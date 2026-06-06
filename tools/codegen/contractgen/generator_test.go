@@ -1106,7 +1106,6 @@ func TestCheckGRPCProtoCollisions_SkipsDisabled(t *testing.T) {
 					Server: "devicecell",
 					GRPC: &metadata.GRPCTransportMeta{
 						Service: "device.draft.v1.DraftService",
-						Method:  "DoDraft",
 						// proto path that does not exist on disk; reading it would error.
 						Proto: "contracts/grpc/device/draft/v1/does_not_exist.proto",
 					},

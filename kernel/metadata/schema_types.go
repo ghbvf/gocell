@@ -97,15 +97,16 @@ func (h *HTTPTransportMeta) IdempotencyFrameworkStatuses() []int {
 //
 // ref: grpc/grpc-go ServiceDesc; go-kratos/kratos protoc-gen-go-grpc service
 // descriptor — service/method names are the wire identity.
+// GRPCTransportMeta declares a gRPC contract's service-level ownership.
+// A single contract owns a whole proto service — the .proto file is the single
+// source of truth for the RPC method set. Per-method field declarations have
+// been removed (#1655): the contractgen ProtoRegistry enumerates all RPCs from
+// the .proto via ReadProtoServiceInfo, so contract.yaml never lists individual
+// method names.
 type GRPCTransportMeta struct {
 	// Service is the proto fully-qualified service name,
 	// e.g. "device.command.v1.DeviceCommandService".
 	Service string `yaml:"service" json:"service"`
-	// Method is the proto method name, e.g. "IssueCommand".
-	Method string `yaml:"method" json:"method"`
-	// StreamingType is one of unary | server-stream | client-stream | bidi.
-	// Empty is treated as unary by downstream codegen (PR 2+).
-	StreamingType string `yaml:"streamingType,omitempty" json:"streamingType,omitempty"`
 	// Proto is the contracts-relative path to the .proto file, e.g.
 	// "contracts/grpc/device/command/v1/device_command.proto".
 	Proto string `yaml:"proto" json:"proto"`

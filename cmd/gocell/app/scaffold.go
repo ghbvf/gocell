@@ -864,10 +864,9 @@ endpoints:
   server: {{.OwnerCell}}
   clients: []
   grpc:
-    # TODO: replace the placeholders below with the real proto service/method/path.
+    # TODO: replace the placeholder below with the real proto service/path.
+    # The method set is derived from the .proto file (single source of truth).
     service: {{.OwnerCell}}.v1.ExampleService
-    method: ExampleMethod
-    streamingType: unary
     proto: contracts/grpc/{{.OwnerCell}}/v1/example.proto
     auth:
       public: false

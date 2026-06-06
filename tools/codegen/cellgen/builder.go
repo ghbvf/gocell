@@ -909,7 +909,6 @@ func buildGrpcServiceSpecFromCU(
 		ListenerConst: "cell.PrimaryListener",
 		ProtoRel:      g.Proto,
 		Service:       g.Service,
-		Method:        g.Method,
 	}, nil
 }
 
@@ -958,15 +957,6 @@ func validateGrpcContractEndpoint(
 				errcode.PublicString("contract", contractID),
 			))
 	}
-	if g.Method == "" {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"cellgen build: grpc contract endpoints.grpc.method is empty",
-			errcode.WithDetails(
-				errcode.PublicString("cellID", cellID),
-				errcode.PublicString("sliceID", sliceID),
-				errcode.PublicString("contract", contractID),
-			))
-	}
 	if err := metadata.ValidateGRPCProtoPath(g.Proto); err != nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"cellgen build: grpc contract endpoints.grpc.proto is invalid",
@@ -991,8 +981,10 @@ func grpcLastSegment(fqn string) string {
 
 // EnrichGrpcServicesWithProtoInfo populates PbImportPath and PbAlias on each
 // GrpcServiceGenSpec by reading the .proto file at root/spec.ProtoRel via
-// contractgen.ReadProtoTypeInfo. This is a post-build step; BuildCellSpec does
+// contractgen.ReadProtoServiceInfo. This is a post-build step; BuildCellSpec does
 // not read the filesystem so it cannot derive the import path itself.
+// The .proto is the single source of truth for the method set (#1655);
+// cellgen only needs the import path and alias for the cell_gen.go registration.
 //
 // PbAlias is set to "grpc<index>" (0-indexed) to guarantee uniqueness even
 // when multiple services share the same last path segment.
@@ -1000,7 +992,7 @@ func EnrichGrpcServicesWithProtoInfo(spec *CellGenSpec, root string) error {
 	for i := range spec.GrpcServices {
 		gs := &spec.GrpcServices[i]
 		protoAbs := filepath.Join(root, filepath.FromSlash(gs.ProtoRel))
-		info, err := contractgen.ReadProtoTypeInfo(protoAbs, gs.Service, gs.Method)
+		info, err := contractgen.ReadProtoServiceInfo(protoAbs, gs.Service)
 		if err != nil {
 			return fmt.Errorf("cellgen enrich grpc-serve contract=%s slice=%s: %w", gs.ContractID, gs.SliceID, err)
 		}

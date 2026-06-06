@@ -592,8 +592,6 @@ func TestContractSchemaGRPCKind(t *testing.T) {
 			name: "full grpc block accepted",
 			grpcBlock: `{
 				"service": "device.command.v1.DeviceCommandService",
-				"method": "IssueCommand",
-				"streamingType": "unary",
 				"proto": "contracts/grpc/device/command/v1/device_command.proto",
 				"auth": {"public": false}
 			}`,
@@ -603,7 +601,6 @@ func TestContractSchemaGRPCKind(t *testing.T) {
 			name: "minimal grpc block accepted",
 			grpcBlock: `{
 				"service": "device.command.v1.DeviceCommandService",
-				"method": "IssueCommand",
 				"proto": "contracts/grpc/device/command/v1/device_command.proto"
 			}`,
 			expectValid: true,
@@ -612,7 +609,6 @@ func TestContractSchemaGRPCKind(t *testing.T) {
 			name: "auth public true accepted",
 			grpcBlock: `{
 				"service": "device.command.v1.DeviceCommandService",
-				"method": "IssueCommand",
 				"proto": "contracts/grpc/device/command/v1/device_command.proto",
 				"auth": {"public": true}
 			}`,
@@ -620,27 +616,35 @@ func TestContractSchemaGRPCKind(t *testing.T) {
 		},
 		{
 			name:        "missing service rejected",
-			grpcBlock:   `{"method": "IssueCommand", "proto": "contracts/grpc/x/v1/x.proto"}`,
+			grpcBlock:   `{"proto": "contracts/grpc/x/v1/x.proto"}`,
 			expectValid: false,
 		},
 		{
-			name:        "missing method rejected",
+			name: "service+proto only accepted (method field removed in #1655)",
+			// method is no longer a required field; service+proto is sufficient.
 			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto"}`,
-			expectValid: false,
+			expectValid: true,
 		},
 		{
 			name:        "missing proto rejected",
-			grpcBlock:   `{"service": "x.v1.S", "method": "M"}`,
+			grpcBlock:   `{"service": "x.v1.S"}`,
 			expectValid: false,
 		},
 		{
 			name:        "proto outside contracts/grpc rejected",
-			grpcBlock:   `{"service": "x.v1.S", "method": "M", "proto": "proto/x.proto"}`,
+			grpcBlock:   `{"service": "x.v1.S", "proto": "proto/x.proto"}`,
 			expectValid: false,
 		},
 		{
-			name:        "invalid streamingType rejected",
-			grpcBlock:   `{"service": "x.v1.S", "method": "M", "proto": "contracts/grpc/x/v1/x.proto", "streamingType": "duplex"}`,
+			name: "method field rejected as additional property (#1655)",
+			// method was removed in #1655; additionalProperties: false rejects it.
+			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto", "method": "M"}`,
+			expectValid: false,
+		},
+		{
+			name: "streamingType field rejected as additional property (#1655)",
+			// streamingType was removed in #1655; additionalProperties: false rejects it.
+			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto", "streamingType": "duplex"}`,
 			expectValid: false,
 		},
 	}

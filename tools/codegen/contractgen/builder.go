@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"go/token"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1036,7 +1035,7 @@ func retryNeedsTime(r *RetryPolicySpec) bool {
 }
 
 // buildGRPCSpec projects metadata.GRPCTransportMeta into spec.GRPC for the
-// server-interface generator. The proto file is read (readProtoTypeInfo) to
+// server-interface generator. The proto file is read (ReadProtoServiceInfo) to
 // resolve the request/response proto-generated message types + the go_package
 // import path emitted into the stub; the proto is the single source of that
 // identity (GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01).
@@ -1044,27 +1043,18 @@ func retryNeedsTime(r *RetryPolicySpec) bool {
 // All guards are fail-closed at codegen time (the golden test path does not run
 // governance FMT-37, so this is the funnel's own defense against malformed
 // endpoints.grpc):
-//   - nil endpoints.grpc / empty service / empty method (mirrors buildHTTPSpec).
-//   - Method is rendered verbatim as the Go interface method identifier, so it
-//     MUST be an exported Go identifier: token.IsIdentifier rejects keywords
-//     (e.g. "func", which would emit a constraint-interface element that
-//     compiles but no cell can implement) and non-identifier text; IsExported
-//     requires the uppercase initial that lets another package implement the
-//     interface. Without this the breakage is silent (gofmt/gofumpt accept it)
-//     or an opaque downstream parse error.
+//   - nil endpoints.grpc / empty service (mirrors buildHTTPSpec).
 //   - Proto must be present and rooted under metadata.GRPCProtoPathPrefix
 //     (contracts/grpc/). This mirrors governance FMT-37 (validateFMT37Proto):
 //     codegen never runs FMT-37, so the funnel rejects the same proto paths the
 //     governance rule would, keeping the generated doc comment's proto reference
 //     a real contracts-relative path rather than an empty or stray string.
-//   - Service and Proto are rendered into the interface doc comment; a control
-//     rune (notably a newline) would break out of the // comment and inject
-//     arbitrary text into the generated source that goimports/gofumpt accept
-//     silently. Reject control runes so the comment stays a comment.
-//   - A non-unary streamingType is rejected rather than emitting a misleading
-//     unary signature. PR 10 adds streaming codegen and lifts this; empty
-//     streamingType is the unary default. (readProtoTypeInfo also rejects a
-//     streaming rpc as a second line of defense.)
+//   - Service is rendered into the interface doc comment; a control rune
+//     (notably a newline) would break out of the // comment and inject arbitrary
+//     text into the generated source that goimports/gofumpt accept silently.
+//     Reject control runes so the comment stays a comment.
+//   - Each rpc method name must be an exported Go identifier and the rpc must be
+//     unary — ReadProtoServiceInfo enforces both fail-closed at proto-read time.
 func buildGRPCSpec(spec *ContractGenSpec, rootDir string, contract *metadata.ContractMeta) error {
 	g := contract.Endpoints.GRPC
 	if g == nil {
@@ -1073,39 +1063,34 @@ func buildGRPCSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 	if g.Service == "" {
 		return fmt.Errorf("contractgen build: contract %q grpc block requires service", contract.ID)
 	}
-	if g.Method == "" {
-		return fmt.Errorf("contractgen build: contract %q grpc block requires method", contract.ID)
-	}
-	if !token.IsIdentifier(g.Method) || !token.IsExported(g.Method) {
-		return fmt.Errorf("contractgen build: contract %q grpc method %q must be an exported Go identifier", contract.ID, g.Method)
-	}
 	if _, err := metadata.GRPCServiceGoName(g.Service); err != nil {
 		return fmt.Errorf("contractgen build: contract %q grpc service: %w", contract.ID, err)
 	}
 	if err := validateGRPCProtoPath(contract.ID, g.Proto); err != nil {
 		return err
 	}
-	if g.StreamingType != "" && g.StreamingType != "unary" {
-		return fmt.Errorf(
-			"contractgen build: contract %q grpc streamingType %q codegen deferred to PR 10 (only unary supported)",
-			contract.ID, g.StreamingType)
-	}
 
-	info, err := ReadProtoTypeInfo(filepath.Join(rootDir, filepath.FromSlash(g.Proto)), g.Service, g.Method)
+	svcInfo, err := ReadProtoServiceInfo(filepath.Join(rootDir, filepath.FromSlash(g.Proto)), g.Service)
 	if err != nil {
 		return fmt.Errorf("contractgen build: contract %q grpc proto: %w", contract.ID, err)
 	}
 
+	methods := make([]GRPCMethodSpec, len(svcInfo.Methods))
+	for i, m := range svcInfo.Methods {
+		methods[i] = GRPCMethodSpec{
+			MethodName:   m.Name,
+			RequestType:  m.RequestType,
+			ResponseType: m.ResponseType,
+		}
+	}
+
 	spec.GRPC = &GRPCEndpointSpec{
 		InterfaceName:   "Server",
-		MethodName:      g.Method,
 		ServiceFQN:      g.Service,
-		StreamingType:   g.StreamingType,
 		ProtoPath:       g.Proto,
-		ProtoImportPath: info.ImportPath,
-		ProtoAlias:      info.Alias,
-		RequestType:     info.RequestType,
-		ResponseType:    info.ResponseType,
+		ProtoImportPath: svcInfo.ImportPath,
+		ProtoAlias:      svcInfo.Alias,
+		Methods:         methods,
 	}
 	return nil
 }

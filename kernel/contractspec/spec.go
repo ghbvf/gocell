@@ -69,15 +69,14 @@ type ContractSpec struct {
 // GRPCEndpointSpec is the grpc-kind transport descriptor carried by
 // ContractSpec.GRPC. It mirrors metadata.GRPCTransportMeta but is the runtime
 // value type (kernel/contractspec is dependency-free of metadata parsing at the
-// registration boundary). Service + Method are the wire identity; ProtoPackage
-// is the proto file's `package` declaration.
+// registration boundary). A single contract owns a whole proto service (#1655);
+// the .proto file is the single source of truth for the RPC method set.
+// ProtoPackage is the proto file's `package` declaration.
 type GRPCEndpointSpec struct {
-	Service       string // proto FQ service name, e.g. "device.command.v1.DeviceCommandService"
-	Method        string // proto method name, e.g. "IssueCommand"
-	StreamingType string // unary | server-stream | client-stream | bidi (empty → unary)
-	Proto         string // contracts-relative .proto path
+	Service string // proto FQ service name, e.g. "device.command.v1.DeviceCommandService"
+	Proto   string // contracts-relative .proto path
 	// ProtoPackage is the proto `package` declaration (e.g. "device.command.v1").
-	// The contractgen ProtoRegistry can resolve it from the .proto starting PR 6;
+	// The contractgen ProtoRegistry resolves it from the .proto starting PR 6;
 	// runtime ContractSpec population lands PR 8 (first real grpc contract
 	// registration). Empty until then; must not be relied upon.
 	ProtoPackage string
@@ -186,24 +185,12 @@ func (s ContractSpec) validateGRPC() error {
 	if s.GRPC.Service == "" {
 		return fmt.Errorf("contractspec.ContractSpec[%s]: grpc kind requires Service", s.ID)
 	}
-	if s.GRPC.Method == "" {
-		return fmt.Errorf("contractspec.ContractSpec[%s]: grpc kind requires Method", s.ID)
-	}
 	if s.GRPC.Proto == "" {
 		return fmt.Errorf("contractspec.ContractSpec[%s]: grpc kind requires Proto", s.ID)
 	}
 	if !strings.HasPrefix(s.GRPC.Proto, metadata.GRPCProtoPathPrefix) {
 		return fmt.Errorf("contractspec.ContractSpec[%s]: grpc Proto %q must be rooted under %q",
 			s.ID, s.GRPC.Proto, metadata.GRPCProtoPathPrefix)
-	}
-	// StreamingType is optional; empty is the unary default. When present it must
-	// be one of metadata.GRPCStreamingTypeEnum — the same single source the
-	// contract.schema.json enum and governance FMT-37 consume, so the three
-	// validation surfaces never disagree.
-	if s.GRPC.StreamingType != "" && !metadata.IsKnownGRPCStreamingType(s.GRPC.StreamingType) {
-		return fmt.Errorf(
-			"contractspec.ContractSpec[%s]: grpc StreamingType %q not recognized (unary|server-stream|client-stream|bidi, or omit for unary)",
-			s.ID, s.GRPC.StreamingType)
 	}
 	if s.Method != "" || s.Path != "" || s.Topic != "" {
 		return fmt.Errorf("contractspec.ContractSpec[%s]: grpc kind must not carry http Method/Path or event Topic", s.ID)

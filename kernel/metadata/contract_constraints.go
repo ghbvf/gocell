@@ -157,21 +157,6 @@ func IsKnownCapability(s string) bool {
 	return false
 }
 
-// GRPCStreamingTypeEnum lists the canonical values accepted for
-// endpoints.grpc.streamingType WHEN THE FIELD IS PRESENT. Order matches the
-// schema enum order at schemas/contract.schema.json
-// (...grpc.properties.streamingType.enum); do not reorder without updating the
-// schema in lockstep. TestSchemaConstantsMatchSchemaLiterals
-// (kernel/metadata/schemas) asserts byte-level parity. This slice is the single
-// source consumed by both governance FMT-37 and runtime
-// kernel/contractspec.validateGRPC, so schema, governance, and runtime never
-// drift on the accepted streaming patterns.
-//
-// An empty/omitted streamingType is treated as unary by downstream codegen
-// (PR 2+), so it is intentionally NOT a member — callers guard the empty case
-// separately before calling IsKnownGRPCStreamingType.
-var GRPCStreamingTypeEnum = []string{"unary", "server-stream", "client-stream", "bidi"}
-
 // GRPCProtoPathPrefix is the required leading path component for
 // endpoints.grpc.proto: every .proto reference must be a contracts-relative
 // path rooted under contracts/grpc/. The schema literal at
@@ -181,19 +166,6 @@ var GRPCStreamingTypeEnum = []string{"unary", "server-stream", "client-stream", 
 // prefix match). Single source shared by governance FMT-37 and runtime
 // kernel/contractspec.validateGRPC.
 const GRPCProtoPathPrefix = "contracts/grpc/"
-
-// IsKnownGRPCStreamingType reports whether s is one of GRPCStreamingTypeEnum.
-// The empty string is NOT a member: callers treat empty as the unary default
-// and must guard it before calling (mirrors the schema, where streamingType is
-// optional but constrained to the enum once present).
-func IsKnownGRPCStreamingType(s string) bool {
-	for _, v := range GRPCStreamingTypeEnum {
-		if s == v {
-			return true
-		}
-	}
-	return false
-}
 
 // ValidateGRPCProtoPath validates an endpoints.grpc.proto path field. It applies
 // five guards in order:

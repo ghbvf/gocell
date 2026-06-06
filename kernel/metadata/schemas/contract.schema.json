@@ -657,22 +657,13 @@
               },
               "grpc": {
                 "type": "object",
-                "description": "Transport metadata elevating proto service, method, streaming pattern, and proto file location to first-class contract fields. Parallel to endpoints.http.",
-                "required": ["service", "method", "proto"],
+                "description": "Transport metadata for a gRPC contract. A single contract owns a whole proto service; the .proto file is the single source of truth for the RPC method set (#1655). Parallel to endpoints.http.",
+                "required": ["service", "proto"],
                 "additionalProperties": false,
                 "properties": {
                   "service": {
                     "type": "string",
                     "description": "Proto fully-qualified service name, e.g. device.command.v1.DeviceCommandService."
-                  },
-                  "method": {
-                    "type": "string",
-                    "description": "Proto method name served by this contract, e.g. IssueCommand."
-                  },
-                  "streamingType": {
-                    "type": "string",
-                    "enum": ["unary", "server-stream", "client-stream", "bidi"],
-                    "description": "RPC streaming pattern. Omitted is treated as unary by codegen."
                   },
                   "proto": {
                     "type": "string",
