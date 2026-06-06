@@ -179,16 +179,6 @@ func isTenantIDType(t types.Type) bool {
 	return obj.Pkg() != nil && obj.Pkg().Path() == tenantPkgPath && obj.Name() == "TenantID"
 }
 
-// isContextType reports whether t is context.Context (interface).
-func isContextType(t types.Type) bool {
-	named, ok := t.(*types.Named)
-	if !ok {
-		return false
-	}
-	obj := named.Obj()
-	return obj.Pkg() != nil && obj.Pkg().Path() == "context" && obj.Name() == "Context"
-}
-
 // tenantIDAtPosition1 asserts the typed positional contract for tenant-scoped
 // repo methods:
 //

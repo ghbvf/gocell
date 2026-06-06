@@ -59,7 +59,6 @@ tools/archtest/required_dep_nil_guard_test.go
 tools/archtest/reverse_coverage_invariants_test.go
 tools/archtest/rmq_invariants_test.go
 tools/archtest/safeid_funnel_test.go
-tools/archtest/saga_invariants_test.go
 tools/archtest/security_defaults_test.go
 tools/archtest/seed_role_iface_test.go
 tools/archtest/serviceowned_handler_owner_check_test.go

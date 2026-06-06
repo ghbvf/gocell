@@ -48,7 +48,6 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -57,10 +56,8 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/kernel/saga/journal"
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/codegen/sagacoveragegen"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
-	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
 // ============================================================================
@@ -149,329 +146,13 @@ import (
 // ref: tools/archtest/aftercommit_pure_transient_test.go (sibling purity pattern).
 // ref: .claude/rules/gocell/ai-robust.md §"typed marker funnel for unbounded ops".
 
-const (
-	sagaCompensatePureRuleID      = "SAGA-STEP-COMPENSATE-PURE-01"
-	sagaPkgPath                   = "github.com/ghbvf/gocell/kernel/saga"
-	sagaCompensateFuncName        = "CompensateFunc"
-	sagaCompensateFieldName       = "Compensate"
-	sagaFixturesDir               = "saga_compensate_pure_fixtures"
-	sagaMaxCompensateStmts        = 10
-	sagaConstructorNilGuardRuleID = "SAGA-CONSTRUCTOR-NIL-GUARD-01"
-	sagaConstructorFixturesDir    = "saga_constructor_nilguard_fixtures"
-)
-
-// sagaBannedReceiverKeys maps "<pkgpath>.<TypeName>" → display label for
-// concrete banned types (matched after one pointer deref for *sql.Tx).
-var sagaBannedReceiverKeys = map[string]string{
-	"database/sql.Tx":                               "*sql.Tx",
-	"github.com/jackc/pgx/v5.Tx":                    "pgx.Tx",
-	"github.com/ghbvf/gocell/kernel/outbox.Writer":  "outbox.Writer",
-	"github.com/ghbvf/gocell/kernel/outbox.Emitter": "outbox.Emitter",
-}
-
-// sagaBannedIfaceSpecs lists the (pkgPath, typeName, label) tuples for
-// interface types that CompensateFunc bodies must not call methods on.
-var sagaBannedIfaceSpecs = []struct{ path, name, label string }{
-	{"github.com/jackc/pgx/v5", "Tx", "pgx.Tx"},
-	{"github.com/ghbvf/gocell/kernel/outbox", "Writer", "outbox.Writer"},
-	{"github.com/ghbvf/gocell/kernel/outbox", "Emitter", "outbox.Emitter"},
-	{"github.com/ghbvf/gocell/kernel/persistence", "TxRunner", "persistence.TxRunner"},
-}
-
-// sagaResolveBannedReceivers resolves the banned interface receiver types from
-// pkg's transitive import closure, once per Pass.
-func sagaResolveBannedReceivers(pkg *types.Package) []bannedReceiver {
-	var out []bannedReceiver
-	for _, b := range sagaBannedIfaceSpecs {
-		if iface := lookupInterface(pkg, b.path, b.name); iface != nil {
-			out = append(out, bannedReceiver{label: b.label, iface: iface})
-		}
-	}
-	return out
-}
-
-// sagaBannedReceiverLabel reports the display label when sel.X's static type
-// is a banned receiver. It checks:
-//  1. Exact concrete match (deref one pointer level for *sql.Tx).
-//  2. Implements a banned interface (types.Implements).
-func sagaBannedReceiverLabel(info *types.Info, sel *ast.SelectorExpr, ifaces []bannedReceiver) (string, bool) {
-	t := info.TypeOf(sel.X)
-	if t == nil {
-		return "", false
-	}
-	// 1. Exact concrete match (deref one pointer level for *sql.Tx / *pgx.Tx).
-	nt := t
-	if ptr, isPtr := nt.(*types.Pointer); isPtr {
-		nt = ptr.Elem()
-	}
-	if named, isNamed := nt.(*types.Named); isNamed && named.Obj() != nil && named.Obj().Pkg() != nil {
-		key := named.Obj().Pkg().Path() + "." + named.Obj().Name()
-		if label, ok := sagaBannedReceiverKeys[key]; ok {
-			return label, true
-		}
-	}
-	// 2. Implements a banned interface (value or pointer receiver).
-	for _, b := range ifaces {
-		if implementsBannedIface(t, b.iface) {
-			return b.label, true
-		}
-	}
-	return "", false
-}
-
-// isCompensateFuncType reports whether typ is exactly kernel/saga.CompensateFunc.
-func isCompensateFuncType(typ types.Type) bool {
-	named, ok := typ.(*types.Named)
-	if !ok {
-		return false
-	}
-	obj := named.Obj()
-	return obj != nil && obj.Pkg() != nil &&
-		obj.Pkg().Path() == sagaPkgPath &&
-		obj.Name() == sagaCompensateFuncName
-}
-
-// compensateFuncAssignment holds a scanned assignment: either a func literal
-// body (for direct scan) or an ident reference to a named function (for
-// declared-func scan). Exactly one of Lit / NamedIdent is non-nil.
-type compensateFuncAssignment struct {
-	Lit        *ast.FuncLit
-	NamedIdent *ast.Ident
-}
-
-// collectCompensateAssignments walks the AST of file and returns every
-// assignment to a kernel/saga.CompensateFunc-typed slot, covering:
-//
-//  1. var c saga.CompensateFunc = <expr>    (ValueSpec)
-//  2. c = <expr> where c is CompensateFunc (AssignStmt)
-//  3. saga.Step{Compensate: <expr>}         (CompositeLit KV)
-//
-// <expr> is either a FuncLit (returned in Lit) or an Ident referencing a
-// named function (returned in NamedIdent).
-func collectCompensateAssignments(p *Pass, file *ast.File) []compensateFuncAssignment {
-	info := p.TypesInfo
-	var out []compensateFuncAssignment
-
-	// var c saga.CompensateFunc = <expr>
-	scanner.EachInSubtree[ast.ValueSpec](file, func(node *ast.ValueSpec) {
-		typ := info.TypeOf(node.Type)
-		if typ == nil || !isCompensateFuncType(typ) {
-			return
-		}
-		for _, val := range node.Values {
-			out = append(out, classifyExpr(val))
-		}
-	})
-
-	// c = <expr> where c is CompensateFunc
-	scanner.EachInSubtree[ast.AssignStmt](file, func(node *ast.AssignStmt) {
-		for i, lhs := range node.Lhs {
-			if i >= len(node.Rhs) {
-				break
-			}
-			lhsType := info.TypeOf(lhs)
-			if lhsType == nil || !isCompensateFuncType(lhsType) {
-				continue
-			}
-			out = append(out, classifyExpr(node.Rhs[i]))
-		}
-	})
-
-	// saga.Step{Compensate: <expr>}
-	scanner.EachInSubtree[ast.CompositeLit](file, func(node *ast.CompositeLit) {
-		scanner.EachInChildren[ast.KeyValueExpr](node, func(kv *ast.KeyValueExpr) {
-			key, ok := kv.Key.(*ast.Ident)
-			if !ok || key.Name != sagaCompensateFieldName {
-				return
-			}
-			// Verify the field's declared type is CompensateFunc via struct
-			// field lookup (TypeOf on a CompositeLit KV value may return the
-			// underlying func signature, not the named alias).
-			if !compensateKVFieldIsCompensateFunc(info, node) {
-				return
-			}
-			out = append(out, classifyExpr(kv.Value))
-		})
-	})
-
-	return out
-}
-
-// compensateKVFieldIsCompensateFunc verifies that the struct type of the
-// CompositeLit node has a field named sagaCompensateFieldName whose declared
-// type is kernel/saga.CompensateFunc. This is the reliable path for CompositeLit
-// KV values where TypeOf(kv.Value) may return the underlying func signature.
-func compensateKVFieldIsCompensateFunc(info *types.Info, node *ast.CompositeLit) bool {
-	structType := info.TypeOf(node)
-	if structType == nil {
-		return false
-	}
-	st := structType
-	if ptr, ok := st.(*types.Pointer); ok {
-		st = ptr.Elem()
-	}
-	var underlying types.Type
-	if named, ok := st.(*types.Named); ok {
-		underlying = named.Underlying()
-	} else {
-		underlying = st.Underlying()
-	}
-	s, ok := underlying.(*types.Struct)
-	if !ok {
-		return false
-	}
-	for fi := 0; fi < s.NumFields(); fi++ {
-		f := s.Field(fi)
-		if f.Name() == sagaCompensateFieldName && isCompensateFuncType(f.Type()) {
-			return true
-		}
-	}
-	return false
-}
-
-// classifyExpr returns a compensateFuncAssignment for expr: either a FuncLit
-// or a named-function Ident.
-func classifyExpr(expr ast.Expr) compensateFuncAssignment {
-	switch e := expr.(type) {
-	case *ast.FuncLit:
-		return compensateFuncAssignment{Lit: e}
-	case *ast.Ident:
-		return compensateFuncAssignment{NamedIdent: e}
-	}
-	return compensateFuncAssignment{}
-}
-
-// sagaFuncDeclsByObject collects all top-level FuncDecls in the Pass (across
-// all files) keyed by the types.Func pointer (via info.ObjectOf). This is
-// used to resolve named CompensateFunc assignments to their declaration bodies.
-func sagaFuncDeclsByObject(p *Pass) map[*types.Func]*ast.FuncDecl {
-	out := make(map[*types.Func]*ast.FuncDecl)
-	for _, f := range p.Files {
-		EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
-			if fd.Body == nil {
-				return
-			}
-			obj, ok := p.TypesInfo.Defs[fd.Name].(*types.Func)
-			if !ok {
-				return
-			}
-			out[obj] = fd
-		})
-	}
-	return out
-}
-
-// countStmts counts the top-level statements in a BlockStmt.
-func countStmts(body *ast.BlockStmt) int {
-	if body == nil {
-		return 0
-	}
-	return len(body.List)
-}
-
-func sagaDiag(p *Pass, node ast.Node, rel, msg string) Diagnostic {
-	return Diagnostic{Rel: rel, Line: p.Fset.Position(node.Pos()).Line, Message: msg}
-}
-
-// scanBodyForForbiddenCalls scans a BlockStmt for calls to banned receivers
-// and returns diagnostics.
-func scanBodyForForbiddenCalls(p *Pass, body *ast.BlockStmt, rel string, ifaces []bannedReceiver) []Diagnostic {
-	info := p.TypesInfo
-	var out []Diagnostic
-	EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
-		sel, isSel := call.Fun.(*ast.SelectorExpr)
-		if !isSel {
-			return
-		}
-		if label, banned := sagaBannedReceiverLabel(info, sel, ifaces); banned {
-			out = append(out, sagaDiag(p, sel, rel,
-				sagaCompensatePureRuleID+"-A1: CompensateFunc body must be pure-reverse; "+
-					"it calls a method on "+label+
-					" (Compensate runs in app domain only — the Coordinator owns the tx layer)"))
-		}
-	})
-	return out
-}
-
-// scanCompensatePure implements A1 over one file: collect every CompensateFunc
-// assignment (literal or named func) and check the body for forbidden calls.
-func scanCompensatePure(p *Pass, file *ast.File, ifaces []bannedReceiver, funcDecls map[*types.Func]*ast.FuncDecl) []Diagnostic {
-	rel := p.Rel(file)
-	var out []Diagnostic
-
-	assignments := collectCompensateAssignments(p, file)
-	for _, a := range assignments {
-		switch {
-		case a.Lit != nil:
-			// Direct function literal: scan its body.
-			out = append(out, scanBodyForForbiddenCalls(p, a.Lit.Body, rel, ifaces)...)
-
-		case a.NamedIdent != nil:
-			// Named function: resolve to FuncDecl and scan its body.
-			obj, ok := p.TypesInfo.ObjectOf(a.NamedIdent).(*types.Func)
-			if !ok {
-				continue
-			}
-			fd, ok := funcDecls[obj]
-			if !ok {
-				continue
-			}
-			out = append(out, scanBodyForForbiddenCalls(p, fd.Body, rel, ifaces)...)
-		}
-	}
-	return out
-}
-
-// scanCompensateBodyCount implements B1 over one file: every CompensateFunc
-// literal must have <= sagaMaxCompensateStmts top-level statements.
-func scanCompensateBodyCount(p *Pass, file *ast.File) []Diagnostic {
-	rel := p.Rel(file)
-	var out []Diagnostic
-
-	assignments := collectCompensateAssignments(p, file)
-	for _, a := range assignments {
-		if a.Lit == nil {
-			continue // only applies to inline literals
-		}
-		n := countStmts(a.Lit.Body)
-		if n > sagaMaxCompensateStmts {
-			out = append(out, sagaDiag(p, a.Lit, rel,
-				sagaCompensatePureRuleID+"-B1: CompensateFunc body has too many statements ("+
-					itoa(n)+">"+itoa(sagaMaxCompensateStmts)+"); "+
-					"pure-reverse compensates must be short — extract logic to a named helper "+
-					"and call it from Compensate (B1 blind-spot discipline)"))
-		}
-	}
-	return out
-}
-
-func sagaCompensateFixturePattern(fix string) (dir, pattern string) {
-	return filepath.Join("tools", "archtest", "testdata", sagaFixturesDir, fix),
-		"./tools/archtest/testdata/" + sagaFixturesDir + "/" + fix
-}
-
 // TestSagaStepCompensatePure_A1_NoForbiddenCallsInCompensateBody asserts no
 // production CompensateFunc slot (literal or named func) calls a banned receiver
 // method. In PR-06 there are zero CompensateFunc assignments in production, so
 // this fires 0 diagnostics; it guards future Compensate authors.
 func TestSagaStepCompensatePure_A1_NoForbiddenCallsInCompensateBody(t *testing.T) {
 	t.Parallel()
-	diags := Run(t, Production(TypedOpts{Tags: FlatNonDefaultTags()}), func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil {
-			return nil
-		}
-		ifaces := sagaResolveBannedReceivers(p.Pkg)
-		funcDecls := sagaFuncDeclsByObject(p)
-		var out []Diagnostic
-		for _, file := range p.Files {
-			if strings.HasSuffix(filepath.ToSlash(p.Rel(file)), "_test.go") {
-				continue
-			}
-			out = append(out, scanCompensatePure(p, file, ifaces, funcDecls)...)
-		}
-		return out
-	})
-
+	diags := CheckSagaStepCompensatePure(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()})
 	Report(t, sagaCompensatePureRuleID+"-A1", diags)
 }
 
@@ -795,12 +476,6 @@ func TestSagaStepCompensatePure_Detector_RedAssignFuncLitFixture(t *testing.T) {
 // §"Funnel 双向锁评级", the Hard interface-field seal needs no gh-tracked upgrade;
 // the Medium func-field + downstream residuals are deliberate, not Soft carryovers.
 
-// sagaCoordinatorNoHeartbeatLoopRule is the rule ID for diagnostics.
-const sagaCoordinatorNoHeartbeatLoopRule = "SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01"
-
-// heartbeatMethodName is the forbidden method name on journal.Journal.
-const heartbeatMethodName = "Heartbeat"
-
 // TestSagaCoordinatorNoHeartbeatLoop_A1_NoJournalHeartbeatCallInRuntimeSaga
 // fails if any production (non-test) file under runtime/saga/ — excluding
 // the runtime/saga/executor/ subpackage — references a Heartbeat method
@@ -826,165 +501,8 @@ const heartbeatMethodName = "Heartbeat"
 // via Ident, bypassing a SelectorExpr-only check.
 func TestSagaCoordinatorNoHeartbeatLoop_A1_NoJournalHeartbeatCallInRuntimeSaga(t *testing.T) {
 	t.Parallel()
-
-	diags := Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil {
-			return nil
-		}
-		var out []Diagnostic
-		for _, file := range p.Files {
-			rel := filepath.ToSlash(p.Rel(file))
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-
-			if !strings.HasPrefix(rel, "runtime/saga/") {
-				continue
-			}
-			if strings.HasPrefix(rel, "runtime/saga/executor/") {
-				continue
-			}
-
-			out = append(out, scanHeartbeatSelectors(p, file, rel)...)
-		}
-		return out
-	})
-
+	diags := CheckSagaCoordinatorNoHeartbeatLoop(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()})
 	Report(t, sagaCoordinatorNoHeartbeatLoopRule+"-A1", diags)
-}
-
-// scanHeartbeatSelectors walks every SelectorExpr whose Sel.Name == "Heartbeat"
-// (both inside CallExpr and as a method value) and emits a diagnostic when the
-// receiver implements the Heartbeater-shape signature.
-func scanHeartbeatSelectors(p *Pass, file *ast.File, rel string) []Diagnostic {
-	var out []Diagnostic
-	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-		if sel.Sel == nil || sel.Sel.Name != heartbeatMethodName {
-			return
-		}
-		fn, ok := ResolveMethodCall(p.TypesInfo, sel)
-		if !ok || fn == nil {
-			return
-		}
-		if !methodIsHeartbeaterShape(fn) {
-			return
-		}
-		pos := p.Fset.Position(sel.Pos())
-		out = append(out, Diagnostic{
-			Rel:  rel,
-			Line: pos.Line,
-			Message: fmt.Sprintf(
-				"%s: forbidden reference to a Heartbeater-shape .Heartbeat method in runtime/saga; "+
-					"per-step lease maintenance is funneled through runtime/saga/executor "+
-					"(Executor.Execute / Executor.RunWithHeartbeat). If you need a "+
-					"non-step heartbeat (e.g. extending lease across an outer operation), "+
-					"call Executor.RunWithHeartbeat — do NOT re-introduce a centralized "+
-					"heartbeat goroutine.",
-				sagaCoordinatorNoHeartbeatLoopRule,
-			),
-		})
-	})
-	return out
-}
-
-// methodIsHeartbeaterShape reports whether fn (a method func object) has the
-// signature `Heartbeat(ctx context.Context, instanceID, leaseID idutil.SafeID,
-// leaseDuration time.Duration) (bool, error)`. The shape check is structural
-// — it does not require the receiver to be kernel/saga/journal.Journal so
-// new interfaces / local helpers that duplicate the shape are also caught
-// (#1181 F13).
-//
-// Shape constants:
-//
-//	params: 4 ⇒ context.Context, idutil.SafeID, idutil.SafeID, time.Duration
-//	results: 2 ⇒ bool, error
-//
-// Receiver type is not inspected; only the parameter and result types matter.
-func methodIsHeartbeaterShape(fn *types.Func) bool {
-	if fn == nil {
-		return false
-	}
-	sig, ok := fn.Type().(*types.Signature)
-	if !ok || sig.Recv() == nil {
-		return false // nil signature, or not a method
-	}
-	return signatureMatchesHeartbeaterShape(sig)
-}
-
-// signatureMatchesHeartbeaterShape reports whether sig has the parameter and
-// result types of journal.Heartbeater.Heartbeat, independent of whether sig is
-// a method (has a receiver) or a bare func type:
-//
-//	(ctx context.Context, instanceID, leaseID idutil.SafeID, leaseDuration time.Duration) (bool, error)
-//
-// It backs two scans in this package: the .Heartbeat method-call scan
-// (SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01 A1, via methodIsHeartbeaterShape) and
-// the heartbeat-shaped func-FIELD scan (SAGA-JOURNAL-HOLDER-SEAL-01, where a
-// persisted func value of this shape is the func-value equivalent of holding a
-// journal.Heartbeater field).
-func signatureMatchesHeartbeaterShape(sig *types.Signature) bool {
-	if sig == nil {
-		return false
-	}
-	params := sig.Params()
-	if params.Len() != 4 {
-		return false
-	}
-	results := sig.Results()
-	if results.Len() != 2 {
-		return false
-	}
-	if !typeIsNamed(params.At(0).Type(), "context", "Context") {
-		return false
-	}
-	if !typeIsNamed(params.At(1).Type(), heartbeaterIdutilPkgName, heartbeaterSafeIDType) {
-		return false
-	}
-	if !typeIsNamed(params.At(2).Type(), heartbeaterIdutilPkgName, heartbeaterSafeIDType) {
-		return false
-	}
-	if !typeIsNamed(params.At(3).Type(), "time", "Duration") {
-		return false
-	}
-	if b, ok := results.At(0).Type().(*types.Basic); !ok || b.Kind() != types.Bool {
-		return false
-	}
-	if named, ok := results.At(1).Type().(*types.Named); !ok ||
-		named.Obj() == nil || named.Obj().Name() != "error" {
-		return false
-	}
-	return true
-}
-
-// heartbeaterIdutilPkgName / heartbeaterSafeIDType carry the package-suffix
-// and type-name used by Heartbeater-shape param-1 + param-2
-// (instanceID, leaseID idutil.SafeID). Names are package-prefixed to avoid
-// colliding with safeid_funnel_test.go's constants of the same intent.
-const (
-	heartbeaterIdutilPkgName = "idutil"
-	heartbeaterSafeIDType    = "SafeID"
-)
-
-// typeIsNamed reports whether t resolves to a named type whose enclosing
-// package's import-path *suffix* equals pkgSuffix and whose declared name
-// equals typeName. Suffix matching is used because callers refer to
-// idutil.SafeID via the local name even when the package is at a long path.
-func typeIsNamed(t types.Type, pkgSuffix, typeName string) bool {
-	named, ok := t.(*types.Named)
-	if !ok {
-		return false
-	}
-	obj := named.Obj()
-	if obj == nil || obj.Name() != typeName {
-		return false
-	}
-	pkg := obj.Pkg()
-	if pkg == nil {
-		// "error" lives in the universe scope (Pkg == nil); caller handles
-		// that case directly without typeIsNamed.
-		return false
-	}
-	return pkg.Path() == pkgSuffix || strings.HasSuffix(pkg.Path(), "/"+pkgSuffix)
 }
 
 // TestSagaCoordinatorNoHeartbeatLoop_B1_ExecutorSubpkgCallsitesAllowed is the
@@ -1151,112 +669,6 @@ func TestSagaCoordinatorNoHeartbeatLoop_B1_ExecutorSubpkgCallsitesAllowed(t *tes
 //
 // ref: .claude/rules/gocell/ai-robust.md §"typed marker funnel for unbounded ops".
 
-const (
-	sagaRandInjectedRuleID = "SAGA-EXECUTOR-RAND-INJECTED-01"
-	// executorPkgPrefix is the module-relative path prefix for the
-	// runtime/saga/executor package (production .go files, not _test.go).
-	executorPkgPrefix = "runtime/saga/executor/"
-)
-
-// randV1PkgPath and randV2PkgPath are the canonical import paths for the two
-// math/rand package versions. Both are checked so v1 usage is also caught.
-const (
-	randV1PkgPath = "math/rand"
-	randV2PkgPath = "math/rand/v2"
-)
-
-// randAllowedConstructors is the set of function names that ARE permitted as
-// package-level calls (they construct a source, not use the global source).
-// Keyed by (pkgPath, funcName).
-var randAllowedConstructors = map[string]bool{
-	randV2PkgPath + ".New":        true,
-	randV2PkgPath + ".NewPCG":     true,
-	randV2PkgPath + ".NewChaCha8": true,
-	randV1PkgPath + ".New":        true,
-	randV1PkgPath + ".NewSource":  true,
-}
-
-// isRandGlobalForbidden reports whether fn is a package-level function in
-// math/rand or math/rand/v2 that is NOT in the allowed constructor set.
-func isRandGlobalForbidden(fn *types.Func) bool {
-	if fn == nil || fn.Pkg() == nil {
-		return false
-	}
-	pkgPath := fn.Pkg().Path()
-	if pkgPath != randV1PkgPath && pkgPath != randV2PkgPath {
-		return false
-	}
-	// Must be a package-level function (nil receiver), not a method.
-	if sig, _ := fn.Type().(*types.Signature); sig != nil && sig.Recv() != nil {
-		return false
-	}
-	key := pkgPath + "." + fn.Name()
-	return !randAllowedConstructors[key]
-}
-
-// scanRandGlobalCalls walks file's AST and returns diagnostics for every
-// call to a forbidden package-level global rand function. Detection is
-// type-driven via info.ObjectOf — covers both qualified form (rand.Int64N)
-// and dot-import form (Int64N after `import . "math/rand/v2"`).
-func scanRandGlobalCalls(p *Pass, file *ast.File) []Diagnostic {
-	rel := p.Rel(file)
-	info := p.TypesInfo
-	var out []Diagnostic
-	seen := map[string]bool{}
-
-	record := func(node ast.Node, fnName, pkgPath string) {
-		line := p.Fset.Position(node.Pos()).Line
-		key := fmt.Sprintf("%s:%d:%s.%s", rel, line, pkgPath, fnName)
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-		out = append(out, Diagnostic{
-			Rel:  rel,
-			Line: line,
-			Message: fmt.Sprintf(
-				sagaRandInjectedRuleID+": %s.%s — "+
-					"must use an injected *rand.Rand source (rand.New(rand.NewPCG(...))) "+
-					"instead of the package-level global; "+
-					"global rand is not injectable and makes jitter non-deterministic in tests",
-				pkgPath, fnName,
-			),
-		})
-	}
-
-	// Qualified form: rand.Int64N(...)
-	EachInSubtree[ast.SelectorExpr](file, func(e *ast.SelectorExpr) {
-		fn, ok := info.ObjectOf(e.Sel).(*types.Func)
-		if !ok || !isRandGlobalForbidden(fn) {
-			return
-		}
-		record(e, fn.Name(), fn.Pkg().Path())
-	})
-
-	// Dot-import form: Int64N(...) — bare Ident, no SelectorExpr.
-	EachInSubtree[ast.Ident](file, func(e *ast.Ident) {
-		fn, ok := info.ObjectOf(e).(*types.Func)
-		if !ok || !isRandGlobalForbidden(fn) {
-			return
-		}
-		record(e, fn.Name(), fn.Pkg().Path())
-	})
-
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Rel != out[j].Rel {
-			return out[i].Rel < out[j].Rel
-		}
-		return out[i].Line < out[j].Line
-	})
-	return out
-}
-
-// isExecutorProductionFile reports whether rel is a production .go file
-// under runtime/saga/executor/ (not _test.go).
-func isExecutorProductionFile(rel string) bool {
-	return strings.HasPrefix(rel, executorPkgPrefix) && !strings.HasSuffix(rel, "_test.go")
-}
-
 // sagaExecutorRandFixturePattern returns the (relDir, pattern) pair for the
 // given fixture case under saga_executor_rand_injected_fixtures.
 func sagaExecutorRandFixturePattern(fix string) (dir, pattern string) {
@@ -1276,21 +688,7 @@ func sagaExecutorRandFixturePattern(fix string) (dir, pattern string) {
 //   - B2: dot-import — handled via ast.Ident walk (reverse self-test below).
 func TestSagaExecutorRandInjected_A1_NoGlobalRandInExecutor(t *testing.T) {
 	t.Parallel()
-	diags := Run(t, Production(TypedOpts{Tags: FlatNonDefaultTags()}), func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil {
-			return nil
-		}
-		var out []Diagnostic
-		for _, file := range p.Files {
-			rel := filepath.ToSlash(p.Rel(file))
-			if !isExecutorProductionFile(rel) {
-				continue
-			}
-			out = append(out, scanRandGlobalCalls(p, file)...)
-		}
-		return out
-	})
-
+	diags := CheckSagaExecutorRandInjected(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()})
 	Report(t, sagaRandInjectedRuleID+"-A1", diags)
 }
 
@@ -1439,13 +837,6 @@ func TestSagaExecutorRandInjected_Detector_RedDotImportRandFixture(t *testing.T)
 // ref: tools/archtest/user_repo_conformance_enrollment_test.go (USERREPO-CONFORMANCE-ENROLLMENT-01)
 // ref: docs/plans/202605230231-046-saga-l3-workflow-implementation-plan.md §PR-04
 
-const (
-	sagaJournalIfacePkg     = "github.com/ghbvf/gocell/kernel/saga/journal"
-	sagaJournalIfaceName    = "Journal"
-	sagaConformancePkg      = "github.com/ghbvf/gocell/kernel/saga/sagajournaltest"
-	sagaConformanceFuncName = "RunConformanceSuite"
-)
-
 // TestSagaJournalConformanceEnrollment enforces SAGA-JOURNAL-CONFORMANCE-
 // ENROLLMENT-01: every concrete type implementing kernel/saga/journal.Journal
 // in the production tree must have a sagajournaltest.RunConformanceSuite call
@@ -1453,110 +844,7 @@ const (
 // variant).
 func TestSagaJournalConformanceEnrollment(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping packages.Load-based archtest in -short mode")
-	}
-
-	root := findModuleRoot(t)
-
-	// ─── Step 1: resolve journal.Journal interface ──────────────────────────
-	//
-	// The iface and the impl types MUST come from the same packages.Load
-	// invocation so that types.Implements uses pointer-identical *types.Named
-	// descriptors (cross-load comparisons are always false).
-	prodPatterns := prodscan.Patterns(root)
-	ifacePatterns := append([]string{"./kernel/saga/journal/..."}, prodPatterns...)
-
-	var iface *types.Interface
-	var implPkgs []*types.Package
-
-	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns),
-		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil {
-				return nil
-			}
-			if p.Pkg.Path() == sagaJournalIfacePkg {
-				if obj := p.Pkg.Scope().Lookup(sagaJournalIfaceName); obj != nil {
-					if named, ok := obj.Type().(*types.Named); ok {
-						if i, ok := named.Underlying().(*types.Interface); ok {
-							iface = i.Complete()
-						}
-					}
-				}
-			}
-			implPkgs = append(implPkgs, p.Pkg)
-			return nil
-		})
-
-	require.NotNil(t, iface,
-		"SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01: failed to resolve journal.Journal interface; "+
-			"check import path %s", sagaJournalIfacePkg)
-
-	// ─── Step 2: collect all concrete implementations ───────────────────────
-	implSet := make(map[string]bool)    // "pkg/path.TypeName" → true
-	implPkgSet := make(map[string]bool) // pkg path → true
-	for _, pkg := range implPkgs {
-		if pkg == nil {
-			continue
-		}
-		collectSagaJournalImpls(pkg, iface, implSet, implPkgSet)
-	}
-
-	require.NotEmpty(t, implSet,
-		"SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01: zero Journal implementations collected — "+
-			"likely a type-universe regression (iface and impls must share one packages.Load). "+
-			"Expect at least journal.MemJournal and saga.PGJournal.")
-
-	// ─── Step 3: scan test corpus for RunConformanceSuite call sites with
-	// impl-level enrollment. A test file is credited with enrolling impl X
-	// only if (a) it contains a sagajournaltest.RunConformanceSuite call AND
-	// (b) it constructs X (constructor call whose return type unwraps to X).
-	// Package co-location is no longer enough — closes the gap where two
-	// impls in one package could share a single conformance call.
-	enrolledImpls := make(map[string]bool)
-
-	testPatterns := prodscan.Patterns(root)
-	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, testPatterns),
-		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil {
-				return nil
-			}
-			for _, f := range p.Files {
-				if !strings.HasSuffix(p.Rel(f), "_test.go") {
-					continue
-				}
-				creditEnrollmentsFromFactory(p.TypesInfo, p.Files, f,
-					sagaConformancePkg, sagaConformanceFuncName, implSet, enrolledImpls)
-			}
-			return nil
-		})
-
-	// ─── Step 4: flag unenrolled implementations ─────────────────────────────
-	var diags []Diagnostic
-	for implKey := range implSet {
-		if enrolledImpls[implKey] {
-			continue
-		}
-		dotIdx := strings.LastIndex(implKey, ".")
-		if dotIdx < 0 {
-			continue
-		}
-		pkgPath := implKey[:dotIdx]
-		diags = append(diags, Diagnostic{
-			Rel:  implKey,
-			Line: 0,
-			Message: fmt.Sprintf(
-				"archtest: kernel/saga/journal.Journal impl %q not enrolled "+
-					"(SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01). "+
-					"Add a _test.go in package %s (or its external _test) that "+
-					"both calls sagajournaltest.RunConformanceSuite(t, factory) "+
-					"AND constructs %s inside the factory closure (impl-level "+
-					"enrollment).",
-				implKey, pkgPath, implKey,
-			),
-		})
-	}
-	sort.Slice(diags, func(i, j int) bool { return diags[i].Rel < diags[j].Rel })
+	diags := CheckSagaJournalConformanceEnrollment(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()})
 	Report(t, "SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01", diags)
 }
 
@@ -1655,7 +943,8 @@ func TestSagaJournalConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t *test
 			if strings.HasPrefix(rel, "kernel/saga/journal/") ||
 				strings.HasPrefix(rel, "kernel/saga/sagajournaltest/") ||
 				strings.HasPrefix(rel, "adapters/postgres/saga/") ||
-				strings.HasPrefix(rel, "runtime/saga/") {
+				strings.HasPrefix(rel, "runtime/saga/") ||
+				strings.HasPrefix(rel, "tools/archtest/") {
 				continue
 			}
 			EachInSubtree[ast.BasicLit](f, func(lit *ast.BasicLit) {
@@ -1745,11 +1034,6 @@ func TestSagaJournalConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t *test
 // ref: SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01 (sibling rule, same mechanism)
 // ref: docs/architecture/202606051200-1609-adr-saga-journal-projection-source.md §6
 
-const (
-	sagaGlobalReaderIfaceName       = "GlobalReader"
-	sagaGlobalReaderConformanceFunc = "RunGlobalReaderConformance"
-)
-
 // TestSagaGlobalReaderConformanceEnrollment enforces
 // SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01: every concrete type implementing
 // kernel/saga/journal.GlobalReader in the production tree must have a
@@ -1757,101 +1041,7 @@ const (
 // package that also constructs the impl.
 func TestSagaGlobalReaderConformanceEnrollment(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping packages.Load-based archtest in -short mode")
-	}
-
-	root := findModuleRoot(t)
-
-	// ─── Step 1: resolve journal.GlobalReader interface ─────────────────────
-	prodPatterns := prodscan.Patterns(root)
-	ifacePatterns := append([]string{"./kernel/saga/journal/..."}, prodPatterns...)
-
-	var iface *types.Interface
-	var implPkgs []*types.Package
-
-	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns),
-		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil {
-				return nil
-			}
-			if p.Pkg.Path() == sagaJournalIfacePkg {
-				if obj := p.Pkg.Scope().Lookup(sagaGlobalReaderIfaceName); obj != nil {
-					if named, ok := obj.Type().(*types.Named); ok {
-						if i, ok := named.Underlying().(*types.Interface); ok {
-							iface = i.Complete()
-						}
-					}
-				}
-			}
-			implPkgs = append(implPkgs, p.Pkg)
-			return nil
-		})
-
-	require.NotNil(t, iface,
-		"SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01: failed to resolve journal.GlobalReader interface; "+
-			"check import path %s", sagaJournalIfacePkg)
-
-	// ─── Step 2: collect all concrete implementations ───────────────────────
-	implSet := make(map[string]bool)
-	implPkgSet := make(map[string]bool)
-	for _, pkg := range implPkgs {
-		if pkg == nil {
-			continue
-		}
-		collectSagaJournalImpls(pkg, iface, implSet, implPkgSet)
-	}
-
-	require.NotEmpty(t, implSet,
-		"SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01: zero GlobalReader implementations collected — "+
-			"likely a type-universe regression (iface and impls must share one packages.Load). "+
-			"Expect at least journal.MemJournal.")
-
-	// ─── Step 3: scan test corpus for RunGlobalReaderConformance call sites
-	// with impl-level enrollment (constructs the impl AND calls the suite). ──
-	enrolledImpls := make(map[string]bool)
-	testPatterns := prodscan.Patterns(root)
-	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, testPatterns),
-		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil {
-				return nil
-			}
-			for _, f := range p.Files {
-				if !strings.HasSuffix(p.Rel(f), "_test.go") {
-					continue
-				}
-				creditEnrollmentsFromFactory(p.TypesInfo, p.Files, f,
-					sagaConformancePkg, sagaGlobalReaderConformanceFunc, implSet, enrolledImpls)
-			}
-			return nil
-		})
-
-	// ─── Step 4: flag unenrolled implementations ────────────────────────────
-	var diags []Diagnostic
-	for implKey := range implSet {
-		if enrolledImpls[implKey] {
-			continue
-		}
-		dotIdx := strings.LastIndex(implKey, ".")
-		if dotIdx < 0 {
-			continue
-		}
-		pkgPath := implKey[:dotIdx]
-		diags = append(diags, Diagnostic{
-			Rel:  implKey,
-			Line: 0,
-			Message: fmt.Sprintf(
-				"archtest: kernel/saga/journal.GlobalReader impl %q not enrolled "+
-					"(SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01). "+
-					"Add a _test.go in package %s (or its external _test) that "+
-					"both calls sagajournaltest.RunGlobalReaderConformance(t, factory) "+
-					"AND constructs %s inside the factory closure (impl-level "+
-					"enrollment).",
-				implKey, pkgPath, implKey,
-			),
-		})
-	}
-	sort.Slice(diags, func(i, j int) bool { return diags[i].Rel < diags[j].Rel })
+	diags := CheckSagaGlobalReaderConformanceEnrollment(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()})
 	Report(t, "SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01", diags)
 }
 
@@ -1949,7 +1139,8 @@ func TestSagaGlobalReaderConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t 
 			if strings.HasPrefix(rel, "kernel/saga/journal/") ||
 				strings.HasPrefix(rel, "kernel/saga/sagajournaltest/") ||
 				strings.HasPrefix(rel, "adapters/postgres/saga/") ||
-				strings.HasPrefix(rel, "runtime/saga/") {
+				strings.HasPrefix(rel, "runtime/saga/") ||
+				strings.HasPrefix(rel, "tools/archtest/") {
 				continue
 			}
 			EachInSubtree[ast.BasicLit](f, func(lit *ast.BasicLit) {
@@ -1977,162 +1168,6 @@ func TestSagaGlobalReaderConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t 
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
-
-// collectSagaJournalImpls adds to implSet all concrete types in pkg (exported
-// AND unexported) that implement Journal (value or pointer receiver).
-// Interface types are skipped. Unexported impls must also enroll — a package-
-// private fake/wrapper that satisfies the interface still risks behavior
-// drift if not exercised by the conformance suite.
-func collectSagaJournalImpls(pkg *types.Package, iface *types.Interface, implSet, implPkgSet map[string]bool) {
-	for _, name := range pkg.Scope().Names() {
-		obj, ok := pkg.Scope().Lookup(name).(*types.TypeName)
-		if !ok {
-			continue
-		}
-		t := obj.Type()
-		if _, isIface := t.Underlying().(*types.Interface); isIface {
-			continue
-		}
-		if typesutil.ImplementsInterface(t, iface) {
-			key := pkg.Path() + "." + name
-			implSet[key] = true
-			implPkgSet[pkg.Path()] = true
-		}
-	}
-}
-
-// extractEnrolledImpls inspects a CallExpr's callee signature and returns
-// implKey strings ("pkg/path.TypeName") for every concrete Journal impl that
-// the call constructs (return values whose underlying named type is in
-// implSet). Pointer wrappers (*T) are unwrapped. Cross-package type identity
-// is irrelevant — we compare by string keys, so the iface-pass and test-pass
-// loads do not need to share *types.Named instances.
-//
-// This is the impl-level upgrade of the prior package-level enrollment: a
-// test file is now only credited with enrolling impl X if it actually
-// constructs X — package co-location is no longer enough.
-func extractEnrolledImpls(call *ast.CallExpr, info *types.Info, implSet map[string]bool) []string {
-	if info == nil {
-		return nil
-	}
-	calleeType := info.TypeOf(call.Fun)
-	if calleeType == nil {
-		return nil
-	}
-	sig, ok := calleeType.(*types.Signature)
-	if !ok {
-		return nil
-	}
-	var out []string
-	results := sig.Results()
-	for i := 0; i < results.Len(); i++ {
-		rt := results.At(i).Type()
-		if ptr, isPtr := rt.(*types.Pointer); isPtr {
-			rt = ptr.Elem()
-		}
-		named, ok := rt.(*types.Named)
-		if !ok {
-			continue
-		}
-		obj := named.Obj()
-		if obj == nil || obj.Pkg() == nil {
-			continue
-		}
-		key := obj.Pkg().Path() + "." + obj.Name()
-		if implSet[key] {
-			out = append(out, key)
-		}
-	}
-	return out
-}
-
-// creditEnrollmentsFromFactory walks file for calls to confPkg.confFunc(t, factory)
-// and credits ONLY the impls the FACTORY argument constructs (call.Args[1]),
-// binding enrollment to the factory actually passed rather than to any
-// constructor elsewhere in the file. Shared by the Journal and GlobalReader
-// enrollment rules (#1641 review F1 — closes the file-level false-credit gap
-// where an unrelated NewXxx() in a conformance-calling file falsely credited Xxx).
-func creditEnrollmentsFromFactory(
-	info *types.Info, files []*ast.File, file *ast.File,
-	confPkg, confFunc string, implSet, enrolled map[string]bool,
-) {
-	if info == nil {
-		return
-	}
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
-		if !ok || pkgPath != confPkg || name != confFunc {
-			return
-		}
-		for _, implKey := range factoryConstructedImpls(call, info, files, implSet) {
-			enrolled[implKey] = true
-		}
-	})
-}
-
-// factoryConstructedImpls returns the impl keys constructed inside the factory
-// argument (call.Args[1]) of a conformance call. Resolves three factory forms:
-// an inline FuncLit, a named-func Ident (its FuncDecl in the package), and a
-// local var bound to a FuncLit. Any other form resolves to no body and credits
-// nothing — fail-closed: an unrecognized factory shape flags its impl as
-// UNENROLLED (CI-visible) rather than silently crediting it.
-func factoryConstructedImpls(call *ast.CallExpr, info *types.Info, files []*ast.File, implSet map[string]bool) []string {
-	if len(call.Args) < 2 {
-		return nil
-	}
-	body := factoryBody(call.Args[1], info, files)
-	if body == nil {
-		return nil
-	}
-	var out []string
-	EachInSubtree[ast.CallExpr](body, func(c *ast.CallExpr) {
-		out = append(out, extractEnrolledImpls(c, info, implSet)...)
-	})
-	return out
-}
-
-// factoryBody resolves a conformance factory argument to the function body that
-// constructs the impl: a direct FuncLit, a named-func Ident (its FuncDecl), or a
-// local var Ident bound to a FuncLit (`factory := func(){…}`). Returns nil for
-// any other form.
-func factoryBody(arg ast.Expr, info *types.Info, files []*ast.File) *ast.BlockStmt {
-	switch a := arg.(type) {
-	case *ast.FuncLit:
-		return a.Body
-	case *ast.Ident:
-		obj := info.ObjectOf(a)
-		if obj == nil {
-			return nil
-		}
-		switch obj.(type) {
-		case *types.Func:
-			if fd := findFuncDeclFor(info, files, obj); fd != nil {
-				return fd.Body
-			}
-		case *types.Var:
-			if fl := findVarFuncLit(info, files, obj); fl != nil {
-				return fl.Body
-			}
-		}
-	}
-	return nil
-}
-
-// findFuncDeclFor finds the FuncDecl in files whose name identifier defines obj.
-func findFuncDeclFor(info *types.Info, files []*ast.File, obj types.Object) *ast.FuncDecl {
-	for _, f := range files {
-		for _, decl := range f.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok || fd.Body == nil {
-				continue
-			}
-			if info.Defs[fd.Name] == obj {
-				return fd
-			}
-		}
-	}
-	return nil
-}
 
 // TestSagaEnrollment_FactoryBinding_RED is the reverse self-test for the
 // factory-bound enrollment credit (#1641 review F1). It type-checks a synthetic
@@ -2198,43 +1233,6 @@ func useUnrelated() { _ = NewImpl(); run(0, emptyFactory) }
 	// — this is the file-level false-credit gap the factory binding closes.
 	assert.Empty(t, got["useUnrelated"],
 		"unrelated NewImpl() outside the factory must not credit p.Impl (false-credit gap)")
-}
-
-// findVarFuncLit finds the FuncLit a local var (obj) is bound to via
-// `v := func(){…}` or `var v = func(){…}`.
-func findVarFuncLit(info *types.Info, files []*ast.File, obj types.Object) *ast.FuncLit {
-	for _, f := range files {
-		var found *ast.FuncLit
-		EachInSubtree[ast.AssignStmt](f, func(s *ast.AssignStmt) {
-			if found != nil || len(s.Lhs) != 1 || len(s.Rhs) != 1 {
-				return
-			}
-			if id, ok := s.Lhs[0].(*ast.Ident); ok && info.Defs[id] == obj {
-				if fl, ok := s.Rhs[0].(*ast.FuncLit); ok {
-					found = fl
-				}
-			}
-		})
-		if found != nil {
-			return found
-		}
-		EachInSubtree[ast.ValueSpec](f, func(s *ast.ValueSpec) {
-			if found != nil {
-				return
-			}
-			for i, name := range s.Names {
-				if info.Defs[name] == obj && i < len(s.Values) {
-					if fl, ok := s.Values[i].(*ast.FuncLit); ok {
-						found = fl
-					}
-				}
-			}
-		})
-		if found != nil {
-			return found
-		}
-	}
-	return nil
 }
 
 // ============================================================================
@@ -2329,178 +1327,6 @@ func findVarFuncLit(info *types.Info, files []*ast.File, obj types.Object) *ast.
 //     still resolves any field that actually uses such an alias). B1 only scans
 //     non-test files in runtime/saga; test files may alias freely.
 
-// journalInterfacePkgPath is the canonical import path of the package that
-// declares the Journal / JournalCore / Heartbeater interfaces. Hardcoded rather
-// than derived from go.mod because it is load-bearing: a rename of this package
-// path would be a contract break requiring a deliberate update here.
-const journalInterfacePkgPath = "github.com/ghbvf/gocell/kernel/saga/journal"
-
-// journalInterfaceTypeName / heartbeaterInterfaceTypeName name the two
-// Heartbeat-bearing interfaces that may not be persisted as a field anywhere in
-// runtime/saga production code (rule 1).
-const (
-	journalInterfaceTypeName     = "Journal"
-	heartbeaterInterfaceTypeName = "Heartbeater"
-)
-
-// journalCoreInterfaceTypeName names the Heartbeat-free core interface that only
-// the Coordinator may hold as a field (rule 2).
-const journalCoreInterfaceTypeName = "JournalCore"
-
-// allowedSagaJournalHolder is the single struct in runtime/saga permitted to
-// hold a journal.JournalCore field.
-const allowedSagaJournalHolder = "Coordinator"
-
-// sagaJournalHolderSealRule is the rule ID prefixed to every diagnostic message.
-const sagaJournalHolderSealRule = "SAGA-JOURNAL-HOLDER-SEAL-01"
-
-// journalFieldKind classifies a struct field's resolved type against the three
-// journal-package interfaces this seal cares about.
-type journalFieldKind int
-
-const (
-	journalFieldNone        journalFieldKind = iota // not a journal-package interface
-	journalFieldFull                                // journal.Journal (Heartbeat-bearing)
-	journalFieldHeartbeater                         // journal.Heartbeater (Heartbeat-bearing)
-	journalFieldCore                                // journal.JournalCore (Heartbeat-free)
-)
-
-// classifyJournalFieldType resolves the field expression via go/types and
-// classifies it. Returns journalFieldNone when TypesInfo is nil or the type is
-// not one of the three journal-package interfaces.
-func classifyJournalFieldType(info *types.Info, expr ast.Expr) journalFieldKind {
-	if info == nil {
-		return journalFieldNone
-	}
-	tv, ok := info.Types[expr]
-	if !ok {
-		return journalFieldNone
-	}
-	return classifyResolvedJournalType(tv.Type)
-}
-
-// classifyResolvedJournalType checks whether t (possibly wrapped in one pointer
-// or resolved through a type alias) is journal.Journal, journal.Heartbeater, or
-// journal.JournalCore.
-//
-// On Go 1.23+ (gotypesalias=1, the default — this module is on go 1.25), a type
-// alias materializes as *types.Alias, NOT transparently as the aliased
-// *types.Named. A bare t.(*types.Named) assertion therefore MISSES alias-typed
-// fields (a field of `type J = journal.JournalCore` resolves to *types.Alias and
-// the assertion fails). types.Unalias collapses an alias to its underlying type
-// so the Obj().Pkg().Path()/Name() check below is canonical regardless of how
-// many alias / pointer layers wrap the field type (go/types.Unalias expands a
-// type to the one it denotes after resolving package-level aliases).
-func classifyResolvedJournalType(t types.Type) journalFieldKind {
-	if t == nil {
-		return journalFieldNone
-	}
-	// Collapse a top-level alias (`type J = journal.JournalCore`) before the
-	// pointer probe, then again after unwrapping a pointer (`*J`, or
-	// `type J = *journal.JournalCore`), so every alias⇄pointer ordering resolves.
-	t = types.Unalias(t)
-	if ptr, ok := t.(*types.Pointer); ok {
-		t = types.Unalias(ptr.Elem())
-	}
-	named, ok := t.(*types.Named)
-	if !ok {
-		return journalFieldNone
-	}
-	obj := named.Obj()
-	if obj == nil || obj.Pkg() == nil || obj.Pkg().Path() != journalInterfacePkgPath {
-		return journalFieldNone
-	}
-	switch obj.Name() {
-	case journalInterfaceTypeName:
-		return journalFieldFull
-	case heartbeaterInterfaceTypeName:
-		return journalFieldHeartbeater
-	case journalCoreInterfaceTypeName:
-		return journalFieldCore
-	}
-	return journalFieldNone
-}
-
-// journalFieldSealDiag applies the two seal rules to a single struct field and
-// returns a diagnostic when violated.
-func journalFieldSealDiag(p *Pass, rel, holderName string, field *ast.Field) (Diagnostic, bool) {
-	kind := classifyJournalFieldType(p.TypesInfo, field.Type)
-	if kind == journalFieldNone {
-		return Diagnostic{}, false
-	}
-	// Rule 2: JournalCore is allowed, but only on the Coordinator.
-	if kind == journalFieldCore && holderName == allowedSagaJournalHolder {
-		return Diagnostic{}, false
-	}
-	pos := p.Fset.Position(field.Pos())
-	return Diagnostic{Rel: rel, Line: pos.Line, Message: journalFieldSealMessage(kind, holderName)}, true
-}
-
-// journalFieldSealMessage renders the diagnostic text for a violating field.
-func journalFieldSealMessage(kind journalFieldKind, holderName string) string {
-	if kind == journalFieldCore {
-		return fmt.Sprintf(
-			"%s: struct %q holds a journal.JournalCore field; only %q may hold it",
-			sagaJournalHolderSealRule, holderName, allowedSagaJournalHolder,
-		)
-	}
-	// journalFieldFull / journalFieldHeartbeater — a Heartbeat-bearing field.
-	return fmt.Sprintf(
-		"%s: struct %q holds a Heartbeat-bearing journal interface field "+
-			"(journal.Journal or journal.Heartbeater); no struct in runtime/saga may "+
-			"persist a Heartbeat-capable field — hold journal.JournalCore instead. The "+
-			"full Journal exists transiently only as the NewCoordinator parameter handed "+
-			"to executor.NewExecutor (the sanctioned per-step heartbeat funnel).",
-		sagaJournalHolderSealRule, holderName,
-	)
-}
-
-// heartbeatFuncFieldDiag (rule 3) flags a struct field whose type is a func —
-// anonymous, named, aliased, or pointer-to-func — matching the Heartbeater
-// signature shape. Persisting such a callable is the func-value equivalent of
-// holding a journal.Heartbeater field: a centralized heartbeat loop can be
-// reconstructed from a heartbeat func passed into the constructor from OUTSIDE
-// runtime/saga, where the `.Heartbeat` selector is beyond
-// SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01 A1's scope. Closing the field-
-// persistence path here blocks the loop (a loop needs a persisted callable; a
-// bare constructor closure capturing the param is the irreducible residual, same
-// class as that archtest's NewCoordinator pass-through window). No struct in
-// runtime/saga — Coordinator included — may persist a heartbeat-shaped func.
-func heartbeatFuncFieldDiag(p *Pass, rel, holderName string, field *ast.Field) (Diagnostic, bool) {
-	if p.TypesInfo == nil {
-		return Diagnostic{}, false
-	}
-	tv, ok := p.TypesInfo.Types[field.Type]
-	if !ok {
-		return Diagnostic{}, false
-	}
-	// Collapse alias + one pointer level (mirrors classifyResolvedJournalType),
-	// then require the underlying type to be a func signature of the heartbeat
-	// shape. Interface fields (Underlying = *types.Interface) never match here —
-	// they are journal-package interfaces handled by classifyJournalFieldType.
-	t := types.Unalias(tv.Type)
-	if ptr, ok := t.(*types.Pointer); ok {
-		t = types.Unalias(ptr.Elem())
-	}
-	sig, ok := t.Underlying().(*types.Signature)
-	if !ok || !signatureMatchesHeartbeaterShape(sig) {
-		return Diagnostic{}, false
-	}
-	pos := p.Fset.Position(field.Pos())
-	return Diagnostic{
-		Rel:  rel,
-		Line: pos.Line,
-		Message: fmt.Sprintf(
-			"%s: struct %q holds a Heartbeater-shaped func field "+
-				"(func(context.Context, idutil.SafeID, idutil.SafeID, time.Duration) (bool, error)); "+
-				"no struct in runtime/saga may persist a Heartbeat-capable callable (interface OR func) "+
-				"— a persisted heartbeat func reconstructs the centralized-loop anti-pattern from a value "+
-				"passed in from outside runtime/saga. Funnel per-step heartbeat through executor.",
-			sagaJournalHolderSealRule, holderName,
-		),
-	}, true
-}
-
 // TestSagaJournalHolderSeal_A1_OnlyCoordinatorHoldsJournal scans runtime/saga
 // production source for struct fields whose resolved type is a journal-package
 // interface, applying both seal rules (see package godoc):
@@ -2550,56 +1376,11 @@ func TestSagaJournalHolderSeal_A1_OnlyCoordinatorHoldsJournal(t *testing.T) {
 	Report(t, sagaJournalHolderSealRule+"-A1", diags)
 }
 
-// journalPackageLocalNames returns the set of local identifiers in file bound
-// to the journal interface package (journalInterfacePkgPath): the default
-// package name for a plain import, plus any explicit import alias
-// (`import sagajournal "…/journal"`). Blank (`_`) and dot (`.`) imports are not
-// usable as a `pkg.Type` selector base and are excluded — a dot-imported
-// `type X = JournalCore` is a bare-Ident form (no SelectorExpr) noted as a
-// residual in the package godoc.
-func journalPackageLocalNames(file *ast.File) map[string]bool {
-	names := map[string]bool{}
-	for _, imp := range file.Imports {
-		p, err := strconv.Unquote(imp.Path.Value)
-		if err != nil || p != journalInterfacePkgPath {
-			continue
-		}
-		switch {
-		case imp.Name == nil:
-			names[path.Base(journalInterfacePkgPath)] = true // default name: "journal"
-		case imp.Name.Name == "_" || imp.Name.Name == ".":
-			// not usable as a selector base; skip
-		default:
-			names[imp.Name.Name] = true
-		}
-	}
-	return names
-}
-
-// journalInterfaceAliasName reports the journal interface name aliased by ts if
-// ts is `type X = <localName>.{Journal,JournalCore,Heartbeater}` where localName
-// is any local binding of the journal package (journalLocalNames), else
-// ("", false). Resolving via journalLocalNames rather than a hardcoded "journal"
-// closes the import-alias evasion: `import sagajournal "…/journal"` followed by
-// `type X = sagajournal.JournalCore` is now flagged.
-func journalInterfaceAliasName(ts *ast.TypeSpec, journalLocalNames map[string]bool) (string, bool) {
-	// An alias has a valid Assign token.
-	if !ts.Assign.IsValid() {
-		return "", false
-	}
-	sel, ok := ts.Type.(*ast.SelectorExpr)
-	if !ok {
-		return "", false
-	}
-	id, ok := sel.X.(*ast.Ident)
-	if !ok || !journalLocalNames[id.Name] {
-		return "", false
-	}
-	switch sel.Sel.Name {
-	case journalInterfaceTypeName, journalCoreInterfaceTypeName, heartbeaterInterfaceTypeName:
-		return sel.Sel.Name, true
-	}
-	return "", false
+// TestSagaJournalHolderSeal_CheckDogfood exercises the aggregate CheckSagaJournalHolderSeal
+// on GoCell production (must yield 0 diags), verifying the importable Check* surface.
+func TestSagaJournalHolderSeal_CheckDogfood(t *testing.T) {
+	t.Parallel()
+	Report(t, sagaJournalHolderSealRule, CheckSagaJournalHolderSeal(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 }
 
 // TestSagaJournalHolderSeal_BlindSpot_B1_NoAliasInRuntimeSaga ensures production
@@ -2938,44 +1719,6 @@ func TestSagaJournalHolderSeal_A1_HeartbeatFuncFieldFlagged(t *testing.T) {
 // ref: SAGA-STEP-RUN-OUTSIDE-TX-01 section (callsite-discipline pattern)
 // ref: .claude/rules/gocell/ai-robust.md §"Funnel 双向锁评级"
 
-const sagaLeaderGateRule = "SAGA-DRIVE-BEHIND-LEADER-GATE-01"
-
-// driveOneMethodName is the Coordinator step-drive method gated by leader-elect.
-const driveOneMethodName = "driveOne"
-
-// acquireLeadMethodName is the leader-elect gate method tickOnce must call.
-const acquireLeadMethodName = "acquireLead"
-
-// tickOnceFuncName is the single sanctioned driveOne caller.
-const tickOnceFuncName = "tickOnce"
-
-// sagaLeaderGateFixturesDir is the testdata directory for red fixtures.
-const sagaLeaderGateFixturesDir = "saga_leader_gate_fixtures"
-
-const (
-	violSagaLeaderA1DriveOutsideTick = "SAGA-DRIVE-BEHIND-LEADER-GATE-01-A1: " +
-		"driveOne CallExpr outside tickOnce body — " +
-		"driveOne must only be called from tickOnce so the leader-elect gate guards every drive"
-
-	violSagaLeaderA2TickMissingGate = "SAGA-DRIVE-BEHIND-LEADER-GATE-01-A2: " +
-		"tickOnce body does not call acquireLead — " +
-		"the sole driveOne caller must pass the leader-elect gate"
-
-	violSagaLeaderA3LeadIgnored = "SAGA-DRIVE-BEHIND-LEADER-GATE-01-A3: " +
-		"tickOnce calls acquireLead but its lead result does not gate driveOne — " +
-		"the gate verdict must guard the drive (e.g. `if !lead { continue }`)"
-)
-
-// callIsMethodNamed reports whether call is `<expr>.<name>(...)` — selector
-// method name matched syntactically (pure AST, no types).
-func callIsMethodNamed(call *ast.CallExpr, name string) bool {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || sel.Sel == nil {
-		return false
-	}
-	return sel.Sel.Name == name
-}
-
 // --- A1: driveOne only inside tickOnce ---
 
 // TestSagaLeaderGate_A1_DriveOneOnlyInTickOnce asserts every `.driveOne(`
@@ -2999,28 +1742,6 @@ func TestSagaLeaderGate_A1_DriveOneOnlyInTickOnce(t *testing.T) {
 	Report(t, sagaLeaderGateRule+"-A1", diags)
 }
 
-// checkLeaderGateA1 emits a diagnostic for every driveOne callsite in file that
-// is not within the tickOnce body range.
-func checkLeaderGateA1(p *Pass, file *ast.File) []Diagnostic {
-	tickRanges := collectFuncBodyRanges(file, tickOnceFuncName)
-	var ds []Diagnostic
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		if !callIsMethodNamed(call, driveOneMethodName) {
-			return
-		}
-		if posInRanges(call.Pos(), tickRanges) {
-			return
-		}
-		pos := p.Fset.Position(call.Pos())
-		ds = append(ds, Diagnostic{
-			Rel:     filepath.ToSlash(p.Rel(file)),
-			Line:    pos.Line,
-			Message: violSagaLeaderA1DriveOutsideTick,
-		})
-	})
-	return ds
-}
-
 // --- A2: tickOnce must call acquireLead ---
 
 // TestSagaLeaderGate_A2_TickOnceCallsAcquireLead asserts each tickOnce function
@@ -3042,29 +1763,6 @@ func TestSagaLeaderGate_A2_TickOnceCallsAcquireLead(t *testing.T) {
 	})
 
 	Report(t, sagaLeaderGateRule+"-A2", diags)
-}
-
-// checkLeaderGateA2 emits a diagnostic for any tickOnce FuncDecl whose body
-// does not contain a call to acquireLead.
-func checkLeaderGateA2(p *Pass, file *ast.File) []Diagnostic {
-	var ds []Diagnostic
-	EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-		if fd.Name == nil || fd.Name.Name != tickOnceFuncName || fd.Body == nil {
-			return
-		}
-		if _, ok := FindFirstInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) bool {
-			return callIsMethodNamed(call, acquireLeadMethodName)
-		}); ok {
-			return
-		}
-		pos := p.Fset.Position(fd.Pos())
-		ds = append(ds, Diagnostic{
-			Rel:     filepath.ToSlash(p.Rel(file)),
-			Line:    pos.Line,
-			Message: violSagaLeaderA2TickMissingGate,
-		})
-	})
-	return ds
 }
 
 // --- A3: acquireLead's lead result must gate driveOne ---
@@ -3093,117 +1791,14 @@ func TestSagaLeaderGate_A3_LeadGatesDriveOne(t *testing.T) {
 	Report(t, sagaLeaderGateRule+"-A3", diags)
 }
 
-// checkLeaderGateA3 emits a diagnostic for any tickOnce that calls driveOne and
-// acquireLead but does not let the acquireLead boolean result (lead) gate the
-// drive. "Gate" is approximated structurally: there must be an IfStmt in
-// tickOnce whose condition references the lead variable and whose body either
-// early-exits the claim loop (a BranchStmt / ReturnStmt — the `if !lead {
-// continue }` shape) or directly encloses a driveOne call (the `if lead { …
-// driveOne … }` shape). A blank/missing lead binding is an immediate violation
-// (a discarded verdict cannot gate anything).
-func checkLeaderGateA3(p *Pass, file *ast.File) []Diagnostic {
-	var ds []Diagnostic
-	EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-		if fd.Name == nil || fd.Name.Name != tickOnceFuncName || fd.Body == nil {
-			return
-		}
-		// If this tickOnce never drives, A3 is vacuous (A1 governs drive sites).
-		if !bodyCallsMethodNamed(fd.Body, driveOneMethodName) {
-			return
-		}
-		leadVar, ok := acquireLeadResultVar(fd.Body)
-		if !ok || !leadGatesDrive(fd.Body, leadVar) {
-			pos := p.Fset.Position(fd.Pos())
-			ds = append(ds, Diagnostic{
-				Rel:     filepath.ToSlash(p.Rel(file)),
-				Line:    pos.Line,
-				Message: violSagaLeaderA3LeadIgnored,
-			})
-		}
-	})
-	return ds
-}
-
-// bodyCallsMethodNamed reports whether body contains a `<expr>.<name>(...)` call.
-func bodyCallsMethodNamed(body *ast.BlockStmt, name string) bool {
-	found := false
-	EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
-		if callIsMethodNamed(call, name) {
-			found = true
-		}
-	})
-	return found
-}
-
-// acquireLeadResultVar finds the assignment whose RHS is `<expr>.acquireLead(...)`
-// and returns the identifier bound to the last LHS element (the lead bool). ok is
-// false when acquireLead is not assigned to a tuple of at least 2 elements or the
-// lead slot is blank (`_`) — a discarded verdict cannot gate the drive.
-//
-// acquireLead currently returns 3 values (release, orphan, lead); the last LHS
-// element is always the bool gate regardless of tuple arity, so arity ≥ 2 is
-// accepted. Fixtures using the historical 2-return form also pass.
-func acquireLeadResultVar(body *ast.BlockStmt) (name string, ok bool) {
-	as, found := FindFirstInSubtree[ast.AssignStmt](body, func(as *ast.AssignStmt) bool {
-		if len(as.Rhs) != 1 || len(as.Lhs) < 2 {
-			return false
-		}
-		call, isCall := as.Rhs[0].(*ast.CallExpr)
-		if !isCall || !callIsMethodNamed(call, acquireLeadMethodName) {
-			return false
-		}
-		last := as.Lhs[len(as.Lhs)-1]
-		id, isID := last.(*ast.Ident)
-		return isID && id.Name != "_"
-	})
-	if !found {
-		return "", false
-	}
-	last := as.Lhs[len(as.Lhs)-1]
-	id := last.(*ast.Ident)
-	return id.Name, true
-}
-
-// leadGatesDrive reports whether some IfStmt in body has a condition referencing
-// leadVar and a body that either early-exits (BranchStmt/ReturnStmt) or contains
-// a driveOne call — the two sanctioned gate shapes.
-func leadGatesDrive(body *ast.BlockStmt, leadVar string) bool {
-	_, ok := FindFirstInSubtree[ast.IfStmt](body, func(ifs *ast.IfStmt) bool {
-		if ifs.Cond == nil || !condReferences(ifs.Cond, leadVar) {
-			return false
-		}
-		return ifBodyEarlyExits(ifs.Body) || bodyCallsMethodNamed(ifs.Body, driveOneMethodName)
-	})
-	return ok
-}
-
-// condReferences reports whether expr contains an identifier named want.
-func condReferences(expr ast.Expr, want string) bool {
-	_, ok := FindFirstInSubtree[ast.Ident](expr, func(id *ast.Ident) bool {
-		return id.Name == want
-	})
-	return ok
-}
-
-// ifBodyEarlyExits reports whether body contains a continue/break/return that
-// skips the rest of the claim-loop iteration before driveOne runs.
-func ifBodyEarlyExits(body *ast.BlockStmt) bool {
-	exits := false
-	EachInSubtree[ast.BranchStmt](body, func(*ast.BranchStmt) { exits = true })
-	if exits {
-		return true
-	}
-	EachInSubtree[ast.ReturnStmt](body, func(*ast.ReturnStmt) { exits = true })
-	return exits
+// TestSagaLeaderGate_CheckDogfood exercises the aggregate CheckSagaDriveBehindLeaderGate
+// on GoCell production (must yield 0 diags), verifying the importable Check* surface.
+func TestSagaLeaderGate_CheckDogfood(t *testing.T) {
+	t.Parallel()
+	Report(t, sagaLeaderGateRule, CheckSagaDriveBehindLeaderGate(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 }
 
 // --- reverse self-tests (red fixtures) ---
-
-// sagaLeaderGateFixturePattern returns (relDir, pattern) for a fixture case.
-func sagaLeaderGateFixturePattern(fix string) (dir, pattern string) {
-	return filepath.Join("tools", "archtest", "testdata", sagaLeaderGateFixturesDir, fix),
-		"./tools/archtest/testdata/" + sagaLeaderGateFixturesDir + "/" + fix
-}
 
 // TestSagaLeaderGate_Detector_RedDriveOutsideTick proves A1 fires when driveOne
 // is called from a function other than tickOnce.
@@ -3370,8 +1965,8 @@ func TestSagaLeaderGate_Detector_RedTickIgnoresLead(t *testing.T) {
 // ref: .claude/rules/gocell/contract-fanout.md (the fanout obligation this guards)
 
 const (
-	sfcStatusPkgPath  = "github.com/ghbvf/gocell/kernel/saga"
-	sfcJournalPkgPath = "github.com/ghbvf/gocell/kernel/saga/journal"
+	sfcStatusPkgPath  = PlatformModulePath + "/kernel/saga"
+	sfcJournalPkgPath = PlatformModulePath + "/kernel/saga/journal"
 	sfcStatusTypeName = "Status"
 	sfcKindTypeName   = "EventKind"
 	sfcReadyzDocRel   = "docs/ops/readyz.md"
@@ -3950,48 +2545,6 @@ func TestSagaCoverageDiagnosticLocations(t *testing.T) {
 // ref: tools/archtest/aftercommit_pure_transient_test.go (parent-node negative)
 // ref: .claude/rules/gocell/ai-robust.md §"Hard 范本目录" "typed marker funnel"
 
-// --- Rule constants ---
-
-const sagaStepRunOutsideTxRule = "SAGA-STEP-RUN-OUTSIDE-TX-01"
-
-// safeRunFuncName is the single sanctioned StepFunc invoker inside coordinator.go.
-const safeRunFuncName = "safeRun"
-
-// runInTxMethodName is the method on TxRunner whose closure body must not
-// contain a safeRun call.
-const runInTxMethodName = "RunInTx"
-
-// sagaRuntimePkgPrefix is the prefix for all production runtime/saga/ files
-// enforced by A1, A2, and B1. Both test-file exclusion (_test.go suffix) and
-// this prefix guard are applied together.
-const sagaRuntimePkgPrefix = "runtime/saga/"
-
-// sagaStepRunFixturesDir is the testdata directory for SAGA-STEP-RUN-OUTSIDE-TX-01
-// red/green fixtures.
-const sagaStepRunFixturesDir = "saga_step_run_outside_tx_fixtures"
-
-// ksagaPkgPath is the import path of kernel/saga, where StepFunc is declared.
-const ksagaPkgPath = "github.com/ghbvf/gocell/kernel/saga"
-
-// stepFuncTypeName is the declared type in ksagaPkgPath.
-const stepFuncTypeName = "StepFunc"
-
-// --- Violation messages ---
-
-const (
-	violSagaA1StepFuncOutsideSafeRun = "SAGA-STEP-RUN-OUTSIDE-TX-01-A1: " +
-		"saga.StepFunc CallExpr outside safeRun body — " +
-		"StepFunc must only be invoked from safeRun (user step code outside DB tx invariant)"
-
-	violSagaA2SafeRunInsideRunInTx = "SAGA-STEP-RUN-OUTSIDE-TX-01-A2: " +
-		"safeRun() called inside RunInTx closure body — " +
-		"user step code would run with a DB transaction held open"
-
-	violSagaB1StepFuncAlias = "SAGA-STEP-RUN-OUTSIDE-TX-01-B1 (blind-spot): " +
-		"type alias of kernel/saga.StepFunc found in runtime/saga/ — " +
-		"A1 type check would miss StepFunc invocations via this alias"
-)
-
 // --- A1: StepFunc callsite uniqueness (typed) ---
 
 // TestSagaStepRunOutsideTx_A1_StepFuncCallsiteUniqueness asserts that every
@@ -4031,103 +2584,6 @@ func TestSagaStepRunOutsideTx_A1_StepFuncCallsiteUniqueness(t *testing.T) {
 	Report(t, sagaStepRunOutsideTxRule+"-A1", diags)
 }
 
-// checkA1StepFuncCallsites emits A1 diagnostics for coordinator.go:
-// every CallExpr whose callee type is saga.StepFunc must be inside safeRun.
-func checkA1StepFuncCallsites(p *Pass, file *ast.File) []Diagnostic {
-	// Resolve the saga.StepFunc named type from the package's import closure.
-	stepFuncType := resolveSagaStepFuncType(p.Pkg)
-	if stepFuncType == nil {
-		// Package doesn't import kernel/saga — nothing to check.
-		return nil
-	}
-
-	// Collect the body Pos/End range of safeRun.
-	safeRunRanges := collectFuncBodyRanges(file, safeRunFuncName)
-
-	var ds []Diagnostic
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		if !calleeIsSagaStepFunc(p.TypesInfo, call, stepFuncType) {
-			return
-		}
-		if posInRanges(call.Pos(), safeRunRanges) {
-			return
-		}
-		pos := p.Fset.Position(call.Pos())
-		ds = append(ds, Diagnostic{
-			Rel:     filepath.ToSlash(p.Rel(file)),
-			Line:    pos.Line,
-			Message: violSagaA1StepFuncOutsideSafeRun,
-		})
-	})
-	return ds
-}
-
-// resolveSagaStepFuncType walks the import closure of pkg to find the
-// kernel/saga package and returns the named type for StepFunc. Returns nil
-// when the package is not imported.
-func resolveSagaStepFuncType(pkg *types.Package) *types.Named {
-	if pkg == nil {
-		return nil
-	}
-	sagaPkg := findImportedPkg(pkg, ksagaPkgPath)
-	if sagaPkg == nil {
-		return nil
-	}
-	obj := sagaPkg.Scope().Lookup(stepFuncTypeName)
-	if obj == nil {
-		return nil
-	}
-	named, _ := obj.Type().(*types.Named)
-	return named
-}
-
-// findImportedPkg does a BFS over pkg's transitive import closure to find the
-// package with the given path. Returns nil if not found.
-func findImportedPkg(root *types.Package, path string) *types.Package {
-	seen := make(map[string]bool)
-	var walk func(*types.Package) *types.Package
-	walk = func(p *types.Package) *types.Package {
-		if p.Path() == path {
-			return p
-		}
-		if seen[p.Path()] {
-			return nil
-		}
-		seen[p.Path()] = true
-		for _, imp := range p.Imports() {
-			if found := walk(imp); found != nil {
-				return found
-			}
-		}
-		return nil
-	}
-	return walk(root)
-}
-
-// calleeIsSagaStepFunc reports whether the callee of call has the same
-// underlying type as sagaStepFuncType. Handles both the exact named type and
-// its underlying function signature.
-func calleeIsSagaStepFunc(info *types.Info, call *ast.CallExpr, sagaStepFuncType *types.Named) bool {
-	if info == nil || sagaStepFuncType == nil {
-		return false
-	}
-	tv, ok := info.Types[call.Fun]
-	if !ok {
-		return false
-	}
-	t := tv.Type
-	if t == nil {
-		return false
-	}
-	// Direct named-type match (exact ksaga.StepFunc).
-	if named, isNamed := t.(*types.Named); isNamed {
-		return named == sagaStepFuncType
-	}
-	// Underlying signature match: a callee can be typed as the underlying func
-	// signature without the named wrapper (e.g. after a type conversion).
-	return types.Identical(t, sagaStepFuncType.Underlying())
-}
-
 // --- A2: safeRun not inside RunInTx closure (pure AST) ---
 
 // TestSagaStepRunOutsideTx_A2_SafeRunNotInsideRunInTxClosure asserts that no
@@ -4163,53 +2619,11 @@ func TestSagaStepRunOutsideTx_A2_SafeRunNotInsideRunInTxClosure(t *testing.T) {
 	Report(t, sagaStepRunOutsideTxRule+"-A2", diags)
 }
 
-// checkA2SafeRunNotInRunInTx walks the file for RunInTx calls and asserts
-// their closure bodies do not contain a direct call to safeRun.
-func checkA2SafeRunNotInRunInTx(p *Pass, file *ast.File) []Diagnostic {
-	var ds []Diagnostic
-	EachInSubtree[ast.CallExpr](file, func(outer *ast.CallExpr) {
-		if !callIsRunInTx(outer) {
-			return
-		}
-		// Args[1] must be the closure literal (the tx callback).
-		if len(outer.Args) < 2 {
-			return
-		}
-		lit, isLit := outer.Args[1].(*ast.FuncLit)
-		if !isLit || lit.Body == nil {
-			return
-		}
-		// Scan inside the closure body for any direct call to safeRun.
-		EachInSubtree[ast.CallExpr](lit.Body, func(inner *ast.CallExpr) {
-			if !callIsSafeRun(inner) {
-				return
-			}
-			pos := p.Fset.Position(inner.Pos())
-			ds = append(ds, Diagnostic{
-				Rel:     filepath.ToSlash(p.Rel(file)),
-				Line:    pos.Line,
-				Message: violSagaA2SafeRunInsideRunInTx,
-			})
-		})
-	})
-	return ds
-}
-
-// callIsRunInTx reports whether call is `<expr>.RunInTx(...)` — the method
-// name matched syntactically.
-func callIsRunInTx(call *ast.CallExpr) bool {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || sel.Sel == nil {
-		return false
-	}
-	return sel.Sel.Name == runInTxMethodName
-}
-
-// callIsSafeRun reports whether call is a direct (unqualified) call to the
-// identifier "safeRun" — the only form that driveOne uses.
-func callIsSafeRun(call *ast.CallExpr) bool {
-	id, ok := call.Fun.(*ast.Ident)
-	return ok && id.Name == safeRunFuncName
+// TestSagaStepRunOutsideTx_CheckDogfood exercises the aggregate CheckSagaStepRunOutsideTx
+// on GoCell production (must yield 0 diags), verifying the importable Check* surface.
+func TestSagaStepRunOutsideTx_CheckDogfood(t *testing.T) {
+	t.Parallel()
+	Report(t, sagaStepRunOutsideTxRule, CheckSagaStepRunOutsideTx(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 }
 
 // --- B1: No StepFunc alias in runtime/saga (pure AST, reverse self-test) ---
@@ -4258,74 +2672,6 @@ func TestSagaStepRunOutsideTx_BlindSpot_B1_NoStepFuncAlias(t *testing.T) {
 	})
 
 	Report(t, sagaStepRunOutsideTxRule+"-B1", diags)
-}
-
-// checkB1NoStepFuncAlias scans file for any TypeSpec that aliases or redefines
-// ksaga.StepFunc using the file's local import name for kernel/saga.
-func checkB1NoStepFuncAlias(p *Pass, file *ast.File) []Diagnostic {
-	ksagaLocal := sagaLocalName(file)
-	if ksagaLocal == "" {
-		// File doesn't import kernel/saga at all — no alias possible.
-		return nil
-	}
-	var ds []Diagnostic
-	EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
-		if ts.Name == nil || ts.Type == nil {
-			return
-		}
-		sel, ok := ts.Type.(*ast.SelectorExpr)
-		if !ok {
-			return
-		}
-		x, ok := sel.X.(*ast.Ident)
-		if !ok || x.Name != ksagaLocal {
-			return
-		}
-		if sel.Sel == nil || sel.Sel.Name != stepFuncTypeName {
-			return
-		}
-		pos := p.Fset.Position(ts.Pos())
-		ds = append(ds, Diagnostic{
-			Rel:     filepath.ToSlash(p.Rel(file)),
-			Line:    pos.Line,
-			Message: violSagaB1StepFuncAlias,
-		})
-	})
-	return ds
-}
-
-// sagaLocalName returns the local identifier used in file to refer to the
-// kernel/saga package (default "saga" for an unnamed import; alias otherwise).
-// Returns "" when the file does not import kernel/saga at all.
-func sagaLocalName(file *ast.File) string {
-	const sagaImportPath = `"github.com/ghbvf/gocell/kernel/saga"`
-	for _, imp := range file.Imports {
-		if imp.Path == nil || imp.Path.Value != sagaImportPath {
-			continue
-		}
-		if imp.Name != nil {
-			return imp.Name.Name
-		}
-		// Default local name is the last path segment.
-		return "saga"
-	}
-	return ""
-}
-
-// isRuntimeSagaProductionFile reports whether rel is a production .go file
-// under runtime/saga/ (i.e., has the sagaRuntimePkgPrefix prefix and does not
-// end with _test.go). Used by A1 and A2 to scope the rule to the full
-// runtime/saga/ package, not just coordinator.go.
-func isRuntimeSagaProductionFile(rel string) bool {
-	return strings.HasPrefix(rel, sagaRuntimePkgPrefix) && !strings.HasSuffix(rel, "_test.go")
-}
-
-// sagaStepRunFixturePattern returns the (relDir, pattern) pair for the given
-// fixture case under sagaStepRunFixturesDir. Mirrors the helper pattern used
-// by the saga compensate pure test.
-func sagaStepRunFixturePattern(fix string) (dir, pattern string) {
-	return filepath.Join("tools", "archtest", "testdata", sagaStepRunFixturesDir, fix),
-		"./tools/archtest/testdata/" + sagaStepRunFixturesDir + "/" + fix
 }
 
 // TestSagaStepRunOutsideTx_Detector_RedExtraFileFixture proves that A1 fires
@@ -4464,207 +2810,6 @@ func sagaConstructorNilGuardFixturePattern(fix string) (dir, pattern string) {
 		"./tools/archtest/testdata/" + sagaConstructorFixturesDir + "/" + fix
 }
 
-// sagaConstructorScopePackages is the set of production package paths scanned
-// by SAGA-CONSTRUCTOR-NIL-GUARD-01.
-var sagaConstructorScopePackages = map[string]bool{
-	"github.com/ghbvf/gocell/runtime/saga":          true,
-	"github.com/ghbvf/gocell/runtime/saga/executor": true,
-}
-
-// sagaGuardFuncKeys is the set of (pkgPath, funcName) pairs that constitute an
-// accepted nil-guard call for a constructor parameter.
-type sagaGuardKey struct{ pkg, name string }
-
-var sagaGuardFuncKeys = []sagaGuardKey{
-	{"github.com/ghbvf/gocell/pkg/validation", "IsNilInterface"},
-	{"github.com/ghbvf/gocell/kernel/clock", "MustHaveClock"},
-}
-
-// scanConstructorNilGuards scans p for top-level New* functions that accept
-// non-variadic interface parameters lacking a guard call. It is a pure function
-// (no *testing.T dependency) so it can be shared between the production scan
-// and the fixture-based reverse test.
-//
-// Detection algorithm:
-//  1. Walk p.Files for top-level FuncDecl (no Recv) whose name starts with "New"
-//     and has a non-nil Body.
-//  2. For each non-variadic parameter: resolve its type via
-//     p.TypesInfo.TypeOf(fieldType). If the Underlying() is an interface, the
-//     parameter is a required interface dep that needs a guard.
-//  3. For each such parameter, collect its types.Object via
-//     p.TypesInfo.Defs[paramIdent].
-//  4. Walk the Body for CallExpr whose callee resolves (via
-//     p.TypesInfo.ObjectOf) to a types.Func in sagaGuardFuncKeys, and whose
-//     first argument's ObjectOf equals the parameter object.
-//  5. If no matching guard call is found, emit a diagnostic.
-func scanConstructorNilGuards(p *Pass) []Diagnostic {
-	if p.TypesInfo == nil {
-		return nil
-	}
-	var out []Diagnostic
-	for _, file := range p.Files {
-		if strings.HasSuffix(filepath.ToSlash(p.Rel(file)), "_test.go") {
-			continue
-		}
-		rel := p.Rel(file)
-		EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-			if fd.Recv != nil || fd.Body == nil {
-				return
-			}
-			if !strings.HasPrefix(fd.Name.Name, "New") {
-				return
-			}
-			if fd.Type.Params == nil {
-				return
-			}
-			// Collect interface parameters and their types.Object.
-			type ifaceParam struct {
-				obj      types.Object
-				typeExpr ast.Expr
-				name     string
-				typStr   string
-			}
-			var ifaces []ifaceParam
-			for _, field := range fd.Type.Params.List {
-				if _, isEllipsis := field.Type.(*ast.Ellipsis); isEllipsis {
-					// variadic — skip
-					continue
-				}
-				typ := p.TypesInfo.TypeOf(field.Type)
-				if typ == nil {
-					continue
-				}
-				if _, isIface := typ.Underlying().(*types.Interface); !isIface {
-					continue
-				}
-				// An unnamed interface parameter (e.g. `func New(journal.Journal)`)
-				// has no identifier to reference, so it can never be nil-guarded —
-				// flag it directly rather than silently skipping (closes the
-				// anonymous-param bypass; the param loop below requires a name).
-				if len(field.Names) == 0 {
-					out = append(out, sagaDiag(p, field.Type, rel,
-						sagaConstructorNilGuardRuleID+": constructor "+fd.Name.Name+
-							" has an unnamed interface parameter (type "+sagaShortType(typ)+
-							") that cannot be nil-guarded; give it a name and add "+
-							"validation.IsNilInterface(<param>) (or clock.MustHaveClock)"))
-					continue
-				}
-				for _, name := range field.Names {
-					obj := p.TypesInfo.Defs[name]
-					// A blank-identifier interface param (`_ journal.Journal`) has
-					// no object to bind a guard to — also a bypass; flag it.
-					if name.Name == "_" || obj == nil {
-						out = append(out, sagaDiag(p, name, rel,
-							sagaConstructorNilGuardRuleID+": constructor "+fd.Name.Name+
-								" has a blank-identifier interface parameter (type "+sagaShortType(typ)+
-								") that cannot be nil-guarded; give it a name and add "+
-								"validation.IsNilInterface(<param>) (or clock.MustHaveClock)"))
-						continue
-					}
-					ifaces = append(ifaces, ifaceParam{
-						obj:      obj,
-						typeExpr: field.Type,
-						name:     name.Name,
-						typStr:   sagaShortType(typ),
-					})
-				}
-			}
-			if len(ifaces) == 0 {
-				return
-			}
-			// For each interface param, check if a guard call referencing it exists
-			// in the body.
-			for _, ip := range ifaces {
-				_, guarded := FindFirstInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) bool {
-					if !sagaIsGuardCall(p, call) {
-						return false
-					}
-					// Check first argument is the parameter object. ast.Unparen
-					// strips redundant parens so IsNilInterface((dep)) is still
-					// recognized as a guard (closes the parenthesized-arg bypass).
-					if len(call.Args) == 0 {
-						return false
-					}
-					firstArg, ok2 := ast.Unparen(call.Args[0]).(*ast.Ident)
-					if !ok2 {
-						return false
-					}
-					return p.TypesInfo.ObjectOf(firstArg) == ip.obj
-				})
-				if !guarded {
-					out = append(out, sagaDiag(p, fd.Name, rel,
-						sagaConstructorNilGuardRuleID+": constructor "+fd.Name.Name+
-							" has interface parameter "+ip.name+" (type "+ip.typStr+
-							") without a guard call (IsNilInterface or clock.MustHaveClock); "+
-							"add validation.IsNilInterface("+ip.name+") or clock.MustHaveClock("+ip.name+", ...)"))
-				}
-			}
-		})
-	}
-	return out
-}
-
-// sagaIsGuardCall reports whether call resolves (via go/types) to a sanctioned
-// nil-guard function — validation.IsNilInterface or clock.MustHaveClock. Shared
-// by scanConstructorNilGuards and the B1 reverse self-test so both key on the
-// same callee identity (not a string name match).
-func sagaIsGuardCall(p *Pass, call *ast.CallExpr) bool {
-	var calleeFunc *types.Func
-	switch fun := call.Fun.(type) {
-	case *ast.SelectorExpr:
-		if f, ok := p.TypesInfo.ObjectOf(fun.Sel).(*types.Func); ok {
-			calleeFunc = f
-		}
-	case *ast.Ident:
-		if f, ok := p.TypesInfo.ObjectOf(fun).(*types.Func); ok {
-			calleeFunc = f
-		}
-	}
-	if calleeFunc == nil || calleeFunc.Pkg() == nil {
-		return false
-	}
-	for _, gk := range sagaGuardFuncKeys {
-		if calleeFunc.Pkg().Path() == gk.pkg && calleeFunc.Name() == gk.name {
-			return true
-		}
-	}
-	return false
-}
-
-// sagaShortType renders t as package.TypeName (short package name, no full
-// import path) to keep diagnostics readable in CI logs.
-func sagaShortType(t types.Type) string {
-	return types.TypeString(t, func(p *types.Package) string { return p.Name() })
-}
-
-// sagaConstructorIfaceParamObjs returns the set of named, non-variadic interface
-// parameter objects of a New* constructor — the params scanConstructorNilGuards
-// requires a guard for. Used by the B2 reverse self-test.
-func sagaConstructorIfaceParamObjs(p *Pass, fd *ast.FuncDecl) map[types.Object]bool {
-	out := map[types.Object]bool{}
-	if fd.Type.Params == nil {
-		return out
-	}
-	for _, field := range fd.Type.Params.List {
-		if _, isEllipsis := field.Type.(*ast.Ellipsis); isEllipsis {
-			continue
-		}
-		typ := p.TypesInfo.TypeOf(field.Type)
-		if typ == nil {
-			continue
-		}
-		if _, isIface := typ.Underlying().(*types.Interface); !isIface {
-			continue
-		}
-		for _, name := range field.Names {
-			if obj := p.TypesInfo.Defs[name]; obj != nil {
-				out[obj] = true
-			}
-		}
-	}
-	return out
-}
-
 // TestSagaConstructorNilGuard_NoUnguardedInterfaceParam asserts that every
 // top-level New* constructor in the runtime/saga and runtime/saga/executor
 // packages guards every non-variadic interface parameter with either
@@ -4679,13 +2824,7 @@ func sagaConstructorIfaceParamObjs(p *Pass, fd *ast.FuncDecl) map[types.Object]b
 //   - B2: guard called on a reassigned alias of the parameter variable
 func TestSagaConstructorNilGuard_NoUnguardedInterfaceParam(t *testing.T) {
 	t.Parallel()
-	diags := Run(t, Production(TypedOpts{Tags: FlatNonDefaultTags()}), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || !sagaConstructorScopePackages[p.Pkg.Path()] {
-			return nil
-		}
-		return scanConstructorNilGuards(p)
-	})
-
+	diags := CheckSagaConstructorNilGuard(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()})
 	Report(t, sagaConstructorNilGuardRuleID, diags)
 }
 
@@ -4855,110 +2994,6 @@ func TestSagaConstructorNilGuard_BlindSpot_B2_NoParamReassignment(t *testing.T) 
 // A1, golden-asserting the diagnostic fires — so a regression in the detector
 // (sagaSlogAttrCtorGuardedKey / posInRanges) is caught, not silently masked by
 // production's current zero violations.
-const sagaSlogInstanceFieldsRule = "SAGA-SLOG-INSTANCE-FIELDS-CALLER-01"
-
-const (
-	sagaInstanceFieldsFuncName = "InstanceFields"
-	sagaSlogPkgPath            = "log/slog"
-	sagaSlogAttrTypeName       = "Attr"
-	sagalogPkgPath             = "github.com/ghbvf/gocell/runtime/saga/internal/sagalog"
-)
-
-// sagaInstanceFieldsGuardedKeys are the per-instance identity attrs that may
-// only be emitted from inside the sagalog.InstanceFields carrier.
-var sagaInstanceFieldsGuardedKeys = map[string]struct{}{
-	"instance_id": {},
-	"lease_id":    {},
-}
-
-const violSagaSlogInstanceFieldsOutsideCarrier = sagaSlogInstanceFieldsRule + ": " +
-	`a log/slog Attr constructor with key "instance_id"|"lease_id" outside ` +
-	"sagalog.InstanceFields — route every per-instance saga log through " +
-	"sagalog.InstanceFields so lease_id is structurally guaranteed (#1266)"
-
-// sagaSlogAttrCtorGuardedKey reports whether call is a log/slog package-level
-// Attr constructor — slog.String / Int / Int64 / Uint64 / Float64 / Bool /
-// Time / Duration / Any / Group / GroupAttrs and any future key-first
-// constructor — whose first argument is one of the guarded identity keys,
-// returning the matched key.
-//
-// It does NOT hardcode the constructor name set: it accepts any call whose
-// callee resolves into package log/slog AND whose signature returns a single
-// log/slog.Attr result (sagaCalleeReturnsSlogAttr). All such log/slog
-// constructors are key-first, so the first arg is the attr key. This keeps the
-// funnel's coverage face aligned with the full log/slog Attr API face (#1266
-// review C1/F1) — a new ctor added to log/slog is covered automatically.
-// Callee resolution is via go/types, so a log/slog import alias does not evade.
-func sagaSlogAttrCtorGuardedKey(info *types.Info, call *ast.CallExpr) (string, bool) {
-	if info == nil || len(call.Args) < 1 {
-		return "", false
-	}
-	pkgPath, _, ok := ResolvePackageRef(info, call.Fun)
-	if !ok || pkgPath != sagaSlogPkgPath {
-		return "", false
-	}
-	if !sagaCalleeReturnsSlogAttr(info, call.Fun) {
-		return "", false
-	}
-	key, ok := EvaluateConstString(info, call.Args[0])
-	if !ok {
-		return "", false
-	}
-	if _, guarded := sagaInstanceFieldsGuardedKeys[key]; !guarded {
-		return "", false
-	}
-	return key, true
-}
-
-// sagaCalleeReturnsSlogAttr reports whether fun (a CallExpr.Fun) resolves to a
-// function whose single result is log/slog.Attr — i.e. an Attr constructor.
-// Used to identify the full key-first constructor family (String/Int/Any/
-// Group/…) by signature rather than by an enumerated name set.
-func sagaCalleeReturnsSlogAttr(info *types.Info, fun ast.Expr) bool {
-	tv, ok := info.Types[fun]
-	if !ok {
-		return false
-	}
-	sig, ok := tv.Type.(*types.Signature)
-	if !ok || sig.Results().Len() != 1 {
-		return false
-	}
-	named, ok := sig.Results().At(0).Type().(*types.Named)
-	if !ok {
-		return false
-	}
-	obj := named.Obj()
-	return obj != nil && obj.Name() == sagaSlogAttrTypeName &&
-		obj.Pkg() != nil && obj.Pkg().Path() == sagaSlogPkgPath
-}
-
-// scanSagaSlogInstanceFieldsFile is the A1 core: flag every log/slog Attr
-// constructor call carrying a guarded identity key (instance_id|lease_id) in
-// file that is NOT inside an InstanceFields body. Shared by A1 (production
-// scan, with the isRuntimeSagaProductionFile filter applied by the caller) and
-// the RED-fixture detector self-test (no production filter).
-func scanSagaSlogInstanceFieldsFile(p *Pass, file *ast.File) []Diagnostic {
-	rel := filepath.ToSlash(p.Rel(file))
-	carrierRanges := collectFuncBodyRanges(file, sagaInstanceFieldsFuncName)
-	var ds []Diagnostic
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		key, ok := sagaSlogAttrCtorGuardedKey(p.TypesInfo, call)
-		if !ok {
-			return
-		}
-		if posInRanges(call.Pos(), carrierRanges) {
-			return
-		}
-		pos := p.Fset.Position(call.Pos())
-		ds = append(ds, Diagnostic{
-			Rel:     rel,
-			Line:    pos.Line,
-			Message: violSagaSlogInstanceFieldsOutsideCarrier + ` (key="` + key + `")`,
-		})
-	})
-	return ds
-}
-
 // TestSagaSlogInstanceFieldsCaller_A1_GuardedKeysOnlyInCarrier is the upstream
 // caller-allowlist: a log/slog Attr constructor carrying a guarded key
 // (instance_id|lease_id) may appear only inside the sagalog.InstanceFields body
@@ -4980,6 +3015,14 @@ func TestSagaSlogInstanceFieldsCaller_A1_GuardedKeysOnlyInCarrier(t *testing.T) 
 	})
 
 	Report(t, sagaSlogInstanceFieldsRule+"-A1", diags)
+}
+
+// TestSagaSlogInstanceFieldsCaller_CheckDogfood exercises the aggregate
+// CheckSagaSlogInstanceFieldsCaller on GoCell production (must yield 0 diags),
+// verifying the importable Check* surface.
+func TestSagaSlogInstanceFieldsCaller_CheckDogfood(t *testing.T) {
+	t.Parallel()
+	Report(t, sagaSlogInstanceFieldsRule, CheckSagaSlogInstanceFieldsCaller(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 }
 
 // sagaSlogInstanceFieldsFixturePattern returns the (relDir, load-pattern) pair
@@ -5063,36 +3106,6 @@ func TestSagaSlogInstanceFieldsCaller_B3_CarrierNameUniqueInRuntimeSaga(t *testi
 	}
 }
 
-// TestSagaSlogInstanceFieldsCaller_B4_NoIdentityAttrStructLiterals closes the
-// detectable half of the "identity attr built indirectly" blind spot: a
-// slog.Attr composite literal carrying a guarded key — keyed
-// (slog.Attr{Key: "instance_id", …}) OR unkeyed (slog.Attr{"instance_id", …}) —
-// would carry an identity key without an Attr-constructor CallExpr for A1 to
-// see. Assert none exists in runtime/saga/ production. (The pre-bound-variable
-// form is a documented residual — runtime/saga uses the carrier by convention.)
-// scanSagaSlogAttrLiteralsFile flags every log/slog.Attr composite literal
-// (keyed or unkeyed) carrying a guarded identity key. Shared by B4 (production
-// scan, with the isRuntimeSagaProductionFile filter applied by the caller) and
-// the RED-fixture self-test.
-func scanSagaSlogAttrLiteralsFile(p *Pass, file *ast.File) []Diagnostic {
-	rel := filepath.ToSlash(p.Rel(file))
-	var ds []Diagnostic
-	EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
-		key, ok := sagaSlogAttrLiteralGuardedKey(p.TypesInfo, cl)
-		if !ok {
-			return
-		}
-		pos := p.Fset.Position(cl.Pos())
-		ds = append(ds, Diagnostic{
-			Rel:  rel,
-			Line: pos.Line,
-			Message: sagaSlogInstanceFieldsRule + ": slog.Attr{…} literal with key \"" + key +
-				"\" — build identity attrs via sagalog.InstanceFields, not a raw slog.Attr literal (#1266)",
-		})
-	})
-	return ds
-}
-
 func TestSagaSlogInstanceFieldsCaller_B4_NoIdentityAttrStructLiterals(t *testing.T) {
 	t.Parallel()
 	diags := Run(t, Typed(TypedOpts{}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
@@ -5110,60 +3123,6 @@ func TestSagaSlogInstanceFieldsCaller_B4_NoIdentityAttrStructLiterals(t *testing
 	})
 
 	Report(t, sagaSlogInstanceFieldsRule+"-B4", diags)
-}
-
-// sagaSlogAttrLiteralGuardedKey reports whether cl is a log/slog.Attr composite
-// literal whose Key field is one of the guarded identity keys, returning the
-// key. Handles BOTH literal forms (#1266 review C1/F2):
-//   - keyed:    slog.Attr{Key: "instance_id", Value: …}
-//   - unkeyed:  slog.Attr{"instance_id", …}   (Key is the first struct field)
-func sagaSlogAttrLiteralGuardedKey(info *types.Info, cl *ast.CompositeLit) (string, bool) {
-	if info == nil {
-		return "", false
-	}
-	named, ok := info.TypeOf(cl).(*types.Named)
-	if !ok {
-		return "", false
-	}
-	obj := named.Obj()
-	if obj == nil || obj.Name() != sagaSlogAttrTypeName || obj.Pkg() == nil || obj.Pkg().Path() != sagaSlogPkgPath {
-		return "", false
-	}
-	if len(cl.Elts) == 0 {
-		return "", false
-	}
-	// Keyed form: a field is given as `Key: <expr>`. Find the first `Key:` field
-	// whose value is a guarded key via the typed find-first funnel — no
-	// caller-held found/done sentinel (SCANNER-FRAMEWORK-USAGE-02).
-	if _, isKV := cl.Elts[0].(*ast.KeyValueExpr); isKV {
-		kv, ok := scanner.FindFirstChild[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) bool {
-			ident, isIdent := kv.Key.(*ast.Ident)
-			if !isIdent || ident.Name != "Key" {
-				return false
-			}
-			_, guarded := sagaGuardedKeyFromExpr(info, kv.Value)
-			return guarded
-		})
-		if !ok {
-			return "", false
-		}
-		return sagaGuardedKeyFromExpr(info, kv.Value)
-	}
-	// Unkeyed (positional) form: slog.Attr's first field is Key (string).
-	return sagaGuardedKeyFromExpr(info, cl.Elts[0])
-}
-
-// sagaGuardedKeyFromExpr evaluates expr to a const string and returns it when
-// it is one of the guarded identity keys.
-func sagaGuardedKeyFromExpr(info *types.Info, expr ast.Expr) (string, bool) {
-	key, ok := EvaluateConstString(info, expr)
-	if !ok {
-		return "", false
-	}
-	if _, guarded := sagaInstanceFieldsGuardedKeys[key]; guarded {
-		return key, true
-	}
-	return "", false
 }
 
 // TestSagaSlogInstanceFieldsCaller_B1_CarrierEmitsBothGuardedKeys closes the
@@ -5570,91 +3529,6 @@ func TestSagaInvariantsConsolidated_REDFixture(t *testing.T) {
 // non-constant arg and is not flagged. Reverse self-check:
 // TestSagaMetricLabelValuesFrozen01_NegativeControl + the callsite fixtures.
 
-const sagaExecutorPkg = PlatformModulePath + "/runtime/saga/executor"
-
-// sagaLabelEnumWant maps each frozen executor label-enum type name to its
-// frozen string value set. Updating any entry requires a simultaneous update to:
-// (1) the enum consts in runtime/saga/executor/observer.go, (2) the classifier
-// feeding it (classifyLeaderSkip / driveResult mapping / tick branches in
-// runtime/saga), (3) dashboards/alerts in docs/ops/alerting-rules.md, and (4)
-// any saga metric label doc契约.
-var sagaLabelEnumWant = map[string][]string{
-	"HeartbeatFailureReason": {"infra_error", "stale_lease"},
-	"TickResult":             {"claimed", "empty", "error"},
-	"DriveResult":            {"ok", "error"},
-	"LeaderSkipReason":       {"contended", "ctx_canceled", "backend_error"},
-}
-
-// sagaEnumTypeName returns the enum type name if t is one of the frozen executor
-// label-enum named types, else "".
-func sagaEnumTypeName(t types.Type) string {
-	named, ok := t.(*types.Named)
-	if !ok {
-		return ""
-	}
-	obj := named.Obj()
-	if obj == nil || obj.Pkg() == nil || obj.Pkg().Path() != sagaExecutorPkg {
-		return ""
-	}
-	if _, frozen := sagaLabelEnumWant[obj.Name()]; frozen {
-		return obj.Name()
-	}
-	return ""
-}
-
-// collectSagaEnumConsts enumerates, per frozen enum type, the string constant
-// values declared in the executor package (p must be that package Pass).
-func collectSagaEnumConsts(p *Pass) map[string][]string {
-	if p.Pkg == nil {
-		return nil
-	}
-	got := make(map[string][]string)
-	scope := p.Pkg.Scope()
-	for _, name := range scope.Names() {
-		c, ok := scope.Lookup(name).(*types.Const)
-		if !ok {
-			continue
-		}
-		typeName := sagaEnumTypeName(c.Type())
-		if typeName == "" {
-			continue
-		}
-		got[typeName] = append(got[typeName], strings.Trim(c.Val().ExactString(), `"`))
-	}
-	return got
-}
-
-// sagaValueSetDiff returns "" when got and want hold the same set
-// (order-insensitive), else a human-readable extra/missing description.
-func sagaValueSetDiff(got, want []string) string {
-	gs, ws := slices.Clone(got), slices.Clone(want)
-	slices.Sort(gs)
-	slices.Sort(ws)
-	if slices.Equal(gs, ws) {
-		return ""
-	}
-	wantSet := make(map[string]struct{}, len(want))
-	for _, k := range want {
-		wantSet[k] = struct{}{}
-	}
-	gotSet := make(map[string]struct{}, len(got))
-	var extra, missing []string
-	for _, k := range got {
-		gotSet[k] = struct{}{}
-		if _, ok := wantSet[k]; !ok {
-			extra = append(extra, k)
-		}
-	}
-	for _, k := range want {
-		if _, ok := gotSet[k]; !ok {
-			missing = append(missing, k)
-		}
-	}
-	slices.Sort(extra)
-	slices.Sort(missing)
-	return "  extra:   " + sliceOrNone(extra) + "\n  missing: " + sliceOrNone(missing)
-}
-
 // TestSagaMetricLabelValuesFrozen01 freezes each executor label-enum's const
 // value set against the independent hardcoded want-set.
 func TestSagaMetricLabelValuesFrozen01(t *testing.T) {
@@ -5690,225 +3564,14 @@ func TestSagaMetricLabelValuesFrozen01(t *testing.T) {
 	}
 }
 
-// isSagaEnumConversion reports whether call is a type conversion to one of the
-// frozen executor label enums (e.g. executor.LeaderSkipReason("x")). The
-// conversion's operand is itself recorded by go/types with the enum type, so
-// scanning it would double-flag; we skip the operands here and let the parent
-// call flag the conversion expression once (as its argument).
-func isSagaEnumConversion(info *types.Info, call *ast.CallExpr) bool {
-	var sel *ast.Ident
-	switch f := call.Fun.(type) {
-	case *ast.Ident:
-		sel = f
-	case *ast.SelectorExpr:
-		sel = f.Sel
-	default:
-		return false
-	}
-	tn, ok := info.ObjectOf(sel).(*types.TypeName)
-	if !ok {
-		return false
-	}
-	return sagaEnumTypeName(tn.Type()) != ""
-}
-
-// isSagaDeclaredConstRef reports whether arg is a bare reference to a const
-// declared in the runtime/saga/executor package AND typed as one of the frozen
-// executor label enums.  A const of an enum type declared in any other package
-// (e.g. `const myReason executor.LeaderSkipReason = "rogue"`) is NOT a valid
-// frozen reference and must be flagged (F1 fix).
-func isSagaDeclaredConstRef(info *types.Info, arg ast.Expr) bool {
-	var obj types.Object
-	switch e := arg.(type) {
-	case *ast.Ident:
-		obj = info.ObjectOf(e)
-	case *ast.SelectorExpr:
-		obj = info.ObjectOf(e.Sel)
-	default:
-		return false
-	}
-	c, ok := obj.(*types.Const)
-	if !ok {
-		return false
-	}
-	// The const must be declared in the executor package (not laundered in from
-	// another package) AND must be of one of the frozen enum types.
-	if c.Pkg() == nil || c.Pkg().Path() != sagaExecutorPkg {
-		return false
-	}
-	return sagaEnumTypeName(c.Type()) != ""
-}
-
-// sagaEnumConstViolation reports whether expr is an inline enum-typed constant
-// that is NOT a valid frozen executor declared-const reference.  Returns the
-// enum type name if it is a violation, "" otherwise.  Used by both the callsite
-// guard and the assignment guard to share detection logic.
-func sagaEnumConstViolation(info *types.Info, expr ast.Expr) string {
-	tv, ok := info.Types[expr]
-	if !ok || tv.Value == nil {
-		return "" // non-constant (var, func call) — allowed
-	}
-	typeName := sagaEnumTypeName(tv.Type)
-	if typeName == "" {
-		return "" // not a frozen enum type
-	}
-	if isSagaDeclaredConstRef(info, expr) {
-		return "" // valid frozen executor const reference
-	}
-	return typeName
-}
-
-// scanSagaEnumLabelCallsites flags any CallExpr argument whose go/types type is a
-// frozen executor label-enum AND is a compile-time constant that is not a valid
-// frozen executor declared-const reference (an inline string literal, a T("x")
-// conversion, or a const declared outside runtime/saga/executor).
-func scanSagaEnumLabelCallsites(p *Pass) []Diagnostic {
-	info := p.TypesInfo
-	if info == nil {
-		return nil
-	}
-	var diags []Diagnostic
-	for _, file := range p.Files {
-		if strings.HasSuffix(p.Rel(file), "_test.go") {
-			continue
-		}
-		rel := p.Rel(file)
-		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-			if isSagaEnumConversion(info, call) {
-				return // operand handled by the parent call that receives the conversion
-			}
-			for _, arg := range call.Args {
-				typeName := sagaEnumConstViolation(info, arg)
-				if typeName == "" {
-					continue // allowed: non-constant, not an enum, or valid frozen executor const
-				}
-				diags = append(diags, Diagnostic{
-					Rel:  rel,
-					Line: p.Fset.Position(arg.Pos()).Line,
-					Message: "inline constant of saga label enum " + typeName +
-						" reaches a metric label — pass a declared executor." + typeName +
-						" const (or a classify() result), not a string literal or " +
-						typeName + "(...) conversion (SAGA-METRIC-LABEL-VALUES-FROZEN-01 callsite guard)",
-				})
-			}
-		})
-	}
-	return diags
-}
-
-// scanSagaEnumLabelAssignments flags any variable declaration or assignment
-// whose LHS has a frozen executor label-enum type and whose RHS is an inline
-// constant that is NOT a valid frozen executor declared-const reference.  This
-// catches the F2 variable-relay bypass: `var x LeaderSkipReason = "typo"` has
-// tv.Value==nil at the callsite (it is a var), so the callsite guard cannot see
-// the violation; we flag it at the assignment site instead.
-func scanSagaEnumLabelAssignments(p *Pass) []Diagnostic {
-	info := p.TypesInfo
-	if info == nil {
-		return nil
-	}
-	var diags []Diagnostic
-	for _, file := range p.Files {
-		if strings.HasSuffix(p.Rel(file), "_test.go") {
-			continue
-		}
-		rel := p.Rel(file)
-		// Walk var declarations only. const GenDecls are EXCLUDED: the executor
-		// package's own enum const block (`const TickClaimed TickResult = "claimed"`
-		// …) IS the frozen-set source of truth — those declarations are enumerated
-		// by collectSagaEnumConsts and value-frozen by A1, so flagging them here
-		// would be a false positive on the canonical definitions. Only `var`
-		// laundering (`var x EnumType = "typo"`) is a bypass of the callsite guard.
-		EachInSubtree[ast.GenDecl](file, func(gd *ast.GenDecl) {
-			if gd.Tok != token.VAR {
-				return
-			}
-			scanner.EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
-				for i, val := range vs.Values {
-					// Determine the type of the LHS.  For `var x EnumType = expr`,
-					// the type is recorded on the Ident in vs.Names[i].
-					if i >= len(vs.Names) {
-						continue
-					}
-					lhsTV, ok := info.Types[vs.Names[i]]
-					if !ok {
-						// Fallback: check the spec-level type expression if present.
-						if vs.Type == nil {
-							continue
-						}
-						lhsTV, ok = info.Types[vs.Type]
-						if !ok {
-							continue
-						}
-					}
-					if sagaEnumTypeName(lhsTV.Type) == "" {
-						continue // LHS is not a frozen enum type
-					}
-					typeName := sagaEnumConstViolation(info, val)
-					if typeName == "" {
-						continue // RHS is non-constant or a valid frozen executor const
-					}
-					diags = append(diags, Diagnostic{
-						Rel:  rel,
-						Line: p.Fset.Position(val.Pos()).Line,
-						Message: "variable of saga label enum " + typeName +
-							" initialized from an inline constant — use a declared executor." +
-							typeName + " const or a classify() result to avoid laundering " +
-							"an arbitrary value into the frozen set (SAGA-METRIC-LABEL-VALUES-FROZEN-01 assignment guard)",
-					})
-				}
-			})
-		})
-		// Walk AssignStmt nodes (x = expr or x := expr).
-		EachInSubtree[ast.AssignStmt](file, func(as *ast.AssignStmt) {
-			for i, rhs := range as.Rhs {
-				if i >= len(as.Lhs) {
-					continue
-				}
-				lhsTV, ok := info.Types[as.Lhs[i]]
-				if !ok {
-					continue
-				}
-				if sagaEnumTypeName(lhsTV.Type) == "" {
-					continue // LHS is not a frozen enum type
-				}
-				typeName := sagaEnumConstViolation(info, rhs)
-				if typeName == "" {
-					continue
-				}
-				diags = append(diags, Diagnostic{
-					Rel:  rel,
-					Line: p.Fset.Position(rhs.Pos()).Line,
-					Message: "variable of saga label enum " + typeName +
-						" assigned from an inline constant — use a declared executor." +
-						typeName + " const or a classify() result to avoid laundering " +
-						"an arbitrary value into the frozen set (SAGA-METRIC-LABEL-VALUES-FROZEN-01 assignment guard)",
-				})
-			}
-		})
-	}
-	return diags
-}
-
-// scanSagaEnumLabelAll runs both the callsite guard and the assignment guard on
-// a single Pass and merges the diagnostics.  Used by the production baseline and
-// by combined fixture tests.
-func scanSagaEnumLabelAll(p *Pass) []Diagnostic {
-	return append(scanSagaEnumLabelCallsites(p), scanSagaEnumLabelAssignments(p)...)
-}
-
 // TestSagaMetricLabelValuesFrozen01_CallsiteGuard is the production GREEN
 // baseline: every saga label enum value reaching a callsite or assigned to a
 // variable is a frozen executor declared const or a non-constant expression
 // (classifyLeaderSkip output / direct executor.Tick* const).
 func TestSagaMetricLabelValuesFrozen01_CallsiteGuard(t *testing.T) {
 	t.Parallel()
-	var allDiags []Diagnostic
-	Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
-		allDiags = append(allDiags, scanSagaEnumLabelAll(p)...)
-		return nil
-	})
-	Report(t, "SAGA-METRIC-LABEL-VALUES-FROZEN-01", allDiags)
+	diags := CheckSagaMetricLabelValuesFrozen(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()})
+	Report(t, "SAGA-METRIC-LABEL-VALUES-FROZEN-01", diags)
 }
 
 // TestSagaMetricLabelValuesFrozen01_NegativeControl proves the freeze comparison

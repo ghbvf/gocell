@@ -59,7 +59,6 @@ package archtest
 
 import (
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -164,11 +163,4 @@ func reservedKeysDiff(got, want []string) string {
 	slices.Sort(missing)
 	return "  extra (in production, not in golden):   " + sliceOrNone(extra) + "\n" +
 		"  missing (in golden, not in production): " + sliceOrNone(missing)
-}
-
-func sliceOrNone(s []string) string {
-	if len(s) == 0 {
-		return "(none)"
-	}
-	return "[" + strings.Join(s, ", ") + "]"
 }

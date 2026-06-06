@@ -147,6 +147,36 @@ type ConfigForExternalCell struct {
 //     → vacuous-green there. Migrated for the unified PlatformModulePath
 //     parameterization + fork-safety only; enforced in GoCell via
 //     TestScaffoldListenerMarkerTypedConst.
+//   - SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01 (CheckSagaCoordinatorNoHeartbeatLoop):
+//     reasons about GoCell-internal runtime/saga layout (or conformance enrollment)
+//     → vacuous/false-red in an external module.
+//   - SAGA-EXECUTOR-RAND-INJECTED-01 (CheckSagaExecutorRandInjected): reasons about
+//     GoCell-internal runtime/saga layout (or conformance enrollment) → vacuous/
+//     false-red in an external module.
+//   - SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01 (CheckSagaJournalConformanceEnrollment):
+//     reasons about GoCell-internal runtime/saga layout (or conformance enrollment)
+//     → vacuous/false-red in an external module.
+//   - SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01 (CheckSagaGlobalReaderConformanceEnrollment):
+//     reasons about GoCell-internal runtime/saga layout (or conformance enrollment)
+//     → vacuous/false-red in an external module.
+//   - SAGA-JOURNAL-HOLDER-SEAL-01 (CheckSagaJournalHolderSeal): reasons about
+//     GoCell-internal runtime/saga layout (or conformance enrollment) → vacuous/
+//     false-red in an external module.
+//   - SAGA-DRIVE-BEHIND-LEADER-GATE-01 (CheckSagaDriveBehindLeaderGate): reasons
+//     about GoCell-internal runtime/saga layout (or conformance enrollment) →
+//     vacuous/false-red in an external module.
+//   - SAGA-STEP-RUN-OUTSIDE-TX-01 (CheckSagaStepRunOutsideTx): reasons about
+//     GoCell-internal runtime/saga layout (or conformance enrollment) → vacuous/
+//     false-red in an external module.
+//   - SAGA-CONSTRUCTOR-NIL-GUARD-01 (CheckSagaConstructorNilGuard): reasons about
+//     GoCell-internal runtime/saga layout (or conformance enrollment) → vacuous/
+//     false-red in an external module.
+//   - SAGA-SLOG-INSTANCE-FIELDS-CALLER-01 (CheckSagaSlogInstanceFieldsCaller):
+//     reasons about GoCell-internal runtime/saga layout (or conformance enrollment)
+//     → vacuous/false-red in an external module.
+//   - SAGA-METRIC-LABEL-VALUES-FROZEN-01 (CheckSagaMetricLabelValuesFrozen):
+//     reasons about GoCell-internal runtime/saga layout (or conformance enrollment)
+//     → vacuous/false-red in an external module.
 //
 // An external consumer gets the rules migrated so far plus any cfg.ExtraRules
 // they add. The set expands as additional portable rules land in #1302.
@@ -161,6 +191,7 @@ func StandardCellRules() []*CellRule {
 		// sanctioned planDerivedArtifact site (no such site in an external repo →
 		// pure ban). Cell-applicable; Hard downstream (types.Info caller-allowlist).
 		{ID: ruleScaffoldDerivedForceOverwrite01, Run: CheckScaffoldDerivedForceOverwrite},
+		{ID: sagaCompensatePureRuleID, Run: CheckSagaStepCompensatePure},
 	}
 }
 
