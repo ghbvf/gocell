@@ -1,0 +1,8 @@
+syntax = "proto3";
+package device.command.v1;
+option go_package = "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1;commandv1";
+service DeviceCommandService {
+  rpc IssueCommand(IssueCommandRequest) returns (IssueCommandResponse) {}
+}
+message IssueCommandRequest { string device_id = 1; }
+message IssueCommandResponse { string ack_id = 1; }

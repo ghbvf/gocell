@@ -2,9 +2,9 @@
 // level-triggered control loop modeled on Kubernetes controller-runtime's
 // Reconciler. It is delivered across stacked PRs: PR-A2 landed the minimal core
 // documented below (the Reconciler interface, Request / Result, and the
-// PermanentError classifier); PR-A3 landed the scheduling Loop — transplanted
-// from runtime/command.SweeperLifecycle — which is present from that commit on;
-// PR-A4 landed the Trigger source abstraction (TickerTrigger / ChannelTrigger).
+// PermanentError classifier); PR-A3 landed the scheduling Loop, which is present
+// from that commit on; PR-A4 landed the Trigger source abstraction
+// (TickerTrigger / ChannelTrigger).
 // Comments here describe how each type is consumed by the Loop to pin its
 // contract. PR-A5 (#1166) refined scheduling: it added the shared heap-based
 // delaying queue (F6, one waitingLoop goroutine) + dirty/processing dedup (F5,
@@ -15,8 +15,7 @@
 // a Trigger is required by Build; defaulting runs through a single applyDefaults()
 // funnel at Start with no lazy getter methods. The Builder is a pure wiring layer:
 // it injects config and validates required deps and introduces NO scheduling logic
-// (all scheduling lives in Loop, transplanted from runtime/command.SweeperLifecycle
-// in PR-A3).
+// (all scheduling lives in Loop).
 //
 // # When to use
 //
@@ -119,11 +118,11 @@
 //     { RequeueAfter time.Duration } (no Requeue bool / Priority int).
 //   - PROD-CLOCK-INJECTION-01 (PR-A3): the Loop's control-plane probe / requeue
 //     timers are confined to the sealed controlPlaneClock type; kernel/reconcile
-//     becomes a sanctioned control-plane host (alongside runtime/command) when
-//     the Loop + clock carve-out land in PR-A3 — it is NOT yet enforced for this
-//     package at the PR-A2 commit. The TickerTrigger (PR-A4) does NOT use this
-//     carve-out: its cadence is driven by an injected clock.Clock, so it makes
-//     no stdlib time.* call.
+//     becomes the sanctioned control-plane host when the Loop + clock carve-out
+//     land in PR-A3 — it is NOT yet enforced for this package at the PR-A2
+//     commit. The TickerTrigger (PR-A4) does NOT use this carve-out: its
+//     cadence is driven by an injected clock.Clock, so it makes no stdlib
+//     time.* call.
 //   - RECONCILE-TRIGGER-INTERFACE-FROZEN-01 (PR-A4): Trigger's method set is
 //     exactly Start(context.Context, chan<- Request) error (send-only sink).
 //   - RECONCILE-RESULT-LABEL-VALUES-FROZEN-01 (PR-A5): the result* const value

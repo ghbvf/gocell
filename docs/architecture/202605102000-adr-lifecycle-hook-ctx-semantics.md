@@ -96,8 +96,8 @@ ownerCancel → worker 退出路径的正确性。OnStop 仅负责有序排空�
 
 ## ref
 
-- `runtime/command/lifecycle.go::SweeperLifecycle.Start` 实现（新语义）
+- `runtime/command/lifecycle.go::SweeperLifecycle.Start` 实现（新语义）（deleted in PR-A8 #1169; lifecycle hook now via reconcile.Loop.Start/Stop）
 - `runtime/bootstrap/lifecycle.go::runHook` — OnStart 分支直接传 ownerCtx，无 applyTimeout 包裹
 - `runtime/bootstrap/bootstrap.go` — `ownerCtx, ownerCancel = WithCancel(runCtx)`
-- `runtime/command/lifecycle_rollback_test.go` 集成测试（新语义下重验通过）
+- `runtime/command/lifecycle_rollback_test.go` 集成测试（新语义下重验通过）（deleted in PR-A8 #1169; lifecycle hook now via reconcile.Loop.Start/Stop）
 - supersede ADR `202605170000-adr-control-plane-business-plane-decouple.md`

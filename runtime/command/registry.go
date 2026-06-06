@@ -1,3 +1,8 @@
+// Package command wires kernel command workers (queue discovery + dispatch
+// registry) into the runtime. The periodic command-expiry sweep is no longer a
+// runtime control shell here — the kernel Sweeper implements reconcile.Reconciler
+// and is driven by a kernel/reconcile.Loop at the cell (see
+// examples/iotdevice/cells/devicecell).
 package command
 
 import (

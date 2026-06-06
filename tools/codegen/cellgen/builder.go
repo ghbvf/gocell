@@ -2,6 +2,7 @@ package cellgen
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/webhook"
 	"github.com/ghbvf/gocell/pkg/contractpath"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/tools/codegen/contractgen"
 	"github.com/ghbvf/gocell/tools/codegen/markergen"
 )
 
@@ -56,6 +58,7 @@ const (
 	roleSubscribe       = "subscribe"
 	roleWebhookReceive  = "webhook-receive"
 	roleWebhookDispatch = "webhook-dispatch"
+	roleServe           = "serve"
 )
 
 // BuildCellSpec projects (cell.yaml + markergen.WireBundle + fieldIndex) into
@@ -169,6 +172,12 @@ func BuildCellSpec(
 		return nil, err
 	}
 	spec.Projections = projections
+
+	grpcServices, err := buildGrpcServicesFromSlices(p, cellID, fieldIndex)
+	if err != nil {
+		return nil, err
+	}
+	spec.GrpcServices = grpcServices
 
 	return spec, nil
 }
@@ -826,6 +835,179 @@ func buildProjectionSpecFromCU(
 		ApplyExpr:    "c." + fieldName + "." + cu.Handler,
 		OnResetExpr:  onResetExpr,
 	}, nil
+}
+
+// buildGrpcServicesFromSlices scans all slices belonging to cellID and
+// converts each contractUsage[role=serve] with kind=grpc into a
+// GrpcServiceGenSpec, sorted by SliceID then ContractID.
+//
+// Skip predicate: only skip when the contract IS KNOWN and is NOT grpc (e.g. a
+// role:serve CU on a kind:http contract is a valid HTTP route handled by
+// markergen — skipping it here is correct). A nil lookup (unknown contract id)
+// is NOT skipped; instead buildGrpcServiceSpecFromCU / validateGrpcContractEndpoint
+// returns an explicit "unknown contract" error, mirroring the subscribe path.
+func buildGrpcServicesFromSlices(p *metadata.ProjectMeta, cellID string, fieldIndex *CellFieldIndex) ([]GrpcServiceGenSpec, error) {
+	return buildSpecsFromSlices(p, cellID, roleServe, fieldIndex, buildGrpcServiceSpecFromCU,
+		func(s GrpcServiceGenSpec) string { return s.SliceID },
+		func(s GrpcServiceGenSpec) string { return s.ContractID },
+		func(cu metadata.ContractUsage) bool {
+			c := p.Contracts[cu.Contract]
+			return c != nil && c.Kind != "grpc"
+		})
+}
+
+// buildGrpcServiceSpecFromCU validates one ContractUsage[role=serve] and
+// converts it to a GrpcServiceGenSpec.
+//
+// The cell struct field is resolved via fieldIndex.resolveSliceField.
+// RegisterFunc is derived from the last dot-segment of the proto service FQN
+// + "Server" (e.g. "DeviceCommandService" → "RegisterDeviceCommandServiceServer").
+// ListenerConst is always "cell.PrimaryListener" for grpc-serve.
+func buildGrpcServiceSpecFromCU(
+	p *metadata.ProjectMeta,
+	cellID, sliceID string,
+	cu metadata.ContractUsage,
+	fieldIndex *CellFieldIndex,
+) (GrpcServiceGenSpec, error) {
+	g, err := validateGrpcContractEndpoint(p, cellID, sliceID, cu.Contract)
+	if err != nil {
+		return GrpcServiceGenSpec{}, err
+	}
+
+	fieldName, err := fieldIndex.resolveSliceField(cu.Field, cellID, sliceID, roleServe)
+	if err != nil {
+		return GrpcServiceGenSpec{}, err
+	}
+	if !goLocalIdentPattern.MatchString(fieldName) {
+		return GrpcServiceGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: grpc-serve field name must be a valid Go identifier",
+			errcode.WithDetails(
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("field", fieldName),
+				errcode.PublicString("pattern", goLocalIdentPattern.String()),
+			))
+	}
+
+	simpleName, err := metadata.GRPCServiceGoName(g.Service)
+	if err != nil {
+		return GrpcServiceGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: grpc contract endpoints.grpc.service is not a valid exported Go name",
+			errcode.WithDetails(
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("contract", cu.Contract),
+			),
+			errcode.WithInternal(errcode.InternalAttr("cause", err)))
+	}
+
+	return GrpcServiceGenSpec{
+		ContractID:    cu.Contract,
+		SliceID:       sliceID,
+		HandlerField:  fieldName,
+		RegisterFunc:  "Register" + simpleName + "Server",
+		ListenerConst: "cell.PrimaryListener",
+		ProtoRel:      g.Proto,
+		Service:       g.Service,
+		Method:        g.Method,
+	}, nil
+}
+
+// validateGrpcContractEndpoint checks that cu.Contract exists, has kind=grpc,
+// and has a fully-populated endpoints.grpc block. Returns the grpc endpoint on success.
+func validateGrpcContractEndpoint(
+	p *metadata.ProjectMeta,
+	cellID, sliceID, contractID string,
+) (*metadata.GRPCTransportMeta, error) {
+	contract, ok := p.Contracts[contractID]
+	if !ok {
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrContractNotFound,
+			"cellgen build: grpc-serve references unknown contract",
+			errcode.WithDetails(
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("contract", contractID),
+			))
+	}
+	if contract.Kind != "grpc" {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: grpc-serve requires a contract of kind grpc",
+			errcode.WithDetails(
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("contract", contractID),
+				errcode.PublicString("kind", contract.Kind),
+			))
+	}
+	if contract.Endpoints.GRPC == nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: grpc contract is missing grpc block in endpoints",
+			errcode.WithDetails(
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("contract", contractID),
+			))
+	}
+	g := contract.Endpoints.GRPC
+	if g.Service == "" {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: grpc contract endpoints.grpc.service is empty",
+			errcode.WithDetails(
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("contract", contractID),
+			))
+	}
+	if g.Method == "" {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: grpc contract endpoints.grpc.method is empty",
+			errcode.WithDetails(
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("contract", contractID),
+			))
+	}
+	if err := metadata.ValidateGRPCProtoPath(g.Proto); err != nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: grpc contract endpoints.grpc.proto is invalid",
+			errcode.WithDetails(
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("contract", contractID),
+			),
+			errcode.WithInternal(errcode.InternalAttr("cause", err)))
+	}
+	return g, nil
+}
+
+// grpcLastSegment returns the last dot-delimited segment of a proto service
+// FQN, e.g. "device.command.v1.DeviceCommandService" → "DeviceCommandService".
+func grpcLastSegment(fqn string) string {
+	if i := strings.LastIndex(fqn, "."); i >= 0 {
+		return fqn[i+1:]
+	}
+	return fqn
+}
+
+// EnrichGrpcServicesWithProtoInfo populates PbImportPath and PbAlias on each
+// GrpcServiceGenSpec by reading the .proto file at root/spec.ProtoRel via
+// contractgen.ReadProtoTypeInfo. This is a post-build step; BuildCellSpec does
+// not read the filesystem so it cannot derive the import path itself.
+//
+// PbAlias is set to "grpc<index>" (0-indexed) to guarantee uniqueness even
+// when multiple services share the same last path segment.
+func EnrichGrpcServicesWithProtoInfo(spec *CellGenSpec, root string) error {
+	for i := range spec.GrpcServices {
+		gs := &spec.GrpcServices[i]
+		protoAbs := filepath.Join(root, filepath.FromSlash(gs.ProtoRel))
+		info, err := contractgen.ReadProtoTypeInfo(protoAbs, gs.Service, gs.Method)
+		if err != nil {
+			return fmt.Errorf("cellgen enrich grpc-serve contract=%s slice=%s: %w", gs.ContractID, gs.SliceID, err)
+		}
+		gs.PbImportPath = info.ImportPath
+		gs.PbAlias = fmt.Sprintf("grpc%d", i)
+	}
+	return nil
 }
 
 // EnrichSubscriptionsWithModulePath populates SubscriptionPackage and

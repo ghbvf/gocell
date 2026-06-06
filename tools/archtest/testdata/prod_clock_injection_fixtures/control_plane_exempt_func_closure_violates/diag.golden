@@ -1,1 +1,1 @@
-runtime/command/lifecycle.go:23: time.NewTicker — must use injected clock.Clock.NewTicker instead
+kernel/reconcile/loop.go:23: time.NewTicker — must use injected clock.Clock.NewTicker instead

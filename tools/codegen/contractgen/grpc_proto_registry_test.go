@@ -2,13 +2,13 @@
 //
 // Package-internal archtest: it lives in tools/codegen/contractgen (not
 // tools/archtest) because the truth source — buildContractSpec + renderFile +
-// readProtoTypeInfo — is reachable only from inside this package (same reason
+// ReadProtoTypeInfo — is reachable only from inside this package (same reason
 // the deleted GRPC-CODEGEN-NO-PROTO-DEP-01 was co-located here). It is therefore
 // NOT in scope for ARCHTEST-VERIFY-COVERAGE-01, which scans tools/archtest only.
 //
 // The proto import path + request/response message type names emitted into a
 // grpc stub's iface_gen.go MUST come from the .proto file (resolved by the
-// ProtoRegistry / readProtoTypeInfo), never from a hand-written literal in
+// ProtoRegistry / ReadProtoTypeInfo), never from a hand-written literal in
 // iface.tmpl or a divergent field write. Carriers (downstream Hard + supporting
 // Medium + a tracked Go ceiling):
 //
@@ -20,7 +20,7 @@
 //	C3 (Hard, render-compare to an INDEPENDENT proto oracle) —
 //	   TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_ImportMatchesProtoOracle renders
 //	   the stub fresh, AST-walks its imports, and asserts the single non-context
-//	   import byte-equals readProtoTypeInfo(proto).ImportPath, and that the
+//	   import byte-equals ReadProtoTypeInfo(proto).ImportPath, and that the
 //	   method signature references the oracle's alias.RequestType / .ResponseType.
 //	   The oracle is computed straight from the .proto, NOT from spec.GRPC, so a
 //	   template that hard-codes a divergent import OR a builder that fills the
@@ -83,9 +83,9 @@ const grpcSingleSourceContractID = "grpc.device.command.v1"
 
 func TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_ImportMatchesProtoOracle(t *testing.T) {
 	t.Parallel()
-	oracle, err := readProtoTypeInfo(fixtureProtoPath(t), fixtureFQService, "IssueCommand")
+	oracle, err := ReadProtoTypeInfo(fixtureProtoPath(t), fixtureFQService, "IssueCommand")
 	if err != nil {
-		t.Fatalf("oracle readProtoTypeInfo: %v", err)
+		t.Fatalf("oracle ReadProtoTypeInfo: %v", err)
 	}
 
 	testDir, err := filepath.Abs(filepath.Join("testdata", "synth", "synth_grpc_minimal"))
@@ -124,7 +124,7 @@ func TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_ImportMatchesProtoOracle(t *testin
 // site C1 locks).
 func TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_PopulatesProtoFields(t *testing.T) {
 	t.Parallel()
-	oracle, err := readProtoTypeInfo(fixtureProtoPath(t), fixtureFQService, "IssueCommand")
+	oracle, err := ReadProtoTypeInfo(fixtureProtoPath(t), fixtureFQService, "IssueCommand")
 	if err != nil {
 		t.Fatalf("oracle: %v", err)
 	}
@@ -250,8 +250,8 @@ func grpcSpecConstructorsOutside(fset *token.FileSet, files []*ast.File, allowed
 
 // --- C4: registry collision uniqueness ----------------------------------------
 
-func sampleProtoInfo() protoTypeInfo {
-	return protoTypeInfo{
+func sampleProtoInfo() ProtoTypeInfo {
+	return ProtoTypeInfo{
 		ProtoPackage: "device.command.v1",
 		ImportPath:   "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1",
 		Alias:        "commandv1",

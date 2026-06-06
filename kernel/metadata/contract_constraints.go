@@ -20,8 +20,12 @@
 package metadata
 
 import (
+	"fmt"
+	"go/token"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/pkg/scaffoldid"
@@ -189,6 +193,93 @@ func IsKnownGRPCStreamingType(s string) bool {
 		}
 	}
 	return false
+}
+
+// ValidateGRPCProtoPath validates an endpoints.grpc.proto path field. It applies
+// five guards in order:
+//
+//  1. non-empty — a proto field is required on every grpc contract.
+//  2. must be rooted under GRPCProtoPathPrefix ("contracts/grpc/") — prevents
+//     referencing protos outside the governed contracts tree.
+//  3. no control rune — a control character would corrupt generated doc comments
+//     and file path handling.
+//  4. filepath.IsLocal — HasPrefix alone does not stop a traversal such as
+//     "contracts/grpc/../../../etc/x" escaping the repo root on os.ReadFile.
+//     This is the single-source guard shared by contractgen and governance FMT-37
+//     (governance never runs contractgen, so without this shared function FMT-37
+//     missed the IsLocal check — PR #1601 finding #2 / #3).
+//  5. subtree escape after lexical clean — a path like "contracts/grpc/../http/x.proto"
+//     passes guard 2 (string HasPrefix) and guard 4 (stays under repo root) but
+//     cleans to "contracts/http/x.proto", which is OUTSIDE the contracts/grpc/
+//     subtree. Guard 5 lexically cleans the path and re-asserts the prefix so that
+//     intra-subtree ".." sequences (e.g. "contracts/grpc/device/../device/x.proto"
+//     → "contracts/grpc/device/x.proto") are accepted while cross-subtree escapes
+//     are rejected.
+//
+// This is a pure lexical guard — symlink resolution is intentionally out of scope.
+// The contracts/grpc/ tree is repo-controlled and the validator must remain FS-free
+// so governance can run it without reading the proto.
+//
+// The returned error carries a plain, path-focused message. Callers are expected
+// to wrap it with their own contract-identity context:
+//
+//	if err := metadata.ValidateGRPCProtoPath(proto); err != nil {
+//	    return fmt.Errorf("contract %q: %w", id, err)
+//	}
+func ValidateGRPCProtoPath(proto string) error {
+	if proto == "" {
+		return fmt.Errorf("grpc block requires proto: endpoints.grpc.proto must be a non-empty path")
+	}
+	if !strings.HasPrefix(proto, GRPCProtoPathPrefix) {
+		return fmt.Errorf("grpc proto %q must be rooted under %q", proto, GRPCProtoPathPrefix)
+	}
+	if i := strings.IndexFunc(proto, unicode.IsControl); i >= 0 {
+		return fmt.Errorf("grpc proto path %q contains a control character at byte %d", proto, i)
+	}
+	if !filepath.IsLocal(filepath.FromSlash(proto)) {
+		return fmt.Errorf("grpc proto %q must be a local path (no traversal, no absolute)", proto)
+	}
+	// Guard 5: lexically clean and re-assert the subtree prefix. A path such as
+	// "contracts/grpc/../http/x.proto" passes HasPrefix (guard 2) and IsLocal
+	// (guard 4) but escapes the contracts/grpc/ subtree once cleaned.
+	clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(proto)))
+	if !strings.HasPrefix(clean, GRPCProtoPathPrefix) {
+		return fmt.Errorf("grpc proto %q escapes the %q subtree (cleans to %q)", proto, GRPCProtoPathPrefix, clean)
+	}
+	return nil
+}
+
+// GRPCServiceGoName extracts the proto service's simple name (last dotted
+// segment of the fully-qualified service name, e.g.
+// "device.command.v1.DeviceCommandService" → "DeviceCommandService") and
+// validates that it is an exported Go identifier.
+//
+// The protoc-gen-go-grpc generator derives Register<Name>Server from the
+// service's Go name, which for valid proto service declarations equals the
+// last FQN segment. An unexported or syntactically invalid segment would cause
+// cellgen to emit a lowercase RegisterfooServer selector that the Go compiler
+// cannot resolve. This function is the single source for that derivation:
+// both cellgen (RegisterFunc derivation) and contractgen (service-name
+// validation) must call it rather than duplicating the logic.
+//
+// Returns an error when the name is empty, not a valid Go identifier, or not
+// exported (uppercase first letter). It is intentionally FS-free so it can
+// run inside governance and codegen without reading the proto file.
+func GRPCServiceGoName(service string) (string, error) {
+	name := service
+	if i := strings.LastIndex(service, "."); i >= 0 {
+		name = service[i+1:]
+	}
+	if name == "" {
+		return "", fmt.Errorf("grpc service %q: simple name is empty", service)
+	}
+	if !token.IsIdentifier(name) {
+		return "", fmt.Errorf("grpc service %q: simple name %q is not a valid Go identifier", service, name)
+	}
+	if !token.IsExported(name) {
+		return "", fmt.Errorf("grpc service %q: simple name %q is not exported (must start with uppercase letter)", service, name)
+	}
+	return name, nil
 }
 
 // TransportEnum lists the canonical wire transports accepted for contract.yaml

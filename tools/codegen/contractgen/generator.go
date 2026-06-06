@@ -185,7 +185,7 @@ func checkGRPCProtoCollisions(root string, p *metadata.ProjectMeta) error {
 		if err := validateGRPCProtoPath(id, g.Proto); err != nil {
 			return err
 		}
-		info, err := readProtoTypeInfo(filepath.Join(root, filepath.FromSlash(g.Proto)), g.Service, g.Method)
+		info, err := ReadProtoTypeInfo(filepath.Join(root, filepath.FromSlash(g.Proto)), g.Service, g.Method)
 		if err != nil {
 			return fmt.Errorf("contract %q: %w", id, err)
 		}

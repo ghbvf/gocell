@@ -1,9 +1,8 @@
 // invariants:
 //   - INVARIANT: KERNEL-CLOCK-LEAF-FALLBACK-01
 //   - INVARIANT: KERNEL-CLOCK-RESET-RELATIVE-PROD-01
-//   - INVARIANT: PROD-CLOCK-INJECTION-01 (control-plane hosts: runtime/command/
-//   - kernel/reconcile/; the kernel/reconcile host realizes
-//     RECONCILE-LOOP-CLOCK-CARVEOUT-01)
+//   - INVARIANT: PROD-CLOCK-INJECTION-01 (control-plane host: kernel/reconcile/,
+//     which realizes RECONCILE-LOOP-CLOCK-CARVEOUT-01)
 //   - INVARIANT: CLOCK-POSITIONAL-INJECTION-01
 //
 // Package archtest — clock injection invariants.
@@ -466,13 +465,16 @@ var forbiddenTimeFns = map[string]string{
 // Why host-scoped, not a global method→callee map (#1275 review F1): a flat,
 // host-agnostic map let any host borrow any other host's method exception — and
 // let a newly added host inherit ALL methods for free. Binding the method set to
-// its host closes both: runtime/command's newTicker is not exempt in
-// kernel/reconcile, kernel/reconcile's newRequeueTimer/now are not exempt in
-// runtime/command, and adding a third host grants NOTHING until that host gets
+// its host closes both: a different host's methods are not exempt in
+// kernel/reconcile, and adding a second host grants NOTHING until that host gets
 // its own explicit (method→callee) entries here.
 //
-// Host prefixes are disjoint (runtime/command/ vs kernel/reconcile/), so the
-// per-rel lookup in controlPlaneClockHostMethods is unambiguous.
+// Currently a single host (kernel/reconcile/); the map structure generically
+// supports multiple hosts — cross-host isolation is structurally enforced but
+// has no live second host to exercise at this time.
+//
+// Host prefixes are disjoint, so the per-rel lookup in
+// controlPlaneClockHostMethods is unambiguous.
 //
 // Extension policy (HARD form-uniqueness): adding a new exempt callsite requires
 // BOTH a deliberate entry here under the owning host AND a matching method on
@@ -489,10 +491,6 @@ var forbiddenTimeFns = map[string]string{
 //
 // ref: docs/architecture/202605270000-adr-clock-positional-injection-funnel.md §#619
 var controlPlaneClockCarveOut = map[string]map[string]string{
-	"runtime/command/": {
-		"newTicker":     "NewTicker", // SweeperLifecycle ticker
-		"newProbeTimer": "NewTimer",  // startup probe
-	},
 	"kernel/reconcile/": {
 		"newProbeTimer":   "NewTimer",  // startup probe
 		"newRequeueTimer": "NewTimer",  // delayed requeue (RECONCILE-LOOP-CLOCK-CARVEOUT-01)
@@ -523,7 +521,7 @@ func controlPlaneClockHostMethods(rel string) map[string]string {
 //
 //	(a) rel is under a sanctioned control-plane host package — i.e.
 //	    controlPlaneClockHostMethods(rel) is non-nil (host keys of
-//	    controlPlaneClockCarveOut: "runtime/command/" or "kernel/reconcile/").
+//	    controlPlaneClockCarveOut: "kernel/reconcile/").
 //	    This package gate prevents any other package from claiming to host a
 //	    "controlPlaneClock" method; the type is package-private (unexported) so
 //	    only code in a host package can declare methods on it. This is the
@@ -576,11 +574,11 @@ func controlPlaneClockHostMethods(rel string) map[string]string {
 //  2. A method named controlPlaneClock from an entirely different package would
 //     satisfy (b)+(c) without gate (a). Gate (a) prevents this by requiring the
 //     file's module-relative path to be under a sanctioned host package
-//     (controlPlaneClockCarveOut keys: runtime/command/ or kernel/reconcile/).
+//     (controlPlaneClockCarveOut keys: "kernel/reconcile/").
 //     Reverse self-check: control_plane_wrong_path_violates fixture has a struct
 //     named controlPlaneClock with a method outside any host → still flagged.
 //     GREEN self-check for the kernel/reconcile host: control_plane_reconcile_passes.
-//  3. An unexported method on a different struct inside runtime/command/ with
+//  3. An unexported method on a different struct inside kernel/reconcile/ with
 //     the name "controlPlaneClock" is not a legitimate bypass because (c) checks
 //     the *receiver type name*, not the method name. A struct named "otherClock"
 //     with a method named "controlPlaneClock" is NOT exempt.
@@ -590,16 +588,14 @@ func controlPlaneClockHostMethods(rel string) map[string]string {
 //     would have passed under the receiver-type-only form; the host-scoped table
 //     rejects it because "harvest" is in no host's set.
 //     Reverse self-check: control_plane_wrong_method_name_violates fixture.
-//  5. A sanctioned method (e.g. "newTicker") that calls the wrong time.*
+//  5. A sanctioned method (e.g. "newRenewTicker") that calls the wrong time.*
 //     function (e.g. time.Sleep instead of time.NewTicker) would pass under
 //     the receiver-type-only form; the stored-callee check rejects it because
-//     the host's "newTicker" callee is "NewTicker", not "Sleep".
+//     the host's "newRenewTicker" callee is "NewTicker", not "Sleep".
 //     Reverse self-check: control_plane_wrong_callee_violates fixture.
-//  6. A host using ANOTHER host's sanctioned method (e.g. kernel/reconcile
-//     declaring "newTicker", which is only runtime/command's) would have passed
-//     under the former host-agnostic method map; the host-scoped table rejects
-//     it because "newTicker" is not in the kernel/reconcile set (#1275 F1).
-//     Reverse self-check: control_plane_cross_host_method_violates fixture.
+//  6. The host-scoped table structurally prevents cross-host borrowing (#1275
+//     F1): currently a single host; cross-host isolation is structurally
+//     supported but has no live second host to exercise at this time.
 //
 // ref: docs/architecture/202605270000-adr-clock-positional-injection-funnel.md §#619
 // ref: PROD-CLOCK-INJECTION-01
@@ -725,11 +721,11 @@ func enclosingFuncDeclKey(fset *token.FileSet, file *ast.File, pos token.Pos) st
 // Control-plane carve-out (host-scoped (host, method, callee) triple, #619 +
 // #1275 F1): a FuncDecl is exempt from PROD-CLOCK-INJECTION-01 only if it is a
 // METHOD whose receiver type name is "controlPlaneClock", whose file is under a
-// sanctioned host (controlPlaneClockCarveOut keys: runtime/command/ or
-// kernel/reconcile/), AND whose name maps to the exact stdlib callee listed for
-// THAT host. This replaces the former comment-marker + hand-maintained
-// allowlist-map form (which was AI-abusable: any marked FuncDecl in any
-// allowlisted file could self-exempt by adding the comment).
+// sanctioned host (controlPlaneClockCarveOut keys: "kernel/reconcile/"), AND
+// whose name maps to the exact stdlib callee listed for THAT host. This replaces
+// the former comment-marker + hand-maintained allowlist-map form (which was
+// AI-abusable: any marked FuncDecl in any allowlisted file could self-exempt by
+// adding the comment).
 //
 // The exemption does NOT extend to closures/FuncLits within an exempt method
 // body. enclosingFuncDeclKey explicitly rejects positions inside FuncLit nodes.
@@ -752,9 +748,9 @@ func enclosingFuncDeclKey(fset *token.FileSet, file *ast.File, pos token.Pos) st
 //  3. A receiver type other than "controlPlaneClock" inside a host: only the
 //     exact type name matches; wrong receiver type is NOT exempt.
 //     Reverse self-check: control_plane_wrong_receiver_type_violates fixture.
-//  4. A host using another host's sanctioned method (e.g. kernel/reconcile
-//     declaring runtime/command's "newTicker"): the host-scoped table denies it.
-//     Reverse self-check: control_plane_cross_host_method_violates fixture.
+//  4. Cross-host borrowing is structurally prevented by the host-scoped table
+//     (#1275 F1). Currently a single host (kernel/reconcile/); the structure
+//     generically supports multiple hosts but has no live second host to exercise.
 //
 // ref: docs/architecture/202605170000-adr-control-plane-business-plane-decouple.md §D-A
 // ref: docs/architecture/202605270000-adr-clock-positional-injection-funnel.md
@@ -808,11 +804,11 @@ func isAllowedRealClockPath(rel string) bool {
 // Control-plane carve-out: a forbidden reference is exempt only if it sits in a
 // top-level *ast.FuncDecl that is a METHOD on receiver type "controlPlaneClock",
 // in a file under a sanctioned host (controlPlaneClockCarveOut keys:
-// runtime/command/ or kernel/reconcile/), AND the method/callee match the exact
-// (host, method, callee) triple listed for that host. The carve-out is
-// method-level only — closures within the exempt method body are NOT exempt
-// (enclosingFuncDeclKey rejects positions in FuncLit nodes). Other methods in
-// the same file with a different receiver type are still checked.
+// "kernel/reconcile/"), AND the method/callee match the exact (host, method,
+// callee) triple listed for that host. The carve-out is method-level only —
+// closures within the exempt method body are NOT exempt (enclosingFuncDeclKey
+// rejects positions in FuncLit nodes). Other methods in the same file with a
+// different receiver type are still checked.
 //
 // AI-robust grade: Medium ((host, method, callee) triple confinement; see godoc
 // of clockControlPlaneAllowedMethods for the permanent ceiling rationale).

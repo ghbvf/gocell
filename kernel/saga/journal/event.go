@@ -156,7 +156,15 @@ func TerminalEventKind(s saga.Status) (EventKind, bool) {
 // stamped by the Journal from its injected clock; callers leave both zero on
 // the way in.
 type Event struct {
-	Version   int64         // assigned by Append; zero on input
+	Version int64 // per-instance position, assigned by Append; zero on input
+	// GlobalSeq is the cross-instance global position — monotonic over the whole
+	// journal, NOT per-instance like Version — assigned by the Journal on append
+	// (in-memory from a global counter; PG from a BIGINT IDENTITY column, PR-PG).
+	// It is the stable total order [GlobalReader] scans by and the value a
+	// projection cursor checkpoints on (see [GlobalEvent]). Additive (#1609
+	// PR-02): callers leave it zero on input, and a backend that does not yet
+	// maintain a global sequence (PG until PR-PG) leaves it zero on the way out.
+	GlobalSeq int64
 	Kind      EventKind     // required, must be Valid
 	StepName  idutil.SafeID // required for step kinds; empty for CompensationStarted / terminal kinds
 	Payload   []byte        // opaque JSON object-or-null; copied defensively by the Journal

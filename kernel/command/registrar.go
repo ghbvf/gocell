@@ -10,8 +10,8 @@ package command
 // runtime/command discovery phase), not the Cell.
 //
 // The runtime consumer lives in runtime/command.DiscoverQueueRegistrars; see
-// that package for wiring examples and for SweeperLifecycle (which manages
-// Sweeper goroutines across Cell Start/Stop).
+// that package for wiring examples. The Sweeper is driven as a
+// reconcile.Reconciler via a kernel/reconcile.Loop.
 type QueueRegistrar interface {
 	RegisterCommandQueue(q Queue)
 }

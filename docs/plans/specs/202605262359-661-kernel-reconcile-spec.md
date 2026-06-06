@@ -185,7 +185,7 @@
 
 **SC-009 (文档完整性)**: `.claude/rules/gocell/reconcile.md` 单源文档覆盖：接口契约、Reconciler 实现模式、leader 选举 disposition 语义、死信判定流程、与 saga/projection 边界。
 
-**SC-010 (零向后兼容包袱)**: 迁移后 `runtime/command/lifecycle.go` 中所有 `SweepTicker` / `SweeperLifecycle` 命名 MUST 完全删除（不留 alias / 不留 deprecation），由 `EXPORTED-ERROR-NEW-01` 等同形态的 archtest 守卫名称真值源。
+**SC-010 (零向后兼容包袱)**: 迁移后 `runtime/command/lifecycle.go`（连同 `SweepTicker` / `SweeperLifecycle` 命名）MUST 完全删除（不留 alias / 不留 deprecation）。name-frozen **不**靠 standing archtest 守——`RECONCILE-NAMING-FROZEN-01` 为 won't-do（grep-of-deleted-name = Soft，ai-robust「Soft 严禁立项」）；真护栏是类型删除 Hard（任何残留引用即编译错误）+ 既有 `RECONCILE-BUILDER-FUNNEL-01` + 编译期 `var _ reconcile.Reconciler = (*command.Sweeper)(nil)` 断言 + 一次性 merge-gate grep（生产源为空）。
 
 ---
 
