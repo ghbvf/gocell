@@ -114,17 +114,13 @@ func scanRefreshCookieSecureAttrs(p *Pass) []Diagnostic {
 			}
 			cookieLits++
 			attrs := map[string]ast.Expr{}
-			for _, e := range cl.Elts {
-				kv, ok := e.(*ast.KeyValueExpr)
-				if !ok {
-					continue
-				}
+			EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
 				key, ok := kv.Key.(*ast.Ident)
 				if !ok {
-					continue
+					return
 				}
 				attrs[key.Name] = kv.Value
-			}
+			})
 			rel := p.Rel(file)
 			line := p.Fset.Position(cl.Pos()).Line
 			if !isTrueIdent(attrs["HttpOnly"]) {
