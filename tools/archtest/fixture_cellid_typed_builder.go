@@ -67,10 +67,10 @@ import (
 )
 
 const (
-	fixtureCellIDRuleID          = "FIXTURE-CELLID-TYPED-BUILDER-01"
+	fixtureCellIDRuleID           = "FIXTURE-CELLID-TYPED-BUILDER-01"
 	metadatatestImportScopeRuleID = "METADATATEST-IMPORT-SCOPE-01"
-	metadatatestNewCellIDFunc    = "NewCellID"
-	metadatatestCellIDSourceFile = "kernel/metadata/metadatatest/cellid.go"
+	metadatatestNewCellIDFunc     = "NewCellID"
+	metadatatestCellIDSourceFile  = "kernel/metadata/metadatatest/cellid.go"
 	// fixtureCellIDADRFile is the relative path to the ADR backing A4
 	// (carveout map ↔ ADR registry consistency). Rename or move of the ADR
 	// file requires synchronized update of this constant in the SAME PR —
@@ -226,7 +226,7 @@ func CheckMetadatatestImportScope(t *testing.T, _ ConfigForExternalCell) []Diagn
 // fixtures and will be migrated via mirror backlog issues; once each
 // such package is migrated, its path prefix is added to the scan scope
 // list below and its allowlist entry (if any) removed.
-func scanCellIDFixtureViolations(t *testing.T, allowSelfFiles, carveOuts map[string]struct{}) []string {
+func scanCellIDFixtureViolations(t *testing.T, allowSelfFiles, carveOuts map[string]struct{}) []string { //nolint:gocognit,lll // archtest AST scanner: per-file carve-out + composite-literal walk over kernel/ tags×2; complexity inherent to FIXTURE-CELLID-TYPED-BUILDER-01 A1 (relocated verbatim from _test.go)
 	t.Helper()
 	scopePrefixes := []string{"kernel/"}
 	var violations []string
@@ -363,7 +363,7 @@ func scanCellIDMapComposite(p *Pass, rel string, comp *ast.CompositeLit, m *type
 	return out
 }
 
-func scanCellIDStructComposite(p *Pass, rel string, comp *ast.CompositeLit, t types.Type) []string {
+func scanCellIDStructComposite(p *Pass, rel string, comp *ast.CompositeLit, t types.Type) []string { //nolint:gocognit,lll // archtest AST scanner: keyed/positional struct-literal field-position resolution; complexity inherent to FIXTURE-CELLID-TYPED-BUILDER-01 (relocated verbatim from _test.go)
 	named, ok := t.(*types.Named)
 	if !ok {
 		// pointer to named?
@@ -442,7 +442,7 @@ func lookupCellIDFieldPosition(structName, fieldName string) (cellIDFieldPositio
 // resolving to a metadatatest package-level Var. Any other shape — bare
 // BasicLit, Ident→BasicLit chain, dynamic NewCellID arg, third-party
 // const ref — is rejected.
-func isSanctionedCellIDExpr(p *Pass, expr ast.Expr) bool {
+func isSanctionedCellIDExpr(p *Pass, expr ast.Expr) bool { //nolint:gocognit,cyclop,lll // archtest AST scanner: enumerates sanctioned NewCellID/typed-var expr forms (selector/ident/call); complexity inherent to FIXTURE-CELLID-TYPED-BUILDER-01 (relocated verbatim from _test.go)
 	switch e := expr.(type) {
 	case *ast.CallExpr:
 		sel, ok := e.Fun.(*ast.SelectorExpr)
@@ -610,7 +610,7 @@ func dedupCellIDStrings(in []string) []string {
 // ADR's §2 carveout registry markdown table. The table is recognized by
 // a header line starting with "| Carved-out function" and ending at the
 // next blank line / non-table line.
-func parseCarveOutTableFromADR(content string) (map[string]struct{}, error) {
+func parseCarveOutTableFromADR(content string) (map[string]struct{}, error) { //nolint:gocognit,lll // archtest ADR-table parser: markdown row-state machine for A4 carve-out consistency; complexity inherent (relocated verbatim from _test.go)
 	out := map[string]struct{}{}
 	lines := strings.Split(content, "\n")
 	inTable := false

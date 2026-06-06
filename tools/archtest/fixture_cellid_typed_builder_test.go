@@ -15,7 +15,7 @@
 //   - A4 TestFixtureCellIDTypedBuilder_CarveOutADRConsistency — ADR carveout
 //     registry ↔ fixtureCellIDCarveOuts map must be character-identical.
 //   - A5 TestFixtureCellIDTypedBuilder_VarInitializerShape — locks that every
-//     CellID-prefixed var in metadatatest is initialised via NewCellID(literal).
+//     CellID-prefixed var in metadatatest is initialized via NewCellID(literal).
 //
 // ref: tools/archtest/cell_id_pattern_single_source_test.go — sibling
 //
