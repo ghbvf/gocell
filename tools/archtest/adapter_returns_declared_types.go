@@ -8,8 +8,8 @@
 // Not registered in StandardCellRules: this rule reads contract.yaml metadata
 // and scans generated contract package imports, which are present in any Cell
 // repo that uses GoCell codegen. Registration + external vacuous/effective
-// semantics verification is a deferred backlog follow-up per #1639 D2. Kept
-// importable + module-path-agnostic.
+// semantics verification is a deferred backlog follow-up per #1639 D2
+// (tracked at #1706). Kept importable + module-path-agnostic.
 //
 // # ADAPTER-RETURNS-DECLARED-TYPES-01
 //

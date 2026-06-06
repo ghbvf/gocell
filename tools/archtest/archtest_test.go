@@ -10,6 +10,14 @@
 //   - INVARIANT: LAYER-09T
 //   - INVARIANT: LAYER-10
 //   - INVARIANT: PGQUERY-01
+//
+// Module-path-agnostic note (#1639 M3 PR-8b): test-input + const platform paths
+// derive from PlatformModulePath (cleared from module_path_funnel.baseline), but
+// the LAYER rule bodies stay in _test.go — they use raw typeseval.LoadProductionPackages
+// + depgraph.FromPackages to build a whole-module import graph, which the per-package
+// Pass/Run funnel does not provide, and this file is in passFunnelPermanentExempt.
+// Moving them into a .go Check* (after the Pass funnel gains a whole-module-graph
+// mode) is deferred to #1705.
 
 package archtest
 
