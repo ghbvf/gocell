@@ -1242,6 +1242,55 @@ rate(gocell_session_cache_revoke_del_errors_total{cell="accesscore"}[5m])
 
 ---
 
+## PostgreSQL RLS 运行时执行（#1676）
+
+`postgres_app_role_restricted_ready` 探针验证 serving pool role 是否符合
+NOSUPERUSER + NOBYPASSRLS 要求——这是 `FORCE ROW LEVEL SECURITY` 在运行时实际生效的前提。
+探针失败意味着 RLS policies 在 schema 层正确定义，但在当前 serving role 下被绕过（superuser
+和 BYPASSRLS role 完全忽略所有 RLS policies）。
+
+### 信号路径（无独立 probe-status 指标）
+
+GoCell **不**把单个 readyz probe 的状态导出为 Prometheus 指标——probe 失败的唯一
+运行时信号是 `/readyz` 返回 **503**（→ k8s readiness probe 标记 pod NotReady）。因此本
+probe 没有形如 `gocell_..._total` 的专属告警序列；它复用既有的 readyz 可用性信号，再由
+运维查 `/readyz?verbose` 的 `dependencies.postgres_app_role_restricted_ready` 字段定位
+具体失败原因。
+
+### GoCellPostgresAppRoleNotRestricted（blackbox /readyz）
+
+若部署了 blackbox_exporter 探测 `/readyz`（推荐用于 RLS-enabled assembly），用真实的
+`probe_success` 序列告警；不要引用不存在的 `gocell_readyz_check`。`probe_success == 0`
+表示 readyz 整体 503（可能由本 probe 或其它依赖触发），运维须查 `/readyz?verbose` 区分：
+
+```yaml
+# 需 blackbox_exporter module 指向 <health-listener>/readyz（job=gocell-readyz）
+- alert: GoCellReadyzDown
+  expr: probe_success{job="gocell-readyz"} == 0
+  for: 2m
+  labels:
+    severity: critical
+  annotations:
+    summary: "Serving readiness failing — inspect /readyz?verbose"
+    description: |
+      /readyz is returning 503. Inspect /readyz?verbose and check the
+      dependencies map. If postgres_app_role_restricted_ready is unhealthy, the
+      serving PostgreSQL role is a superuser or has BYPASSRLS — RLS policies are
+      defined on all six tenant tables but bypassed at runtime (cross-tenant leak).
+      Remediation for postgres_app_role_restricted_ready:
+        1. Point GOCELL_CONFIGCORE_DATABASE_URL at role gocell_app (NOSUPERUSER NOBYPASSRLS).
+        2. Ensure deploy/postgres/init/10-restricted-role.sh ran on the target DB
+           (role must exist before corebundle connects).
+        3. Restart corebundle; the probe turns green within the first readyz cycle.
+      See: docs/architecture/202606071200-1676-adr-restricted-app-serving-pool.md
+           docs/ops/local-docker-deploy.md §Dual-role PostgreSQL
+```
+
+> k8s 部署若已对 pod NotReady（readiness-probe 失败）配置告警，本 probe 失败会一并触发
+> 该告警；blackbox 规则是给从外部黑盒探测 `/readyz` 的部署用的补充手段。
+
+---
+
 ## 注意事项
 
 1. **fqName 单前缀**：所有规则中的指标名已包含 `gocell_` 前缀。若部署时 Prometheus
