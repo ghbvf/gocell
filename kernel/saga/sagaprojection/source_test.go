@@ -218,8 +218,12 @@ func TestSagaJournalSource_PositionMatchesGlobalSeq(t *testing.T) {
 }
 
 // TestSagaJournalSource_ReplayPagination asserts that Replay delivers ALL events
-// in the journal even when internal pagination is required. This guards against a
-// one-batch-only off-by-one in the pagination loop.
+// in the journal across a REAL internal page boundary. The seed count is
+// batchSize+1 so the pagination loop must fetch a second page WITH content (one
+// event lands on page 2); a first-page-only regression would silently drop the
+// page-2 event and fail the completeness assertion. It also asserts strictly
+// ascending GlobalSeq order to catch a boundary off-by-one that drops or
+// duplicates the seam event.
 func TestSagaJournalSource_ReplayPagination(t *testing.T) {
 	t.Parallel()
 	factory := newMemJournalFactory()
@@ -235,7 +239,10 @@ func TestSagaJournalSource_ReplayPagination(t *testing.T) {
 		t.Fatalf("NewSagaJournalSource: %v", err)
 	}
 
-	const n = 5
+	// batchSize+1 forces the pagination loop to cross one full batch boundary with
+	// content on the second page. Tracking the real constant (BatchSizeForTest)
+	// keeps this test correct if batchSize ever changes.
+	const n = sagaprojection.BatchSizeForTest + 1
 	want := seedGlobalEvents(t, j, clk, n)
 	if len(want) != n {
 		t.Fatalf("seedGlobalEvents returned %d events, want %d", len(want), n)
@@ -250,7 +257,8 @@ func TestSagaJournalSource_ReplayPagination(t *testing.T) {
 		t.Fatalf("Replay: %v", err)
 	}
 
-	// All seeded events must appear in got.
+	// Completeness: every one of the batchSize+1 seeded events must be delivered.
+	// With n > batchSize this only holds if Replay paged past the first batch.
 	wantIDs := make(map[string]struct{}, n)
 	for _, e := range want {
 		wantIDs[e.EventID()] = struct{}{}
@@ -262,8 +270,25 @@ func TestSagaJournalSource_ReplayPagination(t *testing.T) {
 		}
 	}
 	if matchCount != n {
-		t.Errorf("Replay delivered %d/%d seeded events; total delivered = %d",
-			matchCount, n, len(got))
+		t.Errorf("Replay delivered %d/%d seeded events (batchSize=%d): a first-page-only "+
+			"regression drops events past the batch boundary; total delivered = %d",
+			matchCount, n, sagaprojection.BatchSizeForTest, len(got))
+	}
+
+	// Ordering + no-duplicate across the page seam: positions must be strictly
+	// ascending (GlobalSeq monotonic), so an event is never delivered twice and
+	// the page-2 events follow the page-1 events in order.
+	var prev int64
+	for i, e := range got {
+		pos, perr := src.Position(e)
+		if perr != nil {
+			t.Fatalf("Position(got[%d]): %v", i, perr)
+		}
+		if pos <= prev {
+			t.Errorf("got[%d] position %d not strictly greater than previous %d; pagination "+
+				"must preserve ascending GlobalSeq order without duplicates at the seam", i, pos, prev)
+		}
+		prev = pos
 	}
 }
 

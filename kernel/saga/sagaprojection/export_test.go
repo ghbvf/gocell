@@ -22,3 +22,11 @@ func NewUnseededEventForTest() cellvocab.ProjectionEvent {
 // package (sagaprojection_test) which needs to call j.MarkTerminal with a
 // terminal status. Compiled ONLY in test binaries.
 const StatusSucceededForTest = saga.StatusSucceeded
+
+// BatchSizeForTest exposes the internal Replay pagination batch size to the
+// external test package so TestSagaJournalSource_ReplayPagination can seed
+// strictly more than one batch (BatchSizeForTest+1) and force the pagination
+// loop to cross a real page boundary with content on the second page. Tracking
+// the real constant keeps the test correct if batchSize ever changes (no magic
+// number). Compiled ONLY in test binaries.
+const BatchSizeForTest = batchSize
