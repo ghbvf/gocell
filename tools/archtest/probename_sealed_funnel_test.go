@@ -220,6 +220,7 @@ func goldenProbeNames() []string {
 		"adapters/grpc.ProbeReady=grpc_ready",
 		"adapters/mqtt.ProbeReady=mqtt_ready",
 		"adapters/oidc.ProbeReady=oidc_ready",
+		"adapters/postgres.ProbeAppRoleRestrictedReady=postgres_app_role_restricted_ready",
 		"adapters/postgres.ProbeIndexesValidReady=postgres_indexes_valid_ready",
 		"adapters/postgres.ProbeReady=postgres_ready",
 		"adapters/rabbitmq.ProbeReady=rabbitmq_ready",

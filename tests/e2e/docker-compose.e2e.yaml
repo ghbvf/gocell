@@ -38,6 +38,9 @@ services:
       # local devs use tests/e2e/.env.e2e.example as a starting point.
       POSTGRES_PASSWORD: ${E2E_PG_PASSWORD:?E2E_PG_PASSWORD must be set}
       POSTGRES_DB: gocell
+      GOCELL_APP_PASSWORD: ${GOCELL_APP_PASSWORD:?E2E GOCELL_APP_PASSWORD must be set}
+    volumes:
+      - ../../deploy/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U gocell -d gocell"]
       interval: 2s
@@ -79,7 +82,7 @@ services:
 
       # configcore cell: PG DSN + AES-256 envelope encryption. Loopback host
       # under the host-network compose topology (see file header).
-      GOCELL_CONFIGCORE_DATABASE_URL: postgres://gocell:${E2E_PG_PASSWORD:?E2E_PG_PASSWORD must be set}@127.0.0.1:5432/gocell?sslmode=disable
+      GOCELL_CONFIGCORE_DATABASE_URL: postgres://gocell_app:${GOCELL_APP_PASSWORD:?GOCELL_APP_PASSWORD must be set}@127.0.0.1:5432/gocell?sslmode=disable
       GOCELL_CONFIGCORE_KEY_PROVIDER: local-aes
       # 64-hex-char = 32 bytes. E2e-only; never reuse in production.
       GOCELL_CONFIGCORE_MASTER_KEY: aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899
