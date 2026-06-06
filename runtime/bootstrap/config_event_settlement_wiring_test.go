@@ -21,6 +21,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -40,8 +41,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
-
-	"slices"
 )
 
 // configSettlementRecord captures one RecordEventSettlement call.
