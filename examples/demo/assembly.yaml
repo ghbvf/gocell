@@ -1,0 +1,6 @@
+id: demo
+cells:
+  - democell
+owner:
+  team: examples
+  role: maintainer

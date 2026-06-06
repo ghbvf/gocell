@@ -1,0 +1,20 @@
+id: http.demo.hello.v1
+kind: http
+ownerCell: democell
+consistencyLevel: L0
+lifecycle: active
+endpoints:
+  server: democell
+  http:
+    method: GET
+    path: /api/v1/hello
+    successStatus: 200
+    noContent: false
+    auth:
+      public: true  # demo-only: a minimal unauthenticated hello on a loopback listener
+    responses:
+      400:
+        description: "Bad request — malformed request (the typed error envelope requires at least one declared error response; the hello handler itself only ever returns 200)"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  response: response.schema.json

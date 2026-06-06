@@ -53,6 +53,7 @@ import (
 // fork (caught by archtest SHARED-SCHEMA-MIRROR-FUNNEL-01 A1).
 var Mirrors = map[string][]string{
 	"contracts/shared/errors/error-response-v1.schema.json": {
+		"examples/demo",
 		"examples/iotdevice",
 		"examples/orderfulfillment",
 		"examples/todoorder",

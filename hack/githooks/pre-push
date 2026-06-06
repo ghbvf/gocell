@@ -311,9 +311,9 @@ if [[ ${go_changed} -eq 1 ]]; then
     # nested-module boundary. Enumerate every satellite from the SAME go.work
     # funnel the CI build/test gates use (hack/lib/modules.sh → `go work edit
     # -json`) and build/vet each with `go -C`. A hardcoded import-path wildcard
-    # (`github.com/ghbvf/gocell/examples/...`) silently narrows to examples/demo
-    # under an ambient GOWORK=off and never covers a future non-examples
-    # satellite — so iterate the funnel instead, fail-closed if it breaks.
+    # (`github.com/ghbvf/gocell/examples/...`) silently mis-covers under an
+    # ambient GOWORK=off and never covers a future non-examples satellite — so
+    # iterate the funnel instead, fail-closed if it breaks.
     # shellcheck source=../lib/util.sh
     source "${ROOT}/hack/lib/util.sh"
     # shellcheck source=../lib/modules.sh
