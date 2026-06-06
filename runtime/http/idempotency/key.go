@@ -1,9 +1,10 @@
 package idempotency
 
-// IdempotencyKey is the sealed (namespace, key) pair that scopes one HTTP
-// idempotency record. Its fields are unexported, so a populated
-// IdempotencyKey{...} literal cannot be constructed outside this package — the
-// ONLY producer is DeriveKey. Stores read it through Namespace()/Key().
+// IdempotencyKey is the sealed (namespace, key) pair that scopes one idempotency
+// record. Its fields are unexported, so a populated IdempotencyKey{...} literal
+// cannot be constructed outside this package — the only producers are the
+// sanctioned constructors DeriveKey (HTTP records) and DeriveCommandKey (commands).
+// Stores read it through Namespace()/Key().
 //
 // # Why sealed (the node-agnostic invariant, #1449/#1610)
 //
@@ -23,12 +24,13 @@ package idempotency
 //     OTHER packages; an in-package populated literal or a second in-package
 //     producer is NOT a compile error — the archtest sole-producer freeze is the
 //     Medium backstop there (same split as metrics.CellLabel / holder-seal #893).
-//   - require-isolation-tuple (DeriveKey's body must FLOW all five dimensions
-//     into the key) — Medium, genuine Go ceiling: Go cannot express "a body
-//     consumes all its inputs", and the five same-type string params could be
+//   - require-isolation-tuple (each sanctioned constructor's body must FLOW all
+//     its dimensions into the key) — Medium, genuine Go ceiling: Go cannot express
+//     "a body consumes all its inputs", and the same-type string params could be
 //     transposed at the (single, reviewed) callsite. The β archtest's AST taint
-//     walk is the Medium backstop. Won't-do ceiling tracked at gh #1650 (same
-//     family as #851/#893/#1282/#1552).
+//     walk (with a flat-composition guard that rejects value laundering) is the
+//     Medium backstop. Won't-do ceiling tracked at gh #1650 (same family as
+//     #851/#893/#1282/#1552).
 //
 // # Two sanctioned constructors (HTTP record + cross-cell command, #1669)
 //
@@ -60,8 +62,9 @@ func (k IdempotencyKey) Key() string { return k.key }
 // carries no tenant (e.g. a service principal: callerCellID is not a tenant).
 const noTenantSentinel = "_notenant"
 
-// DeriveKey is the SOLE constructor of an IdempotencyKey. It encodes the
-// isolation tuple (tenantID, subject, method, path, idemKey) into the
+// DeriveKey is the HTTP-record constructor of an IdempotencyKey (DeriveCommandKey
+// is the sibling command constructor; the two are the sanctioned producers). It
+// encodes the isolation tuple (tenantID, subject, method, path, idemKey) into the
 // (namespace, key) pair stores expect:
 //
 //	ns  = tenantID, or noTenantSentinel when empty.

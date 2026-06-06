@@ -96,10 +96,16 @@ package archtest
 //     vector) → signature freeze; dropping any isolation dimension from the body,
 //     INCLUDING a dummy read `_ = commandID` that references the input but never
 //     flows it into the key → checkConstructorRequiredUse (taint flow, not
-//     presence). Proven non-vacuous by inline malformed DeriveKey AND
-//     DeriveCommandKey fixtures. Note: flat-string params remove the old
-//     *auth.Principal selector/alias blind spots entirely (no more
-//     extra-principal-field / chained-selector / type-alias residual). Known
+//     presence). The taint model is lightweight ("a param name appearing ⇒ its
+//     value flows"); its soundness precondition is enforced by checkFlatComposition
+//     (#1699 F1), which rejects the two laundering vectors that keep a param's name
+//     while losing its value — a CALL/foreign SELECTOR (`key: launder(subject,
+//     commandID)`) and a param REASSIGN (`commandID = ""; key: …`). Proven
+//     non-vacuous by inline malformed DeriveKey AND DeriveCommandKey fixtures
+//     (missing / dummy-read / helper-drop / param-rebind). RESIDUAL (NOT closed,
+//     Medium ceiling gh #1650): param TRANSPOSITION (`key: commandID + subject`
+//     swaps two like-typed params, both still flow). Note: flat-string params
+//     remove the old *auth.Principal selector/alias blind spots entirely. Known
 //     tightness: a construction form other than `return IdempotencyKey{ns:…,key:…}`
 //     trips the taint sink lookup — a deliberate review checkpoint, not a defect.
 
@@ -392,14 +398,14 @@ func checkIdempotencyKeyMethods(dt reflect.Type) []string {
 		if idempotencyKeyForbiddenMethods[m.Name] {
 			v = append(v, fmt.Sprintf(
 				"%s must not declare %q — a deserialization entry lets an external package build a key "+
-					"from bytes, bypassing the sole constructor DeriveKey.", idempotencyKeyTypeName, m.Name))
+					"from bytes, bypassing the sanctioned constructors (idempotencyKeyConstructors).", idempotencyKeyTypeName, m.Name))
 			continue
 		}
 		mt := m.Func.Type() // receiver is in[0]; method results are the outs
 		for o := 0; o < mt.NumOut(); o++ {
 			if mt.Out(o) == dt {
 				v = append(v, fmt.Sprintf(
-					"%s method %q returns a new %s (builder laundering) — DeriveKey is the sole constructor.",
+					"%s method %q returns a new %s (builder laundering) — only the sanctioned constructors (idempotencyKeyConstructors) may produce one.",
 					idempotencyKeyTypeName, m.Name, idempotencyKeyTypeName))
 			}
 		}
@@ -422,7 +428,7 @@ func TestHTTPIdempotencyKeyNodeAgnostic01_KeySealed(t *testing.T) {
 }
 
 // TestHTTPIdempotencyKeyNodeAgnostic01_SoleProducerAndSink pins, via go/types,
-// (1) DeriveKey as the SOLE package-level producer of an IdempotencyKey
+// (1) the sanctioned constructors {DeriveKey, DeriveCommandKey} as the ONLY package-level producers of an IdempotencyKey
 // value (a second producer would launder an arbitrary key), and (2) Store.Claim's
 // post-ctx parameter as IdempotencyKey (the downstream Hard sink — a raw (ns,key)
 // string pair is inexpressible at the boundary).
@@ -600,12 +606,20 @@ func checkConstructorSignature(spec constructorSpec, fn *ast.FuncDecl) []string 
 // taint fixpoint engine is unchanged — only the source map (one positional bit
 // per param) and the final per-param sink check are spec-driven.
 //
-// Completeness: each constructor body is a flat composition of assignments +
-// string concatenation over its params + the noTenantSentinel const (no calls,
-// closures, or foreign selectors are needed to express the derivation), so the
-// per-variable token fixpoint follows every value path. Rating is Medium (AST
-// taint); the Hard form that would make a dropped dimension inexpressible is a
-// genuine Go ceiling — see gh #1650.
+// Soundness precondition (#1699 F1): the fixpoint uses a deliberately lightweight
+// "a param NAME appearing in a sink-reachable expression ⇒ its VALUE flows" model.
+// That is sound ONLY if the body is a flat composition with no value laundering —
+// which the constructors are by contract (their godoc: "the result is derived ONLY
+// from its parameters", a NUL-joined concat). checkFlatComposition enforces that
+// precondition structurally, rejecting the two laundering vectors that would keep a
+// param's name while losing its value: (a) a CALL or foreign SELECTOR that could
+// drop/transform the value (`key: launder(subject, commandID)`), and (b) REASSIGNING
+// a param so its name later denotes a different value (`commandID = ""; key: …`).
+// With those banned, "name appears ⇒ value flows" holds. Rating stays Medium (AST
+// taint): the residual is param TRANSPOSITION (`key: commandID + subject` swaps two
+// like-typed params, both still flow) — the documented gh #1650 ceiling, NOT closed
+// here. The Hard form that would make a dropped/transposed dimension inexpressible is
+// a genuine Go ceiling — see gh #1650.
 func checkConstructorRequiredUse(spec constructorSpec, fn *ast.FuncDecl) []string {
 	if fn.Body == nil {
 		return []string{"missing body"}
@@ -613,6 +627,12 @@ func checkConstructorRequiredUse(spec constructorSpec, fn *ast.FuncDecl) []strin
 	params := flattenFieldList(fn.Type.Params)
 	if len(params) != len(spec.params) {
 		return nil // the signature freeze reports the shape
+	}
+
+	// Enforce the flat-composition precondition before trusting the taint walk; a
+	// laundering body makes the lightweight model unsound, so report THAT instead.
+	if v := checkFlatComposition(spec, params, fn.Body); len(v) != 0 {
+		return v
 	}
 
 	// One unique token bit per positional param, keyed to its source name. Safe:
@@ -691,6 +711,51 @@ func checkConstructorRequiredUse(spec constructorSpec, fn *ast.FuncDecl) []strin
 				p.label, sinkLabel, p.label))
 		}
 	}
+	return v
+}
+
+// checkFlatComposition is the soundness precondition for checkConstructorRequiredUse's
+// lightweight taint model (#1699 F1): the constructor body must derive the key by
+// flat composition over its params + the noTenantSentinel const, with NO value
+// laundering. It rejects two vectors that keep a param's name while losing its value:
+//
+//   - a CallExpr or foreign SelectorExpr anywhere in the body — a helper/method can
+//     drop or transform the value (`key: launder(subject, commandID)`) while the
+//     param names still appear in the arg list, fooling the "name appears ⇒ flow"
+//     model. The legit bodies contain neither (the derivation is pure concat).
+//   - REASSIGNING a constructor param (`commandID = ""`) — rebinding the name to a
+//     different value defeats the model (the legit bodies assign only `ns`, a local).
+//
+// `ns := tenantID` (a DEFINE of a new local) and `ns = noTenantSentinel` (assign to
+// that local) are fine — they do not touch a param.
+func checkFlatComposition(spec constructorSpec, params []flatParam, body *ast.BlockStmt) []string {
+	paramNames := map[string]bool{}
+	for _, p := range params {
+		if p.name != "" {
+			paramNames[p.name] = true
+		}
+	}
+	var v []string
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.CallExpr:
+			v = append(v, spec.fnName+" body contains a call expression — a helper can launder/drop a "+
+				"param's value while its name still appears, defeating the taint model. The derivation "+
+				"must be a flat concatenation of the params (no calls).")
+		case *ast.SelectorExpr:
+			v = append(v, spec.fnName+" body contains a selector expression — a foreign field/method "+
+				"access can launder a param's value. Use only the params + the noTenantSentinel const.")
+		case *ast.AssignStmt:
+			for _, lhs := range x.Lhs {
+				if id, ok := lhs.(*ast.Ident); ok && paramNames[id.Name] {
+					v = append(v, fmt.Sprintf("%s reassigns param %q — rebinding a param name to a "+
+						"different value defeats the taint model (the name keeps appearing but the original "+
+						"value is lost).", spec.fnName, id.Name))
+				}
+			}
+		}
+		return true
+	})
 	return v
 }
 
@@ -840,7 +905,7 @@ func TestHTTPIdempotencyKeyNodeAgnostic01_ReverseBlindSpot(t *testing.T) {
 // reverseSoleProducerFixtureNames builds a synthetic package scope with an
 // unexported package-level producer. The production detector must include it:
 // same-package helpers can populate IdempotencyKey's unexported fields, so
-// exported-only scanning does not prove DeriveKey is the sole producer.
+// exported-only scanning does not prove the sanctioned set is the only producer.
 func reverseSoleProducerFixtureNames() []string {
 	pkg := types.NewPackage("example.com/reverse/idem", "idem")
 	scope := pkg.Scope()
@@ -910,6 +975,21 @@ func DeriveKey(tenantID, subject, method, path, idemKey string) IdempotencyKey {
 	_ = idemKey
 	return IdempotencyKey{ns: tenantID, key: subject}
 }`,
+	// helper-drop: every param NAME appears (so a syntactic "name appears ⇒ flow"
+	// model passes), but the value is laundered through a call that could drop it.
+	// Caught by the no-CallExpr structural guard (#1699 F1).
+	"helper-drop": `package p
+func DeriveKey(tenantID, subject, method, path, idemKey string) IdempotencyKey {
+	return IdempotencyKey{ns: tenantID, key: launder(subject, method, path, idemKey)}
+}`,
+	// param-rebind: a param is reassigned to a different value, then its NAME is used
+	// in the key — the syntactic model sees the name and passes, but the original
+	// value was killed. Caught by the no-param-reassign structural guard (#1699 F1).
+	"param-rebind": `package p
+func DeriveKey(tenantID, subject, method, path, idemKey string) IdempotencyKey {
+	subject = ""
+	return IdempotencyKey{ns: tenantID, key: subject + method + path + idemKey}
+}`,
 }
 
 const deriveCommandKeyGood = `package p
@@ -948,6 +1028,17 @@ func DeriveCommandKey(tenantID, subject, commandID string) IdempotencyKey {
 func DeriveCommandKey(tenantID, subject, commandID string) IdempotencyKey {
 	_ = commandID
 	return IdempotencyKey{ns: tenantID, key: subject}
+}`,
+	// helper-drop / param-rebind: same two laundering vectors as deriveKeyBad,
+	// covering the 3-param constructor. Caught by the structural guards (#1699 F1).
+	"helper-drop": `package p
+func DeriveCommandKey(tenantID, subject, commandID string) IdempotencyKey {
+	return IdempotencyKey{ns: tenantID, key: launder(subject, commandID)}
+}`,
+	"param-rebind": `package p
+func DeriveCommandKey(tenantID, subject, commandID string) IdempotencyKey {
+	commandID = ""
+	return IdempotencyKey{ns: tenantID, key: subject + commandID}
 }`,
 }
 
