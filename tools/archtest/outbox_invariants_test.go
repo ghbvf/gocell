@@ -1648,11 +1648,14 @@ var deliveryOutcomeAllowedFields = map[string]struct{}{
 // changes the SubscriberHandler protocol and requires deliberate review of all
 // Subscriber implementations (rabbitmq/mqtt/eventbus/wrapper).
 //
-// Hard via reflect schema freeze: any field drift triggers a tuple comparison
-// failure, forcing the change through this explicit review checkpoint. No
-// schema/marker source can express "exactly these field names" as a Go
-// compile-time constraint without regenerating the type. Archtest is the
-// minimum-friction gate at Medium enforcement level.
+// Grading: Medium (AST field-NAME freeze). The scan parses outbox.go and
+// compares DeliveryOutcome's declared field names against the allowlist —
+// add/remove/rename of a field fails the comparison and forces the change
+// through this explicit review checkpoint. Blind spot: a field TYPE change
+// (e.g. Err error -> Err string) is NOT caught, since only names are checked.
+// Hard-upgrade path: reflect-based enumeration (field count + name + type
+// identity), the same ceiling as the sibling OUTBOX-HANDLERESULT-FIELDS-FROZEN-01;
+// kept name-only here so the two sibling freezes stay structurally identical.
 func TestOutboxDeliveryOutcomeFieldsFrozen(t *testing.T) {
 	root := findModuleRoot(t)
 	path := filepath.Join(root, "kernel", "outbox", "outbox.go")

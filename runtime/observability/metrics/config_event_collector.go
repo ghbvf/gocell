@@ -119,16 +119,15 @@ func RecordConfigEventProcess(ctx context.Context, collector ConfigEventCollecto
 
 // ConfigEventMiddleware installs config-event owner metadata into the handler
 // context so that RecordConfigEventProcess can retrieve it inside the
-// EntryHandler. Settlement observation has been moved to the SubscriberHandler
-// layer via WrapConfigEventSubscriber; this middleware no longer appends a
-// SettlementObserver.
+// EntryHandler. Settlement observation is handled at the SubscriberHandler
+// layer by WrapConfigEventSubscriber; this middleware only injects owner ctx.
 //
 // The non-config-prefix fast path (isConfigEventSubscription == false) is
 // legitimate: non-config subscriptions and audit/command topics pass through
 // without instrumentation. Config subscriptions missing owner metadata are
 // intercepted at registration time by ConfigEventOwnerValidator and never
 // reach this middleware.
-func ConfigEventMiddleware(_ ConfigEventCollector) outbox.SubscriptionMiddleware {
+func ConfigEventMiddleware() outbox.SubscriptionMiddleware {
 	return func(sub outbox.Subscription, next outbox.EntryHandler) outbox.EntryHandler {
 		if !isConfigEventSubscription(sub) {
 			// Fast path: non-config-prefix or non-config topic — skip instrumentation.

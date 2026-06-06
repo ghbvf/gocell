@@ -51,11 +51,10 @@ func (c *recordingConfigEventCollector) RecordEventSettlement(_ context.Context,
 // callWithConfigEventOwner runs handler through ConfigEventMiddleware and returns
 // (disposition, err) extracted from the HandleResult.
 func callWithConfigEventOwner(
-	collector obmetrics.ConfigEventCollector,
 	entry outbox.Entry,
 	fn outbox.EntryHandler,
 ) (outbox.Disposition, error) {
-	wrapped := obmetrics.ConfigEventMiddleware(collector)(
+	wrapped := obmetrics.ConfigEventMiddleware()(
 		outbox.Subscription{Topic: entry.Topic(), ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
 		fn,
 	)
@@ -313,7 +312,7 @@ func TestHandleEntryUpserted_ConfigEventMetricsOutcomes(t *testing.T) {
 			svc := NewService(slog.Default(), opts...)
 			entry := outboxtest.NewEntry(TopicConfigEntryUpserted, tt.payload)
 
-			disposition, _ := callWithConfigEventOwner(collector, entry, svc.HandleEntryUpserted)
+			disposition, _ := callWithConfigEventOwner(entry, svc.HandleEntryUpserted)
 			assert.Equal(t, tt.wantDisposition, disposition)
 			assert.Equal(t, tt.wantRecords, collector.records)
 		})
@@ -434,7 +433,7 @@ func TestHandleEntryDeleted_ConfigEventMetricsOutcomes(t *testing.T) {
 			svc := NewService(slog.Default(), WithConfigEventCollector(collector))
 			entry := outboxtest.NewEntry(TopicConfigEntryDeleted, tt.payload)
 
-			disposition, _ := callWithConfigEventOwner(collector, entry, svc.HandleEntryDeleted)
+			disposition, _ := callWithConfigEventOwner(entry, svc.HandleEntryDeleted)
 			assert.Equal(t, tt.wantDisposition, disposition)
 			assert.Equal(t, tt.wantRecords, collector.records)
 		})

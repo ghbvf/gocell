@@ -56,7 +56,7 @@ func runtimeBaseOptions(
 		// conversion boundary: idempotency Claim/Commit/Release + retry live here,
 		// after the business middleware chain.
 		bootstrap.WithConsumerBase(consumerBase),
-		bootstrap.WithConsumerMiddleware(consumerMiddlewares(shared)...),
+		bootstrap.WithConsumerMiddleware(consumerMiddlewares()...),
 		bootstrap.WithConfigEventCollector(shared.ConfigEventCollector),
 		bootstrap.WithSubscriptionValidator(obmetrics.ConfigEventOwnerValidator),
 		bootstrap.WithAdapterInfo(adapterInfo),
@@ -78,14 +78,10 @@ func runtimeBaseOptions(
 	return opts
 }
 
-func consumerMiddlewares(shared *composition.SharedDeps) []outbox.SubscriptionMiddleware {
+func consumerMiddlewares() []outbox.SubscriptionMiddleware {
 	return []outbox.SubscriptionMiddleware{
-		configEventConsumerMiddleware(shared.ConfigEventCollector),
+		obmetrics.ConfigEventMiddleware(),
 	}
-}
-
-func configEventConsumerMiddleware(collector obmetrics.ConfigEventCollector) outbox.SubscriptionMiddleware {
-	return obmetrics.ConfigEventMiddleware(collector)
 }
 
 // newBootstrapFromOptions creates a bootstrap.Bootstrap from a pre-built option

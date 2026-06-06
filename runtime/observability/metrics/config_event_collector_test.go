@@ -79,7 +79,7 @@ func TestProviderConfigEventCollector_EmitsExpectedMetricsAndLabels(t *testing.T
 
 func TestConfigEventMiddleware_RecordsProcessReasonFromSubscriptionOwner(t *testing.T) {
 	collector := &recordingConfigEventCollector{}
-	mw := obmetrics.ConfigEventMiddleware(collector)
+	mw := obmetrics.ConfigEventMiddleware()
 	wrapped := mw(
 		outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
 		func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
@@ -129,7 +129,7 @@ func TestWrapConfigEventSubscriber_RecordsSettlementOnlyAfterNotification(t *tes
 
 func TestConfigEventMiddleware_SkipsSubscriptionsWithoutOwnerOrConfigTopic(t *testing.T) {
 	collector := &recordingConfigEventCollector{}
-	mw := obmetrics.ConfigEventMiddleware(collector)
+	mw := obmetrics.ConfigEventMiddleware()
 
 	for _, sub := range []outbox.Subscription{
 		{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore"},
