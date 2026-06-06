@@ -101,15 +101,15 @@ type GRPCContractMeta struct {
 YAML shape (PR 1):
 
 ```yaml
-id: grpc.device.command.v1.IssueCommand
+id: grpc.device.command.v1.DeviceCommandService
 kind: grpc
 grpc:
   service: device.command.v1.DeviceCommandService
-  method: IssueCommand
-  streamingType: unary       # optional, defaults to unary
   proto: contracts/grpc/device/command/v1/device_command.proto
   auth:
     public: false            # internal-only by default
+# Note: `method` and `streamingType` removed in #1655 (ADR D5, service-level granularity).
+# The contract owns the whole proto service; the method set derives from the .proto file.
 ```
 
 ---
@@ -320,11 +320,11 @@ None. Transport-only feature; no stateful entities.
 
 | Rule | Source | PR |
 |------|--------|----|
-| `kind=grpc` requires `grpc.service` + `grpc.method` | metadata parser | PR 1 |
+| `kind=grpc` requires `grpc.service` + `grpc.proto` (service-level per ADR D5 / #1655; `grpc.method` deleted) | metadata parser | PR 1 |
 | `grpc.proto` MUST resolve under `contracts/grpc/` | metadata parser | PR 1 |
 | `(package, service, method)` globally unique | ProtoRegistry at codegen time | PR 6 |
 | Handler signature MUST match generated interface | Go compiler (interface assertion) | PR 7 |
 | Service registration MUST happen before `Serve()` | `ServiceRegistrar.Register` ordering | PR 7 |
 | `func(grpc.ServiceRegistrar)` callback (Form B) type assertion safety | runtime/grpc panics with Approved marker on bad/typed-nil callback type | PR 7 |
-| Hand-written grpc method registration banned in `cells/` | archtest `GRPC-METHOD-IN-CONTRACT-01` | PR 8 |
+| Hand-written grpc **service** registration banned in `cells/` | archtest `GRPC-SERVICE-IN-CONTRACT-01` (service-level per ADR D5 / #1655) | PR 8 |
 | Exhaustive `errcode.Kind → codes.Code` mapping | archtest `GRPC-ERRCODE-MAPPING-01` | PR 12 |

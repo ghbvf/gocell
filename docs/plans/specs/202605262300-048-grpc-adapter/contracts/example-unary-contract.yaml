@@ -1,26 +1,28 @@
 # Illustrative `kind: grpc` contract.yaml — referenced from plan.md and quickstart.md
 # This file is not loaded by the runtime; it is documentation of the schema shape.
 
-id: grpc.device.command.v1.IssueCommand
+id: grpc.device.command.v1.DeviceCommandService
 kind: grpc
 version: v1
 owner: iotdevice
 description: |
-  Issue a command to a device over RPC. Used by control-plane cells to push
+  Command service for a device over RPC. Used by control-plane cells to push
   state changes; replaces the prior HTTP+JSON internal endpoint for this path.
+  Owns the whole DeviceCommandService proto service (ADR D5 / #1655).
 
 grpc:
   service: device.command.v1.DeviceCommandService
-  method: IssueCommand
-  streamingType: unary         # one of: unary | server-stream | client-stream | bidi
   proto: contracts/grpc/device/command/v1/device_command.proto
   auth:
     public: false              # service-to-service; not exposed on public listener
+# Note: `method` and `streamingType` fields were removed in #1655 (service-level
+# granularity, ADR D5). A grpc contract now owns a whole proto service; the method set
+# and streaming kinds derive from the .proto file (single source of truth).
 
 verify:
   contract:
-    - contract.grpc.device.command.v1.IssueCommand.serve
-    - contract.grpc.device.command.v1.IssueCommand.call
+    - contract.grpc.device.command.v1.DeviceCommandService.serve
+    - contract.grpc.device.command.v1.DeviceCommandService.call
 
 # Optional: external actors that consume via RPC client without being a cell
 # actorClients:

@@ -23,11 +23,11 @@ description: Create a new order via internal RPC
 
 grpc:
   service: todoorder.command.v1.OrderCommandService
-  method: CreateOrder
-  streamingType: unary
   proto: contracts/grpc/todoorder/command/v1/order_command.proto
   auth:
     public: false   # service-to-service only
+# Note: `method` and `streamingType` fields removed in #1655 (service-level granularity).
+# The method set and streaming kind are derived from the .proto file (single source of truth).
 
 verify:
   contract:
@@ -238,7 +238,7 @@ If `/readyz?verbose` shows `grpc_ready: ok` and `/metrics` reports `grpc_server_
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `gocell generate cell` reports `no cell.go struct field for serving slice` | Missing `*ordercommand.Service` field on cell struct | Add the field (Step 3) |
-| `gocell validate` rejects `kind: grpc` | Pre-PR-1 build, or contract.yaml missing required fields | Upgrade to PR 1+ build; ensure `grpc.service`, `grpc.method`, `grpc.proto` all set |
+| `gocell validate` rejects `kind: grpc` | Pre-PR-1 build, or contract.yaml missing required fields | Upgrade to PR 1+ build; ensure `grpc.service` and `grpc.proto` are set (`grpc.method` was removed in #1655 — service-level granularity) |
 | `make proto-gen` fails with `package mismatch` | `option go_package` not aligned with `generated/contracts/grpc/...` layout | Match the `go_package` to `generated/contracts/grpc/{domain}/{version};{shortname}v1` |
 | `grpc.Server.Serve()` returns immediately at boot | Listener bind failed (port collision) | Check `/readyz?verbose`; the `grpc_ready` probe surfaces the bind error |
-| Cell label shows `_runtime` instead of `todoorder` | Method not registered through generated `methods_gen.go` (hand-rolled `RegisterServer`) | Use `reg.GRPCService(...)` only; archtest `GRPC-METHOD-IN-CONTRACT-01` would normally catch this — check whether it was bypassed |
+| Cell label shows `_runtime` instead of `todoorder` | Method not registered through generated `methods_gen.go` (hand-rolled `RegisterServer`) | Use `reg.GRPCService(...)` only; archtest `GRPC-SERVICE-IN-CONTRACT-01` would normally catch this — check whether it was bypassed |
