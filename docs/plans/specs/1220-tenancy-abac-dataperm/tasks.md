@@ -166,6 +166,7 @@ graph TD
 - [ ] T7.5 archtest（Medium）：policy err path 返回 deny；attribute lookup 有 not-found guard；clock 注入
 - [ ] T7.6 测试：命中/forbid/缺属性/store-down/device 态势 矩阵
 - [ ] T7.7 add `Allow()`/`Deny()` caller-allowlist archtest (only authorizationdecide engine may construct Decision) — downstream half of the sealed-Decision funnel begun in PR-6 #1344; per ai-robust.md §"Funnel 双向锁评级", this is the Hard-downstream caller-allowlist deferred from PR-6 (tracked in gh #1345)
+- [ ] T7.8 design action/resource-type policy scoping (Cedar-style Rule.Target vs external route binding) — PR-6 #1344 modeled attribute conditions only (Subject/Resource/Environment sources); evaluator must resolve which policy applies to a (subject, resource, action) request before evaluating Conditions; see `cells/accesscore/internal/abac/condition.go` `AttributeSource` godoc for the explicit deferral note
 
 ### PR-8 — PG policy store + conformance + readyz probe（W3, ~1300, dep: PR-6,PR-7）
 - [ ] T8.1 migration：policy 表（**`[R1 F-B5]`** 索引 `CREATE INDEX CONCURRENTLY`）

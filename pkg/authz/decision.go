@@ -33,11 +33,21 @@ type Decision struct {
 	reason      string
 }
 
-// Allow returns a permit Decision carrying obligations the PEP must discharge.
+// Allow validates o and returns a permit Decision carrying the cloned
+// obligations the PEP must discharge. It returns an error if o fails
+// Obligations.Validate() — the returned Decision is the zero value (which
+// IsAllow()==false, fail-closed) in that case.
+//
 // The obligations are only meaningful when IsAllow() == true; PEPs SHOULD NOT
 // enforce Obligations from a Deny Decision.
-func Allow(o Obligations) Decision {
-	return Decision{effect: EffectAllow, obligations: o}
+//
+// This is an intentional breaking signature change from the zero-error variant:
+// invalid obligations must not produce an Allow decision (fail-closed).
+func Allow(o Obligations) (Decision, error) {
+	if err := o.Validate(); err != nil {
+		return Decision{}, err // zero Decision is non-Allow → fail-closed
+	}
+	return Decision{effect: EffectAllow, obligations: o.clone()}, nil
 }
 
 // Deny returns a fail-closed deny Decision.
@@ -68,10 +78,14 @@ func (d Decision) Effect() Effect {
 	return d.effect
 }
 
-// Obligations returns the mandatory obligations the PEP must enforce when the
-// Decision is Allow. Obligations are meaningless on a Deny Decision.
+// Obligations returns a defensive copy of the mandatory obligations the PEP
+// must enforce when the Decision is Allow. The returned value has a fresh
+// FieldMask.Fields backing array so callers cannot mutate the sealed verdict
+// by modifying the slice in place.
+//
+// Obligations are meaningless on a Deny Decision.
 func (d Decision) Obligations() Obligations {
-	return d.obligations
+	return d.obligations.clone()
 }
 
 // Reason returns the opaque server-side diagnostic string supplied to Deny().

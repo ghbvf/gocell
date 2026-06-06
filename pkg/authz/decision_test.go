@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/tenant"
 )
@@ -14,7 +15,8 @@ func TestAllow_RoundTrip(t *testing.T) {
 		RowScope:  tenant.RowScopeTenant,
 		FieldMask: FieldMask{Fields: []string{"ssn", "phone"}},
 	}
-	d := Allow(obs)
+	d, err := Allow(obs)
+	require.NoError(t, err)
 
 	assert.True(t, d.IsAllow(), "Allow() must return an allow decision")
 	assert.Equal(t, EffectAllow, d.Effect())
@@ -25,10 +27,21 @@ func TestAllow_RoundTrip(t *testing.T) {
 
 func TestAllow_EmptyObligations(t *testing.T) {
 	t.Parallel()
-	d := Allow(Obligations{})
+	d, err := Allow(Obligations{})
+	require.NoError(t, err)
 	assert.True(t, d.IsAllow())
 	assert.True(t, d.Obligations().FieldMask.IsZero())
 	assert.Equal(t, tenant.RowScope(0), d.Obligations().RowScope)
+}
+
+// TestAllow_InvalidObligations verifies that Allow() with an invalid
+// Obligations returns an error and a zero (deny) Decision (fail-closed).
+func TestAllow_InvalidObligations(t *testing.T) {
+	t.Parallel()
+	// RowScope(99) is out of the valid range {self, device, tenant, all}.
+	d, err := Allow(Obligations{RowScope: tenant.RowScope(99)})
+	require.Error(t, err, "Allow with invalid RowScope must return error")
+	assert.False(t, d.IsAllow(), "zero Decision on error must be non-Allow (fail-closed)")
 }
 
 func TestDeny_RoundTrip(t *testing.T) {
@@ -68,13 +81,15 @@ func TestDecision_ZeroValueFailClosed(t *testing.T) {
 
 func TestDecision_EffectAccessor(t *testing.T) {
 	t.Parallel()
+	allowDec, err := Allow(Obligations{})
+	require.NoError(t, err)
 	tests := []struct {
 		name       string
 		d          Decision
 		wantEffect Effect
 		wantAllow  bool
 	}{
-		{"Allow", Allow(Obligations{}), EffectAllow, true},
+		{"Allow", allowDec, EffectAllow, true},
 		{"Deny with reason", Deny("denied"), EffectDeny, false},
 		{"Deny empty reason", Deny(""), EffectDeny, false},
 		{"zero value", Decision{}, Effect(0), false},
@@ -96,7 +111,8 @@ func TestDecision_SealedConstruction(t *testing.T) {
 	// The only construction paths are Allow() and Deny(). Any forged literal
 	// would fail to compile outside this package. We verify Allow/Deny are the
 	// only meaningful values.
-	allowDecision := Allow(Obligations{RowScope: tenant.RowScopeSelf})
+	allowDecision, err := Allow(Obligations{RowScope: tenant.RowScopeSelf})
+	require.NoError(t, err)
 	denyDecision := Deny("test")
 
 	assert.True(t, allowDecision.IsAllow())
@@ -106,4 +122,47 @@ func TestDecision_SealedConstruction(t *testing.T) {
 	assert.Equal(t, tenant.RowScopeSelf, allowDecision.Obligations().RowScope)
 	// Verify that Deny does not carry obligations.
 	assert.Equal(t, tenant.RowScope(0), denyDecision.Obligations().RowScope)
+}
+
+// TestDecision_ObligationsMutationIsolation verifies F2: mutating the original
+// Obligations after Allow() must NOT affect the stored verdict, and mutating
+// the slice returned by Obligations() must NOT affect a fresh call.
+func TestDecision_ObligationsMutationIsolation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("mutating original obligations after Allow does not affect Decision", func(t *testing.T) {
+		t.Parallel()
+		original := Obligations{
+			RowScope:  tenant.RowScopeTenant,
+			FieldMask: FieldMask{Fields: []string{"ssn", "phone"}},
+		}
+		dec, err := Allow(original)
+		require.NoError(t, err)
+
+		// Mutate the original slice element.
+		original.FieldMask.Fields[0] = "TAMPERED"
+
+		// The Decision must still see the original value.
+		got := dec.Obligations().FieldMask.Fields[0]
+		assert.Equal(t, "ssn", got,
+			"mutating the original Obligations.FieldMask.Fields must not affect the stored Decision")
+	})
+
+	t.Run("mutating the returned Obligations does not affect a fresh Obligations() call", func(t *testing.T) {
+		t.Parallel()
+		dec, err := Allow(Obligations{
+			RowScope:  tenant.RowScopeTenant,
+			FieldMask: FieldMask{Fields: []string{"ssn", "phone"}},
+		})
+		require.NoError(t, err)
+
+		// Mutate the first returned copy.
+		first := dec.Obligations()
+		first.FieldMask.Fields[0] = "TAMPERED"
+
+		// A fresh call must return the unmodified value.
+		second := dec.Obligations()
+		assert.Equal(t, "ssn", second.FieldMask.Fields[0],
+			"mutating a previously returned Obligations must not affect a fresh Obligations() call")
+	})
 }

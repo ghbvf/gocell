@@ -1,6 +1,7 @@
 package abac
 
 import (
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -12,9 +13,14 @@ import (
 //   - Resource: attributes of the protected object (e.g. classification, owner)
 //   - Environment: contextual attributes (e.g. time_of_day, ip_region)
 //
+// These three sources are the complete attribute-condition universe modeled in
+// PR-6. "Action" and "resource-type" scoping (which policy applies to which
+// action + resource combination — analogous to Cedar's Rule.Target or XACML's
+// Policy Target) is NOT modeled as a Condition attribute here. That binding is
+// resolved by the PR-7 policy evaluator, which maps a (subject, resource, action)
+// request to the applicable policy set before evaluating conditions.
+//
 // ref: XACML 3.0 §5.7 — Subject, Resource, Action, Environment attribute categories.
-// Action attributes are intentionally omitted (GoCell encodes actions as the
-// HTTP method + contract ID, not as a separate attribute namespace).
 type AttributeSource uint8
 
 const (
@@ -83,8 +89,8 @@ func (c Condition) Validate() error {
 	if err := c.Source.Validate(); err != nil {
 		return err
 	}
-	if c.Key == "" {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "abac: condition Key must not be empty")
+	if err := authz.ValidAttributeKey(c.Key); err != nil {
+		return err
 	}
 	if err := c.Operator.Validate(); err != nil {
 		return err

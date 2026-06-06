@@ -48,6 +48,9 @@ func (r *PolicyRepository) Save(ctx context.Context, t tenant.TenantID, p *abac.
 	if err := t.Validate(); err != nil {
 		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: invalid tenant", err)
 	}
+	if p == nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: policy must not be nil")
+	}
 	if p.TenantID != t {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: policy TenantID does not match the provided tenant",
 			errcode.WithDetails(

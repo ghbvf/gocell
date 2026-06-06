@@ -113,6 +113,37 @@ func TestCondition_Validate(t *testing.T) {
 			cond:    abac.Condition{Source: abac.SourceSubject, Key: "", Operator: abac.OpEquals, Values: []string{"eng"}},
 			wantErr: true,
 		},
+		// F6: canonical key validation via authz.ValidAttributeKey.
+		{
+			name:    "Key with leading space rejected",
+			cond:    abac.Condition{Source: abac.SourceSubject, Key: " department", Operator: abac.OpEquals, Values: []string{"eng"}},
+			wantErr: true,
+		},
+		{
+			name:    "Key with trailing newline rejected",
+			cond:    abac.Condition{Source: abac.SourceSubject, Key: "department\n", Operator: abac.OpEquals, Values: []string{"eng"}},
+			wantErr: true,
+		},
+		{
+			name:    "Key starting with digit rejected",
+			cond:    abac.Condition{Source: abac.SourceSubject, Key: "1level", Operator: abac.OpEquals, Values: []string{"eng"}},
+			wantErr: true,
+		},
+		{
+			name:    "Key with control character rejected",
+			cond:    abac.Condition{Source: abac.SourceSubject, Key: "field\x00name", Operator: abac.OpEquals, Values: []string{"v"}},
+			wantErr: true,
+		},
+		{
+			name:    "dot-separated Key valid",
+			cond:    abac.Condition{Source: abac.SourceResource, Key: "device.compliant", Operator: abac.OpEquals, Values: []string{"true"}},
+			wantErr: false,
+		},
+		{
+			name:    "underscore Key valid",
+			cond:    abac.Condition{Source: abac.SourceSubject, Key: "job_level", Operator: abac.OpEquals, Values: []string{"L5"}},
+			wantErr: false,
+		},
 		{
 			name:    "zero Operator",
 			cond:    abac.Condition{Source: abac.SourceSubject, Key: "dept", Operator: 0, Values: []string{"eng"}},

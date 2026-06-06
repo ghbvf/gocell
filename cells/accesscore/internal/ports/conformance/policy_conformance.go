@@ -26,7 +26,9 @@ type PolicyRepoFactory func(t *testing.T) ports.PolicyRepository
 // freshly constructed repository from factory to avoid inter-test state leakage.
 //
 // Implementations MUST enroll by calling RunPolicyRepoConformance from a
-// _test.go file in their own package. Example:
+// _test.go file in their own package. This requirement is enforced by the
+// POLICYREPO-CONFORMANCE-ENROLLMENT-01 archtest
+// (tools/archtest/policy_repo_conformance_enrollment_test.go). Example:
 //
 //	func TestMemPolicyRepo_Conformance(t *testing.T) {
 //	    conformance.RunPolicyRepoConformance(t, func(t *testing.T) ports.PolicyRepository {
@@ -70,6 +72,12 @@ func RunPolicyRepoConformance(t *testing.T, factory PolicyRepoFactory) {
 	})
 	t.Run("Concurrent_NoDataRace", func(t *testing.T) {
 		conformPolicyConcurrentNoDataRace(t, factory)
+	})
+	t.Run("Save_NilPolicy_Error", func(t *testing.T) {
+		conformPolicySaveNilPolicyError(t, factory)
+	})
+	t.Run("SaveInputClone_IsIndependent", func(t *testing.T) {
+		conformPolicySaveInputCloneIsIndependent(t, factory)
 	})
 }
 
@@ -440,6 +448,89 @@ func conformPolicyConcurrentNoDataRace(t *testing.T, factory PolicyRepoFactory) 
 
 	if len(unexpected) > 0 {
 		t.Errorf("concurrent ops produced %d unexpected error(s): first=%v", len(unexpected), unexpected[0])
+	}
+}
+
+// conformPolicySaveNilPolicyError asserts that Save with a nil *abac.Policy
+// returns a non-nil KindInvalid error without panicking. This is the conformance
+// complement to F7 (mem nil-guard) — PG and any future implementations inherit
+// the same contract.
+func conformPolicySaveNilPolicyError(t *testing.T, factory PolicyRepoFactory) {
+	t.Parallel()
+	repo := factory(t)
+	ctx := context.Background()
+
+	err := repo.Save(ctx, testTenantID, nil)
+	if err == nil {
+		t.Fatal("Save(ctx, t, nil) expected non-nil error, got nil")
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Errorf("Save(ctx, t, nil): expected *errcode.Error, got %T: %v", err, err)
+		return
+	}
+	if ec.Kind != errcode.KindInvalid {
+		t.Errorf("Save(ctx, t, nil): expected Kind KindInvalid, got %v (err: %v)", ec.Kind, err)
+	}
+}
+
+// conformPolicySaveInputCloneIsIndependent asserts that the stored policy is an
+// independent deep copy of the value passed to Save: mutations made to the
+// original after Save must not be visible via GetByID or ListByTenant.
+//
+// This is the "Save-input snapshot boundary" test required by F8.
+func conformPolicySaveInputCloneIsIndependent(t *testing.T, factory PolicyRepoFactory) {
+	t.Parallel()
+	repo := factory(t)
+	ctx := context.Background()
+
+	// Build a policy with nested Rules → Conditions (with Values) and
+	// Obligations.FieldMask.Fields — exercising every deep-copy branch.
+	p := conformTestPolicyWithFieldMask("pol-clone-input", testTenantID)
+
+	// Take a snapshot of all fields we will mutate afterwards.
+	origName := p.Name
+	origCondVal := p.Rules[0].Conditions[0].Values[0]
+	origField := p.Rules[0].Obligations.FieldMask.Fields[0]
+
+	if err := repo.Save(ctx, testTenantID, p); err != nil {
+		t.Fatalf("Save() unexpected error: %v", err)
+	}
+
+	// Mutate the ORIGINAL p after Save.
+	p.Name = "mutated-after-save"
+	p.Rules[0].Conditions[0].Values[0] = "mutated-value"
+	p.Rules[0].Obligations.FieldMask.Fields[0] = "mutated_field"
+
+	// GetByID must reflect the at-Save snapshot, not the mutations.
+	got, err := repo.GetByID(ctx, testTenantID, "pol-clone-input")
+	if err != nil {
+		t.Fatalf("GetByID() unexpected error: %v", err)
+	}
+	if got.Name != origName {
+		t.Errorf("GetByID(): Name = %q, want %q (mutation of original leaked into store)", got.Name, origName)
+	}
+	if len(got.Rules) > 0 && len(got.Rules[0].Conditions) > 0 && len(got.Rules[0].Conditions[0].Values) > 0 {
+		if got.Rules[0].Conditions[0].Values[0] != origCondVal {
+			t.Errorf("GetByID(): Conditions[0].Values[0] = %q, want %q", got.Rules[0].Conditions[0].Values[0], origCondVal)
+		}
+	}
+	if len(got.Rules) > 0 && len(got.Rules[0].Obligations.FieldMask.Fields) > 0 {
+		if got.Rules[0].Obligations.FieldMask.Fields[0] != origField {
+			t.Errorf("GetByID(): FieldMask.Fields[0] = %q, want %q", got.Rules[0].Obligations.FieldMask.Fields[0], origField)
+		}
+	}
+
+	// ListByTenant must also reflect the at-Save snapshot.
+	list, err := repo.ListByTenant(ctx, testTenantID)
+	if err != nil {
+		t.Fatalf("ListByTenant() unexpected error: %v", err)
+	}
+	if len(list) == 0 {
+		t.Fatal("ListByTenant() returned empty list, want 1 item")
+	}
+	if list[0].Name != origName {
+		t.Errorf("ListByTenant(): Name = %q, want %q (mutation of original leaked into store)", list[0].Name, origName)
 	}
 }
 

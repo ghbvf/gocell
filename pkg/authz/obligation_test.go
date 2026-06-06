@@ -9,6 +9,53 @@ import (
 	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
+// TestValidAttributeKey covers the canonical attribute/column identifier
+// validation introduced by F5 (#1344 PR-6 review).
+func TestValidAttributeKey(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		// Valid identifiers
+		{"simple ascii", "department", false},
+		{"with underscore", "owner_id", false},
+		{"with dot", "device.compliant", false},
+		{"with digits after first char", "field1", false},
+		{"mixed case", "myField", false},
+		{"all caps", "SSN", false},
+		{"single char", "x", false},
+		// Invalid: empty
+		{"empty string", "", true},
+		// Invalid: leading whitespace
+		{"leading space", " ssn", true},
+		// Invalid: trailing whitespace
+		{"trailing newline", "ssn\n", true},
+		// Invalid: internal whitespace
+		{"internal space", "my field", true},
+		// Invalid: starts with digit
+		{"starts with digit", "1abc", true},
+		// Invalid: starts with underscore
+		{"starts with underscore", "_field", true},
+		// Invalid: control character
+		{"tab char", "field\t", true},
+		// Invalid: starts with dot
+		{"starts with dot", ".field", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidAttributeKey(tc.input)
+			if tc.wantErr {
+				require.Error(t, err, "ValidAttributeKey(%q) should return error", tc.input)
+			} else {
+				require.NoError(t, err, "ValidAttributeKey(%q) should not return error", tc.input)
+			}
+		})
+	}
+}
+
 func TestFieldMask_IsZero(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -75,6 +122,27 @@ func TestFieldMask_Validate(t *testing.T) {
 			name:    "duplicate adjacent rejected",
 			fm:      FieldMask{Fields: []string{"id", "id"}},
 			wantErr: true,
+		},
+		// F5: whitespace/control char keys must be rejected by ValidAttributeKey.
+		{
+			name:    "leading-space key rejected",
+			fm:      FieldMask{Fields: []string{" ssn"}},
+			wantErr: true,
+		},
+		{
+			name:    "trailing-newline key rejected",
+			fm:      FieldMask{Fields: []string{"ssn\n"}},
+			wantErr: true,
+		},
+		{
+			name:    "starts-with-digit key rejected",
+			fm:      FieldMask{Fields: []string{"1abc"}},
+			wantErr: true,
+		},
+		{
+			name:    "valid dot-separated key",
+			fm:      FieldMask{Fields: []string{"device.compliant"}},
+			wantErr: false,
 		},
 	}
 	for _, tc := range tests {
