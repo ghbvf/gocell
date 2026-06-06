@@ -661,7 +661,10 @@ func TestCommandGenFunnelSoleEmitter01_RedFixture(t *testing.T) {
 							continue
 						}
 						name := d.Name.Name
-						if name != "Register" && name != "Dispatch" {
+						// Use the shared name set (incl. DispatchAsync) so this RED
+						// self-check exercises the same detection as the production
+						// scan — a DispatchAsync-only look-alike must trip it too.
+						if !isCommandSoleEmitterFuncName(name) {
 							continue
 						}
 						if funcHasCommandRegistryParam(p.TypesInfo, d) {

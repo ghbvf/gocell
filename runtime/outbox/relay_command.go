@@ -22,12 +22,14 @@ import (
 //	    enqueue.DispatchID: enqueue.DispatchAsync,
 //	})
 //
-// This is an accumulating builder option (mirrors WithPendingDepthObserver): a
-// nil reg or an empty/all-nil dispatch map is a silent no-op (the relay keeps
-// operating event-only), and nil entries within the map are dropped. reg and the
-// map values are concrete (pointer / func) types, so plain == nil is the correct
-// nil check here (validation.IsNilInterface guards interface-typed values). Must
-// be called before Start().
+// This is a replace-semantics builder option, NOT accumulating: each call sets
+// (does not merge) cmdRegistry + cmdDispatch, so a second call REPLACES the whole
+// table (last-write-wins) — pass all commands in one call. A nil reg or an
+// empty/all-nil dispatch map is a silent no-op (the relay keeps operating
+// event-only, leaving any prior table untouched), and nil entries within the map
+// are dropped. reg and the map values are concrete (pointer / func) types, so
+// plain == nil is the correct nil check here (validation.IsNilInterface guards
+// interface-typed values). Must be called before Start().
 func (r *Relay) WithCommandDispatch(
 	reg *command.Registry,
 	dispatch map[command.CommandID]command.AsyncDispatchFunc,
@@ -54,6 +56,12 @@ func (r *Relay) WithCommandDispatch(
 // routing topic, or (nil, false) when the topic is not a registered command
 // (the common event path). It is the single read point publishBatch uses to
 // decide command-dispatch vs broker-publish.
+//
+// The discriminator is dispatcher-map MEMBERSHIP (a closed set), not the topic
+// string shape: the command.* naming convention is a readability aid, not the
+// gate. Correctness comes from the closed map + the generated-DispatchAsync-only
+// values that COMMAND-ASYNC-DISPATCH-CALLER-01 locks (ADR §D10). An event topic
+// is never in the map, so it cleanly falls through to the broker path.
 func (r *Relay) commandDispatchFor(topic string) (command.AsyncDispatchFunc, bool) {
 	if r.cmdDispatch == nil {
 		return nil, false
