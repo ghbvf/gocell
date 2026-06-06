@@ -6,6 +6,7 @@ type: edge
 # receive is the sanctioned TOPO-05 exception where an L0 owner cell implements
 # the contract via webhook-receive.
 consistencyLevel: L0
+l0Dependencies: []
 lifecycle: experimental
 owner:
   team: examples
