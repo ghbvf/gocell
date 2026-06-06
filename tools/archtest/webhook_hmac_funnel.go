@@ -54,8 +54,11 @@
 // TestWebhookHMACFunnel function (webhook_hmac_funnel_test.go) calls the same
 // shared helpers — single source, no parallel rule body.
 //
-// register=no — gocell-internal-layout (scans kernel/webhook; vacuous-pass
-// externally; migrated for unified PlatformModulePath parameterization +
+// register=no — gocell-internal-layout (scans kernel/webhook), NOT in
+// StandardCellRules() and NOT promised to run externally — this dogfood-only
+// rule targets a package an external repo lacks, so a manual ExtraRules caller
+// does not get a clean pass; migrated for unified PlatformModulePath
+// parameterization +
 // fork-safety, dogfooded via TestWebhookHMACFunnel).
 //
 // Platform-symbol paths are anchored to [PlatformModulePath] so a module
@@ -193,11 +196,21 @@ func collectSecretSlogArgs(fset *token.FileSet, call *ast.CallExpr, rel string, 
 	}
 }
 
+// webhookSealInfo records, for a sealed interface decl found during the scan,
+// whether it carries an unexported sealed() marker plus its source location, so
+// the A3 diagnostic can anchor to the interface declaration (rel:line) instead
+// of degrading to ":0:".
+type webhookSealInfo struct {
+	hasUnexported bool
+	rel           string
+	line          int
+}
+
 // collectWebhookSealedMarkers reports the unexported-marker status of the named
-// sealed interfaces declared in file. Returns a map name→hasUnexportedMethod
-// for any of webhookSealedInterfaces found.
-func collectWebhookSealedMarkers(file *ast.File) map[string]bool {
-	found := map[string]bool{}
+// sealed interfaces declared in file. Returns a map name→webhookSealInfo for any
+// of webhookSealedInterfaces found in this file.
+func collectWebhookSealedMarkers(fset *token.FileSet, file *ast.File, rel string) map[string]webhookSealInfo {
+	found := map[string]webhookSealInfo{}
 	EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
 		if !webhookSealedInterfaces[ts.Name.Name] {
 			return
@@ -214,7 +227,11 @@ func collectWebhookSealedMarkers(file *ast.File) map[string]bool {
 				}
 			}
 		}
-		found[ts.Name.Name] = hasUnexported
+		found[ts.Name.Name] = webhookSealInfo{
+			hasUnexported: hasUnexported,
+			rel:           rel,
+			line:          fset.Position(ts.Pos()).Line,
+		}
 	})
 	return found
 }
@@ -222,20 +239,26 @@ func collectWebhookSealedMarkers(file *ast.File) map[string]bool {
 // scanWebhookPkg runs the A1/A2/B6 file-level scans and sealed-marker
 // collection over all non-test production files in the webhook package pass.
 // Extracted from CheckWebhookHMACFunnel to keep the Check func within
-// gocognit ≤15.
-func scanWebhookPkg(p *Pass, a1, a2, b6 *[]Diagnostic, sealed map[string]bool) {
+// gocognit ≤15. It returns a package-anchor rel (preferring signer.go) used to
+// locate the A3 "interface not found" diagnostic, which has no decl to point at.
+func scanWebhookPkg(p *Pass, a1, a2, b6 *[]Diagnostic, sealed map[string]webhookSealInfo) string {
+	var pkgRel string
 	for _, f := range p.Files {
 		rel := p.Rel(f)
 		if strings.HasSuffix(rel, "_test.go") {
 			continue
 		}
+		if pkgRel == "" || filepath.Base(filepath.ToSlash(rel)) == signerFileBasename {
+			pkgRel = rel
+		}
 		*a1 = append(*a1, scanWebhookHMACNew(p.Fset, f, rel, p.TypesInfo)...)
 		*a2 = append(*a2, scanWebhookBytesEqual(p.Fset, f, rel, p.TypesInfo)...)
 		*b6 = append(*b6, scanWebhookSecretSlog(p.Fset, f, rel, p.TypesInfo)...)
-		for name, ok := range collectWebhookSealedMarkers(f) {
-			sealed[name] = ok
+		for name, info := range collectWebhookSealedMarkers(p.Fset, f, rel) {
+			sealed[name] = info
 		}
 	}
+	return pkgRel
 }
 
 // CheckWebhookHMACFunnel runs the WEBHOOK-HMAC-FUNNEL-01 production scan
@@ -244,21 +267,25 @@ func scanWebhookPkg(p *Pass, a1, a2, b6 *[]Diagnostic, sealed map[string]bool) {
 // cfg is unused: kernel/webhook has no build-tagged production files, so a
 // single default-config scan is complete.
 //
-// register=no — gocell-internal-layout (scans kernel/webhook; vacuous-pass
-// externally; migrated for unified PlatformModulePath parameterization +
+// register=no — gocell-internal-layout (scans kernel/webhook), NOT in
+// StandardCellRules() and NOT promised to run externally — this dogfood-only
+// rule targets a package an external repo lacks, so a manual ExtraRules caller
+// does not get a clean pass; migrated for unified PlatformModulePath
+// parameterization +
 // fork-safety, dogfooded via TestWebhookHMACFunnel).
 func CheckWebhookHMACFunnel(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 
 	var a1, a2, b6 []Diagnostic
-	sealed := map[string]bool{}
+	sealed := map[string]webhookSealInfo{}
+	var pkgRel string
 
 	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{webhookPkgPattern}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != webhookPkgPath {
 				return nil
 			}
-			scanWebhookPkg(p, &a1, &a2, &b6, sealed)
+			pkgRel = scanWebhookPkg(p, &a1, &a2, &b6, sealed)
 			return nil
 		})
 
@@ -266,27 +293,28 @@ func CheckWebhookHMACFunnel(t *testing.T, _ ConfigForExternalCell) []Diagnostic 
 	all = append(all, a1...)
 	all = append(all, a2...)
 	all = append(all, b6...)
-	all = append(all, checkWebhookSealedMarkers(sealed)...)
+	all = append(all, checkWebhookSealedMarkers(sealed, pkgRel)...)
 	return all
 }
 
 // checkWebhookSealedMarkers validates A3 and converts violations to
 // Diagnostics. Extracted to keep CheckWebhookHMACFunnel within gocognit ≤15.
-func checkWebhookSealedMarkers(sealed map[string]bool) []Diagnostic {
+// A "missing marker" diagnostic anchors to the interface decl (info.rel:line);
+// an "interface not found" diagnostic anchors to pkgRel (the package's signer.go
+// or first production file) since there is no decl to point at.
+func checkWebhookSealedMarkers(sealed map[string]webhookSealInfo, pkgRel string) []Diagnostic {
 	var out []Diagnostic
 	for name := range webhookSealedInterfaces {
-		hasUnexported, found := sealed[name]
+		info, found := sealed[name]
 		if !found {
-			out = append(out, Diagnostic{
-				Message: "WEBHOOK-HMAC-FUNNEL-01/A3: interface " + name + " not found in kernel/webhook",
-			})
+			out = append(out, diagFile(pkgRel,
+				"WEBHOOK-HMAC-FUNNEL-01/A3: interface "+name+" not found in kernel/webhook"))
 			continue
 		}
-		if !hasUnexported {
-			out = append(out, Diagnostic{
-				Message: "WEBHOOK-HMAC-FUNNEL-01/A3: interface " + name +
-					" must carry an unexported sealed() marker so package-external implementations are a compile error",
-			})
+		if !info.hasUnexported {
+			out = append(out, diagAt(info.rel, info.line,
+				"WEBHOOK-HMAC-FUNNEL-01/A3: interface "+name+
+					" must carry an unexported sealed() marker so package-external implementations are a compile error"))
 		}
 	}
 	return out

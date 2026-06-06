@@ -10,8 +10,11 @@
 // TestMQTTReasonNameRedaction_ScannerNonVacuous (mqtt_reason_redaction_test.go)
 // call the same shared helpers — single source, no parallel rule body.
 //
-// register=no — gocell-internal-layout (scans adapters/mqtt; vacuous-pass
-// externally; migrated for unified PlatformModulePath parameterization +
+// register=no — gocell-internal-layout (scans adapters/mqtt), NOT in
+// StandardCellRules() and NOT promised to run externally — this dogfood-only
+// rule targets a package an external repo lacks, so a manual ExtraRules caller
+// does not get a clean pass; migrated for unified PlatformModulePath
+// parameterization +
 // fork-safety, dogfooded via the per-rule Tests).
 //
 // Platform-symbol paths are anchored to [PlatformModulePath] so a module
@@ -85,8 +88,11 @@ func collectReasonNameDiags(p *Pass, diags *[]Diagnostic) {
 // CheckMQTTReasonNameRedaction runs the REASON-NAME-REDACTION-01 scan and
 // returns its diagnostics.
 //
-// register=no — gocell-internal-layout (scans adapters/mqtt; vacuous-pass
-// externally; migrated for unified PlatformModulePath parameterization +
+// register=no — gocell-internal-layout (scans adapters/mqtt), NOT in
+// StandardCellRules() and NOT promised to run externally — this dogfood-only
+// rule targets a package an external repo lacks, so a manual ExtraRules caller
+// does not get a clean pass; migrated for unified PlatformModulePath
+// parameterization +
 // fork-safety, dogfooded via the per-rule Tests).
 func CheckMQTTReasonNameRedaction(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()

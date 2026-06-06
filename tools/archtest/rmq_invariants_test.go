@@ -287,3 +287,75 @@ func TestRMQStopIntakeInflightWait01_StopIntakeAvoidsLocalWgWait(t *testing.T) {
 	t.Parallel()
 	Report(t, "RMQ-STOPINTAKE-INFLIGHT-WAIT-01", CheckRMQStopIntakeInflightWait(t, ConfigForExternalCell{}))
 }
+
+// ---------------------------------------------------------------------------
+// Diagnostic-location reverse self-check (F1)
+// ---------------------------------------------------------------------------
+
+// TestRMQDiagnostics_StructuralAbsenceLocated is the F1 reverse self-check
+// (ai-robust 强制反向自检). The structural-absence and violation branches of the
+// RMQ checks are never reached by the GREEN dogfood (production satisfies every
+// rule), so a regression that drops Diagnostic.Rel/Line — degrading Report to
+// ":0:" — would otherwise pass CI undetected. It drives each sub-check with a
+// minimal violating in-memory source and asserts every emitted Diagnostic
+// carries a clickable Rel and a 1-based Line (and that the violation actually
+// fires — fail-closed, not vacuous).
+func TestRMQDiagnostics_StructuralAbsenceLocated(t *testing.T) {
+	t.Parallel()
+
+	const rel = "adapters/rabbitmq/fixture.go"
+	parse := func(src string) (*ast.File, *token.FileSet) {
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, "fixture.go", src, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse fixture: %v", err)
+		}
+		return f, fset
+	}
+	assertLocated := func(name string, diags []Diagnostic) {
+		if len(diags) == 0 {
+			t.Errorf("%s: expected ≥1 diagnostic from violating fixture, got none (vacuous)", name)
+		}
+		for i, d := range diags {
+			if d.Rel != rel {
+				t.Errorf("%s[%d]: Rel = %q, want %q (Diagnostic must be clickable, not \":0:\")", name, i, d.Rel, rel)
+			}
+			if d.Line <= 0 {
+				t.Errorf("%s[%d]: Line = %d, want > 0", name, i, d.Line)
+			}
+		}
+	}
+
+	// CHANNEL-MAX-PER-CONN-01: Config without the field; no setDefaults; no AcquireChannel.
+	f, fset := parse("package rabbitmq\ntype Config struct{ Other int }\n")
+	assertLocated("checkChannelMaxConfigField", checkChannelMaxConfigField(f, fset, rel))
+	assertLocated("checkChannelMaxSetDefaults", checkChannelMaxSetDefaults(f, fset, rel))
+	assertLocated("checkChannelMaxAcquireGuard", checkChannelMaxAcquireGuard(f, fset, rel))
+
+	// PUBLISHER-FAILURE-HANDLING-01: Publish lacks Nack ref / slog.Warn /
+	// RecordPublishFailure and has an unrecorded error return.
+	f, fset = parse(`package rabbitmq
+type P struct{}
+func (p *P) Publish() error {
+	if true {
+		return errBoom
+	}
+	return nil
+}
+`)
+	publish := findMethod(f, "Publish")
+	if publish == nil {
+		t.Fatal("fixture Publish method not found")
+	}
+	pubLine := fset.Position(publish.Pos()).Line
+	assertLocated("checkPublisherNackErrcode", checkPublisherNackErrcode(publish, rel, pubLine))
+	assertLocated("checkPublisherWarnCount", checkPublisherWarnCount(publish, rel, pubLine))
+	assertLocated("checkPublisherRecordsFailureMetric", checkPublisherRecordsFailureMetric(publish, rel, pubLine))
+	assertLocated("checkPublisherAllReturnsMustRecord", checkPublisherAllReturnsMustRecord(publish, fset, rel))
+
+	// STOPINTAKE-INFLIGHT-WAIT-01: no StopIntake; no drainRemaining; no WithoutCancel.
+	f, fset = parse("package rabbitmq\ntype S struct{}\nfunc (s *S) Other() {}\n")
+	assertLocated("checkStopIntakeWaitsForInflight", checkStopIntakeWaitsForInflight(f, fset, rel))
+	assertLocated("checkDrainNoParentCtxDone", checkDrainNoParentCtxDone(f, fset, rel))
+	assertLocated("checkDrainUsesDetachedContext", checkDrainUsesDetachedContext(f, fset, rel))
+}

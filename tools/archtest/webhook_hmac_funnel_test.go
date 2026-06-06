@@ -135,3 +135,37 @@ func TestWebhookFunnel_NoRawSecretSlog(t *testing.T) {
 
 	require.Empty(t, b6, "B6 self-check: no slog call may reference a raw .secret field")
 }
+
+// TestWebhookHMACFunnel_SealedMarkerDiagnosticsLocated is the F1 reverse
+// self-check for the A3 sealed-marker branches. The GREEN dogfood never reaches
+// them (production declares both sealed interfaces with markers), so a
+// regression dropping Diagnostic.Rel/Line — degrading Report to ":0:" — would
+// pass CI undetected. It drives checkWebhookSealedMarkers with both violating
+// inputs and asserts every emitted Diagnostic is clickable.
+func TestWebhookHMACFunnel_SealedMarkerDiagnosticsLocated(t *testing.T) {
+	t.Parallel()
+
+	assertLocated := func(name string, diags []Diagnostic) {
+		if len(diags) == 0 {
+			t.Errorf("%s: expected ≥1 diagnostic, got none (vacuous)", name)
+		}
+		for i, d := range diags {
+			if d.Rel == "" {
+				t.Errorf("%s[%d]: empty Rel (Diagnostic must be clickable, not \":0:\")", name, i)
+			}
+			if d.Line <= 0 {
+				t.Errorf("%s[%d]: Line = %d, want > 0", name, i, d.Line)
+			}
+		}
+	}
+
+	// "interface not found" → anchored to the package-anchor rel.
+	assertLocated("notFound",
+		checkWebhookSealedMarkers(map[string]webhookSealInfo{}, "kernel/webhook/signer.go"))
+
+	// "interface present but missing the sealed() marker" → anchored to its decl.
+	assertLocated("missingMarker", checkWebhookSealedMarkers(map[string]webhookSealInfo{
+		"Signer":   {hasUnexported: false, rel: "kernel/webhook/signer.go", line: 12},
+		"Verifier": {hasUnexported: false, rel: "kernel/webhook/verifier.go", line: 8},
+	}, "kernel/webhook/signer.go"))
+}

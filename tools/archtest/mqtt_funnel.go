@@ -12,8 +12,11 @@
 // TestMQTTTopicNamespace01 functions (mqtt_funnel_test.go) call the same shared
 // helpers — single source, no parallel rule body.
 //
-// register=no — gocell-internal-layout (scans adapters/mqtt; vacuous-pass
-// externally; migrated for unified PlatformModulePath parameterization +
+// register=no — gocell-internal-layout (scans adapters/mqtt), NOT in
+// StandardCellRules() and NOT promised to run externally — these dogfood-only
+// rules target a package an external repo lacks, so a manual ExtraRules caller
+// does not get a clean pass; migrated for unified PlatformModulePath
+// parameterization +
 // fork-safety, dogfooded via the per-rule Tests).
 //
 // Platform-symbol paths are anchored to [PlatformModulePath] so a module
@@ -371,8 +374,11 @@ func collectTopicNSDiags(p *Pass, a2Diags, a3Diags *[]Diagnostic) {
 // CheckMQTTClientIDNamespace runs the MQTT-CLIENT-ID-NAMESPACE-01 A2+A3 scans
 // (the A1 field-freeze is reflect-based and lives in the dogfood Test).
 //
-// register=no — gocell-internal-layout (scans adapters/mqtt; vacuous-pass
-// externally; migrated for unified PlatformModulePath parameterization +
+// register=no — gocell-internal-layout (scans adapters/mqtt), NOT in
+// StandardCellRules() and NOT promised to run externally — these dogfood-only
+// rules target a package an external repo lacks, so a manual ExtraRules caller
+// does not get a clean pass; migrated for unified PlatformModulePath
+// parameterization +
 // fork-safety, dogfooded via the per-rule Tests).
 func CheckMQTTClientIDNamespace(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
@@ -390,8 +396,11 @@ func CheckMQTTClientIDNamespace(t *testing.T, cfg ConfigForExternalCell) []Diagn
 // CheckMQTTTopicNamespace runs the MQTT-TOPIC-NAMESPACE-01 A2+A3 scans
 // (the A1 field-freeze is reflect-based and lives in the dogfood Test).
 //
-// register=no — gocell-internal-layout (scans adapters/mqtt; vacuous-pass
-// externally; migrated for unified PlatformModulePath parameterization +
+// register=no — gocell-internal-layout (scans adapters/mqtt), NOT in
+// StandardCellRules() and NOT promised to run externally — these dogfood-only
+// rules target a package an external repo lacks, so a manual ExtraRules caller
+// does not get a clean pass; migrated for unified PlatformModulePath
+// parameterization +
 // fork-safety, dogfooded via the per-rule Tests).
 func CheckMQTTTopicNamespace(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
