@@ -1216,15 +1216,20 @@ func paramToField(p ParamSpec, source string) DTOField {
 	if p.Required {
 		tag = p.Name
 	}
+	doc := p.Doc
 	if source == "header" {
 		tag = "-"
+		doc = fmt.Sprintf(
+			"%s is populated from the %q request header by the generated handler; "+
+				"do not set it in the Service implementation (read-only).",
+			p.GoName, p.Name)
 	}
 	return DTOField{
 		Name:     p.GoName,
 		JSONTag:  tag,
 		GoType:   p.GoType,
 		Required: p.Required,
-		Doc:      p.Doc,
+		Doc:      doc,
 		Source:   source,
 		// MinLength/MaxLength/Minimum/Maximum are intentionally left nil for
 		// path/query fields — they are validated at query parse time in the
@@ -1304,9 +1309,10 @@ func buildQueryParams(http *metadata.HTTPTransportMeta) []ParamSpec {
 // "string"). MinLength/MaxLength/Minimum/Maximum are intentionally NOT carried
 // here: headers are populate-only and the generated handler emits no gate, so a
 // length/numeric constraint would silently no-op — governance FMT-40 rejects such
-// declarations at the source. `Required` is carried for documentation/client-gen
-// metadata but does NOT emit a server-side gate (decision: per-endpoint fail
-// behavior is owned by the cell adapter; see HTTPTransportMeta.Headers godoc).
+// declarations at validate time (`gocell validate`). `Required` is carried for
+// documentation/client-gen metadata but does NOT emit a server-side gate
+// (decision: per-endpoint fail behavior is owned by the cell adapter; see
+// HTTPTransportMeta.Headers godoc).
 func buildHeaderParams(http *metadata.HTTPTransportMeta) []ParamSpec {
 	if len(http.Headers) == 0 {
 		return nil

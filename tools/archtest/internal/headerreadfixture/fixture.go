@@ -49,3 +49,18 @@ func goodOutboundSet(req *http.Request) {
 func goodResponseHeaderGet(w http.ResponseWriter) string {
 	return w.Header().Get("Content-Type")
 }
+
+// goodAliasedHeaderRead is GREEN (alias blind spot): the detector keys on the
+// `r.Header` SelectorExpr where `r` is a *http.Request. When the Header field is
+// first assigned to a local variable (`h := r.Header`) and the Get call is made
+// on that variable, the receiver is a plain Ident `h` of type http.Header — not a
+// SelectorExpr on the *http.Request — so the detector does NOT flag it.
+//
+// This is a documented blind spot of HTTP-REQUEST-HEADER-READ-FUNNEL-01. The
+// reverse self-check (TestHTTPRequestHeaderReadFunnel01_FixtureFires) asserts
+// exactly 3 diagnostics (the three RED functions above); this function must NOT
+// add a 4th, confirming the alias path is outside the detector's scope.
+func goodAliasedHeaderRead(r *http.Request) string {
+	h := r.Header
+	return h.Get("X-Foo")
+}

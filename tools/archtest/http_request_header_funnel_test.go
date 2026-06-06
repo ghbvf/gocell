@@ -191,8 +191,12 @@ func TestHTTPRequestHeaderReadFunnel01(t *testing.T) {
 
 // TestHTTPRequestHeaderReadFunnel01_FixtureFires is the reverse self-check (teeth
 // proof for the flat ban): the RED fixture has 3 inbound reads (Get/Values/index)
-// and 2 GREEN controls (outbound Set write + response w.Header().Get) — the
-// detector must flag exactly the 3 reads.
+// and 3 GREEN controls (outbound Set write + response w.Header().Get + aliased
+// header read `h := r.Header; h.Get(...)`) — the detector must flag exactly the 3
+// reads. The aliased form is a documented blind spot: the detector keys on the
+// `r.Header` SelectorExpr; when the Header field is first assigned to a local
+// variable the receiver becomes a plain http.Header Ident and is not detected.
+// The count of 3 (not 4) is the explicit reverse self-check for that blind spot.
 func TestHTTPRequestHeaderReadFunnel01_FixtureFires(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -223,8 +227,9 @@ func TestHTTPRequestHeaderReadFunnel01_FixtureFires(t *testing.T) {
 		t.Log(dg.Message)
 	}
 	require.Len(t, diags, 3,
-		"fixture must yield exactly 3 inbound reads (Get/Values/index); the outbound Set write and "+
-			"the w.Header().Get response read must not be flagged")
+		"fixture must yield exactly 3 inbound reads (Get/Values/index); the outbound Set write, "+
+			"the w.Header().Get response read, and the aliased h:=r.Header form (documented blind spot) "+
+			"must NOT be flagged — 3 confirms the alias blind spot is outside the detector's scope")
 	for _, dg := range diags {
 		assert.Contains(t, dg.Message, "HTTP-REQUEST-HEADER-READ-FUNNEL-01")
 	}

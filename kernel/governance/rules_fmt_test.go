@@ -106,6 +106,8 @@ func fmt40Errors(t *testing.T, headers map[string]metadata.ParamSchema) []Valida
 }
 
 // TestFMT40_ValidHeaderAccepted verifies a canonical typed header passes.
+// `required: true` is intentionally accepted — it is documentation/client-gen
+// metadata only; the generated handler never enforces it server-side (ADR 1160).
 func TestFMT40_ValidHeaderAccepted(t *testing.T) {
 	truthy := true
 	got := fmt40Errors(t, map[string]metadata.ParamSchema{

@@ -28,24 +28,38 @@ unknown top-level key would cause `gocell validate` to fail). As a result, no
 generated client code emits the header and no governance rule enforces its
 presence.
 
+## Amendment — 2026-06-07 (delivered in issue #1494 / PR #1707)
+
+The deferred backlog item has shipped. The decisions and consequences below are
+rewritten to describe the delivered state. The original "document now, generate
+later" posture is retired.
+
 ## Decision
 
-**Document now, generate later.**
+**Header parameters are a first-class field on `HTTPTransportMeta`.**
 
-1. Add YAML comment blocks to the three affected `contract.yaml` files describing
-   the `X-Tenant-ID` header (type, parsing, fail-closed behaviour, codegen gap).
-   YAML comments are invisible to the strict-decode parser, so governance CI is
-   unaffected.
+1. `kernel/metadata/schema_types.go` `HTTPTransportMeta` gained a
+   `Headers map[string]ParamSchema` field (`yaml:"headers,omitempty"`). The three
+   affected `contract.yaml` files now declare the `X-Tenant-ID` header in a
+   machine-readable `endpoints.http.headers:` block (YAML comments replaced by
+   structured data).
 
-2. Do NOT modify `kernel/metadata/types.go` or the contractgen pipeline in this
-   PR. Adding a `headers:` field to `EndpointsMeta` (or a sub-struct) and wiring
-   it through codegen is a non-trivial change with its own blast radius (golden
-   tests, archtest form-locks, codegen templates). It is deferred to a dedicated
-   backlog issue.
+2. Contractgen merges each declared header into the generated `Request` DTO as a
+   typed field populated by the generated handler via `r.Header.Get(...)` — the
+   handler is the sole sanctioned reader (archtest
+   `HTTP-REQUEST-HEADER-READ-FUNNEL-01`). The populate-only accessor emits no
+   required/length/format gate; per-endpoint fail behavior (the matrix below)
+   remains owned by the cell adapter/service.
 
-3. Open a backlog issue (tracked externally, referenced below) to implement
-   contractgen header-parameter support. Until that issue ships, callers must set
-   `X-Tenant-ID` manually.
+3. Governance rule `FMT-40` (`kernel/governance/rules_fmt.go::validateFMT40`,
+   `PhaseBase`) validates the `headers:` block at `gocell validate` time:
+   header name must be a valid HTTP token, `type` must be a known param type, and
+   `minLength`/`maxLength`/`minimum`/`maximum` are rejected because the generated
+   handler emits no gate for them (`required` is accepted as declared-intent /
+   client-gen metadata only).
+
+4. Archtest `HTTP-HEADERS-FIELD-FROZEN-01` reflect-freezes the
+   `HTTPTransportMeta.Headers` field set to prevent silent drift.
 
 ## Fail-closed semantics per endpoint
 
@@ -78,19 +92,24 @@ invalid tenant → 200" (split), not a blanket fail-closed.
 
 ## Consequences
 
-- Contract files are now the source of documentation truth for the header, even
-  though codegen does not yet enforce it. Reviewers can audit the comment blocks
-  to verify handler behaviour matches the declared semantics.
-- Generated client stubs remain incomplete until the deferred issue ships. Teams
-  consuming these contracts from generated code must add the header manually.
-- No governance rule change in this ADR. The deferred issue must add a governance
-  rule or archtest that enforces header presence when `headers:` is declared.
+- Contract files are the authoritative source for header declarations. The three
+  pre-auth contracts (`http.auth.login.v1`, `http.auth.setup.admin.v1`,
+  `http.auth.setup.status.v1`) each declare `X-Tenant-ID` in their
+  `endpoints.http.headers:` block; generated client stubs will include the header
+  field automatically.
+- The populate-only model is intentional: the header value is made available to the
+  cell adapter, but the generated handler never rejects or validates it. This keeps
+  the per-endpoint fail behavior (login→401, setup/admin→400, setup/status→200
+  fail-soft) entirely under cell-adapter control.
+- `gocell validate` now enforces header declaration correctness via `FMT-40`;
+  undeclared length/numeric constraints on headers are a hard validation error so
+  they can never silently no-op.
+- The archtest `HTTP-REQUEST-HEADER-READ-FUNNEL-01` prevents business code in
+  `cells/` or `examples/` from reading inbound request headers raw, directing all
+  header consumption through the generated `Request` DTO field.
 
 ## Deferred backlog
 
-Issue: #1494 — "contractgen: support header parameters (X-Tenant-ID single-source)"
-Labels: `backlog`, `pri-p2`
-Scope: add `headers:` to `EndpointsMeta` (or a new sub-struct) with
-`yaml:"headers,omitempty"`, wire through `parser_strict_test.go` KnownFields
-golden, extend contractgen templates to emit typed header accessors, update
-archtest form-locks.
+No items remain deferred from the original scope of issue #1494. The full
+header-parameter pipeline (metadata field, governance rule, codegen, archtest) has
+been delivered in PR #1707.

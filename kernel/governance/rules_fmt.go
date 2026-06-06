@@ -1954,6 +1954,17 @@ var headerNameRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*$`)
 // type is a known param type, and no length/numeric constraint is declared
 // (those would silently no-op since no gate is generated — FMT-25 owns the
 // path/query constraint regime; FMT-40 owns headers).
+//
+// Asymmetry between `required` and length/numeric constraints: FMT-40 accepts
+// `required: true` on header declarations but rejects
+// minLength/maxLength/minimum/maximum. The rationale is that `required` is
+// documentation and client-gen metadata only — it does NOT cause the generated
+// server handler to reject a missing header (the adapter owns that decision; see
+// ADR 1160 for the per-endpoint fail-closed vs fail-soft matrix). By contrast,
+// minLength/maxLength/minimum/maximum would imply an enforceable server-side
+// constraint that the generated handler never validates, making them misleading
+// rather than merely informational — so they are rejected outright to prevent
+// silently unenforced declarations.
 func (v *Validator) validateFMT40() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
@@ -1963,6 +1974,8 @@ func (v *Validator) validateFMT40() []ValidationResult {
 }
 
 // validateFMT40ForContract validates a single contract's header declarations.
+// `required` is intentionally accepted (documentation/client-gen metadata; see
+// validateFMT40 for the full asymmetry rationale).
 func (v *Validator) validateFMT40ForContract(c *metadata.ContractMeta) []ValidationResult {
 	if c.Endpoints.HTTP == nil || len(c.Endpoints.HTTP.Headers) == 0 {
 		return nil

@@ -21,9 +21,14 @@ type LoginAdapter struct{ S *Service }
 
 // Login implements logingen.Service. The generated handler validates and decodes
 // username+password from the request body and populates req.XTenantID from the
-// X-Tenant-ID header (populate-only — no codegen gate). A missing/malformed
-// tenant fails closed inside Service.Login (tenant.ParseTenantID) to a uniform
-// 401, the same shape as wrong-password, to prevent tenant enumeration (ADR 1160).
+// X-Tenant-ID header (populate-only — no codegen gate). The tenant header drives
+// a two-stage validation inside Service.Login:
+//
+//   - Absent header (empty string): validation.RequireNotEmpty rejects with 400
+//     (ErrAuthLoginInvalidInput) before any authentication work is attempted.
+//   - Present but malformed UUID: tenant.ParseTenantID rejects with a uniform 401
+//     (ErrAuthLoginFailed), the same shape as wrong-password, to prevent tenant
+//     enumeration (ADR 1160).
 func (a LoginAdapter) Login(ctx context.Context, req *logingen.Request) (logingen.LoginResponseObject, error) {
 	pair, err := a.S.Login(ctx, LoginInput{
 		Username: req.Username,

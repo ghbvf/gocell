@@ -16,7 +16,7 @@ import (
 
 // Request — http.auth.setup.status.v1.request
 type Request struct {
-	// format: uuid
+	// XTenantID is populated from the "X-Tenant-ID" request header by the generated handler; do not set it in the Service implementation (read-only).
 	XTenantID string `json:"-"`
 }
 
