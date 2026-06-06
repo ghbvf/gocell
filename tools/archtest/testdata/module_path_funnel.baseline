@@ -57,7 +57,6 @@ tools/archtest/refresh_invariants_test.go
 tools/archtest/relay_isolation_test.go
 tools/archtest/required_dep_nil_guard_test.go
 tools/archtest/reverse_coverage_invariants_test.go
-tools/archtest/rmq_invariants_test.go
 tools/archtest/safeid_funnel_test.go
 tools/archtest/saga_invariants_test.go
 tools/archtest/security_defaults_test.go
