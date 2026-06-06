@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	commandruntime "github.com/ghbvf/gocell/runtime/command"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
@@ -65,6 +66,7 @@ func newSweepTestCell(t *testing.T, fc clock.Clock, q kcommand.Queue, mp metrics
 	opts := []Option{
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clock.Real()))),
+		WithCommandRegistry(commandruntime.NewRegistry()),
 	}
 	if mp != nil {
 		opts = append(opts, WithMetricsProvider(mp))

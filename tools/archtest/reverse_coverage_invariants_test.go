@@ -30,6 +30,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/ghbvf/gocell/tools/typesutil"
 )
@@ -52,10 +53,59 @@ type contractDoc struct {
 // contractEndpoints mirrors kernel/metadata.EndpointsMeta: actorSubscribers
 // lives under endpoints (not at the top level). Confirmed by all 4 contracts
 // using this field today (event.audit.appended.v1 + 3 example events).
+//
+// The per-kind provider field differs (server/publisher/handler/provider); the
+// DEAD-CONTRACT-01 provider check must read the SAME field metadata's
+// ContractMeta.ProviderEndpoint reads for that kind — see contractProviderEndpoint.
 type contractEndpoints struct {
 	Server           string   `yaml:"server"`
 	Publisher        string   `yaml:"publisher"`
+	Handler          string   `yaml:"handler"`  // kind:command provider (mirrors metadata)
+	Provider         string   `yaml:"provider"` // kind:projection provider (mirrors metadata)
+	Invokers         []string `yaml:"invokers"`
 	ActorSubscribers []string `yaml:"actorSubscribers"`
+}
+
+// contractProviderEndpoint returns the provider endpoint for a contract, reading
+// the per-kind provider field exactly as kernel/metadata.ContractMeta.ProviderEndpoint
+// does (http/grpc/saga→server, event→publisher, command→handler,
+// projection→provider, webhook→ownerCell). DEAD-CONTRACT-01 uses this instead of a
+// hardcoded endpoints.server fallback so a valid contract declaring only its
+// kind-correct provider (e.g. a kind:command with endpoints.handler and no ownerCell)
+// is not false-flagged. Parity with metadata is locked by
+// TestDeadContractCover_ProviderEndpointMirrorsMetadata — if metadata's per-kind
+// provider semantics change, that test fails until this mirror is updated.
+func contractProviderEndpoint(c contractDoc) string {
+	switch c.Kind {
+	case "http", "grpc", "saga":
+		return c.Endpoints.Server
+	case "event":
+		return c.Endpoints.Publisher
+	case "command":
+		return c.Endpoints.Handler
+	case "projection":
+		return c.Endpoints.Provider
+	case "webhook":
+		return c.OwnerCell
+	default:
+		return ""
+	}
+}
+
+// contractProviderFieldLabel names the provider endpoint field for a kind, for
+// human-readable DEAD-CONTRACT-01 diagnostics (keeps the message pointing at the
+// exact field a fix should populate).
+func contractProviderFieldLabel(kind string) string {
+	switch kind {
+	case "command":
+		return "endpoints.handler"
+	case "projection":
+		return "endpoints.provider"
+	case "event":
+		return "endpoints.publisher"
+	default:
+		return "endpoints.server"
+	}
 }
 
 var (
@@ -1018,27 +1068,64 @@ func outboxEmit(ctx context.Context, e interface{}, topic string, p interface{})
 // Every lifecycle: active contract.yaml must have an entry point:
 //   - http → a cell impl of its generated Service interface (reuses HANDLER logic)
 //   - event → endpoints.publisher != "" OR ≥1 subscriber slice OR ≥1 actorSubscriber
-//   - All other kinds → ownerCell or endpoints.server non-empty.
+//   - command → ownerCell or endpoints.handler non-empty AND (when codegen:true)
+//     a cell impl of its generated Handler interface (the #1580 reverse-coverage
+//     strengthening).
+//   - All other kinds → ownerCell or the kind-correct provider endpoint
+//     (projection→endpoints.provider, grpc/saga→endpoints.server), resolved via
+//     contractProviderEndpoint to mirror metadata ProviderEndpoint (the #1647 F2 fix).
 //
 // Floor scan: asserts ≥40 contracts loaded (defense against broken YAML scan).
 // Today's count: 47 active contracts (2026-05-28); floor is conservative to
 // allow for normal lifecycle changes without breaking this floor assertion.
 //
+// # Command dimension (#1580)
+//
+// Before #1580 the command branch only checked ownerCell != "" — a codegen:true
+// command contract could emit a typed Handler that no cell implemented and still
+// pass (the dead-but-compiles state #1580 fixes for command.devicecommand.enqueue.v1).
+// The command branch now additionally requires, for codegen:true commands (those
+// with a generated command_gen.go, located via loadGeneratedSourceMap(…,"command",
+// "/command_gen.go")), that ≥1 cell/example type implements the generated Handler
+// interface — the same types.Implements cross-check used for HTTP Service, in the
+// same single ModeWorkspace universe. codegen:false command contracts (the deferred
+// dequeue/report/ack/extend-lease siblings) have no generated package and are never
+// mis-flagged: they keep only the ownerCell check.
+//
 // AI-robust funnel evaluation:
 //   - upstream: Medium — YAML full enumeration relies on loadContentFiles
 //     scanning the contracts/ tree; the source map is read from generated/
-//     iface_gen.go "// source:" comments. Both paths are deterministic given
-//     the repo tree; broken scan triggers floor assertion.
-//   - downstream: Hard — event subscriber dimension uses slice.yaml scan +
-//     actorSubscribers []string field (now correctly typed); http uses typed
-//     types.Implements via a single-pass typed Run.
+//     iface_gen.go / command_gen.go "// source:" comments. Both paths are
+//     deterministic given the repo tree; broken scan triggers floor assertion.
+//     For the command dimension specifically, the archtest statically requires a
+//     Handler IMPL to exist but cannot express "a codegen:true command is always
+//     REGISTERED" — deleting the cmdenqueue.Register call while keeping the adapter
+//     type leaves this green (runtime required-registry fail-fast + the e2e
+//     wiring test are the runtime backstops). The Hard upgrade = a cellgen
+//     role:handle codegen funnel deriving the Register call from slice.yaml so the
+//     unregistered state is compile-unexpressible; tracked at gh #1645 (after
+//     which this command dimension can retire).
+//   - downstream: Hard — http + command dimensions use typesutil.ImplementsInterface
+//     (Go type-system native, no string matching); event subscriber dimension uses
+//     slice.yaml scan + actorSubscribers []string field.
 //
 // Blind-spot self-check:
 //   - draft/deprecated lifecycle: excluded (only active checked).
 //   - examples/ contracts with no platform backing: handled via ownerCell check.
 //   - actorSubscribers: correctly parsed as []string matching kernel/metadata/types.go.
-//   - Cross-load type identity: eliminated by a single-pass typed Run (all patterns
-//     loaded in one packages.Load invocation).
+//   - Cross-load type identity: eliminated by a single ModeWorkspace universe
+//     (LoadProductionPackages over all go.work members, root + satellites #1556).
+//   - Command Handler-lookup regression / loader dropping generated/contracts/command/*:
+//     caught by the anti-vacuity guard (codegen command source map non-empty ⟹
+//     ≥1 generated Handler iface must load).
+//   - Positive command-impl detection (the real types.Implements path) is exercised
+//     by THIS test's main assertion: command.devicecommand.enqueue.v1 is active +
+//     codegen:true, so if types.Implements failed to match the satellite-module
+//     EnqueueCommandAdapter, the command branch would flag it and the test would FAIL.
+//     A loader regression to root-only (GOWORK=off, dropping examples/* satellites
+//     #1556) therefore surfaces as a false-positive RED here (impl appears absent),
+//     never a silent pass. TestDeadContractCover_DetectsUnimplementedCommand
+//     additionally locks the diagnostic-emission decision in isolation.
 func TestDeadContractCover(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -1092,6 +1179,22 @@ func TestDeadContractCover(t *testing.T) {
 		contractPathToGenPkg[contractPath] = genPkg
 	}
 
+	// Command dimension (#1580): codegen:true command contracts emit command_gen.go
+	// with a typed Handler interface. Map contractYamlAbsPath → generated command
+	// package path so the command branch below can require a cell implements the
+	// generated Handler (the reverse-coverage strengthening). codegen:false command
+	// contracts (e.g. the deferred dequeue/report/ack/extend-lease siblings) have NO
+	// command_gen.go, so they never appear here and skip the Handler check —
+	// only the ownerCell check applies to them.
+	genCommandSourceMap, cmdMapErr := loadGeneratedSourceMap(root, modPath, "command", "/command_gen.go")
+	if cmdMapErr != nil {
+		t.Fatalf("DEAD-CONTRACT-01: loadGeneratedSourceMap(command): %v", cmdMapErr)
+	}
+	contractPathToCmdGenPkg := make(map[string]string, len(genCommandSourceMap))
+	for genPkg, contractPath := range genCommandSourceMap {
+		contractPathToCmdGenPkg[contractPath] = genPkg
+	}
+
 	// Build the implemented-Service set by loading generated Service interfaces +
 	// cell / example impls in ONE ModeWorkspace type universe. ModeWorkspace (via
 	// LoadProductionPackages) is mandatory — NOT the Typed/ModeModule loader:
@@ -1103,6 +1206,7 @@ func TestDeadContractCover(t *testing.T) {
 	// one type-check universe so ImplementsInterface compares identical packages.
 	// Mirrors the loadModule funnel in archtest_test.go.
 	generatedHTTPPrefix := modPath + "/generated/contracts/http/"
+	generatedCommandPrefix := modPath + "/generated/contracts/command/"
 	cellsPrefix := modPath + "/cells/"
 	examplesPrefix := modPath + "/examples/"
 
@@ -1115,6 +1219,7 @@ func TestDeadContractCover(t *testing.T) {
 	}
 
 	var genServiceIfaces []ifaceEntry
+	var genCommandHandlerIfaces []ifaceEntry
 	var cellNamedTypes []namedEntry
 
 	modules := findWorkspaceModules(t, root)
@@ -1156,6 +1261,33 @@ func TestDeadContractCover(t *testing.T) {
 			continue
 		}
 
+		// Command dimension (#1580): collect the generated Handler interface from
+		// each generated/contracts/command/* package. Same single-universe load as
+		// the HTTP Service ifaces, so types.Implements compares identical packages.
+		if strings.HasPrefix(pkgPath, generatedCommandPrefix) {
+			obj := pkg.Types.Scope().Lookup("Handler")
+			if obj == nil {
+				continue
+			}
+			tn, ok := obj.(*types.TypeName)
+			if !ok {
+				continue
+			}
+			named, ok := tn.Type().(*types.Named)
+			if !ok {
+				continue
+			}
+			iface, ok := named.Underlying().(*types.Interface)
+			if !ok {
+				continue
+			}
+			genCommandHandlerIfaces = append(genCommandHandlerIfaces, ifaceEntry{
+				pkgPath:  pkgPath,
+				ifaceTyp: iface.Complete(),
+			})
+			continue
+		}
+
 		isCells := strings.HasPrefix(pkgPath, cellsPrefix)
 		isExamples := strings.HasPrefix(pkgPath, examplesPrefix)
 		if !isCells && !isExamples {
@@ -1185,6 +1317,28 @@ func TestDeadContractCover(t *testing.T) {
 				implementedPkgPaths[iface.pkgPath] = true
 			}
 		}
+	}
+
+	// Command dimension (#1580): generatedCommandPkg → ≥1 cell/example type
+	// implements its Handler. Same types.Implements cross-check as Service above.
+	commandImplementedPkgPaths := make(map[string]bool)
+	for _, impl := range cellNamedTypes {
+		for _, iface := range genCommandHandlerIfaces {
+			if typesutil.ImplementsInterface(impl.named, iface.ifaceTyp) {
+				commandImplementedPkgPaths[iface.pkgPath] = true
+			}
+		}
+	}
+	// Anti-vacuity: if any codegen:true command contract exists (command_gen.go
+	// emitted → present in contractPathToCmdGenPkg), the scanner MUST have found
+	// at least one generated Handler interface. An empty iface set with non-empty
+	// source map means the Handler-lookup regressed (renamed interface, loader
+	// dropped generated/contracts/command/*) — fail loudly rather than passing the
+	// command branch vacuously.
+	if len(contractPathToCmdGenPkg) > 0 && len(genCommandHandlerIfaces) == 0 {
+		t.Fatal("DEAD-CONTRACT-01: codegen command contracts exist but no generated Handler " +
+			"interface was loaded from generated/contracts/command/* — the command Handler-impl " +
+			"cross-check would pass vacuously (#1580). Check the Handler lookup + ModeWorkspace loader.")
 	}
 
 	// Now evaluate each active contract for entry-point existence.
@@ -1260,17 +1414,46 @@ func TestDeadContractCover(t *testing.T) {
 						"or change lifecycle to draft/deprecated if unused)",
 				})
 			}
-		default:
-			// command, projection, or any other kind: require ownerCell or server
-			ownerCell := c.OwnerCell
-			if ownerCell == "" {
-				ownerCell = c.Endpoints.Server
-			}
-			if ownerCell == "" {
+		case "command":
+			// Every command contract needs a provider: ownerCell or the command's
+			// provider endpoint (endpoints.handler, per metadata ProviderEndpoint —
+			// covers codegen:false siblings too). Using contractProviderEndpoint
+			// rather than endpoints.server avoids false-flagging a kind:command that
+			// declares only endpoints.handler (ownerCell deriving from handler).
+			if c.OwnerCell == "" && contractProviderEndpoint(c) == "" {
 				diags = append(diags, Diagnostic{
 					Rel:  rel,
 					Line: 1,
-					Message: "active " + c.Kind + " contract " + c.ID + " has no ownerCell or endpoints.server declared " +
+					Message: "active command contract " + c.ID + " has no ownerCell or " +
+						contractProviderFieldLabel(c.Kind) + " declared " +
+						"(change lifecycle to draft/deprecated if unused)",
+				})
+			}
+			// codegen:true command contracts additionally require a cell that
+			// implements the generated Handler interface — mirroring HANDLER-DECL-COVER-01
+			// for HTTP Service (#1580). codegen:false commands have no generated
+			// package (absent from contractPathToCmdGenPkg) and skip this check.
+			if genPkg := contractPathToCmdGenPkg[c.FilePath]; genPkg != "" && !commandImplementedPkgPaths[genPkg] {
+				diags = append(diags, Diagnostic{
+					Rel:  rel,
+					Line: 1,
+					Message: "active codegen command contract " + c.ID + " has no cell implementation of its " +
+						"generated Handler interface (implement the generated <pkg>.Handler in a cell/example slice " +
+						"and register it via <pkg>.Register, or change lifecycle to draft/deprecated / codegen: false " +
+						"if not yet implemented)",
+				})
+			}
+		default:
+			// projection / grpc / saga / any other kind: require ownerCell or the
+			// kind-correct provider endpoint (projection→endpoints.provider,
+			// grpc/saga→endpoints.server), read via contractProviderEndpoint so the
+			// per-kind provider field matches metadata ProviderEndpoint.
+			if c.OwnerCell == "" && contractProviderEndpoint(c) == "" {
+				diags = append(diags, Diagnostic{
+					Rel:  rel,
+					Line: 1,
+					Message: "active " + c.Kind + " contract " + c.ID + " has no ownerCell or " +
+						contractProviderFieldLabel(c.Kind) + " declared " +
 						"(change lifecycle to draft/deprecated if unused)",
 				})
 			}
@@ -1289,6 +1472,90 @@ func TestDeadContractCover_FloorScan(t *testing.T) {
 	contracts := loadReverseCoverageContracts(t)
 	if len(contracts) < 40 {
 		t.Errorf("DEAD-CONTRACT-01 floor scan: expected ≥40 contracts, got %d (YAML scan may be broken)", len(contracts))
+	}
+}
+
+// TestDeadContractCover_DetectsUnimplementedCommand is the negative self-check
+// for the #1580 command dimension (mirrors TestHandlerDeclCover_DetectsOrphanImpl).
+// It replicates the command branch decision with an EMPTY
+// commandImplementedPkgPaths set for a known codegen command package, and asserts
+// the "no cell implementation of its generated Handler" diagnostic fires.
+//
+// Blind spot it closes: without this, a regression that wipes the command-impl
+// cross-check (e.g. genCommandHandlerIfaces never populated, or the
+// contractPathToCmdGenPkg lookup silently empty) would make the command branch
+// pass vacuously and never surface an unimplemented codegen command.
+func TestDeadContractCover_DetectsUnimplementedCommand(t *testing.T) {
+	t.Parallel()
+	const fakeCmdGenPkg = "github.com/ghbvf/gocell/generated/contracts/command/fake/op/v1"
+	const fakeContractPath = "/abs/examples/x/contracts/command/fake/op/v1/contract.yaml"
+
+	// Simulate: this codegen command contract maps to a generated package, but no
+	// cell implements its Handler.
+	contractPathToCmdGenPkg := map[string]string{fakeContractPath: fakeCmdGenPkg}
+	commandImplementedPkgPaths := map[string]bool{ // fakeCmdGenPkg intentionally absent
+	}
+
+	var diags []Diagnostic
+	if genPkg := contractPathToCmdGenPkg[fakeContractPath]; genPkg != "" && !commandImplementedPkgPaths[genPkg] {
+		diags = append(diags, Diagnostic{
+			Rel:     "examples/x/contracts/command/fake/op/v1/contract.yaml",
+			Line:    1,
+			Message: "active codegen command contract command.fake.op.v1 has no cell implementation of its generated Handler interface",
+		})
+	}
+
+	if len(diags) == 0 {
+		t.Error("DEAD-CONTRACT-01 unimplemented-command self-check: expected a diagnostic for a " +
+			"codegen command with no Handler impl, got none — command branch logic may be broken")
+	}
+	for _, d := range diags {
+		if !strings.Contains(d.Message, "no cell implementation of its generated Handler") {
+			t.Errorf("DEAD-CONTRACT-01 unimplemented-command self-check: diagnostic missing expected text, got: %q", d.Message)
+		}
+	}
+}
+
+// TestDeadContractCover_ProviderEndpointMirrorsMetadata locks contractProviderEndpoint
+// (the DEAD-CONTRACT-01 per-kind provider resolution) to
+// kernel/metadata.ContractMeta.ProviderEndpoint. DEAD-CONTRACT-01 does a lightweight
+// YAML content scan with its own contractDoc struct rather than parsing full
+// metadata, so the provider-field-per-kind mapping is duplicated; this parity test
+// prevents that local mirror from drifting from the canonical semantics — the #1647
+// F2 root cause was the command (and projection) provider field silently diverging to
+// endpoints.server, false-flagging a valid kind:command/projection that declares only
+// its kind-correct provider. If metadata's per-kind provider changes, this fails until
+// contractProviderEndpoint (+ the contractEndpoints field) is updated to match.
+func TestDeadContractCover_ProviderEndpointMirrorsMetadata(t *testing.T) {
+	t.Parallel()
+	const owner, ep = "owner-cell", "provider-cell"
+	for _, kind := range []string{"http", "grpc", "saga", "event", "command", "projection", "webhook", "unknownkind"} {
+		kind := kind
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
+			// Populate the kind-correct provider field on both the local contractDoc
+			// and the canonical ContractMeta; both must resolve to the same provider.
+			doc := contractDoc{Kind: kind, OwnerCell: owner}
+			meta := metadata.ContractMeta{Kind: kind, OwnerCell: owner}
+			switch kind {
+			case "http", "grpc", "saga":
+				doc.Endpoints.Server, meta.Endpoints.Server = ep, ep
+			case "event":
+				doc.Endpoints.Publisher, meta.Endpoints.Publisher = ep, ep
+			case "command":
+				doc.Endpoints.Handler, meta.Endpoints.Handler = ep, ep
+			case "projection":
+				doc.Endpoints.Provider, meta.Endpoints.Provider = ep, ep
+			case "webhook", "unknownkind":
+				// webhook provider = ownerCell; unknownkind → "" both sides.
+			}
+			got, want := contractProviderEndpoint(doc), meta.ProviderEndpoint()
+			if got != want {
+				t.Errorf("contractProviderEndpoint(kind=%s)=%q but metadata ProviderEndpoint()=%q — "+
+					"the DEAD-CONTRACT-01 provider mirror drifted from kernel/metadata; update "+
+					"contractProviderEndpoint (+ contractEndpoints field) to match", kind, got, want)
+			}
+		})
 	}
 }
 

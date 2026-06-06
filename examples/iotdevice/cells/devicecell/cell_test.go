@@ -25,6 +25,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
+	commandruntime "github.com/ghbvf/gocell/runtime/command"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
@@ -34,6 +35,7 @@ func newTestCell() *DeviceCell {
 		clock.Real(),
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clock.Real()))),
+		WithCommandRegistry(commandruntime.NewRegistry()),
 	)
 	c.RegisterCommandQueue(commandtest.NewInMemQueue())
 	return c
@@ -125,6 +127,26 @@ func TestDeviceCell_InitNoCommandQueue_FailsFast(t *testing.T) {
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
 	assert.Contains(t, err.Error(), "command queue")
+}
+
+func TestDeviceCell_InitNoCommandRegistry_FailsFast(t *testing.T) {
+	// Symmetric with the commandQueue case: the sync command-bus registry is a
+	// required cell dep (#1580). Omitting WithCommandRegistry must fail fast in
+	// Init rather than silently leaving the generated funnel unregistered
+	// (dead-but-compiles). Full deps minus the registry so initSlices reaches the
+	// registry guard (which sits after the commandQueue guard).
+	c := NewDeviceCell(
+		clock.Real(),
+		WithDeviceRepository(mem.NewDeviceRepository()),
+		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clock.Real()))),
+	)
+	c.RegisterCommandQueue(commandtest.NewInMemQueue())
+	err := c.Init(context.Background(), newTestRec())
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
+	assert.Contains(t, err.Error(), "command registry")
 }
 
 func TestDeviceCell_InitNoPublisher(t *testing.T) {
@@ -399,6 +421,7 @@ func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsCreated(t *testing.
 		WithDirectPublisher(outbox.WrapPublisherForCell(failingPublisher{})),
 
 		WithCursorCodec(newTestCursorCodec(t)),
+		WithCommandRegistry(commandruntime.NewRegistry()),
 	)
 	c.RegisterCommandQueue(commandtest.NewInMemQueue())
 	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo)))
@@ -417,6 +440,7 @@ func TestDeviceCell_DemoMode_RegisterPublishFailureReturnsCreated(t *testing.T) 
 		clock.Real(),
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithDirectPublisher(outbox.WrapPublisherForCell(failingPublisher{})),
+		WithCommandRegistry(commandruntime.NewRegistry()),
 	)
 	c.RegisterCommandQueue(commandtest.NewInMemQueue())
 	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo)))
@@ -478,6 +502,7 @@ func TestDeviceCell_CommandSweeper_MetricsBranches(t *testing.T) {
 			clock.Real(),
 			WithDeviceRepository(mem.NewDeviceRepository()),
 			WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clock.Real()))),
+			WithCommandRegistry(commandruntime.NewRegistry()),
 			WithMetricsProvider(metrics.NopProvider{}),
 		)
 		c.RegisterCommandQueue(commandtest.NewInMemQueue())
