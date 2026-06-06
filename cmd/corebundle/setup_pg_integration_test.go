@@ -1144,7 +1144,7 @@ func TestS4b_RbacRevoke_SameTxAtomicity(t *testing.T) {
 	require.NoError(t, err)
 
 	// 3. Assign "editor" role via internal listener.
-	assignBody, _ := json.Marshal(map[string]string{"userId": userID, "roleId": "editor"})
+	assignBody, _ := json.Marshal(map[string]string{"userId": userID, "roleId": "editor", "tenantId": testTenantID})
 	assignToken := auth.GenerateServiceToken(h.ring, "accesscore", http.MethodPost, "/internal/v1/access/roles/assign", "", time.Now())
 	assignReq, _ := http.NewRequest(http.MethodPost, h.internalBase+"/internal/v1/access/roles/assign",
 		bytes.NewReader(assignBody))
@@ -1167,7 +1167,7 @@ func TestS4b_RbacRevoke_SameTxAtomicity(t *testing.T) {
 	assert.Equal(t, 1, roleCount, "editor role assignment must be present after assign")
 
 	// 4. Revoke "editor" role → outbox write fails → tx rollback → 500.
-	revokeBody, _ := json.Marshal(map[string]string{"userId": userID, "roleId": "editor"})
+	revokeBody, _ := json.Marshal(map[string]string{"userId": userID, "roleId": "editor", "tenantId": testTenantID})
 	revokeToken := auth.GenerateServiceToken(h.ring, "accesscore", http.MethodPost, "/internal/v1/access/roles/revoke", "", time.Now())
 	revokeReq, _ := http.NewRequest(http.MethodPost, h.internalBase+"/internal/v1/access/roles/revoke",
 		bytes.NewReader(revokeBody))
@@ -1224,7 +1224,7 @@ func TestS4b_RoleChangeConsumer_NoRedundantRevoke(t *testing.T) {
 	userID := sessionPGQueryUserIDByUsername(t, h, sessionPGAdminUsername)
 
 	// Assign "editor" role so revoke has something to act on.
-	assignBody, _ := json.Marshal(map[string]string{"userId": userID, "roleId": "editor"})
+	assignBody, _ := json.Marshal(map[string]string{"userId": userID, "roleId": "editor", "tenantId": testTenantID})
 	assignToken := auth.GenerateServiceToken(h.ring, "accesscore", http.MethodPost, "/internal/v1/access/roles/assign", "", time.Now())
 	assignReq, _ := http.NewRequest(http.MethodPost, h.internalBase+"/internal/v1/access/roles/assign",
 		bytes.NewReader(assignBody))
@@ -1244,7 +1244,7 @@ func TestS4b_RoleChangeConsumer_NoRedundantRevoke(t *testing.T) {
 		"authz_epoch must still be 1 after role assign (NewUser baseline 1; assign additive, no credential invalidation)")
 
 	// Revoke the role — funnel runs once: epoch bumped 1→2.
-	revokeBody, _ := json.Marshal(map[string]string{"userId": userID, "roleId": "editor"})
+	revokeBody, _ := json.Marshal(map[string]string{"userId": userID, "roleId": "editor", "tenantId": testTenantID})
 	revokeToken := auth.GenerateServiceToken(h.ring, "accesscore", http.MethodPost, "/internal/v1/access/roles/revoke", "", time.Now())
 	revokeReq, _ := http.NewRequest(http.MethodPost, h.internalBase+"/internal/v1/access/roles/revoke",
 		bytes.NewReader(revokeBody))

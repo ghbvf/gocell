@@ -340,7 +340,7 @@ func TestWalkthrough(t *testing.T) {
 
 	t.Run("internal listener is isolated and service-token protected", func(t *testing.T) {
 		const internalRoleAssignPath = "/internal/v1/access/roles/assign"
-		body := fmt.Sprintf(`{"userId":%q,"roleId":"admin"}`, adminUserID)
+		body := fmt.Sprintf(`{"userId":%q,"roleId":"admin","tenantId":%q}`, adminUserID, ssobffTestTenantID)
 
 		primaryReq, err := http.NewRequestWithContext(context.Background(),
 			http.MethodPost,
