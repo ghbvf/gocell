@@ -213,7 +213,7 @@ PR3 (adapters/grpc server) ── PR4 (interceptors) ── PR5 (bootstrap wirin
 
 ### PR 1 — kernel kind=grpc parse + contractspec extension
 
-- **Scope**: `kernel/metadata/contract.go` accepts `kind: grpc` and the `grpc:` subtree (service/method/stream/proto fields); `kernel/contractspec.ContractSpec` gains transport-specific fields; ADR `202605260000-adr-grpc-transport-adapter.md` records the decision.
+- **Scope**: `kernel/metadata/contract.go` accepts `kind: grpc` and the `endpoints.grpc` subtree (service/proto fields; method set and streaming kinds derive from `.proto` per ADR D5 / #1655); `kernel/contractspec.ContractSpec` gains transport-specific fields; ADR `202605260000-adr-grpc-transport-adapter.md` records the decision.
 - **Files**:
   - `kernel/metadata/contract.go` ~80
   - `kernel/metadata/contract_test.go` ~120
