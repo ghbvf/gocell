@@ -29,6 +29,9 @@ import (
 
 const loginPath = "/api/v1/access/sessions/login"
 
+// testCookieTTL mirrors accesscore.DefaultRefreshMaxAge (7 days).
+const testCookieTTL = 7 * 24 * time.Hour
+
 // setup wires the slice handler onto a celltest mux via RegisterRoutes — the
 // same code path cell_routes.go takes in production. Tests dispatch via
 // mux.ServeHTTP so per-package coverage records both HandleLogin and the
@@ -54,9 +57,8 @@ func setup(t *testing.T) http.Handler {
 		WithSessionTTL(time.Hour),
 		WithAccountLockout(newTestLockout(userRepo, sessionStore, refreshStore)))
 	require.NoError(t, err)
-	const testCookieMaxAge = 604800 // 7 days in seconds
 	mux := celltest.NewTestMux()
-	if err := NewHandler(svc, testCookieMaxAge).RegisterRoutes(mux); err != nil {
+	if err := NewHandler(svc, testCookieTTL).RegisterRoutes(mux); err != nil {
 		panic("RegisterRoutes: " + err.Error())
 	}
 	return mux
@@ -275,7 +277,7 @@ func TestHandler_Login_SetsRefreshCookie(t *testing.T) {
 	assert.True(t, rtCookie.Secure, "cookie must be Secure")
 	assert.Equal(t, http.SameSiteStrictMode, rtCookie.SameSite, "cookie must be SameSite=Strict")
 	assert.Equal(t, "/api/v1/access/sessions", rtCookie.Path, "cookie Path must be /api/v1/access/sessions")
-	assert.Equal(t, 604800, rtCookie.MaxAge, "cookie MaxAge must match cookieMaxAge arg")
+	assert.Equal(t, int(testCookieTTL.Seconds()), rtCookie.MaxAge, "cookie MaxAge must match cookieTTL arg")
 }
 
 // TestHandler_Login_NoCookieOn401 asserts that a failed login (401) does NOT

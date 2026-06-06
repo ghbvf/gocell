@@ -12,6 +12,12 @@ package refreshcookiefixture
 
 import "net/http"
 
+// fixtureMaxAge mirrors accesscore.DefaultRefreshMaxAge (7 days in seconds).
+// Named to avoid bare magic literals and to stay in sync with production via
+// code review; not imported from production code because fixture packages must
+// be dependency-free (archtest_fixture build tag).
+const fixtureMaxAge = 604800 // 7d seconds
+
 // weakCookie intentionally weakens Secure. HttpOnly and SameSite are kept
 // correct so the fixture exercises exactly one missing-attribute branch (the
 // expected-count assertion in the RED-fixture test pins this to 1).
@@ -20,7 +26,7 @@ func weakCookie() *http.Cookie {
 		Name:     "gocell_rt",
 		Value:    "x",
 		Path:     "/api/v1/access/sessions",
-		MaxAge:   604800,
+		MaxAge:   fixtureMaxAge,
 		HttpOnly: true,
 		Secure:   false, // RED: weakened — must be caught
 		SameSite: http.SameSiteStrictMode,

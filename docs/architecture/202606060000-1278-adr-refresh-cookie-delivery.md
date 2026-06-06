@@ -72,8 +72,9 @@ declared explicitly here rather than buried in the code.
 | XSS reading the long-lived refresh token | `HttpOnly` (JS cannot read the cookie) | ✅ |
 | Token sent over plaintext | `Secure` (HTTPS-only; localhost is a secure context, so local dev works without a toggle) | ✅ |
 | CSRF on the public refresh endpoint | `SameSite=Strict` (browser will not attach the cookie cross-site) + `Path` narrowed to the sessions subtree | ✅ (primary defense) |
-| CSRF defense-in-depth (double-submit / Origin check) | Not added; SameSite=Strict + httpOnly judged sufficient (issue) | ⚠️ deferred (backlog if needed) |
-| Cross-origin credentialed requests | CORS not implemented | ⚠️ deferred to backlog (same-origin/edge-bff in the interim) |
+| CSRF defense-in-depth (double-submit / Origin check) | Not added; SameSite=Strict + httpOnly judged sufficient (issue) | ⚠️ deferred — tracked at #1680 |
+| Cross-origin credentialed requests | CORS not implemented | ⚠️ deferred — tracked at #1680 (same-origin/edge-bff in the interim) |
+| Refresh token also returned in JSON body | Intentional dual-channel: body is still returned for `edge-bff` / native-app callers that cannot read httpOnly cookies; cookie is the primary channel for browser clients | ✅ intentional (BR-005 §dual-channel) |
 | Refresh reuse after the cookie is stale | Reuse → 401 cascade-revoke; the stale cookie is left untouched on 4xx (already useless; the 401 request is untrusted) | ✅ intentional |
 | Refresh token leaking into logs/spans via Set-Cookie | The token is only passed to `http.SetCookie`, never to slog/spans; idempotency replay already strips `set-cookie`. No new leak surface (the token was already in the JSON body). | ✅ |
 

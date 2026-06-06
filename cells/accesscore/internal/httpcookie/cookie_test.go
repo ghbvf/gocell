@@ -6,11 +6,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
-const testMaxAge = 604800 // 7d in seconds, mirrors accesscore.DefaultRefreshMaxAge
+const testTTL = 7 * 24 * time.Hour // mirrors accesscore.DefaultRefreshMaxAge
 
-// serve runs h wrapped by Middleware(testMaxAge) against a request that
+// serve runs h wrapped by Middleware(testTTL) against a request that
 // optionally carries an inbound gocell_rt cookie, returning the recorder.
 func serve(t *testing.T, inboundCookie string, h http.HandlerFunc) *httptest.ResponseRecorder {
 	t.Helper()
@@ -19,7 +20,7 @@ func serve(t *testing.T, inboundCookie string, h http.HandlerFunc) *httptest.Res
 		req.AddCookie(&http.Cookie{Name: CookieName, Value: inboundCookie})
 	}
 	rec := httptest.NewRecorder()
-	Middleware(testMaxAge)(h).ServeHTTP(rec, req)
+	Middleware(testTTL)(h).ServeHTTP(rec, req)
 	return rec
 }
 
@@ -59,8 +60,8 @@ func TestMiddleware_SetOnSuccess(t *testing.T) {
 	if got.Path != CookiePath {
 		t.Errorf("Path = %q, want %q", got.Path, CookiePath)
 	}
-	if got.MaxAge != testMaxAge {
-		t.Errorf("MaxAge = %d, want %d", got.MaxAge, testMaxAge)
+	if want := int(testTTL.Seconds()); got.MaxAge != want {
+		t.Errorf("MaxAge = %d, want %d", got.MaxAge, want)
 	}
 	// Wire-string assertions per issue spec.
 	raw := rec.Header().Get("Set-Cookie")

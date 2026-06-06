@@ -229,12 +229,6 @@ func (c *AccessCore) initSlices() error {
 		return fmt.Errorf("accesscore: build accountlockout service: %w", err)
 	}
 
-	// cookieMaxAge is the httpOnly refresh-cookie Max-Age (seconds), shared by the
-	// login/refresh (set) and logout (clear) session handlers. It equals the
-	// refresh token's hard TTL; rotation reissues a fresh-TTL token on every
-	// refresh, so a static Max-Age stays aligned with the live token (#1278).
-	cookieMaxAge := int(DefaultRefreshMaxAge.Seconds())
-
 	// session-login must be constructed before identity-manage because
 	// ChangePassword injects loginSvc as the TokenIssuer.
 	loginOpts := []sessionlogin.Option{
@@ -258,7 +252,7 @@ func (c *AccessCore) initSlices() error {
 	if err != nil {
 		return err
 	}
-	c.loginHandler = sessionlogin.NewHandler(loginSvc, cookieMaxAge)
+	c.loginHandler = sessionlogin.NewHandler(loginSvc, DefaultRefreshMaxAge)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(sessionlogin.SliceMetadata()))
 
 	// identity-manage: inject loginSvc as TokenIssuer for ChangePassword.
@@ -303,7 +297,7 @@ func (c *AccessCore) initSlices() error {
 	if err != nil {
 		return err
 	}
-	c.refreshHandler = sessionrefresh.NewHandler(refreshSvc, cookieMaxAge)
+	c.refreshHandler = sessionrefresh.NewHandler(refreshSvc, DefaultRefreshMaxAge)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(sessionrefresh.SliceMetadata()))
 
 	// session-logout — cascades revocation to refresh.Store so logout
@@ -313,7 +307,7 @@ func (c *AccessCore) initSlices() error {
 	if err != nil {
 		return err
 	}
-	c.logoutHandler = sessionlogout.NewHandler(logoutSvc, cookieMaxAge)
+	c.logoutHandler = sessionlogout.NewHandler(logoutSvc, DefaultRefreshMaxAge)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(sessionlogout.SliceMetadata()))
 
 	// authorization-decide

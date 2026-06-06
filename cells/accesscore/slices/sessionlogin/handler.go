@@ -3,6 +3,7 @@ package sessionlogin
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/httpcookie"
@@ -71,18 +72,18 @@ func toLoginResponseData(p dto.TokenPair) *logingen.ResponseData {
 // response with httpcookie.Middleware to emit the refresh token as an httpOnly
 // cookie on 201 responses (BR-005, #1278).
 type Handler struct {
-	loginH       *logingen.Handler
-	cookieMaxAge int
+	loginH    *logingen.Handler
+	cookieTTL time.Duration
 }
 
 // NewHandler creates a sessionlogin Handler using the generated login handler.
-// cookieMaxAge is the refresh-token TTL in seconds used as the cookie Max-Age
-// on a successful login (e.g. 604800 for 7 days). No policy argument: the
+// cookieTTL is the refresh-token lifetime used as the cookie Max-Age on a
+// successful login (e.g. 7*24*time.Hour for 7 days). No policy argument: the
 // login endpoint is Public (no JWT required).
-func NewHandler(svc *Service, cookieMaxAge int) *Handler {
+func NewHandler(svc *Service, cookieTTL time.Duration) *Handler {
 	return &Handler{
-		loginH:       logingen.NewHandler(LoginAdapter{svc}),
-		cookieMaxAge: cookieMaxAge,
+		loginH:    logingen.NewHandler(LoginAdapter{svc}),
+		cookieTTL: cookieTTL,
 	}
 }
 
@@ -104,7 +105,7 @@ func NewHandler(svc *Service, cookieMaxAge int) *Handler {
 // (archtest CELLS-NO-CONTRACTSPEC-IMPORT-01).
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
 	wrap := func(next http.Handler) http.Handler {
-		return httpcookie.Middleware(h.cookieMaxAge)(injectLoginTenant(next))
+		return httpcookie.Middleware(h.cookieTTL)(injectLoginTenant(next))
 	}
 	return h.loginH.RegisterRoutes(cellmw.NewHeaderInjectMux(mux, wrap))
 }

@@ -29,8 +29,11 @@ import (
 
 const refreshPath = "/api/v1/access/sessions/refresh"
 
+const testCookieTTL = 7 * 24 * time.Hour // mirrors accesscore.DefaultRefreshMaxAge
+
 // setup wires the slice handler onto a celltest mux via RegisterRoutes — the
-// same code path cell_routes.go takes in production.
+// same code path cell_routes.go takes in production. Tests dispatch via
+// mux.ServeHTTP so coverage records both the adapter and the RegisterRoutes wiring.
 func setup(t testing.TB) (http.Handler, string) {
 	t.Helper()
 	sessionStore := newTestSessionStore(t)
@@ -66,14 +69,11 @@ func setup(t testing.TB) (http.Handler, string) {
 		withTestInvalidator(userRepo, sessionStore, refreshStore),
 	)
 	require.NoError(t, err)
-	h := NewHandler(svc, 604800)
-	// Verify routes can be registered (governance check).
 	mux := celltest.NewTestMux()
-	if err := h.RegisterRoutes(mux); err != nil {
+	if err := NewHandler(svc, testCookieTTL).RegisterRoutes(mux); err != nil {
 		panic("RegisterRoutes: " + err.Error())
 	}
-	// Return h directly so Handler.ServeHTTP is used.
-	return h, wireToken
+	return mux, wireToken
 }
 
 type unavailableRefreshStore struct {
@@ -138,7 +138,7 @@ func TestTokenPairResponse_Fields(t *testing.T) {
 }
 
 func TestHandleRefresh(t *testing.T) {
-	h, validToken := setup(t)
+	mux, validToken := setup(t)
 
 	tests := []struct {
 		name        string
@@ -197,7 +197,7 @@ func TestHandleRefresh(t *testing.T) {
 				assert.True(t, found.HttpOnly, "gocell_rt must be HttpOnly")
 				assert.True(t, found.Secure, "gocell_rt must be Secure")
 				assert.Equal(t, http.SameSiteStrictMode, found.SameSite)
-				assert.Equal(t, 604800, found.MaxAge)
+				assert.Equal(t, int(testCookieTTL.Seconds()), found.MaxAge)
 			},
 		},
 		{
@@ -226,7 +226,7 @@ func TestHandleRefresh(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, refreshPath, strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("X-Tenant-ID", testTenantIDStr)
-			h.ServeHTTP(w, req)
+			mux.ServeHTTP(w, req)
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.checkBody != nil {
 				tc.checkBody(t, w.Body.Bytes())
@@ -246,7 +246,7 @@ func TestHandleRefresh_RefreshStoreUnavailable_Returns503(t *testing.T) {
 		WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
 		withTestInvalidator(userRepo, sessionStore, newTestRefreshStore()))
 	mux := celltest.NewTestMux()
-	if err := NewHandler(svc, 604800).RegisterRoutes(mux); err != nil {
+	if err := NewHandler(svc, testCookieTTL).RegisterRoutes(mux); err != nil {
 		panic("RegisterRoutes: " + err.Error())
 	}
 
@@ -266,12 +266,12 @@ func TestHandleRefresh_RefreshStoreUnavailable_Returns503(t *testing.T) {
 // returns 400. The generated handler enforces minLength:20 and returns
 // ERR_VALIDATION_FAILED before the request reaches the service layer.
 func TestHandler_Refresh_BlankToken(t *testing.T) {
-	h, _ := setup(t)
+	mux, _ := setup(t)
 	body := `{"refreshToken":""}`
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, refreshPath, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	h.ServeHTTP(w, req)
+	mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 
@@ -328,7 +328,7 @@ func TestHandleRefresh_UserNotActive_Returns401(t *testing.T) {
 		WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
 		withTestInvalidator(userRepo, sessionStore, refreshStore))
 	mux := celltest.NewTestMux()
-	if err := NewHandler(svc, 604800).RegisterRoutes(mux); err != nil {
+	if err := NewHandler(svc, testCookieTTL).RegisterRoutes(mux); err != nil {
 		panic("RegisterRoutes: " + err.Error())
 	}
 
@@ -345,14 +345,14 @@ func TestHandleRefresh_UserNotActive_Returns401(t *testing.T) {
 // TestHandleRefresh_CookieOnly verifies that a request with an empty JSON body
 // but a valid gocell_rt cookie succeeds (schema relaxation: required:[]).
 func TestHandleRefresh_CookieOnly(t *testing.T) {
-	h, validToken := setup(t)
+	mux, validToken := setup(t)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, refreshPath, strings.NewReader("{}"))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Tenant-ID", testTenantIDStr)
 	req.AddCookie(&http.Cookie{Name: "gocell_rt", Value: validToken})
-	h.ServeHTTP(w, req)
+	mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code, "cookie-only refresh must succeed")
 
@@ -376,7 +376,7 @@ func TestHandleRefresh_CookieOnly(t *testing.T) {
 // a valid token is in the cookie and an invalid token is in the body, the
 // request succeeds (cookie wins).
 func TestHandleRefresh_CookiePriority(t *testing.T) {
-	h, validToken := setup(t)
+	mux, validToken := setup(t)
 
 	// Send a body token that is syntactically valid (length ≥20) but does not
 	// correspond to any issued token, so it would fail if selected.
@@ -388,7 +388,7 @@ func TestHandleRefresh_CookiePriority(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Tenant-ID", testTenantIDStr)
 	req.AddCookie(&http.Cookie{Name: "gocell_rt", Value: validToken})
-	h.ServeHTTP(w, req)
+	mux.ServeHTTP(w, req)
 
 	// The cookie's valid token must win → 200, not 401.
 	assert.Equal(t, http.StatusOK, w.Code,
@@ -413,7 +413,7 @@ func TestHandleRefresh_CookiePriority(t *testing.T) {
 // This confirms the schema relaxation: required:[] makes the field optional,
 // but if provided it must still satisfy minLength.
 func TestHandleRefresh_NeitherCookieNorBody(t *testing.T) {
-	h, _ := setup(t)
+	mux, _ := setup(t)
 
 	// A body with refreshToken="" violates minLength:20 → 400.
 	w := httptest.NewRecorder()
@@ -421,32 +421,28 @@ func TestHandleRefresh_NeitherCookieNorBody(t *testing.T) {
 		strings.NewReader(`{"refreshToken":""}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Tenant-ID", testTenantIDStr)
-	h.ServeHTTP(w, req)
+	mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code,
 		"empty refreshToken must fail validation (minLength:20)")
 }
 
-// TestHandleRefresh_EmptyBodyNoCookie verifies that {} body without cookie
-// results in 400 (schema validation rejects the zero-value empty string for
-// refreshToken, which violates minLength:20 even though the field is not
-// listed in required:[]).
+// TestHandleRefresh_EmptyBodyNoCookie verifies that {} body without a cookie
+// results in 400. JSON decode sets req.RefreshToken = "" (zero value); the
+// service's empty-input validation rejects a zero-length token before the store
+// is consulted (the schema permits an absent field via required:[], but an empty
+// string that reaches the service fails service-layer validation, not schema
+// validation).
 func TestHandleRefresh_EmptyBodyNoCookie(t *testing.T) {
-	h, _ := setup(t)
+	mux, _ := setup(t)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, refreshPath,
 		strings.NewReader("{}"))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Tenant-ID", testTenantIDStr)
-	h.ServeHTTP(w, req)
+	mux.ServeHTTP(w, req)
 
-	// JSON decode sets req.RefreshToken = "" (zero value); the schema validator
-	// treats "" as a present string that violates minLength:20 → 400.
-	// Clients that want cookie-only must omit the refreshToken key entirely
-	// (TestHandleRefresh_CookieOnly uses the cookie and an empty body "{}",
-	// but the cookie provides the token so RefreshAdapter never sees "").
-	// The only path to 401 is: valid-length token rejected by service layer.
 	assert.Equal(t, http.StatusBadRequest, w.Code,
-		"empty body (no refreshToken key value) + no cookie must yield 400 — schema rejects empty string")
+		"empty body + no cookie must yield 400: service rejects empty token input")
 }

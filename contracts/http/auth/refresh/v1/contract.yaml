@@ -14,7 +14,9 @@
 #   2. Otherwise the body refreshToken field is used.
 #   The body field is therefore optional (required:[]) but a cookie-only client
 #   MUST still send a valid JSON object body (minimally {}) because the handler
-#   still requires a parseable JSON body.
+#   still requires a parseable JSON body. Note: {} (absent key) is OK for
+#   cookie-only; {"refreshToken":""} is NOT OK — an explicitly empty string
+#   violates the schema minLength:20 constraint and yields 400.
 id: http.auth.refresh.v1
 kind: http
 ownerCell: accesscore

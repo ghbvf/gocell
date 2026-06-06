@@ -23,6 +23,7 @@ package httpcookie
 import (
 	"context"
 	"net/http"
+	"time"
 )
 
 const (
@@ -32,6 +33,17 @@ const (
 	// CookiePath narrows the cookie to the sessions subtree so it is only ever
 	// attached to /sessions/refresh + logout, reducing its exposure surface.
 	CookiePath = "/api/v1/access/sessions"
+
+	// cookieClearMaxAge is the MaxAge value that instructs the browser to delete
+	// the cookie immediately. The stdlib renders MaxAge<0 as the wire string
+	// "Max-Age=0" (delete-now directive per RFC 6265 §5.2.2).
+	cookieClearMaxAge = -1
+
+	// maxIncomingCookieLen caps the length of the inbound gocell_rt cookie value
+	// that is forwarded into ctx. Values longer than this are silently ignored
+	// (defense-in-depth: the refresh-token opaque format is bounded, and
+	// oversized values cannot match any issued token).
+	maxIncomingCookieLen = 4096
 )
 
 // newRefreshCookie is the SOLE constructor for the refresh-token cookie. The
@@ -41,8 +53,8 @@ const (
 // REFRESH-COOKIE-SECURE-ATTRS-01 form-locks these attributes; any weakening
 // fails CI.
 //
-// A clear directive is expressed as value=="" with maxAge<0, which renders on
-// the wire as Max-Age=0 (delete now).
+// A clear directive is expressed as value=="" with maxAge==cookieClearMaxAge,
+// which renders on the wire as Max-Age=0 (delete now).
 func newRefreshCookie(value string, maxAge int) *http.Cookie {
 	return &http.Cookie{
 		Name:     CookieName,
@@ -108,15 +120,16 @@ func IncomingRefresh(ctx context.Context) string {
 //   - a [SetRefresh] / [ClearRefresh] directive recorded by the inner handler is
 //     emitted as a Set-Cookie header on a 2xx response.
 //
-// maxAge is the refresh-token TTL in seconds, used as the cookie Max-Age on set
+// ttl is the refresh-token lifetime, used as the cookie Max-Age on set
 // (the refresh token is reissued with a fresh TTL on every rotation, so a static
 // Max-Age stays aligned with the token's hard expiry).
-func Middleware(maxAge int) func(http.Handler) http.Handler {
+func Middleware(ttl time.Duration) func(http.Handler) http.Handler {
+	maxAge := int(ttl.Seconds())
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			d := &directive{}
 			ctx := context.WithValue(r.Context(), directiveCtxKey{}, d)
-			if c, err := r.Cookie(CookieName); err == nil {
+			if c, err := r.Cookie(CookieName); err == nil && len(c.Value) <= maxIncomingCookieLen {
 				ctx = context.WithValue(ctx, incomingCtxKey{}, c.Value)
 			}
 			cw := &cookieResponseWriter{ResponseWriter: w, d: d, maxAge: maxAge}
@@ -139,9 +152,20 @@ func (cw *cookieResponseWriter) WriteHeader(status int) {
 	cw.ResponseWriter.WriteHeader(status)
 }
 
+// Write emits the cookie with an implicit 200 status before delegating to the
+// underlying writer. The stdlib calls WriteHeader(200) on the first Write if
+// WriteHeader has not already been called; by intercepting Write here we ensure
+// the cookie header is committed before that implicit WriteHeader fires.
 func (cw *cookieResponseWriter) Write(b []byte) (int, error) {
 	cw.emitCookie(http.StatusOK)
 	return cw.ResponseWriter.Write(b)
+}
+
+// Unwrap returns the underlying http.ResponseWriter so that http.ResponseController
+// and callers using type assertions (e.g. http.Flusher, http.Hijacker) can reach
+// the real writer through this wrapper layer.
+func (cw *cookieResponseWriter) Unwrap() http.ResponseWriter {
+	return cw.ResponseWriter
 }
 
 // emitCookie writes the Set-Cookie header exactly once, before the underlying
@@ -161,6 +185,6 @@ func (cw *cookieResponseWriter) emitCookie(status int) {
 	case cw.d.set:
 		http.SetCookie(cw.ResponseWriter, newRefreshCookie(cw.d.value, cw.maxAge))
 	case cw.d.clear:
-		http.SetCookie(cw.ResponseWriter, newRefreshCookie("", -1))
+		http.SetCookie(cw.ResponseWriter, newRefreshCookie("", cookieClearMaxAge))
 	}
 }
