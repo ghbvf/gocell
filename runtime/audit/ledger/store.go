@@ -20,7 +20,7 @@ import (
 // arrival is a wiring/programmer error, not user input.
 func RowScopeAllUnsupportedError() error {
 	return errcode.New(errcode.KindInternal, errcode.ErrInternal,
-		"audit ledger: RowScopeAll requires the super-admin BYPASSRLS path (epic #1337 PR-5); not supported")
+		"audit ledger: RowScopeAll is not supported on this read path")
 }
 
 // TailSnapshot holds a point-in-time snapshot of the ledger chain tail.

@@ -21,18 +21,10 @@ import (
 // pattern (Union(backends ...Backend) Backend); the write side stays per-
 // backend independent.
 type QueryStore interface {
-	// Query lists entries matching AuditFilters using keyset cursor pagination
-	// defined by params (Limit + decoded CursorValues + Sort). It returns up to
-	// params.FetchLimit() (Limit+1) rows for N+1 hasMore detection, ordered by
-	// params.Sort. params.Sort must be non-empty (callers pass QuerySort);
-	// an empty Sort is a programmer error and yields ErrValidationFailed.
-	// Returns an empty (non-nil) slice when no entries match.
-	//
-	// vis is the row-visibility obligation enforced on the actor_id owner column.
-	// Self/device scopes restrict results to entries whose actor_id matches the
-	// obligation subject. Tenant scope returns all matching rows in the tenant.
-	// vis must be valid (NewRowVisibility must succeed). A vis carrying
-	// RowScopeAll is fail-closed (RowScopeAllUnsupportedError) until the audited
-	// super-admin path lands (epic #1337 PR-5).
+	// Query has identical semantics to Store.Query — see that method's godoc for
+	// the full contract (keyset pagination + params.Sort requirement, the vis
+	// row-visibility obligation enforced on the actor_id owner column, and the
+	// RowScopeAll fail-closed rule). This narrow read-only subset exists so
+	// read-side aggregators (MultiStore) implement only Query, not the write path.
 	Query(ctx context.Context, vis tenant.RowVisibility, filters AuditFilters, params query.ListParams) ([]*Entry, error)
 }

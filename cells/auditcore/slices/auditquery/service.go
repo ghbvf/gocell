@@ -74,6 +74,17 @@ func (s *Service) Query(
 		// tenant's rows (#1337 PR-2a review U4).
 		attrs = append(attrs, "tenantId", filters.TenantID)
 	}
+	// The row-visibility obligation is a cursor-scope axis exactly like tenantId
+	// (#1337 PR-4): it decides which actor's rows are paged (via the actor_id
+	// owner predicate). A cursor minted under one obligation must not silently
+	// resume under another — e.g. if the caller's role changes mid-pagination
+	// (self → tenant or vice versa), cursor replay must produce a "query context
+	// mismatch" rather than page the wrong owner set. Subject only varies the
+	// scope for self/device (empty for tenant), so both axes participate.
+	attrs = append(attrs, "rowScope", vis.Scope().String())
+	if vis.Subject() != "" {
+		attrs = append(attrs, "rowSubject", vis.Subject())
+	}
 	// From/To are time-range filter predicates, not cursor-scope identifiers.
 	// Including zero-value time.Time in the scope would embed "0001-01-01T00:00:00Z"
 	// and break cursor reuse when callers omit From/To (F-07). Non-zero values
