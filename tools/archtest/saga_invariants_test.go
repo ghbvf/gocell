@@ -146,14 +146,16 @@ import (
 // ref: tools/archtest/aftercommit_pure_transient_test.go (sibling purity pattern).
 // ref: .claude/rules/gocell/ai-robust.md §"typed marker funnel for unbounded ops".
 
-// TestSagaStepCompensatePure_A1_NoForbiddenCallsInCompensateBody asserts no
-// production CompensateFunc slot (literal or named func) calls a banned receiver
-// method. In PR-06 there are zero CompensateFunc assignments in production, so
-// this fires 0 diagnostics; it guards future Compensate authors.
-func TestSagaStepCompensatePure_A1_NoForbiddenCallsInCompensateBody(t *testing.T) {
+// TestSagaStepCompensatePure_CheckDogfood exercises the aggregate registered
+// CellRule CheckSagaStepCompensatePure (A1 forbidden-calls + B1 body-count + B2
+// MethodByName + B3 CompensateFunc-arg, over the consumer-scan contract) against
+// GoCell production — proving the importable surface is reachable and clean (0
+// diagnostics; there are zero CompensateFunc assignments in production today).
+// The focused A1/B1/B2/B3 detectors keep their own granular tests + RED fixtures.
+func TestSagaStepCompensatePure_CheckDogfood(t *testing.T) {
 	t.Parallel()
-	diags := CheckSagaStepCompensatePure(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()})
-	Report(t, sagaCompensatePureRuleID+"-A1", diags)
+	Report(t, sagaCompensatePureRuleID,
+		CheckSagaStepCompensatePure(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 }
 
 // TestSagaStepCompensatePure_BlindSpot_B1_BodyStatementCount asserts no
@@ -198,33 +200,7 @@ func TestSagaStepCompensatePure_BlindSpot_B2_NoMethodByNameInCompensateBodies(t 
 			if strings.HasSuffix(filepath.ToSlash(p.Rel(file)), "_test.go") {
 				continue
 			}
-			assignments := collectCompensateAssignments(p, file)
-			rel := p.Rel(file)
-			for _, a := range assignments {
-				var body *ast.BlockStmt
-				switch {
-				case a.Lit != nil:
-					body = a.Lit.Body
-				case a.NamedIdent != nil:
-					if obj, ok := p.TypesInfo.ObjectOf(a.NamedIdent).(*types.Func); ok {
-						if fd, ok2 := funcDecls[obj]; ok2 {
-							body = fd.Body
-						}
-					}
-				}
-				if body == nil {
-					continue
-				}
-				EachInSubtree[ast.SelectorExpr](body, func(sel *ast.SelectorExpr) {
-					if sel.Sel.Name == "MethodByName" {
-						out = append(out, sagaDiag(p, sel, rel,
-							sagaCompensatePureRuleID+"-B2 (blind-spot guard): "+
-								"MethodByName call inside a CompensateFunc body; "+
-								"reflection-based dispatch is a B2 blind spot — "+
-								"call-graph upgrade tracked in gh issue #1182"))
-					}
-				})
-			}
+			out = append(out, scanCompensateMethodByName(p, file, funcDecls)...)
 		}
 		return out
 	})
@@ -246,36 +222,16 @@ func TestSagaStepCompensatePure_BlindSpot_B2_NoMethodByNameInCompensateBodies(t 
 // forbidden.
 func TestSagaStepCompensatePure_BlindSpot_B3_NoCompensateFuncPassedAsArgument(t *testing.T) {
 	t.Parallel()
-	// The one sanctioned call site: executor passes step.Compensate to safeRunCompensate.
-	const sanctionedCallee = "safeRunCompensate"
 	diags := Run(t, Production(TypedOpts{Tags: FlatNonDefaultTags()}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
 		var out []Diagnostic
 		for _, file := range p.Files {
-			rel := filepath.ToSlash(p.Rel(file))
-			if strings.HasSuffix(rel, "_test.go") {
+			if strings.HasSuffix(filepath.ToSlash(p.Rel(file)), "_test.go") {
 				continue
 			}
-			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == sanctionedCallee {
-					return
-				}
-				if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == sanctionedCallee {
-					return
-				}
-				for _, arg := range call.Args {
-					if typ := p.TypesInfo.TypeOf(arg); typ != nil && isCompensateFuncType(typ) {
-						out = append(out, sagaDiag(p, arg, p.Rel(file),
-							sagaCompensatePureRuleID+"-B3 (blind-spot guard): "+
-								"CompensateFunc value passed as a function argument outside "+
-								"the safeRunCompensate transport funnel; "+
-								"B3 bodies are not scanned — use the typed-slot assignment forms "+
-								"(forms 1–5) until call-graph support lands (gh issue #1182)"))
-					}
-				}
-			})
+			out = append(out, scanCompensateFuncArg(p, file)...)
 		}
 		return out
 	})

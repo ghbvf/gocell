@@ -31,11 +31,17 @@ package archtest
 //
 //	SAGA-STEP-COMPENSATE-PURE-01 via CheckSagaStepCompensatePure.
 //
-// The other ten Check* are importable but intentionally NOT registered because
-// they constrain GoCell's OWN runtime/saga internals (Coordinator, executor,
-// sagalog, journal, etc.) — an external Cell module that merely uses the saga
-// engine would have zero runtime/saga/ production files and would see vacuous-
-// green or false-red results for those rules.
+// The other ten Check* are importable but intentionally NOT registered, and are
+// GoCell-internal dogfood helpers — NOT a consumer API. They constrain GoCell's
+// OWN runtime/saga internals (Coordinator, executor, sagalog, journal, etc.):
+// each IGNORES cfg (the scan scope is a hardcoded GoCell path such as
+// ./runtime/saga/... or ./kernel/saga/journal/..., never the consumer's module),
+// so an external Cell module that merely uses the saga engine sees vacuous-green
+// or false-red results. Do NOT register them in StandardCellRules or pass them
+// via ConfigForExternalCell.ExtraRules — only CheckSagaStepCompensatePure is a
+// portable consumer rule (it alone honors the cfg.BuildTags consumer-scan
+// contract). This single godoc is the authoritative internal/portable boundary;
+// per-func docs defer to it rather than repeating the caveat ten times.
 //
 // Two rules remain in saga_invariants_test.go (no importable Check*):
 //
@@ -521,16 +527,28 @@ func sagaStepRunFixturePattern(fix string) (dir, pattern string) {
 }
 
 // CheckSagaStepCompensatePure is the importable, registered form of
-// SAGA-STEP-COMPENSATE-PURE-01. It scans the running module's production code
-// (with cfg.BuildTags) for CompensateFunc bodies that call forbidden persistent
-// interfaces (outbox.Writer, outbox.Emitter, persistence.TxRunner, *sql.Tx,
-// pgx.Tx). This rule applies to any Cell that uses the saga engine and assigns
-// CompensateFunc values.
+// SAGA-STEP-COMPENSATE-PURE-01. It scans the running module's production code and
+// enforces the COMPLETE invariant (not just the direct forbidden-call scan), so
+// an external Cell repo gets the same escape-hatch guards GoCell dogfoods:
+//
+//   - A1: CompensateFunc bodies must not call forbidden persistent interfaces
+//     (outbox.Writer, outbox.Emitter, persistence.TxRunner, *sql.Tx, pgx.Tx).
+//   - B1: a CompensateFunc literal body must not exceed sagaMaxCompensateStmts
+//     top-level statements (long bodies can hide helper-indirected side effects).
+//   - B2: no reflect MethodByName dispatch inside a CompensateFunc body.
+//   - B3: a CompensateFunc value must not be passed as a function argument
+//     (outside the sanctioned safeRunCompensate transport funnel).
+//
+// Consumer-scan contract (matches the other registered CellRules, e.g. errcode):
+// it scans the consumer's DEFAULT build config first, then re-scans with
+// cfg.BuildTags when non-empty, de-duplicating by (Rel, Line, Message). This
+// catches a violation behind a //go:build tag without false-red on tag-only
+// files, and a false-green on default-build files that a hardcoded foreign tag
+// union would miss. GoCell's dogfood passes FlatNonDefaultTags() as cfg.BuildTags.
 //
 // Registered in [StandardCellRules].
 func CheckSagaStepCompensatePure(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
-	var all []Diagnostic
 	scan := func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
@@ -542,24 +560,106 @@ func CheckSagaStepCompensatePure(t *testing.T, cfg ConfigForExternalCell) []Diag
 			if strings.HasSuffix(filepath.ToSlash(p.Rel(file)), "_test.go") {
 				continue
 			}
-			out = append(out, scanCompensatePure(p, file, ifaces, funcDecls)...)
+			out = append(out, scanCompensatePure(p, file, ifaces, funcDecls)...) // A1
+			out = append(out, scanCompensateBodyCount(p, file)...)               // B1
+			out = append(out, scanCompensateMethodByName(p, file, funcDecls)...) // B2
+			out = append(out, scanCompensateFuncArg(p, file)...)                 // B3
 		}
 		return out
 	}
-	all = append(all, Run(t, Production(TypedOpts{Tags: FlatNonDefaultTags()}), scan)...)
-	if len(cfg.BuildTags) > 0 {
-		seen := map[string]bool{}
-		for _, d := range all {
-			seen[d.Rel+":"+strconv.Itoa(d.Line)] = true
+	var all []Diagnostic
+	seen := map[string]bool{}
+	add := func(ds []Diagnostic) {
+		for _, d := range ds {
+			key := d.Rel + ":" + strconv.Itoa(d.Line) + ":" + d.Message
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			all = append(all, d)
 		}
-		extra := Run(t, Production(TypedOpts{Tags: cfg.BuildTags}), scan)
-		for _, d := range extra {
-			if !seen[d.Rel+":"+strconv.Itoa(d.Line)] {
-				all = append(all, d)
+	}
+	add(Run(t, Production(TypedOpts{}), scan))
+	if len(cfg.BuildTags) > 0 {
+		add(Run(t, Production(TypedOpts{Tags: cfg.BuildTags}), scan))
+	}
+	return all
+}
+
+// scanCompensateMethodByName flags reflect MethodByName calls inside
+// CompensateFunc bodies — the B2 blind spot (reflection dispatch bypasses the
+// banned-receiver check). Caller filters _test.go. Shared by
+// CheckSagaStepCompensatePure and the B2 reverse self-test (single source).
+// compensateAssignmentBody resolves a CompensateFunc assignment (func literal or
+// named func) to its function body, or nil when unresolvable.
+func compensateAssignmentBody(p *Pass, a compensateFuncAssignment, funcDecls map[*types.Func]*ast.FuncDecl) *ast.BlockStmt {
+	switch {
+	case a.Lit != nil:
+		return a.Lit.Body
+	case a.NamedIdent != nil:
+		if obj, ok := p.TypesInfo.ObjectOf(a.NamedIdent).(*types.Func); ok {
+			if fd, ok2 := funcDecls[obj]; ok2 {
+				return fd.Body
 			}
 		}
 	}
-	return all
+	return nil
+}
+
+func scanCompensateMethodByName(p *Pass, file *ast.File, funcDecls map[*types.Func]*ast.FuncDecl) []Diagnostic {
+	if p.TypesInfo == nil {
+		return nil
+	}
+	rel := p.Rel(file)
+	var out []Diagnostic
+	for _, a := range collectCompensateAssignments(p, file) {
+		body := compensateAssignmentBody(p, a, funcDecls)
+		if body == nil {
+			continue
+		}
+		EachInSubtree[ast.SelectorExpr](body, func(sel *ast.SelectorExpr) {
+			if sel.Sel.Name == "MethodByName" {
+				out = append(out, sagaDiag(p, sel, rel,
+					sagaCompensatePureRuleID+"-B2 (blind-spot guard): "+
+						"MethodByName call inside a CompensateFunc body; "+
+						"reflection-based dispatch is a B2 blind spot — "+
+						"call-graph upgrade tracked in gh issue #1182"))
+			}
+		})
+	}
+	return out
+}
+
+// scanCompensateFuncArg flags a CompensateFunc value passed as a function
+// argument outside the sanctioned safeRunCompensate transport funnel — the B3
+// blind spot. Caller filters _test.go. Shared by CheckSagaStepCompensatePure and
+// the B3 reverse self-test (single source).
+func scanCompensateFuncArg(p *Pass, file *ast.File) []Diagnostic {
+	if p.TypesInfo == nil {
+		return nil
+	}
+	const sanctionedCallee = "safeRunCompensate"
+	rel := p.Rel(file)
+	var out []Diagnostic
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == sanctionedCallee {
+			return
+		}
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == sanctionedCallee {
+			return
+		}
+		for _, arg := range call.Args {
+			if typ := p.TypesInfo.TypeOf(arg); typ != nil && isCompensateFuncType(typ) {
+				out = append(out, sagaDiag(p, arg, rel,
+					sagaCompensatePureRuleID+"-B3 (blind-spot guard): "+
+						"CompensateFunc value passed as a function argument outside "+
+						"the safeRunCompensate transport funnel; "+
+						"B3 bodies are not scanned — use the typed-slot assignment forms "+
+						"(forms 1–5) until call-graph support lands (gh issue #1182)"))
+			}
+		}
+	})
+	return out
 }
 
 // ─── SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01 helpers ──────────────────────────
