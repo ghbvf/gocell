@@ -10,14 +10,19 @@ description: |
   state changes; replaces the prior HTTP+JSON internal endpoint for this path.
   Owns the whole DeviceCommandService proto service (ADR D5 / #1655).
 
-grpc:
-  service: device.command.v1.DeviceCommandService
-  proto: contracts/grpc/device/command/v1/device_command.proto
-  auth:
-    public: false              # service-to-service; not exposed on public listener
-# Note: `method` and `streamingType` fields were removed in #1655 (service-level
-# granularity, ADR D5). A grpc contract now owns a whole proto service; the method set
-# and streaming kinds derive from the .proto file (single source of truth).
+endpoints:
+  server: iotdevice
+  clients: []
+  grpc:
+    service: device.command.v1.DeviceCommandService
+    proto: contracts/grpc/device/command/v1/device_command.proto
+# Note: the grpc block lives under `endpoints.grpc` (parallel to endpoints.http), not
+# top-level. `method` and `streamingType` fields were removed in #1655 (service-level
+# granularity, ADR D5): a grpc contract owns a whole proto service; the method set and
+# streaming kinds derive from the .proto file (single source of truth). The per-RPC
+# `auth.public` flag was also removed — a service-level bool cannot express per-method
+# auth once a service owns multiple RPCs, and nothing consumed it; per-method auth is
+# deferred to #1675.
 
 verify:
   contract:

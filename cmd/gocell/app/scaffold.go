@@ -868,8 +868,6 @@ endpoints:
     # The method set is derived from the .proto file (single source of truth).
     service: {{.OwnerCell}}.v1.ExampleService
     proto: contracts/grpc/{{.OwnerCell}}/v1/example.proto
-    auth:
-      public: false
 {{- end}}
 `))
 

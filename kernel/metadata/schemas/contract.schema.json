@@ -669,18 +669,6 @@
                     "type": "string",
                     "pattern": "^contracts/grpc/",
                     "description": "Contracts-relative path to the .proto file; must resolve under contracts/grpc/."
-                  },
-                  "auth": {
-                    "type": "object",
-                    "description": "RPC-level authentication overrides, mirroring http.auth.public.",
-                    "additionalProperties": false,
-                    "properties": {
-                      "public": {
-                        "type": "boolean",
-                        "default": false,
-                        "description": "If true, the RPC is mounted without listener auth (no JWT required)."
-                      }
-                    }
                   }
                 }
               }

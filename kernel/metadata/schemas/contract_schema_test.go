@@ -563,8 +563,10 @@ func TestProjectionConsistencyLevelSchemaEnum(t *testing.T) {
 }
 
 // TestContractSchemaGRPCKind verifies the kind=grpc if/then block: endpoints
-// require server/clients/grpc and the nested grpc block requires service/method/
-// proto with proto rooted under contracts/grpc/. gRPC mirrors http endpoints.
+// require server/clients/grpc and the nested grpc block requires service/proto
+// with proto rooted under contracts/grpc/ (method/streamingType removed in
+// #1655; auth removed as additional property — per-method auth deferred to
+// #1675). gRPC mirrors http endpoints.
 func TestContractSchemaGRPCKind(t *testing.T) {
 	schema := compileContractSchemaForTest(t)
 
@@ -589,15 +591,6 @@ func TestContractSchemaGRPCKind(t *testing.T) {
 		expectValid bool
 	}{
 		{
-			name: "full grpc block accepted",
-			grpcBlock: `{
-				"service": "device.command.v1.DeviceCommandService",
-				"proto": "contracts/grpc/device/command/v1/device_command.proto",
-				"auth": {"public": false}
-			}`,
-			expectValid: true,
-		},
-		{
 			name: "minimal grpc block accepted",
 			grpcBlock: `{
 				"service": "device.command.v1.DeviceCommandService",
@@ -606,13 +599,17 @@ func TestContractSchemaGRPCKind(t *testing.T) {
 			expectValid: true,
 		},
 		{
-			name: "auth public true accepted",
+			name: "auth block rejected as additional property (#1675 — service-level auth removed)",
+			// The service-level grpc auth block was removed: a single bool could
+			// not express per-method auth once a service owns multiple RPCs, and
+			// nothing consumed it. additionalProperties: false now rejects it;
+			// per-method auth is deferred to #1675.
 			grpcBlock: `{
 				"service": "device.command.v1.DeviceCommandService",
 				"proto": "contracts/grpc/device/command/v1/device_command.proto",
 				"auth": {"public": true}
 			}`,
-			expectValid: true,
+			expectValid: false,
 		},
 		{
 			name:        "missing service rejected",

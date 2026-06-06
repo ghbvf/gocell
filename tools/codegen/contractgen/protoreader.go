@@ -99,10 +99,15 @@ func ReadProtoServiceInfo(protoAbsPath, service string) (ProtoServiceInfo, error
 // parseAllRPCMethods enumerates every rpc declaration in a service block,
 // returning a ProtoMethodInfo for each. Streaming rpcs are rejected (unary
 // only). Each method name must be an exported Go identifier — codegen renders
-// it directly as a Go interface method. The returned slice preserves proto
-// declaration order.
+// it directly as a Go interface method. Duplicate method names within the
+// service are rejected here rather than left to surface as a duplicate-method
+// Go compile error in the generated interface (this regex reader does not get
+// protoc's own duplicate-rpc check, so a malformed proto generated without buf
+// would otherwise emit an uncompilable interface). The returned slice preserves
+// proto declaration order.
 func parseAllRPCMethods(block, protoPkg string) ([]ProtoMethodInfo, error) {
 	var methods []ProtoMethodInfo
+	seen := make(map[string]struct{})
 	for _, m := range rpcLineRE.FindAllStringSubmatch(block, -1) {
 		name := m[1]
 		if m[2] != "" || m[4] != "" {
@@ -111,6 +116,10 @@ func parseAllRPCMethods(block, protoPkg string) ([]ProtoMethodInfo, error) {
 		if !token.IsIdentifier(name) || !token.IsExported(name) {
 			return nil, fmt.Errorf("proto: rpc method %q must be an exported Go identifier", name)
 		}
+		if _, dup := seen[name]; dup {
+			return nil, fmt.Errorf("proto: duplicate rpc method %q in service block", name)
+		}
+		seen[name] = struct{}{}
 		req, err := localMessageName(m[3], protoPkg)
 		if err != nil {
 			return nil, err

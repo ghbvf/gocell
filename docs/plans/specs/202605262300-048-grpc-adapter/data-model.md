@@ -46,29 +46,18 @@ type GRPCEndpointSpec struct {
     Service       string            // proto fully-qualified service name, e.g. "device.command.v1.DeviceCommandService"
     ProtoFile     string            // contracts-relative path, e.g. "contracts/grpc/device/command/v1/device_command.proto"
     ProtoPackage  string            // proto file's `package` declaration, e.g. "device.command.v1"
-    Auth          GRPCAuthSpec
-}
-
-type StreamingType string
-
-const (
-    StreamingUnary        StreamingType = "unary"
-    StreamingServerStream StreamingType = "server-stream"
-    StreamingClientStream StreamingType = "client-stream"
-    StreamingBidi         StreamingType = "bidi"
-)
-
-type GRPCAuthSpec struct {
-    Public bool  // mirrors http.auth.public
 }
 ```
 
+> `Method`, `StreamingType`, and the per-RPC `Auth` overlay were removed in #1655
+> (service-level granularity, ADR D5). The method set and streaming kinds derive
+> from the .proto file (single source of truth); per-method auth is deferred to
+> #1675.
+
 **Invariants**:
 - `Service` MUST be non-empty when `Kind == KindGRPC` (validated in PR 1).
-- `Method` MUST be non-empty when `Kind == KindGRPC`.
 - `ProtoFile` MUST resolve to a file inside `contracts/grpc/`; absolute paths forbidden.
-- `(ProtoPackage, Service, Method)` triple MUST be globally unique across all contracts in the repo (proto registry collision check at codegen time).
-- `StreamingType` defaults to `unary` if omitted in YAML (PR 1 parser default).
+- `(ProtoPackage, Service)` pair MUST be globally unique across all contracts in the repo (proto registry collision check at codegen time).
 
 ---
 
@@ -86,28 +75,26 @@ type ContractMeta struct {
 }
 
 type GRPCContractMeta struct {
-    Service       string
-    Method        string
-    StreamingType StreamingType
-    Proto         string  // relative path, validated against contracts/grpc/ tree
-    Auth          struct {
-        Public bool
-    }
+    Service string
+    Proto   string  // relative path, validated against contracts/grpc/ tree
 }
 ```
 
-YAML shape (PR 1):
+YAML shape:
 
 ```yaml
 id: grpc.device.command.v1.DeviceCommandService
 kind: grpc
-grpc:
-  service: device.command.v1.DeviceCommandService
-  proto: contracts/grpc/device/command/v1/device_command.proto
-  auth:
-    public: false            # internal-only by default
-# Note: `method` and `streamingType` removed in #1655 (ADR D5, service-level granularity).
-# The contract owns the whole proto service; the method set derives from the .proto file.
+endpoints:
+  server: iotdevice
+  clients: []
+  grpc:
+    service: device.command.v1.DeviceCommandService
+    proto: contracts/grpc/device/command/v1/device_command.proto
+# Note: the grpc block lives under `endpoints.grpc` (parallel to endpoints.http).
+# `method`, `streamingType`, and per-RPC `auth.public` removed in #1655 (ADR D5,
+# service-level granularity). The contract owns the whole proto service; the method
+# set derives from the .proto file. Per-method auth is deferred to #1675.
 ```
 
 ---
@@ -320,7 +307,7 @@ None. Transport-only feature; no stateful entities.
 |------|--------|----|
 | `kind=grpc` requires `grpc.service` + `grpc.proto` (service-level per ADR D5 / #1655; `grpc.method` deleted) | metadata parser | PR 1 |
 | `grpc.proto` MUST resolve under `contracts/grpc/` | metadata parser | PR 1 |
-| `(package, service, method)` globally unique | ProtoRegistry at codegen time | PR 6 |
+| `(package, service)` globally unique | ProtoRegistry at codegen time | PR 6 |
 | Handler signature MUST match generated interface | Go compiler (interface assertion) | PR 7 |
 | Service registration MUST happen before `Serve()` | `ServiceRegistrar.Register` ordering | PR 7 |
 | `func(grpc.ServiceRegistrar)` callback (Form B) type assertion safety | runtime/grpc panics with Approved marker on bad/typed-nil callback type | PR 7 |

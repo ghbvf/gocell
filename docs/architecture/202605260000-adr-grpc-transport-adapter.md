@@ -50,7 +50,7 @@ grpc.
 
 ### D3 — grpc transport subtree lives at `endpoints.grpc` (parallel to `endpoints.http`)
 
-The RPC wire details (**service / proto / auth.public**) are modeled by
+The RPC wire details (**service / proto**) are modeled by
 `metadata.GRPCTransportMeta` under `EndpointsMeta.GRPC`, mirroring how
 `HTTPTransportMeta` lives under `EndpointsMeta.HTTP`. This is the established
 codebase convention. (The plan's `data-model.md` illustrative example placed a
@@ -112,7 +112,17 @@ only.
 A `kind: grpc` contract owns a whole **proto service**. The `.proto` file is the
 single source of truth for the method set and streaming kind. The `GRPCTransportMeta`
 fields `method` and `streamingType` (present in the original PR 1 schema) are
-**deleted**; `GRPCTransportMeta` now models **service + proto + auth** only.
+**deleted**; `GRPCTransportMeta` now models **service + proto** only.
+
+The per-RPC `auth` overlay (`GRPCAuthMeta{ Public bool }`) is **also deleted** (PR
+#1672 follow-up): a service-level `public` bool cannot express per-method auth once
+a contract owns multiple RPCs — the identical premise-loss that justified deleting
+`method`/`streamingType` — and nothing consumed it (the runtime `WithPublicMethod`
+predicate is wired independently, never read from the contract). It is removed
+fail-closed rather than left as a dead, misleading declaration. The per-method auth
+model (likely a `endpoints.grpc.methods[]` overlay, a different shape than the old
+service-level bool) is deferred to **#1675**; re-adding a field there starts from a
+clean slate, not from this vestigial one.
 
 `contractgen.ReadProtoServiceInfo` (replacing the deleted `ReadProtoTypeInfo`)
 enumerates all RPCs from the proto service at codegen time. The generated `Server`
@@ -150,3 +160,4 @@ interface declares every RPC; the generated registrar wires the whole-service ma
 | PII / redaction | None. | **Unchanged.** Removing YAML fields introduces no new log or error surface. |
 | Layering (`kernel/` ↛ grpc) | Holds. | **Unchanged.** `GRPCTransportMeta` field reduction does not affect the `any`-typed `Register` field boundary. |
 | AI-robustness | Closed-set = Hard; field presence = Hard schema + Medium runtime. | **Improves.** `method`-level is now **unexpressible** — the YAML field is gone. The method set is exclusively derived from the `.proto` (Hard codegen funnel). Single-method `method:` declaration was an implicit Soft: an AI co-author could declare the wrong method name with no compile-time check. That footgun is eliminated. |
+| Auth granularity / security (#1672) | `auth.public` modeled service-level (PR 1). | **Improves (fail-closed).** The service-level `auth.public` field was **deleted**. It was dead (zero readers — the runtime `WithPublicMethod` predicate never reads the contract) and, under service-level granularity, a single bool could silently mark *every* RPC of a multi-method service JWT-exempt — a latent mixed-auth bypass if a future PR naively wired it. Removal makes the dangerous declaration **unexpressible** (schema `additionalProperties:false` rejects `endpoints.grpc.auth`, locked by `contract_schema_test.go`); per-method auth is deferred to #1675. Today's runtime default is nil predicate = fail-closed (all RPCs authed). |

@@ -158,7 +158,7 @@ func Generate(root string, p *metadata.ProjectMeta, opts Options) (Result, error
 
 // checkGRPCProtoCollisions builds a protoRegistry from every grpc contract in p
 // (reading each .proto for package/import identity) and fails fast on a
-// duplicate (proto package, service, method) or a divergent import path for the
+// duplicate (proto package, service) or a divergent import path for the
 // same proto service. The single source of proto identity is the .proto file
 // (GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01); this re-reads the protos that
 // buildGRPCSpec also reads (codegen is not a hot path), keeping the

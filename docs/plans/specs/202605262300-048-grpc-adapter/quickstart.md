@@ -21,13 +21,17 @@ version: v1
 owner: todoorder
 description: Create a new order via internal RPC
 
-grpc:
-  service: todoorder.command.v1.OrderCommandService
-  proto: contracts/grpc/todoorder/command/v1/order_command.proto
-  auth:
-    public: false   # service-to-service only
-# Note: `method` and `streamingType` fields removed in #1655 (service-level granularity).
-# The method set and streaming kind are derived from the .proto file (single source of truth).
+endpoints:
+  server: todoorder
+  clients: []
+  grpc:
+    service: todoorder.command.v1.OrderCommandService
+    proto: contracts/grpc/todoorder/command/v1/order_command.proto
+# Note: the grpc block lives under `endpoints.grpc` (parallel to endpoints.http), not
+# top-level. `method` and `streamingType` fields were removed in #1655 (service-level
+# granularity); the method set and streaming kind derive from the .proto file (single
+# source of truth). Per-RPC `auth.public` was also removed — service-level couldn't
+# express per-method auth; per-method auth is deferred to #1675.
 
 verify:
   contract:

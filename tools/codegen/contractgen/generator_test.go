@@ -1040,8 +1040,8 @@ func setupGRPCMultiMethodRoot(t *testing.T) (string, *metadata.ProjectMeta) {
 // TestBuildContractSpec_GRPCKind_MultiMethod asserts that a grpc contract with
 // NO method: field (service-level granularity, #1655) generates a spec whose
 // GRPC.Methods contains BOTH IssueCommand and GetCommandStatus with the correct
-// request/response types. This test is RED on current code because the current
-// builder requires method: and only renders a single-method spec.
+// request/response types — the builder enumerates the full method set from the
+// .proto service block (single source of truth).
 func TestBuildContractSpec_GRPCKind_MultiMethod(t *testing.T) {
 	t.Parallel()
 	root, p := setupGRPCMultiMethodRoot(t)

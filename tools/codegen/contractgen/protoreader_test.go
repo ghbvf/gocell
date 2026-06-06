@@ -361,20 +361,55 @@ func TestReadProtoServiceInfo_ServiceNotFound(t *testing.T) {
 }
 
 // TestReadProtoServiceInfo_StreamingRejected verifies that a service containing
-// a streaming RPC is rejected — service-level codegen supports unary only.
+// any streaming RPC is rejected — service-level codegen supports unary only.
+// The rpc grammar has two independent stream positions (request-side and
+// response-side), so all three non-unary shapes must be covered: server-stream
+// (response only), client-stream (request only), and bidi (both).
 func TestReadProtoServiceInfo_StreamingRejected(t *testing.T) {
+	t.Parallel()
+	const header = `syntax = "proto3";
+package device.command.v1;
+option go_package = "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1;commandv1";
+`
+	cases := []struct {
+		name string
+		rpc  string
+	}{
+		{"server-stream", "rpc Watch(WatchRequest) returns (stream WatchResponse) {}"},
+		{"client-stream", "rpc Upload(stream UploadRequest) returns (UploadResponse) {}"},
+		{"bidi", "rpc Chat(stream ChatRequest) returns (stream ChatResponse) {}"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			src := header + "service DeviceCommandService {\n  " + tc.rpc + "\n}\n"
+			path := writeTempProto(t, src)
+			_, err := ReadProtoServiceInfo(path, fixtureFQService)
+			if err == nil || !strings.Contains(err.Error(), "streaming") {
+				t.Fatalf("expected streaming-rejected error, got %v", err)
+			}
+		})
+	}
+}
+
+// TestReadProtoServiceInfo_DuplicateMethodRejected verifies that two rpc
+// declarations with the same method name in one service block are rejected —
+// the regex reader does not get protoc's own duplicate-rpc check, so without
+// this guard the duplicate would surface as an uncompilable generated interface.
+func TestReadProtoServiceInfo_DuplicateMethodRejected(t *testing.T) {
 	t.Parallel()
 	src := `syntax = "proto3";
 package device.command.v1;
 option go_package = "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1;commandv1";
 service DeviceCommandService {
-  rpc Watch(WatchRequest) returns (stream WatchResponse) {}
+  rpc IssueCommand(IssueCommandRequest) returns (IssueCommandResponse) {}
+  rpc IssueCommand(IssueCommandRequest) returns (IssueCommandResponse) {}
 }
 `
 	path := writeTempProto(t, src)
 	_, err := ReadProtoServiceInfo(path, fixtureFQService)
-	if err == nil || !strings.Contains(err.Error(), "streaming") {
-		t.Fatalf("expected streaming-rejected error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "duplicate rpc method") {
+		t.Fatalf("expected duplicate-method error, got %v", err)
 	}
 }
 
