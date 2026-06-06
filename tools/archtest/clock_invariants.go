@@ -1,5 +1,3 @@
-package archtest
-
 // clock_invariants.go — importable clock injection rule logic (#1640 M3 PR-9).
 //
 // Non-test home for KERNEL-CLOCK-LEAF-FALLBACK-01,
@@ -32,6 +30,7 @@ package archtest
 // (kernel/clock layout, composition-root carve-outs) with no ConfigForExternalCell
 // consumer-extension -> vacuous/false-red externally; kept importable +
 // module-path-agnostic + fork-safe.
+package archtest
 
 import (
 	"fmt"
@@ -658,7 +657,7 @@ func clockMatchedTimeFn(info *types.Info, ident *ast.Ident) (string, bool) {
 // path; no structural reduction is possible without hiding the (host, method,
 // callee) triple logic.
 //
-//nolint:gocognit // R2-approved: see comment above.
+//nolint:gocognit // R2-approved: linear two-form (Selector/Ident) scanner; shared carve-out closure; additive per form, not nested.
 func scanProdClockInjectionAST(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
 	var out []Diagnostic
 	seen := map[string]bool{}

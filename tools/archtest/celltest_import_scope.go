@@ -17,14 +17,13 @@ package archtest
 //
 // # Register status
 //
-// Not registered in StandardCellRules: the scan uses readModulePath (module
-// root derived at runtime) which is correct for external repos, but the
-// celltestImportPathPattern is a generic regex and already handles external
-// module paths — this rule CAN be safely registered. However, the Go test
-// helper readModulePath lives in a _test.go and is not importable from
-// production code (required by the Check* signature). External callers can
-// implement the check by calling CheckCelltestImportScope directly.
-// Kept importable + module-path-agnostic + fork-safe.
+// Not registered in StandardCellRules: the rule enforces gocell's
+// cells/{X}/{X}test test-infra layout convention (celltestImportPathPattern).
+// An external cell repo not adopting this exact naming → no matches (vacuous);
+// one using a different test-infra layout → not covered. To avoid imposing
+// gocell's specific layout on forks it is kept importable + module-path-agnostic
+// + fork-safe — an external repo following the same convention can call
+// CheckCelltestImportScope directly.
 
 import (
 	"fmt"
