@@ -190,9 +190,9 @@ func TestAuthzDecisionSealedFieldFrozen01_GreenFixture(t *testing.T) {
 
 	// All-unexported struct — exactly the shape we require for authz.Decision.
 	type goodDecision struct {
-		effect      authz.Effect
-		obligations authz.Obligations //nolint:unused // intentional
-		reason      string            //nolint:unused // intentional
+		effect      authz.Effect      //nolint:unused // reflected over via reflect.TypeOf, not read directly
+		obligations authz.Obligations //nolint:unused // reflected over via reflect.TypeOf, not read directly
+		reason      string            //nolint:unused // reflected over via reflect.TypeOf, not read directly
 	}
 
 	gt := reflect.TypeOf(goodDecision{})
