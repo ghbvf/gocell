@@ -46,7 +46,7 @@ func httpIdempotencyStoreKeys(storeNS KeyNamespace, reqNS, key string) (resp, le
 
 // TestHTTPIdempotency_HashtagKeysShareSlot asserts the resp/lease/fp keys for a
 // given request colocate on one Redis Cluster slot. Sample business keys mirror
-// the real buildNamespaceKey output shape (subject\x00method\x00path\x00header),
+// the real DeriveKey output shape (subject\x00method\x00path\x00header),
 // and the request-namespace varies (tenant id vs the "_notenant" sentinel). The
 // "_runtime" store namespace mirrors cmd/corebundle's httpIdempotencyStoreNamespace
 // (the assembly-wide owner namespace, ADR 202606051000-1449).

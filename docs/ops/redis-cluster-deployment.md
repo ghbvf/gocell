@@ -112,7 +112,7 @@ It holds because the replay key carries no per-node identity:
   `httpIdempotencyStoreNamespace`), which is **not** pod- or cell-specific.
 - The per-request key is `(tenantID | "_notenant") · subject · method · path ·
   Idempotency-Key` — derived only from request + principal data, never from the
-  serving pod / listener / cell (`runtime/http/idempotency.buildNamespaceKey`).
+  serving pod / listener / cell (`runtime/http/idempotency.DeriveKey`).
 - The `HTTPIdempotencyStore` holds no in-memory replay state — all
   Claim/Record/Release state lives in Redis — so any pod's store instance sees
   the same state.

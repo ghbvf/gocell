@@ -16,6 +16,16 @@ import (
 	idemhttp "github.com/ghbvf/gocell/runtime/http/idempotency"
 )
 
+// httpKey builds an idemhttp.IdempotencyKey for HTTPIdempotencyStore tests from
+// an (ns, key) pair via the real DeriveKey (external packages cannot construct
+// the sealed type any other way). It maps ns→tenant and key→subject; the other
+// tuple slots are empty, so Namespace()==ns and Key()==key+"\x00\x00\x00"
+// (distinct per `key`, brace-free unless ns/key carry braces — which the
+// brace-rejection tests rely on).
+func httpKey(ns, key string) idemhttp.IdempotencyKey {
+	return idemhttp.DeriveKey(ns, key, "", "", "")
+}
+
 // =============================================================================
 // Constructor tests
 // =============================================================================
@@ -66,7 +76,7 @@ func TestHTTPIdempotencyStore_Claim_Acquired(t *testing.T) {
 	store := mustNewHTTPIdempotencyStoreFromCmdable(t, mock)
 	ctx := context.Background()
 
-	state, rec, receipt, err := store.Claim(ctx, "testns", "key:001", "", testtime.D5min)
+	state, rec, receipt, err := store.Claim(ctx, httpKey("testns", "key:001"), "", testtime.D5min)
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimAcquired, state)
 	assert.Nil(t, rec, "acquired should have nil RecordedResponse")
@@ -74,7 +84,7 @@ func TestHTTPIdempotencyStore_Claim_Acquired(t *testing.T) {
 
 	// Verify lease key is present.
 	mock.mu.Lock()
-	_, hasLease := mock.store["ownerns:testns:{key:001}:lease"]
+	_, hasLease := mock.store["ownerns:testns:{key:001\x00\x00\x00}:lease"]
 	mock.mu.Unlock()
 	assert.True(t, hasLease, "lease key should exist after Claim Acquired")
 }
@@ -89,7 +99,7 @@ func TestHTTPIdempotencyStore_Record_ThenClaim_Done(t *testing.T) {
 	ctx := context.Background()
 
 	// First claim acquires the lease.
-	state, _, receipt, err := store.Claim(ctx, "testns", "key:002", "", testtime.D5min)
+	state, _, receipt, err := store.Claim(ctx, httpKey("testns", "key:002"), "", testtime.D5min)
 	require.NoError(t, err)
 	require.Equal(t, idempotency.ClaimAcquired, state)
 	require.NotNil(t, receipt)
@@ -103,14 +113,14 @@ func TestHTTPIdempotencyStore_Record_ThenClaim_Done(t *testing.T) {
 
 	// Verify resp key is now present, lease key is gone.
 	mock.mu.Lock()
-	_, hasLease := mock.store["ownerns:testns:{key:002}:lease"]
-	_, hasResp := mock.store["ownerns:testns:{key:002}:resp"]
+	_, hasLease := mock.store["ownerns:testns:{key:002\x00\x00\x00}:lease"]
+	_, hasResp := mock.store["ownerns:testns:{key:002\x00\x00\x00}:resp"]
 	mock.mu.Unlock()
 	assert.False(t, hasLease, "lease key should be deleted after Record")
 	assert.True(t, hasResp, "resp key should exist after Record")
 
 	// Second claim returns Done with the replayed response.
-	state2, rec2, _, err2 := store.Claim(ctx, "testns", "key:002", "", testtime.D5min)
+	state2, rec2, _, err2 := store.Claim(ctx, httpKey("testns", "key:002"), "", testtime.D5min)
 	require.NoError(t, err2)
 	assert.Equal(t, idempotency.ClaimDone, state2)
 	require.NotNil(t, rec2, "ClaimDone should return the recorded response")
@@ -128,14 +138,14 @@ func TestHTTPIdempotencyStore_Claim_Busy(t *testing.T) {
 
 	// Pre-set the lease to simulate another consumer.
 	mock.mu.Lock()
-	mock.store["ownerns:testns:{key:003}:lease"] = mockEntry{
+	mock.store["ownerns:testns:{key:003\x00\x00\x00}:lease"] = mockEntry{
 		value:  "other-token",
 		expiry: time.Now().Add(testtime.D5min),
 	}
 	mock.mu.Unlock()
 
 	store := mustNewHTTPIdempotencyStoreFromCmdable(t, mock)
-	state, rec, _, err := store.Claim(ctx, "testns", "key:003", "", testtime.D5min)
+	state, rec, _, err := store.Claim(ctx, httpKey("testns", "key:003"), "", testtime.D5min)
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimBusy, state)
 	assert.Nil(t, rec, "ClaimBusy should have nil RecordedResponse")
@@ -150,7 +160,7 @@ func TestHTTPIdempotencyStore_Release(t *testing.T) {
 	store := mustNewHTTPIdempotencyStoreFromCmdable(t, mock)
 	ctx := context.Background()
 
-	state, _, receipt, err := store.Claim(ctx, "testns", "key:004", "", testtime.D5min)
+	state, _, receipt, err := store.Claim(ctx, httpKey("testns", "key:004"), "", testtime.D5min)
 	require.NoError(t, err)
 	require.Equal(t, idempotency.ClaimAcquired, state)
 
@@ -158,8 +168,8 @@ func TestHTTPIdempotencyStore_Release(t *testing.T) {
 	require.NoError(t, err)
 
 	mock.mu.Lock()
-	_, hasLease := mock.store["ownerns:testns:{key:004}:lease"]
-	_, hasResp := mock.store["ownerns:testns:{key:004}:resp"]
+	_, hasLease := mock.store["ownerns:testns:{key:004\x00\x00\x00}:lease"]
+	_, hasResp := mock.store["ownerns:testns:{key:004\x00\x00\x00}:resp"]
 	mock.mu.Unlock()
 	assert.False(t, hasLease, "lease key should be deleted after Release")
 	assert.False(t, hasResp, "resp key should NOT exist after Release")
@@ -174,13 +184,13 @@ func TestHTTPIdempotencyStore_Record_StaleToken(t *testing.T) {
 	store := mustNewHTTPIdempotencyStoreFromCmdable(t, mock)
 	ctx := context.Background()
 
-	state, _, receipt, err := store.Claim(ctx, "testns", "key:005", "", testtime.D5min)
+	state, _, receipt, err := store.Claim(ctx, httpKey("testns", "key:005"), "", testtime.D5min)
 	require.NoError(t, err)
 	require.Equal(t, idempotency.ClaimAcquired, state)
 
 	// Simulate lease expiry by deleting the lease key.
 	mock.mu.Lock()
-	delete(mock.store, "ownerns:testns:{key:005}:lease")
+	delete(mock.store, "ownerns:testns:{key:005\x00\x00\x00}:lease")
 	mock.mu.Unlock()
 
 	resp := buildTestRecordedResponse(t)
@@ -198,13 +208,13 @@ func TestHTTPIdempotencyStore_Release_StaleToken(t *testing.T) {
 	store := mustNewHTTPIdempotencyStoreFromCmdable(t, mock)
 	ctx := context.Background()
 
-	state, _, receipt, err := store.Claim(ctx, "testns", "key:006", "", testtime.D5min)
+	state, _, receipt, err := store.Claim(ctx, httpKey("testns", "key:006"), "", testtime.D5min)
 	require.NoError(t, err)
 	require.Equal(t, idempotency.ClaimAcquired, state)
 
 	// Simulate lease expiry.
 	mock.mu.Lock()
-	delete(mock.store, "ownerns:testns:{key:006}:lease")
+	delete(mock.store, "ownerns:testns:{key:006\x00\x00\x00}:lease")
 	mock.mu.Unlock()
 
 	err = receipt.Release(ctx)
@@ -221,7 +231,7 @@ func TestHTTPIdempotencyStore_DoubleRecord_Idempotent(t *testing.T) {
 	store := mustNewHTTPIdempotencyStoreFromCmdable(t, mock)
 	ctx := context.Background()
 
-	_, _, receipt, err := store.Claim(ctx, "testns", "key:007", "", testtime.D5min)
+	_, _, receipt, err := store.Claim(ctx, httpKey("testns", "key:007"), "", testtime.D5min)
 	require.NoError(t, err)
 
 	resp := buildTestRecordedResponse(t)
@@ -234,7 +244,7 @@ func TestHTTPIdempotencyStore_DoubleRelease_Idempotent(t *testing.T) {
 	store := mustNewHTTPIdempotencyStoreFromCmdable(t, mock)
 	ctx := context.Background()
 
-	_, _, receipt, err := store.Claim(ctx, "testns", "key:008", "", testtime.D5min)
+	_, _, receipt, err := store.Claim(ctx, httpKey("testns", "key:008"), "", testtime.D5min)
 	require.NoError(t, err)
 
 	require.NoError(t, receipt.Release(ctx))
@@ -251,7 +261,7 @@ func TestHTTPIdempotencyStore_Claim_EvalError(t *testing.T) {
 	store := mustNewHTTPIdempotencyStoreFromCmdable(t, mock)
 	ctx := context.Background()
 
-	state, rec, receipt, err := store.Claim(ctx, "testns", "key:009", "", testtime.D5min)
+	state, rec, receipt, err := store.Claim(ctx, httpKey("testns", "key:009"), "", testtime.D5min)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_SET")
 	assert.Equal(t, idempotency.ClaimState(0), state)
@@ -286,7 +296,7 @@ func TestNewHTTPIdempotencyStore_ViaClientConstructor(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	state, _, _, err := store.Claim(ctx, "testns", "key:client:001", "", testtime.D5min)
+	state, _, _, err := store.Claim(ctx, httpKey("testns", "key:client:001"), "", testtime.D5min)
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimAcquired, state)
 }
