@@ -108,7 +108,7 @@ Each Cell that uses PostgreSQL reads its own DB and encryption env variables.
 
 | Variable | Purpose | Default | Required |
 |---|---|---|---|
-| `GOCELL_APP_PASSWORD` | Password for the restricted PostgreSQL role `gocell_app` (NOSUPERUSER, NOBYPASSRLS, non-owner). Used by `GOCELL_CONFIGCORE_DATABASE_URL` and by `deploy/postgres/init/10-restricted-role.sh` which creates the role on first data-dir init. Must not contain single-quote characters (it is interpolated into a shell heredoc). | — | **postgres mode** |
+| `GOCELL_APP_PASSWORD` | Password for the restricted PostgreSQL role `gocell_app` (NOSUPERUSER, NOBYPASSRLS, non-owner). Used by `GOCELL_CONFIGCORE_DATABASE_URL` and by `deploy/postgres/init/10-restricted-role.sh` which creates the role on first data-dir init. Must be URL-safe — RFC 3986 unreserved characters only (`A-Za-z0-9._~-`); it is interpolated into a SQL heredoc AND the serving DSN userinfo, so `'` `/` `+` `=` `@` and spaces would break init or connection. Recommended: `openssl rand -hex 16`. | — | **postgres mode** |
 
 See `docs/ops/local-docker-deploy.md` §Dual-role PostgreSQL for first-time setup steps.
 Probe `postgres_app_role_restricted_ready` verifies at runtime that the serving role is not a superuser / `BYPASSRLS`.

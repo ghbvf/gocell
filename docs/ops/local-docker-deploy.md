@@ -44,7 +44,7 @@ cd gocell
 bash scripts/gen-deploy-secrets.sh
 ```
 
-The script generates 12 values in `.env.local` (see §Secrets table for the
+The script generates 13 values in `.env.local` (see §Secrets table for the
 full list). The file is set to `chmod 600` automatically. The script exits
 with code 1 if `.env.local` already exists, so it is safe to run without
 checking first.
@@ -156,11 +156,12 @@ Primary port `:8080` is the only listener published to the host; business `/api/
 
 ### What the script generates
 
-`scripts/gen-deploy-secrets.sh` writes 12 values to `.env.local`:
+`scripts/gen-deploy-secrets.sh` writes 13 values to `.env.local`:
 
 | Variable | How generated |
 |----------|---------------|
 | `PG_PASSWORD` | `openssl rand -hex 16` |
+| `GOCELL_APP_PASSWORD` | `openssl rand -hex 16` (hex = URL-safe; embedded in the restricted serving DSN) |
 | `CONFIGCORE_MASTER_KEY` | `openssl rand -hex 32` (64 hex chars) |
 | `CONFIGCORE_CURSOR_KEY` | `openssl rand -base64 32` |
 | `AUDITCORE_HMAC_KEY` | `openssl rand -base64 32` |
