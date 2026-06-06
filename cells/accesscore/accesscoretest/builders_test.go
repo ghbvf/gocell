@@ -373,7 +373,11 @@ func TestBuildIdentityManageService_AllOptions(t *testing.T) {
 // the collector observes a RecordEventProcess call.
 func TestBuildConfigReceiveService_WithCollectorAndLogger(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	// Inject a tenant so HandleEntryUpserted reaches the refetch success path
+	// (Ack). Without a tenant the handler now fail-closes to Reject/DLQ (#1577
+	// tenant-correct invariant, codex F2), which is covered by its own test.
+	ctx := ctxkeys.WithTenantID(auth.TestContext("acc", []string{"admin"}),
+		accesscoretest.DefaultFixtureTenantID.String())
 
 	fg := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
 		"foo": accesscoretest.PresentStub("foo", "v", 1),
