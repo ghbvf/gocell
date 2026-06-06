@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
@@ -41,8 +42,10 @@ func NewService(store ledger.QueryStore, codec *query.CursorCodec, logger *slog.
 }
 
 // Query returns a paginated page of audit entries matching the given filters.
+// vis is the row-visibility obligation derived from the authenticated principal;
+// it is enforced on the actor_id owner column by the underlying store.
 func (s *Service) Query(
-	ctx context.Context, filters ledger.AuditFilters, pageReq query.PageParams,
+	ctx context.Context, vis tenant.RowVisibility, filters ledger.AuditFilters, pageReq query.PageParams,
 ) (query.PageResult[*ledger.Entry], error) {
 	attrs := []string{"endpoint", "audit-query"}
 	if filters.EventType != "" {
@@ -88,7 +91,7 @@ func (s *Service) Query(
 			// pgquery.AppendKeyset over idx_audit_namespace_ts_id; MemStore:
 			// in-memory keyset). The store returns up to params.FetchLimit()
 			// (Limit+1) rows; BuildPageResult trims to Limit and detects hasMore.
-			entries, err := s.store.Query(ctx, filters, params)
+			entries, err := s.store.Query(ctx, vis, filters, params)
 			if err != nil {
 				return nil, fmt.Errorf("audit-query: query: %w", err)
 			}

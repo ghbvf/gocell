@@ -38,11 +38,26 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest" // test funnel; storetest is testing-helper package, errcodetest import is intentional (not a test-only import in a non-_test.go file)
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
 const fmtErrGetBySeq1 = "GetBySeq(1): %v"
+
+// mustRowVisibility constructs a tenant.RowVisibility for test use, failing the
+// test if the arguments are invalid. Most conformance callsites use
+// tenant.RowScopeTenant with an empty subject (unrestricted visibility) so that
+// existing tests observe the same behavior as before PR-4. New visibility-
+// obligation tests pass explicit scope/subject values.
+func mustRowVisibility(t testing.TB, scope tenant.RowScope, subject string) tenant.RowVisibility {
+	t.Helper()
+	v, err := tenant.NewRowVisibility(scope, subject)
+	if err != nil {
+		t.Fatalf("mustRowVisibility(%v, %q): %v", scope, subject, err)
+	}
+	return v
+}
 
 // entryStoreAssignedFields enumerates Entry fields that Append/GetBySeq write
 // or compute, NOT the caller's source-of-truth. AssertEntryRoundTrip skips
@@ -254,7 +269,7 @@ func Run(t *testing.T, factory Factory, protocol *ledger.Protocol) {
 	t.Run("GetBySeq_NotFound", func(t *testing.T) {
 		store, _, cleanup := factory(t)
 		defer cleanup()
-		_, err := store.GetBySeq(context.Background(), 9999)
+		_, err := store.GetBySeq(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""), 9999)
 		errcodetest.AssertCode(t, err, errcode.ErrAuditLedgerNotFound)
 	})
 	t.Run("Query_ByFilters", func(t *testing.T) { runQueryByFilters(t, factory) })
@@ -267,6 +282,8 @@ func Run(t *testing.T, factory Factory, protocol *ledger.Protocol) {
 	t.Run("Protocol_HashParity", func(t *testing.T) { runProtocolHashParity(t, factory, protocol) })
 	t.Run("PrincipalFields_RoundTrip", func(t *testing.T) { RunPrincipalFieldsRoundTrip(t, factory, protocol) })
 	t.Run("Query_ByTraceID", func(t *testing.T) { runQueryByTraceID(t, factory) })
+	t.Run("Query_VisibilityObligations", func(t *testing.T) { runQueryVisibilityObligations(t, factory) })
+	t.Run("GetBySeq_VisibilityObligations", func(t *testing.T) { runGetBySeqVisibilityObligations(t, factory) })
 }
 
 // runAppendTailRoundTrip: Append persists entry; Tail advances; GetBySeq returns entry.
@@ -290,7 +307,7 @@ func runAppendTailRoundTrip(t *testing.T, factory Factory) {
 		t.Errorf("Tail.EntryCount: got %d, want 1", tail.EntryCount)
 	}
 
-	got, err := store.GetBySeq(context.Background(), 1)
+	got, err := store.GetBySeq(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""), 1)
 	if err != nil {
 		t.Fatalf(fmtErrGetBySeq1, err)
 	}
@@ -353,7 +370,7 @@ func runRestartRecovery(t *testing.T, factory Factory) {
 	defer cleanupB()
 
 	for seq := int64(1); seq <= int64(n); seq++ {
-		src, err := storeA.GetBySeq(context.Background(), seq)
+		src, err := storeA.GetBySeq(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""), seq)
 		if err != nil {
 			t.Fatalf("storeA GetBySeq(%d): %v", seq, err)
 		}
@@ -375,7 +392,7 @@ func runRestartRecovery(t *testing.T, factory Factory) {
 		// AssertEntryRoundTrip uses reflect to walk every exported, non-store-
 		// assigned Entry field — adding a new field anywhere on Entry picks up
 		// here automatically.
-		gotB, err := storeB.GetBySeq(context.Background(), seq)
+		gotB, err := storeB.GetBySeq(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""), seq)
 		if err != nil {
 			t.Fatalf("storeB GetBySeq(%d): %v", seq, err)
 		}
@@ -600,7 +617,8 @@ func runQueryByFilters(t *testing.T, factory Factory) {
 		}
 	}
 
-	results, err := store.Query(context.Background(), ledger.AuditFilters{EventType: filterEventType},
+	results, err := store.Query(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""),
+		ledger.AuditFilters{EventType: filterEventType},
 		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
@@ -610,7 +628,8 @@ func runQueryByFilters(t *testing.T, factory Factory) {
 	}
 
 	// #1290: subject_id filter narrows to the two alice-subject rows.
-	bySubject, err := store.Query(context.Background(), ledger.AuditFilters{SubjectID: filterSubject},
+	bySubject, err := store.Query(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""),
+		ledger.AuditFilters{SubjectID: filterSubject},
 		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	if err != nil {
 		t.Fatalf("Query(subjectId): %v", err)
@@ -620,7 +639,7 @@ func runQueryByFilters(t *testing.T, factory Factory) {
 	}
 
 	// Combined EventType + SubjectID — both predicates AND together.
-	combined, err := store.Query(context.Background(),
+	combined, err := store.Query(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""),
 		ledger.AuditFilters{EventType: filterEventType, SubjectID: filterSubject},
 		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	if err != nil {
@@ -656,7 +675,7 @@ func runAppendMultiKeyPayloadRoundTrip(t *testing.T, factory Factory) {
 		t.Fatalf(msgAppend, err)
 	}
 
-	got, err := store.GetBySeq(context.Background(), 1)
+	got, err := store.GetBySeq(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""), 1)
 	if err != nil {
 		t.Fatalf(fmtErrGetBySeq1, err)
 	}
@@ -718,7 +737,7 @@ func runQueryOrderingTimestampDescIDAsc(t *testing.T, factory Factory) {
 		}
 	}
 
-	results, err := store.Query(context.Background(), ledger.AuditFilters{},
+	results, err := store.Query(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""), ledger.AuditFilters{},
 		query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
@@ -816,10 +835,11 @@ func seedKeysetEntries(t *testing.T, store ledger.Store, base time.Time) {
 // equality (the seed uses distinct timestamps so the id tie-break never fires).
 func collectKeysetPages(t *testing.T, store ledger.Store, limit int) []string {
 	t.Helper()
+	vis := mustRowVisibility(t, tenant.RowScopeTenant, "")
 	var collected []string
 	var cursorVals []any
 	for iter := 0; iter <= keysetSeedTotal+1; iter++ {
-		rows, err := store.Query(context.Background(), ledger.AuditFilters{},
+		rows, err := store.Query(context.Background(), vis, ledger.AuditFilters{},
 			query.ListParams{Limit: limit, Sort: ledger.QuerySort(), CursorValues: cursorVals})
 		if err != nil {
 			t.Fatalf("Query iter %d: %v", iter, err)
@@ -850,7 +870,8 @@ func runQueryEmptySortRejected(t *testing.T, factory Factory) {
 	store, _, cleanup := factory(t)
 	defer cleanup()
 
-	_, err := store.Query(context.Background(), ledger.AuditFilters{}, query.ListParams{Limit: 10})
+	_, err := store.Query(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""),
+		ledger.AuditFilters{}, query.ListParams{Limit: 10})
 	assertErrCode(t, err, errcode.ErrValidationFailed)
 }
 
@@ -871,7 +892,7 @@ func runQueryInvalidCursorRejected(t *testing.T, factory Factory) {
 		}
 	}
 
-	_, err := store.Query(context.Background(), ledger.AuditFilters{},
+	_, err := store.Query(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""), ledger.AuditFilters{},
 		query.ListParams{Limit: 10, Sort: ledger.QuerySort(), CursorValues: []any{"not-a-timestamp", "some-id"}})
 	assertErrCode(t, err, errcode.ErrCursorInvalid)
 }
@@ -935,24 +956,24 @@ func runQueryTenantIsolation(t *testing.T, factory Factory) {
 // set is exactly wantIDs (by EventID), so any cross-tenant row surfaces as a
 // failure. Extracted from runQueryTenantIsolation to keep that function's
 // cognitive complexity within budget.
-func assertTenantScopedQuery(t *testing.T, store ledger.Store, tenant string, wantIDs []string) {
+func assertTenantScopedQuery(t *testing.T, store ledger.Store, tenantID string, wantIDs []string) {
 	t.Helper()
 	want := make(map[string]bool, len(wantIDs))
 	for _, id := range wantIDs {
 		want[id] = true
 	}
-	rows, err := store.Query(context.Background(),
-		ledger.AuditFilters{TenantID: tenant}, query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	rows, err := store.Query(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""),
+		ledger.AuditFilters{TenantID: tenantID}, query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	if err != nil {
-		t.Fatalf("Query(tenant=%q): %v", tenant, err)
+		t.Fatalf("Query(tenant=%q): %v", tenantID, err)
 	}
 	if len(rows) != len(wantIDs) {
-		t.Fatalf("Query(tenant=%q): got %d rows, want %d", tenant, len(rows), len(wantIDs))
+		t.Fatalf("Query(tenant=%q): got %d rows, want %d", tenantID, len(rows), len(wantIDs))
 	}
 	for _, r := range rows {
 		if !want[r.EventID] {
 			t.Errorf("Query(tenant=%q): leaked cross-tenant row %q (tenant_id=%q)",
-				tenant, r.EventID, r.TenantID)
+				tenantID, r.EventID, r.TenantID)
 		}
 	}
 }
@@ -979,7 +1000,7 @@ func runProtocolHashParity(t *testing.T, factory Factory, protocol *ledger.Proto
 		t.Fatalf("Append seq 2: %v", err)
 	}
 
-	got1, err := store.GetBySeq(context.Background(), 1)
+	got1, err := store.GetBySeq(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""), 1)
 	if err != nil {
 		t.Fatalf("GetBySeq 1: %v", err)
 	}
@@ -990,7 +1011,7 @@ func runProtocolHashParity(t *testing.T, factory Factory, protocol *ledger.Proto
 			got1.Hash, want1)
 	}
 
-	got2, err := store.GetBySeq(context.Background(), 2)
+	got2, err := store.GetBySeq(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""), 2)
 	if err != nil {
 		t.Fatalf("GetBySeq 2: %v", err)
 	}
@@ -1041,8 +1062,10 @@ func runQueryByTraceID(t *testing.T, factory Factory) {
 		}
 	}
 
+	vis := mustRowVisibility(t, tenant.RowScopeTenant, "")
+
 	// Filter by T1: must return exactly 2 entries.
-	byT1, err := store.Query(context.Background(),
+	byT1, err := store.Query(context.Background(), vis,
 		ledger.AuditFilters{TraceID: traceT1},
 		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	if err != nil {
@@ -1058,7 +1081,7 @@ func runQueryByTraceID(t *testing.T, factory Factory) {
 	}
 
 	// Empty TraceID filter: must return all 3 entries.
-	all, err := store.Query(context.Background(),
+	all, err := store.Query(context.Background(), vis,
 		ledger.AuditFilters{},
 		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	if err != nil {
@@ -1069,7 +1092,7 @@ func runQueryByTraceID(t *testing.T, factory Factory) {
 	}
 
 	// Non-matching trace: must return empty.
-	noMatch, err := store.Query(context.Background(),
+	noMatch, err := store.Query(context.Background(), vis,
 		ledger.AuditFilters{TraceID: "no-match-trace"},
 		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	if err != nil {
@@ -1193,7 +1216,7 @@ func RunPrincipalFieldsRoundTrip(t *testing.T, factory Factory, protocol *ledger
 		t.Fatalf("Append principal-roundtrip: %v", err)
 	}
 
-	got, err := store.GetBySeq(context.Background(), 1)
+	got, err := store.GetBySeq(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""), 1)
 	if err != nil {
 		t.Fatalf(fmtErrGetBySeq1, err)
 	}
@@ -1220,6 +1243,76 @@ func RunPrincipalFieldsRoundTrip(t *testing.T, factory Factory, protocol *ledger
 	}
 }
 
+// visQueryCase is one row-visibility Query conformance case. It is a named type
+// (not an anonymous table) so the per-case assertion lives in the run method
+// below, keeping each conformance function's cognitive complexity within budget.
+type visQueryCase struct {
+	name      string
+	scope     tenant.RowScope
+	subject   string
+	wantCount int
+	wantActor string       // non-empty: every result row must carry this actorID
+	wantErr   errcode.Code // non-empty: expect this error code; skip count/actor checks
+}
+
+// run executes one Query visibility case against store.
+func (tc visQueryCase) run(t *testing.T, store ledger.Store, filters ledger.AuditFilters, params query.ListParams) {
+	t.Helper()
+	vis := mustRowVisibility(t, tc.scope, tc.subject)
+	rows, err := store.Query(context.Background(), vis, filters, params)
+	if tc.wantErr != "" {
+		errcodetest.AssertCode(t, err, tc.wantErr)
+		if rows != nil {
+			t.Errorf("Query(vis=%v) fail-closed: expected nil rows, got %d", tc.scope, len(rows))
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("Query(vis=%v): %v", tc.scope, err)
+	}
+	if len(rows) != tc.wantCount {
+		t.Errorf("Query(vis=%v subject=%q): got %d rows, want %d", tc.scope, tc.subject, len(rows), tc.wantCount)
+	}
+	for _, r := range rows {
+		if tc.wantActor != "" && r.ActorID != tc.wantActor {
+			t.Errorf("Query(vis=%v): got ActorID=%q, want %q", tc.scope, r.ActorID, tc.wantActor)
+		}
+	}
+}
+
+// visGetCase is one row-visibility GetBySeq conformance case (named for the same
+// cognitive-complexity reason as visQueryCase).
+type visGetCase struct {
+	name    string
+	scope   tenant.RowScope
+	subject string
+	wantOK  bool         // true = expect the entry; false = expect wantErr
+	wantErr errcode.Code // expected error code when wantOK is false
+}
+
+// run executes one GetBySeq visibility case against store (seq 1 = the seeded
+// alice entry).
+func (tc visGetCase) run(t *testing.T, store ledger.Store) {
+	t.Helper()
+	vis := mustRowVisibility(t, tc.scope, tc.subject)
+	got, err := store.GetBySeq(context.Background(), vis, 1)
+	if tc.wantOK {
+		if err != nil {
+			t.Fatalf("GetBySeq(vis=%v subject=%q): got error %v, want entry", tc.scope, tc.subject, err)
+		}
+		if got.ActorID != "alice" {
+			t.Errorf("GetBySeq: got ActorID=%q, want %q", got.ActorID, "alice")
+		}
+		return
+	}
+	// Non-OK: must return tc.wantErr (IDOR-safe collapse → ErrAuditLedgerNotFound;
+	// RowScopeAll → ErrInternal), not the entry.
+	errcodetest.AssertCode(t, err, tc.wantErr)
+	if got != nil {
+		t.Errorf("GetBySeq(vis=%v): expected nil entry, got %+v", tc.scope, got)
+	}
+}
+
 // NOTE: assertErrCode is reserved for non-_NotFound assertions
 // (ErrAuditLedgerAlreadyExists, ErrValidationFailed). Any t.Run("..._NotFound", ...)
 // table case MUST call errcodetest.AssertCode directly — POSTGRES-NOTFOUND-
@@ -1227,6 +1320,90 @@ func RunPrincipalFieldsRoundTrip(t *testing.T, factory Factory, protocol *ledger
 // _NotFound t.Run body level only; routing through this helper would be a
 // cross-function wrapper that escapes detection (godoc-declared blind spot).
 //
+// runQueryVisibilityObligations verifies that Store.Query correctly applies
+// the row-visibility obligation (epic #1337 PR-4) across all four RowScope
+// values. Seeds three entries with distinct actorIDs ("alice", "bob", "charlie"),
+// then asserts:
+//
+//   - RowScopeSelf("alice")   → only alice's entries
+//   - RowScopeDevice("alice") → same as self (device uses Allows=subject match)
+//   - RowScopeTenant("")      → all entries (tenant-wide: no actor filter)
+//   - RowScopeAll("")         → fail-closed (RowScopeAllUnsupportedError) on every
+//     backend until the audited super-admin path lands (PR-5); no silent degrade
+//     to tenant scope.
+func runQueryVisibilityObligations(t *testing.T, factory Factory) {
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	actors := []string{"alice", "bob", "charlie"}
+	for i, actor := range actors {
+		e := &ledger.Entry{
+			EventID:   fmt.Sprintf("vis-query-%d", i),
+			EventType: "vis.test",
+			ActorID:   actor,
+			Timestamp: fc.Now(),
+			Payload:   []byte(`{}`),
+		}
+		if err := store.Append(context.Background(), e); err != nil {
+			t.Fatalf("Append vis-query-%d: %v", i, err)
+		}
+	}
+
+	params := query.ListParams{Limit: 50, Sort: ledger.QuerySort()}
+	filters := ledger.AuditFilters{}
+
+	cases := []visQueryCase{
+		{"self-alice", tenant.RowScopeSelf, "alice", 1, "alice", ""},
+		{"device-alice", tenant.RowScopeDevice, "alice", 1, "alice", ""},
+		{"tenant-wide", tenant.RowScopeTenant, "", 3, "", ""},
+		// RowScopeAll is fail-closed on every backend until PR-5 (no silent
+		// degrade to tenant scope) — see RowScopeAllUnsupportedError.
+		{"all-fail-closed", tenant.RowScopeAll, "", 0, "", errcode.ErrInternal},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { tc.run(t, store, filters, params) })
+	}
+}
+
+// runGetBySeqVisibilityObligations verifies the IDOR-safe collapse contract of
+// Store.GetBySeq (epic #1337 PR-4): GetBySeq with a non-matching vis returns
+// ErrAuditLedgerNotFound (same as actual not-found), not the entry.
+//
+// Appends one entry with ActorID="alice". Then asserts:
+//   - Self("alice")   → found (owns the entry)
+//   - Self("bob")     → ErrAuditLedgerNotFound (IDOR collapse)
+//   - Tenant("")      → found (tenant-wide read)
+//   - All("")         → fail-closed (RowScopeAllUnsupportedError) until PR-5
+func runGetBySeqVisibilityObligations(t *testing.T, factory Factory) {
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	e := &ledger.Entry{
+		EventID:   "vis-getbyseq-1",
+		EventType: "vis.getbyseq.test",
+		ActorID:   "alice",
+		Timestamp: fc.Now(),
+		Payload:   []byte(`{}`),
+	}
+	if err := store.Append(context.Background(), e); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	cases := []visGetCase{
+		{"self-alice-found", tenant.RowScopeSelf, "alice", true, ""},
+		{"self-bob-idor-collapse", tenant.RowScopeSelf, "bob", false, errcode.ErrAuditLedgerNotFound},
+		{"device-alice-found", tenant.RowScopeDevice, "alice", true, ""},
+		{"device-bob-idor-collapse", tenant.RowScopeDevice, "bob", false, errcode.ErrAuditLedgerNotFound},
+		{"tenant-wide-found", tenant.RowScopeTenant, "", true, ""},
+		// RowScopeAll is fail-closed on every backend until PR-5 (distinct from the
+		// IDOR-collapse NotFound: it is a wiring/programmer error, ErrInternal).
+		{"all-fail-closed", tenant.RowScopeAll, "", false, errcode.ErrInternal},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { tc.run(t, store) })
+	}
+}
+
 // assertErrCode asserts err wraps an *errcode.Error with the given Code.
 func assertErrCode(t *testing.T, err error, want errcode.Code) {
 	t.Helper()

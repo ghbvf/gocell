@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -25,6 +26,15 @@ import (
 // integration tests. Matches the tenant seeded in testmain_test.go (roles)
 // and the canonical GoCell test tenant used in cell_test.go.
 const l2TestTenantID = "00000000-0000-0000-0000-000000000001"
+
+// l2TestVis returns a RowScopeTenant RowVisibility (unrestricted owner
+// dimension) for audit-ledger reads in these atomicity tests, which assert on
+// outbox/ledger atomicity rather than the row-visibility obligation itself
+// (that is covered by the ledger conformance suite).
+func l2TestVis() tenant.RowVisibility {
+	vis, _ := tenant.NewRowVisibility(tenant.RowScopeTenant, "")
+	return vis
+}
 
 // Internal API paths for rbacassign endpoints. Shared by assignRole /
 // revokeRole and the failure-injection variants in
@@ -437,7 +447,8 @@ func countLiveRefreshTokens(t *testing.T, h *l2Harness, sessionID string) int {
 // concurrent role.assigned / session.created delivery could satisfy).
 func countAuditEntries(t *testing.T, ctx context.Context, h *l2Harness, eventType string) int {
 	t.Helper()
-	entries, err := h.auditStore.Query(ctx, ledger.AuditFilters{EventType: eventType}, query.ListParams{Limit: 500, Sort: ledger.QuerySort()})
+	entries, err := h.auditStore.Query(ctx, l2TestVis(), ledger.AuditFilters{EventType: eventType},
+		query.ListParams{Limit: 500, Sort: ledger.QuerySort()})
 	require.NoError(t, err)
 	return len(entries)
 }
@@ -452,7 +463,8 @@ func countAuditEntries(t *testing.T, ctx context.Context, h *l2Harness, eventTyp
 // triggers multiple revokes on the same harness needs the correct semantic.
 func latestAuditEntry(t *testing.T, ctx context.Context, h *l2Harness, eventType string) *ledger.Entry {
 	t.Helper()
-	entries, err := h.auditStore.Query(ctx, ledger.AuditFilters{EventType: eventType}, query.ListParams{Limit: 500, Sort: ledger.QuerySort()})
+	entries, err := h.auditStore.Query(ctx, l2TestVis(), ledger.AuditFilters{EventType: eventType},
+		query.ListParams{Limit: 500, Sort: ledger.QuerySort()})
 	require.NoError(t, err)
 	require.NotEmpty(t, entries, "expected at least one audit entry for event %s", eventType)
 	return entries[0]

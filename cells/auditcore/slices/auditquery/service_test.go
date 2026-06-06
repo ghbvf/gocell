@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
@@ -25,6 +26,14 @@ const (
 	auditNs100 = 100 * time.Nanosecond
 	auditNs200 = 200 * time.Nanosecond
 )
+
+// testTenantVis returns a RowScopeTenant RowVisibility for service_test helpers.
+// All tests that call svc.Query use tenant-wide scope (no actor filter)
+// to preserve pre-PR-4 test semantics.
+func testTenantVis() tenant.RowVisibility {
+	vis, _ := tenant.NewRowVisibility(tenant.RowScopeTenant, "")
+	return vis
+}
 
 func testCodec() *query.CursorCodec {
 	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
@@ -169,7 +178,7 @@ func TestService_Query(t *testing.T) {
 			svc, store := newTestService()
 			tt.seed(store)
 
-			result, err := svc.Query(context.Background(), tt.filters, query.PageParams{})
+			result, err := svc.Query(context.Background(), testTenantVis(), tt.filters, query.PageParams{})
 			require.NoError(t, err)
 			assert.Len(t, result.Items, tt.wantLen)
 		})
@@ -184,7 +193,7 @@ func TestService_Query_FirstPage(t *testing.T) {
 			base.Add(time.Duration(i)*time.Hour))
 	}
 
-	result, err := svc.Query(context.Background(), ledger.AuditFilters{}, query.PageParams{Limit: 3})
+	result, err := svc.Query(context.Background(), testTenantVis(), ledger.AuditFilters{}, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 3)
 	assert.True(t, result.HasMore)
@@ -199,11 +208,11 @@ func TestService_Query_WithCursor(t *testing.T) {
 			base.Add(time.Duration(i)*time.Hour))
 	}
 
-	page1, err := svc.Query(context.Background(), ledger.AuditFilters{}, query.PageParams{Limit: 3})
+	page1, err := svc.Query(context.Background(), testTenantVis(), ledger.AuditFilters{}, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, page1.HasMore)
 
-	page2, err := svc.Query(context.Background(), ledger.AuditFilters{}, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	page2, err := svc.Query(context.Background(), testTenantVis(), ledger.AuditFilters{}, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.NoError(t, err)
 	assert.Len(t, page2.Items, 3)
 	assert.NotEqual(t, page1.Items[0].ID, page2.Items[0].ID)
@@ -212,7 +221,7 @@ func TestService_Query_WithCursor(t *testing.T) {
 func TestService_Query_InvalidCursor(t *testing.T) {
 	svc, _ := newTestService()
 
-	_, err := svc.Query(context.Background(), ledger.AuditFilters{}, query.PageParams{Cursor: "garbage-token"})
+	_, err := svc.Query(context.Background(), testTenantVis(), ledger.AuditFilters{}, query.PageParams{Cursor: "garbage-token"})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -225,7 +234,7 @@ func TestService_Query_LastPage(t *testing.T) {
 	seedEntry(store, "ae-00", "event.test.v1", "usr-1", base)
 	seedEntry(store, "ae-01", "event.test.v1", "usr-1", base.Add(time.Hour))
 
-	result, err := svc.Query(context.Background(), ledger.AuditFilters{}, query.PageParams{Limit: 10})
+	result, err := svc.Query(context.Background(), testTenantVis(), ledger.AuditFilters{}, query.PageParams{Limit: 10})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 2)
 	assert.False(t, result.HasMore)
@@ -235,7 +244,7 @@ func TestService_Query_LastPage(t *testing.T) {
 func TestService_Query_Empty(t *testing.T) {
 	svc, _ := newTestService()
 
-	result, err := svc.Query(context.Background(), ledger.AuditFilters{}, query.PageParams{})
+	result, err := svc.Query(context.Background(), testTenantVis(), ledger.AuditFilters{}, query.PageParams{})
 	require.NoError(t, err)
 	assert.Empty(t, result.Items)
 	assert.False(t, result.HasMore)
@@ -251,13 +260,13 @@ func TestService_Query_CursorContextMismatch(t *testing.T) {
 	}
 
 	loginFilters := ledger.AuditFilters{EventType: "event.login.v1"}
-	page1, err := svc.Query(context.Background(), loginFilters, query.PageParams{Limit: 3})
+	page1, err := svc.Query(context.Background(), testTenantVis(), loginFilters, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, page1.HasMore)
 	require.NotEmpty(t, page1.NextCursor)
 
 	logoutFilters := ledger.AuditFilters{EventType: "event.logout.v1"}
-	_, err = svc.Query(context.Background(), logoutFilters, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	_, err = svc.Query(context.Background(), testTenantVis(), logoutFilters, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -290,13 +299,13 @@ func TestService_Query_CursorContextMismatch_SubjectID(t *testing.T) {
 	}
 
 	alice := ledger.AuditFilters{SubjectID: "alice"}
-	page1, err := svc.Query(context.Background(), alice, query.PageParams{Limit: 3})
+	page1, err := svc.Query(context.Background(), testTenantVis(), alice, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, page1.HasMore)
 	require.NotEmpty(t, page1.NextCursor)
 
 	bob := ledger.AuditFilters{SubjectID: "bob"}
-	_, err = svc.Query(context.Background(), bob, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	_, err = svc.Query(context.Background(), testTenantVis(), bob, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -329,13 +338,13 @@ func TestService_Query_CursorContextMismatch_TraceID(t *testing.T) {
 	}
 
 	traceX := ledger.AuditFilters{TraceID: "trace-X"}
-	page1, err := svc.Query(context.Background(), traceX, query.PageParams{Limit: 3})
+	page1, err := svc.Query(context.Background(), testTenantVis(), traceX, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, page1.HasMore)
 	require.NotEmpty(t, page1.NextCursor)
 
 	traceY := ledger.AuditFilters{TraceID: "trace-Y"}
-	_, err = svc.Query(context.Background(), traceY, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	_, err = svc.Query(context.Background(), testTenantVis(), traceY, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -383,7 +392,7 @@ func TestService_Query_InvalidCursor_LogsDecode(t *testing.T) {
 
 	badCursor := "garbage-token-should-not-appear-in-log"
 	ctx := ctxkeys.WithRequestID(context.Background(), "req-test-001")
-	_, err := svc.Query(ctx, ledger.AuditFilters{}, query.PageParams{Cursor: badCursor})
+	_, err := svc.Query(ctx, testTenantVis(), ledger.AuditFilters{}, query.PageParams{Cursor: badCursor})
 	require.Error(t, err)
 
 	logs := parseLogLines(t, buf)
@@ -408,7 +417,7 @@ func TestService_Query_InvalidCursor_LogsScope(t *testing.T) {
 	}
 
 	loginFilters := ledger.AuditFilters{EventType: "event.login.v1"}
-	page1, err := svc.Query(context.Background(), loginFilters, query.PageParams{Limit: 3})
+	page1, err := svc.Query(context.Background(), testTenantVis(), loginFilters, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.NotEmpty(t, page1.NextCursor)
 
@@ -416,7 +425,7 @@ func TestService_Query_InvalidCursor_LogsScope(t *testing.T) {
 
 	logoutFilters := ledger.AuditFilters{EventType: "event.logout.v1"}
 	ctxWithReqID := ctxkeys.WithRequestID(context.Background(), "req-test-002")
-	_, err = svc.Query(ctxWithReqID, logoutFilters, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	_, err = svc.Query(ctxWithReqID, testTenantVis(), logoutFilters, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.Error(t, err)
 
 	logs := parseLogLines(t, buf)
@@ -434,7 +443,7 @@ func TestService_Query_InvalidCursor_LogsScope(t *testing.T) {
 func TestService_Query_InvalidCursor_NoRequestID(t *testing.T) {
 	svc, _, buf := newTestServiceWithLogBuf()
 
-	_, err := svc.Query(context.Background(), ledger.AuditFilters{}, query.PageParams{Cursor: "garbage"})
+	_, err := svc.Query(context.Background(), testTenantVis(), ledger.AuditFilters{}, query.PageParams{Cursor: "garbage"})
 	require.Error(t, err)
 
 	logs := parseLogLines(t, buf)
@@ -465,13 +474,13 @@ func TestService_Query_CursorContextMismatch_TenantID(t *testing.T) {
 	}
 
 	tenantA := ledger.AuditFilters{TenantID: "tenant-A"}
-	page1, err := svc.Query(context.Background(), tenantA, query.PageParams{Limit: 3})
+	page1, err := svc.Query(context.Background(), testTenantVis(), tenantA, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, page1.HasMore)
 	require.NotEmpty(t, page1.NextCursor)
 
 	tenantB := ledger.AuditFilters{TenantID: "tenant-B"}
-	_, err = svc.Query(context.Background(), tenantB, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	_, err = svc.Query(context.Background(), testTenantVis(), tenantB, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -496,13 +505,13 @@ func TestService_Query_SubsecondFilterContext(t *testing.T) {
 	}
 
 	filtersA := ledger.AuditFilters{From: base.Add(auditNs100)}
-	pageA, err := svc.Query(context.Background(), filtersA, query.PageParams{Limit: 3})
+	pageA, err := svc.Query(context.Background(), testTenantVis(), filtersA, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, pageA.HasMore)
 
 	// From/To are NOT cursor-scope keys — changing From must not invalidate the cursor.
 	filtersB := ledger.AuditFilters{From: base.Add(auditNs200)}
-	_, err = svc.Query(context.Background(), filtersB, query.PageParams{
+	_, err = svc.Query(context.Background(), testTenantVis(), filtersB, query.PageParams{
 		Limit:  3,
 		Cursor: pageA.NextCursor,
 	})
@@ -556,7 +565,7 @@ func TestQuery_ZeroTime_SkipsFromToFormat(t *testing.T) {
 
 	// Page 1: zero From/To (no time filter).
 	zeroFilters := ledger.AuditFilters{} // From and To are zero value
-	page1, err := svc.Query(context.Background(), zeroFilters, query.PageParams{Limit: 3})
+	page1, err := svc.Query(context.Background(), testTenantVis(), zeroFilters, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, page1.HasMore)
 
@@ -584,7 +593,7 @@ func TestQuery_ZeroTime_SkipsFromToFormat(t *testing.T) {
 	// a scope-mismatch error. If "from" is NOT in scope (GREEN), From can change
 	// freely without breaking the cursor → page2 succeeds normally.
 	nonZeroFromFilters := ledger.AuditFilters{From: base}
-	_, err2 := svc.Query(context.Background(), nonZeroFromFilters, query.PageParams{
+	_, err2 := svc.Query(context.Background(), testTenantVis(), nonZeroFromFilters, query.PageParams{
 		Limit:  3,
 		Cursor: page1.NextCursor,
 	})

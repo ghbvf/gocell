@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
 // QueryStore is the narrow read-only subset of Store used by the auditquery
@@ -26,5 +27,12 @@ type QueryStore interface {
 	// params.Sort. params.Sort must be non-empty (callers pass QuerySort);
 	// an empty Sort is a programmer error and yields ErrValidationFailed.
 	// Returns an empty (non-nil) slice when no entries match.
-	Query(ctx context.Context, filters AuditFilters, params query.ListParams) ([]*Entry, error)
+	//
+	// vis is the row-visibility obligation enforced on the actor_id owner column.
+	// Self/device scopes restrict results to entries whose actor_id matches the
+	// obligation subject. Tenant scope returns all matching rows in the tenant.
+	// vis must be valid (NewRowVisibility must succeed). A vis carrying
+	// RowScopeAll is fail-closed (RowScopeAllUnsupportedError) until the audited
+	// super-admin path lands (epic #1337 PR-5).
+	Query(ctx context.Context, vis tenant.RowVisibility, filters AuditFilters, params query.ListParams) ([]*Entry, error)
 }

@@ -4,8 +4,24 @@ import (
 	"context"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
+
+// RowScopeAllUnsupportedError reports that a RowVisibility carrying
+// tenant.RowScopeAll reached a ledger read path (Query / GetBySeq).
+// RowScopeAll is cross-tenant super-admin visibility whose audited BYPASSRLS
+// path is not wired until epic #1337 PR-5; until then EVERY ledger backend
+// fail-closes it (no silent degrade to tenant scope). It is shared by MemStore
+// and the PG LedgerStore so the rejection is byte-identical across backends and
+// exercised uniformly by the conformance suite. The classification is
+// KindInternal: in PR-4 no caller constructs RowScopeAll for these reads, so its
+// arrival is a wiring/programmer error, not user input.
+func RowScopeAllUnsupportedError() error {
+	return errcode.New(errcode.KindInternal, errcode.ErrInternal,
+		"audit ledger: RowScopeAll requires the super-admin BYPASSRLS path (epic #1337 PR-5); not supported")
+}
 
 // TailSnapshot holds a point-in-time snapshot of the ledger chain tail.
 // Returned by Store.Tail to allow restart recovery and chain verification
@@ -133,9 +149,14 @@ type Store interface {
 	// Returns zero TailSnapshot when the store is empty (not an error).
 	Tail(ctx context.Context) (TailSnapshot, error)
 
-	// GetBySeq fetches a single entry by sequence number. Returns
-	// ErrAuditLedgerNotFound when the sequence number does not exist.
-	GetBySeq(ctx context.Context, seq int64) (*Entry, error)
+	// GetBySeq fetches a single entry by sequence number. The vis obligation
+	// is enforced on the actor_id owner column: if the entry exists but
+	// vis.Allows(entry.ActorID) is false, the implementation returns
+	// ErrAuditLedgerNotFound (IDOR-safe collapse — existence is not leaked).
+	// vis must be valid (NewRowVisibility must succeed). A vis carrying
+	// RowScopeAll is fail-closed on every backend (RowScopeAllUnsupportedError)
+	// until the audited super-admin path lands (epic #1337 PR-5).
+	GetBySeq(ctx context.Context, vis tenant.RowVisibility, seq int64) (*Entry, error)
 
 	// Query lists entries matching AuditFilters using keyset cursor pagination
 	// defined by params (Limit + decoded CursorValues + Sort). It returns up to
@@ -143,7 +164,14 @@ type Store interface {
 	// params.Sort. params.Sort must be non-empty (callers pass QuerySort);
 	// an empty Sort is a programmer error and yields ErrValidationFailed.
 	// Returns an empty (non-nil) slice when no entries match.
-	Query(ctx context.Context, filters AuditFilters, params query.ListParams) ([]*Entry, error)
+	//
+	// vis is the row-visibility obligation enforced on the actor_id owner column.
+	// Self/device scopes restrict results to entries whose actor_id matches the
+	// obligation subject. Tenant scope returns all matching rows in the tenant.
+	// vis must be valid (NewRowVisibility must succeed). A vis carrying
+	// RowScopeAll is fail-closed on every backend (RowScopeAllUnsupportedError)
+	// until the audited super-admin path lands (epic #1337 PR-5).
+	Query(ctx context.Context, vis tenant.RowVisibility, filters AuditFilters, params query.ListParams) ([]*Entry, error)
 
 	// Verify re-computes the HMAC for each entry in [fromSeq, toSeq] and checks
 	// chain linkage (PrevHash). Returns valid=true and firstInvalidSeq=-1 when

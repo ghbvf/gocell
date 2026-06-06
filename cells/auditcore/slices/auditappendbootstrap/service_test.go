@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
@@ -98,12 +99,14 @@ func (e *errLedgerStore) Tail(ctx context.Context) (ledger.TailSnapshot, error) 
 	return e.inner.Tail(ctx)
 }
 
-func (e *errLedgerStore) GetBySeq(ctx context.Context, seq int64) (*ledger.Entry, error) {
-	return e.inner.GetBySeq(ctx, seq)
+func (e *errLedgerStore) GetBySeq(ctx context.Context, vis tenant.RowVisibility, seq int64) (*ledger.Entry, error) {
+	return e.inner.GetBySeq(ctx, vis, seq)
 }
 
-func (e *errLedgerStore) Query(ctx context.Context, filters ledger.AuditFilters, params query.ListParams) ([]*ledger.Entry, error) {
-	return e.inner.Query(ctx, filters, params)
+func (e *errLedgerStore) Query(
+	ctx context.Context, vis tenant.RowVisibility, filters ledger.AuditFilters, params query.ListParams,
+) ([]*ledger.Entry, error) {
+	return e.inner.Query(ctx, vis, filters, params)
 }
 
 func (e *errLedgerStore) Verify(ctx context.Context, fromSeq, toSeq int64) (bool, int64, error) {

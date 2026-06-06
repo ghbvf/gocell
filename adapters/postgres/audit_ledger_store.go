@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
@@ -364,8 +365,15 @@ func (s *LedgerStore) RepoReady(ctx context.Context) error {
 }
 
 // GetBySeq fetches a single entry by sequence number.
-// Returns ErrAuditLedgerNotFound when the seq does not exist.
-func (s *LedgerStore) GetBySeq(ctx context.Context, seq int64) (*ledger.Entry, error) {
+// Returns ErrAuditLedgerNotFound when the seq does not exist, or when the
+// entry exists but vis.Allows(entry.ActorID) is false (IDOR-safe collapse).
+func (s *LedgerStore) GetBySeq(ctx context.Context, vis tenant.RowVisibility, seq int64) (*ledger.Entry, error) {
+	if err := vis.Validate(); err != nil {
+		return nil, err
+	}
+	if vis.Scope() == tenant.RowScopeAll {
+		return nil, ledger.RowScopeAllUnsupportedError()
+	}
 	ns := s.namespace()
 	var e ledger.Entry
 	err := s.db.QueryRow(ctx, selectBySeqSQL, ns, seq).Scan(
@@ -384,6 +392,14 @@ func (s *LedgerStore) GetBySeq(ctx context.Context, seq int64) (*ledger.Entry, e
 		return nil, ctxcancel.WrapOrInfra(err, "get_by_seq", ns,
 			ErrAdapterPGQuery, "audit ledger: get by seq failed")
 	}
+	// IDOR-safe collapse: do not reveal that the entry exists when visibility
+	// obligation is not satisfied.
+	if !vis.Allows(e.ActorID) {
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
+			"audit ledger: entry not found",
+			errcode.WithDetails(errcode.PublicInt("seqNo", seq)),
+		)
+	}
 	return &e, nil
 }
 
@@ -395,7 +411,15 @@ func (s *LedgerStore) GetBySeq(ctx context.Context, seq int64) (*ledger.Entry, e
 // params.Sort must be non-empty (callers pass ledger.QuerySort); AppendKeyset
 // returns ErrValidationFailed on empty Sort. Returns an empty (non-nil) slice
 // when no entries match.
-func (s *LedgerStore) Query(ctx context.Context, filters ledger.AuditFilters, params query.ListParams) ([]*ledger.Entry, error) {
+func (s *LedgerStore) Query(
+	ctx context.Context, vis tenant.RowVisibility, filters ledger.AuditFilters, params query.ListParams,
+) ([]*ledger.Entry, error) {
+	if err := vis.Validate(); err != nil {
+		return nil, err
+	}
+	if vis.Scope() == tenant.RowScopeAll {
+		return nil, ledger.RowScopeAllUnsupportedError()
+	}
 	ns := s.namespace()
 
 	params, err := bindTimestampCursor(params)
@@ -432,6 +456,15 @@ FROM audit_entries WHERE namespace = `, ns)
 	b.AppendIf(filters.TraceID != "", `AND trace_id = `, filters.TraceID)
 	b.AppendIf(!filters.From.IsZero(), `AND timestamp >= `, filters.From)
 	b.AppendIf(!filters.To.IsZero(), `AND timestamp <= `, filters.To)
+	// Row-visibility obligation on actor_id (epic #1337 PR-4). Self/device
+	// scopes restrict results to entries whose actor_id matches the subject.
+	// Tenant scope applies no additional predicate (Apply=false); RowScopeAll is
+	// already rejected above (RowScopeAllUnsupportedError).
+	visPred, predErr := vis.SQLPredicate("actor_id")
+	if predErr != nil {
+		return nil, predErr
+	}
+	b.AppendIf(visPred.Apply, visPred.Prefix, visPred.Arg)
 	if ksErr := pgquery.AppendKeyset(b, params); ksErr != nil {
 		return nil, ksErr
 	}
