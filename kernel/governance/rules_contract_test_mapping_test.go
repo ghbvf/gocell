@@ -429,7 +429,6 @@ func addActiveGRPCContract(pm *metadata.ProjectMeta, id string) {
 			Clients: []string{},
 			GRPC: &metadata.GRPCTransportMeta{
 				Service: "auth.session.v1.SessionVerifyService",
-				Method:  "Verify",
 				Proto:   "contracts/grpc/auth/session/verify/v1/session_verify.proto",
 			},
 		},

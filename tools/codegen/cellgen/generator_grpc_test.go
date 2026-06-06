@@ -51,7 +51,6 @@ func buildGRPCProject() *metadata.ProjectMeta {
 			Server: "demo",
 			GRPC: &metadata.GRPCTransportMeta{
 				Service: "device.command.v1.DeviceCommandService",
-				Method:  "IssueCommand",
 				Proto:   "contracts/grpc/device/command/v1/device_command.proto",
 			},
 		},
@@ -87,7 +86,6 @@ func TestBuildGrpcServiceSpecFromCU(t *testing.T) {
 			Server: "demo",
 			GRPC: &metadata.GRPCTransportMeta{
 				Service: "device.command.v1.DeviceCommandService",
-				Method:  "IssueCommand",
 				Proto:   "contracts/grpc/device/command/v1/device_command.proto",
 			},
 		},
@@ -114,7 +112,6 @@ func TestBuildGrpcServiceSpecFromCU(t *testing.T) {
 				ListenerConst: "cell.PrimaryListener",
 				ProtoRel:      "contracts/grpc/device/command/v1/device_command.proto",
 				Service:       "device.command.v1.DeviceCommandService",
-				Method:        "IssueCommand",
 			},
 		},
 		{
@@ -143,7 +140,6 @@ func TestBuildGrpcServiceSpecFromCU(t *testing.T) {
 					Endpoints: metadata.EndpointsMeta{
 						GRPC: &metadata.GRPCTransportMeta{
 							Service: "",
-							Method:  "IssueCommand",
 							Proto:   "contracts/grpc/device/command/v1/device_command.proto",
 						},
 					},
@@ -162,7 +158,6 @@ func TestBuildGrpcServiceSpecFromCU(t *testing.T) {
 					Endpoints: metadata.EndpointsMeta{
 						GRPC: &metadata.GRPCTransportMeta{
 							Service: "device.command.v1.DeviceCommandService",
-							Method:  "IssueCommand",
 							Proto:   "",
 						},
 					},
@@ -218,8 +213,7 @@ func TestBuildGrpcServiceSpecFromCU(t *testing.T) {
 					got.RegisterFunc != tc.wantSpec.RegisterFunc ||
 					got.ListenerConst != tc.wantSpec.ListenerConst ||
 					got.ProtoRel != tc.wantSpec.ProtoRel ||
-					got.Service != tc.wantSpec.Service ||
-					got.Method != tc.wantSpec.Method {
+					got.Service != tc.wantSpec.Service {
 					t.Errorf("GrpcServiceGenSpec mismatch:\n got:  %+v\nwant: %+v", got, *tc.wantSpec)
 				}
 			}
@@ -285,7 +279,6 @@ func TestRenderCell_GRPCImportsPresent(t *testing.T) {
 			ListenerConst: "cell.PrimaryListener",
 			ProtoRel:      "contracts/grpc/device/command/v1/device_command.proto",
 			Service:       "device.command.v1.DeviceCommandService",
-			Method:        "IssueCommand",
 			PbImportPath:  "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1",
 			PbAlias:       "grpc0",
 		}},
@@ -375,18 +368,19 @@ func TestBuildGrpcServicesFromSlices_SkipAndError(t *testing.T) {
 }
 
 // TestValidateGrpcContractEndpoint_Guards exercises the individual guards added
-// to validateGrpcContractEndpoint: traversal path rejection and empty Method.
+// to validateGrpcContractEndpoint: traversal path rejection and empty service.
+// The method field was removed in #1655 (service-level granularity); the proto
+// file is now the single source of truth for the method set.
 func TestValidateGrpcContractEndpoint_Guards(t *testing.T) {
 	t.Parallel()
 
-	baseGRPC := func(service, method, proto string) *metadata.ContractMeta {
+	baseGRPC := func(service, proto string) *metadata.ContractMeta {
 		return &metadata.ContractMeta{
 			ID:   "grpc.device.command.v1",
 			Kind: "grpc",
 			Endpoints: metadata.EndpointsMeta{
 				GRPC: &metadata.GRPCTransportMeta{
 					Service: service,
-					Method:  method,
 					Proto:   proto,
 				},
 			},
@@ -400,18 +394,13 @@ func TestValidateGrpcContractEndpoint_Guards(t *testing.T) {
 	}{
 		{
 			name:     "traversal path rejected",
-			contract: baseGRPC("device.command.v1.DeviceCommandService", "IssueCommand", "contracts/grpc/../../../etc/x"),
+			contract: baseGRPC("device.command.v1.DeviceCommandService", "contracts/grpc/../../../etc/x"),
 			wantErr:  "local path",
 		},
 		{
 			name:     "path outside contracts/grpc/ rejected",
-			contract: baseGRPC("device.command.v1.DeviceCommandService", "IssueCommand", "etc/passwd"),
+			contract: baseGRPC("device.command.v1.DeviceCommandService", "etc/passwd"),
 			wantErr:  "rooted under",
-		},
-		{
-			name:     "empty Method rejected",
-			contract: baseGRPC("device.command.v1.DeviceCommandService", "", "contracts/grpc/device/command/v1/device_command.proto"),
-			wantErr:  "method",
 		},
 	}
 
@@ -449,7 +438,6 @@ func TestEnrichGrpcServicesWithProtoInfo_ErrorPath(t *testing.T) {
 				RegisterFunc: "RegisterDeviceCommandServiceServer",
 				ProtoRel:     "contracts/grpc/device/command/v1/does_not_exist.proto",
 				Service:      "device.command.v1.DeviceCommandService",
-				Method:       "IssueCommand",
 			},
 		},
 	}

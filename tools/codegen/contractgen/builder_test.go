@@ -518,10 +518,12 @@ func TestBuildContractSpec_ProjectionKind_Skips(t *testing.T) {
 
 // TestBuildContractSpec_GRPCKind_ProtoTypedInterface verifies that a kind=grpc
 // contract projects endpoints.grpc into spec.GRPC with the derived Go interface
-// name ("Server") + the proto method name, resolves the proto-typed fields from
-// the .proto go_package option + rpc declaration, leaves HTTP/event fields nil,
-// and resolves the generated package path/name kind-generically. Uses the
-// committed synth_grpc_minimal fixture as the root so the proto resolves.
+// name ("Server"), enumerates all RPC methods from the .proto file into
+// spec.GRPC.Methods, resolves proto-typed fields (import path, alias) from the
+// .proto go_package option, leaves HTTP/event fields nil, and resolves the
+// generated package path/name kind-generically. The proto is the single source
+// of truth for the method set (#1655). Uses the committed synth_grpc_minimal
+// fixture (one RPC: IssueCommand) as the root so the proto resolves.
 func TestBuildContractSpec_GRPCKind_ProtoTypedInterface(t *testing.T) {
 	t.Parallel()
 	root, err := filepath.Abs(filepath.Join("testdata", "synth", "synth_grpc_minimal"))
@@ -540,7 +542,6 @@ func TestBuildContractSpec_GRPCKind_ProtoTypedInterface(t *testing.T) {
 					Server: "devicecell",
 					GRPC: &metadata.GRPCTransportMeta{
 						Service: "device.command.v1.DeviceCommandService",
-						Method:  "IssueCommand",
 						Proto:   "contracts/grpc/device/command/v1/device_command.proto",
 					},
 				},
@@ -566,9 +567,6 @@ func TestBuildContractSpec_GRPCKind_ProtoTypedInterface(t *testing.T) {
 	if spec.GRPC.InterfaceName != "Server" {
 		t.Errorf("spec.GRPC.InterfaceName = %q, want %q", spec.GRPC.InterfaceName, "Server")
 	}
-	if spec.GRPC.MethodName != "IssueCommand" {
-		t.Errorf("spec.GRPC.MethodName = %q, want %q", spec.GRPC.MethodName, "IssueCommand")
-	}
 	if spec.GRPC.ServiceFQN != "device.command.v1.DeviceCommandService" {
 		t.Errorf("spec.GRPC.ServiceFQN = %q, want %q", spec.GRPC.ServiceFQN, "device.command.v1.DeviceCommandService")
 	}
@@ -581,8 +579,19 @@ func TestBuildContractSpec_GRPCKind_ProtoTypedInterface(t *testing.T) {
 	if spec.GRPC.ProtoAlias != "commandv1" {
 		t.Errorf("spec.GRPC.ProtoAlias = %q, want %q", spec.GRPC.ProtoAlias, "commandv1")
 	}
-	if spec.GRPC.RequestType != "IssueCommandRequest" || spec.GRPC.ResponseType != "IssueCommandResponse" {
-		t.Errorf("spec.GRPC req/resp = %q/%q", spec.GRPC.RequestType, spec.GRPC.ResponseType)
+	// The .proto is the single source of truth for the method set (#1655).
+	// synth_grpc_minimal declares one RPC: IssueCommand.
+	if len(spec.GRPC.Methods) != 1 {
+		t.Fatalf("spec.GRPC.Methods len = %d, want 1; got %+v", len(spec.GRPC.Methods), spec.GRPC.Methods)
+	}
+	if spec.GRPC.Methods[0].MethodName != "IssueCommand" {
+		t.Errorf("spec.GRPC.Methods[0].MethodName = %q, want %q", spec.GRPC.Methods[0].MethodName, "IssueCommand")
+	}
+	if spec.GRPC.Methods[0].RequestType != "IssueCommandRequest" {
+		t.Errorf("spec.GRPC.Methods[0].RequestType = %q, want %q", spec.GRPC.Methods[0].RequestType, "IssueCommandRequest")
+	}
+	if spec.GRPC.Methods[0].ResponseType != "IssueCommandResponse" {
+		t.Errorf("spec.GRPC.Methods[0].ResponseType = %q, want %q", spec.GRPC.Methods[0].ResponseType, "IssueCommandResponse")
 	}
 	if spec.PackageName != "command" {
 		t.Errorf("spec.PackageName = %q, want %q", spec.PackageName, "command")
@@ -645,70 +654,30 @@ func TestBuildContractSpec_GRPCKind_MissingEndpoint(t *testing.T) {
 	}
 }
 
-// TestBuildContractSpec_GRPCKind_NonUnaryRejected verifies the PR-10 deferral:
-// a non-unary streamingType is rejected rather than emitting a misleading unary
-// signature.
-func TestBuildContractSpec_GRPCKind_NonUnaryRejected(t *testing.T) {
-	t.Parallel()
-	for _, st := range []string{"server-stream", "client-stream", "bidi"} {
-		t.Run(st, func(t *testing.T) {
-			t.Parallel()
-			p := &metadata.ProjectMeta{
-				Contracts: map[string]*metadata.ContractMeta{
-					"grpc.device.watch.v1": {
-						ID:         "grpc.device.watch.v1",
-						Kind:       "grpc",
-						Codegen:    true,
-						Transports: []string{"grpc"}, // mirrors parser defaultTransportsForKind("grpc")
-						File:       "contracts/grpc/device/watch/v1/contract.yaml",
-						Endpoints: metadata.EndpointsMeta{
-							Server: "devicecell",
-							GRPC: &metadata.GRPCTransportMeta{
-								Service:       "device.watch.v1.DeviceWatchService",
-								Method:        "WatchCommands",
-								Proto:         "contracts/grpc/device/watch/v1/device_watch.proto",
-								StreamingType: st,
-							},
-						},
-					},
-				},
-			}
-			_, err := buildContractSpec("", p, "grpc.device.watch.v1")
-			if err == nil {
-				t.Fatalf("buildContractSpec should reject non-unary streamingType %q (PR-10 deferral)", st)
-			}
-		})
-	}
-}
-
 // TestBuildContractSpec_GRPCKind_RejectsMalformed exercises the fail-closed
 // buildGRPCSpec guards (the golden path does not run governance FMT-37, so these
-// are the funnel's own defense). Empty service/method, a method that is not an
-// exported Go identifier (keyword "func", lower-case "issueCommand", dashed
-// "issue-command"), an empty proto path, a proto path not rooted under
-// metadata.GRPCProtoPathPrefix, and a control character (newline) in service or
-// proto — each must error rather than emit a silently-broken or injected stub.
-// The empty/outside-prefix proto cases mirror governance FMT-37
-// (validateFMT37Proto) so the codegen funnel rejects the same proto paths the
-// governance rule would, even though codegen does not run FMT-37.
+// are the funnel's own defense). Empty service, an empty proto path, a proto
+// path not rooted under metadata.GRPCProtoPathPrefix, and a control character
+// (newline) in service or proto — each must error rather than emit a
+// silently-broken or injected stub. The empty/outside-prefix proto cases mirror
+// governance FMT-37 (validateFMT37Proto) so the codegen funnel rejects the same
+// proto paths the governance rule would, even though codegen does not run FMT-37.
+// Method/streamingType validation cases were removed in #1655: the .proto file
+// is now the single source of truth for the RPC method set.
 func TestBuildContractSpec_GRPCKind_RejectsMalformed(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name string
 		grpc metadata.GRPCTransportMeta
 	}{
-		{"empty service", metadata.GRPCTransportMeta{Service: "", Method: "IssueCommand", Proto: "contracts/grpc/d/c/v1/c.proto"}},
-		{"empty method", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Method: "", Proto: "contracts/grpc/d/c/v1/c.proto"}},
-		{"keyword method", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Method: "func", Proto: "contracts/grpc/d/c/v1/c.proto"}},
-		{"unexported method", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Method: "issueCommand", Proto: "contracts/grpc/d/c/v1/c.proto"}},
-		{"dashed method", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Method: "issue-command", Proto: "contracts/grpc/d/c/v1/c.proto"}},
-		{"empty proto", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Method: "IssueCommand", Proto: ""}},
-		{"proto outside prefix", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Method: "IssueCommand", Proto: "proto/d/c/v1/c.proto"}},
+		{"empty service", metadata.GRPCTransportMeta{Service: "", Proto: "contracts/grpc/d/c/v1/c.proto"}},
+		{"empty proto", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Proto: ""}},
+		{"proto outside prefix", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Proto: "proto/d/c/v1/c.proto"}},
 		{"newline in service", metadata.GRPCTransportMeta{
-			Service: "S\nimport \"os\"", Method: "IssueCommand", Proto: "contracts/grpc/d/c/v1/c.proto",
+			Service: "S\nimport \"os\"", Proto: "contracts/grpc/d/c/v1/c.proto",
 		}},
 		{"newline in proto", metadata.GRPCTransportMeta{
-			Service: "d.c.v1.S", Method: "IssueCommand", Proto: "contracts/grpc/d/c/v1/c.proto\nvar _ = 1",
+			Service: "d.c.v1.S", Proto: "contracts/grpc/d/c/v1/c.proto\nvar _ = 1",
 		}},
 	}
 	for _, tc := range cases {

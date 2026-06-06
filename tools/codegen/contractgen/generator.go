@@ -140,7 +140,7 @@ func Generate(root string, p *metadata.ProjectMeta, opts Options) (Result, error
 		return res, err
 	}
 
-	// Cross-contract gate: (proto package, service, method) global uniqueness +
+	// Cross-contract gate: (proto package, service) global uniqueness +
 	// single import path per proto service. Scans ALL grpc contracts (not just
 	// the selected scope) so collisions surface regardless of scope. Iterates the
 	// empty set until the first real grpc contract lands (PR 8).
@@ -158,7 +158,7 @@ func Generate(root string, p *metadata.ProjectMeta, opts Options) (Result, error
 
 // checkGRPCProtoCollisions builds a protoRegistry from every grpc contract in p
 // (reading each .proto for package/import identity) and fails fast on a
-// duplicate (proto package, service, method) or a divergent import path for the
+// duplicate (proto package, service) or a divergent import path for the
 // same proto service. The single source of proto identity is the .proto file
 // (GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01); this re-reads the protos that
 // buildGRPCSpec also reads (codegen is not a hot path), keeping the
@@ -185,11 +185,11 @@ func checkGRPCProtoCollisions(root string, p *metadata.ProjectMeta) error {
 		if err := validateGRPCProtoPath(id, g.Proto); err != nil {
 			return err
 		}
-		info, err := ReadProtoTypeInfo(filepath.Join(root, filepath.FromSlash(g.Proto)), g.Service, g.Method)
+		info, err := ReadProtoServiceInfo(filepath.Join(root, filepath.FromSlash(g.Proto)), g.Service)
 		if err != nil {
 			return fmt.Errorf("contract %q: %w", id, err)
 		}
-		if err := reg.register(id, g.Service, g.Method, info); err != nil {
+		if err := reg.register(id, g.Service, info); err != nil {
 			return err
 		}
 	}

@@ -43,6 +43,8 @@ import (
 //
 // ref: grpc/grpc-go protoc-gen-go-grpc {Service}Server interface
 type {{.GRPC.InterfaceName}} interface {
-	{{.GRPC.MethodName}}(ctx context.Context, req *{{.GRPC.ProtoAlias}}.{{.GRPC.RequestType}}) (*{{.GRPC.ProtoAlias}}.{{.GRPC.ResponseType}}, error)
+{{- range .GRPC.Methods}}
+	{{.MethodName}}(ctx context.Context, req *{{$.GRPC.ProtoAlias}}.{{.RequestType}}) (*{{$.GRPC.ProtoAlias}}.{{.ResponseType}}, error)
+{{- end}}
 }
 {{- end}}

@@ -15,23 +15,27 @@ Phase 1 walkthrough. The reader has finished PR 8 (first end-to-end usable handl
 Create `contracts/grpc/<domain>/<version>/contract.yaml`:
 
 ```yaml
-id: grpc.todoorder.command.v1.CreateOrder
+id: grpc.todoorder.command.v1.OrderCommandService
 kind: grpc
 version: v1
 owner: todoorder
 description: Create a new order via internal RPC
 
-grpc:
-  service: todoorder.command.v1.OrderCommandService
-  method: CreateOrder
-  streamingType: unary
-  proto: contracts/grpc/todoorder/command/v1/order_command.proto
-  auth:
-    public: false   # service-to-service only
+endpoints:
+  server: todoorder
+  clients: []
+  grpc:
+    service: todoorder.command.v1.OrderCommandService
+    proto: contracts/grpc/todoorder/command/v1/order_command.proto
+# Note: the grpc block lives under `endpoints.grpc` (parallel to endpoints.http), not
+# top-level. `method` and `streamingType` fields were removed in #1655 (service-level
+# granularity); the method set and streaming kind derive from the .proto file (single
+# source of truth). Per-RPC `auth.public` was also removed — service-level couldn't
+# express per-method auth; per-method auth is deferred to #1675.
 
 verify:
   contract:
-    - contract.grpc.todoorder.command.v1.CreateOrder
+    - contract.grpc.todoorder.command.v1.OrderCommandService
 ```
 
 Create the proto file `contracts/grpc/todoorder/command/v1/order_command.proto`:
@@ -69,12 +73,12 @@ Update the cell's `slice.yaml` to add the contractUsage. Both `provider` (the ce
 id: ordercommand
 belongsToCell: todoorder
 contractUsages:
-  - contract: grpc.todoorder.command.v1.CreateOrder
+  - contract: grpc.todoorder.command.v1.OrderCommandService
     role: serve              # NEW: serve / call (analogous to http server / clients)
-    handler: CreateOrder     # method name on the generated interface
+    # field: orderCommandServer   # optional, only needed to disambiguate multiple *ordercommand.Service fields
 verify:
   contract:
-    - contract.grpc.todoorder.command.v1.CreateOrder.serve
+    - contract.grpc.todoorder.command.v1.OrderCommandService.serve
 ```
 
 For a consuming cell:
@@ -82,11 +86,11 @@ For a consuming cell:
 ```yaml
 # cells/todoorder/slices/orderconsumer/slice.yaml
 contractUsages:
-  - contract: grpc.todoorder.command.v1.CreateOrder
+  - contract: grpc.todoorder.command.v1.OrderCommandService
     role: call
 verify:
   contract:
-    - contract.grpc.todoorder.command.v1.CreateOrder.call
+    - contract.grpc.todoorder.command.v1.OrderCommandService.call
 ```
 
 ---
@@ -238,7 +242,7 @@ If `/readyz?verbose` shows `grpc_ready: ok` and `/metrics` reports `grpc_server_
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `gocell generate cell` reports `no cell.go struct field for serving slice` | Missing `*ordercommand.Service` field on cell struct | Add the field (Step 3) |
-| `gocell validate` rejects `kind: grpc` | Pre-PR-1 build, or contract.yaml missing required fields | Upgrade to PR 1+ build; ensure `grpc.service`, `grpc.method`, `grpc.proto` all set |
+| `gocell validate` rejects `kind: grpc` | Pre-PR-1 build, or contract.yaml missing required fields | Upgrade to PR 1+ build; ensure `grpc.service` and `grpc.proto` are set (`grpc.method` was removed in #1655 — service-level granularity) |
 | `make proto-gen` fails with `package mismatch` | `option go_package` not aligned with `generated/contracts/grpc/...` layout | Match the `go_package` to `generated/contracts/grpc/{domain}/{version};{shortname}v1` |
 | `grpc.Server.Serve()` returns immediately at boot | Listener bind failed (port collision) | Check `/readyz?verbose`; the `grpc_ready` probe surfaces the bind error |
-| Cell label shows `_runtime` instead of `todoorder` | Method not registered through generated `methods_gen.go` (hand-rolled `RegisterServer`) | Use `reg.GRPCService(...)` only; archtest `GRPC-METHOD-IN-CONTRACT-01` would normally catch this — check whether it was bypassed |
+| Cell label shows `_runtime` instead of `todoorder` | Service not registered through generated `cell_gen.go` (hand-rolled `RegisterServer`) | Use generated `reg.GRPCService(...)` wiring only; archtest `GRPC-SERVICE-IN-CONTRACT-01` would normally catch this — check whether it was bypassed |

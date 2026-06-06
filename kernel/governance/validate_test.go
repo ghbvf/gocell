@@ -2266,7 +2266,6 @@ func TestFMT37(t *testing.T) {
 	grpcContract := func(mutate func(*metadata.GRPCTransportMeta)) *metadata.ContractMeta {
 		g := &metadata.GRPCTransportMeta{
 			Service: "access.session.v1.SessionVerifyService",
-			Method:  "Verify",
 			Proto:   validProto,
 		}
 		if mutate != nil {
@@ -2303,26 +2302,6 @@ func TestFMT37(t *testing.T) {
 			wantCount: 0,
 		},
 		{
-			name: "full valid grpc block (with streamingType)",
-			setup: func(pm *metadata.ProjectMeta) {
-				pm.Contracts["grpc.access.session.verify.v1"] = grpcContract(func(g *metadata.GRPCTransportMeta) {
-					g.StreamingType = "server-stream"
-				})
-			},
-			wantCount: 0,
-		},
-		{
-			name: "explicit unary streamingType accepted",
-			setup: func(pm *metadata.ProjectMeta) {
-				pm.Contracts["grpc.access.session.verify.v1"] = grpcContract(func(g *metadata.GRPCTransportMeta) {
-					// "unary" is a real enum member, distinct from the omitted
-					// default — both must be accepted (see GRPCStreamingTypeEnum).
-					g.StreamingType = "unary"
-				})
-			},
-			wantCount: 0,
-		},
-		{
 			name: "minimal valid grpc block (streamingType omitted)",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["grpc.access.session.verify.v1"] = grpcContract(nil)
@@ -2352,17 +2331,6 @@ func TestFMT37(t *testing.T) {
 			wantField: "endpoints.grpc.service",
 		},
 		{
-			name: "grpc missing method",
-			setup: func(pm *metadata.ProjectMeta) {
-				pm.Contracts["grpc.access.session.verify.v1"] = grpcContract(func(g *metadata.GRPCTransportMeta) {
-					g.Method = ""
-				})
-			},
-			wantCount: 1,
-			wantIssue: IssueRequired,
-			wantField: "endpoints.grpc.method",
-		},
-		{
 			name: "grpc missing proto",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["grpc.access.session.verify.v1"] = grpcContract(func(g *metadata.GRPCTransportMeta) {
@@ -2385,23 +2353,12 @@ func TestFMT37(t *testing.T) {
 			wantField: "endpoints.grpc.proto",
 		},
 		{
-			name: "grpc invalid streamingType rejected",
-			setup: func(pm *metadata.ProjectMeta) {
-				pm.Contracts["grpc.access.session.verify.v1"] = grpcContract(func(g *metadata.GRPCTransportMeta) {
-					g.StreamingType = "duplex"
-				})
-			},
-			wantCount: 1,
-			wantIssue: IssueInvalid,
-			wantField: "endpoints.grpc.streamingType",
-		},
-		{
 			name: "non-grpc contract declaring endpoints.grpc rejected",
 			setup: func(pm *metadata.ProjectMeta) {
 				// http.auth.login.v1 is a valid http contract in validProject();
 				// graft a grpc block onto it — FMT-37 must reject the foreign block.
 				pm.Contracts["http.auth.login.v1"].Endpoints.GRPC = &metadata.GRPCTransportMeta{
-					Service: "x.v1.S", Method: "M", Proto: validProto,
+					Service: "x.v1.S", Proto: validProto,
 				}
 			},
 			wantCount: 1,
@@ -2412,10 +2369,10 @@ func TestFMT37(t *testing.T) {
 			name: "multiple missing fields → one finding each",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["grpc.access.session.verify.v1"] = grpcContract(func(g *metadata.GRPCTransportMeta) {
-					g.Service, g.Method, g.Proto = "", "", ""
+					g.Service, g.Proto = "", ""
 				})
 			},
-			wantCount: 3,
+			wantCount: 2,
 			wantIssue: IssueRequired,
 		},
 	}
@@ -2462,7 +2419,6 @@ func TestFMT37Proto_TraversalAndControlRune(t *testing.T) {
 				Clients: []string{metadatatest.CellIDSvcB},
 				GRPC: &metadata.GRPCTransportMeta{
 					Service: "access.session.v1.SessionVerifyService",
-					Method:  "Verify",
 					Proto:   proto,
 				},
 			},
@@ -2548,8 +2504,8 @@ func TestFMT39(t *testing.T) {
 		case "grpc":
 			c.Endpoints.Server = metadatatest.CellIDAccessCore
 			c.Endpoints.GRPC = &metadata.GRPCTransportMeta{
-				Service: "test.v1.TestService", Method: "Do",
-				Proto: "contracts/grpc/test/v1/test.proto",
+				Service: "test.v1.TestService",
+				Proto:   "contracts/grpc/test/v1/test.proto",
 			}
 		case "projection":
 			c.ConsistencyLevel = "L3"

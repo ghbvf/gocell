@@ -148,7 +148,7 @@ Phase 0 ran three parallel explorer agents (ship-style). Findings are consolidat
 | Proto file location | `contracts/grpc/{domain}/{version}/*.proto` | Parallel to existing `contracts/http/`; preserves single-SoR rule | `proto/` root (parallel SoR, breaks contracts/ ownership) |
 | Codegen pattern | Extend `tools/codegen/contractgen` with `kind=grpc` branch | Single entrypoint preserved; reuse spec/builder/render layering; golden + regenerate-and-diff applies | New `tools/codegen/grpcgen` (parallel toolchain to maintain) |
 | Service registration | `reg.GRPCService(...)` parallel to `reg.RouteGroup`; bootstrap phase5 drain | Matches existing Registry builder pattern; lifecycle-safe (Init declares intent, bootstrap mounts) | grpc-go-native `RegisterXxxServer` direct call (bypasses Registry; breaks Init/Serve lifecycle); Kratos-style transport-merge ListenerAuth (more invasive) |
-| Cell attribution source | grpc `FullMethod` → cellID map maintained by codegen-generated `RegisterXxxServer` wrapper | Single source from contract.yaml; archtest `GRPC-METHOD-IN-CONTRACT-01` enforces | Manual map (two SoRs); ctxkey-only (no compile-time guarantee) |
+| Cell attribution source | grpc `FullMethod` → cellID map maintained by codegen-generated `RegisterXxxServer` wrapper | Single source from contract.yaml; archtest `GRPC-SERVICE-IN-CONTRACT-01` enforces (service-level granularity per ADR D5 / #1655) | Manual map (two SoRs); ctxkey-only (no compile-time guarantee) |
 | errcode → grpc/codes mapping | Explicit table (see §research.md §3) inside `runtime/grpc/interceptor/errcode_mapping.go`; ADR-fixed | Removes ambiguity; archtest `GRPC-ERRCODE-MAPPING-01` ensures exhaustive coverage | Implicit `status.FromError` fallback (silently maps unknown Kinds to `Unknown`) |
 | readyz probe shape | New typed const `grpc_ready` via `kernel/healthz.ReadyProbeName` funnel | Mirrors `postgres_ready`, `rabbitmq_ready`; no naming improvisation | Reuse `http_ready` (different failure domain; would mask gRPC outage when HTTP healthy) |
 | Streaming initial scope | PR 10: server-stream + client-stream + bidi all together (after unary stable) | One streaming PR is testable as a unit; deferring further fragments the design | Split per pattern (PR fragmentation; bidi needs server+client base anyway) |
@@ -213,7 +213,7 @@ PR3 (adapters/grpc server) ── PR4 (interceptors) ── PR5 (bootstrap wirin
 
 ### PR 1 — kernel kind=grpc parse + contractspec extension
 
-- **Scope**: `kernel/metadata/contract.go` accepts `kind: grpc` and the `grpc:` subtree (service/method/stream/proto fields); `kernel/contractspec.ContractSpec` gains transport-specific fields; ADR `202605260000-adr-grpc-transport-adapter.md` records the decision.
+- **Scope**: `kernel/metadata/contract.go` accepts `kind: grpc` and the `endpoints.grpc` subtree (service/proto fields; method set and streaming kinds derive from `.proto` per ADR D5 / #1655); `kernel/contractspec.ContractSpec` gains transport-specific fields; ADR `202605260000-adr-grpc-transport-adapter.md` records the decision.
 - **Files**:
   - `kernel/metadata/contract.go` ~80
   - `kernel/metadata/contract_test.go` ~120
@@ -223,7 +223,7 @@ PR3 (adapters/grpc server) ── PR4 (interceptors) ── PR5 (bootstrap wirin
 - **TDD**: `contract_test.go` table-driven for grpc kind parse (valid/invalid); `contractspec_test.go` for `ContractSpec.GRPCInfo()` accessor & validation boundaries.
 - **archtest (same PR)**:
   - `CONTRACT-KINDS-CLOSED-SET-01` — extend closed set to include `grpc` (Hard: governance builder.go switch exhaustive)
-  - `GRPC-KIND-PARSE-01` — `kind=grpc` requires `grpc.service` + `grpc.method` non-empty (Medium: AST scan of decode logic)
+  - `GRPC-KIND-PARSE-01` — `kind=grpc` requires `grpc.service` + `grpc.proto` non-empty (method field deleted in #1655; see ADR D4 — not added, D5 — method field removed)
 - **Est.**: 440 lines
 - **Risk**: downstream exhaustive `switch contract.Kind` callsites — grep-verified at PR-1 time; any missed case is a same-PR fix (no follow-up PR).
 
@@ -339,7 +339,7 @@ PR3 (adapters/grpc server) ── PR4 (interceptors) ── PR5 (bootstrap wirin
 - **TDD**: handler unit (direct call); cell integration (bufconn dial + Invoke)
 - **archtest**:
   - `LAYER-06` — extend cell-owned subpackage scope to grpc slice (consistency check)
-  - `GRPC-METHOD-IN-CONTRACT-01` (Hard: registered grpc methods MUST appear in contract.yaml — generated registrar derives the map, no hand-registration)
+  - `GRPC-SERVICE-IN-CONTRACT-01` (Hard: registered grpc **service**'s ContractID ∈ declared grpc contracts; the generated registrar derives the whole-service map — no hand-registration; service-level granularity per ADR D5 / #1655)
 - **Est.**: 560 lines
 - **Risk**: this is the integration acid test — any earlier API gap surfaces here. Buffer reserved for same-PR API refinement (max 1–2 packages re-touched without exceeding 2000-line cap).
 

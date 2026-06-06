@@ -92,16 +92,10 @@ type GrpcServiceGenSpec struct {
 	// Service is the proto fully-qualified service name,
 	// e.g. "device.command.v1.DeviceCommandService".
 	// Retained for proto-info resolution (EnrichGrpcServicesWithProtoInfo passes
-	// it to contractgen.ReadProtoTypeInfo) and is NOT rendered directly into
+	// it to contractgen.ReadProtoServiceInfo) and is NOT rendered directly into
 	// cell_gen.go; only RegisterFunc/PbAlias/HandlerField/ContractID/ListenerConst
 	// appear in the generated output.
 	Service string
-	// Method is the proto RPC method name, e.g. "IssueCommand".
-	// Retained for proto-registry lookup via contractgen.ReadProtoTypeInfo
-	// (resolves request/response types) and is NOT rendered directly into
-	// cell_gen.go; only RegisterFunc/PbAlias/HandlerField/ContractID/ListenerConst
-	// appear in the generated output.
-	Method string
 	// PbImportPath is the Go import path of the generated proto package.
 	// Populated by EnrichGrpcServicesWithProtoInfo (post-build, FS-derived).
 	PbImportPath string

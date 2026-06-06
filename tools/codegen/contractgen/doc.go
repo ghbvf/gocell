@@ -72,7 +72,7 @@
 // `Handle{Topic}(ctx, *Payload) error`. For grpc contracts the signature is
 // `{Method}(ctx, *pb.{Request}) (*pb.{Response}, error)` on a `Server`
 // interface — the proto-generated message types + import path are resolved from
-// the .proto go_package option + rpc declaration (readProtoTypeInfo). types_gen.go
+// the .proto go_package option + rpc declarations (ReadProtoServiceInfo). types_gen.go
 // carries no DTOs for grpc (proto is the schema); GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01
 // (grpc_proto_registry_test.go) locks that the emitted import path comes only
 // from the proto, not a hand-written literal. For

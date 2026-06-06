@@ -1,0 +1,39 @@
+// Synth fixture proto for synth_grpc_multimethod (contractgen service-level
+// multi-method enumeration tests). Same module/package as synth_grpc_minimal
+// but declares TWO unary RPCs to exercise the service-level enumeration path
+// where the generator must render both IssueCommand and GetCommandStatus.
+// Consumed by the contractgen ProtoReader (go_package + rpc line scan), NOT by
+// buf/protoc — no .pb.go is produced here.
+
+syntax = "proto3";
+
+package device.command.v1;
+
+option go_package = "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1;commandv1";
+
+service DeviceCommandService {
+  // IssueCommand pushes a state change to a device.
+  rpc IssueCommand(IssueCommandRequest) returns (IssueCommandResponse) {}
+  // GetCommandStatus retrieves the current status of an issued command.
+  rpc GetCommandStatus(GetCommandStatusRequest) returns (GetCommandStatusResponse) {}
+}
+
+message IssueCommandRequest {
+  string device_id    = 1;
+  string command_type = 2;
+  bytes  payload      = 3;
+}
+
+message IssueCommandResponse {
+  string ack_id                    = 1;
+  int64  acknowledged_at_unix_nano = 2;
+}
+
+message GetCommandStatusRequest {
+  string ack_id = 1;
+}
+
+message GetCommandStatusResponse {
+  string status  = 1;
+  int64  updated_at_unix_nano = 2;
+}

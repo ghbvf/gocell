@@ -1,12 +1,18 @@
-// INVARIANT: GRPC-METHOD-IN-CONTRACT-01
+// INVARIANT: GRPC-SERVICE-IN-CONTRACT-01
 //
-// GRPC-METHOD-IN-CONTRACT-01 — reg.GRPCService caller allowlist + contract
+// GRPC-SERVICE-IN-CONTRACT-01 — reg.GRPCService caller allowlist + contract
 // bidirectional coverage.
 //
-// # IMPORTANT — service-level vs method-level granularity
+// # Service-level granularity (formal, decided)
 //
-// This invariant operates at the SERVICE / CONTRACT level, NOT the per-RPC
-// method level. The generated cellgen call is:
+// This invariant operates at the SERVICE / CONTRACT level. This is the formal,
+// decided granularity for gRPC contract enforcement in GoCell (ref: ADR
+// docs/architecture/202605260000-adr-grpc-transport-adapter.md Amendment D5;
+// issue #1655). The contract declares a proto SERVICE and codegen enumerates all
+// its RPCs; the A/B/C checks enforce "registered grpc service's ContractID ∈
+// declared grpc contracts" at service/contract granularity.
+//
+// The generated cellgen call is:
 //
 //	reg.GRPCService(cell.GRPCServiceSpec{ContractID: "grpc.foo.v1", ...})
 //
@@ -18,9 +24,8 @@
 // Consequence: the A/B/C enforcement here checks "registered grpc service's
 // ContractID ∈ declared grpc contracts" — it does NOT guarantee that every
 // individual RPC method ∈ a specific contract-declared method entry. The
-// per-method coverage gap is a deferred design decision tracked at
-// gh #1655 (sub-issue of epic #1099); until that issue is resolved the
-// archtest ID stays GRPC-METHOD-IN-CONTRACT-01 (renaming is churn).
+// service-level contract declaration is the single source of truth; codegen
+// derives the per-method registration from it.
 //
 // This rule has three sub-checks (A, B, C):
 //
@@ -78,7 +83,7 @@
 //
 //   - B1. Function-value indirection (`f := reg.GRPCService; f(spec)`): the
 //     CallExpr Fun is an *ast.Ident → *types.Var, invisible to ResolveMethodCall.
-//     Covered by TestGRPCMethodInContract01_ReverseBlindSpot_NoFuncValue.
+//     Covered by TestGRPCServiceInContract01_ReverseBlindSpot_NoFuncValue.
 //   - B2. ContractID string built at runtime (fmt.Sprintf etc.) inside a
 //     generated cell_gen.go — EvaluateConstString returns ("", false) → the
 //     check is skipped (conservatively not flagging). In practice cellgen always
@@ -286,13 +291,13 @@ type sliceServeEntry struct {
 	ContractID    string
 }
 
-// TestGRPCMethodInContract01_A_CallerAllowlist enforces the A sub-check of
-// GRPC-METHOD-IN-CONTRACT-01: reg.GRPCService must only be called from _test.go
+// TestGRPCServiceInContract01_A_CallerAllowlist enforces the A sub-check of
+// GRPC-SERVICE-IN-CONTRACT-01: reg.GRPCService must only be called from _test.go
 // files or the cellgen DO-NOT-EDIT cell_gen.go.
 //
 // Status: vacuously green today (zero production GRPCService callsites); will
 // become load-bearing when #1151 adds the first kind:grpc cell.
-func TestGRPCMethodInContract01_A_CallerAllowlist(t *testing.T) {
+func TestGRPCServiceInContract01_A_CallerAllowlist(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
@@ -322,7 +327,7 @@ func TestGRPCMethodInContract01_A_CallerAllowlist(t *testing.T) {
 						Rel:  rel,
 						Line: p.Fset.Position(call.Pos()).Line,
 						Message: fmt.Sprintf(
-							"GRPC-METHOD-IN-CONTRACT-01/A: reg.GRPCService called from "+
+							"GRPC-SERVICE-IN-CONTRACT-01/A: reg.GRPCService called from "+
 								"non-allowlisted file %s (line %d). Only _test.go files and the "+
 								"cellgen DO-NOT-EDIT cell_gen.go may call GRPCService. cellgen "+
 								"derives these from slice.yaml contractUsages[role=serve] — "+
@@ -341,7 +346,7 @@ func TestGRPCMethodInContract01_A_CallerAllowlist(t *testing.T) {
 		}
 		return diags[i].Line < diags[j].Line
 	})
-	Report(t, "GRPC-METHOD-IN-CONTRACT-01/A", diags)
+	Report(t, "GRPC-SERVICE-IN-CONTRACT-01/A", diags)
 }
 
 // grpcRegRef describes a single reg.GRPCService call site extracted from a
@@ -357,8 +362,8 @@ type grpcRegRef struct {
 // found in generated cell_gen.go files, and returns one Diagnostic per
 // reference whose ContractID is absent from the known set.
 //
-// Both the production test (TestGRPCMethodInContract01_B_NoOrphanReg) and the
-// synthetic RED test (TestGRPCMethodInContract01_B_SyntheticOrphanReg) call
+// Both the production test (TestGRPCServiceInContract01_B_NoOrphanReg) and the
+// synthetic RED test (TestGRPCServiceInContract01_B_SyntheticOrphanReg) call
 // this function directly — the production test drives it via the packages.Load
 // code path; the synthetic test drives it via in-memory inputs.
 func detectOrphanRegs(knownGRPCContracts map[string]bool, regs []grpcRegRef) []Diagnostic {
@@ -368,7 +373,7 @@ func detectOrphanRegs(knownGRPCContracts map[string]bool, regs []grpcRegRef) []D
 			diags = append(diags, Diagnostic{
 				Rel: r.Rel,
 				Message: fmt.Sprintf(
-					"GRPC-METHOD-IN-CONTRACT-01/B: generated cell_gen.go references "+
+					"GRPC-SERVICE-IN-CONTRACT-01/B: generated cell_gen.go references "+
 						"ContractID %q which does not match any kind:grpc contract.yaml. "+
 						"Delete or regenerate the stale entry.",
 					r.ContractID,
@@ -384,8 +389,8 @@ func detectOrphanRegs(knownGRPCContracts map[string]bool, regs []grpcRegRef) []D
 // serve contractUsage, and returns one Diagnostic per active kind:grpc contract
 // with a non-empty endpoints.server that has no matching serve usage.
 //
-// Both the production test (TestGRPCMethodInContract01_C_NoOrphanContract) and
-// the synthetic RED test (TestGRPCMethodInContract01_C_SyntheticOrphanContract)
+// Both the production test (TestGRPCServiceInContract01_C_NoOrphanContract) and
+// the synthetic RED test (TestGRPCServiceInContract01_C_SyntheticOrphanContract)
 // call this function directly.
 func detectOrphanContracts(contracts []contractDoc, servedIDs map[string]bool) []Diagnostic {
 	var diags []Diagnostic
@@ -397,7 +402,7 @@ func detectOrphanContracts(contracts []contractDoc, servedIDs map[string]bool) [
 			diags = append(diags, Diagnostic{
 				Rel: c.FilePath,
 				Message: fmt.Sprintf(
-					"GRPC-METHOD-IN-CONTRACT-01/C: active kind:grpc contract %q has "+
+					"GRPC-SERVICE-IN-CONTRACT-01/C: active kind:grpc contract %q has "+
 						"endpoints.server=%q but no slice.yaml declares "+
 						"contractUsages[role=serve] referencing it. "+
 						"Add a serve contractUsage or set lifecycle to inactive.",
@@ -409,14 +414,14 @@ func detectOrphanContracts(contracts []contractDoc, servedIDs map[string]bool) [
 	return diags
 }
 
-// TestGRPCMethodInContract01_B_NoOrphanReg enforces the B sub-check of
-// GRPC-METHOD-IN-CONTRACT-01: every ContractID string found in a generated
+// TestGRPCServiceInContract01_B_NoOrphanReg enforces the B sub-check of
+// GRPC-SERVICE-IN-CONTRACT-01: every ContractID string found in a generated
 // cell_gen.go's reg.GRPCService call must resolve to a real kind:grpc contract.
 //
 // Status: vacuously green today (zero cell_gen.go GRPCService calls, zero
 // kind:grpc contracts). Will fire if a generated cell_gen.go references a
 // contract that has been deleted or renamed.
-func TestGRPCMethodInContract01_B_NoOrphanReg(t *testing.T) {
+func TestGRPCServiceInContract01_B_NoOrphanReg(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
@@ -454,7 +459,7 @@ func TestGRPCMethodInContract01_B_NoOrphanReg(t *testing.T) {
 	sort.Slice(diags, func(i, j int) bool {
 		return diags[i].Rel < diags[j].Rel
 	})
-	Report(t, "GRPC-METHOD-IN-CONTRACT-01/B", diags)
+	Report(t, "GRPC-SERVICE-IN-CONTRACT-01/B", diags)
 }
 
 // buildGRPCContractIDSet returns a set of contract IDs whose kind is "grpc".
@@ -468,15 +473,15 @@ func buildGRPCContractIDSet(contracts []contractDoc) map[string]bool {
 	return m
 }
 
-// TestGRPCMethodInContract01_C_NoOrphanContract enforces the C sub-check of
-// GRPC-METHOD-IN-CONTRACT-01: every active kind:grpc contract with a non-empty
+// TestGRPCServiceInContract01_C_NoOrphanContract enforces the C sub-check of
+// GRPC-SERVICE-IN-CONTRACT-01: every active kind:grpc contract with a non-empty
 // endpoints.server must have a slice.yaml contractUsage with role=serve
 // referencing its contract ID.
 //
 // Status: vacuously green today (zero kind:grpc contracts). Will fire if a
 // kind:grpc contract is declared active with a server endpoint but no cell
 // serves it.
-func TestGRPCMethodInContract01_C_NoOrphanContract(t *testing.T) {
+func TestGRPCServiceInContract01_C_NoOrphanContract(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping archtest in -short mode")
@@ -486,7 +491,7 @@ func TestGRPCMethodInContract01_C_NoOrphanContract(t *testing.T) {
 	contracts := loadReverseCoverageContracts(t)
 	serveUsages, err := loadSliceServeUsages(root)
 	if err != nil {
-		t.Fatalf("GRPC-METHOD-IN-CONTRACT-01/C: loadSliceServeUsages: %v", err)
+		t.Fatalf("GRPC-SERVICE-IN-CONTRACT-01/C: loadSliceServeUsages: %v", err)
 	}
 
 	// Build a set of (belongsToCell, contractID) serve pairs keyed by contractID.
@@ -496,7 +501,7 @@ func TestGRPCMethodInContract01_C_NoOrphanContract(t *testing.T) {
 	sort.Slice(diags, func(i, j int) bool {
 		return diags[i].Rel < diags[j].Rel
 	})
-	Report(t, "GRPC-METHOD-IN-CONTRACT-01/C", diags)
+	Report(t, "GRPC-SERVICE-IN-CONTRACT-01/C", diags)
 }
 
 // isActiveGRPCContractWithServer reports whether a contract is an active
@@ -517,14 +522,14 @@ func buildServedContractSet(usages []sliceServeEntry) map[string]bool {
 	return m
 }
 
-// TestGRPCMethodInContract01_B_SyntheticOrphanReg exercises detectOrphanRegs
+// TestGRPCServiceInContract01_B_SyntheticOrphanReg exercises detectOrphanRegs
 // on in-memory synthetic data to prove the diagnostic-producing branch is
 // reachable even when the repository has zero kind:grpc contracts (sub-check B
 // is vacuously green in production today).
 //
 // RED case: a reg reference to an unknown ContractID must produce a diagnostic.
 // GREEN case: a reg reference to a known ContractID must produce no diagnostic.
-func TestGRPCMethodInContract01_B_SyntheticOrphanReg(t *testing.T) {
+func TestGRPCServiceInContract01_B_SyntheticOrphanReg(t *testing.T) {
 	t.Parallel()
 
 	known := map[string]bool{
@@ -553,7 +558,7 @@ func TestGRPCMethodInContract01_B_SyntheticOrphanReg(t *testing.T) {
 		"detectOrphanRegs: known ContractID must produce no diagnostic")
 }
 
-// TestGRPCMethodInContract01_C_SyntheticOrphanContract exercises
+// TestGRPCServiceInContract01_C_SyntheticOrphanContract exercises
 // detectOrphanContracts on in-memory synthetic data to prove the
 // diagnostic-producing branch is reachable even when the repository has zero
 // kind:grpc contracts (sub-check C is vacuously green in production today).
@@ -562,7 +567,7 @@ func TestGRPCMethodInContract01_B_SyntheticOrphanReg(t *testing.T) {
 // usage must produce a diagnostic.
 // GREEN case: an active kind:grpc contract WITH a matching serve usage must
 // produce no diagnostic.
-func TestGRPCMethodInContract01_C_SyntheticOrphanContract(t *testing.T) {
+func TestGRPCServiceInContract01_C_SyntheticOrphanContract(t *testing.T) {
 	t.Parallel()
 
 	contracts := []contractDoc{
@@ -591,25 +596,25 @@ func TestGRPCMethodInContract01_C_SyntheticOrphanContract(t *testing.T) {
 		"detectOrphanContracts: served active grpc contract must produce no diagnostic")
 }
 
-// TestGRPCMethodInContract01_B_ASTExtractionRED proves that the real
+// TestGRPCServiceInContract01_B_ASTExtractionRED proves that the real
 // extractGRPCContractIDs AST extractor (banner filter + basename check +
 // ContractID literal extraction) correctly surfaces a ContractID from the
 // violate fixture's cell_gen.go, and that detectOrphanRegs fires when that
 // ContractID is absent from the known-set.
 //
 // This covers the SCAN/EXTRACTION layer (packages.Load → Pass → AST walk),
-// not just the pure detectOrphanRegs logic that TestGRPCMethodInContract01_B_SyntheticOrphanReg
+// not just the pure detectOrphanRegs logic that TestGRPCServiceInContract01_B_SyntheticOrphanReg
 // already exercises. A bug in extractGRPCContractIDs (banner check / basename
 // filter / ContractID literal resolution) would be caught here but not in the
 // synthetic test.
-func TestGRPCMethodInContract01_B_ASTExtractionRED(t *testing.T) {
+func TestGRPCServiceInContract01_B_ASTExtractionRED(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
 	root := findModuleRoot(t)
-	fixtureDir := filepath.Join(root, "tools", "archtest", "testdata", "grpc_method_in_contract_violate")
+	fixtureDir := filepath.Join(root, "tools", "archtest", "testdata", "grpc_service_in_contract_violate")
 
 	// Run the real extractor over the violate fixture module.
 	var extracted []grpcRegRef
@@ -645,12 +650,12 @@ func TestGRPCMethodInContract01_B_ASTExtractionRED(t *testing.T) {
 		"B AST extraction RED: detectOrphanRegs must fire for every extracted ContractID "+
 			"when known-set is empty")
 	for _, d := range diags {
-		assert.Contains(t, d.Message, "GRPC-METHOD-IN-CONTRACT-01/B",
+		assert.Contains(t, d.Message, "GRPC-SERVICE-IN-CONTRACT-01/B",
 			"diagnostic must carry the sub-check ID")
 	}
 }
 
-// TestGRPCMethodInContract01_C_YAMLScanRED proves that the real contract-YAML
+// TestGRPCServiceInContract01_C_YAMLScanRED proves that the real contract-YAML
 // loader (loadContractDocs) and serve-usage scanner (loadSliceServeUsages)
 // correctly identify an active kind:grpc contract with no serving slice.yaml,
 // and that detectOrphanContracts fires for it.
@@ -658,11 +663,11 @@ func TestGRPCMethodInContract01_B_ASTExtractionRED(t *testing.T) {
 // This covers the SCAN/EXTRACTION layer (YAML parse + DirsScope walk), not
 // just the pure detectOrphanContracts logic. A bug in the YAML parser, the
 // isActiveGRPCContractWithServer predicate, or the DirsScope walk would be
-// caught here but not in TestGRPCMethodInContract01_C_SyntheticOrphanContract.
+// caught here but not in TestGRPCServiceInContract01_C_SyntheticOrphanContract.
 //
 // Fixture: testdata/grpc_orphan_contract/contracts/grpc/fixture/v1/contract.yaml
 // — kind:grpc, lifecycle:active, endpoints.server:fixturecell, no serving slice.
-func TestGRPCMethodInContract01_C_YAMLScanRED(t *testing.T) {
+func TestGRPCServiceInContract01_C_YAMLScanRED(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping archtest in -short mode")
@@ -701,26 +706,26 @@ func TestGRPCMethodInContract01_C_YAMLScanRED(t *testing.T) {
 		"C YAML scan RED: detectOrphanContracts must fire for the unserved active "+
 			"kind:grpc contract in the fixture (grpc.fixture.orphan.v1)")
 	for _, d := range diags {
-		assert.Contains(t, d.Message, "GRPC-METHOD-IN-CONTRACT-01/C",
+		assert.Contains(t, d.Message, "GRPC-SERVICE-IN-CONTRACT-01/C",
 			"diagnostic must carry the sub-check ID")
 		assert.Contains(t, d.Message, "grpc.fixture.orphan.v1",
 			"diagnostic must name the orphaned contract ID")
 	}
 }
 
-// TestGRPCMethodInContract01_ReverseFixture loads the synthetic violation
+// TestGRPCServiceInContract01_ReverseFixture loads the synthetic violation
 // fixture and asserts:
 //   - cell_gen.go (banner) is ALLOWED (no diagnostic)
 //   - a GRPCService call in healthz_gen.go (banner, wrong basename) FIRES
 //   - a GRPCService call in a non-generated rogue file FIRES
-func TestGRPCMethodInContract01_ReverseFixture(t *testing.T) {
+func TestGRPCServiceInContract01_ReverseFixture(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
 	root := findModuleRoot(t)
-	fixtureDir := filepath.Join(root, "tools", "archtest", "testdata", "grpc_method_in_contract_violate")
+	fixtureDir := filepath.Join(root, "tools", "archtest", "testdata", "grpc_service_in_contract_violate")
 
 	var diags []Diagnostic
 
@@ -767,11 +772,11 @@ func TestGRPCMethodInContract01_ReverseFixture(t *testing.T) {
 		"reg.GRPCService in a non-generated rogue file MUST fire")
 }
 
-// TestGRPCMethodInContract01_ReverseBlindSpot_NoFuncValue (blind spot B1)
+// TestGRPCServiceInContract01_ReverseBlindSpot_NoFuncValue (blind spot B1)
 // asserts no production non-test file holds a reg.GRPCService function value
 // (method expression assigned to a variable, not called), which would escape
 // the SelectorExpr call detection.
-func TestGRPCMethodInContract01_ReverseBlindSpot_NoFuncValue(t *testing.T) {
+func TestGRPCServiceInContract01_ReverseBlindSpot_NoFuncValue(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping archtest in -short mode")
@@ -824,7 +829,7 @@ func TestGRPCMethodInContract01_ReverseBlindSpot_NoFuncValue(t *testing.T) {
 					}
 					violations = append(violations, fmt.Sprintf(
 						"%s:%d: reg.GRPCService used as a function value (not a direct call) "+
-							"— would escape GRPC-METHOD-IN-CONTRACT-01/A detection (blind spot B1)",
+							"— would escape GRPC-SERVICE-IN-CONTRACT-01/A detection (blind spot B1)",
 						rel, p.Fset.Position(sel.Sel.Pos()).Line,
 					))
 				})

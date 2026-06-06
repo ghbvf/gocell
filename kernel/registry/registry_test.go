@@ -189,7 +189,7 @@ func TestContractRegistry_ByKind_DeepCopiesGRPC(t *testing.T) {
 				Endpoints: metadata.EndpointsMeta{
 					Server:  metadatatest.CellIDAccessCore,
 					Clients: []string{metadatatest.CellIDAuditCore},
-					GRPC:    &metadata.GRPCTransportMeta{Service: "x.v1.S", Method: "M", Proto: "contracts/grpc/x/v1/x.proto"},
+					GRPC:    &metadata.GRPCTransportMeta{Service: "x.v1.S", Proto: "contracts/grpc/x/v1/x.proto"},
 				},
 			},
 		},
