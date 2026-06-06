@@ -221,6 +221,39 @@ func ValidateGRPCProtoPath(proto string) error {
 	return nil
 }
 
+// GRPCProtoRepoRelPath converts a module-relative endpoints.grpc.proto path
+// (rooted at GRPCProtoPathPrefix, as declared in contract.yaml and validated by
+// ValidateGRPCProtoPath) into a path relative to the workspace root, by
+// prefixing the contract's module base.
+//
+// contractFile is the contract.yaml path relative to the workspace root
+// (metadata.ContractMeta.File). The proto and the contract both live under the
+// same module's contracts/grpc/ tree, so the module base is the portion of
+// contractFile preceding the first GRPCProtoPathPrefix segment:
+//
+//   - repo-root contract: File "contracts/grpc/d/v1/contract.yaml" → base "" →
+//     proto returned unchanged ("contracts/grpc/d/v1/x.proto").
+//   - satellite-module contract: File "examples/iotdevice/contracts/grpc/d/v1/contract.yaml"
+//     → base "examples/iotdevice/" → "examples/iotdevice/contracts/grpc/d/v1/x.proto".
+//
+// Every filesystem reader of the proto (contractgen collision pre-pass, cellgen
+// grpc-serve enrich) MUST resolve through this before filepath.Join with the
+// absolute workspace root. Joining the raw module-relative proto against the
+// workspace root silently resolves to the wrong (repo-root) location for
+// satellite modules such as examples/iotdevice — the gap the first real
+// example-owned grpc contract surfaced (#1151). The result is slash-form.
+func GRPCProtoRepoRelPath(contractFile, proto string) string {
+	file := filepath.ToSlash(contractFile)
+	idx := strings.Index(file, GRPCProtoPathPrefix)
+	if idx <= 0 {
+		// idx == 0: repo-root contract (empty module base). idx < 0: prefix absent
+		// (non-grpc / unexpected File) — return the proto unchanged, preserving the
+		// existing repo-root resolution behavior.
+		return proto
+	}
+	return file[:idx] + proto
+}
+
 // GRPCServiceGoName extracts the proto service's simple name (last dotted
 // segment of the fully-qualified service name, e.g.
 // "device.command.v1.DeviceCommandService" → "DeviceCommandService") and

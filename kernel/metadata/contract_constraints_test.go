@@ -336,3 +336,58 @@ func TestGRPCServiceGoName(t *testing.T) {
 		})
 	}
 }
+
+// TestGRPCProtoRepoRelPath covers module-base prefixing for endpoints.grpc.proto
+// resolution. A repo-root contract (File rooted at contracts/grpc/) leaves the
+// module-relative proto unchanged; a satellite-module contract (examples/iotdevice)
+// prefixes the module base so filesystem readers resolve the real proto location
+// (#1151).
+func TestGRPCProtoRepoRelPath(t *testing.T) {
+	t.Parallel()
+	const proto = "contracts/grpc/device/command/v1/device_command.proto"
+	cases := []struct {
+		name string
+		file string
+		want string
+	}{
+		{
+			"repo-root contract unchanged",
+			"contracts/grpc/device/command/v1/contract.yaml",
+			proto,
+		},
+		{
+			"satellite module prefixed",
+			"examples/iotdevice/contracts/grpc/device/command/v1/contract.yaml",
+			"examples/iotdevice/contracts/grpc/device/command/v1/device_command.proto",
+		},
+		{
+			"nested satellite prefixed",
+			"examples/foo/bar/contracts/grpc/x/v1/contract.yaml",
+			"examples/foo/bar/" + proto,
+		},
+		{
+			"prefix absent returns proto unchanged",
+			"some/other/contract.yaml",
+			proto,
+		},
+		{
+			// Documents the "first GRPCProtoPathPrefix segment" semantics: the
+			// module base is everything before the FIRST contracts/grpc/. A second
+			// occurrence inside the tree does not shift the base. Unreachable in
+			// practice (governance FMT-37 / ValidateGRPCProtoPath keep contracts
+			// rooted at a single contracts/grpc/), but guards a refactor to
+			// strings.LastIndex.
+			"duplicate prefix uses first occurrence",
+			"examples/iotdevice/contracts/grpc/a/contracts/grpc/b/contract.yaml",
+			"examples/iotdevice/" + proto,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := metadata.GRPCProtoRepoRelPath(tc.file, proto); got != tc.want {
+				t.Errorf("GRPCProtoRepoRelPath(%q, %q) = %q, want %q", tc.file, proto, got, tc.want)
+			}
+		})
+	}
+}

@@ -58,11 +58,8 @@ type ContractGenSpec struct {
 	// are generated into DTOs (rendered by types.tmpl) like any kind.
 	// iface_gen.go is NOT emitted for command (Handler lives in command_gen.go).
 	Command *CommandSpec
-	// GRPC is non-nil when Kind == "grpc". It drives the server interface emitted
-	// into iface_gen.go; the proto-generated message types + import path are
-	// resolved from the .proto go_package option + rpc declaration
-	// (ReadProtoServiceInfo).
-	GRPC *GRPCEndpointSpec
+	// (No grpc field: kind=grpc emits zero contractgen artifacts since #1688 —
+	// buf's generated pb.<Svc>Server is the sole server contract.)
 	// RequestSchemaJSON is the raw JSON content of the request schema file,
 	// compacted to a single line (no extra whitespace).
 	// Non-empty only when Kind=="http" and the contract declares schemaRefs.request.
@@ -374,60 +371,6 @@ type RetryPolicySpec struct {
 	MaxAttempts      int
 	BaseIntervalExpr string
 	MaxIntervalExpr  string
-}
-
-// GRPCEndpointSpec holds gRPC-specific endpoint information for the
-// server-interface generator. It mirrors EventEndpointSpec's role: the builder
-// projects metadata.GRPCTransportMeta into this codegen-local value type, and
-// GRPCMethodSpec carries the name + request/response type for one RPC in a
-// service-level grpc contract. iface.tmpl ranges over GRPCEndpointSpec.Methods
-// to emit one method per entry in the Server interface.
-type GRPCMethodSpec struct {
-	// MethodName is the rpc method name, e.g. "IssueCommand".
-	MethodName string
-	// RequestType is the proto request message simple name, e.g. "IssueCommandRequest".
-	RequestType string
-	// ResponseType is the proto response message simple name, e.g. "IssueCommandResponse".
-	ResponseType string
-}
-
-// GRPCEndpointSpec is the contractgen IR for a kind=grpc contract.
-// iface.tmpl reads it to emit the Server interface.
-//
-// This is the contractgen IR type — distinct from kernel/contractspec's
-// GRPCEndpointSpec, which is the runtime registration descriptor. They share no
-// definition because the codegen IR carries Go-identifier-shaped fields the
-// runtime descriptor has no use for.
-//
-// The proto-typed fields (ProtoImportPath / ProtoAlias / Methods) are resolved
-// by buildGRPCSpec from the .proto file's go_package option + service block
-// (ReadProtoServiceInfo) — the proto is the single source of truth for the
-// import + method set emitted into the stub (#1655). buildGRPCSpec is the only
-// constructor of this struct; GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01 locks both
-// that single write site (C1) and that the rendered import equals the proto
-// oracle (C3).
-type GRPCEndpointSpec struct {
-	// InterfaceName is the Go identifier for the generated server interface,
-	// e.g. "Server". Held as a field (not a literal in the template) so the
-	// naming convention has a single source the test can assert.
-	InterfaceName string
-	// ServiceFQN is the proto fully-qualified service name from
-	// endpoints.grpc.service, e.g. "device.command.v1.DeviceCommandService".
-	// Rendered into the interface doc comment only (no code dependency).
-	ServiceFQN string
-	// ProtoPath is the contracts-relative .proto path from endpoints.grpc.proto.
-	// Rendered into the interface doc comment; also resolved + read by buildGRPCSpec.
-	ProtoPath string
-	// ProtoImportPath is the Go import path of the proto-generated package, read
-	// from the .proto go_package option. Single source for the import literal in
-	// iface.tmpl (no hand-written string).
-	ProtoImportPath string
-	// ProtoAlias is the import alias from go_package (after ';'), e.g. "commandv1".
-	ProtoAlias string
-	// Methods lists every unary RPC declared in the proto service block, in
-	// declaration order. iface.tmpl ranges over this slice to emit one method
-	// signature per entry in the Server interface. Populated from ReadProtoServiceInfo.
-	Methods []GRPCMethodSpec
 }
 
 // CommandSpec holds command-specific generation data (Kind=="command" only). It
