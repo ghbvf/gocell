@@ -69,6 +69,12 @@ const (
 	defaultCoordPollInterval   = 200 * time.Millisecond
 	defaultCoordClaimBatchSize = 16
 	defaultCoordLeaseDuration  = 30 * time.Second
+	// defaultCoordMaxConcurrentDrives defaults per-tick drive concurrency to the
+	// claim batch size, so a full claimed batch drives concurrently out of the
+	// box (eliminating the previous serial 16×step-latency throttle). It is an
+	// independent field: operators may lower it without shrinking the claim batch
+	// (decoupling claim throughput from drive fan-out).
+	defaultCoordMaxConcurrentDrives = defaultCoordClaimBatchSize
 )
 
 // Config holds tunable parameters for the Coordinator engine.
@@ -78,7 +84,8 @@ const (
 // WithConfig is supplied, it replaces the whole struct (assigns c.cfg = cfg);
 // there is no partial-merge and no per-field substitution. Validate() then
 // runs once and rejects zero values for PollInterval / ClaimBatchSize /
-// LeaseDuration / HeartbeatInterval — those four fields MUST be positive.
+// LeaseDuration / HeartbeatInterval / MaxConcurrentDrives — those five fields
+// MUST be positive.
 // To override only some fields, start from the defaults:
 //
 //	cfg := saga.DefaultConfig()
@@ -106,15 +113,27 @@ type Config struct {
 	// HeartbeatInterval * executor.HeartbeatLeaseSafetyFactor < LeaseDuration
 	// so at least one heartbeat lands before expiry.
 	HeartbeatInterval time.Duration
+	// MaxConcurrentDrives bounds how many claimed instances tickOnce drives
+	// concurrently within a single tick (semaphore-limited fan-out). Default 16
+	// (= ClaimBatchSize), so a full claimed batch drives concurrently. Each
+	// concurrent drive that reaches a step also runs one Executor heartbeat
+	// goroutine, so this also bounds peak goroutines + concurrent external
+	// step IO; lower it when steps open many connections. A tick still waits
+	// for its whole batch to finish before returning (the "one batch at a time"
+	// semantics are unchanged — only the per-instance driving within a batch is
+	// parallelized), so Stop's inflight drain is unaffected. MUST be positive:
+	// a zero value would deadlock the semaphore.
+	MaxConcurrentDrives int
 }
 
 // DefaultConfig returns a Config with documented defaults.
 func DefaultConfig() Config {
 	return Config{
-		PollInterval:      defaultCoordPollInterval,
-		ClaimBatchSize:    defaultCoordClaimBatchSize,
-		LeaseDuration:     defaultCoordLeaseDuration,
-		HeartbeatInterval: executor.DefaultHeartbeatInterval,
+		PollInterval:        defaultCoordPollInterval,
+		ClaimBatchSize:      defaultCoordClaimBatchSize,
+		LeaseDuration:       defaultCoordLeaseDuration,
+		HeartbeatInterval:   executor.DefaultHeartbeatInterval,
+		MaxConcurrentDrives: defaultCoordMaxConcurrentDrives,
 	}
 }
 
@@ -136,6 +155,10 @@ func (c Config) Validate() error {
 	if c.HeartbeatInterval <= 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga coordinator: Config.HeartbeatInterval must be positive")
+	}
+	if c.MaxConcurrentDrives <= 0 {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"saga coordinator: Config.MaxConcurrentDrives must be positive")
 	}
 	if c.HeartbeatInterval*executor.HeartbeatLeaseSafetyFactor >= c.LeaseDuration {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -605,6 +628,16 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 		return nil
 	}
 	c.safeObserve(ctx, "ObserveTick", func() { c.observer.ObserveTick(ctx, executor.TickClaimed) })
+	// Bounded-concurrent fan-out (#983): drive each led instance in its own
+	// goroutine, capped by MaxConcurrentDrives. The tick still waits for the
+	// whole batch (wg.Wait) before returning, so the "one batch at a time"
+	// semantics and Stop's inflight drain are unchanged — only per-instance
+	// driving within a batch is parallelized. acquireLead + the leader gate
+	// stay serial in the loop body so every drive passes the gate before any
+	// goroutine spawns; inflightLocks.Store also stays serial (before go) so the
+	// entry is visible the instant the drive could run (closes the drain gap).
+	sem := make(chan struct{}, c.cfg.MaxConcurrentDrives)
+	var wg sync.WaitGroup
 	for _, ci := range claimed {
 		// Leader-elect gate: in multi-process mode only the holder of the
 		// per-instance distlock drives it; others skip this tick (no-lock →
@@ -623,25 +656,45 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 			definitionID: ci.Instance.DefinitionID,
 			leaseID:      ci.LeaseID,
 		})
-		driveErr := c.driveOne(ctx, ci)
-		driveResult := executor.DriveOK
-		if driveErr != nil {
-			driveResult = executor.DriveError
-			// Sentinel-aware severity: ErrSagaStaleLease (handoff race) →
-			// Info; ErrSagaNotFound (instance gone) → Warn; default → Warn.
-			// Keeps multi-coordinator deployments from spamming WARN
-			// dashboards on every lease lost during normal handoff.
-			c.logger.LogAttrs(ctx, journalErrLevel(driveErr), "saga: drive failed",
-				sagalog.InstanceFields(ci.Instance.ID, ci.LeaseID,
-					slog.String("definition_id", string(ci.Instance.DefinitionID)),
-					slog.Any("error", driveErr))...)
-		}
-		defID := ci.Instance.DefinitionID
-		c.safeObserve(ctx, "ObserveDrive", func() { c.observer.ObserveDrive(ctx, c.labelDefinitionID(defID), driveResult) })
-		c.inflightLocks.Delete(ci.Instance.ID)
-		release()
+		wg.Add(1)
+		go func(ci journal.ClaimedInstance, release func()) {
+			// wg.Done is the outermost defer (runs last) so wg.Wait()/the Stop
+			// drain never observe a half-cleaned entry: Delete+release run first.
+			defer wg.Done()
+			defer func() {
+				c.inflightLocks.Delete(ci.Instance.ID)
+				release()
+			}()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			driveErr := c.driveOne(ctx, ci)
+			c.observeDrive(ctx, ci, driveErr)
+		}(ci, release)
 	}
+	wg.Wait()
 	return nil
+}
+
+// observeDrive emits the per-drive result log + ObserveDrive metric for a
+// completed driveOne. Extracted from the tickOnce goroutine so tickOnce stays
+// within the cognitive-complexity limit; it MUST NOT call driveOne — the sole
+// driveOne call site stays lexically in tickOnce per
+// SAGA-DRIVE-BEHIND-LEADER-GATE-01 A1.
+func (c *Coordinator) observeDrive(ctx context.Context, ci journal.ClaimedInstance, driveErr error) {
+	driveResult := executor.DriveOK
+	if driveErr != nil {
+		driveResult = executor.DriveError
+		// Sentinel-aware severity: ErrSagaStaleLease (handoff race) → Info;
+		// ErrSagaNotFound (instance gone) → Warn; default → Warn. Keeps
+		// multi-coordinator deployments from spamming WARN dashboards on every
+		// lease lost during normal handoff.
+		c.logger.LogAttrs(ctx, journalErrLevel(driveErr), "saga: drive failed",
+			sagalog.InstanceFields(ci.Instance.ID, ci.LeaseID,
+				slog.String("definition_id", string(ci.Instance.DefinitionID)),
+				slog.Any("error", driveErr))...)
+	}
+	defID := ci.Instance.DefinitionID
+	c.safeObserve(ctx, "ObserveDrive", func() { c.observer.ObserveDrive(ctx, c.labelDefinitionID(defID), driveResult) })
 }
 
 // safeObserve runs a Coordinator-emitted Observer call (ObserveTick /
@@ -655,8 +708,9 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 //     waits at most c.observerCallDeadline (default
 //     executor.DefaultObserverCallDeadline = 5s) before logging Warn and
 //     returning. This prevents a hung observer from leaking the per-instance
-//     distlock (release() and c.inflightLocks.Delete run AFTER ObserveDrive
-//     returns in tickOnce) and from blocking the shutdown drain.
+//     distlock (within each tickOnce drive goroutine, release() and
+//     c.inflightLocks.Delete run as deferred cleanup AFTER observeDrive — and
+//     thus the ObserveDrive call — returns) and from blocking the shutdown drain.
 //
 // The leaked observer goroutine may continue running indefinitely — bounded
 // only by observer behavior, not by the coordinator (Go cannot kill a

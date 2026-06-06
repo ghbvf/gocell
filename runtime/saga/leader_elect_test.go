@@ -31,10 +31,11 @@ import (
 // leaderElectCfg is a fast-tick config shared by the leader-elect tests.
 func leaderElectCfg() Config {
 	return Config{
-		PollInterval:      testtime.D10ms,
-		ClaimBatchSize:    16,
-		LeaseDuration:     testtime.D60s,
-		HeartbeatInterval: testtime.D20s,
+		PollInterval:        testtime.D10ms,
+		ClaimBatchSize:      16,
+		LeaseDuration:       testtime.D60s,
+		HeartbeatInterval:   testtime.D20s,
+		MaxConcurrentDrives: 16,
 	}
 }
 
@@ -603,10 +604,11 @@ const (
 func TestNewCoordinator_LeaderElect_RejectsSubMillisLease(t *testing.T) {
 	t.Parallel()
 	subMsCfg := Config{
-		PollInterval:      subMsPoll,
-		ClaimBatchSize:    16,
-		LeaseDuration:     subMsLease,
-		HeartbeatInterval: subMsHeartbeat,
+		PollInterval:        subMsPoll,
+		ClaimBatchSize:      16,
+		LeaseDuration:       subMsLease,
+		HeartbeatInterval:   subMsHeartbeat,
+		MaxConcurrentDrives: 16,
 	}
 	if err := subMsCfg.Validate(); err != nil {
 		t.Fatalf("precondition: sub-ms cfg must pass Config.Validate, got %v", err)

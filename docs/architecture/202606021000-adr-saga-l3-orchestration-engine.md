@@ -128,7 +128,8 @@ D7 是**单向**：用 saga 编排 ⟹ L3；但 L3 不等价于 saga。`accessco
 | journal conformance codegen golden 枚举（实现自动入列 Hard 化） | gh **#1003** |
 | 声明式 Saga DSL（D1 v2） | 业务场景 ≥ 3 个相似 saga 后立项 |
 | 跨 cell child workflow / nested saga | v1.2+ ADR（outbox 触发新 saga 已覆盖，parent-child 引用 + 联合 compensate 待做） |
-| Activity / Workflow worker pool 分层 | step concurrency 出现明确瓶颈再做 |
+| 有界 tick 并发（一个 claim 批内并发驱动 claimed 实例） | **已落 → §Amendment 2026-06-07（#983）** |
+| claim/drive 解耦的常驻 worker pool（消除批 barrier head-of-line） | tick 级有界并发已落地（§Amendment 2026-06-07）；进程内常驻 worker pool 待真实瓶颈再做 |
 | Projection / Replay（从 `saga_events` replay 任意时点状态） | **已立项 → ADR `202606051200-1609-adr-saga-journal-projection-source.md`（EPIC #1609，model-a）**；原「W10 独立 wave」由该 ADR superseded |
 
 ---
@@ -139,3 +140,67 @@ ref: docs/architecture/202605051600-adr-pg-outbox-fencing.md (in-repo) — adapt
 ref: dtm-labs/dtm dtmsvr/storage saga_branch.go — saga branch state + CompensateFailed
 ref: temporalio/temporal service/history/workflow — workflow state machine
 ref: ThreeDotsLabs/watermill components — outbox-driven message dispatch
+
+---
+
+## Amendment 2026-06-07 — 有界 tick 并发（#983）
+
+### 决策
+
+`tickOnce` 此前**串行**驱动一个 claim 批次（`for ci := range claimed { driveOne(ci) }`），把单个
+tick 节流到 `ClaimBatchSize × step-latency`（默认 16×）。改为**有界并发 fan-out**：每个通过
+leader gate 的 claimed 实例在自己的 goroutine 内 `driveOne`，并发度由新增 `Config.MaxConcurrentDrives`
+（semaphore 容量，默认 = `ClaimBatchSize` = 16）限定。tick 仍 `wg.Wait` 整批完成后才返回——
+**「一次一个批次」语义不变**，仅批内驱动并行化，因此 `Stop` 的 inflight drain（轮询 `inflightLocks`
+至空）与 leader-elect 接管语义均不受影响。
+
+载体：semaphore channel + `sync.WaitGroup`（对齐 `runtime/websocket/hub.go` 仓内有界 fan-out 惯例；
+**不用 errgroup**——其 first-error 取消语义与「每个 driveOne 错误是记录并继续、非致命」相悖）。
+
+### 关键不变式
+
+- **`acquireLead` + 浮 gate 保持串行**：`acquireLead(ctx, ci)` 与 `if !lead { continue }` 留在循环体内，
+  每个 drive 在 spawn goroutine 前先过 leader gate（`SAGA-DRIVE-BEHIND-LEADER-GATE-01` A1/A2/A3 不变——
+  唯一 `driveOne` callsite 仍词法位于 `tickOnce` 内的 goroutine 闭包；评级 Medium 不变，未被削弱）。
+- **`inflightLocks.Store` 串行先于 `go`**：goroutine 可运行的瞬间 entry 已可见，关闭 Stop-drain 可见性缺口。
+- **`wg.Done()` 为最外层 defer**：`inflightLocks.Delete` + `release()` 在其之前执行，`wg.Wait()`/drain 永不
+  观测到半清理 entry。
+- **`MaxConcurrentDrives` 必须为正**（`Config.Validate` fail-fast）：零值会让 `sem <- struct{}{}` 死锁。
+
+### 为何有界 + 默认 = ClaimBatchSize
+
+每个到达 step 的并发 drive 还会起 1 个 executor heartbeat goroutine（并发 drive ≈ 2× goroutine + 慢
+HTTP step 的并发外部连接），故有界。默认 = 批大小 → 开箱即整批并发（直接消除 16× 节流）；字段独立，
+ops 可在不缩小 claim 批的前提下调低 drive 并发（解耦 claim 吞吐与 drive fan-out）。
+
+### deliberate 残留（非 silent 缺口）
+
+1. tick `wg.Wait` 整批后才 claim 下一批 → 单个慢实例 head-of-line 阻塞下批 claim。
+2. `acquireLead` 串行（非 issue 所指的慢 *step* 瓶颈，且维持 leader-gate AST 形态）。
+
+彻底消除①需 claim/drive 解耦的常驻 worker pool（更大的 lifecycle 重构），见 §8 演进路径对应行——
+本 PR 刻意不折叠（YAGNI / 优雅简洁）。
+
+### enforcement / AI-robust 评级
+
+- 新并发不变式（「Store 串行先于 go」「wg.Done 最外层」）Go 类型系统无法表达；为其写按 defer 顺序匹配的
+  AST archtest 属 **Soft（章程严禁立项）**。其机器载体 = **`-race` + 真实触发竞态的 drain/并发测试
+  （Medium）**：`TestTickOnce_DrivesConcurrently` / `_BoundedByMaxConcurrentDrives` / `TestStop_DrainsInflight`
+  在 `go test -race` 下运行，Store/defer 顺序回归即竞态报红。这是 Go 下该形状 enforcement 的天花板，
+  与 leader-gate 的 Medium 同族（typed gate token Hard 化仍由 §8 / gh #1110 独立追踪）。
+- **panic 安全**：`executor.safeRun` / `safeRunCompensate` / `Coordinator.safeObserve` 三处 recover 使业务
+  step/compensate/observer panic 转为 error，慢/坏 step 不会击穿 sibling drive——并发未引入 blast-radius
+  回归；刻意不加 per-goroutine 兜底 recover（避免吞掉 charter 要求 surface 的 infra panic）。
+
+### §7 威胁矩阵逐行重评（AI-robust「ADR amendment 落地必查」）
+
+并发改动与威胁矩阵各行正交，**无格子从 ✅ 翻转**：
+
+- 「无 leader 误并发」「旧 leader 复活继续驱动」：`acquireLead` 仍串行门控**每个** drive，`ci.LeaseID`
+  per-instance fencing CAS 不变——并发是 per-instance 隔离，不放宽 leader/lease 任一保证。
+- 「step 在持锁事务内长执行」（`SAGA-STEP-RUN-OUTSIDE-TX-01`）/「Compensate 持事务」
+  （`SAGA-STEP-COMPENSATE-PURE-01`）：step/compensate 执行路径未变，仍 tx-free / 纯净。
+- 「lease 失效 / leader 假死」：每个并发 drive 仍由 executor per-step heartbeat 独立续租（executor 本就
+  per-call 隔离、字段只读，并发安全）。
+
+ref: `runtime/websocket/hub.go` `closeEntriesConcurrently` — 仓内 semaphore + WaitGroup 有界 fan-out 范式
