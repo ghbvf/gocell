@@ -22,7 +22,7 @@ const fixtureMaxAge = 604800 // 7d seconds
 // correct so the fixture exercises exactly one missing-attribute branch (the
 // expected-count assertion in the RED-fixture test pins this to 1).
 func weakCookie() *http.Cookie {
-	// nosemgrep: go.lang.security.audit.net.cookie-missing-secure // RED fixture: Secure:false is the negative case REFRESH-COOKIE-SECURE-ATTRS-01 must catch
+	// nosemgrep: go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure // RED fixture: Secure:false is the negative case REFRESH-COOKIE-SECURE-ATTRS-01 must catch
 	return &http.Cookie{
 		Name:     "gocell_rt",
 		Value:    "x",
