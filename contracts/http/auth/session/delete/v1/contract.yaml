@@ -1,3 +1,20 @@
+# Response cookies (documentation; codegen does not emit response headers —
+# cookie clearing is applied by httpcookie.Middleware in the slice handler):
+#
+#   Set-Cookie: gocell_rt=; HttpOnly; Secure; SameSite=Strict;
+#               Path=/api/v1/access/sessions; Max-Age=0
+#
+#     Emitted on: 204 (successful logout) only. The middleware is a no-op on
+#                 4xx/5xx responses — a failing logout must not disturb the
+#                 cookie state (e.g. a 401 from an expired bearer token must
+#                 leave the gocell_rt cookie intact for the next refresh).
+#     Purpose:    Deletes the httpOnly refresh cookie (gocell_rt) that the
+#                 login and refresh endpoints set. Clients that use the cookie
+#                 path for silent re-authentication must rely on this header
+#                 to invalidate their local cookie on explicit logout.
+#     Codegen:    contractgen does not emit Set-Cookie / response-header params.
+#                 The clearing is enforced at runtime via httpcookie.Middleware
+#                 wrapping the generated handler in RegisterRoutes.
 id: http.auth.session.delete.v1
 kind: http
 ownerCell: accesscore
