@@ -273,6 +273,12 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 // ServiceTokenMiddleware guard and RequireCallerCell policy, reaching the
 // handler. The handler returns 404 (key not seeded) which proves both guards
 // passed — neither short-circuited to 401 or 403.
+//
+// The request carries an X-Tenant-ID header (#1577): the internal config-read
+// endpoint derives the tenant from this header (tenant.ParseTenantID,
+// fail-closed → 400) instead of the removed SystemTenantID sentinel. Without a
+// valid tenant the adapter returns 400 before the key lookup, so a valid
+// non-reserved tenant UUID is required to reach the 404-key-not-found path.
 func TestInternalRPC_AccessCoreCallsConfigRead_GuardPassed_404KeyNotFound(t *testing.T) {
 	app := startCallerCellApp(t)
 
@@ -284,6 +290,9 @@ func TestInternalRPC_AccessCoreCallsConfigRead_GuardPassed_404KeyNotFound(t *tes
 		fmt.Sprintf("http://%s/internal/v1/config/no-such-key", app.internalAddr), nil)
 	require.NoError(t, err)
 	req.Header.Set("Authorization", "ServiceToken "+token)
+	// Real (non-reserved) tenant UUID so the X-Tenant-ID parse passes and the
+	// request reaches the key lookup (which 404s — the key is not seeded).
+	req.Header.Set("X-Tenant-ID", "00000000-0000-0000-0000-000000000001")
 
 	resp, err := callerCellHTTPClient.Do(req)
 	require.NoError(t, err)
