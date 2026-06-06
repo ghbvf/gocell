@@ -11,10 +11,28 @@ package metadata
 // ref: go-kratos/kratos cmd/protoc-gen-go-http - path params parsed via
 // regex on the path template string.
 type HTTPTransportMeta struct {
-	Method        string                   `yaml:"method"        json:"method"`
-	Path          string                   `yaml:"path"          json:"path"`
-	PathParams    map[string]ParamSchema   `yaml:"pathParams,omitempty"  json:"pathParams,omitempty"`
-	QueryParams   map[string]ParamSchema   `yaml:"queryParams,omitempty" json:"queryParams,omitempty"`
+	Method      string                 `yaml:"method"        json:"method"`
+	Path        string                 `yaml:"path"          json:"path"`
+	PathParams  map[string]ParamSchema `yaml:"pathParams,omitempty"  json:"pathParams,omitempty"`
+	QueryParams map[string]ParamSchema `yaml:"queryParams,omitempty" json:"queryParams,omitempty"`
+	// Headers declares inbound HTTP request headers this endpoint consumes
+	// (keyed by canonical header name, e.g. "X-Tenant-ID"). It is the single
+	// source for request-header consumption: contractgen merges each declared
+	// header into the generated Request DTO as a typed field populated from
+	// r.Header.Get — see archtest HTTP-REQUEST-HEADER-READ-FUNNEL-01 (cells /
+	// examples may not read inbound headers raw; the generated handler is the
+	// sole reader).
+	//
+	// Headers are POPULATE-ONLY at codegen: the generated handler emits no
+	// required / length / format gate. Per-endpoint fail behavior (e.g. the
+	// X-Tenant-ID anti-enumeration matrix in ADR 1160 — login→401, setup/admin→400,
+	// setup/status→200 fail-soft) is owned by the cell adapter/service via
+	// tenant.ParseTenantID, not derivable from a uniform codegen gate. `required`
+	// is documentation / governance / client-gen metadata only. Governance FMT-40
+	// rejects unenforced minLength/maxLength/minimum/maximum on header schemas so a
+	// declared constraint can never silently no-op. ref: goadesign/goa v3
+	// expr/http_endpoint.go Headers; go-kratos/kratos transport/http header binding.
+	Headers       map[string]ParamSchema   `yaml:"headers,omitempty"     json:"headers,omitempty"`
 	SuccessStatus int                      `yaml:"successStatus" json:"successStatus"`
 	NoContent     bool                     `yaml:"noContent"     json:"noContent"`
 	Responses     map[int]HTTPResponseMeta `yaml:"responses,omitempty" json:"responses,omitempty"`

@@ -14,8 +14,8 @@
 // runtime/http/cellmw.WrapBeforeCommit (an httpsnoop-backed, optional-interface
 // preserving wrapper — httpsnoop lives in runtime/ because cells/ may not import
 // it) and emits the cookie at commit time, driven by a ctx directive the adapter
-// records via [SetRefresh] / [ClearRefresh]. This mirrors the existing
-// injectLoginTenant pattern (request-side ctx injection) on the response side.
+// records via [SetRefresh] / [ClearRefresh] — a response-side ctx directive
+// analogous to how request-side params reach the handler.
 //
 // # Host-binding
 //

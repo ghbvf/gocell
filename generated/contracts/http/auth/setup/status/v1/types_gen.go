@@ -15,7 +15,10 @@ import (
 )
 
 // Request — http.auth.setup.status.v1.request
-type Request struct{}
+type Request struct {
+	// format: uuid
+	XTenantID string `json:"-"`
+}
 
 // Response — http.auth.setup.status.v1.response
 type Response struct {

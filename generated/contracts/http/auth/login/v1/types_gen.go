@@ -16,8 +16,10 @@ import (
 
 // Request — http.auth.login.v1.request
 type Request struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	// format: uuid
+	XTenantID string `json:"-"`
+	Username  string `json:"username"`
+	Password  string `json:"password"`
 }
 
 // Response — http.auth.login.v1.response

@@ -54,6 +54,7 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 
 func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
+	req.XTenantID = r.Header.Get("X-Tenant-ID")
 	resp, err := h.svc.Status(r.Context(), req)
 	if err != nil {
 		httputil.WriteError(r.Context(), w, err)

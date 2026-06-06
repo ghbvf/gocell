@@ -16,9 +16,11 @@ import (
 
 // Request — http.auth.setup.admin.v1.request
 type Request struct {
-	Username string `json:"username"`
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	// format: uuid
+	XTenantID string `json:"-"`
+	Username  string `json:"username"`
+	Email     string `json:"email"`
+	Password  string `json:"password"`
 }
 
 // Response — http.auth.setup.admin.v1.response

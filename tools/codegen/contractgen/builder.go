@@ -157,18 +157,19 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 		return fmt.Errorf("contractgen build: contract %q is kind=http but has no http endpoint", contract.ID)
 	}
 
-	// Pre-compute path and query params once; both buildHTTPDTOs and
-	// buildHTTPEndpointSpec need them (F-09: avoid calling buildQueryParams twice).
+	// Pre-compute path, query, and header params once; both buildHTTPDTOs and
+	// buildHTTPEndpointSpec need them (F-09: avoid calling builders twice).
 	pathParams := buildPathParams(http)
 	queryParams := buildQueryParams(http)
+	headerParams := buildHeaderParams(http)
 
-	allDTOs, err := buildHTTPDTOs(rootDir, contract, contractDir, pathParams, queryParams)
+	allDTOs, err := buildHTTPDTOs(rootDir, contract, contractDir, pathParams, queryParams, headerParams)
 	if err != nil {
 		return err
 	}
 	spec.DTOs = allDTOs
 
-	endpointSpec, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+	endpointSpec, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams, headerParams)
 	if err != nil {
 		return err
 	}
@@ -222,7 +223,7 @@ func buildHTTPDTOs(
 	rootDir string,
 	contract *metadata.ContractMeta,
 	contractDir string,
-	pathParams, queryParams []ParamSpec,
+	pathParams, queryParams, headerParams []ParamSpec,
 ) ([]DTOSpec, error) {
 	var allDTOs []DTOSpec
 
@@ -268,8 +269,8 @@ func buildHTTPDTOs(
 		})
 	}
 
-	// Merge path and query params into Request DTO using the pre-computed params.
-	merged, mergeErr := mergeParamsIntoRequest(allDTOs, pathParams, queryParams, contract.ID)
+	// Merge path, query, and header params into Request DTO using the pre-computed params.
+	merged, mergeErr := mergeParamsIntoRequest(allDTOs, pathParams, queryParams, headerParams, contract.ID)
 	if mergeErr != nil {
 		return nil, fmt.Errorf("contractgen build: %q merge params: %w", contract.ID, mergeErr)
 	}
@@ -334,7 +335,7 @@ func hasDTONamed(dtos []DTOSpec, name string) bool {
 func buildHTTPEndpointSpec(
 	contract *metadata.ContractMeta,
 	http *metadata.HTTPTransportMeta,
-	pathParams, queryParams []ParamSpec,
+	pathParams, queryParams, headerParams []ParamSpec,
 ) (*httpEndpointSpec, error) {
 	handlerMethod := goPascalCase(domainLastSegment(contract.ID))
 	methodHasBody := http.Method == "POST" || http.Method == "PUT" || http.Method == "PATCH"
@@ -379,6 +380,7 @@ func buildHTTPEndpointSpec(
 	}
 	spec.PathParams = pathParams
 	spec.QueryParams = queryParams
+	spec.HeaderParams = headerParams
 
 	// Pagination detection (PR-V1-CONTRACT-TYPED-RESPONSE-ENVELOPE F4 absorb):
 	// Any GET endpoint that declares cursor (string) + limit (integer) in its
@@ -1139,22 +1141,22 @@ func validateGRPCProtoPath(contractID, proto string) error {
 // Returns error when a param name (as Go field name) conflicts with an existing
 // body schema field (which would produce a duplicate struct field).
 // contractID is used in error messages.
-func mergeParamsIntoRequest(dtos []DTOSpec, pathParams, queryParams []ParamSpec, contractID string) ([]DTOSpec, error) {
-	if len(pathParams) == 0 && len(queryParams) == 0 {
+func mergeParamsIntoRequest(dtos []DTOSpec, pathParams, queryParams, headerParams []ParamSpec, contractID string) ([]DTOSpec, error) {
+	if len(pathParams) == 0 && len(queryParams) == 0 && len(headerParams) == 0 {
 		return dtos, nil
 	}
 
 	// Find or create Request DTO.
 	reqIdx := findOrCreateRequestDTO(&dtos)
 
-	// Check for name conflicts between path/query param Go names and existing body fields.
+	// Check for name conflicts between path/query/header param Go names and existing body fields.
 	existing := make(map[string]bool, len(dtos[reqIdx].Fields))
 	for _, f := range dtos[reqIdx].Fields {
 		existing[f.Name] = true
 	}
 
-	// Build prefix fields from path and query params, checking for conflicts.
-	prefixFields, err := buildParamFields(pathParams, queryParams, existing, contractID)
+	// Build prefix fields from path, query, and header params, checking for conflicts.
+	prefixFields, err := buildParamFields(pathParams, queryParams, headerParams, existing, contractID)
 	if err != nil {
 		return nil, err
 	}
@@ -1177,7 +1179,7 @@ func findOrCreateRequestDTO(dtos *[]DTOSpec) int {
 
 // buildParamFields converts ParamSpec slices to DTOFields, checking for name
 // conflicts against existing body fields. Returns error on conflict.
-func buildParamFields(pathParams, queryParams []ParamSpec, existing map[string]bool, contractID string) ([]DTOField, error) {
+func buildParamFields(pathParams, queryParams, headerParams []ParamSpec, existing map[string]bool, contractID string) ([]DTOField, error) {
 	var fields []DTOField
 	for _, p := range pathParams {
 		if existing[p.GoName] {
@@ -1193,16 +1195,29 @@ func buildParamFields(pathParams, queryParams []ParamSpec, existing map[string]b
 		}
 		fields = append(fields, paramToField(q, "query"))
 	}
+	for _, hd := range headerParams {
+		if existing[hd.GoName] {
+			return nil, fmt.Errorf("contractgen: contract %q field %q conflict between header param and request body schema",
+				contractID, hd.Name)
+		}
+		fields = append(fields, paramToField(hd, "header"))
+	}
 	return fields, nil
 }
 
 // paramToField converts a ParamSpec to a DTOField with the given source tag.
 // Path and query fields carry Source="path"/"query" so the handler template
-// does not re-validate them in the body validation block.
+// does not re-validate them in the body validation block. Header fields
+// (source="header") additionally carry JSONTag "-": they are populated from
+// r.Header.Get only and must never be decodable from the request body, so a
+// client cannot spoof a header value (e.g. X-Tenant-ID) via the JSON body.
 func paramToField(p ParamSpec, source string) DTOField {
 	tag := p.Name + ",omitempty"
 	if p.Required {
 		tag = p.Name
+	}
+	if source == "header" {
+		tag = "-"
 	}
 	return DTOField{
 		Name:     p.GoName,
@@ -1277,6 +1292,45 @@ func buildQueryParams(http *metadata.HTTPTransportMeta) []ParamSpec {
 			MaxLength: paramMaxLength(schema),
 			Minimum:   paramMinimum(schema),
 			Maximum:   paramMaximum(schema),
+		})
+	}
+	return out
+}
+
+// buildHeaderParams extracts inbound request-header declarations from
+// HTTPTransport in canonical-name-sorted order (contract.yaml headers is a YAML
+// map; sort for deterministic output). Header GoType is always the populate-only
+// scalar derived from schema.Type ("X-Tenant-ID" → GoName "XTenantID", GoType
+// "string"). MinLength/MaxLength/Minimum/Maximum are intentionally NOT carried
+// here: headers are populate-only and the generated handler emits no gate, so a
+// length/numeric constraint would silently no-op — governance FMT-40 rejects such
+// declarations at the source. `Required` is carried for documentation/client-gen
+// metadata but does NOT emit a server-side gate (decision: per-endpoint fail
+// behavior is owned by the cell adapter; see HTTPTransportMeta.Headers godoc).
+func buildHeaderParams(http *metadata.HTTPTransportMeta) []ParamSpec {
+	if len(http.Headers) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(http.Headers))
+	for name := range http.Headers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var out []ParamSpec
+	for _, name := range names {
+		schema := http.Headers[name]
+		required := false
+		if schema.Required != nil {
+			required = *schema.Required
+		}
+		out = append(out, ParamSpec{
+			Name:     name,
+			GoName:   goPascalCase(name),
+			GoType:   paramGoType(schema.Type),
+			Required: required,
+			Doc:      paramDoc(schema),
+			Format:   schema.Format,
 		})
 	}
 	return out

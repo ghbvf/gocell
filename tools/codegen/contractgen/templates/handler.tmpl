@@ -391,6 +391,12 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 {{template "queryParamParse" .}}
 {{- end}}
 {{- end}}
+{{- /* Header params: populate-only (read from r.Header.Get, no gate). The field
+       carries json:"-" so the body cannot spoof it; per-endpoint fail behavior
+       is owned by the cell adapter. See HTTPTransportMeta.Headers godoc. */}}
+{{- range .Endpoint.HeaderParams}}
+	req.{{.GoName}} = r.Header.Get("{{.Name}}")
+{{- end}}
 	resp, err := h.svc.{{.Endpoint.HandlerMethod}}(r.Context(), req)
 	if err != nil {
 		httputil.WriteError(r.Context(), w, err)

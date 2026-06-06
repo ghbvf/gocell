@@ -1939,6 +1939,75 @@ func (v *Validator) fmt38PayloadFieldChecks(c *metadata.ContractMeta) []Validati
 // golden; see ADR
 // docs/architecture/202606040210-1389-adr-mqtt-transports-multi-value-truth-source.md
 // §P2.5.
+// headerNameRe matches a canonical HTTP request-header name that produces a
+// clean Go identifier via contractgen.goPascalCase (which splits on "-"): a
+// letter followed by letters / digits / hyphens, e.g. "X-Tenant-ID",
+// "Authorization", "Content-Type". Rejects names with spaces, colons, or other
+// token-illegal characters that would either break the r.Header.Get literal or
+// yield a malformed generated field name.
+var headerNameRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*$`)
+
+// validateFMT40 validates the endpoints.http.headers block on every HTTP
+// contract (issue #1494). Headers are POPULATE-ONLY at codegen (the generated
+// handler emits no gate; the cell adapter owns per-endpoint fail behavior), so
+// this rule guards the declaration surface: header name is a valid HTTP token,
+// type is a known param type, and no length/numeric constraint is declared
+// (those would silently no-op since no gate is generated — FMT-25 owns the
+// path/query constraint regime; FMT-40 owns headers).
+func (v *Validator) validateFMT40() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		results = append(results, v.validateFMT40ForContract(c)...)
+	}
+	return results
+}
+
+// validateFMT40ForContract validates a single contract's header declarations.
+func (v *Validator) validateFMT40ForContract(c *metadata.ContractMeta) []ValidationResult {
+	if c.Endpoints.HTTP == nil || len(c.Endpoints.HTTP.Headers) == 0 {
+		return nil
+	}
+	file := contractFile(c)
+	var results []ValidationResult
+	for _, name := range sortedParamKeys(c.Endpoints.HTTP.Headers) {
+		h := c.Endpoints.HTTP.Headers[name]
+		field := fmt.Sprintf("endpoints.http.headers.%s", name)
+
+		if !headerNameRe.MatchString(name) {
+			results = append(results, v.newError(
+				codeFMT40, IssueInvalid, file, field,
+				fmt.Sprintf("contract %q header name %q is not a valid HTTP header token", c.ID, name),
+				"use a canonical header name matching ^[A-Za-z][A-Za-z0-9-]*$ (e.g. X-Tenant-ID)",
+			))
+		}
+
+		if h.Type == "" {
+			results = append(results, v.newError(
+				codeFMT40, IssueRequired, file, field,
+				fmt.Sprintf("contract %q header %q declares no type", c.ID, name),
+				"declare type: string|integer|number|boolean on the header schema",
+			))
+		} else if !metadata.ParamTypes[h.Type] {
+			results = append(results, v.newError(
+				codeFMT40, IssueInvalid, file, field,
+				fmt.Sprintf("contract %q header %q type %q is not one of string/integer/number/boolean", c.ID, name, h.Type),
+				"use a known param type for the header schema",
+			))
+		}
+
+		if h.MinLength != nil || h.MaxLength != nil || h.Minimum != nil || h.Maximum != nil {
+			results = append(results, v.newError(
+				codeFMT40, IssueForbidden, file, field,
+				fmt.Sprintf("contract %q header %q declares minLength/maxLength/minimum/maximum, which are not "+
+					"codegen-enforced (headers are populate-only — the generated handler emits no gate)", c.ID, name),
+				"remove the length/numeric constraint and validate the header value in the cell adapter "+
+					"(e.g. tenant.ParseTenantID), which owns the per-endpoint fail behavior",
+			))
+		}
+	}
+	return results
+}
+
 func (v *Validator) validateFMT39() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {

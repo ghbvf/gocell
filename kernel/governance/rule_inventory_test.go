@@ -115,6 +115,12 @@ func goldenRuleIDs() []string {
 		// compatibility matrix (event⊆{amqp,mqtt,internal}, command⊆{amqp,internal},
 		// http/grpc/webhook/projection/saga==singleton). Mirrors FMT-37 structurally.
 		"FMT-39",
+		// FMT-40: endpoints.http.headers block well-formedness — header name is a
+		// valid HTTP token, type ∈ {string,integer,number,boolean}, and rejects
+		// minLength/maxLength/minimum/maximum (headers are populate-only at codegen,
+		// so a length/numeric constraint would silently no-op). Owns header
+		// validation (FMT-25 scans only path/query params). Issue #1494.
+		"FMT-40",
 		"FMT-A1", "FMT-C1",
 
 		// JOURNEY — journey lifecycle & cross-file consistency

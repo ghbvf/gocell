@@ -18,6 +18,8 @@ import (
 type Request struct {
 	ID   string `json:"id"`
 	Page int64  `json:"page,omitempty"`
+	// format: uuid
+	XTenantID string `json:"-"`
 }
 
 // Response — http.item.details.v1.response

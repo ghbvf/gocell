@@ -348,7 +348,7 @@ func TestMergeParamsIntoRequest_ConflictDetected(t *testing.T) {
 	}
 	pathParams := buildPathParams(http)
 	queryParams := buildQueryParams(http)
-	_, err := mergeParamsIntoRequest(existing, pathParams, queryParams, "http.test.conflict.v1")
+	_, err := mergeParamsIntoRequest(existing, pathParams, queryParams, nil, "http.test.conflict.v1")
 	if err == nil {
 		t.Fatal("expected error for field name conflict between path param and body schema")
 	}
@@ -377,7 +377,7 @@ func TestMergeParamsIntoRequest_QueryConflictDetected(t *testing.T) {
 	}
 	pathParams := buildPathParams(http)
 	queryParams := buildQueryParams(http)
-	_, err := mergeParamsIntoRequest(existing, pathParams, queryParams, "http.test.queryconflict.v1")
+	_, err := mergeParamsIntoRequest(existing, pathParams, queryParams, nil, "http.test.queryconflict.v1")
 	if err == nil {
 		t.Fatal("expected error for field name conflict between query param and body schema")
 	}
@@ -405,7 +405,7 @@ func TestMergeParamsIntoRequest_NoConflict(t *testing.T) {
 	}
 	pathParams := buildPathParams(http)
 	queryParams := buildQueryParams(http)
-	dtos, err := mergeParamsIntoRequest(existing, pathParams, queryParams, "http.test.noconflict.v1")
+	dtos, err := mergeParamsIntoRequest(existing, pathParams, queryParams, nil, "http.test.noconflict.v1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -413,6 +413,82 @@ func TestMergeParamsIntoRequest_NoConflict(t *testing.T) {
 	req := dtos[0]
 	if len(req.Fields) != 2 {
 		t.Errorf("expected 2 fields, got %d", len(req.Fields))
+	}
+}
+
+func TestMergeParamsIntoRequest_HeaderConflictDetected(t *testing.T) {
+	// Body schema has field "tenant"; header param GoName also "Tenant" → conflict.
+	existing := []DTOSpec{
+		{
+			Name: "Request",
+			Fields: []DTOField{
+				{Name: "Tenant", JSONTag: "tenant", GoType: "string"},
+			},
+		},
+	}
+	truthy := true
+	http := &metadata.HTTPTransportMeta{
+		Method: "POST",
+		Path:   "/api/v1/access/sessions/login",
+		Headers: map[string]metadata.ParamSchema{
+			"Tenant": {Type: "string", Required: &truthy},
+		},
+	}
+	headerParams := buildHeaderParams(http)
+	_, err := mergeParamsIntoRequest(existing, nil, nil, headerParams, "http.test.headerconflict.v1")
+	if err == nil {
+		t.Fatal("expected error for field name conflict between header param and body schema")
+	}
+	if !strings.Contains(err.Error(), "conflict") {
+		t.Errorf("error should mention 'conflict', got: %v", err)
+	}
+}
+
+// TestBuildHeaderParams verifies headers are extracted populate-only: GoName is
+// PascalCase (dash-aware), GoType derives from schema.Type, the canonical header
+// name is preserved as Name (the r.Header.Get literal), and no length/numeric
+// constraint is carried (headers emit no gate; FMT-40 rejects such declarations).
+func TestBuildHeaderParams(t *testing.T) {
+	truthy := true
+	http := &metadata.HTTPTransportMeta{
+		Method: "POST",
+		Path:   "/api/v1/access/sessions/login",
+		Headers: map[string]metadata.ParamSchema{
+			"X-Tenant-ID": {Type: "string", Format: "uuid", Required: &truthy},
+		},
+	}
+	got := buildHeaderParams(http)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 header param, got %d", len(got))
+	}
+	p := got[0]
+	if p.Name != "X-Tenant-ID" {
+		t.Errorf("Name = %q, want %q (canonical r.Header.Get literal)", p.Name, "X-Tenant-ID")
+	}
+	if p.GoName != "XTenantID" {
+		t.Errorf("GoName = %q, want %q", p.GoName, "XTenantID")
+	}
+	if p.GoType != "string" {
+		t.Errorf("GoType = %q, want %q", p.GoType, "string")
+	}
+	if !p.Required {
+		t.Errorf("Required = false, want true (documentation/client-gen metadata)")
+	}
+	if p.MinLength != nil || p.MaxLength != nil || p.Minimum != nil || p.Maximum != nil {
+		t.Errorf("header param must carry no length/numeric constraints (populate-only): %+v", p)
+	}
+}
+
+// TestParamToField_HeaderForcesJSONDash verifies a header field is never
+// body-decodable: paramToField with source="header" forces JSONTag "-" so a
+// client cannot spoof the header value (e.g. X-Tenant-ID) via the JSON body.
+func TestParamToField_HeaderForcesJSONDash(t *testing.T) {
+	f := paramToField(ParamSpec{Name: "X-Tenant-ID", GoName: "XTenantID", GoType: "string", Required: true}, "header")
+	if f.JSONTag != "-" {
+		t.Errorf("header field JSONTag = %q, want %q (body must not spoof headers)", f.JSONTag, "-")
+	}
+	if f.Source != "header" {
+		t.Errorf("header field Source = %q, want %q", f.Source, "header")
 	}
 }
 
@@ -729,7 +805,7 @@ func TestBuildHTTPEndpointSpec_HasBody_PostWithoutRequestSchema(t *testing.T) {
 	}
 	pathParams := buildPathParams(http)
 	queryParams := buildQueryParams(http)
-	spec, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+	spec, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -757,7 +833,7 @@ func TestBuildHTTPEndpointSpec_HasBody_PostWithRequestSchema(t *testing.T) {
 	}
 	pathParams := buildPathParams(http)
 	queryParams := buildQueryParams(http)
-	spec, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+	spec, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -878,7 +954,7 @@ func TestBuildHTTPEndpointSpec_ServiceOwnedAllowsPasswordResetExempt(t *testing.
 		},
 	}
 	http := contract.Endpoints.HTTP
-	spec, err := buildHTTPEndpointSpec(contract, http, buildPathParams(http), buildQueryParams(http))
+	spec, err := buildHTTPEndpointSpec(contract, http, buildPathParams(http), buildQueryParams(http), buildHeaderParams(http))
 	if err != nil {
 		t.Fatalf("expected serviceOwned + passwordResetExempt to build, got: %v", err)
 	}
@@ -938,7 +1014,7 @@ func TestBuildHTTPEndpointSpec_ServiceOwnedRejectsExclusiveModes(t *testing.T) {
 				},
 			}
 			http := contract.Endpoints.HTTP
-			_, err := buildHTTPEndpointSpec(contract, http, buildPathParams(http), buildQueryParams(http))
+			_, err := buildHTTPEndpointSpec(contract, http, buildPathParams(http), buildQueryParams(http), buildHeaderParams(http))
 			if err == nil {
 				t.Fatal("expected serviceOwned mutual-exclusion error, got nil")
 			}
@@ -984,7 +1060,7 @@ func TestBuildHTTPEndpointSpec_AuthBootstrap_MutuallyExclusive_WithPublic(t *tes
 
 	pathParams := buildPathParams(httpMeta)
 	queryParams := buildQueryParams(httpMeta)
-	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams, nil)
 	if err != nil {
 		t.Fatalf("buildHTTPEndpointSpec: %v", err)
 	}
@@ -1022,7 +1098,7 @@ func TestBuildHTTPEndpointSpec_PaginationShape_PureCursorLimit(t *testing.T) {
 	contract := &metadata.ContractMeta{ID: "http.order.list.v1", Kind: "http", Endpoints: metadata.EndpointsMeta{HTTP: httpMeta}}
 	pathParams := buildPathParams(httpMeta)
 	queryParams := buildQueryParams(httpMeta)
-	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams, nil)
 	if err != nil {
 		t.Fatalf("buildHTTPEndpointSpec: %v", err)
 	}
@@ -1066,7 +1142,7 @@ func TestBuildHTTPEndpointSpec_PaginationShape_CursorLimitPlusFilter(t *testing.
 	contract := &metadata.ContractMeta{ID: "http.auth.role.list.v1", Kind: "http", Endpoints: metadata.EndpointsMeta{HTTP: httpMeta}}
 	pathParams := buildPathParams(httpMeta)
 	queryParams := buildQueryParams(httpMeta)
-	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams, nil)
 	if err != nil {
 		t.Fatalf("buildHTTPEndpointSpec: %v", err)
 	}
@@ -1103,7 +1179,7 @@ func TestBuildHTTPEndpointSpec_PaginationShape_NoPagination(t *testing.T) {
 	contract := &metadata.ContractMeta{ID: "http.item.search.v1", Kind: "http", Endpoints: metadata.EndpointsMeta{HTTP: httpMeta}}
 	pathParams := buildPathParams(httpMeta)
 	queryParams := buildQueryParams(httpMeta)
-	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams, nil)
 	if err != nil {
 		t.Fatalf("buildHTTPEndpointSpec: %v", err)
 	}
@@ -1138,7 +1214,7 @@ func TestBuildHTTPEndpointSpec_Responses_LiftFromContract(t *testing.T) {
 	contract := &metadata.ContractMeta{ID: "http.access.session.get.v1", Kind: "http", Endpoints: metadata.EndpointsMeta{HTTP: httpMeta}}
 	pathParams := buildPathParams(httpMeta)
 	queryParams := buildQueryParams(httpMeta)
-	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams, nil)
 	if err != nil {
 		t.Fatalf("buildHTTPEndpointSpec: %v", err)
 	}
@@ -1227,7 +1303,7 @@ func TestDetectPagination_TypeMismatch(t *testing.T) {
 			}
 			pathParams := buildPathParams(httpMeta)
 			queryParams := buildQueryParams(httpMeta)
-			_, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+			_, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams, nil)
 			if err == nil {
 				t.Fatalf("expected error, got nil")
 			}
@@ -1258,7 +1334,7 @@ func TestBuildHTTPEndpointSpec_Responses_NoContent(t *testing.T) {
 	contract := &metadata.ContractMeta{ID: "http.access.session.delete.v1", Kind: "http", Endpoints: metadata.EndpointsMeta{HTTP: httpMeta}}
 	pathParams := buildPathParams(httpMeta)
 	queryParams := buildQueryParams(httpMeta)
-	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams, nil)
 	if err != nil {
 		t.Fatalf("buildHTTPEndpointSpec: %v", err)
 	}
@@ -1594,7 +1670,7 @@ func TestBuildHTTPEndpointSpec_RejectsPublicBypassOnInternalPath(t *testing.T) {
 				},
 			}
 			http := contract.Endpoints.HTTP
-			_, err := buildHTTPEndpointSpec(contract, http, buildPathParams(http), buildQueryParams(http))
+			_, err := buildHTTPEndpointSpec(contract, http, buildPathParams(http), buildQueryParams(http), buildHeaderParams(http))
 			switch {
 			case tc.wantErr && err == nil:
 				t.Fatalf("expected FMT-34 codegen rejection, got nil")
@@ -1662,7 +1738,7 @@ func TestBuildHTTPEndpointSpec_IdempotencyExempt_FieldPropagated(t *testing.T) {
 				},
 			}
 			http := contract.Endpoints.HTTP
-			spec, err := buildHTTPEndpointSpec(contract, http, buildPathParams(http), buildQueryParams(http))
+			spec, err := buildHTTPEndpointSpec(contract, http, buildPathParams(http), buildQueryParams(http), buildHeaderParams(http))
 			if err != nil {
 				t.Fatalf("expected idempotency.exempt combo to build without error, got: %v", err)
 			}
