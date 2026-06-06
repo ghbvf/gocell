@@ -460,8 +460,8 @@ func CheckRefreshInvalidIndexSingleSource01(t *testing.T, cfg ConfigForExternalC
 		diags = append(diags, Diagnostic{
 			Rel:  canonicalInvalidIndexFile,
 			Line: 0,
-			Message: fmt.Sprintf("%s: DetectInvalidIndexes not declared anywhere — expected it in %s",
-				ruleRefreshInvalidIndexSingleSource01, canonicalInvalidIndexFile),
+			Message: fmt.Sprintf("DetectInvalidIndexes not declared anywhere — expected it in %s",
+				canonicalInvalidIndexFile),
 		})
 		return diags
 	}
@@ -470,8 +470,8 @@ func CheckRefreshInvalidIndexSingleSource01(t *testing.T, cfg ConfigForExternalC
 			diags = append(diags, Diagnostic{
 				Rel:  d.rel,
 				Line: d.line,
-				Message: fmt.Sprintf("%s: DetectInvalidIndexes declared in %d files (expected 1): %s:%d",
-					ruleRefreshInvalidIndexSingleSource01, len(declarations), d.rel, d.line),
+				Message: fmt.Sprintf("DetectInvalidIndexes declared in %d files (expected 1)",
+					len(declarations)),
 			})
 		}
 		return diags
@@ -480,8 +480,8 @@ func CheckRefreshInvalidIndexSingleSource01(t *testing.T, cfg ConfigForExternalC
 		diags = append(diags, Diagnostic{
 			Rel:  declarations[0].rel,
 			Line: declarations[0].line,
-			Message: fmt.Sprintf("%s: DetectInvalidIndexes must be declared in %s, not %s",
-				ruleRefreshInvalidIndexSingleSource01, canonicalInvalidIndexFile, declarations[0].rel),
+			Message: fmt.Sprintf("DetectInvalidIndexes must be declared in %s, not %s",
+				canonicalInvalidIndexFile, declarations[0].rel),
 		})
 	}
 	return diags
@@ -520,10 +520,9 @@ func CheckRefreshAmbientTX01(t *testing.T, cfg ConfigForExternalCell) []Diagnost
 				}
 				pos := p.Fset.Position(call.Pos())
 				diags = append(diags, Diagnostic{
-					Rel:  rel,
-					Line: pos.Line,
-					Message: fmt.Sprintf("%s: %s:%d: .Begin() call — refresh_store must delegate to TxRunner, not acquire transactions directly",
-						ruleRefreshAmbientTX01, rel, pos.Line),
+					Rel:     rel,
+					Line:    pos.Line,
+					Message: ".Begin() call — refresh_store must delegate to TxRunner, not acquire transactions directly",
 				})
 			})
 		}
@@ -534,7 +533,7 @@ func CheckRefreshAmbientTX01(t *testing.T, cfg ConfigForExternalCell) []Diagnost
 		diags = append(diags, Diagnostic{
 			Rel:     rel,
 			Line:    0,
-			Message: fmt.Sprintf("%s: file not found: %s", ruleRefreshAmbientTX01, rel),
+			Message: "file not found",
 		})
 	}
 	return diags

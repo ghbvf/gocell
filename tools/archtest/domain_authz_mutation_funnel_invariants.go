@@ -122,7 +122,7 @@ func CheckDomainAuthzFieldPrivate01(t *testing.T, cfg ConfigForExternalCell) []D
 			if p.Pkg == nil || p.Pkg.Path() != domainUserPkg {
 				return nil
 			}
-			out = append(out, scanDomainUserViolations(p.Pkg)...)
+			out = append(out, scanDomainUserViolations(p)...)
 			return nil
 		})
 		return out
@@ -170,41 +170,68 @@ func CheckAuthzMutationApplyFunnel01(t *testing.T, cfg ConfigForExternalCell) []
 
 // ─── scanDomainUserViolations ────────────────────────────────────────────────
 
-// scanDomainUserViolations inspects the User named type in pkg for exported
-// authz fields and unauthorized exported setter methods.
-func scanDomainUserViolations(pkg *types.Package) []Diagnostic {
-	obj := pkg.Scope().Lookup(domainUserType)
+// scanDomainUserViolations inspects the User named type in p.Pkg for exported
+// authz fields and unauthorized exported setter methods. Every Diagnostic is
+// anchored at the offending field/method's real source position via [diagAtPos]
+// (resolving p.Fset on the go/types object's token.Pos), so Report emits a
+// clickable <file>:<line> even though there is no AST node at the violation
+// site. Mirrors buildApplierViolations in credential_invalidate_funnel_invariants.go.
+func scanDomainUserViolations(p *Pass) []Diagnostic {
+	obj := p.Pkg.Scope().Lookup(domainUserType)
 	if obj == nil {
+		// Defensive guard: the scan runs only on the domain package, which by
+		// definition declares User. A genuinely absent type has no declaration
+		// token to anchor, so fall back to the package's file (Line 0 — there is
+		// no declaration site to point at). The reachable field/method
+		// violations below always carry a real position.
 		return []Diagnostic{{
-			Rel:  pkg.Path(),
-			Line: 0,
+			Rel: pkgAnchorRel(p),
 			Message: fmt.Sprintf(
 				"type %s not found in package %s",
-				domainUserType, pkg.Path(),
+				domainUserType, p.Pkg.Path(),
 			),
 		}}
 	}
 	named, ok := obj.Type().(*types.Named)
 	if !ok {
-		return []Diagnostic{{
-			Rel:  pkg.Path(),
-			Line: 0,
-			Message: fmt.Sprintf(
-				"%s is not a named type in %s",
-				domainUserType, pkg.Path(),
-			),
-		}}
+		return []Diagnostic{diagAtPos(p, obj.Pos(), fmt.Sprintf(
+			"%s is not a named type", domainUserType,
+		))}
 	}
 
 	var out []Diagnostic
-	out = append(out, scanExportedAuthzFields(named, pkg.Path())...)
-	out = append(out, scanUnauthorizedSetterMethods(named, pkg.Path())...)
+	out = append(out, scanExportedAuthzFields(p, named)...)
+	out = append(out, scanUnauthorizedSetterMethods(p, named)...)
 	return out
 }
 
+// diagAtPos builds a Diagnostic anchored at the source position of pos,
+// resolving a module-relative file path + 1-based line via p.Fset. Used for
+// go/types-object violations (field / method / type-name) that have no AST node
+// to read p.Fset.Position from directly — the object's token.Pos is the anchor.
+// Mirrors buildApplierViolations (credential_invalidate_funnel_invariants.go).
+func diagAtPos(p *Pass, pos token.Pos, msg string) Diagnostic {
+	position := p.Fset.Position(pos)
+	return Diagnostic{
+		Rel:     stripModuleRoot(position.Filename),
+		Line:    position.Line,
+		Message: msg,
+	}
+}
+
+// pkgAnchorRel returns a module-relative file path for the package under p,
+// used only by the defensive "User type absent" guard where no declaration
+// token exists. Falls back to the import path if no files are loaded.
+func pkgAnchorRel(p *Pass) string {
+	if len(p.Files) > 0 {
+		return p.Rel(p.Files[0])
+	}
+	return p.Pkg.Path()
+}
+
 // scanExportedAuthzFields returns a Diagnostic for each exported struct field
-// whose name is in authzFieldNames.
-func scanExportedAuthzFields(named *types.Named, pkgPath string) []Diagnostic {
+// whose name is in authzFieldNames, anchored at the field's source position.
+func scanExportedAuthzFields(p *Pass, named *types.Named) []Diagnostic {
 	strct, ok := named.Underlying().(*types.Struct)
 	if !ok {
 		return nil
@@ -213,14 +240,10 @@ func scanExportedAuthzFields(named *types.Named, pkgPath string) []Diagnostic {
 	for i := 0; i < strct.NumFields(); i++ {
 		f := strct.Field(i)
 		if f.Exported() && authzFieldNames[f.Name()] {
-			out = append(out, Diagnostic{
-				Rel:  pkgPath,
-				Line: 0,
-				Message: fmt.Sprintf(
-					"%s.%s has exported authz field %q — must be private",
-					domainUserType, pkgPath, f.Name(),
-				),
-			})
+			out = append(out, diagAtPos(p, f.Pos(), fmt.Sprintf(
+				"%s has exported authz field %q — must be private",
+				domainUserType, f.Name(),
+			)))
 		}
 	}
 	return out
@@ -228,36 +251,38 @@ func scanExportedAuthzFields(named *types.Named, pkgPath string) []Diagnostic {
 
 // scanUnauthorizedSetterMethods returns a Diagnostic for each exported
 // pointer-receiver method whose name matches an authzSetterPrefixes entry but
-// is not in sanctionedSetters.
-func scanUnauthorizedSetterMethods(named *types.Named, pkgPath string) []Diagnostic {
+// is not in sanctionedSetters, anchored at the method's source position.
+func scanUnauthorizedSetterMethods(p *Pass, named *types.Named) []Diagnostic {
 	mset := types.NewMethodSet(types.NewPointer(named))
 	var out []Diagnostic
 	for i := 0; i < mset.Len(); i++ {
-		name := mset.At(i).Obj().Name()
+		fn, ok := mset.At(i).Obj().(*types.Func)
+		if !ok {
+			continue
+		}
+		name := fn.Name()
 		if !token.IsExported(name) || sanctionedSetters[name] {
 			continue
 		}
-		if d, ok := unauthorizedSetterViolation(name, pkgPath); ok {
+		if d, ok := unauthorizedSetterViolation(p, fn); ok {
 			out = append(out, d)
 		}
 	}
 	return out
 }
 
-// unauthorizedSetterViolation returns a Diagnostic (and ok=true) when name
-// matches an authzSetterPrefixes entry, otherwise returns (zero, false).
-func unauthorizedSetterViolation(name, pkgPath string) (Diagnostic, bool) {
+// unauthorizedSetterViolation returns a Diagnostic (and ok=true) anchored at
+// fn's source position when fn's name matches an authzSetterPrefixes entry,
+// otherwise returns (zero, false).
+func unauthorizedSetterViolation(p *Pass, fn *types.Func) (Diagnostic, bool) {
+	name := fn.Name()
 	for _, prefix := range authzSetterPrefixes {
 		if strings.HasPrefix(name, prefix) {
-			return Diagnostic{
-				Rel:  pkgPath,
-				Line: 0,
-				Message: fmt.Sprintf(
-					"%s.%s has unauthorized exported setter %q "+
-						"(prefix %q); only SetStatus and SetPasswordResetRequired are sanctioned",
-					domainUserType, pkgPath, name, prefix,
-				),
-			}, true
+			return diagAtPos(p, fn.Pos(), fmt.Sprintf(
+				"%s has unauthorized exported setter %q "+
+					"(prefix %q); only SetStatus and SetPasswordResetRequired are sanctioned",
+				domainUserType, name, prefix,
+			)), true
 		}
 	}
 	return Diagnostic{}, false

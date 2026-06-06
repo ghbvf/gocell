@@ -531,7 +531,7 @@ func verifyDomainFieldRedFixtureDetected(t *testing.T, root, fixturePattern, lab
 		if p.Pkg == nil {
 			return nil
 		}
-		found += len(scanDomainUserViolations(p.Pkg))
+		found += len(scanDomainUserViolations(p))
 		return nil
 	})
 
