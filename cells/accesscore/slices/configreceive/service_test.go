@@ -322,11 +322,11 @@ func TestHandleEntryUpserted_ConfigEventMetricsOutcomes(t *testing.T) {
 			}},
 		},
 		{
-			name:            "no tenant in context records no_tenant and Acks",
+			name:            "no tenant in context records no_tenant and Rejects to DLQ",
 			getter:          &stubConfigGetter{entry: ports.ConfigEntry{Key: "jwt.ttl", Value: "30m", Version: 1}},
 			needTenant:      false, // deliberately omit tenant → FromContext error
 			payload:         []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
-			wantDisposition: outbox.DispositionAck,
+			wantDisposition: outbox.DispositionReject, // fail-closed: missing-tenant invariant violation → DLQ (codex F2)
 			wantRecords: []configEventRecord{{
 				cell: "accesscore", slice: "configreceive", reason: obmetrics.ConfigEventProcessReasonNoTenant,
 			}},
@@ -379,10 +379,12 @@ func TestHandleEntryUpserted_WithConfigGetter_ForwardsRealTenant(t *testing.T) {
 	assert.Equal(t, wantTenant, stub.calledWithTenant, "GetEntry must receive the real tenant from context")
 }
 
-// TestHandleEntryUpserted_WithConfigGetter_NoTenant_SkipsRefetch asserts that
+// TestHandleEntryUpserted_WithConfigGetter_NoTenant_RejectsToDLQ asserts that
 // when no tenant is present in the context (bare context.Background()), the
-// service skips the ConfigGetter refetch and returns Ack without calling GetEntry.
-func TestHandleEntryUpserted_WithConfigGetter_NoTenant_SkipsRefetch(t *testing.T) {
+// service fail-closes: it does NOT call the ConfigGetter and Rejects the event
+// to DLQ with a PermanentError (a tenant-less config event is an envelope/restore
+// invariant violation, not a safely-consumable event — codex review F2).
+func TestHandleEntryUpserted_WithConfigGetter_NoTenant_RejectsToDLQ(t *testing.T) {
 	stub := &stubConfigGetter{
 		entry: ports.ConfigEntry{Key: "jwt.ttl", Value: "30m", Version: 1},
 	}
@@ -392,8 +394,10 @@ func TestHandleEntryUpserted_WithConfigGetter_NoTenant_SkipsRefetch(t *testing.T
 	entry := outboxtest.NewEntry(TopicConfigEntryUpserted, []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`))
 	result := svc.HandleEntryUpserted(context.Background(), entry)
 
-	assert.Equal(t, outbox.DispositionAck, result.Disposition)
-	assert.NoError(t, result.Err)
+	assert.Equal(t, outbox.DispositionReject, result.Disposition)
+	require.Error(t, result.Err)
+	var permErr *outbox.PermanentError
+	assert.True(t, errors.As(result.Err, &permErr), "missing-tenant Reject must wrap PermanentError (→ DLQ)")
 	assert.Empty(t, stub.calledWith, "GetEntry must NOT be called when no tenant in context")
 }
 

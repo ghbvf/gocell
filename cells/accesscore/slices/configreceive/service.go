@@ -82,8 +82,11 @@ func NewService(logger *slog.Logger, opts ...Option) *Service {
 // principal envelope) and fetches the current entry value from configcore
 // (contract: http.config.internal.get.v1) scoped to that tenant tier.
 //
-// If no tenant is in ctx the refetch is skipped with Ack (Warn log): this
-// guards against misconfigured consumer pipelines while remaining idempotent.
+// If no tenant is in ctx the event is Rejected to DLQ (PermanentError): a
+// config event reaching this consumer without a tenant is an envelope/restore
+// pipeline violation of this PR's tenant-correct invariant (#1577), not a
+// safely-consumable event — fail-closed surfaces it for investigation instead
+// of silently Acking (codex review F2).
 //
 // Fetch failures are retriable: a transient Requeue is returned so the
 // consumer pipeline retries. A 404 (entry genuinely absent in the tenant
@@ -104,10 +107,15 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) o
 	if s.configGetter != nil {
 		t, terr := tenant.FromContext(ctx)
 		if terr != nil {
-			s.logger.Warn("config-receive: no tenant in context, skipping refetch",
-				slog.Any("error", terr), slog.String("key", event.Key))
+			// Fail-closed: a config event without a tenant in ctx is an
+			// envelope/restore pipeline violation of the tenant-correct
+			// invariant (#1577), not a safely-consumable stale event. Reject to
+			// DLQ so operators investigate, rather than silently Acking.
+			s.logger.Error("config-receive: no tenant in event envelope, cannot scope refetch; routing to DLQ",
+				slog.Any("error", terr), slog.String("key", event.Key), slog.String("entry_id", entry.ID()))
 			s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonNoTenant)
-			return outbox.Ack()
+			return outbox.Reject(outbox.NewPermanentError(
+				fmt.Errorf("config-receive: missing tenant in event envelope, cannot scope refetch: %w", terr)))
 		}
 
 		cfg, fetchErr := s.configGetter.GetEntry(ctx, t, event.Key)

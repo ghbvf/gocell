@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -195,4 +196,33 @@ func TestHandler_InternalGet_NilUUIDTenantHeader_400(t *testing.T) {
 	handler.ServeHTTP(w, asCaller(req))
 
 	errcodetest.AssertWireCode(t, w, http.StatusBadRequest, errcode.ErrValidationFailed)
+}
+
+// TestHandler_InternalGet_UppercaseTenantHeader_Normalized asserts that an
+// uppercase X-Tenant-ID is ACCEPTED and normalized to canonical lowercase
+// (tenant.ParseTenantID semantics) — NOT rejected as non-canonical. The row is
+// seeded under the lowercase tenant and found via the uppercase header (200).
+// Locks the contract.yaml header semantics against the parser (codex review F3).
+func TestHandler_InternalGet_UppercaseTenantHeader_Normalized(t *testing.T) {
+	const tenantLower = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	handler, repo := setupHandler()
+	now := time.Now()
+	require.NoError(t, repo.Create(context.Background(), tenant.TenantID(tenantLower), &domain.ConfigEntry{
+		ID: "cfg-up", Key: "app.region", Value: "eu", Version: 1,
+		CreatedAt: now, UpdatedAt: now,
+	}))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, internalBasePath+"/app.region", nil)
+	// Uppercase header; row seeded under canonical lowercase — must still be found.
+	req.Header.Set("X-Tenant-ID", strings.ToUpper(tenantLower))
+	handler.ServeHTTP(w, asCaller(req))
+
+	assert.Equal(t, http.StatusOK, w.Code,
+		"uppercase X-Tenant-ID must normalize to canonical lowercase (not 400)")
+	var resp struct {
+		Data internalapig.ResponseData `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "eu", resp.Data.Value)
 }
