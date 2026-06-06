@@ -40,7 +40,7 @@ func setup(t testing.TB) (http.Handler, string) {
 	refreshStore := newTestRefreshStore()
 
 	sess := newTestSession("usr-1", "sess-1")
-	_ = sessionStore.Create(context.Background(), sess)
+	_ = sessionStore.Create(context.Background(), testTenantID, sess)
 
 	// Issue an opaque wire token for sess-1.
 	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-1", "usr-1", int64(1))
@@ -320,7 +320,7 @@ func TestHandleRefresh_UserNotActive_Returns401(t *testing.T) {
 	require.NoError(t, userRepo.UpdateLockState(context.Background(), testTenantID, u.ID, domain.StatusSuspended, time.Now()))
 
 	sess := newTestSession(u.ID, "sess-suspended")
-	require.NoError(t, sessionStore.Create(context.Background(), sess))
+	require.NoError(t, sessionStore.Create(context.Background(), testTenantID, sess))
 	wireToken, _, issueErr := refreshStore.Issue(context.Background(), sess.ID, u.ID, int64(1))
 	require.NoError(t, issueErr)
 

@@ -529,7 +529,7 @@ func httpCreateUserStatus(t *testing.T, base, adminAccessToken, username, email,
 // position so the caller-cell allowlist can be statically verified.
 func assignRole(t *testing.T, h *l2Harness, userID, roleID string) {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{"userId": userID, "roleId": roleID})
+	body, _ := json.Marshal(map[string]string{"userId": userID, "roleId": roleID, "tenantId": l2TestTenantID})
 	token := auth.GenerateServiceToken(h.ring, "accesscore", http.MethodPost,
 		internalPathRolesAssign, "", time.Now())
 	req, _ := http.NewRequest(http.MethodPost, h.internalBase+internalPathRolesAssign,
@@ -549,7 +549,7 @@ func assignRole(t *testing.T, h *l2Harness, userID, roleID string) {
 // cell is an inlined literal rather than a parameter.
 func revokeRole(t *testing.T, h *l2Harness, userID, roleID string) {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{"userId": userID, "roleId": roleID})
+	body, _ := json.Marshal(map[string]string{"userId": userID, "roleId": roleID, "tenantId": l2TestTenantID})
 	token := auth.GenerateServiceToken(h.ring, "accesscore", http.MethodPost,
 		internalPathRolesRevoke, "", time.Now())
 	req, _ := http.NewRequest(http.MethodPost, h.internalBase+internalPathRolesRevoke,

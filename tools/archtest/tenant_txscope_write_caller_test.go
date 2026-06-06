@@ -93,10 +93,14 @@ const tenantWithScopeSetter = "WithScope"
 
 // tenantTxScopeAllowlist is the set of module-relative production files allowed
 // to call tenant.WithScope. PR-3a: the single configcore read-scoping helper.
-// PR-3b (#1617) will add the pre-auth/service derivation sites (setup / login /
-// refresh) when accesscore tables go under RLS.
+// PR-3b (#1617): accesscore routes ALL its pre-auth/service tenant-scoping (setup,
+// login 2-tx, refresh reuse-cascade, validate, rbaccheck, authorizationdecide,
+// rbacassign, IssueForUser) through the single scopedtx funnel — so the allowlist
+// gains exactly ONE accesscore entry (scopedtx.Do is the only WithScope callsite;
+// the mid-tx ApplyScope path does not call WithScope, it writes the GUC directly).
 var tenantTxScopeAllowlist = map[string]struct{}{
 	"cells/configcore/internal/scopedread/scopedread.go": {},
+	"cells/accesscore/internal/scopedtx/scopedtx.go":     {},
 }
 
 // TestTenantTxScopeWriteCaller01 asserts every production reference to

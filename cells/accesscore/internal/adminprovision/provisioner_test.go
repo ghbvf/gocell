@@ -142,7 +142,7 @@ func TestEnsure_DuplicateUsername_Returns409(t *testing.T) {
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthUserDuplicate, ec.Code)
 	// Existing user must be untouched.
-	refreshed, getErr := userRepo.GetByID(context.Background(), "usr-existing")
+	refreshed, getErr := userRepo.GetByIDInTenant(context.Background(), testTenantID, "usr-existing")
 	require.NoError(t, getErr)
 	assert.Equal(t, "$2a$10$identityhash", refreshed.PasswordHash, "existing user hash must not change")
 }
@@ -350,7 +350,7 @@ func TestProvisioner_Compensate_RemovesRoleAndUser(t *testing.T) {
 	cnt, err := roleRepo.CountByRole(context.Background(), testTenantID, auth.RoleAdmin)
 	require.NoError(t, err)
 	assert.Equal(t, 0, cnt, "role assignment removed")
-	_, err = userRepo.GetByID(context.Background(), user.ID)
+	_, err = userRepo.GetByIDInTenant(context.Background(), testTenantID, user.ID)
 	require.Error(t, err, "user row removed")
 }
 

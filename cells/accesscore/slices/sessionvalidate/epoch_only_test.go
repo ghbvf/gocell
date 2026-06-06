@@ -33,6 +33,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
@@ -65,7 +66,7 @@ func TestEnforceSessionState_EpochMismatch_RejectsWithoutSessionRevoke(t *testin
 	// Seed an active session — AuthzEpochAtIssue=1 matches user.epoch=1.
 	// RevokedAt deliberately stays nil so the epoch branch is the ONLY
 	// rejection path after the bump.
-	require.NoError(t, sessionStore.Create(context.Background(), &session.Session{
+	require.NoError(t, sessionStore.Create(context.Background(), testTenantID, &session.Session{
 		ID:                sessionID,
 		SubjectID:         userID,
 		JTI:               "jti-epoch-" + sessionID,
@@ -74,7 +75,8 @@ func TestEnforceSessionState_EpochMismatch_RejectsWithoutSessionRevoke(t *testin
 		ExpiresAt:         time.Now().Add(time.Hour),
 	}))
 
-	svc, err := NewService(testVerifier, sessionStore, userRepo, slog.Default())
+	svc, err := NewService(testVerifier, sessionStore, userRepo, slog.Default(),
+		WithTxManager(outbox.DemoCellTxManager()))
 	require.NoError(t, err)
 
 	// Token with active session: user.epoch=1 == session.AuthzEpochAtIssue=1 → ACCEPT.
@@ -122,7 +124,7 @@ func TestEnforceSessionState_SubjectMismatch_Rejects(t *testing.T) {
 	}
 
 	// Seed an active session owned by ownerID. AuthzEpochAtIssue=1 matches ownerID.epoch=1.
-	require.NoError(t, sessionStore.Create(context.Background(), &session.Session{
+	require.NoError(t, sessionStore.Create(context.Background(), testTenantID, &session.Session{
 		ID:                sessionID,
 		SubjectID:         ownerID,
 		JTI:               "jti-mismatch-" + sessionID,
@@ -131,7 +133,8 @@ func TestEnforceSessionState_SubjectMismatch_Rejects(t *testing.T) {
 		ExpiresAt:         time.Now().Add(time.Hour),
 	}))
 
-	svc, err := NewService(testVerifier, sessionStore, userRepo, slog.Default())
+	svc, err := NewService(testVerifier, sessionStore, userRepo, slog.Default(),
+		WithTxManager(outbox.DemoCellTxManager()))
 	require.NoError(t, err)
 
 	// Forge a token whose sub is imposter but sid points at owner's session.
@@ -171,7 +174,8 @@ var _ kauth.IntentTokenVerifier = infraOnlyVerifier{}
 // credential failures. The fixed path must propagate KindUnavailable so the
 // middleware layer can emit a 503.
 func TestVerifyIntent_VerifierInfra_Preserves503(t *testing.T) {
-	svc, err := NewService(infraOnlyVerifier{}, nil /*sessionStore*/, mem.NewStore(clock.Real()).UserRepository(), slog.Default())
+	svc, err := NewService(infraOnlyVerifier{}, nil /*sessionStore*/, mem.NewStore(clock.Real()).UserRepository(), slog.Default(),
+		WithTxManager(outbox.DemoCellTxManager()))
 	require.NoError(t, err)
 
 	_, err = svc.VerifyIntent(context.Background(), "any-token", kauth.TokenIntentAccess)

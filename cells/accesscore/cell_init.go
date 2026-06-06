@@ -270,7 +270,8 @@ func (c *AccessCore) initSlices() error {
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(identitymanage.SliceMetadata()))
 
 	// session-validate (before session-refresh: provides session-aware verifier)
-	validateSvc, err := sessionvalidate.NewService(c.jwtVerifier, c.sessionStore, c.userRepo, c.logger)
+	validateSvc, err := sessionvalidate.NewService(c.jwtVerifier, c.sessionStore, c.userRepo, c.logger,
+		sessionvalidate.WithTxManager(c.txRunner))
 	if err != nil {
 		return err
 	}
@@ -311,7 +312,8 @@ func (c *AccessCore) initSlices() error {
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(sessionlogout.SliceMetadata()))
 
 	// authorization-decide
-	authzSvc, err := authorizationdecide.NewService(c.roleRepo, c.logger)
+	authzSvc, err := authorizationdecide.NewService(c.roleRepo, c.logger,
+		authorizationdecide.WithTxManager(c.txRunner))
 	if err != nil {
 		return err
 	}
@@ -319,7 +321,8 @@ func (c *AccessCore) initSlices() error {
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(authorizationdecide.SliceMetadata()))
 
 	// rbac-check
-	rbacSvc, err := rbaccheck.NewService(c.roleRepo, c.cursorCodec, c.logger, c.rbacRunMode)
+	rbacSvc, err := rbaccheck.NewService(c.roleRepo, c.cursorCodec, c.logger, c.rbacRunMode,
+		rbaccheck.WithTxManager(c.txRunner))
 	if err != nil {
 		return err
 	}

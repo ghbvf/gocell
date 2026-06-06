@@ -187,14 +187,18 @@ func TestRLSForce_SystemTenantStrictEquality(t *testing.T) {
 func TestRLSForce_SchemaGuardVerifyRLS(t *testing.T) {
 	ctx := context.Background()
 
-	// Positive: after migration 052 the config tables are FORCE RLS + policy.
+	// Positive: after migrations 052 (config) + 053 (accesscore) all six tenant
+	// tables are FORCE RLS + policy.
 	require.NoError(t, VerifyExpectedShape(ctx, migratedPool(t)),
-		"VerifyExpectedShape must pass with RLS enabled on the config tables")
+		"VerifyExpectedShape must pass with RLS enabled on all six tenant tables")
 
-	// Negative: dropping the tenant_isolation policy on ANY of the three config
-	// tables must make verifyRLS fail — each on its own fresh clone so the drops
-	// don't interfere (proves verifyRLS checks every table, not just the first).
-	for _, table := range []string{"config_entries", "config_versions", "feature_flags"} {
+	// Negative: dropping the tenant_isolation policy on ANY of the six RLS tables
+	// must make verifyRLS fail — each on its own fresh clone so the drops don't
+	// interfere (proves verifyRLS checks every table, not just the first).
+	for _, table := range []string{
+		"config_entries", "config_versions", "feature_flags",
+		"users", "roles", "role_assignments",
+	} {
 		t.Run("drop_policy_"+table, func(t *testing.T) {
 			pool := migratedPool(t)
 			_, err := pool.DB().Exec(ctx, `DROP POLICY tenant_isolation ON `+table)
@@ -261,4 +265,112 @@ func TestRLSForce_SchemaGuardVerifyRLS(t *testing.T) {
 				"VerifyExpectedShape must fail for a semantically weakened tenant_isolation policy ("+dc.name+")")
 		})
 	}
+}
+
+// ── PR-3b (#1617) accesscore-table RLS isolation ─────────────────────────────
+//
+// These mirror the config-table tests above against the accesscore tables that
+// migration 053 placed under FORCE RLS (users/roles/role_assignments), exercised
+// through the restricted (NON-superuser, NOBYPASSRLS) role so RLS is observable.
+
+// scopedInsertUser inserts a minimal valid users row under tenant tid's RLS scope.
+// Only the NOT NULL columns without a DEFAULT are supplied (migration 050); the
+// rest rely on their column defaults.
+func scopedInsertUser(t *testing.T, tm *TxManager, tid tenant.TenantID, id, username string) error {
+	t.Helper()
+	return tm.RunInTx(tenant.WithScope(context.Background(), tid), func(ctx context.Context) error {
+		tx, ok := persistence.TxFromContext[pgx.Tx](ctx)
+		require.True(t, ok, "ambient tx must be present")
+		// WHERE-less INSERT: RLS WITH CHECK validates tenant_id against app.tenant_id.
+		_, err := tx.Exec(ctx, `INSERT INTO users
+			(id, tenant_id, username, email, password_hash, status, creation_source, authz_epoch, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, 'h', 'active', 'identity', 1, now(), now())`,
+			id, string(tid), username, username+"@rls.local")
+		return err
+	})
+}
+
+// scopedCountUsers counts users rows with the given username VISIBLE under tenant
+// tid's RLS scope. The WHERE clause omits tenant_id — RLS supplies the predicate.
+func scopedCountUsers(t *testing.T, tm *TxManager, tid tenant.TenantID, username string) int {
+	t.Helper()
+	var n int
+	require.NoError(t, tm.RunInTx(tenant.WithScope(context.Background(), tid), func(ctx context.Context) error {
+		tx, _ := persistence.TxFromContext[pgx.Tx](ctx)
+		return tx.QueryRow(ctx, `SELECT count(*) FROM users WHERE username = $1`, username).Scan(&n)
+	}))
+	return n
+}
+
+func TestRLSForce_Accesscore_CrossTenantIsolation(t *testing.T) {
+	dsn := sharedPG.CloneDSN(t)
+	admin := openPerTestPool(t, dsn)
+	app := restrictedAppPool(t, dsn, admin)
+	tm := NewTxManager(app)
+
+	require.NoError(t, scopedInsertUser(t, tm, rlsTenantA, "11111111-1111-1111-1111-111111111111", "u-iso"))
+
+	assert.Equal(t, 1, scopedCountUsers(t, tm, rlsTenantA, "u-iso"),
+		"tenant A must see its own users row")
+	assert.Equal(t, 0, scopedCountUsers(t, tm, rlsTenantB, "u-iso"),
+		"tenant B must NOT see tenant A's users row (RLS USING isolation)")
+}
+
+func TestRLSForce_Accesscore_InsertWithCheckRejectsCrossTenant(t *testing.T) {
+	dsn := sharedPG.CloneDSN(t)
+	admin := openPerTestPool(t, dsn)
+	app := restrictedAppPool(t, dsn, admin)
+	tm := NewTxManager(app)
+
+	// Scope = A, but the row claims tenant_id = B → WITH CHECK must reject.
+	err := tm.RunInTx(tenant.WithScope(context.Background(), rlsTenantA), func(ctx context.Context) error {
+		tx, _ := persistence.TxFromContext[pgx.Tx](ctx)
+		_, e := tx.Exec(ctx, `INSERT INTO users
+			(id, tenant_id, username, email, password_hash, status, creation_source, authz_epoch, created_at, updated_at)
+			VALUES ($1, $2, 'u-wc', 'u-wc@rls.local', 'h', 'active', 'identity', 1, now(), now())`,
+			"22222222-2222-2222-2222-222222222222", string(rlsTenantB))
+		return e
+	})
+	require.Error(t, err, "writing a users row for another tenant must be rejected by WITH CHECK")
+	var pgErr *pgconn.PgError
+	require.ErrorAs(t, err, &pgErr)
+	assert.Equal(t, "42501", pgErr.Code, "expected row-level-security WITH CHECK violation (SQLSTATE 42501)")
+}
+
+func TestRLSForce_Accesscore_RoleAssignmentSameTenantFK(t *testing.T) {
+	dsn := sharedPG.CloneDSN(t)
+	admin := openPerTestPool(t, dsn)
+	app := restrictedAppPool(t, dsn, admin)
+	tm := NewTxManager(app)
+
+	const userID = "33333333-3333-3333-3333-333333333333"
+	require.NoError(t, scopedInsertUser(t, tm, rlsTenantA, userID, "u-fk"))
+	// Seed a role + a same-tenant assignment under A — must succeed.
+	require.NoError(t, tm.RunInTx(tenant.WithScope(context.Background(), rlsTenantA), func(ctx context.Context) error {
+		tx, _ := persistence.TxFromContext[pgx.Tx](ctx)
+		if _, e := tx.Exec(ctx, `INSERT INTO roles (tenant_id, id, name) VALUES ($1, 'viewer', 'Viewer')`, string(rlsTenantA)); e != nil {
+			return e
+		}
+		_, e := tx.Exec(ctx, `INSERT INTO role_assignments (tenant_id, user_id, role_id) VALUES ($1, $2, 'viewer')`, string(rlsTenantA), userID)
+		return e
+	}), "same-tenant role assignment must succeed")
+
+	// Cross-tenant grant: scope = B, assign B-tenant grant to A's user → the
+	// composite FK (tenant_id, user_id) -> users(tenant_id, id) finds no such user
+	// in tenant B (RLS-invisible + no row), so the FK is violated (23503).
+	err := tm.RunInTx(tenant.WithScope(context.Background(), rlsTenantB), func(ctx context.Context) error {
+		tx, _ := persistence.TxFromContext[pgx.Tx](ctx)
+		if _, e := tx.Exec(ctx, `INSERT INTO roles (tenant_id, id, name) VALUES ($1, 'viewer', 'Viewer')`, string(rlsTenantB)); e != nil {
+			return e
+		}
+		_, e := tx.Exec(ctx, `INSERT INTO role_assignments (tenant_id, user_id, role_id) VALUES ($1, $2, 'viewer')`, string(rlsTenantB), userID)
+		return e
+	})
+	require.Error(t, err, "granting a role to a user that does not exist in this tenant must be rejected")
+	var pgErr *pgconn.PgError
+	require.ErrorAs(t, err, &pgErr)
+	// 23503 = foreign_key_violation; 42501 = RLS WITH CHECK — either is a valid
+	// cross-tenant rejection (the composite FK and RLS both fail-close here).
+	assert.Contains(t, []string{"23503", "42501"}, pgErr.Code,
+		"expected FK (23503) or RLS (42501) rejection of the cross-tenant grant, got "+pgErr.Code)
 }

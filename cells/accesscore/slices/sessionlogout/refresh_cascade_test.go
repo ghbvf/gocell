@@ -45,7 +45,7 @@ func TestService_Logout_RevokesRefreshChain(t *testing.T) {
 
 	sessionID := "sess-logout-1"
 	userID := "user-logout-1"
-	require.NoError(t, sessionStore.Create(ctx, &session.Session{
+	require.NoError(t, sessionStore.Create(ctx, testTenantID, &session.Session{
 		ID:                sessionID,
 		SubjectID:         userID,
 		JTI:               "jti-" + sessionID,

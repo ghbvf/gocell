@@ -94,18 +94,9 @@ INSERT INTO users (
     status, creation_source, authz_epoch, created_at, updated_at
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
 
-	// GetByID is the tenant-deriving carve-out — it reads by global UUID PK only.
-	selectUserByIDSQL = `
-SELECT id, username, email, password_hash, password_version, password_reset_required,
-       status, creation_source, authz_epoch, created_at, updated_at,
-       failed_login_count, last_failed_at, locked_until, tenant_id
-FROM users
-WHERE id = $1`
-
 	// selectUserByIDInTenantSQL: $1=id, $2=tenant_id — tenant-scoped by-PK read.
-	// Used by admin paths that hold a tenant context (identitymanage GetByID
-	// callsites converted by F2). Collapses "row not in this tenant" and "row
-	// absent" into a single pgx.ErrNoRows so no cross-tenant existence leaks.
+	// Collapses "row not in this tenant" and "row absent" into a single
+	// pgx.ErrNoRows so no cross-tenant existence leaks.
 	selectUserByIDInTenantSQL = `
 SELECT id, username, email, password_hash, password_version, password_reset_required,
        status, creation_source, authz_epoch, created_at, updated_at,
@@ -267,29 +258,6 @@ func (r *PGUserRepo) Create(ctx context.Context, t tenant.TenantID, user *domain
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: create", err)
 	}
 	return nil
-}
-
-// GetByID fetches a user by primary key. Returns ErrAuthUserNotFound when absent.
-func (r *PGUserRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
-	row := r.db.QueryRow(ctx, selectUserByIDSQL, id)
-	u, err := scanUser(row)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
-				errcode.WithCategory(errcode.CategoryDomain),
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%s", id))))
-		}
-		// scanUser may return errcode.ErrPGSchemaShape for invalid enum drift
-		// from the DB; propagate that code instead of collapsing to ErrInternal
-		// so operators can distinguish schema-drift faults from generic infra
-		// failures (e.g. /readyz?verbose triage).
-		var ec *errcode.Error
-		if errors.As(err, &ec) && ec.Code == errcode.ErrPGSchemaShape {
-			return nil, err
-		}
-		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: get-by-id", err)
-	}
-	return u, nil
 }
 
 // GetByIDInTenant fetches a user by primary key within tenant t. Returns

@@ -188,3 +188,68 @@ Session repo `tenant.TenantID` typed param and refresh-token tenant carrier are
 **deferred to PR-3** (refresh path has no pre-auth tenant source until PR-3 RLS
 `SET LOCAL app.tenant_id` lands). The `sessionrefresh` / `sessionvalidate`
 callers of `GetByID` are therefore still correct for this PR.
+
+## §Amendment 2026-06-06 — PR-3b: tenant-less `GetByID` DELETED (#1617)
+
+**EPIC**: #1337 multi-tenancy, PR-3b accesscore RLS + auth-path tenant wiring.
+
+PR-3b places `users` / `roles` / `role_assignments` under PG `FORCE ROW LEVEL
+SECURITY`. A tenant-less `GetByID(ctx, id)` (`WHERE id = $1`, no tenant predicate)
+then fails-closed to 0 rows under a restricted role, so the carve-out can no longer
+function. The PR-2a amendment's prediction ("RLS backstop in PR-3") is realised by
+**deleting the method**, not by an RLS-protected tenant-less read.
+
+### Changes to the method set
+
+- **`GetByID(ctx, id)` REMOVED.** All former callers now derive the tenant and use
+  `GetByIDInTenant(ctx, t, id)` under a tenant scope:
+  - `sessionrefresh` / `sessionvalidate` — tenant derived from the **session row**
+    (`sessions.tenant_id` carrier, migration 054; the composite FK
+    `(tenant_id, subject_id) → users(tenant_id, id)` makes that carrier DB-Hard
+    trustworthy), not from a tenant-less by-PK read.
+  - `rbacassign` / role-revoke — tenant supplied by the service-token caller via
+    the internal request contract (`tenantId`).
+- Net method set: **13 → 12** (remove `GetByID`; every remaining `UserRepository`
+  method now carries `tenant.TenantID`).
+
+### Updated method set (12 methods)
+
+```
+BumpAuthzEpoch(ctx, t, userID, tok)
+Create(ctx, t, user)
+Delete(ctx, t, id)
+GetByIDForUpdate(ctx, t, id)
+GetByIDInTenant(ctx, t, id)            ← the sole by-PK read (tenant-typed)
+GetByUsername(ctx, t, username)
+GetByUsernameForUpdate(ctx, t, username)
+UpdateLockState(ctx, t, userID, status, now)
+UpdateLockoutFields(ctx, t, user)
+UpdatePassword(ctx, t, userID, newHash, resetRequired, expectedPasswordVersion)
+UpdatePasswordResetFlag(ctx, t, userID, required, now)
+UpdateProfile(ctx, t, userID, name, email, now)
+```
+
+### Threat matrix re-evaluation (per ai-robust.md §"ADR amendment 落地必查")
+
+The two PR-2a `GetByID`-carve-out rows are upgraded — the residual Medium archtest
+caller-allowlist becomes a compile-time Hard because the method no longer exists:
+
+| Threat | PR-2a state | PR-3b state | Notes |
+|---|---|---|---|
+| Cross-tenant data read via a tenant-less read | ✅ Hard write methods + ⚠️ `GetByID` carve-out allowlisted by `TENANT-REPO-CALLSITE-FUNNEL-01` (Medium) | ✅ **Hard, fully** — `GetByID` deleted; **every** `UserRepository` method takes `tenant.TenantID` → omitting it is a compile error; no tenant-less escape hatch | carve-out closed at the type level |
+| Admin/new path using tenant-less `GetByID` to leak existence | ✅ `GetByIDInTenant` added; new `GetByID` callers blocked by `TENANT-REPO-CALLSITE-FUNNEL-01` (Medium archtest) | ✅ **Hard** — the method is gone; there is nothing to call. `TENANT-REPO-CALLSITE-FUNNEL-01` **retired** (no subject left to fence) | upstream direction now compiler-Hard |
+| Generic `Update(*User)` regression | 🛡️ Medium archtest (golden 13) | 🛡️ Medium archtest (golden **12**) | `USERREPO-METHOD-SET-FROZEN-01` golden − `GetByID` |
+
+No row regresses (no ✅→⚠️/❌); both `GetByID`-carve-out rows strengthen
+Medium→Hard. The DB-layer FORCE RLS (migration 053) is an additional independent
+backstop, runtime-active once the restricted app-serving pool lands (backlog #1676).
+
+### Enforcement artifacts updated in this PR
+
+- `tools/archtest/userrepo_method_set_frozen_test.go` — golden `−GetByID` (13 → 12).
+- `tools/archtest/tenant_repo_param_funnel_test.go` — `GetByID` carve-out removed from
+  `TENANT-REPO-PARAM-FUNNEL-01`; **`TENANT-REPO-CALLSITE-FUNNEL-01` retired** (with an
+  in-file retirement note).
+- New mid-tx scope primitive `CellTxManager.ApplyTenantScope` + single accesscore
+  WithScope funnel `cells/accesscore/internal/scopedtx` (TENANT-TXSCOPE-WRITE-CALLER-01
+  allowlist +1). See `.claude/rules/gocell/tenancy.md` PR-3b row.

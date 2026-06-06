@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
 )
@@ -27,7 +28,8 @@ func TestService_VerifyIntent_RejectsRefreshIntentToken(t *testing.T) {
 	require.NoError(t, err)
 
 	// sessionStore nil = demo mode; userRepo required by ctor but never called.
-	svc, err := NewService(verifier, nil, &stubUserRepo{}, slog.Default())
+	svc, err := NewService(verifier, nil, &stubUserRepo{}, slog.Default(),
+		WithTxManager(outbox.DemoCellTxManager()))
 	require.NoError(t, err)
 
 	refreshTok, err := IssueLegacyRefreshJWT(priv, "usr-attacker", time.Hour)
@@ -47,7 +49,8 @@ func TestService_VerifyIntent_AcceptsAccessIntentToken(t *testing.T) {
 	require.NoError(t, err)
 
 	// sessionStore nil = demo mode; userRepo required by ctor but never called.
-	svc, err := NewService(verifier, nil, &stubUserRepo{}, slog.Default())
+	svc, err := NewService(verifier, nil, &stubUserRepo{}, slog.Default(),
+		WithTxManager(outbox.DemoCellTxManager()))
 	require.NoError(t, err)
 
 	accessTok, err := IssueTestTokenWithIntent(priv, kauth.TokenIntentAccess,

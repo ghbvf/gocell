@@ -574,7 +574,7 @@ func TestEffectiveAdminTrigger_RawStatusUpdate_Rejected_PG(t *testing.T) {
 	assert.True(t, isLastAdminProtected(rawErr), "isLastAdminProtected must classify the trigger error")
 
 	// Confirm the status was NOT actually updated (trigger fired BEFORE UPDATE).
-	got, err := userRepo.GetByID(ctx, soloAdmin.ID)
+	got, err := userRepo.GetByIDInTenant(ctx, testTenantID, soloAdmin.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.StatusActive, got.Status(), "trigger must reject UPDATE before row is changed")
 }
@@ -599,7 +599,7 @@ func TestEffectiveAdminTrigger_RawStatusUpdate_Allowed_WhenOtherActiveAdmin_PG(t
 		"UPDATE users SET status = 'locked' WHERE id = $1", target.ID)
 	require.NoError(t, rawErr, "DB trigger must allow status demotion when a peer effective admin remains")
 
-	got, err := userRepo.GetByID(ctx, target.ID)
+	got, err := userRepo.GetByIDInTenant(ctx, testTenantID, target.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.StatusLocked, got.Status(), "status must have been updated")
 }

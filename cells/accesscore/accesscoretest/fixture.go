@@ -178,7 +178,7 @@ func (f *AccessFixture) SeedAssignment(ctx context.Context, userID, roleID strin
 // this to assert that service operations updated user state without needing
 // to import internal/domain.
 func (f *AccessFixture) GetUser(ctx context.Context, id string) (SeededUserView, error) {
-	u, err := f.bundle.UserRepository().GetByID(ctx, id)
+	u, err := f.bundle.UserRepository().GetByIDInTenant(ctx, f.TenantID, id)
 	if err != nil {
 		return SeededUserView{}, err
 	}

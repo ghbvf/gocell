@@ -31,6 +31,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
@@ -89,9 +90,9 @@ type trackingSessionStore struct {
 	revoked []string
 }
 
-func (r *trackingSessionStore) Create(ctx context.Context, s *session.Session) error {
+func (r *trackingSessionStore) Create(ctx context.Context, t tenant.TenantID, s *session.Session) error {
 	r.created = append(r.created, s.ID)
-	return r.Store.Create(ctx, s)
+	return r.Store.Create(ctx, t, s)
 }
 
 func (r *trackingSessionStore) Revoke(ctx context.Context, id string) error {
@@ -599,9 +600,9 @@ type countingSessionStore struct {
 	creates int
 }
 
-func (c *countingSessionStore) Create(ctx context.Context, s *session.Session) error {
+func (c *countingSessionStore) Create(ctx context.Context, t tenant.TenantID, s *session.Session) error {
 	c.creates++
-	return c.Store.Create(ctx, s)
+	return c.Store.Create(ctx, t, s)
 }
 
 // countingEmitter counts Emit calls so the fail-closed test can prove the
@@ -1354,12 +1355,18 @@ func TestLogin_WrongPassword_CounterPersistsAcrossTx(t *testing.T) {
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthLoginFailed, ec.Code, "wire code is ERR_AUTH_LOGIN_FAILED")
 
-	require.Len(t, tx.committedCleanly, 1, "exactly one tx for the login attempt")
-	assert.True(t, tx.committedCleanly[0],
-		"the login tx must commit so the auto-lockout counter UPDATE persists "+
+	// PR-3b: Login now opens two transactions per attempt:
+	//   tx[0] = pre-bcrypt read-tx (GetByUsername scoped for RLS) — always commits
+	//   tx[1] = write-tx (loginInTx: FOR UPDATE + counter + session + outbox)
+	// The key invariant is that the WRITE tx (tx[1]) commits cleanly so the
+	// auto-lockout counter UPDATE persists (PR #585 review P1#1).
+	require.Len(t, tx.committedCleanly, 2, "one read-tx + one write-tx for the login attempt")
+	assert.True(t, tx.committedCleanly[0], "pre-bcrypt read-tx must commit")
+	assert.True(t, tx.committedCleanly[1],
+		"the login write-tx must commit so the auto-lockout counter UPDATE persists "+
 			"(PG ROLLBACK on error would silently drop the counter — PR #585 review P1#1)")
 
-	persisted, err := userRepo.GetByID(context.Background(), uid)
+	persisted, err := userRepo.GetByIDInTenant(context.Background(), testTenantID, uid)
 	require.NoError(t, err)
 	assert.Equal(t, 1, persisted.FailedLoginCount(),
 		"failed_login_count must advance to 1 even though Login returned 401")
@@ -1378,13 +1385,16 @@ func TestLogin_ThresholdReached_AccountLocks(t *testing.T) {
 		require.Error(t, err, "attempt %d: wrong password rejected", i+1)
 	}
 
-	require.Len(t, tx.committedCleanly, accountlockout.Threshold,
-		"each wrong-password attempt opens exactly one login tx")
+	// PR-3b: each Login attempt opens two transactions:
+	//   even indices = pre-bcrypt read-tx (GetByUsername, RLS scoped)
+	//   odd  indices = write-tx (loginInTx: FOR UPDATE + counter + session)
+	require.Len(t, tx.committedCleanly, accountlockout.Threshold*2,
+		"each wrong-password attempt opens one read-tx + one write-tx")
 	for i, ok := range tx.committedCleanly {
 		assert.True(t, ok, "tx #%d must commit so the counter advances", i+1)
 	}
 
-	persisted, err := userRepo.GetByID(context.Background(), uid)
+	persisted, err := userRepo.GetByIDInTenant(context.Background(), testTenantID, uid)
 	require.NoError(t, err)
 	assert.Equal(t, domain.StatusLocked, persisted.Status(),
 		"after %d wrong attempts the account must be auto-locked", accountlockout.Threshold)
@@ -1412,7 +1422,7 @@ func TestLogin_SuspendedUser_DoesNotIncrementCounter(t *testing.T) {
 		require.Error(t, err, "attempt %d: suspended user rejected", i+1)
 	}
 
-	persisted, err := userRepo.GetByID(context.Background(), uid)
+	persisted, err := userRepo.GetByIDInTenant(context.Background(), testTenantID, uid)
 	require.NoError(t, err)
 	assert.Equal(t, domain.StatusSuspended, persisted.Status(),
 		"suspended user must remain Suspended; the failure counter must not "+
@@ -1475,4 +1485,102 @@ func TestService_IssueForUser_InactiveUser_ReturnsCleanUserNotActiveError(t *tes
 				"Message must be the clean user-visible literal, not the jargon 'credential not authoritative'")
 		})
 	}
+}
+
+// scopeCapturingUserRepo wraps a UserRepository and records whether
+// tenant.ScopeFromContext was set on the context received by GetByUsername.
+// Used by TestLogin_PreBcryptRead_IsRLSScoped (Site 1, PR-3b RLS fix).
+type scopeCapturingUserRepo struct {
+	inner         ports.UserRepository
+	capturedScope tenant.TenantID
+	capturedOK    bool
+}
+
+var _ ports.UserRepository = (*scopeCapturingUserRepo)(nil)
+
+func (r *scopeCapturingUserRepo) Create(ctx context.Context, t tenant.TenantID, user *domain.User) error {
+	return r.inner.Create(ctx, t, user)
+}
+
+func (r *scopeCapturingUserRepo) GetByIDInTenant(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
+	return r.inner.GetByIDInTenant(ctx, t, id)
+}
+
+func (r *scopeCapturingUserRepo) GetByUsername(ctx context.Context, t tenant.TenantID, username string) (*domain.User, error) {
+	r.capturedScope, r.capturedOK = tenant.ScopeFromContext(ctx)
+	return r.inner.GetByUsername(ctx, t, username)
+}
+
+func (r *scopeCapturingUserRepo) Delete(ctx context.Context, t tenant.TenantID, id string) error {
+	return r.inner.Delete(ctx, t, id)
+}
+
+func (r *scopeCapturingUserRepo) UpdateProfile(ctx context.Context, t tenant.TenantID, userID string, name, email *domain.NonEmpty, now time.Time) (*domain.User, error) { //nolint:lll // test fake stub signature; cannot be meaningfully split
+	return r.inner.UpdateProfile(ctx, t, userID, name, email, now)
+}
+
+func (r *scopeCapturingUserRepo) UpdateLockState(ctx context.Context, t tenant.TenantID, userID string, status domain.UserStatus, now time.Time) error { //nolint:lll // test fake stub signature; cannot be meaningfully split
+	return r.inner.UpdateLockState(ctx, t, userID, status, now)
+}
+
+func (r *scopeCapturingUserRepo) UpdatePasswordResetFlag(ctx context.Context, t tenant.TenantID, userID string, required bool, now time.Time) error { //nolint:lll // test fake stub signature; cannot be meaningfully split
+	return r.inner.UpdatePasswordResetFlag(ctx, t, userID, required, now)
+}
+
+func (r *scopeCapturingUserRepo) UpdatePassword(ctx context.Context, t tenant.TenantID, userID string, newHash string, resetRequired bool, expectedPasswordVersion int64) (int64, error) { //nolint:lll // test fake stub signature; cannot be meaningfully split
+	return r.inner.UpdatePassword(ctx, t, userID, newHash, resetRequired, expectedPasswordVersion)
+}
+
+func (r *scopeCapturingUserRepo) BumpAuthzEpoch(ctx context.Context, t tenant.TenantID, userID string, tok credentialfence.FenceToken) (int64, error) { //nolint:lll // test fake stub signature; cannot be meaningfully split
+	return r.inner.BumpAuthzEpoch(ctx, t, userID, tok)
+}
+
+func (r *scopeCapturingUserRepo) GetByIDForUpdate(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
+	return r.inner.GetByIDForUpdate(ctx, t, id)
+}
+
+func (r *scopeCapturingUserRepo) GetByUsernameForUpdate(ctx context.Context, t tenant.TenantID, username string) (*domain.User, error) {
+	return r.inner.GetByUsernameForUpdate(ctx, t, username)
+}
+
+func (r *scopeCapturingUserRepo) UpdateLockoutFields(ctx context.Context, t tenant.TenantID, user *domain.User) error {
+	return r.inner.UpdateLockoutFields(ctx, t, user)
+}
+
+// TestLogin_PreBcryptRead_IsRLSScoped (Site 1, PR-3b) asserts that the
+// pre-bcrypt GetByUsername call runs inside a scopedtx.Do, so that
+// tenant.ScopeFromContext is set on the context when the users table is
+// queried. Under FORCE ROW LEVEL SECURITY (migration 053) an unscoped
+// SELECT returns 0 rows; wrapping in scopedtx.Do ensures the GUC is set.
+//
+// The test uses outbox.DemoCellTxManager() which passes ctx through
+// (unlike stubTxRunner which calls fn(context.Background())), so the
+// WithScope'd ctx propagates to GetByUsername.
+func TestLogin_PreBcryptRead_IsRLSScoped(t *testing.T) {
+	inner := mem.NewStore(clock.Real()).UserRepository()
+	capRepo := &scopeCapturingUserRepo{inner: inner}
+
+	sessionStore := testutil.RealSessionRepo(t)
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+
+	svc := mustNewService(
+		capRepo, sessionStore, roleRepo, newTestRefreshStore(),
+		testIssuer, slog.Default(),
+		WithTxManager(outbox.DemoCellTxManager()),
+		WithSessionTTL(time.Hour),
+	)
+
+	// Seed the user in the inner repo so GetByUsername can find it.
+	seedUser(inner, "rls-test-user", "pass123")
+
+	_, _ = svc.Login(context.Background(), LoginInput{
+		TenantID: testTenantIDStr,
+		Username: "rls-test-user",
+		Password: "pass123",
+	})
+
+	assert.True(t, capRepo.capturedOK,
+		"GetByUsername must run inside a scoped tx (tenant.ScopeFromContext must be set)")
+	assert.Equal(t, testTenantID, capRepo.capturedScope,
+		"GetByUsername must see the correct tenant scope")
 }

@@ -17,12 +17,15 @@
 // (internal/pgsetlocalfixture) proves the scanner actually fires on a bare SET.
 //
 // Prong 2 — GUC-write funnel (the real lock). The app.tenant_id GUC write is the
-// tenant-isolation injection point; it must live in exactly one sanctioned
-// helper (tx_manager.go::setLocalTenant). This prong scans adapters/postgres
-// production string literals for a GUC-WRITE statement targeting app.tenant_id
-// (`set_config('app.tenant_id'…` / `SET [LOCAL] app.tenant_id`) and reports any
-// outside tx_manager.go. The anti-vacuity check requires the sole sanctioned
-// writer to be observed, so a scanner regression or a moved writer fails CI.
+// tenant-isolation injection point; it must live in exactly one file
+// (adapters/postgres/tx_manager.go). The single physical writer is
+// tx_manager.go::writeTenantGUC, called by setLocalTenant (tx-start, from the ctx
+// scope) and by ApplyTenantScope (mid-tx, explicit — #1617 PR-3b sessionrefresh).
+// This prong scans adapters/postgres production string literals for a GUC-WRITE
+// statement targeting app.tenant_id (`set_config('app.tenant_id'…` /
+// `SET [LOCAL] app.tenant_id`) and reports any outside tx_manager.go. The
+// anti-vacuity check requires the sanctioned writer to be observed, so a scanner
+// regression or a moved writer fails CI.
 //
 // # AI-robust rating (charter §"Funnel 双向锁评级")
 //
@@ -191,7 +194,7 @@ func scanPGTenantGUCWrite(p *Pass, writerFile string) (offenders []Diagnostic, w
 				Line: pos.Line,
 				Message: fmt.Sprintf(
 					"PG-SETLOCAL-FUNNEL-01: app.tenant_id GUC write in %s:%d is outside the sole sanctioned "+
-						"writer (%s::setLocalTenant). The tenant RLS GUC injection is the isolation boundary and "+
+						"writer (%s::writeTenantGUC). The tenant RLS GUC injection is the isolation boundary and "+
 						"must be funneled through one helper; do not write app.tenant_id elsewhere.",
 					rel, pos.Line, pgSetLocalGUCWriterFile,
 				),
@@ -223,7 +226,7 @@ func TestPGSetLocalFunnel01_TenantGUCWriterFunnel(t *testing.T) {
 	Report(t, "PG-SETLOCAL-FUNNEL-01", diags)
 	if !observedWriter {
 		t.Errorf("PG-SETLOCAL-FUNNEL-01 anti-vacuity: expected an app.tenant_id GUC write in %s but found none — "+
-			"the scanner regressed or setLocalTenant moved; the funnel would be silently vacuous.", pgSetLocalGUCWriterFile)
+			"the scanner regressed or writeTenantGUC moved; the funnel would be silently vacuous.", pgSetLocalGUCWriterFile)
 	}
 }
 

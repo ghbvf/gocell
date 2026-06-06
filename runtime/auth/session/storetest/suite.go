@@ -25,6 +25,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest" // test funnel; storetest is testing-helper package, errcodetest import is intentional (not a test-only import in a non-_test.go file)
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
@@ -44,6 +45,11 @@ type Factory func(t *testing.T) (store session.Store, fakeClock *clockmock.FakeC
 // epochAnchor is the deterministic start time used by NewTestProtocol-driven
 // fixtures. Anchored at 2025-01-01 UTC (round, far from epoch boundaries).
 var epochAnchor = time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// testTenantID is the canonical tenant used by all storetest cases. The literal
+// is already a valid, non-nil, canonical lowercase UUID, so it can be constructed
+// directly — session.Store.Create's tenant.Validate() accepts it, no parse/panic.
+var testTenantID = tenant.TenantID("00000000-0000-0000-0000-000000000001")
 
 // EpochAnchor returns the deterministic clock anchor used by storetest cases;
 // backends constructing FakeClock from outside the suite (per-test setup hooks)
@@ -144,6 +150,8 @@ func Run(t *testing.T, factory Factory, protocol *session.Protocol) {
 	t.Run("Expired_StillReturned", func(t *testing.T) { runExpiredStillReturned(t, factory) })
 	t.Run("T-S4D-1_Create_RejectsZeroEpoch", func(t *testing.T) { runTS4D1CreateRejectsZeroEpoch(t, factory) })
 	t.Run("T-S4D-1_Get_RoundtripsEpoch", func(t *testing.T) { runTS4D1GetRoundtripsEpoch(t, factory) })
+	t.Run("Create_EmptyTenantID_Rejected", func(t *testing.T) { runCreateEmptyTenantIDRejected(t, factory) })
+	t.Run("Create_Get_RoundtripsTenantID", func(t *testing.T) { runCreateGetRoundtripsTenantID(t, factory) })
 	t.Run("RevokeForSubject_EmptySubject_Rejected", func(t *testing.T) {
 		runRevokeForSubjectEmptySubject(t, factory)
 	})
@@ -191,7 +199,7 @@ func runCreateGet(t *testing.T, factory Factory) {
 	defer cleanup()
 
 	fixture := NewSessionFixture(t, subjectA, "jti-create-get", caseEpoch, caseTTL, fc.Now())
-	if err := store.Create(context.Background(), fixture); err != nil {
+	if err := store.Create(context.Background(), testTenantID, fixture); err != nil {
 		t.Fatalf("Create: unexpected error: %v", err)
 	}
 	got, err := store.Get(context.Background(), fixture.ID)
@@ -216,10 +224,10 @@ func runCreateDuplicateID(t *testing.T, factory Factory) {
 	defer cleanup()
 
 	fixture := NewSessionFixture(t, subjectA, "jti-dup", caseEpoch, caseTTL, fc.Now())
-	if err := store.Create(context.Background(), fixture); err != nil {
+	if err := store.Create(context.Background(), testTenantID, fixture); err != nil {
 		t.Fatalf("first Create unexpected error: %v", err)
 	}
-	err := store.Create(context.Background(), fixture)
+	err := store.Create(context.Background(), testTenantID, fixture)
 	assertErrCode(t, err, errcode.ErrSessionConflict)
 }
 
@@ -230,7 +238,7 @@ func runRevokeDirect(t *testing.T, factory Factory) {
 	defer cleanup()
 
 	fixture := NewSessionFixture(t, subjectA, "jti-revoke", caseEpoch, caseTTL, fc.Now())
-	if err := store.Create(context.Background(), fixture); err != nil {
+	if err := store.Create(context.Background(), testTenantID, fixture); err != nil {
 		t.Fatalf(errFmtCreate, err)
 	}
 	revokeAt := fc.Now()
@@ -256,7 +264,7 @@ func runRevokeIdempotent(t *testing.T, factory Factory) {
 	defer cleanup()
 
 	fixture := NewSessionFixture(t, subjectA, "jti-idem", caseEpoch, caseTTL, fc.Now())
-	if err := store.Create(context.Background(), fixture); err != nil {
+	if err := store.Create(context.Background(), testTenantID, fixture); err != nil {
 		t.Fatalf(errFmtCreate, err)
 	}
 	firstRevokeAt := fc.Now()
@@ -302,7 +310,7 @@ func runExpiredStillReturned(t *testing.T, factory Factory) {
 	defer cleanup()
 
 	fixture := NewSessionFixture(t, subjectA, "jti-exp", caseEpoch, caseTTL, fc.Now())
-	if err := store.Create(context.Background(), fixture); err != nil {
+	if err := store.Create(context.Background(), testTenantID, fixture); err != nil {
 		t.Fatalf(errFmtCreate, err)
 	}
 	fc.Advance(caseExpiryAdvance) // past GC eligibility
@@ -400,7 +408,7 @@ func seedRevokeForSubjectFixtures(
 		b:        NewSessionFixture(t, subjectB, "jti-b-"+event.String(), caseEpoch, caseTTL, fc.Now()),
 	}
 	for _, s := range []*session.Session{fix.a1, fix.a2, fix.aRevoked, fix.b} {
-		if err := store.Create(ctx, s); err != nil {
+		if err := store.Create(ctx, testTenantID, s); err != nil {
 			t.Fatalf("Create %s: %v", s.ID, err)
 		}
 	}
@@ -542,7 +550,7 @@ func runTS4D1CreateRejectsZeroEpoch(t *testing.T, factory Factory) {
 		CreatedAt:         fc.Now(),
 		ExpiresAt:         fc.Now().Add(caseTTL),
 	}
-	err := store.Create(context.Background(), fixture)
+	err := store.Create(context.Background(), testTenantID, fixture)
 	assertErrCode(t, err, errcode.ErrValidationFailed)
 }
 
@@ -556,7 +564,7 @@ func runTS4D1GetRoundtripsEpoch(t *testing.T, factory Factory) {
 
 	const wantEpoch int64 = 42
 	fixture := NewSessionFixture(t, subjectA, "jti-epoch-rt", wantEpoch, caseTTL, fc.Now())
-	if err := store.Create(context.Background(), fixture); err != nil {
+	if err := store.Create(context.Background(), testTenantID, fixture); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	got, err := store.Get(context.Background(), fixture.ID)
@@ -565,6 +573,38 @@ func runTS4D1GetRoundtripsEpoch(t *testing.T, factory Factory) {
 	}
 	if got.AuthzEpochAtIssue != wantEpoch {
 		t.Errorf("AuthzEpochAtIssue: got %d, want %d", got.AuthzEpochAtIssue, wantEpoch)
+	}
+}
+
+// runCreateEmptyTenantIDRejected — Store contract: Create with empty TenantID
+// must return ErrValidationFailed. The sessions.tenant_id column is NOT NULL
+// (migration 054) and is required for RLS scope derivation (PR-3b).
+func runCreateEmptyTenantIDRejected(t *testing.T, factory Factory) {
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	fixture := NewSessionFixture(t, subjectA, "jti-empty-tid", caseEpoch, caseTTL, fc.Now())
+	err := store.Create(context.Background(), tenant.TenantID(""), fixture)
+	assertErrCode(t, err, errcode.ErrValidationFailed)
+}
+
+// runCreateGetRoundtripsTenantID — Store contract: Store.Get must return a
+// ValidateView whose TenantID equals the TenantID passed to Create. This is
+// the core carrier invariant for refresh/validate RLS scope derivation.
+func runCreateGetRoundtripsTenantID(t *testing.T, factory Factory) {
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	fixture := NewSessionFixture(t, subjectA, "jti-tid-rt", caseEpoch, caseTTL, fc.Now())
+	if err := store.Create(context.Background(), testTenantID, fixture); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, err := store.Get(context.Background(), fixture.ID)
+	if err != nil {
+		t.Fatalf(errFmtGetPlain, err)
+	}
+	if got.TenantID != testTenantID {
+		t.Errorf("TenantID: got %q, want %q", got.TenantID, testTenantID)
 	}
 }
 

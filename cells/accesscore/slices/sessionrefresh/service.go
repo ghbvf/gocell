@@ -5,6 +5,7 @@ package sessionrefresh
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -13,12 +14,14 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/scopedtx"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/sessionmint"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/ctxutil"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/panicregister"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -183,12 +186,20 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (dto.TokenPa
 		return dto.TokenPair{}, err
 	}
 
-	// outerCtx is the caller's context, captured here so refreshInTx can pass
-	// it to handleRotateError. On reuse detection, Apply must run in a detached
-	// tx that is independent of the outer RunInTx boundary — otherwise the 401
-	// return causes the outer tx to roll back, undoing the cascade writes.
+	// outerCtx is the caller's context, captured before entering the tx so the
+	// reuse cascade (handleRotateError / handleReuseDetected) can run in a tx
+	// DETACHED from this RunInTx boundary — otherwise the 401 return rolls back
+	// the cascade writes (Finding #4 / PR#395 detached-context invariant).
 	outerCtx := ctx
 
+	// PR-3b (RLS): the whole validate→mint→rotate sequence runs in ONE tx so
+	// Peek + sessions.Get + Rotate stay atomic across the refresh store and the
+	// session store (REFRESH-CROSS-STORE-TX-01: no TOCTOU window that could issue
+	// a token for an out-of-band-revoked session). The tx OPENS UNSCOPED — Peek
+	// and sessions.Get touch only non-RLS tables — and refreshInTx scopes it
+	// mid-flight (scopedtx.ApplyScope) once it derives the tenant from
+	// sessions.tenant_id, before any users/roles (RLS-protected) read. sessions
+	// itself is NOT under RLS, so it cannot supply the scope at tx-start.
 	var pair dto.TokenPair
 	do := func(txCtx context.Context) error {
 		var err error
@@ -203,28 +214,10 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (dto.TokenPa
 	return pair, nil
 }
 
-// refreshInTx executes the validate→mint→rotate sequence under the outer
-// RunInTx boundary established by Refresh. With a real PG TxRunner
-// (postgres.TxManager), refresh-store calls participate in the outer
-// transaction via savepoint nesting and roll back together on abort; with
-// a no-op TxRunner (outbox.DemoTxRunner) the closure executes directly without
-// TX semantics. Cascade-revoke calls intentionally bypass the outer TX
-// through RevokeSessionDetached (PR#395 detached-context invariant).
-//
-// outerCtx is the caller's context from Refresh (before RunInTx). It is
-// passed to handleRotateError so that the reuse-cascade Apply call uses a
-// detached tx independent of the outer RunInTx boundary (Finding #4).
-//
-// session.Store is read-only on this path: refresh keeps session.ID stable
-// across rotations (OAuth2 RFC 6749 §6 + OIDC Back-Channel Logout sid
-// stability). AuthzEpoch staleness is detected via rejectIfStaleEpoch (S4d
-// row-provenance: compares presented.AuthzEpochAtIssue to user.AuthzEpoch()).
 // handlePeekError classifies a Peek error and produces the service-layer
-// error: ErrReused routes into the unified reuse cascade entry
+// error. ErrReused routes into the unified reuse cascade entry
 // (handleReuseDetected) using whatever row identity Peek conveyed; other
-// errors go through refreshStoreError. Extracted from refreshInTx to keep
-// refreshInTx within the cognitive-complexity budget (≤15) after S4d added
-// the stale-epoch branch.
+// errors go through refreshStoreError.
 //
 // Reuse detected on Peek (grace-counter cap or post-rotation reuse window):
 // the refresh store has already revoked the *single* presented session via
@@ -242,38 +235,87 @@ func (s *Service) handlePeekError(outerCtx context.Context, presented *refresh.T
 	return s.refreshStoreError("session-refresh: refresh store peek failed", err)
 }
 
-func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, refreshToken string) (dto.TokenPair, error) {
+// peekVerifyAndScope runs the non-RLS prologue of refreshInTx INSIDE the cross-
+// store tx: Peek (refresh store) + sessions.Get + revoked/subject checks — so
+// Peek and sessions.Get satisfy REFRESH-CROSS-STORE-TX-01 (inside RunInTx) — then
+// derives sessions.tenant_id and scopes the ambient tx mid-flight via
+// scopedtx.ApplyScope. Returns the peeked token + verified session for the
+// caller's scoped user/role reads. Extracted to keep refreshInTx within the ≤15
+// cognitive-complexity budget.
+//
+// Mid-flight scoping is safe here: every statement above the ApplyScope call
+// touched only non-RLS tables (refresh store, sessions); the users/roles reads
+// that need the GUC all happen after it returns.
+//
+// Params: ctx is the ambient RunInTx transaction context (used for the scoped
+// reads + the mid-tx ApplyScope); outerCtx is the caller's pre-tx context, used
+// only by handlePeekError to run the reuse cascade in a DETACHED tx.
+func (s *Service) peekVerifyAndScope(
+	ctx context.Context,
+	outerCtx context.Context,
+	refreshToken string,
+) (*refresh.Token, *session.ValidateView, error) {
 	presented, err := s.refreshStore.Peek(ctx, refreshToken)
 	if err != nil {
-		return dto.TokenPair{}, s.handlePeekError(outerCtx, presented, err)
+		return nil, nil, s.handlePeekError(outerCtx, presented, err)
 	}
-
-	// Belt-and-braces: double-check the backing session has not been revoked
-	// out-of-band (e.g. a logout that bypassed the refresh store).
+	// Belt-and-braces: read the backing session by PK (sessions has no FORCE RLS)
+	// to confirm it was not revoked out-of-band (e.g. a logout that bypassed the
+	// refresh store). Atomic with Rotate via the enclosing tx.
 	sess, err := s.verifySession(ctx, presented.SessionID)
 	if err != nil {
-		return dto.TokenPair{}, err
+		return nil, nil, err
 	}
-
-	// Session-state inline check — must run BEFORE any user lookup so a
-	// revoked session never escalates to 403 (user-not-active) or 503
-	// (userRepo outage). Extracted to rejectIfRevokedSession to keep
-	// refreshInTx cognitive complexity within the ≤15 budget.
+	// Session-state inline check — must run BEFORE any user lookup so a revoked
+	// session never escalates to 403 (user-not-active) or 503 (userRepo outage).
 	if err := s.rejectIfRevokedSession(ctx, sess, presented.SubjectID); err != nil {
-		return dto.TokenPair{}, err
+		return nil, nil, err
 	}
-
 	if sess.SubjectID != presented.SubjectID {
 		s.cascadeRevoke(ctx, presented.SessionID, "subject-mismatch")
-		return dto.TokenPair{}, authRefreshRejected()
+		return nil, nil, authRefreshRejected()
 	}
+	// PR-3b: derive tenant from sessions.tenant_id (carrier; composite FK
+	// (tenant_id, subject_id) → users(tenant_id, id) = DB-Hard proof it is the
+	// session's true tenant). Validate fail-closed to 401 so a malformed row does
+	// not surface as a 503. Then scope THIS tx before the RLS reads.
+	refreshTenantID := sess.TenantID
+	if err := refreshTenantID.Validate(); err != nil {
+		s.logger.Error("session-refresh: invalid tenant derived from session row (fail-closed)",
+			slog.Any("error", err), slog.String("subject_id", sess.SubjectID))
+		return nil, nil, authRefreshRejected()
+	}
+	// Preserve the underlying error Kind (%w) rather than masking everything as
+	// 503: ApplyTenantScope returns KindInternal for a programmer error (no ambient
+	// tx — impossible here, we are inside RunInTx) and propagates writeTenantGUC's
+	// classified Kind for a genuine DB fault. Forcing KindUnavailable would
+	// mislead on-call about an infra outage when it is actually an internal fault.
+	if err := scopedtx.ApplyScope(ctx, s.txRunner, refreshTenantID); err != nil {
+		return nil, nil, fmt.Errorf("session-refresh: apply tenant scope: %w", err)
+	}
+	return presented, sess, nil
+}
 
-	user, err := s.fetchUserForRefresh(ctx, sess.ID, sess.SubjectID)
+// refreshInTx executes the full validate→mint→rotate sequence inside the single
+// cross-store tx opened by Refresh. peekVerifyAndScope runs the non-RLS prologue
+// (Peek + sessions.Get inside the tx, REFRESH-CROSS-STORE-TX-01) and scopes the
+// tx by sessions.tenant_id; the remaining user/role reads + mint + Rotate run
+// under that RLS scope.
+//
+// outerCtx is the caller's pre-tx context, threaded to handlePeekError /
+// handleRotateError so the reuse cascade runs in a DETACHED tx.
+func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, refreshToken string) (dto.TokenPair, error) {
+	presented, sess, err := s.peekVerifyAndScope(ctx, outerCtx, refreshToken)
 	if err != nil {
 		return dto.TokenPair{}, err
 	}
-	// User-bound credentialauthority funnel (ADR §A11 重写后, user-bound
-	// only). Session-revoked already rejected above. Baseline
+
+	user, err := s.fetchUserForRefresh(ctx, sess.ID, sess.SubjectID, sess.TenantID)
+	if err != nil {
+		return dto.TokenPair{}, err
+	}
+	// User-bound credentialauthority funnel (ADR §A11 重写后, user-bound only).
+	// Session-revoked already rejected in peekVerifyAndScope. Baseline
 	// (CanAuthenticate) failure surfaces as uniform 401 ErrAuthRefreshFailed
 	// (ADR §A13 single-envelope). cascadeRevoke clears the refresh chain so
 	// subsequent rotation attempts fail immediately.
@@ -286,31 +328,6 @@ func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, ref
 	}
 
 	passwordResetRequired := user.PasswordResetRequired()
-
-	// session.ID is stable across refresh — the access JWT carries the same
-	// sid claim as the original login. AuthzEpoch / password-reset state is
-	// re-evaluated per refresh via the user lookup above; the session row
-	// itself is not rotated.
-	//
-	// Tenant derivation (#1337 PR-2 stopgap): the refresh endpoint is Public
-	// (no JWT), so there is no pre-auth ctx tenant. Derive the tenant from the
-	// user row returned by fetchUserForRefresh (GetByID by-PK carve-out).
-	// user.TenantID was stamped at Create time and is the authoritative source.
-	// PR-3 will carry tenant in the refresh token / session row for true RLS
-	// isolation; at that point this derivation moves to the store layer.
-	refreshTenantID := user.TenantID
-	// Defense-in-depth: validate the derived tenant before using it (#1337
-	// PR-2a review U5). user.TenantID is normally stamped at Create time
-	// and should always be a canonical UUID; a missing or malformed value
-	// here would indicate a data integrity issue in the user row. Fail
-	// closed to authRefreshRejected (the same envelope as every other
-	// refresh rejection) to avoid leaking information about the failure.
-	if err := refreshTenantID.Validate(); err != nil {
-		s.logger.Error("session-refresh: invalid tenant derived from user row (fail-closed)",
-			slog.Any("error", err),
-			slog.String("subject_id", sess.SubjectID))
-		return dto.TokenPair{}, authRefreshRejected()
-	}
 	minted, err := sessionmint.MintAccess(ctx, s.clock, sessionmint.Deps{
 		Issuer:   s.issuer,
 		RoleRepo: s.roleRepo,
@@ -318,7 +335,7 @@ func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, ref
 		UserID:                sess.SubjectID,
 		SessionID:             sess.ID,
 		PasswordResetRequired: passwordResetRequired,
-		TenantID:              refreshTenantID,
+		TenantID:              sess.TenantID,
 	})
 	if err != nil {
 		s.logger.Error("session-refresh: token issuance failed",
@@ -399,29 +416,31 @@ func (s *Service) handleReuseDetected(outerCtx context.Context, subjectID, sessi
 		panic(panicregister.Approved("sessionrefresh-reuse-empty-subject",
 			errcode.Assertion("sessionrefresh.handleReuseDetected: refresh.Store violated contract — returned ErrReused with empty SubjectID")))
 	}
-	// Derive the tenant from the user row. The refresh endpoint is Public (no
-	// JWT), so there is no pre-auth ctx tenant. GetByID is the by-PK
-	// tenant-deriving carve-out (#1337 PR-2a); it returns the row regardless of
-	// tenant and the TenantID stamped at Create time is the authoritative source.
-	// On any error (user not found, infra outage) fail-closed to 401: the reuse
-	// attack is confirmed regardless, and surfacing a different status code would
-	// leak side-channel information.
-	userForTenant, err := s.userRepo.GetByID(outerCtx, subjectID)
+	// Derive the tenant from the session row (#1337 PR-3b). The refresh endpoint
+	// is Public (no JWT), so there is no pre-auth ctx tenant. sessions.tenant_id
+	// is the carrier stamped at Create time; the composite FK
+	// (tenant_id, subject_id) → users(tenant_id, id) provides DB-Hard proof that
+	// session.TenantID is trustworthy. GetByID carve-out removed in PR-3b.
+	// On any error fail-closed to 401: the reuse attack is confirmed regardless,
+	// and surfacing a different status code would leak side-channel information.
+	sessForTenant, err := s.sessionStore.Get(outerCtx, sessionID)
 	if err != nil {
-		s.logger.Error("session-refresh: reuse cascade: failed to fetch user for tenant derivation (fail-closed to 401)",
+		s.logger.Error("session-refresh: reuse cascade: failed to fetch session for tenant derivation (fail-closed to 401)",
 			slog.Any("error", err),
 			slog.String("stage", stage),
 			slog.String("subject_id", subjectID),
 			slog.String("session_id", sessionID))
 		return authRefreshRejected()
 	}
-	reuseTenantID := userForTenant.TenantID
+	reuseTenantID := sessForTenant.TenantID
 	// Defense-in-depth: validate the derived tenant before using it (#1337
-	// PR-2a review U5). Fail closed to authRefreshRejected — the reuse
-	// attack is confirmed regardless of cascade health; surfacing a
-	// different code would leak side-channel info.
+	// PR-3b). session.TenantID is stamped at Create time and should always be
+	// a canonical UUID; a missing or malformed value indicates a data integrity
+	// issue. Fail closed to authRefreshRejected — the reuse attack is confirmed
+	// regardless of cascade health; surfacing a different code would leak
+	// side-channel info.
 	if err := reuseTenantID.Validate(); err != nil {
-		s.logger.Error("session-refresh: reuse cascade: invalid tenant derived from user row (fail-closed)",
+		s.logger.Error("session-refresh: reuse cascade: invalid tenant derived from session row (fail-closed)",
 			slog.Any("error", err),
 			slog.String("stage", stage),
 			slog.String("subject_id", subjectID))
@@ -429,9 +448,11 @@ func (s *Service) handleReuseDetected(outerCtx context.Context, subjectID, sessi
 	}
 	detachedCtx, cancel := ctxutil.WithDetachedTimeout(outerCtx, reuseCascadeTimeout)
 	defer cancel()
-	if applyErr := s.txRunner.RunInTx(detachedCtx, func(txCtx context.Context) error {
-		return s.invalidator.Apply(txCtx, reuseTenantID, subjectID, session.CredentialEventRefreshReuse)
-	}); applyErr != nil {
+	_, applyErr := scopedtx.Do(detachedCtx, s.txRunner, reuseTenantID,
+		func(txCtx context.Context) (struct{}, error) {
+			return struct{}{}, s.invalidator.Apply(txCtx, reuseTenantID, subjectID, session.CredentialEventRefreshReuse)
+		})
+	if applyErr != nil {
 		// Reuse has already been identified as an attack — the wire response
 		// must be uniform 401 regardless of whether the cascade infrastructure
 		// (DB, dependent stores) is currently healthy. Surfacing applyErr here
@@ -641,10 +662,12 @@ func (s *Service) rejectIfStaleEpoch(ctx context.Context, rowEpoch, userEpoch in
 
 // fetchUserForRefresh reads the session's owning user so the caller can
 // validate the per-refresh predicates (status='active', password-reset flag).
+// tenantID is derived from sessions.tenant_id (#1337 PR-3b) and is used to
+// scope the user lookup via GetByIDInTenant (RLS-safe path).
 // Fail-closed: any error returns ErrAuthRefreshFailed so the caller aborts
 // refresh rather than signing a token from stale or unknown user state.
-func (s *Service) fetchUserForRefresh(ctx context.Context, sessionID, userID string) (*domain.User, error) {
-	user, err := s.userRepo.GetByID(ctx, userID)
+func (s *Service) fetchUserForRefresh(ctx context.Context, sessionID, userID string, tenantID tenant.TenantID) (*domain.User, error) {
+	user, err := s.userRepo.GetByIDInTenant(ctx, tenantID, userID)
 	if err != nil {
 		s.logger.Error("session-refresh: failed to fetch user for refresh predicates (fail-closed)",
 			slog.Any("error", err), slog.String("user_id", userID))

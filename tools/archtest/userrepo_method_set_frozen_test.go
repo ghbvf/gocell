@@ -51,9 +51,10 @@ import (
 var expectedUserRepoMethodSignatures = map[string]string{
 	"BumpAuthzEpoch": "(ctx context.Context, t tenant.TenantID, userID string," +
 		" tok credentialfence.FenceToken) (newEpoch int64, err error)",
-	"Create":           "(ctx context.Context, t tenant.TenantID, user *domain.User) error",
-	"Delete":           "(ctx context.Context, t tenant.TenantID, id string) error",
-	"GetByID":          "(ctx context.Context, id string) (*domain.User, error)",
+	"Create": "(ctx context.Context, t tenant.TenantID, user *domain.User) error",
+	"Delete": "(ctx context.Context, t tenant.TenantID, id string) error",
+	// GetByID (tenant-less by-PK) deleted in PR-3b (#1617): every UserRepository
+	// method now carries tenant.TenantID; callers use GetByIDInTenant under scope.
 	"GetByIDForUpdate": "(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error)",
 	"GetByIDInTenant":  "(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error)",
 	"GetByUsername":    "(ctx context.Context, t tenant.TenantID, username string) (*domain.User, error)",

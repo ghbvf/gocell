@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -23,6 +24,15 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
+
+// testTenantID is the canonical test tenant UUID used in sessionlogout tests.
+var testTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("sessionlogout_test: invalid testTenantID: " + err.Error())
+	}
+	return t
+}()
 
 const (
 	invalidUUID    = "not-a-uuid-string"
@@ -55,7 +65,7 @@ func setup(t testing.TB) http.Handler {
 	t.Helper()
 	sessionRepo := testutil.RealSessionRepo(t)
 	sessID := testutil.TestID("sess-1")
-	_ = sessionRepo.Create(context.Background(), &session.Session{
+	_ = sessionRepo.Create(context.Background(), testTenantID, &session.Session{
 		ID:                sessID,
 		SubjectID:         testutil.TestID("usr-1"),
 		JTI:               "jti-" + sessID,
@@ -65,7 +75,7 @@ func setup(t testing.TB) http.Handler {
 	})
 	// Victim session owned by a different user — used to prove IDOR guard.
 	victimID := testutil.TestID("sess-victim")
-	_ = sessionRepo.Create(context.Background(), &session.Session{
+	_ = sessionRepo.Create(context.Background(), testTenantID, &session.Session{
 		ID:                victimID,
 		SubjectID:         testutil.TestID("usr-victim"),
 		JTI:               "jti-" + victimID,

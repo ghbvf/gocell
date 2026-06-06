@@ -8,6 +8,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/scopedtx"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -128,8 +129,10 @@ func NewService(
 // topic out of this function lets EMIT-DECL-COVER-01's literal-site scan see
 // each caller's const, rather than an opaque `topic string` parameter.
 //
-// tid scopes the credential invalidation to the correct tenant. Callers derive
-// it from the target user (GetByID by-PK carve-out) before calling persistChange.
+// tid scopes the credential invalidation to the correct tenant. Callers take it
+// from the request body (#1617 PR-3b): the InternalListener / service-token
+// caller has no JWT, so the tenant is supplied explicitly rather than derived
+// from the target user (the tenant-less GetByID carve-out was deleted in PR-3b).
 func (s *Service) persistChange(
 	ctx context.Context,
 	tid tenant.TenantID,
@@ -138,22 +141,22 @@ func (s *Service) persistChange(
 	emitFn func(ctx context.Context, evt dto.RoleChangedEvent) error,
 	callFunnel bool,
 ) (changed bool, err error) {
-	err = s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		var innerErr error
-		changed, innerErr = writeFn(txCtx)
-		if innerErr != nil {
-			return innerErr
-		}
-		if !changed {
-			return nil
-		}
-		if callFunnel {
-			if err := s.invalidator.Apply(txCtx, tid, evt.UserID, session.CredentialEventRoleRevoke); err != nil {
-				return fmt.Errorf("rbac-assign: invalidate credentials: %w", err)
+	changed, err = scopedtx.Do(ctx, s.txRunner, tid,
+		func(txCtx context.Context) (bool, error) {
+			ok, innerErr := writeFn(txCtx)
+			if innerErr != nil {
+				return false, innerErr
 			}
-		}
-		return emitFn(txCtx, evt)
-	})
+			if !ok {
+				return false, nil
+			}
+			if callFunnel {
+				if err := s.invalidator.Apply(txCtx, tid, evt.UserID, session.CredentialEventRoleRevoke); err != nil {
+					return false, fmt.Errorf("rbac-assign: invalidate credentials: %w", err)
+				}
+			}
+			return ok, emitFn(txCtx, evt)
+		})
 	return changed, err
 }
 
@@ -162,7 +165,11 @@ func (s *Service) persistChange(
 //
 // HIGH-3 decision: granting a role is additive and not a credential-security
 // event. The funnel is intentionally NOT called on Assign.
-func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
+//
+// tenantID is derived from the request body (PR-3b #1617): the
+// InternalListener / service-token caller has no JWT, so the tenant is
+// supplied explicitly by the caller rather than via GetByID carve-out.
+func (s *Service) Assign(ctx context.Context, tenantID tenant.TenantID, userID, roleID string) error {
 	if err := validation.RequireNotEmpty(
 		errcode.ErrAuthRBACInvalidInput,
 		validation.F("userId", userID),
@@ -171,16 +178,7 @@ func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 		return err
 	}
 
-	// Option B (#1337 PR-2a): this InternalListener / service-token endpoint has
-	// a tenant-less caller, so the assignment tenant is derived from the TARGET
-	// user via the by-global-PK tenant-deriving GetByID carve-out — "assign role
-	// to user U" inherently scopes to U's tenant. A missing user surfaces as the
-	// GetByID not-found error.
-	u, err := s.userRepo.GetByID(ctx, userID)
-	if err != nil {
-		return fmt.Errorf("rbac-assign: assign: resolve user tenant: %w", err)
-	}
-	tid := u.TenantID
+	tid := tenantID
 	evt := dto.RoleChangedEvent{UserID: userID, RoleID: roleID, Action: dto.ActionAssigned, ActorID: actorFromContext(ctx)}
 	writeFn := func(txCtx context.Context) (bool, error) {
 		changed, err := s.roleRepo.AssignToUser(txCtx, tid, userID, roleID)
@@ -212,7 +210,9 @@ func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 // When a state change occurs, the credentialinvalidate funnel runs inside the same
 // transaction, atomically bumping the authz_epoch and revoking all active sessions
 // and refresh chains.
-func (s *Service) Revoke(ctx context.Context, userID, roleID string) error {
+//
+// tenantID is derived from the request body (PR-3b #1617): same rationale as Assign.
+func (s *Service) Revoke(ctx context.Context, tenantID tenant.TenantID, userID, roleID string) error {
 	if err := validation.RequireNotEmpty(
 		errcode.ErrAuthRBACInvalidInput,
 		validation.F("userId", userID),
@@ -221,14 +221,22 @@ func (s *Service) Revoke(ctx context.Context, userID, roleID string) error {
 		return err
 	}
 
-	// Option B (#1337 PR-2a): tenant derived from the target user (see Assign).
-	u, err := s.userRepo.GetByID(ctx, userID)
-	if err != nil {
-		return fmt.Errorf("rbac-assign: revoke: resolve user tenant: %w", err)
-	}
-	tid := u.TenantID
+	tid := tenantID
 	evt := dto.RoleChangedEvent{UserID: userID, RoleID: roleID, Action: dto.ActionRevoked, ActorID: actorFromContext(ctx)}
 	writeFn := func(txCtx context.Context) (bool, error) {
+		// Target-tenant ownership guard (#1617 PR-3b review F4). The tenant now
+		// comes from the request body, not from the target user, so a caller that
+		// supplies the WRONG tenant would make RemoveFromUserIfNotLast a silent
+		// (false, nil) no-op below — the DELETE matches 0 rows in the wrong tenant
+		// — which the handler would report as revoked:true while the role survives
+		// in the user's real tenant (credentials never invalidated). Asserting the
+		// target exists in this tenant first turns that into a clean 404
+		// (ErrAuthUserNotFound), mirroring the Assign path's repo-level user guard
+		// (PG composite FK / mem userByIDInTenant). A user that DOES exist here but
+		// does not hold the role still revokes idempotently (no-op success below).
+		if _, err := s.userRepo.GetByIDInTenant(txCtx, tid, userID); err != nil {
+			return false, fmt.Errorf("rbac-assign: revoke: %w", err)
+		}
 		// Atomic count-check + removal eliminates TOCTOU race for last-admin guard.
 		changed, err := s.roleRepo.RemoveFromUserIfNotLast(txCtx, tid, userID, roleID)
 		if err != nil {

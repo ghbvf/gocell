@@ -29,7 +29,7 @@ var contractSpec = contractspec.ContractSpec{
 
 // requestSchemaJSON is the embedded request schema for runtime validation.
 // Compiled once at handler construction time by schemavalidate.NewValidator.
-var requestSchemaJSON = []byte("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"http.auth.role.revoke.v1.request\",\"type\":\"object\",\"properties\":{\"userId\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":64},\"roleId\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":64}},\"required\":[\"userId\",\"roleId\"],\"additionalProperties\":false}")
+var requestSchemaJSON = []byte("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"http.auth.role.revoke.v1.request\",\"type\":\"object\",\"properties\":{\"tenantId\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":1,\"maxLength\":64},\"userId\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":64},\"roleId\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":64}},\"required\":[\"tenantId\",\"userId\",\"roleId\"],\"additionalProperties\":false}")
 
 // Handler wires HTTP decode/encode + auth.Mount for http.auth.role.revoke.v1.
 type Handler struct {

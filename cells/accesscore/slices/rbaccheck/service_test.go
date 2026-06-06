@@ -10,10 +10,13 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
 // tenantCtx returns context.Background() with the canonical test tenant injected.
@@ -37,7 +40,8 @@ func newTestService(t *testing.T) (*Service, *mem.RoleRepository) {
 func newTestServiceWithMode(t *testing.T, runMode query.RunMode) (*Service, *mem.RoleRepository) {
 	t.Helper()
 	repo := mem.NewStore(clock.Real()).RoleRepository()
-	svc, err := NewService(repo, newTestCodec(t), slog.Default(), runMode)
+	svc, err := NewService(repo, newTestCodec(t), slog.Default(), runMode,
+		WithTxManager(outbox.DemoCellTxManager()))
 	require.NoError(t, err)
 	return svc, repo
 }
@@ -147,4 +151,108 @@ func TestService_ListRoles_ProdMode_BadCursor_ReturnsError(t *testing.T) {
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+}
+
+// scopeCapturingRoleRepo wraps a RoleRepository and records whether the
+// context passed to GetByUserID / ListByUserID carries a tenant scope.
+// Used by TestHasRole_IsRLSScoped and TestListRoles_IsRLSScoped (Site 5).
+type scopeCapturingRoleRepo struct {
+	inner         ports.RoleRepository
+	capturedScope tenant.TenantID
+	capturedOK    bool
+}
+
+var _ ports.RoleRepository = (*scopeCapturingRoleRepo)(nil)
+
+func (r *scopeCapturingRoleRepo) GetByID(ctx context.Context, t tenant.TenantID, id string) (*domain.Role, error) {
+	return r.inner.GetByID(ctx, t, id)
+}
+
+func (r *scopeCapturingRoleRepo) GetByUserID(ctx context.Context, t tenant.TenantID, userID string) ([]*domain.Role, error) {
+	r.capturedScope, r.capturedOK = tenant.ScopeFromContext(ctx)
+	return r.inner.GetByUserID(ctx, t, userID)
+}
+
+func (r *scopeCapturingRoleRepo) ListByUserID(ctx context.Context, t tenant.TenantID, userID string, params query.ListParams) ([]*domain.Role, error) { //nolint:lll // test fake stub signature; cannot be meaningfully split
+	r.capturedScope, r.capturedOK = tenant.ScopeFromContext(ctx)
+	return r.inner.ListByUserID(ctx, t, userID, params)
+}
+
+func (r *scopeCapturingRoleRepo) Create(ctx context.Context, t tenant.TenantID, role *domain.Role) error {
+	return r.inner.Create(ctx, t, role)
+}
+
+func (r *scopeCapturingRoleRepo) AssignToUser(ctx context.Context, t tenant.TenantID, userID, roleID string) (bool, error) {
+	return r.inner.AssignToUser(ctx, t, userID, roleID)
+}
+
+func (r *scopeCapturingRoleRepo) RemoveFromUser(ctx context.Context, t tenant.TenantID, userID, roleID string) error {
+	return r.inner.RemoveFromUser(ctx, t, userID, roleID)
+}
+
+func (r *scopeCapturingRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, t tenant.TenantID, userID, roleID string) (bool, error) {
+	return r.inner.RemoveFromUserIfNotLast(ctx, t, userID, roleID)
+}
+
+func (r *scopeCapturingRoleRepo) CountByRole(ctx context.Context, t tenant.TenantID, roleID string) (int, error) {
+	return r.inner.CountByRole(ctx, t, roleID)
+}
+
+func (r *scopeCapturingRoleRepo) CountEffectiveAdmins(ctx context.Context, t tenant.TenantID) (int, error) {
+	return r.inner.CountEffectiveAdmins(ctx, t)
+}
+
+func (r *scopeCapturingRoleRepo) EffectiveAdminExists(ctx context.Context, t tenant.TenantID) (bool, error) {
+	return r.inner.EffectiveAdminExists(ctx, t)
+}
+
+// TestListRoles_IsRLSScoped asserts that ListRoles wraps the ListByUserID call
+// in a scoped transaction so the RLS tenant_isolation policy on role_assignments
+// is satisfied (Site 5 RLS fix, paired with TestHasRole_IsRLSScoped).
+func TestListRoles_IsRLSScoped(t *testing.T) {
+	inner := mem.NewStore(clock.Real()).RoleRepository()
+	inner.SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
+	inner.SeedUserRoleAssignment(testTenantID, "usr-rls-list", "admin")
+
+	cap := &scopeCapturingRoleRepo{inner: inner}
+	svc, err := NewService(cap, newTestCodec(t), slog.Default(), query.RunModeDemo,
+		WithTxManager(outbox.DemoCellTxManager()))
+	require.NoError(t, err)
+
+	ctx := ctxkeys.WithTenantID(context.Background(), testTenantIDStr)
+	result, err := svc.ListRoles(ctx, "usr-rls-list", query.PageParams{Limit: 10})
+	require.NoError(t, err)
+	assert.Len(t, result.Items, 1)
+
+	assert.True(t, cap.capturedOK,
+		"ListByUserID must run inside a scoped tx (tenant.ScopeFromContext must be set)")
+	assert.Equal(t, testTenantID, cap.capturedScope,
+		"ListByUserID scope must equal the request tenant")
+}
+
+// TestHasRole_IsRLSScoped asserts that HasRole wraps the GetByUserID call in a
+// scoped transaction so the RLS tenant_isolation policy on role_assignments is
+// satisfied (Site 5 RLS fix).
+//
+// This is a RED test until Site 5 (rbaccheck scopedtx.Do) is implemented.
+func TestHasRole_IsRLSScoped(t *testing.T) {
+	inner := mem.NewStore(clock.Real()).RoleRepository()
+	inner.SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
+	inner.SeedUserRoleAssignment(testTenantID, "usr-rls", "admin")
+
+	cap := &scopeCapturingRoleRepo{inner: inner}
+	svc, err := NewService(cap, newTestCodec(t), slog.Default(), query.RunModeDemo,
+		WithTxManager(outbox.DemoCellTxManager()))
+	require.NoError(t, err)
+
+	// Use a context that carries ctxkeys.TenantID (post-auth path).
+	ctx := ctxkeys.WithTenantID(context.Background(), testTenantIDStr)
+	has, err := svc.HasRole(ctx, "usr-rls", "admin")
+	require.NoError(t, err)
+	assert.True(t, has)
+
+	assert.True(t, cap.capturedOK,
+		"GetByUserID must run inside a scoped tx (tenant.ScopeFromContext must be set)")
+	assert.Equal(t, testTenantID, cap.capturedScope,
+		"GetByUserID scope must equal the request tenant")
 }

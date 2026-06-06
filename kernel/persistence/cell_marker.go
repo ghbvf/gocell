@@ -1,6 +1,8 @@
 package persistence
 
 import (
+	"context"
+
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -24,6 +26,22 @@ import (
 // ref: docs/architecture/202605101900-adr-cell-raw-infra-sealed-marker.md §D1
 type CellTxManager interface {
 	TxRunner
+	// ApplyTenantScope sets the RLS app.tenant_id GUC on the AMBIENT transaction
+	// mid-flight (must be called inside RunInTx). It exists for the one path that
+	// cannot know the tenant at tx-start because it must read a non-RLS row inside
+	// the tx to learn it — sessionrefresh (#1617 PR-3b): Peek + sessions.tenant_id
+	// reads happen inside the cross-store tx (REFRESH-CROSS-STORE-TX-01), then the
+	// derived tenant scopes the subsequent users/roles reads via this call. Backends
+	// without row-level security (mem / demo TxRunner) return nil — there is no GUC
+	// to scope. The real injection lives in adapters/postgres.TxManager.ApplyTenantScope.
+	//
+	// canonicalTenantID is the canonical lowercase-UUID tenant string (the typed
+	// pkg/tenant.TenantID is enforced upstream at the cells/accesscore/internal/scopedtx
+	// funnel; this kernel boundary takes a string so kernel/persistence stays free of
+	// pkg/tenant's transitive deps — google/uuid — which would otherwise ripple into
+	// every satellite module's go.sum). adapters/postgres re-validates it via
+	// tenant.ParseTenantID before writing the GUC (defense in depth).
+	ApplyTenantScope(ctx context.Context, canonicalTenantID string) error
 	// MARKER: do not implement; this is the sealing marker — call persistence.WrapForCell(...) from your composition root instead.
 	sealedCellTxManager()
 }
@@ -50,6 +68,21 @@ func (i internalCellTxManager) Noop() bool {
 		return n.Noop()
 	}
 	return false
+}
+
+// ApplyTenantScope forwards to the wrapped TxRunner's ApplyTenantScope when it
+// supports row-level security (the PG TxManager); otherwise it is a no-op (mem /
+// demo runners have no GUC to scope). The interface is matched structurally —
+// kernel/persistence does not import adapters/postgres — mirroring the Noop()
+// delegation above. See the CellTxManager.ApplyTenantScope godoc for semantics.
+func (i internalCellTxManager) ApplyTenantScope(ctx context.Context, canonicalTenantID string) error {
+	type tenantScoper interface {
+		ApplyTenantScope(context.Context, string) error
+	}
+	if sc, ok := i.TxRunner.(tenantScoper); ok {
+		return sc.ApplyTenantScope(ctx, canonicalTenantID)
+	}
+	return nil
 }
 
 // WrapForCell is the sole authorized path for handing a TxRunner to a
