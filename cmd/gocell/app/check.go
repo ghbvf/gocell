@@ -770,7 +770,8 @@ func buildDeclaredDeps(cm *metadata.CellMeta) map[string]bool {
 }
 
 func cellDeclaresL0Dependencies(root string, cm *metadata.CellMeta) bool {
-	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(cm.File))) //nolint:gosec // G304: cm.File is emitted by the metadata locator, not user input
+	//nolint:gosec // G304: cm.File is emitted by the metadata locator, not user input.
+	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(cm.File)))
 	if err != nil {
 		return false
 	}
