@@ -1,0 +1,4 @@
+// Package mem provides in-memory implementations of the goldcell cell's ports interfaces,
+// used by demo mode and tests. Production adapters are added on demand under
+// internal/adapters/.
+package mem

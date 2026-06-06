@@ -1,0 +1,28 @@
+package goldcellexample
+
+import "testing"
+
+// TestService_Echo verifies the example slice's stub business logic.
+// Replace this when Echo is replaced.
+func TestService_Echo(t *testing.T) {
+	t.Parallel()
+	svc := NewService()
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "simple", in: "hello", want: "hello"},
+		{name: "empty", in: "", want: ""},
+		{name: "unicode", in: "你好", want: "你好"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := svc.Echo(tc.in); got != tc.want {
+				t.Errorf("Echo(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

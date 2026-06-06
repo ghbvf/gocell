@@ -142,6 +142,7 @@ var allRules = []Rule{
 
 	// COMMAND — command contract format (rules_command.go)
 	{Code: codeCOMMANDCONTRACTSCHEMAREF01, Phase: PhaseBase, Detect: (*Validator).validateCOMMANDCONTRACTSCHEMAREF01},
+	{Code: codeCOMMANDCONTRACTCONSISTENCYLEVEL01, Phase: PhaseBase, Detect: (*Validator).validateCOMMANDCONTRACTCONSISTENCYLEVEL01},
 
 	// -------------------------------------------------------------------------
 	// PhaseStrict — run only with `gocell validate --strict`

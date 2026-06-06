@@ -4,6 +4,7 @@ use (
 	.
 	./cmd/gocell
 	./examples/corebundlestarter
+	./examples/demo
 	./examples/iotdevice
 	./examples/orderfulfillment
 	./examples/ssobff

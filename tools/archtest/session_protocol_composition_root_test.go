@@ -1,25 +1,9 @@
-// invariants:
-//   - INVARIANT: SESSION-PROTOCOL-COMPOSITION-ROOT-01
+// INVARIANT: SESSION-PROTOCOL-COMPOSITION-ROOT-01
 package archtest
 
 import (
-	"fmt"
-	"go/ast"
-	"strings"
 	"testing"
 )
-
-const (
-	sessionProtocolRuleID = "SESSION-PROTOCOL-COMPOSITION-ROOT-01"
-	sessionPkgImportPath  = "github.com/ghbvf/gocell/runtime/auth/session"
-)
-
-// sessionProtocolForbidden is the closed set of session-package constructors
-// banned outside the composition root. (MustNewProtocol was deleted by
-// B2-K-02; only NewProtocol remains.)
-var sessionProtocolForbidden = map[string]struct{}{
-	"NewProtocol": {},
-}
 
 // TestSessionProtocol_CompositionRootOnly enforces
 // SESSION-PROTOCOL-COMPOSITION-ROOT-01: session.NewProtocol /
@@ -73,86 +57,6 @@ var sessionProtocolForbidden = map[string]struct{}{
 //   - BS-3 Reflection construction (reflect.New + MethodByName): out of
 //     scope per ai-robust.md §3 (no Go static rule reaches it).
 func TestSessionProtocol_CompositionRootOnly(t *testing.T) {
-	diags := Run(t, Typed(
-		TypedOpts{Tests: false},
-		sessionProtocolProductionPatterns(),
-	),
-
-		scanSessionProtocolViolations)
-
-	Report(t, sessionProtocolRuleID, diags)
-}
-
-// sessionProtocolProductionPatterns returns the package patterns scanned by
-// the production rule (cells / runtime / adapters).
-//
-// cmd/ and examples/ are intentionally outside scope:
-//
-//   - cmd/* is the composition root by definition — wiring authority owns
-//     session.NewProtocol construction.
-//   - examples/* each carry their own composition root (typically
-//     examples/<demo>/main.go or app.go); allowing them mirrors the
-//     AUTH-PLAN-04 / LAYER-09 carve-out for example projects. The rule
-//     does not validate whether examples/* actually use NewProtocol
-//     legitimately — examples are intentionally a separate enforcement
-//     surface, owned by their own composition-root files.
-//
-// Adding a new module subtree that owns a composition root (e.g. a future
-// tools/<demo>/) requires extending this list AND updating the godoc
-// above so the carve-out is documented at every layer.
-func sessionProtocolProductionPatterns() []string {
-	return []string{
-		"./cells/...",
-		"./runtime/...",
-		"./adapters/...",
-	}
-}
-
-// scanSessionProtocolViolations walks every CallExpr in pass.Files, resolves
-// the callee to its (pkgPath, name) tuple via archtest.ResolvePackageRef, and
-// flags hits whose owning package is runtime/auth/session and whose name is in
-// sessionProtocolForbidden.
-//
-// Two file-level filters apply:
-//
-//   - _test.go suffix: defense-in-depth alongside TypedOpts{Tests: false}.
-//   - rel under "runtime/auth/session/": the package itself owns the
-//     constructor; subpackages (storetest, etc.) are part of the wiring
-//     authority and need NewProtocol for fake construction.
-//
-// Used by both TestSessionProtocol_CompositionRootOnly (production scan,
-// asserts zero diagnostics) and TestSessionProtocol_RedFixtureDetected
-// (fixture scan, asserts ≥ 6 diagnostics across qualified / aliased / dot
-// import shapes × NewProtocol + MustNewProtocol).
-func scanSessionProtocolViolations(p *Pass) []Diagnostic {
-	var out []Diagnostic
-	for _, file := range p.Files {
-		rel := p.Rel(file)
-		if strings.HasSuffix(rel, "_test.go") {
-			continue
-		}
-		if strings.HasPrefix(rel, "runtime/auth/session/") {
-			continue
-		}
-		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-			pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
-			if !ok || pkgPath != sessionPkgImportPath {
-				return
-			}
-			if _, banned := sessionProtocolForbidden[name]; !banned {
-				return
-			}
-			line := p.Fset.Position(call.Pos()).Line
-			out = append(out, Diagnostic{
-				Rel:  rel,
-				Line: line,
-				Message: fmt.Sprintf(
-					"session.%s must only be called from cmd/* (composition root) or runtime/auth/session/*; "+
-						"cells / runtime (non-session) / adapters must consume an injected *session.Protocol",
-					name,
-				),
-			})
-		})
-	}
-	return out
+	t.Parallel()
+	Report(t, ruleSessionProtocolCompositionRoot01, CheckSessionProtocolCompositionRoot01(t, ConfigForExternalCell{}))
 }
