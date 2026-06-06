@@ -62,7 +62,7 @@ import (
 // by TestReconstituteUserCallerAllowlist_REDFixture.
 func TestReconstituteUserCallerAllowlist(t *testing.T) {
 	t.Parallel()
-	Report(t, ruleReconstituteUserCaller01, CheckReconstituteUserCallerAllowlist(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
+	Report(t, ruleReconstituteUserCaller01, CheckReconstituteUserCallerAllowlist01(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 }
 
 // TestReconstituteUserCallerAllowlist_REDFixture verifies the double-lock:

@@ -22,7 +22,7 @@ package archtest
 //
 // 单条独立规则，按 ai-robust.md "{rule}_test.go" 命名。
 //
-// Detector logic (CheckSessionrefreshNoSessionCreate, scanSessionrefreshFile,
+// Detector logic (CheckSessionrefreshNoSessionCreate01, scanSessionrefreshFile,
 // receiverNamedType, bannedSessionStoreMethods) lives in
 // sessionrefresh_no_session_create.go (non-test) so it can be compiled by
 // external Cell repositories. This file is the thin dogfood wrapper.
@@ -39,5 +39,5 @@ import (
 // all collapse to the same *types.Func identity.
 func TestSessionrefreshNoSessionStoreMutation_01(t *testing.T) {
 	t.Parallel()
-	Report(t, ruleSessionrefreshNoSessionCreate01, CheckSessionrefreshNoSessionCreate(t, ConfigForExternalCell{}))
+	Report(t, ruleSessionrefreshNoSessionCreate01, CheckSessionrefreshNoSessionCreate01(t, ConfigForExternalCell{}))
 }

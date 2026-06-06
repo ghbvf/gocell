@@ -105,9 +105,9 @@ func scanReconstituteViolationsPass(p *Pass, file *ast.File, rel string) []Diagn
 	return out
 }
 
-// ─── CheckReconstituteUserCallerAllowlist ─────────────────────────────────
+// ─── CheckReconstituteUserCallerAllowlist01 ─────────────────────────────────
 
-// CheckReconstituteUserCallerAllowlist runs RECONSTITUTE-USER-CALLER-01 over
+// CheckReconstituteUserCallerAllowlist01 runs RECONSTITUTE-USER-CALLER-01 over
 // the running module and returns its diagnostics.
 //
 // This is the importable CellRule body. GoCell's own Test* functions in
@@ -117,7 +117,7 @@ func scanReconstituteViolationsPass(p *Pass, file *ast.File, rel string) []Diagn
 // The rule is intentionally NOT registered in StandardCellRules: it reasons
 // about GoCell's own internal package layout (accesscore domain/mem/postgres),
 // making it vacuous-green or false-red for an external module.
-func CheckReconstituteUserCallerAllowlist(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
+func CheckReconstituteUserCallerAllowlist01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	var diags []Diagnostic
 

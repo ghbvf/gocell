@@ -13,12 +13,8 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // INVARIANT: REFRESH-CROSS-STORE-TX-01
@@ -192,57 +188,8 @@ func TestRefreshCrossStoreTX01_BlindSpot_ServiceRefreshReceiverIsS(t *testing.T)
 // violate the rule, which would indicate B8 or future work introducing a
 // parallel invalid-index check path outside schema_guard.
 func TestRefreshInvalidIndexSingleSource01(t *testing.T) {
-	root := findModuleRoot(t)
-
-	type declarationSite struct {
-		rel  string
-		line int
-	}
-	var declarations []declarationSite
-
-	scope := ModuleScope(root)
-	Run(t, AST(scope), func(p *Pass) []Diagnostic {
-		for _, file := range p.Files {
-			EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-				if fd.Name.Name != "DetectInvalidIndexes" {
-					return
-				}
-
-				if fd.Recv != nil {
-					return
-				}
-				pos := p.Fset.Position(fd.Pos())
-				declarations = append(declarations, declarationSite{
-					rel:  filepath.ToSlash(p.Rel(file)),
-					line: pos.Line,
-				})
-			})
-		}
-		return nil
-	})
-
-	if len(declarations) == 0 {
-		t.Fatalf("%s: DetectInvalidIndexes not declared anywhere — expected it in %s",
-			ruleRefreshInvalidIndexSingleSource01, canonicalInvalidIndexFile)
-	}
-
-	if len(declarations) > 1 {
-		t.Logf("%s: DetectInvalidIndexes declared in %d files (expected 1):", ruleRefreshInvalidIndexSingleSource01, len(declarations))
-		for _, d := range declarations {
-			t.Logf("  %s:%d", d.rel, d.line)
-		}
-	}
-
-	assert.Len(t, declarations, 1,
-		"%s: DetectInvalidIndexes must be declared in exactly one production file (%s); "+
-			"found declarations in %d files — callers are allowed, new parallel definitions are not",
-		ruleRefreshInvalidIndexSingleSource01, canonicalInvalidIndexFile, len(declarations))
-
-	if len(declarations) == 1 {
-		assert.Equal(t, canonicalInvalidIndexFile, declarations[0].rel,
-			"%s: DetectInvalidIndexes must be declared in %s, not %s",
-			ruleRefreshInvalidIndexSingleSource01, canonicalInvalidIndexFile, declarations[0].rel)
-	}
+	diags := CheckRefreshInvalidIndexSingleSource01(t, ConfigForExternalCell{})
+	Report(t, ruleRefreshInvalidIndexSingleSource01, diags)
 }
 
 // INVARIANT: REFRESH-AMBIENT-TX-01
@@ -258,53 +205,6 @@ func TestRefreshInvalidIndexSingleSource01(t *testing.T) {
 // method calls named "Begin" on any expression, since the only legitimate
 // Begin callers in refresh_store.go would be pool or tx variables.
 func TestRefreshAmbientTX01(t *testing.T) {
-	const rel = "adapters/postgres/refresh_store.go"
-	root := findModuleRoot(t)
-
-	scope := DirsScope(
-		root, []string{filepath.Dir(rel)},
-		MatchRels(func(r string) bool { return r == rel }),
-	)
-
-	type violation struct {
-		line int
-		expr string
-	}
-	var (
-		violations []violation
-		foundFile  bool
-	)
-
-	Run(t, AST(scope), func(p *Pass) []Diagnostic {
-		for _, file := range p.Files {
-			if p.Rel(file) != rel {
-				continue
-			}
-			foundFile = true
-			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || sel.Sel.Name != "Begin" {
-					return
-				}
-				pos := p.Fset.Position(call.Pos())
-				violations = append(violations, violation{
-					line: pos.Line,
-					expr: fmt.Sprintf("call to .Begin() at line %d", pos.Line),
-				})
-			})
-		}
-		return nil
-	})
-
-	require.True(t, foundFile, "%s: file not found: %s", ruleRefreshAmbientTX01, rel)
-
-	if len(violations) > 0 {
-		t.Logf("%s: %d violation(s) in %s:", ruleRefreshAmbientTX01, len(violations), rel)
-		for _, v := range violations {
-			t.Logf("  line %d: .Begin() call — refresh_store must delegate to TxRunner, not acquire transactions directly", v.line)
-		}
-	}
-	assert.Empty(t, violations,
-		"%s: %s must not contain .Begin() calls; use injected TxRunner.RunInTx instead (B2-A-08)",
-		ruleRefreshAmbientTX01, rel)
+	diags := CheckRefreshAmbientTX01(t, ConfigForExternalCell{})
+	Report(t, ruleRefreshAmbientTX01, diags)
 }

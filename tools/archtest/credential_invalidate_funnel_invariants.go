@@ -9,12 +9,6 @@ package archtest
 // in credential_invalidate_funnel_invariants_test.go call the same Check* —
 // single source, no parallel rule body.
 //
-// INVARIANT: CREDENTIAL-INVALIDATE-FUNNEL-01
-// INVARIANT: USER-AUTHZ-EPOCH-BUMP-FUNNEL-01
-// INVARIANT: REFRESH-REVOKE-USER-FUNNEL-01
-// INVARIANT: CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01
-// INVARIANT: CREDENTIAL-INVALIDATE-APPLIER-INTERFACE-CANONICAL-01
-//
 // Platform-symbol paths are anchored to [PlatformModulePath] — no bare literals.
 
 import (

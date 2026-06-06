@@ -23,12 +23,6 @@ import (
 
 const ruleSessionProtocolCompositionRoot01 = "SESSION-PROTOCOL-COMPOSITION-ROOT-01"
 
-// ─── platform-symbol path constant ───────────────────────────────────────────
-
-// sessionPkgPath is the canonical import path of the runtime/auth/session
-// package, derived from PlatformModulePath — no bare literal.
-const sessionPkgPath = PlatformModulePath + "/runtime/auth/session"
-
 // ─── forbidden constructor set ────────────────────────────────────────────────
 
 // sessionProtocolForbidden is the closed set of session-package constructors
@@ -99,7 +93,7 @@ func scanSessionProtocolViolations(p *Pass) []Diagnostic {
 		}
 		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 			pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
-			if !ok || pkgPath != sessionPkgPath {
+			if !ok || pkgPath != sessionStorePkg { // sessionStorePkg declared in credential_invalidate_funnel_invariants.go
 				return
 			}
 			if _, banned := sessionProtocolForbidden[name]; !banned {

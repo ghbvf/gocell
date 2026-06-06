@@ -5,7 +5,7 @@ package archtest
 //
 // Detection logic lives here (non-test) so it can be compiled by external
 // Cell repositories. GoCell's own TestSessionrefreshNoSessionStoreMutation_01
-// in sessionrefresh_no_session_create_test.go calls CheckSessionrefreshNoSessionCreate
+// in sessionrefresh_no_session_create_test.go calls CheckSessionrefreshNoSessionCreate01
 // directly — single source, no parallel rule body.
 //
 // receiverNamedType is also defined here because refresh_invariants.go
@@ -33,7 +33,7 @@ const ruleSessionrefreshNoSessionCreate01 = "SESSIONREFRESH-NO-SESSION-CREATE-01
 // sessionrefreshPkg and sessionStorePkg are declared in
 // credential_invalidate_funnel_invariants.go (same package).
 
-const sessionStoreInterfaceTyp = "Store"
+// sessionStoreType ("Store") is declared in credential_invalidate_funnel_invariants.go (same package).
 
 // bannedSessionStoreMethods is the closed set of mutating method names on
 // runtime/auth/session.Store. Refresh may call Get; everything that flips
@@ -46,10 +46,10 @@ var bannedSessionStoreMethods = map[string]struct{}{
 
 // ─── SESSIONREFRESH-NO-SESSION-CREATE-01 ─────────────────────────────────────
 
-// CheckSessionrefreshNoSessionCreate runs SESSIONREFRESH-NO-SESSION-CREATE-01
+// CheckSessionrefreshNoSessionCreate01 runs SESSIONREFRESH-NO-SESSION-CREATE-01
 // over the running module and returns its diagnostics. GoCell's own
 // TestSessionrefreshNoSessionStoreMutation_01 calls it directly — single source.
-func CheckSessionrefreshNoSessionCreate(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
+func CheckSessionrefreshNoSessionCreate01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	return Run(t, Typed(TypedOpts{Tests: false}, []string{"./cells/accesscore/slices/sessionrefresh/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
@@ -115,7 +115,7 @@ func checkSessionStoreBannedCall(p *Pass, call *ast.CallExpr, rel string) (Diagn
 		return Diagnostic{}, false
 	}
 	named, ok := receiverNamedType(sig.Recv().Type())
-	if !ok || named.Obj().Name() != sessionStoreInterfaceTyp {
+	if !ok || named.Obj().Name() != sessionStoreType {
 		return Diagnostic{}, false
 	}
 	line := p.Fset.Position(call.Pos()).Line

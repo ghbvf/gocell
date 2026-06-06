@@ -9,9 +9,6 @@ package archtest
 // in domain_authz_mutation_funnel_invariants_test.go call the same Check* —
 // single source, no parallel rule body.
 //
-// INVARIANT: DOMAIN-AUTHZ-FIELD-PRIVATE-01
-// INVARIANT: AUTHZ-MUTATION-APPLY-FUNNEL-01
-//
 // Platform-symbol paths are anchored to [PlatformModulePath] — no bare literals.
 
 import (
