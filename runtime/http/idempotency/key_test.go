@@ -2,12 +2,12 @@ package idempotency
 
 import "testing"
 
-// TestDeriveCommandKey covers the #1669 command dedup key derivation: the
-// (ns,key) layout, the empty-tenant sentinel, the NUL separator, and the
-// per-dimension isolation (distinct tenant/subject/commandID → distinct slot).
-// DeriveCommandKey is node-agnostic by construction — it reads only its three
-// params, no pod/listener/cell input (the β archtest signature freeze enforces
-// the absence of a 4th param).
+// These tests cover the #1669 command dedup key derivation: the (ns,key) layout,
+// the empty-tenant sentinel, the NUL separator, the empty-subject/empty-commandID
+// degenerate boundaries, and the per-dimension isolation (distinct
+// tenant/subject/commandID → distinct slot). DeriveCommandKey is node-agnostic by
+// construction — it reads only its three params, no pod/listener/cell input (the β
+// archtest signature freeze enforces the absence of a 4th param).
 
 func TestDeriveCommandKey_Layout(t *testing.T) {
 	t.Parallel()
@@ -30,6 +30,27 @@ func TestDeriveCommandKey_EmptyTenantSentinel(t *testing.T) {
 	// A service principal (no tenant) still gets a deterministic key body.
 	if got, want := k.Key(), "sub\x00cmd"; got != want {
 		t.Errorf("Key() = %q, want %q", got, want)
+	}
+}
+
+// TestDeriveCommandKey_DegenerateBoundaries locks the empty-subject and
+// empty-commandID bodies — both are deterministic (the NUL separator always
+// present), so a service principal (no subject) is distinguished within its
+// tenant namespace by commandID alone, and an empty commandID by subject alone.
+// The caller is responsible for keeping the surviving dimension unique.
+func TestDeriveCommandKey_DegenerateBoundaries(t *testing.T) {
+	t.Parallel()
+	// Empty subject (service principal): slot keyed by commandID within ns.
+	if got, want := DeriveCommandKey("t", "", "cmd").Key(), "\x00cmd"; got != want {
+		t.Errorf("empty subject Key() = %q, want %q", got, want)
+	}
+	// Empty commandID: body is still well-formed (one NUL), subject distinguishes.
+	if got, want := DeriveCommandKey("t", "sub", "").Key(), "sub\x00"; got != want {
+		t.Errorf("empty commandID Key() = %q, want %q", got, want)
+	}
+	// Empty subject AND commandID is the lone all-empty body — bare separator.
+	if got, want := DeriveCommandKey("t", "", "").Key(), "\x00"; got != want {
+		t.Errorf("both-empty Key() = %q, want %q", got, want)
 	}
 }
 

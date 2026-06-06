@@ -615,7 +615,11 @@ func checkConstructorRequiredUse(spec constructorSpec, fn *ast.FuncDecl) []strin
 		return nil // the signature freeze reports the shape
 	}
 
-	// One unique token bit per positional param, keyed to its source name.
+	// One unique token bit per positional param, keyed to its source name. Safe:
+	// an isolation tuple has a handful of params (DeriveKey=5, DeriveCommandKey=3),
+	// far below uint's bit width — `1 << i` cannot overflow. A constructor with
+	// ≥63 params would break this and is absurd for an isolation tuple; if one ever
+	// appears, switch the token set to math/big.
 	src := map[uint]string{}
 	for i, p := range params {
 		src[uint(i)] = p.name
@@ -806,9 +810,11 @@ func TestHTTPIdempotencyKeyNodeAgnostic01_ReverseBlindSpot(t *testing.T) {
 
 	// Taint reverse fixtures (inline source). For each sanctioned constructor the
 	// conforming body yields zero; each malformed variant yields ≥1 from the
-	// signature freeze or the taint walk. Index order matches idempotencyKeyConstructors.
-	keySpec := idempotencyKeyConstructors[0] // DeriveKey
-	cmdSpec := idempotencyKeyConstructors[1] // DeriveCommandKey
+	// signature freeze or the taint walk. Resolve specs by name (not by index) so
+	// reordering idempotencyKeyConstructors cannot silently pair a spec with the
+	// wrong fixture family.
+	keySpec := constructorSpecByName(t, deriveKeyFnName)
+	cmdSpec := constructorSpecByName(t, deriveCommandKeyFnName)
 	if sv, uv := runConstructorDetectors(t, keySpec, deriveKeyGood); len(sv) != 0 || len(uv) != 0 {
 		t.Errorf("%s self-test: detectors flagged the conforming DeriveKey (vacuous-pass): sig=%v use=%v",
 			ruleHTTPIdemKeyNodeAgnostic01, sv, uv)
@@ -943,6 +949,21 @@ func DeriveCommandKey(tenantID, subject, commandID string) IdempotencyKey {
 	_ = commandID
 	return IdempotencyKey{ns: tenantID, key: subject}
 }`,
+}
+
+// constructorSpecByName returns the sanctioned constructor spec with the given
+// func name from idempotencyKeyConstructors, failing the test if absent. Used by
+// the reverse self-check to pair a spec with its fixture family by name rather
+// than by a fragile slice index.
+func constructorSpecByName(t *testing.T, fnName string) constructorSpec {
+	t.Helper()
+	for _, c := range idempotencyKeyConstructors {
+		if c.fnName == fnName {
+			return c
+		}
+	}
+	require.FailNowf(t, "constructor spec not found", "no constructorSpec %q in idempotencyKeyConstructors", fnName)
+	return constructorSpec{}
 }
 
 // runConstructorDetectors parses an inline constructor source and runs the

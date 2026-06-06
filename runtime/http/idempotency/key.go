@@ -114,7 +114,21 @@ func DeriveKey(tenantID, subject, method, path, idemKey string) IdempotencyKey {
 // runtime/command.CommandID used to route a command to its handler): two distinct
 // invocations of the same contract command carry DIFFERENT commandID values and
 // MUST occupy different dedup slots. Sourcing a stable per-instance commandID is
-// the caller's job (the deferred relay-side Claimer wrap, ⑤ PR-B).
+// the caller's job (the deferred relay-side Claimer wrap, ⑤ PR-B). Because
+// runtime/command.CommandID is the contract-level routing id (a different
+// concept), callers pass the per-instance identity as a plain string here, e.g.
+// DeriveCommandKey(string(tenantID), string(subject), instanceID).
+//
+// Caller obligations (same store-side contract as DeriveKey, deliberately NOT
+// folded into this store-agnostic constructor): commandID is opaque and may be
+// untrusted; the Redis-backed store rejects a key whose body contains the
+// Redis-Cluster hash-tag braces "{"/"}" or is empty (returns KindInternal on
+// Claim → permanent error → MarkDead). The caller MUST therefore validate
+// commandID is brace-free and non-empty before deriving (DeriveKey's HTTP path
+// does this in middleware on the Idempotency-Key header). When subject is empty
+// (a service principal with no subject), the slot is distinguished within its
+// tenant namespace by commandID alone, so the caller MUST keep commandID unique
+// in that scope.
 //
 // Why no method/path (unlike DeriveKey): DeriveKey scopes an HTTP record per
 // endpoint so the same Idempotency-Key header on POST /orders and POST /payments
