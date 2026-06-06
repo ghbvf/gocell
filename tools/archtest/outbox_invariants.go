@@ -10,13 +10,15 @@
 // composite literals, except for the files in handleResultLiteralAllowlist
 // (factories themselves, kernel internal plumbing, shared conformance harness).
 //
-// External Cell repo semantics: the allowlist entries
+// External Cell repo semantics: the allowlist is consulted by
+// isHandleResultLiteralAllowed, which FIRST requires the constructing package to
+// be a GoCell platform package (isGoCellPlatformPkgPath). The allowlist entries
 // (kernel/outbox/result.go, kernel/outbox/consumer_base.go,
-// kernel/outbox/outboxtest/conformance.go) belong to the GoCell platform module
-// and never exist in a consumer module, so the allowlist never matches in an
-// external repo — the rule degrades to a PURE BAN on HandleResult{} literals,
-// which is the intended behavior: business handlers must use the typed
-// factories.
+// kernel/outbox/outboxtest/conformance.go) belong to the GoCell platform module;
+// a consumer module that forges one of these rel paths has a non-platform package
+// path and is correctly NOT exempt, so the rule degrades to a PURE BAN on
+// HandleResult{} literals — the intended behavior: business handlers must use the
+// typed factories.
 //
 // # OUTBOX-TOPIC-FAILOPEN-01
 //
@@ -54,7 +56,6 @@ import (
 	"go/token"
 	"go/types"
 	"regexp"
-	"sort"
 	"strings"
 	"testing"
 
@@ -129,29 +130,52 @@ func CheckOutboxHandleResultFactoryPreferred01(t *testing.T, cfg ConfigForExtern
 	return scanner.Canonical(out)
 }
 
+// handleResultFactoryViolationMessage is the consumer-facing diagnostic body. The
+// violation LOCATION travels in Diagnostic.Rel / Diagnostic.Line (so Report
+// renders "<rule>: <rel>:<line>: <msg>"), NOT embedded in the message. The fix an
+// external consumer can act on is "use the factories"; the allowlist is a
+// GoCell-internal escape hatch, not a consumer extension point.
+const handleResultFactoryViolationMessage = "OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01: " +
+	"outbox.HandleResult{...} composite literal — business handlers must return " +
+	"outbox.Ack() / outbox.Requeue(err) / outbox.Reject(err) instead of constructing " +
+	"the struct literal. (The ProcessReason / SettlementObservers fallback-literal " +
+	"escape hatch is reserved for kernel-internal plumbing via the GoCell-internal " +
+	"handleResultLiteralAllowlist — not a consumer extension point.)"
+
+// isHandleResultLiteralAllowed reports whether a outbox.HandleResult{...} literal
+// in the package pkgPath / file rel is sanctioned: the constructing package must
+// be a GoCell platform package (so a consumer module forging an allowlisted rel
+// path is NOT exempt — closing the registered rule's pure-ban bypass) AND rel
+// must be listed in handleResultLiteralAllowlist. Extracted as a pure function so
+// the platform-identity bind is unit-testable (TestIsHandleResultLiteralAllowed).
+func isHandleResultLiteralAllowed(pkgPath, rel string) bool {
+	if !isGoCellPlatformPkgPath(pkgPath) {
+		return false
+	}
+	_, ok := handleResultLiteralAllowlist[rel]
+	return ok
+}
+
 // collectHandleResultLiteralViolations is the per-Pass scanner shared by the
 // production Check and the fixture precision gate (no parallel rule body).
 func collectHandleResultLiteralViolations(p *Pass) []Diagnostic {
-	if p.TypesInfo == nil || p.Fset == nil {
+	if p.TypesInfo == nil || p.Fset == nil || p.Pkg == nil {
 		return nil
 	}
-	var hits []string
+	pkgPath := p.Pkg.Path()
+	var out []Diagnostic
 	for _, file := range p.Files {
 		rel := p.Rel(file)
-		if _, ok := handleResultLiteralAllowlist[rel]; ok {
+		if isHandleResultLiteralAllowed(pkgPath, rel) {
 			continue
 		}
-		hits = append(hits, scanForHandleResultLiterals(p.Fset, p.TypesInfo, file, rel, outboxKernelPkgPath)...)
-	}
-	sort.Strings(hits)
-	var out []Diagnostic
-	for _, h := range hits {
-		out = append(out, Diagnostic{
-			Message: fmt.Sprintf("OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01: %s — use outbox.Ack() / "+
-				"outbox.Requeue(err) / outbox.Reject(err) instead of constructing the "+
-				"struct literal; if you genuinely need ProcessReason or SettlementObservers, "+
-				"extend handleResultLiteralAllowlist with a code-comment justification", h),
-		})
+		for _, h := range scanForHandleResultLiterals(p.Fset, p.TypesInfo, file, rel, outboxKernelPkgPath) {
+			out = append(out, Diagnostic{
+				Rel:     h.Rel,
+				Line:    h.Line,
+				Message: handleResultFactoryViolationMessage,
+			})
+		}
 	}
 	return out
 }
@@ -166,9 +190,15 @@ func collectHandleResultLiteralViolations(p *Pass) []Diagnostic {
 // observes.  It does NOT call t.Errorf — the caller (Report /
 // RunStandardCellRules) does that.
 //
-// External Cell repo: external Cells use platform outbox at the stable
-// PlatformModulePath import path; the type-identity check via go/types
-// resolves regardless of import alias — the rule applies uniformly.
+// External Cell repo: this rule is deliberately NOT registered in
+// StandardCellRules (see the OUTBOX-TOPIC-FAILOPEN-01 section of this file's
+// package godoc). kernel/outbox.Entry is sealed — a populated outbox.Entry{...}
+// composite literal outside kernel/outbox is a compile error
+// (OUTBOX-ENTRY-SEALED-CONSTRUCTION-01) — so the production scan is vacuous in
+// GoCell AND in any external repo; the rule's real coverage is the
+// fixturetest/outbox fixtures, exercised by the dogfood sub-tests. This exported
+// Check exists for that single-source fixture reuse + PlatformModulePath
+// parameterization, NOT to gate external consumer production code.
 func CheckOutboxTopicFailopen01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	out := Run(t, Production(TypedOpts{}), collectOutboxTopicFailopenViolations)
@@ -455,9 +485,19 @@ func skipOutboxTopicProductionScan(rel string) bool {
 		strings.HasPrefix(rel, "testdata/")
 }
 
+// handleResultHit is a single outbox.HandleResult{...} composite-literal
+// occurrence located by scanForHandleResultLiterals, carrying structured
+// location so the caller can populate Diagnostic.Rel / Diagnostic.Line (the
+// uniform diagnostic contract) rather than embedding "<rel>:<line>" in the
+// message — which produced a bogus ":0:" prefix when Report formatted it.
+type handleResultHit struct {
+	Rel  string
+	Line int
+}
+
 // scanForHandleResultLiterals scans file for HandleResult composite literals.
-// Returns "<rel>:<line>" strings. Files that neither import kernel/outbox nor
-// declare package outbox produce no hits. Type-aware via info.
+// Returns the structured location of each hit. Files that neither import
+// kernel/outbox nor declare package outbox produce no hits. Type-aware via info.
 //
 // Coverage:
 //   - qualified literal `outbox.HandleResult{}` — *ast.SelectorExpr resolved
@@ -469,8 +509,8 @@ func skipOutboxTopicProductionScan(rel string) bool {
 //     in package outbox) AND dot-imported use (`import . "outbox"`). The
 //     latter closes the prior path A.3 bypass — symmetric with the PR-SH1
 //     caller-side migration to typeseval.ResolvePackageRef for function refs.
-func scanForHandleResultLiterals(fset *token.FileSet, info *types.Info, file *ast.File, rel, outboxImportPath string) []string {
-	var hits []string
+func scanForHandleResultLiterals(fset *token.FileSet, info *types.Info, file *ast.File, rel, outboxImportPath string) []handleResultHit {
+	var hits []handleResultHit
 	EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
 		var id *ast.Ident
 		switch tn := cl.Type.(type) {
@@ -491,8 +531,7 @@ func scanForHandleResultLiterals(fset *token.FileSet, info *types.Info, file *as
 		if !ok || obj.Pkg() == nil || obj.Pkg().Path() != outboxImportPath {
 			return
 		}
-		pos := fset.Position(cl.Pos())
-		hits = append(hits, fmt.Sprintf("%s:%d: HandleResult{} literal (resolved to %s)", rel, pos.Line, outboxImportPath))
+		hits = append(hits, handleResultHit{Rel: rel, Line: fset.Position(cl.Pos()).Line})
 	})
 	return hits
 }

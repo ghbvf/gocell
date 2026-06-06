@@ -2,6 +2,7 @@ package archtest
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -53,6 +54,31 @@ import (
 // supplied by the driver (the Run typed scopes Typed/Production → findModuleRoot),
 // which resolves the consumer's own go.mod for external repos.
 const PlatformModulePath = "github.com/ghbvf/gocell"
+
+// isGoCellPlatformPkgPath reports whether pkgPath is a package inside the GoCell
+// platform module ([PlatformModulePath] itself or any subpackage).
+//
+// The registered CellRules in [StandardCellRules] that carry a file allowlist
+// (OUTBOX-RECONSTRUCTION-CALLER-01, PROJECTION-APPLY-HOOK-FUNNEL-01,
+// OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01) key their sanctioned sites by
+// module-RELATIVE path (e.g. "kernel/outbox/result.go"). A repo-relative path is
+// NOT a trustworthy identity in a CONSUMER module: an external Cell repo could
+// recreate the same relative path and claim the GoCell-internal exemption,
+// defeating the rule's pure-ban guarantee. Binding each allowlist to platform
+// package identity closes that bypass — a forged site in a consumer module has
+// pkgPath = <consumer-module>/… which is not under [PlatformModulePath], so it is
+// correctly never exempt and the rule stays a true pure ban there. In GoCell's
+// own dogfood every production package is under [PlatformModulePath], so the bind
+// is transparent: the relative-path allowlist still discriminates among GoCell
+// files (rel→file is a bijection within a single module).
+//
+// ref: scaffold_derived_forceoverwrite.go::isDerivedCtorSite — the same
+// package-identity bind for SCAFFOLD-DERIVED-FORCEOVERWRITE-01, with the same
+// "consumer module forges path" threat; go/analysis Pass carries Pkg identity for
+// exactly this kind of provenance check.
+func isGoCellPlatformPkgPath(pkgPath string) bool {
+	return pkgPath == PlatformModulePath || strings.HasPrefix(pkgPath, PlatformModulePath+"/")
+}
 
 // CellRule is a reusable, importable architecture invariant — the GoCell
 // analog of golang.org/x/tools/go/analysis.Analyzer. ID is the stable rule
@@ -185,7 +211,10 @@ func StandardCellRules() []*CellRule {
 		// kernel reconstruction primitives outbox.UnmarshalEnvelope /
 		// (outbox.EntryScan).ToEntry — the sanctioned storage/wire-decode callers
 		// are GoCell-internal packages absent from a consumer module → pure ban.
-		// Cell-applicable; Hard downstream (types.Info caller-allowlist).
+		// Cell-applicable; Hard downstream (types.Info caller-allowlist bound to
+		// platform package identity via isGoCellPlatformPkgPath, so a forged
+		// consumer rel path is not exempt; SelectorExpr + bare-Ident dot-import
+		// walk leaves no looks-like-but-isn't gap). See outbox_reconstruction_caller.go godoc.
 		{ID: ruleOutboxReconstructionCaller01, Run: CheckOutboxReconstructionCaller01},
 		// PROJECTION-APPLY-HOOK-FUNNEL-01: bans consumer code from calling
 		// projection.Coordinator.Subscribe outside the sanctioned bootstrap drain
@@ -196,9 +225,10 @@ func StandardCellRules() []*CellRule {
 		{ID: ruleProjectionApplyHookFunnel01, Run: CheckProjectionApplyHookFunnel01},
 		// OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01: business handlers must return
 		// outbox.Ack()/Requeue()/Reject() rather than construct outbox.HandleResult{}
-		// composite literals; the 3-file kernel/outbox allowlist never exists in a
-		// consumer module → pure ban on the literal form (HandleResult is exported
-		// and constructible, so this is a real consumer-usage constraint).
+		// composite literals; the 3-file kernel/outbox allowlist is bound to platform
+		// package identity (isGoCellPlatformPkgPath), so a forged consumer rel path is
+		// not exempt → pure ban on the literal form (HandleResult is exported and
+		// constructible, so this is a real consumer-usage constraint).
 		// Cell-applicable; Medium downstream (types.Info type-identity scan).
 		{ID: ruleOutboxHandleResultFactoryPreferred01, Run: CheckOutboxHandleResultFactoryPreferred01},
 	}

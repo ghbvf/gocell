@@ -1360,6 +1360,69 @@ func TestOutboxHandleResultFactoryPreferred(t *testing.T) {
 		CheckOutboxHandleResultFactoryPreferred01(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 }
 
+// TestOutboxHandleResultFactoryPreferred_StructuredDiagFixture is the RED-fixture
+// gate proving the diagnostic carries STRUCTURED Rel/Line (codex #1682 F6): a
+// non-allowlisted outbox.HandleResult{} literal must produce a Diagnostic whose
+// Rel/Line are populated (so Report renders "<rule>: <rel>:<line>: <msg>", not the
+// previous bogus ":0:"), and whose consumer-facing message points to the factories
+// — not to editing the GoCell-internal allowlist.
+func TestOutboxHandleResultFactoryPreferred_StructuredDiagFixture(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	const fixturePattern = "./tools/archtest/testdata/handleresult_factory_fixtures/red_literal"
+	var diags []Diagnostic
+	_ = Run(t, Typed(TypedOpts{}, []string{fixturePattern}), func(p *Pass) []Diagnostic {
+		diags = append(diags, collectHandleResultLiteralViolations(p)...)
+		return nil
+	})
+
+	assert.NotEmpty(t, diags,
+		"OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01 fixture: expected ≥1 diagnostic for the "+
+			"non-allowlisted HandleResult{} literal")
+	for _, d := range diags {
+		assert.Equal(t, "tools/archtest/testdata/handleresult_factory_fixtures/red_literal/usage.go", d.Rel,
+			"diagnostic Rel must be populated (no ':0:' — F6)")
+		assert.Positive(t, d.Line,
+			"diagnostic Line must be populated (no ':0:' — F6)")
+		assert.Contains(t, d.Message, "outbox.Ack()",
+			"diagnostic must give the consumer-facing factory guidance; got %q", d.Message)
+	}
+}
+
+// TestIsHandleResultLiteralAllowed proves the literal allowlist is bound to
+// PLATFORM package identity, not just a repo-relative path. The critical case is
+// "consumer module forges allowlisted rel path": a consumer recreating
+// kernel/outbox/result.go must STILL be flagged (false), because its package path
+// is not under PlatformModulePath — closing the registered rule's pure-ban bypass
+// (codex #1682 F4).
+func TestIsHandleResultLiteralAllowed(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name         string
+		pkgPath, rel string
+		want         bool
+	}{
+		{"sanctioned platform factory file", PlatformModulePath + "/kernel/outbox", "kernel/outbox/result.go", true},
+		{"sanctioned platform plumbing file", PlatformModulePath + "/kernel/outbox", "kernel/outbox/consumer_base.go", true},
+		{"consumer module forges allowlisted rel", "consumer.example/app/kernel/outbox", "kernel/outbox/result.go", false},
+		{"platform pkg, non-allowlisted rel", PlatformModulePath + "/cells/foo", "cells/foo/handler.go", false},
+		{"unresolved pkg", "", "kernel/outbox/result.go", false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isHandleResultLiteralAllowed(tc.pkgPath, tc.rel); got != tc.want {
+				t.Errorf("isHandleResultLiteralAllowed(%q, %q) = %v, want %v",
+					tc.pkgPath, tc.rel, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3 anchors
 // the load-vs-skip decision contract for the HandleResult factory rule.
 //

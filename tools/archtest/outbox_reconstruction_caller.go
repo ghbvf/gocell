@@ -37,10 +37,15 @@
 // # AI-robust rating (charter §"Funnel 双向锁评级")
 //
 //   - Downstream: HARD by archtest caller-allowlist. The callee is resolved via
-//     go/types (ResolvePackageRef / ResolveMethodCall), so import aliases
-//     (kout "…/kernel/outbox"), dot-imports, and method-expression forms are all
-//     resolved to the same symbol — there is no "looks like but isn't" gap. Any
-//     callsite outside the allowlist fails in CI.
+//     go/types (ResolvePackageRef / ResolveMethodCall / types.Info.Uses), so
+//     import aliases (kout "…/kernel/outbox"), dot-imports (bare-identifier
+//     UnmarshalEnvelope), and method-expression forms are all resolved to the
+//     same symbol — there is no "looks like but isn't" gap. The allowlist is
+//     bound to PLATFORM PACKAGE IDENTITY (isGoCellPlatformPkgPath), not a bare
+//     repo-relative path, so a consumer module that forges an allowlisted rel
+//     path (e.g. its own "runtime/eventbus/eventbus.go") is NOT exempt — the
+//     rule stays a true pure ban for external repos. Any callsite outside the
+//     allowlist fails in CI.
 //   - Upstream: MEDIUM, and this is a GO-LANGUAGE CEILING, not a deferred TODO.
 //     Hard upstream would require the two funnels to be unreachable outside the
 //     sanctioned packages. They cannot be: reconstruction is inherently
@@ -53,28 +58,34 @@
 //
 // # Detection is REFERENCE-based, not call-based
 //
-// The scanner matches every SelectorExpr that go/types resolves to a funnel
-// symbol — whether it is the callee of a call OR passed as a function/method
-// value. This deliberately closes the "indirection through a function value"
-// gap: a file that does `f := outbox.UnmarshalEnvelope; f(b)` references the
-// symbol at the `outbox.UnmarshalEnvelope` SelectorExpr and is therefore caught.
+// The scanner walks BOTH SelectorExpr and bare *ast.Ident references that
+// go/types resolves to a funnel symbol — whether the reference is the callee of
+// a call OR passed as a function/method value. This deliberately closes the
+// "indirection through a function value" gap: a file that does
+// `f := outbox.UnmarshalEnvelope; f(b)` references the symbol at the
+// `outbox.UnmarshalEnvelope` SelectorExpr and is caught. The bare-Ident walk
+// additionally closes the dot-import form (import . "…/kernel/outbox";
+// UnmarshalEnvelope(b)), which references the package func as a bare *ast.Ident —
+// resolved via types.Info.Uses, alias/dot-import-proof. The mirror of
+// scaffold_derived_forceoverwrite.go's dual SelectorExpr+Ident walk.
+// (The (EntryScan).ToEntry method funnel is always a SelectorExpr — a method call
+// on a receiver value — even under a dot-import of kernel/outbox, so only the
+// package func has a bare-Ident form.)
 //
 // # Tool blind spots (charter §"强制盲区自检")
 //
-//   - Dot-import bare-identifier form (import . "…/kernel/outbox"; UnmarshalEnvelope(b))
-//     references the symbol as a bare *ast.Ident, not a SelectorExpr, so it is not
-//     matched. Dot-importing kernel/outbox is absent from the corpus and
-//     conspicuous; documented, not enforced.
 //   - A bypass added in a //go:build-gated PRODUCTION file under a tag not in the
 //     default build context would be missed by the default-tags scan. The funnel
 //     callers today are all default-build; the integration-tagged code is _test.go
-//     (excluded from production load anyway). Documented.
+//     (excluded from production load anyway). Mitigated by the default+tagged
+//     double scan when cfg.BuildTags is supplied. Documented.
 //   - The anti-vacuity guard (every allowlisted file must reference its funnel ≥1×)
-//     lives in the _test.go dogfood and proves the scanner actually resolves the
-//     real references (not a vacuous pass) AND forbids stale allowlist rot — a dead
-//     allowlist entry is a latent bypass slot, so an entry that no longer corresponds
-//     to a real reference fails the test (charter "no silent carve-over / empty
-//     steady state").
+//     lives in the _test.go dogfood (checkReconstructionAntiVacuity) — NOT in the
+//     importable Check (which returns only forward caller-allowlist violations).
+//     It proves the scanner actually resolves the real references (not a vacuous
+//     pass) AND forbids stale allowlist rot — a dead allowlist entry is a latent
+//     bypass slot, so an entry that no longer corresponds to a real reference
+//     fails the dogfood (charter "no silent carve-over / empty steady state").
 //
 // # External Cell repo semantics
 //
@@ -111,10 +122,13 @@ const reconstructionOutboxPkg = PlatformModulePath + "/kernel/outbox"
 // DISTINCT sanctioned callers — storage reconstruction vs wire decode — so the
 // allowlist is per-symbol, not a shared infra blanket.
 //
-// External Cell repo note: these paths exist only inside the GoCell platform
-// module (they are in adapters/ and runtime/ packages that ship as dependencies).
-// A consumer module's own source never contains these paths, so the allowlist
-// never matches there — the rule degrades to a pure ban as intended.
+// External Cell repo note: a relative path alone is not a trustworthy identity in
+// a consumer module. The allowlist is consulted by isReconstructionAllowedSite,
+// which FIRST requires the calling package to be a GoCell platform package
+// (isGoCellPlatformPkgPath) — these rel paths exist only inside adapters/ and
+// runtime/ packages that ship as GoCell dependencies. A consumer module that
+// forges one of these rel paths has a non-platform package path and is correctly
+// NOT exempt, so the rule degrades to a true pure ban there.
 var reconstructionFunnelAllowlist = map[string]map[string]struct{}{
 	// Wire-decode funnel: inbound broker bytes → sealed Entry.
 	"kernel/outbox.UnmarshalEnvelope": {
@@ -134,11 +148,18 @@ var reconstructionFunnelAllowlist = map[string]map[string]struct{}{
 	},
 }
 
-// CheckOutboxReconstructionCaller01 enforces OUTBOX-RECONSTRUCTION-CALLER-01:
-// every production reference to outbox.UnmarshalEnvelope and
-// (outbox.EntryScan).ToEntry must occur in a file listed in
-// reconstructionFunnelAllowlist, and every allowlisted file must host a live
-// reference to its funnel (anti-vacuity).
+// CheckOutboxReconstructionCaller01 enforces the FORWARD leg of
+// OUTBOX-RECONSTRUCTION-CALLER-01: every production reference to
+// outbox.UnmarshalEnvelope and (outbox.EntryScan).ToEntry must occur in a
+// sanctioned site — a GoCell platform package (isGoCellPlatformPkgPath) whose
+// module-relative path is listed in reconstructionFunnelAllowlist. This is the
+// portable, externally-runnable half of the rule.
+//
+// The REVERSE leg — anti-vacuity / no-stale-allowlist (every allowlisted file
+// must still host a live reference) — is a GoCell-internal self-check
+// (checkReconstructionAntiVacuity, exercised by the _test.go dogfood), NOT part
+// of this Check: it reasons about GoCell's own allowlist hygiene, which is
+// meaningless in an external consumer module.
 //
 // It scans the running module's production code (Production → findModuleRoot),
 // covering tag-gated files via cfg.BuildTags, and returns the diagnostics it
@@ -166,41 +187,80 @@ func CheckOutboxReconstructionCaller01(t *testing.T, cfg ConfigForExternalCell) 
 	return scanner.Canonical(out)
 }
 
-// collectReconstructionCallerViolations is the per-Pass scanner shared by the
-// production Check and the anti-vacuity reverse self-check. It returns forward
-// caller-allowlist violations (references outside the sanctioned files). The
-// anti-vacuity check (stale allowlist entries) is handled separately by
+// isReconstructionAllowedSite reports whether (pkgPath, symbol, rel) identifies a
+// sanctioned Entry-reconstruction site: the calling package must be a GoCell
+// platform package (so a consumer module forging an allowlisted rel path is NOT
+// exempt — closing the registered rule's pure-ban bypass) AND the
+// module-relative file must be listed for that symbol in
+// reconstructionFunnelAllowlist. Extracted as a pure function so the
+// platform-identity bind is unit-testable (TestIsReconstructionAllowedSite).
+func isReconstructionAllowedSite(pkgPath, symbol, rel string) bool {
+	if !isGoCellPlatformPkgPath(pkgPath) {
+		return false
+	}
+	_, ok := reconstructionFunnelAllowlist[symbol][rel]
+	return ok
+}
+
+// reconstructionViolationMessage is the diagnostic body shared by the SelectorExpr
+// and bare-Ident (dot-import) reference walkers.
+func reconstructionViolationMessage(symbol, rel string) string {
+	return fmt.Sprintf(
+		"OUTBOX-RECONSTRUCTION-CALLER-01: %s is called from %s, which is not a sanctioned "+
+			"Entry-reconstruction site. This funnel rebuilds a sealed outbox.Entry from "+
+			"untrusted input (wire bytes / scan fields) and Entry.Validate does NOT check "+
+			"principal provenance — a producer calling it could forge an audit identity. "+
+			"Only storage adapters and wire/consumer decoders may reconstruct; route producer "+
+			"event creation through outbox.NewEntry. If this IS a new sanctioned infra site, "+
+			"add it to reconstructionFunnelAllowlist with rationale.",
+		symbol, rel,
+	)
+}
+
+// collectReconstructionCallerViolations is the per-Pass forward scanner shared by
+// the production Check and the anti-vacuity reverse self-check. It returns forward
+// caller-allowlist violations (references outside the sanctioned platform sites).
+// It walks BOTH SelectorExpr references (qualified / aliased / method / function
+// value) AND bare *ast.Ident references (dot-import form of the UnmarshalEnvelope
+// package func), mirroring scaffold_derived_forceoverwrite.go. The anti-vacuity
+// check (stale allowlist entries) is handled separately by
 // checkReconstructionAntiVacuity, which requires the observed map accumulated
 // across the full production scan.
 func collectReconstructionCallerViolations(p *Pass) []Diagnostic {
 	if !p.Typed() {
 		return nil
 	}
+	pkgPath := p.Pkg.Path()
 	var d []Diagnostic
 	for _, file := range p.Files {
 		rel := p.Rel(file)
+		// Qualified / aliased / method / function-value forms (SelectorExpr).
 		EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
 			symbol, matched := reconstructionFunnelSymbol(p.TypesInfo, sel)
-			if !matched {
+			if !matched || isReconstructionAllowedSite(pkgPath, symbol, rel) {
 				return
 			}
-			if _, allowed := reconstructionFunnelAllowlist[symbol][rel]; !allowed {
-				pos := p.Fset.Position(sel.Pos())
-				d = append(d, Diagnostic{
-					Rel:  rel,
-					Line: pos.Line,
-					Message: fmt.Sprintf(
-						"OUTBOX-RECONSTRUCTION-CALLER-01: %s is called from %s, which is not a sanctioned "+
-							"Entry-reconstruction site. This funnel rebuilds a sealed outbox.Entry from "+
-							"untrusted input (wire bytes / scan fields) and Entry.Validate does NOT check "+
-							"principal provenance — a producer calling it could forge an audit identity. "+
-							"Only storage adapters and wire/consumer decoders may reconstruct; route producer "+
-							"event creation through outbox.NewEntry. If this IS a new sanctioned infra site, "+
-							"add it to reconstructionFunnelAllowlist with rationale.",
-						symbol, rel,
-					),
-				})
+			d = append(d, Diagnostic{
+				Rel:     rel,
+				Line:    p.Fset.Position(sel.Pos()).Line,
+				Message: reconstructionViolationMessage(symbol, rel),
+			})
+		})
+		// Dot-import bare-identifier form of the UnmarshalEnvelope package func.
+		// Idents that are the .Sel of a SelectorExpr are already handled above.
+		EachInSubtree[ast.Ident](file, func(ident *ast.Ident) {
+			if isInsideSelectorExpr(file, ident) {
+				return
 			}
+			symbol, matched := reconstructionFunnelSymbolFromIdent(p.TypesInfo, ident)
+			if !matched || isReconstructionAllowedSite(pkgPath, symbol, rel) {
+				return
+			}
+			d = append(d, Diagnostic{
+				Rel:     rel,
+				Line:    p.Fset.Position(ident.Pos()).Line,
+				Message: reconstructionViolationMessage(symbol, rel),
+			})
 		})
 	}
 	return d
@@ -279,6 +339,27 @@ func reconstructionFunnelSymbol(info *types.Info, sel *ast.SelectorExpr) (string
 		return "", false
 	}
 	return "(kernel/outbox.EntryScan).ToEntry", true
+}
+
+// reconstructionFunnelSymbolFromIdent resolves a bare *ast.Ident (the dot-import
+// form of the kernel/outbox.UnmarshalEnvelope package func) to its funnel symbol
+// via types.Info.Uses, alias/dot-import-proof. Returns ("", false) for any other
+// ident. The (EntryScan).ToEntry method funnel has no bare-Ident form — a method
+// call is always a SelectorExpr on the receiver value — so only the package func
+// is resolved here.
+func reconstructionFunnelSymbolFromIdent(info *types.Info, ident *ast.Ident) (string, bool) {
+	if info == nil || ident == nil || ident.Name != "UnmarshalEnvelope" {
+		return "", false
+	}
+	obj, ok := info.Uses[ident]
+	if !ok {
+		return "", false
+	}
+	fn, ok := obj.(*types.Func)
+	if !ok || fn.Pkg() == nil || fn.Pkg().Path() != reconstructionOutboxPkg {
+		return "", false
+	}
+	return "kernel/outbox.UnmarshalEnvelope", true
 }
 
 // isEntryScanReceiver reports whether fn's receiver base type is

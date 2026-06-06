@@ -36,11 +36,13 @@
 // # External Cell repo semantics (this rule is registered in StandardCellRules)
 //
 // The sanctioned bootstrap drain (runtime/bootstrap/phases_projection.go) lives
-// in the GoCell platform module, NOT in a consumer repo. The allowlist matching
-// kernel/projection/ and the drain file will never match in a consumer module,
-// so the rule degrades to a PURE BAN for external Cell repos: any
-// Coordinator.Subscribe call in consumer code fires immediately. That is the
-// intended semantics — consumers must declare projections via
+// in the GoCell platform module, NOT in a consumer repo. The production-file
+// exemptions are bound to platform package identity (isProjectionApplyHookAllowed
+// → isGoCellPlatformPkgPath), so a consumer module CANNOT claim them by forging
+// the kernel/projection/… or drain rel path — its package path is not under
+// PlatformModulePath. The rule therefore degrades to a PURE BAN for external Cell
+// repos: any Coordinator.Subscribe call in consumer code fires immediately. That
+// is the intended semantics — consumers must declare projections via
 // reg.RegisterProjection (cellgen-generated from slice.yaml) and never wire the
 // Coordinator directly. A clean external repo has zero Coordinator.Subscribe
 // calls (vacuous-green).
@@ -157,31 +159,35 @@ func isProjectionSubscribeCall(call *ast.CallExpr, info *types.Info) bool {
 		named.Obj().Name() == projectionCoordTypeName
 }
 
-// isProjectionApplyHookAllowed reports whether the file at the given rel path is
-// in the allowed set for Coordinator.Subscribe calls:
+// isProjectionApplyHookAllowed reports whether a Coordinator.Subscribe call in the
+// package pkgPath / file rel is in the allowed set:
+//   - _test.go files (tests of the Coordinator API) — exempt regardless of package
 //   - kernel/projection package itself (where the method is defined and used internally)
-//   - _test.go files (tests of the Coordinator API)
 //   - the single bootstrap projection drain file (runtime/bootstrap/phases_projection.go)
+//
+// The two production-file exemptions are bound to PLATFORM PACKAGE IDENTITY
+// (isGoCellPlatformPkgPath): a repo-relative path alone is not a trustworthy
+// identity in a consumer module, which could recreate kernel/projection/… or the
+// drain rel path to claim the GoCell-internal exemption and defeat the registered
+// rule's pure ban. A forged site in a consumer module has a non-platform package
+// path and is correctly NOT exempt — so this returns false for all non-test
+// consumer files and the rule stays a pure ban there (intended).
 //
 // Generated files (cell_gen.go / healthz_gen.go / slice_gen.go) are NOT in the
 // set: under Option A cellgen emits reg.RegisterProjection (record-only), not
 // Coordinator.Subscribe. The cell_gen.go RegisterProjection callsite is guarded
 // separately by PROJECTION-REGISTER-FUNNEL-01.
-//
-// External Cell repo note: kernel/projection/ and the drain file do not exist in
-// a consumer module, so this function returns false for all non-test files in a
-// consumer module, making the rule a pure ban there (intended).
-func isProjectionApplyHookAllowed(rel, _ string) bool {
+func isProjectionApplyHookAllowed(pkgPath, rel string) bool {
 	if strings.HasSuffix(rel, "_test.go") {
 		return true
+	}
+	if !isGoCellPlatformPkgPath(pkgPath) {
+		return false
 	}
 	if strings.HasPrefix(rel, "kernel/projection/") {
 		return true
 	}
-	if filepath.ToSlash(rel) == projectionDrainFile {
-		return true
-	}
-	return false
+	return filepath.ToSlash(rel) == projectionDrainFile
 }
 
 // collectProjectionApplyHookViolations is the single per-Pass scanner shared by
@@ -192,10 +198,10 @@ func collectProjectionApplyHookViolations(p *Pass) []Diagnostic {
 		return nil
 	}
 	var out []Diagnostic
+	pkgPath := p.Pkg.Path()
 	for _, f := range p.Files {
 		rel := p.Rel(f)
-		absPath := p.Abs(f)
-		if isProjectionApplyHookAllowed(rel, absPath) {
+		if isProjectionApplyHookAllowed(pkgPath, rel) {
 			continue
 		}
 		EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {

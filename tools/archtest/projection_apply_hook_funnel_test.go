@@ -36,6 +36,39 @@ func TestProjectionApplyHookFunnel01_DrainFileExists(t *testing.T) {
 		"projectionDrainFile %q must exist; update the const if the bootstrap drain moved", projectionDrainFile)
 }
 
+// TestIsProjectionApplyHookAllowed proves the production-file exemptions are bound
+// to PLATFORM package identity, not just a repo-relative path. The critical cases
+// are "consumer module forges kernel/projection/… or drain rel path": a consumer
+// recreating either must STILL be flagged (false), because its package path is not
+// under PlatformModulePath — closing the registered rule's pure-ban bypass (codex
+// #1682 F3). The _test.go exemption is package-independent by design.
+func TestIsProjectionApplyHookAllowed(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name         string
+		pkgPath, rel string
+		want         bool
+	}{
+		{"_test.go exempt regardless of pkg", "consumer.example/app/foo", "foo/bar_test.go", true},
+		{"sanctioned kernel/projection", PlatformModulePath + "/kernel/projection", "kernel/projection/coordinator.go", true},
+		{"sanctioned bootstrap drain", PlatformModulePath + "/runtime/bootstrap", "runtime/bootstrap/phases_projection.go", true},
+		{"consumer forges kernel/projection rel", "consumer.example/app/kernel/projection", "kernel/projection/coordinator.go", false},
+		{"consumer forges drain rel", "consumer.example/app/runtime/bootstrap", "runtime/bootstrap/phases_projection.go", false},
+		{"platform pkg, non-allowlisted rel", PlatformModulePath + "/cells/foo", "cells/foo/cell.go", false},
+		{"unresolved pkg, drain rel", "", "runtime/bootstrap/phases_projection.go", false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isProjectionApplyHookAllowed(tc.pkgPath, tc.rel); got != tc.want {
+				t.Errorf("isProjectionApplyHookAllowed(%q, %q) = %v, want %v",
+					tc.pkgPath, tc.rel, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestProjectionApplyHookFunnel01 dogfoods PROJECTION-APPLY-HOOK-FUNNEL-01
 // against GoCell itself by calling the same CheckProjectionApplyHookFunnel01
 // that StandardCellRules (and external Cell repos via RunStandardCellRules) use

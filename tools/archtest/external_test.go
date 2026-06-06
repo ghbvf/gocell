@@ -51,11 +51,14 @@ func TestStandardCellRulesComposition(t *testing.T) {
 	// external.go's StandardCellRules godoc, which also documents the rules
 	// deliberately NOT registered because they are gocell-internal-layout.
 	wantRuleIDs := map[string]bool{
-		rulePanicRegistered01:               true,
-		ruleErrcodeKindLiteral01:            true,
-		ruleMessageConstLiteral01:           true,
-		ruleExportedErrorNew01:              true,
-		ruleScaffoldDerivedForceOverwrite01: true,
+		rulePanicRegistered01:                    true,
+		ruleErrcodeKindLiteral01:                 true,
+		ruleMessageConstLiteral01:                true,
+		ruleExportedErrorNew01:                   true,
+		ruleScaffoldDerivedForceOverwrite01:      true,
+		ruleOutboxReconstructionCaller01:         true,
+		ruleProjectionApplyHookFunnel01:          true,
+		ruleOutboxHandleResultFactoryPreferred01: true,
 	}
 	for id := range seen {
 		if !wantRuleIDs[id] {
