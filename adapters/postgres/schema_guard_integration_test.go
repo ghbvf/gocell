@@ -1007,7 +1007,8 @@ func TestUsersMigration033_PasswordVersionNonNegative(t *testing.T) {
 	require.NoError(t, migrator.Up(ctx), "all migrations must apply cleanly through 033")
 
 	// password_version = 0 must succeed (NewUser baseline).
-	_, execErr := pool.DB().Exec(ctx, `
+	_, execErr := pool.DB().Exec(
+		ctx, `
 		INSERT INTO users
 			(id, tenant_id, username, email, password_hash, password_version,
 			 creation_source, status, authz_epoch, created_at, updated_at)
@@ -1022,7 +1023,8 @@ func TestUsersMigration033_PasswordVersionNonNegative(t *testing.T) {
 	require.NoError(t, execErr, "password_version=0 must be accepted by DB")
 
 	// password_version = -1 must be rejected by users_password_version_non_negative.
-	_, execErr = pool.DB().Exec(ctx, `
+	_, execErr = pool.DB().Exec(
+		ctx, `
 		INSERT INTO users
 			(id, tenant_id, username, email, password_hash, password_version,
 			 creation_source, status, authz_epoch, created_at, updated_at)
@@ -1159,7 +1161,8 @@ func assertMigrationUpDownUpIdempotent(t *testing.T, targetVersion int64, sigTab
 
 	// Down requires an explicit DestructiveDownPermit (the forward-rebuild gate).
 	downPermit, dpErr := AllowDestructiveDown(
-		fmt.Sprintf("migration %d up-down-up idempotency test", targetVersion))
+		fmt.Sprintf("migration %d up-down-up idempotency test", targetVersion),
+	)
 	require.NoError(t, dpErr)
 
 	m2, err := newMigratorForTable(pool, fsys, tracking)
@@ -1237,4 +1240,123 @@ func TestMigration051_DestructiveDownPermitRejection(t *testing.T) {
 	require.True(t, errors.As(downErr, &ec), "error must wrap *errcode.Error")
 	assert.Equal(t, errcode.ErrValidationFailed, ec.Code,
 		"error code must be ErrValidationFailed for a missing permit")
+}
+
+// ---------------------------------------------------------------------------
+// Migration 053 up-down-up idempotency (RLS ENABLE + FORCE on users/roles/role_assignments)
+// ---------------------------------------------------------------------------
+
+// pgRLSEnabled reports whether the named table has both relrowsecurity AND
+// relforcerowsecurity set (i.e. ENABLE + FORCE ROW LEVEL SECURITY).
+func pgRLSEnabled(t *testing.T, pool *Pool, table string) bool {
+	t.Helper()
+	var enabled, forced bool
+	err := pool.DB().QueryRow(context.Background(), `
+SELECT c.relrowsecurity, c.relforcerowsecurity
+FROM   pg_class c
+JOIN   pg_namespace n ON n.oid = c.relnamespace
+WHERE  n.nspname = current_schema()
+  AND  c.relname  = $1`, table).Scan(&enabled, &forced)
+	if err != nil {
+		return false
+	}
+	return enabled && forced
+}
+
+// pgPolicyExists reports whether the named policy exists on the given table.
+func pgPolicyExists(t *testing.T, pool *Pool, table, policy string) bool {
+	t.Helper()
+	var exists bool
+	require.NoError(t, pool.DB().QueryRow(context.Background(), `
+SELECT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = current_schema()
+      AND tablename  = $1
+      AND policyname = $2
+)`, table, policy).Scan(&exists))
+	return exists
+}
+
+// TestMigration053_UpDownUpIdempotency verifies that migration 053 (ENABLE +
+// FORCE RLS + tenant_isolation policy on users/roles/role_assignments) is
+// up-down-up idempotent. After each Up the three tables must have RLS enabled
+// and the policy present; after Down they must not.
+func TestMigration053_UpDownUpIdempotency(t *testing.T) {
+	ctx := context.Background()
+	pool := emptyPool(t)
+	fsys := migrationsUpToFS(t, 53)
+	tracking := "schema_migrations_053_idem"
+
+	m1, err := newMigratorForTable(pool, fsys, tracking)
+	require.NoError(t, err)
+	require.NoError(t, m1.Up(ctx), "initial Up() through migration 053 must succeed")
+
+	for _, tbl := range []string{"users", "roles", "role_assignments"} {
+		assert.True(t, pgRLSEnabled(t, pool, tbl),
+			"%s must have FORCE RLS after migration 053 Up", tbl)
+		assert.True(t, pgPolicyExists(t, pool, tbl, "tenant_isolation"),
+			"%s must have tenant_isolation policy after migration 053 Up", tbl)
+	}
+
+	downPermit, err := AllowDestructiveDown("migration 053 up-down-up idempotency test")
+	require.NoError(t, err)
+
+	m2, err := newMigratorForTable(pool, fsys, tracking)
+	require.NoError(t, err)
+	require.NoError(t, m2.Down(ctx, downPermit), "Down() of migration 053 must succeed")
+
+	for _, tbl := range []string{"users", "roles", "role_assignments"} {
+		assert.False(t, pgRLSEnabled(t, pool, tbl),
+			"%s must NOT have FORCE RLS after migration 053 Down", tbl)
+		assert.False(t, pgPolicyExists(t, pool, tbl, "tenant_isolation"),
+			"%s must NOT have tenant_isolation policy after migration 053 Down", tbl)
+	}
+
+	m3, err := newMigratorForTable(pool, fsys, tracking)
+	require.NoError(t, err)
+	require.NoError(t, m3.Up(ctx), "second Up() re-applying migration 053 must succeed")
+
+	for _, tbl := range []string{"users", "roles", "role_assignments"} {
+		assert.True(t, pgRLSEnabled(t, pool, tbl),
+			"%s must have FORCE RLS again after migration 053 re-Up", tbl)
+		assert.True(t, pgPolicyExists(t, pool, tbl, "tenant_isolation"),
+			"%s must have tenant_isolation policy again after migration 053 re-Up", tbl)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Migration 054 up-down-up idempotency (sessions.tenant_id column + composite FK)
+// ---------------------------------------------------------------------------
+
+// TestMigration054_UpDownUpIdempotency verifies that migration 054 (adds
+// sessions.tenant_id carrier column and swaps to a composite same-tenant FK)
+// is up-down-up idempotent. The truncated-FS helper pins the single Down to
+// migration 054.
+func TestMigration054_UpDownUpIdempotency(t *testing.T) {
+	ctx := context.Background()
+	pool := emptyPool(t)
+	fsys := migrationsUpToFS(t, 54)
+	tracking := "schema_migrations_054_idem"
+
+	m1, err := newMigratorForTable(pool, fsys, tracking)
+	require.NoError(t, err)
+	require.NoError(t, m1.Up(ctx), "initial Up() through migration 054 must succeed")
+	require.True(t, pgColumnExists(t, pool, "sessions", "tenant_id"),
+		"sessions.tenant_id must exist after migration 054 Up")
+
+	downPermit, err := AllowDestructiveDown("migration 054 up-down-up idempotency test")
+	require.NoError(t, err)
+
+	m2, err := newMigratorForTable(pool, fsys, tracking)
+	require.NoError(t, err)
+	require.NoError(t, m2.Down(ctx, downPermit), "Down() of migration 054 must succeed")
+	require.False(t, pgColumnExists(t, pool, "sessions", "tenant_id"),
+		"sessions.tenant_id must be GONE after migration 054 Down "+
+			"(proves the Down targeted 054, not a higher migration)")
+
+	m3, err := newMigratorForTable(pool, fsys, tracking)
+	require.NoError(t, err)
+	require.NoError(t, m3.Up(ctx), "second Up() re-applying migration 054 must succeed")
+	require.True(t, pgColumnExists(t, pool, "sessions", "tenant_id"),
+		"sessions.tenant_id must exist again after the up-down-up cycle through migration 054")
 }
