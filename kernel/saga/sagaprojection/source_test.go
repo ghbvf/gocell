@@ -37,7 +37,7 @@ func newMemJournalFactory() sagajournaltest.Factory {
 // Conformance enrolment: ReplaySource + Cursor
 // ---------------------------------------------------------------------------
 
-// TestSagaJournalSource_ReplaySourceConformance enrols SagaJournalSource in the
+// TestSagaJournalSource_ReplaySourceConformance enrolls SagaJournalSource in the
 // canonical RunReplaySourceConformance suite (SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01
 // sister rule — projection side).
 func TestSagaJournalSource_ReplaySourceConformance(t *testing.T) {
@@ -59,7 +59,7 @@ func TestSagaJournalSource_ReplaySourceConformance(t *testing.T) {
 	projectiontest.RunReplaySourceConformance(t, src, seed)
 }
 
-// TestSagaJournalSource_CursorConformance enrols SagaJournalSource in the
+// TestSagaJournalSource_CursorConformance enrolls SagaJournalSource in the
 // canonical RunCursorConformance suite.
 func TestSagaJournalSource_CursorConformance(t *testing.T) {
 	t.Parallel()
@@ -77,13 +77,9 @@ func TestSagaJournalSource_CursorConformance(t *testing.T) {
 		return seedGlobalEvents(t, j, clk, n)
 	}
 
-	newUnseeded := func() projection.ProjectionEvent {
-		// Return a saga projection event that was never appended to this journal;
-		// cursor must return a permanent error for an unknown event.
-		return sagaprojection.NewUnseededEventForTest()
-	}
-
-	projectiontest.RunCursorConformance(t, src, seed, newUnseeded)
+	// newUnseeded returns a saga projection event never appended to this journal;
+	// the cursor must return a permanent error for an unknown event.
+	projectiontest.RunCursorConformance(t, src, seed, sagaprojection.NewUnseededEventForTest)
 }
 
 // ---------------------------------------------------------------------------

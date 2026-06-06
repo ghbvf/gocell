@@ -44,7 +44,7 @@ import (
 
 // batchSize is the number of events fetched per LoadSince call in Replay.
 // 256 is the same budget used by the outbox relay page size — large enough to
-// amortise round-trip latency without allocating unbounded slices.
+// amortize round-trip latency without allocating unbounded slices.
 const batchSize = 256
 
 // SagaJournalStream is the stream name reported by sagaProjectionEvent.Stream().
@@ -208,8 +208,10 @@ func (s *SagaJournalSource) Position(entry projection.ProjectionEvent) (int64, e
 }
 
 // compile-time interface checks.
-var _ projection.ReplaySource = (*SagaJournalSource)(nil)
-var _ projection.Cursor = (*SagaJournalSource)(nil)
+var (
+	_ projection.ReplaySource = (*SagaJournalSource)(nil)
+	_ projection.Cursor       = (*SagaJournalSource)(nil)
+)
 
 // toCarrier converts a journal.GlobalEvent to the *sagaProjectionEvent carrier.
 // The GlobalSeq is read from the outer GlobalEvent envelope (not the inner

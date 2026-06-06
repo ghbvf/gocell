@@ -259,7 +259,7 @@ ADR `docs/architecture/202606051200-1609-adr-saga-journal-projection-source.md` 
 | Archtest ID | 摘要 | 评级 |
 |---|---|---|
 | `PROJECTION-EVENT-CARRIER-TYPED-01` | 投影公开载体 API（`projection.Apply` / `ReplaySource.Replay` fn / `Cursor.Position` / `cell.ProjectionApply`）只收 `cellvocab.ProjectionEvent`，禁裸 `outbox.Entry`；A2 broad scan 兜 kernel/projection+cellvocab 导出符号未来新增 | **type-system Hard（API shape，单轴非 funnel）**：签名即接口（编译期）+ archtest 下游禁裸收 `outbox.Entry`。**非** carrier-source-sealing funnel——`ProjectionEvent` 全导出可实现、载体来源不封闭（forge 防护在 wiring 层），故不声明 sealed-carrier 上游 Hard |
-| `PROJECTION-SYSTEM-PRINCIPAL-INSTALL-CALLER-01` | `projection.InstallSystemPrincipal` 生产引用点锁定在 `kernel/saga/sagaprojection/source.go`（saga carrier `RestoreContext` 唯一安装点）；`clearAmbientPrincipal`（`kernel/projection` 包内 unexported，Go 可见性即上游 Hard）在 `rebuild.go` detach 边界调用，确保触发者 admin principal 不穿透投影 Apply（audit impersonation 修复，PR-03 #1627） | 下游 **Hard**（go/types caller-allowlist，1 成员）+ 上游 **Medium**（`InstallSystemPrincipal` 为公开方法，Hard 化路径 = unexported marker，追踪 **gh #1628**） |
+| `PROJECTION-SYSTEM-PRINCIPAL-INSTALL-CALLER-01` | `projection.InstallSystemPrincipal` 生产引用点锁定在 `kernel/saga/sagaprojection/source.go`（saga carrier `RestoreContext` 唯一安装点）；`clearAmbientPrincipal`（`kernel/projection` 包内 unexported，Go 可见性即上游 Hard）在 `rebuild.go` detach 边界调用，确保触发者 admin principal 不穿透投影 Apply（audit impersonation 修复，PR-03 #1627） | 下游 **Hard**（go/types caller-allowlist，1 成员）+ 上游 **Medium**（`InstallSystemPrincipal` 为公开方法，Hard 化路径 = unexported marker，追踪 **gh #1702**） |
 
 完整盲区清单 + 反向自检（RED/GREEN fixture）活在 `tools/archtest/projection_event_carrier_typed_test.go` 与
 `tools/archtest/projection_system_principal_install_caller_test.go` 的 package godoc（单源）。

@@ -12,7 +12,7 @@ import (
 // forwarded admin identity from the Rebuild trigger context.
 //
 // Value "system" is consistent with the framework-internal sentinel used
-// elsewhere (e.g. reconcile worker identity) — a stable, recognisable string
+// elsewhere (e.g. reconcile worker identity) — a stable, recognizable string
 // that audit log consumers can filter on.
 const SystemPrincipalActor = "system"
 
@@ -31,7 +31,7 @@ const SystemPrincipalActor = "system"
 //
 // Only kernel/saga/sagaprojection/source.go is sanctioned to call this function.
 // Any other callsite fails the archtest in CI. See the archtest for the
-// AI-robust rating and Hard-upgrade tracking (gh #1628).
+// AI-robust rating and Hard-upgrade tracking (gh #1702).
 func InstallSystemPrincipal(ctx context.Context) context.Context {
 	ctx = ctxkeys.WithActorID(ctx, SystemPrincipalActor)
 	ctx = ctxkeys.WithSubjectID(ctx, SystemPrincipalActor)

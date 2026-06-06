@@ -131,9 +131,9 @@ const ctxkeysPkgPath = PlatformModulePath + "/pkg/ctxkeys"
 // See ADR 202605281200-1042 §Amendment 2026-05-30.
 var principalSetterAllowlist = map[string]map[string]struct{}{
 	"WithActorID": {
-		"runtime/auth/middleware.go":             {}, // producer bridge (JWT + service-token)
-		"kernel/outbox/principal.go":             {}, // consumer-side RestoreToContext
-		"kernel/projection/system_principal.go":  {}, // saga journal carrier: InstallSystemPrincipal + clearAmbientPrincipal (PR-03 #1627)
+		"runtime/auth/middleware.go":            {}, // producer bridge (JWT + service-token)
+		"kernel/outbox/principal.go":            {}, // consumer-side RestoreToContext
+		"kernel/projection/system_principal.go": {}, // saga journal carrier: InstallSystemPrincipal + clearAmbientPrincipal (PR-03 #1627)
 	},
 	"WithSubjectID": {
 		"runtime/auth/middleware.go":            {},
@@ -146,10 +146,10 @@ var principalSetterAllowlist = map[string]map[string]struct{}{
 		"kernel/projection/system_principal.go": {}, // saga journal carrier (PR-03 #1627)
 	},
 	"WithTenantID": {
-		"runtime/auth/middleware.go":                        {}, // producer bridge — JWT tenant_id claim (#1337)
-		"kernel/outbox/principal.go":                        {}, // consumer-side RestoreToContext
-		"kernel/projection/system_principal.go":             {}, // saga journal carrier (PR-03 #1627)
-		"cells/configcore/configcoretest/fakes.go":          {}, // CtxWithTenant test-helper — simulates JWT auth ctx (#1337, missed allowlist)
+		"runtime/auth/middleware.go":               {}, // producer bridge — JWT tenant_id claim (#1337)
+		"kernel/outbox/principal.go":               {}, // consumer-side RestoreToContext
+		"kernel/projection/system_principal.go":    {}, // saga journal carrier (PR-03 #1627)
+		"cells/configcore/configcoretest/fakes.go": {}, // CtxWithTenant test-helper — simulates JWT auth ctx (#1337, missed allowlist)
 	},
 }
 

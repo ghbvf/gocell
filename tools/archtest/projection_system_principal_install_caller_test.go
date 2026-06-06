@@ -9,7 +9,7 @@
 // projection.InstallSystemPrincipal is an OVERWRITE setter: it unconditionally
 // replaces all four principal ctx keys (actor/subject/tenant/session) with the
 // "system" sentinel — bypassing the auth trust boundary that outbox's no-overwrite
-// RestoreContext honours. Unrestricted use could silently strip a legitimate
+// RestoreContext honors. Unrestricted use could silently strip a legitimate
 // authenticated identity from a request context; restricting it to the one site
 // that has a principled reason (saga journal carrier, ADR #1609 §5) prevents
 // misuse and keeps the impersonation threat matrix closed.
@@ -25,7 +25,7 @@
 //     archtest is the enforcement backstop. Hard-upgrade path = seal
 //     InstallSystemPrincipal behind an unexported interface or move it to an
 //     internal/ sub-package so sagaprojection is the only import-reachable caller.
-//     Tracked at gh #1628 (won't-do-now — sole caller today is sagaprojection,
+//     Tracked at gh #1702 (won't-do-now — sole caller today is sagaprojection,
 //     no second caller risk).
 //
 // # Blind spots and anti-vacuity
@@ -117,7 +117,7 @@ func scanInstallSystemPrincipalCallers(p *Pass, observed map[string]struct{}) []
 						"principal ctx keys with the \"system\" sentinel — bypassing the auth "+
 						"trust boundary. Only the saga journal carrier "+
 						"(kernel/saga/sagaprojection/source.go) is permitted to call it. "+
-						"See ADR #1609 §5 and gh #1628 for the Hard-upgrade tracking issue.",
+						"See ADR #1609 §5 and gh #1702 for the Hard-upgrade tracking issue.",
 					rel,
 				),
 			})
