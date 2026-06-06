@@ -15,6 +15,18 @@ set -e
 
 : "${GOCELL_APP_PASSWORD:?GOCELL_APP_PASSWORD required for restricted serving role}"
 
+# Defense-in-depth: the password is interpolated into the CREATE ROLE SQL literal
+# below AND into the serving DSN userinfo. gen-deploy-secrets.sh emits it as
+# `openssl rand -hex 16`; enforce that shape so a hand-set value containing a
+# single quote / shell metachar / URL-unsafe byte cannot break the SQL string or
+# the DSN (fail fast at init rather than mid-statement).
+case "${GOCELL_APP_PASSWORD}" in
+  *[!0-9a-fA-F]*|"")
+    echo "10-restricted-role: GOCELL_APP_PASSWORD must be non-empty hex (e.g. openssl rand -hex 16)" >&2
+    exit 1
+    ;;
+esac
+
 psql \
   --username "$POSTGRES_USER" \
   --dbname   "$POSTGRES_DB"   \
