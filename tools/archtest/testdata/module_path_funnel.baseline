@@ -25,17 +25,11 @@ tools/archtest/eval_predicate_centralization_test.go
 tools/archtest/fence_token_mint_funnel_test.go
 tools/archtest/fixture_cellid_typed_builder_test.go
 tools/archtest/governance_rules_invariants_test.go
-tools/archtest/health_aggregation_test.go
-tools/archtest/health_verbose_invariants_test.go
-tools/archtest/healthz_invariants_test.go
-tools/archtest/kernel_poolstats_location_test.go
 tools/archtest/l2_outbox_atomicity_coverage_test.go
-tools/archtest/metrics_cancel_ctx_conformance_test.go
 tools/archtest/mqtt_funnel_test.go
 tools/archtest/mqtt_reason_redaction_test.go
 tools/archtest/no_deleted_auth_symbols_test.go
 tools/archtest/notfound_test_strict_test.go
-tools/archtest/observability_metrics_test.go
 tools/archtest/outbox_invariants_test.go
 tools/archtest/outbox_publisher_conformance_enrollment_test.go
 tools/archtest/outbox_reconstruction_caller_test.go
@@ -43,11 +37,9 @@ tools/archtest/outboxtest_import_boundary_test.go
 tools/archtest/parser_matcher_examples_symmetry_test.go
 tools/archtest/pass_funnel_test.go
 tools/archtest/pg_repo_ambient_tx_test.go
-tools/archtest/probename_sealed_funnel_test.go
 tools/archtest/projection_apply_hook_funnel_test.go
 tools/archtest/projection_checkpoint_conformance_enroll_test.go
 tools/archtest/projection_checkpoint_tx_bound_test.go
-tools/archtest/prom_cell_label_funnel_test.go
 tools/archtest/relay_isolation_test.go
 tools/archtest/required_dep_nil_guard_test.go
 tools/archtest/reverse_coverage_invariants_test.go
@@ -60,4 +52,3 @@ tools/archtest/serviceowned_handler_owner_check_test.go
 tools/archtest/svctoken_caller_cell_test.go
 tools/archtest/test_polling_external_reason_literal_test.go
 tools/archtest/webhook_hmac_funnel_test.go
-tools/archtest/wrapper_location_test.go

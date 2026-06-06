@@ -80,9 +80,7 @@ import (
 )
 
 const (
-	metricsProviderIfacePkg    = "github.com/ghbvf/gocell/kernel/observability/metrics"
 	metricsProviderIfaceName   = "Provider"
-	cancelCtxConformancePkg    = "github.com/ghbvf/gocell/kernel/observability/metrics/metricstest"
 	cancelCtxConformanceFunc   = "RunCanceledCtxConformance"
 	metricsProviderScopePrefix = "adapters/"
 )
@@ -172,8 +170,8 @@ func TestMetricsCancelCtxConformance_REDFixture(t *testing.T) {
 	t.Parallel()
 
 	const (
-		otelPkg = "github.com/ghbvf/gocell/adapters/otel"
-		promPkg = "github.com/ghbvf/gocell/adapters/prometheus"
+		otelPkg = metricsConformanceOtelPkg
+		promPkg = metricsConformancePromPkg
 		otelP   = otelPkg + ".MetricProvider"
 		promP   = promPkg + ".MetricProvider"
 	)

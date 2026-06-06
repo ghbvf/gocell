@@ -38,16 +38,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// wrapperFunctionsCanonical is the closed set of wrapper functions whose
-// callers are restricted by CELL-RAW-INFRA-WRAPPER-LOCATION-01. Adding a
-// new wrapper requires updating this set AND wrapperLocationAllowlistDoc
-// (godoc above) so the rule's surface stays trivially auditable.
-var wrapperFunctionsCanonical = map[string]bool{
-	"github.com/ghbvf/gocell/kernel/persistence.WrapForCell":     true,
-	"github.com/ghbvf/gocell/kernel/outbox.WrapPublisherForCell": true,
-	"github.com/ghbvf/gocell/kernel/outbox.WrapWriterForCell":    true,
-	"github.com/ghbvf/gocell/kernel/outbox.WrapEmitterForCell":   true,
-}
+// Note: wrapperFunctionsCanonical is defined in wrapper_location.go (non-test
+// file) using the four named consts anchored to PlatformModulePath.
 
 type wrapperViolation struct {
 	File     string
@@ -262,13 +254,13 @@ func TestCellRawInfraWrapperLocation01_ScannerDetectsViolation(t *testing.T) {
 	// The fixture covers all four wrapper functions; the scanner must
 	// report each one. A pre-fix gap (only WrapForCell case in fixture)
 	// silently masked detection regressions on the publisher/writer legs.
-	assert.NotEmpty(t, got["github.com/ghbvf/gocell/kernel/persistence.WrapForCell"],
+	assert.NotEmpty(t, got[wrapPersistenceWrapForCell],
 		"fixture must trigger persistence.WrapForCell detection")
-	assert.NotEmpty(t, got["github.com/ghbvf/gocell/kernel/outbox.WrapPublisherForCell"],
+	assert.NotEmpty(t, got[wrapOutboxWrapPublisherForCell],
 		"fixture must trigger outbox.WrapPublisherForCell detection")
-	assert.NotEmpty(t, got["github.com/ghbvf/gocell/kernel/outbox.WrapWriterForCell"],
+	assert.NotEmpty(t, got[wrapOutboxWrapWriterForCell],
 		"fixture must trigger outbox.WrapWriterForCell detection")
-	assert.NotEmpty(t, got["github.com/ghbvf/gocell/kernel/outbox.WrapEmitterForCell"],
+	assert.NotEmpty(t, got[wrapOutboxWrapEmitterForCell],
 		"fixture must trigger outbox.WrapEmitterForCell detection")
 
 	// dotimport.go uses `import . "kernel/outbox"` and writes the wrap
@@ -279,11 +271,11 @@ func TestCellRawInfraWrapperLocation01_ScannerDetectsViolation(t *testing.T) {
 	// and the dot-import form (from dotimport.go) to fire — i.e., the
 	// publisher/writer wrappers each yield ≥ 2 line entries across the
 	// two fixture files.
-	assert.GreaterOrEqual(t, len(gotLines["github.com/ghbvf/gocell/kernel/outbox.WrapPublisherForCell"]), 2,
+	assert.GreaterOrEqual(t, len(gotLines[wrapOutboxWrapPublisherForCell]), 2,
 		"WrapPublisherForCell must be detected via SelectorExpr (violation.go) AND *ast.Ident dot-import (dotimport.go)")
-	assert.GreaterOrEqual(t, len(gotLines["github.com/ghbvf/gocell/kernel/outbox.WrapWriterForCell"]), 2,
+	assert.GreaterOrEqual(t, len(gotLines[wrapOutboxWrapWriterForCell]), 2,
 		"WrapWriterForCell must be detected via SelectorExpr (violation.go) AND *ast.Ident dot-import (dotimport.go)")
-	assert.GreaterOrEqual(t, len(gotLines["github.com/ghbvf/gocell/kernel/outbox.WrapEmitterForCell"]), 2,
+	assert.GreaterOrEqual(t, len(gotLines[wrapOutboxWrapEmitterForCell]), 2,
 		"WrapEmitterForCell must be detected via SelectorExpr (violation.go) AND *ast.Ident dot-import (dotimport.go)")
 }
 

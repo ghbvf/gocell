@@ -229,11 +229,11 @@ func TestMetricsFunnel_SymbolSentinel(t *testing.T) {
 	}
 	cases := []wrapSpec{
 		{
-			importPath: "github.com/ghbvf/gocell/adapters/prometheus/internal/promwrap",
+			importPath: promwrapPkg,
 			expected:   []string{"NewCounter", "NewCounterVec", "NewGauge", "NewGaugeFunc", "NewGaugeVec", "NewHistogramVec"},
 		},
 		{
-			importPath: "github.com/ghbvf/gocell/adapters/otel/internal/otelwrap",
+			importPath: otelwrapPkg,
 			expected:   []string{"Float64Counter", "Float64Gauge", "Float64Histogram"},
 		},
 	}
@@ -355,10 +355,8 @@ func TestMetricsFunnel_SymbolSentinel(t *testing.T) {
 	}
 }
 
-// adapterPromPkg is the import path of the public adapter passthrough package
-// whose New*/Register* constructors are locked by
-// METRICS-ADAPTERPROM-CALLER-ALLOWLIST-01.
-const adapterPromPkg = "github.com/ghbvf/gocell/adapters/prometheus"
+// Note: adapterPromPkg is defined in observability_metrics.go (non-test file)
+// anchored to PlatformModulePath.
 
 // adapterPromCallerAllowlist maps each public funnel symbol to its allowed
 // caller files (relative to module root). Any callee match + caller-rel not
@@ -722,15 +720,11 @@ func gaugeVecFunnelRule(p *Pass) []Diagnostic {
 	return diags
 }
 
-// promwrapPkg and otelwrapPkg are the exact import paths for the two internal
-// wrap packages that are permitted to call the banned constructors directly.
-// Exact equality is used instead of strings.Contains to prevent sibling
-// packages with similar names (e.g. adapters/prometheus/internal/promwrap_bypass)
-// from being accidentally allowed.
-const (
-	promwrapPkg = "github.com/ghbvf/gocell/adapters/prometheus/internal/promwrap"
-	otelwrapPkg = "github.com/ghbvf/gocell/adapters/otel/internal/otelwrap"
-)
+// Note: promwrapPkg and otelwrapPkg are defined in observability_metrics.go
+// (non-test file) anchored to PlatformModulePath. Exact equality is used
+// instead of strings.Contains to prevent sibling packages with similar names
+// (e.g. adapters/prometheus/internal/promwrap_bypass) from being accidentally
+// allowed.
 
 // isGaugeVecWrapPkg returns true for the exact internal wrap packages that are
 // permitted to call the banned constructors directly. Narrowed from the former
