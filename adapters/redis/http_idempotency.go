@@ -28,7 +28,9 @@ var _ idemhttp.Store = (*HTTPIdempotencyStore)(nil)
 //
 //   - <store-ns>:<req-ns>:{key}:lease — SET NX with leaseTTL, value = random token. Indicates "processing".
 //   - <store-ns>:<req-ns>:{key}:resp  — SET with doneTTL, value = MarshalRecordedResponse blob. Indicates "completed".
-//   - <store-ns>:<req-ns>:{key}:fp    — SET with leaseTTL while processing; Record extends it to doneTTL. Value = body fingerprint; flags same-key/different-body reuse.
+//   - <store-ns>:<req-ns>:{key}:fp    — SET with leaseTTL while
+//     processing; Record extends it to doneTTL. Value = body fingerprint;
+//     flags same-key/different-body reuse.
 //
 // The key prefix has two segments, both OUTSIDE the hashtag:
 //
