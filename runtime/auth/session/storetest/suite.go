@@ -46,17 +46,10 @@ type Factory func(t *testing.T) (store session.Store, fakeClock *clockmock.FakeC
 // fixtures. Anchored at 2025-01-01 UTC (round, far from epoch boundaries).
 var epochAnchor = time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 
-// testTenantID is the canonical tenant used by all storetest cases. It must be
-// a valid UUID — session.Store.Create validates TenantID via tenant.Validate().
-var testTenantID = mustParseTenantID("00000000-0000-0000-0000-000000000001")
-
-func mustParseTenantID(s string) tenant.TenantID {
-	t, err := tenant.ParseTenantID(s)
-	if err != nil {
-		panic("storetest: invalid testTenantID literal: " + err.Error())
-	}
-	return t
-}
+// testTenantID is the canonical tenant used by all storetest cases. The literal
+// is already a valid, non-nil, canonical lowercase UUID, so it can be constructed
+// directly — session.Store.Create's tenant.Validate() accepts it, no parse/panic.
+var testTenantID = tenant.TenantID("00000000-0000-0000-0000-000000000001")
 
 // EpochAnchor returns the deterministic clock anchor used by storetest cases;
 // backends constructing FakeClock from outside the suite (per-test setup hooks)
