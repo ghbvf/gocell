@@ -54,17 +54,16 @@ const ruleSvctokenCallerCellRequired01 = "SVCTOKEN-CALLER-CELL-REQUIRED-01"
 const authRuntimeImportPath = PlatformModulePath + "/runtime/auth"
 
 // CheckSvctokenCallerCellRequired01 runs SVCTOKEN-CALLER-CELL-REQUIRED-01 over
-// the running module and returns its diagnostics. It is the importable rule body;
-// GoCell's TestSVCTOKEN_CALLER_CELL_REQUIRED_01 calls it directly — single
-// source, no parallel rule body.
+// the running module and returns its diagnostics: every call to
+// auth.GenerateServiceToken must pass a valid cell-ID string literal as its
+// second argument (callerCell). It is the importable rule body; GoCell's
+// TestSVCTOKEN_CALLER_CELL_REQUIRED_01 dogfoods it directly — single source, no
+// parallel rule body.
 //
 // Not registered in StandardCellRules: allowlist is gocell-hardcoded with no
 // ConfigForExternalCell consumer-extension → would false-red an external cell's
 // own auth code; kept importable & module-path-agnostic but vacuous-green
 // externally.
-//
-// Note: this test FAILS (RED) until Wave 2 updates GenerateServiceToken to
-// accept callerCell as the second parameter AND all call sites are migrated.
 func CheckSvctokenCallerCellRequired01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 

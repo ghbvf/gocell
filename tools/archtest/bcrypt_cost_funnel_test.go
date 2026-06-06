@@ -13,64 +13,19 @@ import (
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
-// TestBCRYPT_COST_FUNNEL_01_A1_SingleHashOrigin fails if bcrypt.GenerateFromPassword
-// appears in any production (non-test) file other than credential/hasher.go.
-// Replaces the compile-time guarantee the deleted domain.BcryptCost const gave.
-func TestBCRYPT_COST_FUNNEL_01_A1_SingleHashOrigin(t *testing.T) {
+// TestBCRYPT_COST_FUNNEL_01 dogfoods CheckBcryptCostFunnel01 — the single rule
+// body covering both sub-rules — so the exact scan an external cell would import
+// is the one GoCell enforces (no parallel inline rule body):
+//   - A1 "single sanctioned holder": bcrypt.GenerateFromPassword may appear only
+//     in credential/hasher.go (replaces the compile-time guarantee the deleted
+//     domain.BcryptCost const gave); test files may hash fixtures directly, which
+//     is out of A1's production-only scope.
+//   - A2 "typed function choice": credential.NewTestHasher (the only cost-bearing
+//     door) may be called only from *_test.go or sanctioned test-support packages;
+//     production wires NewProductionHasher (no cost knob).
+func TestBCRYPT_COST_FUNNEL_01(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
-	// ModuleScope without IncludeTests → production files only. Test files may
-	// hash fixtures directly (seed a known password into a store); that is not
-	// production hashing and is out of A1's scope.
-	files, err := scanner.ModuleScope(root).Files()
-	require.NoError(t, err)
-
-	var findings []string
-	for _, path := range files {
-		rel := relSlash(root, path)
-		if rel == bcryptHasherRel {
-			continue // the sanctioned holder
-		}
-		line, ok, perr := firstQualifiedSelectorLine(path, bcryptModulePath, "bcrypt", "GenerateFromPassword")
-		require.NoError(t, perr)
-		if ok {
-			findings = append(findings, fmt.Sprintf(
-				"%s:%d: bcrypt.GenerateFromPassword outside credential.Hasher", rel, line,
-			))
-		}
-	}
-	assert.Empty(t, findings,
-		"all password hashing must route through cells/accesscore/internal/credential.Hasher "+
-			"(NewProductionHasher / NewTestHasher); bcrypt.GenerateFromPassword may appear only in "+bcryptHasherRel)
-}
-
-// TestBCRYPT_COST_FUNNEL_01_A2_TestHasherCallerAllowlist fails if
-// credential.NewTestHasher is called from any non-test, non-allowlisted file.
-// The production path has only NewProductionHasher (no cost knob), so there is
-// no way to express a weaker-cost production hasher.
-func TestBCRYPT_COST_FUNNEL_01_A2_TestHasherCallerAllowlist(t *testing.T) {
-	t.Parallel()
-	root := findModuleRoot(t)
-	files, err := scanner.ModuleScope(root, scanner.IncludeTests()).Files()
-	require.NoError(t, err)
-
-	var findings []string
-	for _, path := range files {
-		rel := relSlash(root, path)
-		if newTestHasherCallerAllowed(rel) {
-			continue
-		}
-		line, ok, perr := firstQualifiedSelectorLine(path, credentialModulePath, "credential", "NewTestHasher")
-		require.NoError(t, perr)
-		if ok {
-			findings = append(findings, fmt.Sprintf(
-				"%s:%d: credential.NewTestHasher called outside test code", rel, line,
-			))
-		}
-	}
-	assert.Empty(t, findings,
-		"credential.NewTestHasher is the low-cost test door; it may be called only from *_test.go "+
-			"or sanctioned test-support packages. Production wires credential.NewProductionHasher().")
+	Report(t, "BCRYPT-COST-FUNNEL-01", CheckBcryptCostFunnel01(t, ConfigForExternalCell{}))
 }
 
 // TestBCRYPT_COST_FUNNEL_01_A1_RedFixture asserts the A1 detector fires on a

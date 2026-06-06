@@ -114,6 +114,7 @@ func CheckAuthKeystestBoundary(t *testing.T, _ ConfigForExternalCell) []Diagnost
 		}
 		diags = append(diags, Diagnostic{
 			Rel:     rel,
+			Line:    importLine(f, keystestImport),
 			Message: fmt.Sprintf("%s: %s imports %s — %s", sub, rel, keystestImport, suffix),
 		})
 	}

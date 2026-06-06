@@ -19,10 +19,9 @@ package archtest
 //                 (AuthJWT, AuthJWTFromAssembly, AuthMTLS, etc.) — composition
 //                 root responsibility only.
 //
-//   - INVARIANT: AUTH-PLAN-01
-//   - INVARIANT: AUTH-PLAN-02
-//   - INVARIANT: AUTH-PLAN-03
-//   - INVARIANT: AUTH-PLAN-04
+// Implements rules AUTH-PLAN-01 / -02 / -03 / -04. The canonical `// INVARIANT:`
+// anchors live in auth_plan_test.go (the inventory scan reads only _test.go);
+// they are intentionally not repeated here as markers to avoid a second source.
 //
 // ref: kubernetes/apiserver pkg/authentication/authenticator/interfaces.go@master
 //      — typed authenticator interface, no string-keyed dispatch.
@@ -533,39 +532,4 @@ func moduleRootOf(dir string) string {
 			panic("moduleRootOf: go.mod not found above " + dir)
 		}
 	}
-}
-
-// ---------------------------------------------------------------------------
-// fixtureImporter — in-memory types.Importer for rule04 typed resolver test
-// ---------------------------------------------------------------------------
-
-// fixtureImporter is a minimal types.Importer that checks named packages from
-// in-memory ast files. Only used by TestAuthPlan_Rule04_TypedResolverContract;
-// the path namespace is rooted at "stand-in/" so it never collides with the
-// real module's packages.
-type fixtureImporter struct {
-	pkgs  map[string]*types.Package
-	files map[string][]*ast.File
-	fset  *token.FileSet
-}
-
-func (i *fixtureImporter) Import(path string) (*types.Package, error) {
-	if p, ok := i.pkgs[path]; ok {
-		return p, nil
-	}
-	return i.checkPackage(path)
-}
-
-func (i *fixtureImporter) checkPackage(path string) (*types.Package, error) {
-	files, ok := i.files[path]
-	if !ok {
-		return nil, fmt.Errorf("fixtureImporter: no source for %q", path)
-	}
-	conf := &types.Config{Importer: i}
-	pkg, err := conf.Check(path, i.fset, files, nil)
-	if err != nil {
-		return nil, err
-	}
-	i.pkgs[path] = pkg
-	return pkg, nil
 }

@@ -13,6 +13,7 @@ package archtest
 // that shared logic against GoCell itself — single source, no parallel rule body.
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -204,4 +205,40 @@ var _, _ = myauth.NewAuthJWT(nil)
 	assert.Equal(t, "NewAuthJWT", jwtFunc.Name())
 	assert.Equal(t, authPkg.Path(), jwtFunc.Pkg().Path(),
 		"constructor call must resolve to the kernel/auth stand-in package regardless of alias")
+}
+
+// ---------------------------------------------------------------------------
+// fixtureImporter — in-memory types.Importer for rule04 typed resolver test
+// ---------------------------------------------------------------------------
+
+// fixtureImporter is a minimal types.Importer that checks named packages from
+// in-memory ast files. Only used by TestAuthPlan_Rule04_TypedResolverContract;
+// the path namespace is rooted at "stand-in/" so it never collides with the
+// real module's packages. It is test-only scaffolding, so it lives in this
+// _test.go file (never shipped to an external cell importing auth_plan.go).
+type fixtureImporter struct {
+	pkgs  map[string]*types.Package
+	files map[string][]*ast.File
+	fset  *token.FileSet
+}
+
+func (i *fixtureImporter) Import(path string) (*types.Package, error) {
+	if p, ok := i.pkgs[path]; ok {
+		return p, nil
+	}
+	return i.checkPackage(path)
+}
+
+func (i *fixtureImporter) checkPackage(path string) (*types.Package, error) {
+	files, ok := i.files[path]
+	if !ok {
+		return nil, fmt.Errorf("fixtureImporter: no source for %q", path)
+	}
+	conf := &types.Config{Importer: i}
+	pkg, err := conf.Check(path, i.fset, files, nil)
+	if err != nil {
+		return nil, err
+	}
+	i.pkgs[path] = pkg
+	return pkg, nil
 }

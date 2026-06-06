@@ -68,7 +68,6 @@ package archtest
 // own auth code; kept importable & module-path-agnostic but vacuous-green externally.
 
 import (
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -229,16 +228,16 @@ func bcryptRelSlash(root, path string) string {
 
 // CheckBcryptCostFunnel01 runs both A1 and A2 sub-rules of
 // BCRYPT-COST-FUNNEL-01 over the running module and returns their combined
-// diagnostics. It is the importable rule body; GoCell's
-// TestBCRYPT_COST_FUNNEL_01_A1_SingleHashOrigin and
-// TestBCRYPT_COST_FUNNEL_01_A2_TestHasherCallerAllowlist call the same
-// underlying scanner helpers — single source, no parallel rule body.
+// diagnostics. It is the importable rule body and the single source for the
+// rule: GoCell's TestBCRYPT_COST_FUNNEL_01 dogfoods it via Report(...), so the
+// exact scan an external cell would import is the one GoCell enforces (no
+// parallel rule body).
 //
 // Not registered in StandardCellRules: allowlist is gocell-hardcoded with no
 // ConfigForExternalCell consumer-extension → would false-red an external cell's
 // own auth code; kept importable & module-path-agnostic but vacuous-green
 // externally.
-func CheckBcryptCostFunnel01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic { //nolint:gocognit,lll // R2-approved: two-prong A1/A2 linear scan; same shape as PG-TESTCONTAINER-FUNNEL-01
+func CheckBcryptCostFunnel01(t *testing.T, _ ConfigForExternalCell) []Diagnostic { //nolint:gocognit,lll // R2-approved: two-prong A1/A2 linear scan; same shape as PG-TESTCONTAINER-FUNNEL-01
 	t.Helper()
 
 	root := findModuleRoot(t)
@@ -260,9 +259,9 @@ func CheckBcryptCostFunnel01(t *testing.T, cfg ConfigForExternalCell) []Diagnost
 		}
 		if ok {
 			diags = append(diags, Diagnostic{
-				Message: fmt.Sprintf(
-					"%s:%d: bcrypt.GenerateFromPassword outside credential.Hasher", rel, line,
-				),
+				Rel:     rel,
+				Line:    line,
+				Message: "bcrypt.GenerateFromPassword outside credential.Hasher",
 			})
 		}
 	}
@@ -283,9 +282,9 @@ func CheckBcryptCostFunnel01(t *testing.T, cfg ConfigForExternalCell) []Diagnost
 		}
 		if ok {
 			diags = append(diags, Diagnostic{
-				Message: fmt.Sprintf(
-					"%s:%d: credential.NewTestHasher called outside test code", rel, line,
-				),
+				Rel:     rel,
+				Line:    line,
+				Message: "credential.NewTestHasher called outside test code",
 			})
 		}
 	}

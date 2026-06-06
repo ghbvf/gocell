@@ -156,7 +156,8 @@ func scanAuthtestImports(t *testing.T, root string, allGoFiles []string) []Diagn
 		for _, imp := range imports {
 			if authtestImports[imp] {
 				diags = append(diags, Diagnostic{
-					Rel: rel,
+					Rel:  rel,
+					Line: importLine(f, imp),
 					Message: fmt.Sprintf(
 						"AUTH-AUTHTEST-C: %s (non-test file) imports %s — only _test.go files "+
 							"may import authtest; move your auth policy helper into a _test.go "+
@@ -213,6 +214,25 @@ func parseImports(path string) ([]string, error) {
 		imports = append(imports, path)
 	}
 	return imports, nil
+}
+
+// importLine returns the 1-based line of the import spec for importPath in the
+// file at path, or 0 if absent / unparseable. Lets the import-boundary rules
+// (AUTH-AUTHTEST-C / AUTH-KEYSTEST) attach a precise location to their
+// diagnostics instead of rendering "file.go:0". Shared with
+// AUTH-KEYSTEST-IMPORT-BOUNDARY-01.
+func importLine(path, importPath string) int {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly|parser.SkipObjectResolution)
+	if err != nil {
+		return 0
+	}
+	for _, imp := range f.Imports {
+		if strings.Trim(imp.Path.Value, `"`) == importPath {
+			return fset.Position(imp.Path.Pos()).Line
+		}
+	}
+	return 0
 }
 
 // findCallExpr parses path with full AST and returns the line numbers of every

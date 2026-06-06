@@ -5,10 +5,9 @@ import "testing"
 
 // TestSVCTOKEN_CALLER_CELL_REQUIRED_01 enforces that every call to
 // auth.GenerateServiceToken passes a valid cell-ID string literal as its
-// second argument (callerCell).
-//
-// Note: this test FAILS (RED) until Wave 2 updates GenerateServiceToken to
-// accept callerCell as the second parameter AND all call sites are migrated.
+// second argument (callerCell). Green now that GenerateServiceToken takes
+// callerCell and every flat-tag-visible call site passes it; the build-tagged
+// satellite-module blind spot is tracked by the _Wave5_RED companion below (#1590).
 func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 	t.Parallel()
 	Report(t, ruleSvctokenCallerCellRequired01,
