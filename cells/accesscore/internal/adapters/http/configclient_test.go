@@ -161,6 +161,26 @@ func TestHTTPConfigGetter_GetEntry_Forbidden(t *testing.T) {
 	assert.Equal(t, errcode.ErrAuthForbidden, ec.Code)
 }
 
+// TestHTTPConfigGetter_GetEntry_BadRequest_400 asserts that a 400 response from
+// configcore (absent, malformed, or nil-UUID X-Tenant-ID) is returned as a
+// permanent ErrValidationFailed errcode so callers can Reject instead of Requeue.
+func TestHTTPConfigGetter_GetEntry_BadRequest_400(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	ring := newTestRing(t)
+	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
+	_, err := client.GetEntry(context.Background(), testTenant, "some.key")
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec, "400 response must return *errcode.Error")
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Equal(t, errcode.KindInvalid, ec.Kind)
+}
+
 func TestNewHTTPConfigGetter_Constructor(t *testing.T) {
 	ring := newTestRing(t)
 	g := NewHTTPConfigGetter("http://localhost:9090", ring, clock.Real())

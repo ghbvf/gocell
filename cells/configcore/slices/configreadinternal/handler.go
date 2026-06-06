@@ -24,6 +24,10 @@ const headerTenantID = "X-Tenant-ID"
 // X-Tenant-ID header value into the handler. Using a local unexported struct
 // avoids writing to ctxkeys.TenantID, which is locked to auth-boundary callers
 // by CTXKEYS-PRINCIPAL-WRITE-CALLER-01.
+// (CTXKEYS-PRINCIPAL-WRITE-CALLER-01: writing ctxkeys.TenantID here would
+// require adding configreadinternal to the principal-write allowlist; a
+// caller-asserted X-Tenant-ID is a different trust class from a JWT principal
+// tenant.)
 type internalTenantCtxKey struct{}
 
 // internalTenantFromCtx retrieves the raw X-Tenant-ID header value that was

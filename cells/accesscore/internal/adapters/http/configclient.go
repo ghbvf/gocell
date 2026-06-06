@@ -133,6 +133,13 @@ func (c *HTTPConfigGetter) GetEntry(ctx context.Context, t tenant.TenantID, key 
 		return ports.ConfigEntry{}, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
 			"configclient: 403 from configcore (caller_cell not in allowlist)",
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalKeyQuotedFmt, key))))
+	case http.StatusBadRequest:
+		// Permanent: the X-Tenant-ID header was absent, malformed, or a
+		// nil-UUID. Retrying with the same (broken) context cannot recover;
+		// consumers must Reject (DLQ) rather than burning retry budget.
+		return ports.ConfigEntry{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"configclient: 400 from configcore (invalid X-Tenant-ID)",
+			errcode.WithInternal(errcode.InternalAttr("key", key)))
 	default:
 		return ports.ConfigEntry{}, fmt.Errorf("configclient: unexpected status %d for key %q", resp.StatusCode, key)
 	}

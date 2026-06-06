@@ -32,7 +32,7 @@ endpoints:
     noContent: false
     responses:
       400:
-        description: "Bad request — path parameter key is too short or too long"
+        description: "Bad request — (1) path parameter key too short/long; (2) X-Tenant-ID header absent, malformed (non-UUID), or nil-UUID"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       401:
         description: "Unauthorized — missing or invalid service token"

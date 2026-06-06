@@ -312,12 +312,24 @@ func TestHandleEntryUpserted_ConfigEventMetricsOutcomes(t *testing.T) {
 			}},
 		},
 		{
-			name:            "transient getter error records no service outcome",
+			name:            "transient getter error records transient",
 			getter:          &stubConfigGetter{err: errors.New("configcore unavailable")},
 			needTenant:      true,
 			payload:         []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
 			wantDisposition: outbox.DispositionRequeue,
-			wantRecords:     nil,
+			wantRecords: []configEventRecord{{
+				cell: "accesscore", slice: "configreceive", reason: obmetrics.ConfigEventProcessReasonTransient,
+			}},
+		},
+		{
+			name:            "no tenant in context records no_tenant and Acks",
+			getter:          &stubConfigGetter{entry: ports.ConfigEntry{Key: "jwt.ttl", Value: "30m", Version: 1}},
+			needTenant:      false, // deliberately omit tenant → FromContext error
+			payload:         []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
+			wantDisposition: outbox.DispositionAck,
+			wantRecords: []configEventRecord{{
+				cell: "accesscore", slice: "configreceive", reason: obmetrics.ConfigEventProcessReasonNoTenant,
+			}},
 		},
 	}
 
@@ -385,8 +397,8 @@ func TestHandleEntryUpserted_WithConfigGetter_NoTenant_SkipsRefetch(t *testing.T
 	assert.Empty(t, stub.calledWith, "GetEntry must NOT be called when no tenant in context")
 }
 
-// TestIsPermanentAuthFailure tests the isPermanentAuthFailure helper directly.
-func TestIsPermanentAuthFailure(t *testing.T) {
+// TestIsPermanentRefetchError tests the isPermanentRefetchError helper directly.
+func TestIsPermanentRefetchError(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
@@ -396,6 +408,7 @@ func TestIsPermanentAuthFailure(t *testing.T) {
 		{"plain error", errors.New("some error"), false},
 		{"errcode ErrAuthUnauthorized", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "401"), true},
 		{"errcode ErrAuthForbidden", errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, "403"), true},
+		{"errcode ErrValidationFailed KindInvalid (400)", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "invalid tenant"), true},
 		{"errcode other code", errcode.New(errcode.KindNotFound, errcode.ErrConfigRepoNotFound, "not found",
 			errcode.WithCategory(errcode.CategoryDomain)), false},
 		{"wrapped ErrAuthUnauthorized", fmt.Errorf("wrap: %w",
@@ -403,7 +416,7 @@ func TestIsPermanentAuthFailure(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, isPermanentAuthFailure(tt.err))
+			assert.Equal(t, tt.want, isPermanentRefetchError(tt.err))
 		})
 	}
 }

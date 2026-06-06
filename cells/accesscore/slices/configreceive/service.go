@@ -106,7 +106,7 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) o
 		if terr != nil {
 			s.logger.Warn("config-receive: no tenant in context, skipping refetch",
 				slog.Any("error", terr), slog.String("key", event.Key))
-			s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonStale)
+			s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonNoTenant)
 			return outbox.Ack()
 		}
 
@@ -122,16 +122,17 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) o
 				s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonStale)
 				return outbox.Ack()
 			}
-			// 401/403 are permanent auth/authz failures (invalid token,
-			// caller_cell not in contract.clients allowlist). Retrying with
-			// the same credentials cannot recover; route to DLQ via Reject +
-			// PermanentError so operators can investigate the configuration
-			// drift instead of silently consuming retry budget.
-			if isPermanentAuthFailure(fetchErr) {
-				s.logger.Error("config-receive: permanent auth failure fetching config entry, routing to DLQ",
+			// 401/403 auth/authz failures and 400 bad-request (invalid
+			// X-Tenant-ID) are permanent: retrying with the same credentials
+			// or broken context cannot recover. Route to DLQ via Reject +
+			// PermanentError so operators can investigate configuration drift
+			// instead of silently consuming retry budget.
+			if isPermanentRefetchError(fetchErr) {
+				s.logger.Error("config-receive: permanent auth/validation failure fetching config entry, routing to DLQ",
 					slog.Any("error", fetchErr),
 					slog.String("key", event.Key),
-					slog.Int("version", event.Version))
+					slog.Int("version", event.Version),
+					slog.String("entry_id", entry.ID()))
 				s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonPermanentError)
 				return outbox.Reject(outbox.NewPermanentError(fetchErr))
 			}
@@ -139,7 +140,9 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) o
 			s.logger.Error("config-receive: failed to fetch config entry after upsert",
 				slog.Any("error", fetchErr),
 				slog.String("key", event.Key),
-				slog.Int("version", event.Version))
+				slog.Int("version", event.Version),
+				slog.String("entry_id", entry.ID()))
+			s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonTransient)
 			return outbox.Requeue(fetchErr)
 		}
 		s.logger.Info("config-receive: fetched config entry",
@@ -169,11 +172,13 @@ func (s *Service) HandleEntryDeleted(ctx context.Context, entry outbox.Entry) ou
 	return outbox.Ack()
 }
 
-// isPermanentAuthFailure reports whether err is an *errcode.Error with
-// code ErrAuthUnauthorized or ErrAuthForbidden — i.e. a 401/403 response
-// from configcore that retrying with the same credentials cannot recover.
+// isPermanentRefetchError reports whether err is a permanent client error
+// that retrying cannot recover: 401/403 auth/authz failures from configcore
+// (invalid service token or caller_cell not in contract.clients allowlist),
+// or a 400 bad-request (absent, malformed, or nil-UUID X-Tenant-ID header)
+// which signals a permanent misconfiguration in the consumer pipeline.
 // Such failures must Reject (DLQ) instead of Requeue.
-func isPermanentAuthFailure(err error) bool {
+func isPermanentRefetchError(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -181,7 +186,9 @@ func isPermanentAuthFailure(err error) bool {
 	if !errors.As(err, &ec) {
 		return false
 	}
-	return ec.Code == errcode.ErrAuthUnauthorized || ec.Code == errcode.ErrAuthForbidden
+	return ec.Code == errcode.ErrAuthUnauthorized ||
+		ec.Code == errcode.ErrAuthForbidden ||
+		ec.Kind == errcode.KindInvalid
 }
 
 func (s *Service) recordConfigEventProcess(ctx context.Context, reason obmetrics.ConfigEventProcessReason) {
