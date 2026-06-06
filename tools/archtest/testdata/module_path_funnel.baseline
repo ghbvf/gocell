@@ -15,7 +15,6 @@ tools/archtest/clock_invariants_test.go
 tools/archtest/contract_path_query_coverage_test.go
 tools/archtest/contracttest_loadbyid_literal_test.go
 tools/archtest/distlock_lock_not_context_test.go
-tools/archtest/eval_predicate_centralization_test.go
 tools/archtest/fixture_cellid_typed_builder_test.go
 tools/archtest/governance_rules_invariants_test.go
 tools/archtest/notfound_test_strict_test.go
