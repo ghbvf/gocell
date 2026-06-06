@@ -17,12 +17,6 @@ func TestAck(t *testing.T) {
 	if got.Err != nil {
 		t.Fatalf("Err = %v, want nil", got.Err)
 	}
-	if got.ProcessReason != "" {
-		t.Fatalf("ProcessReason = %q, want empty", got.ProcessReason)
-	}
-	if got.SettlementObservers != nil {
-		t.Fatalf("SettlementObservers = %v, want nil", got.SettlementObservers)
-	}
 }
 
 func TestRequeue(t *testing.T) {

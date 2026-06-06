@@ -67,6 +67,6 @@ func dispatchAckEntry(t testing.TB, topic string) (*paho.Publish, outbox.Entry) 
 // ackHandler is a trivial SubscriberHandler that always Acks with no settlement.
 // Used by tests that exercise Subscribe/Ready lifecycle and do not assert on the
 // handler result itself.
-func ackHandler(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-	return outbox.Ack(), nil
+func ackHandler(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+	return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, nil
 }

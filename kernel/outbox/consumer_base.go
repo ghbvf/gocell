@@ -209,9 +209,11 @@ func ExponentialDelay(base, maxDelay time.Duration, attempt int) time.Duration {
 // handled by the broker via DLX (DispositionReject triggers Nack requeue=false).
 //
 // Settlement flows to the Subscriber delivery loop via the second return value
-// of SubscriberHandler: ConsumerBase.Wrap returns (HandleResult, Settlement)
+// of SubscriberHandler: ConsumerBase.Wrap returns (DeliveryOutcome, Settlement)
 // so that Commit/Release can be called after broker Ack/Nack without leaking
-// idempotency types into business code. Business handlers only return HandleResult.
+// idempotency types into business code. Business handlers only return the slim
+// HandleResult; ConsumerBase lifts it to DeliveryOutcome, injecting
+// ProcessReason (e.g. "retry_exhausted") as needed.
 //
 // Lives in kernel/outbox rather than adapters/rabbitmq because the logic is
 // broker-agnostic — it only depends on kernel/idempotency + outbox types —
@@ -320,14 +322,22 @@ func (cb *ConsumerBase) AttachObserver(o ConsumerObserver) error {
 	return nil
 }
 
-// Wrap returns an EntryHandler that wraps the given business handler with
+// deliveryFrom converts a slim HandleResult into a DeliveryOutcome. It copies
+// only the fields that business handlers can express (Disposition + Err); the
+// subscriber-layer fields (ProcessReason, SettlementObservers) start empty and
+// are filled in by ConsumerBase / subscriber-layer middleware.
+func deliveryFrom(r HandleResult) DeliveryOutcome {
+	return DeliveryOutcome{Disposition: r.Disposition, Err: r.Err}
+}
+
+// Wrap returns a SubscriberHandler that wraps the given business handler with
 // two-phase Claim/Commit/Release idempotency and retry with exponential backoff.
 //
 // The idempotency key is constructed as "{sub.ConsumerGroup}:{entry.id}",
 // ensuring cross-cell fanout correctness: each cell's ConsumerGroup forms a
 // separate namespace so ClaimDone in one cell does not silence another.
 //
-// The Receipt is threaded through HandleResult -- ConsumerBase never calls
+// The Receipt is threaded through DeliveryOutcome -- ConsumerBase never calls
 // Commit/Release itself; that is the delivery loop's job after broker Ack/Nack.
 //
 // Fail-open (ClaimPolicyFailOpen): single Claim attempt; on error, proceed
@@ -345,7 +355,7 @@ func (cb *ConsumerBase) AttachObserver(o ConsumerObserver) error {
 //   - handler returns DispositionReject -> pass through as Reject
 //   - handler returns error with non-Ack disposition -> retry with backoff
 //   - DispositionReject (handler-explicit) -> Reject (broker routes to DLX)
-//   - retry budget exhausted -> Reject
+//   - retry budget exhausted -> Reject with ProcessReason="retry_exhausted"
 //   - ctx canceled / shutdown -> Requeue
 //
 // Wrap lifts a business EntryHandler into a SubscriberHandler that includes
@@ -361,7 +371,7 @@ func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) SubscriberH
 	topic := sub.Topic
 	consumerGroup := sub.ConsumerGroup
 	cellID := sub.CellID
-	return func(ctx context.Context, entry Entry) (HandleResult, Settlement) {
+	return func(ctx context.Context, entry Entry) (DeliveryOutcome, Settlement) {
 		idempotencyKey := fmt.Sprintf("%s:%s", consumerGroup, entry.id)
 
 		// Fail-open: single Claim attempt, proceed without idempotency on error.
@@ -387,7 +397,7 @@ func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) SubscriberH
 				slog.String(logKeyConsumerGroup, consumerGroup),
 				slog.Int("claim_retry_count", cb.config.ClaimRetryCount),
 				slog.Any("error", err))
-			return Requeue(err), nil
+			return deliveryFrom(Requeue(err)), nil
 		}
 		return cb.handleClaimState(ctx, deliveryDims{cellID: cellID, consumerGroup: consumerGroup, topic: topic}, entry, handler, state, receipt)
 	}
@@ -471,7 +481,7 @@ type deliveryDims struct {
 
 // handleClaimState dispatches on the Claim result state. Both fail-open and
 // fail-closed paths share the same ClaimDone / ClaimBusy / ClaimAcquired logic.
-// Returns (HandleResult, Settlement) so Settlement flows to the Subscriber.
+// Returns (DeliveryOutcome, Settlement) so Settlement flows to the Subscriber.
 // Settlement is nil for ClaimDone and ClaimBusy (no idempotency state to settle).
 func (cb *ConsumerBase) handleClaimState(
 	ctx context.Context,
@@ -480,14 +490,14 @@ func (cb *ConsumerBase) handleClaimState(
 	handler EntryHandler,
 	state idempotency.ClaimState,
 	receipt idempotency.Receipt,
-) (HandleResult, Settlement) {
+) (DeliveryOutcome, Settlement) {
 	cellID, consumerGroup, topic := dims.cellID, dims.consumerGroup, dims.topic
 	switch state {
 	case idempotency.ClaimDone:
 		logWithContext(ctx, slog.LevelDebug, "outbox: event already processed, skipping",
 			slog.String(logKeyEventID, entry.id),
 			slog.String(logKeyTopic, topic))
-		return Ack(), nil
+		return deliveryFrom(Ack()), nil
 	case idempotency.ClaimBusy:
 		delay := cb.config.RetryBaseDelay
 		logWithContext(ctx, slog.LevelDebug, "outbox: event being processed by another consumer, requeuing after backoff",
@@ -501,7 +511,7 @@ func (cb *ConsumerBase) handleClaimState(
 		case <-ctx.Done():
 			t.Stop()
 		}
-		return Requeue(nil), nil
+		return deliveryFrom(Requeue(nil)), nil
 	default:
 		// ClaimAcquired -- start lease-renewal goroutine before invoking handler.
 		result := cb.runWithRenewal(ctx, cellID, consumerGroup, topic, entry, handler, receipt)
@@ -509,16 +519,12 @@ func (cb *ConsumerBase) handleClaimState(
 	}
 }
 
-// requeueResult constructs a Requeue HandleResult with the given error and
-// SettlementObservers. Observers from the last handler invocation are
-// propagated so business-middleware observers are notified on ctx-cancel abort
-// and other early-exit paths.
+// requeueResult constructs a Requeue DeliveryOutcome with the given error.
 // Settlement is returned separately by the Wrap closure.
-func requeueResult(err error, observers []SettlementObserver) HandleResult {
-	return HandleResult{
-		Disposition:         DispositionRequeue,
-		Err:                 err,
-		SettlementObservers: observers,
+func requeueResult(err error) DeliveryOutcome {
+	return DeliveryOutcome{
+		Disposition: DispositionRequeue,
+		Err:         err,
 	}
 }
 
@@ -559,13 +565,8 @@ func (cb *ConsumerBase) waitBackoff(ctx context.Context, topic string, entry Ent
 }
 
 // retryLoop executes the handler with exponential backoff retries.
-// Settlement is no longer threaded through HandleResult — it is returned
-// by the Wrap closure alongside HandleResult via SubscriberHandler.
-//
-// SettlementObservers from the last handler invocation are propagated to the
-// final returned HandleResult so that business-middleware observers (e.g.
-// ConfigEventMiddleware) are notified after ConsumerBase resolves the final
-// broker disposition.
+// Settlement is returned by the Wrap closure alongside DeliveryOutcome via
+// SubscriberHandler.
 //
 // cellID is the observability owner dimension forwarded to the ConsumerObserver
 // on terminal Reject paths. It is captured from sub.CellID by Wrap and passed
@@ -577,16 +578,12 @@ func (cb *ConsumerBase) retryLoop(
 	topic string,
 	entry Entry,
 	handler EntryHandler,
-) HandleResult {
+) DeliveryOutcome {
 	var lastResult HandleResult
 	for attempt := range cb.config.RetryCount {
 		lastResult = handler(ctx, entry)
 		if lastResult.Disposition == DispositionAck {
-			return HandleResult{
-				Disposition:         DispositionAck,
-				ProcessReason:       lastResult.ProcessReason,
-				SettlementObservers: lastResult.SettlementObservers,
-			}
+			return deliveryFrom(lastResult)
 		}
 
 		if isPermanentRejection(lastResult) {
@@ -602,19 +599,14 @@ func (cb *ConsumerBase) retryLoop(
 			), func() {
 				cb.observer.ObserveReject(ctx, cellID, topic, consumerGroup, ConsumerRejectReasonHandlerReject)
 			})
-			return HandleResult{
-				Disposition:         DispositionReject,
-				Err:                 lastResult.Err,
-				ProcessReason:       lastResult.ProcessReason,
-				SettlementObservers: lastResult.SettlementObservers,
-			}
+			return deliveryFrom(lastResult)
 		}
 
 		// Transient error — backoff before retry (skipped on the final attempt).
 		if attempt < cb.config.RetryCount-1 {
 			if cb.waitBackoff(ctx, topic, entry, attempt, lastResult.Err) {
 				// Settlement.Release is called by the Subscriber after broker Nack.
-				return requeueResult(ctx.Err(), lastResult.SettlementObservers)
+				return requeueResult(ctx.Err())
 			}
 		}
 	}
@@ -623,7 +615,7 @@ func (cb *ConsumerBase) retryLoop(
 	// rather than routing to DLX. This ensures graceful shutdown does not
 	// permanently discard in-flight messages.
 	if ctx.Err() != nil {
-		return requeueResult(ctx.Err(), lastResult.SettlementObservers)
+		return requeueResult(ctx.Err())
 	}
 
 	// Exhausted all retries -- reject so broker routes to DLX.
@@ -634,7 +626,7 @@ func (cb *ConsumerBase) retryLoop(
 		slog.String(logKeyTopic, topic),
 		slog.String(logKeyConsumerGroup, consumerGroup),
 		slog.Int("retry_count", cb.config.RetryCount),
-		slog.String("process_reason", "retry_exhausted"),
+		slog.String("process_reason", ProcessReasonRetryExhausted),
 		slog.Any("error", lastResult.Err))
 	observability.SafeObserve(slog.Default().With(
 		slog.String("cell", cellID),
@@ -643,11 +635,10 @@ func (cb *ConsumerBase) retryLoop(
 	), func() {
 		cb.observer.ObserveReject(ctx, cellID, topic, consumerGroup, ConsumerRejectReasonRetryExhausted)
 	})
-	return HandleResult{
-		Disposition:         DispositionReject,
-		Err:                 lastResult.Err,
-		ProcessReason:       "retry_exhausted",
-		SettlementObservers: lastResult.SettlementObservers,
+	return DeliveryOutcome{
+		Disposition:   DispositionReject,
+		Err:           lastResult.Err,
+		ProcessReason: ProcessReasonRetryExhausted,
 	}
 }
 
@@ -674,7 +665,7 @@ func (cb *ConsumerBase) runWithRenewal(
 	entry Entry,
 	handler EntryHandler,
 	receipt idempotency.Receipt,
-) HandleResult {
+) DeliveryOutcome {
 	interval := cb.config.LeaseRenewalInterval
 	// Skip renewal when disabled (negative) or receipt is nil.
 	if interval <= 0 || receipt == nil {
@@ -710,11 +701,10 @@ func (cb *ConsumerBase) runWithRenewal(
 		logWithContext(ctx, slog.LevelWarn, "outbox: lease lost during processing, downgrading Ack to Requeue (hard fence)",
 			slog.String(logKeyEventID, entry.id),
 			slog.String(logKeyTopic, topic))
-		return HandleResult{
-			Disposition:         DispositionRequeue,
-			Err:                 idempotency.ErrLeaseExpired,
-			ProcessReason:       result.ProcessReason,
-			SettlementObservers: result.SettlementObservers,
+		return DeliveryOutcome{
+			Disposition:   DispositionRequeue,
+			Err:           idempotency.ErrLeaseExpired,
+			ProcessReason: result.ProcessReason,
 		}
 	}
 

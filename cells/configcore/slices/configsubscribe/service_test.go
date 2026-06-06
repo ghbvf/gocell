@@ -102,12 +102,11 @@ func (c *recordingConfigEventCollector) RecordEventSettlement(_ context.Context,
 }
 
 func callWithConfigEventOwner(
-	collector obmetrics.ConfigEventCollector,
 	entry outbox.Entry,
 	fn func(context.Context, outbox.Entry) outbox.HandleResult,
 ) outbox.HandleResult {
 	var result outbox.HandleResult
-	wrapped := obmetrics.ConfigEventMiddleware(collector)(
+	wrapped := obmetrics.ConfigEventMiddleware()(
 		outbox.Subscription{Topic: entry.Topic(), ConsumerGroup: "configcore", CellID: "configcore", SliceID: "configsubscribe"},
 		func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 			result = fn(ctx, entry)
@@ -528,7 +527,7 @@ func TestService_ConfigEventMetrics_EntryUpsertedOutcomes(t *testing.T) {
 				collector.records = nil
 			}
 
-			result := callWithConfigEventOwner(collector, tt.entry, svc.HandleEntryUpserted)
+			result := callWithConfigEventOwner(tt.entry, svc.HandleEntryUpserted)
 			if tt.wantReject {
 				assert.Equal(t, outbox.DispositionReject, result.Disposition)
 			} else {
@@ -604,7 +603,7 @@ func TestService_ConfigEventMetrics_EntryDeletedOutcomes(t *testing.T) {
 				collector.records = nil
 			}
 
-			result := callWithConfigEventOwner(collector, tt.entry, svc.HandleEntryDeleted)
+			result := callWithConfigEventOwner(tt.entry, svc.HandleEntryDeleted)
 			if tt.wantReject {
 				assert.Equal(t, outbox.DispositionReject, result.Disposition)
 			} else {

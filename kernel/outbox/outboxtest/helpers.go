@@ -153,7 +153,7 @@ func CollectN(
 	t.Cleanup(cancel)
 
 	//nolint:unparam // Settlement always nil: adapter tests bypass ConsumerBase by design
-	handler := func(_ context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+	handler := func(_ context.Context, entry outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 		mu.Lock()
 		collected = append(collected, entry)
 		count := len(collected)
@@ -162,7 +162,7 @@ func CollectN(
 		if count >= n {
 			closeOnce.Do(func() { close(done) })
 		}
-		return outbox.Ack(), nil
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, nil
 	}
 
 	// Subscribe blocks -- run in goroutine.
@@ -236,7 +236,7 @@ func startCollecting(t *testing.T, ctx context.Context, sub outbox.Subscriber, t
 		defer close(c.subDone)
 		close(ready) // signal: goroutine is running, Subscribe call is imminent
 		err := sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, CellID: "_outboxtest"},
-			func(_ context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+			func(_ context.Context, entry outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 				c.mu.Lock()
 				c.collected = append(c.collected, entry)
 				count := len(c.collected)
@@ -244,7 +244,7 @@ func startCollecting(t *testing.T, ctx context.Context, sub outbox.Subscriber, t
 				if count >= c.n {
 					c.closeOnce.Do(func() { close(c.done) })
 				}
-				return outbox.Ack(), nil
+				return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, nil
 			})
 		if err != nil && !errors.Is(err, context.Canceled) {
 			c.t.Errorf(errSubscribeUnexpectedFmt, err)
@@ -341,7 +341,7 @@ func (h *pubSubHarness) subscribeWithHandler(handler outbox.SubscriberHandler) {
 	ctx, cancel := context.WithCancel(h.T.Context())
 	h.cancel = cancel
 	h.T.Cleanup(cancel)
-	wrapped := func(hctx context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+	wrapped := func(hctx context.Context, entry outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 		select {
 		case h.deliveryEvents <- struct{}{}:
 		default:
@@ -375,12 +375,13 @@ func (h *pubSubHarness) subscribe(handler outbox.EntryHandler) {
 	h.cancel = cancel
 	h.T.Cleanup(cancel)
 	//nolint:unparam // Settlement always nil: adapter tests bypass ConsumerBase by design
-	wrapped := func(hctx context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+	wrapped := func(hctx context.Context, entry outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 		select {
 		case h.deliveryEvents <- struct{}{}:
 		default:
 		}
-		return handler(hctx, entry), nil
+		r := handler(hctx, entry)
+		return outbox.DeliveryOutcome{Disposition: r.Disposition, Err: r.Err}, nil
 	}
 	ready := make(chan struct{})
 	go func() {

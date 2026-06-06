@@ -127,7 +127,8 @@ type Bootstrap struct {
 	routerReadyTimeout     time.Duration
 	routerReadyTimeoutSet  bool
 	subscriptionValidators []cell.SubscriptionValidator
-	relay                  *runtimeoutbox.Relay // optional: wired by WithRelay; nil = no relay depth metric
+	relay                  *runtimeoutbox.Relay                   // optional: wired by WithRelay; nil = no relay depth metric
+	configEventCollector   metricsmiddleware.ConfigEventCollector // optional: settlement observer injected via WrapConfigEventSubscriber
 
 	// --- lifecycle: kernel/cell Lifecycle + ManagedResource + shutdown budgets ---
 	lifecycle                Lifecycle

@@ -605,8 +605,8 @@ func TestSubscribe_ReceiptCommittedOnAck(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "receipt.ack"},
-			func(_ context.Context, e outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-				return outbox.Ack(), receipt
+			func(_ context.Context, e outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+				return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, receipt
 			})
 	}()
 
@@ -635,8 +635,8 @@ func TestSubscribe_ReceiptReleasedOnReject(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "receipt.reject"},
-			func(_ context.Context, e outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-				return outbox.Reject(errors.New("permanent")), receipt
+			func(_ context.Context, e outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+				return outbox.DeliveryOutcome{Disposition: outbox.DispositionReject, Err: errors.New("permanent")}, receipt
 			})
 	}()
 
@@ -666,12 +666,12 @@ func TestSubscribe_ReceiptReleasedOnRequeue(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "receipt.requeue"},
-			func(_ context.Context, e outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+			func(_ context.Context, e outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 				r := &mockReceipt{}
 				receiptsMu.Lock()
 				receipts = append(receipts, r)
 				receiptsMu.Unlock()
-				return outbox.Requeue(errors.New("transient")), r
+				return outbox.DeliveryOutcome{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}, r
 			})
 	}()
 
@@ -714,12 +714,12 @@ func TestSubscribe_ReceiptReleasedOnRetryExhaustion(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "receipt.exhaust"},
-			func(_ context.Context, e outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+			func(_ context.Context, e outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 				r := &mockReceipt{}
 				receiptsMu.Lock()
 				receipts = append(receipts, r)
 				receiptsMu.Unlock()
-				return outbox.Requeue(testErr), r
+				return outbox.DeliveryOutcome{Disposition: outbox.DispositionRequeue, Err: testErr}, r
 			})
 	}()
 
@@ -765,14 +765,14 @@ func TestSubscribe_ZeroValueDisposition_TreatedAsRequeue(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "zero.disp"},
-			func(_ context.Context, e outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+			func(_ context.Context, e outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 				attempts.Add(1)
 				r := &mockReceipt{}
 				receiptsMu.Lock()
 				receipts = append(receipts, r)
 				receiptsMu.Unlock()
-				// Zero-value HandleResult — Disposition is 0 (invalid).
-				return outbox.HandleResult{Err: errors.New("forgot disposition")}, r
+				// Zero-value DeliveryOutcome — Disposition is 0 (invalid).
+				return outbox.DeliveryOutcome{Err: errors.New("forgot disposition")}, r
 			})
 	}()
 
@@ -1237,8 +1237,8 @@ func TestReleaseReceipt_FailedRelease_LogsError(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "release.fail"},
-			func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-				return outbox.Reject(errors.New("permanent handler error")), receipt
+			func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+				return outbox.DeliveryOutcome{Disposition: outbox.DispositionReject, Err: errors.New("permanent handler error")}, receipt
 			})
 	}()
 
@@ -1335,9 +1335,9 @@ func TestSubscribe_CommitFailure_NotifiesCommitFailed(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "spy.commitfail"},
-			func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+			func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 				attempts.Add(1)
-				return outbox.HandleResult{
+				return outbox.DeliveryOutcome{
 					Disposition:         outbox.DispositionAck,
 					SettlementObservers: []outbox.SettlementObserver{spy},
 				}, receipt
@@ -1376,13 +1376,13 @@ func TestSubscribe_RetryExhausted_NotifiesRetryExhausted(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "spy.retryexhausted"},
-			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-				return outbox.HandleResult{
+			func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+				return outbox.DeliveryOutcome{
 					Disposition:         outbox.DispositionRequeue,
 					Err:                 transientErr,
 					SettlementObservers: []outbox.SettlementObserver{spy},
-				}
-			}))
+				}, nil
+			})
 	}()
 
 	<-bus.Ready(outbox.Subscription{Topic: "spy.retryexhausted"})
@@ -1407,6 +1407,54 @@ func TestSubscribe_RetryExhausted_NotifiesRetryExhausted(t *testing.T) {
 	assert.Equal(t, 1, bus.DeadLetterLen(), "one entry must be dead-lettered")
 }
 
+// TestSubscribe_RejectWithRetryExhaustedProcessReason_NotifiesRetryExhausted
+// covers the PRODUCTION path (distinct from the eventbus-internal retry loop
+// asserted above): ConsumerBase.Wrap exhausts its OWN retry budget in-process
+// and hands the eventbus a TERMINAL Reject already tagged
+// ProcessReason=retry_exhausted on the first delivery. The eventbus Reject
+// branch never reaches its own notifyRetryExhausted, so it must classify the
+// settlement from ProcessReason (via outbox.RejectSettlementResult) instead of
+// hard-coding Success — otherwise retry-budget exhaustion is silently observed
+// as a successful settlement on the in-mem transport.
+func TestSubscribe_RejectWithRetryExhaustedProcessReason_NotifiesRetryExhausted(t *testing.T) {
+	bus := New(clock.Real(), WithBufferSize(16))
+	defer func() { _ = bus.Close(context.Background()) }()
+
+	spy := &spySettlementObserver{}
+	rejectErr := errors.New("retry budget exhausted by ConsumerBase")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "spy.terminalreject"},
+			func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+				return outbox.DeliveryOutcome{
+					Disposition:         outbox.DispositionReject,
+					Err:                 rejectErr,
+					ProcessReason:       outbox.ProcessReasonRetryExhausted,
+					SettlementObservers: []outbox.SettlementObserver{spy},
+				}, nil
+			})
+	}()
+
+	<-bus.Ready(outbox.Subscription{Topic: "spy.terminalreject"})
+	require.NoError(t, bus.Publish(context.Background(), "spy.terminalreject", makeSimpleEnvelope(t, "spy.terminalreject")))
+
+	testwait.External(t, "eventbus-terminal-reject-settled", func() bool {
+		last := spy.last()
+		return last.Disposition == outbox.DispositionReject &&
+			last.Result == outbox.SettlementResultRetryExhausted
+	}, busEventually10x, testtime.D10ms, "spy must receive Reject/RetryExhausted for a terminal retry-exhausted reject")
+
+	cancel()
+	<-done
+
+	last := spy.last()
+	assert.Equal(t, outbox.DispositionReject, last.Disposition)
+	assert.Equal(t, outbox.SettlementResultRetryExhausted, last.Result)
+	assert.Equal(t, 1, bus.DeadLetterLen(), "terminal reject must dead-letter exactly once")
+}
+
 func TestSubscribe_RetryExhausted_NotifiesOncePerAttempt(t *testing.T) {
 	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
@@ -1418,13 +1466,13 @@ func TestSubscribe_RetryExhausted_NotifiesOncePerAttempt(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "spy.retryexhausted.once"},
-			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-				return outbox.HandleResult{
+			func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+				return outbox.DeliveryOutcome{
 					Disposition:         outbox.DispositionRequeue,
 					Err:                 transientErr,
 					SettlementObservers: []outbox.SettlementObserver{spy},
-				}
-			}))
+				}, nil
+			})
 	}()
 
 	<-bus.Ready(outbox.Subscription{Topic: "spy.retryexhausted.once"})
@@ -1465,8 +1513,8 @@ func TestSubscribe_CommitFailureRetryExhausted_NotifiesOncePerAttempt(t *testing
 	done := make(chan error, 1)
 	go func() {
 		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "spy.commitfail.exhausted"},
-			func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-				return outbox.HandleResult{
+			func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+				return outbox.DeliveryOutcome{
 					Disposition:         outbox.DispositionAck,
 					SettlementObservers: []outbox.SettlementObserver{spy},
 				}, receipt

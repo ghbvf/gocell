@@ -2915,8 +2915,8 @@ func TestProcessDelivery_Ack_CommitsReceipt(t *testing.T) {
 	entry := mustNewEntry(t, "test.ack", []byte(`{}`), outbox.WithID("evt-ack-receipt"))
 	entryBytes := makeDeliveryBody(t, entry)
 
-	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.Ack(), receipt
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, receipt
 	}
 
 	ctx := context.Background()
@@ -2951,8 +2951,8 @@ func TestProcessDelivery_Reject_ReleasesReceipt(t *testing.T) {
 	entry := mustNewEntry(t, "test.reject", []byte(`{}`), outbox.WithID("evt-reject-receipt"))
 	entryBytes := makeDeliveryBody(t, entry)
 
-	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.Reject(errors.New("permanent")), receipt
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionReject, Err: errors.New("permanent")}, receipt
 	}
 
 	ctx := context.Background()
@@ -3126,8 +3126,8 @@ func TestProcessDelivery_Receipt_UsesDetachedCtx(t *testing.T) {
 	entry := mustNewEntry(t, "test.ctx", []byte(`{}`), outbox.WithID("evt-detached-ctx"))
 	entryBytes := makeDeliveryBody(t, entry)
 
-	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.Ack(), receipt
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, receipt
 	}
 
 	// Use a canceled context to simulate shutdown.
@@ -3164,8 +3164,8 @@ func TestProcessDelivery_Requeue_ReleasesReceipt(t *testing.T) {
 	entry := mustNewEntry(t, "test.requeue", []byte(`{}`), outbox.WithID("evt-requeue-receipt"))
 	entryBytes := makeDeliveryBody(t, entry)
 
-	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.Requeue(errors.New("transient")), receipt
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}, receipt
 	}
 
 	sub.wg.Add(1)
@@ -3245,8 +3245,8 @@ func TestProcessDelivery_BrokerAckFails_CommitAlreadyDone(t *testing.T) {
 	entry := mustNewEntry(t, "test.brokerfail", []byte(`{}`), outbox.WithID("evt-broker-fail"))
 	entryBytes := makeDeliveryBody(t, entry)
 
-	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.Ack(), receipt
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, receipt
 	}
 
 	ctx := context.Background()
@@ -3279,8 +3279,8 @@ func TestProcessDelivery_CommitFails_NackRequeueSuccess_ReleasesReceipt(t *testi
 	entry := mustNewEntry(t, "test.commitfail", []byte(`{}`), outbox.WithID("evt-commit-fail-release"))
 	entryBytes := makeDeliveryBody(t, entry)
 
-	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.Ack(), receipt
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, receipt
 	}
 
 	sub.wg.Add(1)
@@ -3317,8 +3317,8 @@ func TestProcessDelivery_CommitFails_NackRequeueFails_ReleasesReceipt(t *testing
 	entry := mustNewEntry(t, "test.commitfail.nackfail", []byte(`{}`), outbox.WithID("evt-commit-fail-nack-fail-release"))
 	entryBytes := makeDeliveryBody(t, entry)
 
-	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.Ack(), receipt
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, receipt
 	}
 
 	sub.wg.Add(1)
@@ -3520,8 +3520,8 @@ func TestProcessDelivery_Requeue_BrokerNackFails_ReleasesReceipt(t *testing.T) {
 	entry := mustNewEntry(t, "test.requeue.nackfail", []byte(`{}`), outbox.WithID("evt-requeue-nack-fail"))
 	entryBytes := makeDeliveryBody(t, entry)
 
-	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.Requeue(errors.New("transient")), receipt
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}, receipt
 	}
 
 	sub.wg.Add(1)
@@ -3647,8 +3647,8 @@ func TestProcessDelivery_UnknownDisposition_NackWithRequeue(t *testing.T) {
 	entry := mustNewEntry(t, "test.unknown", []byte(`{}`), outbox.WithID("evt-unknown-disp"))
 	entryBytes := makeDeliveryBody(t, entry)
 
-	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.HandleResult{
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{
 			Disposition: outbox.Disposition(99),
 		}, receipt
 	}

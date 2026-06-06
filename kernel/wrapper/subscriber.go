@@ -13,7 +13,7 @@ import (
 // WrapSubscriber wraps a SubscriberHandler with a contract delivery span whose
 // status is resolved by the final broker settlement notification. It starts one
 // span per delivery attempt, appends a SettlementObserver to the returned
-// HandleResult, and ends the span when the subscriber calls outbox.NotifySettlement.
+// DeliveryOutcome, and ends the span when the subscriber calls outbox.NotifySettlement.
 //
 // This differs from WrapConsumer: Consumer middleware only sees the business
 // HandleResult before Commit/Ack/Nack, while this wrapper observes the
@@ -48,7 +48,7 @@ func WrapSubscriber(tr Tracer, spec contractspec.ContractSpec, fn outbox.Subscri
 		{Key: "messaging.destination", Value: spec.Topic},
 	}
 
-	return func(ctx context.Context, entry outbox.Entry) (res outbox.HandleResult, settlement outbox.Settlement) {
+	return func(ctx context.Context, entry outbox.Entry) (res outbox.DeliveryOutcome, settlement outbox.Settlement) {
 		ctx = entry.Observability().RestoreToContext(ctx)
 		ctx = ctxkeys.WithContractID(ctx, spec.ID)
 		ctx, span := tr.Start(ctx, defaultEventSpanName(spec))

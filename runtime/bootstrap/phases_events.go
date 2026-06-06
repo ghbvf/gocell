@@ -227,8 +227,18 @@ func (b *Bootstrap) buildEventRouter(sub outbox.Subscriber) (*eventrouter.Router
 	}
 	evtRouterOpts = append(evtRouterOpts, collectorOpts...)
 
+	var tracingOpts []eventrouter.TracingSubscriberOption
+	collector := b.configEventCollector
+	if collector == nil {
+		collector = metricsmiddleware.NoopConfigEventCollector{}
+	}
+	tracingOpts = append(tracingOpts, eventrouter.WithSubscriberWrapper(
+		func(sub outbox.Subscription, next outbox.SubscriberHandler) outbox.SubscriberHandler {
+			return metricsmiddleware.WrapConfigEventSubscriber(collector, sub, next)
+		},
+	))
 	swm, err := outbox.NewSubscriberWithMiddleware(
-		eventrouter.NewContractTracingSubscriber(sub, b.wrapperTracer),
+		eventrouter.NewContractTracingSubscriber(sub, b.wrapperTracer, tracingOpts...),
 		b.consumerBase,
 		b.consumerMiddleware...,
 	)

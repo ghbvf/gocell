@@ -255,8 +255,8 @@ func TestSubscriberInterface(t *testing.T) {
 	var sub Subscriber = &mockSubscriber{}
 
 	t.Run("Subscribe returns nil on success", func(t *testing.T) {
-		handler := func(_ context.Context, _ Entry) (HandleResult, Settlement) {
-			return Ack(), nil
+		handler := func(_ context.Context, _ Entry) (DeliveryOutcome, Settlement) {
+			return DeliveryOutcome{Disposition: DispositionAck}, nil
 		}
 		err := sub.Subscribe(context.Background(), testFullSub("test.topic", "cg-test"), handler)
 		assert.NoError(t, err)
@@ -1265,7 +1265,7 @@ func TestNotifySettlement_ObserverPanic_DoesNotKillCaller(t *testing.T) {
 		spy3Called = true
 	})
 
-	result := HandleResult{
+	result := DeliveryOutcome{
 		Disposition:         DispositionAck,
 		SettlementObservers: []SettlementObserver{spy1, panicObserver, spy3},
 	}
@@ -1297,7 +1297,7 @@ func TestNotifySettlement_NoObservers_NoOp(t *testing.T) {
 		}
 	}()
 	NotifySettlement(context.Background(),
-		Ack(),
+		DeliveryOutcome{Disposition: DispositionAck},
 		Entry{id: "evt-noop", topic: "t"},
 		DispositionAck, SettlementResultSuccess, nil)
 }
@@ -1312,7 +1312,7 @@ func TestNotifySettlement_NilObserverInList_Skipped(t *testing.T) {
 	spy := SettlementObserverFunc(func(_ context.Context, _ SettlementObservation) {
 		called++
 	})
-	result := HandleResult{
+	result := DeliveryOutcome{
 		Disposition:         DispositionAck,
 		SettlementObservers: []SettlementObserver{nil, spy, nil},
 	}
@@ -1322,6 +1322,41 @@ func TestNotifySettlement_NilObserverInList_Skipped(t *testing.T) {
 		DispositionAck, SettlementResultSuccess, nil)
 
 	assert.Equal(t, 1, called, "non-nil observer must run exactly once; nil entries skipped")
+}
+
+// TestRejectSettlementResult is the single-source classification every
+// subscriber settle loop (rabbitmq / mqtt / eventbus) routes its Reject branch
+// through. A Reject carrying ProcessReason="retry_exhausted" (injected by
+// ConsumerBase on retry-budget exhaustion) must report RetryExhausted; any
+// other Reject (handler explicit reject, empty/unknown ProcessReason) reports
+// Success because the broker settlement action itself succeeded.
+func TestRejectSettlementResult(t *testing.T) {
+	tests := []struct {
+		name string
+		out  DeliveryOutcome
+		want SettlementResult
+	}{
+		{
+			name: "retry_exhausted_process_reason",
+			out:  DeliveryOutcome{Disposition: DispositionReject, ProcessReason: ProcessReasonRetryExhausted},
+			want: SettlementResultRetryExhausted,
+		},
+		{
+			name: "empty_process_reason_handler_reject",
+			out:  DeliveryOutcome{Disposition: DispositionReject},
+			want: SettlementResultSuccess,
+		},
+		{
+			name: "unknown_process_reason",
+			out:  DeliveryOutcome{Disposition: DispositionReject, ProcessReason: "something_else"},
+			want: SettlementResultSuccess,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, RejectSettlementResult(tc.out))
+		})
+	}
 }
 
 func TestDiscardPublisher_TypedNil_NoPanic(t *testing.T) {
