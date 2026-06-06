@@ -104,25 +104,6 @@ func exposesHealthProbeMethod(s *typeMethodSet, qualified string) bool {
 	return s.has(qualified, "Probes")
 }
 
-// healthAggSanctionedAdapterCarveOuts lists exported types in runtime/ or
-// adapters/ that intentionally do NOT implement ManagedResource directly even
-// though they expose Probes() — their Probes/Worker primitives are consumed by
-// a single sanctioned adapter that owns the Close obligation.
-//
-// Each entry MUST cite the ADR that closes the carve-out semantically. The
-// downstream Hard guard for *runtime/outbox.Relay is archtest
-// RELAY-NOT-MANAGEDRESOURCE-01 (relay_isolation_test.go) — that test fails the
-// moment *Relay re-satisfies ManagedResource, so this allowlist cannot widen
-// in the wrong direction without an immediate second archtest failure.
-var healthAggSanctionedAdapterCarveOuts = map[string]string{
-	// *Relay's Probes/Worker are consumed exclusively by the
-	// package-private runtime/bootstrap.relayAdapter (single sanctioned
-	// holder) which owns Close → relay.Stop. Re-adding Close to *Relay
-	// would regress the type isolation guarded by
-	// RELAY-NOT-MANAGEDRESOURCE-01.
-	"github.com/ghbvf/gocell/runtime/outbox.Relay": "docs/architecture/202605201400-adr-relay-managedresource-isolation.md",
-}
-
 // TestHealthCheckersImpliesManagedResource (HEALTH-AGG-01) asserts that every
 // exported type in runtime/ or adapters/ that exposes Probes() also implements
 // the full ManagedResource contract (Probes + Worker + Close), counting

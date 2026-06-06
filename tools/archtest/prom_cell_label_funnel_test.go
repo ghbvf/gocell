@@ -28,12 +28,15 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
+// Note: promAdapterPkgPath and cellPkgPath are defined in
+// prom_cell_label_funnel.go (non-test file) anchored to PlatformModulePath.
+
 const (
-	promAdapterPkgPath = "github.com/ghbvf/gocell/adapters/prometheus"
 	promFunnelFuncName = "promCellLabel"
-	cellPkgPath        = "github.com/ghbvf/gocell/kernel/cell"
 	hookEventTypeName  = "HookEvent"
 	cellLabelDefnFile  = "cell_label.go" // funnel definition; excluded from scan
 	promRuleID         = "PROM-CELL-LABEL-FUNNEL-01"
@@ -195,4 +198,42 @@ func isHookEventType(t types.Type) bool {
 		return false
 	}
 	return obj.Pkg().Path() == cellPkgPath && obj.Name() == hookEventTypeName
+}
+
+// INVARIANT: PROM-CELL-LABEL-FUNNEL-01
+//
+// TestPromCellLabelFunnel_ScannerDetectsViolation loads the fixture package
+// tools/archtest/internal/promcelllabelfixture/violation and asserts the
+// scanner reports a cell.HookEvent.CellID read outside promCellLabel as a
+// violation.
+//
+// Per ai-robust.md §"real source AST capture": the fixture is a real Go
+// package loaded via packages.Load through the Fixture driver. Bypassing this
+// test requires modifying real source — a hand-crafted AST cannot satisfy
+// go/types canonical-name resolution for kernel/cell.HookEvent.
+func TestPromCellLabelFunnel_ScannerDetectsViolation(t *testing.T) {
+	t.Parallel()
+
+	var violations []string
+	Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/promcelllabelfixture/violation"}),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil {
+				return nil
+			}
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				violations = append(violations, scanPromCellLabelFunnel(p, file, rel)...)
+			}
+			return nil
+		})
+
+	require.NotEmpty(t, violations,
+		"scanner must detect cell.HookEvent.CellID read outside promCellLabel in fixture")
+
+	for _, v := range violations {
+		if !strings.Contains(v, "promcelllabelfixture") {
+			t.Errorf("violation expected in promcelllabelfixture path, got: %s", v)
+		}
+	}
 }

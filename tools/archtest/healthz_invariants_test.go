@@ -93,22 +93,14 @@ import (
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const (
-	healthzAggPkgPath = "github.com/ghbvf/gocell/kernel/healthz"
-)
-
 // healthz path strings that A1 bans from being registered directly.
 var healthzBannedPaths = map[string]bool{
 	"/healthz": true,
 	"/readyz":  true,
 }
 
-// A3 allowlist: (pkg path, type name) pairs allowed to hold a healthz.Aggregator field.
-var healthzHolderAllowlist = map[string]bool{
-	"github.com/ghbvf/gocell/runtime/observability/healthz.aggregator": true, // unexported impl
-	"github.com/ghbvf/gocell/runtime/http/health.Handler":              true, // HTTP transport
-	"github.com/ghbvf/gocell/runtime/bootstrap.Bootstrap":              true, // composition root
-}
+// Note: healthzAggPkgPath and healthzHolderAllowlist are defined in
+// healthz_invariants.go (non-test file) anchored to PlatformModulePath.
 
 // A1 allowlist: files whose path ends with this suffix are exempt from the
 // direct /healthz or /readyz registration ban.
@@ -364,12 +356,7 @@ func TestHealthzWrite01(t *testing.T) {
 			}
 			pkgPath := p.Pkg.Path()
 
-			if !strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/kernel/") &&
-				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/cells/") &&
-				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/adapters/") &&
-				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/runtime/") &&
-				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/cmd/") &&
-				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/examples/") {
+			if !healthzHasAnyPrefix(pkgPath, healthzAllLayerPrefixes) {
 				return nil
 			}
 			for _, f := range p.Files {
@@ -469,11 +456,7 @@ func TestHealthzInvariants_ReverseBlindSpot_NoDynamicHealthzPath(t *testing.T) {
 				return nil
 			}
 			pkgPath := p.Pkg.Path()
-			if !strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/cells/") &&
-				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/adapters/") &&
-				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/runtime/") &&
-				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/cmd/") &&
-				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/examples/") {
+			if !healthzHasAnyPrefix(pkgPath, healthzNonKernelLayerPrefixes) {
 				return nil
 			}
 			for _, f := range p.Files {
