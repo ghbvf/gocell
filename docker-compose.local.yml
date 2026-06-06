@@ -7,8 +7,10 @@ services:
       POSTGRES_USER: gocell
       POSTGRES_PASSWORD: ${PG_PASSWORD:?PG_PASSWORD required}
       POSTGRES_DB: gocell
+      GOCELL_APP_PASSWORD: ${GOCELL_APP_PASSWORD:?GOCELL_APP_PASSWORD required}
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U gocell -d gocell"]
       interval: 2s
@@ -61,7 +63,7 @@ services:
       GOCELL_HTTP_HEALTH_LOCAL_ONLY: "1"
 
       # PostgreSQL DSN (shared-netns DNS resolution still uses container names)
-      GOCELL_CONFIGCORE_DATABASE_URL: postgres://gocell:${PG_PASSWORD:?}@postgres:5432/gocell?sslmode=disable
+      GOCELL_CONFIGCORE_DATABASE_URL: postgres://gocell_app:${GOCELL_APP_PASSWORD:?}@postgres:5432/gocell?sslmode=disable
       GOCELL_CONFIGCORE_KEY_PROVIDER: local-aes
 
       # Redis loopback via shared netns (see network_mode above)

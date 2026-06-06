@@ -43,6 +43,7 @@ if ! command -v docker >/dev/null 2>&1; then
 else
   env \
     PG_PASSWORD=placeholder \
+    GOCELL_APP_PASSWORD=placeholder \
     CONFIGCORE_MASTER_KEY=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff \
     CONFIGCORE_CURSOR_KEY=placeholder-32-bytes-padding-xxxxxxxxxxxxxxxx \
     AUDITCORE_HMAC_KEY=placeholder-32-bytes-padding-xxxxxxxxxxxxxxxxxx \

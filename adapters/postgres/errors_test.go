@@ -20,6 +20,7 @@ func TestErrorCodes_Prefix(t *testing.T) {
 		ErrAdapterPGSchemaMismatch,
 		ErrAdapterPGSchemaShape,
 		ErrAdapterPGInvalidIndex,
+		ErrAdapterPGRoleBypassRLS,
 	}
 
 	for _, c := range codes {
@@ -40,6 +41,7 @@ func TestErrorCodes_Unique(t *testing.T) {
 		ErrAdapterPGSchemaMismatch,
 		ErrAdapterPGSchemaShape,
 		ErrAdapterPGInvalidIndex,
+		ErrAdapterPGRoleBypassRLS,
 	}
 
 	seen := make(map[errcode.Code]bool, len(codes))

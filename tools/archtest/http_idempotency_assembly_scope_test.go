@@ -25,14 +25,17 @@ package archtest
 //     the "any pod sees the same state" guarantee and is caught here.
 //
 //   - β HTTP-IDEMPOTENCY-KEY-NODE-AGNOSTIC-01: the request key is a SEALED typed
-//     runtime/http/idempotency.IdempotencyKey, minted only by DeriveKey from the
-//     isolation tuple (tenantID, subject, method, path, idemKey). Sealing makes
-//     the node-agnostic property structural on two directions: no OTHER package
-//     can mint a key and splice in a pod/listener/cell id (sealed construction),
-//     and Store.Claim takes IdempotencyKey (not raw strings) so a hand-built
-//     (ns,key) pair is inexpressible at the store boundary. The require-isolation-
-//     tuple half (every dimension must FLOW into the key) stays an AST taint walk
-//     on DeriveKey (Go cannot make body-flow type-Hard).
+//     runtime/http/idempotency.IdempotencyKey, minted only by its sanctioned
+//     constructors — DeriveKey (HTTP record key, from tenantID/subject/method/
+//     path/idemKey) and DeriveCommandKey (#1669 command dedup key, from
+//     tenantID/subject/commandID). Both are single-sourced in
+//     idempotencyKeyConstructors below, the one table every β prong iterates.
+//     Sealing makes the node-agnostic property structural on two directions: no
+//     OTHER package can mint a key and splice in a pod/listener/cell id (sealed
+//     construction), and Store.Claim takes IdempotencyKey (not raw strings) so a
+//     hand-built (ns,key) pair is inexpressible at the store boundary. The
+//     require-isolation-tuple half (every dimension must FLOW into the key) stays
+//     an AST taint walk on each constructor (Go cannot make body-flow type-Hard).
 //
 // The A-layer cross-pod integration test
 // (adapters/redis/http_idempotency_assembly_scope_test.go) is the behavioral
@@ -57,12 +60,13 @@ package archtest
 //         populated literal or a 2nd in-package producer; the prong-1 reflect
 //         field freeze + go/types sole-producer scan are the only backstop there.
 //   - β require-isolation-tuple — Medium, genuine Go ceiling (gh #1650): Go
-//     cannot express "DeriveKey's body consumes all five params into the key",
-//     and the five same-type string params could be transposed at the (single,
-//     reviewed) callsite. The AST taint walk on DeriveKey is the Medium backstop.
-//     Same ceiling family as #851/#893/#1282/#1552. NOT typestate-upgradeable
-//     (a builder enforces presence-of-setters, which positional params already
-//     give; it does not make body-flow Hard).
+//     cannot express "a constructor's body consumes all its params into the key",
+//     and the same-type string params could be transposed at the (single,
+//     reviewed) callsite. The AST taint walk on each constructor (DeriveKey,
+//     DeriveCommandKey) is the Medium backstop. Same ceiling family as
+//     #851/#893/#1282/#1552. NOT typestate-upgradeable (a builder enforces
+//     presence-of-setters, which positional params already give; it does not make
+//     body-flow Hard).
 //
 // # Blind spots + reverse self-checks (ai-robust mandate)
 //
@@ -87,14 +91,22 @@ package archtest
 //     package type that returns IdempotencyKey (e.g. func (b keyBuilder) Build()
 //     IdempotencyKey) is caught by neither. It is bounded by the
 //     upstream-external Hard seal: such a method still cannot populate the
-//     unexported fields except via DeriveKey. Known in-package Medium blind spot.
-//   - β prong-3 taint walk blind spots: a 6th DeriveKey param (node-id vector) →
-//     signature freeze; dropping any isolation dimension from the body, INCLUDING
-//     a dummy read `_ = method` that references the input but never flows it into
-//     the key → checkDeriveKeyRequiredUse (taint flow, not presence). Proven
-//     non-vacuous by inline malformed DeriveKey fixtures. Note: flat-string params
-//     remove the old *auth.Principal selector/alias blind spots entirely (no more
-//     extra-principal-field / chained-selector / type-alias residual). Known
+//     unexported fields except via the sanctioned constructors. Known in-package
+//     Medium blind spot.
+//   - β prong-3 taint walk blind spots: an extra constructor param (node-id
+//     vector) → signature freeze; dropping any isolation dimension from the body,
+//     INCLUDING a dummy read `_ = commandID` that references the input but never
+//     flows it into the key → checkConstructorRequiredUse (taint flow, not
+//     presence). The taint model is lightweight ("a param name appearing ⇒ its
+//     value flows"); its soundness precondition is enforced by checkFlatComposition
+//     (#1699 F1), which rejects the two laundering vectors that keep a param's name
+//     while losing its value — a CALL/foreign SELECTOR (`key: launder(subject,
+//     commandID)`) and a param REASSIGN (`commandID = ""; key: …`). Proven
+//     non-vacuous by inline malformed DeriveKey AND DeriveCommandKey fixtures
+//     (missing / dummy-read / helper-drop / param-rebind). RESIDUAL (NOT closed,
+//     Medium ceiling gh #1650): param TRANSPOSITION (`key: commandID + subject`
+//     swaps two like-typed params, both still flow). Note: flat-string params
+//     remove the old *auth.Principal selector/alias blind spots entirely. Known
 //     tightness: a construction form other than `return IdempotencyKey{ns:…,key:…}`
 //     trips the taint sink lookup — a deliberate review checkpoint, not a defect.
 
@@ -251,23 +263,87 @@ const ruleHTTPIdemKeyNodeAgnostic01 = "HTTP-IDEMPOTENCY-KEY-NODE-AGNOSTIC-01"
 const (
 	idempotencyKeyTypeName = "IdempotencyKey"
 	deriveKeyFnName        = "DeriveKey"
+	deriveCommandKeyFnName = "DeriveCommandKey"
 	deriveKeyFile          = "key.go"
 	storeIfaceName         = "Store"
 	storeClaimMethodName   = "Claim"
 )
 
-// deriveKeyProducerAllowed is the exhaustive set of package-level
-// surfaces in runtime/http/idempotency that may PRODUCE an IdempotencyKey value.
-// DeriveKey is the sole constructor; a second producer (FromStrings / a
-// function-typed var / an Unmarshal) would launder an arbitrary (ns,key) —
-// possibly carrying a node id — into a sealed key, defeating the seal. (A future
-// cross-cell DeriveCommandKey, #1610, would be added here in the same PR.)
-var deriveKeyProducerAllowed = map[string]struct{}{deriveKeyFnName: {}}
+// keyField identifies which field of the returned IdempotencyKey an isolation
+// param must flow into: the ns field (tenant) or the key field (everything else).
+type keyField uint8
+
+const (
+	fieldNS keyField = iota
+	fieldKey
+)
+
+// paramSpec pins one positional string param of a key constructor to the
+// IdempotencyKey field its value MUST reach (the taint sink).
+type paramSpec struct {
+	label string   // human label used in the violation message
+	sink  keyField // ns or key
+}
+
+// constructorSpec is one sanctioned IdempotencyKey constructor: its top-level
+// func name + the ordered isolation params (each pinned to a sink). The signature
+// freeze + taint walk run identically over every spec; only the param count and
+// the param→sink mapping differ.
+type constructorSpec struct {
+	fnName string
+	params []paramSpec
+}
+
+// idempotencyKeyConstructors is the SINGLE source of sanctioned IdempotencyKey
+// constructors. Both the sole-producer allowlist (deriveKeyProducerAllowed,
+// derived below) AND the per-constructor signature-freeze + taint-walk
+// (TestHTTPIdempotencyKeyNodeAgnostic01_RequiredUse) iterate this one table, so a
+// new producer CANNOT be added to one gate while skipping the other: adding a row
+// here grants all three checks at once (sole-producer + signature freeze + taint
+// walk). Two separate lists would let a 3rd producer pass the sole-producer scan
+// yet escape the signature/taint gate (a node-id extra param undetected) — the
+// "two truth sources" hazard ai-robust.md bans. DeriveKey derives the HTTP record
+// key from (tenant, subject, method, path, idemKey); DeriveCommandKey (#1669, the
+// #1610 cross-cell same-slot mapping primitive) derives the command dedup key
+// from (tenant, subject, command_id).
+var idempotencyKeyConstructors = []constructorSpec{
+	{
+		fnName: deriveKeyFnName,
+		params: []paramSpec{
+			{"tenantID", fieldNS},
+			{"subject", fieldKey},
+			{"method", fieldKey},
+			{"path", fieldKey},
+			{"idemKey", fieldKey},
+		},
+	},
+	{
+		fnName: deriveCommandKeyFnName,
+		params: []paramSpec{
+			{"tenantID", fieldNS},
+			{"subject", fieldKey},
+			{"commandID", fieldKey},
+		},
+	},
+}
+
+// deriveKeyProducerAllowed is the exhaustive set of package-level surfaces in
+// runtime/http/idempotency that may PRODUCE an IdempotencyKey value, derived
+// single-source from idempotencyKeyConstructors. A producer not in this set (a
+// FromStrings / a function-typed var / an Unmarshal) would launder an arbitrary
+// (ns,key) — possibly carrying a node id — into a sealed key, defeating the seal.
+var deriveKeyProducerAllowed = func() map[string]struct{} {
+	m := make(map[string]struct{}, len(idempotencyKeyConstructors))
+	for _, c := range idempotencyKeyConstructors {
+		m[c.fnName] = struct{}{}
+	}
+	return m
+}()
 
 // idempotencyKeyForbiddenMethods are deserialization entries that would let an
-// external package populate a sealed IdempotencyKey from bytes, bypassing
-// DeriveKey. They return error (not IdempotencyKey), so a returns-IdempotencyKey
-// scan never catches them — they are banned by name (#1488 F4 lesson).
+// external package populate a sealed IdempotencyKey from bytes, bypassing the
+// sanctioned constructors. They return error (not IdempotencyKey), so a
+// returns-IdempotencyKey scan never catches them — banned by name (#1488 F4 lesson).
 var idempotencyKeyForbiddenMethods = map[string]bool{
 	"UnmarshalJSON":   true,
 	"UnmarshalText":   true,
@@ -323,14 +399,14 @@ func checkIdempotencyKeyMethods(dt reflect.Type) []string {
 		if idempotencyKeyForbiddenMethods[m.Name] {
 			v = append(v, fmt.Sprintf(
 				"%s must not declare %q — a deserialization entry lets an external package build a key "+
-					"from bytes, bypassing the sole constructor DeriveKey.", idempotencyKeyTypeName, m.Name))
+					"from bytes, bypassing the sanctioned constructors (idempotencyKeyConstructors).", idempotencyKeyTypeName, m.Name))
 			continue
 		}
 		mt := m.Func.Type() // receiver is in[0]; method results are the outs
 		for o := 0; o < mt.NumOut(); o++ {
 			if mt.Out(o) == dt {
 				v = append(v, fmt.Sprintf(
-					"%s method %q returns a new %s (builder laundering) — DeriveKey is the sole constructor.",
+					"%s method %q returns a new %s (builder laundering) — only the sanctioned constructors (idempotencyKeyConstructors) may produce one.",
 					idempotencyKeyTypeName, m.Name, idempotencyKeyTypeName))
 			}
 		}
@@ -353,7 +429,7 @@ func TestHTTPIdempotencyKeyNodeAgnostic01_KeySealed(t *testing.T) {
 }
 
 // TestHTTPIdempotencyKeyNodeAgnostic01_SoleProducerAndSink pins, via go/types,
-// (1) DeriveKey as the SOLE package-level producer of an IdempotencyKey
+// (1) the sanctioned constructors {DeriveKey, DeriveCommandKey} as the ONLY package-level producers of an IdempotencyKey
 // value (a second producer would launder an arbitrary key), and (2) Store.Claim's
 // post-ctx parameter as IdempotencyKey (the downstream Hard sink — a raw (ns,key)
 // string pair is inexpressible at the boundary).
@@ -381,8 +457,10 @@ func TestHTTPIdempotencyKeyNodeAgnostic01_SoleProducerAndSink(t *testing.T) {
 			}
 			ikType := ikObj.Type()
 
-			// (1) sole producer: package-level funcs AND function-typed vars whose
-			// signature returns IdempotencyKey must be exactly {DeriveKey}.
+			// (1) sole producers: package-level funcs AND function-typed vars whose
+			// signature returns IdempotencyKey must be exactly the sanctioned set
+			// {DeriveKey, DeriveCommandKey} (deriveKeyProducerAllowed, single-sourced
+			// from idempotencyKeyConstructors).
 			producers := idempotencyKeyProducerNames(scope, ikType)
 			diags = append(diags, diffHTTPIdempotencyExpectedSet(
 				"package-level surfaces producing IdempotencyKey",
@@ -464,12 +542,15 @@ func checkStoreClaimParamType(scope *types.Scope, ikType types.Type) []Diagnosti
 
 // TestHTTPIdempotencyKeyNodeAgnostic01_RequiredUse is the require-isolation-tuple
 // half (Medium residual, gh #1650): the sealed type makes "external code injects
-// a node id" inexpressible, but Go CANNOT make "DeriveKey's body consumes all
-// five isolation dimensions into the key" type-system-Hard. This AST taint walk on
-// DeriveKey is the Medium backstop: each of (tenantID→ns, subject/method/path/
-// idemKey→key) must FLOW (not merely be referenced) into the returned
-// IdempotencyKey literal; a dropped dimension or a `_ = method` dummy read is
-// caught. A 6th parameter (a node-id injection vector) trips the signature freeze.
+// a node id" inexpressible, but Go CANNOT make "a sanctioned constructor's body
+// consumes all its isolation dimensions into the key" type-system-Hard. This AST
+// taint walk over every constructor in idempotencyKeyConstructors (DeriveKey:
+// tenantID→ns, subject/method/path/idemKey→key; DeriveCommandKey: tenantID→ns,
+// subject/commandID→key) is the Medium backstop: each dimension must FLOW (not
+// merely be referenced) into the returned IdempotencyKey literal; a dropped
+// dimension, a `_ = commandID` dummy read, or a laundering call / param-rebind
+// (rejected by checkFlatComposition) is caught. An extra parameter (a node-id
+// injection vector) trips the signature freeze.
 func TestHTTPIdempotencyKeyNodeAgnostic01_RequiredUse(t *testing.T) {
 	t.Parallel()
 
@@ -479,29 +560,36 @@ func TestHTTPIdempotencyKeyNodeAgnostic01_RequiredUse(t *testing.T) {
 	file, err := parser.ParseFile(fset, path, nil, 0)
 	require.NoError(t, err, "parse %s", path)
 
-	fn, ok := findTopLevelFuncDecl(file, deriveKeyFnName)
-	require.Truef(t, ok, "%s: %s not found in %s", ruleHTTPIdemKeyNodeAgnostic01, deriveKeyFnName, deriveKeyFile)
+	for _, spec := range idempotencyKeyConstructors {
+		fn, ok := findTopLevelFuncDecl(file, spec.fnName)
+		require.Truef(t, ok, "%s: %s not found in %s", ruleHTTPIdemKeyNodeAgnostic01, spec.fnName, deriveKeyFile)
 
-	for _, vio := range checkDeriveKeySignature(fn) {
-		t.Errorf("%s (signature): %s. DeriveKey must take exactly five string isolation params and return "+
-			"IdempotencyKey — a 6th param is the node-id injection vector. If intentional, update ADR "+
-			"202606051000-1449 + this gate in the same PR.", ruleHTTPIdemKeyNodeAgnostic01, vio)
-	}
-	for _, vio := range checkDeriveKeyRequiredUse(fn) {
-		t.Errorf("%s (required-use): %s. Every isolation dimension MUST flow into the key (#1650 Medium "+
-			"backstop); dropping one collapses cross-tenant/-user/-endpoint isolation.", ruleHTTPIdemKeyNodeAgnostic01, vio)
+		for _, vio := range checkConstructorSignature(spec, fn) {
+			t.Errorf("%s (%s signature): %s. The constructor must take exactly %d string isolation params and "+
+				"return IdempotencyKey — an extra param is the node-id injection vector. If intentional, update "+
+				"ADR 202606051000-1449 + this gate in the same PR.",
+				ruleHTTPIdemKeyNodeAgnostic01, spec.fnName, vio, len(spec.params))
+		}
+		for _, vio := range checkConstructorRequiredUse(spec, fn) {
+			t.Errorf("%s (%s required-use): %s. Every isolation dimension MUST flow into the key (#1650 Medium "+
+				"backstop); dropping one collapses cross-tenant/-subject/-endpoint isolation.",
+				ruleHTTPIdemKeyNodeAgnostic01, spec.fnName, vio)
+		}
 	}
 }
 
-// checkDeriveKeySignature pins DeriveKey to exactly five string params and a
-// single IdempotencyKey result.
-func checkDeriveKeySignature(fn *ast.FuncDecl) []string {
+// checkConstructorSignature pins a key constructor to exactly len(spec.params)
+// string params and a single IdempotencyKey result. Generalizes the former
+// per-DeriveKey freeze over every constructor in idempotencyKeyConstructors.
+func checkConstructorSignature(spec constructorSpec, fn *ast.FuncDecl) []string {
 	var v []string
+	want := len(spec.params)
 	params := flattenFieldList(fn.Type.Params)
-	if len(params) != 5 {
+	if len(params) != want {
 		v = append(v, fmt.Sprintf(
-			"param count = %d, want exactly 5 (tenantID, subject, method, path, idemKey string)", len(params)))
-		return v // positional taint resolution below assumes 5
+			"param count = %d, want exactly %d (a node/listener/cell param is the node-id injection vector)",
+			len(params), want))
+		return v // positional taint resolution below assumes the exact count
 	}
 	for i, p := range params {
 		if !isStringIdent(p.typ) {
@@ -517,40 +605,50 @@ func checkDeriveKeySignature(fn *ast.FuncDecl) []string {
 	return v
 }
 
-// isolationToken is a bit in the set of sanctioned isolation inputs that must
-// flow into the returned key.
-type isolationToken uint8
-
-const (
-	tokTenant  isolationToken = 1 << iota // tenantID → must reach the ns field
-	tokSubject                            // subject  → must reach the key field
-	tokMethod                             // method   → must reach the key field
-	tokPath                               // path     → must reach the key field
-	tokIdemKey                            // idemKey  → must reach the key field
-)
-
-// checkDeriveKeyRequiredUse taint-tracks each of the five params from its source
-// to the ns/key fields of the returned IdempotencyKey literal. tenantID must
-// reach the ns field; subject/method/path/idemKey must reach the key field. Flow
-// (not mere presence) is tracked so a dummy read `_ = method` does not count.
+// checkConstructorRequiredUse taint-tracks each positional param of spec from its
+// source to the ns/key field of the returned IdempotencyKey literal, per the
+// spec's param→sink mapping. Flow (not mere presence) is tracked so a dummy read
+// `_ = commandID` does not count. Generalizes the former DeriveKey-only walk; the
+// taint fixpoint engine is unchanged — only the source map (one positional bit
+// per param) and the final per-param sink check are spec-driven.
 //
-// Completeness: the body is a flat composition of assignments + binary
-// concatenation over the five params + the noTenantSentinel const (no calls,
-// closures, or foreign selectors are needed to express the derivation), so the
-// per-variable token fixpoint follows every value path. Rating is Medium (AST
-// taint); the Hard form that would make a dropped dimension inexpressible is a
-// genuine Go ceiling — see gh #1650.
-func checkDeriveKeyRequiredUse(fn *ast.FuncDecl) []string {
+// Soundness precondition (#1699 F1): the fixpoint uses a deliberately lightweight
+// "a param NAME appearing in a sink-reachable expression ⇒ its VALUE flows" model.
+// That is sound ONLY if the body is a flat composition with no value laundering —
+// which the constructors are by contract (their godoc: "the result is derived ONLY
+// from its parameters", a NUL-joined concat). checkFlatComposition enforces that
+// precondition structurally, rejecting the two laundering vectors that would keep a
+// param's name while losing its value: (a) a CALL or foreign SELECTOR that could
+// drop/transform the value (`key: launder(subject, commandID)`), and (b) REASSIGNING
+// a param so its name later denotes a different value (`commandID = ""; key: …`).
+// With those banned, "name appears ⇒ value flows" holds. Rating stays Medium (AST
+// taint): the residual is param TRANSPOSITION (`key: commandID + subject` swaps two
+// like-typed params, both still flow) — the documented gh #1650 ceiling, NOT closed
+// here. The Hard form that would make a dropped/transposed dimension inexpressible is
+// a genuine Go ceiling — see gh #1650.
+func checkConstructorRequiredUse(spec constructorSpec, fn *ast.FuncDecl) []string {
 	if fn.Body == nil {
 		return []string{"missing body"}
 	}
 	params := flattenFieldList(fn.Type.Params)
-	if len(params) != 5 {
+	if len(params) != len(spec.params) {
 		return nil // the signature freeze reports the shape
 	}
-	src := map[isolationToken]string{
-		tokTenant: params[0].name, tokSubject: params[1].name, tokMethod: params[2].name,
-		tokPath: params[3].name, tokIdemKey: params[4].name,
+
+	// Enforce the flat-composition precondition before trusting the taint walk; a
+	// laundering body makes the lightweight model unsound, so report THAT instead.
+	if v := checkFlatComposition(spec, params, fn.Body); len(v) != 0 {
+		return v
+	}
+
+	// One unique token bit per positional param, keyed to its source name. Safe:
+	// an isolation tuple has a handful of params (DeriveKey=5, DeriveCommandKey=3),
+	// far below uint's bit width — `1 << i` cannot overflow. A constructor with
+	// ≥63 params would break this and is absurd for an isolation tuple; if one ever
+	// appears, switch the token set to math/big.
+	src := map[uint]string{}
+	for i, p := range params {
+		src[uint(i)] = p.name
 	}
 
 	// Sinks are the ns/key fields of the returned IdempotencyKey composite
@@ -558,18 +656,18 @@ func checkDeriveKeyRequiredUse(fn *ast.FuncDecl) []string {
 	const nsSink, keySink = "$ns", "$key"
 	nsExpr, keyExpr, found := returnedKeyFields(fn.Body)
 	if !found {
-		return []string{"DeriveKey must end by returning an IdempotencyKey{ns: …, key: …} composite literal " +
-			"(the taint sinks); a different construction form is a deliberate review checkpoint"}
+		return []string{spec.fnName + " must end by returning an IdempotencyKey{ns: …, key: …} composite " +
+			"literal (the taint sinks); a different construction form is a deliberate review checkpoint"}
 	}
 
-	taint := map[string]isolationToken{}
-	tokensOf := func(expr ast.Expr) isolationToken {
-		var bits isolationToken
+	taint := map[string]uint{}
+	tokensOf := func(expr ast.Expr) uint {
+		var bits uint
 		ast.Inspect(expr, func(n ast.Node) bool {
 			if id, ok := n.(*ast.Ident); ok {
-				for tok, name := range src {
+				for bit, name := range src {
 					if name != "" && id.Name == name {
-						bits |= tok
+						bits |= 1 << bit
 					}
 				}
 				bits |= taint[id.Name]
@@ -607,19 +705,63 @@ func checkDeriveKeyRequiredUse(fn *ast.FuncDecl) []string {
 	}
 
 	var v []string
-	if taint[nsSink]&tokTenant == 0 {
-		v = append(v, "tenantID never flows into the ns field — cross-tenant replay")
-	}
-	for _, want := range []struct {
-		tok   isolationToken
-		label string
-	}{{tokSubject, "subject"}, {tokMethod, "method"}, {tokPath, "path"}, {tokIdemKey, "idemKey"}} {
-		if taint[keySink]&want.tok == 0 {
+	for i, p := range spec.params {
+		bit := uint(1) << uint(i)
+		sinkName, sinkLabel := keySink, "key"
+		if p.sink == fieldNS {
+			sinkName, sinkLabel = nsSink, "ns"
+		}
+		if taint[sinkName]&bit == 0 {
 			v = append(v, fmt.Sprintf(
-				"%s never flows into the key field — isolation dropped (dummy read `_ = %s` does not count)",
-				want.label, want.label))
+				"%s never flows into the %s field — isolation dropped (dummy read `_ = %s` does not count)",
+				p.label, sinkLabel, p.label))
 		}
 	}
+	return v
+}
+
+// checkFlatComposition is the soundness precondition for checkConstructorRequiredUse's
+// lightweight taint model (#1699 F1): the constructor body must derive the key by
+// flat composition over its params + the noTenantSentinel const, with NO value
+// laundering. It rejects two vectors that keep a param's name while losing its value:
+//
+//   - a CallExpr or foreign SelectorExpr anywhere in the body — a helper/method can
+//     drop or transform the value (`key: launder(subject, commandID)`) while the
+//     param names still appear in the arg list, fooling the "name appears ⇒ flow"
+//     model. The legit bodies contain neither (the derivation is pure concat).
+//   - REASSIGNING a constructor param (`commandID = ""`) — rebinding the name to a
+//     different value defeats the model (the legit bodies assign only `ns`, a local).
+//
+// `ns := tenantID` (a DEFINE of a new local) and `ns = noTenantSentinel` (assign to
+// that local) are fine — they do not touch a param.
+func checkFlatComposition(spec constructorSpec, params []flatParam, body *ast.BlockStmt) []string {
+	paramNames := map[string]bool{}
+	for _, p := range params {
+		if p.name != "" {
+			paramNames[p.name] = true
+		}
+	}
+	var v []string
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.CallExpr:
+			v = append(v, spec.fnName+" body contains a call expression — a helper can launder/drop a "+
+				"param's value while its name still appears, defeating the taint model. The derivation "+
+				"must be a flat concatenation of the params (no calls).")
+		case *ast.SelectorExpr:
+			v = append(v, spec.fnName+" body contains a selector expression — a foreign field/method "+
+				"access can launder a param's value. Use only the params + the noTenantSentinel const.")
+		case *ast.AssignStmt:
+			for _, lhs := range x.Lhs {
+				if id, ok := lhs.(*ast.Ident); ok && paramNames[id.Name] {
+					v = append(v, fmt.Sprintf("%s reassigns param %q — rebinding a param name to a "+
+						"different value defeats the taint model (the name keeps appearing but the original "+
+						"value is lost).", spec.fnName, id.Name))
+				}
+			}
+		}
+		return true
+	})
 	return v
 }
 
@@ -737,15 +879,30 @@ func TestHTTPIdempotencyKeyNodeAgnostic01_ReverseBlindSpot(t *testing.T) {
 			ruleHTTPIdemKeyNodeAgnostic01, got)
 	}
 
-	// Taint reverse fixtures (inline DeriveKey source). The conforming body yields
-	// zero; each malformed variant yields ≥1 from the signature freeze or taint walk.
-	if sv, uv := runDeriveKeyDetectors(t, deriveKeyGood); len(sv) != 0 || len(uv) != 0 {
+	// Taint reverse fixtures (inline source). For each sanctioned constructor the
+	// conforming body yields zero; each malformed variant yields ≥1 from the
+	// signature freeze or the taint walk. Resolve specs by name (not by index) so
+	// reordering idempotencyKeyConstructors cannot silently pair a spec with the
+	// wrong fixture family.
+	keySpec := constructorSpecByName(t, deriveKeyFnName)
+	cmdSpec := constructorSpecByName(t, deriveCommandKeyFnName)
+	if sv, uv := runConstructorDetectors(t, keySpec, deriveKeyGood); len(sv) != 0 || len(uv) != 0 {
 		t.Errorf("%s self-test: detectors flagged the conforming DeriveKey (vacuous-pass): sig=%v use=%v",
 			ruleHTTPIdemKeyNodeAgnostic01, sv, uv)
 	}
 	for name, src := range deriveKeyBad {
-		if sv, uv := runDeriveKeyDetectors(t, src); len(sv) == 0 && len(uv) == 0 {
+		if sv, uv := runConstructorDetectors(t, keySpec, src); len(sv) == 0 && len(uv) == 0 {
 			t.Errorf("%s self-test: detectors passed malformed DeriveKey %q (blind spot)",
+				ruleHTTPIdemKeyNodeAgnostic01, name)
+		}
+	}
+	if sv, uv := runConstructorDetectors(t, cmdSpec, deriveCommandKeyGood); len(sv) != 0 || len(uv) != 0 {
+		t.Errorf("%s self-test: detectors flagged the conforming DeriveCommandKey (vacuous-pass): sig=%v use=%v",
+			ruleHTTPIdemKeyNodeAgnostic01, sv, uv)
+	}
+	for name, src := range deriveCommandKeyBad {
+		if sv, uv := runConstructorDetectors(t, cmdSpec, src); len(sv) == 0 && len(uv) == 0 {
+			t.Errorf("%s self-test: detectors passed malformed DeriveCommandKey %q (blind spot)",
 				ruleHTTPIdemKeyNodeAgnostic01, name)
 		}
 	}
@@ -754,7 +911,7 @@ func TestHTTPIdempotencyKeyNodeAgnostic01_ReverseBlindSpot(t *testing.T) {
 // reverseSoleProducerFixtureNames builds a synthetic package scope with an
 // unexported package-level producer. The production detector must include it:
 // same-package helpers can populate IdempotencyKey's unexported fields, so
-// exported-only scanning does not prove DeriveKey is the sole producer.
+// exported-only scanning does not prove the sanctioned set is the only producer.
 func reverseSoleProducerFixtureNames() []string {
 	pkg := types.NewPackage("example.com/reverse/idem", "idem")
 	scope := pkg.Scope()
@@ -824,18 +981,98 @@ func DeriveKey(tenantID, subject, method, path, idemKey string) IdempotencyKey {
 	_ = idemKey
 	return IdempotencyKey{ns: tenantID, key: subject}
 }`,
+	// helper-drop: every param NAME appears (so a syntactic "name appears ⇒ flow"
+	// model passes), but the value is laundered through a call that could drop it.
+	// Caught by the no-CallExpr structural guard (#1699 F1).
+	"helper-drop": `package p
+func DeriveKey(tenantID, subject, method, path, idemKey string) IdempotencyKey {
+	return IdempotencyKey{ns: tenantID, key: launder(subject, method, path, idemKey)}
+}`,
+	// param-rebind: a param is reassigned to a different value, then its NAME is used
+	// in the key — the syntactic model sees the name and passes, but the original
+	// value was killed. Caught by the no-param-reassign structural guard (#1699 F1).
+	"param-rebind": `package p
+func DeriveKey(tenantID, subject, method, path, idemKey string) IdempotencyKey {
+	subject = ""
+	return IdempotencyKey{ns: tenantID, key: subject + method + path + idemKey}
+}`,
 }
 
-// runDeriveKeyDetectors parses an inline DeriveKey source and runs the signature
-// freeze + the required-use taint walk against it.
-func runDeriveKeyDetectors(t *testing.T, src string) (sig, use []string) {
+const deriveCommandKeyGood = `package p
+func DeriveCommandKey(tenantID, subject, commandID string) IdempotencyKey {
+	ns := tenantID
+	if ns == "" {
+		ns = noTenantSentinel
+	}
+	return IdempotencyKey{
+		ns:  ns,
+		key: subject + "\x00" + commandID,
+	}
+}`
+
+// deriveCommandKeyBad: each fixture drops one isolation dimension (caught by the
+// taint walk) or adds a node-id param (caught by the signature freeze). The
+// dummy-read fixture references commandID but flows only subject into the key.
+var deriveCommandKeyBad = map[string]string{ //nolint:gosec,gochecknoglobals // G101: Go source fixtures, not credentials
+	"node-id-param": `package p
+func DeriveCommandKey(tenantID, subject, commandID, podID string) IdempotencyKey {
+	return IdempotencyKey{ns: tenantID + podID, key: subject + commandID}
+}`,
+	"missing-tenant": `package p
+func DeriveCommandKey(tenantID, subject, commandID string) IdempotencyKey {
+	return IdempotencyKey{ns: noTenantSentinel, key: subject + commandID}
+}`,
+	"missing-subject": `package p
+func DeriveCommandKey(tenantID, subject, commandID string) IdempotencyKey {
+	return IdempotencyKey{ns: tenantID, key: commandID}
+}`,
+	"missing-commandid": `package p
+func DeriveCommandKey(tenantID, subject, commandID string) IdempotencyKey {
+	return IdempotencyKey{ns: tenantID, key: subject}
+}`,
+	"dummy-read-bypass": `package p
+func DeriveCommandKey(tenantID, subject, commandID string) IdempotencyKey {
+	_ = commandID
+	return IdempotencyKey{ns: tenantID, key: subject}
+}`,
+	// helper-drop / param-rebind: same two laundering vectors as deriveKeyBad,
+	// covering the 3-param constructor. Caught by the structural guards (#1699 F1).
+	"helper-drop": `package p
+func DeriveCommandKey(tenantID, subject, commandID string) IdempotencyKey {
+	return IdempotencyKey{ns: tenantID, key: launder(subject, commandID)}
+}`,
+	"param-rebind": `package p
+func DeriveCommandKey(tenantID, subject, commandID string) IdempotencyKey {
+	commandID = ""
+	return IdempotencyKey{ns: tenantID, key: subject + commandID}
+}`,
+}
+
+// constructorSpecByName returns the sanctioned constructor spec with the given
+// func name from idempotencyKeyConstructors, failing the test if absent. Used by
+// the reverse self-check to pair a spec with its fixture family by name rather
+// than by a fragile slice index.
+func constructorSpecByName(t *testing.T, fnName string) constructorSpec {
+	t.Helper()
+	for _, c := range idempotencyKeyConstructors {
+		if c.fnName == fnName {
+			return c
+		}
+	}
+	require.FailNowf(t, "constructor spec not found", "no constructorSpec %q in idempotencyKeyConstructors", fnName)
+	return constructorSpec{}
+}
+
+// runConstructorDetectors parses an inline constructor source and runs the
+// signature freeze + the required-use taint walk for the given spec.
+func runConstructorDetectors(t *testing.T, spec constructorSpec, src string) (sig, use []string) {
 	t.Helper()
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "inline.go", src, 0)
-	require.NoError(t, err, "parse inline DeriveKey fixture")
-	fn, ok := findTopLevelFuncDecl(f, deriveKeyFnName)
-	require.True(t, ok, "inline fixture missing DeriveKey")
-	return checkDeriveKeySignature(fn), checkDeriveKeyRequiredUse(fn)
+	require.NoErrorf(t, err, "parse inline %s fixture", spec.fnName)
+	fn, ok := findTopLevelFuncDecl(f, spec.fnName)
+	require.Truef(t, ok, "inline fixture missing %s", spec.fnName)
+	return checkConstructorSignature(spec, fn), checkConstructorRequiredUse(spec, fn)
 }
 
 // ---------------------------------------------------------------------------

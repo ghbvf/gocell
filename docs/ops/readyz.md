@@ -377,6 +377,28 @@ connection Ping cannot detect.
 | `accesscore_repo_ready` | accesscore | `sessions` | PG only; mem stores always return nil (ready) |
 | `auditcore_repo_ready` | auditcore | `audit_entries` (via `Tail`) | PG only; mem stores always return nil (ready) |
 
+### Adapter-level: serving-role capability probe
+
+`postgres_app_role_restricted_ready` is an **adapter-level** probe registered by
+`adapters/postgres` (not cell-level). It queries
+`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user` and
+fails (503) when the serving role is a superuser or carries `BYPASSRLS`. This is a
+**distinct failure domain** from `postgres_ready` (connection alive) and from the
+cell-level repo probes (schema shape):
+
+- Green `postgres_ready` + failing `postgres_app_role_restricted_ready` → serving
+  pool is connected but running as a privileged role that bypasses RLS. Remediation:
+  change `GOCELL_CONFIGCORE_DATABASE_URL` to use role `gocell_app` and restart.
+- Red on startup: local dev env still uses the admin `gocell` role; see
+  `docs/ops/local-docker-deploy.md` §Dual-role PostgreSQL.
+
+This probe exists because `schema_guard.verifyRLS` only validates that RLS
+policies are **defined** on the correct tables; it does not verify that the
+**serving connection role** honours those policies. A superuser or `BYPASSRLS`
+role ignores all policies at runtime even if the schema is correct.
+
+ref: `docs/architecture/202606071200-1676-adr-restricted-app-serving-pool.md` §Decision.
+
 These probes are **not synonymous** with `postgres_ready`. A green `postgres_ready`
 and a failing `accesscore_repo_ready` means the PG connection is alive but the
 `sessions` table is inaccessible — a different remediation path (migration replay,
@@ -387,10 +409,11 @@ Cell-level repo probe names appear in the verbose breakdown under `dependencies`
 
 ```json
 "dependencies": {
-  "postgres_ready":       { "status": "healthy", "duration_ms": 3 },
-  "configcore_repo_ready": { "status": "healthy", "duration_ms": 2 },
-  "accesscore_repo_ready": { "status": "healthy", "duration_ms": 1 },
-  "auditcore_repo_ready":  { "status": "healthy", "duration_ms": 2 }
+  "postgres_ready":                       { "status": "healthy", "duration_ms": 3 },
+  "postgres_app_role_restricted_ready":   { "status": "healthy", "duration_ms": 1 },
+  "configcore_repo_ready":                { "status": "healthy", "duration_ms": 2 },
+  "accesscore_repo_ready":                { "status": "healthy", "duration_ms": 1 },
+  "auditcore_repo_ready":                 { "status": "healthy", "duration_ms": 2 }
 }
 ```
 

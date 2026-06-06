@@ -46,4 +46,12 @@ const (
 	// (B2-X-03) — invalid indexes typically indicate an aborted CREATE INDEX
 	// CONCURRENTLY and must be DROPped manually before the binary may proceed.
 	ErrAdapterPGInvalidIndex errcode.Code = "ERR_ADAPTER_PG_INVALID_INDEX"
+
+	// ErrAdapterPGRoleBypassRLS signals that the serving connection's current_user
+	// is a superuser or carries BYPASSRLS — either bypasses ROW LEVEL SECURITY,
+	// making the FORCE RLS tenant_isolation policies (migrations 052/053) a runtime
+	// no-op. Surfaced by the postgres_app_role_restricted_ready precondition probe
+	// (#1676 [F-B11]); a serving pool that trips this must NOT be considered ready.
+	//nolint:gosec // G101 false positive: errcode sentinel naming the PG BYPASSRLS role attribute, not a credential
+	ErrAdapterPGRoleBypassRLS errcode.Code = "ERR_ADAPTER_PG_ROLE_BYPASS_RLS"
 )
