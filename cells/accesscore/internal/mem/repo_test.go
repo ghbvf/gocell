@@ -62,7 +62,7 @@ func TestUserRepository_ConcurrentCreateAndGet(t *testing.T) {
 	for r := range readers {
 		wg.Go(func() {
 			for range iterations {
-				_, _ = repo.GetByID(ctx, "uid-w0-i0")
+				_, _ = repo.GetByIDInTenant(ctx, testTenantID, "uid-w0-i0")
 				_, _ = repo.GetByUsername(ctx, testTenantID, "user-w0-i0")
 			}
 			_ = r
@@ -83,9 +83,9 @@ func TestUserRepository_NotFoundErrors(t *testing.T) {
 		wantInternal string
 	}{
 		{
-			name: "get by id",
+			name: "get by id in tenant",
 			call: func() error {
-				_, err := repo.GetByID(ctx, "usr-missing")
+				_, err := repo.GetByIDInTenant(ctx, testTenantID, "usr-missing")
 				return err
 			},
 			wantCode:     errcode.ErrAuthUserNotFound,

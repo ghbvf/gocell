@@ -27,12 +27,11 @@ const (
 // It is always vended by Store.UserRepository() so the shared mutex covers
 // any cross-repo invariant (e.g. effective-admin checks in RoleRepository).
 //
-// # Tenancy (#1337 PR-2)
+// # Tenancy (#1337 PR-2 + PR-3b)
 //
 // Methods take a mandatory tenant.TenantID positional parameter and scope all
-// reads/writes to the tenant's partition of the underlying maps. The by-PK
-// tenant-deriving carve-out (GetByID) still looks up by the global UUID PK
-// without a tenant predicate, mirroring the PG adapter.
+// reads/writes to the tenant's partition of the underlying maps. After PR-3b
+// the tenant-less GetByID carve-out is removed; all by-PK reads are tenant-scoped.
 //
 // # Lock contract
 //
@@ -102,32 +101,6 @@ func checkProfileUniqueLocked(tByName, tByEmail map[string]*domain.User, userID,
 	return nil
 }
 
-// userTenantMismatch reports whether a non-nil user belongs to a tenant other
-// than t — used by the GetByIDForUpdate carve-out path to reject a cross-tenant
-// row found via the global by-PK index (collapsing to not-found, mirroring the
-// PG `WHERE tenant_id = $N AND id = $1` predicate).
-func userTenantMismatch(existing *domain.User, t tenant.TenantID) bool {
-	return existing != nil && existing.TenantID != t
-}
-
-// GetByID returns the User with the given ID. Tenant-deriving carve-out: no
-// tenant predicate — looks up by the global UUID PK. Safe to call both inside
-// and outside a RunInTx closure; see UserRepository lock contract.
-func (r *UserRepository) GetByID(ctx context.Context, id string) (*domain.User, error) {
-	if !r.store.inLiveTx(ctx) {
-		r.store.mu.Lock()
-		defer r.store.mu.Unlock()
-	}
-
-	u, ok := r.store.usersByID[id]
-	if !ok {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
-			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgIDFmt, id))))
-	}
-	return cloneUser(u), nil
-}
-
 // GetByIDInTenant fetches a user by primary key and verifies it belongs to t.
 // Returns ErrAuthUserNotFound when the row is absent OR in a different tenant,
 // collapsing both cases to prevent cross-tenant existence enumeration.
@@ -171,29 +144,12 @@ func (r *UserRepository) GetByUsername(ctx context.Context, t tenant.TenantID, u
 }
 
 // GetByIDForUpdate (S4d): mem implementation of SELECT ... FOR UPDATE
-// semantics. The lookup is tenant-scoped (NOT the GetByID carve-out): callers
-// are post-auth and carry a tenant, so the for-update read must reject a
-// cross-tenant row (mirrors PG selectUserByIDForUpdateSQL's WHERE tenant_id
-// predicate). Cross-tenant rows found via the global by-PK index are collapsed
-// to ErrAuthUserNotFound. The mem store serializes via store.mu held in RunInTx
+// semantics. Tenant-scoped: callers are post-auth and carry a tenant. After
+// PR-3b this delegates directly to GetByIDInTenant (the former GetByID
+// carve-out is removed). The mem store serializes via store.mu held in RunInTx
 // — for details see UserRepository lock contract.
 func (r *UserRepository) GetByIDForUpdate(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
-	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
-	}
-	// Tenant-scoped (NOT the GetByID carve-out): GetByIDForUpdate callers are
-	// post-auth and carry a tenant, so the for-update read must reject a
-	// cross-tenant row (mirrors PG selectUserByIDForUpdateSQL's tenant predicate).
-	u, err := r.GetByID(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if userTenantMismatch(u, t) {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
-			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgIDFmt, id))))
-	}
-	return u, nil
+	return r.GetByIDInTenant(ctx, t, id)
 }
 
 // GetByUsernameForUpdate (S4d): username-keyed counterpart to

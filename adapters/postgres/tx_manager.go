@@ -121,10 +121,52 @@ func setLocalTenant(ctx context.Context, tx pgx.Tx) error {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
 			"tx: invalid tenant scope for RLS GUC injection", err)
 	}
+	return writeTenantGUC(ctx, tx, tid)
+}
+
+// writeTenantGUC is the single physical writer of the app.tenant_id RLS GUC. It
+// lives in this file so PG-SETLOCAL-FUNNEL-01 (which locks the GUC-write string
+// literal to tx_manager.go) stays satisfied — both setLocalTenant (tx-start, from
+// the ctx scope) and ApplyTenantScope (mid-tx, explicit) route through here so the
+// `set_config('app.tenant_id', $1, true)` literal appears exactly once.
+func writeTenantGUC(ctx context.Context, tx pgx.Tx, tid tenant.TenantID) error {
 	if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tid.String()); err != nil {
 		return classifyPGError(err, ErrAdapterPGQuery, "set local tenant scope")
 	}
 	return nil
+}
+
+// ApplyTenantScope sets the RLS app.tenant_id GUC on the AMBIENT transaction
+// mid-flight. It exists for paths that cannot know the tenant at tx-start because
+// they must read a non-RLS row inside the tx to learn it — specifically
+// sessionrefresh, which Peeks the refresh token and reads sessions.tenant_id
+// (neither table is under FORCE RLS) inside the cross-store tx (REFRESH-CROSS-
+// STORE-TX-01), then derives the tenant and scopes the subsequent users/roles
+// reads with this call.
+//
+// PRECONDITIONS (caller responsibility): (1) called inside a RunInTx (an ambient
+// pgx.Tx must be in ctx, else this returns an error — it never silently runs
+// unscoped); (2) every statement executed in the tx BEFORE this call touches only
+// non-RLS tables. Calling it after an RLS-table statement would mean that earlier
+// statement ran fail-closed (0 rows) — the late scope cannot retroactively fix it.
+//
+// is_local=true keeps the GUC transaction-scoped (auto-reset on COMMIT/ROLLBACK),
+// identical to setLocalTenant.
+func (tm *TxManager) ApplyTenantScope(ctx context.Context, canonicalTenantID string) error {
+	tx, ok := persistence.TxFromContext[pgx.Tx](ctx)
+	if !ok {
+		return errcode.New(errcode.KindInternal, ErrAdapterPGQuery,
+			"ApplyTenantScope: no ambient transaction (must be called inside RunInTx)")
+	}
+	// Re-validate (defense in depth): the typed pkg/tenant.TenantID is enforced at
+	// the cells scopedtx funnel, but the kernel CellTxManager boundary is a string,
+	// so parse it back to a canonical TenantID here before writing the GUC.
+	tid, err := tenant.ParseTenantID(canonicalTenantID)
+	if err != nil {
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+			"ApplyTenantScope: invalid tenant scope for RLS GUC injection", err)
+	}
+	return writeTenantGUC(ctx, tx, tid)
 }
 
 // TxManager provides transactional execution with context-embedded pgx.Tx,
