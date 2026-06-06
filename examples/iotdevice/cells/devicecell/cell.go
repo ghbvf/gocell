@@ -14,6 +14,7 @@ import (
 	dto "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
 	devicecommand "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommand"
 	devicecommandinternal "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommandinternal"
+	devicecommandrpc "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommandrpc"
 	devicelist "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicelist"
 	deviceregister "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/deviceregister"
 	devicestatus "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicestatus"
@@ -139,6 +140,13 @@ type DeviceCell struct {
 
 	// +slice:route:slice=devicelist,subPath=/api/v1/devices
 	listHandler *listcontract.Handler
+
+	// commandRPCServer serves the grpc.device.command.v1 contract (first
+	// end-to-end grpc handler, #1151). It carries no +slice:route marker — grpc
+	// serve is derived by cellgen from slice.yaml contractUsages[role=serve]
+	// (#1601), which resolves this field by "pointer-type package == sliceID"
+	// (devicecommandrpc) and emits the reg.GRPCService(...) call into cell_gen.go.
+	commandRPCServer *devicecommandrpc.Server
 }
 
 // RegisterCommandQueue implements kernel/command.QueueRegistrar. The supplied
@@ -329,6 +337,11 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 		return fmt.Errorf("device-command-internal: %w", err)
 	}
 	c.commandHandler = devicecommand.NewHandler(pubSvc)
+	// device-command grpc slice: first end-to-end unary RPC (#1151). The
+	// cell_gen.go reg.GRPCService(...) call (derived from slice.yaml) registers
+	// c.commandRPCServer with the gRPC listener; construct it here.
+	c.commandRPCServer = devicecommandrpc.NewServer(c.clk)
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicecommandrpc.SliceMetadata()))
 	// Register the sync command-bus enqueue handler into the process registry.
 	// EnqueueCommandAdapter bridges the generated cmdenqueue.Handler to the same
 	// devicecmd.Service.Enqueue logic the HTTP enqueue path uses; cmdenqueue.Register

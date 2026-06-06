@@ -19,6 +19,9 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/auth"
 
+	"google.golang.org/grpc"
+
+	adaptersgrpc "github.com/ghbvf/gocell/adapters/grpc"
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	devicecell "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell"
 	devicemem "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/mem"
@@ -34,6 +37,8 @@ import (
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	commandruntime "github.com/ghbvf/gocell/runtime/command"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/grpc/interceptor"
+	rtmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
 // runIotdevice is the hand-written runtime helper for the iotdevice assembly.
@@ -88,7 +93,8 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		// the publisher closer is mandatory, not redundant (PR #1364 review F1).
 		// mqttChannelWiringFor derives both; its godoc documents the LIFO
 		// drain-before-disconnect ordering.
-		mqttBootstrapOpts = append(mqttBootstrapOpts,
+		mqttBootstrapOpts = append(
+			mqttBootstrapOpts,
 			mqttChannelWiringFor(mqttPub, mqttConn).bootstrapOptions()...,
 		)
 	}
@@ -151,6 +157,31 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		return fmt.Errorf("invalid JWT auth plan: %w", err)
 	}
 
+	// gRPC listener (first end-to-end grpc handler, #1151). devicecell registers
+	// grpc.device.command.v1 on cell.PrimaryListener (cell_gen.go reg.GRPCService),
+	// so a grpc listener with that ref MUST be wired or bootstrap phase7b fails
+	// fast. It shares the PrimaryListener role with the HTTP listener (:8083) but
+	// binds its own port :8084 — grpc and HTTP listener refs are independent
+	// namespaces. The interceptor chain mirrors the HTTP primary listener's JWT
+	// auth: every RPC is authenticated (per-method public is deferred to #1675).
+	// Metrics record to an in-memory collector — the iotdevice demo runs with a
+	// Nop metrics provider, so neither HTTP nor gRPC metrics are exported to
+	// /metrics here; real grpc metric export + cell attribution are PR-9 / #1383.
+	grpcServer, err := adaptersgrpc.New(adaptersgrpc.Config{
+		Addr: ":8084",
+		TLS:  adaptersgrpc.TLSConfig{AllowInsecure: true},
+		ServerOptions: []grpc.ServerOption{
+			interceptor.NewUnaryChain(interceptor.Deps{
+				Verifier:  jwtVerifier,
+				Clock:     clk,
+				Collector: rtmetrics.NewInMemoryGRPCCollector(),
+			}),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("build grpc server: %w", err)
+	}
+
 	opts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
@@ -159,6 +190,7 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		// #673: a dedicated HealthListener is mandatory — /healthz, /readyz,
 		// /metrics no longer fall back onto the primary listener.
 		bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9093", []auth.ListenerAuth{auth.AuthNone{}}),
+		bootstrap.WithGRPCListener(cell.PrimaryListener, grpcServer, ":8084"),
 		bootstrap.WithHealthRoutes(healthOpts...),
 	}
 	// MQTT channel options (health probe + managed closer) when enabled.
@@ -298,13 +330,15 @@ func assertModuleIDsMatch(assemblyID string, cellIDs []string, mods []CellModule
 	if len(cellIDs) != len(mods) {
 		return fmt.Errorf(
 			"%s: assembly.yaml cells (%d) ↔ modules_gen.go (%d) length mismatch; %s",
-			assemblyID, len(cellIDs), len(mods), hint)
+			assemblyID, len(cellIDs), len(mods), hint,
+		)
 	}
 	for i, want := range cellIDs {
 		if got := mods[i].ID(); got != want {
 			return fmt.Errorf(
 				"%s: assembly.yaml cells[%d]=%q ↔ modules_gen.go=%q drift; %s",
-				assemblyID, i, want, got, hint)
+				assemblyID, i, want, got, hint,
+			)
 		}
 	}
 	return nil

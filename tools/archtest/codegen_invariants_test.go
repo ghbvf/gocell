@@ -384,20 +384,31 @@ func TestCodegenContractGen02_GeneratedHeader(t *testing.T) {
 }
 
 // TestCodegenContractUserOverlap01 verifies CODEGEN-CONTRACT-USER-OVERLAP-01.
-// No hand-written .go files (non _gen.go suffix) are permitted under
-// generated/contracts/.
+// No hand-written .go files (neither _gen.go nor .pb.go suffix) are permitted
+// under generated/contracts/.
 func TestCodegenContractUserOverlap01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 	for _, abs := range detectUserFilesUnderGeneratedContracts(t, root, generatedContractsSubdir) {
 		t.Errorf("CODEGEN-CONTRACT-USER-OVERLAP-01: %s is a hand-written .go file under generated/contracts/"+
-			" — only _gen.go files are permitted; move helpers to the consuming package",
+			" — only _gen.go (contractgen) and .pb.go (buf) files are permitted; move helpers to the consuming package",
 			relSlashOrAbs(root, abs))
 	}
 }
 
 // detectUserFilesUnderGeneratedContracts returns absolute paths of every
-// non-_gen.go file under root/dirRel.
+// machine-generated-suffix-less .go file under root/dirRel (i.e. neither
+// contractgen `_gen.go` nor buf `.pb.go`).
+//
+// The `.pb.go` exemption is the buf protoc-gen-go / protoc-gen-go-grpc output
+// landing under generated/contracts/grpc/ (per buf.gen.yaml out, ADR
+// 202605260000). It is generated, not hand-written — protoc-gen-go is a
+// deterministic codegen funnel from the .proto (single-source guarded by
+// GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01 + hermetic buf.gen.yaml), so it belongs
+// in generated/ exactly like contractgen output. The "no hand-written code in
+// generated/contracts/" guarantee is unchanged for plain `.go` files. The buf
+// header is independently asserted by buf's own DO-NOT-EDIT banner; the suffix
+// check here is symmetric with the existing `_gen.go` suffix handling.
 //
 // Single source for CODEGEN-CONTRACT-USER-OVERLAP-01's scope construction —
 // shared by the production rule (TestCodegenContractUserOverlap01) and the
@@ -412,7 +423,7 @@ func detectUserFilesUnderGeneratedContracts(t *testing.T, root, dirRel string) [
 	Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			abs := p.Fset.Position(file.Pos()).Filename
-			if strings.HasSuffix(abs, "_gen.go") {
+			if strings.HasSuffix(abs, "_gen.go") || strings.HasSuffix(abs, ".pb.go") {
 				continue
 			}
 			userFiles = append(userFiles, abs)

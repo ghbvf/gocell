@@ -118,27 +118,34 @@ type Cell struct {
 ## Step 4 — generate
 
 ```bash
-$ make proto-gen          # buf generates .pb.go from .proto
-$ gocell generate         # contractgen reads contract.yaml + slice.yaml, emits:
-                          #  - generated/contracts/grpc/todoorder/command/v1/server_gen.go
-                          #  - generated/contracts/grpc/todoorder/command/v1/client_gen.go
-                          #  - generated/contracts/grpc/todoorder/command/v1/methods_gen.go
-                          #  - cells/todoorder/cell_gen.go (Init calls reg.GRPCService)
+$ make proto-gen          # buf generates the .pb.go from .proto:
+                          #  - generated/contracts/grpc/todoorder/command/v1/order_command.pb.go      (messages)
+                          #  - generated/contracts/grpc/todoorder/command/v1/order_command_grpc.pb.go  (service)
+$ gocell generate         # contractgen emits NOTHING for kind=grpc (#1688); cellgen
+                          # emits cells/todoorder/cell_gen.go (Init calls reg.GRPCService)
 ```
 
-Generated `server_gen.go` declares:
+> **The grpc server contract is buf's generated `pb.<Svc>Server` interface — there is
+> no GoCell-side generated interface (#1688).** buf's `protoc-gen-go-grpc` already
+> emits, from the .proto, the proto-derived server contract that declares every RPC
+> and carries `mustEmbedUnimplemented<Svc>Server()` for forward compatibility. A
+> second contractgen interface would be a register-incompatible, package-colliding
+> duplicate, so contractgen emits no Go file for grpc. The cell author implements
+> the buf interface directly (idiomatic grpc-go / Kratos). This mirrors how the
+> error model lands at the interceptor layer (Kratos `GRPCStatus()`), not at a
+> per-handler typed-response envelope.
+
+buf's `order_command_grpc.pb.go` declares (the interface your handler implements):
 
 ```go
-type OrderCommandServer interface {
-    CreateOrder(ctx context.Context, req *orderv1.CreateOrderRequest) (OrderCommandCreateOrderResponseObject, error)
+type OrderCommandServiceServer interface {
+    CreateOrder(context.Context, *CreateOrderRequest) (*CreateOrderResponse, error)
+    mustEmbedUnimplementedOrderCommandServiceServer()
 }
 
-type OrderCommandCreateOrderResponseObject interface {
-    visitOrderCommandCreateOrderResponse(grpc.ServerStream) error
-}
+type UnimplementedOrderCommandServiceServer struct{} // embed this (by value) for forward-compat
 
-type OrderCommandCreateOrder200JSONResponse orderv1.CreateOrderResponse  // success
-type OrderCommandCreateOrder4xxErrorResponse errcode.Error               // error envelope
+func RegisterOrderCommandServiceServer(s grpc.ServiceRegistrar, srv OrderCommandServiceServer)
 ```
 
 ---
@@ -152,75 +159,79 @@ package ordercommand
 import (
     "context"
 
-    "github.com/gocell/gocell/generated/contracts/grpc/todoorder/command/v1"
+    orderv1 "github.com/gocell/gocell/generated/contracts/grpc/todoorder/command/v1"
     "github.com/gocell/gocell/pkg/errcode"
 )
 
 type Service struct {
-    repo     domain.OrderRepository       `gocell:"required"`
-    txRunner persistence.CellTxManager    `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"ordercommand: TxRunner required"` //nolint:lll
+    orderv1.UnimplementedOrderCommandServiceServer // by-value embed → forward-compat; satisfies the pb interface
+    repo     domain.OrderRepository    `gocell:"required"`
+    txRunner persistence.CellTxManager `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"ordercommand: TxRunner required"` //nolint:lll
 }
 
 func (s *Service) CreateOrder(
     ctx context.Context,
     req *orderv1.CreateOrderRequest,
-) (orderv1.OrderCommandCreateOrderResponseObject, error) {
+) (*orderv1.CreateOrderResponse, error) {
     if req.CustomerId == "" {
-        return orderv1.OrderCommandCreateOrder4xxErrorResponse(*errcode.New(
+        // errcode.Error flows out as the Go error; the gRPC interceptor maps it to a
+        // status code (Recovery → codes.Internal today; the full errcode→codes table
+        // lands at runtime/grpc/interceptor in PR-12, the Kratos GRPCStatus() model).
+        return nil, errcode.New(
             errcode.ErrValidationFailed,
             "customer_id is required",
             errcode.WithDetails(errcode.PublicString("field", "customer_id")),
-        )), nil
+        )
     }
 
     order, err := s.createOrderTx(ctx, req)
     if err != nil {
-        return nil, err   // framework converts via runtime/grpc/interceptor/errcode_mapping.go
+        return nil, err
     }
 
-    return orderv1.OrderCommandCreateOrder200JSONResponse{
+    return &orderv1.CreateOrderResponse{
         OrderId:           order.ID,
         CreatedAtUnixNano: order.CreatedAt.UnixNano(),
     }, nil
 }
 ```
 
-**Return shapes**:
-- `(typed success, nil)` → 200-equivalent
-- `(typed 4xx envelope, nil)` → declared business error
-- `(nil, *errcode.Error)` → framework 5xx-equivalent (panic recovery or infrastructure fault)
-
-The four-channel redaction discipline applies identically to HTTP: `errcode.Error.Internal` never reaches the gRPC trailer; for `KindInternal/Unavailable/DeadlineExceeded`, `Details` are stripped at the wire.
+**Return shapes** (idiomatic grpc-go):
+- `(*pb.Response, nil)` → success.
+- `(nil, error)` → failure. Return an `*errcode.Error` for a domain error; the interceptor
+  chain maps it to a gRPC status code and applies the same redaction discipline as HTTP
+  (`errcode.Error.Internal` never reaches the trailer; `Details` stripped for 5xx-class codes).
+  The precise errcode→codes table is PR-12.
 
 ---
 
 ## Step 6 — call from another cell
 
+Use buf's generated standard gRPC client (`pb.New<Svc>Client`):
+
 ```go
-// in a consuming cell's handler
+// in a consuming cell
 import (
     orderv1 "github.com/gocell/gocell/generated/contracts/grpc/todoorder/command/v1"
+    "google.golang.org/grpc"
 )
 
-type Service struct {
-    orders orderv1.OrderCommandClient   `gocell:"required"`
-}
-
-func (s *Service) PlaceOrder(ctx context.Context, ...) error {
-    resp, err := s.orders.CreateOrder(ctx, &orderv1.CreateOrderRequest{
+func placeOrder(ctx context.Context, conn *grpc.ClientConn, customerID string, items []string) error {
+    client := orderv1.NewOrderCommandServiceClient(conn)
+    resp, err := client.CreateOrder(ctx, &orderv1.CreateOrderRequest{
         CustomerId: customerID,
         ItemIds:    items,
     })
     if err != nil {
-        // err is *errcode.Error — public Message + Details present, Internal absent
+        // err is a gRPC status; the interceptor carried the errcode public Message + Details.
         return fmt.Errorf("place order: %w", err)
     }
-    // resp.OrderId available
+    _ = resp.OrderId
     return nil
 }
 ```
 
-Context (deadline, trace, correlation_id, principal envelope) propagates automatically via the generated client.
+Context (deadline, trace, correlation_id, principal envelope) propagates automatically via the standard client + interceptor chain.
 
 ---
 

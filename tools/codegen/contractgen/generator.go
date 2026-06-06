@@ -39,12 +39,17 @@ type artifactDef struct {
 // e.g. "types" for "types_gen.go".
 func (a artifactDef) word() string { return strings.TrimSuffix(a.file, "_gen.go") }
 
-// contractArtifacts is the kind × artifact matrix. webhook is intentionally
-// absent (zero artifacts by design); projection and grpc need no special-casing
-// — they are covered by the types/iface kind sets.
+// contractArtifacts is the kind × artifact matrix. webhook and grpc are
+// intentionally absent (zero contractgen artifacts by design): webhook wires via
+// cellgen ReceiverSpec literals; grpc's server contract is buf's generated
+// pb.<Svc>Server interface (the ADR-202605260000 D5 proto-derived Hard funnel) —
+// contractgen would only emit a redundant, register-incompatible parallel
+// interface that also collides on package name with the pb.go in the same dir,
+// so it emits nothing (#1688). projection needs no special-casing — it is
+// covered by the types/iface kind sets.
 var contractArtifacts = []artifactDef{
-	{"types.tmpl", "types_gen.go", []string{"http", "event", "command", "projection", "grpc", "saga"}},
-	{"iface.tmpl", "iface_gen.go", []string{"http", "event", "projection", "grpc", "saga"}},
+	{"types.tmpl", "types_gen.go", []string{"http", "event", "command", "projection", "saga"}},
+	{"iface.tmpl", "iface_gen.go", []string{"http", "event", "projection", "saga"}},
 	{"handler.tmpl", "handler_gen.go", []string{"http"}},
 	{"spec.tmpl", "spec_gen.go", []string{"event"}},
 	{"subscription.tmpl", "subscription_gen.go", []string{"event"}},
@@ -160,9 +165,14 @@ func Generate(root string, p *metadata.ProjectMeta, opts Options) (Result, error
 // (reading each .proto for package/import identity) and fails fast on a
 // duplicate (proto package, service) or a divergent import path for the
 // same proto service. The single source of proto identity is the .proto file
-// (GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01); this re-reads the protos that
-// buildGRPCSpec also reads (codegen is not a hot path), keeping the
-// cross-contract gate separate from per-contract spec construction.
+// (GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01).
+//
+// Since #1688 deleted contractgen's grpc per-contract spec (kind=grpc now emits
+// zero artifacts — buf's pb.<Svc>Server is the sole server contract), this
+// pre-pass is the ONLY contractgen proto-read/validation point: validateGRPCProtoPath
+// + ReadProtoServiceInfo here fail-close every codegen:true grpc contract's proto
+// (path under contracts/grpc/, exported unary RPCs, valid go_package) before any
+// generation runs. Governance FMT-37 is the parallel gate in `gocell validate`.
 func checkGRPCProtoCollisions(root string, p *metadata.ProjectMeta) error {
 	reg := newProtoRegistry()
 	ids := make([]string, 0, len(p.Contracts))
@@ -177,15 +187,16 @@ func checkGRPCProtoCollisions(root string, p *metadata.ProjectMeta) error {
 	sort.Strings(ids)
 	for _, id := range ids {
 		g := p.Contracts[id].Endpoints.GRPC
-		// This pre-pass runs before generateOneContract → buildGRPCSpec, so it
-		// applies the proto-path guards itself (it cannot rely on buildGRPCSpec
-		// having validated yet). The proto is read here and again in buildGRPCSpec;
-		// codegen is not a hot path and threading a shared registry through
-		// buildContractSpec's signature would be more invasive than the re-read.
+		// Sole grpc proto validation gate (#1688): applies the proto-path guards +
+		// ReadProtoServiceInfo fail-closed for every codegen:true grpc contract.
 		if err := validateGRPCProtoPath(id, g.Proto); err != nil {
 			return err
 		}
-		info, err := ReadProtoServiceInfo(filepath.Join(root, filepath.FromSlash(g.Proto)), g.Service)
+		// Resolve module-relative proto ("contracts/grpc/…") to a repo-root-relative
+		// path so satellite-module contracts (examples/iotdevice) read the proto at
+		// "<moduleBase>/contracts/grpc/…" rather than the wrong repo-root location (#1151).
+		protoRel := metadata.GRPCProtoRepoRelPath(p.Contracts[id].File, g.Proto)
+		info, err := ReadProtoServiceInfo(filepath.Join(root, filepath.FromSlash(protoRel)), g.Service)
 		if err != nil {
 			return fmt.Errorf("contract %q: %w", id, err)
 		}
@@ -220,11 +231,13 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 
 	pkgDir := filepath.Join(root, filepath.FromSlash(spec.PackagePath))
 
-	// webhook: recognized, zero artifacts by design — registration uses
-	// kernel/webhook.ReceiverSpec literals via cellgen, no per-contract package.
-	if spec.Kind == "webhook" {
-		slog.Debug("contractgen: webhook contract emits zero artifacts by design; wiring derives via cellgen from slice.yaml",
-			"contractID", contractID)
+	// webhook / grpc: recognized, zero contractgen artifacts by design. webhook
+	// registration uses kernel/webhook.ReceiverSpec literals via cellgen; grpc's
+	// server contract is buf's generated pb.<Svc>Server (#1688) — neither has a
+	// per-contract contractgen package.
+	if spec.Kind == "webhook" || spec.Kind == "grpc" {
+		slog.Debug("contractgen: contract emits zero artifacts by design; wiring derives via cellgen / buf",
+			"contractID", contractID, "kind", spec.Kind)
 		return nil
 	}
 
@@ -310,11 +323,13 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID, m
 		return nil, err
 	}
 
-	// webhook: recognized, zero artifacts by design — registration uses
-	// kernel/webhook.ReceiverSpec literals via cellgen, no per-contract package.
-	if spec.Kind == "webhook" {
-		slog.Debug("contractgen: webhook contract emits zero artifacts by design; wiring derives via cellgen from slice.yaml",
-			"contractID", contractID)
+	// webhook / grpc: recognized, zero contractgen artifacts by design. webhook
+	// registration uses kernel/webhook.ReceiverSpec literals via cellgen; grpc's
+	// server contract is buf's generated pb.<Svc>Server (#1688) — neither has a
+	// per-contract contractgen package.
+	if spec.Kind == "webhook" || spec.Kind == "grpc" {
+		slog.Debug("contractgen: contract emits zero artifacts by design; wiring derives via cellgen / buf",
+			"contractID", contractID, "kind", spec.Kind)
 		return nil, nil
 	}
 

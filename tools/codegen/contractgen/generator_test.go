@@ -21,8 +21,9 @@ import (
 // implicitly, the absence of every other artifact — so the command row also
 // pins iface_gen.go's exclusion. The order IS the emit/append order, and
 // RenderContractArtifacts returns artifacts in it (consumed by
-// cellgen/generatedverify), so reordering is a wire change. webhook and any
-// unknown kind emit zero artifacts.
+// cellgen/generatedverify), so reordering is a wire change. webhook, grpc, and
+// any unknown kind emit zero artifacts (grpc since #1688 — buf's pb.<Svc>Server
+// is the sole server contract).
 func TestArtifactsForKind(t *testing.T) {
 	tests := []struct {
 		kind  string
@@ -32,7 +33,7 @@ func TestArtifactsForKind(t *testing.T) {
 		{"event", []string{"types_gen.go", "iface_gen.go", "spec_gen.go", "subscription_gen.go", "projection_gen.go"}},
 		{"command", []string{"types_gen.go", "command_gen.go"}}, // no iface_gen.go by design
 		{"projection", []string{"types_gen.go", "iface_gen.go"}},
-		{"grpc", []string{"types_gen.go", "iface_gen.go"}},
+		{"grpc", nil}, // #1688: zero artifacts — buf pb.<Svc>Server is the sole server contract
 		{"saga", []string{"types_gen.go", "iface_gen.go", "saga_gen.go"}},
 		{"webhook", nil},
 		{"unknown-kind", nil},
@@ -624,12 +625,13 @@ func TestRenderContractArtifacts_Event(t *testing.T) {
 }
 
 // TestRenderContractArtifacts_GRPC verifies that the production
-// RenderContractArtifacts path emits EXACTLY types_gen.go + iface_gen.go for a
-// grpc contract — and explicitly NOT handler_gen.go / spec_gen.go /
-// subscription_gen.go. grpc relies on falling through generator.go's http and
-// event kind gates; this is the regression guard that a future change to that
-// gating cannot start emitting extra artifacts for grpc unnoticed (the golden
-// test is file-name-driven and would not enumerate a new file).
+// RenderContractArtifacts path emits ZERO artifacts for a grpc contract (#1688) —
+// buf's generated pb.<Svc>Server is the sole server contract, so contractgen
+// writes no per-contract Go file (no types_gen.go, no iface_gen.go, nothing). This
+// is the production-path regression guard (via setupGRPCMinimalRoot's tmpdir +
+// real module path) that a future change to the kind × artifact matrix cannot
+// start emitting any file for grpc unnoticed — which would also collide on
+// package name with the buf pb.go in the same generated dir.
 func TestRenderContractArtifacts_GRPC(t *testing.T) {
 	t.Parallel()
 	root, p := setupGRPCMinimalRoot(t)
@@ -638,25 +640,12 @@ func TestRenderContractArtifacts_GRPC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderContractArtifacts: %v", err)
 	}
-	if len(artifacts) != 2 {
-		t.Errorf("expected 2 artifacts for grpc contract, got %d", len(artifacts))
-	}
-	fileNames := make(map[string]bool)
-	for _, a := range artifacts {
-		fileNames[filepath.Base(a.Path)] = true
-		if len(a.Content) == 0 {
-			t.Errorf("artifact %s has empty content", a.Path)
+	if len(artifacts) != 0 {
+		names := make([]string, len(artifacts))
+		for i, a := range artifacts {
+			names[i] = filepath.Base(a.Path)
 		}
-	}
-	for _, want := range []string{"types_gen.go", "iface_gen.go"} {
-		if !fileNames[want] {
-			t.Errorf("missing artifact: %s", want)
-		}
-	}
-	for _, unwanted := range []string{"handler_gen.go", "spec_gen.go", "subscription_gen.go"} {
-		if fileNames[unwanted] {
-			t.Errorf("grpc contract must not produce %s", unwanted)
-		}
+		t.Errorf("grpc contract must emit zero artifacts (#1688), got %d: %v", len(artifacts), names)
 	}
 }
 
@@ -1007,87 +996,11 @@ func TestGenerate_Options_ScopeAllProcessesAll(t *testing.T) {
 	}
 }
 
-// synthGRPCMultiMethodFixture returns the absolute path to the
-// synth_grpc_multimethod testdata fixture (a two-RPC kind=grpc contract with NO
-// method: field — tests service-level enumeration, #1655).
-func synthGRPCMultiMethodFixture(t *testing.T) string {
-	t.Helper()
-	abs, err := filepath.Abs(filepath.Join("testdata", "synth", "synth_grpc_multimethod"))
-	if err != nil {
-		t.Fatalf("abs path synth_grpc_multimethod: %v", err)
-	}
-	return abs
-}
-
-// setupGRPCMultiMethodRoot copies the synth_grpc_multimethod fixture into a
-// fresh t.TempDir() and parses it. Returns (root, project).
-func setupGRPCMultiMethodRoot(t *testing.T) (string, *metadata.ProjectMeta) {
-	t.Helper()
-	fixture := synthGRPCMultiMethodFixture(t)
-	root := t.TempDir()
-	copyDirIntoTemp(t, fixture, root)
-	goMod := "module github.com/ghbvf/gocell\n\ngo 1.22\n"
-	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(goMod), 0o644); err != nil {
-		t.Fatalf("write go.mod: %v", err)
-	}
-	p, err := metadata.NewParser(root).Parse()
-	if err != nil {
-		t.Fatalf("parse synth_grpc_multimethod from tmp: %v", err)
-	}
-	return root, p
-}
-
-// TestBuildContractSpec_GRPCKind_MultiMethod asserts that a grpc contract with
-// NO method: field (service-level granularity, #1655) generates a spec whose
-// GRPC.Methods contains BOTH IssueCommand and GetCommandStatus with the correct
-// request/response types — the builder enumerates the full method set from the
-// .proto service block (single source of truth).
-func TestBuildContractSpec_GRPCKind_MultiMethod(t *testing.T) {
-	t.Parallel()
-	root, p := setupGRPCMultiMethodRoot(t)
-
-	spec, err := buildContractSpec(root, p, "grpc.device.command.v1")
-	if err != nil {
-		t.Fatalf("buildContractSpec: %v", err)
-	}
-	if spec.GRPC == nil {
-		t.Fatal("spec.GRPC is nil")
-	}
-
-	// Service-level spec must enumerate ALL RPCs from the proto.
-	if len(spec.GRPC.Methods) != 2 {
-		t.Fatalf("expected 2 GRPC methods, got %d: %+v", len(spec.GRPC.Methods), spec.GRPC.Methods)
-	}
-
-	byName := make(map[string]GRPCMethodSpec, len(spec.GRPC.Methods))
-	for _, m := range spec.GRPC.Methods {
-		byName[m.MethodName] = m
-	}
-
-	issue, ok := byName["IssueCommand"]
-	if !ok {
-		t.Error("IssueCommand not found in spec.GRPC.Methods")
-	} else {
-		if issue.RequestType != "IssueCommandRequest" {
-			t.Errorf("IssueCommand.RequestType = %q, want IssueCommandRequest", issue.RequestType)
-		}
-		if issue.ResponseType != "IssueCommandResponse" {
-			t.Errorf("IssueCommand.ResponseType = %q, want IssueCommandResponse", issue.ResponseType)
-		}
-	}
-
-	status, ok := byName["GetCommandStatus"]
-	if !ok {
-		t.Error("GetCommandStatus not found in spec.GRPC.Methods")
-	} else {
-		if status.RequestType != "GetCommandStatusRequest" {
-			t.Errorf("GetCommandStatus.RequestType = %q, want GetCommandStatusRequest", status.RequestType)
-		}
-		if status.ResponseType != "GetCommandStatusResponse" {
-			t.Errorf("GetCommandStatus.ResponseType = %q, want GetCommandStatusResponse", status.ResponseType)
-		}
-	}
-}
+// Multi-method service-level enumeration (#1655) — that a grpc service's full
+// RPC set is read from the .proto, not a YAML method list — is covered at the
+// ReadProtoServiceInfo level by TestReadProtoServiceInfo_MultiMethod
+// (protoreader_test.go). Since #1688 contractgen builds no grpc IR, there is no
+// buildContractSpec-level method projection left to assert here.
 
 // TestCheckGRPCProtoCollisions_SkipsDisabled (F3 regression) proves the
 // collision pre-pass honors codegen:false: a disabled grpc draft whose proto
@@ -1151,5 +1064,48 @@ func TestCheckGRPCProtoCollisions_RegistersEnabled(t *testing.T) {
 	}
 	if err := checkGRPCProtoCollisions(root, p); err != nil {
 		t.Fatalf("enabled grpc contract pre-pass must succeed, got %v", err)
+	}
+}
+
+// TestCheckGRPCProtoCollisions_RejectsBadProtoPath proves the production pre-pass
+// (the sole contractgen grpc proto gate since #1688) fails closed on a malformed
+// proto path before any file read — it wires validateGRPCProtoPath. The empty,
+// outside-contracts/grpc/, and control-rune cases are rejected deterministically
+// (no proto file on disk required). Service-name validity is gated downstream by
+// ReadProtoServiceInfo (protoreader_test.go) and governance FMT-37.
+func TestCheckGRPCProtoCollisions_RejectsBadProtoPath(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		proto string
+	}{
+		{"empty proto", ""},
+		{"proto outside prefix", "proto/d/c/v1/c.proto"},
+		{"newline in proto", "contracts/grpc/d/c/v1/c.proto\nvar _ = 1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := &metadata.ProjectMeta{
+				Contracts: map[string]*metadata.ContractMeta{
+					"grpc.device.command.v1": {
+						ID:      "grpc.device.command.v1",
+						Kind:    "grpc",
+						Codegen: true,
+						File:    "contracts/grpc/device/command/v1/contract.yaml",
+						Endpoints: metadata.EndpointsMeta{
+							Server: "devicecell",
+							GRPC: &metadata.GRPCTransportMeta{
+								Service: "device.command.v1.DeviceCommandService",
+								Proto:   tc.proto,
+							},
+						},
+					},
+				},
+			}
+			if err := checkGRPCProtoCollisions(t.TempDir(), p); err == nil {
+				t.Fatalf("checkGRPCProtoCollisions should reject malformed proto path %q", tc.name)
+			}
+		})
 	}
 }

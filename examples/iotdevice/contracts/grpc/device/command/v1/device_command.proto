@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+// device.command.v1 is the iotdevice cell's command RPC surface — the first
+// real cell-owned grpc contract (PR-8 #1151). DeviceCommandService.IssueCommand
+// is a unary RPC that a control-plane caller uses to push a command to a device
+// and receive an acknowledgement. The .proto is the single source of the service
+// + message set; contractgen emits no Go for kind=grpc (#1688) — this buf-generated
+// pb.<Svc>Server is the sole server contract.
+package device.command.v1;
+
+option go_package = "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1;commandv1";
+
+// DeviceCommandService is served by the iotdevice devicecell.
+service DeviceCommandService {
+  // IssueCommand pushes a command to a device and returns an acknowledgement.
+  rpc IssueCommand(IssueCommandRequest) returns (IssueCommandResponse) {}
+}
+
+message IssueCommandRequest {
+  // device_id is the target device (canonical id).
+  string device_id = 1;
+  // command_type is the command verb, e.g. "lock" or "reboot".
+  string command_type = 2;
+  // payload is the opaque command body (command-type specific).
+  bytes payload = 3;
+}
+
+message IssueCommandResponse {
+  // ack_id is the server-minted acknowledgement id for this command.
+  string ack_id = 1;
+  // acknowledged_at_unix_nano is the server acknowledgement time, unix nanos.
+  int64 acknowledged_at_unix_nano = 2;
+}
