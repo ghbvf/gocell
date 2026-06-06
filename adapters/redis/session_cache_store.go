@@ -10,6 +10,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/ctxutil"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
@@ -282,8 +283,8 @@ func NewCachingSessionStore(
 }
 
 // Create delegates to inner. No cache write — see godoc rationale.
-func (s *CachingSessionStore) Create(ctx context.Context, sess *session.Session) error {
-	return s.inner.Create(ctx, sess)
+func (s *CachingSessionStore) Create(ctx context.Context, t tenant.TenantID, sess *session.Session) error {
+	return s.inner.Create(ctx, t, sess)
 }
 
 // Get is the read-through hot path. Cache hit on a well-formed JSON entry

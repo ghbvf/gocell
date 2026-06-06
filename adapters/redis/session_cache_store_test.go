@@ -16,9 +16,18 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
+
+var scsTestTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("session_cache_store_test: invalid scsTestTenantID: " + err.Error())
+	}
+	return t
+}()
 
 const (
 	scsTestTTL     = 30 * time.Second
@@ -31,6 +40,7 @@ const (
 
 // lastCreateArgs records the arguments passed to the most recent Create call.
 type lastCreateArgs struct {
+	t    tenant.TenantID
 	sess *session.Session
 }
 
@@ -82,9 +92,9 @@ type fakeSessionStore struct {
 	lastRevokeSubj atomic.Pointer[lastRevokeSubjArgs]
 }
 
-func (f *fakeSessionStore) Create(_ context.Context, sess *session.Session) error {
+func (f *fakeSessionStore) Create(_ context.Context, t tenant.TenantID, sess *session.Session) error {
 	f.createCalls.Add(1)
-	f.lastCreate.Store(&lastCreateArgs{sess: sess})
+	f.lastCreate.Store(&lastCreateArgs{t: t, sess: sess})
 	return f.createErr
 }
 
@@ -271,7 +281,7 @@ func TestCachingSessionStore_Create_DoesNotTouchCache(t *testing.T) {
 	store := newTestCachingStore(t, inner, mock)
 
 	sess := &session.Session{ID: scsTestSID, SubjectID: scsTestSubj, JTI: "jti-x", AuthzEpochAtIssue: scsTestEpoch}
-	require.NoError(t, store.Create(context.Background(), sess))
+	require.NoError(t, store.Create(context.Background(), scsTestTenantID, sess))
 	assert.Equal(t, int64(1), inner.createCalls.Load())
 	if args := inner.lastCreate.Load(); assert.NotNil(t, args, "lastCreate must be set") {
 		assert.Equal(t, scsTestSID, args.sess.ID, "Create must delegate exact sess")

@@ -6,6 +6,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 )
@@ -62,11 +63,16 @@ func NewMemStore(protocol *Protocol, clk clock.Clock) (*MemStore, error) {
 	}, nil
 }
 
-// Create persists s. Protocol-shape validation rejects records that violate
-// the configured FingerprintMode (e.g. empty JTI under FingerprintJTIRef);
-// duplicate IDs return ErrSessionConflict. Stored value is a defensive copy
-// so caller mutations cannot bleed into the store after Create.
-func (m *MemStore) Create(_ context.Context, s *Session) error {
+// Create persists s with the given tenant t. t must be a non-empty canonical
+// UUID; empty TenantID returns ErrValidationFailed. Protocol-shape validation
+// rejects records that violate the configured FingerprintMode (e.g. empty JTI
+// under FingerprintJTIRef); duplicate IDs return ErrSessionConflict. Stored
+// value is a defensive copy so caller mutations cannot bleed into the store.
+func (m *MemStore) Create(_ context.Context, t tenant.TenantID, s *Session) error {
+	if err := t.Validate(); err != nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"session: Create requires valid TenantID")
+	}
 	if s == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"session: Create requires non-nil Session")
@@ -92,13 +98,16 @@ func (m *MemStore) Create(_ context.Context, s *Session) error {
 		return err
 	}
 
+	cp := copySession(s)
+	cp.TenantID = t
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, exists := m.sessions[s.ID]; exists {
 		return errcode.New(errcode.KindConflict, errcode.ErrSessionConflict,
 			"session: duplicate ID")
 	}
-	m.sessions[s.ID] = copySession(s)
+	m.sessions[s.ID] = cp
 	return nil
 }
 
@@ -210,6 +219,7 @@ func toValidateView(s *Session) *ValidateView {
 		ID:                s.ID,
 		SubjectID:         s.SubjectID,
 		AuthzEpochAtIssue: s.AuthzEpochAtIssue,
+		TenantID:          s.TenantID,
 	}
 	if s.RevokedAt != nil {
 		stamp := *s.RevokedAt

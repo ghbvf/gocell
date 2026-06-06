@@ -523,6 +523,8 @@ var expectedColumns = []expectedColumn{
 	// sessions (018_sessions.sql + 026_restore_sessions_authz_epoch_at_issue.sql)
 	{Table: "sessions", Column: "id", Type: "text", NotNull: true},
 	{Table: "sessions", Column: "subject_id", Type: "uuid", NotNull: true},
+	// 054: tenant carrier (sessions is NOT under RLS; carrier read by PK pre-auth).
+	{Table: "sessions", Column: "tenant_id", Type: "text", NotNull: true},
 	{Table: "sessions", Column: "jti", Type: "text", NotNull: true},
 	{Table: "sessions", Column: "expires_at", Type: pgTypeTSTZ, NotNull: true},
 	{Table: "sessions", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
@@ -790,12 +792,18 @@ var expectedFKs = []expectedFK{
 		OnDelete:   "a", // NO ACTION (default) — migrations/051_configcore_tenant_id.sql
 	},
 	{
+		// 054: composite same-tenant FK. (tenant_id, subject_id) -> users(tenant_id, id)
+		// via the UNIQUE(tenant_id, id) support index (idx_users_tenant_id_id, migration
+		// 050) — DB-level Hard guarantee that a session references a user in its OWN
+		// tenant (the carrier's trust source, since sessions is not under RLS). The
+		// (tenant_id, subject_id) local column ORDER is the isolation pair — a swap must
+		// be rejected. ON DELETE CASCADE preserved from migration 018.
 		Table:      "sessions",
 		Constraint: "sessions_subject_id_fkey",
-		Columns:    []string{"subject_id"},
+		Columns:    []string{"tenant_id", "subject_id"},
 		RefTable:   "users",
-		RefColumns: []string{"id"},
-		OnDelete:   "c", // CASCADE — migrations/018_sessions.sql
+		RefColumns: []string{"tenant_id", "id"},
+		OnDelete:   "c", // CASCADE — migrations/054_sessions_tenant_id.sql
 	},
 	{
 		// 050: (tenant_id, user_id) references users(tenant_id, id) via UNIQUE(tenant_id, id)
@@ -868,13 +876,18 @@ var expectedFunctions = []expectedFunction{
 }
 
 // expectedRLSTables is the FORCE-ROW-LEVEL-SECURITY registry. PR-3a (#1341,
-// migration 052) covers the configcore tenant tables only. PR-3b adds
-// users/roles/role_assignments; audit_entries awaits its per-(namespace,tenant)
-// hash-chain re-architecture before it can be added (see migration 052 header).
+// migration 052) covers the configcore tenant tables; PR-3b (#1617, migration
+// 053) adds the accesscore tables users/roles/role_assignments. sessions is
+// deliberately NOT under RLS — it is the pre-auth tenant carrier read by PK
+// before any scope is known (migration 054 header). audit_entries awaits its
+// per-(namespace,tenant) hash-chain re-architecture (#1618) before it can be added.
 var expectedRLSTables = []expectedRLS{
 	{Table: "config_entries", Policy: "tenant_isolation"},
 	{Table: "config_versions", Policy: "tenant_isolation"},
 	{Table: "feature_flags", Policy: "tenant_isolation"},
+	{Table: "users", Policy: "tenant_isolation"},
+	{Table: "roles", Policy: "tenant_isolation"},
+	{Table: "role_assignments", Policy: "tenant_isolation"},
 }
 
 // rlsPolicyRow is a single pg_policies row (the security-load-bearing attributes

@@ -86,9 +86,13 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// 051 rebuilds config_entries/config_versions/feature_flags (DROP+CREATE) adding
 	// tenant_id TEXT NOT NULL for configcore multi-tenancy isolation (EPIC #1337 PR-2b, #1479);
 	// 052 enables FORCE ROW LEVEL SECURITY + tenant_isolation policy on the configcore
-	// tables (non-destructive DDL) for the PR-3a RLS backstop (EPIC #1337, #1341).
-	assert.Equal(t, int64(52), v,
-		"expected version should be exactly 52 (current migration max — 052_tenant_rls_force)")
+	// tables (non-destructive DDL) for the PR-3a RLS backstop (EPIC #1337, #1341);
+	// 053 enables FORCE ROW LEVEL SECURITY + tenant_isolation policy on the accesscore
+	// tables users/roles/role_assignments (EPIC #1337 PR-3b, #1617);
+	// 054 adds sessions.tenant_id TEXT NOT NULL DEFAULT '' + backfills from users table
+	// for the sessions tenant carrier (EPIC #1337 PR-3b, #1617).
+	assert.Equal(t, int64(54), v,
+		"expected version should be exactly 54 (current migration max — 054_sessions_tenant_id)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {
