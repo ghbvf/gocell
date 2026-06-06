@@ -28,7 +28,6 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
-	"go/constant"
 	"go/parser"
 	"go/token"
 	"go/types"
@@ -44,7 +43,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
-	kerneloutbox "github.com/ghbvf/gocell/kernel/outbox"
 )
 
 // ---------------------------------------------------------------------------
@@ -999,56 +997,12 @@ func groupOutboxServiceViolations(violations []outboxServiceViolation) map[strin
 // OUTBOX-TOPIC-FAILOPEN-01
 // ---------------------------------------------------------------------------
 
-const (
-	outboxTopicRuleFailOpen         = "OUTBOX-TOPIC-FAILOPEN-01_security_topics_must_not_opt_in_fail_open"
-	outboxTopicForbiddenPolicyField = "FailurePolicy"
-	outboxTopicEntryField           = "Topic"
-	outboxTopicEventTypeField       = "EventType"
-	outboxEntryTypeName             = "Entry"
-	outboxFailurePolicyTypeName     = "FailurePolicy"
-	gocellOutboxPackagePath         = "github.com/ghbvf/gocell/kernel/outbox"
-	fixtureOutboxPackagePath        = "fixturetest/outbox"
-)
-
-var outboxFailOpenConstValues = map[string]int64{
-	gocellOutboxPackagePath:  int64(kerneloutbox.FailurePolicyFailOpen),
-	fixtureOutboxPackagePath: 1,
-}
-
-// outboxSecurityTopicPattern matches topics that carry security or audit-chain
-// semantics. Events matching these prefixes must not opt into
-// FailurePolicyFailOpen — dropping them silently removes audit/security
-// signals from downstream consumers.
-//
-// ref: kubernetes apiserver/pkg/audit — audit events default to Fail policy;
-// operators opt into Ignore per backend, not per event type.
-var outboxSecurityTopicPattern = regexp.MustCompile(`^(event\.)?(session|user|role|audit)\.`)
-
-type outboxTopicViolation struct {
-	Rule    string
-	File    string
-	Line    int
-	Message string
-}
-
-func (v outboxTopicViolation) String() string {
-	return fmt.Sprintf("%s: %s:%d: %s", v.Rule, v.File, v.Line, v.Message)
-}
-
 // INVARIANT: OUTBOX-TOPIC-FAILOPEN-01
 //
-// TestSecurityTopicsDoNotOptInFailOpen enforces OUTBOX-TOPIC-FAILOPEN-01:
-// an outbox.Entry composite literal whose Topic or EventType string constant
-// matches one of the security-sensitive prefixes (session.*, user.*, role.*,
-// audit.* and their event.* contract forms) must not set FailurePolicy:
-// outbox.FailurePolicyFailOpen.
-//
-// The scanner uses go/types TypesInfo to evaluate Topic/EventType field
-// expressions, covering BasicLit, same-package const Idents, and cross-package
-// SelectorExprs (e.g. dto.TopicSessionCreated). go/types' built-in constant
-// folding provides full intra-module const propagation without manual SSA.
-//
-// Scope: scans all production non-test .go files via packages.Load.
+// TestSecurityTopicsDoNotOptInFailOpen dogfoods OUTBOX-TOPIC-FAILOPEN-01
+// against GoCell itself by calling the same CheckOutboxTopicFailopen01 that
+// StandardCellRules (and external Cell repos via RunStandardCellRules) use —
+// single source, no parallel rule body.
 //
 // ref: kubernetes apiserver/pkg/audit Backend.FailurePolicy (Ignore/Fail)
 // ref: ThreeDotsLabs/watermill message/router/middleware/retry.go
@@ -1056,167 +1010,8 @@ func TestSecurityTopicsDoNotOptInFailOpen(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode (loads production packages module-wide, ~5-10s)")
 	}
-
-	var violations []outboxTopicViolation
-	_ = Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil || p.Fset == nil {
-			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if skipOutboxTopicProductionScan(rel) {
-				continue
-			}
-			violations = append(violations, scanOutboxTopicFailOpenAST(p.Fset, file, rel, p.TypesInfo)...)
-		}
-		return nil
-	})
-
-	if len(violations) > 0 {
-		t.Logf("Found %d OUTBOX-TOPIC-FAILOPEN-01 violation(s):", len(violations))
-		for _, v := range violations {
-			t.Logf("  %s", v)
-		}
-	}
-
-	assert.Empty(t, violations,
-		"security-sensitive topics (session.*, user.*, role.*, audit.*, event.* security contracts) "+
-			"must not set FailurePolicy: outbox.FailurePolicyFailOpen on the outbox.Entry "+
-			"literal; drop silently = lose audit invariant. Leave FailurePolicy "+
-			"unset (= Default, falls through to Cell ctor default = FailClosed).")
-}
-
-// scanOutboxTopicFailOpenAST is the core AST-matching routine. Given a parsed
-// file, fileset, types.Info and a file label, it returns every outbox.Entry
-// composite literal that opts into FailurePolicyFailOpen with a Topic or
-// EventType matching the security-sensitive prefix regex.
-//
-// Topic/EventType field values are evaluated via EvaluateConstString,
-// covering BasicLit, same-package const Ident, and cross-package SelectorExpr.
-func scanOutboxTopicFailOpenAST(fset *token.FileSet, file *ast.File, fileLabel string, info *types.Info) []outboxTopicViolation {
-	var violations []outboxTopicViolation
-	EachInSubtree[ast.CompositeLit](file, func(lit *ast.CompositeLit) {
-		if !isOutboxEntryLiteral(info, lit) {
-			return
-		}
-		policy := extractFailurePolicy(info, lit)
-		if policy.safe() {
-			return
-		}
-		topic := extractStringField(info, lit, outboxTopicEntryField)
-		eventType := extractStringField(info, lit, outboxTopicEventTypeField)
-		route := effectiveOutboxRoute(topic, eventType)
-
-		switch {
-		case route.ok && outboxSecurityTopicPattern.MatchString(route.value):
-			violations = append(violations, outboxTopicViolation{
-				Rule:    outboxTopicRuleFailOpen,
-				File:    fileLabel,
-				Line:    fset.Position(lit.Pos()).Line,
-				Message: outboxPolicyViolationMessage(policy, route.value),
-			})
-		case route.unknown() || !route.present:
-			violations = append(violations, outboxTopicViolation{
-				Rule:    outboxTopicRuleFailOpen,
-				File:    fileLabel,
-				Line:    fset.Position(lit.Pos()).Line,
-				Message: outboxUnknownRouteViolationMessage(policy),
-			})
-		}
-	})
-	return violations
-}
-
-// isOutboxEntryLiteral matches real kernel/outbox.Entry composite literals by
-// type identity. Import aliases and type aliases are resolved by go/types;
-// unrelated Entry structs are rejected even when they share field names.
-func isOutboxEntryLiteral(info *types.Info, lit *ast.CompositeLit) bool {
-	if info == nil || lit.Type == nil {
-		return false
-	}
-	tv, ok := info.Types[lit.Type]
-	if !ok {
-		return false
-	}
-	return isOutboxNamedType(tv.Type, outboxEntryTypeName)
-}
-
-type outboxTopicFieldValue struct {
-	present bool
-	ok      bool
-	value   string
-}
-
-func (f outboxTopicFieldValue) unknown() bool {
-	return f.present && !f.ok
-}
-
-func effectiveOutboxRoute(topic, eventType outboxTopicFieldValue) outboxTopicFieldValue {
-	if topic.present {
-		if topic.ok && topic.value == "" {
-			return eventType
-		}
-		return topic
-	}
-	return eventType
-}
-
-// extractStringField returns the compile-time constant string value for the
-// named field of a composite literal, evaluated via typeseval.EvaluateConstString.
-// Covers BasicLit, same-package const Ident, and cross-package SelectorExpr.
-// Returns ok=false when the field is missing or its value is not a constant string.
-//
-// EachInChildren visits only lit's direct children, so a same-named field
-// nested inside a sub-struct (e.g. `Spec: SubSpec{Topic:"a"}`) does not
-// pollute lit's reading.
-func extractStringField(info *types.Info, lit *ast.CompositeLit, fieldName string) outboxTopicFieldValue {
-	// FindFirstChild visits only lit's direct children (depth-1, identical
-	// semantics to EachInChildren), so a same-named field nested inside a
-	// sub-struct does not pollute lit's reading.
-	kv, ok := FindFirstChild[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) bool {
-		id, isID := kv.Key.(*ast.Ident)
-		return isID && id.Name == fieldName
-	})
-	if !ok {
-		return outboxTopicFieldValue{}
-	}
-	value, vok := EvaluateConstString(info, kv.Value)
-	return outboxTopicFieldValue{present: true, ok: vok, value: value}
-}
-
-type outboxFailurePolicyStatus int
-
-const (
-	outboxPolicyAbsent outboxFailurePolicyStatus = iota
-	outboxPolicyKnownOther
-	outboxPolicyKnownFailOpen
-	outboxPolicyUnknown
-)
-
-func (s outboxFailurePolicyStatus) safe() bool {
-	return s == outboxPolicyAbsent || s == outboxPolicyKnownOther
-}
-
-func outboxPolicyViolationMessage(policy outboxFailurePolicyStatus, topic string) string {
-	if policy == outboxPolicyUnknown {
-		return fmt.Sprintf(
-			"outbox.Entry for topic %q uses non-constant FailurePolicy;"+
-				" security/audit events must statically remain FailClosed", topic,
-		)
-	}
-	return fmt.Sprintf(
-		"outbox.Entry for topic %q opts into FailurePolicyFailOpen;"+
-			" security/audit events must remain FailClosed (leave FailurePolicy unset)", topic,
-	)
-}
-
-func outboxUnknownRouteViolationMessage(policy outboxFailurePolicyStatus) string {
-	if policy == outboxPolicyUnknown {
-		return "outbox.Entry uses non-constant FailurePolicy and Topic/EventType is not statically known;" +
-			" security/audit fail-open policy must be statically ruled out"
-	}
-	return "outbox.Entry opts into FailurePolicyFailOpen but Topic/EventType is not statically known;" +
-		" fail-open requires a statically non-security topic"
+	Report(t, ruleOutboxTopicFailopen01,
+		CheckOutboxTopicFailopen01(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 }
 
 // INVARIANT: OUTBOX-TOPIC-FAILOPEN-01 (regression fixtures)
@@ -1293,95 +1088,6 @@ func TestSecurityTopicsDoNotOptInFailOpen_RegressionFixtures(t *testing.T) {
 			}
 		})
 	}
-}
-
-// extractFailurePolicy classifies the FailurePolicy field. A dynamic policy is
-// treated as unknown, and callers fail closed when the route is security-like or
-// not statically known.
-//
-// EachInChildren visits only lit's direct children, so a FailurePolicy buried
-// inside a nested struct is not hoisted to lit's level.
-func extractFailurePolicy(info *types.Info, lit *ast.CompositeLit) outboxFailurePolicyStatus {
-	// FindFirstChild visits only lit's direct children (depth-1, identical
-	// semantics to EachInChildren), so a FailurePolicy buried inside a nested
-	// struct is not hoisted to lit's level.
-	kv, ok := FindFirstChild[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) bool {
-		key, isID := kv.Key.(*ast.Ident)
-		return isID && key.Name == outboxTopicForbiddenPolicyField
-	})
-	if !ok {
-		return outboxPolicyAbsent
-	}
-	if isOutboxFailOpenConst(info, kv.Value) {
-		return outboxPolicyKnownFailOpen
-	} else if isKnownOutboxFailurePolicyConst(info, kv.Value) {
-		return outboxPolicyKnownOther
-	}
-	return outboxPolicyUnknown
-}
-
-func isOutboxFailOpenConst(info *types.Info, expr ast.Expr) bool {
-	if info == nil {
-		return false
-	}
-	tv, ok := info.Types[expr]
-	if !ok || tv.Value == nil {
-		return false
-	}
-	pkgPath, ok := outboxNamedTypePackagePath(tv.Type, outboxFailurePolicyTypeName)
-	if !ok {
-		return false
-	}
-	failOpenValue, ok := outboxFailOpenConstValues[pkgPath]
-	if !ok {
-		return false
-	}
-	value, exact := constant.Int64Val(constant.ToInt(tv.Value))
-	return exact && value == failOpenValue
-}
-
-func isKnownOutboxFailurePolicyConst(info *types.Info, expr ast.Expr) bool {
-	if info == nil {
-		return false
-	}
-	tv, ok := info.Types[expr]
-	if !ok || tv.Value == nil {
-		return false
-	}
-	_, ok = outboxNamedTypePackagePath(tv.Type, outboxFailurePolicyTypeName)
-	return ok
-}
-
-func isOutboxNamedType(t types.Type, name string) bool {
-	_, ok := outboxNamedTypePackagePath(t, name)
-	return ok
-}
-
-func outboxNamedTypePackagePath(t types.Type, name string) (string, bool) {
-	if t == nil {
-		return "", false
-	}
-	named, ok := types.Unalias(t).(*types.Named)
-	if !ok {
-		return "", false
-	}
-	obj := named.Obj()
-	if obj == nil || obj.Name() != name || obj.Pkg() == nil {
-		return "", false
-	}
-	pkgPath := obj.Pkg().Path()
-	return pkgPath, isOutboxPackagePath(pkgPath)
-}
-
-func isOutboxPackagePath(pkgPath string) bool {
-	return pkgPath == gocellOutboxPackagePath || pkgPath == fixtureOutboxPackagePath
-}
-
-func skipOutboxTopicProductionScan(rel string) bool {
-	return strings.HasPrefix(rel, "tools/") ||
-		strings.HasPrefix(rel, "tests/") ||
-		strings.Contains(rel, "/testdata/") ||
-		strings.HasPrefix(rel, "testdata/")
 }
 
 // ---------------------------------------------------------------------------
@@ -1608,32 +1314,9 @@ func TestOutboxHandleResultFieldsFrozen(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01
+// handleResultLiteralAllowlist is defined in outbox_invariants.go (non-test),
+// shared between the production Check and this test file.
 // ---------------------------------------------------------------------------
-
-// handleResultLiteralAllowlist lists the production (non-_test.go) files that
-// may construct outbox.HandleResult{...} composite literals. Every other
-// production file must use the Ack/Requeue/Reject factories from
-// kernel/outbox/result.go.
-//
-// Why these three:
-//   - kernel/outbox/result.go         — defines the factories themselves.
-//   - kernel/outbox/consumer_base.go  — kernel internal retry/settle plumbing
-//     constructs HandleResult with ProcessReason / SettlementObservers, which
-//     the factories do not expose (see eventbus.md "回落字面量").
-//   - kernel/outbox/outboxtest/conformance.go — shared conformance harness;
-//     non-_test.go by package convention but used only from test binaries.
-//
-// Adding a new entry requires the justification to live **next to the map
-// entry below as a Go comment** (not in the file being scanned, since that
-// file is the subject of the rule). The goal of FACTORY-PREFERRED-01 is to
-// keep the fallback-literal surface intentionally small. New kernel/outbox
-// files writing HandleResult literals are rare — extend this list
-// deliberately.
-var handleResultLiteralAllowlist = map[string]struct{}{
-	"kernel/outbox/result.go":                 {},
-	"kernel/outbox/consumer_base.go":          {},
-	"kernel/outbox/outboxtest/conformance.go": {},
-}
 
 // INVARIANT: OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01
 //
@@ -1671,33 +1354,8 @@ var handleResultLiteralAllowlist = map[string]struct{}{
 // Closes PR445-FU-PACKAGEALIASES-TYPE-AWARE-01 for this rule.
 func TestOutboxHandleResultFactoryPreferred(t *testing.T) {
 	t.Parallel()
-
-	const outboxImportPath = "github.com/ghbvf/gocell/kernel/outbox"
-
-	var violations []string
-	_ = Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil || p.Fset == nil {
-			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-
-			if _, ok := handleResultLiteralAllowlist[rel]; ok {
-				continue
-			}
-			violations = append(violations,
-				scanForHandleResultLiterals(p.Fset, p.TypesInfo, file, rel, outboxImportPath)...)
-		}
-		return nil
-	})
-
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Errorf("OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01: %s — use outbox.Ack() / "+
-			"outbox.Requeue(err) / outbox.Reject(err) instead of constructing the "+
-			"struct literal; if you genuinely need ProcessReason or SettlementObservers, "+
-			"extend handleResultLiteralAllowlist with a code-comment justification", v)
-	}
+	Report(t, ruleOutboxHandleResultFactoryPreferred01,
+		CheckOutboxHandleResultFactoryPreferred01(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 }
 
 // TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3 anchors
@@ -1799,7 +1457,7 @@ func TestOutboxtestCloseViaBudget01(t *testing.T) {
 	t.Parallel()
 
 	const (
-		outboxPkgPath     = "github.com/ghbvf/gocell/kernel/outbox"
+		outboxPkgPath     = PlatformModulePath + "/kernel/outbox"
 		sanctionedHolder  = "closeWithBudget"
 		outboxtestPattern = "./kernel/outbox/outboxtest/..."
 	)
@@ -1957,44 +1615,5 @@ func TestOutboxtestCloseViaBudget01_BlindSpot_NoMethodValue(t *testing.T) {
 	}
 }
 
-// scanForHandleResultLiterals scans file for HandleResult composite literals.
-// Returns "<rel>:<line>" diagnostics. Files that neither import kernel/outbox
-// nor declare package outbox produce no hits. Type-aware via info.
-//
-// Coverage:
-//   - qualified literal `outbox.HandleResult{}` — *ast.SelectorExpr resolved
-//     via info.Uses[tn.Sel].(*types.TypeName); covers renamed imports
-//     authoritatively (the type's owning package is reported regardless of
-//     local alias).
-//   - bare-Ident literal `HandleResult{}` — *ast.Ident resolved via
-//     info.Uses[tn].(*types.TypeName); covers BOTH same-package use (file is
-//     in package outbox) AND dot-imported use (`import . "outbox"`). The
-//     latter closes the prior path A.3 bypass — symmetric with the PR-SH1
-//     caller-side migration to typeseval.ResolvePackageRef for function refs.
-func scanForHandleResultLiterals(fset *token.FileSet, info *types.Info, file *ast.File, rel, outboxImportPath string) []string {
-	var hits []string
-	EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
-		var id *ast.Ident
-		switch tn := cl.Type.(type) {
-		case *ast.SelectorExpr:
-			if tn.Sel == nil || tn.Sel.Name != "HandleResult" {
-				return
-			}
-			id = tn.Sel
-		case *ast.Ident:
-			if tn.Name != "HandleResult" {
-				return
-			}
-			id = tn
-		default:
-			return
-		}
-		obj, ok := info.Uses[id].(*types.TypeName)
-		if !ok || obj.Pkg() == nil || obj.Pkg().Path() != outboxImportPath {
-			return
-		}
-		pos := fset.Position(cl.Pos())
-		hits = append(hits, fmt.Sprintf("%s:%d: HandleResult{} literal (resolved to %s)", rel, pos.Line, outboxImportPath))
-	})
-	return hits
-}
+// scanForHandleResultLiterals is defined in outbox_invariants.go (non-test),
+// shared between the production Check and this test file.

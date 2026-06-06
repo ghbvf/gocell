@@ -77,7 +77,7 @@ import (
 )
 
 const (
-	checkpointConformancePkg      = "github.com/ghbvf/gocell/kernel/projection/projectiontest"
+	checkpointConformancePkg      = PlatformModulePath + "/kernel/projection/projectiontest"
 	checkpointConformanceFuncName = "RunCheckpointConformance"
 )
 
@@ -85,7 +85,7 @@ const (
 // loaded by TestProjectionCheckpointConformanceEnroll01_RedFixture. The fixture
 // declares an enrolledStore (enrolled via RunCheckpointConformance in its
 // _test.go) and an unenrolledStore (deliberately not enrolled).
-const fixtureEnrollPkg = "github.com/ghbvf/gocell/tools/archtest/internal/projectioncheckpointenrollfixture"
+const fixtureEnrollPkg = PlatformModulePath + "/tools/archtest/internal/projectioncheckpointenrollfixture"
 
 // TestProjectionCheckpointConformanceEnroll01 enforces PROJECTION-CHECKPOINT-
 // CONFORMANCE-ENROLL-01: every concrete production type implementing

@@ -1,87 +1,18 @@
 // INVARIANT: PROJECTION-APPLY-HOOK-FUNNEL-01
 //
-// PROJECTION-APPLY-HOOK-FUNNEL-01 — Coordinator.Subscribe caller allowlist.
-//
-// kernel/projection.Coordinator.Subscribe registers an Apply hook with the
-// cell.Registrar (it calls reg.Subscribe internally). This is the per-projection
-// wiring callsite; it must only appear in:
-//
-//   - kernel/projection/ itself (the method body calls reg.Subscribe internally)
-//   - _test.go files (tests of the Coordinator API — explicitly allowed)
-//   - the single sanctioned bootstrap projection drain file
-//     runtime/bootstrap/phases_projection.go — the ONE place that constructs a
-//     Coordinator from framework-owned deps and drives Coordinator.Subscribe.
-//
-// Relocation (PR-04a, Option A — ADR §7 amendment 2026-05-31): the sanctioned
-// callsite moved from the cellgen-generated cell_gen.go to the bootstrap drain.
-// Reason: Coordinator.Subscribe must be fed framework-owned raw infrastructure
-// (CheckpointStore / TxRunner / Cursor / ReplaySource), which cell code may never
-// hold (sealed-marker architecture). So cellgen emits the record-only
-// reg.RegisterProjection (guarded by PROJECTION-REGISTER-FUNNEL-01) into
-// cell_gen.go, and bootstrap — which legally holds the raw deps — constructs the
-// Coordinator and calls Subscribe. The Subscribe terminal is now a single
-// hand-written kernel/runtime file under tight review, a TIGHTER sanctioned set
-// than "any cell_gen.go".
-//
-// Any other production callsite bypasses the drain funnel and constitutes a
-// hand-rolled wiring that diverges from the single source of truth.
-//
-// PR-04a status: genuinely-green active guard (NOT t.Skip). The only production
-// callsite is runtime/bootstrap/phases_projection.go; any other fires.
-//
-// # AI-robust grading (Funnel 双向锁评级)
-//
-//   - Downstream: Medium archtest caller allowlist. Go has no type-system
-//     mechanism to restrict who calls a public method (Go visibility applies
-//     to packages, not callers), so this is the strongest achievable form
-//     for a method-call restriction. Archtest enforcement is CI fail-closed.
-//     The sanctioned set is a single named file, tighter than the prior
-//     "any cell_gen.go".
-//   - Upstream: Medium — and permanently so (won't-do, gh #1372). A "cellgen-only
-//     sealed token" that would make a hand-written Subscribe call uncompilable is
-//     NOT expressible in Go: cellgen emits this call into the cell's OWN package
-//     (cell_gen.go sits beside the hand-written cell.go), and Go has no
-//     compile-time identity for "generated code". Any token constructor the
-//     generated file can call, a hand-written sibling in the same package can call
-//     too. Same permanent Go-language ceiling as Subscribe / RegisterWebhookReceiver
-//     and the holder-seal family #851 / #893 / #1282.
-//
-// Because both sides are Medium and the upstream side cannot be Hard-ized, this is
-// NOT a closed-loop Hard funnel and will not become one (gh #1372 closed won't-do).
-// The raw-infra-stays-in-bootstrap property IS Hard (type system): cells
-// hold sealed markers, never the CheckpointStore/TxRunner constructed in the
-// drain — that is what makes Option A sound vs emitting NewCoordinator into
-// generated cell code.
-//
-// # Blind spots (forms *types.Info / ResolveMethodCall cannot see)
-//
-//   - B1. Function-value / method-expression indirection:
-//     `f := coord.Subscribe; f(ctx, spec, id, apply)` — the CallExpr's Fun is
-//     an *ast.Ident resolving to a *types.Var, not a *types.Func, so
-//     ResolveMethodCall returns (nil, false) and the call is invisible to R1.
-//     Reverse self-check TestProjectionApplyHookFunnel01_ReverseBlindSpot_NoFuncValue
-//     asserts no production code holds a Coordinator.Subscribe function value.
-//
-//   - B2. Wrapper method indirection: a wrapper struct that embeds *Coordinator
-//     and calls Subscribe inside its own method body — the wrapper's callsite
-//     IS caught (it's a direct method call on the embedded receiver), but the
-//     wrapper struct itself could be in a non-allowlisted package. Covered by
-//     the regular rule scan; not a blind spot.
-//
-//   - B3. Dot-import: `import . "…/projection"` — ResolveMethodCall handles dot-import
-//     via *types.Info.Uses, so this form is caught. Not a blind spot.
-//
-// ref: tools/archtest/healthz_invariants_test.go (HEALTHZ-WRITE-01/A2 caller-allowlist pattern)
-// ref: docs/architecture/202605261620-adr-cqrs-projection-lifecycle-harness.md §3 PR-01
+// This _test.go only dogfoods + precision-gates the rule. The importable rule
+// body (CheckProjectionApplyHookFunnel01 + collectProjectionApplyHookViolations
+// + isProjectionSubscribeCall + isProjectionApplyHookAllowed + the full package
+// godoc) lives in the non-test companion projection_apply_hook_funnel.go, so
+// external Cell repos can import and run it via StandardCellRules /
+// RunStandardCellRules (M3 #1302 / issue #1635).
 package archtest
 
 import (
 	"fmt"
 	"go/ast"
-	"go/types"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 
@@ -91,67 +22,6 @@ import (
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
 
-const (
-	projectionCoordPkgPath    = "github.com/ghbvf/gocell/kernel/projection"
-	projectionCoordTypeName   = "Coordinator"
-	projectionSubscribeMethod = "Subscribe"
-)
-
-// isProjectionSubscribeCall reports whether call is a method call to
-// (*kernel/projection.Coordinator).Subscribe resolved via *types.Info.Selections.
-func isProjectionSubscribeCall(call *ast.CallExpr, info *types.Info) bool {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || sel.Sel.Name != projectionSubscribeMethod {
-		return false
-	}
-	fn, ok := ResolveMethodCall(info, sel)
-	if !ok || fn == nil {
-		return false
-	}
-	if fn.Pkg() == nil || fn.Pkg().Path() != projectionCoordPkgPath {
-		return false
-	}
-	if fn.Name() != projectionSubscribeMethod {
-		return false
-	}
-	// Verify receiver is *Coordinator (not some other type named Subscribe).
-	sig, ok := fn.Type().(*types.Signature)
-	if !ok {
-		return false
-	}
-	recv := sig.Recv()
-	if recv == nil {
-		return false
-	}
-	recvT := recv.Type()
-	if ptr, ok := recvT.(*types.Pointer); ok {
-		recvT = ptr.Elem()
-	}
-	named, ok := recvT.(*types.Named)
-	if !ok {
-		return false
-	}
-	return named.Obj().Pkg() != nil &&
-		named.Obj().Pkg().Path() == projectionCoordPkgPath &&
-		named.Obj().Name() == projectionCoordTypeName
-}
-
-// projectionDrainFile is the single sanctioned production Coordinator.Subscribe
-// callsite (PR-04a, Option A): the bootstrap projection drain. It constructs the
-// Coordinator from framework-owned deps and drives Subscribe via a capture
-// Registrar. No generated file calls Subscribe under Option A.
-const projectionDrainFile = "runtime/bootstrap/phases_projection.go"
-
-// isProjectionApplyHookAllowed reports whether the file at the given rel path is
-// in the allowed set for Coordinator.Subscribe calls:
-//   - kernel/projection package itself (where the method is defined and used internally)
-//   - _test.go files (tests of the Coordinator API)
-//   - the single bootstrap projection drain file (runtime/bootstrap/phases_projection.go)
-//
-// Generated files (cell_gen.go / healthz_gen.go / slice_gen.go) are NOT in the
-// set: under Option A cellgen emits reg.RegisterProjection (record-only), not
-// Coordinator.Subscribe. The cell_gen.go RegisterProjection callsite is guarded
-// separately by PROJECTION-REGISTER-FUNNEL-01.
 // TestProjectionApplyHookFunnel01_DrainFileExists guards against silent drift:
 // if runtime/bootstrap/phases_projection.go is renamed/moved without updating
 // projectionDrainFile, the allowlist would stop matching the real Subscribe
@@ -166,24 +36,10 @@ func TestProjectionApplyHookFunnel01_DrainFileExists(t *testing.T) {
 		"projectionDrainFile %q must exist; update the const if the bootstrap drain moved", projectionDrainFile)
 }
 
-func isProjectionApplyHookAllowed(rel, _ string) bool {
-	if strings.HasSuffix(rel, "_test.go") {
-		return true
-	}
-	if strings.HasPrefix(rel, "kernel/projection/") {
-		return true
-	}
-	if filepath.ToSlash(rel) == projectionDrainFile {
-		return true
-	}
-	return false
-}
-
-// TestProjectionApplyHookFunnel01 enforces PROJECTION-APPLY-HOOK-FUNNEL-01:
-// Coordinator.Subscribe must only be called from the kernel/projection package
-// itself, from _test.go files, or from the single bootstrap projection drain
-// (runtime/bootstrap/phases_projection.go). Any other production callsite is a
-// violation.
+// TestProjectionApplyHookFunnel01 dogfoods PROJECTION-APPLY-HOOK-FUNNEL-01
+// against GoCell itself by calling the same CheckProjectionApplyHookFunnel01
+// that StandardCellRules (and external Cell repos via RunStandardCellRules) use
+// — single source, no parallel rule body.
 //
 // PR-04a status: genuinely-green active guard. The only production callsite is
 // runtime/bootstrap/phases_projection.go; any other fires. (Under Option A no
@@ -206,54 +62,8 @@ func TestProjectionApplyHookFunnel01(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-
-	root := findModuleRoot(t)
-	allPatterns := prodscan.Patterns(root)
-
-	var diags []Diagnostic
-
-	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, allPatterns),
-		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil || p.TypesInfo == nil {
-				return nil
-			}
-			for _, f := range p.Files {
-				rel := p.Rel(f)
-				absPath := p.Abs(f)
-				if isProjectionApplyHookAllowed(rel, absPath) {
-					continue
-				}
-				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
-					if !isProjectionSubscribeCall(call, p.TypesInfo) {
-						return
-					}
-					diags = append(diags, Diagnostic{
-						Rel:  rel,
-						Line: p.Fset.Position(call.Pos()).Line,
-						Message: fmt.Sprintf(
-							"PROJECTION-APPLY-HOOK-FUNNEL-01: Coordinator.Subscribe called "+
-								"from non-allowlisted file %s (line %d). "+
-								"Allowed callers: kernel/projection/ itself, _test.go files, "+
-								"and the single bootstrap projection drain "+
-								"(runtime/bootstrap/phases_projection.go). "+
-								"Declare projections via reg.RegisterProjection in cell_gen.go "+
-								"(generated by cellgen from slice.yaml contractUsages); "+
-								"bootstrap constructs the Coordinator and calls Subscribe automatically.",
-							rel, p.Fset.Position(call.Pos()).Line,
-						),
-					})
-				})
-			}
-			return nil
-		})
-
-	sort.Slice(diags, func(i, j int) bool {
-		if diags[i].Rel != diags[j].Rel {
-			return diags[i].Rel < diags[j].Rel
-		}
-		return diags[i].Line < diags[j].Line
-	})
-	Report(t, "PROJECTION-APPLY-HOOK-FUNNEL-01", diags)
+	Report(t, ruleProjectionApplyHookFunnel01,
+		CheckProjectionApplyHookFunnel01(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 }
 
 // TestProjectionApplyHookFunnel01_ReverseFixture loads the synthetic violation
@@ -271,26 +81,7 @@ func TestProjectionApplyHookFunnel01_ReverseFixture(t *testing.T) {
 
 	_ = Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false}, []string{"./..."}),
 		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil || p.TypesInfo == nil {
-				return nil
-			}
-			for _, f := range p.Files {
-				rel := p.Rel(f)
-				absPath := p.Abs(f)
-				if isProjectionApplyHookAllowed(rel, absPath) {
-					continue
-				}
-				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
-					if !isProjectionSubscribeCall(call, p.TypesInfo) {
-						return
-					}
-					diags = append(diags, Diagnostic{
-						Rel:     rel,
-						Line:    p.Fset.Position(call.Pos()).Line,
-						Message: "PROJECTION-APPLY-HOOK-FUNNEL-01: rogue Coordinator.Subscribe callsite",
-					})
-				})
-			}
+			diags = append(diags, collectProjectionApplyHookViolations(p)...)
 			return nil
 		})
 
@@ -319,25 +110,7 @@ func TestProjectionApplyHookFunnel01_ReverseFixture_GeneratedNotSanctioned(t *te
 
 	_ = Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false}, []string{"./..."}),
 		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil || p.TypesInfo == nil {
-				return nil
-			}
-			for _, f := range p.Files {
-				rel := p.Rel(f)
-				absPath := p.Abs(f)
-				if isProjectionApplyHookAllowed(rel, absPath) {
-					continue
-				}
-				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
-					if !isProjectionSubscribeCall(call, p.TypesInfo) {
-						return
-					}
-					diags = append(diags, Diagnostic{
-						Rel:  rel,
-						Line: p.Fset.Position(call.Pos()).Line,
-					})
-				})
-			}
+			diags = append(diags, collectProjectionApplyHookViolations(p)...)
 			return nil
 		})
 

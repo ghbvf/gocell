@@ -147,6 +147,14 @@ type ConfigForExternalCell struct {
 //     → vacuous-green there. Migrated for the unified PlatformModulePath
 //     parameterization + fork-safety only; enforced in GoCell via
 //     TestScaffoldListenerMarkerTypedConst.
+//   - OUTBOX-TOPIC-FAILOPEN-01 (CheckOutboxTopicFailopen01): kernel/outbox.Entry
+//     is sealed — a populated outbox.Entry{...} composite literal outside
+//     kernel/outbox is a compile error (OUTBOX-ENTRY-SEALED-CONSTRUCTION-01), so
+//     the production scan for fail-open security-topic literals is vacuous in
+//     GoCell AND in any external repo; the rule's real coverage is the
+//     fixturetest/outbox fake-package fixtures under testdata/. Migrated for
+//     PlatformModulePath parameterization + fork-safety only; enforced in GoCell
+//     via the dogfood + fixture sub-tests in outbox_invariants_test.go.
 //
 // An external consumer gets the rules migrated so far plus any cfg.ExtraRules
 // they add. The set expands as additional portable rules land in #1302.
@@ -161,6 +169,24 @@ func StandardCellRules() []*CellRule {
 		// sanctioned planDerivedArtifact site (no such site in an external repo →
 		// pure ban). Cell-applicable; Hard downstream (types.Info caller-allowlist).
 		{ID: ruleScaffoldDerivedForceOverwrite01, Run: CheckScaffoldDerivedForceOverwrite},
+		// OUTBOX-RECONSTRUCTION-CALLER-01: bans consumer code from calling the
+		// kernel reconstruction primitives outbox.UnmarshalEnvelope /
+		// (outbox.EntryScan).ToEntry — the sanctioned storage/wire-decode callers
+		// are GoCell-internal packages absent from a consumer module → pure ban.
+		// Cell-applicable; Hard downstream (types.Info caller-allowlist).
+		{ID: ruleOutboxReconstructionCaller01, Run: CheckOutboxReconstructionCaller01},
+		// PROJECTION-APPLY-HOOK-FUNNEL-01: bans consumer code from calling
+		// projection.Coordinator.Subscribe outside the sanctioned bootstrap drain
+		// (no such site in an external repo → pure ban). Cell-applicable; Hard
+		// downstream (types.Info caller-allowlist).
+		{ID: ruleProjectionApplyHookFunnel01, Run: CheckProjectionApplyHookFunnel01},
+		// OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01: business handlers must return
+		// outbox.Ack()/Requeue()/Reject() rather than construct outbox.HandleResult{}
+		// composite literals; the 3-file kernel/outbox allowlist never exists in a
+		// consumer module → pure ban on the literal form (HandleResult is exported
+		// and constructible, so this is a real consumer-usage constraint).
+		// Cell-applicable; Medium downstream (types.Info type-identity scan).
+		{ID: ruleOutboxHandleResultFactoryPreferred01, Run: CheckOutboxHandleResultFactoryPreferred01},
 	}
 }
 
