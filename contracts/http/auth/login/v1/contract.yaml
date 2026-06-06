@@ -10,6 +10,23 @@
 #              401) to prevent tenant enumeration by callers.
 #     Codegen: contractgen client generation does not yet emit this header.
 #              Callers must set it manually until the backlog issue is resolved.
+#
+# Response headers (documentation; codegen does not emit response headers —
+# tracked in backlog issue #1494 "contractgen: support header parameters"):
+#
+#   Set-Cookie: __Host-gocell_rt=<refreshToken>; HttpOnly; Secure; SameSite=Strict;
+#               Path=/; Max-Age=<refresh TTL in seconds>
+#     Condition: emitted on 201 only (4xx/5xx leave the cookie untouched).
+#     Naming:    the __Host- prefix is browser-enforced host-binding (requires
+#                Secure, no Domain, Path=/) so a sibling subdomain cannot set or
+#                override this long-lived refresh credential.
+#     Source:    httpcookie.Middleware (cells/accesscore/internal/httpcookie)
+#                wraps the response writer and writes the Set-Cookie header
+#                before the status is committed.
+#     Note:      the response body also returns refreshToken for clients that
+#                cannot read httpOnly cookies (e.g. native apps). Both are
+#                always emitted on success — the cookie is the primary channel
+#                for browser clients (BR-005 #1278).
 id: http.auth.login.v1
 kind: http
 ownerCell: accesscore

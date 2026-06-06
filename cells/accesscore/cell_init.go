@@ -252,7 +252,7 @@ func (c *AccessCore) initSlices() error {
 	if err != nil {
 		return err
 	}
-	c.loginHandler = sessionlogin.NewHandler(loginSvc)
+	c.loginHandler = sessionlogin.NewHandler(loginSvc, DefaultRefreshMaxAge)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(sessionlogin.SliceMetadata()))
 
 	// identity-manage: inject loginSvc as TokenIssuer for ChangePassword.
@@ -297,7 +297,7 @@ func (c *AccessCore) initSlices() error {
 	if err != nil {
 		return err
 	}
-	c.refreshHandler = sessionrefresh.NewHandler(refreshSvc)
+	c.refreshHandler = sessionrefresh.NewHandler(refreshSvc, DefaultRefreshMaxAge)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(sessionrefresh.SliceMetadata()))
 
 	// session-logout — cascades revocation to refresh.Store so logout
@@ -307,7 +307,7 @@ func (c *AccessCore) initSlices() error {
 	if err != nil {
 		return err
 	}
-	c.logoutHandler = sessionlogout.NewHandler(logoutSvc)
+	c.logoutHandler = sessionlogout.NewHandler(logoutSvc, DefaultRefreshMaxAge)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(sessionlogout.SliceMetadata()))
 
 	// authorization-decide

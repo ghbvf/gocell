@@ -5,6 +5,6 @@
   "properties": {
     "refreshToken": { "type": "string", "minLength": 20, "maxLength": 4096 }
   },
-  "required": ["refreshToken"],
+  "required": [],
   "additionalProperties": false
 }

@@ -29,6 +29,9 @@ import (
 
 const loginPath = "/api/v1/access/sessions/login"
 
+// testCookieTTL mirrors accesscore.DefaultRefreshMaxAge (7 days).
+const testCookieTTL = 7 * 24 * time.Hour
+
 // setup wires the slice handler onto a celltest mux via RegisterRoutes — the
 // same code path cell_routes.go takes in production. Tests dispatch via
 // mux.ServeHTTP so per-package coverage records both HandleLogin and the
@@ -55,7 +58,7 @@ func setup(t *testing.T) http.Handler {
 		WithAccountLockout(newTestLockout(userRepo, sessionStore, refreshStore)))
 	require.NoError(t, err)
 	mux := celltest.NewTestMux()
-	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {
+	if err := NewHandler(svc, testCookieTTL).RegisterRoutes(mux); err != nil {
 		panic("RegisterRoutes: " + err.Error())
 	}
 	return mux
@@ -234,4 +237,62 @@ func TestHandler_Login_BlankPassword(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	// Generated handler intercepts blank password before the service; returns ERR_VALIDATION_FAILED.
 	assertValidationError(t, w.Body.Bytes(), "ERR_VALIDATION_FAILED")
+}
+
+// TestHandler_Login_SetsRefreshCookie asserts that a successful login (201)
+// emits a __Host-gocell_rt httpOnly cookie carrying the refresh token, while the JSON
+// body still contains the same refreshToken value (backward compat).
+func TestHandler_Login_SetsRefreshCookie(t *testing.T) {
+	h := setup(t)
+	body := `{"username":"alice","password":"correct-pass"}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, loginPath, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Tenant-ID", testTenantIDStr)
+	h.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code, "expected 201 on valid login")
+
+	// Parse JSON body and extract refreshToken for comparison.
+	var resp struct {
+		Data struct {
+			RefreshToken string `json:"refreshToken"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.NotEmpty(t, resp.Data.RefreshToken, "body must still carry refreshToken")
+
+	// Find the __Host-gocell_rt cookie in the response.
+	var rtCookie *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "__Host-gocell_rt" {
+			rtCookie = c
+			break
+		}
+	}
+	require.NotNil(t, rtCookie, "Set-Cookie: __Host-gocell_rt must be present on 201 response")
+	assert.NotEmpty(t, rtCookie.Value, "cookie value must not be empty")
+	assert.Equal(t, resp.Data.RefreshToken, rtCookie.Value, "cookie value must match body refreshToken")
+	assert.True(t, rtCookie.HttpOnly, "cookie must be HttpOnly")
+	assert.True(t, rtCookie.Secure, "cookie must be Secure")
+	assert.Equal(t, http.SameSiteStrictMode, rtCookie.SameSite, "cookie must be SameSite=Strict")
+	assert.Equal(t, "/", rtCookie.Path, "cookie Path must be / (mandated by __Host- prefix)")
+	assert.Equal(t, int(testCookieTTL.Seconds()), rtCookie.MaxAge, "cookie MaxAge must match cookieTTL arg")
+}
+
+// TestHandler_Login_NoCookieOn401 asserts that a failed login (401) does NOT
+// emit a __Host-gocell_rt cookie — a 4xx must neither mint nor clear the cookie.
+func TestHandler_Login_NoCookieOn401(t *testing.T) {
+	h := setup(t)
+	body := `{"username":"alice","password":"wrong-password"}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, loginPath, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Tenant-ID", testTenantIDStr)
+	h.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	for _, c := range w.Result().Cookies() {
+		assert.NotEqual(t, "__Host-gocell_rt", c.Name, "no __Host-gocell_rt cookie must be set on 401")
+	}
 }

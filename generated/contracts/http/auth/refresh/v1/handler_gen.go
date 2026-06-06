@@ -28,7 +28,7 @@ var contractSpec = contractspec.ContractSpec{
 
 // requestSchemaJSON is the embedded request schema for runtime validation.
 // Compiled once at handler construction time by schemavalidate.NewValidator.
-var requestSchemaJSON = []byte("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"http.auth.refresh.v1.request\",\"type\":\"object\",\"properties\":{\"refreshToken\":{\"type\":\"string\",\"minLength\":20,\"maxLength\":4096}},\"required\":[\"refreshToken\"],\"additionalProperties\":false}")
+var requestSchemaJSON = []byte("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"http.auth.refresh.v1.request\",\"type\":\"object\",\"properties\":{\"refreshToken\":{\"type\":\"string\",\"minLength\":20,\"maxLength\":4096}},\"required\":[],\"additionalProperties\":false}")
 
 // Handler wires HTTP decode/encode + auth.Mount for http.auth.refresh.v1.
 type Handler struct {
