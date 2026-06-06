@@ -134,6 +134,24 @@ func validateProjectionLevel(contractID, level string) error {
 	return nil
 }
 
+// validateCommandLevel enforces the contractgen half of
+// COMMAND-CONTRACT-CONSISTENCY-LEVEL-01 (#1668): the generated types_gen.go
+// carries a compile-time guard `const _ = uint(cellvocab.<level> - cellvocab.L1)`.
+// The level must parse to a known cellvocab.Level so the template emits a valid
+// cellvocab identifier; an empty/garbage level would render uncompilable Go for
+// the wrong reason, so it is rejected here with a clean build error. The floor
+// check (>= L1) is deliberately NOT done here — that is the compile-time guard's
+// job (Hard downstream); doing it here would degrade it to a builder-time guard.
+// Mirror of validateProjectionLevel (floor L3); here the floor is L1.
+func validateCommandLevel(contractID, level string) error {
+	if _, err := cellvocab.ParseLevel(level); err != nil {
+		return fmt.Errorf(
+			"contractgen build: command contract %q has invalid consistencyLevel %q (must be L0..L4): %w",
+			contractID, level, err)
+	}
+	return nil
+}
+
 func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.ContractMeta, contractDir string) error {
 	http := contract.Endpoints.HTTP
 	if http == nil {
@@ -702,6 +720,15 @@ func buildCommandSpec(spec *ContractGenSpec, rootDir string, contract *metadata.
 		return fmt.Errorf("contractgen build: command contract %q must declare both schemaRefs.request and "+
 			"schemaRefs.response (COMMAND-CONTRACT-SCHEMA-REF-01); got request=%q response=%q",
 			contract.ID, contract.SchemaRefs.Request, contract.SchemaRefs.Response)
+	}
+
+	// Validate the level parses so types.tmpl emits a valid cellvocab identifier
+	// for the COMMAND-CONTRACT-CONSISTENCY-LEVEL-01 compile-time guard. The >= L1
+	// floor is enforced by that guard (uint overflow), not here. Checked after the
+	// schemaRef gate so a refs-less command still reports the more fundamental
+	// SCHEMA-REF-01 misconfiguration first.
+	if err := validateCommandLevel(contract.ID, contract.ConsistencyLevel); err != nil {
+		return err
 	}
 
 	dtos, err := buildCommandDTOs(rootDir, contract, contractDir, reqRef, respRef)

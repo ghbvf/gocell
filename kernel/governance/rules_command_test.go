@@ -1,4 +1,5 @@
 // INVARIANT: COMMAND-CONTRACT-SCHEMA-REF-01
+// INVARIANT: COMMAND-CONTRACT-CONSISTENCY-LEVEL-01
 
 package governance
 
@@ -120,7 +121,8 @@ func TestCOMMANDCONTRACTSCHEMAREF01_MissingBoth(t *testing.T) {
 			t.Errorf("results[%d]: finding must carry non-empty Fix guidance", i)
 		}
 	}
-	// First finding should be for request, second for response (iteration order).
+	// Request finding comes first: the rule body checks request before response
+	// (fixed field order, not map iteration).
 	if results[0].Field != "schemaRefs.request" {
 		t.Errorf("results[0]: expected field %q, got %q", "schemaRefs.request", results[0].Field)
 	}
@@ -188,5 +190,114 @@ func TestCOMMANDCONTRACTSCHEMAREF01_NonCommandNotFlagged(t *testing.T) {
 	results := v.validateCOMMANDCONTRACTSCHEMAREF01()
 	if len(results) != 0 {
 		t.Fatalf("non-command contract must not be flagged by COMMAND-CONTRACT-SCHEMA-REF-01, got %d: %v", len(results), results)
+	}
+}
+
+// --- COMMAND-CONTRACT-CONSISTENCY-LEVEL-01 (#1668) ---
+
+// buildCommandProjectLevel reuses buildCommandProject (valid schemaRefs so it is
+// not flagged by SCHEMA-REF-01) and overrides the command contract's declared
+// consistencyLevel.
+func buildCommandProjectLevel(level string) *metadata.ProjectMeta {
+	p := buildCommandProject("request.schema.json", "response.schema.json")
+	p.Contracts[commandTestContractID].ConsistencyLevel = level
+	return p
+}
+
+// TestCOMMANDCONTRACTCONSISTENCYLEVEL01_L0Rejected checks that a command contract
+// declaring consistencyLevel=L0 (LocalOnly) emits exactly one finding: a command
+// crosses the local boundary and requires at least L1 (LocalTx) atomicity.
+func TestCOMMANDCONTRACTCONSISTENCYLEVEL01_L0Rejected(t *testing.T) {
+	t.Parallel()
+	project := buildCommandProjectLevel("L0")
+	v := NewValidator(project, "", clock.Real())
+	results := filterByCode(v.validateCOMMANDCONTRACTCONSISTENCYLEVEL01(), codeCOMMANDCONTRACTCONSISTENCYLEVEL01)
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 finding for L0 command, got %d: %v", len(results), results)
+	}
+	r := results[0]
+	if r.Severity != SeverityError {
+		t.Errorf("expected SeverityError, got %s", r.Severity)
+	}
+	if r.Field != "consistencyLevel" {
+		t.Errorf("expected field %q, got %q", "consistencyLevel", r.Field)
+	}
+	if r.Fix == "" {
+		t.Error("finding must carry non-empty Fix guidance (typed-Fix contract)")
+	}
+	if r.Code != codeCOMMANDCONTRACTCONSISTENCYLEVEL01 {
+		t.Errorf("expected code %s, got %s", codeCOMMANDCONTRACTCONSISTENCYLEVEL01, r.Code)
+	}
+}
+
+// TestCOMMANDCONTRACTCONSISTENCYLEVEL01_L1ToL4Accepted checks that command
+// contracts declaring any level >= L1 (including L4 devicecommand) are not
+// flagged — the rule is a lower-bound (>= L1), not an exact-level lock.
+func TestCOMMANDCONTRACTCONSISTENCYLEVEL01_L1ToL4Accepted(t *testing.T) {
+	t.Parallel()
+	for _, level := range []string{"L1", "L2", "L3", "L4"} {
+		level := level
+		t.Run(level, func(t *testing.T) {
+			t.Parallel()
+			project := buildCommandProjectLevel(level)
+			v := NewValidator(project, "", clock.Real())
+			results := filterByCode(v.validateCOMMANDCONTRACTCONSISTENCYLEVEL01(), codeCOMMANDCONTRACTCONSISTENCYLEVEL01)
+			if len(results) != 0 {
+				t.Fatalf("level %s command must not be flagged, got %d: %v", level, len(results), results)
+			}
+		})
+	}
+}
+
+// TestCOMMANDCONTRACTCONSISTENCYLEVEL01_EmptyOrInvalidNotDoubleReported checks
+// that empty / unparseable consistencyLevel is NOT reported by this rule — it is
+// bottomed out by FMT-03 (contract consistencyLevel validity) and the parser's
+// non-empty rejection. Re-reporting it here would double-report the same root
+// cause.
+func TestCOMMANDCONTRACTCONSISTENCYLEVEL01_EmptyOrInvalidNotDoubleReported(t *testing.T) {
+	t.Parallel()
+	for _, level := range []string{"", "L9", "garbage"} {
+		level := level
+		t.Run(level, func(t *testing.T) {
+			t.Parallel()
+			project := buildCommandProjectLevel(level)
+			v := NewValidator(project, "", clock.Real())
+			results := filterByCode(v.validateCOMMANDCONTRACTCONSISTENCYLEVEL01(), codeCOMMANDCONTRACTCONSISTENCYLEVEL01)
+			if len(results) != 0 {
+				t.Fatalf("level %q must not be reported by CONSISTENCY-LEVEL-01 (FMT-03 backstop), got %d: %v", level, len(results), results)
+			}
+		})
+	}
+}
+
+// TestCOMMANDCONTRACTCONSISTENCYLEVEL01_NonCommandNotFlagged checks that a
+// non-command contract declaring L0 is NOT flagged by this rule. The rule is
+// command-kind specific.
+func TestCOMMANDCONTRACTCONSISTENCYLEVEL01_NonCommandNotFlagged(t *testing.T) {
+	t.Parallel()
+	c := &metadata.ContractMeta{
+		ID:               "http.test.users.v1",
+		Kind:             "http",
+		OwnerCell:        metadatatest.CellIDTestCell,
+		ConsistencyLevel: "L0",
+		Lifecycle:        "active",
+		Dir:              "contracts/http/test/users/v1",
+		File:             "contracts/http/test/users/v1/contract.yaml",
+	}
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			metadatatest.CellIDTestCell: {ID: metadatatest.CellIDTestCell},
+		},
+		Slices:     map[string]*metadata.SliceMeta{},
+		Contracts:  map[string]*metadata.ContractMeta{"http.test.users.v1": c},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(project, "", clock.Real())
+	results := v.validateCOMMANDCONTRACTCONSISTENCYLEVEL01()
+	if len(results) != 0 {
+		t.Fatalf("non-command contract must not be flagged by COMMAND-CONTRACT-CONSISTENCY-LEVEL-01, got %d: %v", len(results), results)
 	}
 }
