@@ -187,15 +187,15 @@ func TestHandleRefresh(t *testing.T) {
 				cookies := w.Result().Cookies()
 				var found *http.Cookie
 				for _, c := range cookies {
-					if c.Name == "gocell_rt" {
+					if c.Name == "__Host-gocell_rt" {
 						found = c
 						break
 					}
 				}
-				require.NotNil(t, found, "expected gocell_rt Set-Cookie on 200")
+				require.NotNil(t, found, "expected __Host-gocell_rt Set-Cookie on 200")
 				assert.NotEmpty(t, found.Value, "Set-Cookie value must be non-empty rotated token")
-				assert.True(t, found.HttpOnly, "gocell_rt must be HttpOnly")
-				assert.True(t, found.Secure, "gocell_rt must be Secure")
+				assert.True(t, found.HttpOnly, "__Host-gocell_rt must be HttpOnly")
+				assert.True(t, found.Secure, "__Host-gocell_rt must be Secure")
 				assert.Equal(t, http.SameSiteStrictMode, found.SameSite)
 				assert.Equal(t, int(testCookieTTL.Seconds()), found.MaxAge)
 			},
@@ -343,7 +343,7 @@ func TestHandleRefresh_UserNotActive_Returns401(t *testing.T) {
 }
 
 // TestHandleRefresh_CookieOnly verifies that a request with an empty JSON body
-// but a valid gocell_rt cookie succeeds (schema relaxation: required:[]).
+// but a valid __Host-gocell_rt cookie succeeds (schema relaxation: required:[]).
 func TestHandleRefresh_CookieOnly(t *testing.T) {
 	mux, validToken := setup(t)
 
@@ -351,7 +351,7 @@ func TestHandleRefresh_CookieOnly(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, refreshPath, strings.NewReader("{}"))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Tenant-ID", testTenantIDStr)
-	req.AddCookie(&http.Cookie{Name: "gocell_rt", Value: validToken})
+	req.AddCookie(&http.Cookie{Name: "__Host-gocell_rt", Value: validToken})
 	mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code, "cookie-only refresh must succeed")
@@ -360,12 +360,12 @@ func TestHandleRefresh_CookieOnly(t *testing.T) {
 	cookies := w.Result().Cookies()
 	var found *http.Cookie
 	for _, c := range cookies {
-		if c.Name == "gocell_rt" {
+		if c.Name == "__Host-gocell_rt" {
 			found = c
 			break
 		}
 	}
-	require.NotNil(t, found, "expected gocell_rt Set-Cookie on 200")
+	require.NotNil(t, found, "expected __Host-gocell_rt Set-Cookie on 200")
 	assert.NotEmpty(t, found.Value, "rotated token must be non-empty")
 	assert.True(t, found.HttpOnly)
 	assert.True(t, found.Secure)
@@ -387,7 +387,7 @@ func TestHandleRefresh_CookiePriority(t *testing.T) {
 		strings.NewReader(`{"refreshToken":"`+garbageToken+`"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Tenant-ID", testTenantIDStr)
-	req.AddCookie(&http.Cookie{Name: "gocell_rt", Value: validToken})
+	req.AddCookie(&http.Cookie{Name: "__Host-gocell_rt", Value: validToken})
 	mux.ServeHTTP(w, req)
 
 	// The cookie's valid token must win → 200, not 401.
@@ -398,12 +398,12 @@ func TestHandleRefresh_CookiePriority(t *testing.T) {
 	cookies := w.Result().Cookies()
 	var found *http.Cookie
 	for _, c := range cookies {
-		if c.Name == "gocell_rt" {
+		if c.Name == "__Host-gocell_rt" {
 			found = c
 			break
 		}
 	}
-	require.NotNil(t, found, "expected gocell_rt Set-Cookie on 200")
+	require.NotNil(t, found, "expected __Host-gocell_rt Set-Cookie on 200")
 	assert.NotEmpty(t, found.Value)
 }
 

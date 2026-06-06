@@ -1,9 +1,13 @@
-// INVARIANT: REFRESH-COOKIE-SECURE-ATTRS-01
+//   - INVARIANT: REFRESH-COOKIE-SECURE-ATTRS-01
+//   - INVARIANT: REFRESH-COOKIE-SINGLE-WRITER-01
 
 package archtest
 
 import (
 	"go/ast"
+	"go/token"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,9 +15,18 @@ import (
 
 // REFRESH-COOKIE-SECURE-ATTRS-01
 //
-// Claim: every http.Cookie composite literal in
-// cells/accesscore/internal/httpcookie (production code) MUST set the three
-// security attributes HttpOnly:true, Secure:true, SameSite:http.SameSiteStrictMode.
+// Claim (two parts):
+//
+//  1. Secure attributes — every http.Cookie composite literal in
+//     cells/accesscore/internal/httpcookie (production code) MUST set the three
+//     security attributes HttpOnly:true, Secure:true,
+//     SameSite:http.SameSiteStrictMode (scanRefreshCookieSecureAttrs).
+//  2. Host-binding — the package's CookieName const MUST be "__Host-gocell_rt"
+//     and CookiePath MUST be "/", and no http.Cookie literal may set a Domain
+//     (scanRefreshCookieHostBound). The browser-enforced __Host- prefix binds
+//     the long-lived, cookie-first refresh credential to the exact host, so a
+//     sibling subdomain cannot set or override it (cookie tossing / fixation);
+//     the prefix is only honored when Secure + Path=/ + no Domain all hold.
 //
 // # Why
 //
@@ -55,10 +68,53 @@ import (
 //     exact shape, and the RED fixture (refreshcookiefixture, Secure:false) is
 //     asserted to produce exactly one diagnostic in
 //     TestRefreshCookieSecureAttrs_RedFixtureDetected.
-//   - ACCEPTED (out of scope): cookies constructed OUTSIDE the httpcookie
-//     package. The package is the single sanctioned cookie constructor for the
-//     refresh token; cross-package raw http.SetCookie of the refresh token is a
-//     review concern, not covered here (would be a different, broader rule).
+//   - Cross-package writes of the refresh cookie are NO LONGER out of scope:
+//     REFRESH-COOKIE-SINGLE-WRITER-01 (scanRefreshCookieSingleWriter, below)
+//     enforces that the refresh-cookie name may only be written inside the
+//     httpcookie package. (Superseded the pre-#1677 "ACCEPTED out of scope"
+//     carve-out.)
+//
+// REFRESH-COOKIE-SINGLE-WRITER-01
+//
+// Claim: the refresh-cookie name "__Host-gocell_rt" may be written ONLY inside
+// cells/accesscore/internal/httpcookie. Any other production package that emits
+// a cookie with this name (via http.Cookie{Name:...}, raw Set-Cookie header, or
+// the httpcookie.CookieName const) is a single-writer violation — it would let
+// a second site mint or weaken the host-bound refresh credential outside the
+// one audited constructor.
+//
+// # Tool: archtest.Run(Production(TypedOpts{})) + EachInSubtree
+//
+// Two checks per production file (httpcookie package skipped):
+//
+//   - Check A (AST, always): a bare string literal == "__Host-gocell_rt".
+//     Covers http.Cookie{Name:"..."} AND a raw Set-Cookie header string write.
+//   - Check B (typed, when the Pass carries types): an http.Cookie{Name: X}
+//     where X is NOT a literal but EvaluateConstString resolves it to the
+//     sentinel (e.g. a reference to httpcookie.CookieName). Closes the
+//     const-reference blind spot that Check A's literal scan would miss.
+//
+// # AI-robust grading (REFRESH-COOKIE-SINGLE-WRITER-01)
+//
+//   - Rating: Medium both axes. Downstream: the scan resolves the sentinel via
+//     EvaluateConstString (literal / local const / cross-package const all
+//     match) + a bare-literal AST scan for raw header writes; RED fixture proves
+//     it is non-vacuous. Upstream Medium (honest ceiling): a cookie name is just
+//     a string to net/http, so Go cannot make "only httpcookie emits this name"
+//     unexpressible — same #851/#893/#1282 family (won't-do).
+//   - Blind spots (declared per ai-robust §强制盲区自检) + closures:
+//   - String-concat name ("__Host-" + "gocell_rt") dodges both checks. OPEN
+//     (declared): implausible + review-visible; same class as other
+//     string-anchor blind spots.
+//   - Field-by-field assignment (c := &http.Cookie{}; c.Name = sentinel) —
+//     Check A still catches the sentinel literal; only a const-ref assigned
+//     field-by-field outside an http.Cookie literal escapes. OPEN (declared).
+//   - net/http imported under an alias would make Check B's isHTTPCookieType
+//     miss the composite literal; Check A (literal) is unaffected. OPEN for the
+//     const-ref-via-aliased-http.Cookie corner only (declared).
+//   - Vacuity: a mis-scoped scan would silently pass (0 hits). CLOSED:
+//     TestRefreshCookieSingleWriter_RedFixtureDetected asserts the fixture
+//     (a cross-package sentinel writer) yields exactly one diagnostic.
 
 func isHTTPCookieType(expr ast.Expr) bool {
 	sel, ok := expr.(*ast.SelectorExpr)
@@ -176,4 +232,187 @@ func TestRefreshCookieSecureAttrs_RedFixtureDetected(t *testing.T) {
 	// fixture or the rule surfaces here.
 	assert.Len(t, diags, 1,
 		"refreshcookiefixture must yield exactly 1 REFRESH-COOKIE-SECURE-ATTRS-01 hit (Secure:false)")
+}
+
+// refreshCookieName is the sentinel refresh-cookie name. Single source for the
+// host-bound shape check and the cross-package single-writer scan.
+const refreshCookieName = "__Host-gocell_rt"
+
+// httpcookiePkgRel is the module-relative path of the sole sanctioned writer of
+// the refresh cookie (REFRESH-COOKIE-SINGLE-WRITER-01 skips it).
+const httpcookiePkgRel = "cells/accesscore/internal/httpcookie"
+
+// scanRefreshCookieHostBound enforces the host-binding half of
+// REFRESH-COOKIE-SECURE-ATTRS-01 inside the httpcookie package: CookieName must
+// be the __Host- sentinel, CookiePath must be "/", and no http.Cookie literal
+// may set a Domain. Anti-vacuity fires if either const is missing.
+func scanRefreshCookieHostBound(p *Pass) []Diagnostic {
+	var ds []Diagnostic
+	const wantName = `"` + refreshCookieName + `"`
+	const wantPath = `"/"`
+	foundName, foundPath := false, false
+	for _, file := range p.Files {
+		rel := p.Rel(file)
+		for _, decl := range file.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for i, name := range vs.Names {
+					if i >= len(vs.Values) {
+						continue
+					}
+					lit, ok := vs.Values[i].(*ast.BasicLit)
+					if !ok {
+						continue
+					}
+					line := p.Fset.Position(lit.Pos()).Line
+					switch name.Name {
+					case "CookieName":
+						foundName = true
+						if lit.Value != wantName {
+							ds = append(ds, Diagnostic{
+								Rel: rel, Line: line,
+								Message: "CookieName must be " + wantName + " (the __Host- prefix is browser-enforced host-binding)",
+							})
+						}
+					case "CookiePath":
+						foundPath = true
+						if lit.Value != wantPath {
+							ds = append(ds, Diagnostic{
+								Rel: rel, Line: line,
+								Message: "CookiePath must be " + wantPath + " (mandated by the __Host- prefix)",
+							})
+						}
+					}
+				}
+			}
+		}
+		EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
+			if !isHTTPCookieType(cl.Type) {
+				return
+			}
+			EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
+				if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "Domain" {
+					ds = append(ds, Diagnostic{
+						Rel: rel, Line: p.Fset.Position(kv.Pos()).Line,
+						Message: "refresh cookie must not set Domain (the __Host- prefix forbids it)",
+					})
+				}
+			})
+		})
+	}
+	if !foundName {
+		ds = append(ds, Diagnostic{
+			Rel: "(scope)", Line: 0,
+			Message: "anti-vacuity: CookieName const not found in httpcookie package",
+		})
+	}
+	if !foundPath {
+		ds = append(ds, Diagnostic{
+			Rel: "(scope)", Line: 0,
+			Message: "anti-vacuity: CookiePath const not found in httpcookie package",
+		})
+	}
+	return ds
+}
+
+// scanRefreshCookieSingleWriter enforces REFRESH-COOKIE-SINGLE-WRITER-01: the
+// refresh-cookie name may only be written inside the httpcookie package. See the
+// file-head godoc for Check A / Check B and the blind-spot inventory.
+func scanRefreshCookieSingleWriter(p *Pass) []Diagnostic {
+	var ds []Diagnostic
+	for _, file := range p.Files {
+		rel := p.Rel(file)
+		if rel == httpcookiePkgRel || strings.HasPrefix(rel, httpcookiePkgRel+"/") {
+			continue // the single sanctioned writer
+		}
+		// Check A: bare string literal == sentinel (covers http.Cookie{Name:"…"}
+		// AND a raw Set-Cookie header string write).
+		EachInSubtree[ast.BasicLit](file, func(lit *ast.BasicLit) {
+			if lit.Kind != token.STRING {
+				return
+			}
+			if s, err := strconv.Unquote(lit.Value); err == nil && s == refreshCookieName {
+				ds = append(ds, Diagnostic{
+					Rel: rel, Line: p.Fset.Position(lit.Pos()).Line,
+					Message: "refresh cookie name " + strconv.Quote(refreshCookieName) + " may only be written in " + httpcookiePkgRel,
+				})
+			}
+		})
+		// Check B: http.Cookie{Name: <non-literal const>} resolving to sentinel
+		// (covers a const ref such as httpcookie.CookieName; needs types).
+		if !p.Typed() {
+			continue
+		}
+		EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
+			if !isHTTPCookieType(cl.Type) {
+				return
+			}
+			EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
+				key, ok := kv.Key.(*ast.Ident)
+				if !ok || key.Name != "Name" {
+					return
+				}
+				if _, isLit := kv.Value.(*ast.BasicLit); isLit {
+					return // already covered by Check A
+				}
+				if s, ok := EvaluateConstString(p.TypesInfo, kv.Value); ok && s == refreshCookieName {
+					ds = append(ds, Diagnostic{
+						Rel: rel, Line: p.Fset.Position(kv.Pos()).Line,
+						Message: "refresh cookie name (via const) may only be written in " + httpcookiePkgRel,
+					})
+				}
+			})
+		})
+	}
+	return ds
+}
+
+// TestRefreshCookieHostBound asserts the host-binding shape (CookieName / Path /
+// no Domain) on the real httpcookie package.
+func TestRefreshCookieHostBound(t *testing.T) {
+	t.Parallel()
+
+	root := findModuleRoot(t)
+	scope := DirsScope(root, []string{"cells/accesscore/internal/httpcookie"})
+
+	diags := Run(t, AST(scope), scanRefreshCookieHostBound)
+
+	Report(t, "REFRESH-COOKIE-SECURE-ATTRS-01", diags)
+}
+
+// TestRefreshCookieSingleWriter asserts no production package outside httpcookie
+// writes the refresh-cookie name.
+func TestRefreshCookieSingleWriter(t *testing.T) {
+	t.Parallel()
+
+	diags := Run(t, Production(TypedOpts{}), scanRefreshCookieSingleWriter)
+
+	Report(t, "REFRESH-COOKIE-SINGLE-WRITER-01", diags)
+}
+
+// TestRefreshCookieSingleWriter_RedFixtureDetected asserts the cross-package
+// scan catches a sentinel-named cookie written outside httpcookie, so a
+// zero-diagnostic outcome on real production is informative (rule works) rather
+// than vacuous (rule mis-scoped).
+func TestRefreshCookieSingleWriter_RedFixtureDetected(t *testing.T) {
+	diags := Run(t, Fixture(
+		FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/refreshcookiefixture/..."},
+	), scanRefreshCookieSingleWriter)
+
+	for _, d := range diags {
+		t.Logf("RED fixture hit: %s:%d %s", d.Rel, d.Line, d.Message)
+	}
+
+	// Exactly one hit: the fixture's crossWriterCookie sets Name to the sentinel
+	// once. Equality pins the fixture so drift in either side surfaces here.
+	assert.Len(t, diags, 1,
+		"refreshcookiefixture must yield exactly 1 REFRESH-COOKIE-SINGLE-WRITER-01 hit (cross-package __Host-gocell_rt writer)")
 }

@@ -90,7 +90,7 @@ func NewHandler(svc *Service, cookieTTL time.Duration) *Handler {
 
 // RegisterRoutes mounts the session-delete contract handler on mux, wrapped with
 // [httpcookie.Middleware] so that a successful 204 response carries
-// Set-Cookie: gocell_rt=; ...; Max-Age=0 to delete the refresh cookie.
+// Set-Cookie: __Host-gocell_rt=; ...; Max-Age=0 to delete the refresh cookie.
 // The parameter type is cell.RouteHandler (not cell.RouteMux) because the
 // generated handler_gen.go declares RegisterRoutes(mux cell.RouteHandler) — the
 // minimum interface that both production RouteMux and stdlib *http.ServeMux

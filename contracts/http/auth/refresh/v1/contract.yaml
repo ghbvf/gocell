@@ -1,15 +1,18 @@
 # Response headers (documentation; codegen does not emit response headers —
 # tracked in backlog issue #1494 "contractgen: support header parameters"):
 #
-#   Set-Cookie: gocell_rt=<refreshToken>; HttpOnly; Secure; SameSite=Strict;
-#               Path=/api/v1/access/sessions; Max-Age=<refresh TTL in seconds>
+#   Set-Cookie: __Host-gocell_rt=<refreshToken>; HttpOnly; Secure; SameSite=Strict;
+#               Path=/; Max-Age=<refresh TTL in seconds>
 #     Condition: emitted on 200 only (4xx/5xx leave the cookie untouched).
 #     Source:    httpcookie.Middleware (cells/accesscore/internal/httpcookie)
 #                wraps the response writer and writes the Set-Cookie header
 #                before the status is committed.
+#     Naming:    the __Host- prefix is browser-enforced host-binding (requires
+#                Secure, no Domain, Path=/) so a sibling subdomain cannot set or
+#                override this cookie-first refresh credential.
 #
 # Refresh token source (cookie-first, body-fallback — BR-005 #1278):
-#   1. If the inbound gocell_rt cookie is present its value is used as the
+#   1. If the inbound __Host-gocell_rt cookie is present its value is used as the
 #      refresh token; the request body refreshToken field is ignored.
 #   2. Otherwise the body refreshToken field is used.
 #   The body field is therefore optional (required:[]) but a cookie-only client

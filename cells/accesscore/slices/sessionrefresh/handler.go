@@ -20,7 +20,7 @@ type RefreshAdapter struct{ S *Service }
 // and decodes refreshToken from the request body.
 //
 // Token source (cookie-first, body-fallback — BR-005 #1278):
-//  1. If the inbound gocell_rt cookie is present, its value is used as the
+//  1. If the inbound __Host-gocell_rt cookie is present, its value is used as the
 //     refresh token; the request body refreshToken field is ignored.
 //  2. Otherwise the body refreshToken field is used.
 //

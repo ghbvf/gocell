@@ -90,8 +90,8 @@ func NewHandler(svc *Service, cookieTTL time.Duration) *Handler {
 // RegisterRoutes mounts the login contract handler on mux.
 // The route is wrapped with two middlewares:
 //  1. httpcookie.Middleware (outermost) — intercepts WriteHeader to emit the
-//     Set-Cookie: gocell_rt header on 2xx responses when the adapter called
-//     httpcookie.SetRefresh.
+//     Set-Cookie: __Host-gocell_rt header on 2xx responses when the adapter
+//     called httpcookie.SetRefresh.
 //  2. injectLoginTenant (innermost) — reads X-Tenant-ID from the HTTP request
 //     headers and stores it in ctx under loginTenantCtxKey so LoginAdapter.Login
 //     can retrieve it without access to the raw request.

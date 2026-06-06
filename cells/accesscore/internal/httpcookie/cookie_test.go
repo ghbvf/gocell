@@ -12,7 +12,7 @@ import (
 const testTTL = 7 * 24 * time.Hour // mirrors accesscore.DefaultRefreshMaxAge
 
 // serve runs h wrapped by Middleware(testTTL) against a request that
-// optionally carries an inbound gocell_rt cookie, returning the recorder.
+// optionally carries an inbound refresh cookie, returning the recorder.
 func serve(t *testing.T, inboundCookie string, h http.HandlerFunc) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/sessions/refresh", nil)
@@ -43,7 +43,7 @@ func TestMiddleware_SetOnSuccess(t *testing.T) {
 
 	got := findCookie(rec)
 	if got == nil {
-		t.Fatalf("expected gocell_rt cookie, got none; headers=%v", rec.Header())
+		t.Fatalf("expected refresh cookie, got none; headers=%v", rec.Header())
 	}
 	if got.Value != "tok-abc" {
 		t.Errorf("cookie value = %q, want tok-abc", got.Value)
@@ -65,7 +65,7 @@ func TestMiddleware_SetOnSuccess(t *testing.T) {
 	}
 	// Wire-string assertions per issue spec.
 	raw := rec.Header().Get("Set-Cookie")
-	for _, want := range []string{"HttpOnly", "Secure", "SameSite=Strict", "Max-Age=604800", "Path=/api/v1/access/sessions"} {
+	for _, want := range []string{"__Host-gocell_rt=", "HttpOnly", "Secure", "SameSite=Strict", "Max-Age=604800", "Path=/"} {
 		if !strings.Contains(raw, want) {
 			t.Errorf("Set-Cookie %q missing %q", raw, want)
 		}
@@ -81,7 +81,7 @@ func TestMiddleware_ClearOnSuccess(t *testing.T) {
 
 	got := findCookie(rec)
 	if got == nil {
-		t.Fatalf("expected clearing gocell_rt cookie, got none; headers=%v", rec.Header())
+		t.Fatalf("expected clearing refresh cookie, got none; headers=%v", rec.Header())
 	}
 	if got.Value != "" {
 		t.Errorf("clear cookie value = %q, want empty", got.Value)

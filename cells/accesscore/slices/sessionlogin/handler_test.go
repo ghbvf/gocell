@@ -240,7 +240,7 @@ func TestHandler_Login_BlankPassword(t *testing.T) {
 }
 
 // TestHandler_Login_SetsRefreshCookie asserts that a successful login (201)
-// emits a gocell_rt httpOnly cookie carrying the refresh token, while the JSON
+// emits a __Host-gocell_rt httpOnly cookie carrying the refresh token, while the JSON
 // body still contains the same refreshToken value (backward compat).
 func TestHandler_Login_SetsRefreshCookie(t *testing.T) {
 	h := setup(t)
@@ -262,26 +262,26 @@ func TestHandler_Login_SetsRefreshCookie(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.NotEmpty(t, resp.Data.RefreshToken, "body must still carry refreshToken")
 
-	// Find the gocell_rt cookie in the response.
+	// Find the __Host-gocell_rt cookie in the response.
 	var rtCookie *http.Cookie
 	for _, c := range w.Result().Cookies() {
-		if c.Name == "gocell_rt" {
+		if c.Name == "__Host-gocell_rt" {
 			rtCookie = c
 			break
 		}
 	}
-	require.NotNil(t, rtCookie, "Set-Cookie: gocell_rt must be present on 201 response")
+	require.NotNil(t, rtCookie, "Set-Cookie: __Host-gocell_rt must be present on 201 response")
 	assert.NotEmpty(t, rtCookie.Value, "cookie value must not be empty")
 	assert.Equal(t, resp.Data.RefreshToken, rtCookie.Value, "cookie value must match body refreshToken")
 	assert.True(t, rtCookie.HttpOnly, "cookie must be HttpOnly")
 	assert.True(t, rtCookie.Secure, "cookie must be Secure")
 	assert.Equal(t, http.SameSiteStrictMode, rtCookie.SameSite, "cookie must be SameSite=Strict")
-	assert.Equal(t, "/api/v1/access/sessions", rtCookie.Path, "cookie Path must be /api/v1/access/sessions")
+	assert.Equal(t, "/", rtCookie.Path, "cookie Path must be / (mandated by __Host- prefix)")
 	assert.Equal(t, int(testCookieTTL.Seconds()), rtCookie.MaxAge, "cookie MaxAge must match cookieTTL arg")
 }
 
 // TestHandler_Login_NoCookieOn401 asserts that a failed login (401) does NOT
-// emit a gocell_rt cookie — a 4xx must neither mint nor clear the cookie.
+// emit a __Host-gocell_rt cookie — a 4xx must neither mint nor clear the cookie.
 func TestHandler_Login_NoCookieOn401(t *testing.T) {
 	h := setup(t)
 	body := `{"username":"alice","password":"wrong-password"}`
@@ -293,6 +293,6 @@ func TestHandler_Login_NoCookieOn401(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 	for _, c := range w.Result().Cookies() {
-		assert.NotEqual(t, "gocell_rt", c.Name, "no gocell_rt cookie must be set on 401")
+		assert.NotEqual(t, "__Host-gocell_rt", c.Name, "no __Host-gocell_rt cookie must be set on 401")
 	}
 }

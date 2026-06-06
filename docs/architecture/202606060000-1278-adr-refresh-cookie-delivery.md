@@ -19,7 +19,12 @@ client that uses the JSON body.
 ## Decision
 
 1. **Set-Cookie on login (201) / refresh (200)**:
-   `Set-Cookie: gocell_rt=<refreshToken>; HttpOnly; Secure; SameSite=Strict; Path=/api/v1/access/sessions; Max-Age=<refresh TTL>`.
+   `Set-Cookie: __Host-gocell_rt=<refreshToken>; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=<refresh TTL>`.
+   The `__Host-` prefix is browser-enforced host-binding (the browser only
+   accepts the cookie when it is `Secure`, sets no `Domain`, and uses `Path=/`).
+   A sibling subdomain therefore cannot set or override this cookie. `Path` is
+   `/` because the prefix mandates it; it cannot be narrowed to the sessions
+   subtree without forfeiting host-binding (see threat matrix).
 2. **Refresh reads cookie-first, body-fallback**. The request schema's
    `refreshToken` becomes optional (`required: []`, `additionalProperties:false`
    kept); a cookie-only client still sends a JSON object body (minimally `{}`).
@@ -71,7 +76,8 @@ declared explicitly here rather than buried in the code.
 |--------|-----------|--------|
 | XSS reading the long-lived refresh token | `HttpOnly` (JS cannot read the cookie) | ✅ |
 | Token sent over plaintext | `Secure` (HTTPS-only; localhost is a secure context, so local dev works without a toggle) | ✅ |
-| CSRF on the public refresh endpoint | `SameSite=Strict` (browser will not attach the cookie cross-site) + `Path` narrowed to the sessions subtree | ✅ (primary defense) |
+| CSRF on the public refresh endpoint | `SameSite=Strict` (browser will not attach the cookie cross-site) | ✅ (primary defense) |
+| Cookie tossing / session fixation by a sibling subdomain (the refresh cookie is read cookie-first, so a forged same-name cookie would be trusted) | `__Host-` prefix: browser-enforced host-binding (no `Domain`, `Path=/`, `Secure`), so a sibling subdomain cannot set a `__Host-` cookie that reaches this host | ✅ |
 | CSRF defense-in-depth (double-submit / Origin check) | Not added; SameSite=Strict + httpOnly judged sufficient (issue) | ⚠️ deferred — tracked at #1680 |
 | Cross-origin credentialed requests | CORS not implemented | ⚠️ deferred — tracked at #1680 (same-origin/edge-bff in the interim) |
 | Refresh token also returned in JSON body | Intentional dual-channel: body is still returned for `edge-bff` / native-app callers that cannot read httpOnly cookies; cookie is the primary channel for browser clients | ✅ intentional (BR-005 §dual-channel) |
@@ -80,21 +86,39 @@ declared explicitly here rather than buried in the code.
 
 ## AI-robust grading
 
-The three security attributes (`HttpOnly`/`Secure`/`SameSite=Strict`) are the
+The cookie's security attributes (`HttpOnly`/`Secure`/`SameSite=Strict`) plus
+its `__Host-` host-binding (name prefix + `Path=/` + absent `Domain`) are the
 entire point of the feature: silently dropping `HttpOnly` would turn the
 long-lived refresh token into an XSS-readable credential — strictly worse than
-the memory-only status quo. A unit test asserting the wire string is Soft. So:
+the memory-only status quo — and silently dropping the `__Host-` prefix (or
+adding a `Domain`, or narrowing `Path`) would re-open the cookie tossing /
+fixation vector. A unit test asserting the wire string is Soft. So:
 
 - **`REFRESH-COOKIE-SECURE-ATTRS-01`** (`tools/archtest/refresh_cookie_secure_attrs_test.go`)
-  — Medium. AST form-lock: every `http.Cookie` composite literal in the
-  `httpcookie` package must set the three attributes; anti-vacuity (zero cookie
-  literals ⇒ fail) + net/http alias blind-spot closure + RED fixture
-  (`refreshcookiefixture`, `Secure:false` ⇒ exactly 1 diagnostic). **Hard ceiling
-  (honest)**: the holder is stdlib `net/http.Cookie` with public bool fields, so
-  the type system cannot make `Secure:false` unexpressible — a type-system Hard
-  is unreachable (same family as the #851/#893 holder-seal ceilings). The
+  — Medium. AST/const form-lock inside the `httpcookie` package: every
+  `http.Cookie` composite literal must set the three security attributes; and
+  the host-binding shape is pinned (`CookieName == "__Host-gocell_rt"`,
+  `CookiePath == "/"`, no `Domain` field on the cookie literal). Anti-vacuity
+  (zero cookie literals or missing name/path consts ⇒ fail) + net/http alias
+  blind-spot closure + RED fixture (`refreshcookiefixture`, `Secure:false` ⇒
+  exactly 1 diagnostic). **Hard ceiling (honest)**: the holder is stdlib
+  `net/http.Cookie` with public fields, so the type system cannot make
+  `Secure:false` / a wrong name unexpressible — a type-system Hard is
+  unreachable (same family as the #851/#893 holder-seal ceilings). The
   directive-provenance side IS Hard: `directiveCtxKey` is unexported, so no
   cross-package code can forge a `SetRefresh` directive.
+- **`REFRESH-COOKIE-SINGLE-WRITER-01`** (same file) — Medium both axes. A
+  repo-wide `Production` typed scan asserts the refresh-cookie name
+  (`__Host-gocell_rt`, resolved via `EvaluateConstString` so a literal, a local
+  const, or the cross-package `httpcookie.CookieName` const all match) is
+  written ONLY inside the `httpcookie` package; a bare-literal AST check covers
+  raw `Set-Cookie` header writes; RED fixture proves the cross-package scan is
+  non-vacuous. **Honest ceiling**: a cookie name is just a string to
+  `net/http`, so Go cannot make "only `httpcookie` may emit this cookie"
+  unexpressible — upstream Medium, same #851/#893/#1282 family (won't-do).
+  Declared blind spots (string-concat name, field-by-field assignment, a const
+  ref used in a raw header rather than `http.Cookie{Name:}`) live in the
+  archtest godoc.
 
 Full blind-spot inventory + reverse self-checks live in that archtest's package
 godoc (single source per the AI-robust charter).
