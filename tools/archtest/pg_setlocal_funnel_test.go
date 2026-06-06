@@ -17,12 +17,15 @@
 // (internal/pgsetlocalfixture) proves the scanner actually fires on a bare SET.
 //
 // Prong 2 — GUC-write funnel (the real lock). The app.tenant_id GUC write is the
-// tenant-isolation injection point; it must live in exactly one sanctioned
-// helper (tx_manager.go::setLocalTenant). This prong scans adapters/postgres
-// production string literals for a GUC-WRITE statement targeting app.tenant_id
-// (`set_config('app.tenant_id'…` / `SET [LOCAL] app.tenant_id`) and reports any
-// outside tx_manager.go. The anti-vacuity check requires the sole sanctioned
-// writer to be observed, so a scanner regression or a moved writer fails CI.
+// tenant-isolation injection point; it must live in exactly one file
+// (adapters/postgres/tx_manager.go). The single physical writer is
+// tx_manager.go::writeTenantGUC, called by setLocalTenant (tx-start, from the ctx
+// scope) and by ApplyTenantScope (mid-tx, explicit — #1617 PR-3b sessionrefresh).
+// This prong scans adapters/postgres production string literals for a GUC-WRITE
+// statement targeting app.tenant_id (`set_config('app.tenant_id'…` /
+// `SET [LOCAL] app.tenant_id`) and reports any outside tx_manager.go. The
+// anti-vacuity check requires the sanctioned writer to be observed, so a scanner
+// regression or a moved writer fails CI.
 //
 // # AI-robust rating (charter §"Funnel 双向锁评级")
 //
