@@ -34,7 +34,7 @@ func handleEvent(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 }
 ```
 
-> **回落字面量**：`outbox.HandleResult.ProcessReason` / `SettlementObservers` 字段无法用 factory 表达，需要时直接构造 `outbox.HandleResult{...}` 字面量（典型场景：kernel internal retry plumbing、middleware-handler 协议）。`OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01` archtest 把字面量构造限定在 `kernel/outbox/result.go` / `consumer_base.go` / `outboxtest/conformance.go` 三处 allowlist；业务路径必须用 `outbox.Ack()` / `Requeue(err)` / `Reject(err)`。`HandleResult` 字段集本身由 `OUTBOX-HANDLERESULT-FIELDS-FROZEN-01` 冻结。
+> **业务面 slim + subscriber 层载体（#663）**：业务 `outbox.HandleResult` 只有 `{Disposition, Err}` 两字段，factory（`outbox.Ack()` / `Requeue(err)` / `Reject(err)`）**全覆盖**——业务 handler 既不需要也无法构造携带 `ProcessReason` / `SettlementObservers` 的字面量（type-system Hard）。这两个非业务字段迁到 subscriber 层载体 `outbox.DeliveryOutcome{Disposition, Err, ProcessReason, SettlementObservers}`（`SubscriberHandler` 的返回类型，由 `ConsumerBase.Wrap` 从业务 `HandleResult` 升格产出；`ProcessReason` 仅 kernel 设 `"retry_exhausted"`，`SettlementObservers` 由 subscriber 层 wrapper —— `wrapper.WrapSubscriber` / `obmetrics.WrapConfigEventSubscriber` —— 注入）。`OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01` archtest 把 `HandleResult{...}` 字面量构造限定在 `kernel/outbox/result.go` / `outboxtest/conformance.go`（`consumer_base.go` 现构造 `DeliveryOutcome`，已移出该 allowlist）。`HandleResult` 2 字段集由 `OUTBOX-HANDLERESULT-FIELDS-FROZEN-01` 冻结、`DeliveryOutcome` 4 字段集由 `OUTBOX-DELIVERYOUTCOME-FIELDS-FROZEN-01` 冻结。详见 ADR `docs/architecture/202605031900-adr-handler-vocabulary-collapse.md` §Amendment 2026-06-06。
 
 ### Disposition 语义
 

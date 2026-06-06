@@ -94,24 +94,33 @@ func TestConfigEventMiddleware_RecordsProcessReasonFromSubscriptionOwner(t *test
 	require.Equal(t, []configEventProcessRecord{{
 		cell: "accesscore", slice: "configreceive", reason: obmetrics.ConfigEventProcessReasonAck,
 	}}, collector.processRecords)
-	require.Len(t, result.SettlementObservers, 1)
+	// Note: SettlementObservers is on DeliveryOutcome (SubscriberHandler layer),
+	// not on HandleResult (EntryHandler layer). ConfigEventMiddleware only injects
+	// owner ctx; settlement observer is added by WrapConfigEventSubscriber.
 }
 
-func TestConfigEventMiddleware_RecordsSettlementOnlyAfterNotification(t *testing.T) {
+// TestWrapConfigEventSubscriber_RecordsSettlementOnlyAfterNotification verifies
+// that the settlement observer added by WrapConfigEventSubscriber records the
+// metric only after NotifySettlement is called, not during handler execution.
+func TestWrapConfigEventSubscriber_RecordsSettlementOnlyAfterNotification(t *testing.T) {
 	collector := &recordingConfigEventCollector{}
-	mw := obmetrics.ConfigEventMiddleware(collector)
+	sub := outbox.Subscription{
+		Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore",
+		CellID: "accesscore", SliceID: "configreceive",
+	}
 	entry := newConfigEventEntry(t, "evt-1")
-	wrapped := mw(
-		outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
-		func(context.Context, outbox.Entry) outbox.HandleResult {
-			return outbox.Requeue(nil)
-		},
-	)
 
-	result := wrapped(context.Background(), entry)
+	// WrapConfigEventSubscriber wraps a SubscriberHandler and appends the
+	// settlement observer to DeliveryOutcome.SettlementObservers.
+	inner := func(context.Context, outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionRequeue}, nil
+	}
+	wrapped := obmetrics.WrapConfigEventSubscriber(collector, sub, inner)
+
+	outcome, _ := wrapped(context.Background(), entry)
 	assert.Empty(t, collector.settlementRecords)
 
-	outbox.NotifySettlement(context.Background(), result, entry, outbox.DispositionRequeue, outbox.SettlementResultSuccess, nil)
+	outbox.NotifySettlement(context.Background(), outcome, entry, outbox.DispositionRequeue, outbox.SettlementResultSuccess, nil)
 
 	require.Equal(t, []configEventSettlementRecord{{
 		cell: "accesscore", slice: "configreceive", disposition: "requeue", result: outbox.SettlementResultSuccess,
@@ -126,13 +135,21 @@ func TestConfigEventMiddleware_SkipsSubscriptionsWithoutOwnerOrConfigTopic(t *te
 		{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore"},
 		{Topic: "event.audit.appended.v1", ConsumerGroup: "auditcore", CellID: "auditcore", SliceID: "auditappend"},
 	} {
-		wrapped := mw(sub, func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
+		entry := newConfigEventEntry(t, "evt-1")
+		// EntryHandler layer (middleware): process reason must not be recorded.
+		entryHandler := mw(sub, func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
 			obmetrics.RecordConfigEventProcess(ctx, collector, obmetrics.ConfigEventProcessReasonAck)
 			return outbox.Ack()
 		})
-		entry := newConfigEventEntry(t, "evt-1")
-		result := wrapped(context.Background(), entry)
-		outbox.NotifySettlement(context.Background(), result,
+		entryHandler(context.Background(), entry)
+
+		// SubscriberHandler layer: settlement observer must not be appended for
+		// non-qualifying subscriptions (missing owner or non-config topic).
+		inner := func(context.Context, outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+			return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, nil
+		}
+		outcome, _ := obmetrics.WrapConfigEventSubscriber(collector, sub, inner)(context.Background(), entry)
+		outbox.NotifySettlement(context.Background(), outcome,
 			entry, outbox.DispositionAck, outbox.SettlementResultSuccess, nil)
 	}
 
@@ -222,23 +239,31 @@ func TestConfigEventOwnerValidator(t *testing.T) {
 	}
 }
 
-// TestConfigEventMiddleware_RetryExhaustedSettlement verifies that when
-// NotifySettlement is called with SettlementResultRetryExhausted, the
-// settlement observer records the correct result label.
-func TestConfigEventMiddleware_RetryExhaustedSettlement(t *testing.T) {
+// TestWrapConfigEventSubscriber_RetryExhaustedSettlement verifies that when
+// NotifySettlement is called with SettlementResultRetryExhausted on a
+// WrapConfigEventSubscriber-wrapped handler, the settlement observer records
+// the correct result label.
+func TestWrapConfigEventSubscriber_RetryExhaustedSettlement(t *testing.T) {
 	t.Parallel()
 	collector := &recordingConfigEventCollector{}
-	mw := obmetrics.ConfigEventMiddleware(collector)
+	sub := outbox.Subscription{
+		Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore",
+		CellID: "accesscore", SliceID: "configreceive",
+	}
 	entry := newConfigEventEntry(t, "evt-retry-exhausted")
-	wrapped := mw(
-		outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
-		func(context.Context, outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionReject, ProcessReason: "retry_exhausted"}
-		},
-	)
 
-	result := wrapped(context.Background(), entry)
-	outbox.NotifySettlement(context.Background(), result, entry, outbox.DispositionReject, outbox.SettlementResultRetryExhausted, nil)
+	// ProcessReason is carried on DeliveryOutcome (set by ConsumerBase.Wrap when
+	// retry budget is exhausted). Use it here to simulate the exhausted path.
+	inner := func(context.Context, outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{
+			Disposition:   outbox.DispositionReject,
+			ProcessReason: "retry_exhausted",
+		}, nil
+	}
+	wrapped := obmetrics.WrapConfigEventSubscriber(collector, sub, inner)
+
+	outcome, _ := wrapped(context.Background(), entry)
+	outbox.NotifySettlement(context.Background(), outcome, entry, outbox.DispositionReject, outbox.SettlementResultRetryExhausted, nil)
 
 	require.Equal(t, []configEventSettlementRecord{{
 		cell: "accesscore", slice: "configreceive", disposition: "reject", result: outbox.SettlementResultRetryExhausted,

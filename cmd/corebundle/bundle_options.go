@@ -57,6 +57,7 @@ func runtimeBaseOptions(
 		// after the business middleware chain.
 		bootstrap.WithConsumerBase(consumerBase),
 		bootstrap.WithConsumerMiddleware(consumerMiddlewares(shared)...),
+		bootstrap.WithConfigEventCollector(shared.ConfigEventCollector),
 		bootstrap.WithSubscriptionValidator(obmetrics.ConfigEventOwnerValidator),
 		bootstrap.WithAdapterInfo(adapterInfo),
 		bootstrap.WithHealthRoutes(healthRouteOpts...),

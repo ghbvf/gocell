@@ -435,7 +435,7 @@ func (s *Subscriber) processDelivery(ctx context.Context, pb *paho.Publish, hand
 // dispatchDisposition routes a handler result to the broker (ack / leave-unacked)
 // and settles the idempotency receipt. Mirrors adapters/rabbitmq dispatchDisposition.
 func (s *Subscriber) dispatchDisposition(
-	ctx context.Context, pb *paho.Publish, res outbox.HandleResult,
+	ctx context.Context, pb *paho.Publish, res outbox.DeliveryOutcome,
 	settlement outbox.Settlement, entry outbox.Entry, start time.Time,
 ) {
 	switch res.Disposition {
@@ -504,7 +504,7 @@ func (s *Subscriber) dispatchDisposition(
 // expired), the message is left unacked (broker redelivers) and the claim is
 // released so another holder retries — mirroring rabbitmq dispatchAck.
 func (s *Subscriber) dispatchAck(
-	ctx context.Context, pb *paho.Publish, res outbox.HandleResult,
+	ctx context.Context, pb *paho.Publish, res outbox.DeliveryOutcome,
 	settlement outbox.Settlement, entry outbox.Entry, start time.Time,
 ) {
 	if settlement != nil {

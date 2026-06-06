@@ -226,12 +226,12 @@ func TestMQTTSmoke_DeviceRegisterPublishesToBroker(t *testing.T) {
 	t.Cleanup(runCancel)
 	go func() {
 		_ = sub.Subscribe(runCtx, subscription,
-			func(_ context.Context, e outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+			func(_ context.Context, e outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 				select {
 				case received <- e:
 				default:
 				}
-				return outbox.Ack(), noopSettlement{}
+				return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, noopSettlement{}
 			})
 	}()
 	// Deterministic channel waits — no caller-supplied wall-clock budget (issue

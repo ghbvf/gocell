@@ -203,8 +203,8 @@ func TestSubscriber_Ready_ClosesAfterSubscribe(t *testing.T) {
 	default:
 	}
 
-	cancel := startSubscribe(t, sub, subscription, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.Ack(), nil
+	cancel := startSubscribe(t, sub, subscription, func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, nil
 	})
 	defer cancel()
 
@@ -224,7 +224,7 @@ func TestSubscriber_DispositionMatrix(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name        string
-		result      func() outbox.HandleResult
+		result      func() outbox.DeliveryOutcome
 		wantSuccess int
 		wantReason  ConsumeFailureReason
 		wantCommit  int
@@ -233,28 +233,32 @@ func TestSubscriber_DispositionMatrix(t *testing.T) {
 	}{
 		{
 			name:        "ack",
-			result:      outbox.Ack,
+			result:      func() outbox.DeliveryOutcome { return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck} },
 			wantSuccess: 1,
 			wantCommit:  1,
 			wantRelease: 0,
 		},
 		{
-			name:        "requeue",
-			result:      func() outbox.HandleResult { return outbox.Requeue(errors.New("transient")) },
+			name: "requeue",
+			result: func() outbox.DeliveryOutcome {
+				return outbox.DeliveryOutcome{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
+			},
 			wantReason:  consumeReasonRequeue,
 			wantRelease: 1,
 			wantDLX:     0, // Option C: Requeue leaves unacked for reconnect, no $dead
 		},
 		{
-			name:        "reject",
-			result:      func() outbox.HandleResult { return outbox.Reject(errors.New("permanent")) },
+			name: "reject",
+			result: func() outbox.DeliveryOutcome {
+				return outbox.DeliveryOutcome{Disposition: outbox.DispositionReject, Err: errors.New("permanent")}
+			},
 			wantReason:  consumeReasonReject,
 			wantRelease: 1,
 			wantDLX:     1, // Reject routes the envelope to $dead before ack-as-poison
 		},
 		{
 			name:        "zero-value-disposition",
-			result:      func() outbox.HandleResult { return outbox.HandleResult{} },
+			result:      func() outbox.DeliveryOutcome { return outbox.DeliveryOutcome{} },
 			wantReason:  consumeReasonUnknownDisposition,
 			wantRelease: 1,
 			wantDLX:     0, // unknown disposition degrades to Requeue (leave unacked), no $dead
@@ -279,7 +283,7 @@ func TestSubscriber_DispositionMatrix(t *testing.T) {
 			// makes the filters disjoint so no cross-subtest delivery occurs.
 			prefix := "test/disp/" + tc.name
 			subscription := newSubscription(prefix+"/+", "disp-"+tc.name+"-"+uuid.NewString())
-			cancel := startSubscribe(t, sub, subscription, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+			cancel := startSubscribe(t, sub, subscription, func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 				called.Store(true)
 				return tc.result(), settlement
 			})
@@ -343,9 +347,9 @@ func TestSubscriber_UnmarshalFail_PoisonAcked(t *testing.T) {
 
 	var handlerCalled atomic.Bool
 	subscription := newSubscription("test/poison/+", "poison-cg-"+uuid.NewString())
-	cancel := startSubscribe(t, sub, subscription, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+	cancel := startSubscribe(t, sub, subscription, func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 		handlerCalled.Store(true)
-		return outbox.Ack(), nil
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, nil
 	})
 	defer cancel()
 
@@ -452,12 +456,12 @@ func TestSubscriber_CompetingConsumers_ShareDistributes(t *testing.T) {
 	var dup atomic.Int64
 
 	mkHandler := func(counter *atomic.Int64) outbox.SubscriberHandler {
-		return func(_ context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+		return func(_ context.Context, entry outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 			counter.Add(1)
 			if _, loaded := seen.LoadOrStore(string(entry.Payload()), struct{}{}); loaded {
 				dup.Add(1)
 			}
-			return outbox.Ack(), nil
+			return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, nil
 		}
 	}
 
@@ -501,11 +505,11 @@ func TestSubscriber_StopIntake_DrainsInFlight(t *testing.T) {
 	var once sync.Once
 
 	subscription := newSubscription("test/drain/+", "drain-cg-"+uuid.NewString())
-	cancel := startSubscribe(t, sub, subscription, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+	cancel := startSubscribe(t, sub, subscription, func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 		once.Do(func() { close(entered) })
 		<-release
 		completed.Store(true)
-		return outbox.Ack(), nil
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, nil
 	})
 	defer cancel()
 
@@ -585,8 +589,8 @@ func TestSubscriber_Close_StopsBlockedSubscribe(t *testing.T) {
 
 	subscription := newSubscription("test/block/+", "block-cg-"+uuid.NewString())
 	subDone := make(chan error, 1)
-	ackHandler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.Ack(), nil
+	ackHandler := func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, nil
 	}
 	go func() {
 		subDone <- sub.Subscribe(context.Background(), subscription, ackHandler)
@@ -622,8 +626,8 @@ func TestSubscriber_MetricsEmission(t *testing.T) {
 
 	// First message acked (success), second is poison (failure).
 	subscription := newSubscription("test/metrics/+", "metrics-cg-"+uuid.NewString())
-	cancel := startSubscribe(t, sub, subscription, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.Ack(), &recordingSettlement{}
+	cancel := startSubscribe(t, sub, subscription, func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, &recordingSettlement{}
 	})
 	defer cancel()
 
@@ -673,7 +677,7 @@ func TestSubscriber_DispatchAck_AckFailsAfterCommit(t *testing.T) {
 
 	settlement := &recordingSettlement{} // commitErr nil → Commit succeeds
 	pb, entry := dispatchAckEntry(t, "test/ackfail/x")
-	sub.dispatchAck(context.Background(), pb, outbox.Ack(), settlement, entry, time.Now())
+	sub.dispatchAck(context.Background(), pb, outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, settlement, entry, time.Now())
 
 	success, failure, lastReason := coll.snapshot()
 	commit, release := settlement.counts()
@@ -698,7 +702,7 @@ func TestSubscriber_DispatchAck_CommitFails(t *testing.T) {
 
 	settlement := &recordingSettlement{commitErr: errors.New("lease expired")}
 	pb, entry := dispatchAckEntry(t, "test/commitfail/x")
-	sub.dispatchAck(context.Background(), pb, outbox.Ack(), settlement, entry, time.Now())
+	sub.dispatchAck(context.Background(), pb, outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, settlement, entry, time.Now())
 
 	success, failure, lastReason := coll.snapshot()
 	commit, release := settlement.counts()
@@ -737,10 +741,10 @@ func TestSubscriber_StopIntake_DrainTimeout(t *testing.T) {
 	t.Cleanup(func() { close(release) })
 
 	subscription := newSubscription("test/draintimeout/+", "draintimeout-cg-"+uuid.NewString())
-	cancel := startSubscribe(t, sub, subscription, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+	cancel := startSubscribe(t, sub, subscription, func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 		once.Do(func() { close(entered) })
 		<-release // blocks until cleanup; keeps inflight > 0 past the drain budget
-		return outbox.Ack(), nil
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, nil
 	})
 	defer cancel()
 
@@ -796,14 +800,14 @@ func TestSubscriber_NotifySettlement_FiresObservers(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name       string
-		result     func(obs outbox.SettlementObserver) outbox.HandleResult
+		result     func(obs outbox.SettlementObserver) outbox.DeliveryOutcome
 		wantDisp   outbox.Disposition
 		wantResult outbox.SettlementResult
 	}{
 		{
 			name: "ack",
-			result: func(o outbox.SettlementObserver) outbox.HandleResult {
-				return outbox.HandleResult{
+			result: func(o outbox.SettlementObserver) outbox.DeliveryOutcome {
+				return outbox.DeliveryOutcome{
 					Disposition:         outbox.DispositionAck,
 					SettlementObservers: []outbox.SettlementObserver{o},
 				}
@@ -813,8 +817,8 @@ func TestSubscriber_NotifySettlement_FiresObservers(t *testing.T) {
 		},
 		{
 			name: "reject",
-			result: func(o outbox.SettlementObserver) outbox.HandleResult {
-				return outbox.HandleResult{
+			result: func(o outbox.SettlementObserver) outbox.DeliveryOutcome {
+				return outbox.DeliveryOutcome{
 					Disposition:         outbox.DispositionReject,
 					Err:                 errors.New("permanent"),
 					SettlementObservers: []outbox.SettlementObserver{o},
@@ -825,8 +829,8 @@ func TestSubscriber_NotifySettlement_FiresObservers(t *testing.T) {
 		},
 		{
 			name: "requeue",
-			result: func(o outbox.SettlementObserver) outbox.HandleResult {
-				return outbox.HandleResult{
+			result: func(o outbox.SettlementObserver) outbox.DeliveryOutcome {
+				return outbox.DeliveryOutcome{
 					Disposition:         outbox.DispositionRequeue,
 					Err:                 errors.New("transient"),
 					SettlementObservers: []outbox.SettlementObserver{o},
@@ -860,7 +864,7 @@ func TestSubscriber_NotifySettlement_FiresObservers(t *testing.T) {
 
 			prefix := "test/notify/" + tc.name
 			subscription := newSubscription(prefix+"/+", "notify-"+tc.name+"-"+uuid.NewString())
-			cancel := startSubscribe(t, sub, subscription, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+			cancel := startSubscribe(t, sub, subscription, func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 				return tc.result(obs), &recordingSettlement{}
 			})
 			defer cancel()
@@ -908,14 +912,14 @@ func TestSubscriber_ConcurrentDispatch_SlowHandlerDoesNotBlock(t *testing.T) {
 	})
 
 	subscription := newSubscription("test/conc/+", "conc-cg-"+uuid.NewString())
-	cancel := startSubscribe(t, sub, subscription, func(_ context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+	cancel := startSubscribe(t, sub, subscription, func(_ context.Context, entry outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 		if string(entry.Payload()) == slowPayload {
 			slowEntered.Store(true)
 			<-block // block until released
 		} else {
 			fastDone.Store(true)
 		}
-		return outbox.Ack(), nil
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, nil
 	})
 	defer cancel()
 

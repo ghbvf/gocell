@@ -755,40 +755,60 @@ func (f SettlementObserverFunc) ObserveSettlement(ctx context.Context, obs Settl
 }
 
 // HandleResult carries the business handler's processing outcome.
-// The Subscriber inspects Disposition to decide Ack/Nack, then calls
-// Settlement.Commit or Settlement.Release (received via SubscriberHandler
-// return value) based on the broker outcome.
+// Business handlers return HandleResult via EntryHandler — it contains only
+// what the handler author decides: the disposition and an optional error.
+//
+// ProcessReason and SettlementObservers are subscriber-layer concerns and live
+// in DeliveryOutcome (the type ConsumerBase.Wrap produces). Business handlers
+// never need to set those fields; ConsumerBase injects ProcessReason (e.g.
+// "retry_exhausted") and the subscriber layer appends SettlementObservers.
 type HandleResult struct {
 	Disposition Disposition
 	Err         error // optional: logged/observed; nil for success
+}
 
-	// ProcessReason is a low-cardinality handler/process classification, such
-	// as "ack", "stale", or "permanent_error". It is not a broker outcome.
+// DeliveryOutcome is the subscriber-layer carrier produced by ConsumerBase.Wrap.
+// It extends the slim HandleResult with kernel-injected ProcessReason and
+// SettlementObservers so the subscriber (rabbitmq / eventbus / mqtt) can
+// perform post-settlement notification without any of those concerns leaking
+// into business handler code.
+//
+// Business handlers return HandleResult. ConsumerBase.Wrap lifts HandleResult
+// → DeliveryOutcome, injecting ProcessReason (e.g. "retry_exhausted") before
+// returning SubscriberHandler to the subscriber layer.
+type DeliveryOutcome struct {
+	Disposition Disposition
+	Err         error // optional: logged/observed; nil for success
+
+	// ProcessReason is a low-cardinality kernel/process classification, such
+	// as "retry_exhausted". Injected by ConsumerBase, never set by business
+	// handlers.
 	ProcessReason string
 
 	// SettlementObservers are notified by subscribers after final broker
-	// settlement. Middleware appends observers after ConsumerBase has resolved
+	// settlement. Appended by subscriber-layer middleware (e.g.
+	// WrapConfigEventSubscriber) after ConsumerBase has resolved
 	// retry/lease decisions.
 	SettlementObservers []SettlementObserver
 }
 
 // NotifySettlement emits a settlement observation to every observer attached
-// to the result. It is a no-op when no observer is present.
+// to the outcome. It is a no-op when no observer is present.
 func NotifySettlement(
-	ctx context.Context, result HandleResult, entry Entry,
+	ctx context.Context, outcome DeliveryOutcome, entry Entry,
 	disposition Disposition, settlement SettlementResult, err error,
 ) {
-	if len(result.SettlementObservers) == 0 {
+	if len(outcome.SettlementObservers) == 0 {
 		return
 	}
 	obs := SettlementObservation{
 		Entry:         entry,
 		Disposition:   disposition,
 		Result:        settlement,
-		ProcessReason: result.ProcessReason,
+		ProcessReason: outcome.ProcessReason,
 		Err:           err,
 	}
-	for _, observer := range result.SettlementObservers {
+	for _, observer := range outcome.SettlementObservers {
 		if observer == nil {
 			continue
 		}
@@ -818,6 +838,11 @@ type EntryHandler func(context.Context, Entry) HandleResult
 // Settlement.Commit before broker Ack and Settlement.Release after broker Nack
 // without any idempotency types leaking into business code.
 //
+// The return type is DeliveryOutcome (not HandleResult) because ConsumerBase.Wrap
+// injects kernel-level ProcessReason ("retry_exhausted") and subscriber-layer
+// SettlementObservers that business handlers must not set. Business handlers
+// return slim HandleResult; ConsumerBase lifts it to DeliveryOutcome.
+//
 // Settlement may be nil when ConsumerBase has no idempotency state (fail-open
 // claim error, ClaimDone, ClaimBusy short-circuit). Subscribers MUST nil-check
 // before calling Commit/Release.
@@ -830,7 +855,7 @@ type EntryHandler func(context.Context, Entry) HandleResult
 //	claim ConsumerGroupClaim) — settle handle as explicit method parameter
 //
 // ref: nats-io/nats.go jetstream/message.go Msg interface (Ack/Nak/Term)
-type SubscriberHandler func(ctx context.Context, entry Entry) (HandleResult, Settlement)
+type SubscriberHandler func(ctx context.Context, entry Entry) (DeliveryOutcome, Settlement)
 
 // ---------------------------------------------------------------------------
 // PermanentError -- error classification (domain concept)
@@ -899,7 +924,7 @@ type Subscriber interface {
 	// different groups each receive a full copy (fanout).
 	//
 	// handler is SubscriberHandler so the Subscriber can receive Settlement
-	// alongside HandleResult without idempotency types leaking into business
+	// alongside DeliveryOutcome without idempotency types leaking into business
 	// code. Callers that hold an EntryHandler and want the full business
 	// pipeline (middleware chain + ConsumerBase idempotency) should use
 	// SubscriberWithMiddleware.SubscribeEntry instead of lifting manually.
@@ -1094,7 +1119,7 @@ func (s *SubscriberWithMiddleware) SubscribeEntry(ctx context.Context, sub Subsc
 	// populated with trace/request/correlation AND actor/subject/tenant/session
 	// identity. Symmetric with NewEntry's construction-time injection; neither
 	// endpoint has a kill-switch.
-	withRestore := func(reqCtx context.Context, entry Entry) (HandleResult, Settlement) {
+	withRestore := func(reqCtx context.Context, entry Entry) (DeliveryOutcome, Settlement) {
 		reqCtx = entry.RestoreContext(reqCtx)
 		return subHandler(reqCtx, entry)
 	}

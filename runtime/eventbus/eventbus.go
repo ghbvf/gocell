@@ -452,7 +452,7 @@ func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, en
 }
 
 func (b *InMemoryEventBus) notifyRetryExhausted(
-	ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, err error,
+	ctx context.Context, topic string, entry outbox.Entry, res outbox.DeliveryOutcome, err error,
 ) {
 	b.appendDeadLetter(topic, entry, err)
 	outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.SettlementResultRetryExhausted, err)
@@ -472,7 +472,7 @@ func (b *InMemoryEventBus) processResult(
 	ctx context.Context,
 	topic string,
 	entry outbox.Entry,
-	res outbox.HandleResult,
+	res outbox.DeliveryOutcome,
 	settlement outbox.Settlement,
 	attempt int,
 	finalAttempt bool,
@@ -526,7 +526,7 @@ func (b *InMemoryEventBus) handleRequeue(
 	ctx context.Context,
 	topic string,
 	entry outbox.Entry,
-	res outbox.HandleResult,
+	res outbox.DeliveryOutcome,
 	settlement outbox.Settlement,
 	attempt int,
 	finalAttempt bool,
@@ -554,7 +554,7 @@ func (b *InMemoryEventBus) handleInvalidDisposition(
 	ctx context.Context,
 	topic string,
 	entry outbox.Entry,
-	res outbox.HandleResult,
+	res outbox.DeliveryOutcome,
 	settlement outbox.Settlement,
 	attempt int,
 	finalAttempt bool,

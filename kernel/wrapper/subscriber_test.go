@@ -23,11 +23,11 @@ func newDeliveryEntry() outbox.Entry {
 func TestWrapSubscriber_ClaimDoneSpanEndsAfterSettlement(t *testing.T) {
 	tr := &spyTracer{}
 	wrapped := mustWrapSubscriberForTest(t, tr, eventSpec(),
-		func(ctx context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+		func(ctx context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 			if got := wrapper.ContractIDFromContext(ctx); got != eventSpec().ID {
 				t.Fatalf("contract id missing from handler context: %q", got)
 			}
-			return outbox.Ack(), nil
+			return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, nil
 		})
 
 	entry := newDeliveryEntry()
@@ -54,8 +54,8 @@ func TestWrapSubscriber_ClaimDoneSpanEndsAfterSettlement(t *testing.T) {
 func TestWrapSubscriber_ClaimBusySpanRecordsRequeueSettlement(t *testing.T) {
 	tr := &spyTracer{}
 	wrapped := mustWrapSubscriberForTest(t, tr, eventSpec(),
-		func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-			return outbox.Requeue(nil), nil
+		func(context.Context, outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+			return outbox.DeliveryOutcome{Disposition: outbox.DispositionRequeue}, nil
 		})
 
 	entry := newDeliveryEntry()
@@ -87,10 +87,11 @@ func TestWrapSubscriber_CommitFailedUsesFinalSettlementAndPreservesObservers(t *
 	commitErr := errors.New("lease expired")
 
 	wrapped := mustWrapSubscriberForTest(t, tr, eventSpec(),
-		func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-			// Literal: factory Ack() does not carry SettlementObservers; needed
-			// here to verify observer propagation through commit-failure path.
-			return outbox.HandleResult{
+		func(context.Context, outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+			// Literal: factory Ack() (slim HandleResult) does not carry
+			// SettlementObservers; needed here to verify observer propagation
+			// through commit-failure path, so construct DeliveryOutcome directly.
+			return outbox.DeliveryOutcome{
 				Disposition:         outbox.DispositionAck,
 				SettlementObservers: []outbox.SettlementObserver{existingObserver},
 			}, nil
@@ -124,7 +125,7 @@ func TestWrapSubscriber_PanicEndsSpan(t *testing.T) {
 	tr := &spyTracer{}
 	boom := errors.New("subscriber handler exploded")
 	wrapped := mustWrapSubscriberForTest(t, tr, eventSpec(),
-		func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+		func(context.Context, outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 			panic(boom)
 		})
 
@@ -151,8 +152,8 @@ func TestWrapSubscriber_PanicEndsSpan(t *testing.T) {
 func TestWrapSubscriber_ReturnsErrorsForInvalidInputs(t *testing.T) {
 	t.Parallel()
 
-	ackHandler := func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.Ack(), nil
+	ackHandler := func(context.Context, outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, nil
 	}
 
 	// Structural assertions WrapSubscriber still owns: nil fn and non-event Kind
@@ -201,8 +202,8 @@ func TestWrapSubscriber_NilTracerFallsBackToNoop(t *testing.T) {
 	t.Parallel()
 
 	wrapped := mustWrapSubscriberForTest(t, nil, eventSpec(),
-		func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-			return outbox.Ack(), nil
+		func(context.Context, outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+			return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, nil
 		})
 	entry := newDeliveryEntry()
 	res, settlement := wrapped(context.Background(), entry)
@@ -273,8 +274,8 @@ func TestWrapSubscriber_SettlementStatusBranches(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tr := &spyTracer{}
 			wrapped := mustWrapSubscriberForTest(t, tr, eventSpec(),
-				func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-					return outbox.Ack(), nil
+				func(context.Context, outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+					return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, nil
 				})
 
 			entry := newDeliveryEntry()
@@ -298,8 +299,8 @@ func TestWrapSubscriber_SettlementStatusBranches(t *testing.T) {
 func TestWrapSubscriber_SettlementObserverEndsSpanOnce(t *testing.T) {
 	tr := &spyTracer{}
 	wrapped := mustWrapSubscriberForTest(t, tr, eventSpec(),
-		func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-			return outbox.Ack(), nil
+		func(context.Context, outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+			return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, nil
 		})
 
 	entry := newDeliveryEntry()

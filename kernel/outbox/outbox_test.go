@@ -255,8 +255,8 @@ func TestSubscriberInterface(t *testing.T) {
 	var sub Subscriber = &mockSubscriber{}
 
 	t.Run("Subscribe returns nil on success", func(t *testing.T) {
-		handler := func(_ context.Context, _ Entry) (HandleResult, Settlement) {
-			return Ack(), nil
+		handler := func(_ context.Context, _ Entry) (DeliveryOutcome, Settlement) {
+			return DeliveryOutcome{Disposition: DispositionAck}, nil
 		}
 		err := sub.Subscribe(context.Background(), testFullSub("test.topic", "cg-test"), handler)
 		assert.NoError(t, err)
@@ -1265,7 +1265,7 @@ func TestNotifySettlement_ObserverPanic_DoesNotKillCaller(t *testing.T) {
 		spy3Called = true
 	})
 
-	result := HandleResult{
+	result := DeliveryOutcome{
 		Disposition:         DispositionAck,
 		SettlementObservers: []SettlementObserver{spy1, panicObserver, spy3},
 	}
@@ -1297,7 +1297,7 @@ func TestNotifySettlement_NoObservers_NoOp(t *testing.T) {
 		}
 	}()
 	NotifySettlement(context.Background(),
-		Ack(),
+		DeliveryOutcome{Disposition: DispositionAck},
 		Entry{id: "evt-noop", topic: "t"},
 		DispositionAck, SettlementResultSuccess, nil)
 }
@@ -1312,7 +1312,7 @@ func TestNotifySettlement_NilObserverInList_Skipped(t *testing.T) {
 	spy := SettlementObserverFunc(func(_ context.Context, _ SettlementObservation) {
 		called++
 	})
-	result := HandleResult{
+	result := DeliveryOutcome{
 		Disposition:         DispositionAck,
 		SettlementObservers: []SettlementObserver{nil, spy, nil},
 	}
