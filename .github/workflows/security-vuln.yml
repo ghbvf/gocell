@@ -45,7 +45,7 @@ jobs:
       contents: read
       security-events: write   # required by upload-sarif
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
@@ -108,7 +108,7 @@ jobs:
 
       - name: Upload SARIF to GitHub Security
         if: always() && hashFiles('govulncheck-sarif/*.sarif') != ''
-        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v3
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v3
         # No `category:` input — each SARIF carries its own per-module
         # `automationDetails.id` (set above) so the runs upload as distinct
         # categories rather than colliding under one shared category.
