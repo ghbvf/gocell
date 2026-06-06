@@ -21,7 +21,7 @@ import (
 // testFlagSvcTenant is the TenantID used for featureflag service tests.
 // featureflag.Service.GetByKey / List / Evaluate take an explicit tenant.TenantID
 // param (not derived from ctx); this constant provides a consistent test value.
-var testFlagSvcTenant = tenant.SystemTenantID
+var testFlagSvcTenant = tenant.TenantID("22222222-2222-2222-2222-222222222222")
 
 func newTestService() (*Service, *mem.FlagRepository) {
 	repo := mem.NewFlagRepository(clock.Real())

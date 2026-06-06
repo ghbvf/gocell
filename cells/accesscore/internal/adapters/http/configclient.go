@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -23,6 +24,10 @@ const (
 	defaultConfigClientHTTPTimeout = 5 * time.Second
 
 	internalKeyQuotedFmt = "key=%q"
+
+	// headerTenantID is the request header that carries the caller's tenant for
+	// configcore's RLS-scoped GET /internal/v1/config/{key}.
+	headerTenantID = "X-Tenant-ID"
 )
 
 // configEntryDataResponse mirrors the {data: {...}} envelope returned by
@@ -75,9 +80,11 @@ func NewHTTPConfigGetterWithHTTPClient(baseURL string, ring *auth.HMACKeyRing, h
 }
 
 // GetEntry fetches the current config entry for key from the configcore
-// internal endpoint. Returns errcode.ErrConfigRepoNotFound when the key does
-// not exist (HTTP 404).
-func (c *HTTPConfigGetter) GetEntry(ctx context.Context, key string) (ports.ConfigEntry, error) {
+// internal endpoint. t is forwarded as X-Tenant-ID so configcore's RLS scopes
+// the lookup to the caller's real tenant tier. Returns
+// errcode.ErrConfigRepoNotFound when the key does not exist in that tier
+// (HTTP 404).
+func (c *HTTPConfigGetter) GetEntry(ctx context.Context, t tenant.TenantID, key string) (ports.ConfigEntry, error) {
 	path := "/internal/v1/config/" + url.PathEscape(key)
 	fullURL := c.baseURL + path
 
@@ -93,6 +100,7 @@ func (c *HTTPConfigGetter) GetEntry(ctx context.Context, key string) (ports.Conf
 		return ports.ConfigEntry{}, errcode.New(errcode.KindInternal, errcode.ErrInternal, "configclient: service token generation failed")
 	}
 	req.Header.Set("Authorization", "ServiceToken "+token)
+	req.Header.Set(headerTenantID, t.String())
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -125,6 +133,13 @@ func (c *HTTPConfigGetter) GetEntry(ctx context.Context, key string) (ports.Conf
 		return ports.ConfigEntry{}, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
 			"configclient: 403 from configcore (caller_cell not in allowlist)",
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalKeyQuotedFmt, key))))
+	case http.StatusBadRequest:
+		// Permanent: the X-Tenant-ID header was absent, malformed, or a
+		// nil-UUID. Retrying with the same (broken) context cannot recover;
+		// consumers must Reject (DLQ) rather than burning retry budget.
+		return ports.ConfigEntry{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"configclient: 400 from configcore (invalid X-Tenant-ID)",
+			errcode.WithInternal(errcode.InternalAttr("key", key)))
 	default:
 		return ports.ConfigEntry{}, fmt.Errorf("configclient: unexpected status %d for key %q", resp.StatusCode, key)
 	}

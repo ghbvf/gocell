@@ -505,20 +505,25 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	// --- Step 4: Stub internal server —
 	// Simulates GET /internal/v1/config/{key} — the endpoint that
 	// accesscore.configreceive calls after receiving an upsert event.
-	// Records: path, method, Authorization header — assertions verify the
-	// refetch HTTP call uses correct verb + carries a service-token (the
-	// real listener auth chain rejects unauthenticated callers).
+	// Records: path, method, Authorization header, X-Tenant-ID header —
+	// assertions verify the refetch HTTP call uses the correct verb, carries a
+	// service-token (the real listener auth chain rejects unauthenticated
+	// callers), and forwards the caller's real tenant (#1577: configreceive
+	// derives the tenant from the event envelope and HTTPConfigGetter sends it
+	// as X-Tenant-ID, replacing the removed SystemTenantID sentinel).
 	type refetchCall struct {
-		path       string
-		method     string
-		authHeader string
+		path         string
+		method       string
+		authHeader   string
+		tenantHeader string
 	}
 	refetchCh := make(chan refetchCall, 8)
 	internalSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		refetchCh <- refetchCall{
-			path:       r.URL.Path,
-			method:     r.Method,
-			authHeader: r.Header.Get("Authorization"),
+			path:         r.URL.Path,
+			method:       r.Method,
+			authHeader:   r.Header.Get("Authorization"),
+			tenantHeader: r.Header.Get("X-Tenant-ID"),
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -655,6 +660,14 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		"refetch Authorization header must start with \"ServiceToken \"; got %q — "+
 			"indicates HTTPConfigGetter is not signing requests with the configured ring",
 		captured.authHeader)
+	// X-Tenant-ID must carry the publisher's real tenant (#1577): the config
+	// event was published under a session whose JWT carries tenant_id=testTenantID,
+	// so configreceive's tenant.FromContext yields it and HTTPConfigGetter forwards
+	// it. A mismatch/empty header indicates the tenant pass-through regressed (e.g.
+	// reverted to the removed SystemTenantID sentinel or dropped on the consumer side).
+	assert.Equal(t, testTenantID, captured.tenantHeader,
+		"refetch must forward the caller's real tenant as X-Tenant-ID; got %q",
+		captured.tenantHeader)
 
 	// --- Teardown ---
 	appCancel()

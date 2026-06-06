@@ -4,7 +4,8 @@
 
 ## 类型地基（`pkg/tenant/`）
 
-- **`tenant.TenantID`**（`pkg/tenant/tenant_id.go`）：隔离域边界 sealed newtype，对齐 `idutil.SafeID` 范式。与 SafeID 不同——**空值无效**（tenant 查询不可缺 tenant），非空须为 canonical UUID。`Validate` / `ParseTenantID` / `UnmarshalJSON` runtime fail-fast（Medium；type-system Hard 来源 = PR-2 repo 方法收 `TenantID` typed 位置参，漏传=编译错误）。
+- **`tenant.TenantID`**（`pkg/tenant/tenant_id.go`）：隔离域边界 sealed newtype，对齐 `idutil.SafeID` 范式。与 SafeID 不同——**空值无效**（tenant 查询不可缺 tenant），非空须为 canonical UUID，**nil-UUID（全零）一并拒绝**（`#1577` 删 `SystemTenantID` 哨兵后，nil-UUID 不再有合法用途；`Validate` 与 `ParseTenantID` / `UnmarshalJSON` 统一拒绝它）。`Validate` / `ParseTenantID` / `UnmarshalJSON` runtime fail-fast（Medium；type-system Hard 来源 = PR-2 repo 方法收 `TenantID` typed 位置参，漏传=编译错误）。
+  - **内部 config 读 tenant 透传（#1577）**：configcore `configreadinternal`（`/internal/v1/config/{key}`，service-token + `RequireCallerCell("accesscore")`）由 caller 经 `X-Tenant-ID` header（`ParseTenantID` fail-closed，缺/非法→400）传真 tenant，**不再用 `SystemTenantID` 哨兵读全局 tier**；accesscore `configreceive` 从事件 envelope 经 `tenant.FromContext` 派生 tenant 并由 `HTTPConfigGetter` 转发。退役 archtest `SYSTEM-TENANT-SENTINEL-CALLER-01`（哨兵删除后约束 moot；替代 = ParseTenantID 类型系统 fail-closed + caller-cell allowlist）。
 - **`tenant.RowScope`**（`pkg/tenant/rowscope.go`）：行可见范围 typed obligation enum `{self, device, tenant, all}`，零值 invalid。XACML PDP→PEP obligation 模型的有界 Go 投影。**仅类型，消费在 PR-4**（repo list/get typed 位置参）。取值扩张超 4 值则迁 `pkg/authz/`。
 
 ## Principal / claim source（`runtime/auth/`）

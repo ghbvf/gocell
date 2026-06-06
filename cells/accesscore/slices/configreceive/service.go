@@ -1,6 +1,8 @@
 // Package configreceive implements the config-receive slice: consumes
-// config state-sync events from configcore. Currently logs changes for
-// observability; future use: refresh JWT TTL, key rotation intervals, etc.
+// config state-sync events from configcore. When a ConfigGetter is wired it
+// refetches the current entry value from configcore using the real tenant
+// derived from the consumer context — ensuring the lookup is scoped to the
+// caller's tenant tier rather than the legacy system tier.
 package configreceive
 
 import (
@@ -13,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
@@ -25,10 +28,11 @@ const (
 
 // Service consumes config change events for accesscore.
 //
-// NOTE: HandleEntryUpserted/HandleEntryDeleted are currently observability-only
-// (logs only). Real consumers (JWT TTL refresh, key rotation interval) will land
-// in a follow-up; the current subscription is a placeholder per ADV-05
-// (active event must have subscribers).
+// When a ConfigGetter is wired, HandleEntryUpserted refetches the current
+// entry value from configcore using the real tenant derived from the consumer
+// context (restored by SubscriberWithMiddleware from the outbox principal
+// envelope). The refetch is observability/log-only for now; future consumers
+// (JWT TTL refresh, key rotation interval) will read the fetched value.
 //
 // Consumer: cg-accesscore-config-events
 // Idempotency: log-only (no side effects), inherently idempotent
@@ -73,11 +77,20 @@ func NewService(logger *slog.Logger, opts ...Option) *Service {
 }
 
 // HandleEntryUpserted processes an event.config.entry-upserted.v1 event.
-// When a ConfigGetter is configured it fetches the current entry value from
-// configcore (contract: http.config.internal.get.v1) and logs it. Fetch
-// failures are retriable: a transient Requeue is returned so the consumer
-// pipeline retries. A 404 (entry truly gone) is treated as a stale event:
-// log Warn and Ack (retry cannot help).
+// When a ConfigGetter is configured it derives the real tenant from ctx via
+// tenant.FromContext (populated by SubscriberWithMiddleware from the outbox
+// principal envelope) and fetches the current entry value from configcore
+// (contract: http.config.internal.get.v1) scoped to that tenant tier.
+//
+// If no tenant is in ctx the event is Rejected to DLQ (PermanentError): a
+// config event reaching this consumer without a tenant is an envelope/restore
+// pipeline violation of this PR's tenant-correct invariant (#1577), not a
+// safely-consumable event — fail-closed surfaces it for investigation instead
+// of silently Acking (codex review F2).
+//
+// Fetch failures are retriable: a transient Requeue is returned so the
+// consumer pipeline retries. A 404 (entry genuinely absent in the tenant
+// tier) is treated as a stale event: log Warn and Ack (retry cannot help).
 func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 	event, err := dto.DecodeEntryUpserted(entry.Payload())
 	if err != nil {
@@ -92,37 +105,42 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) o
 		slog.Int("version", event.Version))
 
 	if s.configGetter != nil {
-		cfg, fetchErr := s.configGetter.GetEntry(ctx, event.Key)
+		t, terr := tenant.FromContext(ctx)
+		if terr != nil {
+			// Fail-closed: a config event without a tenant in ctx is an
+			// envelope/restore pipeline violation of the tenant-correct
+			// invariant (#1577), not a safely-consumable stale event. Reject to
+			// DLQ so operators investigate, rather than silently Acking.
+			s.logger.Error("config-receive: no tenant in event envelope, cannot scope refetch; routing to DLQ",
+				slog.Any("error", terr), slog.String("key", event.Key), slog.String("entry_id", entry.ID()))
+			s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonNoTenant)
+			return outbox.Reject(outbox.NewPermanentError(
+				fmt.Errorf("config-receive: missing tenant in event envelope, cannot scope refetch: %w", terr)))
+		}
+
+		cfg, fetchErr := s.configGetter.GetEntry(ctx, t, event.Key)
 		if fetchErr != nil {
-			// If the config entry is not found (404), Ack and move on.
-			//
-			// PR-2b tenant-tier note: the internal config GET is issued via
-			// configreadinternal, which passes tenant.SystemTenantID — it reads
-			// from the system/global tier only. A 404 therefore has two distinct
-			// causes that are indistinguishable at this layer:
-			//   1. The config key is genuinely absent (truly stale event).
-			//   2. The key exists but belongs to a per-tenant tier that is not
-			//      visible through the system tier lookup.
-			// In either case, retrying will not help. Real per-tenant config
-			// consumption (reading the correct tenant tier) is tracked at gh #1577.
+			// A 404 means the key is genuinely absent in this tenant's tier
+			// (truly stale event). Retrying cannot help.
 			if errcode.IsDomainNotFound(fetchErr, errcode.ErrConfigRepoNotFound) {
-				s.logger.Warn("config-receive: config entry not found in system tier (stale or per-tenant), skipping",
+				s.logger.Warn("config-receive: config entry not found (stale event), skipping",
 					slog.Any("error", fetchErr),
 					slog.String("key", event.Key),
 					slog.Int("version", event.Version))
 				s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonStale)
 				return outbox.Ack()
 			}
-			// 401/403 are permanent auth/authz failures (invalid token,
-			// caller_cell not in contract.clients allowlist). Retrying with
-			// the same credentials cannot recover; route to DLQ via Reject +
-			// PermanentError so operators can investigate the configuration
-			// drift instead of silently consuming retry budget.
-			if isPermanentAuthFailure(fetchErr) {
-				s.logger.Error("config-receive: permanent auth failure fetching config entry, routing to DLQ",
+			// 401/403 auth/authz failures and 400 bad-request (invalid
+			// X-Tenant-ID) are permanent: retrying with the same credentials
+			// or broken context cannot recover. Route to DLQ via Reject +
+			// PermanentError so operators can investigate configuration drift
+			// instead of silently consuming retry budget.
+			if isPermanentRefetchError(fetchErr) {
+				s.logger.Error("config-receive: permanent auth/validation failure fetching config entry, routing to DLQ",
 					slog.Any("error", fetchErr),
 					slog.String("key", event.Key),
-					slog.Int("version", event.Version))
+					slog.Int("version", event.Version),
+					slog.String("entry_id", entry.ID()))
 				s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonPermanentError)
 				return outbox.Reject(outbox.NewPermanentError(fetchErr))
 			}
@@ -130,7 +148,9 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) o
 			s.logger.Error("config-receive: failed to fetch config entry after upsert",
 				slog.Any("error", fetchErr),
 				slog.String("key", event.Key),
-				slog.Int("version", event.Version))
+				slog.Int("version", event.Version),
+				slog.String("entry_id", entry.ID()))
+			s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonTransient)
 			return outbox.Requeue(fetchErr)
 		}
 		s.logger.Info("config-receive: fetched config entry",
@@ -160,11 +180,13 @@ func (s *Service) HandleEntryDeleted(ctx context.Context, entry outbox.Entry) ou
 	return outbox.Ack()
 }
 
-// isPermanentAuthFailure reports whether err is an *errcode.Error with
-// code ErrAuthUnauthorized or ErrAuthForbidden — i.e. a 401/403 response
-// from configcore that retrying with the same credentials cannot recover.
+// isPermanentRefetchError reports whether err is a permanent client error
+// that retrying cannot recover: 401/403 auth/authz failures from configcore
+// (invalid service token or caller_cell not in contract.clients allowlist),
+// or a 400 bad-request (absent, malformed, or nil-UUID X-Tenant-ID header)
+// which signals a permanent misconfiguration in the consumer pipeline.
 // Such failures must Reject (DLQ) instead of Requeue.
-func isPermanentAuthFailure(err error) bool {
+func isPermanentRefetchError(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -172,7 +194,9 @@ func isPermanentAuthFailure(err error) bool {
 	if !errors.As(err, &ec) {
 		return false
 	}
-	return ec.Code == errcode.ErrAuthUnauthorized || ec.Code == errcode.ErrAuthForbidden
+	return ec.Code == errcode.ErrAuthUnauthorized ||
+		ec.Code == errcode.ErrAuthForbidden ||
+		ec.Kind == errcode.KindInvalid
 }
 
 func (s *Service) recordConfigEventProcess(ctx context.Context, reason obmetrics.ConfigEventProcessReason) {
