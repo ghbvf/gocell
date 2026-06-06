@@ -20,7 +20,10 @@
 //   - runtime/websocket — ProbeReady
 //   - runtime/saga — ProbeCoordinatorReady
 //   - cells/{configcore,auditcore,accesscore}/healthz_gen.go — ProbeRepoReady (cellgen marker required)
-//   - examples/{iotdevice/cells/devicecell,todoorder/cells/ordercell}/healthz_gen.go — ProbeRepoReady (cellgen marker required)
+//   - examples/iotdevice/cells/devicecell/healthz_gen.go — ProbeRepoReady (cellgen marker required)
+//   - examples/orderfulfillment/cells/orderfulfillmentcell/healthz_gen.go — ProbeRepoReady (cellgen marker required)
+//   - examples/todoorder/cells/ordercell/healthz_gen.go — ProbeRepoReady (cellgen marker required)
+//   - examples/webhookdemo/cells/hooks/healthz_gen.go — ProbeRepoReady (cellgen marker required)
 //
 // # Golden inventory (sorted "<module-relative-pkg>.<ConstName>=<value>")
 //

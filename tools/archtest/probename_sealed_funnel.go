@@ -11,6 +11,8 @@ package archtest
 //
 // Mirrors the shape of tools/archtest/cell_public_option_param.go.
 
+import "strings"
+
 // probenameModPrefix is the module path prefix used to strip the module path
 // from package paths and to test whether a package belongs to this module.
 const probenameModPrefix = PlatformModulePath + "/"
@@ -109,7 +111,7 @@ var probenameInRepoLayerPrefixes = []string{
 // in-repo production layers enumerated in probenameInRepoLayerPrefixes.
 func probenameIsInRepoPkg(pkgPath string) bool {
 	for _, prefix := range probenameInRepoLayerPrefixes {
-		if len(pkgPath) >= len(prefix) && pkgPath[:len(prefix)] == prefix {
+		if strings.HasPrefix(pkgPath, prefix) {
 			return true
 		}
 	}

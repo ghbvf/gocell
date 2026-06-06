@@ -1,12 +1,14 @@
 package archtest
 
-// healthz_invariants.go — importable HEALTHZ-WRITE-01 rule constants.
+// healthz_invariants.go — importable HEALTHZ-WRITE-01 rule constants and a
+// shared prefix helper.
 //
 // Platform symbol paths are anchored to PlatformModulePath so a module rename
 // updates exactly one place. The scanner logic (scanHealthzA1, scanHealthzA3,
 // fieldTypeIsAggregator, etc.) lives in the _test.go file because it is not
-// needed by external Cell repos; only the path constants need to be in a
-// non-test file for importability.
+// needed by external Cell repos; the path constants, the layer-prefix slices,
+// and the shared prefix helper (healthzHasAnyPrefix) live in this non-test file
+// for importability.
 //
 // This file is NOT registered in StandardCellRules(): the rule reasons about
 // how cells consume platform infra types via healthz.Aggregator; it depends on
