@@ -20,40 +20,18 @@
 // cannot see. The callee-resolved + const-key allowlist is the Go-reachable
 // ceiling for this shape; a Hard form would require a sealed reasonName-detail
 // type, tracked as future work if the leak class recurs.
+//
+// Scanner logic lives in mqtt_reason_redaction.go (importable non-test file).
 
 package archtest
 
 import (
-	"fmt"
 	"go/ast"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
-
-const (
-	mqttReasonNameDetailKey     = "reasonName"
-	mqttReasonDetailFunnelFunc  = "reasonDetailOptions"
-	mqttErrcodePkgPath          = "github.com/ghbvf/gocell/pkg/errcode"
-	mqttErrcodePublicStringName = "PublicString"
-)
-
-// mqttIsReasonNamePublicStringCall reports whether call is
-// errcode.PublicString("reasonName", …): the callee is resolved to the errcode
-// package via go/types and the first argument is const-evaluated to "reasonName"
-// (so a const-named key like reasonDetailKeyName is also matched).
-func mqttIsReasonNamePublicStringCall(p *Pass, call *ast.CallExpr) bool {
-	if len(call.Args) == 0 {
-		return false
-	}
-	pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
-	if !ok || pkgPath != mqttErrcodePkgPath || name != mqttErrcodePublicStringName {
-		return false
-	}
-	key, ok := EvaluateConstString(p.TypesInfo, call.Args[0])
-	return ok && key == mqttReasonNameDetailKey
-}
 
 // TestMQTTReasonNameRedaction_FunnelOnly enforces REASON-NAME-REDACTION-01:
 // every errcode.PublicString("reasonName", …) in adapters/mqtt production code
@@ -63,42 +41,8 @@ func TestMQTTReasonNameRedaction_FunnelOnly(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-	var diags []Diagnostic
-	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{mqttPkgPath}),
-		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
-				return nil
-			}
-			for _, f := range p.Files {
-				rel := p.Rel(f)
-				if strings.HasSuffix(rel, "_test.go") {
-					continue
-				}
-				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
-					if !mqttIsReasonNamePublicStringCall(p, call) {
-						return
-					}
-					if mqttEnclosingFuncName(f, call.Pos()) == mqttReasonDetailFunnelFunc {
-						return
-					}
-					pos := p.Fset.Position(call.Pos())
-					diags = append(diags, Diagnostic{
-						Rel:  rel,
-						Line: pos.Line,
-						Message: fmt.Sprintf(
-							"REASON-NAME-REDACTION-01: errcode.PublicString(%q, …) at %s:%d outside %s — "+
-								"reasonName must be built only via %s so auth-code redaction cannot be bypassed",
-							mqttReasonNameDetailKey, rel, pos.Line, mqttReasonDetailFunnelFunc, mqttReasonDetailFunnelFunc,
-						),
-					})
-				})
-			}
-			return nil
-		})
-
-	assert.Empty(t, diags,
-		"REASON-NAME-REDACTION-01: errcode.PublicString(\"reasonName\", …) outside reasonDetailOptions detected")
+	Report(t, "REASON-NAME-REDACTION-01",
+		CheckMQTTReasonNameRedaction(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 }
 
 // TestMQTTReasonNameRedaction_ScannerNonVacuous proves the detector fires on the

@@ -35,8 +35,6 @@ tools/archtest/healthz_invariants_test.go
 tools/archtest/kernel_poolstats_location_test.go
 tools/archtest/l2_outbox_atomicity_coverage_test.go
 tools/archtest/metrics_cancel_ctx_conformance_test.go
-tools/archtest/mqtt_funnel_test.go
-tools/archtest/mqtt_reason_redaction_test.go
 tools/archtest/no_deleted_auth_symbols_test.go
 tools/archtest/notfound_test_strict_test.go
 tools/archtest/observability_metrics_test.go
