@@ -44,6 +44,10 @@ package archtest
 //   - SAGA-INVARIANTS-FILE-CONSOLIDATED-01: a meta-rule about where saga INVARIANT
 //     comments live in tools/archtest/ — GoCell-specific directory structure.
 //
+// For each importable Check* targeting GoCell-internal packages, a companion
+// Test*_CheckDogfood runs the aggregate Check* on GoCell production and asserts
+// zero diagnostics, proving the imported surface is reachable.
+//
 // Platform-symbol paths are anchored to [PlatformModulePath]. See external.go.
 
 import (
@@ -65,17 +69,13 @@ import (
 // ─── Platform-path consts (all derived from PlatformModulePath) ─────────────
 
 const (
-	// sagaPkgPath is the kernel/saga package path. Merges the two formerly
-	// separate consts sagaPkgPath (line 154) and ksagaPkgPath (line 3974).
+	// sagaPkgPath is the kernel/saga package path. Merges the formerly
+	// separate consts sagaPkgPath and ksagaPkgPath.
 	sagaPkgPath = PlatformModulePath + "/kernel/saga"
 
-	// sagaJournalPkg is the kernel/saga/journal package path. Merges
-	// sagaJournalIfacePkg (line 1443) and journalInterfacePkgPath (line 2336).
+	// sagaJournalPkg is the kernel/saga/journal package path. Consolidates
+	// the formerly separate journalInterfacePkgPath const.
 	sagaJournalPkg = PlatformModulePath + "/kernel/saga/journal"
-
-	// sagaJournalIfacePkg is a backward-compat alias for sagaJournalPkg,
-	// retained so test-side code that still uses the old name compiles.
-	sagaJournalIfacePkg = sagaJournalPkg
 
 	// sagaConformancePkg is the sagajournaltest package path.
 	sagaConformancePkg = PlatformModulePath + "/kernel/saga/sagajournaltest"
@@ -488,7 +488,7 @@ func scanCompensateBodyCount(p *Pass, file *ast.File) []Diagnostic {
 		if n > sagaMaxCompensateStmts {
 			out = append(out, sagaDiag(p, a.Lit, rel,
 				sagaCompensatePureRuleID+"-B1: CompensateFunc body has too many statements ("+
-					itoa(n)+">"+itoa(sagaMaxCompensateStmts)+"); "+
+					strconv.Itoa(n)+">"+strconv.Itoa(sagaMaxCompensateStmts)+"); "+
 					"pure-reverse compensates must be short — extract logic to a named helper "+
 					"and call it from Compensate (B1 blind-spot discipline)"))
 		}
@@ -550,11 +550,11 @@ func CheckSagaStepCompensatePure(t *testing.T, cfg ConfigForExternalCell) []Diag
 	if len(cfg.BuildTags) > 0 {
 		seen := map[string]bool{}
 		for _, d := range all {
-			seen[d.Rel+":"+itoa(d.Line)] = true
+			seen[d.Rel+":"+strconv.Itoa(d.Line)] = true
 		}
 		extra := Run(t, Production(TypedOpts{Tags: cfg.BuildTags}), scan)
 		for _, d := range extra {
-			if !seen[d.Rel+":"+itoa(d.Line)] {
+			if !seen[d.Rel+":"+strconv.Itoa(d.Line)] {
 				all = append(all, d)
 			}
 		}
@@ -1372,16 +1372,12 @@ func CheckSagaJournalHolderSeal(t *testing.T, cfg ConfigForExternalCell) []Diagn
 			if strings.HasSuffix(rel, "_test.go") || !strings.HasPrefix(rel, "runtime/saga/") {
 				continue
 			}
-			EachInSubtree[ast.StructType](file, func(st *ast.StructType) {
-				// Find the enclosing type declaration name.
-				// We walk upward from the StructType, which requires finding
-				// the GenDecl/TypeSpec parent. Since we only need the struct
-				// name for the diagnostic message, we do best-effort via
-				// TypesInfo: find any TypeSpec that is a parent via file walk.
-				holderName := sagaStructHolderName(p.TypesInfo, file, st)
-				if st.Fields == nil {
+			EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
+				st, ok := ts.Type.(*ast.StructType)
+				if !ok || st.Fields == nil {
 					return
 				}
+				holderName := ts.Name.Name
 				for _, field := range st.Fields.List {
 					if d, ok := journalFieldSealDiag(p, rel, holderName, field); ok {
 						out = append(out, d)
@@ -1395,28 +1391,6 @@ func CheckSagaJournalHolderSeal(t *testing.T, cfg ConfigForExternalCell) []Diagn
 		return nil
 	})
 	return out
-}
-
-// sagaStructHolderName returns the declared type name of the struct that
-// contains st, or "unknown" if not found. It iterates TypesInfo.Defs to find
-// a TypeName whose declared type's underlying is st.
-func sagaStructHolderName(_ *types.Info, file *ast.File, st *ast.StructType) string {
-	// Walk GenDecl/TypeSpec in the file to find the enclosing TypeSpec.
-	var name string
-	EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
-		if name != "" {
-			return
-		}
-		structLit, ok := ts.Type.(*ast.StructType)
-		if !ok || structLit != st {
-			return
-		}
-		name = ts.Name.Name
-	})
-	if name == "" {
-		return "unknown"
-	}
-	return name
 }
 
 // ─── SAGA-DRIVE-BEHIND-LEADER-GATE-01 helpers ────────────────────────────────
@@ -1993,7 +1967,7 @@ func CheckSagaConstructorNilGuard(t *testing.T, cfg ConfigForExternalCell) []Dia
 	t.Helper()
 	_ = cfg
 	var out []Diagnostic
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/saga/...", "./runtime/saga/executor/..."}), func(p *Pass) []Diagnostic {
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil || p.Pkg == nil {
 			return nil
 		}
@@ -2077,6 +2051,8 @@ func scanSagaSlogInstanceFieldsFile(p *Pass, file *ast.File) []Diagnostic {
 
 // scanSagaSlogAttrLiteralsFile flags every log/slog.Attr composite literal
 // (keyed or unkeyed) carrying a guarded identity key.
+// Callers are responsible for _test.go filtering; fixture tests intentionally
+// do not filter so they can prove the detector fires on synthetic red code.
 func scanSagaSlogAttrLiteralsFile(p *Pass, file *ast.File) []Diagnostic {
 	rel := filepath.ToSlash(p.Rel(file))
 	var ds []Diagnostic
@@ -2154,7 +2130,12 @@ func sagaGuardedKeyFromExpr(info *types.Info, expr ast.Expr) (string, bool) {
 }
 
 // CheckSagaSlogInstanceFieldsCaller is the importable form of
-// SAGA-SLOG-INSTANCE-FIELDS-CALLER-01.
+// SAGA-SLOG-INSTANCE-FIELDS-CALLER-01. It runs both sub-checks:
+//   - A1: guarded keys (instance_id, lease_id) must only appear inside the
+//     sagalog.InstanceFields carrier body (scanSagaSlogInstanceFieldsFile).
+//   - B4: slog.Attr composite literals with guarded keys are banned outside the
+//     carrier body (scanSagaSlogAttrLiteralsFile).
+//
 // Not registered in StandardCellRules.
 func CheckSagaSlogInstanceFieldsCaller(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
@@ -2169,6 +2150,7 @@ func CheckSagaSlogInstanceFieldsCaller(t *testing.T, cfg ConfigForExternalCell) 
 				continue
 			}
 			out = append(out, scanSagaSlogInstanceFieldsFile(p, file)...)
+			out = append(out, scanSagaSlogAttrLiteralsFile(p, file)...)
 		}
 		return nil
 	})
@@ -2429,7 +2411,12 @@ func scanSagaEnumLabelAll(p *Pass) []Diagnostic {
 }
 
 // CheckSagaMetricLabelValuesFrozen is the importable form of
-// SAGA-METRIC-LABEL-VALUES-FROZEN-01.
+// SAGA-METRIC-LABEL-VALUES-FROZEN-01. It covers the A2 callsite/assignment
+// guard only: it enforces that no production code reaches a metric label via an
+// inline literal or a raw string(reason) conversion. The A1 enum-value-set-
+// frozen check (enumerating declared consts vs the sagaLabelEnumWant golden) is
+// GoCell-internal (golden-bound via sagaLabelEnumWant) and intentionally stays
+// in TestSagaMetricLabelValuesFrozen01, not exported.
 // Not registered in StandardCellRules.
 func CheckSagaMetricLabelValuesFrozen(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()

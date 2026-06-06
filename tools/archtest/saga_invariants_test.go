@@ -870,7 +870,7 @@ func TestSagaJournalConformanceEnrollment_REDFixture(t *testing.T) {
 			if p.Pkg == nil {
 				return nil
 			}
-			if p.Pkg.Path() == sagaJournalIfacePkg {
+			if p.Pkg.Path() == sagaJournalPkg {
 				if obj := p.Pkg.Scope().Lookup(sagaJournalIfaceName); obj != nil {
 					if named, ok := obj.Type().(*types.Named); ok {
 						if i, ok := named.Underlying().(*types.Interface); ok {
@@ -1065,7 +1065,7 @@ func TestSagaGlobalReaderConformanceEnrollment_REDFixture(t *testing.T) {
 			if p.Pkg == nil {
 				return nil
 			}
-			if p.Pkg.Path() == sagaJournalIfacePkg {
+			if p.Pkg.Path() == sagaJournalPkg {
 				if obj := p.Pkg.Scope().Lookup(sagaGlobalReaderIfaceName); obj != nil {
 					if named, ok := obj.Type().(*types.Named); ok {
 						if i, ok := named.Underlying().(*types.Interface); ok {
@@ -1338,49 +1338,8 @@ func useUnrelated() { _ = NewImpl(); run(0, emptyFactory) }
 // other selector named "JournalCore" without type information.
 func TestSagaJournalHolderSeal_A1_OnlyCoordinatorHoldsJournal(t *testing.T) {
 	t.Parallel()
-
-	diags := Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil {
-			return nil
-		}
-		var out []Diagnostic
-		for _, file := range p.Files {
-			rel := filepath.ToSlash(p.Rel(file))
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-			if !strings.HasPrefix(rel, "runtime/saga/") {
-				continue
-			}
-
-			EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
-				st, ok := ts.Type.(*ast.StructType)
-				if !ok || st.Fields == nil {
-					return
-				}
-				holderName := ts.Name.Name
-				for _, field := range st.Fields.List {
-					if d, ok := journalFieldSealDiag(p, rel, holderName, field); ok {
-						out = append(out, d)
-						continue
-					}
-					if d, ok := heartbeatFuncFieldDiag(p, rel, holderName, field); ok {
-						out = append(out, d)
-					}
-				}
-			})
-		}
-		return out
-	})
-
+	diags := CheckSagaJournalHolderSeal(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()})
 	Report(t, sagaJournalHolderSealRule+"-A1", diags)
-}
-
-// TestSagaJournalHolderSeal_CheckDogfood exercises the aggregate CheckSagaJournalHolderSeal
-// on GoCell production (must yield 0 diags), verifying the importable Check* surface.
-func TestSagaJournalHolderSeal_CheckDogfood(t *testing.T) {
-	t.Parallel()
-	Report(t, sagaJournalHolderSealRule, CheckSagaJournalHolderSeal(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 }
 
 // TestSagaJournalHolderSeal_BlindSpot_B1_NoAliasInRuntimeSaga ensures production
@@ -2722,9 +2681,8 @@ func TestSagaStepRunOutsideTx_Detector_RedSafeRunInRunInTxFixture(t *testing.T) 
 	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
 
-// posInRanges (package-level, defined in span_record_error_redact_test.go) and
-// collectFuncBodyRanges (defined in span_setattr_redact_test.go) are reused
-// directly — both are visible within the archtest package.
+// posInRanges and collectFuncBodyRanges are defined in shared_helpers.go and
+// reused directly — both are visible within the archtest package.
 
 // ============================================================================
 // SAGA-CONSTRUCTOR-NIL-GUARD-01   (type-aware, Medium)

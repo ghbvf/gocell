@@ -115,6 +115,8 @@ type ConfigForExternalCell struct {
 // GoCell platform (they reason about how the consumer uses platform APIs like
 // errcode / panicregister, not about GoCell's own internal package layout).
 //
+// Registered saga rule: SAGA-STEP-COMPENSATE-PURE-01 (CheckSagaStepCompensatePure).
+//
 // This is the GoCell analog of the []*analysis.Analyzer slice handed to
 // multichecker.Main: a flat, registry-free list. The set grows as more rules
 // are migrated from their legacy _test.go form into importable CellRules (M3

@@ -36,6 +36,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -117,7 +118,7 @@ func TestHealthcheckVerifyRuntime01(t *testing.T) {
 			if !ok {
 				wantDesc := "non-zero"
 				if tc.wantExit != -1 {
-					wantDesc = itoa(tc.wantExit)
+					wantDesc = strconv.Itoa(tc.wantExit)
 				}
 				t.Fatalf("HEALTHCHECK-VERIFY-CLEANUP-AND-WAIT-TIMEOUT-01 (E/%s): "+
 					"got exit %d, want %s.\nWhy: %s\nScript output:\n%s",
@@ -139,7 +140,7 @@ func buildDockerStub(upExit int) string {
 # Test stub for docker — used by TestHealthcheckVerifyRuntime01.
 echo "[docker-stub] $*" >&2
 case "$2" in
-  up)   exit ` + itoa(upExit) + ` ;;
+  up)   exit ` + strconv.Itoa(upExit) + ` ;;
   down) exit 1 ;;
   *)    exit 0 ;;
 esac
