@@ -6,7 +6,6 @@
 # migrated file must be DELETED from this list (ratchet-down). Empty = Hard
 # terminal pure ban. Migration tracked by #1302; Hard-ization by #1304.
 # blank lines and # comments are ignored.
-tools/archtest/adapter_returns_declared_types_test.go
 tools/archtest/archtest_test.go
 tools/archtest/audit_hash_input_frozen_test.go
 tools/archtest/celltest_import_boundary_test.go
