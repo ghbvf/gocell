@@ -1,5 +1,9 @@
-package archtest
-
+// INVARIANT: RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01
+//   - INVARIANT: RMQ-CHANNEL-MAX-PER-CONN-01
+//   - INVARIANT: RMQ-PUBLISHER-FAILURE-HANDLING-01
+//   - INVARIANT: RMQ-PUBLISHER-RELEASES-CHANNEL-01
+//   - INVARIANT: RMQ-STOPINTAKE-INFLIGHT-WAIT-01
+//
 // rmq_invariants.go — importable RabbitMQ adapter rule logic.
 //
 // This is the non-test home of the RMQ-* scanner helpers so they can be
@@ -18,12 +22,84 @@ package archtest
 // SCOPE (./adapters/rabbitmq/...) is the running module's own adapter package;
 // this is intentionally gocell-internal-layout and vacuous-pass in an external
 // repo that has no such adapter tree.
+//
+// # RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01
+//
+// Enforces that every AMQPChannel destruction site in adapters/rabbitmq/ goes
+// through Connection.CloseEphemeralChannel. Direct ch.Close() calls outside of
+// CloseEphemeralChannel or waitAndClose bypass the inUseChannels.Add(-1)
+// decrement and permanently leak MaxChannelsPerConn slots, causing spurious
+// ERR_ADAPTER_AMQP_CHANNEL_MAX_EXCEEDED false-positives after enough reconnect
+// cycles or subscription teardowns.
+//
+// AI-robust grading:
+//   - Downstream: Medium — go/types receiver classification via
+//     types.Implements; naming-immune (renaming the receiver var does not
+//     weaken the gate); allowlisted funcs are string-name matched (Soft
+//     residual — renaming CloseEphemeralChannel bypasses without scanner
+//     update; tracked as known blind spot: function-name allowlist is not
+//     type-qualified).
+//   - Upstream: N/A — this is a single-package restriction rule, not a
+//     funnel-type constraint.
+//
+// # RMQ-CHANNEL-MAX-PER-CONN-01
+//
+// Enforces that adapters/rabbitmq.Config declares MaxChannelsPerConn with a
+// setDefaults guard (`<= 0`) and AcquireChannel references the inUseChannels
+// counter. Without the cap, pool-miss paths can silently exceed broker
+// channel_max and cause a connection-level shutdown.
+//
+// AI-robust grading (all sub-rules: A/B/C):
+//   - Medium — pure AST struct-field and selector scan; not type-qualified.
+//     Hard upgrade path: generate a typed golden that locks the Config struct
+//     field presence and setDefaults assignment form.
+//
+// # RMQ-PUBLISHER-FAILURE-HANDLING-01
+//
+// Enforces that Publisher.Publish in adapters/rabbitmq/publisher.go:
+//   - references ErrAdapterAMQPNack (distinct from ErrAdapterAMQPConfirmTimeout)
+//   - calls slog.Warn at least 3 times (NACK / timeout / confirmCh-closed)
+//   - calls RecordPublishFailure at least once
+//   - pairs every error-returning if-block with a RecordPublishFailure call
+//
+// AI-robust grading:
+//   - Medium — AST identifier and call-expression scan; string-name matching
+//     (renaming slog.Warn or RecordPublishFailure bypasses without scanner
+//     update). The -D sub-rule (AllReturnsMustRecord) uses a block-recursive
+//     walker that covers ForStmt / RangeStmt / SwitchStmt / TypeSwitchStmt /
+//     SelectStmt containers (Wave 4 extension). Blind spot: the string-name
+//     gate means a renamed callee bypasses silently (documented in RED fixture).
+//
+// # RMQ-PUBLISHER-RELEASES-CHANNEL-01
+//
+// Enforces that Publisher.Publish acquires a channel via AcquireChannel and
+// pairs it with a deferred CloseEphemeralChannel or ReleaseChannel call.
+// Without this pairing, each Publish leaks one inUseChannels slot; after
+// MaxChannelsPerConn (=256) publishes all subsequent calls fail with
+// ErrAdapterAMQPChannelMaxExceeded.
+//
+// AI-robust grading:
+//   - Medium — AST DeferStmt + SelectorExpr name scan; not type-qualified.
+//
+// # RMQ-STOPINTAKE-INFLIGHT-WAIT-01
+//
+// Enforces that Subscriber.StopIntake waits for in-flight processDelivery
+// goroutines before returning, and that drainRemaining uses a detached context
+// (context.WithoutCancel) with no bare ctx.Done case. Also enforces that
+// StopIntake does NOT call localWg.Wait() directly (Add-after-Wait race).
+//
+// AI-robust grading:
+//   - Medium — AST call-expression and CommClause name scan; not type-qualified.
+package archtest
 
 import (
 	"fmt"
 	"go/ast"
+	"go/parser"
 	"go/token"
 	"go/types"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/tools/typesutil"
@@ -71,20 +147,12 @@ func lookupInterfaceTypeFromPkg(t *testing.T, pkg *types.Package, name string) *
 	return iface
 }
 
-// checkFileForDirectChannelClose walks every function in f and flags any
-// `Close()` call whose receiver type implements AMQPChannel — regardless of
-// the receiver variable's name. AMQPConnection close calls slip through
-// because AMQPConnection's method set (4 methods) is a strict subset of
-// AMQPChannel's (16 methods), so types.Implements rejects it.
-func checkFileForDirectChannelClose(
-	t *testing.T,
-	p *Pass,
-	f *ast.File,
-	chanIface *types.Interface,
-	rel string,
-) {
-	t.Helper()
-
+// collectChannelDestructionDiags is the per-file body for
+// CheckRMQChannelDestructionViaConn, converting t.Errorf calls into
+// []Diagnostic. Extracted to keep CheckRMQChannelDestructionViaConn within
+// gocognit ≤15.
+func collectChannelDestructionDiags(p *Pass, chanIface *types.Interface, f *ast.File, rel string) []Diagnostic {
+	var out []Diagnostic
 	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if fd.Body == nil {
 			return
@@ -93,7 +161,6 @@ func checkFileForDirectChannelClose(
 		if allowedChannelCloseFuncs[funcName] {
 			return
 		}
-
 		EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
 			sel, ok := call.Fun.(*ast.SelectorExpr)
 			if !ok || sel.Sel.Name != "Close" {
@@ -106,18 +173,22 @@ func checkFileForDirectChannelClose(
 			if !typesutil.ImplementsInterface(recvType, chanIface) {
 				return
 			}
-
 			pos := p.Fset.Position(call.Pos())
-			receiverHint := receiverHint(sel.X)
-			t.Errorf(
-				"RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01: %s:%d: %s() contains direct %s.Close() call (receiver type %s implements AMQPChannel).\n"+
-					"  All AMQPChannel destruction MUST go through Connection.CloseEphemeralChannel\n"+
-					"  to keep inUseChannels in sync with MaxChannelsPerConn.\n"+
-					"  Replace: %s.Close() → conn.CloseEphemeralChannel(%s)",
-				rel, pos.Line, funcName, receiverHint, recvType.String(), receiverHint, receiverHint,
-			)
+			hint := receiverHint(sel.X)
+			out = append(out, Diagnostic{
+				Rel:  rel,
+				Line: pos.Line,
+				Message: fmt.Sprintf(
+					"RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01: %s:%d: %s() contains direct %s.Close() call (receiver type %s implements AMQPChannel).\n"+
+						"  All AMQPChannel destruction MUST go through Connection.CloseEphemeralChannel\n"+
+						"  to keep inUseChannels in sync with MaxChannelsPerConn.\n"+
+						"  Replace: %s.Close() → conn.CloseEphemeralChannel(%s)",
+					rel, pos.Line, funcName, hint, recvType.String(), hint, hint,
+				),
+			})
 		})
 	})
+	return out
 }
 
 // receiverHint reproduces the source-level receiver expression for use in
@@ -132,11 +203,233 @@ func receiverHint(x ast.Expr) string {
 	return "<expr>"
 }
 
+// CheckRMQChannelDestructionViaConn runs the RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01
+// production scan and returns all diagnostics.
+//
+// cfg is unused: adapters/rabbitmq has no build-tagged production files, so a
+// single default-config scan is complete.
+//
+// register=no — gocell-internal-layout (scans adapters/rabbitmq; vacuous-pass
+// externally; migrated for unified PlatformModulePath parameterization +
+// fork-safety, dogfooded via TestRMQChannelDestructionViaConn01).
+func CheckRMQChannelDestructionViaConn(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
+	t.Helper()
+	var diags []Diagnostic
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./adapters/rabbitmq/..."}), func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.TypesInfo == nil {
+			return nil
+		}
+		if p.Pkg.Path() != rmqAdapterPkgPath {
+			return nil
+		}
+		chanIface := lookupInterfaceTypeFromPkg(t, p.Pkg, "AMQPChannel")
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			if strings.HasSuffix(rel, "_test.go") {
+				continue
+			}
+			diags = append(diags, collectChannelDestructionDiags(p, chanIface, file, rel)...)
+		}
+		return nil
+	})
+	return diags
+}
+
 // ---------------------------------------------------------------------------
 // RMQ-CHANNEL-MAX-PER-CONN-01
 // ---------------------------------------------------------------------------
 
 const expectedDefaultMaxChannelsPerConnConst = "defaultRMQMaxChannelsPerConn"
+
+// collectChannelMaxPerConnDiags runs all three sub-checks (A/B/C) for
+// RMQ-CHANNEL-MAX-PER-CONN-01 against connection.go. Extracted to keep
+// CheckRMQChannelMaxPerConn within gocognit ≤15.
+func collectChannelMaxPerConnDiags(root string) []Diagnostic {
+	var out []Diagnostic
+	src := filepath.Join(root, "adapters", "rabbitmq", "connection.go")
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, src, nil, parser.SkipObjectResolution)
+	if err != nil {
+		return append(out, Diagnostic{
+			Message: fmt.Sprintf("RMQ-CHANNEL-MAX-PER-CONN-01: parse %s: %v", src, err),
+		})
+	}
+	out = append(out, checkChannelMaxConfigField(f)...)
+	out = append(out, checkChannelMaxSetDefaults(f, src)...)
+	out = append(out, checkChannelMaxAcquireGuard(f, src)...)
+	return out
+}
+
+// checkChannelMaxConfigField enforces RMQ-CHANNEL-MAX-PER-CONN-01-A:
+// Config struct must declare MaxChannelsPerConn int.
+func checkChannelMaxConfigField(f *ast.File) []Diagnostic {
+	var hasField bool
+	EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+		if ts.Name.Name != "Config" {
+			return
+		}
+		st, ok := ts.Type.(*ast.StructType)
+		if !ok {
+			return
+		}
+		for _, field := range st.Fields.List {
+			for _, name := range field.Names {
+				if name.Name == "MaxChannelsPerConn" {
+					hasField = true
+				}
+			}
+		}
+	})
+	if hasField {
+		return nil
+	}
+	return []Diagnostic{{
+		Message: "RMQ-CHANNEL-MAX-PER-CONN-01-A: rabbitmq.Config must declare " +
+			"`MaxChannelsPerConn int` so callers can bound channel allocation per " +
+			"physical AMQP connection. Default 256 prevents broker channel_max " +
+			"(default 2047) exhaustion.",
+	}}
+}
+
+// isMaxChannelsDefaultAssign returns true if assign assigns MaxChannelsPerConn
+// from expectedDefaultMaxChannelsPerConnConst. Used by checkChannelMaxSetDefaults.
+func isMaxChannelsDefaultAssign(assign *ast.AssignStmt) bool {
+	if len(assign.Lhs) != 1 {
+		return false
+	}
+	sel, ok := assign.Lhs[0].(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "MaxChannelsPerConn" {
+		return false
+	}
+	if len(assign.Rhs) != 1 {
+		return false
+	}
+	ident, ok := assign.Rhs[0].(*ast.Ident)
+	if !ok {
+		return false
+	}
+	return ident.Name == expectedDefaultMaxChannelsPerConnConst
+}
+
+// isMaxChannelsLEQCondition returns true if ifStmt's condition is
+// `<recv>.MaxChannelsPerConn <= 0`.
+func isMaxChannelsLEQCondition(ifStmt *ast.IfStmt) bool {
+	bin, ok := ifStmt.Cond.(*ast.BinaryExpr)
+	if !ok || bin.Op != token.LEQ {
+		return false
+	}
+	lhsSel, ok := bin.X.(*ast.SelectorExpr)
+	if !ok || lhsSel.Sel.Name != "MaxChannelsPerConn" {
+		return false
+	}
+	rhs, ok := bin.Y.(*ast.BasicLit)
+	return ok && rhs.Kind == token.INT && rhs.Value == "0"
+}
+
+// checkChannelMaxSetDefaults enforces RMQ-CHANNEL-MAX-PER-CONN-01-B:
+// setDefaults must guard with <= 0 and assign from the documented default
+// constant.
+func checkChannelMaxSetDefaults(f *ast.File, src string) []Diagnostic {
+	var setDefaults *ast.FuncDecl
+	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		if fd.Name.Name == "setDefaults" && fd.Recv != nil {
+			setDefaults = fd
+		}
+	})
+	if setDefaults == nil {
+		return []Diagnostic{{
+			Message: fmt.Sprintf("RMQ-CHANNEL-MAX-PER-CONN-01-B: Config.setDefaults not found in %s", src),
+		}}
+	}
+	var assigns, conditionIsLEQ bool
+	EachInSubtree[ast.IfStmt](setDefaults.Body, func(ifStmt *ast.IfStmt) {
+		if !isMaxChannelsLEQCondition(ifStmt) {
+			return
+		}
+		conditionIsLEQ = true
+		if !assigns {
+			if _, ok := FindFirstInSubtree[ast.AssignStmt](ifStmt.Body, isMaxChannelsDefaultAssign); ok {
+				assigns = true
+			}
+		}
+	})
+	return buildSetDefaultsDiags(assigns, conditionIsLEQ)
+}
+
+// buildSetDefaultsDiags converts the boolean scan results of
+// checkChannelMaxSetDefaults into []Diagnostic. Extracted to keep
+// checkChannelMaxSetDefaults within gocognit ≤15.
+func buildSetDefaultsDiags(assigns, conditionIsLEQ bool) []Diagnostic {
+	var out []Diagnostic
+	if !conditionIsLEQ {
+		out = append(out, Diagnostic{
+			Message: "RMQ-CHANNEL-MAX-PER-CONN-01-B: Config.setDefaults must guard the " +
+				"MaxChannelsPerConn assignment with `<= 0` (not `== 0`). " +
+				"A negative value passed by a caller must also fall back to the " +
+				"default (256) — accepting only == 0 allows -1 to bypass the cap " +
+				"and produce a production outage.",
+		})
+	}
+	if !assigns {
+		out = append(out, Diagnostic{
+			Message: fmt.Sprintf(
+				"RMQ-CHANNEL-MAX-PER-CONN-01-B: Config.setDefaults must assign "+
+					"MaxChannelsPerConn from the documented default constant `%s` (=256). "+
+					"Hardcoded literals defeat the single-source default and drift from "+
+					"the godoc on Config.MaxChannelsPerConn.",
+				expectedDefaultMaxChannelsPerConnConst,
+			),
+		})
+	}
+	return out
+}
+
+// checkChannelMaxAcquireGuard enforces RMQ-CHANNEL-MAX-PER-CONN-01-C:
+// AcquireChannel must reference the inUseChannels counter.
+func checkChannelMaxAcquireGuard(f *ast.File, src string) []Diagnostic {
+	var acquire *ast.FuncDecl
+	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		if fd.Name.Name == "AcquireChannel" && fd.Recv != nil {
+			acquire = fd
+		}
+	})
+	if acquire == nil {
+		return []Diagnostic{{
+			Message: fmt.Sprintf("RMQ-CHANNEL-MAX-PER-CONN-01-C: AcquireChannel method not found in %s", src),
+		}}
+	}
+	var refersToCounter bool
+	EachInSubtree[ast.SelectorExpr](acquire.Body, func(sel *ast.SelectorExpr) {
+		if sel.Sel.Name == "inUseChannels" {
+			refersToCounter = true
+		}
+	})
+	if refersToCounter {
+		return nil
+	}
+	return []Diagnostic{{
+		Message: "RMQ-CHANNEL-MAX-PER-CONN-01-C: AcquireChannel must reference the " +
+			"`inUseChannels` atomic counter to bound new-channel creation against " +
+			"Config.MaxChannelsPerConn; current source has no such reference. " +
+			"Without the counter, pool-miss paths can silently exceed broker " +
+			"channel_max and cause a connection-level shutdown.",
+	}}
+}
+
+// CheckRMQChannelMaxPerConn runs the RMQ-CHANNEL-MAX-PER-CONN-01 production
+// scan (sub-rules A/B/C) and returns all diagnostics.
+//
+// cfg is unused: adapters/rabbitmq has no build-tagged production files, so a
+// single default-config scan is complete.
+//
+// register=no — gocell-internal-layout (scans adapters/rabbitmq; vacuous-pass
+// externally; migrated for unified PlatformModulePath parameterization +
+// fork-safety, dogfooded via TestRMQChannelMaxPerConn01_*).
+func CheckRMQChannelMaxPerConn(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
+	t.Helper()
+	root := findModuleRoot(t)
+	return collectChannelMaxPerConnDiags(root)
+}
 
 // ---------------------------------------------------------------------------
 // RMQ-PUBLISHER-FAILURE-HANDLING-01
@@ -347,8 +640,6 @@ func blockContainsRecordPublishFailure(stmts []ast.Stmt) bool {
 
 // findMethod returns the FuncDecl for a method whose name matches `name` and
 // which has a non-nil receiver. Returns nil if not found.
-//
-//nolint:unparam // name is "Publish" in all callers; kept as param for readability
 func findMethod(f *ast.File, name string) *ast.FuncDecl {
 	var result *ast.FuncDecl
 	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
@@ -357,4 +648,458 @@ func findMethod(f *ast.File, name string) *ast.FuncDecl {
 		}
 	})
 	return result
+}
+
+// collectPublisherFailureDiags gathers all sub-rule (A/B/C/D) diagnostics for
+// RMQ-PUBLISHER-FAILURE-HANDLING-01 against publisher.go. Extracted to keep
+// CheckRMQPublisherFailureHandling within gocognit ≤15.
+func collectPublisherFailureDiags(root string) []Diagnostic {
+	var out []Diagnostic
+	src := filepath.Join(root, "adapters", "rabbitmq", "publisher.go")
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, src, nil, parser.SkipObjectResolution)
+	if err != nil {
+		return append(out, Diagnostic{
+			Message: fmt.Sprintf("RMQ-PUBLISHER-FAILURE-HANDLING-01: parse %s: %v", src, err),
+		})
+	}
+	publish := findMethod(f, "Publish")
+	if publish == nil {
+		return append(out, Diagnostic{
+			Message: fmt.Sprintf("RMQ-PUBLISHER-FAILURE-HANDLING-01: Publish method not found in %s", src),
+		})
+	}
+	rel, _ := filepath.Rel(root, src)
+	if rel == "" {
+		rel = src
+	}
+	out = append(out, checkPublisherNackErrcode(publish, rel)...)
+	out = append(out, checkPublisherWarnCount(publish, src)...)
+	out = append(out, checkPublisherRecordsFailureMetric(publish, rel)...)
+	out = append(out, checkPublisherAllReturnsMustRecord(publish, fset, src)...)
+	return out
+}
+
+// checkPublisherNackErrcode enforces RMQ-PUBLISHER-FAILURE-HANDLING-01-A.
+func checkPublisherNackErrcode(publish *ast.FuncDecl, rel string) []Diagnostic {
+	var found bool
+	EachInSubtree[ast.Ident](publish.Body, func(ident *ast.Ident) {
+		if ident.Name == "ErrAdapterAMQPNack" {
+			found = true
+		}
+	})
+	if found {
+		return nil
+	}
+	return []Diagnostic{{
+		Message: fmt.Sprintf(
+			"RMQ-PUBLISHER-FAILURE-HANDLING-01-A: Publish in %s must reference "+
+				"ErrAdapterAMQPNack to mark broker-NACK as a distinct error code (vs "+
+				"ErrAdapterAMQPConfirmTimeout). Sharing a code makes alerting rules "+
+				"unable to tell broker rejection from network timeout.",
+			rel,
+		),
+	}}
+}
+
+// checkPublisherWarnCount enforces RMQ-PUBLISHER-FAILURE-HANDLING-01-B.
+func checkPublisherWarnCount(publish *ast.FuncDecl, src string) []Diagnostic {
+	const requiredWarnCalls = 3
+	var warnCount int
+	EachInSubtree[ast.CallExpr](publish.Body, func(call *ast.CallExpr) {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Warn" {
+			return
+		}
+		ident, ok := sel.X.(*ast.Ident)
+		if !ok || ident.Name != "slog" {
+			return
+		}
+		warnCount++
+	})
+	if warnCount >= requiredWarnCalls {
+		return nil
+	}
+	return []Diagnostic{{
+		Message: fmt.Sprintf(
+			"RMQ-PUBLISHER-FAILURE-HANDLING-01-B: Publish in %s must call slog.Warn at "+
+				"least %d times (NACK / confirm timeout / confirm-channel-closed); "+
+				"found %d. Silent failure branches make on-call diagnosis impossible.",
+			src, requiredWarnCalls, warnCount,
+		),
+	}}
+}
+
+// checkPublisherRecordsFailureMetric enforces RMQ-PUBLISHER-FAILURE-HANDLING-01-C.
+func checkPublisherRecordsFailureMetric(publish *ast.FuncDecl, rel string) []Diagnostic {
+	var calls int
+	EachInSubtree[ast.CallExpr](publish.Body, func(call *ast.CallExpr) {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return
+		}
+		if sel.Sel.Name == "RecordPublishFailure" {
+			calls++
+		}
+	})
+	if calls >= 1 {
+		return nil
+	}
+	return []Diagnostic{{
+		Message: fmt.Sprintf(
+			"RMQ-PUBLISHER-FAILURE-HANDLING-01-C: Publish in %s must call "+
+				"RecordPublishFailure on the injected PublisherCollector so the failure "+
+				"reason is queryable as a metric. Defaulting to NoopPublisherCollector "+
+				"keeps the call cheap; production wiring injects the provider-backed "+
+				"collector at the composition root.",
+			rel,
+		),
+	}}
+}
+
+// checkPublisherAllReturnsMustRecord enforces RMQ-PUBLISHER-FAILURE-HANDLING-01-D.
+func checkPublisherAllReturnsMustRecord(publish *ast.FuncDecl, fset *token.FileSet, src string) []Diagnostic {
+	violations := scanPublishMissingFailureRecord(publish, fset)
+	var out []Diagnostic
+	for _, v := range violations {
+		out = append(out, Diagnostic{
+			Message: fmt.Sprintf(
+				"RMQ-PUBLISHER-FAILURE-HANDLING-01-D: Publish in %s: %s. "+
+					"All error-returning if-blocks must contain collector.RecordPublishFailure "+
+					"so alerting rules can observe the failure reason without log-parsing. "+
+					"Exemptions: success `return nil` and returns inside ctx.Done() case.",
+				src, v,
+			),
+		})
+	}
+	return out
+}
+
+// CheckRMQPublisherFailureHandling runs the RMQ-PUBLISHER-FAILURE-HANDLING-01
+// production scan (sub-rules A/B/C/D) and returns all diagnostics.
+//
+// cfg is unused: adapters/rabbitmq has no build-tagged production files, so a
+// single default-config scan is complete.
+//
+// register=no — gocell-internal-layout (scans adapters/rabbitmq; vacuous-pass
+// externally; migrated for unified PlatformModulePath parameterization +
+// fork-safety, dogfooded via TestRMQPublisherFailureHandling01_*).
+func CheckRMQPublisherFailureHandling(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
+	t.Helper()
+	root := findModuleRoot(t)
+	return collectPublisherFailureDiags(root)
+}
+
+// ---------------------------------------------------------------------------
+// RMQ-PUBLISHER-RELEASES-CHANNEL-01
+// ---------------------------------------------------------------------------
+
+// collectPublisherReleasesChannelDiags gathers diagnostics for
+// RMQ-PUBLISHER-RELEASES-CHANNEL-01. Extracted to keep
+// CheckRMQPublisherReleasesChannel within gocognit ≤15.
+func collectPublisherReleasesChannelDiags(root string) []Diagnostic {
+	var out []Diagnostic
+	src := filepath.Join(root, "adapters", "rabbitmq", "publisher.go")
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, src, nil, parser.SkipObjectResolution)
+	if err != nil {
+		return append(out, Diagnostic{
+			Message: fmt.Sprintf("RMQ-PUBLISHER-RELEASES-CHANNEL-01: parse %s: %v", src, err),
+		})
+	}
+
+	var publishMethod *ast.FuncDecl
+	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		if publishMethod == nil && fd.Recv != nil && fd.Name.Name == "Publish" {
+			publishMethod = fd
+		}
+	})
+	if publishMethod == nil {
+		return append(out, Diagnostic{
+			Message: fmt.Sprintf("RMQ-PUBLISHER-RELEASES-CHANNEL-01: Publisher.Publish method not found in %s", src),
+		})
+	}
+
+	var hasAcquire bool
+	EachInSubtree[ast.CallExpr](publishMethod.Body, func(call *ast.CallExpr) {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return
+		}
+		if sel.Sel.Name == "AcquireChannel" {
+			hasAcquire = true
+		}
+	})
+	if !hasAcquire {
+		out = append(out, Diagnostic{
+			Message: "RMQ-PUBLISHER-RELEASES-CHANNEL-01: Publisher.Publish must call " +
+				"conn.AcquireChannel to obtain a channel for confirm-mode publish.",
+		})
+	}
+
+	releaseSelectors := map[string]bool{
+		"CloseEphemeralChannel": true,
+		"ReleaseChannel":        true,
+	}
+	_, hasRelease := FindFirstInSubtree[ast.DeferStmt](publishMethod.Body, func(ds *ast.DeferStmt) bool {
+		_, ok := FindFirstInSubtree[ast.SelectorExpr](ds, func(sel *ast.SelectorExpr) bool {
+			return releaseSelectors[sel.Sel.Name]
+		})
+		return ok
+	})
+	if !hasRelease {
+		out = append(out, Diagnostic{
+			Message: "RMQ-PUBLISHER-RELEASES-CHANNEL-01: Publisher.Publish must pair " +
+				"AcquireChannel with a deferred p.conn.CloseEphemeralChannel " +
+				"(or p.conn.ReleaseChannel) call. Without this pairing every Publish " +
+				"leaks one inUseChannels slot; after MaxChannelsPerConn (=256) " +
+				"publishes all subsequent calls fail with " +
+				"ErrAdapterAMQPChannelMaxExceeded.",
+		})
+	}
+	return out
+}
+
+// CheckRMQPublisherReleasesChannel runs the RMQ-PUBLISHER-RELEASES-CHANNEL-01
+// production scan and returns all diagnostics.
+//
+// cfg is unused: adapters/rabbitmq has no build-tagged production files, so a
+// single default-config scan is complete.
+//
+// register=no — gocell-internal-layout (scans adapters/rabbitmq; vacuous-pass
+// externally; migrated for unified PlatformModulePath parameterization +
+// fork-safety, dogfooded via TestRMQPublisherReleasesChannel01).
+func CheckRMQPublisherReleasesChannel(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
+	t.Helper()
+	root := findModuleRoot(t)
+	return collectPublisherReleasesChannelDiags(root)
+}
+
+// ---------------------------------------------------------------------------
+// RMQ-STOPINTAKE-INFLIGHT-WAIT-01
+// ---------------------------------------------------------------------------
+
+// collectStopIntakeDiags gathers all sub-rule diagnostics for
+// RMQ-STOPINTAKE-INFLIGHT-WAIT-01. Extracted to keep
+// CheckRMQStopIntakeInflightWait within gocognit ≤15.
+func collectStopIntakeDiags(root string) []Diagnostic {
+	var out []Diagnostic
+	src := filepath.Join(root, "adapters", "rabbitmq", "subscriber.go")
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, src, nil, parser.SkipObjectResolution)
+	if err != nil {
+		return append(out, Diagnostic{
+			Message: fmt.Sprintf("RMQ-STOPINTAKE-INFLIGHT-WAIT-01: parse %s: %v", src, err),
+		})
+	}
+	rel, _ := filepath.Rel(root, src)
+	if rel == "" {
+		rel = src
+	}
+	out = append(out, checkStopIntakeWaitsForInflight(f, rel)...)
+	out = append(out, checkDrainNoParentCtxDone(f, fset)...)
+	out = append(out, checkDrainUsesDetachedContext(f, rel)...)
+	out = append(out, checkStopIntakeAvoidsLocalWgWait(f, fset, rel)...)
+	return out
+}
+
+// isInflightWaitCall returns true if call is any recognized inflight-wait
+// sentinel: waitInflightDrain, <recv>.localWg.Wait, <recv>.inflightWg.Wait,
+// or the helper method names waitInflight/waitDrained/wgDone/inflightCount.
+func isInflightWaitCall(call *ast.CallExpr) bool {
+	if id, ok := call.Fun.(*ast.Ident); ok {
+		return id.Name == "waitInflightDrain"
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	switch sel.Sel.Name {
+	case "Wait":
+		inner, ok := sel.X.(*ast.SelectorExpr)
+		if !ok {
+			return false
+		}
+		return inner.Sel.Name == "localWg" || inner.Sel.Name == "inflightWg"
+	case "waitInflight", "waitDrained", "wgDone", "inflightCount":
+		return true
+	}
+	return false
+}
+
+// checkStopIntakeWaitsForInflight enforces RMQ-STOPINTAKE-INFLIGHT-WAIT-01-A.
+func checkStopIntakeWaitsForInflight(f *ast.File, rel string) []Diagnostic {
+	var stopIntake *ast.FuncDecl
+	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		if fd.Name.Name == "StopIntake" && fd.Recv != nil {
+			stopIntake = fd
+		}
+	})
+	if stopIntake == nil {
+		return []Diagnostic{{
+			Message: fmt.Sprintf("RMQ-STOPINTAKE-INFLIGHT-WAIT-01-A: StopIntake method not found in %s", rel),
+		}}
+	}
+	var found bool
+	EachInSubtree[ast.CallExpr](stopIntake.Body, func(call *ast.CallExpr) {
+		if isInflightWaitCall(call) {
+			found = true
+		}
+	})
+	if found {
+		return nil
+	}
+	return []Diagnostic{{
+		Message: fmt.Sprintf(
+			"RMQ-STOPINTAKE-INFLIGHT-WAIT-01-A: StopIntake in %s must wait for in-flight "+
+				"processDelivery goroutines (run.localWg.Wait / run.waitInflight / run.wgDone) "+
+				"before returning, otherwise Close() can race with active broker I/O.",
+			rel,
+		),
+	}}
+}
+
+// isCtxDoneReceiveCase returns true if comm is a `case <-ctx.Done():` arm
+// (ExprStmt form only — assignment form is handled separately by isCtxDoneCase).
+func isCtxDoneReceiveCase(comm *ast.CommClause) bool {
+	expr, ok := comm.Comm.(*ast.ExprStmt)
+	if !ok {
+		return false
+	}
+	unary, ok := expr.X.(*ast.UnaryExpr)
+	if !ok || unary.Op != token.ARROW {
+		return false
+	}
+	call, ok := unary.X.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	ident, ok := sel.X.(*ast.Ident)
+	return ok && ident.Name == "ctx" && sel.Sel.Name == "Done"
+}
+
+// checkDrainNoParentCtxDone enforces RMQ-STOPINTAKE-INFLIGHT-WAIT-01-B
+// (no parent ctx.Done).
+func checkDrainNoParentCtxDone(f *ast.File, fset *token.FileSet) []Diagnostic {
+	var drain *ast.FuncDecl
+	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		if fd.Name.Name == "drainRemaining" && fd.Recv != nil {
+			drain = fd
+		}
+	})
+	if drain == nil {
+		return []Diagnostic{{
+			Message: "RMQ-STOPINTAKE-INFLIGHT-WAIT-01-B: drainRemaining method not found",
+		}}
+	}
+	var out []Diagnostic
+	EachInSubtree[ast.CommClause](drain.Body, func(comm *ast.CommClause) {
+		if !isCtxDoneReceiveCase(comm) {
+			return
+		}
+		out = append(out, Diagnostic{
+			Line: fset.Position(comm.Pos()).Line,
+			Message: fmt.Sprintf(
+				"RMQ-STOPINTAKE-INFLIGHT-WAIT-01-B: drainRemaining at %s contains `case <-ctx.Done()`; "+
+					"drain MUST run on a detached context (context.WithoutCancel) bounded by "+
+					"currentDrainDeadline timer, otherwise parent ctx cancel drops prefetched messages.",
+				fset.Position(comm.Pos()),
+			),
+		})
+	})
+	return out
+}
+
+// checkDrainUsesDetachedContext enforces RMQ-STOPINTAKE-INFLIGHT-WAIT-01-B
+// (detached context cross-check).
+func checkDrainUsesDetachedContext(f *ast.File, rel string) []Diagnostic {
+	bodyHasWithoutCancel := func(body *ast.BlockStmt) bool {
+		var found bool
+		EachInSubtree[ast.SelectorExpr](body, func(sel *ast.SelectorExpr) {
+			ident, ok := sel.X.(*ast.Ident)
+			if !ok {
+				return
+			}
+			if ident.Name == "context" && sel.Sel.Name == "WithoutCancel" {
+				found = true
+			}
+		})
+		return found
+	}
+	_, found := FindFirstInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) bool {
+		if fd.Recv == nil || fd.Body == nil {
+			return false
+		}
+		if fd.Name.Name != "drainRemaining" && fd.Name.Name != "consumeLoop" {
+			return false
+		}
+		return bodyHasWithoutCancel(fd.Body)
+	})
+	if found {
+		return nil
+	}
+	return []Diagnostic{{
+		Message: fmt.Sprintf(
+			"RMQ-STOPINTAKE-INFLIGHT-WAIT-01-B: drainRemaining or consumeLoop in %s must "+
+				"use `context.WithoutCancel` to derive the drain ctx, so prefetched "+
+				"deliveries are processed independently of the parent ctx cancel.",
+			strings.TrimPrefix(rel, "./"),
+		),
+	}}
+}
+
+// checkStopIntakeAvoidsLocalWgWait enforces the negative invariant for
+// RMQ-STOPINTAKE-INFLIGHT-WAIT-01: StopIntake must NOT call localWg.Wait().
+func checkStopIntakeAvoidsLocalWgWait(f *ast.File, fset *token.FileSet, rel string) []Diagnostic {
+	var stopIntake *ast.FuncDecl
+	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		if fd.Name.Name == "StopIntake" && fd.Recv != nil {
+			stopIntake = fd
+		}
+	})
+	if stopIntake == nil {
+		return nil // already caught by checkStopIntakeWaitsForInflight
+	}
+	var out []Diagnostic
+	EachInSubtree[ast.CallExpr](stopIntake.Body, func(call *ast.CallExpr) {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Wait" {
+			return
+		}
+		inner, ok := sel.X.(*ast.SelectorExpr)
+		if !ok || inner.Sel.Name != "localWg" {
+			return
+		}
+		out = append(out, Diagnostic{
+			Line: fset.Position(call.Pos()).Line,
+			Message: fmt.Sprintf(
+				"RMQ-STOPINTAKE-INFLIGHT-WAIT-01: %s:%s — StopIntake body must not call "+
+					"localWg.Wait(); poll inflightCount() instead. drainRemaining "+
+					"concurrently calls localWg.Add(1) on every prefetched delivery, "+
+					"and Wait racing that Add panics with "+
+					"\"WaitGroup misuse: Add called concurrently with Wait\".",
+				rel, fset.Position(call.Pos()),
+			),
+		})
+	})
+	return out
+}
+
+// CheckRMQStopIntakeInflightWait runs the RMQ-STOPINTAKE-INFLIGHT-WAIT-01
+// production scan and returns all diagnostics.
+//
+// cfg is unused: adapters/rabbitmq has no build-tagged production files, so a
+// single default-config scan is complete.
+//
+// register=no — gocell-internal-layout (scans adapters/rabbitmq; vacuous-pass
+// externally; migrated for unified PlatformModulePath parameterization +
+// fork-safety, dogfooded via TestRMQStopIntakeInflightWait01_*).
+func CheckRMQStopIntakeInflightWait(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
+	t.Helper()
+	root := findModuleRoot(t)
+	return collectStopIntakeDiags(root)
 }

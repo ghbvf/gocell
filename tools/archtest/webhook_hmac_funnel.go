@@ -1,6 +1,51 @@
-package archtest
-
+// INVARIANT: WEBHOOK-HMAC-FUNNEL-01
+//
 // webhook_hmac_funnel.go — importable webhook HMAC signing funnel rule logic.
+//
+// WEBHOOK-HMAC-FUNNEL-01 — kernel/webhook HMAC signing funnel (KERNEL-WEBHOOK-01).
+//
+//   - A1 (downstream Hard): crypto/hmac.New has exactly one callsite in the
+//     kernel/webhook package — the computeMAC function in signer.go. The check is
+//     FUNCTION-level, not file-level: an hmac.New in any other function (even
+//     inside signer.go) fails. This also closes the package-internal upstream
+//     blind spot: any new struct that wants to sign MUST call hmac.New, which is
+//     allowlisted to computeMAC, so an unsealed internal holder cannot produce a
+//     signature undetected. Detection: ResolvePackageRef(callee) == crypto/hmac.New
+//     AND (file basename != signer.go OR enclosing func != computeMAC).
+//   - A2 (downstream Hard): signature comparison must use crypto/hmac.Equal or
+//     crypto/subtle.ConstantTimeCompare. The non-constant-time comparison callees
+//     bytes.Equal / bytes.Compare / slices.Equal / reflect.DeepEqual are banned in
+//     the package. This makes the constant-time invariant an AST lock rather than
+//     a flaky timing test. Detection: ResolvePackageRef(callee) ∈ the banned set.
+//   - A3 (upstream Hard external / Medium internal): the Signer and Verifier
+//     interfaces each carry an unexported sealed() marker method, so
+//     package-external implementations are a compile error (Hard). Package-internal
+//     new holders are not blocked by sealing (Medium) — covered transitively by
+//     A1. Explicit Hard-ization of the internal axis (unexported method-set
+//     interface + private construction, per the SPAN-SETATTR-HOLDER-SEAL #851
+//     precedent) is tracked in gh #1243. Detection: the Signer/Verifier interface
+//     type decls must contain an unexported method.
+//
+// Blind spots (ai-robust 强制反向自检; each has a reverse self-test in the _test.go):
+//
+//	B-A1/A2 — rule-logic regression: a reverse fixture module
+//	  (testdata/webhook_hmac_violate) calls hmac.New outside computeMAC (both
+//	  outside signer.go and inside signer.go in a non-computeMAC func) and the
+//	  banned comparison callees; TestWebhookHMACFunnel_ReverseFixture asserts A1/A2
+//	  fire on each form.
+//	B6 — Source.Secret leak: slog of the raw unexported secret field would leak
+//	  it (Source.LogValue + slog.LogValuer covers slog.Any of a whole Source, but
+//	  not slog of src.secret directly). scanWebhookSecretSlog covers BOTH the
+//	  package-function form (slog.Info(...)) and the method form
+//	  (logger.Info(...)). TestWebhookFunnel_NoRawSecretSlog asserts no such call in
+//	  the package references a `.secret` selector.
+//	B7 — non-AST-detectable constant-time bypass: comparing the base64 signature
+//	  STRINGS with `==` (e.g. expectedB64 == presentedB64) is non-constant-time but
+//	  is a plain *ast.BinaryExpr with no resolvable callee, so the A2 callee scan
+//	  cannot see it. Detecting it would need type-level data-flow analysis. Bounded
+//	  response: production matchAnySignature compares raw MAC bytes via hmac.Equal
+//	  (A2-clean), and this blind spot is documented here so a future reviewer knows
+//	  the AST scan does not cover string-`==`.
 //
 // This is the non-test home of the WEBHOOK-HMAC-FUNNEL-01 scanner helpers so
 // they can be compiled by external Cell repositories through the CellRule
@@ -15,6 +60,10 @@ package archtest
 //
 // Platform-symbol paths are anchored to [PlatformModulePath] so a module
 // rename updates exactly one place and no bare literal appears here.
+//
+// ref: docs/architecture/202605291200-adr-webhook-signing-algorithm.md
+// ref: tools/archtest/healthz_invariants_test.go (callsite-allowlist template)
+package archtest
 
 import (
 	"go/ast"
@@ -192,6 +241,9 @@ func scanWebhookPkg(p *Pass, a1, a2, b6 *[]Diagnostic, sealed map[string]bool) {
 // CheckWebhookHMACFunnel runs the WEBHOOK-HMAC-FUNNEL-01 production scan
 // (A1/A2/A3/B6) and returns all diagnostics.
 //
+// cfg is unused: kernel/webhook has no build-tagged production files, so a
+// single default-config scan is complete.
+//
 // register=no — gocell-internal-layout (scans kernel/webhook; vacuous-pass
 // externally; migrated for unified PlatformModulePath parameterization +
 // fork-safety, dogfooded via TestWebhookHMACFunnel).
@@ -214,14 +266,13 @@ func CheckWebhookHMACFunnel(t *testing.T, _ ConfigForExternalCell) []Diagnostic 
 	all = append(all, a1...)
 	all = append(all, a2...)
 	all = append(all, b6...)
-	all = append(all, checkWebhookSealedMarkers(t, sealed)...)
+	all = append(all, checkWebhookSealedMarkers(sealed)...)
 	return all
 }
 
 // checkWebhookSealedMarkers validates A3 and converts violations to
 // Diagnostics. Extracted to keep CheckWebhookHMACFunnel within gocognit ≤15.
-func checkWebhookSealedMarkers(t *testing.T, sealed map[string]bool) []Diagnostic {
-	t.Helper()
+func checkWebhookSealedMarkers(sealed map[string]bool) []Diagnostic {
 	var out []Diagnostic
 	for name := range webhookSealedInterfaces {
 		hasUnexported, found := sealed[name]
