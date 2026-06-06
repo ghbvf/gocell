@@ -3172,8 +3172,12 @@ const sagaConsolidatedFile = "saga_invariants_test.go"
 // sagaConsolidatedFileMinIDs is the floor for the non-vacuous guard: the
 // consolidated file must declare at least this many SAGA-* IDs, else a
 // rename/empty/scan-regression would let TestSagaInvariantsConsolidated pass
-// vacuously. 3 is the structural floor (well below the actual 9 declared today).
-const sagaConsolidatedFileMinIDs = 3
+// vacuously. Derived from knownSagaInvariantIDs (the full saga theme set) so the
+// floor tightens automatically as rules are added; the B1 oracle
+// (TestSagaInvariantsConsolidated_BlindSpot_KnownIDsPresent) is the stronger
+// per-ID check, this is the count backstop. (var, not const: len of a slice is
+// not a constant expression.)
+var sagaConsolidatedFileMinIDs = len(knownSagaInvariantIDs)
 
 // sagaThemePrefix is the theme key the consolidation guard scans for: a saga
 // INVARIANT is any anchor whose parsed ID carries this prefix (the SAGA- family
