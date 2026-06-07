@@ -346,14 +346,23 @@ func TestCommandBus_Enqueue_AsyncRelayValueValidationDeadLetters(t *testing.T) {
 	require.NoError(t, enqueue.Register(reg, h))
 
 	store := outboxtest.NewFakeStore()
-	// Missing required "payload" — decodes into *Request but violates the schema.
-	store.Seed(outbox.ClaimedEntry{Entry: newRawCommandEntry(t, `{"deviceId":"d1"}`)})
+	// Identity-bearing (so it passes the #1698 Claimer wrap and reaches the REAL
+	// DispatchAsync) but schema-invalid payload (missing required "payload"): this
+	// proves the #1588 value funnel dead-letters AT DISPATCH — distinct from the
+	// #1698 missing-identity fail-closed, which would also dead-letter but BEFORE
+	// DispatchAsync (and its value funnel) ever runs.
+	invalidEntry, err := kout.NewEntry(clock.Real(), context.Background(), string(enqueue.DispatchID),
+		[]byte(`{"deviceId":"d1"}`),
+		kout.WithAggregateID("d1"),
+		kout.WithMetadata(map[string]string{command.CommandIDMetadataKey: "cmd-d1"}))
+	require.NoError(t, err)
+	store.Seed(outbox.ClaimedEntry{Entry: invalidEntry})
 
 	relay := outbox.NewRelay(clock.Real(), store, &kout.DiscardPublisher{},
 		outbox.RelayConfig{PollInterval: 5 * time.Millisecond}.WithDefaults())
 	relay.WithCommandDispatch(reg, map[command.CommandID]command.AsyncDispatchFunc{
 		enqueue.DispatchID: enqueue.DispatchAsync,
-	})
+	}, idempotency.NewInMemClaimer(clock.Real()))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
