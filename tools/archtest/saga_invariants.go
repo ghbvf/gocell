@@ -25,6 +25,8 @@ package archtest
 //	CheckSagaConstructorNilGuard — SAGA-CONSTRUCTOR-NIL-GUARD-01
 //	CheckSagaMetricLabelValuesFrozen — SAGA-METRIC-LABEL-VALUES-FROZEN-01
 //	CheckSagaSlogInstanceFieldsCaller — SAGA-SLOG-INSTANCE-FIELDS-CALLER-01
+//	CheckSagaTailerCheckpointAdvancerCaller — SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01
+//	CheckSagaOwnerCheckpointConformanceEnrollment — SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01
 //
 // Registered in StandardCellRules (portable subset — rules that apply to any
 // Cell using the saga engine):
@@ -96,6 +98,18 @@ const (
 	// Note: sagaExecutorPkg (already used for SAGA-METRIC-LABEL-VALUES-FROZEN-01)
 	// and sagaRuntimeExecutorPkg are the same path; they are unified here.
 	sagaRuntimeExecutorPkg = PlatformModulePath + "/runtime/saga/executor"
+
+	// sagaTailerPkg is the runtime/saga/tailer package path (EPIC #1609 PR-04).
+	sagaTailerPkg = PlatformModulePath + "/runtime/saga/tailer"
+
+	// sagaKernelProjectionPkg is the kernel/projection package path (OwnerCheckpointStore).
+	// Named sagaKernelProjectionPkg (not sagaKernelProjectionPkg) to avoid clashing with
+	// the same-named const in projection_system_principal_install_caller_test.go
+	// which refers to kernel/saga/sagaprojection.
+	sagaKernelProjectionPkg = PlatformModulePath + "/kernel/projection"
+
+	// sagaKernelProjectionTestPkg is the kernel/projection/projectiontest package path.
+	sagaKernelProjectionTestPkg = PlatformModulePath + "/kernel/projection/projectiontest"
 
 	// sagaOutboxPkg is the kernel/outbox package path.
 	sagaOutboxPkg = PlatformModulePath + "/kernel/outbox"
@@ -178,6 +192,16 @@ const (
 
 	// sagaExecutorPkg aliases sagaRuntimeExecutorPkg for metric-label helpers.
 	sagaExecutorPkg = sagaRuntimeExecutorPkg
+
+	// SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01.
+	sagaTailerAdvancerRuleID        = "SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01"
+	sagaAdvanceIfOwnerMethodName    = "AdvanceIfOwner"
+	sagaTailerTypeName              = "Tailer"
+	sagaTailerCommitEventMethodName = "commitEvent"
+
+	// SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01.
+	sagaOwnerCheckpointIfaceName       = "OwnerCheckpointStore"
+	sagaOwnerCheckpointConformanceFunc = "RunOwnerCheckpointConformance"
 )
 
 // randAllowedConstructors is the set of (pkgPath.funcName) keys that are
@@ -197,13 +221,27 @@ var sagaInstanceFieldsGuardedKeys = map[string]struct{}{
 	"lease_id":    {},
 }
 
-// sagaLabelEnumWant is the golden value-set for each frozen executor label
-// enum type (SAGA-METRIC-LABEL-VALUES-FROZEN-01 A1).
+// sagaLabelEnumWant is the golden value-set for each frozen saga label enum
+// type across both runtime/saga/executor and runtime/saga/tailer
+// (SAGA-METRIC-LABEL-VALUES-FROZEN-01 A1).
+//
+// executor enums:
+//
+//	HeartbeatFailureReason, TickResult, DriveResult, LeaderSkipReason
+//
+// tailer enums (EPIC #1609 PR-04):
+//
+//	LockAcquireResult, DrainResult, AdvanceResult
 var sagaLabelEnumWant = map[string][]string{
+	// executor enums.
 	"HeartbeatFailureReason": {"infra_error", "stale_lease"},
 	"TickResult":             {"claimed", "empty", "error"},
 	"DriveResult":            {"ok", "error"},
 	"LeaderSkipReason":       {"contended", "ctx_canceled", "backend_error"},
+	// tailer enums (EPIC #1609 PR-04).
+	"LockAcquireResult": {"backend_error", "contended", "ctx_canceled"},
+	"DrainResult":       {"apply_error", "ok", "store_error"},
+	"AdvanceResult":     {"error", "ok", "stale_owner"},
 }
 
 // sagaBannedReceiverKeys maps "<pkgpath>.<TypeName>" → display label for
@@ -231,6 +269,7 @@ var sagaBannedIfaceSpecs = []struct{ path, name, label string }{
 var sagaConstructorScopePackages = map[string]bool{
 	sagaRuntimePkg:         true,
 	sagaRuntimeExecutorPkg: true,
+	sagaTailerPkg:          true, // EPIC #1609 PR-04: NewTailer
 }
 
 // sagaGuardKey is a (pkgPath, funcName) pair for a sanctioned nil-guard call.
@@ -2259,15 +2298,20 @@ func CheckSagaSlogInstanceFieldsCaller(t *testing.T, cfg ConfigForExternalCell) 
 
 // ─── SAGA-METRIC-LABEL-VALUES-FROZEN-01 helpers ──────────────────────────────
 
-// sagaEnumTypeName returns the enum type name if t is one of the frozen
-// executor label-enum named types, else "".
+// sagaEnumTypeName returns the enum type name if t is one of the frozen saga
+// label-enum named types (in either runtime/saga/executor or
+// runtime/saga/tailer), else "".
 func sagaEnumTypeName(t types.Type) string {
 	named, ok := t.(*types.Named)
 	if !ok {
 		return ""
 	}
 	obj := named.Obj()
-	if obj == nil || obj.Pkg() == nil || obj.Pkg().Path() != sagaExecutorPkg {
+	if obj == nil || obj.Pkg() == nil {
+		return ""
+	}
+	// Allow consts from either executor or tailer package.
+	if obj.Pkg().Path() != sagaExecutorPkg && obj.Pkg().Path() != sagaTailerPkg {
 		return ""
 	}
 	if _, frozen := sagaLabelEnumWant[obj.Name()]; frozen {
@@ -2349,8 +2393,8 @@ func isSagaEnumConversion(info *types.Info, call *ast.CallExpr) bool {
 }
 
 // isSagaDeclaredConstRef reports whether arg is a bare reference to a const
-// declared in the runtime/saga/executor package AND typed as one of the frozen
-// executor label enums.
+// declared in runtime/saga/executor or runtime/saga/tailer AND typed as one of
+// the frozen saga label enums.
 func isSagaDeclaredConstRef(info *types.Info, arg ast.Expr) bool {
 	var obj types.Object
 	switch e := arg.(type) {
@@ -2365,7 +2409,11 @@ func isSagaDeclaredConstRef(info *types.Info, arg ast.Expr) bool {
 	if !ok {
 		return false
 	}
-	if c.Pkg() == nil || c.Pkg().Path() != sagaExecutorPkg {
+	if c.Pkg() == nil {
+		return false
+	}
+	// Accept declared consts from either executor or tailer package.
+	if c.Pkg().Path() != sagaExecutorPkg && c.Pkg().Path() != sagaTailerPkg {
 		return false
 	}
 	return sagaEnumTypeName(c.Type()) != ""
@@ -2415,8 +2463,8 @@ func scanSagaEnumLabelCallsites(p *Pass) []Diagnostic {
 					Rel:  rel,
 					Line: p.Fset.Position(arg.Pos()).Line,
 					Message: "inline constant of saga label enum " + typeName +
-						" reaches a metric label — pass a declared executor." + typeName +
-						" const (or a classify() result), not a string literal or " +
+						" reaches a metric label — pass a declared const (executor." + typeName +
+						" or tailer." + typeName + ") or a classify() result, not a string literal or " +
 						typeName + "(...) conversion (SAGA-METRIC-LABEL-VALUES-FROZEN-01 callsite guard)",
 				})
 			}
@@ -2527,4 +2575,286 @@ func CheckSagaMetricLabelValuesFrozen(t *testing.T, cfg ConfigForExternalCell) [
 		return nil
 	})
 	return all
+}
+
+// ─── SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01 helpers ───────────────────────
+
+// sagaTailerAdvancerSanctionedCallers is the set of (pkgPath, recv type name,
+// method name) triples sanctioned to call OwnerCheckpointStore.AdvanceIfOwner.
+// The sole runtime caller is (*Tailer).commitEvent in runtime/saga/tailer. The
+// key is package-qualified so a same-named type/method in another package cannot
+// inherit the exemption (the scan is repo-wide, see scanSagaTailerAdvancerCallers).
+var sagaTailerAdvancerSanctionedCallers = map[[3]string]bool{
+	{sagaTailerPkg, sagaTailerTypeName, sagaTailerCommitEventMethodName}: true,
+}
+
+// sagaTailerAdvancerExemptPkgs lists test-support packages whose whole purpose is
+// to exercise AdvanceIfOwner (conformance suites). They are not runtime callers
+// and are excluded from the funnel; a new entry here is a deliberate review
+// checkpoint. _test.go files are skipped separately inside the scan.
+var sagaTailerAdvancerExemptPkgs = map[string]bool{
+	sagaKernelProjectionPkg + "/projectiontest": true, // RunOwnerCheckpointConformance
+}
+
+// scanSagaTailerAdvancerCallers scans the FuncDecls of one production package and
+// reports any call to OwnerCheckpointStore.AdvanceIfOwner that is NOT enclosed in
+// a sanctioned FuncDecl. It runs over the WHOLE production tree (the caller wires
+// Production scope), not just runtime/saga/tailer, so a different package that
+// holds an OwnerCheckpointStore and advances the checkpoint directly is caught —
+// the rule's declared scope (repo-wide runtime production) now matches its
+// execution scope (F4). It uses EachInSubtree to descend into FuncLit closures so
+// that the call inside commitEvent's RunInTx closure is attributed to commitEvent.
+func scanSagaTailerAdvancerCallers(p *Pass) []Diagnostic { //nolint:gocognit,cyclop,lll // archtest: EachInSubtree into FuncLit closures for attribution + receiver-key + go/types callee resolution; inherent to caller-allowlist with closure descent (same as scanConstructorNilGuards / scanSagaEnumLabelAssignments)
+	if p.TypesInfo == nil || p.Pkg == nil {
+		return nil
+	}
+	if sagaTailerAdvancerExemptPkgs[p.Pkg.Path()] {
+		return nil // conformance/test-support package — exercises AdvanceIfOwner by design
+	}
+	pkgPath := p.Pkg.Path()
+	info := p.TypesInfo
+	var diags []Diagnostic
+	for _, file := range p.Files {
+		if strings.HasSuffix(p.Rel(file), "_test.go") {
+			continue
+		}
+		for _, decl := range file.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Body == nil {
+				continue
+			}
+			// Determine the enclosing method key: (pkgPath, recvTypeName, funcName).
+			recvName := ""
+			if fd.Recv != nil && len(fd.Recv.List) == 1 {
+				t := fd.Recv.List[0].Type
+				if star, ok := t.(*ast.StarExpr); ok {
+					if id, ok := star.X.(*ast.Ident); ok {
+						recvName = id.Name
+					}
+				} else if id, ok := t.(*ast.Ident); ok {
+					recvName = id.Name
+				}
+			}
+			funcKey := [3]string{pkgPath, recvName, fd.Name.Name}
+			// EachInSubtree descends into FuncLit closures, attributing all calls
+			// (including those inside RunInTx closures) to this FuncDecl.
+			EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != sagaAdvanceIfOwnerMethodName {
+					return
+				}
+				// Verify the receiver is OwnerCheckpointStore via go/types.
+				xType := info.TypeOf(sel.X)
+				if xType == nil {
+					return
+				}
+				// Check if the receiver type implements/is OwnerCheckpointStore.
+				// We look for the method AdvanceIfOwner on the resolved object.
+				obj := info.ObjectOf(sel.Sel)
+				if obj == nil {
+					return
+				}
+				if obj.Pkg() == nil || obj.Pkg().Path() != sagaKernelProjectionPkg {
+					return
+				}
+				// This is a call to projection.OwnerCheckpointStore.AdvanceIfOwner.
+				if sagaTailerAdvancerSanctionedCallers[funcKey] {
+					return // sanctioned caller — OK
+				}
+				rel := p.Rel(file)
+				diags = append(diags, Diagnostic{
+					Rel:  rel,
+					Line: p.Fset.Position(call.Pos()).Line,
+					Message: sagaTailerAdvancerRuleID + ": AdvanceIfOwner called from unsanctioned function " +
+						pkgPath + ".(" + funcKey[1] + ")." + funcKey[2] +
+						" — only (*Tailer).commitEvent (runtime/saga/tailer) may call AdvanceIfOwner; " +
+						"route checkpoint advances through commitEvent",
+				})
+			})
+		}
+	}
+	return diags
+}
+
+// CheckSagaTailerCheckpointAdvancerCaller is the importable form of
+// SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01.
+//
+// Locks OwnerCheckpointStore.AdvanceIfOwner so that the sole runtime callsite is
+// (*Tailer).commitEvent in runtime/saga/tailer. The scan runs over the WHOLE
+// production tree (Production scope), so a different production package that holds
+// an OwnerCheckpointStore and advances the checkpoint directly is caught — the
+// declared scope (repo-wide runtime production) now matches the execution scope
+// (F4; the previous form scanned only runtime/saga/tailer). EachInSubtree
+// descends into FuncLit closures (the actual call is inside a RunInTx closure),
+// attributing enclosed calls to the enclosing FuncDecl. Test-support packages
+// whose purpose is to exercise the method (conformance suites) are excluded via
+// sagaTailerAdvancerExemptPkgs; _test.go files are skipped inside the scan.
+//
+// AI-robust rating:
+//   - Downstream Hard: go/types caller-allowlist — pkg path + method identity
+//     resolved via info.ObjectOf; import alias cannot bypass the pkg path check;
+//     the package-qualified sanctioned-caller key means a same-named type/method
+//     in another package cannot inherit the exemption.
+//   - Upstream Medium: Go visibility ceiling — AdvanceIfOwner is a public method
+//     on a public interface; Go cannot prevent non-Tailer types from holding an
+//     OwnerCheckpointStore and calling AdvanceIfOwner directly. Hard upgrade path:
+//     sealed OwnerCheckpointStore handle that only Tailer can hold, tracked at
+//     gh #1612.
+//
+// Not registered in StandardCellRules (targets GoCell-internal tailer package).
+func CheckSagaTailerCheckpointAdvancerCaller(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
+	t.Helper()
+	_ = cfg
+	var out []Diagnostic
+	Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
+		out = append(out, scanSagaTailerAdvancerCallers(p)...)
+		return nil
+	})
+	return out
+}
+
+// ─── SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01 helpers ─────────────────────
+
+// creditOwnerCheckpointEnrollments credits conformance enrollment for impls
+// passed directly (not via factory) to projectiontest.RunOwnerCheckpointConformance.
+// Unlike journal conformance which uses a factory closure, RunOwnerCheckpointConformance
+// takes a direct store argument (Args[1]), so we inspect the type of Args[1].
+func creditOwnerCheckpointEnrollments(
+	info *types.Info,
+	file *ast.File,
+	conformancePkg, conformanceFuncName string,
+	implSet, enrolledImpls map[string]bool,
+) {
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
+		if !ok || pkgPath != conformancePkg || name != conformanceFuncName {
+			return
+		}
+		// Args[0] = t *testing.T, Args[1] = the store argument.
+		if len(call.Args) < 2 {
+			return
+		}
+		storeArg := call.Args[1]
+		tv, ok := info.Types[storeArg]
+		if !ok {
+			return
+		}
+		// Unwrap pointer.
+		t := tv.Type
+		if ptr, ok := t.(*types.Pointer); ok {
+			t = ptr.Elem()
+		}
+		named, ok := t.(*types.Named)
+		if !ok || named.Obj() == nil || named.Obj().Pkg() == nil {
+			return
+		}
+		key := named.Obj().Pkg().Path() + "." + named.Obj().Name()
+		if implSet[key] {
+			enrolledImpls[key] = true
+		}
+		// Also handle CallExpr wrapping (e.g. NewMemOwnerCheckpointStore() call).
+		// The type-of approach above covers the result type directly.
+	})
+}
+
+// CheckSagaOwnerCheckpointConformanceEnrollment is the importable form of
+// SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01.
+//
+// Every production named type implementing kernel/projection.OwnerCheckpointStore
+// must appear as an argument to projectiontest.RunOwnerCheckpointConformance in a
+// _test.go file of its package.
+//
+// AI-robust rating: Medium (types.Implements scan + test-callsite resolution;
+// Hard upgrade path = codegen golden that enumerates implementations, shared
+// with journal enrollment at gh #1003).
+//
+// Not registered in StandardCellRules.
+func CheckSagaOwnerCheckpointConformanceEnrollment(t *testing.T, cfg ConfigForExternalCell) []Diagnostic { //nolint:gocognit,funlen,lll // archtest: mirrors GlobalReader enrollment; OwnerCheckpointStore target; direct store arg (not factory closure)
+	t.Helper()
+	_ = cfg
+
+	root := findModuleRoot(t)
+	prodPatterns := prodscan.Patterns(root)
+	ifacePatterns := append([]string{"./kernel/projection/..."}, prodPatterns...)
+
+	var iface *types.Interface
+	var implPkgs []*types.Package
+
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil {
+				return nil
+			}
+			if p.Pkg.Path() == sagaKernelProjectionPkg {
+				if obj := p.Pkg.Scope().Lookup(sagaOwnerCheckpointIfaceName); obj != nil {
+					if named, ok := obj.Type().(*types.Named); ok {
+						if i, ok := named.Underlying().(*types.Interface); ok {
+							iface = i.Complete()
+						}
+					}
+				}
+			}
+			implPkgs = append(implPkgs, p.Pkg)
+			return nil
+		})
+
+	if iface == nil {
+		return []Diagnostic{{
+			Rel:  "kernel/projection",
+			Line: 0,
+			Message: "SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01: failed to resolve projection.OwnerCheckpointStore interface; " +
+				"check import path " + sagaKernelProjectionPkg,
+		}}
+	}
+
+	implSet := make(map[string]bool)
+	implPkgSet := make(map[string]bool)
+	for _, pkg := range implPkgs {
+		if pkg != nil {
+			collectSagaJournalImpls(pkg, iface, implSet, implPkgSet)
+		}
+	}
+
+	enrolledImpls := make(map[string]bool)
+	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, prodscan.Patterns(root)),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil {
+				return nil
+			}
+			for _, f := range p.Files {
+				if !strings.HasSuffix(p.Rel(f), "_test.go") {
+					continue
+				}
+				creditOwnerCheckpointEnrollments(p.TypesInfo, f,
+					sagaKernelProjectionTestPkg, sagaOwnerCheckpointConformanceFunc,
+					implSet, enrolledImpls)
+			}
+			return nil
+		})
+
+	var diags []Diagnostic
+	for implKey := range implSet {
+		if enrolledImpls[implKey] {
+			continue
+		}
+		dotIdx := strings.LastIndex(implKey, ".")
+		if dotIdx < 0 {
+			continue
+		}
+		pkgPath := implKey[:dotIdx]
+		diags = append(diags, Diagnostic{
+			Rel:  implKey,
+			Line: 0,
+			Message: fmt.Sprintf(
+				"archtest: kernel/projection.OwnerCheckpointStore impl %q not enrolled "+
+					"(SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01). "+
+					"Add a _test.go in package %s (or its external _test) that "+
+					"calls projectiontest.RunOwnerCheckpointConformance(t, store) "+
+					"with an instance of the impl.",
+				implKey, pkgPath,
+			),
+		})
+	}
+	sort.Slice(diags, func(i, j int) bool { return diags[i].Rel < diags[j].Rel })
+	return diags
 }
