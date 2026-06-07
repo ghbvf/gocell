@@ -35,10 +35,12 @@ import (
 	kauth "github.com/ghbvf/gocell/kernel/auth"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
+	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
 	"github.com/ghbvf/gocell/runtime/grpc/interceptor"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
@@ -60,16 +62,20 @@ func buildAdapterServer(
 	if authPublic != nil {
 		authOpts = append(authOpts, interceptor.WithPublicMethod(authPublic))
 	}
+	reg := runtimegrpc.NewServiceRegistrar()
 	chain := interceptor.NewUnaryChain(interceptor.Deps{
-		Collector:   metrics.NewInMemoryGRPCCollector(),
-		Clock:       clock.Real(),
-		Verifier:    &bootstrapTestVerifier{}, // non-nil: NewUnaryChain panics on nil
-		AuthOptions: authOpts,
+		Collector:       metrics.NewInMemoryGRPCCollector(),
+		Clock:           clock.Real(),
+		Verifier:        &bootstrapTestVerifier{}, // non-nil: NewUnaryChain panics on nil
+		AuthOptions:     authOpts,
+		CellResolver:    reg.CellIDForMethod, // Option 3: shared registrar (#1152)
+		CellIDClosedSet: []string{"bootstrap-test-cell"},
 	})
 	srv, err := adaptersgrpc.New(adaptersgrpc.Config{
 		Addr:          ":0",
 		TLS:           adaptersgrpc.TLSConfig{AllowInsecure: true},
 		ServerOptions: []grpc.ServerOption{chain},
+		Registrar:     reg,
 	})
 	require.NoError(t, err)
 	if register != nil {
@@ -132,6 +138,70 @@ type stubGRPCServer struct{}
 func (stubGRPCServer) Serve(context.Context, net.Listener) error { return nil }
 func (stubGRPCServer) Close(context.Context) error               { return nil }
 func (stubGRPCServer) Registrar() GRPCServiceRegistrar           { return &noopGRPCServiceRegistrar{} }
+func (stubGRPCServer) Probes() []healthz.Probe                   { return nil }
+
+// probeGRPCServer is a GRPCServer exposing one readiness probe, for the
+// expandGRPCServerProbes collection test (#1152). checkErr is what the probe's
+// Check returns (nil = healthy).
+type probeGRPCServer struct {
+	stubGRPCServer
+	probeName healthz.ProbeName
+	checkErr  error
+}
+
+func (s probeGRPCServer) Probes() []healthz.Probe {
+	return []healthz.Probe{healthz.NewProbe(s.probeName, func(context.Context) error { return s.checkErr })}
+}
+
+// grpcReadyChecker returns the single collected checker for name, or nil.
+func grpcReadyChecker(b *Bootstrap, name healthz.ProbeName) func(context.Context) error {
+	var fn func(context.Context) error
+	count := 0
+	for _, hc := range b.healthCheckers {
+		if hc.name == name {
+			fn = hc.fn
+			count++
+		}
+	}
+	if count != 1 {
+		return nil // 0 = not collected; >1 = duplicate (would collide at aggregator)
+	}
+	return fn
+}
+
+// TestExpandGRPCServerProbes_CollectsReadyProbe asserts a declared gRPC server's
+// readiness probe is collected into b.healthCheckers at Run() start, so the
+// phase5 drainProbes registers it onto the aggregator (the gRPC server is wired
+// via WithGRPCListener, not WithManagedResource, so its Probes() are otherwise
+// uncollected — the orphaned-probe bug this PR fixes).
+func TestExpandGRPCServerProbes_CollectsReadyProbe(t *testing.T) {
+	const name healthz.ProbeName = "grpc_ready"
+	b := New(clock.Real(),
+		WithGRPCListener(cell.PrimaryListener, probeGRPCServer{probeName: name}, ":0"))
+	b.expandGRPCServerProbes()
+
+	fn := grpcReadyChecker(b, name)
+	require.NotNil(t, fn, "grpc_ready must be collected exactly once into healthCheckers")
+	require.NoError(t, fn(context.Background()), "single healthy server → grpc_ready healthy")
+}
+
+// TestExpandGRPCServerProbes_MultiListenerComposite asserts two gRPC listeners
+// collapse to ONE grpc_ready checker (no duplicate-name collision) whose check
+// is the AND of every server — an unhealthy listener surfaces, not silently
+// dropped.
+func TestExpandGRPCServerProbes_MultiListenerComposite(t *testing.T) {
+	const name healthz.ProbeName = "grpc_ready"
+	downErr := errcode.New(errcode.KindInternal, errcode.ErrInternal, "grpc: not serving")
+	b := New(clock.Real(),
+		WithGRPCListener(cell.PrimaryListener, probeGRPCServer{probeName: name}, ":0"),
+		WithGRPCListener(cell.InternalListener, probeGRPCServer{probeName: name, checkErr: downErr}, ":0"))
+	b.expandGRPCServerProbes()
+
+	fn := grpcReadyChecker(b, name)
+	require.NotNil(t, fn, "two listeners must collapse to exactly one grpc_ready checker")
+	require.Error(t, fn(context.Background()),
+		"grpc_ready must be unhealthy when any gRPC server is not serving (AND semantics)")
+}
 
 // noopGRPCServiceRegistrar is a no-op GRPCServiceRegistrar for config-validation tests.
 type noopGRPCServiceRegistrar struct{}

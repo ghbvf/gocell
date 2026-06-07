@@ -34,7 +34,7 @@ func TestChainOrderRecoveryInnermost(t *testing.T) {
 
 	t.Run("metrics observes recovery-converted Internal", func(t *testing.T) {
 		coll := metrics.NewInMemoryGRPCCollector()
-		_, err := UnaryMetrics(coll, clock.Real())(
+		_, err := UnaryMetrics(coll, clock.Real(), nil)(
 			context.Background(), nil, info, nestRecovered(info, panicHandler))
 		if status.Code(err) != codes.Internal {
 			t.Fatalf("code = %v, want Internal", status.Code(err))
@@ -60,9 +60,11 @@ func TestChainOrderRecoveryInnermost(t *testing.T) {
 func TestNewUnaryChain(t *testing.T) {
 	// Smoke: composition must not panic and must return a usable ServerOption.
 	opt := NewUnaryChain(Deps{
-		Collector: metrics.NewInMemoryGRPCCollector(),
-		Clock:     clock.Real(),
-		Verifier:  stubVerifier{},
+		Collector:       metrics.NewInMemoryGRPCCollector(),
+		Clock:           clock.Real(),
+		Verifier:        stubVerifier{},
+		CellResolver:    func(string) (string, bool) { return "", false },
+		CellIDClosedSet: []string{"svc-cell"},
 	})
 	if opt == nil {
 		t.Fatalf("NewUnaryChain returned nil ServerOption")
@@ -117,6 +119,8 @@ func TestNewUnaryChain_AuthOptionsPassthrough(t *testing.T) {
 			// Mark /svc/Public as public so no token is required.
 			WithPublicMethod(func(m string) bool { return m == "/svc/Public" }),
 		},
+		CellResolver:    func(string) (string, bool) { return "", false },
+		CellIDClosedSet: []string{"svc-cell"},
 	}
 
 	srv := grpc.NewServer(NewUnaryChain(deps))

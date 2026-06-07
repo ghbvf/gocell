@@ -181,7 +181,7 @@ func TestIntegration_Plaintext_BufconnCheck(t *testing.T) {
 		ShutdownTimeout: integServeTimeout,
 		TLS:             grpcadapter.TLSConfig{AllowInsecure: true},
 	}
-	srv, err := grpcadapter.New(cfg)
+	srv, err := grpcadapter.New(withReg(cfg))
 	require.NoError(t, err)
 
 	// Register health service so the RPC call has something to hit.
@@ -233,7 +233,7 @@ func TestIntegration_ServerTLS(t *testing.T) {
 			KeyPEM:  chain.serverKeyPEM,
 		},
 	}
-	srv, err := grpcadapter.New(cfg)
+	srv, err := grpcadapter.New(withReg(cfg))
 	require.NoError(t, err)
 
 	healthSrv := health.NewServer()
@@ -281,7 +281,7 @@ func TestIntegration_ServerOptionsCannotOverrideTLS(t *testing.T) {
 		// Adversarial: try to downgrade transport security to plaintext.
 		ServerOptions: []grpc.ServerOption{grpc.Creds(insecure.NewCredentials())},
 	}
-	srv, err := grpcadapter.New(cfg)
+	srv, err := grpcadapter.New(withReg(cfg))
 	require.NoError(t, err)
 
 	healthSrv := health.NewServer()
@@ -327,7 +327,7 @@ func TestIntegration_MTLS_WithValidClientCert(t *testing.T) {
 			ClientCAPEM: chain.rootCertPEM,
 		},
 	}
-	srv, err := grpcadapter.New(cfg)
+	srv, err := grpcadapter.New(withReg(cfg))
 	require.NoError(t, err)
 
 	healthSrv := health.NewServer()
@@ -370,7 +370,7 @@ func TestIntegration_MTLS_NoClientCert(t *testing.T) {
 			ClientCAPEM: chain.rootCertPEM,
 		},
 	}
-	srv, err := grpcadapter.New(cfg)
+	srv, err := grpcadapter.New(withReg(cfg))
 	require.NoError(t, err)
 
 	healthSrv := health.NewServer()
@@ -421,7 +421,7 @@ func TestIntegration_GracefulDrain(t *testing.T) {
 		ShutdownTimeout: integServeTimeout,
 		TLS:             grpcadapter.TLSConfig{AllowInsecure: true},
 	}
-	srv, err := grpcadapter.New(cfg)
+	srv, err := grpcadapter.New(withReg(cfg))
 	require.NoError(t, err)
 
 	rpcStarted := make(chan struct{})
@@ -508,7 +508,7 @@ func TestIntegration_WorkerStopAndCloseConcurrent(t *testing.T) {
 		ShutdownTimeout: integServeTimeout,
 		TLS:             grpcadapter.TLSConfig{AllowInsecure: true},
 	}
-	srv, err := grpcadapter.New(cfg)
+	srv, err := grpcadapter.New(withReg(cfg))
 	require.NoError(t, err)
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -572,7 +572,7 @@ func TestIntegration_ServeContextCancel_GracefulDrain(t *testing.T) {
 		ShutdownTimeout: integServeTimeout,
 		TLS:             grpcadapter.TLSConfig{AllowInsecure: true},
 	}
-	srv, err := grpcadapter.New(cfg)
+	srv, err := grpcadapter.New(withReg(cfg))
 	require.NoError(t, err)
 
 	// A blocking unary RPC lets the test hold a request in-flight across the cancel

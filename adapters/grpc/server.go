@@ -97,11 +97,16 @@ func New(cfg Config) (*Server, error) {
 		opts = append(opts, grpc.Creds(creds))
 	}
 
+	// Bind the composition-root-supplied registrar (Option 3 #1152) to the
+	// constructed server. cfg.Registrar is the same instance whose CellIDForMethod
+	// the interceptor chain reads, so attribution resolves through one shared map.
+	// validate() guarantees cfg.Registrar != nil.
 	inner := grpc.NewServer(opts...)
+	cfg.Registrar.BindServer(inner)
 	return &Server{
 		cfg:        cfg,
 		grpcServer: inner,
-		registrar:  runtimegrpc.NewServiceRegistrar(inner),
+		registrar:  cfg.Registrar,
 		serveDone:  make(chan struct{}),
 	}, nil
 }

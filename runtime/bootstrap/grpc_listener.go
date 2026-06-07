@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -47,6 +48,55 @@ type GRPCServer interface {
 	// Registrar().Register(spec) in phase7b for each GRPCServiceSpec drained from
 	// the cell snapshots, before grpcServeAll.
 	Registrar() GRPCServiceRegistrar
+	// Probes returns the server's readiness probes (grpc_ready). bootstrap
+	// collects them into the health aggregator at Run() start
+	// (expandGRPCServerProbes), the same way WithManagedResource collects a
+	// ManagedResource's probes — the gRPC server is wired via WithGRPCListener
+	// (Serve/Close/Registrar), not WithManagedResource, so its Probes() are not
+	// otherwise collected (#1152).
+	Probes() []healthz.Probe
+}
+
+// expandGRPCServerProbes collects gRPC server readiness probes into
+// b.healthCheckers so the existing drainProbes (phase5) registers them onto the
+// health aggregator. Called at Run() start, alongside expandManagedResources —
+// the gRPC server is wired via WithGRPCListener (Serve/Close/Registrar), not
+// WithManagedResource, so its Probes() are not otherwise collected (#1152).
+//
+// /readyz is process-level: multiple gRPC listeners each expose a probe of the
+// same name (grpc_ready), so registering each separately would collide
+// (healthz.ErrDuplicateProbe). Instead, probes are grouped by name and one
+// checker per name reports healthy iff EVERY gRPC server's check passes (AND).
+// This reflects all listeners — a second server going not-ready surfaces, with
+// no silent drop — while keeping a single grpc_ready series. (Today there is one
+// gRPC listener; the AND keeps multi-listener correct without per-listener
+// naming, which would need a typed ProbeName constructor.)
+func (b *Bootstrap) expandGRPCServerProbes() {
+	byName := map[healthz.ProbeName][]func(context.Context) error{}
+	var order []healthz.ProbeName
+	for _, gc := range b.grpcListenerConfigs {
+		for _, probe := range gc.server.Probes() {
+			n := probe.Name()
+			if _, seen := byName[n]; !seen {
+				order = append(order, n)
+			}
+			byName[n] = append(byName[n], probe.Check)
+		}
+	}
+	for _, n := range order {
+		checks := byName[n]
+		b.healthCheckers = append(b.healthCheckers, namedChecker{
+			name: n,
+			fn: func(ctx context.Context) error {
+				for _, check := range checks {
+					if err := check(ctx); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		})
+	}
 }
 
 // grpcListenerConfig is the resolved per-gRPC-listener wiring captured by
@@ -94,14 +144,18 @@ func WithGRPCListenerShutdownGrace(d time.Duration) GRPCListenerOption {
 // are alive).
 //
 // Composition-root wiring (cmd/ or examples/, which may import adapters/grpc and
-// runtime/grpc/interceptor — cells/ may not):
+// runtime/grpc/interceptor — cells/ may not). The registrar is created FIRST and
+// shared by the chain (reg.CellIDForMethod feeds cell attribution) and the
+// adapter server (Config.Registrar) — Option 3, #1152:
 //
+//	reg := runtimegrpc.NewServiceRegistrar()
 //	chain := interceptor.NewUnaryChain(interceptor.Deps{
 //	    Verifier: verifier, Clock: clk, Collector: collector, Tracer: tracer,
-//	}) // always wires UnaryAuth; panics on a nil verifier (fail-closed)
+//	    CellResolver: reg.CellIDForMethod, CellIDClosedSet: asm.CellIDs(),
+//	}) // always wires UnaryAuth; panics on a nil verifier / resolver (fail-closed)
 //	srv, err := adaptersgrpc.New(adaptersgrpc.Config{
 //	    Addr: ":9000", TLS: tlsCfg,
-//	    ServerOptions: []grpc.ServerOption{chain},
+//	    ServerOptions: []grpc.ServerOption{chain}, Registrar: reg,
 //	})
 //	bootstrap.New(clk, bootstrap.WithGRPCListener(cell.PrimaryListener, srv, ":9000"))
 //

@@ -17,6 +17,7 @@ import (
 
 	adaptersgrpc "github.com/ghbvf/gocell/adapters/grpc"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
 )
 
 const (
@@ -37,8 +38,14 @@ const (
 // newGRPCServerFromEnv builds the gRPC server, resolving the listen address and
 // transport security from the environment. serverOpts carries the interceptor
 // chain (assembled by the caller so the JWT verifier / metrics collector stay in
-// run.go).
-func newGRPCServerFromEnv(durabilityMode outbox.DurabilityMode, serverOpts []grpc.ServerOption) (*adaptersgrpc.Server, error) {
+// run.go). reg is the shared method→cellID registrar (Option 3 #1152): the same
+// instance whose CellIDForMethod the chain's cell-attribution interceptor reads,
+// bound to the server here via Config.Registrar.
+func newGRPCServerFromEnv(
+	durabilityMode outbox.DurabilityMode,
+	reg *runtimegrpc.ServiceRegistrar,
+	serverOpts []grpc.ServerOption,
+) (*adaptersgrpc.Server, error) {
 	addr := strings.TrimSpace(os.Getenv(envGRPCAddr))
 	if addr == "" {
 		addr = defaultGRPCAddr
@@ -51,6 +58,7 @@ func newGRPCServerFromEnv(durabilityMode outbox.DurabilityMode, serverOpts []grp
 		Addr:          addr,
 		TLS:           tlsCfg,
 		ServerOptions: serverOpts,
+		Registrar:     reg,
 	})
 }
 

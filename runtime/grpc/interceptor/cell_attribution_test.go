@@ -27,7 +27,7 @@ func TestUnaryCellAttribution(t *testing.T) {
 		var ok bool
 		handler := func(ctx context.Context, _ any) (any, error) {
 			got, ok = kernelctxkeys.CellIDFrom(ctx)
-			return nil, nil
+			return struct{}{}, nil
 		}
 		_, _ = UnaryCellAttribution(resolve)(context.Background(), nil, info, handler)
 		if !ok || got != "mycell" {
@@ -40,7 +40,7 @@ func TestUnaryCellAttribution(t *testing.T) {
 		var present bool
 		handler := func(ctx context.Context, _ any) (any, error) {
 			_, present = kernelctxkeys.CellIDFrom(ctx)
-			return nil, nil
+			return struct{}{}, nil
 		}
 		unknown := &grpc.UnaryServerInfo{FullMethod: "/grpc.health.v1.Health/Check"}
 		_, _ = UnaryCellAttribution(resolve)(context.Background(), nil, unknown, handler)

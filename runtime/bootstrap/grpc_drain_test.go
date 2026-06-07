@@ -31,6 +31,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -48,16 +49,20 @@ var _ GRPCServiceRegistrar = (*runtimegrpc.ServiceRegistrar)(nil)
 // for use in drain tests that don't care about auth.
 func buildDrainAdapterServer(t *testing.T) *adaptersgrpc.Server {
 	t.Helper()
+	reg := runtimegrpc.NewServiceRegistrar()
 	chain := interceptor.NewUnaryChain(interceptor.Deps{
-		Collector:   metrics.NewInMemoryGRPCCollector(),
-		Clock:       clock.Real(),
-		Verifier:    &bootstrapTestVerifier{},
-		AuthOptions: []interceptor.AuthOption{interceptor.WithPublicMethod(func(string) bool { return true })},
+		Collector:       metrics.NewInMemoryGRPCCollector(),
+		Clock:           clock.Real(),
+		Verifier:        &bootstrapTestVerifier{},
+		AuthOptions:     []interceptor.AuthOption{interceptor.WithPublicMethod(func(string) bool { return true })},
+		CellResolver:    reg.CellIDForMethod, // Option 3: shared registrar (#1152)
+		CellIDClosedSet: []string{"bootstrap-test-cell"},
 	})
 	srv, err := adaptersgrpc.New(adaptersgrpc.Config{
 		Addr:          ":0",
 		TLS:           adaptersgrpc.TLSConfig{AllowInsecure: true},
 		ServerOptions: []grpc.ServerOption{chain},
+		Registrar:     reg,
 	})
 	require.NoError(t, err)
 	return srv
@@ -298,6 +303,8 @@ func (s *spyGRPCServer) Serve(ctx context.Context, lis net.Listener) error {
 func (s *spyGRPCServer) Close(ctx context.Context) error {
 	return s.inner.Close(ctx)
 }
+
+func (s *spyGRPCServer) Probes() []healthz.Probe { return s.inner.Probes() }
 
 // spyGRPCServiceRegistrar records that Register was called, then forwards.
 type spyGRPCServiceRegistrar struct {

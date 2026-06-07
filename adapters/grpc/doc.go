@@ -37,10 +37,18 @@
 //  3. The Registrar intercepts the spec.Register callback's RegisterService
 //     call to record /{service}/{method}→cellID attribution.
 //
-// Composition-root wiring (cmd/ or examples/):
+// Composition-root wiring (cmd/ or examples/). The registrar is created FIRST
+// and shared by both the interceptor chain (reg.CellIDForMethod feeds the
+// cell-attribution interceptor) and this server (Config.Registrar) — Option 3,
+// #1152:
 //
-//	chain := interceptor.NewUnaryChain(interceptor.Deps{...})
-//	srv, _ := adaptersgrpc.New(adaptersgrpc.Config{..., ServerOptions: []grpc.ServerOption{chain}})
+//	reg := runtimegrpc.NewServiceRegistrar()
+//	chain := interceptor.NewUnaryChain(interceptor.Deps{
+//	    ..., CellResolver: reg.CellIDForMethod, CellIDClosedSet: asm.CellIDs(),
+//	})
+//	srv, _ := adaptersgrpc.New(adaptersgrpc.Config{
+//	    ..., ServerOptions: []grpc.ServerOption{chain}, Registrar: reg,
+//	})
 //	bootstrap.New(clk,
 //	    bootstrap.WithGRPCListener(cell.PrimaryListener, srv, ":9000"),
 //	)
