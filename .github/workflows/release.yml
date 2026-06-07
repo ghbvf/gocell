@@ -1,0 +1,178 @@
+name: Release
+
+# Tag / release pipeline for GoCell (issue #1724).
+#
+# Two paths, one mechanism:
+#   * workflow_dispatch — an operator cuts a STABLE release by typing the
+#     version (e.g. 0.0.2). Tag vX.Y.Z, full release (becomes "Latest").
+#   * schedule (daily) — automatic develop SNAPSHOT. Version is
+#     v<base>-develop.<UTC timestamp>, where <base> is the latest stable
+#     version (default 0.0.1). Marked prerelease (never "Latest"), skipped
+#     when develop HEAD is unchanged since the last snapshot, and pruned to
+#     the most recent DAILY_RETENTION snapshots.
+#
+# The tag is the single source of truth for the version; no version constant is
+# embedded in binaries and CHANGELOG.md is maintained by hand.
+#
+# Version strings follow SemVer 2.0.0. The snapshot timestamp is encoded as a
+# single ISO-basic pre-release identifier (e.g. 20260607T021500Z) so it is NOT
+# a numeric identifier — the "no leading zeros" rule (semver.org §9) would
+# reject a dotted form like `…-develop.021500`.
+# ref: nodejs nightly (vX-nightly<date>), dotnet (-preview.<date>) tag schemes.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'STABLE release version WITHOUT the v prefix, e.g. 0.0.2. Numeric X.Y.Z, strictly greater than the latest stable tag.'
+        type: string
+        required: true
+  schedule:
+    - cron: '0 2 * * *' # daily develop snapshot, 02:00 UTC
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  DAILY_RETENTION: '14' # keep this many most-recent daily snapshots; older are pruned
+
+jobs:
+  verify:
+    name: Resolve version & build smoke
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+      skip: ${{ steps.resolve.outputs.skip }}
+    steps:
+      - name: Validate branch
+        # schedule runs on the default branch (develop); dispatch must too.
+        run: |
+          if [ "${{ github.ref_name }}" != "develop" ]; then
+            echo "::error::Release must run on develop (got '${{ github.ref_name }}')."
+            exit 1
+          fi
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: develop
+          fetch-depth: 0 # full history + tags for version resolution
+          fetch-tags: true
+
+      - name: Resolve version
+        id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          latest_stable="$(git tag -l 'v[0-9]*' --sort=-v:refname \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)"
+
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            ver="$INPUT_VERSION"
+            if ! printf '%s' "$ver" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "::error::version must be numeric X.Y.Z without a leading v (got '$ver')."
+              exit 1
+            fi
+            tag="v$ver"
+            if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+              echo "::error::tag $tag already exists."
+              exit 1
+            fi
+            if [ -n "$latest_stable" ]; then
+              newest="$(printf '%s\n%s\n' "$latest_stable" "$tag" | sort -V | tail -n1)"
+              if [ "$newest" != "$tag" ]; then
+                echo "::error::version $tag must be greater than the latest stable release $latest_stable."
+                exit 1
+              fi
+            fi
+            {
+              echo "tag=$tag"
+              echo "prerelease=false"
+              echo "skip=false"
+            } >>"$GITHUB_OUTPUT"
+          else
+            base="${latest_stable#v}"
+            base="${base:-0.0.1}"
+            last_daily="$(git tag -l 'v*-develop.*' --sort=-creatordate | head -n1 || true)"
+            if [ -n "$last_daily" ] \
+              && [ "$(git rev-list -n1 "$last_daily")" = "$(git rev-parse HEAD)" ]; then
+              echo "No new commits on develop since $last_daily — skipping snapshot."
+              echo "skip=true" >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+            ts="$(date -u +%Y%m%dT%H%M%SZ)"
+            {
+              echo "tag=v${base}-develop.${ts}"
+              echo "prerelease=true"
+              echo "skip=false"
+            } >>"$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        if: steps.resolve.outputs.skip != 'true'
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Build smoke (compile all modules)
+        if: steps.resolve.outputs.skip != 'true'
+        run: make check-build
+
+      - name: Unit smoke (kernel, docker-free)
+        if: steps.resolve.outputs.skip != 'true'
+        run: go test ./kernel/... -count=1
+
+  release:
+    name: Tag & GitHub Release
+    needs: verify
+    if: needs.verify.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push annotated tag + create/delete GitHub Release
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.verify.outputs.tag }}
+      PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: develop
+          fetch-depth: 0 # full history for annotated tag, --generate-notes, prune
+          fetch-tags: true
+
+      - name: Create annotated tag
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+      - name: Create GitHub Release
+        run: |
+          set -euo pipefail
+          args=(--title "$TAG" --verify-tag --generate-notes)
+          if [ "$PRERELEASE" = "true" ]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$TAG" "${args[@]}"
+
+      - name: Prune old daily snapshots
+        if: needs.verify.outputs.prerelease == 'true'
+        run: |
+          set -euo pipefail
+          # Keep the most recent DAILY_RETENTION snapshots (today's included);
+          # delete older release+tag pairs together via --cleanup-tag.
+          git tag -l 'v*-develop.*' --sort=-creatordate \
+            | tail -n +"$((DAILY_RETENTION + 1))" \
+            | while IFS= read -r old; do
+                [ -n "$old" ] || continue
+                echo "Pruning old snapshot $old"
+                gh release delete "$old" --cleanup-tag --yes \
+                  || git push origin --delete "$old" || true
+              done
