@@ -41,8 +41,19 @@ import (
 type Validator interface {
 	// Validate validates body against the compiled schema.
 	// Returns nil on success. Returns *errcode.Error (code=ErrValidationFailed)
-	// on schema violation. Error messages contain field names but never
-	// expose schema internals (lengths, ranges, regex patterns).
+	// on schema violation.
+	//
+	// Error shape: the offending field path is carried in the "detail"
+	// PublicDetail (oracle-safe — field name only, never the constraint value:
+	// lengths, ranges, regex patterns). The Message is a fixed const literal
+	// ("request body validation failed"). Because (*errcode.Error).Error() renders
+	// only [Code] + Message (+ Cause), NOT Details, a caller that logs err.Error()
+	// — e.g. the outbox relay storing last_error via SanitizeError — never leaks
+	// the field name. The field path reaches clients only via the wire-serialized
+	// details array (4xx), not server-side error strings.
+	//
+	// ctx is accepted for API stability and future cancellation/deadline support;
+	// the default implementation does not use it (validation is CPU-bound, in-memory).
 	Validate(ctx context.Context, body []byte) error
 }
 

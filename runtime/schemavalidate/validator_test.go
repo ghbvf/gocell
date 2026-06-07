@@ -3,6 +3,7 @@ package schemavalidate
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -74,12 +75,20 @@ func TestValidator_MinLength(t *testing.T) {
 	if containsLengthOracle(ec.Message) {
 		t.Errorf("message exposes schema internals (oracle): %q", ec.Message)
 	}
-	// Field name must appear in the detail attribute (not the const Message).
+	// Field name must appear in the detail attribute (not the const Message),
+	// and the detail value is the real oracle vector (the const Message can never
+	// carry constraint values) — it too must not leak the length.
 	detailAttr, found := ec.FindAttr("detail")
 	if !found {
 		t.Errorf("expected 'detail' attribute in error details, got none")
-	} else if v, _ := detailAttr.Value().(string); !containsFieldName(v, "name") {
-		t.Errorf("detail should contain field name 'name', got: %q", detailAttr.Value())
+	} else {
+		v, _ := detailAttr.Value().(string)
+		if !containsFieldName(v, "name") {
+			t.Errorf("detail should contain field name 'name', got: %q", v)
+		}
+		if containsLengthOracle(v) {
+			t.Errorf("detail exposes schema internals (oracle): %q", v)
+		}
 	}
 }
 
@@ -106,6 +115,11 @@ func TestValidator_MaxLength(t *testing.T) {
 	}
 	if containsLengthOracle(ec.Message) {
 		t.Errorf("message exposes oracle: %q", ec.Message)
+	}
+	if d, found := ec.FindAttr("detail"); found {
+		if v, _ := d.Value().(string); containsLengthOracle(v) {
+			t.Errorf("detail exposes oracle: %q", v)
+		}
 	}
 }
 
@@ -153,9 +167,14 @@ func TestValidator_PatternRegex(t *testing.T) {
 	if ec.Code != errcode.ErrValidationFailed {
 		t.Errorf("code = %q, want ErrValidationFailed", ec.Code)
 	}
-	// Must not expose the regex pattern.
+	// Must not expose the regex pattern — in the const Message or the detail value.
 	if containsPatternOracle(ec.Message) {
 		t.Errorf("message exposes pattern oracle: %q", ec.Message)
+	}
+	if d, found := ec.FindAttr("detail"); found {
+		if v, _ := d.Value().(string); containsPatternOracle(v) {
+			t.Errorf("detail exposes pattern oracle: %q", v)
+		}
 	}
 }
 
@@ -181,6 +200,20 @@ func TestValidator_RequiredMissing(t *testing.T) {
 	}
 	if ec.Code != errcode.ErrValidationFailed {
 		t.Errorf("code = %q, want ErrValidationFailed", ec.Code)
+	}
+	// Detail contract for a `required` violation: the JSON Schema `required`
+	// keyword fails at the *parent object* instance location (empty path at the
+	// top level), so the safe message collapses to a generic "invalid" rather
+	// than enumerating the missing field name. This is intentional — declining to
+	// name the missing field avoids a property-enumeration oracle (a client can
+	// already see which field it omitted). Assert it explicitly so the behavior
+	// can't silently drift into leaking field names.
+	d, found := ec.FindAttr("detail")
+	if !found {
+		t.Fatalf("expected 'detail' attribute, got none")
+	}
+	if v, _ := d.Value().(string); v != "invalid" {
+		t.Errorf("required-missing detail = %q, want generic %q (no field enumeration)", v, "invalid")
 	}
 }
 
@@ -289,9 +322,8 @@ func containsLengthOracle(s string) bool {
 		"minLength", "maxLength", "must be at least", "must be at most",
 		"must be longer", "must be shorter", "characters",
 	}
-	lower := s
 	for _, kw := range oracleKeywords {
-		if contains(lower, kw) {
+		if contains(s, kw) {
 			return true
 		}
 	}
@@ -314,40 +346,7 @@ func containsFieldName(s, fieldName string) bool {
 	return contains(s, fieldName)
 }
 
-// contains is a case-insensitive substring check.
+// contains is a case-insensitive substring check (stdlib-backed).
 func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
-		indexCI(s, sub) >= 0)
-}
-
-func indexCI(s, sub string) int {
-	ls, lsub := len(s), len(sub)
-	if lsub == 0 {
-		return 0
-	}
-	for i := 0; i <= ls-lsub; i++ {
-		if equalCI(s[i:i+lsub], sub) {
-			return i
-		}
-	}
-	return -1
-}
-
-func equalCI(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		ac, bc := a[i], b[i]
-		if ac >= 'A' && ac <= 'Z' {
-			ac += 32
-		}
-		if bc >= 'A' && bc <= 'Z' {
-			bc += 32
-		}
-		if ac != bc {
-			return false
-		}
-	}
-	return true
+	return strings.Contains(strings.ToLower(s), strings.ToLower(sub))
 }

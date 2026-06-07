@@ -54,6 +54,10 @@ func TestCommandBus_Enqueue_RegisterDispatchRoundTrip(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
+	// DeviceID (a schema-required field) is intentionally omitted: sync Dispatch
+	// is a first-party trusted boundary and does NOT run schema value-validation
+	// (ADR 202606040550-1044 §D8). Only the async DispatchAsync path validates the
+	// untrusted payload (#1588). Adding DeviceID here would obscure that contract.
 	req := &enqueue.Request{CommandType: "reboot", Payload: "now"}
 	resp, err := enqueue.Dispatch(context.Background(), reg, req)
 	if err != nil {
