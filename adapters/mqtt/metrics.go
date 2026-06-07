@@ -499,7 +499,8 @@ var (
 	}
 )
 
-// NewProviderSubscriberCollector registers 5 metrics on p and returns a
+// NewProviderSubscriberCollector registers 6 metrics on p (4 counters +
+// 1 histogram + the mqtt_consume_inflight gauge) and returns a
 // SubscriberCollector bound to cellID. cellID becomes the "cell" label value.
 //
 // Returns an error when p is nil, cellID is empty, or the Provider reports a
