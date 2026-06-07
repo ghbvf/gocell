@@ -148,18 +148,37 @@ is_seen() {
     [[ -f "${seen_file}" ]] && grep -qxF "${key}" "${seen_file}"
 }
 
-# acquire_lock <pr> — atomic mkdir; prints lock path on success; returns 1 if locked
+# acquire_lock <pr> — atomic mkdir; writes PID into lock dir; prints lock path on success; returns 1 if locked
+# If an existing lock's PID is dead (SIGKILL stale), the lock is reclaimed.
 acquire_lock() {
     local lock_dir="${GOCELL_ROUTER_HOME}/locks/${1}.lock"
+    local pid_file="${lock_dir}/pid"
     if mkdir "${lock_dir}" 2>/dev/null; then
+        echo $$ > "${pid_file}"
         echo "${lock_dir}"
         return 0
+    fi
+    # Check for stale lock: if holding PID is dead, reclaim
+    if [[ -f "${pid_file}" ]]; then
+        local held_pid
+        held_pid="$(cat "${pid_file}" 2>/dev/null || true)"
+        if [[ -n "${held_pid}" ]] && ! kill -0 "${held_pid}" 2>/dev/null; then
+            log "PR #${1}: reclaiming stale lock (held by dead PID ${held_pid})"
+            rm -f "${pid_file}"
+            rmdir "${lock_dir}" 2>/dev/null || true
+            if mkdir "${lock_dir}" 2>/dev/null; then
+                echo $$ > "${pid_file}"
+                echo "${lock_dir}"
+                return 0
+            fi
+        fi
     fi
     return 1
 }
 
 release_lock() {
     local lock_dir="$1"
+    rm -f "${lock_dir}/pid" 2>/dev/null || true
     rmdir "${lock_dir}" 2>/dev/null || true
 }
 
@@ -181,8 +200,11 @@ prepare_worktree() {
     local wt="${GOCELL_ROUTER_HOME}/worktrees/pr-${pr}"
 
     # Fetch the remote branch so we have the OID locally
-    git -C "${REPO_ROOT}" fetch origin "${branch}" --quiet 2>/dev/null || \
-        git -C "${REPO_ROOT}" fetch origin --quiet 2>/dev/null || true
+    if ! git -C "${REPO_ROOT}" fetch origin "${branch}" --quiet 2>/dev/null; then
+        if ! git -C "${REPO_ROOT}" fetch origin --quiet 2>/dev/null; then
+            log "WARN: both fetch attempts failed for branch=${branch}; proceeding with cached refs (later OID lookups may fail)"
+        fi
+    fi
 
     if [[ -d "${wt}" ]]; then
         # Worktree exists — reset it to the pinned OID
@@ -232,17 +254,39 @@ check_freshness() {
 render_pr_review_body() {
     local verdict_file="$1" pr="$2" phase="$3" branch="$4" oid="$5" wt="$6" round="$7"
 
+    # F16: consolidate 10 per-field python3 calls into ONE invocation (quoting-safe: file path via argv[1])
     local verdict total p0 p1 p2 p3 cx1 cx2 cx3 cx4
-    verdict="$(python3 -c "import json,sys; d=json.load(open('${verdict_file}')); print(d['verdict'])")"
-    total="$(python3 -c "import json,sys; d=json.load(open('${verdict_file}')); print(d['counts']['total'])")"
-    p0="$(python3 -c "import json,sys; d=json.load(open('${verdict_file}')); print(d['counts']['byP']['p0'])")"
-    p1="$(python3 -c "import json,sys; d=json.load(open('${verdict_file}')); print(d['counts']['byP']['p1'])")"
-    p2="$(python3 -c "import json,sys; d=json.load(open('${verdict_file}')); print(d['counts']['byP']['p2'])")"
-    p3="$(python3 -c "import json,sys; d=json.load(open('${verdict_file}')); print(d['counts']['byP']['p3'])")"
-    cx1="$(python3 -c "import json,sys; d=json.load(open('${verdict_file}')); print(d['counts']['byCx']['cx1'])")"
-    cx2="$(python3 -c "import json,sys; d=json.load(open('${verdict_file}')); print(d['counts']['byCx']['cx2'])")"
-    cx3="$(python3 -c "import json,sys; d=json.load(open('${verdict_file}')); print(d['counts']['byCx']['cx3'])")"
-    cx4="$(python3 -c "import json,sys; d=json.load(open('${verdict_file}')); print(d['counts']['byCx']['cx4'])")"
+    local _fields_out
+    _fields_out="$(python3 - "$verdict_file" <<'PY'
+import json, sys
+with open(sys.argv[1]) as f:
+    d = json.load(f)
+c = d['counts']
+fields = [
+    d['verdict'],
+    str(c['total']),
+    str(c['byP']['p0']),
+    str(c['byP']['p1']),
+    str(c['byP']['p2']),
+    str(c['byP']['p3']),
+    str(c['byCx']['cx1']),
+    str(c['byCx']['cx2']),
+    str(c['byCx']['cx3']),
+    str(c['byCx']['cx4']),
+]
+print('\n'.join(fields))
+PY
+)"
+    verdict="$(echo "${_fields_out}" | sed -n '1p')"
+    total="$(echo "${_fields_out}"   | sed -n '2p')"
+    p0="$(echo "${_fields_out}"      | sed -n '3p')"
+    p1="$(echo "${_fields_out}"      | sed -n '4p')"
+    p2="$(echo "${_fields_out}"      | sed -n '5p')"
+    p3="$(echo "${_fields_out}"      | sed -n '6p')"
+    cx1="$(echo "${_fields_out}"     | sed -n '7p')"
+    cx2="$(echo "${_fields_out}"     | sed -n '8p')"
+    cx3="$(echo "${_fields_out}"     | sed -n '9p')"
+    cx4="$(echo "${_fields_out}"     | sed -n '10p')"
 
     # Build finding list (check-phase uses ✅/❌/⚠️/🔧 markers)
     local findings_list
@@ -420,15 +464,21 @@ handle_review() {
         return 0
     fi
 
-    if [[ "${DRY_RUN}" -eq 1 ]]; then
-        log_dry "PR #${pr}: would run ${kind} via ${REVIEW_ENGINE} (oid=${live_oid:0:12} branch=${branch})"
+    if dry_action "PR #${pr}: would run ${kind} via ${REVIEW_ENGINE} (oid=${live_oid:0:12} branch=${branch})"; then
         return 0
     fi
 
-    # Engine knob: claude alternate
+    # Engine knob: claude alternate (F3: run in isolated worktree, check exit code, only mark_seen on success)
     if [[ "${REVIEW_ENGINE}" == "claude" ]]; then
-        log "PR #${pr}: running via claude engine (claude -p '/pr-review ${pr}')"
-        claude -p "/pr-review ${pr}"
+        local wt_claude
+        wt_claude="$(prepare_worktree "${pr}" "${branch}" "${live_oid}")"
+        # shellcheck disable=SC2064
+        trap "remove_worktree '${wt_claude}'; release_lock '${lock_dir}'" RETURN
+        log "PR #${pr}: running via claude engine (claude -p '/pr-review ${pr}' --cwd ${wt_claude})"
+        if ! claude -p "/pr-review ${pr}" --cwd "${wt_claude}"; then
+            log "PR #${pr}: claude engine failed; not marking seen"
+            return 0
+        fi
         mark_seen "${pr}" "${live_oid}" "${kind}"
         return 0
     fi
@@ -464,26 +514,107 @@ handle_review() {
         return 0
     fi
 
-    # Validate the output parses
-    if ! python3 -c "import json; json.load(open('${out_file}'))" 2>/dev/null; then
-        log "PR #${pr}: codex output is not valid JSON; skipping"
+    # F2: validate codex output — parse JSON, assert verdict ∈ allowed set, all cx counts are non-negative integers
+    local verdict
+    if ! verdict="$(python3 - "${out_file}" "${VERDICT_SCHEMA}" <<'PY'
+import json, sys
+
+out_file = sys.argv[1]
+schema_file = sys.argv[2]
+
+try:
+    with open(out_file) as f:
+        data = json.load(f)
+except (json.JSONDecodeError, OSError) as e:
+    print(f"INVALID:not valid JSON: {e}", file=sys.stderr)
+    sys.exit(1)
+
+# Try jsonschema if available
+try:
+    import jsonschema
+    with open(schema_file) as f:
+        schema = json.load(f)
+    jsonschema.validate(data, schema)
+except ImportError:
+    pass  # jsonschema not available; fall back to manual checks
+except jsonschema.ValidationError as e:
+    print(f"INVALID:schema validation failed: {e.message}", file=sys.stderr)
+    sys.exit(1)
+
+# Manual checks: verdict must be in allowed set
+allowed_verdicts = {"approved", "changes-requested", "ready"}
+v = data.get("verdict", "")
+if v not in allowed_verdicts:
+    print(f"INVALID:verdict '{v}' not in {sorted(allowed_verdicts)}", file=sys.stderr)
+    sys.exit(1)
+
+# All cx/p counts must be non-negative integers
+counts = data.get("counts", {})
+by_cx = counts.get("byCx", {})
+by_p = counts.get("byP", {})
+for key in ("cx1", "cx2", "cx3", "cx4"):
+    val = by_cx.get(key, -1)
+    if not isinstance(val, int) or val < 0:
+        print(f"INVALID:counts.byCx.{key} must be non-negative integer, got {val!r}", file=sys.stderr)
+        sys.exit(1)
+for key in ("p0", "p1", "p2", "p3"):
+    val = by_p.get(key, -1)
+    if not isinstance(val, int) or val < 0:
+        print(f"INVALID:counts.byP.{key} must be non-negative integer, got {val!r}", file=sys.stderr)
+        sys.exit(1)
+
+print(v)
+PY
+    )"; then
+        log "PR #${pr}: codex output failed validation; skipping"
         rm -f "${out_file}"
         return 0
     fi
-
-    local verdict
-    verdict="$(python3 -c "import json; print(json.load(open('${out_file}'))['verdict'])")"
     log "PR #${pr}: codex verdict=${verdict} (kind=${kind})"
 
     local round
     round="$(pr_round "${pr}")"
 
+    # Read counts from out_file (one python invocation)
+    local _counts_out total p0 p1 p2 p3 cx1 cx2 cx3 cx4
+    _counts_out="$(python3 - "${out_file}" <<'PY'
+import json, sys
+with open(sys.argv[1]) as f:
+    d = json.load(f)
+c = d['counts']
+print(c['total'])
+print(c['byP']['p0'])
+print(c['byP']['p1'])
+print(c['byP']['p2'])
+print(c['byP']['p3'])
+print(c['byCx']['cx1'])
+print(c['byCx']['cx2'])
+print(c['byCx']['cx3'])
+print(c['byCx']['cx4'])
+PY
+)"
+    total="$(echo "${_counts_out}" | sed -n '1p')"
+    p0="$(echo "${_counts_out}"    | sed -n '2p')"
+    p1="$(echo "${_counts_out}"    | sed -n '3p')"
+    p2="$(echo "${_counts_out}"    | sed -n '4p')"
+    p3="$(echo "${_counts_out}"    | sed -n '5p')"
+    cx1="$(echo "${_counts_out}"   | sed -n '6p')"
+    cx2="$(echo "${_counts_out}"   | sed -n '7p')"
+    cx3="$(echo "${_counts_out}"   | sed -n '8p')"
+    cx4="$(echo "${_counts_out}"   | sed -n '9p')"
+
     # Render comment body
     local body_file
     body_file="$(mktemp "${GOCELL_ROUTER_HOME}/state/body-${pr}-XXXXXX.md")"
-    render_pr_review_body "${out_file}" "${pr}" "${kind}" "${branch}" "${live_oid}" "${wt}" "${round}" > "${body_file}"
+    # F6: pass basename of worktree (not absolute path) to avoid leaking it into public PR comment
+    local wt_display
+    wt_display="$(basename "${wt}")"
+    render_pr_review_body "${out_file}" "${pr}" "${kind}" "${branch}" "${live_oid}" "${wt_display}" "${round}" > "${body_file}"
 
-    # Emit machine block and append to body
+    # F1: emit machine block — includes required schema fields: tool, findings.{fixed,unresolved,blocking}
+    # handle_review: fixed=0 (review phase hasn't fixed anything), unresolved=$total, blocking=$((p0+p1))
+    local blocking
+    blocking=$(( p0 + p1 ))
     local meta_block
     meta_block="$(jq -nc \
         --arg repo "${REPO_SLUG}" \
@@ -493,20 +624,23 @@ handle_review() {
         --arg headSha "${live_oid}" \
         --arg phase "${kind}" \
         --arg verdict "${verdict}" \
-        --arg wt "${wt}" \
+        --arg tool "codex" \
         --argjson round "${round}" \
-        --argjson total "$(python3 -c "import json; print(json.load(open('${out_file}'))['counts']['total'])")" \
-        --argjson p0 "$(python3 -c "import json; print(json.load(open('${out_file}'))['counts']['byP']['p0'])")" \
-        --argjson p1 "$(python3 -c "import json; print(json.load(open('${out_file}'))['counts']['byP']['p1'])")" \
-        --argjson p2 "$(python3 -c "import json; print(json.load(open('${out_file}'))['counts']['byP']['p2'])")" \
-        --argjson p3 "$(python3 -c "import json; print(json.load(open('${out_file}'))['counts']['byP']['p3'])")" \
-        --argjson cx1 "$(python3 -c "import json; print(json.load(open('${out_file}'))['counts']['byCx']['cx1'])")" \
-        --argjson cx2 "$(python3 -c "import json; print(json.load(open('${out_file}'))['counts']['byCx']['cx2'])")" \
-        --argjson cx3 "$(python3 -c "import json; print(json.load(open('${out_file}'))['counts']['byCx']['cx3'])")" \
-        --argjson cx4 "$(python3 -c "import json; print(json.load(open('${out_file}'))['counts']['byCx']['cx4'])")" \
+        --argjson total "${total}" \
+        --argjson p0 "${p0}" \
+        --argjson p1 "${p1}" \
+        --argjson p2 "${p2}" \
+        --argjson p3 "${p3}" \
+        --argjson cx1 "${cx1}" \
+        --argjson cx2 "${cx2}" \
+        --argjson cx3 "${cx3}" \
+        --argjson cx4 "${cx4}" \
+        --argjson blocking "${blocking}" \
         '{kind:"pr-review",phase:$phase,verdict:$verdict,repo:$repo,pr:$pr,
-          baseRef:$baseRef,headRef:$headRef,headSha:$headSha,session:null,worktree:$wt,
-          findings:{total:$total,byP:{p0:$p0,p1:$p1,p2:$p2,p3:$p3},
+          tool:$tool,
+          baseRef:$baseRef,headRef:$headRef,headSha:$headSha,session:null,worktree:null,
+          findings:{total:$total,fixed:0,unresolved:$total,blocking:$blocking,
+                    byP:{p0:$p0,p1:$p1,p2:$p2,p3:$p3},
                     byCx:{cx1:$cx1,cx2:$cx2,cx3:$cx3,cx4:$cx4}},
           cycle:{round:$round}}' \
         | bash "${PR_META}" emit)" || {
@@ -697,8 +831,7 @@ handle_fix() {
         return 0
     fi
 
-    if [[ "${DRY_RUN}" -eq 1 ]]; then
-        log_dry "PR #${pr}: would run codex fix (workspace-write) on branch ${branch} oid=${live_oid:0:12}"
+    if dry_action "PR #${pr}: would run codex fix (workspace-write) on branch ${branch} oid=${live_oid:0:12}"; then
         return 0
     fi
 
@@ -716,6 +849,7 @@ handle_fix() {
     if ! codex exec \
             -s workspace-write \
             -C "${wt}" \
+            --base develop \
             "${fix_prompt}"; then
         log "PR #${pr}: codex fix exec failed; posting human-escalation comment"
         post_fix_escalation "${pr}" "${branch}" "${wt}" "codex exec failed"
@@ -758,7 +892,7 @@ print('\n'.join(sorted(pkgs)))
 
     # Run golangci-lint if available
     if command -v golangci-lint >/dev/null 2>&1; then
-        if ! golangci-lint run --new-from-rev=HEAD~1 "${wt}/..." 2>/dev/null; then
+        if ! golangci-lint run -C "${wt}" --new-from-rev=HEAD~1 ./... 2>/dev/null; then
             log "PR #${pr}: golangci-lint failed; posting human-escalation comment"
             post_fix_escalation "${pr}" "${branch}" "${wt}" "golangci-lint reported issues"
             return 0
@@ -775,7 +909,7 @@ print('\n'.join(sorted(pkgs)))
 
     while IFS= read -r f; do
         if [[ -n "${f}" ]]; then
-            git -C "${wt}" add "${f}"
+            git -C "${wt}" add -- "${f}"
         fi
     done <<< "${changed_files}"
 
@@ -829,22 +963,25 @@ codex 自动修复了 ${cx1} 个 Cx1 finding。
 **下一步**：切 \`pr-status/needs-check-fix\`（待 \`/pr-review --check\` 验证）。
 
 ---
-🤖 PR #${pr} · Generated with Codex · branch ${branch} · worktree ${wt} · session —
+🤖 PR #${pr} · Generated with Codex · branch ${branch} · session —
 FIXBODY
 
     local meta_block
     meta_block="$(jq -nc \
+        --arg tool "codex" \
         --arg repo "${REPO_SLUG}" \
         --argjson pr "${pr}" \
         --arg headRef "${branch}" \
         --arg headSha "${live_oid}" \
-        --arg wt "${wt}" \
         --argjson round "${new_round}" \
         --argjson total "${total}" \
+        --argjson cx1_count "${cx1}" \
         '{kind:"fix",phase:"fix",verdict:"needs-check-fix",repo:$repo,pr:$pr,
-          baseRef:"develop",headRef:$headRef,headSha:$headSha,session:null,worktree:$wt,
-          findings:{total:$total,byP:{p0:0,p1:0,p2:0,p3:0},
-                    byCx:{cx1:0,cx2:0,cx3:0,cx4:0}},
+          tool:$tool,
+          baseRef:"develop",headRef:$headRef,headSha:$headSha,session:null,worktree:null,
+          findings:{total:$total,fixed:$cx1_count,unresolved:0,blocking:0,
+                    byP:{p0:0,p1:0,p2:0,p3:0},
+                    byCx:{cx1:$cx1_count,cx2:0,cx3:0,cx4:0}},
           cycle:{round:$round}}' \
         | bash "${PR_META}" emit)" || {
         log "PR #${pr}: pr-meta emit for fix comment failed"

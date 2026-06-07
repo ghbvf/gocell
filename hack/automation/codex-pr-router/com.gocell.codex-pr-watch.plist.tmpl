@@ -29,8 +29,14 @@
     # 2. Load:
     launchctl load ~/Library/LaunchAgents/com.gocell.codex-pr-watch.plist
 
-    # 3. Watch logs:
+    # 3. Verify the agent is running (check PID and state):
+    launchctl print gui/$(id -u)/com.gocell.codex-pr-watch
+
+    # 4. Watch logs:
     tail -f @ROUTER_HOME@/logs/router.err
+
+    # 5. View crash logs (if the agent keeps restarting):
+    log show --predicate 'process == "router.sh"' --last 1h
 
   Uninstall:
     launchctl unload ~/Library/LaunchAgents/com.gocell.codex-pr-watch.plist
@@ -99,10 +105,11 @@
   <!--
     ThrottleInterval: minimum seconds between respawn attempts after crash.
     Prevents rapid restart loops if the script exits immediately due to
-    misconfiguration.
+    misconfiguration.  Set to 90s (1.5× the default poll interval of 60s)
+    so a crash-loop does not hammer the GitHub API more than once per minute.
   -->
   <key>ThrottleInterval</key>
-  <integer>30</integer>
+  <integer>90</integer>
 
   <!-- Standard output log (router INFO/DEBUG lines) -->
   <key>StandardOutPath</key>

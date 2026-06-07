@@ -83,14 +83,30 @@ login (replace `REPLACE_WITH_YOUR_GITHUB_LOGIN`).
 launchctl load ~/Library/LaunchAgents/com.gocell.codex-pr-watch.plist
 ```
 
-### 4. Watch logs
+### 4. Verify the agent is running
+
+```sh
+launchctl print gui/$(id -u)/com.gocell.codex-pr-watch
+```
+
+The output should show `state = running` and a non-zero PID. If it shows
+`state = waiting` or restarts rapidly, check the error log (step 5).
+
+### 5. Watch logs
 
 ```sh
 tail -f "${GOCELL_ROUTER_HOME}/logs/router.err"
 tail -f "${GOCELL_ROUTER_HOME}/logs/router.out"
 ```
 
-### 5. Stop and uninstall
+To view crash logs from the system crash reporter (useful when the agent
+exits immediately before any log is written):
+
+```sh
+log show --predicate 'process == "router.sh"' --last 1h
+```
+
+### 6. Stop and uninstall
 
 ```sh
 launchctl unload ~/Library/LaunchAgents/com.gocell.codex-pr-watch.plist
@@ -239,6 +255,60 @@ $GOCELL_ROUTER_HOME/
     router.out     stdout (launchd StandardOutPath)
     router.err     stderr (launchd StandardErrorPath)
 ```
+
+### Ops: rotating the `state/seen` file
+
+The `state/seen` file grows unboundedly. On long-running installations, rotate
+it periodically:
+
+```sh
+# Safe online rotation: atomically replace with an empty file.
+# The router re-processes any in-flight PR at most once after rotation —
+# the idempotency block it reads from GitHub prevents duplicate comments.
+> "${GOCELL_ROUTER_HOME}/state/seen"
+```
+
+For periodic automated rotation (e.g. monthly via cron):
+
+```sh
+# Truncate seen on the 1st of each month at 03:00 local time.
+# Add to: crontab -e
+0 3 1 * * > /path/to/gocell-router/state/seen
+```
+
+### Ops: CI status is NOT consumed by this router
+
+The router drives the **review → fix → check** label machine based on
+`pr-status/*` labels. It does **not** read or react to GitHub Actions CI
+results (`pm:ci` comments or status checks).
+
+To observe CI status:
+
+- Check the PR's Checks tab in the GitHub UI, or
+- `gh pr checks <N>` from the CLI.
+
+If CI fails and you want the router to re-review after a fix, flip the label
+manually:
+
+```sh
+gh pr edit <N> \
+  --add-label "pr-status/needs-review-again" \
+  --remove-label "pr-status/needs-check-fix"
+```
+
+### Ops: review engine vs fix engine are two independent axes
+
+`GOCELL_ROUTER_REVIEW_ENGINE` controls **only the review/check phase**:
+
+| `GOCELL_ROUTER_REVIEW_ENGINE` | Review / check engine |
+|-------------------------------|----------------------|
+| `codex` (default) | `codex exec review --base develop -s read-only` |
+| `claude` | `claude -p "/pr-review <N>" --cwd <worktree>` |
+
+The **fix phase** always uses `codex exec -s workspace-write --base develop`.
+There is no `GOCELL_ROUTER_FIX_ENGINE` variable. The fix engine is not
+configurable — it is a separate axis from the review engine and cannot be
+unified with it.
 
 ---
 

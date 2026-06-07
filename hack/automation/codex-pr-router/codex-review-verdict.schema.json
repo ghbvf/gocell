@@ -102,6 +102,38 @@
     "summary": {
       "type": "string",
       "description": "Optional: one-paragraph review summary for the pm:pr-review comment header block."
+    },
+    "rootCauseClusters": {
+      "type": "array",
+      "description": "Optional: high-level root-cause clusters grouping related findings. Helps the /fix agent prioritise systemic issues. Not required; omit when findings are unrelated.",
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "findingRefs"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Short kebab-case cluster identifier, e.g. 'missing-error-handling'.",
+            "pattern": "^[a-z][a-z0-9-]*$",
+            "minLength": 1
+          },
+          "label": {
+            "type": "string",
+            "description": "Human-readable cluster label rendered in the pm:pr-review comment.",
+            "minLength": 1
+          },
+          "findingRefs": {
+            "type": "array",
+            "description": "fileLine values from the findings array that belong to this cluster.",
+            "items": {
+              "type": "string",
+              "pattern": "^.+:[0-9]+$",
+              "minLength": 3
+            },
+            "minItems": 1
+          }
+        }
+      }
     }
   }
 }
