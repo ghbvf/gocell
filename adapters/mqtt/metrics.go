@@ -387,6 +387,12 @@ type SubscriberCollector interface {
 	// ref: Kafka Connect KIP-298 deadletterqueue-produce-failures (distinct from
 	// total-record-errors).
 	RecordDeadLetterFailure(ctx context.Context, reason ConsumeFailureReason)
+	// AdjustInflight adds delta to the in-flight consume gauge
+	// mqtt_consume_inflight{cell} — +1 when a delivery enters processing, -1 when
+	// it completes (ack) or is dropped (intake stopped). The gauge reflects the
+	// count of deliveries currently being processed; the cell label is bound at
+	// construction time (no caller-supplied label, so it cannot be forged).
+	AdjustInflight(ctx context.Context, delta int64)
 }
 
 // NoopSubscriberCollector is the default collector used when no observability is
@@ -409,6 +415,9 @@ func (NoopSubscriberCollector) RecordDeadLetter(_ context.Context, _ ConsumeFail
 func (NoopSubscriberCollector) RecordDeadLetterFailure(_ context.Context, _ ConsumeFailureReason) { /* no-op */
 }
 
+// AdjustInflight is a no-op.
+func (NoopSubscriberCollector) AdjustInflight(_ context.Context, _ int64) { /* no-op */ }
+
 // Compile-time interface check.
 var _ SubscriberCollector = NoopSubscriberCollector{}
 
@@ -422,16 +431,18 @@ var _ SubscriberCollector = NoopSubscriberCollector{}
 //	mqtt_dlx_total                  (counter,   labels: cell, reason)
 //	mqtt_dlx_failed_total           (counter,   labels: cell, reason)
 //	mqtt_consume_duration_seconds   (histogram, labels: cell; buckets 1ms–10s)
+//	mqtt_consume_inflight           (gauge,     labels: cell)
 //
 // ref: adapters/mqtt/metrics.go providerPublisherCollector — same inject-at-
 // construction + all-or-nothing registration pattern.
 type providerSubscriberCollector struct {
-	cellID        string
-	consumeTotal  metrics.CounterVec
-	consumeFailed metrics.CounterVec
-	dlxTotal      metrics.CounterVec
-	dlxFailed     metrics.CounterVec
-	consumeDur    metrics.HistogramVec
+	cellID          string
+	consumeTotal    metrics.CounterVec
+	consumeFailed   metrics.CounterVec
+	dlxTotal        metrics.CounterVec
+	dlxFailed       metrics.CounterVec
+	consumeDur      metrics.HistogramVec
+	consumeInflight metrics.GaugeVec
 }
 
 var _ SubscriberCollector = (*providerSubscriberCollector)(nil)
@@ -480,9 +491,18 @@ var (
 		LabelNames: []string{"cell"},
 		Buckets:    consumeDurationBuckets,
 	}
+	subConsumeInflightOpts = metrics.GaugeOpts{
+		Name: "mqtt_consume_inflight",
+		Help: "Number of MQTT messages in-flight in the subscriber, counted from receive-callback entry to " +
+			"ack/drop. At saturation this is MaxConcurrentHandlers active handlers plus at most one delivery " +
+			"awaiting a worker slot (the single-goroutine receive handoff), so it may briefly exceed " +
+			"MaxConcurrentHandlers by one. Maintained by AdjustInflight(+1/-1). " + helpCellLabel,
+		LabelNames: []string{"cell"},
+	}
 )
 
-// NewProviderSubscriberCollector registers 5 metrics on p and returns a
+// NewProviderSubscriberCollector registers 6 metrics on p (4 counters +
+// 1 histogram + the mqtt_consume_inflight gauge) and returns a
 // SubscriberCollector bound to cellID. cellID becomes the "cell" label value.
 //
 // Returns an error when p is nil, cellID is empty, or the Provider reports a
@@ -540,16 +560,24 @@ func NewProviderSubscriberCollector(p metrics.Provider, cellID string) (Subscrib
 		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
 			"mqtt: register consume duration histogram", err))
 	}
-	// consumeDur is the last registration — nothing after it can fail, so it need
-	// not be appended to the rollback set.
+	registered = append(registered, consumeDur)
+
+	consumeInflight, err := p.GaugeVec(subConsumeInflightOpts)
+	if err != nil {
+		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register consume inflight gauge", err))
+	}
+	// consumeInflight is the last registration — nothing after it can fail, so it
+	// need not be appended to the rollback set.
 
 	return &providerSubscriberCollector{
-		cellID:        cellID,
-		consumeTotal:  consumeTotal,
-		consumeFailed: consumeFailed,
-		dlxTotal:      dlxTotal,
-		dlxFailed:     dlxFailed,
-		consumeDur:    consumeDur,
+		cellID:          cellID,
+		consumeTotal:    consumeTotal,
+		consumeFailed:   consumeFailed,
+		dlxTotal:        dlxTotal,
+		dlxFailed:       dlxFailed,
+		consumeDur:      consumeDur,
+		consumeInflight: consumeInflight,
 	}, nil
 }
 
@@ -577,4 +605,11 @@ func (c *providerSubscriberCollector) RecordDeadLetter(ctx context.Context, reas
 // DLT capture — the alertable "dead-letter sink unhealthy" signal.
 func (c *providerSubscriberCollector) RecordDeadLetterFailure(ctx context.Context, reason ConsumeFailureReason) {
 	c.dlxFailed.With(metrics.Labels{"cell": c.cellID, "reason": string(reason)}).Inc(ctx)
+}
+
+// AdjustInflight adds delta to mqtt_consume_inflight{cell}. Add (not Set) keeps
+// the gauge race-free under concurrent deliveries: deltas commute, so the gauge
+// converges to the true count whatever the interleaving.
+func (c *providerSubscriberCollector) AdjustInflight(ctx context.Context, delta int64) {
+	c.consumeInflight.With(metrics.Labels{"cell": c.cellID}).Add(ctx, float64(delta))
 }
