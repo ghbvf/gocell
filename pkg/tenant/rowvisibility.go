@@ -27,6 +27,18 @@ import (
 // interfaces (ROWSCOPE-REPO-PARAM-FUNNEL-01), "forget the obligation" and "forge
 // the obligation" are both compile-time impossible.
 //
+// # Canonical form
+//
+// The {scope, subject} pair has a canonical validity invariant enforced at
+// construction (and re-checked by Validate): RowScopeSelf / RowScopeDevice REQUIRE
+// a non-empty subject (the owner the row must belong to), while RowScopeTenant /
+// RowScopeAll REQUIRE an EMPTY subject (they carry no owner identity). A tenant/all
+// obligation with a non-empty subject is rejected fail-closed rather than silently
+// ignored — so two semantically-equal obligations are byte-equal values and
+// Subject() is always "" for tenant/all. This keeps the value object usable as a
+// scope key (e.g. the auditquery cursor fingerprint) without a non-canonical
+// subject leaking into the scope on one page and not another.
+//
 // # Owner dimension only
 //
 // RowVisibility enforces the OWNER dimension of row visibility:
@@ -61,38 +73,47 @@ var ownerColumnPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
 // NewRowVisibility constructs a validated RowVisibility obligation. It is the
 // sole constructor (the fields are unexported). scope must be a defined RowScope;
-// RowScopeSelf and RowScopeDevice additionally require a non-empty subject (the
-// owner the row must belong to) — an empty subject under a self/device scope
-// would silently widen visibility to every row, so it is rejected fail-closed.
-// RowScopeTenant and RowScopeAll ignore subject (no owner predicate).
+// RowScopeSelf and RowScopeDevice require a non-empty subject (the owner the row
+// must belong to) — an empty subject under a self/device scope would silently
+// widen visibility to every row. RowScopeTenant and RowScopeAll require an EMPTY
+// subject (they carry no owner identity); a non-empty subject is a malformed
+// obligation and is rejected. Both rules are the canonical-form invariant checked
+// by Validate (see type doc).
 func NewRowVisibility(scope RowScope, subject string) (RowVisibility, error) {
-	if err := scope.Validate(); err != nil {
+	v := RowVisibility{scope: scope, subject: subject}
+	if err := v.Validate(); err != nil {
 		return RowVisibility{}, err
 	}
-	if (scope == RowScopeSelf || scope == RowScopeDevice) && subject == "" {
-		return RowVisibility{}, fmt.Errorf("tenant: RowScope %s requires a non-empty subject", scope)
-	}
-	return RowVisibility{scope: scope, subject: subject}, nil
+	return v, nil
 }
 
 // Scope returns the RowScope obligation.
 func (v RowVisibility) Scope() RowScope { return v.scope }
 
-// Subject returns the subject identity that self/device scopes resolve to (empty
-// for tenant/all).
+// Subject returns the subject identity that self/device scopes resolve to. It is
+// always "" for tenant/all (the canonical form rejects a non-empty subject there;
+// see type doc).
 func (v RowVisibility) Subject() string { return v.subject }
 
-// Validate returns an error if the obligation is not a well-formed value (zero
-// value / invalid scope, or a self/device scope with an empty subject). Repo
-// methods receive RowVisibility as a typed positional parameter; calling Validate
-// is the runtime fail-closed backstop to the compile-time "漏传 = 编译失败"
-// guarantee.
+// Validate returns an error if the obligation is not a well-formed value: zero
+// value / invalid scope, a self/device scope with an empty subject, or a
+// tenant/all scope with a NON-empty subject (the canonical-form invariant — see
+// type doc). Repo methods receive RowVisibility as a typed positional parameter;
+// calling Validate is the runtime fail-closed backstop to the compile-time "漏传 =
+// 编译失败" guarantee.
 func (v RowVisibility) Validate() error {
 	if err := v.scope.Validate(); err != nil {
 		return err
 	}
-	if (v.scope == RowScopeSelf || v.scope == RowScopeDevice) && v.subject == "" {
-		return fmt.Errorf("tenant: RowScope %s requires a non-empty subject", v.scope)
+	switch v.scope {
+	case RowScopeSelf, RowScopeDevice:
+		if v.subject == "" {
+			return fmt.Errorf("tenant: RowScope %s requires a non-empty subject", v.scope)
+		}
+	case RowScopeTenant, RowScopeAll:
+		if v.subject != "" {
+			return fmt.Errorf("tenant: RowScope %s must carry an empty subject (no owner identity)", v.scope)
+		}
 	}
 	return nil
 }

@@ -15,8 +15,9 @@ func TestNewRowVisibility(t *testing.T) {
 		{name: "device requires subject", scope: RowScopeDevice, subject: "d1"},
 		{name: "device empty subject rejected", scope: RowScopeDevice, subject: "", wantErr: true},
 		{name: "tenant allows empty subject", scope: RowScopeTenant, subject: ""},
-		{name: "tenant ignores subject", scope: RowScopeTenant, subject: "u1"},
+		{name: "tenant non-empty subject rejected", scope: RowScopeTenant, subject: "u1", wantErr: true},
 		{name: "all allows empty subject", scope: RowScopeAll, subject: ""},
+		{name: "all non-empty subject rejected", scope: RowScopeAll, subject: "u1", wantErr: true},
 		{name: "zero scope rejected", scope: RowScope(0), subject: "u1", wantErr: true},
 		{name: "out-of-range scope rejected", scope: RowScope(9), subject: "u1", wantErr: true},
 	}

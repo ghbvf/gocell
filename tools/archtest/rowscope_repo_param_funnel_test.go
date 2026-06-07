@@ -1,6 +1,7 @@
 // rowscope_repo_param_funnel_test.go — guards that every row-scoped list/get
 // repo interface method carries a tenant.RowVisibility obligation positional
-// parameter. Enrolled repos: auditcore (runtime/audit/ledger.Store).
+// parameter. Enrolled repos: auditcore (runtime/audit/ledger.Store and the
+// narrow read-side ledger.QueryStore).
 //
 //   - INVARIANT: ROWSCOPE-REPO-PARAM-FUNNEL-01
 //
@@ -38,6 +39,12 @@
 // runtime/audit/ledger (ledgerStorePkg):
 //   - Store — the audit ledger read surface. Carve-out: Protocol / Append / Tail /
 //     Verify / RepoReady (see allowlist).
+//   - QueryStore — the narrow read-only subset (just Query) that the auditquery
+//     slice actually depends on: auditquery.Service holds a ledger.QueryStore (so a
+//     read-side aggregator like MultiStore can be injected without the write path).
+//     QueryStore is the real composition boundary, so locking only Store would
+//     leave Query's obligation slot undefended on the interface auditquery binds
+//     to. Its sole method (Query) is a subject-owned row read → no carve-out.
 //
 // PR-4 scope is auditcore ONLY. accesscore (UserRepository / RoleRepository) and
 // configcore (ConfigRepository / FlagRepository) reads are auth-internal /
@@ -115,6 +122,10 @@ const (
 var rowScopedRepoIfaces = []string{
 	// runtime/audit/ledger (ledgerStorePkg)
 	"Store",
+	// QueryStore — the narrow read-only subset auditquery.Service actually binds
+	// to (Query only). Enrolled so the obligation slot is locked on the real
+	// read-side composition boundary, not just the wide Store.
+	"QueryStore",
 }
 
 // rowScopeParamCarveOut is the non-row-read allowlist (see file godoc). Key is

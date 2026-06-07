@@ -150,12 +150,25 @@ type Store interface {
 	Tail(ctx context.Context) (TailSnapshot, error)
 
 	// GetBySeq fetches a single entry by sequence number. The vis obligation
-	// is enforced on the actor_id owner column: if the entry exists but
+	// is enforced on the actor_id OWNER column: if the entry exists but
 	// vis.Allows(entry.ActorID) is false, the implementation returns
 	// ErrAuditLedgerNotFound (IDOR-safe collapse — existence is not leaked).
 	// vis must be valid (NewRowVisibility must succeed). A vis carrying
 	// RowScopeAll is fail-closed on every backend (RowScopeAllUnsupportedError)
 	// until the audited super-admin path lands (epic #1337 PR-5).
+	//
+	// Tenant axis NOT enforced here (deliberate, tracked #1342 / #1618): GetBySeq
+	// enforces ONLY the owner dimension (vis on actor_id). Unlike Query it takes no
+	// AuditFilters, so it carries no tenant predicate — by seq_no it reads the
+	// namespace-global hash chain (the same chain-primitive surface as Tail/Verify),
+	// where seq_no is unique per namespace, not per (namespace, tenant). It has NO
+	// production caller today (chain replay / conformance only). A future
+	// tenant-FACING by-seq read endpoint MUST add a tenant filter (an AuditFilters /
+	// tenant.TenantID parameter that returns ErrAuditLedgerNotFound on tenant
+	// mismatch) rather than rely on this owner-only check; that is deferred until
+	// such a consumer exists (adding it now would be dead plumbing). The deeper fix
+	// — a per-(namespace, tenant) chain with RLS so seq reads are tenant-scoped at
+	// the DB — is #1618.
 	GetBySeq(ctx context.Context, vis tenant.RowVisibility, seq int64) (*Entry, error)
 
 	// Query lists entries matching AuditFilters using keyset cursor pagination

@@ -35,6 +35,13 @@ func testTenantVis() tenant.RowVisibility {
 	return vis
 }
 
+// testSelfVis returns a RowScopeSelf RowVisibility scoped to subject — used by the
+// row-obligation cursor-scope replay test to mint a cursor under one owner scope.
+func testSelfVis(subject string) tenant.RowVisibility {
+	vis, _ := tenant.NewRowVisibility(tenant.RowScopeSelf, subject)
+	return vis
+}
+
 func testCodec() *query.CursorCodec {
 	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
 	return codec
@@ -488,6 +495,65 @@ func TestService_Query_CursorContextMismatch_TenantID(t *testing.T) {
 	reasonAttr, ok := ecErr.FindAttr("reason")
 	require.True(t, ok)
 	assert.Equal(t, "query context mismatch", reasonAttr.Value().(string))
+}
+
+// TestService_Query_CursorContextMismatch_RowScope is the row-visibility sibling
+// of the tenantId/subjectId/traceId mismatch tests: it locks that the row
+// obligation (rowScope + rowSubject) participates in the cursor-scope fingerprint
+// (#1337 PR-4, service.go QueryContext attrs). This is a security regression
+// guard: a cursor minted under one obligation must be REJECTED when replayed under
+// a different one, so a mid-pagination authorization change (self → tenant, or
+// self(alice) → self(bob)) produces a "query context mismatch" rather than silently
+// paging the wrong owner set. Without rowScope/rowSubject in the fingerprint, the
+// replays would share a QueryContext and succeed — this test would then fail. It
+// covers both axes the obligation contributes:
+//
+//   - scope change: self(alice) cursor replayed under tenant-wide scope;
+//   - subject change: self(alice) cursor replayed under self(bob).
+func TestService_Query_CursorContextMismatch_RowScope(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	// Seed 5 entries owned by alice so a self(alice) page1 returns a full page +
+	// HasMore (the cursor that the replays attempt to reuse under a different
+	// obligation).
+	mintAlicePage1 := func(svc *Service) string {
+		page1, err := svc.Query(context.Background(), testSelfVis("alice"), ledger.AuditFilters{}, query.PageParams{Limit: 3})
+		require.NoError(t, err)
+		require.True(t, page1.HasMore)
+		require.NotEmpty(t, page1.NextCursor)
+		return page1.NextCursor
+	}
+	assertMismatch := func(t *testing.T, err error) {
+		t.Helper()
+		require.Error(t, err)
+		var ecErr *errcode.Error
+		require.ErrorAs(t, err, &ecErr)
+		assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+		reasonAttr, ok := ecErr.FindAttr("reason")
+		require.True(t, ok)
+		assert.Equal(t, "query context mismatch", reasonAttr.Value().(string))
+	}
+
+	t.Run("scope change self→tenant", func(t *testing.T) {
+		svc, store := newTestService()
+		for i := range 5 {
+			seedEntry(store, fmt.Sprintf("ae-%02d", i), "event.test.v1", "alice",
+				base.Add(time.Duration(i)*time.Hour))
+		}
+		cursor := mintAlicePage1(svc)
+		_, err := svc.Query(context.Background(), testTenantVis(), ledger.AuditFilters{}, query.PageParams{Limit: 3, Cursor: cursor})
+		assertMismatch(t, err)
+	})
+
+	t.Run("subject change self(alice)→self(bob)", func(t *testing.T) {
+		svc, store := newTestService()
+		for i := range 5 {
+			seedEntry(store, fmt.Sprintf("ae-%02d", i), "event.test.v1", "alice",
+				base.Add(time.Duration(i)*time.Hour))
+		}
+		cursor := mintAlicePage1(svc)
+		_, err := svc.Query(context.Background(), testSelfVis("bob"), ledger.AuditFilters{}, query.PageParams{Limit: 3, Cursor: cursor})
+		assertMismatch(t, err)
+	})
 }
 
 // TestService_Query_SubsecondFilterContext verifies that From/To are not part of
