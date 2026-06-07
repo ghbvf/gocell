@@ -31,6 +31,13 @@ const (
 	// testObserverDeadline is a short observer deadline used (with a real clock) to
 	// exercise the bounded-observer wrapper (TEST-TIME-LITERAL-01: package const).
 	testObserverDeadline = 20 * time.Millisecond
+	// testFastPoll is a short poll interval (real clock) so a lifecycle loop ticks
+	// into a blocking apply promptly in the retryable-shutdown test
+	// (TEST-TIME-LITERAL-01: package const).
+	testFastPoll = 5 * time.Millisecond
+	// testStopBudget is a short Stop ctx budget used to force a Stop timeout while
+	// the loop is deliberately wedged (TEST-TIME-LITERAL-01: package const).
+	testStopBudget = 50 * time.Millisecond
 )
 
 // ── fakes ─────────────────────────────────────────────────────────────────
@@ -784,6 +791,75 @@ func TestTailer_StopOrphansInflightLock(t *testing.T) {
 	}
 	if cause := held.Cause(); !errors.Is(cause, distlock.ErrLockOrphaned) {
 		t.Errorf("in-flight lock cause = %v, want ErrLockOrphaned (Stop must Orphan, not Release)", cause)
+	}
+}
+
+// TestTailer_StopTimeoutRetryable verifies the retryable-shutdown contract (F1
+// check round): when the first Stop's ctx budget is exhausted while the poll loop
+// is wedged in a non-cooperative apply, Stop returns a deadline error — and a
+// RETRIED Stop must NOT return nil prematurely; it keeps waiting on the same loop-
+// exit signal. Only once the loop genuinely exits does a final Stop return nil.
+// Pre-fix, the second Stop short-circuited to nil via the alreadyStopping branch,
+// falsely reporting a stopped loop that was still draining.
+func TestTailer_StopTimeoutRetryable(t *testing.T) {
+	src := &fakeSource{events: events(1)}
+	store := projection.NewMemOwnerCheckpointStore()
+
+	var entered sync.Once
+	enteredCh := make(chan struct{})
+	release := make(chan struct{})
+	apply := func(context.Context, projection.ProjectionEvent) error {
+		entered.Do(func() { close(enteredCh) })
+		<-release // non-cooperative: ignore ctx, wedge the loop until released
+		return nil
+	}
+
+	// Real clock + short poll interval so the loop ticks into apply promptly.
+	tl, err := NewTailer(clock.Real(), src, src, store, fakeTxRunner{}, apply,
+		newTestLocker(t, clock.Real()), testCell, testProj,
+		WithConfig(Config{PollInterval: testFastPoll, LeaseTTL: testLockTTL}))
+	if err != nil {
+		t.Fatalf("NewTailer: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startErr := make(chan error, 1)
+	go func() { startErr <- tl.Start(ctx) }()
+
+	<-enteredCh // loop is wedged inside the non-cooperative apply
+
+	// First Stop times out: the loop ignores ctx, so its goroutine never exits
+	// within the budget and done is not closed.
+	sctx1, scancel1 := context.WithTimeout(context.Background(), testStopBudget)
+	defer scancel1()
+	if err := tl.Stop(sctx1); err == nil {
+		t.Fatal("first Stop must time out while the loop is wedged, got nil")
+	}
+
+	// Retry Stop: state is tailerStopping. It must keep waiting on the same done
+	// (the loop is still wedged) and time out again — NOT return nil. This is the
+	// regression the fix closes.
+	sctx2, scancel2 := context.WithTimeout(context.Background(), testStopBudget)
+	defer scancel2()
+	if err := tl.Stop(sctx2); err == nil {
+		t.Fatal("retry Stop returned nil while the loop was still draining (must keep waiting on done)")
+	}
+
+	// Release the wedge → the loop drains the tick, observes the canceled ctx, and
+	// exits, closing done.
+	close(release)
+
+	// A final Stop with ample budget now observes genuine loop exit and returns nil.
+	sctx3, scancel3 := context.WithTimeout(context.Background(), testLifecycleTimeout)
+	defer scancel3()
+	if err := tl.Stop(sctx3); err != nil {
+		t.Errorf("final Stop after loop exit = %v, want nil", err)
+	}
+	select {
+	case <-startErr:
+	case <-time.After(testLifecycleTimeout):
+		t.Fatal("Start did not return after the loop exited")
 	}
 }
 

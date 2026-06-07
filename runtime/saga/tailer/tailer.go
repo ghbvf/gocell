@@ -325,24 +325,42 @@ func (t *Tailer) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop signals shutdown, cancels the tick loop, and waits for it to exit.
-// Idempotent. Unlike the saga Coordinator, the Tailer holds at most one lock per
-// tick and releases it synchronously inside pollOnce, so there is no inflight
-// fan-out to drain — cancellation is sufficient.
+// Stop signals shutdown, cancels the tick loop, and waits for it to exit within
+// ctx's budget. Idempotent AND retryable: if ctx is exhausted before the loop
+// drains, Stop returns a deadline error but leaves shutdown in progress (state
+// stays tailerStopping; the cancel + in-flight lock Orphan have already been
+// issued). A subsequent Stop/Close then re-enters the alreadyStopping branch and
+// keeps waiting on the SAME loop-exit signal rather than reporting a premature
+// success — mirroring kernel/reconcile.(*Loop).Stop's retryable-shutdown
+// semantics. Returning nil from a timed-out shutdown would let callers (e.g.
+// bootstrap LIFO Close) believe the loop has stopped while it is still draining.
+//
+// Unlike the saga Coordinator, the Tailer holds at most one lock per tick and
+// releases it synchronously inside pollOnce, so there is no inflight fan-out to
+// drain — cancellation (plus the in-flight lock Orphan) is sufficient.
 func (t *Tailer) Stop(ctx context.Context) error {
 	t.mu.Lock()
 	state := tailerState(t.state.Load())
 	notStarted := t.cancel == nil && state == tailerStopped
 	alreadyStopping := state == tailerStopping
-	cancel := t.cancel
 	done := t.done
 	ready := t.readyCh
 	t.mu.Unlock()
 
-	if notStarted || alreadyStopping {
+	if notStarted {
 		return nil
 	}
+	if alreadyStopping {
+		// A prior (possibly timed-out) or concurrent Stop already issued cancel +
+		// lock Orphan; the loop is draining. Wait on the SAME loop-exit signal
+		// instead of returning nil prematurely, so a retried Stop keeps retryable
+		// shutdown semantics (F1 check round). done is non-nil here: under t.mu,
+		// state==tailerStopping implies Start's teardown — which nils done and stores
+		// tailerStopped in the same mu section — has not run.
+		return t.awaitLoopExit(ctx, done)
+	}
 
+	// Wait until Start has populated cancel/done and reached running.
 	select {
 	case <-ready:
 	case <-ctx.Done():
@@ -351,6 +369,15 @@ func (t *Tailer) Stop(ctx context.Context) error {
 	}
 
 	t.state.Store(int32(tailerStopping))
+
+	// Re-read cancel/done now that ready is closed (Start is past its mu section);
+	// capturing them at the top would race a concurrent Start that had not yet
+	// stored them. Mirrors runtime/saga.(*Coordinator).Stop's point-of-use re-read.
+	t.mu.Lock()
+	cancel := t.cancel
+	done = t.done
+	t.mu.Unlock()
+
 	// Orphan any in-flight lock BEFORE canceling so a graceful Stop hands off
 	// leadership promptly: Orphan stops renewal without a Release RPC (never blocks
 	// on backend reachability) and closes the lock's Done() channel, which the
@@ -364,6 +391,17 @@ func (t *Tailer) Stop(ctx context.Context) error {
 	if cancel != nil {
 		cancel()
 	}
+	if done == nil {
+		return nil // Start's teardown already ran between the ready wait and here.
+	}
+	return t.awaitLoopExit(ctx, done)
+}
+
+// awaitLoopExit blocks until the poll-loop goroutine has fully exited (Start's
+// deferred teardown closes done) or ctx's budget is exhausted. On timeout it
+// returns a deadline error WITHOUT clearing lifecycle state, so a subsequent
+// Stop/Close re-selects on the same done — the retryable-shutdown contract.
+func (t *Tailer) awaitLoopExit(ctx context.Context, done <-chan struct{}) error {
 	select {
 	case <-done:
 		return nil
