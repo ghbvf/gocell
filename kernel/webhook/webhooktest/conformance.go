@@ -21,6 +21,7 @@ package webhooktest
 import (
 	"bytes"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -30,10 +31,12 @@ import (
 )
 
 // inboundFromSigned converts a sealed outbound [webhook.SignedHeaders] (the Sign
-// output, #1492) into the inbound [webhook.Headers] DTO that [webhook.Verifier.Verify]
-// consumes, mirroring how a real receiver reconstructs the headers off the wire.
-// It reads via the public read-only accessors (the seal is on construction, not
-// reading).
+// output, #1492) into the inbound [webhook.Headers] DTO that
+// [webhook.Verifier.Verify] consumes, using the public read-only accessors (the
+// seal is on construction, not reading). This is a unit-level bridge that does
+// NOT go through the HTTP wire path; the dedicated apply_wire_roundtrip
+// conformance case ([runApplyWireRoundTrip]) exercises [webhook.SignedHeaders.Apply]
+// → http.Header → parse end-to-end.
 func inboundFromSigned(s webhook.SignedHeaders) webhook.Headers {
 	return webhook.Headers{
 		DeliveryID: s.DeliveryID(),
@@ -106,8 +109,9 @@ func RunSignerVerifierConformance(
 
 	signed, err := signer.Sign(basePayload, base, deliveryID)
 	mustNoError(t, err, "signer.Sign")
-	// Bridge the sealed outbound SignedHeaders to the inbound Headers DTO via the
-	// real wire round-trip (Apply → http.Header → parse); see inboundFromSigned.
+	// goodHeaders is the inbound DTO derived from the signed output via the
+	// read-only accessors (see inboundFromSigned). The dedicated apply_wire_roundtrip
+	// case below is the one that exercises the real Apply → http.Header → parse path.
 	goodHeaders := inboundFromSigned(signed)
 
 	// verifierAt builds a Verifier pinned to ts.
@@ -119,6 +123,7 @@ func RunSignerVerifierConformance(
 	}
 
 	runRoundTrip(t, src, basePayload, goodHeaders, base, verifierAt)
+	runApplyWireRoundTrip(t, src, basePayload, signed, base, verifierAt)
 	runTamperBody(t, src, basePayload, goodHeaders, base, verifierAt)
 	runTamperSignature(t, src, basePayload, goodHeaders, base, verifierAt)
 	runTamperTimestampExpired(t, src, basePayload, goodHeaders, base, verifierAt)
@@ -126,6 +131,7 @@ func RunSignerVerifierConformance(
 	runMultiTokenSecondMatches(t, src, basePayload, goodHeaders, base, deliveryID, newSigner, verifierAt)
 	runTimestampOutsideWindow(t, src, basePayload, goodHeaders, base, verifierAt)
 	runEmptySecretSourceRejected(t, newSigner)
+	runEmptySecretSourceRejectedByVerifier(t, basePayload, goodHeaders, base, verifierAt)
 	runNoMatchingToken(t, src, basePayload, goodHeaders, base, verifierAt)
 }
 
@@ -140,6 +146,38 @@ func runRoundTrip(
 		v := verifierAt(t, base)
 		requireNoError(t, v.Verify(payload, headers, src),
 			"sign→verify must succeed with matching body/headers/source")
+	})
+}
+
+// runApplyWireRoundTrip is the ONLY conformance case that exercises the real
+// outbound write path [webhook.SignedHeaders.Apply] → http.Header → read-back by
+// the three header-name constants → verify. The other cases bridge via accessors
+// ([inboundFromSigned]), so this case is what catches an Apply field-mapping swap
+// (e.g. writing the signature under HeaderID) or an Apply ↔ accessor divergence.
+func runApplyWireRoundTrip(
+	t *testing.T, src webhook.Source, payload []byte,
+	signed webhook.SignedHeaders, base time.Time,
+	verifierAt func(*testing.T, time.Time) webhook.Verifier,
+) {
+	t.Helper()
+	t.Run("apply_wire_roundtrip", func(t *testing.T) {
+		t.Parallel()
+		h := http.Header{}
+		signed.Apply(h)
+		// Apply must map each field to its sanctioned header name and agree with
+		// the read-only accessors.
+		requireEqual(t, string(signed.DeliveryID()), h.Get(webhook.HeaderID), "Apply HeaderID")
+		requireEqual(t, signed.Timestamp(), h.Get(webhook.HeaderTimestamp), "Apply HeaderTimestamp")
+		requireEqual(t, signed.Signature(), h.Get(webhook.HeaderSignature), "Apply HeaderSignature")
+		// Reconstruct the inbound Headers off the wire and verify end-to-end.
+		inbound := webhook.Headers{
+			DeliveryID: webhook.DeliveryID(h.Get(webhook.HeaderID)),
+			Timestamp:  h.Get(webhook.HeaderTimestamp),
+			Signature:  h.Get(webhook.HeaderSignature),
+		}
+		v := verifierAt(t, base)
+		requireNoError(t, v.Verify(payload, inbound, src),
+			"sign→Apply→wire→verify round-trip must succeed")
 	})
 }
 
@@ -257,6 +295,23 @@ func runEmptySecretSourceRejected(
 	})
 }
 
+// runEmptySecretSourceRejectedByVerifier is the verifier-side sibling of
+// runEmptySecretSourceRejected: Verify must independently reject a zero-value
+// (empty-secret) Source, not rely on the signer guard. Without this case, a
+// dropped verifier-side empty-secret guard would pass conformance.
+func runEmptySecretSourceRejectedByVerifier(
+	t *testing.T, payload []byte, headers webhook.Headers, base time.Time,
+	verifierAt func(*testing.T, time.Time) webhook.Verifier,
+) {
+	t.Helper()
+	t.Run("empty_secret_source_rejected_by_verifier", func(t *testing.T) {
+		t.Parallel()
+		v := verifierAt(t, base)
+		err := v.Verify(payload, headers, webhook.Source{})
+		requireErrCode(t, err, errcode.ErrWebhookConfigInvalid, errcode.KindInvalid)
+	})
+}
+
 func runNoMatchingToken(
 	t *testing.T, src webhook.Source, payload []byte,
 	headers webhook.Headers, base time.Time,
@@ -313,6 +368,14 @@ func requireNoError(t *testing.T, err error, msg string) {
 	t.Helper()
 	if err != nil {
 		t.Fatalf("%s: unexpected error: %v", msg, err)
+	}
+}
+
+// requireEqual fails the test immediately if got != want (string equality).
+func requireEqual(t *testing.T, want, got, context string) {
+	t.Helper()
+	if got != want {
+		t.Fatalf("%s: got %q, want %q", context, got, want)
 	}
 }
 
