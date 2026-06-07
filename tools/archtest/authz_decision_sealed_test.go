@@ -4,6 +4,7 @@
 //
 //   - INVARIANT: AUTHZ-DECISION-SEALED-FIELD-FROZEN-01
 //   - INVARIANT: AUTHZ-DECISION-CONSTRUCTOR-CLOSEDSET-01
+//   - INVARIANT: AUTHZ-DECISION-ALLOW-DENY-CALLER-01
 //
 // # What this guards
 //
@@ -46,14 +47,43 @@
 //   - Upstream: Obligations and FieldMask have EXPORTED fields (PEPs must read
 //     them) — sealed construction does not apply. The reflect freeze here is the
 //     sole drift guard for those two types.
-//   - Downstream caller-allowlist: Allow()/Deny() today have zero production
-//     callers; the allowlist lands in PR-7 (#1345, gh issue tracking). This is
-//     explicitly deferred as stated in pkg/authz/doc.go per ai-robust.md
-//     §"Funnel 双向锁评级": the Medium-upstream → Hard-downstream transitional
-//     funnel must name its Hard-ization tracker, which is gh #1345 (PR-7).
-//     Once PR-7 ships a production Allow()/Deny() caller, the companion archtest
-//     must be extended with an AST caller-allowlist guard (only the
-//     authorizationdecide engine may call Allow() or Deny()).
+//   - Downstream caller-allowlist (DELIVERED PR-7 #1345): the closing half of
+//     the sealed-Decision funnel — AUTHZ-DECISION-ALLOW-DENY-CALLER-01 below —
+//     pins every production reference to authz.Allow / authz.Deny to the sole
+//     ABAC PDP engine file (authorizationdecide/evaluator.go). Combined with the
+//     upstream sealed fields (literal forge impossible), the funnel is now
+//     fully closed Hard/Hard: a business package forging an authorization verdict
+//     either cannot construct Decision (upstream Hard) or cannot reach the only
+//     two constructors (downstream Hard caller-allowlist).
+//
+// # AUTHZ-DECISION-ALLOW-DENY-CALLER-01 (Hard downstream)
+//
+// AI-robust Rating (charter §"Funnel 双向锁评级") — fully closed (Hard/Hard):
+//
+//   - Downstream (who may CALL Allow/Deny): HARD. The detector resolves every
+//     identifier USE to the authz.Allow / authz.Deny *types.Func via go/types
+//     (info.Uses), so the package-qualified form (authz.Allow), an import-aliased
+//     form, AND the dot-imported bare ident all resolve to the same object; any
+//     reference outside allowDenyCallerAllowlist fails CI, no import shape excepted.
+//   - Upstream (can a Decision be CONSTRUCTED without Allow/Deny): HARD. All
+//     Decision fields are unexported (AUTHZ-DECISION-SEALED-FIELD-FROZEN-01 above),
+//     so an outside-package struct literal is a compile error, and the only two
+//     exported funcs returning a Decision are Allow / Deny
+//     (AUTHZ-DECISION-CONSTRUCTOR-CLOSEDSET-01). There is no alternative
+//     construction path — no Hard-upgrade issue is needed.
+//
+// Detection is use-based (info.Uses), invariant to import form. Anti-vacuity: the
+// allowlisted file must reference Allow or Deny at least once, so a removed call
+// or scanner regression (which would make the funnel vacuously pass) fails CI. A
+// RED fixture (internal/authzdecisioncallerfixture) proves the detector fires on
+// an Allow/Deny reference outside the allowlist.
+//
+// Blind spot (known, by design): the scan runs over Production() scope, which
+// excludes _test.go files. Test doubles legitimately construct verdicts via
+// Allow/Deny (e.g. runtime/auth/middleware_test.go mockAuthorizer) and are NOT
+// flagged — production-only enforcement is the intended boundary (the same
+// convention as every Production() caller-allowlist in this suite). A production
+// Allow/Deny reference is always caught; a test-file one is an accepted exemption.
 //
 // # AUTHZ-DECISION-CONSTRUCTOR-CLOSEDSET-01
 //
@@ -158,7 +188,8 @@ func TestAuthzDecisionSealedFieldFrozen01(t *testing.T) {
 	require.Equal(t, reflect.Struct, dt.Kind(), "authz.Decision must be a struct")
 
 	// Axis 1: exact field count.
-	require.Equal(t, len(frozenDecisionFields), dt.NumField(),
+	require.Equal(
+		t, len(frozenDecisionFields), dt.NumField(),
 		"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01: authz.Decision NumField = %d, want %d "+
 			"(adding a field may re-open the sealed-construction invariant; "+
 			"removing a field breaks the PDP contract; update the frozen tuple and "+
@@ -170,20 +201,23 @@ func TestAuthzDecisionSealedFieldFrozen01(t *testing.T) {
 		sf := dt.Field(i)
 
 		// Axis 2a: field name.
-		assert.Equal(t, want.name, sf.Name,
+		assert.Equal(
+			t, want.name, sf.Name,
 			"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01: Decision field[%d] name = %q, want %q",
 			i, sf.Name, want.name,
 		)
 
 		// Axis 2b: field type identity.
-		assert.Equal(t, want.typeName, sf.Type.String(),
+		assert.Equal(
+			t, want.typeName, sf.Type.String(),
 			"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01: Decision.%s type = %q, want %q",
 			sf.Name, sf.Type.String(), want.typeName,
 		)
 
 		// Axis 3: all fields must be unexported (PkgPath != "").
 		exported := sf.PkgPath == ""
-		assert.Equal(t, want.exported, exported,
+		assert.Equal(
+			t, want.exported, exported,
 			"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01: Decision.%s exported = %v, want %v "+
 				"(exported fields allow outside-package struct-literal construction — "+
 				"a P0 authz-bypass vector; re-seal by making the field unexported)",
@@ -200,16 +234,19 @@ func TestAuthzDecisionSealedFieldFrozen01_AntiVacuity(t *testing.T) {
 	dt := reflect.TypeOf(authz.Decision{})
 
 	// The type must be named "Decision" in package "authz".
-	assert.Equal(t, "Decision", dt.Name(),
+	assert.Equal(
+		t, "Decision", dt.Name(),
 		"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01 anti-vacuity: loaded type name = %q, want Decision",
 		dt.Name(),
 	)
-	assert.Equal(t, "authz", dt.PkgPath()[len(dt.PkgPath())-len("authz"):],
+	assert.Equal(
+		t, "authz", dt.PkgPath()[len(dt.PkgPath())-len("authz"):],
 		"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01 anti-vacuity: package path suffix must be 'authz'",
 	)
 
 	// The type must have at least one field (guards against loading an empty stub).
-	assert.Greater(t, dt.NumField(), 0,
+	assert.Greater(
+		t, dt.NumField(), 0,
 		"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01 anti-vacuity: Decision has no fields — wrong type loaded?",
 	)
 }
@@ -234,7 +271,8 @@ func TestAuthzDecisionSealedFieldFrozen01_RedFixture(t *testing.T) {
 	// The first field (Effect) must be detected as exported (PkgPath == "").
 	exportedField := bt.Field(0)
 	exportedDetected := exportedField.PkgPath == ""
-	assert.True(t, exportedDetected,
+	assert.True(
+		t, exportedDetected,
 		"RED fixture self-check: Effect field in brokenDecision must be detected as exported "+
 			"(PkgPath empty = %q); if this fails the check would trivially miss real violations",
 		exportedField.PkgPath,
@@ -256,7 +294,8 @@ func TestAuthzDecisionSealedFieldFrozen01_GreenFixture(t *testing.T) {
 	gt := reflect.TypeOf(goodDecision{})
 	for i := range gt.NumField() {
 		sf := gt.Field(i)
-		assert.NotEmpty(t, sf.PkgPath,
+		assert.NotEmpty(
+			t, sf.PkgPath,
 			"GREEN fixture self-check: field[%d] %q must be unexported (PkgPath non-empty); "+
 				"if this fails the check is broken",
 			i, sf.Name,
@@ -281,7 +320,8 @@ func TestAuthzDecisionSealedFieldFrozen01_FieldNames(t *testing.T) {
 		wantNames[i] = f.name
 	}
 
-	assert.Equal(t, wantNames, gotNames,
+	assert.Equal(
+		t, wantNames, gotNames,
 		"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01: Decision field names (ordered) = %v, want %v "+
 			"(a rename or reorder here breaks the semantic contract; update frozenDecisionFields)",
 		gotNames, wantNames,
@@ -303,7 +343,8 @@ func TestAuthzDecisionSealedFieldFrozen01_AllFieldsUnexported(t *testing.T) {
 		}
 	}
 
-	assert.Empty(t, exported,
+	assert.Empty(
+		t, exported,
 		"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01: exported Decision fields = %v — "+
 			"any exported field allows `authz.Decision{%s: ...}` outside pkg/authz "+
 			"(P0 authz-bypass); re-seal by lowercasing the field name",
@@ -339,7 +380,8 @@ func TestAuthzDecisionSealedFieldFrozen01_ConstructorSet(t *testing.T) {
 
 	// The reflect type of what Allow() returns must be authz.Decision.
 	allowType := fmt.Sprintf("%T", allowDec)
-	assert.Equal(t, "authz.Decision", allowType,
+	assert.Equal(
+		t, "authz.Decision", allowType,
 		"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01 constructor: Allow() return type = %s, want authz.Decision",
 		allowType,
 	)
@@ -391,7 +433,8 @@ func TestAuthzObligationsFieldsFrozen(t *testing.T) {
 	require.Equal(t, reflect.Struct, ot.Kind(), "authz.Obligations must be a struct")
 
 	// Axis 1: exact field count.
-	require.Equal(t, len(frozenObligationsFields), ot.NumField(),
+	require.Equal(
+		t, len(frozenObligationsFields), ot.NumField(),
 		"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01 (Obligations): authz.Obligations NumField = %d, want %d "+
 			"(adding a field silently extends the obligation contract without updating PEP consumers; "+
 			"removing one drops an obligation axis; update frozenObligationsFields and pkg/authz/doc.go together)",
@@ -402,20 +445,23 @@ func TestAuthzObligationsFieldsFrozen(t *testing.T) {
 		sf := ot.Field(i)
 
 		// Axis 2a: field name.
-		assert.Equal(t, want.name, sf.Name,
+		assert.Equal(
+			t, want.name, sf.Name,
 			"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01 (Obligations): Obligations field[%d] name = %q, want %q",
 			i, sf.Name, want.name,
 		)
 
 		// Axis 2b: field type identity.
-		assert.Equal(t, want.typeName, sf.Type.String(),
+		assert.Equal(
+			t, want.typeName, sf.Type.String(),
 			"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01 (Obligations): Obligations.%s type = %q, want %q",
 			sf.Name, sf.Type.String(), want.typeName,
 		)
 
 		// Axis 3: all fields must be exported (PkgPath == "").
 		exported := sf.PkgPath == ""
-		assert.Equal(t, want.exported, exported,
+		assert.Equal(
+			t, want.exported, exported,
 			"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01 (Obligations): Obligations.%s exported = %v, want %v "+
 				"(unexported Obligations field would break PEP construction; re-export by uppercasing)",
 			sf.Name, exported, want.exported,
@@ -567,7 +613,8 @@ func TestAuthzDecisionConstructorClosedSet01(t *testing.T) {
 		}
 	}
 
-	assert.Empty(t, violations,
+	assert.Empty(
+		t, violations,
 		"AUTHZ-DECISION-CONSTRUCTOR-CLOSEDSET-01: exported pkg/authz funcs returning Decision "+
 			"outside closed set {Allow, Deny}: %v — add a new constructor only if it validates "+
 			"obligations via Obligations.Validate() and is approved in ai-robust review; "+
@@ -696,7 +743,8 @@ func TestAuthzFieldMaskFieldsFrozen(t *testing.T) {
 	require.Equal(t, reflect.Struct, ft.Kind(), "authz.FieldMask must be a struct")
 
 	// Axis 1: exact field count.
-	require.Equal(t, len(frozenFieldMaskFields), ft.NumField(),
+	require.Equal(
+		t, len(frozenFieldMaskFields), ft.NumField(),
 		"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01 (FieldMask): authz.FieldMask NumField = %d, want %d "+
 			"(adding a field changes the masking contract; update frozenFieldMaskFields and pkg/authz/doc.go together)",
 		ft.NumField(), len(frozenFieldMaskFields),
@@ -706,23 +754,138 @@ func TestAuthzFieldMaskFieldsFrozen(t *testing.T) {
 		sf := ft.Field(i)
 
 		// Axis 2a: field name.
-		assert.Equal(t, want.name, sf.Name,
+		assert.Equal(
+			t, want.name, sf.Name,
 			"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01 (FieldMask): FieldMask field[%d] name = %q, want %q",
 			i, sf.Name, want.name,
 		)
 
 		// Axis 2b: field type identity.
-		assert.Equal(t, want.typeName, sf.Type.String(),
+		assert.Equal(
+			t, want.typeName, sf.Type.String(),
 			"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01 (FieldMask): FieldMask.%s type = %q, want %q",
 			sf.Name, sf.Type.String(), want.typeName,
 		)
 
 		// Axis 3: all fields must be exported.
 		exported := sf.PkgPath == ""
-		assert.Equal(t, want.exported, exported,
+		assert.Equal(
+			t, want.exported, exported,
 			"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01 (FieldMask): FieldMask.%s exported = %v, want %v "+
 				"(unexported FieldMask field would break PEP construction; re-export by uppercasing)",
 			sf.Name, exported, want.exported,
 		)
 	}
+}
+
+// --- AUTHZ-DECISION-ALLOW-DENY-CALLER-01 (Hard downstream caller-allowlist) ---
+
+// authzPkgPath is the pkg/authz import path, anchored to PlatformModulePath.
+const authzPkgPath = PlatformModulePath + "/pkg/authz"
+
+// allowDenyCallerAllowlist is the set of module-relative production files allowed
+// to reference authz.Allow / authz.Deny. PR-7 (#1345): the sole ABAC PDP engine
+// file is the only sanctioned construction site of an authorization verdict.
+var allowDenyCallerAllowlist = map[string]struct{}{
+	"cells/accesscore/slices/authorizationdecide/evaluator.go": {},
+}
+
+// TestAuthzDecisionAllowDenyCaller01 asserts every production reference to
+// authz.Allow / authz.Deny sits in allowDenyCallerAllowlist, and that the
+// allowlist entry is live (anti-vacuity reverse self-check).
+func TestAuthzDecisionAllowDenyCaller01(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+	observed := map[string]struct{}{}
+	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
+		if !p.Typed() {
+			return nil
+		}
+		return scanAllowDenyCallers(p, observed)
+	})
+	for f := range allowDenyCallerAllowlist {
+		if _, seen := observed[f]; !seen {
+			diags = append(diags, Diagnostic{
+				Message: fmt.Sprintf(
+					"AUTHZ-DECISION-ALLOW-DENY-CALLER-01: allowlist entry %q is STALE — no live authz.Allow/Deny "+
+						"reference observed. Either the scanner regressed or the call was removed; drop the dead "+
+						"allowlist entry so it cannot become a silent verdict-forge slot.", f,
+				),
+			})
+		}
+	}
+	Report(t, "AUTHZ-DECISION-ALLOW-DENY-CALLER-01", diags)
+}
+
+// scanAllowDenyCallers flags every reference to authz.Allow / authz.Deny outside
+// allowDenyCallerAllowlist, recording observed allowlisted files for anti-vacuity.
+func scanAllowDenyCallers(p *Pass, observed map[string]struct{}) []Diagnostic {
+	var d []Diagnostic
+	for _, file := range p.Files {
+		rel := p.Rel(file)
+		EachInSubtree[ast.Ident](file, func(id *ast.Ident) {
+			if !isAuthzAllowOrDenyRef(p.TypesInfo, id) {
+				return
+			}
+			if _, allowed := allowDenyCallerAllowlist[rel]; allowed {
+				observed[rel] = struct{}{}
+				return
+			}
+			pos := p.Fset.Position(id.Pos())
+			d = append(d, Diagnostic{
+				Rel:  rel,
+				Line: pos.Line,
+				Message: fmt.Sprintf(
+					"AUTHZ-DECISION-ALLOW-DENY-CALLER-01: authz.%s is referenced from %s, which is not the sanctioned "+
+						"PDP engine. Only the authorizationdecide ABAC evaluator (evaluator.go) may construct an "+
+						"authz.Decision; forging an authorization verdict elsewhere is a P0 bypass. If this IS a new "+
+						"sanctioned engine, add it to allowDenyCallerAllowlist with rationale.", id.Name, rel,
+				),
+			})
+		})
+	}
+	return d
+}
+
+// isAuthzAllowOrDenyRef resolves an identifier USE to authz.Allow or authz.Deny
+// via go/types (info.Uses): matches package-qualified, import-aliased, and
+// dot-imported forms (all resolve to the same *types.Func).
+func isAuthzAllowOrDenyRef(info *types.Info, id *ast.Ident) bool {
+	if id.Name != "Allow" && id.Name != "Deny" {
+		return false
+	}
+	fn, ok := info.Uses[id].(*types.Func)
+	if !ok {
+		return false
+	}
+	return fn.Pkg() != nil && fn.Pkg().Path() == authzPkgPath
+}
+
+// TestAuthzDecisionAllowDenyCaller01_RedFixture is the reverse self-check: the
+// fixture references authz.Allow / authz.Deny from a package that is NOT on the
+// allowlist; the detector must flag it. A 0 result means the detector regressed.
+func TestAuthzDecisionAllowDenyCaller01_RedFixture(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+	root := findModuleRoot(t)
+	modPath, err := moduleImportPath(root)
+	require.NoError(t, err, "read module path from go.mod")
+	fixturePkg := modPath + "/tools/archtest/internal/authzdecisioncallerfixture"
+	pattern := "./tools/archtest/internal/authzdecisioncallerfixture/..."
+
+	throwaway := map[string]struct{}{}
+	var found int
+	_ = Run(t, Fixture(FixtureOpts{Tests: false}, []string{pattern}), func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.Pkg.Path() != fixturePkg || p.TypesInfo == nil {
+			return nil
+		}
+		found += len(scanAllowDenyCallers(p, throwaway))
+		return nil
+	})
+	assert.GreaterOrEqual(t, found, 1,
+		"RED fixture self-check FAILED: detector must flag an authz.Allow/Deny reference outside the allowlist")
 }

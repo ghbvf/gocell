@@ -54,3 +54,37 @@ func TestRowScope_String(t *testing.T) {
 		assert.Equal(t, tc.want, tc.in.String())
 	}
 }
+
+// TestRowScope_StrictnessOrdering locks the numeric ordering that Narrower (and
+// any obligation-merge consumer) relies on: self < device < tenant < all, i.e.
+// a smaller value is a stricter scope. Reordering or inserting an out-of-order
+// constant must break this test before it silently changes merge semantics.
+func TestRowScope_StrictnessOrdering(t *testing.T) {
+	t.Parallel()
+	assert.True(t,
+		RowScopeSelf < RowScopeDevice && RowScopeDevice < RowScopeTenant && RowScopeTenant < RowScopeAll,
+		"RowScope numeric order must encode strictness self<device<tenant<all (Narrower depends on it)")
+}
+
+func TestRowScope_Narrower(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		a, b RowScope
+		want RowScope
+	}{
+		{"self vs tenant → self", RowScopeSelf, RowScopeTenant, RowScopeSelf},
+		{"tenant vs self → self", RowScopeTenant, RowScopeSelf, RowScopeSelf},
+		{"device vs all → device", RowScopeDevice, RowScopeAll, RowScopeDevice},
+		{"equal → same", RowScopeTenant, RowScopeTenant, RowScopeTenant},
+		{"zero treated as no-constraint (other wins)", 0, RowScopeTenant, RowScopeTenant},
+		{"other zero → rs wins", RowScopeSelf, 0, RowScopeSelf},
+		{"both zero → zero", 0, 0, 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, tc.a.Narrower(tc.b))
+		})
+	}
+}

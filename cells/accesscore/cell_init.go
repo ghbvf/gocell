@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/adminprovision"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/authzmutate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/authorizationdecide"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/configreceive"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/identitymanage"
@@ -311,8 +312,13 @@ func (c *AccessCore) initSlices() error {
 	c.logoutHandler = sessionlogout.NewHandler(logoutSvc, DefaultRefreshMaxAge)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(sessionlogout.SliceMetadata()))
 
-	// authorization-decide
-	authzSvc, err := authorizationdecide.NewService(c.roleRepo, c.logger,
+	// authorization-decide (ABAC PDP engine, #1345 PR-7). The cell owns its
+	// policy store: the in-memory PolicyRepository is the only implementation in
+	// PR-7 (mem in both demo and PG modes). The injectable PG policy store lands
+	// in PR-8 (#1346), which will route this through the bundle like the other
+	// repos; until then there is no mem-vs-PG fork to make.
+	policyRepo := mem.NewPolicyRepository()
+	authzSvc, err := authorizationdecide.NewService(c.clk, policyRepo, c.logger,
 		authorizationdecide.WithTxManager(c.txRunner))
 	if err != nil {
 		return err

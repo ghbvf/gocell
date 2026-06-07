@@ -36,6 +36,14 @@ PR-6 把授权**决策词汇表**（`auth.Authorizer` 返回的 `Decision`/oblig
 
 来源（PR-6 实际 WebFetch）：`cedar-policy/cedar-go` types.go / authorize.go（`Decision bool`、`Authorize()→(Decision,Diagnostic)`）；XACML 3.0 OASIS core §3.4/§3.5/§7.16；`casbin/casbin` enforcer.go（`EnforceEx`、反射 rvals）；`openfga/go-sdk` CheckResponse。
 
+**PR-7 落地偏离 spec 字面（#1345，与用户对齐 2026-06-07）**：
+
+- **T7.8 policy applicability = condition-based evaluate-all**（偏离 tasks.md T7.8 字面「Cedar-style `Rule.Target` vs external route binding」二选其一）。PR-6 刻意未建一等 `Rule.Target`；PR-7 评估器不引入独立的 target-matching 阶段，而是 `ListByTenant` 全量加载租户 policy、对每条 rule 评估 conditions，适用性**由 conditions 表达**。理由：YAGNI + 优雅简洁（无真实 action/resource-type 消费者前不建一等 target），与 PR-6「不引入一等 target」一致。一等 `Rule.Target` 待真实需求再加。`condition.go` AttributeSource godoc 同步重写（删去原「评估器 maps request 到 applicable policy set **before** evaluating conditions」表述——该两阶段描述在 evaluate-all 下为假）。
+- **T7.4 `Authorize` infra 失败返回单信号 `(authz.Decision{}, err)`**（零值 Decision 即 fail-closed `IsAllow()==false`，不另调 `Deny()`）；`authz.Allow`/`Deny` 仅用于真 policy 裁决，使 caller-allowlist `AUTHZ-DECISION-ALLOW-DENY-CALLER-01` 收口更紧（infra 错误路径不触及构造器）。store 失败 → err 携 `KindUnavailable`（→503）；tenant 缺失 → `KindPermissionDenied`（→403）。
+- **T7.5 三档 archtest 落地形态**：`AUTHZ-EVAL-CLOCK-INJECTED-01`（Medium，禁引擎包 `time.Now/Since/Until`）+ `AUTHZ-EVAL-ATTR-NOTFOUND-GUARD-01`（Medium，禁 `resolve()` 丢弃 found bool）为静态 archtest；「policy err→deny」**刻意不立 archtest**（ai-robust「Soft 严禁立项」）——由 fail-closed by-construction（`Allow` 唯一 callsite 在 permit-wins 分支，infra 错误路径走零值 Decision，结构上不可 allow-on-error）+ runtime store-down 测试强制。
+- **D3 resource 属性来源推迟 PR-9（#1347）**：PR-7 评估器结构上支持三 source（Subject/Resource/Environment），但只**解析** subject（trusted principal claims）+ environment（注入 clock）；resource 条件因无 `GetAttributes` 数据源 fail-closed（missing → 不满足）。已在 #1347 留评论记录此 carve-out。
+- **RBAC 纯替换**：`authorizationdecide` 删 `roleRepo`、改持 `policyRepo` + `clk`，由 RBAC role-check 变为 ABAC policy 评估（dormant authorizer，零生产消费者，无活跃行为影响）。policy store 为 cell 自有 mem（PR-7 唯一实现，PG store + 注入留 PR-8 #1346）。
+
 ## 2. GoCell 现状（关键缺口）
 
 1. **TenantID 零生产来源**：ctxkey/wire/DB 列都有位置，`injectPrincipalCtxKeys` 明确「no source on develop」，所有 repo 查询无 tenant 谓词。

@@ -9,6 +9,7 @@ import (
 	"crypto/rsa"
 
 	kauth "github.com/ghbvf/gocell/kernel/auth"
+	"github.com/ghbvf/gocell/pkg/authz"
 )
 
 // TestServiceContext creates a context carrying a service Principal with the
@@ -55,12 +56,30 @@ type Claims = kauth.Claims
 // attacks (RFC 8725 §3.11).
 type IntentTokenVerifier = kauth.IntentTokenVerifier
 
-// Authorizer checks whether a subject is allowed to perform an action on a resource.
-// Implementations may use RBAC, ABAC, or external policy engines.
+// Authorizer is the PDP (policy decision point) contract: it evaluates whether
+// the subject may perform action on resource and returns a sealed authz.Decision
+// (effect + obligations). Implementations may use ABAC, RBAC, or external policy
+// engines; the production implementation is the accesscore authorizationdecide
+// ABAC engine.
+//
+// Fail-closed contract: when err != nil the returned Decision is ALWAYS non-Allow
+// (the zero authz.Decision{} has IsAllow()==false), so a caller may treat any
+// error as a deny and never has to inspect the Decision on the error path. The
+// error's errcode Kind classifies the failure (e.g. KindUnavailable when the
+// policy store is unreachable → HTTP 503; KindPermissionDenied when the request
+// carries no tenant scope). When err == nil the Decision is the policy verdict.
+//
+// PR-7 (#1345) note for wiring (PR-10): as of the ABAC engine landing, the
+// subject/resource/action parameters do NOT themselves gate evaluation — the
+// engine evaluates the tenant's policy conditions against the authenticated
+// principal's attributes (from ctx) plus environment attributes. subject is
+// carried for observability; resource/action are reserved for PR-9 resource-
+// attribute lookup. Do not assume coarse-grained (subject,resource,action)
+// matching is enforced yet. Decision.Reason() carries a deny diagnostic; the
+// current PEP (middleware) does not yet surface it — wire it into deny logs when
+// connecting business endpoints.
 type Authorizer interface {
-	// Authorize returns true if the subject is authorized to perform the
-	// given action on the resource.
-	Authorize(ctx context.Context, subject, resource, action string) (bool, error)
+	Authorize(ctx context.Context, subject, resource, action string) (authz.Decision, error)
 }
 
 // SigningKeyProvider supplies the active signing key for JWT issuance.
