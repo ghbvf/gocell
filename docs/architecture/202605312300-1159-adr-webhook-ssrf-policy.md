@@ -209,14 +209,18 @@ enum suitable for a future `{reason}` metric label —
 `errors.As(err, &ec) && ec.Code == ErrWebhookSSRFBlocked` at the
 `Transport`/`CheckRedirect` error boundary.
 
-**`WithAllowLoopback` production guard.** The option is dev/CI-only and guarded
-today only by godoc (a Soft constraint). PR-5's wiring layer (corebundle /
-assembly) must not pass it; a Medium archtest banning `WithAllowLoopback`
-references in non-`_test.go` production files should land with PR-5 once there is
-a production callsite to guard (tracked: gh #1378). The upstream
-holder-axis Hard-ization remains a won't-do permanent ceiling (#1375); PR-5 adds
-the dispatcher-specific `Dispatcher.client` typed-field lock as the practical
-upstream tightening.
+**`WithAllowLoopback` production guard.** The option is dev/CI-only.
+**Amendment 2026-06-07 (#1378):** the prior Soft godoc-only constraint is now a
+**Medium archtest** `WEBHOOK-ALLOW-LOOPBACK-PROD-BAN-01` — any reference to
+`webhook.WithAllowLoopback` in a non-`_test.go` production file fails CI (today
+vacuous green: every caller is a kernel/webhook same-package test). The wiring
+layer (corebundle / assembly) must not pass it. The stronger Hard form —
+unexporting to `withAllowLoopback` so an external reference is a Go compile error
+(achievable today, all callers being same-package tests) — is deliberately
+deferred to preserve the dev escape hatch / future cross-package integration
+tests, tracked at gh #1730 and named in the archtest godoc per the AI-robust
+§Funnel 双向锁评级 requirement. The SSRF holder-axis Hard-ization (the dispatcher
+egress holder) remains the separate won't-do permanent ceiling #1375.
 
 ## References
 

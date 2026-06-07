@@ -22,15 +22,15 @@ const (
 	signedContentSep = "."
 )
 
-// Signer produces signature [Headers] for an outbound webhook delivery. The
+// Signer produces a sealed [SignedHeaders] for an outbound webhook delivery. The
 // interface is sealed (unexported sealed() marker): the sole implementation is
 // the HMAC-SHA256 signer from [NewHMACSigner], so package-external types cannot
 // satisfy Signer (WEBHOOK-HMAC-FUNNEL-01/A3 upstream).
 type Signer interface {
-	// Sign computes the signature headers for payload at time ts under
+	// Sign computes the sealed signature headers for payload at time ts under
 	// deliveryID. ts is supplied by the caller (the dispatcher passes its
 	// clock's Now) so the signer holds no clock.
-	Sign(payload []byte, ts time.Time, deliveryID DeliveryID) (Headers, error)
+	Sign(payload []byte, ts time.Time, deliveryID DeliveryID) (SignedHeaders, error)
 	sealed()
 }
 
@@ -60,17 +60,17 @@ func (s *hmacSigner) LogValue() slog.Value {
 	return slog.GroupValue(slog.Any("source", s.source))
 }
 
-func (s *hmacSigner) Sign(payload []byte, ts time.Time, deliveryID DeliveryID) (Headers, error) {
+func (s *hmacSigner) Sign(payload []byte, ts time.Time, deliveryID DeliveryID) (SignedHeaders, error) {
 	if err := deliveryID.Validate(); err != nil {
-		return Headers{}, err
+		return SignedHeaders{}, err
 	}
 	timestamp := strconv.FormatInt(ts.Unix(), 10)
 	mac := computeMAC(s.source.secret, deliveryID, timestamp, payload)
 	signature := signatureSchemeV1 + signatureSchemeSep + base64.StdEncoding.EncodeToString(mac)
-	return Headers{
-		DeliveryID: deliveryID,
-		Timestamp:  timestamp,
-		Signature:  signature,
+	return SignedHeaders{
+		deliveryID: deliveryID,
+		timestamp:  timestamp,
+		signature:  signature,
 	}, nil
 }
 

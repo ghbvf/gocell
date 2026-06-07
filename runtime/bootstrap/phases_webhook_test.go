@@ -355,15 +355,15 @@ func TestPhase5DrainWebhookReceivers_EndToEnd(t *testing.T) {
 
 	buildReq := func(signature string) *http.Request {
 		req := httptest.NewRequest(http.MethodPost, whTestPathPattern, bytes.NewReader(body))
-		req.Header.Set("X-Delivery-Id", string(headers.DeliveryID))
-		req.Header.Set("X-Timestamp", headers.Timestamp)
+		req.Header.Set("X-Delivery-Id", string(headers.DeliveryID()))
+		req.Header.Set("X-Timestamp", headers.Timestamp())
 		req.Header.Set("X-Signature", signature)
 		return req
 	}
 
 	t.Run("valid_hmac_returns_200", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		rtr.Handler().ServeHTTP(rec, buildReq(headers.Signature))
+		rtr.Handler().ServeHTTP(rec, buildReq(headers.Signature()))
 		assert.Equal(t, http.StatusOK, rec.Code,
 			"valid HMAC at %s must return 200 (no double-prefix, handler reached)", whTestPathPattern)
 	})
@@ -421,9 +421,9 @@ func TestPhase5_WebhookListener_IsolatedFromPrimary(t *testing.T) {
 	require.NoError(t, err, "Sign")
 	newReq := func() *http.Request {
 		req := httptest.NewRequest(http.MethodPost, whTestPathPattern, bytes.NewReader(body))
-		req.Header.Set("X-Delivery-Id", string(headers.DeliveryID))
-		req.Header.Set("X-Timestamp", headers.Timestamp)
-		req.Header.Set("X-Signature", headers.Signature)
+		req.Header.Set("X-Delivery-Id", string(headers.DeliveryID()))
+		req.Header.Set("X-Timestamp", headers.Timestamp())
+		req.Header.Set("X-Signature", headers.Signature())
 		return req
 	}
 

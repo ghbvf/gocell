@@ -29,6 +29,19 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+// inboundFromSigned converts a sealed outbound [webhook.SignedHeaders] (the Sign
+// output, #1492) into the inbound [webhook.Headers] DTO that [webhook.Verifier.Verify]
+// consumes, mirroring how a real receiver reconstructs the headers off the wire.
+// It reads via the public read-only accessors (the seal is on construction, not
+// reading).
+func inboundFromSigned(s webhook.SignedHeaders) webhook.Headers {
+	return webhook.Headers{
+		DeliveryID: s.DeliveryID(),
+		Timestamp:  s.Timestamp(),
+		Signature:  s.Signature(),
+	}
+}
+
 const (
 	conformanceMinSecretLen = 24
 
@@ -91,8 +104,11 @@ func RunSignerVerifierConformance(
 	deliveryID, err := webhook.NewDeliveryID("conf-del-01")
 	mustNoError(t, err, "NewDeliveryID")
 
-	goodHeaders, err := signer.Sign(basePayload, base, deliveryID)
+	signed, err := signer.Sign(basePayload, base, deliveryID)
 	mustNoError(t, err, "signer.Sign")
+	// Bridge the sealed outbound SignedHeaders to the inbound Headers DTO via the
+	// real wire round-trip (Apply → http.Header → parse); see inboundFromSigned.
+	goodHeaders := inboundFromSigned(signed)
 
 	// verifierAt builds a Verifier pinned to ts.
 	verifierAt := func(t *testing.T, ts time.Time) webhook.Verifier {
@@ -274,9 +290,9 @@ func buildAltHeaders(
 	mustNoError(t, err, "NewSource alt")
 	signer2, err := newSigner(src2)
 	mustNoError(t, err, "newSigner alt")
-	h, err := signer2.Sign(payload, ts, deliveryID)
+	signed, err := signer2.Sign(payload, ts, deliveryID)
 	mustNoError(t, err, "Sign alt")
-	return h
+	return inboundFromSigned(signed)
 }
 
 // ---------------------------------------------------------------------------

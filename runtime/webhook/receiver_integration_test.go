@@ -121,9 +121,9 @@ func sendSignedRequest(t *testing.T, srv *httptest.Server, signer kwh.Signer, bo
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	req.Header.Set("X-Delivery-Id", string(headers.DeliveryID))
-	req.Header.Set("X-Timestamp", headers.Timestamp)
-	req.Header.Set("X-Signature", headers.Signature)
+	req.Header.Set("X-Delivery-Id", string(headers.DeliveryID()))
+	req.Header.Set("X-Timestamp", headers.Timestamp())
+	req.Header.Set("X-Signature", headers.Signature())
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -209,7 +209,7 @@ func TestIntegration_MissingHeader_Returns400(t *testing.T) {
 	headers, _ := signer.Sign(body, fixedNow, did)
 
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+testPathPattern, bytes.NewReader(body))
-	req.Header.Set("X-Delivery-Id", string(headers.DeliveryID))
+	req.Header.Set("X-Delivery-Id", string(headers.DeliveryID()))
 	// Intentionally omit X-Timestamp and X-Signature.
 
 	resp, err := http.DefaultClient.Do(req)
@@ -232,8 +232,8 @@ func TestIntegration_BadSignature_Returns401(t *testing.T) {
 	headers, _ := signer.Sign(body, fixedNow, did)
 
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+testPathPattern, bytes.NewReader(body))
-	req.Header.Set("X-Delivery-Id", string(headers.DeliveryID))
-	req.Header.Set("X-Timestamp", headers.Timestamp)
+	req.Header.Set("X-Delivery-Id", string(headers.DeliveryID()))
+	req.Header.Set("X-Timestamp", headers.Timestamp())
 	req.Header.Set("X-Signature", "v1,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=") // forged
 
 	resp, err := http.DefaultClient.Do(req)
@@ -252,7 +252,7 @@ func TestIntegration_StatusCodeCoverage(t *testing.T) {
 	tests := []struct {
 		name       string
 		deliveryID string
-		mutate     func(*http.Request, kwh.Headers)
+		mutate     func(*http.Request)
 		wantStatus int
 	}{
 		{
@@ -263,7 +263,7 @@ func TestIntegration_StatusCodeCoverage(t *testing.T) {
 		{
 			name:       "missing signature header -> 400",
 			deliveryID: "cov-400",
-			mutate: func(r *http.Request, _ kwh.Headers) {
+			mutate: func(r *http.Request) {
 				r.Header.Del("X-Signature")
 			},
 			wantStatus: http.StatusBadRequest,
@@ -271,7 +271,7 @@ func TestIntegration_StatusCodeCoverage(t *testing.T) {
 		{
 			name:       "invalid signature -> 401",
 			deliveryID: "cov-401",
-			mutate: func(r *http.Request, _ kwh.Headers) {
+			mutate: func(r *http.Request) {
 				r.Header.Set("X-Signature", "v1,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
 			},
 			wantStatus: http.StatusUnauthorized,
@@ -287,11 +287,11 @@ func TestIntegration_StatusCodeCoverage(t *testing.T) {
 			headers, _ := signer.Sign(body, fixedNow, did)
 
 			req, _ := http.NewRequest(http.MethodPost, srv.URL+testPathPattern, bytes.NewReader(body))
-			req.Header.Set("X-Delivery-Id", string(headers.DeliveryID))
-			req.Header.Set("X-Timestamp", headers.Timestamp)
-			req.Header.Set("X-Signature", headers.Signature)
+			req.Header.Set("X-Delivery-Id", string(headers.DeliveryID()))
+			req.Header.Set("X-Timestamp", headers.Timestamp())
+			req.Header.Set("X-Signature", headers.Signature())
 			if tt.mutate != nil {
-				tt.mutate(req, headers)
+				tt.mutate(req)
 			}
 
 			resp, err := http.DefaultClient.Do(req)
@@ -392,9 +392,9 @@ func TestIntegration_TimestampExpired_Returns401(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+testPathPattern, bytes.NewReader(body))
-	req.Header.Set("X-Delivery-Id", string(headers.DeliveryID))
-	req.Header.Set("X-Timestamp", headers.Timestamp)
-	req.Header.Set("X-Signature", headers.Signature)
+	req.Header.Set("X-Delivery-Id", string(headers.DeliveryID()))
+	req.Header.Set("X-Timestamp", headers.Timestamp())
+	req.Header.Set("X-Signature", headers.Signature())
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -445,9 +445,9 @@ func TestIntegration_ConcurrentDelivery_Returns409(t *testing.T) {
 	headers, _ := signer.Sign(body, fixedNow, did)
 
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+testPathPattern, bytes.NewReader(body))
-	req.Header.Set("X-Delivery-Id", string(headers.DeliveryID))
-	req.Header.Set("X-Timestamp", headers.Timestamp)
-	req.Header.Set("X-Signature", headers.Signature)
+	req.Header.Set("X-Delivery-Id", string(headers.DeliveryID()))
+	req.Header.Set("X-Timestamp", headers.Timestamp())
+	req.Header.Set("X-Signature", headers.Signature())
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

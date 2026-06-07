@@ -162,7 +162,8 @@ func TestNewSource(t *testing.T) {
 		}
 		after, err := signer.Sign([]byte("body"), ts, MustDeliveryID("d1"))
 		require.NoError(t, err)
-		assert.Equal(t, before.Signature, after.Signature)
+		// Same-package: compare SignedHeaders' unexported signature field.
+		assert.Equal(t, before.signature, after.signature)
 	})
 }
 
