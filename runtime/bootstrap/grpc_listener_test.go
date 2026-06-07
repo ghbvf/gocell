@@ -66,6 +66,7 @@ func buildAdapterServer(
 		authOpts = append(authOpts, interceptor.WithPublicMethod(authPublic))
 	}
 	reg := runtimegrpc.NewServiceRegistrar()
+	drain := runtimegrpc.NewDrainSignal()
 	chain := interceptor.NewUnaryChain(interceptor.Deps{
 		Collector:       metrics.NewInMemoryGRPCCollector(),
 		Clock:           clock.Real(),
@@ -79,6 +80,7 @@ func buildAdapterServer(
 		TLS:           adaptersgrpc.TLSConfig{AllowInsecure: true},
 		ServerOptions: []grpc.ServerOption{chain},
 		Registrar:     reg,
+		Drain:         drain, // Option 3: shared drain signal (#1153)
 	})
 	require.NoError(t, err)
 	if register != nil {

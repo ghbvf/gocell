@@ -43,11 +43,13 @@
 // #1152:
 //
 //	reg := runtimegrpc.NewServiceRegistrar()
-//	chain := interceptor.NewUnaryChain(interceptor.Deps{
-//	    ..., Registrar: reg, CellIDClosedSet: asm.CellIDs(),
-//	})
+//	drain := runtimegrpc.NewDrainSignal() // shared with the stream chain (#1153)
+//	deps := interceptor.Deps{..., Registrar: reg, CellIDClosedSet: asm.CellIDs(), Drain: drain}
 //	srv, _ := adaptersgrpc.New(adaptersgrpc.Config{
-//	    ..., ServerOptions: []grpc.ServerOption{chain}, Registrar: reg,
+//	    ..., Registrar: reg, Drain: drain,
+//	    ServerOptions: []grpc.ServerOption{
+//	        interceptor.NewUnaryChain(deps), interceptor.NewStreamChain(deps),
+//	    },
 //	})
 //	bootstrap.New(clk,
 //	    bootstrap.WithGRPCListener(cell.PrimaryListener, srv, ":9000"),

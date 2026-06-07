@@ -50,6 +50,7 @@ var _ GRPCServiceRegistrar = (*runtimegrpc.ServiceRegistrar)(nil)
 func buildDrainAdapterServer(t *testing.T) *adaptersgrpc.Server {
 	t.Helper()
 	reg := runtimegrpc.NewServiceRegistrar()
+	drain := runtimegrpc.NewDrainSignal()
 	chain := interceptor.NewUnaryChain(interceptor.Deps{
 		Collector:       metrics.NewInMemoryGRPCCollector(),
 		Clock:           clock.Real(),
@@ -63,6 +64,7 @@ func buildDrainAdapterServer(t *testing.T) *adaptersgrpc.Server {
 		TLS:           adaptersgrpc.TLSConfig{AllowInsecure: true},
 		ServerOptions: []grpc.ServerOption{chain},
 		Registrar:     reg,
+		Drain:         drain, // Option 3: shared drain signal (#1153)
 	})
 	require.NoError(t, err)
 	return srv
