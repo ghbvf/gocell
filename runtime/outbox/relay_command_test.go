@@ -63,7 +63,8 @@ func claimedEntry(t *testing.T, id, topic, payload string) ClaimedEntry {
 // seedPendingCommand seeds a pending command entry (RoutingTopic == topic) into
 // the minimalStore (defined in relay_internal_test.go, same package). The entry
 // carries a full command idempotency identity so ClaimKeyFromEntry succeeds.
-func (s *minimalStore) seedPendingCommand(id, topic, payload string) {
+func (s *minimalStore) seedPendingCommand(topic, payload string) {
+	const id = "c1"
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	past := time.Now().Add(relayStaleAge)
@@ -140,7 +141,7 @@ func TestPollOnce_CommandDispatchSettlesPublished(t *testing.T) {
 	t.Parallel()
 	const cmdID = "command.test.do.v1"
 	store := newMinimalStore()
-	store.seedPendingCommand("c1", cmdID, `{"deviceId":"d1"}`)
+	store.seedPendingCommand(cmdID, `{"deviceId":"d1"}`)
 
 	var called int
 	r := NewRelay(clock.Real(), store, &recordingPublisher{}, RelayConfig{}.WithDefaults())
@@ -163,7 +164,7 @@ func TestPollOnce_CommandDispatchRetriesOnError(t *testing.T) {
 	t.Parallel()
 	const cmdID = "command.test.fail.v1"
 	store := newMinimalStore()
-	store.seedPendingCommand("c1", cmdID, `{}`)
+	store.seedPendingCommand(cmdID, `{}`)
 
 	r := NewRelay(clock.Real(), store, &recordingPublisher{},
 		RelayConfig{MaxAttempts: 5, BaseRetryDelay: time.Millisecond, MaxRetryDelay: time.Second}.WithDefaults())

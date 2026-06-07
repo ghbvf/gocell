@@ -62,13 +62,17 @@ func noIdentityEntry(t *testing.T, id, topic string) ClaimedEntry {
 	return ClaimedEntry{Entry: e, LeaseID: "lease-1"}
 }
 
-func relayWithDispatch(cmdID string, fn command.AsyncDispatchFunc, claimer idempotency.Claimer) (*Relay, *recordingPublisher) {
-	pub := &recordingPublisher{}
+// testCmdID is the single command topic every dispatch test seeds and routes;
+// relayWithDispatch builds its dispatcher map against it (callers seed entries
+// with the same value via their local cmdID const).
+const testCmdID = "command.test.do.v1"
+
+func relayWithDispatch(fn command.AsyncDispatchFunc, claimer idempotency.Claimer) *Relay {
 	r := &Relay{}
-	r.pub = pub
+	r.pub = &recordingPublisher{}
 	r.WithCommandDispatch(command.NewRegistry(),
-		map[command.CommandID]command.AsyncDispatchFunc{command.CommandID(cmdID): fn}, claimer)
-	return r, pub
+		map[command.CommandID]command.AsyncDispatchFunc{command.CommandID(testCmdID): fn}, claimer)
+	return r
 }
 
 // TestDispatchCommand_ClaimAcquired_DispatchesAndCarriesReceipt asserts a fresh
@@ -80,7 +84,7 @@ func TestDispatchCommand_ClaimAcquired_DispatchesAndCarriesReceipt(t *testing.T)
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: rcpt}
 
 	var dispatched int
-	r, _ := relayWithDispatch(cmdID,
+	r := relayWithDispatch(
 		func(context.Context, *command.Registry, kout.Entry) error { dispatched++; return nil },
 		claimer)
 
@@ -100,7 +104,7 @@ func TestDispatchCommand_ClaimDone_DedupsWithoutDispatch(t *testing.T) {
 	claimer := &fakeClaimer{state: idempotency.ClaimDone}
 
 	var dispatched int
-	r, _ := relayWithDispatch(cmdID,
+	r := relayWithDispatch(
 		func(context.Context, *command.Registry, kout.Entry) error { dispatched++; return nil },
 		claimer)
 
@@ -118,7 +122,7 @@ func TestDispatchCommand_ClaimBusy_Transient(t *testing.T) {
 	const cmdID = "command.test.do.v1"
 	claimer := &fakeClaimer{state: idempotency.ClaimBusy}
 
-	r, _ := relayWithDispatch(cmdID,
+	r := relayWithDispatch(
 		func(context.Context, *command.Registry, kout.Entry) error { return nil },
 		claimer)
 
@@ -135,7 +139,7 @@ func TestDispatchCommand_ClaimInfraError_Transient(t *testing.T) {
 	const cmdID = "command.test.do.v1"
 	claimer := &fakeClaimer{claimErr: errors.New("redis down")}
 
-	r, _ := relayWithDispatch(cmdID,
+	r := relayWithDispatch(
 		func(context.Context, *command.Registry, kout.Entry) error { return nil },
 		claimer)
 
@@ -154,7 +158,7 @@ func TestDispatchCommand_MissingIdentity_Permanent(t *testing.T) {
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: &spyReceipt{}}
 
 	var dispatched int
-	r, _ := relayWithDispatch(cmdID,
+	r := relayWithDispatch(
 		func(context.Context, *command.Registry, kout.Entry) error { dispatched++; return nil },
 		claimer)
 
@@ -173,7 +177,7 @@ func TestPollOnce_ClaimDone_DedupSettlesPublished(t *testing.T) {
 	t.Parallel()
 	const cmdID = "command.test.do.v1"
 	store := newMinimalStore()
-	store.seedPendingCommand("c1", cmdID, `{}`)
+	store.seedPendingCommand(cmdID, `{}`)
 
 	var dispatched int
 	r := NewRelay(clock.Real(), store, &recordingPublisher{}, RelayConfig{}.WithDefaults())
@@ -196,7 +200,7 @@ func TestWriteBack_CommitsReceiptOnSuccess(t *testing.T) {
 	t.Parallel()
 	const cmdID = "command.test.do.v1"
 	store := newMinimalStore()
-	store.seedPendingCommand("c1", cmdID, `{}`)
+	store.seedPendingCommand(cmdID, `{}`)
 
 	rcpt := &spyReceipt{}
 	r := NewRelay(clock.Real(), store, &recordingPublisher{}, RelayConfig{}.WithDefaults())
@@ -216,7 +220,7 @@ func TestWriteBack_ReleasesReceiptOnFailure(t *testing.T) {
 	t.Parallel()
 	const cmdID = "command.test.do.v1"
 	store := newMinimalStore()
-	store.seedPendingCommand("c1", cmdID, `{}`)
+	store.seedPendingCommand(cmdID, `{}`)
 
 	rcpt := &spyReceipt{}
 	r := NewRelay(clock.Real(), store, &recordingPublisher{},
