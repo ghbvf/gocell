@@ -26,3 +26,21 @@ func registerCounterVec(
 	*registered = append(*registered, cv)
 	return cv, nil
 }
+
+// registerGaugeVec registers one gauge and appends it to *registered on success.
+// On failure it tears down every previously-registered collector LIFO (same
+// atomic-registration discipline as registerCounterVec) and wraps the error with
+// the metric name.
+func registerGaugeVec(
+	p kernelmetrics.Provider, opts kernelmetrics.GaugeOpts, registered *[]kernelmetrics.Collector,
+) (kernelmetrics.GaugeVec, error) {
+	gv, err := p.GaugeVec(opts)
+	if err != nil {
+		for i := len(*registered) - 1; i >= 0; i-- {
+			_ = p.Unregister((*registered)[i])
+		}
+		return nil, fmt.Errorf("runtime/observability/metrics: register %s: %w", opts.Name, err)
+	}
+	*registered = append(*registered, gv)
+	return gv, nil
+}

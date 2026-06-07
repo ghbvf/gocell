@@ -257,3 +257,82 @@ func TestReadWorkUseDirs_SymlinkEscape(t *testing.T) {
 		}
 	})
 }
+
+func TestReadReplaceExclude(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		goMod        string // "" means do not write go.mod
+		wantReplaces int
+		wantExcludes int
+		wantErr      bool
+	}{
+		{
+			name:  "clean module has neither",
+			goMod: "module github.com/acme/svc\n\ngo 1.25\n\nrequire github.com/x/y v1.2.3\n",
+		},
+		{
+			name:         "single local replace",
+			goMod:        "module github.com/acme/svc\n\ngo 1.25\n\nrequire github.com/x/y v1.2.3\n\nreplace github.com/x/y => ../../y\n",
+			wantReplaces: 1,
+		},
+		{
+			name:         "versioned module replace",
+			goMod:        "module m\n\ngo 1.25\n\nreplace github.com/x/y v1.0.0 => github.com/x/y v1.0.1\n",
+			wantReplaces: 1,
+		},
+		{
+			name:         "exclude only",
+			goMod:        "module m\n\ngo 1.25\n\nexclude github.com/x/y v1.2.3\n",
+			wantExcludes: 1,
+		},
+		{
+			name: "block replace and block exclude",
+			goMod: "module m\n\ngo 1.25\n\n" +
+				"replace (\n\tgithub.com/a/b => ../b\n\tgithub.com/c/d v1.0.0 => github.com/c/d v1.0.1\n)\n\n" +
+				"exclude (\n\tgithub.com/x/y v1.0.0\n\tgithub.com/x/y v1.1.0\n)\n",
+			wantReplaces: 2,
+			wantExcludes: 2,
+		},
+		{
+			name:    "missing go.mod",
+			goMod:   "",
+			wantErr: true,
+		},
+		{
+			name:    "malformed go.mod (unterminated block)",
+			goMod:   "module m\n\ngo 1.25\n\nrequire (\n",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			if tt.goMod != "" {
+				if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(tt.goMod), 0o600); err != nil {
+					t.Fatalf("write go.mod: %v", err)
+				}
+			}
+
+			replaces, excludes, err := gomodutil.ReadReplaceExclude(root)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ReadReplaceExclude(%q) = (%v, %v), want error", root, replaces, excludes)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ReadReplaceExclude(%q) unexpected error: %v", root, err)
+			}
+			if len(replaces) != tt.wantReplaces {
+				t.Errorf("ReadReplaceExclude(%q) replaces = %d (%v), want %d", root, len(replaces), replaces, tt.wantReplaces)
+			}
+			if len(excludes) != tt.wantExcludes {
+				t.Errorf("ReadReplaceExclude(%q) excludes = %d (%v), want %d", root, len(excludes), excludes, tt.wantExcludes)
+			}
+		})
+	}
+}

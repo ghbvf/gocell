@@ -158,3 +158,69 @@ func checkWorkUseDirSymlink(root, rootResolved, raw, cleaned string) error {
 		raw, resolved, rootResolved,
 	)
 }
+
+// ReplaceDirective is one `replace` directive from a go.mod, rendered for
+// human-readable diagnostics (e.g. "github.com/ghbvf/gocell => ../../").
+type ReplaceDirective struct {
+	Old string // replaced module, "path" or "path@version"
+	New string // replacement: a filesystem path, or "path@version"
+}
+
+// ExcludeDirective is one `exclude` directive from a go.mod ("path@version").
+type ExcludeDirective struct {
+	Path    string
+	Version string
+}
+
+// ReadReplaceExclude reads root/go.mod and returns its replace and exclude
+// directives. A module carrying either is NOT cleanly consumable as an external
+// dependency: a downstream `go get`/`go build` ignores the directives (so a
+// replace pointing at a local path references code the consumer cannot resolve),
+// and `go install pkg@version` of any package in the module is rejected outright
+// by the toolchain when the module's go.mod contains replace or exclude
+// directives.
+//
+// It uses golang.org/x/mod/modfile (the canonical parser), so it is robust
+// against comments and block/single-line forms. Returns an error when go.mod is
+// absent/unreadable or malformed (fail-closed: callers must not treat a parse
+// failure as "no directives").
+func ReadReplaceExclude(root string) ([]ReplaceDirective, []ExcludeDirective, error) {
+	p := filepath.Clean(filepath.Join(root, "go.mod"))
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read go.mod: %w", err)
+	}
+	mf, err := modfile.Parse(p, data, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse go.mod at %s: %w", root, err)
+	}
+	replaces := make([]ReplaceDirective, 0, len(mf.Replace))
+	for _, r := range mf.Replace {
+		// Defensive: modfile.Parse does not emit nil directive entries; the guard
+		// future-proofs against library behavior changes (hence not unit-tested).
+		if r == nil {
+			continue
+		}
+		replaces = append(replaces, ReplaceDirective{
+			Old: formatModuleVersion(r.Old),
+			New: formatModuleVersion(r.New),
+		})
+	}
+	excludes := make([]ExcludeDirective, 0, len(mf.Exclude))
+	for _, e := range mf.Exclude {
+		if e == nil {
+			continue
+		}
+		excludes = append(excludes, ExcludeDirective{Path: e.Mod.Path, Version: e.Mod.Version})
+	}
+	return replaces, excludes, nil
+}
+
+// formatModuleVersion renders a module.Version as "path" (a filesystem
+// replacement target carries no version) or "path@version".
+func formatModuleVersion(mv module.Version) string {
+	if mv.Version == "" {
+		return mv.Path
+	}
+	return mv.Path + "@" + mv.Version
+}

@@ -32,6 +32,15 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # nightly via archtest-nightly.yml (full 24-shard suite) + local `make verify`
 # (verify-archtest.sh full sweep). #1053 review F6 (add to PR-time) reverted for
 # CI stability — the heavy whole-module form-lock belongs with the nightly suite.
+#
+# ROOT-MODULE-NO-REPLACE-01 (TestRootModuleNoReplace01 + …NegativeControl) IS in
+# this PR-time set even though governance.yml VERIFY_SKIPs the full archtest sweep:
+# it guards a user-visible release-surface promise (README / external-cell
+# quickstart: "public module, plain `go get` — no GOPRIVATE"), so a regression — a
+# replace/exclude added back to the ROOT go.mod — must fail at PR-merge time, not
+# only nightly. It is cheap here: a go.mod parse via gomodutil, NO whole-tree
+# packages.Load, so it adds ~0 to the shared-resolver process (warm-up already paid
+# by the tests above). #1723 / PR #1766 review F1.
 go test ./tools/archtest \
-  -run '^(TestProdClockInjection|TestKernelClockLeafFallback|TestKernelClockLeafFallbackFixtures|TestProdClockInjectionFixtures|TestProdDurationConst|TestProdDurationConstFixtures|TestTestTimeLiteralConst|TestTestSleepDiscipline|TestTestTimeLiteralFixtures|TestPanicRegistered|TestPanicRegisteredScannerFixtures|TestArchtestModulePathFunnel|TestModulePathFunnel_TypedReconstruction|TestFenceTokenMintFunnel_AllowlistEnforced|TestMetadatatestImportScope|TestFixtureCellIDTypedBuilder_NewCellIDBodyShape|TestFixtureCellIDTypedBuilder_VarInitializerShape)$' \
+  -run '^(TestProdClockInjection|TestKernelClockLeafFallback|TestKernelClockLeafFallbackFixtures|TestProdClockInjectionFixtures|TestProdDurationConst|TestProdDurationConstFixtures|TestTestTimeLiteralConst|TestTestSleepDiscipline|TestTestTimeLiteralFixtures|TestPanicRegistered|TestPanicRegisteredScannerFixtures|TestArchtestModulePathFunnel|TestModulePathFunnel_TypedReconstruction|TestFenceTokenMintFunnel_AllowlistEnforced|TestMetadatatestImportScope|TestFixtureCellIDTypedBuilder_NewCellIDBodyShape|TestFixtureCellIDTypedBuilder_VarInitializerShape|TestRootModuleNoReplace01|TestRootModuleNoReplace01_NegativeControl)$' \
   -count=1 -timeout 5m

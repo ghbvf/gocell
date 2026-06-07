@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # pr-meta.sh — produce and consume the gocell-pr-meta:v1 machine block that
 # rides in a hidden HTML comment after the human footer of every pm:ship /
-# pm:fix / pm:pr-review PR comment.
+# pm:fix / pm:pr-review / pm:ci / pm:oos PR comment.
 #
 # Wire form (single line, appended after the visible footer):
 #   <!-- gocell-pr-meta:v1 <standard-base64(JSON)> -->
@@ -25,12 +25,13 @@
 #   decode            stdin markdown/block -> stdout validated JSON           (offline)
 #   extract <PR#>     gh-fetched comments -> latest block JSON iff fresh       (online)
 #   round   <PR#>     gh-fetched comments -> max cycle.round for this PR       (online)
+#   selftest          offline protocol self-test (no network)                 (offline)
 #
 # Exit codes: 0 ok · 1 gh/IO error · 2 no/invalid block · 3 stale block · 64 usage error
 #
 # Trust model (layered, fail-safe): `round`/`extract` only read comments that are
 # both from a trusted author (author_association OWNER/MEMBER/COLLABORATOR) AND a
-# real pm:* protocol comment (carry a <!-- pm:ship|fix|pr-review --> marker) — F3;
+# real pm:* protocol comment (carry a <!-- pm:ship|fix|pr-review|ci|oos --> marker) — F3;
 # only count/accept blocks whose repo+pr match this PR (cross-PR copy-paste
 # ignored); and only accept *canonical* blocks — every derived field (next/
 # idempotencyKey/cycle.maxRounds/cycle.exhausted) must equal what emit would
@@ -56,11 +57,12 @@ REPO_SLUG="ghbvf/gocell"
 
 usage() {
     cat >&2 <<'EOF'
-usage: pr-meta.sh <emit|decode|extract|round> [args]
+usage: pr-meta.sh <emit|decode|extract|round|selftest> [args]
   emit            read fact JSON on stdin, print the gocell-pr-meta:v1 block
   decode          read markdown/block on stdin, print validated JSON
   extract <PR#>   fetch PR comments, print the latest block JSON iff fresh
   round   <PR#>   fetch PR comments, print max cycle.round for this PR (0 if none)
+  selftest        offline protocol self-test (no network required)
 exit codes: 0 ok | 1 gh/IO error | 2 no/invalid block | 3 stale block | 64 usage error
 EOF
 }
@@ -104,6 +106,9 @@ COHERENT = {
     ("pr-review", "review", "changes-requested"),
     ("pr-review", "check", "ready"),
     ("pr-review", "check", "changes-requested"),
+    ("ci", "check", "ci-failed"),
+    ("ci", "check", "ci-green"),
+    ("oos", "review", "oos-filed"),
 }
 
 
@@ -130,6 +135,7 @@ def type_ok(obj, t):
 # keywords pr-meta.v1.json uses (type/const/enum/pattern/minLength/minimum/
 # required/properties/additionalProperties). The schema file stays the single
 # source of truth — this walker reads it, it does not hard-code field lists.
+# Array items are validated recursively when the schema has type:array + items.
 def validate(obj, schema, path="$"):
     errs = []
     if "const" in schema:
@@ -156,6 +162,11 @@ def validate(obj, schema, path="$"):
         for k, v in obj.items():
             if k in props:
                 errs += validate(v, props[k], "%s.%s" % (path, k))
+    if isinstance(obj, list):
+        items_schema = schema.get("items")
+        if items_schema is not None:
+            for i, elem in enumerate(obj):
+                errs += validate(elem, items_schema, "%s[%d]" % (path, i))
     if isinstance(obj, str):
         if "pattern" in schema and not re.search(schema["pattern"], obj):
             errs.append("%s: %r does not match pattern %s" % (path, obj, schema["pattern"]))
@@ -180,10 +191,23 @@ def derive_next(verdict, exhausted):
             # escalate to a human. Daemons must not auto-dispatch on this.
             return {"agent": "human", "command": None, "sandbox": False,
                     "triggerLabel": None, "requiresSameHeadSha": False}
+        # 5-state: non-exhausted changes-requested triggers pr-status/needs-fix
         return {"agent": "claude", "command": "/fix", "sandbox": True,
-                "triggerLabel": "pr-review/changes-requested", "requiresSameHeadSha": True}
+                "triggerLabel": "pr-status/needs-fix", "requiresSameHeadSha": True}
     if verdict in ("approved", "ready"):
         return {"agent": None, "command": None, "sandbox": False,
+                "triggerLabel": None, "requiresSameHeadSha": False}
+    if verdict == "ci-green":
+        return {"agent": None, "command": None, "sandbox": False,
+                "triggerLabel": None, "requiresSameHeadSha": False}
+    if verdict == "ci-failed":
+        # CI fix is handled inline by ship/fix's own 3-round loop, so a posted
+        # pm:ci is terminal: green or exhausted->human — NOT auto-/fix.
+        return {"agent": "human", "command": None, "sandbox": False,
+                "triggerLabel": None, "requiresSameHeadSha": False}
+    if verdict == "oos-filed":
+        # Drafts staged for human `gh issue create`; no auto-filer.
+        return {"agent": "human", "command": None, "sandbox": False,
                 "triggerLabel": None, "requiresSameHeadSha": False}
     raise ValueError("unknown verdict %r" % verdict)
 
@@ -205,6 +229,10 @@ def derive(facts):
     obj["next"] = derive_next(obj["verdict"], exhausted)
     obj.setdefault("session", None)
     obj.setdefault("worktree", None)
+    # ci/oos are facts (not derived) — setdefault so every block has identical
+    # key-set for clean canonical comparison.
+    obj.setdefault("ci", None)
+    obj.setdefault("oos", None)
     obj["idempotencyKey"] = "%s#%s@%s:%s/%s#%s" % (
         obj.get("repo"), obj.get("pr"), obj.get("headSha"),
         obj.get("kind"), obj.get("phase"), rnd)
@@ -222,6 +250,7 @@ def extract_payloads(blob):
 def facts_of(obj):
     # Strip every emit-derived field so the block can be re-derived and compared
     # against itself. cycle keeps only round (maxRounds/exhausted are derived).
+    # ci/oos are facts (not derived) so they survive naturally.
     f = {k: v for k, v in obj.items() if k not in DERIVED_KEYS}
     f["cycle"] = {"round": (obj.get("cycle") or {}).get("round")}
     return f
@@ -305,6 +334,313 @@ def do_maxround(schema, live_repo, live_pr):
     sys.stdout.write("%d\n" % best)
 
 
+# ---------------------------------------------------------------------------
+# Selftest helpers
+# ---------------------------------------------------------------------------
+
+def _make_facts(kind, phase, verdict, rnd=1, **extra):
+    """Build a minimal facts dict for the given triple."""
+    f = {
+        "repo": "ghbvf/gocell",
+        "pr": 42,
+        "kind": kind,
+        "phase": phase,
+        "tool": "claude-code",
+        "baseRef": "develop",
+        "headRef": "feature/test",
+        "headSha": "a" * 40,
+        "verdict": verdict,
+        "findings": {
+            "total": 0, "fixed": 0, "unresolved": 0, "blocking": 0,
+            "byP": {"p0": 0, "p1": 0, "p2": 0, "p3": 0},
+            "byCx": {"cx1": 0, "cx2": 0, "cx3": 0, "cx4": 0},
+        },
+        "cycle": {"round": rnd},
+    }
+    f.update(extra)
+    return f
+
+
+def _emit_decode(facts, schema):
+    """emit facts -> block line -> decode -> return obj."""
+    obj = derive(facts)
+    errs = validate(obj, schema)
+    if errs:
+        raise AssertionError("emit produced invalid object: %s" % errs)
+    payload = base64.b64encode(canon(obj).encode("utf-8")).decode("ascii")
+    block_line = "<!-- %s %s -->" % (MARKER, payload)
+    decoded_list = valid_blocks(block_line, schema)
+    if not decoded_list:
+        raise AssertionError("decode returned no blocks")
+    return decoded_list[0]
+
+
+def do_selftest(schema):
+    # F7: explicit expected-check count so a silently-dropped check fails the
+    # selftest rather than printing "OK (N checks)" with a lower-than-expected N.
+    # Update this constant whenever a check is added or removed.
+    EXPECTED_CHECKS = 24
+
+    checks = 0
+    failures = []
+
+    def ok(name):
+        nonlocal checks
+        checks += 1
+
+    def fail(name, msg):
+        failures.append("FAIL [%s]: %s" % (name, msg))
+
+    def assert_eq(name, got, want):
+        nonlocal checks
+        checks += 1
+        if got != want:
+            failures.append("FAIL [%s]: got %r, want %r" % (name, got, want))
+
+    def assert_raises(name, fn):
+        nonlocal checks
+        checks += 1
+        try:
+            fn()
+            failures.append("FAIL [%s]: expected exception but none raised" % name)
+        except Exception:
+            pass  # expected
+
+    def assert_decode_fails(name, block_line):
+        nonlocal checks
+        checks += 1
+        result = valid_blocks(block_line, schema)
+        if result:
+            failures.append("FAIL [%s]: expected decode failure but got: %s" % (name, result))
+
+    # ------------------------------------------------------------------
+    # 1. Round-trip every kind
+    # ------------------------------------------------------------------
+
+    kinds = [
+        ("ship",      "ship",   "needs-review-again"),
+        ("fix",       "fix",    "needs-check-fix"),
+        ("pr-review", "review", "approved"),
+        ("pr-review", "review", "changes-requested"),  # non-exhausted, round=1
+        ("pr-review", "check",  "ready"),
+        ("pr-review", "check",  "changes-requested"),  # non-exhausted, round=1
+        ("ci",        "check",  "ci-failed"),
+        ("ci",        "check",  "ci-green"),
+        ("oos",       "review", "oos-filed"),
+    ]
+    for kind, phase, verdict in kinds:
+        name = "round-trip/%s/%s/%s" % (kind, phase, verdict)
+        try:
+            facts = _make_facts(kind, phase, verdict, rnd=1)
+            decoded = _emit_decode(facts, schema)
+            expected = derive(facts_of(decoded))
+            if canon(decoded) != canon(expected):
+                failures.append("FAIL [%s]: decoded != re-derived" % name)
+            else:
+                ok(name)
+        except Exception as e:
+            failures.append("FAIL [%s]: %s" % (name, e))
+
+    # ------------------------------------------------------------------
+    # 2. 5-state assertion: changes-requested non-exhausted -> needs-fix
+    # ------------------------------------------------------------------
+
+    name = "5-state/pr-review/review/changes-requested"
+    try:
+        facts = _make_facts("pr-review", "review", "changes-requested", rnd=1)
+        decoded = _emit_decode(facts, schema)
+        got_label = decoded["next"]["triggerLabel"]
+        assert_eq(name, got_label, "pr-status/needs-fix")
+    except Exception as e:
+        failures.append("FAIL [%s]: %s" % (name, e))
+
+    name = "5-state/pr-review/check/changes-requested"
+    try:
+        facts = _make_facts("pr-review", "check", "changes-requested", rnd=1)
+        decoded = _emit_decode(facts, schema)
+        got_label = decoded["next"]["triggerLabel"]
+        assert_eq(name, got_label, "pr-status/needs-fix")
+    except Exception as e:
+        failures.append("FAIL [%s]: %s" % (name, e))
+
+    # ------------------------------------------------------------------
+    # 3. Schema rejection
+    # ------------------------------------------------------------------
+
+    # 3a. Missing required key (no "verdict")
+    name = "schema-reject/missing-required-key"
+    try:
+        facts = _make_facts("ship", "ship", "needs-review-again")
+        obj = derive(facts)
+        del obj["verdict"]
+        payload = base64.b64encode(canon(obj).encode("utf-8")).decode("ascii")
+        block_line = "<!-- %s %s -->" % (MARKER, payload)
+        assert_decode_fails(name, block_line)
+    except Exception as e:
+        failures.append("FAIL [%s]: %s" % (name, e))
+
+    # 3b. Extra key (additionalProperties violation)
+    name = "schema-reject/extra-key"
+    try:
+        facts = _make_facts("ship", "ship", "needs-review-again")
+        obj = derive(facts)
+        obj["__extraKey__"] = "forbidden"
+        payload = base64.b64encode(canon(obj).encode("utf-8")).decode("ascii")
+        block_line = "<!-- %s %s -->" % (MARKER, payload)
+        assert_decode_fails(name, block_line)
+    except Exception as e:
+        failures.append("FAIL [%s]: %s" % (name, e))
+
+    # 3c. Bad enum value for kind
+    name = "schema-reject/bad-enum-kind"
+    try:
+        facts = _make_facts("ship", "ship", "needs-review-again")
+        obj = derive(facts)
+        obj["kind"] = "bogus-kind"
+        payload = base64.b64encode(canon(obj).encode("utf-8")).decode("ascii")
+        block_line = "<!-- %s %s -->" % (MARKER, payload)
+        assert_decode_fails(name, block_line)
+    except Exception as e:
+        failures.append("FAIL [%s]: %s" % (name, e))
+
+    # 3d. Bad headSha (not 40 hex)
+    name = "schema-reject/bad-headsha"
+    try:
+        facts = _make_facts("ship", "ship", "needs-review-again")
+        obj = derive(facts)
+        obj["headSha"] = "notahexsha"
+        # idempotencyKey also references headSha — just rebuild it to keep
+        # the test focused on the headSha pattern check
+        obj["idempotencyKey"] = "ghbvf/gocell#42@notahexsha:ship/ship#1"
+        payload = base64.b64encode(canon(obj).encode("utf-8")).decode("ascii")
+        block_line = "<!-- %s %s -->" % (MARKER, payload)
+        assert_decode_fails(name, block_line)
+    except Exception as e:
+        failures.append("FAIL [%s]: %s" % (name, e))
+
+    # ------------------------------------------------------------------
+    # 4. Canonical-forgery rejection
+    # ------------------------------------------------------------------
+
+    def _mutate_and_check(name, field_path, new_value):
+        """Take a valid block, mutate a field, assert decode fails."""
+        try:
+            facts = _make_facts("ship", "ship", "needs-review-again")
+            obj = derive(facts)
+            # Navigate and set field_path (dot-notation)
+            parts = field_path.split(".")
+            target = obj
+            for p in parts[:-1]:
+                target = target[p]
+            target[parts[-1]] = new_value
+            payload = base64.b64encode(canon(obj).encode("utf-8")).decode("ascii")
+            block_line = "<!-- %s %s -->" % (MARKER, payload)
+            result = valid_blocks(block_line, schema)
+            nonlocal checks
+            checks += 1
+            if result:
+                failures.append("FAIL [%s]: expected decode failure but got valid block" % name)
+        except Exception as e:
+            failures.append("FAIL [%s]: %s" % (name, e))
+
+    _mutate_and_check("forgery/next.agent",         "next.agent",         "human")
+    _mutate_and_check("forgery/idempotencyKey",      "idempotencyKey",     "forged-key")
+    _mutate_and_check("forgery/cycle.exhausted",     "cycle.exhausted",    True)
+    _mutate_and_check("forgery/cycle.maxRounds",     "cycle.maxRounds",    99)
+
+    # ------------------------------------------------------------------
+    # 5. Incoherent triple rejection
+    # ------------------------------------------------------------------
+
+    name = "incoherent/fix+approved"
+    assert_raises(name, lambda: derive(_make_facts("fix", "fix", "approved")))
+
+    # ------------------------------------------------------------------
+    # 6. Array-items validation: oos block whose items[0] missing required key
+    # ------------------------------------------------------------------
+
+    name = "array-items/oos-missing-fileLine"
+    try:
+        facts = _make_facts("oos", "review", "oos-filed")
+        # Add a valid oos object but with items[0] missing the required "fileLine"
+        facts["oos"] = {
+            "items": [
+                {
+                    # "fileLine" is required but intentionally omitted
+                    "rootCause": {"code": "c", "arch": "a", "history": "h"},
+                    "solutionSeeds": {"minimal": "m", "thorough": "t", "refactor": "r"},
+                }
+            ]
+        }
+        obj = derive(facts)
+        payload = base64.b64encode(canon(obj).encode("utf-8")).decode("ascii")
+        block_line = "<!-- %s %s -->" % (MARKER, payload)
+        result = valid_blocks(block_line, schema)
+        checks += 1
+        if result:
+            failures.append("FAIL [%s]: expected decode failure (missing fileLine) but got valid block" % name)
+    except Exception as e:
+        failures.append("FAIL [%s]: %s" % (name, e))
+
+    # ------------------------------------------------------------------
+    # 7. Array-items validation: ci block whose failedChecks[0] missing required key
+    # F8: the validate() array-items recursion's ci branch was previously untested.
+    # ------------------------------------------------------------------
+
+    name = "array-items/ci-failedChecks-missing-name"
+    try:
+        # ci kind needs a coherent triple: kind=ci, phase=check, verdict=ci-failed
+        facts = _make_facts("ci", "check", "ci-failed",
+                            ci={"failedChecks": [{"link": "https://example.com/run/1"}]})
+        # "name" is required in each failedChecks item per the schema; omitting it
+        # must cause decode to reject the block.
+        obj = derive(facts)
+        payload = base64.b64encode(canon(obj).encode("utf-8")).decode("ascii")
+        block_line = "<!-- %s %s -->" % (MARKER, payload)
+        assert_decode_fails(name, block_line)
+    except Exception as e:
+        failures.append("FAIL [%s]: %s" % (name, e))
+
+    # ------------------------------------------------------------------
+    # 8. Exhausted branch: rnd=3 forces next.agent=="human"
+    # F9: exhausted path was untested; only rnd=1 (non-exhausted) was covered.
+    # ------------------------------------------------------------------
+
+    name = "exhausted/pr-review/review/changes-requested"
+    try:
+        facts = _make_facts("pr-review", "review", "changes-requested", rnd=3)
+        decoded = _emit_decode(facts, schema)
+        assert_eq(name, decoded["next"]["agent"], "human")
+    except Exception as e:
+        failures.append("FAIL [%s]: %s" % (name, e))
+
+    name = "exhausted/pr-review/check/changes-requested"
+    try:
+        facts = _make_facts("pr-review", "check", "changes-requested", rnd=3)
+        decoded = _emit_decode(facts, schema)
+        assert_eq(name, decoded["next"]["agent"], "human")
+    except Exception as e:
+        failures.append("FAIL [%s]: %s" % (name, e))
+
+    # ------------------------------------------------------------------
+    # Report
+    # ------------------------------------------------------------------
+
+    if failures:
+        for f in failures:
+            sys.stderr.write(f + "\n")
+        sys.exit(1)
+    # F7: assert the exact number of checks ran — a silently-dropped check
+    # still causes the selftest to fail even if failures is empty.
+    if checks != EXPECTED_CHECKS:
+        sys.stderr.write(
+            "FAIL [check-count]: expected %d checks, ran %d\n"
+            % (EXPECTED_CHECKS, checks)
+        )
+        sys.exit(1)
+    sys.stdout.write("pr-meta selftest: OK (%d checks)\n" % checks)
+
+
 def main():
     if len(sys.argv) < 3:
         sys.stderr.write("pr-meta engine: usage: <mode> <schema-path> [args]\n")
@@ -320,6 +656,8 @@ def main():
         do_extract(schema, sys.argv[3], sys.argv[4], sys.argv[5])
     elif mode == "maxround":
         do_maxround(schema, sys.argv[3], sys.argv[4])
+    elif mode == "selftest":
+        do_selftest(schema)
     else:
         sys.stderr.write("pr-meta engine: unknown mode %r\n" % mode)
         sys.exit(64)
@@ -351,14 +689,14 @@ cmd_decode() { py decode "${SCHEMA_FILE}"; }
 
 # fetch_trusted_bodies prints the bodies of PR comments that are BOTH from a
 # trusted author (author_association OWNER/MEMBER/COLLABORATOR) AND a real pm:*
-# protocol comment (carry a <!-- pm:ship|fix|pr-review --> marker). This is the
-# single trust boundary for the dispatch protocol (F3): neither an untrusted
-# commenter nor a canonical block pasted into a trusted author's plain (non-pm)
-# comment can reach extract/round as a dispatch fact.
+# protocol comment (carry a <!-- pm:ship|fix|pr-review|ci|oos --> marker). This
+# is the single trust boundary for the dispatch protocol (F3): neither an
+# untrusted commenter nor a canonical block pasted into a trusted author's plain
+# (non-pm) comment can reach extract/round as a dispatch fact.
 fetch_trusted_bodies() {
     local pr="$1"
     gh api "repos/${REPO_SLUG}/issues/${pr}/comments" --paginate \
-        --jq '.[] | select((.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") and (.body | test("<!-- pm:(ship|fix|pr-review) -->"))) | .body'
+        --jq '.[] | select((.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") and (.body | test("<!-- pm:(ship|fix|pr-review|ci|oos) -->"))) | .body'
 }
 
 cmd_extract() {
@@ -381,6 +719,8 @@ cmd_round() {
     printf '%s\n' "${bodies}" | py maxround "${SCHEMA_FILE}" "${REPO_SLUG}" "${pr}"
 }
 
+cmd_selftest() { py selftest "${SCHEMA_FILE}"; }
+
 # ---- dispatch --------------------------------------------------------------
 
 main() {
@@ -391,6 +731,7 @@ main() {
         decode)   cmd_decode "$@" ;;
         extract)  cmd_extract "$@" ;;
         round)    cmd_round "$@" ;;
+        selftest) cmd_selftest "$@" ;;
         -h|--help|help) usage; exit 0 ;;
         "") usage; exit 64 ;;
         *) echo "pr-meta: unknown subcommand '${sub}'" >&2; usage; exit 64 ;;

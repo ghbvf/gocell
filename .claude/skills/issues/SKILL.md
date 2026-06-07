@@ -161,17 +161,19 @@ epic 用 `epic` label + GitHub 原生 sub-issue（不手写 body task list）。
 > 两正交轴（pr-status 流转 / pr-review 结论）的取值与「何时切」语义见 `.github/project-template/PROJECT.md` §2.5 + §5（单源，不在此复制表）。**两轴各自互斥**：pr-status 恰好一个；pr-review `approved` XOR `changes-requested`——**切一侧必 `--remove-label` 同轴对侧**。本节只给切换命令。
 
 ```bash
-# ship 后：待再审
+# ship 后：待再审（首次交接，唯一使用 needs-review-again 的地方）
 gh pr edit <N> --add-label pr-status/needs-review-again --remove-label pr-status/in-progress
 # review 轮结论（默认 /pr-review 或 codex；review 轴互斥）
-gh pr edit <N> --add-label pr-review/changes-requested --remove-label pr-review/approved          # 有 finding
-gh pr edit <N> --add-label pr-review/approved          --remove-label pr-review/changes-requested  # 无 finding
+# 有 finding → changes-requested + needs-fix（5-state：review 轮 changes-requested 始终切 needs-fix）
+gh pr edit <N> --add-label pr-review/changes-requested --add-label pr-status/needs-fix --remove-label pr-review/approved --remove-label pr-status/needs-review-again
+# 无 finding → approved + pr-status/ready（无需 fix/check 的终态）
+gh pr edit <N> --add-label pr-review/approved --add-label pr-status/ready --remove-label pr-review/changes-requested --remove-label pr-status/needs-review-again
 # fix 后：待 --check 验证（fix 不直接到 ready）
-gh pr edit <N> --add-label pr-status/needs-check-fix --remove-label pr-status/needs-review-again
+gh pr edit <N> --add-label pr-status/needs-check-fix --remove-label pr-status/needs-fix
 # --check 全修复：可合并（清 pr-status 前态 + review 轴对侧）
 gh pr edit <N> --add-label pr-status/ready --add-label pr-review/approved --remove-label pr-status/needs-check-fix --remove-label pr-review/changes-requested
 # --check 有未修/回归：回 fix（清 pr-status 前态 + review 轴对侧）
-gh pr edit <N> --add-label pr-review/changes-requested --add-label pr-status/needs-review-again --remove-label pr-status/needs-check-fix --remove-label pr-review/approved
+gh pr edit <N> --add-label pr-review/changes-requested --add-label pr-status/needs-fix --remove-label pr-status/needs-check-fix --remove-label pr-review/approved
 ```
 
 ## B4. PR 评论（编排）
@@ -189,11 +191,11 @@ echo "✅ 已贴评论：$URL"                                            # 必�
 
 ## B5. PR 冲突预检 + CI 跟进（ship/fix 共用）
 
-push 后**先验无文件冲突、再等 CI 收敛**，才交接 / 收尾（ship 切 `pr-status/needs-review-again` 前、fix 切 `pr-status/needs-check-fix` 前都过此 gate）。
+push 后流程分**两阶段**：① 冲突预检（阻塞，贴评论前必过）→ 立即收尾（贴评论 + 切 label，不等 CI）→ ② CI 异步收敛（收尾后再跑，结果贴独立 pm:ci 评论）。
 
-**① 冲突预检**：`gh pr view <N> --json mergeable,mergeStateStatus`。`mergeable` 由 GitHub **异步计算**，刚 push 常返回 `UNKNOWN`——**轮询几次（~5-10s 间隔）直到落定** `MERGEABLE` / `CONFLICTING`，单查 UNKNOWN 无效。`CONFLICTING`（或 `mergeStateStatus=DIRTY`）→ 先解冲突：`git -C <wt> fetch origin && git -C <wt> merge origin/develop --no-edit`（解冲突 → commit → push）→ 回本步重检。`MERGEABLE` → 进 ②。
+**① 冲突预检**（阻塞，必须先于收尾）：`gh pr view <N> --json mergeable,mergeStateStatus`。`mergeable` 由 GitHub **异步计算**，刚 push 常返回 `UNKNOWN`——**轮询几次（~5-10s 间隔）直到落定** `MERGEABLE` / `CONFLICTING`，单查 UNKNOWN 无效。`CONFLICTING`（或 `mergeStateStatus=DIRTY`）→ 先解冲突：`git -C <wt> fetch origin && git -C <wt> merge origin/develop --no-edit`（解冲突 → commit → push）→ 回本步重检。`MERGEABLE` → 立即进行收尾（贴评论 + 切 label），**不等 CI**。
 
-**② CI watch**：本仓 PR CI 五个 check 并行跑，**典型 ~5-6 min**（实测最慢 PR Check 中位 ~4.6 / 峰值 ~5.5 min；Governance ~4-5 min；Race / Static ~3 min；govulncheck ~40s）。
+**② CI 异步收敛**（收尾评论 + label 切换之后再跑）：本仓 PR CI 五个 check 并行跑，**典型 ~5-6 min**（实测最慢 PR Check 中位 ~4.6 / 峰值 ~5.5 min；Governance ~4-5 min；Race / Static ~3 min；govulncheck ~40s）。
 
 ```bash
 # 阻塞轮询直到所有 check 完成（exit 0=全绿 / 8=pending / 非0=有失败；--fail-fast 见首个失败即退）
@@ -204,8 +206,8 @@ gh run view <run-id> --job <job-id> --log-failed         # link=/actions/runs/<r
 ```
 
 - **等待上限 ~12-15 min**（~2.5× 典型，吸收 runner 排队）。超 Bash 10min 上限用后台轮询兜底（`run_in_background` 跑 watch，或循环 `gh pr checks <N> --json bucket --jq 'any(.[]; .bucket=="pending")'` 间隔 30-60s）；超上限仍 pending → 停下报告，不无限等。
-- 失败 → 回 `fix` 修复循环（定位 → 修 → commit → push → 重新预检 + watch），**最多 3 轮**；**3 轮仍红 → 直接贴 PR 评论留痕（ship 走 pm:ship、fix 走 pm:fix，含 CI 失败摘要 + 已尝试轮次）+ 停下交人工，不 AskUserQuestion**。
-- **全绿才继续收尾**（贴评论 / 切 label）。
+- 失败 → 回 `fix` 修复循环（定位 → 修 → commit → push → 重新预检），**最多 3 轮**；**3 轮仍红 → 停下交人工，不 AskUserQuestion**。
+- CI 收敛后（全绿或 3 轮红）贴独立 `pm:ci` 评论（`verdict=ci-green` 或 `verdict=ci-failed`），不合并进主 pm:ship / pm:fix 评论。
 
 ## B6. 沟通规则
 

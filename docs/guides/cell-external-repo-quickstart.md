@@ -7,7 +7,7 @@
 ## 前置
 
 - Go 1.25.11+
-- `gocell` CLI：M7 #1088 发布独立安装入口前，先从本仓源码安装：
+- `gocell` CLI：从本仓源码安装（当前唯一可用入口）：
 
   ```bash
   git clone https://github.com/ghbvf/gocell.git
@@ -15,8 +15,11 @@
   go install ./cmd/gocell
   ```
 
-  `go install github.com/ghbvf/gocell/cmd/gocell@latest` 需要等 #1088
-  补齐版本化发布策略后再作为稳定入口。
+  框架本体已是 public module，`go get github.com/ghbvf/gocell@v0.1.0` 即可消费（无需
+  GOPRIVATE）。但 `go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` 仍不可用——
+  `cmd/gocell` 是卫星 module（其 go.mod 含本地 `replace`，且 release 流水线只切 root
+  tag、未切 `cmd/gocell/vX.Y.Z` 子模块 tag），`go install pkg@version` 因此受阻。稳定的
+  CLI 独立安装入口跟踪于 #1088。
 
 ## 步骤
 
@@ -25,7 +28,7 @@
 ```bash
 mkdir -p ~/work/acme-payment-cell && cd ~/work/acme-payment-cell
 go mod init github.com/acme/payment-cell
-go get github.com/ghbvf/gocell@develop
+go get github.com/ghbvf/gocell@v0.1.0   # pin a stable tag (@develop = prerelease snapshot)
 ```
 
 ### 2. 放 manifest 文件

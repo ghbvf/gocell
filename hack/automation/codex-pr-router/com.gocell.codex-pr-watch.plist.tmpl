@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.gocell.codex-pr-watch.plist.tmpl
+  launchd LaunchAgent template for the codex-pr-router daemon.
+
+  Placeholders (fill with envsubst or sed before installing):
+    @REPO_ROOT@    absolute path to the gocell repo root
+                   e.g. /Users/alice/code/gocell
+    @ROUTER_HOME@  absolute path to the router state/log base directory
+                   (= GOCELL_ROUTER_HOME env var value)
+                   e.g. /Users/alice/.local/gocell-router
+    @PATH@         colon-separated PATH that includes codex, gh, git, node, go
+                   e.g. /usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin
+    @HOME@         absolute path to the user home directory
+                   e.g. /Users/alice
+
+  Install:
+    # 1. Fill placeholders (example using sed):
+    sed \
+      -e "s|@REPO_ROOT@|$(pwd -P)|g" \
+      -e "s|@ROUTER_HOME@|${HOME}/.local/gocell-router|g" \
+      -e "s|@PATH@|$(command -v codex | xargs dirname):$(command -v gh | xargs dirname):/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin|g" \
+      -e "s|@HOME@|${HOME}|g" \
+      hack/automation/codex-pr-router/com.gocell.codex-pr-watch.plist.tmpl \
+      > ~/Library/LaunchAgents/com.gocell.codex-pr-watch.plist
+
+    # 2. Load:
+    launchctl load ~/Library/LaunchAgents/com.gocell.codex-pr-watch.plist
+
+    # 3. Verify the agent is running (check PID and state):
+    launchctl print gui/$(id -u)/com.gocell.codex-pr-watch
+
+    # 4. Watch logs:
+    tail -f @ROUTER_HOME@/logs/router.err
+
+    # 5. View crash logs (if the agent keeps restarting):
+    log show --predicate 'process == "router.sh"' --last 1h
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.gocell.codex-pr-watch.plist
+    rm ~/Library/LaunchAgents/com.gocell.codex-pr-watch.plist
+-->
+<plist version="1.0">
+<dict>
+  <!-- Unique label for launchctl identify/stop/start -->
+  <key>Label</key>
+  <string>com.gocell.codex-pr-watch</string>
+
+  <!-- The daemon: bash running the router script directly -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>@REPO_ROOT@/hack/automation/codex-pr-router/router.sh</string>
+  </array>
+
+  <!--
+    Environment variables.
+    All GOCELL_ROUTER_* vars are loaded here so the daemon requires no
+    shell profile sourcing.  PATH must include codex, gh, git, node, and go.
+
+    GOCELL_ROUTER_AUTHORS: space-separated GitHub login allowlist.
+    This is the primary security gate — only PRs authored by listed users
+    will be processed.  Set to your own login (and trusted bot logins if any).
+
+    GOCELL_ROUTER_REVIEW_ENGINE: "codex" (default) or "claude".
+    Switch to "claude" to use the Claude headless engine instead of codex
+    for the review+check phases.
+  -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>GOCELL_ROUTER_HOME</key>
+    <string>@ROUTER_HOME@</string>
+
+    <key>GOCELL_ROUTER_AUTHORS</key>
+    <string>REPLACE_WITH_YOUR_GITHUB_LOGIN</string>
+
+    <key>GOCELL_ROUTER_INTERVAL</key>
+    <string>120</string>
+
+    <key>GOCELL_ROUTER_REVIEW_ENGINE</key>
+    <string>codex</string>
+
+    <!--
+      PATH must resolve codex, gh, git, node, go.
+      Homebrew on Apple Silicon typically lives at /opt/homebrew/bin;
+      Intel Macs at /usr/local/bin.  Adjust to match your system.
+    -->
+    <key>PATH</key>
+    <string>@PATH@</string>
+
+    <key>HOME</key>
+    <string>@HOME@</string>
+  </dict>
+
+  <!-- Start when the agent is loaded (e.g. on login) -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart automatically if the process exits -->
+  <key>KeepAlive</key>
+  <true/>
+
+  <!--
+    ThrottleInterval: minimum seconds between respawn attempts after crash.
+    Prevents rapid restart loops if the script exits immediately due to
+    misconfiguration.  Set to 90s (1.5× the default poll interval of 60s)
+    so a crash-loop does not hammer the GitHub API more than once per minute.
+  -->
+  <key>ThrottleInterval</key>
+  <integer>90</integer>
+
+  <!-- Standard output log (router INFO/DEBUG lines) -->
+  <key>StandardOutPath</key>
+  <string>@ROUTER_HOME@/logs/router.out</string>
+
+  <!-- Standard error log (router ERROR lines + bash set -euo pipefail traces) -->
+  <key>StandardErrorPath</key>
+  <string>@ROUTER_HOME@/logs/router.err</string>
+</dict>
+</plist>

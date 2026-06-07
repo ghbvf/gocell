@@ -12,6 +12,8 @@
 //   - INVARIANT: SAGA-METRIC-LABEL-VALUES-FROZEN-01
 //   - INVARIANT: SAGA-SLOG-INSTANCE-FIELDS-CALLER-01
 //   - INVARIANT: SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01
+//   - INVARIANT: SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01
+//   - INVARIANT: SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01
 //
 // saga_invariants_test.go — consolidated saga-theme archtest invariants.
 //
@@ -1121,6 +1123,349 @@ func TestSagaGlobalReaderConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t 
 
 	assert.Empty(t, diags,
 		"B1 reverse: no production non-test file outside saga packages should contain string literal %q", sagaGlobalReaderIfaceName)
+}
+
+// ============================================================================
+// SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01   (#1609 PR-04)
+// ============================================================================
+// INVARIANT: SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01
+//
+// AI-robust rating:
+//   - Downstream Hard: go/types caller-allowlist — method identity resolved via
+//     info.ObjectOf (pkg path == kernel/projection + method name == AdvanceIfOwner).
+//     EachInSubtree descends into FuncLit closures attributing enclosed calls to
+//     the enclosing FuncDecl; import alias cannot bypass pkg path check. The scan
+//     runs over the WHOLE production tree (Production scope) with a
+//     package-qualified sanctioned-caller key, so a same-named type/method in
+//     another package cannot inherit the exemption (F4 — the prior form scanned
+//     only runtime/saga/tailer, leaving the declared repo-wide scope unenforced).
+//   - Upstream Medium: Go visibility ceiling — AdvanceIfOwner is a public method
+//     on a public interface; Go cannot prevent non-Tailer types from holding an
+//     OwnerCheckpointStore and calling AdvanceIfOwner directly. Hard upgrade path:
+//     sealed OwnerCheckpointStore handle that only Tailer can hold, tracked at
+//     gh #1612.
+//
+// # Sanctioned callers
+//
+// Exactly one runtime callsite is sanctioned:
+//
+//   - (*Tailer).commitEvent in runtime/saga/tailer/tailer.go — the call is
+//     inside a RunInTx FuncLit closure; EachInSubtree attributes it to the
+//     enclosing commitEvent FuncDecl.
+//
+// Test-support packages whose purpose is to exercise the method (conformance
+// suites — kernel/projection/projectiontest) are excluded via
+// sagaTailerAdvancerExemptPkgs; a new entry there is a deliberate review
+// checkpoint. _test.go files are skipped inside the scan.
+//
+// # Blind-spot catalog
+//
+//   - B1 (cross-package helper) — CLOSED (F4): the scan now covers the whole
+//     production tree, so a helper package outside runtime/saga/tailer that holds
+//     an OwnerCheckpointStore and calls AdvanceIfOwner IS flagged (verified by the
+//     RED fixture, which runs the real scanner over a non-tailer fixture package).
+//   - B2 (reflect/interface-forwarding): a struct embedding OwnerCheckpointStore
+//     that is used to forward AdvanceIfOwner to an inner field. Not a current
+//     production pattern; the embed would appear as a method call on the wrapper
+//     type, not on the interface directly. Reverse self-test asserts none exists
+//     via TestSagaTailerCheckpointAdvancerCaller_NonVacuity.
+//
+// ref: docs/architecture/202606051200-1609-adr-saga-journal-projection-source.md §D6
+// ref: SAGA-INVARIANTS-FILE-CONSOLIDATED-01 (this rule must stay in this file)
+
+// TestSagaTailerCheckpointAdvancerCaller enforces
+// SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01: only (*Tailer).commitEvent may call
+// projection.OwnerCheckpointStore.AdvanceIfOwner in runtime/saga/tailer.
+func TestSagaTailerCheckpointAdvancerCaller(t *testing.T) {
+	t.Parallel()
+	diags := CheckSagaTailerCheckpointAdvancerCaller(t, ConfigForExternalCell{})
+	Report(t, sagaTailerAdvancerRuleID, diags)
+}
+
+// TestSagaTailerCheckpointAdvancerCaller_NonVacuity asserts that the production
+// scanner actually finds at least one AdvanceIfOwner call in runtime/saga/tailer
+// — confirming the rule is non-vacuous (commitEvent does call AdvanceIfOwner and
+// it is NOT flagged as unsanctioned).
+func TestSagaTailerCheckpointAdvancerCaller_NonVacuity(t *testing.T) {
+	t.Parallel()
+	var advanceCalls int
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/saga/tailer/..."}), func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.Pkg.Path() != sagaTailerPkg {
+			return nil
+		}
+		info := p.TypesInfo
+		for _, file := range p.Files {
+			if strings.HasSuffix(p.Rel(file), "_test.go") {
+				continue
+			}
+			for _, decl := range file.Decls {
+				fd, ok := decl.(*ast.FuncDecl)
+				if !ok || fd.Body == nil {
+					continue
+				}
+				EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok || sel.Sel.Name != sagaAdvanceIfOwnerMethodName {
+						return
+					}
+					obj := info.ObjectOf(sel.Sel)
+					if obj == nil || obj.Pkg() == nil || obj.Pkg().Path() != sagaKernelProjectionPkg {
+						return
+					}
+					advanceCalls++
+				})
+			}
+		}
+		return nil
+	})
+	if advanceCalls == 0 {
+		t.Fatalf("%s: non-vacuity check failed — no AdvanceIfOwner call found in runtime/saga/tailer; "+
+			"either the call was removed (update sanctioned set) or the package path changed "+
+			"(update sagaTailerPkg constant)", sagaTailerAdvancerRuleID)
+	}
+}
+
+// TestSagaTailerCheckpointAdvancerCaller_REDFixture loads the synthetic
+// sagataileradvancerfixture package (//go:build archtest_fixture) and asserts the
+// REAL detector (scanSagaTailerAdvancerCallers — the same scanner the production
+// check runs) fires on the unsanctioned AdvanceIfOwner call in
+// (*badCaller).illegalAdvance. The fixture is gated by the archtest_fixture build
+// tag so it is never visible in normal production builds or the production scan.
+// Running the real scanner (not an inline copy) is what makes this RED fixture
+// meaningful: it proves the production entrypoint catches a cross-package bypass,
+// closing the F4 scope-mismatch gap where the scanner was tailer-package-local.
+func TestSagaTailerCheckpointAdvancerCaller_REDFixture(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based fixture test in -short mode")
+	}
+
+	const fixturePkg = "./tools/archtest/internal/sagataileradvancerfixture/..."
+	// kernel/projection is loaded alongside the fixture so go/types can resolve
+	// OwnerCheckpointStore.AdvanceIfOwner; the fixture pkg is not in the exempt
+	// set and not _test.go, so the real scanner flags (*badCaller).illegalAdvance.
+	var diags []Diagnostic
+	Run(t, Fixture(FixtureOpts{Tests: false}, []string{fixturePkg, "./kernel/projection/..."}),
+		func(p *Pass) []Diagnostic {
+			diags = append(diags, scanSagaTailerAdvancerCallers(p)...)
+			return nil
+		})
+
+	assert.GreaterOrEqual(t, len(diags), 1,
+		"REDFixture: the real scanSagaTailerAdvancerCallers must flag the "+
+			"unsanctioned AdvanceIfOwner call in (*badCaller).illegalAdvance")
+}
+
+// TestSagaTailerCheckpointAdvancerCaller_GREENFixture asserts that the real
+// commitEvent callsite in runtime/saga/tailer is NOT flagged by the production
+// scanner (since it IS in the sanctioned set). This is the positive direction:
+// if commitEvent is erroneously added to diagnostics, this test fails.
+func TestSagaTailerCheckpointAdvancerCaller_GREENFixture(t *testing.T) {
+	t.Parallel()
+	diags := CheckSagaTailerCheckpointAdvancerCaller(t, ConfigForExternalCell{})
+	for _, d := range diags {
+		t.Errorf("GREENFixture: (*Tailer).commitEvent must NOT be flagged, but got: %s", d.Message)
+	}
+}
+
+// ============================================================================
+// SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01   (#1609 PR-04)
+// ============================================================================
+// INVARIANT: SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01
+//
+// AI-robust rating: Medium
+//
+//   - Implementation scan: types.Implements(*types.Interface) — type-aware;
+//     identifies every concrete named type (exported AND unexported) that
+//     satisfies kernel/projection.OwnerCheckpointStore (value or pointer receivers).
+//   - Conformance-call scan (direct store arg): ResolvePackageRef resolves each
+//     projectiontest.RunOwnerCheckpointConformance(t, store) call; the second
+//     argument's concrete type (unwrapping *T → T for pointer-receiver impls) is
+//     used to credit enrollment. Unlike GlobalReader/Journal conformance which use
+//     a factory closure, RunOwnerCheckpointConformance takes the store DIRECTLY,
+//     so creditOwnerCheckpointEnrollments inspects info.Types[call.Args[1]] for
+//     the concrete type.
+//   - Medium ceiling: Go cannot require a _test.go file to exist for a type at
+//     compile time; enforcement is archtest-bound (CI fails), not compile-time.
+//     Hard upgrade path: codegen golden enumeration of impls, shared with
+//     SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01 at gh #1003. Do NOT open a
+//     separate issue.
+//
+// Enforces: every concrete type in the production source tree that implements
+// kernel/projection.OwnerCheckpointStore must have at least one
+// projectiontest.RunOwnerCheckpointConformance(t, store) call in a _test.go file
+// of its package. Today the sole impl is kernel/projection.MemOwnerCheckpointStore,
+// enrolled in kernel/projection/mem_owner_checkpoint_test.go. The PG impl is
+// deferred to PR-PG (#1630); when it lands it automatically becomes required.
+//
+// # Blind-spot catalog
+//
+//   - B1. reflect-based implicit implementations: no production code uses this
+//     pattern; confirmed by TestSagaOwnerCheckpointConformanceEnrollment_
+//     ReverseBlindSpot_NoReflectImpl.
+//   - B2. generated mock implementations in _test.go are excluded (Tests=false in
+//     the implementation scan); a mock in a production non-test file would be
+//     flagged — intentionally.
+//   - B3. pointer-receiver-only impl whose constructor returns *T: info.Types for
+//     the direct store arg unwraps *T → T, so keys match. Confirmed by
+//     MemOwnerCheckpointStore (constructed directly as &MemOwnerCheckpointStore{}).
+//
+// ref: SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01 (sibling rule, same mechanism)
+// ref: docs/architecture/202606051200-1609-adr-saga-journal-projection-source.md §D5(b)
+
+// TestSagaOwnerCheckpointConformanceEnrollment enforces
+// SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01: every concrete type implementing
+// kernel/projection.OwnerCheckpointStore in the production tree must have a
+// projectiontest.RunOwnerCheckpointConformance call in a _test.go of its package
+// that passes a concretely-typed instance of the impl.
+func TestSagaOwnerCheckpointConformanceEnrollment(t *testing.T) {
+	t.Parallel()
+	diags := CheckSagaOwnerCheckpointConformanceEnrollment(t, ConfigForExternalCell{})
+	Report(t, "SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01", diags)
+}
+
+// TestSagaOwnerCheckpointConformanceEnrollment_REDFixture loads the synthetic
+// sagaownercheckpointenrollfixture package and asserts the detector flags the
+// unenrolled OwnerCheckpointStore impl. The fixture is gated by the
+// archtest_fixture build tag and is invisible in normal builds and production scans.
+func TestSagaOwnerCheckpointConformanceEnrollment_REDFixture(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based fixture test in -short mode")
+	}
+
+	const fixturePkgPath = PlatformModulePath + "/tools/archtest/internal/sagaownercheckpointenrollfixture"
+	const unenrolledTypeName = "unenrolledOwnerStore"
+	unenrolledKey := fixturePkgPath + "." + unenrolledTypeName
+
+	loadPatterns := []string{
+		"./kernel/projection/...",
+		"./tools/archtest/internal/sagaownercheckpointenrollfixture/...",
+	}
+
+	// ─── Pass 1 (Tests:false): resolve iface + collect impls ─────────────────
+	var ownerIface *types.Interface
+	var implPkgs []*types.Package
+	_ = Run(t, Fixture(FixtureOpts{Tests: false}, loadPatterns),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil {
+				return nil
+			}
+			if p.Pkg.Path() == sagaKernelProjectionPkg {
+				if obj := p.Pkg.Scope().Lookup(sagaOwnerCheckpointIfaceName); obj != nil {
+					if named, ok := obj.Type().(*types.Named); ok {
+						if i, ok := named.Underlying().(*types.Interface); ok {
+							ownerIface = i.Complete()
+						}
+					}
+				}
+			}
+			implPkgs = append(implPkgs, p.Pkg)
+			return nil
+		})
+
+	require.NotNil(t, ownerIface, "REDFixture: could not resolve OwnerCheckpointStore interface")
+
+	implSet := make(map[string]bool)
+	implPkgSet := make(map[string]bool)
+	for _, pkg := range implPkgs {
+		if pkg != nil {
+			collectSagaJournalImpls(pkg, ownerIface, implSet, implPkgSet)
+		}
+	}
+
+	// Restrict to the fixture package's impls only.
+	for k := range implSet {
+		if !strings.HasPrefix(k, fixturePkgPath+".") {
+			delete(implSet, k)
+		}
+	}
+
+	require.Contains(t, implSet, unenrolledKey,
+		"REDFixture: impl discovery must find %q in fixture", unenrolledKey)
+
+	// ─── Pass 2 (Tests:true): scan for enrollment calls ──────────────────────
+	// No enrollment call exists in the fixture package's tests (no _test.go).
+	enrolledImpls := make(map[string]bool)
+	_ = Run(t, Fixture(FixtureOpts{Tests: true},
+		[]string{"./tools/archtest/internal/sagaownercheckpointenrollfixture/..."}),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil {
+				return nil
+			}
+			for _, f := range p.Files {
+				if !strings.HasSuffix(p.Rel(f), "_test.go") {
+					continue
+				}
+				creditOwnerCheckpointEnrollments(p.TypesInfo, f,
+					sagaKernelProjectionTestPkg, sagaOwnerCheckpointConformanceFunc,
+					implSet, enrolledImpls)
+			}
+			return nil
+		})
+
+	// ─── Assert: unenrolledOwnerStore must be flagged ────────────────────────
+	var diags []Diagnostic
+	for implKey := range implSet {
+		if !enrolledImpls[implKey] {
+			diags = append(diags, Diagnostic{Rel: implKey, Message: implKey + " not enrolled"})
+		}
+	}
+	assert.GreaterOrEqual(t, len(diags), 1,
+		"REDFixture: the scanner must flag unenrolledOwnerStore (no enrollment call exists in the fixture)")
+}
+
+// TestSagaOwnerCheckpointConformanceEnrollment_ReverseBlindSpot_NoReflectImpl
+// (B1) confirms no production non-test file outside kernel/projection packages
+// uses the string literal "OwnerCheckpointStore" as a reflect target that could
+// construct an implicit impl bypassing types.Implements.
+func TestSagaOwnerCheckpointConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping archtest in -short mode")
+	}
+
+	root := findModuleRoot(t)
+	scope := ModuleScope(root)
+
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
+		var out []Diagnostic
+		for _, f := range p.Files {
+			rel := p.Rel(f)
+			if strings.HasSuffix(rel, "_test.go") {
+				continue
+			}
+			// Exclude kernel/projection (defines the interface + conformance helper),
+			// runtime/saga/ (the sanctioned consumer — Tailer holds OwnerCheckpointStore),
+			// and tools/archtest/ (test infrastructure).
+			if strings.HasPrefix(rel, "kernel/projection/") ||
+				strings.HasPrefix(rel, "runtime/saga/") ||
+				strings.HasPrefix(rel, "tools/archtest/") {
+				continue
+			}
+			EachInSubtree[ast.BasicLit](f, func(lit *ast.BasicLit) {
+				val, ok := StringLitValue(lit)
+				if !ok {
+					return
+				}
+				if val == sagaOwnerCheckpointIfaceName {
+					const b1msg = "blind-spot B1: string literal \"OwnerCheckpointStore\" " +
+						"in production code outside kernel/projection packages may indicate " +
+						"reflect-based impl (SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01)"
+					out = append(out, Diagnostic{
+						Rel:     rel,
+						Line:    p.Fset.Position(lit.Pos()).Line,
+						Message: b1msg,
+					})
+				}
+			})
+		}
+		return out
+	})
+
+	assert.Empty(t, diags,
+		"B1 reverse: no production non-test file outside kernel/projection should contain "+
+			"string literal %q", sagaOwnerCheckpointIfaceName)
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -3321,6 +3666,8 @@ var knownSagaInvariantIDs = []string{
 	"SAGA-METRIC-LABEL-VALUES-FROZEN-01",
 	"SAGA-SLOG-INSTANCE-FIELDS-CALLER-01",
 	"SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01",
+	"SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01",   // EPIC #1609 PR-04
+	"SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01", // EPIC #1609 PR-04
 }
 
 // TestSagaInvariantsConsolidated_BlindSpot_KnownIDsPresent closes blind-spot B1:
@@ -3447,22 +3794,30 @@ func TestSagaInvariantsConsolidated_REDFixture(t *testing.T) {
 // non-constant arg and is not flagged. Reverse self-check:
 // TestSagaMetricLabelValuesFrozen01_NegativeControl + the callsite fixtures.
 
-// TestSagaMetricLabelValuesFrozen01 freezes each executor label-enum's const
-// value set against the independent hardcoded want-set.
+// TestSagaMetricLabelValuesFrozen01 freezes each saga label-enum's const value
+// set (across both runtime/saga/executor and runtime/saga/tailer) against the
+// independent hardcoded want-set in sagaLabelEnumWant.
 func TestSagaMetricLabelValuesFrozen01(t *testing.T) {
 	t.Parallel()
 
-	var got map[string][]string
+	// Collect enum consts from both executor and tailer packages.
+	got := make(map[string][]string)
 	Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.Pkg.Path() != sagaExecutorPkg {
+		if p.Pkg == nil {
 			return nil
 		}
-		got = collectSagaEnumConsts(p)
+		if p.Pkg.Path() != sagaExecutorPkg && p.Pkg.Path() != sagaTailerPkg {
+			return nil
+		}
+		for k, v := range collectSagaEnumConsts(p) {
+			got[k] = append(got[k], v...)
+		}
 		return nil
 	})
 
-	if got == nil {
-		t.Fatalf("SAGA-METRIC-LABEL-VALUES-FROZEN-01: executor package %s not scanned — path changed?", sagaExecutorPkg)
+	if len(got) == 0 {
+		t.Fatalf("SAGA-METRIC-LABEL-VALUES-FROZEN-01: neither executor package %s nor tailer package %s scanned — path changed?",
+			sagaExecutorPkg, sagaTailerPkg)
 	}
 	for typeName, want := range sagaLabelEnumWant {
 		gotVals, ok := got[typeName]
@@ -3472,7 +3827,8 @@ func TestSagaMetricLabelValuesFrozen01(t *testing.T) {
 		if diff := sagaValueSetDiff(gotVals, want); diff != "" {
 			t.Fatalf("SAGA-METRIC-LABEL-VALUES-FROZEN-01: %s value set drifted from the frozen want-set.\n%s\n"+
 				"Update ALL sync points in the same PR: (1) the enum consts in "+
-				"runtime/saga/executor/observer.go, (2) the classifier feeding it, "+
+				"runtime/saga/executor/observer.go or runtime/saga/tailer/observer.go, "+
+				"(2) the classifier feeding it, "+
 				"(3) sagaLabelEnumWant here, (4) docs/ops/alerting-rules.md.", typeName, diff)
 		}
 		if len(gotVals) != len(want) {

@@ -514,7 +514,12 @@ var a2FunnelInternalAllowlist = map[string]struct{}{
 	// constructors ProjectionStoreReadyProbeName / ProjectionLagProbeName and
 	// passes the results to NewProbe — same funnel-internal shape as emitter.go
 	// (names are runtime compositions of cellID+projectionID, not consts).
-	"kernel/projection/probe.go":                               {},
+	"kernel/projection/probe.go": {},
+	// tailer.Tailer.Probes composes its readiness probe name via the sanctioned
+	// SagaTailerReadyProbeName constructor (cellID+projectionID runtime composition,
+	// not a const) and passes the result to NewProbe — same funnel-internal shape
+	// as kernel/projection/probe.go (#1609 PR-04).
+	"runtime/saga/tailer/probe.go":                             {},
 	"runtime/bootstrap/bootstrap_phases.go":                    {},
 	"runtime/bootstrap/phases_lifecycle.go":                    {},
 	"runtime/observability/healthz/healthztest/conformance.go": {},
