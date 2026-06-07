@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
 // tamperEntryHash directly modifies the Hash field of the stored entry at the
@@ -124,7 +125,8 @@ func TestMemStore_VerifyTamperedHash(t *testing.T) {
 	}
 
 	// Confirm the stored hash no longer matches the recomputed hash.
-	entry, err := store.GetBySeq(context.Background(), 1)
+	tamperVis, _ := tenant.NewRowVisibility(tenant.RowScopeTenant, "")
+	entry, err := store.GetBySeq(context.Background(), tamperVis, 1)
 	if err != nil {
 		t.Fatalf("GetBySeq: %v", err)
 	}

@@ -84,6 +84,10 @@ func WithTracer(t wrapper.Tracer) Option {
 // #1181 F8 typed-nil guard: WithObserver uses validation.IsNilInterface so a
 // nil *SagaCollector is rejected and NopObserver is kept.
 //
+// The supplied Observer MUST be safe for concurrent use: a tick drives its
+// claimed instances in parallel, so its methods are invoked concurrently from
+// multiple goroutines (see executor.Observer godoc).
+//
 // For why the Coordinator owns Executor construction (rather than accepting an
 // injected Executor), see runtime/saga/coordinator.go Coordinator struct
 // comments (#1181 F5 design): the Executor must use the Coordinator's journal

@@ -4,8 +4,24 @@ import (
 	"context"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
+
+// RowScopeAllUnsupportedError reports that a RowVisibility carrying
+// tenant.RowScopeAll reached a ledger read path (Query / GetBySeq).
+// RowScopeAll is cross-tenant super-admin visibility whose audited BYPASSRLS
+// path is not wired until epic #1337 PR-5; until then EVERY ledger backend
+// fail-closes it (no silent degrade to tenant scope). It is shared by MemStore
+// and the PG LedgerStore so the rejection is byte-identical across backends and
+// exercised uniformly by the conformance suite. The classification is
+// KindInternal: in PR-4 no caller constructs RowScopeAll for these reads, so its
+// arrival is a wiring/programmer error, not user input.
+func RowScopeAllUnsupportedError() error {
+	return errcode.New(errcode.KindInternal, errcode.ErrInternal,
+		"audit ledger: RowScopeAll is not supported on this read path")
+}
 
 // TailSnapshot holds a point-in-time snapshot of the ledger chain tail.
 // Returned by Store.Tail to allow restart recovery and chain verification
@@ -133,9 +149,27 @@ type Store interface {
 	// Returns zero TailSnapshot when the store is empty (not an error).
 	Tail(ctx context.Context) (TailSnapshot, error)
 
-	// GetBySeq fetches a single entry by sequence number. Returns
-	// ErrAuditLedgerNotFound when the sequence number does not exist.
-	GetBySeq(ctx context.Context, seq int64) (*Entry, error)
+	// GetBySeq fetches a single entry by sequence number. The vis obligation
+	// is enforced on the actor_id OWNER column: if the entry exists but
+	// vis.Allows(entry.ActorID) is false, the implementation returns
+	// ErrAuditLedgerNotFound (IDOR-safe collapse — existence is not leaked).
+	// vis must be valid (NewRowVisibility must succeed). A vis carrying
+	// RowScopeAll is fail-closed on every backend (RowScopeAllUnsupportedError)
+	// until the audited super-admin path lands (epic #1337 PR-5).
+	//
+	// Tenant axis NOT enforced here (deliberate, tracked #1342 / #1618): GetBySeq
+	// enforces ONLY the owner dimension (vis on actor_id). Unlike Query it takes no
+	// AuditFilters, so it carries no tenant predicate — by seq_no it reads the
+	// namespace-global hash chain (the same chain-primitive surface as Tail/Verify),
+	// where seq_no is unique per namespace, not per (namespace, tenant). It has NO
+	// production caller today (chain replay / conformance only). A future
+	// tenant-FACING by-seq read endpoint MUST add a tenant filter (an AuditFilters /
+	// tenant.TenantID parameter that returns ErrAuditLedgerNotFound on tenant
+	// mismatch) rather than rely on this owner-only check; that is deferred until
+	// such a consumer exists (adding it now would be dead plumbing). The deeper fix
+	// — a per-(namespace, tenant) chain with RLS so seq reads are tenant-scoped at
+	// the DB — is #1618.
+	GetBySeq(ctx context.Context, vis tenant.RowVisibility, seq int64) (*Entry, error)
 
 	// Query lists entries matching AuditFilters using keyset cursor pagination
 	// defined by params (Limit + decoded CursorValues + Sort). It returns up to
@@ -143,7 +177,14 @@ type Store interface {
 	// params.Sort. params.Sort must be non-empty (callers pass QuerySort);
 	// an empty Sort is a programmer error and yields ErrValidationFailed.
 	// Returns an empty (non-nil) slice when no entries match.
-	Query(ctx context.Context, filters AuditFilters, params query.ListParams) ([]*Entry, error)
+	//
+	// vis is the row-visibility obligation enforced on the actor_id owner column.
+	// Self/device scopes restrict results to entries whose actor_id matches the
+	// obligation subject. Tenant scope returns all matching rows in the tenant.
+	// vis must be valid (NewRowVisibility must succeed). A vis carrying
+	// RowScopeAll is fail-closed on every backend (RowScopeAllUnsupportedError)
+	// until the audited super-admin path lands (epic #1337 PR-5).
+	Query(ctx context.Context, vis tenant.RowVisibility, filters AuditFilters, params query.ListParams) ([]*Entry, error)
 
 	// Verify re-computes the HMAC for each entry in [fromSeq, toSeq] and checks
 	// chain linkage (PrevHash). Returns valid=true and firstInvalidSeq=-1 when

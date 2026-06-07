@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -151,8 +152,15 @@ func (m *MemStore) Tail(_ context.Context) (TailSnapshot, error) {
 }
 
 // GetBySeq returns a defensive copy of the entry at the given sequence number.
-// Returns ErrAuditLedgerNotFound for missing sequence numbers.
-func (m *MemStore) GetBySeq(_ context.Context, seq int64) (*Entry, error) {
+// Returns ErrAuditLedgerNotFound for missing sequence numbers or when the
+// entry exists but vis.Allows(entry.ActorID) is false (IDOR-safe collapse).
+func (m *MemStore) GetBySeq(_ context.Context, vis tenant.RowVisibility, seq int64) (*Entry, error) {
+	if err := vis.Validate(); err != nil {
+		return nil, err
+	}
+	if vis.Scope() == tenant.RowScopeAll {
+		return nil, RowScopeAllUnsupportedError()
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if seq < 1 || int(seq) > len(m.entries) {
@@ -161,7 +169,15 @@ func (m *MemStore) GetBySeq(_ context.Context, seq int64) (*Entry, error) {
 			errcode.WithDetails(errcode.PublicInt("seqNo", seq)),
 		)
 	}
-	return copyEntry(m.entries[seq-1]), nil
+	e := m.entries[seq-1]
+	if !vis.Allows(e.ActorID) {
+		// IDOR-safe collapse: do not reveal that the entry exists.
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
+			"audit ledger: entry not found",
+			errcode.WithDetails(errcode.PublicInt("seqNo", seq)),
+		)
+	}
+	return copyEntry(e), nil
 }
 
 // Query returns entries matching the supplied filters using keyset cursor
@@ -173,7 +189,13 @@ func (m *MemStore) GetBySeq(_ context.Context, seq int64) (*Entry, error) {
 // params.Sort must be non-empty (callers pass QuerySort). An empty Sort is a
 // programmer error and yields ErrValidationFailed — the same rejection the PG
 // keyset builder produces, so both backends reject it identically.
-func (m *MemStore) Query(_ context.Context, filters AuditFilters, params query.ListParams) ([]*Entry, error) {
+func (m *MemStore) Query(_ context.Context, vis tenant.RowVisibility, filters AuditFilters, params query.ListParams) ([]*Entry, error) {
+	if err := vis.Validate(); err != nil {
+		return nil, err
+	}
+	if vis.Scope() == tenant.RowScopeAll {
+		return nil, RowScopeAllUnsupportedError()
+	}
 	if len(params.Sort) == 0 {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit ledger: query requires a non-empty sort")
@@ -186,7 +208,7 @@ func (m *MemStore) Query(_ context.Context, filters AuditFilters, params query.L
 	// candidate set; ApplyCursor then trims to FetchLimit after ordering.
 	var candidates []*Entry
 	for _, e := range m.entries {
-		if matchesFilters(e, filters) {
+		if matchesFilters(e, filters) && vis.Allows(e.ActorID) {
 			candidates = append(candidates, copyEntry(e))
 		}
 	}
