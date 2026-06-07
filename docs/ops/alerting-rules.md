@@ -765,6 +765,121 @@ rebuild 卡在 Replay 相。下游查询读到陈旧 read-model。
 
 ---
 
+## Saga-Journal Tailer 可观测性（#1609 PR-04）
+
+`runtime/saga/tailer.Tailer`（saga 终态 model-A catch-up 投影驱动）是新长驻组件，
+**不经 ConsumerBase / saga Coordinator 路径**，运维信号不自动继承——故自带运行面。
+所有 metric 带 `{cell, projection}` 双 label（Prometheus 加 `gocell_` 前缀），与
+Projection 投影 metric 同维度约定。readiness probe `<cell>_saga_tailer_<proj>_ready`
+在 Tailer 未运行或 journal/checkpoint 存储不可达时返回 unhealthy（lag 是 metric，不进 probe）。
+
+| Metric (registered name) | 类型 | 含义 |
+|---|---|---|
+| `saga_journal_tailer_lock_acquire_failed_total{reason}` | Counter | per-projection distlock 抢锁失败（leader gate 跳过该 tick），`reason ∈ {contended, ctx_canceled, backend_error}` |
+| `saga_journal_tailer_drain_total{result}` | Counter | 有进展或失败的 drain，`result ∈ {ok, store_error, apply_error}`（空闲 caught-up tick 不计） |
+| `saga_journal_tailer_checkpoint_advance_total{result}` | Counter | 每次 AdvanceIfOwner，`result ∈ {ok, stale_owner, error}` |
+| `saga_journal_tailer_pending_events` | Gauge | 残余积压 = HeadSeq − checkpoint（上次干净 tick 后） |
+| `saga_journal_tailer_last_success_timestamp_seconds` | Gauge | 上次完整 tick 的 unix 时间（驱动停摆告警） |
+
+> **`stale_owner` 是良性交接，不是故障**：`checkpoint_advance_total{result="stale_owner"}`
+> 表示一个被废黜的旧 leader 在 lock 交接窗口被 CAS fence（设计预期，见 ADR D5(b)），
+> 告警必须排除该 result，只对 `result="error"` 报警。同理 `lock_acquire_failed_total{reason="contended"}`
+> 是正常多进程竞争，只对 `reason="backend_error"`（distlock I/O 故障）报警。
+
+### SagaTailerStalled
+
+checkpoint 长期不动（`last_success` 时间戳不前进）= tailer 停摆：无 leader 在跑、
+或 drain 反复失败、或 distlock 后端不可达。下游读投影读到陈旧 saga 终态。
+
+```yaml
+- alert: GoCellSagaTailerStalled
+  expr: |
+    time() - max(gocell_saga_journal_tailer_last_success_timestamp_seconds) by (cell, projection) > 600
+    or absent(gocell_saga_journal_tailer_last_success_timestamp_seconds) == 1
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Saga journal tailer stalled ({{ $labels.cell }}/{{ $labels.projection }})"
+    description: |
+      No saga-journal tailer tick has succeeded for {{ $labels.cell }}/{{ $labels.projection }}
+      in > 10m. The checkpoint is silently frozen.
+      First arm — per-{cell,projection} staleness, including cold/never-succeeded
+      projections: the tailer seeds last_success = start time when it starts (see
+      Tailer.Start), so the {cell,projection} series exists from startup. A projection
+      that has never had a successful tick therefore fires once its age exceeds the
+      threshold — it does not vanish from the series set, so a single cold projection is
+      caught even while other projections keep reporting (the seed is what makes per-label
+      cold detection work; without it a cold projection would have no series). max() by
+      (cell,projection) means one healthy replica keeps the projection green.
+      Second arm (absent()) — coarse backstop only: fires when the gauge disappears
+      ENTIRELY (every replica down / metrics pipeline broken), which the first arm cannot
+      see because a comparison on an empty vector yields no samples.
+      Triage: is a tailer pod running and winning the per-projection distlock? See
+      saga-runbook.md §"场景 5：投影 tailer 停滞" (HeadSeq vs checkpoint SQL + distlock
+      key holder). Cross-check gocell_saga_journal_tailer_drain_total{result} and
+      gocell_saga_journal_tailer_lock_acquire_failed_total{reason}.
+```
+
+### SagaTailerLagHigh
+
+积压增长（HeadSeq 远超 checkpoint）= apply 速率落后或 tailer 停摆。
+
+```yaml
+- alert: GoCellSagaTailerLagHigh
+  expr: max(gocell_saga_journal_tailer_pending_events) by (cell, projection) > 1000
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Saga journal tailer backlog high ({{ $labels.cell }}/{{ $labels.projection }})"
+    description: |
+      > 1000 un-applied saga events for {{ $labels.cell }}/{{ $labels.projection }} for 5m.
+      Gauge is written after each clean tick (probe/tick cadence, no background ticker).
+      A sustained climb with flat checkpoint advance indicates the drain is wedged or the
+      tailer is not the leader. Inspect gocell_saga_journal_tailer_drain_total{result}.
+```
+
+### SagaTailerLockAcquireFailures
+
+distlock 后端 I/O 故障率——`contended` 是正常竞争、必须排除，只对 `backend_error` 报警。
+
+```yaml
+- alert: GoCellSagaTailerLockAcquireFailures
+  expr: sum(rate(gocell_saga_journal_tailer_lock_acquire_failed_total{reason="backend_error"}[5m])) by (cell, projection) > 0
+  for: 10m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Saga journal tailer distlock backend faulting ({{ $labels.cell }}/{{ $labels.projection }})"
+    description: |
+      The saga-journal tailer cannot reach the distlock backend (reason=backend_error).
+      reason=contended is benign multi-process contention and is excluded. Sustained
+      backend_error means no tailer can confirm leadership → drains stop → pair with
+      GoCellSagaTailerStalled. Check the distlock (Redis) backend health.
+```
+
+### SagaTailerCheckpointAdvanceFailures
+
+checkpoint 推进故障——`stale_owner` 是良性交接、必须排除，只对 `error` 报警。
+
+```yaml
+- alert: GoCellSagaTailerCheckpointAdvanceFailures
+  expr: sum(rate(gocell_saga_journal_tailer_checkpoint_advance_total{result="error"}[5m])) by (cell, projection) > 0
+  for: 10m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Saga journal tailer checkpoint advance failing ({{ $labels.cell }}/{{ $labels.projection }})"
+    description: |
+      AdvanceIfOwner is failing with result=error (tx/storage fault) for
+      {{ $labels.cell }}/{{ $labels.projection }}. result=stale_owner is a benign leader
+      handoff (CAS fence) and is excluded. Sustained error means apply+advance cannot
+      commit → checkpoint frozen. Inspect the projection.apply tx path and DB health.
+```
+
+---
+
 ## 调试 / 仪表板查询
 
 以下 PromQL 片段可直接 paste 到 Grafana Explore 或 Dashboard panel。

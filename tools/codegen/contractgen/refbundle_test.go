@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/runtime/http/schemavalidate"
+	"github.com/ghbvf/gocell/runtime/schemavalidate"
 )
 
 // TestBundleSchemaRefs tests the bundleSchemaRefs function which resolves external

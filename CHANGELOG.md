@@ -108,6 +108,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **External consumability**: the repository is public, so the framework module
+  is consumable with plain `go get github.com/ghbvf/gocell@<tag>` — the `GOPRIVATE`
+  setup step was removed from the README and the external-cell quickstart (#1723).
+  Known limitation: `go install github.com/ghbvf/gocell/cmd/gocell@<tag>` does not
+  yet work (the satellite `cmd/gocell` module keeps a local `replace` and the
+  release pipeline cuts no submodule tag); install the CLI from source until #1088.
 - `gocell scaffold assembly` runnable stub now blocks on signal (SIGINT/SIGTERM)
   instead of returning a "not implemented" error immediately. `go run ./cmd/{id}`
   will wait for signal rather than exiting with code 1. (#867, sub-item

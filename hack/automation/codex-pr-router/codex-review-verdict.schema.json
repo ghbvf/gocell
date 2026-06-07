@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ghbvf/gocell/hack/automation/codex-pr-router/codex-review-verdict.schema.json",
+  "title": "codex-review-verdict",
+  "description": "JSON Schema for the structured output that codex must emit when invoked with --output-schema. The router reads this JSON and maps it to the pm:pr-review comment template + pr-meta.sh emit block.",
+  "type": "object",
+  "required": ["verdict", "findings", "counts"],
+  "additionalProperties": false,
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["approved", "changes-requested", "ready"],
+      "description": "Overall review verdict. 'approved' = no actionable findings; 'changes-requested' = actionable findings present (maps to pr-review/changes-requested + pr-status/needs-fix); 'ready' = check phase passed all prior findings (maps to pr-status/ready)."
+    },
+    "findings": {
+      "type": "array",
+      "description": "List of individual review findings. Empty when verdict=approved or verdict=ready with no regressions.",
+      "items": {
+        "type": "object",
+        "required": ["fileLine", "p", "cx", "dimension", "summary"],
+        "additionalProperties": false,
+        "properties": {
+          "fileLine": {
+            "type": "string",
+            "description": "File and line reference in the form 'path/to/file.go:42'. Required by pr-comment.md convention: /fix relies on this to locate findings without re-reviewing.",
+            "pattern": "^.+:[0-9]+$",
+            "minLength": 3
+          },
+          "p": {
+            "type": "string",
+            "enum": ["P0", "P1", "P2", "P3"],
+            "description": "Severity per PROJECT.md §3.1: P0=release-blocker/data-loss/CVE, P1=arch/security/correctness critical, P2=normal debt, P3=deferred/optional."
+          },
+          "cx": {
+            "type": "string",
+            "enum": ["Cx1", "Cx2", "Cx3", "Cx4"],
+            "description": "Complexity per PROJECT.md §3.2: Cx1=single-file, Cx2=same-pkg ≤5 files, Cx3=cross-pkg 5-15 files, Cx4=cross-pkg >15 files or arch change."
+          },
+          "dimension": {
+            "type": "string",
+            "description": "Review dimension (e.g. 安全, 正确性, DX, 运维, 架构, 测试). Free-form label, used in the pm:pr-review comment header.",
+            "minLength": 1
+          },
+          "summary": {
+            "type": "string",
+            "description": "One-sentence finding description. Must be actionable and include enough context for /fix to act on it. Rendered in the Findings list of the pm:pr-review comment.",
+            "minLength": 1
+          },
+          "evidence": {
+            "type": "string",
+            "description": "Optional: code snippet or quoted text as evidence. Placed in the <details> full table of the pm:pr-review comment."
+          },
+          "suggestion": {
+            "type": "string",
+            "description": "Optional: suggested fix direction. Placed in the <details> full table."
+          },
+          "checkStatus": {
+            "type": "string",
+            "enum": ["fixed", "not-fixed", "regression", "partial"],
+            "description": "Used only in check-phase output (verdict=ready or changes-requested for a check run). Maps to ✅/❌/⚠️/🔧 in the --check variant of the pm:pr-review comment."
+          }
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "required": ["total", "byP", "byCx"],
+      "additionalProperties": false,
+      "description": "Aggregated counts for the pr-review comment header and for the pr-meta.sh emit facts block.",
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of findings."
+        },
+        "byP": {
+          "type": "object",
+          "required": ["p0", "p1", "p2", "p3"],
+          "additionalProperties": false,
+          "description": "Finding counts broken down by P severity level.",
+          "properties": {
+            "p0": { "type": "integer", "minimum": 0 },
+            "p1": { "type": "integer", "minimum": 0 },
+            "p2": { "type": "integer", "minimum": 0 },
+            "p3": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "byCx": {
+          "type": "object",
+          "required": ["cx1", "cx2", "cx3", "cx4"],
+          "additionalProperties": false,
+          "description": "Finding counts broken down by Cx complexity level. Router uses cx2/cx3/cx4 to gate the alternate fix path (Cx1-only check).",
+          "properties": {
+            "cx1": { "type": "integer", "minimum": 0 },
+            "cx2": { "type": "integer", "minimum": 0 },
+            "cx3": { "type": "integer", "minimum": 0 },
+            "cx4": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "summary": {
+      "type": "string",
+      "description": "Optional: one-paragraph review summary for the pm:pr-review comment header block."
+    },
+    "rootCauseClusters": {
+      "type": "array",
+      "description": "Optional: high-level root-cause clusters grouping related findings. Helps the /fix agent prioritise systemic issues. Not required; omit when findings are unrelated.",
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "findingRefs"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Short kebab-case cluster identifier, e.g. 'missing-error-handling'.",
+            "pattern": "^[a-z][a-z0-9-]*$",
+            "minLength": 1
+          },
+          "label": {
+            "type": "string",
+            "description": "Human-readable cluster label rendered in the pm:pr-review comment.",
+            "minLength": 1
+          },
+          "findingRefs": {
+            "type": "array",
+            "description": "fileLine values from the findings array that belong to this cluster.",
+            "items": {
+              "type": "string",
+              "pattern": "^.+:[0-9]+$",
+              "minLength": 3
+            },
+            "minItems": 1
+          }
+        }
+      }
+    }
+  }
+}

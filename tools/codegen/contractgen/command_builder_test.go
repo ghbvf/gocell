@@ -8,6 +8,7 @@ package contractgen
 // see TestBuildCommandSpec_NoSchemaRefs / _MissingRequestSchemaRef / _MissingResponseSchemaRef.
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -104,6 +105,71 @@ func TestBuildCommandSpec_FullSpec(t *testing.T) {
 			names = append(names, d.Name)
 		}
 		t.Errorf("spec.DTOs missing 'Response'; got: %v", names)
+	}
+
+	// #1588: a command always embeds its request schema for the async-entry
+	// value funnel (unlike HTTP, which gates on HasBody). It must be non-empty,
+	// single-line compacted, and carry the schema's properties.
+	if spec.RequestSchemaJSON == "" {
+		t.Fatal("spec.RequestSchemaJSON must be non-empty for a command (D6 mandates request schemaRef)")
+	}
+	if strings.Contains(spec.RequestSchemaJSON, "\n") {
+		t.Errorf("spec.RequestSchemaJSON must be single-line compacted; got newline: %q", spec.RequestSchemaJSON)
+	}
+	if !strings.Contains(spec.RequestSchemaJSON, `"deviceId"`) {
+		t.Errorf("spec.RequestSchemaJSON must carry the request schema properties; got: %q", spec.RequestSchemaJSON)
+	}
+}
+
+// TestEmbedRequestSchema_Valid verifies the shared embed helper reads, bundles,
+// compacts, and compile-checks a valid request schema into single-line JSON
+// (the #1588 / HTTP-shared embedRequestSchema funnel).
+func TestEmbedRequestSchema_Valid(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	const schema = `{
+		"$schema": "https://json-schema.org/draft/2020-12/schema",
+		"type": "object",
+		"properties": { "deviceId": { "type": "string", "minLength": 1 } },
+		"required": ["deviceId"],
+		"additionalProperties": false
+	}`
+	if err := os.WriteFile(filepath.Join(root, "request.schema.json"), []byte(schema), 0o600); err != nil {
+		t.Fatalf("write schema: %v", err)
+	}
+
+	got, err := embedRequestSchema("command.test.do.v1", root, "", "request.schema.json")
+	if err != nil {
+		t.Fatalf("embedRequestSchema(valid): %v", err)
+	}
+	if got == "" {
+		t.Fatal("expected non-empty embedded schema")
+	}
+	if strings.ContainsAny(got, "\n\t") {
+		t.Errorf("embedded schema must be compacted single-line; got: %q", got)
+	}
+	if !strings.Contains(got, `"deviceId"`) || !strings.Contains(got, `"minLength":1`) {
+		t.Errorf("embedded schema lost constraints; got: %q", got)
+	}
+}
+
+// TestEmbedRequestSchema_InvalidSchema verifies the codegen-time compile-check
+// fails fast on a schema that does not compile (the AI-HARD fail-fast: a command
+// can never half-generate around a broken value funnel). `type` must be a string
+// or array of strings; a number violates the draft 2020-12 meta-schema.
+func TestEmbedRequestSchema_InvalidSchema(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "request.schema.json"), []byte(`{"type": 123}`), 0o600); err != nil {
+		t.Fatalf("write schema: %v", err)
+	}
+
+	_, err := embedRequestSchema("command.test.do.v1", root, "", "request.schema.json")
+	if err == nil {
+		t.Fatal("expected compile error for an uncompilable request schema, got nil")
+	}
+	if !strings.Contains(err.Error(), "fails to compile") {
+		t.Errorf("error must cite the compile-check; got: %v", err)
 	}
 }
 

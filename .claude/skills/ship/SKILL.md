@@ -148,14 +148,19 @@ GoCell 六维度 = 架构合规 / 安全 / 测试 / 运维可观测 / DX / 产�
 ## 阶段 8：Fix（内置审 findings）+ 收尾
 
 1. **先在对话窗口完整打印内置 review findings 表**（主输出：含 P/Cx 分级 + IN_SCOPE/OUT 归属 + 每条 `file:line`）——窗口打印是主输出、下面贴 pm:ship 评论是无损留痕，**两者都要做**（对齐 `pr-review` 阶段 5/6 的"窗口=主输出、评论=留痕"约定）。
-2. **Cx1/Cx2 IN_SCOPE findings 自动修**（派 `developer` agent 按 `fix` 的 [AUTO-FIX] 流程直接 Edit-Test 修——developer 无 Skill 工具，不真调 `/fix`，是复用其判定 + 修复循环；**不逐条问**）；Cx3/Cx4 遗留与 OUT_OF_SCOPE 写进下面 pm:ship `<details>` 无损区（**不降级成计数**）+ 阶段 9 摘要。**仅当**归属不清 / 取舍没把握 / 有 Cx3+ 需现在做时才 AskUserQuestion。
-3. **推送 + 冲突预检 + CI 绿 gate**：`git -C worktrees/<wt> push` 推送内置修复 commits（阶段 6 已建 PR，CI 在新 SHA 上重跑）；按 `issues` B5 先验无文件冲突、再等 CI 绿（典型 ~5-6 min）——失败则回 `fix` 修复循环再推再等（**最多 3 轮**）；**3 轮仍红 → 直接贴 pm:ship 评论留痕（含 CI 失败摘要 + 已尝试轮次）+ 停下交人工，不 AskUserQuestion**。
-4. **收尾**（命令形态见 `issues` Part B；评论用 `.github/project-template/pr-comment.md` 的 `<!-- pm:ship -->` 模板，含 footer，**评论必留**）：
-   - 贴 ship 评论（命令 + **回显 comment URL/id** 见 `issues` B4）：**每条 finding 带 `file:line`，证据/根因/建议/方案种子入 `<details>`（评论即 review 结果，无损——供再审（codex / `/pr-review`）/ `/fix` 直接读取，不重新 review）**；含 reviewer 数 / 已修 Cx1-Cx2 / 遗留 / OUT_OF_SCOPE / 下一步=待再审。**OUT_OF_SCOPE finding 也写满无损详表 + 建 issue 命令草稿**（形态见 pr-comment.md 的 F3 OOS 示范），不只计数。
+2. **Cx1/Cx2 IN_SCOPE findings 自动修**（派 `developer` agent 按 `fix` 的 [AUTO-FIX] 流程直接 Edit-Test 修——developer 无 Skill 工具，不真调 `/fix`，是复用其判定 + 修复循环；**不逐条问**）；Cx3/Cx4 遗留与 OUT_OF_SCOPE 不进主评论详表（移至下面步骤 4 的独立 pm:oos 评论）。**仅当**归属不清 / 取舍没把握 / 有 Cx3+ 需现在做时才 AskUserQuestion。
+3. **推送 + 冲突预检（阻塞）**：`git -C worktrees/<wt> push` 推送内置修复 commits；按 `issues` B5 ① 先验无文件冲突（冲突则 merge origin/develop --no-edit 解冲突再 push）。冲突预检通过后**立即**执行步骤 4（不等 CI）。
+4. **立即收尾（评论 + 状态，不等 CI）**（命令形态见 `issues` Part B；评论用 `.github/project-template/pr-comment.md` 的 `<!-- pm:ship -->` 模板，含 footer，**评论必留**）：
+   - 贴 ship 评论（命令 + **回显 comment URL/id** 见 `issues` B4）：**每条 IN_SCOPE finding 带 `file:line`，证据/根因/建议/方案种子入 `<details>`（评论即 review 结果，无损——供再审（codex / `/pr-review`）/ `/fix` 直接读取，不重新 review）**；含 reviewer 数 / 已修 Cx1-Cx2 / 遗留 Cx3/Cx4 / OUT_OF_SCOPE 数量（OOS 仅一行指针：`🚦 OUT_OF_SCOPE（详见本 PR 的 pm:oos 评论）`，全量无损记录由步骤 5 独立 pm:oos 承载）。
    - **追加机器块**（贴评论前；约定见 `pr-comment.md` §机器块）：用 `jq -nc` 构造**事实** JSON（`kind:"ship",phase:"ship",tool:"claude-code",verdict:"needs-review-again",cycle:{round:0}` + `repo/pr/baseRef/headRef/headSha/session/worktree` + `findings{total,fixed,unresolved,blocking,byP,byCx}` 计数，**不写 `next`**——helper 派生）`| bash hack/automation/pr-meta.sh emit`，把输出单行追加到填好的 `pm:ship` body 末尾（footer 之后），再走 `issues` B4 贴评论。`headSha` 取 `git -C worktrees/<wt> rev-parse HEAD`。
-   - `gh pr edit` 切 `pr-status/needs-review-again`（移除 `pr-status/in-progress`）。
+   - `gh pr edit` 切 `pr-status/needs-review-again`（移除 `pr-status/in-progress`）——review-side 执行器从此刻可立即开始，无需等待 CI。
+5. **CI 异步收敛（非阻塞收尾，步骤 4 完成后执行）**：按 `issues` B5 ② 等 CI 收敛（典型 ~5-6 min）——失败则回 `fix` 修复循环再推再等（**最多 3 轮**）；CI 收敛后**贴独立 pm:ci 评论**（用 `.github/project-template/pr-comment.md` 的 `<!-- pm:ci -->` 模板）：
+   - 全绿 → `verdict=ci-green`；3 轮仍红 → `verdict=ci-failed`（含失败 check 摘要 + run 链接）+ 停下交人工。
+   - **追加机器块**（贴评论前）：先取轮次 `r=$(bash hack/automation/pr-meta.sh round <PR#>)`，用 `jq -nc` 构造事实 JSON（`kind:"ci",phase:"check",tool:"claude-code",verdict:"ci-green"|"ci-failed",cycle:{round: r}` + `repo/pr/baseRef/headRef/headSha/session/worktree` + `findings:{total:0,fixed:0,unresolved:0,blocking:0,byP:{p0:0,p1:0,p2:0,p3:0},byCx:{cx1:0,cx2:0,cx3:0,cx4:0}}` + `ci:{conclusion:"success"|"failure",failedChecks:[{name,url},...],passedChecks:<n>,totalChecks:<m>}`，**不写 `next`**）`| bash hack/automation/pr-meta.sh emit`，输出追加到 pm:ci body 末尾，再走 `issues` B4 贴评论。
+6. **OOS findings → 独立 pm:oos 评论**（仅当有 OUT_OF_SCOPE findings 时）：用 `.github/project-template/pr-comment.md` 的 `<!-- pm:oos -->` 模板，每条 OOS finding 完整无损记录（file:line + 三维根因 + 三级方案种子 + 影响范围 + Files + `gh issue create` 草稿）。**追加机器块**（贴评论前）：用 `jq -nc` 构造事实 JSON（`kind:"oos",phase:"review",tool:"claude-code",verdict:"oos-filed",cycle:{round:0}` + `repo/pr/baseRef/headRef/headSha/session/worktree` + `findings` 全 0 + `oos:{items:[{fileLine,rootCause:{code,arch,history},solutionSeeds:{minimal,thorough,refactor}},...]}` 数组，**不写 `next`**）`| bash hack/automation/pr-meta.sh emit`，输出追加到 pm:oos body 末尾，再走 `issues` B4 贴评论。
+7. **ScheduleWakeup hook**（所有评论 + label 操作全部完成后）：宿主 LLM 启动 `ScheduleWakeup`（delay ≈ 1800s），调用 `/pr-monitor <PR#>`（report-mode，监控 review-side 进展，等待审查结论）。`pr-monitor` 是 Batch 3 同 PR 落地的新技能。
 
-> ship 到此结束（内置审 + 修）。再审（codex / `/pr-review`）后，续修走 `/fix <PR#>`。
+> ship 到此结束（内置审 + 修；评论 + 状态已先行；CI 异步收敛 + OOS 独立贴）。再审（codex / `/pr-review`）后，续修走 `/fix <PR#>`。
 
 ---
 

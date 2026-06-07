@@ -208,9 +208,9 @@ relay 消费时按 **routing-topic** 在 composition-root 注入的 dispatcher-m
 否则照常发 broker。判别器 = dispatcher-map 成员资格（`command.*.v1` 命名空间 + 闭合 map
 天然隔离事件 topic），**不改 sealed `outbox.Entry`、不带 metadata 标记**。命令 settle 复用事件
 writeBack：成功 `MarkPublished` = 命令已消费；失败分两类——生成 `DispatchAsync` 的**确定性框架错误**
-（reg nil / routing-topic ≠ DispatchID / decode 失败 / no-handler / wrong-type）经 `kout.NewPermanentError`
-标记 → relay 直接 `MarkDead`（不耗重试预算，错配 entry fail-closed）；**handler 业务 error** 透传 → `MarkRetry`
-至耗尽（#1673 F3；值校验失败分类随 #1588）。生成 `DispatchAsync` 体首做 trust-boundary 自检
+（reg nil / routing-topic ≠ DispatchID / **request-schema 值校验失败** / decode 失败 / no-handler / wrong-type）经 `kout.NewPermanentError`
+标记 → relay 直接 `MarkDead`（不耗重试预算，错配 / 非法 entry fail-closed）；**handler 业务 error** 透传 → `MarkRetry`
+至耗尽（#1673 F3 + #1588）。生成 `DispatchAsync` 体首做 trust-boundary 自检
 `entry.RoutingTopic() == string(DispatchID)`，错配 entry 不被错 handler 消费。
 
 composition root 注入（dispatch 值**必须**是生成 `DispatchAsync` 直接符号——archtest
@@ -224,11 +224,17 @@ relay.WithCommandDispatch(reg, map[command.CommandID]command.AsyncDispatchFunc{
 })
 ```
 
-`DispatchAsync` 不执行 schema 值约束（typed struct 即结构契约）；untrusted-payload 值校验
-funnel = #1588。真实 binary producer 接线（devicecell 异步 enqueue）随后续 PR 落地。设计单源 =
+`DispatchAsync` **在 topic-guard 后、unmarshal 前对 `entry.Payload()`（入站 wire JSON bytes）跑
+`runtime/schemavalidate.Validator.Validate` 强制 request schema 值约束**（minLength/maxLength/required/
+additionalProperties/...全 schema 语义；#1588）——这是 HTTP request-body 校验的不可信边界对位物。违例 →
+`kout.NewPermanentError` → relay `MarkDead`。复用 HTTP 同源 byte-validator（核心抽中性包 `runtime/schemavalidate`，
+HTTP 与 command 生成包共用）；honor D4——async bytes 校验零 marshal round-trip（round-trip 仅在校验 **sync** typed
+输入时出现，sync `Dispatch` 仍刻意不校验 = 第一方可信边界，ADR §D8）。command 无 `HasBody` gate，D6 保证恒有 request
+schemaRef，故 `command.tmpl` 无条件 emit validator（无「command 无校验」逃逸路径）。真实 binary producer 接线
+（devicecell 异步 enqueue）随后续 PR（#1698）落地。设计单源 =
 ADR `docs/architecture/202606040550-1044-adr-command-bus-dispatch-funnel.md` §5 ④ +
-§Amendment 2026-06-06；funnel 双向锁 = `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`（上游 Hard）+
-`COMMAND-ASYNC-DISPATCH-CALLER-01`（下游 Hard）。
+§Amendment 2026-06-06 / 2026-06-08；funnel 双向锁 = `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`（上游 Hard，golden 锁
+含值校验 emit）+ `COMMAND-ASYNC-DISPATCH-CALLER-01`（下游 Hard）——值校验骑既有 funnel，无新增 enforcement 机制。
 
 ## Projection ↔ ConsumerBase 装配（composition root）
 
@@ -268,6 +274,25 @@ ADR `docs/architecture/202606051200-1609-adr-saga-journal-projection-source.md` 
 > rebuild 期 foreign-stream 条目只推进 checkpoint、不更新 `projection_event_replay_lag_seconds`（lag 是 own-stream
 > apply 信号）。journal 被 foreign 流主导时 lag gauge 可能长时间平直但 rebuild 仍在进展——排查 rebuild 进度看
 > checkpoint / `pending_events`，不看 lag。
+
+### 投影事件 retained journal（outbox-event durable 源，#1504）
+
+投影 harness 的生产 `ReplaySource`/`Cursor` 现状从 transient `outbox_entries.seq` 取位置——relay
+`CleanupPublished`/`CleanupDead` 删行后 rebuild-from-0 与 live `Cursor.Position` 都会失败（已 fail-closed
+gated off，`202605261620` §Amendment 2026-06-03）。**durable 解法设计已立项**：ADR
+`docs/architecture/202606071600-1504-adr-projection-event-journal.md`——专用 append-only `projection_events`
+表（`global_seq IDENTITY` 位置，`Position` 读行自带 seq、无删行查找）+ emit 期同事务双写装饰器（topic-filtered）+
+删 `GOCELL_PROJECTION_PG_JOURNAL_PREVIEW` gate（**在 PR-04 T-06-2 e2e 证明 + no-DELETE 守卫之后**才 flip，非 PR-03）。**复用** #1609 已落地的 `cellvocab.ProjectionEvent` 载体 +
+#1627 身份修复；**平行 reader**，不泛化 saga `journal.GlobalReader`。本 ADR 是 EPIC #1504 的 PR-00（设计）；
+能力随 PR-01..04 落地。三条新 enforcement invariant（落地 PR 定型，符号清单活在各 archtest godoc）：
+
+| Archtest ID（占位） | 摘要 | 评级 |
+|---|---|---|
+| `PROJECTION-EVENT-JOURNAL-APPEND-CALLER-01` | append `projection_events` 收口单一 sanctioned 写路径（装饰器内未导出 `appendProjectionEvent`）；#1504 forge 防护（封写侧） | **Hard/Hard**（未导出 append + 包内 caller-allowlist，append 与 caller 同包，不受跨包可见性天花板限制） |
+| `PROJECTION-EVENT-JOURNAL-NO-DELETE-01` | 生产代码禁对 `projection_events` 发 DELETE/TRUNCATE（D7 append-only） | **Medium**（archtest SQL-literal scan，有盲区：动态 SQL / 其它 adapter raw `pgx.Exec` / migration / 包内旁路绕得过；store-无-删-方法只约束 sanctioned store 类型）。**真 Hard 升级** = serving DB role `REVOKE DELETE, TRUNCATE ON projection_events`（DB 引擎不可绕，同 #1676 restricted role）/ schema guard 锁 append-only 权限 |
+| `PROJECTION-EVENT-JOURNAL-TOPIC-ALLOWLIST-DERIVED-01` | 双写 topic 集从投影合约 metadata 派生（cellgen），非手写列表 | Medium（Hard 路径 = cellgen golden 字节锁，开 gh 跟踪） |
+
+新 source（mem + PG）入既有 `RunReplaySourceConformance`/`RunCursorConformance`（骑既有 enroll archtest，无新文件）。
 
 ## Stream 命名
 

@@ -17,6 +17,10 @@
 // RunCursorConformance exercises the four Cursor position invariants documented
 // on projection.Cursor (1-based, monotonic, gap-allowed, permanent-error).
 //
+// RunOwnerCheckpointConformance exercises the fenced AdvanceIfOwner contract of
+// projection.OwnerCheckpointStore (cold claim, same-owner re-advance, new-leader
+// claim-ahead, stale-owner rejection with ErrStaleOwner).
+//
 // The Checkpoint helper does NOT exercise transaction semantics (ambient-tx
 // binding is the responsibility of each adapter's own integration test). The PG
 // adapter (PR-02) invokes this funnel directly on a real
@@ -464,5 +468,207 @@ func assertOrderedSubsequence(t *testing.T, got, want []string) {
 	if i != len(want) {
 		t.Errorf("Replay did not deliver the seeded entries in order:\n want subsequence = %v\n got = %v\n matched %d/%d",
 			want, got, i, len(want))
+	}
+}
+
+const (
+	ownerTokenA = "owner-token-aaaaaaaa"
+	ownerTokenB = "owner-token-bbbbbbbb"
+)
+
+// RunOwnerCheckpointConformance verifies the fenced AdvanceIfOwner contract that
+// every projection.OwnerCheckpointStore must satisfy (EPIC #1609 ADR D5(b)).
+// Each sub-test uses a distinct (cellID, projectionID) key so the ordered
+// advance sequences do not interfere on a shared store instance.
+//
+// The fencing contract (single source = projection.OwnerCheckpointStore godoc):
+//   - cold claim: first AdvanceIfOwner on an empty checkpoint with offset > 0
+//     succeeds and records the owner token
+//   - same-owner re-advance: AdvanceIfOwner with the recorded token always
+//     succeeds (idempotent retry / forward advance)
+//   - same-owner backward: same token can advance to a LOWER offset (monotonicity
+//     is the caller's responsibility, not the store's)
+//   - new-leader claim-ahead: a different token advancing strictly past the
+//     committed offset succeeds and takes ownership
+//   - stale-owner rejection: a different token NOT ahead of the committed offset
+//     is rejected with ErrStaleOwner and leaves the offset unchanged
+//   - empty token rejected: an empty ownerToken returns non-nil and must NOT be
+//     ErrStaleOwner (validation fault, not a deposed-leader condition)
+//   - cold claim offset zero: cold AdvanceIfOwner with offset 0 returns
+//     ErrStaleOwner (0 is not strictly ahead of the committed offset 0)
+//
+// This helper is intended for external packages that provide their own
+// OwnerCheckpointStore implementations; SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01
+// forces every implementation to appear as an argument here.
+func RunOwnerCheckpointConformance(t *testing.T, store projection.OwnerCheckpointStore) {
+	t.Helper()
+	t.Run("ColdClaimEstablishesOwner", func(t *testing.T) {
+		t.Parallel()
+		checkOwnerColdClaim(t, store)
+	})
+	t.Run("SameOwnerReAdvance", func(t *testing.T) {
+		t.Parallel()
+		checkOwnerSameTokenReAdvance(t, store)
+	})
+	t.Run("NewLeaderClaimsAhead", func(t *testing.T) {
+		t.Parallel()
+		checkOwnerNewLeaderAhead(t, store)
+	})
+	t.Run("StaleOwnerRejected", func(t *testing.T) {
+		t.Parallel()
+		checkOwnerStaleRejected(t, store)
+	})
+	t.Run("SameOwnerBackwardAccepted", func(t *testing.T) {
+		t.Parallel()
+		checkOwnerSameTokenBackward(t, store)
+	})
+	t.Run("EmptyTokenRejected", func(t *testing.T) {
+		t.Parallel()
+		checkOwnerEmptyTokenRejected(t, store)
+	})
+	t.Run("ColdClaimOffsetZero", func(t *testing.T) {
+		t.Parallel()
+		checkOwnerColdClaimOffsetZero(t, store)
+	})
+}
+
+// checkOwnerSameTokenBackward asserts that a same-owner advance to a LOWER
+// offset is accepted (monotonicity is the caller's responsibility, not the
+// store's). This is the F5 sub-test: seed same-owner to 9, advance same-owner
+// to 4, assert nil error and LoadOffset == 4.
+func checkOwnerSameTokenBackward(t *testing.T, store projection.OwnerCheckpointStore) {
+	t.Helper()
+	ctx := context.Background()
+	const cell, proj = "cell-oc-back", "proj-oc-back"
+	if err := store.AdvanceIfOwner(ctx, cell, proj, ownerTokenA, 9); err != nil {
+		t.Fatalf("AdvanceIfOwner(A, 9): %v", err)
+	}
+	// Same owner advancing BACKWARD must still be accepted — the store does not
+	// enforce monotonicity within a single owner window; that is the caller's job.
+	if err := store.AdvanceIfOwner(ctx, cell, proj, ownerTokenA, 4); err != nil {
+		t.Fatalf("same-owner backward AdvanceIfOwner(A, 4) must be accepted, got: %v", err)
+	}
+	assertOwnerOffset(t, store, cell, proj, 4)
+}
+
+// checkOwnerEmptyTokenRejected asserts that an empty ownerToken is rejected
+// fail-closed (a real Tailer always mints a non-empty UUID; accepting an empty
+// token would let a cold-start race claim an empty-owner row without distlock
+// backing). The error need NOT be ErrStaleOwner — implementations may return a
+// validation error.
+func checkOwnerEmptyTokenRejected(t *testing.T, store projection.OwnerCheckpointStore) {
+	t.Helper()
+	ctx := context.Background()
+	const cell, proj = "cell-oc-empty", "proj-oc-empty"
+	err := store.AdvanceIfOwner(ctx, cell, proj, "", 5)
+	if err == nil {
+		t.Fatalf("AdvanceIfOwner(empty token, 5) returned nil, want non-nil error")
+	}
+	// The error must NOT be ErrStaleOwner (empty token is a validation fault,
+	// not a deposed-leader condition).
+	if errorsIsStaleOwner(err) {
+		t.Errorf("AdvanceIfOwner(empty token) returned ErrStaleOwner, want a distinct validation error")
+	}
+	// The offset must remain 0 (cold store is unmodified by a rejected advance).
+	assertOwnerOffset(t, store, cell, proj, 0)
+}
+
+// checkOwnerColdClaimOffsetZero asserts that a cold claim with offset == 0 is
+// rejected. A new leader must advance strictly past the committed offset (0 for
+// a cold checkpoint), so offset 0 is not "ahead" and MUST return ErrStaleOwner.
+func checkOwnerColdClaimOffsetZero(t *testing.T, store projection.OwnerCheckpointStore) {
+	t.Helper()
+	ctx := context.Background()
+	const cell, proj = "cell-oc-zero", "proj-oc-zero"
+	err := store.AdvanceIfOwner(ctx, cell, proj, ownerTokenA, 0)
+	if !errorsIsStaleOwner(err) {
+		t.Fatalf("cold AdvanceIfOwner(A, 0) = %v, want ErrStaleOwner (offset 0 is not strictly ahead of committed 0)", err)
+	}
+	// Offset must remain 0 (cold store is unmodified by a rejected advance).
+	assertOwnerOffset(t, store, cell, proj, 0)
+}
+
+func checkOwnerColdClaim(t *testing.T, store projection.OwnerCheckpointStore) {
+	t.Helper()
+	ctx := context.Background()
+	const cell, proj = "cell-oc-cold", "proj-oc-cold"
+	if err := store.AdvanceIfOwner(ctx, cell, proj, ownerTokenA, 5); err != nil {
+		t.Fatalf("cold AdvanceIfOwner(A, 5): unexpected error: %v", err)
+	}
+	assertOwnerOffset(t, store, cell, proj, 5)
+}
+
+func checkOwnerSameTokenReAdvance(t *testing.T, store projection.OwnerCheckpointStore) {
+	t.Helper()
+	ctx := context.Background()
+	const cell, proj = "cell-oc-same", "proj-oc-same"
+	if err := store.AdvanceIfOwner(ctx, cell, proj, ownerTokenA, 5); err != nil {
+		t.Fatalf("AdvanceIfOwner(A, 5): %v", err)
+	}
+	// Same owner advancing forward must always succeed.
+	if err := store.AdvanceIfOwner(ctx, cell, proj, ownerTokenA, 9); err != nil {
+		t.Fatalf("same-owner AdvanceIfOwner(A, 9): %v", err)
+	}
+	assertOwnerOffset(t, store, cell, proj, 9)
+	// Same owner re-advancing to the SAME offset is an idempotent retry and must
+	// succeed (handler/tx replay safety).
+	if err := store.AdvanceIfOwner(ctx, cell, proj, ownerTokenA, 9); err != nil {
+		t.Fatalf("same-owner idempotent AdvanceIfOwner(A, 9): %v", err)
+	}
+	assertOwnerOffset(t, store, cell, proj, 9)
+}
+
+func checkOwnerNewLeaderAhead(t *testing.T, store projection.OwnerCheckpointStore) {
+	t.Helper()
+	ctx := context.Background()
+	const cell, proj = "cell-oc-new", "proj-oc-new"
+	if err := store.AdvanceIfOwner(ctx, cell, proj, ownerTokenA, 9); err != nil {
+		t.Fatalf("AdvanceIfOwner(A, 9): %v", err)
+	}
+	// A different token strictly ahead of the committed offset is a legitimate
+	// new leader: it succeeds and claims ownership.
+	if err := store.AdvanceIfOwner(ctx, cell, proj, ownerTokenB, 12); err != nil {
+		t.Fatalf("new-leader AdvanceIfOwner(B, 12): %v", err)
+	}
+	assertOwnerOffset(t, store, cell, proj, 12)
+	// B now owns it: B continues to advance.
+	if err := store.AdvanceIfOwner(ctx, cell, proj, ownerTokenB, 15); err != nil {
+		t.Fatalf("new-owner continue AdvanceIfOwner(B, 15): %v", err)
+	}
+	assertOwnerOffset(t, store, cell, proj, 15)
+}
+
+func checkOwnerStaleRejected(t *testing.T, store projection.OwnerCheckpointStore) {
+	t.Helper()
+	ctx := context.Background()
+	const cell, proj = "cell-oc-stale", "proj-oc-stale"
+	// B becomes the leader at offset 12.
+	if err := store.AdvanceIfOwner(ctx, cell, proj, ownerTokenB, 12); err != nil {
+		t.Fatalf("AdvanceIfOwner(B, 12): %v", err)
+	}
+	// A deposed leader (token A) that lags must be fenced.
+	if err := store.AdvanceIfOwner(ctx, cell, proj, ownerTokenA, 10); !errorsIsStaleOwner(err) {
+		t.Fatalf("stale AdvanceIfOwner(A, 10) = %v, want ErrStaleOwner", err)
+	}
+	// A deposed leader at the SAME offset (not strictly ahead) is also fenced.
+	if err := store.AdvanceIfOwner(ctx, cell, proj, ownerTokenA, 12); !errorsIsStaleOwner(err) {
+		t.Fatalf("stale AdvanceIfOwner(A, 12) = %v, want ErrStaleOwner", err)
+	}
+	// Offset is unchanged by the rejected advances.
+	assertOwnerOffset(t, store, cell, proj, 12)
+}
+
+func errorsIsStaleOwner(err error) bool {
+	return errors.Is(err, projection.ErrStaleOwner)
+}
+
+func assertOwnerOffset(t *testing.T, store projection.OwnerCheckpointStore, cellID, projID string, want int64) {
+	t.Helper()
+	got, err := store.LoadOffset(context.Background(), cellID, projID)
+	if err != nil {
+		t.Fatalf("LoadOffset(%s/%s): %v", cellID, projID, err)
+	}
+	if got != want {
+		t.Errorf("LoadOffset(%s/%s) = %d, want %d", cellID, projID, got, want)
 	}
 }

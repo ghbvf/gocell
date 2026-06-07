@@ -1,10 +1,25 @@
-// Package schemavalidate provides JSON Schema validation for generated HTTP handlers.
+// Package schemavalidate provides transport-neutral JSON Schema validation for
+// generated code at untrusted wire boundaries.
 //
 // It loads a JSON Schema (draft 2020-12) from raw bytes, compiles it once at
-// handler construction time, and validates request bodies on every request.
-// Validation errors are mapped to errcode.ErrValidationFailed and written
-// via httputil.WriteError. Error messages expose field names but never expose
-// schema-internal details (lengths, ranges, patterns) to prevent oracle attacks.
+// construction time, and validates payloads on every call. Validation errors are
+// mapped to errcode.ErrValidationFailed. Error messages expose field names but
+// never expose schema-internal details (lengths, ranges, patterns) to prevent
+// oracle attacks.
+//
+// Both transports embed and reuse this validator at their untrusted ingress:
+//   - HTTP handlers (generated/contracts/http/**): validate the request body
+//     bytes before entering the cell (handler.tmpl).
+//   - Async command dispatch (generated/contracts/command/**): validate the
+//     outbox entry payload bytes inside DispatchAsync before unmarshal+handle
+//     (command.tmpl, #1588). The sync in-process Dispatch deliberately does NOT
+//     validate — it is a first-party typed boundary (ADR 202606040550-1044 §D8).
+//
+// HTTP response writing for a validation error is the caller's concern:
+// generated HTTP handlers pass the returned *errcode.Error straight to
+// httputil.WriteError (KindInvalid → 400); this package stays response-writer
+// free so non-HTTP consumers (command dispatch) can reuse it without pulling in
+// net/http.
 //
 // ref: santhosh-tekuri/jsonschema/v6 (already in go.mod via contracttest)
 // ref: deepmap/oapi-codegen security examples (request validation patterns)
@@ -15,21 +30,30 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
 // Validator validates a JSON payload against a compiled JSON Schema.
 type Validator interface {
 	// Validate validates body against the compiled schema.
 	// Returns nil on success. Returns *errcode.Error (code=ErrValidationFailed)
-	// on schema violation. Error messages contain field names but never
-	// expose schema internals (lengths, ranges, regex patterns).
+	// on schema violation.
+	//
+	// Error shape: the offending field path is carried in the "detail"
+	// PublicDetail (oracle-safe — field name only, never the constraint value:
+	// lengths, ranges, regex patterns). The Message is a fixed const literal
+	// ("request body validation failed"). Because (*errcode.Error).Error() renders
+	// only [Code] + Message (+ Cause), NOT Details, a caller that logs err.Error()
+	// — e.g. the outbox relay storing last_error via SanitizeError — never leaks
+	// the field name. The field path reaches clients only via the wire-serialized
+	// details array (4xx), not server-side error strings.
+	//
+	// ctx is accepted for API stability and future cancellation/deadline support;
+	// the default implementation does not use it (validation is CPU-bound, in-memory).
 	Validate(ctx context.Context, body []byte) error
 }
 
@@ -56,17 +80,6 @@ func NewValidator(schemaJSON []byte) (Validator, error) {
 	}
 
 	return &validator{schema: schema}, nil
-}
-
-// WriteValidationError writes an HTTP 400 response with the error from Validate.
-// If err is not an *errcode.Error it is wrapped as ErrValidationFailed.
-func WriteValidationError(ctx context.Context, w http.ResponseWriter, err error) {
-	var ec *errcode.Error
-	if !errors.As(err, &ec) {
-		ec = errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "request validation failed",
-			errcode.WithInternal(errcode.InternalAttr("_", err.Error())))
-	}
-	httputil.WriteError(ctx, w, ec)
 }
 
 // validator is the concrete implementation backed by santhosh-tekuri/jsonschema/v6.

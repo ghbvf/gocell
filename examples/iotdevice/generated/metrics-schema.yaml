@@ -438,6 +438,44 @@ metrics:
         - cell
         - reason
       file: runtime/observability/metrics/saga.go
+    - name: saga_journal_tailer_checkpoint_advance_total
+      type: counter
+      help: Total saga-journal tailer checkpoint AdvanceIfOwner attempts, labeled by result (ok = committed; stale_owner = deposed-leader fence, benign; error = tx/storage fault). Alert on result=error; exclude result=stale_owner.
+      labels:
+        - cell
+        - projection
+        - result
+      file: runtime/observability/metrics/saga_tailer.go
+    - name: saga_journal_tailer_drain_total
+      type: counter
+      help: Total saga-journal tailer drains that made progress or failed, labeled by result (ok = ≥1 event applied; store_error = checkpoint load failed; apply_error = non-stale replay/apply failure). Idle caught-up ticks are not counted.
+      labels:
+        - cell
+        - projection
+        - result
+      file: runtime/observability/metrics/saga_tailer.go
+    - name: saga_journal_tailer_last_success_timestamp_seconds
+      type: gauge
+      help: Unix time of the last fully-completed saga-journal tailer tick (drives the stalled-tailer alert).
+      labels:
+        - cell
+        - projection
+      file: runtime/observability/metrics/saga_tailer.go
+    - name: saga_journal_tailer_lock_acquire_failed_total
+      type: counter
+      help: Total per-projection distlock acquire failures (the saga-journal tailer leader gate skipped the tick), labeled by reason (contended = another process holds the lock; ctx_canceled = shutdown; backend_error = distlock I/O fault / lock-acquire failure rate).
+      labels:
+        - cell
+        - projection
+        - reason
+      file: runtime/observability/metrics/saga_tailer.go
+    - name: saga_journal_tailer_pending_events
+      type: gauge
+      help: Residual saga-journal tailer backlog (HeadSeq − checkpoint) after the last clean tick.
+      labels:
+        - cell
+        - projection
+      file: runtime/observability/metrics/saga_tailer.go
     - name: saga_leader_elect_skip_total
       type: counter
       help: Total leader-elect skips (acquireLead could not confirm leadership), labeled by reason (contended = another coordinator holds the distlock; ctx_canceled = shutdown; backend_error = distlock I/O fault / lock-acquire failure rate). Sustained contended with drive{result=ok}≈0 means an instance is stuck skipping.
