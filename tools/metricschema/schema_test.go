@@ -2209,12 +2209,11 @@ func productionGoTopLevels(t *testing.T, root string) map[string]bool {
 			// go.mod, e.g. cellmodules/ #1559) is unaddressable by the ModeModule
 			// (GOWORK=off) production scan that prodscan.Patterns drives, so it must
 			// not be required by this coverage guard either — symmetric with
-			// prodscan.Patterns skipping it. Full coverage of satellites is the
-			// ModeWorkspace migration tracked by gh #1590.
-			if rel == top {
-				if info, statErr := os.Stat(filepath.Join(path, "go.mod")); statErr == nil && !info.IsDir() {
-					return filepath.SkipDir
-				}
+			// prodscan.Patterns skipping it (shared prodscan.IsModuleRoot is the
+			// single source). Full coverage of satellites is the ModeWorkspace
+			// migration tracked by gh #1590.
+			if rel == top && prodscan.IsModuleRoot(path) {
+				return filepath.SkipDir
 			}
 			if strings.HasPrefix(d.Name(), ".") || obs01CoverageExcludedTop(top) || d.Name() == "testdata" {
 				if rel == top || d.Name() == "testdata" {

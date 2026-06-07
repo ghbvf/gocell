@@ -38,7 +38,7 @@ func Patterns(root string) []string {
 	}
 	for _, dir := range topLevelDirs {
 		full := filepath.Join(root, dir)
-		if !dirExists(full) || isModuleRoot(full) {
+		if !dirExists(full) || IsModuleRoot(full) {
 			continue
 		}
 		patterns = append(patterns, "./"+dir+"/...")
@@ -84,11 +84,13 @@ func dirExists(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-// isModuleRoot reports whether dir carries its own go.mod (a go.work satellite
+// IsModuleRoot reports whether dir carries its own go.mod (a go.work satellite
 // module root). Such dirs are unaddressable by root-relative patterns under
 // ModeModule (GOWORK=off) and are skipped by Patterns / PatternsExtended — see
-// the Patterns godoc + gh #1590.
-func isModuleRoot(dir string) bool {
+// the Patterns godoc + gh #1590. Exported so coverage guards that must stay
+// symmetric with the scan set (e.g. metricschema's productionGoTopLevels) share
+// this single source of truth rather than re-deriving the go.mod check.
+func IsModuleRoot(dir string) bool {
 	info, err := os.Stat(filepath.Join(dir, "go.mod"))
 	return err == nil && !info.IsDir()
 }
