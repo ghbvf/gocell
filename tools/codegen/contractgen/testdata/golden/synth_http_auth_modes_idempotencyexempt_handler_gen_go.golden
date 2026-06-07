@@ -15,7 +15,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/http/schemavalidate"
+	"github.com/ghbvf/gocell/runtime/schemavalidate"
 )
 
 var contractSpec = contractspec.ContractSpec{
@@ -92,7 +92,9 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	// schemavalidate.NewValidator failure (codegen invariant), so the field
 	// is only reachable here when validator construction succeeded.
 	if err := h.requestValidator.Validate(r.Context(), bodyBytes); err != nil {
-		schemavalidate.WriteValidationError(r.Context(), w, err)
+		// Validate always returns *errcode.Error (ErrValidationFailed → 400);
+		// httputil.WriteError renders it via errors.As → writeErrcodeError.
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	resp, err := h.svc.Idempotencyexempt(r.Context(), req)

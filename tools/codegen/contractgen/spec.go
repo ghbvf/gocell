@@ -61,11 +61,16 @@ type ContractGenSpec struct {
 	// (No grpc field: kind=grpc emits zero contractgen artifacts since #1688 —
 	// buf's generated pb.<Svc>Server is the sole server contract.)
 	// RequestSchemaJSON is the raw JSON content of the request schema file,
-	// compacted to a single line (no extra whitespace).
-	// Non-empty only when Kind=="http" and the contract declares schemaRefs.request.
-	// The generated handler embeds this as a Go string literal to compile the
+	// $ref-bundled and compacted to a single line (no extra whitespace).
+	// Set by embedRequestSchema for two kinds:
+	//   - Kind=="http" with a body (POST/PUT/PATCH declaring schemaRefs.request)
+	//     — handler.tmpl embeds it to validate the request body at HTTP ingress.
+	//   - Kind=="command" — ALWAYS set (D6 mandates schemaRefs.request; a command
+	//     always carries a payload), so command.tmpl unconditionally embeds it to
+	//     validate the untrusted outbox entry payload inside DispatchAsync (#1588).
+	// The generated code embeds this as a Go string literal to compile the
 	// validator at construction time — no runtime file I/O, no embed.FS.
-	// Empty string means no schema validation is emitted.
+	// Empty string means no schema validation is emitted (no-body HTTP endpoints).
 	RequestSchemaJSON string
 
 	// PanicReasonPolicyNil is the kebab-case reason literal passed to

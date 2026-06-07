@@ -227,10 +227,10 @@ sealed `outbox.Entry` wire envelope**（command_id 走 producer-owned business-m
 
 **command_id 确定性来源 = 源事件 `entry.ID()`**（重投稳定，不碰 sealed envelope）：源事件
 被 broker 重投时 producer 反应式 emit 出两条同 command_id 的命令 entry，relay 只 dispatch 一次。
-`DispatchAsync` 失败 settle 分两类（#1673 F3）：生成体的**确定性框架错误**（reg nil /
-routing-topic ≠ DispatchID / decode 失败 / no-handler / wrong-type）经 `kout.NewPermanentError`
-→ `MarkDead`；**handler 业务 error** 透传 → `MarkRetry` 至耗尽（值校验失败分类随 #1588）。
-生成 `DispatchAsync` 体首做 trust-boundary 自检 `entry.RoutingTopic() == string(DispatchID)`。
+`DispatchAsync` 失败 settle 分两类（#1673 F3 + #1588）：生成体的**确定性框架错误**（reg nil /
+routing-topic ≠ DispatchID / **request-schema 值校验失败**（#1588，详见下文值校验段）/ decode 失败 /
+no-handler / wrong-type）经 `kout.NewPermanentError` → `MarkDead`；**handler 业务 error** 透传 →
+`MarkRetry` 至耗尽。生成 `DispatchAsync` 体首做 trust-boundary 自检 `entry.RoutingTopic() == string(DispatchID)`。
 
 ### producer + composition-root 接线（首个生产 callsite #1698）
 
@@ -276,13 +276,20 @@ bootstrap.New(bootstrap.WithRelay(relay), bootstrap.WithConsumerBase(consumerBas
 // durable: adapterpg.NewOutboxStore + NewOutboxWriter + persistence.WrapForCell(adapterpg.NewTxManager(pool))
 ```
 
-`DispatchAsync` 不执行 schema 值约束（typed struct 即结构契约）；untrusted-payload 值校验
-funnel = #1588。设计单源 = ADR `docs/architecture/202606040550-1044-adr-command-bus-dispatch-funnel.md`
-§5 ⑤ + §Amendment 2026-06-08（消费半 + producer）/ §Amendment 2026-06-06（④ async 机制）。
+`DispatchAsync` **在 topic-guard 后、unmarshal 前对 `entry.Payload()`（入站 wire JSON bytes）跑
+`runtime/schemavalidate.Validator.Validate` 强制 request schema 值约束**（minLength/maxLength/required/
+additionalProperties/...全 schema 语义；#1588）——这是 HTTP request-body 校验的不可信边界对位物。违例 →
+`kout.NewPermanentError` → relay `MarkDead`。复用 HTTP 同源 byte-validator（核心抽中性包 `runtime/schemavalidate`，
+HTTP 与 command 生成包共用）；honor D4——async bytes 校验零 marshal round-trip（round-trip 仅在校验 **sync** typed
+输入时出现，sync `Dispatch` 仍刻意不校验 = 第一方可信边界，ADR §D8）。command 无 `HasBody` gate，D6 保证恒有 request
+schemaRef，故 `command.tmpl` 无条件 emit validator（无「command 无校验」逃逸路径）。
+
+设计单源 = ADR `docs/architecture/202606040550-1044-adr-command-bus-dispatch-funnel.md`
+§5 ④/⑤ + §Amendment 2026-06-08（#1698 消费半 + producer / #1588 值校验）/ §Amendment 2026-06-06（④ async 机制）。
 funnel 双向锁（盲区清单活在各 archtest godoc）：
 
 - `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`：typed `Register`/`Dispatch`/`DispatchAsync` 仅 codegen
-  派生（上游 Hard）。
+  派生（上游 Hard；golden 锁含 #1588 值校验 emit）。
 - `COMMAND-ASYNC-DISPATCH-CALLER-01`（3-arg）：relay 只接生成 `DispatchAsync`（下游 Hard）。
 - `COMMAND-ASYNC-EMIT-FUNNEL-01`（#1698）：`EmitAsync` subject/commandID 必填位置参（下游 Hard）
   + `command.*`-topic emit 收口 `runtime/command`（上游 Medium）。
