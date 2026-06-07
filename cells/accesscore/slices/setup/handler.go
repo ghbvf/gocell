@@ -8,27 +8,19 @@ import (
 	statusGen "github.com/ghbvf/gocell/generated/contracts/http/auth/setup/status/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/tenant"
-	"github.com/ghbvf/gocell/runtime/http/cellmw"
 )
-
-// headerTenantID is the HTTP header name for the tenant identifier on
-// bootstrap endpoints (pre-auth, no JWT claim available).
-const headerTenantID = "X-Tenant-ID"
-
-// setupTenantCtxKey is the unexported context key used to ferry the
-// X-Tenant-ID header value from the HTTP request into the adapter methods.
-type setupTenantCtxKey struct{}
 
 // StatusAdapter implements statusGen.Service for http.auth.setup.status.v1.
 // The status endpoint is always Public (no JWT required): no admin exists yet
 // during first-run bootstrap.
 type StatusAdapter struct{ S *Service }
 
-// Status implements statusGen.Service. Reads X-Tenant-ID from ctx (injected
-// by the wrapping mux) to scope the admin existence check to the tenant.
-func (a StatusAdapter) Status(ctx context.Context, _ *statusGen.Request) (statusGen.StatusResponseObject, error) {
-	rawTID, _ := ctx.Value(setupTenantCtxKey{}).(string)
-	tid, err := tenant.ParseTenantID(rawTID)
+// Status implements statusGen.Service. The generated handler populates
+// req.XTenantID from the X-Tenant-ID header declared in contract.yaml
+// endpoints.http.headers; this adapter parses it to scope the admin existence
+// check to the tenant.
+func (a StatusAdapter) Status(ctx context.Context, req *statusGen.Request) (statusGen.StatusResponseObject, error) {
+	tid, err := tenant.ParseTenantID(req.XTenantID)
 	if err != nil {
 		// Missing or malformed tenant → report HasAdmin:false rather than surfacing
 		// the parse error. This pre-auth bootstrap probe must stay non-enumerable:
@@ -52,13 +44,14 @@ func (a StatusAdapter) Status(ctx context.Context, _ *statusGen.Request) (status
 // AdminAdapter implements adminGen.Service for http.auth.setup.admin.v1.
 type AdminAdapter struct{ S *Service }
 
-// Admin implements adminGen.Service. The generated handler validates and
-// decodes username+email+password from the request body. TenantID is read
-// from ctx (injected by the wrapping mux from X-Tenant-ID header).
+// Admin implements adminGen.Service. The generated handler validates and decodes
+// username+email+password from the request body and populates req.XTenantID from
+// the X-Tenant-ID header. A missing/malformed tenant fails closed inside
+// Service.CreateAdmin (tenant.ParseTenantID on CreateAdminInput.TenantID) to a
+// 400 ERR_AUTH_IDENTITY_INVALID_INPUT (ADR 1160).
 func (a AdminAdapter) Admin(ctx context.Context, req *adminGen.Request) (adminGen.AdminResponseObject, error) {
-	rawTID, _ := ctx.Value(setupTenantCtxKey{}).(string)
 	out, err := a.S.CreateAdmin(ctx, CreateAdminInput{
-		TenantID: rawTID,
+		TenantID: req.XTenantID,
 		Username: req.Username,
 		Email:    req.Email,
 		Password: req.Password,
@@ -103,27 +96,12 @@ func NewHandler(svc *Service, bootstrapAuth func(http.Handler) http.Handler) *Ha
 	}
 }
 
-// RegisterRoutes mounts the setup contract handlers on mux. Both handlers are
-// wrapped with a thin middleware that reads X-Tenant-ID from the HTTP request
-// headers and stores it in ctx under setupTenantCtxKey.
-//
-// cellmw.NewHeaderInjectMux is used instead of a local wrapper struct so that
-// DeclareHTTPContract (which names contractspec.ContractSpec) stays in
-// runtime/ — cells/ must not import kernel/contractspec directly
-// (archtest CELLS-NO-CONTRACTSPEC-IMPORT-01).
+// RegisterRoutes mounts the setup contract handlers on mux. The X-Tenant-ID
+// header is consumed by the generated handlers (Request.XTenantID), so no
+// tenant-injection middleware is needed.
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
-	wrapped := cellmw.NewHeaderInjectMux(mux, injectSetupTenant)
-	if err := h.statusH.RegisterRoutes(wrapped); err != nil {
+	if err := h.statusH.RegisterRoutes(mux); err != nil {
 		return err
 	}
-	return h.adminH.RegisterRoutes(wrapped)
-}
-
-// injectSetupTenant is the per-request middleware that reads X-Tenant-ID from
-// the HTTP header and stores it in ctx under setupTenantCtxKey.
-func injectSetupTenant(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := context.WithValue(r.Context(), setupTenantCtxKey{}, r.Header.Get(headerTenantID))
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
+	return h.adminH.RegisterRoutes(mux)
 }

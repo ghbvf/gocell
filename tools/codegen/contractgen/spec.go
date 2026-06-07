@@ -135,9 +135,11 @@ type DTOField struct {
 	Required bool
 	// Doc is an optional comment, used for format hints (uuid, date-time).
 	Doc string
-	// Source identifies where this field originates: "body", "path", or "query".
-	// Empty means body (legacy/default). Only body fields receive schema validation
-	// in the generated handler; path/query fields are validated at parse time.
+	// Source identifies where this field originates: "body", "path", "query", or
+	// "header". Empty means body (legacy/default). Only body fields receive schema
+	// validation in the generated handler; path/query fields are validated at parse
+	// time. "header" fields are populate-only (read from r.Header.Get, no gate) and
+	// carry JSONTag "-" so the request body can never spoof them.
 	Source string
 	// MinLength constrains string body fields (minimum character length).
 	MinLength *int
@@ -180,6 +182,11 @@ type httpEndpointSpec struct {
 	PathParams []ParamSpec
 	// QueryParams lists URL query parameters, in declaration order.
 	QueryParams []ParamSpec
+	// HeaderParams lists inbound HTTP request headers, in canonical-name-sorted
+	// order. The generated handler populates each into the Request DTO via
+	// r.Header.Get with NO gate (populate-only — endpoint-specific fail behavior
+	// is owned by the cell adapter; see HTTPTransportMeta.Headers godoc).
+	HeaderParams []ParamSpec
 	// SuccessCode is the HTTP status code on success, e.g. 201 or 200.
 	SuccessCode int
 	// NoContent indicates a 204 No Content response (no body written).

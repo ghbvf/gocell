@@ -1955,6 +1955,85 @@ func (v *Validator) fmt38PayloadFieldChecks(c *metadata.ContractMeta) []Validati
 // golden; see ADR
 // docs/architecture/202606040210-1389-adr-mqtt-transports-multi-value-truth-source.md
 // §P2.5.
+// headerNameRe matches a canonical HTTP request-header name that produces a
+// clean Go identifier via contractgen.goPascalCase (which splits on "-"): a
+// letter followed by letters / digits / hyphens, e.g. "X-Tenant-ID",
+// "Authorization", "Content-Type". Rejects names with spaces, colons, or other
+// token-illegal characters that would either break the r.Header.Get literal or
+// yield a malformed generated field name.
+// validateFMT40 validates the endpoints.http.headers block on every HTTP
+// contract (issue #1494). It delegates entirely to metadata.ValidateHTTPHeaders
+// — the SINGLE SOURCE shared with contractgen's codegen-time (fail-closed) gate
+// — so the validate-time and codegen-time header rules cannot drift (#1494
+// review F4). FMT-40 maps each metadata.HeaderViolation to a governance finding.
+//
+// Headers are POPULATE-ONLY at codegen (the generated handler emits
+// req.X = r.Header.Get(name) with no gate; the cell adapter owns per-endpoint
+// fail behavior). The validator therefore restricts the declarable shape to what
+// the accessor can express: canonical token name, type: string only (a
+// non-string type would generate uncompilable Go — review F1), no
+// minLength/maxLength/minimum/maximum (no gate is generated — they would
+// silently no-op), and no case-insensitive duplicate name (review F3).
+//
+// `required` is intentionally accepted (documentation / client-gen metadata; it
+// does NOT make the generated server reject a missing header — the adapter owns
+// that, see ADR 1160), so it is not a metadata.HeaderViolation.
+func (v *Validator) validateFMT40() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		results = append(results, v.validateFMT40ForContract(c)...)
+	}
+	return results
+}
+
+// validateFMT40ForContract maps metadata.ValidateHTTPHeaders violations for a
+// single contract into governance findings.
+func (v *Validator) validateFMT40ForContract(c *metadata.ContractMeta) []ValidationResult {
+	if c.Endpoints.HTTP == nil || len(c.Endpoints.HTTP.Headers) == 0 {
+		return nil
+	}
+	file := contractFile(c)
+	var results []ValidationResult
+	for _, viol := range metadata.ValidateHTTPHeaders(c.Endpoints.HTTP.Headers) {
+		field := fmt.Sprintf("endpoints.http.headers.%s", viol.Header)
+		results = append(results, v.newError(
+			codeFMT40, fmt40IssueType(viol.Kind), file, field,
+			fmt.Sprintf("contract %q %s", c.ID, viol.Message),
+			fmt40Fix(viol.Kind),
+		))
+	}
+	return results
+}
+
+// fmt40IssueType maps a metadata.HeaderViolationKind to a governance IssueType.
+func fmt40IssueType(k metadata.HeaderViolationKind) IssueType {
+	switch k {
+	case metadata.HeaderViolationDuplicate:
+		return IssueDuplicate
+	case metadata.HeaderViolationConstraint:
+		return IssueForbidden
+	default: // HeaderViolationName, HeaderViolationType
+		return IssueInvalid
+	}
+}
+
+// fmt40Fix returns the remediation guidance for a header violation kind.
+func fmt40Fix(k metadata.HeaderViolationKind) string {
+	switch k {
+	case metadata.HeaderViolationName:
+		return "use a canonical header name matching ^[A-Za-z][A-Za-z0-9-]*$ (e.g. X-Tenant-ID)"
+	case metadata.HeaderViolationType:
+		return "declare type: string on the header schema (headers are populate-only; only string can be generated)"
+	case metadata.HeaderViolationConstraint:
+		return "remove the length/numeric constraint and validate the header value in the cell adapter " +
+			"(e.g. tenant.ParseTenantID), which owns the per-endpoint fail behavior"
+	case metadata.HeaderViolationDuplicate:
+		return "declare each HTTP header once (names are case-insensitive); remove the duplicate"
+	default:
+		return "fix the endpoints.http.headers declaration"
+	}
+}
+
 func (v *Validator) validateFMT39() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {

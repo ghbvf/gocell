@@ -1953,7 +1953,7 @@ func TestBuildHTTPEndpointSpec_ClientsOnlyRequiresInternalPathAndClients(t *test
 		http := contract.Endpoints.HTTP
 		pathParams := buildPathParams(http)
 		queryParams := buildQueryParams(http)
-		spec, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+		spec, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams, nil)
 		if err != nil {
 			t.Fatalf("expected no error for valid clientsOnly config, got: %v", err)
 		}
@@ -1968,7 +1968,7 @@ func TestBuildHTTPEndpointSpec_ClientsOnlyRequiresInternalPathAndClients(t *test
 		http := contract.Endpoints.HTTP
 		pathParams := buildPathParams(http)
 		queryParams := buildQueryParams(http)
-		_, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+		_, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams, nil)
 		if err == nil {
 			t.Fatal("expected error for clientsOnly on non-internal path")
 		}
@@ -1983,7 +1983,7 @@ func TestBuildHTTPEndpointSpec_ClientsOnlyRequiresInternalPathAndClients(t *test
 		http := contract.Endpoints.HTTP
 		pathParams := buildPathParams(http)
 		queryParams := buildQueryParams(http)
-		_, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+		_, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams, nil)
 		if err == nil {
 			t.Fatal("expected error for clientsOnly with empty clients")
 		}
@@ -2011,7 +2011,7 @@ func TestBuildHTTPEndpointSpec_ClientsOnlyRequiresInternalPathAndClients(t *test
 				http.Auth = tc.auth
 				pathParams := buildPathParams(http)
 				queryParams := buildQueryParams(http)
-				_, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+				_, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams, nil)
 				if err == nil {
 					t.Fatal("expected error for clientsOnly combined with exclusive auth mode")
 				}

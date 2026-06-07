@@ -16,8 +16,10 @@ import (
 
 // Request — http.auth.login.v1.request
 type Request struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	// XTenantID is populated from the "X-Tenant-ID" request header by the generated handler; do not set it in the Service implementation (read-only).
+	XTenantID string `json:"-"`
+	Username  string `json:"username"`
+	Password  string `json:"password"`
 }
 
 // Response — http.auth.login.v1.response

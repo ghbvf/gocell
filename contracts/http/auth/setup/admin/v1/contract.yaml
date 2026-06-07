@@ -1,15 +1,3 @@
-# Request headers (documentation; contractgen does not yet emit header params —
-# tracked in backlog issue #1494 "contractgen: support header parameters"):
-#
-#   X-Tenant-ID  (required)
-#     Type:    string (canonical UUID)
-#     Source:  HTTP request header; no JWT exists pre-bootstrap so the tenant
-#              cannot be derived from bearer token claims.
-#     Parsing: tenant.ParseTenantID — fail-closed; malformed or absent UUID
-#              → 400 ERR_AUTH_IDENTITY_INVALID_INPUT via service-layer validation
-#              on CreateAdminInput.TenantID.
-#     Codegen: contractgen client generation does not yet emit this header.
-#              Callers must set it manually until the backlog issue is resolved.
 id: http.auth.setup.admin.v1
 kind: http
 ownerCell: accesscore
@@ -25,6 +13,17 @@ endpoints:
   http:
     method: POST
     path: /api/v1/access/setup/admin
+    headers:
+      # X-Tenant-ID carries the pre-bootstrap tenant scope (no JWT yet).
+      # Populate-only at codegen → merged into the generated Request field; the
+      # setup admin adapter passes it to CreateAdminInput.TenantID, whose
+      # service-layer tenant.ParseTenantID validation rejects a missing/malformed
+      # value with 400 ERR_AUTH_IDENTITY_INVALID_INPUT (ADR 1160 — adapter-owned
+      # fail, not a codegen gate).
+      X-Tenant-ID:
+        type: string
+        format: uuid
+        required: true
     successStatus: 201
     noContent: false
     auth:

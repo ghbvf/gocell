@@ -222,7 +222,7 @@ func TestCredentialResponseIdempotencyGuard_Integration_NonExemptRejectsCredenti
 			},
 		},
 	}
-	_, err := buildHTTPDTOs(tmp, contract, synthContractDir, nil, nil)
+	_, err := buildHTTPDTOs(tmp, contract, synthContractDir, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected buildHTTPDTOs to reject credential response without idempotency.exempt, got nil error")
 	}
@@ -250,7 +250,7 @@ func TestCredentialResponseIdempotencyGuard_Integration_ExemptPasses(t *testing.
 			},
 		},
 	}
-	_, err := buildHTTPDTOs(tmp, contract, synthContractDir, nil, nil)
+	_, err := buildHTTPDTOs(tmp, contract, synthContractDir, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("idempotency.exempt=true must suppress the credential guard in buildHTTPDTOs, got: %v", err)
 	}
@@ -289,7 +289,7 @@ func TestCredentialResponseIdempotencyGuard_Integration_NestedCredentialRejected
 			},
 		},
 	}
-	_, err := buildHTTPDTOs(tmp, contract, synthContractDir, nil, nil)
+	_, err := buildHTTPDTOs(tmp, contract, synthContractDir, nil, nil, nil)
 	if err == nil {
 		t.Fatal("nested credential response without idempotency.exempt must be rejected")
 	}

@@ -173,7 +173,7 @@ func TestAuditWireSensitiveFieldFunnel_Response(t *testing.T) {
 					},
 				},
 			}
-			_, err := buildHTTPDTOs(tmp, contract, synthContractDir, nil, nil)
+			_, err := buildHTTPDTOs(tmp, contract, synthContractDir, nil, nil, nil)
 
 			if tc.wantErr {
 				if err == nil {
@@ -228,7 +228,7 @@ func TestAuditWireSensitiveFieldFunnel_RequestExempt(t *testing.T) {
 		Kind:       "http",
 		SchemaRefs: metadata.SchemaRefsMeta{Request: "request.schema.json"},
 	}
-	if _, err := buildHTTPDTOs(tmp, contract, synthContractDir, nil, nil); err != nil {
+	if _, err := buildHTTPDTOs(tmp, contract, synthContractDir, nil, nil, nil); err != nil {
 		t.Fatalf("request path must be exempt from the audit funnel, got: %v", err)
 	}
 }

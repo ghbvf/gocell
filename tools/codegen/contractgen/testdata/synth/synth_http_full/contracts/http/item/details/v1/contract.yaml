@@ -19,6 +19,13 @@ endpoints:
         required: false
         minimum: 1
         maximum: 1000
+    headers:
+      X-Request-ID:
+        type: string
+      X-Tenant-ID:
+        type: string
+        format: uuid
+        required: true
     successStatus: 200
     noContent: false
     responses:
