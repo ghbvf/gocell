@@ -158,13 +158,7 @@ func TestAuthorize_DecisionMatrix(t *testing.T) {
 			wantAllow: false,
 		},
 		{
-			name:      "nil principal fails closed on subject condition",
-			policies:  []*abac.Policy{policyWith("p1", permitRule("r1", authz.Obligations{}, engPermit))},
-			principal: nil,
-			wantAllow: false,
-		},
-		{
-			name: "device posture: subject.kind==device permits",
+			name: "subject.kind==device matches (posture matrix in TestAuthorize_DevicePosture)",
 			policies: []*abac.Policy{policyWith("p1", permitRule("r1", authz.Obligations{},
 				cond(abac.SourceSubject, "kind", abac.OpEquals, "device")))},
 			principal: &auth.Principal{
@@ -213,6 +207,38 @@ func TestAuthorize_DecisionMatrix(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			eng := memEngineWithPolicies(t, tt.policies...)
 			dec, err := eng.Authorize(reqCtx(tt.principal), "usr-1", "/api/v1/x", "read")
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantAllow, dec.IsAllow())
+		})
+	}
+}
+
+// --- device posture -------------------------------------------------------
+
+// TestAuthorize_DevicePosture is the F6 (Codex) guard: a device-posture policy
+// must actually gate on the device_trust attribute (resolved from the device
+// principal's claims), not merely on subject.kind. Missing or wrong posture must
+// fail closed.
+func TestAuthorize_DevicePosture(t *testing.T) {
+	pol := policyWith("p1", permitRule("r1", authz.Obligations{},
+		cond(abac.SourceSubject, "kind", abac.OpEquals, "device"),
+		cond(abac.SourceSubject, "device_trust", abac.OpEquals, "managed")))
+	device := func(claims map[string]string) *auth.Principal {
+		return &auth.Principal{Kind: auth.PrincipalDevice, Subject: "dev-1", TenantID: testTenantIDStr, Claims: claims}
+	}
+	tests := []struct {
+		name      string
+		principal *auth.Principal
+		wantAllow bool
+	}{
+		{"managed device permits", device(map[string]string{"device_trust": "managed"}), true},
+		{"unmanaged device denied", device(map[string]string{"device_trust": "unmanaged"}), false},
+		{"missing posture fails closed", device(nil), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := memEngineWithPolicies(t, pol)
+			dec, err := eng.Authorize(reqCtx(tt.principal), "dev-1", "/x", "read")
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantAllow, dec.IsAllow())
 		})
@@ -351,6 +377,34 @@ func TestAuthorize_NoTenant_Denies(t *testing.T) {
 	dec, err := eng.Authorize(auth.WithPrincipal(context.Background(), userPrincipal(nil)), "usr-1", "/x", "read")
 	require.Error(t, err, "missing tenant scope must surface an error")
 	assert.False(t, dec.IsAllow(), "missing tenant must fail closed")
+}
+
+// TestAuthorize_NoPrincipal_FailsClosed is the F1 (Codex) guard: with a tenant
+// present but NO authenticated principal, even an unconditional or environment-
+// only permit must not grant — those rule shapes never resolve a subject, so the
+// PDP must fail closed at entry.
+func TestAuthorize_NoPrincipal_FailsClosed(t *testing.T) {
+	tests := []struct {
+		name string
+		rule abac.Rule
+	}{
+		{"unconditional permit", permitRule("r1", authz.Obligations{})},
+		{"environment-only permit", permitRule("r1", authz.Obligations{},
+			cond(abac.SourceEnvironment, "hour", abac.OpEquals, "14"))},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := memEngineWithPolicies(t, policyWith("p1", tt.rule))
+			// tenant present, NO principal in ctx.
+			ctx := ctxkeys.WithTenantID(context.Background(), testTenantIDStr)
+			dec, err := eng.Authorize(ctx, "usr-1", "/x", "read")
+			require.Error(t, err, "no authenticated principal must fail closed with an error")
+			var ecErr *errcode.Error
+			require.ErrorAs(t, err, &ecErr)
+			assert.Equal(t, errcode.KindPermissionDenied, ecErr.Kind)
+			assert.False(t, dec.IsAllow(), "no principal must never grant, even on an unconditional/env-only permit")
+		})
+	}
 }
 
 // --- RLS scoping ----------------------------------------------------------

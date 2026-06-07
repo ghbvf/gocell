@@ -120,10 +120,19 @@ func (s *Service) Authorize(ctx context.Context, subject, resource, action strin
 			"authorization-decide: policy store unavailable", err)
 	}
 
+	// An authenticated principal is required. Without one the PDP must not decide:
+	// an unconditional permit (zero conditions) or an environment-only permit
+	// never resolves a subject attribute, so it would otherwise grant an
+	// unauthenticated request. Fail closed BEFORE evaluation rather than relying
+	// on per-condition subject resolution (which those rule shapes skip).
+	principal, ok := auth.FromContext(ctx)
+	if !ok || principal == nil {
+		return authz.Decision{}, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
+			"authorization-decide: no authenticated principal")
+	}
+
 	// Subject attributes come from the authenticated principal (trusted JWT
-	// claims, FR-012); environment attributes from the injected clock. A nil
-	// principal yields no subject attributes → subject conditions fail-closed.
-	principal, _ := auth.FromContext(ctx)
+	// claims, FR-012); environment attributes from the injected clock.
 	resolver := attributeResolver{principal: principal, now: s.clk.Now()}
 
 	dec := s.evaluate(policies, resolver)

@@ -321,9 +321,15 @@ func matchPathTemplate(template, concrete string) bool {
 	return true
 }
 
-// RequireRole checks that the authenticated subject has at least one of the
-// specified roles. The AuthMiddleware must run before this middleware.
-// On failure, it returns a 403 JSON response.
+// RequireRole gates a request on the authenticated subject's authorization.
+// The AuthMiddleware must run before this middleware. On failure it returns a
+// 403 JSON response.
+//
+// Authority: when an Authorizer (PDP) is provided, its Decision is the sole
+// gate — an in-token role does NOT pre-empt a policy deny (forbid-wins). The
+// legacy in-token role-set fast-path applies only when authorizer is nil. (The
+// role-literal gate at business endpoints is migrated to policy-based authz in
+// PR-10 #914.)
 func RequireRole(authorizer Authorizer, roles ...string) func(http.Handler) http.Handler {
 	roleSet := make(map[string]bool, len(roles))
 	for _, r := range roles {
@@ -348,11 +354,10 @@ func handleRequireRole(
 		return
 	}
 
-	if hasMatchingRoleList(p.Roles, roleSet) {
-		next.ServeHTTP(w, r)
-		return
-	}
-
+	// When an Authorizer (PDP) is wired, its Decision is the SOLE authority: an
+	// in-token role must NOT pre-empt a policy deny (forbid-wins). The legacy
+	// in-token role fast-path applies only when no Authorizer is present. (The
+	// role-literal gate itself is retired at the business endpoints in PR-10.)
 	if authorizer != nil {
 		allowed, err := checkAuthorizer(authorizer, r, p.Subject, roles)
 		if err != nil {
@@ -373,6 +378,9 @@ func handleRequireRole(
 			next.ServeHTTP(w, r)
 			return
 		}
+	} else if hasMatchingRoleList(p.Roles, roleSet) {
+		next.ServeHTTP(w, r)
+		return
 	}
 
 	loggerFrom(r.Context()).Info(
@@ -401,6 +409,12 @@ func checkAuthorizer(authorizer Authorizer, r *http.Request, subject string, rol
 			return false, err
 		}
 		if dec.IsAllow() {
+			// RequireRole is a coarse allow/deny gate; it intentionally does NOT
+			// consume dec.Obligations() (RowScope/FieldMask). Those obligations
+			// are enforced at the data-read PEPs (repo/projection), wired in
+			// PR-11/PR-12 — not at this route gate, where denying on a non-zero
+			// obligation would wrongly block a legitimately allowed-with-masking
+			// request. The obligation-propagation contract lands with those PRs.
 			return true, nil
 		}
 	}

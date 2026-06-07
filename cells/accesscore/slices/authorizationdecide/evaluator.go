@@ -98,24 +98,16 @@ func anyIn(vals, set []string) bool {
 
 // mergeObligations fail-safely combines the obligations of all matching permit
 // rules: FieldMask is the UNION of masked fields (masking a superset never
-// widens visibility) and RowScope is the NARROWEST (smallest) non-zero scope
-// (combining row-visibility constraints conservatively never widens access).
+// widens visibility) and RowScope is the NARROWEST scope (via tenant.RowScope's
+// Narrower, which owns the strictness ordering — no raw numeric comparison here).
 // Both directions are fail-safe so that combining multiple permits can only
 // tighten, never loosen, what the PEP enforces.
-//
-// The "narrowest = smallest value" rule relies on the tenant.RowScope iota
-// ordering (RowScopeSelf=1 < RowScopeDevice=2 < RowScopeTenant=3 < RowScopeAll=4
-// in pkg/tenant/rowscope.go): a smaller value is a stricter scope. Reordering or
-// inserting an out-of-order RowScope constant would silently break this combine;
-// keep the enum monotonic from strictest to broadest.
 func mergeObligations(obligations []authz.Obligations) authz.Obligations {
 	var merged authz.Obligations
 	seen := make(map[string]struct{})
 	var fields []string
 	for _, o := range obligations {
-		if o.RowScope != 0 && (merged.RowScope == 0 || o.RowScope < merged.RowScope) {
-			merged.RowScope = o.RowScope
-		}
+		merged.RowScope = merged.RowScope.Narrower(o.RowScope)
 		for _, f := range o.FieldMask.Fields {
 			if _, ok := seen[f]; ok {
 				continue

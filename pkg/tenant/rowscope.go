@@ -64,3 +64,23 @@ func (rs RowScope) Validate() error {
 	}
 	return nil
 }
+
+// Narrower returns the stricter (narrower-visibility) of rs and other, treating
+// the zero value as "no row-scope constraint" (the other operand wins; when both
+// are zero, returns zero). It is the single source of the strictness ordering
+// self < device < tenant < all: callers (e.g. an ABAC obligation merge that must
+// combine multiple permit scopes fail-safely) MUST use this instead of a raw
+// numeric `<`, so the cross-package ordering invariant is encoded in exactly one
+// place. The ordering is locked by TestRowScope_StrictnessOrdering.
+func (rs RowScope) Narrower(other RowScope) RowScope {
+	switch {
+	case rs == 0:
+		return other
+	case other == 0:
+		return rs
+	case rs <= other:
+		return rs
+	default:
+		return other
+	}
+}

@@ -143,7 +143,8 @@ func TestAuthMiddleware_PublicEndpointMatcher_Bypasses(t *testing.T) {
 	handler := AuthMiddleware(clock.Real(), verifier, WithPublicEndpointMatcher(matcher))(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
-		}))
+		}),
+	)
 
 	// Declared public endpoint should pass without token.
 	req := httptest.NewRequest(http.MethodGet, "/custom/public", nil)
@@ -244,6 +245,26 @@ func TestRequireRole_AuthorizerError(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
+// TestRequireRole_AuthorizerDenyOverridesRoleMatch is the F2 (Codex) guard: when
+// an Authorizer is wired, an in-token role MUST NOT bypass a policy deny — the
+// PDP Decision is authoritative (forbid-wins).
+func TestRequireRole_AuthorizerDenyOverridesRoleMatch(t *testing.T) {
+	authorizer := &mockAuthorizer{allowed: false}
+	handler := RequireRole(authorizer, "admin")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("PDP deny must not reach the handler despite the in-token role match")
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	// Roles include "admin" (matches roleSet) — but the PDP denies.
+	ctx := WithPrincipal(req.Context(), &Principal{Kind: PrincipalUser, Subject: "u1", Roles: []string{"admin"}})
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code, "in-token role must not override a PDP deny")
 }
 
 func TestAuthMiddleware_WithLogger_LogsToBuffer(t *testing.T) {
@@ -504,7 +525,8 @@ func TestAuthMiddleware_PasswordResetRequired_BlocksBusinessRoute(t *testing.T) 
 	verifier := &mockVerifier{
 		claims: Claims{Subject: "usr-bootstrap", PasswordResetRequired: true},
 	}
-	handler := AuthMiddleware(clock.Real(), verifier,
+	handler := AuthMiddleware(
+		clock.Real(), verifier,
 		WithPasswordResetChangeEndpointHintFn(func() string { return "POST /api/v1/access/users/{id}/password" }),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not reach business handler when password reset is required")
@@ -527,7 +549,8 @@ func TestAuthMiddleware_PasswordResetRequired_AllowsChangePassword_PathTemplate(
 		claims: Claims{Subject: "usr-bootstrap-abc", PasswordResetRequired: true},
 	}
 	reached := false
-	handler := AuthMiddleware(clock.Real(), verifier,
+	handler := AuthMiddleware(
+		clock.Real(), verifier,
 		WithPasswordResetExemptMatcher(testExemptMatcher(t)),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached = true
@@ -589,7 +612,8 @@ func TestAuthMiddleware_PasswordResetRequired_AllowsLogout(t *testing.T) {
 		claims: Claims{Subject: "usr-bootstrap", PasswordResetRequired: true},
 	}
 	reached := false
-	handler := AuthMiddleware(clock.Real(), verifier,
+	handler := AuthMiddleware(
+		clock.Real(), verifier,
 		WithPasswordResetExemptMatcher(testExemptMatcher(t)),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached = true
@@ -611,7 +635,8 @@ func TestAuthMiddleware_PasswordResetRequired_BlocksWrongMethodOnExempt(t *testi
 	verifier := &mockVerifier{
 		claims: Claims{Subject: "usr-bootstrap", PasswordResetRequired: true},
 	}
-	handler := AuthMiddleware(clock.Real(), verifier,
+	handler := AuthMiddleware(
+		clock.Real(), verifier,
 		WithPasswordResetChangeEndpointHintFn(func() string { return "POST /api/v1/access/users/{id}/password" }),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("GET on change-password path must NOT be exempt")
@@ -640,7 +665,8 @@ func TestAuthMiddleware_PasswordResetRequired_OmitsHintWhenNotConfigured(t *test
 	handler := AuthMiddleware(clock.Real(), verifier, WithLogger(logger))(
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			t.Fatal("should not reach handler")
-		}))
+		}),
+	)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/configs", nil)
 	req.Header.Set("Authorization", "Bearer reset-token")
@@ -768,7 +794,8 @@ func TestAuthMiddleware_InjectsPrincipal_PasswordResetRequired(t *testing.T) {
 			PasswordResetRequired: true,
 		},
 	}
-	handler := AuthMiddleware(clock.Real(), verifier,
+	handler := AuthMiddleware(
+		clock.Real(), verifier,
 		WithPasswordResetExemptMatcher(func(method, path string) bool {
 			return method == http.MethodPost && path == "/api/v1/access/users/usr-bootstrap/password"
 		}),
