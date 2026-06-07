@@ -127,7 +127,7 @@ func TestContractPathQueryCoverage01_FixtureMissingReject(t *testing.T) {
 			return nil
 		})
 
-	failures := computePQFailures(fixtureReqs, coverage)
+	failures := computePQFailures(fixtureReqs, coverage, root)
 	require.NotEmpty(t, failures,
 		"CONTRACT-PATH-QUERY-COVERAGE-01 reverse self-check: fixture must produce ≥1 missing-reject failure "+
 			"(fixture contract has pathParams but no MustRejectPathParam call)")
@@ -173,14 +173,14 @@ func TestContractPathQueryCoverage01_FixtureParamPartial(t *testing.T) {
 			return nil
 		})
 
-	failures := computePQFailures([]contractPQParamInfo{req}, coverage)
+	failures := computePQFailures([]contractPQParamInfo{req}, coverage, root)
 	require.Len(t, failures, 1,
 		"reverse self-check: exactly one param (cursor) should be flagged uncovered; got: %v", failures)
 	assert := require.New(t)
-	assert.Contains(failures[0], "cursor",
-		"missing failure must reference param name `cursor`; got: %s", failures[0])
-	assert.NotContains(failures[0], `param "limit"`,
-		"covered param `limit` must NOT be flagged; got: %s", failures[0])
+	assert.Contains(failures[0].Message, "cursor",
+		"missing failure must reference param name `cursor`; got: %s", failures[0].Message)
+	assert.NotContains(failures[0].Message, `param "limit"`,
+		"covered param `limit` must NOT be flagged; got: %s", failures[0].Message)
 }
 
 // TestContractPathQueryParamNameLiteral01_RedComputedParamName — reverse

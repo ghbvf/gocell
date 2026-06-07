@@ -162,12 +162,7 @@ func CheckContractPathQueryCoverage01(t *testing.T, _ ConfigForExternalCell) []D
 		return nil
 	})
 
-	failures := computePQFailures(wantCoverage, coverage)
-	diags := make([]Diagnostic, 0, len(failures))
-	for _, f := range failures {
-		diags = append(diags, Diagnostic{Message: f})
-	}
-	return diags
+	return computePQFailures(wantCoverage, coverage, root)
 }
 
 // CheckContractPathQueryParamNameLiteral01 runs
@@ -235,29 +230,43 @@ func pqParamNameViolation(p *Pass, file *ast.File, call *ast.CallExpr) []Diagnos
 	}}
 }
 
-// computePQFailures returns one failure per uncovered (contractID, paramKind,
-// paramName) tuple. The per-param granularity is the F2 fix.
-func computePQFailures(wantCoverage []contractPQParamInfo, coverage *pqCoverage) []string {
-	var failures []string
+// computePQFailures returns one diagnostic per uncovered (contractID, paramKind,
+// paramName) tuple. The per-param granularity is the F2 fix. Each diagnostic is
+// anchored to the declaring contract.yaml (module-relative, line 1) so Report
+// renders a clickable prefix instead of degrading to ":0:".
+func computePQFailures(wantCoverage []contractPQParamInfo, coverage *pqCoverage, root string) []Diagnostic {
+	var diags []Diagnostic
 	for _, req := range wantCoverage {
+		rel := contractPQRel(root, req.FilePath)
 		for _, name := range req.PathParamNames {
 			if !coverage.covered(pqKindPath, req.ID, name) {
-				failures = append(failures, fmt.Sprintf(
+				diags = append(diags, diagFile(rel, fmt.Sprintf(
 					"contract %q (server: %s) pathParam %q has no MustRejectPathParam call site in cells/**/contract_test.go",
 					req.ID, req.ServerCell, name,
-				))
+				)))
 			}
 		}
 		for _, name := range req.QueryParamNames {
 			if !coverage.covered(pqKindQuery, req.ID, name) {
-				failures = append(failures, fmt.Sprintf(
+				diags = append(diags, diagFile(rel, fmt.Sprintf(
 					"contract %q (server: %s) queryParam %q has no MustRejectQueryParam call site in cells/**/contract_test.go",
 					req.ID, req.ServerCell, name,
-				))
+				)))
 			}
 		}
 	}
-	return failures
+	return diags
+}
+
+// contractPQRel converts the absolute contract.yaml path to a module-relative
+// slash path for diagnostics, falling back to the slash-normalized absolute path
+// if it does not sit under root.
+func contractPQRel(root, abs string) string {
+	rel, err := filepath.Rel(root, abs)
+	if err != nil {
+		return filepath.ToSlash(abs)
+	}
+	return filepath.ToSlash(rel)
 }
 
 // attributePQCoverageFromFile walks the top-level function declarations in

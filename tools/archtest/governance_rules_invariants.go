@@ -41,6 +41,13 @@ import (
 // (ARCHTEST-MODULE-PATH-FUNNEL-01).
 const governancePkgPath = PlatformModulePath + "/kernel/governance"
 
+// governanceRelDir is the module-relative directory of kernel/governance,
+// derived from governancePkgPath so a module rename updates exactly one place
+// (ARCHTEST-MODULE-PATH-FUNNEL-01). Used to anchor package-level guard
+// diagnostics (e.g. "rulecodes.go must declare a const") to a clickable path
+// instead of degrading to ":0:".
+var governanceRelDir = strings.TrimPrefix(governancePkgPath, PlatformModulePath+"/")
+
 // ruleCodesFile is the base name of the single-source file for RuleCode consts.
 const ruleCodesFile = "rulecodes.go"
 
@@ -69,24 +76,25 @@ func CheckGovernanceRulesRegistrationGuard(t *testing.T, _ ConfigForExternalCell
 	pkg := loadGovernancePackage(t, root)
 
 	declared := declaredRuleMethodNames(t, pkg)
-	registered, fatal := extractRegisteredFromAllRules(pkg)
+	registered, registryRel, fatal := extractRegisteredFromAllRules(pkg)
+	if registryRel == "" {
+		registryRel = governanceRelDir
+	}
 	if fatal != "" {
-		return []Diagnostic{{Message: "GOVERNANCE-RULES-REGISTRATION-GUARD-01 fatal: " + fatal}}
+		return []Diagnostic{diagFile(registryRel, "GOVERNANCE-RULES-REGISTRATION-GUARD-01 fatal: "+fatal)}
 	}
 
 	var diags []Diagnostic
 	for name := range declared {
 		if _, ok := registered[name]; !ok {
-			diags = append(diags, Diagnostic{
-				Message: "rule-shaped method declared on *Validator but not registered in allRules: " + name,
-			})
+			diags = append(diags, diagFile(registryRel,
+				"rule-shaped method declared on *Validator but not registered in allRules: "+name))
 		}
 	}
 	for name := range registered {
 		if _, ok := declared[name]; !ok {
-			diags = append(diags, Diagnostic{
-				Message: "name referenced in allRules Detect but no matching rule-shaped method on *Validator: " + name,
-			})
+			diags = append(diags, diagFile(registryRel,
+				"name referenced in allRules Detect but no matching rule-shaped method on *Validator: "+name))
 		}
 	}
 	return diags
@@ -110,7 +118,8 @@ func CheckGovernanceRuleCodeConstSingleSource(t *testing.T, _ ConfigForExternalC
 
 	ruleCodeConsts := collectRuleCodeConsts(pkg)
 	if len(ruleCodeConsts) == 0 {
-		return []Diagnostic{{Message: "rulecodes.go must declare at least one RuleCode const"}}
+		return []Diagnostic{diagFile(governanceRelDir+"/"+ruleCodesFile,
+			"rulecodes.go must declare at least one RuleCode const")}
 	}
 
 	var diags []Diagnostic
@@ -119,9 +128,8 @@ func CheckGovernanceRuleCodeConstSingleSource(t *testing.T, _ ConfigForExternalC
 		if base == ruleCodesFile || base == "locator.go" {
 			continue
 		}
-		for _, v := range scanINV2ViolationsInFile(file, pkg.fset, pkg.info, ruleCodeConsts, pkg.fileRel(file), governancePkgPath) {
-			diags = append(diags, Diagnostic{Message: v})
-		}
+		diags = append(diags,
+			scanINV2ViolationsInFile(file, pkg.fset, pkg.info, ruleCodeConsts, pkg.fileRel(file), governancePkgPath)...)
 	}
 	return diags
 }
@@ -146,9 +154,8 @@ func CheckGovernanceRuleErrorFixField(t *testing.T, _ ConfigForExternalCell) []D
 
 	var diags []Diagnostic
 	for _, file := range pkg.files {
-		for _, v := range scanFixFieldViolationsInFile(file, pkg.fset, pkg.info, consts, pkg.fileRel(file), governancePkgPath) {
-			diags = append(diags, Diagnostic{Message: v})
-		}
+		diags = append(diags,
+			scanFixFieldViolationsInFile(file, pkg.fset, pkg.info, consts, pkg.fileRel(file), governancePkgPath)...)
 	}
 	return diags
 }
@@ -175,13 +182,17 @@ func CheckGovernanceRuleCodeDetectBinding(t *testing.T, _ ConfigForExternalCell)
 
 	ruleCodeConsts := collectRuleCodeConsts(pkg)
 	if len(ruleCodeConsts) == 0 {
-		return []Diagnostic{{Message: "rulecodes.go must declare at least one RuleCode const"}}
+		return []Diagnostic{diagFile(governanceRelDir+"/"+ruleCodesFile,
+			"rulecodes.go must declare at least one RuleCode const")}
 	}
 
 	methodMap := buildValidatorMethodMap(pkg.files)
-	entries, fatal := extractAllRulesEntries(pkg)
+	entries, registryRel, fatal := extractAllRulesEntries(pkg)
+	if registryRel == "" {
+		registryRel = governanceRelDir
+	}
 	if fatal != "" {
-		return []Diagnostic{{Message: "GOVERNANCE-RULE-CODE-DETECT-BINDING-01 fatal: " + fatal}}
+		return []Diagnostic{diagFile(registryRel, "GOVERNANCE-RULE-CODE-DETECT-BINDING-01 fatal: "+fatal)}
 	}
 
 	var diags []Diagnostic
@@ -201,17 +212,15 @@ func checkCodeDetectBinding(
 ) []Diagnostic {
 	emitted := collectEmittedCodes(entry.methodName, methodMap, ruleCodeConsts, info)
 	if len(emitted) == 0 {
-		return []Diagnostic{{
-			Message: "allRules entry Code=" + entry.codeValue + " Detect=" + entry.methodName +
-				": detect method emits NO RuleCode consts — walk incomplete or rule body empty",
-		}}
+		return []Diagnostic{diagAt(entry.rel, entry.line,
+			"allRules entry Code="+entry.codeValue+" Detect="+entry.methodName+
+				": detect method emits NO RuleCode consts — walk incomplete or rule body empty")}
 	}
 	if _, ok := emitted[entry.codeValue]; !ok {
-		return []Diagnostic{{
-			Message: "allRules entry Code=" + entry.codeValue + " Detect=" + entry.methodName +
-				": entry Code not in emitted set " + strings.Join(sortedStringSet(emitted), ",") +
-				" — mislabeled entry: detect method emits a different code",
-		}}
+		return []Diagnostic{diagAt(entry.rel, entry.line,
+			"allRules entry Code="+entry.codeValue+" Detect="+entry.methodName+
+				": entry Code not in emitted set "+strings.Join(sortedStringSet(emitted), ",")+
+				" — mislabeled entry: detect method emits a different code")}
 	}
 	return nil
 }
@@ -384,9 +393,13 @@ func ruleShapeSignature(sig *types.Signature) bool {
 // extractRegisteredFromAllRules scans the allRules package-level var and
 // collects method names from each Rule's Detect field.
 //
-// Returns (registered, "") on success, (nil, fatalMsg) on shape error.
-func extractRegisteredFromAllRules(pkg *governancePackage) (map[string]struct{}, string) {
+// Returns (registered, registryRel, "") on success and (registered, registryRel,
+// fatalMsg) on shape error. registryRel is the module-relative path of the file
+// declaring allRules (empty if no allRules var is found), used by the caller to
+// anchor registration diagnostics.
+func extractRegisteredFromAllRules(pkg *governancePackage) (map[string]struct{}, string, string) {
 	registered := map[string]struct{}{}
+	var registryRel string
 	var fatal string
 
 	for _, file := range pkg.files {
@@ -398,9 +411,10 @@ func extractRegisteredFromAllRules(pkg *governancePackage) (map[string]struct{},
 		if cl == nil {
 			continue
 		}
+		registryRel = relPath
 		fatal = extractRegisteredFromRuleList(cl, relPath, pkg.fset, registered)
 	}
-	return registered, fatal
+	return registered, registryRel, fatal
 }
 
 // findAllRulesCompositeLit finds the composite literal value of the allRules
@@ -549,6 +563,8 @@ func methodExprValidatorName(sel *ast.SelectorExpr) (string, bool) {
 
 // scanINV2ViolationsInFile reports all INV-2 violations in a single AST file.
 // Two scan paths: (1) CallExpr emitter name-arg, (2) CompositeLit ValidationResult.
+// Each diagnostic carries the structured (relPath, line) of the offending node so
+// Report renders a clickable "<rel>:<line>:" prefix.
 func scanINV2ViolationsInFile(
 	file *ast.File,
 	fset *token.FileSet,
@@ -556,11 +572,11 @@ func scanINV2ViolationsInFile(
 	ruleCodeConsts map[*types.Const]struct{},
 	relPath string,
 	pkgPath string,
-) []string {
-	var violations []string
-	violations = append(violations, scanINV2CallExprs(file, fset, info, ruleCodeConsts, relPath)...)
-	violations = append(violations, scanINV2CompositeLits(file, fset, info, ruleCodeConsts, relPath, pkgPath)...)
-	return violations
+) []Diagnostic {
+	var diags []Diagnostic
+	diags = append(diags, scanINV2CallExprs(file, fset, info, ruleCodeConsts, relPath)...)
+	diags = append(diags, scanINV2CompositeLits(file, fset, info, ruleCodeConsts, relPath, pkgPath)...)
+	return diags
 }
 
 // scanINV2CallExprs scans emitter CallExprs for bad code args.
@@ -570,8 +586,8 @@ func scanINV2CallExprs(
 	info *types.Info,
 	ruleCodeConsts map[*types.Const]struct{},
 	relPath string,
-) []string {
-	var violations []string
+) []Diagnostic {
+	var diags []Diagnostic
 	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		name := governanceEmitterName(call)
 		if name == "" || len(call.Args) == 0 {
@@ -581,13 +597,12 @@ func scanINV2CallExprs(
 		if !ruleCodeArgShapeIsValid(codeArg) ||
 			!ruleCodeArgResolvesToConst(codeArg, info, ruleCodeConsts) {
 			pos := fset.Position(codeArg.Pos())
-			violations = append(violations,
-				relPath+":"+strconv.Itoa(pos.Line)+
-					": code arg to "+name+" must be a RuleCode-typed const from rulecodes.go — "+
-					"got AST shape "+astShapeName(codeArg))
+			diags = append(diags, diagAt(relPath, pos.Line,
+				"code arg to "+name+" must be a RuleCode-typed const from rulecodes.go — "+
+					"got AST shape "+astShapeName(codeArg)))
 		}
 	})
-	return violations
+	return diags
 }
 
 // scanINV2CompositeLits scans ValidationResult{} composite literals for INV-2.
@@ -598,16 +613,15 @@ func scanINV2CompositeLits(
 	ruleCodeConsts map[*types.Const]struct{},
 	relPath string,
 	pkgPath string,
-) []string {
-	var violations []string
+) []Diagnostic {
+	var diags []Diagnostic
 	scanner.EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
 		if !isValidationResultCompositeLit(cl, info, pkgPath) {
 			return
 		}
-		v := checkINV2CompositeLit(cl, fset, info, ruleCodeConsts, relPath)
-		violations = append(violations, v...)
+		diags = append(diags, checkINV2CompositeLit(cl, fset, info, ruleCodeConsts, relPath)...)
 	})
-	return violations
+	return diags
 }
 
 // checkINV2CompositeLit checks one ValidationResult{} composite literal for INV-2.
@@ -617,7 +631,7 @@ func checkINV2CompositeLit(
 	info *types.Info,
 	ruleCodeConsts map[*types.Const]struct{},
 	relPath string,
-) []string {
+) []Diagnostic {
 	// (a) Positional ban.
 	keyValueCount := 0
 	scanner.EachInChildren[ast.KeyValueExpr](cl, func(_ *ast.KeyValueExpr) {
@@ -625,8 +639,8 @@ func checkINV2CompositeLit(
 	})
 	if len(cl.Elts) > 0 && keyValueCount != len(cl.Elts) {
 		pos := fset.Position(cl.Pos())
-		return []string{relPath + ":" + strconv.Itoa(pos.Line) +
-			": ValidationResult literal must use named fields — positional element forbidden"}
+		return []Diagnostic{diagAt(relPath, pos.Line,
+			"ValidationResult literal must use named fields — positional element forbidden")}
 	}
 	// (b)(c) Code: presence and value.
 	var codeValue ast.Expr
@@ -638,14 +652,14 @@ func checkINV2CompositeLit(
 	})
 	if codeValue == nil {
 		pos := fset.Position(cl.Pos())
-		return []string{relPath + ":" + strconv.Itoa(pos.Line) +
-			": ValidationResult literal omits Code: field — every result must reference a RuleCode const from rulecodes.go"}
+		return []Diagnostic{diagAt(relPath, pos.Line,
+			"ValidationResult literal omits Code: field — every result must reference a RuleCode const from rulecodes.go")}
 	}
 	if !ruleCodeArgShapeIsValid(codeValue) ||
 		!ruleCodeArgResolvesToConst(codeValue, info, ruleCodeConsts) {
 		pos := fset.Position(codeValue.Pos())
-		return []string{relPath + ":" + strconv.Itoa(pos.Line) +
-			": ValidationResult.Code must be a RuleCode-typed const from rulecodes.go — got AST shape " + astShapeName(codeValue)}
+		return []Diagnostic{diagAt(relPath, pos.Line,
+			"ValidationResult.Code must be a RuleCode-typed const from rulecodes.go — got AST shape "+astShapeName(codeValue))}
 	}
 	return nil
 }
@@ -778,6 +792,8 @@ func fixHasLiteralContent(resolved string) bool {
 }
 
 // scanFixFieldViolationsInFile reports all INV-3 violations in a single AST file.
+// Each diagnostic carries the structured (relPath, line) of the offending node so
+// Report renders a clickable "<rel>:<line>:" prefix.
 func scanFixFieldViolationsInFile(
 	file *ast.File,
 	fset *token.FileSet,
@@ -785,14 +801,14 @@ func scanFixFieldViolationsInFile(
 	consts map[string]string,
 	relPath string,
 	pkgPath string,
-) []string {
-	var violations []string
-	violations = append(violations, scanINV3FixArgs(file, fset, consts, info, relPath)...)
+) []Diagnostic {
+	var diags []Diagnostic
+	diags = append(diags, scanINV3FixArgs(file, fset, consts, info, relPath)...)
 	if filepath.Base(relPath) == "locator.go" {
-		return violations
+		return diags
 	}
-	violations = append(violations, scanINV3CompositeLits(file, fset, info, relPath, pkgPath)...)
-	return violations
+	diags = append(diags, scanINV3CompositeLits(file, fset, info, relPath, pkgPath)...)
+	return diags
 }
 
 // scanINV3FixArgs scans emitter calls for empty/unresolvable fix args.
@@ -802,8 +818,8 @@ func scanINV3FixArgs(
 	consts map[string]string,
 	info *types.Info,
 	relPath string,
-) []string {
-	var violations []string
+) []Diagnostic {
+	var diags []Diagnostic
 	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		name := governanceEmitterName(call)
 		if name == "" || len(call.Args) < 2 {
@@ -814,12 +830,11 @@ func scanINV3FixArgs(
 			return
 		}
 		pos := fset.Position(fixArg.Pos())
-		violations = append(violations,
-			relPath+":"+strconv.Itoa(pos.Line)+
-				": "+name+" fix argument is empty, unresolvable, or carries no literal guidance — "+
-				"every finding must carry remediation text in the typed Fix field (GOVERNANCE-RULE-ERROR-FIX-FIELD-01)")
+		diags = append(diags, diagAt(relPath, pos.Line,
+			name+" fix argument is empty, unresolvable, or carries no literal guidance — "+
+				"every finding must carry remediation text in the typed Fix field (GOVERNANCE-RULE-ERROR-FIX-FIELD-01)"))
 	})
-	return violations
+	return diags
 }
 
 // scanINV3CompositeLits scans for raw ValidationResult{} literals outside locator.go.
@@ -829,19 +844,18 @@ func scanINV3CompositeLits(
 	info *types.Info,
 	relPath string,
 	pkgPath string,
-) []string {
-	var violations []string
+) []Diagnostic {
+	var diags []Diagnostic
 	scanner.EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
 		if !isValidationResultCompositeLit(cl, info, pkgPath) {
 			return
 		}
 		pos := fset.Position(cl.Pos())
-		violations = append(violations,
-			relPath+":"+strconv.Itoa(pos.Line)+
-				": raw ValidationResult{} literal is forbidden outside locator.go — construct findings "+
-				"via newError / newWarning / newErrorAt / newScopedError (GOVERNANCE-RULE-ERROR-FIX-FIELD-01)")
+		diags = append(diags, diagAt(relPath, pos.Line,
+			"raw ValidationResult{} literal is forbidden outside locator.go — construct findings "+
+				"via newError / newWarning / newErrorAt / newScopedError (GOVERNANCE-RULE-ERROR-FIX-FIELD-01)"))
 	})
-	return violations
+	return diags
 }
 
 // resolveStringFragments returns every string fragment that contributes to
@@ -957,18 +971,24 @@ func findTypesPackageByPath(pkg *types.Package, importPath string) *types.Packag
 // ----- INV-4 helpers -----
 
 // allRulesEntry holds the Code string value and Detect method name extracted
-// from a single Rule composite literal in allRules.
+// from a single Rule composite literal in allRules, plus the (rel, line) of that
+// Rule literal so binding diagnostics anchor to the registration site.
 type allRulesEntry struct {
 	codeValue  string // resolved string value of the Code RuleCode const
 	methodName string // name of the detect method
+	rel        string // module-relative path of the file declaring the Rule literal
+	line       int    // 1-based line of the Rule composite literal
 }
 
 // extractAllRulesEntries parses each element of the allRules composite literal
 // and returns one allRulesEntry per Rule element.
 //
-// Returns (nil, fatalMsg) when a fatal shape is encountered.
-func extractAllRulesEntries(pkg *governancePackage) ([]allRulesEntry, string) {
+// Returns (entries, registryRel, "") on success and (nil, registryRel, fatalMsg)
+// when a fatal shape is encountered. registryRel is the module-relative path of
+// the file declaring allRules (empty if none is found).
+func extractAllRulesEntries(pkg *governancePackage) ([]allRulesEntry, string, string) {
 	var entries []allRulesEntry
+	var registryRel string
 	var fatal string
 
 	for _, file := range pkg.files {
@@ -980,6 +1000,7 @@ func extractAllRulesEntries(pkg *governancePackage) ([]allRulesEntry, string) {
 		if cl == nil {
 			continue
 		}
+		registryRel = relPath
 		fileEntries, fileFatal := parseAllRulesLit(cl, relPath, pkg)
 		if fileFatal != "" {
 			fatal = fileFatal
@@ -987,7 +1008,7 @@ func extractAllRulesEntries(pkg *governancePackage) ([]allRulesEntry, string) {
 		}
 		entries = append(entries, fileEntries...)
 	}
-	return entries, fatal
+	return entries, registryRel, fatal
 }
 
 // parseAllRulesLit walks the allRules composite literal and returns entries
@@ -1053,7 +1074,8 @@ func parseRuleEntry(ruleLit *ast.CompositeLit, relPath string, pkg *governancePa
 		}
 	}
 
-	return &allRulesEntry{codeValue: codeValue, methodName: methodName}, ""
+	pos := pkg.fset.Position(ruleLit.Pos())
+	return &allRulesEntry{codeValue: codeValue, methodName: methodName, rel: relPath, line: pos.Line}, ""
 }
 
 // resolveRuleCodeValue extracts the string value of a RuleCode const ident.

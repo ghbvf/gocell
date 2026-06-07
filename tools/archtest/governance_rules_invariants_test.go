@@ -124,7 +124,7 @@ func testINV1OrphanFixture(t *testing.T) {
 	require.NotNil(t, fixtureGP, "the typed Run must visit the fixture package")
 
 	declared := declaredRuleMethodNames(t, fixtureGP)
-	registered, fatal := extractRegisteredFromAllRules(fixtureGP)
+	registered, _, fatal := extractRegisteredFromAllRules(fixtureGP)
 	require.Empty(t, fatal, "fixture must not trigger a fatal shape error")
 
 	_, hasRegistered := declared["validateRegistered"]
@@ -238,7 +238,7 @@ func testINV2CompositeLitFixtures(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.shape, func(t *testing.T) {
-			var violations []string
+			var violations []Diagnostic
 			Run(t, Typed(TypedOpts{Tests: false}, []string{tc.pattern}),
 				func(p *Pass) []Diagnostic {
 					govTypesPkg := findTypesPackageByPath(p.Pkg, governancePkgPath)
@@ -429,7 +429,7 @@ func testINV3NegativeFixture(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.shape, func(t *testing.T) {
-			var violations []string
+			var violations []Diagnostic
 			Run(t, Typed(TypedOpts{Tests: false}, []string{tc.pattern}),
 				func(p *Pass) []Diagnostic {
 					consts := collectPackageStringConsts(p.Pkg.Scope())
@@ -537,26 +537,15 @@ func TestGovernanceRuleCodeDetectBinding(t *testing.T) {
 	t.Run("negative_fixture_mislabel_detected", testBindingNegativeFixture)
 }
 
+// testBindingProductionSource dogfoods the importable CheckGovernanceRuleCodeDetectBinding
+// (the single rule body shared with the external-cell path) rather than
+// re-implementing the binding walk inline — keeping production enforcement and
+// the exported Check* on one source. The per-entry granularity moves into the
+// Check; negative-fixture coverage of the lower-level walk stays in
+// testBindingNegativeFixture.
 func testBindingProductionSource(t *testing.T) {
-	root := findModuleRoot(t)
-	pkg := loadGovernancePackage(t, root)
-
-	ruleCodeConsts := collectRuleCodeConsts(pkg)
-	require.NotEmpty(t, ruleCodeConsts, "rulecodes.go must declare at least one RuleCode const")
-
-	methodMap := buildValidatorMethodMap(pkg.files)
-	entries, fatal := extractAllRulesEntries(pkg)
-	if fatal != "" {
-		t.Fatal(fatal)
-	}
-
-	for _, entry := range entries {
-		entry := entry
-		t.Run(entry.codeValue+"_bound_to_"+entry.methodName, func(t *testing.T) {
-			t.Parallel()
-			assertCodeDetectBinding(t, entry, methodMap, ruleCodeConsts, pkg.info)
-		})
-	}
+	Report(t, "GOVERNANCE-RULE-CODE-DETECT-BINDING-01",
+		CheckGovernanceRuleCodeDetectBinding(t, ConfigForExternalCell{}))
 }
 
 func testBindingNegativeFixture(t *testing.T) {
@@ -585,7 +574,7 @@ func testBindingNegativeFixture(t *testing.T) {
 	require.NotEmpty(t, fixtureRuleCodeConsts, "fixture must declare at least one RuleCode const")
 
 	methodMap := buildValidatorMethodMap(fixtureGP.files)
-	entries, fatal := extractAllRulesEntries(fixtureGP)
+	entries, _, fatal := extractAllRulesEntries(fixtureGP)
 	require.Empty(t, fatal, "fixture must not trigger a fatal shape error")
 	require.Len(t, entries, 1, "fixture allRules must have exactly one entry")
 
@@ -637,34 +626,6 @@ func TestGovernanceEmitterConstructorsNeverFuncValue(t *testing.T) {
 			"scanEmitterFuncValueUsages must detect the fixture's `f := newError` "+
 				"func-value indirection — a zero result means the scan is vacuous")
 	})
-}
-
-// assertCodeDetectBinding asserts that entry.codeValue appears in the set of
-// RuleCode strings emitted by entry.methodName (transitively).
-func assertCodeDetectBinding(
-	t *testing.T,
-	entry allRulesEntry,
-	methodMap map[string]*ast.FuncDecl,
-	ruleCodeConsts map[*types.Const]struct{},
-	info *types.Info,
-) {
-	t.Helper()
-	emitted := collectEmittedCodes(entry.methodName, methodMap, ruleCodeConsts, info)
-	if len(emitted) == 0 {
-		t.Fatalf(
-			"allRules entry Code=%q Detect=%q: the detect method (and its transitive *Validator"+
-				" helper calls) emit NO RuleCode consts — either the walk is incomplete or the"+
-				" rule body is empty (both are bugs to surface)",
-			entry.codeValue, entry.methodName,
-		)
-	}
-	if _, ok := emitted[entry.codeValue]; !ok {
-		t.Fatalf(
-			"allRules entry Code=%q Detect=%q: entry Code not in emitted set %v"+
-				" — mislabeled entry: the detect method emits a different code",
-			entry.codeValue, entry.methodName, sortedStringSet(emitted),
-		)
-	}
 }
 
 // stringSetDifference returns keys in a that are not in b.

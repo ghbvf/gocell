@@ -108,10 +108,13 @@ func matcherAndCalleeBodies(file *ast.File, matcher *ast.FuncDecl) []*ast.BlockS
 	return bodies
 }
 
-// matcherResult holds per-matcher symmetry findings.
+// matcherResult holds per-matcher symmetry findings. line is the 1-based line of
+// the matcher FuncDecl in parserMatcherLocatorFile, used to anchor symmetry
+// diagnostics to a clickable position.
 type matcherResult struct {
 	foundExamples bool
 	foundRoot     bool
+	line          int
 }
 
 // CheckParserMatcherExamplesSymmetry01 runs PARSER-MATCHER-EXAMPLES-SYMMETRY-01
@@ -192,6 +195,7 @@ func recordMatcherCoverage(p *Pass, fn *ast.FuncDecl, parserFuncs map[string]*as
 	if results[funcName] == nil {
 		results[funcName] = &matcherResult{}
 	}
+	results[funcName].line = p.Fset.Position(fn.Pos()).Line
 
 	allVals := collectMatcherParts0Values(p, fn, parserFuncs)
 	if allVals["examples"] {
@@ -260,29 +264,29 @@ func collectCalleeNames(root ast.Node) []string {
 	return names
 }
 
-// collectSymmetryDiagnostics converts the results map to diagnostics.
+// collectSymmetryDiagnostics converts the results map to diagnostics, each
+// anchored to parserMatcherLocatorFile (the file all matchers live in). A
+// missing matcher anchors to the file head; a matcher missing a parts[0]
+// comparison anchors to its declaration line.
 func collectSymmetryDiagnostics(results map[string]*matcherResult) []Diagnostic {
 	var diags []Diagnostic
 	for funcName, wantRoot := range matcherRootSegment {
 		r, found := results[funcName]
 		if !found {
-			diags = append(diags, Diagnostic{
-				Message: "PARSER-MATCHER-EXAMPLES-SYMMETRY-01: matcher " + funcName +
-					" not found in kernel/metadata/locator_conventional.go",
-			})
+			diags = append(diags, diagFile(parserMatcherLocatorFile,
+				"PARSER-MATCHER-EXAMPLES-SYMMETRY-01: matcher "+funcName+
+					" not found in kernel/metadata/locator_conventional.go"))
 			continue
 		}
 		if !r.foundRoot {
-			diags = append(diags, Diagnostic{
-				Message: "PARSER-MATCHER-EXAMPLES-SYMMETRY-01: matcher " + funcName +
-					` is missing parts[0] == "` + wantRoot + `" comparison (root segment) in its body or direct callees`,
-			})
+			diags = append(diags, diagAt(parserMatcherLocatorFile, r.line,
+				"PARSER-MATCHER-EXAMPLES-SYMMETRY-01: matcher "+funcName+
+					` is missing parts[0] == "`+wantRoot+`" comparison (root segment) in its body or direct callees`))
 		}
 		if !r.foundExamples {
-			diags = append(diags, Diagnostic{
-				Message: "PARSER-MATCHER-EXAMPLES-SYMMETRY-01: matcher " + funcName +
-					` is missing parts[0] == "examples" comparison (examples support) in its body or direct callees`,
-			})
+			diags = append(diags, diagAt(parserMatcherLocatorFile, r.line,
+				"PARSER-MATCHER-EXAMPLES-SYMMETRY-01: matcher "+funcName+
+					` is missing parts[0] == "examples" comparison (examples support) in its body or direct callees`))
 		}
 	}
 	return diags
@@ -303,8 +307,9 @@ func runUpstreamCoverageCheck(t *testing.T) []Diagnostic {
 			if p.Rel(f) != parserMatcherLocatorFile {
 				continue
 			}
+			rel := p.Rel(f)
 			EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
-				diags = append(diags, uncoveredMatcherDiag(fn)...)
+				diags = append(diags, uncoveredMatcherDiag(rel, p.Fset.Position(fn.Pos()).Line, fn)...)
 			})
 		}
 		return nil
@@ -314,17 +319,17 @@ func runUpstreamCoverageCheck(t *testing.T) []Diagnostic {
 
 // uncoveredMatcherDiag returns a diagnostic when fn is a match*Path matcher
 // absent from matcherRootSegment (a newly added matcher silently bypassing the
-// primary check), else nil.
-func uncoveredMatcherDiag(fn *ast.FuncDecl) []Diagnostic {
+// primary check), else nil. rel/line anchor the diagnostic to the matcher's
+// declaration so Report renders a clickable prefix.
+func uncoveredMatcherDiag(rel string, line int, fn *ast.FuncDecl) []Diagnostic {
 	if fn.Name == nil || !matchYAMLFuncRE.MatchString(fn.Name.Name) {
 		return nil
 	}
 	if _, ok := matcherRootSegment[fn.Name.Name]; ok {
 		return nil
 	}
-	return []Diagnostic{{
-		Message: "PARSER-MATCHER-EXAMPLES-SYMMETRY-01: matcher " + fn.Name.Name +
-			" found in parser.go but not in matcherRootSegment — " +
-			"add expected root segment to the test",
-	}}
+	return []Diagnostic{diagAt(rel, line,
+		"PARSER-MATCHER-EXAMPLES-SYMMETRY-01: matcher "+fn.Name.Name+
+			" found in parser.go but not in matcherRootSegment — "+
+			"add expected root segment to the test")}
 }
