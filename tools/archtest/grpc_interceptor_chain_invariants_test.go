@@ -20,11 +20,18 @@
 // single grpc.ChainUnaryInterceptor(...) call inside NewUnaryChain. That call's
 // arguments MUST be, in order:
 //
-//	UnaryRequestID, UnaryTracing, UnaryMetrics, UnaryAuth, UnaryRecovery
+//	UnaryRequestID, UnaryCellAttribution, UnaryTracing, UnaryAccessLog,
+//	UnaryMetrics, UnaryAuth, UnaryRecovery
 //
-// i.e. RequestID outermost and Recovery innermost. The order is load-bearing:
+// i.e. RequestID outermost and Recovery innermost — mirroring the HTTP
+// listener-root order (CellAttribution → Tracing → AccessLog → Metrics). The
+// order is load-bearing:
 //   - RequestID outermost so every other interceptor (and any errcode the
 //     handler emits) carries a stable request/correlation id.
+//   - CellAttribution before every interceptor that reads the cell label
+//     (AccessLog, Metrics) so the owning cell is in ctx when they observe it.
+//   - AccessLog after Tracing (so trace_id, set on a propagated trace, is in
+//     ctx) and OUTER to Auth (so auth rejections are still logged).
 //   - Recovery innermost so a handler panic is collapsed into codes.Internal
 //     *before* the outer Metrics and Tracing interceptors observe the result;
 //     otherwise a panic would be recorded as a raw failure rather than a clean
@@ -151,7 +158,9 @@ const grpcPkgPath = "google.golang.org/grpc"
 // match.
 var grpcChainExpectedOrder = []string{
 	"UnaryRequestID",
+	"UnaryCellAttribution",
 	"UnaryTracing",
+	"UnaryAccessLog",
 	"UnaryMetrics",
 	"UnaryAuth",
 	"UnaryRecovery",
@@ -195,8 +204,9 @@ func TestArchtest_GRPCInterceptorChainOrder(t *testing.T) {
 						Line: p.Fset.Position(call.Pos()).Line,
 						Message: fmt.Sprintf(
 							"GRPC-INTERCEPTOR-CHAIN-ORDER-01: interceptor order must be "+
-								"RequestID→Tracing→Metrics→Auth→Recovery (RequestID outermost, Recovery "+
-								"innermost), each resolved to a runtime/grpc/interceptor constructor; got %v. "+
+								"RequestID→CellAttribution→Tracing→AccessLog→Metrics→Auth→Recovery "+
+								"(RequestID outermost, Recovery innermost), each resolved to a "+
+								"runtime/grpc/interceptor constructor; got %v. "+
 								"See runtime/grpc/interceptor package doc.",
 							got,
 						),
