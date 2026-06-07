@@ -57,11 +57,8 @@ import (
 	"errors"
 	"fmt"
 	"go/ast"
-	"go/token"
-	"go/types"
 	"os"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -77,15 +74,6 @@ import (
 // //go:build archtest_fixture. A1 fixture comparison runs the generator with
 // this tag; production A1 uses the empty tag. (#944 consolidated the former
 // file-local const here onto the package single source.)
-
-// requiredDepNilGuardRule is the rule ID for diagnostic messages.
-const requiredDepNilGuardRule = "REQUIRED-DEP-NIL-GUARD-01"
-
-// validationPkgPath is the canonical import path of pkg/validation.
-const validationPkgPath = "github.com/ghbvf/gocell/pkg/validation"
-
-// isNilInterfaceFunc is the name of the banned helper function.
-const isNilInterfaceFunc = "IsNilInterface"
 
 // --- A1: Generator Ground Truth ---
 
@@ -200,10 +188,7 @@ func runA1Check(t *testing.T, modRoot, sliceDir, buildTag string) []Diagnostic {
 }
 
 // discoverSlicePaths returns every slice directory with a service.go that the
-// generator would emit a gen file for. It delegates to the generator's
-// FindSlicePaths so A1's regen-diff covers the exact same set — including
-// internal/* packages and nested slices/*/* that a narrower glob would miss
-// (a gap that previously let those gen files escape the Hard byte check).
+// generator would emit a gen file for.
 func discoverSlicePaths(t *testing.T, modRoot string) []string {
 	t.Helper()
 	paths, err := requireddepsgen.FindSlicePaths(modRoot)
@@ -224,11 +209,7 @@ func requiredDepSlashRel(modRoot, absPath string) string {
 
 // TestRequiredDepNilGuard_A2_CallsiteUniqueness verifies that every
 // NewXxx(*Service, error) function calls validateRequired() exactly once,
-// after any options loop. The constructor must also have first return type
-// *Service (not *T for any arbitrary T).
-//
-// Fixture sub-tests: green_basic (pass), red_missing_callsite (missing call),
-// red_pre_options_callsite (call placed before options loop).
+// after any options loop.
 func TestRequiredDepNilGuard_A2_CallsiteUniqueness(t *testing.T) {
 	for _, fix := range []string{
 		"green_basic",
@@ -260,277 +241,15 @@ func TestRequiredDepNilGuard_A2_CallsiteUniqueness(t *testing.T) {
 	}
 
 	t.Run("production_scan", func(t *testing.T) {
-		diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
-			if p.TypesInfo == nil {
-				return nil
-			}
-			var out []Diagnostic
-			for _, file := range p.Files {
-				rel := p.Rel(file)
-				if !isServiceGoForScan(rel) {
-					continue
-				}
-				out = append(out, scanA2(p, file)...)
-			}
-			return out
-		})
-
-		Report(t, requiredDepNilGuardRule+"-A2", diags)
+		Report(t, requiredDepNilGuardRule+"-A2", CheckRequiredDepNilGuardA2(t, ConfigForExternalCell{}))
 	})
-}
-
-// scanA2 scans one file for A2 violations. When the file declares a Service
-// struct carrying at least one gocell:"required" field, every New* constructor
-// returning *Service MUST: (1) return error as its last result, and (2) call
-// validateRequired() exactly once, after the options loop, consuming the error
-// in the canonical form `if err := s.validateRequired(); err != nil { return
-// ..., err }`. Counting the call alone is insufficient — a discarded result
-// (`_ = s.validateRequired()`), a bare expression statement, or a bare-*Service
-// signature that cannot propagate the error would each let a required dep escape
-// the funnel. This mirrors fx/dig: a construction-time error must abort
-// construction, not merely be observed.
-//
-// Files whose Service struct has no required field are skipped: validateRequired
-// is then a no-op (A1 guarantees no gen file in that case) and there is nothing
-// to enforce.
-func scanA2(p *Pass, file *ast.File) []Diagnostic {
-	if !serviceStructHasRequiredField(file) {
-		return nil
-	}
-	var out []Diagnostic
-	EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
-		if fn.Recv != nil || fn.Body == nil {
-			return
-		}
-		if !constructorReturnsStarService(fn) {
-			return
-		}
-		out = append(out, checkA2Constructor(p, file, fn)...)
-	})
-	return out
-}
-
-// checkA2Constructor returns the A2 diagnostic(s) for a single New*-returning-
-// *Service constructor in a required-bearing Service file. At most one is
-// returned (the first failing condition).
-func checkA2Constructor(p *Pass, file *ast.File, fn *ast.FuncDecl) []Diagnostic {
-	mk := func(msg string) []Diagnostic {
-		return []Diagnostic{{
-			Rel:     p.Rel(file),
-			Line:    p.Fset.Position(fn.Pos()).Line,
-			Message: fmt.Sprintf("REQUIRED-DEP-NIL-GUARD-01-A2: %s (%s)", msg, requiredDepNilGuardRule),
-		}}
-	}
-
-	if !lastResultIsError(fn.Type.Results) {
-		return mk("NewService returns *Service but the Service struct has gocell:\"required\" " +
-			"fields; it must return error to propagate validateRequired()")
-	}
-
-	count, preOpts := countValidateRequiredCalls(fn.Body, p.TypesInfo, optsLoopEnd(fn))
-	switch {
-	case count == 0:
-		return mk("NewService does not call validateRequired()")
-	case count > 1:
-		return mk("validateRequired() must be called exactly once")
-	case preOpts:
-		return mk("validateRequired() must be called AFTER the options loop (currently before opts apply)")
-	case !validateRequiredErrorConsumed(fn.Body):
-		return mk("validateRequired() result must be checked and returned " +
-			"(if err := s.validateRequired(); err != nil { return ..., err })")
-	}
-	return nil
-}
-
-// optsLoopEnd returns the token.Pos of the end of the options range loop in fn,
-// or token.NoPos when no options loop is found. An options loop has the shape:
-//
-//	for _, o := range opts { o(s) }
-//
-// where "opts" matches the last variadic parameter of the function (if any).
-func optsLoopEnd(fn *ast.FuncDecl) token.Pos {
-	// Find the name of the variadic parameter (last param, if variadic).
-	params := fn.Type.Params
-	if params == nil || len(params.List) == 0 {
-		return token.NoPos
-	}
-	last := params.List[len(params.List)-1]
-	if _, ok := last.Type.(*ast.Ellipsis); !ok {
-		return token.NoPos
-	}
-	if len(last.Names) == 0 {
-		return token.NoPos
-	}
-	optsName := last.Names[0].Name
-
-	// Find the top-level range loop over the opts param.
-	rs, ok := FindFirstChild[ast.RangeStmt](fn.Body, func(rs *ast.RangeStmt) bool {
-		x, ok := rs.X.(*ast.Ident)
-		return ok && x.Name == optsName
-	})
-	if !ok {
-		return token.NoPos
-	}
-	return rs.End()
-}
-
-// constructorReturnsStarService returns true when fn is a top-level New*
-// function whose FIRST return type is *Service. Unlike a stricter
-// (*Service, error) gate, it deliberately matches bare-*Service constructors
-// too, so a required-bearing Service whose NewService omits the error return —
-// and therefore cannot propagate validateRequired — is still scanned (and
-// flagged) rather than silently skipped.
-func constructorReturnsStarService(fn *ast.FuncDecl) bool {
-	if !strings.HasPrefix(fn.Name.Name, "New") {
-		return false
-	}
-	results := fn.Type.Results
-	if results == nil || len(results.List) == 0 {
-		return false
-	}
-	star, ok := results.List[0].Type.(*ast.StarExpr)
-	if !ok {
-		return false
-	}
-	ident, ok := star.X.(*ast.Ident)
-	return ok && ident.Name == "Service"
-}
-
-// lastResultIsError reports whether the function's last result type is error.
-func lastResultIsError(results *ast.FieldList) bool {
-	if results == nil || len(results.List) == 0 {
-		return false
-	}
-	last := results.List[len(results.List)-1]
-	ident, ok := last.Type.(*ast.Ident)
-	return ok && ident.Name == "error"
-}
-
-// serviceStructHasRequiredField reports whether the file declares a
-// `type Service struct` with at least one gocell:"required" field. Single
-// source: delegates to requiredFieldNames so A2/A3/B2 agree on the field set.
-func serviceStructHasRequiredField(file *ast.File) bool {
-	return len(requiredFieldNames(file)) > 0
-}
-
-// validateRequiredErrorConsumed reports whether body contains the canonical
-// guard `if err := s.validateRequired(); err != nil { return ..., err }`: the
-// call's error result is bound to a named variable, compared != nil, and that
-// variable is referenced inside the if-body (propagated via return, optionally
-// wrapped). A discarded result (`_ = s.validateRequired()`) or a bare expression
-// statement does not satisfy this.
-func validateRequiredErrorConsumed(body *ast.BlockStmt) bool {
-	found := false
-	EachInSubtree[ast.IfStmt](body, func(ifs *ast.IfStmt) {
-		assign, ok := ifs.Init.(*ast.AssignStmt)
-		if !ok || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
-			return
-		}
-		errIdent, ok := assign.Lhs[0].(*ast.Ident)
-		if !ok || errIdent.Name == "_" {
-			return
-		}
-		if !isValidateRequiredCallExpr(assign.Rhs[0]) {
-			return
-		}
-		bin, ok := ifs.Cond.(*ast.BinaryExpr)
-		if !ok || bin.Op != token.NEQ {
-			return
-		}
-		if !identHasName(bin.X, errIdent.Name) || !identHasName(bin.Y, "nil") {
-			return
-		}
-		if ifs.Body != nil && blockReferencesIdent(ifs.Body, errIdent.Name) {
-			found = true
-		}
-	})
-	return found
-}
-
-// isValidateRequiredCallExpr reports whether expr is a call to a method named
-// validateRequired (e.g. s.validateRequired()).
-func isValidateRequiredCallExpr(expr ast.Expr) bool {
-	call, ok := expr.(*ast.CallExpr)
-	if !ok {
-		return false
-	}
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	return ok && sel.Sel != nil && sel.Sel.Name == "validateRequired"
-}
-
-// identHasName reports whether expr is an *ast.Ident with the given name.
-func identHasName(expr ast.Expr, name string) bool {
-	ident, ok := expr.(*ast.Ident)
-	return ok && ident.Name == name
-}
-
-// blockReferencesIdent reports whether any *ast.Ident named name appears in block.
-func blockReferencesIdent(block *ast.BlockStmt, name string) bool {
-	found := false
-	EachInSubtree[ast.Ident](block, func(id *ast.Ident) {
-		if id.Name == name {
-			found = true
-		}
-	})
-	return found
-}
-
-// countValidateRequiredCalls counts how many times validateRequired() is called
-// as a method on a receiver within body, and reports whether any such call
-// occurs before loopEnd (token.NoPos means no loop constraint applies).
-// Returns (count, preOpts) where preOpts is true when count >= 1 and the
-// first call site appears before loopEnd.
-func countValidateRequiredCalls(body *ast.BlockStmt, info *types.Info, loopEnd token.Pos) (count int, preOpts bool) {
-	firstCallPos := token.NoPos
-	EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel == nil || sel.Sel.Name != "validateRequired" {
-			return
-		}
-		isMatch := false
-		if info != nil {
-			if fn, ok := info.Selections[sel]; ok {
-				isMatch = fn.Obj().Name() == "validateRequired"
-			} else {
-				isMatch = true // AST-only fallback
-			}
-		} else {
-			isMatch = true
-		}
-		if isMatch {
-			count++
-			if !firstCallPos.IsValid() {
-				firstCallPos = call.Pos()
-			}
-		}
-	})
-	if loopEnd.IsValid() && firstCallPos.IsValid() && firstCallPos < loopEnd {
-		preOpts = true
-	}
-	return count, preOpts
-}
-
-// isServiceGoForScan returns true for service.go files in slice directories
-// that should be scanned by the production A2 rule.
-func isServiceGoForScan(rel string) bool {
-	if strings.HasSuffix(rel, "_gen.go") {
-		return false
-	}
-	if !strings.HasSuffix(rel, "/service.go") {
-		return false
-	}
-	return strings.Contains(rel, "/slices/") || strings.Contains(rel, "/internal/")
 }
 
 // --- A3: Hand-written IsNilInterface Ban ---
 
 // TestRequiredDepNilGuard_A3_HandwrittenIsNilInterfaceBan verifies that no
-// hand-written service.go (non-gen file) calls validation.IsNilInterface to
-// guard a REQUIRED field — that check belongs to the generated method. Calls on
-// optional-dep option parameters (the builder-noop typed-nil pattern, e.g.
-// WithMetrics) are not the funnel's domain and are allowed.
-//
-// Fixture sub-test verifies logic against red_handwritten_guard.
+// hand-written service.go calls validation.IsNilInterface to guard a REQUIRED
+// field.
 func TestRequiredDepNilGuard_A3_HandwrittenIsNilInterfaceBan(t *testing.T) {
 	for _, fix := range []string{"green_basic", "green_optional_isnil", "red_handwritten_guard"} {
 		fix := fix
@@ -561,172 +280,23 @@ func TestRequiredDepNilGuard_A3_HandwrittenIsNilInterfaceBan(t *testing.T) {
 	}
 
 	t.Run("production_scan", func(t *testing.T) {
-		diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
-			if p.TypesInfo == nil {
-				return nil
-			}
-			var out []Diagnostic
-			for _, file := range p.Files {
-				rel := p.Rel(file)
-				if !isHandWrittenServiceFile(rel) {
-					continue
-				}
-				out = append(out, scanA3(p, file)...)
-			}
-			return out
-		})
-
-		Report(t, requiredDepNilGuardRule+"-A3", diags)
+		Report(t, requiredDepNilGuardRule+"-A3", CheckRequiredDepNilGuardA3(t, ConfigForExternalCell{}))
 	})
-}
-
-// scanA3 scans one file for A3 violations: hand-written validation.IsNilInterface
-// calls that guard a REQUIRED field. The argument must be a selector on a
-// gocell:"required" field of this file's Service struct — that is the funnel's
-// domain and must live in the generated method. IsNilInterface on an
-// optional-dep option parameter (the builder-noop typed-nil pattern per
-// runtime-api.md "Option 范式分层", e.g. WithMetrics) or on an untagged optional
-// field is NOT a funnel bypass and is left alone. Scoping mirrors B2.
-func scanA3(p *Pass, file *ast.File) []Diagnostic {
-	requiredFields := requiredFieldNames(file)
-	if len(requiredFields) == 0 {
-		return nil
-	}
-	var out []Diagnostic
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		if !isIsNilInterfaceCallee(call.Fun, p.TypesInfo) {
-			return
-		}
-		if !callArgIsRequiredField(call, requiredFields) {
-			return
-		}
-		out = append(out, Diagnostic{
-			Rel:  p.Rel(file),
-			Line: p.Fset.Position(call.Pos()).Line,
-			Message: fmt.Sprintf(
-				"REQUIRED-DEP-NIL-GUARD-01-A3: hand-written validation.IsNilInterface call in service.go "+
-					"bypasses generated funnel; remove the call — required-dep nil checks are generated "+
-					"in service_required_gen.go via gocell:\"required\" tag (%s)", requiredDepNilGuardRule,
-			),
-		})
-	})
-	return out
-}
-
-// callArgIsRequiredField reports whether the call's first argument is a selector
-// `<expr>.<field>` whose field is a gocell:"required" field of the Service struct.
-func callArgIsRequiredField(call *ast.CallExpr, requiredFields map[string]bool) bool {
-	if len(call.Args) == 0 {
-		return false
-	}
-	sel, ok := call.Args[0].(*ast.SelectorExpr)
-	if !ok || sel.Sel == nil {
-		return false
-	}
-	return requiredFields[sel.Sel.Name]
-}
-
-// isIsNilInterfaceCallee reports whether funExpr refers to validation.IsNilInterface.
-func isIsNilInterfaceCallee(funExpr ast.Expr, info *types.Info) bool {
-	sel, ok := funExpr.(*ast.SelectorExpr)
-	if !ok || sel.Sel == nil || sel.Sel.Name != isNilInterfaceFunc {
-		return false
-	}
-	if info != nil {
-		obj := info.Uses[sel.Sel]
-		if obj == nil {
-			return false
-		}
-		fn, ok := obj.(*types.Func)
-		if !ok || fn.Pkg() == nil {
-			return false
-		}
-		return fn.Pkg().Path() == validationPkgPath
-	}
-	// AST-only fallback
-	xIdent, ok := sel.X.(*ast.Ident)
-	return ok && xIdent.Name == "validation"
-}
-
-// isHandWrittenServiceFile returns true for service.go files that are NOT generated.
-func isHandWrittenServiceFile(rel string) bool {
-	if strings.HasSuffix(rel, "_gen.go") {
-		return false
-	}
-	return strings.HasSuffix(rel, "/service.go") &&
-		(strings.Contains(rel, "/slices/") || strings.Contains(rel, "/internal/"))
 }
 
 // --- A4: Tag Value Whitelist ---
 
 // TestRequiredDepNilGuard_A4_TagValueWhitelist verifies that all gocell struct
-// tag values in production source are in {"", "required"}. Any typo (e.g.
-// "requied") is caught.
+// tag values in production source are in {"", "required"}.
 func TestRequiredDepNilGuard_A4_TagValueWhitelist(t *testing.T) {
-	root := findModuleRoot(t)
-	scope := ModuleScope(root)
-	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
-		var out []Diagnostic
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasPrefix(rel, "tools/") ||
-				strings.HasPrefix(rel, "generated/") ||
-				strings.HasPrefix(rel, "vendor/") {
-				continue
-			}
-			out = append(out, scanA4(p, file)...)
-		}
-		return out
-	})
-
-	Report(t, requiredDepNilGuardRule+"-A4", diags)
-}
-
-// scanA4 scans one file for A4 violations: unknown gocell tag values.
-func scanA4(p *Pass, file *ast.File) []Diagnostic {
-	var out []Diagnostic
-	EachInSubtree[ast.StructType](file, func(st *ast.StructType) {
-		for _, field := range st.Fields.List {
-			if field.Tag == nil {
-				continue
-			}
-			raw := strings.Trim(field.Tag.Value, "`")
-			// Fail closed on malformed tags: reflect.StructTag.Get reports them
-			// as absent, which would let a typo'd tag silently drop a required-dep
-			// guard. Shares the generator's single malformed-tag definition.
-			if !requireddepsgen.TagSyntaxValid(raw) {
-				out = append(out, Diagnostic{
-					Rel:  p.Rel(file),
-					Line: p.Fset.Position(field.Pos()).Line,
-					Message: fmt.Sprintf(
-						"REQUIRED-DEP-NIL-GUARD-01-A4: malformed struct tag %q (reflect.StructTag.Get would silently drop it) (%s)",
-						raw, requiredDepNilGuardRule,
-					),
-				})
-				continue
-			}
-			val := reflect.StructTag(raw).Get("gocell")
-			if val == "" || val == "required" {
-				continue
-			}
-			out = append(out, Diagnostic{
-				Rel:  p.Rel(file),
-				Line: p.Fset.Position(field.Pos()).Line,
-				Message: fmt.Sprintf(
-					"REQUIRED-DEP-NIL-GUARD-01-A4: unknown gocell tag value %q (allowed: \"\", \"required\") (%s)",
-					val, requiredDepNilGuardRule,
-				),
-			})
-		}
-	})
-	return out
+	Report(t, requiredDepNilGuardRule+"-A4", CheckRequiredDepNilGuardA4(t, ConfigForExternalCell{}))
 }
 
 // --- B1: No reflect nil check on required field ---
 
 // TestRequiredDepNilGuard_BlindSpot_B1_NoReflectNilCheck is the reverse
 // self-test for B1: asserts production code does not use reflect.ValueOf(s.X).IsNil()
-// on fields of Service structs. This form bypasses A3's IsNilInterface check.
+// on fields of Service structs.
 func TestRequiredDepNilGuard_BlindSpot_B1_NoReflectNilCheck(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := ModuleScope(root)
@@ -750,12 +320,10 @@ func TestRequiredDepNilGuard_BlindSpot_B1_NoReflectNilCheck(t *testing.T) {
 func scanB1ReflectNilCheck(p *Pass, file *ast.File) []Diagnostic {
 	var out []Diagnostic
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		// Match: <expr>.IsNil()
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel.Name != "IsNil" {
 			return
 		}
-		// Check if receiver is reflect.ValueOf(...)
 		inner, ok := sel.X.(*ast.CallExpr)
 		if !ok {
 			return
@@ -782,24 +350,8 @@ func scanB1ReflectNilCheck(p *Pass, file *ast.File) []Diagnostic {
 // TestRequiredDepNilGuard_BlindSpot_B2_NoDirectNilCompare is the reverse
 // self-test for B2: asserts that no FuncDecl body in a hand-written service.go
 // contains `<recv>.X == nil` or `<recv>.X != nil` where X is a Service struct
-// field tagged gocell:"required". The generated validateRequired() centralizes
-// all required-dep nil checks; method-level guards on those fields bypass A3's
-// IsNilInterface ban (an AI could substitute raw == nil to evade A3).
-//
-// Carve-outs:
-//   - generated files (*_gen.go) — sanctioned guard locations
-//   - non-required fields (e.g., logger, sessionStore) — legitimate optional
-//     fallback / feature-gate semantics; these are not in the required-tag set
-//
-// Production scan gated by REQUIRED_DEP_FUNNEL_PRODUCTION_SCAN until Batch
-// A/B/C/D land (pre-migration NewXxx bodies still contain hand-written
-// `if s.txRunner == nil { ... }` blocks that the migration removes).
+// field tagged gocell:"required".
 func TestRequiredDepNilGuard_BlindSpot_B2_NoDirectNilCompare(t *testing.T) {
-	// green_basic — no nil compare; red_handwritten_guard — IsNilInterface (A3 case,
-	// not a raw == nil compare, so B2 stays empty); red_direct_nil_compare — raw
-	// s.repo == nil in DoWork body, which A3 cannot catch: B2 must fire.
-	// b2.golden is separate from diag.golden (which records A3 diagnostics) to
-	// avoid two test functions asserting different content against the same file.
 	for _, fix := range []string{"green_basic", "red_handwritten_guard", "red_direct_nil_compare"} {
 		fix := fix
 		t.Run("fixture_"+fix, func(t *testing.T) {
@@ -847,8 +399,7 @@ func TestRequiredDepNilGuard_BlindSpot_B2_NoDirectNilCompare(t *testing.T) {
 }
 
 // isB2InScopeFile reports whether rel is a hand-written service.go in a slice/internal
-// directory (B2 is scoped narrower than A3 because it only asserts on a per-file
-// required-field set derived from that file's Service struct).
+// directory.
 func isB2InScopeFile(rel string) bool {
 	return isHandWrittenServiceFile(rel)
 }
@@ -856,9 +407,6 @@ func isB2InScopeFile(rel string) bool {
 // scanB2RequiredFieldNilCompare walks all FuncDecl bodies in file, finds
 // BinaryExpr of the form `<expr>.<field> == nil` (or !=), and reports those
 // where <field> is a gocell:"required"-tagged field on the file's Service struct.
-//
-// The required-field set is built from the Service struct in this file only;
-// cross-file Service definitions are not considered.
 func scanB2RequiredFieldNilCompare(p *Pass, file *ast.File) []Diagnostic {
 	requiredFields := requiredFieldNames(file)
 	if len(requiredFields) == 0 {
@@ -895,79 +443,11 @@ func scanB2RequiredFieldNilCompare(p *Pass, file *ast.File) []Diagnostic {
 	return out
 }
 
-// requiredFieldNames extracts the set of field names tagged gocell:"required"
-// from the file's Service struct (returns empty when no Service struct exists).
-func requiredFieldNames(file *ast.File) map[string]bool {
-	out := make(map[string]bool)
-	EachInChildren[ast.GenDecl](file, func(genDecl *ast.GenDecl) {
-		if genDecl.Tok != token.TYPE {
-			return
-		}
-		EachInChildren[ast.TypeSpec](genDecl, func(ts *ast.TypeSpec) {
-			if ts.Name.Name != "Service" {
-				return
-			}
-			st, ok := ts.Type.(*ast.StructType)
-			if !ok {
-				return
-			}
-			for _, f := range st.Fields.List {
-				if f.Tag == nil {
-					continue
-				}
-				raw := strings.Trim(f.Tag.Value, "`")
-				if reflect.StructTag(raw).Get("gocell") != "required" {
-					continue
-				}
-				for _, name := range f.Names {
-					out[name.Name] = true
-				}
-			}
-		})
-	})
-	return out
-}
-
-// selectorFieldComparedToNil returns the selector's field name when be has the
-// shape `<expr>.<field> == nil` or `nil == <expr>.<field>` (likewise for !=);
-// otherwise returns "".
-func selectorFieldComparedToNil(be *ast.BinaryExpr) string {
-	isNilIdent := func(e ast.Expr) bool {
-		id, ok := e.(*ast.Ident)
-		return ok && id.Name == "nil"
-	}
-	selField := func(e ast.Expr) string {
-		sel, ok := e.(*ast.SelectorExpr)
-		if !ok || sel.Sel == nil {
-			return ""
-		}
-		return sel.Sel.Name
-	}
-	switch {
-	case isNilIdent(be.Y):
-		return selField(be.X)
-	case isNilIdent(be.X):
-		return selField(be.Y)
-	default:
-		return ""
-	}
-}
-
-// formatNilCompare returns a short readable rendering of `s.X == nil`.
-func formatNilCompare(be *ast.BinaryExpr) string {
-	field := selectorFieldComparedToNil(be)
-	if field == "" {
-		return "<unknown>"
-	}
-	return "<recv>." + field + " " + be.Op.String() + " nil"
-}
-
 // --- B3: No indirect IsNilInterface reference ---
 
 // TestRequiredDepNilGuard_BlindSpot_B3_NoIndirectIsNilInterfaceRef verifies
 // that every reference to validation.IsNilInterface in the module appears in
 // direct call position (CallExpr.Fun), not as a function value / pointer.
-// Generated files are allowlisted (they are the sanctioned call sites).
 func TestRequiredDepNilGuard_BlindSpot_B3_NoIndirectIsNilInterfaceRef(t *testing.T) {
 	seen := make(map[string]struct{})
 	var violations []Diagnostic
@@ -1002,7 +482,6 @@ func TestRequiredDepNilGuard_BlindSpot_B3_NoIndirectIsNilInterfaceRef(t *testing
 // scanB3IndirectRef finds non-call-position references to IsNilInterface.
 func scanB3IndirectRef(p *Pass, file *ast.File, rel string, seen map[string]struct{}) []Diagnostic {
 	var out []Diagnostic
-	// Collect all direct-call Ident positions (these are allowed).
 	legalCallFun := make(map[*ast.Ident]struct{})
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
@@ -1013,7 +492,6 @@ func scanB3IndirectRef(p *Pass, file *ast.File, rel string, seen map[string]stru
 			legalCallFun[sel.Sel] = struct{}{}
 		}
 	})
-	// Check all Uses for IsNilInterface outside legal positions.
 	for ident, obj := range p.TypesInfo.Uses {
 		if !isIsNilInterfaceIdentObj(obj) {
 			continue
@@ -1025,7 +503,6 @@ func scanB3IndirectRef(p *Pass, file *ast.File, rel string, seen map[string]stru
 		if _, ok := legalCallFun[ident]; ok {
 			continue
 		}
-		// Generated files allowed.
 		if strings.HasSuffix(rel, "_gen.go") {
 			continue
 		}
@@ -1043,24 +520,10 @@ func scanB3IndirectRef(p *Pass, file *ast.File, rel string, seen map[string]stru
 	return out
 }
 
-// isIsNilInterfaceIdentObj reports whether obj is validation.IsNilInterface.
-func isIsNilInterfaceIdentObj(obj types.Object) bool {
-	if obj == nil {
-		return false
-	}
-	fn, ok := obj.(*types.Func)
-	if !ok || fn.Pkg() == nil {
-		return false
-	}
-	return fn.Pkg().Path() == validationPkgPath && fn.Name() == isNilInterfaceFunc
-}
-
 // --- B5: No validateRequired method value leak ---
 
 // TestRequiredDepNilGuard_BlindSpot_B5_NoValidateRequiredMethodValueLeak
-// verifies that validateRequired is only referenced in direct call position
-// (s.validateRequired()), not as a method value (s.validateRequired without
-// parens). Method value usage would bypass A2's count-based detection.
+// verifies that validateRequired is only referenced in direct call position.
 func TestRequiredDepNilGuard_BlindSpot_B5_NoValidateRequiredMethodValueLeak(t *testing.T) {
 	seen := make(map[string]struct{})
 	var violations []Diagnostic
@@ -1096,7 +559,6 @@ func TestRequiredDepNilGuard_BlindSpot_B5_NoValidateRequiredMethodValueLeak(t *t
 // scanB5MethodValueLeak finds validateRequired Sel references not in call position.
 func scanB5MethodValueLeak(p *Pass, file *ast.File, rel string, seen map[string]struct{}) []Diagnostic {
 	var out []Diagnostic
-	// Collect all direct-call positions.
 	legalCalls := make(map[*ast.Ident]struct{})
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
@@ -1104,7 +566,6 @@ func scanB5MethodValueLeak(p *Pass, file *ast.File, rel string, seen map[string]
 			legalCalls[sel.Sel] = struct{}{}
 		}
 	})
-	// Find all SelectorExpr with Sel.Name == "validateRequired".
 	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
 		if sel.Sel == nil || sel.Sel.Name != "validateRequired" {
 			return
@@ -1112,7 +573,6 @@ func scanB5MethodValueLeak(p *Pass, file *ast.File, rel string, seen map[string]
 		if _, ok := legalCalls[sel.Sel]; ok {
 			return
 		}
-		// Skip the method declaration itself.
 		key := fmt.Sprintf("%s:%d", rel, p.Fset.Position(sel.Sel.Pos()).Line)
 		if _, dup := seen[key]; dup {
 			return

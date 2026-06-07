@@ -12,7 +12,9 @@ package archtest
 //   - INVARIANT: SEC-FAIL-CLOSED-09
 //   - INVARIANT: SEC-FAIL-CLOSED-10
 //
-// security_defaults_test.go — static archtest rules for PR-MODE-1 SEC-FAIL-CLOSED.
+// security_defaults_test.go — dogfood + standalone fixture tests for
+// SEC-FAIL-CLOSED-01..10. The importable scanner logic lives in
+// security_defaults.go (module-path-agnostic, #1640 M3 PR-9).
 //
 // Sub-tests mirror the SEC-FAIL-CLOSED-01..10 rule IDs:
 //
@@ -38,16 +40,12 @@ package archtest
 // ref: tools/archtest/auth_authtest_boundary_test.go — 4 sub-test pattern
 
 import (
-	"bytes"
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -57,79 +55,23 @@ import (
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
-const (
-	// RETIRED: SEC-FAIL-CLOSED-01 — see testSEC01AddrDrivenGate godoc below.
-	// The constant + t.Run subtest are retained as inert markers so historic
-	// CI logs and grep continue to map cleanly onto rule IDs; the body is a
-	// one-line t.Skip().
-	secFailClosed01 = "SEC-FAIL-CLOSED-01"
-	secFailClosed02 = "SEC-FAIL-CLOSED-02"
-	secFailClosed03 = "SEC-FAIL-CLOSED-03"
-	secFailClosed04 = "SEC-FAIL-CLOSED-04"
-	secFailClosed05 = "SEC-FAIL-CLOSED-05"
-	secFailClosed06 = "SEC-FAIL-CLOSED-06"
-	secFailClosed07 = "SEC-FAIL-CLOSED-07"
-	secFailClosed08 = "SEC-FAIL-CLOSED-08"
-	secFailClosed09 = "SEC-FAIL-CLOSED-09"
-	secFailClosed10 = "SEC-FAIL-CLOSED-10"
-)
-
-// kernelCellPkgPath is the canonical import path of the kernel/cell package,
-// home of the ListenerRef consts (PrimaryListener / InternalListener /
-// HealthListener). SEC-FAIL-CLOSED-10 resolves listener references to this path
-// via ResolvePackageRef (type-aware), so import aliases do not defeat it.
-const kernelCellPkgPath = "github.com/ghbvf/gocell/kernel/cell"
-
+// TestSecurityDefaults is the dogfood entry point for SEC-FAIL-CLOSED-02..10.
+// It iterates securityRules() (the single source also used by the aggregate
+// CheckSecurityDefaults) and Reports each sub-rule under its precise id — so a
+// SEC-04 failure is reported as "SEC-FAIL-CLOSED-04: …", not collapsed under one
+// "SEC-FAIL-CLOSED-02..10" prefix (matching the clock_invariants per-rule Report
+// pattern).
+//
+// SEC-FAIL-CLOSED-01 is retired; its t.Skip sub-test is retained as an inert
+// marker so historic CI logs and grep map cleanly onto rule IDs.
 func TestSecurityDefaults(t *testing.T) {
-	root := findModuleRoot(t)
-
 	t.Run(secFailClosed01+"_addr_driven_listener_gate_banned", func(t *testing.T) {
-		testSEC01AddrDrivenGate(t, root)
+		testSEC01AddrDrivenGate(t)
 	})
-
-	t.Run(secFailClosed02+"_listener_authchain_must_be_explicit", func(t *testing.T) {
-		testSEC02ListenerAuthChainNonNil(t, root)
-	})
-
-	t.Run(secFailClosed03+"_adapter_endpoint_must_validate_tls", func(t *testing.T) {
-		testSEC03AdapterTLSValidation(t, root)
-	})
-
-	t.Run(secFailClosed04+"_websocket_must_not_skip_origin_verify", func(t *testing.T) {
-		testSEC04WebSocketOriginVerify(t, root)
-	})
-
-	t.Run(secFailClosed05+"_example_compose_credentials_from_env", func(t *testing.T) {
-		testSEC05ExampleComposeCredentialsFromEnv(t, root)
-	})
-
-	t.Run(secFailClosed06+"_internal_listener_must_not_use_authnone", func(t *testing.T) {
-		testSEC06InternalListenerMustNotUseAuthNone(t, root)
-	})
-
-	t.Run(secFailClosed07+"_websocket_upgrade_config_must_set_authenticator", func(t *testing.T) {
-		testSEC07WebsocketAuthenticatorRequired(t, root)
-	})
-
-	t.Run(secFailClosed08+"_no_legacy_broadcast_call", func(t *testing.T) {
-		testSEC08NoLegacyBroadcastCall(t, root)
-	})
-
-	t.Run(secFailClosed09+"_hub_subjectidx_sync", func(t *testing.T) {
-		testSEC09HubSubjectIdxSync(t, root)
-	})
-
-	t.Run(secFailClosed10+"_main_with_primary_must_declare_health", func(t *testing.T) {
-		testSEC10HealthListenerRequiredInMain(t)
-	})
-
-	t.Run(secFailClosed10+"_no_dotimport_kernelcell_in_main", func(t *testing.T) {
-		testSEC10NoDotImportKernelCellBlindSpotInProduction(t)
-	})
-
-	t.Run(secFailClosed10+"_fixture_catches_primary_without_health", func(t *testing.T) {
-		testSEC10FixtureCatchesPrimaryWithoutHealth(t)
-	})
+	root := findModuleRoot(t)
+	for _, r := range securityRules() {
+		Report(t, r.id, r.check(t, root))
+	}
 }
 
 // testSEC01AddrDrivenGate is skipped — SEC-FAIL-CLOSED-01 is retired.
@@ -156,218 +98,14 @@ func TestSecurityDefaults(t *testing.T) {
 // HealthListener — now enforced statically by SEC-FAIL-CLOSED-10.
 //
 // SEC-02 covers the actual nil-authChain risk. See git history for context.
-func testSEC01AddrDrivenGate(t *testing.T, _ string) {
+func testSEC01AddrDrivenGate(t *testing.T) {
 	t.Helper()
 	t.Skip("SEC-FAIL-CLOSED-01 retired: addr-driven if-gate is safe; SEC-02 covers actual fail-open. See git history for context.")
 }
 
-// testSEC02ListenerAuthChainNonNil scans every production package-main .go
-// file in the repo for bootstrap.WithListener CallExpr nodes and verifies
-// that the 3rd argument (authChain) is never a bare nil identifier.
-//
-// Scope: any new entry point (cmd/<name>/main.go, examples/<name>/main.go,
-// tests/<harness>/main.go) is auto-included because the filter is package
-// clause `main`, not a hardcoded directory list. This closes the SEC-02
-// scope-shrink bypass: previously only cmd/corebundle + examples/**/main.go
-// were scanned, leaving any new cmd/<name>/ unguarded.
-//
-// ref: rust-lang/rust-clippy `expect`/deny levels — critical lint rules
-// cannot be downgraded by scope-shrinking the scan.
-func testSEC02ListenerAuthChainNonNil(t *testing.T, root string) {
-	t.Helper()
-
-	scanFiles, err := findAllProductionMainPackageFiles(root)
-	require.NoError(t, err, "finding production main package files")
-
-	var violations []string
-
-	for _, f := range scanFiles {
-		hits, err := findWithListenerNilAuthChain(f)
-		require.NoErrorf(t, err, "scanning %s", f)
-		rel, _ := filepath.Rel(root, f)
-		rel = filepath.ToSlash(rel)
-		for _, line := range hits {
-			violations = append(violations, fmt.Sprintf("%s:%d: WithListener 3rd arg is bare nil (SEC-FAIL-CLOSED-02)", rel, line))
-		}
-	}
-
-	if len(violations) > 0 {
-		for _, v := range violations {
-			t.Logf("%s violation: %s", secFailClosed02, v)
-		}
-	}
-	assert.Empty(t, violations,
-		"all bootstrap.WithListener calls in cmd/corebundle and examples/**/main.go must pass "+
-			"an explicit non-nil authChain; use auth.AuthNone{} for HealthListener")
-}
-
-// findWithListenerNilAuthChain parses path and returns line numbers of every
-// bootstrap.WithListener CallExpr where the 3rd argument is the identifier nil.
-func findWithListenerNilAuthChain(path string) ([]int, error) {
-	data, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return nil, err
-	}
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
-	if err != nil {
-		return nil, err
-	}
-	var lines []int
-	scanner.EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
-		// Must be a SelectorExpr "bootstrap.WithListener" or plain "WithListener".
-		switch fn := call.Fun.(type) {
-		case *ast.SelectorExpr:
-			if fn.Sel.Name != "WithListener" {
-				return
-			}
-		case *ast.Ident:
-			if fn.Name != "WithListener" {
-				return
-			}
-		default:
-			return
-		}
-		// 3rd argument (index 2) must not be nil identifier.
-		if len(call.Args) < 3 {
-			return
-		}
-		arg := call.Args[2]
-		ident, ok := arg.(*ast.Ident)
-		if ok && ident.Name == "nil" {
-			lines = append(lines, fset.Position(call.Lparen).Line)
-		}
-	})
-	return lines, nil
-}
-
-func testSEC06InternalListenerMustNotUseAuthNone(t *testing.T, root string) {
-	t.Helper()
-
-	// Same auto-include scope as SEC-02 — every package-main entry point.
-	scanFiles, err := findAllProductionMainPackageFiles(root)
-	require.NoError(t, err, "finding production main package files")
-
-	var violations []string
-	for _, f := range scanFiles {
-		hits, err := findInternalListenerAuthNoneChain(f)
-		require.NoErrorf(t, err, "scanning %s", f)
-		rel, _ := filepath.Rel(root, f)
-		rel = filepath.ToSlash(rel)
-		for _, line := range hits {
-			violations = append(violations, fmt.Sprintf("%s:%d: InternalListener uses AuthNone literal (SEC-FAIL-CLOSED-06)", rel, line))
-		}
-	}
-
-	if len(violations) > 0 {
-		for _, v := range violations {
-			t.Logf("%s violation: %s", secFailClosed06, v)
-		}
-	}
-	assert.Empty(t, violations,
-		"production InternalListener declarations must use guarded auth chains, not a literal AuthNone chain")
-}
-
-func findInternalListenerAuthNoneChain(path string) ([]int, error) {
-	data, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return nil, err
-	}
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
-	if err != nil {
-		return nil, err
-	}
-	var lines []int
-	facts := collectAuthNoneChainFacts(f)
-	scanner.EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
-		if !isWithListenerCall(call) || len(call.Args) < 3 {
-			return
-		}
-		if !isInternalListenerRef(call.Args[0]) || !chainExprContainsAuthNone(call.Args[2], facts) {
-			return
-		}
-		lines = append(lines, fset.Position(call.Lparen).Line)
-	})
-	return lines, nil
-}
-
-type authNoneChainFacts struct {
-	vars  map[string]bool
-	funcs map[string]bool
-}
-
-func collectAuthNoneChainFacts(f *ast.File) authNoneChainFacts {
-	facts := authNoneChainFacts{
-		vars:  make(map[string]bool),
-		funcs: make(map[string]bool),
-	}
-	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
-		if fn.Body == nil {
-			return
-		}
-		scanner.EachInSubtree[ast.ReturnStmt](fn.Body, func(ret *ast.ReturnStmt) {
-			for _, result := range ret.Results {
-				if chainLiteralContainsAuthNone(result) {
-					facts.funcs[fn.Name.Name] = true
-				}
-			}
-		})
-	})
-	scanner.EachInSubtree[ast.ValueSpec](f, func(stmt *ast.ValueSpec) {
-		for i, name := range stmt.Names {
-			if authNoneRHSAt(stmt.Values, i) {
-				facts.vars[name.Name] = true
-			}
-		}
-	})
-	scanner.EachInSubtree[ast.AssignStmt](f, func(stmt *ast.AssignStmt) {
-		for i, lhsExpr := range stmt.Lhs {
-			id := exprToIdent(lhsExpr)
-			if id == nil {
-				continue
-			}
-			if authNoneRHSAt(stmt.Rhs, i) {
-				facts.vars[id.Name] = true
-			}
-		}
-	})
-	return facts
-}
-
-func authNoneRHSAt(rhs []ast.Expr, idx int) bool {
-	if len(rhs) == 0 {
-		return false
-	}
-	if len(rhs) == 1 {
-		return chainLiteralContainsAuthNone(rhs[0])
-	}
-	if idx >= len(rhs) {
-		return false
-	}
-	return chainLiteralContainsAuthNone(rhs[idx])
-}
-
-// exprToIdent casts e to *ast.Ident, returning nil if not an identifier.
-func exprToIdent(e ast.Expr) *ast.Ident {
-	id, _ := e.(*ast.Ident)
-	return id
-}
-
-func chainExprContainsAuthNone(expr ast.Expr, facts authNoneChainFacts) bool {
-	if chainLiteralContainsAuthNone(expr) {
-		return true
-	}
-	switch e := expr.(type) {
-	case *ast.Ident:
-		return facts.vars[e.Name]
-	case *ast.CallExpr:
-		id, ok := e.Fun.(*ast.Ident)
-		return ok && facts.funcs[id.Name]
-	default:
-		return false
-	}
-}
+// ---------------------------------------------------------------------------
+// Standalone fixture tests — exercise helpers from security_defaults.go directly.
+// ---------------------------------------------------------------------------
 
 func TestFindInternalListenerAuthNoneChain_CatchesLiteralVarAndHelper(t *testing.T) {
 	t.Parallel()
@@ -399,123 +137,6 @@ func insecureInternalAuth() []auth.ListenerAuth {
 	assert.Len(t, lines, 2)
 }
 
-func isWithListenerCall(call *ast.CallExpr) bool {
-	switch fn := call.Fun.(type) {
-	case *ast.SelectorExpr:
-		return fn.Sel.Name == "WithListener"
-	case *ast.Ident:
-		return fn.Name == "WithListener"
-	default:
-		return false
-	}
-}
-
-func isInternalListenerRef(expr ast.Expr) bool {
-	sel, ok := expr.(*ast.SelectorExpr)
-	return ok && sel.Sel.Name == "InternalListener"
-}
-
-func chainLiteralContainsAuthNone(expr ast.Expr) bool {
-	lit, ok := expr.(*ast.CompositeLit)
-	if !ok {
-		return false
-	}
-	return slices.ContainsFunc(lit.Elts, isAuthNoneComposite)
-}
-
-func isAuthNoneComposite(expr ast.Expr) bool {
-	lit, ok := expr.(*ast.CompositeLit)
-	if !ok {
-		return false
-	}
-	sel, ok := lit.Type.(*ast.SelectorExpr)
-	return ok && sel.Sel.Name == "AuthNone"
-}
-
-// testSEC03AdapterTLSValidation verifies that adapters/redis, adapters/vault,
-// and adapters/s3 each contain at least one call to secutil.ValidateTLSEndpoint.
-// This ensures the shared TLS validation helper is wired in and the adapters
-// will benefit from phase-2 implementation without extra code changes.
-//
-// Detection is text-based (strings.Contains) — sufficient for this rule since
-// the call site is the only use of secutil in each adapter package.
-// Phase 2 may upgrade to packages.Load TypesInfo if false-positive risk grows.
-func testSEC03AdapterTLSValidation(t *testing.T, root string) {
-	t.Helper()
-
-	targets := []struct {
-		label string
-		dir   string
-	}{
-		{"adapters/redis", filepath.Join(root, "adapters", "redis")},
-		{"adapters/vault", filepath.Join(root, "adapters", "vault")},
-		{"adapters/s3", filepath.Join(root, "adapters", "s3")},
-	}
-
-	var violations []string
-
-	for _, tgt := range targets {
-		files, err := findProductionGoFilesInDir(tgt.dir)
-		require.NoErrorf(t, err, "reading %s", tgt.label)
-
-		pkgImportsSecutil := false
-		pkgCallsValidate := false
-
-		for _, f := range files {
-			data, err := os.ReadFile(filepath.Clean(f))
-			if err != nil {
-				continue
-			}
-			src := string(data)
-			if strings.Contains(src, `"github.com/ghbvf/gocell/pkg/secutil"`) {
-				pkgImportsSecutil = true
-			}
-			if secutilCallsValidateTLSEndpoint(src) {
-				pkgCallsValidate = true
-			}
-		}
-
-		if !pkgImportsSecutil {
-			violations = append(violations, fmt.Sprintf("%s: does not import pkg/secutil (SEC-FAIL-CLOSED-03)", tgt.label))
-		}
-		if !pkgCallsValidate {
-			violations = append(violations, fmt.Sprintf("%s: no call to secutil.ValidateTLSEndpoint (SEC-FAIL-CLOSED-03)", tgt.label))
-		}
-	}
-
-	if len(violations) > 0 {
-		for _, v := range violations {
-			t.Logf("%s violation: %s", secFailClosed03, v)
-		}
-	}
-	assert.Empty(t, violations,
-		"adapters/redis, adapters/vault, and adapters/s3 must each import pkg/secutil "+
-			"and call secutil.ValidateTLSEndpoint to validate remote endpoint TLS")
-}
-
-// secutilCallsValidateTLSEndpoint reports whether src contains an actual
-// *ast.CallExpr to secutil.ValidateTLSEndpoint. Comment / string-literal
-// occurrences of the bytes do not count.
-func secutilCallsValidateTLSEndpoint(src string) bool {
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "src.go", src, parser.SkipObjectResolution)
-	if err != nil {
-		return false
-	}
-	_, ok := scanner.FindFirstInSubtree[ast.CallExpr](f, func(ce *ast.CallExpr) bool {
-		sel, isSel := ce.Fun.(*ast.SelectorExpr)
-		if !isSel {
-			return false
-		}
-		x, isIdent := sel.X.(*ast.Ident)
-		if !isIdent {
-			return false
-		}
-		return x.Name == "secutil" && sel.Sel.Name == "ValidateTLSEndpoint"
-	})
-	return ok
-}
-
 // TestSecurityDefaultsSEC03_NegativeFixture_StringLiteralOnly asserts the
 // scanner does NOT flag a fixture that only contains "secutil.ValidateTLSEndpoint("
 // in comments and string-constant values, with no real CallExpr. Legacy
@@ -534,92 +155,6 @@ func TestSecurityDefaultsSEC03_NegativeFixture_StringLiteralOnly(t *testing.T) {
 	}
 }
 
-// testSEC04WebSocketOriginVerify scans adapters/websocket for the forbidden
-// assignment opts.InsecureSkipVerify = true. The pattern is detected via AST
-// AssignStmt matching to avoid false positives from comments or string literals.
-func testSEC04WebSocketOriginVerify(t *testing.T, root string) {
-	t.Helper()
-
-	wsDir := filepath.Join(root, "adapters", "websocket")
-	files, err := findProductionGoFilesInDir(wsDir)
-	require.NoError(t, err, "reading adapters/websocket")
-
-	var violations []string
-
-	for _, f := range files {
-		hits, err := findInsecureSkipVerifyAssign(f)
-		require.NoErrorf(t, err, "scanning %s", f)
-		rel, _ := filepath.Rel(root, f)
-		rel = filepath.ToSlash(rel)
-		for _, line := range hits {
-			violations = append(violations, fmt.Sprintf("%s:%d: opts.InsecureSkipVerify = true (SEC-FAIL-CLOSED-04)", rel, line))
-		}
-	}
-
-	if len(violations) > 0 {
-		for _, v := range violations {
-			t.Logf("%s violation: %s", secFailClosed04, v)
-		}
-	}
-	assert.Empty(t, violations,
-		"adapters/websocket must not assign opts.InsecureSkipVerify = true; "+
-			"empty AllowedOrigins must fail-fast rather than silently accepting all origins")
-}
-
-// findInsecureSkipVerifyAssign parses path and returns line numbers of every
-// AssignStmt of the form `opts.InsecureSkipVerify = true`.
-func findInsecureSkipVerifyAssign(path string) ([]int, error) {
-	data, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return nil, err
-	}
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
-	if err != nil {
-		return nil, err
-	}
-	var lines []int
-	scanner.EachInSubtree[ast.AssignStmt](f, func(assign *ast.AssignStmt) {
-		if len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
-			return
-		}
-		// LHS: opts.InsecureSkipVerify — SelectorExpr X=Ident("opts") Sel="InsecureSkipVerify"
-		sel, ok := assign.Lhs[0].(*ast.SelectorExpr)
-		if !ok {
-			return
-		}
-		xIdent, ok := sel.X.(*ast.Ident)
-		if !ok || xIdent.Name != "opts" {
-			return
-		}
-		if sel.Sel.Name != "InsecureSkipVerify" {
-			return
-		}
-		// RHS: true — must be a pointer deref of AcceptOptions.InsecureSkipVerify via SelectorExpr
-		// or a direct BasicLit / Ident "true".
-		if rhs, ok := assign.Rhs[0].(*ast.Ident); ok {
-			if rhs.Name == "true" {
-				lines = append(lines, fset.Position(assign.Pos()).Line)
-			}
-		}
-	})
-	return lines, nil
-}
-
-func testSEC05ExampleComposeCredentialsFromEnv(t *testing.T, root string) {
-	t.Helper()
-
-	violations := findExampleComposeCredentialViolations(t, root)
-
-	if len(violations) > 0 {
-		for _, v := range violations {
-			t.Logf("%s violation: %s", secFailClosed05, v)
-		}
-	}
-	assert.Empty(t, violations,
-		"example docker compose credential values must use ${VAR:?required} instead of committed literals")
-}
-
 func TestSEC05ExampleComposeCredentialsRejectsFallbacksInFutureExamples(t *testing.T) {
 	root := t.TempDir()
 	exampleDir := filepath.Join(root, "examples", "futuredevice")
@@ -634,10 +169,11 @@ services:
       RABBITMQ_DEFAULT_PASS: ${FUTURE_RABBITMQ_PASSWORD:?required}
 `), 0o644))
 
-	violations := findExampleComposeCredentialViolations(t, root)
-	require.Len(t, violations, 1)
-	assert.Contains(t, violations[0], "examples/futuredevice/docker-compose.yml:5")
-	assert.Contains(t, violations[0], "POSTGRES_PASSWORD")
+	diags := findExampleComposeCredentialViolations(t, root)
+	require.Len(t, diags, 1)
+	assert.Equal(t, "examples/futuredevice/docker-compose.yml", diags[0].Rel)
+	assert.Equal(t, 5, diags[0].Line)
+	assert.Contains(t, diags[0].Message, "POSTGRES_PASSWORD")
 }
 
 // TestSEC05ExampleComposeCredentialsScansNestedDirs locks in the recursive
@@ -661,83 +197,16 @@ services:
 	require.NoError(t, os.WriteFile(filepath.Join(topDir, "docker-compose.yml"), body, 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(nestedDir, "docker-compose.yml"), body, 0o644))
 
-	violations := findExampleComposeCredentialViolations(t, root)
-	require.Len(t, violations, 2, "expected both top-level and nested compose violations: %v", violations)
+	diags := findExampleComposeCredentialViolations(t, root)
+	require.Len(t, diags, 2, "expected both top-level and nested compose violations: %v", diags)
 
-	rels := append([]string(nil), violations...)
+	rels := make([]string, len(diags))
+	for i, d := range diags {
+		rels[i] = d.Rel
+	}
 	sort.Strings(rels)
-	assert.Contains(t, rels[0], "examples/futuredevice/deploy/docker-compose.yml")
-	assert.Contains(t, rels[1], "examples/futuredevice/docker-compose.yml")
-}
-
-// findExampleComposeCredentialViolations scans every docker-compose.yml under
-// examples/ (recursive, any depth) for committed credential literals. Uses
-// scanner.DirsScope("examples") with a MatchRels predicate keyed only on
-// filename — depth is intentionally NOT constrained: a hardcoded password in
-// examples/<example>/deploy/docker-compose.yml leaks credentials just as
-// surely as one at the top level. Strict improvement over the pre-Path-C
-// two-level os.ReadDir loop, which failed open on nested compose files.
-func findExampleComposeCredentialViolations(t *testing.T, root string) []string {
-	t.Helper()
-	scope := scanner.DirsScope(
-		root, []string{"examples"},
-		scanner.MatchRels(func(rel string) bool {
-			return filepath.Base(rel) == "docker-compose.yml"
-		}),
-	)
-	var violations []string
-	scanner.EachContentFile(t, scope, []string{".yml"}, func(_ *testing.T, fc scanner.ContentContext) {
-		violations = append(violations, scanComposeCredentialViolations(fc.Rel, fc.Bytes)...)
-	})
-	return violations
-}
-
-// scanComposeCredentialViolations inspects compose YAML bytes for committed
-// credential literals (any line whose key matches isComposeCredentialKey
-// must use ${VAR:?required} env interpolation). Decoupled from file reading
-// so callers funneled through scanner.EachContentFile can pass bytes directly.
-func scanComposeCredentialViolations(rel string, data []byte) []string {
-	var violations []string
-	for i, line := range strings.Split(string(data), "\n") {
-		trimmed := strings.TrimSpace(line)
-		key, value, ok := strings.Cut(trimmed, ":")
-		if !ok || !isComposeCredentialKey(key) {
-			continue
-		}
-		if !isRequiredComposeEnvInterpolation(value) {
-			violations = append(violations,
-				fmt.Sprintf("%s:%d: %s must use required environment interpolation ${VAR:?message} (%s)",
-					rel, i+1, key, secFailClosed05))
-		}
-	}
-	return violations
-}
-
-func isComposeCredentialKey(key string) bool {
-	return strings.Contains(key, "PASSWORD") || strings.HasSuffix(key, "_PASS")
-}
-
-func isRequiredComposeEnvInterpolation(value string) bool {
-	value = strings.TrimSpace(value)
-	value = strings.Trim(value, `"'`)
-	if !strings.HasPrefix(value, "${") || !strings.HasSuffix(value, "}") {
-		return false
-	}
-	inner := strings.TrimSuffix(strings.TrimPrefix(value, "${"), "}")
-	name, message, ok := strings.Cut(inner, ":?")
-	if !ok || name == "" || message == "" {
-		return false
-	}
-	for i, r := range name {
-		switch {
-		case r == '_':
-		case r >= 'A' && r <= 'Z':
-		case i > 0 && r >= '0' && r <= '9':
-		default:
-			return false
-		}
-	}
-	return true
+	assert.Equal(t, "examples/futuredevice/deploy/docker-compose.yml", rels[0])
+	assert.Equal(t, "examples/futuredevice/docker-compose.yml", rels[1])
 }
 
 func TestFindUpgradeConfigWithoutAuthenticator_DetectsLiteralWithMissingField(t *testing.T) {
@@ -820,199 +289,6 @@ func main() {
 	lines2, err := findUpgradeConfigWithoutAuthenticator(path2)
 	require.NoError(t, err)
 	assert.Empty(t, lines2, "should not flag UpgradeConfig that has Authenticator field (selector form)")
-}
-
-func testSEC07WebsocketAuthenticatorRequired(t *testing.T, root string) {
-	t.Helper()
-	files, err := findAllProductionGoFiles(root)
-	require.NoError(t, err)
-
-	var violations []string
-	for _, f := range files {
-		hits, err := findUpgradeConfigWithoutAuthenticator(f)
-		require.NoErrorf(t, err, "scanning %s", f)
-		rel, _ := filepath.Rel(root, f)
-		rel = filepath.ToSlash(rel)
-		for _, line := range hits {
-			violations = append(violations, fmt.Sprintf("%s:%d: UpgradeConfig literal missing Authenticator field (%s)",
-				rel, line, secFailClosed07))
-		}
-	}
-	if len(violations) > 0 {
-		for _, v := range violations {
-			t.Logf("%s violation: %s", secFailClosed07, v)
-		}
-	}
-	assert.Empty(t, violations,
-		"adapters/websocket UpgradeConfig literals must explicitly set Authenticator "+
-			"(use auth.NewAnonymousAuthenticator() for explicit unauthenticated channels)")
-}
-
-func findUpgradeConfigWithoutAuthenticator(path string) ([]int, error) {
-	data, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return nil, err
-	}
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
-	if err != nil {
-		return nil, err
-	}
-	var lines []int
-	scanner.EachInSubtree[ast.CompositeLit](f, func(cl *ast.CompositeLit) {
-		if !isUpgradeConfigType(cl.Type) {
-			return
-		}
-		if hasKey(cl, "Authenticator") {
-			return
-		}
-		lines = append(lines, fset.Position(cl.Pos()).Line)
-	})
-	return lines, nil
-}
-
-func isUpgradeConfigType(expr ast.Expr) bool {
-	switch t := expr.(type) {
-	case *ast.Ident:
-		return t.Name == "UpgradeConfig"
-	case *ast.SelectorExpr:
-		return t.Sel != nil && t.Sel.Name == "UpgradeConfig"
-	}
-	return false
-}
-
-// hasKey reports whether cl has a TOP-LEVEL key field equal to key.
-// FindFirstChild visits only direct children of cl (depth-1), so nested
-// composites (e.g. `Other: Sub{Authenticator: ...}`) are not reached.
-func hasKey(cl *ast.CompositeLit, key string) bool {
-	_, found := scanner.FindFirstChild[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) bool {
-		ident, ok := kv.Key.(*ast.Ident)
-		return ok && ident.Name == key
-	})
-	return found
-}
-
-func testSEC08NoLegacyBroadcastCall(t *testing.T, root string) {
-	t.Helper()
-	files, err := findAllProductionGoFiles(root)
-	require.NoError(t, err)
-
-	var violations []string
-	for _, f := range files {
-		hits, err := findLegacyBroadcastCalls(f)
-		require.NoErrorf(t, err, "scanning %s", f)
-		rel, _ := filepath.Rel(root, f)
-		rel = filepath.ToSlash(rel)
-		for _, line := range hits {
-			violations = append(violations, fmt.Sprintf("%s:%d: legacy Hub.Broadcast call (use BroadcastFilter or BroadcastToSubject; %s)",
-				rel, line, secFailClosed08))
-		}
-	}
-	if len(violations) > 0 {
-		for _, v := range violations {
-			t.Logf("%s violation: %s", secFailClosed08, v)
-		}
-	}
-	assert.Empty(t, violations,
-		"runtime/websocket.Hub.Broadcast was deleted by PR-V1-SEC-WS-AUTH-ACL; "+
-			"use BroadcastFilter (filter required) or BroadcastToSubject (O(1) subject index)")
-}
-
-func findLegacyBroadcastCalls(path string) ([]int, error) {
-	data, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return nil, err
-	}
-	// Skip files that don't import runtime/websocket (no chance of a Hub.Broadcast call).
-	if !bytes.Contains(data, []byte(`"github.com/ghbvf/gocell/runtime/websocket"`)) {
-		return nil, nil
-	}
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
-	if err != nil {
-		return nil, err
-	}
-	var lines []int
-	scanner.EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return
-		}
-		if sel.Sel == nil || sel.Sel.Name != "Broadcast" {
-			return
-		}
-		// BroadcastFilter / BroadcastToSubject have different Sel.Name, so they pass.
-		lines = append(lines, fset.Position(call.Pos()).Line)
-	})
-	return lines, nil
-}
-
-// allowedConnsMutationFuncs lists hub.go function names where direct mutation
-// of h.conns (delete / clear) is permitted. Every other function must route
-// through removeConnLocked. shutdown is allowed because its bulk drain pairs
-// clear(h.conns) with clear(h.subjectIdx) in adjacent statements; this
-// colocation cannot be enforced via a per-function boolean check, hence the
-// function-name allowlist.
-var allowedConnsMutationFuncs = map[string]bool{
-	"removeConnLocked": true,
-	"shutdown":         true,
-}
-
-// testSEC09HubSubjectIdxSync enforces that every call site mutating h.conns
-// (delete or clear) in hub.go resides in either the centralized
-// removeConnLocked helper or the shutdown bulk-drain path. This replaces the
-// previous per-function boolean ("function deletes h.conns AND touches
-// subjectIdx") which silently passed when a function had multiple delete sites
-// with only one paired subjectIdx update.
-func testSEC09HubSubjectIdxSync(t *testing.T, root string) {
-	t.Helper()
-	path := filepath.Join(root, "runtime", "websocket", "hub.go")
-
-	data, err := os.ReadFile(filepath.Clean(path))
-	require.NoError(t, err)
-
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
-	require.NoError(t, err)
-
-	var violations []string
-	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
-		if fn.Body == nil {
-			return
-		}
-		if allowedConnsMutationFuncs[fn.Name.Name] {
-			return
-		}
-		scanner.EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
-			ident, ok := call.Fun.(*ast.Ident)
-			if !ok || (ident.Name != "delete" && ident.Name != "clear") {
-				return
-			}
-			if len(call.Args) < 1 {
-				return
-			}
-			sel, ok := call.Args[0].(*ast.SelectorExpr)
-			if !ok || sel.Sel == nil || sel.Sel.Name != "conns" {
-				return
-			}
-			line := fset.Position(call.Pos()).Line
-			violations = append(violations,
-				fmt.Sprintf("hub.go:%d: %s() must not call %s(h.conns,...) directly; "+
-					"use removeConnLocked() helper (or, for bulk drain, place inside shutdown). [%s]",
-					line, fn.Name.Name, ident.Name, secFailClosed09))
-		})
-	})
-
-	if len(violations) > 0 {
-		for _, v := range violations {
-			t.Logf("%s violation: %s", secFailClosed09, v)
-		}
-	}
-	assert.Empty(t, violations,
-		"every h.conns mutation site (delete or clear) must reside in the "+
-			"centralized removeConnLocked helper or the shutdown bulk-drain path. "+
-			"All other call sites must route through removeConnLocked() to keep "+
-			"subjectIdx in lockstep with conns.")
 }
 
 // TestSEC09_SyntheticDirectDeleteViolates verifies that the SEC-09 archtest
@@ -1124,181 +400,11 @@ func (h *Hub) shutdown() {
 	assert.Empty(t, found, "removeConnLocked and shutdown should be allowed and produce no violations")
 }
 
-// findAllProductionMainPackageFiles walks the repo and returns every
-// production .go file (non-test, non-vendor, non-generated) whose package
-// clause is `main`. New entry points (cmd/<name>/main.go,
-// examples/<name>/main.go, tests/<harness>/main.go, ...) are picked up
-// automatically — no scope list to maintain.
-//
-// Parse errors fail-visible (callers receive an error) so a syntactically
-// broken entry point cannot silently bypass the SEC scans.
-func findAllProductionMainPackageFiles(root string) ([]string, error) {
-	// ModuleScope's default skip set already excludes vendor/testdata/
-	// worktrees/generated/.git/node_modules — sufficient for the
-	// production-main scan. (ExcludeRels only matches exact file rels, not
-	// directories; the previous ExcludeRels("bak") call was a no-op and
-	// has been removed. If a future "bak/" directory needs skipping, use
-	// MatchRels with a path-segment predicate.)
-	scope := scanner.ModuleScope(root)
-	candidates, err := scope.Files()
-	if err != nil {
-		return nil, err
-	}
-	var files []string
-	for _, path := range candidates {
-		fset := token.NewFileSet()
-		af, perr := parser.ParseFile(fset, path, nil, parser.PackageClauseOnly)
-		if perr != nil {
-			return nil, fmt.Errorf("parse %s: %w", path, perr)
-		}
-		if af.Name != nil && af.Name.Name == "main" {
-			files = append(files, path)
-		}
-	}
-	return files, nil
-}
+// ---------------------------------------------------------------------------
+// SEC-10 standalone fixture test
+// ---------------------------------------------------------------------------
 
-// --- SEC-FAIL-CLOSED-10: health listener required in composition roots ---
-
-// listenerRefsInPass reports whether the package in p references the kernel/cell
-// PrimaryListener / HealthListener consts (anywhere — not only as WithListener
-// arguments, since composition roots like examples/ssobff route the ref through
-// a listenerOption helper). primaryLine is the line of the first PrimaryListener
-// reference, for diagnostics.
-//
-// Resolution is type-aware via ResolvePackageRef → canonical *types.PkgName →
-// import path, so an aliased `import kcell ".../kernel/cell"` is handled and a
-// bare `.Sel.Name == "HealthListener"` (Soft name-convention) match is avoided.
-//
-// cell.ListenerRef is `type ListenerRef struct{ name string }` with an
-// unexported field. Outside kernel/cell a ListenerRef value can ONLY be obtained
-// by referencing one of the exported consts (PrimaryListener / InternalListener /
-// HealthListener): `cell.ListenerRef(s)` is not a valid conversion (string→struct)
-// and the struct literal is unconstructable (unexported field). Fabricating a
-// listener ref from a dynamic string is therefore type-system unexpressable in any
-// composition root and needs no archtest self-check. The one shape this
-// *ast.SelectorExpr walk would still miss is a dot-import `import . ".../kernel/cell"`
-// referencing the consts as bare idents; that is closed by
-// testSEC10NoDotImportKernelCellBlindSpotInProduction.
-func listenerRefsInPass(p *Pass) (primary, health bool, primaryLine int) {
-	for _, file := range p.Files {
-		if strings.HasSuffix(p.Rel(file), "_test.go") {
-			continue
-		}
-		EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-			pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, sel)
-			if !ok || pkgPath != kernelCellPkgPath {
-				return
-			}
-			switch name {
-			case "PrimaryListener":
-				primary = true
-				if primaryLine == 0 {
-					primaryLine = p.Fset.Position(sel.Pos()).Line
-				}
-			case "HealthListener":
-				health = true
-			}
-		})
-	}
-	return primary, health, primaryLine
-}
-
-// sec10Violations runs the full SEC-FAIL-CLOSED-10 rule against a single typed
-// pass: a `package main` that references cell.PrimaryListener (wires the public
-// listener) must also reference cell.HealthListener. It returns one diagnostic
-// string per violating package (nil for compliant or non-main packages).
-//
-// Both the production scan (testSEC10HealthListenerRequiredInMain) and the
-// positive-coverage fixture test (testSEC10FixtureCatchesPrimaryWithoutHealth)
-// drive this one function, so the fixture exercises the real rule path — the
-// package-main gate AND the primary-without-health detection — not merely the
-// listenerRefsInPass helper. A regression in the gate or the violation
-// construction is caught by the fixture's "exactly one violation" assertion.
-func sec10Violations(p *Pass) []string {
-	if p.Pkg == nil || p.Pkg.Name() != "main" {
-		return nil
-	}
-	primary, health, line := listenerRefsInPass(p)
-	if primary && !health {
-		return []string{
-			fmt.Sprintf("%s (references cell.PrimaryListener at line %d but never cell.HealthListener)", p.Pkg.Path(), line),
-		}
-	}
-	return nil
-}
-
-// testSEC10HealthListenerRequiredInMain enforces #673 at the composition-root
-// boundary: a `package main` that references cell.PrimaryListener (i.e. wires
-// the public listener) must also reference cell.HealthListener. Without it,
-// bootstrap phase0 fails fast at startup; this archtest catches the omission at
-// CI build time, layered with that runtime guard.
-func testSEC10HealthListenerRequiredInMain(t *testing.T) {
-	t.Helper()
-	var violations []string
-	_ = Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
-		violations = append(violations, sec10Violations(p)...)
-		return nil
-	})
-
-	for _, v := range violations {
-		t.Logf("%s violation: %s", secFailClosed10, v)
-	}
-	assert.Empty(t, violations,
-		"SEC-FAIL-CLOSED-10: every package main wiring cell.PrimaryListener must also declare a "+
-			"cell.HealthListener (bootstrap phase0 fails fast without one; #673 removed the silent "+
-			"remap onto the public primary listener)")
-}
-
-// dotImportKernelCellHits reports `import . "<kernel/cell>"` dot-imports in p —
-// the second blind spot of listenerRefsInPass (a bare PrimaryListener/
-// HealthListener ident under a dot-import would not be a *ast.SelectorExpr the
-// scan walks). Composition roots import kernel/cell qualified, so this is empty.
-func dotImportKernelCellHits(p *Pass) []string {
-	var hits []string
-	for _, file := range p.Files {
-		if strings.HasSuffix(p.Rel(file), "_test.go") {
-			continue
-		}
-		for _, imp := range file.Imports {
-			if imp.Name == nil || imp.Name.Name != "." {
-				continue
-			}
-			if strings.Trim(imp.Path.Value, `"`) == kernelCellPkgPath {
-				hits = append(hits, fmt.Sprintf("%s:%d", p.Rel(file), p.Fset.Position(imp.Pos()).Line))
-			}
-		}
-	}
-	return hits
-}
-
-// testSEC10NoDotImportKernelCellBlindSpotInProduction closes the only blind spot
-// of listenerRefsInPass that is type-system expressable: a dot-import of
-// kernel/cell would make listener-ref references bare idents the *ast.SelectorExpr
-// walk misses. (The dynamic `cell.ListenerRef(string)` shape is unconstructable —
-// ListenerRef is a struct with an unexported field — so it needs no self-check;
-// see listenerRefsInPass godoc.) Production main packages must not dot-import
-// kernel/cell; composition roots use the named consts via qualified imports.
-func testSEC10NoDotImportKernelCellBlindSpotInProduction(t *testing.T) {
-	t.Helper()
-	var blindspots []string
-	_ = Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.Pkg.Name() != "main" {
-			return nil
-		}
-		blindspots = append(blindspots, dotImportKernelCellHits(p)...)
-		return nil
-	})
-
-	for _, b := range blindspots {
-		t.Logf("%s blind spot: %s", secFailClosed10, b)
-	}
-	assert.Empty(t, blindspots,
-		"SEC-FAIL-CLOSED-10: package main must not dot-import kernel/cell; use the named consts "+
-			"via a qualified import so the listener topology stays statically analyzable")
-}
-
-// testSEC10FixtureCatchesPrimaryWithoutHealth is the positive-coverage proof
+// TestSEC10FixtureCatchesPrimaryWithoutHealth is the positive-coverage proof
 // that the rule fires end-to-end. The build-tag-gated healthlistenerfixture is a
 // `package main` that references cell.PrimaryListener (through a non-default
 // alias, proving canonical-path resolution) and never cell.HealthListener — the
@@ -1306,8 +412,7 @@ func testSEC10NoDotImportKernelCellBlindSpotInProduction(t *testing.T) {
 // listenerRefsInPass helper) proves the real rule path — the package-main gate
 // plus the primary-without-health detection — fires, so a regression in either
 // is caught.
-func testSEC10FixtureCatchesPrimaryWithoutHealth(t *testing.T) {
-	t.Helper()
+func TestSEC10FixtureCatchesPrimaryWithoutHealth(t *testing.T) {
 	var violations []string
 	_ = Run(t, Fixture(FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/healthlistenerfixture"}),
