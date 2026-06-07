@@ -58,7 +58,7 @@
 
 ---
 🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支> · worktree <路径|—> · session <会话id|—>
-<!-- gocell-pr-meta:v1 (emit 产出，勿手填 · kind=ship phase=ship verdict=needs-review-again cycle.round=0) -->
+<!-- 机器块占位：贴评论前由 hack/automation/pr-meta.sh emit 生成并追加到此处（kind=ship phase=ship verdict=needs-review-again round=0）；勿手填 base64 -->
 ```
 
 ## fix 评论（`<!-- pm:fix -->`，每次 fix 都贴）
@@ -96,7 +96,7 @@
 
 ---
 🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支> · worktree <路径|—> · session <会话id|—>
-<!-- gocell-pr-meta:v1 (emit 产出，勿手填 · kind=fix phase=fix verdict=needs-check-fix cycle.round=prev+1) -->
+<!-- 机器块占位：贴评论前由 hack/automation/pr-meta.sh emit 生成并追加到此处（kind=fix phase=fix verdict=needs-check-fix round=prev+1）；勿手填 base64 -->
 ```
 
 ## pr-review 评论（`<!-- pm:pr-review -->`，独立 review 留痕）
@@ -133,5 +133,5 @@
 
 ---
 🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支> · worktree <路径|—> · session <会话id|—>
-<!-- gocell-pr-meta:v1 (emit 产出，勿手填 · kind=pr-review phase=review|check verdict=approved|changes-requested|ready cycle.round=carry) -->
+<!-- 机器块占位：贴评论前由 hack/automation/pr-meta.sh emit 生成并追加到此处（kind=pr-review phase=review|check verdict=approved|changes-requested|ready round=carry）；勿手填 base64 -->
 ```
