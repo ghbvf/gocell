@@ -155,18 +155,18 @@ func WithMetricsProvider(mp metrics.Provider) Option {
 // +cell:listener:ref=cell.InternalListener,prefix=
 type DeviceCell struct {
 	*cell.BaseCell
-	deviceRepo      domain.DeviceRepository
-	publisher        outbox.CellPublisher
-	emitter          outbox.CellEmitter // set during initInternal; retained for Probes
-	bootstrapEmitter    outbox.CellEmitter          // writer-backed; feeds devicebootstrap reactive command emit (#1698)
+	deviceRepo         domain.DeviceRepository
+	publisher          outbox.CellPublisher
+	emitter            outbox.CellEmitter        // set during initInternal; retained for Probes
+	bootstrapEmitter   outbox.CellEmitter        // writer-backed; feeds devicebootstrap reactive command emit (#1698)
 	bootstrapTxManager persistence.CellTxManager // wraps EmitAsync in tx for durable PG writer; defaults to DemoCellTxManager
-	cursorCodec     *query.CursorCodec
-	logger          *slog.Logger
-	metricsProvider metrics.Provider
-	commandQueue    commandQueueStore
-	commandRegistry *commandruntime.Registry // required; sync command-bus handler registry (#1580)
-	commandSweeper  *reconcile.Loop          // device-command expiry sweep, driven on a TickerTrigger cadence
-	clk             clock.Clock              // injected from reg.Config during initInternal
+	cursorCodec        *query.CursorCodec
+	logger             *slog.Logger
+	metricsProvider    metrics.Provider
+	commandQueue       commandQueueStore
+	commandRegistry    *commandruntime.Registry // required; sync command-bus handler registry (#1580)
+	commandSweeper     *reconcile.Loop          // device-command expiry sweep, driven on a TickerTrigger cadence
+	clk                clock.Clock              // injected from reg.Config during initInternal
 
 	// +slice:route:slice=deviceregister,subPath=/api/v1/devices
 	registerHandler *registercontract.Handler

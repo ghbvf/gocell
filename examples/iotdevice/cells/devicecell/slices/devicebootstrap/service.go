@@ -140,7 +140,7 @@ func (s *Service) HandleDeviceRegistered(ctx context.Context, entry outbox.Entry
 	// gets a transaction in ctx — adapters/postgres.OutboxWriter.Write requires
 	// persistence.TxFromContext[pgx.Tx] and returns ErrAdapterPGNoTx otherwise.
 	// Demo mode uses outbox.DemoCellTxManager() (no-op), which just calls the
-	// closure directly, so behaviour is unchanged for tests and demo assemblies.
+	// closure directly, so behavior is unchanged for tests and demo assemblies.
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		return command.EmitAsync(txCtx, s.clk, s.emitter, cmdenqueue.DispatchID,
 			ev.ID, entry.ID(), req)
