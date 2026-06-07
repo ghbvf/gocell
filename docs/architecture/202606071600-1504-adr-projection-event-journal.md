@@ -110,10 +110,11 @@ CREATE TABLE IF NOT EXISTS projection_events (
     payload        JSONB       NOT NULL,
     metadata       JSONB       DEFAULT '{}',
     observability  JSONB,                            -- RestoreContext obs 信封
-    principal      JSONB       NOT NULL,             -- RestoreContext principal 信封
+    principal      JSONB       NOT NULL DEFAULT '{}', -- RestoreContext principal 信封（background/system ctx 无 auth principal 时序列化为 {} 非 null，对齐 outbox_entries；at-rest 永久留存见 §5 PII 行）
     created_at     TIMESTAMPTZ NOT NULL,
     occurred_at    TIMESTAMPTZ NOT NULL              -- OccurredAt()（域事件时间）
 );
+-- 新表，建表即建唯一索引，无锁争用——故 NOT CONCURRENTLY（CONCURRENTLY 用于给现有热表加索引、且不能在事务型 migration 内运行；#1609 给已存在的 saga_events 加 global_seq 列才用 CONCURRENTLY，形态不同）。
 CREATE UNIQUE INDEX IF NOT EXISTS idx_projection_events_id ON projection_events (id);
 -- global_seq 为 PK，replay 的 WHERE global_seq > $1 ORDER BY global_seq 由 PK btree 直接服务，无需额外索引。
 ```
@@ -164,13 +165,14 @@ func (w *journalingOutboxWriter) Write(ctx context.Context, e outbox.Entry) erro
 
 | 威胁 | 机制 | 覆盖 | 遗留 |
 |------|------|------|------|
-| **rebuild-from-0 不健全**（读 transient outbox，删行 → permanent error / rebuild 中止）——#1504 根 bug | D1+D3：专用 append-only `projection_events`；`Position` = 行自带 `global_seq`、无删行查找；永不 cleanup（D7/I4） | ✅ | —（本 ADR 全部目的，PR-01..03 交付） |
+| **rebuild-from-0 不健全**（读 transient outbox，删行 → permanent error / rebuild 中止）——#1504 根 bug | D1+D3：专用 append-only `projection_events`；`Position` = 行自带 `global_seq`、无删行查找；永不 cleanup（D7/I4） | ✅ | **bootstrap gap（v1 已知 limitation，见 §8）**：journal 仅从 PR-02 装饰器部署起 append，部署前历史事件不在表内——新投影/新 topic 的 full rebuild 只覆盖部署后历史（同 Debezium start-from-now 结构性形态，非 bug） |
 | **live-path `Cursor.Position` gap**（live 事件的 outbox 行先被 cleanup → dead-letter） | 同上 + D4 emit 期同事务双写：journal 行在事件投递前已提交，live `Position` 必然解析成功，删行 permanent-error 路径结构上不可达 | ✅ | — |
 | **写路径原子性**（journal 行是否与业务事实同提交） | D4 装饰器在 producer 既有 `RunInTx` 内同事务 append（`persistence.TxFromContext`，无新 tx 边界）+ `ON CONFLICT (id) DO NOTHING` | ✅ | — |
-| **leader 交接 mid-rebuild**（多 pod 两实例推进同一 checkpoint） | D6(a) apply+advance 同事务；D6(b) **`AdvanceIfOwner` 尚不存在**（grep 确认）。v1 继承 #1100 Q5 单 pod 边界；live 投递经 `ConsumerBase` 串行单 pod | ⚠️ | **文档化 v1 单 pod 边界**（`projection_checkpoints.owner` 保留不写）。多 pod fencing CAS = 前向扩展（PR-PG，届时定义 #1504 自己的 `AdvanceIfOwner`）；幂等 upsert + 串行交付兜底，无 un-mitigated regression |
+| **leader 交接 mid-rebuild**（多 pod 两实例推进同一 checkpoint） | D6(a) apply+advance 同事务；D6(b) **`AdvanceIfOwner` 尚不存在**（grep 确认）。v1 继承 #1100 Q5 单 pod 边界 | ⚠️ | **文档化 v1 单 pod 边界**（`projection_checkpoints.owner` 保留不写），多 pod fencing CAS = 前向扩展（PR-PG，届时定义 #1504 自己的 `AdvanceIfOwner`）。**精确范围**：`ON CONFLICT DO NOTHING` 幂等只覆盖 **journal 行写入**（D4）；**checkpoint advance** 是无条件 upsert（无 CAS）；**Apply fn 业务幂等性由各投影实现保证、非 framework**。`ConsumerBase` 串行只序列化**同 pod live 路径**，**不**覆盖跨 pod rebuild——故双 pod 并发 rebuild 会 double-apply。单 pod 是**运维层约束**（无代码级 mitigation），多 pod 须待 PR-PG CAS |
 | **无界增长**（append-only 永不删；归档截断到 checkpoint 之下丢事件） | D8：归档须 ≥ 最慢投影 checkpoint；D4 topic-filter 使增长仅限 projection-relevant 事件 | ⚠️ | 归档能力本身 out-of-scope（同 #1609 §5 增长行）；D8 记下界约束待归档落地 |
 | **伪造 / 越界投影事件**（业务包注入 source 会重放为真值的行） | I2 append caller-allowlist（**Hard/Hard**：未导出 append + 包内 allowlist）——唯一 append 路径是 sanctioned 装饰器；source 只读 sealed `projection_events`；载体 `ProjectionEvent` 只读。forge 防护在 **wiring 层**（同 #1609 §5 forge 行） | ✅ | — |
 | **身份 / impersonation**（rebuild 触发 admin 身份 / 后台 ctx 穿透进 Apply / audit） | **复用已落地 #1627 修复**：`rebuild.go` detach 边界 `clearAmbientPrincipal(context.WithoutCancel(ctx))`；outbox carrier `RestoreContext` 在 clean ctx 上 no-overwrite。`PROJECTION-SYSTEM-PRINCIPAL-INSTALL-CALLER-01` 已 green | ✅（#1627 已落） | — |
+| **`principal`/`observability` 信封 at-rest 永久留存（PII）**——`outbox_entries` 72h/30d 后删行，journal **永不删**（D7），故 actor/subject/tenant/`session_id` 永久落盘 | at-rest **不脱敏是既有姿态**：`audit_entries` 已永久存 principal 派生数据，redaction 在 **sink 侧**（slog/span/wire，observability.md），DB 列 by-design 存原值；`projection_events` 是**内部表、永不 wire 出站**，承袭同姿态；`session_id` 命中 `IsSensitiveKey` 仅 sink 脱敏 | ⚠️（接受） | 若未来数据保留/合规要求 principal 过期，须**对称**作用于 `audit_entries`（同 at-rest 永久姿态），out-of-scope 本 ADR；D4 topic-filter 已把留存面限到 projection-relevant 事件 |
 | **乱序 / 非 exactly-once** | `global_seq` 稳定全序（非 `created_at`）；Coordinator 按 position 处理；幂等 upsert + `pos <= checkpoint` skip | ✅ | 继承 #1100 串行交付前提（已 enforce） |
 
 ---
@@ -182,9 +184,9 @@ func (w *journalingOutboxWriter) Write(ctx context.Context, e outbox.Entry) erro
 | ID（占位，落地 PR 定型） | 摘要 | 评级（双向锁分轴） |
 |---|---|---|
 | **I1 — `PROJECTION-EVENT-JOURNAL-SOURCE-CONFORMANCE-ENROLL`** | 新 source（mem + PG）入既有 `RunReplaySourceConformance`/`RunCursorConformance`——**骑现有** `PROJECTION-REPLAY-SOURCE-CONFORMANCE-ENROLL-01`/`PROJECTION-CURSOR-CONFORMANCE-ENROLL-01`，新 impl 自动纳入，无新 archtest 文件 | **Medium**（typed impl-discovery + conformance 调用扫描；Go 无法编译期要求某类型有 `_test.go`。Hard 路径 = codegen golden 枚举 impl，**共享 gh #1003**） |
-| **I2 — `PROJECTION-EVENT-JOURNAL-APPEND-CALLER-01`**（#1504 forge 防护，封写侧） | append `projection_events` 收口单一 sanctioned 写路径 | **Hard/Hard fully-closed**：append 是装饰器包内**未导出**函数（包外不可调 = 上游 Hard，**非** Medium 天花板）+ archtest 包内 caller-allowlist 锁到 `decorator.Write`（下游 Hard）。生产无任何导出 append API（read-only source + seed-persists conformance）。比 #851/#893/#1282 族更紧（那些受跨包可见性天花板限制，本条 append 与 caller 同包） |
+| **I2 — `PROJECTION-EVENT-JOURNAL-APPEND-CALLER-01`**（#1504 forge 防护，封写侧） | append `projection_events` 收口单一 sanctioned 写路径 | **Hard/Hard fully-closed**：上游 = append 是 `adapters/postgres` 包内**未导出**函数（**包外**调用编译不可表达）；下游 = archtest caller-allowlist 扫 `adapters/postgres` **包内所有** callsite、锁到 `decorator.Write` 唯一调用点（闭合"同包其他函数直接调 `appendProjectionEvent`"盲区——上游 unexported 只防包外，包内由下游 whole-package scan 闭环）。生产无任何导出 append API（read-only source + seed-persists conformance）。比 #851/#893/#1282 族更紧：那些 append 与 caller **跨包**、受 Go 可见性天花板限制只能 Medium 上游；本条同包，下游 archtest 可完整闭合 |
 | **I3 — `…-APPEND-TX-BOUND`** | ~~append 经 ambient tx 同事务~~ **不单独立项**：被 I2 + 既有 `PG-REPO-AMBIENT-TX-01` 包含——append 就在已 ambient-tx 的 `Write` 体内，同事务是结构性的，独立 archtest 冗余（最小化 enforcement 集） | —（subsumed） |
-| **I4 — `PROJECTION-EVENT-JOURNAL-NO-DELETE-01`**（D7 append-only） | 生产代码不对 `projection_events` 发 `DELETE`/`TRUNCATE` | **今日 Hard**：store 接口无 Cleanup/Delete 方法（调不存在方法 = 编译错误，上游）+ archtest 禁裸 DELETE/TRUNCATE 字面量打该表（下游 SQL-literal scan）+ anti-vacuity 自检。仅当未来 archive 落地才降为带 allowlist 的 Medium（allowlist entry 须引 archive ADR 章节号 per `contract-fanout.md`） |
+| **I4 — `PROJECTION-EVENT-JOURNAL-NO-DELETE-01`**（D7 append-only，archtest 落 PR-05） | 生产代码不对 `projection_events` 发 `DELETE`/`TRUNCATE` | 上游 **Hard 即时**（store 接口无 Cleanup/Delete 方法 = 调不存在方法编译错误，PR-01 起生效）+ 下游 **archtest 落 PR-05**（禁裸 DELETE/TRUNCATE 字面量打该表，SQL-literal scan + anti-vacuity）。**PR-05 落地前下游分量尚未激活**——PR-01→PR-05 窗口仅靠上游"接口无删方法"守，故 PR-05 建议在 PR-03 wiring 切换前落地（见 §9）。未来 archive 落地后下游降为带 allowlist 的 Medium（allowlist entry 须引 archive ADR 章节号 per `contract-fanout.md`） |
 | **I5 — `PROJECTION-EVENT-JOURNAL-TOPIC-ALLOWLIST-DERIVED-01`**（D4 topic-filter） | 双写的 topic 集从投影合约 metadata 派生（cellgen），非手写字面量列表——加投影自动纳入 journal | **Medium**（metadata 派生成员；Hard 路径 = cellgen golden 字节锁，开 gh 跟踪） |
 
 **I2 vs 既有 `PROJECTION-EVENT-CARRIER-TYPED-01`**：后者是**单轴 type-system Hard（API shape）**——只 gate"公开 API 不再裸收 `outbox.Entry`"，`ProjectionEvent` 全导出可实现、载体来源**不**封闭。**I2 才是 #1504 的真 forge 防护**（封*写侧*：只有 sanctioned 装饰器能把行放进 source 读的 journal），与 #1609 §5 forge 行同款 wiring-层（非 interface-构造层）保护。
@@ -215,6 +217,9 @@ func (w *journalingOutboxWriter) Write(ctx context.Context, e outbox.Entry) erro
 - journal retention 多一约束（D8）：归档须 ≥ 最慢投影 checkpoint。
 - 解锁 T-06-2（#1368 follow-up，real PG e2e rebuild 测试，原 blocked on 本 retention 模型）。
 - v1 单 pod 边界保持（同 #1100 Q5）；多 pod fencing CAS 待真实消费者（PR-PG）。
+- **已知 v1 limitation — bootstrap gap**：`projection_events` 仅从 PR-02 装饰器部署时刻起 append，之前产生的 outbox 事件不在 journal——v1 full rebuild 仅覆盖部署后事件；需覆盖完整历史须部署前经 broker replay / snapshot 补全（Q4 snapshot #1100，YAGNI）。生产投影当前 hard-gated OFF，故首个真实投影自然从 journal 起点 rebuild，无遗留状态待迁移。
+- **运维注意 — lag gauge 语义**：首次 full rebuild 后 `projection_event_replay_lag_seconds` 快速降至 ~0 仅表示读完 journal，**不**代表历史数据完整（bootstrap gap）；数据完整性须经 `projection_checkpoints.offset_seq` + 业务校验确认，不能仅看 lag（对齐 `eventbus.md` rebuild-lag 盲区注意范式）。
+- **运维注意 — 增长监控**：append-only 表，归档（D8）out-of-scope 前持续增长（D4 topic-filter 已限到 projection-relevant 事件）；运营须监控 `pg_relation_size('projection_events')` / 行数并接入告警，`docs/ops` runbook 留对应条目（随实现 PR）。
 
 ---
 
@@ -223,14 +228,14 @@ func (w *journalingOutboxWriter) Write(ctx context.Context, e outbox.Entry) erro
 | PR | 范围 | 本 ADR 决策 | 依赖 / 解锁 |
 |----|------|------------|-------------|
 | **PR-00（本 PR）** | 本 ADR + `202605261620` §Amendment 2026-06-03 retention-boundary 段 + §6 Row 1 原地重写 + `202606051200-1609` §1.2 back-pointer + `eventbus.md` nav。`Refs #1504`（**不 Closes**，镜像 #1609 PR-00 不关闭 #1609） | D1–D9（设计） | 无；解锁 PR-01..05 |
-| **PR-01** | `projection_events` migration（only-add `global_seq IDENTITY` + `idx`）+ `schema_guard` 表注册 + mem source + PG source（`Position` 读 `global_seq`）+ 入既有 conformance（I1） | D2/D3 | 依赖 PR-00 |
-| **PR-02** | emit 期同事务双写装饰器（D4，topic-filtered）+ `PROJECTION-EVENT-JOURNAL-APPEND-CALLER-01`（I2）+ `…-TOPIC-ALLOWLIST-DERIVED-01`（I5） | D4 | 依赖 PR-01 |
+| **PR-01** | `projection_events` migration（only-add `global_seq IDENTITY` + `idx`）+ `schema_guard` 表注册 + mem source + PG source（`Position` 读 `global_seq`）+ 入既有 conformance（I1，**含新增 "Position 返回 carrier 自带 `global_seq`、无额外 DB 往返" 场景断言**——回归 #1504 根 fix，可经 mock tx / statement 计数）+ **`projection_journal_ready` readyz probe**（`RepoReady()` + `CELL-REPO-READYZ-PROBE-01` 入列 + `PROBENAME-SEALED-FUNNEL-01` typed const）+ **扩 `OUTBOX-RECONSTRUCTION-CALLER-01` allowlist +1**（`PGProjectionEventSource` 调 `EntryScan.ToEntry` 重建载体） | D2/D3 | 依赖 PR-00 |
+| **PR-02** | emit 期同事务双写装饰器（D4，topic-filtered）+ `PROJECTION-EVENT-JOURNAL-APPEND-CALLER-01`（I2）+ `…-TOPIC-ALLOWLIST-DERIVED-01`（I5）+ **写路径回归测试**（L2-equiv 原子性，**不甩 PR-04**）：①双写原子性——`outbox_entries` 写成功但 `appendProjectionEvent` 失败时两表同回滚；②topic-filter——非 projection-source topic 事件不入 `projection_events`；③`ON CONFLICT (id) DO NOTHING` 幂等——同 `id` 二次写 `global_seq` 不变 | D4 | 依赖 PR-01 |
 | **PR-03** | corebundle wiring（换 source）+ **删 hard gate + 删 outbox-backed source**（D9）→ finalize `202605261620` compensation 重写 | D5/D9 | 依赖 PR-01+02；移除 gate |
 | **PR-04** | **PG e2e rebuild 测试 T-06-2**（#1368 follow-up，明确 blocked on #1504）：testcontainers cold-start / crash-restart / full-rebuild-from-0 over `projection_events`，证 cleaned-outbox 行不再破坏 rebuild | D1（验证） | 依赖 PR-03；**解锁 T-06-2** |
-| **PR-05** | `PROJECTION-EVENT-JOURNAL-NO-DELETE-01`（I4）+ anti-vacuity + RED/GREEN fixture | D7 | 依赖 PR-01 |
+| **PR-05** | `PROJECTION-EVENT-JOURNAL-NO-DELETE-01`（I4）+ anti-vacuity + RED/GREEN fixture | D7 | 依赖 PR-01；**建议在 PR-03 wiring 切换前落地**（封住 PR-01→PR-03 窗口期误删 `projection_events` 的风险，I4 下游分量及早生效） |
 | **PR-PG（deferred）** | 多 pod fencing：定义 #1504 自己的 `AdvanceIfOwner` CAS + 激活 `projection_checkpoints.owner`（D6b）。**gated on 真实多 pod 消费者**（同 #1609 PR-PG 姿态） | D6(b) | deferred；v1 单 pod 边界保持至此 |
 
-依赖：PR-01→02→03 串行；PR-04 依赖 PR-03；PR-05 仅依赖 PR-01。#1482（per-spec replay filtering）已落（Coordinator 层，与位置源正交，无需改）。
+依赖：PR-01→02→03 串行；PR-04 依赖 PR-03；**PR-05 依赖 PR-01，建议 ≤ PR-03**（no-DELETE 守卫早于 wiring 切换）。#1482（per-spec replay filtering）已落（Coordinator 层，与位置源正交，无需改）。
 
 ---
 
