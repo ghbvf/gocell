@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/ghbvf/gocell/hack/automation/schema/pr-meta.v1.json",
   "title": "gocell-pr-meta v1",
-  "description": "Machine-readable provenance + dispatch protocol carried in a hidden HTML comment after the human-readable footer of every pm:ship / pm:fix / pm:pr-review PR comment. Wire form: a single-line `<!-- gocell-pr-meta:v1 <standard-base64(JSON)> -->`. Standard base64 (alphabet A-Za-z0-9+/=, never `-`) is used instead of base64url because CommonMark forbids `--` inside an HTML comment body; base64url's `-` could emit `--` and demote the whole block to visible text. Consumed by the #935 / #1657 local executors (Codex review daemon, Claude fix monitor) to dispatch the next review<->fix step and enforce the 3-round circuit breaker. Produced solely by hack/automation/pr-meta.sh emit, which derives `schema`, `cycle.exhausted`, `next`, and `idempotencyKey` from the producer-supplied facts.",
+  "description": "Machine-readable provenance + dispatch protocol carried in a hidden HTML comment after the human-readable footer of every pm:ship / pm:fix / pm:pr-review / pm:ci / pm:oos PR comment. Wire form: a single-line `<!-- gocell-pr-meta:v1 <standard-base64(JSON)> -->`. Standard base64 (alphabet A-Za-z0-9+/=, never `-`) is used instead of base64url because CommonMark forbids `--` inside an HTML comment body; base64url's `-` could emit `--` and demote the whole block to visible text. Consumed by the #935 / #1657 local executors (Codex review daemon, Claude fix monitor) to dispatch the next review<->fix step and enforce the 3-round circuit breaker. Produced solely by hack/automation/pr-meta.sh emit, which derives `schema`, `cycle.exhausted`, `next`, and `idempotencyKey` from the producer-supplied facts. pm:ci records CI check outcomes; pm:oos records out-of-scope findings for future gh issue filing.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -26,12 +26,12 @@
       "description": "PR number."
     },
     "kind": {
-      "enum": ["ship", "fix", "pr-review"],
-      "description": "Comment marker family (pm:ship / pm:fix / pm:pr-review)."
+      "enum": ["ship", "fix", "pr-review", "ci", "oos"],
+      "description": "Comment marker family (pm:ship / pm:fix / pm:pr-review / pm:ci / pm:oos)."
     },
     "phase": {
       "enum": ["ship", "review", "fix", "check"],
-      "description": "Pipeline stage. pr-review uses phase to distinguish a normal review (review) from a --check verification (check)."
+      "description": "Pipeline stage. pr-review uses phase to distinguish a normal review (review) from a --check verification (check). ci uses check; oos uses review."
     },
     "tool": {
       "enum": ["claude-code", "codex"],
@@ -61,7 +61,7 @@
       "description": "Producer worktree path, or null when working on develop directly."
     },
     "verdict": {
-      "enum": ["needs-review-again", "approved", "changes-requested", "ready", "needs-check-fix"],
+      "enum": ["needs-review-again", "approved", "changes-requested", "ready", "needs-check-fix", "ci-failed", "ci-green", "oos-filed"],
       "description": "Workflow conclusion, bound to the real label state machine (pr-status/* and pr-review/* — see .github/project-template/PROJECT.md §2.5/§5)."
     },
     "findings": {
@@ -117,7 +117,7 @@
       "properties": {
         "agent": {
           "enum": ["claude", "codex", "human", null],
-          "description": "Executor that handles the next step, or null for a terminal verdict (approved/ready)."
+          "description": "Executor that handles the next step, or null for a terminal verdict (approved/ready/ci-green)."
         },
         "command": {
           "type": ["string", "null"],
@@ -129,7 +129,7 @@
         },
         "triggerLabel": {
           "type": ["string", "null"],
-          "description": "The pr-status/* or pr-review/* label whose presence triggers the next executor, or null."
+          "description": "The pr-status/* label whose presence triggers the next executor, or null."
         },
         "requiresSameHeadSha": {
           "type": "boolean",
@@ -141,6 +141,79 @@
       "type": "string",
       "minLength": 1,
       "description": "Derived {repo}#{pr}@{headSha}:{kind}/{phase}#{round}. Lets an executor dedup repeated dispatch on the same comment."
+    },
+    "ci": {
+      "type": ["object", "null"],
+      "description": "CI check outcome data, present only for pm:ci comments, null otherwise.",
+      "additionalProperties": false,
+      "properties": {
+        "failedChecks": {
+          "type": "array",
+          "description": "List of failed CI check names and URLs.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "url"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "url": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "passedChecks": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of checks that passed."
+        },
+        "totalChecks": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of checks run."
+        }
+      }
+    },
+    "oos": {
+      "type": ["object", "null"],
+      "description": "Out-of-scope findings data, present only for pm:oos comments, null otherwise. Each item is a lossless per-finding record staged for future `gh issue create`.",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "Per-finding OOS records. Each item carries the full finding detail needed for gh issue creation.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["fileLine", "rootCause", "solutionSeeds"],
+            "properties": {
+              "fileLine": {
+                "type": "string",
+                "minLength": 1,
+                "description": "File path and line reference (e.g. 'kernel/foo.go:42')."
+              },
+              "rootCause": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["code", "arch", "history"],
+                "properties": {
+                  "code": { "type": "string", "minLength": 1 },
+                  "arch": { "type": "string", "minLength": 1 },
+                  "history": { "type": "string", "minLength": 1 }
+                }
+              },
+              "solutionSeeds": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["minimal", "thorough", "refactor"],
+                "properties": {
+                  "minimal": { "type": "string", "minLength": 1 },
+                  "thorough": { "type": "string", "minLength": 1 },
+                  "refactor": { "type": "string", "minLength": 1 }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

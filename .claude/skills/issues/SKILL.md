@@ -161,17 +161,19 @@ epic 用 `epic` label + GitHub 原生 sub-issue（不手写 body task list）。
 > 两正交轴（pr-status 流转 / pr-review 结论）的取值与「何时切」语义见 `.github/project-template/PROJECT.md` §2.5 + §5（单源，不在此复制表）。**两轴各自互斥**：pr-status 恰好一个；pr-review `approved` XOR `changes-requested`——**切一侧必 `--remove-label` 同轴对侧**。本节只给切换命令。
 
 ```bash
-# ship 后：待再审
+# ship 后：待再审（首次交接，唯一使用 needs-review-again 的地方）
 gh pr edit <N> --add-label pr-status/needs-review-again --remove-label pr-status/in-progress
 # review 轮结论（默认 /pr-review 或 codex；review 轴互斥）
-gh pr edit <N> --add-label pr-review/changes-requested --remove-label pr-review/approved          # 有 finding
-gh pr edit <N> --add-label pr-review/approved          --remove-label pr-review/changes-requested  # 无 finding
+# 有 finding → changes-requested + needs-fix（5-state：review 轮 changes-requested 始终切 needs-fix）
+gh pr edit <N> --add-label pr-review/changes-requested --add-label pr-status/needs-fix --remove-label pr-review/approved --remove-label pr-status/needs-review-again
+# 无 finding → approved（terminal）
+gh pr edit <N> --add-label pr-review/approved --remove-label pr-review/changes-requested
 # fix 后：待 --check 验证（fix 不直接到 ready）
-gh pr edit <N> --add-label pr-status/needs-check-fix --remove-label pr-status/needs-review-again
+gh pr edit <N> --add-label pr-status/needs-check-fix --remove-label pr-status/needs-fix
 # --check 全修复：可合并（清 pr-status 前态 + review 轴对侧）
 gh pr edit <N> --add-label pr-status/ready --add-label pr-review/approved --remove-label pr-status/needs-check-fix --remove-label pr-review/changes-requested
 # --check 有未修/回归：回 fix（清 pr-status 前态 + review 轴对侧）
-gh pr edit <N> --add-label pr-review/changes-requested --add-label pr-status/needs-review-again --remove-label pr-status/needs-check-fix --remove-label pr-review/approved
+gh pr edit <N> --add-label pr-review/changes-requested --add-label pr-status/needs-fix --remove-label pr-status/needs-check-fix --remove-label pr-review/approved
 ```
 
 ## B4. PR 评论（编排）
