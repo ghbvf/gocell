@@ -18,7 +18,7 @@
 > - **消费**：`bash hack/automation/pr-meta.sh extract <PR#>` 拉评论 → 取最新块 → base64 解码 → schema 校验 → 比对 live `headSha`（不一致=过期，丢弃）。
 > - **熔断（auto review↔fix ≤3 轮）**：`cycle.round` = 已完成 fix 轮数；`round ≥ maxRounds(3)` → `cycle.exhausted=true`，且 `changes-requested` 的 `next.agent` 被 helper 强制为 `human`——守护进程必停派、转人工，不得继续 auto 循环。
 > - **标准 base64（非 url）**：CommonMark 禁 HTML 注释正文含 `--`；标准 base64 字母表 `A-Za-z0-9+/=` 无 `-`，结构上不可能产 `--`/`-->`（base64url 含 `-`，会破块）。
-> - schema 单源 = `hack/automation/schema/pr-meta.v1.json`；helper = `hack/automation/pr-meta.sh`（`emit`/`decode`/`extract`/`round`/`selftest`）。**人读 footer 不动其格式**——footer 人读、机器块 dispatch，二者并存。
+> - schema 单源 = `hack/automation/schema/pr-meta.v1.json`；helper = `hack/automation/pr-meta.sh`（`emit`/`decode`/`extract`/`round`）。消费侧只接受 canonical 块（派生字段必须 = emit 由块自身 facts 重算结果，防伪造）+ 仅信 OWNER/MEMBER/COLLABORATOR 作者评论。**人读 footer 不动其格式**——footer 人读、机器块 dispatch，二者并存。
 > - 各 kind 的 `phase`/`verdict` 取值见下方各模板末尾标注。
 
 ## ship 评论（`<!-- pm:ship -->`）

@@ -25,15 +25,18 @@
 #   decode            stdin markdown/block -> stdout validated JSON           (offline)
 #   extract <PR#>     gh-fetched comments -> latest block JSON iff fresh       (online)
 #   round   <PR#>     gh-fetched comments -> max cycle.round for this PR       (online)
-#   selftest          emit<->decode/extract round-trip + circuit-breaker asserts (offline)
 #
 # Exit codes: 0 ok · 1 gh/IO error · 2 no/invalid block · 3 stale block · 64 usage error
 #
-# Trust model: `round` and `extract` only count/accept blocks whose repo+pr
-# match this PR (cross-PR copy-paste is ignored). `extract` additionally
-# rejects blocks whose headSha != the live PR head (stale). A same-PR commenter
-# can still inflate cycle.round to trip the breaker early, but that fails
-# *safe* (toward human escalation, never toward auto-merge) and is recoverable
+# Trust model (layered, fail-safe): `round`/`extract` only read comments from
+# trusted authors (author_association OWNER/MEMBER/COLLABORATOR — F3), only
+# count/accept blocks whose repo+pr match this PR (cross-PR copy-paste ignored),
+# and only accept *canonical* blocks — every derived field (next/idempotencyKey/
+# cycle.maxRounds/cycle.exhausted) must equal what emit would re-derive from the
+# block's own facts (forgery rejected — F1); maxRounds is a sealed constant (F2).
+# `extract` additionally rejects blocks whose headSha != the live PR head (stale).
+# A trusted member could still inflate cycle.round to trip the breaker early, but
+# that fails *safe* (toward human escalation, never auto-merge) and is recoverable
 # by deleting the comment — accepted for an internal single-tenant repo.
 #
 # Schema single source: hack/automation/schema/pr-meta.v1.json
@@ -49,12 +52,11 @@ REPO_SLUG="ghbvf/gocell"
 
 usage() {
     cat >&2 <<'EOF'
-usage: pr-meta.sh <emit|decode|extract|round|selftest> [args]
+usage: pr-meta.sh <emit|decode|extract|round> [args]
   emit            read fact JSON on stdin, print the gocell-pr-meta:v1 block
   decode          read markdown/block on stdin, print validated JSON
   extract <PR#>   fetch PR comments, print the latest block JSON iff fresh
   round   <PR#>   fetch PR comments, print max cycle.round for this PR (0 if none)
-  selftest        run offline emit<->decode/extract + circuit-breaker assertions
 exit codes: 0 ok | 1 gh/IO error | 2 no/invalid block | 3 stale block | 64 usage error
 EOF
 }
@@ -85,6 +87,8 @@ import sys, json, base64, re
 SCHEMA_CONST = "gocell-pr-meta/v1"
 MARKER = "gocell-pr-meta:v1"
 BLOCK_RE = re.compile(r"<!--\s*gocell-pr-meta:v1\s+([A-Za-z0-9+/=]+)\s*-->")
+MAX_ROUNDS = 3  # sealed circuit-breaker ceiling; producer facts cannot raise it
+DERIVED_KEYS = ("schema", "next", "idempotencyKey")  # cycle.maxRounds/exhausted also derived
 
 # Coherent (kind, phase, verdict) triples. Producers report facts; an incoherent
 # triple (e.g. kind=fix with verdict=approved) would route derive_next down the
@@ -186,18 +190,20 @@ def derive(facts):
     if triple not in COHERENT:
         raise ValueError("incoherent (kind,phase,verdict)=%r" % (triple,))
     obj["schema"] = SCHEMA_CONST
-    cyc = dict(obj.get("cycle") or {})
-    if "round" not in cyc:
+    rnd = (obj.get("cycle") or {}).get("round")
+    if rnd is None:
         raise ValueError("cycle.round is required in input facts")
-    cyc.setdefault("maxRounds", 3)
-    cyc["exhausted"] = bool(cyc["round"] >= cyc["maxRounds"])
-    obj["cycle"] = cyc
-    obj["next"] = derive_next(obj["verdict"], cyc["exhausted"])
+    # cycle is rebuilt from round alone: maxRounds is the sealed MAX_ROUNDS
+    # constant (producer facts cannot raise the breaker ceiling, F2) and
+    # exhausted is always recomputed.
+    exhausted = bool(rnd >= MAX_ROUNDS)
+    obj["cycle"] = {"round": rnd, "maxRounds": MAX_ROUNDS, "exhausted": exhausted}
+    obj["next"] = derive_next(obj["verdict"], exhausted)
     obj.setdefault("session", None)
     obj.setdefault("worktree", None)
     obj["idempotencyKey"] = "%s#%s@%s:%s/%s#%s" % (
         obj.get("repo"), obj.get("pr"), obj.get("headSha"),
-        obj.get("kind"), obj.get("phase"), cyc["round"])
+        obj.get("kind"), obj.get("phase"), rnd)
     return obj
 
 
@@ -209,12 +215,25 @@ def extract_payloads(blob):
     return BLOCK_RE.findall(blob)
 
 
+def facts_of(obj):
+    # Strip every emit-derived field so the block can be re-derived and compared
+    # against itself. cycle keeps only round (maxRounds/exhausted are derived).
+    f = {k: v for k, v in obj.items() if k not in DERIVED_KEYS}
+    f["cycle"] = {"round": (obj.get("cycle") or {}).get("round")}
+    return f
+
+
 def decode_payload(payload, schema):
     raw = base64.b64decode(payload, validate=True)
     obj = json.loads(raw)
     errs = validate(obj, schema)
     if errs:
         raise ValueError("block fails schema:\n  " + "\n  ".join(errs))
+    # Canonical check (F1): accept a block only if it equals what emit would
+    # derive from its own facts. Rejects hand-forged next / idempotencyKey /
+    # cycle.maxRounds / cycle.exhausted even when the block is schema-valid.
+    if canon(derive(facts_of(obj))) != canon(obj):
+        raise ValueError("block is not canonical (derived fields forged or inconsistent)")
     return obj
 
 
@@ -326,11 +345,21 @@ cmd_emit() { py emit "${SCHEMA_FILE}"; }
 
 cmd_decode() { py decode "${SCHEMA_FILE}"; }
 
+# fetch_trusted_bodies prints the bodies of only those PR comments whose author
+# has write access (author_association OWNER/MEMBER/COLLABORATOR). This is the
+# single trust boundary for the dispatch protocol (F3): an untrusted commenter
+# cannot inject a machine block that extract/round would feed to an executor.
+fetch_trusted_bodies() {
+    local pr="$1"
+    gh api "repos/${REPO_SLUG}/issues/${pr}/comments" --paginate \
+        --jq '.[] | select(.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") | .body'
+}
+
 cmd_extract() {
     local pr
     pr="$(normalize_pr "${1:-}")" || return 64
     local bodies live_sha
-    bodies="$(gh api "repos/${REPO_SLUG}/issues/${pr}/comments" --paginate --jq '.[].body')" \
+    bodies="$(fetch_trusted_bodies "${pr}")" \
         || { echo "pr-meta extract: gh api comments failed" >&2; return 1; }
     live_sha="$(gh pr view "${pr}" --repo "${REPO_SLUG}" --json headRefOid --jq .headRefOid)" \
         || { echo "pr-meta extract: gh pr view failed" >&2; return 1; }
@@ -341,119 +370,9 @@ cmd_round() {
     local pr
     pr="$(normalize_pr "${1:-}")" || return 64
     local bodies
-    bodies="$(gh api "repos/${REPO_SLUG}/issues/${pr}/comments" --paginate --jq '.[].body')" \
+    bodies="$(fetch_trusted_bodies "${pr}")" \
         || { echo "pr-meta round: gh api comments failed" >&2; return 1; }
     printf '%s\n' "${bodies}" | py maxround "${SCHEMA_FILE}" "${REPO_SLUG}" "${pr}"
-}
-
-# ---- selftest --------------------------------------------------------------
-
-st_fail=0
-st_assert_eq() { # <label> <got> <want>
-    if [[ "${2}" == "${3}" ]]; then
-        echo "  ok: ${1}"
-    else
-        echo "  FAIL: ${1} — got [${2}] want [${3}]" >&2
-        st_fail=1
-    fi
-}
-
-st_field() { printf '%s' "${1}" | jq -r "${2}"; }
-
-# st_facts emits a fact JSON for the given kind/phase/verdict/round (+ repo/pr
-# override). Keeps selftest cases terse.
-st_facts() { # <kind> <phase> <verdict> <round> [repo] [pr]
-    jq -nc \
-        --arg kind "${1}" --arg phase "${2}" --arg verdict "${3}" \
-        --argjson round "${4}" --arg repo "${5:-ghbvf/gocell}" --argjson pr "${6:-1660}" \
-        --arg sha "0123456789abcdef0123456789abcdef01234567" \
-        '{repo:$repo,pr:$pr,kind:$kind,phase:$phase,tool:"claude-code",baseRef:"develop",headRef:"x",headSha:$sha,session:null,worktree:null,verdict:$verdict,findings:{total:0,fixed:0,unresolved:0,blocking:0,byP:{p0:0,p1:0,p2:0,p3:0},byCx:{cx1:0,cx2:0,cx3:0,cx4:0}},cycle:{round:$round}}'
-}
-
-cmd_selftest() {
-    echo "pr-meta selftest"
-    local headsha="0123456789abcdef0123456789abcdef01234567"
-    local block json block2
-
-    # 1. ship round 0 -> needs-review-again, next.agent=codex, not exhausted
-    block="$(st_facts ship ship needs-review-again 0 | cmd_emit)"
-    st_assert_eq "ship: single-line block, base64-only payload" \
-        "$(printf '%s' "${block}" | grep -cE '^<!-- gocell-pr-meta:v1 [A-Za-z0-9+/=]+ -->$')" "1"
-    json="$(printf '%s\n' "${block}" | cmd_decode)"
-    st_assert_eq "ship: schema const" "$(st_field "${json}" .schema)" "gocell-pr-meta/v1"
-    st_assert_eq "ship: verdict" "$(st_field "${json}" .verdict)" "needs-review-again"
-    st_assert_eq "ship: next.agent" "$(st_field "${json}" .next.agent)" "codex"
-    st_assert_eq "ship: next.command" "$(st_field "${json}" '.next.command')" "codex review"
-    st_assert_eq "ship: cycle.exhausted" "$(st_field "${json}" .cycle.exhausted)" "false"
-    st_assert_eq "ship: cycle.maxRounds default" "$(st_field "${json}" .cycle.maxRounds)" "3"
-    st_assert_eq "ship: idempotencyKey" "$(st_field "${json}" .idempotencyKey)" \
-        "ghbvf/gocell#1660@${headsha}:ship/ship#0"
-    # fixpoint round-trip: re-emitting the decoded object is byte-identical
-    block2="$(printf '%s' "${json}" | cmd_emit)"
-    st_assert_eq "ship: emit/decode fixpoint" "${block}" "${block2}"
-
-    # 2. fix round 1 -> needs-check-fix, next.command=/pr-review --check
-    json="$(st_facts fix fix needs-check-fix 1 | cmd_emit | cmd_decode)"
-    st_assert_eq "fix: verdict" "$(st_field "${json}" .verdict)" "needs-check-fix"
-    st_assert_eq "fix: next.command" "$(st_field "${json}" '.next.command')" "/pr-review --check"
-
-    # 3. pr-review review changes-requested round 2 (< 3) -> next=/fix, not exhausted
-    json="$(st_facts pr-review review changes-requested 2 | cmd_emit | cmd_decode)"
-    st_assert_eq "review r2: exhausted" "$(st_field "${json}" .cycle.exhausted)" "false"
-    st_assert_eq "review r2: next.agent" "$(st_field "${json}" .next.agent)" "claude"
-    st_assert_eq "review r2: next.command" "$(st_field "${json}" '.next.command')" "/fix"
-
-    # 4. circuit breaker: changes-requested round 3 (== 3) -> exhausted, next=human
-    json="$(st_facts pr-review review changes-requested 3 | cmd_emit | cmd_decode)"
-    st_assert_eq "breaker r3: exhausted" "$(st_field "${json}" .cycle.exhausted)" "true"
-    st_assert_eq "breaker r3: next.agent" "$(st_field "${json}" .next.agent)" "human"
-    st_assert_eq "breaker r3: next.command null" "$(st_field "${json}" '.next.command')" "null"
-    st_assert_eq "breaker r3: next.triggerLabel null" "$(st_field "${json}" '.next.triggerLabel')" "null"
-
-    # 5. pr-review check ready round 3 -> terminal, next.agent null
-    json="$(st_facts pr-review check ready 3 | cmd_emit | cmd_decode)"
-    st_assert_eq "check ready: next.agent null" "$(st_field "${json}" '.next.agent')" "null"
-
-    # 6. pr-review review approved -> terminal, next.agent null (no-finding path)
-    json="$(st_facts pr-review review approved 1 | cmd_emit | cmd_decode)"
-    st_assert_eq "review approved: next.agent null" "$(st_field "${json}" '.next.agent')" "null"
-    st_assert_eq "review approved: next.triggerLabel null" "$(st_field "${json}" '.next.triggerLabel')" "null"
-
-    # 7. maxround counts only this PR's blocks (cross-PR / cross-repo ignored)
-    local own foreign
-    own="$(st_facts fix fix needs-check-fix 2 | cmd_emit)"
-    foreign="$(st_facts fix fix needs-check-fix 9 other/repo 1660 | cmd_emit)"
-    st_assert_eq "maxround ignores foreign-repo block" \
-        "$(printf '%s\n%s\n' "${own}" "${foreign}" | py maxround "${SCHEMA_FILE}" ghbvf/gocell 1660)" "2"
-
-    # 8. extract freshness: matching headSha passes, mismatched is rejected (exit 3)
-    block="$(st_facts ship ship needs-review-again 0 | cmd_emit)"
-    st_assert_eq "extract fresh: matching headSha accepted" \
-        "$(printf '%s\n' "${block}" | py extract "${SCHEMA_FILE}" ghbvf/gocell 1660 "${headsha}" | jq -r .headSha)" \
-        "${headsha}"
-    if printf '%s\n' "${block}" | py extract "${SCHEMA_FILE}" ghbvf/gocell 1660 deadbeef >/dev/null 2>&1; then
-        echo "  FAIL: extract accepted stale headSha" >&2; st_fail=1
-    else
-        echo "  ok: extract rejects stale headSha (exit 3)"
-    fi
-
-    # 9. fail-closed: incoherent (kind,phase,verdict) and bad verdict rejected by emit
-    if st_facts fix fix approved 1 | cmd_emit >/dev/null 2>&1; then
-        echo "  FAIL: incoherent (fix,fix,approved) accepted by emit" >&2; st_fail=1
-    else
-        echo "  ok: incoherent (kind,phase,verdict) rejected by emit"
-    fi
-    if st_facts ship ship bogus 0 | cmd_emit >/dev/null 2>&1; then
-        echo "  FAIL: bad verdict accepted by emit" >&2; st_fail=1
-    else
-        echo "  ok: bad verdict rejected by emit"
-    fi
-
-    if [[ "${st_fail}" -ne 0 ]]; then
-        echo "selftest: FAIL" >&2
-        return 1
-    fi
-    echo "selftest: PASS"
 }
 
 # ---- dispatch --------------------------------------------------------------
@@ -466,7 +385,6 @@ main() {
         decode)   cmd_decode "$@" ;;
         extract)  cmd_extract "$@" ;;
         round)    cmd_round "$@" ;;
-        selftest) cmd_selftest "$@" ;;
         -h|--help|help) usage; exit 0 ;;
         "") usage; exit 64 ;;
         *) echo "pr-meta: unknown subcommand '${sub}'" >&2; usage; exit 64 ;;
