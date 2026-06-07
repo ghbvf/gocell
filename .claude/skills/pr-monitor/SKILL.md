@@ -305,7 +305,7 @@ pr-monitor 继续监控，不在 session 内运行 /fix。
 claude -p "/pr-review $PR"
 ```
 
-`--fix-engine=codex` 时：贴 `pr-status/needs-review-again` label，由 codex-pr-router daemon 处理（Batch 4）。
+`--fix-engine=codex` 时：**不**在 session 内跑 `/fix`，改由 codex-pr-router daemon 的 gated workspace-write 路径接管（daemon 轮询 `pr-status/needs-fix` ∧ `ai/local-fix`）。pr-monitor 只确认 PR 已带 `pr-status/needs-fix`（本就是把我们带到此处的触发标，**不切 needs-review-again** —— 那会错误路由回 review 侧），并提示「需贴 `ai/local-fix` label 该 PR 才会被 daemon 接管」，然后继续 loop 等 codex `--check` 结论。
 
 review 结果由 /pr-review 技能贴评论 + 切 label，pr-monitor 继续 loop 等待 fix 侧响应。
 
