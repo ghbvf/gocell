@@ -279,14 +279,16 @@ func TestPGRepoAmbientTx_InterfaceSealed(t *testing.T) {
 	const anchorPkg = PlatformModulePath + "/adapters/postgres/internal/pgexec"
 
 	var checked []string
+	var sealDiags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{}, patterns), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || !isPgexecSubpackage(p.Pkg.Path()) {
 			return nil
 		}
 		checked = append(checked, p.Pkg.Path())
-		assertSealedInterface(t, p.Pkg, pgExecutorInterfaceName, pgExecutorImplName)
+		sealDiags = append(sealDiags, scanSealedInterface(p.Fset, root, p.Pkg, pgExecutorInterfaceName, pgExecutorImplName)...)
 		return nil
 	})
+	Report(t, "PG-REPO-AMBIENT-TX-01-INTERFACE-SEALED", sealDiags)
 
 	assert.Contains(t, checked, anchorPkg,
 		"InterfaceSealed: prodscan discovery did not find the canonical "+

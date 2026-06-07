@@ -84,7 +84,9 @@ package archtest
 
 import (
 	"fmt"
-	"strings"
+	"os"
+	"path/filepath"
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -99,88 +101,69 @@ func TestCelltestImportBoundary(t *testing.T) {
 	Report(t, "CELLTEST-IMPORT-BOUNDARY-01", CheckCelltestImportBoundary(t, ConfigForExternalCell{}))
 }
 
-// TestCelltestImportBoundary_NegativeProbes validates that the detection logic
-// works correctly using synthetic fixtures.
-func TestCelltestImportBoundary_NegativeProbes(t *testing.T) {
+// TestCelltestImportBoundary_SubRules drives the actual rule bodies
+// (celltestSubA / celltestSubB / celltestSubC) over a synthetic module laid out
+// under a temp root, asserting the exact set of flagged files for each sub-rule.
+// Unlike the prior negative probes — which only exercised parseImports and never
+// reached a rule body — a regression in any sub-rule's skip logic (the _test.go
+// exemption, the celltest-package self-exemption, the kernel/cell parent
+// _test.go carve-out, or the kernel/ vs examples/ prefix gating) now fails this
+// test.
+//
+// The synthetic module path is deliberately NON-github (example.test/extmod) so
+// the boundary rule's module-path-agnostic prefix handling is exercised too, and
+// each flagged diagnostic's line is asserted to be the real import line (F7), not
+// a hardcoded 1.
+func TestCelltestImportBoundary_SubRules(t *testing.T) {
 	t.Parallel()
+	root := t.TempDir()
+	const modPath = "example.test/extmod" // NON-github → proves module-path-agnostic
+	celltestImport := modPath + "/kernel/cell/celltest"
+	celltestPkgDir := filepath.Join(root, "kernel", "cell", "celltest")
+	celltestParentDir := filepath.Join(root, "kernel", "cell")
 
-	celltestImport := PlatformModulePath + "/kernel/cell/celltest"
+	// write creates root/<rel> with a blank import of celltest on line 2 and
+	// returns the absolute path.
+	write := func(rel string) string {
+		abs := filepath.Join(root, filepath.FromSlash(rel))
+		require.NoError(t, os.MkdirAll(filepath.Dir(abs), 0o755))
+		content := fmt.Sprintf("package p\nimport _ %q\n", celltestImport)
+		require.NoError(t, os.WriteFile(abs, []byte(content), 0o644))
+		return abs
+	}
 
-	// Probe A: parseImports must detect a celltest import in a non-test file.
-	t.Run("A_detects_nontest_celltest_import", func(t *testing.T) {
-		t.Parallel()
-		content := fmt.Sprintf("package cellfoo\nimport _ %q\n", celltestImport)
-		path := writeTempGoFile(t, "handler.go", content)
-		assert.False(t, strings.HasSuffix(path, "_test.go"),
-			"negative probe A: fixture must not be a _test.go file")
-		imports, err := parseImports(path)
-		require.NoError(t, err)
-		found := false
-		for _, imp := range imports {
-			if imp == celltestImport {
-				found = true
-			}
+	files := []string{
+		write("cells/foo/handler.go"),             // A RED (non-test, outside celltest dir)
+		write("cells/foo/handler_test.go"),        // A GREEN (_test.go)
+		write("kernel/sub/thing_test.go"),         // B RED (kernel _test.go)
+		write("kernel/cell/celltest/celltest.go"), // A & B GREEN (celltest's own source)
+		write("kernel/cell/cell_test.go"),         // B GREEN (kernel/cell parent _test.go carve-out)
+		write("examples/app/app.go"),              // A RED + C RED (examples non-test)
+		write("examples/app/app_test.go"),         // C GREEN (_test.go)
+	}
+
+	// relsOf returns the sorted module-relative Rel set of diags, asserting each
+	// diagnostic points at the real import line (2), never a hardcoded 1.
+	relsOf := func(t *testing.T, diags []Diagnostic) []string {
+		t.Helper()
+		var rels []string
+		for _, d := range diags {
+			assert.Equal(t, 2, d.Line, "diagnostic %s must point at the real import line (2), not 1", d.Rel)
+			rels = append(rels, d.Rel)
 		}
-		assert.True(t, found,
-			"negative probe A: parseImports must detect celltest import in a non-test file")
-	})
+		sort.Strings(rels)
+		return rels
+	}
 
-	// Probe B: _test.go files are permitted by CELLTEST-A and CELLTEST-C;
-	// confirm parseImports detects the import AND the file is identified as a
-	// test file via HasSuffix.
-	t.Run("B_test_file_suffix_detection", func(t *testing.T) {
-		t.Parallel()
-		content := fmt.Sprintf("package cellfoo\nimport _ %q\n", celltestImport)
-		path := writeTempGoFile(t, "handler_test.go", content)
-		assert.True(t, strings.HasSuffix(path, "_test.go"),
-			"negative probe B: fixture path must end in _test.go to confirm skip logic")
-		imports, err := parseImports(path)
-		require.NoError(t, err)
-		found := false
-		for _, imp := range imports {
-			if imp == celltestImport {
-				found = true
-			}
-		}
-		assert.True(t, found,
-			"negative probe B: parseImports must detect celltest import even in _test.go files")
-	})
+	diagsA := celltestSubA(t, root, files, celltestPkgDir, celltestImport)
+	assert.Equal(t, []string{"cells/foo/handler.go", "examples/app/app.go"}, relsOf(t, diagsA),
+		"CELLTEST-A flags every non-_test.go file (outside celltest's own dir) importing celltest")
 
-	// Probe C: a kernel/ file (including _test.go) importing celltest must be
-	// caught by CELLTEST-B.
-	t.Run("C_detects_kernel_celltest_import", func(t *testing.T) {
-		t.Parallel()
-		content := fmt.Sprintf("package kernelfoo\nimport _ %q\n", celltestImport)
-		// Even a _test.go file in kernel/ should be detected by CELLTEST-B.
-		path := writeTempGoFile(t, "kernel_test.go", content)
-		imports, err := parseImports(path)
-		require.NoError(t, err)
-		found := false
-		for _, imp := range imports {
-			if imp == celltestImport {
-				found = true
-			}
-		}
-		assert.True(t, found,
-			"negative probe C: parseImports must detect celltest import in a kernel _test.go file")
-	})
+	diagsB := celltestSubB(t, root, files, celltestPkgDir, celltestParentDir, celltestImport)
+	assert.Equal(t, []string{"kernel/sub/thing_test.go"}, relsOf(t, diagsB),
+		"CELLTEST-B flags kernel/ files (incl _test.go) except celltest's own dir and the kernel/cell parent _test.go")
 
-	// Probe D: a non-test file in examples/ must be caught by CELLTEST-C.
-	t.Run("D_detects_examples_nontest_celltest_import", func(t *testing.T) {
-		t.Parallel()
-		content := fmt.Sprintf("package exampleapp\nimport _ %q\n", celltestImport)
-		path := writeTempGoFile(t, "app.go", content)
-		assert.False(t, strings.HasSuffix(path, "_test.go"),
-			"negative probe D: fixture must not be a _test.go file")
-		imports, err := parseImports(path)
-		require.NoError(t, err)
-		found := false
-		for _, imp := range imports {
-			if imp == celltestImport {
-				found = true
-			}
-		}
-		assert.True(t, found,
-			"negative probe D: parseImports must detect celltest import in examples non-test file")
-	})
+	diagsC := celltestSubC(t, root, files, celltestImport)
+	assert.Equal(t, []string{"examples/app/app.go"}, relsOf(t, diagsC),
+		"CELLTEST-C flags examples/ non-_test.go files importing celltest")
 }

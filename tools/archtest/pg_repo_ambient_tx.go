@@ -69,12 +69,15 @@ func CheckPGRepoAmbientTx(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 
 // CheckPGRepoApprovedSealed enforces the pgrepoapproved.Approval interface seal
 // and returns diagnostics for any violation. The caller should pass the results to
-// Report(t, "PG-REPO-APPROVED-SEALED", diags).
+// Report(t, "PG-REPO-APPROVED-SEALED", diags). Seal violations are returned as
+// []Diagnostic (via scanSealedInterface) rather than emitted with t.Errorf, so
+// the whole rule routes through Report — file:line anchored, sorted, deduped.
 func CheckPGRepoApprovedSealed(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
+	root := findModuleRoot(t)
 	const approvedPkg = PlatformModulePath + "/pkg/pgrepoapproved"
 	var diags []Diagnostic
 	found := false
@@ -83,12 +86,12 @@ func CheckPGRepoApprovedSealed(t *testing.T, _ ConfigForExternalCell) []Diagnost
 			return nil
 		}
 		found = true
-		assertSealedInterface(t, p.Pkg, "Approval", "approval")
+		diags = append(diags, scanSealedInterface(p.Fset, root, p.Pkg, "Approval", "approval")...)
 		return nil
 	})
 	if !found {
 		diags = append(diags, Diagnostic{
-			Rel:     "",
+			Rel:     approvedPkg,
 			Line:    0,
 			Message: "pkg/pgrepoapproved was not loaded/checked",
 		})
@@ -538,34 +541,54 @@ func isPgxPoolType(expr ast.Expr, info *types.Info) bool {
 	return obj.Pkg().Path() == pgxpoolImportPath && obj.Name() == pgxpoolTypeName
 }
 
-// assertSealedInterface asserts pkg's ifaceName interface has exactly one
+// diagAtObj anchors a diagnostic to obj's declaration via fset+root; a nil obj
+// (or nil fset) degrades to the package path with Line 0.
+func diagAtObj(fset *token.FileSet, root, pkgPath string, obj types.Object, msg string) Diagnostic {
+	if obj == nil || fset == nil {
+		return Diagnostic{Rel: pkgPath, Line: 0, Message: msg}
+	}
+	pos := fset.Position(obj.Pos())
+	rel, err := filepath.Rel(root, pos.Filename)
+	if err != nil {
+		rel = pos.Filename
+	}
+	return diagAt(filepath.ToSlash(rel), pos.Line, msg)
+}
+
+// scanSealedInterface checks that pkg's ifaceName interface has exactly one
 // unexported marker method (structural, not name-anchored — the seal makes the
-// interface unimplementable outside the package), that *implName implements
-// it, AND that implName is the ONLY in-package named type implementing it.
-// Removing the marker (interface still compiles), adding a second unexported
-// method, or declaring a sibling impl in the same package all fail here. The
+// interface unimplementable outside the package), that *implName implements it,
+// AND that implName is the ONLY in-package named type implementing it. Removing
+// the marker (interface still compiles), adding a second unexported method, or
+// declaring a sibling impl in the same package all produce a diagnostic. The
 // uniqueness check closes the in-package drift hole that pure Go visibility
 // cannot prevent: external impls are blocked by the unexported marker, but a
-// package author could declare a parallel struct alongside *pgExecutor.
+// package author could declare a parallel struct alongside *implName.
 //
-//nolint:gocognit // R2-approved: sequential sealed-interface assertions (impl/marker/uniqueness), additive not nesting.
-func assertSealedInterface(t *testing.T, pkg *types.Package, ifaceName, implName string) {
-	t.Helper()
+// Pure: it returns []Diagnostic anchored (via fset + root) to the offending
+// declaration instead of calling t.Errorf, so callers route the result through
+// Report — file:line clickable, sorted, deduped. fset/root come from the *Pass.
+//
+//nolint:gocognit // R2-approved: sequential sealed-interface checks (impl/marker/uniqueness), additive not nesting.
+func scanSealedInterface(fset *token.FileSet, root string, pkg *types.Package, ifaceName, implName string) []Diagnostic {
 	path := pkg.Path()
+	// at anchors a diagnostic to obj's declaration (see diagAtObj).
+	at := func(obj types.Object, msg string) Diagnostic {
+		return diagAtObj(fset, root, path, obj, msg)
+	}
+
+	var diags []Diagnostic
 	ifaceObj := pkg.Scope().Lookup(ifaceName)
 	if ifaceObj == nil {
-		t.Errorf("%s: no %s type declared", path, ifaceName)
-		return
+		return append(diags, at(nil, fmt.Sprintf("%s: no %s type declared", path, ifaceName)))
 	}
 	named, ok := ifaceObj.Type().(*types.Named)
 	if !ok {
-		t.Errorf("%s: %s is not a named type", path, ifaceName)
-		return
+		return append(diags, at(ifaceObj, fmt.Sprintf("%s: %s is not a named type", path, ifaceName)))
 	}
 	iface, ok := named.Underlying().(*types.Interface)
 	if !ok {
-		t.Errorf("%s: %s underlying is not an interface", path, ifaceName)
-		return
+		return append(diags, at(ifaceObj, fmt.Sprintf("%s: %s underlying is not an interface", path, ifaceName)))
 	}
 	unexported := 0
 	for i := range iface.NumMethods() {
@@ -574,22 +597,23 @@ func assertSealedInterface(t *testing.T, pkg *types.Package, ifaceName, implName
 		}
 	}
 	if unexported != 1 {
-		t.Errorf("%s: %s must have exactly one unexported marker method (seal); "+
-			"got %d — the seal makes the interface unimplementable outside the "+
-			"package; removing or duplicating it breaks the upstream Hard guarantee",
-			path, ifaceName, unexported)
+		diags = append(diags, at(ifaceObj, fmt.Sprintf(
+			"%s: %s must have exactly one unexported marker method (seal); "+
+				"got %d — the seal makes the interface unimplementable outside the "+
+				"package; removing or duplicating it breaks the upstream Hard guarantee",
+			path, ifaceName, unexported)))
 	}
 
 	implObj := pkg.Scope().Lookup(implName)
 	if implObj == nil {
-		t.Errorf("%s: no %s impl type declared", path, implName)
-		return
+		return append(diags, at(ifaceObj, fmt.Sprintf("%s: no %s impl type declared", path, implName)))
 	}
 	// typesutil.ImplementsInterface tries value-or-pointer (TYPESUTIL-
 	// IMPLEMENTS-FUNNEL-01: raw go/types.Implements is funnel-banned here).
 	if !typesutil.ImplementsInterface(implObj.Type(), iface) {
-		t.Errorf("%s: *%s does not implement %s (sanctioned impl must satisfy the sealed interface)",
-			path, implName, ifaceName)
+		diags = append(diags, at(implObj, fmt.Sprintf(
+			"%s: *%s does not implement %s (sanctioned impl must satisfy the sealed interface)",
+			path, implName, ifaceName)))
 	}
 
 	// Uniqueness: enumerate every named type in pkg.Scope() and reject any
@@ -616,12 +640,14 @@ func assertSealedInterface(t *testing.T, pkg *types.Package, ifaceName, implName
 			continue
 		}
 		if typesutil.ImplementsInterface(siblingType, iface) {
-			t.Errorf("%s: %s implements sealed interface %s but is not the sanctioned impl %s — "+
-				"the seal contract is that ONLY %s satisfies %s; declare neither a parallel "+
-				"struct nor an alias in this package",
-				path, name, ifaceName, implName, implName, ifaceName)
+			diags = append(diags, at(typeName, fmt.Sprintf(
+				"%s: %s implements sealed interface %s but is not the sanctioned impl %s — "+
+					"the seal contract is that ONLY %s satisfies %s; declare neither a parallel "+
+					"struct nor an alias in this package",
+				path, name, ifaceName, implName, implName, ifaceName)))
 		}
 	}
+	return diags
 }
 
 // findPgexecFuncValueUses returns violations for any Ident in the file that

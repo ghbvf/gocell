@@ -102,9 +102,42 @@ const (
 // CheckSecurityDefaults — top-level importable entry point
 // ---------------------------------------------------------------------------
 
+// securityRule pairs a SEC-FAIL-CLOSED rule id with its scanner. It is the
+// single source iterated by BOTH the aggregate importable entry
+// (CheckSecurityDefaults) and the dogfood test (TestSecurityDefaults, which
+// Reports each sub-rule under its precise id). This mirrors the per-rule Report
+// pattern the clock_invariants batch sibling uses, so a SEC-04 violation is
+// reported under "SEC-FAIL-CLOSED-04" — not a collapsed "SEC-FAIL-CLOSED-02..10".
+type securityRule struct {
+	id    string
+	check func(t *testing.T, root string) []Diagnostic
+}
+
+// securityRules returns the SEC-FAIL-CLOSED-02..10 sub-rules in id order.
+// SEC-FAIL-CLOSED-01 is retired (see security_defaults_test.go). Each scanner
+// returns clean, id-free Diagnostics; the precise rule id is carried by the
+// Report ruleID (dogfood) or re-prefixed onto the message (aggregate).
+func securityRules() []securityRule {
+	return []securityRule{
+		{secFailClosed02, secCheckSEC02},
+		{secFailClosed03, secCheckSEC03},
+		{secFailClosed04, secCheckSEC04},
+		{secFailClosed05, secCheckSEC05},
+		{secFailClosed06, secCheckSEC06},
+		{secFailClosed07, secCheckSEC07},
+		{secFailClosed08, secCheckSEC08},
+		{secFailClosed09, secCheckSEC09},
+		{secFailClosed10, func(t *testing.T, _ string) []Diagnostic { return secCheckSEC10(t) }},
+	}
+}
+
 // CheckSecurityDefaults runs SEC-FAIL-CLOSED-02..10 and returns all violations
-// as []Diagnostic. It does not call t.Errorf; callers use Report to surface
-// them. t.Fatalf is used only for infrastructure load failures.
+// as []Diagnostic, each message prefixed with its precise sub-rule id (so the
+// aggregate surface stays self-describing even when an external caller Reports
+// the whole slice under one id). The dogfood TestSecurityDefaults instead
+// Reports each sub-rule separately for native per-id output. It does not call
+// t.Errorf; callers use Report to surface the result. t.Fatalf is used only for
+// infrastructure load failures.
 //
 // SEC-FAIL-CLOSED-01 is skipped (retired; see security_defaults_test.go).
 func CheckSecurityDefaults(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
@@ -112,15 +145,12 @@ func CheckSecurityDefaults(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 	root := findModuleRoot(t)
 
 	var diags []Diagnostic
-	diags = append(diags, secCheckSEC02(t, root)...)
-	diags = append(diags, secCheckSEC03(t, root)...)
-	diags = append(diags, secCheckSEC04(t, root)...)
-	diags = append(diags, secCheckSEC05(t, root)...)
-	diags = append(diags, secCheckSEC06(t, root)...)
-	diags = append(diags, secCheckSEC07(t, root)...)
-	diags = append(diags, secCheckSEC08(t, root)...)
-	diags = append(diags, secCheckSEC09(t, root)...)
-	diags = append(diags, secCheckSEC10(t)...)
+	for _, r := range securityRules() {
+		for _, d := range r.check(t, root) {
+			d.Message = r.id + ": " + d.Message
+			diags = append(diags, d)
+		}
+	}
 	return diags
 }
 
@@ -146,7 +176,7 @@ func secCheckSEC02(t *testing.T, root string) []Diagnostic {
 			diags = append(diags, Diagnostic{
 				Rel:     rel,
 				Line:    line,
-				Message: "WithListener 3rd arg is bare nil (" + secFailClosed02 + ")",
+				Message: "WithListener 3rd arg is bare nil",
 			})
 		}
 	}
@@ -215,7 +245,7 @@ func secCheckSEC06(t *testing.T, root string) []Diagnostic {
 			diags = append(diags, Diagnostic{
 				Rel:     rel,
 				Line:    line,
-				Message: "InternalListener uses AuthNone literal (" + secFailClosed06 + ")",
+				Message: "InternalListener uses AuthNone literal",
 			})
 		}
 	}
@@ -422,14 +452,14 @@ func secCheckSEC03Target(label string, files []string) []Diagnostic {
 		diags = append(diags, Diagnostic{
 			Rel:     label,
 			Line:    1,
-			Message: label + ": does not import pkg/secutil (" + secFailClosed03 + ")",
+			Message: label + ": does not import pkg/secutil",
 		})
 	}
 	if !pkgCallsValidate {
 		diags = append(diags, Diagnostic{
 			Rel:     label,
 			Line:    1,
-			Message: label + ": no call to secutil.ValidateTLSEndpoint (" + secFailClosed03 + ")",
+			Message: label + ": no call to secutil.ValidateTLSEndpoint",
 		})
 	}
 	return diags
@@ -481,7 +511,7 @@ func secCheckSEC04(t *testing.T, root string) []Diagnostic {
 			diags = append(diags, Diagnostic{
 				Rel:     rel,
 				Line:    line,
-				Message: "opts.InsecureSkipVerify = true (" + secFailClosed04 + ")",
+				Message: "opts.InsecureSkipVerify = true",
 			})
 		}
 	}
@@ -540,16 +570,7 @@ func secInsecureSkipVerifyLine(fset *token.FileSet, assign *ast.AssignStmt) (int
 
 func secCheckSEC05(t *testing.T, root string) []Diagnostic {
 	t.Helper()
-	violations := findExampleComposeCredentialViolations(t, root)
-	var diags []Diagnostic
-	for _, v := range violations {
-		diags = append(diags, Diagnostic{
-			Rel:     v,
-			Line:    1,
-			Message: v + " (" + secFailClosed05 + ")",
-		})
-	}
-	return diags
+	return findExampleComposeCredentialViolations(t, root)
 }
 
 // findExampleComposeCredentialViolations scans every docker-compose.yml under
@@ -560,10 +581,11 @@ func secCheckSEC05(t *testing.T, root string) []Diagnostic {
 // surely as one at the top level. Strict improvement over the pre-Path-C
 // two-level os.ReadDir loop, which failed open on nested compose files.
 //
-// Returns []string so the standalone fixture tests in security_defaults_test.go
-// (TestSEC05ExampleComposeCredentials*) can directly assert string content.
-// CheckSecurityDefaults converts these to []Diagnostic via secCheckSEC05.
-func findExampleComposeCredentialViolations(t *testing.T, root string) []string {
+// Returns structured []Diagnostic (Rel = compose file, Line = offending line,
+// Message = the credential-key explanation) so the position is carried in the
+// Rel/Line fields rather than baked into the message string. The standalone
+// fixture tests in security_defaults_test.go assert on those fields directly.
+func findExampleComposeCredentialViolations(t *testing.T, root string) []Diagnostic {
 	t.Helper()
 	scope := scanner.DirsScope(
 		root, []string{"examples"},
@@ -571,19 +593,21 @@ func findExampleComposeCredentialViolations(t *testing.T, root string) []string 
 			return filepath.Base(rel) == "docker-compose.yml"
 		}),
 	)
-	var violations []string
+	var diags []Diagnostic
 	scanner.EachContentFile(t, scope, []string{".yml"}, func(_ *testing.T, fc scanner.ContentContext) {
-		violations = append(violations, scanComposeCredentialViolations(fc.Rel, fc.Bytes)...)
+		diags = append(diags, scanComposeCredentialViolations(fc.Rel, fc.Bytes)...)
 	})
-	return violations
+	return diags
 }
 
 // scanComposeCredentialViolations inspects compose YAML bytes for committed
-// credential literals (any line whose key matches isComposeCredentialKey
-// must use ${VAR:?required} env interpolation). Decoupled from file reading
-// so callers funneled through scanner.EachContentFile can pass bytes directly.
-func scanComposeCredentialViolations(rel string, data []byte) []string {
-	var violations []string
+// credential literals (any line whose key matches isComposeCredentialKey must
+// use ${VAR:?required} env interpolation) and returns one structured Diagnostic
+// per offending line (Rel = rel, Line = line number, Message = key explanation —
+// no rel/line/id baked into the message). Decoupled from file reading so callers
+// funneled through scanner.EachContentFile can pass bytes directly.
+func scanComposeCredentialViolations(rel string, data []byte) []Diagnostic {
+	var diags []Diagnostic
 	for i, line := range strings.Split(string(data), "\n") {
 		trimmed := strings.TrimSpace(line)
 		key, value, ok := strings.Cut(trimmed, ":")
@@ -591,12 +615,14 @@ func scanComposeCredentialViolations(rel string, data []byte) []string {
 			continue
 		}
 		if !isRequiredComposeEnvInterpolation(value) {
-			violations = append(violations,
-				fmt.Sprintf("%s:%d: %s must use required environment interpolation ${VAR:?message} (%s)",
-					rel, i+1, key, secFailClosed05))
+			diags = append(diags, Diagnostic{
+				Rel:     rel,
+				Line:    i + 1,
+				Message: key + " must use required environment interpolation ${VAR:?message}",
+			})
 		}
 	}
-	return violations
+	return diags
 }
 
 func isComposeCredentialKey(key string) bool {
@@ -646,10 +672,9 @@ func secCheckSEC07(t *testing.T, root string) []Diagnostic {
 		rel = filepath.ToSlash(rel)
 		for _, line := range hits {
 			diags = append(diags, Diagnostic{
-				Rel:  rel,
-				Line: line,
-				Message: "UpgradeConfig literal missing Authenticator field (" +
-					secFailClosed07 + ")",
+				Rel:     rel,
+				Line:    line,
+				Message: "UpgradeConfig literal missing Authenticator field",
 			})
 		}
 	}
@@ -720,10 +745,9 @@ func secCheckSEC08(t *testing.T, root string) []Diagnostic {
 		rel = filepath.ToSlash(rel)
 		for _, line := range hits {
 			diags = append(diags, Diagnostic{
-				Rel:  rel,
-				Line: line,
-				Message: "legacy Hub.Broadcast call (use BroadcastFilter or BroadcastToSubject; " +
-					secFailClosed08 + ")",
+				Rel:     rel,
+				Line:    line,
+				Message: "legacy Hub.Broadcast call (use BroadcastFilter or BroadcastToSubject)",
 			})
 		}
 	}
@@ -818,8 +842,8 @@ func secCheckSEC09FuncBody(fset *token.FileSet, fn *ast.FuncDecl) []Diagnostic {
 			Line: line,
 			Message: fmt.Sprintf(
 				"%s() must not call %s(h.conns,...) directly; "+
-					"use removeConnLocked() helper (or, for bulk drain, place inside shutdown). [%s]",
-				fn.Name.Name, ident.Name, secFailClosed09),
+					"use removeConnLocked() helper (or, for bulk drain, place inside shutdown)",
+				fn.Name.Name, ident.Name),
 		})
 	})
 	return diags
@@ -877,7 +901,7 @@ func sec10DotImportScan(t *testing.T) []Diagnostic {
 			diags = append(diags, Diagnostic{
 				Rel:     rel,
 				Line:    line,
-				Message: secFailClosed10 + ": package main must not dot-import kernel/cell",
+				Message: "package main must not dot-import kernel/cell",
 			})
 		}
 		return nil

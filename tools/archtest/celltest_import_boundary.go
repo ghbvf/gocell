@@ -72,6 +72,17 @@ func CheckCelltestImportBoundary(t *testing.T, _ ConfigForExternalCell) []Diagno
 	return diags
 }
 
+// celltestImportLineOr1 returns the 1-based source line of importPath's import
+// spec in file f, falling back to 1 when the spec cannot be located (parse
+// hiccup) so the diagnostic stays clickable. Shared by the celltest boundary
+// sub-rules and celltestScopeCheckFile.
+func celltestImportLineOr1(f, importPath string) int {
+	if line := importLine(f, importPath); line > 0 {
+		return line
+	}
+	return 1
+}
+
 // celltestSubA checks CELLTEST-A: non-_test.go files (except celltest's own
 // sources) must not import celltest.
 func celltestSubA(t *testing.T, root string, allGoFiles []string, celltestPkgDir, celltestImport string) []Diagnostic {
@@ -94,7 +105,7 @@ func celltestSubA(t *testing.T, root string, allGoFiles []string, celltestPkgDir
 				rel = filepath.ToSlash(rel)
 				diags = append(diags, Diagnostic{
 					Rel:  rel,
-					Line: 1,
+					Line: celltestImportLineOr1(f, celltestImport),
 					Message: fmt.Sprintf("CELLTEST-A: non-test file imports %s — "+
 						"production code must use auth.NewAuthJWT / auth.NewAuthJWTFromAssembly / "+
 						"auth.NewAuthServiceToken (error-first) instead", celltestImport),
@@ -130,7 +141,7 @@ func celltestSubB(t *testing.T, root string, allGoFiles []string, celltestPkgDir
 			if imp == celltestImport {
 				diags = append(diags, Diagnostic{
 					Rel:  rel,
-					Line: 1,
+					Line: celltestImportLineOr1(f, celltestImport),
 					Message: fmt.Sprintf("CELLTEST-B: kernel file imports %s — "+
 						"kernel packages (including _test.go) must not import "+
 						"kernel/cell/celltest; layering rule: kernel must not depend on "+
@@ -164,7 +175,7 @@ func celltestSubC(t *testing.T, root string, allGoFiles []string, celltestImport
 			if imp == celltestImport {
 				diags = append(diags, Diagnostic{
 					Rel:  rel,
-					Line: 1,
+					Line: celltestImportLineOr1(f, celltestImport),
 					Message: fmt.Sprintf("CELLTEST-C: examples non-test file imports %s — "+
 						"examples production code must use auth.NewAuth* (kernel/auth, error-first) "+
 						"instead of celltest panic helpers", celltestImport),

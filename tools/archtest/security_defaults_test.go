@@ -56,8 +56,11 @@ import (
 )
 
 // TestSecurityDefaults is the dogfood entry point for SEC-FAIL-CLOSED-02..10.
-// It delegates to CheckSecurityDefaults (security_defaults.go) which returns
-// violations as []Diagnostic; Report surfaces them via t.Errorf.
+// It iterates securityRules() (the single source also used by the aggregate
+// CheckSecurityDefaults) and Reports each sub-rule under its precise id — so a
+// SEC-04 failure is reported as "SEC-FAIL-CLOSED-04: …", not collapsed under one
+// "SEC-FAIL-CLOSED-02..10" prefix (matching the clock_invariants per-rule Report
+// pattern).
 //
 // SEC-FAIL-CLOSED-01 is retired; its t.Skip sub-test is retained as an inert
 // marker so historic CI logs and grep map cleanly onto rule IDs.
@@ -65,7 +68,10 @@ func TestSecurityDefaults(t *testing.T) {
 	t.Run(secFailClosed01+"_addr_driven_listener_gate_banned", func(t *testing.T) {
 		testSEC01AddrDrivenGate(t)
 	})
-	Report(t, "SEC-FAIL-CLOSED-02..10", CheckSecurityDefaults(t, ConfigForExternalCell{}))
+	root := findModuleRoot(t)
+	for _, r := range securityRules() {
+		Report(t, r.id, r.check(t, root))
+	}
 }
 
 // testSEC01AddrDrivenGate is skipped — SEC-FAIL-CLOSED-01 is retired.
@@ -163,10 +169,11 @@ services:
       RABBITMQ_DEFAULT_PASS: ${FUTURE_RABBITMQ_PASSWORD:?required}
 `), 0o644))
 
-	violations := findExampleComposeCredentialViolations(t, root)
-	require.Len(t, violations, 1)
-	assert.Contains(t, violations[0], "examples/futuredevice/docker-compose.yml:5")
-	assert.Contains(t, violations[0], "POSTGRES_PASSWORD")
+	diags := findExampleComposeCredentialViolations(t, root)
+	require.Len(t, diags, 1)
+	assert.Equal(t, "examples/futuredevice/docker-compose.yml", diags[0].Rel)
+	assert.Equal(t, 5, diags[0].Line)
+	assert.Contains(t, diags[0].Message, "POSTGRES_PASSWORD")
 }
 
 // TestSEC05ExampleComposeCredentialsScansNestedDirs locks in the recursive
@@ -190,13 +197,16 @@ services:
 	require.NoError(t, os.WriteFile(filepath.Join(topDir, "docker-compose.yml"), body, 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(nestedDir, "docker-compose.yml"), body, 0o644))
 
-	violations := findExampleComposeCredentialViolations(t, root)
-	require.Len(t, violations, 2, "expected both top-level and nested compose violations: %v", violations)
+	diags := findExampleComposeCredentialViolations(t, root)
+	require.Len(t, diags, 2, "expected both top-level and nested compose violations: %v", diags)
 
-	rels := append([]string(nil), violations...)
+	rels := make([]string, len(diags))
+	for i, d := range diags {
+		rels[i] = d.Rel
+	}
 	sort.Strings(rels)
-	assert.Contains(t, rels[0], "examples/futuredevice/deploy/docker-compose.yml")
-	assert.Contains(t, rels[1], "examples/futuredevice/docker-compose.yml")
+	assert.Equal(t, "examples/futuredevice/deploy/docker-compose.yml", rels[0])
+	assert.Equal(t, "examples/futuredevice/docker-compose.yml", rels[1])
 }
 
 func TestFindUpgradeConfigWithoutAuthenticator_DetectsLiteralWithMissingField(t *testing.T) {

@@ -33,24 +33,31 @@ import (
 	"testing"
 )
 
-// celltestImportPathPattern matches module-relative import paths whose final
+// celltestImportPathPattern matches a MODULE-RELATIVE import path whose final
 // segment is `[a-z]+test` under cells/{X}/ (e.g. cells/configcore/configcoretest).
+// The pattern is anchored to the module-relative form (no leading module path)
+// so the rule is module-path-agnostic: an external Cell repo whose module path
+// is not `github.com/{org}/{repo}` (a vanity host, a `/v2`-versioned module,
+// etc.) is matched identically to gocell. The caller strips the module prefix
+// before matching — see celltestScopeCheckFile.
+//
 // The trailing `$` anchors the match to the top-level testutil package — nested
 // sub-packages (cells/configcore/configcoretest/sub) are intentionally NOT
 // matched here; they should be ban-covered by their parent package's
 // boundary, which an importer must traverse through the matched root first.
-var celltestImportPathPattern = regexp.MustCompile(`^github\.com/[^/]+/[^/]+/cells/[a-z]+/[a-z]+test$`)
+var celltestImportPathPattern = regexp.MustCompile(`^cells/[a-z]+/[a-z]+test$`)
 
-// isCellTestImportPath reports whether an absolute import path matches the
+// isCellTestImportPath reports whether a MODULE-RELATIVE import path (the import
+// path with the importing module's path + "/" already stripped) matches the
 // cells/{X}/{X}test naming convention.
 //
-// Blind spots: the pattern matches the full path literal from the import
-// declaration; it does not follow type aliases or build-tag-gated imports.
-// Both of those forms are effectively impossible to use as a production import
-// without also triggering a Go compilation error, so they are acceptable
+// Blind spots: the pattern matches the module-relative path literal from the
+// import declaration; it does not follow type aliases or build-tag-gated
+// imports. Both of those forms are effectively impossible to use as a production
+// import without also triggering a Go compilation error, so they are acceptable
 // non-coverage.
-func isCellTestImportPath(importPath string) bool {
-	return celltestImportPathPattern.MatchString(importPath)
+func isCellTestImportPath(relImportPath string) bool {
+	return celltestImportPathPattern.MatchString(relImportPath)
 }
 
 // celltestScopeIsTestInfraPath reports whether rel (module-relative slash path)
@@ -138,13 +145,14 @@ func celltestScopeCheckFile(root, modPath, f string) ([]Diagnostic, error) {
 	}
 	var diags []Diagnostic
 	for _, imp := range imports {
-		if !strings.HasPrefix(imp, modPath+"/") {
+		relImport, ok := strings.CutPrefix(imp, modPath+"/")
+		if !ok {
 			continue
 		}
-		if isCellTestImportPath(imp) {
+		if isCellTestImportPath(relImport) {
 			diags = append(diags, Diagnostic{
 				Rel:  rel,
-				Line: 1,
+				Line: celltestImportLineOr1(f, imp),
 				Message: fmt.Sprintf(
 					"production file imports %s (cells/*/*test packages are test-infrastructure; "+
 						"only *_test.go or test-infra packages may import them)", imp),
