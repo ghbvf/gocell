@@ -145,7 +145,10 @@ type Subscriber struct {
 	// intentionally NOT used — makeReceive runs in autopaho's read-loop callback,
 	// so wg.Add(1) would race StopIntake's wg.Wait ("Add called concurrently with
 	// Wait" panic). Mirrors adapters/rabbitmq's inflight-counter poll-drain
-	// (waitInflightDrain).
+	// (waitInflightDrain). Every mutation goes through adjustInflight, which also
+	// mirrors the delta to the mqtt_consume_inflight gauge — the atomic feeds the
+	// poll-drain (the gauge value cannot be read back from the Provider), the gauge
+	// feeds observability.
 	inflight atomic.Int64
 
 	// workerSem is a bounded semaphore (cap = config.MaxConcurrentHandlers).
@@ -349,12 +352,12 @@ func (s *Subscriber) makeReceive(subCtx context.Context, handler outbox.Subscrib
 		// so the StopIntake poll-drain can never read a zero count while a delivery
 		// is mid-flight. The decrement is owned by exactly one path: an inline drop
 		// here, or the worker goroutine's defer.
-		s.inflight.Add(1)
+		s.adjustInflight(ctx, 1)
 		select {
 		case <-s.stopIntakeCh:
 			// Intake stopped: do not process or ack. Leaving the message unacked
 			// lets the broker redeliver after session resume / reconnect.
-			s.inflight.Add(-1)
+			s.adjustInflight(ctx, -1)
 			s.logIntakeStoppedDrop(pb)
 			return
 		default:
@@ -367,7 +370,7 @@ func (s *Subscriber) makeReceive(subCtx context.Context, handler outbox.Subscrib
 		select {
 		case s.workerSem <- struct{}{}:
 		case <-s.stopIntakeCh:
-			s.inflight.Add(-1)
+			s.adjustInflight(ctx, -1)
 			s.logIntakeStoppedDrop(pb)
 			return
 		}
@@ -380,11 +383,19 @@ func (s *Subscriber) makeReceive(subCtx context.Context, handler outbox.Subscrib
 		go func() {
 			defer func() {
 				<-s.workerSem
-				s.inflight.Add(-1)
+				s.adjustInflight(deliveryCtx, -1)
 			}()
 			s.processDelivery(deliveryCtx, pb, handler)
 		}()
 	}
+}
+
+// adjustInflight applies delta to the inflight atomic (StopIntake poll-drain
+// source) and mirrors the same delta to the mqtt_consume_inflight gauge. Single
+// call site for both so the atomic and the gauge never diverge.
+func (s *Subscriber) adjustInflight(ctx context.Context, delta int64) {
+	s.inflight.Add(delta)
+	s.collector.AdjustInflight(ctx, delta)
 }
 
 // logIntakeStoppedDrop records that a delivery was dropped (left unacked for
