@@ -69,7 +69,8 @@ func (p *Principal) RowVisibility(ctx context.Context) (tenant.RowVisibility, er
 	// Unreachable: the switch above covers all five PrincipalKind constants.
 	// This satisfies PRINCIPAL-KIND-EXHAUSTIVE-SWITCH-01 — the default branch
 	// is absent, so a new PrincipalKind constant added without a case here will
-	// produce a compile-time exhaustiveness failure in the archtest.
+	// be caught by archtest PRINCIPAL-KIND-EXHAUSTIVE-SWITCH-01 (Medium, nightly
+	// archtest — not compile-time).
 	return tenant.RowVisibility{}, errcode.New(
 		errcode.KindInternal,
 		errcode.ErrInternal,
@@ -87,6 +88,7 @@ func deriveUserRowVisibility(ctx context.Context, p *Principal) (tenant.RowVisib
 			slog.String("actor", p.Subject),
 			slog.String("scope", "all"),
 			slog.String("tenant", p.TenantID),
+			slog.String("reason", "cross_tenant_read"),
 		)
 		return tenant.NewRowVisibility(tenant.RowScopeAll, "")
 	}

@@ -1,16 +1,7 @@
 package auth
 
-// TestPrincipalRowVisibility_DerivationTable and
-// TestPrincipalRowVisibility_SuperAdminMandatoryAudit are RED TDD tests for
-// Principal.RowVisibility — the identity→RowScope narrowing contract added in
-// EPIC #1337 PR-5 (#1343).
-//
-// These tests reference:
-//   - p.RowVisibility(ctx) — method that does NOT exist yet
-//   - RoleSuperAdmin         — const that does NOT exist yet
-//
-// Both references cause a compilation failure, which is the intended RED state.
-// The tests will turn GREEN once the implementation lands.
+// Tests for Principal.RowVisibility — the identity→RowScope narrowing contract
+// added in EPIC #1337 PR-5 (#1343).
 
 import (
 	"context"
@@ -43,7 +34,7 @@ func (h *captureHandler) WithGroup(_ string) slog.Handler      { return h }
 // TestPrincipalRowVisibility_DerivationTable verifies the full derivation table
 // for Principal.RowVisibility across all PrincipalKind values and role combos.
 //
-// Contract (non-existent symbols → compile failure = RED):
+// Derivation rules:
 //
 //	nil receiver                        → error (fail-closed)
 //	PrincipalUser + HasRole(RoleSuperAdmin) → RowScopeAll,   subject ""
@@ -149,11 +140,21 @@ func TestPrincipalRowVisibility_DerivationTable(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			// RowScopeSelf requires a non-empty subject; PrincipalUser with empty
+			// Subject must propagate the NewRowVisibility validation error.
+			name: "non_admin_user_empty_subject_fail_closed",
+			principal: &Principal{
+				Kind:    PrincipalUser,
+				Subject: "",
+				Roles:   nil,
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// RowVisibility does not exist yet — this call is the RED trigger.
 			vis, err := tc.principal.RowVisibility(ctx)
 			if tc.wantErr {
 				if err == nil {
@@ -182,11 +183,12 @@ func TestPrincipalRowVisibility_DerivationTable(t *testing.T) {
 // observable without querying the audit ledger (which the super-admin can
 // themselves read). Omitting the log would create an unobservable privilege path.
 //
-// Keys required on the slog.Error record:
+// Keys required on the slog.Error record (FR-007):
 //
 //	"actor"  = p.Subject
 //	"scope"  = "all"
 //	"tenant" = p.TenantID
+//	"reason" = "cross_tenant_read"
 func TestPrincipalRowVisibility_SuperAdminMandatoryAudit(t *testing.T) {
 	capture := &captureHandler{}
 	prev := slog.Default()
@@ -198,7 +200,7 @@ func TestPrincipalRowVisibility_SuperAdminMandatoryAudit(t *testing.T) {
 	cases := []struct {
 		name      string
 		principal *Principal
-		wantError bool // true = expect ≥1 Error-level record with actor+scope+tenant keys
+		wantError bool // true = expect ≥1 Error-level record with actor+scope+tenant+reason keys
 	}{
 		{
 			name: "superadmin_emits_mandatory_audit",
@@ -207,6 +209,19 @@ func TestPrincipalRowVisibility_SuperAdminMandatoryAudit(t *testing.T) {
 				Subject:  "super-alice",
 				Roles:    []string{RoleSuperAdmin},
 				TenantID: "acme-tenant-id",
+			},
+			wantError: true,
+		},
+		{
+			// Super-admin with empty TenantID (e.g. system-bootstrap context) must
+			// still emit the mandatory FR-007 audit; the audit is unconditional on
+			// the super-admin path regardless of whether TenantID is set.
+			name: "superadmin_empty_tenant_still_audited",
+			principal: &Principal{
+				Kind:     PrincipalUser,
+				Subject:  "super-bootstrap",
+				Roles:    []string{RoleSuperAdmin},
+				TenantID: "", // empty — audit must still fire
 			},
 			wantError: true,
 		},
@@ -242,16 +257,15 @@ func TestPrincipalRowVisibility_SuperAdminMandatoryAudit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			capture.records = capture.records[:0] // reset between sub-tests
 
-			// RowVisibility does not exist yet — RED trigger.
 			_, _ = tc.principal.RowVisibility(ctx) // only testing slog side-effect
 
-			// Count Error-level records with the required keys.
+			// Count Error-level records with all required FR-007 keys.
 			errorCount := 0
 			for _, r := range capture.records {
 				if r.Level != slog.LevelError {
 					continue
 				}
-				hasActor, hasScope, hasTenant := false, false, false
+				hasActor, hasScope, hasTenant, hasReason := false, false, false, false
 				r.Attrs(func(a slog.Attr) bool {
 					switch a.Key {
 					case "actor":
@@ -260,16 +274,18 @@ func TestPrincipalRowVisibility_SuperAdminMandatoryAudit(t *testing.T) {
 						hasScope = true
 					case "tenant":
 						hasTenant = true
+					case "reason":
+						hasReason = true
 					}
 					return true
 				})
-				if hasActor && hasScope && hasTenant {
+				if hasActor && hasScope && hasTenant && hasReason {
 					errorCount++
 				}
 			}
 
 			if tc.wantError && errorCount == 0 {
-				t.Errorf("%s: expected ≥1 slog.Error with keys {actor,scope,tenant}, got 0 matching records (total records: %d)",
+				t.Errorf("%s: expected ≥1 slog.Error with keys {actor,scope,tenant,reason}, got 0 matching records (total records: %d)",
 					tc.name, len(capture.records))
 			}
 			if !tc.wantError && errorCount > 0 {

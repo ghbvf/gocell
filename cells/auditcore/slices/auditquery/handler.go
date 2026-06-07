@@ -71,7 +71,15 @@ func auditTenantFilter(p *auth.Principal, vis tenant.RowVisibility) (string, err
 // logAdminAuditQuery emits an audit-access breadcrumb when an admin queries the
 // ledger (all actors, or a specific other user). Non-admins and admin-self
 // queries are silent. Factored out of List for cognitive-complexity budget.
+//
+// Super-admin access is excluded from this breadcrumb: the mandatory FR-007
+// slog.Error cross-tenant audit is already emitted inside p.RowVisibility before
+// this function is called. Emitting a second admin-breadcrumb would be redundant
+// and confusing (a lower-severity Info record for a higher-privilege event).
 func logAdminAuditQuery(ctx context.Context, p *auth.Principal, subject, actorIDFilter string) {
+	if p.HasRole(auth.RoleSuperAdmin) {
+		return // FR-007 audit already emitted inside p.RowVisibility
+	}
 	if !p.HasRole(auth.RoleAdmin) {
 		return
 	}
@@ -137,7 +145,8 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 	filters := ledger.AuditFilters{
 		// TenantID: set by auditTenantFilter — non-empty for self/device/tenant scopes
 		// (isolation boundary), empty for RowScopeAll (super-admin cross-tenant read,
-		// epic #1337 PR-5). DB-layer RLS (PR-3) is defense-in-depth.
+		// epic #1337 PR-5). Note: audit_entries has NO DB-layer RLS (deferred #1618 —
+		// hash chain is namespace-global; tenant isolation here is app-layer only).
 		TenantID:  tenantID,
 		EventType: req.EventType,
 		// ActorID: admin's explicit actor filter (or empty = all). Non-admin
@@ -237,7 +246,7 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 // tenant), so it is omitted. This replaced the PR-1 (#1339 F2) blanket 403 gate
 // and retired the appender's INV-SINGLE-TENANT-ONLY tripwire (#1289). A principal
 // with an empty tenant is rejected at the List boundary (F1), so the read path is
-// never tenant-unscoped; DB-layer RLS (PR-3) is defense-in-depth.
+// never tenant-unscoped; audit_entries has NO DB-layer RLS (deferred #1618).
 func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 	// Both audit-evidence timestamps use RFC3339Nano: sub-second precision is
 	// part of the evidence (the HMAC chain pins occurred_at/timestamp at nanosecond

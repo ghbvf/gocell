@@ -1,7 +1,7 @@
 // rowscopeall_audit_funnel_test.go — closes the PRODUCER side of the
 // "RowScope=all ⟹ mandatory cross-tenant audit" funnel (epic #1337 PR-5, #1343).
 //
-//   - INVARIANT: ROWSCOPEALL-AUDIT-FUNNEL-01
+// INVARIANT: ROWSCOPEALL-AUDIT-FUNNEL-01
 //
 // # What this guards
 //
@@ -47,7 +47,7 @@
 //     constructor". Same permanent ceiling as CTXKEYS-PRINCIPAL-WRITE-CALLER-01
 //     (#1282) / SPAN-SETATTR-HOLDER-SEAL (#851) / HEALTHZ-HOLDER-SEAL (#893).
 //     The Hard upgrade — a separate sealed all-construction type — is tracked as
-//     a deliberate won't-do-now (gh issue registered with this PR). The
+//     a deliberate won't-do-now at **gh #1760**. The
 //     downstream typed/sealed param + the co-located mandatory audit are the
 //     enforcement.
 //
@@ -58,7 +58,7 @@
 //     NewRowVisibility(s, "")`) is NOT const-resolved and would be missed — the
 //     same non-const-arg ceiling as the saga metric-label funnel. The idiomatic
 //     mint passes the const directly; the reverse fixture proves the direct-const
-//     form is caught and the RowScopeSelf control is not.
+//     form is caught and the RowScopeSelf control is not (tracked at gh #1760).
 //   - Detection is call-based (tenant.NewRowVisibility CallExpr). A second
 //     constructor for RowVisibility would need adding to the scan; today
 //     NewRowVisibility is the sole constructor (sealed — see ROWSCOPE-REPO-PARAM

@@ -10,4 +10,7 @@ const RoleAdmin = "admin"
 // type-foundation constant (same pattern as PrincipalDevice) that allows
 // test-injection and satisfies PRINCIPAL-KIND-EXHAUSTIVE-SWITCH-01 for the
 // super-admin branch in rowscope.go.
+//
+// JWT wire form: the expected value in the JWT "roles" claim is "superadmin"
+// (one word, no separator). This must match the string literal below exactly.
 const RoleSuperAdmin = "superadmin"

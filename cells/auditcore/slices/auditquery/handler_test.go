@@ -49,6 +49,21 @@ func newHandlerStore(t testing.TB) *ledger.MemStore {
 	return store
 }
 
+// testCaptureHandler is a minimal slog.Handler that accumulates every log record.
+// We MUST NOT use slog.NewJSONHandler or slog.NewTextHandler here — both are
+// banned by archtest SLOG-HANDLER-SEALED-FUNNEL-01 outside the logging package.
+type testCaptureHandler struct {
+	records []slog.Record
+}
+
+func (h *testCaptureHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (h *testCaptureHandler) Handle(_ context.Context, r slog.Record) error {
+	h.records = append(h.records, r)
+	return nil
+}
+func (h *testCaptureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *testCaptureHandler) WithGroup(_ string) slog.Handler      { return h }
+
 // auditQueryTestTenant is a canonical tenant UUID for handler tests. auditquery
 // fail-closes on an empty principal tenant (epic #1337 PR-2a, F1), so every
 // handler test that expects to reach the query path must carry a tenant.
@@ -925,12 +940,14 @@ func assertActorBindingCase(t *testing.T, mux *http.ServeMux, tc actorBindingCas
 //	non-admin usrA in tenantA → count 1  (RowScopeSelf, own row only)
 //	admin in tenantA           → count 2  (RowScopeTenant: tenantA + tenant-less; NOT tenantB)
 //	super-admin (any tenant)   → count 3  (RowScopeAll: cross-tenant)
-//
-// This test is RED until:
-//  1. auth.RoleSuperAdmin const is added (compile fails now)
-//  2. handler derives RowVisibility from principal.RowVisibility(ctx) (PR-5)
-//  3. RowScopeAll is supported by ledger stores (PR-5 flips fail-closed → success)
 func TestHandleQuery_RowScopeVisibilityMatrix(t *testing.T) {
+	// Install slog capture to assert FR-007: super-admin cross-tenant access must
+	// emit a slog.Error record; admin and non-admin paths must not.
+	capture := &testCaptureHandler{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(capture))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
 	store := newHandlerStore(t)
 	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
 	require.NoError(t, err)
@@ -992,17 +1009,28 @@ func TestHandleQuery_RowScopeVisibilityMatrix(t *testing.T) {
 		},
 		{
 			// super-admin: RowScopeAll → cross-tenant, sees all 3 entries.
-			// auth.RoleSuperAdmin does not exist yet → this is the RED trigger.
+			// Must also trigger exactly one FR-007 slog.Error audit record.
 			name:      "superadmin_cross_tenant",
 			subject:   "super-sa",
-			roles:     []string{auth.RoleSuperAdmin}, // RED: RoleSuperAdmin undefined
+			roles:     []string{auth.RoleSuperAdmin},
 			tenantID:  auditQueryTestTenant,
 			wantCount: 3,
 		},
 	}
 
+	isSuperAdmin := func(roles []string) bool {
+		for _, r := range roles {
+			if r == auth.RoleSuperAdmin {
+				return true
+			}
+		}
+		return false
+	}
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			capture.records = capture.records[:0] // reset between sub-tests
+
 			p := &auth.Principal{
 				Kind:       auth.PrincipalUser,
 				Subject:    tc.subject,
@@ -1021,6 +1049,42 @@ func TestHandleQuery_RowScopeVisibilityMatrix(t *testing.T) {
 			data, ok := resp["data"].([]any)
 			require.True(t, ok, "tc=%s: data field must be array", tc.name)
 			assert.Len(t, data, tc.wantCount, "tc=%s: wrong row count", tc.name)
+
+			// FR-007: super-admin path must emit exactly one slog.Error cross-tenant
+			// audit record with actor+scope+tenant+reason keys. Non-super-admin paths
+			// must NOT emit an Error-level record matching those keys.
+			errorCount := 0
+			for _, rec := range capture.records {
+				if rec.Level != slog.LevelError {
+					continue
+				}
+				hasActor, hasScope, hasTenant, hasReason := false, false, false, false
+				rec.Attrs(func(a slog.Attr) bool {
+					switch a.Key {
+					case "actor":
+						hasActor = true
+					case "scope":
+						hasScope = true
+					case "tenant":
+						hasTenant = true
+					case "reason":
+						hasReason = true
+					}
+					return true
+				})
+				if hasActor && hasScope && hasTenant && hasReason {
+					errorCount++
+				}
+			}
+
+			wantError := isSuperAdmin(tc.roles)
+			if wantError && errorCount == 0 {
+				t.Errorf("tc=%s: expected FR-007 slog.Error audit record with {actor,scope,tenant,reason}, got 0 (total records: %d)",
+					tc.name, len(capture.records))
+			}
+			if !wantError && errorCount > 0 {
+				t.Errorf("tc=%s: expected no FR-007 Error-level records, got %d", tc.name, errorCount)
+			}
 		})
 	}
 }
