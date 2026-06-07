@@ -1,9 +1,12 @@
 package tailer
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -25,6 +28,9 @@ const (
 	testLockTTL = 30 * time.Second
 	// testLifecycleTimeout bounds Start/Stop lifecycle waits in tests.
 	testLifecycleTimeout = 2 * time.Second
+	// testObserverDeadline is a short observer deadline used (with a real clock) to
+	// exercise the bounded-observer wrapper (TEST-TIME-LITERAL-01: package const).
+	testObserverDeadline = 20 * time.Millisecond
 )
 
 // ── fakes ─────────────────────────────────────────────────────────────────
@@ -46,11 +52,18 @@ func (e *fakeEvent) RestoreContext(ctx context.Context) context.Context { return
 type fakeSource struct {
 	events  []*fakeEvent // sorted ascending by seq
 	headErr error
+	// headOverride, when non-nil, makes Head return a fixed bound below the last
+	// event seq — simulating a moving tail where events are appended after Head is
+	// captured (used to exercise the bounded-drain stop, F2).
+	headOverride *int64
 }
 
 func (s *fakeSource) Head(context.Context) (int64, error) {
 	if s.headErr != nil {
 		return 0, s.headErr
+	}
+	if s.headOverride != nil {
+		return *s.headOverride, nil
 	}
 	if len(s.events) == 0 {
 		return 0, nil
@@ -118,6 +131,32 @@ type fakeTxRunner struct{}
 
 func (fakeTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
 	return fn(ctx)
+}
+
+// acquireErrDriver wraps a FakeDriver and injects a SetNX backend I/O error so
+// distlock.Acquire returns a non-timeout (backend) error — exercising the
+// readiness probe's leader-gate backend dimension (F5). Set err to nil to let
+// acquires succeed again.
+type acquireErrDriver struct {
+	*locktest.FakeDriver
+	mu  sync.Mutex
+	err error
+}
+
+func (d *acquireErrDriver) setErr(err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.err = err
+}
+
+func (d *acquireErrDriver) SetNX(ctx context.Context, key, token string, ttl time.Duration) (bool, error) {
+	d.mu.Lock()
+	e := d.err
+	d.mu.Unlock()
+	if e != nil {
+		return false, e
+	}
+	return d.FakeDriver.SetNX(ctx, key, token, ttl)
 }
 
 // recordingObserver captures observer calls for assertions.
@@ -340,6 +379,13 @@ func TestTailer_ApplyErrorStopsAndReports(t *testing.T) {
 	err := tl.pollOnce(context.Background())
 	if !errors.Is(err, applyErr) {
 		t.Fatalf("pollOnce err = %v, want wraps applyErr", err)
+	}
+	// F7: the apply error carries the event identity + position so a wedged apply
+	// is locatable from the tick log without re-deriving it.
+	for _, want := range []string{"event_id=evt-2", "position=2", "stream=saga.journal.v1"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("apply error %q missing diagnostic %q", err.Error(), want)
+		}
 	}
 	// evt-1 committed before evt-2 failed.
 	off, _ := store.LoadOffset(context.Background(), testCell, testProj)
@@ -655,5 +701,252 @@ func TestTailer_MidDrainCtxCancel(t *testing.T) {
 	off, _ := store.LoadOffset(context.Background(), testCell, testProj)
 	if off != 1 {
 		t.Errorf("checkpoint = %d, want 1 (only evt-1 committed before cancel)", off)
+	}
+}
+
+// TestTailer_DrainAbortsOnLockLoss verifies the lock-aware drain ctx (F1): when
+// the held lock ends mid-drain (here via Orphan — exactly what a Stop handoff
+// issues), the drain ctx is canceled, the in-flight apply observes the
+// cancellation and aborts, and the checkpoint does not advance. distlock is an
+// efficiency lock; aborting here narrows the bounded-duplicate-apply handoff window.
+func TestTailer_DrainAbortsOnLockLoss(t *testing.T) {
+	clk := clockmock.New(time.Unix(1000, 0))
+	src := &fakeSource{events: events(1, 2, 3)}
+	store := projection.NewMemOwnerCheckpointStore()
+
+	var entered sync.Once
+	enteredCh := make(chan struct{})
+	apply := func(applyCtx context.Context, _ projection.ProjectionEvent) error {
+		entered.Do(func() { close(enteredCh) })
+		select {
+		case <-applyCtx.Done():
+			return applyCtx.Err() // drain ctx canceled by lock loss
+		case <-time.After(testLifecycleTimeout):
+			return errors.New("apply not aborted after lock loss")
+		}
+	}
+	tl := newTestTailer(t, src, store, apply, &recordingObserver{}, newTestLocker(t, clk), clk)
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- tl.pollOnce(context.Background()) }()
+
+	<-enteredCh
+	lk := tl.inflightLock.Load()
+	if lk == nil {
+		t.Fatal("inflight lock not registered during drain")
+	}
+	lk.Orphan() // simulate lock loss / Stop handoff
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("pollOnce err = %v, want wraps context.Canceled (drain aborted on lock loss)", err)
+		}
+	case <-time.After(testLifecycleTimeout):
+		t.Fatal("pollOnce did not return after lock loss")
+	}
+	if off, _ := store.LoadOffset(context.Background(), testCell, testProj); off != 0 {
+		t.Errorf("checkpoint = %d, want 0 (no advance after aborted apply)", off)
+	}
+}
+
+// TestTailer_StopOrphansInflightLock verifies Stop hands off an in-flight lock by
+// Orphan (no Release I/O block) rather than waiting on it (F1). White-box: a real
+// held lock is registered as in-flight and the lifecycle is set to a running loop
+// whose goroutine has already exited (done closed), so Stop proceeds through the
+// orphan branch and returns immediately.
+func TestTailer_StopOrphansInflightLock(t *testing.T) {
+	clk := clockmock.New(time.Unix(1000, 0))
+	locker := newTestLocker(t, clk)
+	tl := newTestTailer(t, &fakeSource{}, projection.NewMemOwnerCheckpointStore(),
+		func(context.Context, projection.ProjectionEvent) error { return nil },
+		&recordingObserver{}, locker, clk)
+
+	held, err := locker.Acquire(context.Background(), tl.lockKey, testLockTTL)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	tl.inflightLock.Store(held)
+
+	done := make(chan struct{})
+	close(done)
+	ready := make(chan struct{})
+	close(ready)
+	tl.mu.Lock()
+	tl.done = done
+	tl.readyCh = ready
+	tl.cancel = func() {}
+	tl.mu.Unlock()
+	tl.state.Store(int32(tailerRunning))
+
+	if err := tl.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if cause := held.Cause(); !errors.Is(cause, distlock.ErrLockOrphaned) {
+		t.Errorf("in-flight lock cause = %v, want ErrLockOrphaned (Stop must Orphan, not Release)", cause)
+	}
+}
+
+// TestTailer_DrainBoundedByHead verifies a single drain is bounded by the Head
+// captured at tick start (F2): with events 1..5 but Head pinned to 3, only events
+// ≤ 3 are drained this tick; 4 and 5 are left for the next tick instead of being
+// chased as a moving tail.
+func TestTailer_DrainBoundedByHead(t *testing.T) {
+	clk := clockmock.New(time.Unix(1000, 0))
+	headBound := int64(3)
+	src := &fakeSource{events: events(1, 2, 3, 4, 5), headOverride: &headBound}
+	store := projection.NewMemOwnerCheckpointStore()
+	var applied []string
+	apply := func(_ context.Context, evt projection.ProjectionEvent) error {
+		applied = append(applied, evt.EventID())
+		return nil
+	}
+	obs := &recordingObserver{}
+	tl := newTestTailer(t, src, store, apply, obs, newTestLocker(t, clk), clk)
+
+	if err := tl.pollOnce(context.Background()); err != nil {
+		t.Fatalf("pollOnce: %v", err)
+	}
+	if want := []string{"evt-1", "evt-2", "evt-3"}; fmt.Sprint(applied) != fmt.Sprint(want) {
+		t.Errorf("applied = %v, want %v (bounded at Head=3)", applied, want)
+	}
+	if off, _ := store.LoadOffset(context.Background(), testCell, testProj); off != 3 {
+		t.Errorf("checkpoint = %d, want 3 (bounded at Head)", off)
+	}
+	_, drains, advances, _, _ := obs.snapshot()
+	if len(advances) != 3 {
+		t.Errorf("advances = %v, want 3 (bounded at Head)", advances)
+	}
+	if len(drains) != 1 || drains[0] != DrainOK {
+		t.Errorf("drains = %v, want [ok]", drains)
+	}
+}
+
+// TestTailer_BlockingObserverBounded verifies a blocking observer cannot pin the
+// held-lock drain (F3): safeObserve abandons the call after observerCallDeadline
+// and returns. Uses a real clock + short deadline to avoid fake-timer
+// registration races; the abandoned observer goroutine is released at test end.
+func TestTailer_BlockingObserverBounded(t *testing.T) {
+	tl := newTestTailer(t, &fakeSource{}, projection.NewMemOwnerCheckpointStore(),
+		func(context.Context, projection.ProjectionEvent) error { return nil },
+		&recordingObserver{}, newTestLocker(t, clockmock.New(time.Unix(0, 0))), clock.Real())
+	tl.observerCallDeadline = testObserverDeadline
+
+	release := make(chan struct{})
+	defer close(release) // let the abandoned observer goroutine exit at test end
+	blocked := make(chan struct{})
+	returned := make(chan struct{})
+	go func() {
+		tl.safeObserve(context.Background(), "Blocking", func() {
+			close(blocked)
+			<-release
+		})
+		close(returned)
+	}()
+
+	<-blocked
+	select {
+	case <-returned:
+	case <-time.After(testLifecycleTimeout):
+		t.Fatal("safeObserve did not return after observerCallDeadline despite blocked observer")
+	}
+}
+
+// TestTailer_ProbeFailsOnLockBackendError verifies the readiness probe reflects
+// leader-gate distlock backend health (F5): a backend acquire fault makes a
+// running tailer not-ready (contended would not), and a subsequent successful
+// acquire clears it.
+func TestTailer_ProbeFailsOnLockBackendError(t *testing.T) {
+	clk := clockmock.New(time.Unix(1000, 0))
+	drv := &acquireErrDriver{FakeDriver: locktest.NewFakeDriver()}
+	locker, err := distlock.New(drv, clk)
+	if err != nil {
+		t.Fatalf("distlock.New: %v", err)
+	}
+	tl := newTestTailer(t, &fakeSource{}, projection.NewMemOwnerCheckpointStore(),
+		func(context.Context, projection.ProjectionEvent) error { return nil },
+		&recordingObserver{}, locker, clk)
+	tl.state.Store(int32(tailerRunning)) // probe only reports when running
+
+	// Healthy baseline.
+	if err := tl.checkReady(context.Background()); err != nil {
+		t.Fatalf("baseline checkReady = %v, want nil", err)
+	}
+
+	// Inject a backend acquire fault → tick skips, probe must turn unhealthy.
+	drv.setErr(errors.New("redis down"))
+	if err := tl.pollOnce(context.Background()); err != nil {
+		t.Fatalf("pollOnce with backend error must skip cleanly, got: %v", err)
+	}
+	if tl.lockBackendErrUnixNano.Load() == 0 {
+		t.Fatal("backend error not recorded")
+	}
+	if err := tl.checkReady(context.Background()); err == nil {
+		t.Fatal("checkReady = nil, want unhealthy after leader-gate backend fault")
+	}
+
+	// Backend recovers → next successful acquire clears the fault → probe healthy.
+	drv.setErr(nil)
+	if err := tl.pollOnce(context.Background()); err != nil {
+		t.Fatalf("pollOnce after recovery: %v", err)
+	}
+	if err := tl.checkReady(context.Background()); err != nil {
+		t.Errorf("checkReady = %v, want nil after backend recovery", err)
+	}
+}
+
+// TestTailer_ProbeStaysHealthyOnContention verifies a contended acquire (another
+// replica leads) is NOT treated as a backend fault — the probe stays healthy (F5).
+func TestTailer_ProbeStaysHealthyOnContention(t *testing.T) {
+	clk := clockmock.New(time.Unix(1000, 0))
+	locker := newTestLocker(t, clk)
+	tl := newTestTailer(t, &fakeSource{}, projection.NewMemOwnerCheckpointStore(),
+		func(context.Context, projection.ProjectionEvent) error { return nil },
+		&recordingObserver{}, locker, clk)
+	tl.state.Store(int32(tailerRunning))
+
+	// A competitor holds the lock → acquire is contended, not a backend fault.
+	held, err := locker.Acquire(context.Background(), tl.lockKey, testLockTTL)
+	if err != nil {
+		t.Fatalf("competitor acquire: %v", err)
+	}
+	defer func() { _ = held.Release() }()
+
+	if err := tl.pollOnce(context.Background()); err != nil {
+		t.Fatalf("pollOnce: %v", err)
+	}
+	if tl.lockBackendErrUnixNano.Load() != 0 {
+		t.Error("contended acquire must not record a backend error")
+	}
+	if err := tl.checkReady(context.Background()); err != nil {
+		t.Errorf("checkReady = %v, want nil (contention is normal multi-replica)", err)
+	}
+}
+
+// TestTailer_ObserverPanicRedacted verifies a panicking observer is recovered and
+// its payload is redacted before reaching slog (F8): a secret in the panic value
+// must not appear in the log output.
+func TestTailer_ObserverPanicRedacted(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	tl := newTestTailer(t, &fakeSource{}, projection.NewMemOwnerCheckpointStore(),
+		func(context.Context, projection.ProjectionEvent) error { return nil },
+		&recordingObserver{}, newTestLocker(t, clockmock.New(time.Unix(0, 0))),
+		clockmock.New(time.Unix(0, 0)))
+	tl.logger = logger
+
+	// Panic with a string value so RedactAny's string branch yields a redacted
+	// string that any slog handler renders visibly (an error value would marshal
+	// to {} under a plain JSON handler — secret hidden but no visible marker).
+	tl.safeObserve(context.Background(), "Panicking", func() {
+		panic("token=supersecret123")
+	})
+
+	out := buf.String()
+	if strings.Contains(out, "supersecret123") {
+		t.Errorf("panic log leaked secret: %s", out)
+	}
+	if !strings.Contains(out, "REDACTED") {
+		t.Errorf("panic log not redacted (no REDACTED marker): %s", out)
 	}
 }

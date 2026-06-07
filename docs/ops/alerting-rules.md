@@ -804,9 +804,18 @@ checkpoint 长期不动（`last_success` 时间戳不前进）= tailer 停摆：
     summary: "Saga journal tailer stalled ({{ $labels.cell }}/{{ $labels.projection }})"
     description: |
       No saga-journal tailer tick has succeeded for {{ $labels.cell }}/{{ $labels.projection }}
-      in > 10m. The checkpoint is silently frozen. The second arm (absent()) fires when
-      all tailer pods are down and the gauge series disappears entirely — a comparison on
-      an empty vector yields no samples, so the first arm alone would miss a total outage.
+      in > 10m. The checkpoint is silently frozen.
+      First arm — per-{cell,projection} staleness, including cold/never-succeeded
+      projections: the tailer seeds last_success = start time when it starts (see
+      Tailer.Start), so the {cell,projection} series exists from startup. A projection
+      that has never had a successful tick therefore fires once its age exceeds the
+      threshold — it does not vanish from the series set, so a single cold projection is
+      caught even while other projections keep reporting (the seed is what makes per-label
+      cold detection work; without it a cold projection would have no series). max() by
+      (cell,projection) means one healthy replica keeps the projection green.
+      Second arm (absent()) — coarse backstop only: fires when the gauge disappears
+      ENTIRELY (every replica down / metrics pipeline broken), which the first arm cannot
+      see because a comparison on an empty vector yields no samples.
       Triage: is a tailer pod running and winning the per-projection distlock? See
       saga-runbook.md §"场景 5：投影 tailer 停滞" (HeadSeq vs checkpoint SQL + distlock
       key holder). Cross-check gocell_saga_journal_tailer_drain_total{result} and

@@ -11,6 +11,10 @@ import (
 const (
 	defaultPollInterval = time.Second
 	defaultLeaseTTL     = 30 * time.Second
+	// defaultObserverCallDeadline bounds each Observer method invocation so a
+	// blocking observer cannot pin the held per-projection distlock during a drain
+	// (F3). Matches runtime/saga/executor.DefaultObserverCallDeadline (5s).
+	defaultObserverCallDeadline = 5 * time.Second
 )
 
 // Config tunes the Tailer poll cadence and distlock lease. The Tailer does not

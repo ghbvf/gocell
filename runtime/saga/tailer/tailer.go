@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/healthz"
@@ -16,9 +17,18 @@ import (
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/distlock"
 )
+
+// errStopAtHead is an internal sentinel returned by the drain replay callback to
+// stop replay once the fixed Head bound captured at the start of the tick is
+// reached. It bounds a single drain to (checkpoint, Head] so the tailer cannot
+// chase a moving tail under continuous writes (the ReplaySource pages forward
+// until a short page and would otherwise keep following newly-appended events
+// within one tick). It never escapes drain.
+var errStopAtHead = errors.New("tailer: reached captured head bound")
 
 // compile-time: Tailer is a lifecycle.ManagedResource (bootstrap wires it via
 // WithManagedResource in PR-05) and its own worker.Worker (Start/Stop = the poll
@@ -81,10 +91,11 @@ type Tailer struct {
 	readyProbeName healthz.ProbeName
 
 	// optional (defaulted)
-	clk      clock.Clock
-	logger   *slog.Logger
-	cfg      Config
-	observer Observer
+	clk                  clock.Clock
+	logger               *slog.Logger
+	cfg                  Config
+	observer             Observer
+	observerCallDeadline time.Duration // bounds each Observer call (F3); default defaultObserverCallDeadline
 
 	// lifecycle (mirrors runtime/saga.Coordinator)
 	state   atomic.Int32
@@ -94,8 +105,19 @@ type Tailer struct {
 	readyCh chan struct{}
 	wg      sync.WaitGroup
 
+	// inflightLock holds the per-projection distlock currently held during a drain
+	// (nil when idle). Stop reads it to Orphan a held lock for prompt leader
+	// handoff without blocking on Release I/O (F1).
+	inflightLock atomic.Pointer[distlock.Lock]
+
 	// observability state (read by the readiness probe; atomic, no hot-path lock)
 	lastSuccessUnixNano atomic.Int64
+	// lockBackendErrUnixNano is the unix-nano time of the most recent distlock
+	// acquire that failed with a backend I/O fault (0 = leader-gate backend last
+	// seen reachable). The readiness probe fails while non-zero so a tailer that
+	// cannot reach its leader-gate backend does not report ready (F5). Contended /
+	// ctx-canceled acquires clear it (the backend responded).
+	lockBackendErrUnixNano atomic.Int64
 }
 
 // NewTailer constructs a saga-journal projection Tailer. clk is the mandatory
@@ -147,19 +169,20 @@ func NewTailer(
 			"tailer.NewTailer: cellID and projectionID must be non-empty")
 	}
 	t := &Tailer{
-		replay:       replay,
-		cursor:       cursor,
-		store:        store,
-		txRunner:     txRunner,
-		apply:        apply,
-		locker:       locker,
-		cellID:       cellID,
-		projectionID: projectionID,
-		lockKey:      tailerLockKey(projectionID),
-		clk:          clk,
-		logger:       slog.Default(),
-		cfg:          DefaultConfig(),
-		observer:     NopObserver{},
+		replay:               replay,
+		cursor:               cursor,
+		store:                store,
+		txRunner:             txRunner,
+		apply:                apply,
+		locker:               locker,
+		cellID:               cellID,
+		projectionID:         projectionID,
+		lockKey:              tailerLockKey(projectionID),
+		clk:                  clk,
+		logger:               slog.Default(),
+		cfg:                  DefaultConfig(),
+		observer:             NopObserver{},
+		observerCallDeadline: defaultObserverCallDeadline,
 	}
 	for _, o := range opts {
 		o(t)
@@ -190,24 +213,49 @@ func (t *Tailer) Worker() worker.Worker { return t }
 // LIFO order during phase10 shutdown.
 func (t *Tailer) Close(ctx context.Context) error { return t.Stop(ctx) }
 
-// safeObserve runs an Observer method with panic recovery so a misbehaving
-// observer cannot crash the tail loop. The panic payload is redacted through
-// redaction.RedactAny before reaching slog — same form as the Coordinator's
-// safeObserve (runtime/saga/coordinator.go). Unlike the Coordinator's variant,
-// no deadline timer is added: the Tailer drives a single goroutine and an
-// observer that blocks will only stall that one tick, not hold a per-instance
-// distributed lock.
+// safeObserve runs an Observer method with two layers of fail-closed protection,
+// mirroring runtime/saga.(*Coordinator).safeObserve:
+//
+//  1. Panic recovery: a panicking observer logs Warn (redacted payload) and the
+//     tail loop continues.
+//
+//  2. Bounded wait: the call runs on a fresh goroutine and the caller waits at
+//     most t.observerCallDeadline before logging Warn and returning. Drain-path
+//     observer calls (ObserveDrain / ObserveCheckpointAdvance) execute while the
+//     per-projection distlock is HELD — pollOnce releases the lock only after
+//     drain returns — so a blocking observer would otherwise pin leadership and
+//     stall the drain. The bound caps that to one deadline window (F3).
+//
+// A leaked observer goroutine may run indefinitely (Go cannot kill a goroutine);
+// this is bounded by Observer impl quality — the Observer contract requires
+// non-blocking methods.
 func (t *Tailer) safeObserve(ctx context.Context, method string, call func()) {
-	defer t.recoverObserverPanic(ctx, method)
-	call()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer t.recoverObserverPanic(ctx, method)
+		call()
+	}()
+	timer := t.clk.NewTimerAt(t.clk.Now().Add(t.observerCallDeadline))
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C():
+		t.logger.WarnContext(ctx, "saga journal tailer: observer call exceeded deadline; continuing",
+			slog.String("method", method),
+			slog.Duration("deadline", t.observerCallDeadline))
+	}
 }
 
 // recoverObserverPanic is the shared recover handler for Tailer observer calls.
+// The panic payload is redacted through redaction.RedactAny before reaching slog
+// so a panic value carrying user data does not leak into operator logs — same
+// form as runtime/saga.(*Coordinator).recoverObserverPanic.
 func (t *Tailer) recoverObserverPanic(ctx context.Context, method string) {
 	if r := recover(); r != nil {
 		t.logger.WarnContext(ctx, "saga journal tailer: observer call panicked, ignoring",
 			slog.String("method", method),
-			slog.Any("panic", r))
+			slog.Any("panic", redaction.RedactAny(r)))
 	}
 }
 
@@ -249,6 +297,16 @@ func (t *Tailer) Start(ctx context.Context) error {
 		slog.String("cell", t.cellID),
 		slog.String("projection", t.projectionID),
 		slog.Duration("lease_ttl", t.cfg.LeaseTTL))
+
+	// Seed the last-success-timestamp series for this {cell,projection} at start
+	// (baseline = start time) so a never-succeeding projection is detectable
+	// per-label: the stalled-tailer alert's first arm fires once start age exceeds
+	// its threshold. Without the seed the series only appears on the first
+	// successful tick, so a cold {cell,projection} would have no series and could
+	// only be caught by a global absent() that cannot pin a single projection (F6).
+	t.safeObserve(ctx, "ObserveLastSuccess", func() {
+		t.observer.ObserveLastSuccess(ctx, t.projectionID, t.clk.Now())
+	})
 
 	defer func() {
 		t.wg.Wait()
@@ -293,6 +351,16 @@ func (t *Tailer) Stop(ctx context.Context) error {
 	}
 
 	t.state.Store(int32(tailerStopping))
+	// Orphan any in-flight lock BEFORE canceling so a graceful Stop hands off
+	// leadership promptly: Orphan stops renewal without a Release RPC (never blocks
+	// on backend reachability) and closes the lock's Done() channel, which the
+	// drain's lock-aware ctx observes to abort apply/advance immediately. pollOnce's
+	// subsequent lock.Release() then becomes a no-op (Orphan won the shared
+	// sync.Once). The deposed leader stops renewing; the competitor takes over on
+	// the lease TTL (F1).
+	if lk := t.inflightLock.Load(); lk != nil {
+		lk.Orphan()
+	}
 	if cancel != nil {
 		cancel()
 	}
@@ -347,17 +415,33 @@ func (t *Tailer) pollOnce(ctx context.Context) error {
 	lock, err := t.locker.Acquire(ctx, t.lockKey, t.cfg.LeaseTTL)
 	if err != nil {
 		reason := classifyLockSkip(err)
+		t.recordLockAcquireOutcome(reason)
 		t.safeObserve(ctx, "ObserveLockAcquire", func() {
 			t.observer.ObserveLockAcquire(ctx, t.projectionID, reason)
 		})
 		return nil // skip this tick — no drain without leadership
 	}
+	t.lockBackendErrUnixNano.Store(0) // acquire succeeded → leader-gate backend reachable (F5)
+	t.inflightLock.Store(lock)
+	defer t.inflightLock.Store(nil)
+
 	ownerToken, err := idutil.NewUUID()
 	if err != nil {
 		_ = lock.Release()
 		return fmt.Errorf("tailer: mint owner token: %w", err)
 	}
-	drainErr := t.drain(ctx, ownerToken)
+
+	// Derive a lock-aware drain ctx: abort the drain (stop applying/advancing) the
+	// moment the held lock ends — renewal failure (ErrLockLost) or a Stop-issued
+	// Orphan — so a deposed leader does not keep mutating the projection during a
+	// handoff window. distlock is an efficiency lock, not the correctness boundary
+	// (the AdvanceIfOwner CAS fences checkpoint regression); aborting here narrows
+	// the bounded-duplicate-apply window per ADR D5(b) (F1).
+	drainCtx, cancelDrain := context.WithCancel(ctx)
+	defer cancelDrain()
+	go t.watchLock(drainCtx, lock, cancelDrain)
+
+	drainErr := t.drain(drainCtx, ownerToken)
 	if rerr := lock.Release(); rerr != nil {
 		t.logger.WarnContext(ctx, "saga journal tailer: distlock release failed",
 			slog.String("lock_key", t.lockKey), slog.Any("error", rerr))
@@ -369,51 +453,95 @@ func (t *Tailer) pollOnce(ctx context.Context) error {
 	return nil
 }
 
-// drain replays (checkpoint, Head] and commits each event via commitEvent. A
-// stale-owner rejection (deposed leader fenced) ends the drain benignly.
+// watchLock cancels the drain ctx when the held lock ends (renewal failure or a
+// Stop-issued Orphan). It exits when the drain finishes (drainCtx canceled by
+// pollOnce's deferred cancel), so it never outlives a tick.
+func (t *Tailer) watchLock(drainCtx context.Context, lock *distlock.Lock, cancelDrain context.CancelFunc) {
+	select {
+	case <-lock.Done():
+		cancelDrain()
+	case <-drainCtx.Done():
+	}
+}
+
+// recordLockAcquireOutcome tracks leader-gate backend health for the readiness
+// probe (F5). A backend I/O fault stamps the failure time; contended (another
+// holder) and ctx-canceled (shutdown) acquires prove the backend responded and
+// clear the stamp. A successful acquire also clears it (see pollOnce).
+func (t *Tailer) recordLockAcquireOutcome(reason LockAcquireResult) {
+	if reason == LockBackendError {
+		t.lockBackendErrUnixNano.Store(t.clk.Now().UnixNano())
+		return
+	}
+	t.lockBackendErrUnixNano.Store(0)
+}
+
+// drain replays (checkpoint, Head] and commits each event via commitEvent, where
+// Head is a FIXED upper bound captured once at the start of the drain. Bounding
+// the range stops a single tick from chasing a moving tail under continuous
+// writes: the ReplaySource pages forward until a short page, so without a fixed
+// bound a high-write-rate journal could keep an open-ended drain following
+// newly-appended events indefinitely within one tick. Events appended after Head
+// are left for the next tick (F2). A stale-owner rejection (deposed leader
+// fenced) ends the drain benignly.
 func (t *Tailer) drain(ctx context.Context, ownerToken string) error {
+	head, err := t.replay.Head(ctx)
+	if err != nil {
+		t.observeDrain(ctx, DrainStoreError)
+		return fmt.Errorf("tailer drain: head: %w", err)
+	}
 	checkpoint, err := t.store.LoadOffset(ctx, t.cellID, t.projectionID)
 	if err != nil {
-		t.safeObserve(ctx, "ObserveDrain", func() {
-			t.observer.ObserveDrain(ctx, t.projectionID, DrainStoreError)
-		})
+		t.observeDrain(ctx, DrainStoreError)
 		return fmt.Errorf("tailer drain: load checkpoint: %w", err)
 	}
 	drained := 0
 	replayErr := t.replay.Replay(ctx, checkpoint, func(evt projection.ProjectionEvent) error {
-		return t.commitEvent(ctx, ownerToken, evt, &drained)
-	})
-	if replayErr != nil {
-		if errors.Is(replayErr, projection.ErrStaleOwner) {
-			return nil // deposed leader fenced — benign handoff, not a tick error
+		pos, perr := t.cursor.Position(evt)
+		if perr != nil {
+			return fmt.Errorf("tailer drain: cursor position: %w", perr)
 		}
-		t.safeObserve(ctx, "ObserveDrain", func() {
-			t.observer.ObserveDrain(ctx, t.projectionID, DrainApplyError)
-		})
+		if pos > head {
+			return errStopAtHead // bounded drain reached the captured Head — stop this tick
+		}
+		return t.commitEvent(ctx, ownerToken, evt, pos, &drained)
+	})
+	switch {
+	case replayErr == nil, errors.Is(replayErr, errStopAtHead):
+		// clean drain or benign bounded stop — fall through to the success path.
+	case errors.Is(replayErr, projection.ErrStaleOwner):
+		return nil // deposed leader fenced — benign handoff, not a tick error
+	default:
+		t.observeDrain(ctx, DrainApplyError)
 		return fmt.Errorf("tailer drain: replay: %w", replayErr)
 	}
 	if drained > 0 {
-		t.safeObserve(ctx, "ObserveDrain", func() {
-			t.observer.ObserveDrain(ctx, t.projectionID, DrainOK)
-		})
+		t.observeDrain(ctx, DrainOK)
 	}
 	return nil
 }
 
+// observeDrain reports a drain outcome through the bounded observer funnel.
+func (t *Tailer) observeDrain(ctx context.Context, result DrainResult) {
+	t.safeObserve(ctx, "ObserveDrain", func() {
+		t.observer.ObserveDrain(ctx, t.projectionID, result)
+	})
+}
+
 // commitEvent is the SOLE sanctioned caller of OwnerCheckpointStore.AdvanceIfOwner
-// (SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01). It applies one event and advances
-// the fenced checkpoint in the SAME transaction so apply+advance commit
-// atomically (exactly-once within an owner, D5(a); PROJECTION-CHECKPOINT-TX-BOUND-01).
-func (t *Tailer) commitEvent(ctx context.Context, ownerToken string, evt projection.ProjectionEvent, drained *int) error {
-	pos, err := t.cursor.Position(evt)
-	if err != nil {
-		return fmt.Errorf("tailer commit: cursor position: %w", err)
-	}
+// (SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01). It applies one event at the
+// already-resolved cursor position pos and advances the fenced checkpoint in the
+// SAME transaction so apply+advance commit atomically (exactly-once within an
+// owner, D5(a); PROJECTION-CHECKPOINT-TX-BOUND-01).
+func (t *Tailer) commitEvent(ctx context.Context, ownerToken string, evt projection.ProjectionEvent, pos int64, drained *int) error {
 	reachedAdvance := false
 	txErr := t.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		applyCtx := evt.RestoreContext(txCtx)
 		if e := t.apply(applyCtx, evt); e != nil {
-			return e
+			// Carry the event identity + position so a wedged apply is locatable
+			// from the tick-error log without re-deriving it (F7).
+			return fmt.Errorf("tailer commit: apply event_id=%s stream=%s position=%d: %w",
+				evt.EventID(), evt.Stream(), pos, e)
 		}
 		reachedAdvance = true // the next call is the AdvanceIfOwner — failures past here are advance faults
 		return t.store.AdvanceIfOwner(txCtx, t.cellID, t.projectionID, ownerToken, pos)

@@ -2579,22 +2579,39 @@ func CheckSagaMetricLabelValuesFrozen(t *testing.T, cfg ConfigForExternalCell) [
 
 // ─── SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01 helpers ───────────────────────
 
-// sagaTailerAdvancerSanctionedCallers is the set of (recv type name, method name)
-// pairs sanctioned to call OwnerCheckpointStore.AdvanceIfOwner.
-// The sole production sanctioned caller is (*Tailer).commitEvent.
-var sagaTailerAdvancerSanctionedCallers = map[[2]string]bool{
-	{sagaTailerTypeName, sagaTailerCommitEventMethodName}: true,
+// sagaTailerAdvancerSanctionedCallers is the set of (pkgPath, recv type name,
+// method name) triples sanctioned to call OwnerCheckpointStore.AdvanceIfOwner.
+// The sole runtime caller is (*Tailer).commitEvent in runtime/saga/tailer. The
+// key is package-qualified so a same-named type/method in another package cannot
+// inherit the exemption (the scan is repo-wide, see scanSagaTailerAdvancerCallers).
+var sagaTailerAdvancerSanctionedCallers = map[[3]string]bool{
+	{sagaTailerPkg, sagaTailerTypeName, sagaTailerCommitEventMethodName}: true,
 }
 
-// scanSagaTailerAdvancerCallers scans all FuncDecls in pkg (runtime/saga/tailer)
-// and reports any call to OwnerCheckpointStore.AdvanceIfOwner that is NOT
-// enclosed in a sanctioned FuncDecl. It uses EachInSubtree to descend into
-// FuncLit closures so that the call inside commitEvent's RunInTx closure is
-// properly attributed to commitEvent.
+// sagaTailerAdvancerExemptPkgs lists test-support packages whose whole purpose is
+// to exercise AdvanceIfOwner (conformance suites). They are not runtime callers
+// and are excluded from the funnel; a new entry here is a deliberate review
+// checkpoint. _test.go files are skipped separately inside the scan.
+var sagaTailerAdvancerExemptPkgs = map[string]bool{
+	sagaKernelProjectionPkg + "/projectiontest": true, // RunOwnerCheckpointConformance
+}
+
+// scanSagaTailerAdvancerCallers scans the FuncDecls of one production package and
+// reports any call to OwnerCheckpointStore.AdvanceIfOwner that is NOT enclosed in
+// a sanctioned FuncDecl. It runs over the WHOLE production tree (the caller wires
+// Production scope), not just runtime/saga/tailer, so a different package that
+// holds an OwnerCheckpointStore and advances the checkpoint directly is caught —
+// the rule's declared scope (repo-wide runtime production) now matches its
+// execution scope (F4). It uses EachInSubtree to descend into FuncLit closures so
+// that the call inside commitEvent's RunInTx closure is attributed to commitEvent.
 func scanSagaTailerAdvancerCallers(p *Pass) []Diagnostic { //nolint:gocognit,cyclop,lll // archtest: EachInSubtree into FuncLit closures for attribution + receiver-key + go/types callee resolution; inherent to caller-allowlist with closure descent (same as scanConstructorNilGuards / scanSagaEnumLabelAssignments)
-	if p.TypesInfo == nil || p.Pkg == nil || p.Pkg.Path() != sagaTailerPkg {
+	if p.TypesInfo == nil || p.Pkg == nil {
 		return nil
 	}
+	if sagaTailerAdvancerExemptPkgs[p.Pkg.Path()] {
+		return nil // conformance/test-support package — exercises AdvanceIfOwner by design
+	}
+	pkgPath := p.Pkg.Path()
 	info := p.TypesInfo
 	var diags []Diagnostic
 	for _, file := range p.Files {
@@ -2606,7 +2623,7 @@ func scanSagaTailerAdvancerCallers(p *Pass) []Diagnostic { //nolint:gocognit,cyc
 			if !ok || fd.Body == nil {
 				continue
 			}
-			// Determine the enclosing method key: (recvTypeName, funcName).
+			// Determine the enclosing method key: (pkgPath, recvTypeName, funcName).
 			recvName := ""
 			if fd.Recv != nil && len(fd.Recv.List) == 1 {
 				t := fd.Recv.List[0].Type
@@ -2618,7 +2635,7 @@ func scanSagaTailerAdvancerCallers(p *Pass) []Diagnostic { //nolint:gocognit,cyc
 					recvName = id.Name
 				}
 			}
-			funcKey := [2]string{recvName, fd.Name.Name}
+			funcKey := [3]string{pkgPath, recvName, fd.Name.Name}
 			// EachInSubtree descends into FuncLit closures, attributing all calls
 			// (including those inside RunInTx closures) to this FuncDecl.
 			EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
@@ -2649,8 +2666,8 @@ func scanSagaTailerAdvancerCallers(p *Pass) []Diagnostic { //nolint:gocognit,cyc
 					Rel:  rel,
 					Line: p.Fset.Position(call.Pos()).Line,
 					Message: sagaTailerAdvancerRuleID + ": AdvanceIfOwner called from unsanctioned function " +
-						"(" + funcKey[0] + ")." + funcKey[1] +
-						" — only (*Tailer).commitEvent may call AdvanceIfOwner; " +
+						pkgPath + ".(" + funcKey[1] + ")." + funcKey[2] +
+						" — only (*Tailer).commitEvent (runtime/saga/tailer) may call AdvanceIfOwner; " +
 						"route checkpoint advances through commitEvent",
 				})
 			})
@@ -2662,14 +2679,22 @@ func scanSagaTailerAdvancerCallers(p *Pass) []Diagnostic { //nolint:gocognit,cyc
 // CheckSagaTailerCheckpointAdvancerCaller is the importable form of
 // SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01.
 //
-// Locks OwnerCheckpointStore.AdvanceIfOwner so that the sole production
-// callsite is (*Tailer).commitEvent in runtime/saga/tailer. EachInSubtree is
-// used to descend into FuncLit closures (the actual call is inside a RunInTx
-// closure), attributing enclosed calls to the enclosing FuncDecl.
+// Locks OwnerCheckpointStore.AdvanceIfOwner so that the sole runtime callsite is
+// (*Tailer).commitEvent in runtime/saga/tailer. The scan runs over the WHOLE
+// production tree (Production scope), so a different production package that holds
+// an OwnerCheckpointStore and advances the checkpoint directly is caught — the
+// declared scope (repo-wide runtime production) now matches the execution scope
+// (F4; the previous form scanned only runtime/saga/tailer). EachInSubtree
+// descends into FuncLit closures (the actual call is inside a RunInTx closure),
+// attributing enclosed calls to the enclosing FuncDecl. Test-support packages
+// whose purpose is to exercise the method (conformance suites) are excluded via
+// sagaTailerAdvancerExemptPkgs; _test.go files are skipped inside the scan.
 //
 // AI-robust rating:
 //   - Downstream Hard: go/types caller-allowlist — pkg path + method identity
-//     resolved via info.ObjectOf; import alias cannot bypass pkg path check.
+//     resolved via info.ObjectOf; import alias cannot bypass the pkg path check;
+//     the package-qualified sanctioned-caller key means a same-named type/method
+//     in another package cannot inherit the exemption.
 //   - Upstream Medium: Go visibility ceiling — AdvanceIfOwner is a public method
 //     on a public interface; Go cannot prevent non-Tailer types from holding an
 //     OwnerCheckpointStore and calling AdvanceIfOwner directly. Hard upgrade path:
@@ -2681,7 +2706,7 @@ func CheckSagaTailerCheckpointAdvancerCaller(t *testing.T, cfg ConfigForExternal
 	t.Helper()
 	_ = cfg
 	var out []Diagnostic
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/saga/tailer/..."}), func(p *Pass) []Diagnostic {
+	Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		out = append(out, scanSagaTailerAdvancerCallers(p)...)
 		return nil
 	})

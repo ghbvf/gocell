@@ -10,7 +10,8 @@ import (
 
 // Probes implements lifecycle.ManagedResource. There is a SINGLE readiness probe
 // "<cell>_saga_tailer_<proj>_ready" (dependency availability: the Tailer is
-// running AND journal/checkpoint storage is reachable). Replay lag is exposed as
+// running AND the leader-gate distlock backend AND journal/checkpoint storage are
+// reachable — all three are required to make forward progress). Replay lag is exposed as
 // a metric gauge (Observer.ObserveLag), not a second probe — mirroring the
 // metric/probe split in ADR 202606051200-1609 §4.3. The probe name is validated
 // and cached at construction (NewTailer), so this method cannot fail.
@@ -19,8 +20,14 @@ func (t *Tailer) Probes() []healthz.Probe {
 }
 
 // checkReady is the readiness probe check: not-ready while stopped/starting/
-// stopping; when running, unhealthy if journal/checkpoint storage is unreachable
-// (computePending exercises both replay.Head and store.LoadOffset).
+// stopping; when running, unhealthy if EITHER (a) the leader-gate distlock
+// backend was unreachable on the most recent acquire, or (b) journal/checkpoint
+// storage is unreachable (computePending exercises both replay.Head and
+// store.LoadOffset). Covering the distlock backend (a) is required because a
+// drain never runs without first acquiring the lock: a backend fault makes the
+// tick a silent no-op, so a probe that only checked storage reachability would
+// report ready while the projection cannot advance (F5). A contended acquire
+// (another replica leads) is NOT a fault and keeps the probe healthy.
 func (t *Tailer) checkReady(ctx context.Context) error {
 	switch tailerState(t.state.Load()) {
 	case tailerStopped:
@@ -29,6 +36,11 @@ func (t *Tailer) checkReady(ctx context.Context) error {
 		return notReady("starting")
 	case tailerStopping:
 		return notReady("stopping")
+	}
+	if t.lockBackendErrUnixNano.Load() != 0 {
+		return errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable,
+			"tailer.probe: leader-gate distlock backend unreachable",
+			errcode.WithInternal(errcode.InternalAttr("reason", "lock_acquire_backend_error")))
 	}
 	if _, err := t.computePending(ctx); err != nil {
 		return errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable,

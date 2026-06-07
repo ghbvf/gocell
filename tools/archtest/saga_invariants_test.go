@@ -1134,7 +1134,11 @@ func TestSagaGlobalReaderConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t 
 //   - Downstream Hard: go/types caller-allowlist — method identity resolved via
 //     info.ObjectOf (pkg path == kernel/projection + method name == AdvanceIfOwner).
 //     EachInSubtree descends into FuncLit closures attributing enclosed calls to
-//     the enclosing FuncDecl; import alias cannot bypass pkg path check.
+//     the enclosing FuncDecl; import alias cannot bypass pkg path check. The scan
+//     runs over the WHOLE production tree (Production scope) with a
+//     package-qualified sanctioned-caller key, so a same-named type/method in
+//     another package cannot inherit the exemption (F4 — the prior form scanned
+//     only runtime/saga/tailer, leaving the declared repo-wide scope unenforced).
 //   - Upstream Medium: Go visibility ceiling — AdvanceIfOwner is a public method
 //     on a public interface; Go cannot prevent non-Tailer types from holding an
 //     OwnerCheckpointStore and calling AdvanceIfOwner directly. Hard upgrade path:
@@ -1143,18 +1147,23 @@ func TestSagaGlobalReaderConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t 
 //
 // # Sanctioned callers
 //
-// Exactly one production callsite is sanctioned:
+// Exactly one runtime callsite is sanctioned:
 //
 //   - (*Tailer).commitEvent in runtime/saga/tailer/tailer.go — the call is
 //     inside a RunInTx FuncLit closure; EachInSubtree attributes it to the
 //     enclosing commitEvent FuncDecl.
 //
+// Test-support packages whose purpose is to exercise the method (conformance
+// suites — kernel/projection/projectiontest) are excluded via
+// sagaTailerAdvancerExemptPkgs; a new entry there is a deliberate review
+// checkpoint. _test.go files are skipped inside the scan.
+//
 // # Blind-spot catalog
 //
-//   - B1 (cross-package helper): a helper package outside runtime/saga/tailer
-//     that holds an OwnerCheckpointStore and calls AdvanceIfOwner is not
-//     scanned. Mitigation: production wiring only provides OwnerCheckpointStore
-//     to the Tailer; no other package holds the interface today.
+//   - B1 (cross-package helper) — CLOSED (F4): the scan now covers the whole
+//     production tree, so a helper package outside runtime/saga/tailer that holds
+//     an OwnerCheckpointStore and calls AdvanceIfOwner IS flagged (verified by the
+//     RED fixture, which runs the real scanner over a non-tailer fixture package).
 //   - B2 (reflect/interface-forwarding): a struct embedding OwnerCheckpointStore
 //     that is used to forward AdvanceIfOwner to an inner field. Not a current
 //     production pattern; the embed would appear as a method call on the wrapper
@@ -1218,9 +1227,13 @@ func TestSagaTailerCheckpointAdvancerCaller_NonVacuity(t *testing.T) {
 
 // TestSagaTailerCheckpointAdvancerCaller_REDFixture loads the synthetic
 // sagataileradvancerfixture package (//go:build archtest_fixture) and asserts the
-// detector fires exactly once on the unsanctioned AdvanceIfOwner call in
+// REAL detector (scanSagaTailerAdvancerCallers — the same scanner the production
+// check runs) fires on the unsanctioned AdvanceIfOwner call in
 // (*badCaller).illegalAdvance. The fixture is gated by the archtest_fixture build
 // tag so it is never visible in normal production builds or the production scan.
+// Running the real scanner (not an inline copy) is what makes this RED fixture
+// meaningful: it proves the production entrypoint catches a cross-package bypass,
+// closing the F4 scope-mismatch gap where the scanner was tailer-package-local.
 func TestSagaTailerCheckpointAdvancerCaller_REDFixture(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -1228,63 +1241,18 @@ func TestSagaTailerCheckpointAdvancerCaller_REDFixture(t *testing.T) {
 	}
 
 	const fixturePkg = "./tools/archtest/internal/sagataileradvancerfixture/..."
-	// The fixture is not in runtime/saga/tailer, so we run an inline version
-	// of the detector that does NOT guard on the package path.
+	// kernel/projection is loaded alongside the fixture so go/types can resolve
+	// OwnerCheckpointStore.AdvanceIfOwner; the fixture pkg is not in the exempt
+	// set and not _test.go, so the real scanner flags (*badCaller).illegalAdvance.
 	var diags []Diagnostic
 	Run(t, Fixture(FixtureOpts{Tests: false}, []string{fixturePkg, "./kernel/projection/..."}),
 		func(p *Pass) []Diagnostic {
-			if p.TypesInfo == nil || p.Pkg == nil {
-				return nil
-			}
-			info := p.TypesInfo
-			for _, file := range p.Files {
-				if strings.HasSuffix(p.Rel(file), "_test.go") {
-					continue
-				}
-				for _, decl := range file.Decls {
-					fd, ok := decl.(*ast.FuncDecl)
-					if !ok || fd.Body == nil {
-						continue
-					}
-					recvName := ""
-					if fd.Recv != nil && len(fd.Recv.List) == 1 {
-						recv := fd.Recv.List[0].Type
-						if star, ok2 := recv.(*ast.StarExpr); ok2 {
-							if id, ok3 := star.X.(*ast.Ident); ok3 {
-								recvName = id.Name
-							}
-						} else if id, ok2 := recv.(*ast.Ident); ok2 {
-							recvName = id.Name
-						}
-					}
-					funcKey := [2]string{recvName, fd.Name.Name}
-					EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
-						sel, ok := call.Fun.(*ast.SelectorExpr)
-						if !ok || sel.Sel.Name != sagaAdvanceIfOwnerMethodName {
-							return
-						}
-						obj := info.ObjectOf(sel.Sel)
-						if obj == nil || obj.Pkg() == nil || obj.Pkg().Path() != sagaKernelProjectionPkg {
-							return
-						}
-						if sagaTailerAdvancerSanctionedCallers[funcKey] {
-							return
-						}
-						rel := p.Rel(file)
-						diags = append(diags, Diagnostic{
-							Rel:  rel,
-							Line: p.Fset.Position(call.Pos()).Line,
-							Message: sagaTailerAdvancerRuleID + ": AdvanceIfOwner called from unsanctioned function " +
-								"(" + funcKey[0] + ")." + funcKey[1],
-						})
-					})
-				}
-			}
+			diags = append(diags, scanSagaTailerAdvancerCallers(p)...)
 			return nil
 		})
 
 	assert.GreaterOrEqual(t, len(diags), 1,
-		"REDFixture: the tailer advancer caller detector must flag the "+
+		"REDFixture: the real scanSagaTailerAdvancerCallers must flag the "+
 			"unsanctioned AdvanceIfOwner call in (*badCaller).illegalAdvance")
 }
 

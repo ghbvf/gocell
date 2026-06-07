@@ -8,11 +8,14 @@ import (
 // Observer is the saga-journal Tailer's best-effort observability sink (metrics
 // counters + gauges). It mirrors the runtime/saga/executor.Observer convention:
 // all methods MUST be non-blocking, tolerate canceled contexts, and be safe for
-// concurrent use — they are called on the tail hot path and must never affect
-// drain correctness. A misbehaving observer that panics is caught by the
-// Tailer's safeObserve wrapper: the panic is logged as Warn and the tail loop
-// continues. Keep implementations trivial (atomic instrument increments) to
-// avoid blocking the single-goroutine drain.
+// concurrent use — they are called on the tail hot path (some while the
+// per-projection distlock is HELD) and must never affect drain correctness. A
+// misbehaving observer is contained by the Tailer's safeObserve wrapper: a panic
+// is recovered and logged as Warn (payload redacted), and a call that blocks past
+// observerCallDeadline is abandoned (logged as Warn) so it cannot pin the held
+// lock or stall the drain. The abandoned call's goroutine still runs until the
+// observer returns, so implementations MUST stay non-blocking. Keep them trivial
+// (atomic instrument increments).
 //
 // projectionID is the bounded label dimension (assembly-enumerated, like the
 // HTTP/saga cell label). Per-event identities (event id, owner token) are NOT
