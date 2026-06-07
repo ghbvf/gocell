@@ -16,6 +16,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
@@ -38,8 +39,15 @@ type mockAuthorizer struct {
 	err     error
 }
 
-func (a *mockAuthorizer) Authorize(_ context.Context, _, _, _ string) (bool, error) {
-	return a.allowed, a.err
+func (a *mockAuthorizer) Authorize(_ context.Context, _, _, _ string) (authz.Decision, error) {
+	if a.err != nil {
+		return authz.Decision{}, a.err
+	}
+	if a.allowed {
+		dec, err := authz.Allow(authz.Obligations{})
+		return dec, err
+	}
+	return authz.Deny("test: not allowed"), nil
 }
 
 func TestAuthMiddleware_ValidToken(t *testing.T) {
