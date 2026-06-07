@@ -9,12 +9,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
@@ -29,6 +31,22 @@ import (
 func ledgerTestVis() tenant.RowVisibility {
 	vis, _ := tenant.NewRowVisibility(tenant.RowScopeTenant, "")
 	return vis
+}
+
+// sysEntry builds a NewEntryFixture forced onto the "" system chain
+// (tenant_id=""). These PG chain-mechanics tests (restart / sub-range /
+// advisory-lock / cross-pool / ambient-read / trace round-trip) are
+// tenant-agnostic, so seeding the "" chain lets unscoped Tail/Verify/GetBySeq
+// reads (and Query with an empty tenant) target the same chain without
+// per-tenant scope plumbing — scoped reads on PG would otherwise require a
+// tenant-scoped RunInTx (the pool's scope-outside-RunInTx defense, #1618).
+// Per-tenant isolation itself is covered by the conformance suite + the
+// restricted-role audit_rls_integration_test.go.
+func sysEntry(t *testing.T, eventID, eventType, actorID string, now time.Time) *ledger.Entry {
+	t.Helper()
+	e := storetest.NewEntryFixture(t, eventID, eventType, actorID, now)
+	e.TenantID = ""
+	return e
 }
 
 // newTestLedgerProtocol constructs a Protocol for the "auditcore" namespace used
@@ -78,7 +96,7 @@ func newIsolatedLedgerStore(
 func TestAuditLedgerStore_StoretestSuite(t *testing.T) {
 	protocol := storetest.NewTestProtocol(t)
 
-	factory := storetest.Factory(func(t *testing.T) (ledger.Store, *clockmock.FakeClock, func()) {
+	factory := storetest.Factory(func(t *testing.T) (ledger.Store, persistence.TxRunner, *clockmock.FakeClock, func()) {
 		t.Helper()
 		fc := clockmock.New(storetest.EpochAnchor())
 
@@ -88,7 +106,7 @@ func TestAuditLedgerStore_StoretestSuite(t *testing.T) {
 		require.NoError(t, err)
 
 		cleanupFn := func() { _ = p.Close(context.Background()) }
-		return store, fc, cleanupFn
+		return store, txm, fc, cleanupFn
 	})
 
 	storetest.Run(t, factory, protocol)
@@ -113,7 +131,7 @@ func FuzzAuditLedgerStore_EntryRoundTrip(f *testing.F) {
 		f.Fatalf("NewLedgerStore: %v", err)
 	}
 
-	storetest.RunEntryRoundTripFuzz(f, store, protocol)
+	storetest.RunEntryRoundTripFuzz(f, store, protocol, txm)
 }
 
 // ---------------------------------------------------------------------------
@@ -147,7 +165,7 @@ func TestAuditLedgerStore_RestartRecovery_AcrossPool(t *testing.T) {
 
 	const nFirst = 5
 	for i := 1; i <= nFirst; i++ {
-		e := storetest.NewEntryFixture(t,
+		e := sysEntry(t,
 			fmt.Sprintf("restart-evt-a-%d", i),
 			"restart.test", "actor", fcA.Now())
 		require.NoError(t, storeA.Append(ctx, e), "storeA Append %d", i)
@@ -174,7 +192,7 @@ func TestAuditLedgerStore_RestartRecovery_AcrossPool(t *testing.T) {
 	// storeB continues writing 5 more entries.
 	const nSecond = 5
 	for i := 1; i <= nSecond; i++ {
-		e := storetest.NewEntryFixture(t,
+		e := sysEntry(t,
 			fmt.Sprintf("restart-evt-b-%d", i),
 			"restart.test", "actor", fcB.Now())
 		require.NoError(t, storeB.Append(ctx, e), "storeB Append %d", i)
@@ -206,7 +224,7 @@ func TestPGVerify_SubRange_Valid(t *testing.T) {
 	fc := clockmock.New(storetest.EpochAnchor())
 	const total = 5
 	for i := 1; i <= total; i++ {
-		e := storetest.NewEntryFixture(t,
+		e := sysEntry(t,
 			fmt.Sprintf("sub-range-valid-%d", i),
 			"sub.range.test", "actor", fc.Now())
 		require.NoError(t, store.Append(ctx, e), "Append seq %d", i)
@@ -236,7 +254,7 @@ func TestPGVerify_SubRange_Tampered(t *testing.T) {
 
 	const total = 5
 	for i := 1; i <= total; i++ {
-		e := storetest.NewEntryFixture(t,
+		e := sysEntry(t,
 			fmt.Sprintf("sub-range-tamper-%d", i),
 			"sub.range.tamper", "actor", fc.Now())
 		require.NoError(t, store.Append(ctx, e), "Append seq %d", i)
@@ -358,7 +376,7 @@ func TestAuditLedgerStore_AdvisoryLockSerializesAppend(t *testing.T) {
 		i := i
 		go func() {
 			defer wg.Done()
-			e := storetest.NewEntryFixture(t,
+			e := sysEntry(t,
 				fmt.Sprintf("advisory-lock-evt-%03d", i),
 				"lock.test", "actor", fc.Now())
 			if err := store.Append(ctx, e); err != nil {
@@ -421,7 +439,7 @@ func TestL2Atomicity_auditcore_RollsBack(t *testing.T) {
 	// Run store.Append + deliberate outbox-fail inside the same transaction.
 	simulatedOutboxErr := errors.New("simulated outbox write failure")
 	txErr := txm.RunInTx(ctx, func(txCtx context.Context) error {
-		e := storetest.NewEntryFixture(t, "atomicity-evt-1", "atomicity.test", "actor", fc.Now())
+		e := sysEntry(t, "atomicity-evt-1", "atomicity.test", "actor", fc.Now())
 		if appendErr := store.Append(txCtx, e); appendErr != nil {
 			return appendErr
 		}
@@ -442,7 +460,7 @@ func TestL2Atomicity_auditcore_RollsBack(t *testing.T) {
 	// Negative control: a successful Append on the same store must persist a
 	// row, proving the rollback assertion above is not vacuous (i.e., Append
 	// genuinely writes a row on the happy path and the store is properly wired).
-	e2 := storetest.NewEntryFixture(t, "atomicity-control-evt", "atomicity.control", "actor", fc.Now())
+	e2 := sysEntry(t, "atomicity-control-evt", "atomicity.control", "actor", fc.Now())
 	require.NoError(t, store.Append(ctx, e2), "negative control: Append must succeed without outbox failure")
 	var countControl int
 	require.NoError(t, p.DB().QueryRow(ctx,
@@ -482,13 +500,13 @@ func TestAuditLedgerStore_NamespaceIsolation(t *testing.T) {
 
 	// Write 3 entries to storeA and 2 to storeB.
 	for i := 1; i <= 3; i++ {
-		e := storetest.NewEntryFixture(t,
+		e := sysEntry(t,
 			fmt.Sprintf("ns-iso-a-evt-%d", i),
 			"iso.test", "actor-a", fc.Now())
 		require.NoError(t, storeA.Append(ctx, e), "storeA Append %d", i)
 	}
 	for i := 1; i <= 2; i++ {
-		e := storetest.NewEntryFixture(t,
+		e := sysEntry(t,
 			fmt.Sprintf("ns-iso-b-evt-%d", i),
 			"iso.test", "actor-b", fc.Now())
 		require.NoError(t, storeB.Append(ctx, e), "storeB Append %d", i)
@@ -591,7 +609,7 @@ func TestAuditLedgerStore_ReadWithinAmbientTx(t *testing.T) {
 	// --- Rolled-back transaction: in-tx reads see the uncommitted entry,
 	//     post-rollback reads see an empty ledger. ---
 	rbErr := txm.RunInTx(ctx, func(txCtx context.Context) error {
-		e := storetest.NewEntryFixture(t, "ambient-read-1", "ambient.read", "actor", fc.Now())
+		e := sysEntry(t, "ambient-read-1", "ambient.read", "actor", fc.Now())
 		require.NoError(t, store.Append(txCtx, e), "Append inside ambient tx")
 
 		tail, tErr := store.Tail(txCtx)
@@ -627,7 +645,7 @@ func TestAuditLedgerStore_ReadWithinAmbientTx(t *testing.T) {
 	// --- Committed control: a successful RunInTx persists; reads outside the
 	//     tx then observe it. ---
 	commitErr := txm.RunInTx(ctx, func(txCtx context.Context) error {
-		e := storetest.NewEntryFixture(t, "ambient-read-2", "ambient.read", "actor", fc.Now())
+		e := sysEntry(t, "ambient-read-2", "ambient.read", "actor", fc.Now())
 		require.NoError(t, store.Append(txCtx, e))
 		return nil
 	})
@@ -660,7 +678,7 @@ func TestAuditLedgerStore_TraceID_RoundTripAndFilter(t *testing.T) {
 	fc := clockmock.New(storetest.EpochAnchor())
 
 	// --- Round-trip ---
-	e1 := storetest.NewEntryFixture(t, "trace-rt-1", "trace.roundtrip", "actor", fc.Now())
+	e1 := sysEntry(t, "trace-rt-1", "trace.roundtrip", "actor", fc.Now())
 	e1.TraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
 	require.NoError(t, store.Append(ctx, e1), "Append trace-rt-1")
 
@@ -669,11 +687,11 @@ func TestAuditLedgerStore_TraceID_RoundTripAndFilter(t *testing.T) {
 	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", got1.TraceID, "trace_id round-trip")
 
 	// --- Filter ---
-	e2 := storetest.NewEntryFixture(t, "trace-rt-2", "trace.roundtrip", "actor", fc.Now())
+	e2 := sysEntry(t, "trace-rt-2", "trace.roundtrip", "actor", fc.Now())
 	e2.TraceID = "4bf92f3577b34da6a3ce929d0e0e4736" // same trace
 	require.NoError(t, store.Append(ctx, e2), "Append trace-rt-2")
 
-	e3 := storetest.NewEntryFixture(t, "trace-rt-3", "trace.roundtrip", "actor", fc.Now())
+	e3 := sysEntry(t, "trace-rt-3", "trace.roundtrip", "actor", fc.Now())
 	e3.TraceID = "different-trace-id"
 	require.NoError(t, store.Append(ctx, e3), "Append trace-rt-3")
 

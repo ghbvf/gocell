@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest" // test funnel; storetest is testing-helper package, errcodetest import is intentional (not a test-only import in a non-_test.go file)
 	"github.com/ghbvf/gocell/pkg/query"
@@ -45,10 +46,70 @@ import (
 
 const fmtErrGetBySeq1 = "GetBySeq(1): %v"
 
-// scopedCtx returns a context scoped to the given tenant, for use in
-// Tail / GetBySeq / Verify calls that derive tenant from context (#1618).
-func scopedCtx(t tenant.TenantID) context.Context {
-	return tenant.WithScope(context.Background(), t)
+// passthroughTxRunner is a no-op TxRunner used by MemStore conformance tests.
+// MemStore has no pool defense — scope-bearing contexts flow through without a
+// real DB transaction — so fn is called directly without wrapping.
+type passthroughTxRunner struct{}
+
+func (passthroughTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
+// PassthroughTxRunner returns a persistence.TxRunner that calls fn(ctx)
+// directly without wrapping in a real database transaction. Use this in
+// MemStore-backed Factory implementations where no pool defense exists.
+func PassthroughTxRunner() persistence.TxRunner { return passthroughTxRunner{} }
+
+// scopedTail wraps a tenant-scoped Tail in RunInTx so that PG's deep-defense
+// (PrepareConn: reject scope-bearing ctx outside RunInTx) does not fire.
+// For MemStore, passthroughTxRunner simply calls fn(ctx) directly.
+func scopedTail(t *testing.T, tr persistence.TxRunner, store ledger.Store, tid tenant.TenantID) (ledger.TailSnapshot, error) {
+	t.Helper()
+	var snap ledger.TailSnapshot
+	var rerr error
+	err := tr.RunInTx(tenant.WithScope(context.Background(), tid), func(ctx context.Context) error {
+		snap, rerr = store.Tail(ctx)
+		return rerr
+	})
+	if err != nil {
+		return ledger.TailSnapshot{}, err
+	}
+	return snap, nil
+}
+
+// scopedGetBySeq wraps a tenant-scoped GetBySeq in RunInTx for the same reason
+// as scopedTail — PG pool defense rejects scope-bearing ctx outside RunInTx.
+func scopedGetBySeq(
+	t *testing.T, tr persistence.TxRunner, store ledger.Store,
+	tid tenant.TenantID, vis tenant.RowVisibility, seq int64,
+) (*ledger.Entry, error) {
+	t.Helper()
+	var entry *ledger.Entry
+	var rerr error
+	err := tr.RunInTx(tenant.WithScope(context.Background(), tid), func(ctx context.Context) error {
+		entry, rerr = store.GetBySeq(ctx, vis, seq)
+		return rerr
+	})
+	if err != nil {
+		return nil, err
+	}
+	return entry, nil
+}
+
+// scopedVerify wraps a tenant-scoped Verify in RunInTx for the same reason.
+func scopedVerify(t *testing.T, tr persistence.TxRunner, store ledger.Store, tid tenant.TenantID, from, to int64) (bool, int64, error) {
+	t.Helper()
+	var valid bool
+	var firstInvalid int64
+	var rerr error
+	err := tr.RunInTx(tenant.WithScope(context.Background(), tid), func(ctx context.Context) error {
+		valid, firstInvalid, rerr = store.Verify(ctx, from, to)
+		return rerr
+	})
+	if err != nil {
+		return false, 0, err
+	}
+	return valid, firstInvalid, nil
 }
 
 // mustRowVisibility constructs a tenant.RowVisibility for test use, failing the
@@ -149,7 +210,12 @@ const (
 // The fakeClock return type is the concrete *clockmock.FakeClock rather than
 // the clock.Clock interface — suite cases call fc.Advance() and fc.Now()
 // directly, methods that only the concrete type carries.
-type Factory func(t *testing.T) (store ledger.Store, fakeClock *clockmock.FakeClock, cleanup func())
+//
+// txRunner is used by suite helpers to wrap tenant-scoped Tail/GetBySeq/Verify
+// calls in RunInTx so that the PG pool's deep-defense (PrepareConn: reject
+// scope-bearing ctx outside RunInTx) does not fire. MemStore factories return
+// passthroughTxRunner which calls fn(ctx) directly.
+type Factory func(t *testing.T) (store ledger.Store, txRunner persistence.TxRunner, fakeClock *clockmock.FakeClock, cleanup func())
 
 // epochAnchor is the deterministic start time used by NewTestProtocol-driven
 // fixtures. Anchored at 2025-01-01 UTC (round, far from epoch boundaries).
@@ -273,7 +339,7 @@ func Run(t *testing.T, factory Factory, protocol *ledger.Protocol) {
 	t.Run("StrictPayload_InvalidJSON", func(t *testing.T) { runStrictPayloadInvalidJSON(t, factory) })
 	t.Run("Verify_FullRange", func(t *testing.T) { runVerifyFullRange(t, factory) })
 	t.Run("GetBySeq_NotFound", func(t *testing.T) {
-		store, _, cleanup := factory(t)
+		store, _, _, cleanup := factory(t)
 		defer cleanup()
 		_, err := store.GetBySeq(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""), 9999)
 		errcodetest.AssertCode(t, err, errcode.ErrAuditLedgerNotFound)
@@ -295,7 +361,7 @@ func Run(t *testing.T, factory Factory, protocol *ledger.Protocol) {
 
 // runAppendTailRoundTrip: Append persists entry; Tail advances; GetBySeq returns entry.
 func runAppendTailRoundTrip(t *testing.T, factory Factory) {
-	store, fc, cleanup := factory(t)
+	store, tr, fc, cleanup := factory(t)
 	defer cleanup()
 
 	e := NewEntryFixture(t, "evt-round-trip", "audit.test", "actor-1", fc.Now())
@@ -303,8 +369,8 @@ func runAppendTailRoundTrip(t *testing.T, factory Factory) {
 		t.Fatalf(msgAppend, err)
 	}
 
-	fixtureCtx := scopedCtx(tenant.TenantID("tenant-test"))
-	tail, err := store.Tail(fixtureCtx)
+	fixtureTenant := tenant.TenantID("tenant-test")
+	tail, err := scopedTail(t, tr, store, fixtureTenant)
 	if err != nil {
 		t.Fatalf("Tail: %v", err)
 	}
@@ -315,7 +381,7 @@ func runAppendTailRoundTrip(t *testing.T, factory Factory) {
 		t.Errorf("Tail.EntryCount: got %d, want 1", tail.EntryCount)
 	}
 
-	got, err := store.GetBySeq(fixtureCtx, mustRowVisibility(t, tenant.RowScopeTenant, ""), 1)
+	got, err := scopedGetBySeq(t, tr, store, fixtureTenant, mustRowVisibility(t, tenant.RowScopeTenant, ""), 1)
 	if err != nil {
 		t.Fatalf(fmtErrGetBySeq1, err)
 	}
@@ -332,7 +398,7 @@ func runAppendTailRoundTrip(t *testing.T, factory Factory) {
 
 // runTailEmptyStore: empty store returns zero TailSnapshot.
 func runTailEmptyStore(t *testing.T, factory Factory) {
-	store, _, cleanup := factory(t)
+	store, _, _, cleanup := factory(t)
 	defer cleanup()
 
 	tail, err := store.Tail(context.Background())
@@ -356,7 +422,7 @@ func runTailEmptyStore(t *testing.T, factory Factory) {
 // stores (proves all 12 canonical-HMAC fields participated in chain replay,
 // not just the originally-asserted SeqNo/EntryCount pair).
 func runRestartRecovery(t *testing.T, factory Factory) {
-	storeA, fc, cleanupA := factory(t)
+	storeA, trA, fc, cleanupA := factory(t)
 	defer cleanupA()
 
 	const n = 3
@@ -366,8 +432,8 @@ func runRestartRecovery(t *testing.T, factory Factory) {
 			t.Fatalf("storeA Append %d: %v", i, err)
 		}
 	}
-	fixtureCtx := scopedCtx(tenant.TenantID("tenant-test"))
-	tailA, err := storeA.Tail(fixtureCtx)
+	fixtureTenant := tenant.TenantID("tenant-test")
+	tailA, err := scopedTail(t, trA, storeA, fixtureTenant)
 	if err != nil {
 		t.Fatalf("storeA Tail: %v", err)
 	}
@@ -375,11 +441,12 @@ func runRestartRecovery(t *testing.T, factory Factory) {
 	// Replay into storeB using a second factory call. Replay copies the FULL
 	// Entry shape (every caller-supplied field) so the cross-store chain truly
 	// witnesses all 12 canonical-HMAC fields, not just the historical 5.
-	storeB, _, cleanupB := factory(t)
+	storeB, trB, _, cleanupB := factory(t)
 	defer cleanupB()
 
+	vis := mustRowVisibility(t, tenant.RowScopeTenant, "")
 	for seq := int64(1); seq <= int64(n); seq++ {
-		src, err := storeA.GetBySeq(fixtureCtx, mustRowVisibility(t, tenant.RowScopeTenant, ""), seq)
+		src, err := scopedGetBySeq(t, trA, storeA, fixtureTenant, vis, seq)
 		if err != nil {
 			t.Fatalf("storeA GetBySeq(%d): %v", seq, err)
 		}
@@ -401,13 +468,13 @@ func runRestartRecovery(t *testing.T, factory Factory) {
 		// AssertEntryRoundTrip uses reflect to walk every exported, non-store-
 		// assigned Entry field — adding a new field anywhere on Entry picks up
 		// here automatically.
-		gotB, err := storeB.GetBySeq(fixtureCtx, mustRowVisibility(t, tenant.RowScopeTenant, ""), seq)
+		gotB, err := scopedGetBySeq(t, trB, storeB, fixtureTenant, vis, seq)
 		if err != nil {
 			t.Fatalf("storeB GetBySeq(%d): %v", seq, err)
 		}
 		AssertEntryRoundTrip(t, src, gotB)
 	}
-	tailB, err := storeB.Tail(fixtureCtx)
+	tailB, err := scopedTail(t, trB, storeB, fixtureTenant)
 	if err != nil {
 		t.Fatalf("storeB Tail: %v", err)
 	}
@@ -428,7 +495,7 @@ func runRestartRecovery(t *testing.T, factory Factory) {
 
 // runIdempotencyDuplicateContent: duplicate content fingerprint returns ErrAuditLedgerAlreadyExists.
 func runIdempotencyDuplicateContent(t *testing.T, factory Factory) {
-	store, fc, cleanup := factory(t)
+	store, _, fc, cleanup := factory(t)
 	defer cleanup()
 
 	e1 := &ledger.Entry{
@@ -466,7 +533,7 @@ func runIdempotencyDuplicateContent(t *testing.T, factory Factory) {
 // time and allow the same event to be appended multiple times. The EventID-only
 // fingerprint detects the duplicate regardless of the timestamp difference.
 func runIdempotencyDifferentTimestampSameEventID(t *testing.T, factory Factory) {
-	store, fc, cleanup := factory(t)
+	store, _, fc, cleanup := factory(t)
 	defer cleanup()
 
 	e1 := &ledger.Entry{
@@ -502,7 +569,7 @@ func runIdempotencyDifferentTimestampSameEventID(t *testing.T, factory Factory) 
 // runConcurrentAppendHashChainValid: 100 concurrent appends; chain must be valid.
 // F24: increased from 50 to 100 to align with PG integration test concurrency level.
 func runConcurrentAppendHashChainValid(t *testing.T, factory Factory) {
-	store, fc, cleanup := factory(t)
+	store, _, fc, cleanup := factory(t)
 	defer cleanup()
 
 	const n = 100
@@ -552,7 +619,7 @@ func runConcurrentAppendHashChainValid(t *testing.T, factory Factory) {
 
 // runStrictPayloadInvalidJSON: invalid JSON payload is rejected.
 func runStrictPayloadInvalidJSON(t *testing.T, factory Factory) {
-	store, fc, cleanup := factory(t)
+	store, _, fc, cleanup := factory(t)
 	defer cleanup()
 
 	e := &ledger.Entry{
@@ -574,7 +641,7 @@ func runStrictPayloadInvalidJSON(t *testing.T, factory Factory) {
 
 // runVerifyFullRange: Verify returns valid=true for a freshly appended range.
 func runVerifyFullRange(t *testing.T, factory Factory) {
-	store, fc, cleanup := factory(t)
+	store, tr, fc, cleanup := factory(t)
 	defer cleanup()
 
 	for i := 1; i <= 5; i++ {
@@ -584,8 +651,7 @@ func runVerifyFullRange(t *testing.T, factory Factory) {
 		}
 	}
 
-	fixtureCtx := scopedCtx(tenant.TenantID("tenant-test"))
-	valid, firstInvalid, err := store.Verify(fixtureCtx, 1, 5)
+	valid, firstInvalid, err := scopedVerify(t, tr, store, tenant.TenantID("tenant-test"), 1, 5)
 	if err != nil {
 		t.Fatalf(msgVerify, err)
 	}
@@ -600,7 +666,7 @@ func runQueryByFilters(t *testing.T, factory Factory) {
 		filterEventType = "type.X" // event type asserted by the EventType filter
 		filterSubject   = "alice"  // subject asserted by the SubjectID filter (#1290)
 	)
-	store, fc, cleanup := factory(t)
+	store, _, fc, cleanup := factory(t)
 	defer cleanup()
 
 	for i := 1; i <= 6; i++ {
@@ -670,7 +736,7 @@ func runQueryByFilters(t *testing.T, factory Factory) {
 // is stored differently from the original bytes, breaking the HMAC hash chain.
 // MemStore passes this test (no normalization); PG store FAILS until BYTEA fix.
 func runAppendMultiKeyPayloadRoundTrip(t *testing.T, factory Factory) {
-	store, fc, cleanup := factory(t)
+	store, _, fc, cleanup := factory(t)
 	defer cleanup()
 
 	// Payload with non-alphabetical key order + embedded whitespace.
@@ -721,7 +787,7 @@ func runAppendMultiKeyPayloadRoundTrip(t *testing.T, factory Factory) {
 // by construction, so this case uses 4 distinct timestamps to eliminate ties
 // and validate only the timestamp-DESC contract that both backends must honor.
 func runQueryOrderingTimestampDescIDAsc(t *testing.T, factory Factory) {
-	store, fc, cleanup := factory(t)
+	store, _, fc, cleanup := factory(t)
 	defer cleanup()
 
 	base := fc.Now()
@@ -790,7 +856,7 @@ func runQueryOrderingTimestampDescIDAsc(t *testing.T, factory Factory) {
 // token), so the next page's cursor is built by hand from the last visible
 // entry — mirroring the service Extract: []any{ts.Format(RFC3339Nano), id}.
 func runQueryKeysetPagination(t *testing.T, factory Factory) {
-	store, fc, cleanup := factory(t)
+	store, _, fc, cleanup := factory(t)
 	defer cleanup()
 
 	seedKeysetEntries(t, store, fc.Now())
@@ -883,7 +949,7 @@ func collectKeysetPages(t *testing.T, store ledger.Store, limit int) []string {
 // (MemStore guards explicitly; PG via pgquery.AppendKeyset) — this case locks
 // that both backends produce the same rejection.
 func runQueryEmptySortRejected(t *testing.T, factory Factory) {
-	store, _, cleanup := factory(t)
+	store, _, _, cleanup := factory(t)
 	defer cleanup()
 
 	_, err := store.Query(context.Background(), tenant.TenantID(""), mustRowVisibility(t, tenant.RowScopeTenant, ""),
@@ -898,7 +964,7 @@ func runQueryEmptySortRejected(t *testing.T, factory Factory) {
 // this case locks cross-backend parity on the malformed-cursor error. At least
 // one entry is seeded so MemStore's ApplyCursor actually performs the compare.
 func runQueryInvalidCursorRejected(t *testing.T, factory Factory) {
-	store, fc, cleanup := factory(t)
+	store, _, fc, cleanup := factory(t)
 	defer cleanup()
 
 	for i := 1; i <= 2; i++ {
@@ -922,7 +988,7 @@ func runQueryInvalidCursorRejected(t *testing.T, factory Factory) {
 // system rows, never any tenant's rows (mem mirrors the PG predicate exactly).
 // Production always passes a non-empty tenant from the authenticated principal.
 func runQueryTenantIsolation(t *testing.T, factory Factory) {
-	store, fc, cleanup := factory(t)
+	store, _, fc, cleanup := factory(t)
 	defer cleanup()
 
 	// Seed: 2 rows in tenant-a, 1 in tenant-b, 1 tenant-less (system chain "").
@@ -1023,7 +1089,7 @@ func appendChainEntry(t *testing.T, store ledger.Store, eventID, tenantID string
 // each tenant's entries start at SeqNo==1 independently, and cross-tenant
 // GetBySeq reads the correct chain without leaking entries between tenants.
 func runPerTenantChains(t *testing.T, factory Factory) {
-	store, fc, cleanup := factory(t)
+	store, tr, fc, cleanup := factory(t)
 	defer cleanup()
 
 	tenantA := tenant.TenantID("chain-tenant-a")
@@ -1038,8 +1104,7 @@ func runPerTenantChains(t *testing.T, factory Factory) {
 	appendChainEntry(t, store, "chain-b-2", "chain-tenant-b", fc.Now())
 
 	// Tenant-a chain: Tail shows SeqNo==2.
-	ctxA := scopedCtx(tenantA)
-	tailA, err := store.Tail(ctxA)
+	tailA, err := scopedTail(t, tr, store, tenantA)
 	if err != nil {
 		t.Fatalf("Tail(tenant-a): %v", err)
 	}
@@ -1051,8 +1116,7 @@ func runPerTenantChains(t *testing.T, factory Factory) {
 	}
 
 	// Tenant-b chain: Tail shows SeqNo==2.
-	ctxB := scopedCtx(tenantB)
-	tailB, err := store.Tail(ctxB)
+	tailB, err := scopedTail(t, tr, store, tenantB)
 	if err != nil {
 		t.Fatalf("Tail(tenant-b): %v", err)
 	}
@@ -1061,7 +1125,7 @@ func runPerTenantChains(t *testing.T, factory Factory) {
 	}
 
 	// GetBySeq isolation: tenant-a seq 1 must return chain-a-1, not chain-b-1.
-	gotA1, err := store.GetBySeq(ctxA, vis, 1)
+	gotA1, err := scopedGetBySeq(t, tr, store, tenantA, vis, 1)
 	if err != nil {
 		t.Fatalf("GetBySeq(tenant-a, seq=1): %v", err)
 	}
@@ -1070,7 +1134,7 @@ func runPerTenantChains(t *testing.T, factory Factory) {
 	}
 
 	// GetBySeq isolation: tenant-b seq 1 must return chain-b-1, not chain-a-1.
-	gotB1, err := store.GetBySeq(ctxB, vis, 1)
+	gotB1, err := scopedGetBySeq(t, tr, store, tenantB, vis, 1)
 	if err != nil {
 		t.Fatalf("GetBySeq(tenant-b, seq=1): %v", err)
 	}
@@ -1099,7 +1163,7 @@ func runPerTenantChains(t *testing.T, factory Factory) {
 //   - seq 1: prevHash="" (chain root)
 //   - seq 2: prevHash=entry1.Hash (chain link)
 func runProtocolHashParity(t *testing.T, factory Factory, protocol *ledger.Protocol) {
-	store, fc, cleanup := factory(t)
+	store, tr, fc, cleanup := factory(t)
 	defer cleanup()
 
 	e1 := NewEntryFixture(t, "parity-1", "parity.test", "actor-parity", fc.Now())
@@ -1112,8 +1176,9 @@ func runProtocolHashParity(t *testing.T, factory Factory, protocol *ledger.Proto
 	}
 
 	// NewEntryFixture stamps TenantID="tenant-test"; scope ctx to that chain.
-	fixtureCtx := scopedCtx(tenant.TenantID("tenant-test"))
-	got1, err := store.GetBySeq(fixtureCtx, mustRowVisibility(t, tenant.RowScopeTenant, ""), 1)
+	fixtureTenant := tenant.TenantID("tenant-test")
+	vis := mustRowVisibility(t, tenant.RowScopeTenant, "")
+	got1, err := scopedGetBySeq(t, tr, store, fixtureTenant, vis, 1)
 	if err != nil {
 		t.Fatalf("GetBySeq 1: %v", err)
 	}
@@ -1124,7 +1189,7 @@ func runProtocolHashParity(t *testing.T, factory Factory, protocol *ledger.Proto
 			got1.Hash, want1)
 	}
 
-	got2, err := store.GetBySeq(fixtureCtx, mustRowVisibility(t, tenant.RowScopeTenant, ""), 2)
+	got2, err := scopedGetBySeq(t, tr, store, fixtureTenant, vis, 2)
 	if err != nil {
 		t.Fatalf("GetBySeq 2: %v", err)
 	}
@@ -1150,7 +1215,7 @@ func runQueryByTraceID(t *testing.T, factory Factory) {
 		traceT1 = "4bf92f3577b34da6a3ce929d0e0e4736"
 		traceT2 = "00f067aa0ba902b7000000000000000a"
 	)
-	store, fc, cleanup := factory(t)
+	store, _, fc, cleanup := factory(t)
 	defer cleanup()
 
 	entries := []struct {
@@ -1309,7 +1374,7 @@ func RunPrincipalFieldsRoundTrip(t *testing.T, factory Factory, protocol *ledger
 		t.Fatal("storetest.RunPrincipalFieldsRoundTrip: protocol must not be nil")
 	}
 
-	store, fc, cleanup := factory(t)
+	store, tr, fc, cleanup := factory(t)
 	defer cleanup()
 
 	occurredAt := fc.Now().Add(principalOccurredAtSkew).UTC()
@@ -1332,7 +1397,7 @@ func RunPrincipalFieldsRoundTrip(t *testing.T, factory Factory, protocol *ledger
 	}
 
 	// Entry has TenantID="tenant-alpha"; scope ctx to read from that chain.
-	got, err := store.GetBySeq(scopedCtx(tenant.TenantID("tenant-alpha")), mustRowVisibility(t, tenant.RowScopeTenant, ""), 1)
+	got, err := scopedGetBySeq(t, tr, store, tenant.TenantID("tenant-alpha"), mustRowVisibility(t, tenant.RowScopeTenant, ""), 1)
 	if err != nil {
 		t.Fatalf(fmtErrGetBySeq1, err)
 	}
@@ -1450,7 +1515,7 @@ func (tc visGetCase) run(t *testing.T, store ledger.Store) {
 //     backend until the audited super-admin path lands (PR-5); no silent degrade
 //     to tenant scope.
 func runQueryVisibilityObligations(t *testing.T, factory Factory) {
-	store, fc, cleanup := factory(t)
+	store, _, fc, cleanup := factory(t)
 	defer cleanup()
 
 	actors := []string{"alice", "bob", "charlie"}
@@ -1493,7 +1558,7 @@ func runQueryVisibilityObligations(t *testing.T, factory Factory) {
 //   - Tenant("")      → found (tenant-wide read)
 //   - All("")         → fail-closed (RowScopeAllUnsupportedError) until PR-5
 func runGetBySeqVisibilityObligations(t *testing.T, factory Factory) {
-	store, fc, cleanup := factory(t)
+	store, _, fc, cleanup := factory(t)
 	defer cleanup()
 
 	e := &ledger.Entry{

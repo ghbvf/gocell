@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
@@ -52,12 +53,18 @@ const fuzzTimePrecision = time.Microsecond
 // callsite); this fuzz adds the runtime behavior that a static archtest cannot
 // express — µs precision handling, payload binary safety, and namespace domain
 // separation under arbitrary inputs.
-func RunEntryRoundTripFuzz(f *testing.F, store ledger.Store, protocol *ledger.Protocol) {
+// RunEntryRoundTripFuzz accepts a txRunner so that PG-backed fuzz tests can
+// wrap scoped GetBySeq calls inside RunInTx (required by PG pool deep-defense).
+// Pass storetest.PassthroughTxRunner() for MemStore targets.
+func RunEntryRoundTripFuzz(f *testing.F, store ledger.Store, protocol *ledger.Protocol, txRunner persistence.TxRunner) {
 	if store == nil {
 		f.Fatal("storetest.RunEntryRoundTripFuzz: store must not be nil")
 	}
 	if protocol == nil {
 		f.Fatal("storetest.RunEntryRoundTripFuzz: protocol must not be nil")
+	}
+	if txRunner == nil {
+		f.Fatal("storetest.RunEntryRoundTripFuzz: txRunner must not be nil")
 	}
 	seedEntryRoundTripCorpus(f)
 
@@ -92,7 +99,7 @@ func RunEntryRoundTripFuzz(f *testing.F, store ledger.Store, protocol *ledger.Pr
 			Timestamp:     time.Unix(0, tsNano).UTC().Truncate(fuzzTimePrecision),
 			Payload:       payload,
 		}
-		assertEntryRoundTripParity(t, store, protocol, src)
+		assertEntryRoundTripParity(t, store, protocol, txRunner, src)
 	})
 }
 
@@ -105,11 +112,10 @@ func RunEntryRoundTripFuzz(f *testing.F, store ledger.Store, protocol *ledger.Pr
 // protocol rejections to skip. Every other error — any other errcode, or a
 // non-errcode error such as a PG infrastructure failure — is a t.Fatalf, so an
 // infra fault can never be silently mistaken for "covered".
-func assertEntryRoundTripParity(t *testing.T, store ledger.Store, protocol *ledger.Protocol, src *ledger.Entry) {
+func assertEntryRoundTripParity(t *testing.T, store ledger.Store, protocol *ledger.Protocol, tr persistence.TxRunner, src *ledger.Entry) {
 	t.Helper()
-	ctx := context.Background()
 
-	if err := store.Append(ctx, src); err != nil {
+	if err := store.Append(context.Background(), src); err != nil {
 		var ec *errcode.Error
 		if errors.As(err, &ec) &&
 			(ec.Code == errcode.ErrValidationFailed || ec.Code == errcode.ErrAuditLedgerAlreadyExists) {
@@ -127,9 +133,11 @@ func assertEntryRoundTripParity(t *testing.T, store ledger.Store, protocol *ledg
 	//
 	// GetBySeq derives the tenant chain from ctx via tenantScopeOrSystem; scope
 	// to src.TenantID so reads target the same per-tenant chain Append wrote to.
+	// scopedGetBySeq wraps the call in RunInTx so PG's pool deep-defense doesn't
+	// fire when a scope-bearing ctx is used outside a transaction.
 	fuzzVis := mustRowVisibility(t, tenant.RowScopeTenant, "")
-	scopedCtx := tenant.WithScope(ctx, tenant.TenantID(src.TenantID))
-	got, err := store.GetBySeq(scopedCtx, fuzzVis, src.SeqNo)
+	fuzzTenant := tenant.TenantID(src.TenantID)
+	got, err := scopedGetBySeq(t, tr, store, fuzzTenant, fuzzVis, src.SeqNo)
 	if err != nil {
 		t.Fatalf("GetBySeq(%d): %v", src.SeqNo, err)
 	}
@@ -144,7 +152,7 @@ func assertEntryRoundTripParity(t *testing.T, store ledger.Store, protocol *ledg
 	// chain root (prev_hash = "").
 	prevHash := ""
 	if src.SeqNo > 1 {
-		prev, perr := store.GetBySeq(scopedCtx, fuzzVis, src.SeqNo-1)
+		prev, perr := scopedGetBySeq(t, tr, store, fuzzTenant, fuzzVis, src.SeqNo-1)
 		if perr != nil {
 			t.Fatalf("GetBySeq(%d) for chain link: %v", src.SeqNo-1, perr)
 		}
