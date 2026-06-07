@@ -158,6 +158,17 @@ func newCommandEntry(t *testing.T, req enqueue.Request) kout.Entry {
 	return entry
 }
 
+// newRawCommandEntry builds a command entry from raw JSON bytes — needed for the
+// #1588 value-validation cases that can't be expressed via a typed enqueue.Request
+// (missing required field, additionalProperties), which json.Marshal of the struct
+// would never produce.
+func newRawCommandEntry(t *testing.T, rawJSON string) kout.Entry {
+	t.Helper()
+	entry, err := kout.NewEntry(clock.Real(), context.Background(), string(enqueue.DispatchID), []byte(rawJSON))
+	require.NoError(t, err)
+	return entry
+}
+
 // TestCommandBus_Enqueue_DispatchAsyncRoundTrip drives the REAL generated
 // enqueue.DispatchAsync: it decodes the entry payload into *Request and invokes
 // the registered Handler — the async sibling of the sync Dispatch round-trip.
@@ -177,14 +188,16 @@ func TestCommandBus_Enqueue_DispatchAsyncRoundTrip(t *testing.T) {
 }
 
 // TestCommandBus_Enqueue_DispatchAsyncHandlerError verifies the handler error is
-// returned (the relay routes it to MarkRetry).
+// returned (the relay routes it to MarkRetry). The payload is schema-VALID
+// (DeviceID + Payload present) so it passes the #1588 value funnel and reaches
+// the handler — the handler's own error is what propagates, not a validation error.
 func TestCommandBus_Enqueue_DispatchAsyncHandlerError(t *testing.T) {
 	t.Parallel()
 	reg := command.NewRegistry()
 	sentinel := errors.New("downstream failure")
 	require.NoError(t, enqueue.Register(reg, &fakeEnqueueHandler{retErr: sentinel}))
 
-	err := enqueue.DispatchAsync(context.Background(), reg, newCommandEntry(t, enqueue.Request{Payload: "x"}))
+	err := enqueue.DispatchAsync(context.Background(), reg, newCommandEntry(t, enqueue.Request{DeviceID: "d1", Payload: "x"}))
 	assert.ErrorIs(t, err, sentinel)
 }
 
@@ -202,11 +215,51 @@ func TestCommandBus_Enqueue_DispatchAsyncBadPayload(t *testing.T) {
 	assert.False(t, h.called, "handler must not run on a malformed payload")
 }
 
+// TestCommandBus_Enqueue_DispatchAsyncValueValidation is the #1588 value funnel:
+// a payload that decodes fine into *Request but violates the request schema's
+// value constraints (required / minLength / additionalProperties) is rejected
+// with ErrValidationFailed BEFORE the handler runs, and the error is PERMANENT
+// (kout.PermanentError) so the relay dead-letters it instead of burning retries.
+// This is the untrusted-boundary counterpart to HTTP body validation; the sync
+// Dispatch path stays unvalidated (first-party typed boundary, ADR §D8).
+func TestCommandBus_Enqueue_DispatchAsyncValueValidation(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		rawJSON string
+	}{
+		{"missing required payload", `{"deviceId":"d1"}`},
+		{"missing required deviceId", `{"payload":"x"}`},
+		{"empty deviceId violates minLength", `{"deviceId":"","payload":"x"}`},
+		{"empty payload violates minLength", `{"deviceId":"d1","payload":""}`},
+		{"additionalProperties rejected", `{"deviceId":"d1","payload":"x","bogus":"y"}`},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			reg := command.NewRegistry()
+			h := &fakeEnqueueHandler{}
+			require.NoError(t, enqueue.Register(reg, h))
+
+			err := enqueue.DispatchAsync(context.Background(), reg, newRawCommandEntry(t, tc.rawJSON))
+
+			errcodetest.AssertCode(t, err, errcode.ErrValidationFailed)
+			assert.False(t, h.called, "handler must not run on a schema-invalid payload")
+			var pe *kout.PermanentError
+			assert.True(t, errors.As(err, &pe),
+				"value-validation failure must be permanent (relay → MarkDead, not retry)")
+		})
+	}
+}
+
 // TestCommandBus_Enqueue_DispatchAsyncNoHandler verifies the no-handler branch.
+// Payload is schema-VALID so it clears the value funnel and reaches the
+// LookupHandler check (which is where the no-handler error originates).
 func TestCommandBus_Enqueue_DispatchAsyncNoHandler(t *testing.T) {
 	t.Parallel()
 	reg := command.NewRegistry()
-	err := enqueue.DispatchAsync(context.Background(), reg, newCommandEntry(t, enqueue.Request{Payload: "x"}))
+	err := enqueue.DispatchAsync(context.Background(), reg, newCommandEntry(t, enqueue.Request{DeviceID: "d1", Payload: "x"}))
 	errcodetest.AssertCode(t, err, errcode.ErrCommandNotFound)
 	var ec *errcode.Error
 	if errors.As(err, &ec) {
@@ -214,10 +267,12 @@ func TestCommandBus_Enqueue_DispatchAsyncNoHandler(t *testing.T) {
 	}
 }
 
-// TestCommandBus_Enqueue_DispatchAsyncNilRegistry verifies the nil-registry guard.
+// TestCommandBus_Enqueue_DispatchAsyncNilRegistry verifies the nil-registry guard
+// fires first (before the value funnel). Payload is valid so the asserted error
+// is unambiguously the nil-registry one, not a schema violation.
 func TestCommandBus_Enqueue_DispatchAsyncNilRegistry(t *testing.T) {
 	t.Parallel()
-	err := enqueue.DispatchAsync(context.Background(), nil, newCommandEntry(t, enqueue.Request{Payload: "x"}))
+	err := enqueue.DispatchAsync(context.Background(), nil, newCommandEntry(t, enqueue.Request{DeviceID: "d1", Payload: "x"}))
 	errcodetest.AssertCode(t, err, errcode.ErrValidationFailed)
 }
 
@@ -250,4 +305,36 @@ func TestCommandBus_Enqueue_AsyncRelayEndToEnd(t *testing.T) {
 		return len(rows) == 1 && rows[0].Status == kout.StatePublished
 	}), "command entry must settle to published after in-process dispatch")
 	assert.True(t, h.called, "the registered enqueue handler must be invoked via the relay")
+}
+
+// TestCommandBus_Enqueue_AsyncRelayValueValidationDeadLetters is the end-to-end
+// proof of the #1588 settle classification: a schema-invalid command entry, once
+// claimed by the relay and dispatched to the REAL generated enqueue.DispatchAsync,
+// fails the value funnel with a PERMANENT error, so the relay routes it straight
+// to MarkDead (StateDead) — not MarkRetry, not published, and the handler never
+// runs. Mirrors AsyncRelayEndToEnd but with an invalid payload + dead terminal.
+func TestCommandBus_Enqueue_AsyncRelayValueValidationDeadLetters(t *testing.T) {
+	t.Parallel()
+	reg := command.NewRegistry()
+	h := &fakeEnqueueHandler{}
+	require.NoError(t, enqueue.Register(reg, h))
+
+	store := outboxtest.NewFakeStore()
+	// Missing required "payload" — decodes into *Request but violates the schema.
+	store.Seed(outbox.ClaimedEntry{Entry: newRawCommandEntry(t, `{"deviceId":"d1"}`)})
+
+	relay := outbox.NewRelay(clock.Real(), store, &kout.DiscardPublisher{},
+		outbox.RelayConfig{PollInterval: 5 * time.Millisecond}.WithDefaults())
+	relay.WithCommandDispatch(reg, map[command.CommandID]command.AsyncDispatchFunc{
+		enqueue.DispatchID: enqueue.DispatchAsync,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go func() { _ = relay.Start(ctx) }()
+
+	require.NoError(t, store.WaitFor(ctx, func(rows []outboxtest.FakeRow) bool {
+		return len(rows) == 1 && rows[0].Status == kout.StateDead
+	}), "schema-invalid command entry must dead-letter (permanent), not retry or publish")
+	assert.False(t, h.called, "the handler must never run for a schema-invalid payload")
 }

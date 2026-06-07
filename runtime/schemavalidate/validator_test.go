@@ -3,8 +3,6 @@ package schemavalidate
 import (
 	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -32,6 +30,22 @@ func TestValidator_HappyPath(t *testing.T) {
 
 	if err := v.Validate(context.Background(), []byte(`{"name":"alice"}`)); err != nil {
 		t.Errorf("expected no error for valid input, got: %v", err)
+	}
+}
+
+func TestValidator_InvalidJSONBody(t *testing.T) {
+	v := schemaForTest(t, `{"type": "object"}`)
+
+	err := v.Validate(context.Background(), []byte("not json"))
+	if err == nil {
+		t.Fatal("expected error for malformed JSON body, got nil")
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+	if ec.Code != errcode.ErrValidationFailed {
+		t.Errorf("code = %q, want ErrValidationFailed", ec.Code)
 	}
 }
 
@@ -264,26 +278,6 @@ func TestValidator_ErrorTypeIsErrcode(t *testing.T) {
 	}
 	if ec.Code != errcode.ErrValidationFailed {
 		t.Errorf("Code = %q, want ErrValidationFailed", ec.Code)
-	}
-}
-
-func TestWriteValidationError_WritesHTTP400(t *testing.T) {
-	err := errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "name: invalid")
-	w := httptest.NewRecorder()
-	WriteValidationError(context.Background(), w, err)
-
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("HTTP status = %d, want 400", w.Code)
-	}
-}
-
-func TestWriteValidationError_WrapsPlainError(t *testing.T) {
-	plainErr := errors.New("something went wrong")
-	w := httptest.NewRecorder()
-	WriteValidationError(context.Background(), w, plainErr)
-
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("HTTP status = %d, want 400", w.Code)
 	}
 }
 

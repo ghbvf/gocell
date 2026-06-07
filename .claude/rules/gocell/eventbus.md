@@ -208,9 +208,9 @@ relay 消费时按 **routing-topic** 在 composition-root 注入的 dispatcher-m
 否则照常发 broker。判别器 = dispatcher-map 成员资格（`command.*.v1` 命名空间 + 闭合 map
 天然隔离事件 topic），**不改 sealed `outbox.Entry`、不带 metadata 标记**。命令 settle 复用事件
 writeBack：成功 `MarkPublished` = 命令已消费；失败分两类——生成 `DispatchAsync` 的**确定性框架错误**
-（reg nil / routing-topic ≠ DispatchID / decode 失败 / no-handler / wrong-type）经 `kout.NewPermanentError`
-标记 → relay 直接 `MarkDead`（不耗重试预算，错配 entry fail-closed）；**handler 业务 error** 透传 → `MarkRetry`
-至耗尽（#1673 F3；值校验失败分类随 #1588）。生成 `DispatchAsync` 体首做 trust-boundary 自检
+（reg nil / routing-topic ≠ DispatchID / **request-schema 值校验失败** / decode 失败 / no-handler / wrong-type）经 `kout.NewPermanentError`
+标记 → relay 直接 `MarkDead`（不耗重试预算，错配 / 非法 entry fail-closed）；**handler 业务 error** 透传 → `MarkRetry`
+至耗尽（#1673 F3 + #1588）。生成 `DispatchAsync` 体首做 trust-boundary 自检
 `entry.RoutingTopic() == string(DispatchID)`，错配 entry 不被错 handler 消费。
 
 composition root 注入（dispatch 值**必须**是生成 `DispatchAsync` 直接符号——archtest
@@ -224,11 +224,17 @@ relay.WithCommandDispatch(reg, map[command.CommandID]command.AsyncDispatchFunc{
 })
 ```
 
-`DispatchAsync` 不执行 schema 值约束（typed struct 即结构契约）；untrusted-payload 值校验
-funnel = #1588。真实 binary producer 接线（devicecell 异步 enqueue）随后续 PR 落地。设计单源 =
+`DispatchAsync` **在 topic-guard 后、unmarshal 前对 `entry.Payload()`（入站 wire JSON bytes）跑
+`runtime/schemavalidate.Validator.Validate` 强制 request schema 值约束**（minLength/maxLength/required/
+additionalProperties/...全 schema 语义；#1588）——这是 HTTP request-body 校验的不可信边界对位物。违例 →
+`kout.NewPermanentError` → relay `MarkDead`。复用 HTTP 同源 byte-validator（核心抽中性包 `runtime/schemavalidate`，
+HTTP 与 command 生成包共用）；honor D4——async bytes 校验零 marshal round-trip（round-trip 仅在校验 **sync** typed
+输入时出现，sync `Dispatch` 仍刻意不校验 = 第一方可信边界，ADR §D8）。command 无 `HasBody` gate，D6 保证恒有 request
+schemaRef，故 `command.tmpl` 无条件 emit validator（无「command 无校验」逃逸路径）。真实 binary producer 接线
+（devicecell 异步 enqueue）随后续 PR（#1698）落地。设计单源 =
 ADR `docs/architecture/202606040550-1044-adr-command-bus-dispatch-funnel.md` §5 ④ +
-§Amendment 2026-06-06；funnel 双向锁 = `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`（上游 Hard）+
-`COMMAND-ASYNC-DISPATCH-CALLER-01`（下游 Hard）。
+§Amendment 2026-06-06 / 2026-06-08；funnel 双向锁 = `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`（上游 Hard，golden 锁
+含值校验 emit）+ `COMMAND-ASYNC-DISPATCH-CALLER-01`（下游 Hard）——值校验骑既有 funnel，无新增 enforcement 机制。
 
 ## Projection ↔ ConsumerBase 装配（composition root）
 

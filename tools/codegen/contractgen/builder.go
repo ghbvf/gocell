@@ -16,7 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/pkg/contractpath"
-	"github.com/ghbvf/gocell/runtime/http/schemavalidate"
+	"github.com/ghbvf/gocell/runtime/schemavalidate"
 )
 
 // buildContractSpec projects a single contract.yaml + its schemaRefs into a
@@ -206,32 +206,52 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 	// ref: oapi-codegen — request validator emitted only for operations with
 	// a requestBody.
 	if contract.SchemaRefs.Request != "" && endpointSpec.HasBody {
-		reqPath := filepath.Join(rootDir, contractDir, contract.SchemaRefs.Request)
-		schemaBytes, err := os.ReadFile(reqPath) //nolint:gosec // schema path resolved from contract.yaml metadata
+		embedded, err := embedRequestSchema(contract.ID, rootDir, contractDir, contract.SchemaRefs.Request)
 		if err != nil {
-			return fmt.Errorf("contractgen build: %q read request schema for embed: %w", contract.ID, err)
+			return err
 		}
-		// Resolve external $ref entries so the embedded schema is self-contained.
-		// schemavalidate.NewValidator (santhosh-tekuri, base URI "mem:///") has no
-		// external loader; an unresolved $ref would fail to compile at codegen time.
-		bundled, err := bundleSchemaRefs(rootDir, reqPath, schemaBytes)
-		if err != nil {
-			return fmt.Errorf("contractgen build: %q bundle request schema $ref: %w", contract.ID, err)
-		}
-		// Compact to a single line: eliminates newlines so the schema can be
-		// safely embedded in the generated file as a Go interpreted string literal.
-		var compacted bytes.Buffer
-		if err := json.Compact(&compacted, bundled); err != nil {
-			return fmt.Errorf("contractgen build: %q compact request schema: %w", contract.ID, err)
-		}
-		// Validate schema compiles before embedding — fail-fast at codegen time
-		// rather than at runtime. ref: oapi-codegen pkg/codegen/templates/strict.
-		if _, vErr := schemavalidate.NewValidator(compacted.Bytes()); vErr != nil {
-			return fmt.Errorf("contractgen build: %q request schema fails to compile: %w", contract.ID, vErr)
-		}
-		spec.RequestSchemaJSON = compacted.String()
+		spec.RequestSchemaJSON = embedded
 	}
 	return nil
+}
+
+// embedRequestSchema reads, $ref-bundles, compacts, and compile-checks the
+// request schema at contractDir/ref, returning the single-line JSON to embed in
+// generated code for runtime schemavalidate.Validator construction. The
+// compile-check fails codegen early (rather than at runtime) when the schema is
+// malformed.
+//
+// Shared by HTTP handlers (handler.tmpl) and async command dispatch
+// (command.tmpl, #1588) — both validate untrusted wire bytes at ingress against
+// the embedded schema. Single source so the bundle/compact/compile-check
+// sequence stays identical across both transports.
+//
+//   - bundleSchemaRefs inlines external $ref so the embedded schema is
+//     self-contained: schemavalidate.NewValidator (santhosh-tekuri, base URI
+//     "mem:///") has no external loader; an unresolved $ref would fail to compile.
+//   - json.Compact eliminates newlines so the schema embeds safely as a Go
+//     interpreted string literal.
+//   - the NewValidator compile-check is the codegen-time fail-fast.
+//
+// ref: oapi-codegen — request validator emitted from the operation's requestBody schema.
+func embedRequestSchema(contractID, rootDir, contractDir, ref string) (string, error) {
+	reqPath := filepath.Join(rootDir, contractDir, ref)
+	schemaBytes, err := os.ReadFile(reqPath) //nolint:gosec // schema path resolved from contract.yaml metadata
+	if err != nil {
+		return "", fmt.Errorf("contractgen build: %q read request schema for embed: %w", contractID, err)
+	}
+	bundled, err := bundleSchemaRefs(rootDir, reqPath, schemaBytes)
+	if err != nil {
+		return "", fmt.Errorf("contractgen build: %q bundle request schema $ref: %w", contractID, err)
+	}
+	var compacted bytes.Buffer
+	if err := json.Compact(&compacted, bundled); err != nil {
+		return "", fmt.Errorf("contractgen build: %q compact request schema: %w", contractID, err)
+	}
+	if _, vErr := schemavalidate.NewValidator(compacted.Bytes()); vErr != nil {
+		return "", fmt.Errorf("contractgen build: %q request schema fails to compile: %w", contractID, vErr)
+	}
+	return compacted.String(), nil
 }
 
 // buildHTTPDTOs loads request/response schemas, converts them to DTOSpecs, and
@@ -765,6 +785,20 @@ func buildCommandSpec(spec *ContractGenSpec, rootDir string, contract *metadata.
 		return err
 	}
 	spec.DTOs = dtos
+
+	// Embed the request schema for runtime value-validation at the untrusted
+	// async command-entry boundary (#1588). Unlike HTTP (gated on endpoint
+	// HasBody), a command ALWAYS carries a request payload and D6 mandates a
+	// non-empty request schemaRef (checked above), so the embed is unconditional
+	// — there is no "command without a request validator" path. command.tmpl
+	// emits requestValidator + its DispatchAsync Validate call unconditionally;
+	// the golden byte-lock pins them so the value funnel cannot be silently
+	// dropped (ADR 202606040550-1044 §Amendment 2026-06-08).
+	embedded, err := embedRequestSchema(contract.ID, rootDir, contractDir, reqRef)
+	if err != nil {
+		return err
+	}
+	spec.RequestSchemaJSON = embedded
 
 	domainLast := domainLastSegment(contract.ID)
 	spec.Command = &CommandSpec{
