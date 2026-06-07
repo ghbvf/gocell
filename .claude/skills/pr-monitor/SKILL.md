@@ -21,6 +21,8 @@ disable-model-invocation: true
 
 **主要角色**：fix 侧监控（默认）；`--role=review` 时切换为 review 侧（见 §7）。
 
+**engine knob 说明**：`--fix-engine` 选择 **fix 侧**引擎（`claude|codex`）——这是与 codex-pr-router 的 `GOCELL_ROUTER_REVIEW_ENGINE`（review 侧引擎）**完全独立的两个轴**，不要混用或合并。
+
 **路由依据**：所有分支判定基于 **PR label**（`gh pr view <N> --json labels,state`），**不基于** block 字段中的 `next.agent`（block 字段仅供 §6.3 熔断判定参考）。
 
 ### 两种模式
@@ -70,12 +72,16 @@ gh pr view "$PR" --json number,state,labels \
 
 ## §2 游标初始化
 
-**首次 tick**：cursor = 当前所有评论中 `createdAt` 的最大值（这样启动我们的 ship/fix 评论本身不会被当作新 findings 重复触发）。
+**首次 tick**：cursor = 当前所有评论中 `created_at` 的最大值（这样启动我们的 ship/fix 评论本身不会被当作新 findings 重复触发）。
+
+> 注意：`gh api repos/.../issues/<N>/comments` REST 端点返回 **snake_case** 字段（`created_at`），
+> 而 `gh pr view --json comments` 返回 camelCase（`createdAt`）。这里统一使用前者，
+> cursor 初始化和 §3 过滤器均使用 `created_at`。
 
 ```bash
 # 初始化 cursor（首 tick 时执行）
 CURSOR=$(gh api repos/ghbvf/gocell/issues/${PR}/comments \
-  --jq '[.[].createdAt] | max // ""')
+  --jq '[.[].created_at] | max // ""')
 TICK_COUNT=0
 ```
 
@@ -87,9 +93,12 @@ TICK_COUNT=0
   "cursor": "<ISO8601 timestamp>",
   "tickCount": 0,
   "mode": "report|auto",
-  "fixEngine": "claude|codex"
+  "fixEngine": "claude|codex",
+  "role": "fix|review"
 }
 ```
+
+> `role` 必须随 payload 携带，否则重唤醒后 `--role` 丢失，loop 会静默回退为默认 fix 角色。
 
 ---
 
@@ -117,7 +126,9 @@ TICK_COUNT=0
 
 4. 推进 cursor = 最新评论 `createdAt`（若 `NEW_COMMENTS` 非空）
 5. 按 `$ROLE` / `$MODE` 分支：`--role=review` → §7；否则按 `$MODE` → §5（report）或 §6（auto）
-6. 递增 `TICK_COUNT`；`ScheduleWakeup(1800)` 调度下次 tick（终止条件已在步骤 2 中止）
+6. 递增 `TICK_COUNT`；`ScheduleWakeup(1800)` 调度下次 tick（终止条件已在步骤 2 中止）；
+   wakeup payload 携带 `{pr, cursor, tickCount, mode, fixEngine, role}` 全部字段（见 §2），
+   确保 `role` 在每次 re-entry 时正确恢复。
 
 ---
 
@@ -128,7 +139,9 @@ TICK_COUNT=0
 | `pr-status/ready` 在 label 中 | `echo $LABELS \| grep pr-status/ready` | "PR #N 已 ready，监控结束" |
 | PR 状态 != OPEN | `state != "OPEN"` | "PR #N 已关闭（state=$STATE），监控结束" |
 | tickCount >= 48（约 24h） | `[[ $TICK_COUNT -ge 48 ]]` | "监控超时（48 ticks ~24h），请人工检查 PR #N" |
-| §6 fire/handoff 条件触发 | §6.4 /fix 已调用 or §6.3 熔断 | 见各小节 |
+| §6.3 熔断触发 | `cycle.exhausted == true` or round >= 3 | 见 §6.3 |
+
+> **auto /fix 触发（§6.4）不是终止条件**：/fix 完成后 loop 切换到等待 `--check` 结论（`pr-status/needs-check-fix`），继续 ScheduleWakeup。终止只在上表条件之一成立时发生。
 
 ---
 
@@ -149,11 +162,15 @@ else:
 **findings 清单提取**（text-scrape 最新 pm:pr-review `<details>` Finding 行）：
 
 ```bash
-# 从最新 findings 评论提取 file:line 行
+# 从最新 findings 评论提取 Finding 行（格式：**F1** [P1·Cx2] `path/to/file.go:120` — ...）
 LATEST_REVIEW=$(echo "$NEW_COMMENTS" | jq -r '.[-1].body // ""')
-echo "$LATEST_REVIEW" | grep -oP 'F\d+[^\n]*\bfile:line\b[^\n]*' || \
+echo "$LATEST_REVIEW" | grep -oP '\*\*F\d+\*\*[^\n]*`[^`]+:\d+`[^\n]*' || \
 echo "$LATEST_REVIEW" | grep -oP '\*\*F\d+\*\*[^\n]*'
 ```
+
+> 旧 pattern `\bfile:line\b` 匹配字面字符串 "file:line"，永不命中真实 Finding 行（Finding 行
+> 格式为 `` **F1** [Cx1] `path/to/file.go:42` — 描述 ``）。新 pattern 先匹配带有
+> `` `path:lineno` `` 的 bold-F 行，fallback 匹配所有 bold-F 前缀行。
 
 **窗口打印格式**：
 
@@ -193,14 +210,24 @@ MERGEABLE=$(gh pr view "$PR" --json mergeable,mergeStateStatus \
 若 `MERGEABLE == "CONFLICTING"` 或 `mergeStateStatus == "DIRTY"`：
 
 ```bash
-# 解冲突（在 PR 所在 worktree 中执行）
-git -C "worktrees/$(gh pr view $PR --json headRefName --jq .headRefName)" \
-  fetch origin && \
-  git merge origin/develop --no-edit && \
-  git push
+# 解冲突（在 PR 的已有 dev worktree 中执行；不新建 worktree）
+# 优先复用 codex-pr-router 管理的 worktree（若 pr-monitor 在其中运行）；
+# 否则查找 PR 分支对应的已有 dev worktree。
+HEAD_REF=$(gh pr view "$PR" --json headRefName --jq .headRefName)
+WT_PATH=$(git worktree list --porcelain | awk -v b="$HEAD_REF" '
+  /^worktree / { wt=$2 }
+  /^branch / && $2 == "refs/heads/"b { print wt; exit }
+')
+if [[ -z "$WT_PATH" ]]; then
+  echo "pr-monitor: no existing worktree for branch $HEAD_REF; please resolve conflict manually" >&2
+else
+  git -C "$WT_PATH" fetch origin && \
+    git -C "$WT_PATH" merge origin/develop --no-edit && \
+    git -C "$WT_PATH" push
+fi
 ```
 
-解冲突后回 §6.2 重检。若无 worktree 可用：窗口打印冲突 + 建议人工解决。
+解冲突后回 §6.2 重检。若无已有 worktree 可用：窗口打印冲突 + 建议人工解决（不新建 worktree，避免与 router 或已有 dev worktree 命名冲突）。
 
 ### §6.3 findings 消费 + 熔断判定
 
@@ -334,7 +361,8 @@ review 结果由 /pr-review 技能贴评论 + 切 label，pr-monitor 继续 loop
   "cursor": "2026-06-07T10:30:00Z",
   "tickCount": 3,
   "mode": "auto",
-  "fixEngine": "claude"
+  "fixEngine": "claude",
+  "role": "fix"
 }
 ```
 

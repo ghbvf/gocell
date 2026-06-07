@@ -376,6 +376,11 @@ def _emit_decode(facts, schema):
 
 
 def do_selftest(schema):
+    # F7: explicit expected-check count so a silently-dropped check fails the
+    # selftest rather than printing "OK (N checks)" with a lower-than-expected N.
+    # Update this constant whenever a check is added or removed.
+    EXPECTED_CHECKS = 24
+
     checks = 0
     failures = []
 
@@ -578,12 +583,60 @@ def do_selftest(schema):
         failures.append("FAIL [%s]: %s" % (name, e))
 
     # ------------------------------------------------------------------
+    # 7. Array-items validation: ci block whose failedChecks[0] missing required key
+    # F8: the validate() array-items recursion's ci branch was previously untested.
+    # ------------------------------------------------------------------
+
+    name = "array-items/ci-failedChecks-missing-name"
+    try:
+        # ci kind needs a coherent triple: kind=ci, phase=check, verdict=ci-failed
+        facts = _make_facts("ci", "check", "ci-failed",
+                            ci={"failedChecks": [{"link": "https://example.com/run/1"}]})
+        # "name" is required in each failedChecks item per the schema; omitting it
+        # must cause decode to reject the block.
+        obj = derive(facts)
+        payload = base64.b64encode(canon(obj).encode("utf-8")).decode("ascii")
+        block_line = "<!-- %s %s -->" % (MARKER, payload)
+        assert_decode_fails(name, block_line)
+    except Exception as e:
+        failures.append("FAIL [%s]: %s" % (name, e))
+
+    # ------------------------------------------------------------------
+    # 8. Exhausted branch: rnd=3 forces next.agent=="human"
+    # F9: exhausted path was untested; only rnd=1 (non-exhausted) was covered.
+    # ------------------------------------------------------------------
+
+    name = "exhausted/pr-review/review/changes-requested"
+    try:
+        facts = _make_facts("pr-review", "review", "changes-requested", rnd=3)
+        decoded = _emit_decode(facts, schema)
+        assert_eq(name, decoded["next"]["agent"], "human")
+    except Exception as e:
+        failures.append("FAIL [%s]: %s" % (name, e))
+
+    name = "exhausted/pr-review/check/changes-requested"
+    try:
+        facts = _make_facts("pr-review", "check", "changes-requested", rnd=3)
+        decoded = _emit_decode(facts, schema)
+        assert_eq(name, decoded["next"]["agent"], "human")
+    except Exception as e:
+        failures.append("FAIL [%s]: %s" % (name, e))
+
+    # ------------------------------------------------------------------
     # Report
     # ------------------------------------------------------------------
 
     if failures:
         for f in failures:
             sys.stderr.write(f + "\n")
+        sys.exit(1)
+    # F7: assert the exact number of checks ran — a silently-dropped check
+    # still causes the selftest to fail even if failures is empty.
+    if checks != EXPECTED_CHECKS:
+        sys.stderr.write(
+            "FAIL [check-count]: expected %d checks, ran %d\n"
+            % (EXPECTED_CHECKS, checks)
+        )
         sys.exit(1)
     sys.stdout.write("pr-meta selftest: OK (%d checks)\n" % checks)
 
