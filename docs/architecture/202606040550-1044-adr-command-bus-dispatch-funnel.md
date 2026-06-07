@@ -49,7 +49,8 @@ issue 立项门要「上游 Hard + 下游 Hard」。**闭环 funnel 由两条 in
 |-----------|------|------|------|
 | `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01` | typed Handler/Register/Dispatch**/DispatchAsync**（#1667 起含 async）仅由 `command.tmpl` 派生（生产包外无手写 look-alike trio 声明） | **Hard**（codegen funnel + golden regenerate-and-diff 字节锁；`command.tmpl` 单一 emitter） | Medium（AST/types 声明扫描 + 反向 synth fixture） |
 | `COMMAND-DISPATCH-REGISTER-CALLER-01` | `(*command.Registry).RegisterHandler`/`LookupHandler` 调用方 ⊆ `generated/contracts/command/**` + `runtime/command` 自测 | Medium（Go 无 friend-package：「仅生成码可调」不可编译期表达；archtest caller-allowlist 兜底） | **Hard**（`ResolveMethodCall` 按 pkg path + receiver type 绑定 callee，alias/同名异型不匹配） |
-| `COMMAND-ASYNC-DISPATCH-CALLER-01`（#1667 / #1673） | `(*outbox.Relay).WithCommandDispatch` 必须是直接 method-call，其 dispatch-map 把生成 `DispatchID` const 映射到**同包**生成 `DispatchAsync`（`generated/contracts/command/**`），异步路径下游半边 | Medium（Go 无 friend-package：「relay 只接生成 DispatchAsync」不可编译期表达；archtest value-allowlist 兜底。forwarded func-var = #1508-family data-flow 残留。与同步 `…REGISTER-CALLER-01` 共用 gh #1575） | **Hard**（go/types 绑 value 的 `*types.Func` + key 的 `DispatchID *types.Const` 身份 = pkg path + name，alias-proof；**form-complete**：扫全部 WithCommandDispatch selector，method-value capture / method-expression 即违例（#1673 F2 闭 call-only 盲区）；key↔value 同源校验（#1673 F1，今日单包 vacuous，第 2 个 codegen command 自动 bites）） |
+| `COMMAND-ASYNC-DISPATCH-CALLER-01`（#1667 / #1673 / #1698 3-arg） | `(*outbox.Relay).WithCommandDispatch(reg, dispatch, claimer)`（#1698 起 **3-arg**，claimer 必填位置参）必须是直接 method-call，其 dispatch-map 把生成 `DispatchID` const 映射到**同包**生成 `DispatchAsync`（`generated/contracts/command/**`），异步路径下游半边 | Medium（Go 无 friend-package：「relay 只接生成 DispatchAsync」不可编译期表达；archtest value-allowlist 兜底。forwarded func-var = #1508-family data-flow 残留。与同步 `…REGISTER-CALLER-01` 共用 gh #1575） | **Hard**（go/types 绑 value 的 `*types.Func` + key 的 `DispatchID *types.Const` 身份 = pkg path + name，alias-proof；**form-complete**：扫全部 WithCommandDispatch selector，method-value capture / method-expression 即违例（#1673 F2 闭 call-only 盲区）；key↔value 同源校验（#1673 F1，今日单包 vacuous，第 2 个 codegen command 自动 bites）） |
+| `COMMAND-ASYNC-EMIT-FUNNEL-01`（#1698） | 任何 `command.*`-topic 的 `kout.Emit` / `kout.NewEntry` 必须在 `runtime/command` 包内（即异步命令只能经 sanctioned `command.EmitAsync` 出口构造 + 发射）；producer 侧上游半边 | **Medium**（Go 无 friend-package：「业务只能经 EmitAsync emit 异步命令」不可编译期表达；producer↔relay 经 async outbox store 解耦，「每条异步命令必带身份」无法端到端编译期 Hard——同 ConsumerBase 运行期 key 构造 / #1282·#851·#893 族结构天花板。archtest caller-allowlist 兜底；**won't-do ceiling**，per-command codegen extractor 不抬升该天花板，**不开伪 Hard-升级 issue**） | **Hard**（`EmitAsync` 的 subject/commandID 为 required 位置参 → happy-path「emit 异步命令但无身份槽」编译不可表达） |
 
 **闭环论证**：codegen-Hard 上游（typed funnel 不可手写，D1/D2）+ caller-allowlist-Hard 下游（raw `RegisterHandler` 在生成码外被调即 CI 红，D3）= 业务**既不能手写 typed funnel、也不能在 funnel 外用 raw registry** → 达成立项门「Hard 双向锁」。
 
@@ -62,10 +63,10 @@ issue 立项门要「上游 Hard + 下游 Hard」。**闭环 funnel 由两条 in
 PR-1 同步核心是 W3 的第一片。`Registry` map signature 与生成码 funnel 为后续保持**前向兼容的 seam**（不预设字段，需要时加）：
 
 - **④ async outbox 桥（#1667，已落地——见 §Amendment 2026-06-06）**：codegen 派生单态 `DispatchAsync(ctx, reg, entry)`（从 `entry.Payload()` JSON unmarshal 回 typed `*Request` → `LookupHandler` → 复用同一 `Handler`，丢弃 `*Response` 回 `error`）；relay 按 routing-topic 在 composition-root 注入的 dispatcher-map 中匹配 command → 在进程内触发 `DispatchAsync`，否则发 broker。JSON marshal 在 outbox 边界发生（D4 同步 type-assert 路径不变）。**判别器 = routing-topic + dispatcher-map 成员，未改 sealed `Entry` wire envelope、未引入 metadata 约定 → 未触发 contract-fanout 5 载体**（原文「携带 command kind——触及 sealed Entry wire envelope 或 topic 约定，触发 contract-fanout」+「relay 消费按 command id LookupHandler」实现为：command entry 即 `eventType = command id` 的普通 entry，`LookupHandler` 留在生成 `DispatchAsync` 体内、relay 不直接调）。
-- **⑤ idempotency 桥（#1669，子 issue）**：HTTP Idempotency-Key ↔ command_id 映射（复用 `runtime/http/idempotency` Claimer 两阶段）。**映射原语半已落地（#1669 PR-A）**：`runtime/http/idempotency` sealed funnel 扩第二构造器 `DeriveCommandKey(tenant, subject, command_id)`——纯编译期形态，产同一 sealed `IdempotencyKey`、流同一 `Store.Claim` sink（详见 ADR-1449 §Amendment 2026-06-07）；#1610 cross-cell 同槽路由消费它。**Claimer-wrap 消费半延期**（`kernel/idempotency.Claimer` 两阶段包裹 relay 命令分发 + 三态生命周期）——今日 0 个生产 `WithCommandDispatch` 调用点，且 sealed-key→Claimer string-key 扁平化 + per-instance 身份承载有真实设计缺口，须随真实 devicecell 异步 command producer 落地（与下一项「真实 binary async producer 接线」绑定 → **#1698**，避免给无 producer 的 consumer 接 dead wiring）。本项**不改 §4 评级矩阵**（funnel 正交：映射原语在 `runtime/http/idempotency` funnel，与 command dispatch/register funnel 不相交），无 ✅→⚠️/❌ 降格。
+- **⑤ idempotency 桥（#1669 映射半 + #1698 消费半，已落地）**：HTTP Idempotency-Key ↔ command_id 映射（复用 `runtime/http/idempotency` 派生 key + `kernel/idempotency.Claimer` 两阶段）。**映射原语半已落地（#1669 PR-A）**：`runtime/http/idempotency` sealed funnel 扩第二构造器 `DeriveCommandKey(tenant, subject, command_id)`——纯编译期形态，产同一 sealed `IdempotencyKey`、流同一 `Store.Claim` sink（详见 ADR-1449 §Amendment 2026-06-07）；#1610 cross-cell 同槽路由消费它。**Claimer-wrap 消费半已落地（#1698 PR-B，见 §Amendment 2026-06-08）**：`kernel/idempotency.Claimer` 两阶段包裹 relay 命令分发 + 三态生命周期；sealed-key→Claimer string-key 经新增 `IdempotencyKey.Flat()` 扁平化（node-agnostic）；per-instance 身份经 `outbox.Entry` 的 `AggregateID(subject)` + business-metadata（command_id）承载，随真实 devicecell 异步 command producer 一并落地。**§4 评级矩阵新增「命令幂等身份双向锁 funnel」行（见 §Amendment 2026-06-08）**，无 ✅→⚠️/❌ 降格。
 - **command-entry 值校验 funnel（#1588，Blocked-by ④）**：`DispatchAsync` 只做 typed JSON unmarshal（typed struct 即结构契约），不执行 schema 值约束（minLength/required/…）；untrusted-payload 值校验在此不可信 async 边界落地（Amendment 2026-06-04 已点名归属）。
 - ~~**command consistencyLevel governance（#1044 子 issue）**：PR-1 不锁 level~~ **已交付（#1668，双层）**：`COMMAND-CONTRACT-CONSISTENCY-LEVEL-01` 下界约束 `consistencyLevel ≥ L1`，仅拒 `L0`（命令跨本地边界至少需 L1 LocalTx 原子性，L0 LocalOnly 结构上不适用）。**双层**（同 PROJECTION-CONSISTENCY-01 单 ID 双层范式）：Hard = `types.tmpl` 编译期 `const _ = uint(cellvocab.<level> - cellvocab.L1)` 对 codegen:true 命令契约 uint 下溢拦 L0；Medium = governance rule 兜底 codegen:false + in-memory fixture。下界（非 exact-lock）使现有 active L4 `devicecommand` 契约全部通过、零误伤。详见 §Amendment 2026-06-06（#1668）。
-- **真实 binary async producer 接线（#1044 子 issue，gh backlog，Blocked-by ④）**：④ 交付机制 + relay-level E2E（mem outbox store 绑生成 `enqueue.DispatchAsync` 扮演 composition root）；devicecell 异步 enqueue 命令 + iotdevice durable-mode relay `WithCommandDispatch` 接线随真实 producer 落地（给无 producer 的 consumer 接 binary wiring = dead wiring，故 defer）。
+- **真实 binary async producer 接线（#1698 PR-B，已落地——见 §Amendment 2026-06-08）**：archetype ① **事件反应式**——`examples/iotdevice/cells/devicecell/slices/devicebootstrap` 订阅 `event.device-registered.v1` → handler 经 `command.EmitAsync` emit `command.devicecommand.enqueue.v1`（包进 `CellTxManager.RunInTx`，durable PG outbox writer 要 tx）；`examples/iotdevice/run.go` demo + durable 两模式都接命令-relay 子系统（首个生产 `WithCommandDispatch` callsite）。其余 producer archetype（② #1757 同步 HTTP→command、③ #1758 saga step→command）仍复用本 wrap，随各自 PR 落地。
 
 amend 时须回到 §4 矩阵逐行重评（ai-robust.md ADR amendment 必查）：见 §Amendment 2026-06-06。
 
@@ -85,7 +86,8 @@ amend 时须回到 §4 矩阵逐行重评（ai-robust.md ADR amendment 必查）
 
 | 载体 | ID / 名 | 文件 |
 |------|---------|------|
-| archtest | `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01` / `COMMAND-DISPATCH-REGISTER-CALLER-01` | `tools/archtest/command_dispatch_funnel_test.go` |
+| archtest | `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01` / `COMMAND-DISPATCH-REGISTER-CALLER-01` / `COMMAND-ASYNC-DISPATCH-CALLER-01`（#1698 3-arg） | `tools/archtest/command_dispatch_funnel_test.go` |
+| archtest | `COMMAND-ASYNC-EMIT-FUNNEL-01`（#1698 producer 上游半边） | `tools/archtest/command_async_emit_caller_test.go` |
 | governance | `COMMAND-CONTRACT-SCHEMA-REF-01` / `COMMAND-CONTRACT-CONSISTENCY-LEVEL-01` | `kernel/governance/rules_command.go` |
 | codegen | `kind:command` 生成器 + golden；`COMMAND-CONTRACT-CONSISTENCY-LEVEL-01` 编译期 const-guard | `tools/codegen/contractgen/{builder,generator}.go`（`validateCommandLevel`）+ `templates/{command,types}.tmpl` |
 | runtime | sealed `Registry` | `runtime/command/registry.go` |
@@ -186,3 +188,38 @@ empty / 非法 level 不由本规则报——由 `FMT-03`（contract consistency
 **F4（可观测维度）不在本轮**：命令 dispatch 与 broker publish 共享 `published` stat/metric 的 sink 维度区分，因今日 0 命令 producer（dead observability，sink 维度命名需真实流量决定），完整并入 **#1674**（已含 F4/F5/F6）随真实 producer 接线统一落地。
 
 **eventbus.md「Relay 命令分发」节**同步重写 settle 语义（原「失败 `MarkRetry`」）。
+
+---
+
+## Amendment 2026-06-08 — ⑤ PR-B Claimer-wrap 消费半 + 首个真实异步 producer 落地（#1698）
+
+**触发**：#1698 落地 §5 演进路径 ⑤ 的 **Claimer-wrap 消费半** + **真实 binary async producer 接线**（archetype ① 事件反应式 devicecell）。按 ai-robust.md「ADR amendment 必查」逐行重评 §4 + 重写矛盾原文（§5「Claimer-wrap 消费半延期」/「真实 binary producer defer」/「0 生产 WithCommandDispatch callsite」+ §4 第 3 行 2-arg 形态均已就地改写）。
+
+**交付**（机制 + 首个生产 producer + 生产 wiring）：
+
+1. **命令幂等身份双向锁 funnel**（`runtime/command/command_idempotency.go`）：
+   - `const CommandIDMetadataKey = "gocell.command.idempotency_id"`（单源声明，producer + relay 共引；`gocell.command.` 前缀刻意避开 `kout.ReservedMetadataKeys` observability/principal 命名空间——commandID 是命令实例 dedup token，非 principal/observability 身份，故落 producer-owned business metadata map）。
+   - producer funnel `EmitAsync[T](ctx, clk, emitter kout.Emitter, dispatchID CommandID, subject, commandID string, payload T) error`——唯一 sanctioned 异步命令 emit 出口，subject/commandID 必填位置参（**编译期 Hard**：「emit 异步命令但无身份槽」happy-path 不可表达）。内部 `NewEntry(topic=dispatchID)` + `WithAggregateID(subject)` + `WithMetadata{CommandIDMetadataKey: commandID}` + `emitter.Emit`。
+   - relay funnel `ClaimKeyFromEntry(e kout.Entry) (key string, ok bool)`：tenant = `Principal().TenantID`（ctx 传播、`NewEntry` 注入）、subject = `AggregateID()`、commandID = `Metadata()[CommandIDMetadataKey]`；任一空 → `ok=false`（relay fail-closed dead-letter）；否则 `idemkey.DeriveCommandKey(tenant, subject, commandID).Flat()`。
+   - `IdempotencyKey.Flat() string`（`runtime/http/idempotency/key.go`）= `ns + "\x00" + key`，node-agnostic，sealed key → Claimer string-key 唯一扁平化出口（详见 ADR-1449 §Amendment 2026-06-08）。
+
+2. **relay Claimer 两阶段 + 破坏式 3-arg**（`runtime/outbox/relay.go` / `relay_command.go`）：`WithCommandDispatch(reg, dispatch, claimer)` **2→3 arg 破坏式改**（claimer 必填位置参，**编译期不可表达「接命令分发但无去重」**）；`Start()` nil-guard（dispatch 非空但 claimer nil → fail-fast）。命令分支：`ClaimKeyFromEntry` → `!ok` → `kout.NewPermanentError`（MarkDead，fail-closed）；否则 `Claimer.Claim`：**Acquired** → dispatch + Commit/Release；**Done** → 跳过 dispatch + MarkPublished（去重）；**Busy** → MarkRetry；**Claim infra err** → MarkRetry。
+
+3. **command_id 取值 = 源事件 `entry.ID()`**（确定性、重投稳定；不碰 sealed envelope）。tenant = principal.TenantID；subject = device id。
+
+4. **首个真实 producer**（archetype ① 事件反应式，`examples/iotdevice/cells/devicecell/slices/devicebootstrap`）：订阅 `event.device-registered.v1` → handler 经 `command.EmitAsync` emit `command.devicecommand.enqueue.v1`，**包进 `CellTxManager.RunInTx`**（durable PG outbox writer 要 tx）。
+
+5. **生产 wiring**（`examples/iotdevice/run.go`，**首个生产 `WithCommandDispatch` callsite**）：demo + durable **两模式都接**命令-relay 子系统——demo `outboxtest.FakeStore`（store = writer 同一实例）/ durable `adapterpg.NewOutboxStore` + `NewOutboxWriter`；单一共享 `idempotency.NewInMemClaimer` 同喂 relay command-dispatch + ConsumerBase；`bootstrap.WithRelay` + `WithConsumerBase`；bootstrap emitter = WriterEmitter over store-writer，txManager demo `outbox.DemoCellTxManager()` / durable `persistence.WrapForCell(adapterpg.NewTxManager(pool))`。
+
+6. **archtest**：新 `COMMAND-ASYNC-EMIT-FUNNEL-01`（`tools/archtest/command_async_emit_caller_test.go`）；`COMMAND-ASYNC-DISPATCH-CALLER-01` 更新到 3-arg。
+
+**§4 评级矩阵逐行重评（无格降级）**：
+
+- `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`：**不变**（上游 Hard / 下游 Medium）——本 PR 不触及 typed Handler/Register/Dispatch/DispatchAsync 派生。
+- `COMMAND-DISPATCH-REGISTER-CALLER-01`：**不变**（上游 Medium / 下游 Hard）——`RegisterHandler`/`LookupHandler` caller-allowlist 不动（devicecell producer 经 `EmitAsync`、relay 经生成 `DispatchAsync`，均不直接调）。
+- `COMMAND-ASYNC-DISPATCH-CALLER-01`：**评级不变**（上游 Medium / 下游 Hard），形态从 2-arg 更新到 3-arg（claimer 必填位置参纳入 method-call 形态校验，下游 Hard 覆盖**净增**）。
+- **新增行 `COMMAND-ASYNC-EMIT-FUNNEL-01`**（producer 上游半边）：**下游 Hard**（`EmitAsync` subject/commandID required 位置参，happy-path「无身份槽」编译不可表达）+ **上游 Medium**（Go 无 friend-package，archtest caller-allowlist：`command.*`-topic 的 `kout.Emit`/`NewEntry` 必须在 `runtime/command`）。
+
+**Medium 结构天花板（诚实记 won't-do ceiling，不伪装延期 Hard）**：producer↔relay 经 async outbox store **解耦**，「每条异步命令必带身份」**无法端到端编译期 Hard**——producer 把命令写成 store 里的 `outbox.Entry`，relay 异步读回，二者不在同一调用栈，Go 类型系统无法表达「凡进 store 的 command-topic entry 必带 commandID」。这与 ConsumerBase 运行期 key 构造 / #1282·#851·#893 同族**永久结构天花板**。补偿 = 上游 bypass archtest（`COMMAND-ASYNC-EMIT-FUNNEL-01`，禁 funnel 外构造 command-topic entry）+ 下游 fail-closed relay（`ClaimKeyFromEntry` 缺身份 → `MarkDead`）**双锁兜底**。**不开伪 Hard-升级 issue**——per-command codegen extractor 不会抬升该结构天花板（producer/relay 跨 async 边界是 command-bus 的本质形态，非可消除的实现缺陷）。
+
+**无 ✅→⚠️/❌ 降格，无补偿措施缺口**：⑤ PR-B 未改 `kernel/outbox.Entry` wire envelope（commandID 走既有 business-metadata map + AggregateID，均 producer-owned 既有字段）；OUTBOX-ENTRY 系列封装 + §4 同步双向锁均不受影响；新增 producer funnel 是**净增**覆盖。**不触发 contract-fanout 5 载体**——无 interface 签名 / schema / migration / errcode 新增（`WithCommandDispatch` 2→3 arg 是 `runtime/outbox` 内部 method 签名演化，非跨 cell wire 契约；唯一 callsite 同 PR 更新）。
