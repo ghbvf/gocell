@@ -28,16 +28,20 @@
 #
 # Exit codes: 0 ok · 1 gh/IO error · 2 no/invalid block · 3 stale block · 64 usage error
 #
-# Trust model (layered, fail-safe): `round`/`extract` only read comments from
-# trusted authors (author_association OWNER/MEMBER/COLLABORATOR — F3), only
-# count/accept blocks whose repo+pr match this PR (cross-PR copy-paste ignored),
-# and only accept *canonical* blocks — every derived field (next/idempotencyKey/
-# cycle.maxRounds/cycle.exhausted) must equal what emit would re-derive from the
-# block's own facts (forgery rejected — F1); maxRounds is a sealed constant (F2).
-# `extract` additionally rejects blocks whose headSha != the live PR head (stale).
-# A trusted member could still inflate cycle.round to trip the breaker early, but
-# that fails *safe* (toward human escalation, never auto-merge) and is recoverable
-# by deleting the comment — accepted for an internal single-tenant repo.
+# Trust model (layered, fail-safe): `round`/`extract` only read comments that are
+# both from a trusted author (author_association OWNER/MEMBER/COLLABORATOR) AND a
+# real pm:* protocol comment (carry a <!-- pm:ship|fix|pr-review --> marker) — F3;
+# only count/accept blocks whose repo+pr match this PR (cross-PR copy-paste
+# ignored); and only accept *canonical* blocks — every derived field (next/
+# idempotencyKey/cycle.maxRounds/cycle.exhausted) must equal what emit would
+# re-derive from the block's own facts (forgery rejected — F1); maxRounds is a
+# sealed constant (F2). `extract` additionally rejects blocks whose headSha !=
+# the live PR head (stale). Accepted residual (internal single-tenant repo): a
+# trusted member who *intentionally* crafts a pm:* comment can still post a
+# fresh canonical block or inflate cycle.round — but both fail *safe* (toward
+# human escalation, never auto-merge) and are recoverable by deleting the
+# comment. Cryptographic block signing (HMAC / GitHub App identity) would close
+# this last gap but is deferred (YAGNI for this repo).
 #
 # Schema single source: hack/automation/schema/pr-meta.v1.json
 #
@@ -345,14 +349,16 @@ cmd_emit() { py emit "${SCHEMA_FILE}"; }
 
 cmd_decode() { py decode "${SCHEMA_FILE}"; }
 
-# fetch_trusted_bodies prints the bodies of only those PR comments whose author
-# has write access (author_association OWNER/MEMBER/COLLABORATOR). This is the
-# single trust boundary for the dispatch protocol (F3): an untrusted commenter
-# cannot inject a machine block that extract/round would feed to an executor.
+# fetch_trusted_bodies prints the bodies of PR comments that are BOTH from a
+# trusted author (author_association OWNER/MEMBER/COLLABORATOR) AND a real pm:*
+# protocol comment (carry a <!-- pm:ship|fix|pr-review --> marker). This is the
+# single trust boundary for the dispatch protocol (F3): neither an untrusted
+# commenter nor a canonical block pasted into a trusted author's plain (non-pm)
+# comment can reach extract/round as a dispatch fact.
 fetch_trusted_bodies() {
     local pr="$1"
     gh api "repos/${REPO_SLUG}/issues/${pr}/comments" --paginate \
-        --jq '.[] | select(.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") | .body'
+        --jq '.[] | select((.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") and (.body | test("<!-- pm:(ship|fix|pr-review) -->"))) | .body'
 }
 
 cmd_extract() {
