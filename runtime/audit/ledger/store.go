@@ -78,6 +78,30 @@ type AuditFilters struct {
 	To time.Time
 }
 
+// ValidateQueryTenant enforces the Store.Query tenant-axis contract and is the
+// single source of the audit-specific "empty vs non-empty" tenant rule shared by
+// every backend (MemStore / PG LedgerStore / MultiStore), so the two halves
+// cannot drift apart:
+//
+//   - A NON-EMPTY tenant MUST be canonical (tenant.TenantID.Validate) — a garbage
+//     value like "tenant-a" is rejected at the store, not silently treated as a
+//     distinct partition that no canonical query ever matches.
+//   - An EMPTY tenant is permitted: it is the legitimate system-chain read used by
+//     trusted internal callers (startup tail-verify, the dual-writer, conformance
+//     sysVis cases), collapsing the predicate to tenant_id = ” (system rows only,
+//     never another tenant's rows — fail-closed, NOT "all").
+//
+// This is deliberately NOT a full t.Validate(): the strict post-auth boundary that
+// also rejects an EMPTY tenant lives in cells/auditcore/slices/auditquery
+// Service.Query (every user request is tenant-scoped). The store permits empty
+// for the internal system-chain capability above (#1618 F2).
+func ValidateQueryTenant(t tenant.TenantID) error {
+	if t.String() == "" {
+		return nil
+	}
+	return t.Validate()
+}
+
 // QuerySort returns the canonical ordering for audit ledger listings: newest
 // first (timestamp DESC) with the store-assigned id as a stable ASC tie-breaker.
 // It is the single source of truth shared by every Store.Query caller and
@@ -182,8 +206,12 @@ type Store interface {
 	// the app-layer half of the dual-layer tenant isolation; FORCE RLS on the
 	// app.tenant_id GUC is the DB-Hard primary. On mem (no RLS) the typed param is
 	// the sole tenant isolation. The auditquery handler passes t from the
-	// authenticated principal — every Query is tenant-scoped (fail-closed; a
-	// tenant-less Query is not expressible).
+	// authenticated principal, and Service.Query rejects an empty/invalid t — so on
+	// the post-auth path every Query is tenant-scoped (fail-closed). A non-empty t
+	// must be canonical (ValidateQueryTenant); an EMPTY t is the legitimate
+	// system-chain read for trusted internal callers (startup tail-verify,
+	// dual-writer, conformance) and collapses to tenant_id = '' (system rows only,
+	// never another tenant's rows).
 	//
 	// vis is the row-visibility obligation enforced on the actor_id owner column
 	// (the orthogonal OWNER axis). Self/device scopes restrict results to entries

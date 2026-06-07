@@ -993,25 +993,41 @@ func runQueryInvalidCursorRejected(t *testing.T, factory Factory) {
 	assertErrCode(t, err, errcode.ErrCursorInvalid)
 }
 
+// Canonical tenant UUIDs for the per-tenant isolation conformance (#1618). They
+// MUST be canonical: Store.Query now rejects a non-empty non-canonical tenant
+// (ledger.ValidateQueryTenant), so the pre-#1618 "tenant-a"/"tenant-b" string
+// fixtures would fail the contract instead of exercising the partitioning — which
+// is exactly the gap review F4 closed (the suite now pins the mandatory canonical
+// tenant contract).
+const (
+	isoTenantA = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+	isoTenantB = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+)
+
 // runQueryTenantIsolation locks per-(namespace,tenant) chain isolation (#1618):
-// querying with tenant-a returns only tenant-a rows + tenant-less system rows
-// (never tenant-b's rows), and vice versa. An EMPTY tenant param ("") is
-// fail-closed — it collapses the predicate to `tenant_id = ”` and sees ONLY
-// system rows, never any tenant's rows (mem mirrors the PG predicate exactly).
-// Production always passes a non-empty tenant from the authenticated principal.
+// querying with tenant-A returns only tenant-A rows + tenant-less system rows
+// (never tenant-B's rows), and vice versa. Two tenant-axis edges are also pinned:
+//   - an EMPTY tenant is the legitimate system-chain read (ValidateQueryTenant
+//     permits it) — it collapses the predicate to `tenant_id = ”` and sees ONLY
+//     system rows, never any tenant's rows (mem mirrors the PG predicate exactly);
+//   - a NON-EMPTY but non-canonical tenant is rejected at the store, so a garbage
+//     tenant can never be treated as a silent distinct partition.
+//
+// Production always passes a canonical tenant from the authenticated principal
+// (and Service.Query additionally rejects an empty one at the post-auth boundary).
 func runQueryTenantIsolation(t *testing.T, factory Factory) {
 	store, _, fc, cleanup := factory(t)
 	defer cleanup()
 
-	// Seed: 2 rows in tenant-a, 1 in tenant-b, 1 tenant-less (system chain "").
+	// Seed: 2 rows in tenant-A, 1 in tenant-B, 1 tenant-less (system chain "").
 	// Same event type so only the tenant partition distinguishes them.
 	seed := []struct {
 		eventID  string
 		tenantID string
 	}{
-		{"ti-a1", "tenant-a"},
-		{"ti-a2", "tenant-a"},
-		{"ti-b1", "tenant-b"},
+		{"ti-a1", isoTenantA},
+		{"ti-a2", isoTenantA},
+		{"ti-b1", isoTenantB},
 		{"ti-none", ""},
 	}
 	for _, s := range seed {
@@ -1033,19 +1049,30 @@ func runQueryTenantIsolation(t *testing.T, factory Factory) {
 		tid     string
 		wantIDs []string
 	}{
-		// tenant-a: sees its OWN rows + system ("") rows, never tenant-b rows.
-		{"tenant-a sees its rows + system, not tenant-b", "tenant-a", []string{"ti-a1", "ti-a2", "ti-none"}},
-		// tenant-b: sees its row + system ("") rows, never tenant-a rows.
-		{"tenant-b sees its row + system, not tenant-a", "tenant-b", []string{"ti-b1", "ti-none"}},
-		// Empty tenant "" is fail-closed: sees ONLY tenant-less system rows, never
-		// any tenant's rows (predicate collapses to tenant_id = '').
-		{"empty tenant is fail-closed (system rows only)", "", []string{"ti-none"}},
+		// tenant-A: sees its OWN rows + system ("") rows, never tenant-B rows.
+		{"tenant-A sees its rows + system, not tenant-B", isoTenantA, []string{"ti-a1", "ti-a2", "ti-none"}},
+		// tenant-B: sees its row + system ("") rows, never tenant-A rows.
+		{"tenant-B sees its row + system, not tenant-A", isoTenantB, []string{"ti-b1", "ti-none"}},
+		// Empty tenant "" is the internal system-chain read: sees ONLY tenant-less
+		// system rows, never any tenant's rows (predicate collapses to tenant_id = '').
+		{"empty tenant is system-chain read (system rows only)", "", []string{"ti-none"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			assertTenantScopedQuery(t, store, tc.tid, tc.wantIDs)
 		})
 	}
+
+	// A non-empty non-canonical tenant is rejected at the store (ValidateQueryTenant)
+	// — it is never treated as a distinct partition that returns zero rows.
+	t.Run("non-canonical tenant is rejected", func(t *testing.T) {
+		_, err := store.Query(context.Background(), tenant.TenantID("not-a-uuid"),
+			mustRowVisibility(t, tenant.RowScopeTenant, ""),
+			ledger.AuditFilters{}, query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+		if err == nil {
+			t.Fatal("Query with a non-canonical tenant must return an error, not silently match nothing")
+		}
+	})
 }
 
 // assertTenantScopedQuery runs a tenant.TenantID-partitioned Query and asserts

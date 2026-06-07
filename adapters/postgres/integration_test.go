@@ -299,7 +299,8 @@ func TestIntegration_OutboxWriter(t *testing.T) {
 
 		// Verify the entry was persisted.
 		var aggID, eventType, status string
-		err = pool.DB().QueryRow(ctx,
+		err = pool.DB().QueryRow(
+			ctx,
 			"SELECT aggregate_id, event_type, status FROM outbox_entries WHERE id = $1",
 			entryID,
 		).Scan(&aggID, &eventType, &status)
@@ -351,7 +352,8 @@ func TestIntegration_OutboxWriter(t *testing.T) {
 
 		// The outbox entry should NOT exist because the tx was rolled back.
 		var count int
-		err = pool.DB().QueryRow(ctx,
+		err = pool.DB().QueryRow(
+			ctx,
 			"SELECT count(*) FROM outbox_entries WHERE id = $1", entryID,
 		).Scan(&count)
 		require.NoError(t, err)
@@ -995,6 +997,76 @@ func TestMigrator_ForwardRebuild_Migration043_PopulatedAuditEntries(t *testing.T
 		)`).Scan(&subjectIDExists)
 	require.NoError(t, err)
 	assert.True(t, subjectIDExists, "audit_entries must have subject_id column after migration 043")
+}
+
+// TestMigrator_ForwardRebuild_Migration055_PopulatedAuditEntries mirrors the
+// migration 043 populated-table test for migration 055, the second audit_entries
+// DROP+recreate (per-(namespace,tenant) chain + FORCE RLS, #1618). 055 carries the
+// same destructive risk as 043, so the populated-table forward-rebuild gate must be
+// exercised: with a row present and migration 055 pending, plain Up() must
+// fail-closed citing migration 55, and only an explicit ForwardRebuild permit for
+// 55 may proceed. The pre-fix suite covered only fresh-DB up-down-up idempotency
+// and Down permit rejection (review F5).
+func TestMigrator_ForwardRebuild_Migration055_PopulatedAuditEntries(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	// Apply migrations up through 054 so audit_entries exists in its pre-055
+	// (043-rebuilt + 047 trace_id) shape — all columns NOT NULL.
+	mfs054 := migrationsUpToFS(t, 54)
+	prep, err := newMigratorForTable(pool, mfs054, "schema_migrations_055_prep")
+	require.NoError(t, err)
+	require.NoError(t, prep.Up(ctx), "Up() through 054 must succeed")
+
+	// Insert a row into the pre-055 audit_entries to make migration 055 dangerous.
+	// All pre-055 columns are NOT NULL with no DEFAULT, so every one must be supplied.
+	_, execErr := pool.DB().Exec(ctx, `
+		INSERT INTO audit_entries
+			(id, namespace, seq_no, event_id, event_type, actor_id, subject_id,
+			 tenant_id, session_id, correlation_id, trace_id, occurred_at, timestamp,
+			 payload, prev_hash, hash)
+		VALUES
+			(gen_random_uuid(), 'auditcore', 1, 'evt-055-001', 'test.event', 'actor-1',
+			 '', '', '', '', '', now(), now(), '\x7b7d', '',
+			 'aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd')
+	`)
+	require.NoError(t, execErr, "must be able to insert a row into pre-055 audit_entries")
+
+	// Up() must fail-closed: 055 is pending and audit_entries has rows. Bound the FS
+	// to 055 so it is the SOLE pending audit_entries rebuild (1..054 already applied),
+	// asserting the gate cites migration 55 specifically.
+	migrator, err := newMigratorForTable(pool, migrationsUpToFS(t, 55), "schema_migrations_055_prep")
+	require.NoError(t, err)
+
+	upErr := migrator.Up(ctx)
+	require.Error(t, upErr, "Up() must refuse when migration 055 target audit_entries has rows")
+	var ec *errcode.Error
+	require.True(t, errors.As(upErr, &ec), "error must wrap *errcode.Error")
+	assert.Equal(t, ErrAdapterPGMigrate, ec.Code)
+	migDetail, ok := ec.FindAttr("migration")
+	require.True(t, ok, "error must have a public detail keyed 'migration'")
+	assert.Equal(t, int64(55), migDetail.Value(), "migration detail value must be 55")
+
+	// ForwardRebuild with the correct permit must succeed (bounded FS: 055 the sole
+	// pending rebuild).
+	migrator2, err := newMigratorForTable(pool, migrationsUpToFS(t, 55), "schema_migrations_055_prep")
+	require.NoError(t, err)
+
+	permit := mustAllowForwardRebuild(t, 55, "055 audit_entries per-tenant rebuild integration test")
+	require.NoError(t, migrator2.ForwardRebuild(ctx, permit),
+		"ForwardRebuild with permit for migration 055 must succeed")
+
+	// Verify migration 055's per-tenant unique index was created (043-era
+	// uq_audit_namespace_event_id is dropped; uq_audit_ns_tenant_event_id is new).
+	var perTenantIdxExists bool
+	err = pool.DB().QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_indexes
+			WHERE tablename = 'audit_entries' AND indexname = 'uq_audit_ns_tenant_event_id'
+		)`).Scan(&perTenantIdxExists)
+	require.NoError(t, err)
+	assert.True(t, perTenantIdxExists,
+		"audit_entries must have the per-tenant uq_audit_ns_tenant_event_id index after migration 055")
 }
 
 // TestMigrator_ForwardRebuild_Migrations043And044_DualPermit verifies that

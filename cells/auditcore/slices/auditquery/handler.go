@@ -23,13 +23,14 @@ import (
 //   - OR actorId equals authenticated subject (self-access)
 //   - OR subject has the "admin" role
 //
-// Tenant isolation (epic #1337 PR-2a): every query is tenant-scoped. The List
-// adapter always sets AuditFilters.TenantID from the authenticated principal and
-// the store filters by it, so a caller can only ever read its own tenant's audit
-// trail (admin-ness widens the actor axis, never the tenant axis). This handler
-// is the isolation boundary — it replaced the PR-1 (#1339 F2) blanket 403
-// fail-closed gate that rejected every tenant-bearing caller outright because no
-// tenant-scoped read path existed yet.
+// Tenant isolation (epic #1337 PR-2a, typed param #1618): every query is
+// tenant-scoped. The List adapter always passes the typed tenant.TenantID parsed
+// from the authenticated principal to Service.Query → Store.Query, which scopes
+// results to that tenant (plus tenant-less system rows), so a caller can only ever
+// read its own tenant's audit trail (admin-ness widens the actor axis, never the
+// tenant axis). This handler is the isolation boundary — it replaced the PR-1
+// (#1339 F2) blanket 403 fail-closed gate that rejected every tenant-bearing caller
+// outright because no tenant-scoped read path existed yet.
 //
 // SelfOr cannot be used here because "self" is determined by the actorId query
 // parameter, not a path parameter.
@@ -239,13 +240,14 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 //
 // TenantID is deliberately NOT exposed per-row. This is no longer a fail-open
 // gap: as of epic #1337 PR-2a the read path IS tenant-scoped — the List adapter
-// always sets AuditFilters.TenantID from the authenticated principal, so every
-// returned row already belongs to the caller's own tenant. A per-row tenantId
-// field would therefore be redundant (a constant equal to the caller's own
-// tenant), so it is omitted. This replaced the PR-1 (#1339 F2) blanket 403 gate
-// and retired the appender's INV-SINGLE-TENANT-ONLY tripwire (#1289). A principal
-// with an empty tenant is rejected at the List boundary (F1), so the read path is
-// never tenant-unscoped; DB-layer RLS (PR-3) is defense-in-depth.
+// always passes the typed tenant.TenantID (from the authenticated principal) to
+// Store.Query, so every returned row already belongs to the caller's own tenant
+// (plus tenant-less system rows). A per-row tenantId field would therefore be
+// redundant (effectively a constant equal to the caller's own tenant), so it is
+// omitted. This replaced the PR-1 (#1339 F2) blanket 403 gate and retired the
+// appender's INV-SINGLE-TENANT-ONLY tripwire (#1289). A principal with an empty
+// tenant is rejected at the List boundary (F1), so the read path is never
+// tenant-unscoped; DB-layer FORCE RLS (#1618) is defense-in-depth.
 func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 	// Both audit-evidence timestamps use RFC3339Nano: sub-second precision is
 	// part of the evidence (the HMAC chain pins occurred_at/timestamp at nanosecond

@@ -167,6 +167,45 @@ bitmapscan). Per-tenant queries therefore do a namespace-prefix scan with an
 in-scan tenant_id filter. This is acceptable for current audit volumes; revisit
 if per-tenant chain depth or tenant count grows significantly.
 
+## Amendment 2026-06-07 — pre-auth scoped-emit tenant provenance (PR #1753 review F1)
+
+The original threat matrix's **Write surface** row treated every `tenant_id=''`
+row as a genuinely tenant-agnostic system/framework event, bounded by the
+appender being the sole writer. Review F1 found that assumption was **false for
+two tenant-bearing pre-auth events**: login's `event.session.created.v1`
+(`cells/accesscore/slices/sessionlogin`) and setup's `event.user.created.v1`
+(`cells/accesscore/slices/setup`) are emitted **inside** `tenant.WithScope`
+(scopedtx) — so the RLS scope carries the real tenant — but the outbox principal
+tenant was sourced **only** from `ctxkeys.TenantID`, which login/setup never set
+(pre-auth, JWT-exempt). The appender therefore wrote those rows with
+`tenant_id=''`, and the new D4 `OR tenant_id=''` USING clause made them readable
+by **every** tenant — a cross-tenant audit leak introduced by this PR (pre-#1618
+the read filter was `AND tenant_id=$N`, so those rows were invisible, not
+all-visible).
+
+**Compensating measure (fix, this PR):** `kernel/outbox.ContextPrincipal` now
+falls back to `tenant.ScopeFromContext` for the principal `TenantID` when
+`ctxkeys.TenantID` is absent, mirroring the GUC source precedence in
+`adapters/postgres.tenantScopeForTx` (scope → ctxkeys). Pre-auth scoped emits
+now carry their real tenant end-to-end, so the appender writes them into the
+correct per-(namespace, tenant) chain — and, symmetrically, the appender's own
+FORCE-RLS INSERT GUC (restored from the now-correct envelope principal) matches
+the row `tenant_id`, satisfying WITH CHECK on the tenant branch rather than the
+`OR tenant_id=''` branch. Genuinely tenant-less events (`bootstrap.auth.fail`,
+emitted with neither scope nor ctxkeys) stay `tenant_id=''` → system chain.
+
+**Threat-matrix re-evaluation (per ai-robust "ADR amendment 落地必查"):** no cell
+flips to ⚠️/❌. The **Write surface** row stays **Hard boundary** — the invariant
+it relies on ("`tenant_id=''` ⟺ genuinely tenant-less framework event") is now
+*restored* rather than assumed: tenant-bearing scoped emits no longer fall into
+the `''` bucket. The fix sources principal-tenant from the scope, whose write
+provenance is itself **Hard**-funnel-locked (`TENANT-TXSCOPE-WRITE-CALLER-01`),
+so no new forge surface is added; `CTXKEYS-PRINCIPAL-WRITE-CALLER-01` is
+untouched (the change is a ctx *read* inside the single existing injection point
+`ContextPrincipal`, not a new ctxkeys write). Regression guard:
+`kernel/outbox.TestContextPrincipal` (scope-fallback + ctxkeys-precedence
+subtests).
+
 ## References
 
 - Migration: `adapters/postgres/migrations/055_audit_entries_per_tenant_rls.sql`

@@ -210,7 +210,8 @@ func (m *MemStore) GetBySeq(ctx context.Context, vis tenant.RowVisibility, seq i
 	defer m.mu.Unlock()
 	chain := m.chains[tenantScopeOrSystem(ctx)]
 	if chain == nil || seq < 1 || int(seq) > len(chain.entries) {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
+		return nil, errcode.New(
+			errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
 			"audit ledger: entry not found",
 			errcode.WithDetails(errcode.PublicInt("seqNo", seq)),
 		)
@@ -218,7 +219,8 @@ func (m *MemStore) GetBySeq(ctx context.Context, vis tenant.RowVisibility, seq i
 	e := chain.entries[seq-1]
 	if !vis.Allows(e.ActorID) {
 		// IDOR-safe collapse: do not reveal that the entry exists.
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
+		return nil, errcode.New(
+			errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
 			"audit ledger: entry not found",
 			errcode.WithDetails(errcode.PublicInt("seqNo", seq)),
 		)
@@ -239,6 +241,9 @@ func (m *MemStore) Query(
 	_ context.Context, t tenant.TenantID, vis tenant.RowVisibility,
 	filters AuditFilters, params query.ListParams,
 ) ([]*Entry, error) {
+	if err := ValidateQueryTenant(t); err != nil {
+		return nil, err
+	}
 	if err := vis.Validate(); err != nil {
 		return nil, err
 	}
@@ -371,7 +376,8 @@ func validatePayloadJSON(payload []byte) error {
 	}
 	var m map[string]any
 	if err := json.NewDecoder(bytes.NewReader(payload)).Decode(&m); err != nil {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(
+			errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit ledger: payload must be a JSON object or null",
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("json decode: %v", err))),
 		)

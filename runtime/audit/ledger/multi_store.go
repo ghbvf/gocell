@@ -70,6 +70,9 @@ func (m *MultiStore) Query(
 	ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility,
 	filters AuditFilters, params query.ListParams,
 ) ([]*Entry, error) {
+	if err := ValidateQueryTenant(t); err != nil {
+		return nil, err
+	}
 	if len(params.Sort) == 0 {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit ledger: query requires a non-empty sort")

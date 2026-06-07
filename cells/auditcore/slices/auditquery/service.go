@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
@@ -60,6 +61,18 @@ func NewService(
 func (s *Service) Query(
 	ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, filters ledger.AuditFilters, pageReq query.PageParams,
 ) (query.PageResult[*ledger.Entry], error) {
+	// Post-auth hard boundary (#1618 F2): every audit query is tenant-scoped. The
+	// handler derives t from the authenticated principal and the empty case is
+	// already rejected there (403), so a non-canonical / empty t reaching here is a
+	// server-side invariant break — reject fail-closed rather than let the store's
+	// empty-t = system-chain semantics (a trusted internal-only capability) serve a
+	// user request. Unlike the store's ValidateQueryTenant (which permits empty for
+	// internal system-chain reads), this is the full t.Validate() — empty is invalid
+	// at the user-facing boundary.
+	if err := t.Validate(); err != nil {
+		return query.PageResult[*ledger.Entry]{}, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"audit query: tenant scope is not canonical", err)
+	}
 	attrs := []string{"endpoint", "audit-query"}
 	if filters.EventType != "" {
 		attrs = append(attrs, "eventType", filters.EventType)

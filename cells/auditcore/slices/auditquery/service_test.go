@@ -16,6 +16,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -26,7 +27,17 @@ import (
 const (
 	auditNs100 = 100 * time.Nanosecond
 	auditNs200 = 200 * time.Nanosecond
+	// svcQueryTenant is the canonical tenant UUID the Service.Query tests pass.
+	// Service.Query rejects an empty/non-canonical tenant at the post-auth boundary
+	// (#1618 F2), so pagination/filter tests use a real tenant. Seeded entries are
+	// tenant-less system rows (seedEntry sets no TenantID), which a canonical-tenant
+	// query still returns via the `OR tenant_id=''` system-rows predicate.
+	svcQueryTenant = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
 )
+
+// svcTenant is a short alias for the canonical Service.Query test tenant, keeping
+// the (already long) svc.Query(...) call sites within the line-length budget.
+var svcTenant = tenant.TenantID(svcQueryTenant)
 
 // testTenantVis returns a RowScopeTenant RowVisibility for service_test helpers.
 // All tests that call svc.Query use tenant-wide scope (no actor filter)
@@ -89,6 +100,85 @@ func newTestService() (*Service, *ledger.MemStore) {
 		panic(err)
 	}
 	return svc, store
+}
+
+// spyTxCtxKey marks a context as having passed through spyTxRunner.RunInTx, so a
+// downstream store can prove it executed inside the tenant-scoped transaction.
+type spyTxCtxKey struct{}
+
+// spyTxRunner is a persistence.TxRunner that records that RunInTx was invoked and
+// tags the closure's txCtx with spyTxCtxKey. When failWith is set it returns that
+// error WITHOUT invoking the closure (modeling a tx-open failure before the read).
+type spyTxRunner struct {
+	called   bool
+	failWith error
+}
+
+func (s *spyTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	s.called = true
+	if s.failWith != nil {
+		return s.failWith
+	}
+	return fn(context.WithValue(ctx, spyTxCtxKey{}, true))
+}
+
+// spyQueryStore is a ledger.QueryStore that records whether the ctx it received
+// carried the spyTxRunner marker — i.e. whether Service.Query wrapped the store
+// read in RunInTx (so FORCE RLS app.tenant_id GUC would be active, #1618).
+type spyQueryStore struct {
+	queried  bool
+	sawTxCtx bool
+}
+
+func (s *spyQueryStore) Query(
+	ctx context.Context, _ tenant.TenantID, _ tenant.RowVisibility,
+	_ ledger.AuditFilters, _ query.ListParams,
+) ([]*ledger.Entry, error) {
+	s.queried = true
+	if v, _ := ctx.Value(spyTxCtxKey{}).(bool); v {
+		s.sawTxCtx = true
+	}
+	return []*ledger.Entry{}, nil
+}
+
+// TestService_Query_RunsStoreInsideRunInTx proves the store read executes inside
+// the tenant-scoped RunInTx (#1618 F3): without it, FORCE RLS's app.tenant_id GUC
+// would not be set on the read connection and the DB-Hard tenant backstop would be
+// silently bypassed. The pre-fix suite used a passthrough DemoCellTxManager, so
+// this invariant was unasserted.
+func TestService_Query_RunsStoreInsideRunInTx(t *testing.T) {
+	spyStore := &spyQueryStore{}
+	spyTx := &spyTxRunner{}
+	svc, err := NewService(spyStore, testCodec(), slog.Default(),
+		persistence.WrapForCell(spyTx), query.RunModeProd)
+	require.NoError(t, err)
+
+	_, err = svc.Query(context.Background(), svcTenant, testTenantVis(),
+		ledger.AuditFilters{}, query.PageParams{})
+	require.NoError(t, err)
+	assert.True(t, spyTx.called, "Service.Query must invoke RunInTx")
+	assert.True(t, spyStore.queried, "store.Query must be called")
+	assert.True(t, spyStore.sawTxCtx,
+		"store.Query must run inside the RunInTx txCtx so FORCE RLS app.tenant_id GUC is active")
+}
+
+// TestService_Query_RunInTxError_Propagates locks the fail-closed path: when the
+// tenant-scoped tx cannot be opened, the error propagates and the store is never
+// queried outside a transaction (#1618 F3).
+func TestService_Query_RunInTxError_Propagates(t *testing.T) {
+	spyStore := &spyQueryStore{}
+	boom := errcode.New(errcode.KindUnavailable, errcode.ErrInternal, "tx open failed")
+	spyTx := &spyTxRunner{failWith: boom}
+	svc, err := NewService(spyStore, testCodec(), slog.Default(),
+		persistence.WrapForCell(spyTx), query.RunModeProd)
+	require.NoError(t, err)
+
+	_, err = svc.Query(context.Background(), svcTenant, testTenantVis(),
+		ledger.AuditFilters{}, query.PageParams{})
+	require.Error(t, err)
+	assert.True(t, spyTx.called, "RunInTx must have been attempted")
+	assert.False(t, spyStore.queried,
+		"store must not be queried when the tenant-scoped tx fails to open")
 }
 
 func seedEntry(store *ledger.MemStore, id, eventType, actorID string, ts time.Time) {
@@ -186,9 +276,38 @@ func TestService_Query(t *testing.T) {
 			svc, store := newTestService()
 			tt.seed(store)
 
-			result, err := svc.Query(context.Background(), tenant.TenantID(""), testTenantVis(), tt.filters, query.PageParams{})
+			result, err := svc.Query(context.Background(), svcTenant, testTenantVis(), tt.filters, query.PageParams{})
 			require.NoError(t, err)
 			assert.Len(t, result.Items, tt.wantLen)
+		})
+	}
+}
+
+// TestService_Query_RejectsNonCanonicalTenant locks the post-auth hard boundary
+// (#1618 F2): Service.Query rejects an empty or non-canonical tenant before any
+// store read, so the store's empty-t = system-chain capability (a trusted
+// internal-only read) can never be reached through a user-facing query. Without
+// this guard an empty/garbage principal tenant would silently degrade a user
+// request to the system chain instead of failing closed.
+func TestService_Query_RejectsNonCanonicalTenant(t *testing.T) {
+	cases := []struct {
+		name string
+		tid  tenant.TenantID
+	}{
+		{"empty tenant rejected", tenant.TenantID("")},
+		{"non-canonical tenant rejected", tenant.TenantID("tenant-a")},
+		{"nil-uuid tenant rejected", tenant.TenantID("00000000-0000-0000-0000-000000000000")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, store := newTestService()
+			seedEntry(store, "x-1", "event.test.v1", "usr-1", time.Now())
+			_, err := svc.Query(context.Background(), tc.tid, testTenantVis(), ledger.AuditFilters{}, query.PageParams{})
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.ErrorAs(t, err, &ecErr)
+			assert.Equal(t, errcode.ErrInternal, ecErr.Code,
+				"a non-canonical tenant at the post-auth boundary is a server-side invariant break")
 		})
 	}
 }
@@ -201,7 +320,7 @@ func TestService_Query_FirstPage(t *testing.T) {
 			base.Add(time.Duration(i)*time.Hour))
 	}
 
-	result, err := svc.Query(context.Background(), tenant.TenantID(""), testTenantVis(), ledger.AuditFilters{}, query.PageParams{Limit: 3})
+	result, err := svc.Query(context.Background(), svcTenant, testTenantVis(), ledger.AuditFilters{}, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 3)
 	assert.True(t, result.HasMore)
@@ -216,11 +335,11 @@ func TestService_Query_WithCursor(t *testing.T) {
 			base.Add(time.Duration(i)*time.Hour))
 	}
 
-	page1, err := svc.Query(context.Background(), tenant.TenantID(""), testTenantVis(), ledger.AuditFilters{}, query.PageParams{Limit: 3})
+	page1, err := svc.Query(context.Background(), svcTenant, testTenantVis(), ledger.AuditFilters{}, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, page1.HasMore)
 
-	page2, err := svc.Query(context.Background(), tenant.TenantID(""), testTenantVis(),
+	page2, err := svc.Query(context.Background(), svcTenant, testTenantVis(),
 		ledger.AuditFilters{}, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.NoError(t, err)
 	assert.Len(t, page2.Items, 3)
@@ -230,7 +349,7 @@ func TestService_Query_WithCursor(t *testing.T) {
 func TestService_Query_InvalidCursor(t *testing.T) {
 	svc, _ := newTestService()
 
-	_, err := svc.Query(context.Background(), tenant.TenantID(""), testTenantVis(),
+	_, err := svc.Query(context.Background(), svcTenant, testTenantVis(),
 		ledger.AuditFilters{}, query.PageParams{Cursor: "garbage-token"})
 	require.Error(t, err)
 	var ecErr *errcode.Error
@@ -244,7 +363,7 @@ func TestService_Query_LastPage(t *testing.T) {
 	seedEntry(store, "ae-00", "event.test.v1", "usr-1", base)
 	seedEntry(store, "ae-01", "event.test.v1", "usr-1", base.Add(time.Hour))
 
-	result, err := svc.Query(context.Background(), tenant.TenantID(""), testTenantVis(), ledger.AuditFilters{}, query.PageParams{Limit: 10})
+	result, err := svc.Query(context.Background(), svcTenant, testTenantVis(), ledger.AuditFilters{}, query.PageParams{Limit: 10})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 2)
 	assert.False(t, result.HasMore)
@@ -254,7 +373,7 @@ func TestService_Query_LastPage(t *testing.T) {
 func TestService_Query_Empty(t *testing.T) {
 	svc, _ := newTestService()
 
-	result, err := svc.Query(context.Background(), tenant.TenantID(""), testTenantVis(), ledger.AuditFilters{}, query.PageParams{})
+	result, err := svc.Query(context.Background(), svcTenant, testTenantVis(), ledger.AuditFilters{}, query.PageParams{})
 	require.NoError(t, err)
 	assert.Empty(t, result.Items)
 	assert.False(t, result.HasMore)
@@ -270,13 +389,13 @@ func TestService_Query_CursorContextMismatch(t *testing.T) {
 	}
 
 	loginFilters := ledger.AuditFilters{EventType: "event.login.v1"}
-	page1, err := svc.Query(context.Background(), tenant.TenantID(""), testTenantVis(), loginFilters, query.PageParams{Limit: 3})
+	page1, err := svc.Query(context.Background(), svcTenant, testTenantVis(), loginFilters, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, page1.HasMore)
 	require.NotEmpty(t, page1.NextCursor)
 
 	logoutFilters := ledger.AuditFilters{EventType: "event.logout.v1"}
-	_, err = svc.Query(context.Background(), tenant.TenantID(""), testTenantVis(),
+	_, err = svc.Query(context.Background(), svcTenant, testTenantVis(),
 		logoutFilters, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.Error(t, err)
 	var ecErr *errcode.Error
@@ -310,13 +429,13 @@ func TestService_Query_CursorContextMismatch_SubjectID(t *testing.T) {
 	}
 
 	alice := ledger.AuditFilters{SubjectID: "alice"}
-	page1, err := svc.Query(context.Background(), tenant.TenantID(""), testTenantVis(), alice, query.PageParams{Limit: 3})
+	page1, err := svc.Query(context.Background(), svcTenant, testTenantVis(), alice, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, page1.HasMore)
 	require.NotEmpty(t, page1.NextCursor)
 
 	bob := ledger.AuditFilters{SubjectID: "bob"}
-	_, err = svc.Query(context.Background(), tenant.TenantID(""), testTenantVis(), bob, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	_, err = svc.Query(context.Background(), svcTenant, testTenantVis(), bob, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -349,13 +468,13 @@ func TestService_Query_CursorContextMismatch_TraceID(t *testing.T) {
 	}
 
 	traceX := ledger.AuditFilters{TraceID: "trace-X"}
-	page1, err := svc.Query(context.Background(), tenant.TenantID(""), testTenantVis(), traceX, query.PageParams{Limit: 3})
+	page1, err := svc.Query(context.Background(), svcTenant, testTenantVis(), traceX, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, page1.HasMore)
 	require.NotEmpty(t, page1.NextCursor)
 
 	traceY := ledger.AuditFilters{TraceID: "trace-Y"}
-	_, err = svc.Query(context.Background(), tenant.TenantID(""), testTenantVis(),
+	_, err = svc.Query(context.Background(), svcTenant, testTenantVis(),
 		traceY, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.Error(t, err)
 	var ecErr *errcode.Error
@@ -404,7 +523,7 @@ func TestService_Query_InvalidCursor_LogsDecode(t *testing.T) {
 
 	badCursor := "garbage-token-should-not-appear-in-log"
 	ctx := ctxkeys.WithRequestID(context.Background(), "req-test-001")
-	_, err := svc.Query(ctx, tenant.TenantID(""), testTenantVis(), ledger.AuditFilters{}, query.PageParams{Cursor: badCursor})
+	_, err := svc.Query(ctx, svcTenant, testTenantVis(), ledger.AuditFilters{}, query.PageParams{Cursor: badCursor})
 	require.Error(t, err)
 
 	logs := parseLogLines(t, buf)
@@ -429,7 +548,7 @@ func TestService_Query_InvalidCursor_LogsScope(t *testing.T) {
 	}
 
 	loginFilters := ledger.AuditFilters{EventType: "event.login.v1"}
-	page1, err := svc.Query(context.Background(), tenant.TenantID(""), testTenantVis(), loginFilters, query.PageParams{Limit: 3})
+	page1, err := svc.Query(context.Background(), svcTenant, testTenantVis(), loginFilters, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.NotEmpty(t, page1.NextCursor)
 
@@ -437,7 +556,7 @@ func TestService_Query_InvalidCursor_LogsScope(t *testing.T) {
 
 	logoutFilters := ledger.AuditFilters{EventType: "event.logout.v1"}
 	ctxWithReqID := ctxkeys.WithRequestID(context.Background(), "req-test-002")
-	_, err = svc.Query(ctxWithReqID, tenant.TenantID(""), testTenantVis(), logoutFilters, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	_, err = svc.Query(ctxWithReqID, svcTenant, testTenantVis(), logoutFilters, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.Error(t, err)
 
 	logs := parseLogLines(t, buf)
@@ -455,7 +574,7 @@ func TestService_Query_InvalidCursor_LogsScope(t *testing.T) {
 func TestService_Query_InvalidCursor_NoRequestID(t *testing.T) {
 	svc, _, buf := newTestServiceWithLogBuf()
 
-	_, err := svc.Query(context.Background(), tenant.TenantID(""), testTenantVis(), ledger.AuditFilters{}, query.PageParams{Cursor: "garbage"})
+	_, err := svc.Query(context.Background(), svcTenant, testTenantVis(), ledger.AuditFilters{}, query.PageParams{Cursor: "garbage"})
 	require.Error(t, err)
 
 	logs := parseLogLines(t, buf)
@@ -522,7 +641,7 @@ func TestService_Query_CursorContextMismatch_RowScope(t *testing.T) {
 	// HasMore (the cursor that the replays attempt to reuse under a different
 	// obligation).
 	mintAlicePage1 := func(svc *Service) string {
-		page1, err := svc.Query(context.Background(), tenant.TenantID(""), testSelfVis("alice"),
+		page1, err := svc.Query(context.Background(), svcTenant, testSelfVis("alice"),
 			ledger.AuditFilters{}, query.PageParams{Limit: 3})
 		require.NoError(t, err)
 		require.True(t, page1.HasMore)
@@ -547,7 +666,7 @@ func TestService_Query_CursorContextMismatch_RowScope(t *testing.T) {
 				base.Add(time.Duration(i)*time.Hour))
 		}
 		cursor := mintAlicePage1(svc)
-		_, err := svc.Query(context.Background(), tenant.TenantID(""), testTenantVis(),
+		_, err := svc.Query(context.Background(), svcTenant, testTenantVis(),
 			ledger.AuditFilters{}, query.PageParams{Limit: 3, Cursor: cursor})
 		assertMismatch(t, err)
 	})
@@ -559,7 +678,7 @@ func TestService_Query_CursorContextMismatch_RowScope(t *testing.T) {
 				base.Add(time.Duration(i)*time.Hour))
 		}
 		cursor := mintAlicePage1(svc)
-		_, err := svc.Query(context.Background(), tenant.TenantID(""), testSelfVis("bob"),
+		_, err := svc.Query(context.Background(), svcTenant, testSelfVis("bob"),
 			ledger.AuditFilters{}, query.PageParams{Limit: 3, Cursor: cursor})
 		assertMismatch(t, err)
 	})
@@ -580,13 +699,13 @@ func TestService_Query_SubsecondFilterContext(t *testing.T) {
 	}
 
 	filtersA := ledger.AuditFilters{From: base.Add(auditNs100)}
-	pageA, err := svc.Query(context.Background(), tenant.TenantID(""), testTenantVis(), filtersA, query.PageParams{Limit: 3})
+	pageA, err := svc.Query(context.Background(), svcTenant, testTenantVis(), filtersA, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, pageA.HasMore)
 
 	// From/To are NOT cursor-scope keys — changing From must not invalidate the cursor.
 	filtersB := ledger.AuditFilters{From: base.Add(auditNs200)}
-	_, err = svc.Query(context.Background(), tenant.TenantID(""), testTenantVis(), filtersB, query.PageParams{
+	_, err = svc.Query(context.Background(), svcTenant, testTenantVis(), filtersB, query.PageParams{
 		Limit:  3,
 		Cursor: pageA.NextCursor,
 	})
@@ -640,7 +759,7 @@ func TestQuery_ZeroTime_SkipsFromToFormat(t *testing.T) {
 
 	// Page 1: zero From/To (no time filter).
 	zeroFilters := ledger.AuditFilters{} // From and To are zero value
-	page1, err := svc.Query(context.Background(), tenant.TenantID(""), testTenantVis(), zeroFilters, query.PageParams{Limit: 3})
+	page1, err := svc.Query(context.Background(), svcTenant, testTenantVis(), zeroFilters, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, page1.HasMore)
 
@@ -668,7 +787,7 @@ func TestQuery_ZeroTime_SkipsFromToFormat(t *testing.T) {
 	// a scope-mismatch error. If "from" is NOT in scope (GREEN), From can change
 	// freely without breaking the cursor → page2 succeeds normally.
 	nonZeroFromFilters := ledger.AuditFilters{From: base}
-	_, err2 := svc.Query(context.Background(), tenant.TenantID(""), testTenantVis(), nonZeroFromFilters, query.PageParams{
+	_, err2 := svc.Query(context.Background(), svcTenant, testTenantVis(), nonZeroFromFilters, query.PageParams{
 		Limit:  3,
 		Cursor: page1.NextCursor,
 	})
