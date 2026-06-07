@@ -9,8 +9,10 @@ import (
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/command"
+	"github.com/ghbvf/gocell/runtime/schemavalidate"
 )
 
 // DispatchID is the command.Registry key for {{.ContractID}}.
@@ -59,8 +61,9 @@ func Register(reg *command.Registry, h Handler) error {
 // values at runtime: Go enforces field types, additionalProperties:false is
 // structurally unviolatable on a typed struct, and the caller is first-party
 // in-process code. JSON-schema value-validation belongs at the untrusted
-// command-entry boundaries (HTTP→command, async outbox→command), tracked as a
-// #1044 sub-issue.
+// command-entry boundaries: async outbox→command is validated in DispatchAsync
+// (the #1588 value funnel, ADR §Amendment 2026-06-08); HTTP→command (when wired)
+// validates the request body in the generated HTTP handler before calling Dispatch.
 //
 // Returns KindInvalid / ErrValidationFailed when reg or req is nil (miswiring /
 // caller bug — surfaced as a structured error rather than a nil-pointer panic).
@@ -91,6 +94,29 @@ func Dispatch(ctx context.Context, reg *command.Registry, req *{{.Command.Reques
 	return h.{{.Command.HandlerMethod}}(ctx, req)
 }
 
+// requestSchemaJSON is the contract request schema ($ref-bundled, compacted),
+// embedded for the async command-entry value funnel (#1588). A command always
+// declares a request schemaRef (D6), so unlike HTTP this is emitted
+// unconditionally — there is no codegen path to a command without a validator.
+var requestSchemaJSON = []byte({{quoteGoString .RequestSchemaJSON}})
+
+// requestValidator validates the untrusted outbox entry payload in DispatchAsync
+// before decode+handle. Compiled once at init; the schema was already
+// compile-checked at codegen time (contractgen embedRequestSchema → NewValidator),
+// so newRequestValidator never panics in production — the panic is a codegen
+// invariant assertion mirroring handler.tmpl NewHandler.
+var requestValidator = newRequestValidator()
+
+func newRequestValidator() schemavalidate.Validator {
+	v, err := schemavalidate.NewValidator(requestSchemaJSON)
+	if err != nil {
+		panic(panicregister.Approved("command-request-schema-compile-failed",
+			errcode.Assertion("generated command {{.ContractID}}: request schema compile failed: %v "+
+				"(codegen invariant violation; regenerate via gocell generate contract --all)", err)))
+	}
+	return v
+}
+
 // Compile-assert that DispatchAsync matches the generic async-dispatch signature
 // the outbox relay routes command entries to (command.Relay-side
 // WithCommandDispatch). archtest COMMAND-ASYNC-DISPATCH-CALLER-01 locks the
@@ -116,22 +142,25 @@ var _ command.AsyncDispatchFunc = DispatchAsync
 // returned for the relay to settle (ack) or retry the entry.
 //
 // Request value-constraints declared in the contract request schema
-// (minLength/maxLength/required) are NOT validated here — the typed
-// *{{.Command.RequestGoType}} is the structural contract; untrusted-payload
-// value validation at the async command-entry boundary is the command-entry
-// validation funnel tracked as #1588 (ADR §5 / Amendment 2026-06-04).
+// (minLength/maxLength/required/additionalProperties) ARE validated here against
+// the untrusted entry payload via requestValidator, before decode+handle — the
+// async command-entry value funnel (#1588, ADR §Amendment 2026-06-08). This is
+// the untrusted-boundary counterpart to HTTP request-body validation; the
+// synchronous Dispatch path stays unvalidated as a first-party typed boundary
+// (§D8). entry.Payload() is already the inbound JSON, so validating it adds no
+// marshal round-trip — D4 (sync zero-serialization fast-path) is preserved.
 //
 // # Settle classification (relay)
 //
 // Deterministic framework errors — reg nil, routing-topic ≠ DispatchID (a
-// mis-wired dispatcher map), payload decode failure, no handler registered, or a
-// wrong-typed registered value — are wrapped with kout.NewPermanentError. None
-// can recover by retry, so the relay's handleFailedEntry routes them straight to
-// MarkDead instead of burning the retry budget (ADR §Amendment 2026-06-06 r2).
-// The handler's own business error is returned UNWRAPPED: it is transient by
-// default (relay → MarkRetry until the attempt budget is exhausted); a handler
-// that knows a failure is unrecoverable can itself return a kout.PermanentError.
-// Untrusted-payload value-validation classification stays deferred to #1588.
+// mis-wired dispatcher map), request-schema value-validation failure, payload
+// decode failure, no handler registered, or a wrong-typed registered value — are
+// wrapped with kout.NewPermanentError. None can recover by retry, so the relay's
+// handleFailedEntry routes them straight to MarkDead instead of burning the retry
+// budget (ADR §Amendment 2026-06-06 r2 / 2026-06-08). The handler's own business
+// error is returned UNWRAPPED: it is transient by default (relay → MarkRetry
+// until the attempt budget is exhausted); a handler that knows a failure is
+// unrecoverable can itself return a kout.PermanentError.
 func DispatchAsync(ctx context.Context, reg *command.Registry, entry kout.Entry) error {
 	if reg == nil {
 		return kout.NewPermanentError(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -145,6 +174,14 @@ func DispatchAsync(ctx context.Context, reg *command.Registry, entry kout.Entry)
 	if entry.RoutingTopic() != string(DispatchID) {
 		return kout.NewPermanentError(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"{{.Command.DispatchID}} dispatch async: entry routing topic does not match DispatchID"))
+	}
+	// Value funnel (#1588): validate the untrusted wire payload against the request
+	// schema's value constraints (minLength/maxLength/required/additionalProperties)
+	// before decode+handle. A schema violation is deterministic and unrecoverable,
+	// so it is wrapped permanent → relay MarkDead (same class as the decode failure
+	// below). Validate returns an oracle-safe *errcode.Error (ErrValidationFailed).
+	if err := requestValidator.Validate(ctx, entry.Payload()); err != nil {
+		return kout.NewPermanentError(err)
 	}
 	var req {{.Command.RequestGoType}}
 	if err := json.Unmarshal(entry.Payload(), &req); err != nil {

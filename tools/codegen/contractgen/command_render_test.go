@@ -124,6 +124,13 @@ func TestRender_Command_ContainsKeySymbols(t *testing.T) {
 		{"Dispatch func", "func Dispatch(ctx context.Context, reg *command.Registry, req *Request) (*Response, error)"},
 		{"AsyncDispatchFunc assert", "var _ command.AsyncDispatchFunc = DispatchAsync"},
 		{"DispatchAsync func", "func DispatchAsync(ctx context.Context, reg *command.Registry, entry kout.Entry) error"},
+		// #1588 value funnel: unconditional request-schema embed + validator +
+		// the DispatchAsync Validate call (the async command-entry value check).
+		{"requestSchemaJSON embed", "var requestSchemaJSON = []byte("},
+		{"requestValidator var", "var requestValidator = newRequestValidator()"},
+		{"newRequestValidator helper", "func newRequestValidator() schemavalidate.Validator"},
+		{"DispatchAsync value-validate call", "requestValidator.Validate(ctx, entry.Payload())"},
+		{"schemavalidate import", `"github.com/ghbvf/gocell/runtime/schemavalidate"`},
 		{"KindInvalid", "errcode.KindInvalid"},
 		{"KindNotFound", "errcode.KindNotFound"},
 		{"KindInternal", "errcode.KindInternal"},
