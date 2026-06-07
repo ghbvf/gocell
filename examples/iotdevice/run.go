@@ -25,11 +25,13 @@ import (
 	devicecell "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell"
 	devicemem "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/mem"
 	devicepg "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/postgres"
+	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/migration"
@@ -40,6 +42,8 @@ import (
 	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
 	"github.com/ghbvf/gocell/runtime/grpc/interceptor"
 	rtmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
+	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
+	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
 )
 
 // runIotdevice is the hand-written runtime helper for the iotdevice assembly.
@@ -123,11 +127,21 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	// required cell dependency (#1580), so it must be wired here.
 	commandReg := commandruntime.NewRegistry()
 
+	// Async command-relay subsystem (#1698): writer-backed bootstrap emitter +
+	// ConsumerBase (idempotency guard for the device-registered subscriber) +
+	// relay (polls the outbox store, in-process-dispatches command entries). Built
+	// for both demo and durable modes; pgPool discriminates the backing store.
+	crs, err := buildCommandRelaySubsystem(clk, eb, commandReg, pgPool)
+	if err != nil {
+		return fmt.Errorf("build command-relay subsystem: %w", err)
+	}
+
 	// Create the device cell with explicitly wired persistence.
 	dc := devicecell.NewDeviceCell(
 		clk,
 		devicecell.WithDeviceRepository(deviceRepo),
 		devicecell.WithDirectPublisher(outbox.WrapPublisherForCell(directPub)),
+		devicecell.WithBootstrapEmitter(crs.bootstrapEmitter),
 		devicecell.WithCursorCodec(cursorCodec),
 		devicecell.WithCommandRegistry(commandReg),
 		devicecell.WithLogger(logger),
@@ -215,16 +229,96 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	}
 	// MQTT channel options (health probe + managed closer) when enabled.
 	opts = append(opts, mqttBootstrapOpts...)
+	// Command-relay subsystem wiring (#1698): ConsumerBase is required because the
+	// devicecell registers the event.device-registered.v1 subscription (phase6
+	// fails fast otherwise); WithRelay drives the relay lifecycle + outbox polling.
+	opts = append(opts,
+		bootstrap.WithConsumerBase(crs.consumerBase),
+	)
 	// Durable mode: register the PG pool as a managed closer so framework
 	// LIFO teardown closes it even when app.Run returns an error followed by
 	// os.Exit(1). Defer-based cleanup would be skipped on that path.
 	if pgPool != nil {
 		opts = append(opts, bootstrap.WithManagedCloser(pgPool))
 	}
+	// Relay registered LAST → stopped FIRST (LIFO): the relay must stop before the
+	// pool closes (durable) so no in-flight poll touches a closed pool.
+	opts = append(opts, bootstrap.WithRelay(crs.relay))
 	app := bootstrap.New(clk, opts...)
 
 	logger.Info("iotdevice: starting on :8083; protected routes require an RS256 bearer token")
 	return app.Run(ctx)
+}
+
+// commandRelaySubsystem bundles the wiring the async command-relay path needs:
+// the writer-backed bootstrap emitter the devicebootstrap reactive slice emits
+// into, the ConsumerBase that idempotency-guards the device-registered
+// subscriber, and the relay that polls the outbox store and dispatches command
+// entries in-process (#1698). Both demo and durable modes build all three — the
+// only difference is the backing store/writer (FakeStore vs PG).
+type commandRelaySubsystem struct {
+	bootstrapEmitter outbox.CellEmitter
+	consumerBase     *outbox.ConsumerBase
+	relay            *outboxruntime.Relay
+}
+
+// buildCommandRelaySubsystem wires the async command-relay subsystem for the
+// resolved durability mode (mirrors examples/ssobff/app.go: NewOutboxStore +
+// NewOutboxWriter + NewRelay + ConsumerBase). The relay polls store, publishes
+// events to eb, and in-process-dispatches command.devicecommand.enqueue.v1
+// entries to the registered handler — wrapped in the Claimer so an at-least-once
+// device-registered redelivery cannot enqueue the same bootstrap command twice.
+//
+// In demo mode the store and writer are the SAME outboxtest.FakeStore (it
+// implements both outbox.Store and kout.Writer). In durable mode they are an
+// adapterpg.PGOutboxStore (relay poll) + adapterpg.OutboxWriter (producer write)
+// over the shared pool — iotdevice durable already applies the platform outbox
+// migration. iotdevice is single-pod, so an in-memory idempotency Claimer is a
+// real choice, not a fallback; the same claimer feeds the relay and ConsumerBase.
+func buildCommandRelaySubsystem(
+	clk clock.Clock,
+	eb outbox.Publisher,
+	commandReg *commandruntime.Registry,
+	pool *adapterpg.Pool,
+) (commandRelaySubsystem, error) {
+	var (
+		store  outboxruntime.Store
+		writer outbox.Writer
+	)
+	if pool == nil {
+		fakeStore := outboxtest.NewFakeStore()
+		store = fakeStore
+		writer = fakeStore // FakeStore satisfies both outbox.Store and kout.Writer.
+	} else {
+		store = adapterpg.NewOutboxStore(pool.DB(), clk)
+		writer = adapterpg.NewOutboxWriter(clk)
+	}
+
+	writerEmitter, err := outbox.NewWriterEmitter(writer)
+	if err != nil {
+		return commandRelaySubsystem{}, fmt.Errorf("bootstrap writer emitter: %w", err)
+	}
+	// Single shared in-memory Claimer feeds both the relay's command-dispatch
+	// path and the ConsumerBase event-subscriber path (single-pod).
+	claimer := idempotency.NewInMemClaimer(clk)
+
+	consumerBase, err := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{}, clk)
+	if err != nil {
+		return commandRelaySubsystem{}, fmt.Errorf("consumer base: %w", err)
+	}
+
+	relay := outboxruntime.NewRelay(clk, store, eb, outboxruntime.DefaultRelayConfig())
+	// First production WithCommandDispatch callsite: the map value MUST be the
+	// generated cmdenqueue.DispatchAsync direct symbol (COMMAND-ASYNC-DISPATCH-CALLER-01).
+	relay.WithCommandDispatch(commandReg, map[commandruntime.CommandID]commandruntime.AsyncDispatchFunc{
+		cmdenqueue.DispatchID: cmdenqueue.DispatchAsync,
+	}, claimer)
+
+	return commandRelaySubsystem{
+		bootstrapEmitter: outbox.WrapEmitterForCell(writerEmitter),
+		consumerBase:     consumerBase,
+		relay:            relay,
+	}, nil
 }
 
 // deviceCommandQueue is the runtime contract devicecell expects — a single

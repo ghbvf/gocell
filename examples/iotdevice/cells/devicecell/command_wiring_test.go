@@ -28,6 +28,7 @@ func newWiredCommandCell(t *testing.T, reg *commandruntime.Registry, repo domain
 		clk,
 		WithDeviceRepository(repo),
 		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clk))),
+		WithBootstrapEmitter(testBootstrapEmitter()),
 		WithCommandRegistry(reg),
 	)
 	c.RegisterCommandQueue(commandtest.NewInMemQueue())

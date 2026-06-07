@@ -28,6 +28,7 @@ import (
 	commandruntime "github.com/ghbvf/gocell/runtime/command"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
 )
 
 func newTestCell() *DeviceCell {
@@ -35,10 +36,22 @@ func newTestCell() *DeviceCell {
 		clock.Real(),
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clock.Real()))),
+		WithBootstrapEmitter(testBootstrapEmitter()),
 		WithCommandRegistry(commandruntime.NewRegistry()),
 	)
 	c.RegisterCommandQueue(commandtest.NewInMemQueue())
 	return c
+}
+
+// testBootstrapEmitter builds a writer-backed sealed CellEmitter for the
+// devicebootstrap slice (#1698), mirroring the composition root: a WriterEmitter
+// over an in-memory FakeStore (which satisfies kout.Writer).
+func testBootstrapEmitter() outbox.CellEmitter {
+	we, err := outbox.NewWriterEmitter(outboxtest.NewFakeStore())
+	if err != nil {
+		panic(err)
+	}
+	return outbox.WrapEmitterForCell(we)
 }
 
 type failingPublisher struct{}
@@ -121,6 +134,7 @@ func TestDeviceCell_InitNoCommandQueue_FailsFast(t *testing.T) {
 		clock.Real(),
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clock.Real()))),
+		WithBootstrapEmitter(testBootstrapEmitter()),
 	)
 	err := c.Init(context.Background(), newTestRec())
 	require.Error(t, err)
@@ -140,6 +154,7 @@ func TestDeviceCell_InitNoCommandRegistry_FailsFast(t *testing.T) {
 		clock.Real(),
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clock.Real()))),
+		WithBootstrapEmitter(testBootstrapEmitter()),
 	)
 	c.RegisterCommandQueue(commandtest.NewInMemQueue())
 	err := c.Init(context.Background(), newTestRec())
@@ -420,6 +435,7 @@ func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsCreated(t *testing.
 		clock.Real(),
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithDirectPublisher(outbox.WrapPublisherForCell(failingPublisher{})),
+		WithBootstrapEmitter(testBootstrapEmitter()),
 
 		WithCursorCodec(newTestCursorCodec(t)),
 		WithCommandRegistry(commandruntime.NewRegistry()),
@@ -441,6 +457,7 @@ func TestDeviceCell_DemoMode_RegisterPublishFailureReturnsCreated(t *testing.T) 
 		clock.Real(),
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithDirectPublisher(outbox.WrapPublisherForCell(failingPublisher{})),
+		WithBootstrapEmitter(testBootstrapEmitter()),
 		WithCommandRegistry(commandruntime.NewRegistry()),
 	)
 	c.RegisterCommandQueue(commandtest.NewInMemQueue())
@@ -503,6 +520,7 @@ func TestDeviceCell_CommandSweeper_MetricsBranches(t *testing.T) {
 			clock.Real(),
 			WithDeviceRepository(mem.NewDeviceRepository()),
 			WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clock.Real()))),
+			WithBootstrapEmitter(testBootstrapEmitter()),
 			WithCommandRegistry(commandruntime.NewRegistry()),
 			WithMetricsProvider(metrics.NopProvider{}),
 		)

@@ -100,6 +100,27 @@ func WithCommandRegistry(reg *commandruntime.Registry) Option {
 	return func(c *DeviceCell) { c.commandRegistry = reg }
 }
 
+// WithBootstrapEmitter wires the writer-backed sealed CellEmitter the
+// devicebootstrap reactive slice uses to emit command.devicecommand.enqueue.v1
+// async command entries into the outbox store (where the relay polls them),
+// instead of the cell's direct-publish emitter (which fans out to the broker/eb
+// for device-registered events). Batch-3 (#1698): the command-relay subsystem
+// requires the emitted command entry land in the same store the relay polls, so
+// the composition root constructs a WriterEmitter over the mode's outbox Writer
+// (demo: outboxtest.FakeStore; durable: adapterpg.OutboxWriter) and injects it
+// here.
+//
+// This is the SECOND emitter on the cell: the device-registered direct publisher
+// (WithDirectPublisher) is unchanged and keeps fanning out events to the bus.
+// The two are deliberately separate sinks.
+//
+// One-shot wiring option: a nil emitter is stored as-is and rejected by the
+// initSlices fail-fast guard; it does not preserve a previously-set value. The
+// dependency is required once the command-relay subsystem is wired.
+func WithBootstrapEmitter(e outbox.CellEmitter) Option {
+	return func(c *DeviceCell) { c.bootstrapEmitter = e }
+}
+
 // WithLogger sets the structured logger.
 func WithLogger(l *slog.Logger) Option {
 	return func(c *DeviceCell) { c.logger = l }
@@ -118,8 +139,9 @@ func WithMetricsProvider(mp metrics.Provider) Option {
 type DeviceCell struct {
 	*cell.BaseCell
 	deviceRepo      domain.DeviceRepository
-	publisher       outbox.CellPublisher
-	emitter         outbox.CellEmitter // set during initInternal; retained for Probes
+	publisher        outbox.CellPublisher
+	emitter          outbox.CellEmitter // set during initInternal; retained for Probes
+	bootstrapEmitter outbox.CellEmitter // writer-backed; feeds devicebootstrap reactive command emit (#1698)
 	cursorCodec     *query.CursorCodec
 	logger          *slog.Logger
 	metricsProvider metrics.Provider
@@ -306,12 +328,22 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 
 	// device-bootstrap slice: event-reactive producer subscribing to
 	// event.device-registered.v1 and emitting a command.devicecommand.enqueue.v1
-	// async command for each new device. Batch-3 (#1698) replaces c.emitter with
-	// a store-writer-backed CellEmitter so the emitted command entry lands in the
-	// outbox store; for now it shares the cell's direct emitter.
+	// async command for each new device. Batch-3 (#1698): the emitter is the
+	// writer-backed CellEmitter (WithBootstrapEmitter) so the emitted command entry
+	// lands in the outbox store the relay polls — NOT the cell's direct-publish
+	// emitter (c.emitter), which fans device-registered events out to the bus.
+	// Required (no soft fallback): an assembly that wires the command-relay
+	// subsystem must inject this; absence is a dead-wiring bug, so fail fast.
+	if c.bootstrapEmitter == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
+			"devicecell requires a bootstrap command emitter; from the composition root, "+
+				"call WithBootstrapEmitter(outbox.WrapEmitterForCell(writerEmitter)) where "+
+				"writerEmitter is an outbox.WriterEmitter over the mode's outbox Writer "+
+				"(demo: outboxtest.FakeStore; durable: adapterpg.NewOutboxWriter(clk))")
+	}
 	bootstrapSvc, err := devicebootstrap.NewService(
 		c.clk,
-		devicebootstrap.WithEmitter(c.emitter),
+		devicebootstrap.WithEmitter(c.bootstrapEmitter),
 		devicebootstrap.WithLogger(c.logger),
 	)
 	if err != nil {
