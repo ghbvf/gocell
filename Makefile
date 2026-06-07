@@ -48,15 +48,24 @@ build:
 # under CodeQL's Go build-tracer the canonical `go build` command form is what
 # the tracing shim recognizes — a leading `-C` flag makes it miss the build and
 # the database ends up empty ("no source code seen during build"). `-o` points at
-# a temp directory so main packages do not leave binaries in satellite dirs.
-# Fail-closed: a broken funnel aborts under `set -e`.
+# a temp directory so main-package modules do not leave binaries in satellite dirs.
+# Library-only modules (no main package, e.g. cellmodules #1559) build WITHOUT `-o`
+# because `go build -o <dir> ./...` errors "no main packages to build" — a plain
+# `go build ./...` compile-checks every package and produces no binary to pollute
+# the dir. Both forms are the canonical `( cd "$$d" && go build ./... )` the CodeQL
+# tracer recognizes. Fail-closed: a broken funnel aborts under `set -e`.
 check-build:
 	@bash -c 'set -euo pipefail; \
 	build_out="$$(mktemp -d)"; trap '\''rm -rf "$$build_out"'\'' EXIT; \
 	source hack/lib/util.sh; source hack/lib/modules.sh; \
 	dirs="$$(gocell::modules::dirs)"; \
 	while IFS= read -r d; do [ -n "$$d" ] || continue; \
-	  echo "+++ go build ($$d)"; ( cd "$$d" && go build -o "$$build_out/" ./... ); \
+	  echo "+++ go build ($$d)"; \
+	  if ( cd "$$d" && go list -f '\''{{.Name}}'\'' ./... 2>/dev/null ) | grep -qx main; then \
+	    ( cd "$$d" && go build -o "$$build_out/" ./... ); \
+	  else \
+	    ( cd "$$d" && go build ./... ); \
+	  fi; \
 	done <<< "$$dirs"'
 
 # Root `./...` stops at nested-module boundaries. Iterate every
