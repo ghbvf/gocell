@@ -281,9 +281,13 @@ func collectPlatformReconstructions(p *Pass, skip func(rel string) bool) []Diagn
 // buildPackageConstRHS maps every same-package const object to the AST of its
 // declared value, so [hasSanctionedPlatformOperand] can trace provenance through
 // derived consts (const x = PlatformModulePath + "/a"; const y = x + "/b").
-// Grouped/iota consts without an explicit value at their index are skipped.
-// Cross-package consts are absent from the map (their RHS is in another package's
-// files), which is exactly why a cross-package fragment stays a violation.
+// It honors Go const-group INHERITED RHS (spec §Constant declarations): within a
+// parenthesized const group, a ConstSpec that omits its expression list repeats
+// the preceding non-empty one (by position) — so `const ( p = X; q )` gives q the
+// expression X. lastValues carries that preceding list across specs in source
+// order (EachInChildren yields gd.Specs in order). Cross-package consts are absent
+// from the map (their RHS is in another package's files), which is exactly why a
+// cross-package fragment stays a violation.
 func buildPackageConstRHS(p *Pass) map[*types.Const]ast.Expr {
 	m := make(map[*types.Const]ast.Expr)
 	for _, f := range p.Files {
@@ -291,13 +295,20 @@ func buildPackageConstRHS(p *Pass) map[*types.Const]ast.Expr {
 			if gd.Tok != token.CONST {
 				return
 			}
+			var lastValues []ast.Expr
 			EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
+				values := vs.Values
+				if len(values) == 0 {
+					values = lastValues // inherited RHS from the preceding non-empty spec
+				} else {
+					lastValues = vs.Values
+				}
 				for i, name := range vs.Names {
-					if i >= len(vs.Values) {
+					if i >= len(values) {
 						continue
 					}
 					if c, ok := p.TypesInfo.Defs[name].(*types.Const); ok {
-						m[c] = vs.Values[i]
+						m[c] = values[i]
 					}
 				}
 			})
@@ -439,10 +450,12 @@ func isBarePlatformValue(v string) bool {
 
 // TestModulePathFunnel_TypedReconstruction is the RED/GREEN reverse self-check for
 // the typed reconstruction detector (#1304). It loads the fixture package
-// (modulepathfunnelfixture, build tag archtest_fixture) and asserts which FILES
-// collectPlatformReconstructions flags: the two typed-only reconstructions (a)/(b)
-// MUST be flagged; the sanctioned derivation, the unrelated concat, and the
-// runtime-ops residual (c) MUST NOT be flagged.
+// (modulepathfunnelfixture, build tag archtest_fixture) and asserts the detector
+// flags EXACTLY the two typed-only reconstructions (a)/(b) and NOTHING ELSE — an
+// exact-diagnostics assertion (analysistest model), repo-relative (no basename
+// collision), so an extra flagged fixture (e.g. a false-positive on a legal const
+// form) fails the test. The per-GREEN asserts below name each not-flagged case for
+// readable intent. Codex review F1/F2 (#1749) hardened this from a basename spot-check.
 func TestModulePathFunnel_TypedReconstruction(t *testing.T) {
 	t.Parallel()
 	const fixturePattern = "./tools/archtest/internal/modulepathfunnelfixture/..."
@@ -453,22 +466,40 @@ func TestModulePathFunnel_TypedReconstruction(t *testing.T) {
 			return nil
 		})
 
+	// Exact-set: the detector must flag EXACTLY these two RED fixtures (repo-
+	// relative), proving both the RED hits AND that no GREEN case (sanctioned,
+	// unrelated, runtime-ops, transitive-derived, const-group-inherited) leaks in.
+	const fixtureDir = "tools/archtest/internal/modulepathfunnelfixture/"
+	gotSet := make(map[string]bool)
+	var got []string
+	for _, d := range diags {
+		if !gotSet[d.Rel] {
+			gotSet[d.Rel] = true
+			got = append(got, d.Rel)
+		}
+	}
+	want := []string{fixtureDir + "red_const_of_const.go", fixtureDir + "red_cross_pkg.go"}
+	require.ElementsMatch(t, want, got,
+		"typed detector must flag EXACTLY the two RED reconstruction fixtures (a)/(b) and nothing else")
+
+	// Per-case readable intent (subsumed by the exact-set above; kept so a specific
+	// case breaking points at its own fixture). flagged keyed by basename.
 	flagged := make(map[string]bool)
 	for _, d := range diags {
 		flagged[filepath.Base(d.Rel)] = true
 	}
-
-	// RED — typed-only reconstructions MUST be flagged (anti-vacuity).
 	require.True(t, flagged["red_const_of_const.go"],
 		"residual (a) const-of-const reconstruction must be flagged by the typed detector")
 	require.True(t, flagged["red_cross_pkg.go"],
 		"residual (b) cross-package const reconstruction must be flagged by the typed detector")
-	// GREEN — exemption + negative controls MUST NOT be flagged.
 	require.False(t, flagged["green_sanctioned.go"],
 		"sanctioned PlatformModulePath derivation must be exempt (object identity)")
 	require.False(t, flagged["green_transitive_derived.go"],
 		"same-package derived const (q = p+\"/b\", p = PlatformModulePath+\"/a\") must be "+
-			"exempt by TRANSITIVE provenance — the path the 369 real funnel-scope derivations rely on")
+			"exempt by TRANSITIVE provenance — the path the real funnel-scope derivations rely on")
+	require.False(t, flagged["green_const_group_inherit.go"],
+		"Go const-group INHERITED RHS (const ( _ = PMP+\"/a\"; q )) must be exempt — "+
+			"buildPackageConstRHS models the inherited expression (Codex review F1)")
 	require.False(t, flagged["green_unrelated.go"],
 		"non-platform concat must not be flagged")
 	require.False(t, flagged["green_runtime_ops.go"],
