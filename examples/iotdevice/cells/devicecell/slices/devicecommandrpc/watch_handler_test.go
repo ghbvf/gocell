@@ -12,6 +12,9 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+// watchTestTimeout bounds the WatchCommands snapshot/tail waits (TEST-TIME-LITERAL-01).
+const watchTestTimeout = 2 * time.Second
+
 // fakeWatchStream is a minimal commandv1.DeviceCommandService_WatchCommandsServer
 // (grpc.ServerStreamingServer[WatchCommandsResponse]). Embedding the nil
 // grpc.ServerStream satisfies the rest of the method set; the handler only uses
@@ -90,7 +93,7 @@ func TestServer_WatchCommands_SnapshotThenTailUntilCancel(t *testing.T) {
 		if e.GetCommandId() == "" {
 			t.Errorf("snapshot event must carry the command id")
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(watchTestTimeout):
 		t.Fatalf("WatchCommands did not stream the active-command snapshot")
 	}
 
@@ -101,7 +104,7 @@ func TestServer_WatchCommands_SnapshotThenTailUntilCancel(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("WatchCommands tail must return context.Canceled on cancel, got %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(watchTestTimeout):
 		t.Fatalf("WatchCommands tail did not return after context cancel (drain discipline broken)")
 	}
 }

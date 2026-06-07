@@ -36,6 +36,9 @@ func (f *fakeServerStream) RecvMsg(any) error            { return nil }
 
 const streamMethod = "/pkg.Svc/Watch"
 
+// streamDrainTestTimeout bounds the StreamDrain cancellation wait (TEST-TIME-LITERAL-01).
+const streamDrainTestTimeout = 2 * time.Second
+
 func streamInfo() *grpc.StreamServerInfo {
 	return &grpc.StreamServerInfo{FullMethod: streamMethod, IsServerStream: true}
 }
@@ -249,7 +252,7 @@ func TestStreamDrain_CancelsHandlerCtxOnTrigger(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("drained stream handler must observe context.Canceled, got %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(streamDrainTestTimeout):
 		t.Fatalf("StreamDrain did not cancel the handler context after Trigger")
 	}
 }
