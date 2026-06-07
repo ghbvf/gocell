@@ -45,6 +45,12 @@ import (
 
 const fmtErrGetBySeq1 = "GetBySeq(1): %v"
 
+// scopedCtx returns a context scoped to the given tenant, for use in
+// Tail / GetBySeq / Verify calls that derive tenant from context (#1618).
+func scopedCtx(t tenant.TenantID) context.Context {
+	return tenant.WithScope(context.Background(), t)
+}
+
 // mustRowVisibility constructs a tenant.RowVisibility for test use, failing the
 // test if the arguments are invalid. Most conformance callsites use
 // tenant.RowScopeTenant with an empty subject (unrestricted visibility) so that
@@ -279,6 +285,7 @@ func Run(t *testing.T, factory Factory, protocol *ledger.Protocol) {
 	t.Run("Query_EmptySort_Rejected", func(t *testing.T) { runQueryEmptySortRejected(t, factory) })
 	t.Run("Query_InvalidCursor_Rejected", func(t *testing.T) { runQueryInvalidCursorRejected(t, factory) })
 	t.Run("Query_TenantIsolation", func(t *testing.T) { runQueryTenantIsolation(t, factory) })
+	t.Run("Per_Tenant_Chains", func(t *testing.T) { runPerTenantChains(t, factory) })
 	t.Run("Protocol_HashParity", func(t *testing.T) { runProtocolHashParity(t, factory, protocol) })
 	t.Run("PrincipalFields_RoundTrip", func(t *testing.T) { RunPrincipalFieldsRoundTrip(t, factory, protocol) })
 	t.Run("Query_ByTraceID", func(t *testing.T) { runQueryByTraceID(t, factory) })
@@ -296,7 +303,8 @@ func runAppendTailRoundTrip(t *testing.T, factory Factory) {
 		t.Fatalf(msgAppend, err)
 	}
 
-	tail, err := store.Tail(context.Background())
+	fixtureCtx := scopedCtx(tenant.TenantID("tenant-test"))
+	tail, err := store.Tail(fixtureCtx)
 	if err != nil {
 		t.Fatalf("Tail: %v", err)
 	}
@@ -307,7 +315,7 @@ func runAppendTailRoundTrip(t *testing.T, factory Factory) {
 		t.Errorf("Tail.EntryCount: got %d, want 1", tail.EntryCount)
 	}
 
-	got, err := store.GetBySeq(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""), 1)
+	got, err := store.GetBySeq(fixtureCtx, mustRowVisibility(t, tenant.RowScopeTenant, ""), 1)
 	if err != nil {
 		t.Fatalf(fmtErrGetBySeq1, err)
 	}
@@ -358,7 +366,8 @@ func runRestartRecovery(t *testing.T, factory Factory) {
 			t.Fatalf("storeA Append %d: %v", i, err)
 		}
 	}
-	tailA, err := storeA.Tail(context.Background())
+	fixtureCtx := scopedCtx(tenant.TenantID("tenant-test"))
+	tailA, err := storeA.Tail(fixtureCtx)
 	if err != nil {
 		t.Fatalf("storeA Tail: %v", err)
 	}
@@ -370,7 +379,7 @@ func runRestartRecovery(t *testing.T, factory Factory) {
 	defer cleanupB()
 
 	for seq := int64(1); seq <= int64(n); seq++ {
-		src, err := storeA.GetBySeq(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""), seq)
+		src, err := storeA.GetBySeq(fixtureCtx, mustRowVisibility(t, tenant.RowScopeTenant, ""), seq)
 		if err != nil {
 			t.Fatalf("storeA GetBySeq(%d): %v", seq, err)
 		}
@@ -392,13 +401,13 @@ func runRestartRecovery(t *testing.T, factory Factory) {
 		// AssertEntryRoundTrip uses reflect to walk every exported, non-store-
 		// assigned Entry field — adding a new field anywhere on Entry picks up
 		// here automatically.
-		gotB, err := storeB.GetBySeq(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""), seq)
+		gotB, err := storeB.GetBySeq(fixtureCtx, mustRowVisibility(t, tenant.RowScopeTenant, ""), seq)
 		if err != nil {
 			t.Fatalf("storeB GetBySeq(%d): %v", seq, err)
 		}
 		AssertEntryRoundTrip(t, src, gotB)
 	}
-	tailB, err := storeB.Tail(context.Background())
+	tailB, err := storeB.Tail(fixtureCtx)
 	if err != nil {
 		t.Fatalf("storeB Tail: %v", err)
 	}
@@ -575,7 +584,8 @@ func runVerifyFullRange(t *testing.T, factory Factory) {
 		}
 	}
 
-	valid, firstInvalid, err := store.Verify(context.Background(), 1, 5)
+	fixtureCtx := scopedCtx(tenant.TenantID("tenant-test"))
+	valid, firstInvalid, err := store.Verify(fixtureCtx, 1, 5)
 	if err != nil {
 		t.Fatalf(msgVerify, err)
 	}
@@ -617,7 +627,9 @@ func runQueryByFilters(t *testing.T, factory Factory) {
 		}
 	}
 
-	results, err := store.Query(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""),
+	// Entries have no TenantID → system/framework chain (""). Query with "" sees all.
+	sysVis := mustRowVisibility(t, tenant.RowScopeTenant, "")
+	results, err := store.Query(context.Background(), tenant.TenantID(""), sysVis,
 		ledger.AuditFilters{EventType: filterEventType},
 		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	if err != nil {
@@ -628,7 +640,7 @@ func runQueryByFilters(t *testing.T, factory Factory) {
 	}
 
 	// #1290: subject_id filter narrows to the two alice-subject rows.
-	bySubject, err := store.Query(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""),
+	bySubject, err := store.Query(context.Background(), tenant.TenantID(""), sysVis,
 		ledger.AuditFilters{SubjectID: filterSubject},
 		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	if err != nil {
@@ -639,7 +651,7 @@ func runQueryByFilters(t *testing.T, factory Factory) {
 	}
 
 	// Combined EventType + SubjectID — both predicates AND together.
-	combined, err := store.Query(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""),
+	combined, err := store.Query(context.Background(), tenant.TenantID(""), sysVis,
 		ledger.AuditFilters{EventType: filterEventType, SubjectID: filterSubject},
 		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	if err != nil {
@@ -737,7 +749,9 @@ func runQueryOrderingTimestampDescIDAsc(t *testing.T, factory Factory) {
 		}
 	}
 
-	results, err := store.Query(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""), ledger.AuditFilters{},
+	// Entries have no TenantID → system chain "". Query with "" sees all chains.
+	results, err := store.Query(context.Background(), tenant.TenantID(""),
+		mustRowVisibility(t, tenant.RowScopeTenant, ""), ledger.AuditFilters{},
 		query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
@@ -835,11 +849,13 @@ func seedKeysetEntries(t *testing.T, store ledger.Store, base time.Time) {
 // equality (the seed uses distinct timestamps so the id tie-break never fires).
 func collectKeysetPages(t *testing.T, store ledger.Store, limit int) []string {
 	t.Helper()
+	// Keyset entries have no TenantID → system chain "". Query with "" sees all.
+	tid := tenant.TenantID("")
 	vis := mustRowVisibility(t, tenant.RowScopeTenant, "")
 	var collected []string
 	var cursorVals []any
 	for iter := 0; iter <= keysetSeedTotal+1; iter++ {
-		rows, err := store.Query(context.Background(), vis, ledger.AuditFilters{},
+		rows, err := store.Query(context.Background(), tid, vis, ledger.AuditFilters{},
 			query.ListParams{Limit: limit, Sort: ledger.QuerySort(), CursorValues: cursorVals})
 		if err != nil {
 			t.Fatalf("Query iter %d: %v", iter, err)
@@ -870,7 +886,7 @@ func runQueryEmptySortRejected(t *testing.T, factory Factory) {
 	store, _, cleanup := factory(t)
 	defer cleanup()
 
-	_, err := store.Query(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""),
+	_, err := store.Query(context.Background(), tenant.TenantID(""), mustRowVisibility(t, tenant.RowScopeTenant, ""),
 		ledger.AuditFilters{}, query.ListParams{Limit: 10})
 	assertErrCode(t, err, errcode.ErrValidationFailed)
 }
@@ -892,27 +908,28 @@ func runQueryInvalidCursorRejected(t *testing.T, factory Factory) {
 		}
 	}
 
-	_, err := store.Query(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""), ledger.AuditFilters{},
+	// Entries from NewEntryFixture go to "tenant-test" chain.
+	_, err := store.Query(context.Background(), tenant.TenantID("tenant-test"),
+		mustRowVisibility(t, tenant.RowScopeTenant, ""), ledger.AuditFilters{},
 		query.ListParams{Limit: 10, Sort: ledger.QuerySort(), CursorValues: []any{"not-a-timestamp", "some-id"}})
 	assertErrCode(t, err, errcode.ErrCursorInvalid)
 }
 
-// runQueryTenantIsolation locks the AuditFilters.TenantID predicate across both
-// backends (epic #1337 PR-2a): a non-empty TenantID returns ONLY that tenant's
-// rows (never another tenant's), proving cross-tenant isolation. An empty
-// TenantID is "no filter" (sees all) — at this generic store layer tenant is an
-// optional predicate; the actual isolation boundary is the auditquery handler,
-// which always sets TenantID from the authenticated principal (this subtest
-// asserts the store half of that contract). See AuditFilters.TenantID.
+// runQueryTenantIsolation locks per-(namespace,tenant) chain isolation (#1618):
+// querying with tenant-a returns only tenant-a rows + tenant-less system rows
+// (never tenant-b's rows), and vice versa. An EMPTY tenant param ("") is
+// fail-closed — it collapses the predicate to `tenant_id = ”` and sees ONLY
+// system rows, never any tenant's rows (mem mirrors the PG predicate exactly).
+// Production always passes a non-empty tenant from the authenticated principal.
 func runQueryTenantIsolation(t *testing.T, factory Factory) {
 	store, fc, cleanup := factory(t)
 	defer cleanup()
 
-	// Seed: 2 rows in tenant-a, 1 in tenant-b, 1 tenant-less. Same event type so
-	// only the tenant predicate distinguishes them.
+	// Seed: 2 rows in tenant-a, 1 in tenant-b, 1 tenant-less (system chain "").
+	// Same event type so only the tenant partition distinguishes them.
 	seed := []struct {
-		eventID string
-		tenant  string
+		eventID  string
+		tenantID string
 	}{
 		{"ti-a1", "tenant-a"},
 		{"ti-a2", "tenant-a"},
@@ -924,7 +941,7 @@ func runQueryTenantIsolation(t *testing.T, factory Factory) {
 			EventID:   s.eventID,
 			EventType: "tenant.iso.test",
 			ActorID:   "actor",
-			TenantID:  s.tenant,
+			TenantID:  s.tenantID,
 			Timestamp: fc.Now(),
 			Payload:   []byte(`{}`),
 		}
@@ -935,46 +952,140 @@ func runQueryTenantIsolation(t *testing.T, factory Factory) {
 
 	cases := []struct {
 		name    string
-		tenant  string
+		tid     string
 		wantIDs []string
 	}{
-		// A tenant sees its OWN rows + tenant-less system rows (ti-none), never
-		// another tenant's. This is the standard multi-tenant audit semantic.
+		// tenant-a: sees its OWN rows + system ("") rows, never tenant-b rows.
 		{"tenant-a sees its rows + system, not tenant-b", "tenant-a", []string{"ti-a1", "ti-a2", "ti-none"}},
+		// tenant-b: sees its row + system ("") rows, never tenant-a rows.
 		{"tenant-b sees its row + system, not tenant-a", "tenant-b", []string{"ti-b1", "ti-none"}},
-		// Empty TenantID is "no filter" at the store layer (sees all 4).
-		{"empty tenant is no filter (sees all)", "", []string{"ti-a1", "ti-a2", "ti-b1", "ti-none"}},
+		// Empty tenant "" is fail-closed: sees ONLY tenant-less system rows, never
+		// any tenant's rows (predicate collapses to tenant_id = '').
+		{"empty tenant is fail-closed (system rows only)", "", []string{"ti-none"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assertTenantScopedQuery(t, store, tc.tenant, tc.wantIDs)
+			assertTenantScopedQuery(t, store, tc.tid, tc.wantIDs)
 		})
 	}
 }
 
-// assertTenantScopedQuery runs a TenantID-filtered Query and asserts the result
-// set is exactly wantIDs (by EventID), so any cross-tenant row surfaces as a
-// failure. Extracted from runQueryTenantIsolation to keep that function's
-// cognitive complexity within budget.
+// assertTenantScopedQuery runs a tenant.TenantID-partitioned Query and asserts
+// the result set is exactly wantIDs (by EventID), so any cross-tenant leakage
+// surfaces as a failure. Extracted from runQueryTenantIsolation to keep that
+// function's cognitive complexity within budget.
 func assertTenantScopedQuery(t *testing.T, store ledger.Store, tenantID string, wantIDs []string) {
 	t.Helper()
 	want := make(map[string]bool, len(wantIDs))
 	for _, id := range wantIDs {
 		want[id] = true
 	}
-	rows, err := store.Query(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""),
-		ledger.AuditFilters{TenantID: tenantID}, query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	rows, err := store.Query(context.Background(), tenant.TenantID(tenantID), mustRowVisibility(t, tenant.RowScopeTenant, ""),
+		ledger.AuditFilters{}, query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	if err != nil {
 		t.Fatalf("Query(tenant=%q): %v", tenantID, err)
 	}
 	if len(rows) != len(wantIDs) {
-		t.Fatalf("Query(tenant=%q): got %d rows, want %d", tenantID, len(rows), len(wantIDs))
+		t.Fatalf("Query(tenant=%q): got %d rows, want %d; got=%v want=%v",
+			tenantID, len(rows), len(wantIDs),
+			func() []string {
+				ids := make([]string, len(rows))
+				for i, r := range rows {
+					ids[i] = r.EventID
+				}
+				return ids
+			}(),
+			wantIDs)
 	}
 	for _, r := range rows {
 		if !want[r.EventID] {
 			t.Errorf("Query(tenant=%q): leaked cross-tenant row %q (tenant_id=%q)",
 				tenantID, r.EventID, r.TenantID)
 		}
+	}
+}
+
+// appendChainEntry appends one entry under tenantID (for per-tenant chain tests)
+// and fatals on error. Factored out of runPerTenantChains to keep its cognitive
+// complexity within budget.
+func appendChainEntry(t *testing.T, store ledger.Store, eventID, tenantID string, now time.Time) {
+	t.Helper()
+	e := &ledger.Entry{
+		EventID: eventID, EventType: "chain.test", ActorID: "actor",
+		TenantID: tenantID, Timestamp: now, Payload: []byte(`{}`),
+	}
+	if err := store.Append(context.Background(), e); err != nil {
+		t.Fatalf("Append %s: %v", eventID, err)
+	}
+}
+
+// runPerTenantChains verifies the per-(namespace,tenant) chain invariant (#1618):
+// each tenant's entries start at SeqNo==1 independently, and cross-tenant
+// GetBySeq reads the correct chain without leaking entries between tenants.
+func runPerTenantChains(t *testing.T, factory Factory) {
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	tenantA := tenant.TenantID("chain-tenant-a")
+	tenantB := tenant.TenantID("chain-tenant-b")
+	vis := mustRowVisibility(t, tenant.RowScopeTenant, "")
+
+	// Interleave two tenants' appends; each chain is independent (per-tenant
+	// seq_no), so both reach SeqNo==2 on their own (namespace, tenant) chain.
+	appendChainEntry(t, store, "chain-a-1", "chain-tenant-a", fc.Now())
+	appendChainEntry(t, store, "chain-b-1", "chain-tenant-b", fc.Now())
+	appendChainEntry(t, store, "chain-a-2", "chain-tenant-a", fc.Now())
+	appendChainEntry(t, store, "chain-b-2", "chain-tenant-b", fc.Now())
+
+	// Tenant-a chain: Tail shows SeqNo==2.
+	ctxA := scopedCtx(tenantA)
+	tailA, err := store.Tail(ctxA)
+	if err != nil {
+		t.Fatalf("Tail(tenant-a): %v", err)
+	}
+	if tailA.SeqNo != 2 {
+		t.Errorf("tenant-a Tail.SeqNo: got %d, want 2 (independent chain)", tailA.SeqNo)
+	}
+	if tailA.EntryCount != 2 {
+		t.Errorf("tenant-a Tail.EntryCount: got %d, want 2", tailA.EntryCount)
+	}
+
+	// Tenant-b chain: Tail shows SeqNo==2.
+	ctxB := scopedCtx(tenantB)
+	tailB, err := store.Tail(ctxB)
+	if err != nil {
+		t.Fatalf("Tail(tenant-b): %v", err)
+	}
+	if tailB.SeqNo != 2 {
+		t.Errorf("tenant-b Tail.SeqNo: got %d, want 2 (independent chain)", tailB.SeqNo)
+	}
+
+	// GetBySeq isolation: tenant-a seq 1 must return chain-a-1, not chain-b-1.
+	gotA1, err := store.GetBySeq(ctxA, vis, 1)
+	if err != nil {
+		t.Fatalf("GetBySeq(tenant-a, seq=1): %v", err)
+	}
+	if gotA1.EventID != "chain-a-1" {
+		t.Errorf("GetBySeq(tenant-a, seq=1): got EventID=%q, want %q", gotA1.EventID, "chain-a-1")
+	}
+
+	// GetBySeq isolation: tenant-b seq 1 must return chain-b-1, not chain-a-1.
+	gotB1, err := store.GetBySeq(ctxB, vis, 1)
+	if err != nil {
+		t.Fatalf("GetBySeq(tenant-b, seq=1): %v", err)
+	}
+	if gotB1.EventID != "chain-b-1" {
+		t.Errorf("GetBySeq(tenant-b, seq=1): got EventID=%q, want %q", gotB1.EventID, "chain-b-1")
+	}
+
+	// System chain (unscoped ctx) is separate from both tenant chains.
+	sysTail, err := store.Tail(context.Background())
+	if err != nil {
+		t.Fatalf("Tail(system/unscoped): %v", err)
+	}
+	if sysTail.EntryCount != 0 {
+		t.Errorf("system chain unexpectedly contains %d entries; tenant entries must not bleed into system chain",
+			sysTail.EntryCount)
 	}
 }
 
@@ -1000,7 +1111,9 @@ func runProtocolHashParity(t *testing.T, factory Factory, protocol *ledger.Proto
 		t.Fatalf("Append seq 2: %v", err)
 	}
 
-	got1, err := store.GetBySeq(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""), 1)
+	// NewEntryFixture stamps TenantID="tenant-test"; scope ctx to that chain.
+	fixtureCtx := scopedCtx(tenant.TenantID("tenant-test"))
+	got1, err := store.GetBySeq(fixtureCtx, mustRowVisibility(t, tenant.RowScopeTenant, ""), 1)
 	if err != nil {
 		t.Fatalf("GetBySeq 1: %v", err)
 	}
@@ -1011,7 +1124,7 @@ func runProtocolHashParity(t *testing.T, factory Factory, protocol *ledger.Proto
 			got1.Hash, want1)
 	}
 
-	got2, err := store.GetBySeq(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""), 2)
+	got2, err := store.GetBySeq(fixtureCtx, mustRowVisibility(t, tenant.RowScopeTenant, ""), 2)
 	if err != nil {
 		t.Fatalf("GetBySeq 2: %v", err)
 	}
@@ -1062,10 +1175,12 @@ func runQueryByTraceID(t *testing.T, factory Factory) {
 		}
 	}
 
+	// Entries have no TenantID → system chain "". Query with "" sees all chains.
+	tid := tenant.TenantID("")
 	vis := mustRowVisibility(t, tenant.RowScopeTenant, "")
 
 	// Filter by T1: must return exactly 2 entries.
-	byT1, err := store.Query(context.Background(), vis,
+	byT1, err := store.Query(context.Background(), tid, vis,
 		ledger.AuditFilters{TraceID: traceT1},
 		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	if err != nil {
@@ -1081,7 +1196,7 @@ func runQueryByTraceID(t *testing.T, factory Factory) {
 	}
 
 	// Empty TraceID filter: must return all 3 entries.
-	all, err := store.Query(context.Background(), vis,
+	all, err := store.Query(context.Background(), tid, vis,
 		ledger.AuditFilters{},
 		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	if err != nil {
@@ -1092,7 +1207,7 @@ func runQueryByTraceID(t *testing.T, factory Factory) {
 	}
 
 	// Non-matching trace: must return empty.
-	noMatch, err := store.Query(context.Background(), vis,
+	noMatch, err := store.Query(context.Background(), tid, vis,
 		ledger.AuditFilters{TraceID: "no-match-trace"},
 		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	if err != nil {
@@ -1216,7 +1331,8 @@ func RunPrincipalFieldsRoundTrip(t *testing.T, factory Factory, protocol *ledger
 		t.Fatalf("Append principal-roundtrip: %v", err)
 	}
 
-	got, err := store.GetBySeq(context.Background(), mustRowVisibility(t, tenant.RowScopeTenant, ""), 1)
+	// Entry has TenantID="tenant-alpha"; scope ctx to read from that chain.
+	got, err := store.GetBySeq(scopedCtx(tenant.TenantID("tenant-alpha")), mustRowVisibility(t, tenant.RowScopeTenant, ""), 1)
 	if err != nil {
 		t.Fatalf(fmtErrGetBySeq1, err)
 	}
@@ -1256,10 +1372,12 @@ type visQueryCase struct {
 }
 
 // run executes one Query visibility case against store.
+// Entries in runQueryVisibilityObligations have no TenantID → system chain "";
+// pass "" so Query sees all chains (tenant isolation is tested separately).
 func (tc visQueryCase) run(t *testing.T, store ledger.Store, filters ledger.AuditFilters, params query.ListParams) {
 	t.Helper()
 	vis := mustRowVisibility(t, tc.scope, tc.subject)
-	rows, err := store.Query(context.Background(), vis, filters, params)
+	rows, err := store.Query(context.Background(), tenant.TenantID(""), vis, filters, params)
 	if tc.wantErr != "" {
 		errcodetest.AssertCode(t, err, tc.wantErr)
 		if rows != nil {

@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
@@ -114,7 +115,7 @@ func TestMultiStore_Query_RequiresSort(t *testing.T) {
 	ms, err := ledger.NewMultiStore(a, b)
 	require.NoError(t, err)
 
-	_, qerr := ms.Query(context.Background(), memTestVis(), ledger.AuditFilters{}, query.ListParams{Limit: 5})
+	_, qerr := ms.Query(context.Background(), tenant.TenantID(""), memTestVis(), ledger.AuditFilters{}, query.ListParams{Limit: 5})
 	require.Error(t, qerr, "empty sort must be rejected")
 	var coded *errcode.Error
 	require.True(t, errors.As(qerr, &coded))
@@ -140,7 +141,7 @@ func TestMultiStore_Query_MergesAcrossNamespaces(t *testing.T) {
 
 	ms, err := ledger.NewMultiStore(a, b)
 	require.NoError(t, err)
-	got, err := ms.Query(context.Background(), memTestVis(), ledger.AuditFilters{}, query.ListParams{
+	got, err := ms.Query(context.Background(), tenant.TenantID(""), memTestVis(), ledger.AuditFilters{}, query.ListParams{
 		Limit: 10,
 		Sort:  ledger.QuerySort(),
 	})
@@ -169,7 +170,7 @@ func TestMultiStore_Query_FiltersByEventType(t *testing.T) {
 
 	ms, err := ledger.NewMultiStore(a, b)
 	require.NoError(t, err)
-	got, err := ms.Query(context.Background(), memTestVis(),
+	got, err := ms.Query(context.Background(), tenant.TenantID(""), memTestVis(),
 		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 		query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 	require.NoError(t, err)
@@ -195,7 +196,7 @@ func TestMultiStore_Query_HonorsFetchLimit(t *testing.T) {
 
 	ms, err := ledger.NewMultiStore(a, b)
 	require.NoError(t, err)
-	got, err := ms.Query(context.Background(), memTestVis(), ledger.AuditFilters{}, query.ListParams{
+	got, err := ms.Query(context.Background(), tenant.TenantID(""), memTestVis(), ledger.AuditFilters{}, query.ListParams{
 		Limit: 3,
 		Sort:  ledger.QuerySort(),
 	})
@@ -217,7 +218,7 @@ func TestMultiStore_Query_OneEmptyOneNonEmpty(t *testing.T) {
 
 	ms, err := ledger.NewMultiStore(a, b)
 	require.NoError(t, err)
-	got, err := ms.Query(context.Background(), memTestVis(), ledger.AuditFilters{}, query.ListParams{
+	got, err := ms.Query(context.Background(), tenant.TenantID(""), memTestVis(), ledger.AuditFilters{}, query.ListParams{
 		Limit: 10,
 		Sort:  ledger.QuerySort(),
 	})
@@ -237,7 +238,7 @@ func TestMultiStore_Query_BothEmpty(t *testing.T) {
 	ms, err := ledger.NewMultiStore(a, b)
 	require.NoError(t, err)
 
-	got, err := ms.Query(context.Background(), memTestVis(), ledger.AuditFilters{}, query.ListParams{
+	got, err := ms.Query(context.Background(), tenant.TenantID(""), memTestVis(), ledger.AuditFilters{}, query.ListParams{
 		Limit: 10,
 		Sort:  ledger.QuerySort(),
 	})
@@ -263,7 +264,7 @@ func TestMultiStore_Query_TiedTimestamps_TieBreakedByID(t *testing.T) {
 
 	ms, err := ledger.NewMultiStore(a, b)
 	require.NoError(t, err)
-	got, err := ms.Query(context.Background(), memTestVis(), ledger.AuditFilters{}, query.ListParams{
+	got, err := ms.Query(context.Background(), tenant.TenantID(""), memTestVis(), ledger.AuditFilters{}, query.ListParams{
 		Limit: 10,
 		Sort:  ledger.QuerySort(),
 	})
@@ -295,7 +296,7 @@ func TestMultiStore_Query_AppliesCursor(t *testing.T) {
 	require.NoError(t, err)
 
 	// Page 1 (Limit=2): expect [a1, b1] plus one extra for N+1 hasMore.
-	page1, err := ms.Query(context.Background(), memTestVis(), ledger.AuditFilters{}, query.ListParams{
+	page1, err := ms.Query(context.Background(), tenant.TenantID(""), memTestVis(), ledger.AuditFilters{}, query.ListParams{
 		Limit: 2,
 		Sort:  ledger.QuerySort(),
 	})
@@ -306,7 +307,7 @@ func TestMultiStore_Query_AppliesCursor(t *testing.T) {
 
 	// Page 2 cursor: take the second result (b1) and walk forward.
 	cursor := page1[1] // a1, b1 → cursor on b1
-	page2, err := ms.Query(context.Background(), memTestVis(), ledger.AuditFilters{}, query.ListParams{
+	page2, err := ms.Query(context.Background(), tenant.TenantID(""), memTestVis(), ledger.AuditFilters{}, query.ListParams{
 		Limit: 2,
 		Sort:  ledger.QuerySort(),
 		CursorValues: []any{

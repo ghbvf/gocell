@@ -129,16 +129,24 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 
 	logAdminAuditQuery(ctx, p, subject, req.ActorID)
 
+	// Tenant axis (#1618): the typed tenant scope, re-parsed from the
+	// authenticated principal at this repo boundary (auth.Principal.TenantID is a
+	// canonicalized string; the JWT authenticator already validated it). It is
+	// passed to Store.Query as the mandatory t param so a caller reads its OWN
+	// tenant's audit trail PLUS tenant-less system events (bootstrap.auth.fail) —
+	// never another tenant's rows. p.TenantID is guaranteed non-empty here (the
+	// empty case is rejected above — F1). This always-from-principal step is the
+	// app-layer isolation boundary; the Service wraps the read in a tenant-scoped
+	// RunInTx so DB-layer FORCE RLS is the defense-in-depth backstop.
+	tid, err := tenant.ParseTenantID(p.TenantID)
+	if err != nil {
+		// Unreachable on the normal path (the JWT authenticator canonicalizes the
+		// claim); a malformed principal tenant is a server-side invariant break.
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"audit query: principal tenant is not canonical", err)
+	}
+
 	filters := ledger.AuditFilters{
-		// TenantID is the isolation scope (epic #1337 PR-2a): sourced from the
-		// authenticated principal, never from a request field, so a caller reads
-		// its OWN tenant's audit trail PLUS tenant-less system events (e.g.
-		// bootstrap.auth.fail) — never another tenant's rows (see
-		// ledger.AuditFilters.TenantID). p.TenantID is guaranteed non-empty here
-		// (the empty case is rejected above — F1); DB-layer RLS (PR-3) is
-		// defense-in-depth for the non-empty path. This always-set-from-principal
-		// step is the isolation boundary.
-		TenantID:  p.TenantID,
 		EventType: req.EventType,
 		// ActorID: admin's explicit actor filter (or empty = all). Non-admin
 		// callers: auditQueryPolicy already enforces req.ActorID == "" || ==
@@ -178,7 +186,7 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 		Limit:  int(req.Limit),
 	}
 
-	result, err := a.S.Query(ctx, vis, filters, pageReq)
+	result, err := a.S.Query(ctx, tid, vis, filters, pageReq)
 	if err != nil {
 		return nil, err
 	}

@@ -90,9 +90,12 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// 053 enables FORCE ROW LEVEL SECURITY + tenant_isolation policy on the accesscore
 	// tables users/roles/role_assignments (EPIC #1337 PR-3b, #1617);
 	// 054 adds sessions.tenant_id TEXT NOT NULL DEFAULT '' + backfills from users table
-	// for the sessions tenant carrier (EPIC #1337 PR-3b, #1617).
-	assert.Equal(t, int64(54), v,
-		"expected version should be exactly 54 (current migration max — 054_sessions_tenant_id)")
+	// for the sessions tenant carrier (EPIC #1337 PR-3b, #1617);
+	// 055 rebuilds audit_entries per-(namespace, tenant) (DROP+CREATE — UNIQUE(namespace,
+	// tenant_id, seq_no)) + FORCE RLS with the OR tenant_id='' system-rows policy
+	// (EPIC #1337 #1618).
+	assert.Equal(t, int64(55), v,
+		"expected version should be exactly 55 (current migration max — 055_audit_entries_per_tenant_rls)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {
@@ -547,16 +550,42 @@ func rlsPolicyWith(mut func(*rlsPolicyRow)) []rlsPolicyRow {
 	return []rlsPolicyRow{p}
 }
 
+// rlsPolicyWithSystemOK returns the audit_entries SystemRowsReadable variant
+// (#1618) — the migration-055 tenant_isolation policy with the `OR tenant_id =
+// ”` system-rows clause, as pg_policies renders `(A OR B)` (each side wrapped).
+func rlsPolicyWithSystemOK() rlsPolicyRow {
+	const pred = "((tenant_id = NULLIF(current_setting('app.tenant_id'::text, true), ''::text)) OR (tenant_id = ''::text))"
+	return rlsPolicyRow{
+		name:       "tenant_isolation",
+		permissive: "PERMISSIVE",
+		cmd:        "ALL",
+		roles:      "public",
+		qual:       pred,
+		withCheck:  pred,
+	}
+}
+
+// rlsPolicySystemWith returns a single-policy slice with one field mutated from
+// the audit SystemRowsReadable shape.
+func rlsPolicySystemWith(mut func(*rlsPolicyRow)) []rlsPolicyRow {
+	p := rlsPolicyWithSystemOK()
+	mut(&p)
+	return []rlsPolicyRow{p}
+}
+
 // TestCheckRLSPolicyShape is the DB-free unit cover of verifyRLSPolicy's
 // validation core (#1622 F1): every semantic weakening of the tenant_isolation
 // policy that a name-presence-only check would have passed must be rejected, and
 // the well-formed shape must be accepted.
 func TestCheckRLSPolicyShape(t *testing.T) {
-	r := expectedRLS{Table: "feature_flags", Policy: "tenant_isolation"}
 	tests := []struct {
-		name     string
-		policies []rlsPolicyRow
-		wantErr  bool
+		name string
+		// systemReadable selects the audit_entries variant (#1618): the
+		// SystemRowsReadable expectedRLS that accepts the `OR tenant_id = ''`
+		// predicate. Default false = the strict config/accesscore shape.
+		systemReadable bool
+		policies       []rlsPolicyRow
+		wantErr        bool
 	}{
 		{name: "well_formed", policies: []rlsPolicyRow{rlsPolicyOK()}, wantErr: false},
 		{name: "no_policy", policies: nil, wantErr: true},
@@ -613,9 +642,39 @@ func TestCheckRLSPolicyShape(t *testing.T) {
 		},
 		{name: "missing_with_check", policies: rlsPolicyWith(func(p *rlsPolicyRow) { p.withCheck = "" }), wantErr: true},
 		{name: "with_check_true", policies: rlsPolicyWith(func(p *rlsPolicyRow) { p.withCheck = "true" }), wantErr: true},
+
+		// audit_entries SystemRowsReadable variant (#1618): the `OR tenant_id =
+		// ''` predicate is ACCEPTED only when SystemRowsReadable is set.
+		{name: "system_well_formed", systemReadable: true, policies: []rlsPolicyRow{rlsPolicyWithSystemOK()}, wantErr: false},
+		// The strict (config/accesscore) shape MUST REJECT the `OR tenant_id = ''`
+		// clause — only audit opts into the wider predicate.
+		{name: "strict_rejects_or_system", systemReadable: false, policies: []rlsPolicyRow{rlsPolicyWithSystemOK()}, wantErr: true},
+		// Conversely the audit variant MUST still reject the plain (no-OR) shape:
+		// audit_entries REQUIRES the OR clause (else system-row inserts 42501).
+		{name: "system_rejects_plain", systemReadable: true, policies: []rlsPolicyRow{rlsPolicyOK()}, wantErr: true},
+		// The audit variant must still reject `OR true` (vacuous) — the right
+		// operand is pinned to `tenant_id = ''`, not an arbitrary truthy clause.
+		{
+			name:           "system_or_true",
+			systemReadable: true,
+			policies: rlsPolicySystemWith(func(p *rlsPolicyRow) {
+				p.qual = "((tenant_id = NULLIF(current_setting('app.tenant_id'::text, true), ''::text)) OR true)"
+			}),
+			wantErr: true,
+		},
+		// And reject `OR tenant_id = '<other>'` (a specific foreign tenant leak).
+		{
+			name:           "system_or_other_tenant",
+			systemReadable: true,
+			policies: rlsPolicySystemWith(func(p *rlsPolicyRow) {
+				p.qual = "((tenant_id = NULLIF(current_setting('app.tenant_id'::text, true), ''::text)) OR (tenant_id = 'other'::text))"
+			}),
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			r := expectedRLS{Table: "feature_flags", Policy: "tenant_isolation", SystemRowsReadable: tt.systemReadable}
 			err := checkRLSPolicyShape(r, tt.policies)
 			if !tt.wantErr {
 				require.NoError(t, err)

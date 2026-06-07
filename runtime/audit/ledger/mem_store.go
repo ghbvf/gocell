@@ -37,9 +37,44 @@ type MemStore struct {
 	protocol *Protocol
 	clock    clock.Clock
 
-	mu           sync.Mutex
-	entries      []*Entry            // indexed by SeqNo-1 (SeqNo starts at 1)
-	fingerprints map[string]struct{} // content fingerprint → exists
+	mu sync.Mutex
+	// chains partitions entries by tenant_id into independent per-(namespace,
+	// tenant) hash chains (#1618). MemStore is per-namespace (one instance per
+	// NamespaceID), so the key is the tenant_id alone; tenant_id == "" is the
+	// system/framework sub-chain (pre-auth events with no principal tenant, e.g.
+	// bootstrap.auth.fail). Each chain restarts at SeqNo=1 with PrevHash="".
+	chains map[string]*memChain
+}
+
+// memChain is one per-tenant hash chain within a MemStore namespace: the entry
+// slice (indexed by SeqNo-1) plus a per-tenant content-fingerprint set mirroring
+// the PG uq_audit_ns_tenant_event_id idempotency index.
+type memChain struct {
+	entries      []*Entry
+	fingerprints map[string]struct{}
+}
+
+// tenantScopeOrSystem resolves the tenant chain key for ctx-scoped reads
+// (GetBySeq / Verify / Tail): the tenant.WithScope value when present, else ""
+// (the system/framework chain). Mirrors the PG store deriving its explicit
+// tenant predicate from tenant.ScopeFromContext, defaulting to "" when no scope
+// is set — startup tail-verify and system-chain replay run unscoped (#1618).
+func tenantScopeOrSystem(ctx context.Context) string {
+	if t, ok := tenant.ScopeFromContext(ctx); ok {
+		return t.String()
+	}
+	return ""
+}
+
+// chainFor returns the chain for tenant key t, creating it on first write.
+// Callers must hold m.mu.
+func (m *MemStore) chainFor(t string) *memChain {
+	c := m.chains[t]
+	if c == nil {
+		c = &memChain{fingerprints: make(map[string]struct{})}
+		m.chains[t] = c
+	}
+	return c
 }
 
 // NewMemStore constructs a MemStore. Both protocol and clk are strong-
@@ -64,10 +99,9 @@ func NewMemStore(protocol *Protocol, clk clock.Clock) (*MemStore, error) {
 			"audit ledger: NewMemStore requires non-nil Clock")
 	}
 	return &MemStore{
-		protocol:     protocol,
-		clock:        clk,
-		entries:      make([]*Entry, 0),
-		fingerprints: make(map[string]struct{}),
+		protocol: protocol,
+		clock:    clk,
+		chains:   make(map[string]*memChain),
 	}, nil
 }
 
@@ -100,16 +134,20 @@ func (m *MemStore) Append(_ context.Context, e *Entry) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Per-(namespace, tenant) chain: seq_no, prev-hash linkage and the
+	// idempotency fingerprint are all scoped to the entry's own tenant (#1618).
+	chain := m.chainFor(e.TenantID)
+
 	// Idempotency check.
-	if _, exists := m.fingerprints[fp]; exists {
+	if _, exists := chain.fingerprints[fp]; exists {
 		return errcode.New(errcode.KindConflict, errcode.ErrAuditLedgerAlreadyExists,
 			"audit ledger: duplicate content fingerprint")
 	}
 
-	// Determine PrevHash from the current tail.
+	// Determine PrevHash from the current tail of this tenant's chain.
 	prevHash := ""
-	if len(m.entries) > 0 {
-		prevHash = m.entries[len(m.entries)-1].Hash
+	if len(chain.entries) > 0 {
+		prevHash = chain.entries[len(chain.entries)-1].Hash
 	}
 
 	// Build the stored entry (copy to prevent caller mutations from leaking).
@@ -119,12 +157,12 @@ func (m *MemStore) Append(_ context.Context, e *Entry) error {
 	// Query tie-breaking by ID ASC is stable across test runs — random UUIDs
 	// would make same-timestamp tie ordering non-deterministic.
 	stored.ID = e.EventID
-	stored.SeqNo = int64(len(m.entries)) + 1
+	stored.SeqNo = int64(len(chain.entries)) + 1
 	stored.PrevHash = prevHash
 	stored.Hash = m.protocol.ComputeHash(prevHash, stored)
 
-	m.entries = append(m.entries, stored)
-	m.fingerprints[fp] = struct{}{}
+	chain.entries = append(chain.entries, stored)
+	chain.fingerprints[fp] = struct{}{}
 
 	// Write back SeqNo, ID, and Hash to caller's entry so caller can observe them.
 	e.ID = stored.ID
@@ -135,26 +173,33 @@ func (m *MemStore) Append(_ context.Context, e *Entry) error {
 	return nil
 }
 
-// Tail returns the current chain tail snapshot. Returns a zero TailSnapshot
-// for an empty store (SeqNo=0, PrevHash="", EntryCount=0).
-func (m *MemStore) Tail(_ context.Context) (TailSnapshot, error) {
+// Tail returns the current tail snapshot of the ctx-scoped tenant chain (the
+// tenant.WithScope value, or the "" system chain when unscoped — #1618). Returns
+// a zero TailSnapshot for an empty/absent chain (SeqNo=0, PrevHash="",
+// EntryCount=0). Per-(namespace, tenant) chains have no single "namespace tail";
+// startup tail-verify runs unscoped and thus reads the "" system chain.
+func (m *MemStore) Tail(ctx context.Context) (TailSnapshot, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if len(m.entries) == 0 {
+	chain := m.chains[tenantScopeOrSystem(ctx)]
+	if chain == nil || len(chain.entries) == 0 {
 		return TailSnapshot{}, nil
 	}
-	last := m.entries[len(m.entries)-1]
+	last := chain.entries[len(chain.entries)-1]
 	return TailSnapshot{
 		SeqNo:      last.SeqNo,
 		PrevHash:   last.Hash,
-		EntryCount: int64(len(m.entries)),
+		EntryCount: int64(len(chain.entries)),
 	}, nil
 }
 
-// GetBySeq returns a defensive copy of the entry at the given sequence number.
-// Returns ErrAuditLedgerNotFound for missing sequence numbers or when the
-// entry exists but vis.Allows(entry.ActorID) is false (IDOR-safe collapse).
-func (m *MemStore) GetBySeq(_ context.Context, vis tenant.RowVisibility, seq int64) (*Entry, error) {
+// GetBySeq returns a defensive copy of the entry at the given sequence number
+// within the ctx-scoped tenant chain (#1618). Two orthogonal axes are enforced
+// and both collapse to ErrAuditLedgerNotFound (IDOR-safe — existence is not
+// leaked): the TENANT axis (seq must exist in the tenant.ScopeFromContext chain,
+// "" system chain when unscoped — a cross-tenant by-seq read finds nothing,
+// closing PR #1715 F1) and the OWNER axis (vis.Allows(entry.ActorID)).
+func (m *MemStore) GetBySeq(ctx context.Context, vis tenant.RowVisibility, seq int64) (*Entry, error) {
 	if err := vis.Validate(); err != nil {
 		return nil, err
 	}
@@ -163,13 +208,14 @@ func (m *MemStore) GetBySeq(_ context.Context, vis tenant.RowVisibility, seq int
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if seq < 1 || int(seq) > len(m.entries) {
+	chain := m.chains[tenantScopeOrSystem(ctx)]
+	if chain == nil || seq < 1 || int(seq) > len(chain.entries) {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
 			"audit ledger: entry not found",
 			errcode.WithDetails(errcode.PublicInt("seqNo", seq)),
 		)
 	}
-	e := m.entries[seq-1]
+	e := chain.entries[seq-1]
 	if !vis.Allows(e.ActorID) {
 		// IDOR-safe collapse: do not reveal that the entry exists.
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
@@ -189,7 +235,10 @@ func (m *MemStore) GetBySeq(_ context.Context, vis tenant.RowVisibility, seq int
 // params.Sort must be non-empty (callers pass QuerySort). An empty Sort is a
 // programmer error and yields ErrValidationFailed — the same rejection the PG
 // keyset builder produces, so both backends reject it identically.
-func (m *MemStore) Query(_ context.Context, vis tenant.RowVisibility, filters AuditFilters, params query.ListParams) ([]*Entry, error) {
+func (m *MemStore) Query(
+	_ context.Context, t tenant.TenantID, vis tenant.RowVisibility,
+	filters AuditFilters, params query.ListParams,
+) ([]*Entry, error) {
 	if err := vis.Validate(); err != nil {
 		return nil, err
 	}
@@ -204,12 +253,22 @@ func (m *MemStore) Query(_ context.Context, vis tenant.RowVisibility, filters Au
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Collect all matching entries first so the sort/keyset see the full
-	// candidate set; ApplyCursor then trims to FetchLimit after ordering.
+	// TENANT axis (#1618): scan tenant t's chain PLUS the "" system chain
+	// (tenantMatches mirrors the PG `tenant_id = $N OR tenant_id = ''` predicate;
+	// t is a non-empty canonical tenant, so exactly those two chains qualify).
+	// This is the mem-store analog of FORCE RLS. Collect all matching entries
+	// first so the sort/keyset see the full candidate set; ApplyCursor then trims
+	// to FetchLimit after ordering.
+	tenantKey := t.String()
 	var candidates []*Entry
-	for _, e := range m.entries {
-		if matchesFilters(e, filters) && vis.Allows(e.ActorID) {
-			candidates = append(candidates, copyEntry(e))
+	for chainKey, chain := range m.chains {
+		if !tenantMatches(chainKey, tenantKey) {
+			continue
+		}
+		for _, e := range chain.entries {
+			if matchesFilters(e, filters) && vis.Allows(e.ActorID) {
+				candidates = append(candidates, copyEntry(e))
+			}
 		}
 	}
 
@@ -255,7 +314,7 @@ func entryFieldValue(e *Entry, field string) any {
 // Verify re-computes the HMAC-SHA256 hash for each entry in [fromSeq, toSeq]
 // and checks chain linkage (PrevHash). Returns valid=true and firstInvalidSeq=-1
 // when all entries are intact.
-func (m *MemStore) Verify(_ context.Context, fromSeq, toSeq int64) (valid bool, firstInvalidSeq int64, err error) {
+func (m *MemStore) Verify(ctx context.Context, fromSeq, toSeq int64) (valid bool, firstInvalidSeq int64, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -264,17 +323,24 @@ func (m *MemStore) Verify(_ context.Context, fromSeq, toSeq int64) (valid bool, 
 			"audit ledger: Verify requires 1 <= fromSeq <= toSeq")
 	}
 
+	// Verify the ctx-scoped tenant chain (#1618; "" system chain when unscoped —
+	// startup tail-verify runs unscoped over the system/bootstrap chain).
+	var entries []*Entry
+	if chain := m.chains[tenantScopeOrSystem(ctx)]; chain != nil {
+		entries = chain.entries
+	}
+
 	for seq := fromSeq; seq <= toSeq; seq++ {
 		idx := seq - 1
-		if int(idx) >= len(m.entries) {
+		if int(idx) >= len(entries) {
 			return false, seq, errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
 				"audit ledger: entry not found during Verify")
 		}
-		e := m.entries[idx]
+		e := entries[idx]
 
 		expectedPrev := ""
 		if idx > 0 {
-			expectedPrev = m.entries[idx-1].Hash
+			expectedPrev = entries[idx-1].Hash
 		}
 		if e.PrevHash != expectedPrev {
 			return false, seq, nil
@@ -340,19 +406,23 @@ func contentFingerprint(e *Entry) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// tenantMatches mirrors the PG store's tenant predicate: a non-empty filter
-// tenant matches its OWN tenant's rows PLUS tenant-less system/framework rows
-// (entryTenant == "" — e.g. bootstrap.auth.fail), never another tenant's rows.
-// An empty filter tenant matches everything (no filter). See AuditFilters.TenantID.
-func tenantMatches(entryTenant, filterTenant string) bool {
-	return filterTenant == "" || entryTenant == filterTenant || entryTenant == ""
+// tenantMatches mirrors the PG store's tenant predicate `(tenant_id = ” OR
+// tenant_id = $N)` exactly, where $N is the query tenant (#1618). A non-empty
+// query tenant matches its OWN tenant's chain PLUS the tenant-less
+// system/framework chain (entryTenant == "" — e.g. bootstrap.auth.fail), never
+// another tenant's rows. An EMPTY query tenant (queryTenant == "") collapses the
+// PG predicate to `tenant_id = ”` → system rows ONLY (NOT "all"): a tenant-less
+// query is fail-closed and can never read another tenant's rows. The query
+// tenant is the mandatory Store.Query t parameter, always non-empty in
+// production. See Store.Query.
+func tenantMatches(entryTenant, queryTenant string) bool {
+	return entryTenant == queryTenant || entryTenant == ""
 }
 
-// matchesFilters reports whether e matches all non-zero filter predicates.
+// matchesFilters reports whether e matches all non-zero non-tenant filter
+// predicates. The TENANT axis is enforced separately (Query chain selection via
+// tenantMatches), not here — AuditFilters no longer carries a tenant field.
 func matchesFilters(e *Entry, f AuditFilters) bool {
-	if !tenantMatches(e.TenantID, f.TenantID) {
-		return false
-	}
 	if f.EventType != "" && e.EventType != f.EventType {
 		return false
 	}

@@ -460,7 +460,7 @@ func (c *AuditCore) initQuerySlice(mode outbox.DurabilityMode) error {
 	if queryStore == nil {
 		queryStore = c.ledgerStore
 	}
-	querySvc, err := auditquery.NewService(queryStore, c.cursorCodec, c.logger,
+	querySvc, err := auditquery.NewService(queryStore, c.cursorCodec, c.logger, c.txRunner,
 		query.RunModeForDemo(mode == outbox.DurabilityDemo))
 	if err != nil {
 		return fmt.Errorf("audit-query: %w", err)

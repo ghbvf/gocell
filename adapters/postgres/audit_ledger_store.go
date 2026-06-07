@@ -35,20 +35,30 @@ var (
 // SQL statements for audit_entries operations.
 // All statements use positional parameters ($N); no dynamic SQL concatenation.
 const (
-	// lockNamespaceSQL acquires a transaction-scoped advisory lock keyed on the
-	// namespace string. hashtextextended(text, 0) returns a stable int64 from any
-	// text value — same function used by refresh_store.go for session locking.
+	// lockNamespaceTenantSQL acquires a transaction-scoped advisory lock keyed on
+	// the (namespace, tenant_id) pair via the two-argument int4 form. Each
+	// per-(namespace, tenant) chain serializes independently (#1618); the
+	// two-argument form avoids the string-concatenation ambiguity of a single
+	// combined key (e.g. "ab"+"c" vs "a"+"bc"). hashtext(text) returns a stable
+	// int4 from any text value. A hash collision between two different
+	// (namespace, tenant) pairs only costs false serialization, never
+	// correctness — the SELECT FOR UPDATE tail read (also tenant-filtered) is the
+	// real fence.
 	//
 	// ref: adapters/postgres/refresh_store.go lockSessionSQL — advisory lock pattern.
-	lockNamespaceSQL = `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`
+	lockNamespaceTenantSQL = `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`
 
-	// selectTailForUpdateSQL reads the highest seq_no row in the namespace and
-	// locks it with SELECT FOR UPDATE to fence concurrent Appends within the same
-	// namespace (second safety guard after the advisory lock).
+	// selectTailForUpdateSQL reads the highest seq_no row in the (namespace,
+	// tenant_id) chain and locks it with SELECT FOR UPDATE to fence concurrent
+	// Appends within the same chain (second safety guard after the advisory lock).
+	// Under per-(namespace, tenant) chains the explicit tenant_id predicate is
+	// required: FORCE RLS USING carries `OR tenant_id=''`, which would otherwise
+	// leak system rows into a tenant's tail computation.
 	selectTailForUpdateSQL = `
 SELECT seq_no, hash
 FROM audit_entries
 WHERE namespace = $1
+  AND tenant_id = $2
 ORDER BY seq_no DESC
 LIMIT 1
 FOR UPDATE`
@@ -64,26 +74,34 @@ INSERT INTO audit_entries
      timestamp, payload, prev_hash, hash)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`
 
-	// selectBySeqSQL fetches a single entry by namespace + seq_no. 15 selected
-	// columns (id + 14 entry fields; seq_no replays the WHERE filter).
+	// selectBySeqSQL fetches a single entry by (namespace, tenant_id, seq_no). 15
+	// selected columns (id + 14 entry fields). The explicit tenant_id predicate
+	// ($3, derived from the ctx tenant scope) is REQUIRED under per-(namespace,
+	// tenant) chains: (namespace, seq_no) is no longer unique, and the RLS
+	// `OR tenant_id=''` clause would otherwise let this match both a tenant row
+	// and a system row → QueryRow ambiguity. It also scopes the read to one
+	// tenant, closing PR #1715 F1 (cross-tenant by-seq read → ErrAuditLedgerNotFound).
 	selectBySeqSQL = `
 SELECT id, seq_no, event_id, event_type, actor_id,
        subject_id, tenant_id, session_id, correlation_id, trace_id, occurred_at,
        timestamp, payload, prev_hash, hash
 FROM audit_entries
-WHERE namespace = $1
-  AND seq_no    = $2`
+WHERE namespace  = $1
+  AND tenant_id  = $2
+  AND seq_no     = $3`
 
-	// selectRangeSQL fetches a contiguous seq_no range for Verify in ascending
-	// order. 14 columns (no id needed — Verify only checks chain linkage).
+	// selectRangeSQL fetches a contiguous seq_no range within a (namespace,
+	// tenant_id) chain for Verify in ascending order. 14 columns (no id needed —
+	// Verify only checks chain linkage). tenant_id ($2) is the ctx-scoped chain.
 	selectRangeSQL = `
 SELECT seq_no, event_id, event_type, actor_id,
        subject_id, tenant_id, session_id, correlation_id, trace_id, occurred_at,
        timestamp, payload, prev_hash, hash
 FROM audit_entries
 WHERE namespace = $1
-  AND seq_no >= $2
-  AND seq_no <= $3
+  AND tenant_id = $2
+  AND seq_no >= $3
+  AND seq_no <= $4
 ORDER BY seq_no ASC`
 
 	// selectFingerprintSQL checks for an existing entry with the same stable
@@ -94,15 +112,18 @@ ORDER BY seq_no ASC`
 	// each time; Timestamp changes on every retry — the old multi-field form
 	// produced a different fingerprint on each attempt, defeating idempotency.
 	//
-	// The DB-level uq_audit_namespace_event_id UNIQUE INDEX (migration 021)
+	// The DB-level uq_audit_ns_tenant_event_id UNIQUE INDEX (migration 055)
 	// provides a second-line guard against concurrent bypass of this check.
+	// Per-tenant (#1618): the fingerprint is scoped to (namespace, tenant_id,
+	// event_id), matching the appender's GUC-filtered RLS visibility.
 	//
 	// ref: Watermill router.go — message.UUID as dedup key.
 	// ref: NServiceBus MessageDeduplicationBehavior — message ID as idempotency key.
 	selectFingerprintSQL = `
 SELECT 1 FROM audit_entries
 WHERE namespace = $1
-  AND event_id  = $2
+  AND tenant_id = $2
+  AND event_id  = $3
 LIMIT 1`
 )
 
@@ -210,11 +231,15 @@ func (s *LedgerStore) Append(ctx context.Context, e *ledger.Entry) error {
 	ns := s.namespace()
 
 	return s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		// Step 2: advisory lock — serializes all Append calls for this namespace.
-		// Must run BEFORE the fingerprint check to prevent TOCTOU: two concurrent
-		// goroutines with identical payloads would both pass a pre-lock fingerprint
-		// check and both attempt to INSERT, causing a duplicate chain entry.
-		if _, lockErr := s.db.Exec(txCtx, lockNamespaceSQL, ns); lockErr != nil {
+		// Step 2: advisory lock — serializes all Append calls for this
+		// (namespace, tenant) chain (#1618). Must run BEFORE the fingerprint check
+		// to prevent TOCTOU: two concurrent goroutines with identical payloads
+		// would both pass a pre-lock fingerprint check and both attempt to INSERT,
+		// causing a duplicate chain entry. The GUC for FORCE RLS WITH CHECK on the
+		// INSERT comes from the appender's ctxkeys.TenantID (= e.TenantID) via
+		// tenantScopeForTx; for system events (e.TenantID == "") the GUC is unset
+		// and the policy's `OR tenant_id=''` clause admits the row.
+		if _, lockErr := s.db.Exec(txCtx, lockNamespaceTenantSQL, ns, e.TenantID); lockErr != nil {
 			return ctxcancel.WrapOrInfra(lockErr, "advisory_lock", ns,
 				ErrAdapterPGQuery, "audit ledger: namespace advisory lock failed")
 		}
@@ -229,8 +254,8 @@ func (s *LedgerStore) Append(ctx context.Context, e *ledger.Entry) error {
 				"audit ledger: duplicate content fingerprint")
 		}
 
-		// Step 4: read current tail (SELECT FOR UPDATE).
-		prevHash, nextSeqNo, tailErr := s.readTailForUpdate(txCtx, ns)
+		// Step 4: read current tail of this tenant's chain (SELECT FOR UPDATE).
+		prevHash, nextSeqNo, tailErr := s.readTailForUpdate(txCtx, ns, e.TenantID)
 		if tailErr != nil {
 			return tailErr
 		}
@@ -262,7 +287,7 @@ func (s *LedgerStore) Append(ctx context.Context, e *ledger.Entry) error {
 // may change between retries and must not be part of the fingerprint.
 func (s *LedgerStore) checkFingerprint(ctx context.Context, ns string, e *ledger.Entry) (bool, error) {
 	var marker int
-	err := s.db.QueryRow(ctx, selectFingerprintSQL, ns, e.EventID).Scan(&marker)
+	err := s.db.QueryRow(ctx, selectFingerprintSQL, ns, e.TenantID, e.EventID).Scan(&marker)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -273,12 +298,13 @@ func (s *LedgerStore) checkFingerprint(ctx context.Context, ns string, e *ledger
 	return true, nil
 }
 
-// readTailForUpdate reads the current tail (prevHash, nextSeqNo) within an
-// advisory-locked transaction context. Returns ("", 1, nil) for an empty namespace.
-func (s *LedgerStore) readTailForUpdate(ctx context.Context, ns string) (prevHash string, nextSeqNo int64, err error) {
+// readTailForUpdate reads the current tail (prevHash, nextSeqNo) of the
+// (namespace, tenant) chain within an advisory-locked transaction context.
+// Returns ("", 1, nil) for an empty chain (per-tenant genesis).
+func (s *LedgerStore) readTailForUpdate(ctx context.Context, ns, tenantID string) (prevHash string, nextSeqNo int64, err error) {
 	var tailSeqNo int64
 	var tailHash string
-	scanErr := s.db.QueryRow(ctx, selectTailForUpdateSQL, ns).Scan(&tailSeqNo, &tailHash)
+	scanErr := s.db.QueryRow(ctx, selectTailForUpdateSQL, ns, tenantID).Scan(&tailSeqNo, &tailHash)
 	if errors.Is(scanErr, pgx.ErrNoRows) {
 		return "", 1, nil
 	}
@@ -289,28 +315,46 @@ func (s *LedgerStore) readTailForUpdate(ctx context.Context, ns string) (prevHas
 	return tailHash, tailSeqNo + 1, nil
 }
 
-// tailWithCountSQL retrieves the latest seq_no + hash + total row count in a
-// single query, avoiding a separate COUNT(*) round-trip.
-// Returns (0, "", 0) via ErrNoRows when the namespace is empty.
+// auditChainTenant resolves the (namespace, tenant) chain key for ctx-scoped
+// reads (GetBySeq / Verify / Tail): the tenant.WithScope value when present, else
+// "" (the system/framework chain). Mirrors the mem store's tenantScopeOrSystem.
+// On PG the resulting predicate is the app-layer half of the dual-layer tenant
+// isolation; FORCE RLS on the app.tenant_id GUC is the DB-Hard primary. The
+// unscoped default of "" lets startup tail-verify and system-chain replay run
+// without a scope (#1618).
+func auditChainTenant(ctx context.Context) string {
+	if t, ok := tenant.ScopeFromContext(ctx); ok {
+		return t.String()
+	}
+	return ""
+}
+
+// tailWithCountSQL retrieves the latest seq_no + hash + total row count of a
+// (namespace, tenant_id) chain in a single query, avoiding a separate COUNT(*)
+// round-trip. Returns (0, "", 0) via ErrNoRows when the chain is empty.
 //
 // F13: merged Tail + Count into one query.
 //
-// $1 (namespace) appears twice — in the COUNT(*) subquery and the outer WHERE.
-// pgx binds a single positional parameter to all occurrences of $1, so both
-// clauses receive the same namespace value; this is intentional, not a
-// parameter mismatch. If the two clauses ever needed different values they
-// would use $1 and $2 respectively.
+// $1 (namespace) and $2 (tenant_id) each appear twice — in the COUNT(*) subquery
+// and the outer WHERE. pgx binds a single positional parameter to all of its
+// occurrences, so both clauses receive the same values; this is intentional, not
+// a parameter mismatch.
 const tailWithCountSQL = `
 SELECT seq_no, hash,
-       (SELECT COUNT(*) FROM audit_entries WHERE namespace=$1) AS total
+       (SELECT COUNT(*) FROM audit_entries WHERE namespace=$1 AND tenant_id=$2) AS total
 FROM audit_entries
 WHERE namespace=$1
+  AND tenant_id=$2
 ORDER BY seq_no DESC
 LIMIT 1`
 
-// Tail returns the current chain tail snapshot. Returns zero TailSnapshot for
-// an empty namespace (not an error). Routes through pgExecutor (ambient-tx
-// aware; falls back to pool when no tx in ctx).
+// Tail returns the current tail snapshot of the ctx-scoped tenant chain (the
+// tenant.WithScope value, or the "" system chain when unscoped — #1618). Returns
+// zero TailSnapshot for an empty/absent chain (not an error). Routes through
+// pgExecutor (ambient-tx aware; falls back to pool when no tx in ctx).
+//
+// Per-(namespace, tenant) chains have no single "namespace tail"; startup
+// tail-verify runs unscoped and thus reads the "" system/bootstrap chain.
 //
 // F13: uses a single SQL query to retrieve seq_no, hash, and total count.
 //
@@ -320,11 +364,12 @@ LIMIT 1`
 // commits.
 func (s *LedgerStore) Tail(ctx context.Context) (ledger.TailSnapshot, error) {
 	ns := s.namespace()
+	chainTenant := auditChainTenant(ctx)
 
 	var seqNo int64
 	var hash string
 	var count int64
-	err := s.db.QueryRow(ctx, tailWithCountSQL, ns).Scan(&seqNo, &hash, &count)
+	err := s.db.QueryRow(ctx, tailWithCountSQL, ns, chainTenant).Scan(&seqNo, &hash, &count)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ledger.TailSnapshot{}, nil
 	}
@@ -375,8 +420,9 @@ func (s *LedgerStore) GetBySeq(ctx context.Context, vis tenant.RowVisibility, se
 		return nil, ledger.RowScopeAllUnsupportedError()
 	}
 	ns := s.namespace()
+	chainTenant := auditChainTenant(ctx)
 	var e ledger.Entry
-	err := s.db.QueryRow(ctx, selectBySeqSQL, ns, seq).Scan(
+	err := s.db.QueryRow(ctx, selectBySeqSQL, ns, chainTenant, seq).Scan(
 		&e.ID, &e.SeqNo,
 		&e.EventID, &e.EventType, &e.ActorID,
 		&e.SubjectID, &e.TenantID, &e.SessionID, &e.CorrelationID, &e.TraceID, &e.OccurredAt,
@@ -403,16 +449,24 @@ func (s *LedgerStore) GetBySeq(ctx context.Context, vis tenant.RowVisibility, se
 	return &e, nil
 }
 
-// Query lists entries matching the supplied AuditFilters using keyset cursor
-// pagination pushed into SQL via pgquery.AppendKeyset: params.Sort drives the
-// ORDER BY and the keyset WHERE predicate, and params.FetchLimit() (Limit+1) is
-// the LIMIT for N+1 hasMore detection. The idx_audit_namespace_ts_id composite
-// index covers the (timestamp DESC, id ASC) keyset, so this is an index scan.
-// params.Sort must be non-empty (callers pass ledger.QuerySort); AppendKeyset
-// returns ErrValidationFailed on empty Sort. Returns an empty (non-nil) slice
-// when no entries match.
+// Query lists entries matching the supplied AuditFilters within tenant t using
+// keyset cursor pagination pushed into SQL via pgquery.AppendKeyset: params.Sort
+// drives the ORDER BY and the keyset WHERE predicate, and params.FetchLimit()
+// (Limit+1) is the LIMIT for N+1 hasMore detection. The idx_audit_namespace_ts_id
+// composite index covers the (timestamp DESC, id ASC) keyset, so this is an index
+// scan with tenant_id applied as an in-scan filter (the `OR tenant_id=”`
+// disjunction precludes a single ordered tenant-leading scan). params.Sort must
+// be non-empty (callers pass ledger.QuerySort); AppendKeyset returns
+// ErrValidationFailed on empty Sort. Returns an empty (non-nil) slice when no
+// entries match.
+//
+// t (#1618) is the mandatory tenant axis (param[1], TENANT-REPO-PARAM-FUNNEL-01):
+// the app-layer half of the dual-layer tenant isolation. FORCE RLS on the
+// app.tenant_id GUC (set from the post-auth ctxkeys.TenantID when this runs inside
+// the auditquery RunInTx) is the DB-Hard primary; this explicit predicate is the
+// defense-in-depth backstop and the sole isolation on the superuser/mem paths.
 func (s *LedgerStore) Query(
-	ctx context.Context, vis tenant.RowVisibility, filters ledger.AuditFilters, params query.ListParams,
+	ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, filters ledger.AuditFilters, params query.ListParams,
 ) ([]*ledger.Entry, error) {
 	if err := vis.Validate(); err != nil {
 		return nil, err
@@ -432,24 +486,21 @@ func (s *LedgerStore) Query(
        subject_id, tenant_id, session_id, correlation_id, trace_id, occurred_at,
        timestamp, payload, prev_hash, hash
 FROM audit_entries WHERE namespace = `, ns)
-	// tenant_id is the isolation filter (epic #1337 PR-2a). A tenant-bearing
-	// caller sees its OWN tenant's rows PLUS tenant-less system/framework rows
-	// (bootstrap.auth.fail and other pre-auth events have no principal tenant) —
-	// never another tenant's rows. The auditquery HANDLER always sets
-	// filters.TenantID from the authenticated principal (replacing the PR-1 #1339
-	// 403 gate); empty = no filter (generic store consumers / tenant-less
-	// callers). DB-layer RLS (PR-3) is the defense-in-depth backstop.
-	// See ledger.AuditFilters.TenantID.
+	// TENANT axis (#1618): the mandatory typed tenant t scopes results to its OWN
+	// tenant's rows PLUS tenant-less system/framework rows (tenant_id == "" —
+	// bootstrap.auth.fail and other pre-auth events have no principal tenant) —
+	// never another tenant's rows. This is the app-layer half of the dual-layer
+	// isolation (FORCE RLS on the app.tenant_id GUC is the DB-Hard primary); it is
+	// always applied (no tenant-less Query is expressible). The auditquery handler
+	// passes t from the authenticated principal.
 	//
-	// Index note: this OR disjunction is served by idx_audit_namespace_ts_id
-	// (namespace equality + the ts/id keyset, ORDER BY satisfied without a sort)
-	// with tenant_id applied as an in-scan filter. A (namespace, tenant_id, …)
-	// tenant-leading index cannot serve the OR as a single ordered scan, so none
-	// is defined; it is deferred to PR-3, where RLS rewrites this to pure
-	// tenant_id equality (see adapters/postgres/schema_guard.go expectedIndexes).
-	if filters.TenantID != "" {
-		b.AppendParam(`AND (tenant_id = '' OR tenant_id = `, filters.TenantID).Append(`)`)
-	}
+	// Index note: the `OR tenant_id=''` disjunction is served by
+	// idx_audit_namespace_ts_id (namespace equality + the ts/id keyset, ORDER BY
+	// satisfied without a sort) with tenant_id applied as an in-scan filter. A
+	// (namespace, tenant_id, …) tenant-leading index cannot serve the disjunction
+	// as a single ordered scan — the RLS predicate is itself a disjunction, not
+	// pure equality — so none is defined (see schema_guard.go expectedIndexes).
+	b.AppendParam(`AND (tenant_id = '' OR tenant_id = `, t.String()).Append(`)`)
 	b.AppendIf(filters.EventType != "", `AND event_type = `, filters.EventType)
 	b.AppendIf(filters.ActorID != "", `AND actor_id = `, filters.ActorID)
 	b.AppendIf(filters.SubjectID != "", `AND subject_id = `, filters.SubjectID)
@@ -565,31 +616,33 @@ func (s *LedgerStore) scanEntries(rows pgx.Rows, ns string) ([]*ledger.Entry, er
 // commits.
 func (s *LedgerStore) Verify(ctx context.Context, fromSeq, toSeq int64) (valid bool, firstInvalidSeq int64, err error) {
 	ns := s.namespace()
+	chainTenant := auditChainTenant(ctx)
 
 	if fromSeq < 1 || toSeq < fromSeq {
 		return false, fromSeq, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit ledger: Verify requires 1 <= fromSeq <= toSeq")
 	}
 
-	prevHash, baseErr := s.verifyBaseline(ctx, ns, fromSeq)
+	prevHash, baseErr := s.verifyBaseline(ctx, ns, chainTenant, fromSeq)
 	if baseErr != nil {
 		return false, fromSeq, baseErr
 	}
 
-	return s.verifyRange(ctx, ns, fromSeq, toSeq, prevHash)
+	return s.verifyRange(ctx, ns, chainTenant, fromSeq, toSeq, prevHash)
 }
 
-// verifyBaseline returns the hash of entries[fromSeq-1] when fromSeq > 1 (the
-// sub-range baseline), or "" when fromSeq == 1 (chain genesis). A missing
-// baseline row returns ErrAuditLedgerNotFound.
-func (s *LedgerStore) verifyBaseline(ctx context.Context, ns string, fromSeq int64) (string, error) {
+// verifyBaseline returns the hash of entries[fromSeq-1] in the (namespace,
+// tenant) chain when fromSeq > 1 (the sub-range baseline), or "" when
+// fromSeq == 1 (chain genesis). A missing baseline row returns
+// ErrAuditLedgerNotFound.
+func (s *LedgerStore) verifyBaseline(ctx context.Context, ns, tenantID string, fromSeq int64) (string, error) {
 	if fromSeq == 1 {
 		return "", nil
 	}
 	var baselineHash string
 	err := s.db.QueryRow(ctx,
-		`SELECT hash FROM audit_entries WHERE namespace=$1 AND seq_no=$2`,
-		ns, fromSeq-1,
+		`SELECT hash FROM audit_entries WHERE namespace=$1 AND tenant_id=$2 AND seq_no=$3`,
+		ns, tenantID, fromSeq-1,
 	).Scan(&baselineHash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
@@ -603,11 +656,12 @@ func (s *LedgerStore) verifyBaseline(ctx context.Context, ns string, fromSeq int
 	return baselineHash, nil
 }
 
-// verifyRange scans entries in [fromSeq, toSeq] and validates gap-freeness,
-// PrevHash linkage, and hash recomputation. prevHash is the expected PrevHash
-// of the first scanned entry (empty string for the chain genesis).
-func (s *LedgerStore) verifyRange(ctx context.Context, ns string, fromSeq, toSeq int64, prevHash string) (bool, int64, error) {
-	rows, queryErr := s.db.Query(ctx, selectRangeSQL, ns, fromSeq, toSeq)
+// verifyRange scans entries in [fromSeq, toSeq] of the (namespace, tenant) chain
+// and validates gap-freeness, PrevHash linkage, and hash recomputation. prevHash
+// is the expected PrevHash of the first scanned entry (empty string for the
+// chain genesis).
+func (s *LedgerStore) verifyRange(ctx context.Context, ns, tenantID string, fromSeq, toSeq int64, prevHash string) (bool, int64, error) {
+	rows, queryErr := s.db.Query(ctx, selectRangeSQL, ns, tenantID, fromSeq, toSeq)
 	if queryErr != nil {
 		return false, 0, ctxcancel.WrapOrInfra(queryErr, "verify_query", ns,
 			ErrAdapterPGQuery, "audit ledger: verify range query failed")

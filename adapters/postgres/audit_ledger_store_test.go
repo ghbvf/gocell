@@ -504,14 +504,14 @@ func TestAuditLedgerStore_NamespaceIsolation(t *testing.T) {
 	assert.Equal(t, int64(2), tailB.SeqNo, "namespace B SeqNo must be 2")
 
 	// Query storeA must not return storeB's entries.
-	aEntries, err := storeA.Query(ctx, ledgerTestVis(), ledger.AuditFilters{}, query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	aEntries, err := storeA.Query(ctx, tenant.TenantID(""), ledgerTestVis(), ledger.AuditFilters{}, query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	require.NoError(t, err)
 	assert.Len(t, aEntries, 3, "namespace A Query must return exactly 3 entries")
 	for _, e := range aEntries {
 		assert.Equal(t, "actor-a", e.ActorID, "namespace A entry must have actor-a")
 	}
 
-	bEntries, err := storeB.Query(ctx, ledgerTestVis(), ledger.AuditFilters{}, query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	bEntries, err := storeB.Query(ctx, tenant.TenantID(""), ledgerTestVis(), ledger.AuditFilters{}, query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	require.NoError(t, err)
 	assert.Len(t, bEntries, 2, "namespace B Query must return exactly 2 entries")
 	for _, e := range bEntries {
@@ -677,7 +677,7 @@ func TestAuditLedgerStore_TraceID_RoundTripAndFilter(t *testing.T) {
 	e3.TraceID = "different-trace-id"
 	require.NoError(t, store.Append(ctx, e3), "Append trace-rt-3")
 
-	byTrace, err := store.Query(ctx, ledgerTestVis(),
+	byTrace, err := store.Query(ctx, tenant.TenantID(""), ledgerTestVis(),
 		ledger.AuditFilters{TraceID: "4bf92f3577b34da6a3ce929d0e0e4736"},
 		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	require.NoError(t, err)

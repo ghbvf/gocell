@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -69,7 +70,7 @@ func auditTestCtx(subject string, roles []string) context.Context {
 
 func TestHandleQuery_InvalidTimeFormat(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -127,7 +128,7 @@ func TestHandleQuery_InvalidTimeFormat(t *testing.T) {
 
 func TestHandleQuery_InvalidLimit(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -142,7 +143,7 @@ func TestHandleQuery_InvalidLimit(t *testing.T) {
 
 func TestHandleQuery_ExceedsMaxLimit(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -161,7 +162,7 @@ func TestHandleQuery_ExceedsMaxLimit(t *testing.T) {
 
 func TestHandleQuery_Pagination_FullTraversal(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -242,7 +243,7 @@ func TestHandleQuery_InvalidCursor(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			store := newHandlerStore(t)
-			svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+			svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 			require.NoError(t, err)
 			mux := newHandlerMux(svc)
 
@@ -262,7 +263,7 @@ func TestHandleQuery_InvalidCursor(t *testing.T) {
 // and sensitive payload fields are redacted.
 func TestAuditEntryResponse_ExcludesInternalFields(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -299,7 +300,7 @@ func TestAuditEntryResponse_ExcludesInternalFields(t *testing.T) {
 // F23: HTTP-path redaction coverage.
 func TestAuditEntryResponse_SensitivePayload_Redacted(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -330,7 +331,7 @@ func TestAuditEntryResponse_SensitivePayload_Redacted(t *testing.T) {
 // fail-open vector the second-round review flagged P0.
 func TestList_EmptyTenant_Forbidden(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -353,7 +354,7 @@ func TestList_EmptyTenant_Forbidden(t *testing.T) {
 
 func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	h := NewHandler(svc)
 
@@ -433,7 +434,7 @@ func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
 // admin-ness widens the actor axis but never the tenant axis.
 func TestHandler_RegisterRoutes_TenantScoped(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	h := NewHandler(svc)
 
@@ -495,7 +496,7 @@ func TestHandler_RegisterRoutes_TenantScoped(t *testing.T) {
 // Trust boundary tests (#27q).
 func TestHandleQuery_ActorBinding(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	h := NewHandler(svc)
 
@@ -610,7 +611,7 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 // WHERE to subject_id = ?. Without the binding every row is returned (RED).
 func TestHandleQuery_SubjectFilter(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -660,7 +661,7 @@ func TestHandleQuery_SubjectFilter(t *testing.T) {
 // caller's own actions and cannot leak another user's rows (#1290 authz design).
 func TestHandleQuery_SubjectFilter_NonAdminScopedToActorSelf(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -717,7 +718,7 @@ func TestHandleQuery_SubjectFilter_NonAdminScopedToActorSelf(t *testing.T) {
 // the matched entry's traceId is surfaced in the response item.
 func TestHandleQuery_TraceIDFilter_Admin(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -771,7 +772,7 @@ func TestHandleQuery_TraceIDFilter_Admin(t *testing.T) {
 // parameter entirely) and returns all matching rows, not WHERE trace_id="".
 func TestHandleQuery_TraceIDFilter_EmptyParam(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -814,7 +815,7 @@ func TestHandleQuery_TraceIDFilter_EmptyParam(t *testing.T) {
 // auditQueryPolicy — it does NOT widen scope beyond the caller's own actions.
 func TestHandleQuery_TraceIDFilter_NonAdminScopedToActorSelf(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 

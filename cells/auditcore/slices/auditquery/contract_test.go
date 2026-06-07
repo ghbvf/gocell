@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -36,7 +37,7 @@ func newContractQueryHandler(entries ...*ledger.Entry) http.Handler {
 			panic("newContractQueryHandler: Append: " + err.Error())
 		}
 	}
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	if err != nil {
 		panic(err)
 	}
@@ -138,11 +139,15 @@ func TestHttpAuditListV1Serve_PrincipalProjection(t *testing.T) {
 
 	// Sub-second OccurredAt so the precision assertion is meaningful.
 	occurred := time.Date(2026, 1, 2, 3, 4, 5, 123456789, time.UTC)
+	// auditQueryTestTenant is a canonical UUID — tenant.ParseTenantID requires it.
+	// We assert that this UUID does not appear on the wire as a per-row tenantId
+	// field (it is deliberately NOT projected by toListResponseDataItem).
+	const projTenant = auditQueryTestTenant
 	h := newContractQueryHandler(&ledger.Entry{
 		ID: "ae-proj", EventID: "evt-proj", EventType: "event.test.v1",
 		ActorID:       "usr-actor",
 		SubjectID:     "sub-of-record",
-		TenantID:      "tenant-must-not-leak",
+		TenantID:      projTenant,
 		SessionID:     "session-must-not-leak",
 		CorrelationID: "corr-id-123",
 		TraceID:       "trace-proj-001",
@@ -159,7 +164,7 @@ func TestHttpAuditListV1Serve_PrincipalProjection(t *testing.T) {
 	req = req.WithContext(auth.WithPrincipal(context.Background(), &auth.Principal{
 		Kind:       auth.PrincipalUser,
 		Subject:    "usr-actor",
-		TenantID:   "tenant-must-not-leak",
+		TenantID:   projTenant,
 		AuthMethod: "test",
 	}))
 	h.ServeHTTP(rec, req)
@@ -206,10 +211,12 @@ func TestHttpAuditListV1Serve_PrincipalProjection(t *testing.T) {
 
 	// ABSENT — sessionId / tenantId must not appear by key or by value, in
 	// camelCase (DTO/wire) or snake_case (DB column) form, even though the
-	// underlying ledger.Entry carries them.
+	// underlying ledger.Entry carries them. The tenant UUID (projTenant) must also
+	// not leak as a per-row value — it is a query-scope parameter, not a projected
+	// field (toListResponseDataItem deliberately omits TenantID).
 	for _, forbidden := range []string{
 		"sessionId", "session_id", "tenantId", "tenant_id",
-		"session-must-not-leak", "tenant-must-not-leak",
+		"session-must-not-leak", projTenant,
 	} {
 		if strings.Contains(body, forbidden) {
 			t.Errorf("response leaked %q — sessionId/tenantId must never reach the wire\nbody=%s", forbidden, body)

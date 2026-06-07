@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
@@ -22,30 +23,42 @@ import (
 // satisfies QueryStore by structural typing, so single-chain deployments need
 // no extra wiring.
 type Service struct {
-	store   ledger.QueryStore  `gocell:"required"`
-	codec   *query.CursorCodec `gocell:"required" gocellCode:"ErrCellMissingCodec" gocellErr:"auditquery: cursor codec is required"`
-	logger  *slog.Logger
-	runMode query.RunMode
+	store ledger.QueryStore  `gocell:"required"`
+	codec *query.CursorCodec `gocell:"required" gocellCode:"ErrCellMissingCodec" gocellErr:"auditquery: cursor codec is required"`
+	// txRunner wraps each page fetch in a tenant-scoped RunInTx so the FORCE RLS
+	// app.tenant_id GUC (set from the post-auth ctxkeys.TenantID via
+	// tenantScopeForTx) is active on the read connection (#1618). No
+	// tenant.WithScope is used — the post-auth principal tenant flows through the
+	// ctxkeys fallback. In demo/mem mode RunInTx is a passthrough.
+	txRunner persistence.CellTxManager `gocell:"required" gocellErr:"auditquery: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	logger   *slog.Logger
+	runMode  query.RunMode
 }
 
 // NewService creates an audit-query Service. runMode controls cursor
 // fail-open vs fail-closed semantics; pass query.RunModeProd unless the
 // assembly declares DurabilityDemo.
 //
-// Both store and codec must be non-nil; codec is required for pagination.
-func NewService(store ledger.QueryStore, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
-	s := &Service{store: store, codec: codec, logger: logger, runMode: runMode}
+// store, codec and txRunner must be non-nil; codec is required for pagination,
+// txRunner for the tenant-scoped RunInTx that activates FORCE RLS on reads.
+func NewService(
+	store ledger.QueryStore, codec *query.CursorCodec, logger *slog.Logger,
+	txRunner persistence.CellTxManager, runMode query.RunMode,
+) (*Service, error) {
+	s := &Service{store: store, codec: codec, txRunner: txRunner, logger: logger, runMode: runMode}
 	if err := s.validateRequired(); err != nil {
 		return nil, err
 	}
 	return s, nil
 }
 
-// Query returns a paginated page of audit entries matching the given filters.
-// vis is the row-visibility obligation derived from the authenticated principal;
-// it is enforced on the actor_id owner column by the underlying store.
+// Query returns a paginated page of audit entries within tenant t matching the
+// given filters. t is the tenant axis (#1618), passed from the authenticated
+// principal by the handler; vis is the row-visibility obligation enforced on the
+// actor_id owner column by the underlying store. Each page fetch runs inside a
+// tenant-scoped RunInTx so DB-layer FORCE RLS is active.
 func (s *Service) Query(
-	ctx context.Context, vis tenant.RowVisibility, filters ledger.AuditFilters, pageReq query.PageParams,
+	ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, filters ledger.AuditFilters, pageReq query.PageParams,
 ) (query.PageResult[*ledger.Entry], error) {
 	attrs := []string{"endpoint", "audit-query"}
 	if filters.EventType != "" {
@@ -66,13 +79,13 @@ func (s *Service) Query(
 		// resume against a different traceId or an unfiltered query (#1048).
 		attrs = append(attrs, "traceId", filters.TraceID)
 	}
-	if filters.TenantID != "" {
-		// tenantId is the primary isolation axis: a cursor minted under tenant A
-		// must not silently resume under tenant B. Including it in the scope
-		// fingerprint makes cross-tenant cursor replay produce a
+	if t.String() != "" {
+		// tenant is the primary isolation axis (#1618): a cursor minted under
+		// tenant A must not silently resume under tenant B. Including it in the
+		// scope fingerprint makes cross-tenant cursor replay produce a
 		// "query context mismatch" error rather than silently paging the wrong
-		// tenant's rows (#1337 PR-2a review U4).
-		attrs = append(attrs, "tenantId", filters.TenantID)
+		// tenant's rows (#1337 PR-2a review U4). Sourced from the typed t param.
+		attrs = append(attrs, "tenantId", t.String())
 	}
 	// The row-visibility obligation is a cursor-scope axis exactly like tenantId
 	// (#1337 PR-4): it decides which actor's rows are paged (via the actor_id
@@ -102,7 +115,20 @@ func (s *Service) Query(
 			// pgquery.AppendKeyset over idx_audit_namespace_ts_id; MemStore:
 			// in-memory keyset). The store returns up to params.FetchLimit()
 			// (Limit+1) rows; BuildPageResult trims to Limit and detects hasMore.
-			entries, err := s.store.Query(ctx, vis, filters, params)
+			//
+			// The store read runs inside RunInTx so the FORCE RLS app.tenant_id GUC
+			// is set from the post-auth ctxkeys.TenantID (#1618); MultiStore fans
+			// the read out to every backing PG store on the same ambient tx, so one
+			// RunInTx scopes them all. Demo/mem RunInTx is a passthrough.
+			var entries []*ledger.Entry
+			err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+				page, qerr := s.store.Query(txCtx, t, vis, filters, params)
+				if qerr != nil {
+					return qerr
+				}
+				entries = page
+				return nil
+			})
 			if err != nil {
 				return nil, fmt.Errorf("audit-query: query: %w", err)
 			}
