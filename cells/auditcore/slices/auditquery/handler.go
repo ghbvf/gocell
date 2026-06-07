@@ -45,25 +45,41 @@ func auditQueryPolicy(r *http.Request) error {
 	if actorID == "" || actorID == p.Subject {
 		return nil
 	}
-	return auth.AnyRole(auth.RoleAdmin)(r)
+	return auth.AnyRole(auth.RoleAdmin, auth.RoleSuperAdmin)(r)
 }
 
-// auditRowVisibility derives the row-visibility obligation (epic #1337 PR-4) for
-// an audit query from the caller principal: admins read tenant-wide (all actors
-// in their tenant), non-admins are restricted to their own actor_id
-// (RowScopeSelf, subject = principal.Subject). Factored out of List to keep its
-// cognitive complexity within budget.
-func auditRowVisibility(p *auth.Principal) (tenant.RowVisibility, error) {
-	if p.HasRole(auth.RoleAdmin) {
-		return tenant.NewRowVisibility(tenant.RowScopeTenant, "")
+// auditTenantFilter determines the TenantID filter and validates tenant isolation
+// based on the derived row-visibility obligation. Returns the TenantID to set on
+// AuditFilters, or an error if the principal cannot issue an audit query.
+//
+// RowScopeAll (super-admin cross-tenant path, epic #1337 PR-5): skip both the
+// F1 empty-tenant rejection and the tenant filter — the store reads across all
+// tenants. The mandatory FR-007 audit is already emitted inside p.RowVisibility.
+// All other scopes (self/device/tenant): keep the existing F1 isolation guard
+// (reject if TenantID is empty) and set the tenant filter from the principal.
+func auditTenantFilter(p *auth.Principal, vis tenant.RowVisibility) (string, error) {
+	if vis.Scope() == tenant.RowScopeAll {
+		return "", nil
 	}
-	return tenant.NewRowVisibility(tenant.RowScopeSelf, p.Subject)
+	if p.TenantID == "" {
+		return "", errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
+			"audit query requires a tenant-scoped principal")
+	}
+	return p.TenantID, nil
 }
 
 // logAdminAuditQuery emits an audit-access breadcrumb when an admin queries the
 // ledger (all actors, or a specific other user). Non-admins and admin-self
 // queries are silent. Factored out of List for cognitive-complexity budget.
+//
+// Super-admin access is excluded from this breadcrumb: the mandatory FR-007
+// slog.Error cross-tenant audit is already emitted inside p.RowVisibility before
+// this function is called. Emitting a second admin-breadcrumb would be redundant
+// and confusing (a lower-severity Info record for a higher-privilege event).
 func logAdminAuditQuery(ctx context.Context, p *auth.Principal, subject, actorIDFilter string) {
+	if p.HasRole(auth.RoleSuperAdmin) {
+		return // FR-007 audit already emitted inside p.RowVisibility
+	}
 	if !p.HasRole(auth.RoleAdmin) {
 		return
 	}
@@ -99,46 +115,39 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 	if !ok || p.Subject == "" {
 		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required")
 	}
-	// Tenant isolation fail-closed (epic #1337 PR-2a, F1): a tenant-scoped audit
-	// read REQUIRES a concrete tenant. An authenticated principal with an empty
-	// TenantID cannot establish an isolation scope; rather than fall through to
-	// the store's "empty TenantID = no filter = all tenants" semantics (a
-	// cross-tenant read), reject here. Post-PR-2a every access token carries
-	// tenant_id (login requires it; sessionmint stamps it), so this only triggers
-	// for malformed/legacy tokens — never the normal path. This is the isolation
-	// boundary; canonical-UUID form is already enforced by the JWT authenticator.
-	if p.TenantID == "" {
-		return nil, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
-			"audit query requires a tenant-scoped principal")
-	}
 	subject := p.Subject
 
-	// Row-visibility obligation (epic #1337 PR-4): derive from principal.
-	// Admin → tenant scope (sees all actors in the tenant). Non-admin → self
-	// scope (only entries where actor_id == subject). The explicit actorId filter
-	// (req.ActorID) is an additional AND predicate on top of the obligation; for
-	// non-admins auditQueryPolicy already enforces actorId == "" || == self, so
-	// the obligation is the effective enforcement gate for row access.
-	vis, err := auditRowVisibility(p)
+	// Row-visibility obligation (epic #1337 PR-4/PR-5): derive from principal via
+	// the framework derivation. Super-admin → RowScopeAll (cross-tenant; mandatory
+	// FR-007 slog.Error audit emitted inside p.RowVisibility). Admin → RowScopeTenant
+	// (all actors in their tenant). Non-admin → RowScopeSelf (actor_id == subject).
+	// The explicit actorId filter (req.ActorID) is an additional AND predicate on top
+	// of the obligation; for non-admins auditQueryPolicy already enforces
+	// actorId == "" || == self, so the obligation is the effective enforcement gate.
+	vis, err := p.RowVisibility(ctx)
 	if err != nil {
-		// NewRowVisibility only errors on invalid construction (programmer error,
-		// not a user input error). Treat as 500.
-		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-			"audit query: failed to build row visibility obligation", err)
+		// RowVisibility errors for service/anonymous/unknown principals
+		// (KindPermissionDenied). Surface as-is; callers holding a JWT-authenticated
+		// user/device principal never reach here under normal circumstances.
+		return nil, err
+	}
+
+	// Tenant isolation (epic #1337 PR-2a/PR-5): RowScopeAll bypasses F1 guard and
+	// tenant filter (super-admin cross-tenant read). All other scopes enforce F1
+	// (reject empty TenantID) and set the filter from the principal.
+	tenantID, err := auditTenantFilter(p, vis)
+	if err != nil {
+		return nil, err
 	}
 
 	logAdminAuditQuery(ctx, p, subject, req.ActorID)
 
 	filters := ledger.AuditFilters{
-		// TenantID is the isolation scope (epic #1337 PR-2a): sourced from the
-		// authenticated principal, never from a request field, so a caller reads
-		// its OWN tenant's audit trail PLUS tenant-less system events (e.g.
-		// bootstrap.auth.fail) — never another tenant's rows (see
-		// ledger.AuditFilters.TenantID). p.TenantID is guaranteed non-empty here
-		// (the empty case is rejected above — F1); DB-layer RLS (PR-3) is
-		// defense-in-depth for the non-empty path. This always-set-from-principal
-		// step is the isolation boundary.
-		TenantID:  p.TenantID,
+		// TenantID: set by auditTenantFilter — non-empty for self/device/tenant scopes
+		// (isolation boundary), empty for RowScopeAll (super-admin cross-tenant read,
+		// epic #1337 PR-5). Note: audit_entries has NO DB-layer RLS (deferred #1618 —
+		// hash chain is namespace-global; tenant isolation here is app-layer only).
+		TenantID:  tenantID,
 		EventType: req.EventType,
 		// ActorID: admin's explicit actor filter (or empty = all). Non-admin
 		// callers: auditQueryPolicy already enforces req.ActorID == "" || ==
@@ -229,15 +238,26 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 // backstop: it rejects any sensitive-key field in an audit wire-out schema at
 // generation time, so SessionID cannot re-enter ResponseDataItem via schema.
 //
-// TenantID is deliberately NOT exposed per-row. This is no longer a fail-open
-// gap: as of epic #1337 PR-2a the read path IS tenant-scoped — the List adapter
-// always sets AuditFilters.TenantID from the authenticated principal, so every
-// returned row already belongs to the caller's own tenant. A per-row tenantId
-// field would therefore be redundant (a constant equal to the caller's own
-// tenant), so it is omitted. This replaced the PR-1 (#1339 F2) blanket 403 gate
-// and retired the appender's INV-SINGLE-TENANT-ONLY tripwire (#1289). A principal
-// with an empty tenant is rejected at the List boundary (F1), so the read path is
-// never tenant-unscoped; DB-layer RLS (PR-3) is defense-in-depth.
+// TenantID is deliberately NOT exposed per-row. Two read regimes (epic #1337):
+//   - self/device/tenant scopes (the default for every non-super-admin caller):
+//     the read path IS tenant-scoped — auditTenantFilter sets
+//     AuditFilters.TenantID from the principal and the store filters by it, so
+//     every returned row already belongs to the caller's own tenant. A per-row
+//     tenantId field would be redundant (a constant equal to the caller's own
+//     tenant). This replaced the PR-1 (#1339 F2) blanket 403 gate and retired the
+//     appender's INV-SINGLE-TENANT-ONLY tripwire (#1289); a principal with an
+//     empty tenant is rejected at the List boundary (F1).
+//   - super-admin RowScopeAll (PR-5): the read IS cross-tenant — auditTenantFilter
+//     drops the tenant filter, so returned rows may span tenants and a per-row
+//     tenantId would NOT be a redundant constant. Surfacing per-row tenant
+//     attribution for the cross-tenant view is a known, deliberate limitation of
+//     PR-5 (#1759 F3): it is deferred to the PR-11/12 column-level
+//     ResourceProjection work (spec T12.2 / #1219), which lands the wire field
+//     together with FieldMask masking rather than ad-hoc here. Until then a
+//     super-admin correlates rows to tenants via the audited payload, not a
+//     dedicated DTO field. audit_entries has NO DB-layer RLS (deferred #1618);
+//     cross-tenant isolation for non-super-admins is app-layer (the obligation +
+//     tenant filter above), not DB RLS.
 func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 	// Both audit-evidence timestamps use RFC3339Nano: sub-second precision is
 	// part of the evidence (the HMAC chain pins occurred_at/timestamp at nanosecond

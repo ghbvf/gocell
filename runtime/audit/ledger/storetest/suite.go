@@ -1305,8 +1305,8 @@ func (tc visGetCase) run(t *testing.T, store ledger.Store) {
 		}
 		return
 	}
-	// Non-OK: must return tc.wantErr (IDOR-safe collapse → ErrAuditLedgerNotFound;
-	// RowScopeAll → ErrInternal), not the entry.
+	// Non-OK: must return tc.wantErr (IDOR-safe collapse → ErrAuditLedgerNotFound),
+	// not the entry. RowScopeAll no longer produces ErrInternal (PR-5).
 	errcodetest.AssertCode(t, err, tc.wantErr)
 	if got != nil {
 		t.Errorf("GetBySeq(vis=%v): expected nil entry, got %+v", tc.scope, got)
@@ -1321,16 +1321,15 @@ func (tc visGetCase) run(t *testing.T, store ledger.Store) {
 // cross-function wrapper that escapes detection (godoc-declared blind spot).
 //
 // runQueryVisibilityObligations verifies that Store.Query correctly applies
-// the row-visibility obligation (epic #1337 PR-4) across all four RowScope
+// the row-visibility obligation (epic #1337 PR-4/PR-5) across all four RowScope
 // values. Seeds three entries with distinct actorIDs ("alice", "bob", "charlie"),
 // then asserts:
 //
 //   - RowScopeSelf("alice")   → only alice's entries
 //   - RowScopeDevice("alice") → same as self (device uses Allows=subject match)
 //   - RowScopeTenant("")      → all entries (tenant-wide: no actor filter)
-//   - RowScopeAll("")         → fail-closed (RowScopeAllUnsupportedError) on every
-//     backend until the audited super-admin path lands (PR-5); no silent degrade
-//     to tenant scope.
+//   - RowScopeAll("")         → SUCCESS returning all rows (PR-5: super-admin
+//     cross-tenant path; no owner predicate applied, all 3 rows returned).
 func runQueryVisibilityObligations(t *testing.T, factory Factory) {
 	store, fc, cleanup := factory(t)
 	defer cleanup()
@@ -1356,9 +1355,9 @@ func runQueryVisibilityObligations(t *testing.T, factory Factory) {
 		{"self-alice", tenant.RowScopeSelf, "alice", 1, "alice", ""},
 		{"device-alice", tenant.RowScopeDevice, "alice", 1, "alice", ""},
 		{"tenant-wide", tenant.RowScopeTenant, "", 3, "", ""},
-		// RowScopeAll is fail-closed on every backend until PR-5 (no silent
-		// degrade to tenant scope) — see RowScopeAllUnsupportedError.
-		{"all-fail-closed", tenant.RowScopeAll, "", 0, "", errcode.ErrInternal},
+		// RowScopeAll succeeds in PR-5: super-admin cross-tenant reads all rows.
+		// No owner predicate is applied; result is non-vacuous (alice ≠ bob ≠ charlie).
+		{"all-cross-tenant", tenant.RowScopeAll, "", 3, "", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) { tc.run(t, store, filters, params) })
@@ -1366,14 +1365,16 @@ func runQueryVisibilityObligations(t *testing.T, factory Factory) {
 }
 
 // runGetBySeqVisibilityObligations verifies the IDOR-safe collapse contract of
-// Store.GetBySeq (epic #1337 PR-4): GetBySeq with a non-matching vis returns
+// Store.GetBySeq (epic #1337 PR-4/PR-5): GetBySeq with a non-matching vis returns
 // ErrAuditLedgerNotFound (same as actual not-found), not the entry.
 //
-// Appends one entry with ActorID="alice". Then asserts:
+// Appends one entry with ActorID="alice" and a second with ActorID="bob" to make
+// the RowScopeAll case non-vacuous (alice ≠ bob, so any owner-filter mismatch is
+// detectable). Then asserts:
 //   - Self("alice")   → found (owns the entry)
-//   - Self("bob")     → ErrAuditLedgerNotFound (IDOR collapse)
+//   - Self("bob")     → ErrAuditLedgerNotFound (IDOR collapse for alice's seq)
 //   - Tenant("")      → found (tenant-wide read)
-//   - All("")         → fail-closed (RowScopeAllUnsupportedError) until PR-5
+//   - All("")         → found (PR-5: super-admin cross-tenant, no owner restriction)
 func runGetBySeqVisibilityObligations(t *testing.T, factory Factory) {
 	store, fc, cleanup := factory(t)
 	defer cleanup()
@@ -1386,7 +1387,18 @@ func runGetBySeqVisibilityObligations(t *testing.T, factory Factory) {
 		Payload:   []byte(`{}`),
 	}
 	if err := store.Append(context.Background(), e); err != nil {
-		t.Fatalf("Append: %v", err)
+		t.Fatalf("Append alice: %v", err)
+	}
+	// Second entry for a distinct actor, making RowScopeAll non-vacuous.
+	e2 := &ledger.Entry{
+		EventID:   "vis-getbyseq-2",
+		EventType: "vis.getbyseq.test",
+		ActorID:   "bob",
+		Timestamp: fc.Now(),
+		Payload:   []byte(`{}`),
+	}
+	if err := store.Append(context.Background(), e2); err != nil {
+		t.Fatalf("Append bob: %v", err)
 	}
 
 	cases := []visGetCase{
@@ -1395,9 +1407,10 @@ func runGetBySeqVisibilityObligations(t *testing.T, factory Factory) {
 		{"device-alice-found", tenant.RowScopeDevice, "alice", true, ""},
 		{"device-bob-idor-collapse", tenant.RowScopeDevice, "bob", false, errcode.ErrAuditLedgerNotFound},
 		{"tenant-wide-found", tenant.RowScopeTenant, "", true, ""},
-		// RowScopeAll is fail-closed on every backend until PR-5 (distinct from the
-		// IDOR-collapse NotFound: it is a wiring/programmer error, ErrInternal).
-		{"all-fail-closed", tenant.RowScopeAll, "", false, errcode.ErrInternal},
+		// RowScopeAll succeeds in PR-5: super-admin cross-tenant read returns alice's
+		// entry (seq=1) without owner restriction. Non-vacuous: bob's seq=2 entry
+		// differs in actor, confirming no owner predicate is applied to seq=1.
+		{"all-cross-tenant", tenant.RowScopeAll, "", true, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) { tc.run(t, store) })

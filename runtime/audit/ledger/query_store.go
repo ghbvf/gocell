@@ -22,9 +22,10 @@ import (
 // backend independent.
 type QueryStore interface {
 	// Query has identical semantics to Store.Query — see that method's godoc for
-	// the full contract (keyset pagination + params.Sort requirement, the vis
-	// row-visibility obligation enforced on the actor_id owner column, and the
-	// RowScopeAll fail-closed rule). This narrow read-only subset exists so
-	// read-side aggregators (MultiStore) implement only Query, not the write path.
+	// the full contract (keyset pagination + params.Sort requirement, and the vis
+	// row-visibility obligation enforced on the actor_id owner column; RowScopeAll
+	// applies no owner predicate, stores are pure PEPs). This narrow read-only
+	// subset exists so read-side aggregators (MultiStore) implement only Query,
+	// not the write path.
 	Query(ctx context.Context, vis tenant.RowVisibility, filters AuditFilters, params query.ListParams) ([]*Entry, error)
 }

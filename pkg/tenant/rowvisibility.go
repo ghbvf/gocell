@@ -53,11 +53,11 @@ import (
 //
 // SQLPredicate and Allows below are PURE OWNER-DIMENSION TRANSLATORS: for the
 // owner dimension RowScopeAll genuinely means "no owner predicate" (== tenant),
-// so they translate it as such and PR-5 reuses them once the audited path lands.
-// Whether RowScopeAll is PERMITTED AT ALL today is an orthogonal enforcement-layer
-// decision: in PR-4 no caller constructs it, and enforcement layers fail-close any
-// RowScopeAll that reaches them rather than silently degrade it to tenant scope
-// (e.g. the audit ledger store returns ledger.RowScopeAllUnsupportedError).
+// so they translate it as such. As of PR-5 (epic #1337), audit ledger stores are
+// pure PEPs that APPLY the obligation without fail-closing RowScopeAll; whether
+// the caller is PERMITTED to use RowScopeAll is an authentication/authorization
+// concern wired at the super-admin path in PR-5 (身份→RowScope 收窄 +
+// RowScope=all 强制審計). The TENANT boundary remains orthogonal (see above).
 type RowVisibility struct {
 	scope   RowScope
 	subject string

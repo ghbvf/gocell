@@ -1141,7 +1141,16 @@ func (s *SubscriberWithMiddleware) SubscribeEntry(ctx context.Context, sub Subsc
 	// populated with trace/request/correlation AND actor/subject/tenant/session
 	// identity. Symmetric with NewEntry's construction-time injection; neither
 	// endpoint has a kill-switch.
+	//
+	// On the consume path the entry's wire identity is authoritative: the ambient
+	// principal (if any) in reqCtx is cleared first so that RestoreContext's
+	// no-overwrite guard never lets a stale or wrong ambient tenant win over the
+	// entry's own tenant/actor/subject/session. This mirrors the projection rebuild
+	// detach boundary (kernel/projection.clearAmbientPrincipal, PR-03 #1627).
+	// Observability (trace/request/correlation) is NOT cleared — ambient trace
+	// context is propagated intentionally (foreign-stream tagging).
 	withRestore := func(reqCtx context.Context, entry Entry) (DeliveryOutcome, Settlement) {
+		reqCtx = clearAmbientPrincipal(reqCtx)
 		reqCtx = entry.RestoreContext(reqCtx)
 		return subHandler(reqCtx, entry)
 	}
