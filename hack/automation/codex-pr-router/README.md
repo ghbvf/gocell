@@ -12,7 +12,7 @@ fix path ([#1662](https://github.com/ghbvf/gocell/issues/1662)) for the
 | Phase | Default engine | Alternate engine (engine-knob) |
 |-------|---------------|-------------------------------|
 | **review** (`pr-status/needs-review-again`) | `codex exec review --base develop` (read-only sandbox) | `claude -p "/pr-review <N>"` |
-| **check** (`pr-status/needs-check-fix`) | `codex exec review --base develop` (read-only sandbox, check-variant prompt) | `claude -p "/pr-review <N>"` |
+| **check** (`pr-status/needs-check-fix`) | `codex exec review --base develop` (read-only sandbox, check-variant prompt) | `claude -p "/pr-review <N> --check"` |
 | **fix** (`pr-status/needs-fix` + `ai/local-fix`) | `codex exec` (workspace-write sandbox) | — (dormant by default) |
 
 Switch the review/check engine via `GOCELL_ROUTER_REVIEW_ENGINE=claude`.

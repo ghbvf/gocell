@@ -131,7 +131,7 @@
 [review 轮] codex review 或 /pr-review <PR#>
   → 贴 findings 评论（codex / pm:pr-review）
   → 有需改 → 切 pr-review/changes-requested + pr-status/needs-fix
-  → 无需改 → 切 pr-review/approved（terminal 或继续 --check）
+  → 无需改（无 findings）→ 切 pr-review/approved + pr-status/ready（无需 fix/check 的终态）
 
 /fix <PR#>（pr-status/needs-fix 时；可多次跑，≤3 轮自动循环）
   → gh pr view --json reviews,comments + gh api pulls/N/comments 探 inline（>0 才读）→ 过滤最新一轮

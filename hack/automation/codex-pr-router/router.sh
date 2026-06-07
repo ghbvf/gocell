@@ -459,6 +459,19 @@ handle_review() {
         return 0
     fi
 
+    # F8: Re-confirm trigger label still present after acquiring lock (TOCTOU: human may have moved label during poll→lock window)
+    if [[ "${kind}" == "review" ]]; then
+        if ! pr_has_label "${pr}" "pr-status/needs-review-again"; then
+            log "PR #${pr}: skip — trigger label pr-status/needs-review-again gone after lock (state changed under us)"
+            return 0
+        fi
+    elif [[ "${kind}" == "check" ]]; then
+        if ! pr_has_label "${pr}" "pr-status/needs-check-fix"; then
+            log "PR #${pr}: skip — trigger label pr-status/needs-check-fix gone after lock (state changed under us)"
+            return 0
+        fi
+    fi
+
     # Re-check freshness after acquiring lock (TOCTOU guard)
     if ! check_freshness "${pr}" "${live_oid}"; then
         return 0
@@ -468,16 +481,24 @@ handle_review() {
         return 0
     fi
 
-    # Engine knob: claude alternate (F3: run in isolated worktree, check exit code, only mark_seen on success)
+    # Engine knob: claude alternate (F2: check phase uses --check flag)
     if [[ "${REVIEW_ENGINE}" == "claude" ]]; then
         local wt_claude
         wt_claude="$(prepare_worktree "${pr}" "${branch}" "${live_oid}")"
         # shellcheck disable=SC2064
         trap "remove_worktree '${wt_claude}'; release_lock '${lock_dir}'" RETURN
-        log "PR #${pr}: running via claude engine (claude -p '/pr-review ${pr}' --cwd ${wt_claude})"
-        if ! claude -p "/pr-review ${pr}" --cwd "${wt_claude}"; then
-            log "PR #${pr}: claude engine failed; not marking seen"
-            return 0
+        if [[ "${kind}" == "check" ]]; then
+            log "PR #${pr}: running via claude engine (claude -p '/pr-review ${pr} --check' --cwd ${wt_claude})"
+            if ! claude -p "/pr-review ${pr} --check" --cwd "${wt_claude}"; then
+                log "PR #${pr}: claude engine failed; not marking seen"
+                return 0
+            fi
+        else
+            log "PR #${pr}: running via claude engine (claude -p '/pr-review ${pr}' --cwd ${wt_claude})"
+            if ! claude -p "/pr-review ${pr}" --cwd "${wt_claude}"; then
+                log "PR #${pr}: claude engine failed; not marking seen"
+                return 0
+            fi
         fi
         mark_seen "${pr}" "${live_oid}" "${kind}"
         return 0
@@ -495,7 +516,53 @@ handle_review() {
 
     local codex_prompt
     if [[ "${kind}" == "check" ]]; then
-        codex_prompt="Review this PR (base=develop). This is a CHECK phase: verify that findings from the previous review round have been fixed. For each prior finding, determine if it is fixed, not-fixed, regression, or partial. Emit structured JSON per the output schema."
+        # F1: fetch prior-round findings from the PR comments before the check call.
+        # Without this, codex re-reviews without knowing what was previously found → may emit 'ready' vacuously.
+        # Fail-closed: if no prior findings are found, do NOT proceed (a check with nothing to verify is a bug).
+        local prior_findings_json
+        prior_findings_json="$(gh api "repos/${REPO_SLUG}/issues/${pr}/comments" \
+            --jq '[.[] | select(.body | contains("<!-- pm:pr-review -->")) | .body] | last' \
+            2>/dev/null || echo "null")"
+
+        local prior_findings_text
+        prior_findings_text="$(python3 - "${prior_findings_json:-null}" <<'PY'
+import json, sys, re
+
+raw = sys.argv[1]
+if not raw or raw == "null":
+    print("")
+    sys.exit(0)
+
+# Extract the findings list section from the comment body
+# Look for the Findings section between header and details
+lines = raw.split("\n")
+findings = []
+in_findings = False
+for line in lines:
+    if "**Findings**" in line and "/fix" in line:
+        in_findings = True
+        continue
+    if in_findings:
+        if line.startswith("<details>") or line.startswith("**修复分流") or line.startswith("**结论"):
+            break
+        if line.strip():
+            findings.append(line.strip())
+
+print("\n".join(findings))
+PY
+)"
+
+        if [[ -z "${prior_findings_text}" ]]; then
+            log "PR #${pr}: check phase: no prior pm:pr-review findings found — skipping (check with nothing to verify is a bug)"
+            return 0
+        fi
+
+        codex_prompt="Review this PR (base=develop). This is a CHECK phase: verify that the following findings from the previous review round have been fixed. For EACH finding listed below, determine its checkStatus: 'fixed', 'not-fixed', 'regression', or 'partial'. Every finding in the list MUST appear in the output findings[] with a checkStatus field. Do NOT emit 'ready' unless you have verified every prior finding.
+
+Prior-round findings to verify:
+${prior_findings_text}
+
+Emit structured JSON per the output schema with verdict (ready if all fixed, changes-requested if any unfixed/regression) and per-finding details including checkStatus for each prior finding."
     else
         codex_prompt="Review this PR (base=develop). Perform a thorough six-dimension review (security, correctness, DX, ops, arch, tests). Emit structured JSON per the output schema with verdict and per-finding details."
     fi
@@ -514,13 +581,16 @@ handle_review() {
         return 0
     fi
 
-    # F2: validate codex output — parse JSON, assert verdict ∈ allowed set, all cx counts are non-negative integers
+    # Validate codex output + recompute counts from findings[] (F7+F10)
+    # F10: fail-closed when jsonschema unavailable — manual validator covers key fields
+    # F7: recompute total/byP/byCx from actual findings[] (not self-reported counts)
     local verdict
-    if ! verdict="$(python3 - "${out_file}" "${VERDICT_SCHEMA}" <<'PY'
+    if ! verdict="$(python3 - "${out_file}" "${VERDICT_SCHEMA}" "${kind}" <<'PY'
 import json, sys
 
 out_file = sys.argv[1]
 schema_file = sys.argv[2]
+phase = sys.argv[3]
 
 try:
     with open(out_file) as f:
@@ -529,39 +599,81 @@ except (json.JSONDecodeError, OSError) as e:
     print(f"INVALID:not valid JSON: {e}", file=sys.stderr)
     sys.exit(1)
 
-# Try jsonschema if available
+# Try jsonschema if available; if not, run full manual validator (fail-closed, not pass)
+jsonschema_available = False
 try:
     import jsonschema
+    jsonschema_available = True
     with open(schema_file) as f:
         schema = json.load(f)
     jsonschema.validate(data, schema)
 except ImportError:
-    pass  # jsonschema not available; fall back to manual checks
+    pass  # will run manual checks below
 except jsonschema.ValidationError as e:
     print(f"INVALID:schema validation failed: {e.message}", file=sys.stderr)
     sys.exit(1)
 
-# Manual checks: verdict must be in allowed set
+# Manual checks: verdict must be in allowed set (always run)
 allowed_verdicts = {"approved", "changes-requested", "ready"}
 v = data.get("verdict", "")
 if v not in allowed_verdicts:
     print(f"INVALID:verdict '{v}' not in {sorted(allowed_verdicts)}", file=sys.stderr)
     sys.exit(1)
 
-# All cx/p counts must be non-negative integers
-counts = data.get("counts", {})
-by_cx = counts.get("byCx", {})
-by_p = counts.get("byP", {})
-for key in ("cx1", "cx2", "cx3", "cx4"):
-    val = by_cx.get(key, -1)
-    if not isinstance(val, int) or val < 0:
-        print(f"INVALID:counts.byCx.{key} must be non-negative integer, got {val!r}", file=sys.stderr)
+# F10: when jsonschema not available, validate findings[] element shape manually (fail-closed)
+if not jsonschema_available:
+    valid_p = {"P0", "P1", "P2", "P3"}
+    valid_cx = {"Cx1", "Cx2", "Cx3", "Cx4"}
+    valid_check_status = {"fixed", "not-fixed", "regression", "partial"}
+    findings = data.get("findings", [])
+    if not isinstance(findings, list):
+        print("INVALID:findings must be an array", file=sys.stderr)
         sys.exit(1)
-for key in ("p0", "p1", "p2", "p3"):
-    val = by_p.get(key, -1)
-    if not isinstance(val, int) or val < 0:
-        print(f"INVALID:counts.byP.{key} must be non-negative integer, got {val!r}", file=sys.stderr)
-        sys.exit(1)
+    for i, f in enumerate(findings):
+        if not isinstance(f, dict):
+            print(f"INVALID:findings[{i}] must be an object", file=sys.stderr)
+            sys.exit(1)
+        fl = f.get("fileLine", "")
+        if not fl or not isinstance(fl, str) or ":" not in fl:
+            print(f"INVALID:findings[{i}].fileLine missing or malformed (expected 'path:line')", file=sys.stderr)
+            sys.exit(1)
+        p_val = f.get("p", "")
+        if p_val not in valid_p:
+            print(f"INVALID:findings[{i}].p='{p_val}' not in {sorted(valid_p)}", file=sys.stderr)
+            sys.exit(1)
+        cx_val = f.get("cx", "")
+        if cx_val not in valid_cx:
+            print(f"INVALID:findings[{i}].cx='{cx_val}' not in {sorted(valid_cx)}", file=sys.stderr)
+            sys.exit(1)
+        if phase == "check":
+            cs = f.get("checkStatus", "")
+            if cs and cs not in valid_check_status:
+                print(f"INVALID:findings[{i}].checkStatus='{cs}' not in {sorted(valid_check_status)}", file=sys.stderr)
+                sys.exit(1)
+
+# F7: recompute counts from actual findings[] (ignore self-reported counts — source of truth)
+findings = data.get("findings", [])
+recomputed = {"total": len(findings), "byP": {"p0":0,"p1":0,"p2":0,"p3":0}, "byCx": {"cx1":0,"cx2":0,"cx3":0,"cx4":0}}
+for f in findings:
+    p_key = f.get("p","").lower()
+    cx_key = f.get("cx","").lower()
+    if p_key in recomputed["byP"]:
+        recomputed["byP"][p_key] += 1
+    if cx_key in recomputed["byCx"]:
+        recomputed["byCx"][cx_key] += 1
+
+# Detect and log discrepancy between self-reported and recomputed counts
+reported = data.get("counts", {})
+reported_total = reported.get("total", -1)
+if reported_total != recomputed["total"]:
+    print(f"WARN:findings[] count discrepancy: self-reported total={reported_total} recomputed={recomputed['total']}; using recomputed", file=sys.stderr)
+
+# Overwrite data counts with recomputed values so downstream uses correct numbers
+data["counts"] = recomputed
+
+# Write patched data back to out_file so bash reads recomputed values
+with open(out_file, "w") as f:
+    json.dump(data, f)
 
 print(v)
 PY
@@ -575,7 +687,7 @@ PY
     local round
     round="$(pr_round "${pr}")"
 
-    # Read counts from out_file (one python invocation)
+    # Read recomputed counts from out_file (patched by validator above)
     local _counts_out total p0 p1 p2 p3 cx1 cx2 cx3 cx4
     _counts_out="$(python3 - "${out_file}" <<'PY'
 import json, sys
@@ -602,6 +714,25 @@ PY
     cx2="$(echo "${_counts_out}"   | sed -n '7p')"
     cx3="$(echo "${_counts_out}"   | sed -n '8p')"
     cx4="$(echo "${_counts_out}"   | sed -n '9p')"
+
+    # F5: mergeability precheck BEFORE rendering/posting the ready comment.
+    # Never post a "ready" comment or flip to ready on unknown/conflicting mergeability.
+    # If not MERGEABLE, override verdict to changes-requested before rendering body.
+    if [[ "${kind}" == "check" && "${verdict}" == "ready" ]]; then
+        local mergeable
+        mergeable="$(gh pr view "${pr}" --repo "${REPO_SLUG}" \
+            --json mergeable --jq '.mergeable' 2>/dev/null || echo "UNKNOWN")"
+        # UNKNOWN means GitHub is still computing; poll once more after a short wait
+        if [[ "${mergeable}" == "UNKNOWN" ]]; then
+            sleep 5
+            mergeable="$(gh pr view "${pr}" --repo "${REPO_SLUG}" \
+                --json mergeable --jq '.mergeable' 2>/dev/null || echo "UNKNOWN")"
+        fi
+        if [[ "${mergeable}" != "MERGEABLE" ]]; then
+            log "PR #${pr}: check ready but mergeable=${mergeable} — overriding verdict to changes-requested"
+            verdict="changes-requested"
+        fi
+    fi
 
     # Render comment body
     local body_file
@@ -656,16 +787,22 @@ PY
     log "PR #${pr}: comment posted → ${comment_url}"
     rm -f "${out_file}" "${body_file}"
 
-    # Label flips (issues B3, 5-state)
-    flip_labels_review "${pr}" "${kind}" "${verdict}"
-
-    # Mark seen (gate 5)
-    mark_seen "${pr}" "${live_oid}" "${kind}"
+    # Label flips (issues B3, 5-state) — F3: only mark_seen if flip succeeds
+    if flip_labels_review "${pr}" "${kind}" "${verdict}"; then
+        # Mark seen (gate 5) — only after BOTH comment post AND label flip succeed
+        mark_seen "${pr}" "${live_oid}" "${kind}"
+    else
+        log "PR #${pr}: label flip failed — not marking seen so next poll can retry flip"
+    fi
 }
 
 # ---------------------------------------------------------------------------
 # flip_labels_review <pr> <kind:review|check> <verdict>
 # Implements the 5-state label machine (PROJECT.md §2.5 / §5).
+# F3: no || true — returns real gh exit status so caller can gate mark_seen.
+# F4: review/approved sets pr-status/ready + pr-review/approved (no-findings terminal state).
+# F5: mergeability precheck is done in handle_review BEFORE comment post; by the time
+#     flip_labels_review is called the verdict already reflects the precheck outcome.
 # ---------------------------------------------------------------------------
 flip_labels_review() {
     local pr="$1" kind="$2" verdict="$3"
@@ -677,46 +814,36 @@ flip_labels_review() {
                     --add-label "pr-review/changes-requested" \
                     --add-label "pr-status/needs-fix" \
                     --remove-label "pr-review/approved" \
-                    --remove-label "pr-status/needs-review-again" 2>/dev/null || true
+                    --remove-label "pr-status/needs-review-again"
                 log "PR #${pr}: labels → changes-requested + needs-fix"
                 ;;
             approved)
+                # F4: no findings → terminal ready state (approved + pr-status/ready)
                 gh pr edit "${pr}" --repo "${REPO_SLUG}" \
                     --add-label "pr-review/approved" \
+                    --add-label "pr-status/ready" \
                     --remove-label "pr-review/changes-requested" \
-                    --remove-label "pr-status/needs-review-again" 2>/dev/null || true
-                log "PR #${pr}: labels → approved"
+                    --remove-label "pr-status/needs-review-again"
+                log "PR #${pr}: labels → approved + pr-status/ready (no findings)"
                 ;;
         esac
     elif [[ "${kind}" == "check" ]]; then
         case "${verdict}" in
             ready)
-                # B5 conflict precheck before flipping to ready
-                local mergeable
-                mergeable="$(gh pr view "${pr}" --repo "${REPO_SLUG}" \
-                    --json mergeable --jq '.mergeable' 2>/dev/null || echo "UNKNOWN")"
-                if [[ "${mergeable}" == "CONFLICTING" ]]; then
-                    log "PR #${pr}: check ready but CONFLICTING — treating as changes-requested"
-                    gh pr edit "${pr}" --repo "${REPO_SLUG}" \
-                        --add-label "pr-review/changes-requested" \
-                        --add-label "pr-status/needs-fix" \
-                        --remove-label "pr-status/needs-check-fix" \
-                        --remove-label "pr-review/approved" 2>/dev/null || true
-                else
-                    gh pr edit "${pr}" --repo "${REPO_SLUG}" \
-                        --add-label "pr-status/ready" \
-                        --add-label "pr-review/approved" \
-                        --remove-label "pr-status/needs-check-fix" \
-                        --remove-label "pr-review/changes-requested" 2>/dev/null || true
-                    log "PR #${pr}: labels → ready + approved"
-                fi
+                # Mergeability precheck already performed in handle_review before this call
+                gh pr edit "${pr}" --repo "${REPO_SLUG}" \
+                    --add-label "pr-status/ready" \
+                    --add-label "pr-review/approved" \
+                    --remove-label "pr-status/needs-check-fix" \
+                    --remove-label "pr-review/changes-requested"
+                log "PR #${pr}: labels → ready + approved"
                 ;;
             changes-requested)
                 gh pr edit "${pr}" --repo "${REPO_SLUG}" \
                     --add-label "pr-review/changes-requested" \
                     --add-label "pr-status/needs-fix" \
                     --remove-label "pr-status/needs-check-fix" \
-                    --remove-label "pr-review/approved" 2>/dev/null || true
+                    --remove-label "pr-review/approved"
                 log "PR #${pr}: labels → changes-requested + needs-fix"
                 ;;
         esac
@@ -943,6 +1070,11 @@ Co-Authored-By: codex <noreply@codex.ai>"
     git -C "${wt}" push origin "HEAD:${branch}"
     log "PR #${pr}: pushed fix commit to ${branch}"
 
+    # F6: re-read new head sha after push — live_oid is pre-push and must not be used in machine block
+    local pushed_oid
+    pushed_oid="$(git -C "${wt}" rev-parse HEAD 2>/dev/null || echo "${live_oid}")"
+    log "PR #${pr}: post-push head sha=${pushed_oid:0:12}"
+
     # Post pm:fix comment with machine block
     local body_file
     body_file="$(mktemp "${GOCELL_ROUTER_HOME}/state/fixbody-${pr}-XXXXXX.md")"
@@ -972,7 +1104,7 @@ FIXBODY
         --arg repo "${REPO_SLUG}" \
         --argjson pr "${pr}" \
         --arg headRef "${branch}" \
-        --arg headSha "${live_oid}" \
+        --arg headSha "${pushed_oid}" \
         --argjson round "${new_round}" \
         --argjson total "${total}" \
         --argjson cx1_count "${cx1}" \
@@ -1005,6 +1137,9 @@ FIXBODY
 }
 
 # post_fix_escalation <pr> <branch> <wt> <reason>
+# F9: do NOT embed ${wt} in the comment body — wt is deleted by the RETURN trap before (or
+# simultaneously with) this call, so the path is already invalid when a human reads the comment.
+# Instead, give a reproducible checkout command so the human can reconstruct the state.
 post_fix_escalation() {
     local pr="$1" branch="$2" wt="$3" reason="$4"
     local body_file
@@ -1015,10 +1150,18 @@ post_fix_escalation() {
 
 codex 自动修复失败（原因：${reason}）。
 
-**下一步**：请人工介入检查 worktree \`${wt}\`，修复后 push，再切 \`pr-status/needs-check-fix\`。
+**下一步**：请人工介入 —— 检出分支 \`${branch}\`，查阅 router 日志（\`${GOCELL_ROUTER_HOME}/logs/\`），修复后 push，再切 \`pr-status/needs-check-fix\`：
+
+\`\`\`
+git checkout ${branch}
+# 查阅 router 日志了解失败详情
+# 修复后：
+git add <files> && git commit -m "fix: ..." && git push
+gh pr edit ${pr} --add-label pr-status/needs-check-fix --remove-label pr-status/needs-fix
+\`\`\`
 
 ---
-🤖 PR #${pr} · Generated with Codex · branch ${branch} · worktree ${wt} · session —
+🤖 PR #${pr} · Generated with Codex · branch ${branch} · session —
 ESC
     local comment_url
     comment_url="$(gh pr comment "${pr}" --repo "${REPO_SLUG}" --body-file "${body_file}" 2>/dev/null || echo "(comment failed)")"

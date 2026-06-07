@@ -166,8 +166,8 @@ gh pr edit <N> --add-label pr-status/needs-review-again --remove-label pr-status
 # review 轮结论（默认 /pr-review 或 codex；review 轴互斥）
 # 有 finding → changes-requested + needs-fix（5-state：review 轮 changes-requested 始终切 needs-fix）
 gh pr edit <N> --add-label pr-review/changes-requested --add-label pr-status/needs-fix --remove-label pr-review/approved --remove-label pr-status/needs-review-again
-# 无 finding → approved（terminal）
-gh pr edit <N> --add-label pr-review/approved --remove-label pr-review/changes-requested
+# 无 finding → approved + pr-status/ready（无需 fix/check 的终态）
+gh pr edit <N> --add-label pr-review/approved --add-label pr-status/ready --remove-label pr-review/changes-requested --remove-label pr-status/needs-review-again
 # fix 后：待 --check 验证（fix 不直接到 ready）
 gh pr edit <N> --add-label pr-status/needs-check-fix --remove-label pr-status/needs-fix
 # --check 全修复：可合并（清 pr-status 前态 + review 轴对侧）
