@@ -97,9 +97,6 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.LeaseDuration != testtime.D30s {
 		t.Errorf("LeaseDuration = %v, want 30s", cfg.LeaseDuration)
 	}
-	if cfg.MaxConcurrentDrives != 16 {
-		t.Errorf("MaxConcurrentDrives = %d, want 16 (= ClaimBatchSize)", cfg.MaxConcurrentDrives)
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -167,16 +164,6 @@ func TestConfig_Validate(t *testing.T) {
 				ClaimBatchSize: 16,
 				LeaseDuration:  0,
 			},
-			wantErr: true,
-		},
-		{
-			name:    "zero MaxConcurrentDrives",
-			cfg:     func() Config { c := valid; c.MaxConcurrentDrives = 0; return c }(),
-			wantErr: true,
-		},
-		{
-			name:    "negative MaxConcurrentDrives",
-			cfg:     func() Config { c := valid; c.MaxConcurrentDrives = -1; return c }(),
 			wantErr: true,
 		},
 	}
@@ -731,11 +718,10 @@ func TestStop_DrainsInflight(t *testing.T) {
 	tx := newSafeFakeTxRunner()
 
 	cfg := Config{
-		PollInterval:        testtime.D10ms,
-		ClaimBatchSize:      16,
-		LeaseDuration:       testtime.D60s,
-		HeartbeatInterval:   testtime.D20s,
-		MaxConcurrentDrives: 16,
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
 	}
 	c, err := NewCoordinator(j, tx, em, reg, clk, WithConfig(cfg))
 	if err != nil {
@@ -845,11 +831,10 @@ func TestStop_DrainTimeout(t *testing.T) {
 	tx := newSafeFakeTxRunner()
 
 	cfg := Config{
-		PollInterval:        testtime.D10ms,
-		ClaimBatchSize:      16,
-		LeaseDuration:       testtime.D60s,
-		HeartbeatInterval:   testtime.D20s,
-		MaxConcurrentDrives: 16,
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
 	}
 	c, err := NewCoordinator(j, tx, em, reg, clk, WithConfig(cfg))
 	if err != nil {
@@ -1070,11 +1055,10 @@ func TestDriveOne_StepDeadlineExceeded_MarkExpired(t *testing.T) {
 	tx := newSafeFakeTxRunner()
 
 	cfg := Config{
-		PollInterval:        testtime.D10ms,
-		ClaimBatchSize:      16,
-		LeaseDuration:       testtime.D60s,
-		HeartbeatInterval:   testtime.D20s,
-		MaxConcurrentDrives: 16,
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
 	}
 	c, err := NewCoordinator(j, tx, em, reg, clk, WithConfig(cfg))
 	if err != nil {
@@ -1201,11 +1185,10 @@ func TestNewCoordinator_ConfigFlowsToExecutor(t *testing.T) {
 
 	// Valid Config: HeartbeatInterval * 2 < LeaseDuration.
 	validCfg := Config{
-		PollInterval:        testtime.D10ms,
-		ClaimBatchSize:      16,
-		LeaseDuration:       testtime.D60s,
-		HeartbeatInterval:   testtime.D20s,
-		MaxConcurrentDrives: 16,
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
 	}
 	c, err := NewCoordinator(j, tx, em, reg, clk, WithConfig(validCfg))
 	if err != nil {
@@ -1233,9 +1216,8 @@ func TestNewCoordinator_ConfigFlowsToExecutor(t *testing.T) {
 			PollInterval:   testtime.D10ms,
 			ClaimBatchSize: 4,
 			// HBI=30s, LeaseDuration=60s → HBI*2 = 60s, NOT < 60s → reject.
-			HeartbeatInterval:   testtime.D30s,
-			LeaseDuration:       testtime.D60s,
-			MaxConcurrentDrives: 4,
+			HeartbeatInterval: testtime.D30s,
+			LeaseDuration:     testtime.D60s,
 		}
 		_, err := NewCoordinator(j, tx, em, reg, clk, WithConfig(invalidCfg))
 		if err == nil {
@@ -1677,11 +1659,10 @@ func TestDriveOne_OutcomeLeaseLost_LogInfoNoTerminalWrite(t *testing.T) {
 	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk,
 		WithLogger(logger),
 		WithConfig(Config{
-			PollInterval:        testtime.D10ms,
-			ClaimBatchSize:      16,
-			LeaseDuration:       testtime.D60s,
-			HeartbeatInterval:   driveOneLeaseLostHB,
-			MaxConcurrentDrives: 16,
+			PollInterval:      testtime.D10ms,
+			ClaimBatchSize:    16,
+			LeaseDuration:     testtime.D60s,
+			HeartbeatInterval: driveOneLeaseLostHB,
 		}))
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -2396,11 +2377,10 @@ func TestDriveOne_EmitFails_AppendRolledBack(t *testing.T) {
 	tx := newSafeFakeTxRunner()
 
 	cfg := Config{
-		PollInterval:        testtime.D10ms,
-		ClaimBatchSize:      16,
-		LeaseDuration:       testtime.D60s,
-		HeartbeatInterval:   testtime.D20s,
-		MaxConcurrentDrives: 16,
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
 	}
 
 	c, err := NewCoordinator(staged, tx, em, reg, clk, WithConfig(cfg))
@@ -2473,11 +2453,10 @@ func TestDriveOne_MarkTerminalFails_AppendRolledBack(t *testing.T) {
 	tx := newSafeFakeTxRunner()
 
 	cfg := Config{
-		PollInterval:        testtime.D10ms,
-		ClaimBatchSize:      16,
-		LeaseDuration:       testtime.D60s,
-		HeartbeatInterval:   testtime.D20s,
-		MaxConcurrentDrives: 16,
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
 	}
 
 	c, err := NewCoordinator(staged, tx, em, reg, clk, WithConfig(cfg))

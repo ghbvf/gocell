@@ -148,14 +148,15 @@ ref: ThreeDotsLabs/watermill components — outbox-driven message dispatch
 ### 决策
 
 `tickOnce` 此前**串行**驱动一个 claim 批次（`for ci := range claimed { driveOne(ci) }`），把单个
-tick 节流到 `ClaimBatchSize × step-latency`（默认 16×）。改为**有界并发 fan-out**：每个通过
-leader gate 的 claimed 实例在自己的 goroutine 内 `driveOne`，并发度由新增 `Config.MaxConcurrentDrives`
-（semaphore 容量，默认 = `ClaimBatchSize` = 16）限定。tick 仍 `wg.Wait` 整批完成后才返回——
-**「一次一个批次」语义不变**，仅批内驱动并行化，因此 `Stop` 的 inflight drain（轮询 `inflightLocks`
-至空）与 leader-elect 接管语义均不受影响。
+tick 节流到 `ClaimBatchSize × step-latency`（默认 16×）。改为**并发 fan-out**：每个通过 leader gate
+的 claimed 实例在自己的 goroutine 内 `driveOne`，**并发度 = 本批 claimed 实例数 ≤ `ClaimBatchSize`**
+——claim 数即并发上限，无独立旋钮（见下「为何 claim 数 = 并发数」）。tick 仍 `wg.Wait` 整批完成后
+才返回——**「一次一个批次」语义不变**，仅批内驱动并行化，因此 `Stop` 的 inflight drain（轮询
+`inflightLocks` 至空）与 leader-elect 接管语义均不受影响。
 
-载体：semaphore channel + `sync.WaitGroup`（对齐 `runtime/websocket/hub.go` 仓内有界 fan-out 惯例；
-**不用 errgroup**——其 first-error 取消语义与「每个 driveOne 错误是记录并继续、非致命」相悖）。
+载体：`sync.WaitGroup`（**不用 errgroup**——其 first-error 取消语义与「每个 driveOne 错误是记录并
+继续、非致命」相悖；**不设并发 semaphore**——claim 批本身即并发上界，二次封顶要么不安全要么冗余，
+见下）。
 
 ### 关键不变式
 
@@ -165,37 +166,53 @@ leader gate 的 claimed 实例在自己的 goroutine 内 `driveOne`，并发度�
 - **`inflightLocks.Store` 串行先于 `go`**：goroutine 可运行的瞬间 entry 已可见，关闭 Stop-drain 可见性缺口。
 - **`wg.Done()` 为最外层 defer**：`inflightLocks.Delete` + `release()` 在其之前执行，`wg.Wait()`/drain 永不
   观测到半清理 entry。
-- **`MaxConcurrentDrives` 必须为正**（`Config.Validate` fail-fast）：零值会让 `sem <- struct{}{}` 死锁。
 
-### 为何有界 + 默认 = ClaimBatchSize
+### 为何 claim 数 = 并发数（单旋钮，无独立 MaxConcurrentDrives）
 
-每个到达 step 的并发 drive 还会起 1 个 executor heartbeat goroutine（并发 drive ≈ 2× goroutine + 慢
-HTTP step 的并发外部连接），故有界。默认 = 批大小 → 开箱即整批并发（直接消除 16× 节流）；字段独立，
-ops 可在不缩小 claim 批的前提下调低 drive 并发（解耦 claim 吞吐与 drive fan-out）。
+一个 claimed 实例当场即持 journal lease，而 lease 续租只由 `driveOne` 内部启动的 executor per-step
+heartbeat 维持。因此 claim 数**必须**等于并发 drive 数：在已 claim 的整批上再套一个更小的 semaphore
+（amendment 早期形态的 `MaxConcurrentDrives < ClaimBatchSize`）会让排队实例**持锁空等、无 heartbeat
+续租**，前序慢 step 超过 `LeaseDuration` 后它们的 lease 已 stale（与 SQS 批量 receive + 慢处理的
+visibility-timeout 坑同类）；而 `MaxConcurrentDrives ≥ ClaimBatchSize` 又使该 semaphore 永不阻塞 =
+死代码、旋钮等价于 `ClaimBatchSize`。两种取值要么不安全、要么冗余，故 **#1714 删除该旋钮**：tickOnce
+直接整批并发 drive，峰值并发 = `ClaimBatchSize`（=「想降并发就降 `ClaimBatchSize`」，与 `doc.go` /
+`Config.ClaimBatchSize` godoc 一致）。真正「claim 批量 ≠ drive 并发」的解耦需常驻 worker pool
+（claim-on-free-slot，有空闲 slot 才 claim 一个 → 持锁即驱动），对标 temporalio/sdk-go 的
+slot-before-poll 与 kubernetes client-go workqueue 的 per-worker pull（队列项无 lease），属更大的
+lifecycle 重构，见 §8 演进路径，本 PR 不折叠。
 
 ### deliberate 残留（非 silent 缺口）
 
 1. tick `wg.Wait` 整批后才 claim 下一批 → 单个慢实例 head-of-line 阻塞下批 claim。
 2. `acquireLead` 串行（非 issue 所指的慢 *step* 瓶颈，且维持 leader-gate AST 形态）。
+3. drive 并发不可独立于 claim 批调（峰值并发恒 = `ClaimBatchSize`）——降并发只能降 `ClaimBatchSize`。
 
-彻底消除①需 claim/drive 解耦的常驻 worker pool（更大的 lifecycle 重构），见 §8 演进路径对应行——
-本 PR 刻意不折叠（YAGNI / 优雅简洁）。
+彻底消除① + 让 drive 并发独立于 claim 批（②/③），均需 claim/drive 解耦的常驻 worker pool（更大的
+lifecycle 重构），见 §8 演进路径对应行——本 PR 刻意不折叠（YAGNI / 优雅简洁）。
 
 ### enforcement / AI-robust 评级
 
-- 新并发不变式（「Store 串行先于 go」「wg.Done 最外层」）Go 类型系统无法表达；为其写按 defer 顺序匹配的
-  AST archtest 属 **Soft（章程严禁立项）**。其机器载体 = **`-race` + 真实触发竞态的 drain/并发测试
-  （Medium）**：`TestTickOnce_DrivesConcurrently` / `_BoundedByMaxConcurrentDrives` / `TestStop_DrainsInflight`
-  在 `go test -race` 下运行，Store/defer 顺序回归即竞态报红。这是 Go 下该形状 enforcement 的天花板，
-  与 leader-gate 的 Medium 同族（typed gate token Hard 化仍由 §8 / gh #1110 独立追踪）。
+- 新并发不变式（「Store 串行先于 go」「wg.Done 最外层」「Observer 并发安全」）Go 类型系统无法表达；为
+  其写按 defer 顺序匹配的 AST archtest 属 **Soft（章程严禁立项）**。其机器载体 = **`-race` + 真实触发
+  竞态的 drain/并发测试（Medium）**：`TestTickOnce_DrivesConcurrently` /
+  `TestTickOnce_ConcurrencyBoundedByClaimBatchSize` / `TestObserveDrive_ConcurrentCallsRaceSafe`（并发
+  ObserveDrive）/ `TestStop_DrainsInflight` 在 `go test -race` 下运行，Store/defer 顺序或非并发安全
+  Observer 回归即竞态报红。这是 Go 下该形状 enforcement 的天花板，与 leader-gate 的 Medium 同族
+  （typed gate token Hard 化仍由 §8 / gh #1110 独立追踪）。
+- **Observer 并发契约（#1714 F2）**：tick 并发驱动使 `executor.Observer` 的 `ObserveDrive` 及 step 级方法
+  被多 goroutine 并发调用；接口 godoc 显式声明「实现 MUST 并发安全」，`SagaCollector`（OTel SDK
+  instrument）满足，上面的 race 测试守回归。
 - **panic 安全**：`executor.safeRun` / `safeRunCompensate` / `Coordinator.safeObserve` 三处 recover 使业务
   step/compensate/observer panic 转为 error，慢/坏 step 不会击穿 sibling drive——并发未引入 blast-radius
   回归；刻意不加 per-goroutine 兜底 recover（避免吞掉 charter 要求 surface 的 infra panic）。
 
 ### §7 威胁矩阵逐行重评（AI-robust「ADR amendment 落地必查」）
 
-并发改动与威胁矩阵各行正交，**无格子从 ✅ 翻转**：
+并发改动与威胁矩阵各行正交，**无格子从 ✅ 翻转**；并新**关闭**一条 amendment 早期版本曾引入的风险：
 
+- 「claimed lease 空等无续租」（早期 `MaxConcurrentDrives < ClaimBatchSize` 形态，#1714 修复前）：本版
+  **由构造消除**——claim 数 = 并发数，每个 claimed 实例立即 drive、heartbeat 即时启动，不再有 parked
+  无续租 lease 可 stale。
 - 「无 leader 误并发」「旧 leader 复活继续驱动」：`acquireLead` 仍串行门控**每个** drive，`ci.LeaseID`
   per-instance fencing CAS 不变——并发是 per-instance 隔离，不放宽 leader/lease 任一保证。
 - 「step 在持锁事务内长执行」（`SAGA-STEP-RUN-OUTSIDE-TX-01`）/「Compensate 持事务」
@@ -203,4 +220,6 @@ ops 可在不缩小 claim 批的前提下调低 drive 并发（解耦 claim 吞�
 - 「lease 失效 / leader 假死」：每个并发 drive 仍由 executor per-step heartbeat 独立续租（executor 本就
   per-call 隔离、字段只读，并发安全）。
 
-ref: `runtime/websocket/hub.go` `closeEntriesConcurrently` — 仓内 semaphore + WaitGroup 有界 fan-out 范式
+ref: `sync.WaitGroup` 批内 fan-out（无 semaphore——claim 批即并发上界）；claim/drive 解耦 worker pool
+（slot-before-claim，持锁即驱动）的对标 = temporalio/sdk-go（slot-before-poll）/ kubernetes client-go
+workqueue（per-worker pull，队列项无 lease）。

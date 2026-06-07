@@ -10,11 +10,12 @@ import (
 	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
+	"github.com/ghbvf/gocell/runtime/saga/executor"
 )
 
 // concProbe builds a Coordinator whose single saga step blocks on a release
 // channel, instrumenting how many drives run concurrently within one tick.
-// It exercises the bounded-concurrent tickOnce fan-out (#983).
+// It exercises the concurrent tickOnce fan-out (#983).
 type concProbe struct {
 	c        *Coordinator
 	release  chan struct{}
@@ -27,10 +28,12 @@ type concProbe struct {
 // releaseAll unblocks every step. Idempotent (safe to defer + call explicitly).
 func (p *concProbe) releaseAll() { p.relOnce.Do(func() { close(p.release) }) }
 
-// newConcurrencyProbe wires a single-process Coordinator with MaxConcurrentDrives
-// = maxConcurrent and seeds nInstances pending saga instances. The step records
-// concurrency then blocks until releaseAll().
-func newConcurrencyProbe(t *testing.T, maxConcurrent, nInstances int) *concProbe {
+// newConcurrencyProbe wires a single-process Coordinator and seeds nInstances
+// pending saga instances. The step records concurrency then blocks until
+// releaseAll(). Extra opts are applied AFTER the DefaultConfig baseline, so a
+// caller may override ClaimBatchSize (the concurrency bound) or attach an
+// Observer.
+func newConcurrencyProbe(t *testing.T, nInstances int, opts ...Option) *concProbe {
 	t.Helper()
 	const defID idutil.SafeID = "tickconcurrency"
 	p := &concProbe{release: make(chan struct{})}
@@ -67,9 +70,8 @@ func newConcurrencyProbe(t *testing.T, maxConcurrent, nInstances int) *concProbe
 	if err != nil {
 		t.Fatalf("NewInMemoryRegistry: %v", err)
 	}
-	cfg := DefaultConfig()
-	cfg.MaxConcurrentDrives = maxConcurrent
-	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk, WithConfig(cfg))
+	ctorOpts := append([]Option{WithConfig(DefaultConfig())}, opts...)
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk, ctorOpts...)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -85,14 +87,14 @@ func newConcurrencyProbe(t *testing.T, maxConcurrent, nInstances int) *concProbe
 }
 
 // TestTickOnce_DrivesConcurrently asserts a claimed batch drives concurrently:
-// with MaxConcurrentDrives ≥ batch, all N instances are inside their step body
-// at the same time. Under the previous serial loop only one driveOne ran at a
-// time, so peak would never reach N and the testwait below would time out — this
-// test is red without the fan-out.
+// with ClaimBatchSize (default 16) ≥ batch, all N instances are inside their
+// step body at the same time. Under the previous serial loop only one driveOne
+// ran at a time, so peak would never reach N and the testwait below would time
+// out — this test is red without the fan-out.
 func TestTickOnce_DrivesConcurrently(t *testing.T) {
 	t.Parallel()
 	const n = 4
-	p := newConcurrencyProbe(t, 16, n) // 16 = default, ≥ n
+	p := newConcurrencyProbe(t, n) // default ClaimBatchSize=16 ≥ n
 	defer p.releaseAll()
 
 	ctx := context.Background()
@@ -115,36 +117,100 @@ func TestTickOnce_DrivesConcurrently(t *testing.T) {
 	}
 }
 
-// TestTickOnce_BoundedByMaxConcurrentDrives asserts the semaphore caps in-flight
-// drives: with MaxConcurrentDrives=2 and 4 claimed instances, at most 2 steps
-// run at once (the other 2 block on the semaphore) while all 4 are eventually
-// driven within the single tick.
-func TestTickOnce_BoundedByMaxConcurrentDrives(t *testing.T) {
+// TestTickOnce_ConcurrencyBoundedByClaimBatchSize asserts ClaimBatchSize is the
+// per-tick concurrency bound: with ClaimBatchSize=4 and 8 pending instances, a
+// single tick claims and concurrently drives exactly 4 (peak==4, entered==4) —
+// the remaining 4 stay pending for a later tick. After #983 deleted the separate
+// MaxConcurrentDrives knob, ClaimBatchSize alone bounds drive fan-out because a
+// claimed instance must drive immediately (its lease is only kept alive by the
+// heartbeat that starts inside driveOne), so claim count == concurrency.
+func TestTickOnce_ConcurrencyBoundedByClaimBatchSize(t *testing.T) {
 	t.Parallel()
 	const (
-		maxConcurrent = 2
-		n             = 4
+		batch = 4
+		n     = 8
 	)
-	p := newConcurrencyProbe(t, maxConcurrent, n)
+	cfg := DefaultConfig()
+	cfg.ClaimBatchSize = batch
+	p := newConcurrencyProbe(t, n, WithConfig(cfg))
 	defer p.releaseAll()
 
 	ctx := context.Background()
 	tickDone := make(chan error, 1)
 	go func() { tickDone <- p.c.tickOnce(ctx) }()
 
-	// Both semaphore slots fill; the remaining 2 instances block on the semaphore.
-	testwait.External(t, "slots-filled",
-		func() bool { return p.peak.Load() >= int64(maxConcurrent) },
+	// All batch slots fill concurrently; the remaining instances are not claimed
+	// this tick (no parked-without-heartbeat leases — that was the #983 bug).
+	testwait.External(t, "batch-driven-concurrently",
+		func() bool { return p.peak.Load() >= int64(batch) },
 		testtime.D2s, testtime.D1ms)
 
 	p.releaseAll()
 	if err := testwait.Deterministic(t, tickDone, "tickOnce-returned"); err != nil {
 		t.Errorf("tickOnce returned error: %v", err)
 	}
-	if got := p.peak.Load(); got != int64(maxConcurrent) {
-		t.Errorf("peak concurrency = %d, want exactly %d (semaphore bound)", got, maxConcurrent)
+	if got := p.peak.Load(); got != int64(batch) {
+		t.Errorf("peak concurrency = %d, want exactly %d (ClaimBatchSize bound)", got, batch)
 	}
-	if got := p.entered.Load(); got != int64(n) {
-		t.Errorf("entered = %d, want %d (all instances eventually driven)", got, n)
+	if got := p.entered.Load(); got != int64(batch) {
+		t.Errorf("entered = %d, want %d (only one batch claimed per tick)", got, batch)
+	}
+}
+
+// recordingDriveObserver is a concurrency-safe executor.Observer that counts
+// ObserveDrive calls. It embeds NopObserver and overrides only ObserveDrive.
+type recordingDriveObserver struct {
+	executor.NopObserver
+	mu     sync.Mutex
+	drives []executor.DriveResult
+}
+
+func (o *recordingDriveObserver) ObserveDrive(_ context.Context, _ string, result executor.DriveResult) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.drives = append(o.drives, result)
+}
+
+func (o *recordingDriveObserver) count() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return len(o.drives)
+}
+
+// TestObserveDrive_ConcurrentCallsRaceSafe exercises the concurrent-invocation
+// contract documented on executor.Observer (#1714 F2): a tick drives its claimed
+// instances in parallel, so ObserveDrive fires from multiple goroutines at once.
+// Run under `go test -race ./runtime/saga/...` (PR CI), a data race in the
+// coordinator's observer-call path — or in a non-thread-safe Observer — reports
+// red. The recording observer is mutex-guarded; the assertion confirms every
+// concurrent drive reached the sink exactly once.
+func TestObserveDrive_ConcurrentCallsRaceSafe(t *testing.T) {
+	t.Parallel()
+	const n = 8
+	rec := &recordingDriveObserver{}
+	p := newConcurrencyProbe(t, n, WithObserver(rec)) // default ClaimBatchSize=16 ≥ n
+	defer p.releaseAll()
+
+	ctx := context.Background()
+	tickDone := make(chan error, 1)
+	go func() { tickDone <- p.c.tickOnce(ctx) }()
+
+	// Force all n drives to overlap before any completes, so ObserveDrive is
+	// genuinely invoked concurrently (each fires as its driveOne returns).
+	testwait.External(t, "all-drives-concurrent",
+		func() bool { return p.peak.Load() >= int64(n) },
+		testtime.D2s, testtime.D1ms)
+
+	p.releaseAll()
+	if err := testwait.Deterministic(t, tickDone, "tickOnce-returned"); err != nil {
+		t.Errorf("tickOnce returned error: %v", err)
+	}
+	if got := rec.count(); got != n {
+		t.Errorf("ObserveDrive call count = %d, want %d (one per concurrent drive)", got, n)
+	}
+	for i, r := range rec.drives {
+		if r != executor.DriveOK {
+			t.Errorf("drive[%d] result = %q, want %q", i, r, executor.DriveOK)
+		}
 	}
 }

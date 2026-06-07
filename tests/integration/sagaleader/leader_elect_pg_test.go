@@ -37,11 +37,10 @@ func (noopEmitter) Emit(context.Context, koutbox.Entry) error { return nil }
 // internally-constructed Executor via Config (#1181 F5).
 func leaderPGCfg() saga.Config {
 	return saga.Config{
-		PollInterval:        testtime.D10ms,
-		ClaimBatchSize:      4,
-		LeaseDuration:       testtime.D60s,
-		HeartbeatInterval:   testtime.D20s,
-		MaxConcurrentDrives: 4,
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    4,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
 	}
 }
 

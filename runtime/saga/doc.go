@@ -94,9 +94,11 @@
 //
 // # PR-03 deferred scope
 //
-//   - Per-step parallelism: deferred to PR-06+ (tracked in #983).
 //   - Coordinator-level Start API for producers (typed producer facade):
 //     deferred to PR-07/PR-09.
+//
+// (Per-tick concurrent driving of claimed instances — formerly tracked here as
+// #983 — is now delivered; see the tickLoop section below.)
 //
 // Metrics emission is complete (#1109): the Coordinator and Executor fan all
 // observability out through executor.Observer, which runtime/observability/
@@ -125,9 +127,16 @@
 // to running. RepoReady delegates to journal.RepoReady so the wrapping cell
 // (PR-09) can register it via cellgen-emitted RegisterReadiness.
 //
-// tickLoop processes claimed instances sequentially within one tick. If
-// Step.Run has high latency, set ClaimBatchSize=1 to keep ticks short and
-// lease heartbeats timely. Per-step parallelism is tracked in #983.
+// tickLoop drives the instances claimed in one tick concurrently — each led
+// instance runs driveOne in its own goroutine and the tick wg.Waits for the
+// whole batch before claiming the next (#983). Peak concurrency = ClaimBatchSize,
+// which is therefore also the drive-concurrency / external-step-IO bound: lower
+// ClaimBatchSize when steps open many external connections. Claim count and
+// drive fan-out are deliberately one knob because a claimed instance holds a
+// journal lease kept alive only by the Executor heartbeat that starts inside
+// driveOne; decoupling them (claim a large batch, drive with lower concurrency)
+// needs a resident worker pool and is deferred (#978). See Amendment 2026-06-07
+// of the saga ADR (docs/architecture/202606021000-adr-saga-l3-orchestration-engine.md).
 //
 // # Step.Run is the only StepFunc callsite
 //

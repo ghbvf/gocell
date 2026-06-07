@@ -89,11 +89,10 @@ func newTestHarness(t *testing.T, defs ...*ksaga.Definition) *testHarness {
 	disp := &recordingDispatcher{}
 
 	cfg := Config{
-		PollInterval:        testtime.D10ms, // fast tick for clock-driven tests
-		ClaimBatchSize:      16,
-		LeaseDuration:       testtime.D60s,
-		HeartbeatInterval:   testtime.D20s,
-		MaxConcurrentDrives: 16,
+		PollInterval:      testtime.D10ms, // fast tick for clock-driven tests
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
 	}
 
 	c, err := NewCoordinator(j, tx, em, reg, clk,
@@ -421,11 +420,10 @@ func TestIntegration_ClaimContention(t *testing.T) {
 	reg, _ := ksaga.NewInMemoryRegistry(def)
 
 	cfg := Config{
-		PollInterval:        testtime.D10ms,
-		ClaimBatchSize:      1, // each coordinator claims at most 1 instance
-		LeaseDuration:       testtime.D60s,
-		HeartbeatInterval:   testtime.D20s,
-		MaxConcurrentDrives: 16,
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    1, // each coordinator claims at most 1 instance
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
 	}
 
 	disp1 := &recordingDispatcher{}
@@ -534,11 +532,10 @@ func TestIntegration_ResumeAfterRestart(t *testing.T) {
 	j, _ := journal.NewMemJournal(clk)
 	reg, _ := ksaga.NewInMemoryRegistry(def)
 	cfg := Config{
-		PollInterval:        testtime.D10ms,
-		ClaimBatchSize:      16,
-		LeaseDuration:       testtime.D60s,
-		HeartbeatInterval:   testtime.D20s,
-		MaxConcurrentDrives: 16,
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
 	}
 
 	inst := newInstance(t, defID, clk.Now())
@@ -685,11 +682,10 @@ func TestIntegration_PanicRecovery(t *testing.T) {
 	}
 
 	cfg := Config{
-		PollInterval:        testtime.D10ms,
-		ClaimBatchSize:      16,
-		LeaseDuration:       testtime.D60s,
-		HeartbeatInterval:   testtime.D20s,
-		MaxConcurrentDrives: 16,
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
 	}
 
 	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
@@ -923,11 +919,10 @@ func TestIntegration_Compensation_LeaseLost_ResumesOnReclaim(t *testing.T) {
 
 	// Short heartbeat interval so the goroutine fires after one clock tick.
 	cfg1 := Config{
-		PollInterval:        testtime.D10ms,
-		ClaimBatchSize:      16,
-		LeaseDuration:       testtime.D60s,
-		HeartbeatInterval:   testtime.D5ms,
-		MaxConcurrentDrives: 16,
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D5ms,
 	}
 	c1, err := NewCoordinator(staleJ, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk,
 		WithConfig(cfg1))
@@ -968,11 +963,10 @@ func TestIntegration_Compensation_LeaseLost_ResumesOnReclaim(t *testing.T) {
 	// Phase 3 — coordinator-2 re-claims the StatusCompensating instance and
 	// drives recovery. c2 uses memJ directly so its Heartbeat always returns true.
 	cfg2 := Config{
-		PollInterval:        testtime.D10ms,
-		ClaimBatchSize:      16,
-		LeaseDuration:       testtime.D60s,
-		HeartbeatInterval:   testtime.D20s,
-		MaxConcurrentDrives: 16,
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
 	}
 	c2, err := NewCoordinator(memJ, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk,
 		WithConfig(cfg2))

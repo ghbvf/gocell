@@ -69,12 +69,6 @@ const (
 	defaultCoordPollInterval   = 200 * time.Millisecond
 	defaultCoordClaimBatchSize = 16
 	defaultCoordLeaseDuration  = 30 * time.Second
-	// defaultCoordMaxConcurrentDrives defaults per-tick drive concurrency to the
-	// claim batch size, so a full claimed batch drives concurrently out of the
-	// box (eliminating the previous serial 16×step-latency throttle). It is an
-	// independent field: operators may lower it without shrinking the claim batch
-	// (decoupling claim throughput from drive fan-out).
-	defaultCoordMaxConcurrentDrives = defaultCoordClaimBatchSize
 )
 
 // Config holds tunable parameters for the Coordinator engine.
@@ -84,8 +78,7 @@ const (
 // WithConfig is supplied, it replaces the whole struct (assigns c.cfg = cfg);
 // there is no partial-merge and no per-field substitution. Validate() then
 // runs once and rejects zero values for PollInterval / ClaimBatchSize /
-// LeaseDuration / HeartbeatInterval / MaxConcurrentDrives — those five fields
-// MUST be positive.
+// LeaseDuration / HeartbeatInterval — those four fields MUST be positive.
 // To override only some fields, start from the defaults:
 //
 //	cfg := saga.DefaultConfig()
@@ -101,7 +94,16 @@ type Config struct {
 	// PollInterval is how often tickLoop calls ClaimPending. Default 200ms.
 	PollInterval time.Duration
 	// ClaimBatchSize is the maximum number of instances claimed per tick.
-	// Default 16.
+	// Default 16. It is also the per-tick drive-concurrency bound: tickOnce
+	// drives every claimed instance that passes the leader gate in its own
+	// goroutine, so peak concurrent driveOne (and concurrent external step IO)
+	// per tick ≈ ClaimBatchSize. Lower it when steps open many external
+	// connections — claim count and drive fan-out are intentionally the same
+	// knob, because a claimed instance holds a journal lease that is only kept
+	// alive by the Executor heartbeat that starts inside driveOne; claiming more
+	// than are driven concurrently would let the excess leases go stale while
+	// parked. Decoupling claim batch from drive concurrency requires a resident
+	// worker pool (claim-on-free-slot) and is deferred (ADR §8 / #978).
 	ClaimBatchSize int
 	// LeaseDuration is how long a claimed lease is held. Default 30s.
 	// Also used as the per-instance distlock TTL in leader-elect mode AND
@@ -113,38 +115,15 @@ type Config struct {
 	// HeartbeatInterval * executor.HeartbeatLeaseSafetyFactor < LeaseDuration
 	// so at least one heartbeat lands before expiry.
 	HeartbeatInterval time.Duration
-	// MaxConcurrentDrives bounds how many claimed instances tickOnce drives
-	// concurrently within a single tick (semaphore-limited fan-out). Default 16
-	// (= ClaimBatchSize), so a full claimed batch drives concurrently. Lower it
-	// when steps open many external connections.
-	//
-	// Scope: this bounds concurrent driveOne *execution*, NOT goroutine spawn
-	// count — tickOnce spawns one goroutine per led instance (up to
-	// ClaimBatchSize) and the excess park on the semaphore, so peak goroutines
-	// per tick ≈ ClaimBatchSize regardless of this value; to bound peak
-	// goroutines, reduce ClaimBatchSize. Each in-flight drive that reaches a
-	// step also runs one Executor heartbeat goroutine. A semaphore slot is held
-	// for the whole driveOne AND the subsequent ObserveDrive observer call
-	// (bounded by observerCallDeadline), so a slow observer lowers effective
-	// drive throughput. Runtime drive pressure is not currently exposed as a
-	// metric; if saturation is suspected, lower this and watch tick latency as
-	// a proxy.
-	//
-	// A tick still waits for its whole batch to finish before returning (the
-	// "one batch at a time" semantics are unchanged — only per-instance driving
-	// within a batch is parallelized), so Stop's inflight drain is unaffected.
-	// MUST be positive: a zero value would deadlock the semaphore.
-	MaxConcurrentDrives int
 }
 
 // DefaultConfig returns a Config with documented defaults.
 func DefaultConfig() Config {
 	return Config{
-		PollInterval:        defaultCoordPollInterval,
-		ClaimBatchSize:      defaultCoordClaimBatchSize,
-		LeaseDuration:       defaultCoordLeaseDuration,
-		HeartbeatInterval:   executor.DefaultHeartbeatInterval,
-		MaxConcurrentDrives: defaultCoordMaxConcurrentDrives,
+		PollInterval:      defaultCoordPollInterval,
+		ClaimBatchSize:    defaultCoordClaimBatchSize,
+		LeaseDuration:     defaultCoordLeaseDuration,
+		HeartbeatInterval: executor.DefaultHeartbeatInterval,
 	}
 }
 
@@ -166,10 +145,6 @@ func (c Config) Validate() error {
 	if c.HeartbeatInterval <= 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga coordinator: Config.HeartbeatInterval must be positive")
-	}
-	if c.MaxConcurrentDrives <= 0 {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"saga coordinator: Config.MaxConcurrentDrives must be positive")
 	}
 	if c.HeartbeatInterval*executor.HeartbeatLeaseSafetyFactor >= c.LeaseDuration {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -639,15 +614,18 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 		return nil
 	}
 	c.safeObserve(ctx, "ObserveTick", func() { c.observer.ObserveTick(ctx, executor.TickClaimed) })
-	// Bounded-concurrent fan-out (#983): drive each led instance in its own
-	// goroutine, capped by MaxConcurrentDrives. The tick still waits for the
-	// whole batch (wg.Wait) before returning, so the "one batch at a time"
-	// semantics and Stop's inflight drain are unchanged — only per-instance
-	// driving within a batch is parallelized. acquireLead + the leader gate
-	// stay serial in the loop body so every drive passes the gate before any
-	// goroutine spawns; inflightLocks.Store also stays serial (before go) so the
-	// entry is visible the instant the drive could run (closes the drain gap).
-	sem := make(chan struct{}, c.cfg.MaxConcurrentDrives)
+	// Concurrent fan-out (#983): drive each led instance in its own goroutine.
+	// Peak concurrency = the number of led instances ≤ ClaimBatchSize — claim
+	// count IS the concurrency bound (a claimed instance holds a journal lease
+	// kept alive only by the Executor heartbeat that starts inside driveOne, so
+	// every claimed instance must drive immediately rather than park; see the
+	// Config.ClaimBatchSize godoc). The tick still waits for the whole batch
+	// (wg.Wait) before returning, so the "one batch at a time" semantics and
+	// Stop's inflight drain are unchanged — only per-instance driving within a
+	// batch is parallelized. acquireLead + the leader gate stay serial in the
+	// loop body so every drive passes the gate before any goroutine spawns;
+	// inflightLocks.Store also stays serial (before go) so the entry is visible
+	// the instant the drive could run (closes the drain gap).
 	var wg sync.WaitGroup
 	for _, ci := range claimed {
 		// Leader-elect gate: in multi-process mode only the holder of the
@@ -676,8 +654,6 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 				c.inflightLocks.Delete(ci.Instance.ID)
 				release()
 			}()
-			sem <- struct{}{}
-			defer func() { <-sem }()
 			driveErr := c.driveOne(ctx, ci)
 			c.observeDrive(ctx, ci, driveErr)
 		}(ci, release)
