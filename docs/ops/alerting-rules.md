@@ -794,7 +794,9 @@ checkpoint 长期不动（`last_success` 时间戳不前进）= tailer 停摆：
 
 ```yaml
 - alert: GoCellSagaTailerStalled
-  expr: time() - max(gocell_saga_journal_tailer_last_success_timestamp_seconds) by (cell, projection) > 600
+  expr: |
+    time() - max(gocell_saga_journal_tailer_last_success_timestamp_seconds) by (cell, projection) > 600
+    or absent(gocell_saga_journal_tailer_last_success_timestamp_seconds) == 1
   for: 5m
   labels:
     severity: warning
@@ -802,10 +804,12 @@ checkpoint 长期不动（`last_success` 时间戳不前进）= tailer 停摆：
     summary: "Saga journal tailer stalled ({{ $labels.cell }}/{{ $labels.projection }})"
     description: |
       No saga-journal tailer tick has succeeded for {{ $labels.cell }}/{{ $labels.projection }}
-      in > 10m. The checkpoint is silently frozen. Triage: is a tailer pod running and
-      winning the per-projection distlock? See saga-runbook.md §"场景 5：投影 tailer 停滞"
-      (HeadSeq vs checkpoint SQL + distlock key holder). Cross-check
-      gocell_saga_journal_tailer_drain_total{result} and
+      in > 10m. The checkpoint is silently frozen. The second arm (absent()) fires when
+      all tailer pods are down and the gauge series disappears entirely — a comparison on
+      an empty vector yields no samples, so the first arm alone would miss a total outage.
+      Triage: is a tailer pod running and winning the per-projection distlock? See
+      saga-runbook.md §"场景 5：投影 tailer 停滞" (HeadSeq vs checkpoint SQL + distlock
+      key holder). Cross-check gocell_saga_journal_tailer_drain_total{result} and
       gocell_saga_journal_tailer_lock_acquire_failed_total{reason}.
 ```
 

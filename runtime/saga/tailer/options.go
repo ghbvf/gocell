@@ -31,8 +31,10 @@ func DefaultConfig() Config {
 	return Config{PollInterval: defaultPollInterval, LeaseTTL: defaultLeaseTTL}
 }
 
-// Validate returns nil iff both durations are positive. (The LeaseTTL ≥
-// distlock.MinTTL check lives in NewTailer, where distlock is in scope.)
+// Validate returns nil iff both durations are positive. Note that a Config that
+// passes Validate may still be rejected by NewTailer if LeaseTTL <
+// distlock.MinTTL — that additional check lives in NewTailer where distlock is
+// in scope, and is separate from the positive-duration check here.
 func (c Config) Validate() error {
 	if c.PollInterval <= 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,

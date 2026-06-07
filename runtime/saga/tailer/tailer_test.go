@@ -113,7 +113,7 @@ var _ projection.OwnerCheckpointStore = (*fakeOwnerStore)(nil)
 
 // fakeTxRunner is a pass-through TxRunner: RunInTx runs fn(ctx) and propagates
 // its error (no real rollback — the mem store mutates directly; the tx boundary
-// is structural here, exercised for real in PG integration).
+// is structural here, exercised for real in PG integration per ADR §9 PR-PG).
 type fakeTxRunner struct{}
 
 func (fakeTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
@@ -551,5 +551,109 @@ func TestTailerLockKeyInjective(t *testing.T) {
 	}
 	if got := tailerLockKey(testProj); got == "" {
 		t.Error("empty key")
+	}
+}
+
+// TestTailer_LeaderHandoffBoundedDuplicateApply documents the at-least-once
+// delivery contract: when a leader handoff occurs, the new leader may re-apply
+// an event that the old leader already applied (but whose checkpoint advance was
+// rejected with ErrStaleOwner). The duplicate apply is bounded — the checkpoint
+// is monotonically non-decreasing and the new leader advances it to the correct
+// offset. There is no ErrStaleOwner on the second attempt because the new owner
+// token is strictly ahead of the committed checkpoint (cold-claim semantics).
+func TestTailer_LeaderHandoffBoundedDuplicateApply(t *testing.T) {
+	clk := clockmock.New(time.Unix(1000, 0))
+
+	// Scenario: one event at seq 5. Old leader applied it but was fenced
+	// (ErrStaleOwner). New leader reprocesses the same event with a fresh token.
+
+	src := &fakeSource{events: events(5)}
+	store := projection.NewMemOwnerCheckpointStore()
+
+	// Count apply calls to verify duplicate-apply is bounded to at most 2.
+	applyCount := 0
+	apply := func(_ context.Context, evt projection.ProjectionEvent) error {
+		applyCount++
+		return nil
+	}
+
+	// ── First pollOnce (old leader): AdvanceIfOwner returns ErrStaleOwner.
+	obs1 := &recordingObserver{}
+	fakeOld := &fakeOwnerStore{MemOwnerCheckpointStore: store}
+	fakeOld.advanceErr = projection.ErrStaleOwner
+	tl1 := newTestTailer(t, src, fakeOld, apply, obs1, newTestLocker(t, clk), clk)
+	if err := tl1.pollOnce(context.Background()); err != nil {
+		t.Fatalf("old-leader pollOnce: expected benign stale-owner, got: %v", err)
+	}
+	if applyCount != 1 {
+		t.Errorf("old-leader: apply count = %d, want 1", applyCount)
+	}
+	// Checkpoint must NOT have advanced (stale advance was fenced).
+	off, _ := store.LoadOffset(context.Background(), testCell, testProj)
+	if off != 0 {
+		t.Errorf("checkpoint after stale advance = %d, want 0", off)
+	}
+	_, _, advances1, _, _ := obs1.snapshot()
+	if len(advances1) != 1 || advances1[0] != AdvanceStaleOwner {
+		t.Errorf("old-leader advances = %v, want [stale_owner]", advances1)
+	}
+
+	// ── Second pollOnce (new leader): fresh token, real store — event re-applied.
+	obs2 := &recordingObserver{}
+	tl2 := newTestTailer(t, src, store, apply, obs2, newTestLocker(t, clk), clk)
+	if err := tl2.pollOnce(context.Background()); err != nil {
+		t.Fatalf("new-leader pollOnce: %v", err)
+	}
+	// Duplicate apply: total apply calls is now 2 (event re-processed once).
+	if applyCount != 2 {
+		t.Errorf("total apply count = %d, want 2 (at-most-once-ahead duplicate)", applyCount)
+	}
+	// Checkpoint must now be at seq 5.
+	off, _ = store.LoadOffset(context.Background(), testCell, testProj)
+	if off != 5 {
+		t.Errorf("checkpoint after new-leader advance = %d, want 5", off)
+	}
+	_, _, advances2, _, _ := obs2.snapshot()
+	if len(advances2) != 1 || advances2[0] != AdvanceOK {
+		t.Errorf("new-leader advances = %v, want [ok]", advances2)
+	}
+}
+
+// TestTailer_MidDrainCtxCancel verifies that a ctx cancellation during the
+// Replay/apply phase propagates out of pollOnce with the cancellation error.
+// The checkpoint must not advance past the last successfully applied event.
+func TestTailer_MidDrainCtxCancel(t *testing.T) {
+	clk := clockmock.New(time.Unix(1000, 0))
+	src := &fakeSource{events: events(1, 2, 3)}
+	store := projection.NewMemOwnerCheckpointStore()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Cancel the context on the second apply call to simulate a mid-drain cancellation.
+	applyCount := 0
+	apply := func(applyCtx context.Context, _ projection.ProjectionEvent) error {
+		applyCount++
+		if applyCount == 2 {
+			cancel()
+			return applyCtx.Err() // propagate cancellation up through Replay
+		}
+		return nil
+	}
+
+	obs := &recordingObserver{}
+	tl := newTestTailer(t, src, store, apply, obs, newTestLocker(t, clk), clk)
+
+	err := tl.pollOnce(ctx)
+	if err == nil {
+		t.Fatal("pollOnce: want error from ctx cancellation, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("pollOnce err = %v, want context.Canceled", err)
+	}
+
+	// Only event 1 was applied successfully before cancellation; checkpoint = 1.
+	off, _ := store.LoadOffset(context.Background(), testCell, testProj)
+	if off != 1 {
+		t.Errorf("checkpoint = %d, want 1 (only evt-1 committed before cancel)", off)
 	}
 }

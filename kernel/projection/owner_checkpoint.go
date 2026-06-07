@@ -54,6 +54,16 @@ type OwnerCheckpointStore interface {
 	// transaction carried by ctx, fenced by ownerToken (see the fencing model in
 	// the interface doc). It returns ErrStaleOwner when the caller is a deposed
 	// leader (different token and not ahead of the committed offset).
+	//
+	// When the caller's ownerToken matches the recorded owner (same leader),
+	// the advance is always accepted regardless of the requested offset — the
+	// caller may advance to any value, including a value lower than the last
+	// committed offset. Monotonicity across same-owner advances is the caller's
+	// responsibility, not the store's.
+	//
+	// Cold claims (first advance on an empty checkpoint) must use offset >= 1;
+	// offset 0 with a new token is not strictly ahead of the committed offset 0
+	// and will be rejected with ErrStaleOwner.
 	AdvanceIfOwner(ctx context.Context, cellID, projectionID, ownerToken string, offset int64) error
 }
 

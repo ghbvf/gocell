@@ -64,10 +64,11 @@ GoCell 中有三个 L3 cell 并非 saga 编排：
 
 ## 构造器 nil 守卫（SAGA-CONSTRUCTOR-NIL-GUARD-01）
 
-`runtime/saga` 引擎的两个核心构造器有必填的 interface 依赖（按实际位置参数签名）：
+`runtime/saga` 引擎的三个核心构造器有必填的 interface 依赖（按实际位置参数签名）：
 
 - `runtime/saga.NewCoordinator(j journal.Journal, tx persistence.TxRunner, em outbox.Emitter, reg saga.Resolver, clk clock.Clock, opts ...Option)`：必填 interface 依赖 = `journal.Journal`、`persistence.TxRunner`、`outbox.Emitter`、`saga.Resolver`；`clock.Clock` 单独由 `MustHaveClock` 守。（`distlock.Locker` 是**可选**依赖，经 `WithLeaderElect` option 注入并由 `leaderElectNil` flag 单独校验，不在本规则扫描的位置参数范围内。）
 - `runtime/saga/executor.NewExecutor(hb Heartbeater, clk clock.Clock, opts ...Option)`：必填 interface 依赖 = `executor.Heartbeater`；`clock.Clock` 由 `MustHaveClock` 守。
+- `runtime/saga/tailer.NewTailer(clk clock.Clock, replay projection.ReplaySource, cursor projection.Cursor, store projection.OwnerCheckpointStore, txRunner persistence.TxRunner, apply projection.Apply, locker distlock.Locker, cellID, projectionID string, opts ...Option)`：必填 interface 依赖 = `projection.ReplaySource`、`projection.Cursor`、`projection.OwnerCheckpointStore`、`persistence.TxRunner`、`distlock.Locker`（tailer 不支持单进程 unsafe 模式，locker 是 required）；`projection.Apply` 是 func 类型（nil 检查，非 IsNilInterface）；`clock.Clock` 由 `MustHaveClock` 守；`cellID`/`projectionID` 非空字符串校验。
 
 **要求**：
 

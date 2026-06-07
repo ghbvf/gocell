@@ -9,10 +9,10 @@ import (
 // counters + gauges). It mirrors the runtime/saga/executor.Observer convention:
 // all methods MUST be non-blocking, tolerate canceled contexts, and be safe for
 // concurrent use — they are called on the tail hot path and must never affect
-// drain correctness. A misbehaving observer must not panic; the Tailer does not
-// wrap these in recover guards (a single tail goroutine, not a fan-out), so an
-// implementation that panics will crash the tail loop — keep implementations
-// trivial (atomic instrument increments).
+// drain correctness. A misbehaving observer that panics is caught by the
+// Tailer's safeObserve wrapper: the panic is logged as Warn and the tail loop
+// continues. Keep implementations trivial (atomic instrument increments) to
+// avoid blocking the single-goroutine drain.
 //
 // projectionID is the bounded label dimension (assembly-enumerated, like the
 // HTTP/saga cell label). Per-event identities (event id, owner token) are NOT

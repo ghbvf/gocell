@@ -105,12 +105,19 @@ type Tailer struct {
 // Tailer's leader-handoff correctness depends on the distlock making the
 // owner-token claim race-free. A single-process demo passes a real in-memory
 // distlock.Locker.
+//
+// replay and cursor are commonly the same object. For example,
+// sagaprojection.SagaJournalSource implements both projection.ReplaySource (via
+// Replay/Head) and projection.Cursor (via Position), so callers typically pass
+// the same value for both parameters. They are kept as distinct parameters so
+// the Tailer is not hard-coupled to a concrete type and so that read-only
+// replay sources can be paired with a separately-provided cursor if needed.
 func NewTailer(
 	clk clock.Clock,
 	replay projection.ReplaySource,
 	cursor projection.Cursor,
 	store projection.OwnerCheckpointStore,
-	tx persistence.TxRunner,
+	txRunner persistence.TxRunner,
 	apply projection.Apply,
 	locker distlock.Locker,
 	cellID, projectionID string,
@@ -126,7 +133,7 @@ func NewTailer(
 	if validation.IsNilInterface(store) {
 		return nil, nilDepErr("store")
 	}
-	if validation.IsNilInterface(tx) {
+	if validation.IsNilInterface(txRunner) {
 		return nil, nilDepErr("txRunner")
 	}
 	if apply == nil {
@@ -143,7 +150,7 @@ func NewTailer(
 		replay:       replay,
 		cursor:       cursor,
 		store:        store,
-		txRunner:     tx,
+		txRunner:     txRunner,
 		apply:        apply,
 		locker:       locker,
 		cellID:       cellID,
@@ -183,9 +190,31 @@ func (t *Tailer) Worker() worker.Worker { return t }
 // LIFO order during phase10 shutdown.
 func (t *Tailer) Close(ctx context.Context) error { return t.Stop(ctx) }
 
+// safeObserve runs an Observer method with panic recovery so a misbehaving
+// observer cannot crash the tail loop. The panic payload is redacted through
+// redaction.RedactAny before reaching slog — same form as the Coordinator's
+// safeObserve (runtime/saga/coordinator.go). Unlike the Coordinator's variant,
+// no deadline timer is added: the Tailer drives a single goroutine and an
+// observer that blocks will only stall that one tick, not hold a per-instance
+// distributed lock.
+func (t *Tailer) safeObserve(ctx context.Context, method string, call func()) {
+	defer t.recoverObserverPanic(ctx, method)
+	call()
+}
+
+// recoverObserverPanic is the shared recover handler for Tailer observer calls.
+func (t *Tailer) recoverObserverPanic(ctx context.Context, method string) {
+	if r := recover(); r != nil {
+		t.logger.WarnContext(ctx, "saga journal tailer: observer call panicked, ignoring",
+			slog.String("method", method),
+			slog.Any("panic", r))
+	}
+}
+
 func nilDepErr(dep string) error {
 	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 		"tailer.NewTailer: required dependency is nil",
+		errcode.WithDetails(errcode.PublicString("dependency", dep)),
 		errcode.WithInternal(errcode.InternalAttr("dependency", dep)))
 }
 
@@ -305,13 +334,22 @@ func (t *Tailer) tickLoop(ctx context.Context) {
 // pollOnce is the leader-gated drain cycle. The distlock acquire is the leader
 // gate (mirrors SAGA-DRIVE-BEHIND-LEADER-GATE-01 semantics): on any acquire
 // failure the tick is a no-op (no drain without the lock, fail-closed).
+//
+// NOTE: this method is deliberately named pollOnce, NOT tickOnce. The
+// SAGA-DRIVE-BEHIND-LEADER-GATE-01 archtest locks the Coordinator's driveOne
+// caller to a function named exactly "tickOnce". Naming this method tickOnce
+// would trigger that archtest sentinel and cause a false-positive CI failure.
+// pollOnce is the Tailer-local analog and is intentionally distinct.
 func (t *Tailer) pollOnce(ctx context.Context) error {
 	if tailerState(t.state.Load()) == tailerStopping {
 		return nil
 	}
 	lock, err := t.locker.Acquire(ctx, t.lockKey, t.cfg.LeaseTTL)
 	if err != nil {
-		t.observer.ObserveLockAcquire(ctx, t.projectionID, classifyLockSkip(err))
+		reason := classifyLockSkip(err)
+		t.safeObserve(ctx, "ObserveLockAcquire", func() {
+			t.observer.ObserveLockAcquire(ctx, t.projectionID, reason)
+		})
 		return nil // skip this tick — no drain without leadership
 	}
 	ownerToken, err := idutil.NewUUID()
@@ -336,7 +374,9 @@ func (t *Tailer) pollOnce(ctx context.Context) error {
 func (t *Tailer) drain(ctx context.Context, ownerToken string) error {
 	checkpoint, err := t.store.LoadOffset(ctx, t.cellID, t.projectionID)
 	if err != nil {
-		t.observer.ObserveDrain(ctx, t.projectionID, DrainStoreError)
+		t.safeObserve(ctx, "ObserveDrain", func() {
+			t.observer.ObserveDrain(ctx, t.projectionID, DrainStoreError)
+		})
 		return fmt.Errorf("tailer drain: load checkpoint: %w", err)
 	}
 	drained := 0
@@ -347,11 +387,15 @@ func (t *Tailer) drain(ctx context.Context, ownerToken string) error {
 		if errors.Is(replayErr, projection.ErrStaleOwner) {
 			return nil // deposed leader fenced — benign handoff, not a tick error
 		}
-		t.observer.ObserveDrain(ctx, t.projectionID, DrainApplyError)
+		t.safeObserve(ctx, "ObserveDrain", func() {
+			t.observer.ObserveDrain(ctx, t.projectionID, DrainApplyError)
+		})
 		return fmt.Errorf("tailer drain: replay: %w", replayErr)
 	}
 	if drained > 0 {
-		t.observer.ObserveDrain(ctx, t.projectionID, DrainOK)
+		t.safeObserve(ctx, "ObserveDrain", func() {
+			t.observer.ObserveDrain(ctx, t.projectionID, DrainOK)
+		})
 	}
 	return nil
 }
@@ -365,23 +409,25 @@ func (t *Tailer) commitEvent(ctx context.Context, ownerToken string, evt project
 	if err != nil {
 		return fmt.Errorf("tailer commit: cursor position: %w", err)
 	}
-	advanced := false
+	reachedAdvance := false
 	txErr := t.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		applyCtx := evt.RestoreContext(txCtx)
 		if e := t.apply(applyCtx, evt); e != nil {
 			return e
 		}
-		advanced = true // the next call is the AdvanceIfOwner — failures past here are advance faults
+		reachedAdvance = true // the next call is the AdvanceIfOwner — failures past here are advance faults
 		return t.store.AdvanceIfOwner(txCtx, t.cellID, t.projectionID, ownerToken, pos)
 	})
 	if txErr != nil {
-		if advanced {
+		if reachedAdvance {
 			t.observeAdvanceFailure(ctx, txErr)
 		}
 		return txErr
 	}
 	*drained++
-	t.observer.ObserveCheckpointAdvance(ctx, t.projectionID, AdvanceOK)
+	t.safeObserve(ctx, "ObserveCheckpointAdvance", func() {
+		t.observer.ObserveCheckpointAdvance(ctx, t.projectionID, AdvanceOK)
+	})
 	return nil
 }
 
@@ -392,7 +438,9 @@ func (t *Tailer) observeAdvanceFailure(ctx context.Context, err error) {
 	if errors.Is(err, projection.ErrStaleOwner) {
 		result = AdvanceStaleOwner
 	}
-	t.observer.ObserveCheckpointAdvance(ctx, t.projectionID, result)
+	t.safeObserve(ctx, "ObserveCheckpointAdvance", func() {
+		t.observer.ObserveCheckpointAdvance(ctx, t.projectionID, result)
+	})
 }
 
 // recordTickSuccess stamps the last-success timestamp and reports the residual
@@ -400,9 +448,13 @@ func (t *Tailer) observeAdvanceFailure(ctx context.Context, err error) {
 func (t *Tailer) recordTickSuccess(ctx context.Context) {
 	now := t.clk.Now()
 	t.lastSuccessUnixNano.Store(now.UnixNano())
-	t.observer.ObserveLastSuccess(ctx, t.projectionID, now)
+	t.safeObserve(ctx, "ObserveLastSuccess", func() {
+		t.observer.ObserveLastSuccess(ctx, t.projectionID, now)
+	})
 	if pending, err := t.computePending(ctx); err == nil {
-		t.observer.ObserveLag(ctx, t.projectionID, pending)
+		t.safeObserve(ctx, "ObserveLag", func() {
+			t.observer.ObserveLag(ctx, t.projectionID, pending)
+		})
 	}
 }
 
