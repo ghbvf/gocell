@@ -13,12 +13,16 @@ import (
 //   - Resource: attributes of the protected object (e.g. classification, owner)
 //   - Environment: contextual attributes (e.g. time_of_day, ip_region)
 //
-// These three sources are the complete attribute-condition universe modeled in
-// PR-6. "Action" and "resource-type" scoping (which policy applies to which
-// action + resource combination — analogous to Cedar's Rule.Target or XACML's
-// Policy Target) is NOT modeled as a Condition attribute here. That binding is
-// resolved by the PR-7 policy evaluator, which maps a (subject, resource, action)
-// request to the applicable policy set before evaluating conditions.
+// These three sources are the complete attribute-condition universe. "Action"
+// and "resource-type" scoping (which policy applies to which action + resource
+// combination — analogous to Cedar's Rule.Target or XACML's Policy Target) is
+// deliberately NOT modeled as a first-class target. PR-7 (#1345) resolved the
+// applicability design as condition-based evaluate-all: the policy evaluator
+// loads every policy of the tenant and evaluates each rule's conditions, with
+// applicability expressed THROUGH conditions rather than a separate
+// target-matching phase. A first-class action/resource-type Rule.Target is
+// deferred under YAGNI until a real need appears. Design decision recorded in
+// docs/plans/specs/1220-tenancy-abac-dataperm/research.md §1.1.
 //
 // ref: XACML 3.0 §5.7 — Subject, Resource, Action, Environment attribute categories.
 type AttributeSource uint8

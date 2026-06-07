@@ -30,3 +30,11 @@ func MustDeliveryID(s string) DeliveryID {
 	}
 	return id
 }
+
+// signedToInbound bridges a sealed [SignedHeaders] (the outbound Sign output,
+// #1492) to the inbound [Headers] DTO that [Verifier.Verify] consumes. White-box
+// (same-package) so it reads SignedHeaders' unexported fields directly, mirroring
+// the wire reconstruction a real receiver performs from request headers.
+func signedToInbound(s SignedHeaders) Headers {
+	return Headers{DeliveryID: s.deliveryID, Timestamp: s.timestamp, Signature: s.signature}
+}

@@ -64,7 +64,7 @@ func (r *recordingSettlement) counts() (commit, release int) {
 }
 
 // recordingSubCollector records consume success / failure / dead-letter
-// (capture + failure) calls.
+// (capture + failure) calls, plus the in-flight gauge delta stream.
 type recordingSubCollector struct {
 	mu              sync.Mutex
 	successCount    int
@@ -75,6 +75,12 @@ type recordingSubCollector struct {
 	failureCounts   map[ConsumeFailureReason]int
 	dlxCounts       map[ConsumeFailureReason]int
 	dlxFailedCounts map[ConsumeFailureReason]int
+	// inflight gauge delta stream: AdjustInflight appends each delta; inflightNet
+	// is the running sum (current gauge value), inflightPeak the max running sum
+	// observed (== concurrent in-flight deliveries at peak).
+	inflightDeltas []int64
+	inflightNet    int64
+	inflightPeak   int64
 }
 
 func newRecordingSubCollector() *recordingSubCollector {
@@ -111,6 +117,24 @@ func (c *recordingSubCollector) RecordDeadLetterFailure(_ context.Context, reaso
 	defer c.mu.Unlock()
 	c.deadLetterFailN++
 	c.dlxFailedCounts[reason]++
+}
+
+func (c *recordingSubCollector) AdjustInflight(_ context.Context, delta int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.inflightDeltas = append(c.inflightDeltas, delta)
+	c.inflightNet += delta
+	if c.inflightNet > c.inflightPeak {
+		c.inflightPeak = c.inflightNet
+	}
+}
+
+// inflightSnapshot returns the current net gauge value, the peak observed, and
+// the number of AdjustInflight calls.
+func (c *recordingSubCollector) inflightSnapshot() (net, peak int64, calls int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.inflightNet, c.inflightPeak, len(c.inflightDeltas)
 }
 
 func (c *recordingSubCollector) snapshot() (success, failure int, last ConsumeFailureReason) {

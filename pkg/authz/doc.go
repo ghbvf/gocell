@@ -31,20 +31,19 @@
 // and no Unmarshal capability it is structurally non-serializable, reinforcing
 // that invariant.
 //
-// # Deferred PR-7 Downstream Caller-Allowlist
+// # Downstream Caller-Allowlist (DELIVERED PR-7 #1345)
 //
 // The downstream funnel half — a caller-allowlist restricting Allow()/Deny() to
-// only the PDP evaluation engine (authorizationdecide) — lands in PR-7
-// (tracking issue: gh #1345) when a production producer first exists; today
-// there is no production caller so an allowlist would be vacuous. The upstream
-// Hard (sealed fields → literal forge impossible) is achieved here.
+// only the PDP evaluation engine — was delivered in PR-7 (#1345) when the first
+// production producer (the authorizationdecide ABAC evaluator) landed. The
+// archtest AUTHZ-DECISION-ALLOW-DENY-CALLER-01 in
+// tools/archtest/authz_decision_sealed_test.go pins every production reference to
+// Allow()/Deny() to cells/accesscore/slices/authorizationdecide/evaluator.go.
 //
-// Per ai-robust.md §"Funnel 双向锁评级": a Medium-upstream → Hard-downstream
-// transitional funnel must name its Hard-ization tracker. That tracker is
-// gh #1345 (PR-7). Once PR-7 ships a production Allow()/Deny() caller, the
-// companion archtest in tools/archtest/authz_decision_sealed_test.go must be
-// extended with an AST caller-allowlist guard (only the authorizationdecide
-// engine may call Allow() or Deny()).
+// The funnel is now fully closed Hard/Hard (ai-robust.md §"Funnel 双向锁评级"):
+// upstream Hard (sealed unexported fields → literal forge impossible; the only
+// Decision-returning exported funcs are Allow/Deny) + downstream Hard (use-based
+// caller-allowlist, invariant to import form). No Hard-upgrade issue is needed.
 //
 // # Combining Algorithm
 //

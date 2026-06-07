@@ -127,6 +127,8 @@ echo "✅ 已贴评论：$URL"                                           # 回�
 
 贴失败（非 0 退出）则报错退出，不静默跳过。footer 格式见 `.github/project-template/pr-comment.md`（PR#/工具/分支/worktree/session，AI 自填）。
 
+**追加机器块**（贴评论前；约定见 `pr-comment.md` §机器块）：verdict 按结论取 `approved`（无 finding）/ `changes-requested`（有 finding）；轮次 carry `r=$(bash hack/automation/pr-meta.sh round <N>)`；用 `jq -nc` 构造**事实** JSON（`kind:"pr-review",phase:"review",tool:"claude-code",verdict:<上>,cycle:{round: r}` + `repo/pr/baseRef/headRef/headSha`（`git rev-parse HEAD`）`/session/worktree` + `findings` 计数，**不写 `next`**——helper 派生）`| bash hack/automation/pr-meta.sh emit`，输出单行追加到填好的 `pm:pr-review` body 末尾再贴。`changes-requested` 且 `r≥3` 时 helper 把 `next.agent` 置 `human`（熔断），窗口提示「review↔fix 已达 3 轮上限，转人工」。
+
 贴完按结论切 **review 轴 label**（命令见 `issues` B3）：有 finding → `pr-review/changes-requested`；无 finding → `pr-review/approved`（默认 review 不动 pr-status 轴——PR 仍 `needs-review-again`，由后续 `/fix` 推进）。
 
 ---
@@ -166,7 +168,7 @@ echo "✅ 已贴评论：$URL"                                           # 回�
 
 ### B5 贴 pm:pr-review（--check 留痕）+ 切 label
 
-窗口打印 B4 后，贴 `pm:pr-review` 评论（--check 变体：每条 finding 带 ✅/❌/⚠️/🔧 状态替代簇归属，summary 用 已修复N/未修复M/回归K）——**窗口=主输出、评论=留痕，两者都做**。命令 + 回显见 `issues` B4；再按 B4 结论切 label（命令见 `issues` B3）。
+窗口打印 B4 后，贴 `pm:pr-review` 评论（--check 变体：每条 finding 带 ✅/❌/⚠️/🔧 状态替代簇归属，summary 用 已修复N/未修复M/回归K）——**窗口=主输出、评论=留痕，两者都做**。**追加机器块**（贴评论前；约定见 `pr-comment.md` §机器块）：verdict 取 `ready`（全 ✅）/ `changes-requested`（有 ❌/⚠️/🔧）；轮次 carry `r=$(bash hack/automation/pr-meta.sh round <N>)`；用 `jq -nc` 构造**事实** JSON（`kind:"pr-review",phase:"check",tool:"claude-code",verdict:<上>,cycle:{round: r}` + refs/headSha/findings 计数，**不写 `next`**）`| bash hack/automation/pr-meta.sh emit` 追加到 body 末尾。命令 + 回显见 `issues` B4；再按 B4 结论切 label（命令见 `issues` B3）。
 
 ---
 

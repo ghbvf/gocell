@@ -11,13 +11,17 @@ import (
 // is present and non-typed-nil. Generated from gocell:"required" struct field
 // tags; do not edit by hand.
 func (s *Service) validateRequired() error {
-	if validation.IsNilInterface(s.roleRepo) {
+	if validation.IsNilInterface(s.policyRepo) {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"authorizationdecide: roleRepo is required")
+			"authorizationdecide: policyRepo is required")
 	}
 	if validation.IsNilInterface(s.txRunner) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"authorizationdecide: TxRunner required; use WithTxManager")
+	}
+	if validation.IsNilInterface(s.clk) {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"authorizationdecide.NewService: clock.Clock required")
 	}
 	return nil
 }

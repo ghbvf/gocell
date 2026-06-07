@@ -226,7 +226,7 @@ func (d *Dispatcher) prepare(ctx context.Context, entry outbox.Entry) (*http.Req
 		return nil, outbox.Reject(errcode.Wrap(errcode.KindInvalid, errcode.ErrWebhookPermanentFailure,
 			"webhook dispatcher: outbox entry id is not a valid delivery id", err))
 	}
-	headers, err := d.signer.Sign(payload, d.clk.Now(), deliveryID)
+	signed, err := d.signer.Sign(payload, d.clk.Now(), deliveryID)
 	if err != nil {
 		return nil, outbox.Reject(errcode.Wrap(errcode.KindInvalid, errcode.ErrWebhookPermanentFailure,
 			"webhook dispatcher: signing failed", err))
@@ -238,7 +238,7 @@ func (d *Dispatcher) prepare(ctx context.Context, entry outbox.Entry) (*http.Req
 			"webhook dispatcher: build request failed", err))
 	}
 	req.Header.Set("Content-Type", "application/json")
-	headers.Apply(req.Header) // SOLE sanctioned signature-header writer.
+	signed.Apply(req.Header) // SOLE sanctioned signature-header writer.
 	return req, outbox.Ack()
 }
 

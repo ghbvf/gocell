@@ -206,6 +206,45 @@ untouched (the change is a ctx *read* inside the single existing injection point
 `kernel/outbox.TestContextPrincipal` (scope-fallback + ctxkeys-precedence
 subtests).
 
+## Amendment 2026-06-08 — merge with PR-5 #1343 (RowScopeAll re-fail-closed)
+
+While this PR was in review, sibling tenancy-epic **PR-5 (#1343)** merged to
+`develop`. PR-5 (a) generalized the audit-query identity→RowScope derivation into
+framework-level `(*auth.Principal).RowVisibility(ctx)` (non-admin→self,
+device→device, admin→tenant, **super-admin→RowScopeAll**) with a mandatory FR-007
+`slog.Error` cross-tenant audit, and (b) — in its standalone form, built on the
+**pre-#1618** base where `audit_entries` had no RLS and tenant was the app-layer
+`AuditFilters.TenantID` string — **un-fail-closed** `RowScopeAll` (deleted
+`RowScopeAllUnsupportedError`, made the stores pure PEPs that read cross-tenant).
+
+These two designs are **incompatible** at the audit `Store.Query` interface, and
+PR-5's (b) is **architecturally impossible** under this PR's per-tenant FORCE RLS:
+the `gocell_app` NOBYPASSRLS serving role cannot read across tenants, so "drop the
+tenant filter" would be silently filtered by RLS to the GUC tenant's rows — a
+cross-tenant view that silently under-delivers. The merge therefore:
+
+- **Keeps** PR-5 (a): the audit-query handler uses `p.RowVisibility(ctx)` (the
+  cell-local `auditRowVisibility` is deleted), and the FR-007 producer funnel
+  `ROWSCOPEALL-AUDIT-FUNNEL-01` is unchanged.
+- **Reverts** PR-5 (b) for audit: `RowScopeAllUnsupportedError` and the
+  mem/PG/conformance fail-close guards are **restored**. A super-admin's
+  `RowScopeAll` obligation fail-closes at the audit store (`KindInternal`/500); the
+  FR-007 `slog.Error` still fires (at mint, before the store rejects).
+  Cross-tenant audit read is **deferred to backlog** (same deferral as the
+  startup full-chain verify above — the NOBYPASSRLS role cannot enumerate tenants).
+
+**Threat-matrix re-evaluation (per ai-robust "ADR amendment 落地必查"):** no cell
+flips to ⚠️/❌. Re-fail-closing `RowScopeAll` **strengthens** the OWNER/TENANT
+boundary relative to PR-5's standalone un-fail-close (it removes a silent-partial
+cross-tenant read path that FORCE RLS would have produced). The **Write surface**
+and TENANT rows are unaffected. The producer funnel (`ROWSCOPEALL-AUDIT-FUNNEL-01`)
+remains **Hard-downstream / Medium-upstream** — it locks where `RowScopeAll` may be
+*minted* (auth/rowscope.go + conformance), orthogonal to whether a consumer
+fail-closes or applies it; the merge keeps both legitimate producers. Regression
+guard: `runtime/audit/ledger/storetest` `all-fail-closed` conformance (mem + PG) +
+`auditquery` `TestHandleQuery_RowScopeVisibilityMatrix` (super-admin → 500 + FR-007
+audit asserted).
+
 ## References
 
 - Migration: `adapters/postgres/migrations/055_audit_entries_per_tenant_rls.sql`

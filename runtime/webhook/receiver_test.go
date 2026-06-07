@@ -92,9 +92,9 @@ func signedRequest(t *testing.T, body []byte, deliveryID string) *http.Request {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, testPathPattern, bytes.NewReader(body))
-	req.Header.Set("X-Delivery-Id", string(headers.DeliveryID))
-	req.Header.Set("X-Timestamp", headers.Timestamp)
-	req.Header.Set("X-Signature", headers.Signature)
+	req.Header.Set("X-Delivery-Id", string(headers.DeliveryID()))
+	req.Header.Set("X-Timestamp", headers.Timestamp())
+	req.Header.Set("X-Signature", headers.Signature())
 	return req
 }
 
@@ -428,9 +428,9 @@ func TestReceiver_TimestampExpired_Returns401(t *testing.T) {
 	headers, _ := signer.Sign(body, fixedNow, did)
 
 	req := httptest.NewRequest(http.MethodPost, testPathPattern, bytes.NewReader(body))
-	req.Header.Set("X-Delivery-Id", string(headers.DeliveryID))
-	req.Header.Set("X-Timestamp", headers.Timestamp)
-	req.Header.Set("X-Signature", headers.Signature)
+	req.Header.Set("X-Delivery-Id", string(headers.DeliveryID()))
+	req.Header.Set("X-Timestamp", headers.Timestamp())
+	req.Header.Set("X-Signature", headers.Signature())
 
 	// Verifier clock is testReplaySkew ahead → outside ±300s window.
 	laterClk := clockmock.New(fixedNow.Add(testReplaySkew))
@@ -476,9 +476,9 @@ func TestReceiver_BodyExceedsLimitViaMaxBytesReader(t *testing.T) {
 	headers, _ := signer.Sign(bigBody, fixedNow, did)
 
 	req := httptest.NewRequest(http.MethodPost, testPathPattern, bytes.NewReader(bigBody))
-	req.Header.Set("X-Delivery-Id", string(headers.DeliveryID))
-	req.Header.Set("X-Timestamp", headers.Timestamp)
-	req.Header.Set("X-Signature", headers.Signature)
+	req.Header.Set("X-Delivery-Id", string(headers.DeliveryID()))
+	req.Header.Set("X-Timestamp", headers.Timestamp())
+	req.Header.Set("X-Signature", headers.Signature())
 	// Don't set Content-Length above limit — let MaxBytesReader detect it.
 	req.ContentLength = int64(len(bigBody)) // correct but above limit
 

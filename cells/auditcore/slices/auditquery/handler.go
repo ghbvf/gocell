@@ -46,25 +46,21 @@ func auditQueryPolicy(r *http.Request) error {
 	if actorID == "" || actorID == p.Subject {
 		return nil
 	}
-	return auth.AnyRole(auth.RoleAdmin)(r)
-}
-
-// auditRowVisibility derives the row-visibility obligation (epic #1337 PR-4) for
-// an audit query from the caller principal: admins read tenant-wide (all actors
-// in their tenant), non-admins are restricted to their own actor_id
-// (RowScopeSelf, subject = principal.Subject). Factored out of List to keep its
-// cognitive complexity within budget.
-func auditRowVisibility(p *auth.Principal) (tenant.RowVisibility, error) {
-	if p.HasRole(auth.RoleAdmin) {
-		return tenant.NewRowVisibility(tenant.RowScopeTenant, "")
-	}
-	return tenant.NewRowVisibility(tenant.RowScopeSelf, p.Subject)
+	return auth.AnyRole(auth.RoleAdmin, auth.RoleSuperAdmin)(r)
 }
 
 // logAdminAuditQuery emits an audit-access breadcrumb when an admin queries the
 // ledger (all actors, or a specific other user). Non-admins and admin-self
 // queries are silent. Factored out of List for cognitive-complexity budget.
+//
+// Super-admin access is excluded from this breadcrumb: the mandatory FR-007
+// slog.Error cross-tenant audit is already emitted inside p.RowVisibility before
+// this function is called. Emitting a second admin-breadcrumb would be redundant
+// and confusing (a lower-severity Info record for a higher-privilege event).
 func logAdminAuditQuery(ctx context.Context, p *auth.Principal, subject, actorIDFilter string) {
+	if p.HasRole(auth.RoleSuperAdmin) {
+		return // FR-007 audit already emitted inside p.RowVisibility
+	}
 	if !p.HasRole(auth.RoleAdmin) {
 		return
 	}
@@ -116,18 +112,23 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 	}
 	subject := p.Subject
 
-	// Row-visibility obligation (epic #1337 PR-4): derive from principal.
-	// Admin → tenant scope (sees all actors in the tenant). Non-admin → self
-	// scope (only entries where actor_id == subject). The explicit actorId filter
-	// (req.ActorID) is an additional AND predicate on top of the obligation; for
-	// non-admins auditQueryPolicy already enforces actorId == "" || == self, so
-	// the obligation is the effective enforcement gate for row access.
-	vis, err := auditRowVisibility(p)
+	// Row-visibility obligation (epic #1337 PR-4/PR-5): derive from principal via
+	// the framework derivation. Super-admin → RowScopeAll, Admin → RowScopeTenant
+	// (all actors in their tenant), Non-admin → RowScopeSelf (actor_id == subject).
+	// NOTE (#1618 merge): under per-tenant FORCE RLS the audit store fail-closes
+	// RowScopeAll (RowScopeAllUnsupportedError) — cross-tenant audit read by a
+	// super-admin is deferred to backlog (the NOBYPASSRLS serving role cannot
+	// enumerate tenants); the mandatory FR-007 slog.Error audit is still emitted
+	// inside p.RowVisibility regardless. The explicit actorId filter (req.ActorID)
+	// is an additional AND predicate on top of the obligation; for non-admins
+	// auditQueryPolicy already enforces actorId == "" || == self, so the obligation
+	// is the effective enforcement gate.
+	vis, err := p.RowVisibility(ctx)
 	if err != nil {
-		// NewRowVisibility only errors on invalid construction (programmer error,
-		// not a user input error). Treat as 500.
-		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-			"audit query: failed to build row visibility obligation", err)
+		// RowVisibility errors for service/anonymous/unknown principals
+		// (KindPermissionDenied). Surface as-is; callers holding a JWT-authenticated
+		// user/device principal never reach here under normal circumstances.
+		return nil, err
 	}
 
 	logAdminAuditQuery(ctx, p, subject, req.ActorID)
@@ -249,7 +250,10 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 // omitted. This replaced the PR-1 (#1339 F2) blanket 403 gate and retired the
 // appender's INV-SINGLE-TENANT-ONLY tripwire (#1289). A principal with an empty
 // tenant is rejected at the List boundary (F1), so the read path is never
-// tenant-unscoped; DB-layer FORCE RLS (#1618) is defense-in-depth.
+// tenant-unscoped; DB-layer FORCE RLS (#1618) is defense-in-depth. Super-admin
+// RowScopeAll cross-tenant audit read is fail-closed under FORCE RLS (deferred
+// to backlog), so there is no cross-tenant regime that would make per-row
+// tenantId non-redundant.
 func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 	// Both audit-evidence timestamps use RFC3339Nano: sub-second precision is
 	// part of the evidence (the HMAC chain pins occurred_at/timestamp at nanosecond

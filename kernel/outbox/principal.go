@@ -155,6 +155,13 @@ func ContextPrincipal(ctx context.Context) PrincipalMetadata {
 //   - RestoreToContext does NOT overwrite existing ctx values (the
 //     consumer ctx may legitimately carry its own principal propagated
 //     by an outer middleware; the entry's identity is a fallback).
+//
+// The no-overwrite / idempotent contract above is for the generic /
+// spawn path. The async consume path (SubscriberWithMiddleware.SubscribeEntry)
+// pre-clears the ambient principal via clearAmbientPrincipal before calling
+// RestoreContext, so the entry's wire principal (actor/subject/tenant/session)
+// is authoritative and the no-overwrite guard never blocks it. This mirrors the
+// projection rebuild detach boundary (kernel/projection.clearAmbientPrincipal).
 func (p PrincipalMetadata) RestoreToContext(ctx context.Context) context.Context {
 	ctx = withContextMetadata(ctx, string(p.ActorID), ctxkeys.ActorIDFrom, ctxkeys.WithActorID)
 	ctx = withContextMetadata(ctx, string(p.SubjectID), ctxkeys.SubjectIDFrom, ctxkeys.WithSubjectID)
@@ -176,4 +183,44 @@ func (p PrincipalMetadata) RestoreToContext(ctx context.Context) context.Context
 // be silently disabled. Mirror of injectObservabilityFromContext.
 func (e *Entry) injectPrincipalFromContext(ctx context.Context) {
 	e.principal = ContextPrincipal(ctx)
+}
+
+// clearAmbientPrincipal returns a new context with all four principal ctx keys
+// zeroed to the empty string. It is the consume-path detach hook for
+// SubscriberWithMiddleware.SubscribeEntry (outbox.go).
+//
+// # Consume-path entry-authoritative contract
+//
+// On the async consume path the entry's wire identity is the source of truth:
+// the entry was constructed (via NewEntry) from the producer's authenticated
+// request context, sealed in the wire envelope, and reconstituted by
+// UnmarshalEnvelope / EntryScan.ToEntry. Whatever tenant, actor, subject or
+// session the subscribe-loop goroutine carries as "ambient" ctx is irrelevant
+// and must not bleed into the handler.
+//
+// RestoreToContext is no-overwrite (existing ctx values win) — a deliberate
+// contract for the generic / spawn path where an outer middleware may have
+// already populated the ctx. On the consume path that no-overwrite guard would
+// let a stale or wrong ambient tenant (e.g. from the bootstrap context or a
+// prior request leaking into a reused goroutine-local ctx) silently WIN over
+// the entry's own tenant. clearAmbientPrincipal removes all four ambient
+// principal keys before RestoreToContext is called, ensuring the entry wins
+// cleanly (no cross-tenant pollution).
+//
+// This mirrors kernel/projection.clearAmbientPrincipal (projection rebuild
+// detach boundary, ADR #1609 §5, PR-03 #1627): both sites clear before
+// installing the event-specific identity so the no-overwrite guard is
+// never an obstacle.
+//
+// The function is unexported: it is ONLY called at the SubscribeEntry
+// consume-path dispatch in this package (outbox.go). Placing it here (not in
+// outbox.go) keeps ALL four ctxkeys.With* principal setter calls in the file
+// already allowlisted by CTXKEYS-PRINCIPAL-WRITE-CALLER-01 — zero allowlist
+// changes required.
+func clearAmbientPrincipal(ctx context.Context) context.Context {
+	ctx = ctxkeys.WithActorID(ctx, "")
+	ctx = ctxkeys.WithSubjectID(ctx, "")
+	ctx = ctxkeys.WithTenantID(ctx, "")
+	ctx = ctxkeys.WithSessionID(ctx, "")
+	return ctx
 }

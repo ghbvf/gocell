@@ -252,6 +252,12 @@ metrics:
         - cell
         - reason
       file: adapters/mqtt/metrics.go
+    - name: mqtt_consume_inflight
+      type: gauge
+      help: 'Number of MQTT messages in-flight in the subscriber, counted from receive-callback entry to ack/drop. At saturation this is MaxConcurrentHandlers active handlers plus at most one delivery awaiting a worker slot (the single-goroutine receive handoff), so it may briefly exceed MaxConcurrentHandlers by one. Maintained by AdjustInflight(+1/-1). Label: cell = construction-time cell identifier (registration-time enumerated, not from request ctx).'
+      labels:
+        - cell
+      file: adapters/mqtt/metrics.go
     - name: mqtt_consume_total
       type: counter
       help: 'Total number of MQTT messages consumed successfully (handler Ack + Settlement Commit). Label: cell = construction-time cell identifier (registration-time enumerated, not from request ctx).'

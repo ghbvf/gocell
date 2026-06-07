@@ -656,6 +656,43 @@ func TestSubscriber_MetricsEmission(t *testing.T) {
 	assert.Equal(t, consumeReasonUnmarshal, lastReason, "the single failure is the poison unmarshal")
 }
 
+// TestSubscriber_InflightGauge_LifecycleNetZero drives a single successful
+// delivery and asserts the mqtt_consume_inflight gauge delta stream: it peaks at
+// exactly one in-flight delivery (entry +1) and nets to zero after the delivery
+// settles (completion -1), via exactly two AdjustInflight calls. The drop paths
+// (stopIntake / workerSem race) share the same adjustInflight helper, so this
+// happy-path lifecycle test covers the entry+completion accounting for all sites.
+func TestSubscriber_InflightGauge_LifecycleNetZero(t *testing.T) {
+	t.Parallel()
+	addr, stop := startInternalBroker(t)
+	defer stop()
+	coll := newRecordingSubCollector()
+	sub, conn := newTestSubscriber(t, addr, coll)
+
+	subscription := newSubscription("test/inflight/+", "inflight-cg-"+uuid.NewString())
+	cancel := startSubscribe(t, sub, subscription, func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, &recordingSettlement{}
+	})
+	defer cancel()
+
+	topic := "test/inflight/" + uuid.NewString()
+	publishTo(t, conn, topic, newSubEnvelope(t, topic, []byte(`{"k":"v"}`)))
+
+	// Wait for the delivery to fully account: both the entry +1 and the
+	// completion -1 recorded (calls >= 2) AND drained back to net zero. net==0
+	// alone is true from the start (before any delivery), so it must be paired
+	// with calls>=2 to actually wait for the lifecycle.
+	testwait.External(t, "inflight-drained", func() bool {
+		net, _, calls := coll.inflightSnapshot()
+		return calls >= 2 && net == 0
+	}, testtime.D5s, testtime.D10ms)
+
+	net, peak, calls := coll.inflightSnapshot()
+	assert.Equal(t, int64(0), net, "inflight gauge delta must net to zero after delivery settles")
+	assert.Equal(t, int64(1), peak, "inflight peaked at exactly one in-flight delivery")
+	assert.Equal(t, 2, calls, "exactly one +1 (entry) and one -1 (completion)")
+}
+
 // ---------------------------------------------------------------------------
 // dispatchAck branches: commit-success-then-ack-FAIL, commit-FAIL
 // ---------------------------------------------------------------------------

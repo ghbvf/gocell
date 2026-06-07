@@ -129,23 +129,36 @@ HMAC-SHA256, and the `v1,<base64>` token format are identical to the signer
 implementation (`kernel/webhook/signer.go`) and are Svix/standard-webhooks
 aligned; only the header names are GoCell's deliberate choice.
 
-The sole writer of these headers in the codebase is `(webhook.Headers).Apply`
-(`kernel/webhook/webhook.go`), locked downstream by archtest
-`WEBHOOK-SIGNER-FUNNEL-01`. No callsite may call `Header.Set` on these header
-name constants directly.
+The sole writer of these headers in the codebase is
+`(webhook.SignedHeaders).Apply` (`kernel/webhook/webhook.go`), locked downstream
+by archtest `WEBHOOK-SIGNER-FUNNEL-01/A1`. No callsite may call `Header.Set` on
+these header name constants directly.
 
 > **Amendment 2026-06-02 (review #1455).** F9: the `WEBHOOK-SIGNER-FUNNEL-01`
 > scan scope used exact package-path matching, which silently excluded the
 > `runtime/webhook/dispatch` subpackage (the consumer layer that actually calls
-> `Headers.Apply`). The scope is now subtree-matched (`base` or `base+"/"`), so
-> the dispatch subpackage and any future subpackage are covered. F5 (open
-> hardening): `webhook.Headers` is still a public struct with exported fields, so
-> a caller could construct `Headers{Signature: …}.Apply(h)` outside `Signer.Sign`
-> — the funnel locks the *header write site*, not *Headers provenance*. Severity
-> is low (a forged `Headers` carries an invalid HMAC the receiver rejects; no
-> secret is exposed). Closing the gap via sealed construction (unexported fields,
-> only `Signer.Sign` produces `Headers`) is tracked as a backlog item, not done
-> in PR-5.
+> `SignedHeaders.Apply`). The scope is now subtree-matched (`base` or `base+"/"`),
+> so the dispatch subpackage and any future subpackage are covered.
+>
+> **Amendment 2026-06-07 (#1492 + #1733 F1 — provenance gap CLOSED).** F5 (the open
+> hardening noted in the 2026-06-02 amendment) is **resolved**. Previously `Apply`
+> lived on the public `webhook.Headers` struct with exported fields, so a caller
+> could construct `Headers{Signature: …}.Apply(h)` outside `Signer.Sign` — the
+> funnel locked only the *write site*, not *provenance*. #1492 split the type: the
+> inbound parse DTO stays `webhook.Headers` (untrusted by design — a forged inbound
+> Headers just fails `Verify`), while the OUTBOUND value `Apply` writes is the
+> sealed `webhook.SignedHeaders`. A POPULATED outside-package literal
+> (`SignedHeaders{signature: …}`) is a Go compile error (unexported fields), but
+> unexported fields alone do NOT stop a ZERO-value construction
+> (`var h webhook.SignedHeaders`) — the residual gap **review #1733 F1** caught
+> (the original "closed" claim was itself an overclaim). The closure is an
+> unexported `valid` provenance flag that ONLY `Signer.Sign` sets, with `Apply`
+> fail-closing (writing nothing) when `valid==false`; external code can set neither
+> a populated literal nor `valid`, so only a Sign-produced SignedHeaders writes to
+> the wire. The field set (incl. `valid`) is reflect-frozen by
+> `WEBHOOK-SIGNER-FUNNEL-01/A2`. **Upstream is now genuinely Hard (external)**; the
+> only residual is the package-internal holder axis (`SignedHeaders{valid: true}`
+> in-package), the permanent Go ceiling shared with #851/#893/#1282/#1375.
 
 ### D5 — Schedule is the canonical default seam; per-attempt wall-clock delays and RetryCount are NOT yet wired (explicit boundary + tracked follow-up)
 

@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
@@ -34,7 +35,10 @@ func TestChainOrderRecoveryInnermost(t *testing.T) {
 
 	t.Run("metrics observes recovery-converted Internal", func(t *testing.T) {
 		coll := metrics.NewInMemoryGRPCCollector()
-		_, err := UnaryMetrics(coll, clock.Real())(
+		// Direct interceptor invocation (not via NewUnaryChain): a nil closed set
+		// is valid here and resolves to the _runtime sentinel — this case asserts
+		// the recovery-converted code/label, not cell attribution.
+		_, err := UnaryMetrics(coll, clock.Real(), nil)(
 			context.Background(), nil, info, nestRecovered(info, panicHandler))
 		if status.Code(err) != codes.Internal {
 			t.Fatalf("code = %v, want Internal", status.Code(err))
@@ -60,15 +64,35 @@ func TestChainOrderRecoveryInnermost(t *testing.T) {
 func TestNewUnaryChain(t *testing.T) {
 	// Smoke: composition must not panic and must return a usable ServerOption.
 	opt := NewUnaryChain(Deps{
-		Collector: metrics.NewInMemoryGRPCCollector(),
-		Clock:     clock.Real(),
-		Verifier:  stubVerifier{},
+		Collector:       metrics.NewInMemoryGRPCCollector(),
+		Clock:           clock.Real(),
+		Verifier:        stubVerifier{},
+		Registrar:       runtimegrpc.NewServiceRegistrar(),
+		CellIDClosedSet: []string{"svc-cell"},
 	})
 	if opt == nil {
 		t.Fatalf("NewUnaryChain returned nil ServerOption")
 	}
 	// It must be installable on a real server without panicking.
 	_ = grpc.NewServer(opt)
+}
+
+// TestNewUnaryChainNilRegistrarPanics asserts the same-instance fail-closed
+// guard: a chain without a Registrar would silently attribute every RPC to the
+// runtime sentinel, so NewUnaryChain panics at construction (#1152 F1).
+func TestNewUnaryChainNilRegistrarPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatalf("NewUnaryChain with a nil Deps.Registrar must panic")
+		}
+	}()
+	_ = NewUnaryChain(Deps{
+		Collector:       metrics.NewInMemoryGRPCCollector(),
+		Clock:           clock.Real(),
+		Verifier:        stubVerifier{},
+		CellIDClosedSet: []string{"svc-cell"},
+		// Registrar omitted → fail-closed panic.
+	})
 }
 
 // testSvc is a minimal gRPC service implementation used by F5 test only.
@@ -117,6 +141,8 @@ func TestNewUnaryChain_AuthOptionsPassthrough(t *testing.T) {
 			// Mark /svc/Public as public so no token is required.
 			WithPublicMethod(func(m string) bool { return m == "/svc/Public" }),
 		},
+		Registrar:       runtimegrpc.NewServiceRegistrar(),
+		CellIDClosedSet: []string{"svc-cell"},
 	}
 
 	srv := grpc.NewServer(NewUnaryChain(deps))

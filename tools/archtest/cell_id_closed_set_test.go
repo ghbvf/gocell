@@ -315,8 +315,12 @@ func TestCellIDClosedSet01_StringSentinel(t *testing.T) {
 // router via WithCellIDClosedSet, and buildMux passes r.cellIDClosedSet to both
 // the Metrics and BodyLimit middleware.
 //
-// NOTE: gRPC has no closed-set wiring yet (ResolveCellLabel(ctx, nil) in UnaryMetrics);
-// when gRPC attribution lands (#1383) this test must gain a gRPC interceptor wiring assertion.
+// NOTE: gRPC cell attribution is wired (#1383 / #1152) — UnaryMetrics passes the
+// assembly closed set via interceptor.Deps.CellIDClosedSet (composition root sends
+// asm.CellIDs()). This test locks only the HTTP buildMux→router upstream source;
+// the gRPC closed-set source is composition-root-built (not bootstrap-built), so
+// it cannot be archtest-locked the same way — same permanent ceiling as AUTH-PLAN-04
+// (see GRPC-METRICS-LABEL-CELLID-CTXSOURCE-01 godoc).
 func TestCellIDClosedSet01_UpstreamSource(t *testing.T) {
 	root := findModuleRoot(t)
 

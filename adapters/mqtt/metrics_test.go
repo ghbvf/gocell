@@ -472,13 +472,28 @@ func TestNewProviderSubscriberCollector_RegistrationFailure_RollsBack(t *testing
 	t.Parallel()
 	// Fail on the histogram (5th registration) so all four counters
 	// (consume_total, consume_failed, dlx_total, dlx_failed) were registered and
-	// must be unregistered.
+	// must be unregistered. The gauge (6th) is never reached.
 	spy := &subRollbackProvider{failHistogram: true}
 	_, err := NewProviderSubscriberCollector(spy, "testcell")
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec))
 	assert.Equal(t, 4, spy.unregisterCount, "all four counters must be rolled back on histogram failure")
+}
+
+// TestNewProviderSubscriberCollector_GaugeRegistrationFailure_RollsBack verifies
+// that a failure on the gauge (the last, 6th registration) rolls back the 4
+// counters + histogram already registered (5 total).
+func TestNewProviderSubscriberCollector_GaugeRegistrationFailure_RollsBack(t *testing.T) {
+	t.Parallel()
+	spy := &subRollbackProvider{failGauge: true}
+	_, err := NewProviderSubscriberCollector(spy, "testcell")
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.KindInternal, ec.Kind)
+	assert.Equal(t, 5, spy.unregisterCount,
+		"4 counters + histogram must be rolled back on gauge failure")
 }
 
 // TestNewProviderSubscriberCollector_CounterRegistrationFailure_RollsBack covers
@@ -638,9 +653,32 @@ func TestProviderSubscriberCollector_RecordDeadLetterFailure(t *testing.T) {
 	}
 }
 
+// TestProviderSubscriberCollector_AdjustInflight verifies AdjustInflight(+1) and
+// AdjustInflight(-1) each emit a gauge Add op on mqtt_consume_inflight with the
+// construction-time cell label and the delta as the value.
+func TestProviderSubscriberCollector_AdjustInflight(t *testing.T) {
+	t.Parallel()
+	spy := newSubSpyProvider()
+	col, err := NewProviderSubscriberCollector(spy, "testcell")
+	require.NoError(t, err)
+
+	col.AdjustInflight(context.Background(), 1)
+	col.AdjustInflight(context.Background(), -1)
+
+	var deltas []float64
+	for _, op := range spy.ops() {
+		if op.name == "mqtt_consume_inflight" && op.op == "Add" {
+			assert.Equal(t, "testcell", op.labels["cell"])
+			deltas = append(deltas, op.value)
+		}
+	}
+	assert.Equal(t, []float64{1, -1}, deltas,
+		"mqtt_consume_inflight must receive a +1 Add then a -1 Add")
+}
+
 // TestProviderSubscriberCollector_RegistersExpectedLabelNames pins the label
 // schema: consume_total {cell}, consume_failed {cell, reason}, dlx_total
-// {cell, reason}, dlx_failed {cell, reason}, duration {cell}.
+// {cell, reason}, dlx_failed {cell, reason}, duration {cell}, inflight {cell}.
 func TestProviderSubscriberCollector_RegistersExpectedLabelNames(t *testing.T) {
 	t.Parallel()
 	spy := newSubSpyProvider()
@@ -659,6 +697,9 @@ func TestProviderSubscriberCollector_RegistersExpectedLabelNames(t *testing.T) {
 	require.Len(t, spy.histogramRegs, 1)
 	assert.Equal(t, "mqtt_consume_duration_seconds", spy.histogramRegs[0].Name)
 	assert.Equal(t, []string{"cell"}, spy.histogramRegs[0].LabelNames)
+	require.Len(t, spy.gaugeRegs, 1)
+	assert.Equal(t, "mqtt_consume_inflight", spy.gaugeRegs[0].Name)
+	assert.Equal(t, []string{"cell"}, spy.gaugeRegs[0].LabelNames)
 }
 
 // TestNoopSubscriberCollector_Methods verifies NoopSubscriberCollector does not panic.
@@ -670,6 +711,8 @@ func TestNoopSubscriberCollector_Methods(t *testing.T) {
 		col.RecordConsumeFailure(context.Background(), consumeReasonUnmarshal)
 		col.RecordDeadLetter(context.Background(), consumeReasonReject)
 		col.RecordDeadLetterFailure(context.Background(), consumeReasonReject)
+		col.AdjustInflight(context.Background(), 1)
+		col.AdjustInflight(context.Background(), -1)
 	})
 }
 
@@ -677,12 +720,15 @@ func TestNoopSubscriberCollector_Methods(t *testing.T) {
 // Subscriber test doubles
 // ---------------------------------------------------------------------------
 
-// subRollbackProvider registers counters successfully until a configured failure
-// point, recording how many Unregister calls the rollback issues. failHistogram
-// fails the histogram (after all 4 counters); failAtCounter (1-based, 0=disabled)
-// fails the Nth CounterVec call so the per-counter error branches can be exercised.
+// subRollbackProvider registers metrics successfully until a configured failure
+// point, recording how many Unregister calls the rollback issues. Registration
+// order is 4 counters → histogram → gauge. failAtCounter (1-based, 0=disabled)
+// fails the Nth CounterVec call; failHistogram fails the histogram (after all 4
+// counters); failGauge fails the gauge (after the 4 counters + histogram) so the
+// last-registration error branch is exercised.
 type subRollbackProvider struct {
 	failHistogram   bool
+	failGauge       bool
 	failAtCounter   int
 	counterCount    int
 	unregisterCount int
@@ -696,15 +742,18 @@ func (p *subRollbackProvider) CounterVec(opts metrics.CounterOpts) (metrics.Coun
 	return &subSpyCounterVec{name: opts.Name, labelNames: opts.LabelNames}, nil
 }
 
-func (p *subRollbackProvider) HistogramVec(_ metrics.HistogramOpts) (metrics.HistogramVec, error) {
+func (p *subRollbackProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.HistogramVec, error) {
 	if p.failHistogram {
 		return nil, errors.New("duplicate histogram")
 	}
-	return nil, errors.New("subRollbackProvider: unexpected HistogramVec")
+	return metrics.NopProvider{}.HistogramVec(opts)
 }
 
-func (p *subRollbackProvider) GaugeVec(_ metrics.GaugeOpts) (metrics.GaugeVec, error) {
-	return metrics.NopProvider{}.GaugeVec(metrics.GaugeOpts{})
+func (p *subRollbackProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, error) {
+	if p.failGauge {
+		return nil, errors.New("duplicate gauge")
+	}
+	return metrics.NopProvider{}.GaugeVec(opts)
 }
 
 func (p *subRollbackProvider) Unregister(_ metrics.Collector) error {
@@ -722,6 +771,7 @@ type subSpyRecord struct {
 type subSpyProvider struct {
 	counterRegs   []metrics.CounterOpts
 	histogramRegs []metrics.HistogramOpts
+	gaugeRegs     []metrics.GaugeOpts
 	records       []subSpyRecord
 }
 
@@ -737,8 +787,9 @@ func (p *subSpyProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.Histo
 	return &subSpyHistogramVec{parent: p, name: opts.Name, labelNames: opts.LabelNames}, nil
 }
 
-func (p *subSpyProvider) GaugeVec(_ metrics.GaugeOpts) (metrics.GaugeVec, error) {
-	return metrics.NopProvider{}.GaugeVec(metrics.GaugeOpts{})
+func (p *subSpyProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, error) {
+	p.gaugeRegs = append(p.gaugeRegs, opts)
+	return &subSpyGaugeVec{parent: p, name: opts.Name, labelNames: opts.LabelNames}, nil
 }
 
 func (p *subSpyProvider) Unregister(_ metrics.Collector) error { return nil }
@@ -810,3 +861,36 @@ func (h *subSpyHistogram) Observe(_ context.Context, val float64) {
 		name: h.name, op: "Observe", labels: h.labels, value: val,
 	})
 }
+
+type subSpyGaugeVec struct {
+	parent     *subSpyProvider
+	name       string
+	labelNames []string
+}
+
+func (v *subSpyGaugeVec) Registered() bool { return true }
+
+func (v *subSpyGaugeVec) With(l metrics.Labels) metrics.Gauge {
+	metrics.MustValidateLabels(v.labelNames, l)
+	return &subSpyGauge{parent: v.parent, name: v.name, labels: l}
+}
+
+type subSpyGauge struct {
+	parent *subSpyProvider
+	name   string
+	labels metrics.Labels
+}
+
+func (g *subSpyGauge) record(op string, val float64) {
+	if g.parent == nil {
+		return
+	}
+	g.parent.records = append(g.parent.records, subSpyRecord{
+		name: g.name, op: op, labels: g.labels, value: val,
+	})
+}
+
+func (g *subSpyGauge) Set(_ context.Context, val float64) { g.record("Set", val) }
+func (g *subSpyGauge) Inc(_ context.Context)              { g.record("Inc", 1) }
+func (g *subSpyGauge) Dec(_ context.Context)              { g.record("Dec", -1) }
+func (g *subSpyGauge) Add(_ context.Context, d float64)   { g.record("Add", d) }

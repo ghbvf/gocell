@@ -37,6 +37,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	commandruntime "github.com/ghbvf/gocell/runtime/command"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
 	"github.com/ghbvf/gocell/runtime/grpc/interceptor"
 	rtmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
@@ -174,18 +175,27 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	// or an explicit insecure opt-in. The interceptor chain mirrors the HTTP
 	// primary listener's JWT auth: every RPC is authenticated (per-method public
 	// is deferred to #1675). The metrics collector is backed by a Nop provider —
-	// the iotdevice demo exports no metrics (HTTP path is Nop too); real grpc
-	// metric export + cell attribution are PR-9 / #1383, and the grpc_ready readyz
-	// probe wiring is PR-9 (plan §"PR 9").
+	// the iotdevice demo exports no metrics (HTTP path is Nop too). Cell
+	// attribution + the grpc_ready readyz probe are wired below (PR-9 #1152): the
+	// registrar is created FIRST and shared by the interceptor chain
+	// (reg.CellIDForMethod feeds cell attribution) and the adapter server
+	// (Config.Registrar), with asm.CellIDs() as the metrics closed set.
 	grpcCollector, err := rtmetrics.NewGRPCProviderCollector(kernelmetrics.NopProvider{}, rtmetrics.ProviderCollectorConfig{})
 	if err != nil {
 		return fmt.Errorf("build grpc metrics collector: %w", err)
 	}
-	grpcServer, err := newGRPCServerFromEnv(durabilityMode, []grpc.ServerOption{
+	grpcRegistrar := runtimegrpc.NewServiceRegistrar()
+	// Resolve the gRPC addr ONCE and bind it in both the adapter config and
+	// WithGRPCListener below — bootstrap pre-binds the WithGRPCListener addr, so a
+	// divergent adapter Config.Addr would be ignored (#1737 F2).
+	grpcAddr := grpcAddrFromEnv()
+	grpcServer, err := newGRPCServerFromEnv(durabilityMode, grpcAddr, grpcRegistrar, []grpc.ServerOption{
 		interceptor.NewUnaryChain(interceptor.Deps{
-			Verifier:  jwtVerifier,
-			Clock:     clk,
-			Collector: grpcCollector,
+			Verifier:        jwtVerifier,
+			Clock:           clk,
+			Collector:       grpcCollector,
+			Registrar:       grpcRegistrar,
+			CellIDClosedSet: asm.CellIDs(),
 		}),
 	})
 	if err != nil {
@@ -200,7 +210,7 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		// #673: a dedicated HealthListener is mandatory — /healthz, /readyz,
 		// /metrics no longer fall back onto the primary listener.
 		bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9093", []auth.ListenerAuth{auth.AuthNone{}}),
-		bootstrap.WithGRPCListener(cell.PrimaryListener, grpcServer, ":8084"),
+		bootstrap.WithGRPCListener(cell.PrimaryListener, grpcServer, grpcAddr),
 		bootstrap.WithHealthRoutes(healthOpts...),
 	}
 	// MQTT channel options (health probe + managed closer) when enabled.

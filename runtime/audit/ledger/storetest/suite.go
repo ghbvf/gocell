@@ -1552,8 +1552,9 @@ func (tc visGetCase) run(t *testing.T, store ledger.Store) {
 //   - RowScopeDevice("alice") → same as self (device uses Allows=subject match)
 //   - RowScopeTenant("")      → all entries (tenant-wide: no actor filter)
 //   - RowScopeAll("")         → fail-closed (RowScopeAllUnsupportedError) on every
-//     backend until the audited super-admin path lands (PR-5); no silent degrade
-//     to tenant scope.
+//     backend; cross-tenant audit read is deferred to backlog under #1618 FORCE
+//     RLS (PR-5 #1343 landed the derivation, not the audit path); no silent
+//     degrade to tenant scope.
 func runQueryVisibilityObligations(t *testing.T, factory Factory) {
 	store, _, fc, cleanup := factory(t)
 	defer cleanup()
@@ -1579,8 +1580,9 @@ func runQueryVisibilityObligations(t *testing.T, factory Factory) {
 		{"self-alice", tenant.RowScopeSelf, "alice", 1, "alice", ""},
 		{"device-alice", tenant.RowScopeDevice, "alice", 1, "alice", ""},
 		{"tenant-wide", tenant.RowScopeTenant, "", 3, "", ""},
-		// RowScopeAll is fail-closed on every backend until PR-5 (no silent
-		// degrade to tenant scope) — see RowScopeAllUnsupportedError.
+		// RowScopeAll is fail-closed on every backend (deferred to backlog under
+		// #1618 FORCE RLS; no silent degrade to tenant scope) — see
+		// RowScopeAllUnsupportedError.
 		{"all-fail-closed", tenant.RowScopeAll, "", 0, "", errcode.ErrInternal},
 	}
 	for _, tc := range cases {
@@ -1596,7 +1598,7 @@ func runQueryVisibilityObligations(t *testing.T, factory Factory) {
 //   - Self("alice")   → found (owns the entry)
 //   - Self("bob")     → ErrAuditLedgerNotFound (IDOR collapse)
 //   - Tenant("")      → found (tenant-wide read)
-//   - All("")         → fail-closed (RowScopeAllUnsupportedError) until PR-5
+//   - All("")         → fail-closed (RowScopeAllUnsupportedError); deferred backlog
 func runGetBySeqVisibilityObligations(t *testing.T, factory Factory) {
 	store, _, fc, cleanup := factory(t)
 	defer cleanup()
@@ -1618,8 +1620,9 @@ func runGetBySeqVisibilityObligations(t *testing.T, factory Factory) {
 		{"device-alice-found", tenant.RowScopeDevice, "alice", true, ""},
 		{"device-bob-idor-collapse", tenant.RowScopeDevice, "bob", false, errcode.ErrAuditLedgerNotFound},
 		{"tenant-wide-found", tenant.RowScopeTenant, "", true, ""},
-		// RowScopeAll is fail-closed on every backend until PR-5 (distinct from the
-		// IDOR-collapse NotFound: it is a wiring/programmer error, ErrInternal).
+		// RowScopeAll is fail-closed on every backend (deferred to backlog under
+		// #1618 FORCE RLS; distinct from the IDOR-collapse NotFound: it is a
+		// deferred-capability wiring error, ErrInternal).
 		{"all-fail-closed", tenant.RowScopeAll, "", false, errcode.ErrInternal},
 	}
 	for _, tc := range cases {

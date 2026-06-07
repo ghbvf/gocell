@@ -11,13 +11,17 @@ import (
 
 // RowScopeAllUnsupportedError reports that a RowVisibility carrying
 // tenant.RowScopeAll reached a ledger read path (Query / GetBySeq).
-// RowScopeAll is cross-tenant super-admin visibility whose audited BYPASSRLS
-// path is not wired until epic #1337 PR-5; until then EVERY ledger backend
-// fail-closes it (no silent degrade to tenant scope). It is shared by MemStore
-// and the PG LedgerStore so the rejection is byte-identical across backends and
-// exercised uniformly by the conformance suite. The classification is
-// KindInternal: in PR-4 no caller constructs RowScopeAll for these reads, so its
-// arrival is a wiring/programmer error, not user input.
+// RowScopeAll is cross-tenant super-admin visibility. Epic #1337 PR-5 (#1343)
+// landed the identity→RowScopeAll derivation (auth.Principal.RowVisibility), but
+// under #1618's per-tenant FORCE RLS a cross-tenant audit read is architecturally
+// blocked for the NOBYPASSRLS serving role (it cannot enumerate tenants), so the
+// audited super-admin path stays DEFERRED to backlog; until it is wired EVERY
+// ledger backend fail-closes RowScopeAll (no silent degrade to tenant scope — a
+// partial "all-within-my-tenant" view would be a misleading under-delivery). It
+// is shared by MemStore and the PG LedgerStore so the rejection is byte-identical
+// across backends and exercised uniformly by the conformance suite. The
+// classification is KindInternal: a super-admin's RowScopeAll obligation reaching
+// this deferred read path is a wiring error, not user input.
 func RowScopeAllUnsupportedError() error {
 	return errcode.New(errcode.KindInternal, errcode.ErrInternal,
 		"audit ledger: RowScopeAll is not supported on this read path")
@@ -187,9 +191,10 @@ type Store interface {
 	//     existence is not leaked).
 	//
 	// vis must be valid (NewRowVisibility must succeed). A vis carrying RowScopeAll
-	// is fail-closed on every backend (RowScopeAllUnsupportedError) until the
-	// audited super-admin path lands (epic #1337 PR-5). GetBySeq has NO production
-	// caller today (chain replay / conformance / startup tail-verify only).
+	// is fail-closed on every backend (RowScopeAllUnsupportedError) — cross-tenant
+	// audit read is deferred to backlog under #1618 FORCE RLS (see
+	// RowScopeAllUnsupportedError). GetBySeq has NO production caller today (chain
+	// replay / conformance / startup tail-verify only).
 	GetBySeq(ctx context.Context, vis tenant.RowVisibility, seq int64) (*Entry, error)
 
 	// Query lists entries matching AuditFilters using keyset cursor pagination
@@ -218,7 +223,8 @@ type Store interface {
 	// whose actor_id matches the obligation subject. Tenant scope returns all
 	// matching rows in t. vis must be valid (NewRowVisibility must succeed). A vis
 	// carrying RowScopeAll is fail-closed on every backend
-	// (RowScopeAllUnsupportedError) until the audited super-admin path lands (PR-5).
+	// (RowScopeAllUnsupportedError) — cross-tenant audit read is deferred to backlog
+	// under #1618 FORCE RLS (PR-5 #1343 landed the derivation, not the audit path).
 	Query(ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, filters AuditFilters, params query.ListParams) ([]*Entry, error)
 
 	// Verify re-computes the HMAC for each entry in [fromSeq, toSeq] and checks

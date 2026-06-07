@@ -101,12 +101,23 @@ construction.
   the `Classifier`. A migrated `CellRule` that scans the whole workspace uses the
   `Production` scope (now workspace-spanning); the ratchet baseline is untouched.
 - **#1304** (extract archtest to an independent module / FreezingArchRule
-  baseline / ratchet Hard-ization): NOT done here. archtest stays in the root
-  module, so the `hack/verify-archtest*.sh` three execution modes need **no
-  change** — they run `go test ./tools/archtest` (root module) and the workspace
-  awareness is internal Go. When archtest is later extracted, its own production
-  scan of the workspace still works via `WorkspaceRoot()` (it walks up to the
-  repo `go.work`, not the nearest go.mod).
+  baseline / ratchet Hard-ization): three sub-items, NONE done in *this* PR but
+  reconciled later —
+  - *extract to independent module*: → reassigned to **#1561** (go.work P6 tools
+    module), out of #1304 scope.
+  - *external FreezingArchRule `BaselinePath`*: still **#1304 open, demand-gated**
+    (needs a real brownfield external adopter; greenfield does not).
+  - *ratchet Hard-ization + downstream residual*: **done (#1304)** — the
+    `module_path_funnel.baseline` reached EMPTY (#1302 migration complete), so the
+    bare-literal ratchet is a Medium pure-ban terminal state (NOT Hard — archtest
+    CI-time, permanent Go ceiling); and the `no-reconstruction` sub-check upgraded
+    from AST flatten to **typed const-eval** (closing const-of-const / cross-package
+    residual — downstream Hard), with runtime string ops the permanent residual.
+  archtest still stays in the root module, so the `hack/verify-archtest*.sh` three
+  execution modes need **no change** — they run `go test ./tools/archtest` (root
+  module) and the workspace awareness is internal Go. When archtest is later
+  extracted (#1561), its own production scan of the workspace still works via
+  `WorkspaceRoot()` (it walks up to the repo `go.work`, not the nearest go.mod).
 
 ## Operational notes (P1+ when satellites land)
 

@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ghbvf/gocell/hack/automation/schema/pr-meta.v1.json",
+  "title": "gocell-pr-meta v1",
+  "description": "Machine-readable provenance + dispatch protocol carried in a hidden HTML comment after the human-readable footer of every pm:ship / pm:fix / pm:pr-review PR comment. Wire form: a single-line `<!-- gocell-pr-meta:v1 <standard-base64(JSON)> -->`. Standard base64 (alphabet A-Za-z0-9+/=, never `-`) is used instead of base64url because CommonMark forbids `--` inside an HTML comment body; base64url's `-` could emit `--` and demote the whole block to visible text. Consumed by the #935 / #1657 local executors (Codex review daemon, Claude fix monitor) to dispatch the next review<->fix step and enforce the 3-round circuit breaker. Produced solely by hack/automation/pr-meta.sh emit, which derives `schema`, `cycle.exhausted`, `next`, and `idempotencyKey` from the producer-supplied facts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "repo", "pr", "kind", "phase", "tool",
+    "baseRef", "headRef", "headSha", "session", "worktree",
+    "verdict", "findings", "cycle", "next", "idempotencyKey"
+  ],
+  "properties": {
+    "schema": {
+      "const": "gocell-pr-meta/v1",
+      "description": "Schema version discriminator. The marker token `gocell-pr-meta:v1` mirrors this."
+    },
+    "repo": {
+      "type": "string",
+      "pattern": "^[^/ ]+/[^/ ]+$",
+      "description": "owner/name slug, e.g. ghbvf/gocell."
+    },
+    "pr": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "PR number."
+    },
+    "kind": {
+      "enum": ["ship", "fix", "pr-review"],
+      "description": "Comment marker family (pm:ship / pm:fix / pm:pr-review)."
+    },
+    "phase": {
+      "enum": ["ship", "review", "fix", "check"],
+      "description": "Pipeline stage. pr-review uses phase to distinguish a normal review (review) from a --check verification (check)."
+    },
+    "tool": {
+      "enum": ["claude-code", "codex"],
+      "description": "Tool that produced the comment."
+    },
+    "baseRef": {
+      "type": "string",
+      "minLength": 1,
+      "description": "PR base branch (develop)."
+    },
+    "headRef": {
+      "type": "string",
+      "minLength": 1,
+      "description": "PR head branch name."
+    },
+    "headSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "Full head commit SHA. Freshness anchor: a consumer compares this against the live headRefOid and discards a stale block."
+    },
+    "session": {
+      "type": ["string", "null"],
+      "description": "Producer session id, or null if unavailable."
+    },
+    "worktree": {
+      "type": ["string", "null"],
+      "description": "Producer worktree path, or null when working on develop directly."
+    },
+    "verdict": {
+      "enum": ["needs-review-again", "approved", "changes-requested", "ready", "needs-check-fix"],
+      "description": "Workflow conclusion, bound to the real label state machine (pr-status/* and pr-review/* — see .github/project-template/PROJECT.md §2.5/§5)."
+    },
+    "findings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "fixed", "unresolved", "blocking", "byP", "byCx"],
+      "description": "Machine summary of this round's findings.",
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "fixed": { "type": "integer", "minimum": 0, "description": "Cx1/Cx2 IN_SCOPE auto-fixed this round." },
+        "unresolved": { "type": "integer", "minimum": 0, "description": "Cx3/Cx4 + deferred/OOS left for human." },
+        "blocking": { "type": "integer", "minimum": 0, "description": "Must-fix-before-merge count (typically unresolved P0/P1)." },
+        "byP": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["p0", "p1", "p2", "p3"],
+          "properties": {
+            "p0": { "type": "integer", "minimum": 0 },
+            "p1": { "type": "integer", "minimum": 0 },
+            "p2": { "type": "integer", "minimum": 0 },
+            "p3": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "byCx": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cx1", "cx2", "cx3", "cx4"],
+          "properties": {
+            "cx1": { "type": "integer", "minimum": 0 },
+            "cx2": { "type": "integer", "minimum": 0 },
+            "cx3": { "type": "integer", "minimum": 0 },
+            "cx4": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "cycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["round", "maxRounds", "exhausted"],
+      "description": "Circuit breaker for the automated review<->fix loop. round = number of completed fix rounds for this PR; exhausted = round >= maxRounds. When exhausted and verdict is changes-requested, emit forces next.agent=human so daemons stop dispatching and escalate.",
+      "properties": {
+        "round": { "type": "integer", "minimum": 0 },
+        "maxRounds": { "type": "integer", "minimum": 1 },
+        "exhausted": { "type": "boolean" }
+      }
+    },
+    "next": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent", "command", "sandbox", "triggerLabel", "requiresSameHeadSha"],
+      "description": "Dispatch directive, derived by emit from (verdict, cycle). Never hand-written by producers.",
+      "properties": {
+        "agent": {
+          "enum": ["claude", "codex", "human", null],
+          "description": "Executor that handles the next step, or null for a terminal verdict (approved/ready)."
+        },
+        "command": {
+          "type": ["string", "null"],
+          "description": "Advisory command the next agent runs, or null."
+        },
+        "sandbox": {
+          "type": "boolean",
+          "description": "Whether the next step should run sandboxed."
+        },
+        "triggerLabel": {
+          "type": ["string", "null"],
+          "description": "The pr-status/* or pr-review/* label whose presence triggers the next executor, or null."
+        },
+        "requiresSameHeadSha": {
+          "type": "boolean",
+          "description": "Whether the next executor must verify headSha is unchanged before acting."
+        }
+      }
+    },
+    "idempotencyKey": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Derived {repo}#{pr}@{headSha}:{kind}/{phase}#{round}. Lets an executor dedup repeated dispatch on the same comment."
+    }
+  }
+}

@@ -18,9 +18,10 @@ package grpc
 //     spec whose callback registers the same service name panics before grpc-go's own
 //     fatal (which gives a less helpful message about cross-cell collision).
 //
-//  4. The attribution map built here (method→cellID) is the foundation for PR-9
-//     (gRPC metrics cell label) and PR-10 (streaming interceptors). PR-7 does not
-//     wire it into any interceptor — it only exposes CellIDForMethod.
+//  4. The attribution map built here (method→cellID) is consumed by PR-9 (#1152):
+//     CellIDForMethod feeds interceptor.UnaryCellAttribution (via Deps.Registrar),
+//     which writes ctxkeys.CellID so the gRPC metrics cell label and access log
+//     reflect the owning cell. Streaming interceptors (PR-10) reuse the same map.
 //
 // ref: zeromicro/go-zero zrpc/internal/rpcserver.go — RegisterFn (Form B precedent)
 // ref: go-kratos/kratos transport/grpc/server.go — pb.RegisterXxxServer before Start
@@ -64,19 +65,38 @@ type serviceOwner struct {
 	contractID string
 }
 
-// NewServiceRegistrar wraps inner (typically *grpc.Server) into a ServiceRegistrar.
-// inner must not be nil — both bare-nil and typed-nil are rejected with a
-// panicregister.Approved("grpc-registrar-nil-inner", …) panic (B-class programmer error).
-func NewServiceRegistrar(inner grpc.ServiceRegistrar) *ServiceRegistrar {
-	if validation.IsNilInterface(inner) {
-		panic(panicregister.Approved("grpc-registrar-nil-inner",
-			errcode.Assertion("NewServiceRegistrar: inner must not be nil")))
-	}
+// NewServiceRegistrar builds a ServiceRegistrar with an empty attribution map and
+// no delegation target (two-phase, Option 3 #1152). The composition root creates
+// it FIRST so reg.CellIDForMethod can be handed to the unary interceptor chain —
+// which is composed BEFORE the gRPC server exists — and binds the delegation
+// target via BindServer once grpc.NewServer has been constructed with that chain.
+// CellIDForMethod is callable immediately (the map exists from construction); it
+// returns matches once Register has populated it during the bootstrap drain.
+func NewServiceRegistrar() *ServiceRegistrar {
 	return &ServiceRegistrar{
-		inner:   inner,
 		methods: make(map[string]string),
 		names:   make(map[string]serviceOwner),
 	}
+}
+
+// BindServer sets the delegation target (typically *grpc.Server) that Register
+// forwards RegisterService calls to. It must be called exactly once, during
+// adapter construction, before any Register call (the bootstrap drain runs in
+// phase7b, after New returns). inner must not be nil and BindServer must not be
+// called twice — both are B-class programmer errors raised via
+// panicregister.Approved.
+func (r *ServiceRegistrar) BindServer(inner grpc.ServiceRegistrar) {
+	if validation.IsNilInterface(inner) {
+		panic(panicregister.Approved("grpc-registrar-nil-inner",
+			errcode.Assertion("BindServer: inner must not be nil")))
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.inner != nil {
+		panic(panicregister.Approved("grpc-registrar-rebind",
+			errcode.Assertion("BindServer: delegation target already bound")))
+	}
+	r.inner = inner
 }
 
 // Register invokes the spec.Register callback via an attribution-aware,
@@ -133,6 +153,17 @@ func (r *ServiceRegistrar) Register(spec cell.GRPCServiceSpec) error {
 	// Post-Serve registration safety is a PR-9 concern (out of scope here).
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// Register before BindServer is a wiring bug: the delegation target is
+	// unbound, so RegisterService would nil-deref. Fail-fast (the adapter binds
+	// the gRPC server in New, before the phase7b drain ever calls Register).
+	if r.inner == nil {
+		panic(panicregister.Approved("grpc-registrar-unbound",
+			errcode.Assertion(
+				"grpc: ServiceRegistrar.Register called before BindServer "+
+					"(contractID=%q, cellID=%q); bind the gRPC server before draining cell services",
+				spec.ContractID, spec.CellID)))
+	}
 
 	scoped := &cellScopedRegistrar{
 		inner:      r.inner,
