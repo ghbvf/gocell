@@ -361,8 +361,12 @@ func handleRequireRole(
 				slog.Any("error", err),
 				slog.String("subject", p.Subject),
 			)
-			httputil.WriteError(r.Context(), w,
-				errcode.New(errcode.KindInternal, errcode.ErrInternal, "internal server error"))
+			// Fail-closed: the Authorizer returns an errcode-classified error
+			// (KindUnavailable when the policy store is down → 503,
+			// KindPermissionDenied when the request lacks a tenant scope → 403).
+			// Pass it through so httputil maps the correct status instead of a
+			// blanket 500. WriteError redacts internal detail per status.
+			httputil.WriteError(r.Context(), w, err)
 			return
 		}
 		if allowed {
@@ -392,11 +396,11 @@ func hasMatchingRoleList(roleList []string, roleSet map[string]bool) bool {
 
 func checkAuthorizer(authorizer Authorizer, r *http.Request, subject string, roles []string) (bool, error) {
 	for _, role := range roles {
-		allowed, err := authorizer.Authorize(r.Context(), subject, r.URL.Path, role)
+		dec, err := authorizer.Authorize(r.Context(), subject, r.URL.Path, role)
 		if err != nil {
 			return false, err
 		}
-		if allowed {
+		if dec.IsAllow() {
 			return true, nil
 		}
 	}
