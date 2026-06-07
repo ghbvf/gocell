@@ -1,17 +1,26 @@
 package outbox
 
 import (
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/runtime/command"
 )
 
 // WithCommandDispatch wires the in-process async command bus into the relay
 // (#1667 / ADR docs/architecture/202606040550-1044-adr-command-bus-dispatch-funnel.md
 // §5 ④). dispatch maps each command id to its generated DispatchAsync; reg is
-// the shared command.Registry the handlers were registered into. When a claimed
-// entry's RoutingTopic equals a key in dispatch, publishBatch routes it to the
-// mapped AsyncDispatchFunc in-process (decode payload → LookupHandler → handler)
-// instead of marshaling + publishing to the broker. Events (and any topic not in
-// the map) are unaffected.
+// the shared command.Registry the handlers were registered into; claimer is the
+// two-phase idempotency Claimer that wraps every in-process command dispatch
+// (Claim → dispatch → Commit/Release) so an at-least-once source event redelivery
+// cannot enqueue the same command twice (#1698). When a claimed entry's
+// RoutingTopic equals a key in dispatch, publishBatch routes it to the mapped
+// AsyncDispatchFunc in-process (decode payload → LookupHandler → handler) instead
+// of marshaling + publishing to the broker. Events (and any topic not in the map)
+// are unaffected.
+//
+// claimer is a REQUIRED positional dependency: it is compile-time inexpressible to
+// "wire command dispatch but skip deduplication". A nil claimer combined with a
+// non-empty dispatch map is rejected at Start() (fail-closed); see the nil-guard
+// in Start.
 //
 // Composition root usage (the dispatch values MUST be generated DispatchAsync
 // symbols — archtest COMMAND-ASYNC-DISPATCH-CALLER-01 locks this):
@@ -20,19 +29,20 @@ import (
 //	_ = enqueue.Register(reg, handler)
 //	relay.WithCommandDispatch(reg, map[command.CommandID]command.AsyncDispatchFunc{
 //	    enqueue.DispatchID: enqueue.DispatchAsync,
-//	})
+//	}, claimer)
 //
 // This is a replace-semantics builder option, NOT accumulating: each call sets
-// (does not merge) cmdRegistry + cmdDispatch, so a second call REPLACES the whole
-// table (last-write-wins) — pass all commands in one call. A nil reg or an
-// empty/all-nil dispatch map is a silent no-op (the relay keeps operating
-// event-only, leaving any prior table untouched), and nil entries within the map
-// are dropped. reg and the map values are concrete (pointer / func) types, so
-// plain == nil is the correct nil check here (validation.IsNilInterface guards
-// interface-typed values). Must be called before Start().
+// (does not merge) cmdRegistry + cmdDispatch + cmdClaimer, so a second call
+// REPLACES the whole table (last-write-wins) — pass all commands in one call. A
+// nil reg or an empty/all-nil dispatch map is a silent no-op (the relay keeps
+// operating event-only, leaving any prior table untouched), and nil entries within
+// the map are dropped. reg and the map values are concrete (pointer / func) types,
+// so plain == nil is the correct nil check here (validation.IsNilInterface guards
+// the interface-typed claimer at Start). Must be called before Start().
 func (r *Relay) WithCommandDispatch(
 	reg *command.Registry,
 	dispatch map[command.CommandID]command.AsyncDispatchFunc,
+	claimer idempotency.Claimer,
 ) *Relay {
 	if reg == nil || len(dispatch) == 0 {
 		return r
@@ -49,6 +59,7 @@ func (r *Relay) WithCommandDispatch(
 	}
 	r.cmdRegistry = reg
 	r.cmdDispatch = m
+	r.cmdClaimer = claimer
 	return r
 }
 

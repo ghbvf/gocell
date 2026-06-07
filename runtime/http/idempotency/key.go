@@ -58,6 +58,22 @@ func (k IdempotencyKey) Namespace() string { return k.ns }
 // Key returns the per-request key within the namespace.
 func (k IdempotencyKey) Key() string { return k.key }
 
+// Flat flattens the sealed (ns, key) pair into the single string key that
+// kernel/idempotency.Claimer.Claim(ctx, key string, …) consumes. It is the SOLE
+// flattening exit for an IdempotencyKey into the claimer string-key domain.
+//
+// Encoding: ns + "\x00" + key. The NUL (\x00) separator is consistent with the
+// NUL separators already embedded inside ns/key by DeriveKey / DeriveCommandKey,
+// and tenant ids / command ids are opaque tokens free of NUL, so the boundary is
+// unambiguous (subject="alic",rest="e:x" never collides with subject="alice",
+// rest="x" — a colon separator would).
+//
+// Node-agnostic (assembly-scope) invariant — inherited from the type godoc: the
+// flat key carries NO pod/listener/cell dimension; it is derived ONLY from the
+// (ns,key) pair, which is itself derived ONLY from request + principal data. The
+// claimer dedup domain is therefore assembly-wide, matching the replay store.
+func (k IdempotencyKey) Flat() string { return k.ns + "\x00" + k.key }
+
 // noTenantSentinel is the namespace substituted when the authenticated principal
 // carries no tenant (e.g. a service principal: callerCellID is not a tenant).
 const noTenantSentinel = "_notenant"

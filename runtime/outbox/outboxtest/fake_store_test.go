@@ -339,3 +339,50 @@ func TestFakeStore_ReclaimStale_DeterministicBatchSelection(t *testing.T) {
 		t.Errorf("stillClaiming = %v, want %v", stillClaiming, wantStill)
 	}
 }
+
+// TestFakeStore_Write_InsertsPending verifies the kout.Writer implementation:
+// Write inserts a single pending row keyed by entry ID, so a producer using the
+// standard WriterEmitter path and a relay polling the same store interoperate.
+func TestFakeStore_Write_InsertsPending(t *testing.T) {
+	s := outboxtest.NewFakeStore()
+
+	entry, err := kout.EntryScan{
+		ID:         "wr-1",
+		EventType:  "command.x.v1",
+		Topic:      "command.x.v1",
+		Payload:    []byte(`{"x":1}`),
+		CreatedAt:  time.Now(),
+		OccurredAt: time.Now(),
+	}.ToEntry()
+	if err != nil {
+		t.Fatalf("ToEntry: %v", err)
+	}
+
+	if err := s.Write(context.Background(), entry); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	rows := s.Snapshot()
+	if len(rows) != 1 {
+		t.Fatalf("Snapshot len = %d, want 1", len(rows))
+	}
+	row := rows[0]
+	if row.Entry.ID() != "wr-1" {
+		t.Errorf("row ID = %q, want wr-1", row.Entry.ID())
+	}
+	if row.Status != kout.StatePending {
+		t.Errorf("row Status = %v, want StatePending", row.Status)
+	}
+	if row.Attempts != 0 {
+		t.Errorf("row Attempts = %d, want 0", row.Attempts)
+	}
+	if row.LeaseID != "" {
+		t.Errorf("row LeaseID = %q, want empty", row.LeaseID)
+	}
+}
+
+// TestFakeStore_Write_SatisfiesKoutWriter is a compile-time + behavioral anchor
+// that FakeStore satisfies kout.Writer (the WriterEmitter dependency).
+func TestFakeStore_Write_SatisfiesKoutWriter(t *testing.T) {
+	var _ kout.Writer = (*outboxtest.FakeStore)(nil)
+}

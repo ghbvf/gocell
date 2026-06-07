@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/healthz"
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -75,6 +76,13 @@ const (
 type publishResult struct {
 	entry ClaimedEntry
 	err   error
+	// receipt is the live idempotency lease handle for a command entry that was
+	// dispatched in-process under a freshly acquired claim (ClaimAcquired). It is
+	// nil for events, for non-acquired command claims (ClaimDone / ClaimBusy /
+	// missing-identity / Claim-infra-error), and for any path that did not take the
+	// command branch. writeBack Commits it on success and Releases it on failure;
+	// nil receipts are skipped (NonAcquiredReceipt is deliberately not stored here).
+	receipt idempotency.Receipt
 }
 
 // pollStats records per-poll-cycle counters for observability.
@@ -167,6 +175,13 @@ type Relay struct {
 	// relay_command.go.
 	cmdRegistry *command.Registry
 	cmdDispatch map[command.CommandID]command.AsyncDispatchFunc
+
+	// cmdClaimer wraps every in-process command dispatch in the two-phase
+	// idempotency protocol (Claim → dispatch → Commit/Release) so an at-least-once
+	// source-event redelivery cannot enqueue the same command twice (#1698). It is
+	// REQUIRED whenever cmdDispatch is non-empty; Start fails fast on a nil claimer
+	// with a non-empty dispatch map.
+	cmdClaimer idempotency.Claimer
 }
 
 // WithPendingDepthObserver wires a PendingDepthObserver that receives the
@@ -238,6 +253,16 @@ func NewRelay(clk clock.Clock, store Store, pub kout.Publisher, cfg RelayConfig)
 func (r *Relay) Start(ctx context.Context) error {
 	if !r.state.CompareAndSwap(int32(relayStopped), int32(relayStarting)) {
 		return errcode.New(errcode.KindConflict, errRelayOp, "outbox relay already started")
+	}
+
+	// Fail-closed: command dispatch must never run without a Claimer (#1698).
+	// A non-empty dispatch map with a nil claimer would dispatch commands with no
+	// deduplication, letting an at-least-once source event enqueue the same command
+	// twice. Reset state so a corrected re-Start is possible.
+	if len(r.cmdDispatch) > 0 && validation.IsNilInterface(r.cmdClaimer) {
+		r.state.Store(int32(relayStopped))
+		return errcode.New(errcode.KindInvalid, errRelayOp,
+			"outbox relay: command dispatch wired without claimer")
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -595,10 +620,9 @@ func (r *Relay) publishBatch(ctx context.Context, entries []ClaimedEntry) []publ
 	results := make([]publishResult, len(entries))
 	for i, e := range entries {
 		if fn, ok := r.commandDispatchFor(e.RoutingTopic()); ok {
-			// Command entry: dispatch to its in-process handler instead of
-			// publishing to the broker. fn is a generated DispatchAsync
-			// (COMMAND-ASYNC-DISPATCH-CALLER-01 locks the map values).
-			results[i] = publishResult{entry: e, err: fn(ctx, r.cmdRegistry, e.Entry)}
+			// Command entry: dispatch to its in-process handler (wrapped in the
+			// two-phase Claimer protocol) instead of publishing to the broker.
+			results[i] = r.dispatchCommand(ctx, e, fn)
 			continue
 		}
 		payload, marshalErr := kout.MarshalEnvelope(e.Entry)
@@ -616,6 +640,69 @@ func (r *Relay) publishBatch(ctx context.Context, entries []ClaimedEntry) []publ
 	}
 	return results
 }
+
+// commandLeaseTTL / commandDoneTTL are the processing-lease and done-key TTLs the
+// relay passes to the command Claimer. They reuse the framework idempotency
+// defaults (5m lease / 24h done) — the lease covers a single in-process dispatch
+// (sub-second) with generous headroom, and the done key dedupes redeliveries of
+// the same source event across the standard 24h idempotency window. They are not
+// exposed as public RelayConfig fields (no real tuning need today, YAGNI).
+const (
+	commandLeaseTTL = idempotency.DefaultLeaseTTL // 5m
+	commandDoneTTL  = idempotency.DefaultTTL      // 24h
+)
+
+// dispatchCommand wraps a single in-process command dispatch in the two-phase
+// Claimer protocol (#1698). Extracted from publishBatch to keep that loop under
+// the cognitive-complexity ceiling. The returned publishResult settles through
+// the shared writeBack:
+//
+//   - missing identity → permanent error → MarkDead (fail-closed; an entry with no
+//     idempotency identity cannot be safely deduplicated).
+//   - Claim infra error → transient error → MarkRetry (no permanent tag).
+//   - ClaimAcquired → dispatch + carry the live receipt (Commit on success,
+//     Release on failure).
+//   - ClaimDone → already processed → success without dispatch (command deduped).
+//   - ClaimBusy → another worker holds the claim → transient error → MarkRetry.
+//   - unknown state → permanent error → MarkDead (fail-closed).
+func (r *Relay) dispatchCommand(ctx context.Context, e ClaimedEntry, fn command.AsyncDispatchFunc) publishResult {
+	key, ok := command.ClaimKeyFromEntry(e.Entry)
+	if !ok {
+		return publishResult{entry: e, err: kout.NewPermanentError(
+			errcode.New(errcode.KindInvalid, errRelayOp,
+				"outbox relay: command entry missing idempotency identity"))}
+	}
+
+	state, receipt, err := r.cmdClaimer.Claim(ctx, key, commandLeaseTTL, commandDoneTTL)
+	if err != nil {
+		// Claim infrastructure failure is transient — retry, do not dead-letter.
+		return publishResult{entry: e, err: err}
+	}
+
+	switch state {
+	case idempotency.ClaimAcquired:
+		// fn is a generated DispatchAsync (COMMAND-ASYNC-DISPATCH-CALLER-01 locks
+		// the map values). Carry the live receipt so writeBack settles the lease.
+		return publishResult{entry: e, err: fn(ctx, r.cmdRegistry, e.Entry), receipt: receipt}
+	case idempotency.ClaimDone:
+		// Already processed by an earlier delivery — skip dispatch, settle the row
+		// as published (the command is deduped, not re-enqueued). No live receipt.
+		return publishResult{entry: e}
+	case idempotency.ClaimBusy:
+		// Another worker holds the claim — transient, retry later.
+		return publishResult{entry: e, err: errCommandDispatchBusy}
+	default:
+		return publishResult{entry: e, err: kout.NewPermanentError(
+			errcode.New(errcode.KindInternal, errRelayOp,
+				"outbox relay: command claim returned unknown state"))}
+	}
+}
+
+// errCommandDispatchBusy is the transient sentinel returned when the command
+// Claimer reports ClaimBusy (another worker is mid-dispatch). It routes through
+// the normal retry path (MarkRetry) so the entry is re-attempted later.
+var errCommandDispatchBusy = errcode.New(errcode.KindConflict, errRelayOp,
+	"outbox relay: command dispatch busy; another worker holds the claim")
 
 // writeBackResults updates entry statuses based on publish outcomes.
 // Each Store method call uses its own short transaction with an optimistic
@@ -668,6 +755,18 @@ func (r *Relay) writeBackOne(ctx context.Context, res publishResult, stats *poll
 	} else {
 		stats.published++
 	}
+	// Command dispatch settled successfully — Commit the idempotency lease so a
+	// future redelivery of the same source event is deduped (ClaimDone). Commit
+	// failure is logged, not fatal: the row is already MarkPublished (command
+	// consumed); the done-key simply may not persist (lease TTL still bounds it).
+	// receipt is nil for events and for non-acquired command claims.
+	if res.receipt != nil {
+		if err := res.receipt.Commit(ctx); err != nil {
+			slog.Warn("outbox relay: command idempotency Commit failed",
+				slog.String("entry_id", res.entry.ID()),
+				slog.Any("error", err))
+		}
+	}
 	return nil
 }
 
@@ -680,6 +779,19 @@ func (r *Relay) writeBackOne(ctx context.Context, res publishResult, stats *poll
 // canonical outcome — and we emit a Warn so operators can correlate stats
 // drift with real reclaim activity. ref: graphile/worker complete_job pattern.
 func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats *pollStats) error {
+	// Release the command idempotency lease so the entry can be re-claimed on the
+	// next attempt (failed dispatch must NOT leave a held lease that would make the
+	// retry see ClaimBusy/ClaimDone). receipt is nil for events and for non-acquired
+	// command claims. Release failure is logged, not fatal. ref: ConsumerBase
+	// settle semantics — Reject/Requeue → Receipt.Release.
+	if res.receipt != nil {
+		if err := res.receipt.Release(ctx); err != nil {
+			slog.Warn("outbox relay: command idempotency Release failed",
+				slog.String("entry_id", res.entry.ID()),
+				slog.Any("error", err))
+		}
+	}
+
 	newAttempts := res.entry.Attempts + 1
 	errMsg := SanitizeError(res.err.Error(), 1000)
 

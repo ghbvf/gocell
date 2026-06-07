@@ -19,9 +19,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/command"
 )
+
+// newCommandClaimer builds an in-memory Claimer for command-dispatch tests.
+func newCommandClaimer() idempotency.Claimer {
+	return idempotency.NewInMemClaimer(clock.Real())
+}
 
 // recordingPublisher captures the topics it was asked to publish so a test can
 // assert command entries are NOT published to the broker.
@@ -37,27 +43,36 @@ func (p *recordingPublisher) Publish(_ context.Context, topic string, _ []byte) 
 func (p *recordingPublisher) Close(_ context.Context) error { return nil }
 
 // claimedEntry builds a ClaimedEntry whose RoutingTopic == topic (EventType and
-// Topic both set) with the given JSON payload, for direct publishBatch tests.
+// Topic both set) with the given JSON payload, for direct publishBatch tests. The
+// entry carries a full command idempotency identity (AggregateID=subject +
+// CommandIDMetadataKey metadata) keyed off id so ClaimKeyFromEntry succeeds.
 func claimedEntry(t *testing.T, id, topic, payload string) ClaimedEntry {
 	t.Helper()
 	now := time.Now()
 	e, err := kout.EntryScan{
-		ID: id, EventType: topic, Topic: topic, Payload: []byte(payload),
-		CreatedAt: now, OccurredAt: now,
+		ID: id, AggregateID: "subject-" + id, EventType: topic, Topic: topic,
+		Payload:    []byte(payload),
+		Metadata:   map[string]string{command.CommandIDMetadataKey: "cmd-" + id},
+		CreatedAt:  now,
+		OccurredAt: now,
 	}.ToEntry()
 	require.NoError(t, err)
 	return ClaimedEntry{Entry: e, LeaseID: "lease-1"}
 }
 
 // seedPendingCommand seeds a pending command entry (RoutingTopic == topic) into
-// the minimalStore (defined in relay_internal_test.go, same package).
+// the minimalStore (defined in relay_internal_test.go, same package). The entry
+// carries a full command idempotency identity so ClaimKeyFromEntry succeeds.
 func (s *minimalStore) seedPendingCommand(id, topic, payload string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	past := time.Now().Add(relayStaleAge)
 	entry, err := kout.EntryScan{
-		ID: id, EventType: topic, Topic: topic, Payload: []byte(payload),
-		CreatedAt: past, OccurredAt: past,
+		ID: id, AggregateID: "subject-" + id, EventType: topic, Topic: topic,
+		Payload:    []byte(payload),
+		Metadata:   map[string]string{command.CommandIDMetadataKey: "cmd-" + id},
+		CreatedAt:  past,
+		OccurredAt: past,
 	}.ToEntry()
 	if err != nil {
 		panic("relay_command_test.go seedPendingCommand: " + err.Error())
@@ -85,7 +100,7 @@ func TestPublishBatch_CommandDispatchVsBroker(t *testing.T) {
 			assert.Same(t, reg, gotReg, "relay must pass its own registry to the dispatch func")
 			return nil
 		},
-	})
+	}, newCommandClaimer())
 
 	results := r.publishBatch(context.Background(), []ClaimedEntry{
 		claimedEntry(t, "c1", cmdID, `{"deviceId":"d1"}`),
@@ -111,7 +126,7 @@ func TestPublishBatch_CommandDispatchErrorPropagates(t *testing.T) {
 	r.pub = &recordingPublisher{}
 	r.WithCommandDispatch(command.NewRegistry(), map[command.CommandID]command.AsyncDispatchFunc{
 		cmdID: func(context.Context, *command.Registry, kout.Entry) error { return sentinel },
-	})
+	}, newCommandClaimer())
 
 	results := r.publishBatch(context.Background(), []ClaimedEntry{claimedEntry(t, "c1", cmdID, `{}`)})
 	require.Len(t, results, 1)
@@ -131,7 +146,7 @@ func TestPollOnce_CommandDispatchSettlesPublished(t *testing.T) {
 	r := NewRelay(clock.Real(), store, &recordingPublisher{}, RelayConfig{}.WithDefaults())
 	r.WithCommandDispatch(command.NewRegistry(), map[command.CommandID]command.AsyncDispatchFunc{
 		cmdID: func(context.Context, *command.Registry, kout.Entry) error { called++; return nil },
-	})
+	}, newCommandClaimer())
 
 	require.NoError(t, r.pollOnce(context.Background()))
 	assert.Equal(t, 1, called, "command handler must be dispatched once")
@@ -154,7 +169,7 @@ func TestPollOnce_CommandDispatchRetriesOnError(t *testing.T) {
 		RelayConfig{MaxAttempts: 5, BaseRetryDelay: time.Millisecond, MaxRetryDelay: time.Second}.WithDefaults())
 	r.WithCommandDispatch(command.NewRegistry(), map[command.CommandID]command.AsyncDispatchFunc{
 		cmdID: func(context.Context, *command.Registry, kout.Entry) error { return errors.New("boom") },
-	})
+	}, newCommandClaimer())
 
 	require.NoError(t, r.pollOnce(context.Background()))
 	store.mu.Lock()
@@ -171,15 +186,17 @@ func TestWithCommandDispatch_NoopGuards(t *testing.T) {
 	t.Parallel()
 	fn := func(context.Context, *command.Registry, kout.Entry) error { return nil }
 
+	claimer := newCommandClaimer()
 	r := &Relay{}
-	r.WithCommandDispatch(nil, map[command.CommandID]command.AsyncDispatchFunc{"command.x.v1": fn})
+	r.WithCommandDispatch(nil, map[command.CommandID]command.AsyncDispatchFunc{"command.x.v1": fn}, claimer)
 	_, ok := r.commandDispatchFor("command.x.v1")
 	assert.False(t, ok, "nil registry → no command dispatch wired")
 	assert.Nil(t, r.cmdDispatch)
+	assert.Nil(t, r.cmdClaimer, "no-op must not store the claimer")
 
-	r.WithCommandDispatch(command.NewRegistry(), nil)
+	r.WithCommandDispatch(command.NewRegistry(), nil, claimer)
 	assert.Nil(t, r.cmdDispatch, "empty map → no-op")
 
-	r.WithCommandDispatch(command.NewRegistry(), map[command.CommandID]command.AsyncDispatchFunc{"command.x.v1": nil})
+	r.WithCommandDispatch(command.NewRegistry(), map[command.CommandID]command.AsyncDispatchFunc{"command.x.v1": nil}, claimer)
 	assert.Nil(t, r.cmdDispatch, "all-nil entries dropped → no-op")
 }
