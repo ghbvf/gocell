@@ -5,13 +5,13 @@
 // WEBHOOK-HMAC-FUNNEL-01 — kernel/webhook HMAC signing funnel (KERNEL-WEBHOOK-01).
 //
 //   - A1 (downstream Hard): crypto/hmac.New has exactly one callsite in the
-//     kernel/webhook package — the computeMAC function in signer.go. The check is
-//     FUNCTION-level, not file-level: an hmac.New in any other function (even
-//     inside signer.go) fails. This also closes the package-internal upstream
-//     blind spot: any new struct that wants to sign MUST call hmac.New, which is
-//     allowlisted to computeMAC, so an unsealed internal holder cannot produce a
-//     signature undetected. Detection: ResolvePackageRef(callee) == crypto/hmac.New
-//     AND (file basename != signer.go OR enclosing func != computeMAC).
+//     kernel/webhook package — the computeMAC function. The check is
+//     FUNCTION-IDENTITY level via go/types FullName (file-independent; #1493): an
+//     hmac.New whose enclosing func FullName != computeMAC's fails, and a
+//     same-named function in another package cannot inherit the allowance
+//     (mirrors WEBHOOK-SSRF-GUARD-01/A2). Detection: ResolvePackageRef(callee) ==
+//     crypto/hmac.New AND ResolveEnclosingFunc(call).FullName() !=
+//     hmacSanctionedComputeMACFunc.
 //   - A2 (downstream Hard): signature comparison must use crypto/hmac.Equal or
 //     crypto/subtle.ConstantTimeCompare. The non-constant-time comparison callees
 //     bytes.Equal / bytes.Compare / slices.Equal / reflect.DeepEqual are banned in
@@ -19,12 +19,27 @@
 //     a flaky timing test. Detection: ResolvePackageRef(callee) ∈ the banned set.
 //   - A3 (upstream Hard external / Medium internal): the Signer and Verifier
 //     interfaces each carry an unexported sealed() marker method, so
-//     package-external implementations are a compile error (Hard). Package-internal
-//     new holders are not blocked by sealing (Medium) — covered transitively by
-//     A1. Explicit Hard-ization of the internal axis (unexported method-set
-//     interface + private construction, per the SPAN-SETATTR-HOLDER-SEAL #851
-//     precedent) is tracked in gh #1243. Detection: the Signer/Verifier interface
-//     type decls must contain an unexported method.
+//     package-external implementations are a compile error (Hard external).
+//     Package-internal new holders are NOT blocked by sealing — and contrary to a
+//     prior overclaim, A1 does NOT transitively cover them: A1 locks only
+//     crypto/hmac.New, not reuse of the package-level computeMAC helper, so a
+//     rogue in-package struct could call computeMAC and produce a valid signature
+//     without its own hmac.New. That internal axis is instead covered by A4
+//     (computeMAC caller-allowlist, Medium). True type-system Hard for the
+//     internal axis is a PERMANENT Go ceiling (in-package code can always declare
+//     sealed(), read Source.secret, and call computeMAC) — same family as #851 /
+//     #893 / #1282 / #1375; #1243 is relabeled won't-do and named here as that
+//     ceiling's tracker. Detection: the Signer/Verifier interface type decls must
+//     contain an unexported method.
+//   - A4 (Medium, internal axis; #1243): every USE of the package-internal
+//     computeMAC symbol — direct call, parenthesized call, OR function-value
+//     capture (`macFn := computeMAC`; the bypass review #1733 F4 flagged) — must
+//     have an enclosing func whose go/types FullName ∈ {hmacSigner.Sign,
+//     hmacVerifier.Verify}. This is the actual enforcement of "only the sanctioned
+//     signer/verifier may compute a MAC", closing the A3 internal axis at Medium
+//     (Hard is the permanent ceiling above). Detection: walk every ident, match
+//     info.Uses FullName == computeMAC's, require enclosing FullName ∈ allowlist
+//     (the computeMAC definition is in info.Defs, not info.Uses, so it never fires).
 //
 // Blind spots (ai-robust 强制反向自检; each has a reverse self-test in the _test.go):
 //
@@ -33,6 +48,11 @@
 //	  outside signer.go and inside signer.go in a non-computeMAC func) and the
 //	  banned comparison callees; TestWebhookHMACFunnel_ReverseFixture asserts A1/A2
 //	  fire on each form.
+//	B-A4 — rule-logic regression (computeMAC is unexported, so no standalone-module
+//	  RED fixture can call it): TestWebhookHMACFunnel_ComputeMACCallerAntiVacuity
+//	  re-runs the A4 scan over real production with an EMPTY allowlist and asserts it
+//	  fires on the ≥2 real computeMAC callers (Sign + Verify) — proving the scan
+//	  detects computeMAC calls and the allowlist is what suppresses them (non-vacuous).
 //	B6 — Source.Secret leak: slog of the raw unexported secret field would leak
 //	  it (Source.LogValue + slog.LogValuer covers slog.Any of a whole Source, but
 //	  not slog of src.secret directly). scanWebhookSecretSlog covers BOTH the
@@ -84,14 +104,37 @@ const webhookPkgPath = PlatformModulePath + "/kernel/webhook"
 const (
 	webhookPkgPattern  = "./kernel/webhook/..."
 	signerFileBasename = "signer.go"
-	computeMACFuncName = "computeMAC"
 	hmacPkgPath        = "crypto/hmac"
 	slogPkgPath        = "log/slog"
+
+	// hmacSanctionedComputeMACFunc is the go/types FullName of the ONE function
+	// allowed to call crypto/hmac.New: the free func computeMAC in signer.go.
+	// FullName encodes the package path, so a same-named function in another
+	// package cannot inherit the A1 allowance (mirrors WEBHOOK-SSRF-GUARD-01/A2's
+	// ssrfSanctionedDialFunc; #1493). computeMAC is package-unique, so the check is
+	// file-independent — computeMAC may move files freely. It also doubles as the
+	// callee identity for the A4 caller-allowlist scan (computeMAC's own FullName).
+	hmacSanctionedComputeMACFunc = PlatformModulePath + "/kernel/webhook.computeMAC"
+
+	// hmacSanctionedSignFunc / hmacSanctionedVerifyFunc are the go/types FullNames
+	// of the ONLY two functions permitted to call computeMAC (A4 caller-allowlist).
+	hmacSanctionedSignFunc   = "(*" + PlatformModulePath + "/kernel/webhook.hmacSigner).Sign"
+	hmacSanctionedVerifyFunc = "(*" + PlatformModulePath + "/kernel/webhook.hmacVerifier).Verify"
 )
 
 // webhookSealedInterfaces are the interface type names in kernel/webhook that
 // must carry an unexported sealed() marker (A3).
 var webhookSealedInterfaces = map[string]bool{"Signer": true, "Verifier": true}
+
+// computeMACCallerAllowlist is the set of go/types FullNames permitted to call
+// the package-internal computeMAC helper (A4). Any other in-package caller could
+// compute a valid MAC and thereby forge a signature WITHOUT an hmac.New callsite
+// of its own — A1 only locks hmac.New, not computeMAC reuse, so A4 is the actual
+// enforcement of "only the sanctioned signer/verifier may produce a MAC".
+var computeMACCallerAllowlist = map[string]bool{
+	hmacSanctionedSignFunc:   true,
+	hmacSanctionedVerifyFunc: true,
+}
 
 // nonConstTimeCompareCallees is the A2 banned set: package-qualified callees
 // that compare bytes/values in non-constant time. Signature comparison must use
@@ -103,26 +146,59 @@ var nonConstTimeCompareCallees = map[[2]string]bool{
 	{"reflect", "DeepEqual"}: true,
 }
 
-// scanWebhookHMACNew implements A1: crypto/hmac.New may be called only inside
-// the computeMAC function of signer.go (function-level, not merely file-level).
+// scanWebhookHMACNew implements A1: crypto/hmac.New may be called only inside the
+// computeMAC function (function-identity level via go/types FullName, file-
+// independent; #1493). The allowance is bound to computeMAC's FullName, not its
+// bare name, so a same-named function in another package cannot inherit it.
 func scanWebhookHMACNew(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
 	var out []Diagnostic
-	inSignerFile := filepath.Base(filepath.ToSlash(rel)) == signerFileBasename
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
 		if !ok || pkgPath != hmacPkgPath || name != "New" {
 			return
 		}
-		if inSignerFile {
-			if fn, ok := ResolveEnclosingFunc(info, file, call); ok && fn != nil && fn.Name() == computeMACFuncName {
-				return
-			}
+		if fn, ok := ResolveEnclosingFunc(info, file, call); ok && fn != nil &&
+			fn.FullName() == hmacSanctionedComputeMACFunc {
+			return
 		}
 		out = append(out, Diagnostic{
 			Rel:  rel,
 			Line: fset.Position(call.Pos()).Line,
-			Message: "crypto/hmac.New called outside computeMAC (signer.go); " +
+			Message: "crypto/hmac.New called outside computeMAC; " +
 				"all HMAC computation must funnel through computeMAC (WEBHOOK-HMAC-FUNNEL-01/A1)",
+		})
+	})
+	return out
+}
+
+// scanWebhookComputeMACCallers implements A4: every USE of the package-internal
+// computeMAC symbol must have an enclosing func whose go/types FullName is in
+// allowlist. It walks every identifier and matches info.Uses to computeMAC's
+// FullName, so ALL use forms are covered — direct call `computeMAC(...)`,
+// parenthesized `(computeMAC)(...)`, and function-value capture
+// `macFn := computeMAC` (the bypass review #1733 F4 flagged); the older
+// call.Fun.(*ast.Ident) form only caught direct calls. The computeMAC *definition*
+// ident lives in info.Defs (not info.Uses), so signer.go's declaration never
+// false-fires. Passing allowlist as a parameter lets the anti-vacuity self-test
+// re-run with an empty allowlist to prove the scan detects the real uses.
+func scanWebhookComputeMACCallers(
+	fset *token.FileSet, file *ast.File, rel string, info *types.Info, allowlist map[string]bool,
+) []Diagnostic {
+	var out []Diagnostic
+	EachInSubtree[ast.Ident](file, func(id *ast.Ident) {
+		fnObj, ok := info.Uses[id].(*types.Func)
+		if !ok || fnObj.FullName() != hmacSanctionedComputeMACFunc {
+			return
+		}
+		if enc, ok := ResolveEnclosingFunc(info, file, id); ok && enc != nil && allowlist[enc.FullName()] {
+			return
+		}
+		out = append(out, Diagnostic{
+			Rel:  rel,
+			Line: fset.Position(id.Pos()).Line,
+			Message: "computeMAC used outside the sanctioned signer/verifier (direct call, " +
+				"parenthesized call, or function-value capture); MAC computation must funnel " +
+				"through hmacSigner.Sign / hmacVerifier.Verify (WEBHOOK-HMAC-FUNNEL-01/A4)",
 		})
 	})
 	return out
@@ -236,12 +312,20 @@ func collectWebhookSealedMarkers(fset *token.FileSet, file *ast.File, rel string
 	return found
 }
 
-// scanWebhookPkg runs the A1/A2/B6 file-level scans and sealed-marker
+// webhookScanAccum collects the per-rule diagnostic slices threaded through
+// scanWebhookPkg, keeping that helper's signature within lint limits while it
+// fans the file scans (A1/A2/A4/B6) plus sealed-marker collection.
+type webhookScanAccum struct {
+	a1, a2, a4, b6 *[]Diagnostic
+	sealed         map[string]webhookSealInfo
+}
+
+// scanWebhookPkg runs the A1/A2/A4/B6 file-level scans and sealed-marker
 // collection over all non-test production files in the webhook package pass.
 // Extracted from CheckWebhookHMACFunnel to keep the Check func within
 // gocognit ≤15. It returns a package-anchor rel (preferring signer.go) used to
 // locate the A3 "interface not found" diagnostic, which has no decl to point at.
-func scanWebhookPkg(p *Pass, a1, a2, b6 *[]Diagnostic, sealed map[string]webhookSealInfo) string {
+func scanWebhookPkg(p *Pass, acc webhookScanAccum) string {
 	var pkgRel string
 	for _, f := range p.Files {
 		rel := p.Rel(f)
@@ -251,18 +335,19 @@ func scanWebhookPkg(p *Pass, a1, a2, b6 *[]Diagnostic, sealed map[string]webhook
 		if pkgRel == "" || filepath.Base(filepath.ToSlash(rel)) == signerFileBasename {
 			pkgRel = rel
 		}
-		*a1 = append(*a1, scanWebhookHMACNew(p.Fset, f, rel, p.TypesInfo)...)
-		*a2 = append(*a2, scanWebhookBytesEqual(p.Fset, f, rel, p.TypesInfo)...)
-		*b6 = append(*b6, scanWebhookSecretSlog(p.Fset, f, rel, p.TypesInfo)...)
+		*acc.a1 = append(*acc.a1, scanWebhookHMACNew(p.Fset, f, rel, p.TypesInfo)...)
+		*acc.a2 = append(*acc.a2, scanWebhookBytesEqual(p.Fset, f, rel, p.TypesInfo)...)
+		*acc.a4 = append(*acc.a4, scanWebhookComputeMACCallers(p.Fset, f, rel, p.TypesInfo, computeMACCallerAllowlist)...)
+		*acc.b6 = append(*acc.b6, scanWebhookSecretSlog(p.Fset, f, rel, p.TypesInfo)...)
 		for name, info := range collectWebhookSealedMarkers(p.Fset, f, rel) {
-			sealed[name] = info
+			acc.sealed[name] = info
 		}
 	}
 	return pkgRel
 }
 
 // CheckWebhookHMACFunnel runs the WEBHOOK-HMAC-FUNNEL-01 production scan
-// (A1/A2/A3/B6) and returns all diagnostics.
+// (A1/A2/A3/A4/B6) and returns all diagnostics.
 //
 // cfg is unused: kernel/webhook has no build-tagged production files, so a
 // single default-config scan is complete.
@@ -276,7 +361,7 @@ func scanWebhookPkg(p *Pass, a1, a2, b6 *[]Diagnostic, sealed map[string]webhook
 func CheckWebhookHMACFunnel(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 
-	var a1, a2, b6 []Diagnostic
+	var a1, a2, a4, b6 []Diagnostic
 	sealed := map[string]webhookSealInfo{}
 	var pkgRel string
 
@@ -285,13 +370,14 @@ func CheckWebhookHMACFunnel(t *testing.T, _ ConfigForExternalCell) []Diagnostic 
 			if p.Pkg == nil || p.Pkg.Path() != webhookPkgPath {
 				return nil
 			}
-			pkgRel = scanWebhookPkg(p, &a1, &a2, &b6, sealed)
+			pkgRel = scanWebhookPkg(p, webhookScanAccum{a1: &a1, a2: &a2, a4: &a4, b6: &b6, sealed: sealed})
 			return nil
 		})
 
 	var all []Diagnostic
 	all = append(all, a1...)
 	all = append(all, a2...)
+	all = append(all, a4...)
 	all = append(all, b6...)
 	all = append(all, checkWebhookSealedMarkers(sealed, pkgRel)...)
 	return all

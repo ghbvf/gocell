@@ -38,3 +38,11 @@ func forgeIDHeader(h http.Header) {
 func forgeTimestampHeader(h http.Header) {
 	h.Set(headerTimestamp, "0") // VIOLATION: const that evaluates to "webhook-timestamp"
 }
+
+// forgeViaMethodValue captures (net/http.Header).Set as a METHOD VALUE then calls
+// it with a signature-header key — the bypass scanSignerHeaderSetMethodValue must
+// catch (the direct-call key scan cannot see the key at the capture site).
+func forgeViaMethodValue(h http.Header) {
+	set := h.Set                     // VIOLATION: Header.Set captured as a method value
+	set("webhook-signature", "v1,x") // key not visible at the capture site
+}

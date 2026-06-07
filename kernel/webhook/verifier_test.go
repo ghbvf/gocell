@@ -76,8 +76,9 @@ func TestNewHMACVerifier_Options(t *testing.T) {
 		require.NoError(t, err)
 		signer, err := NewHMACSigner(src)
 		require.NoError(t, err)
-		headers, err := signer.Sign([]byte("body"), base, MustDeliveryID("d1"))
+		signed, err := signer.Sign([]byte("body"), base, MustDeliveryID("d1"))
 		require.NoError(t, err)
+		headers := signedToInbound(signed)
 
 		verifier, err := NewHMACVerifier(clockmockAt(base.Add(tenMinutes)), WithTolerance(oneHourTolerance))
 		require.NoError(t, err)
@@ -92,8 +93,9 @@ func TestVerify_Errors(t *testing.T) {
 	require.NoError(t, err)
 	signer, err := NewHMACSigner(src)
 	require.NoError(t, err)
-	good, err := signer.Sign([]byte("body"), base, MustDeliveryID("d1"))
+	signed, err := signer.Sign([]byte("body"), base, MustDeliveryID("d1"))
 	require.NoError(t, err)
+	good := signedToInbound(signed)
 
 	cases := []struct {
 		name     string
@@ -219,8 +221,9 @@ func TestVerify_AcceptsAtExactTolerance(t *testing.T) {
 	require.NoError(t, err)
 	signer, err := NewHMACSigner(src)
 	require.NoError(t, err)
-	good, err := signer.Sign([]byte("body"), base, MustDeliveryID("d1"))
+	signed, err := signer.Sign([]byte("body"), base, MustDeliveryID("d1"))
 	require.NoError(t, err)
+	good := signedToInbound(signed)
 
 	// Clock is exactly fiveMinutes after signing — skew == tolerance, must pass.
 	verifier, err := NewHMACVerifier(clockmockAt(base.Add(fiveMinutes)))

@@ -3,13 +3,13 @@
 // WEBHOOK-HMAC-FUNNEL-01 — kernel/webhook HMAC signing funnel (KERNEL-WEBHOOK-01).
 //
 //   - A1 (downstream Hard): crypto/hmac.New has exactly one callsite in the
-//     kernel/webhook package — the computeMAC function in signer.go. The check is
-//     FUNCTION-level, not file-level: an hmac.New in any other function (even
-//     inside signer.go) fails. This also closes the package-internal upstream
-//     blind spot: any new struct that wants to sign MUST call hmac.New, which is
-//     allowlisted to computeMAC, so an unsealed internal holder cannot produce a
-//     signature undetected. Detection: ResolvePackageRef(callee) == crypto/hmac.New
-//     AND (file basename != signer.go OR enclosing func != computeMAC).
+//     kernel/webhook package — the computeMAC function. The check is
+//     FUNCTION-IDENTITY level via go/types FullName (file-independent; #1493): an
+//     hmac.New whose enclosing func FullName != computeMAC's fails, and a
+//     same-named function in another package cannot inherit the allowance
+//     (mirrors WEBHOOK-SSRF-GUARD-01/A2). Detection: ResolvePackageRef(callee) ==
+//     crypto/hmac.New AND ResolveEnclosingFunc(call).FullName() !=
+//     hmacSanctionedComputeMACFunc.
 //   - A2 (downstream Hard): signature comparison must use crypto/hmac.Equal or
 //     crypto/subtle.ConstantTimeCompare. The non-constant-time comparison callees
 //     bytes.Equal / bytes.Compare / slices.Equal / reflect.DeepEqual are banned in
@@ -17,12 +17,24 @@
 //     a flaky timing test. Detection: ResolvePackageRef(callee) ∈ the banned set.
 //   - A3 (upstream Hard external / Medium internal): the Signer and Verifier
 //     interfaces each carry an unexported sealed() marker method, so
-//     package-external implementations are a compile error (Hard). Package-internal
-//     new holders are not blocked by sealing (Medium) — covered transitively by
-//     A1. Explicit Hard-ization of the internal axis (unexported method-set
-//     interface + private construction, per the SPAN-SETATTR-HOLDER-SEAL #851
-//     precedent) is tracked in gh #1243. Detection: the Signer/Verifier interface
-//     type decls must contain an unexported method.
+//     package-external implementations are a compile error (Hard external).
+//     Package-internal new holders are NOT blocked by sealing — and contrary to a
+//     prior overclaim, A1 does NOT transitively cover them: A1 locks only
+//     crypto/hmac.New, not reuse of the package-level computeMAC helper. That
+//     internal axis is covered by A4 (computeMAC caller-allowlist, Medium). True
+//     type-system Hard for the internal axis is a PERMANENT Go ceiling (in-package
+//     code can always declare sealed(), read Source.secret, and call computeMAC) —
+//     same family as #851 / #893 / #1282 / #1375; #1243 is relabeled won't-do and
+//     named here as that ceiling's tracker. Detection: the Signer/Verifier
+//     interface type decls must contain an unexported method.
+//   - A4 (Medium, internal axis; #1243): every USE of the package-internal
+//     computeMAC symbol — direct call, parenthesized call, OR function-value
+//     capture (`macFn := computeMAC`; bypass review #1733 F4) — must have an
+//     enclosing func whose go/types FullName ∈ {hmacSigner.Sign,
+//     hmacVerifier.Verify}. This is the actual enforcement of "only the sanctioned
+//     signer/verifier may compute a MAC", closing the A3 internal axis at Medium.
+//     Detection: walk every ident, match info.Uses FullName == computeMAC's,
+//     require enclosing FullName ∈ allowlist (definition is in info.Defs).
 //
 // Blind spots (ai-robust 强制反向自检; each has a reverse self-test below):
 //
@@ -31,6 +43,10 @@
 //	  outside signer.go and inside signer.go in a non-computeMAC func) and the
 //	  banned comparison callees; TestWebhookHMACFunnel_ReverseFixture asserts A1/A2
 //	  fire on each form.
+//	B-A4 — rule-logic regression (computeMAC is unexported, so no standalone-module
+//	  RED fixture can call it): TestWebhookHMACFunnel_ComputeMACCallerAntiVacuity
+//	  re-runs the A4 scan over real production with an EMPTY allowlist and asserts it
+//	  fires on the ≥2 real computeMAC callers (Sign + Verify).
 //	B6 — Source.Secret leak: slog of the raw unexported secret field would leak
 //	  it (Source.LogValue + slog.LogValuer covers slog.Any of a whole Source, but
 //	  not slog of src.secret directly). scanWebhookSecretSlog covers BOTH the
@@ -168,4 +184,42 @@ func TestWebhookHMACFunnel_SealedMarkerDiagnosticsLocated(t *testing.T) {
 		"Signer":   {hasUnexported: false, rel: "kernel/webhook/signer.go", line: 12},
 		"Verifier": {hasUnexported: false, rel: "kernel/webhook/verifier.go", line: 8},
 	}, "kernel/webhook/signer.go"))
+}
+
+// TestWebhookHMACFunnel_ComputeMACCallerAntiVacuity is the B-A4 self-check.
+// computeMAC is unexported, so a standalone-module RED fixture cannot call it;
+// instead this re-runs the A4 scan over REAL production with an EMPTY allowlist
+// and asserts it fires on the actual computeMAC callers (≥2: hmacSigner.Sign +
+// hmacVerifier.Verify). That proves the scan genuinely detects computeMAC calls
+// and that the real allowlist (not a vacuous scan) is what makes production GREEN.
+func TestWebhookHMACFunnel_ComputeMACCallerAntiVacuity(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	var fired []Diagnostic
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{webhookPkgPattern}),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.Pkg.Path() != webhookPkgPath {
+				return nil
+			}
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				// Empty allowlist → every computeMAC caller is a violation.
+				fired = append(fired, scanWebhookComputeMACCallers(p.Fset, f, rel, p.TypesInfo, map[string]bool{})...)
+			}
+			return nil
+		})
+
+	assert.GreaterOrEqual(t, len(fired), 2,
+		"A4 anti-vacuity: empty allowlist must fire on ≥2 real computeMAC callers "+
+			"(hmacSigner.Sign + hmacVerifier.Verify); got %d — scan may be vacuous", len(fired))
+	for i, d := range fired {
+		assert.NotEmpty(t, d.Rel, "A4 anti-vacuity: diagnostic[%d] has empty Rel (not clickable)", i)
+		assert.Greater(t, d.Line, 0, "A4 anti-vacuity: diagnostic[%d] Line = %d, want > 0", i, d.Line)
+	}
 }
