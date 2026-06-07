@@ -16,9 +16,20 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/audit/ledger/storetest"
 )
+
+// ledgerTestVis returns a RowScopeTenant RowVisibility (unrestricted owner
+// dimension) for ledger-store integration tests that do not exercise the
+// row-visibility obligation itself; the obligation's self/device behavior is
+// covered by the conformance suite (storetest). Constructed via the sole
+// constructor so the obligation is always valid.
+func ledgerTestVis() tenant.RowVisibility {
+	vis, _ := tenant.NewRowVisibility(tenant.RowScopeTenant, "")
+	return vis
+}
 
 // newTestLedgerProtocol constructs a Protocol for the "auditcore" namespace used
 // throughout these integration tests. Fails the test immediately if construction fails.
@@ -493,14 +504,14 @@ func TestAuditLedgerStore_NamespaceIsolation(t *testing.T) {
 	assert.Equal(t, int64(2), tailB.SeqNo, "namespace B SeqNo must be 2")
 
 	// Query storeA must not return storeB's entries.
-	aEntries, err := storeA.Query(ctx, ledger.AuditFilters{}, query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	aEntries, err := storeA.Query(ctx, ledgerTestVis(), ledger.AuditFilters{}, query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	require.NoError(t, err)
 	assert.Len(t, aEntries, 3, "namespace A Query must return exactly 3 entries")
 	for _, e := range aEntries {
 		assert.Equal(t, "actor-a", e.ActorID, "namespace A entry must have actor-a")
 	}
 
-	bEntries, err := storeB.Query(ctx, ledger.AuditFilters{}, query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	bEntries, err := storeB.Query(ctx, ledgerTestVis(), ledger.AuditFilters{}, query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	require.NoError(t, err)
 	assert.Len(t, bEntries, 2, "namespace B Query must return exactly 2 entries")
 	for _, e := range bEntries {
@@ -588,7 +599,7 @@ func TestAuditLedgerStore_ReadWithinAmbientTx(t *testing.T) {
 		assert.Equal(t, int64(1), tail.SeqNo, "Tail(txCtx) must see the uncommitted append")
 		assert.Equal(t, int64(1), tail.EntryCount, "EntryCount(txCtx) must reflect uncommitted state")
 
-		got, gErr := store.GetBySeq(txCtx, 1)
+		got, gErr := store.GetBySeq(txCtx, ledgerTestVis(), 1)
 		require.NoError(t, gErr, "GetBySeq(txCtx,1) must see the uncommitted append")
 		assert.Equal(t, int64(1), got.SeqNo)
 
@@ -610,7 +621,7 @@ func TestAuditLedgerStore_ReadWithinAmbientTx(t *testing.T) {
 	assert.Equal(t, int64(0), tail.SeqNo, "post-rollback Tail must be empty")
 	assert.Equal(t, int64(0), tail.EntryCount, "post-rollback EntryCount must be 0")
 
-	_, err = store.GetBySeq(ctx, 1)
+	_, err = store.GetBySeq(ctx, ledgerTestVis(), 1)
 	require.Error(t, err, "post-rollback GetBySeq(1) must not find the rolled-back entry")
 
 	// --- Committed control: a successful RunInTx persists; reads outside the
@@ -653,7 +664,7 @@ func TestAuditLedgerStore_TraceID_RoundTripAndFilter(t *testing.T) {
 	e1.TraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
 	require.NoError(t, store.Append(ctx, e1), "Append trace-rt-1")
 
-	got1, err := store.GetBySeq(ctx, 1)
+	got1, err := store.GetBySeq(ctx, ledgerTestVis(), 1)
 	require.NoError(t, err)
 	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", got1.TraceID, "trace_id round-trip")
 
@@ -666,7 +677,7 @@ func TestAuditLedgerStore_TraceID_RoundTripAndFilter(t *testing.T) {
 	e3.TraceID = "different-trace-id"
 	require.NoError(t, store.Append(ctx, e3), "Append trace-rt-3")
 
-	byTrace, err := store.Query(ctx,
+	byTrace, err := store.Query(ctx, ledgerTestVis(),
 		ledger.AuditFilters{TraceID: "4bf92f3577b34da6a3ce929d0e0e4736"},
 		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	require.NoError(t, err)

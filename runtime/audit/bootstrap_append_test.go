@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
@@ -77,7 +78,8 @@ func TestAppendBootstrapAuthFail_WritesEntryWithReasonAndClientIPHash(t *testing
 			err := audit.AppendBootstrapAuthFail(context.Background(), store, clk, uuid.NewString(), tc.reason, tc.clientIPHash)
 			require.NoError(t, err, "AppendBootstrapAuthFail must succeed for valid reason %q", tc.reason)
 
-			entries, err := raw.Query(context.Background(),
+			rawVis, _ := tenant.NewRowVisibility(tenant.RowScopeTenant, "")
+			entries, err := raw.Query(context.Background(), rawVis,
 				ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 				query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 			require.NoError(t, err, "ledger query")
@@ -176,7 +178,8 @@ func TestAppendBootstrapAuthFail_RedeliverySameEventID_Deduplicates(t *testing.T
 	assert.Equal(t, errcode.ErrAuditLedgerAlreadyExists, coded.Code,
 		"redelivery must surface ErrAuditLedgerAlreadyExists (idempotent replay)")
 
-	entries, qerr := raw.Query(ctx,
+	idempotVis, _ := tenant.NewRowVisibility(tenant.RowScopeTenant, "")
+	entries, qerr := raw.Query(ctx, idempotVis,
 		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 		query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 	require.NoError(t, qerr)
@@ -185,7 +188,7 @@ func TestAppendBootstrapAuthFail_RedeliverySameEventID_Deduplicates(t *testing.T
 	// A genuinely distinct event (different eventID) persists independently.
 	err = audit.AppendBootstrapAuthFail(ctx, store, clk, uuid.NewString(), "rate_limited", h64)
 	require.NoError(t, err, "distinct eventID must persist a second entry")
-	entries, qerr = raw.Query(ctx,
+	entries, qerr = raw.Query(ctx, idempotVis,
 		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 		query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 	require.NoError(t, qerr)

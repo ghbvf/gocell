@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
@@ -41,8 +42,10 @@ func NewService(store ledger.QueryStore, codec *query.CursorCodec, logger *slog.
 }
 
 // Query returns a paginated page of audit entries matching the given filters.
+// vis is the row-visibility obligation derived from the authenticated principal;
+// it is enforced on the actor_id owner column by the underlying store.
 func (s *Service) Query(
-	ctx context.Context, filters ledger.AuditFilters, pageReq query.PageParams,
+	ctx context.Context, vis tenant.RowVisibility, filters ledger.AuditFilters, pageReq query.PageParams,
 ) (query.PageResult[*ledger.Entry], error) {
 	attrs := []string{"endpoint", "audit-query"}
 	if filters.EventType != "" {
@@ -71,6 +74,17 @@ func (s *Service) Query(
 		// tenant's rows (#1337 PR-2a review U4).
 		attrs = append(attrs, "tenantId", filters.TenantID)
 	}
+	// The row-visibility obligation is a cursor-scope axis exactly like tenantId
+	// (#1337 PR-4): it decides which actor's rows are paged (via the actor_id
+	// owner predicate). A cursor minted under one obligation must not silently
+	// resume under another — e.g. if the caller's role changes mid-pagination
+	// (self → tenant or vice versa), cursor replay must produce a "query context
+	// mismatch" rather than page the wrong owner set. Subject only varies the
+	// scope for self/device (empty for tenant), so both axes participate.
+	attrs = append(attrs, "rowScope", vis.Scope().String())
+	if vis.Subject() != "" {
+		attrs = append(attrs, "rowSubject", vis.Subject())
+	}
 	// From/To are time-range filter predicates, not cursor-scope identifiers.
 	// Including zero-value time.Time in the scope would embed "0001-01-01T00:00:00Z"
 	// and break cursor reuse when callers omit From/To (F-07). Non-zero values
@@ -88,7 +102,7 @@ func (s *Service) Query(
 			// pgquery.AppendKeyset over idx_audit_namespace_ts_id; MemStore:
 			// in-memory keyset). The store returns up to params.FetchLimit()
 			// (Limit+1) rows; BuildPageResult trims to Limit and detects hasMore.
-			entries, err := s.store.Query(ctx, filters, params)
+			entries, err := s.store.Query(ctx, vis, filters, params)
 			if err != nil {
 				return nil, fmt.Errorf("audit-query: query: %w", err)
 			}

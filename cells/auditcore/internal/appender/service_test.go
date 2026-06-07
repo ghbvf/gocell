@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
@@ -436,7 +437,8 @@ func TestHandleEvent_TraceIDFromEnvelope(t *testing.T) {
 
 	// Round-trip: confirm TraceID survives the full Append lifecycle and is
 	// readable via GetBySeq (not just captured pre-persist in cap.appended).
-	roundTrip, err := cap.GetBySeq(context.Background(), got.SeqNo)
+	appenderVis, _ := tenant.NewRowVisibility(tenant.RowScopeTenant, "")
+	roundTrip, err := cap.GetBySeq(context.Background(), appenderVis, got.SeqNo)
 	require.NoError(t, err, "GetBySeq round-trip after Append must succeed")
 	assert.Equal(t, wantTraceID, roundTrip.TraceID,
 		"TraceID must survive full Append lifecycle (GetBySeq round-trip)")

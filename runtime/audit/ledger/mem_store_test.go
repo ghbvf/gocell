@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/audit/ledger/storetest"
 )
@@ -20,6 +21,13 @@ import (
 // redeliveryAdvance is the clock advance used in at-least-once redelivery
 // simulation tests (F-CR-2 idempotency regression guard).
 const redeliveryAdvance = 10 * time.Second
+
+// memTestVis returns a RowScopeTenant RowVisibility for mem_store_test helpers,
+// preserving pre-PR-4 semantics (no actor filter).
+func memTestVis() tenant.RowVisibility {
+	vis, _ := tenant.NewRowVisibility(tenant.RowScopeTenant, "")
+	return vis
+}
 
 // testHMACKey returns a deterministic 32-byte test key.
 func testHMACKey() []byte {
@@ -126,7 +134,7 @@ func TestMemStore_Append_HashEquivalence(t *testing.T) {
 		t.Errorf("Tail.SeqNo: got %d, want 1", tail.SeqNo)
 	}
 
-	got, err := store.GetBySeq(context.Background(), 1)
+	got, err := store.GetBySeq(context.Background(), memTestVis(), 1)
 	if err != nil {
 		t.Fatalf("GetBySeq(1): %v", err)
 	}
@@ -163,7 +171,7 @@ func TestMemStore_Append_ChainLinkage(t *testing.T) {
 	// Check chain linkage: entry[i].PrevHash == entry[i-1].Hash
 	prev := ""
 	for seq := int64(1); seq <= 3; seq++ {
-		e, err := store.GetBySeq(context.Background(), seq)
+		e, err := store.GetBySeq(context.Background(), memTestVis(), seq)
 		if err != nil {
 			t.Fatalf("GetBySeq(%d): %v", seq, err)
 		}
@@ -272,7 +280,7 @@ func TestMemStore_Restart_Recovery(t *testing.T) {
 		t.Fatalf("NewMemStore B: %v", err)
 	}
 	for i := int64(1); i <= int64(n); i++ {
-		e, err := storeA.GetBySeq(context.Background(), i)
+		e, err := storeA.GetBySeq(context.Background(), memTestVis(), i)
 		if err != nil {
 			t.Fatalf("storeA GetBySeq(%d): %v", i, err)
 		}
@@ -310,7 +318,7 @@ func TestMemStore_GetBySeq_NotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMemStore: %v", err)
 	}
-	_, err = store.GetBySeq(context.Background(), 999)
+	_, err = store.GetBySeq(context.Background(), memTestVis(), 999)
 	errcodetest.AssertCode(t, err, errcode.ErrAuditLedgerNotFound)
 }
 
@@ -553,7 +561,7 @@ func TestMemStore_Query_ByFilters(t *testing.T) {
 		}
 	}
 
-	results, err := store.Query(context.Background(), ledger.AuditFilters{EventType: "type.A"},
+	results, err := store.Query(context.Background(), memTestVis(), ledger.AuditFilters{EventType: "type.A"},
 		query.ListParams{Limit: 100, Sort: ledger.QuerySort()})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
@@ -850,7 +858,7 @@ func TestMemStore_TraceID_RoundTrip(t *testing.T) {
 		t.Fatalf("Append: %v", err)
 	}
 
-	got, err := store.GetBySeq(context.Background(), 1)
+	got, err := store.GetBySeq(context.Background(), memTestVis(), 1)
 	if err != nil {
 		t.Fatalf("GetBySeq(1): %v", err)
 	}
@@ -959,7 +967,7 @@ func TestMemStore_Query_ByTraceID(t *testing.T) {
 	}
 
 	// Filter by trace-abc: must return 2 entries.
-	results, err := store.Query(context.Background(),
+	results, err := store.Query(context.Background(), memTestVis(),
 		ledger.AuditFilters{TraceID: "trace-abc"},
 		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	if err != nil {
@@ -975,7 +983,7 @@ func TestMemStore_Query_ByTraceID(t *testing.T) {
 	}
 
 	// Empty filter must return all 3 entries.
-	all, err := store.Query(context.Background(),
+	all, err := store.Query(context.Background(), memTestVis(),
 		ledger.AuditFilters{},
 		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	if err != nil {

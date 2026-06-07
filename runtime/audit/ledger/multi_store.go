@@ -7,6 +7,7 @@ import (
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -65,14 +66,14 @@ func NewMultiStore(stores ...Store) (*MultiStore, error) {
 // to len(stores)*FetchLimit() rows, sorts once, and trims to FetchLimit(). For
 // a 2-store deployment with Limit=20 the worst case is 42 rows merged per
 // page — a constant-factor cost that does not change pagination semantics.
-func (m *MultiStore) Query(ctx context.Context, filters AuditFilters, params query.ListParams) ([]*Entry, error) {
+func (m *MultiStore) Query(ctx context.Context, vis tenant.RowVisibility, filters AuditFilters, params query.ListParams) ([]*Entry, error) {
 	if len(params.Sort) == 0 {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit ledger: query requires a non-empty sort")
 	}
 	var merged []*Entry
 	for _, s := range m.stores {
-		page, err := s.Query(ctx, filters, params)
+		page, err := s.Query(ctx, vis, filters, params)
 		if err != nil {
 			return nil, fmt.Errorf("multi-store query: %w", err)
 		}

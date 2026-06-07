@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
@@ -128,7 +129,8 @@ func TestDualWriter_PhysicalIsolation_NoChainFork(t *testing.T) {
 	// MultiStore must surface every committed entry from both chains.
 	multi, err := ledger.NewMultiStore(relayStore, bootstrapStore)
 	require.NoError(t, err)
-	all, err := multi.Query(context.Background(), ledger.AuditFilters{}, query.ListParams{
+	multiVis, _ := tenant.NewRowVisibility(tenant.RowScopeTenant, "")
+	all, err := multi.Query(context.Background(), multiVis, ledger.AuditFilters{}, query.ListParams{
 		Limit: 100,
 		Sort:  ledger.QuerySort(),
 	})
@@ -138,7 +140,7 @@ func TestDualWriter_PhysicalIsolation_NoChainFork(t *testing.T) {
 		goroutinesPerChain, goroutinesPerChain)
 
 	// Filter by event type to mirror the ssobff bug reproducer.
-	bootstrapOnly, err := multi.Query(context.Background(),
+	bootstrapOnly, err := multi.Query(context.Background(), multiVis,
 		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 		query.ListParams{Limit: 100, Sort: ledger.QuerySort()})
 	require.NoError(t, err)

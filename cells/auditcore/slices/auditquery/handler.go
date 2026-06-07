@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/redaction"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -45,6 +46,34 @@ func auditQueryPolicy(r *http.Request) error {
 		return nil
 	}
 	return auth.AnyRole(auth.RoleAdmin)(r)
+}
+
+// auditRowVisibility derives the row-visibility obligation (epic #1337 PR-4) for
+// an audit query from the caller principal: admins read tenant-wide (all actors
+// in their tenant), non-admins are restricted to their own actor_id
+// (RowScopeSelf, subject = principal.Subject). Factored out of List to keep its
+// cognitive complexity within budget.
+func auditRowVisibility(p *auth.Principal) (tenant.RowVisibility, error) {
+	if p.HasRole(auth.RoleAdmin) {
+		return tenant.NewRowVisibility(tenant.RowScopeTenant, "")
+	}
+	return tenant.NewRowVisibility(tenant.RowScopeSelf, p.Subject)
+}
+
+// logAdminAuditQuery emits an audit-access breadcrumb when an admin queries the
+// ledger (all actors, or a specific other user). Non-admins and admin-self
+// queries are silent. Factored out of List for cognitive-complexity budget.
+func logAdminAuditQuery(ctx context.Context, p *auth.Principal, subject, actorIDFilter string) {
+	if !p.HasRole(auth.RoleAdmin) {
+		return
+	}
+	switch {
+	case actorIDFilter == "":
+		slog.InfoContext(ctx, "audit: admin querying all actors", slog.String("admin", subject))
+	case actorIDFilter != subject:
+		slog.InfoContext(ctx, "audit: admin querying other user",
+			slog.String("admin", subject), slog.String("target_actor", actorIDFilter))
+	}
 }
 
 // ListAdapter wraps Service to implement auditlist.Service for http.audit.list.v1.
@@ -84,20 +113,21 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 	}
 	subject := p.Subject
 
-	actorID := req.ActorID
-	if actorID == "" && !p.HasRole(auth.RoleAdmin) {
-		actorID = subject
+	// Row-visibility obligation (epic #1337 PR-4): derive from principal.
+	// Admin → tenant scope (sees all actors in the tenant). Non-admin → self
+	// scope (only entries where actor_id == subject). The explicit actorId filter
+	// (req.ActorID) is an additional AND predicate on top of the obligation; for
+	// non-admins auditQueryPolicy already enforces actorId == "" || == self, so
+	// the obligation is the effective enforcement gate for row access.
+	vis, err := auditRowVisibility(p)
+	if err != nil {
+		// NewRowVisibility only errors on invalid construction (programmer error,
+		// not a user input error). Treat as 500.
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"audit query: failed to build row visibility obligation", err)
 	}
-	switch {
-	case actorID == "":
-		slog.InfoContext(ctx, "audit: admin querying all actors", slog.String("admin", subject))
-	case actorID != subject:
-		slog.InfoContext(ctx,
-			"audit: admin querying other user",
-			slog.String("admin", subject),
-			slog.String("target_actor", actorID),
-		)
-	}
+
+	logAdminAuditQuery(ctx, p, subject, req.ActorID)
 
 	filters := ledger.AuditFilters{
 		// TenantID is the isolation scope (epic #1337 PR-2a): sourced from the
@@ -110,7 +140,12 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 		// step is the isolation boundary.
 		TenantID:  p.TenantID,
 		EventType: req.EventType,
-		ActorID:   actorID,
+		// ActorID: admin's explicit actor filter (or empty = all). Non-admin
+		// callers: auditQueryPolicy already enforces req.ActorID == "" || ==
+		// self, but the row-visibility obligation (vis) above is the
+		// real enforcement gate — it restricts store results to actor_id == self
+		// regardless of this filter. The explicit filter narrows further if set.
+		ActorID:   req.ActorID,
 		SubjectID: req.SubjectID,
 		TraceID:   req.TraceID,
 	}
@@ -143,7 +178,7 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 		Limit:  int(req.Limit),
 	}
 
-	result, err := a.S.Query(ctx, filters, pageReq)
+	result, err := a.S.Query(ctx, vis, filters, pageReq)
 	if err != nil {
 		return nil, err
 	}

@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
@@ -123,7 +124,8 @@ func assertEntryRoundTripParity(t *testing.T, store ledger.Store, protocol *ledg
 	// assumption about iteration ordering. AssertEntryRoundTrip skips the
 	// store-assigned fields (SeqNo/ID/PrevHash/Hash), so populating src here is
 	// harmless to the field comparison.
-	got, err := store.GetBySeq(ctx, src.SeqNo)
+	fuzzVis := mustRowVisibility(t, tenant.RowScopeTenant, "")
+	got, err := store.GetBySeq(ctx, fuzzVis, src.SeqNo)
 	if err != nil {
 		t.Fatalf("GetBySeq(%d): %v", src.SeqNo, err)
 	}
@@ -138,7 +140,7 @@ func assertEntryRoundTripParity(t *testing.T, store ledger.Store, protocol *ledg
 	// chain root (prev_hash = "").
 	prevHash := ""
 	if src.SeqNo > 1 {
-		prev, perr := store.GetBySeq(ctx, src.SeqNo-1)
+		prev, perr := store.GetBySeq(ctx, fuzzVis, src.SeqNo-1)
 		if perr != nil {
 			t.Fatalf("GetBySeq(%d) for chain link: %v", src.SeqNo-1, perr)
 		}
