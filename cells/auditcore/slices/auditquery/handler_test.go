@@ -54,6 +54,11 @@ func newHandlerStore(t testing.TB) *ledger.MemStore {
 // handler test that expects to reach the query path must carry a tenant.
 const auditQueryTestTenant = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
 
+// auditQueryTestTenantB is a second canonical tenant UUID used in the PR-5
+// (#1343) cross-tenant visibility matrix test. A super-admin must see rows from
+// both tenants; a regular admin must NOT see rows from another tenant.
+const auditQueryTestTenantB = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+
 // auditTestCtx builds a tenant-bearing principal context for handler tests.
 // auth.TestContext alone leaves TenantID empty, which the F1 isolation guard now
 // rejects; the empty-tenant rejection itself is covered by TestList_EmptyTenant_Forbidden.
@@ -904,4 +909,118 @@ func assertActorBindingCase(t *testing.T, mux *http.ServeMux, tc actorBindingCas
 		gotActorIDs = append(gotActorIDs, item["actorId"].(string))
 	}
 	assert.Equal(t, tc.wantActorIDs, gotActorIDs)
+}
+
+// TestHandleQuery_RowScopeVisibilityMatrix is the T5.5 e2e test for EPIC #1337
+// PR-5 (#1343): identity → RowScope narrowing at the handler layer.
+//
+// Seed (three entries in a multi-tenant ledger):
+//
+//	entry vsm-a1: actor=usrA,           tenantID=auditQueryTestTenant   (tenantA)
+//	entry vsm-b1: actor=usrB,           tenantID=auditQueryTestTenantB  (tenantB)
+//	entry vsm-sys: actor="system:bootstrap", tenantID=""                (tenant-less)
+//
+// Expected visibility matrix (no actorId query param — handler derives from identity):
+//
+//	non-admin usrA in tenantA → count 1  (RowScopeSelf, own row only)
+//	admin in tenantA           → count 2  (RowScopeTenant: tenantA + tenant-less; NOT tenantB)
+//	super-admin (any tenant)   → count 3  (RowScopeAll: cross-tenant)
+//
+// This test is RED until:
+//  1. auth.RoleSuperAdmin const is added (compile fails now)
+//  2. handler derives RowVisibility from principal.RowVisibility(ctx) (PR-5)
+//  3. RowScopeAll is supported by ledger stores (PR-5 flips fail-closed → success)
+func TestHandleQuery_RowScopeVisibilityMatrix(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+
+	// Seed: one entry per tenant + one tenant-less system entry.
+	seed := []*ledger.Entry{
+		{
+			ID: "vsm-a1", EventID: "evt-vsm-a1", EventType: "vis.matrix.v1",
+			ActorID: "usrA", TenantID: auditQueryTestTenant,
+			Timestamp: base, Payload: []byte("{}"),
+		},
+		{
+			ID: "vsm-b1", EventID: "evt-vsm-b1", EventType: "vis.matrix.v1",
+			ActorID: "usrB", TenantID: auditQueryTestTenantB,
+			Timestamp: base.Add(time.Hour), Payload: []byte("{}"),
+		},
+		{
+			// Tenant-less system entry: TenantID="" so tenantMatches logic includes
+			// it in any non-empty tenant query (tenant-less rows are visible to
+			// all tenants, not a specific tenant's private data).
+			ID: "vsm-sys", EventID: "evt-vsm-sys", EventType: "vis.matrix.v1",
+			ActorID:   "system:bootstrap",
+			TenantID:  "",
+			Timestamp: base.Add(seedThirdEntryOffset), Payload: []byte("{}"),
+		},
+	}
+	for _, e := range seed {
+		require.NoError(t, store.Append(context.Background(), e))
+	}
+
+	type visCase struct {
+		name      string
+		subject   string
+		roles     []string
+		tenantID  string
+		wantCount int
+	}
+
+	cases := []visCase{
+		{
+			// non-admin usrA: RowScopeSelf → sees only its own row (vsm-a1).
+			name:      "non_admin_self_scope",
+			subject:   "usrA",
+			roles:     nil,
+			tenantID:  auditQueryTestTenant,
+			wantCount: 1,
+		},
+		{
+			// admin in tenantA: RowScopeTenant → sees tenantA rows + tenant-less
+			// system row. The vsm-b1 (tenantB) row must NOT be visible.
+			name:      "admin_tenant_scope",
+			subject:   "admin-a",
+			roles:     []string{auth.RoleAdmin},
+			tenantID:  auditQueryTestTenant,
+			wantCount: 2,
+		},
+		{
+			// super-admin: RowScopeAll → cross-tenant, sees all 3 entries.
+			// auth.RoleSuperAdmin does not exist yet → this is the RED trigger.
+			name:      "superadmin_cross_tenant",
+			subject:   "super-sa",
+			roles:     []string{auth.RoleSuperAdmin}, // RED: RoleSuperAdmin undefined
+			tenantID:  auditQueryTestTenant,
+			wantCount: 3,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &auth.Principal{
+				Kind:       auth.PrincipalUser,
+				Subject:    tc.subject,
+				Roles:      tc.roles,
+				TenantID:   tc.tenantID,
+				AuthMethod: "test",
+			}
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
+			req = req.WithContext(auth.WithPrincipal(context.Background(), p))
+			mux.ServeHTTP(w, req)
+
+			require.Equal(t, http.StatusOK, w.Code, "tc=%s body=%s", tc.name, w.Body.String())
+			var resp map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp), "tc=%s", tc.name)
+			data, ok := resp["data"].([]any)
+			require.True(t, ok, "tc=%s: data field must be array", tc.name)
+			assert.Len(t, data, tc.wantCount, "tc=%s: wrong row count", tc.name)
+		})
+	}
 }
