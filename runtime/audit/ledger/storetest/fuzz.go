@@ -87,12 +87,19 @@ func RunEntryRoundTripFuzz(f *testing.F, store ledger.Store, protocol *ledger.Pr
 		}
 
 		src := &ledger.Entry{
-			EventID:       eventID,
-			EventType:     eventType,
-			ActorID:       actorID,
-			SubjectID:     subjectID,
-			SessionID:     sessionID,
-			TenantID:      tenantID,
+			EventID:   eventID,
+			EventType: eventType,
+			ActorID:   actorID,
+			SubjectID: subjectID,
+			SessionID: sessionID,
+			// TenantID is the per-(namespace, tenant) chain key (#1618). It cannot
+			// be fuzzed as an arbitrary string: the scoped read-back (scopedGetBySeq
+			// → RunInTx) validates the RLS GUC tenant as a canonical UUID. Fix it to
+			// a valid UUID so the chain key is well-formed; the fuzz still exercises
+			// payload binary-safety, µs timestamp precision and namespace separation
+			// over the other arbitrary fields (the corpus tenantID is still
+			// pg-representability-checked above to keep the seed shape stable).
+			TenantID:      conformanceTenant,
 			CorrelationID: correlationID,
 			TraceID:       traceID,
 			OccurredAt:    time.Unix(0, occNano).UTC().Truncate(fuzzTimePrecision),

@@ -1395,7 +1395,7 @@ func RunPrincipalFieldsRoundTrip(t *testing.T, factory Factory, protocol *ledger
 		EventType:     "user.login",
 		ActorID:       "actor-impersonator",
 		SubjectID:     "subject-end-user",
-		TenantID:      "tenant-alpha",
+		TenantID:      conformanceTenantA,
 		SessionID:     "sess-42",
 		CorrelationID: "corr-xyz-001",
 		TraceID:       "4bf92f3577b34da6a3ce929d0e0e4736",
@@ -1408,8 +1408,9 @@ func RunPrincipalFieldsRoundTrip(t *testing.T, factory Factory, protocol *ledger
 		t.Fatalf("Append principal-roundtrip: %v", err)
 	}
 
-	// Entry has TenantID="tenant-alpha"; scope ctx to read from that chain.
-	got, err := scopedGetBySeq(t, tr, store, tenant.TenantID("tenant-alpha"), mustRowVisibility(t, tenant.RowScopeTenant, ""), 1)
+	// Entry has TenantID=conformanceTenantA (a valid UUID, distinct from the
+	// default chain — proves the TenantID field roundtrips); scope to that chain.
+	got, err := scopedGetBySeq(t, tr, store, tenant.TenantID(conformanceTenantA), mustRowVisibility(t, tenant.RowScopeTenant, ""), 1)
 	if err != nil {
 		t.Fatalf(fmtErrGetBySeq1, err)
 	}
