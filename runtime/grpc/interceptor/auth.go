@@ -78,34 +78,51 @@ func UnaryAuth(verifier auth.IntentTokenVerifier, opts ...AuthOption) grpc.Unary
 		o(&cfg)
 	}
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		isPublic, err := callPredicate(ctx, cfg.publicMethod, info.FullMethod)
+		ctx, err := authorize(ctx, cfg, verifier, info.FullMethod)
 		if err != nil {
 			return nil, err
 		}
-		if isPublic {
-			return handler(ctx, req)
-		}
-
-		token, ok := bearerFromMetadata(ctx)
-		if !ok {
-			return nil, status.Error(codes.Unauthenticated, "missing or invalid authorization metadata")
-		}
-
-		ctx, p, err := auth.AuthenticateBearer(ctx, verifier, token)
-		if err != nil {
-			return nil, authErrorToStatus(err)
-		}
-
-		exempt, err := callPredicate(ctx, cfg.passwordResetExempt, info.FullMethod)
-		if err != nil {
-			return nil, err
-		}
-		if auth.PasswordResetBlocked(p, exempt) {
-			return nil, status.Error(codes.PermissionDenied, "password reset required before accessing this method")
-		}
-
 		return handler(ctx, req)
 	}
+}
+
+// authorize is the transport-shape-agnostic auth core shared by UnaryAuth and
+// StreamAuth (PR-10 #1153) — the single source of the gRPC bearer-auth decision
+// across both transports. It applies the public-method bypass, extracts and
+// verifies the bearer token via the shared runtime/auth.AuthenticateBearer core,
+// and applies the password-reset gate. On success it returns the
+// principal-enriched context and a nil error; on any failure it returns a gRPC
+// status error (the context is returned unchanged on the failure paths). The
+// caller forwards the returned context to the handler (wrapping the stream for
+// the streaming path).
+func authorize(ctx context.Context, cfg authConfig, verifier auth.IntentTokenVerifier, fullMethod string) (context.Context, error) {
+	isPublic, err := callPredicate(ctx, cfg.publicMethod, fullMethod)
+	if err != nil {
+		return ctx, err
+	}
+	if isPublic {
+		return ctx, nil
+	}
+
+	token, ok := bearerFromMetadata(ctx)
+	if !ok {
+		return ctx, status.Error(codes.Unauthenticated, "missing or invalid authorization metadata")
+	}
+
+	ctx, p, err := auth.AuthenticateBearer(ctx, verifier, token)
+	if err != nil {
+		return ctx, authErrorToStatus(err)
+	}
+
+	exempt, err := callPredicate(ctx, cfg.passwordResetExempt, fullMethod)
+	if err != nil {
+		return ctx, err
+	}
+	if auth.PasswordResetBlocked(p, exempt) {
+		return ctx, status.Error(codes.PermissionDenied, "password reset required before accessing this method")
+	}
+
+	return ctx, nil
 }
 
 // callPredicate invokes an externally-supplied auth predicate (public-method /

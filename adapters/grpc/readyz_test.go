@@ -24,6 +24,20 @@ func TestNew_RequiresRegistrar(t *testing.T) {
 	require.Error(t, err, "New must reject a Config without a Registrar")
 }
 
+// TestNew_RequiresDrain asserts New rejects a Config without a Drain signal: the
+// drain is the shared signal the stream interceptor chain binds in-flight streams
+// to (PR-10 #1153), so a missing one is a wiring bug (no `if drain != nil`
+// fallback, fail-closed — same discipline as the required Registrar).
+func TestNew_RequiresDrain(t *testing.T) {
+	_, err := grpcadapter.New(grpcadapter.Config{
+		Addr:      ":0",
+		TLS:       grpcadapter.TLSConfig{AllowInsecure: true},
+		Registrar: runtimegrpc.NewServiceRegistrar(),
+		// Drain omitted → required-dep error.
+	})
+	require.Error(t, err, "New must reject a Config without a Drain signal")
+}
+
 // TestServer_Probes_ReadyShape asserts the server exposes exactly one readiness
 // probe named grpc_ready that reports unhealthy before serving (so /readyz gates
 // the instance out until the gRPC server is actually accepting RPCs).
@@ -32,6 +46,7 @@ func TestServer_Probes_ReadyShape(t *testing.T) {
 		Addr:      ":0",
 		TLS:       grpcadapter.TLSConfig{AllowInsecure: true},
 		Registrar: runtimegrpc.NewServiceRegistrar(),
+		Drain:     runtimegrpc.NewDrainSignal(),
 	})
 	require.NoError(t, err)
 

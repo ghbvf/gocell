@@ -146,18 +146,24 @@ func WithGRPCListenerShutdownGrace(d time.Duration) GRPCListenerOption {
 // are alive).
 //
 // Composition-root wiring (cmd/ or examples/, which may import adapters/grpc and
-// runtime/grpc/interceptor — cells/ may not). The registrar is created FIRST and
-// shared by the chain (reg.CellIDForMethod feeds cell attribution) and the
-// adapter server (Config.Registrar) — Option 3, #1152:
+// runtime/grpc/interceptor — cells/ may not). The registrar AND the drain signal
+// are created FIRST and each shared by the chains and the adapter server
+// (Option 3, #1152/#1153): reg.CellIDForMethod feeds cell attribution; the drain
+// is bound by StreamDrain (consumer) and triggered by the adapter's gracefulStop
+// (producer):
 //
 //	reg := runtimegrpc.NewServiceRegistrar()
-//	chain := interceptor.NewUnaryChain(interceptor.Deps{
+//	drain := runtimegrpc.NewDrainSignal()
+//	deps := interceptor.Deps{
 //	    Verifier: verifier, Clock: clk, Collector: collector, Tracer: tracer,
-//	    Registrar: reg, CellIDClosedSet: asm.CellIDs(),
-//	}) // always wires UnaryAuth; panics on a nil verifier / registrar (fail-closed)
+//	    Registrar: reg, CellIDClosedSet: asm.CellIDs(), Drain: drain,
+//	}
 //	srv, err := adaptersgrpc.New(adaptersgrpc.Config{
-//	    Addr: ":9000", TLS: tlsCfg,
-//	    ServerOptions: []grpc.ServerOption{chain}, Registrar: reg,
+//	    Addr: ":9000", TLS: tlsCfg, Registrar: reg, Drain: drain,
+//	    ServerOptions: []grpc.ServerOption{
+//	        interceptor.NewUnaryChain(deps),  // always wires UnaryAuth; fail-closed
+//	        interceptor.NewStreamChain(deps), // stream parity incl. StreamAuth + StreamDrain
+//	    },
 //	})
 //	bootstrap.New(clk, bootstrap.WithGRPCListener(cell.PrimaryListener, srv, ":9000"))
 //

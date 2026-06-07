@@ -84,6 +84,22 @@ type Config struct {
 	// fallback): if the adapter minted its own registrar, it would differ from the
 	// one the chain reads and attribution would silently degrade to _runtime.
 	Registrar *runtimegrpc.ServiceRegistrar
+
+	// Drain is the framework-side drain signal (PR-10 #1153). gracefulStop
+	// triggers it FIRST (before GracefulStop), so the stream interceptor chain's
+	// StreamDrain cancels every in-flight stream's context — a long-lived
+	// server-stream that selects on ctx.Done() then returns within the
+	// ShutdownTimeout budget instead of blocking until the hard Stop().
+	//
+	// Required, exactly like Registrar (no `if drain != nil` dual path): the
+	// interceptor chain is a ServerOption built BEFORE this server exists, so the
+	// composition root MUST own one *DrainSignal and hand the SAME instance to
+	// both Config.Drain and interceptor.Deps.Drain — a different instance would
+	// trigger a signal no stream observes. A unary-only server still wires it (one
+	// line); the trigger is then a harmless no-op cancel with no StreamDrain
+	// consumer. The compile-proof single-builder that emits the config, both
+	// chains, the registrar, and this drain together is the Hard upgrade, #1752.
+	Drain *runtimegrpc.DrainSignal
 }
 
 // applyDefaults fills zero-value fields with their defaults.
@@ -120,38 +136,9 @@ func (c *Config) validate() error {
 			"grpc: ShutdownTimeout must not be negative; leave it zero for the default or set a positive duration")
 	}
 
-	hasCert := len(c.TLS.CertPEM) > 0
-	hasKey := len(c.TLS.KeyPEM) > 0
-	hasCA := len(c.TLS.ClientCAPEM) > 0
-
-	// V2: AllowInsecure and TLS material are mutually exclusive — caller error.
-	if c.TLS.AllowInsecure && (hasCert || hasKey || hasCA) {
-		return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
-			"grpc: AllowInsecure and TLS material (CertPEM/KeyPEM/ClientCAPEM) are mutually exclusive; "+
-				"use AllowInsecure for plaintext-only mode or supply PEM material for TLS")
-	}
-
-	if !c.TLS.AllowInsecure {
-		// V5: fail-closed — neither plaintext nor TLS configured — caller error.
-		if !hasCert && !hasKey && !hasCA {
-			return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
-				"grpc: no TLS configuration; set AllowInsecure=true for plaintext (dev or mesh-sidecar) "+
-					"or supply CertPEM+KeyPEM for TLS")
-		}
-
-		// V3: CertPEM required when any TLS material is present — caller error.
-		if !hasCert {
-			return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
-				"grpc: TLS.CertPEM is required when configuring TLS; "+
-					"supply the PEM-encoded server certificate")
-		}
-
-		// V4: KeyPEM required when any TLS material is present — caller error.
-		if !hasKey {
-			return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
-				"grpc: TLS.KeyPEM is required when configuring TLS; "+
-					"supply the PEM-encoded server private key")
-		}
+	// V2–V5: transport-security shape (mutual exclusion + fail-closed + required PEM).
+	if err := c.validateTLS(); err != nil {
+		return err
 	}
 
 	// V6: Registrar is required (Option 3 #1152) — the shared method→cellID source
@@ -166,5 +153,57 @@ func (c *Config) validate() error {
 				"interceptor.Deps.Registrar")
 	}
 
+	// V7: Drain is required (Option 3, #1153) — the shared drain signal the
+	// stream interceptor chain binds in-flight streams to. No `if drain != nil`
+	// fallback: a missing one is a composition-root wiring bug (fail-closed). The
+	// composition root must hand the SAME instance to both Config.Drain and
+	// interceptor.Deps.Drain so the GracefulStop trigger reaches the chain.
+	if c.Drain == nil {
+		return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
+			"grpc: Drain is required; create it with runtimegrpc.NewDrainSignal() at the "+
+				"composition root and pass the same instance to both Config.Drain and "+
+				"interceptor.Deps.Drain")
+	}
+
+	return nil
+}
+
+// validateTLS checks the transport-security shape (V2–V5): AllowInsecure and TLS
+// material are mutually exclusive (V2); when not plaintext, some material must be
+// present (V5) and CertPEM (V3) + KeyPEM (V4) are required. Extracted from
+// validate to keep its cognitive complexity within budget.
+func (c *Config) validateTLS() error {
+	hasCert := len(c.TLS.CertPEM) > 0
+	hasKey := len(c.TLS.KeyPEM) > 0
+	hasCA := len(c.TLS.ClientCAPEM) > 0
+
+	// V2: AllowInsecure and TLS material are mutually exclusive — caller error.
+	if c.TLS.AllowInsecure && (hasCert || hasKey || hasCA) {
+		return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
+			"grpc: AllowInsecure and TLS material (CertPEM/KeyPEM/ClientCAPEM) are mutually exclusive; "+
+				"use AllowInsecure for plaintext-only mode or supply PEM material for TLS")
+	}
+	if c.TLS.AllowInsecure {
+		return nil
+	}
+
+	// V5: fail-closed — neither plaintext nor TLS configured — caller error.
+	if !hasCert && !hasKey && !hasCA {
+		return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
+			"grpc: no TLS configuration; set AllowInsecure=true for plaintext (dev or mesh-sidecar) "+
+				"or supply CertPEM+KeyPEM for TLS")
+	}
+	// V3: CertPEM required when any TLS material is present — caller error.
+	if !hasCert {
+		return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
+			"grpc: TLS.CertPEM is required when configuring TLS; "+
+				"supply the PEM-encoded server certificate")
+	}
+	// V4: KeyPEM required when any TLS material is present — caller error.
+	if !hasKey {
+		return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
+			"grpc: TLS.KeyPEM is required when configuring TLS; "+
+				"supply the PEM-encoded server private key")
+	}
 	return nil
 }

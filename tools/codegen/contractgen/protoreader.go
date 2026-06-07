@@ -39,8 +39,9 @@ type ProtoServiceInfo struct {
 	ImportPath string
 	// Alias is the go_package import alias (the part after ';'), e.g. "commandv1".
 	Alias string
-	// Methods lists every unary RPC in the service block; streaming RPCs and
-	// unexported-identifier method names are rejected (see parseAllRPCMethods).
+	// Methods lists every RPC in the service block (unary and streaming alike,
+	// PR-10 #1153); only unexported-identifier and duplicate method names are
+	// rejected (see parseAllRPCMethods).
 	Methods []ProtoMethodInfo
 }
 
@@ -54,10 +55,11 @@ type ProtoMethodInfo struct {
 	ResponseType string
 }
 
-// ReadProtoServiceInfo reads protoAbsPath and returns all unary RPC methods for
-// the named service (fully-qualified, e.g. "device.command.v1.DeviceCommandService").
-// It enumerates ALL methods in the service block; the proto is the single source
-// of truth for the method set (#1655).
+// ReadProtoServiceInfo reads protoAbsPath and returns all RPC methods (unary and
+// streaming, PR-10 #1153) for the named service (fully-qualified, e.g.
+// "device.command.v1.DeviceCommandService"). It enumerates ALL methods in the
+// service block; the proto is the single source of truth for the method set
+// (#1655).
 //
 // Usage: callers must pass an absolute proto path that already exists on disk.
 // Contract-context errors should be wrapped by the caller.
@@ -97,22 +99,24 @@ func ReadProtoServiceInfo(protoAbsPath, service string) (ProtoServiceInfo, error
 }
 
 // parseAllRPCMethods enumerates every rpc declaration in a service block,
-// returning a ProtoMethodInfo for each. Streaming rpcs are rejected (unary
-// only). Each method name must be an exported Go identifier — codegen renders
-// it directly as a Go interface method. Duplicate method names within the
-// service are rejected here rather than left to surface as a duplicate-method
-// Go compile error in the generated interface (this regex reader does not get
-// protoc's own duplicate-rpc check, so a malformed proto generated without buf
-// would otherwise emit an uncompilable interface). The returned slice preserves
-// proto declaration order.
+// returning a ProtoMethodInfo for each. Both unary and streaming rpcs are
+// accepted (PR-10 #1153): contract granularity is service-level (#1655), so the
+// whole proto service is registered regardless of per-method stream shape and the
+// gRPC stream interceptor chain handles streaming RPCs at runtime — the reader
+// does not special-case the stream keyword. Each method name must be an exported
+// Go identifier. Duplicate method names within the service are rejected here
+// rather than left to surface as a duplicate-method Go compile error in the
+// generated interface (this regex reader does not get protoc's own duplicate-rpc
+// check, so a malformed proto generated without buf would otherwise emit an
+// uncompilable interface). The returned slice preserves proto declaration order.
 func parseAllRPCMethods(block, protoPkg string) ([]ProtoMethodInfo, error) {
 	var methods []ProtoMethodInfo
 	seen := make(map[string]struct{})
 	for _, m := range rpcLineRE.FindAllStringSubmatch(block, -1) {
 		name := m[1]
-		if m[2] != "" || m[4] != "" {
-			return nil, fmt.Errorf("proto: rpc %q is streaming; codegen supports unary only (streaming tracked at gh #1099)", name)
-		}
+		// m[2] (request-side) / m[4] (response-side) carry the optional `stream`
+		// keyword; both unary and streaming shapes are accepted (PR-10 #1153), so
+		// the keyword is intentionally not inspected.
 		if !token.IsIdentifier(name) || !token.IsExported(name) {
 			return nil, fmt.Errorf("proto: rpc method %q must be an exported Go identifier", name)
 		}

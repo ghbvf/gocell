@@ -15,12 +15,13 @@ import (
 	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
 )
 
-// withReg injects a fresh shared registrar into cfg so New satisfies the
-// required Config.Registrar (Option 3 #1152). These tests do not exercise
-// attribution, so any registrar suffices; it is shared across the grpc_test
-// package via this helper.
+// withReg injects a fresh shared registrar and drain signal into cfg so New
+// satisfies the required Config.Registrar (Option 3 #1152) and Config.Drain
+// (PR-10 #1153). These tests do not exercise attribution or drain, so fresh
+// instances suffice; the helper is shared across the grpc_test package.
 func withReg(cfg grpcadapter.Config) grpcadapter.Config {
 	cfg.Registrar = runtimegrpc.NewServiceRegistrar()
+	cfg.Drain = runtimegrpc.NewDrainSignal()
 	return cfg
 }
 

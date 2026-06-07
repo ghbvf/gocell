@@ -288,6 +288,15 @@ func warnIfInsecureNonLoopback(allowInsecure bool, addr net.Addr) {
 func (s *Server) gracefulStop(ctx context.Context) error {
 	var stopErr error
 	s.stopOnce.Do(func() {
+		// Trigger the framework drain signal FIRST (PR-10 #1153): this cancels
+		// every in-flight stream's handler context via the StreamDrain
+		// interceptor, so a long-lived server-stream that selects on ctx.Done()
+		// returns promptly and GracefulStop below completes within the budget
+		// instead of waiting the full ShutdownTimeout for the hard Stop(). Drain
+		// is required (validate guarantees non-nil); the trigger is idempotent and
+		// a no-op for a server with no StreamDrain consumer.
+		s.cfg.Drain.Trigger()
+
 		// Flip readiness to unhealthy BEFORE draining: GracefulStop stops
 		// accepting new RPCs immediately, so the grpc_ready probe must report
 		// not-serving the moment shutdown begins (lets a load balancer drain

@@ -360,33 +360,40 @@ func TestReadProtoServiceInfo_ServiceNotFound(t *testing.T) {
 	}
 }
 
-// TestReadProtoServiceInfo_StreamingRejected verifies that a service containing
-// any streaming RPC is rejected — service-level codegen supports unary only.
-// The rpc grammar has two independent stream positions (request-side and
-// response-side), so all three non-unary shapes must be covered: server-stream
-// (response only), client-stream (request only), and bidi (both).
-func TestReadProtoServiceInfo_StreamingRejected(t *testing.T) {
+// TestReadProtoServiceInfo_StreamingAccepted verifies that streaming RPCs are
+// accepted (PR-10 #1153 lifted the unary-only rejection): service-level codegen
+// registers the whole proto service regardless of per-method stream shape — the
+// stream interceptor chain handles streaming RPCs at runtime — so the reader
+// parses every shape without error. The rpc grammar has two independent stream
+// positions (request-side and response-side), so all three non-unary shapes are
+// covered: server-stream (response only), client-stream (request only), and bidi
+// (both).
+func TestReadProtoServiceInfo_StreamingAccepted(t *testing.T) {
 	t.Parallel()
 	const header = `syntax = "proto3";
 package device.command.v1;
 option go_package = "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1;commandv1";
 `
 	cases := []struct {
-		name string
-		rpc  string
+		name   string
+		rpc    string
+		method string
 	}{
-		{"server-stream", "rpc Watch(WatchRequest) returns (stream WatchResponse) {}"},
-		{"client-stream", "rpc Upload(stream UploadRequest) returns (UploadResponse) {}"},
-		{"bidi", "rpc Chat(stream ChatRequest) returns (stream ChatResponse) {}"},
+		{"server-stream", "rpc Watch(WatchRequest) returns (stream WatchResponse) {}", "Watch"},
+		{"client-stream", "rpc Upload(stream UploadRequest) returns (UploadResponse) {}", "Upload"},
+		{"bidi", "rpc Chat(stream ChatRequest) returns (stream ChatResponse) {}", "Chat"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			src := header + "service DeviceCommandService {\n  " + tc.rpc + "\n}\n"
 			path := writeTempProto(t, src)
-			_, err := ReadProtoServiceInfo(path, fixtureFQService)
-			if err == nil || !strings.Contains(err.Error(), "streaming") {
-				t.Fatalf("expected streaming-rejected error, got %v", err)
+			info, err := ReadProtoServiceInfo(path, fixtureFQService)
+			if err != nil {
+				t.Fatalf("streaming rpc must be accepted, got %v", err)
+			}
+			if len(info.Methods) != 1 || info.Methods[0].Name != tc.method {
+				t.Fatalf("expected exactly method %q, got %+v", tc.method, info.Methods)
 			}
 		})
 	}

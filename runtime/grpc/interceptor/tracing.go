@@ -37,30 +37,42 @@ func UnaryTracing(tracer wrapper.Tracer) grpc.UnaryServerInterceptor {
 		tracer = wrapper.NoopTracer{}
 	}
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		ctx = extractGRPCTraceContext(ctx)
-
-		ctx, span := tracer.Start(ctx, strings.TrimPrefix(info.FullMethod, "/"))
+		ctx, span := startRPCSpan(ctx, tracer, info.FullMethod)
 		defer span.End()
-
-		service, method := splitFullMethod(info.FullMethod)
-		span.SetAttributes(
-			wrapper.Attr{Key: "rpc.system", Value: "grpc"},
-			wrapper.Attr{Key: "rpc.service", Value: service},
-			wrapper.Attr{Key: "rpc.method", Value: method},
-		)
-
 		resp, err := handler(ctx, req)
-
-		code := status.Code(err)
-		span.SetAttributes(wrapper.Attr{Key: "rpc.grpc.status_code", Value: int64(code)})
-		if err != nil {
-			// status.Code never returns codes.OK for a non-nil error, so a
-			// failing RPC always marks the span as error. The raw error is
-			// redacted at the otelSpan sink (SPAN-RECORD-ERROR-SEAL-01).
-			span.RecordError(err)
-			span.SetStatus(wrapper.StatusError, code.String())
-		}
+		finishRPCSpan(span, err)
 		return resp, err
+	}
+}
+
+// startRPCSpan is the transport-shape-agnostic span-open core shared by
+// UnaryTracing and StreamTracing (PR-10 #1153): it continues any upstream trace
+// from the incoming metadata, starts a span named by the full method, and sets
+// the rpc.system/service/method attributes. The caller must `defer span.End()`.
+func startRPCSpan(ctx context.Context, tracer wrapper.Tracer, fullMethod string) (context.Context, wrapper.Span) {
+	ctx = extractGRPCTraceContext(ctx)
+	ctx, span := tracer.Start(ctx, strings.TrimPrefix(fullMethod, "/"))
+	service, method := splitFullMethod(fullMethod)
+	span.SetAttributes(
+		wrapper.Attr{Key: "rpc.system", Value: "grpc"},
+		wrapper.Attr{Key: "rpc.service", Value: service},
+		wrapper.Attr{Key: "rpc.method", Value: method},
+	)
+	return ctx, span
+}
+
+// finishRPCSpan is the transport-shape-agnostic span-close core shared by
+// UnaryTracing and StreamTracing: it records the final gRPC status code and, on
+// error, the (sink-redacted) error and an error span status.
+func finishRPCSpan(span wrapper.Span, err error) {
+	code := status.Code(err)
+	span.SetAttributes(wrapper.Attr{Key: "rpc.grpc.status_code", Value: int64(code)})
+	if err != nil {
+		// status.Code never returns codes.OK for a non-nil error, so a failing
+		// RPC always marks the span as error. The raw error is redacted at the
+		// otelSpan sink (SPAN-RECORD-ERROR-SEAL-01).
+		span.RecordError(err)
+		span.SetStatus(wrapper.StatusError, code.String())
 	}
 }
 

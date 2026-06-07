@@ -2,6 +2,27 @@
 //
 //   - INVARIANT: GRPC-INTERCEPTOR-CHAIN-ORDER-01
 //   - INVARIANT: GRPC-CHAIN-UNARY-INTERCEPTOR-CALLER-01
+//   - INVARIANT: GRPC-STREAM-CHAIN-ORDER-01
+//   - INVARIANT: GRPC-CHAIN-STREAM-INTERCEPTOR-CALLER-01
+//   - INVARIANT: GRPC-STREAM-DRAIN-01
+//
+// The STREAM-* invariants (PR-10 #1153) are the streaming counterparts of the
+// unary chain guards, with the same AI-robust ratings and Go-ceiling caveats:
+// GRPC-STREAM-CHAIN-ORDER-01 pins the 8-arg order of the single
+// grpc.ChainStreamInterceptor call in NewStreamChain (RequestID outermost, Drain
+// just inside Auth, Recovery innermost); GRPC-CHAIN-STREAM-INTERCEPTOR-CALLER-01
+// pins WHO may call grpc.ChainStreamInterceptor (sole site = NewStreamChain in
+// stream.go) — Hard-upstream is the same Go-language ceiling as the unary
+// CALLER-01 (third-party exported func, won't-do gh #1394; the single-builder
+// funnel that would also force both chains to be wired is gh #1752).
+// GRPC-STREAM-DRAIN-01 is the two-sided framework-drain guard: (A) StreamDrain is
+// a pinned arg of NewStreamChain (every in-flight stream's ctx is bound to the
+// drain signal), and (B) runtimegrpc.DrainSignal.Trigger is caller-allowlisted to
+// adapters/grpc/server.go (only — and exactly — the adapter's gracefulStop fires
+// it). Together: drain is wired on both producer (adapter Trigger) and consumer
+// (chain StreamDrain) ends. Upstream Hard is unreachable (Trigger is an exported
+// method; Go cannot seal its callers) — same #1394/#851/#1282 family; the
+// single-builder Hard upgrade is gh #1752.
 //
 // Two related invariants guard the single unary interceptor chain that
 // runtime/grpc/interceptor.NewUnaryChain composes:
@@ -440,4 +461,346 @@ func TestArchtest_GRPCChainUnaryInterceptorCaller01(t *testing.T) {
 	}
 
 	Report(t, "GRPC-CHAIN-UNARY-INTERCEPTOR-CALLER-01", diags)
+}
+
+// ─── Streaming chain (PR-10 #1153) ──────────────────────────────────────────────
+
+// grpcRuntimePkgPath is the import path of the runtime/grpc package that owns the
+// shared ServiceRegistrar and DrainSignal.
+const grpcRuntimePkgPath = PlatformModulePath + "/runtime/grpc"
+
+// grpcStreamChainExpectedOrder is the required argument order of the
+// grpc.ChainStreamInterceptor call in NewStreamChain. The streaming chain mirrors
+// the unary order plus a stream-only StreamDrain just inside StreamAuth (so the
+// handler's context is drain-bound while the outer observability interceptors
+// still see the final status). Each name is resolved to a runtime/grpc/interceptor
+// function via go/types before the order is compared.
+var grpcStreamChainExpectedOrder = []string{
+	"StreamRequestID",
+	"StreamCellAttribution",
+	"StreamTracing",
+	"StreamAccessLog",
+	"StreamMetrics",
+	"StreamAuth",
+	"StreamDrain",
+	"StreamRecovery",
+}
+
+// isChainStreamInterceptorSelector resolves sel via go/types and reports whether
+// it references grpc.ChainStreamInterceptor (alias/value-ref proof).
+func isChainStreamInterceptorSelector(info *types.Info, sel *ast.SelectorExpr) bool {
+	pkgPath, name, ok := ResolvePackageRef(info, sel)
+	return ok && pkgPath == grpcPkgPath && name == "ChainStreamInterceptor"
+}
+
+// TestArchtest_GRPCStreamChainOrder asserts the interceptor argument order of the
+// single grpc.ChainStreamInterceptor call in stream.go, resolving each argument's
+// callee to the real runtime/grpc/interceptor constructor via go/types — the
+// streaming sibling of GRPC-INTERCEPTOR-CHAIN-ORDER-01.
+func TestArchtest_GRPCStreamChainOrder(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	found := false
+	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
+		if !p.Typed() || p.Pkg.Path() != grpcInterceptorPkgPath {
+			return nil
+		}
+		var d []Diagnostic
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || !isChainStreamInterceptorSelector(p.TypesInfo, sel) {
+					return
+				}
+				found = true
+				got := grpcResolveArgConstructors(p.TypesInfo, call)
+				if !equalStrings(grpcStreamChainExpectedOrder, got) {
+					d = append(d, Diagnostic{
+						Rel:  rel,
+						Line: p.Fset.Position(call.Pos()).Line,
+						Message: fmt.Sprintf(
+							"GRPC-STREAM-CHAIN-ORDER-01: stream interceptor order must be "+
+								"RequestID→CellAttribution→Tracing→AccessLog→Metrics→Auth→Drain→Recovery "+
+								"(RequestID outermost, Recovery innermost, Drain just inside Auth), each "+
+								"resolved to a runtime/grpc/interceptor constructor; got %v. "+
+								"See runtime/grpc/interceptor package doc.",
+							got,
+						),
+					})
+				}
+			})
+		}
+		return d
+	})
+
+	require.True(t, found,
+		"GRPC-STREAM-CHAIN-ORDER-01: no go/types-resolved grpc.ChainStreamInterceptor "+
+			"call found in %s — the order scan would vacuously pass.", grpcInterceptorPkgPath)
+	Report(t, "GRPC-STREAM-CHAIN-ORDER-01", diags)
+}
+
+// TestArchtest_GRPCStreamChainOrder_BlindSpot_SingleCompositionSite is the reverse
+// self-check that the interceptor package contains EXACTLY ONE
+// grpc.ChainStreamInterceptor call, so the order scan covers the sole stream
+// composition site within the package.
+func TestArchtest_GRPCStreamChainOrder_BlindSpot_SingleCompositionSite(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	var locations []string
+	Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
+		if !p.Typed() || p.Pkg.Path() != grpcInterceptorPkgPath {
+			return nil
+		}
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || !isChainStreamInterceptorSelector(p.TypesInfo, sel) {
+					return
+				}
+				locations = append(locations,
+					fmt.Sprintf("%s:%d", rel, p.Fset.Position(call.Pos()).Line))
+			})
+		}
+		return nil
+	})
+
+	assert.Len(t, locations, 1,
+		"GRPC-STREAM-CHAIN-ORDER-01 blind-spot: grpc.ChainStreamInterceptor must be called "+
+			"exactly once in the interceptor package (sole stream composition site); found at %v", locations)
+}
+
+// TestArchtest_GRPCStreamChainOrder_BlindSpot_ArgsResolveToConstructors is the
+// reverse self-check that every argument to the stream.go
+// grpc.ChainStreamInterceptor call resolves (via go/types) to a
+// runtime/grpc/interceptor constructor, proving the order assertion cannot
+// vacuously pass on a malformed argument list.
+func TestArchtest_GRPCStreamChainOrder_BlindSpot_ArgsResolveToConstructors(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	var violations []string
+	found := false
+	Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
+		if !p.Typed() || p.Pkg.Path() != grpcInterceptorPkgPath {
+			return nil
+		}
+		for _, file := range p.Files {
+			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || !isChainStreamInterceptorSelector(p.TypesInfo, sel) {
+					return
+				}
+				found = true
+				for i, c := range grpcResolveArgConstructors(p.TypesInfo, call) {
+					if strings.HasPrefix(c, "<") {
+						violations = append(violations,
+							fmt.Sprintf("arg %d did not resolve to an interceptor constructor: %s", i, c))
+					}
+				}
+			})
+		}
+		return nil
+	})
+
+	require.True(t, found, "GRPC-STREAM-CHAIN-ORDER-01 blind-spot: no stream chain composition site found")
+	assert.Empty(t, violations,
+		"GRPC-STREAM-CHAIN-ORDER-01 blind-spot: every grpc.ChainStreamInterceptor argument must "+
+			"resolve to a runtime/grpc/interceptor constructor; otherwise order enforcement is bypassable.")
+}
+
+// chainStreamInterceptorCallerAllowlist is the set of production files allowed to
+// reference grpc.ChainStreamInterceptor. The single sanctioned composition site
+// is NewStreamChain in stream.go.
+var chainStreamInterceptorCallerAllowlist = map[string]struct{}{
+	"runtime/grpc/interceptor/stream.go": {}, // NewStreamChain — sole stream composition site
+}
+
+// TestArchtest_GRPCChainStreamInterceptorCaller01 asserts that every production
+// reference to grpc.ChainStreamInterceptor sits in the caller allowlist, and that
+// the sole allowlisted file is actually observed (anti-vacuity reverse check).
+func TestArchtest_GRPCChainStreamInterceptorCaller01(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	observed := map[string]struct{}{}
+
+	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
+		if !p.Typed() {
+			return nil
+		}
+		var d []Diagnostic
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+				if !isChainStreamInterceptorSelector(p.TypesInfo, sel) {
+					return
+				}
+				observed[rel] = struct{}{}
+				if _, allowed := chainStreamInterceptorCallerAllowlist[rel]; !allowed {
+					d = append(d, Diagnostic{
+						Rel:  rel,
+						Line: p.Fset.Position(sel.Pos()).Line,
+						Message: fmt.Sprintf(
+							"GRPC-CHAIN-STREAM-INTERCEPTOR-CALLER-01: grpc.ChainStreamInterceptor is referenced "+
+								"from %s, which is not the sanctioned stream-composition site. Composing a stream "+
+								"interceptor chain anywhere but runtime/grpc/interceptor.NewStreamChain bypasses the "+
+								"chain-order invariant (GRPC-STREAM-CHAIN-ORDER-01). Route all gRPC stream "+
+								"interceptor assembly through NewStreamChain. If this IS a new sanctioned composition "+
+								"site, add it to chainStreamInterceptorCallerAllowlist with rationale and extend "+
+								"STREAM-CHAIN-ORDER-01 to cover it.",
+							rel,
+						),
+					})
+				}
+			})
+		}
+		return d
+	})
+
+	for f := range chainStreamInterceptorCallerAllowlist {
+		if _, seen := observed[f]; !seen {
+			diags = append(diags, Diagnostic{
+				Message: fmt.Sprintf(
+					"GRPC-CHAIN-STREAM-INTERCEPTOR-CALLER-01: allowlist entry %q is STALE — no live "+
+						"grpc.ChainStreamInterceptor reference observed. Either the scanner regressed or the "+
+						"composition site moved; drop or update the dead allowlist entry so it cannot become a "+
+						"silent bypass slot.",
+					f,
+				),
+			})
+		}
+	}
+
+	Report(t, "GRPC-CHAIN-STREAM-INTERCEPTOR-CALLER-01", diags)
+}
+
+// isDrainSignalTrigger resolves sel's selector ident via go/types and reports
+// whether it references the (*runtimegrpc.DrainSignal).Trigger method
+// (receiver-bound, alias-proof).
+func isDrainSignalTrigger(info *types.Info, sel *ast.SelectorExpr) bool {
+	obj := info.Uses[sel.Sel]
+	f, ok := obj.(*types.Func)
+	if !ok || f.Name() != "Trigger" || f.Pkg() == nil || f.Pkg().Path() != grpcRuntimePkgPath {
+		return false
+	}
+	sig, ok := f.Type().(*types.Signature)
+	if !ok || sig.Recv() == nil {
+		return false
+	}
+	rt := sig.Recv().Type()
+	if ptr, ok := rt.(*types.Pointer); ok {
+		rt = ptr.Elem()
+	}
+	named, ok := rt.(*types.Named)
+	return ok && named.Obj().Name() == "DrainSignal"
+}
+
+// drainSignalTriggerCallerAllowlist is the set of production files allowed to call
+// runtimegrpc.DrainSignal.Trigger. The sole sanctioned firing site is the
+// adapter's gracefulStop, which triggers the drain before GracefulStop.
+var drainSignalTriggerCallerAllowlist = map[string]struct{}{
+	"adapters/grpc/server.go": {}, // gracefulStop — sole drain trigger
+}
+
+// TestArchtest_GRPCStreamDrain01 is the two-sided framework-drain guard:
+//
+//	(A) StreamDrain is a pinned argument of the grpc.ChainStreamInterceptor call
+//	    in NewStreamChain (consumer side — every in-flight stream's context is
+//	    bound to the drain signal).
+//	(B) runtimegrpc.DrainSignal.Trigger is called only — and is actually called —
+//	    from adapters/grpc/server.go (producer side — the adapter's gracefulStop
+//	    must fire the drain, and nothing else may).
+func TestArchtest_GRPCStreamDrain01(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	observedTrigger := map[string]struct{}{}
+	streamDrainInChain := false
+
+	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
+		if !p.Typed() {
+			return nil
+		}
+		var d []Diagnostic
+		// Part A: StreamDrain must be an argument of the stream chain composition.
+		if p.Pkg.Path() == grpcInterceptorPkgPath {
+			for _, file := range p.Files {
+				EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok || !isChainStreamInterceptorSelector(p.TypesInfo, sel) {
+						return
+					}
+					for _, name := range grpcResolveArgConstructors(p.TypesInfo, call) {
+						if name == "StreamDrain" {
+							streamDrainInChain = true
+						}
+					}
+				})
+			}
+		}
+		// Part B: DrainSignal.Trigger caller allowlist.
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+				if !isDrainSignalTrigger(p.TypesInfo, sel) {
+					return
+				}
+				observedTrigger[rel] = struct{}{}
+				if _, allowed := drainSignalTriggerCallerAllowlist[rel]; !allowed {
+					d = append(d, Diagnostic{
+						Rel:  rel,
+						Line: p.Fset.Position(sel.Pos()).Line,
+						Message: fmt.Sprintf(
+							"GRPC-STREAM-DRAIN-01: runtimegrpc.DrainSignal.Trigger is called from %s, which is "+
+								"not the sanctioned drain-firing site. Only the gRPC adapter's gracefulStop may "+
+								"trigger the drain (it cancels in-flight streams before GracefulStop). Firing it "+
+								"elsewhere would cut live streams. If this IS a new sanctioned site, add it to "+
+								"drainSignalTriggerCallerAllowlist with rationale.",
+							rel,
+						),
+					})
+				}
+			})
+		}
+		return d
+	})
+
+	// Part A anti-vacuity: StreamDrain must actually be wired into the chain.
+	if !streamDrainInChain {
+		diags = append(diags, Diagnostic{
+			Message: "GRPC-STREAM-DRAIN-01 (A): StreamDrain is not a pinned argument of the " +
+				"grpc.ChainStreamInterceptor call in NewStreamChain — in-flight streams would not be " +
+				"bound to the drain signal, so a drain could not cancel them.",
+		})
+	}
+	// Part B anti-vacuity: the sole allowlisted firing site must host a live call.
+	for f := range drainSignalTriggerCallerAllowlist {
+		if _, seen := observedTrigger[f]; !seen {
+			diags = append(diags, Diagnostic{
+				Message: fmt.Sprintf(
+					"GRPC-STREAM-DRAIN-01 (B): allowlist entry %q is STALE — no live "+
+						"runtimegrpc.DrainSignal.Trigger call observed. The adapter no longer fires the drain, so "+
+						"GracefulStop would wait on in-flight streams instead of canceling them; or the scanner "+
+						"regressed. Drop or update the dead allowlist entry.",
+					f,
+				),
+			})
+		}
+	}
+
+	Report(t, "GRPC-STREAM-DRAIN-01", diags)
 }

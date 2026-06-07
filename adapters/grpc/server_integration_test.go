@@ -6,6 +6,8 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -23,8 +25,13 @@ import (
 
 	grpcadapter "github.com/ghbvf/gocell/adapters/grpc"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
+	"github.com/ghbvf/gocell/runtime/auth"
+	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
+	"github.com/ghbvf/gocell/runtime/grpc/interceptor"
+	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
 const (
@@ -683,4 +690,284 @@ func waitForServing(t *testing.T, srv *grpcadapter.Server) {
 // buffer size. Used by plaintext integration tests to avoid OS-level networking.
 func newBufconnListener(bufSize int) *bufconn.Listener {
 	return bufconn.Listen(bufSize)
+}
+
+// dialBufconn dials the in-process bufconn listener over plaintext.
+func dialBufconn(t *testing.T, lis *bufconn.Listener) *grpc.ClientConn {
+	t.Helper()
+	cc, err := grpc.NewClient("passthrough:///bufnet",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }),
+	)
+	require.NoError(t, err)
+	return cc
+}
+
+// ─── Streaming integration (PR-10 #1153) ───────────────────────────────────────
+
+// integVerifier is a stub IntentTokenVerifier. The streaming tests either mark
+// the method public (auth bypassed, verifier never called) or send no token
+// (StreamAuth rejects before the verifier runs), so it only needs to be non-nil.
+type integVerifier struct{}
+
+func (integVerifier) VerifyIntent(context.Context, string, auth.TokenIntent) (auth.Claims, error) {
+	return auth.Claims{}, errors.New("integ verifier: no tokens issued in this test")
+}
+
+// newStreamingServer builds a plaintext bufconn-ready server whose ServerOptions
+// carry the real unary + stream interceptor chains, sharing one Registrar and one
+// DrainSignal between the chains and the adapter config (Option 3, #1152/#1153).
+func newStreamingServer(t *testing.T, authOpts ...interceptor.AuthOption) (*grpcadapter.Server, *runtimegrpc.DrainSignal) {
+	t.Helper()
+	reg := runtimegrpc.NewServiceRegistrar()
+	drain := runtimegrpc.NewDrainSignal()
+	deps := interceptor.Deps{
+		Collector:       metrics.NewInMemoryGRPCCollector(),
+		Clock:           clock.Real(),
+		Verifier:        integVerifier{},
+		AuthOptions:     authOpts,
+		Registrar:       reg,
+		CellIDClosedSet: []string{"_integration-test"},
+		Drain:           drain,
+	}
+	srv, err := grpcadapter.New(grpcadapter.Config{
+		Addr:            ":0",
+		ShutdownTimeout: integServeTimeout,
+		TLS:             grpcadapter.TLSConfig{AllowInsecure: true},
+		ServerOptions:   []grpc.ServerOption{interceptor.NewStreamChain(deps), interceptor.NewUnaryChain(deps)},
+		Registrar:       reg,
+		Drain:           drain,
+	})
+	require.NoError(t, err)
+	return srv, drain
+}
+
+// allMethodsPublic marks every method public so the streaming round-trip tests
+// exercise the full chain without minting tokens.
+func allMethodsPublic() interceptor.AuthOption {
+	return interceptor.WithPublicMethod(func(string) bool { return true })
+}
+
+const (
+	streamerServerStream = "/grpctest.Streamer/ServerStream"
+	streamerClientStream = "/grpctest.Streamer/ClientStream"
+	streamerBidi         = "/grpctest.Streamer/Bidi"
+	streamerBlock        = "/grpctest.Streamer/BlockStream"
+)
+
+func healthReq() *grpc_health_v1.HealthCheckRequest { return &grpc_health_v1.HealthCheckRequest{} }
+func healthResp() *grpc_health_v1.HealthCheckResponse {
+	return &grpc_health_v1.HealthCheckResponse{Status: grpc_health_v1.HealthCheckResponse_SERVING}
+}
+
+// streamerServiceDesc registers server-stream, client-stream, bidi, and a
+// drain-blocking method (reusing health proto messages as the wire payload, so no
+// extra codegen). BlockStream sends one message, signals started, then blocks on
+// ctx.Done() so a test can hold a stream in-flight across a graceful drain.
+func streamerServiceDesc(started chan<- struct{}) grpc.ServiceDesc {
+	return grpc.ServiceDesc{
+		ServiceName: "grpctest.Streamer",
+		HandlerType: (*any)(nil),
+		Streams: []grpc.StreamDesc{
+			{
+				StreamName:    "ServerStream",
+				ServerStreams: true,
+				Handler: func(_ any, ss grpc.ServerStream) error {
+					if err := ss.RecvMsg(healthReq()); err != nil {
+						return err
+					}
+					for i := 0; i < 3; i++ {
+						if err := ss.Context().Err(); err != nil {
+							return err
+						}
+						if err := ss.SendMsg(healthResp()); err != nil {
+							return err
+						}
+					}
+					return nil
+				},
+			},
+			{
+				StreamName:    "ClientStream",
+				ClientStreams: true,
+				Handler: func(_ any, ss grpc.ServerStream) error {
+					for {
+						if err := ss.RecvMsg(healthReq()); err != nil {
+							if errors.Is(err, io.EOF) {
+								break
+							}
+							return err
+						}
+					}
+					return ss.SendMsg(healthResp())
+				},
+			},
+			{
+				StreamName:    "Bidi",
+				ServerStreams: true,
+				ClientStreams: true,
+				Handler: func(_ any, ss grpc.ServerStream) error {
+					for {
+						if err := ss.RecvMsg(healthReq()); err != nil {
+							if errors.Is(err, io.EOF) {
+								return nil
+							}
+							return err
+						}
+						if err := ss.SendMsg(healthResp()); err != nil {
+							return err
+						}
+					}
+				},
+			},
+			{
+				StreamName:    "BlockStream",
+				ServerStreams: true,
+				Handler: func(_ any, ss grpc.ServerStream) error {
+					if err := ss.RecvMsg(healthReq()); err != nil {
+						return err
+					}
+					if err := ss.SendMsg(healthResp()); err != nil {
+						return err
+					}
+					close(started)
+					<-ss.Context().Done() // block until the drain cancels the stream ctx
+					return ss.Context().Err()
+				},
+			},
+		},
+	}
+}
+
+// TestIntegration_Streaming_RoundTrip drives all three streaming modes through the
+// full unary+stream interceptor chains over bufconn, proving the chain (including
+// auth and the wrapped-stream ctx threading) does not break streaming.
+func TestIntegration_Streaming_RoundTrip(t *testing.T) {
+	t.Parallel()
+	srv, _ := newStreamingServer(t, allMethodsPublic())
+	desc := streamerServiceDesc(make(chan struct{}))
+	integRegisterDesc(t, srv, "grpc.streamer.v1", &desc, new(any))
+
+	lis := newBufconnListener(1024 * 1024)
+	stop := startServing(t, srv, lis)
+	defer stop()
+	waitForServing(t, srv)
+
+	cc := dialBufconn(t, lis)
+	defer func() { _ = cc.Close() }()
+
+	t.Run("server-stream", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), integDialTimeout)
+		defer cancel()
+		cs, err := cc.NewStream(ctx, &grpc.StreamDesc{StreamName: "ServerStream", ServerStreams: true}, streamerServerStream)
+		require.NoError(t, err)
+		require.NoError(t, cs.SendMsg(healthReq()))
+		require.NoError(t, cs.CloseSend())
+		got := 0
+		for {
+			if err := cs.RecvMsg(new(grpc_health_v1.HealthCheckResponse)); err != nil {
+				require.ErrorIs(t, err, io.EOF)
+				break
+			}
+			got++
+		}
+		require.Equal(t, 3, got, "server-stream must deliver all 3 messages")
+	})
+
+	t.Run("client-stream", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), integDialTimeout)
+		defer cancel()
+		cs, err := cc.NewStream(ctx, &grpc.StreamDesc{StreamName: "ClientStream", ClientStreams: true}, streamerClientStream)
+		require.NoError(t, err)
+		for i := 0; i < 3; i++ {
+			require.NoError(t, cs.SendMsg(healthReq()))
+		}
+		require.NoError(t, cs.CloseSend())
+		require.NoError(t, cs.RecvMsg(new(grpc_health_v1.HealthCheckResponse)), "client-stream must return one response")
+	})
+
+	t.Run("bidi", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), integDialTimeout)
+		defer cancel()
+		cs, err := cc.NewStream(ctx, &grpc.StreamDesc{StreamName: "Bidi", ServerStreams: true, ClientStreams: true}, streamerBidi)
+		require.NoError(t, err)
+		for i := 0; i < 3; i++ {
+			require.NoError(t, cs.SendMsg(healthReq()))
+			require.NoError(t, cs.RecvMsg(new(grpc_health_v1.HealthCheckResponse)))
+		}
+		require.NoError(t, cs.CloseSend())
+		require.ErrorIs(t, cs.RecvMsg(new(grpc_health_v1.HealthCheckResponse)), io.EOF, "bidi must EOF after CloseSend drains")
+	})
+}
+
+// TestIntegration_Streaming_AuthRejectsWithoutToken proves the stream chain
+// authenticates streams: with no public-method bypass and no bearer metadata,
+// StreamAuth rejects the stream with codes.Unauthenticated — shipping streaming
+// without the stream auth interceptor would expose unauthenticated streams.
+func TestIntegration_Streaming_AuthRejectsWithoutToken(t *testing.T) {
+	t.Parallel()
+	srv, _ := newStreamingServer(t) // no allMethodsPublic → fail-closed auth
+	desc := streamerServiceDesc(make(chan struct{}))
+	integRegisterDesc(t, srv, "grpc.streamer.v1", &desc, new(any))
+
+	lis := newBufconnListener(1024 * 1024)
+	stop := startServing(t, srv, lis)
+	defer stop()
+	waitForServing(t, srv)
+
+	cc := dialBufconn(t, lis)
+	defer func() { _ = cc.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), integDialTimeout)
+	defer cancel()
+	cs, err := cc.NewStream(ctx, &grpc.StreamDesc{StreamName: "ServerStream", ServerStreams: true}, streamerServerStream)
+	require.NoError(t, err)
+	_ = cs.SendMsg(healthReq())
+	err = cs.RecvMsg(new(grpc_health_v1.HealthCheckResponse))
+	require.Equal(t, codes.Unauthenticated, status.Code(err),
+		"a stream without bearer metadata must be rejected Unauthenticated by StreamAuth")
+}
+
+// TestIntegration_Streaming_DrainCancelsInFlight proves the framework-side drain:
+// an in-flight server-stream blocked on ctx.Done() is actively canceled when the
+// server drains, so Close returns promptly instead of blocking on GracefulStop's
+// passive wait. Without StreamDrain + the adapter Trigger, Close would hang until
+// the watchdog fires.
+func TestIntegration_Streaming_DrainCancelsInFlight(t *testing.T) {
+	t.Parallel()
+	srv, _ := newStreamingServer(t, allMethodsPublic())
+	started := make(chan struct{})
+	desc := streamerServiceDesc(started)
+	integRegisterDesc(t, srv, "grpc.streamer.v1", &desc, new(any))
+
+	lis := newBufconnListener(1024 * 1024)
+	// Serve on a background ctx that we never cancel — the drain must come from
+	// Close, not from the serve ctx.
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- srv.Serve(context.Background(), lis) }()
+	waitForServing(t, srv)
+
+	cc := dialBufconn(t, lis)
+	defer func() { _ = cc.Close() }()
+
+	// Open the blocking server-stream and consume the first message so the handler
+	// is genuinely in-flight (blocked on ctx.Done()) before we drain.
+	cs, err := cc.NewStream(context.Background(),
+		&grpc.StreamDesc{StreamName: "BlockStream", ServerStreams: true}, streamerBlock)
+	require.NoError(t, err)
+	require.NoError(t, cs.SendMsg(healthReq()))
+	require.NoError(t, cs.RecvMsg(new(grpc_health_v1.HealthCheckResponse)))
+	testwait.Deterministic(t, started, "block-stream-handler-in-flight")
+
+	// Close with a background ctx (no budget): only the drain canceling the
+	// stream context lets GracefulStop complete. A watchdog catches a hang.
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- srv.Close(context.Background()) }()
+	select {
+	case err := <-closeDone:
+		require.NoError(t, err, "Close must complete cleanly once the drain cancels the in-flight stream")
+	case <-time.After(integServeTimeout):
+		t.Fatalf("Close blocked — the framework drain did not cancel the in-flight stream")
+	}
+	<-serveDone
 }

@@ -52,14 +52,18 @@ func grpcAddrFromEnv() string {
 // newGRPCServerFromEnv builds the gRPC server, resolving transport security from
 // the environment. addr is the resolved listen address (grpcAddrFromEnv), passed
 // in by the caller so the same value is also handed to WithGRPCListener.
-// serverOpts carries the interceptor chain (assembled by the caller so the JWT
+// serverOpts carries the interceptor chains (assembled by the caller so the JWT
 // verifier / metrics collector stay in run.go). reg is the shared method→cellID
 // registrar (Option 3 #1152): the same instance whose CellIDForMethod the chain's
 // cell-attribution interceptor reads, bound to the server here via Config.Registrar.
+// drain is the shared drain signal (Option 3 #1153): the SAME instance the stream
+// chain's StreamDrain interceptor observes, bound here via Config.Drain so
+// GracefulStop's trigger cancels in-flight streams.
 func newGRPCServerFromEnv(
 	durabilityMode outbox.DurabilityMode,
 	addr string,
 	reg *runtimegrpc.ServiceRegistrar,
+	drain *runtimegrpc.DrainSignal,
 	serverOpts []grpc.ServerOption,
 ) (*adaptersgrpc.Server, error) {
 	tlsCfg, err := grpcTLSConfigFromEnv(durabilityMode)
@@ -71,6 +75,7 @@ func newGRPCServerFromEnv(
 		TLS:           tlsCfg,
 		ServerOptions: serverOpts,
 		Registrar:     reg,
+		Drain:         drain,
 	})
 }
 

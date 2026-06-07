@@ -14,6 +14,11 @@ option go_package = "github.com/ghbvf/gocell/generated/contracts/grpc/device/com
 service DeviceCommandService {
   // IssueCommand pushes a command to a device and returns an acknowledgement.
   rpc IssueCommand(IssueCommandRequest) returns (IssueCommandResponse) {}
+
+  // WatchCommands streams the active commands for a device, then keeps the watch
+  // open until the caller disconnects or the server drains — the example's first
+  // server-streaming RPC (PR-10 #1153).
+  rpc WatchCommands(WatchCommandsRequest) returns (stream WatchCommandsResponse) {}
 }
 
 message IssueCommandRequest {
@@ -30,4 +35,18 @@ message IssueCommandResponse {
   string ack_id = 1;
   // acknowledged_at_unix_nano is the server acknowledgement time, unix nanos.
   int64 acknowledged_at_unix_nano = 2;
+}
+
+message WatchCommandsRequest {
+  // device_id is the device whose commands to watch (canonical id).
+  string device_id = 1;
+}
+
+message WatchCommandsResponse {
+  // command_id is the command's id.
+  string command_id = 1;
+  // command_type is the command verb, e.g. "lock" or "reboot".
+  string command_type = 2;
+  // status is the command's current lifecycle status, e.g. "pending" or "sent".
+  string status = 3;
 }

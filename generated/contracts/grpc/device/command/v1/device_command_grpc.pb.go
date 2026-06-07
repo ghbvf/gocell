@@ -26,7 +26,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	DeviceCommandService_IssueCommand_FullMethodName = "/device.command.v1.DeviceCommandService/IssueCommand"
+	DeviceCommandService_IssueCommand_FullMethodName  = "/device.command.v1.DeviceCommandService/IssueCommand"
+	DeviceCommandService_WatchCommands_FullMethodName = "/device.command.v1.DeviceCommandService/WatchCommands"
 )
 
 // DeviceCommandServiceClient is the client API for DeviceCommandService service.
@@ -37,6 +38,10 @@ const (
 type DeviceCommandServiceClient interface {
 	// IssueCommand pushes a command to a device and returns an acknowledgement.
 	IssueCommand(ctx context.Context, in *IssueCommandRequest, opts ...grpc.CallOption) (*IssueCommandResponse, error)
+	// WatchCommands streams the active commands for a device, then keeps the watch
+	// open until the caller disconnects or the server drains — the example's first
+	// server-streaming RPC (PR-10 #1153).
+	WatchCommands(ctx context.Context, in *WatchCommandsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchCommandsResponse], error)
 }
 
 type deviceCommandServiceClient struct {
@@ -57,6 +62,25 @@ func (c *deviceCommandServiceClient) IssueCommand(ctx context.Context, in *Issue
 	return out, nil
 }
 
+func (c *deviceCommandServiceClient) WatchCommands(ctx context.Context, in *WatchCommandsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchCommandsResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &DeviceCommandService_ServiceDesc.Streams[0], DeviceCommandService_WatchCommands_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchCommandsRequest, WatchCommandsResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DeviceCommandService_WatchCommandsClient = grpc.ServerStreamingClient[WatchCommandsResponse]
+
 // DeviceCommandServiceServer is the server API for DeviceCommandService service.
 // All implementations must embed UnimplementedDeviceCommandServiceServer
 // for forward compatibility.
@@ -65,6 +89,10 @@ func (c *deviceCommandServiceClient) IssueCommand(ctx context.Context, in *Issue
 type DeviceCommandServiceServer interface {
 	// IssueCommand pushes a command to a device and returns an acknowledgement.
 	IssueCommand(context.Context, *IssueCommandRequest) (*IssueCommandResponse, error)
+	// WatchCommands streams the active commands for a device, then keeps the watch
+	// open until the caller disconnects or the server drains — the example's first
+	// server-streaming RPC (PR-10 #1153).
+	WatchCommands(*WatchCommandsRequest, grpc.ServerStreamingServer[WatchCommandsResponse]) error
 	mustEmbedUnimplementedDeviceCommandServiceServer()
 }
 
@@ -77,6 +105,9 @@ type UnimplementedDeviceCommandServiceServer struct{}
 
 func (UnimplementedDeviceCommandServiceServer) IssueCommand(context.Context, *IssueCommandRequest) (*IssueCommandResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method IssueCommand not implemented")
+}
+func (UnimplementedDeviceCommandServiceServer) WatchCommands(*WatchCommandsRequest, grpc.ServerStreamingServer[WatchCommandsResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method WatchCommands not implemented")
 }
 func (UnimplementedDeviceCommandServiceServer) mustEmbedUnimplementedDeviceCommandServiceServer() {}
 func (UnimplementedDeviceCommandServiceServer) testEmbeddedByValue()                              {}
@@ -117,6 +148,17 @@ func _DeviceCommandService_IssueCommand_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DeviceCommandService_WatchCommands_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchCommandsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(DeviceCommandServiceServer).WatchCommands(m, &grpc.GenericServerStream[WatchCommandsRequest, WatchCommandsResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DeviceCommandService_WatchCommandsServer = grpc.ServerStreamingServer[WatchCommandsResponse]
+
 // DeviceCommandService_ServiceDesc is the grpc.ServiceDesc for DeviceCommandService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -129,6 +171,12 @@ var DeviceCommandService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _DeviceCommandService_IssueCommand_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "WatchCommands",
+			Handler:       _DeviceCommandService_WatchCommands_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "device/command/v1/device_command.proto",
 }

@@ -44,6 +44,16 @@ type Deps struct {
 	// series). Required + non-empty: a half-wired chain (resolver set, closed set
 	// empty) would relabel every cell _runtime — NewUnaryChain fails fast instead.
 	CellIDClosedSet []string
+	// Drain is the framework-side gRPC drain signal (PR-10 #1153) the StreamDrain
+	// interceptor binds each in-flight stream's context to, so GracefulStop
+	// actively cancels long-lived streams instead of merely waiting for them. It
+	// MUST be the SAME *runtimegrpc.DrainSignal instance passed to
+	// adaptersgrpc.Config.Drain — the adapter triggers it at GracefulStop start
+	// and the stream chain observes the cancellation (same Option-3 instance
+	// symmetry as Registrar; the single-builder Hard upgrade is #1752). Required
+	// by NewStreamChain (fail-closed); NewUnaryChain ignores it (unary RPCs are
+	// short-lived, GracefulStop's wait suffices).
+	Drain *runtimegrpc.DrainSignal
 }
 
 // NewUnaryChain composes the unary interceptors into a single grpc.ServerOption.
@@ -63,10 +73,7 @@ func NewUnaryChain(deps Deps) grpc.ServerOption {
 			errcode.Assertion(
 				"interceptor.NewUnaryChain: Deps.CellIDClosedSet is required (the assembly cell-id set)")))
 	}
-	validCellIDs := make(map[string]struct{}, len(deps.CellIDClosedSet))
-	for _, id := range deps.CellIDClosedSet {
-		validCellIDs[id] = struct{}{}
-	}
+	validCellIDs := buildValidCellIDs(deps.CellIDClosedSet)
 	return grpc.ChainUnaryInterceptor(
 		UnaryRequestID(),
 		UnaryCellAttribution(deps.Registrar.CellIDForMethod),
@@ -76,4 +83,15 @@ func NewUnaryChain(deps Deps) grpc.ServerOption {
 		UnaryAuth(deps.Verifier, deps.AuthOptions...),
 		UnaryRecovery(),
 	)
+}
+
+// buildValidCellIDs materializes the assembly cell-id closed set into the lookup
+// map the metrics interceptors validate the attributed cell against. Shared by
+// NewUnaryChain and NewStreamChain (PR-10 #1153).
+func buildValidCellIDs(ids []string) map[string]struct{} {
+	validCellIDs := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		validCellIDs[id] = struct{}{}
+	}
+	return validCellIDs
 }

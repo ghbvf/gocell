@@ -40,11 +40,19 @@ func UnaryAccessLog(clk clock.Clock) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		start := clk.Now()
 		resp, err := handler(ctx, req)
-		observability.SafeObserve(slog.Default(), func() {
-			slog.Info("grpc request", accessLogAttrs(start, info.FullMethod, err, ctx, clk)...)
-		})
+		logAccess(ctx, clk, start, info.FullMethod, err)
 		return resp, err
 	}
+}
+
+// logAccess is the transport-shape-agnostic access-log core shared by
+// UnaryAccessLog and StreamAccessLog (PR-10 #1153): it emits the one structured
+// slog.Info line per RPC (guarded by SafeObserve), with the HTTP-parity field
+// set assembled by accessLogAttrs.
+func logAccess(ctx context.Context, clk clock.Clock, start time.Time, fullMethod string, err error) {
+	observability.SafeObserve(slog.Default(), func() {
+		slog.Info("grpc request", accessLogAttrs(start, fullMethod, err, ctx, clk)...)
+	})
 }
 
 // accessLogAttrs assembles the structured fields. fullMethod is sanitized to

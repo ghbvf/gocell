@@ -185,18 +185,30 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		return fmt.Errorf("build grpc metrics collector: %w", err)
 	}
 	grpcRegistrar := runtimegrpc.NewServiceRegistrar()
+	// The drain signal is shared (Option 3 #1153) between the stream interceptor
+	// chain (StreamDrain binds in-flight streams to it) and the adapter
+	// (Config.Drain triggers it at GracefulStop) — devicecell serves a
+	// server-streaming RPC (WatchCommands), so a drain must cancel in-flight
+	// watches instead of holding the graceful-stop budget.
+	grpcDrain := runtimegrpc.NewDrainSignal()
+	// One Deps drives both chains: the unary chain ignores Drain, the stream chain
+	// requires it. Both share the registrar so cell attribution resolves through
+	// one method→cellID map.
+	grpcDeps := interceptor.Deps{
+		Verifier:        jwtVerifier,
+		Clock:           clk,
+		Collector:       grpcCollector,
+		Registrar:       grpcRegistrar,
+		CellIDClosedSet: asm.CellIDs(),
+		Drain:           grpcDrain,
+	}
 	// Resolve the gRPC addr ONCE and bind it in both the adapter config and
 	// WithGRPCListener below — bootstrap pre-binds the WithGRPCListener addr, so a
 	// divergent adapter Config.Addr would be ignored (#1737 F2).
 	grpcAddr := grpcAddrFromEnv()
-	grpcServer, err := newGRPCServerFromEnv(durabilityMode, grpcAddr, grpcRegistrar, []grpc.ServerOption{
-		interceptor.NewUnaryChain(interceptor.Deps{
-			Verifier:        jwtVerifier,
-			Clock:           clk,
-			Collector:       grpcCollector,
-			Registrar:       grpcRegistrar,
-			CellIDClosedSet: asm.CellIDs(),
-		}),
+	grpcServer, err := newGRPCServerFromEnv(durabilityMode, grpcAddr, grpcRegistrar, grpcDrain, []grpc.ServerOption{
+		interceptor.NewUnaryChain(grpcDeps),
+		interceptor.NewStreamChain(grpcDeps),
 	})
 	if err != nil {
 		return fmt.Errorf("build grpc server: %w", err)
