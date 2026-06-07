@@ -287,6 +287,18 @@ func NewTestProtocol(t testing.TB) *ledger.Protocol {
 // runtime/audit/ledger.auditHashInput is caught by archtest
 // AUDIT-HASH-INPUT-FROZEN-01, but only after the test fixture has been
 // updated to populate the new fields.
+// Conformance tenant identifiers MUST be canonical UUIDs (#1618): scoped chain
+// reads (GetBySeq/Verify/Tail) run inside RunInTx, and the PG TxManager's
+// setLocalTenant validates the RLS GUC tenant via tenant.TenantID.Validate
+// (canonical 36-char dashed UUID, non-nil). conformanceTenant is the standard
+// single-tenant fixture chain; conformanceTenantA/B are the distinct per-tenant
+// chains exercised by Per_Tenant_Chains.
+const (
+	conformanceTenant  = "11111111-1111-1111-1111-111111111111"
+	conformanceTenantA = "22222222-2222-2222-2222-222222222222"
+	conformanceTenantB = "33333333-3333-3333-3333-333333333333"
+)
+
 func NewEntryFixture(t *testing.T, eventID, eventType, actorID string, now time.Time) *ledger.Entry {
 	t.Helper()
 	if eventID == "" {
@@ -303,7 +315,7 @@ func NewEntryFixture(t *testing.T, eventID, eventType, actorID string, now time.
 		EventType:     eventType,
 		ActorID:       actorID,
 		SubjectID:     "subject-test",
-		TenantID:      "tenant-test",
+		TenantID:      conformanceTenant,
 		SessionID:     "session-test",
 		CorrelationID: "corr-test",
 		OccurredAt:    now.Add(principalOccurredAtSkew),
@@ -369,7 +381,7 @@ func runAppendTailRoundTrip(t *testing.T, factory Factory) {
 		t.Fatalf(msgAppend, err)
 	}
 
-	fixtureTenant := tenant.TenantID("tenant-test")
+	fixtureTenant := tenant.TenantID(conformanceTenant)
 	tail, err := scopedTail(t, tr, store, fixtureTenant)
 	if err != nil {
 		t.Fatalf("Tail: %v", err)
@@ -432,7 +444,7 @@ func runRestartRecovery(t *testing.T, factory Factory) {
 			t.Fatalf("storeA Append %d: %v", i, err)
 		}
 	}
-	fixtureTenant := tenant.TenantID("tenant-test")
+	fixtureTenant := tenant.TenantID(conformanceTenant)
 	tailA, err := scopedTail(t, trA, storeA, fixtureTenant)
 	if err != nil {
 		t.Fatalf("storeA Tail: %v", err)
@@ -651,7 +663,7 @@ func runVerifyFullRange(t *testing.T, factory Factory) {
 		}
 	}
 
-	valid, firstInvalid, err := scopedVerify(t, tr, store, tenant.TenantID("tenant-test"), 1, 5)
+	valid, firstInvalid, err := scopedVerify(t, tr, store, tenant.TenantID(conformanceTenant), 1, 5)
 	if err != nil {
 		t.Fatalf(msgVerify, err)
 	}
@@ -975,7 +987,7 @@ func runQueryInvalidCursorRejected(t *testing.T, factory Factory) {
 	}
 
 	// Entries from NewEntryFixture go to "tenant-test" chain.
-	_, err := store.Query(context.Background(), tenant.TenantID("tenant-test"),
+	_, err := store.Query(context.Background(), tenant.TenantID(conformanceTenant),
 		mustRowVisibility(t, tenant.RowScopeTenant, ""), ledger.AuditFilters{},
 		query.ListParams{Limit: 10, Sort: ledger.QuerySort(), CursorValues: []any{"not-a-timestamp", "some-id"}})
 	assertErrCode(t, err, errcode.ErrCursorInvalid)
@@ -1092,16 +1104,16 @@ func runPerTenantChains(t *testing.T, factory Factory) {
 	store, tr, fc, cleanup := factory(t)
 	defer cleanup()
 
-	tenantA := tenant.TenantID("chain-tenant-a")
-	tenantB := tenant.TenantID("chain-tenant-b")
+	tenantA := tenant.TenantID(conformanceTenantA)
+	tenantB := tenant.TenantID(conformanceTenantB)
 	vis := mustRowVisibility(t, tenant.RowScopeTenant, "")
 
 	// Interleave two tenants' appends; each chain is independent (per-tenant
 	// seq_no), so both reach SeqNo==2 on their own (namespace, tenant) chain.
-	appendChainEntry(t, store, "chain-a-1", "chain-tenant-a", fc.Now())
-	appendChainEntry(t, store, "chain-b-1", "chain-tenant-b", fc.Now())
-	appendChainEntry(t, store, "chain-a-2", "chain-tenant-a", fc.Now())
-	appendChainEntry(t, store, "chain-b-2", "chain-tenant-b", fc.Now())
+	appendChainEntry(t, store, "chain-a-1", conformanceTenantA, fc.Now())
+	appendChainEntry(t, store, "chain-b-1", conformanceTenantB, fc.Now())
+	appendChainEntry(t, store, "chain-a-2", conformanceTenantA, fc.Now())
+	appendChainEntry(t, store, "chain-b-2", conformanceTenantB, fc.Now())
 
 	// Tenant-a chain: Tail shows SeqNo==2.
 	tailA, err := scopedTail(t, tr, store, tenantA)
@@ -1176,7 +1188,7 @@ func runProtocolHashParity(t *testing.T, factory Factory, protocol *ledger.Proto
 	}
 
 	// NewEntryFixture stamps TenantID="tenant-test"; scope ctx to that chain.
-	fixtureTenant := tenant.TenantID("tenant-test")
+	fixtureTenant := tenant.TenantID(conformanceTenant)
 	vis := mustRowVisibility(t, tenant.RowScopeTenant, "")
 	got1, err := scopedGetBySeq(t, tr, store, fixtureTenant, vis, 1)
 	if err != nil {

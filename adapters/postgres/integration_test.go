@@ -979,8 +979,12 @@ func TestMigrator_ForwardRebuild_Migration043_PopulatedAuditEntries(t *testing.T
 	require.NoError(t, err)
 
 	permit := mustAllowForwardRebuild(t, 43, "043 audit_entries v2 rebuild integration test")
-	require.NoError(t, migrator2.ForwardRebuild(ctx, permit),
-		"ForwardRebuild with permit for migration 043 must succeed")
+	// Migration 055 ALSO forward-rebuilds audit_entries (#1618). The phase0 gate
+	// checks ALL pending rebuilds against the CURRENTLY-populated table, so 055
+	// needs its own permit too (audit_entries has the pre-043 row right now).
+	permit55 := mustAllowForwardRebuild(t, 55, "055 audit_entries per-tenant rebuild integration test")
+	require.NoError(t, migrator2.ForwardRebuild(ctx, permit, permit55),
+		"ForwardRebuild with permits for migrations 043+055 must succeed")
 
 	// Verify migration 043's subject_id column was created.
 	var subjectIDExists bool
@@ -1051,8 +1055,11 @@ func TestMigrator_ForwardRebuild_Migrations043And044_DualPermit(t *testing.T) {
 	require.NoError(t, err)
 	permit43 := mustAllowForwardRebuild(t, 43, "043 dual-test permit final")
 	permit44 := mustAllowForwardRebuild(t, 44, "044 outbox_entries principal dual-test permit")
-	require.NoError(t, migrator3.ForwardRebuild(ctx, permit43, permit44),
-		"ForwardRebuild with both permits must succeed")
+	// 055 also rebuilds audit_entries (#1618) and is gated at phase0 against the
+	// currently-populated audit_entries, so its permit is required here too.
+	permit55 := mustAllowForwardRebuild(t, 55, "055 audit_entries per-tenant dual-test permit")
+	require.NoError(t, migrator3.ForwardRebuild(ctx, permit43, permit44, permit55),
+		"ForwardRebuild with all permits must succeed")
 
 	// Verify 044's principal column was added.
 	var principalExists bool
