@@ -103,6 +103,8 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		req.Page = v
 	}
+	req.XRequestID = r.Header.Get("X-Request-ID")
+	req.XTenantID = r.Header.Get("X-Tenant-ID")
 	resp, err := h.svc.Details(r.Context(), req)
 	if err != nil {
 		httputil.WriteError(r.Context(), w, err)

@@ -65,6 +65,51 @@ func TestContractSchemaAllowsParamConstraintFacets(t *testing.T) {
 	assert.NoError(t, schema.Validate(contractDoc))
 }
 
+func TestContractSchemaAllowsHeaders(t *testing.T) {
+	raw, err := FS.ReadFile("contract.schema.json")
+	require.NoError(t, err)
+
+	var schemaDoc any
+	require.NoError(t, json.Unmarshal(raw, &schemaDoc))
+
+	compiler := jsonschema.NewCompiler()
+	const schemaURL = "https://gocell.dev/schemas/contract.schema.json"
+	require.NoError(t, compiler.AddResource(schemaURL, schemaDoc))
+	schema, err := compiler.Compile(schemaURL)
+	require.NoError(t, err)
+
+	var contractDoc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "http.auth.login.v1",
+		"kind": "http",
+		"ownerCell": "accesscore",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"endpoints": {
+			"server": "accesscore",
+			"clients": [],
+			"http": {
+				"method": "POST",
+				"path": "/api/v1/access/sessions/login",
+				"headers": {
+					"X-Tenant-ID": {
+						"type": "string",
+						"format": "uuid",
+						"required": true
+					}
+				},
+				"successStatus": 201,
+				"noContent": false
+			}
+		},
+		"schemaRefs": {
+			"request": "request.schema.json"
+		}
+	}`), &contractDoc))
+
+	assert.NoError(t, schema.Validate(contractDoc), "contract with endpoints.http.headers must pass strict validation")
+}
+
 func TestContractSchemaAllowsAuthPublic(t *testing.T) {
 	raw, err := FS.ReadFile("contract.schema.json")
 	require.NoError(t, err)

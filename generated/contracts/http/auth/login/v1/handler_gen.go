@@ -87,6 +87,7 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		schemavalidate.WriteValidationError(r.Context(), w, err)
 		return
 	}
+	req.XTenantID = r.Header.Get("X-Tenant-ID")
 	resp, err := h.svc.Login(r.Context(), req)
 	if err != nil {
 		httputil.WriteError(r.Context(), w, err)

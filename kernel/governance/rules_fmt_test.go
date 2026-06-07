@@ -67,6 +67,132 @@ func TestFMT13_MissingEndpointsHTTP(t *testing.T) {
 	}
 }
 
+// fmt40Project builds a minimal HTTP contract carrying the given header map for
+// FMT-40 validation.
+func fmt40Project(headers map[string]metadata.ParamSchema) *metadata.ProjectMeta {
+	return &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.auth.login.v1": {
+				ID:               "http.auth.login.v1",
+				Kind:             "http",
+				OwnerCell:        metadatatest.CellIDAccessCore,
+				ConsistencyLevel: "L1",
+				Lifecycle:        "active",
+				Endpoints: metadata.EndpointsMeta{
+					Server: metadatatest.CellIDAccessCore,
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:        "POST",
+						Path:          "/api/v1/access/sessions/login",
+						Headers:       headers,
+						SuccessStatus: 201,
+					},
+				},
+				File: "contracts/http/auth/login/v1/contract.yaml",
+			},
+		},
+	}
+}
+
+func fmt40Errors(t *testing.T, headers map[string]metadata.ParamSchema) []ValidationResult {
+	t.Helper()
+	v := NewValidator(fmt40Project(headers), "", clock.Real())
+	var out []ValidationResult
+	for _, r := range v.validateFMT40() {
+		if r.Code == codeFMT40 {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// TestFMT40_ValidHeaderAccepted verifies a canonical typed header passes.
+// `required: true` is intentionally accepted — it is documentation/client-gen
+// metadata only; the generated handler never enforces it server-side (ADR 1160).
+func TestFMT40_ValidHeaderAccepted(t *testing.T) {
+	truthy := true
+	got := fmt40Errors(t, map[string]metadata.ParamSchema{
+		"X-Tenant-ID": {Type: "string", Format: "uuid", Required: &truthy},
+	})
+	if len(got) != 0 {
+		t.Fatalf("FMT-40: valid header must not be flagged, got %d: %v", len(got), got)
+	}
+}
+
+// TestFMT40_NoHeadersSkipped verifies a contract without headers is not flagged.
+func TestFMT40_NoHeadersSkipped(t *testing.T) {
+	if got := fmt40Errors(t, nil); len(got) != 0 {
+		t.Fatalf("FMT-40: contract with no headers must not be flagged, got: %v", got)
+	}
+}
+
+// TestFMT40_Violations exercises each rejection branch.
+func TestFMT40_Violations(t *testing.T) {
+	minLen := 1
+	cases := []struct {
+		name       string
+		headers    map[string]metadata.ParamSchema
+		wantIssue  IssueType
+		wantSubstr string
+	}{
+		{
+			name:       "invalid name with space",
+			headers:    map[string]metadata.ParamSchema{"X Tenant": {Type: "string"}},
+			wantIssue:  IssueInvalid,
+			wantSubstr: "not a valid HTTP header token",
+		},
+		{
+			name:       "missing type",
+			headers:    map[string]metadata.ParamSchema{"X-Tenant-ID": {}},
+			wantIssue:  IssueInvalid,
+			wantSubstr: "declares no type",
+		},
+		{
+			name:       "unknown type",
+			headers:    map[string]metadata.ParamSchema{"X-Tenant-ID": {Type: "uuid"}},
+			wantIssue:  IssueInvalid,
+			wantSubstr: "is unsupported",
+		},
+		{
+			// #1494 review F1: non-string type would generate uncompilable Go
+			// (handler emits r.Header.Get → string). FMT-40 must reject it.
+			name:       "integer type rejected (uncompilable codegen)",
+			headers:    map[string]metadata.ParamSchema{"X-Tenant-ID": {Type: "integer"}},
+			wantIssue:  IssueInvalid,
+			wantSubstr: "is unsupported",
+		},
+		{
+			// #1494 review F3: HTTP header names are case-insensitive.
+			name: "case-insensitive duplicate rejected",
+			headers: map[string]metadata.ParamSchema{
+				"X-Tenant-ID": {Type: "string"},
+				"x-tenant-id": {Type: "string"},
+			},
+			wantIssue:  IssueDuplicate,
+			wantSubstr: "case-insensitive duplicate",
+		},
+		{
+			name:       "unenforced minLength rejected",
+			headers:    map[string]metadata.ParamSchema{"X-Tenant-ID": {Type: "string", MinLength: &minLen}},
+			wantIssue:  IssueForbidden,
+			wantSubstr: "not codegen-enforced",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := fmt40Errors(t, tc.headers)
+			found := false
+			for _, r := range got {
+				if r.IssueType == tc.wantIssue && strings.Contains(r.Message, tc.wantSubstr) {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("FMT-40 %s: expected issue %v containing %q, got: %v", tc.name, tc.wantIssue, tc.wantSubstr, got)
+			}
+		})
+	}
+}
+
 // TestFMT13_NonHTTPContractSkipped verifies that non-HTTP contracts are not
 // flagged by FMT-13 even when they have no endpoints.http block.
 func TestFMT13_NonHTTPContractSkipped(t *testing.T) {

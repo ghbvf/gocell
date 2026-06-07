@@ -309,6 +309,11 @@
                     "description": "Typed declarations for query string parameters accepted by this endpoint.",
                     "additionalProperties": {"$ref": "#/$defs/paramSchema"}
                   },
+                  "headers": {
+                    "type": "object",
+                    "description": "Typed declarations for inbound HTTP request headers this endpoint consumes, keyed by canonical header name (e.g. X-Tenant-ID). Populate-only at codegen: merged into the generated Request DTO and read via r.Header.Get; per-endpoint fail behavior is owned by the cell adapter. Governance FMT-40 validates header name + type and rejects unenforced minLength/maxLength/minimum/maximum (header constraints are not codegen-gated). Single source for request-header consumption — see HTTP-REQUEST-HEADER-READ-FUNNEL-01.",
+                    "additionalProperties": {"$ref": "#/$defs/paramSchema"}
+                  },
                   "successStatus": {
                     "type": "integer",
                     "minimum": 200,

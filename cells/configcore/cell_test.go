@@ -535,7 +535,7 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 	require.NoError(t, r.FinalizeAuth())
 
 	// Seed flags directly via repository (no HTTP create endpoint for flags).
-	// Use a normal per-tenant UUID — NOT tenant.SystemTenantID. The HTTP read
+	// Use a normal per-tenant UUID (the nil-UUID is reserved and invalid). The HTTP read
 	// path below resolves the tenant via tenant.FromContext → ParseTenantID,
 	// which rejects the reserved nil-UUID sentinel as untrusted external input
 	// (F2). This test exercises cursor cross-slice rejection, not tenant

@@ -1,0 +1,14 @@
+id: devicecommandrpc
+belongsToCell: devicecell
+consistencyLevel: L4
+lifecycle: experimental
+contractUsages:
+  - contract: grpc.device.command.v1
+    role: serve
+verify:
+  unit:
+    - unit.devicecommandrpc.server
+  contract:
+    - contract.grpc.device.command.v1.serve
+allowedFiles:
+  - examples/iotdevice/cells/devicecell/slices/devicecommandrpc/**

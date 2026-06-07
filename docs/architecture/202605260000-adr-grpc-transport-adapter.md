@@ -161,3 +161,69 @@ interface declares every RPC; the generated registrar wires the whole-service ma
 | Layering (`kernel/` ↛ grpc) | Holds. | **Unchanged.** `GRPCTransportMeta` field reduction does not affect the `any`-typed `Register` field boundary. |
 | AI-robustness | Closed-set = Hard; field presence = Hard schema + Medium runtime. | **Improves.** `method`-level is now **unexpressible** — the YAML field is gone. The method set is exclusively derived from the `.proto` (Hard codegen funnel). Single-method `method:` declaration was an implicit Soft: an AI co-author could declare the wrong method name with no compile-time check. That footgun is eliminated. |
 | Auth granularity / security (#1672) | `auth.public` modeled service-level (PR 1). | **Improves (fail-closed).** The service-level `auth.public` field was **deleted**. It was dead (zero readers — the runtime `WithPublicMethod` predicate never reads the contract) and, under service-level granularity, a single bool could silently mark *every* RPC of a multi-method service JWT-exempt — a latent mixed-auth bypass if a future PR naively wired it. Removal makes the dangerous declaration **unexpressible** (schema `additionalProperties:false` rejects `endpoints.grpc.auth`, locked by `contract_schema_test.go`); per-method auth is deferred to #1675. Today's runtime default is nil predicate = fail-closed (all RPCs authed). |
+
+## Amendment 2026-06-07 — contractgen emits zero artifacts for kind=grpc (#1688)
+
+### 决策
+
+**The single source of a grpc service's Go server contract is buf's generated
+`pb.<Svc>Server` interface. contractgen emits NO Go artifact for kind=grpc** — no
+`types_gen.go`, no `iface_gen.go`, nothing. The cell author's handler struct
+embeds `pb.Unimplemented<Svc>Server` (by value, forward-compat) and implements
+the RPC methods directly with the proto-generated request/response types; cellgen
+registers it via the already-golden `pb.Register<Svc>Server(r, c.<field>)` call.
+
+This resolves the §D5 phrase "the generated `Server` interface declares every RPC
+… (Hard funnel)": **that interface is buf's `pb.<Svc>Server`** (it declares every
+RPC, is codegen-derived from the .proto, regenerates on proto change, and carries
+`mustEmbedUnimplemented<Svc>Server()` for forward compatibility). A *second*,
+contractgen-emitted GoCell `Server` interface was redundant with it and **doubly
+broken**: (1) it lacked `mustEmbedUnimplemented<Svc>Server()`, so
+`pb.Register<Svc>Server(r, handler)` could not accept a handler that implemented
+only it; and (2) it was rendered as `package command` into the *same directory*
+as buf's `package commandv1` pb.go (`generated/contracts/grpc/<domain>/vN/`) — a
+package-name collision that would not compile. Both detonate at the first real
+grpc contract (PR-8 #1151), which is exactly the trigger #1688 records.
+
+### 否决的替代方案
+
+- **Alias** (`type Server = pb.<Svc>Server`): a pure redundant re-export of the pb
+  interface; still requires the handler to embed `pb.Unimplemented`, and adds a
+  duplicate source for zero value. Rejected per the no-duplicate-source principle.
+- **Generated adapter shim** (a clean GoCell business interface + a generated
+  `serverShim` embedding `pb.Unimplemented` and forwarding each method): a parallel
+  mirror of the protoc-generated descriptor — the same maintenance/drift cost §D5
+  already rejected for "custom ServiceDesc". It also double-books error mapping,
+  which this design places at the interceptor layer (Kratos `GRPCStatus()` model,
+  PR-12), not at a per-handler adapter. No canonical grpc framework (grpc-go,
+  Kratos) generates a parallel business interface; go-zero generates a concrete
+  embed scaffold, not an interface. Deferred (re-addable cheaply if a real driver
+  for framework-mediated DX appears — no backward-compat cost, no external
+  consumers).
+
+### Enforcement changes
+
+- `contractgen.contractArtifacts` drops `grpc` from the `types.tmpl` / `iface.tmpl`
+  kind sets — kind=grpc joins `webhook` as a zero-artifact kind. `buildGRPCSpec` +
+  the contractgen-IR `GRPCEndpointSpec` / `GRPCMethodSpec` are deleted. Proto
+  validity is gated solely by the `checkGRPCProtoCollisions` codegen pre-pass
+  (validateGRPCProtoPath + ReadProtoServiceInfo, fail-closed per codegen:true grpc
+  contract) and governance **FMT-37** (`gocell validate`) — both unchanged.
+- **`GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01`** collapses from {C1 constructor-seal,
+  C2 golden byte-lock, C3 rendered-import == oracle, C4 collision} to **{C4
+  collision-uniqueness}** only. C1/C2/C3 protected the proto import + message types
+  emitted into the (now non-existent) grpc iface_gen.go; their protection target
+  was removed, not weakened (AI-robust: delete when the premise is gone). The
+  tracked single-contract Go ceiling (gh #1525) for the rendered literal is moot.
+- **`CODEGEN-CONTRACT-USER-OVERLAP-01`** exempts buf `.pb.go` output (symmetric with
+  its existing `_gen.go` exemption): protoc-gen-go output is deterministic codegen,
+  not hand-written code, and legitimately lands under `generated/contracts/grpc/`.
+
+### 威胁矩阵 re-eval
+
+| Concern | Re-eval (#1688) |
+|---|---|
+| Wire / schema break | **Unchanged.** No grpc contract YAML field changes; only the deletion of a never-shipped, never-compiled GoCell-side generated interface. Zero production grpc contracts existed before #1151. |
+| PII / redaction | **Unchanged.** No new log/error surface; error redaction stays at the interceptor (Recovery → codes.Internal; errcode→codes table PR-12). |
+| Layering (`kernel/` ↛ grpc) | **Unchanged.** The `any`-typed `GRPCServiceSpec.Register` boundary is untouched; cellgen still emits the pb register call. |
+| AI-robustness | **Improves.** A register-incompatible, package-colliding duplicate interface is now **unexpressible** (contractgen emits nothing for grpc). The proto-derived Hard funnel (buf `pb.<Svc>Server`) and the collision-uniqueness guard (C4) remain. The `.pb.go` overlap exemption keeps generated/contracts/ hand-written-code-free for plain `.go` while admitting deterministic buf output. |

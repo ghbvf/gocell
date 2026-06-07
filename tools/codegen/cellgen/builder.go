@@ -901,13 +901,18 @@ func buildGrpcServiceSpecFromCU(
 			errcode.WithInternal(errcode.InternalAttr("cause", err)))
 	}
 
+	// ProtoRel is repo/workspace-root-relative so EnrichGrpcServicesWithProtoInfo's
+	// filepath.Join(root, ProtoRel) resolves correctly for satellite-module cells
+	// (e.g. examples/iotdevice), where g.Proto is module-relative ("contracts/grpc/…")
+	// but the proto lives at "<moduleBase>/contracts/grpc/…" (#1151).
+	contract := p.Contracts[cu.Contract] // non-nil: validateGrpcContractEndpoint succeeded above
 	return GrpcServiceGenSpec{
 		ContractID:    cu.Contract,
 		SliceID:       sliceID,
 		HandlerField:  fieldName,
 		RegisterFunc:  "Register" + simpleName + "Server",
 		ListenerConst: "cell.PrimaryListener",
-		ProtoRel:      g.Proto,
+		ProtoRel:      metadata.GRPCProtoRepoRelPath(contract.File, g.Proto),
 		Service:       g.Service,
 	}, nil
 }

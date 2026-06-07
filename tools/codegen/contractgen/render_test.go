@@ -830,96 +830,58 @@ func TestRender_Golden_Synth_Saga(t *testing.T) {
 	}
 }
 
-// TestRender_Golden_Synth_GRPC tests the grpc placeholder-stub fixture. A
-// kind=grpc contract emits the universal types_gen.go (near-empty: no JSON-schema
-// DTOs — proto is the schema, deferred to PR 6) + iface_gen.go (the []byte
-// placeholder Server interface). No handler/spec/subscription artifacts.
-func TestRender_Golden_Synth_GRPC(t *testing.T) {
-	testDir := filepath.Join("testdata", "synth", "synth_grpc_minimal")
-	absTestDir, err := filepath.Abs(testDir)
-	if err != nil {
-		t.Fatalf("abs path: %v", err)
+// TestRender_Synth_GRPC_EmitsZeroArtifacts asserts that a kind=grpc contract
+// produces ZERO contractgen artifacts (#1688). buf's generated pb.<Svc>Server is
+// the sole proto-derived server contract (ADR 202605260000 §D5) — contractgen
+// emits nothing for grpc (no types_gen.go, no iface_gen.go), exactly like
+// webhook. The proto's method count is irrelevant: both the single-method
+// (synth_grpc_minimal) and multi-method (synth_grpc_multimethod) fixtures emit
+// nothing. Proto validity is gated by checkGRPCProtoCollisions + governance
+// FMT-37, not by per-contract artifact rendering.
+func TestRender_Synth_GRPC_EmitsZeroArtifacts(t *testing.T) {
+	// grpc is absent from the kind × artifact matrix (like webhook).
+	if got := artifactsForKind("grpc"); len(got) != 0 {
+		t.Fatalf("artifactsForKind(%q) = %v, want empty (zero artifacts since #1688)", "grpc", got)
 	}
 
-	parser := metadata.NewParser(absTestDir)
-	p, err := parser.Parse()
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	contract := p.Contracts["grpc.device.command.v1"]
-	if contract == nil {
-		t.Fatal("grpc.device.command.v1 not found in synth fixture")
-	}
+	for _, fixture := range []string{"synth_grpc_minimal", "synth_grpc_multimethod"} {
+		t.Run(fixture, func(t *testing.T) {
+			absTestDir, err := filepath.Abs(filepath.Join("testdata", "synth", fixture))
+			if err != nil {
+				t.Fatalf("abs path: %v", err)
+			}
+			parser := metadata.NewParser(absTestDir)
+			p, err := parser.Parse()
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if p.Contracts["grpc.device.command.v1"] == nil {
+				t.Fatalf("grpc.device.command.v1 not found in %s fixture", fixture)
+			}
 
-	outputs := []string{"types_gen.go", "iface_gen.go"}
-	for _, outFile := range outputs {
-		t.Run(outFile, func(t *testing.T) {
+			// buildContractSpec succeeds for grpc and carries no grpc-specific IR.
 			spec, err := buildContractSpec(absTestDir, p, "grpc.device.command.v1")
 			if err != nil {
 				t.Fatalf("buildContractSpec: %v", err)
 			}
-			content := renderFile(t, spec, outFile)
-			goldenFile := goldenFilePath("synth_grpc_minimal", outFile)
-
-			if *updateGolden {
-				writeGolden(t, goldenFile, content)
-				return
+			if spec.Kind != "grpc" {
+				t.Fatalf("spec.Kind = %q, want grpc", spec.Kind)
 			}
-			assertGolden(t, goldenFile, content)
+
+			// RenderContractArtifacts (the public render API) emits nothing.
+			arts, err := RenderContractArtifacts(absTestDir, p, "grpc.device.command.v1", "github.com/ghbvf/gocell")
+			if err != nil {
+				t.Fatalf("RenderContractArtifacts: %v", err)
+			}
+			if len(arts) != 0 {
+				names := make([]string, len(arts))
+				for i, a := range arts {
+					names[i] = a.Path
+				}
+				t.Fatalf("grpc contract emitted %d artifacts %v, want 0 (#1688)", len(arts), names)
+			}
 		})
 	}
-}
-
-// TestRender_Golden_Synth_GRPC_MultiMethod golden-locks the iface_gen.go
-// rendered for the synth_grpc_multimethod fixture (two RPCs). This byte-locks
-// the {{- range .GRPC.Methods}} multi-method render path in iface.tmpl and
-// confirms that both IssueCommand and GetCommandStatus appear in the output
-// with the shared ProtoAlias import (C2 carrier for
-// GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01).
-func TestRender_Golden_Synth_GRPC_MultiMethod(t *testing.T) {
-	testDir := filepath.Join("testdata", "synth", "synth_grpc_multimethod")
-	absTestDir, err := filepath.Abs(testDir)
-	if err != nil {
-		t.Fatalf("abs path: %v", err)
-	}
-
-	parser := metadata.NewParser(absTestDir)
-	p, err := parser.Parse()
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	contract := p.Contracts["grpc.device.command.v1"]
-	if contract == nil {
-		t.Fatal("grpc.device.command.v1 not found in synth_grpc_multimethod fixture")
-	}
-
-	spec, err := buildContractSpec(absTestDir, p, "grpc.device.command.v1")
-	if err != nil {
-		t.Fatalf("buildContractSpec: %v", err)
-	}
-
-	// Verify the spec has exactly 2 methods before golden-locking the render.
-	if spec.GRPC == nil {
-		t.Fatal("spec.GRPC is nil")
-	}
-	if len(spec.GRPC.Methods) != 2 {
-		t.Fatalf("spec.GRPC.Methods len=%d, want 2 (IssueCommand + GetCommandStatus)", len(spec.GRPC.Methods))
-	}
-	if spec.GRPC.Methods[0].MethodName != "IssueCommand" {
-		t.Errorf("Methods[0].MethodName = %q, want IssueCommand", spec.GRPC.Methods[0].MethodName)
-	}
-	if spec.GRPC.Methods[1].MethodName != "GetCommandStatus" {
-		t.Errorf("Methods[1].MethodName = %q, want GetCommandStatus", spec.GRPC.Methods[1].MethodName)
-	}
-
-	content := renderFile(t, spec, "iface_gen.go")
-	goldenFile := goldenFilePath("synth_grpc_multimethod", "iface_gen.go")
-
-	if *updateGolden {
-		writeGolden(t, goldenFile, content)
-		return
-	}
-	assertGolden(t, goldenFile, content)
 }
 
 // TestBuildContractSpec_Saga asserts the saga IR: step output DTOs, the
@@ -1991,7 +1953,7 @@ func TestBuildHTTPEndpointSpec_ClientsOnlyRequiresInternalPathAndClients(t *test
 		http := contract.Endpoints.HTTP
 		pathParams := buildPathParams(http)
 		queryParams := buildQueryParams(http)
-		spec, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+		spec, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams, nil)
 		if err != nil {
 			t.Fatalf("expected no error for valid clientsOnly config, got: %v", err)
 		}
@@ -2006,7 +1968,7 @@ func TestBuildHTTPEndpointSpec_ClientsOnlyRequiresInternalPathAndClients(t *test
 		http := contract.Endpoints.HTTP
 		pathParams := buildPathParams(http)
 		queryParams := buildQueryParams(http)
-		_, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+		_, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams, nil)
 		if err == nil {
 			t.Fatal("expected error for clientsOnly on non-internal path")
 		}
@@ -2021,7 +1983,7 @@ func TestBuildHTTPEndpointSpec_ClientsOnlyRequiresInternalPathAndClients(t *test
 		http := contract.Endpoints.HTTP
 		pathParams := buildPathParams(http)
 		queryParams := buildQueryParams(http)
-		_, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+		_, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams, nil)
 		if err == nil {
 			t.Fatal("expected error for clientsOnly with empty clients")
 		}
@@ -2049,7 +2011,7 @@ func TestBuildHTTPEndpointSpec_ClientsOnlyRequiresInternalPathAndClients(t *test
 				http.Auth = tc.auth
 				pathParams := buildPathParams(http)
 				queryParams := buildQueryParams(http)
-				_, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+				_, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams, nil)
 				if err == nil {
 					t.Fatal("expected error for clientsOnly combined with exclusive auth mode")
 				}

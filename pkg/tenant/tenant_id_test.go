@@ -32,6 +32,9 @@ func TestTenantID_Validate(t *testing.T) {
 		{"brace-wrapped rejected", TenantID("{3f2504e0-4f89-41d3-9a0c-0305e82c3301}"), true},
 		{"urn-prefixed rejected", TenantID("urn:uuid:3f2504e0-4f89-41d3-9a0c-0305e82c3301"), true},
 		{"leading-space rejected", TenantID(" 3f2504e0-4f89-41d3-9a0c-0305e82c330"), true},
+		// The reserved nil-UUID must be rejected by Validate too — removing
+		// SystemTenantID sentinel means there is no longer a valid use-case for it.
+		{"nil-UUID rejected (reserved)", TenantID("00000000-0000-0000-0000-000000000000"), true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -82,10 +85,10 @@ func TestParseTenantID(t *testing.T) {
 
 	t.Run("reserved nil-UUID rejected (F2 security fix)", func(t *testing.T) {
 		t.Parallel()
-		// The nil-UUID is SystemTenantID — a tenant-isolation bypass token.
-		// ParseTenantID is the untrusted-input boundary (JWT claim, X-Tenant-ID
-		// header, UnmarshalJSON); it must reject the nil-UUID so external callers
-		// cannot alias the system-tier config.
+		// The nil-UUID is a reserved value that must never be accepted from
+		// untrusted input (JWT claim, X-Tenant-ID header, UnmarshalJSON).
+		// Rejecting it at the parse boundary prevents external callers from
+		// aliasing any internal routing that previously used it.
 		_, err := ParseTenantID("00000000-0000-0000-0000-000000000000")
 		require.Error(t, err, "nil-UUID must be rejected from untrusted input")
 		assert.Contains(t, err.Error(), "reserved")
@@ -111,9 +114,9 @@ func TestTenantID_UnmarshalJSON(t *testing.T) {
 		{"uppercase canonicalized", `"` + validTenantUUIDUp + `"`, TenantID(validTenantUUID), false},
 		{"empty string rejected", `""`, "", true},
 		{"non-uuid rejected", `"garbage"`, "", true},
-		// The nil-UUID is the reserved SystemTenantID sentinel; UnmarshalJSON routes
-		// through ParseTenantID, so it must also be rejected (F2 security fix).
-		{"nil-UUID rejected (reserved sentinel)", `"00000000-0000-0000-0000-000000000000"`, "", true},
+		// The nil-UUID is a reserved value; UnmarshalJSON routes through
+		// ParseTenantID, so it must also be rejected (F2 security fix).
+		{"nil-UUID rejected (reserved)", `"00000000-0000-0000-0000-000000000000"`, "", true},
 		{"null rejected (no absent over wire)", `null`, "", true},
 		{"non-string json rejected", `123`, "", true},
 		{"malformed json rejected", `{`, "", true},

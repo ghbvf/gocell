@@ -6,6 +6,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
 // ConfigGetterStub is the sealed value type accepted by NewFakeConfigGetter.
@@ -82,9 +83,10 @@ func ErrorStub(err error) ConfigGetterStub {
 //	    "broken":    accesscoretest.ErrorStub(myTransientErr),
 //	})
 type FakeConfigGetter struct {
-	mu    sync.Mutex
-	stubs map[string]ConfigGetterStub
-	calls []string
+	mu          sync.Mutex
+	stubs       map[string]ConfigGetterStub
+	calls       []string
+	tenantCalls []tenant.TenantID
 }
 
 // Compile-time assertion: FakeConfigGetter must satisfy ports.ConfigGetter.
@@ -107,16 +109,17 @@ func NewFakeConfigGetter(stubs map[string]ConfigGetterStub) *FakeConfigGetter {
 }
 
 // GetEntry implements ports.ConfigGetter. It honors ctx.Err() (matching the
-// production HTTP getter's cancellation semantic), records the call, and
-// returns the stubbed response for the given key. Unknown keys and
-// NotFoundStub entries return ErrConfigRepoNotFound with CategoryDomain.
-func (g *FakeConfigGetter) GetEntry(ctx context.Context, key string) (ports.ConfigEntry, error) {
+// production HTTP getter's cancellation semantic), records the call (key and
+// tenant), and returns the stubbed response for the given key. Unknown keys
+// and NotFoundStub entries return ErrConfigRepoNotFound with CategoryDomain.
+func (g *FakeConfigGetter) GetEntry(ctx context.Context, t tenant.TenantID, key string) (ports.ConfigEntry, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.ConfigEntry{}, err
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.calls = append(g.calls, key)
+	g.tenantCalls = append(g.tenantCalls, t)
 
 	stub, ok := g.stubs[key]
 	if !ok || (stub.entry == nil && stub.err == nil) {
@@ -147,9 +150,21 @@ func (g *FakeConfigGetter) Calls() []string {
 	return out
 }
 
+// TenantCalls returns the ordered list of tenant.TenantID values passed to
+// GetEntry since the last Reset. The i-th element corresponds to the i-th
+// entry in Calls(). Returns a copy.
+func (g *FakeConfigGetter) TenantCalls() []tenant.TenantID {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	out := make([]tenant.TenantID, len(g.tenantCalls))
+	copy(out, g.tenantCalls)
+	return out
+}
+
 // Reset clears the call log. Stubs are not modified.
 func (g *FakeConfigGetter) Reset() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.calls = nil
+	g.tenantCalls = nil
 }

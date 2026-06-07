@@ -6,7 +6,11 @@
 // implementations live in cells/accesscore/internal/adapters/http/.
 package ports
 
-import "context"
+import (
+	"context"
+
+	"github.com/ghbvf/gocell/pkg/tenant"
+)
 
 // ConfigEntry holds the fields returned by the internal config GET endpoint
 // (contract: http.config.internal.get.v1).
@@ -26,6 +30,10 @@ type ConfigEntry struct {
 // ConfigGetter abstracts the cross-cell HTTP call to configcore's internal
 // GET /internal/v1/config/{key} endpoint (contract: http.config.internal.get.v1).
 // Implementations live in cells/accesscore/internal/adapters/http/.
+//
+// t is the caller's real tenant derived from the consumer context via
+// tenant.FromContext. It is forwarded as the X-Tenant-ID request header so
+// configcore's RLS can scope the lookup to the correct tenant tier.
 type ConfigGetter interface {
-	GetEntry(ctx context.Context, key string) (ConfigEntry, error)
+	GetEntry(ctx context.Context, t tenant.TenantID, key string) (ConfigEntry, error)
 }

@@ -348,7 +348,7 @@ func TestMergeParamsIntoRequest_ConflictDetected(t *testing.T) {
 	}
 	pathParams := buildPathParams(http)
 	queryParams := buildQueryParams(http)
-	_, err := mergeParamsIntoRequest(existing, pathParams, queryParams, "http.test.conflict.v1")
+	_, err := mergeParamsIntoRequest(existing, pathParams, queryParams, nil, "http.test.conflict.v1")
 	if err == nil {
 		t.Fatal("expected error for field name conflict between path param and body schema")
 	}
@@ -377,7 +377,7 @@ func TestMergeParamsIntoRequest_QueryConflictDetected(t *testing.T) {
 	}
 	pathParams := buildPathParams(http)
 	queryParams := buildQueryParams(http)
-	_, err := mergeParamsIntoRequest(existing, pathParams, queryParams, "http.test.queryconflict.v1")
+	_, err := mergeParamsIntoRequest(existing, pathParams, queryParams, nil, "http.test.queryconflict.v1")
 	if err == nil {
 		t.Fatal("expected error for field name conflict between query param and body schema")
 	}
@@ -405,7 +405,7 @@ func TestMergeParamsIntoRequest_NoConflict(t *testing.T) {
 	}
 	pathParams := buildPathParams(http)
 	queryParams := buildQueryParams(http)
-	dtos, err := mergeParamsIntoRequest(existing, pathParams, queryParams, "http.test.noconflict.v1")
+	dtos, err := mergeParamsIntoRequest(existing, pathParams, queryParams, nil, "http.test.noconflict.v1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -413,6 +413,142 @@ func TestMergeParamsIntoRequest_NoConflict(t *testing.T) {
 	req := dtos[0]
 	if len(req.Fields) != 2 {
 		t.Errorf("expected 2 fields, got %d", len(req.Fields))
+	}
+}
+
+func TestMergeParamsIntoRequest_HeaderConflictDetected(t *testing.T) {
+	// Body schema has field "tenant"; header param GoName also "Tenant" → conflict.
+	existing := []DTOSpec{
+		{
+			Name: "Request",
+			Fields: []DTOField{
+				{Name: "Tenant", JSONTag: "tenant", GoType: "string"},
+			},
+		},
+	}
+	truthy := true
+	http := &metadata.HTTPTransportMeta{
+		Method: "POST",
+		Path:   "/api/v1/access/sessions/login",
+		Headers: map[string]metadata.ParamSchema{
+			"Tenant": {Type: "string", Required: &truthy},
+		},
+	}
+	headerParams := buildHeaderParams(http)
+	_, err := mergeParamsIntoRequest(existing, nil, nil, headerParams, "http.test.headerconflict.v1")
+	if err == nil {
+		t.Fatal("expected error for field name conflict between header param and body schema")
+	}
+	if !strings.Contains(err.Error(), "conflict") {
+		t.Errorf("error should mention 'conflict', got: %v", err)
+	}
+}
+
+// TestMergeParamsIntoRequest_ParamVsParamCollision covers #1494 review F2: two
+// params (here a path param and a header) that fold to the SAME goPascalCase Go
+// field must error — not silently emit a duplicate Request field. The error must
+// name BOTH colliding sources.
+func TestMergeParamsIntoRequest_ParamVsParamCollision(t *testing.T) {
+	pathParams := []ParamSpec{{Name: "tenantId", GoName: "TenantID", GoType: "string", Required: true}}
+	headerParams := []ParamSpec{{Name: "X-Tenant-ID", GoName: "TenantID", GoType: "string", Required: true}}
+	_, err := mergeParamsIntoRequest(nil, pathParams, nil, headerParams, "http.test.paramcollision.v1")
+	if err == nil {
+		t.Fatal("expected error for path/header params folding to the same Go field name")
+	}
+	msg := err.Error()
+	for _, want := range []string{"conflict", "TenantID", `path param "tenantId"`, `header param "X-Tenant-ID"`} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("collision error must contain %q, got: %v", want, err)
+		}
+	}
+}
+
+// TestMergeParamsIntoRequest_PathVsQueryCollision covers the pre-existing
+// path-vs-query GoName collision that #1494 review F2 generalised (the param
+// merge previously only checked param-vs-body).
+func TestMergeParamsIntoRequest_PathVsQueryCollision(t *testing.T) {
+	pathParams := []ParamSpec{{Name: "id", GoName: "ID", GoType: "string", Required: true}}
+	queryParams := []ParamSpec{{Name: "id", GoName: "ID", GoType: "string"}}
+	_, err := mergeParamsIntoRequest(nil, pathParams, queryParams, nil, "http.test.pathquerycollision.v1")
+	if err == nil {
+		t.Fatal("expected error for path/query params folding to the same Go field name")
+	}
+	if !strings.Contains(err.Error(), "conflict") {
+		t.Errorf("error should mention 'conflict', got: %v", err)
+	}
+}
+
+// TestBuildHTTPSpec_NonStringHeaderFailsClosed covers #1494 review F1/F4: a
+// non-string header type is rejected at codegen time (fail-closed) BEFORE any
+// generation, sharing metadata.ValidateHTTPHeaders with governance FMT-40 — so a
+// "legal contract → uncompilable Go" can never be produced even if `gocell
+// validate` was skipped.
+func TestBuildHTTPSpec_NonStringHeaderFailsClosed(t *testing.T) {
+	contract := &metadata.ContractMeta{
+		ID: "http.test.badheader.v1",
+		Endpoints: metadata.EndpointsMeta{
+			HTTP: &metadata.HTTPTransportMeta{
+				Method:        "GET",
+				Path:          "/api/v1/test",
+				Headers:       map[string]metadata.ParamSchema{"X-Count": {Type: "integer"}},
+				SuccessStatus: 200,
+			},
+		},
+	}
+	err := buildHTTPSpec(&ContractGenSpec{}, t.TempDir(), contract, ".")
+	if err == nil {
+		t.Fatal("expected buildHTTPSpec to fail closed on a non-string header type")
+	}
+	if !strings.Contains(err.Error(), "endpoints.http.headers") || !strings.Contains(err.Error(), "unsupported") {
+		t.Errorf("fail-closed error must point at the invalid header, got: %v", err)
+	}
+}
+
+// TestBuildHeaderParams verifies headers are extracted populate-only: GoName is
+// PascalCase (dash-aware), GoType derives from schema.Type, the canonical header
+// name is preserved as Name (the r.Header.Get literal), and no length/numeric
+// constraint is carried (headers emit no gate; FMT-40 rejects such declarations).
+func TestBuildHeaderParams(t *testing.T) {
+	truthy := true
+	http := &metadata.HTTPTransportMeta{
+		Method: "POST",
+		Path:   "/api/v1/access/sessions/login",
+		Headers: map[string]metadata.ParamSchema{
+			"X-Tenant-ID": {Type: "string", Format: "uuid", Required: &truthy},
+		},
+	}
+	got := buildHeaderParams(http)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 header param, got %d", len(got))
+	}
+	p := got[0]
+	if p.Name != "X-Tenant-ID" {
+		t.Errorf("Name = %q, want %q (canonical r.Header.Get literal)", p.Name, "X-Tenant-ID")
+	}
+	if p.GoName != "XTenantID" {
+		t.Errorf("GoName = %q, want %q", p.GoName, "XTenantID")
+	}
+	if p.GoType != "string" {
+		t.Errorf("GoType = %q, want %q", p.GoType, "string")
+	}
+	if !p.Required {
+		t.Errorf("Required = false, want true (documentation/client-gen metadata)")
+	}
+	if p.MinLength != nil || p.MaxLength != nil || p.Minimum != nil || p.Maximum != nil {
+		t.Errorf("header param must carry no length/numeric constraints (populate-only): %+v", p)
+	}
+}
+
+// TestParamToField_HeaderForcesJSONDash verifies a header field is never
+// body-decodable: paramToField with source="header" forces JSONTag "-" so a
+// client cannot spoof the header value (e.g. X-Tenant-ID) via the JSON body.
+func TestParamToField_HeaderForcesJSONDash(t *testing.T) {
+	f := paramToField(ParamSpec{Name: "X-Tenant-ID", GoName: "XTenantID", GoType: "string", Required: true}, "header")
+	if f.JSONTag != "-" {
+		t.Errorf("header field JSONTag = %q, want %q (body must not spoof headers)", f.JSONTag, "-")
+	}
+	if f.Source != "header" {
+		t.Errorf("header field Source = %q, want %q", f.Source, "header")
 	}
 }
 
@@ -516,15 +652,15 @@ func TestBuildContractSpec_ProjectionKind_Skips(t *testing.T) {
 	}
 }
 
-// TestBuildContractSpec_GRPCKind_ProtoTypedInterface verifies that a kind=grpc
-// contract projects endpoints.grpc into spec.GRPC with the derived Go interface
-// name ("Server"), enumerates all RPC methods from the .proto file into
-// spec.GRPC.Methods, resolves proto-typed fields (import path, alias) from the
-// .proto go_package option, leaves HTTP/event fields nil, and resolves the
-// generated package path/name kind-generically. The proto is the single source
-// of truth for the method set (#1655). Uses the committed synth_grpc_minimal
-// fixture (one RPC: IssueCommand) as the root so the proto resolves.
-func TestBuildContractSpec_GRPCKind_ProtoTypedInterface(t *testing.T) {
+// TestBuildContractSpec_GRPCKind_NoIR verifies that a kind=grpc contract builds a
+// spec with NO grpc-specific IR (#1688): buildContractSpec succeeds, marks
+// spec.Kind=="grpc", leaves every kind-specific IR field nil (Endpoint / Event /
+// Command / Saga — and there is no longer a GRPC field), and resolves the
+// generated package path kind-generically. contractgen emits nothing for grpc —
+// buf's generated pb.<Svc>Server is the sole server contract — so there is no
+// interface name / method set to project here. Uses the committed
+// synth_grpc_minimal fixture as the root so parsing succeeds.
+func TestBuildContractSpec_GRPCKind_NoIR(t *testing.T) {
 	t.Parallel()
 	root, err := filepath.Abs(filepath.Join("testdata", "synth", "synth_grpc_minimal"))
 	if err != nil {
@@ -561,41 +697,14 @@ func TestBuildContractSpec_GRPCKind_ProtoTypedInterface(t *testing.T) {
 	if spec.Event != nil {
 		t.Errorf("spec.Event should be nil for kind=grpc, got non-nil")
 	}
-	if spec.GRPC == nil {
-		t.Fatal("spec.GRPC should be non-nil for kind=grpc")
+	if spec.Command != nil {
+		t.Errorf("spec.Command should be nil for kind=grpc, got non-nil")
 	}
-	if spec.GRPC.InterfaceName != "Server" {
-		t.Errorf("spec.GRPC.InterfaceName = %q, want %q", spec.GRPC.InterfaceName, "Server")
+	if spec.Saga != nil {
+		t.Errorf("spec.Saga should be nil for kind=grpc, got non-nil")
 	}
-	if spec.GRPC.ServiceFQN != "device.command.v1.DeviceCommandService" {
-		t.Errorf("spec.GRPC.ServiceFQN = %q, want %q", spec.GRPC.ServiceFQN, "device.command.v1.DeviceCommandService")
-	}
-	if spec.GRPC.ProtoPath != "contracts/grpc/device/command/v1/device_command.proto" {
-		t.Errorf("spec.GRPC.ProtoPath = %q", spec.GRPC.ProtoPath)
-	}
-	if spec.GRPC.ProtoImportPath != "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1" {
-		t.Errorf("spec.GRPC.ProtoImportPath = %q", spec.GRPC.ProtoImportPath)
-	}
-	if spec.GRPC.ProtoAlias != "commandv1" {
-		t.Errorf("spec.GRPC.ProtoAlias = %q, want %q", spec.GRPC.ProtoAlias, "commandv1")
-	}
-	// The .proto is the single source of truth for the method set (#1655).
-	// synth_grpc_minimal declares one RPC: IssueCommand.
-	if len(spec.GRPC.Methods) != 1 {
-		t.Fatalf("spec.GRPC.Methods len = %d, want 1; got %+v", len(spec.GRPC.Methods), spec.GRPC.Methods)
-	}
-	if spec.GRPC.Methods[0].MethodName != "IssueCommand" {
-		t.Errorf("spec.GRPC.Methods[0].MethodName = %q, want %q", spec.GRPC.Methods[0].MethodName, "IssueCommand")
-	}
-	if spec.GRPC.Methods[0].RequestType != "IssueCommandRequest" {
-		t.Errorf("spec.GRPC.Methods[0].RequestType = %q, want %q", spec.GRPC.Methods[0].RequestType, "IssueCommandRequest")
-	}
-	if spec.GRPC.Methods[0].ResponseType != "IssueCommandResponse" {
-		t.Errorf("spec.GRPC.Methods[0].ResponseType = %q, want %q", spec.GRPC.Methods[0].ResponseType, "IssueCommandResponse")
-	}
-	if spec.PackageName != "command" {
-		t.Errorf("spec.PackageName = %q, want %q", spec.PackageName, "command")
-	}
+	// Package path is still computed kind-generically (used by the
+	// generated/contracts/ prefix guard) even though grpc writes no file there.
 	if spec.PackagePath != "generated/contracts/grpc/device/command/v1" {
 		t.Errorf("spec.PackagePath = %q, want %q", spec.PackagePath, "generated/contracts/grpc/device/command/v1")
 	}
@@ -633,78 +742,14 @@ func TestValidateGRPCProtoPath(t *testing.T) {
 	}
 }
 
-// TestBuildContractSpec_GRPCKind_MissingEndpoint verifies the fail-closed guard:
-// kind=grpc with no endpoints.grpc block is an error, not a silent empty stub.
-func TestBuildContractSpec_GRPCKind_MissingEndpoint(t *testing.T) {
-	t.Parallel()
-	p := &metadata.ProjectMeta{
-		Contracts: map[string]*metadata.ContractMeta{
-			"grpc.device.command.v1": {
-				ID:         "grpc.device.command.v1",
-				Kind:       "grpc",
-				Codegen:    true,
-				Transports: []string{"grpc"}, // mirrors parser defaultTransportsForKind("grpc")
-				File:       "contracts/grpc/device/command/v1/contract.yaml",
-			},
-		},
-	}
-	_, err := buildContractSpec("", p, "grpc.device.command.v1")
-	if err == nil {
-		t.Fatal("buildContractSpec should error for kind=grpc with no endpoints.grpc block")
-	}
-}
-
-// TestBuildContractSpec_GRPCKind_RejectsMalformed exercises the fail-closed
-// buildGRPCSpec guards (the golden path does not run governance FMT-37, so these
-// are the funnel's own defense). Empty service, an empty proto path, a proto
-// path not rooted under metadata.GRPCProtoPathPrefix, and a control character
-// (newline) in service or proto — each must error rather than emit a
-// silently-broken or injected stub. The empty/outside-prefix proto cases mirror
-// governance FMT-37 (validateFMT37Proto) so the codegen funnel rejects the same
-// proto paths the governance rule would, even though codegen does not run FMT-37.
-// Method/streamingType validation cases were removed in #1655: the .proto file
-// is now the single source of truth for the RPC method set.
-func TestBuildContractSpec_GRPCKind_RejectsMalformed(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name string
-		grpc metadata.GRPCTransportMeta
-	}{
-		{"empty service", metadata.GRPCTransportMeta{Service: "", Proto: "contracts/grpc/d/c/v1/c.proto"}},
-		{"empty proto", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Proto: ""}},
-		{"proto outside prefix", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Proto: "proto/d/c/v1/c.proto"}},
-		{"newline in service", metadata.GRPCTransportMeta{
-			Service: "S\nimport \"os\"", Proto: "contracts/grpc/d/c/v1/c.proto",
-		}},
-		{"newline in proto", metadata.GRPCTransportMeta{
-			Service: "d.c.v1.S", Proto: "contracts/grpc/d/c/v1/c.proto\nvar _ = 1",
-		}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			grpc := tc.grpc
-			p := &metadata.ProjectMeta{
-				Contracts: map[string]*metadata.ContractMeta{
-					"grpc.device.command.v1": {
-						ID:         "grpc.device.command.v1",
-						Kind:       "grpc",
-						Codegen:    true,
-						Transports: []string{"grpc"}, // mirrors parser defaultTransportsForKind("grpc")
-						File:       "contracts/grpc/device/command/v1/contract.yaml",
-						Endpoints: metadata.EndpointsMeta{
-							Server: "devicecell",
-							GRPC:   &grpc,
-						},
-					},
-				},
-			}
-			if _, err := buildContractSpec("", p, "grpc.device.command.v1"); err == nil {
-				t.Fatalf("buildContractSpec should reject malformed grpc input %q", tc.name)
-			}
-		})
-	}
-}
+// grpc structural validation (kind=grpc requires endpoints.grpc with a valid
+// service + proto, no control runes, proto rooted under contracts/grpc/) is NOT
+// a buildContractSpec concern since #1688 — contractgen builds no grpc IR. It is
+// owned by governance FMT-37 (validateFMT37, the gocell validate gate) and, at
+// the codegen layer, by the checkGRPCProtoCollisions pre-pass: proto-path guards
+// via TestValidateGRPCProtoPath (above) + production rejection via
+// TestCheckGRPCProtoCollisions_RejectsBadProtoPath (generator_test.go); service
+// validity via the protoreader_test.go ReadProtoServiceInfo suite.
 
 // --- BuildHTTPEndpointSpec HasBody tests ---
 
@@ -729,7 +774,7 @@ func TestBuildHTTPEndpointSpec_HasBody_PostWithoutRequestSchema(t *testing.T) {
 	}
 	pathParams := buildPathParams(http)
 	queryParams := buildQueryParams(http)
-	spec, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+	spec, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -757,7 +802,7 @@ func TestBuildHTTPEndpointSpec_HasBody_PostWithRequestSchema(t *testing.T) {
 	}
 	pathParams := buildPathParams(http)
 	queryParams := buildQueryParams(http)
-	spec, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+	spec, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -878,7 +923,7 @@ func TestBuildHTTPEndpointSpec_ServiceOwnedAllowsPasswordResetExempt(t *testing.
 		},
 	}
 	http := contract.Endpoints.HTTP
-	spec, err := buildHTTPEndpointSpec(contract, http, buildPathParams(http), buildQueryParams(http))
+	spec, err := buildHTTPEndpointSpec(contract, http, buildPathParams(http), buildQueryParams(http), buildHeaderParams(http))
 	if err != nil {
 		t.Fatalf("expected serviceOwned + passwordResetExempt to build, got: %v", err)
 	}
@@ -938,7 +983,7 @@ func TestBuildHTTPEndpointSpec_ServiceOwnedRejectsExclusiveModes(t *testing.T) {
 				},
 			}
 			http := contract.Endpoints.HTTP
-			_, err := buildHTTPEndpointSpec(contract, http, buildPathParams(http), buildQueryParams(http))
+			_, err := buildHTTPEndpointSpec(contract, http, buildPathParams(http), buildQueryParams(http), buildHeaderParams(http))
 			if err == nil {
 				t.Fatal("expected serviceOwned mutual-exclusion error, got nil")
 			}
@@ -984,7 +1029,7 @@ func TestBuildHTTPEndpointSpec_AuthBootstrap_MutuallyExclusive_WithPublic(t *tes
 
 	pathParams := buildPathParams(httpMeta)
 	queryParams := buildQueryParams(httpMeta)
-	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams, nil)
 	if err != nil {
 		t.Fatalf("buildHTTPEndpointSpec: %v", err)
 	}
@@ -1022,7 +1067,7 @@ func TestBuildHTTPEndpointSpec_PaginationShape_PureCursorLimit(t *testing.T) {
 	contract := &metadata.ContractMeta{ID: "http.order.list.v1", Kind: "http", Endpoints: metadata.EndpointsMeta{HTTP: httpMeta}}
 	pathParams := buildPathParams(httpMeta)
 	queryParams := buildQueryParams(httpMeta)
-	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams, nil)
 	if err != nil {
 		t.Fatalf("buildHTTPEndpointSpec: %v", err)
 	}
@@ -1066,7 +1111,7 @@ func TestBuildHTTPEndpointSpec_PaginationShape_CursorLimitPlusFilter(t *testing.
 	contract := &metadata.ContractMeta{ID: "http.auth.role.list.v1", Kind: "http", Endpoints: metadata.EndpointsMeta{HTTP: httpMeta}}
 	pathParams := buildPathParams(httpMeta)
 	queryParams := buildQueryParams(httpMeta)
-	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams, nil)
 	if err != nil {
 		t.Fatalf("buildHTTPEndpointSpec: %v", err)
 	}
@@ -1103,7 +1148,7 @@ func TestBuildHTTPEndpointSpec_PaginationShape_NoPagination(t *testing.T) {
 	contract := &metadata.ContractMeta{ID: "http.item.search.v1", Kind: "http", Endpoints: metadata.EndpointsMeta{HTTP: httpMeta}}
 	pathParams := buildPathParams(httpMeta)
 	queryParams := buildQueryParams(httpMeta)
-	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams, nil)
 	if err != nil {
 		t.Fatalf("buildHTTPEndpointSpec: %v", err)
 	}
@@ -1138,7 +1183,7 @@ func TestBuildHTTPEndpointSpec_Responses_LiftFromContract(t *testing.T) {
 	contract := &metadata.ContractMeta{ID: "http.access.session.get.v1", Kind: "http", Endpoints: metadata.EndpointsMeta{HTTP: httpMeta}}
 	pathParams := buildPathParams(httpMeta)
 	queryParams := buildQueryParams(httpMeta)
-	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams, nil)
 	if err != nil {
 		t.Fatalf("buildHTTPEndpointSpec: %v", err)
 	}
@@ -1227,7 +1272,7 @@ func TestDetectPagination_TypeMismatch(t *testing.T) {
 			}
 			pathParams := buildPathParams(httpMeta)
 			queryParams := buildQueryParams(httpMeta)
-			_, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+			_, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams, nil)
 			if err == nil {
 				t.Fatalf("expected error, got nil")
 			}
@@ -1258,7 +1303,7 @@ func TestBuildHTTPEndpointSpec_Responses_NoContent(t *testing.T) {
 	contract := &metadata.ContractMeta{ID: "http.access.session.delete.v1", Kind: "http", Endpoints: metadata.EndpointsMeta{HTTP: httpMeta}}
 	pathParams := buildPathParams(httpMeta)
 	queryParams := buildQueryParams(httpMeta)
-	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams, nil)
 	if err != nil {
 		t.Fatalf("buildHTTPEndpointSpec: %v", err)
 	}
@@ -1594,7 +1639,7 @@ func TestBuildHTTPEndpointSpec_RejectsPublicBypassOnInternalPath(t *testing.T) {
 				},
 			}
 			http := contract.Endpoints.HTTP
-			_, err := buildHTTPEndpointSpec(contract, http, buildPathParams(http), buildQueryParams(http))
+			_, err := buildHTTPEndpointSpec(contract, http, buildPathParams(http), buildQueryParams(http), buildHeaderParams(http))
 			switch {
 			case tc.wantErr && err == nil:
 				t.Fatalf("expected FMT-34 codegen rejection, got nil")
@@ -1662,7 +1707,7 @@ func TestBuildHTTPEndpointSpec_IdempotencyExempt_FieldPropagated(t *testing.T) {
 				},
 			}
 			http := contract.Endpoints.HTTP
-			spec, err := buildHTTPEndpointSpec(contract, http, buildPathParams(http), buildQueryParams(http))
+			spec, err := buildHTTPEndpointSpec(contract, http, buildPathParams(http), buildQueryParams(http), buildHeaderParams(http))
 			if err != nil {
 				t.Fatalf("expected idempotency.exempt combo to build without error, got: %v", err)
 			}

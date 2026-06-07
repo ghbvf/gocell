@@ -19,13 +19,13 @@ import (
 // Tenant scoping (epic #1337 PR-2b): every data method takes tenant.TenantID as
 // a mandatory typed positional parameter (param[1], right after ctx); "漏传" is a
 // compile error (the type-system Hard guarantee). There is NO by-PK carve-out —
-// GetByKey/GetVersion are tenant+key / tenant+configID scoped, and the global
-// config tier is read by passing tenant.SystemTenantID from the internal
-// control-plane path (configreadinternal). Implementations apply a strict
-// `WHERE tenant_id = $N` equality predicate; cross-tenant rows return not-found.
-// RepoReady is the ONLY tenant-less method: it is a schema-existence probe, not
-// a data read, so a tenant predicate is meaningless (carve-out in archtest
-// TENANT-REPO-PARAM-FUNNEL-01).
+// GetByKey/GetVersion are tenant+key / tenant+configID scoped. The internal
+// control-plane path (configreadinternal) derives the tenant from the
+// X-Tenant-ID request header and passes the real per-tenant UUID. Implementations
+// apply a strict `WHERE tenant_id = $N` equality predicate; cross-tenant rows
+// return not-found. RepoReady is the ONLY tenant-less method: it is a
+// schema-existence probe, not a data read, so a tenant predicate is meaningless
+// (carve-out in archtest TENANT-REPO-PARAM-FUNNEL-01).
 type ConfigRepository interface {
 	Create(ctx context.Context, t tenant.TenantID, entry *domain.ConfigEntry) error
 	GetByKey(ctx context.Context, t tenant.TenantID, key string) (*domain.ConfigEntry, error)

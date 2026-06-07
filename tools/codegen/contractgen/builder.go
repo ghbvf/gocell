@@ -26,10 +26,12 @@ import (
 //   - schemaRef parsing fails
 //   - kind=http but http endpoint missing
 //   - kind=event but payload schemaRef missing
-//   - kind=grpc but endpoints.grpc missing, service/method empty, method not an
-//     exported Go identifier, proto empty or not rooted under
-//     metadata.GRPCProtoPathPrefix, service/proto carrying a control character,
-//     or a non-unary streamingType (streaming codegen deferred to PR 10)
+//
+// kind=grpc and kind=webhook are recognized but build no spec and emit zero
+// contractgen artifacts by design (see the kind switch). grpc's server contract
+// is buf's generated pb.<Svc>Server (#1688); its proto is validated by the
+// checkGRPCProtoCollisions pre-pass + governance FMT-37 (service-level, #1655),
+// not here.
 func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID string) (*ContractGenSpec, error) {
 	if p == nil {
 		return nil, fmt.Errorf("contractgen build: project is nil")
@@ -73,7 +75,8 @@ func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 		return nil, fmt.Errorf(
 			"contractgen build: contract %q has empty transports (parser defaults per kind; "+
 				"an unknown kind yields none — governance FMT-39 should have rejected this)",
-			contractID)
+			contractID,
+		)
 	}
 
 	contractDir := filepath.Dir(contract.File)
@@ -95,22 +98,24 @@ func buildKindSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 		return buildEventSpec(spec, rootDir, contract, contractDir)
 	case "saga":
 		return buildSagaSpec(spec, rootDir, contract, contractDir)
-	case "grpc":
-		return buildGRPCSpec(spec, rootDir, contract)
 	case "projection":
 		return validateProjectionLevel(contract.ID, contract.ConsistencyLevel)
 	case "command":
 		return buildCommandSpec(spec, rootDir, contract, contractDir)
-	case "webhook":
-		// webhook: recognized, zero artifacts by design — registration uses
-		// kernel/webhook.ReceiverSpec literals via cellgen, no per-contract package.
+	case "webhook", "grpc":
+		// webhook / grpc: recognized, zero contractgen artifacts by design — no
+		// per-contract spec to build. webhook registration uses
+		// kernel/webhook.ReceiverSpec literals via cellgen; grpc's server contract
+		// is buf's generated pb.<Svc>Server (#1688), and its proto is validated by
+		// the checkGRPCProtoCollisions pre-pass + governance FMT-37, not here.
 		// generateOneContract and RenderContractArtifacts skip all artifact emission
-		// for this kind; the early-return branches in those functions are the
+		// for these kinds; the early-return branches in those functions are the
 		// enforcement point.
 	default:
 		return fmt.Errorf(
 			"contractgen build: contract %q has unsupported kind %q (http|event|command|projection|webhook|grpc|saga)",
-			contract.ID, contract.Kind)
+			contract.ID, contract.Kind,
+		)
 	}
 
 	return nil
@@ -128,7 +133,8 @@ func validateProjectionLevel(contractID, level string) error {
 	if _, err := cellvocab.ParseLevel(level); err != nil {
 		return fmt.Errorf(
 			"contractgen build: projection contract %q has invalid consistencyLevel %q (must be L0..L4): %w",
-			contractID, level, err)
+			contractID, level, err,
+		)
 	}
 	return nil
 }
@@ -146,7 +152,8 @@ func validateCommandLevel(contractID, level string) error {
 	if _, err := cellvocab.ParseLevel(level); err != nil {
 		return fmt.Errorf(
 			"contractgen build: command contract %q has invalid consistencyLevel %q (must be L0..L4): %w",
-			contractID, level, err)
+			contractID, level, err,
+		)
 	}
 	return nil
 }
@@ -157,18 +164,30 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 		return fmt.Errorf("contractgen build: contract %q is kind=http but has no http endpoint", contract.ID)
 	}
 
-	// Pre-compute path and query params once; both buildHTTPDTOs and
-	// buildHTTPEndpointSpec need them (F-09: avoid calling buildQueryParams twice).
+	// Fail-closed header gate (#1494 review F4): reject any declared header the
+	// populate-only accessor cannot express BEFORE generating. This shares
+	// metadata.ValidateHTTPHeaders with governance FMT-40 (single source), so the
+	// generator fails closed even if `gocell validate` was skipped — a non-string
+	// header type or case-insensitive duplicate can never reach handler.tmpl as
+	// uncompilable Go.
+	if viols := metadata.ValidateHTTPHeaders(http.Headers); len(viols) > 0 {
+		return fmt.Errorf("contractgen build: contract %q invalid endpoints.http.headers: %s",
+			contract.ID, viols[0].Message)
+	}
+
+	// Pre-compute path, query, and header params once; both buildHTTPDTOs and
+	// buildHTTPEndpointSpec need them (F-09: avoid calling builders twice).
 	pathParams := buildPathParams(http)
 	queryParams := buildQueryParams(http)
+	headerParams := buildHeaderParams(http)
 
-	allDTOs, err := buildHTTPDTOs(rootDir, contract, contractDir, pathParams, queryParams)
+	allDTOs, err := buildHTTPDTOs(rootDir, contract, contractDir, pathParams, queryParams, headerParams)
 	if err != nil {
 		return err
 	}
 	spec.DTOs = allDTOs
 
-	endpointSpec, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+	endpointSpec, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams, headerParams)
 	if err != nil {
 		return err
 	}
@@ -222,7 +241,7 @@ func buildHTTPDTOs(
 	rootDir string,
 	contract *metadata.ContractMeta,
 	contractDir string,
-	pathParams, queryParams []ParamSpec,
+	pathParams, queryParams, headerParams []ParamSpec,
 ) ([]DTOSpec, error) {
 	var allDTOs []DTOSpec
 
@@ -268,8 +287,8 @@ func buildHTTPDTOs(
 		})
 	}
 
-	// Merge path and query params into Request DTO using the pre-computed params.
-	merged, mergeErr := mergeParamsIntoRequest(allDTOs, pathParams, queryParams, contract.ID)
+	// Merge path, query, and header params into Request DTO using the pre-computed params.
+	merged, mergeErr := mergeParamsIntoRequest(allDTOs, pathParams, queryParams, headerParams, contract.ID)
 	if mergeErr != nil {
 		return nil, fmt.Errorf("contractgen build: %q merge params: %w", contract.ID, mergeErr)
 	}
@@ -334,7 +353,7 @@ func hasDTONamed(dtos []DTOSpec, name string) bool {
 func buildHTTPEndpointSpec(
 	contract *metadata.ContractMeta,
 	http *metadata.HTTPTransportMeta,
-	pathParams, queryParams []ParamSpec,
+	pathParams, queryParams, headerParams []ParamSpec,
 ) (*httpEndpointSpec, error) {
 	handlerMethod := goPascalCase(domainLastSegment(contract.ID))
 	methodHasBody := http.Method == "POST" || http.Method == "PUT" || http.Method == "PATCH"
@@ -379,6 +398,7 @@ func buildHTTPEndpointSpec(
 	}
 	spec.PathParams = pathParams
 	spec.QueryParams = queryParams
+	spec.HeaderParams = headerParams
 
 	// Pagination detection (PR-V1-CONTRACT-TYPED-RESPONSE-ENVELOPE F4 absorb):
 	// Any GET endpoint that declares cursor (string) + limit (integer) in its
@@ -416,7 +436,8 @@ func validateAuthServiceOwned(contractID string, auth metadata.HTTPAuthMeta) err
 		"contractgen build: contract %q declares auth.serviceOwned:true with auth.public/auth.bootstrap/auth.clientsOnly; "+
 			"serviceOwned keeps listener JWT auth and delegates ownership authorization to the service, "+
 			"so it cannot be combined with auth modes that replace or bypass that route shape",
-		contractID)
+		contractID,
+	)
 }
 
 // validateAuthOnInternalPath is the codegen-side upstream Hard funnel for
@@ -444,7 +465,8 @@ func validateAuthOnInternalPath(contractID, path string, auth metadata.HTTPAuthM
 				"internal endpoints must not bypass JWT "+
 				"(use auth.serviceOwned or auth.clientsOnly instead)"+
 				"; fix: remove auth.public or move the endpoint off /internal/v1/",
-			contractID, path))
+			contractID, path,
+		))
 	}
 	if auth.PasswordResetExempt {
 		errs = append(errs, fmt.Errorf(
@@ -453,7 +475,8 @@ func validateAuthOnInternalPath(contractID, path string, auth metadata.HTTPAuthM
 				"internal endpoints are cell-to-cell only and must "+
 				"not accept the password-reset bypass token"+
 				"; fix: remove auth.passwordResetExempt or move the endpoint off /internal/v1/",
-			contractID, path))
+			contractID, path,
+		))
 	}
 	if len(errs) > 0 {
 		return errors.Join(errs...)
@@ -475,20 +498,23 @@ func validateAuthClientsOnly(
 		return fmt.Errorf(
 			"contractgen build: contract %q declares auth.clientsOnly:true with auth.public/auth.bootstrap/auth.passwordResetExempt; "+
 				"clientsOnly relies on caller-cell identity only and cannot be combined with listener-bypass or password-reset auth modes",
-			contractID)
+			contractID,
+		)
 	}
 	if !isInternalPath {
 		return fmt.Errorf(
 			"contractgen build: contract %q declares auth.clientsOnly:true but path %q is "+
 				"not an internal path (must match /internal/v1 or /internal/v1/...); "+
 				"clientsOnly is only meaningful for internal endpoints where caller-cell identity is verifiable",
-			contractID, path)
+			contractID, path,
+		)
 	}
 	if len(declaredClients) == 0 {
 		return fmt.Errorf(
 			"contractgen build: contract %q declares auth.clientsOnly:true but endpoints.clients is empty; "+
 				"clientsOnly requires at least one declared client cell so RequireCallerCell has an allowlist to enforce",
-			contractID)
+			contractID,
+		)
 	}
 	return nil
 }
@@ -578,7 +604,8 @@ func collectAndValidateStatuses(http *metadata.HTTPTransportMeta, contractID str
 	if http.SuccessStatus == 0 && len(http.Responses) == 0 {
 		return nil, fmt.Errorf(
 			"contractgen: contract %q declares no SuccessStatus and no responses[]; HTTP endpoint must declare at least one response",
-			contractID)
+			contractID,
+		)
 	}
 
 	statuses := make([]int, 0, len(http.Responses)+1)
@@ -587,7 +614,8 @@ func collectAndValidateStatuses(http *metadata.HTTPTransportMeta, contractID str
 		if http.SuccessStatus < 100 || http.SuccessStatus > 399 {
 			return nil, fmt.Errorf(
 				"contractgen: contract %q success status %d invalid: must be 1xx/2xx/3xx",
-				contractID, http.SuccessStatus)
+				contractID, http.SuccessStatus,
+			)
 		}
 		statuses = append(statuses, http.SuccessStatus)
 	}
@@ -600,7 +628,8 @@ func collectAndValidateStatuses(http *metadata.HTTPTransportMeta, contractID str
 		if s < 400 || s > 599 {
 			return nil, fmt.Errorf(
 				"contractgen: contract %q response status %d invalid: must be 4xx/5xx (success status %d declared via SuccessStatus)",
-				contractID, s, http.SuccessStatus)
+				contractID, s, http.SuccessStatus,
+			)
 		}
 		statuses = append(statuses, s)
 		hasError = true
@@ -609,7 +638,8 @@ func collectAndValidateStatuses(http *metadata.HTTPTransportMeta, contractID str
 		return nil, fmt.Errorf(
 			"contractgen: contract %q HTTP endpoint must declare at least one 4xx/5xx response;"+
 				" typed error envelope requires an explicit error response declaration",
-			contractID)
+			contractID,
+		)
 	}
 	return statuses, nil
 }
@@ -872,7 +902,8 @@ func checkSagaStepIdentCollision(seen map[string]int, contract *metadata.Contrac
 			return fmt.Errorf(
 				"contractgen build: contract %q saga steps[%d] %q and steps[%d] %q produce the same Go identifier %q "+
 					"(names collapse after PascalCase, e.g. \"reserve\"/\"Reserve\"); rename one step",
-				contract.ID, prev, steps[prev].Name, i, steps[i].Name, id)
+				contract.ID, prev, steps[prev].Name, i, steps[i].Name, id,
+			)
 		}
 		seen[id] = i
 	}
@@ -892,7 +923,8 @@ func buildSagaStep(
 	if strings.TrimSpace(st.Output) == "" {
 		return SagaStepSpec{}, nil, fmt.Errorf(
 			"contractgen build: contract %q saga step %d (%q) missing output schema $ref",
-			contract.ID, i, st.Name)
+			contract.ID, i, st.Name,
+		)
 	}
 	// The output ref must be a contract-relative path; reject absolute paths and
 	// ".." traversal so a contract.yaml cannot drive the schema loader outside
@@ -902,7 +934,8 @@ func buildSagaStep(
 	if !filepath.IsLocal(st.Output) {
 		return SagaStepSpec{}, nil, fmt.Errorf(
 			"contractgen build: contract %q saga step %d (%q) output %q must be a contract-relative path (no '..' or absolute)",
-			contract.ID, i, st.Name, st.Output)
+			contract.ID, i, st.Name, st.Output,
+		)
 	}
 	goName := goPascalCase(st.Name)
 	outType := goName + "Output"
@@ -910,23 +943,27 @@ func buildSagaStep(
 	schema, err := Parse(rootDir, filepath.Join(contractDir, st.Output))
 	if err != nil {
 		return SagaStepSpec{}, nil, fmt.Errorf(
-			"contractgen build: contract %q saga step %d (%q) output schema: %w", contract.ID, i, st.Name, err)
+			"contractgen build: contract %q saga step %d (%q) output schema: %w", contract.ID, i, st.Name, err,
+		)
 	}
 	dtos, err := schemaToDTOs(outType, schema)
 	if err != nil {
 		return SagaStepSpec{}, nil, fmt.Errorf(
-			"contractgen build: contract %q saga step %d (%q) output DTOs: %w", contract.ID, i, st.Name, err)
+			"contractgen build: contract %q saga step %d (%q) output DTOs: %w", contract.ID, i, st.Name, err,
+		)
 	}
 
 	timeoutExpr, err := durationExpr(st.Timeout)
 	if err != nil {
 		return SagaStepSpec{}, nil, fmt.Errorf(
-			"contractgen build: contract %q saga step %d (%q) timeout: %w", contract.ID, i, st.Name, err)
+			"contractgen build: contract %q saga step %d (%q) timeout: %w", contract.ID, i, st.Name, err,
+		)
 	}
 	retry, err := sagaRetrySpec(st.Retries)
 	if err != nil {
 		return SagaStepSpec{}, nil, fmt.Errorf(
-			"contractgen build: contract %q saga step %d (%q) retries: %w", contract.ID, i, st.Name, err)
+			"contractgen build: contract %q saga step %d (%q) retries: %w", contract.ID, i, st.Name, err,
+		)
 	}
 
 	compensate := true
@@ -1061,67 +1098,6 @@ func retryNeedsTime(r *RetryPolicySpec) bool {
 	return r != nil && (r.BaseIntervalExpr != "" || r.MaxIntervalExpr != "")
 }
 
-// buildGRPCSpec projects metadata.GRPCTransportMeta into spec.GRPC for the
-// server-interface generator. The proto file is read (ReadProtoServiceInfo) to
-// resolve the request/response proto-generated message types + the go_package
-// import path emitted into the stub; the proto is the single source of that
-// identity (GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01).
-//
-// All guards are fail-closed at codegen time (the golden test path does not run
-// governance FMT-37, so this is the funnel's own defense against malformed
-// endpoints.grpc):
-//   - nil endpoints.grpc / empty service (mirrors buildHTTPSpec).
-//   - Proto must be present and rooted under metadata.GRPCProtoPathPrefix
-//     (contracts/grpc/). This mirrors governance FMT-37 (validateFMT37Proto):
-//     codegen never runs FMT-37, so the funnel rejects the same proto paths the
-//     governance rule would, keeping the generated doc comment's proto reference
-//     a real contracts-relative path rather than an empty or stray string.
-//   - Service is rendered into the interface doc comment; a control rune
-//     (notably a newline) would break out of the // comment and inject arbitrary
-//     text into the generated source that goimports/gofumpt accept silently.
-//     Reject control runes so the comment stays a comment.
-//   - Each rpc method name must be an exported Go identifier and the rpc must be
-//     unary — ReadProtoServiceInfo enforces both fail-closed at proto-read time.
-func buildGRPCSpec(spec *ContractGenSpec, rootDir string, contract *metadata.ContractMeta) error {
-	g := contract.Endpoints.GRPC
-	if g == nil {
-		return fmt.Errorf("contractgen build: contract %q is kind=grpc but has no endpoints.grpc block", contract.ID)
-	}
-	if g.Service == "" {
-		return fmt.Errorf("contractgen build: contract %q grpc block requires service", contract.ID)
-	}
-	if _, err := metadata.GRPCServiceGoName(g.Service); err != nil {
-		return fmt.Errorf("contractgen build: contract %q grpc service: %w", contract.ID, err)
-	}
-	if err := validateGRPCProtoPath(contract.ID, g.Proto); err != nil {
-		return err
-	}
-
-	svcInfo, err := ReadProtoServiceInfo(filepath.Join(rootDir, filepath.FromSlash(g.Proto)), g.Service)
-	if err != nil {
-		return fmt.Errorf("contractgen build: contract %q grpc proto: %w", contract.ID, err)
-	}
-
-	methods := make([]GRPCMethodSpec, len(svcInfo.Methods))
-	for i, m := range svcInfo.Methods {
-		methods[i] = GRPCMethodSpec{
-			MethodName:   m.Name,
-			RequestType:  m.RequestType,
-			ResponseType: m.ResponseType,
-		}
-	}
-
-	spec.GRPC = &GRPCEndpointSpec{
-		InterfaceName:   "Server",
-		ServiceFQN:      g.Service,
-		ProtoPath:       g.Proto,
-		ProtoImportPath: svcInfo.ImportPath,
-		ProtoAlias:      svcInfo.Alias,
-		Methods:         methods,
-	}
-	return nil
-}
-
 // validateGRPCProtoPath fail-closes on a grpc contract's endpoints.grpc.proto
 // path before it is filepath.Join-ed onto rootDir and read. Delegates to
 // metadata.ValidateGRPCProtoPath (the single-source 4-guard validator shared
@@ -1139,22 +1115,25 @@ func validateGRPCProtoPath(contractID, proto string) error {
 // Returns error when a param name (as Go field name) conflicts with an existing
 // body schema field (which would produce a duplicate struct field).
 // contractID is used in error messages.
-func mergeParamsIntoRequest(dtos []DTOSpec, pathParams, queryParams []ParamSpec, contractID string) ([]DTOSpec, error) {
-	if len(pathParams) == 0 && len(queryParams) == 0 {
+func mergeParamsIntoRequest(dtos []DTOSpec, pathParams, queryParams, headerParams []ParamSpec, contractID string) ([]DTOSpec, error) {
+	if len(pathParams) == 0 && len(queryParams) == 0 && len(headerParams) == 0 {
 		return dtos, nil
 	}
 
 	// Find or create Request DTO.
 	reqIdx := findOrCreateRequestDTO(&dtos)
 
-	// Check for name conflicts between path/query param Go names and existing body fields.
-	existing := make(map[string]bool, len(dtos[reqIdx].Fields))
+	// Seed the GoName→source map from existing body fields. buildParamFields then
+	// registers each path/query/header param as it is appended, so a collision is
+	// caught whether it is param-vs-body OR param-vs-param (#1494 review F2: two
+	// params folding to the same goPascalCase GoName — e.g. path "userId" and
+	// header "X-User-ID" — would otherwise emit a duplicate Request field).
+	used := make(map[string]string, len(dtos[reqIdx].Fields))
 	for _, f := range dtos[reqIdx].Fields {
-		existing[f.Name] = true
+		used[f.Name] = fmt.Sprintf("request body field %q", f.Name)
 	}
 
-	// Build prefix fields from path and query params, checking for conflicts.
-	prefixFields, err := buildParamFields(pathParams, queryParams, existing, contractID)
+	prefixFields, err := buildParamFields(pathParams, queryParams, headerParams, used, contractID)
 	if err != nil {
 		return nil, err
 	}
@@ -1175,41 +1154,68 @@ func findOrCreateRequestDTO(dtos *[]DTOSpec) int {
 	return 0
 }
 
-// buildParamFields converts ParamSpec slices to DTOFields, checking for name
-// conflicts against existing body fields. Returns error on conflict.
-func buildParamFields(pathParams, queryParams []ParamSpec, existing map[string]bool, contractID string) ([]DTOField, error) {
+// buildParamFields converts path/query/header ParamSpec slices to DTOFields,
+// rejecting any GoName collision. used maps an already-claimed Go field name to a
+// human description of its source (seeded with body fields by the caller); each
+// param registers its GoName as it is appended, so collisions are detected
+// across ALL sources — param-vs-body AND param-vs-param (#1494 review F2). The
+// error names both colliding sources and the folded Go field.
+func buildParamFields(pathParams, queryParams, headerParams []ParamSpec, used map[string]string, contractID string) ([]DTOField, error) {
 	var fields []DTOField
-	for _, p := range pathParams {
-		if existing[p.GoName] {
-			return nil, fmt.Errorf("contractgen: contract %q field %q conflict between path param and request body schema",
-				contractID, p.Name)
+	claim := func(p ParamSpec, source string) error {
+		this := fmt.Sprintf("%s param %q", source, p.Name)
+		if prior, ok := used[p.GoName]; ok {
+			return fmt.Errorf("contractgen: contract %q Go field %q conflict: claimed by both %s and %s; "+
+				"rename one so they do not fold to the same identifier",
+				contractID, p.GoName, prior, this)
 		}
-		fields = append(fields, paramToField(p, "path"))
+		used[p.GoName] = this
+		fields = append(fields, paramToField(p, source))
+		return nil
+	}
+	for _, p := range pathParams {
+		if err := claim(p, "path"); err != nil {
+			return nil, err
+		}
 	}
 	for _, q := range queryParams {
-		if existing[q.GoName] {
-			return nil, fmt.Errorf("contractgen: contract %q field %q conflict between query param and request body schema",
-				contractID, q.Name)
+		if err := claim(q, "query"); err != nil {
+			return nil, err
 		}
-		fields = append(fields, paramToField(q, "query"))
+	}
+	for _, hd := range headerParams {
+		if err := claim(hd, "header"); err != nil {
+			return nil, err
+		}
 	}
 	return fields, nil
 }
 
 // paramToField converts a ParamSpec to a DTOField with the given source tag.
 // Path and query fields carry Source="path"/"query" so the handler template
-// does not re-validate them in the body validation block.
+// does not re-validate them in the body validation block. Header fields
+// (source="header") additionally carry JSONTag "-": they are populated from
+// r.Header.Get only and must never be decodable from the request body, so a
+// client cannot spoof a header value (e.g. X-Tenant-ID) via the JSON body.
 func paramToField(p ParamSpec, source string) DTOField {
 	tag := p.Name + ",omitempty"
 	if p.Required {
 		tag = p.Name
+	}
+	doc := p.Doc
+	if source == "header" {
+		tag = "-"
+		doc = fmt.Sprintf(
+			"%s is populated from the %q request header by the generated handler; "+
+				"do not set it in the Service implementation (read-only).",
+			p.GoName, p.Name)
 	}
 	return DTOField{
 		Name:     p.GoName,
 		JSONTag:  tag,
 		GoType:   p.GoType,
 		Required: p.Required,
-		Doc:      p.Doc,
+		Doc:      doc,
 		Source:   source,
 		// MinLength/MaxLength/Minimum/Maximum are intentionally left nil for
 		// path/query fields — they are validated at query parse time in the
@@ -1277,6 +1283,46 @@ func buildQueryParams(http *metadata.HTTPTransportMeta) []ParamSpec {
 			MaxLength: paramMaxLength(schema),
 			Minimum:   paramMinimum(schema),
 			Maximum:   paramMaximum(schema),
+		})
+	}
+	return out
+}
+
+// buildHeaderParams extracts inbound request-header declarations from
+// HTTPTransport in canonical-name-sorted order (contract.yaml headers is a YAML
+// map; sort for deterministic output). Header GoType is always the populate-only
+// scalar derived from schema.Type ("X-Tenant-ID" → GoName "XTenantID", GoType
+// "string"). MinLength/MaxLength/Minimum/Maximum are intentionally NOT carried
+// here: headers are populate-only and the generated handler emits no gate, so a
+// length/numeric constraint would silently no-op — governance FMT-40 rejects such
+// declarations at validate time (`gocell validate`). `Required` is carried for
+// documentation/client-gen metadata but does NOT emit a server-side gate
+// (decision: per-endpoint fail behavior is owned by the cell adapter; see
+// HTTPTransportMeta.Headers godoc).
+func buildHeaderParams(http *metadata.HTTPTransportMeta) []ParamSpec {
+	if len(http.Headers) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(http.Headers))
+	for name := range http.Headers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var out []ParamSpec
+	for _, name := range names {
+		schema := http.Headers[name]
+		required := false
+		if schema.Required != nil {
+			required = *schema.Required
+		}
+		out = append(out, ParamSpec{
+			Name:     name,
+			GoName:   goPascalCase(name),
+			GoType:   paramGoType(schema.Type),
+			Required: required,
+			Doc:      paramDoc(schema),
+			Format:   schema.Format,
 		})
 	}
 	return out

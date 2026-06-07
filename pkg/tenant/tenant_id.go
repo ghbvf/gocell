@@ -46,10 +46,12 @@ const canonicalUUIDLen = 36
 // String returns the underlying string.
 func (t TenantID) String() string { return string(t) }
 
-// Validate returns nil only for a non-empty TenantID that is ALREADY in
-// canonical form: a 36-char dashed, lowercase UUID. The empty value is rejected
-// (a tenant boundary cannot be absent at the point a TenantID is required), and
-// any non-canonical form — including a valid-but-uppercase UUID — is rejected.
+// Validate returns nil only for a non-empty, non-reserved TenantID that is
+// ALREADY in canonical form: a 36-char dashed, lowercase UUID. The empty value
+// is rejected (a tenant boundary cannot be absent at the point a TenantID is
+// required), the reserved nil-UUID ("00000000-0000-0000-0000-000000000000") is
+// rejected, and any non-canonical form — including a valid-but-uppercase UUID —
+// is rejected.
 //
 // Validate does NOT normalize the receiver: it asserts the value is canonical
 // rather than coercing it. This makes Validate a true post-construction
@@ -66,9 +68,9 @@ func (t TenantID) Validate() error {
 // value is canonicalized to lowercase UUID form. Implements json.Unmarshaler.
 //
 // Routes through ParseTenantID (the untrusted-input constructor) so that the
-// reserved nil-UUID sentinel is rejected at this boundary too — a JSON payload
-// supplying "00000000-0000-0000-0000-000000000000" must not allow the caller to
-// alias the system-tier config (F2 security fix).
+// reserved nil-UUID is rejected at this boundary too — a JSON payload supplying
+// "00000000-0000-0000-0000-000000000000" is an invalid tenant identifier (F2
+// security fix).
 func (t *TenantID) UnmarshalJSON(data []byte) error {
 	var raw string
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -87,10 +89,9 @@ func (t TenantID) MarshalJSON() ([]byte, error) {
 	return json.Marshal(string(t))
 }
 
-// reservedNilUUID is the nil UUID string value reserved as SystemTenantID.
-// It is named here — rather than referencing the constant from system_tenant.go —
-// to keep pkg/tenant self-contained and to make the rejection guard a single
-// string comparison with no circular-init risk.
+// reservedNilUUID is the all-zeros UUID string that is treated as an invalid
+// TenantID value in GoCell. It is kept as a private const to keep pkg/tenant
+// self-contained and to make the rejection guard a single string comparison.
 const reservedNilUUID = "00000000-0000-0000-0000-000000000000"
 
 // ParseTenantID validates s and returns a canonical (lowercase) TenantID.
@@ -98,21 +99,10 @@ const reservedNilUUID = "00000000-0000-0000-0000-000000000000"
 // is an error.
 //
 // SECURITY — untrusted-input boundary: ParseTenantID rejects the reserved
-// nil-UUID sentinel ("00000000-0000-0000-0000-000000000000"). That sentinel is
-// SystemTenantID, a tenant-isolation bypass token used exclusively by the
-// internal control-plane read path. Allowing an external caller to supply it
-// via a JWT claim or X-Tenant-ID header would let them alias the system-tier
-// config, crossing the per-tenant boundary.
-//
-// Deliberate split from Validate:
-//   - Validate() accepts SystemTenantID — repo param guards call Validate on
-//     the typed param; the sentinel is a valid canonical TenantID value.
-//   - ParseTenantID() rejects the nil-UUID — it is the parse-from-untrusted
-//     constructor (JWT, header, UnmarshalJSON); the sentinel may never arrive
-//     from external input.
-//
-// Internal code that needs to pass SystemTenantID to a repo must use the typed
-// constant directly (tenant.SystemTenantID), never parse it from a string.
+// nil-UUID ("00000000-0000-0000-0000-000000000000"). The nil-UUID is an invalid
+// tenant identifier; allowing an external caller to supply it via a JWT claim
+// or X-Tenant-ID header must be prevented at the parse boundary (F2 security
+// fix).
 func ParseTenantID(s string) (TenantID, error) {
 	if s == reservedNilUUID {
 		return "", fmt.Errorf("tenant: TenantID %q is reserved for internal use and must not be submitted as external input", s)
@@ -142,12 +132,20 @@ func parseCanonical(s string) (TenantID, error) {
 	return TenantID(u.String()), nil
 }
 
-// validateTenantIDString asserts that s is ALREADY canonical: it must parse as
-// a valid TenantID AND equal its own canonical form. parseCanonical normalizes
-// (lowercases) on the way through, so comparing s to the canonical result is
-// what rejects a valid-but-uppercase UUID — a check Validate needs but
-// ParseTenantID / UnmarshalJSON (which deliberately normalize) must not apply.
+// validateTenantIDString asserts that s is ALREADY canonical: it must not be
+// the reserved nil-UUID, must parse as a valid UUID, and must already be in
+// canonical (lowercase) form. parseCanonical normalizes (lowercases) on the
+// way through, so comparing s to the canonical result is what rejects a
+// valid-but-uppercase UUID — a check Validate needs but ParseTenantID /
+// UnmarshalJSON (which deliberately normalize) must not apply.
+//
+// The nil-UUID is also rejected here (not just in ParseTenantID) because there
+// is no longer a SystemTenantID sentinel that a valid caller would construct
+// directly — every caller must supply a real per-tenant UUID.
 func validateTenantIDString(s string) error {
+	if s == reservedNilUUID {
+		return fmt.Errorf("tenant: TenantID %q is reserved and invalid", s)
+	}
 	canonical, err := parseCanonical(s)
 	if err != nil {
 		return err

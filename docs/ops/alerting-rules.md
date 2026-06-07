@@ -254,6 +254,8 @@ config event consumer 拆成两条生命周期边界不同的指标：
 | `ack` | handler 接受事件并完成业务处理 |
 | `stale` | 事件已过期或 replay，安全跳过 |
 | `permanent_error` | payload / schema / 语义错误，不应重试 |
+| `no_tenant` | （#1577）`accesscore/configreceive` refetch 时事件 envelope 无 tenant —— tenant-correct 不变式违反（envelope/restore 管线错误），fail-closed Reject 进 DLX；正常生产流量应为 0 |
+| `transient` | refetch 瞬态失败（configcore internal GET 不可达 / 超时 / 5xx），ConsumerBase 退避重试；持续增长表示下游故障 |
 
 | settlement disposition/result | 含义 |
 |---|---|
@@ -321,6 +323,49 @@ payload/schema 永久错误不应在正常生产流量中增长；任意持续�
       Config event consumer {{ $labels.cell }}/{{ $labels.slice }} is routing
       permanent payload/schema errors to DLX. Compare event payloads with
       contracts/event/config/* schemas and recent producer deploys.
+```
+
+### ConfigEventConsumerNoTenant（#1577）
+
+`accesscore/configreceive` 在 refetch 时从事件 envelope 取不到 tenant —— 违反 #1577
+建立的「真实 tenant 必达内部 config 读」不变式（envelope/restore 管线错误），fail-closed
+Reject 进 DLX。正常生产流量恒为 0；任意增长即 producer 未带 tenant principal / consumer
+ctx restore 回归 / 旧版本（pre-#1577）事件重放，须立即排查。
+
+```yaml
+- alert: GoCellConfigEventConsumerNoTenant
+  expr: sum(increase(gocell_config_event_process_total{reason="no_tenant"}[10m])) by (cell, slice) > 0
+  for: 0m
+  labels:
+    severity: critical
+  annotations:
+    summary: "Config event refetch missing tenant ({{ $labels.cell }}/{{ $labels.slice }})"
+    description: |
+      Config event consumer {{ $labels.cell }}/{{ $labels.slice }} received an
+      event without a tenant in context and Rejected it to DLX (#1577 tenant-correct
+      invariant violation — should be 0 in production). Check the producer's
+      principal envelope (outbox tenant) and the consumer ctx RestoreContext path;
+      DLX-replayed pre-#1577 events also surface here.
+```
+
+### ConfigEventConsumerTransient
+
+refetch 瞬态失败（configcore internal GET 不可达 / 超时 / 5xx），由 ConsumerBase 退避重试。
+单次抖动可接受；持续增长指向 configcore internal listener / service-token / configreceive
+refetch 链路的下游故障。
+
+```yaml
+- alert: GoCellConfigEventConsumerTransient
+  expr: sum(rate(gocell_config_event_process_total{reason="transient"}[5m])) by (cell, slice) > 0.1
+  for: 10m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Config event refetch transient failures ({{ $labels.cell }}/{{ $labels.slice }})"
+    description: |
+      Config event consumer {{ $labels.cell }}/{{ $labels.slice }} is retrying
+      refetch on transient errors. Check configcore internal listener / readiness,
+      service-token verification, and the configreceive → http.config.internal.get.v1 path.
 ```
 
 ---
