@@ -592,13 +592,18 @@ length before injection into context.
 
 ## Using in Your Project
 
-```bash
-# Set up Go private module access
-export GOPRIVATE=github.com/ghbvf/gocell
+GoCell is a public Go module — no `GOPRIVATE` or auth setup is required.
 
-# Add to your project
+```bash
+# Add the framework to your project (or pin a stable tag, e.g. @v0.1.0)
 go get github.com/ghbvf/gocell@latest
 ```
+
+The `gocell` governance/codegen CLI is currently installed from source
+(`git clone … && go install ./cmd/gocell`); a standalone
+`go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` entry point is tracked
+in [#1088](https://github.com/ghbvf/gocell/issues/1088). See
+[docs/guides/cell-external-repo-quickstart.md](docs/guides/cell-external-repo-quickstart.md).
 
 ## Project Templates
 
