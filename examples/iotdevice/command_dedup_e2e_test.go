@@ -23,8 +23,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	enqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
 	devicebootstrap "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicebootstrap"
+	enqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
@@ -139,6 +139,16 @@ func TestCommandRelay_DedupOnEventRedelivery(t *testing.T) {
 	}), "both command entries must settle to published (one dispatched, one deduped)")
 
 	assert.Equal(t, 1, h.calls, "enqueue handler must run exactly once across the redelivered command")
+
+	// The two command entries are claimed in one batch before the first commits,
+	// so the second sees ClaimBusy → MarkRetry → re-claim → ClaimDone. At least
+	// one row must therefore show attempts >= 1 — this witnesses the retry path
+	// (the #1698 core), guarding against a future regression that dead-letters or
+	// drops the busy entry instead of retrying it into dedup.
+	final := store.Snapshot()
+	require.Len(t, final, 2)
+	assert.True(t, final[0].Attempts >= 1 || final[1].Attempts >= 1,
+		"at least one row must have retried (ClaimBusy→MarkRetry) before deduping")
 }
 
 // TestCommandRelay_FailClosedOnMissingIdentity is scenario B: a command entry

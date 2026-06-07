@@ -39,14 +39,18 @@ func (c *fakeClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (id
 
 func (c *fakeClaimer) Kind() idempotency.ClaimerKind { return idempotency.ClaimerKindInMemory }
 
-// spyReceipt records Commit / Release so tests can assert lease settlement.
+// spyReceipt records Commit / Release so tests can assert lease settlement. The
+// commitErr / releaseErr fields let a test inject a settle-side store failure to
+// assert it is logged-not-fatal (the row outcome must stand regardless).
 type spyReceipt struct {
-	committed int
-	released  int
+	committed  int
+	released   int
+	commitErr  error
+	releaseErr error
 }
 
-func (r *spyReceipt) Commit(context.Context) error                { r.committed++; return nil }
-func (r *spyReceipt) Release(context.Context) error               { r.released++; return nil }
+func (r *spyReceipt) Commit(context.Context) error                { r.committed++; return r.commitErr }
+func (r *spyReceipt) Release(context.Context) error               { r.released++; return r.releaseErr }
 func (r *spyReceipt) Extend(context.Context, time.Duration) error { return nil }
 
 // noIdentityEntry builds a command ClaimedEntry with NO idempotency identity
@@ -241,6 +245,76 @@ func TestWriteBack_ReleasesReceiptOnFailure(t *testing.T) {
 	status := store.rows["c1"].status
 	store.mu.Unlock()
 	assert.Equal(t, "pending", status, "failed dispatch retries (back to pending)")
+}
+
+// TestDispatchCommand_UnknownState_Permanent asserts a Claimer returning a state
+// outside the enumerated set (a state-machine violation) is fail-closed
+// dead-lettered (permanent error → MarkDead) and never dispatched.
+func TestDispatchCommand_UnknownState_Permanent(t *testing.T) {
+	t.Parallel()
+	const cmdID = "command.test.do.v1"
+	claimer := &fakeClaimer{state: idempotency.ClaimState(99)}
+
+	var dispatched int
+	r := relayWithDispatch(
+		func(context.Context, *command.Registry, kout.Entry) error { dispatched++; return nil },
+		claimer)
+
+	results := r.publishBatch(context.Background(), []ClaimedEntry{claimedEntry(t, "c1", cmdID, `{}`)})
+	require.Len(t, results, 1)
+	require.Error(t, results[0].err)
+	assert.True(t, isPermanentDispatch(results[0].err), "unknown ClaimState must be permanent (→ MarkDead)")
+	assert.Equal(t, 0, dispatched, "unknown ClaimState must NOT dispatch")
+}
+
+// TestWriteBack_CommitErrorDoesNotRollbackPublished asserts that when the
+// idempotency Commit fails after a successful dispatch, the row still settles to
+// "published" — the Commit failure is logged-not-fatal (the command was already
+// consumed; only the done-key may not persist).
+func TestWriteBack_CommitErrorDoesNotRollbackPublished(t *testing.T) {
+	t.Parallel()
+	const cmdID = "command.test.do.v1"
+	store := newMinimalStore()
+	store.seedPendingCommand(cmdID, `{}`)
+
+	rcpt := &spyReceipt{commitErr: errors.New("done-key write failed")}
+	r := NewRelay(clock.Real(), store, &recordingPublisher{}, RelayConfig{}.WithDefaults())
+	r.WithCommandDispatch(command.NewRegistry(),
+		map[command.CommandID]command.AsyncDispatchFunc{
+			cmdID: func(context.Context, *command.Registry, kout.Entry) error { return nil },
+		}, &fakeClaimer{state: idempotency.ClaimAcquired, receipt: rcpt})
+
+	require.NoError(t, r.pollOnce(context.Background()), "Commit failure must not surface as a poll error")
+	assert.Equal(t, 1, rcpt.committed, "Commit is attempted")
+	store.mu.Lock()
+	status := store.rows["c1"].status
+	store.mu.Unlock()
+	assert.Equal(t, "published", status, "row stays published despite Commit failure (settle not rolled back)")
+}
+
+// TestWriteBack_ReleaseErrorDoesNotBlockRetry asserts that when the idempotency
+// Release fails after a failing dispatch, the row still goes back to "pending"
+// (MarkRetry) — the Release failure is logged-not-fatal.
+func TestWriteBack_ReleaseErrorDoesNotBlockRetry(t *testing.T) {
+	t.Parallel()
+	const cmdID = "command.test.do.v1"
+	store := newMinimalStore()
+	store.seedPendingCommand(cmdID, `{}`)
+
+	rcpt := &spyReceipt{releaseErr: errors.New("lease release failed")}
+	r := NewRelay(clock.Real(), store, &recordingPublisher{},
+		RelayConfig{MaxAttempts: 5, BaseRetryDelay: time.Millisecond, MaxRetryDelay: time.Second}.WithDefaults())
+	r.WithCommandDispatch(command.NewRegistry(),
+		map[command.CommandID]command.AsyncDispatchFunc{
+			cmdID: func(context.Context, *command.Registry, kout.Entry) error { return errors.New("boom") },
+		}, &fakeClaimer{state: idempotency.ClaimAcquired, receipt: rcpt})
+
+	require.NoError(t, r.pollOnce(context.Background()), "Release failure must not surface as a poll error")
+	assert.Equal(t, 1, rcpt.released, "Release is attempted")
+	store.mu.Lock()
+	status := store.rows["c1"].status
+	store.mu.Unlock()
+	assert.Equal(t, "pending", status, "row goes to pending (retry) despite Release failure")
 }
 
 // TestStart_CommandDispatchWithoutClaimer_FailsFast asserts wiring command
