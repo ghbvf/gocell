@@ -124,10 +124,10 @@ const ctxkeysPkgPath = PlatformModulePath + "/pkg/ctxkeys"
 // INV-SINGLE-TENANT-ONLY (#1289) — the single-writer entry was a deliberate
 // placeholder for exactly this moment, not an oversight. The persistence-reach
 // tripwire in cells/auditcore/internal/appender was RETIRED in PR-2a (#1340)
-// once tenant-scoped audit query filtering landed (AuditFilters.TenantID, set by
-// the auditquery handler from the authenticated principal): a non-empty
-// principal.TenantID now flows cleanly to audit persistence and is isolated at
-// query time, so the write-time alarm is no longer needed.
+// once tenant-scoped audit query filtering landed (the auditquery handler passes
+// the authenticated principal's tenant to the tenant-scoped read path): a
+// non-empty principal.TenantID now flows cleanly to audit persistence and is
+// isolated at query time, so the write-time alarm is no longer needed.
 // See ADR 202605281200-1042 §Amendment 2026-05-30.
 var principalSetterAllowlist = map[string]map[string]struct{}{
 	"WithActorID": {

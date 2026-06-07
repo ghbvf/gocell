@@ -102,12 +102,14 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 	}
 	// Tenant isolation fail-closed (epic #1337 PR-2a, F1): a tenant-scoped audit
 	// read REQUIRES a concrete tenant. An authenticated principal with an empty
-	// TenantID cannot establish an isolation scope; rather than fall through to
-	// the store's "empty TenantID = no filter = all tenants" semantics (a
-	// cross-tenant read), reject here. Post-PR-2a every access token carries
-	// tenant_id (login requires it; sessionmint stamps it), so this only triggers
-	// for malformed/legacy tokens — never the normal path. This is the isolation
-	// boundary; canonical-UUID form is already enforced by the JWT authenticator.
+	// TenantID cannot establish an isolation scope; rather than let an empty
+	// tenant degrade the read to the store's system-chain (tenant_id = '' rows
+	// only — never the caller's intended tenant data), reject here. Service.Query
+	// is the defense-in-depth backstop (it also rejects an empty post-auth tenant,
+	// #1618 F2). Post-PR-2a every access token carries tenant_id (login requires
+	// it; sessionmint stamps it), so this only triggers for malformed/legacy
+	// tokens — never the normal path. This is the isolation boundary;
+	// canonical-UUID form is already enforced by the JWT authenticator.
 	if p.TenantID == "" {
 		return nil, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
 			"audit query requires a tenant-scoped principal")

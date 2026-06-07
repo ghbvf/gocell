@@ -124,9 +124,9 @@ func TestHttpAuditListV1Serve(t *testing.T) {
 //     KEY, even when the underlying ledger.Entry carries them. sessionId is a
 //     credential-adjacent token (pkg/redaction sensitive-key set); tenantId now
 //     HAS a producer source (epic #1337 PR-2a) and the read path IS tenant-scoped
-//     (AuditFilters.TenantID), but a per-row tenantId is redundant — every
-//     returned row already belongs to the caller's own tenant — so it is
-//     deliberately not projected. The caller below carries the same tenant as the
+//     (the typed Store.Query tenant param, #1618), but a per-row tenantId is
+//     redundant — every returned row already belongs to the caller's own tenant —
+//     so it is deliberately not projected. The caller below carries the same tenant as the
 //     seeded row so the row survives the mandatory tenant scope and the
 //     value-leak assertion stays meaningful. Asserting on the raw JSON (not the
 //     typed DTO) is deliberate: a future PR that adds the fields to

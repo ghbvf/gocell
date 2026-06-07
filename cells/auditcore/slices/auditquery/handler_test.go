@@ -327,8 +327,9 @@ func TestAuditEntryResponse_SensitivePayload_Redacted(t *testing.T) {
 // the route layer, not inside the business handler.
 // TestList_EmptyTenant_Forbidden (epic #1337 PR-2a, F1): an authenticated
 // principal with no tenant must be rejected with 403 rather than degrade to the
-// store's "empty TenantID = no filter = all tenants" cross-tenant read — the
-// fail-open vector the second-round review flagged P0.
+// store's system-chain read (empty tenant → tenant_id = ” rows only, never the
+// caller's intended tenant data) — the fail-open vector the second-round review
+// flagged P0.
 func TestList_EmptyTenant_Forbidden(t *testing.T) {
 	store := newHandlerStore(t)
 	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
@@ -469,8 +470,8 @@ func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
 // TestHandler_RegisterRoutes_TenantScoped proves the audit query endpoint is
 // tenant-scoped (epic #1337 PR-2a): a tenant-bearing caller now SUCCEEDS (200)
 // but sees only its own tenant's audit rows. This replaced the PR-1 (#1339 F2)
-// blanket 403 fail-closed gate. The List adapter sets AuditFilters.TenantID from
-// the authenticated principal and the store applies a mandatory tenant scope, so
+// blanket 403 fail-closed gate. The List adapter passes the authenticated
+// principal's tenant as the mandatory typed Store.Query tenant param (#1618), so
 // admin-ness widens the actor axis but never the tenant axis.
 func TestHandler_RegisterRoutes_TenantScoped(t *testing.T) {
 	store := newHandlerStore(t)

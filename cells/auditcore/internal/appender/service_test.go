@@ -447,8 +447,8 @@ func TestHandleEvent_TraceIDFromEnvelope(t *testing.T) {
 }
 
 // TestHandleEvent_TenantIDPersistedCleanly pins the epic #1337 PR-2a closure of
-// #1289: tenant-scoped audit isolation now lands at the QUERY layer
-// (AuditFilters.TenantID mandatory scope), so a non-empty principal.TenantID is
+// #1289: tenant-scoped audit isolation now lands at the QUERY layer (the typed
+// Store.Query tenant param, #1618), so a non-empty principal.TenantID is
 // no longer a security gap — it flows cleanly through the appender. The
 // INV-SINGLE-TENANT-ONLY tripwire (formerly an Error-level alarm) is RETIRED:
 // the appender persists tenant_id and emits NO tripwire log, because cross-tenant
