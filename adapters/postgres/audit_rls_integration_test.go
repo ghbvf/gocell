@@ -46,10 +46,10 @@ VALUES ($1, $2, $3, $4, $5, $6, '', $7, '', '', '', $8, $8, '{}', $9, $10)`
 // auditRow holds the variable fields of a raw audit_entries INSERT.
 type auditRow struct {
 	id, namespace, eventID, actorID, tenantID string
-	seqNo                                      int64
+	seqNo                                     int64
 }
 
-// genesisAuditRow builds a seq_no=1 genesis row (prev_hash='') for the given chain.
+// genesisAuditRow builds a seq_no=1 genesis row (empty prev_hash) for the given chain.
 func genesisAuditRow(id, ns, eventID, actorID, tenantID string) auditRow {
 	return auditRow{id: id, namespace: ns, eventID: eventID, actorID: actorID, tenantID: tenantID, seqNo: 1}
 }
