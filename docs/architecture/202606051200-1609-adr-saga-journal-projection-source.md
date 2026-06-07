@@ -29,7 +29,7 @@
 
 已落地的 #1100 harness（`202605261620`）只支持「订阅 outbox 事件」live 路径（todoorder `orderprojection` 消费 cell 自发的 `event.order-created.v1` / `event.order-status-changed.v1`，**无 saga**）。其 rebuild 路径的 `PGProjectionReplaySource`/`Cursor` 用 `outbox_entries.seq` 作 position——但 outbox 是 **transient relay**（`CleanupPublished`/`CleanupDead` 删行），consume-lag 超 retention 时 `Cursor.Position` 在已删行上 `SELECT seq WHERE id=…` → 永久错误（#1100 ADR Amendment 2026-06-03 的 Retention-boundary，gated off by default，追踪 **gh #1504 P1**）。
 
-`saga_events` 是 **append-only、永不删**的 journal——天然规避 #1504 的 transient-relay 缺陷。**注意范围**：本 ADR 为 **saga 事件**投影提供 durable 源，**不**声称关闭 #1504（#1504 是 outbox-event 投影的 durable 源问题，载体不同——saga_events 只装 saga 事件）。
+`saga_events` 是 **append-only、永不删**的 journal——天然规避 #1504 的 transient-relay 缺陷。**注意范围**：本 ADR 为 **saga 事件**投影提供 durable 源，**不**声称关闭 #1504（#1504 是 outbox-event 投影的 durable 源问题，载体不同——saga_events 只装 saga 事件）。**back-pointer（#1504 设计已立项）**：outbox-event 投影的 durable 源现有独立 ADR `202606071600-1504-adr-projection-event-journal.md`（专用 append-only `projection_events` 表，复用本 ADR 已落地的 `cellvocab.ProjectionEvent` 载体 + #1627 身份修复地基；平行 reader，**不**泛化本 ADR 的 saga 专属 `journal.GlobalReader`）。
 
 ### 1.3 现状不是 bug——是工业合法形态，本 ADR 是「贴近生产形态」升级
 
