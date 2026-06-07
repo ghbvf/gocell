@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecmd"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	dto "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
+	devicebootstrap "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicebootstrap"
 	devicecommand "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommand"
 	devicecommandinternal "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommandinternal"
 	devicecommandrpc "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommandrpc"
@@ -129,6 +130,13 @@ type DeviceCell struct {
 
 	// +slice:route:slice=deviceregister,subPath=/api/v1/devices
 	registerHandler *registercontract.Handler
+
+	// bootstrapSvc backs the devicebootstrap subscribe slice. It carries no route
+	// marker: the event.device-registered.v1 subscription is derived by cellgen
+	// from slice.yaml contractUsages[role=subscribe], which resolves this field by
+	// "pointer-type package == sliceID" (devicebootstrap) and emits the
+	// NewSubscription(...).Mount(reg) call into cell_gen.go.
+	bootstrapSvc *devicebootstrap.Service
 
 	// +slice:route:slice=devicecommand,subPath=/api/v1/devices
 	commandHandler *devicecommand.Handler
@@ -295,6 +303,22 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	}
 	c.registerHandler = registercontract.NewHandler(registerSvc)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(deviceregister.SliceMetadata()))
+
+	// device-bootstrap slice: event-reactive producer subscribing to
+	// event.device-registered.v1 and emitting a command.devicecommand.enqueue.v1
+	// async command for each new device. Batch-3 (#1698) replaces c.emitter with
+	// a store-writer-backed CellEmitter so the emitted command entry lands in the
+	// outbox store; for now it shares the cell's direct emitter.
+	bootstrapSvc, err := devicebootstrap.NewService(
+		c.clk,
+		devicebootstrap.WithEmitter(c.emitter),
+		devicebootstrap.WithLogger(c.logger),
+	)
+	if err != nil {
+		return fmt.Errorf("device-bootstrap: %w", err)
+	}
+	c.bootstrapSvc = bootstrapSvc
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicebootstrap.SliceMetadata()))
 
 	// device-command slice: a Queue + ActiveScanner is required in every mode.
 	// Demo callers MUST wire commandtest.NewInMemQueue() explicitly via

@@ -6,7 +6,7 @@ consistencyLevel: L4
 lifecycle: active
 endpoints:
   handler: devicecell
-  invokers: []
+  invokers: [devicecell]
 schemaRefs:
   request: request.schema.json
   response: response.schema.json

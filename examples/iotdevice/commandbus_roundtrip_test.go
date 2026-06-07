@@ -22,6 +22,7 @@ import (
 
 	enqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
@@ -158,6 +159,22 @@ func newCommandEntry(t *testing.T, req enqueue.Request) kout.Entry {
 	return entry
 }
 
+// newAsyncCommandEntry builds a command entry that carries the idempotency
+// identity slot the relay's Claimer-wrapped dispatch path requires (AggregateID =
+// subject, Metadata[CommandIDMetadataKey] = commandID), mirroring the shape
+// command.EmitAsync produces for an async command. The async relay end-to-end
+// test seeds this so ClaimKeyFromEntry derives a key instead of fail-closing.
+func newAsyncCommandEntry(t *testing.T, req enqueue.Request) kout.Entry {
+	t.Helper()
+	payload, err := json.Marshal(req)
+	require.NoError(t, err)
+	entry, err := kout.NewEntry(clock.Real(), context.Background(), string(enqueue.DispatchID), payload,
+		kout.WithAggregateID(req.DeviceID),
+		kout.WithMetadata(map[string]string{command.CommandIDMetadataKey: "cmd-" + req.DeviceID}))
+	require.NoError(t, err)
+	return entry
+}
+
 // TestCommandBus_Enqueue_DispatchAsyncRoundTrip drives the REAL generated
 // enqueue.DispatchAsync: it decodes the entry payload into *Request and invokes
 // the registered Handler — the async sibling of the sync Dispatch round-trip.
@@ -234,13 +251,18 @@ func TestCommandBus_Enqueue_AsyncRelayEndToEnd(t *testing.T) {
 	require.NoError(t, enqueue.Register(reg, h))
 
 	store := outboxtest.NewFakeStore()
-	store.Seed(outbox.ClaimedEntry{Entry: newCommandEntry(t, enqueue.Request{DeviceID: "d1", Payload: "now"})})
+	// The relay's command-dispatch path now wraps every dispatch in the Claimer
+	// (#1698); ClaimKeyFromEntry requires the entry carry its idempotency identity
+	// slot (AggregateID = subject, Metadata[CommandIDMetadataKey] = commandID) — the
+	// exact shape command.EmitAsync produces. An identity-less entry is fail-closed
+	// (dead-lettered), so seed an identity-bearing entry here.
+	store.Seed(outbox.ClaimedEntry{Entry: newAsyncCommandEntry(t, enqueue.Request{DeviceID: "d1", Payload: "now"})})
 
 	relay := outbox.NewRelay(clock.Real(), store, &kout.DiscardPublisher{},
 		outbox.RelayConfig{PollInterval: 5 * time.Millisecond}.WithDefaults())
 	relay.WithCommandDispatch(reg, map[command.CommandID]command.AsyncDispatchFunc{
 		enqueue.DispatchID: enqueue.DispatchAsync,
-	})
+	}, idempotency.NewInMemClaimer(clock.Real()))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
