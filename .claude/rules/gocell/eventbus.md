@@ -269,6 +269,25 @@ ADR `docs/architecture/202606051200-1609-adr-saga-journal-projection-source.md` 
 > apply 信号）。journal 被 foreign 流主导时 lag gauge 可能长时间平直但 rebuild 仍在进展——排查 rebuild 进度看
 > checkpoint / `pending_events`，不看 lag。
 
+### 投影事件 retained journal（outbox-event durable 源，#1504）
+
+投影 harness 的生产 `ReplaySource`/`Cursor` 现状从 transient `outbox_entries.seq` 取位置——relay
+`CleanupPublished`/`CleanupDead` 删行后 rebuild-from-0 与 live `Cursor.Position` 都会失败（已 fail-closed
+gated off，`202605261620` §Amendment 2026-06-03）。**durable 解法设计已立项**：ADR
+`docs/architecture/202606071600-1504-adr-projection-event-journal.md`——专用 append-only `projection_events`
+表（`global_seq IDENTITY` 位置，`Position` 读行自带 seq、无删行查找）+ emit 期同事务双写装饰器（topic-filtered）+
+删 `GOCELL_PROJECTION_PG_JOURNAL_PREVIEW` gate。**复用** #1609 已落地的 `cellvocab.ProjectionEvent` 载体 +
+#1627 身份修复；**平行 reader**，不泛化 saga `journal.GlobalReader`。本 ADR 是 EPIC #1504 的 PR-00（设计）；
+能力随 PR-01..04 落地。三条新 enforcement invariant（落地 PR 定型，符号清单活在各 archtest godoc）：
+
+| Archtest ID（占位） | 摘要 | 评级 |
+|---|---|---|
+| `PROJECTION-EVENT-JOURNAL-APPEND-CALLER-01` | append `projection_events` 收口单一 sanctioned 写路径（装饰器内未导出 `appendProjectionEvent`）；#1504 forge 防护（封写侧） | **Hard/Hard**（未导出 append + 包内 caller-allowlist，append 与 caller 同包，不受跨包可见性天花板限制） |
+| `PROJECTION-EVENT-JOURNAL-NO-DELETE-01` | 生产代码禁对 `projection_events` 发 DELETE/TRUNCATE（D7 append-only） | 今日 **Hard**（store 接口无 Cleanup/Delete 方法 + archtest SQL-literal scan）；未来 archive 落地降 Medium（allowlist 须引 ADR 章节号） |
+| `PROJECTION-EVENT-JOURNAL-TOPIC-ALLOWLIST-DERIVED-01` | 双写 topic 集从投影合约 metadata 派生（cellgen），非手写列表 | Medium（Hard 路径 = cellgen golden 字节锁，开 gh 跟踪） |
+
+新 source（mem + PG）入既有 `RunReplaySourceConformance`/`RunCursorConformance`（骑既有 enroll archtest，无新文件）。
+
 ## Stream 命名
 
 - 新建 stream 前搜索已有常量，禁止重复定义
