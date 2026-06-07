@@ -34,6 +34,9 @@ func TestChainOrderRecoveryInnermost(t *testing.T) {
 
 	t.Run("metrics observes recovery-converted Internal", func(t *testing.T) {
 		coll := metrics.NewInMemoryGRPCCollector()
+		// Direct interceptor invocation (not via NewUnaryChain): a nil closed set
+		// is valid here and resolves to the _runtime sentinel — this case asserts
+		// the recovery-converted code/label, not cell attribution.
 		_, err := UnaryMetrics(coll, clock.Real(), nil)(
 			context.Background(), nil, info, nestRecovered(info, panicHandler))
 		if status.Code(err) != codes.Internal {

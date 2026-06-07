@@ -28,7 +28,8 @@ import (
 // auth.Principal is in ctx at log time — emitting it would be permanently dead
 // code. Revisit only if auth ordering changes (e.g. device-token /
 // per-method-public). trace_id is best-effort: UnaryTracing writes it only for a
-// propagated/remote trace, same as the HTTP path.
+// propagated/remote trace, same as the HTTP path. real_ip (an HTTP access-log
+// field) is intentionally absent: gRPC has no X-Real-IP equivalent in this stack.
 //
 // Redaction is handled fail-closed at the slog sink (SLOG-HANDLER-SEALED-FUNNEL-01);
 // like the HTTP access log, this interceptor does not redact field-side.

@@ -27,9 +27,11 @@ type Deps struct {
 	// password-reset-exempt predicates).
 	AuthOptions []AuthOption
 	// CellResolver maps fullMethod→cellID for the cell-attribution interceptor
-	// (Option 3, #1152). The composition root supplies the registrar's
-	// CellIDForMethod. Required: a nil resolver is a wiring bug → NewUnaryChain
-	// panics, rather than leaving every RPC attributed to the runtime sentinel.
+	// (Option 3, #1152). It MUST be the CellIDForMethod of the SAME
+	// *runtimegrpc.ServiceRegistrar instance passed to adaptersgrpc.Config.Registrar
+	// — a second/different registrar populates a different map and silently
+	// degrades attribution to _runtime. Required: a nil resolver is a wiring bug →
+	// NewUnaryChain panics rather than leaving every RPC attributed to the sentinel.
 	CellResolver CellResolver
 	// CellIDClosedSet is the assembly's cell-id set (asm.CellIDs()) the metrics
 	// interceptor validates the attributed cell against (M12b defense-in-depth: an

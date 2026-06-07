@@ -70,7 +70,9 @@ type GRPCServer interface {
 // This reflects all listeners — a second server going not-ready surfaces, with
 // no silent drop — while keeping a single grpc_ready series. (Today there is one
 // gRPC listener; the AND keeps multi-listener correct without per-listener
-// naming, which would need a typed ProbeName constructor.)
+// naming, which would need a typed ProbeName constructor — deferred to #1748.
+// Trade-off: /readyz cannot say WHICH listener is down; the failing server is
+// identifiable from its slog "grpc: server is not serving" line.)
 func (b *Bootstrap) expandGRPCServerProbes() {
 	byName := map[healthz.ProbeName][]func(context.Context) error{}
 	var order []healthz.ProbeName

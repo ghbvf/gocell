@@ -1,10 +1,11 @@
 // Package interceptor provides the gRPC unary server interceptor chain that
 // aligns the gRPC transport with the existing HTTP middleware stack
-// (runtime/http/middleware): RequestID, Tracing, Metrics, Auth, and Recovery.
+// (runtime/http/middleware): RequestID, CellAttribution, Tracing, AccessLog,
+// Metrics, Auth, and Recovery.
 //
 // The interceptors are composed by NewUnaryChain into a single
-// grpc.ServerOption. bootstrap (a later PR) installs that option on the
-// adapters/grpc server; this package owns no server lifecycle.
+// grpc.ServerOption. bootstrap installs that option on the adapters/grpc
+// server; this package owns no server lifecycle.
 //
 // # Chain order
 //
@@ -12,7 +13,13 @@
 // innermost), where the first argument to grpc.ChainUnaryInterceptor is the
 // outermost wrapper closest to the transport:
 //
-//	RequestID → Tracing → Metrics → Auth → Recovery → handler
+//	RequestID → CellAttribution → Tracing → AccessLog → Metrics → Auth → Recovery → handler
+//
+// This mirrors the HTTP listener-root order (CellAttribution → Tracing →
+// AccessLog → Metrics). CellAttribution runs before every interceptor that
+// reads the cell label (AccessLog, Metrics) so the owning cell is in ctx when
+// they observe it; AccessLog runs after Tracing (so a propagated trace_id is in
+// ctx) and OUTER to Auth (so auth rejections are still logged).
 //
 // Recovery is INNERMOST, not outermost. This deliberately diverges from the
 // HTTP middleware order (where Recovery sits inside Tracing/Metrics but its

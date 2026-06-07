@@ -36,3 +36,18 @@ func TestServiceRegistrar_CellIDForMethod_BeforeBind(t *testing.T) {
 	_, ok := reg.CellIDForMethod("/pkg.Svc/Do")
 	require.False(t, ok, "no method registered yet")
 }
+
+// TestServiceRegistrar_BindServerTwice_Panics asserts the delegation target is
+// bound exactly once: a second BindServer is a wiring bug (the adapter binds it
+// in New), fail-fast rather than silently swapping the server out from under a
+// populated attribution map.
+func TestServiceRegistrar_BindServerTwice_Panics(t *testing.T) {
+	reg := runtimegrpc.NewServiceRegistrar()
+	reg.BindServer(grpc.NewServer())
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatalf("second BindServer must panic (delegation target already bound)")
+		}
+	}()
+	reg.BindServer(grpc.NewServer())
+}
