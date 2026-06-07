@@ -23,6 +23,16 @@ import (
 // All methods MUST be non-blocking and must tolerate canceled contexts — they
 // are called on hot paths and must never affect saga correctness.
 //
+// Concurrency: a single Observer value is shared across every saga instance and
+// is invoked CONCURRENTLY. A Coordinator tick drives its claimed instances in
+// parallel (one goroutine each, bounded by ClaimBatchSize, #983), so both the
+// Coordinator-emitted ObserveDrive and the Executor-emitted per-step methods
+// (ObserveOutcome / ObserveRetry / ObserveHeartbeatFailure) may run for several
+// instances at the same time — the same method on different instances, and
+// different methods, can overlap. Implementations MUST be safe for concurrent
+// use (e.g. atomic counters / mutex-guarded state). The metrics SagaCollector
+// satisfies this: its instruments are concurrency-safe via the OTel SDK.
+//
 // SHOULD NOT panic; both producers wrap each Observer call in a defer/recover
 // guard so a misbehaving observer logs Warn and execution continues —
 // observability is best-effort and never affects correctness. Recovery is

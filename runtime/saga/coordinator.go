@@ -94,7 +94,16 @@ type Config struct {
 	// PollInterval is how often tickLoop calls ClaimPending. Default 200ms.
 	PollInterval time.Duration
 	// ClaimBatchSize is the maximum number of instances claimed per tick.
-	// Default 16.
+	// Default 16. It is also the per-tick drive-concurrency bound: tickOnce
+	// drives every claimed instance that passes the leader gate in its own
+	// goroutine, so peak concurrent driveOne (and concurrent external step IO)
+	// per tick ≈ ClaimBatchSize. Lower it when steps open many external
+	// connections — claim count and drive fan-out are intentionally the same
+	// knob, because a claimed instance holds a journal lease that is only kept
+	// alive by the Executor heartbeat that starts inside driveOne; claiming more
+	// than are driven concurrently would let the excess leases go stale while
+	// parked. Decoupling claim batch from drive concurrency requires a resident
+	// worker pool (claim-on-free-slot) and is deferred (ADR §8 / #978).
 	ClaimBatchSize int
 	// LeaseDuration is how long a claimed lease is held. Default 30s.
 	// Also used as the per-instance distlock TTL in leader-elect mode AND
@@ -605,6 +614,19 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 		return nil
 	}
 	c.safeObserve(ctx, "ObserveTick", func() { c.observer.ObserveTick(ctx, executor.TickClaimed) })
+	// Concurrent fan-out (#983): drive each led instance in its own goroutine.
+	// Peak concurrency = the number of led instances ≤ ClaimBatchSize — claim
+	// count IS the concurrency bound (a claimed instance holds a journal lease
+	// kept alive only by the Executor heartbeat that starts inside driveOne, so
+	// every claimed instance must drive immediately rather than park; see the
+	// Config.ClaimBatchSize godoc). The tick still waits for the whole batch
+	// (wg.Wait) before returning, so the "one batch at a time" semantics and
+	// Stop's inflight drain are unchanged — only per-instance driving within a
+	// batch is parallelized. acquireLead + the leader gate stay serial in the
+	// loop body so every drive passes the gate before any goroutine spawns;
+	// inflightLocks.Store also stays serial (before go) so the entry is visible
+	// the instant the drive could run (closes the drain gap).
+	var wg sync.WaitGroup
 	for _, ci := range claimed {
 		// Leader-elect gate: in multi-process mode only the holder of the
 		// per-instance distlock drives it; others skip this tick (no-lock →
@@ -623,25 +645,43 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 			definitionID: ci.Instance.DefinitionID,
 			leaseID:      ci.LeaseID,
 		})
-		driveErr := c.driveOne(ctx, ci)
-		driveResult := executor.DriveOK
-		if driveErr != nil {
-			driveResult = executor.DriveError
-			// Sentinel-aware severity: ErrSagaStaleLease (handoff race) →
-			// Info; ErrSagaNotFound (instance gone) → Warn; default → Warn.
-			// Keeps multi-coordinator deployments from spamming WARN
-			// dashboards on every lease lost during normal handoff.
-			c.logger.LogAttrs(ctx, journalErrLevel(driveErr), "saga: drive failed",
-				sagalog.InstanceFields(ci.Instance.ID, ci.LeaseID,
-					slog.String("definition_id", string(ci.Instance.DefinitionID)),
-					slog.Any("error", driveErr))...)
-		}
-		defID := ci.Instance.DefinitionID
-		c.safeObserve(ctx, "ObserveDrive", func() { c.observer.ObserveDrive(ctx, c.labelDefinitionID(defID), driveResult) })
-		c.inflightLocks.Delete(ci.Instance.ID)
-		release()
+		wg.Add(1)
+		go func(ci journal.ClaimedInstance, release func()) {
+			// wg.Done is the outermost defer (runs last) so wg.Wait()/the Stop
+			// drain never observe a half-cleaned entry: Delete+release run first.
+			defer wg.Done()
+			defer func() {
+				c.inflightLocks.Delete(ci.Instance.ID)
+				release()
+			}()
+			driveErr := c.driveOne(ctx, ci)
+			c.observeDrive(ctx, ci, driveErr)
+		}(ci, release)
 	}
+	wg.Wait()
 	return nil
+}
+
+// observeDrive emits the per-drive result log + ObserveDrive metric for a
+// completed driveOne. Extracted from the tickOnce goroutine so tickOnce stays
+// within the cognitive-complexity limit; it MUST NOT call driveOne — the sole
+// driveOne call site stays lexically in tickOnce per
+// SAGA-DRIVE-BEHIND-LEADER-GATE-01 A1.
+func (c *Coordinator) observeDrive(ctx context.Context, ci journal.ClaimedInstance, driveErr error) {
+	driveResult := executor.DriveOK
+	if driveErr != nil {
+		driveResult = executor.DriveError
+		// Sentinel-aware severity: ErrSagaStaleLease (handoff race) → Info;
+		// ErrSagaNotFound (instance gone) → Warn; default → Warn. Keeps
+		// multi-coordinator deployments from spamming WARN dashboards on every
+		// lease lost during normal handoff.
+		c.logger.LogAttrs(ctx, journalErrLevel(driveErr), "saga: drive failed",
+			sagalog.InstanceFields(ci.Instance.ID, ci.LeaseID,
+				slog.String("definition_id", string(ci.Instance.DefinitionID)),
+				slog.Any("error", driveErr))...)
+	}
+	defID := ci.Instance.DefinitionID
+	c.safeObserve(ctx, "ObserveDrive", func() { c.observer.ObserveDrive(ctx, c.labelDefinitionID(defID), driveResult) })
 }
 
 // safeObserve runs a Coordinator-emitted Observer call (ObserveTick /
@@ -655,8 +695,9 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 //     waits at most c.observerCallDeadline (default
 //     executor.DefaultObserverCallDeadline = 5s) before logging Warn and
 //     returning. This prevents a hung observer from leaking the per-instance
-//     distlock (release() and c.inflightLocks.Delete run AFTER ObserveDrive
-//     returns in tickOnce) and from blocking the shutdown drain.
+//     distlock (within each tickOnce drive goroutine, release() and
+//     c.inflightLocks.Delete run as deferred cleanup AFTER observeDrive — and
+//     thus the ObserveDrive call — returns) and from blocking the shutdown drain.
 //
 // The leaked observer goroutine may continue running indefinitely — bounded
 // only by observer behavior, not by the coordinator (Go cannot kill a
