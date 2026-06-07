@@ -722,11 +722,13 @@ run on the unsound foundation. The durable append-only projection journal that
 removes the limitation now has an **accepted design** — ADR
 `202606071600-1504-adr-projection-event-journal.md` (a dedicated append-only
 `projection_events` table, model-a, mirroring #1609's saga journal; this hard
-gate + the outbox-backed reader are deleted by its PR-03/D9, after which the
-production wiring is durable-by-default and this "fails closed" compensation is
-**superseded**). The capability is delivered by that ADR's PR-01..04 (PR-00 is
-the ADR only); the real PG e2e rebuild test T-06-2 is unblocked once its PR-04
-lands. (Per-spec
+outbox-backed reader is deleted by its PR-03, and this fail-closed gate is
+removed only by its **PR-04 — after** the T-06-2 PG e2e rebuild proof + the
+no-DELETE guard land (the production-default flip is gated on proof, not done in
+PR-03), after which the production wiring is durable-by-default and this "fails
+closed" compensation is **superseded**. The capability is delivered by that ADR's
+PR-01..04 (PR-00 is the ADR only); the real PG e2e rebuild test T-06-2 is the
+gating proof in its PR-04. (Per-spec
 replay filtering — #1482 — has since **landed** at the Coordinator level,
 decoupled from the PG reader and the durable journal; see §Amendment 2026-06-04.)
 The review also hardened the adapter: a schema_guard
@@ -745,9 +747,10 @@ identity restore (F4), and a no-duplicate conformance assertion (F7).
   durable journal lands. That journal now has an **accepted design** — ADR
   `202606071600-1504-adr-projection-event-journal.md` (dedicated append-only
   `projection_events`, position from the row's own `global_seq`, never cleaned).
-  When its PR-03 wires that source by default, Row 1 **strengthens** transient →
-  durable (position no longer sourced from a relay-deletable row); it does **not**
-  flip to ⚠️/❌. See the Retention-boundary compensation above.
+  When its **PR-04** removes the gate (after the T-06-2 e2e proof + no-DELETE
+  guard) and the durable source becomes the default, Row 1 **strengthens**
+  transient → durable (position no longer sourced from a relay-deletable row); it
+  does **not** flip to ⚠️/❌. See the Retention-boundary compensation above.
 - **Row 2** (crash recovery): unchanged. Checkpoint persistence semantics are
   independent of the position source; resume-at-offset+1 now runs over a durable
   `seq` (within the retention window).
