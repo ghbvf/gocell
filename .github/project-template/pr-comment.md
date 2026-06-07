@@ -11,15 +11,16 @@
 
 ## 机器块（`gocell-pr-meta:v1`，隐藏，自动化执行器消费）
 
-> 三模板 footer **之后**各带一行**隐藏机器块**，供 #935/#1657 本机执行器（Codex review daemon / Claude fix monitor）dispatch：
+> 五种评论 footer **之后**各带一行**隐藏机器块**，供 #935/#1657 本机执行器（Codex review daemon / Claude fix monitor）dispatch：
 > `<!-- gocell-pr-meta:v1 <标准 base64(JSON)> -->`（CommonMark 隐藏，肉眼不可见）。
 >
 > - **产**（贴评论的技能/工具）：用 `jq -nc` 构造**事实** JSON（`kind`/`phase`/`verdict`/refs/`findings`/`cycle.round`，**不写 `next`**）`| bash hack/automation/pr-meta.sh emit` 得该行，**追加到填好的 body 末尾**再贴。`emit` 单源派生 `schema`/`cycle.exhausted`/`next`/`idempotencyKey`——手填无意义。
 > - **消费**：`bash hack/automation/pr-meta.sh extract <PR#>` 拉评论 → 取最新块 → base64 解码 → schema 校验 → 比对 live `headSha`（不一致=过期，丢弃）。
 > - **熔断（auto review↔fix ≤3 轮）**：`cycle.round` = 已完成 fix 轮数；`round ≥ maxRounds(3)` → `cycle.exhausted=true`，且 `changes-requested` 的 `next.agent` 被 helper 强制为 `human`——守护进程必停派、转人工，不得继续 auto 循环。
 > - **标准 base64（非 url）**：CommonMark 禁 HTML 注释正文含 `--`；标准 base64 字母表 `A-Za-z0-9+/=` 无 `-`，结构上不可能产 `--`/`-->`（base64url 含 `-`，会破块）。
-> - schema 单源 = `hack/automation/schema/pr-meta.v1.json`；helper = `hack/automation/pr-meta.sh`（`emit`/`decode`/`extract`/`round`）。消费侧只接受 canonical 块（派生字段必须 = emit 由块自身 facts 重算结果，防伪造）+ 仅信 OWNER/MEMBER/COLLABORATOR 作者评论。**人读 footer 不动其格式**——footer 人读、机器块 dispatch，二者并存。
-> - 各 kind 的 `phase`/`verdict` 取值见下方各模板末尾标注。
+> - schema 单源 = `hack/automation/schema/pr-meta.v1.json`；helper = `hack/automation/pr-meta.sh`（`emit`/`decode`/`extract`/`round`/`selftest`）。消费侧只接受 canonical 块（派生字段必须 = emit 由块自身 facts 重算结果，防伪造）+ 仅信 OWNER/MEMBER/COLLABORATOR 作者评论。**人读 footer 不动其格式**——footer 人读、机器块 dispatch，二者并存。
+> - **kind 取值**：`ship`（pm:ship）/ `fix`（pm:fix）/ `pr-review`（pm:pr-review）/ `ci`（pm:ci）/ `oos`（pm:oos）。各 kind 的 `phase`/`verdict` 取值见下方各模板末尾标注。
+> - **protocol 健全性测试**：`bash hack/automation/pr-meta.sh selftest`（离线，无网络，make verify 自动触发）。
 
 ## ship 评论（`<!-- pm:ship -->`）
 
@@ -31,9 +32,9 @@
 
 - **F1** [P1·Cx2·安全] `path/to/file.go:120` — <一句话> → ✅ 已修
 - **F2** [P2·Cx3·DX] `path/to/x.go:88` — <一句话> → ⏸ 遗留（需人工决策）
-- **F3** [P2·Cx2·运维] `other/pkg/z.go:64` — <一句话> → 🚦 OUT_OF_SCOPE（issue 草稿见详表）
+- **F3** [P2·Cx2·运维] `other/pkg/z.go:64` — <一句话> → 🚦 OUT_OF_SCOPE（详见本 PR 的 pm:oos 评论）
 
-<details><summary>完整详表（根因 + 证据 + 建议 + 方案种子，/fix 与后续建 issue 读此）</summary>
+<details><summary>完整详表（根因 + 证据 + 建议 + 方案种子，/fix 读此）</summary>
 
 **F1** [P1·Cx2·安全] `path/to/file.go:120`
 - 证据：`<code 片段>`
@@ -44,14 +45,6 @@
 - 证据：`<code 片段>`
 - 三级方案种子：最小 <…> / 彻底 <…> / 重构 <…>
 - 处置：⏸ 遗留（原因：<…>）
-
-**F3** [P2·Cx2·运维] `other/pkg/z.go:64`（🚦 OUT_OF_SCOPE，属 `other/` 子系统）
-- 证据：`<code 片段>`
-- 三维根因：代码 <…> / 架构 <1 处局部｜Grep N 处系统性> / 历史 <git log 同类>
-- 三级方案种子：最小 <…> / 彻底 <…> / 重构 <…>
-- 影响范围：直接 <…> / 间接 <…> / 同类 <Grep N 处>
-- Files：`other/pkg/z.go:64` `other/pkg/w.go:30`
-- → 建 issue 草稿（确认后跑）：`gh issue create --label backlog --label pri-p2 --label area-XX --label type-XX --title "[<ID>] <标题>" --body-file <backlog.md：现状←证据+根因+影响 / 修复方向←方案种子 / Files←上行 / Source←PR #<N> F3>`
 </details>
 
 **下一步**：切 `pr-status/needs-review-again`（待再审：codex / `/pr-review`）。
@@ -71,9 +64,9 @@
 
 - **F1** [P1·Cx2·安全] `path/to/file.go:120` — <一句话> → ✅ 已修
 - **F2** [P2·Cx3·DX] `path/to/x.go:88` — <一句话> → ⏸ 遗留（需人工决策）
-- **F3** [P2·Cx2·运维] `other/pkg/z.go:64` — <一句话> → 🚦 OUT_OF_SCOPE（issue 草稿见详表）
+- **F3** [P2·Cx2·运维] `other/pkg/z.go:64` — <一句话> → 🚦 OUT_OF_SCOPE（详见本 PR 的 pm:oos 评论）
 
-<details><summary>完整详表（triage 依据 + 证据 + 建议，下次 fix / 人工 / 建 issue 读此）</summary>
+<details><summary>完整详表（triage 依据 + 证据 + 建议，下次 fix 读此）</summary>
 
 **F1** [P1·Cx2·安全] `path/to/file.go:120`（IN_SCOPE）
 - 证据：`<code 片段>`
@@ -82,14 +75,6 @@
 **F2** [P2·Cx3·DX] `path/to/x.go:88`（IN_SCOPE，遗留）
 - 三级方案种子：最小 <…> / 彻底 <…> / 重构 <…>
 - 遗留原因 + 升级窗口：<…>
-
-**F3** [P2·Cx2·运维] `other/pkg/z.go:64`（🚦 OUT_OF_SCOPE，属 `other/` 子系统）
-- 证据：`<code 片段>`
-- 三维根因：代码 <…> / 架构 <1 处局部｜Grep N 处系统性> / 历史 <git log 同类>
-- 三级方案种子：最小 <…> / 彻底 <…> / 重构 <…>
-- 影响范围：直接 <…> / 间接 <…> / 同类 <Grep N 处>
-- Files：`other/pkg/z.go:64` `other/pkg/w.go:30`
-- → 建 issue 草稿（确认后跑）：`gh issue create --label backlog --label pri-p2 --label area-XX --label type-XX --title "[<ID>] <标题>" --body-file <backlog.md：现状←证据+根因+影响 / 修复方向←方案种子 / Files←上行 / Source←PR #<N> F3，派生注 Discovered via /fix #<N>>`
 </details>
 
 **下一步**：切 `pr-status/needs-check-fix`（待 `/pr-review --check` 验证；fix 不直接到 ready）。
@@ -134,4 +119,46 @@
 ---
 🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支> · worktree <路径|—> · session <会话id|—>
 <!-- 机器块占位：贴评论前由 hack/automation/pr-meta.sh emit 生成并追加到此处（kind=pr-review phase=review|check verdict=approved|changes-requested|ready round=carry）；勿手填 base64 -->
+```
+
+## pm:ci 评论（`<!-- pm:ci -->`）
+
+> CI 检查结果记录。`ci-green` 是终态（`next.agent=null`）；`ci-failed` 路由至 `next.agent=human`（CI fix 由 ship/fix 自身内置 3 轮循环处理，pm:ci 仅做记录，不触发自动 /fix）。
+
+```markdown
+<!-- pm:ci -->
+## CI 检查结果
+
+**状态**：<通过 / 失败>（已通过 <n> / 共 <total> 个检查）
+
+<若有失败>
+**失败检查**：
+- `<check-name>` — <url>
+
+---
+🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支> · worktree <路径|—> · session <会话id|—>
+<!-- 机器块占位：贴评论前由 hack/automation/pr-meta.sh emit 生成并追加到此处（kind=ci phase=check verdict=ci-green|ci-failed round=carry）；勿手填 base64 -->
+```
+
+## pm:oos 评论（`<!-- pm:oos -->`）
+
+> Out-of-scope findings 的**无损**独立记录，供后续 `gh issue create` 消费。每条 finding 为一个 lossless item（file:line + 三维根因 + 三级方案种子），机器块中以 `oos.items[]` 数组携带（详见 schema `pr-meta.v1.json`）。与 pm:ship / pm:fix 解耦：OOS finding 移出主评论详表，改为一行指针（`→ 🚦 OUT_OF_SCOPE（详见本 PR 的 pm:oos 评论）`）。
+
+```markdown
+<!-- pm:oos -->
+## Out-of-Scope Findings（待 gh issue create）
+
+**OOS Findings** <k> 条（已从 pm:ship/pm:fix 的主评论分离，本评论为无损存档）
+
+**F3** [P2·Cx2·运维] `other/pkg/z.go:64`（🚦 OUT_OF_SCOPE，属 `other/` 子系统）
+- 证据：`<code 片段>`
+- 三维根因：代码 <…> / 架构 <1 处局部｜Grep N 处系统性> / 历史 <git log 同类>
+- 三级方案种子：最小 <…> / 彻底 <…> / 重构 <…>
+- 影响范围：直接 <…> / 间接 <…> / 同类 <Grep N 处>
+- Files：`other/pkg/z.go:64` `other/pkg/w.go:30`
+- → 建 issue 草稿（确认后跑）：`gh issue create --label backlog --label pri-p2 --label area-XX --label type-XX --title "[<ID>] <标题>" --body-file <backlog.md：现状←证据+根因+影响 / 修复方向←方案种子 / Files←上行 / Source←PR #<N> F3>`
+
+---
+🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支> · worktree <路径|—> · session <会话id|—>
+<!-- 机器块占位：贴评论前由 hack/automation/pr-meta.sh emit 生成并追加到此处（kind=oos phase=review verdict=oos-filed round=carry；oos.items[] 数组携带各 finding 的 fileLine/rootCause/solutionSeeds）；勿手填 base64 -->
 ```
