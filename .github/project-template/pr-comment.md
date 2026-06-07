@@ -9,6 +9,18 @@
 > **OUT_OF_SCOPE finding 同享无损区，不准降级成计数 `OUT_OF_SCOPE <k>`**：每条 OOS 在 `<details>` 里带 file:line + 证据 + 三维根因（代码/架构/历史）+ 三级方案种子 + Files 列表 + 建 issue 命令草稿，使后续 `gh issue create`（body 按 `backlog.md` 字段映射：现状←证据+根因+影响 / 修复方向←方案种子 / Files←file:line 全集 / Source←`PR #<N> finding <Fk>`）能无损成文。
 > **禁止有损浓缩**——只写计数 / 模糊一句话会让 fix 与后续建 issue 丢失定位与根因，违背本约定。
 
+## 机器块（`gocell-pr-meta:v1`，隐藏，自动化执行器消费）
+
+> 三模板 footer **之后**各带一行**隐藏机器块**，供 #935/#1657 本机执行器（Codex review daemon / Claude fix monitor）dispatch：
+> `<!-- gocell-pr-meta:v1 <标准 base64(JSON)> -->`（CommonMark 隐藏，肉眼不可见）。
+>
+> - **产**（贴评论的技能/工具）：用 `jq -nc` 构造**事实** JSON（`kind`/`phase`/`verdict`/refs/`findings`/`cycle.round`，**不写 `next`**）`| bash hack/automation/pr-meta.sh emit` 得该行，**追加到填好的 body 末尾**再贴。`emit` 单源派生 `schema`/`cycle.exhausted`/`next`/`idempotencyKey`——手填无意义。
+> - **消费**：`bash hack/automation/pr-meta.sh extract <PR#>` 拉评论 → 取最新块 → base64 解码 → schema 校验 → 比对 live `headSha`（不一致=过期，丢弃）。
+> - **熔断（auto review↔fix ≤3 轮）**：`cycle.round` = 已完成 fix 轮数；`round ≥ maxRounds(3)` → `cycle.exhausted=true`，且 `changes-requested` 的 `next.agent` 被 helper 强制为 `human`——守护进程必停派、转人工，不得继续 auto 循环。
+> - **标准 base64（非 url）**：CommonMark 禁 HTML 注释正文含 `--`；标准 base64 字母表 `A-Za-z0-9+/=` 无 `-`，结构上不可能产 `--`/`-->`（base64url 含 `-`，会破块）。
+> - schema 单源 = `hack/automation/schema/pr-meta.v1.json`；helper = `hack/automation/pr-meta.sh`（`emit`/`decode`/`extract`/`round`）。消费侧只接受 canonical 块（派生字段必须 = emit 由块自身 facts 重算结果，防伪造）+ 仅信 OWNER/MEMBER/COLLABORATOR 作者评论。**人读 footer 不动其格式**——footer 人读、机器块 dispatch，二者并存。
+> - 各 kind 的 `phase`/`verdict` 取值见下方各模板末尾标注。
+
 ## ship 评论（`<!-- pm:ship -->`）
 
 ```markdown
@@ -46,6 +58,7 @@
 
 ---
 🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支> · worktree <路径|—> · session <会话id|—>
+<!-- 机器块占位：贴评论前由 hack/automation/pr-meta.sh emit 生成并追加到此处（kind=ship phase=ship verdict=needs-review-again round=0）；勿手填 base64 -->
 ```
 
 ## fix 评论（`<!-- pm:fix -->`，每次 fix 都贴）
@@ -83,6 +96,7 @@
 
 ---
 🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支> · worktree <路径|—> · session <会话id|—>
+<!-- 机器块占位：贴评论前由 hack/automation/pr-meta.sh emit 生成并追加到此处（kind=fix phase=fix verdict=needs-check-fix round=prev+1）；勿手填 base64 -->
 ```
 
 ## pr-review 评论（`<!-- pm:pr-review -->`，独立 review 留痕）
@@ -119,4 +133,5 @@
 
 ---
 🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支> · worktree <路径|—> · session <会话id|—>
+<!-- 机器块占位：贴评论前由 hack/automation/pr-meta.sh emit 生成并追加到此处（kind=pr-review phase=review|check verdict=approved|changes-requested|ready round=carry）；勿手填 base64 -->
 ```

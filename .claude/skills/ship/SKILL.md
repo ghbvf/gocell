@@ -152,6 +152,7 @@ GoCell 六维度 = 架构合规 / 安全 / 测试 / 运维可观测 / DX / 产�
 3. **推送 + 冲突预检 + CI 绿 gate**：`git -C worktrees/<wt> push` 推送内置修复 commits（阶段 6 已建 PR，CI 在新 SHA 上重跑）；按 `issues` B5 先验无文件冲突、再等 CI 绿（典型 ~5-6 min）——失败则回 `fix` 修复循环再推再等（**最多 3 轮**）；**3 轮仍红 → 直接贴 pm:ship 评论留痕（含 CI 失败摘要 + 已尝试轮次）+ 停下交人工，不 AskUserQuestion**。
 4. **收尾**（命令形态见 `issues` Part B；评论用 `.github/project-template/pr-comment.md` 的 `<!-- pm:ship -->` 模板，含 footer，**评论必留**）：
    - 贴 ship 评论（命令 + **回显 comment URL/id** 见 `issues` B4）：**每条 finding 带 `file:line`，证据/根因/建议/方案种子入 `<details>`（评论即 review 结果，无损——供再审（codex / `/pr-review`）/ `/fix` 直接读取，不重新 review）**；含 reviewer 数 / 已修 Cx1-Cx2 / 遗留 / OUT_OF_SCOPE / 下一步=待再审。**OUT_OF_SCOPE finding 也写满无损详表 + 建 issue 命令草稿**（形态见 pr-comment.md 的 F3 OOS 示范），不只计数。
+   - **追加机器块**（贴评论前；约定见 `pr-comment.md` §机器块）：用 `jq -nc` 构造**事实** JSON（`kind:"ship",phase:"ship",tool:"claude-code",verdict:"needs-review-again",cycle:{round:0}` + `repo/pr/baseRef/headRef/headSha/session/worktree` + `findings{total,fixed,unresolved,blocking,byP,byCx}` 计数，**不写 `next`**——helper 派生）`| bash hack/automation/pr-meta.sh emit`，把输出单行追加到填好的 `pm:ship` body 末尾（footer 之后），再走 `issues` B4 贴评论。`headSha` 取 `git -C worktrees/<wt> rev-parse HEAD`。
    - `gh pr edit` 切 `pr-status/needs-review-again`（移除 `pr-status/in-progress`）。
 
 > ship 到此结束（内置审 + 修）。再审（codex / `/pr-review`）后，续修走 `/fix <PR#>`。
