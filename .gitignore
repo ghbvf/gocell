@@ -19,6 +19,11 @@ dist/
 /examples/ssobff/ssobff
 /examples/todoorder/todoorder
 
+# cmd/corebundle is its own go.work module (#1559); a bare `go build ./...` inside
+# it leaves an in-dir binary (the canonical build uses `-o bin/`). Ignore it so it
+# is never committed (mirrors the examples/<name>/ binaries above).
+/cmd/corebundle/corebundle
+
 # Test
 *.test
 *.out

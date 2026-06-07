@@ -88,11 +88,11 @@ jobs:
           # Per-module example unit tests run in hack/verify-workspace-test.sh
           # (make verify → governance.yml); per-module example build runs in
           # hack/verify-workspace.sh — both iterate the go.work module funnel.
-          # Likewise cmd/gocell became its own go.work module (#1557): the
-          # `./cmd/...` pattern in the others-light shard below stops at its
-          # nested-module boundary and no longer matches cmd/gocell packages (it
-          # still matches cmd/corebundle + cmd/internal). cmd/gocell unit tests run
-          # in hack/verify-workspace-test.sh and its build in hack/verify-workspace.sh
+          # Likewise cmd/gocell (#1557) and cmd/corebundle (#1559) are each their
+          # own go.work module now: the `./cmd/...` pattern in the others-light
+          # shard below stops at each nested-module boundary and matches only
+          # cmd/internal. cmd/gocell + cmd/corebundle unit tests run in
+          # hack/verify-workspace-test.sh and their builds in hack/verify-workspace.sh
           # — the same go.work funnel as examples/*.
           - shard: others-heavy
             pkgs: ./adapters/...

@@ -1,10 +1,11 @@
-module github.com/ghbvf/gocell/examples/corebundlestarter
+module github.com/ghbvf/gocell/cellmodules
 
 go 1.25.11
 
 require (
 	github.com/ghbvf/gocell v0.0.0
-	github.com/ghbvf/gocell/cellmodules v0.0.0
+	github.com/jackc/pgx/v5 v5.10.0
+	github.com/redis/go-redis/v9 v9.20.0
 	github.com/stretchr/testify v1.11.1
 )
 
@@ -17,12 +18,11 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.10.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/kr/pretty v0.3.1 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/pressly/goose/v3 v3.27.1 // indirect
-	github.com/redis/go-redis/v9 v9.20.0 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
 	go.opentelemetry.io/contrib/propagators/b3 v1.44.0 // indirect
@@ -41,6 +41,4 @@ require (
 // and resolves the core module to the repo root; under GOWORK=off (the
 // release-consistency build in hack/verify-workspace.sh) this replace makes the
 // unpublished core module resolve to the repo root instead of being fetched.
-replace github.com/ghbvf/gocell => ../../
-
-replace github.com/ghbvf/gocell/cellmodules => ../../cellmodules
+replace github.com/ghbvf/gocell => ../
