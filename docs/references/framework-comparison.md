@@ -166,11 +166,17 @@ primary:   golang.org/x/tools/go/analysis → analysis.go (Analyzer struct), mul
 secondary: TNG/ArchUnit            → ArchRule 值 + rule.check(importedClasses) 分离供给；
                                       ArchTests.in(StandardRules.class) 预定义集 ↔ RunStandardCellRules；
                                       FreezingArchRule/ViolationStore（fail-on-new + 禁增长 + 修复手动收缩）
-                                      ↔ ARCHTEST-MODULE-PATH-FUNNEL-01 迁移 ratchet frozen baseline；
+                                      ↔ ARCHTEST-MODULE-PATH-FUNNEL-01 迁移 ratchet frozen baseline
+                                      （空 store = 纯 ban，亦 test-time，对应 upstream Medium 非 Hard）；
+                                      ignoreDependency(predicate<JavaClass>) 按 resolved-target 身份豁免
+                                      ↔ #1304 typed const-eval 的 PlatformModulePath-operand provenance 例外
+                                      （types.Object 身份，非字符串）；
                                       custom rule 同接口无 registry ↔ ConfigForExternalCell.ExtraRules。
            arch-go                  → config.Load(modulePath) ↔ module path 由消费方供给（gocell 从 go.mod 派生）。
 goal:      外部 Cell 仓库 go get + import 跑平台不变量（M3 #1084）；platform-vs-scan 路径拆分；
-           158 条规则全量迁移分 PR，ratchet 强制收敛（ADR 202605281200 §M3）。
+           158 条规则全量迁移分 PR，ratchet 强制收敛（ADR 202605281200 §M3）；
+           MODULE-PATH-FUNNEL reconstruction 自检 AST→typed const-eval 升级闭合 const-of-const/
+           跨包 residual，向 primary（go/analysis typed Pass）靠拢（#1304）。
 ref PR:    M3 PR-1（refactor/archtest-external-library，#1084）
 ```
 
