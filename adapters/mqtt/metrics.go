@@ -493,8 +493,10 @@ var (
 	}
 	subConsumeInflightOpts = metrics.GaugeOpts{
 		Name: "mqtt_consume_inflight",
-		Help: "Number of MQTT messages currently in-flight in the subscriber (delivery entry → ack/drop). " +
-			"Maintained by AdjustInflight(+1/-1); bounded by MaxConcurrentHandlers. " + helpCellLabel,
+		Help: "Number of MQTT messages in-flight in the subscriber, counted from receive-callback entry to " +
+			"ack/drop. At saturation this is MaxConcurrentHandlers active handlers plus at most one delivery " +
+			"awaiting a worker slot (the single-goroutine receive handoff), so it may briefly exceed " +
+			"MaxConcurrentHandlers by one. Maintained by AdjustInflight(+1/-1). " + helpCellLabel,
 		LabelNames: []string{"cell"},
 	}
 )

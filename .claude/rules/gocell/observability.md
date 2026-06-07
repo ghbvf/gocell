@@ -333,7 +333,7 @@ audit `actor_id` 例外：源自事件 payload 的 domain actor（`appender.extr
 
 | Archtest ID | 摘要 | 评级 |
 |---|---|---|
-| `MQTT-METRIC-LABEL-VALUES-FROZEN-01` | (a) metric 名集 11 enumeration freeze（枚举 `metrics.{Counter,Histogram,Gauge}Opts` 的 `Name:` 字面量，覆盖 inline + 包级 var）；(b) reason 闭集 full funnel = 值集 freeze + Record* callsite guard + `XReason(...)` conversion ban + provider*Collector instrument sole-writer lock | 名集/值集 Medium（Hard-upgrade = metricschema golden，**共享 gh #1416**）；sole-writer outside-pkg **Hard**（unexported instrument 字段）+ within-pkg Medium（#851/#893 family）；callsite 下游 Medium |
+| `MQTT-METRIC-LABEL-VALUES-FROZEN-01` | (a) metric 名集 11 enumeration freeze（枚举 `metrics.{Counter,Histogram,Gauge}Opts` 的 `Name:` 字面量，覆盖 inline + 包级 var）；(b) reason 闭集 full funnel = 值集 freeze + Record* callsite guard + `XReason(...)` conversion ban + **reason-constant provenance backstop**（return/var/assign/arg 隐式转换）+ **receiver-identity sole-writer lock** + go/types-派生 instrument 字段 inventory 交叉校验 | 名集/值集 Medium（Hard-upgrade = metricschema golden，**共享 gh #1416**）；sole-writer outside-pkg **Hard**（unexported instrument 字段）+ within-pkg Medium（#851/#893 family）；callsite + provenance 下游 Medium（残留 = 非常量数据流，#1282 族天花板） |
 
 完整盲区清单 + 反向自检（negative control + RED/GREEN fixtures）活在 `tools/archtest/mqtt_metric_label_values_frozen_test.go` 的 package godoc；本节只做导航。
 

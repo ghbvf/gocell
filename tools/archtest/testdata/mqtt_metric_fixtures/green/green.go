@@ -36,3 +36,9 @@ func (c *providerSubscriberCollector) RecordConsumeFailure(ctx context.Context, 
 func emit(c *providerSubscriberCollector, ctx context.Context) {
 	c.RecordConsumeFailure(ctx, reasonReject)
 }
+
+// classify returns a declared const — allowed by the provenance backstop.
+func classify() ConsumeFailureReason { return reasonReject }
+
+// noFail returns the empty zero-value sentinel — allowed by the provenance backstop.
+func noFail() (ConsumeFailureReason, bool) { return "", true }
