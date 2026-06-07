@@ -9,5 +9,6 @@
 # type-system Hard ("do not write this literal in source") is a permanent Go
 # ceiling, not reached by an empty baseline (#1304). The downstream detection
 # Hard-ization (typed const-eval closing const-of-const / cross-package
-# reconstruction) lives in module_path_funnel_test.go. Tracked by #1302; #1304.
+# reconstruction) lives in module_path_funnel_test.go. Delivered by #1302
+# (baseline cleared) and #1304 (typed const-eval reconstruction detector).
 # blank lines and # comments are ignored.

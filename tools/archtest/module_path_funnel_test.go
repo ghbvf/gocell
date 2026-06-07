@@ -67,8 +67,12 @@ package archtest
 //     reconstructed via RUNTIME string ops (strings.Join / fmt.Sprintf / []byte)
 //     is not a compile-time constant, so go/types cannot fold it and the detector
 //     cannot reach it. Closing it needs SSA/dataflow, beyond archtest's ceiling;
-//     such deliberate obfuscation would not survive review. This is a permanent
-//     won't-do (no upgrade issue), same family as #851 / #893 / #1282 / #1424.
+//     such deliberate obfuscation would not survive review. No separate tracking
+//     issue: this is a permanent ceiling of a DIFFERENT kind than the #851 / #893 /
+//     #1282 / #1424 family — those are Go-package-VISIBILITY ceilings (an open
+//     issue tracks the someday-maybe Hard-via-language-feature path); (c) is a
+//     static-analysis-CAPABILITY ceiling (no Go/tooling evolution closes "fold a
+//     runtime call"), so there is nothing to track. Both are won't-do.
 //
 //   - UPSTREAM Medium (NOT Hard) — permanent Go ceiling. Go cannot make "an
 //     author writes a bare platform literal in arbitrary source" inexpressible:
@@ -96,9 +100,21 @@ package archtest
 //	    excluded; the bare-literal firstBare scan still covers them AST-wise,
 //	    build-tag-agnostically. No FlatNonDefaultTags() double-scan is needed
 //	    (no tagged rule file would be missed).
-//	    The sanctioned-exemption is additionally exercised by the MAIN scan: 369
-//	    real PlatformModulePath+"/…" derivations live in funnel scope (real-source
-//	    AST capture); the main rule staying green proves all are exempted.
+//	    The sanctioned-exemption is additionally exercised by the MAIN scan:
+//	    hundreds of real PlatformModulePath+"/…" derivations live in funnel scope
+//	    (real-source AST capture); the main rule staying green proves all are exempted.
+//	(e) tools/archtest/internal/ — excluded wholesale by inFunnelScope. Today it
+//	    holds only loader primitives (which legitimately reference platform paths)
+//	    and fixtures (deliberately excluded). A future NON-fixture tool added under
+//	    internal/ would escape this scan and must be enrolled explicitly. Declared,
+//	    not gated.
+//	(f) CROSS-package sanctioned-derived const, re-concatenated: a const in another
+//	    package that IS legitimately PlatformModulePath-derived (otherpkg.X =
+//	    PlatformModulePath+"/x"), used as otherpkg.X+"/y", would be FLAGGED — its RHS
+//	    is not in this package's constRHS map, so provenance terminates as
+//	    not-sanctioned. This is a conservative FALSE-POSITIVE (safe direction, never a
+//	    false-negative). No such pattern exists in funnel scope today (main rule green);
+//	    if one arises, derive locally from PlatformModulePath or enroll the case.
 
 import (
 	"go/ast"
@@ -119,10 +135,15 @@ const barePlatformLiteralMsg = "bare \"" + PlatformModulePath +
 	"(see external.go / ARCHTEST-MODULE-PATH-FUNNEL-01)"
 
 // platformReconstructionMsg is the diagnostic for a `+` chain that go/types folds
-// to a bare platform value without a sanctioned PlatformModulePath operand.
+// to a bare platform value without a sanctioned PlatformModulePath operand. It is
+// actionable (tells the author how to fix) and notes that, unlike a bare literal,
+// a reconstruction can NOT be admitted via the baseline.
 const platformReconstructionMsg = "platform module path reconstructed from " +
-	"const fragments (const-of-const / cross-package const) — derive it from " +
-	"PlatformModulePath (see external.go / ARCHTEST-MODULE-PATH-FUNNEL-01)"
+	"const fragments (const-of-const / cross-package const) — make at least one " +
+	"operand of the chain reference PlatformModulePath directly (or a same-package " +
+	"const derived from it); do not split it into fragment consts or import a " +
+	"fragment from another package. This cannot be baselined (reconstruction is " +
+	"obfuscation, not migration backlog). See external.go / ARCHTEST-MODULE-PATH-FUNNEL-01"
 
 // modulePathFunnelSanctioned is the one file permitted to contain the bare
 // platform-path literal: external.go, which declares PlatformModulePath.
@@ -445,6 +466,9 @@ func TestModulePathFunnel_TypedReconstruction(t *testing.T) {
 	// GREEN — exemption + negative controls MUST NOT be flagged.
 	require.False(t, flagged["green_sanctioned.go"],
 		"sanctioned PlatformModulePath derivation must be exempt (object identity)")
+	require.False(t, flagged["green_transitive_derived.go"],
+		"same-package derived const (q = p+\"/b\", p = PlatformModulePath+\"/a\") must be "+
+			"exempt by TRANSITIVE provenance — the path the 369 real funnel-scope derivations rely on")
 	require.False(t, flagged["green_unrelated.go"],
 		"non-platform concat must not be flagged")
 	require.False(t, flagged["green_runtime_ops.go"],
