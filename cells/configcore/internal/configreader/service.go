@@ -84,8 +84,8 @@ func NewService(
 // GetByKey retrieves a config entry by key within the tenant scope t. The
 // caller sources t differently per trust boundary: the public configread
 // handler derives it from the authenticated principal (tenant.FromContext);
-// the internal configreadinternal handler passes tenant.SystemTenantID (the
-// global config tier). Sourcing happens in the slice handler, never here, so
+// the internal configreadinternal handler derives it from the X-Tenant-ID
+// request header. Sourcing happens in the slice handler, never here, so
 // this shared Service stays tenant-source-agnostic.
 func (s *Service) GetByKey(ctx context.Context, t tenant.TenantID, key string) (*domain.ConfigEntry, error) {
 	// PR-3 RLS: the read runs inside a tenant-scoped transaction so the DB sees

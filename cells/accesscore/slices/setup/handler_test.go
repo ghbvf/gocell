@@ -359,3 +359,50 @@ func TestHandler_CreateAdmin_ValidCreds_BodyDifferentFromEnv_Returns201(t *testi
 	assert.Equal(t, "alice", resp.Data.Username,
 		"D5: body username (alice) must be the created admin, not env username (op)")
 }
+
+// --- Missing X-Tenant-ID header tests (ADR 1160 fail behavior) -----------
+
+// TestHandler_Status_NoTenantHeader_ReturnsFalse verifies the ADR 1160
+// fail-soft design for the status endpoint: an absent X-Tenant-ID header
+// causes StatusAdapter.Status to receive an empty XTenantID, which fails
+// tenant.ParseTenantID — the adapter intentionally ignores the parse error
+// and returns 200 HasAdmin:false (anti-enumeration: callers cannot infer
+// whether a tenant exists or whether the header was simply missing).
+func TestHandler_Status_NoTenantHeader_ReturnsFalse(t *testing.T) {
+	h := newHandlerFresh(t)
+	// Deliberately omit X-Tenant-ID header to exercise the fail-soft path.
+	req := httptest.NewRequest(http.MethodGet, setupStatusPath, nil)
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code,
+		"status endpoint must return 200 (fail-soft) when X-Tenant-ID header is absent")
+	var body struct {
+		Data setup.StatusOutput `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.False(t, body.Data.HasAdmin,
+		"HasAdmin must be false when tenant cannot be determined (ADR 1160 fail-soft)")
+}
+
+// TestHandler_CreateAdmin_NoTenantHeader_Returns400 verifies the ADR 1160
+// fail-closed design for the admin-creation endpoint: an absent X-Tenant-ID
+// header causes an empty XTenantID in the Request DTO, which
+// validateCreateAdminInput rejects with 400 (RequireNotEmpty on tenantId)
+// before any bcrypt or DB work is attempted.
+func TestHandler_CreateAdmin_NoTenantHeader_Returns400(t *testing.T) {
+	h := newHandlerFresh(t)
+	// Deliberately omit X-Tenant-ID header to exercise the fail-closed path.
+	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
+	req := httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code,
+		"admin endpoint must return 400 when X-Tenant-ID header is absent (ADR 1160 fail-closed)")
+	assert.Contains(t, w.Body.String(), "ERR_AUTH_IDENTITY_INVALID_INPUT",
+		"error code must indicate invalid input (empty tenantId via RequireNotEmpty)")
+}

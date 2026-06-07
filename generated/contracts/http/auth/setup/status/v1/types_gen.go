@@ -15,7 +15,10 @@ import (
 )
 
 // Request — http.auth.setup.status.v1.request
-type Request struct{}
+type Request struct {
+	// XTenantID is populated from the "X-Tenant-ID" request header by the generated handler; do not set it in the Service implementation (read-only).
+	XTenantID string `json:"-"`
+}
 
 // Response — http.auth.setup.status.v1.response
 type Response struct {

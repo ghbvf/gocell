@@ -87,6 +87,36 @@ func TestHTTPTransportYAMLRoundTrip_QueryParams(t *testing.T) {
 	assert.Equal(t, "uuid", got.QueryParams["id"].Format)
 }
 
+func TestHTTPTransportYAMLRoundTrip_Headers(t *testing.T) {
+	truthy := true
+	orig := HTTPTransportMeta{
+		Method: "POST",
+		Path:   "/api/v1/access/sessions/login",
+		Headers: map[string]ParamSchema{
+			"X-Tenant-ID": {Type: "string", Format: "uuid", Required: &truthy},
+		},
+		SuccessStatus: 201,
+	}
+	data, got := schemaRoundTrip(t, orig)
+	assert.Equal(t, orig, got)
+	assert.Contains(t, string(data), "headers:")
+	assert.Equal(t, "string", got.Headers["X-Tenant-ID"].Type)
+	assert.Equal(t, "uuid", got.Headers["X-Tenant-ID"].Format)
+	require.NotNil(t, got.Headers["X-Tenant-ID"].Required)
+	assert.True(t, *got.Headers["X-Tenant-ID"].Required)
+}
+
+func TestHTTPTransportYAMLOmitEmptyHeaders(t *testing.T) {
+	orig := HTTPTransportMeta{
+		Method:        "POST",
+		Path:          "/api/v1/access/sessions/login",
+		SuccessStatus: 201,
+	}
+	data, _ := schemaRoundTrip(t, orig)
+	// headers is omitempty — it must not serialize when absent.
+	assert.NotContains(t, string(data), "headers")
+}
+
 func TestHTTPTransportYAMLRoundTrip_PathAndQueryCoexist(t *testing.T) {
 	falsy := false
 	orig := HTTPTransportMeta{

@@ -26,8 +26,7 @@ type scopeKey struct{}
 // callers are pinned by archtest TENANT-TXSCOPE-WRITE-CALLER-01. Business cells
 // MUST NOT call it for ordinary post-auth work — there the tenant flows from the
 // authenticated principal (the ctxkeys.TenantID fallback). The sanctioned
-// callers are pre-auth derivation sites and the internal control-plane
-// (SystemTenantID) read path.
+// callers are pre-auth derivation sites and the internal control-plane read path.
 //
 // t is stored as-is; RunInTx defensively Validate()s it before use and fails
 // closed on any non-canonical value, so a malformed scope can never reach the

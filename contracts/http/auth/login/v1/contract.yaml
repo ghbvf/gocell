@@ -1,18 +1,7 @@
-# Request headers (documentation; contractgen does not yet emit header params —
-# tracked in backlog issue #1494 "contractgen: support header parameters"):
-#
-#   X-Tenant-ID  (required)
-#     Type:    string (canonical UUID)
-#     Source:  HTTP request header; no JWT exists pre-login so the tenant
-#              cannot be derived from bearer token claims.
-#     Parsing: tenant.ParseTenantID — fail-closed; malformed or absent UUID
-#              → 401 with non-enumerable response (same shape as wrong-password
-#              401) to prevent tenant enumeration by callers.
-#     Codegen: contractgen client generation does not yet emit this header.
-#              Callers must set it manually until the backlog issue is resolved.
-#
-# Response headers (documentation; codegen does not emit response headers —
-# tracked in backlog issue #1494 "contractgen: support header parameters"):
+# Response headers (documentation): response-header emission is a middleware
+# concern, not contractgen — they stay middleware-emitted by design (#1494 added
+# request-header codegen only; the X-Tenant-ID request header is now the
+# endpoints.http.headers block below).
 #
 #   Set-Cookie: __Host-gocell_rt=<refreshToken>; HttpOnly; Secure; SameSite=Strict;
 #               Path=/; Max-Age=<refresh TTL in seconds>
@@ -41,6 +30,19 @@ endpoints:
   http:
     method: POST
     path: /api/v1/access/sessions/login
+    headers:
+      # X-Tenant-ID carries the pre-login tenant scope (no JWT exists yet).
+      # Populate-only at codegen → merged into the generated Request field; the
+      # sessionlogin Service then applies a two-stage check (ADR 1160; the
+      # per-endpoint fail behavior is adapter/service-owned, not a codegen gate):
+      #   - absent header (empty value) → 400 ERR_AUTH_LOGIN_INVALID_INPUT
+      #     (RequireNotEmpty): a malformed request, not a tenant-existence probe.
+      #   - present but non-canonical UUID → 401 (ErrAuthLoginFailed), the same
+      #     opaque shape as wrong-password, to prevent tenant enumeration.
+      X-Tenant-ID:
+        type: string
+        format: uuid
+        required: true
     successStatus: 201
     auth:
       public: true

@@ -58,64 +58,9 @@ import (
 	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
-const (
-	ruleDistlockLockNotContext01 = "DISTLOCK-LOCK-NOT-CONTEXT-01"
-	distlockPkgPath              = "github.com/ghbvf/gocell/runtime/distlock"
-	contextPkgPath               = "context"
-	lockTypeName                 = "Lock"
-	contextTypeName              = "Context"
-)
-
 func TestDistlockLockNotContext01(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping packages.Load-based archtest in -short mode")
-	}
-
-	var (
-		foundLockType bool
-		foundCtxIface bool
-		implements    bool
-	)
-
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/distlock/..."}),
-		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil || p.Pkg.Path() != distlockPkgPath {
-				return nil
-			}
-			obj := p.Pkg.Scope().Lookup(lockTypeName)
-			if obj == nil {
-				return nil
-			}
-			lockType, ok := obj.Type().(*types.Named)
-			if !ok {
-				return nil
-			}
-			foundLockType = true
-
-			ctxIface := resolveContextInterface(p.Pkg.Imports())
-			if ctxIface == nil {
-				return nil
-			}
-			foundCtxIface = true
-
-			implements = typesutil.ImplementsInterface(lockType, ctxIface)
-			return nil
-		})
-
-	assert.True(t, foundLockType,
-		"%s: runtime/distlock.Lock type not found; rule cannot enforce",
-		ruleDistlockLockNotContext01)
-	assert.True(t, foundCtxIface,
-		"%s: context.Context interface not resolvable via distlock imports; rule cannot enforce",
-		ruleDistlockLockNotContext01)
-	assert.False(t, implements,
-		"%s: *runtime/distlock.Lock must NOT implement context.Context; "+
-			"adding Deadline()/Err() methods would let callers pass *Lock to "+
-			"db.QueryContext / http.NewRequestWithContext / etc., reintroducing "+
-			"the misuse class identified in GH #20. See ADR "+
-			"docs/architecture/202605200000-adr-distlock-lock-as-resource.md.",
-		ruleDistlockLockNotContext01)
+	Report(t, ruleDistlockLockNotContext01, CheckDistlockLockNotContext01(t, ConfigForExternalCell{}))
 }
 
 // TestDistlockLockNotContext01_BlindSpotSelfCheck verifies that the
@@ -171,27 +116,5 @@ func (*FakeLock) Value(key any) any            { return nil }
 			"undetected. Check typesutil.ImplementsInterface implementation.")
 }
 
-// resolveContextInterface walks the supplied import set and returns the
-// context.Context interface type, or nil if not reachable. Shared by the
-// forward check and any caller that needs the canonical interface object.
-func resolveContextInterface(imports []*types.Package) *types.Interface {
-	for _, imp := range imports {
-		if imp.Path() != contextPkgPath {
-			continue
-		}
-		ctxObj := imp.Scope().Lookup(contextTypeName)
-		if ctxObj == nil {
-			continue
-		}
-		named, ok := ctxObj.Type().(*types.Named)
-		if !ok {
-			continue
-		}
-		iface, ok := named.Underlying().(*types.Interface)
-		if !ok {
-			continue
-		}
-		return iface
-	}
-	return nil
-}
+// ruleDistlockLockNotContext01 is the rule ID for Report.
+const ruleDistlockLockNotContext01 = "DISTLOCK-LOCK-NOT-CONTEXT-01"

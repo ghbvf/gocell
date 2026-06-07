@@ -18,12 +18,11 @@ import (
 	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
-// testTenant is the tenant used throughout configreader service tests. Using
-// tenant.SystemTenantID mirrors the configreadinternal production path which
-// passes SystemTenantID directly (no ctx sourcing). Tests that exercise the
-// public read path use a regular tenant via ctx injection; here we focus on
-// the shared service logic, tenant-source-agnostically.
-var testTenant = tenant.SystemTenantID
+// testTenant is the tenant used throughout configreader service tests. A fixed
+// real UUID is used so the service logic can be exercised tenant-source-agnostically.
+// The configreadinternal production path now derives tenant from the X-Tenant-ID
+// request header rather than a hardcoded sentinel.
+var testTenant = tenant.TenantID("33333333-3333-3333-3333-333333333333")
 
 func newTestService() (*Service, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository(clock.Real())

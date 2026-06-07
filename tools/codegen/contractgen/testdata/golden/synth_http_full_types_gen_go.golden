@@ -18,6 +18,10 @@ import (
 type Request struct {
 	ID   string `json:"id"`
 	Page int64  `json:"page,omitempty"`
+	// XRequestID is populated from the "X-Request-ID" request header by the generated handler; do not set it in the Service implementation (read-only).
+	XRequestID string `json:"-"`
+	// XTenantID is populated from the "X-Tenant-ID" request header by the generated handler; do not set it in the Service implementation (read-only).
+	XTenantID string `json:"-"`
 }
 
 // Response — http.item.details.v1.response

@@ -1,7 +1,7 @@
 // tenant_repo_param_funnel_test.go — guards that every tenant-scoped platform
 // repo interface method carries a tenant.TenantID positional parameter.
-// Enrolled repos: accesscore (RoleRepository, UserRepository) and configcore
-// (ConfigRepository, FlagRepository).
+// Enrolled repos: accesscore (RoleRepository, UserRepository, PolicyRepository)
+// and configcore (ConfigRepository, FlagRepository).
 //
 //   - INVARIANT: TENANT-REPO-PARAM-FUNNEL-01
 //
@@ -33,6 +33,8 @@
 //   - RoleRepository — no carve-out.
 //   - UserRepository — no carve-out. PR-3b (#1617) deleted the tenant-less
 //     by-PK GetByID; every UserRepository method now carries tenant.TenantID.
+//   - PolicyRepository — no carve-out. PR-6 (#1344) ABAC policy model; a policy
+//     id is unique only within a tenant, so every method must be tenant-scoped.
 //
 // configcore ports (configcorePortsPkg):
 //   - ConfigRepository — carve-out: RepoReady (schema-existence probe, not a
@@ -108,6 +110,7 @@ var tenantScopedRepoIfaces = []string{
 	// accesscore ports (accesscorePortsPkg)
 	"RoleRepository",
 	"UserRepository",
+	"PolicyRepository",
 	// configcore ports (configcorePortsPkg)
 	"ConfigRepository",
 	"FlagRepository",
@@ -226,8 +229,8 @@ var enrolledPortsPkgs = map[string]struct{}{
 // method (minus the carve-out allowlist) carries a tenant.TenantID at param[1]
 // (after ctx), and that no carve-out entry is stale.
 //
-// Enrolled ports packages: accesscore (RoleRepository, UserRepository) and
-// configcore (ConfigRepository, FlagRepository).
+// Enrolled ports packages: accesscore (RoleRepository, UserRepository,
+// PolicyRepository) and configcore (ConfigRepository, FlagRepository).
 func TestTenantRepoParamFunnel01(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {

@@ -29,9 +29,9 @@
 // WithScope writes a dedicated, unexported scope key (pkg/tenant/scope.go), kept
 // separate from the principal carrier ctxkeys.TenantID (locked by
 // CTXKEYS-PRINCIPAL-WRITE-CALLER-01). Reusing the principal key would have forced
-// pre-auth / SystemTenantID sites to mint a principal tenant they do not have,
-// eroding that key's "authenticated JWT tenant" meaning. The two funnels are
-// orthogonal.
+// pre-auth paths (service-token callers without a JWT tenant in ctx) to mint a
+// principal tenant they do not have, eroding that key's "authenticated JWT tenant"
+// meaning. The two funnels are orthogonal.
 //
 // # AI-robust rating (charter §"Funnel 双向锁评级") — fully closed (Hard/Hard)
 //
