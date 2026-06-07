@@ -64,28 +64,27 @@ metric_relabel_configs:
   action: drop
 ```
 
-## gRPC Metrics `cell` Label（当前恒为 `_runtime`）
+## gRPC Metrics `cell` Label
 
 gRPC 指标 `gocell_grpc_server_requests_total` 与
 `gocell_grpc_server_request_duration_seconds` 的 `cell` label 与 HTTP 共享同一
 `_runtime` 哨兵语义与单源（`runtime/observability/metrics.RuntimeCellSentinel`）。
 
-**重要**：gRPC cell attribution 尚未接线——HTTP 侧从 router-root `CellAttribution`
-中间件按 `RouteGroup.CellID` 归属 cell，gRPC 侧对应的 `FullMethod → cellID` 归属
-机制（由生成式 registrar 派生）随 epic PR-7/8 落地（tracking issue #1383）。在此
-之前，**所有 gRPC 流量的 `cell` label 恒为 `_runtime`**。
+gRPC cell attribution 已接线（#1383 / #1152）：`UnaryCellAttribution` 拦截器按
+`FullMethod → cellID`（生成式 registrar `CellIDForMethod` 派生）写入 `ctxkeys.CellID`，
+`UnaryMetrics` 经 sealed `metrics.ResolveCellLabel(ctx, validCellIDs)` 读取并对
+assembly closed set 校验。行为与 HTTP 侧 `CellAttribution` 中间件对称。
 
 运维影响：
 
-- 业务 SLO / 告警**不要**对 gRPC 指标使用 `{cell!="_runtime"}` 过滤——会过滤掉
-  全部 gRPC 流量。在 attribution 落地前，gRPC 流量按 `{cell="_runtime"}` 或不
-  过滤 `cell` 来观察。
-- gRPC 指标的 reader 侧契约（cell label 取自 `ctxkeys.CellID`，缺失回退
-  `RuntimeCellSentinel`）由 archtest `GRPC-METRICS-LABEL-CELLID-CTXSOURCE-01`
-  守卫，故 attribution 一旦接线，`cell` label 会自动反映归属 cell 而无需改
-  interceptor。
-- attribution 落地（#1383）后，本节将更新为与 HTTP 一致的 `{cell!="_runtime"}`
-  推荐过滤。
+- 业务 SLO / 告警对 gRPC 指标**可以**使用 `{cell!="_runtime"}` 过滤（与 HTTP 一致）。
+  `_runtime` 仅出现在未归属流量：未注册方法（如原生 grpc-health 服务）、attributed
+  cellID 不在 assembly closed set、或 ctx 无 cellID。
+- reader 侧契约（cell label 经 `ResolveCellLabel` + sealed `CellLabel` 解析，越界/缺失
+  降级 `_runtime`）由 archtest `GRPC-METRICS-LABEL-CELLID-CTXSOURCE-01` 守卫。
+- gRPC access log 行 `"grpc request"` 的状态字段名为 `code`（string gRPC status，如
+  `"OK"`/`"NOT_FOUND"`），区别于 HTTP access log `"http request"` 的 `status`（int，如
+  `200`/`404`）——协议语义差异，跨协议日志查询时注意区分。
 
 ## HTTP Body-Limit 拒绝计数器
 

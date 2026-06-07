@@ -19,16 +19,18 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 )
 
 // closeErrGRPCServer is a GRPCServer whose Close returns a fixed error, for the
-// drain-failure logging path. Serve/Registrar are unused by drainAllGRPCServers.
+// drain-failure logging path. Serve/Registrar/Probes are unused by drainAllGRPCServers.
 type closeErrGRPCServer struct{ err error }
 
 func (closeErrGRPCServer) Serve(context.Context, net.Listener) error { return nil }
 func (s closeErrGRPCServer) Close(context.Context) error             { return s.err }
 func (closeErrGRPCServer) Registrar() GRPCServiceRegistrar           { return &noopGRPCServiceRegistrar{} }
+func (closeErrGRPCServer) Probes() []healthz.Probe                   { return nil }
 
 // installCaptureLogger swaps the process slog default for a JSON handler over a
 // concurrency-safe buffer, restoring the original on cleanup.

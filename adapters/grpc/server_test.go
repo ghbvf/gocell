@@ -12,7 +12,17 @@ import (
 	grpcadapter "github.com/ghbvf/gocell/adapters/grpc"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
 )
+
+// withReg injects a fresh shared registrar into cfg so New satisfies the
+// required Config.Registrar (Option 3 #1152). These tests do not exercise
+// attribution, so any registrar suffices; it is shared across the grpc_test
+// package via this helper.
+func withReg(cfg grpcadapter.Config) grpcadapter.Config {
+	cfg.Registrar = runtimegrpc.NewServiceRegistrar()
+	return cfg
+}
 
 const (
 	// testShutdownTimeout is the ShutdownTimeout used in unit-test configs that
@@ -56,7 +66,7 @@ func TestConfig_ApplyDefaults_ShutdownTimeout(t *testing.T) {
 					KeyPEM:  chain.serverKeyPEM,
 				},
 			}
-			srv, err := grpcadapter.New(cfg)
+			srv, err := grpcadapter.New(withReg(cfg))
 			if tc.wantErr {
 				require.Error(t, err)
 				require.Nil(t, srv)
@@ -81,7 +91,7 @@ func TestConfig_Validate_V1_AddrRequired(t *testing.T) {
 			KeyPEM:  chain.serverKeyPEM,
 		},
 	}
-	_, err := grpcadapter.New(cfg)
+	_, err := grpcadapter.New(withReg(cfg))
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec))
@@ -112,7 +122,7 @@ func TestConfig_Validate_V1b_AddrMalformed(t *testing.T) {
 					KeyPEM:  chain.serverKeyPEM,
 				},
 			}
-			_, err := grpcadapter.New(cfg)
+			_, err := grpcadapter.New(withReg(cfg))
 			require.Error(t, err)
 			var ec *errcode.Error
 			require.True(t, errors.As(err, &ec))
@@ -136,7 +146,7 @@ func TestConfig_Validate_V1c_NegativeShutdownTimeout(t *testing.T) {
 			KeyPEM:  chain.serverKeyPEM,
 		},
 	}
-	_, err := grpcadapter.New(cfg)
+	_, err := grpcadapter.New(withReg(cfg))
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec))
@@ -178,7 +188,7 @@ func TestConfig_Validate_V2_AllowInsecureAndCertConflict(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := grpcadapter.Config{Addr: ":0", TLS: tc.tls}
-			_, err := grpcadapter.New(cfg)
+			_, err := grpcadapter.New(withReg(cfg))
 			require.Error(t, err)
 			var ec *errcode.Error
 			require.True(t, errors.As(err, &ec))
@@ -213,7 +223,7 @@ func TestConfig_Validate_V3V4_TLSCertKeyRequired(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := grpcadapter.Config{Addr: ":0", TLS: tc.tls}
-			_, err := grpcadapter.New(cfg)
+			_, err := grpcadapter.New(withReg(cfg))
 			require.Error(t, err)
 			var ec *errcode.Error
 			require.True(t, errors.As(err, &ec))
@@ -230,7 +240,7 @@ func TestConfig_Validate_V5_FailClosed_NoTLSNoInsecure(t *testing.T) {
 		Addr: ":0",
 		TLS:  grpcadapter.TLSConfig{}, // zero value — no TLS, no AllowInsecure
 	}
-	_, err := grpcadapter.New(cfg)
+	_, err := grpcadapter.New(withReg(cfg))
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec))
@@ -245,7 +255,7 @@ func TestNew_HappyPath_AllowInsecure(t *testing.T) {
 		Addr: ":0",
 		TLS:  grpcadapter.TLSConfig{AllowInsecure: true},
 	}
-	srv, err := grpcadapter.New(cfg)
+	srv, err := grpcadapter.New(withReg(cfg))
 	require.NoError(t, err)
 	require.NotNil(t, srv)
 }
@@ -260,7 +270,7 @@ func TestNew_HappyPath_ServerTLS(t *testing.T) {
 			KeyPEM:  chain.serverKeyPEM,
 		},
 	}
-	srv, err := grpcadapter.New(cfg)
+	srv, err := grpcadapter.New(withReg(cfg))
 	require.NoError(t, err)
 	require.NotNil(t, srv)
 }
@@ -276,7 +286,7 @@ func TestNew_HappyPath_MTLS(t *testing.T) {
 			ClientCAPEM: chain.rootCertPEM,
 		},
 	}
-	srv, err := grpcadapter.New(cfg)
+	srv, err := grpcadapter.New(withReg(cfg))
 	require.NoError(t, err)
 	require.NotNil(t, srv)
 }
@@ -289,7 +299,7 @@ func TestProbes_NotServingReturnsError(t *testing.T) {
 		Addr: ":0",
 		TLS:  grpcadapter.TLSConfig{AllowInsecure: true},
 	}
-	srv, err := grpcadapter.New(cfg)
+	srv, err := grpcadapter.New(withReg(cfg))
 	require.NoError(t, err)
 
 	probes := srv.Probes()
@@ -309,7 +319,7 @@ func TestClose_IdempotentDoubleCall(t *testing.T) {
 		Addr: ":0",
 		TLS:  grpcadapter.TLSConfig{AllowInsecure: true},
 	}
-	srv, err := grpcadapter.New(cfg)
+	srv, err := grpcadapter.New(withReg(cfg))
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -327,7 +337,7 @@ func TestClose_ContextTimeoutForcesHardStop(t *testing.T) {
 		ShutdownTimeout: testShutdownTimeout,
 		TLS:             grpcadapter.TLSConfig{AllowInsecure: true},
 	}
-	srv, err := grpcadapter.New(cfg)
+	srv, err := grpcadapter.New(withReg(cfg))
 	require.NoError(t, err)
 
 	// Close with an already-expired context — must not hang.
@@ -382,7 +392,7 @@ func TestNew_InvalidPEM(t *testing.T) {
 					KeyPEM:  tc.key,
 				},
 			}
-			_, err := grpcadapter.New(cfg)
+			_, err := grpcadapter.New(withReg(cfg))
 			require.Error(t, err)
 			var ec *errcode.Error
 			require.True(t, errors.As(err, &ec), "expected *errcode.Error, got %T: %v", err, err)

@@ -35,10 +35,14 @@ import (
 
 const registrarBufSize = 1 << 20 // 1 MiB
 
-// newRegistrar returns a *runtimegrpc.ServiceRegistrar wrapping a fresh grpc.Server.
+// newRegistrar returns a *runtimegrpc.ServiceRegistrar bound to a fresh
+// grpc.Server. The registrar is created without an inner server (two-phase,
+// Option 3 #1152) and the delegation target is bound before any Register call.
 func newRegistrar() (*runtimegrpc.ServiceRegistrar, *grpc.Server) {
 	inner := grpc.NewServer()
-	return runtimegrpc.NewServiceRegistrar(inner), inner
+	reg := runtimegrpc.NewServiceRegistrar()
+	reg.BindServer(inner)
+	return reg, inner
 }
 
 // dialBufconn dials via bufconn with insecure credentials.

@@ -7,6 +7,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
 )
 
 const (
@@ -74,6 +75,15 @@ type Config struct {
 	// It is not a business-bypass seam: cells/ cannot import adapters/ (layering
 	// rule), so only composition roots ever construct a Config.
 	ServerOptions []grpc.ServerOption
+
+	// Registrar is the shared method→cellID registry (Option 3, #1152). The
+	// composition root creates it FIRST (runtimegrpc.NewServiceRegistrar()) and
+	// hands reg.CellIDForMethod to the interceptor chain's cell-attribution
+	// interceptor — the chain is composed before this server exists. New binds the
+	// constructed *grpc.Server to it via BindServer. Required (no self-construct
+	// fallback): if the adapter minted its own registrar, it would differ from the
+	// one the chain reads and attribution would silently degrade to _runtime.
+	Registrar *runtimegrpc.ServiceRegistrar
 }
 
 // applyDefaults fills zero-value fields with their defaults.
@@ -142,6 +152,18 @@ func (c *Config) validate() error {
 				"grpc: TLS.KeyPEM is required when configuring TLS; "+
 					"supply the PEM-encoded server private key")
 		}
+	}
+
+	// V6: Registrar is required (Option 3 #1152) — the shared method→cellID source
+	// the interceptor chain reads. No self-construct fallback: a missing one is a
+	// composition-root wiring bug (fail-closed) that would otherwise silently
+	// degrade cell attribution to _runtime. Checked last so the Addr/TLS format
+	// errors above surface first (they are the common misconfigurations).
+	if c.Registrar == nil {
+		return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
+			"grpc: Registrar is required; create it with runtimegrpc.NewServiceRegistrar() at the "+
+				"composition root and pass the same instance to both Config.Registrar and "+
+				"interceptor.Deps.Registrar")
 	}
 
 	return nil

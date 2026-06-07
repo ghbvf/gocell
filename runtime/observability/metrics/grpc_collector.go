@@ -21,8 +21,7 @@ const RuntimeCellSentinel = "_runtime"
 // Collector but emits a distinct metric family (grpc_server_*) with a
 // gRPC-shaped label set: method (the full RPC method, e.g.
 // "/pkg.Service/Method"), code (the gRPC status code name, e.g. "OK" /
-// "Internal"), and cell (the coarse owner dimension, RuntimeCellSentinel until
-// cell attribution is wired for gRPC).
+// "Internal"), and cell (the coarse owner dimension).
 //
 // The method is named RecordRPC (not RecordRequest like the HTTP Collector)
 // because the gRPC signature is intentionally distinct — code (a gRPC status
@@ -30,9 +29,11 @@ const RuntimeCellSentinel = "_runtime"
 // unified.
 //
 // cell is the sealed [CellLabel] from [ResolveCellLabel]; the collector never
-// infers it. gRPC cell attribution is not yet wired, so the interceptor passes
-// ResolveCellLabel(ctx, nil), which resolves to RuntimeCellSentinel ("_runtime")
-// until #1383 threads a real closed set.
+// infers it. gRPC cell attribution is wired (#1383 / #1152): the interceptor
+// chain's UnaryCellAttribution writes the owning cell into ctx and UnaryMetrics
+// passes ResolveCellLabel(ctx, validCellIDs) (the assembly closed set), so the
+// cell reflects the owning cell when registered/in-set and degrades to
+// RuntimeCellSentinel ("_runtime") otherwise.
 type GRPCCollector interface {
 	RecordRPC(ctx context.Context, cell CellLabel, method, code string, durationSeconds float64)
 }

@@ -30,10 +30,10 @@ func TestServeAddr_LogsBoundAddr(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(buf, nil)))
 	t.Cleanup(func() { slog.SetDefault(original) })
 
-	srv, err := adaptersgrpc.New(adaptersgrpc.Config{
+	srv, err := adaptersgrpc.New(withReg(adaptersgrpc.Config{
 		Addr: "127.0.0.1:0",
 		TLS:  adaptersgrpc.TLSConfig{AllowInsecure: true},
-	})
+	}))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())

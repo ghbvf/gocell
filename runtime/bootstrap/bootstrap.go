@@ -534,6 +534,10 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	if err := b.expandManagedResources(); err != nil {
 		return err
 	}
+	// Pre-phase: collect gRPC server readiness probes (grpc_ready) into the same
+	// health-checker list, so drainProbes (phase5) registers them onto the
+	// aggregator. Must run before phase0 for the same reason (#1152).
+	b.expandGRPCServerProbes()
 
 	if err := b.phase0ValidateOptions(); err != nil {
 		return err
