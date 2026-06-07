@@ -130,16 +130,18 @@ LIMIT 1`
 // LedgerStore is a PostgreSQL implementation of ledger.Store. It persists
 // audit entries in a tamper-evident hash chain using the following design:
 //
-//   - pg_advisory_xact_lock(hashtextextended(namespace, 0)) serializes concurrent
-//     Append calls within the same namespace. Different namespaces use different
-//     int64 hash keys, so their advisory locks never contend (B2-C-10).
+//   - pg_advisory_xact_lock(hashtext(namespace), hashtext(tenant_id)) serializes
+//     concurrent Append calls within the same (namespace, tenant) sub-chain.
+//     Different (namespace, tenant) pairs use different int32 hash key pairs, so
+//     their advisory locks never contend (B2-C-10).
 //   - SELECT ... FOR UPDATE on the tail row fences the read-modify-write cycle.
 //   - All DML runs inside the caller's ambient transaction via txRunner.RunInTx.
 //   - Idempotency uses a stable EventID fingerprint check before inserting.
 //     EventID (UUID from the outbox entry) is the same across at-least-once
 //     redeliveries; Timestamp changes per retry so it is excluded (F-CR-2).
-//     A DB-level UNIQUE INDEX on (namespace, event_id) (migration 021) is the
-//     second-line guard against concurrent bypass of the application check.
+//     A DB-level UNIQUE INDEX uq_audit_ns_tenant_event_id on (namespace, tenant_id,
+//     event_id) (migration 055) is the second-line guard against concurrent bypass
+//     of the application check.
 //
 // Consistency level: L1 LocalTx — Append is a single-transaction write that
 // participates in the caller's ambient transaction. L2 callers compose this
@@ -205,7 +207,8 @@ func (s *LedgerStore) namespace() string { return string(s.protocol.Namespace())
 //
 // Algorithm (all within txRunner.RunInTx):
 //  1. Validate payload is valid JSON.
-//  2. Acquire pg_advisory_xact_lock(hashtextextended(namespace, 0)) to serialize.
+//  2. Acquire pg_advisory_xact_lock(hashtext(namespace), hashtext(tenant_id)) to
+//     serialize within the (namespace, tenant) sub-chain.
 //  3. Check idempotency fingerprint (event_id only) inside the lock to eliminate
 //     TOCTOU between concurrent Appends. Timestamp is excluded from the check:
 //     at-least-once redelivery produces the same EventID but a new clk.Now(),

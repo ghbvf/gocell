@@ -31,6 +31,11 @@ const bootstrapTailVerifyStartupTimeout = 30 * time.Second
 //
 // Empty chain (tail.SeqNo == 0) returns nil — no entries to verify.
 //
+// Scope note: this verify covers only the ctx-scoped chain (the "" system
+// chain when unscoped at startup). Per-tenant relay sub-chains are verified
+// on-demand during relay startup. Full admin enumeration of all per-tenant
+// chains is tracked at gh #1755 (blocked by NOBYPASSRLS serving role).
+//
 // ref: cells/auditcore/cell.go:strictTailVerifyOnStartup — auditcore-side
 // counterpart for the relay-driven chain.
 // ref: google/trillian log/sequencer.go IntegrateBatch — tree integrity must

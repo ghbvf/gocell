@@ -129,6 +129,44 @@ revisiting this.
   bootstrap chains share one pool (current). If chains ever split across pools, the
   wrap must become per-store-tx.
 
+## Ops impact
+
+### Index renames (migration 055, forward-rebuild DROP+recreate)
+
+| Old index name | New index name | Columns |
+|---|---|---|
+| `uq_audit_namespace_seq` | `uq_audit_namespace_tenant_seq` | `(namespace, tenant_id, seq_no)` |
+| `uq_audit_namespace_event_id` | `uq_audit_ns_tenant_event_id` | `(namespace, tenant_id, event_id)` |
+
+Dashboard queries or alert rules that reference old index names by string
+(e.g. `pg_stat_user_indexes`) must be updated. The new names are in migration
+055 DDL and reflected in `schema_guard.go` expected-index inventory.
+
+### Advisory lock shape change
+
+Pre-#1618 the appender held a **single-key** advisory lock:
+`pg_advisory_xact_lock(hashtextextended(namespace, 0))` — one `int64` slot.
+
+Post-#1618 the lock is **two-key**:
+`pg_advisory_xact_lock(hashtext(namespace), hashtext(tenant_id))` — two `int4`
+slots. PG treats `pg_advisory_xact_lock(bigint)` and
+`pg_advisory_xact_lock(int4, int4)` as separate lock classes; there is no
+conflict between the two forms during a rolling deploy.
+
+Monitoring queries that inspect `pg_locks` for the old single-bigint advisory
+lock class will miss the new two-int4 locks — update `classid`/`objid`
+predicates accordingly (`int4` columns in `pg_locks`).
+
+### Keyset index ordering (performance note)
+
+The `audit_entries` keyset index remains **namespace-leading**
+(`namespace, tenant_id, seq_no`). The `OR tenant_id = ''` disjunction in the
+RLS predicate prevents a tenant_id-leading index from being used for full-table
+scans (PG cannot use an index on one side of a disjunction without UNION ALL or
+bitmapscan). Per-tenant queries therefore do a namespace-prefix scan with an
+in-scan tenant_id filter. This is acceptable for current audit volumes; revisit
+if per-tenant chain depth or tenant count grows significantly.
+
 ## References
 
 - Migration: `adapters/postgres/migrations/055_audit_entries_per_tenant_rls.sql`

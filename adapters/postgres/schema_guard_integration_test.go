@@ -1378,3 +1378,31 @@ func TestMigration054_UpDownUpIdempotency(t *testing.T) {
 	require.True(t, pgColumnExists(t, pool, "sessions", "tenant_id"),
 		"sessions.tenant_id must exist again after the up-down-up cycle through migration 054")
 }
+
+// ---------------------------------------------------------------------------
+// Migration 055 up-down-up idempotency (audit_entries per-tenant chain + RLS)
+// ---------------------------------------------------------------------------
+
+// TestMigration055_UpDownUpIdempotency verifies that migration 055 (restructures
+// audit_entries into per-(namespace,tenant) hash chains with FORCE RLS) is
+// up-down-up idempotent. Mirrors the 050/051/054 pattern.
+func TestMigration055_UpDownUpIdempotency(t *testing.T) {
+	assertMigrationUpDownUpIdempotent(t, 55, "audit_entries", "tenant_id")
+}
+
+// TestMigration055_DestructiveDownPermitRejection verifies that migration 055
+// Down() without an explicit DestructiveDownPermit returns ErrValidationFailed,
+// preventing accidental data destruction. Mirrors the 050/051 pattern.
+func TestMigration055_DestructiveDownPermitRejection(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_055_downpermit")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "Up() must succeed on a fresh DB")
+	downErr := migrator.Down(ctx, nil)
+	require.Error(t, downErr, "Down() without a permit must return an error")
+	var ec *errcode.Error
+	require.True(t, errors.As(downErr, &ec), "error must wrap *errcode.Error")
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code,
+		"error code must be ErrValidationFailed for a missing permit")
+}

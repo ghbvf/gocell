@@ -138,6 +138,11 @@ type Store interface {
 
 	// Tail returns the current chain tail snapshot (SeqNo, PrevHash, EntryCount).
 	// Returns zero TailSnapshot when the store is empty (not an error).
+	//
+	// Tenant axis: derives chain scope from ctx (tenant.ScopeFromContext, default
+	// "" = system chain). Unlike Query which takes an explicit tenant.TenantID
+	// typed param, Tail has no post-auth HTTP caller (startup / relay / conformance
+	// only) so the tenant is always ctx-scoped rather than caller-supplied.
 	Tail(ctx context.Context) (TailSnapshot, error)
 
 	// GetBySeq fetches a single entry by sequence number within the caller's
@@ -192,6 +197,11 @@ type Store interface {
 	// chain linkage (PrevHash). Returns valid=true and firstInvalidSeq=-1 when
 	// all entries are intact. Returns valid=false and the first invalid seq_no
 	// when tampering is detected.
+	//
+	// Tenant axis: derives chain scope from ctx (tenant.ScopeFromContext, default
+	// "" = system chain). Unlike Query which takes an explicit tenant.TenantID
+	// typed param, Verify has no post-auth HTTP caller (startup / relay /
+	// conformance only) so the tenant is always ctx-scoped.
 	Verify(ctx context.Context, fromSeq, toSeq int64) (valid bool, firstInvalidSeq int64, err error)
 
 	// RepoReady is a differentiated readiness check that exercises the

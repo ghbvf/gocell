@@ -671,6 +671,18 @@ func TestCheckRLSPolicyShape(t *testing.T) {
 			}),
 			wantErr: true,
 		},
+		// PG may render the audit predicate with a single outer paren rather than
+		// the double-paren form returned by rlsPolicyWithSystemOK(). Both forms are
+		// canonically correct; the regex must accept both.
+		{
+			name:           "system_well_formed_single_paren",
+			systemReadable: true,
+			policies: rlsPolicySystemWith(func(p *rlsPolicyRow) {
+				p.qual = "(tenant_id = NULLIF(current_setting('app.tenant_id'::text, true), ''::text) OR tenant_id = ''::text)"
+				p.withCheck = "(tenant_id = NULLIF(current_setting('app.tenant_id'::text, true), ''::text) OR tenant_id = ''::text)"
+			}),
+			wantErr: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

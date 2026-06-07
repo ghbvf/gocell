@@ -352,6 +352,46 @@ func TestList_EmptyTenant_Forbidden(t *testing.T) {
 	assert.Equal(t, "ERR_AUTH_FORBIDDEN", resp.Error.Code)
 }
 
+// TestList_NonCanonicalTenant_InternalError (#1618, Fix 7a): a principal whose
+// TenantID is non-empty but not a valid canonical UUID (e.g. "not-a-uuid") must
+// cause the handler to return 500 (ErrInternal), not 403 or 400.
+//
+// Rationale: the JWT authenticator canonicalises tenant_id claims (malformed →
+// 401 at the edge), so a non-canonical string reaching this point is a
+// server-side invariant break — tenant.ParseTenantID failure maps to
+// errcode.KindInternal/ErrInternal, which the generated handler renders as 500.
+func TestList_NonCanonicalTenant_InternalError(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
+	// Inject a principal whose TenantID is syntactically non-empty but is not a
+	// canonical UUID — this bypasses the empty-tenant 403 gate and reaches the
+	// ParseTenantID call, which must return an error mapped to 500.
+	req = req.WithContext(auth.WithPrincipal(context.Background(), &auth.Principal{
+		Kind:       auth.PrincipalUser,
+		Subject:    "usr-1",
+		Roles:      []string{"admin"},
+		TenantID:   "not-a-uuid",
+		AuthMethod: "test",
+	}))
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code,
+		"non-canonical tenant UUID must yield 500 (invariant break); body=%s", w.Body.String())
+	var resp struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "ERR_INTERNAL", resp.Error.Code,
+		"error code must be ERR_INTERNAL for a principal with malformed tenant UUID")
+}
+
 func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
 	store := newHandlerStore(t)
 	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)

@@ -55,7 +55,8 @@ import (
 //                                 + effective_admin_invariant_on_role_assignments trigger (024)
 //                                 + tenant_id TEXT NOT NULL, PK (tenant_id,user_id,role_id),
 //                                   role FK references roles(tenant_id,id) composite (050)
-//   - audit_entries      (020/043 + 047 (trace_id col) + 048 (trace_id index)) tamper-evident audit ledger (per-namespace hash chain)
+//   - audit_entries      (020/043 + 047 (trace_id col) + 048 (trace_id index)
+//                                 + 055 (per-(namespace,tenant) chain + FORCE RLS)) tamper-evident audit ledger
 //                                 + 043_audit_entries_v2 DROP+CREATE rebuild adding
 //                                   5 NOT NULL columns (subject_id / tenant_id /
 //                                   session_id / correlation_id / occurred_at) for
@@ -417,6 +418,10 @@ type expectedRLS struct {
 	// `OR tenant_id = ''` clause keeps tenant-less system/framework rows readable
 	// by every tenant AND insertable by the GUC-unset (pre-auth) appender. The
 	// config/accesscore tables leave this false (strict equality, no OR).
+	// Write-side note: the WITH CHECK mirror of that OR allows a tenant-scoped
+	// writer to INSERT a tenant_id='' row; this is bounded by
+	// AUDITCORE-APPENDER-SINGLE-SOURCE-01 (the appender is the sole audit_entries
+	// writer), so there is no tenant-controlled INSERT path that can exploit it.
 	SystemRowsReadable bool
 }
 
@@ -558,7 +563,7 @@ var expectedColumns = []expectedColumn{
 	{Table: "role_assignments", Column: "user_id", Type: "uuid", NotNull: true},
 	{Table: "role_assignments", Column: "role_id", Type: "text", NotNull: true},
 	{Table: "role_assignments", Column: "granted_at", Type: pgTypeTSTZ, NotNull: true},
-	// audit_entries (020_audit_ledger.sql + 043_audit_entries_v2.sql + 047_audit_entries_trace_id.sql)
+	// audit_entries (020_audit_ledger.sql + 043_audit_entries_v2.sql + 047_audit_entries_trace_id.sql + 055_audit_entries_per_tenant_rls.sql)
 	// 043 rebuilds the table (DROP+CREATE) with 5 NOT NULL columns added for
 	// the 12-field canonical-JSON HMAC chain — no DEFAULT sentinels, callers
 	// must supply values.
@@ -889,8 +894,8 @@ var expectedFunctions = []expectedFunction{
 // migration 052) covers the configcore tenant tables; PR-3b (#1617, migration
 // 053) adds the accesscore tables users/roles/role_assignments. sessions is
 // deliberately NOT under RLS — it is the pre-auth tenant carrier read by PK
-// before any scope is known (migration 054 header). audit_entries awaits its
-// per-(namespace,tenant) hash-chain re-architecture (#1618) before it can be added.
+// before any scope is known (migration 054 header). audit_entries was added in
+// #1618 (migration 055) with the SystemRowsReadable variant — see below.
 var expectedRLSTables = []expectedRLS{
 	{Table: "config_entries", Policy: "tenant_isolation"},
 	{Table: "config_versions", Policy: "tenant_isolation"},
