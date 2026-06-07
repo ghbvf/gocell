@@ -1,5 +1,12 @@
 # GoCell
 
+[![CI](https://github.com/ghbvf/gocell/actions/workflows/ci.yml/badge.svg)](https://github.com/ghbvf/gocell/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/ghbvf/gocell.svg)](https://pkg.go.dev/github.com/ghbvf/gocell)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Release](https://img.shields.io/github/v/release/ghbvf/gocell)](https://github.com/ghbvf/gocell/releases/latest)
+
+> ⚠️ **v0.x, internal use only** — no stability guarantees; breaking changes and Go-version bumps may happen anytime.
+
 Cell-native Go Engineering Foundation.
 
 GoCell provides Cell/Slice runtime primitives, governance toolchain, and built-in Cells for building reliable Go services with the Slice-Cell architecture.
@@ -37,7 +44,7 @@ export TODOORDER_TOKEN="$(go run ./examples/todoorder/localtoken)"
 # Step 4 — start the server (primary :8082, internal :9082, health 127.0.0.1:9092)
 go run ./examples/todoorder &
 
-# Step 5 — wait for readiness (#673: /healthz and /readyz live on the health listener)
+# Step 5 — wait for readiness (/healthz and /readyz live on the health listener)
 until curl -fsS http://127.0.0.1:9092/readyz >/dev/null; do sleep 0.2; done
 
 # Step 6 — exercise the API
@@ -314,30 +321,30 @@ curl http://localhost:8080/api/v1/hello
 
 ### Further Reading
 
-- [`docs/guides/cell-interface-isp.md`](docs/guides/cell-interface-isp.md) — 为什么拆四个子接口（CellIdentity / CellLifecycle / CellStatus / CellInventory）
-- [`docs/guides/why-sealed-marker.md`](docs/guides/why-sealed-marker.md) — outbox / persistence 注入：sealed marker 模式
+- [`docs/guides/cell-interface-isp.md`](docs/guides/cell-interface-isp.md) — why the Cell interface is split into four sub-interfaces (CellIdentity / CellLifecycle / CellStatus / CellInventory)
+- [`docs/guides/why-sealed-marker.md`](docs/guides/why-sealed-marker.md) — outbox / persistence injection: the sealed marker pattern
 - [`docs/architecture/202605101800-adr-cell-interface-isp-split.md`](docs/architecture/202605101800-adr-cell-interface-isp-split.md) — ADR: Cell interface ISP split
 - [`docs/architecture/202605101900-adr-cell-raw-infra-sealed-marker.md`](docs/architecture/202605101900-adr-cell-raw-infra-sealed-marker.md) — ADR: Cell raw infra sealed marker
 
-## Scaffold（K#09）
+## Scaffold
 
-一键创建完整 cell bundle：
+Create a complete cell bundle in one command:
 
 ```bash
 gocell scaffold cell --id=foo --team=platform --role=cell-owner
 ```
 
-生成 `cells/foo/` 含 cell.go + cell.yaml + slice + contract + JSON schemas，并自动 codegen 让 `go test ./cells/foo/...` 立即通过。
+This generates `cells/foo/` with cell.go + cell.yaml + slice + contract + JSON schemas, and runs codegen automatically so that `go test ./cells/foo/...` passes immediately.
 
-一键创建 assembly：
+Create an assembly in one command:
 
 ```bash
 gocell scaffold assembly --id=bar --cells=foo --team=platform --role=admin --deploy=k8s
 ```
 
-生成 `assemblies/bar/assembly.yaml` + `cmd/bar/{run,app,modules_gen,main}.go` + `boundary.yaml`。
+This generates `assemblies/bar/assembly.yaml` + `cmd/bar/{run,app,modules_gen,main}.go` + `boundary.yaml`.
 
-详见 ADR `docs/architecture/202605101430-adr-scaffold-one-cmd-double-source-removal.md`。
+See the ADR `docs/architecture/202605101430-adr-scaffold-one-cmd-double-source-removal.md` for details.
 
 ## Example Projects
 
@@ -577,9 +584,7 @@ if err != nil { /* handle */ }
 
 **Trust assumption**: trace header propagation assumes a trusted-upstream
 deployment (service-to-service behind a gateway or mesh). Public-facing edges
-should sanitize or ignore inbound trace headers at the gateway layer. See
-the `TRUST-POLICY-01` backlog issue (GitHub Issues / Project v2 #3) for the
-planned public-endpoint strategy.
+should sanitize or ignore inbound trace headers at the gateway layer.
 
 Framework-emitted consumer logs pick up these fields when the process uses
 GoCell's context-aware slog handler. This branch does not make plain slog JSON
@@ -601,8 +606,7 @@ go get github.com/ghbvf/gocell@latest
 
 The `gocell` governance/codegen CLI is currently installed from source
 (`git clone … && go install ./cmd/gocell`); a standalone
-`go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` entry point is tracked
-in [#1088](https://github.com/ghbvf/gocell/issues/1088). See
+`go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` entry point is planned. See
 [docs/guides/cell-external-repo-quickstart.md](docs/guides/cell-external-repo-quickstart.md).
 
 ## Project Templates

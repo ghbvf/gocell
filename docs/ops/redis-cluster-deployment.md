@@ -1,9 +1,9 @@
 # Redis Cluster Deployment Guide
 
 GoCell's Redis adapter supports three modes: `standalone`, `sentinel`, and
-`cluster`. This document covers cluster mode (B10 — PR-V1-REDIS-CLUSTER),
-which is required for AWS ElastiCache Cluster, Azure Cache Cluster, and any
-self-hosted Redis Cluster deployment.
+`cluster`. This document covers cluster mode, which is required for AWS
+ElastiCache Cluster, Azure Cache Cluster, and any self-hosted Redis Cluster
+deployment.
 
 ## When to use cluster mode
 
@@ -152,8 +152,7 @@ deduplicated even though it shares the store.
 
 *Cross-cell* dedup (routing one **logical command** to a single dedup slot
 regardless of path/listener/cell) is a different, stronger guarantee that
-requires an Idempotency-Key ↔ command_id bridge and remains deferred (#1610,
-blocked-by #1044).
+requires an Idempotency-Key ↔ command_id bridge and remains deferred.
 
 ## Operational notes
 

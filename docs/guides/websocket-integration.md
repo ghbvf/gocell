@@ -1,103 +1,103 @@
-# WebSocket 集成指南
+# WebSocket Integration Guide
 
-> 适用版本：GoCell v1.0（PR-V1-SEC-WS-AUTH-ACL）
+> Applicable version: GoCell v1.0
 
 ---
 
-## 1. 架构概览
+## 1. Architecture Overview
 
 ```
-HTTP 请求
+HTTP request
     │
     ▼
-adapters/websocket.UpgradeHandler   — transport 层
+adapters/websocket.UpgradeHandler   — transport layer
     ├─ Authenticate (before Accept)
     ├─ websocket.Accept (coder/websocket)
     └─ hub.Register(conn)
             │
             ▼
-    runtime/websocket.Hub            — 应用层
+    runtime/websocket.Hub            — application layer
         ├─ connMu + conns map
         ├─ subjectIdx (O(1) subject → conns)
         ├─ pingLoop (goroutine)
         └─ per-conn readLoop + writeLoop (goroutines)
 ```
 
-**职责边界**：
+**Responsibility boundaries**:
 
-| 层 | 包 | 职责 |
+| Layer | Package | Responsibility |
 |---|---|---|
-| Transport | `adapters/websocket` | HTTP 升级、Origin 校验、认证、conn 封装 |
-| 应用层 | `runtime/websocket` | 连接生命周期、心跳驱逐、广播路由 |
+| Transport | `adapters/websocket` | HTTP upgrade, Origin validation, authentication, conn encapsulation |
+| Application | `runtime/websocket` | Connection lifecycle, heartbeat eviction, broadcast routing |
 
-`adapters/websocket` 依赖 `coder/websocket` 处理帧协议；`runtime/websocket.Hub` 不了解 transport 细节，只与 `Conn` 接口交互。
+`adapters/websocket` relies on `coder/websocket` for frame-level protocol handling; `runtime/websocket.Hub` knows nothing about transport details and interacts only with the `Conn` interface.
 
 ---
 
-## 2. Origin 配置
+## 2. Origin Configuration
 
-`UpgradeConfig.AllowedOrigins` 是安全关键字段：
+`UpgradeConfig.AllowedOrigins` is a security-critical field:
 
 ```go
 cfg := adapterws.UpgradeConfig{
     AllowedOrigins: []string{
         "https://app.example.com",
-        "https://*.example.com",   // wildcard 仅限 host 一段
+        "https://*.example.com",   // wildcard covering one host segment only
     },
     Authenticator: auth.NewContextAuthenticator(),
 }
 handler, err := adapterws.UpgradeHandler(hub, cfg)
 ```
 
-规则：
+Rules:
 
-- **必填非空**：空 slice → `errcode.ErrWebsocketOriginsMissing`，构造时失败。
-- **scheme 必填**：`"example.com"` 无 scheme 被拒（`errcode.ErrWebsocketOriginsInvalid`）；浏览器 Origin header 始终含 scheme，裸 host 永远不会匹配。
-- **禁止全通配符 `"*"`**：明确拒绝，拒绝路由到 `errcode.ErrWebsocketOriginsInvalid`。
-- **Wildcard 只作 host 一段**：`"https://*.example.com"` 合法；`"https://**"` 语义不明，避免使用。
+- **Required and non-empty**: empty slice → `errcode.ErrWebsocketOriginsMissing`, construction fails.
+- **Scheme required**: `"example.com"` without scheme is rejected (`errcode.ErrWebsocketOriginsInvalid`); browser Origin headers always include the scheme, so a bare host will never match.
+- **Wildcard `"*"` is forbidden**: explicitly rejected, routes to `errcode.ErrWebsocketOriginsInvalid`.
+- **Wildcard covers one host segment only**: `"https://*.example.com"` is valid; `"https://**"` has undefined semantics and must be avoided.
 
-> **生产环境警告**：`"http://*"` 与 `"https://*"` 全 host 通配仅用于本地开发或内网调试；生产环境必须使用具体 host pattern，例如 `"https://app.example.com"` 或 `"https://*.app.example.com"`。全 host 通配会绕过 Origin 安全边界，导致任意跨域访问。
+> **Production warning**: `"http://*"` and `"https://*"` full-host wildcards are only for local development or intranet debugging; production environments must use specific host patterns such as `"https://app.example.com"` or `"https://*.app.example.com"`. Full-host wildcards bypass the Origin security boundary, allowing arbitrary cross-origin access.
 
 ---
 
-## 3. 认证集成
+## 3. Authentication Integration
 
-`UpgradeConfig.Authenticator` 必填（nil → `errcode.ErrWebsocketAuthenticatorMissing`）。认证在 `websocket.Accept` 之前执行；认证失败直接写 `401 Unauthorized` 明文响应（浏览器 WebSocket API 无法读响应 body，JSON envelope 无意义）。
+`UpgradeConfig.Authenticator` is required (nil → `errcode.ErrWebsocketAuthenticatorMissing`). Authentication runs before `websocket.Accept`; authentication failure writes a `401 Unauthorized` plain response directly (browser WebSocket API cannot read a response body, so a JSON envelope is meaningless).
 
-### 3.1 三种接入方式
+### 3.1 Three Integration Modes
 
 #### Bearer token via Authorization header
 
 ```go
-// 适合：服务端直连（curl、native app、后端 worker）
-// 限制：浏览器 JS WebSocket API 无法设置 Authorization header
-// verifier 类型为 auth.IntentTokenVerifier，实现 VerifyIntent(ctx, token, expected TokenIntent) (Claims, error)
+// Suitable for: server-to-server connections (curl, native app, backend worker)
+// Limitation: browser JS WebSocket API cannot set the Authorization header
+// verifier type is auth.IntentTokenVerifier, implementing VerifyIntent(ctx, token, expected TokenIntent) (Claims, error)
 authenticator := auth.NewBearerHeaderAuthenticator(verifier)
 ```
 
-> WebSocket 挂在已有 JWT listener 之后时优先用 `auth.NewContextAuthenticator()`（下节），避免重复验签。Bearer header authenticator 仅用于 WebSocket 独占端口、listener 未做 JWT 校验的场景。
+> When the WebSocket route is mounted behind an existing JWT listener, prefer `auth.NewContextAuthenticator()` (next section) to avoid double verification. The Bearer header authenticator is only for scenarios where the WebSocket runs on a dedicated port with no JWT validation at the listener level.
 
-#### listener middleware 已鉴权后透传（推荐 `/api/v1/*`）
+#### Pass-through after listener middleware authentication (recommended for `/api/v1/*`)
 
 ```go
-// 适合：WebSocket 路由挂载在已有 JWT listener 上
-// Principal 由 listener JWT middleware 写入 ctx，Authenticator 读出
+// Suitable for: WebSocket routes mounted on an existing JWT listener
+// Principal is written to ctx by the listener JWT middleware; Authenticator reads it out
 authenticator := auth.NewContextAuthenticator()
 ```
 
-WebSocket handler 注册在 PrimaryListener 时优先选此方式：listener 已做 JWT 校验，避免重复验签。
+Prefer this when the WebSocket handler is registered on PrimaryListener: the listener has already validated the JWT, avoiding double verification.
 
-#### 显式无认证（broadcast-only 频道）
+#### Explicit anonymous (broadcast-only channels)
 
 ```go
-// 适合：只推送公开数据（公告频道、行情推送）的 hub
-// 必须显式声明，不可用 nil 代替
+// Suitable for: hubs that push only public data (announcement channels, market data)
+// Must be declared explicitly; nil is not a valid substitute
 authenticator := auth.NewAnonymousAuthenticator()
 ```
 
-### 3.2 自定义 AuthenticatorFunc
+### 3.2 Custom AuthenticatorFunc
 
-浏览器 JS `WebSocket` API 不支持设置 `Authorization` header，常见替代方式：
+The browser JS `WebSocket` API does not support setting the `Authorization` header. Common alternatives:
 
 #### a. Query-param token
 
@@ -115,9 +115,9 @@ authenticator := auth.AuthenticatorFunc(func(r *http.Request) (*auth.Principal, 
 })
 ```
 
-**安全权衡**：token 出现在 URL，会落入服务器访问日志、浏览器历史、代理日志。仅在无法使用 Cookie 的场景使用，并设置极短 TTL（≤ 60s 一次性 token）。
+**Security trade-off**: the token appears in the URL and will end up in server access logs, browser history, and proxy logs. Use this only when cookies are not an option, and set a very short TTL (≤ 60 s, one-time token).
 
-#### b. Cookie（推荐浏览器场景）
+#### b. Cookie (recommended for browser scenarios)
 
 ```go
 authenticator := auth.AuthenticatorFunc(func(r *http.Request) (*auth.Principal, bool, error) {
@@ -133,24 +133,24 @@ authenticator := auth.AuthenticatorFunc(func(r *http.Request) (*auth.Principal, 
 })
 ```
 
-**安全权衡**：Cookie 不出现在 URL；需设置 `SameSite=Strict`（或 `Lax`）+ `HttpOnly` + `Secure` 防止 CSRF 和 XSS。
+**Security trade-off**: the cookie does not appear in the URL; set `SameSite=Strict` (or `Lax`) + `HttpOnly` + `Secure` to prevent CSRF and XSS.
 
-#### c. Sec-WebSocket-Protocol 子协议携带 token
+#### c. Sec-WebSocket-Protocol sub-protocol carrying the token
 
 ```go
 authenticator := auth.AuthenticatorFunc(func(r *http.Request) (*auth.Principal, bool, error) {
-    // 浏览器可通过 new WebSocket(url, ["v1", "<token>"]) 传递子协议
+    // Browser can pass sub-protocols via new WebSocket(url, ["v1", "<token>"])
     protos := r.Header.Get("Sec-WebSocket-Protocol")
-    // 解析出 token 部分...
+    // Parse out the token portion...
     ...
 })
 ```
 
-**安全权衡**：token 明文出现在握手 header，不在 URL 日志中，但需服务端在 Accept 时回传选中的子协议，实现略复杂。
+**Security trade-off**: the token appears in plaintext in the handshake header but not in URL logs; the server must echo back the selected sub-protocol in the Accept response, making the implementation slightly more complex.
 
-### 3.3 MessageHandler 读取 Principal（P1-3）
+### 3.3 Reading Principal in a MessageHandler
 
-Hub 在 Register 时把 Principal 注入 per-connection context（`auth.WithPrincipal(connCtx, p)`）。MessageHandler 收到的 `ctx` 可直接通过 `auth.FromContext(ctx)` 取 principal，无需经过 Conn 对象：
+Hub injects the Principal into the per-connection context at Register time (`auth.WithPrincipal(connCtx, p)`). The `ctx` received by a MessageHandler can directly obtain the principal via `auth.FromContext(ctx)`, without going through the Conn object:
 
 ```go
 hub := rtws.NewHub(cfg, func(ctx context.Context, connID string, data []byte) {
@@ -159,46 +159,46 @@ hub := rtws.NewHub(cfg, func(ctx context.Context, connID string, data []byte) {
         slog.Warn("ws: message from unauthenticated conn", slog.String("conn_id", connID))
         return
     }
-    // p.Subject / p.Roles / p.ExpiresAt 是握手时快照的只读字段，禁止修改。
+    // p.Subject / p.Roles / p.ExpiresAt are read-only snapshots taken at handshake time; do not modify them.
     _ = p.Subject
     _ = p.Roles
-    // 业务处理...
+    // Business logic...
 })
 ```
 
-### 3.4 Principal immutability 约定（P2-1）
+### 3.4 Principal Immutability Convention
 
-Authenticator 返回 `*auth.Principal` 后，调用方**禁止修改**其任何字段（`Subject` / `Roles` / `ExpiresAt` / `Claims`）。Hub 在握手时从 `conn.Principal()` 快照 `subject` 和 `expiresAt` 到 `connEntry`，注册完成后 hub 内部不再回读 `conn.Principal()`。`Conn.Principal()` 字段在整个连接生命周期内必须保持不变；如需更新身份，客户端应重新握手。
+After the Authenticator returns `*auth.Principal`, callers **must not modify** any of its fields (`Subject` / `Roles` / `ExpiresAt` / `Claims`). Hub snapshots `subject` and `expiresAt` from `conn.Principal()` into `connEntry` at handshake time; after registration the hub does not re-read `conn.Principal()`. The `Conn.Principal()` field must remain unchanged for the entire connection lifetime; to refresh an identity, the client must re-handshake.
 
-### 3.5 composition root 示例
+### 3.5 Composition Root Examples
 
 ```go
-// 选一：ContextAuthenticator（/api/v1/* JWT listener 上的推荐方式）
+// Option 1: ContextAuthenticator (recommended for /api/v1/* JWT listener)
 handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
     AllowedOrigins: []string{"https://app.example.com"},
     Authenticator:  auth.NewContextAuthenticator(),
 })
 
-// 选二：Bearer header authenticator（独立端口，Bearer header 自校验）
-// verifier 实现 auth.IntentTokenVerifier 接口
+// Option 2: Bearer header authenticator (dedicated port, self-validating Bearer header)
+// verifier implements the auth.IntentTokenVerifier interface
 handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
     AllowedOrigins: []string{"https://app.example.com"},
     Authenticator:  auth.NewBearerHeaderAuthenticator(verifier),
 })
 
-// 选三：AnonymousAuthenticator（广播频道，无认证）
+// Option 3: AnonymousAuthenticator (broadcast channel, no authentication)
 handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
     AllowedOrigins: []string{"https://app.example.com"},
     Authenticator:  auth.NewAnonymousAuthenticator(),
 })
 ```
 
-### 3.6 service principal
+### 3.6 Service Principal
 
-service token 的身份通过 `CallerCellID` 表达，**不是** `Subject`（service principal 的 `Subject` 一律为空）。过滤 service 连接时应读 `p.CallerCellID`：
+A service token's identity is expressed through `CallerCellID`, **not** `Subject` (service principal `Subject` is always empty). Filter service connections by reading `p.CallerCellID`:
 
 ```go
-// 按 CallerCellID 过滤特定 cell 的 service 连接
+// Filter for service connections of a specific cell by CallerCellID
 err := hub.BroadcastFilter(ctx, data, func(c rtws.Conn) bool {
     p := c.Principal()
     return p != nil && p.CallerCellID == "accesscore"
@@ -207,110 +207,110 @@ err := hub.BroadcastFilter(ctx, data, func(c rtws.Conn) bool {
 
 ---
 
-## 4. 心跳与 token 续期
+## 4. Heartbeat and Token Renewal
 
-Hub 内置 ping-pong 循环：
+Hub has a built-in ping-pong loop:
 
-- **PingInterval**（默认 30s）：每轮向所有连接发 ping。
-- **PingMissMax**（默认 2）：连续 miss 达到阈值则驱逐连接。
-- **PingTimeout**（默认 5s）：单次 ping 的 deadline。
+- **PingInterval** (default 30 s): sends a ping to all connections each round.
+- **PingMissMax** (default 2): evicts the connection when consecutive misses reach the threshold.
+- **PingTimeout** (default 5 s): deadline for a single ping.
 
-**Token 过期驱逐**：ping loop 每轮先于发 ping 检查 `Principal.ExpiresAt`。若当前时间已超过 `ExpiresAt`，连接被驱逐，无需等待下一次 miss。`ExpiresAt.IsZero()` 时不检查（Anonymous principal 不过期）。token 过期驱逐在 slog 中带 `reason="token_expired"` 结构化字段（P2-3）。
+**Token expiry eviction**: before sending pings each round, the ping loop checks `Principal.ExpiresAt`. If the current time is past `ExpiresAt`, the connection is evicted without waiting for the next miss. `ExpiresAt.IsZero()` means no check (Anonymous principals do not expire). Token expiry evictions include a `reason="token_expired"` structured field in slog.
 
-**v1.0 不支持服务端 push refresh**：token 续期必须由客户端主动操作：
+**Server-side push refresh is not supported in v1.0**: token renewal must be initiated by the client:
 
-1. 客户端检测到 token 临近过期（推荐提前 60s）。
-2. 客户端通过原认证 API 获取新 token。
-3. 客户端主动断开 WS 连接，用新 token 重新握手建立连接。
+1. Client detects that the token is about to expire (recommend at least 60 s before expiry).
+2. Client obtains a new token from the original authentication API.
+3. Client actively closes the WS connection and re-handshakes with the new token.
 
-**最坏情况**下，token 过期后**最多 `PingInterval`（默认 30s）**才被驱逐；对敏感场景缩短 `PingInterval`。
+**In the worst case**, an expired token will be evicted within at most `PingInterval` (default 30 s); reduce `PingInterval` for sensitive scenarios.
 
 ---
 
-## 5. 重连策略
+## 5. Reconnection Strategy
 
-客户端实现指数退避重连（推荐参数）：
+Clients should implement exponential backoff reconnection (recommended parameters):
 
 ```
-初始延迟: 1s
-倍增系数: 2
-最大延迟: 30s
-抖动:     ±500ms（防止 thundering herd）
+Initial delay: 1 s
+Multiplier:    2
+Max delay:     30 s
+Jitter:        ±500 ms (to prevent thundering herd)
 ```
 
-示例序列：`1s → 2s → 4s → 8s → 16s → 30s → 30s → ...`
+Example sequence: `1 s → 2 s → 4 s → 8 s → 16 s → 30 s → 30 s → ...`
 
-### HTTP 状态码对照表（P2-2）
+### HTTP Status Code Reference
 
-| 状态码 | 触发条件 | 客户端动作 |
+| Status code | Trigger | Client action |
 |---|---|---|
-| 101 | 升级成功 | — |
-| 400 | 客户端握手协议违规（无 `Sec-WebSocket-Key`、Origin 拒绝、非 GET 等） | 修正客户端实现，不重试 |
-| 401 | 凭证缺失或无效 | 重新获取 token / 跳认证 |
-| 500 | 服务端错误（hijack 不支持、Accept I/O 失败） | 指数退避重试 |
-| 503 | hub 未启动或停机中 | 指数退避重试，等 readyz 通过 |
+| 101 | Upgrade successful | — |
+| 400 | Client handshake protocol violation (missing `Sec-WebSocket-Key`, Origin rejected, non-GET, etc.) | Fix client implementation; do not retry |
+| 401 | Missing or invalid credentials | Re-obtain token / re-authenticate |
+| 500 | Server error (hijack not supported, Accept I/O failure) | Retry with exponential backoff |
+| 503 | Hub not started or shutting down | Retry with exponential backoff; wait for readyz to pass |
 
-服务端关系：
+Server-side behaviour:
 
-- `hub.IsRunning() == false` 时，`UpgradeHandler` 返回 `503 Service Unavailable`。客户端收到 503 应继续退避重连。
-- hub 停止（`Stop` 调用或 `Start` ctx cancel）时，所有连接被关闭。客户端重连请求在 hub 重新就绪前会持续得到 503。
-- 正常停机顺序：先停止 hub（关闭连接），readyz 返回 503 防止 LB 继续路由新请求。
+- When `hub.IsRunning() == false`, `UpgradeHandler` returns `503 Service Unavailable`. Clients receiving 503 should continue retry with backoff.
+- When the hub stops (`Stop` called or `Start` ctx cancelled), all connections are closed. Client reconnection requests will continue to receive 503 until the hub is ready again.
+- Normal shutdown sequence: stop the hub first (closing connections); readyz returns 503 to prevent the LB from routing new requests.
 
 ---
 
-## 6. 广播：BroadcastFilter vs BroadcastToSubject
+## 6. Broadcasting: BroadcastFilter vs BroadcastToSubject
 
-### BroadcastFilter — 通用过滤广播
+### BroadcastFilter — General Filtered Broadcast
 
 ```go
-// filter 必填，nil 返回 errcode.ErrWebsocketBroadcastFilterMissing
+// filter is required; nil returns errcode.ErrWebsocketBroadcastFilterMissing
 err := hub.BroadcastFilter(ctx, data, func(c rtws.Conn) bool {
     p := c.Principal()
     return p != nil && p.CallerCellID == "accesscore"
 })
 
-// 全广播（显式）
+// Full broadcast (explicit)
 err := hub.BroadcastFilter(ctx, data, func(rtws.Conn) bool { return true })
 ```
 
-特性：
+Characteristics:
 
-- O(N) 迭代所有连接。
-- **filter 在锁外执行**（P1-2）：Hub 在 connMu 下 snapshot 连接列表后释放锁，再逐个调用 filter。因此 filter 慢不会阻塞 `Register` / `Stop`，filter 内可以**安全**调用 `hub.Send(...)` / `hub.BroadcastToSubject(...)` 而不会死锁。
-- **仍建议 filter O(1) cheap**：filter 变慢只会拖慢该次广播延迟（snapshot 完成后才迭代），但不影响连接管理；禁止在 filter 内发起 DB 查询或远程 RPC（N 连接 × RPC 延迟 = 广播延迟放大反模式）。
+- O(N) iteration over all connections.
+- **filter runs outside the lock**: Hub snapshots the connection list under `connMu` then releases the lock before invoking the filter for each connection. A slow filter therefore does not block `Register` / `Stop`, and it is **safe** to call `hub.Send(...)` / `hub.BroadcastToSubject(...)` inside a filter without risking a deadlock.
+- **filter should still be O(1) cheap**: a slow filter only increases the latency of that broadcast (iteration starts after the snapshot), without affecting connection management. Database queries or remote RPCs inside a filter are forbidden (N connections × RPC latency = broadcast latency amplification anti-pattern).
 
-### BroadcastToSubject — subject 索引广播
+### BroadcastToSubject — Subject-indexed Broadcast
 
 ```go
-// O(1) 索引 lookup，通过 subjectIdx 直接定位
-// subject == "" 返回 errcode.ErrWebsocketBroadcastSubjectMissing
-// subject 不存在（无连接）→ noop，返回 nil
+// O(1) index lookup, locates connections directly via subjectIdx
+// subject == "" returns errcode.ErrWebsocketBroadcastSubjectMissing
+// subject not found (no connections) → noop, returns nil
 err := hub.BroadcastToSubject(ctx, userID, data)
 ```
 
-特性：
+Characteristics:
 
-- `subjectIdx` 由 Hub 在 Register/Unregister 时维护，与 `conns` 严格同步。
-- Subject 来自 `conn.Principal().Subject`（JWT sub claim）。service principal 的 Subject 为空，不进入 subjectIdx；service 连接应通过 `BroadcastFilter` + `CallerCellID` 路由。
-- Anonymous principal（Subject == ""）不进入 subjectIdx。
+- `subjectIdx` is maintained by Hub at Register/Unregister time, strictly in sync with `conns`.
+- Subject comes from `conn.Principal().Subject` (JWT sub claim). Service principal Subject is empty and does not enter `subjectIdx`; service connections should be routed via `BroadcastFilter` + `CallerCellID`.
+- Anonymous principals (Subject == "") do not enter `subjectIdx`.
 
-### ctx 行为说明（P1-5）
+### ctx Behaviour
 
-`Send` / `BroadcastFilter` / `BroadcastToSubject` 在入队前检查调用方 ctx：
+`Send` / `BroadcastFilter` / `BroadcastToSubject` check the caller's ctx before enqueuing:
 
-- 若调用方 ctx 已 canceled，立即返回 `ctx.Err()`，不向 send channel 投递任何消息（short-circuit）。
-- **ctx 仅控制入队 timeout**；writeLoop 写 socket 使用内部 per-connection connCtx，调用方 ctx canceled 后已成功入队的消息**仍会**被 writeLoop 送达。
-- 调用方 ctx 不会污染 send channel（canceled ctx 永远不会把消息写入 channel）。
+- If the caller's ctx is already cancelled, they return `ctx.Err()` immediately without delivering any message to the send channel (short-circuit).
+- **ctx only controls enqueue timeout**; writeLoop writes to the socket using an internal per-connection `connCtx`; messages successfully enqueued before the caller's ctx is cancelled **will still** be delivered by the writeLoop.
+- The caller's ctx does not pollute the send channel (a cancelled ctx will never write a message to the channel).
 
-### 多租户 ACL 示例
+### Multi-Tenant ACL Example
 
 ```go
-// 按 subject 精准推送（用户数据变更通知）
+// Targeted push by subject (user data change notification)
 func notifyUser(hub *rtws.Hub, userID string, event []byte) error {
     return hub.BroadcastToSubject(ctx, userID, event)
 }
 
-// 按 Cell 过滤广播（仅推送给特定 cell 的 service 连接）
+// Filtered broadcast by cell (push only to service connections of a specific cell)
 func broadcastToCell(hub *rtws.Hub, cellID string, event []byte) error {
     return hub.BroadcastFilter(ctx, event, func(c rtws.Conn) bool {
         p := c.Principal()
@@ -321,49 +321,49 @@ func broadcastToCell(hub *rtws.Hub, cellID string, event []byte) error {
 
 ---
 
-## 7. 慢客户端驱逐
+## 7. Slow Client Eviction
 
-每个连接有独立的 send channel，容量由 `HubConfig.SendBufferSize`（默认 32）控制。**零值自动 fallback 到默认值 32**（与 `PingInterval`、`PingMissMax` 等字段同模式），不存在"0 = unbuffered"语义。
+Each connection has its own send channel; capacity is controlled by `HubConfig.SendBufferSize` (default 32). **A zero value automatically falls back to the default of 32** (same pattern as `PingInterval`, `PingMissMax`, etc.); there is no "0 = unbuffered" semantics.
 
-**驱逐触发条件**：
+**Eviction triggers**:
 
-- `BroadcastFilter` / `BroadcastToSubject` fanout 时，`send` channel 满 → 立即驱逐（select default-drop）。
-- `Send(connID)` 时，channel 满 → 驱逐 + 返回 `errcode.ErrWebsocketSlowClient`。
-- `writeLoop` 内 `conn.Write` 失败（网络错误） → 同路径驱逐。
+- During `BroadcastFilter` / `BroadcastToSubject` fanout, if a connection's `send` channel is full → immediate eviction (select default-drop).
+- During `Send(connID)`, if the channel is full → eviction + returns `errcode.ErrWebsocketSlowClient`.
+- Inside `writeLoop`, if `conn.Write` fails (network error) → eviction via the same path.
 
-客户端必须容忍服务端主动断开连接。收到 `1001 Going Away` 或 EOF 后执行重连退避逻辑。
+Clients must tolerate the server actively closing the connection. Upon receiving `1001 Going Away` or EOF, apply the reconnection backoff logic.
 
-**evict slog reason 字段**（P2-3）：所有驱逐路径在 slog 输出中均包含 `reason` 结构化字段，运维可按 label 区分驱逐原因：
+**evict slog `reason` field**: all eviction paths include a structured `reason` field in slog output, allowing operators to distinguish eviction causes by label:
 
-| `reason` 值 | 触发路径 |
+| `reason` value | Trigger path |
 |---|---|
-| `send_buffer_full` | 慢客户端：send channel 满，fanout 或 Send 触发 |
-| `connection_write_failed` | writeLoop 写 socket 失败（网络中断） |
-| `token_expired` | ping loop 检测到 Principal.ExpiresAt 超期 |
-| `duplicate_conn_id` | Register 时发现同 ID 的旧连接，旧连接被驱逐 |
+| `send_buffer_full` | Slow client: send channel full, triggered by fanout or Send |
+| `connection_write_failed` | writeLoop socket write failure (network interruption) |
+| `token_expired` | Ping loop detects `Principal.ExpiresAt` is past |
+| `duplicate_conn_id` | Register finds an existing connection with the same ID; old connection is evicted |
 
 ---
 
-## 8. 故障注入与压测
+## 8. Fault Injection and Load Testing
 
-### fakeConn 模式
+### fakeConn Mode
 
-`runtime/websocket/hub_test.go` 提供 `fakeConn` 参考实现：
+`runtime/websocket/hub_test.go` provides a `fakeConn` reference implementation:
 
 ```go
-// 正常连接（principal 在握手时快照到 connEntry.subject/expiresAt）
+// Normal connection (principal is snapshotted into connEntry.subject/expiresAt at handshake time)
 conn := newFakeConnWithPrincipal("conn-1", &auth.Principal{Kind: auth.PrincipalUser, Subject: "user-1"})
 require.NoError(t, hub.Register(ctx, conn))
 
-// 阻塞连接（模拟慢客户端，writeLoop 永远阻塞 → send buffer 满后驱逐）
+// Blocking connection (simulates slow client; writeLoop blocks forever → evicted when send buffer fills)
 slow := newBlockingFakeConn("slow-1", &auth.Principal{Kind: auth.PrincipalUser, Subject: "slow"})
 require.NoError(t, hub.Register(ctx, slow))
-// 触发 BroadcastFilter 后，conn 的 send buffer 满 → 驱逐（reason="send_buffer_full"）
+// After triggering BroadcastFilter, the conn's send buffer fills → eviction (reason="send_buffer_full")
 ```
 
-### clockmock 推进 token 过期
+### Advancing Token Expiry with clockmock
 
-`clockmock.New(initial time.Time)` 返回 `*FakeClock`，参数为初始时刻（`time.Time`），**不是** `*testing.T`：
+`clockmock.New(initial time.Time)` returns `*FakeClock`; the parameter is the initial instant (`time.Time`), **not** `*testing.T`:
 
 ```go
 clk := clockmock.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
@@ -377,10 +377,10 @@ p := &auth.Principal{
 conn := newFakeConnWithPrincipal("conn-1", p)
 require.NoError(t, hub.Register(ctx, conn))
 
-// 推进时钟，超过 token 过期时间
+// Advance the clock past the token expiry
 clk.Advance(6 * time.Minute)
 
-// 下一个 ping tick 触发过期驱逐
+// The next ping tick triggers expiry eviction
 clk.Advance(hub.Config().PingInterval)
 
 require.Eventually(t, func() bool {
@@ -388,15 +388,15 @@ require.Eventually(t, func() bool {
 }, time.Second, 10*time.Millisecond)
 ```
 
-### BroadcastToSubject 异步断言
+### Async Assertions for BroadcastToSubject
 
-`BroadcastToSubject` 将数据投入 writeLoop goroutine 的 channel，断言需要等待异步完成：
+`BroadcastToSubject` delivers data to the writeLoop goroutine's channel; assertions must wait for asynchronous completion:
 
 ```go
 err := hub.BroadcastToSubject(ctx, "user-1", []byte("hello"))
 require.NoError(t, err)
 
-// 等待 writeLoop 实际投递
+// Wait for writeLoop to actually deliver
 require.Eventually(t, func() bool {
     return conn.ReceivedCount() == 1
 }, time.Second, time.Millisecond)
@@ -404,26 +404,26 @@ require.Eventually(t, func() bool {
 
 ---
 
-## 9. 运维参数表
+## 9. Operational Parameters
 
-| 字段 | DefaultHubConfig 值 | 调优触发条件 |
+| Field | DefaultHubConfig value | Tuning trigger |
 |---|---|---|
-| `PingInterval` | `30s` | 网络不稳定时减小（10s）；连接数大时增大（60s）减少 ping 开销 |
-| `PingTimeout` | `5s` | 高延迟网络（如跨大洲）适当增大；需要快速检测死连接时减小 |
-| `ReadLimit` | `64KB` | 消息 payload 超限时按业务需求增大；安全边界低于默认值可减小 |
-| `PingMissMax` | `2` | 对抖动容忍高时增大（3-5）；严格活跃性检测时设为 1 |
-| `MaxConnections` | `0`（无限制） | 防止 OOM 时设置上限（如 10000）；与 CPU/内存容量匹配 |
-| `SendBufferSize` | `32`；**零值自动取默认值 32** | 高吞吐推送时增大（64-256）；严格 fail-closed 时减小 |
-| `Clock` | 无默认，必须传入 | `clock.Real()` for production；`clockmock.New(time.Now())` for tests |
+| `PingInterval` | `30 s` | Decrease (e.g. 10 s) when network is unstable; increase (e.g. 60 s) to reduce ping overhead with high connection counts |
+| `PingTimeout` | `5 s` | Increase for high-latency networks (e.g. cross-continent); decrease for faster dead-connection detection |
+| `ReadLimit` | `64 KB` | Increase when message payloads exceed the limit; decrease if a lower security boundary is needed |
+| `PingMissMax` | `2` | Increase (3–5) for higher jitter tolerance; set to 1 for strict liveness detection |
+| `MaxConnections` | `0` (unlimited) | Set a limit (e.g. 10000) to prevent OOM; match to CPU/memory capacity |
+| `SendBufferSize` | `32`; **zero value automatically uses default 32** | Increase (64–256) for high-throughput push; decrease for strict fail-closed behaviour |
+| `Clock` | No default; must be provided | `clock.Real()` for production; `clockmock.New(time.Now())` for tests |
 
-**evict slog `reason` 字段**：所有连接驱逐均在 slog 中附带 `reason` 字段，可用于告警分类：`send_buffer_full`（慢客户端）、`token_expired`（token 超期）、`connection_write_failed`（写失败/网络中断）、`duplicate_conn_id`（重复连接 ID）。
+**evict slog `reason` field**: all connection evictions attach a `reason` field in slog, usable for alert classification: `send_buffer_full` (slow client), `token_expired` (token expired), `connection_write_failed` (write failure / network interruption), `duplicate_conn_id` (duplicate connection ID).
 
 ---
 
-## 更多
+## Further Reading
 
-- 架构决策：`docs/architecture/202605011500-adr-ws-auth-acl.md`（SEC-FAIL-CLOSED 设计）
-- 错误码参考：`pkg/errcode/errcode.go`（`ErrWebsocket*` 系列）
-- archtest 规则：`tools/archtest/security_defaults_test.go`（SEC-07/08/09）
+- Architecture decision: `docs/architecture/202605011500-adr-ws-auth-acl.md` (SEC-FAIL-CLOSED design)
+- Error code reference: `pkg/errcode/errcode.go` (`ErrWebsocket*` series)
+- Archtest rules: `tools/archtest/security_defaults_test.go` (SEC-07/08/09)
 
 ref: coder/websocket accept.go; centrifugal/centrifuge hub.go; olahol/melody hub.go
