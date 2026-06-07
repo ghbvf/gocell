@@ -331,6 +331,16 @@ audit `actor_id` 例外：源自事件 payload 的 domain actor（`appender.extr
 
 完整盲区清单（含 raw-map `Labels{"state":"x"}` bypass，与 saga `string(reason)` 同源已知盲区）+ 反向自检（RED/GREEN fixtures + negative control）活在 `tools/archtest/idempotency_metric_label_frozen_test.go` 的 package godoc；本节只做导航。
 
+## MQTT Adapter Metric 面冻结（#1429）
+
+`adapters/mqtt` 注册 11 个 `mqtt_*` metric（publish/consume/dlx/reconnect/ack 延迟/in-flight），全 `cell` label 构造期绑定。EPIC #1138 spec AC-8 字面列 6 名、实现细化为 11 名（含 `subscribe_inflight`→`mqtt_consume_inflight` gauge、`packet_too_large_total`→`mqtt_publish_failed_total{reason=payload_too_large}` reason-label）；完整对账 + 决策见 ADR-048 §Amendment 2026-06-07。三个 reason 闭集：`PublishFailureReason`(10) / `ConsumeFailureReason`(6) / `SubscribeFailureReason`(2)。
+
+| Archtest ID | 摘要 | 评级 |
+|---|---|---|
+| `MQTT-METRIC-LABEL-VALUES-FROZEN-01` | (a) metric 名集 11 enumeration freeze（枚举 `metrics.{Counter,Histogram,Gauge}Opts` 的 `Name:` 字面量，覆盖 inline + 包级 var）；(b) reason 闭集 full funnel = 值集 freeze + Record* callsite guard + `XReason(...)` conversion ban + **reason-constant provenance backstop**（return/var/assign/arg 隐式转换）+ **receiver-identity sole-writer lock** + go/types-派生 instrument 字段 inventory 交叉校验 | 名集/值集 Medium（Hard-upgrade = metricschema golden，**共享 gh #1416**）；sole-writer outside-pkg **Hard**（unexported instrument 字段）+ within-pkg Medium（#851/#893 family）；callsite + provenance 下游 Medium（残留 = 非常量数据流，#1282 族天花板） |
+
+完整盲区清单 + 反向自检（negative control + RED/GREEN fixtures）活在 `tools/archtest/mqtt_metric_label_values_frozen_test.go` 的 package godoc；本节只做导航。
+
 ## Audit Payload Redaction
 
 `auditcore` 通过 `runtime/audit/ledger.Store.Append` 落 hash chain；payload 是订阅事件的原始 JSON。从 `auditquery` HTTP 出口下发时，`cells/auditcore/slices/auditquery/handler.go` 强制走 `pkg/redaction.RedactPayload(payload []byte) []byte`：
