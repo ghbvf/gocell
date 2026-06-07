@@ -43,6 +43,7 @@ jobs:
   verify:
     name: Resolve version & build smoke
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
       prerelease: ${{ steps.resolve.outputs.prerelease }}
@@ -50,13 +51,17 @@ jobs:
     steps:
       - name: Validate branch
         # schedule runs on the default branch (develop); dispatch must too.
+        # Context values go through env, never interpolated into the shell, to
+        # avoid script injection from a crafted ref name.
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [ "${{ github.ref_name }}" != "develop" ]; then
-            echo "::error::Release must run on develop (got '${{ github.ref_name }}')."
+          if [ "$REF_NAME" != "develop" ]; then
+            echo "::error::Release must run on develop (got '$REF_NAME')."
             exit 1
           fi
 
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: develop
           fetch-depth: 0 # full history + tags for version resolution
@@ -83,6 +88,8 @@ jobs:
               echo "::error::tag $tag already exists."
               exit 1
             fi
+            # Monotonic: the new tag must sort strictly after the latest stable.
+            # Equality is already excluded by the duplicate-tag check above.
             if [ -n "$latest_stable" ]; then
               newest="$(printf '%s\n%s\n' "$latest_stable" "$tag" | sort -V | tail -n1)"
               if [ "$newest" != "$tag" ]; then
@@ -99,9 +106,12 @@ jobs:
             base="${latest_stable#v}"
             base="${base:-0.0.1}"
             last_daily="$(git tag -l 'v*-develop.*' --sort=-creatordate | head -n1 || true)"
+            # ^{commit} peels the annotated tag to its commit so the comparison
+            # is unambiguously commit-to-commit.
             if [ -n "$last_daily" ] \
-              && [ "$(git rev-list -n1 "$last_daily")" = "$(git rev-parse HEAD)" ]; then
-              echo "No new commits on develop since $last_daily — skipping snapshot."
+              && [ "$(git rev-parse "$last_daily^{commit}")" = "$(git rev-parse HEAD)" ]; then
+              echo "No new commits on develop since $last_daily — skipping snapshot." \
+                | tee -a "$GITHUB_STEP_SUMMARY"
               echo "skip=true" >>"$GITHUB_OUTPUT"
               exit 0
             fi
@@ -132,6 +142,7 @@ jobs:
     needs: verify
     if: needs.verify.outputs.skip != 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write # push annotated tag + create/delete GitHub Release
     env:
@@ -139,7 +150,7 @@ jobs:
       TAG: ${{ needs.verify.outputs.tag }}
       PRERELEASE: ${{ needs.verify.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: develop
           fetch-depth: 0 # full history for annotated tag, --generate-notes, prune
@@ -160,12 +171,26 @@ jobs:
           if [ "$PRERELEASE" = "true" ]; then
             args+=(--prerelease)
           fi
-          gh release create "$TAG" "${args[@]}"
+          # Retry: the freshly pushed tag may not be API-visible immediately,
+          # which makes --verify-tag fail transiently and leaves an orphan tag.
+          for attempt in 1 2 3; do
+            if gh release create "$TAG" "${args[@]}"; then
+              exit 0
+            fi
+            echo "::warning::gh release create attempt $attempt failed; retrying in 10s."
+            sleep 10
+          done
+          echo "::error::gh release create failed for $TAG after 3 attempts (tag is pushed; create the release manually)."
+          exit 1
 
       - name: Prune old daily snapshots
         if: needs.verify.outputs.prerelease == 'true'
         run: |
           set -euo pipefail
+          if ! printf '%s' "$DAILY_RETENTION" | grep -Eq '^[1-9][0-9]*$'; then
+            echo "::error::DAILY_RETENTION must be a positive integer (got '$DAILY_RETENTION')."
+            exit 1
+          fi
           # Keep the most recent DAILY_RETENTION snapshots (today's included);
           # delete older release+tag pairs together via --cleanup-tag.
           git tag -l 'v*-develop.*' --sort=-creatordate \
@@ -174,5 +199,6 @@ jobs:
                 [ -n "$old" ] || continue
                 echo "Pruning old snapshot $old"
                 gh release delete "$old" --cleanup-tag --yes \
-                  || git push origin --delete "$old" || true
+                  || git push origin --delete "$old" \
+                  || echo "::warning::failed to prune snapshot $old."
               done
