@@ -163,6 +163,47 @@ ORDER BY updated_at ASC LIMIT 20;
 
 ---
 
+## 场景 5：投影 tailer 停滞（#1609 PR-04）
+
+对应告警 `GoCellSagaTailerStalled` / `GoCellSagaTailerLagHigh` / `GoCellSagaTailerLockAcquireFailures` / `GoCellSagaTailerCheckpointAdvanceFailures`（`docs/ops/alerting-rules.md`）。`runtime/saga/tailer.Tailer` 是 saga 终态 model-A 投影的 catch-up 驱动；与场景 4 的 saga Coordinator 是**独立组件、独立 distlock key**（`saga-journal-tailer:<len>:<proj>`，区别于 Coordinator 的 per-instance `saga:<len>:<def>:<inst>`）。tailer 接入生产 assembly（PR-05）/ 真实消费者（orderfulfillment，PR-06）前这些告警沉默。
+
+**症状**：读投影读到陈旧 saga 终态；`last_success_timestamp` 不前进 / `pending_events` 持续增长。
+
+**根因（按概率）**：
+
+1. **无 leader 在跑**：没有 tailer pod 抢到 per-projection distlock（部署缩到 0 副本 / 全部副本崩溃）。
+2. **drain 反复失败**：`drain_total{result="apply_error"}` 或 `checkpoint_advance_total{result="error"}` 持续 >0——apply 路径或 checkpoint 事务故障。
+3. **distlock 后端故障**：`lock_acquire_failed_total{reason="backend_error"}` 持续 >0（Redis 不可达），fail-closed → 无 drain。
+
+**诊断**：
+
+```sql
+-- 积压 = HeadSeq − checkpoint。HeadSeq（saga_events 全局序最大值）：
+SELECT MAX(global_seq) AS head_seq FROM saga_events;
+
+-- 该投影已提交 checkpoint + 当前 owner（PG owner 列 PR-PG 落地后才有值；
+-- 此前 owner 为空，仅看 offset）：
+SELECT cell_id, projection_id, offset_seq, owner
+FROM projection_checkpoints
+WHERE cell_id = '<cell>' AND projection_id = '<projection>';
+-- pending = head_seq − offset_seq；持续 > 0 且 offset_seq 不动 = 停滞。
+```
+
+- **distlock key 持有方**：在 distlock 后端（Redis）查 `saga-journal-tailer:<len>:<projection>` key 是否存在。
+  - key **不存在** 且 checkpoint 不动 → 没有 tailer 在跑（部署问题，根因 1）：检查 tailer pod 副本数 / 启动日志。
+  - key **存在** 但 checkpoint 不动 → 持锁 pod 的 drain 在失败：看该 pod 的 `drain_total{result}` / `checkpoint_advance_total{result}` 与 `projection.apply` trace span / DB 健康（根因 2）。
+- 交叉看 `lock_acquire_failed_total{reason}`：`backend_error` 持续 >0 = 根因 3（按 Redis 故障处置，同场景 4b）。
+
+**处置**：
+
+- 根因 1：恢复 tailer 副本；leader 抢锁后自动 catch-up 全量 `(checkpoint, Head]`。
+- 根因 2：修复 apply/DB 故障；checkpoint advance 与 apply 同事务，故修复后从断点续推，不丢不重（exactly-once within owner）。
+- 根因 3：恢复 distlock 后端（同场景 4b）。
+- **`stale_owner` 不是故障**：`checkpoint_advance_total{result="stale_owner"}` 在 leader 交接窗口出现是设计预期（旧 leader 被 CAS fence，ADR D5(b)），不需处置；只有 `result="error"` 才是真故障。
+- **重复 apply 提示**：leader 交接窗口可能产生有界重复 apply（投影 Apply 幂等兜底，非 exactly-once；完整 monotonic fencing 待 PR-PG PG owner 列）——若读模型出现重复，确认 Apply 实现幂等，不要手工改 checkpoint。
+
+---
+
 ## 审计要求
 
 场景 2 / 场景 3 的所有人工决策与处置动作必须在 audit log 中留存，最低字段集：

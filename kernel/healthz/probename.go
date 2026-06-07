@@ -212,3 +212,37 @@ func ProjectionLagProbeName(cellID, projectionID string) (ProbeName, error) {
 	}
 	return NewProbeName(cellID + projectionProbeNameInfix + projectionID + projectionLagSuffix)
 }
+
+// sagaTailerProbeNameInfix forms the fixed middle segment of the saga-journal
+// Tailer readiness probe name: "<cellID>_saga_tailer_<projectionID>_ready".
+// sagaTailerReadySuffix is the terminal "_ready" segment (dependency-
+// availability probe per observability.md).
+const (
+	sagaTailerProbeNameInfix = "_saga_tailer_" // len 13
+	sagaTailerReadySuffix    = "_ready"        // len 6
+)
+
+// SagaTailerReadyProbeName composes the typed probe name for the saga-journal
+// projection Tailer readiness probe:
+// "<cellID>_saga_tailer_<projectionID>_ready". This is a dependency-availability
+// probe (Tailer running + journal/checkpoint storage reachable); the "_ready"
+// suffix is required per observability.md.
+//
+// It is per-(cellID, projectionID) — like the projection store-ready/lag probe
+// names — so multiple Tailers in one process register distinct probe names
+// (a static name would fail-fast on duplicate registration). Tailer replay-lag
+// is exposed as a metric gauge (tailer.Observer.ObserveLag), not a second probe.
+//
+// Budget: fixed infix "_saga_tailer_" (13) + suffix "_store_ready"-equivalent
+// "_ready" (6) = 19 chars. So len(cellID)+len(projectionID) must be ≤ 45 (64 − 19).
+// NewProbeName fail-fast on overflow.
+//
+// Sole-sanctioned constructor for the saga Tailer readiness probe; routes
+// through the NewProbeName A4 caller-allowlist (PROBENAME-SEALED-FUNNEL-01).
+func SagaTailerReadyProbeName(cellID, projectionID string) (ProbeName, error) {
+	if cellID == "" || projectionID == "" {
+		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"healthz: saga tailer probe cellID and projectionID must not be empty")
+	}
+	return NewProbeName(cellID + sagaTailerProbeNameInfix + projectionID + sagaTailerReadySuffix)
+}

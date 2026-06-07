@@ -17,6 +17,10 @@
 // RunCursorConformance exercises the four Cursor position invariants documented
 // on projection.Cursor (1-based, monotonic, gap-allowed, permanent-error).
 //
+// RunOwnerCheckpointConformance exercises the fenced AdvanceIfOwner contract of
+// projection.OwnerCheckpointStore (cold claim, same-owner re-advance, new-leader
+// claim-ahead, stale-owner rejection with ErrStaleOwner).
+//
 // The Checkpoint helper does NOT exercise transaction semantics (ambient-tx
 // binding is the responsibility of each adapter's own integration test). The PG
 // adapter (PR-02) invokes this funnel directly on a real
@@ -464,5 +468,133 @@ func assertOrderedSubsequence(t *testing.T, got, want []string) {
 	if i != len(want) {
 		t.Errorf("Replay did not deliver the seeded entries in order:\n want subsequence = %v\n got = %v\n matched %d/%d",
 			want, got, i, len(want))
+	}
+}
+
+const (
+	ownerTokenA = "owner-token-aaaaaaaa"
+	ownerTokenB = "owner-token-bbbbbbbb"
+)
+
+// RunOwnerCheckpointConformance verifies the fenced AdvanceIfOwner contract that
+// every projection.OwnerCheckpointStore must satisfy (EPIC #1609 ADR D5(b)).
+// Each sub-test uses a distinct (cellID, projectionID) key so the ordered
+// advance sequences do not interfere on a shared store instance.
+//
+// The fencing contract (single source = projection.OwnerCheckpointStore godoc):
+//   - cold claim: first AdvanceIfOwner on an empty checkpoint with offset > 0
+//     succeeds and records the owner token
+//   - same-owner re-advance: AdvanceIfOwner with the recorded token always
+//     succeeds (idempotent retry / forward advance)
+//   - new-leader claim-ahead: a different token advancing strictly past the
+//     committed offset succeeds and takes ownership
+//   - stale-owner rejection: a different token NOT ahead of the committed offset
+//     is rejected with ErrStaleOwner and leaves the offset unchanged
+//
+// This helper is intended for external packages that provide their own
+// OwnerCheckpointStore implementations; SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01
+// forces every implementation to appear as an argument here.
+func RunOwnerCheckpointConformance(t *testing.T, store projection.OwnerCheckpointStore) {
+	t.Helper()
+	t.Run("ColdClaimEstablishesOwner", func(t *testing.T) {
+		t.Parallel()
+		checkOwnerColdClaim(t, store)
+	})
+	t.Run("SameOwnerReAdvance", func(t *testing.T) {
+		t.Parallel()
+		checkOwnerSameTokenReAdvance(t, store)
+	})
+	t.Run("NewLeaderClaimsAhead", func(t *testing.T) {
+		t.Parallel()
+		checkOwnerNewLeaderAhead(t, store)
+	})
+	t.Run("StaleOwnerRejected", func(t *testing.T) {
+		t.Parallel()
+		checkOwnerStaleRejected(t, store)
+	})
+}
+
+func checkOwnerColdClaim(t *testing.T, store projection.OwnerCheckpointStore) {
+	t.Helper()
+	ctx := context.Background()
+	const cell, proj = "cell-oc-cold", "proj-oc-cold"
+	if err := store.AdvanceIfOwner(ctx, cell, proj, ownerTokenA, 5); err != nil {
+		t.Fatalf("cold AdvanceIfOwner(A, 5): unexpected error: %v", err)
+	}
+	assertOwnerOffset(t, store, cell, proj, 5)
+}
+
+func checkOwnerSameTokenReAdvance(t *testing.T, store projection.OwnerCheckpointStore) {
+	t.Helper()
+	ctx := context.Background()
+	const cell, proj = "cell-oc-same", "proj-oc-same"
+	if err := store.AdvanceIfOwner(ctx, cell, proj, ownerTokenA, 5); err != nil {
+		t.Fatalf("AdvanceIfOwner(A, 5): %v", err)
+	}
+	// Same owner advancing forward must always succeed.
+	if err := store.AdvanceIfOwner(ctx, cell, proj, ownerTokenA, 9); err != nil {
+		t.Fatalf("same-owner AdvanceIfOwner(A, 9): %v", err)
+	}
+	assertOwnerOffset(t, store, cell, proj, 9)
+	// Same owner re-advancing to the SAME offset is an idempotent retry and must
+	// succeed (handler/tx replay safety).
+	if err := store.AdvanceIfOwner(ctx, cell, proj, ownerTokenA, 9); err != nil {
+		t.Fatalf("same-owner idempotent AdvanceIfOwner(A, 9): %v", err)
+	}
+	assertOwnerOffset(t, store, cell, proj, 9)
+}
+
+func checkOwnerNewLeaderAhead(t *testing.T, store projection.OwnerCheckpointStore) {
+	t.Helper()
+	ctx := context.Background()
+	const cell, proj = "cell-oc-new", "proj-oc-new"
+	if err := store.AdvanceIfOwner(ctx, cell, proj, ownerTokenA, 9); err != nil {
+		t.Fatalf("AdvanceIfOwner(A, 9): %v", err)
+	}
+	// A different token strictly ahead of the committed offset is a legitimate
+	// new leader: it succeeds and claims ownership.
+	if err := store.AdvanceIfOwner(ctx, cell, proj, ownerTokenB, 12); err != nil {
+		t.Fatalf("new-leader AdvanceIfOwner(B, 12): %v", err)
+	}
+	assertOwnerOffset(t, store, cell, proj, 12)
+	// B now owns it: B continues to advance.
+	if err := store.AdvanceIfOwner(ctx, cell, proj, ownerTokenB, 15); err != nil {
+		t.Fatalf("new-owner continue AdvanceIfOwner(B, 15): %v", err)
+	}
+	assertOwnerOffset(t, store, cell, proj, 15)
+}
+
+func checkOwnerStaleRejected(t *testing.T, store projection.OwnerCheckpointStore) {
+	t.Helper()
+	ctx := context.Background()
+	const cell, proj = "cell-oc-stale", "proj-oc-stale"
+	// B becomes the leader at offset 12.
+	if err := store.AdvanceIfOwner(ctx, cell, proj, ownerTokenB, 12); err != nil {
+		t.Fatalf("AdvanceIfOwner(B, 12): %v", err)
+	}
+	// A deposed leader (token A) that lags must be fenced.
+	if err := store.AdvanceIfOwner(ctx, cell, proj, ownerTokenA, 10); !errorsIsStaleOwner(err) {
+		t.Fatalf("stale AdvanceIfOwner(A, 10) = %v, want ErrStaleOwner", err)
+	}
+	// A deposed leader at the SAME offset (not strictly ahead) is also fenced.
+	if err := store.AdvanceIfOwner(ctx, cell, proj, ownerTokenA, 12); !errorsIsStaleOwner(err) {
+		t.Fatalf("stale AdvanceIfOwner(A, 12) = %v, want ErrStaleOwner", err)
+	}
+	// Offset is unchanged by the rejected advances.
+	assertOwnerOffset(t, store, cell, proj, 12)
+}
+
+func errorsIsStaleOwner(err error) bool {
+	return errors.Is(err, projection.ErrStaleOwner)
+}
+
+func assertOwnerOffset(t *testing.T, store projection.OwnerCheckpointStore, cellID, projID string, want int64) {
+	t.Helper()
+	got, err := store.LoadOffset(context.Background(), cellID, projID)
+	if err != nil {
+		t.Fatalf("LoadOffset(%s/%s): %v", cellID, projID, err)
+	}
+	if got != want {
+		t.Errorf("LoadOffset(%s/%s) = %d, want %d", cellID, projID, got, want)
 	}
 }
