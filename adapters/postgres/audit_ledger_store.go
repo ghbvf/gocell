@@ -371,9 +371,6 @@ func (s *LedgerStore) GetBySeq(ctx context.Context, vis tenant.RowVisibility, se
 	if err := vis.Validate(); err != nil {
 		return nil, err
 	}
-	if vis.Scope() == tenant.RowScopeAll {
-		return nil, ledger.RowScopeAllUnsupportedError()
-	}
 	ns := s.namespace()
 	var e ledger.Entry
 	err := s.db.QueryRow(ctx, selectBySeqSQL, ns, seq).Scan(
@@ -417,9 +414,6 @@ func (s *LedgerStore) Query(
 	if err := vis.Validate(); err != nil {
 		return nil, err
 	}
-	if vis.Scope() == tenant.RowScopeAll {
-		return nil, ledger.RowScopeAllUnsupportedError()
-	}
 	ns := s.namespace()
 
 	params, err := bindTimestampCursor(params)
@@ -456,10 +450,10 @@ FROM audit_entries WHERE namespace = `, ns)
 	b.AppendIf(filters.TraceID != "", `AND trace_id = `, filters.TraceID)
 	b.AppendIf(!filters.From.IsZero(), `AND timestamp >= `, filters.From)
 	b.AppendIf(!filters.To.IsZero(), `AND timestamp <= `, filters.To)
-	// Row-visibility obligation on actor_id (epic #1337 PR-4). Self/device
+	// Row-visibility obligation on actor_id (epic #1337 PR-4/PR-5). Self/device
 	// scopes restrict results to entries whose actor_id matches the subject.
-	// Tenant scope applies no additional predicate (Apply=false); RowScopeAll is
-	// already rejected above (RowScopeAllUnsupportedError).
+	// Tenant and all scopes apply no additional owner predicate (Apply=false);
+	// stores are pure PEPs — RowScopeAll is translated as "no owner predicate".
 	visPred, predErr := vis.SQLPredicate("actor_id")
 	if predErr != nil {
 		return nil, predErr

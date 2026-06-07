@@ -4,24 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/tenant"
 )
-
-// RowScopeAllUnsupportedError reports that a RowVisibility carrying
-// tenant.RowScopeAll reached a ledger read path (Query / GetBySeq).
-// RowScopeAll is cross-tenant super-admin visibility whose audited BYPASSRLS
-// path is not wired until epic #1337 PR-5; until then EVERY ledger backend
-// fail-closes it (no silent degrade to tenant scope). It is shared by MemStore
-// and the PG LedgerStore so the rejection is byte-identical across backends and
-// exercised uniformly by the conformance suite. The classification is
-// KindInternal: in PR-4 no caller constructs RowScopeAll for these reads, so its
-// arrival is a wiring/programmer error, not user input.
-func RowScopeAllUnsupportedError() error {
-	return errcode.New(errcode.KindInternal, errcode.ErrInternal,
-		"audit ledger: RowScopeAll is not supported on this read path")
-}
 
 // TailSnapshot holds a point-in-time snapshot of the ledger chain tail.
 // Returned by Store.Tail to allow restart recovery and chain verification
@@ -153,9 +138,11 @@ type Store interface {
 	// is enforced on the actor_id OWNER column: if the entry exists but
 	// vis.Allows(entry.ActorID) is false, the implementation returns
 	// ErrAuditLedgerNotFound (IDOR-safe collapse — existence is not leaked).
-	// vis must be valid (NewRowVisibility must succeed). A vis carrying
-	// RowScopeAll is fail-closed on every backend (RowScopeAllUnsupportedError)
-	// until the audited super-admin path lands (epic #1337 PR-5).
+	// vis must be valid (NewRowVisibility must succeed). RowScopeAll applies
+	// no owner predicate (Allows returns true for all actors) — stores are pure
+	// PEPs that translate the obligation; whether the caller is permitted to use
+	// RowScopeAll is the caller's responsibility (epic #1337 PR-5). Tenant axis
+	// is a separate orthogonal dimension (AuditFilters.TenantID / PG RLS).
 	//
 	// Tenant axis NOT enforced here (deliberate, tracked #1342 / #1618): GetBySeq
 	// enforces ONLY the owner dimension (vis on actor_id). Unlike Query it takes no
@@ -180,10 +167,12 @@ type Store interface {
 	//
 	// vis is the row-visibility obligation enforced on the actor_id owner column.
 	// Self/device scopes restrict results to entries whose actor_id matches the
-	// obligation subject. Tenant scope returns all matching rows in the tenant.
-	// vis must be valid (NewRowVisibility must succeed). A vis carrying
-	// RowScopeAll is fail-closed on every backend (RowScopeAllUnsupportedError)
-	// until the audited super-admin path lands (epic #1337 PR-5).
+	// obligation subject. Tenant and all scopes apply no owner predicate (every
+	// actor is visible on the owner dimension). RowScopeAll additionally bypasses
+	// the tenant dimension when the caller sets no TenantID filter; stores are
+	// pure PEPs that apply the obligation as-is. vis must be valid
+	// (NewRowVisibility must succeed). Tenant axis is orthogonal
+	// (AuditFilters.TenantID / PG RLS — see epic #1337 PR-5).
 	Query(ctx context.Context, vis tenant.RowVisibility, filters AuditFilters, params query.ListParams) ([]*Entry, error)
 
 	// Verify re-computes the HMAC for each entry in [fromSeq, toSeq] and checks

@@ -158,9 +158,6 @@ func (m *MemStore) GetBySeq(_ context.Context, vis tenant.RowVisibility, seq int
 	if err := vis.Validate(); err != nil {
 		return nil, err
 	}
-	if vis.Scope() == tenant.RowScopeAll {
-		return nil, RowScopeAllUnsupportedError()
-	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if seq < 1 || int(seq) > len(m.entries) {
@@ -192,9 +189,6 @@ func (m *MemStore) GetBySeq(_ context.Context, vis tenant.RowVisibility, seq int
 func (m *MemStore) Query(_ context.Context, vis tenant.RowVisibility, filters AuditFilters, params query.ListParams) ([]*Entry, error) {
 	if err := vis.Validate(); err != nil {
 		return nil, err
-	}
-	if vis.Scope() == tenant.RowScopeAll {
-		return nil, RowScopeAllUnsupportedError()
 	}
 	if len(params.Sort) == 0 {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
