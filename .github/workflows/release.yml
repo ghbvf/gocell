@@ -48,6 +48,8 @@ jobs:
       tag: ${{ steps.resolve.outputs.tag }}
       prerelease: ${{ steps.resolve.outputs.prerelease }}
       skip: ${{ steps.resolve.outputs.skip }}
+      sha: ${{ steps.resolve.outputs.sha }}
+      tag_exists: ${{ steps.resolve.outputs.tag_exists }}
     steps:
       - name: Validate branch
         # schedule runs on the default branch (develop); dispatch must too.
@@ -72,25 +74,40 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           INPUT_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          head_sha="$(git rev-parse HEAD)"
+          # SemVer 2.0.0: numeric identifiers carry no leading zeros.
+          num='(0|[1-9][0-9]*)'
           latest_stable="$(git tag -l 'v[0-9]*' --sort=-v:refname \
-            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)"
+            | grep -E "^v${num}\.${num}\.${num}$" | head -n1 || true)"
+          tag_exists=false
 
           if [ "$EVENT" = "workflow_dispatch" ]; then
             ver="$INPUT_VERSION"
-            if ! printf '%s' "$ver" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-              echo "::error::version must be numeric X.Y.Z without a leading v (got '$ver')."
+            if ! printf '%s' "$ver" | grep -Eq "^${num}\.${num}\.${num}$"; then
+              echo "::error::version must be SemVer X.Y.Z with no leading zeros or leading v (got '$ver')."
               exit 1
             fi
             tag="v$ver"
             if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-              echo "::error::tag $tag already exists."
-              exit 1
-            fi
-            # Monotonic: the new tag must sort strictly after the latest stable.
-            # Equality is already excluded by the duplicate-tag check above.
-            if [ -n "$latest_stable" ]; then
+              # Tag exists: resumable only if it points at the verified commit and
+              # its release is missing (recovering a prior half-finished run).
+              existing_sha="$(git rev-parse "$tag^{commit}")"
+              if [ "$existing_sha" != "$head_sha" ]; then
+                echo "::error::tag $tag exists at $existing_sha, not the current develop HEAD $head_sha."
+                exit 1
+              fi
+              if gh release view "$tag" >/dev/null 2>&1; then
+                echo "::error::release $tag already exists (nothing to do)."
+                exit 1
+              fi
+              echo "::warning::tag $tag exists without a release — resuming to create it." \
+                | tee -a "$GITHUB_STEP_SUMMARY"
+              tag_exists=true
+            elif [ -n "$latest_stable" ]; then
+              # New tag: enforce strictly-increasing version vs the latest stable.
               newest="$(printf '%s\n%s\n' "$latest_stable" "$tag" | sort -V | tail -n1)"
               if [ "$newest" != "$tag" ]; then
                 echo "::error::version $tag must be greater than the latest stable release $latest_stable."
@@ -100,16 +117,14 @@ jobs:
             {
               echo "tag=$tag"
               echo "prerelease=false"
-              echo "skip=false"
             } >>"$GITHUB_OUTPUT"
           else
             base="${latest_stable#v}"
             base="${base:-0.0.1}"
             last_daily="$(git tag -l 'v*-develop.*' --sort=-creatordate | head -n1 || true)"
-            # ^{commit} peels the annotated tag to its commit so the comparison
-            # is unambiguously commit-to-commit.
+            # ^{commit} peels the annotated tag to its commit for a commit-to-commit compare.
             if [ -n "$last_daily" ] \
-              && [ "$(git rev-parse "$last_daily^{commit}")" = "$(git rev-parse HEAD)" ]; then
+              && [ "$(git rev-parse "$last_daily^{commit}")" = "$head_sha" ]; then
               echo "No new commits on develop since $last_daily — skipping snapshot." \
                 | tee -a "$GITHUB_STEP_SUMMARY"
               echo "skip=true" >>"$GITHUB_OUTPUT"
@@ -119,9 +134,13 @@ jobs:
             {
               echo "tag=v${base}-develop.${ts}"
               echo "prerelease=true"
-              echo "skip=false"
             } >>"$GITHUB_OUTPUT"
           fi
+          {
+            echo "skip=false"
+            echo "sha=$head_sha"
+            echo "tag_exists=$tag_exists"
+          } >>"$GITHUB_OUTPUT"
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         if: steps.resolve.outputs.skip != 'true'
@@ -149,16 +168,22 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ needs.verify.outputs.tag }}
       PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+      SHA: ${{ needs.verify.outputs.sha }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          ref: develop
+          ref: ${{ needs.verify.outputs.sha }} # pin to the exact commit verify smoke-tested
           fetch-depth: 0 # full history for annotated tag, --generate-notes, prune
           fetch-tags: true
 
       - name: Create annotated tag
+        if: needs.verify.outputs.tag_exists != 'true' # skip when resuming an existing tag
         run: |
           set -euo pipefail
+          if [ "$(git rev-parse HEAD)" != "$SHA" ]; then
+            echo "::error::checked-out HEAD $(git rev-parse HEAD) != verified SHA $SHA."
+            exit 1
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" -m "Release $TAG"
@@ -180,7 +205,7 @@ jobs:
             echo "::warning::gh release create attempt $attempt failed; retrying in 10s."
             sleep 10
           done
-          echo "::error::gh release create failed for $TAG after 3 attempts (tag is pushed; create the release manually)."
+          echo "::error::gh release create failed for $TAG after 3 attempts (tag is pushed; re-run this workflow to resume, or create the release manually)."
           exit 1
 
       - name: Prune old daily snapshots
