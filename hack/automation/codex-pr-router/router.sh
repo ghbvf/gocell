@@ -519,36 +519,78 @@ handle_review() {
         # F1: fetch prior-round findings from the PR comments before the check call.
         # Without this, codex re-reviews without knowing what was previously found → may emit 'ready' vacuously.
         # Fail-closed: if no prior findings are found, do NOT proceed (a check with nothing to verify is a bug).
+        #
+        # Trust boundary: only the LATEST pm:pr-review comment from a trusted
+        # author (OWNER/MEMBER/COLLABORATOR) counts — mirrors pr-meta.sh
+        # fetch_trusted_bodies, so an untrusted commenter pasting a fake
+        # `<!-- pm:pr-review -->` cannot inject findings into the check verdict.
         local prior_findings_json
-        prior_findings_json="$(gh api "repos/${REPO_SLUG}/issues/${pr}/comments" \
-            --jq '[.[] | select(.body | contains("<!-- pm:pr-review -->")) | .body] | last' \
+        prior_findings_json="$(gh api "repos/${REPO_SLUG}/issues/${pr}/comments" --paginate \
+            --jq '[.[] | select((.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") and (.body | contains("<!-- pm:pr-review -->"))) | .body] | last' \
             2>/dev/null || echo "null")"
 
         local prior_findings_text
         prior_findings_text="$(python3 - "${prior_findings_json:-null}" <<'PY'
-import json, sys, re
+import re
+import sys
 
 raw = sys.argv[1]
 if not raw or raw == "null":
     print("")
     sys.exit(0)
 
-# Extract the findings list section from the comment body
-# Look for the Findings section between header and details
-lines = raw.split("\n")
-findings = []
-in_findings = False
-for line in lines:
-    if "**Findings**" in line and "/fix" in line:
-        in_findings = True
-        continue
-    if in_findings:
-        if line.startswith("<details>") or line.startswith("**修复分流") or line.startswith("**结论"):
-            break
-        if line.strip():
-            findings.append(line.strip())
+# Strip HTML comments: both the `<!-- pm:pr-review -->` marker and the
+# single-line `<!-- gocell-pr-meta:v1 <base64> -->` machine block, so the
+# base64 payload never pollutes finding extraction.
+body = re.sub(r"<!--.*?-->", "", raw, flags=re.S)
 
-print("\n".join(findings))
+# Anchor on the template-defined bold finding id "**F<n>**" — the one token
+# both pm:pr-review producers emit (router render_pr_review_body "**Findings**"
+# list AND claude pr-review skill "**Finding 详表**" list + their `<details>`
+# lossless tables). Bare "F<n>" prose references (cluster notes, conclusions)
+# are NOT bold and never match — this is what makes extraction immune to the
+# #1762 F1 failure modes: the old "**Findings**+/fix title" matcher both missed
+# the claude format (extract=0 → fail-closed skip) AND false-positive-matched
+# the prose line describing the bug.
+finding_start = re.compile(r"^\s*(?:[-*]\s+)?\*\*F\d+\*\*")
+finding_id = re.compile(r"\*\*(F\d+)\*\*")
+
+blocks = []
+cur = None
+for line in body.split("\n"):
+    if finding_start.match(line):
+        if cur is not None:
+            blocks.append(cur)
+        cur = [line.rstrip()]
+    elif cur is not None:
+        stripped = line.strip()
+        if not stripped:
+            cur.append("")
+        elif line[:1].isspace() or stripped[:2] in ("- ", "* ", "> "):
+            # continuation: indented text or a sub-bullet of the finding
+            cur.append(line.rstrip())
+        else:
+            # a top-level non-finding line (section header / <details> / footer)
+            # ends the current finding block
+            blocks.append(cur)
+            cur = None
+if cur is not None:
+    blocks.append(cur)
+
+# Dedup by finding id (the concise list and the lossless <details> table each
+# carry every finding); keep the richer (longer) block per id, preserve order.
+best = {}
+order = []
+for b in blocks:
+    m = finding_id.search(b[0])
+    fid = m.group(1) if m else b[0]
+    if fid not in best:
+        order.append(fid)
+        best[fid] = b
+    elif sum(len(x) for x in b) > sum(len(x) for x in best[fid]):
+        best[fid] = b
+
+print("\n\n".join("\n".join(best[fid]).strip() for fid in order).strip())
 PY
 )"
 

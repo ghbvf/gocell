@@ -710,6 +710,82 @@ fi
 assert_contains "S7-skip-log" "${out_7}" "trigger label"
 
 # ---------------------------------------------------------------------------
+# Scenario 8: check-path prior-findings extractor (#1762 F1)
+# The check phase must extract prior-round findings from the latest pm:pr-review
+# comment (in the actual claude six-dimension format: **Finding 详表** list +
+# <details> lossless table, finding ids "**F<n>**") and feed them to codex.
+# Case 8a: finding-bearing body → check proceeds, codex called read-only, and
+#          the extracted findings (file:line) reach the codex prompt.
+# Case 8b: finding-less body → fail-closed skip, codex NOT called.
+#
+# Live labels = ONLY pr-status/needs-check-fix so handle_review("review") and
+# handle_fix skip their trigger re-confirm; handle_review("check") proceeds.
+# The gh-api stub returns GH_API_BODIES_FILE verbatim (it simulates the
+# post-filter body), so this exercises the python extractor directly.
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Scenario 8: check-path prior-findings extractor (#1762 F1) ==="
+
+OID_S8="cccc3333dddd4444eeee5555ffff6666aaaa7777"
+
+# 8a: realistic finding-bearing pm:pr-review body → extractor succeeds
+reset_scenario
+echo '[{"number":80,"headRefName":"feat/s8","headRefOid":"'"${OID_S8}"'","author":{"login":"alice"},"isCrossRepository":false,"isDraft":false}]' \
+    > "${GH_LIST_FILE}"
+echo '{"headRefOid":"'"${OID_S8}"'"}' > "${GH_OID_FILE}"
+echo '{"labels":[{"name":"pr-status/needs-check-fix"}]}' > "${GH_LABELS_FILE}"
+echo '{"mergeable":"MERGEABLE"}' > "${GH_MERGE_FILE}"
+cp "${VERDICT_CHANGES_REQUESTED}" "${CODEX_VERDICT_FILE}"
+cat > "${GH_API_BODIES_FILE}" <<'S8ABODY'
+<!-- pm:pr-review -->
+## pr-review（六维度分级审查）
+
+**Finding 详表**
+
+- **F1** [P1·Cx2·correctness] hack/probe.go:99 → 簇 C1
+  concise finding summary
+
+<details><summary>完整详表</summary>
+
+**F1** [P1·Cx2·correctness] `hack/probe.go:99`
+- 证据：`prior extractor keyed on a nonexistent title`
+- 建议：anchor on the bold finding id
+
+</details>
+<!-- gocell-pr-meta:v1 eyJraW5kIjoicHItcmV2aWV3In0= -->
+S8ABODY
+
+# S8a asserts on the codex call recorded in CALLS_LOG (a file side-effect),
+# not on router stdout — discard stdout to keep shellcheck happy.
+run_router >/dev/null
+calls_8a="$(cat "${CALLS_LOG}")"
+
+assert_contains "S8a-codex-readonly-called" "${calls_8a}" "read-only"
+assert_contains "S8a-findings-in-prompt"   "${calls_8a}" "Prior-round findings to verify"
+assert_contains "S8a-finding-reached-prompt" "${calls_8a}" "hack/probe.go:99"
+
+# 8b: finding-less body → fail-closed skip (no codex)
+reset_scenario
+echo '[{"number":80,"headRefName":"feat/s8","headRefOid":"'"${OID_S8}"'","author":{"login":"alice"},"isCrossRepository":false,"isDraft":false}]' \
+    > "${GH_LIST_FILE}"
+echo '{"headRefOid":"'"${OID_S8}"'"}' > "${GH_OID_FILE}"
+echo '{"labels":[{"name":"pr-status/needs-check-fix"}]}' > "${GH_LABELS_FILE}"
+echo '{"mergeable":"MERGEABLE"}' > "${GH_MERGE_FILE}"
+cat > "${GH_API_BODIES_FILE}" <<'S8BBODY'
+<!-- pm:pr-review -->
+## pr-review（六维度分级审查）
+
+**总体结论**：通过
+
+_无 findings_
+S8BBODY
+
+out_8b="$(run_router)"
+
+assert_not_contains "S8b-no-codex" "$(cat "${CALLS_LOG}")" "codex exec"
+assert_contains "S8b-skip-log" "${out_8b}" "no prior pm:pr-review findings"
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""
@@ -717,7 +793,7 @@ echo "=== Selftest summary ==="
 echo "PASS: ${PASS_COUNT}"
 echo "FAIL: ${FAIL_COUNT}"
 
-EXPECTED_CHECKS=23
+EXPECTED_CHECKS=28
 if [[ "${CHECK_COUNT}" -ne "${EXPECTED_CHECKS}" ]]; then
     echo "FAIL [check-count]: expected ${EXPECTED_CHECKS} checks, ran ${CHECK_COUNT}"
     FAIL_COUNT=$(( FAIL_COUNT + 1 ))
