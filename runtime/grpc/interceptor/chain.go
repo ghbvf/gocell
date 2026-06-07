@@ -73,6 +73,10 @@ func NewUnaryChain(deps Deps) grpc.ServerOption {
 			errcode.Assertion(
 				"interceptor.NewUnaryChain: Deps.CellIDClosedSet is required (the assembly cell-id set)")))
 	}
+	// deps.Drain is intentionally NOT validated here: it is a stream-only concern
+	// (StreamDrain) and the unary chain never reads it. A unary-only server may
+	// leave it nil; the asymmetry with NewStreamChain (which requires it) is by
+	// design — see the Deps.Drain field doc.
 	validCellIDs := buildValidCellIDs(deps.CellIDClosedSet)
 	return grpc.ChainUnaryInterceptor(
 		UnaryRequestID(),

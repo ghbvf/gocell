@@ -295,6 +295,13 @@ func (s *Server) gracefulStop(ctx context.Context) error {
 		// instead of waiting the full ShutdownTimeout for the hard Stop(). Drain
 		// is required (validate guarantees non-nil); the trigger is idempotent and
 		// a no-op for a server with no StreamDrain consumer.
+		//
+		// Log the drain start so the shutdown sequence has an ops anchor. The
+		// resulting in-flight streams end with codes.Canceled — that metric spike
+		// during a graceful stop is expected (see StreamMetrics godoc), not an
+		// outage.
+		slog.Info("grpc: draining — canceling in-flight streams before GracefulStop",
+			slog.Duration("shutdown_timeout", s.cfg.ShutdownTimeout))
 		s.cfg.Drain.Trigger()
 
 		// Flip readiness to unhealthy BEFORE draining: GracefulStop stops

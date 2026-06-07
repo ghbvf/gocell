@@ -240,6 +240,8 @@ streaming（server-stream + client-stream + bidi）由 `interceptor.NewStreamCha
 
 **框架侧 drain（#1153）**：`runtime/grpc.DrainSignal`（composition root 构造一个，对称注入 `interceptor.Deps.Drain` + `adaptersgrpc.Config.Drain`，同 Registrar 的 Option-3 实例共享）让 GracefulStop **主动 cancel** 在途 stream 的 ctx（grpc-go 的 GracefulStop 只 wait 不 cancel handler ctx）：adapter `gracefulStop` 起始 `Trigger()` → `StreamDrain` 把每条 stream ctx 绑到信号 → handler `select` 到 `ctx.Done()` 即返回 → GracefulStop 在预算内完成。`Config.Drain` 与 `Config.Registrar` 同为 required（无 `if drain != nil` 双路径）。
 
+**运维（drain 可观测）**：`gracefulStop` 在 Trigger 前打一条 `slog.Info("grpc: draining …", shutdown_timeout)` 作为关闭序列锚点；被 drain 取消的在途 stream 以 `code=Canceled` 收尾，故 `grpc_server_requests_total{code="Canceled"}` 在 drain/rolling-deploy 窗口内的脉冲是**预期现象**（非故障），告警应排除关闭窗口。
+
 守卫（导航；完整盲区清单活在各 archtest godoc 单源）：
 
 | Archtest ID | 摘要 | 评级 |

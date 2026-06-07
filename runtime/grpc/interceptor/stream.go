@@ -84,7 +84,10 @@ func StreamAccessLog(clk clock.Clock) grpc.StreamServerInterceptor {
 
 // StreamMetrics is the streaming analog of UnaryMetrics: it records
 // grpc_server_requests_total / grpc_server_request_duration_seconds once per
-// stream at close (duration = whole stream lifetime). The cell-label funnel
+// stream at close (duration = whole stream lifetime). Ops note: during a
+// graceful shutdown the framework drain (StreamDrain) cancels in-flight streams,
+// so they close with code=Canceled — a Canceled spike on this metric within a
+// drain/deploy window is expected, not an outage. The cell-label funnel
 // (metrics.ResolveCellLabel → GRPCCollector.RecordRPC) is INLINED here — not
 // shared with UnaryMetrics — because GRPC-METRICS-LABEL-CELLID-CTXSOURCE-01 binds
 // the funnel by go/types object identity WITHIN each metrics interceptor body;

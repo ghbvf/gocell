@@ -162,7 +162,8 @@ func (c *Config) validate() error {
 		return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
 			"grpc: Drain is required; create it with runtimegrpc.NewDrainSignal() at the "+
 				"composition root and pass the same instance to both Config.Drain and "+
-				"interceptor.Deps.Drain")
+				"interceptor.Deps.Drain. A unary-only server still wires it — the trigger "+
+				"is a harmless no-op when no StreamDrain interceptor consumes it")
 	}
 
 	return nil

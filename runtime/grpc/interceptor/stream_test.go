@@ -11,9 +11,11 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kernelctxkeys "github.com/ghbvf/gocell/kernel/ctxkeys"
 	pkgctxkeys "github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/runtime/auth"
 	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
@@ -123,6 +125,26 @@ func TestStreamAuth_PublicMethodBypasses(t *testing.T) {
 	}
 }
 
+func TestStreamAuth_ValidTokenReachesHandlerWithPrincipal(t *testing.T) {
+	// bearerCtx() (auth_test.go) carries incoming "authorization: Bearer tok"
+	// metadata — the same path grpc-go populates from the wire — so this exercises
+	// the stream-specific accept wiring: authorize → wrapped stream → handler sees
+	// the principal-enriched ctx.
+	var gotPrincipal *auth.Principal
+	handler := func(_ any, ss grpc.ServerStream) error {
+		gotPrincipal, _ = auth.FromContext(ss.Context())
+		return nil
+	}
+	ss := &fakeServerStream{ctx: bearerCtx()}
+	err := StreamAuth(stubVerifier{claims: kauth.Claims{Subject: "user-1"}})(nil, ss, streamInfo(), handler)
+	if err != nil {
+		t.Fatalf("valid token must pass StreamAuth, got %v", err)
+	}
+	if gotPrincipal == nil || gotPrincipal.Subject != "user-1" {
+		t.Fatalf("handler must see the principal-enriched ctx, got %+v", gotPrincipal)
+	}
+}
+
 func TestStreamAuth_NilVerifierPanics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
@@ -130,6 +152,30 @@ func TestStreamAuth_NilVerifierPanics(t *testing.T) {
 		}
 	}()
 	_ = StreamAuth(nil)
+}
+
+func TestStreamAccessLog_LogsWithoutBreakingStream(t *testing.T) {
+	// StreamAccessLog logs once at stream close and must pass the handler result
+	// through unchanged (success + error paths). The slog line itself is sink-
+	// redacted (SLOG-HANDLER-SEALED-FUNNEL-01); here we lock the pass-through +
+	// clock-required contract, the streaming sibling of TestUnaryAccessLog.
+	t.Run("success passes through", func(t *testing.T) {
+		ss := &fakeServerStream{ctx: context.Background()}
+		err := StreamAccessLog(clock.Real())(nil, ss, streamInfo(),
+			func(any, grpc.ServerStream) error { return nil })
+		if err != nil {
+			t.Fatalf("StreamAccessLog must not alter a nil handler error, got %v", err)
+		}
+	})
+	t.Run("error passes through", func(t *testing.T) {
+		ss := &fakeServerStream{ctx: context.Background()}
+		want := status.Error(codes.NotFound, "x")
+		err := StreamAccessLog(clock.Real())(nil, ss, streamInfo(),
+			func(any, grpc.ServerStream) error { return want })
+		if status.Code(err) != codes.NotFound {
+			t.Fatalf("StreamAccessLog must pass the handler error through, got %v", status.Code(err))
+		}
+	})
 }
 
 func TestStreamMetrics_RecordsRPC(t *testing.T) {
@@ -269,5 +315,16 @@ func TestNewStreamChain_NilRegistrarPanics(t *testing.T) {
 	}()
 	d := streamDeps()
 	d.Registrar = nil
+	_ = NewStreamChain(d)
+}
+
+func TestNewStreamChain_EmptyCellIDClosedSetPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatalf("NewStreamChain with an empty Deps.CellIDClosedSet must panic (would relabel every RPC _runtime)")
+		}
+	}()
+	d := streamDeps()
+	d.CellIDClosedSet = nil
 	_ = NewStreamChain(d)
 }

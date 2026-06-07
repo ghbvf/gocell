@@ -29,7 +29,9 @@ import (
 )
 
 // watchSnapshotLimit bounds the initial active-command snapshot WatchCommands
-// streams before it tails for drain/disconnect.
+// streams before it tails for drain/disconnect. The snapshot is silently capped
+// at this many entries — a production watch should paginate (check page.HasMore
+// and stream subsequent pages) rather than truncate.
 const watchSnapshotLimit = 100
 
 // Server implements commandv1.DeviceCommandServiceServer.
@@ -147,6 +149,11 @@ func (s *Server) WatchCommands(
 // route-policy layer, so the role gate runs before any field validation or
 // device lookup, preserving the 403-before-404 ordering so an unauthorized caller
 // cannot probe device existence (per-method gRPC auth is #1675).
+//
+// Demo authorization model: an admin/operator may command OR watch ANY device —
+// there is no per-device ownership check (IssueCommand uses the same model). A
+// production deployment with multi-tenant device isolation would add a
+// device-ownership predicate here (or restrict cross-device visibility to admin).
 func authorizeCommandRole(ctx context.Context) error {
 	if p, ok := auth.FromContext(ctx); !ok ||
 		(!p.HasRole(dto.RoleAdmin) && !p.HasRole(dto.RoleOperator)) {

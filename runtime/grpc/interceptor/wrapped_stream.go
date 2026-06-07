@@ -30,9 +30,20 @@ func (w *wrappedServerStream) Context() context.Context { return w.ctx }
 
 // wrapServerStream returns a grpc.ServerStream whose Context() reports ctx. When
 // ss is already a *wrappedServerStream (i.e. an outer interceptor already
-// wrapped it), its context is replaced in place so chained interceptors don't
-// nest wrappers; otherwise a fresh wrapper is allocated. Either way the next
-// interceptor / handler observes ctx, which incorporates every prior mutation.
+// wrapped it), its context is **replaced in place** so chained interceptors
+// don't nest wrappers; otherwise a fresh wrapper is allocated. Either way the
+// next interceptor / handler observes ctx, which incorporates every prior
+// mutation.
+//
+// WARNING — in-place mutation: because the wrapper is shared and reused down the
+// chain, any code that captures the stream reference and reads ss.Context()
+// AFTER passing it inward (e.g. an interceptor that reads it both before and
+// after handler) will observe the inner-most ctx, not the one it passed. This is
+// safe in the current chain — every ctx is additive (each interceptor only adds
+// request-id / cell-id / principal / drain-cancel), so the inner-most ctx is a
+// superset, and the observability interceptors read ss.Context() only after the
+// handler returns. A future interceptor that needs a stable pre-handler snapshot
+// MUST bind ctx := ss.Context() into a local before calling handler.
 func wrapServerStream(ss grpc.ServerStream, ctx context.Context) grpc.ServerStream {
 	if existing, ok := ss.(*wrappedServerStream); ok {
 		existing.ctx = ctx
