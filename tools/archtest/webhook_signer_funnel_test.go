@@ -4,10 +4,11 @@
 //
 // The three outbound webhook signature headers (webhook-id / webhook-timestamp
 // / webhook-signature) define GoCell's outbound identity protocol. This rule is
-// a CLOSED double-lock funnel (#1492): [(SignedHeaders).Apply] is the SOLE write
-// site for these header names (A1, downstream), and [SignedHeaders] — the value
-// Apply writes — is sealed-construction so only [Signer.Sign] can produce one
-// (A2, upstream Hard external).
+// a CLOSED double-lock funnel (#1492 + #1733 F1): [(SignedHeaders).Apply] is the
+// SOLE write site for these header names (A1, downstream), and [SignedHeaders] —
+// the value Apply writes — is sealed-construction + a `valid` provenance flag so
+// only [Signer.Sign] can produce a wire-writable one; Apply fail-closes on a
+// zero value (A2, upstream Hard external).
 //
 //   - A1 (downstream Hard): scan production (non-_test.go) files in
 //     kernel/webhook/... and runtime/webhook/... for any
@@ -19,16 +20,24 @@
 //     to confirm the callee is net/http.Header.Set (alias-safe),
 //     EvaluateConstString to fold the key argument across const refs and raw
 //     literals, and ResolveEnclosingFunc to bind the allowance to a go/types
-//     FullName identity (file- and name-independent).
-//   - A2 (upstream Hard external, sealed construction + reflect freeze):
-//     [SignedHeaders] has UNEXPORTED fields and no exported constructor, so an
-//     outside-package literal forge (webhook.SignedHeaders{signature: …}) is a
-//     Go compile error; only the sealed [Signer.Sign] produces a SignedHeaders.
-//     The reflect schema freeze (NumField + per-field name/type/unexported)
-//     locks the field set against in-package drift — exporting a field would
-//     re-open the forge vector; rename/reorder/add/remove breaks the Apply
-//     contract. Detection: reflect.TypeOf(webhook.SignedHeaders{}) vs the frozen
-//     tuple (TestWebhookSignerFunnel_SignedHeadersSealedFields).
+//     FullName identity (file- and name-independent). Plus (review #1733 F2):
+//     a (net/http.Header).Set captured as a METHOD VALUE — `set := h.Set;
+//     set("webhook-signature", v)` — is banned outright in the scanned tree
+//     (scanSignerHeaderSetMethodValue), because the eventual key is not visible at
+//     the capture site; the only sanctioned signature-header write is a direct
+//     (SignedHeaders).Apply call.
+//   - A2 (upstream Hard external, sealed construction + valid-token + reflect
+//     freeze): [SignedHeaders] has UNEXPORTED fields, so an outside-package
+//     POPULATED literal forge (webhook.SignedHeaders{signature: …}) is a Go
+//     compile error. Unexported fields alone do NOT stop a ZERO-value construction
+//     (`var h webhook.SignedHeaders`; review #1733 F1), so the type carries an
+//     unexported `valid` provenance flag that ONLY [Signer.Sign] sets, and
+//     [SignedHeaders.Apply] fail-closes (writes nothing) on a zero value — thus
+//     only a Sign-produced SignedHeaders can write to the wire. The reflect schema
+//     freeze (NumField + per-field name/type/unexported, INCL. `valid`) locks the
+//     field set against in-package drift — exporting any field (esp. `valid`)
+//     re-opens the forge vector. Detection: reflect.TypeOf(webhook.SignedHeaders{})
+//     vs the frozen tuple (TestWebhookSignerFunnel_SignedHeadersSealedFields).
 //
 // AI-robust rating (Funnel 双向锁评级, per .claude/rules/gocell/ai-robust.md):
 //
@@ -37,18 +46,21 @@
 //	  is ineffective. EvaluateConstString folds across const definitions.
 //	  ResolveEnclosingFunc binds the allowance to a go/types FullName — a
 //	  stray func that merely shares the name "Apply" cannot inherit it.
-//	上游 Hard (external) — CLOSED by #1492. Before #1492, Apply lived on the
-//	  public [Headers] struct with EXPORTED fields (also the inbound Verify DTO),
-//	  so any caller could hand-build a `webhook.Headers{Signature: …}` literal and
-//	  Apply it — provenance was open. #1492 split the type: the inbound parse DTO
-//	  stays [Headers] (untrusted by design — a forged inbound Headers just fails
-//	  Verify), while the OUTBOUND value Apply writes is the sealed [SignedHeaders]
-//	  (unexported fields, produced only by [Signer.Sign] — "sealed construction"
-//	  范本). Outside-package construction is now a Go compile error; A2's reflect
-//	  freeze guards in-package field drift. So the value reaching the wire via
-//	  Apply provably originated from the sealed signer. (Read-only accessors on
-//	  SignedHeaders do not weaken this — the seal is on construction, and the
-//	  values travel on the wire in plaintext anyway.)
+//	上游 Hard (external) — CLOSED by #1492 + valid-token (#1733 F1). Before #1492,
+//	  Apply lived on the public [Headers] struct with EXPORTED fields, so any caller
+//	  could hand-build a `webhook.Headers{Signature: …}` literal and Apply it. #1492
+//	  split the type: the inbound parse DTO stays [Headers] (untrusted by design — a
+//	  forged inbound Headers just fails Verify), while the OUTBOUND value Apply
+//	  writes is the sealed [SignedHeaders]. Unexported fields stop a POPULATED
+//	  outside-package literal (compile error) but NOT a ZERO-value construction
+//	  (`var h webhook.SignedHeaders`) — the overclaim review #1733 F1 caught. The
+//	  closure is the unexported `valid` provenance flag: only [Signer.Sign] sets it,
+//	  and Apply fail-closes (writes nothing) when valid==false, so an external
+//	  zero-value Apply writes no signature headers. External code can set neither a
+//	  populated literal nor `valid`, so only a Sign-produced SignedHeaders reaches
+//	  the wire. A2's reflect freeze locks the field set (incl. `valid`) against
+//	  in-package drift. (Read-only accessors don't weaken this — the seal is on
+//	  construction; values travel on the wire in plaintext.)
 //	上游 (package-internal holder axis) — permanent Go ceiling. A same-package
 //	  SignedHeaders{…} literal (Go allows in-package access to unexported fields)
 //	  is not compile-prevented; the A1 scan catches a stray in-package Header.Set
@@ -73,9 +85,13 @@
 // Blind spots (ai-robust 强制反向自检; each has a reverse self-test below):
 //
 //	B-A1 — rule-logic regression: testdata/webhook_signer_violate exercises
-//	  Header.Set with a raw string literal key and with a const key that
-//	  evaluates to each of the three header names;
+//	  Header.Set with a raw string literal key, a const key per header name, AND
+//	  a method-value capture (`set := h.Set`, #1733 F2);
 //	  TestWebhookSignerFunnel_ReverseFixture asserts A1 fires on each form.
+//	B-methodvalue — CLOSED (#1733 F2): a (net/http.Header).Set method-value capture
+//	  is now caught by scanSignerHeaderSetMethodValue. The remaining uncovered form
+//	  is reflection (reflect.Value.Call on Header.Set) — the permanent AST-scan
+//	  ceiling, same as the B3 raw-write below; not realistically reachable.
 //	B3 — fmt.Fprintf raw-write bypass: code that writes the header via
 //	  fmt.Fprintf(w, "webhook-signature: %s\r\n", val) on a raw net.Conn or
 //	  bufio.Writer cannot be caught by the Set-callee scan (no CallExpr with a
@@ -128,43 +144,42 @@ var webhookSignatureHeaders = map[string]bool{
 	"webhook-signature": true,
 }
 
-// scanSignerHeaderSet implements A1: http.Header.Set calls whose key evaluates
-// to one of the three signature-header names must be enclosed by
-// signerSanctionedApplyFunc. Any other enclosing function (including the
+// isNetHTTPHeaderSetSelector reports whether sel resolves to the
+// (net/http.Header).Set method — type-resolved (alias-safe), confirming both the
+// method (Set in net/http) and the receiver type (net/http.Header). Shared by the
+// direct-call scan (A1) and the method-value-capture scan (A1, review #1733 F2).
+func isNetHTTPHeaderSetSelector(info *types.Info, sel *ast.SelectorExpr) bool {
+	fn, ok := ResolveMethodCall(info, sel)
+	if !ok || fn == nil || fn.Pkg() == nil ||
+		fn.Pkg().Path() != httpPkgPath || fn.Name() != "Set" {
+		return false
+	}
+	recvType := info.TypeOf(sel.X)
+	if recvType == nil {
+		return false
+	}
+	if ptr, ok := recvType.(*types.Pointer); ok {
+		recvType = ptr.Elem()
+	}
+	named, ok := recvType.(*types.Named)
+	if !ok {
+		return false
+	}
+	return named.Obj() != nil && named.Obj().Pkg() != nil &&
+		named.Obj().Pkg().Path() == httpPkgPath && named.Obj().Name() == "Header"
+}
+
+// scanSignerHeaderSet implements A1 (direct call): (net/http.Header).Set calls
+// whose key evaluates to one of the three signature-header names must be enclosed
+// by signerSanctionedApplyFunc. Any other enclosing function (including the
 // package-level init or a FuncLit) is a violation.
 func scanSignerHeaderSet(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
 	var out []Diagnostic
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		// Confirm the callee is (net/http.Header).Set — type-resolved, so import
-		// aliases cannot bypass.
 		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
+		if !ok || !isNetHTTPHeaderSetSelector(info, sel) {
 			return
 		}
-		fn, ok := ResolveMethodCall(info, sel)
-		if !ok || fn == nil || fn.Pkg() == nil ||
-			fn.Pkg().Path() != httpPkgPath || fn.Name() != "Set" {
-			return
-		}
-		// Confirm the receiver type is net/http.Header (not some other type
-		// that also has a Set method).
-		recvType := info.TypeOf(sel.X)
-		if recvType == nil {
-			return
-		}
-		// Unwrap pointer if needed.
-		if ptr, ok := recvType.(*types.Pointer); ok {
-			recvType = ptr.Elem()
-		}
-		named, ok := recvType.(*types.Named)
-		if !ok {
-			return
-		}
-		if named.Obj() == nil || named.Obj().Pkg() == nil ||
-			named.Obj().Pkg().Path() != httpPkgPath || named.Obj().Name() != "Header" {
-			return
-		}
-
 		// Call is confirmed to be (net/http.Header).Set. Evaluate the key arg.
 		if len(call.Args) < 1 {
 			return
@@ -173,7 +188,6 @@ func scanSignerHeaderSet(fset *token.FileSet, file *ast.File, rel string, info *
 		if !ok || !webhookSignatureHeaders[keyVal] {
 			return
 		}
-
 		// Key matches a signature header. Check the enclosing function.
 		enc, ok := ResolveEnclosingFunc(info, file, call)
 		if ok && enc != nil && enc.FullName() == signerSanctionedApplyFunc {
@@ -185,6 +199,38 @@ func scanSignerHeaderSet(fset *token.FileSet, file *ast.File, rel string, info *
 			Message: "http.Header.Set with key \"" + keyVal + "\" called outside " +
 				"(SignedHeaders).Apply; signature headers must only be written by " +
 				"SignedHeaders.Apply (WEBHOOK-SIGNER-FUNNEL-01/A1)",
+		})
+	})
+	return out
+}
+
+// scanSignerHeaderSetMethodValue implements A1's method-value closure (review
+// #1733 F2): (net/http.Header).Set captured as a METHOD VALUE rather than called
+// directly — e.g. `set := req.Header.Set; set("webhook-signature", v)` — bypasses
+// the direct-call key check, because the eventual key is not visible at the capture
+// site. There is no legitimate reason to capture Header.Set in kernel/webhook or
+// runtime/webhook (the sole signature-header writer is the direct calls inside
+// (SignedHeaders).Apply), so ANY such capture is a violation. Detection: a
+// SelectorExpr resolving to (net/http.Header).Set that is NOT a direct call callee.
+func scanSignerHeaderSetMethodValue(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
+	var out []Diagnostic
+	// SelectorExprs that ARE direct call callees are handled by scanSignerHeaderSet.
+	directCallee := map[*ast.SelectorExpr]bool{}
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+			directCallee[sel] = true
+		}
+	})
+	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+		if directCallee[sel] || !isNetHTTPHeaderSetSelector(info, sel) {
+			return
+		}
+		out = append(out, Diagnostic{
+			Rel:  rel,
+			Line: fset.Position(sel.Pos()).Line,
+			Message: "net/http.Header.Set captured as a method value (not a direct call); " +
+				"signature-header writes must be direct (SignedHeaders).Apply calls so the key " +
+				"is verifiable (WEBHOOK-SIGNER-FUNNEL-01/A1)",
 		})
 	})
 	return out
@@ -232,6 +278,7 @@ func TestWebhookSignerFunnel(t *testing.T) {
 					continue
 				}
 				a1 = append(a1, scanSignerHeaderSet(p.Fset, f, rel, p.TypesInfo)...)
+				a1 = append(a1, scanSignerHeaderSetMethodValue(p.Fset, f, rel, p.TypesInfo)...)
 			}
 			return nil
 		})
@@ -245,13 +292,14 @@ func TestWebhookSignerFunnel(t *testing.T) {
 //
 // The fixture covers:
 //
-//   - raw string literal key "webhook-signature"
-//   - const key whose value is "webhook-signature"
-//   - const key whose value is "webhook-id"
-//   - const key whose value is "webhook-timestamp"
+//   - raw string literal key "webhook-signature" (direct call)
+//   - const key whose value is "webhook-signature" (direct call)
+//   - const key whose value is "webhook-id" (direct call)
+//   - const key whose value is "webhook-timestamp" (direct call)
+//   - a (net/http.Header).Set method-value capture `set := h.Set` (#1733 F2)
 //
-// so that dropping any one of the three header names from webhookSignatureHeaders
-// causes this test to fail.
+// so that dropping any one of the three header names from webhookSignatureHeaders,
+// or the method-value branch, causes this test to fail.
 func TestWebhookSignerFunnel_ReverseFixture(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -273,21 +321,23 @@ func TestWebhookSignerFunnel_ReverseFixture(t *testing.T) {
 					continue
 				}
 				a1 = append(a1, scanSignerHeaderSet(p.Fset, f, rel, p.TypesInfo)...)
+				a1 = append(a1, scanSignerHeaderSetMethodValue(p.Fset, f, rel, p.TypesInfo)...)
 			}
 			return nil
 		})
 
-	// The fixture has exactly 4 violations:
-	//   - 1 raw string literal key "webhook-signature"
-	//   - 3 const-keyed calls, one per header name (webhook-id / webhook-timestamp
+	// The fixture has exactly 5 violations:
+	//   - 1 raw string literal key "webhook-signature" (direct call, scanSignerHeaderSet)
+	//   - 3 const-keyed direct calls, one per header name (webhook-id / webhook-timestamp
 	//     / webhook-signature)
-	// Asserting ≥4 ensures that dropping ANY single fixture violation (e.g. removing
-	// one const form or one header name from webhookSignatureHeaders) causes this
-	// self-test to fail immediately, rather than passing on the remaining 3.
-	const webhookSignerFixtureMinViolations = 4
+	//   - 1 method-value capture `set := h.Set` (scanSignerHeaderSetMethodValue, #1733 F2)
+	// Asserting ≥5 ensures that dropping ANY single fixture violation (e.g. removing
+	// one const form, one header name, or the method-value branch) causes this
+	// self-test to fail immediately, rather than passing on the remaining ones.
+	const webhookSignerFixtureMinViolations = 5
 	assert.GreaterOrEqual(t, len(a1), webhookSignerFixtureMinViolations,
-		"A1 reverse fixture: expected ≥4 diagnostics (1 raw literal + 3 const refs, "+
-			"one per header name webhook-id / webhook-timestamp / webhook-signature)")
+		"A1 reverse fixture: expected ≥5 diagnostics (1 raw literal + 3 const refs + "+
+			"1 method-value capture)")
 }
 
 // ---- A2: SignedHeaders sealed-construction reflect freeze (#1492) ----
@@ -309,10 +359,15 @@ type frozenSignedHeadersField struct {
 
 // frozenSignedHeadersFields is the expected exact field tuple for
 // webhook.SignedHeaders (in Go struct declaration order). All MUST be unexported.
+// `valid` is the provenance flag (#1733 F1): only Signer.Sign sets it, and Apply
+// fail-closes on a zero value, so an external zero-value SignedHeaders cannot
+// write to the wire. It MUST stay unexported (an exported `Valid` would let an
+// external caller forge a valid value).
 var frozenSignedHeadersFields = []frozenSignedHeadersField{
 	{name: "deliveryID", typeName: "webhook.DeliveryID", exported: false},
 	{name: "timestamp", typeName: "string", exported: false},
 	{name: "signature", typeName: "string", exported: false},
+	{name: "valid", typeName: "bool", exported: false},
 }
 
 // TestWebhookSignerFunnel_SignedHeadersSealedFields is the A2 primary guard: it

@@ -31,12 +31,15 @@
 //     #893 / #1282 / #1375; #1243 is relabeled won't-do and named here as that
 //     ceiling's tracker. Detection: the Signer/Verifier interface type decls must
 //     contain an unexported method.
-//   - A4 (Medium, internal axis; #1243): every call to the package-internal
-//     computeMAC helper must have an enclosing func whose go/types FullName ∈
-//     {hmacSigner.Sign, hmacVerifier.Verify}. This is the actual enforcement of
-//     "only the sanctioned signer/verifier may compute a MAC", closing the A3
-//     internal axis at Medium (Hard is the permanent ceiling above). Detection:
-//     info.Uses callee FullName == computeMAC's AND enclosing FullName ∉ allowlist.
+//   - A4 (Medium, internal axis; #1243): every USE of the package-internal
+//     computeMAC symbol — direct call, parenthesized call, OR function-value
+//     capture (`macFn := computeMAC`; the bypass review #1733 F4 flagged) — must
+//     have an enclosing func whose go/types FullName ∈ {hmacSigner.Sign,
+//     hmacVerifier.Verify}. This is the actual enforcement of "only the sanctioned
+//     signer/verifier may compute a MAC", closing the A3 internal axis at Medium
+//     (Hard is the permanent ceiling above). Detection: walk every ident, match
+//     info.Uses FullName == computeMAC's, require enclosing FullName ∈ allowlist
+//     (the computeMAC definition is in info.Defs, not info.Uses, so it never fires).
 //
 // Blind spots (ai-robust 强制反向自检; each has a reverse self-test in the _test.go):
 //
@@ -168,34 +171,34 @@ func scanWebhookHMACNew(fset *token.FileSet, file *ast.File, rel string, info *t
 	return out
 }
 
-// scanWebhookComputeMACCallers implements A4: every call to the package-internal
-// computeMAC helper must have an enclosing func whose go/types FullName is in
-// allowlist. computeMAC is called as a bare same-package ident; the callee is
-// resolved via info.Uses and matched on FullName so a same-named func elsewhere
-// is not mistaken for it. Passing allowlist as a parameter lets the anti-vacuity
-// self-test re-run with an empty allowlist to prove the scan actually detects the
-// real callers.
+// scanWebhookComputeMACCallers implements A4: every USE of the package-internal
+// computeMAC symbol must have an enclosing func whose go/types FullName is in
+// allowlist. It walks every identifier and matches info.Uses to computeMAC's
+// FullName, so ALL use forms are covered — direct call `computeMAC(...)`,
+// parenthesized `(computeMAC)(...)`, and function-value capture
+// `macFn := computeMAC` (the bypass review #1733 F4 flagged); the older
+// call.Fun.(*ast.Ident) form only caught direct calls. The computeMAC *definition*
+// ident lives in info.Defs (not info.Uses), so signer.go's declaration never
+// false-fires. Passing allowlist as a parameter lets the anti-vacuity self-test
+// re-run with an empty allowlist to prove the scan detects the real uses.
 func scanWebhookComputeMACCallers(
 	fset *token.FileSet, file *ast.File, rel string, info *types.Info, allowlist map[string]bool,
 ) []Diagnostic {
 	var out []Diagnostic
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		ident, ok := call.Fun.(*ast.Ident)
-		if !ok {
-			return
-		}
-		fnObj, ok := info.Uses[ident].(*types.Func)
+	EachInSubtree[ast.Ident](file, func(id *ast.Ident) {
+		fnObj, ok := info.Uses[id].(*types.Func)
 		if !ok || fnObj.FullName() != hmacSanctionedComputeMACFunc {
 			return
 		}
-		if enc, ok := ResolveEnclosingFunc(info, file, call); ok && enc != nil && allowlist[enc.FullName()] {
+		if enc, ok := ResolveEnclosingFunc(info, file, id); ok && enc != nil && allowlist[enc.FullName()] {
 			return
 		}
 		out = append(out, Diagnostic{
 			Rel:  rel,
-			Line: fset.Position(call.Pos()).Line,
-			Message: "computeMAC called outside the sanctioned signer/verifier; MAC computation " +
-				"must funnel through hmacSigner.Sign / hmacVerifier.Verify (WEBHOOK-HMAC-FUNNEL-01/A4)",
+			Line: fset.Position(id.Pos()).Line,
+			Message: "computeMAC used outside the sanctioned signer/verifier (direct call, " +
+				"parenthesized call, or function-value capture); MAC computation must funnel " +
+				"through hmacSigner.Sign / hmacVerifier.Verify (WEBHOOK-HMAC-FUNNEL-01/A4)",
 		})
 	})
 	return out

@@ -215,15 +215,26 @@ type Headers struct {
 
 // SignedHeaders is the provenance-sealed OUTBOUND signature-header set: the value
 // [Signer.Sign] produces and [SignedHeaders.Apply] writes onto an outbound
-// request. Its fields are unexported and there is no exported constructor, so a
-// package-external caller cannot build one — the only SignedHeaders that can reach
-// the wire via Apply is one produced by the sealed [Signer.Sign]
-// (WEBHOOK-SIGNER-FUNNEL-01 upstream Hard, sealed construction; #1492). This is
-// the outbound counterpart to the inbound [Headers] parse DTO.
+// request. All fields are unexported, INCLUDING a `valid` provenance flag that
+// only [Signer.Sign] sets. A package-external caller can neither build a populated
+// literal (unexported fields) nor set `valid` on a zero value, so it cannot obtain
+// a valid SignedHeaders; [SignedHeaders.Apply] fail-closes (writes nothing) on a
+// zero value. Hence the only SignedHeaders that can write to the wire is one
+// produced by the sealed [Signer.Sign] = WEBHOOK-SIGNER-FUNNEL-01 upstream Hard
+// (external; #1492, valid-token closure of the zero-value-construction gap found
+// in review #1733 F1 — unexported fields alone do NOT stop `var h SignedHeaders`).
+// The in-package `SignedHeaders{valid: true}` literal remains the permanent Go
+// ceiling (same family as #851/#893/#1282/#1375). This is the outbound counterpart
+// to the inbound [Headers] parse DTO.
 type SignedHeaders struct {
 	deliveryID DeliveryID
 	timestamp  string
 	signature  string
+	// valid is the provenance flag — only Signer.Sign sets it true. A zero-value
+	// SignedHeaders (the only form a package-external caller can construct) has
+	// valid==false, and Apply fail-closes on it, so a non-Sign-produced value can
+	// never write signature headers to the wire.
+	valid bool
 }
 
 // DeliveryID returns the signed delivery identifier. These accessors expose the
@@ -263,14 +274,21 @@ const (
 // arbitrary value, and the archtest locks every Header.Set of these constants to
 // this method body. That makes the *write site* uniform.
 //
-// Provenance is now type-system closed (#1492): [SignedHeaders] has unexported
-// fields and no exported constructor, and only [Signer.Sign] produces one (sealed
-// construction, WEBHOOK-SIGNER-FUNNEL-01/A2 reflect freeze). So the value Apply
-// writes always originated from the sealed signer — no package-external caller can
-// hand-build a SignedHeaders to feed the wire. The package-internal holder axis (a
-// same-package literal) remains the permanent Go ceiling shared with
-// #851/#893/#1282/#1375.
+// Provenance is type-system closed (#1492 + review #1733 F1): Apply fail-closes on
+// a zero-value SignedHeaders (valid==false) — the ONLY form a package-external
+// caller can construct, since the fields (including `valid`) are unexported. Only
+// [Signer.Sign] sets valid==true, so the value Apply writes always originated from
+// the sealed signer; no external zero-value nor hand-built value can write
+// signature headers to the wire (WEBHOOK-SIGNER-FUNNEL-01/A2 reflect freeze locks
+// the field set incl. `valid`). The in-package `SignedHeaders{valid: true}` literal
+// remains the permanent Go ceiling shared with #851/#893/#1282/#1375.
 func (h SignedHeaders) Apply(header http.Header) {
+	if !h.valid {
+		// Fail-closed: a zero-value / non-Sign-produced SignedHeaders writes no
+		// signature headers; the receiver then rejects the delivery (observable),
+		// rather than letting an empty-signature delivery reach the wire.
+		return
+	}
 	header.Set(HeaderID, string(h.deliveryID))
 	header.Set(HeaderTimestamp, h.timestamp)
 	header.Set(HeaderSignature, h.signature)

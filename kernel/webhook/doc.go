@@ -23,12 +23,18 @@
 //     with no getter, and [Source.LogValue] redacts it, so a webhook secret
 //     can never reach slog/spans by accident — see the secret-leak defenses
 //     below.
-//   - [Headers] — the wire signature headers (delivery id, timestamp,
-//     signature) produced by a [Signer] and consumed by a [Verifier].
+//   - [Headers] — the INBOUND signature-header DTO (delivery id, timestamp,
+//     signature) that a [Verifier] consumes; the receiver builds it from raw
+//     request headers (untrusted input), so its fields are exported.
+//   - [SignedHeaders] — the OUTBOUND, provenance-sealed counterpart that
+//     [Signer.Sign] produces and [SignedHeaders.Apply] writes to the wire. Its
+//     fields are unexported, incl. a `valid` provenance flag only Sign sets, and
+//     Apply fail-closes on a zero value — so only a Sign-produced value reaches
+//     the wire (WEBHOOK-SIGNER-FUNNEL-01 upstream Hard external; #1492 + #1733 F1).
 //   - [Signer] / [Verifier] — sealed interfaces (unexported sealed() marker)
 //     so package-external implementations are a compile error. The sole
 //     in-package implementations are the HMAC-SHA256 signer/verifier built by
-//     [NewHMACSigner] / [NewHMACVerifier].
+//     [NewHMACSigner] / [NewHMACVerifier]; [Signer.Sign] returns a [SignedHeaders].
 //   - [SourceStore] / [SourceRegistry] — secret lookup interface + in-memory
 //     implementation (externally replaceable; persistent stores are a
 //     follow-up).
@@ -50,21 +56,24 @@
 //
 // Enforced by tools/archtest/webhook_hmac_funnel_test.go. Ratings:
 //
-//   - A1 (downstream Hard): crypto/hmac.New has exactly one callsite —
-//     computeMAC in signer.go. Any other hmac.New in this package fails CI.
-//     This also closes the package-internal upstream blind spot: any new struct
-//     that wants to sign MUST call hmac.New, which is allowlisted to signer.go.
+//   - A1 (downstream Hard): crypto/hmac.New has exactly one callsite (by go/types
+//     FullName) — computeMAC. Any other hmac.New in this package fails CI.
 //   - A2 (downstream Hard): signature comparison may only use crypto/hmac.Equal
 //     or crypto/subtle.ConstantTimeCompare; bytes.Equal / == over signature
 //     bytes fails CI (constant-time invariant as an AST lock, not a flaky
 //     timing test).
 //   - A3 (upstream Hard external / Medium internal): [Signer] / [Verifier]
 //     carry an unexported sealed() marker, so external implementations are a
-//     compile error (Hard). Package-internal new holders are not blocked by
-//     sealing (Medium) — covered transitively by A1. The explicit Hard-ization
-//     of the internal axis (unexported method-set interface + private
-//     construction, per the SPAN-SETATTR-HOLDER-SEAL precedent) is tracked in
-//     gh issue #1243; this godoc names it per ai-robust.md §Funnel 双向锁评级.
+//     compile error (Hard external). Package-internal new holders are NOT blocked
+//     by sealing, and A1 does NOT transitively cover them (A1 locks only
+//     crypto/hmac.New, not reuse of the package-level computeMAC helper) — that
+//     internal axis is covered by A4. True type-system Hard for it is a permanent
+//     Go ceiling (same family as #851/#893/#1282/#1375), tracked won't-do at gh
+//     #1243.
+//   - A4 (Medium, internal axis; #1243): every USE of the package-internal
+//     computeMAC symbol (direct/parenthesized call or function-value capture) must
+//     have an enclosing func ∈ {hmacSigner.Sign, hmacVerifier.Verify} — the actual
+//     enforcement of "only the sanctioned signer/verifier may compute a MAC".
 //
 // # Secret-leak defenses (Source.Secret)
 //

@@ -27,12 +27,14 @@
 //     same family as #851 / #893 / #1282 / #1375; #1243 is relabeled won't-do and
 //     named here as that ceiling's tracker. Detection: the Signer/Verifier
 //     interface type decls must contain an unexported method.
-//   - A4 (Medium, internal axis; #1243): every call to the package-internal
-//     computeMAC helper must have an enclosing func whose go/types FullName ∈
-//     {hmacSigner.Sign, hmacVerifier.Verify}. This is the actual enforcement of
-//     "only the sanctioned signer/verifier may compute a MAC", closing the A3
-//     internal axis at Medium. Detection: info.Uses callee FullName == computeMAC's
-//     AND enclosing FullName ∉ allowlist.
+//   - A4 (Medium, internal axis; #1243): every USE of the package-internal
+//     computeMAC symbol — direct call, parenthesized call, OR function-value
+//     capture (`macFn := computeMAC`; bypass review #1733 F4) — must have an
+//     enclosing func whose go/types FullName ∈ {hmacSigner.Sign,
+//     hmacVerifier.Verify}. This is the actual enforcement of "only the sanctioned
+//     signer/verifier may compute a MAC", closing the A3 internal axis at Medium.
+//     Detection: walk every ident, match info.Uses FullName == computeMAC's,
+//     require enclosing FullName ∈ allowlist (definition is in info.Defs).
 //
 // Blind spots (ai-robust 强制反向自检; each has a reverse self-test below):
 //

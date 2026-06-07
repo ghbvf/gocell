@@ -71,6 +71,7 @@ func (s *hmacSigner) Sign(payload []byte, ts time.Time, deliveryID DeliveryID) (
 		deliveryID: deliveryID,
 		timestamp:  timestamp,
 		signature:  signature,
+		valid:      true, // provenance flag — only Sign sets it; Apply fail-closes on false.
 	}, nil
 }
 
