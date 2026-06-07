@@ -101,7 +101,7 @@ jobs:
             pkgs: ./cmd/... ./tests/... ./contracts/...
             static_checks: false
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           # Need full history so `golangci-lint --new-from-merge-base=origin/<base-ref>`
           # can run `git merge-base` successfully. Only the kernel shard actually
@@ -491,7 +491,7 @@ jobs:
             run_adapters_extras: false
             run_adapters_race: false
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
@@ -836,7 +836,7 @@ jobs:
       E2E_PG_PASSWORD: gocell-e2e-ci-pwd
       GOCELL_APP_PASSWORD: gocell-app-restricted-pw-ci
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: go.mod
@@ -916,7 +916,7 @@ jobs:
       fail-fast: false
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: go.mod
@@ -957,7 +957,7 @@ jobs:
       # default shallow checkout is sufficient and faster. (build-test sets
       # fetch-depth: 0 only because golangci-lint --new-from-merge-base
       # needs `git merge-base`.)
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: go.mod
@@ -1003,7 +1003,7 @@ jobs:
     # This ensures new code in DB-path branches (schema_guard, outbox_relay)
     # counts toward the coverage gate.
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       # Downloads all per-shard unit coverage artifacts into the workspace
       # root (merge-multiple: true flattens shard-keyed directories). Each
@@ -1083,7 +1083,7 @@ jobs:
   verify-codegen:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
