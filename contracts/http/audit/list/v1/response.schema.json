@@ -39,6 +39,10 @@
             "type": "string",
             "format": "date-time"
           },
+          "scope": {
+            "type": "string",
+            "description": "Origin of the audit row relative to the calling tenant: \"tenant\" for the caller's own-tenant rows, \"system\" for tenant-less framework/system rows (e.g. bootstrap.auth.fail) that the per-tenant RLS read clause surfaces to every tenant (#1618). Lets a tenant admin distinguish their own audit trail from global system events without exposing any other tenant's id. Empty for rows predating its introduction."
+          },
           "payload": {}
         },
         "required": [

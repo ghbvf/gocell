@@ -347,6 +347,7 @@ func Run(t *testing.T, factory Factory, protocol *ledger.Protocol) {
 	t.Run("Restart_Recovery", func(t *testing.T) { runRestartRecovery(t, factory) })
 	t.Run("Idempotency_DuplicateContent", func(t *testing.T) { runIdempotencyDuplicateContent(t, factory) })
 	t.Run("Idempotency_DifferentTimestamp_SameEventID", func(t *testing.T) { runIdempotencyDifferentTimestampSameEventID(t, factory) })
+	t.Run("Idempotency_PerTenant_EventID", func(t *testing.T) { runIdempotencyPerTenantEventID(t, factory) })
 	t.Run("Concurrent_Append_HashChainValid", func(t *testing.T) { runConcurrentAppendHashChainValid(t, factory) })
 	t.Run("StrictPayload_InvalidJSON", func(t *testing.T) { runStrictPayloadInvalidJSON(t, factory) })
 	t.Run("Verify_FullRange", func(t *testing.T) { runVerifyFullRange(t, factory) })
@@ -576,6 +577,51 @@ func runIdempotencyDifferentTimestampSameEventID(t *testing.T, factory Factory) 
 		t.Fatal("expected ErrAuditLedgerAlreadyExists for same EventID with different Timestamp")
 	}
 	assertErrCode(t, err, errcode.ErrAuditLedgerAlreadyExists)
+}
+
+// runIdempotencyPerTenantEventID pins the per-(namespace, tenant) idempotency
+// boundary introduced by migration 055 (UNIQUE(namespace, tenant_id, event_id),
+// #1618). The dedup key gained a tenant_id axis, so the SAME EventID:
+//
+//   - conflicts WITHIN one tenant (→ ErrAuditLedgerAlreadyExists), and
+//   - is ALLOWED ACROSS tenants — each per-tenant sub-chain dedups independently,
+//     so a tenant-B event reusing a tenant-A EventID is not a duplicate.
+//
+// The pre-055 namespace-global dedup (UNIQUE(namespace, event_id)) would have
+// rejected the cross-tenant reuse; this case is the regression guard that the key
+// is now per-tenant. Runs on every backend (mem + PG via factory).
+func runIdempotencyPerTenantEventID(t *testing.T, factory Factory) {
+	store, _, fc, cleanup := factory(t)
+	defer cleanup()
+
+	const sharedEventID = "per-tenant-idem-evt"
+	mk := func(tenantID string) *ledger.Entry {
+		return &ledger.Entry{
+			EventID:   sharedEventID,
+			EventType: "idempotency.tenant.test",
+			ActorID:   "actor",
+			TenantID:  tenantID,
+			Timestamp: fc.Now(),
+			Payload:   []byte(`{"k":"v"}`),
+		}
+	}
+
+	// Tenant A: first append commits.
+	if err := store.Append(context.Background(), mk(conformanceTenantA)); err != nil {
+		t.Fatalf("tenant-A first Append: %v", err)
+	}
+	// Tenant A: same EventID again → duplicate within the tenant chain.
+	errDup := store.Append(context.Background(), mk(conformanceTenantA))
+	if errDup == nil {
+		t.Fatal("tenant-A duplicate EventID: expected ErrAuditLedgerAlreadyExists, got nil")
+	}
+	assertErrCode(t, errDup, errcode.ErrAuditLedgerAlreadyExists)
+
+	// Tenant B: SAME EventID is allowed — the key is (namespace, tenant_id,
+	// event_id), so cross-tenant chains dedup independently.
+	if err := store.Append(context.Background(), mk(conformanceTenantB)); err != nil {
+		t.Fatalf("tenant-B same EventID must be allowed (per-tenant idempotency): %v", err)
+	}
 }
 
 // runConcurrentAppendHashChainValid: 100 concurrent appends; chain must be valid.
@@ -1529,7 +1575,9 @@ func (tc visGetCase) run(t *testing.T, store ledger.Store) {
 		return
 	}
 	// Non-OK: must return tc.wantErr (IDOR-safe collapse → ErrAuditLedgerNotFound;
-	// RowScopeAll → ErrInternal), not the entry.
+	// RowScopeAll → ErrInternal code with KindNotImplemented → HTTP 501), not the
+	// entry. The conformance asserts the Code (ErrInternal, the 5xx wire-collapse
+	// code); the 501 status mapping is asserted at the handler layer.
 	errcodetest.AssertCode(t, err, tc.wantErr)
 	if got != nil {
 		t.Errorf("GetBySeq(vis=%v): expected nil entry, got %+v", tc.scope, got)
@@ -1582,7 +1630,8 @@ func runQueryVisibilityObligations(t *testing.T, factory Factory) {
 		{"tenant-wide", tenant.RowScopeTenant, "", 3, "", ""},
 		// RowScopeAll is fail-closed on every backend (deferred to backlog under
 		// #1618 FORCE RLS; no silent degrade to tenant scope) — see
-		// RowScopeAllUnsupportedError.
+		// RowScopeAllUnsupportedError. Code = ErrInternal (5xx wire-collapse);
+		// Kind = KindNotImplemented → HTTP 501 at the handler (review F5).
 		{"all-fail-closed", tenant.RowScopeAll, "", 0, "", errcode.ErrInternal},
 	}
 	for _, tc := range cases {
@@ -1622,7 +1671,7 @@ func runGetBySeqVisibilityObligations(t *testing.T, factory Factory) {
 		{"tenant-wide-found", tenant.RowScopeTenant, "", true, ""},
 		// RowScopeAll is fail-closed on every backend (deferred to backlog under
 		// #1618 FORCE RLS; distinct from the IDOR-collapse NotFound: it is a
-		// deferred-capability wiring error, ErrInternal).
+		// deferred CAPABILITY, KindNotImplemented → HTTP 501, Code ErrInternal).
 		{"all-fail-closed", tenant.RowScopeAll, "", false, errcode.ErrInternal},
 	}
 	for _, tc := range cases {

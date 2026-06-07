@@ -48,6 +48,7 @@ type ResponseDataItem struct {
 	OccurredAt string `json:"occurredAt,omitempty"`
 	// format: date-time
 	Timestamp string `json:"timestamp"`
+	Scope     string `json:"scope,omitempty"`
 	Payload   any    `json:"payload,omitempty"`
 }
 

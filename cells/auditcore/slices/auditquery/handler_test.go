@@ -981,13 +981,15 @@ func assertActorBindingCase(t *testing.T, mux *http.ServeMux, tc actorBindingCas
 //
 //	non-admin usrA in tenantA → count 1  (RowScopeSelf, own row only)
 //	admin in tenantA           → count 2  (RowScopeTenant: tenantA + tenant-less; NOT tenantB)
-//	super-admin (any tenant)   → fail-closed 500 (RowScopeAll deferred under #1618 FORCE RLS)
+//	super-admin (any tenant)   → fail-closed 501 (RowScopeAll deferred under #1618 FORCE RLS)
 //
 // #1618 merge note: PR-5 (#1343) shipped super-admin RowScopeAll as a working
 // cross-tenant audit read (count 3). Under #1618's per-tenant FORCE RLS the audit
-// store fail-closes RowScopeAll (RowScopeAllUnsupportedError → 500) — the
-// NOBYPASSRLS serving role cannot enumerate tenants, so cross-tenant audit read is
-// deferred to backlog. The mandatory FR-007 slog.Error audit is still emitted
+// store fail-closes RowScopeAll (RowScopeAllUnsupportedError → 501 Not Implemented)
+// — the NOBYPASSRLS serving role cannot enumerate tenants, so the cross-tenant
+// audit CAPABILITY is deferred to backlog. 501 (not 500) because the super-admin
+// request is policy-authorized but the capability is not yet implemented (review
+// F5; RFC 9110 §15.6.2). The mandatory FR-007 slog.Error audit is still emitted
 // inside p.RowVisibility before the store rejects, so the FR-007 assertion holds.
 func TestHandleQuery_RowScopeVisibilityMatrix(t *testing.T) {
 	// Install slog capture to assert FR-007: super-admin cross-tenant access must
@@ -1031,40 +1033,45 @@ func TestHandleQuery_RowScopeVisibilityMatrix(t *testing.T) {
 	}
 
 	type visCase struct {
-		name      string
-		subject   string
-		roles     []string
-		tenantID  string
-		wantCount int
+		name          string
+		subject       string
+		roles         []string
+		tenantID      string
+		wantCount     int
+		wantSystemRow bool // #1618 F7: a tenant-less system row appears, marked scope="system"
 	}
 
 	cases := []visCase{
 		{
-			// non-admin usrA: RowScopeSelf → sees only its own row (vsm-a1).
-			name:      "non_admin_self_scope",
-			subject:   "usrA",
-			roles:     nil,
-			tenantID:  auditQueryTestTenant,
-			wantCount: 1,
+			// non-admin usrA: RowScopeSelf → sees only its own row (vsm-a1). The
+			// system row (actor=system:bootstrap) is filtered out by the owner axis.
+			name:          "non_admin_self_scope",
+			subject:       "usrA",
+			roles:         nil,
+			tenantID:      auditQueryTestTenant,
+			wantCount:     1,
+			wantSystemRow: false,
 		},
 		{
 			// admin in tenantA: RowScopeTenant → sees tenantA rows + tenant-less
-			// system row. The vsm-b1 (tenantB) row must NOT be visible.
-			name:      "admin_tenant_scope",
-			subject:   "admin-a",
-			roles:     []string{auth.RoleAdmin},
-			tenantID:  auditQueryTestTenant,
-			wantCount: 2,
+			// system row (marked scope="system"). The vsm-b1 (tenantB) row must NOT
+			// be visible.
+			name:          "admin_tenant_scope",
+			subject:       "admin-a",
+			roles:         []string{auth.RoleAdmin},
+			tenantID:      auditQueryTestTenant,
+			wantCount:     2,
+			wantSystemRow: true,
 		},
 		{
 			// super-admin: RowScopeAll is fail-closed under #1618 FORCE RLS
-			// (deferred) — the handler returns 500. Must still trigger exactly one
+			// (deferred) — the handler returns 501. Must still trigger exactly one
 			// FR-007 slog.Error audit record (emitted before the store rejects).
 			name:      "superadmin_cross_tenant_failclosed",
 			subject:   "super-sa",
 			roles:     []string{auth.RoleSuperAdmin},
 			tenantID:  auditQueryTestTenant,
-			wantCount: 0, // unused: super-admin asserts a 500, not a row count
+			wantCount: 0, // unused: super-admin asserts a 501, not a row count
 		},
 	}
 
@@ -1095,17 +1102,33 @@ func TestHandleQuery_RowScopeVisibilityMatrix(t *testing.T) {
 
 			if isSuperAdmin(tc.roles) {
 				// #1618 merge: RowScopeAll fail-closes under FORCE RLS (deferred);
-				// the handler surfaces RowScopeAllUnsupportedError (KindInternal) as a
-				// 500. The FR-007 audit is still emitted (asserted below).
-				require.Equal(t, http.StatusInternalServerError, w.Code,
-					"tc=%s: super-admin RowScopeAll must fail-closed under FORCE RLS, body=%s", tc.name, w.Body.String())
+				// the handler surfaces RowScopeAllUnsupportedError (KindNotImplemented)
+				// as a 501 — policy-authorized but capability-deferred (review F5).
+				// The FR-007 audit is still emitted (asserted below).
+				require.Equal(t, http.StatusNotImplemented, w.Code,
+					"tc=%s: super-admin RowScopeAll must fail-closed (501) under FORCE RLS, body=%s", tc.name, w.Body.String())
 			} else {
 				require.Equal(t, http.StatusOK, w.Code, "tc=%s body=%s", tc.name, w.Body.String())
-				var resp map[string]any
+				var resp struct {
+					Data []struct {
+						Scope string `json:"scope"`
+					} `json:"data"`
+				}
 				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp), "tc=%s", tc.name)
-				data, ok := resp["data"].([]any)
-				require.True(t, ok, "tc=%s: data field must be array", tc.name)
-				assert.Len(t, data, tc.wantCount, "tc=%s: wrong row count", tc.name)
+				assert.Len(t, resp.Data, tc.wantCount, "tc=%s: wrong row count", tc.name)
+				// #1618 F7: every returned row carries a scope marker; the admin's
+				// tenant-wide read surfaces the tenant-less system row marked
+				// "system", own-tenant rows "tenant".
+				sawSystem := false
+				for _, row := range resp.Data {
+					assert.Contains(t, []string{"tenant", "system"}, row.Scope,
+						"tc=%s: row scope must be tenant|system, got %q", tc.name, row.Scope)
+					if row.Scope == "system" {
+						sawSystem = true
+					}
+				}
+				assert.Equal(t, tc.wantSystemRow, sawSystem,
+					"tc=%s: system-row scope visibility mismatch", tc.name)
 			}
 
 			// FR-007: super-admin path must emit exactly one slog.Error cross-tenant

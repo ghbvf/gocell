@@ -273,6 +273,26 @@ func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 		TraceID:       e.TraceID,
 		OccurredAt:    occurredAt,
 		Timestamp:     e.Timestamp.Format(time.RFC3339Nano),
+		Scope:         rowScope(e.TenantID),
 		Payload:       json.RawMessage(redaction.RedactPayload(e.Payload)),
 	}
 }
+
+// rowScope classifies an audit row relative to the calling tenant for the wire
+// `scope` field (#1618 review F7). A tenant-scoped query returns the caller's own
+// rows PLUS tenant-less system/framework rows (tenant_id == "" — e.g.
+// bootstrap.auth.fail), which the per-tenant RLS `OR tenant_id=”` read clause
+// surfaces to every tenant. Marking each row "system" vs "tenant" lets a tenant
+// admin distinguish global system events from their own audit trail WITHOUT
+// exposing any other tenant's id (per-row tenantId is still deliberately omitted).
+func rowScope(tenantID string) string {
+	if tenantID == "" {
+		return scopeSystem
+	}
+	return scopeTenant
+}
+
+const (
+	scopeSystem = "system"
+	scopeTenant = "tenant"
+)

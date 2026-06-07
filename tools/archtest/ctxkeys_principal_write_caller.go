@@ -117,6 +117,11 @@ const ctxkeysPkgPath = PlatformModulePath + "/pkg/ctxkeys"
 // not a production business code path; the call is semantically equivalent to
 // the auth bridge and thus sanctioned. This entry was introduced alongside the
 // multi-tenancy epic (#1337 PR-1) but missed the initial allowlist update.
+// cells/auditcore/auditcoretest/canonical.go (NewSessionCreatedEntry) is the
+// same kind of sanctioned test-helper: it stamps a tenant into the ctx so the
+// canonical session.created entry it builds carries one, matching real post-auth
+// emits — required since the auditcore appender fail-closed rejects a tenant-less
+// business event (#1618 F1).
 //
 // WithTenantID gained its producer writer (runtime/auth/middleware.go) with the
 // multi-tenancy epic (#1337 PR-1): injectPrincipalCtxKeys now writes the JWT
@@ -146,10 +151,11 @@ var principalSetterAllowlist = map[string]map[string]struct{}{
 		"kernel/projection/system_principal.go": {}, // saga journal carrier (PR-03 #1627)
 	},
 	"WithTenantID": {
-		"runtime/auth/middleware.go":               {}, // producer bridge — JWT tenant_id claim (#1337)
-		"kernel/outbox/principal.go":               {}, // consumer-side RestoreToContext
-		"kernel/projection/system_principal.go":    {}, // saga journal carrier (PR-03 #1627)
-		"cells/configcore/configcoretest/fakes.go": {}, // CtxWithTenant test-helper — simulates JWT auth ctx (#1337, missed allowlist)
+		"runtime/auth/middleware.go":                 {}, // producer bridge — JWT tenant_id claim (#1337)
+		"kernel/outbox/principal.go":                 {}, // consumer-side RestoreToContext
+		"kernel/projection/system_principal.go":      {}, // saga journal carrier (PR-03 #1627)
+		"cells/configcore/configcoretest/fakes.go":   {}, // CtxWithTenant test-helper — simulates JWT auth ctx (#1337, missed allowlist)
+		"cells/auditcore/auditcoretest/canonical.go": {}, // NewSessionCreatedEntry test-helper — simulates post-auth ctx (#1618 F1)
 	},
 }
 

@@ -110,6 +110,11 @@ var tenantTxScopeAllowlist = map[string]struct{}{
 	"cells/configcore/internal/scopedread/scopedread.go": {},
 	"cells/accesscore/internal/scopedtx/scopedtx.go":     {},
 	"runtime/audit/ledger/storetest/suite.go":            {},
+	// auditcoretest.BuildAuditcoreChain returns a tenant-scoped ctx so that
+	// Tail/Verify read-back targets the per-tenant chain its entries land in
+	// (#1618). Same test-support precedent as storetest/suite.go (non-_test.go
+	// helper imported by other test packages, so it lands in Production() scan).
+	"cells/auditcore/auditcoretest/builders.go": {},
 }
 
 // TestTenantTxScopeWriteCaller01 asserts every production reference to

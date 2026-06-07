@@ -172,13 +172,14 @@ func TestHttpAuditListV1Serve_PrincipalProjection(t *testing.T) {
 
 	body := rec.Body.String()
 
-	// PRESENT — subjectId + correlationId + traceId surfaced.
+	// PRESENT — subjectId + correlationId + traceId + scope surfaced.
 	var resp struct {
 		Data []struct {
 			SubjectID     string `json:"subjectId"`
 			CorrelationID string `json:"correlationId"`
 			TraceID       string `json:"traceId"`
 			OccurredAt    string `json:"occurredAt"`
+			Scope         string `json:"scope"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal([]byte(body), &resp); err != nil {
@@ -195,6 +196,12 @@ func TestHttpAuditListV1Serve_PrincipalProjection(t *testing.T) {
 	}
 	if resp.Data[0].TraceID != "trace-proj-001" {
 		t.Errorf("traceId = %q, want %q", resp.Data[0].TraceID, "trace-proj-001")
+	}
+	// PRESENT — scope marks this as a tenant-owned row (#1618 review F7): the
+	// seeded row carries a tenant and the caller is in that tenant, so the row is
+	// the caller's own audit, not a tenant-less system event.
+	if resp.Data[0].Scope != "tenant" {
+		t.Errorf("scope = %q, want %q (own-tenant row)", resp.Data[0].Scope, "tenant")
 	}
 	// PRESENT — occurredAt at nanosecond precision (F6).
 	if want := occurred.Format(time.RFC3339Nano); resp.Data[0].OccurredAt != want {

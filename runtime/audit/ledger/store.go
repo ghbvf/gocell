@@ -19,11 +19,18 @@ import (
 // ledger backend fail-closes RowScopeAll (no silent degrade to tenant scope — a
 // partial "all-within-my-tenant" view would be a misleading under-delivery). It
 // is shared by MemStore and the PG LedgerStore so the rejection is byte-identical
-// across backends and exercised uniformly by the conformance suite. The
-// classification is KindInternal: a super-admin's RowScopeAll obligation reaching
-// this deferred read path is a wiring error, not user input.
+// across backends and exercised uniformly by the conformance suite.
+//
+// The classification is KindNotImplemented (HTTP 501, RFC 9110 §15.6.2): the
+// super-admin request is policy-AUTHORIZED (auditQueryPolicy admits RoleSuperAdmin)
+// but the cross-tenant-audit CAPABILITY is deferred / not yet implemented — a 500
+// would mislead ops into chasing an unexpected server fault and pollute the 5xx
+// SLO (#1618 review F5). 501 is still 5xx, so the wire body collapses to the
+// generic ErrInternal code (errcode.PublicCodeForStatus); only the status differs.
+// The FR-007 cross-tenant audit slog.Error is still emitted upstream (at mint,
+// inside auth.Principal.RowVisibility) regardless of this store-side rejection.
 func RowScopeAllUnsupportedError() error {
-	return errcode.New(errcode.KindInternal, errcode.ErrInternal,
+	return errcode.New(errcode.KindNotImplemented, errcode.ErrInternal,
 		"audit ledger: RowScopeAll is not supported on this read path")
 }
 

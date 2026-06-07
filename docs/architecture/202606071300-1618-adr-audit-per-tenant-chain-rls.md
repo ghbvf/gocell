@@ -88,7 +88,7 @@ under FORCE RLS.
 |---|---|---|
 | TENANT — DB (primary) | FORCE RLS + `gocell_app` NOBYPASSRLS (#1676); unset GUC → 0 tenant rows | **Hard** (Postgres-enforced; serving role cannot bypass) |
 | TENANT — GUC injection | single `tenantScopeForTx`→`writeTenantGUC` funnel from ctxkeys / scope | **Hard** (PG-SETLOCAL-FUNNEL-01 + CTXKEYS-PRINCIPAL-WRITE-CALLER-01 + TENANT-TXSCOPE-WRITE-CALLER-01) |
-| TENANT — app layer (DiD + mem) | `Store.Query` typed positional `tenant.TenantID` param | **Hard** (compile-time; omission/un-typing = compile error, also caught by ROWSCOPE obligation-slot check) |
+| TENANT — app layer (DiD + mem) | `Store.Query` typed positional `tenant.TenantID` param | **Hard (caller) / Medium (signature)** — compile-time Hard FOR CALLERS (cannot omit the arg; `tenant.TenantID` is a sealed newtype, so a bare `string` cannot be passed). The param's PRESENCE in the signature is locked by archtest `AUDIT-QUERY-TENANT-PARAM-01` (Medium, review F4): dropping it entirely type-checks and PASSES ROWSCOPE (its no-tenant obligation-slot form), so a dedicated lock is required. (Un-typing it to `string` additionally fails ROWSCOPE's obligation-slot check.) |
 | OWNER (actor_id) | sealed `tenant.RowVisibility` + `vis.Allows`/`SQLPredicate` | **Hard** (existing, ROWSCOPE-REPO-PARAM-FUNNEL-01) |
 | Write surface | appender sole writer; `OR tenant_id=''` WITH CHECK weakening | **Hard boundary** (AUDITCORE-APPENDER-SINGLE-SOURCE-01 — no tenant-controlled INSERT path) |
 
@@ -97,9 +97,15 @@ targets repos where *every* method is tenant-scoped (config/accesscore). The aud
 `Store` is a chain primitive — only `Query` takes the typed tenant param; the
 chain reads (`GetBySeq`/`Verify`/`Tail`) derive tenant from ctx. Enrolling would
 need 5 carve-outs for a 1-tenant-method interface (cargo-culting). The tenant
-param's Hard guarantee is the compile-time positional requirement, and
-ROWSCOPE-REPO-PARAM-FUNNEL-01 already validates the obligation-slot-after-tenant
-shape (so un-typing the tenant param to `string` fails the obligation-slot check).
+param's compile-time requirement is Hard FOR CALLERS, but its PRESENCE in the
+`Query` signature is locked separately by archtest `AUDIT-QUERY-TENANT-PARAM-01`
+(Medium, review F4). ROWSCOPE-REPO-PARAM-FUNNEL-01 catches *un-typing* the tenant
+param to `string` (its obligation slot then resolves to a non-`RowVisibility`
+param[1]), but NOT *dropping* the param entirely — that lands the obligation at
+param[1], ROWSCOPE's sanctioned no-tenant form, which stays green. So
+`AUDIT-QUERY-TENANT-PARAM-01` is the signature-presence backstop (an earlier draft
+of this matrix over-claimed ROWSCOPE caught omission; review F4 corrected it).
+Hard-upgrade path: a sealed `AuditReadScope` handle (gh #1478 / #1710 family).
 
 **Write-side `OR tenant_id=''` weakening (accepted):** a tenant-scoped writer can
 technically INSERT a `tenant_id=''` row. Bounded by the appender being the sole
@@ -228,10 +234,12 @@ cross-tenant view that silently under-delivers. The merge therefore:
   `ROWSCOPEALL-AUDIT-FUNNEL-01` is unchanged.
 - **Reverts** PR-5 (b) for audit: `RowScopeAllUnsupportedError` and the
   mem/PG/conformance fail-close guards are **restored**. A super-admin's
-  `RowScopeAll` obligation fail-closes at the audit store (`KindInternal`/500); the
-  FR-007 `slog.Error` still fires (at mint, before the store rejects).
-  Cross-tenant audit read is **deferred to backlog** (same deferral as the
-  startup full-chain verify above — the NOBYPASSRLS role cannot enumerate tenants).
+  `RowScopeAll` obligation fail-closes at the audit store
+  (`KindNotImplemented` → **HTTP 501**, Code `ErrInternal` via 5xx wire collapse;
+  see review F5 below); the FR-007 `slog.Error` still fires (at mint, before the
+  store rejects). Cross-tenant audit read is **deferred to backlog** (same
+  deferral as the startup full-chain verify above — the NOBYPASSRLS role cannot
+  enumerate tenants).
 
 **Threat-matrix re-evaluation (per ai-robust "ADR amendment 落地必查"):** no cell
 flips to ⚠️/❌. Re-fail-closing `RowScopeAll` **strengthens** the OWNER/TENANT
@@ -242,8 +250,58 @@ remains **Hard-downstream / Medium-upstream** — it locks where `RowScopeAll` m
 *minted* (auth/rowscope.go + conformance), orthogonal to whether a consumer
 fail-closes or applies it; the merge keeps both legitimate producers. Regression
 guard: `runtime/audit/ledger/storetest` `all-fail-closed` conformance (mem + PG) +
-`auditquery` `TestHandleQuery_RowScopeVisibilityMatrix` (super-admin → 500 + FR-007
+`auditquery` `TestHandleQuery_RowScopeVisibilityMatrix` (super-admin → 501 + FR-007
 audit asserted).
+
+## Amendment 2026-06-08 (round 2) — review F1/F4/F5/F7 hardening
+
+A second-round full review surfaced four items, all addressed in this PR:
+
+- **F1 (security/ops) — appender empty-tenant fail-closed guard.** Amendment
+  2026-06-07 fixed the *known* tenant-less business emits (login/setup) at the
+  source (`ContextPrincipal` scope-fallback). This round adds the complementary
+  appender-layer backstop: the shared `appender.Service` (the four business slices
+  user/config/session/role — genuinely tenant-less `bootstrap.auth.fail` runs the
+  SEPARATE `auditappendbootstrap` slice / namespace) now Rejects an empty
+  `principal.TenantID` → DLX (alertable, recoverable) instead of writing a
+  globally-readable `tenant_id=''` row. This turns the **Write surface** invariant
+  ("`tenant_id='' ⟺ genuinely tenant-less framework event`") from an *assumption*
+  into an *enforced guard*. Regression: `appender.TestHandleEvent_EmptyTenant_Reject`
+  (mem) + `TestAppender_PersistsPrincipalTenant` (PG integration, the
+  outbox-principal → store.Append per-tenant-chain seam).
+
+- **F4 (architecture/DX) — the typed tenant param is now archtest-locked.** The
+  threat matrix's TENANT app-layer row previously claimed ROWSCOPE catches omission
+  of `Store.Query`'s `tenant.TenantID` param; it does not (a dropped param lands the
+  obligation at param[1], ROWSCOPE's sanctioned no-tenant form). New archtest
+  `AUDIT-QUERY-TENANT-PARAM-01` (Medium, go/types param-identity scan + RED/GREEN
+  fixture) locks the param's presence on `Store.Query` / `QueryStore.Query` (the
+  concrete `MultiStore.Query` is covered transitively via interface satisfaction).
+  The matrix row + §"Why not enrolled" paragraph are corrected above.
+
+- **F5 (product/DX) — RowScopeAll fail-close is 501, not 500.** A super-admin
+  audit query is policy-authorized but the cross-tenant-audit capability is deferred;
+  `RowScopeAllUnsupportedError` now classifies `KindNotImplemented` (HTTP 501,
+  RFC 9110 §15.6.2) instead of `KindInternal` (500), so the deferred capability no
+  longer reads as an unexpected server fault / pollutes the 5xx-error SLO. Wire body
+  code stays `ErrInternal` (5xx collapse); the FR-007 audit is unchanged.
+
+- **F7 (product/compliance) — audit rows carry a `scope` marker.** A tenant-scoped
+  query surfaces tenant-less system rows (`tenant_id=''`, e.g. `bootstrap.auth.fail`)
+  alongside the caller's own rows via the `OR tenant_id=''` RLS read clause. The
+  `http.audit.list.v1` response now carries `scope: "system"|"tenant"` per row so a
+  tenant admin distinguishes framework/system audit from their own — WITHOUT
+  exposing any other tenant's id (per-row `tenantId` stays omitted). Mirrors AWS
+  CloudTrail (management vs data events) / GCP Cloud Audit Logs (Admin Activity vs
+  System Event) typing of system-origin events. Additive wire field (pre-v1.0).
+
+**Threat-matrix re-evaluation (per ai-robust "ADR amendment 落地必查"):** no cell
+flips to ⚠️/❌. **Write surface** is *strengthened* (F1 makes the `tenant_id=''`
+invariant an enforced appender guard rather than an assumption). **TENANT — app
+layer** is *corrected and now actually backed* (F4: the previously-claimed coverage
+is real via `AUDIT-QUERY-TENANT-PARAM-01`); rating is restated as Hard-caller /
+Medium-signature, accurately. F5 (status) and F7 (additive marker) do not touch any
+isolation boundary — they are presentation-layer (HTTP status / wire field) changes.
 
 ## References
 
