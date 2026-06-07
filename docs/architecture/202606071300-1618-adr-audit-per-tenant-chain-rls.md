@@ -209,7 +209,7 @@ subtests).
 ## Amendment 2026-06-08 — merge with PR-5 #1343 (RowScopeAll re-fail-closed)
 
 While this PR was in review, sibling tenancy-epic **PR-5 (#1343)** merged to
-`develop`. PR-5 (a) generalized the audit-query identity→RowScope derivation into
+`develop`. PR-5 (a) generalized the auditquery identity→RowScope derivation into
 framework-level `(*auth.Principal).RowVisibility(ctx)` (non-admin→self,
 device→device, admin→tenant, **super-admin→RowScopeAll**) with a mandatory FR-007
 `slog.Error` cross-tenant audit, and (b) — in its standalone form, built on the
@@ -223,7 +223,7 @@ the `gocell_app` NOBYPASSRLS serving role cannot read across tenants, so "drop t
 tenant filter" would be silently filtered by RLS to the GUC tenant's rows — a
 cross-tenant view that silently under-delivers. The merge therefore:
 
-- **Keeps** PR-5 (a): the audit-query handler uses `p.RowVisibility(ctx)` (the
+- **Keeps** PR-5 (a): the auditquery handler uses `p.RowVisibility(ctx)` (the
   cell-local `auditRowVisibility` is deleted), and the FR-007 producer funnel
   `ROWSCOPEALL-AUDIT-FUNNEL-01` is unchanged.
 - **Reverts** PR-5 (b) for audit: `RowScopeAllUnsupportedError` and the
