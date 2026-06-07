@@ -22,8 +22,8 @@
 // irrelevant since the receiver/pkg identity is matched, not the textual name).
 // Rated Medium: it is an archtest, not a type-system seal. Hard-upgrade path =
 // make resolve return a sealed lookup type whose value can only be consumed via a
-// method that forces the found check (YAGNI for one callsite today; recorded as a
-// ceiling, no issue opened until a second resolver consumer appears).
+// method that forces the found check (YAGNI for one callsite today; trigger =
+// a second resolver consumer appears). Tracked at gh #1738.
 //
 // # Detection + anti-vacuity
 //

@@ -43,6 +43,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -64,7 +65,7 @@ type Option func(*Service)
 // subsequent factory call will fail with ErrValidationFailed.
 func WithTxManager(tx persistence.CellTxManager) Option {
 	return func(s *Service) {
-		if tx != nil {
+		if !validation.IsNilInterface(tx) {
 			s.txRunner = tx
 		}
 	}

@@ -68,6 +68,16 @@ type IntentTokenVerifier = kauth.IntentTokenVerifier
 // error's errcode Kind classifies the failure (e.g. KindUnavailable when the
 // policy store is unreachable → HTTP 503; KindPermissionDenied when the request
 // carries no tenant scope). When err == nil the Decision is the policy verdict.
+//
+// PR-7 (#1345) note for wiring (PR-10): as of the ABAC engine landing, the
+// subject/resource/action parameters do NOT themselves gate evaluation — the
+// engine evaluates the tenant's policy conditions against the authenticated
+// principal's attributes (from ctx) plus environment attributes. subject is
+// carried for observability; resource/action are reserved for PR-9 resource-
+// attribute lookup. Do not assume coarse-grained (subject,resource,action)
+// matching is enforced yet. Decision.Reason() carries a deny diagnostic; the
+// current PEP (middleware) does not yet surface it — wire it into deny logs when
+// connecting business endpoints.
 type Authorizer interface {
 	Authorize(ctx context.Context, subject, resource, action string) (authz.Decision, error)
 }

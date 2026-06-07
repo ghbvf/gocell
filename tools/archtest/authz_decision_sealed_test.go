@@ -78,6 +78,13 @@
 // RED fixture (internal/authzdecisioncallerfixture) proves the detector fires on
 // an Allow/Deny reference outside the allowlist.
 //
+// Blind spot (known, by design): the scan runs over Production() scope, which
+// excludes _test.go files. Test doubles legitimately construct verdicts via
+// Allow/Deny (e.g. runtime/auth/middleware_test.go mockAuthorizer) and are NOT
+// flagged — production-only enforcement is the intended boundary (the same
+// convention as every Production() caller-allowlist in this suite). A production
+// Allow/Deny reference is always caught; a test-file one is an accepted exemption.
+//
 // # AUTHZ-DECISION-CONSTRUCTOR-CLOSEDSET-01
 //
 // AI-robust Rating: Medium upstream (archtest AST scan; Go type-system cannot

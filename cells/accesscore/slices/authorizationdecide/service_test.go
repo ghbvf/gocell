@@ -188,6 +188,18 @@ func TestAuthorize_DecisionMatrix(t *testing.T) {
 			wantAllow: true,
 		},
 		{
+			// roles attribute is present (found=true) but empty for a principal
+			// with no roles, so "roles not_in {banned}" is satisfied (the empty
+			// set contains no banned role) → permit grants. Documents that
+			// negative operators over a PRESENT-but-empty multi-valued attribute
+			// differ from a MISSING attribute (which fails closed).
+			name: "empty roles satisfy not_in (present-but-empty, not missing)",
+			policies: []*abac.Policy{policyWith("p1", permitRule("r1", authz.Obligations{},
+				cond(abac.SourceSubject, "roles", abac.OpNotIn, "banned")))},
+			principal: userPrincipal(nil),
+			wantAllow: true,
+		},
+		{
 			name: "forbid in a separate policy wins (cross-policy deny-overrides)",
 			policies: []*abac.Policy{
 				policyWith("permit-pol", permitRule("r1", authz.Obligations{}, engPermit)),
@@ -424,4 +436,27 @@ func runAuthorizerConformance(t *testing.T, newRepo func() ports.PolicyRepositor
 		require.NoError(t, err)
 		assert.False(t, dec.IsAllow())
 	})
+}
+
+// --- evaluator white-box units (branches not reachable via seeded policies) ---
+
+// TestMatchCondition_UnknownOperator_FailsClosed covers the matchCondition
+// default branch: a Policy.Validate would reject an invalid Operator, so the
+// only way to reach it is a direct call. An unknown operator must be fail-closed.
+func TestMatchCondition_UnknownOperator_FailsClosed(t *testing.T) {
+	r := attributeResolver{principal: userPrincipal(map[string]string{"department": "eng"})}
+	c := abac.Condition{Source: abac.SourceSubject, Key: "department", Operator: abac.Operator(99), Values: []string{"eng"}}
+	assert.False(t, matchCondition(c, r), "unknown operator must be fail-closed (condition unsatisfied)")
+}
+
+// TestMergeObligations_SkipsZeroRowScope_UnionsFieldMask covers the zero-RowScope
+// skip + FieldMask union/dedup in mergeObligations.
+func TestMergeObligations_SkipsZeroRowScope_UnionsFieldMask(t *testing.T) {
+	merged := mergeObligations([]authz.Obligations{
+		{RowScope: 0, FieldMask: authz.FieldMask{Fields: []string{"a"}}},
+		{RowScope: tenant.RowScopeTenant, FieldMask: authz.FieldMask{Fields: []string{"b", "a"}}},
+		{RowScope: tenant.RowScopeSelf},
+	})
+	assert.Equal(t, tenant.RowScopeSelf, merged.RowScope, "zero RowScope skipped; narrowest non-zero wins")
+	assert.ElementsMatch(t, []string{"a", "b"}, merged.FieldMask.Fields, "FieldMask is the deduped union")
 }

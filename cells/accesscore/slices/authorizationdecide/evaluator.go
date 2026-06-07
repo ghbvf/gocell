@@ -61,6 +61,14 @@ func matchAllConditions(conditions []abac.Condition, r attributeResolver) bool {
 
 // matchCondition evaluates a single condition. A condition whose attribute is
 // not found is unsatisfied (fail-closed); an unknown operator is unsatisfied.
+//
+// Note the negative operators (OpNotEquals / OpNotIn) are also fail-closed on a
+// missing attribute: found=false returns false (condition unsatisfied), NOT
+// "vacuously true". So a "blacklist exclude" permit rule (e.g. region not_in
+// {us-gov}) requires the attribute to be present — a subject missing the
+// attribute does not satisfy the condition and therefore is not granted by that
+// rule. This is intentional: a missing attribute must never widen access. Policy
+// authors relying on negative conditions must ensure the attribute is supplied.
 func matchCondition(c abac.Condition, r attributeResolver) bool {
 	vals, found := r.resolve(c.Source, c.Key)
 	if !found {
@@ -94,6 +102,12 @@ func anyIn(vals, set []string) bool {
 // (combining row-visibility constraints conservatively never widens access).
 // Both directions are fail-safe so that combining multiple permits can only
 // tighten, never loosen, what the PEP enforces.
+//
+// The "narrowest = smallest value" rule relies on the tenant.RowScope iota
+// ordering (RowScopeSelf=1 < RowScopeDevice=2 < RowScopeTenant=3 < RowScopeAll=4
+// in pkg/tenant/rowscope.go): a smaller value is a stricter scope. Reordering or
+// inserting an out-of-order RowScope constant would silently break this combine;
+// keep the enum monotonic from strictest to broadest.
 func mergeObligations(obligations []authz.Obligations) authz.Obligations {
 	var merged authz.Obligations
 	seen := make(map[string]struct{})
