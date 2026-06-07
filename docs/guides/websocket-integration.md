@@ -1,6 +1,6 @@
 # WebSocket Integration Guide
 
-> Applicable version: GoCell v1.0
+> Applicable version: GoCell v0.x
 
 ---
 

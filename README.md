@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Release](https://img.shields.io/github/v/release/ghbvf/gocell)](https://github.com/ghbvf/gocell/releases/latest)
 
-> ⚠️ **v0.x, internal use only** — no stability guarantees; breaking changes and Go-version bumps may happen anytime.
+> ⚠️ **v0.x, pre-GA** — no stability guarantees; breaking changes and Go-version bumps may happen anytime.
 
 Cell-native Go Engineering Foundation.
 
