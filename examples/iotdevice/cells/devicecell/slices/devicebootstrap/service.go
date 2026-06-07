@@ -10,6 +10,7 @@ import (
 	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/runtime/command"
 )
 
@@ -38,10 +39,19 @@ type deviceRegisteredEvent struct {
 // command.EmitAsync's kout.Emitter parameter. It is an optional dependency
 // (defaults to outbox.DemoCellEmitter), matching the deviceregister slice — no
 // gocell:"required" tag.
+//
+// txRunner wraps command.EmitAsync in a real transaction when the durable
+// outbox writer requires one (adapters/postgres.OutboxWriter.Write calls
+// persistence.TxFromContext[pgx.Tx] and returns ErrAdapterPGNoTx when no tx
+// is present in ctx). Defaults to outbox.DemoCellTxManager() — a no-op that
+// just invokes the closure, so demo mode and existing tests work unchanged.
+// Not required (no gocell:"required" tag): DemoCellTxManager is the safe
+// default for any assembly that does not wire a real PG pool.
 type Service struct {
-	emitter outbox.CellEmitter
-	clk     clock.Clock
-	logger  *slog.Logger
+	emitter  outbox.CellEmitter
+	txRunner persistence.CellTxManager
+	clk      clock.Clock
+	logger   *slog.Logger
 }
 
 // Option configures a devicebootstrap Service.
@@ -58,6 +68,19 @@ func WithEmitter(e outbox.CellEmitter) Option {
 	}
 }
 
+// WithTxManager sets the CellTxManager used to wrap command.EmitAsync in a
+// transaction. Required for durable mode: the PG outbox writer calls
+// persistence.TxFromContext[pgx.Tx] and returns ErrAdapterPGNoTx when no tx
+// is in ctx. Demo mode and tests use the default outbox.DemoCellTxManager()
+// no-op. Accumulative: a nil txRunner leaves the previously-set value in place.
+func WithTxManager(tx persistence.CellTxManager) Option {
+	return func(s *Service) {
+		if tx != nil {
+			s.txRunner = tx
+		}
+	}
+}
+
 // WithLogger sets the structured logger. A nil logger is silently ignored,
 // leaving the default in place.
 func WithLogger(l *slog.Logger) Option {
@@ -69,14 +92,15 @@ func WithLogger(l *slog.Logger) Option {
 }
 
 // NewService creates a device-bootstrap Service. The clock is a mandatory
-// positional dependency; the emitter and logger fall back to demo/default values
-// when not injected.
+// positional dependency; the emitter, txRunner and logger fall back to
+// demo/default values when not injected.
 func NewService(clk clock.Clock, opts ...Option) (*Service, error) {
 	clock.MustHaveClock(clk, "devicebootstrap.NewService")
 	s := &Service{
-		emitter: outbox.DemoCellEmitter(),
-		clk:     clk,
-		logger:  slog.Default(),
+		emitter:  outbox.DemoCellEmitter(),
+		txRunner: outbox.DemoCellTxManager(),
+		clk:      clk,
+		logger:   slog.Default(),
 	}
 	for _, o := range opts {
 		o(s)
@@ -111,8 +135,16 @@ func (s *Service) HandleDeviceRegistered(ctx context.Context, entry outbox.Entry
 	// command_id = source event entry.ID() — deterministic across redelivery, so
 	// an at-least-once replay of the same device-registered event dedups to the
 	// same bootstrap command instance. subject = deviceID.
-	if err := command.EmitAsync(ctx, s.clk, s.emitter, cmdenqueue.DispatchID,
-		ev.ID, entry.ID(), req); err != nil {
+	//
+	// EmitAsync is wrapped in txRunner.RunInTx so durable mode (PG outbox writer)
+	// gets a transaction in ctx — adapters/postgres.OutboxWriter.Write requires
+	// persistence.TxFromContext[pgx.Tx] and returns ErrAdapterPGNoTx otherwise.
+	// Demo mode uses outbox.DemoCellTxManager() (no-op), which just calls the
+	// closure directly, so behaviour is unchanged for tests and demo assemblies.
+	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		return command.EmitAsync(txCtx, s.clk, s.emitter, cmdenqueue.DispatchID,
+			ev.ID, entry.ID(), req)
+	}); err != nil {
 		s.logger.Error("device-bootstrap: failed to emit enqueue command",
 			slog.String("device_id", ev.ID), slog.String("entry_id", entry.ID()),
 			slog.Any("error", err))

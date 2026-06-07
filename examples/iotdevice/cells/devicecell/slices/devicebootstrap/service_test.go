@@ -27,6 +27,13 @@ type failingEmitter struct{ err error }
 
 func (f failingEmitter) Emit(context.Context, outbox.Entry) error { return f.err }
 
+// errorWriter is an outbox.Writer that always fails Write. Used to test that
+// an error propagated inside txRunner.RunInTx (via WriterEmitter) produces
+// a Requeue disposition — verifying the RunInTx wrapper is wired correctly.
+type errorWriter struct{ err error }
+
+func (w errorWriter) Write(context.Context, outbox.Entry) error { return w.err }
+
 // registeredEntry builds a deterministic event.device-registered.v1 outbox entry
 // with a fixed ID so the test can assert command_id == source entry.ID().
 func registeredEntry(t *testing.T, clk clock.Clock, payload []byte) outbox.Entry {
@@ -147,6 +154,31 @@ func TestHandleDeviceRegistered(t *testing.T) {
 		}
 		if !errors.Is(res.Err, emitErr) {
 			t.Errorf("err = %v, want it to wrap %v", res.Err, emitErr)
+		}
+	})
+
+	// txRunner wraps EmitAsync: an error inside the RunInTx closure (i.e. a
+	// failing emitter) must propagate out of RunInTx and produce Requeue.
+	// CellTxManager is sealed (cannot be implemented outside kernel packages) so
+	// we exercise the error path via a failing writer: WriterEmitter.Emit calls
+	// writer.Write(ctx) which fails, RunInTx returns the error, handler Requeues.
+	t.Run("requeue when emit fails inside txRunner", func(t *testing.T) {
+		writeErr := errors.New("outbox write: no tx in context")
+		writerEmitter, werr := outbox.NewWriterEmitter(errorWriter{err: writeErr})
+		if werr != nil {
+			t.Fatalf("NewWriterEmitter: %v", werr)
+		}
+		svc, err := NewService(clk, WithEmitter(outbox.WrapEmitterForCell(writerEmitter)))
+		if err != nil {
+			t.Fatalf("NewService: %v", err)
+		}
+
+		res := svc.HandleDeviceRegistered(context.Background(), registeredEntry(t, clk, validPayload))
+		if res.Disposition != outbox.DispositionRequeue {
+			t.Fatalf("Disposition = %v, want Requeue", res.Disposition)
+		}
+		if !errors.Is(res.Err, writeErr) {
+			t.Errorf("err = %v, want it to wrap %v", res.Err, writeErr)
 		}
 	})
 }

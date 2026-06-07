@@ -34,6 +34,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/migration"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -142,6 +143,7 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		devicecell.WithDeviceRepository(deviceRepo),
 		devicecell.WithDirectPublisher(outbox.WrapPublisherForCell(directPub)),
 		devicecell.WithBootstrapEmitter(crs.bootstrapEmitter),
+		devicecell.WithBootstrapTxManager(crs.bootstrapTxManager),
 		devicecell.WithCursorCodec(cursorCodec),
 		devicecell.WithCommandRegistry(commandReg),
 		devicecell.WithLogger(logger),
@@ -253,13 +255,14 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 // commandRelaySubsystem bundles the wiring the async command-relay path needs:
 // the writer-backed bootstrap emitter the devicebootstrap reactive slice emits
 // into, the ConsumerBase that idempotency-guards the device-registered
-// subscriber, and the relay that polls the outbox store and dispatches command
-// entries in-process (#1698). Both demo and durable modes build all three — the
-// only difference is the backing store/writer (FakeStore vs PG).
+// subscriber, the relay that polls the outbox store and dispatches command
+// entries in-process, and the CellTxManager the bootstrap slice uses to wrap
+// command.EmitAsync in a real transaction in durable mode (#1698).
 type commandRelaySubsystem struct {
-	bootstrapEmitter outbox.CellEmitter
-	consumerBase     *outbox.ConsumerBase
-	relay            *outboxruntime.Relay
+	bootstrapEmitter    outbox.CellEmitter
+	bootstrapTxManager persistence.CellTxManager
+	consumerBase        *outbox.ConsumerBase
+	relay               *outboxruntime.Relay
 }
 
 // buildCommandRelaySubsystem wires the async command-relay subsystem for the
@@ -282,16 +285,24 @@ func buildCommandRelaySubsystem(
 	pool *adapterpg.Pool,
 ) (commandRelaySubsystem, error) {
 	var (
-		store  outboxruntime.Store
-		writer outbox.Writer
+		store              outboxruntime.Store
+		writer             outbox.Writer
+		bootstrapTxManager persistence.CellTxManager
 	)
 	if pool == nil {
 		fakeStore := outboxtest.NewFakeStore()
 		store = fakeStore
 		writer = fakeStore // FakeStore satisfies both outbox.Store and kout.Writer.
+		// Demo mode: DemoCellTxManager is a no-op that just calls the closure —
+		// FakeStore.Write ignores the tx context so no real tx is needed.
+		bootstrapTxManager = outbox.DemoCellTxManager()
 	} else {
 		store = adapterpg.NewOutboxStore(pool.DB(), clk)
 		writer = adapterpg.NewOutboxWriter(clk)
+		// Durable mode: wrap PG TxManager so command.EmitAsync gets a real tx in
+		// ctx — adapterpg.OutboxWriter.Write calls persistence.TxFromContext[pgx.Tx]
+		// and returns ErrAdapterPGNoTx without one.
+		bootstrapTxManager = persistence.WrapForCell(adapterpg.NewTxManager(pool))
 	}
 
 	writerEmitter, err := outbox.NewWriterEmitter(writer)
@@ -315,9 +326,10 @@ func buildCommandRelaySubsystem(
 	}, claimer)
 
 	return commandRelaySubsystem{
-		bootstrapEmitter: outbox.WrapEmitterForCell(writerEmitter),
-		consumerBase:     consumerBase,
-		relay:            relay,
+		bootstrapEmitter:    outbox.WrapEmitterForCell(writerEmitter),
+		bootstrapTxManager: bootstrapTxManager,
+		consumerBase:        consumerBase,
+		relay:               relay,
 	}, nil
 }
 

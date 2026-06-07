@@ -29,6 +29,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/kernel/reconcile"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -121,6 +122,22 @@ func WithBootstrapEmitter(e outbox.CellEmitter) Option {
 	return func(c *DeviceCell) { c.bootstrapEmitter = e }
 }
 
+// WithBootstrapTxManager sets the CellTxManager injected into the
+// devicebootstrap reactive slice. The slice wraps command.EmitAsync in
+// txRunner.RunInTx so durable mode (PG outbox writer) gets a real transaction
+// in ctx. Demo mode and tests use the default outbox.DemoCellTxManager() no-op.
+//
+// Accumulative: a nil tx leaves the previously-set value in place. NOT
+// required (no fail-fast guard): DemoCellTxManager is the safe default for
+// assemblies that do not wire a real PG pool.
+func WithBootstrapTxManager(tx persistence.CellTxManager) Option {
+	return func(c *DeviceCell) {
+		if tx != nil {
+			c.bootstrapTxManager = tx
+		}
+	}
+}
+
 // WithLogger sets the structured logger.
 func WithLogger(l *slog.Logger) Option {
 	return func(c *DeviceCell) { c.logger = l }
@@ -141,7 +158,8 @@ type DeviceCell struct {
 	deviceRepo      domain.DeviceRepository
 	publisher        outbox.CellPublisher
 	emitter          outbox.CellEmitter // set during initInternal; retained for Probes
-	bootstrapEmitter outbox.CellEmitter // writer-backed; feeds devicebootstrap reactive command emit (#1698)
+	bootstrapEmitter    outbox.CellEmitter          // writer-backed; feeds devicebootstrap reactive command emit (#1698)
+	bootstrapTxManager persistence.CellTxManager // wraps EmitAsync in tx for durable PG writer; defaults to DemoCellTxManager
 	cursorCodec     *query.CursorCodec
 	logger          *slog.Logger
 	metricsProvider metrics.Provider
@@ -344,6 +362,7 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	bootstrapSvc, err := devicebootstrap.NewService(
 		c.clk,
 		devicebootstrap.WithEmitter(c.bootstrapEmitter),
+		devicebootstrap.WithTxManager(c.bootstrapTxManager),
 		devicebootstrap.WithLogger(c.logger),
 	)
 	if err != nil {
