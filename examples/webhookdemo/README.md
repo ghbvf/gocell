@@ -76,10 +76,10 @@ sourceID, err := webhook.NewSourceID("demosource")          // handle err
 src, err := webhook.NewSource(sourceID, secret)             // handle err
 signer, err := webhook.NewHMACSigner(src)                   // handle err
 did, err := webhook.NewDeliveryID("delivery-1")             // handle err
-headers, err := signer.Sign(body, time.Now(), did)         // handle err
-req.Header.Set("Webhook-Delivery-Id", string(headers.DeliveryID))
-req.Header.Set("Webhook-Timestamp", headers.Timestamp)
-req.Header.Set("Webhook-Signature", headers.Signature)
+signed, err := signer.Sign(body, time.Now(), did)          // handle err — returns webhook.SignedHeaders
+req.Header.Set("Webhook-Delivery-Id", string(signed.DeliveryID())) // read-only accessors
+req.Header.Set("Webhook-Timestamp", signed.Timestamp())
+req.Header.Set("Webhook-Signature", signed.Signature())
 ```
 
 > The demo seeds a single hardcoded source secret in `run.go` for convenience.

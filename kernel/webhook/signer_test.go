@@ -49,12 +49,13 @@ func TestSign_MatchesSvixGoldenVector(t *testing.T) {
 
 	tsInt, err := strconv.ParseInt(v.Timestamp, 10, 64)
 	require.NoError(t, err)
-	headers, err := signer.Sign([]byte(v.Payload), time.Unix(tsInt, 0), MustDeliveryID(v.DeliveryID))
+	signed, err := signer.Sign([]byte(v.Payload), time.Unix(tsInt, 0), MustDeliveryID(v.DeliveryID))
 	require.NoError(t, err)
 
-	assert.Equal(t, v.Signature, headers.Signature)
-	assert.Equal(t, v.Timestamp, headers.Timestamp)
-	assert.Equal(t, DeliveryID(v.DeliveryID), headers.DeliveryID)
+	// Same-package test: read SignedHeaders' unexported fields directly.
+	assert.Equal(t, v.Signature, signed.signature)
+	assert.Equal(t, v.Timestamp, signed.timestamp)
+	assert.Equal(t, DeliveryID(v.DeliveryID), signed.deliveryID)
 }
 
 // TestSign_SignerVerifierRoundTrip signs then verifies with the same source.
@@ -67,16 +68,19 @@ func TestSign_SignerVerifierRoundTrip(t *testing.T) {
 
 	ts := time.Unix(1700000000, 0)
 	body := []byte(`{"hello":"world"}`)
-	headers, err := signer.Sign(body, ts, MustDeliveryID("evt_rt"))
+	signed, err := signer.Sign(body, ts, MustDeliveryID("evt_rt"))
 	require.NoError(t, err)
 
 	// Signature must be a well-formed v1 token decoding to 32 MAC bytes.
-	require.True(t, len(headers.Signature) > 3 && headers.Signature[:3] == "v1,")
-	raw, err := base64.StdEncoding.DecodeString(headers.Signature[3:])
+	require.True(t, len(signed.signature) > 3 && signed.signature[:3] == "v1,")
+	raw, err := base64.StdEncoding.DecodeString(signed.signature[3:])
 	require.NoError(t, err)
 	assert.Len(t, raw, 32)
 
 	verifier, err := NewHMACVerifier(clockmockAt(ts))
 	require.NoError(t, err)
-	assert.NoError(t, verifier.Verify(body, headers, src))
+	// Bridge sealed outbound SignedHeaders → inbound Headers (same-package: read
+	// unexported fields) to feed Verify, mirroring the receiver's wire reconstruction.
+	inbound := Headers{DeliveryID: signed.deliveryID, Timestamp: signed.timestamp, Signature: signed.signature}
+	assert.NoError(t, verifier.Verify(body, inbound, src))
 }

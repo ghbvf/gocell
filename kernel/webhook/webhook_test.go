@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,6 +18,33 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// TestSignedHeaders_ZeroValueApply_FailClosed is the #1733 F1 reverse self-check:
+// a zero-value SignedHeaders (the only form a package-external caller can
+// construct — unexported fields incl. `valid`) must write NO signature headers via
+// Apply (valid-token fail-close), while a Sign-produced one (valid==true) does.
+// This proves the provenance closure is the `valid` flag, not a no-op Apply.
+func TestSignedHeaders_ZeroValueApply_FailClosed(t *testing.T) {
+	t.Parallel()
+
+	var zero SignedHeaders // valid == false — mirrors external `var h webhook.SignedHeaders`
+	zeroHdr := http.Header{}
+	zero.Apply(zeroHdr)
+	assert.Empty(t, zeroHdr.Get(HeaderID), "zero-value Apply must not write webhook-id")
+	assert.Empty(t, zeroHdr.Get(HeaderTimestamp), "zero-value Apply must not write webhook-timestamp")
+	assert.Empty(t, zeroHdr.Get(HeaderSignature), "zero-value Apply must not write webhook-signature")
+
+	src, err := NewSource(MustSourceID("s"), minSecret())
+	require.NoError(t, err)
+	signer, err := NewHMACSigner(src)
+	require.NoError(t, err)
+	signed, err := signer.Sign([]byte("b"), time.Unix(1700000000, 0), MustDeliveryID("d1"))
+	require.NoError(t, err)
+	signedHdr := http.Header{}
+	signed.Apply(signedHdr)
+	assert.NotEmpty(t, signedHdr.Get(HeaderSignature),
+		"Sign-produced (valid) Apply must write the signature header — guard is the valid flag, not a blanket no-op")
+}
 
 // redactionMask is the literal a redacted secret renders as (pkg/redaction.Mask).
 const redactionMask = "<REDACTED>"
@@ -162,7 +190,8 @@ func TestNewSource(t *testing.T) {
 		}
 		after, err := signer.Sign([]byte("body"), ts, MustDeliveryID("d1"))
 		require.NoError(t, err)
-		assert.Equal(t, before.Signature, after.Signature)
+		// Same-package: compare SignedHeaders' unexported signature field.
+		assert.Equal(t, before.signature, after.signature)
 	})
 }
 

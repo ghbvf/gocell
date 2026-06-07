@@ -56,6 +56,13 @@ type SafeOption func(*SafePolicy)
 // targets. It is for dev / CI only (e.g. testcontainers) and must never be set
 // in production. It exempts ONLY loopback — every other private/reserved range
 // stays blocked, on both the DialContext and ValidateTargetURL paths.
+//
+// "Must never be set in production" is enforced by the Medium archtest
+// WEBHOOK-ALLOW-LOOPBACK-PROD-BAN-01 (#1378): any reference in a non-_test.go
+// production file is a CI failure. The stronger Hard form — unexporting this to
+// `withAllowLoopback` so an external reference is a compile error — is tracked at
+// gh #1730 (deferred to preserve the dev escape hatch / future cross-package
+// integration tests).
 func WithAllowLoopback() SafeOption {
 	return func(p *SafePolicy) { p.allowLoopback = true }
 }

@@ -19,10 +19,10 @@ import (
 // Contract-declared inbound path + signature header names
 // (contracts/webhook/demo/events/v1/contract.yaml). The receiver reads the
 // signature from THESE contract-declared header names, so the test sets them
-// explicitly rather than using kwh.Headers.Apply, which writes the fixed
-// outbound (signer-side) header constants kwh.HeaderID/HeaderTimestamp/
-// HeaderSignature — a different set from a contract's inbound header names in
-// the general case.
+// explicitly (via the SignedHeaders read-only accessors) rather than using
+// kwh.SignedHeaders.Apply, which writes the fixed outbound (signer-side) header
+// constants kwh.HeaderID/HeaderTimestamp/HeaderSignature — a different set from a
+// contract's inbound header names in the general case.
 const (
 	e2ePath       = "/api/webhooks/demo/events"
 	hdrDeliveryID = "Webhook-Delivery-Id"
@@ -110,9 +110,9 @@ func TestWebhookdemoE2E(t *testing.T) {
 		require.NoError(t, err)
 		req, err := http.NewRequest(http.MethodPost, webhookURL+e2ePath, bytes.NewReader(payload))
 		require.NoError(t, err)
-		req.Header.Set(hdrDeliveryID, string(headers.DeliveryID))
-		req.Header.Set(hdrTimestamp, headers.Timestamp)
-		req.Header.Set(hdrSignature, headers.Signature)
+		req.Header.Set(hdrDeliveryID, string(headers.DeliveryID()))
+		req.Header.Set(hdrTimestamp, headers.Timestamp())
+		req.Header.Set(hdrSignature, headers.Signature())
 		return req
 	}
 	newSignedReq := func(t *testing.T, deliveryID string) *http.Request {

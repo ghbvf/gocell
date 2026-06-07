@@ -257,8 +257,8 @@ func TestDispatcher_Handle_StatusMapping_408Requeue(t *testing.T) {
 // It implements sealed() because this file is package webhook (white-box).
 type errSigner struct{}
 
-func (errSigner) Sign(_ []byte, _ time.Time, _ DeliveryID) (Headers, error) {
-	return Headers{}, errors.New("inject signer error")
+func (errSigner) Sign(_ []byte, _ time.Time, _ DeliveryID) (SignedHeaders, error) {
+	return SignedHeaders{}, errors.New("inject signer error")
 }
 func (errSigner) sealed() {}
 
