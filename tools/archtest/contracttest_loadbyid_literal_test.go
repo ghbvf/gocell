@@ -42,35 +42,17 @@
 package archtest
 
 import (
-	"go/ast"
-	"go/types"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-// contracttestLoadByIDPkg is the import path of the contracttest package
-// whose LoadByID function is under scrutiny.
-const contracttestLoadByIDPkg = "github.com/ghbvf/gocell/tests/contracttest"
-
-// contracttestLoadByIDFunc is the function name locked by this rule.
-const contracttestLoadByIDFunc = "LoadByID"
-
-// TestContracttestLoadByIDLiteral01 asserts that every call to
-// contracttest.LoadByID in the production+test codebase supplies a compile-time
-// constant string as the third argument (the contract ID). Non-constant
-// arguments (struct field access, function calls, variables) are forbidden.
+// TestContracttestLoadByIDLiteral01 dogfoods CheckContracttestLoadByIDLiteral01
+// — the single rule body — so the exact scan an external cell would import is
+// the one GoCell enforces (no parallel inline rule body).
 func TestContracttestLoadByIDLiteral01(t *testing.T) {
 	t.Parallel()
-
-	diags := Run(t, Production(TypedOpts{Tests: true}), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.TypesInfo == nil {
-			return nil
-		}
-		return scanLoadByIDLiteralViolations(p)
-	})
-
-	Report(t, "CONTRACTTEST-LOADBYID-LITERAL-01", diags)
+	Report(t, "CONTRACTTEST-LOADBYID-LITERAL-01", CheckContracttestLoadByIDLiteral01(t, ConfigForExternalCell{}))
 }
 
 // TestContracttestLoadByIDLiteral01_RedComputedID is the cross-package reverse
@@ -119,76 +101,4 @@ func TestContracttestLoadByIDLiteral01_RedStructFieldID(t *testing.T) {
 	require.NotEmpty(t, diags,
 		"CONTRACTTEST-LOADBYID-LITERAL-01 reverse self-check: fixture must produce ≥1 violation "+
 			"(fixture calls same-package LoadByID with tt.contractID struct field access)")
-}
-
-// scanLoadByIDLiteralViolations scans p.Files for contracttest.LoadByID calls
-// whose third argument does not resolve to a compile-time constant string,
-// and returns diagnostics for each violation.
-func scanLoadByIDLiteralViolations(p *Pass) []Diagnostic {
-	var diags []Diagnostic
-	for _, file := range p.Files {
-		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-			if len(call.Args) < 3 {
-				return
-			}
-			if !isLoadByIDCall(call.Fun, p.TypesInfo) {
-				return
-			}
-			// Third argument (index 2) must resolve to a compile-time const
-			// string via go/types constant folding (covers BasicLit, const
-			// Ident, SelectorExpr to const, BinaryExpr of consts). Runtime
-			// forms (struct field access, function call, plain variable)
-			// fail EvaluateConstString and produce a diagnostic.
-			if _, ok := EvaluateConstString(p.TypesInfo, call.Args[2]); ok {
-				return // compliant
-			}
-			pos := p.Fset.Position(call.Args[2].Pos())
-			diags = append(diags, Diagnostic{
-				Rel:  p.Rel(file),
-				Line: pos.Line,
-				Message: "CONTRACTTEST-LOADBYID-LITERAL-01: contracttest.LoadByID third argument " +
-					"must be a compile-time constant string; got runtime expression",
-			})
-		})
-	}
-	return diags
-}
-
-// isLoadByIDCall reports whether funExpr resolves (via *types.Info) to
-// contracttest.LoadByID. Accepts both forms:
-//   - cross-package selector: contracttest.LoadByID(...)
-//   - same-package bare identifier: LoadByID(...) inside the contracttest
-//     package's own test files.
-//
-// Same-package detection (the *ast.Ident branch) is required because the
-// contracttest package owns several internal table-driven tests that bare-call
-// LoadByID; without this branch they escape the rule entirely.
-func isLoadByIDCall(funExpr ast.Expr, info *types.Info) bool {
-	if info == nil {
-		return false
-	}
-	var ident *ast.Ident
-	switch fn := funExpr.(type) {
-	case *ast.SelectorExpr:
-		if fn.Sel == nil || fn.Sel.Name != contracttestLoadByIDFunc {
-			return false
-		}
-		ident = fn.Sel
-	case *ast.Ident:
-		if fn.Name != contracttestLoadByIDFunc {
-			return false
-		}
-		ident = fn
-	default:
-		return false
-	}
-	obj := info.Uses[ident]
-	if obj == nil {
-		return false
-	}
-	fn, ok := obj.(*types.Func)
-	if !ok || fn.Pkg() == nil {
-		return false
-	}
-	return fn.Pkg().Path() == contracttestLoadByIDPkg && fn.Name() == contracttestLoadByIDFunc
 }
