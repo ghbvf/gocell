@@ -424,13 +424,13 @@ M3 (#1084) 解 R1：让外部 Cell 仓库 `go get github.com/ghbvf/gocell/tools/
 | 可 import API（`external.go`） | `CellRule{ID,Run}` 描述符 + `ConfigForExternalCell{BuildTags,ExtraRules}` + `StandardCellRules() []*CellRule` + `RunStandardCellRules(t,cfg)` + `PlatformModulePath` const。每个 `ConfigForExternalCell` 字段都被一条已 ship 的规则读取（无 no-op 占位字段）；misconfigured rule（nil / nil Run / 空 ID）`t.Errorf` fail-fast 不静默跳过 | **PR-1** |
 | 第一批迁移 exemplar | `PANIC-REGISTERED-01` 逻辑 MOVE 到 `panic_invariants.go`（非 test），platform 路径经 `PlatformModulePath` 派生，scan scope 由 driver 供给；`cfg.BuildTags` 供第二趟 build-tag 扫描（外部仓库传自己的 production tags，gocell dogfood 传 `FlatNonDefaultTags()`）；builtin-`panic` shadow 检测内联进规则（关闭纯 AST `isPanicCallExpr` 唯一残留盲区）；gocell `_test.go` dogfood 同一 `CheckPanicRegistered`（单源） | **PR-1** |
 | 迁移收敛 ratchet | `ARCHTEST-MODULE-PATH-FUNNEL-01`（`module_path_funnel_test.go`）+ **frozen baseline**（`testdata/module_path_funnel.baseline`，PR-1 基线 **76 文件** backlog）。非 golden：`-update` 永不重写，monotone ceiling，新 offender ⊄ baseline 即 CI 红（无 `-update` 洗白路径） | **PR-1** |
-| ratchet PR-time gate | `TestArchtestModulePathFunnel` 入 `hack/verify-archtest-invariants.sh`（纯 AST，~0.07s），fail-on-new 在 PR 时即时生效，不再仅 nightly | **PR-1** |
+| ratchet PR-time gate | `TestArchtestModulePathFunnel` 入 `hack/verify-archtest-invariants.sh`（bare-literal AST ratchet + #1304 起 typed const-eval `no-reconstruction` 子检查，~0.5s），fail-on-new 在 PR 时即时生效，不再仅 nightly | **PR-1** |
 | 跨 module smoke | `external_smoke_test.go`：throwaway 临时 module `replace` 本仓 + import 真 `archtest` + 跑 `RunStandardCellRules`，断言捕获 consumer module 的 bare panic（锁住 import-as-dependency / 无 `-update` flag panic / `findModuleRoot` 解析 consumer go.mod） | **PR-1** |
 | 剩余 ~76 规则族迁移 | errcode / span / saga / outbox / cell / layer-05..10 / `LOCATOR-DISCOVERY-FUNNEL-01` … 逐 PR 缩 baseline 至空 | **PR-2..N**（#1302） |
 | 净新 `PROD-MAIN-WIRING-NOOP-REJECT-01`（reviewer P0 #3） | 扫 composition-root noop/in-memory wiring；落地时同 PR 把 `ProductionMainPkgs` 字段加回 `ConfigForExternalCell`（PR-1 删除该 no-op 占位字段，premise 到时再加） | #1303 |
-| FreezingArchRule baseline（外部既有库增量采纳） | 通用 `BaselinePath` + CI 只读 + 修复自动收缩（ratchet 已先行落地 frozen-baseline 范式，本项是其通用化） | #1304 |
-| 独立 module 抽取 `…/archtest` | go.work 多 module | #1304 |
-| ratchet 上游 Hard 化（baseline 清空后纯 ban） | #1302 完成后 ARCHTEST-MODULE-PATH-FUNNEL-01 退化为 Hard | #1304 |
+| FreezingArchRule baseline（外部既有库增量采纳） | 通用 `BaselinePath` + CI 只读 + 修复自动收缩（ratchet 已先行落地 frozen-baseline 范式，本项是其通用化）。**仍 #1304 开放，demand-gated**——触发 = 真实 brownfield 外部 adopter；greenfield starter 不需，建 = dead plumbing | #1304 |
+| ~~独立 module 抽取 `…/archtest`~~ | ~~go.work 多 module~~ → **转 #1561（go.work P6 tools 拆 module）接管，不在 #1304 范围** | #1561 |
+| ratchet 上游 Hard 化 + 下游 residual 闭合 | **已落（#1304，本 PR）**：① 下游 typed const-eval 闭合 const-of-const/跨包 residual（**Hard**）；② 上游空-baseline（#1302 全量迁移已完成）= **Medium 纯-ban 终态**（permanent ceiling，非 Hard，见下评级修正） | #1304（done） |
 
 ### 核心不变式：platform-vs-scan 路径拆分
 
@@ -444,20 +444,39 @@ vs `pass.Pkg`（被分析目标）的标准分离。
 
 | 方向 | 形态 | 评级 |
 |------|------|------|
-| 下游 Hard（现实向量） | bare `"github.com/ghbvf/gocell[/…]"` STRING 字面量经 AST BasicLit 前缀匹配检出；`+` 拼接经 `no-fragment-split` 自检 flatten 捕获——operand 可为字面量**或同包字面量 const**（`flattenPlatformConcat`+`constMap`），任意片段数；sanctioned 形态 `PlatformModulePath+"/x"` 因 `PlatformModulePath` 声明在被排除的 external.go、`constMap` 解析不到而不可命中 | **Hard** |
-| 下游残留（**非 Hard**，adversarial，如实声明） | const-of-const（`const x = y`，y 本身是 const）/ 跨包 const selector / runtime string ops（`strings.Join`/`fmt.Sprintf`/`[]byte`）拼装的路径，AST-only flatten 解析不到 → 逃逸自检。故下游**对现实向量（bare/字面量片段/同包 const 片段）是 Hard，但非绝对 Hard**。封堵需 typed const-eval（`types.Info` 常量折叠）+ `PlatformModulePath`-operand 例外——当前受阻：规则活在 `_test.go`（需 test-variant typed load）且裸 `EvaluateConstString` 会误伤 sanctioned 形态。由 #1304 跟踪 | **Medium（过渡）** |
-| 上游 Medium | Go 无法阻止包内写 bare 字面量；frozen baseline 兜底，但**不同于 golden：`-update` 永不重写**，新 bare 字面量 ⊄ baseline 即 CI 红，无 `-update` 洗白路径，唯一容纳方式是手改 frozen baseline（review-first 可见 diff）；Hard 终态 = baseline 清空后纯 ban | **Medium（过渡）** |
+| 下游 Hard（bare literal） | bare `"github.com/ghbvf/gocell[/…]"` STRING 字面量经 AST BasicLit 前缀匹配检出（`firstBarePlatformLiteralLine`）；offenders 经 frozen baseline ratchet（空=纯 ban） | **Hard** |
+| 下游 Hard（reconstruction，**#1304 已闭合**） | `+` 拼接经 **typed const-eval**（`EvaluateConstString` go/types 常量折叠）捕获——闭合此前 residual 的 **const-of-const + 跨包 const**；sanctioned 形态 `PlatformModulePath+"/x"` 及其同包**派生 const**（`const q = p+"/b"` 其中 `p = PlatformModulePath+"/a"`）经 **provenance 追溯**（const object identity = name+pkgpath，alias-proof / same-value-forge-proof）例外。test-variant typed load 已落地（`implements_funnel` 同范式）、object-identity 例外解决 sanctioned 误伤——原「受阻：规则活在 `_test.go`」前提**已失效** | **Hard** |
+| 下游 residual（c）**permanent ceiling，非 Hard** | runtime string ops（`strings.Join`/`fmt.Sprintf`/`[]byte`）拼装的路径**非编译期常量** → go/types 折不动 → 检测器够不到。封堵需 SSA/dataflow，超 archtest 天花板；刻意混淆过不了 review。**permanent won't-do（不另开 issue）**，同 #851/#893/#1282/#1424 族 | **Medium（永久天花板）** |
+| 上游 Medium（**permanent ceiling，非 Hard**） | Go 无法阻止包内写 bare 字面量；archtest 在 CI test 时捕获、非编译期。frozen baseline **现已空（#1302 全量迁移完成）= 纯 ban**：消除 exception 逃逸（`-update` 永不重写 baseline，新 bare 字面量 ⊄ baseline 即 CI 红，唯一容纳 = 手改 frozen baseline 的 review-first diff）。**空 baseline 是该规则形状能达到的最强上游形态，但仍 Medium**——「源码不写某字符串值」类型系统 Hard 不可达 | **Medium（永久天花板）** |
 
-Medium（上游 + 下游残留）+ Hard 下游现实向量为合法过渡形态（ai-robust.md §"Funnel 双向锁评级"）；
-两条 Hard 化路径——baseline 清空（上游）+ typed const-eval（下游残留）——均由 #1304 跟踪。
-符号清单 + 盲区自检活在 `module_path_funnel_test.go` 的 godoc，不在本 ADR 复制。
+下游对所有编译期-常量重构（bare/字面量片段/同包 const/const-of-const/跨包 const）现为 **Hard**；
+仅 runtime string ops (c) 为 permanent ceiling。上游 Medium 为 permanent Go 天花板（空 baseline 已达最强形态）。
+**不再有「过渡」评级**——`#1304` 已闭合下游 residual，并修正「空 baseline = Hard 终态」的 overclaim
+为「Medium 纯-ban 终态」。符号清单 + 盲区自检活在 `module_path_funnel_test.go` 的 godoc，不在本 ADR 复制。
 
 > **Amendment 2026-05-30 round-3**：原文（round-2）要求「无 N≥3 字面量 fragment-split
 > 作为每个 M3 迁移 PR 的人工 review checklist 条目」——**已撤销**。`no-fragment-split`
 > 自检现 flatten 任意片段数的 `+` 链，operand 含同包字面量 const，N≥3 与 const-Ident 片段
-> 拼接（如 `const a,b,c = …; a+b+c`）均机器捕获，不再是人工盲区。**唯一残留是 adversarial
-> 形态**（const-of-const / 跨包 const / runtime string ops），见上「下游残留」行，由 #1304
-> typed-const-eval 升级跟踪——不设人工 checklist（这些是过不了 review 的刻意混淆）。
+> 拼接（如 `const a,b,c = …; a+b+c`）均机器捕获，不再是人工盲区。adversarial 残留
+> （const-of-const / 跨包 const / runtime string ops）见下 Amendment 2026-06-07。
+
+> **Amendment 2026-06-07（#1304 ③ 落地，逐行重评本节）**：检测器从 AST-only flatten
+> 升级为 **typed const-eval**（`EvaluateConstString` go/types 常量折叠 + provenance 追溯
+> 例外）。重评影响——
+> - 上方「AI-robust 评级」表已**整体重写**（非追加）：原「下游残留 Medium（过渡）」行因
+>   const-of-const + 跨包 const **已闭合**而拆为「下游 Hard（reconstruction）」+「下游
+>   residual (c) permanent ceiling」两行；原「上游 Medium（过渡）/ Hard 终态 = baseline
+>   清空」修正为「上游 Medium（permanent ceiling）」——**空 baseline 不是 Hard 终态**
+>   （archtest CI-time 捕获，非编译期；类型系统 Hard 对「源码不写某字符串值」不可达）。
+> - `no-fragment-split` 自检（AST `flattenPlatformConcat`/`collectStringLiteralConsts`/
+>   `constMap`）被 typed `collectPlatformReconstructions` 取代（删，无双路径）。RED 自检迁
+>   `internal/modulepathfunnelfixture`（const-of-const / 跨包各一 + sanctioned / unrelated /
+>   runtime-ops GREEN）。
+> - 子项表（上）：① 转 #1561、② demand-gated 续延、③ 本 PR done。
+> - **无格子由 ✅ 降级**——本次全部是 residual 收紧（Medium 过渡 → Hard）+ overclaim 修正
+>   （Hard 终态 → Medium permanent ceiling）。runtime-ops (c) 为已知 permanent ceiling，
+>   非新降级。`ref:` TNG/ArchUnit FreezingArchRule（空 store = 纯 ban，亦 test-time）/
+>   golang.org/x/tools go/analysis（typed Pass）。
 
 ### 开源对标（`ref:` 见 commit）
 
