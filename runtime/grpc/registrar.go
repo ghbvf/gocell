@@ -18,9 +18,10 @@ package grpc
 //     spec whose callback registers the same service name panics before grpc-go's own
 //     fatal (which gives a less helpful message about cross-cell collision).
 //
-//  4. The attribution map built here (method→cellID) is the foundation for PR-9
-//     (gRPC metrics cell label) and PR-10 (streaming interceptors). PR-7 does not
-//     wire it into any interceptor — it only exposes CellIDForMethod.
+//  4. The attribution map built here (method→cellID) is consumed by PR-9 (#1152):
+//     CellIDForMethod feeds interceptor.UnaryCellAttribution (via Deps.Registrar),
+//     which writes ctxkeys.CellID so the gRPC metrics cell label and access log
+//     reflect the owning cell. Streaming interceptors (PR-10) reuse the same map.
 //
 // ref: zeromicro/go-zero zrpc/internal/rpcserver.go — RegisterFn (Form B precedent)
 // ref: go-kratos/kratos transport/grpc/server.go — pb.RegisterXxxServer before Start

@@ -185,12 +185,16 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		return fmt.Errorf("build grpc metrics collector: %w", err)
 	}
 	grpcRegistrar := runtimegrpc.NewServiceRegistrar()
-	grpcServer, err := newGRPCServerFromEnv(durabilityMode, grpcRegistrar, []grpc.ServerOption{
+	// Resolve the gRPC addr ONCE and bind it in both the adapter config and
+	// WithGRPCListener below — bootstrap pre-binds the WithGRPCListener addr, so a
+	// divergent adapter Config.Addr would be ignored (#1737 F2).
+	grpcAddr := grpcAddrFromEnv()
+	grpcServer, err := newGRPCServerFromEnv(durabilityMode, grpcAddr, grpcRegistrar, []grpc.ServerOption{
 		interceptor.NewUnaryChain(interceptor.Deps{
 			Verifier:        jwtVerifier,
 			Clock:           clk,
 			Collector:       grpcCollector,
-			CellResolver:    grpcRegistrar.CellIDForMethod,
+			Registrar:       grpcRegistrar,
 			CellIDClosedSet: asm.CellIDs(),
 		}),
 	})
@@ -206,7 +210,7 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		// #673: a dedicated HealthListener is mandatory — /healthz, /readyz,
 		// /metrics no longer fall back onto the primary listener.
 		bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9093", []auth.ListenerAuth{auth.AuthNone{}}),
-		bootstrap.WithGRPCListener(cell.PrimaryListener, grpcServer, ":8084"),
+		bootstrap.WithGRPCListener(cell.PrimaryListener, grpcServer, grpcAddr),
 		bootstrap.WithHealthRoutes(healthOpts...),
 	}
 	// MQTT channel options (health probe + managed closer) when enabled.

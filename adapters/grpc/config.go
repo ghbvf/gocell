@@ -162,8 +162,8 @@ func (c *Config) validate() error {
 	if c.Registrar == nil {
 		return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
 			"grpc: Registrar is required; create it with runtimegrpc.NewServiceRegistrar() at the "+
-				"composition root and pass the same instance to both Config.Registrar and the "+
-				"interceptor chain's CellResolver (reg.CellIDForMethod)")
+				"composition root and pass the same instance to both Config.Registrar and "+
+				"interceptor.Deps.Registrar")
 	}
 
 	return nil

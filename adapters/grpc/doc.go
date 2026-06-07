@@ -44,7 +44,7 @@
 //
 //	reg := runtimegrpc.NewServiceRegistrar()
 //	chain := interceptor.NewUnaryChain(interceptor.Deps{
-//	    ..., CellResolver: reg.CellIDForMethod, CellIDClosedSet: asm.CellIDs(),
+//	    ..., Registrar: reg, CellIDClosedSet: asm.CellIDs(),
 //	})
 //	srv, _ := adaptersgrpc.New(adaptersgrpc.Config{
 //	    ..., ServerOptions: []grpc.ServerOption{chain}, Registrar: reg,

@@ -11,18 +11,18 @@
 // be produced by the sealed runtime/observability/metrics.ResolveCellLabel
 // funnel — never a hand-written cell literal, an unrelated variable, a
 // constructor field, or an assembly-derived value. The funnel reads
-// ctxkeys.CellIDFrom + validates against the closed set internally; gRPC passes a
-// nil closed set today (attribution not yet wired), so the resolved label is
-// always RuntimeCellSentinel until #1383. Locking the funnel routing now means
-// that when the writer side lands (FullMethod→cellID attribution + a real closed
-// set, epic PR-7/8) the recorded `cell` label automatically reflects the
-// attributed cell instead of regressing to a hardcoded value.
+// ctxkeys.CellIDFrom + validates against the closed set internally; gRPC passes
+// the assembly closed set (validCellIDs), so the resolved label reflects the
+// attributed cell when it is registered/in-set and degrades to
+// RuntimeCellSentinel otherwise. Locking the funnel routing keeps the `cell`
+// label flowing through ResolveCellLabel and never a hardcoded value.
 //
 // Scope note: gRPC cell ATTRIBUTION (writing ctxkeys.CellID from a FullMethod→
-// cellID map, and threading a real closed set) is NOT yet wired — tracked by
-// gh #1383. This archtest covers ONLY the reader/funnel-routing contract; the
-// attribution-wiring archtest lands with PR-7/8. Until then the recorded label
-// is always "_runtime" (see docs/ops/alerting-rules.md).
+// cellID map via UnaryCellAttribution, and threading a real closed set) IS wired
+// (#1383 / #1152). This archtest covers ONLY the reader/funnel-routing contract
+// (UnaryMetrics → ResolveCellLabel → RecordRPC); it does NOT lock the registrar
+// same-instance identity (the writer's source), which is a separate wiring
+// concern (#1752).
 //
 // # AI-robust rating (charter §"Funnel 双向锁评级")
 //
@@ -192,7 +192,7 @@ func scanGRPCMetricsLabelPkg(p *Pass) []Diagnostic {
 			d = append(d, Diagnostic{Rel: rel, Line: p.Fset.Position(recordLit.Pos()).Line, Message: grpcMetricsRuleCtxSource + ": " + msg})
 		}
 	}
-	add(callsResolve, "UnaryMetrics must resolve the cell label through metrics.ResolveCellLabel(ctx, nil)")
+	add(callsResolve, "UnaryMetrics must resolve the cell label through metrics.ResolveCellLabel(ctx, validCellIDs)")
 	add(!readsCtxInline, "cell resolution moved into metrics.ResolveCellLabel; UnaryMetrics must not read ctxkeys.CellIDFrom inline")
 	add(sawRecordRPC, "UnaryMetrics must call GRPCCollector.RecordRPC")
 	add(cellArgIsIdent, "RecordRPC arg[1] (cell label) must be an identifier (the resolved CellLabel variable), not an inline expression")

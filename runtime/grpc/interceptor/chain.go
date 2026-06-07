@@ -8,6 +8,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/runtime/auth"
+	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
@@ -26,13 +27,17 @@ type Deps struct {
 	// AuthOptions configures the auth interceptor (public-method and
 	// password-reset-exempt predicates).
 	AuthOptions []AuthOption
-	// CellResolver maps fullMethod→cellID for the cell-attribution interceptor
-	// (Option 3, #1152). It MUST be the CellIDForMethod of the SAME
+	// Registrar is the gRPC service registrar whose CellIDForMethod feeds the
+	// cell-attribution interceptor (Option 3, #1152). It MUST be the SAME
 	// *runtimegrpc.ServiceRegistrar instance passed to adaptersgrpc.Config.Registrar
-	// — a second/different registrar populates a different map and silently
-	// degrades attribution to _runtime. Required: a nil resolver is a wiring bug →
-	// NewUnaryChain panics rather than leaving every RPC attributed to the sentinel.
-	CellResolver CellResolver
+	// — a different registrar populates a different method map and silently degrades
+	// attribution to _runtime. Taking the registrar object (not a detached
+	// CellIDForMethod func value) makes the two consumers symmetric — both wire
+	// `Registrar: reg` — so a mismatch is visible. (A compile-proof single-builder
+	// that emits both the chain option and the adapter config is the Hard upgrade,
+	// tracked at #1752.) Required: a nil Registrar is a wiring bug → NewUnaryChain
+	// panics rather than leaving every RPC attributed to the sentinel.
+	Registrar *runtimegrpc.ServiceRegistrar
 	// CellIDClosedSet is the assembly's cell-id set (asm.CellIDs()) the metrics
 	// interceptor validates the attributed cell against (M12b defense-in-depth: an
 	// out-of-set cell degrades to the runtime sentinel, never pollutes the SLO
@@ -46,12 +51,12 @@ type Deps struct {
 // (RequestID outermost, Recovery innermost) and guarded by archtest
 // GRPC-INTERCEPTOR-CHAIN-ORDER-01. See the package doc for the order rationale.
 //
-// CellResolver and CellIDClosedSet are required (fail-closed): a chain composed
+// Registrar and CellIDClosedSet are required (fail-closed): a chain composed
 // without them would silently relabel every RPC to the runtime sentinel.
 func NewUnaryChain(deps Deps) grpc.ServerOption {
-	if deps.CellResolver == nil {
-		panic(panicregister.Approved("interceptor-chain-cell-resolver-required",
-			errcode.Assertion("interceptor.NewUnaryChain: Deps.CellResolver is required")))
+	if deps.Registrar == nil {
+		panic(panicregister.Approved("interceptor-chain-registrar-required",
+			errcode.Assertion("interceptor.NewUnaryChain: Deps.Registrar is required")))
 	}
 	if len(deps.CellIDClosedSet) == 0 {
 		panic(panicregister.Approved("interceptor-chain-cell-closed-set-required",
@@ -64,7 +69,7 @@ func NewUnaryChain(deps Deps) grpc.ServerOption {
 	}
 	return grpc.ChainUnaryInterceptor(
 		UnaryRequestID(),
-		UnaryCellAttribution(deps.CellResolver),
+		UnaryCellAttribution(deps.Registrar.CellIDForMethod),
 		UnaryTracing(deps.Tracer),
 		UnaryAccessLog(deps.Clock),
 		UnaryMetrics(deps.Collector, deps.Clock, validCellIDs),

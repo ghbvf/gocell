@@ -35,21 +35,33 @@ const (
 	defaultGRPCAddr = ":8084"
 )
 
-// newGRPCServerFromEnv builds the gRPC server, resolving the listen address and
-// transport security from the environment. serverOpts carries the interceptor
-// chain (assembled by the caller so the JWT verifier / metrics collector stay in
-// run.go). reg is the shared method→cellID registrar (Option 3 #1152): the same
-// instance whose CellIDForMethod the chain's cell-attribution interceptor reads,
-// bound to the server here via Config.Registrar.
+// grpcAddrFromEnv resolves the gRPC listen address from the environment, falling
+// back to defaultGRPCAddr. It is the SINGLE source for the address so the caller
+// binds the same addr in both adaptersgrpc.Config.Addr and bootstrap's
+// WithGRPCListener (#1737 F2): bootstrap pre-binds the WithGRPCListener addr and
+// serves that pre-bound listener, so the adapter's Config.Addr never reaches
+// net.Listen on the bootstrap path — previously GOCELL_IOTDEVICE_GRPC_ADDR
+// reached only Config.Addr and was silently ignored.
+func grpcAddrFromEnv() string {
+	if addr := strings.TrimSpace(os.Getenv(envGRPCAddr)); addr != "" {
+		return addr
+	}
+	return defaultGRPCAddr
+}
+
+// newGRPCServerFromEnv builds the gRPC server, resolving transport security from
+// the environment. addr is the resolved listen address (grpcAddrFromEnv), passed
+// in by the caller so the same value is also handed to WithGRPCListener.
+// serverOpts carries the interceptor chain (assembled by the caller so the JWT
+// verifier / metrics collector stay in run.go). reg is the shared method→cellID
+// registrar (Option 3 #1152): the same instance whose CellIDForMethod the chain's
+// cell-attribution interceptor reads, bound to the server here via Config.Registrar.
 func newGRPCServerFromEnv(
 	durabilityMode outbox.DurabilityMode,
+	addr string,
 	reg *runtimegrpc.ServiceRegistrar,
 	serverOpts []grpc.ServerOption,
 ) (*adaptersgrpc.Server, error) {
-	addr := strings.TrimSpace(os.Getenv(envGRPCAddr))
-	if addr == "" {
-		addr = defaultGRPCAddr
-	}
 	tlsCfg, err := grpcTLSConfigFromEnv(durabilityMode)
 	if err != nil {
 		return nil, err

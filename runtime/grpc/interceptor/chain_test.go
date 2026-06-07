@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
@@ -66,7 +67,7 @@ func TestNewUnaryChain(t *testing.T) {
 		Collector:       metrics.NewInMemoryGRPCCollector(),
 		Clock:           clock.Real(),
 		Verifier:        stubVerifier{},
-		CellResolver:    func(string) (string, bool) { return "", false },
+		Registrar:       runtimegrpc.NewServiceRegistrar(),
 		CellIDClosedSet: []string{"svc-cell"},
 	})
 	if opt == nil {
@@ -74,6 +75,24 @@ func TestNewUnaryChain(t *testing.T) {
 	}
 	// It must be installable on a real server without panicking.
 	_ = grpc.NewServer(opt)
+}
+
+// TestNewUnaryChainNilRegistrarPanics asserts the same-instance fail-closed
+// guard: a chain without a Registrar would silently attribute every RPC to the
+// runtime sentinel, so NewUnaryChain panics at construction (#1152 F1).
+func TestNewUnaryChainNilRegistrarPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatalf("NewUnaryChain with a nil Deps.Registrar must panic")
+		}
+	}()
+	_ = NewUnaryChain(Deps{
+		Collector:       metrics.NewInMemoryGRPCCollector(),
+		Clock:           clock.Real(),
+		Verifier:        stubVerifier{},
+		CellIDClosedSet: []string{"svc-cell"},
+		// Registrar omitted → fail-closed panic.
+	})
 }
 
 // testSvc is a minimal gRPC service implementation used by F5 test only.
@@ -122,7 +141,7 @@ func TestNewUnaryChain_AuthOptionsPassthrough(t *testing.T) {
 			// Mark /svc/Public as public so no token is required.
 			WithPublicMethod(func(m string) bool { return m == "/svc/Public" }),
 		},
-		CellResolver:    func(string) (string, bool) { return "", false },
+		Registrar:       runtimegrpc.NewServiceRegistrar(),
 		CellIDClosedSet: []string{"svc-cell"},
 	}
 

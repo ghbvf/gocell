@@ -18,7 +18,10 @@ package bootstrap
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"testing"
 	"time"
 
@@ -68,7 +71,7 @@ func buildAdapterServer(
 		Clock:           clock.Real(),
 		Verifier:        &bootstrapTestVerifier{}, // non-nil: NewUnaryChain panics on nil
 		AuthOptions:     authOpts,
-		CellResolver:    reg.CellIDForMethod, // Option 3: shared registrar (#1152)
+		Registrar:       reg, // Option 3: shared registrar (#1152)
 		CellIDClosedSet: []string{"bootstrap-test-cell"},
 	})
 	srv, err := adaptersgrpc.New(adaptersgrpc.Config{
@@ -265,6 +268,70 @@ func TestWithGRPCListener_HappyPath_ServeThenGracefulStop(t *testing.T) {
 	case <-time.After(testtime.D5s):
 		t.Fatal("Run did not return after ctx cancel (gRPC drain hung)")
 	}
+}
+
+// TestWithGRPCListener_ReadyzReportsGRPCReady is the integration proof that the
+// grpc_ready probe reaches /readyz through the real Run → phase5 drainProbes →
+// health aggregator → HTTP handler chain (not just the expandGRPCServerProbes
+// helper, #1737 F6). It starts a HealthListener + a bufconn gRPC listener, drives
+// Run, and asserts /readyz?verbose lists grpc_ready once the server is serving.
+func TestWithGRPCListener_ReadyzReportsGRPCReady(t *testing.T) {
+	lis := bufconn.Listen(grpcTestBufSize)
+	srv := buildAdapterServer(t, healthPublic, registerHealth)
+	asm := minimalGRPCAssembly(t, "grpc-readyz")
+	healthLn := newLocalListener(t)
+	const verboseToken = "readyz-test-token"
+
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.HealthListener, healthLn.Addr().String(),
+			[]kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithGRPCListener(cell.PrimaryListener, srv, ":0", WithGRPCListenerNet(lis)),
+		WithHealthRoutes(WithReadyzVerboseToken(verboseToken)),
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(testtime.D5s):
+			t.Fatal("Run did not return after ctx cancel")
+		}
+	}()
+
+	healthAddr := healthLn.Addr().String()
+	// Wait until /readyz reports overall ready (grpc serving + probe registered).
+	testwait.External(t, "readyz-ready", func() bool {
+		resp, err := readyzVerbose(t, healthAddr, verboseToken)
+		if err != nil {
+			return false
+		}
+		defer closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "/readyz did not become ready")
+
+	resp, err := readyzVerbose(t, healthAddr, verboseToken)
+	require.NoError(t, err)
+	defer closeBody(t, resp)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, string(body), "grpc_ready",
+		"/readyz?verbose must list grpc_ready (proves Run→drainProbes→aggregator→handler chain)")
+}
+
+// readyzVerbose GETs /readyz?verbose=true with the verbose token header.
+func readyzVerbose(t *testing.T, addr, token string) (*http.Response, error) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://%s/readyz?verbose=true", addr), nil)
+	require.NoError(t, err)
+	req.Header.Set("X-Readyz-Token", token)
+	return testHTTPClient.Do(req)
 }
 
 // --- Case 3: HTTP + gRPC concurrent serve; gRPC error propagates ----------

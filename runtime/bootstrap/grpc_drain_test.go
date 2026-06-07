@@ -55,7 +55,7 @@ func buildDrainAdapterServer(t *testing.T) *adaptersgrpc.Server {
 		Clock:           clock.Real(),
 		Verifier:        &bootstrapTestVerifier{},
 		AuthOptions:     []interceptor.AuthOption{interceptor.WithPublicMethod(func(string) bool { return true })},
-		CellResolver:    reg.CellIDForMethod, // Option 3: shared registrar (#1152)
+		Registrar:       reg, // Option 3: shared registrar (#1152)
 		CellIDClosedSet: []string{"bootstrap-test-cell"},
 	})
 	srv, err := adaptersgrpc.New(adaptersgrpc.Config{

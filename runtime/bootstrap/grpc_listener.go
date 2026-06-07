@@ -153,8 +153,8 @@ func WithGRPCListenerShutdownGrace(d time.Duration) GRPCListenerOption {
 //	reg := runtimegrpc.NewServiceRegistrar()
 //	chain := interceptor.NewUnaryChain(interceptor.Deps{
 //	    Verifier: verifier, Clock: clk, Collector: collector, Tracer: tracer,
-//	    CellResolver: reg.CellIDForMethod, CellIDClosedSet: asm.CellIDs(),
-//	}) // always wires UnaryAuth; panics on a nil verifier / resolver (fail-closed)
+//	    Registrar: reg, CellIDClosedSet: asm.CellIDs(),
+//	}) // always wires UnaryAuth; panics on a nil verifier / registrar (fail-closed)
 //	srv, err := adaptersgrpc.New(adaptersgrpc.Config{
 //	    Addr: ":9000", TLS: tlsCfg,
 //	    ServerOptions: []grpc.ServerOption{chain}, Registrar: reg,
