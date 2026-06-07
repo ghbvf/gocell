@@ -181,10 +181,9 @@ func observedCommandEmitFunnelPresent(t *testing.T) bool {
 			return nil
 		}
 		for _, file := range p.Files {
-			for _, decl := range file.Decls {
-				fd, isFunc := decl.(*ast.FuncDecl)
-				if !isFunc || fd.Recv != nil || fd.Name == nil || fd.Name.Name != "EmitAsync" {
-					continue
+			EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+				if fd.Recv != nil || fd.Name == nil || fd.Name.Name != "EmitAsync" {
+					return
 				}
 				EachInSubtree[ast.CallExpr](fd, func(call *ast.CallExpr) {
 					fun := call.Fun
@@ -196,7 +195,7 @@ func observedCommandEmitFunnelPresent(t *testing.T) bool {
 						found = true
 					}
 				})
-			}
+			})
 		}
 		return nil
 	})

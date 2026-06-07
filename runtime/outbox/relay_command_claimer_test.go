@@ -67,6 +67,10 @@ func noIdentityEntry(t *testing.T, id, topic string) ClaimedEntry {
 // with the same value via their local cmdID const).
 const testCmdID = "command.test.do.v1"
 
+// relayLifecycleTimeout bounds the Start/Ready/stop waits in the nil-guard
+// lifecycle tests (TEST-TIME-LITERAL-01: no inline test-time duration literals).
+const relayLifecycleTimeout = 2 * time.Second
+
 func relayWithDispatch(fn command.AsyncDispatchFunc, claimer idempotency.Claimer) *Relay {
 	r := &Relay{}
 	r.pub = &recordingPublisher{}
@@ -272,14 +276,14 @@ func TestStart_CommandDispatchWithClaimer_StartsAndStops(t *testing.T) {
 	go func() { errCh <- r.Start(ctx) }()
 	select {
 	case <-r.Ready():
-	case <-time.After(2 * time.Second):
+	case <-time.After(relayLifecycleTimeout):
 		t.Fatal("relay did not become ready")
 	}
 	cancel()
 	select {
 	case err := <-errCh:
 		require.NoError(t, err)
-	case <-time.After(2 * time.Second):
+	case <-time.After(relayLifecycleTimeout):
 		t.Fatal("relay did not stop")
 	}
 }
