@@ -9,14 +9,19 @@
 FROM golang:1.25-alpine AS build
 WORKDIR /src
 RUN apk add --no-cache git
-COPY go.mod go.sum ./
-RUN go mod download
 # Recursive COPY is intentional and bounded by the repo-root .dockerignore
 # (.git, .claude, docs/, worktrees/, bak/, *.env, coverage*.out filtered).
 # Multi-stage isolation: the build stage filesystem is discarded after
 # `go build`; only /out/corebundle crosses into the runtime image.
+#
+# No early `COPY go.mod go.sum && go mod download` cache layer: per-adapter
+# go.work satellites (#1558) make root's go.mod carry local `replace =>
+# ./adapters/X`, so a go.mod-only copy before the source COPY fails with
+# "replacement directory ./adapters/X does not exist". GOWORK=off builds
+# cmd/corebundle standalone against root's own pinned go.mod + replaces (the
+# ./adapters/X dirs are present after the full COPY . .).
 COPY . .
-RUN CGO_ENABLED=0 go build -o /out/corebundle ./cmd/corebundle
+RUN CGO_ENABLED=0 GOWORK=off go build -o /out/corebundle ./cmd/corebundle
 
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates curl openssl \

@@ -186,7 +186,7 @@ local-down:
 
 test-integration:
 	GOCELL_TEST_DOCKER_REQUIRED=1 go test -tags=integration,e2e \
-		./adapters/... \
+		github.com/ghbvf/gocell/adapters/... \
 		./tests/integration/... \
 		./tests/e2e/internal/... \
 		./cmd/corebundle/... \
@@ -210,7 +210,7 @@ test-integration-cluster:
 		echo "GOCELL_TEST_REDIS_CLUSTER_ADDRS is unset; cluster tests will skip."; \
 		echo "Launch grokzen/redis-cluster locally and export the seed addresses first."; \
 	fi
-	go test -tags=integration_cluster ./adapters/redis/... -count=1 -timeout 5m -v
+	go test -tags=integration_cluster github.com/ghbvf/gocell/adapters/redis/... -count=1 -timeout 5m -v
 
 # ---------------------------------------------------------------------------
 # examples/ssobff startup smoke

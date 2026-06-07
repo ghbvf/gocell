@@ -107,12 +107,24 @@ if [[ ${#satellite_dirs[@]} -eq 0 ]]; then
 fi
 gocell::log::status "Satellite modules: ${satellite_dirs[*]}"
 
-# Test each satellite with GOWORK=off so it resolves against its own pinned
-# go.mod (release-consistent), mirroring verify-workspace.sh's build traversal.
+# Test each satellite, mirroring verify-workspace.sh's build-traversal GOWORK
+# partition (#1558): adapters/* + cmd/gocell are true leaves tested GOWORK=off
+# (release-consistent against their own pinned go.mod); the base-consumer
+# assembly modules (examples/*) transitively import workspace satellite modules
+# THROUGH the base, and Go ignores a dependency's replace directives (only the
+# MAIN module's apply) — so they cannot resolve standalone and are tested under
+# the workspace (GOWORK unset). go.mod/go.sum consistency stays gated by the
+# verify-workspace.sh `go work sync` drift check. Removed once the composition
+# layer (examples wire adapters) leaves the base module set.
 for dir in "${satellite_dirs[@]}"; do
-    gocell::log::status "Testing module (GOWORK=off): ${dir}"
-    if ! GOWORK=off go -C "${dir}" test ./... -count=1; then
-        gocell::log::error "go test ./... failed in module '${dir}' (GOWORK=off)"
+    if [[ "${dir#./}" == examples/* ]]; then
+        go_env=(env -u GOWORK); mode_label="workspace"
+    else
+        go_env=(env GOWORK=off); mode_label="GOWORK=off"
+    fi
+    gocell::log::status "Testing module (${mode_label}): ${dir}"
+    if ! "${go_env[@]}" go -C "${dir}" test ./... -count=1; then
+        gocell::log::error "go test ./... failed in module '${dir}' (${mode_label})"
         exit 1
     fi
 done

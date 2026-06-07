@@ -3,42 +3,33 @@ module github.com/ghbvf/gocell
 go 1.25.11
 
 require (
-	github.com/aws/aws-sdk-go-v2 v1.41.12
-	github.com/aws/aws-sdk-go-v2/credentials v1.19.22
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.103.2
-	github.com/aws/smithy-go v1.27.1
 	github.com/coder/websocket v1.8.14
-	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/eclipse/paho.golang v0.23.0
 	github.com/fsnotify/fsnotify v1.10.1
+	github.com/ghbvf/gocell/adapters/grpc v0.0.0-00010101000000-000000000000
+	github.com/ghbvf/gocell/adapters/mqtt v0.0.0-00010101000000-000000000000
+	github.com/ghbvf/gocell/adapters/postgres v0.0.0-00010101000000-000000000000
+	github.com/ghbvf/gocell/adapters/rabbitmq v0.0.0-00010101000000-000000000000
+	github.com/ghbvf/gocell/adapters/ratelimit v0.0.0-00010101000000-000000000000
+	github.com/ghbvf/gocell/adapters/redis v0.0.0-00010101000000-000000000000
+	github.com/ghbvf/gocell/adapters/vault v0.0.0-00010101000000-000000000000
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.6.0
-	github.com/hashicorp/vault/api v1.23.0
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/moby/moby/api v1.54.2
-	github.com/mochi-mqtt/server/v2 v2.7.9
-	github.com/pressly/goose/v3 v3.27.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
-	github.com/prometheus/common v0.68.1
 	github.com/rabbitmq/amqp091-go v1.11.0
 	github.com/redis/go-redis/v9 v9.20.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/stretchr/testify v1.11.1
-	github.com/testcontainers/testcontainers-go/modules/k3s v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/minio v0.42.0
-	github.com/testcontainers/testcontainers-go/modules/vault v0.42.0
 	go.opentelemetry.io/contrib/propagators/b3 v1.44.0
 	go.opentelemetry.io/otel v1.44.0
-	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.44.0
-	go.opentelemetry.io/otel/sdk v1.44.0
-	go.opentelemetry.io/otel/sdk/metric v1.44.0
 	go.opentelemetry.io/otel/trace v1.44.0
 	go.uber.org/goleak v1.3.0
 	golang.org/x/crypto v0.52.0
 	golang.org/x/mod v0.36.0
-	golang.org/x/oauth2 v0.36.0
 	golang.org/x/tools v0.45.0
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
@@ -47,19 +38,9 @@ require (
 )
 
 require (
-	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.13 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.28 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.28 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.29 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.12 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.9.21 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.28 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.19.28 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
-	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
@@ -69,25 +50,25 @@ require (
 	github.com/hashicorp/go-secure-stdlib/strutil v0.1.2 // indirect
 	github.com/hashicorp/go-sockaddr v1.0.7 // indirect
 	github.com/hashicorp/hcl v1.0.1-vault-7 // indirect
-	github.com/kylelemons/godebug v1.1.0 // indirect
+	github.com/hashicorp/vault/api v1.23.0 // indirect
 	github.com/mdelapenya/tlscert v0.2.0 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
+	github.com/moby/moby/api v1.54.2 // indirect
 	github.com/moby/moby/client v0.4.1 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
+	github.com/pressly/goose/v3 v3.27.1 // indirect
+	github.com/prometheus/common v0.68.1 // indirect
 	github.com/prometheus/procfs v0.20.1 // indirect
 	github.com/rogpeppe/go-internal v1.15.0 // indirect
-	github.com/rs/xid v1.5.0 // indirect
 	github.com/ryanuber/go-glob v1.0.0 // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
-	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.44.0 // indirect
-	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
+	go.opentelemetry.io/otel/sdk v1.44.0 // indirect
+	go.opentelemetry.io/otel/sdk/metric v1.44.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 )
 
@@ -108,6 +89,8 @@ require (
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4
+	github.com/ghbvf/gocell/adapters/adapterutil v0.0.0 // indirect
+	github.com/ghbvf/gocell/adapters/prometheus v0.0.0
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
@@ -145,3 +128,31 @@ require (
 	golang.org/x/sys v0.45.0
 	golang.org/x/text v0.37.0 // indirect
 )
+
+replace github.com/ghbvf/gocell/adapters/adapterutil => ./adapters/adapterutil
+
+replace github.com/ghbvf/gocell/adapters/circuitbreaker => ./adapters/circuitbreaker
+
+replace github.com/ghbvf/gocell/adapters/grpc => ./adapters/grpc
+
+replace github.com/ghbvf/gocell/adapters/mqtt => ./adapters/mqtt
+
+replace github.com/ghbvf/gocell/adapters/oidc => ./adapters/oidc
+
+replace github.com/ghbvf/gocell/adapters/otel => ./adapters/otel
+
+replace github.com/ghbvf/gocell/adapters/postgres => ./adapters/postgres
+
+replace github.com/ghbvf/gocell/adapters/prometheus => ./adapters/prometheus
+
+replace github.com/ghbvf/gocell/adapters/rabbitmq => ./adapters/rabbitmq
+
+replace github.com/ghbvf/gocell/adapters/ratelimit => ./adapters/ratelimit
+
+replace github.com/ghbvf/gocell/adapters/redis => ./adapters/redis
+
+replace github.com/ghbvf/gocell/adapters/s3 => ./adapters/s3
+
+replace github.com/ghbvf/gocell/adapters/vault => ./adapters/vault
+
+replace github.com/ghbvf/gocell/adapters/websocket => ./adapters/websocket

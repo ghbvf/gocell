@@ -77,9 +77,37 @@ fi
 build_out="$(mktemp -d)"
 trap 'rm -rf "${build_out}"' EXIT
 for dir in "${module_dirs[@]}"; do
-    gocell::log::status "Building module (GOWORK=off): ${dir}"
-    if ! GOWORK=off go -C "${dir}" build -o "${build_out}/" ./...; then
-        gocell::log::error "go build ./... failed in module '${dir}' (GOWORK=off)"
+    # GOWORK mode per module (#1558). True leaves — root (`.`), cmd/gocell, and
+    # the per-adapter satellites — build GOWORK=off for release-consistency
+    # (Plan D §5.6): each resolves against its OWN pinned go.mod. The
+    # base-consumer assembly modules (examples/*) transitively import workspace
+    # satellite modules (the adapters) THROUGH the base module — and Go does NOT
+    # honor a dependency's replace directives (only the MAIN module's replaces
+    # apply), so the base's `replace ./adapters/X` is invisible to an example
+    # building standalone. They are therefore compile-checked under the
+    # workspace (GOWORK unset) instead; their go.mod/go.sum consistency is still
+    # gated by the `go work sync` drift check above. This split is the
+    # consequence of the composition layer (which wires adapters) living in the
+    # base module set; the composition-root extraction follow-up removes it.
+    if [[ "${dir}" == ./examples/* ]]; then
+        go_env=(env -u GOWORK); mode_label="workspace"
+    else
+        go_env=(env GOWORK=off); mode_label="GOWORK=off"
+    fi
+    gocell::log::status "Building module (${mode_label}): ${dir}"
+    # `-o <dir>/` collects executables into a temp dir (avoids polluting the
+    # module dir with binaries for main-package modules). But `go build -o bin/
+    # ./...` ERRORS with "no main packages to build" for a LIBRARY-ONLY module
+    # — which every per-adapter satellite (#1558) is. Detect whether the module
+    # has any main package: collect binaries when it does, otherwise run a plain
+    # `go build ./...` compile check (libraries produce no output to pollute).
+    if "${go_env[@]}" go -C "${dir}" list -f '{{.Name}}' ./... 2>/dev/null | grep -qx main; then
+        build_args=(build -o "${build_out}/" ./...)
+    else
+        build_args=(build ./...)
+    fi
+    if ! "${go_env[@]}" go -C "${dir}" "${build_args[@]}"; then
+        gocell::log::error "go build ./... failed in module '${dir}' (${mode_label})"
         exit 1
     fi
 done

@@ -75,28 +75,27 @@ jobs:
           - shard: cells
             pkgs: ./cells/...
             static_checks: false
-          # `others` was a single 140s shard covering adapters + cmd +
-          # examples + tests + contracts. Splitting along compile cost:
-          # `others-heavy` carries ./adapters/... (external SDK dependency
-          # surface — postgres / redis / rabbitmq / vault / otel). `others-light`
-          # carries the remaining lightweight subtrees. The split brings the
-          # heavier leg below the kernel-shard critical path.
+          # The former `others-heavy` shard (`./adapters/...`) is GONE: each
+          # adapter became its own go.work module (#1558), so a root
+          # `./adapters/...` pattern stops at the nested-module boundary and
+          # silently matches zero packages (same failure mode as examples #1556
+          # / cmd/gocell #1557). Per-module adapter unit tests now run in
+          # hack/verify-workspace-test.sh (make verify → governance.yml) and
+          # per-module adapter build in hack/verify-workspace.sh — both iterate
+          # the go.work module funnel. Adapter *integration* coverage still feeds
+          # SonarCloud via the integration-test `adapters` shard below.
           #
-          # examples/* unit tests are NO LONGER in this shard: each example is its
-          # own go.work module (#1556), so a root `./examples/...` pattern would
-          # stop at the nested-module boundary and silently match zero packages.
-          # Per-module example unit tests run in hack/verify-workspace-test.sh
-          # (make verify → governance.yml); per-module example build runs in
-          # hack/verify-workspace.sh — both iterate the go.work module funnel.
+          # examples/* unit tests are likewise NOT in any build-test shard: each
+          # example is its own go.work module (#1556), so a root `./examples/...`
+          # pattern would match zero packages. Per-module example unit tests run
+          # in hack/verify-workspace-test.sh; per-module example build in
+          # hack/verify-workspace.sh — the same go.work funnel.
           # Likewise cmd/gocell became its own go.work module (#1557): the
           # `./cmd/...` pattern in the others-light shard below stops at its
           # nested-module boundary and no longer matches cmd/gocell packages (it
           # still matches cmd/corebundle + cmd/internal). cmd/gocell unit tests run
           # in hack/verify-workspace-test.sh and its build in hack/verify-workspace.sh
-          # — the same go.work funnel as examples/*.
-          - shard: others-heavy
-            pkgs: ./adapters/...
-            static_checks: false
+          # — the same go.work funnel as examples/* and adapters/*.
           - shard: others-light
             pkgs: ./cmd/... ./tests/... ./contracts/...
             static_checks: false
@@ -649,8 +648,8 @@ jobs:
         # silently pass. Pipe stdout+stderr through grep and fail explicitly.
         run: |
           set -euo pipefail
-          out=$(go test -tags=integration,otelcollector ./adapters/otel/ \
-            -run '^TestNewTracer_ExportsSpanToOTLPCollector$' -count=1 -timeout 10m 2>&1)
+          out=$(go test -C adapters/otel -tags=integration,otelcollector \
+            -run '^TestNewTracer_ExportsSpanToOTLPCollector$' -count=1 -timeout 10m ./... 2>&1)
           echo "$out"
           if echo "$out" | grep -q 'no tests to run'; then
             echo "FAIL: -run selector matched zero tests in ./adapters/otel/; rename/move regression?"
@@ -676,8 +675,8 @@ jobs:
         # silently disable the race regression防线.
         run: |
           set -euo pipefail
-          out=$(go test -tags=integration -race -count=3 -timeout 5m ./adapters/postgres/ \
-            -run '^TestMigrator_ConcurrentUp_NoRaceWithSessionLocker$' 2>&1)
+          out=$(go test -C adapters/postgres -tags=integration -race -count=3 -timeout 5m \
+            -run '^TestMigrator_ConcurrentUp_NoRaceWithSessionLocker$' ./... 2>&1)
           echo "$out"
           if echo "$out" | grep -q 'no tests to run'; then
             echo "FAIL: -run selector matched zero tests in ./adapters/postgres/; rename/move regression?"
@@ -704,8 +703,8 @@ jobs:
         # silently disable the race regression 防线.
         run: |
           set -euo pipefail
-          out=$(go test -tags=integration -race -count=3 -timeout 5m ./adapters/redis/ \
-            -run '^TestRaceStress_' 2>&1)
+          out=$(go test -C adapters/redis -tags=integration -race -count=3 -timeout 5m \
+            -run '^TestRaceStress_' ./... 2>&1)
           echo "$out"
           if echo "$out" | grep -q 'no tests to run'; then
             echo "FAIL: -run selector matched zero tests in ./adapters/redis/; rename/move regression?"
@@ -722,7 +721,7 @@ jobs:
         # cluster tag keeps the file from bit-rotting when go-redis API
         # changes or our own cluster paths drift. Real-cluster integration
         # is left to staging and B11 backlog.
-        run: go vet -tags=integration_cluster ./adapters/redis/...
+        run: go vet -C adapters/redis -tags=integration_cluster ./...
 
       # adapters/postgres coverage gate (G11 / PR-V1-TEST-GATE-CLOSURE)
       # Closes P3-TD-02 + P4-TD-08 + P4-TD-11: previously coverage-integration.out
@@ -1040,13 +1039,15 @@ jobs:
         run: |
           set -euo pipefail
           echo "mode: atomic" > coverage-merged.out
-          # build-test profiles: kernel, tools, runtime, cells, others-heavy,
-          #   others-light (others-* replaces the single former `others`
-          #   shard, see build-test matrix above).
+          # build-test profiles: kernel, tools, runtime, cells, others-light
+          #   (the former others-heavy `./adapters/...` shard was removed in
+          #   #1558 — adapters became per-module go.work satellites; their unit
+          #   tests run in hack/verify-workspace-test.sh, integration coverage
+          #   still arrives via coverage-integration-adapters.out below).
           # integration-test profiles: adapters (main leg), cells, corebundle,
           #   tests. adapters-race has no profile (run_main_integration: false).
           for f in coverage-shard-kernel.out coverage-shard-tools.out coverage-shard-runtime.out coverage-shard-cells.out \
-                   coverage-shard-others-heavy.out coverage-shard-others-light.out \
+                   coverage-shard-others-light.out \
                    coverage-integration-adapters.out coverage-integration-cells.out coverage-integration-corebundle.out coverage-integration-tests.out; do
             if [ ! -f "$f" ]; then
               echo "FAIL: expected profile $f is missing" >&2
