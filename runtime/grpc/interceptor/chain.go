@@ -12,9 +12,10 @@ import (
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
-// Deps holds the dependencies the unary interceptor chain needs. They are
-// supplied by the composition root (cmd/ or examples/); this package only
-// composes them.
+// Deps holds the dependencies the unary AND streaming interceptor chains need
+// (NewUnaryChain / NewStreamChain share one Deps). They are supplied by the
+// composition root (cmd/ or examples/); this package only composes them. Drain is
+// consumed only by the stream chain (StreamDrain); the unary chain ignores it.
 type Deps struct {
 	// Tracer records one span per RPC. A nil Tracer degrades to NoopTracer.
 	Tracer wrapper.Tracer

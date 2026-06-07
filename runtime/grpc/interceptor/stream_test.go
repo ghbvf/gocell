@@ -321,6 +321,17 @@ func TestNewStreamChain_NilRegistrarPanics(t *testing.T) {
 	_ = NewStreamChain(d)
 }
 
+func TestNewStreamChain_ZeroValueDrainPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatalf("NewStreamChain with a zero-value new(DrainSignal) must panic (nil cancel → panic at GracefulStop)")
+		}
+	}()
+	d := streamDeps()
+	d.Drain = new(runtimegrpc.DrainSignal) // non-nil zero-value → invalid
+	_ = NewStreamChain(d)
+}
+
 func TestNewStreamChain_EmptyCellIDClosedSetPanics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {

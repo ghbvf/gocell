@@ -1,6 +1,10 @@
 package grpc
 
-import "context"
+import (
+	"context"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
 
 // drain.go — framework-side gRPC drain signal (GAP-1 PR-10 [#1153]).
 //
@@ -26,18 +30,34 @@ type DrainSignal struct {
 	cancel context.CancelFunc
 }
 
-// NewDrainSignal returns a fresh, un-triggered DrainSignal. The fields are
-// unexported, so this is the only way to obtain a usable value — a zero-value
-// DrainSignal{} cannot be constructed outside this package.
+// NewDrainSignal returns a fresh, un-triggered DrainSignal. This is the ONLY way
+// to obtain a usable value: the type is exported (it is a Config/Deps field), so
+// a zero-value new(DrainSignal) / DrainSignal{} IS constructable outside this
+// package, but its fields are nil — Trigger/Context would panic. Validate (called
+// by Config.validate and NewStreamChain) rejects such a value at startup.
 func NewDrainSignal() *DrainSignal {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &DrainSignal{ctx: ctx, cancel: cancel}
 }
 
+// Validate reports whether d is a usable signal built by NewDrainSignal. It is
+// nil-receiver safe. A nil pointer or a zero-value (new(DrainSignal)) has a nil
+// cancel/ctx and would panic at Trigger()/Context(); Config.validate and
+// NewStreamChain call Validate so a non-constructed signal fails fast at startup
+// rather than at GracefulStop. The sealed-construction Hard upgrade (forbidding a
+// zero-value at compile time) is tracked with the #1752 single-builder.
+func (d *DrainSignal) Validate() error {
+	if d == nil || d.cancel == nil || d.ctx == nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"grpc: DrainSignal is not initialized; build it with runtimegrpc.NewDrainSignal()")
+	}
+	return nil
+}
+
 // Context returns a context canceled (with context.Canceled) the first time
 // Trigger is called. StreamDrain derives each stream's handler context from it
 // so drain propagates as ordinary ctx cancellation. It is never nil for a value
-// built by NewDrainSignal.
+// built by NewDrainSignal (a zero-value is rejected by Validate before use).
 func (d *DrainSignal) Context() context.Context { return d.ctx }
 
 // Trigger cancels Context(). It is idempotent and safe for concurrent use: the

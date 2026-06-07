@@ -214,9 +214,9 @@ func scanGRPCMetricsFunc(p *Pass, fn *ast.FuncDecl, fnName string) []Diagnostic 
 			d = append(d, Diagnostic{Rel: rel, Line: p.Fset.Position(recordLit.Pos()).Line, Message: grpcMetricsRuleCtxSource + ": " + msg})
 		}
 	}
-	add(callsResolve, "UnaryMetrics must resolve the cell label through metrics.ResolveCellLabel(ctx, validCellIDs)")
-	add(!readsCtxInline, "cell resolution moved into metrics.ResolveCellLabel; UnaryMetrics must not read ctxkeys.CellIDFrom inline")
-	add(sawRecordRPC, "UnaryMetrics must call GRPCCollector.RecordRPC")
+	add(callsResolve, fnName+" must resolve the cell label through metrics.ResolveCellLabel(ctx, validCellIDs)")
+	add(!readsCtxInline, "cell resolution moved into metrics.ResolveCellLabel; "+fnName+" must not read ctxkeys.CellIDFrom inline")
+	add(sawRecordRPC, fnName+" must call GRPCCollector.RecordRPC")
 	add(cellArgIsIdent, "RecordRPC arg[1] (cell label) must be an identifier (the resolved CellLabel variable), not an inline expression")
 	add(!cellArgIsLit, "RecordRPC arg[1] (cell label) must NOT be a literal")
 	add(cellFromResolve, "RecordRPC arg[1] (cell label) must be the same variable assigned from "+

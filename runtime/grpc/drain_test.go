@@ -40,6 +40,22 @@ func TestDrainSignal_TriggerIdempotent(t *testing.T) {
 	}
 }
 
+// TestDrainSignal_Validate asserts a constructed signal is valid and a nil /
+// zero-value (new(DrainSignal)) one is rejected — the latter has a nil cancel and
+// would panic at Trigger()/Context(), so Validate lets Config.validate +
+// NewStreamChain fail fast at startup.
+func TestDrainSignal_Validate(t *testing.T) {
+	if err := runtimegrpc.NewDrainSignal().Validate(); err != nil {
+		t.Fatalf("a NewDrainSignal() value must be valid, got %v", err)
+	}
+	if err := new(runtimegrpc.DrainSignal).Validate(); err == nil {
+		t.Fatalf("a zero-value new(DrainSignal) must be rejected (nil cancel → panic at Trigger)")
+	}
+	if err := (*runtimegrpc.DrainSignal)(nil).Validate(); err == nil {
+		t.Fatalf("a nil *DrainSignal must be rejected (Validate must be nil-receiver safe)")
+	}
+}
+
 // TestDrainSignal_TriggerConcurrent asserts concurrent Trigger() is race-free —
 // GracefulStop may be reached from multiple goroutines. Run with -race.
 func TestDrainSignal_TriggerConcurrent(t *testing.T) {

@@ -70,10 +70,13 @@ type Config struct {
 	TLS TLSConfig
 
 	// ServerOptions are extra grpc.ServerOptions appended after the TLS
-	// credentials option. The composition root (runtime/bootstrap) uses this to
-	// inject the unary interceptor chain (runtime/grpc/interceptor.NewUnaryChain).
-	// It is not a business-bypass seam: cells/ cannot import adapters/ (layering
-	// rule), so only composition roots ever construct a Config.
+	// credentials option. The composition root injects the unary AND streaming
+	// interceptor chains here (interceptor.NewUnaryChain + NewStreamChain, from
+	// one shared Deps). It is not a business-bypass seam: cells/ cannot import
+	// adapters/ (layering rule), so only composition roots ever construct a
+	// Config. (Compile-time enforcement that a streaming server always installs
+	// the stream chain — closing the "forget NewStreamChain → unauthenticated
+	// streams" gap — is the #1752 single-builder Hard upgrade.)
 	ServerOptions []grpc.ServerOption
 
 	// Registrar is the shared method→cellID registry (Option 3, #1152). The
@@ -158,10 +161,13 @@ func (c *Config) validate() error {
 	// fallback: a missing one is a composition-root wiring bug (fail-closed). The
 	// composition root must hand the SAME instance to both Config.Drain and
 	// interceptor.Deps.Drain so the GracefulStop trigger reaches the chain.
-	if c.Drain == nil {
+	// Validate (nil-receiver safe) also rejects a zero-value new(DrainSignal),
+	// which has a nil cancel and would otherwise panic at GracefulStop.
+	if c.Drain.Validate() != nil {
 		return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
 			"grpc: Drain is required; create it with runtimegrpc.NewDrainSignal() at the "+
-				"composition root and pass the same instance to both Config.Drain and "+
+				"composition root (a nil or zero-value DrainSignal is rejected — it would panic "+
+				"at GracefulStop) and pass the same instance to both Config.Drain and "+
 				"interceptor.Deps.Drain. A unary-only server still wires it — the trigger "+
 				"is a harmless no-op when no StreamDrain interceptor consumes it")
 	}

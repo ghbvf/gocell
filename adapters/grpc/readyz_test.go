@@ -38,6 +38,20 @@ func TestNew_RequiresDrain(t *testing.T) {
 	require.Error(t, err, "New must reject a Config without a Drain signal")
 }
 
+// TestNew_RejectsZeroValueDrain asserts New rejects a non-nil but zero-value
+// DrainSignal (new(grpcadapter)... is impossible — the type is in runtimegrpc):
+// new(runtimegrpc.DrainSignal) passes a bare `== nil` check but has a nil cancel
+// and would panic at GracefulStop, so Config.validate calls Drain.Validate().
+func TestNew_RejectsZeroValueDrain(t *testing.T) {
+	_, err := grpcadapter.New(grpcadapter.Config{
+		Addr:      ":0",
+		TLS:       grpcadapter.TLSConfig{AllowInsecure: true},
+		Registrar: runtimegrpc.NewServiceRegistrar(),
+		Drain:     new(runtimegrpc.DrainSignal), // non-nil zero-value → invalid
+	})
+	require.Error(t, err, "New must reject a zero-value DrainSignal (would panic at GracefulStop)")
+}
+
 // TestServer_Probes_ReadyShape asserts the server exposes exactly one readiness
 // probe named grpc_ready that reports unhealthy before serving (so /readyz gates
 // the instance out until the gRPC server is actually accepting RPCs).

@@ -207,9 +207,11 @@ func NewStreamChain(deps Deps) grpc.ServerOption {
 			errcode.Assertion(
 				"interceptor.NewStreamChain: Deps.CellIDClosedSet is required (the assembly cell-id set)")))
 	}
-	if deps.Drain == nil {
+	if deps.Drain.Validate() != nil {
 		panic(panicregister.Approved("interceptor-chain-drain-required",
-			errcode.Assertion("interceptor.NewStreamChain: Deps.Drain is required")))
+			errcode.Assertion("interceptor.NewStreamChain: Deps.Drain is required and must be "+
+				"built with runtimegrpc.NewDrainSignal() (a nil or zero-value DrainSignal would "+
+				"panic at GracefulStop)")))
 	}
 	validCellIDs := buildValidCellIDs(deps.CellIDClosedSet)
 	return grpc.ChainStreamInterceptor(
