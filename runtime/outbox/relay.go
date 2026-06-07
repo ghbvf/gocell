@@ -665,9 +665,25 @@ const (
 //   - ClaimDone → already processed → success without dispatch (command deduped).
 //   - ClaimBusy → another worker holds the claim → transient error → MarkRetry.
 //   - unknown state → permanent error → MarkDead (fail-closed).
+//
+// Dedup observability is a deliberate design decision, not a metric gap: the
+// ClaimDone (deduped) branch settles the row as published — the outbox row WAS
+// consumed, so "published" is the correct row outcome — and the command-level
+// dedup signal is carried by the "command deduped" Info log below (operators
+// reconcile dedup rate from that log line's count, NOT from the outbox published
+// counter, which deliberately does not distinguish first-dispatch from dedup).
+// Each branch emits a structured slog line (entry_id / routing_topic /
+// command_id / state / error — never the command payload body) so operators can
+// distinguish dedup vs first-dispatch vs fail-closed dead-letter vs busy retry.
 func (r *Relay) dispatchCommand(ctx context.Context, e ClaimedEntry, fn command.AsyncDispatchFunc) publishResult {
 	key, ok := command.ClaimKeyFromEntry(e.Entry)
 	if !ok {
+		// Security-relevant fail-closed: an entry with no idempotency identity
+		// cannot be safely deduplicated, so it is dead-lettered before Claim.
+		// command_id is empty here (that is the defect), so it is not logged.
+		slog.Error("outbox relay: command entry missing idempotency identity, dead-lettering",
+			slog.String("entry_id", e.ID()),
+			slog.String("routing_topic", e.RoutingTopic()))
 		return publishResult{entry: e, err: kout.NewPermanentError(
 			errcode.New(errcode.KindInvalid, errRelayOp,
 				"outbox relay: command entry missing idempotency identity"))}
@@ -676,9 +692,14 @@ func (r *Relay) dispatchCommand(ctx context.Context, e ClaimedEntry, fn command.
 	state, receipt, err := r.cmdClaimer.Claim(ctx, key, commandLeaseTTL, commandDoneTTL)
 	if err != nil {
 		// Claim infrastructure failure is transient — retry, do not dead-letter.
+		slog.Warn("outbox relay: command claim infra error, will retry",
+			slog.String("entry_id", e.ID()),
+			slog.String("routing_topic", e.RoutingTopic()),
+			slog.Any("error", err))
 		return publishResult{entry: e, err: err}
 	}
 
+	cmdID := e.Metadata()[command.CommandIDMetadataKey]
 	switch state {
 	case idempotency.ClaimAcquired:
 		// fn is a generated DispatchAsync (COMMAND-ASYNC-DISPATCH-CALLER-01 locks
@@ -687,11 +708,25 @@ func (r *Relay) dispatchCommand(ctx context.Context, e ClaimedEntry, fn command.
 	case idempotency.ClaimDone:
 		// Already processed by an earlier delivery — skip dispatch, settle the row
 		// as published (the command is deduped, not re-enqueued). No live receipt.
+		slog.Info("outbox relay: command deduped (already processed)",
+			slog.String("entry_id", e.ID()),
+			slog.String("routing_topic", e.RoutingTopic()),
+			slog.String("command_id", cmdID))
 		return publishResult{entry: e}
 	case idempotency.ClaimBusy:
 		// Another worker holds the claim — transient, retry later.
+		slog.Warn("outbox relay: command dispatch busy, another worker holds claim",
+			slog.String("entry_id", e.ID()),
+			slog.String("routing_topic", e.RoutingTopic()),
+			slog.String("command_id", cmdID))
 		return publishResult{entry: e, err: errCommandDispatchBusy}
 	default:
+		// Claimer returned a state outside the enumerated set — a state-machine
+		// violation, fail-closed dead-letter.
+		slog.Error("outbox relay: command claim returned unknown state, dead-lettering",
+			slog.String("entry_id", e.ID()),
+			slog.String("routing_topic", e.RoutingTopic()),
+			slog.Int("claim_state", int(state)))
 		return publishResult{entry: e, err: kout.NewPermanentError(
 			errcode.New(errcode.KindInternal, errRelayOp,
 				"outbox relay: command claim returned unknown state"))}
@@ -821,15 +856,7 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 			return nil
 		}
 		stats.dead++
-		slog.Error(
-			"outbox relay: entry dead-lettered",
-			slog.String("entry_id", res.entry.ID()),
-			slog.String("event_type", res.entry.EventType()),
-			slog.String("aggregate_id", res.entry.AggregateID()),
-			slog.Int("attempts", newAttempts),
-			slog.Bool("permanent", permanent),
-			slog.String("last_error", errMsg),
-		)
+		logEntryDeadLettered(ctx, res.entry, newAttempts, permanent, errMsg)
 		return nil
 	}
 
@@ -856,6 +883,26 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 	}
 	stats.retried++
 	return nil
+}
+
+// logEntryDeadLettered emits the dead-letter Error log. Extracted from
+// handleFailedEntry to keep it below the cognitive-complexity ceiling. Command
+// entries carry their per-instance dedup identity in metadata; surface it so
+// command dead-lettering is reconcilable. Non-command (event) entries have no
+// command_id — it is omitted then.
+func logEntryDeadLettered(ctx context.Context, entry ClaimedEntry, attempts int, permanent bool, errMsg string) {
+	attrs := []slog.Attr{
+		slog.String("entry_id", entry.ID()),
+		slog.String("event_type", entry.EventType()),
+		slog.String("aggregate_id", entry.AggregateID()),
+		slog.Int("attempts", attempts),
+		slog.Bool("permanent", permanent),
+		slog.String("last_error", errMsg),
+	}
+	if cmdID := entry.Metadata()[command.CommandIDMetadataKey]; cmdID != "" {
+		attrs = append(attrs, slog.String("command_id", cmdID))
+	}
+	slog.LogAttrs(ctx, slog.LevelError, "outbox relay: entry dead-lettered", attrs...)
 }
 
 // isPermanentDispatch reports whether err is tagged as a permanent (non-retryable)

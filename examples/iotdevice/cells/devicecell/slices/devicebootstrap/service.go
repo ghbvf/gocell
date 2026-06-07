@@ -151,7 +151,7 @@ func (s *Service) HandleDeviceRegistered(ctx context.Context, entry outbox.Entry
 		return outbox.Requeue(fmt.Errorf("devicebootstrap: emit enqueue command: %w", err))
 	}
 
-	s.logger.Debug("device-bootstrap: enqueued bootstrap command",
+	s.logger.Info("device-bootstrap: enqueued bootstrap command",
 		slog.String("device_id", ev.ID), slog.String("entry_id", entry.ID()))
 	return outbox.Ack()
 }

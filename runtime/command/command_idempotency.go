@@ -34,6 +34,11 @@ const CommandIDMetadataKey = "gocell.command.idempotency_id"
 // both back via ClaimKeyFromEntry to derive the Claimer dedup key (tenant is taken
 // from the entry's principal envelope, injected by NewEntry from ctx).
 //
+// WARNING: subject and commandID are adjacent same-typed (string) positional
+// params — transposing them is NOT a compile error and silently mis-partitions
+// the dedup slot across subjects. subject = the dedup aggregate (e.g. deviceID);
+// commandID = the per-instance identity (e.g. the source event id).
+//
 // Error contract mirrors kout.Emit: every failure is wrapped with context and
 // returned (never swallowed). Callers MUST return or log the error.
 func EmitAsync[T any](
