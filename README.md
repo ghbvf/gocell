@@ -595,7 +595,7 @@ length before injection into context.
 GoCell is a public Go module — no `GOPRIVATE` or auth setup is required.
 
 ```bash
-# Add the framework to your project
+# Add the framework to your project (or pin a stable tag, e.g. @v0.1.0)
 go get github.com/ghbvf/gocell@latest
 ```
 

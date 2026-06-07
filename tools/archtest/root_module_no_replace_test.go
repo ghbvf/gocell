@@ -44,8 +44,8 @@
 //   - Network reachability of root's dependencies: a root require on a private /
 //     unfetchable module would still pass this static check. Catching that needs a
 //     clean-room `go get @<tag>` network smoke, which is the DX-5 roadmap item
-//     (external-consumer-smoke CI), deliberately deferred — this PR runs that smoke
-//     once by hand and records the evidence in the PR body.
+//     (external-consumer-smoke CI, tracked in #1767), deliberately deferred — this
+//     PR runs that smoke once by hand and records the evidence in the PR body.
 //   - Only replace + exclude are checked; `retract` / `go` / `toolchain` directives
 //     do not block external consumption, so they are intentionally not asserted.
 //   - Satellite-module replaces (cmd/gocell, examples/*) — out of scope (see Why).
@@ -115,11 +115,23 @@ func TestRootModuleNoReplace01_NegativeControl(t *testing.T) {
 		t.Fatalf("%s: read negative-control fixture go.mod: %v", rootModuleNoReplaceRule, err)
 	}
 	if len(replaces) == 0 {
-		t.Errorf("%s: negative control must expose >=1 replace; detector returned none "+
+		t.Fatalf("%s: negative control must expose >=1 replace; detector returned none "+
 			"(invariant would be vacuous)", rootModuleNoReplaceRule)
 	}
+	// Bind fixture content to the detector mapping so a silently-broken parse
+	// (right count, wrong field extraction) is also caught, not just count==0.
+	if replaces[0].Old != "example.com/other" || replaces[0].New != "./local-other" {
+		t.Errorf("%s: negative control replace mismatch: got %q => %q, "+
+			"want example.com/other => ./local-other (fixture/detector mapping drifted)",
+			rootModuleNoReplaceRule, replaces[0].Old, replaces[0].New)
+	}
 	if len(excludes) == 0 {
-		t.Errorf("%s: negative control must expose >=1 exclude; detector returned none "+
+		t.Fatalf("%s: negative control must expose >=1 exclude; detector returned none "+
 			"(invariant would be vacuous)", rootModuleNoReplaceRule)
+	}
+	if excludes[0].Path != "example.com/excluded" || excludes[0].Version != "v1.2.3" {
+		t.Errorf("%s: negative control exclude mismatch: got %q@%q, "+
+			"want example.com/excluded@v1.2.3 (fixture/detector mapping drifted)",
+			rootModuleNoReplaceRule, excludes[0].Path, excludes[0].Version)
 	}
 }

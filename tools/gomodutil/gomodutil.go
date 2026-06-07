@@ -196,6 +196,8 @@ func ReadReplaceExclude(root string) ([]ReplaceDirective, []ExcludeDirective, er
 	}
 	replaces := make([]ReplaceDirective, 0, len(mf.Replace))
 	for _, r := range mf.Replace {
+		// Defensive: modfile.Parse does not emit nil directive entries; the guard
+		// future-proofs against library behavior changes (hence not unit-tested).
 		if r == nil {
 			continue
 		}
