@@ -12,10 +12,13 @@
 //   - Rule (downstream Medium): scan ALL production (non-_test.go, non-generated)
 //     Go files in the module for any reference to kernel/webhook.WithAllowLoopback.
 //     Any such reference is a violation — the option may only appear in _test.go.
-//     Detection: EachInSubtree[SelectorExpr] + ResolvePackageRef(sel) ==
-//     (kernel/webhook, "WithAllowLoopback"). ResolvePackageRef is type-resolved,
-//     so an import alias (e.g. `kwh "…/kernel/webhook"; kwh.WithAllowLoopback`)
-//     cannot bypass it. Today's inventory: 0 production references → vacuous green
+//     Detection: EachInSubtree[Ident] + info.Uses[id].(*types.Func).FullName() ==
+//     "…/kernel/webhook.WithAllowLoopback". Resolving via go/types info.Uses
+//     catches EVERY reference form — qualified (webhook.WithAllowLoopback),
+//     aliased (kwh.WithAllowLoopback), AND dot-import (bare WithAllowLoopback) —
+//     because all three resolve the reference ident to the same *types.Func; the
+//     function *declaration* ident lives in info.Defs, so ssrf.go's definition
+//     never false-fires. Today's inventory: 0 production references → vacuous green
 //     (every caller is a kernel/webhook same-package test).
 //
 // AI-robust rating (Funnel 双向锁评级, per .claude/rules/gocell/ai-robust.md):
@@ -37,13 +40,11 @@
 //	B-rule — rule-logic regression: testdata/webhook_allow_loopback_violate is a
 //	  standalone-module production (.go) file that calls webhook.WithAllowLoopback;
 //	  TestWebhookAllowLoopbackProdBan_ReverseFixture asserts the scan fires on it.
-//	B-dotimport — a production file that dot-imports kernel/webhook
-//	  (import . "…/kernel/webhook") and calls bare WithAllowLoopback() would be a
-//	  bare *ast.Ident, not a SelectorExpr, so the SelectorExpr walk misses it (same
-//	  bounded precedent as WEBHOOK-SSRF-GUARD-01/A3). Bounded response: no
-//	  production file dot-imports kernel/webhook (a dot-import of a non-dot-import
-//	  package is itself a lint/style violation), so this vector is not realistic;
-//	  documented here so a future reviewer knows the scan is SelectorExpr-scoped.
+//	(No dot-import blind spot: the info.Uses Ident-walk resolves bare dot-import
+//	  idents to the same *types.Func as qualified/aliased selectors, so all import
+//	  forms are covered. The sibling WEBHOOK-SSRF-GUARD-01/A3 still uses a
+//	  SelectorExpr-only scan with that documented gap; adopting this Ident-walk
+//	  there is a separate, out-of-this-PR cleanup.)
 //
 // ref: docs/architecture/202605312300-1159-adr-webhook-ssrf-policy.md §Consequences
 // ref: tools/archtest/webhook_ssrf_guard_test.go (production callsite-scan template)
@@ -63,18 +64,26 @@ import (
 // webhookAllowLoopbackFunc is the banned exported function name in kernel/webhook.
 const webhookAllowLoopbackFunc = "WithAllowLoopback"
 
+// webhookAllowLoopbackFullName is the go/types FullName of the banned function.
+// Matching info.Uses against this FullName catches every reference form
+// (qualified / aliased / dot-import) because all resolve to the same *types.Func.
+const webhookAllowLoopbackFullName = webhookPkgPath + "." + webhookAllowLoopbackFunc
+
 // scanWebhookAllowLoopback implements the rule: any reference to
-// kernel/webhook.WithAllowLoopback in a production file is a violation.
+// kernel/webhook.WithAllowLoopback in a production file is a violation. It walks
+// every identifier and matches info.Uses to the banned func's go/types FullName,
+// so qualified/aliased/dot-import references are all caught; the func declaration
+// (info.Defs, not info.Uses) is not flagged.
 func scanWebhookAllowLoopback(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
 	var out []Diagnostic
-	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-		pkgPath, name, ok := ResolvePackageRef(info, sel)
-		if !ok || pkgPath != webhookPkgPath || name != webhookAllowLoopbackFunc {
+	EachInSubtree[ast.Ident](file, func(id *ast.Ident) {
+		fn, ok := info.Uses[id].(*types.Func)
+		if !ok || fn.FullName() != webhookAllowLoopbackFullName {
 			return
 		}
 		out = append(out, Diagnostic{
 			Rel:  rel,
-			Line: fset.Position(sel.Pos()).Line,
+			Line: fset.Position(id.Pos()).Line,
 			Message: "webhook.WithAllowLoopback referenced in production code; it is dev/CI-only " +
 				"and must appear only in _test.go (WEBHOOK-ALLOW-LOOPBACK-PROD-BAN-01)",
 		})
