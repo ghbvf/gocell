@@ -962,7 +962,11 @@ func TestMigrator_ForwardRebuild_Migration043_PopulatedAuditEntries(t *testing.T
 	require.NoError(t, execErr, "must be able to insert a row into pre-043 audit_entries")
 
 	// Up() must fail-closed: 043 is pending and audit_entries has rows.
-	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_043_prep")
+	// Bound the FS to 043 so 043 is the SOLE pending audit_entries rebuild — this
+	// test asserts the gate cites migration 43 specifically. (Migration 055 is
+	// another audit_entries rebuild; the full-FS multi-rebuild case is covered by
+	// TestMigrator_ForwardRebuild_Migrations043And044_DualPermit.)
+	migrator, err := newMigratorForTable(pool, migrationsUpToFS(t, 43), "schema_migrations_043_prep")
 	require.NoError(t, err)
 
 	upErr := migrator.Up(ctx)
@@ -974,17 +978,13 @@ func TestMigrator_ForwardRebuild_Migration043_PopulatedAuditEntries(t *testing.T
 	require.True(t, ok, "error must have a public detail keyed 'migration'")
 	assert.Equal(t, int64(43), migDetail.Value(), "migration detail value must be 43")
 
-	// ForwardRebuild with the correct permit must succeed.
-	migrator2, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_043_prep")
+	// ForwardRebuild with the correct permit must succeed (bounded FS: 043 only).
+	migrator2, err := newMigratorForTable(pool, migrationsUpToFS(t, 43), "schema_migrations_043_prep")
 	require.NoError(t, err)
 
 	permit := mustAllowForwardRebuild(t, 43, "043 audit_entries v2 rebuild integration test")
-	// Migration 055 ALSO forward-rebuilds audit_entries (#1618). The phase0 gate
-	// checks ALL pending rebuilds against the CURRENTLY-populated table, so 055
-	// needs its own permit too (audit_entries has the pre-043 row right now).
-	permit55 := mustAllowForwardRebuild(t, 55, "055 audit_entries per-tenant rebuild integration test")
-	require.NoError(t, migrator2.ForwardRebuild(ctx, permit, permit55),
-		"ForwardRebuild with permits for migrations 043+055 must succeed")
+	require.NoError(t, migrator2.ForwardRebuild(ctx, permit),
+		"ForwardRebuild with permit for migration 043 must succeed")
 
 	// Verify migration 043's subject_id column was created.
 	var subjectIDExists bool
