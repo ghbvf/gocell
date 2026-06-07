@@ -242,15 +242,24 @@ producer 是 `examples/iotdevice` 的 devicecell——订阅 `event.device-regis
 PG outbox writer 要 tx）：
 
 ```go
-// producer（cells/devicecell/slices/devicebootstrap，事件反应式 archetype）
-func (s *Service) onDeviceRegistered(ctx context.Context, ev DeviceRegisteredEvent) error {
-    return s.txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+// producer（cells/devicecell/slices/devicebootstrap，事件反应式 archetype；
+// 形态示意，真实签名见 service.go::HandleDeviceRegistered —— 它是 outbox.EntryHandler
+// 而非 typed event：先 json.Unmarshal(entry.Payload()) 进 file-local decode view，
+// subject/commandID 取自该 view.ID 与 entry.ID()）
+func (s *Service) HandleDeviceRegistered(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
+    var ev deviceRegisteredEvent // file-local decode view of the payload
+    _ = json.Unmarshal(entry.Payload(), &ev)
+    err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
         return command.EmitAsync(txCtx, s.clk, s.emitter,
             enqueue.DispatchID,     // command topic
-            ev.DeviceID,            // subject（dedup 维度）
-            ev.EventID,             // command_id = 源事件 id（重投稳定）
+            ev.ID,                  // subject（dedup 维度 = deviceID）
+            entry.ID(),             // command_id = 源事件 entry.ID()（重投稳定）
             EnqueueRequest{...})
     })
+    if err != nil {
+        return outbox.Requeue(err)
+    }
+    return outbox.Ack()
 }
 
 // composition root（examples/iotdevice/run.go，demo + durable 两模式都接）

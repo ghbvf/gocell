@@ -79,12 +79,14 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	eb := eventbus.New(clk)
 
 	// Event publish channel selection. By default the cell publishes
-	// device-registered events to the in-memory bus (no in-process subscriber —
-	// it is a demo sink). When GOCELL_IOTDEVICE_MQTT_BROKERS is set, swap the
-	// cell's direct publisher to MQTT so events flow to a real broker, observable
-	// with `mosquitto_sub`. This is a single-channel swap, not a parallel mirror:
-	// device-registered has no second sink to mirror to. The HTTP/WS main path is
-	// unchanged. See examples/iotdevice/docs/mqtt.md.
+	// device-registered events to the in-memory bus, where the in-process
+	// devicebootstrap subscriber reactively consumes them and enqueues a bootstrap
+	// command (the #1698 reactive loop). When GOCELL_IOTDEVICE_MQTT_BROKERS is set,
+	// swap the cell's direct publisher to MQTT so events ALSO flow to a real broker
+	// (observable with `mosquitto_sub`); the MQTT swap only replaces the external
+	// egress channel — the in-process reactive subscriber routes off the same `eb`
+	// regardless. This is a single egress-channel swap, not a parallel mirror. The
+	// HTTP/WS main path is unchanged. See examples/iotdevice/docs/mqtt.md.
 	var directPub outbox.Publisher = eb
 	var mqttBootstrapOpts []bootstrap.Option
 	mqttPub, mqttConn, mqttOK, err := buildMQTTDirectPublisher(ctx, clk, logger)
@@ -259,10 +261,10 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 // entries in-process, and the CellTxManager the bootstrap slice uses to wrap
 // command.EmitAsync in a real transaction in durable mode (#1698).
 type commandRelaySubsystem struct {
-	bootstrapEmitter    outbox.CellEmitter
+	bootstrapEmitter   outbox.CellEmitter
 	bootstrapTxManager persistence.CellTxManager
-	consumerBase        *outbox.ConsumerBase
-	relay               *outboxruntime.Relay
+	consumerBase       *outbox.ConsumerBase
+	relay              *outboxruntime.Relay
 }
 
 // buildCommandRelaySubsystem wires the async command-relay subsystem for the
@@ -326,10 +328,10 @@ func buildCommandRelaySubsystem(
 	}, claimer)
 
 	return commandRelaySubsystem{
-		bootstrapEmitter:    outbox.WrapEmitterForCell(writerEmitter),
+		bootstrapEmitter:   outbox.WrapEmitterForCell(writerEmitter),
 		bootstrapTxManager: bootstrapTxManager,
-		consumerBase:        consumerBase,
-		relay:               relay,
+		consumerBase:       consumerBase,
+		relay:              relay,
 	}, nil
 }
 
