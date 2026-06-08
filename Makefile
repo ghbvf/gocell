@@ -169,6 +169,7 @@ clean:
 		examples/orderfulfillment/orderfulfillment \
 		examples/ssobff/ssobff \
 		examples/todoorder/todoorder
+	rm -f cmd/gocell/gocell cmd/corebundle/corebundle
 
 # ---------------------------------------------------------------------------
 # Docker Compose lifecycle
