@@ -477,8 +477,11 @@ def _emit_decode(facts, schema):
 def do_selftest(schema):
     # F7: explicit expected-check count so a silently-dropped check fails the
     # selftest rather than printing "OK (N checks)" with a lower-than-expected N.
-    # Update this constant whenever a check is added or removed.
-    EXPECTED_CHECKS = 46
+    # Update this constant whenever a check is added or removed. Breakdown:
+    #   9 round-trip + 2 five-state + 4 schema-reject + 4 forgery + 1 incoherent
+    #   + 1 oos-array + 1 ci-array + 2 exhausted + 22 emitblock-derive
+    #   + 5 kind-coverage = 51
+    EXPECTED_CHECKS = 51
 
     checks = 0
     failures = []
@@ -798,6 +801,23 @@ def do_selftest(schema):
             ok("emitblock/e2e")
     except Exception as e:
         failures.append("FAIL [emitblock/e2e]: %s" % e)
+
+    # F4 completeness: derive the kind set from PHASE_BY_KIND (+ pr-review) so a
+    # new kind added to the mapping is automatically exercised here — it can't be
+    # added silently without a selftest case (the added check also trips
+    # EXPECTED_CHECKS, forcing a deliberate update).
+    for k in list(PHASE_BY_KIND.keys()) + ["pr-review"]:
+        try:
+            extra = {}
+            if k == "ci":
+                extra["ci"] = {"failedChecks": []}
+            if k == "pr-review":
+                extra.update({"phase": "review", "verdict": "approved"})
+            f = derive_facts(_minimal(k, 0, **extra))
+            want_phase = "review" if k == "pr-review" else PHASE_BY_KIND[k]
+            assert_eq("emitblock/kind-coverage/%s" % k, f["phase"], want_phase)
+        except Exception as e:
+            failures.append("FAIL [emitblock/kind-coverage/%s]: %s" % (k, e))
 
     # derive_facts rejects malformed input (fail-closed)
     assert_raises("emitblock/reject/unknown-kind", lambda: derive_facts(_minimal("bogus", 0)))
