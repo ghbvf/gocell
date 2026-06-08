@@ -12,16 +12,23 @@
 # impossible in the payload. base64url's `-` could emit `--`; we deliberately
 # diverge from issue #1660's literal "base64url" for this reason.
 #
-# This helper is the single source for the state machine: producers emit only
-# the *facts* (kind/phase/verdict/refs/findings/cycle.round); `emit` derives
-# `schema`, `cycle.exhausted`, `next`, and `idempotencyKey`, and rejects any
-# incoherent (kind,phase,verdict). The 3-round circuit breaker is enforced
+# This helper is the single source for the state machine. Producers (ship/fix/
+# pr-review skills + codex-pr-router) call `emit-block --kind=K --pr=N` with only
+# the irreducible facts; the engine derives EVERYTHING else so no producer
+# hand-encodes the mapping:
+#   - derive_facts(): kind -> {phase, verdict, round} (the single mapping source,
+#     selftest-locked). phase/fixed-verdict by kind; ci verdict from failedChecks;
+#     round ship=0 / fix=roundBase+1 / pr-review,ci,oos=roundBase (carry).
+#   - derive(): `schema`, `cycle.exhausted`, `next`, `idempotencyKey`, and rejects
+#     any incoherent (kind,phase,verdict).
+# The bash wrapper auto-fetches refs (gh pr view) + roundBase (`round`) + env
+# session/worktree unless overridden. The 3-round circuit breaker is enforced
 # here — when a changes-requested round is exhausted (round >= maxRounds),
 # `next.agent` is forced to `human` so the #935/#1657 daemons stop dispatching
 # and escalate.
 #
 # Subcommands:
-#   emit              stdin JSON facts  -> stdout block line                 (offline)
+#   emit-block --kind=K --pr=N [flags]  derive facts -> stdout block line     (online)
 #   decode            stdin markdown/block -> stdout validated JSON           (offline)
 #   extract <PR#>     gh-fetched comments -> latest block JSON iff fresh       (online)
 #   round   <PR#>     gh-fetched comments -> max cycle.round for this PR       (online)
@@ -57,8 +64,12 @@ REPO_SLUG="ghbvf/gocell"
 
 usage() {
     cat >&2 <<'EOF'
-usage: pr-meta.sh <emit|decode|extract|round|selftest> [args]
-  emit            read fact JSON on stdin, print the gocell-pr-meta:v1 block
+usage: pr-meta.sh <emit-block|decode|extract|round|selftest> [args]
+  emit-block --kind=K --pr=N [flags]   build + print the gocell-pr-meta:v1 block
+                  derives phase/verdict/round/refs/session/worktree from --kind +
+                  --pr; flags: --tool --phase --verdict --findings --ci --oos and
+                  overrides --head-sha --base-ref --head-ref --round-base
+                  --session --worktree (router supplies its gated values)
   decode          read markdown/block on stdin, print validated JSON
   extract <PR#>   fetch PR comments, print the latest block JSON iff fresh
   round   <PR#>   fetch PR comments, print max cycle.round for this PR (0 if none)
@@ -239,6 +250,87 @@ def derive(facts):
     return obj
 
 
+# PHASE_BY_KIND / FIXED_VERDICT_BY_KIND are the single source of the
+# kind->{phase,verdict} mapping that producers (ship/fix/pr-review skills +
+# codex-pr-router) used to hand-encode. derive_facts() below derives phase /
+# verdict / cycle.round from these, so no producer re-states the mapping.
+PHASE_BY_KIND = {"ship": "ship", "fix": "fix", "ci": "check", "oos": "review"}
+FIXED_VERDICT_BY_KIND = {
+    "ship": "needs-review-again",
+    "fix": "needs-check-fix",
+    "oos": "oos-filed",
+}
+
+
+def derive_facts(minimal):
+    """Map minimal producer facts -> full facts (phase/verdict/cycle.round filled).
+
+    Single source of the kind->{phase,verdict,round} mapping (selftest-locked).
+    Producers supply only the irreducible facts; the mapping lives here once so
+    neither the skills nor the codex-pr-router hand-encode it:
+
+      phase:   ship->ship, fix->fix, ci->check, oos->review,
+               pr-review->minimal["phase"] (review|check, a genuine mode choice)
+      verdict: ship/fix/oos fixed by kind; ci-> ci-green if ci.failedChecks empty
+               else ci-failed; pr-review-> minimal["verdict"] (a review judgment)
+      round:   ship->0; fix->roundBase+1; pr-review/ci/oos->roundBase (carry the
+               round of the comment cycle they ride — fixes the prior fix-path
+               pm:ci R+2 drift)
+
+    `roundBase` is the PR's current max cycle.round (== `pr-meta.sh round <PR>`),
+    consumed here and NOT written to the wire block. The derived triple is then
+    validated against COHERENT by derive().
+    """
+    kind = minimal.get("kind")
+    round_base = minimal.get("roundBase")
+    if round_base is None:
+        raise ValueError("derive_facts: roundBase is required")
+    if not isinstance(round_base, int) or isinstance(round_base, bool):
+        raise ValueError("derive_facts: roundBase must be an integer")
+    f = {k: v for k, v in minimal.items() if k != "roundBase"}
+
+    # phase
+    if kind == "pr-review":
+        phase = minimal.get("phase")
+        if phase not in ("review", "check"):
+            raise ValueError(
+                "derive_facts: pr-review requires phase in {review,check}, got %r" % (phase,))
+    else:
+        phase = PHASE_BY_KIND.get(kind)
+        if phase is None:
+            raise ValueError("derive_facts: unknown kind %r" % (kind,))
+    f["phase"] = phase
+
+    # verdict
+    if kind in FIXED_VERDICT_BY_KIND:
+        verdict = FIXED_VERDICT_BY_KIND[kind]
+    elif kind == "ci":
+        failed = (minimal.get("ci") or {}).get("failedChecks") or []
+        verdict = "ci-failed" if failed else "ci-green"
+    else:  # pr-review
+        verdict = minimal.get("verdict")
+        if verdict is None:
+            raise ValueError("derive_facts: pr-review requires an explicit verdict")
+    f["verdict"] = verdict
+
+    # round
+    if kind == "ship":
+        rnd = 0
+    elif kind == "fix":
+        rnd = round_base + 1
+    else:  # pr-review / ci / oos carry the round of the comment cycle they ride
+        rnd = round_base
+    f["cycle"] = {"round": rnd}
+
+    # findings default (ci/oos carry no counts)
+    f.setdefault("findings", {
+        "total": 0, "fixed": 0, "unresolved": 0, "blocking": 0,
+        "byP": {"p0": 0, "p1": 0, "p2": 0, "p3": 0},
+        "byCx": {"cx1": 0, "cx2": 0, "cx3": 0, "cx4": 0},
+    })
+    return f
+
+
 def canon(obj):
     return json.dumps(obj, separators=(",", ":"), sort_keys=True)
 
@@ -280,22 +372,29 @@ def valid_blocks(blob, schema):
     return out
 
 
-def do_emit(schema):
-    try:
-        facts = json.load(sys.stdin)
-        obj = derive(facts)
-    except Exception as e:
-        sys.stderr.write("pr-meta emit: %s\n" % e)
-        sys.exit(1)
+def _encode_block(obj, schema, ctx):
     errs = validate(obj, schema)
     if errs:
-        sys.stderr.write("pr-meta emit: derived object fails schema:\n  " + "\n  ".join(errs) + "\n")
+        sys.stderr.write("pr-meta %s: derived object fails schema:\n  " % ctx + "\n  ".join(errs) + "\n")
         sys.exit(1)
     payload = base64.b64encode(canon(obj).encode("utf-8")).decode("ascii")
     if "--" in payload:  # impossible for standard base64; fail-closed guard
-        sys.stderr.write("pr-meta emit: base64 payload contains '--' (HTML-comment unsafe)\n")
+        sys.stderr.write("pr-meta %s: base64 payload contains '--' (HTML-comment unsafe)\n" % ctx)
         sys.exit(1)
     sys.stdout.write("<!-- %s %s -->\n" % (MARKER, payload))
+
+
+def do_emitblock(schema):
+    # Minimal producer facts on stdin -> derive_facts (kind->phase/verdict/round
+    # mapping) -> derive (schema/cycle/next/idempotencyKey + COHERENT check) ->
+    # block line. The only producer-facing emit path; raw full-fact emit is gone.
+    try:
+        minimal = json.load(sys.stdin)
+        obj = derive(derive_facts(minimal))
+    except Exception as e:
+        sys.stderr.write("pr-meta emit-block: %s\n" % e)
+        sys.exit(1)
+    _encode_block(obj, schema, "emit-block")
 
 
 def do_decode(schema):
@@ -379,7 +478,7 @@ def do_selftest(schema):
     # F7: explicit expected-check count so a silently-dropped check fails the
     # selftest rather than printing "OK (N checks)" with a lower-than-expected N.
     # Update this constant whenever a check is added or removed.
-    EXPECTED_CHECKS = 24
+    EXPECTED_CHECKS = 46
 
     checks = 0
     failures = []
@@ -623,6 +722,92 @@ def do_selftest(schema):
         failures.append("FAIL [%s]: %s" % (name, e))
 
     # ------------------------------------------------------------------
+    # 9. emit-block derive_facts: kind -> phase/verdict/round single source
+    # F10: locks the mapping that producers (ship/fix/pr-review skills +
+    # codex-pr-router) used to hand-encode. Any drift in phase/verdict/round
+    # derivation fails here, not silently in a producer.
+    # ------------------------------------------------------------------
+
+    def _minimal(kind, round_base, **extra):
+        m = {"repo": "ghbvf/gocell", "pr": 42, "kind": kind, "tool": "claude-code",
+             "baseRef": "develop", "headRef": "feature/test", "headSha": "a" * 40,
+             "roundBase": round_base, "session": None, "worktree": None}
+        m.update(extra)
+        return m
+
+    # ship: phase=ship, verdict=needs-review-again, round=0 (roundBase ignored)
+    try:
+        f = derive_facts(_minimal("ship", 5))
+        assert_eq("emitblock/ship/phase", f["phase"], "ship")
+        assert_eq("emitblock/ship/verdict", f["verdict"], "needs-review-again")
+        assert_eq("emitblock/ship/round", f["cycle"]["round"], 0)
+    except Exception as e:
+        failures.append("FAIL [emitblock/ship]: %s" % e)
+
+    # fix: round = roundBase + 1
+    try:
+        f = derive_facts(_minimal("fix", 2))
+        assert_eq("emitblock/fix/phase", f["phase"], "fix")
+        assert_eq("emitblock/fix/verdict", f["verdict"], "needs-check-fix")
+        assert_eq("emitblock/fix/round", f["cycle"]["round"], 3)
+    except Exception as e:
+        failures.append("FAIL [emitblock/fix]: %s" % e)
+
+    # oos: phase=review, verdict=oos-filed, round=carry
+    try:
+        f = derive_facts(_minimal("oos", 2))
+        assert_eq("emitblock/oos/phase", f["phase"], "review")
+        assert_eq("emitblock/oos/verdict", f["verdict"], "oos-filed")
+        assert_eq("emitblock/oos/round", f["cycle"]["round"], 2)
+    except Exception as e:
+        failures.append("FAIL [emitblock/oos]: %s" % e)
+
+    # ci: verdict from failedChecks; round = carry (NOT +1 — fixes fix-path R+2)
+    try:
+        f = derive_facts(_minimal(
+            "ci", 2, ci={"failedChecks": [], "passedChecks": 5, "totalChecks": 5}))
+        assert_eq("emitblock/ci-green/verdict", f["verdict"], "ci-green")
+        assert_eq("emitblock/ci-green/phase", f["phase"], "check")
+        assert_eq("emitblock/ci-green/round", f["cycle"]["round"], 2)
+        f = derive_facts(_minimal(
+            "ci", 2, ci={"failedChecks": [{"name": "x", "url": "u"}],
+                         "passedChecks": 4, "totalChecks": 5}))
+        assert_eq("emitblock/ci-failed/verdict", f["verdict"], "ci-failed")
+    except Exception as e:
+        failures.append("FAIL [emitblock/ci]: %s" % e)
+
+    # pr-review: phase + verdict from producer (genuine judgment); round = carry
+    try:
+        f = derive_facts(_minimal("pr-review", 1, phase="review", verdict="changes-requested"))
+        assert_eq("emitblock/pr-review-review/phase", f["phase"], "review")
+        assert_eq("emitblock/pr-review-review/round", f["cycle"]["round"], 1)
+        f = derive_facts(_minimal("pr-review", 1, phase="check", verdict="ready"))
+        assert_eq("emitblock/pr-review-check/phase", f["phase"], "check")
+        assert_eq("emitblock/pr-review-check/verdict", f["verdict"], "ready")
+    except Exception as e:
+        failures.append("FAIL [emitblock/pr-review]: %s" % e)
+
+    # end-to-end: minimal -> derive_facts -> derive -> encode -> decode canonical
+    try:
+        full = derive(derive_facts(_minimal("ship", 0)))
+        payload = base64.b64encode(canon(full).encode("utf-8")).decode("ascii")
+        decoded_list = valid_blocks("<!-- %s %s -->" % (MARKER, payload), schema)
+        if not decoded_list or canon(decoded_list[0]) != canon(full):
+            failures.append("FAIL [emitblock/e2e]: round-trip mismatch")
+        else:
+            ok("emitblock/e2e")
+    except Exception as e:
+        failures.append("FAIL [emitblock/e2e]: %s" % e)
+
+    # derive_facts rejects malformed input (fail-closed)
+    assert_raises("emitblock/reject/unknown-kind", lambda: derive_facts(_minimal("bogus", 0)))
+    assert_raises("emitblock/reject/no-roundbase", lambda: derive_facts({"kind": "ship"}))
+    assert_raises("emitblock/reject/prreview-no-phase",
+                  lambda: derive_facts(_minimal("pr-review", 0, verdict="approved")))
+    assert_raises("emitblock/reject/prreview-no-verdict",
+                  lambda: derive_facts(_minimal("pr-review", 0, phase="review")))
+
+    # ------------------------------------------------------------------
     # Report
     # ------------------------------------------------------------------
 
@@ -648,8 +833,8 @@ def main():
     mode, schema_path = sys.argv[1], sys.argv[2]
     with open(schema_path) as f:
         schema = json.load(f)
-    if mode == "emit":
-        do_emit(schema)
+    if mode == "emitblock":
+        do_emitblock(schema)
     elif mode == "decode":
         do_decode(schema)
     elif mode == "extract":
@@ -683,7 +868,95 @@ normalize_pr() {
     printf '%s' "${pr}"
 }
 
-cmd_emit() { py emit "${SCHEMA_FILE}"; }
+# cmd_emit_block is the single producer-facing funnel: ship/fix/pr-review skills
+# and the codex-pr-router all call it instead of hand-building the
+# kind/phase/verdict/round JSON. It assembles the minimal facts (deriving
+# refs/roundBase/session/worktree unless overridden) and pipes them to the
+# offline `emitblock` engine mode, which applies derive_facts (the single mapping
+# source) + derive (schema/cycle/next/idempotencyKey). The router overrides
+# --head-sha/--base-ref/--head-ref/--round-base to preserve its gated values.
+cmd_emit_block() {
+    local kind="" pr="" tool="claude-code" phase="" verdict=""
+    local findings="" ci="" oos=""
+    local head_sha="" base_ref="" head_ref="" round_base=""
+    local session="__ENV__" worktree="__ENV__"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --kind=*)       kind="${1#*=}" ;;
+            --pr=*)         pr="${1#*=}" ;;
+            --tool=*)       tool="${1#*=}" ;;
+            --phase=*)      phase="${1#*=}" ;;
+            --verdict=*)    verdict="${1#*=}" ;;
+            --findings=*)   findings="${1#*=}" ;;
+            --ci=*)         ci="${1#*=}" ;;
+            --oos=*)        oos="${1#*=}" ;;
+            --head-sha=*)   head_sha="${1#*=}" ;;
+            --base-ref=*)   base_ref="${1#*=}" ;;
+            --head-ref=*)   head_ref="${1#*=}" ;;
+            --round-base=*) round_base="${1#*=}" ;;
+            --session=*)    session="${1#*=}" ;;
+            --worktree=*)   worktree="${1#*=}" ;;
+            *) echo "pr-meta emit-block: unknown flag '$1'" >&2; return 64 ;;
+        esac
+        shift
+    done
+    [[ -n "${kind}" ]] || { echo "pr-meta emit-block: --kind required" >&2; return 64; }
+    pr="$(normalize_pr "${pr}")" || return 64
+
+    # Refs: derive any not explicitly overridden via a single gh pr view.
+    if [[ -z "${head_sha}" || -z "${base_ref}" || -z "${head_ref}" ]]; then
+        local view
+        view="$(gh pr view "${pr}" --repo "${REPO_SLUG}" \
+            --json baseRefName,headRefName,headRefOid)" \
+            || { echo "pr-meta emit-block: gh pr view failed" >&2; return 1; }
+        [[ -n "${base_ref}" ]] || base_ref="$(printf '%s' "${view}" | jq -r '.baseRefName')"
+        [[ -n "${head_ref}" ]] || head_ref="$(printf '%s' "${view}" | jq -r '.headRefName')"
+        [[ -n "${head_sha}" ]] || head_sha="$(printf '%s' "${view}" | jq -r '.headRefOid')"
+    fi
+
+    # roundBase: derive via `round <pr>` unless overridden.
+    if [[ -z "${round_base}" ]]; then
+        round_base="$(cmd_round "${pr}")" \
+            || { echo "pr-meta emit-block: round lookup failed" >&2; return 1; }
+    fi
+
+    # session/worktree: __ENV__ sentinel => derive from env; an explicit flag
+    # (including empty, used by the router) passes through, with empty => null.
+    if [[ "${session}" == "__ENV__" ]]; then session="${CLAUDE_CODE_SESSION_ID:-}"; fi
+    if [[ "${worktree}" == "__ENV__" ]]; then
+        worktree="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+    fi
+
+    local minimal
+    minimal="$(jq -nc \
+        --arg kind "${kind}" \
+        --argjson pr "${pr}" \
+        --arg repo "${REPO_SLUG}" \
+        --arg baseRef "${base_ref}" \
+        --arg headRef "${head_ref}" \
+        --arg headSha "${head_sha}" \
+        --arg tool "${tool}" \
+        --argjson roundBase "${round_base}" \
+        --arg phase "${phase}" \
+        --arg verdict "${verdict}" \
+        --arg session "${session}" \
+        --arg worktree "${worktree}" \
+        --argjson findings "${findings:-null}" \
+        --argjson ci "${ci:-null}" \
+        --argjson oos "${oos:-null}" \
+        '{kind:$kind, pr:$pr, repo:$repo, baseRef:$baseRef, headRef:$headRef,
+          headSha:$headSha, tool:$tool, roundBase:$roundBase,
+          session:(if $session=="" then null else $session end),
+          worktree:(if $worktree=="" then null else $worktree end)}
+         + (if $phase=="" then {} else {phase:$phase} end)
+         + (if $verdict=="" then {} else {verdict:$verdict} end)
+         + (if $findings==null then {} else {findings:$findings} end)
+         + (if $ci==null then {} else {ci:$ci} end)
+         + (if $oos==null then {} else {oos:$oos} end)')" \
+        || { echo "pr-meta emit-block: failed to assemble facts JSON" >&2; return 1; }
+
+    printf '%s' "${minimal}" | py emitblock "${SCHEMA_FILE}"
+}
 
 cmd_decode() { py decode "${SCHEMA_FILE}"; }
 
@@ -727,7 +1000,7 @@ main() {
     local sub="${1:-}"
     if [[ $# -gt 0 ]]; then shift; fi
     case "${sub}" in
-        emit)     cmd_emit "$@" ;;
+        emit-block) cmd_emit_block "$@" ;;
         decode)   cmd_decode "$@" ;;
         extract)  cmd_extract "$@" ;;
         round)    cmd_round "$@" ;;
