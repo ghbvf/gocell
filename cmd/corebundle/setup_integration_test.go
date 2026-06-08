@@ -267,13 +267,13 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		// (observer emits event.auth.bootstrap-failed.v1 → auditcore subscriber
 		// writes the bootstrap-namespace ledger), so poll until it lands.
 		testwait.External(t, "bootstrap-missing-header-audit", func() bool {
-			es, qerr := multiStore.Query(context.Background(), setupTestVis(),
+			es, qerr := multiStore.Query(context.Background(), tenant.TenantID(""), setupTestVis(),
 				ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 				query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 			return qerr == nil && len(es) >= 1
 		}, testtime.EventuallyDefault, testtime.MediumPoll,
 			"401 missing-header path must write a bootstrap.auth.fail ledger entry (async)")
-		entries, err := multiStore.Query(context.Background(), setupTestVis(),
+		entries, err := multiStore.Query(context.Background(), tenant.TenantID(""), setupTestVis(),
 			ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 			query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 		require.NoError(t, err)
@@ -307,13 +307,13 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		// #1423: async delivery — poll until both failure events have been
 		// consumed and appended to the chain.
 		testwait.External(t, "bootstrap-wrong-creds-audit", func() bool {
-			es, qerr := multiStore.Query(context.Background(), setupTestVis(),
+			es, qerr := multiStore.Query(context.Background(), tenant.TenantID(""), setupTestVis(),
 				ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 				query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 			return qerr == nil && len(es) >= 2
 		}, testtime.EventuallyDefault, testtime.MediumPoll,
 			"wrong-credentials path must add a second bootstrap.auth.fail entry (async)")
-		entries, err := multiStore.Query(context.Background(), setupTestVis(),
+		entries, err := multiStore.Query(context.Background(), tenant.TenantID(""), setupTestVis(),
 			ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 			query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 		require.NoError(t, err)
@@ -608,13 +608,13 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 	// poll until it lands. The two prior (authenticated) requests pass bootstrap
 	// auth and produce no auth-fail event, so exactly one entry is expected.
 	testwait.External(t, "bootstrap-ratelimited-audit", func() bool {
-		es, qe := multiStore.Query(context.Background(), setupTestVis(),
+		es, qe := multiStore.Query(context.Background(), tenant.TenantID(""), setupTestVis(),
 			ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 			query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 		return qe == nil && len(es) >= 1
 	}, testtime.EventuallyDefault, testtime.MediumPoll,
 		"rate-limited path must write a bootstrap.auth.fail ledger entry (async)")
-	entries, qerr := multiStore.Query(context.Background(), setupTestVis(),
+	entries, qerr := multiStore.Query(context.Background(), tenant.TenantID(""), setupTestVis(),
 		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 		query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 	require.NoError(t, qerr)

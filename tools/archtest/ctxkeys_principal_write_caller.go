@@ -117,6 +117,11 @@ const ctxkeysPkgPath = PlatformModulePath + "/pkg/ctxkeys"
 // not a production business code path; the call is semantically equivalent to
 // the auth bridge and thus sanctioned. This entry was introduced alongside the
 // multi-tenancy epic (#1337 PR-1) but missed the initial allowlist update.
+// cells/auditcore/auditcoretest/canonical.go (NewSessionCreatedEntry) is the
+// same kind of sanctioned test-helper: it stamps a tenant into the ctx so the
+// canonical session.created entry it builds carries one, matching real post-auth
+// emits — required since the auditcore appender fail-closed rejects a tenant-less
+// business event (#1618 F1).
 //
 // WithTenantID gained its producer writer (runtime/auth/middleware.go) with the
 // multi-tenancy epic (#1337 PR-1): injectPrincipalCtxKeys now writes the JWT
@@ -124,10 +129,10 @@ const ctxkeysPkgPath = PlatformModulePath + "/pkg/ctxkeys"
 // INV-SINGLE-TENANT-ONLY (#1289) — the single-writer entry was a deliberate
 // placeholder for exactly this moment, not an oversight. The persistence-reach
 // tripwire in cells/auditcore/internal/appender was RETIRED in PR-2a (#1340)
-// once tenant-scoped audit query filtering landed (AuditFilters.TenantID, set by
-// the auditquery handler from the authenticated principal): a non-empty
-// principal.TenantID now flows cleanly to audit persistence and is isolated at
-// query time, so the write-time alarm is no longer needed.
+// once tenant-scoped audit query filtering landed (the auditquery handler passes
+// the authenticated principal's tenant to the tenant-scoped read path): a
+// non-empty principal.TenantID now flows cleanly to audit persistence and is
+// isolated at query time, so the write-time alarm is no longer needed.
 // See ADR 202605281200-1042 §Amendment 2026-05-30.
 var principalSetterAllowlist = map[string]map[string]struct{}{
 	"WithActorID": {
@@ -146,10 +151,11 @@ var principalSetterAllowlist = map[string]map[string]struct{}{
 		"kernel/projection/system_principal.go": {}, // saga journal carrier (PR-03 #1627)
 	},
 	"WithTenantID": {
-		"runtime/auth/middleware.go":               {}, // producer bridge — JWT tenant_id claim (#1337)
-		"kernel/outbox/principal.go":               {}, // consumer-side RestoreToContext
-		"kernel/projection/system_principal.go":    {}, // saga journal carrier (PR-03 #1627)
-		"cells/configcore/configcoretest/fakes.go": {}, // CtxWithTenant test-helper — simulates JWT auth ctx (#1337, missed allowlist)
+		"runtime/auth/middleware.go":                 {}, // producer bridge — JWT tenant_id claim (#1337)
+		"kernel/outbox/principal.go":                 {}, // consumer-side RestoreToContext
+		"kernel/projection/system_principal.go":      {}, // saga journal carrier (PR-03 #1627)
+		"cells/configcore/configcoretest/fakes.go":   {}, // CtxWithTenant test-helper — simulates JWT auth ctx (#1337, missed allowlist)
+		"cells/auditcore/auditcoretest/canonical.go": {}, // NewSessionCreatedEntry test-helper — simulates post-auth ctx (#1618 F1)
 	},
 }
 

@@ -6,7 +6,14 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 )
+
+// auditTestTenant is the canonical-UUID tenant stamped onto the entries this
+// package builds. Real business audit events (session.created etc.) are emitted
+// post-auth and always carry a tenant; the auditcore appender fail-closed rejects
+// an empty tenant (#1618 F1), so a canonical builder must simulate the auth ctx.
+const auditTestTenant = "00000000-0000-0000-0000-000000000001"
 
 // sessionCreatedPayload mirrors the payload shape declared in
 // contracts/event/session/created/v1/payload.schema.json (sessionId + userId
@@ -49,7 +56,13 @@ func NewSessionCreatedEntry(sessionID, userID string) outbox.Entry {
 		// Unreachable in practice; kept to satisfy compiler.
 		panic("auditcoretest: NewSessionCreatedEntry: json.Marshal failed: " + err.Error())
 	}
-	e, err := outbox.NewEntry(clock.Real(), context.Background(),
+	// Simulate the post-auth request ctx a real session.created emit carries: a
+	// tenant in ctxkeys, which outbox.NewEntry → ContextPrincipal injects into the
+	// entry's principal tenant (same path as the JWT authenticator; mirrors
+	// configcoretest.CtxWithTenant). Without it the appender's #1618 F1 guard
+	// rejects the entry as a tenant-less business event.
+	ctx := ctxkeys.WithTenantID(context.Background(), auditTestTenant)
+	e, err := outbox.NewEntry(clock.Real(), ctx,
 		"event.session.created.v1", payload, outbox.WithID("evt-"+sessionID))
 	if err != nil {
 		panic("auditcoretest: NewSessionCreatedEntry: " + err.Error())

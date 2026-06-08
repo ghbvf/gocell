@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/audit/ledger/storetest"
 )
@@ -14,14 +15,14 @@ import (
 func TestSuite_MemStore(t *testing.T) {
 	protocol := storetest.NewTestProtocol(t)
 
-	factory := func(t *testing.T) (ledger.Store, *clockmock.FakeClock, func()) {
+	factory := func(t *testing.T) (ledger.Store, persistence.TxRunner, *clockmock.FakeClock, func()) {
 		t.Helper()
 		fc := clockmock.New(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 		store, err := ledger.NewMemStore(protocol, fc)
 		if err != nil {
 			t.Fatalf("NewMemStore: %v", err)
 		}
-		return store, fc, func() {}
+		return store, storetest.PassthroughTxRunner(), fc, func() {}
 	}
 
 	storetest.Run(t, factory, protocol)
@@ -38,5 +39,5 @@ func FuzzEntryRoundTrip(f *testing.F) {
 	if err != nil {
 		f.Fatalf("NewMemStore: %v", err)
 	}
-	storetest.RunEntryRoundTripFuzz(f, store, protocol)
+	storetest.RunEntryRoundTripFuzz(f, store, protocol, storetest.PassthroughTxRunner())
 }

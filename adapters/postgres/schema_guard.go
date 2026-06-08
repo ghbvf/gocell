@@ -55,7 +55,8 @@ import (
 //                                 + effective_admin_invariant_on_role_assignments trigger (024)
 //                                 + tenant_id TEXT NOT NULL, PK (tenant_id,user_id,role_id),
 //                                   role FK references roles(tenant_id,id) composite (050)
-//   - audit_entries      (020/043 + 047 (trace_id col) + 048 (trace_id index)) tamper-evident audit ledger (per-namespace hash chain)
+//   - audit_entries      (020/043 + 047 (trace_id col) + 048 (trace_id index)
+//                                 + 055 (per-(namespace,tenant) chain + FORCE RLS)) tamper-evident audit ledger
 //                                 + 043_audit_entries_v2 DROP+CREATE rebuild adding
 //                                   5 NOT NULL columns (subject_id / tenant_id /
 //                                   session_id / correlation_id / occurred_at) for
@@ -412,6 +413,16 @@ type expectedCheck struct {
 type expectedRLS struct {
 	Table  string
 	Policy string
+	// SystemRowsReadable selects the audit variant of the tenant_isolation
+	// predicate `(tenant_id = NULLIF(...) OR tenant_id = '')` (#1618): the
+	// `OR tenant_id = ''` clause keeps tenant-less system/framework rows readable
+	// by every tenant AND insertable by the GUC-unset (pre-auth) appender. The
+	// config/accesscore tables leave this false (strict equality, no OR).
+	// Write-side note: the WITH CHECK mirror of that OR allows a tenant-scoped
+	// writer to INSERT a tenant_id='' row; this is bounded by
+	// AUDITCORE-APPENDER-SINGLE-SOURCE-01 (the appender is the sole audit_entries
+	// writer), so there is no tenant-controlled INSERT path that can exploit it.
+	SystemRowsReadable bool
 }
 
 // pgTypeTSTZ is the PostgreSQL column type name for a timezone-aware timestamp.
@@ -552,7 +563,7 @@ var expectedColumns = []expectedColumn{
 	{Table: "role_assignments", Column: "user_id", Type: "uuid", NotNull: true},
 	{Table: "role_assignments", Column: "role_id", Type: "text", NotNull: true},
 	{Table: "role_assignments", Column: "granted_at", Type: pgTypeTSTZ, NotNull: true},
-	// audit_entries (020_audit_ledger.sql + 043_audit_entries_v2.sql + 047_audit_entries_trace_id.sql)
+	// audit_entries (020_audit_ledger.sql + 043_audit_entries_v2.sql + 047_audit_entries_trace_id.sql + 055_audit_entries_per_tenant_rls.sql)
 	// 043 rebuilds the table (DROP+CREATE) with 5 NOT NULL columns added for
 	// the 12-field canonical-JSON HMAC chain — no DEFAULT sentinels, callers
 	// must supply values.
@@ -714,25 +725,28 @@ var expectedIndexes = []expectedIndex{
 	// role_assignments (049_accesscore_tenant_id.sql) — composite (tenant_id, role_id)
 	{Table: "role_assignments", Name: "idx_role_assignments_role", Unique: false, Columns: []string{"tenant_id", "role_id"}},
 	// audit_entries (020_audit_ledger.sql + 021 event_id unique;
-	// 043_audit_entries_v2.sql rebuilds the table preserving index names;
-	// 048 adds idx_audit_namespace_trace_id CONCURRENTLY for TraceID filter)
-	// uq_audit_namespace_seq is a UNIQUE constraint (inline DDL) — PG creates
-	// an index for it; key columns mirror CONSTRAINT ... UNIQUE (namespace, seq_no).
-	{Table: "audit_entries", Name: "uq_audit_namespace_seq", Unique: true, Columns: []string{"namespace", "seq_no"}},
+	// 055_audit_entries_per_tenant_rls.sql rebuilds the table per-(namespace,
+	// tenant) (#1618): the two UNIQUE constraints gain tenant_id; 048 adds
+	// idx_audit_namespace_trace_id CONCURRENTLY for TraceID filter.
+	// uq_audit_namespace_tenant_seq is a UNIQUE constraint (inline DDL) — PG
+	// creates an index for it; key columns mirror
+	// CONSTRAINT ... UNIQUE (namespace, tenant_id, seq_no).
+	{Table: "audit_entries", Name: "uq_audit_namespace_tenant_seq", Unique: true, Columns: []string{"namespace", "tenant_id", "seq_no"}},
 	// idx_audit_namespace_ts_id: (namespace, timestamp DESC, id ASC)
 	{Table: "audit_entries", Name: "idx_audit_namespace_ts_id", Unique: false, Columns: []string{"namespace", "timestamp", "id"}},
 	{Table: "audit_entries", Name: "idx_audit_namespace_event_type", Unique: false, Columns: []string{"namespace", "event_type"}},
-	{Table: "audit_entries", Name: "uq_audit_namespace_event_id", Unique: true, Columns: []string{"namespace", "event_id"}},
+	// uq_audit_ns_tenant_event_id: per-(namespace, tenant) idempotency dedup (#1618).
+	{Table: "audit_entries", Name: "uq_audit_ns_tenant_event_id", Unique: true, Columns: []string{"namespace", "tenant_id", "event_id"}},
 	// 048_audit_entries_trace_id_index.sql: (namespace, trace_id) — leading column matters for filter pushdown
 	{Table: "audit_entries", Name: "idx_audit_namespace_trace_id", Unique: false, Columns: []string{"namespace", "trace_id"}},
-	// NOTE: no tenant-leading index here. auditquery's tenant predicate is the
-	// disjunction (tenant_id = '' OR tenant_id = $X) — system rows + own tenant —
-	// which a (namespace, tenant_id, …) index cannot serve as a single ordered
-	// keyset scan (the OR breaks the leading-equality requirement). The existing
-	// idx_audit_namespace_ts_id already satisfies the ORDER BY (namespace equality
-	// + ts/id keyset) with tenant_id applied as an in-scan filter. A tenant-leading
-	// index becomes worthwhile under PR-3 (#1341), where RLS rewrites the predicate
-	// to pure tenant_id = current_setting equality. See audit_ledger_store.Query.
+	// NOTE: the keyset/event_type/trace_id indexes stay namespace-leading (NOT
+	// tenant-leading). The auditquery tenant predicate is the disjunction
+	// (tenant_id = '' OR tenant_id = $X) — system rows + own tenant — AND the RLS
+	// USING predicate is itself the same disjunction, not pure equality (#1618).
+	// A (namespace, tenant_id, …) index cannot serve a disjunction as a single
+	// ordered keyset scan, so idx_audit_namespace_ts_id (namespace equality +
+	// ts/id keyset) keeps the ORDER BY with tenant_id applied as an in-scan
+	// filter. See audit_ledger_store.Query.
 	// devices / commands (029, 030, 031) — B2.B.
 	{Table: "devices", Name: "idx_devices_status", Unique: false, Columns: []string{"status"}},
 	// 030_commands.sql partial indexes — Columns lists only key columns, not WHERE predicate columns
@@ -880,8 +894,8 @@ var expectedFunctions = []expectedFunction{
 // migration 052) covers the configcore tenant tables; PR-3b (#1617, migration
 // 053) adds the accesscore tables users/roles/role_assignments. sessions is
 // deliberately NOT under RLS — it is the pre-auth tenant carrier read by PK
-// before any scope is known (migration 054 header). audit_entries awaits its
-// per-(namespace,tenant) hash-chain re-architecture (#1618) before it can be added.
+// before any scope is known (migration 054 header). audit_entries was added in
+// #1618 (migration 055) with the SystemRowsReadable variant — see below.
 var expectedRLSTables = []expectedRLS{
 	{Table: "config_entries", Policy: "tenant_isolation"},
 	{Table: "config_versions", Policy: "tenant_isolation"},
@@ -889,6 +903,10 @@ var expectedRLSTables = []expectedRLS{
 	{Table: "users", Policy: "tenant_isolation"},
 	{Table: "roles", Policy: "tenant_isolation"},
 	{Table: "role_assignments", Policy: "tenant_isolation"},
+	// audit_entries (migration 055, #1618): SystemRowsReadable variant — the
+	// `OR tenant_id = ''` clause keeps tenant-less system/framework rows readable
+	// by every tenant AND insertable by the GUC-unset pre-auth appender.
+	{Table: "audit_entries", Policy: "tenant_isolation", SystemRowsReadable: true},
 }
 
 // rlsPolicyRow is a single pg_policies row (the security-load-bearing attributes
@@ -1027,7 +1045,7 @@ func checkRLSPolicyShape(r expectedRLS, policies []rlsPolicyRow) error {
 			"schema_guard: row-security policy is not applied to PUBLIC",
 			rlsPolicyShapeDetails(r, fmt.Sprintf("roles=%q want public", p.roles))...)
 	}
-	if !predicateIsTenantIsolation(p.qual) {
+	if !predicateIsTenantIsolation(p.qual, r.SystemRowsReadable) {
 		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
 			"schema_guard: row-security USING predicate is not the tenant_isolation equality",
 			rlsPolicyShapeDetails(r, fmt.Sprintf("using=%q", p.qual))...)
@@ -1037,7 +1055,7 @@ func checkRLSPolicyShape(r expectedRLS, policies []rlsPolicyRow) error {
 			"schema_guard: row-security policy is missing WITH CHECK",
 			rlsPolicyShapeDetails(r, "with_check is NULL")...)
 	}
-	if !predicateIsTenantIsolation(p.withCheck) {
+	if !predicateIsTenantIsolation(p.withCheck, r.SystemRowsReadable) {
 		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
 			"schema_guard: row-security WITH CHECK predicate is not the tenant_isolation equality",
 			rlsPolicyShapeDetails(r, fmt.Sprintf("with_check=%q", p.withCheck))...)
@@ -1067,11 +1085,34 @@ func checkRLSPolicyShape(r expectedRLS, policies []rlsPolicyRow) error {
 var rlsTenantPredicateRe = regexp.MustCompile(
 	`^\s*\(?\s*tenant_id\s*=\s*nullif\(\s*current_setting\(\s*'app\.tenant_id'(::\w+)?\s*,\s*true\s*\)\s*,\s*''(::\w+)?\s*\)\s*\)?\s*$`)
 
+// rlsTenantWithSystemPredicateRe pins the audit_entries (#1618, migration 055)
+// variant of the tenant_isolation predicate:
+//
+//	(tenant_id = NULLIF(current_setting('app.tenant_id', true), '') OR tenant_id = '')
+//
+// The trailing OR-clause (tenant_id equals the empty-string literal) keeps
+// tenant-less system/framework rows readable (USING) and insertable by the
+// GUC-unset pre-auth appender (WITH CHECK). Like the strict variant the anchors
+// (^…$) make it a WHOLE-predicate match, so it still REJECTS every weakening —
+// crucially it pins the OR's right operand to the empty-string literal (NOT an
+// arbitrary OR true, OR tenant_id = some other tenant, or OR tenant_id IS NOT
+// NULL). It is tolerant of PG's deparse rendering (whitespace, ::type casts, the
+// extra paren pairs PG wraps each OR side in).
+var rlsTenantWithSystemPredicateRe = regexp.MustCompile(
+	//nolint:lll // a single anchored regex pattern cannot be split without breaking the whole-predicate match
+	`^\s*\(?\s*\(?\s*tenant_id\s*=\s*nullif\(\s*current_setting\(\s*'app\.tenant_id'(::\w+)?\s*,\s*true\s*\)\s*,\s*''(::\w+)?\s*\)\s*\)?\s*or\s*\(?\s*tenant_id\s*=\s*''(::\w+)?\s*\)?\s*\)?\s*$`)
+
 // predicateIsTenantIsolation reports whether a USING / WITH CHECK predicate is the
-// exact tenant_isolation equality (see rlsTenantPredicateRe). pg_get_expr lowercases
-// keywords inconsistently across versions, so the input is lowercased first.
-func predicateIsTenantIsolation(expr string) bool {
-	return rlsTenantPredicateRe.MatchString(strings.ToLower(expr))
+// exact tenant_isolation equality. systemReadable selects the audit_entries
+// variant that additionally admits the empty-string OR-clause (see the two regexes).
+// pg_get_expr lowercases keywords inconsistently across versions, so the input is
+// lowercased first. A mismatch fails closed.
+func predicateIsTenantIsolation(expr string, systemReadable bool) bool {
+	lowered := strings.ToLower(expr)
+	if systemReadable {
+		return rlsTenantWithSystemPredicateRe.MatchString(lowered)
+	}
+	return rlsTenantPredicateRe.MatchString(lowered)
 }
 
 // policyNames extracts the policy names for an error detail.

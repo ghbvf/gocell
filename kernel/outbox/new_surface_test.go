@@ -20,7 +20,12 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
+
+// scopeTenantUUID is a canonical tenant UUID used by the scope-fallback
+// principal-injection tests (#1618 F1).
+const scopeTenantUUID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
 
 // fixedClockTime is the deterministic instant the FakeClock reports; chosen
 // non-UTC-offset-zero so the .UTC() normalization in NewEntry is observable.
@@ -55,7 +60,8 @@ func TestNewEntry_Options(t *testing.T) {
 	domainTime := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	sealTime := time.Date(2026, 1, 2, 4, 0, 0, 0, time.UTC)
 
-	e, err := NewEntry(clk, context.Background(), "order.created.v1", []byte(`{}`),
+	e, err := NewEntry(
+		clk, context.Background(), "order.created.v1", []byte(`{}`),
 		WithID("evt-fixed"),
 		WithAggregateID("agg-1"),
 		WithAggregateType("Order"),
@@ -204,7 +210,8 @@ func TestEntry_Getters(t *testing.T) {
 	ctx := ctxkeys.WithSubjectID(context.Background(), "subject-g")
 	ctx = ctxkeys.WithRequestID(ctx, "req-g")
 
-	e, err := NewEntry(newSurfaceClock(), ctx, "evt.type.v1", []byte(`{"p":1}`),
+	e, err := NewEntry(
+		newSurfaceClock(), ctx, "evt.type.v1", []byte(`{"p":1}`),
 		WithID("evt-getter"),
 		WithAggregateID("agg-g"),
 		WithAggregateType("Thing"),
@@ -378,5 +385,26 @@ func TestContextPrincipal(t *testing.T) {
 
 	t.Run("empty ctx yields zero", func(t *testing.T) {
 		assert.True(t, ContextPrincipal(context.Background()).IsZero())
+	})
+
+	// #1618 F1: pre-auth scoped emits (login session.created, setup user.created)
+	// carry the tenant only in tenant.WithScope, not in ctxkeys. ContextPrincipal
+	// must fall back to the scope so the audit appender writes the correct
+	// per-tenant chain instead of the all-tenant-readable tenant_id='' system chain.
+	t.Run("tenant falls back to WithScope when ctxkeys absent", func(t *testing.T) {
+		ctx := tenant.WithScope(context.Background(), tenant.TenantID(scopeTenantUUID))
+		p := ContextPrincipal(ctx)
+		assert.Equal(t, idutil.SafeID(scopeTenantUUID), p.TenantID,
+			"pre-auth scoped emit must derive principal tenant from the RLS scope")
+	})
+
+	// Precedence: an authenticated-principal ctxkeys.TenantID WINS over the scope
+	// fallback (post-auth emits are unchanged — the scope branch never fires).
+	t.Run("ctxkeys tenant wins over scope fallback", func(t *testing.T) {
+		ctx := tenant.WithScope(context.Background(), tenant.TenantID(scopeTenantUUID))
+		ctx = ctxkeys.WithTenantID(ctx, "ctxkeys-tenant")
+		p := ContextPrincipal(ctx)
+		assert.Equal(t, idutil.SafeID("ctxkeys-tenant"), p.TenantID,
+			"post-auth ctxkeys tenant must take precedence over the scope fallback")
 	})
 }

@@ -104,9 +104,9 @@ func (e *errLedgerStore) GetBySeq(ctx context.Context, vis tenant.RowVisibility,
 }
 
 func (e *errLedgerStore) Query(
-	ctx context.Context, vis tenant.RowVisibility, filters ledger.AuditFilters, params query.ListParams,
+	ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, filters ledger.AuditFilters, params query.ListParams,
 ) ([]*ledger.Entry, error) {
-	return e.inner.Query(ctx, vis, filters, params)
+	return e.inner.Query(ctx, t, vis, filters, params)
 }
 
 func (e *errLedgerStore) Verify(ctx context.Context, fromSeq, toSeq int64) (bool, int64, error) {

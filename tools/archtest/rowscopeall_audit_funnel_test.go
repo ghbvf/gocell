@@ -5,14 +5,18 @@
 //
 // # What this guards
 //
-// PR-5 un-fail-closes tenant.RowScopeAll at the audit ledger stores (the store
-// is a pure PEP: it APPLIES the obligation, it does not decide who may hold it).
-// The security invariant "every cross-tenant (RowScopeAll) read is audited"
-// (spec FR-007) then rests entirely on the obligation PRODUCER: the sole site
-// that mints a RowScopeAll RowVisibility is (*auth.Principal).RowVisibility,
-// whose super-admin branch emits a mandatory slog.Error security event
-// co-located with — and unconditionally before — the
-// NewRowVisibility(RowScopeAll, "") construction.
+// PR-5 generalized the identity→RowScopeAll derivation. The audit ledger stores
+// fail-close RowScopeAll under #1618 per-tenant FORCE RLS (cross-tenant audit read
+// is deferred to backlog — the NOBYPASSRLS serving role cannot enumerate tenants);
+// a future non-audit consumer may instead APPLY the obligation. Either way the
+// store is a pure PEP: it does not decide who may HOLD a RowScopeAll obligation.
+// The security invariant "every RowScopeAll obligation is minted only at an
+// audited site" (spec FR-007) therefore rests entirely on the obligation PRODUCER:
+// the sole site that mints a RowScopeAll RowVisibility is
+// (*auth.Principal).RowVisibility, whose super-admin branch emits a mandatory
+// slog.Error security event co-located with — and unconditionally before — the
+// NewRowVisibility(RowScopeAll, "") construction (it fires even when the audit
+// store then fail-closes the obligation).
 //
 // This archtest pins every PRODUCTION call to tenant.NewRowVisibility that the
 // scanner cannot prove is non-All to a bounded allowlist. It is FAIL-CLOSED
@@ -34,7 +38,7 @@
 //   - runtime/audit/ledger/storetest/suite.go — the ledger.Store conformance
 //     suite, a testing-helper package (every callsite takes testing.TB) that
 //     constructs RowVisibility across ALL four scopes (including RowScopeAll for
-//     the cross-tenant conformance case) from a parametric `scope` argument.
+//     the fail-closed conformance case) from a parametric `scope` argument.
 //     The parametric mint is fail-closed (non-constant arg), so it is
 //     explicitly sanctioned here rather than silently passed.
 //

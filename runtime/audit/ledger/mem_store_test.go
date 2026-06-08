@@ -561,7 +561,8 @@ func TestMemStore_Query_ByFilters(t *testing.T) {
 		}
 	}
 
-	results, err := store.Query(context.Background(), memTestVis(), ledger.AuditFilters{EventType: "type.A"},
+	// Entries have no TenantID → system chain "". Query with "" sees all chains.
+	results, err := store.Query(context.Background(), tenant.TenantID(""), memTestVis(), ledger.AuditFilters{EventType: "type.A"},
 		query.ListParams{Limit: 100, Sort: ledger.QuerySort()})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
@@ -966,8 +967,9 @@ func TestMemStore_Query_ByTraceID(t *testing.T) {
 		}
 	}
 
+	// Entries have no TenantID → system chain "". Query with "" sees all chains.
 	// Filter by trace-abc: must return 2 entries.
-	results, err := store.Query(context.Background(), memTestVis(),
+	results, err := store.Query(context.Background(), tenant.TenantID(""), memTestVis(),
 		ledger.AuditFilters{TraceID: "trace-abc"},
 		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	if err != nil {
@@ -983,7 +985,7 @@ func TestMemStore_Query_ByTraceID(t *testing.T) {
 	}
 
 	// Empty filter must return all 3 entries.
-	all, err := store.Query(context.Background(), memTestVis(),
+	all, err := store.Query(context.Background(), tenant.TenantID(""), memTestVis(),
 		ledger.AuditFilters{},
 		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	if err != nil {

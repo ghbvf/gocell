@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -89,7 +90,7 @@ func auditTestCtx(subject string, roles []string) context.Context {
 
 func TestHandleQuery_InvalidTimeFormat(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -147,7 +148,7 @@ func TestHandleQuery_InvalidTimeFormat(t *testing.T) {
 
 func TestHandleQuery_InvalidLimit(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -162,7 +163,7 @@ func TestHandleQuery_InvalidLimit(t *testing.T) {
 
 func TestHandleQuery_ExceedsMaxLimit(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -181,7 +182,7 @@ func TestHandleQuery_ExceedsMaxLimit(t *testing.T) {
 
 func TestHandleQuery_Pagination_FullTraversal(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -262,7 +263,7 @@ func TestHandleQuery_InvalidCursor(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			store := newHandlerStore(t)
-			svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+			svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 			require.NoError(t, err)
 			mux := newHandlerMux(svc)
 
@@ -282,7 +283,7 @@ func TestHandleQuery_InvalidCursor(t *testing.T) {
 // and sensitive payload fields are redacted.
 func TestAuditEntryResponse_ExcludesInternalFields(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -319,7 +320,7 @@ func TestAuditEntryResponse_ExcludesInternalFields(t *testing.T) {
 // F23: HTTP-path redaction coverage.
 func TestAuditEntryResponse_SensitivePayload_Redacted(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -346,11 +347,12 @@ func TestAuditEntryResponse_SensitivePayload_Redacted(t *testing.T) {
 // the route layer, not inside the business handler.
 // TestList_EmptyTenant_Forbidden (epic #1337 PR-2a, F1): an authenticated
 // principal with no tenant must be rejected with 403 rather than degrade to the
-// store's "empty TenantID = no filter = all tenants" cross-tenant read — the
-// fail-open vector the second-round review flagged P0.
+// store's system-chain read (empty tenant → tenant_id = ” rows only, never the
+// caller's intended tenant data) — the fail-open vector the second-round review
+// flagged P0.
 func TestList_EmptyTenant_Forbidden(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -371,9 +373,49 @@ func TestList_EmptyTenant_Forbidden(t *testing.T) {
 	assert.Equal(t, "ERR_AUTH_FORBIDDEN", resp.Error.Code)
 }
 
+// TestList_NonCanonicalTenant_InternalError (#1618, Fix 7a): a principal whose
+// TenantID is non-empty but not a valid canonical UUID (e.g. "not-a-uuid") must
+// cause the handler to return 500 (ErrInternal), not 403 or 400.
+//
+// Rationale: the JWT authenticator canonicalises tenant_id claims (malformed →
+// 401 at the edge), so a non-canonical string reaching this point is a
+// server-side invariant break — tenant.ParseTenantID failure maps to
+// errcode.KindInternal/ErrInternal, which the generated handler renders as 500.
+func TestList_NonCanonicalTenant_InternalError(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
+	// Inject a principal whose TenantID is syntactically non-empty but is not a
+	// canonical UUID — this bypasses the empty-tenant 403 gate and reaches the
+	// ParseTenantID call, which must return an error mapped to 500.
+	req = req.WithContext(auth.WithPrincipal(context.Background(), &auth.Principal{
+		Kind:       auth.PrincipalUser,
+		Subject:    "usr-1",
+		Roles:      []string{"admin"},
+		TenantID:   "not-a-uuid",
+		AuthMethod: "test",
+	}))
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code,
+		"non-canonical tenant UUID must yield 500 (invariant break); body=%s", w.Body.String())
+	var resp struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "ERR_INTERNAL", resp.Error.Code,
+		"error code must be ERR_INTERNAL for a principal with malformed tenant UUID")
+}
+
 func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	h := NewHandler(svc)
 
@@ -448,12 +490,12 @@ func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
 // TestHandler_RegisterRoutes_TenantScoped proves the audit query endpoint is
 // tenant-scoped (epic #1337 PR-2a): a tenant-bearing caller now SUCCEEDS (200)
 // but sees only its own tenant's audit rows. This replaced the PR-1 (#1339 F2)
-// blanket 403 fail-closed gate. The List adapter sets AuditFilters.TenantID from
-// the authenticated principal and the store applies a mandatory tenant scope, so
+// blanket 403 fail-closed gate. The List adapter passes the authenticated
+// principal's tenant as the mandatory typed Store.Query tenant param (#1618), so
 // admin-ness widens the actor axis but never the tenant axis.
 func TestHandler_RegisterRoutes_TenantScoped(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	h := NewHandler(svc)
 
@@ -515,7 +557,7 @@ func TestHandler_RegisterRoutes_TenantScoped(t *testing.T) {
 // Trust boundary tests (#27q).
 func TestHandleQuery_ActorBinding(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	h := NewHandler(svc)
 
@@ -630,7 +672,7 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 // WHERE to subject_id = ?. Without the binding every row is returned (RED).
 func TestHandleQuery_SubjectFilter(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -680,7 +722,7 @@ func TestHandleQuery_SubjectFilter(t *testing.T) {
 // caller's own actions and cannot leak another user's rows (#1290 authz design).
 func TestHandleQuery_SubjectFilter_NonAdminScopedToActorSelf(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -737,7 +779,7 @@ func TestHandleQuery_SubjectFilter_NonAdminScopedToActorSelf(t *testing.T) {
 // the matched entry's traceId is surfaced in the response item.
 func TestHandleQuery_TraceIDFilter_Admin(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -791,7 +833,7 @@ func TestHandleQuery_TraceIDFilter_Admin(t *testing.T) {
 // parameter entirely) and returns all matching rows, not WHERE trace_id="".
 func TestHandleQuery_TraceIDFilter_EmptyParam(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -834,7 +876,7 @@ func TestHandleQuery_TraceIDFilter_EmptyParam(t *testing.T) {
 // auditQueryPolicy — it does NOT widen scope beyond the caller's own actions.
 func TestHandleQuery_TraceIDFilter_NonAdminScopedToActorSelf(t *testing.T) {
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -939,7 +981,16 @@ func assertActorBindingCase(t *testing.T, mux *http.ServeMux, tc actorBindingCas
 //
 //	non-admin usrA in tenantA → count 1  (RowScopeSelf, own row only)
 //	admin in tenantA           → count 2  (RowScopeTenant: tenantA + tenant-less; NOT tenantB)
-//	super-admin (any tenant)   → count 3  (RowScopeAll: cross-tenant)
+//	super-admin (any tenant)   → fail-closed 501 (RowScopeAll deferred under #1618 FORCE RLS)
+//
+// #1618 merge note: PR-5 (#1343) shipped super-admin RowScopeAll as a working
+// cross-tenant audit read (count 3). Under #1618's per-tenant FORCE RLS the audit
+// store fail-closes RowScopeAll (RowScopeAllUnsupportedError → 501 Not Implemented)
+// — the NOBYPASSRLS serving role cannot enumerate tenants, so the cross-tenant
+// audit CAPABILITY is deferred to backlog. 501 (not 500) because the super-admin
+// request is policy-authorized but the capability is not yet implemented (review
+// F5; RFC 9110 §15.6.2). The mandatory FR-007 slog.Error audit is still emitted
+// inside p.RowVisibility before the store rejects, so the FR-007 assertion holds.
 func TestHandleQuery_RowScopeVisibilityMatrix(t *testing.T) {
 	// Install slog capture to assert FR-007: super-admin cross-tenant access must
 	// emit a slog.Error record; admin and non-admin paths must not.
@@ -949,7 +1000,7 @@ func TestHandleQuery_RowScopeVisibilityMatrix(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	store := newHandlerStore(t)
-	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -968,9 +1019,9 @@ func TestHandleQuery_RowScopeVisibilityMatrix(t *testing.T) {
 			Timestamp: base.Add(time.Hour), Payload: []byte("{}"),
 		},
 		{
-			// Tenant-less system entry: TenantID="" so tenantMatches logic includes
-			// it in any non-empty tenant query (tenant-less rows are visible to
-			// all tenants, not a specific tenant's private data).
+			// Tenant-less system entry: TenantID="" so the typed-tenant query
+			// includes it for any non-empty tenant (tenant-less system rows are
+			// visible to every tenant, not a specific tenant's private data).
 			ID: "vsm-sys", EventID: "evt-vsm-sys", EventType: "vis.matrix.v1",
 			ActorID:   "system:bootstrap",
 			TenantID:  "",
@@ -982,39 +1033,45 @@ func TestHandleQuery_RowScopeVisibilityMatrix(t *testing.T) {
 	}
 
 	type visCase struct {
-		name      string
-		subject   string
-		roles     []string
-		tenantID  string
-		wantCount int
+		name          string
+		subject       string
+		roles         []string
+		tenantID      string
+		wantCount     int
+		wantSystemRow bool // #1618 F7: a tenant-less system row appears, marked scope="system"
 	}
 
 	cases := []visCase{
 		{
-			// non-admin usrA: RowScopeSelf → sees only its own row (vsm-a1).
-			name:      "non_admin_self_scope",
-			subject:   "usrA",
-			roles:     nil,
-			tenantID:  auditQueryTestTenant,
-			wantCount: 1,
+			// non-admin usrA: RowScopeSelf → sees only its own row (vsm-a1). The
+			// system row (actor=system:bootstrap) is filtered out by the owner axis.
+			name:          "non_admin_self_scope",
+			subject:       "usrA",
+			roles:         nil,
+			tenantID:      auditQueryTestTenant,
+			wantCount:     1,
+			wantSystemRow: false,
 		},
 		{
 			// admin in tenantA: RowScopeTenant → sees tenantA rows + tenant-less
-			// system row. The vsm-b1 (tenantB) row must NOT be visible.
-			name:      "admin_tenant_scope",
-			subject:   "admin-a",
-			roles:     []string{auth.RoleAdmin},
-			tenantID:  auditQueryTestTenant,
-			wantCount: 2,
+			// system row (marked scope="system"). The vsm-b1 (tenantB) row must NOT
+			// be visible.
+			name:          "admin_tenant_scope",
+			subject:       "admin-a",
+			roles:         []string{auth.RoleAdmin},
+			tenantID:      auditQueryTestTenant,
+			wantCount:     2,
+			wantSystemRow: true,
 		},
 		{
-			// super-admin: RowScopeAll → cross-tenant, sees all 3 entries.
-			// Must also trigger exactly one FR-007 slog.Error audit record.
-			name:      "superadmin_cross_tenant",
+			// super-admin: RowScopeAll is fail-closed under #1618 FORCE RLS
+			// (deferred) — the handler returns 501. Must still trigger exactly one
+			// FR-007 slog.Error audit record (emitted before the store rejects).
+			name:      "superadmin_cross_tenant_failclosed",
 			subject:   "super-sa",
 			roles:     []string{auth.RoleSuperAdmin},
 			tenantID:  auditQueryTestTenant,
-			wantCount: 3,
+			wantCount: 0, // unused: super-admin asserts a 501, not a row count
 		},
 	}
 
@@ -1043,12 +1100,36 @@ func TestHandleQuery_RowScopeVisibilityMatrix(t *testing.T) {
 			req = req.WithContext(auth.WithPrincipal(context.Background(), p))
 			mux.ServeHTTP(w, req)
 
-			require.Equal(t, http.StatusOK, w.Code, "tc=%s body=%s", tc.name, w.Body.String())
-			var resp map[string]any
-			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp), "tc=%s", tc.name)
-			data, ok := resp["data"].([]any)
-			require.True(t, ok, "tc=%s: data field must be array", tc.name)
-			assert.Len(t, data, tc.wantCount, "tc=%s: wrong row count", tc.name)
+			if isSuperAdmin(tc.roles) {
+				// #1618 merge: RowScopeAll fail-closes under FORCE RLS (deferred);
+				// the handler surfaces RowScopeAllUnsupportedError (KindNotImplemented)
+				// as a 501 — policy-authorized but capability-deferred (review F5).
+				// The FR-007 audit is still emitted (asserted below).
+				require.Equal(t, http.StatusNotImplemented, w.Code,
+					"tc=%s: super-admin RowScopeAll must fail-closed (501) under FORCE RLS, body=%s", tc.name, w.Body.String())
+			} else {
+				require.Equal(t, http.StatusOK, w.Code, "tc=%s body=%s", tc.name, w.Body.String())
+				var resp struct {
+					Data []struct {
+						Scope string `json:"scope"`
+					} `json:"data"`
+				}
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp), "tc=%s", tc.name)
+				assert.Len(t, resp.Data, tc.wantCount, "tc=%s: wrong row count", tc.name)
+				// #1618 F7: every returned row carries a scope marker; the admin's
+				// tenant-wide read surfaces the tenant-less system row marked
+				// "system", own-tenant rows "tenant".
+				sawSystem := false
+				for _, row := range resp.Data {
+					assert.Contains(t, []string{"tenant", "system"}, row.Scope,
+						"tc=%s: row scope must be tenant|system, got %q", tc.name, row.Scope)
+					if row.Scope == "system" {
+						sawSystem = true
+					}
+				}
+				assert.Equal(t, tc.wantSystemRow, sawSystem,
+					"tc=%s: system-row scope visibility mismatch", tc.name)
+			}
 
 			// FR-007: super-admin path must emit exactly one slog.Error cross-tenant
 			// audit record with actor+scope+tenant+reason keys. Non-super-admin paths

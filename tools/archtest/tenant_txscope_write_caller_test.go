@@ -98,9 +98,23 @@ const tenantWithScopeSetter = "WithScope"
 // rbacassign, IssueForUser) through the single scopedtx funnel — so the allowlist
 // gains exactly ONE accesscore entry (scopedtx.Do is the only WithScope callsite;
 // the mid-tx ApplyScope path does not call WithScope, it writes the GUC directly).
+// #1618 (audit per-tenant chain): the cross-backend audit ledger conformance suite
+// is the SINGLE source that exercises the ctx-scoped chain reads (GetBySeq / Verify
+// / Tail derive their tenant from tenant.ScopeFromContext), so its scoped-read
+// helpers must call WithScope to set up each per-tenant scope. It is test-support
+// (a non-_test.go helper imported by both the mem and PG store test packages, so it
+// cannot itself be _test.go and lands in Production() scan scope); it is the sole
+// scope writer on the audit conformance side, mirroring the scopedread/scopedtx
+// production funnels.
 var tenantTxScopeAllowlist = map[string]struct{}{
 	"cells/configcore/internal/scopedread/scopedread.go": {},
 	"cells/accesscore/internal/scopedtx/scopedtx.go":     {},
+	"runtime/audit/ledger/storetest/suite.go":            {},
+	// auditcoretest.BuildAuditcoreChain returns a tenant-scoped ctx so that
+	// Tail/Verify read-back targets the per-tenant chain its entries land in
+	// (#1618). Same test-support precedent as storetest/suite.go (non-_test.go
+	// helper imported by other test packages, so it lands in Production() scan).
+	"cells/auditcore/auditcoretest/builders.go": {},
 }
 
 // TestTenantTxScopeWriteCaller01 asserts every production reference to

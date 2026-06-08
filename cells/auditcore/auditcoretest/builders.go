@@ -10,6 +10,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/audit/ledger/storetest"
 )
@@ -88,7 +89,13 @@ func BuildAuditcoreChain(t *testing.T, opts ...BuildChainOption) (
 		auditcore.WithLogger(cfg.logger),
 	)
 
-	ctx = context.Background()
+	// Scope the returned ctx to the same tenant NewSessionCreatedEntry stamps onto
+	// its entries (#1618 per-tenant chains): the entries land in that tenant's
+	// partition, so Tail/Verify read-back must be scoped there too — an unscoped
+	// ctx targets the "" system chain (empty). Mirrors storetest/suite.go's
+	// tenant-scoped read-back (the same TENANT-TXSCOPE-WRITE-CALLER-01 test-helper
+	// precedent).
+	ctx = tenant.WithScope(context.Background(), tenant.TenantID(auditTestTenant))
 	recorder := cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo)
 	if err := c.Init(ctx, recorder); err != nil {
 		t.Fatalf("auditcoretest: auditcore.Init: %v", err)

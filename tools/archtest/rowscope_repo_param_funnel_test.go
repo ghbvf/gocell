@@ -57,10 +57,11 @@
 //
 //   - Store.Protocol — returns immutable protocol decisions; not a row read.
 //   - Store.Append — write path (persist an entry); not a row read.
-//   - Store.Tail — chain-tail snapshot (SeqNo/PrevHash/count); namespace-global,
-//     not a subject-owned row read.
-//   - Store.Verify — re-computes the HMAC chain across [from,to]; integrity scan,
-//     not a subject-scoped read.
+//   - Store.Tail — chain-tail snapshot (SeqNo/PrevHash/count); a chain-tail (the
+//     ctx-scoped (namespace, tenant) chain since #1618), not a subject-owned row
+//     read — the OWNER axis (actor_id) does not apply.
+//   - Store.Verify — re-computes the HMAC chain across [from,to] of the ctx-scoped
+//     (namespace, tenant) chain; integrity scan, not a subject-scoped read.
 //   - Store.RepoReady — healthz relation probe; not a data read.
 //
 // Store.Query and Store.GetBySeq have NO carve-out: both return subject-owned
@@ -133,7 +134,7 @@ var rowScopedRepoIfaces = []string{
 var rowScopeParamCarveOut = map[string]string{
 	"Store.Protocol":  "returns immutable protocol decisions; not a row read",
 	"Store.Append":    "write path (persist an entry); not a row read",
-	"Store.Tail":      "namespace-global chain-tail snapshot; not a subject-owned row read",
+	"Store.Tail":      "ctx-scoped per-tenant chain-tail snapshot (#1618); not a subject-owned row read",
 	"Store.Verify":    "HMAC chain integrity scan over [from,to]; not a subject-scoped read",
 	"Store.RepoReady": "healthz relation probe; not a data read",
 }

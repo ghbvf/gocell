@@ -139,6 +139,9 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 	}
 
 	principal := entry.Principal()
+	if res, rejected := s.rejectEmptyTenant(principal, entry, logPrefix); rejected {
+		return res
+	}
 
 	obs := entry.Observability()
 	corr := correlation.New(string(obs.TraceID), string(obs.RequestID), string(obs.CorrelationID))
@@ -205,6 +208,37 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 		slog.String("event_type", entry.EventType()),
 		slog.String("actor_id", e.ActorID))
 	return outbox.Ack()
+}
+
+// rejectEmptyTenant is the #1618 F1 defense-in-depth guard. The four business
+// audit slices (auditappend{user,config,session,role}) consume only tenant-scoped
+// domains, so every business event MUST carry a principal tenant. A genuinely
+// tenant-less event (e.g. bootstrap.auth.fail) is consumed by the SEPARATE
+// auditappendbootstrap slice — a distinct namespace and store — never here. An
+// empty tenant here is therefore a provenance bug: writing it would land a row in
+// the globally-readable tenant_id=” partition (the #1618 `OR tenant_id=”` RLS
+// read clause), exposing it to every tenant admin. Fail closed — Reject → DLX
+// (alertable, recoverable) — rather than silently leak into the all-tenant system
+// chain. This backs the "tenant_id=” ⟺ genuinely tenant-less framework event"
+// invariant (ADR 202606071300 §threat-matrix) with an enforced appender-layer
+// guard, complementing the upstream ContextPrincipal scope-fallback provenance fix
+// (ADR §Amendment 2026-06-07).
+//
+// Returns (result, true) when the entry must be rejected; (zero, false) otherwise.
+func (s *Service) rejectEmptyTenant(
+	principal outbox.PrincipalMetadata, entry outbox.Entry, logPrefix string,
+) (outbox.HandleResult, bool) {
+	if principal.TenantID != "" {
+		return outbox.HandleResult{}, false
+	}
+	s.logger.Error(logPrefix+": empty tenant on business audit event — rejecting",
+		slog.String("event_id", entry.ID()),
+		slog.String("event_type", entry.EventType()))
+	return outbox.Reject(outbox.NewPermanentError(
+		errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"auditappender: business audit event missing required tenant identity",
+			errcode.WithDetails(errcode.PublicString("slice", s.spec.name))),
+	)), true
 }
 
 // tsForLedger picks the audit entry Timestamp (ledger persistence / HMAC time)

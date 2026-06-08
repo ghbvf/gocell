@@ -30,6 +30,12 @@ import (
 // timestamps so plain {ID,EventType,Payload} scans validate. Tests that assert
 // on specific timestamps (CreatedAt fallback, OccurredAt mapping) build the
 // EntryScan with explicit times and must NOT route through this defaulting path.
+//
+// It also defaults a non-empty principal tenant when none is set: business audit
+// events always carry a tenant (the four business slices handle tenant-scoped
+// domains), so the #1618 F1 empty-tenant reject guard would otherwise trip on
+// every plain-scan test. Tests that exercise the guard itself (or that already
+// set a Principal) build the EntryScan directly and bypass this defaulting.
 func mustScan(t *testing.T, s outbox.EntryScan) outbox.Entry {
 	t.Helper()
 	if s.OccurredAt.IsZero() {
@@ -38,10 +44,19 @@ func mustScan(t *testing.T, s outbox.EntryScan) outbox.Entry {
 	if s.CreatedAt.IsZero() {
 		s.CreatedAt = s.OccurredAt
 	}
+	if s.Principal.TenantID == "" {
+		s.Principal.TenantID = idutil.SafeID(appenderTestTenant)
+	}
 	e, err := s.ToEntry()
 	require.NoError(t, err)
 	return e
 }
+
+// appenderTestTenant is the tenant mustScan defaults onto principal-less entries.
+// Tests that read an appended entry back from the (per-tenant-partitioned, #1618)
+// mem store must scope the read to this tenant (tenant.WithScope) — an unscoped
+// read targets the "" system chain, which holds no business rows.
+const appenderTestTenant = "tenant-a"
 
 type failingStore struct {
 	ledger.Store
@@ -183,7 +198,8 @@ func TestActorExtraction(t *testing.T) {
 			result := svc.HandleEvent(context.Background(), entry)
 			if tc.wantAck {
 				assert.Equal(t, outbox.DispositionAck, result.Disposition)
-				tail, err := store.Tail(context.Background())
+				// Read the per-tenant chain mustScan wrote to (#1618 partitioning).
+				tail, err := store.Tail(tenant.WithScope(context.Background(), tenant.TenantID(appenderTestTenant)))
 				require.NoError(t, err)
 				assert.EqualValues(t, 1, tail.EntryCount)
 				return
@@ -339,7 +355,8 @@ func TestService_HandleEvent_Happy(t *testing.T) {
 	result := svc.HandleEvent(context.Background(), entry)
 	require.Equal(t, outbox.DispositionAck, result.Disposition)
 
-	tail, err := store.Tail(context.Background())
+	// Read the per-tenant chain mustScan wrote to (#1618 partitioning).
+	tail, err := store.Tail(tenant.WithScope(context.Background(), tenant.TenantID(appenderTestTenant)))
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, tail.EntryCount)
 	require.Len(t, rec.emitted, 1, "L2 OutboxFact: one outbox.Emit per Append")
@@ -421,6 +438,7 @@ func TestHandleEvent_TraceIDFromEnvelope(t *testing.T) {
 			TraceID:       idutil.SafeID(wantTraceID),
 			CorrelationID: idutil.SafeID(wantCorrID),
 		},
+		Principal: outbox.PrincipalMetadata{TenantID: idutil.SafeID("tenant-a")},
 	}.ToEntry()
 	require.NoError(t, err)
 
@@ -437,8 +455,10 @@ func TestHandleEvent_TraceIDFromEnvelope(t *testing.T) {
 
 	// Round-trip: confirm TraceID survives the full Append lifecycle and is
 	// readable via GetBySeq (not just captured pre-persist in cap.appended).
+	// Scope the read to the entry's tenant — the #1618 store partitions by tenant.
 	appenderVis, _ := tenant.NewRowVisibility(tenant.RowScopeTenant, "")
-	roundTrip, err := cap.GetBySeq(context.Background(), appenderVis, got.SeqNo)
+	readCtx := tenant.WithScope(context.Background(), tenant.TenantID("tenant-a"))
+	roundTrip, err := cap.GetBySeq(readCtx, appenderVis, got.SeqNo)
 	require.NoError(t, err, "GetBySeq round-trip after Append must succeed")
 	assert.Equal(t, wantTraceID, roundTrip.TraceID,
 		"TraceID must survive full Append lifecycle (GetBySeq round-trip)")
@@ -447,8 +467,8 @@ func TestHandleEvent_TraceIDFromEnvelope(t *testing.T) {
 }
 
 // TestHandleEvent_TenantIDPersistedCleanly pins the epic #1337 PR-2a closure of
-// #1289: tenant-scoped audit isolation now lands at the QUERY layer
-// (AuditFilters.TenantID mandatory scope), so a non-empty principal.TenantID is
+// #1289: tenant-scoped audit isolation now lands at the QUERY layer (the typed
+// Store.Query tenant param, #1618), so a non-empty principal.TenantID is
 // no longer a security gap — it flows cleanly through the appender. The
 // INV-SINGLE-TENANT-ONLY tripwire (formerly an Error-level alarm) is RETIRED:
 // the appender persists tenant_id and emits NO tripwire log, because cross-tenant
@@ -487,6 +507,45 @@ func TestHandleEvent_TenantIDPersistedCleanly(t *testing.T) {
 	logs := buf.String()
 	assert.NotContains(t, logs, "INV-SINGLE-TENANT-ONLY",
 		"the single-tenant tripwire is retired (PR-2a); tenant flows cleanly, no alarm")
+}
+
+// TestHandleEvent_EmptyTenant_Reject pins the #1618 F1 defense-in-depth guard:
+// the four business appenders (user/config/session/role) consume only
+// tenant-scoped domains, so an entry with an empty principal tenant is a
+// provenance bug — a genuinely tenant-less audit event (bootstrap.auth.fail) is
+// consumed by the SEPARATE auditappendbootstrap slice (distinct namespace +
+// store), never here. The appender must fail-closed REJECT (PermanentError →
+// DLX, recoverable/alertable) rather than write a tenant_id=” row that the
+// #1618 `OR tenant_id=”` RLS read clause would expose to every tenant admin.
+func TestHandleEvent_EmptyTenant_Reject(t *testing.T) {
+	p := newTestProtocol(t)
+	inner, err := ledger.NewMemStore(p, clock.Real())
+	require.NoError(t, err)
+	cap := &captureStore{Store: inner}
+	spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
+	svc := newService(t, spec, cap, p)
+
+	// Built directly via EntryScan (NOT mustScan) so the principal stays empty —
+	// mustScan defaults a tenant, which would mask the guard under test.
+	epoch := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	entry, err := outbox.EntryScan{
+		ID:         "evt-empty-tenant",
+		EventType:  "event.user.created.v1",
+		Payload:    mustJSON(t, map[string]any{"actorId": "actor-1"}),
+		CreatedAt:  epoch,
+		OccurredAt: epoch,
+		// Principal intentionally zero → empty tenant.
+	}.ToEntry()
+	require.NoError(t, err)
+
+	result := svc.HandleEvent(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionReject, result.Disposition,
+		"empty-tenant business event must fail-closed Reject, not write to the system chain")
+	var permErr *outbox.PermanentError
+	require.ErrorAs(t, result.Err, &permErr,
+		"empty-tenant reject must be a PermanentError → DLX (recoverable, alertable)")
+	assert.Empty(t, cap.appended,
+		"no audit row may be written for an empty-tenant business event (fail-closed)")
 }
 
 // recordingEmitter captures every Emit call. Implements outbox.Emitter.
@@ -558,6 +617,7 @@ func TestHandleEvent_UsesEntryCreatedAt(t *testing.T) {
 		Payload:    mustJSON(t, map[string]any{"actorId": "actor-1"}),
 		CreatedAt:  t1,
 		OccurredAt: t1,
+		Principal:  outbox.PrincipalMetadata{TenantID: idutil.SafeID("tenant-a")},
 	}.ToEntry()
 	require.NoError(t, err)
 
@@ -600,6 +660,7 @@ func TestHandleEvent_ZeroCreatedAt_FallbackToClk_LogsWarn(t *testing.T) {
 		EventType:  "event.user.created.v1",
 		Payload:    mustJSON(t, map[string]any{"actorId": "actor-1"}),
 		OccurredAt: epoch, // non-zero; CreatedAt left zero to trigger fallback
+		Principal:  outbox.PrincipalMetadata{TenantID: idutil.SafeID("tenant-a")},
 	}.ToEntry()
 	require.NoError(t, err)
 

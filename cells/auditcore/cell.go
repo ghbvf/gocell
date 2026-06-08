@@ -324,6 +324,11 @@ func (c *AuditCore) registerHealthProbes(reg cell.Registrar) error {
 // hung store cannot stall k8s readiness indefinitely (F-04). The timeout
 // applies to the entire Tail + Verify sequence.
 //
+// Scope note: covers only the ctx-scoped chain (the "" system chain when
+// unscoped at startup). Per-tenant relay sub-chains are verified on-demand.
+// Full admin enumeration of all per-tenant chains is tracked at gh #1755
+// (blocked by NOBYPASSRLS serving role).
+//
 // Called from initInternal before initSlices; a failure prevents the cell
 // from ever serving traffic, surfacing corruption at process startup.
 func (c *AuditCore) strictTailVerifyOnStartup(ctx context.Context) error {
@@ -460,7 +465,7 @@ func (c *AuditCore) initQuerySlice(mode outbox.DurabilityMode) error {
 	if queryStore == nil {
 		queryStore = c.ledgerStore
 	}
-	querySvc, err := auditquery.NewService(queryStore, c.cursorCodec, c.logger,
+	querySvc, err := auditquery.NewService(queryStore, c.cursorCodec, c.logger, c.txRunner,
 		query.RunModeForDemo(mode == outbox.DurabilityDemo))
 	if err != nil {
 		return fmt.Errorf("audit-query: %w", err)

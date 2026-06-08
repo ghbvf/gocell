@@ -17,9 +17,15 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/audit/ledger/storetest"
 )
+
+// integTenant is the canonical-UUID tenant carried by the principal of every
+// valid integration entry. The appender requires a non-empty tenant (#1618 F1);
+// business audit events always carry one.
+const integTenant = "11111111-1111-1111-1111-111111111111"
 
 // errEmitFail is the sentinel returned by failingEmitter.Emit.
 var errEmitFail = errors.New("simulated outbox emit failure")
@@ -67,6 +73,9 @@ func newValidEntry(t *testing.T, id string) outbox.Entry {
 		Payload:    []byte(`{"actorId":"integ-actor-1","userId":"integ-user-1"}`),
 		CreatedAt:  createdAt,
 		OccurredAt: createdAt,
+		// Business audit events always carry a tenant principal; the appender
+		// fail-closed rejects an empty tenant (#1618 F1).
+		Principal: outbox.PrincipalMetadata{TenantID: idutil.SafeID(integTenant)},
 	}.ToEntry()
 	require.NoError(t, err)
 	return e
@@ -174,4 +183,55 @@ func TestL2Atomicity_appender_ReplayIdempotent(t *testing.T) {
 		"idempotent replay must Ack, not Requeue/Reject")
 	assert.Equal(t, 1, countAuditRows(t, pool),
 		"idempotent replay must not add a second audit_entries row")
+}
+
+// TestAppender_PersistsPrincipalTenant is the #1618 F1/F2 e2e proof of the
+// "outbox principal → store.Append per-(namespace, tenant) chain" seam through
+// the shared appender Service on real PG. The raw-SQL audit_rls_integration_test
+// proves restricted-role RLS USING/WITH CHECK directly; this proves the appender
+// itself maps the principal tenant onto the persisted row, and that the #1618 F1
+// guard fail-closed Rejects an empty-tenant business event (no row written).
+func TestAppender_PersistsPrincipalTenant(t *testing.T) {
+	ctx := context.Background()
+	proto := newIntegProtocol(t)
+	fc := clockmock.New(storetest.EpochAnchor())
+	spec := appender.MustNewSpec("auditappenduser", appender.ActorAcceptUserFallback)
+
+	pool := sharedPG.NewPerTestPool(t)
+	txm := adapterpg.NewTxManager(pool)
+	store, err := adapterpg.NewLedgerStore(pool.DB(), txm, proto, fc)
+	require.NoError(t, err)
+	svc, err := appender.NewService(
+		spec, store, proto, slog.Default(), fc,
+		appender.WithEmitter(outbox.WrapEmitterForCell(passThroughEmitter{})),
+		appender.WithTxManager(persistence.WrapForCell(txm)),
+	)
+	require.NoError(t, err)
+
+	// --- tenant-bearing entry → row persisted with the principal tenant ---
+	res := svc.HandleEvent(ctx, newValidEntry(t, "tenant-provenance-evt"))
+	require.Equal(t, outbox.DispositionAck, res.Disposition,
+		"tenant-bearing business event must Ack; err=%v", res.Err)
+	var gotTenant string
+	require.NoError(t, pool.DB().QueryRow(ctx,
+		"SELECT tenant_id FROM audit_entries WHERE namespace = $1", "auditcore").Scan(&gotTenant))
+	assert.Equal(t, integTenant, gotTenant,
+		"appender must persist the principal tenant into the audit row's per-tenant chain")
+
+	// --- empty-tenant entry → fail-closed Reject, no row (#1618 F1 guard) ---
+	createdAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	emptyEntry, err := outbox.EntryScan{
+		ID:         "empty-tenant-evt",
+		EventType:  "event.user.created.v1",
+		Payload:    []byte(`{"actorId":"integ-actor-1"}`),
+		CreatedAt:  createdAt,
+		OccurredAt: createdAt,
+		// Principal intentionally empty → empty tenant.
+	}.ToEntry()
+	require.NoError(t, err)
+	emptyRes := svc.HandleEvent(ctx, emptyEntry)
+	assert.Equal(t, outbox.DispositionReject, emptyRes.Disposition,
+		"empty-tenant business event must fail-closed Reject on the PG path")
+	assert.Equal(t, 1, countAuditRows(t, pool),
+		"empty-tenant reject must not persist a row (still exactly the one tenant row)")
 }

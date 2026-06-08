@@ -4,9 +4,35 @@ import (
 	"context"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/tenant"
 )
+
+// RowScopeAllUnsupportedError reports that a RowVisibility carrying
+// tenant.RowScopeAll reached a ledger read path (Query / GetBySeq).
+// RowScopeAll is cross-tenant super-admin visibility. Epic #1337 PR-5 (#1343)
+// landed the identity→RowScopeAll derivation (auth.Principal.RowVisibility), but
+// under #1618's per-tenant FORCE RLS a cross-tenant audit read is architecturally
+// blocked for the NOBYPASSRLS serving role (it cannot enumerate tenants), so the
+// audited super-admin path stays DEFERRED to backlog; until it is wired EVERY
+// ledger backend fail-closes RowScopeAll (no silent degrade to tenant scope — a
+// partial "all-within-my-tenant" view would be a misleading under-delivery). It
+// is shared by MemStore and the PG LedgerStore so the rejection is byte-identical
+// across backends and exercised uniformly by the conformance suite.
+//
+// The classification is KindNotImplemented (HTTP 501, RFC 9110 §15.6.2): the
+// super-admin request is policy-AUTHORIZED (auditQueryPolicy admits RoleSuperAdmin)
+// but the cross-tenant-audit CAPABILITY is deferred / not yet implemented — a 500
+// would mislead ops into chasing an unexpected server fault and pollute the 5xx
+// SLO (#1618 review F5). 501 is still 5xx, so the wire body collapses to the
+// generic ErrInternal code (errcode.PublicCodeForStatus); only the status differs.
+// The FR-007 cross-tenant audit slog.Error is still emitted upstream (at mint,
+// inside auth.Principal.RowVisibility) regardless of this store-side rejection.
+func RowScopeAllUnsupportedError() error {
+	return errcode.New(errcode.KindNotImplemented, errcode.ErrInternal,
+		"audit ledger: RowScopeAll is not supported on this read path")
+}
 
 // TailSnapshot holds a point-in-time snapshot of the ledger chain tail.
 // Returned by Store.Tail to allow restart recovery and chain verification
@@ -24,16 +50,17 @@ type TailSnapshot struct {
 	EntryCount int64
 }
 
-// AuditFilters holds optional filter predicates for Store.Query. Zero-value
-// fields are treated as "no filter" (match all), including TenantID.
+// AuditFilters holds optional non-tenant filter predicates for Store.Query.
+// Zero-value fields are treated as "no filter" (match all).
 //
-// Tenant isolation is NOT enforced at this generic store layer (so non-HTTP
-// callers — conformance suites, namespace-isolation tests, ops tooling — can
-// query tenant-agnostically). The isolation boundary lives in the auditquery
-// HTTP HANDLER, which always sets TenantID from the authenticated principal so a
-// tenant-bearing caller only ever reads its own tenant's rows (epic #1337 PR-2a,
-// replacing the PR-1 #1339 403 gate). DB-layer RLS (PR-3) is the backstop for
-// the residual tenant-less case.
+// The TENANT axis is NOT a filter here — it is a mandatory typed parameter of
+// Store.Query (the t tenant.TenantID positional param[1], #1618). Tenant
+// isolation is enforced on two Hard layers: (1) DB-layer FORCE RLS keyed on the
+// app.tenant_id GUC (the primary, Postgres-enforced backstop), and (2) the typed
+// tenant parameter the auditquery handler passes from the authenticated
+// principal (compile-time required, mem-store isolation). The pre-#1618 Soft
+// AuditFilters.TenantID string field is removed — a tenant-less Query is no
+// longer expressible (every Query is tenant-scoped, fail-closed).
 type AuditFilters struct {
 	// EventType filters by exact event type label. Empty means no filter.
 	EventType string
@@ -49,16 +76,6 @@ type AuditFilters struct {
 	// caller's own actions.
 	SubjectID string
 
-	// TenantID scopes the query to a tenant boundary. A non-empty value matches
-	// that tenant's rows PLUS tenant-less system/framework rows (tenant_id == "" —
-	// e.g. bootstrap.auth.fail and other pre-auth events that have no principal
-	// tenant), and NEVER another tenant's rows. Empty means no filter (generic
-	// store consumers). The auditquery handler always sets this from
-	// principal.TenantID (epic #1337 PR-2a) — that handler is the isolation
-	// boundary. Standard multi-tenant audit semantics: a tenant admin sees its own
-	// tenant + global/system events. DB-layer RLS (PR-3) is the backstop.
-	TenantID string
-
 	// TraceID filters by exact trace_id. Empty means no filter. This field
 	// allows correlating audit entries with distributed traces for operational
 	// investigation. trace_id is an observability field and is NOT part of the
@@ -70,6 +87,30 @@ type AuditFilters struct {
 
 	// To filters entries with Timestamp <= To. Zero means no upper bound.
 	To time.Time
+}
+
+// ValidateQueryTenant enforces the Store.Query tenant-axis contract and is the
+// single source of the audit-specific "empty vs non-empty" tenant rule shared by
+// every backend (MemStore / PG LedgerStore / MultiStore), so the two halves
+// cannot drift apart:
+//
+//   - A NON-EMPTY tenant MUST be canonical (tenant.TenantID.Validate) — a garbage
+//     value like "tenant-a" is rejected at the store, not silently treated as a
+//     distinct partition that no canonical query ever matches.
+//   - An EMPTY tenant is permitted: it is the legitimate system-chain read used by
+//     trusted internal callers (startup tail-verify, the dual-writer, conformance
+//     sysVis cases), collapsing the predicate to tenant_id = ” (system rows only,
+//     never another tenant's rows — fail-closed, NOT "all").
+//
+// This is deliberately NOT a full t.Validate(): the strict post-auth boundary that
+// also rejects an EMPTY tenant lives in cells/auditcore/slices/auditquery
+// Service.Query (every user request is tenant-scoped). The store permits empty
+// for the internal system-chain capability above (#1618 F2).
+func ValidateQueryTenant(t tenant.TenantID) error {
+	if t.String() == "" {
+		return nil
+	}
+	return t.Validate()
 }
 
 // QuerySort returns the canonical ordering for audit ledger listings: newest
@@ -132,30 +173,35 @@ type Store interface {
 
 	// Tail returns the current chain tail snapshot (SeqNo, PrevHash, EntryCount).
 	// Returns zero TailSnapshot when the store is empty (not an error).
+	//
+	// Tenant axis: derives chain scope from ctx (tenant.ScopeFromContext, default
+	// "" = system chain). Unlike Query which takes an explicit tenant.TenantID
+	// typed param, Tail has no post-auth HTTP caller (startup / relay / conformance
+	// only) so the tenant is always ctx-scoped rather than caller-supplied.
 	Tail(ctx context.Context) (TailSnapshot, error)
 
-	// GetBySeq fetches a single entry by sequence number. The vis obligation
-	// is enforced on the actor_id OWNER column: if the entry exists but
-	// vis.Allows(entry.ActorID) is false, the implementation returns
-	// ErrAuditLedgerNotFound (IDOR-safe collapse — existence is not leaked).
-	// vis must be valid (NewRowVisibility must succeed). RowScopeAll applies
-	// no owner predicate (Allows returns true for all actors) — stores are pure
-	// PEPs that translate the obligation; whether the caller is permitted to use
-	// RowScopeAll is the caller's responsibility (epic #1337 PR-5). Tenant axis
-	// is a separate orthogonal dimension (AuditFilters.TenantID / PG RLS).
+	// GetBySeq fetches a single entry by sequence number within the caller's
+	// tenant chain. TWO orthogonal axes are enforced:
 	//
-	// Tenant axis NOT enforced here (deliberate, tracked #1342 / #1618): GetBySeq
-	// enforces ONLY the owner dimension (vis on actor_id). Unlike Query it takes no
-	// AuditFilters, so it carries no tenant predicate — by seq_no it reads the
-	// namespace-global hash chain (the same chain-primitive surface as Tail/Verify),
-	// where seq_no is unique per namespace, not per (namespace, tenant). It has NO
-	// production caller today (chain replay / conformance only). A future
-	// tenant-FACING by-seq read endpoint MUST add a tenant filter (an AuditFilters /
-	// tenant.TenantID parameter that returns ErrAuditLedgerNotFound on tenant
-	// mismatch) rather than rely on this owner-only check; that is deferred until
-	// such a consumer exists (adding it now would be dead plumbing). The deeper fix
-	// — a per-(namespace, tenant) chain with RLS so seq reads are tenant-scoped at
-	// the DB — is #1618.
+	//   - TENANT axis (#1618): the entry must belong to the tenant scope on ctx
+	//     (tenant.ScopeFromContext, defaulting to "" — the system/framework chain —
+	//     when absent). Under per-(namespace, tenant) chains, seq_no is unique per
+	//     (namespace, tenant), so a by-seq read of another tenant's entry returns
+	//     ErrAuditLedgerNotFound. This closes PR #1715 F1 (an admin RowScopeTenant
+	//     obligation can no longer read a cross-tenant entry by seq_no). On PG the
+	//     explicit tenant predicate also disambiguates the now-non-unique
+	//     (namespace, seq_no) under the RLS `OR tenant_id=''` system-rows clause;
+	//     FORCE RLS is the DB-Hard backstop.
+	//   - OWNER axis: the vis obligation is enforced on the actor_id column. If the
+	//     entry exists in the tenant chain but vis.Allows(entry.ActorID) is false,
+	//     the implementation returns ErrAuditLedgerNotFound (IDOR-safe collapse —
+	//     existence is not leaked).
+	//
+	// vis must be valid (NewRowVisibility must succeed). A vis carrying RowScopeAll
+	// is fail-closed on every backend (RowScopeAllUnsupportedError) — cross-tenant
+	// audit read is deferred to backlog under #1618 FORCE RLS (see
+	// RowScopeAllUnsupportedError). GetBySeq has NO production caller today (chain
+	// replay / conformance / startup tail-verify only).
 	GetBySeq(ctx context.Context, vis tenant.RowVisibility, seq int64) (*Entry, error)
 
 	// Query lists entries matching AuditFilters using keyset cursor pagination
@@ -165,20 +211,38 @@ type Store interface {
 	// an empty Sort is a programmer error and yields ErrValidationFailed.
 	// Returns an empty (non-nil) slice when no entries match.
 	//
-	// vis is the row-visibility obligation enforced on the actor_id owner column.
-	// Self/device scopes restrict results to entries whose actor_id matches the
-	// obligation subject. Tenant and all scopes apply no owner predicate (every
-	// actor is visible on the owner dimension). RowScopeAll additionally bypasses
-	// the tenant dimension when the caller sets no TenantID filter; stores are
-	// pure PEPs that apply the obligation as-is. vis must be valid
-	// (NewRowVisibility must succeed). Tenant axis is orthogonal
-	// (AuditFilters.TenantID / PG RLS — see epic #1337 PR-5).
-	Query(ctx context.Context, vis tenant.RowVisibility, filters AuditFilters, params query.ListParams) ([]*Entry, error)
+	// t is the TENANT axis (#1618): the mandatory typed tenant scope (param[1],
+	// TENANT-REPO-PARAM-FUNNEL-01). Results are restricted to t's own rows PLUS
+	// tenant-less system/framework rows (tenant_id == "" — e.g. bootstrap.auth.fail
+	// and other pre-auth events), and NEVER another tenant's rows. On PG this is
+	// the app-layer half of the dual-layer tenant isolation; FORCE RLS on the
+	// app.tenant_id GUC is the DB-Hard primary. On mem (no RLS) the typed param is
+	// the sole tenant isolation. The auditquery handler passes t from the
+	// authenticated principal, and Service.Query rejects an empty/invalid t — so on
+	// the post-auth path every Query is tenant-scoped (fail-closed). A non-empty t
+	// must be canonical (ValidateQueryTenant); an EMPTY t is the legitimate
+	// system-chain read for trusted internal callers (startup tail-verify,
+	// dual-writer, conformance) and collapses to tenant_id = '' (system rows only,
+	// never another tenant's rows).
+	//
+	// vis is the row-visibility obligation enforced on the actor_id owner column
+	// (the orthogonal OWNER axis). Self/device scopes restrict results to entries
+	// whose actor_id matches the obligation subject. Tenant scope returns all
+	// matching rows in t. vis must be valid (NewRowVisibility must succeed). A vis
+	// carrying RowScopeAll is fail-closed on every backend
+	// (RowScopeAllUnsupportedError) — cross-tenant audit read is deferred to backlog
+	// under #1618 FORCE RLS (PR-5 #1343 landed the derivation, not the audit path).
+	Query(ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, filters AuditFilters, params query.ListParams) ([]*Entry, error)
 
 	// Verify re-computes the HMAC for each entry in [fromSeq, toSeq] and checks
 	// chain linkage (PrevHash). Returns valid=true and firstInvalidSeq=-1 when
 	// all entries are intact. Returns valid=false and the first invalid seq_no
 	// when tampering is detected.
+	//
+	// Tenant axis: derives chain scope from ctx (tenant.ScopeFromContext, default
+	// "" = system chain). Unlike Query which takes an explicit tenant.TenantID
+	// typed param, Verify has no post-auth HTTP caller (startup / relay /
+	// conformance only) so the tenant is always ctx-scoped.
 	Verify(ctx context.Context, fromSeq, toSeq int64) (valid bool, firstInvalidSeq int64, err error)
 
 	// RepoReady is a differentiated readiness check that exercises the

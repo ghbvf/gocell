@@ -130,7 +130,7 @@ func TestDualWriter_PhysicalIsolation_NoChainFork(t *testing.T) {
 	multi, err := ledger.NewMultiStore(relayStore, bootstrapStore)
 	require.NoError(t, err)
 	multiVis, _ := tenant.NewRowVisibility(tenant.RowScopeTenant, "")
-	all, err := multi.Query(context.Background(), multiVis, ledger.AuditFilters{}, query.ListParams{
+	all, err := multi.Query(context.Background(), tenant.TenantID(""), multiVis, ledger.AuditFilters{}, query.ListParams{
 		Limit: 100,
 		Sort:  ledger.QuerySort(),
 	})
@@ -140,7 +140,7 @@ func TestDualWriter_PhysicalIsolation_NoChainFork(t *testing.T) {
 		goroutinesPerChain, goroutinesPerChain)
 
 	// Filter by event type to mirror the ssobff bug reproducer.
-	bootstrapOnly, err := multi.Query(context.Background(), multiVis,
+	bootstrapOnly, err := multi.Query(context.Background(), tenant.TenantID(""), multiVis,
 		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 		query.ListParams{Limit: 100, Sort: ledger.QuerySort()})
 	require.NoError(t, err)

@@ -66,14 +66,20 @@ func NewMultiStore(stores ...Store) (*MultiStore, error) {
 // to len(stores)*FetchLimit() rows, sorts once, and trims to FetchLimit(). For
 // a 2-store deployment with Limit=20 the worst case is 42 rows merged per
 // page — a constant-factor cost that does not change pagination semantics.
-func (m *MultiStore) Query(ctx context.Context, vis tenant.RowVisibility, filters AuditFilters, params query.ListParams) ([]*Entry, error) {
+func (m *MultiStore) Query(
+	ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility,
+	filters AuditFilters, params query.ListParams,
+) ([]*Entry, error) {
+	if err := ValidateQueryTenant(t); err != nil {
+		return nil, err
+	}
 	if len(params.Sort) == 0 {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit ledger: query requires a non-empty sort")
 	}
 	var merged []*Entry
 	for _, s := range m.stores {
-		page, err := s.Query(ctx, vis, filters, params)
+		page, err := s.Query(ctx, t, vis, filters, params)
 		if err != nil {
 			return nil, fmt.Errorf("multi-store query: %w", err)
 		}

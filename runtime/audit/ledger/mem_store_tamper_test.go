@@ -39,11 +39,15 @@ import (
 func (m *MemStore) tamperEntryHash(seq int64, newHash string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	idx := seq - 1
-	if int(idx) < 0 || int(idx) >= len(m.entries) {
-		panic(fmt.Sprintf("tamperEntryHash: seq %d out of range [1, %d]", seq, len(m.entries)))
+	chain := m.chains[""]
+	if chain == nil {
+		panic("tamperEntryHash: system chain is empty")
 	}
-	m.entries[idx].Hash = newHash
+	idx := seq - 1
+	if int(idx) < 0 || int(idx) >= len(chain.entries) {
+		panic(fmt.Sprintf("tamperEntryHash: seq %d out of range [1, %d]", seq, len(chain.entries)))
+	}
+	chain.entries[idx].Hash = newHash
 }
 
 // tamperEntryPrevHash directly modifies the PrevHash field of the stored entry
@@ -52,11 +56,15 @@ func (m *MemStore) tamperEntryHash(seq int64, newHash string) {
 func (m *MemStore) tamperEntryPrevHash(seq int64, newPrevHash string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	idx := seq - 1
-	if int(idx) < 0 || int(idx) >= len(m.entries) {
-		panic(fmt.Sprintf("tamperEntryPrevHash: seq %d out of range [1, %d]", seq, len(m.entries)))
+	chain := m.chains[""]
+	if chain == nil {
+		panic("tamperEntryPrevHash: system chain is empty")
 	}
-	m.entries[idx].PrevHash = newPrevHash
+	idx := seq - 1
+	if int(idx) < 0 || int(idx) >= len(chain.entries) {
+		panic(fmt.Sprintf("tamperEntryPrevHash: seq %d out of range [1, %d]", seq, len(chain.entries)))
+	}
+	chain.entries[idx].PrevHash = newPrevHash
 }
 
 // newTestProtocolForTamper constructs a test Protocol; mirrors newTestProtocol

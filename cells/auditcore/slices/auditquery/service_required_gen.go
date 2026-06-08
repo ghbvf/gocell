@@ -19,5 +19,9 @@ func (s *Service) validateRequired() error {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
 			"auditquery: cursor codec is required")
 	}
+	if validation.IsNilInterface(s.txRunner) {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"auditquery: TxRunner required; use WithTxManager")
+	}
 	return nil
 }
