@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ROOT-FRAMEWORK-TESTS-NO-ADAPTER-IMPORT-01
 #
-# runtime/bootstrap and root-owned tests are framework/base test surfaces. They
-# must not directly import top-level adapters, because adapters will become
+# Root-owned framework/test surfaces (kernel/runtime/pkg/tests) must not
+# directly import top-level adapters, because adapters will become
 # satellite/per-adapter modules and the root go.mod must remain replace-free.
 # Adapter-real tests belong in adapter packages or consumer satellite modules.
 #
@@ -23,7 +23,7 @@ while IFS= read -r -d '' file; do
         :
     fi
 done < <(
-    find runtime/bootstrap tests \
+    find kernel runtime pkg tests \
         -path tests/integration -prune -o \
         -path tests/testutil/pgshare -prune -o \
         -path '*/testdata/*' -prune -o \
