@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 
 	grpcadapter "github.com/ghbvf/gocell/adapters/grpc"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -15,12 +16,16 @@ import (
 	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
 )
 
-// withReg injects a fresh shared registrar into cfg so New satisfies the
-// required Config.Registrar (Option 3 #1152). These tests do not exercise
-// attribution, so any registrar suffices; it is shared across the grpc_test
-// package via this helper.
+// withReg injects a minimal interceptor bundle into cfg so adapter unit tests can
+// exercise config/serve behavior without importing runtime/grpc/interceptor
+// (GRPC-ADAPTER-LAYER-01). Integration tests that need real auth/stream behavior
+// provide a full bundle from interceptor.NewServerInterceptors.
 func withReg(cfg grpcadapter.Config) grpcadapter.Config {
-	cfg.Registrar = runtimegrpc.NewServiceRegistrar()
+	cfg.Interceptors = runtimegrpc.NewServerInterceptorsBundle(
+		[]grpc.ServerOption{grpc.EmptyServerOption{}},
+		runtimegrpc.NewServiceRegistrar(),
+		runtimegrpc.NewDrainSignal(),
+	)
 	return cfg
 }
 

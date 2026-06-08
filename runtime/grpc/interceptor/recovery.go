@@ -25,23 +25,32 @@ func UnaryRecovery() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp any, err error) {
 		defer func() {
 			if v := recover(); v != nil {
-				stack := string(debug.Stack())
-				// Sanitize the panic payload before logging — a raw value may
-				// carry credentials or connection strings. RedactAny is the
-				// sanctioned funnel for slog.Any("panic", ...).
-				attrs := []any{
-					slog.Any("panic", redaction.RedactAny(v)),
-					slog.String("stack", stack),
-					slog.String("method", info.FullMethod),
-				}
-				if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
-					attrs = append(attrs, slog.String("request_id", reqID))
-				}
-				slog.ErrorContext(ctx, "panic recovered", attrs...)
 				resp = nil
-				err = status.Error(codes.Internal, "internal server error")
+				err = recoverGRPCPanic(ctx, info.FullMethod, v)
 			}
 		}()
 		return handler(ctx, req)
 	}
+}
+
+// recoverGRPCPanic is the transport-shape-agnostic panic-collapse core shared by
+// UnaryRecovery and StreamRecovery (PR-10 #1153): it logs the redacted panic
+// value plus stack and returns the codes.Internal status the interceptor hands
+// back to the client. It never re-panics, so it is outside the PANIC-REGISTERED-01
+// funnel (same as the unary path).
+func recoverGRPCPanic(ctx context.Context, fullMethod string, recovered any) error {
+	stack := string(debug.Stack())
+	// Sanitize the panic payload before logging — a raw value may carry
+	// credentials or connection strings. RedactAny is the sanctioned funnel for
+	// slog.Any("panic", ...).
+	attrs := []any{
+		slog.Any("panic", redaction.RedactAny(recovered)),
+		slog.String("stack", stack),
+		slog.String("method", fullMethod),
+	}
+	if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
+		attrs = append(attrs, slog.String("request_id", reqID))
+	}
+	slog.ErrorContext(ctx, "panic recovered", attrs...)
+	return status.Error(codes.Internal, "internal server error")
 }

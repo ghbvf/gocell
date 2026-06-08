@@ -6,9 +6,12 @@
 //
 // # What this guards
 //
-// runtime/grpc/interceptor.UnaryMetrics records grpc_server_requests_total /
-// grpc_server_request_duration_seconds. Post-M12b (#1093) its `cell` label MUST
-// be produced by the sealed runtime/observability/metrics.ResolveCellLabel
+// runtime/grpc/interceptor.UnaryMetrics AND StreamMetrics (PR-10 #1153) record
+// grpc_server_requests_total / grpc_server_request_duration_seconds. The
+// streaming metrics interceptor inlines the same funnel as the unary one (it is
+// NOT shared, because this rule binds the funnel by go/types object identity
+// WITHIN each function body), so both are scanned. Post-M12b (#1093) their `cell`
+// label MUST be produced by the sealed runtime/observability/metrics.ResolveCellLabel
 // funnel — never a hand-written cell literal, an unrelated variable, a
 // constructor field, or an assembly-derived value. The funnel reads
 // ctxkeys.CellIDFrom + validates against the closed set internally; gRPC passes
@@ -75,12 +78,13 @@ import (
 const (
 	grpcMetricsRuleCtxSource = "GRPC-METRICS-LABEL-CELLID-CTXSOURCE-01"
 	// grpcInterceptorPkgPath is declared in grpc_interceptor_chain_invariants_test.go.
-	grpcCtxkeysPkgPath          = PlatformModulePath + "/kernel/ctxkeys"
-	grpcMetricsPkgPath          = PlatformModulePath + "/runtime/observability/metrics"
-	grpcMetricsCellIDFromName   = "CellIDFrom"
-	grpcMetricsResolveLabelName = "ResolveCellLabel"
-	grpcMetricsRecordRPCName    = "RecordRPC"
-	grpcMetricsUnaryMetricsName = "UnaryMetrics"
+	grpcCtxkeysPkgPath           = PlatformModulePath + "/kernel/ctxkeys"
+	grpcMetricsPkgPath           = PlatformModulePath + "/runtime/observability/metrics"
+	grpcMetricsCellIDFromName    = "CellIDFrom"
+	grpcMetricsResolveLabelName  = "ResolveCellLabel"
+	grpcMetricsRecordRPCName     = "RecordRPC"
+	grpcMetricsUnaryMetricsName  = "UnaryMetrics"
+	grpcMetricsStreamMetricsName = "StreamMetrics"
 )
 
 // TestGRPCMetricsLabelCellIDCtxSource01 asserts that
@@ -114,18 +118,36 @@ func TestGRPCMetricsLabelCellIDCtxSource01(t *testing.T) {
 // scanGRPCMetricsLabelPkg runs the GRPC-METRICS-LABEL-CELLID-CTXSOURCE-01 checks
 // against the already-package-filtered Pass p — the production interceptor
 // package or the RED fixture. The same scan serves both Run(t, Production(...))
-// and Run(t, Fixture(...)).
+// and Run(t, Fixture(...)). It scans BOTH UnaryMetrics and StreamMetrics (PR-10
+// #1153) — whichever are present — and requires at least one (the production
+// package has both; the RED fixture has only UnaryMetrics).
 func scanGRPCMetricsLabelPkg(p *Pass) []Diagnostic {
-	fn := findUnaryMetricsFuncDecl(p.Files)
-	if fn == nil {
+	var diags []Diagnostic
+	scanned := 0
+	for _, name := range []string{grpcMetricsUnaryMetricsName, grpcMetricsStreamMetricsName} {
+		fn := findMetricsFuncDecl(p.Files, name)
+		if fn == nil {
+			continue
+		}
+		scanned++
+		diags = append(diags, scanGRPCMetricsFunc(p, fn, name)...)
+	}
+	if scanned == 0 {
 		return []Diagnostic{{
 			Rel: p.Rel(p.Files[0]),
-			Message: fmt.Sprintf("%s: func %s not found in %s — renamed or moved? "+
+			Message: fmt.Sprintf("%s: neither %s nor %s found in %s — renamed or moved? "+
 				"the gRPC metrics cell-label reader contract is no longer locked",
-				grpcMetricsRuleCtxSource, grpcMetricsUnaryMetricsName, p.Pkg.Path()),
+				grpcMetricsRuleCtxSource, grpcMetricsUnaryMetricsName, grpcMetricsStreamMetricsName, p.Pkg.Path()),
 		}}
 	}
+	return diags
+}
 
+// scanGRPCMetricsFunc runs the cell-label funnel-routing assertions against one
+// metrics interceptor FuncDecl (UnaryMetrics or StreamMetrics). The funnel is
+// inlined per-function by design, so each is scanned independently for the
+// ResolveCellLabel → RecordRPC provenance contract.
+func scanGRPCMetricsFunc(p *Pass, fn *ast.FuncDecl, fnName string) []Diagnostic {
 	rel := relForFunc(p, fn)
 	info := p.TypesInfo
 
@@ -136,8 +158,8 @@ func scanGRPCMetricsLabelPkg(p *Pass) []Diagnostic {
 		return []Diagnostic{{
 			Rel:  rel,
 			Line: p.Fset.Position(fn.Pos()).Line,
-			Message: fmt.Sprintf("%s: %s.UnaryMetrics must record gRPC metrics through "+
-				"GRPCCollector.RecordRPC", grpcMetricsRuleCtxSource, p.Pkg.Path()),
+			Message: fmt.Sprintf("%s: %s.%s must record gRPC metrics through "+
+				"GRPCCollector.RecordRPC", grpcMetricsRuleCtxSource, p.Pkg.Path(), fnName),
 		}}
 	}
 
@@ -192,9 +214,9 @@ func scanGRPCMetricsLabelPkg(p *Pass) []Diagnostic {
 			d = append(d, Diagnostic{Rel: rel, Line: p.Fset.Position(recordLit.Pos()).Line, Message: grpcMetricsRuleCtxSource + ": " + msg})
 		}
 	}
-	add(callsResolve, "UnaryMetrics must resolve the cell label through metrics.ResolveCellLabel(ctx, validCellIDs)")
-	add(!readsCtxInline, "cell resolution moved into metrics.ResolveCellLabel; UnaryMetrics must not read ctxkeys.CellIDFrom inline")
-	add(sawRecordRPC, "UnaryMetrics must call GRPCCollector.RecordRPC")
+	add(callsResolve, fnName+" must resolve the cell label through metrics.ResolveCellLabel(ctx, validCellIDs)")
+	add(!readsCtxInline, "cell resolution moved into metrics.ResolveCellLabel; "+fnName+" must not read ctxkeys.CellIDFrom inline")
+	add(sawRecordRPC, fnName+" must call GRPCCollector.RecordRPC")
 	add(cellArgIsIdent, "RecordRPC arg[1] (cell label) must be an identifier (the resolved CellLabel variable), not an inline expression")
 	add(!cellArgIsLit, "RecordRPC arg[1] (cell label) must NOT be a literal")
 	add(cellFromResolve, "RecordRPC arg[1] (cell label) must be the same variable assigned from "+
@@ -247,13 +269,13 @@ func cellLabelFromResolve(info *types.Info, body ast.Node, argExpr ast.Expr) boo
 	return found
 }
 
-// findUnaryMetricsFuncDecl returns the UnaryMetrics top-level FuncDecl across the
-// Pass's files, or nil if absent.
-func findUnaryMetricsFuncDecl(files []*ast.File) *ast.FuncDecl {
+// findMetricsFuncDecl returns the named top-level FuncDecl (e.g. UnaryMetrics or
+// StreamMetrics) across the Pass's files, or nil if absent.
+func findMetricsFuncDecl(files []*ast.File, name string) *ast.FuncDecl {
 	var result *ast.FuncDecl
 	for _, f := range files {
 		EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
-			if result == nil && fn.Recv == nil && fn.Name.Name == grpcMetricsUnaryMetricsName {
+			if result == nil && fn.Recv == nil && fn.Name.Name == name {
 				result = fn
 			}
 		})

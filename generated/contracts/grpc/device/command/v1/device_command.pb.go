@@ -145,6 +145,114 @@ func (x *IssueCommandResponse) GetAcknowledgedAtUnixNano() int64 {
 	return 0
 }
 
+type WatchCommandsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// device_id is the device whose commands to watch (canonical id).
+	DeviceId      string `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchCommandsRequest) Reset() {
+	*x = WatchCommandsRequest{}
+	mi := &file_device_command_v1_device_command_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchCommandsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchCommandsRequest) ProtoMessage() {}
+
+func (x *WatchCommandsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_device_command_v1_device_command_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchCommandsRequest.ProtoReflect.Descriptor instead.
+func (*WatchCommandsRequest) Descriptor() ([]byte, []int) {
+	return file_device_command_v1_device_command_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *WatchCommandsRequest) GetDeviceId() string {
+	if x != nil {
+		return x.DeviceId
+	}
+	return ""
+}
+
+type WatchCommandsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// command_id is the command's id.
+	CommandId string `protobuf:"bytes,1,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
+	// command_type is the command verb, e.g. "lock" or "reboot".
+	CommandType string `protobuf:"bytes,2,opt,name=command_type,json=commandType,proto3" json:"command_type,omitempty"`
+	// status is the command's current lifecycle status, e.g. "pending" or "sent".
+	Status        string `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchCommandsResponse) Reset() {
+	*x = WatchCommandsResponse{}
+	mi := &file_device_command_v1_device_command_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchCommandsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchCommandsResponse) ProtoMessage() {}
+
+func (x *WatchCommandsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_device_command_v1_device_command_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchCommandsResponse.ProtoReflect.Descriptor instead.
+func (*WatchCommandsResponse) Descriptor() ([]byte, []int) {
+	return file_device_command_v1_device_command_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *WatchCommandsResponse) GetCommandId() string {
+	if x != nil {
+		return x.CommandId
+	}
+	return ""
+}
+
+func (x *WatchCommandsResponse) GetCommandType() string {
+	if x != nil {
+		return x.CommandType
+	}
+	return ""
+}
+
+func (x *WatchCommandsResponse) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
 var File_device_command_v1_device_command_proto protoreflect.FileDescriptor
 
 const file_device_command_v1_device_command_proto_rawDesc = "" +
@@ -156,9 +264,17 @@ const file_device_command_v1_device_command_proto_rawDesc = "" +
 	"\apayload\x18\x03 \x01(\fR\apayload\"h\n" +
 	"\x14IssueCommandResponse\x12\x15\n" +
 	"\x06ack_id\x18\x01 \x01(\tR\x05ackId\x129\n" +
-	"\x19acknowledged_at_unix_nano\x18\x02 \x01(\x03R\x16acknowledgedAtUnixNano2y\n" +
+	"\x19acknowledged_at_unix_nano\x18\x02 \x01(\x03R\x16acknowledgedAtUnixNano\"3\n" +
+	"\x14WatchCommandsRequest\x12\x1b\n" +
+	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\"q\n" +
+	"\x15WatchCommandsResponse\x12\x1d\n" +
+	"\n" +
+	"command_id\x18\x01 \x01(\tR\tcommandId\x12!\n" +
+	"\fcommand_type\x18\x02 \x01(\tR\vcommandType\x12\x16\n" +
+	"\x06status\x18\x03 \x01(\tR\x06status2\xe1\x01\n" +
 	"\x14DeviceCommandService\x12a\n" +
-	"\fIssueCommand\x12&.device.command.v1.IssueCommandRequest\x1a'.device.command.v1.IssueCommandResponse\"\x00BNZLgithub.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1;commandv1b\x06proto3"
+	"\fIssueCommand\x12&.device.command.v1.IssueCommandRequest\x1a'.device.command.v1.IssueCommandResponse\"\x00\x12f\n" +
+	"\rWatchCommands\x12'.device.command.v1.WatchCommandsRequest\x1a(.device.command.v1.WatchCommandsResponse\"\x000\x01BNZLgithub.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1;commandv1b\x06proto3"
 
 var (
 	file_device_command_v1_device_command_proto_rawDescOnce sync.Once
@@ -172,16 +288,20 @@ func file_device_command_v1_device_command_proto_rawDescGZIP() []byte {
 	return file_device_command_v1_device_command_proto_rawDescData
 }
 
-var file_device_command_v1_device_command_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_device_command_v1_device_command_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_device_command_v1_device_command_proto_goTypes = []any{
-	(*IssueCommandRequest)(nil),  // 0: device.command.v1.IssueCommandRequest
-	(*IssueCommandResponse)(nil), // 1: device.command.v1.IssueCommandResponse
+	(*IssueCommandRequest)(nil),   // 0: device.command.v1.IssueCommandRequest
+	(*IssueCommandResponse)(nil),  // 1: device.command.v1.IssueCommandResponse
+	(*WatchCommandsRequest)(nil),  // 2: device.command.v1.WatchCommandsRequest
+	(*WatchCommandsResponse)(nil), // 3: device.command.v1.WatchCommandsResponse
 }
 var file_device_command_v1_device_command_proto_depIdxs = []int32{
 	0, // 0: device.command.v1.DeviceCommandService.IssueCommand:input_type -> device.command.v1.IssueCommandRequest
-	1, // 1: device.command.v1.DeviceCommandService.IssueCommand:output_type -> device.command.v1.IssueCommandResponse
-	1, // [1:2] is the sub-list for method output_type
-	0, // [0:1] is the sub-list for method input_type
+	2, // 1: device.command.v1.DeviceCommandService.WatchCommands:input_type -> device.command.v1.WatchCommandsRequest
+	1, // 2: device.command.v1.DeviceCommandService.IssueCommand:output_type -> device.command.v1.IssueCommandResponse
+	3, // 3: device.command.v1.DeviceCommandService.WatchCommands:output_type -> device.command.v1.WatchCommandsResponse
+	2, // [2:4] is the sub-list for method output_type
+	0, // [0:2] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -198,7 +318,7 @@ func file_device_command_v1_device_command_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_device_command_v1_device_command_proto_rawDesc), len(file_device_command_v1_device_command_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

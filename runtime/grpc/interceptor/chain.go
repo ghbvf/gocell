@@ -12,9 +12,10 @@ import (
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
-// Deps holds the dependencies the unary interceptor chain needs. They are
-// supplied by the composition root (cmd/ or examples/); this package only
-// composes them.
+// Deps holds the dependencies the unary AND streaming interceptor chains need
+// (NewUnaryChain / NewStreamChain share one Deps). They are supplied by the
+// composition root (cmd/ or examples/); this package only composes them. Drain is
+// consumed only by the stream chain (StreamDrain); the unary chain ignores it.
 type Deps struct {
 	// Tracer records one span per RPC. A nil Tracer degrades to NoopTracer.
 	Tracer wrapper.Tracer
@@ -28,15 +29,11 @@ type Deps struct {
 	// password-reset-exempt predicates).
 	AuthOptions []AuthOption
 	// Registrar is the gRPC service registrar whose CellIDForMethod feeds the
-	// cell-attribution interceptor (Option 3, #1152). It MUST be the SAME
-	// *runtimegrpc.ServiceRegistrar instance passed to adaptersgrpc.Config.Registrar
-	// — a different registrar populates a different method map and silently degrades
-	// attribution to _runtime. Taking the registrar object (not a detached
-	// CellIDForMethod func value) makes the two consumers symmetric — both wire
-	// `Registrar: reg` — so a mismatch is visible. (A compile-proof single-builder
-	// that emits both the chain option and the adapter config is the Hard upgrade,
-	// tracked at #1752.) Required: a nil Registrar is a wiring bug → NewUnaryChain
-	// panics rather than leaving every RPC attributed to the sentinel.
+	// cell-attribution interceptor (Option 3, #1152). adapters/grpc.New also
+	// binds this same instance to the underlying grpc.Server via Config.Interceptors,
+	// so attribution and registration share one method map. Required: a nil
+	// Registrar is a wiring bug → NewUnaryChain panics rather than leaving every
+	// RPC attributed to the sentinel.
 	Registrar *runtimegrpc.ServiceRegistrar
 	// CellIDClosedSet is the assembly's cell-id set (asm.CellIDs()) the metrics
 	// interceptor validates the attributed cell against (M12b defense-in-depth: an
@@ -44,6 +41,14 @@ type Deps struct {
 	// series). Required + non-empty: a half-wired chain (resolver set, closed set
 	// empty) would relabel every cell _runtime — NewUnaryChain fails fast instead.
 	CellIDClosedSet []string
+	// Drain is the framework-side gRPC drain signal (PR-10 #1153) the StreamDrain
+	// interceptor binds each in-flight stream's context to, so GracefulStop
+	// actively cancels long-lived streams instead of merely waiting for them. It
+	// is also the instance adapters/grpc.New stores for its GracefulStop trigger
+	// via Config.Interceptors (same Option-3 instance symmetry as Registrar).
+	// Required by NewStreamChain (fail-closed); NewUnaryChain ignores it (unary
+	// RPCs are short-lived, GracefulStop's wait suffices).
+	Drain *runtimegrpc.DrainSignal
 }
 
 // NewUnaryChain composes the unary interceptors into a single grpc.ServerOption.
@@ -63,10 +68,11 @@ func NewUnaryChain(deps Deps) grpc.ServerOption {
 			errcode.Assertion(
 				"interceptor.NewUnaryChain: Deps.CellIDClosedSet is required (the assembly cell-id set)")))
 	}
-	validCellIDs := make(map[string]struct{}, len(deps.CellIDClosedSet))
-	for _, id := range deps.CellIDClosedSet {
-		validCellIDs[id] = struct{}{}
-	}
+	// deps.Drain is intentionally NOT validated here: it is a stream-only concern
+	// (StreamDrain) and the unary chain never reads it. A unary-only server may
+	// leave it nil; the asymmetry with NewStreamChain (which requires it) is by
+	// design — see the Deps.Drain field doc.
+	validCellIDs := buildValidCellIDs(deps.CellIDClosedSet)
 	return grpc.ChainUnaryInterceptor(
 		UnaryRequestID(),
 		UnaryCellAttribution(deps.Registrar.CellIDForMethod),
@@ -76,4 +82,32 @@ func NewUnaryChain(deps Deps) grpc.ServerOption {
 		UnaryAuth(deps.Verifier, deps.AuthOptions...),
 		UnaryRecovery(),
 	)
+}
+
+// NewServerInterceptors returns the adapter-consumable bundle for a complete
+// GoCell gRPC server. Both unary and streaming chains are built from the same
+// Deps value, and the same Registrar/Drain instances are carried for the adapter
+// to bind and trigger. This is the normal composition-root entrypoint; it closes
+// the "forgot NewStreamChain" streaming-auth gap while keeping adapters/grpc
+// free of a direct interceptor import.
+func NewServerInterceptors(deps Deps) runtimegrpc.ServerInterceptors {
+	return runtimegrpc.NewServerInterceptorsBundle(
+		[]grpc.ServerOption{
+			NewUnaryChain(deps),
+			NewStreamChain(deps),
+		},
+		deps.Registrar,
+		deps.Drain,
+	)
+}
+
+// buildValidCellIDs materializes the assembly cell-id closed set into the lookup
+// map the metrics interceptors validate the attributed cell against. Shared by
+// NewUnaryChain and NewStreamChain (PR-10 #1153).
+func buildValidCellIDs(ids []string) map[string]struct{} {
+	validCellIDs := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		validCellIDs[id] = struct{}{}
+	}
+	return validCellIDs
 }

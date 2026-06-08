@@ -6,12 +6,12 @@ package bootstrap
 // allow-list). The gRPC server lifecycle lives in adapters/grpc; bootstrap only
 // orchestrates serve + drain through the GRPCServer interface, which
 // adapters/grpc.Server satisfies structurally. The composition root (cmd/,
-// examples/) builds the interceptor chain (runtime/grpc/interceptor.NewUnaryChain,
-// which always wires UnaryAuth and panics on a nil verifier) and constructs the
-// adapter server with that chain injected via adaptersgrpc.Config.ServerOptions,
-// then hands the ready server to WithGRPCListener. This keeps gRPC auth wiring in
-// the composition root (AUTH-PLAN-04) and the server implementation single-sourced
-// in the adapter.
+// examples/) builds the interceptor deps object (runtime/grpc/interceptor.Deps)
+// and constructs the adapter server with adaptersgrpc.Config.Interceptors. The
+// adapter derives both unary and stream chains from that deps object, then hands
+// the ready server to WithGRPCListener. This keeps gRPC auth inputs in the
+// composition root (AUTH-PLAN-04) and the server implementation single-sourced in
+// the adapter.
 
 import (
 	"context"
@@ -146,18 +146,19 @@ func WithGRPCListenerShutdownGrace(d time.Duration) GRPCListenerOption {
 // are alive).
 //
 // Composition-root wiring (cmd/ or examples/, which may import adapters/grpc and
-// runtime/grpc/interceptor — cells/ may not). The registrar is created FIRST and
-// shared by the chain (reg.CellIDForMethod feeds cell attribution) and the
-// adapter server (Config.Registrar) — Option 3, #1152:
+// runtime/grpc/interceptor — cells/ may not). The registrar AND the drain signal
+// are created FIRST and placed into one interceptor deps object (Option 3,
+// #1152/#1153): reg.CellIDForMethod feeds cell attribution; the drain is bound by
+// StreamDrain (consumer) and triggered by the adapter's gracefulStop (producer):
 //
 //	reg := runtimegrpc.NewServiceRegistrar()
-//	chain := interceptor.NewUnaryChain(interceptor.Deps{
+//	drain := runtimegrpc.NewDrainSignal()
+//	deps := interceptor.Deps{
 //	    Verifier: verifier, Clock: clk, Collector: collector, Tracer: tracer,
-//	    Registrar: reg, CellIDClosedSet: asm.CellIDs(),
-//	}) // always wires UnaryAuth; panics on a nil verifier / registrar (fail-closed)
+//	    Registrar: reg, CellIDClosedSet: asm.CellIDs(), Drain: drain,
+//	}
 //	srv, err := adaptersgrpc.New(adaptersgrpc.Config{
-//	    Addr: ":9000", TLS: tlsCfg,
-//	    ServerOptions: []grpc.ServerOption{chain}, Registrar: reg,
+//	    Addr: ":9000", TLS: tlsCfg, Interceptors: interceptor.NewServerInterceptors(deps),
 //	})
 //	bootstrap.New(clk, bootstrap.WithGRPCListener(cell.PrimaryListener, srv, ":9000"))
 //

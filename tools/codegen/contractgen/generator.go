@@ -171,8 +171,9 @@ func Generate(root string, p *metadata.ProjectMeta, opts Options) (Result, error
 // zero artifacts — buf's pb.<Svc>Server is the sole server contract), this
 // pre-pass is the ONLY contractgen proto-read/validation point: validateGRPCProtoPath
 // + ReadProtoServiceInfo here fail-close every codegen:true grpc contract's proto
-// (path under contracts/grpc/, exported unary RPCs, valid go_package) before any
-// generation runs. Governance FMT-37 is the parallel gate in `gocell validate`.
+// (path under contracts/grpc/, exported RPC identifiers — unary or streaming,
+// PR-10 #1153 — valid go_package) before any generation runs. Governance FMT-37
+// is the parallel gate in `gocell validate`.
 func checkGRPCProtoCollisions(root string, p *metadata.ProjectMeta) error {
 	reg := newProtoRegistry()
 	ids := make([]string, 0, len(p.Contracts))

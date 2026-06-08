@@ -84,29 +84,29 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 
-	// Composition-root-supplied options (e.g. the unary interceptor chain) go
-	// FIRST; the adapter-owned transport credentials are appended LAST so they
-	// win. grpc.NewServer applies options in order and a later grpc.Creds
-	// overrides an earlier one, so putting the validated creds last makes the
-	// adapter's TLS/mTLS posture non-overridable by a caller-supplied grpc.Creds
-	// in ServerOptions (fail-closed: ServerOptions cannot downgrade transport
-	// security). ref: grpc-go v1.81.1 server.go NewServer + Creds.
-	var opts []grpc.ServerOption
-	opts = append(opts, cfg.ServerOptions...)
+	// Interceptor bundles are built outside the adapter (normally via
+	// interceptor.NewServerInterceptors) to preserve GRPC-ADAPTER-LAYER-01. The
+	// adapter consumes the bundle atomically: options, registrar, and drain all
+	// come from the same value.
+	opts := cfg.Interceptors.ServerOptions()
+	// The adapter-owned transport credentials are appended LAST so they win.
+	// grpc.NewServer applies options in order and a later grpc.Creds overrides an
+	// earlier one, so the validated TLS/mTLS posture remains non-overridable.
+	// ref: grpc-go v1.81.1 server.go NewServer + Creds.
 	if creds != nil {
 		opts = append(opts, grpc.Creds(creds))
 	}
 
 	// Bind the composition-root-supplied registrar (Option 3 #1152) to the
-	// constructed server. cfg.Registrar is the same instance whose CellIDForMethod
-	// the interceptor chain reads, so attribution resolves through one shared map.
-	// validate() guarantees cfg.Registrar != nil.
+	// constructed server. It is also the instance read by the cell-attribution
+	// interceptor, so attribution resolves through one shared map. validate()
+	// guarantees cfg.Interceptors.Registrar() != nil.
 	inner := grpc.NewServer(opts...)
-	cfg.Registrar.BindServer(inner)
+	cfg.Interceptors.Registrar().BindServer(inner)
 	return &Server{
 		cfg:        cfg,
 		grpcServer: inner,
-		registrar:  cfg.Registrar,
+		registrar:  cfg.Interceptors.Registrar(),
 		serveDone:  make(chan struct{}),
 	}, nil
 }
@@ -288,6 +288,22 @@ func warnIfInsecureNonLoopback(allowInsecure bool, addr net.Addr) {
 func (s *Server) gracefulStop(ctx context.Context) error {
 	var stopErr error
 	s.stopOnce.Do(func() {
+		// Trigger the framework drain signal FIRST (PR-10 #1153): this cancels
+		// every in-flight stream's handler context via the StreamDrain
+		// interceptor, so a long-lived server-stream that selects on ctx.Done()
+		// returns promptly and GracefulStop below completes within the budget
+		// instead of waiting the full ShutdownTimeout for the hard Stop(). Drain
+		// is required (validate guarantees non-nil); the trigger is idempotent and
+		// a no-op for a server with no StreamDrain consumer.
+		//
+		// Log the drain start so the shutdown sequence has an ops anchor. The
+		// resulting in-flight streams end with codes.Canceled — that metric spike
+		// during a graceful stop is expected (see StreamMetrics godoc), not an
+		// outage.
+		slog.Info("grpc: draining — canceling in-flight streams before GracefulStop",
+			slog.Duration("shutdown_timeout", s.cfg.ShutdownTimeout))
+		s.cfg.Interceptors.Drain().Trigger()
+
 		// Flip readiness to unhealthy BEFORE draining: GracefulStop stops
 		// accepting new RPCs immediately, so the grpc_ready probe must report
 		// not-serving the moment shutdown begins (lets a load balancer drain

@@ -4,8 +4,6 @@ import (
 	"net"
 	"time"
 
-	"google.golang.org/grpc"
-
 	"github.com/ghbvf/gocell/pkg/errcode"
 	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
 )
@@ -69,21 +67,13 @@ type Config struct {
 	// TLS configures transport security. See TLSConfig for the three supported modes.
 	TLS TLSConfig
 
-	// ServerOptions are extra grpc.ServerOptions appended after the TLS
-	// credentials option. The composition root (runtime/bootstrap) uses this to
-	// inject the unary interceptor chain (runtime/grpc/interceptor.NewUnaryChain).
-	// It is not a business-bypass seam: cells/ cannot import adapters/ (layering
-	// rule), so only composition roots ever construct a Config.
-	ServerOptions []grpc.ServerOption
-
-	// Registrar is the shared method→cellID registry (Option 3, #1152). The
-	// composition root creates it FIRST (runtimegrpc.NewServiceRegistrar()) and
-	// hands reg.CellIDForMethod to the interceptor chain's cell-attribution
-	// interceptor — the chain is composed before this server exists. New binds the
-	// constructed *grpc.Server to it via BindServer. Required (no self-construct
-	// fallback): if the adapter minted its own registrar, it would differ from the
-	// one the chain reads and attribution would silently degrade to _runtime.
-	Registrar *runtimegrpc.ServiceRegistrar
+	// Interceptors are the single gRPC wiring bundle. Composition roots normally
+	// build it with interceptor.NewServerInterceptors(deps), which fixes BOTH
+	// unary and streaming chains to one deps value. New binds the bundle's
+	// Registrar to the underlying grpc.Server and triggers the bundle's Drain at
+	// graceful stop, so the adapter cannot observe different Registrar/Drain
+	// instances than the chains observe (#1752/#1153 closure).
+	Interceptors runtimegrpc.ServerInterceptors
 }
 
 // applyDefaults fills zero-value fields with their defaults.
@@ -120,6 +110,28 @@ func (c *Config) validate() error {
 			"grpc: ShutdownTimeout must not be negative; leave it zero for the default or set a positive duration")
 	}
 
+	// V2–V5: transport-security shape (mutual exclusion + fail-closed + required PEM).
+	if err := c.validateTLS(); err != nil {
+		return err
+	}
+
+	// V6: Interceptors are required (Option 3 #1152/#1153). The bundle carries
+	// the full unary + stream chain pair plus the shared registrar/drain instances
+	// consumed by the adapter. Checked after Addr/TLS so common misconfigurations
+	// surface first.
+	if err := c.Interceptors.Validate(); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
+			"grpc: Interceptors are required; build them with interceptor.NewServerInterceptors(deps)", err)
+	}
+
+	return nil
+}
+
+// validateTLS checks the transport-security shape (V2–V5): AllowInsecure and TLS
+// material are mutually exclusive (V2); when not plaintext, some material must be
+// present (V5) and CertPEM (V3) + KeyPEM (V4) are required. Extracted from
+// validate to keep its cognitive complexity within budget.
+func (c *Config) validateTLS() error {
 	hasCert := len(c.TLS.CertPEM) > 0
 	hasKey := len(c.TLS.KeyPEM) > 0
 	hasCA := len(c.TLS.ClientCAPEM) > 0
@@ -130,41 +142,27 @@ func (c *Config) validate() error {
 			"grpc: AllowInsecure and TLS material (CertPEM/KeyPEM/ClientCAPEM) are mutually exclusive; "+
 				"use AllowInsecure for plaintext-only mode or supply PEM material for TLS")
 	}
-
-	if !c.TLS.AllowInsecure {
-		// V5: fail-closed — neither plaintext nor TLS configured — caller error.
-		if !hasCert && !hasKey && !hasCA {
-			return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
-				"grpc: no TLS configuration; set AllowInsecure=true for plaintext (dev or mesh-sidecar) "+
-					"or supply CertPEM+KeyPEM for TLS")
-		}
-
-		// V3: CertPEM required when any TLS material is present — caller error.
-		if !hasCert {
-			return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
-				"grpc: TLS.CertPEM is required when configuring TLS; "+
-					"supply the PEM-encoded server certificate")
-		}
-
-		// V4: KeyPEM required when any TLS material is present — caller error.
-		if !hasKey {
-			return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
-				"grpc: TLS.KeyPEM is required when configuring TLS; "+
-					"supply the PEM-encoded server private key")
-		}
+	if c.TLS.AllowInsecure {
+		return nil
 	}
 
-	// V6: Registrar is required (Option 3 #1152) — the shared method→cellID source
-	// the interceptor chain reads. No self-construct fallback: a missing one is a
-	// composition-root wiring bug (fail-closed) that would otherwise silently
-	// degrade cell attribution to _runtime. Checked last so the Addr/TLS format
-	// errors above surface first (they are the common misconfigurations).
-	if c.Registrar == nil {
+	// V5: fail-closed — neither plaintext nor TLS configured — caller error.
+	if !hasCert && !hasKey && !hasCA {
 		return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
-			"grpc: Registrar is required; create it with runtimegrpc.NewServiceRegistrar() at the "+
-				"composition root and pass the same instance to both Config.Registrar and "+
-				"interceptor.Deps.Registrar")
+			"grpc: no TLS configuration; set AllowInsecure=true for plaintext (dev or mesh-sidecar) "+
+				"or supply CertPEM+KeyPEM for TLS")
 	}
-
+	// V3: CertPEM required when any TLS material is present — caller error.
+	if !hasCert {
+		return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
+			"grpc: TLS.CertPEM is required when configuring TLS; "+
+				"supply the PEM-encoded server certificate")
+	}
+	// V4: KeyPEM required when any TLS material is present — caller error.
+	if !hasKey {
+		return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
+			"grpc: TLS.KeyPEM is required when configuring TLS; "+
+				"supply the PEM-encoded server private key")
+	}
 	return nil
 }

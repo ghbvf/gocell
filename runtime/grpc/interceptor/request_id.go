@@ -31,28 +31,37 @@ var requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 // no funnel restriction.
 func UnaryRequestID() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		id := requestIDFromMetadata(ctx)
-		if id == "" {
-			// NewUUID's error is unreachable on the production path (crypto/rand
-			// fatals on entropy failure); on the off chance it surfaces we leave
-			// the id empty rather than fabricating a non-unique value.
-			if gen, err := idutil.NewUUID(); err == nil {
-				id = gen
-			}
-		}
-		if id != "" {
-			ctx = ctxkeys.WithRequestID(ctx, id)
-			ctx = ctxkeys.WithCorrelationID(ctx, id)
-			if err := grpc.SetHeader(ctx, metadata.Pairs(requestIDMetadataKey, id)); err != nil {
-				// Best-effort response-header echo for client correlation; a
-				// SetHeader error only occurs when the stream is already
-				// terminating, at which point the id has served its purpose via
-				// ctx. Non-actionable, so logged at Debug only.
-				slog.DebugContext(ctx, "grpc: request-id response header not sent", slog.Any("error", err))
-			}
-		}
-		return handler(ctx, req)
+		return handler(deriveRequestIDCtx(ctx), req)
 	}
+}
+
+// deriveRequestIDCtx is the transport-shape-agnostic core shared by
+// UnaryRequestID and StreamRequestID (PR-10 #1153): it derives the request id,
+// stores it under ctxkeys.RequestID + CorrelationID, best-effort echoes it as a
+// response header, and returns the enriched context.
+func deriveRequestIDCtx(ctx context.Context) context.Context {
+	id := requestIDFromMetadata(ctx)
+	if id == "" {
+		// NewUUID's error is unreachable on the production path (crypto/rand
+		// fatals on entropy failure); on the off chance it surfaces we leave the
+		// id empty rather than fabricating a non-unique value.
+		if gen, err := idutil.NewUUID(); err == nil {
+			id = gen
+		}
+	}
+	if id == "" {
+		return ctx
+	}
+	ctx = ctxkeys.WithRequestID(ctx, id)
+	ctx = ctxkeys.WithCorrelationID(ctx, id)
+	if err := grpc.SetHeader(ctx, metadata.Pairs(requestIDMetadataKey, id)); err != nil {
+		// Best-effort response-header echo for client correlation; a SetHeader
+		// error only occurs when the stream is already terminating, at which
+		// point the id has served its purpose via ctx. Non-actionable, so logged
+		// at Debug only.
+		slog.DebugContext(ctx, "grpc: request-id response header not sent", slog.Any("error", err))
+	}
+	return ctx
 }
 
 func requestIDFromMetadata(ctx context.Context) string {

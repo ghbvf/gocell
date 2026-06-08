@@ -34,9 +34,17 @@ func UnaryCellAttribution(resolve CellResolver) grpc.UnaryServerInterceptor {
 			errcode.Assertion("interceptor.UnaryCellAttribution: resolver is required")))
 	}
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		if cellID, ok := resolve(info.FullMethod); ok {
-			ctx = kernelctxkeys.WithCellID(ctx, cellID)
-		}
-		return handler(ctx, req)
+		return handler(attributeCellCtx(ctx, resolve, info.FullMethod), req)
 	}
+}
+
+// attributeCellCtx is the transport-shape-agnostic core shared by
+// UnaryCellAttribution and StreamCellAttribution (PR-10 #1153): on a resolver
+// match it writes kernel/ctxkeys.CellID into the context, otherwise returns ctx
+// unchanged (downstream degrades to the runtime sentinel).
+func attributeCellCtx(ctx context.Context, resolve CellResolver, fullMethod string) context.Context {
+	if cellID, ok := resolve(fullMethod); ok {
+		ctx = kernelctxkeys.WithCellID(ctx, cellID)
+	}
+	return ctx
 }

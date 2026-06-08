@@ -234,6 +234,24 @@ HTTP/gRPC **request-metrics** `cell` label 的 `_runtime` 哨兵单源 = `runtim
 
 **`grpc_ready` readyz probe（#1152）**：`adapters/grpc.Server.Probes()` 暴露 `ProbeReady`（typed const `grpc_ready`，在 `PROBENAME-SEALED-FUNNEL-01` golden inventory），bootstrap `expandGRPCServerProbes`（Run 起始，邻 `expandManagedResources`）收集进 `healthCheckers`，由 phase5 `drainProbes` 注册到 aggregator。多 gRPC listener 同名 probe 按 name 分组合并为单一 process-level checker（AND：任一 server not-serving 即 `grpc_ready` 不健康——无 dup-name 冲突、无 silent drop）。per-listener 粒度命名（区分哪个 listener 故障）需 typed ProbeName 构造器，backlog `#1748` 跟踪。
 
+### gRPC streaming（PR-10 #1153）
+
+streaming（server-stream + client-stream + bidi）由 `interceptor.NewStreamChain` 组装的**流拦截器链**承载，与 unary 链**全等价**（含 auth——否则 streaming RPC 无认证）：`RequestID→CellAttribution→Tracing→AccessLog→Metrics→Auth→Drain→Recovery`（多一个 stream-only `StreamDrain`，紧贴 Auth 内侧）。各 concern 的核心（request-id 派生 / cell 归属 / span 开闭 / access log / bearer-auth 决策 / panic 收敛）与 unary 共享单源；**唯一例外** = metrics cell-label funnel 按 `GRPC-METRICS-LABEL-CELLID-CTXSOURCE-01` 的逐函数 provenance binding 在 `StreamMetrics` 内联（不共享）。composition root 把 `NewUnaryChain` + `NewStreamChain` 同 `Deps` 一并装进 server options（`examples/iotdevice/run.go` 首个消费者，server-stream `WatchCommands`）。
+
+**框架侧 drain（#1153）**：`runtime/grpc.DrainSignal`（composition root 构造一个，对称注入 `interceptor.Deps.Drain` + `adaptersgrpc.Config.Drain`，同 Registrar 的 Option-3 实例共享）让 GracefulStop **主动 cancel** 在途 stream 的 ctx（grpc-go 的 GracefulStop 只 wait 不 cancel handler ctx）：adapter `gracefulStop` 起始 `Trigger()` → `StreamDrain` 把每条 stream ctx 绑到信号 → handler `select` 到 `ctx.Done()` 即返回 → GracefulStop 在预算内完成。`Config.Drain` 与 `Config.Registrar` 同为 required（无 `if drain != nil` 双路径）。
+
+**运维（drain 可观测）**：`gracefulStop` 在 Trigger 前打一条 `slog.Info("grpc: draining …", shutdown_timeout)` 作为关闭序列锚点；被 drain 取消的在途 stream 以 `code=Canceled` 收尾，故 `grpc_server_requests_total{code="Canceled"}` 在 drain/rolling-deploy 窗口内的脉冲是**预期现象**（非故障），告警应排除关闭窗口。
+
+守卫（导航；完整盲区清单活在各 archtest godoc 单源）：
+
+| Archtest ID | 摘要 | 评级 |
+|---|---|---|
+| `GRPC-STREAM-CHAIN-ORDER-01` | `NewStreamChain` 的 `grpc.ChainStreamInterceptor` 8-arg 顺序冻结（含 `StreamDrain`），go/types 解析每参到 interceptor 构造器 + 单站点/参数解析两 blind-spot | Medium（变参顺序 Go 不可编译期表达，同 unary `…-ORDER-01` 天花板） |
+| `GRPC-CHAIN-STREAM-INTERCEPTOR-CALLER-01` | `grpc.ChainStreamInterceptor` 生产引用点收口 `runtime/grpc/interceptor/stream.go::NewStreamChain` + anti-vacuity | 下游 Medium（caller-allowlist）/ 上游 Go 天花板（第三方导出 func，won't-do #1394；单-builder Hard 升级 #1752） |
+| `GRPC-STREAM-DRAIN-01` | 两侧框架-drain 守：(A) `StreamDrain` 入 `NewStreamChain` 参（消费侧）+ (B) `runtimegrpc.DrainSignal.Trigger` caller-allowlist 收口 `adapters/grpc/server.go`（生产侧）+ 双 anti-vacuity | 下游 Medium / 上游 Go 天花板（Trigger 是导出方法，#1394/#851/#1282 族；单-builder Hard 升级 #1752） |
+
+`StreamMetrics` 已纳入 `GRPC-METRICS-LABEL-CELLID-CTXSOURCE-01`（扫 `UnaryMetrics` + `StreamMetrics` 两函数）；`StreamRecovery` 经共享 `recoverGRPCPanic` 自动受 `PANIC-LOG-REDACT-01` 覆盖。**codegen**：`contractgen.ReadProtoServiceInfo` 已接受 streaming RPC（#1153 退役 unary-only 拒绝，service-level 注册整个 proto service，stream 形态由运行时链处理）。
+
 ## Redis Key Namespace（owner 维度的 keyspace 等价物）
 
 `adapters/redis` 四个 primitive（IdempotencyClaimer / Cache / NonceStore / RedisDriver）构造期注入 `KeyNamespace` 给 Redis key 加 owner 前缀。命名约定与 HTTP metrics `cell` label 同源：
