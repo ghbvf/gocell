@@ -47,6 +47,8 @@ const (
 // Used in resolveSlicePkg; extracted as a const to satisfy go:S1192.
 const fmtSlicePkgPath = "./%s/%s/..."
 
+const integrationJourneyPkgPath = "github.com/ghbvf/gocell/tests/integration/..."
+
 // Runner executes metadata-driven verification tests.
 type Runner struct {
 	project   *metadata.ProjectMeta
@@ -380,8 +382,8 @@ func recordResult(result *VerifyResult, name string, res goTestResult, pkg, patt
 
 // resolveJourneyPkg determines the Go test package and extra args for a journey
 // ref. Example-local journey files run against their owning example tree;
-// project-level journeys still prefer ./tests/integration/... with integration
-// tags, then ./journeys/..., then ./... as last resort.
+// project-level journeys still prefer the tests/integration satellite module
+// with integration tags, then ./journeys/..., then ./... as last resort.
 func (r *Runner) resolveJourneyPkg(j *metadata.JourneyMeta, ref resolvedRef) (pkg string, extraArgs []string) {
 	if ref.Pkg != "" {
 		return ref.Pkg, nil
@@ -394,7 +396,7 @@ func (r *Runner) resolveJourneyPkg(j *metadata.JourneyMeta, ref resolvedRef) (pk
 		}
 	}
 	if dirExists(filepath.Join(r.root, "tests", "integration")) {
-		return "./tests/integration/...", []string{"-tags=integration"}
+		return integrationJourneyPkgPath, []string{"-tags=integration"}
 	}
 	if dirExists(filepath.Join(r.root, "journeys")) {
 		return "./journeys/...", nil

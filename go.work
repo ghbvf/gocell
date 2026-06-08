@@ -12,4 +12,6 @@ use (
 	./examples/ssobff
 	./examples/todoorder
 	./examples/webhookdemo
+	./tests/integration
+	./tests/testutil/pgshare
 )

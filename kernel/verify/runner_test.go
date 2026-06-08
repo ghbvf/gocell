@@ -274,7 +274,7 @@ func TestResolveJourneyPkg_IntegrationDir(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "tests", "integration"), 0o755))
 	r := NewRunner(nil, dir)
 	pkg, extra := r.resolveJourneyPkg(&metadata.JourneyMeta{}, resolvedRef{Kind: PrefixJourney})
-	assert.Equal(t, "./tests/integration/...", pkg)
+	assert.Equal(t, integrationJourneyPkgPath, pkg)
 	assert.Contains(t, extra, "-tags=integration")
 }
 

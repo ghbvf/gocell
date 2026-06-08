@@ -200,7 +200,7 @@ local-down:
 test-integration:
 	GOCELL_TEST_DOCKER_REQUIRED=1 go test -tags=integration,e2e \
 		./adapters/... \
-		./tests/integration/... \
+		github.com/ghbvf/gocell/tests/integration/... \
 		./tests/e2e/internal/... \
 		github.com/ghbvf/gocell/cmd/corebundle/... \
 		github.com/ghbvf/gocell/examples/ssobff/... \

@@ -100,7 +100,7 @@ jobs:
         #
         #   - adapters/postgres/...                                   PG store ambient-tx + jti UNIQUE retries
         #   - cells/accesscore/internal/adapters/postgres/...         accesscore PG store conformance
-        #   - tests/integration/l2atomicity/...                       producer→relay→publisher→subscriber goroutines
+        #   - github.com/ghbvf/gocell/tests/integration/l2atomicity/... producer→relay→publisher→subscriber goroutines
         #
         # Adding a non-PG / non-concurrent package here yields no race
         # signal at significant CI cost. Each addition is a deliberate
@@ -126,4 +126,4 @@ jobs:
           go test -race -count=1 -timeout 15m -tags=integration \
             ./adapters/postgres/... \
             ./cells/accesscore/internal/adapters/postgres/... \
-            ./tests/integration/l2atomicity/...
+            github.com/ghbvf/gocell/tests/integration/l2atomicity/...

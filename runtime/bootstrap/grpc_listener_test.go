@@ -3,11 +3,10 @@ package bootstrap
 // grpc_listener_test.go — TDD coverage for WithGRPCListener + phase7b serve +
 // phase10 stage2 gRPC drain (#1148 / GAP-1 PR-5).
 //
-// Layering note: this is a _test.go file, exempt from the runtime/ → adapters/
-// import ban (LAYER-03 `!**/runtime/**/*_test.go`). It therefore plays the
-// composition-root role — building the interceptor chain and the adapters/grpc
-// server — exactly as cmd/ or examples/ would, then handing the ready server to
-// WithGRPCListener (which only sees the GRPCServer interface).
+// Layering note: framework-core tests use a bootstrap-local GRPCServer fake
+// rather than importing adapters/grpc. Adapter-real coverage lives in the
+// adapter/consumer test surface; bootstrap asserts only the GRPCServer contract
+// it orchestrates.
 //
 // Cases:
 //   1. nil server (bare + typed) → phase0 fail-fast ErrGRPCServerMissing, no socket
@@ -33,7 +32,6 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/test/bufconn"
 
-	adaptersgrpc "github.com/ghbvf/gocell/adapters/grpc"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	kauth "github.com/ghbvf/gocell/kernel/auth"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -43,57 +41,22 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
-	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
-	"github.com/ghbvf/gocell/runtime/grpc/interceptor"
-	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
 const grpcTestBufSize = 1024 * 1024
 
-// buildAdapterServer constructs an adapters/grpc.Server with one interceptor deps
-// object (as the composition root would), registering the
-// caller-supplied services via the Form B Registrar path. authPublic, when
-// non-nil, marks methods exempt from the auth interceptor so RPCs can be issued
-// without a bearer token.
+// buildAdapterServer constructs a test GRPCServer with one interceptor deps
+// object, registering the caller-supplied services via the Form B Registrar
+// path. authPublic, when non-nil, marks methods exempt from the auth
+// interceptor so RPCs can be issued without a bearer token.
 func buildAdapterServer(
 	t *testing.T,
 	authPublic func(fullMethod string) bool,
 	register func(grpc.ServiceRegistrar),
-) *adaptersgrpc.Server {
+) *testGRPCServer {
 	t.Helper()
-	var authOpts []interceptor.AuthOption
-	if authPublic != nil {
-		authOpts = append(authOpts, interceptor.WithPublicMethod(authPublic))
-	}
-	reg := runtimegrpc.NewServiceRegistrar()
-	drain := runtimegrpc.NewDrainSignal()
-	deps := interceptor.Deps{
-		Collector:       metrics.NewInMemoryGRPCCollector(),
-		Clock:           clock.Real(),
-		Verifier:        &bootstrapTestVerifier{},
-		AuthOptions:     authOpts,
-		Registrar:       reg, // Option 3: shared registrar (#1152)
-		CellIDClosedSet: []string{"bootstrap-test-cell", "_listener-test"},
-		Drain:           drain, // Option 3: shared drain signal (#1153)
-	}
-	srv, err := adaptersgrpc.New(adaptersgrpc.Config{
-		Addr:         ":0",
-		TLS:          adaptersgrpc.TLSConfig{AllowInsecure: true},
-		Interceptors: interceptor.NewServerInterceptors(deps),
-	})
-	require.NoError(t, err)
-	if register != nil {
-		// Register via Form B callback using a synthetic spec (grpc_listener_test
-		// plays the composition-root role; it may import adapters/grpc and call
-		// Registrar() directly — identical to how cmd/ would wire things pre-cell).
-		spec := cell.GRPCServiceSpec{
-			ContractID: "grpc.listener.test.v1",
-			CellID:     "_listener-test",
-			Listener:   cell.PrimaryListener,
-			Register:   register,
-		}
-		require.NoError(t, srv.Registrar().Register(spec))
-	}
+	srv := newTestGRPCServer(authPublic)
+	require.NoError(t, registerTestGRPCService(srv, register))
 	return srv
 }
 
@@ -220,7 +183,7 @@ func TestWithGRPCListener_NilServer_Phase0FailFast(t *testing.T) {
 		server GRPCServer
 	}{
 		{"bare_nil", nil},
-		{"typed_nil", (*adaptersgrpc.Server)(nil)},
+		{"typed_nil", (*testGRPCServer)(nil)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
