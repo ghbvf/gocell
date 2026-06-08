@@ -19,8 +19,6 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/auth"
 
-	"google.golang.org/grpc"
-
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	devicecell "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell"
 	devicemem "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/mem"
@@ -177,23 +175,24 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	// is deferred to #1675). The metrics collector is backed by a Nop provider —
 	// the iotdevice demo exports no metrics (HTTP path is Nop too). Cell
 	// attribution + the grpc_ready readyz probe are wired below (PR-9 #1152): the
-	// registrar is created FIRST and shared by the interceptor chain
-	// (reg.CellIDForMethod feeds cell attribution) and the adapter server
-	// (Config.Registrar), with asm.CellIDs() as the metrics closed set.
+	// registrar is created FIRST and put into the adapter-owned interceptor deps;
+	// adaptersgrpc.New binds that same instance to the server, with asm.CellIDs()
+	// as the metrics closed set.
 	grpcCollector, err := rtmetrics.NewGRPCProviderCollector(kernelmetrics.NopProvider{}, rtmetrics.ProviderCollectorConfig{})
 	if err != nil {
 		return fmt.Errorf("build grpc metrics collector: %w", err)
 	}
 	grpcRegistrar := runtimegrpc.NewServiceRegistrar()
 	// The drain signal is shared (Option 3 #1153) between the stream interceptor
-	// chain (StreamDrain binds in-flight streams to it) and the adapter
-	// (Config.Drain triggers it at GracefulStop) — devicecell serves a
+	// chain (StreamDrain binds in-flight streams to it) and the adapter trigger —
+	// devicecell serves a
 	// server-streaming RPC (WatchCommands), so a drain must cancel in-flight
 	// watches instead of holding the graceful-stop budget.
 	grpcDrain := runtimegrpc.NewDrainSignal()
-	// One Deps drives both chains: the unary chain ignores Drain, the stream chain
-	// requires it. Both share the registrar so cell attribution resolves through
-	// one method→cellID map.
+	// One Deps drives both chains and the adapter binding: adaptersgrpc.New owns
+	// NewUnaryChain + NewStreamChain construction and binds this same registrar /
+	// drain pair to the server, so a composition root cannot accidentally omit
+	// the stream chain or wire different instances.
 	grpcDeps := interceptor.Deps{
 		Verifier:        jwtVerifier,
 		Clock:           clk,
@@ -206,10 +205,7 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	// WithGRPCListener below — bootstrap pre-binds the WithGRPCListener addr, so a
 	// divergent adapter Config.Addr would be ignored (#1737 F2).
 	grpcAddr := grpcAddrFromEnv()
-	grpcServer, err := newGRPCServerFromEnv(durabilityMode, grpcAddr, grpcRegistrar, grpcDrain, []grpc.ServerOption{
-		interceptor.NewUnaryChain(grpcDeps),
-		interceptor.NewStreamChain(grpcDeps),
-	})
+	grpcServer, err := newGRPCServerFromEnv(durabilityMode, grpcAddr, grpcDeps)
 	if err != nil {
 		return fmt.Errorf("build grpc server: %w", err)
 	}

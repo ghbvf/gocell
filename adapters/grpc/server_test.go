@@ -10,18 +10,35 @@ import (
 	"github.com/stretchr/testify/require"
 
 	grpcadapter "github.com/ghbvf/gocell/adapters/grpc"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/runtime/auth"
 	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
+	"github.com/ghbvf/gocell/runtime/grpc/interceptor"
+	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
-// withReg injects a fresh shared registrar and drain signal into cfg so New
-// satisfies the required Config.Registrar (Option 3 #1152) and Config.Drain
-// (PR-10 #1153). These tests do not exercise attribution or drain, so fresh
-// instances suffice; the helper is shared across the grpc_test package.
+type adapterTestVerifier struct{}
+
+func (adapterTestVerifier) VerifyIntent(context.Context, string, auth.TokenIntent) (auth.Claims, error) {
+	return auth.Claims{}, nil
+}
+
+// withReg injects a complete interceptor wiring object into cfg so New satisfies
+// the required Config.Interceptors dependencies. Adapter unit tests do not
+// exercise auth policy, so every method is public; integration tests that need
+// auth behavior provide their own deps.
 func withReg(cfg grpcadapter.Config) grpcadapter.Config {
-	cfg.Registrar = runtimegrpc.NewServiceRegistrar()
-	cfg.Drain = runtimegrpc.NewDrainSignal()
+	cfg.Interceptors = interceptor.Deps{
+		Collector:       metrics.NewInMemoryGRPCCollector(),
+		Clock:           clock.Real(),
+		Verifier:        adapterTestVerifier{},
+		AuthOptions:     []interceptor.AuthOption{interceptor.WithPublicMethod(func(string) bool { return true })},
+		Registrar:       runtimegrpc.NewServiceRegistrar(),
+		CellIDClosedSet: []string{"_grpc-test", "_integration-test"},
+		Drain:           runtimegrpc.NewDrainSignal(),
+	}
 	return cfg
 }
 

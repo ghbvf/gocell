@@ -143,8 +143,8 @@ func StreamAuth(verifier auth.IntentTokenVerifier, opts ...AuthOption) grpc.Stre
 // ctx.Done() returns promptly instead of blocking GracefulStop until the
 // hard-stop deadline. It runs one bounded goroutine per active stream, freed when
 // the stream ends (defer cancel → ctx.Done) or drain fires. drain is required
-// (programmer-error panic on nil; the composition root wires the SAME instance
-// into adaptersgrpc.Config.Drain).
+// (programmer-error panic on nil; adapters/grpc.New stores the SAME instance
+// from Config.Interceptors for its graceful-stop trigger).
 func StreamDrain(drain *runtimegrpc.DrainSignal) grpc.StreamServerInterceptor {
 	if drain == nil {
 		panic(panicregister.Approved("interceptor-stream-drain-required",

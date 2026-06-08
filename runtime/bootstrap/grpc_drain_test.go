@@ -51,20 +51,19 @@ func buildDrainAdapterServer(t *testing.T) *adaptersgrpc.Server {
 	t.Helper()
 	reg := runtimegrpc.NewServiceRegistrar()
 	drain := runtimegrpc.NewDrainSignal()
-	chain := interceptor.NewUnaryChain(interceptor.Deps{
+	deps := interceptor.Deps{
 		Collector:       metrics.NewInMemoryGRPCCollector(),
 		Clock:           clock.Real(),
 		Verifier:        &bootstrapTestVerifier{},
 		AuthOptions:     []interceptor.AuthOption{interceptor.WithPublicMethod(func(string) bool { return true })},
 		Registrar:       reg, // Option 3: shared registrar (#1152)
 		CellIDClosedSet: []string{"bootstrap-test-cell"},
-	})
+		Drain:           drain,
+	}
 	srv, err := adaptersgrpc.New(adaptersgrpc.Config{
-		Addr:          ":0",
-		TLS:           adaptersgrpc.TLSConfig{AllowInsecure: true},
-		ServerOptions: []grpc.ServerOption{chain},
-		Registrar:     reg,
-		Drain:         drain, // Option 3: shared drain signal (#1153)
+		Addr:         ":0",
+		TLS:          adaptersgrpc.TLSConfig{AllowInsecure: true},
+		Interceptors: deps,
 	})
 	require.NoError(t, err)
 	return srv

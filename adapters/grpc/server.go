@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
+	"github.com/ghbvf/gocell/runtime/grpc/interceptor"
 	"github.com/ghbvf/gocell/runtime/http/tlsutil"
 )
 
@@ -84,29 +85,32 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 
-	// Composition-root-supplied options (e.g. the unary interceptor chain) go
-	// FIRST; the adapter-owned transport credentials are appended LAST so they
-	// win. grpc.NewServer applies options in order and a later grpc.Creds
-	// overrides an earlier one, so putting the validated creds last makes the
-	// adapter's TLS/mTLS posture non-overridable by a caller-supplied grpc.Creds
-	// in ServerOptions (fail-closed: ServerOptions cannot downgrade transport
-	// security). ref: grpc-go v1.81.1 server.go NewServer + Creds.
-	var opts []grpc.ServerOption
-	opts = append(opts, cfg.ServerOptions...)
+	// New owns the gRPC interceptor chain construction. Both chains are derived
+	// from the one Config.Interceptors value, so a streaming server cannot be
+	// half-wired with unary auth only, and the adapter binds the same registrar
+	// and drain instances that the chains observe (#1752/#1153).
+	opts := []grpc.ServerOption{
+		interceptor.NewUnaryChain(cfg.Interceptors),
+		interceptor.NewStreamChain(cfg.Interceptors),
+	}
+	// The adapter-owned transport credentials are appended LAST so they win.
+	// grpc.NewServer applies options in order and a later grpc.Creds overrides an
+	// earlier one, so the validated TLS/mTLS posture remains non-overridable.
+	// ref: grpc-go v1.81.1 server.go NewServer + Creds.
 	if creds != nil {
 		opts = append(opts, grpc.Creds(creds))
 	}
 
 	// Bind the composition-root-supplied registrar (Option 3 #1152) to the
-	// constructed server. cfg.Registrar is the same instance whose CellIDForMethod
-	// the interceptor chain reads, so attribution resolves through one shared map.
-	// validate() guarantees cfg.Registrar != nil.
+	// constructed server. cfg.Interceptors.Registrar is also the instance read by
+	// the cell-attribution interceptor, so attribution resolves through one shared
+	// map. validate() guarantees cfg.Interceptors.Registrar != nil.
 	inner := grpc.NewServer(opts...)
-	cfg.Registrar.BindServer(inner)
+	cfg.Interceptors.Registrar.BindServer(inner)
 	return &Server{
 		cfg:        cfg,
 		grpcServer: inner,
-		registrar:  cfg.Registrar,
+		registrar:  cfg.Interceptors.Registrar,
 		serveDone:  make(chan struct{}),
 	}, nil
 }
@@ -302,7 +306,7 @@ func (s *Server) gracefulStop(ctx context.Context) error {
 		// outage.
 		slog.Info("grpc: draining — canceling in-flight streams before GracefulStop",
 			slog.Duration("shutdown_timeout", s.cfg.ShutdownTimeout))
-		s.cfg.Drain.Trigger()
+		s.cfg.Interceptors.Drain.Trigger()
 
 		// Flip readiness to unhealthy BEFORE draining: GracefulStop stops
 		// accepting new RPCs immediately, so the grpc_ready probe must report

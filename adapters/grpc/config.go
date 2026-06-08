@@ -4,10 +4,8 @@ import (
 	"net"
 	"time"
 
-	"google.golang.org/grpc"
-
 	"github.com/ghbvf/gocell/pkg/errcode"
-	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
+	"github.com/ghbvf/gocell/runtime/grpc/interceptor"
 )
 
 const (
@@ -69,40 +67,13 @@ type Config struct {
 	// TLS configures transport security. See TLSConfig for the three supported modes.
 	TLS TLSConfig
 
-	// ServerOptions are extra grpc.ServerOptions appended after the TLS
-	// credentials option. The composition root injects the unary AND streaming
-	// interceptor chains here (interceptor.NewUnaryChain + NewStreamChain, from
-	// one shared Deps). It is not a business-bypass seam: cells/ cannot import
-	// adapters/ (layering rule), so only composition roots ever construct a
-	// Config. (Compile-time enforcement that a streaming server always installs
-	// the stream chain — closing the "forget NewStreamChain → unauthenticated
-	// streams" gap — is the #1752 single-builder Hard upgrade.)
-	ServerOptions []grpc.ServerOption
-
-	// Registrar is the shared method→cellID registry (Option 3, #1152). The
-	// composition root creates it FIRST (runtimegrpc.NewServiceRegistrar()) and
-	// hands reg.CellIDForMethod to the interceptor chain's cell-attribution
-	// interceptor — the chain is composed before this server exists. New binds the
-	// constructed *grpc.Server to it via BindServer. Required (no self-construct
-	// fallback): if the adapter minted its own registrar, it would differ from the
-	// one the chain reads and attribution would silently degrade to _runtime.
-	Registrar *runtimegrpc.ServiceRegistrar
-
-	// Drain is the framework-side drain signal (PR-10 #1153). gracefulStop
-	// triggers it FIRST (before GracefulStop), so the stream interceptor chain's
-	// StreamDrain cancels every in-flight stream's context — a long-lived
-	// server-stream that selects on ctx.Done() then returns within the
-	// ShutdownTimeout budget instead of blocking until the hard Stop().
-	//
-	// Required, exactly like Registrar (no `if drain != nil` dual path): the
-	// interceptor chain is a ServerOption built BEFORE this server exists, so the
-	// composition root MUST own one *DrainSignal and hand the SAME instance to
-	// both Config.Drain and interceptor.Deps.Drain — a different instance would
-	// trigger a signal no stream observes. A unary-only server still wires it (one
-	// line); the trigger is then a harmless no-op cancel with no StreamDrain
-	// consumer. The compile-proof single-builder that emits the config, both
-	// chains, the registrar, and this drain together is the Hard upgrade, #1752.
-	Drain *runtimegrpc.DrainSignal
+	// Interceptors are the single gRPC wiring object. New always derives BOTH
+	// unary and streaming interceptor chains from this one Deps value and binds
+	// Interceptors.Registrar to the underlying grpc.Server. That makes it
+	// impossible for a composition root to serve a streaming RPC while forgetting
+	// interceptor.NewStreamChain, or to pass a different Registrar/Drain instance
+	// to the adapter than the chains observe (#1752/#1153 Hard closure).
+	Interceptors interceptor.Deps
 }
 
 // applyDefaults fills zero-value fields with their defaults.
@@ -144,32 +115,38 @@ func (c *Config) validate() error {
 		return err
 	}
 
-	// V6: Registrar is required (Option 3 #1152) — the shared method→cellID source
-	// the interceptor chain reads. No self-construct fallback: a missing one is a
-	// composition-root wiring bug (fail-closed) that would otherwise silently
-	// degrade cell attribution to _runtime. Checked last so the Addr/TLS format
-	// errors above surface first (they are the common misconfigurations).
-	if c.Registrar == nil {
+	// V6: Interceptors.Registrar is required (Option 3 #1152) — the shared
+	// method→cellID source the adapter binds and both chains read. No
+	// self-construct fallback: a missing one is a composition-root wiring bug
+	// (fail-closed) that would otherwise silently degrade cell attribution to
+	// _runtime. Checked after Addr/TLS so common misconfigurations surface first.
+	if c.Interceptors.Registrar == nil {
 		return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
 			"grpc: Registrar is required; create it with runtimegrpc.NewServiceRegistrar() at the "+
-				"composition root and pass the same instance to both Config.Registrar and "+
-				"interceptor.Deps.Registrar")
+				"composition root and pass it as Config.Interceptors.Registrar")
 	}
 
-	// V7: Drain is required (Option 3, #1153) — the shared drain signal the
-	// stream interceptor chain binds in-flight streams to. No `if drain != nil`
-	// fallback: a missing one is a composition-root wiring bug (fail-closed). The
-	// composition root must hand the SAME instance to both Config.Drain and
-	// interceptor.Deps.Drain so the GracefulStop trigger reaches the chain.
-	// Validate (nil-receiver safe) also rejects a zero-value new(DrainSignal),
-	// which has a nil cancel and would otherwise panic at GracefulStop.
-	if c.Drain.Validate() != nil {
+	// V6b: Interceptors.CellIDClosedSet is required by both chains. Without it,
+	// every attributed cell would be rejected from the metrics label closed set
+	// and relabeled to _runtime.
+	if len(c.Interceptors.CellIDClosedSet) == 0 {
+		return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
+			"grpc: Interceptors.CellIDClosedSet is required; pass the assembly cell-id set")
+	}
+
+	// V7: Interceptors.Drain is required (Option 3, #1153) — the shared drain
+	// signal the stream interceptor chain binds in-flight streams to and the
+	// adapter triggers at GracefulStop start. Since New owns both chain
+	// construction and adapter binding, one Deps value guarantees same-instance
+	// wiring. Validate (nil-receiver safe) also rejects a zero-value
+	// new(DrainSignal), which has a nil cancel and would otherwise panic.
+	if c.Interceptors.Drain.Validate() != nil {
 		return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
 			"grpc: Drain is required; create it with runtimegrpc.NewDrainSignal() at the "+
 				"composition root (a nil or zero-value DrainSignal is rejected — it would panic "+
-				"at GracefulStop) and pass the same instance to both Config.Drain and "+
-				"interceptor.Deps.Drain. A unary-only server still wires it — the trigger "+
-				"is a harmless no-op when no StreamDrain interceptor consumes it")
+				"at GracefulStop) and pass it as Config.Interceptors.Drain. A unary-only "+
+				"server still wires it — the trigger is a harmless no-op when no StreamDrain "+
+				"interceptor consumes it")
 	}
 
 	return nil

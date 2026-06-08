@@ -13,11 +13,9 @@ import (
 	"os"
 	"strings"
 
-	"google.golang.org/grpc"
-
 	adaptersgrpc "github.com/ghbvf/gocell/adapters/grpc"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
+	"github.com/ghbvf/gocell/runtime/grpc/interceptor"
 )
 
 const (
@@ -52,30 +50,24 @@ func grpcAddrFromEnv() string {
 // newGRPCServerFromEnv builds the gRPC server, resolving transport security from
 // the environment. addr is the resolved listen address (grpcAddrFromEnv), passed
 // in by the caller so the same value is also handed to WithGRPCListener.
-// serverOpts carries the interceptor chains (assembled by the caller so the JWT
-// verifier / metrics collector stay in run.go). reg is the shared method→cellID
-// registrar (Option 3 #1152): the same instance whose CellIDForMethod the chain's
-// cell-attribution interceptor reads, bound to the server here via Config.Registrar.
-// drain is the shared drain signal (Option 3 #1153): the SAME instance the stream
-// chain's StreamDrain interceptor observes, bound here via Config.Drain so
-// GracefulStop's trigger cancels in-flight streams.
+// grpcDeps carries the single interceptor wiring object: adaptersgrpc.New derives
+// both unary and stream chains from it and binds the same registrar/drain instances
+// to the adapter. That keeps the JWT verifier / metrics collector in run.go while
+// making "forgot NewStreamChain" and mismatched registrar/drain wiring
+// unrepresentable at this call site.
 func newGRPCServerFromEnv(
 	durabilityMode outbox.DurabilityMode,
 	addr string,
-	reg *runtimegrpc.ServiceRegistrar,
-	drain *runtimegrpc.DrainSignal,
-	serverOpts []grpc.ServerOption,
+	grpcDeps interceptor.Deps,
 ) (*adaptersgrpc.Server, error) {
 	tlsCfg, err := grpcTLSConfigFromEnv(durabilityMode)
 	if err != nil {
 		return nil, err
 	}
 	return adaptersgrpc.New(adaptersgrpc.Config{
-		Addr:          addr,
-		TLS:           tlsCfg,
-		ServerOptions: serverOpts,
-		Registrar:     reg,
-		Drain:         drain,
+		Addr:         addr,
+		TLS:          tlsCfg,
+		Interceptors: grpcDeps,
 	})
 }
 

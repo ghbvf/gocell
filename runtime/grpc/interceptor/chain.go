@@ -29,15 +29,11 @@ type Deps struct {
 	// password-reset-exempt predicates).
 	AuthOptions []AuthOption
 	// Registrar is the gRPC service registrar whose CellIDForMethod feeds the
-	// cell-attribution interceptor (Option 3, #1152). It MUST be the SAME
-	// *runtimegrpc.ServiceRegistrar instance passed to adaptersgrpc.Config.Registrar
-	// — a different registrar populates a different method map and silently degrades
-	// attribution to _runtime. Taking the registrar object (not a detached
-	// CellIDForMethod func value) makes the two consumers symmetric — both wire
-	// `Registrar: reg` — so a mismatch is visible. (A compile-proof single-builder
-	// that emits both the chain option and the adapter config is the Hard upgrade,
-	// tracked at #1752.) Required: a nil Registrar is a wiring bug → NewUnaryChain
-	// panics rather than leaving every RPC attributed to the sentinel.
+	// cell-attribution interceptor (Option 3, #1152). adapters/grpc.New also
+	// binds this same instance to the underlying grpc.Server via Config.Interceptors,
+	// so attribution and registration share one method map. Required: a nil
+	// Registrar is a wiring bug → NewUnaryChain panics rather than leaving every
+	// RPC attributed to the sentinel.
 	Registrar *runtimegrpc.ServiceRegistrar
 	// CellIDClosedSet is the assembly's cell-id set (asm.CellIDs()) the metrics
 	// interceptor validates the attributed cell against (M12b defense-in-depth: an
@@ -48,12 +44,10 @@ type Deps struct {
 	// Drain is the framework-side gRPC drain signal (PR-10 #1153) the StreamDrain
 	// interceptor binds each in-flight stream's context to, so GracefulStop
 	// actively cancels long-lived streams instead of merely waiting for them. It
-	// MUST be the SAME *runtimegrpc.DrainSignal instance passed to
-	// adaptersgrpc.Config.Drain — the adapter triggers it at GracefulStop start
-	// and the stream chain observes the cancellation (same Option-3 instance
-	// symmetry as Registrar; the single-builder Hard upgrade is #1752). Required
-	// by NewStreamChain (fail-closed); NewUnaryChain ignores it (unary RPCs are
-	// short-lived, GracefulStop's wait suffices).
+	// is also the instance adapters/grpc.New stores for its GracefulStop trigger
+	// via Config.Interceptors (same Option-3 instance symmetry as Registrar).
+	// Required by NewStreamChain (fail-closed); NewUnaryChain ignores it (unary
+	// RPCs are short-lived, GracefulStop's wait suffices).
 	Drain *runtimegrpc.DrainSignal
 }
 

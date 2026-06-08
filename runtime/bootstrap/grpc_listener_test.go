@@ -50,8 +50,8 @@ import (
 
 const grpcTestBufSize = 1024 * 1024
 
-// buildAdapterServer constructs an adapters/grpc.Server with the full unary
-// interceptor chain wired (as the composition root would), registering the
+// buildAdapterServer constructs an adapters/grpc.Server with one interceptor deps
+// object (as the composition root would), registering the
 // caller-supplied services via the Form B Registrar path. authPublic, when
 // non-nil, marks methods exempt from the auth interceptor so RPCs can be issued
 // without a bearer token.
@@ -67,20 +67,19 @@ func buildAdapterServer(
 	}
 	reg := runtimegrpc.NewServiceRegistrar()
 	drain := runtimegrpc.NewDrainSignal()
-	chain := interceptor.NewUnaryChain(interceptor.Deps{
+	deps := interceptor.Deps{
 		Collector:       metrics.NewInMemoryGRPCCollector(),
 		Clock:           clock.Real(),
-		Verifier:        &bootstrapTestVerifier{}, // non-nil: NewUnaryChain panics on nil
+		Verifier:        &bootstrapTestVerifier{},
 		AuthOptions:     authOpts,
 		Registrar:       reg, // Option 3: shared registrar (#1152)
-		CellIDClosedSet: []string{"bootstrap-test-cell"},
-	})
+		CellIDClosedSet: []string{"bootstrap-test-cell", "_listener-test"},
+		Drain:           drain, // Option 3: shared drain signal (#1153)
+	}
 	srv, err := adaptersgrpc.New(adaptersgrpc.Config{
-		Addr:          ":0",
-		TLS:           adaptersgrpc.TLSConfig{AllowInsecure: true},
-		ServerOptions: []grpc.ServerOption{chain},
-		Registrar:     reg,
-		Drain:         drain, // Option 3: shared drain signal (#1153)
+		Addr:         ":0",
+		TLS:          adaptersgrpc.TLSConfig{AllowInsecure: true},
+		Interceptors: deps,
 	})
 	require.NoError(t, err)
 	if register != nil {

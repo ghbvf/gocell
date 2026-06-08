@@ -268,57 +268,6 @@ func TestIntegration_ServerTLS(t *testing.T) {
 	assert.Equal(t, grpc_health_v1.HealthCheckResponse_SERVING, st)
 }
 
-// TestIntegration_ServerOptionsCannotOverrideTLS is the fail-closed regression
-// for F1 (#1148): a caller-supplied grpc.Creds(insecure) in Config.ServerOptions
-// must NOT downgrade the adapter's validated TLS posture. grpc.NewServer applies
-// options in order and a later grpc.Creds wins, so New appends the adapter creds
-// LAST. Proof: with an insecure ServerOption present, a plaintext client is still
-// rejected (TLS enforced) and a TLS client still succeeds.
-func TestIntegration_ServerOptionsCannotOverrideTLS(t *testing.T) {
-	t.Parallel()
-
-	chain := genIntegChain(t)
-	cfg := grpcadapter.Config{
-		Addr:            "127.0.0.1:0",
-		ShutdownTimeout: integServeTimeout,
-		TLS: grpcadapter.TLSConfig{
-			CertPEM: chain.serverCertPEM,
-			KeyPEM:  chain.serverKeyPEM,
-		},
-		// Adversarial: try to downgrade transport security to plaintext.
-		ServerOptions: []grpc.ServerOption{grpc.Creds(insecure.NewCredentials())},
-	}
-	srv, err := grpcadapter.New(withReg(cfg))
-	require.NoError(t, err)
-
-	healthSrv := health.NewServer()
-	healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
-	integRegisterHealth(t, srv, healthSrv)
-
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	addr := lis.Addr().String()
-
-	stop := startServing(t, srv, lis)
-	defer stop()
-	waitForServing(t, srv)
-
-	// Plaintext client must FAIL — TLS was not overridden by the insecure option.
-	plain := dialInsecure(t, addr)
-	defer func() { _ = plain.Close() }()
-	_, plainErr := healthCheck(t, plain)
-	require.Error(t, plainErr, "plaintext client must be rejected; adapter TLS must win over ServerOptions grpc.Creds")
-
-	// TLS client must still succeed.
-	rootCAs := x509.NewCertPool()
-	require.True(t, rootCAs.AppendCertsFromPEM(chain.rootCertPEM))
-	tlsCC := dialTLS(t, addr, rootCAs, "localhost")
-	defer func() { _ = tlsCC.Close() }()
-	st, err := healthCheck(t, tlsCC)
-	require.NoError(t, err)
-	assert.Equal(t, grpc_health_v1.HealthCheckResponse_SERVING, st)
-}
-
 // TestIntegration_MTLS_WithValidClientCert verifies mTLS with a CA-signed client cert.
 func TestIntegration_MTLS_WithValidClientCert(t *testing.T) {
 	t.Parallel()
@@ -714,9 +663,10 @@ func (integVerifier) VerifyIntent(context.Context, string, auth.TokenIntent) (au
 	return auth.Claims{}, errors.New("integ verifier: no tokens issued in this test")
 }
 
-// newStreamingServer builds a plaintext bufconn-ready server whose ServerOptions
-// carry the real unary + stream interceptor chains, sharing one Registrar and one
-// DrainSignal between the chains and the adapter config (Option 3, #1152/#1153).
+// newStreamingServer builds a plaintext bufconn-ready server whose adapter Config
+// carries one interceptor deps object. grpcadapter.New must derive both unary and
+// stream chains from it, sharing one Registrar and one DrainSignal between the
+// chains and the adapter config (Option 3, #1152/#1153).
 func newStreamingServer(t *testing.T, authOpts ...interceptor.AuthOption) (*grpcadapter.Server, *runtimegrpc.DrainSignal) {
 	t.Helper()
 	reg := runtimegrpc.NewServiceRegistrar()
@@ -734,9 +684,7 @@ func newStreamingServer(t *testing.T, authOpts ...interceptor.AuthOption) (*grpc
 		Addr:            ":0",
 		ShutdownTimeout: integServeTimeout,
 		TLS:             grpcadapter.TLSConfig{AllowInsecure: true},
-		ServerOptions:   []grpc.ServerOption{interceptor.NewStreamChain(deps), interceptor.NewUnaryChain(deps)},
-		Registrar:       reg,
-		Drain:           drain,
+		Interceptors:    deps,
 	})
 	require.NoError(t, err)
 	return srv, drain
