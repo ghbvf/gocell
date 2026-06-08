@@ -982,6 +982,23 @@ func TestTOPO05(t *testing.T) {
 			},
 			wantCount: 1,
 		},
+		{
+			name: "same L0 cell as provider and consumer reports both endpoints",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.crypto.loop.v1"] = &metadata.ContractMeta{
+					ID:               "http.crypto.loop.v1",
+					Kind:             "http",
+					OwnerCell:        metadatatest.CellIDAccessCore,
+					ConsistencyLevel: "L0",
+					Lifecycle:        "active",
+					Endpoints: metadata.EndpointsMeta{
+						Server:  metadatatest.CellIDSharedCrypto,
+						Clients: []string{metadatatest.CellIDSharedCrypto},
+					},
+				}
+			},
+			wantCount: 2,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

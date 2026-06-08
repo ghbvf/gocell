@@ -202,9 +202,19 @@ func (v *Validator) checkContractProviderLevel(
 // the exception: the owner cell is listed as the provider/receiver endpoint, but
 // its implementing role is webhook-receive and may be a pure L0 receiver.
 func (v *Validator) validateTOPO05() []ValidationResult {
-	var results []ValidationResult
+	l0Cells := v.buildL0CellSet()
+	if len(l0Cells) == 0 {
+		return nil
+	}
 
-	// Build set of L0 cells.
+	var results []ValidationResult
+	for _, ct := range v.project.Contracts {
+		results = append(results, v.validateTOPO05Contract(ct, l0Cells)...)
+	}
+	return results
+}
+
+func (v *Validator) buildL0CellSet() map[string]bool {
 	l0Cells := make(map[string]bool)
 	for _, c := range v.project.Cells {
 		level, err := cellvocab.ParseLevel(c.ConsistencyLevel)
@@ -215,34 +225,50 @@ func (v *Validator) validateTOPO05() []ValidationResult {
 			l0Cells[c.ID] = true
 		}
 	}
-	if len(l0Cells) == 0 {
-		return nil
-	}
+	return l0Cells
+}
 
-	for _, ct := range v.project.Contracts {
-		provider := contractProvider(ct)
-		if l0Cells[provider] && !v.inboundWebhookL0Receiver(ct, provider) {
-			results = append(results, v.newError(
-				codeTOPO05, IssueForbidden,
-				contractFile(ct),
-				"endpoints",
-				fmt.Sprintf("L0 cell %q must not appear as provider in contract %q", provider, ct.ID),
-				"remove this cell from the contract endpoints or change the contract kind",
-			))
-		}
-		for _, consumer := range contractConsumers(ct) {
-			if l0Cells[consumer] && !v.inboundWebhookL0Receiver(ct, consumer) {
-				results = append(results, v.newError(
-					codeTOPO05, IssueForbidden,
-					contractFile(ct),
-					"endpoints",
-					fmt.Sprintf("L0 cell %q must not appear as consumer in contract %q", consumer, ct.ID),
-					"remove this cell from the contract endpoints",
-				))
-			}
+func (v *Validator) validateTOPO05Contract(ct *metadata.ContractMeta, l0Cells map[string]bool) []ValidationResult {
+	var results []ValidationResult
+
+	provider := contractProvider(ct)
+	if v.isForbiddenL0Endpoint(ct, provider, l0Cells) {
+		results = append(results, v.newTOPO05ProviderError(ct, provider))
+	}
+	for _, consumer := range contractConsumers(ct) {
+		if v.isForbiddenL0Endpoint(ct, consumer, l0Cells) {
+			results = append(results, v.newTOPO05ConsumerError(ct, consumer))
 		}
 	}
 	return results
+}
+
+func (v *Validator) isForbiddenL0Endpoint(
+	ct *metadata.ContractMeta,
+	cellID string,
+	l0Cells map[string]bool,
+) bool {
+	return l0Cells[cellID] && !v.inboundWebhookL0Receiver(ct, cellID)
+}
+
+func (v *Validator) newTOPO05ProviderError(ct *metadata.ContractMeta, provider string) ValidationResult {
+	return v.newError(
+		codeTOPO05, IssueForbidden,
+		contractFile(ct),
+		"endpoints",
+		fmt.Sprintf("L0 cell %q must not appear as provider in contract %q", provider, ct.ID),
+		"remove this cell from the contract endpoints or change the contract kind",
+	)
+}
+
+func (v *Validator) newTOPO05ConsumerError(ct *metadata.ContractMeta, consumer string) ValidationResult {
+	return v.newError(
+		codeTOPO05, IssueForbidden,
+		contractFile(ct),
+		"endpoints",
+		fmt.Sprintf("L0 cell %q must not appear as consumer in contract %q", consumer, ct.ID),
+		"remove this cell from the contract endpoints",
+	)
 }
 
 // inboundWebhookL0Receiver reports whether an L0 owner cell is the legitimate
