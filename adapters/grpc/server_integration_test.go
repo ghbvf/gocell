@@ -684,7 +684,7 @@ func newStreamingServer(t *testing.T, authOpts ...interceptor.AuthOption) (*grpc
 		Addr:            ":0",
 		ShutdownTimeout: integServeTimeout,
 		TLS:             grpcadapter.TLSConfig{AllowInsecure: true},
-		Interceptors:    deps,
+		Interceptors:    interceptor.NewServerInterceptors(deps),
 	})
 	require.NoError(t, err)
 	return srv, drain

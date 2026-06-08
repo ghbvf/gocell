@@ -158,7 +158,7 @@ func WithGRPCListenerShutdownGrace(d time.Duration) GRPCListenerOption {
 //	    Registrar: reg, CellIDClosedSet: asm.CellIDs(), Drain: drain,
 //	}
 //	srv, err := adaptersgrpc.New(adaptersgrpc.Config{
-//	    Addr: ":9000", TLS: tlsCfg, Interceptors: deps,
+//	    Addr: ":9000", TLS: tlsCfg, Interceptors: interceptor.NewServerInterceptors(deps),
 //	})
 //	bootstrap.New(clk, bootstrap.WithGRPCListener(cell.PrimaryListener, srv, ":9000"))
 //

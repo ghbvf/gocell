@@ -79,7 +79,7 @@ func buildAdapterServer(
 	srv, err := adaptersgrpc.New(adaptersgrpc.Config{
 		Addr:         ":0",
 		TLS:          adaptersgrpc.TLSConfig{AllowInsecure: true},
-		Interceptors: deps,
+		Interceptors: interceptor.NewServerInterceptors(deps),
 	})
 	require.NoError(t, err)
 	if register != nil {

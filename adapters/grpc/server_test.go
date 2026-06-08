@@ -8,37 +8,24 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 
 	grpcadapter "github.com/ghbvf/gocell/adapters/grpc"
-	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	"github.com/ghbvf/gocell/runtime/auth"
 	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
-	"github.com/ghbvf/gocell/runtime/grpc/interceptor"
-	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
-type adapterTestVerifier struct{}
-
-func (adapterTestVerifier) VerifyIntent(context.Context, string, auth.TokenIntent) (auth.Claims, error) {
-	return auth.Claims{}, nil
-}
-
-// withReg injects a complete interceptor wiring object into cfg so New satisfies
-// the required Config.Interceptors dependencies. Adapter unit tests do not
-// exercise auth policy, so every method is public; integration tests that need
-// auth behavior provide their own deps.
+// withReg injects a minimal interceptor bundle into cfg so adapter unit tests can
+// exercise config/serve behavior without importing runtime/grpc/interceptor
+// (GRPC-ADAPTER-LAYER-01). Integration tests that need real auth/stream behavior
+// provide a full bundle from interceptor.NewServerInterceptors.
 func withReg(cfg grpcadapter.Config) grpcadapter.Config {
-	cfg.Interceptors = interceptor.Deps{
-		Collector:       metrics.NewInMemoryGRPCCollector(),
-		Clock:           clock.Real(),
-		Verifier:        adapterTestVerifier{},
-		AuthOptions:     []interceptor.AuthOption{interceptor.WithPublicMethod(func(string) bool { return true })},
-		Registrar:       runtimegrpc.NewServiceRegistrar(),
-		CellIDClosedSet: []string{"_grpc-test", "_integration-test"},
-		Drain:           runtimegrpc.NewDrainSignal(),
-	}
+	cfg.Interceptors = runtimegrpc.NewServerInterceptorsBundle(
+		[]grpc.ServerOption{grpc.EmptyServerOption{}},
+		runtimegrpc.NewServiceRegistrar(),
+		runtimegrpc.NewDrainSignal(),
+	)
 	return cfg
 }
 

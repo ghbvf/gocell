@@ -17,7 +17,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
-	"github.com/ghbvf/gocell/runtime/grpc/interceptor"
 	"github.com/ghbvf/gocell/runtime/http/tlsutil"
 )
 
@@ -85,14 +84,11 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 
-	// New owns the gRPC interceptor chain construction. Both chains are derived
-	// from the one Config.Interceptors value, so a streaming server cannot be
-	// half-wired with unary auth only, and the adapter binds the same registrar
-	// and drain instances that the chains observe (#1752/#1153).
-	opts := []grpc.ServerOption{
-		interceptor.NewUnaryChain(cfg.Interceptors),
-		interceptor.NewStreamChain(cfg.Interceptors),
-	}
+	// Interceptor bundles are built outside the adapter (normally via
+	// interceptor.NewServerInterceptors) to preserve GRPC-ADAPTER-LAYER-01. The
+	// adapter consumes the bundle atomically: options, registrar, and drain all
+	// come from the same value.
+	opts := cfg.Interceptors.ServerOptions()
 	// The adapter-owned transport credentials are appended LAST so they win.
 	// grpc.NewServer applies options in order and a later grpc.Creds overrides an
 	// earlier one, so the validated TLS/mTLS posture remains non-overridable.
@@ -102,15 +98,15 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	// Bind the composition-root-supplied registrar (Option 3 #1152) to the
-	// constructed server. cfg.Interceptors.Registrar is also the instance read by
-	// the cell-attribution interceptor, so attribution resolves through one shared
-	// map. validate() guarantees cfg.Interceptors.Registrar != nil.
+	// constructed server. It is also the instance read by the cell-attribution
+	// interceptor, so attribution resolves through one shared map. validate()
+	// guarantees cfg.Interceptors.Registrar() != nil.
 	inner := grpc.NewServer(opts...)
-	cfg.Interceptors.Registrar.BindServer(inner)
+	cfg.Interceptors.Registrar().BindServer(inner)
 	return &Server{
 		cfg:        cfg,
 		grpcServer: inner,
-		registrar:  cfg.Interceptors.Registrar,
+		registrar:  cfg.Interceptors.Registrar(),
 		serveDone:  make(chan struct{}),
 	}, nil
 }
@@ -306,7 +302,7 @@ func (s *Server) gracefulStop(ctx context.Context) error {
 		// outage.
 		slog.Info("grpc: draining — canceling in-flight streams before GracefulStop",
 			slog.Duration("shutdown_timeout", s.cfg.ShutdownTimeout))
-		s.cfg.Interceptors.Drain.Trigger()
+		s.cfg.Interceptors.Drain().Trigger()
 
 		// Flip readiness to unhealthy BEFORE draining: GracefulStop stops
 		// accepting new RPCs immediately, so the grpc_ready probe must report

@@ -47,7 +47,7 @@
 //	drain := runtimegrpc.NewDrainSignal()
 //	deps := interceptor.Deps{..., Registrar: reg, CellIDClosedSet: asm.CellIDs(), Drain: drain}
 //	srv, _ := adaptersgrpc.New(adaptersgrpc.Config{
-//	    ..., Interceptors: deps,
+//	    ..., Interceptors: interceptor.NewServerInterceptors(deps),
 //	})
 //	bootstrap.New(clk,
 //	    bootstrap.WithGRPCListener(cell.PrimaryListener, srv, ":9000"),

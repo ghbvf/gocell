@@ -7,12 +7,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 
 	grpcadapter "github.com/ghbvf/gocell/adapters/grpc"
-	"github.com/ghbvf/gocell/kernel/clock"
 	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
-	"github.com/ghbvf/gocell/runtime/grpc/interceptor"
-	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
 // TestNew_RequiresRegistrar asserts New rejects a Config without a Registrar:
@@ -22,21 +20,22 @@ func TestNew_RequiresRegistrar(t *testing.T) {
 	_, err := grpcadapter.New(grpcadapter.Config{
 		Addr: ":0",
 		TLS:  grpcadapter.TLSConfig{AllowInsecure: true},
+		Interceptors: runtimegrpc.NewServerInterceptorsBundle(
+			[]grpc.ServerOption{grpc.EmptyServerOption{}},
+			nil,
+			runtimegrpc.NewDrainSignal(),
+		),
 		// Registrar omitted → required-dep error.
 	})
 	require.Error(t, err, "New must reject a Config without a Registrar")
 }
 
-func readyzDeps() interceptor.Deps {
-	return interceptor.Deps{
-		Collector:       metrics.NewInMemoryGRPCCollector(),
-		Clock:           clock.Real(),
-		Verifier:        adapterTestVerifier{},
-		AuthOptions:     []interceptor.AuthOption{interceptor.WithPublicMethod(func(string) bool { return true })},
-		Registrar:       runtimegrpc.NewServiceRegistrar(),
-		CellIDClosedSet: []string{"_grpc-test", "_integration-test"},
-		Drain:           runtimegrpc.NewDrainSignal(),
-	}
+func readyzBundle(drain *runtimegrpc.DrainSignal) runtimegrpc.ServerInterceptors {
+	return runtimegrpc.NewServerInterceptorsBundle(
+		[]grpc.ServerOption{grpc.EmptyServerOption{}},
+		runtimegrpc.NewServiceRegistrar(),
+		drain,
+	)
 }
 
 // TestNew_RequiresDrain asserts New rejects a Config without a Drain signal: the
@@ -44,12 +43,10 @@ func readyzDeps() interceptor.Deps {
 // to (PR-10 #1153), so a missing one is a wiring bug (no `if drain != nil`
 // fallback, fail-closed — same discipline as the required Registrar).
 func TestNew_RequiresDrain(t *testing.T) {
-	deps := readyzDeps()
-	deps.Drain = nil
 	_, err := grpcadapter.New(grpcadapter.Config{
 		Addr:         ":0",
 		TLS:          grpcadapter.TLSConfig{AllowInsecure: true},
-		Interceptors: deps,
+		Interceptors: readyzBundle(nil),
 		// Drain omitted → required-dep error.
 	})
 	require.Error(t, err, "New must reject a Config without a Drain signal")
@@ -60,12 +57,10 @@ func TestNew_RequiresDrain(t *testing.T) {
 // new(runtimegrpc.DrainSignal) passes a bare `== nil` check but has a nil cancel
 // and would panic at GracefulStop, so Config.validate calls Drain.Validate().
 func TestNew_RejectsZeroValueDrain(t *testing.T) {
-	deps := readyzDeps()
-	deps.Drain = new(runtimegrpc.DrainSignal) // non-nil zero-value → invalid
 	_, err := grpcadapter.New(grpcadapter.Config{
 		Addr:         ":0",
 		TLS:          grpcadapter.TLSConfig{AllowInsecure: true},
-		Interceptors: deps,
+		Interceptors: readyzBundle(new(runtimegrpc.DrainSignal)), // non-nil zero-value → invalid
 	})
 	require.Error(t, err, "New must reject a zero-value DrainSignal (would panic at GracefulStop)")
 }
@@ -77,7 +72,7 @@ func TestServer_Probes_ReadyShape(t *testing.T) {
 	srv, err := grpcadapter.New(grpcadapter.Config{
 		Addr:         ":0",
 		TLS:          grpcadapter.TLSConfig{AllowInsecure: true},
-		Interceptors: readyzDeps(),
+		Interceptors: readyzBundle(runtimegrpc.NewDrainSignal()),
 	})
 	require.NoError(t, err)
 

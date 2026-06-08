@@ -84,6 +84,23 @@ func NewUnaryChain(deps Deps) grpc.ServerOption {
 	)
 }
 
+// NewServerInterceptors returns the adapter-consumable bundle for a complete
+// GoCell gRPC server. Both unary and streaming chains are built from the same
+// Deps value, and the same Registrar/Drain instances are carried for the adapter
+// to bind and trigger. This is the normal composition-root entrypoint; it closes
+// the "forgot NewStreamChain" streaming-auth gap while keeping adapters/grpc
+// free of a direct interceptor import.
+func NewServerInterceptors(deps Deps) runtimegrpc.ServerInterceptors {
+	return runtimegrpc.NewServerInterceptorsBundle(
+		[]grpc.ServerOption{
+			NewUnaryChain(deps),
+			NewStreamChain(deps),
+		},
+		deps.Registrar,
+		deps.Drain,
+	)
+}
+
 // buildValidCellIDs materializes the assembly cell-id closed set into the lookup
 // map the metrics interceptors validate the attributed cell against. Shared by
 // NewUnaryChain and NewStreamChain (PR-10 #1153).

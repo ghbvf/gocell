@@ -67,7 +67,7 @@ func newGRPCServerFromEnv(
 	return adaptersgrpc.New(adaptersgrpc.Config{
 		Addr:         addr,
 		TLS:          tlsCfg,
-		Interceptors: grpcDeps,
+		Interceptors: interceptor.NewServerInterceptors(grpcDeps),
 	})
 }
 

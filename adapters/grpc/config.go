@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/grpc/interceptor"
+	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
 )
 
 const (
@@ -67,13 +67,13 @@ type Config struct {
 	// TLS configures transport security. See TLSConfig for the three supported modes.
 	TLS TLSConfig
 
-	// Interceptors are the single gRPC wiring object. New always derives BOTH
-	// unary and streaming interceptor chains from this one Deps value and binds
-	// Interceptors.Registrar to the underlying grpc.Server. That makes it
-	// impossible for a composition root to serve a streaming RPC while forgetting
-	// interceptor.NewStreamChain, or to pass a different Registrar/Drain instance
-	// to the adapter than the chains observe (#1752/#1153 Hard closure).
-	Interceptors interceptor.Deps
+	// Interceptors are the single gRPC wiring bundle. Composition roots normally
+	// build it with interceptor.NewServerInterceptors(deps), which fixes BOTH
+	// unary and streaming chains to one deps value. New binds the bundle's
+	// Registrar to the underlying grpc.Server and triggers the bundle's Drain at
+	// graceful stop, so the adapter cannot observe different Registrar/Drain
+	// instances than the chains observe (#1752/#1153 closure).
+	Interceptors runtimegrpc.ServerInterceptors
 }
 
 // applyDefaults fills zero-value fields with their defaults.
@@ -115,38 +115,13 @@ func (c *Config) validate() error {
 		return err
 	}
 
-	// V6: Interceptors.Registrar is required (Option 3 #1152) — the shared
-	// method→cellID source the adapter binds and both chains read. No
-	// self-construct fallback: a missing one is a composition-root wiring bug
-	// (fail-closed) that would otherwise silently degrade cell attribution to
-	// _runtime. Checked after Addr/TLS so common misconfigurations surface first.
-	if c.Interceptors.Registrar == nil {
-		return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
-			"grpc: Registrar is required; create it with runtimegrpc.NewServiceRegistrar() at the "+
-				"composition root and pass it as Config.Interceptors.Registrar")
-	}
-
-	// V6b: Interceptors.CellIDClosedSet is required by both chains. Without it,
-	// every attributed cell would be rejected from the metrics label closed set
-	// and relabeled to _runtime.
-	if len(c.Interceptors.CellIDClosedSet) == 0 {
-		return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
-			"grpc: Interceptors.CellIDClosedSet is required; pass the assembly cell-id set")
-	}
-
-	// V7: Interceptors.Drain is required (Option 3, #1153) — the shared drain
-	// signal the stream interceptor chain binds in-flight streams to and the
-	// adapter triggers at GracefulStop start. Since New owns both chain
-	// construction and adapter binding, one Deps value guarantees same-instance
-	// wiring. Validate (nil-receiver safe) also rejects a zero-value
-	// new(DrainSignal), which has a nil cancel and would otherwise panic.
-	if c.Interceptors.Drain.Validate() != nil {
-		return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
-			"grpc: Drain is required; create it with runtimegrpc.NewDrainSignal() at the "+
-				"composition root (a nil or zero-value DrainSignal is rejected — it would panic "+
-				"at GracefulStop) and pass it as Config.Interceptors.Drain. A unary-only "+
-				"server still wires it — the trigger is a harmless no-op when no StreamDrain "+
-				"interceptor consumes it")
+	// V6: Interceptors are required (Option 3 #1152/#1153). The bundle carries
+	// the full unary + stream chain pair plus the shared registrar/drain instances
+	// consumed by the adapter. Checked after Addr/TLS so common misconfigurations
+	// surface first.
+	if err := c.Interceptors.Validate(); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
+			"grpc: Interceptors are required; build them with interceptor.NewServerInterceptors(deps)", err)
 	}
 
 	return nil

@@ -63,7 +63,7 @@ func buildDrainAdapterServer(t *testing.T) *adaptersgrpc.Server {
 	srv, err := adaptersgrpc.New(adaptersgrpc.Config{
 		Addr:         ":0",
 		TLS:          adaptersgrpc.TLSConfig{AllowInsecure: true},
-		Interceptors: deps,
+		Interceptors: interceptor.NewServerInterceptors(deps),
 	})
 	require.NoError(t, err)
 	return srv
