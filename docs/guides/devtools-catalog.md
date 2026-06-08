@@ -8,7 +8,7 @@ Design goals:
 
 - **Decoupled from gocell-web**: at frontend build time, call `gocell export catalog --out=public/catalog.json`; the frontend loads it via same-origin `fetch('/catalog.json')` — zero CORS, zero live endpoint deployment coupling.
 - **Single endpoint, multiple views**: CLI flags and HTTP query parameters are semantically symmetric; front-end and back-end consumers share the same wire schema.
-- **Admin-gated by default**: the HTTP endpoint defaults to `admin` role access (`auth.AnyRole("admin")`), following the PR-CFG-4 fail-secure pattern.
+- **Admin-gated by default**: the HTTP endpoint defaults to `admin` role access (`auth.AnyRole("admin")`), following the fail-secure admin-access pattern.
 
 The wire schema draws on the [Backstage Catalog Entity model](https://backstage.io/docs/features/software-catalog/descriptor-format) (no Backstage dependency is introduced); the package-level dependency graph draws on the [loov/goda](https://github.com/loov/goda) internal `pkggraph` data model.
 
@@ -119,7 +119,9 @@ When `kinds`, `layers`, and `cells` are all present, they are combined with **AN
 
 ```bash
 # Obtain admin token (development environment)
-TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/auth/sessions \
+TENANT_ID=00000000-0000-0000-0000-000000000001
+TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/access/sessions/login \
+  -H "X-Tenant-ID: $TENANT_ID" \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"YOUR_ADMIN_PASSWORD"}' \
   | jq -r '.data.accessToken')
@@ -156,7 +158,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 ### Build-time packageDeps (`dependencies.packages.graph`)
 
-The package-level dep graph is generated at **build time** by `go generate ./cmd/corebundle/` and committed as `cmd/corebundle/catalog_gen.go`. The HTTP handler reads the graph data compiled into the binary at startup — zero runtime goroutines, zero wait time.
+The package-level dep graph is generated at **build time** by `go generate ./cmd/corebundle/` into the ignored `cmd/corebundle/catalog_gen.go` artifact. The HTTP handler reads the graph data compiled into the binary at startup — zero runtime goroutines, zero wait time.
 
 `PackageDepsView` has only two forms: on success it returns `{"graph": {...}}`; on failure it returns `{"error": "..."}`. `Graph != nil` means ready; `Error != ""` means error. A separate `status` enum field is no longer maintained (the lazy-load approach has been replaced by build-time generation; a `loading` state cannot occur, so the redundant field has been removed).
 
@@ -172,7 +174,7 @@ The package-level dep graph is generated at **build time** by `go generate ./cmd
 go generate ./cmd/corebundle/
 ```
 
-Then commit the updated `cmd/corebundle/catalog_gen.go`.
+Then build with the `catalog_gen` tag. Do not commit `cmd/corebundle/catalog_gen.go`; it is regenerated per build environment and guarded by `.gitignore` plus `hack/verify-gitignore-respect.sh`.
 
 ---
 
@@ -185,7 +187,7 @@ Call the CLI in the `gocell-web` `Dockerfile` build stage to embed a static cata
 # Requires Go toolchain: --include=packageDeps invokes tools/depgraph (go/packages)
 # synchronously, taking 5–10 s. If packageDeps is not needed, remove that value
 # and use a smaller builder image.
-FROM golang:1.24-alpine AS catalog-builder
+FROM golang:1.25-alpine AS catalog-builder
 WORKDIR /gocell
 COPY . .
 RUN go install ./cmd/gocell && \

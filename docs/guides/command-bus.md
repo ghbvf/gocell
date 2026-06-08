@@ -177,7 +177,7 @@ resp, err := cmdenqueue.Dispatch(ctx, commandReg, &cmdenqueue.Request{
 
 As of this writing there is **no production `Dispatch` caller** for devicecommand
 enqueue: the production entry points that front the command bus — an
-HTTP→command bridge and an async outbox→command relay — are planned future work described in ADR §5. The wiring is exercised end-to-end by `examples/iotdevice/cells/devicecell/command_wiring_test.go`.
+HTTP→command bridge and an async outbox→command relay — are planned future work described in ADR `docs/architecture/202606040550-1044-adr-command-bus-dispatch-funnel.md` §5. The wiring is exercised end-to-end by `examples/iotdevice/cells/devicecell/command_wiring_test.go`.
 
 ## How it differs from saga and event consumers
 
@@ -196,6 +196,7 @@ Folding command registration into the cellgen `role: handle` funnel (so an
 unregistered codegen command becomes compile-unexpressible — upgrading
 `DEAD-CONTRACT-01`'s command dimension from Medium to Hard) is planned future
 work.
+See ADR `docs/architecture/202606040550-1044-adr-command-bus-dispatch-funnel.md` §5 for the staged command-bus roadmap.
 
 ## Checklist
 

@@ -196,7 +196,7 @@ app, err := builder.Build(ctx, shared, runtimeOpts)
 | Limitation | Impact | Unlock condition |
 |-----------|--------|-----------------|
 | Standard platform rules (`PANIC-REGISTERED-01` / `ERRCODE-KIND-LITERAL-01` / `MESSAGE-CONST-LITERAL-01` / `EXPORTED-ERROR-NEW-01` / `SCAFFOLD-DERIVED-FORCEOVERWRITE-01`) can already be used in external repositories via `archtest.RunStandardCellRules`; custom rules are added via `cfg.ExtraRules`. **The exact set is defined in code at `StandardCellRules()` + `TestStandardCellRulesComposition`** (this table is for reference only; code is authoritative) | Limited to the above platform rules; rules that reason about GoCell's own internal layout (`ERROR-FIRST-API-01` / `ERROR-FIRST-TYPED-NIL-01` / `DETAILS-SEALED-FIELD-FROZEN-01` / `SCAFFOLD-LISTENER-MARKER-TYPED-CONST-01`) are deliberately excluded (vacuous in external repos; see `external.go` `StandardCellRules` godoc) | Partial landing complete; remaining rule migration tracked separately |
-| `CellModule` interface is package-private in `cmd/` | External repositories cannot wire into corebundle | Planned future work |
+| Stock corebundle does not dynamically load third-party modules | External repositories must build their own composition root and call exported `runtime/composition` module APIs explicitly | Starter repo / template support |
 | No starter repo template | The steps above must be followed manually | Planned future work |
 
 See ADR `docs/architecture/202605281200-adr-cell-development-external-repo.md` for detailed roadmap.

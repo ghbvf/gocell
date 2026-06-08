@@ -24,7 +24,7 @@ Missing required variables cause fail-fast before any assembly initialization.
 
 | Variable | Purpose | Default | Required | Notes |
 |---|---|---|---|---|
-| `GOCELL_SERVICE_SECRET` | HMAC-SHA256 secret (≥ 32 bytes) for `ServiceTokenMiddleware` protecting `/internal/v1/*` | — | **All modes** | Value is used as raw UTF-8 bytes (not base64-decoded); any UTF-8 string of ≥ 32 bytes is acceptable. Recommended generators: `openssl rand -base64 32` → 44 printable chars (base64 padded), used as raw bytes; `openssl rand -hex 32` → 64 hex chars, used as raw bytes. Both meet the 32-byte minimum. Startup fails fast with `ERR_CONTROLPLANE_SERVICE_SECRET_MISSING` in every adapter mode if the env var is empty. PR-A25: when the guard is installed, a replay-defense `NonceStore` is wired automatically so a captured token cannot be replayed within `auth.ServiceTokenNonceTTL` (currently 5 min 30 sec). Real-mode startup also fails fast with `ERR_CONTROLPLANE_NONCE_STORE_MISSING` if the guard was somehow wired without a replay-safe store. Single-pod real deployments may use the in-memory store by setting `GOCELL_SINGLE_POD=1`; real multi-pod deployments must configure Redis with `GOCELL_REDIS_ADDR` so nonce replay protection and outbox idempotency are distributed across pods. |
+| `GOCELL_SERVICE_SECRET` | HMAC-SHA256 secret (≥ 32 bytes) for `ServiceTokenMiddleware` protecting `/internal/v1/*` | — | **All modes** | Value is used as raw UTF-8 bytes (not base64-decoded); any UTF-8 string of ≥ 32 bytes is acceptable. Recommended generators: `openssl rand -base64 32` → 44 printable chars (base64 padded), used as raw bytes; `openssl rand -hex 32` → 64 hex chars, used as raw bytes. Both meet the 32-byte minimum. Startup fails fast with `ERR_CONTROLPLANE_SERVICE_SECRET_MISSING` in every adapter mode if the env var is empty. When the guard is installed, a replay-defense `NonceStore` is wired automatically so a captured token cannot be replayed within `auth.ServiceTokenNonceTTL` (currently 5 min 30 sec). Real-mode startup also fails fast with `ERR_CONTROLPLANE_NONCE_STORE_MISSING` if the guard was somehow wired without a replay-safe store. Single-pod real deployments may use the in-memory store by setting `GOCELL_SINGLE_POD=1`; real multi-pod deployments must configure Redis with `GOCELL_REDIS_ADDR` so nonce replay protection and outbox idempotency are distributed across pods. |
 | `GOCELL_SERVICE_SECRET_PREVIOUS` | Previous HMAC secret for zero-downtime rotation | — | No | Optional; tried after current secret fails verification. |
 | `GOCELL_SINGLE_POD` | Acknowledges that the deployment is single-pod and in-memory replay protection is sufficient | — | **Real mode** (when using default in-memory NonceStore) | Must be `1` in single-pod real-mode deployments to acknowledge in-memory replay defence scope; otherwise startup fails fast with `ERR_CONTROLPLANE_NONCE_STORE_MISSING`. Multi-pod deployments leave unset and configure Redis via `GOCELL_REDIS_ADDR` or `GOCELL_REDIS_CLUSTER_ADDRS` instead. |
 
@@ -149,11 +149,11 @@ path "transit/decrypt/<keyname>"            { capabilities = ["create","update"]
 
 Substitute `<keyname>` with the value of `GOCELL_VAULT_TRANSIT_KEY` (default `gocell-config`). The startup readiness check only exercises `transit/keys/<keyname>` (the `read` cap), so a missing `datakey/plaintext` capability slips past startup and surfaces as `ErrKeyProviderEncryptFailed` on the first encrypt — apply the policy before the first deploy.
 
-> Migration note: pre-PR-A18 deployments granted `transit/encrypt/<keyname>` instead of `transit/datakey/plaintext/<keyname>`. The legacy `encrypt` path is no longer used; the new policy above replaces it.
+> Migration note: older deployments granted `transit/encrypt/<keyname>` instead of `transit/datakey/plaintext/<keyname>`. The legacy `encrypt` path is no longer used; the new policy above replaces it.
 
-## HTTP Listeners (PR-A14b three-listener topology)
+## HTTP Listeners (three-listener topology)
 
-> **Breaking change (PR-A14b):** `/healthz`, `/readyz`, and `/metrics` have moved from the primary port to the health listener. Update your k8s probes and Prometheus scrape configuration accordingly. See [listener-topology](listener-topology.md) for details.
+> **Breaking change:** `/healthz`, `/readyz`, and `/metrics` have moved from the primary port to the health listener. Update your k8s probes and Prometheus scrape configuration accordingly. See [listener-topology](listener-topology.md) for details.
 
 `cmd/corebundle` binds three HTTP servers. See `docs/ops/listener-topology.md` for the full topology diagram and k8s probe migration notes.
 
@@ -175,8 +175,8 @@ All three addresses must be non-empty and distinct; startup fails fast otherwise
 | Variable | Purpose | Default | Required |
 |---|---|---|---|
 | `GOCELL_METRICS_TOKEN` | Bearer token for `/metrics` scraper authentication (`X-Metrics-Token` header) | — | **Real mode** |
-| `GOCELL_READYZ_VERBOSE_TOKEN` | Bearer token for `/readyz?verbose` (exposes internal topology). After PR-A35 required in every mode unless `GOCELL_READYZ_VERBOSE_DISABLED=1` is set; verbose requests without a matching token return 401 `ERR_READYZ_VERBOSE_DENIED`. See `docs/ops/readyz.md`. | — | **All modes** |
-| `GOCELL_READYZ_VERBOSE_DISABLED` | Set to `1` to waive the `/readyz?verbose` endpoint entirely. Lets ephemeral deployments (test harnesses, single-node demos) satisfy the PR-A35 invariant without minting a token. Rejected when `GOCELL_ADAPTER_MODE=real`. | `0` | Optional |
+| `GOCELL_READYZ_VERBOSE_TOKEN` | Bearer token for `/readyz?verbose` (exposes internal topology). Required in every mode unless `GOCELL_READYZ_VERBOSE_DISABLED=1` is set; verbose requests without a matching token return 401 `ERR_READYZ_VERBOSE_DENIED`. See `docs/ops/readyz.md`. | — | **All modes** |
+| `GOCELL_READYZ_VERBOSE_DISABLED` | Set to `1` to waive the `/readyz?verbose` endpoint entirely. Lets ephemeral deployments (test harnesses, single-node demos) satisfy the verbose-readiness invariant without minting a token. Rejected when `GOCELL_ADAPTER_MODE=real`. | `0` | Optional |
 
 ## Adapter Mode
 
@@ -207,7 +207,7 @@ Set `GOCELL_STATE_DIR` to override the platform default for all stateful files.
 
 ## Migration from pre-T6 env names
 
-Old names are removed in GoCell PR-A3 / T6. Operators must update environment configuration before upgrading.
+The old global PostgreSQL env names have been removed. Operators must update environment configuration before upgrading.
 
 | Old name (pre-T6, removed) | New name |
 |---|---|

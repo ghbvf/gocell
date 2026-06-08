@@ -742,7 +742,7 @@ gocell validate --layout=manifest --manifest=./config/.gocell/manifest.yaml
 gocell validate --layout=conventional
 ```
 
-The other 11 CLI sub-commands (`generate / verify / export / scaffold-assembly / codegen / graph` etc.) work via auto-detect automatically — if `<root>/.gocell/manifest.yaml` exists it is used, with no explicit flag required.
+The other CLI command families (`generate`, `verify`, `export`, `scaffold`, `graph`, and `check`) work via auto-detect automatically — if `<root>/.gocell/manifest.yaml` exists it is used, with no explicit flag required. Assembly and codegen operations are subcommands inside those families, such as `gocell scaffold assembly`, `gocell generate assembly`, and `gocell verify codegen-assembly`.
 
 > **Exception**: `gocell check unconditional-skip` does not use `metadata.Locator` (it scans Go code directly via `go/packages` for static analysis); its behaviour is determined entirely by Go package paths and is unaffected by manifest configuration.
 

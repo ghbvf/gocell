@@ -217,7 +217,7 @@ Hub has a built-in ping-pong loop:
 
 **Token expiry eviction**: before sending pings each round, the ping loop checks `Principal.ExpiresAt`. If the current time is past `ExpiresAt`, the connection is evicted without waiting for the next miss. `ExpiresAt.IsZero()` means no check (Anonymous principals do not expire). Token expiry evictions include a `reason="token_expired"` structured field in slog.
 
-**Server-side push refresh is not supported in v1.0**: token renewal must be initiated by the client:
+**Server-side push refresh is not supported in GoCell v0.x**: token renewal must be initiated by the client:
 
 1. Client detects that the token is about to expire (recommend at least 60 s before expiry).
 2. Client obtains a new token from the original authentication API.
