@@ -1,6 +1,6 @@
 ---
 name: issues
-description: "GitHub Issues + Project v2 #3 项目管理单源技能。Part A：epic 拆解 + wave 实施顺序调度（找子任务 → blocked-by DAG → wave 1-4 滚动排序：OPEN 重排、已完成不动、超窗不入字段 → 写 Project Wave 字段 + 回填 epic body + 回评）。Part B：issue/PR 原子操作（建/改 backlog issue、area/type/pri label、PR 双轴状态 label 流转、统一 PR 评论格式 + 冲突预检/CI watch 跟进，ship/fix 共用）。非 epic issue 号 → 查代码判状态（只判不修，建议 /fix 或 close）。当用户要整理 epic 排 wave、建/改 backlog issue、贴 label、切 PR 状态、给 PR 留评论、核一个 issue 是否还成立时使用。"
+description: "GitHub Issues + Project v2 #3 项目管理单源技能。Part A：epic 拆解 + wave 实施顺序调度（找子任务 → blocked-by DAG → wave 1-4 滚动排序：OPEN 重排、已完成不动、超窗不入字段 → 写 Project Wave 字段 + 回填 epic body + 回评）。Part B：issue/PR 原子操作（建/改 backlog issue、area/type/pri label、PR 双轴状态 label 流转、统一 PR 评论格式 + 冲突预检/CI watch 跟进，ship/fix 共用）。非 epic issue 号 → 查代码判状态（只判不修，建议 /ship 或 close）。当用户要整理 epic 排 wave、建/改 backlog issue、贴 label、切 PR 状态、给 PR 留评论、核一个 issue 是否还成立时使用。"
 argument-hint: "<epic #N | #issue（非epic→状态核查）| create-issue | edit-labels | pr-status | comment> [...]"
 allowed-tools: [Read, Grep, Bash, Agent, AskUserQuestion]
 ---
@@ -21,7 +21,7 @@ allowed-tools: [Read, Grep, Bash, Agent, AskUserQuestion]
 1. `gh issue view <N> --json title,body,labels` 读问题描述 + body 的 Files。
 2. 按 Files / 关键字 Read/Grep 定位代码；跨 3+ 文件时并行派 `Agent(Explore)` 核查。
 3. 判状态（**只判不修**）：**存在** / **已修复**（给证据：哪行 / 哪 PR）/ **已变更**（形态变化）/ **无法确认**。
-4. 输出状态 + 证据 + 建议：需修 → 建议 `/fix #<N>`；已修复 / 过期 → 建议 Part B 关闭（`gh issue close --reason ...`）。
+4. 输出状态 + 证据 + 建议：需修 → 建议 `/ship #<N>`（或定位到 file:line 后 `/fix`）；已修复 / 过期 → 建议 Part B 关闭（`gh issue close --reason ...`）。
 
 ---
 
@@ -135,7 +135,7 @@ gh issue create \
 # body 骨架单源 = .github/project-template/backlog.md（现状 / 修复方向 / Files / Trigger / Source）——本技能不复制其结构
 ```
 
-> **由 review/fix finding（OUT_OF_SCOPE / 派生）成文时**：body 按 backlog.md 顶部的字段映射**无损**填充（现状←证据+三维根因+影响 / 修复方向←三级方案种子 / Files←file:line 全集 / Source←`PR #<N> finding <Fk>`），不得一句话带过——否则后续无法据此修复。
+> **由 review/fix finding（OUT_OF_SCOPE / 派生）成文时**：body 按 `backlog.md` 顶部的字段映射**无损**填充，不得一句话带过——否则后续无法据此修复。
 
 - **area-XX**（1 个，8 选）：见 `.github/project-template/PROJECT.md` §2.1。
 - **type-XX**（1 个，8 选）：见 §2.2。
