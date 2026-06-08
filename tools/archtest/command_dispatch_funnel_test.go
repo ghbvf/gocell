@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/types"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -833,7 +834,8 @@ func asyncDispatchMapViolations(info *types.Info, arg ast.Expr) []string {
 		if valueOK && keyOK && keyPkg != valuePkg {
 			bad = append(bad, fmt.Sprintf(
 				"key %s and value %s are from different command packages (%s vs %s)",
-				asyncDispatchValueText(kv.Key), asyncDispatchValueText(kv.Value), keyPkg, valuePkg))
+				asyncDispatchValueText(kv.Key), asyncDispatchValueText(kv.Value), keyPkg, valuePkg,
+			))
 		}
 	}
 	return bad
@@ -928,6 +930,24 @@ func scanAsyncDispatchViolations(p *Pass, file *ast.File) []Diagnostic {
 	return d
 }
 
+func countWithCommandDispatchDirectCallsites(p *Pass, file *ast.File) int {
+	var count int
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return
+		}
+		if !isWithCommandDispatchSelector(p.TypesInfo, sel) {
+			return
+		}
+		if isMethodExpressionSelector(p.TypesInfo, sel) {
+			return
+		}
+		count++
+	})
+	return count
+}
+
 // TestCommandAsyncDispatchCaller01 asserts that every WithCommandDispatch call is
 // a direct method call whose dispatch map maps a generated DispatchID const to the
 // generated DispatchAsync from the SAME generated/contracts/command/** package.
@@ -975,13 +995,11 @@ func scanAsyncDispatchViolations(p *Pass, file *ast.File) []Diagnostic {
 //
 // # Vacuity
 //
-// There are ZERO production WithCommandDispatch callsites today — the real async
-// command producer wiring (devicecell enqueue → outbox, iotdevice durable-mode
-// relay WithCommandDispatch) is deferred to a follow-up (gh backlog, Blocked-by
-// #1667), exactly like GRPC-METHOD-IN-CONTRACT-01 ships vacuous-green before its
-// first consumer. Phase 1 is therefore vacuous-green; the RED fixture below
-// proves the rule bites, and Phase 2 anti-vacuity (a generated DispatchAsync
-// must exist) prevents the funnel from guarding nothing.
+// The first production WithCommandDispatch callsite now lives in
+// examples/iotdevice/run.go. Anti-vacuity therefore has two floors: at least one
+// production direct callsite must exist, and at least one generated DispatchAsync
+// must exist. Removing the real composition-root wiring no longer leaves this
+// rule vacuous-green.
 func TestCommandAsyncDispatchCaller01(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -1001,6 +1019,31 @@ func TestCommandAsyncDispatchCaller01(t *testing.T) {
 		}
 		return d
 	})
+
+	productionCallsites := 0
+	iotdeviceRoot := filepath.Join(findModuleRoot(t), "examples", "iotdevice")
+	diags = append(diags, Run(t, StandaloneModule(iotdeviceRoot, TypedOpts{}, []string{"./..."}),
+		func(p *Pass) []Diagnostic {
+			if !p.Typed() {
+				return nil
+			}
+			var d []Diagnostic
+			for _, file := range p.Files {
+				if strings.HasSuffix(p.Rel(file), "_test.go") {
+					continue
+				}
+				productionCallsites += countWithCommandDispatchDirectCallsites(p, file)
+				d = append(d, scanAsyncDispatchViolations(p, file)...)
+			}
+			return d
+		})...)
+	if productionCallsites == 0 {
+		diags = append(diags, Diagnostic{
+			Message: "COMMAND-ASYNC-DISPATCH-CALLER-01 anti-vacuity: NO production " +
+				"Relay.WithCommandDispatch direct callsite found. The command-dispatch " +
+				"funnel must guard at least one production composition-root wiring site.",
+		})
+	}
 
 	// Phase 2: anti-vacuity — at least one generated DispatchAsync must exist,
 	// else the funnel guards nothing (codegen removed/renamed it). Production()

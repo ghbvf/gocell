@@ -27,9 +27,10 @@ acknowledgement (ack) back to the server.
 This pattern is designed for IoT scenarios where devices have intermittent
 connectivity, high latency, or constrained bandwidth.
 
-> **Note:** L4 command primitives in v1.0 are implemented at the application
-> layer. Framework-level `kernel/command` first-class support is planned for
-> v1.1.
+> **Note:** the device-facing L4 command queue (enqueue / dequeue / ack) is an
+> application-layer model in this cell. Separately, the framework `runtime/command`
+> async command bus is wired here (#1698): registering a device reactively enqueues
+> a `bootstrap` command through it — see [Reactive bootstrap command](#reactive-bootstrap-command).
 
 ## Quick Start (In-Memory Mode)
 
@@ -194,6 +195,37 @@ curl -H "X-Readyz-Token: $GOCELL_READYZ_VERBOSE_TOKEN" 'http://localhost:9093/re
 ```
 
 `/healthz` is liveness-only. Use `/readyz?verbose` for the detailed readiness breakdown — PR-A35 requires `GOCELL_READYZ_VERBOSE_TOKEN` to be set and the matching `X-Readyz-Token` header on the request.
+
+## Reactive bootstrap command
+
+Registering a device reactively enqueues a `bootstrap` command for it through the
+framework `runtime/command` async command bus (#1698) — no manual "send a command"
+step. The flow: `POST /devices` publishes a `device-registered` event → the
+in-process `devicebootstrap` subscriber reacts and emits a
+`command.devicecommand.enqueue.v1` async command → the outbox relay dispatches it
+in-process (Claimer-deduped) → a `bootstrap` command lands in the device's queue,
+observable on the normal dequeue endpoint with `status: pending`.
+
+```bash
+# 1. Register a device
+DEV=$(curl -s -X POST http://localhost:8083/api/v1/devices \
+  -H "Authorization: Bearer ${IOT_ADMIN_TOKEN}" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"sensor-001"}')
+DEV_ID=$(echo "$DEV" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+# 2. Observe the auto-enqueued bootstrap command (reactive — no send step).
+#    A bootstrap command with status "pending" appears in the device queue.
+curl -s "http://localhost:8083/api/v1/devices/${DEV_ID}/commands" \
+  -H "Authorization: Bearer ${IOT_ADMIN_TOKEN}"
+# → {"data":[{"id":"cmd-...","commandType":"bootstrap","status":"pending",...}],...}
+
+# 3. Dedup: the source device-registered event is keyed by its event id, so an
+#    at-least-once redelivery does NOT enqueue a second bootstrap command. Re-running
+#    registration creates a NEW device (new id) with its own single bootstrap command;
+#    a redelivery of the SAME registration event dedups to one command (relay-level,
+#    via the Claimer two-phase wrap).
+```
 
 ## Full Walkthrough
 

@@ -203,4 +203,24 @@ ADR-1044 §5 演进路径 **⑤**（HTTP `Idempotency-Key` ↔ `command_id` 映�
 
 **威胁矩阵重评**：「节点身份污染 key」格保持 ✅（Hard），现对两 producer 共同生效。其余各行（跨 pod 回放 / 指纹绕过 / Cluster CROSSSLOT / namespace 碰撞 / 日志明文）不涉——`DeriveCommandKey` 不引入新隔离面（同携 `subject + tenant` 隔离；去掉 method/path 是 cross-cell 同槽的刻意设计；command key 与 HTTP key 同居 `(ns,key)` 空间，stores 已处理）。**显式声明无 ✅→⚠️/❌ 退化。**
 
-**延期（→ #1698，需真实 producer 锚定）**：⑤ 的 **Claimer-wrap 消费半**（`kernel/idempotency.Claimer` 两阶段包裹 relay 命令分发 + 三态生命周期）——今日 0 个生产 `WithCommandDispatch` 调用点（`tools/archtest/command_dispatch_funnel_test.go` 自证），且 sealed-key→Claimer string-key 扁平化 + per-instance 身份如何随 `outbox.Entry` 承载有真实设计缺口，须随 devicecell 异步 command producer 落地，避免 speculative 键布局。该消费半与 producer 接线绑定，由 **#1698** 承载。
+**消费半已落地（→ #1698 PR-B，见 §Amendment 2026-06-08）**：⑤ 的 **Claimer-wrap 消费半**（`kernel/idempotency.Claimer` 两阶段包裹 relay 命令分发 + 三态生命周期）随 devicecell 异步 command producer 一并落地——sealed-key→Claimer string-key 经新增 `IdempotencyKey.Flat()` 扁平化，per-instance 身份经 `outbox.Entry` 的 `AggregateID(subject)` + business-metadata（command_id）承载，避免 speculative 键布局。
+
+---
+
+## Amendment 2026-06-08 — #1698 PR-B（`DeriveCommandKey` relay 消费半 + `Flat` 扁平化）
+
+ADR-1044 §5 演进路径 **⑤** 的 **Claimer-wrap 消费半**落地（#1698 PR-B），把 #1669 PR-A 交付的 `DeriveCommandKey` 映射原语接通到真实消费路径：relay 命令分发经 `kernel/idempotency.Claimer` 两阶段去重。**本 PR `Closes #1698` + ⑤ 闭环（映射半 #1669 + 消费半 #1698 均落地）。**
+
+**改动**（零 wire / 零 store schema 改动；新增扁平化出口 + relay 消费）：
+
+- `runtime/http/idempotency/key.go`：新增 `IdempotencyKey.Flat() string`（= `ns + "\x00" + key`）——sealed `IdempotencyKey` → `kernel/idempotency.Claimer.Claim(string)` 的**唯一扁平化出口**。`Claimer` 是 string-key 幂等原语（与 outbox consumer 去重共用），`DeriveCommandKey` 产的 sealed key 经 `Flat()` 降为其 string 输入。**node-agnostic 不变**：`Flat()` 只拼接已有 `{ns, key}` 两段（均无 pod/cell/listener/instance 维度），**不引入 node 维度**。
+- `runtime/command/command_idempotency.go`（消费侧 funnel，layer = `runtime/command`，不在本 ADR 的 `runtime/http/idempotency` funnel 内但消费它）：relay 经 `command.ClaimKeyFromEntry(entry)` 读回 identity 三元组 → `DeriveCommandKey(tenant, subject, commandID).Flat()` → `Claimer.Claim`。identity 来源 = `entry.AggregateID()`（subject）+ `entry.Metadata()[CommandIDMetadataKey]`（command_id）+ `entry.Principal().TenantID`（tenant，`NewEntry` 从 ctx 注入；可空并映射为 `_notenant`）；subject 或 commandID 为空 → fail-closed dead-letter（不静默跳过去重）。
+- `Store.Claim` / `MemStore` / `adapters/redis.HTTPIdempotencyStore` / `DeriveKey` / `DeriveCommandKey`：**全不动**（sealed 类型 + sink 已是耐久层；`Flat()` 是 `IdempotencyKey` 上的纯取值方法，不触构造 funnel）。
+
+**β archtest 评级（逐轴，零降格）**：`Flat()` 是 sealed `IdempotencyKey` 上的取值方法（同 `Namespace()`/`Key()`），**不**是构造器——不进 `idempotencyKeyConstructors` sole-producer 表，不放宽 node-agnostic（下游 `Store.Claim` typed sink + 上游-external 未导出字段）任一 Hard 轴。relay 消费经 `Claimer`（string-key）发生在 `DeriveCommandKey` sealed 构造**之后**，sealed-construction 保证已在 key 派生处成立；`Flat()` 只是把已封好的 node-agnostic key 降维给 Claimer，无新伪造面。
+
+**威胁矩阵逐行重评（无 ✅→⚠️/❌ 退化）**：
+
+- 「节点身份污染 key」格保持 ✅（Hard）：`Flat()` 只拼接 `{ns, key}` 既有两段，结构上无法塞入 node 维度（拼接源是 sealed 未导出字段，包外不可篡改）。
+- **新增行「relay 消费命令幂等身份」**：identity 来源 = `AggregateID(subject)` + `Metadata[command_id]` + `Principal(tenant)`，经 `DeriveCommandKey + Flat` → `Claimer.Claim` 两阶段去重。隔离面同携 `subject + tenant`（与 HTTP key 同隔离维度）；producer-stamp（commandID 由 producer 经 `EmitAsync` 写 metadata）是 **Medium 结构天花板**——producer↔relay 经 async outbox store 解耦，「每条命令 entry 必带 commandID」无法端到端编译期 Hard（同 #1650 require-isolation-tuple / #1282 族永久天花板）。补偿 = producer 上游 `COMMAND-ASYNC-EMIT-FUNNEL-01` archtest（禁 funnel 外构造 command-topic entry，详见 ADR-1044 §Amendment 2026-06-08）+ relay 下游 `ClaimKeyFromEntry` fail-closed（缺身份 → `MarkDead`）双锁。
+- 其余各行（跨 pod 回放 / 指纹绕过 / Cluster CROSSSLOT / namespace 碰撞 / 日志明文）不涉——`Flat()` 不引入新隔离面，command key 与 HTTP key 同居 `(ns, key)` 空间且 stores 已处理。**显式声明无 ✅→⚠️/❌ 退化。**

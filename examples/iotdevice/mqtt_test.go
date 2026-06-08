@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"testing"
@@ -47,13 +48,16 @@ func TestMQTTEventTopic(t *testing.T) {
 type captureFakePublisher struct {
 	gotTopic   string
 	gotPayload []byte
+	calls      int
+	err        error
 	closed     bool
 }
 
 func (f *captureFakePublisher) Publish(_ context.Context, topic string, payload []byte) error {
+	f.calls++
 	f.gotTopic = topic
 	f.gotPayload = payload
-	return nil
+	return f.err
 }
 
 func (f *captureFakePublisher) Close(_ context.Context) error {
@@ -86,6 +90,45 @@ func TestMQTTTopicPublisher_MapsTopicAndDelegates(t *testing.T) {
 	}
 	if !fake.closed {
 		t.Fatal("Close did not delegate to inner publisher")
+	}
+}
+
+func TestTeePublisher_PublishesLocalAndExternal(t *testing.T) {
+	local := &captureFakePublisher{}
+	external := &captureFakePublisher{}
+	pub := &teePublisher{local: local, external: external}
+
+	payload := []byte(`{"id":"dev-1"}`)
+	if err := pub.Publish(context.Background(), "event.device-registered.v1", payload); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if local.calls != 1 || external.calls != 1 {
+		t.Fatalf("calls local=%d external=%d, want 1/1", local.calls, external.calls)
+	}
+	if local.gotTopic != "event.device-registered.v1" {
+		t.Fatalf("local topic = %q, want original event topic", local.gotTopic)
+	}
+	if external.gotTopic != "event.device-registered.v1" {
+		t.Fatalf("external topic = %q, want original event topic before mqttTopicPublisher mapping", external.gotTopic)
+	}
+	if !bytes.Equal(local.gotPayload, payload) || !bytes.Equal(external.gotPayload, payload) {
+		t.Fatal("teePublisher mutated payload")
+	}
+}
+
+func TestTeePublisher_AttemptsBothAndJoinsErrors(t *testing.T) {
+	localErr := errors.New("local failed")
+	externalErr := errors.New("external failed")
+	local := &captureFakePublisher{err: localErr}
+	external := &captureFakePublisher{err: externalErr}
+	pub := &teePublisher{local: local, external: external}
+
+	err := pub.Publish(context.Background(), "event.device-registered.v1", []byte(`{}`))
+	if !errors.Is(err, localErr) || !errors.Is(err, externalErr) {
+		t.Fatalf("Publish error = %v, want joined local and external errors", err)
+	}
+	if local.calls != 1 || external.calls != 1 {
+		t.Fatalf("calls local=%d external=%d, want both attempted", local.calls, external.calls)
 	}
 }
 

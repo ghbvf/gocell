@@ -19,8 +19,13 @@ import (
 	"github.com/ghbvf/gocell/runtime/outbox"
 )
 
-// Compile-time assertion: FakeStore must satisfy outbox.Store.
-var _ outbox.Store = (*FakeStore)(nil)
+// Compile-time assertions: FakeStore satisfies outbox.Store (relay side) and
+// kout.Writer (producer side), so a producer using the standard WriterEmitter
+// path and a relay polling the same store interoperate in unit tests.
+var (
+	_ outbox.Store = (*FakeStore)(nil)
+	_ kout.Writer  = (*FakeStore)(nil)
+)
 
 // fakeRow holds the full mutable state of a single outbox entry in FakeStore.
 type fakeRow struct {
@@ -117,6 +122,23 @@ func (s *FakeStore) Seed(entries ...outbox.ClaimedEntry) {
 		s.rows[ce.ID()] = row
 	}
 	s.notifyLocked()
+}
+
+// Write inserts entry as a single pending row (attempts 0, no lease), letting a
+// producer emit via the standard kout.WriterEmitter path while the relay polls the
+// same store. Demo/test use only — there is no transactional atomicity (the real
+// PG Writer ties the write to the caller's business tx; FakeStore is in-memory).
+// An existing row with the same ID is overwritten, mirroring Seed.
+func (s *FakeStore) Write(_ context.Context, entry kout.Entry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rows[entry.ID()] = &fakeRow{
+		entry:    entry,
+		status:   kout.StatePending,
+		attempts: 0,
+	}
+	s.notifyLocked()
+	return nil
 }
 
 // Snapshot returns a sorted (by ID) copy of all rows for test assertions.

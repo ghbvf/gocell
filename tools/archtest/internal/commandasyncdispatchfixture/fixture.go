@@ -20,10 +20,16 @@ package commandasyncdispatchfixture
 import (
 	"context"
 
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/command"
 	"github.com/ghbvf/gocell/runtime/outbox"
 )
+
+// fixtureClaimer is a typed-nil Claimer used only to satisfy the third positional
+// param of WithCommandDispatch (#1698); the fixture exercises map/form violations,
+// not claimer wiring, so the value is inert.
+var fixtureClaimer idempotency.Claimer
 
 // notGenerated is a hand-rolled command.AsyncDispatchFunc that bypasses the
 // generated DispatchAsync funnel. Binding it into WithCommandDispatch is the
@@ -38,7 +44,7 @@ func BadWithCommandDispatch(r *outbox.Relay, reg *command.Registry) {
 	r.WithCommandDispatch(reg, map[command.CommandID]command.AsyncDispatchFunc{
 		"command.bad.local.v1":   notGenerated,
 		"command.bad.closure.v1": func(_ context.Context, _ *command.Registry, _ kout.Entry) error { return nil },
-	})
+	}, fixtureClaimer)
 }
 
 // BadMethodValueCapture captures WithCommandDispatch as a method VALUE and calls
@@ -48,7 +54,7 @@ func BadMethodValueCapture(r *outbox.Relay, reg *command.Registry) {
 	bind := r.WithCommandDispatch
 	bind(reg, map[command.CommandID]command.AsyncDispatchFunc{
 		"command.bad.captured.v1": notGenerated,
-	})
+	}, fixtureClaimer)
 }
 
 // BadMethodExpression invokes WithCommandDispatch as a method EXPRESSION, which
@@ -57,5 +63,5 @@ func BadMethodValueCapture(r *outbox.Relay, reg *command.Registry) {
 func BadMethodExpression(r *outbox.Relay, reg *command.Registry) {
 	(*outbox.Relay).WithCommandDispatch(r, reg, map[command.CommandID]command.AsyncDispatchFunc{
 		"command.bad.methodexpr.v1": notGenerated,
-	})
+	}, fixtureClaimer)
 }

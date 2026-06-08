@@ -199,29 +199,83 @@ cell.go 须声明一个指针类型包名 == sliceID 的字段（如 `*devicecom
 - Claim 获取处理租约 → handler 执行 → broker Ack 后 Settlement.Commit / 失败时 Settlement.Release（由 Subscriber delivery loop 完成）。
 - 默认 fail-closed：Claimer 故障时 Requeue，不丢弃幂等保护。
 
-## Relay 命令分发（async command 桥，#1667）
+## Relay 命令分发（async command 桥，#1667 / #1698）
 
-W3 Command Bus 的异步路径复用 outbox relay：业务把命令写成 `eventType = command id`
-的普通 `outbox.Entry`（`outbox.Emit(ctx, clk, emitter, "command.<domain>.<name>.v1", req)`），
-relay 消费时按 **routing-topic** 在 composition-root 注入的 dispatcher-map 中匹配——命中
-则在**进程内**触发生成的 `DispatchAsync`（decode payload → `LookupHandler` → typed `Handler`），
-否则照常发 broker。判别器 = dispatcher-map 成员资格（`command.*.v1` 命名空间 + 闭合 map
-天然隔离事件 topic），**不改 sealed `outbox.Entry`、不带 metadata 标记**。命令 settle 复用事件
-writeBack：成功 `MarkPublished` = 命令已消费；失败分两类——生成 `DispatchAsync` 的**确定性框架错误**
-（reg nil / routing-topic ≠ DispatchID / **request-schema 值校验失败** / decode 失败 / no-handler / wrong-type）经 `kout.NewPermanentError`
-标记 → relay 直接 `MarkDead`（不耗重试预算，错配 / 非法 entry fail-closed）；**handler 业务 error** 透传 → `MarkRetry`
-至耗尽（#1673 F3 + #1588）。生成 `DispatchAsync` 体首做 trust-boundary 自检
-`entry.RoutingTopic() == string(DispatchID)`，错配 entry 不被错 handler 消费。
+W3 Command Bus 的异步路径复用 outbox relay：producer 经 sanctioned 出口
+`command.EmitAsync(ctx, clk, emitter, dispatchID, subject, commandID, payload)` 把命令写成
+`eventType = command id` 的普通 `outbox.Entry`（topic = dispatchID、`AggregateID = subject`、
+`Metadata[CommandIDMetadataKey] = command_id`）；relay 消费时按 **routing-topic** 在
+composition-root 注入的 dispatcher-map 中匹配——命中则在**进程内**触发生成的 `DispatchAsync`
+（decode payload → `LookupHandler` → typed `Handler`），否则照常发 broker。判别器 =
+dispatcher-map 成员资格（`command.*.v1` 命名空间 + 闭合 map 天然隔离事件 topic），**不改
+sealed `outbox.Entry` wire envelope**（command_id 走 producer-owned business-metadata map +
+`AggregateID`，均既有字段，非新增 envelope 标记）。
 
-composition root 注入（dispatch 值**必须**是生成 `DispatchAsync` 直接符号——archtest
-`COMMAND-ASYNC-DISPATCH-CALLER-01` 锁定）：
+### 命令幂等身份承载 + Claimer 两阶段去重（#1698）
+
+`WithCommandDispatch(reg, dispatch, claimer)` 自 #1698 起是 **3-arg**——`claimer`
+（`kernel/idempotency.Claimer`）是**必填位置参**，「接命令分发但无去重」编译期不可表达；
+`Start()` 额外 nil-guard（dispatch 非空但 claimer nil → fail-fast）。命令分支去重生命周期：
+
+1. relay 经 `command.ClaimKeyFromEntry(entry)` 读回身份三元组 → `DeriveCommandKey(tenant,
+   subject, command_id).Flat()` 得 Claimer string-key（tenant = `Principal().TenantID`、
+   subject = `AggregateID()`、command_id = `Metadata()[CommandIDMetadataKey]`）。tenant 可空，
+   与 HTTP idempotency 一致映射为 `_notenant`（single-tenant / service principal）；subject 或
+   command_id 为空 → `ok=false`。
+2. `!ok`（缺 subject 或 command_id 身份槽）→ `kout.NewPermanentError` → **`MarkDead`
+   （fail-closed，不静默跳过去重）**。
+3. `Claimer.Claim`：**Acquired** → dispatch + Commit/Release；**Done**（重复）→ 跳过 dispatch +
+   `MarkPublished`（去重）；**Busy** → `MarkRetry`；**Claim infra err** → `MarkRetry`。
+
+**command_id 确定性来源 = 源事件 `entry.ID()`**（重投稳定，不碰 sealed envelope）：源事件
+被 broker 重投时 producer 反应式 emit 出两条同 command_id 的命令 entry，relay 只 dispatch 一次。
+`DispatchAsync` 失败 settle 分两类（#1673 F3 + #1588）：生成体的**确定性框架错误**（reg nil /
+routing-topic ≠ DispatchID / **request-schema 值校验失败**（#1588，详见下文值校验段）/ decode 失败 /
+no-handler / wrong-type）经 `kout.NewPermanentError` → `MarkDead`；**handler 业务 error** 透传 →
+`MarkRetry` 至耗尽。生成 `DispatchAsync` 体首做 trust-boundary 自检 `entry.RoutingTopic() == string(DispatchID)`。
+
+### producer + composition-root 接线（首个生产 callsite #1698）
+
+dispatch 值**必须**是生成 `DispatchAsync` 直接符号（archtest `COMMAND-ASYNC-DISPATCH-CALLER-01`
+锁定）；异步命令**只能**经 `command.EmitAsync` 构造发射（archtest `COMMAND-ASYNC-EMIT-FUNNEL-01`
+锁定：`command.*`-topic 的 `kout.Emit`/`NewEntry` 必须在 `runtime/command`）。首个真实
+producer 是 `examples/iotdevice` 的 devicecell——订阅 `event.device-registered.v1` → handler 经
+`EmitAsync` emit `command.devicecommand.enqueue.v1`，**包进 `CellTxManager.RunInTx`**（durable
+PG outbox writer 要 tx）：
 
 ```go
+// producer（cells/devicecell/slices/devicebootstrap，事件反应式 archetype；
+// 形态示意，真实签名见 service.go::HandleDeviceRegistered —— 它是 outbox.EntryHandler
+// 而非 typed event：先 json.Unmarshal(entry.Payload()) 进 file-local decode view，
+// subject/commandID 取自该 view.ID 与 entry.ID()）
+func (s *Service) HandleDeviceRegistered(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
+    var ev deviceRegisteredEvent // file-local decode view of the payload
+    _ = json.Unmarshal(entry.Payload(), &ev)
+    err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+        return command.EmitAsync(txCtx, s.clk, s.emitter,
+            enqueue.DispatchID,     // command topic
+            ev.ID,                  // subject（dedup 维度 = deviceID）
+            entry.ID(),             // command_id = 源事件 entry.ID()（重投稳定）
+            EnqueueRequest{...})
+    })
+    if err != nil {
+        return outbox.Requeue(err)
+    }
+    return outbox.Ack()
+}
+
+// composition root（examples/iotdevice/run.go，demo + durable 两模式都接）
+claimer := idempotency.NewInMemClaimer(clk) // 单实例同喂 relay + ConsumerBase
 reg := command.NewRegistry()
 _ = enqueue.Register(reg, handler)
-relay.WithCommandDispatch(reg, map[command.CommandID]command.AsyncDispatchFunc{
-    enqueue.DispatchID: enqueue.DispatchAsync, // 生成符号，不可 wrap 闭包
-})
+relay.WithCommandDispatch(reg,
+    map[command.CommandID]command.AsyncDispatchFunc{
+        enqueue.DispatchID: enqueue.DispatchAsync, // 生成符号，不可 wrap 闭包
+    },
+    claimer) // #1698 必填第 3 参
+bootstrap.New(bootstrap.WithRelay(relay), bootstrap.WithConsumerBase(consumerBase), ...)
+// demo: store=writer=outboxtest.FakeStore + outbox.DemoCellTxManager()
+// durable: adapterpg.NewOutboxStore + NewOutboxWriter + persistence.WrapForCell(adapterpg.NewTxManager(pool))
 ```
 
 `DispatchAsync` **在 topic-guard 后、unmarshal 前对 `entry.Payload()`（入站 wire JSON bytes）跑
@@ -230,11 +284,21 @@ additionalProperties/...全 schema 语义；#1588）——这是 HTTP request-bo
 `kout.NewPermanentError` → relay `MarkDead`。复用 HTTP 同源 byte-validator（核心抽中性包 `runtime/schemavalidate`，
 HTTP 与 command 生成包共用）；honor D4——async bytes 校验零 marshal round-trip（round-trip 仅在校验 **sync** typed
 输入时出现，sync `Dispatch` 仍刻意不校验 = 第一方可信边界，ADR §D8）。command 无 `HasBody` gate，D6 保证恒有 request
-schemaRef，故 `command.tmpl` 无条件 emit validator（无「command 无校验」逃逸路径）。真实 binary producer 接线
-（devicecell 异步 enqueue）随后续 PR（#1698）落地。设计单源 =
-ADR `docs/architecture/202606040550-1044-adr-command-bus-dispatch-funnel.md` §5 ④ +
-§Amendment 2026-06-06 / 2026-06-08；funnel 双向锁 = `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`（上游 Hard，golden 锁
-含值校验 emit）+ `COMMAND-ASYNC-DISPATCH-CALLER-01`（下游 Hard）——值校验骑既有 funnel，无新增 enforcement 机制。
+schemaRef，故 `command.tmpl` 无条件 emit validator（无「command 无校验」逃逸路径）。
+
+设计单源 = ADR `docs/architecture/202606040550-1044-adr-command-bus-dispatch-funnel.md`
+§5 ④/⑤ + §Amendment 2026-06-08（#1698 消费半 + producer / #1588 值校验）/ §Amendment 2026-06-06（④ async 机制）。
+funnel 双向锁（盲区清单活在各 archtest godoc）：
+
+- `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`：typed `Register`/`Dispatch`/`DispatchAsync` 仅 codegen
+  派生（上游 Hard；golden 锁含 #1588 值校验 emit）。
+- `COMMAND-ASYNC-DISPATCH-CALLER-01`（3-arg）：relay 只接生成 `DispatchAsync`（下游 Hard）。
+- `COMMAND-ASYNC-EMIT-FUNNEL-01`（#1698）：`EmitAsync` subject/commandID 必填位置参（下游 Hard）
+  + `command.*`-topic emit 收口 `runtime/command`（上游 Medium）。
+- **Medium 结构天花板（won't-do ceiling）**：producer↔relay 经 async outbox store 解耦，「每条
+  异步命令必带身份」无法端到端编译期 Hard（同 ConsumerBase 运行期 key 构造 / #1282·#851·#893
+  族）。补偿 = 上游 emit-funnel archtest + 下游 fail-closed relay（缺身份 → `MarkDead`）双锁。
+  **不开伪 Hard-升级 issue**——per-command codegen extractor 不抬升该结构天花板。
 
 ## Projection ↔ ConsumerBase 装配（composition root）
 

@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecmd"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	dto "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
+	devicebootstrap "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicebootstrap"
 	devicecommand "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommand"
 	devicecommandinternal "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommandinternal"
 	devicecommandrpc "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommandrpc"
@@ -28,6 +29,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/kernel/reconcile"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -99,6 +101,43 @@ func WithCommandRegistry(reg *commandruntime.Registry) Option {
 	return func(c *DeviceCell) { c.commandRegistry = reg }
 }
 
+// WithBootstrapEmitter wires the writer-backed sealed CellEmitter the
+// devicebootstrap reactive slice uses to emit command.devicecommand.enqueue.v1
+// async command entries into the outbox store (where the relay polls them),
+// instead of the cell's direct-publish emitter (which fans out to the broker/eb
+// for device-registered events). Batch-3 (#1698): the command-relay subsystem
+// requires the emitted command entry land in the same store the relay polls, so
+// the composition root constructs a WriterEmitter over the mode's outbox Writer
+// (demo: outboxtest.FakeStore; durable: adapterpg.OutboxWriter) and injects it
+// here.
+//
+// This is the SECOND emitter on the cell: the device-registered direct publisher
+// (WithDirectPublisher) is unchanged and keeps fanning out events to the bus.
+// The two are deliberately separate sinks.
+//
+// One-shot wiring option: a nil emitter is stored as-is and rejected by the
+// initSlices fail-fast guard; it does not preserve a previously-set value. The
+// dependency is required once the command-relay subsystem is wired.
+func WithBootstrapEmitter(e outbox.CellEmitter) Option {
+	return func(c *DeviceCell) { c.bootstrapEmitter = e }
+}
+
+// WithBootstrapTxManager sets the CellTxManager injected into the
+// devicebootstrap reactive slice. The slice wraps command.EmitAsync in
+// txRunner.RunInTx so durable mode (PG outbox writer) gets a real transaction
+// in ctx. Demo mode and tests use the default outbox.DemoCellTxManager() no-op.
+//
+// Accumulative: a nil tx leaves the previously-set value in place. NOT
+// required (no fail-fast guard): DemoCellTxManager is the safe default for
+// assemblies that do not wire a real PG pool.
+func WithBootstrapTxManager(tx persistence.CellTxManager) Option {
+	return func(c *DeviceCell) {
+		if tx != nil {
+			c.bootstrapTxManager = tx
+		}
+	}
+}
+
 // WithLogger sets the structured logger.
 func WithLogger(l *slog.Logger) Option {
 	return func(c *DeviceCell) { c.logger = l }
@@ -116,19 +155,28 @@ func WithMetricsProvider(mp metrics.Provider) Option {
 // +cell:listener:ref=cell.InternalListener,prefix=
 type DeviceCell struct {
 	*cell.BaseCell
-	deviceRepo      domain.DeviceRepository
-	publisher       outbox.CellPublisher
-	emitter         outbox.CellEmitter // set during initInternal; retained for Probes
-	cursorCodec     *query.CursorCodec
-	logger          *slog.Logger
-	metricsProvider metrics.Provider
-	commandQueue    commandQueueStore
-	commandRegistry *commandruntime.Registry // required; sync command-bus handler registry (#1580)
-	commandSweeper  *reconcile.Loop          // device-command expiry sweep, driven on a TickerTrigger cadence
-	clk             clock.Clock              // injected from reg.Config during initInternal
+	deviceRepo         domain.DeviceRepository
+	publisher          outbox.CellPublisher
+	emitter            outbox.CellEmitter        // set during initInternal; retained for Probes
+	bootstrapEmitter   outbox.CellEmitter        // writer-backed; feeds devicebootstrap reactive command emit (#1698)
+	bootstrapTxManager persistence.CellTxManager // wraps EmitAsync in tx for durable PG writer; defaults to DemoCellTxManager
+	cursorCodec        *query.CursorCodec
+	logger             *slog.Logger
+	metricsProvider    metrics.Provider
+	commandQueue       commandQueueStore
+	commandRegistry    *commandruntime.Registry // required; sync command-bus handler registry (#1580)
+	commandSweeper     *reconcile.Loop          // device-command expiry sweep, driven on a TickerTrigger cadence
+	clk                clock.Clock              // injected from reg.Config during initInternal
 
 	// +slice:route:slice=deviceregister,subPath=/api/v1/devices
 	registerHandler *registercontract.Handler
+
+	// bootstrapSvc backs the devicebootstrap subscribe slice. It carries no route
+	// marker: the event.device-registered.v1 subscription is derived by cellgen
+	// from slice.yaml contractUsages[role=subscribe], which resolves this field by
+	// "pointer-type package == sliceID" (devicebootstrap) and emits the
+	// NewSubscription(...).Mount(reg) call into cell_gen.go.
+	bootstrapSvc *devicebootstrap.Service
 
 	// +slice:route:slice=devicecommand,subPath=/api/v1/devices
 	commandHandler *devicecommand.Handler
@@ -295,6 +343,33 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	}
 	c.registerHandler = registercontract.NewHandler(registerSvc)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(deviceregister.SliceMetadata()))
+
+	// device-bootstrap slice: event-reactive producer subscribing to
+	// event.device-registered.v1 and emitting a command.devicecommand.enqueue.v1
+	// async command for each new device. Batch-3 (#1698): the emitter is the
+	// writer-backed CellEmitter (WithBootstrapEmitter) so the emitted command entry
+	// lands in the outbox store the relay polls — NOT the cell's direct-publish
+	// emitter (c.emitter), which fans device-registered events out to the bus.
+	// Required (no soft fallback): an assembly that wires the command-relay
+	// subsystem must inject this; absence is a dead-wiring bug, so fail fast.
+	if c.bootstrapEmitter == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
+			"devicecell requires a bootstrap command emitter; from the composition root, "+
+				"call WithBootstrapEmitter(outbox.WrapEmitterForCell(writerEmitter)) where "+
+				"writerEmitter is an outbox.WriterEmitter over the mode's outbox Writer "+
+				"(demo: outboxtest.FakeStore; durable: adapterpg.NewOutboxWriter(clk))")
+	}
+	bootstrapSvc, err := devicebootstrap.NewService(
+		c.clk,
+		devicebootstrap.WithEmitter(c.bootstrapEmitter),
+		devicebootstrap.WithTxManager(c.bootstrapTxManager),
+		devicebootstrap.WithLogger(c.logger),
+	)
+	if err != nil {
+		return fmt.Errorf("device-bootstrap: %w", err)
+	}
+	c.bootstrapSvc = bootstrapSvc
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicebootstrap.SliceMetadata()))
 
 	// device-command slice: a Queue + ActiveScanner is required in every mode.
 	// Demo callers MUST wire commandtest.NewInMemQueue() explicitly via

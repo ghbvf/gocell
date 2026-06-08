@@ -114,3 +114,57 @@ func countNUL(s string) int {
 	}
 	return n
 }
+
+// TestFlat_Layout pins the Flat() encoding: ns + NUL + key, node-agnostic. This
+// is the sole flattening of a sealed IdempotencyKey into the string key that
+// kernel/idempotency.Claimer.Claim consumes.
+func TestFlat_Layout(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name             string
+		tenant, sub, cmd string
+		want             string
+	}{
+		{
+			name:   "tenant + subject + commandID",
+			tenant: "tenant-1", sub: "sub-9", cmd: "cmd-42",
+			want: "tenant-1\x00sub-9\x00cmd-42",
+		},
+		{
+			name:   "empty tenant uses _notenant sentinel",
+			tenant: "", sub: "sub-9", cmd: "cmd-42",
+			want: "_notenant\x00sub-9\x00cmd-42",
+		},
+		{
+			name:   "empty subject (service principal) distinguished by commandID",
+			tenant: "tenant-1", sub: "", cmd: "cmd-42",
+			want: "tenant-1\x00\x00cmd-42",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			k := DeriveCommandKey(tt.tenant, tt.sub, tt.cmd)
+			if got := k.Flat(); got != tt.want {
+				t.Errorf("Flat() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFlat_DistinctKeysFlattenDistinct asserts the flattening preserves the
+// per-dimension isolation of the sealed (ns,key) pair: keys that differ in any
+// dimension produce different flat strings (no collision via flattening).
+func TestFlat_DistinctKeysFlattenDistinct(t *testing.T) {
+	t.Parallel()
+	base := DeriveCommandKey("t", "s", "c").Flat()
+	for _, other := range []string{
+		DeriveCommandKey("t2", "s", "c").Flat(),
+		DeriveCommandKey("t", "s2", "c").Flat(),
+		DeriveCommandKey("t", "s", "c2").Flat(),
+	} {
+		if other == base {
+			t.Errorf("distinct command key flattened to same string as base: %q", base)
+		}
+	}
+}
