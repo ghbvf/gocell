@@ -834,7 +834,8 @@ func asyncDispatchMapViolations(info *types.Info, arg ast.Expr) []string {
 		if valueOK && keyOK && keyPkg != valuePkg {
 			bad = append(bad, fmt.Sprintf(
 				"key %s and value %s are from different command packages (%s vs %s)",
-				asyncDispatchValueText(kv.Key), asyncDispatchValueText(kv.Value), keyPkg, valuePkg))
+				asyncDispatchValueText(kv.Key), asyncDispatchValueText(kv.Value), keyPkg, valuePkg,
+			))
 		}
 	}
 	return bad

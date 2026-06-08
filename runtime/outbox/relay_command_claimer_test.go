@@ -57,6 +57,7 @@ func (r *spyReceipt) Commit(ctx context.Context) error {
 	r.commitCtxErr = ctx.Err()
 	return r.commitErr
 }
+
 func (r *spyReceipt) Release(ctx context.Context) error {
 	r.released++
 	r.releaseCtxErr = ctx.Err()
@@ -105,7 +106,8 @@ func TestDispatchCommand_ClaimAcquired_DispatchesAndCarriesReceipt(t *testing.T)
 	var dispatched int
 	r := relayWithDispatch(
 		func(context.Context, *command.Registry, kout.Entry) error { dispatched++; return nil },
-		claimer)
+		claimer,
+	)
 
 	results := r.publishBatch(context.Background(), []ClaimedEntry{claimedEntry(t, "c1", cmdID, `{}`)})
 	require.Len(t, results, 1)
@@ -125,7 +127,8 @@ func TestDispatchCommand_ClaimDone_DedupsWithoutDispatch(t *testing.T) {
 	var dispatched int
 	r := relayWithDispatch(
 		func(context.Context, *command.Registry, kout.Entry) error { dispatched++; return nil },
-		claimer)
+		claimer,
+	)
 
 	results := r.publishBatch(context.Background(), []ClaimedEntry{claimedEntry(t, "c1", cmdID, `{}`)})
 	require.Len(t, results, 1)
@@ -143,7 +146,8 @@ func TestDispatchCommand_ClaimBusy_Transient(t *testing.T) {
 
 	r := relayWithDispatch(
 		func(context.Context, *command.Registry, kout.Entry) error { return nil },
-		claimer)
+		claimer,
+	)
 
 	results := r.publishBatch(context.Background(), []ClaimedEntry{claimedEntry(t, "c1", cmdID, `{}`)})
 	require.Len(t, results, 1)
@@ -160,7 +164,8 @@ func TestDispatchCommand_ClaimInfraError_Transient(t *testing.T) {
 
 	r := relayWithDispatch(
 		func(context.Context, *command.Registry, kout.Entry) error { return nil },
-		claimer)
+		claimer,
+	)
 
 	results := r.publishBatch(context.Background(), []ClaimedEntry{claimedEntry(t, "c1", cmdID, `{}`)})
 	require.Len(t, results, 1)
@@ -179,7 +184,8 @@ func TestDispatchCommand_MissingIdentity_Permanent(t *testing.T) {
 	var dispatched int
 	r := relayWithDispatch(
 		func(context.Context, *command.Registry, kout.Entry) error { dispatched++; return nil },
-		claimer)
+		claimer,
+	)
 
 	results := r.publishBatch(context.Background(), []ClaimedEntry{noIdentityEntry(t, "c1", cmdID)})
 	require.Len(t, results, 1)
@@ -269,7 +275,8 @@ func TestDispatchCommand_UnknownState_Permanent(t *testing.T) {
 	var dispatched int
 	r := relayWithDispatch(
 		func(context.Context, *command.Registry, kout.Entry) error { dispatched++; return nil },
-		claimer)
+		claimer,
+	)
 
 	results := r.publishBatch(context.Background(), []ClaimedEntry{claimedEntry(t, "c1", cmdID, `{}`)})
 	require.Len(t, results, 1)

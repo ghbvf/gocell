@@ -235,7 +235,8 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	// Command-relay subsystem wiring (#1698): ConsumerBase is required because the
 	// devicecell registers the event.device-registered.v1 subscription (phase6
 	// fails fast otherwise); WithRelay drives the relay lifecycle + outbox polling.
-	opts = append(opts,
+	opts = append(
+		opts,
 		bootstrap.WithConsumerBase(crs.consumerBase),
 	)
 	// Durable mode: register the PG pool as a managed closer so framework
@@ -344,7 +345,8 @@ func commandRelayClaimer(clk clock.Clock, durable bool) (idempotency.Claimer, er
 		return nil, fmt.Errorf(
 			"iotdevice durable command relay requires a distributed idempotency claimer; "+
 				"set %s=true only for an explicitly single-pod demo deployment",
-			envDurableSinglePod)
+			envDurableSinglePod,
+		)
 	}
 	return idempotency.NewInMemClaimer(clk), nil
 }

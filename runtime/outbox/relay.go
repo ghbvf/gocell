@@ -688,7 +688,8 @@ func (r *Relay) dispatchCommand(ctx context.Context, e ClaimedEntry, fn command.
 			slog.String("routing_topic", e.RoutingTopic()))
 		return publishResult{entry: e, err: kout.NewPermanentError(
 			errcode.New(errcode.KindInvalid, errRelayOp,
-				"outbox relay: command entry missing idempotency identity"))}
+				"outbox relay: command entry missing idempotency identity"),
+		)}
 	}
 
 	state, receipt, err := r.cmdClaimer.Claim(ctx, key, commandLeaseTTL, commandDoneTTL)
@@ -731,7 +732,8 @@ func (r *Relay) dispatchCommand(ctx context.Context, e ClaimedEntry, fn command.
 			slog.Int("claim_state", int(state)))
 		return publishResult{entry: e, err: kout.NewPermanentError(
 			errcode.New(errcode.KindInternal, errRelayOp,
-				"outbox relay: command claim returned unknown state"))}
+				"outbox relay: command claim returned unknown state"),
+		)}
 	}
 }
 
