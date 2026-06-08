@@ -47,8 +47,6 @@ const (
 // Used in resolveSlicePkg; extracted as a const to satisfy go:S1192.
 const fmtSlicePkgPath = "./%s/%s/..."
 
-const integrationJourneyPkgPath = "github.com/ghbvf/gocell/tests/integration/..."
-
 // Runner executes metadata-driven verification tests.
 type Runner struct {
 	project   *metadata.ProjectMeta
@@ -395,13 +393,39 @@ func (r *Runner) resolveJourneyPkg(j *metadata.JourneyMeta, ref resolvedRef) (pk
 			}
 		}
 	}
-	if dirExists(filepath.Join(r.root, "tests", "integration")) {
-		return integrationJourneyPkgPath, []string{"-tags=integration"}
+	if pkgPath, ok := integrationJourneyPkgPath(r.root); ok {
+		return pkgPath, []string{"-tags=integration"}
 	}
 	if dirExists(filepath.Join(r.root, "journeys")) {
 		return "./journeys/...", nil
 	}
 	return "./...", nil
+}
+
+func integrationJourneyPkgPath(root string) (string, bool) {
+	dir := filepath.Join(root, "tests", "integration")
+	if !dirExists(dir) {
+		return "", false
+	}
+	modulePath, err := readGoModModulePath(filepath.Join(dir, "go.mod"))
+	if err != nil || modulePath == "" {
+		return "./tests/integration/...", true
+	}
+	return modulePath + "/...", true
+}
+
+func readGoModModulePath(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "module ")), nil
+		}
+	}
+	return "", nil
 }
 
 func exampleNameFromJourneyFile(file string) (string, bool) {

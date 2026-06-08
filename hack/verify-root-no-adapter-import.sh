@@ -5,6 +5,9 @@
 # must not directly import top-level adapters, because adapters will become
 # satellite/per-adapter modules and the root go.mod must remain replace-free.
 # Adapter-real tests belong in adapter packages or consumer satellite modules.
+#
+# Discovered automatically by make verify via hack/verify-*.sh glob
+# (governance.yml). Keep this filename shape so the gate stays PR-time.
 
 set -euo pipefail
 
