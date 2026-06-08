@@ -415,6 +415,7 @@ func integrationJourneyPkgPath(root string) (string, bool) {
 }
 
 func readGoModModulePath(path string) (string, error) {
+	//nolint:gosec // R2-approved: path is the fixed repo-local tests/integration/go.mod assembled from Runner.root.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
