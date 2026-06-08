@@ -1996,11 +1996,39 @@ func (v *Validator) validateFMT40ForContract(c *metadata.ContractMeta) []Validat
 	var results []ValidationResult
 	for _, viol := range metadata.ValidateHTTPHeaders(c.Endpoints.HTTP.Headers) {
 		field := fmt.Sprintf("endpoints.http.headers.%s", viol.Header)
-		results = append(results, v.newError(
-			codeFMT40, fmt40IssueType(viol.Kind), file, field,
-			fmt.Sprintf("contract %q %s", c.ID, viol.Message),
-			fmt40Fix(viol.Kind),
-		))
+		switch viol.Kind {
+		case metadata.HeaderViolationName:
+			results = append(results, v.newError(
+				codeFMT40, fmt40IssueType(viol.Kind), file, field,
+				fmt.Sprintf("contract %q %s", c.ID, viol.Message),
+				"use a canonical header name matching ^[A-Za-z][A-Za-z0-9-]*$ (e.g. X-Tenant-ID)",
+			))
+		case metadata.HeaderViolationType:
+			results = append(results, v.newError(
+				codeFMT40, fmt40IssueType(viol.Kind), file, field,
+				fmt.Sprintf("contract %q %s", c.ID, viol.Message),
+				"declare type: string on the header schema (headers are populate-only; only string can be generated)",
+			))
+		case metadata.HeaderViolationConstraint:
+			results = append(results, v.newError(
+				codeFMT40, fmt40IssueType(viol.Kind), file, field,
+				fmt.Sprintf("contract %q %s", c.ID, viol.Message),
+				"remove the length/numeric constraint and validate the header value in the cell adapter "+
+					"(e.g. tenant.ParseTenantID), which owns the per-endpoint fail behavior",
+			))
+		case metadata.HeaderViolationDuplicate:
+			results = append(results, v.newError(
+				codeFMT40, fmt40IssueType(viol.Kind), file, field,
+				fmt.Sprintf("contract %q %s", c.ID, viol.Message),
+				"declare each HTTP header once (names are case-insensitive); remove the duplicate",
+			))
+		default:
+			results = append(results, v.newError(
+				codeFMT40, fmt40IssueType(viol.Kind), file, field,
+				fmt.Sprintf("contract %q %s", c.ID, viol.Message),
+				"fix the endpoints.http.headers declaration",
+			))
+		}
 	}
 	return results
 }
@@ -2014,23 +2042,6 @@ func fmt40IssueType(k metadata.HeaderViolationKind) IssueType {
 		return IssueForbidden
 	default: // HeaderViolationName, HeaderViolationType
 		return IssueInvalid
-	}
-}
-
-// fmt40Fix returns the remediation guidance for a header violation kind.
-func fmt40Fix(k metadata.HeaderViolationKind) string {
-	switch k {
-	case metadata.HeaderViolationName:
-		return "use a canonical header name matching ^[A-Za-z][A-Za-z0-9-]*$ (e.g. X-Tenant-ID)"
-	case metadata.HeaderViolationType:
-		return "declare type: string on the header schema (headers are populate-only; only string can be generated)"
-	case metadata.HeaderViolationConstraint:
-		return "remove the length/numeric constraint and validate the header value in the cell adapter " +
-			"(e.g. tenant.ParseTenantID), which owns the per-endpoint fail behavior"
-	case metadata.HeaderViolationDuplicate:
-		return "declare each HTTP header once (names are case-insensitive); remove the duplicate"
-	default:
-		return "fix the endpoints.http.headers declaration"
 	}
 }
 

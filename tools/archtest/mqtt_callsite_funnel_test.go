@@ -811,17 +811,16 @@ func mqttAssertTypedFieldAssignScannerFires(t *testing.T, typeName, fieldName, a
 					continue
 				}
 				EachInSubtree[ast.AssignStmt](f, func(assign *ast.AssignStmt) {
-					for _, lhs := range assign.Lhs {
-						sel, ok := lhs.(*ast.SelectorExpr)
-						if !ok || sel.Sel == nil || sel.Sel.Name != fieldName {
-							continue
+					EachInChildren[ast.SelectorExpr](assign, func(sel *ast.SelectorExpr) {
+						if sel.Pos() > assign.TokPos || sel.Sel == nil || sel.Sel.Name != fieldName {
+							return
 						}
 						if !mqttIsTokenTyped(p.TypesInfo, sel.X, typeName, mqttTokenFieldFixturePkgPath) {
-							continue
+							return
 						}
 						if mqttEnclosingKeyAllowed(p, f, assign, []string{allowedCtorFullName}) {
 							greenCount++ // inside-allowed: must not be reported
-							continue
+							return
 						}
 						pos := p.Fset.Position(sel.Pos())
 						violations = append(violations, Diagnostic{
@@ -832,7 +831,7 @@ func mqttAssertTypedFieldAssignScannerFires(t *testing.T, typeName, fieldName, a
 								ruleID, rel, pos.Line,
 							),
 						})
-					}
+					})
 				})
 			}
 			return nil

@@ -180,19 +180,15 @@ func collectMqttMetricNames(p *Pass) []string {
 			if obj.Pkg() == nil || obj.Pkg().Path() != metricsPkg || !mqttMetricsOptsTypes[obj.Name()] {
 				return
 			}
-			for _, el := range lit.Elts {
-				kv, ok := el.(*ast.KeyValueExpr)
-				if !ok {
-					continue
-				}
+			EachInChildren[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
 				key, ok := kv.Key.(*ast.Ident)
 				if !ok || key.Name != "Name" {
-					continue
+					return
 				}
 				if tv, ok := info.Types[kv.Value]; ok && tv.Value != nil && tv.Value.Kind() == constant.String {
 					names = append(names, constant.StringVal(tv.Value))
 				}
-			}
+			})
 		})
 	}
 	return names
@@ -396,35 +392,32 @@ func scanMqttReasonOffsetConstants(p *Pass) []Diagnostic {
 			if gd.Tok != token.CONST {
 				return
 			}
-			for _, spec := range gd.Specs {
-				vs, ok := spec.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
+			EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
 				for _, v := range vs.Values {
 					if tv, ok := info.Types[v]; ok && tv.Value != nil && isEnum(tv.Type) {
 						exempt[v.Pos()] = true
 					}
 				}
-			}
+			})
 		})
-		ast.Inspect(file, func(n ast.Node) bool {
-			expr, ok := n.(ast.Expr)
-			if !ok {
-				return true
+		seen := map[token.Pos]bool{}
+		checkExpr := func(expr ast.Expr) {
+			if seen[expr.Pos()] {
+				return
 			}
+			seen[expr.Pos()] = true
 			tv, ok := info.Types[expr]
 			if !ok || tv.Value == nil || !isEnum(tv.Type) {
-				return true // not a constant of a reason enum type
+				return // not a constant of a reason enum type
 			}
 			if exempt[expr.Pos()] {
-				return true // the defining const spec value
+				return // the defining const spec value
 			}
 			if c, ok := constObjectOf(info, expr).(*types.Const); ok && types.Identical(c.Type(), tv.Type) {
-				return true // reference to a declared enum const
+				return // reference to a declared enum const
 			}
 			if constant.StringVal(tv.Value) == "" {
-				return true // zero-value no-failure sentinel
+				return // zero-value no-failure sentinel
 			}
 			diags = append(diags, Diagnostic{
 				Rel:  rel,
@@ -434,8 +427,13 @@ func scanMqttReasonOffsetConstants(p *Pass) []Diagnostic {
 					"literal/untyped const at a return / var / assignment / arg " +
 					"(MQTT-METRIC-LABEL-VALUES-FROZEN-01 reason provenance backstop)",
 			})
-			return true
-		})
+		}
+		EachInSubtree[ast.BasicLit](file, func(expr *ast.BasicLit) { checkExpr(expr) })
+		EachInSubtree[ast.Ident](file, func(expr *ast.Ident) { checkExpr(expr) })
+		EachInSubtree[ast.SelectorExpr](file, func(expr *ast.SelectorExpr) { checkExpr(expr) })
+		EachInSubtree[ast.BinaryExpr](file, func(expr *ast.BinaryExpr) { checkExpr(expr) })
+		EachInSubtree[ast.ParenExpr](file, func(expr *ast.ParenExpr) { checkExpr(expr) })
+		EachInSubtree[ast.CallExpr](file, func(expr *ast.CallExpr) { checkExpr(expr) })
 	}
 	return diags
 }

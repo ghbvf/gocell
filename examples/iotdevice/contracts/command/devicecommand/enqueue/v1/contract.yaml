@@ -1,6 +1,5 @@
 id: command.devicecommand.enqueue.v1
 kind: command
-codegen: true  # command-bus sync funnel (#1044 PR-1): generates command_gen.go typed Handler/Register/Dispatch
 ownerCell: devicecell
 consistencyLevel: L4
 lifecycle: active

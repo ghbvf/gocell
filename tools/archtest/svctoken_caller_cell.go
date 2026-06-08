@@ -74,7 +74,7 @@ func CheckSvctokenCallerCellRequired01(t *testing.T, cfg ConfigForExternalCell) 
 	// (e.g. examples/ssobff/walkthrough_test.go) that call
 	// GenerateServiceToken are also scanned. FlatNonDefaultTags()
 	// returns the union of every tag tracked in KnownNonDefaultTags(); a
-	// single Run(t, Typed(...)) call carrying all tags simultaneously satisfies
+	// single Run(t, Production(...)) call carrying all tags simultaneously satisfies
 	// every //go:build constraint at once (e.g. `//go:build integration` is
 	// included because `integration` is in the set; `//go:build integration
 	// && otelcollector` is included because both tags are present). This
@@ -89,8 +89,7 @@ func CheckSvctokenCallerCellRequired01(t *testing.T, cfg ConfigForExternalCell) 
 	// post-load filtering by file build constraints.
 	seen := map[string]struct{}{}
 	var diags []Diagnostic
-	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: cfg.BuildTags},
-		[]string{"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/..."}),
+	_ = Run(t, Production(TypedOpts{Tests: true, Tags: cfg.BuildTags}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil

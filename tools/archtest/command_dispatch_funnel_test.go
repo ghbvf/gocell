@@ -465,41 +465,38 @@ func TestCommandGenFunnelSoleEmitter01(t *testing.T) {
 				continue // generated/ excluded by Production scope, but guard anyway
 			}
 
-			for _, decl := range file.Decls {
-				switch d := decl.(type) {
-				case *ast.GenDecl:
-					for _, spec := range d.Specs {
-						ts, ok := spec.(*ast.TypeSpec)
-						if !ok || ts.Name == nil || !ts.Name.IsExported() {
-							continue
-						}
-						iface, ok := ts.Type.(*ast.InterfaceType)
-						if !ok {
-							continue
-						}
-						if isHandlerLikeInterface(iface) {
-							hasHandlerInterface = true
-							pos := p.Fset.Position(ts.Pos())
-							handlerInterfacePos = append(handlerInterfacePos,
-								fmt.Sprintf("%s:%d (type %s)", rel, pos.Line, ts.Name.Name))
-						}
+			EachInChildren[ast.GenDecl](file, func(d *ast.GenDecl) {
+				EachInChildren[ast.TypeSpec](d, func(ts *ast.TypeSpec) {
+					if ts.Name == nil || !ts.Name.IsExported() {
+						return
 					}
-				case *ast.FuncDecl:
-					if d.Name == nil || d.Recv != nil {
-						continue // skip methods; only free funcs
+					iface, ok := ts.Type.(*ast.InterfaceType)
+					if !ok {
+						return
 					}
-					name := d.Name.Name
-					if !isCommandSoleEmitterFuncName(name) {
-						continue
+					if isHandlerLikeInterface(iface) {
+						hasHandlerInterface = true
+						pos := p.Fset.Position(ts.Pos())
+						handlerInterfacePos = append(handlerInterfacePos,
+							fmt.Sprintf("%s:%d (type %s)", rel, pos.Line, ts.Name.Name))
 					}
-					if funcHasCommandRegistryParam(p.TypesInfo, d) {
-						hasRegistryFreeFunc = true
-						pos := p.Fset.Position(d.Pos())
-						registryFreeFuncPos = append(registryFreeFuncPos,
-							fmt.Sprintf("%s:%d (func %s)", rel, pos.Line, name))
-					}
+				})
+			})
+			EachInChildren[ast.FuncDecl](file, func(d *ast.FuncDecl) {
+				if d.Name == nil || d.Recv != nil {
+					return // skip methods; only free funcs
 				}
-			}
+				name := d.Name.Name
+				if !isCommandSoleEmitterFuncName(name) {
+					return
+				}
+				if funcHasCommandRegistryParam(p.TypesInfo, d) {
+					hasRegistryFreeFunc = true
+					pos := p.Fset.Position(d.Pos())
+					registryFreeFuncPos = append(registryFreeFuncPos,
+						fmt.Sprintf("%s:%d (func %s)", rel, pos.Line, name))
+				}
+			})
 		}
 
 		if hasHandlerInterface && hasRegistryFreeFunc {
@@ -645,38 +642,35 @@ func TestCommandGenFunnelSoleEmitter01_RedFixture(t *testing.T) {
 				if strings.HasSuffix(rel, "_test.go") {
 					continue
 				}
-				for _, decl := range file.Decls {
-					switch d := decl.(type) {
-					case *ast.GenDecl:
-						for _, spec := range d.Specs {
-							ts, ok := spec.(*ast.TypeSpec)
-							if !ok || ts.Name == nil || !ts.Name.IsExported() {
-								continue
-							}
-							iface, ok := ts.Type.(*ast.InterfaceType)
-							if !ok {
-								continue
-							}
-							if isHandlerLikeInterface(iface) {
-								hasHandlerInterface = true
-							}
+				EachInChildren[ast.GenDecl](file, func(d *ast.GenDecl) {
+					EachInChildren[ast.TypeSpec](d, func(ts *ast.TypeSpec) {
+						if ts.Name == nil || !ts.Name.IsExported() {
+							return
 						}
-					case *ast.FuncDecl:
-						if d.Name == nil || d.Recv != nil {
-							continue
+						iface, ok := ts.Type.(*ast.InterfaceType)
+						if !ok {
+							return
 						}
-						name := d.Name.Name
-						// Use the shared name set (incl. DispatchAsync) so this RED
-						// self-check exercises the same detection as the production
-						// scan — a DispatchAsync-only look-alike must trip it too.
-						if !isCommandSoleEmitterFuncName(name) {
-							continue
+						if isHandlerLikeInterface(iface) {
+							hasHandlerInterface = true
 						}
-						if funcHasCommandRegistryParam(p.TypesInfo, d) {
-							hasRegistryFreeFunc = true
-						}
+					})
+				})
+				EachInChildren[ast.FuncDecl](file, func(d *ast.FuncDecl) {
+					if d.Name == nil || d.Recv != nil {
+						return
 					}
-				}
+					name := d.Name.Name
+					// Use the shared name set (incl. DispatchAsync) so this RED
+					// self-check exercises the same detection as the production
+					// scan — a DispatchAsync-only look-alike must trip it too.
+					if !isCommandSoleEmitterFuncName(name) {
+						return
+					}
+					if funcHasCommandRegistryParam(p.TypesInfo, d) {
+						hasRegistryFreeFunc = true
+					}
+				})
 			}
 
 			if hasHandlerInterface && hasRegistryFreeFunc {
@@ -813,11 +807,7 @@ func asyncDispatchMapViolations(info *types.Info, arg ast.Expr) []string {
 		return []string{"non-literal dispatch map (cannot verify keys/values are generated symbols)"}
 	}
 	var bad []string
-	for _, elt := range lit.Elts {
-		kv, ok := elt.(*ast.KeyValueExpr)
-		if !ok {
-			continue
-		}
+	EachInChildren[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
 		valuePkg, valueOK := generatedDispatchAsyncPkg(info, kv.Value)
 		if !valueOK {
 			bad = append(bad, "value is not a generated DispatchAsync: "+asyncDispatchValueText(kv.Value))
@@ -837,7 +827,7 @@ func asyncDispatchMapViolations(info *types.Info, arg ast.Expr) []string {
 				asyncDispatchValueText(kv.Key), asyncDispatchValueText(kv.Value), keyPkg, valuePkg,
 			))
 		}
-	}
+	})
 	return bad
 }
 
@@ -1055,15 +1045,14 @@ func TestCommandAsyncDispatchCaller01(t *testing.T) {
 			return nil
 		}
 		for _, file := range p.Files {
-			for _, decl := range file.Decls {
-				fd, ok := decl.(*ast.FuncDecl)
-				if !ok || fd.Recv != nil || fd.Name == nil {
-					continue
+			EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+				if fd.Recv != nil || fd.Name == nil {
+					return
 				}
 				if fd.Name.Name == dispatchAsyncFuncName && funcHasCommandRegistryParam(p.TypesInfo, fd) {
 					generatedDispatchAsyncFound = true
 				}
-			}
+			})
 		}
 		return nil
 	})

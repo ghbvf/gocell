@@ -18,10 +18,10 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 // RED-step regression test (TDD per ai-robust.md) for PR445-FU finding F2.
 //
 // The production rule TestSVCTOKEN_CALLER_CELL_REQUIRED_01 calls
-// Run(t, Typed(TypedOpts{...}, ...)) with FlatNonDefaultTags() — so packages.Load uses all known
-// build tags and includes every file gated by `//go:build <tag>`. Two real
-// callsites of auth.GenerateServiceToken are gated this way and therefore
-// escape the rule without the flat-tag load:
+// Run(t, Production(TypedOpts{...})) with FlatNonDefaultTags() — so packages.Load
+// uses all known build tags and includes every file gated by `//go:build <tag>`.
+// Two real callsites of auth.GenerateServiceToken are gated this way and
+// therefore escape the rule without the flat-tag load:
 //
 //   - examples/ssobff/walkthrough_test.go  (//go:build integration)
 //   - tests/integration/internal_rpc_caller_cell_test.go  (//go:build integration)
@@ -49,8 +49,7 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01_BuildTaggedFilesScanned_Wave5_RED(t *t
 
 	// Mirror the production rule's loader call (single flat-tag load) exactly.
 	loadedFiles := map[string]bool{}
-	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
-		[]string{"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/..."}),
+	_ = Run(t, Production(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}),
 		func(p *Pass) []Diagnostic {
 			for _, file := range p.Files {
 				loadedFiles[p.Rel(file)] = true

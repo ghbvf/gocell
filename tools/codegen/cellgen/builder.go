@@ -999,7 +999,13 @@ func EnrichGrpcServicesWithProtoInfo(spec *CellGenSpec, root string) error {
 		protoAbs := filepath.Join(root, filepath.FromSlash(gs.ProtoRel))
 		info, err := contractgen.ReadProtoServiceInfo(protoAbs, gs.Service)
 		if err != nil {
-			return fmt.Errorf("cellgen enrich grpc-serve contract=%s slice=%s: %w", gs.ContractID, gs.SliceID, err)
+			return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"cellgen enrich grpc-serve contract", err,
+				errcode.WithDetails(
+					errcode.PublicString("contract", gs.ContractID),
+					errcode.PublicString("slice", gs.SliceID)),
+				errcode.WithInternal(errcode.InternalAttr("_",
+					fmt.Sprintf("contract=%s slice=%s", gs.ContractID, gs.SliceID))))
 		}
 		gs.PbImportPath = info.ImportPath
 		gs.PbAlias = fmt.Sprintf("grpc%d", i)

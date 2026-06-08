@@ -10,8 +10,6 @@
 #   - not a UUID (malformed) → 400 ERR_VALIDATION_FAILED
 #   - reserved nil-UUID ("00000000-0000-0000-0000-000000000000") → 400 ERR_VALIDATION_FAILED
 # There is no SystemTenantID fallback — every call must carry a real tenant UUID.
-# Note: contractgen does not yet emit header parameters from contract.yaml (#1494);
-# this comment is the authoritative documentation until that support lands.
 id: http.config.internal.get.v1
 kind: http
 ownerCell: configcore
@@ -29,6 +27,11 @@ endpoints:
         type: string
         minLength: 1
         maxLength: 256
+    headers:
+      X-Tenant-ID:
+        type: string
+        format: uuid
+        required: true
     successStatus: 200
     auth:
       responses:

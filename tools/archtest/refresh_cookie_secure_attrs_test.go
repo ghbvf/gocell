@@ -253,16 +253,11 @@ func scanRefreshCookieHostBound(p *Pass) []Diagnostic {
 	foundName, foundPath := false, false
 	for _, file := range p.Files {
 		rel := p.Rel(file)
-		for _, decl := range file.Decls {
-			gd, ok := decl.(*ast.GenDecl)
-			if !ok || gd.Tok != token.CONST {
-				continue
+		EachInChildren[ast.GenDecl](file, func(gd *ast.GenDecl) {
+			if gd.Tok != token.CONST {
+				return
 			}
-			for _, spec := range gd.Specs {
-				vs, ok := spec.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
+			EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
 				for i, name := range vs.Names {
 					if i >= len(vs.Values) {
 						continue
@@ -291,8 +286,8 @@ func scanRefreshCookieHostBound(p *Pass) []Diagnostic {
 						}
 					}
 				}
-			}
-		}
+			})
+		})
 		EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
 			if !isHTTPCookieType(cl.Type) {
 				return

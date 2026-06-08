@@ -138,13 +138,14 @@ func scanClaimerProvenance(p *Pass) []Diagnostic {
 			if !ok || !isClaimerClaimCall(info, call) {
 				return
 			}
-			for _, lhs := range as.Lhs {
-				if id, ok := lhs.(*ast.Ident); ok {
-					if obj := info.ObjectOf(id); obj != nil {
-						claimSourced[obj] = true
-					}
+			EachInChildren[ast.Ident](as, func(id *ast.Ident) {
+				if id.Pos() > as.TokPos {
+					return
 				}
-			}
+				if obj := info.ObjectOf(id); obj != nil {
+					claimSourced[obj] = true
+				}
+			})
 		})
 	}
 
@@ -163,18 +164,14 @@ func scanClaimerProvenance(p *Pass) []Diagnostic {
 			if t == nil || !types.Identical(t, claimedType) {
 				return
 			}
-			for _, elt := range cl.Elts {
-				kv, ok := elt.(*ast.KeyValueExpr)
-				if !ok {
-					continue
-				}
+			EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
 				key, ok := kv.Key.(*ast.Ident)
 				if !ok || key.Name != "rcpt" {
-					continue
+					return
 				}
 				valIdent, ok := kv.Value.(*ast.Ident)
 				if ok && claimSourced[info.ObjectOf(valIdent)] {
-					continue // provenance confirmed
+					return // provenance confirmed
 				}
 				diags = append(diags, Diagnostic{
 					Rel:  rel,
@@ -183,7 +180,7 @@ func scanClaimerProvenance(p *Pass) []Diagnostic {
 						"must data-flow from a `... := r.claimer.Claim(...)` call, not a fabricated / " +
 						"zero / NonAcquiredReceipt value (WEBHOOK-IDEMPOTENCY-CLAIMER-01/A1)",
 				})
-			}
+			})
 		})
 	}
 	return diags

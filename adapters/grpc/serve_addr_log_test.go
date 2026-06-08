@@ -19,6 +19,7 @@ import (
 	adaptersgrpc "github.com/ghbvf/gocell/adapters/grpc"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // TestServeAddr_LogsBoundAddr drives the Worker self-bind path with Addr ":0"
@@ -41,7 +42,7 @@ func TestServeAddr_LogsBoundAddr(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- srv.Worker().Start(ctx) }()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "grpc-server-listening-log", func() bool {
 		return sloghelper.FindLogEntry(buf.String(), "server listening") != nil
 	}, testtime.D2s, testtime.MediumPoll, "expected a 'server listening' log line")
 

@@ -596,21 +596,17 @@ func TestAuthzDecisionConstructorClosedSet01(t *testing.T) {
 
 	var violations []string
 	for _, file := range parsedFiles {
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok {
-				continue
-			}
+		EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 			// Only package-level funcs (no receiver), exported names.
 			if fn.Recv != nil || !fn.Name.IsExported() {
-				continue
+				return
 			}
 			if resultContainsDecisionAST(fn) {
 				if _, allowed := allowedConstructors[fn.Name.Name]; !allowed {
 					violations = append(violations, fn.Name.Name)
 				}
 			}
-		}
+		})
 	}
 
 	assert.Empty(
@@ -637,15 +633,14 @@ func TestAuthzDecisionConstructorClosedSet01_AntiVacuity(t *testing.T) {
 	// Build a map: func name → returns Decision (by AST).
 	returnsDecision := map[string]bool{}
 	for _, file := range parsedFiles {
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Recv != nil || !fn.Name.IsExported() {
-				continue
+		EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+			if fn.Recv != nil || !fn.Name.IsExported() {
+				return
 			}
 			if resultContainsDecisionAST(fn) {
 				returnsDecision[fn.Name.Name] = true
 			}
-		}
+		})
 	}
 
 	// Verify Allow and Deny both exist and return Decision.

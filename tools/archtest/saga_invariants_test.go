@@ -1198,10 +1198,9 @@ func TestSagaTailerCheckpointAdvancerCaller_NonVacuity(t *testing.T) {
 			if strings.HasSuffix(p.Rel(file), "_test.go") {
 				continue
 			}
-			for _, decl := range file.Decls {
-				fd, ok := decl.(*ast.FuncDecl)
-				if !ok || fd.Body == nil {
-					continue
+			EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+				if fd.Body == nil {
+					return
 				}
 				EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
 					sel, ok := call.Fun.(*ast.SelectorExpr)
@@ -1214,7 +1213,7 @@ func TestSagaTailerCheckpointAdvancerCaller_NonVacuity(t *testing.T) {
 					}
 					advanceCalls++
 				})
-			}
+			})
 		}
 		return nil
 	})
@@ -1512,10 +1511,9 @@ func useUnrelated() { _ = NewImpl(); run(0, emptyFactory) }
 
 	// Collect the impls credited for each enclosing function's run(0, factory) call.
 	got := map[string][]string{}
-	for _, decl := range af.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok || fd.Body == nil {
-			continue
+	EachInChildren[ast.FuncDecl](af, func(fd *ast.FuncDecl) {
+		if fd.Body == nil {
+			return
 		}
 		EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
 			if id, ok := call.Fun.(*ast.Ident); !ok || id.Name != "run" {
@@ -1523,7 +1521,7 @@ func useUnrelated() { _ = NewImpl(); run(0, emptyFactory) }
 			}
 			got[fd.Name.Name] = factoryConstructedImpls(call, info, files, implSet)
 		})
-	}
+	})
 
 	// The three resolvable factory forms each credit Impl.
 	for _, fn := range []string{"useNamed", "useLit", "useVar"} {
