@@ -14,12 +14,13 @@
 > 五种评论 footer **之后**各带一行**隐藏机器块**，供 #935/#1657 本机执行器（Codex review daemon / Claude fix monitor）dispatch：
 > `<!-- gocell-pr-meta:v1 <标准 base64(JSON)> -->`（CommonMark 隐藏，肉眼不可见）。
 >
-> - **产**（贴评论的技能/工具）：用 `jq -nc` 构造**事实** JSON（`kind`/`phase`/`verdict`/refs/`findings`/`cycle.round`，**不写 `next`**）`| bash hack/automation/pr-meta.sh emit` 得该行，**追加到填好的 body 末尾**再贴。`emit` 单源派生 `schema`/`cycle.exhausted`/`next`/`idempotencyKey`——手填无意义。
+> - **产**（贴评论的技能/工具）：调 `bash hack/automation/pr-meta.sh emit-block --kind=<kind> --pr=<N> [flags]` 得该行，**追加到填好的 body 末尾**再贴。producer 只供不可推导的事实：`--findings='<json>'`（ship/fix/pr-review 计数）/ `--ci='<json>'`（ci）/ `--oos='<json>'`（oos）；pr-review 另需 `--phase=review|check` + `--verdict=<结论>`。**phase/verdict/cycle.round、refs(repo/baseRef/headRef/headSha)、session/worktree 全部由 emit-block 派生**（refs 经 `gh pr view`、roundBase 经 `round <PR>`、session/worktree 经 env；可经 `--head-sha`/`--base-ref`/`--head-ref`/`--round-base`/`--session`/`--worktree` override——codex-pr-router 传其 gated 值）。无 `jq` 拼 facts JSON、无手写 phase/verdict/round——`schema`/`cycle.exhausted`/`next`/`idempotencyKey` 亦 emit-block 派生，手填无意义。
+> - **kind→{phase,verdict,round} 派生规则单源 = `pr-meta.sh` 的 `derive_facts`（selftest golden-lock）**。本文档只定义 producer contract：ship/fix/pr-review 必须传 `--findings`，ci 必须传完整 `--ci`，oos 必须传非空 `--oos.items`；pr-review 的 phase/verdict 是 caller judgment，ci verdict 从 ci facts 派生。**不在本文档或任何 skill 重述派生映射**（重述=漂移面，本 issue #1774 即为消除它）。
 > - **消费**：`bash hack/automation/pr-meta.sh extract <PR#>` 拉评论 → 取最新块 → base64 解码 → schema 校验 → 比对 live `headSha`（不一致=过期，丢弃）。
 > - **熔断（auto review↔fix ≤3 轮）**：`cycle.round` = 已完成 fix 轮数；`round ≥ maxRounds(3)` → `cycle.exhausted=true`，且 `changes-requested` 的 `next.agent` 被 helper 强制为 `human`——守护进程必停派、转人工，不得继续 auto 循环。
 > - **标准 base64（非 url）**：CommonMark 禁 HTML 注释正文含 `--`；标准 base64 字母表 `A-Za-z0-9+/=` 无 `-`，结构上不可能产 `--`/`-->`（base64url 含 `-`，会破块）。
-> - schema 单源 = `hack/automation/schema/pr-meta.v1.json`；helper = `hack/automation/pr-meta.sh`（`emit`/`decode`/`extract`/`round`/`selftest`）。消费侧只接受 canonical 块（派生字段必须 = emit 由块自身 facts 重算结果，防伪造）+ 仅信 OWNER/MEMBER/COLLABORATOR 作者评论。**人读 footer 不动其格式**——footer 人读、机器块 dispatch，二者并存。
-> - **kind 取值**：`ship`（pm:ship）/ `fix`（pm:fix）/ `pr-review`（pm:pr-review）/ `ci`（pm:ci）/ `oos`（pm:oos）。各 kind 的 `phase`/`verdict` 取值见下方各模板末尾标注。
+> - schema 单源 = `hack/automation/schema/pr-meta.v1.json`；helper = `hack/automation/pr-meta.sh`（`emit-block`/`decode`/`extract`/`round`/`selftest`）。消费侧只接受 canonical 块（派生字段必须 = emit-block 由块自身 facts 重算结果，防伪造）+ 仅信 OWNER/MEMBER/COLLABORATOR 作者评论。**人读 footer 不动其格式**——footer 人读、机器块 dispatch，二者并存。
+> - **kind 列表**：`ship`（pm:ship）/ `fix`（pm:fix）/ `pr-review`（pm:pr-review）/ `ci`（pm:ci）/ `oos`（pm:oos）。phase/verdict/round 派生见上方 `derive_facts` 单源条。
 > - **protocol 健全性测试**：`bash hack/automation/pr-meta.sh selftest`（离线，无网络，make verify 自动触发）。
 
 ## ship 评论（`<!-- pm:ship -->`）
@@ -51,7 +52,7 @@
 
 ---
 🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支> · worktree <路径|—> · session <会话id|—>
-<!-- 机器块占位：贴评论前由 hack/automation/pr-meta.sh emit 生成并追加到此处（kind=ship phase=ship verdict=needs-review-again round=0）；勿手填 base64 -->
+<!-- 机器块占位：贴评论前由 `pr-meta.sh emit-block --kind=ship` 生成追加于此（phase/verdict/round 派生见 §机器块）；勿手填 base64 -->
 ```
 
 ## fix 评论（`<!-- pm:fix -->`，每次 fix 都贴）
@@ -81,7 +82,7 @@
 
 ---
 🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支> · worktree <路径|—> · session <会话id|—>
-<!-- 机器块占位：贴评论前由 hack/automation/pr-meta.sh emit 生成并追加到此处（kind=fix phase=fix verdict=needs-check-fix round=prev+1）；勿手填 base64 -->
+<!-- 机器块占位：贴评论前由 `pr-meta.sh emit-block --kind=fix` 生成追加于此（phase/verdict/round 派生见 §机器块）；勿手填 base64 -->
 ```
 
 ## pr-review 评论（`<!-- pm:pr-review -->`，独立 review 留痕）
@@ -118,7 +119,7 @@
 
 ---
 🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支> · worktree <路径|—> · session <会话id|—>
-<!-- 机器块占位：贴评论前由 hack/automation/pr-meta.sh emit 生成并追加到此处（kind=pr-review phase=review|check verdict=approved|changes-requested|ready round=carry）；勿手填 base64 -->
+<!-- 机器块占位：贴评论前由 `pr-meta.sh emit-block --kind=pr-review --phase=review|check --verdict=<结论>` 生成追加于此（round 派生见 §机器块）；勿手填 base64 -->
 ```
 
 ## pm:ci 评论（`<!-- pm:ci -->`）
@@ -137,7 +138,7 @@
 
 ---
 🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支> · worktree <路径|—> · session <会话id|—>
-<!-- 机器块占位：贴评论前由 hack/automation/pr-meta.sh emit 生成并追加到此处（kind=ci phase=check verdict=ci-green|ci-failed round=carry）；勿手填 base64 -->
+<!-- 机器块占位：贴评论前由 `pr-meta.sh emit-block --kind=ci --ci='<json>'` 生成追加于此（verdict 由 ci.failedChecks 派生，round 派生见 §机器块）；勿手填 base64 -->
 ```
 
 ## pm:oos 评论（`<!-- pm:oos -->`）
@@ -160,5 +161,5 @@
 
 ---
 🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支> · worktree <路径|—> · session <会话id|—>
-<!-- 机器块占位：贴评论前由 hack/automation/pr-meta.sh emit 生成并追加到此处（kind=oos phase=review verdict=oos-filed round=carry；oos.items[] 数组携带各 finding 的 fileLine/rootCause/solutionSeeds）；勿手填 base64 -->
+<!-- 机器块占位：贴评论前由 `pr-meta.sh emit-block --kind=oos --oos='{"items":[…]}'` 生成追加于此（items 各 finding 携 fileLine/rootCause/solutionSeeds；phase/verdict/round 派生见 §机器块）；勿手填 base64 -->
 ```

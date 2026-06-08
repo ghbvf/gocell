@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/ghbvf/gocell/hack/automation/codex-pr-router/codex-review-verdict.schema.json",
   "title": "codex-review-verdict",
-  "description": "JSON Schema for the structured output that codex must emit when invoked with --output-schema. The router reads this JSON and maps it to the pm:pr-review comment template + pr-meta.sh emit block.",
+  "description": "JSON Schema for the structured output that codex must emit when invoked with --output-schema. The router reads this JSON and maps it to the pm:pr-review comment template + pr-meta.sh emit-block call.",
   "type": "object",
   "required": ["verdict", "findings", "counts"],
   "additionalProperties": false,
@@ -66,7 +66,7 @@
       "type": "object",
       "required": ["total", "byP", "byCx"],
       "additionalProperties": false,
-      "description": "Aggregated counts for the pr-review comment header and for the pr-meta.sh emit facts block.",
+      "description": "Aggregated counts for the pr-review comment header and for the pr-meta.sh emit-block findings facts.",
       "properties": {
         "total": {
           "type": "integer",

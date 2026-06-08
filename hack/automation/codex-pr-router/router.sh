@@ -784,40 +784,28 @@ PY
     wt_display="$(basename "${wt}")"
     render_pr_review_body "${out_file}" "${pr}" "${kind}" "${branch}" "${live_oid}" "${wt_display}" "${round}" > "${body_file}"
 
-    # F1: emit machine block — includes required schema fields: tool, findings.{fixed,unresolved,blocking}
-    # handle_review: fixed=0 (review phase hasn't fixed anything), unresolved=$total, blocking=$((p0+p1))
-    local blocking
+    # F1: emit machine block via the shared emit-block funnel (single source of
+    # the kind->phase/verdict/round mapping; pr-meta.sh derive_facts). handle_review:
+    # fixed=0 (review hasn't fixed anything), unresolved=$total, blocking=$((p0+p1)).
+    # The router overrides refs + round-base to preserve its gated live_oid and the
+    # carried round; phase/verdict are the genuine codex review judgment.
+    local blocking findings_json
     blocking=$(( p0 + p1 ))
+    findings_json="$(jq -nc \
+        --argjson total "${total}" --argjson blocking "${blocking}" \
+        --argjson p0 "${p0}" --argjson p1 "${p1}" --argjson p2 "${p2}" --argjson p3 "${p3}" \
+        --argjson cx1 "${cx1}" --argjson cx2 "${cx2}" --argjson cx3 "${cx3}" --argjson cx4 "${cx4}" \
+        '{total:$total,fixed:0,unresolved:$total,blocking:$blocking,
+          byP:{p0:$p0,p1:$p1,p2:$p2,p3:$p3},
+          byCx:{cx1:$cx1,cx2:$cx2,cx3:$cx3,cx4:$cx4}}')"
     local meta_block
-    meta_block="$(jq -nc \
-        --arg repo "${REPO_SLUG}" \
-        --argjson pr "${pr}" \
-        --arg baseRef "develop" \
-        --arg headRef "${branch}" \
-        --arg headSha "${live_oid}" \
-        --arg phase "${kind}" \
-        --arg verdict "${verdict}" \
-        --arg tool "codex" \
-        --argjson round "${round}" \
-        --argjson total "${total}" \
-        --argjson p0 "${p0}" \
-        --argjson p1 "${p1}" \
-        --argjson p2 "${p2}" \
-        --argjson p3 "${p3}" \
-        --argjson cx1 "${cx1}" \
-        --argjson cx2 "${cx2}" \
-        --argjson cx3 "${cx3}" \
-        --argjson cx4 "${cx4}" \
-        --argjson blocking "${blocking}" \
-        '{kind:"pr-review",phase:$phase,verdict:$verdict,repo:$repo,pr:$pr,
-          tool:$tool,
-          baseRef:$baseRef,headRef:$headRef,headSha:$headSha,session:null,worktree:null,
-          findings:{total:$total,fixed:0,unresolved:$total,blocking:$blocking,
-                    byP:{p0:$p0,p1:$p1,p2:$p2,p3:$p3},
-                    byCx:{cx1:$cx1,cx2:$cx2,cx3:$cx3,cx4:$cx4}},
-          cycle:{round:$round}}' \
-        | bash "${PR_META}" emit)" || {
-        log "PR #${pr}: pr-meta emit failed; skipping"
+    meta_block="$(bash "${PR_META}" emit-block \
+        --kind=pr-review --pr="${pr}" --tool=codex \
+        --phase="${kind}" --verdict="${verdict}" \
+        --head-sha="${live_oid}" --base-ref=develop --head-ref="${branch}" \
+        --round-base="${round}" --session= --worktree= \
+        --findings="${findings_json}")" || {
+        log "PR #${pr}: pr-meta emit-block failed; skipping"
         rm -f "${out_file}" "${body_file}"
         return 0
     }
@@ -1140,25 +1128,22 @@ codex 自动修复了 ${cx1} 个 Cx1 finding。
 🤖 PR #${pr} · Generated with Codex · branch ${branch} · session —
 FIXBODY
 
+    # emit-block funnel: kind=fix derives phase=fix / verdict=needs-check-fix /
+    # round=round-base+1 (== new_round). The router passes only its gated facts
+    # (pushed_oid head-sha, base round) + findings; the mapping is no longer
+    # hand-encoded here.
+    local fix_findings
+    fix_findings="$(jq -nc --argjson total "${total}" --argjson cx1 "${cx1}" \
+        '{total:$total,fixed:$cx1,unresolved:0,blocking:0,
+          byP:{p0:0,p1:0,p2:0,p3:0},
+          byCx:{cx1:$cx1,cx2:0,cx3:0,cx4:0}}')"
     local meta_block
-    meta_block="$(jq -nc \
-        --arg tool "codex" \
-        --arg repo "${REPO_SLUG}" \
-        --argjson pr "${pr}" \
-        --arg headRef "${branch}" \
-        --arg headSha "${pushed_oid}" \
-        --argjson round "${new_round}" \
-        --argjson total "${total}" \
-        --argjson cx1_count "${cx1}" \
-        '{kind:"fix",phase:"fix",verdict:"needs-check-fix",repo:$repo,pr:$pr,
-          tool:$tool,
-          baseRef:"develop",headRef:$headRef,headSha:$headSha,session:null,worktree:null,
-          findings:{total:$total,fixed:$cx1_count,unresolved:0,blocking:0,
-                    byP:{p0:0,p1:0,p2:0,p3:0},
-                    byCx:{cx1:$cx1_count,cx2:0,cx3:0,cx4:0}},
-          cycle:{round:$round}}' \
-        | bash "${PR_META}" emit)" || {
-        log "PR #${pr}: pr-meta emit for fix comment failed"
+    meta_block="$(bash "${PR_META}" emit-block \
+        --kind=fix --pr="${pr}" --tool=codex \
+        --head-sha="${pushed_oid}" --base-ref=develop --head-ref="${branch}" \
+        --round-base="${round}" --session= --worktree= \
+        --findings="${fix_findings}")" || {
+        log "PR #${pr}: pr-meta emit-block for fix comment failed"
         rm -f "${body_file}"
         return 0
     }

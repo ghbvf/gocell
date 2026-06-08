@@ -34,7 +34,7 @@ The fix path always uses codex workspace-write and is **dormant by default**
 | `golangci-lint` on `PATH` (optional) | Lint guard in the fix path |
 | `git` on `PATH` | Worktree management |
 | `python3` on `PATH` | JSON rendering in the review comment builder |
-| `jq` on `PATH` | JSON construction for `pr-meta.sh emit` |
+| `jq` on `PATH` | facts JSON construction inside `pr-meta.sh emit-block` |
 
 ---
 

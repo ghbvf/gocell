@@ -1,7 +1,7 @@
 ---
 name: fix
-description: "问题诊断与修复: 验证+根因+复杂度分级+修复方案+backlog登记。当用户说'这个问题存在吗''帮我分析这个bug''诊断一下这个模块''修复这个问题'时触发。输入优先 PR 号（自动读 PR 评论），也支持 issue 号 / 文件:行号 / 自然语言；多 findings 自动批量。"
-argument-hint: "<#PR | #issue | 文件:行号 | 问题描述>"
+description: "问题诊断与修复: 验证+根因+复杂度分级+修复方案+backlog登记。当用户说'这个问题存在吗''帮我分析这个bug''诊断一下这个模块''修复这个问题'时触发。输入优先 PR 号（自动读 PR 评论），也支持 文件:行号 / 自然语言；多 findings 自动批量。issue 号不再受理——issue triage 走 `issues` 技能（建议 /ship 或 close）。"
+argument-hint: "<#PR | 文件:行号 | 问题描述>"
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 ---
 
@@ -12,7 +12,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 ---
 
 ## 输入解析
-优先级：**PR 号**（裸数字先按 PR 试 → `gh pr view <N> --json reviews,comments` 读对话评论 + review 摘要（每条带 body/id/url/createdAt）；再 `gh api repos/ghbvf/gocell/pulls/<N>/comments --jq length` 探 inline review comments，>0 则 `gh api .../pulls/<N>/comments` 一并读入（codex/人的 inline finding 不静默漏），=0（本仓常态）跳过；**只取最新一轮**——按 createdAt 倒序，跳过自己上一轮的 `pm:ship`/`pm:fix` 留痕（已处理），取最近一批 **review findings**：codex review/comment 或 `/pr-review` 贴的 `pm:pr-review` 无损详表（二者都是 fix 的 findings 源），**不回头处理上一轮已 triage 的 findings**）> **issue 号**（`gh issue view`，404 停）> **文件:行号** > **自然语言**（Grep/Glob）。
+优先级：**PR 号**（裸数字先按 PR 试 → `gh pr view <N> --json reviews,comments` 读对话评论 + review 摘要（每条带 body/id/url/createdAt）；再 `gh api repos/ghbvf/gocell/pulls/<N>/comments --jq length` 探 inline review comments，>0 则 `gh api .../pulls/<N>/comments` 一并读入（codex/人的 inline finding 不静默漏），=0（本仓常态）跳过；**只取最新一轮**——按 createdAt 倒序，跳过自己上一轮的 `pm:ship`/`pm:fix` 留痕（已处理），取最近一批 **review findings**：codex review/comment 或 `/pr-review` 贴的 `pm:pr-review` 无损详表（二者都是 fix 的 findings 源），**不回头处理上一轮已 triage 的 findings**）> **文件:行号** > **自然语言**（Grep/Glob）。**issue 号不再受理**——裸数字一律先按 PR 解析；issue 状态核查 + triage 收敛到 `issues` 技能（判定后建议 `/ship #<N>` 或 file:line）。
 
 ---
 
@@ -248,7 +248,7 @@ go test ./kernel/...                            # 改了 kernel 时
 
 ### 4.6 Git 收尾（测试通过后自动执行）
 
-分四步：先提交代码，再冲突预检（阻塞），再立即收尾（评论 + 状态），最后 CI 异步收敛。issue 写入不产生 git diff，无需"不 commit"概念。
+分四步：先提交代码，再冲突预检（阻塞），再立即收尾（评论 + 状态），最后 CI 异步收敛。
 
 **步骤 1: 提交当前分支代码**
 1. `git add` 修复涉及的代码文件
@@ -256,20 +256,19 @@ go test ./kernel/...                            # 改了 kernel 时
 
 **步骤 2: 冲突预检（阻塞；有 push 时；命令见 `issues` B5 ①）**
 
-push 后先验无文件冲突：冲突 → 先 merge origin/develop --no-edit 解冲突再 push → 回本步重检；通过后**立即**进步骤 3（不等 CI）。纯 issue 路径（无代码 push）跳过本步。
+push 后按 `issues` B5 ① 验无文件冲突；通过后**立即**进步骤 3（不等 CI）。
 
-**步骤 3: 立即收尾（评论 + 状态，不等 CI；按输入类型；命令形态见 `issues` Part B）**
+**步骤 3: 立即收尾（评论 + 状态，不等 CI；命令形态见 `issues` Part B）**
 
-- **输入是 issue 号 + 已修** → 关闭该 issue（`gh issue close`，reason completed，comment 引用 `PR #<NNN>`；N 即输入，不查找）。
-- **输入是 PR 号 + 修完** → 贴 fix 评论（命令 + **回显 comment URL/id** 见 `issues` B4；用 `.github/project-template/pr-comment.md` 的 `<!-- pm:fix -->` 模板：findings triage + 修复结果 + 遗留 IN_SCOPE，**每条带 `file:line` + 证据/根因/建议/方案种子入 `<details>`（无损，供下次 fix / 人工读）**，OUT_OF_SCOPE findings 仅一行指针（`🚦 OUT_OF_SCOPE（详见本 PR 的 pm:oos 评论）`），含 footer）。**追加机器块**（贴评论前；约定见 `pr-comment.md` §机器块）：先取轮次 `r=$(bash hack/automation/pr-meta.sh round <PR#>)`，用 `jq -nc` 构造**事实** JSON（`kind:"fix",phase:"fix",tool:"claude-code",verdict:"needs-check-fix",cycle:{round: (r+1)}` + `repo/pr/baseRef/headRef/headSha`（`git rev-parse HEAD`）`/session/worktree` + `findings` 计数，**不写 `next`**）`| bash hack/automation/pr-meta.sh emit`，输出单行追加到 `pm:fix` body 末尾，再走 `issues` B4 贴评论。再 `gh pr edit` 切 `pr-status/needs-check-fix`（移除 `pr-status/needs-fix`；待 `/pr-review --check` 验证；**fix 不再直接到 ready**）——check-side 执行器从此刻可立即开始，无需等待 CI。
-- **OOS findings → 独立 pm:oos 评论**（仅当有 OUT_OF_SCOPE findings 时，紧接在 pm:fix 之后贴）：用 `.github/project-template/pr-comment.md` 的 `<!-- pm:oos -->` 模板，每条 OOS finding 完整无损记录（file:line + 三维根因 + 三级方案种子 + 影响范围 + Files + `gh issue create` 草稿，**不得一句话带过**）。**追加机器块**（贴评论前）：`jq -nc '{"kind":"oos","phase":"review","tool":"claude-code","verdict":"oos-filed","cycle":{"round":('"$r+1"')},...,"oos":{"items":[...]}}' | bash hack/automation/pr-meta.sh emit`，输出追加到 pm:oos body 末尾，再走 `issues` B4 贴评论。
-- **未修 / 待办 finding**（非 OOS 的 Cx3+/RELATED deferred）→ §沟通规则闸门输出 `gh issue create` 建议命令（确认后跑，留 open；label = `backlog` + `pri-pX` + `area-XX` + `type-XX`；body 按 `.github/project-template/backlog.md` 的字段映射**无损**填充——现状←证据+三维根因+影响 / 修复方向←三级方案种子 / Files←file:line 全集 / Source←`PR #<N> finding <Fk>`，**不得一句话带过**；条件延后型加 `flag-cond` + Trigger，派生注明 `Discovered via /fix #<original>`）。
+- **修完** → 贴 fix 评论（命令 + **回显 comment URL/id** 见 `issues` B4；用 `<!-- pm:fix -->` 模板：findings triage + 修复结果 + 遗留 IN_SCOPE，无损写入（约定见 `pr-comment.md`：每条带 `file:line` + 详表入 `<details>`），OUT_OF_SCOPE 仅一行指针（`🚦 OUT_OF_SCOPE（详见本 PR 的 pm:oos 评论）`），含 footer）。**追加机器块**（贴评论前，接口见 `pr-comment.md` §机器块）：`bash hack/automation/pr-meta.sh emit-block --kind=fix --pr=<PR#> --findings='<计数 json>'`（phase/verdict/round 全派生），输出单行追加到 `pm:fix` body 末尾，再走 `issues` B4 贴。再 `gh pr edit` 切 `pr-status/needs-check-fix`（移除 `pr-status/needs-fix`；待 `/pr-review --check` 验证；**fix 不再直接到 ready**）——check-side 执行器从此刻可立即开始，无需等待 CI。
+- **OOS findings → 独立 pm:oos 评论**（仅当有 OUT_OF_SCOPE findings 时，紧接在 pm:fix 之后贴）：用 `<!-- pm:oos -->` 模板，每条 OOS finding 完整无损记录（字段映射见 `pr-comment.md` / `backlog.md`，不得一句话带过）。**追加机器块**（贴评论前）：`bash hack/automation/pr-meta.sh emit-block --kind=oos --pr=<PR#> --oos='{"items":[…]}'`，输出追加到 pm:oos body 末尾，再走 `issues` B4 贴。
+- **未修 / 待办 finding**（非 OOS 的 Cx3+/RELATED deferred）→ §沟通规则闸门输出 `gh issue create` 建议命令（确认后跑，留 open；label = `backlog` + `pri-pX` + `area-XX` + `type-XX`；body 按 `backlog.md` 顶部字段映射**无损**填充，不得一句话带过；条件延后型加 `flag-cond` + Trigger，派生注明 `Discovered via /fix #<original>`）。
 
 Priority：review finding 用原 `[P0-P3]`；`/fix` 派生默认 `pri-p2`；`pri-p0` 仅 incident（线上故障/数据完整性/CVE），停下 AskUserQuestion 确认。建 issue 必须显式 `--label pri-pX`。
 
 **步骤 4: CI 异步收敛（非阻塞，步骤 3 完成后执行；有 push 时；命令见 `issues` B5 ②）**
 
-等 CI 收敛（典型 ~5-6 min）：失败则回阶段 1-4 修复循环（定位 → 修 → commit → push）再等，**最多 3 轮**；CI 收敛后**贴独立 pm:ci 评论**（用 `.github/project-template/pr-comment.md` 的 `<!-- pm:ci -->` 模板）：全绿 → `verdict=ci-green`；3 轮仍红 → `verdict=ci-failed`（含失败 check 摘要 + run 链接）+ 停下交人工。**追加机器块**（贴评论前）：先取 `r=$(bash hack/automation/pr-meta.sh round <PR#>)`，`jq -nc '{"kind":"ci","phase":"check","tool":"claude-code","verdict":"ci-green"|"ci-failed","cycle":{"round":('"$r+1"')},...,"findings":{"total":0,"fixed":0,"unresolved":0,"blocking":0,"byP":{"p0":0,"p1":0,"p2":0,"p3":0},"byCx":{"cx1":0,"cx2":0,"cx3":0,"cx4":0}},"ci":{"conclusion":"success"|"failure","failedChecks":[{"name":"...","url":"..."}],"passedChecks":<n>,"totalChecks":<m>}}' | bash hack/automation/pr-meta.sh emit`，输出追加到 pm:ci body 末尾，再走 `issues` B4 贴评论。
+按 `issues` B5 ② 等 CI 收敛 + 失败回阶段 1-4 修复循环再推再等（时限 / 3 轮熔断单源在 B5 ②）；CI 收敛后**贴独立 pm:ci 评论**（用 `<!-- pm:ci -->` 模板）：全绿 → `verdict=ci-green`；B5 ② 熔断仍红 → `verdict=ci-failed`（含失败 check 摘要 + run 链接）。**追加机器块**（贴评论前）：`bash hack/automation/pr-meta.sh emit-block --kind=ci --pr=<PR#> --ci='{"failedChecks":[…],"passedChecks":<n>,"totalChecks":<m>}'`，输出追加到 pm:ci body 末尾，再走 `issues` B4 贴。
 
 **步骤 5: ScheduleWakeup hook**（所有评论 + label 操作全部完成后）：宿主 LLM 启动 `ScheduleWakeup`（delay ≈ 1800s），调用 `/pr-monitor <PR#>`（report-mode，监控 check-side 进展，等待 `--check` 验证结论）。`pr-monitor` 是 Batch 3 同 PR 落地的新技能。
 
@@ -279,13 +278,13 @@ Priority：review finding 用原 `[P0-P3]`；`/fix` 派生默认 `pri-p2`；`pri
 
 ## 阶段 5: 输出 + 验证
 
-**窗口打印诊断 / 修复报告是主输出**；pm:fix 评论（4.6 已贴）是无损留痕，两者都要做（对齐 `pr-review` 阶段 5/6 的"窗口=主输出、评论=留痕"约定）。
+窗口打印诊断 / 修复报告是主输出、pm:fix 评论（4.6 已贴）是无损留痕，两者都做（输出纪律单源见 `PROJECT.md` §5）。
 
 - 诊断报告（未修）
 - 修复报告（已修）
 - 批量验证（审查报告）
 
-**验证**（4.6 已执行，此处复核，不再查找）：issue-输入 → 核对该 issue 已 closed + comment 引用 PR（`gh issue view <N>`）；PR-输入 → 核对 fix 评论 + `pr-status` 已切；未修/派生 → create 建议命令已输出待确认。
+**验证**（4.6 已执行，此处复核，不再查找）：核对 fix 评论 + `pr-status` 已切；未修/派生 → create 建议命令已输出待确认。
 
 ---
 
