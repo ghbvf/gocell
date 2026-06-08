@@ -229,7 +229,7 @@ func (s *Service) rejectEmptyTenant(
 	principal outbox.PrincipalMetadata, entry outbox.Entry, logPrefix string,
 ) (outbox.HandleResult, bool) {
 	if principal.TenantID != "" {
-		return outbox.HandleResult{}, false
+		return outbox.Ack(), false
 	}
 	s.logger.Error(logPrefix+": empty tenant on business audit event — rejecting",
 		slog.String("event_id", entry.ID()),

@@ -38,6 +38,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
@@ -170,7 +171,7 @@ func TestPhase6_ConfigEventSettlementWrapper_RecordsRetryExhausted(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, bus.Publish(context.Background(), topic, env))
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "config-event-settlement-observer-retry-exhausted", func() bool {
 		rec, ok := collector.last()
 		return ok && rec.disposition == "reject" && rec.result == outbox.SettlementResultRetryExhausted
 	}, testtime.D2s, testtime.D10ms,

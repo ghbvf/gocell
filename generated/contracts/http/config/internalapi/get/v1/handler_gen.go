@@ -80,6 +80,7 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		req.Key = v
 	}
+	req.XTenantID = r.Header.Get("X-Tenant-ID")
 	resp, err := h.svc.Get(r.Context(), req)
 	if err != nil {
 		httputil.WriteError(r.Context(), w, err)

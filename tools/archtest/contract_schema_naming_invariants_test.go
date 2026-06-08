@@ -54,9 +54,13 @@ import (
 // updating this list turns that probe red.
 var contractRootBases = []string{
 	"contracts",
+	"examples/corebundlestarter/contracts",
+	"examples/demo/contracts",
 	"examples/iotdevice/contracts",
 	"examples/orderfulfillment/contracts",
+	"examples/ssobff/contracts",
 	"examples/todoorder/contracts",
+	"examples/webhookdemo/contracts",
 }
 
 // contractRoots returns the relative paths archtest should scan for contract

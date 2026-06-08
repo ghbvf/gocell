@@ -337,11 +337,7 @@ func scanIdemStateAssignments(p *Pass) []Diagnostic {
 			if gd.Tok != token.VAR {
 				return
 			}
-			for _, spec := range gd.Specs {
-				vs, ok := spec.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
+			EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
 				for i, val := range vs.Values {
 					if i >= len(vs.Names) {
 						continue
@@ -354,7 +350,7 @@ func scanIdemStateAssignments(p *Pass) []Diagnostic {
 					}
 					diags = append(diags, idemStateAssignDiag(p, rel, val))
 				}
-			}
+			})
 		})
 		EachInSubtree[ast.AssignStmt](file, func(as *ast.AssignStmt) {
 			for i, rhs := range as.Rhs {

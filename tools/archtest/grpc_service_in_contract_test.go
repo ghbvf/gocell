@@ -228,19 +228,15 @@ func extractGRPCContractIDs(f *ast.File, info *types.Info) []string {
 		if !ok {
 			return
 		}
-		for _, elt := range lit.Elts {
-			kv, ok := elt.(*ast.KeyValueExpr)
-			if !ok {
-				continue
-			}
+		EachInChildren[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
 			key, ok := kv.Key.(*ast.Ident)
 			if !ok || key.Name != "ContractID" {
-				continue
+				return
 			}
 			if id, ok := EvaluateConstString(info, kv.Value); ok && id != "" {
 				ids = append(ids, id)
 			}
-		}
+		})
 	})
 	return ids
 }

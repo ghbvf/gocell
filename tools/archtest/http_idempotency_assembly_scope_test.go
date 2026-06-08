@@ -663,16 +663,13 @@ func checkConstructorRequiredUse(spec constructorSpec, fn *ast.FuncDecl) []strin
 	taint := map[string]uint{}
 	tokensOf := func(expr ast.Expr) uint {
 		var bits uint
-		ast.Inspect(expr, func(n ast.Node) bool {
-			if id, ok := n.(*ast.Ident); ok {
-				for bit, name := range src {
-					if name != "" && id.Name == name {
-						bits |= 1 << bit
-					}
+		EachInSubtree[ast.Ident](expr, func(id *ast.Ident) {
+			for bit, name := range src {
+				if name != "" && id.Name == name {
+					bits |= 1 << bit
 				}
-				bits |= taint[id.Name]
 			}
-			return true
+			bits |= taint[id.Name]
 		})
 		return bits
 	}
@@ -682,15 +679,21 @@ func checkConstructorRequiredUse(spec constructorSpec, fn *ast.FuncDecl) []strin
 		rhs  ast.Expr
 	}
 	var edges []edge
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		if as, ok := n.(*ast.AssignStmt); ok && len(as.Lhs) == len(as.Rhs) {
+	EachInSubtree[ast.AssignStmt](fn.Body, func(as *ast.AssignStmt) {
+		if len(as.Lhs) != len(as.Rhs) {
+			return
+		}
+		EachInChildren[ast.Ident](as, func(id *ast.Ident) {
+			if id.Pos() > as.TokPos {
+				return
+			}
 			for i, lhs := range as.Lhs {
-				if id, ok := lhs.(*ast.Ident); ok {
+				if lhs.Pos() == id.Pos() {
 					edges = append(edges, edge{sink: id.Name, rhs: as.Rhs[i]})
+					return
 				}
 			}
-		}
-		return true
+		})
 	})
 	edges = append(edges, edge{sink: nsSink, rhs: nsExpr}, edge{sink: keySink, rhs: keyExpr})
 
@@ -742,25 +745,24 @@ func checkFlatComposition(spec constructorSpec, params []flatParam, body *ast.Bl
 		}
 	}
 	var v []string
-	ast.Inspect(body, func(n ast.Node) bool {
-		switch x := n.(type) {
-		case *ast.CallExpr:
-			v = append(v, spec.fnName+" body contains a call expression — a helper can launder/drop a "+
-				"param's value while its name still appears, defeating the taint model. The derivation "+
-				"must be a flat concatenation of the params (no calls).")
-		case *ast.SelectorExpr:
-			v = append(v, spec.fnName+" body contains a selector expression — a foreign field/method "+
-				"access can launder a param's value. Use only the params + the noTenantSentinel const.")
-		case *ast.AssignStmt:
-			for _, lhs := range x.Lhs {
-				if id, ok := lhs.(*ast.Ident); ok && paramNames[id.Name] {
-					v = append(v, fmt.Sprintf("%s reassigns param %q — rebinding a param name to a "+
-						"different value defeats the taint model (the name keeps appearing but the original "+
-						"value is lost).", spec.fnName, id.Name))
-				}
+	EachInSubtree[ast.CallExpr](body, func(*ast.CallExpr) {
+		v = append(v, spec.fnName+" body contains a call expression — a helper can launder/drop a "+
+			"param's value while its name still appears, defeating the taint model. The derivation "+
+			"must be a flat concatenation of the params (no calls).")
+	})
+	EachInSubtree[ast.SelectorExpr](body, func(*ast.SelectorExpr) {
+		v = append(v, spec.fnName+" body contains a selector expression — a foreign field/method "+
+			"access can launder a param's value. Use only the params + the noTenantSentinel const.")
+	})
+	EachInSubtree[ast.AssignStmt](body, func(as *ast.AssignStmt) {
+		EachInChildren[ast.Ident](as, func(id *ast.Ident) {
+			if id.Pos() > as.TokPos || !paramNames[id.Name] {
+				return
 			}
-		}
-		return true
+			v = append(v, fmt.Sprintf("%s reassigns param %q — rebinding a param name to a "+
+				"different value defeats the taint model (the name keeps appearing but the original "+
+				"value is lost).", spec.fnName, id.Name))
+		})
 	})
 	return v
 }
@@ -768,26 +770,21 @@ func checkFlatComposition(spec constructorSpec, params []flatParam, body *ast.Bl
 // returnedKeyFields extracts the ns/key field value expressions from the
 // IdempotencyKey composite literal in the function's return statement.
 func returnedKeyFields(body *ast.BlockStmt) (nsExpr, keyExpr ast.Expr, found bool) {
-	ast.Inspect(body, func(n ast.Node) bool {
-		ret, ok := n.(*ast.ReturnStmt)
-		if !ok || len(ret.Results) != 1 {
-			return true
+	_, found = FindFirstInSubtree[ast.ReturnStmt](body, func(ret *ast.ReturnStmt) bool {
+		if len(ret.Results) != 1 {
+			return false
 		}
 		cl, ok := ret.Results[0].(*ast.CompositeLit)
 		if !ok {
-			return true
+			return false
 		}
 		if id, ok := cl.Type.(*ast.Ident); !ok || id.Name != idempotencyKeyTypeName {
-			return true
+			return false
 		}
-		for _, el := range cl.Elts {
-			kv, ok := el.(*ast.KeyValueExpr)
-			if !ok {
-				continue
-			}
+		EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
 			key, ok := kv.Key.(*ast.Ident)
 			if !ok {
-				continue
+				return
 			}
 			switch key.Name {
 			case "ns":
@@ -795,12 +792,8 @@ func returnedKeyFields(body *ast.BlockStmt) (nsExpr, keyExpr ast.Expr, found boo
 			case "key":
 				keyExpr = kv.Value
 			}
-		}
-		if nsExpr != nil && keyExpr != nil {
-			found = true
-			return false
-		}
-		return true
+		})
+		return nsExpr != nil && keyExpr != nil
 	})
 	return
 }

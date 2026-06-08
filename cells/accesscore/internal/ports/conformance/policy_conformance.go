@@ -10,6 +10,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
@@ -41,7 +42,8 @@ func RunPolicyRepoConformance(t *testing.T, factory PolicyRepoFactory) {
 		conformPolicySaveAndGetByID(t, factory)
 	})
 	t.Run("GetByID_NotFound", func(t *testing.T) {
-		conformPolicyGetByIDNotFound(t, factory)
+		err := conformPolicyGetByIDNotFound(t, factory)
+		errcodetest.AssertCode(t, err, errcode.ErrAuthPolicyNotFound)
 	})
 	t.Run("ListByTenant_Empty", func(t *testing.T) {
 		conformPolicyListByTenantEmpty(t, factory)
@@ -53,7 +55,8 @@ func RunPolicyRepoConformance(t *testing.T, factory PolicyRepoFactory) {
 		conformPolicyDeleteSucceeds(t, factory)
 	})
 	t.Run("Delete_NotFound", func(t *testing.T) {
-		conformPolicyDeleteNotFound(t, factory)
+		err := conformPolicyDeleteNotFound(t, factory)
+		errcodetest.AssertCode(t, err, errcode.ErrAuthPolicyNotFound)
 	})
 	t.Run("CrossTenant_Isolation", func(t *testing.T) {
 		conformPolicyCrossTenantIsolation(t, factory)
@@ -134,7 +137,7 @@ func conformPolicySaveAndGetByID(t *testing.T, factory PolicyRepoFactory) {
 	}
 }
 
-func conformPolicyGetByIDNotFound(t *testing.T, factory PolicyRepoFactory) {
+func conformPolicyGetByIDNotFound(t *testing.T, factory PolicyRepoFactory) error {
 	t.Parallel()
 	repo := factory(t)
 	ctx := context.Background()
@@ -144,6 +147,7 @@ func conformPolicyGetByIDNotFound(t *testing.T, factory PolicyRepoFactory) {
 		t.Fatal("GetByID() expected KindNotFound error, got nil")
 	}
 	assertPolicyKind(t, err, "GetByID() nonexistent")
+	return err
 }
 
 func conformPolicyListByTenantEmpty(t *testing.T, factory PolicyRepoFactory) {
@@ -204,7 +208,7 @@ func conformPolicyDeleteSucceeds(t *testing.T, factory PolicyRepoFactory) {
 	assertPolicyKind(t, err, "GetByID() after Delete")
 }
 
-func conformPolicyDeleteNotFound(t *testing.T, factory PolicyRepoFactory) {
+func conformPolicyDeleteNotFound(t *testing.T, factory PolicyRepoFactory) error {
 	t.Parallel()
 	repo := factory(t)
 	ctx := context.Background()
@@ -214,6 +218,7 @@ func conformPolicyDeleteNotFound(t *testing.T, factory PolicyRepoFactory) {
 		t.Fatal("Delete() nonexistent expected KindNotFound, got nil")
 	}
 	assertPolicyKind(t, err, "Delete() nonexistent")
+	return err
 }
 
 func conformPolicyCrossTenantIsolation(t *testing.T, factory PolicyRepoFactory) {

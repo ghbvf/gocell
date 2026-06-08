@@ -24,6 +24,3 @@ payload:
   schemaRef: ./payload.schema.json
   contentType: application/json
   maxBodyBytes: 1048576
-# codegen: true selects this contract for Generate(ScopeAll); webhook still emits
-# zero per-contract artifacts by design (registration goes through cellgen).
-codegen: true

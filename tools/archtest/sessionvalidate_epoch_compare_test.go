@@ -19,7 +19,7 @@ package archtest
 //     stable). The compared value is the session row's AuthzEpochAtIssue
 //     snapshot (row-SoR per ADR §A8) — the access JWT carries no authz_epoch
 //     claim since S4d.
-//  2. Contain a call to a method named GetByID (user repo read to obtain the
+//  2. Contain a call to a method named GetByIDInTenant (user repo read to obtain the
 //     current server-side epoch for comparison).
 //  3. Contain a BinaryExpr with Op == token.NEQ (!=) that references AuthzEpoch
 //     on either side — enforcing that the epoch comparison is a strict inequality
@@ -92,7 +92,7 @@ func bodyContainsEpochInequality(body *ast.BlockStmt) bool {
 // TestSessionvalidateEpochCompare_01 enforces SESSIONVALIDATE-EPOCH-COMPARE-01:
 // the enforceSessionState function in sessionvalidate/service.go must contain:
 //  1. A reference to AuthzEpoch (the epoch field exists in the check).
-//  2. A GetByID call (user repo is read to fetch the server-side epoch).
+//  2. A GetByIDInTenant call (user repo is read to fetch the server-side epoch).
 //  3. A BinaryExpr with Op == token.NEQ (!=) referencing AuthzEpoch — the epoch
 //     comparison must be strict inequality, not a weaker operator like >.
 //
@@ -114,7 +114,7 @@ func TestSessionvalidateEpochCompare_01(t *testing.T) {
 		enforceFuncName, sessionvalidateServiceFile)
 
 	hasAuthzEpoch := bodyContainsSelectorName(body, "AuthzEpoch")
-	hasGetByID := bodyContainsMethodCall(body, "GetByID")
+	hasGetByID := bodyContainsMethodCall(body, "GetByIDInTenant")
 	hasEpochInequality := bodyContainsEpochInequality(body)
 
 	assert.True(t, hasAuthzEpoch,
@@ -122,7 +122,7 @@ func TestSessionvalidateEpochCompare_01(t *testing.T) {
 			"epoch invariant check (user.AuthzEpoch != claims.AuthzEpoch) must not be removed",
 		enforceFuncName, sessionvalidateServiceFile)
 	assert.True(t, hasGetByID,
-		"SESSIONVALIDATE-EPOCH-COMPARE-01: %q in %s must call a method named 'GetByID' — "+
+		"SESSIONVALIDATE-EPOCH-COMPARE-01: %q in %s must call a method named 'GetByIDInTenant' — "+
 			"user repo read is required to obtain the server-side epoch for comparison",
 		enforceFuncName, sessionvalidateServiceFile)
 	assert.True(t, hasEpochInequality,
@@ -134,7 +134,7 @@ func TestSessionvalidateEpochCompare_01(t *testing.T) {
 
 // TestSessionvalidateEpochCompare_RedFixtureDetected verifies the RED fixture
 // (testdata/sessionvalidate_no_epoch_compare_red/service.go) DOES contain AuthzEpoch
-// and GetByID (so those checks pass), but uses > instead of != — proving the
+// and GetByIDInTenant (so those checks pass), but uses > instead of != — proving the
 // new bodyContainsEpochInequality check can detect the wrong operator.
 // This is the "反向 RED 自检" (reverse RED self-check) for the upgraded rule.
 func TestSessionvalidateEpochCompare_RedFixtureDetected(t *testing.T) {
@@ -151,14 +151,14 @@ func TestSessionvalidateEpochCompare_RedFixtureDetected(t *testing.T) {
 	require.NotNil(t, body, "RED fixture must contain function %q", enforceFuncName)
 
 	hasAuthzEpoch := bodyContainsSelectorName(body, "AuthzEpoch")
-	hasGetByID := bodyContainsMethodCall(body, "GetByID")
+	hasGetByID := bodyContainsMethodCall(body, "GetByIDInTenant")
 	hasEpochInequality := bodyContainsEpochInequality(body)
 
-	// The RED fixture has AuthzEpoch and GetByID — those checks pass.
+	// The RED fixture has AuthzEpoch and GetByIDInTenant — those checks pass.
 	assert.True(t, hasAuthzEpoch,
 		"RED fixture self-check: fixture must contain 'AuthzEpoch' selector (it uses >)")
 	assert.True(t, hasGetByID,
-		"RED fixture self-check: fixture must contain 'GetByID' call")
+		"RED fixture self-check: fixture must contain 'GetByIDInTenant' call")
 	// But the fixture uses > not !=, so the inequality check must FAIL.
 	assert.False(t, hasEpochInequality,
 		"RED fixture self-check: fixture must NOT satisfy bodyContainsEpochInequality — "+
@@ -196,7 +196,7 @@ func bodyContainsSelectorName(body *ast.BlockStmt, name string) bool {
 }
 
 // bodyContainsMethodCall reports whether any CallExpr within body has a
-// SelectorExpr Fun where Sel.Name == methodName (e.g. "GetByID").
+// SelectorExpr Fun where Sel.Name == methodName (e.g. "GetByIDInTenant").
 func bodyContainsMethodCall(body *ast.BlockStmt, methodName string) bool {
 	found := false
 	scanner.EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
