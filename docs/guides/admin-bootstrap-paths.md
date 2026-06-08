@@ -1,37 +1,37 @@
 # First-Admin Setup — Single Setup-Driven Path
 
-> 本文档面向**应用层 / 客户端开发者**，回答：
+> This document is for **application-layer / client developers** and answers:
 >
-> - GoCell first-run admin 如何注册？
-> - 客户端收到 setup 端点的 `410 Gone` 时该如何处理？
-> - 日常如何区分 setup 端点的 `400` / `401` / `409` / `410`？
+> - How does GoCell register the first-run admin?
+> - What should a client do when it receives `410 Gone` from the setup endpoint?
+> - How do you distinguish `400` / `401` / `409` / `410` responses from the setup endpoint in day-to-day use?
 >
-> 运维侧的部署细节（env 变量、Docker / K8s 配置、密码重置流程）见 [`docs/ops/first-run-setup.md`](../ops/first-run-setup.md)。
-> 安全边界 ADR 见 [`docs/architecture/202605061600-adr-bootstrap-admin-boundary.md`](../architecture/202605061600-adr-bootstrap-admin-boundary.md)。
+> For operator-side deployment details (env variables, Docker / K8s configuration, password reset procedure), see [`docs/ops/first-run-setup.md`](../ops/first-run-setup.md).
+> For the security boundary ADR, see [`docs/architecture/202605061600-adr-bootstrap-admin-boundary.md`](../architecture/202605061600-adr-bootstrap-admin-boundary.md).
 
 ---
 
 ## 1. Single setup-driven path
 
-`accesscore` Cell 把"创建第一个 admin"建模为一次性事实：admin role 在系统中唯一存在一份，先到者拥有它。GoCell 提供单一路径：
+The `accesscore` Cell models "create the first admin" as a one-time fact: the admin role exists exactly once in the system, and whoever calls first owns it. GoCell provides a single path:
 
-运维启动服务后，通过 `POST /api/v1/access/setup/admin` 引导式创建首个 admin。endpoint 以 HTTP Basic Auth（env 操作员凭据）保护，body 中的 `username` / `email` / `password` 是业务 admin 身份，两者完全独立。
+After the operator starts the service, the first admin is bootstrapped via `POST /api/v1/access/setup/admin`. The endpoint is protected by HTTP Basic Auth (operator credentials from env), and the `username` / `email` / `password` fields in the body are the business admin identity — the two are completely independent.
 
 ```
 env  → GOCELL_BOOTSTRAP_ADMIN_USERNAME / GOCELL_BOOTSTRAP_ADMIN_PASSWORD
-         = operator authenticator（谁有权限发起 setup 请求）
+         = operator authenticator (who is authorized to initiate the setup request)
 
 body → username / email / password
-         = admin user identity（要创建的账号）
+         = admin user identity (the account to create)
 ```
 
-`POST /api/v1/access/setup/admin` 的密码必须是 8-72 个可打印 ASCII 字节，与 bcrypt 72-byte 输入上限一致。
+The password in `POST /api/v1/access/setup/admin` must be 8–72 printable ASCII bytes, consistent with bcrypt's 72-byte input limit.
 
-admin 创建后 setup endpoint 永久返回 410 Gone（Basic Auth 通过后）。env 凭据是持久 operator authenticator，admin 创建后不可删除。
+Once the admin is created, the setup endpoint permanently returns 410 Gone (after Basic Auth passes). The env credentials are a persistent operator authenticator and cannot be removed after the admin is created.
 
 ---
 
-## 2. 完整流
+## 2. Full flow
 
 ```
 [startup]
@@ -40,19 +40,19 @@ admin 创建后 setup endpoint 永久返回 410 Gone（Basic Auth 通过后）�
   start gocell
 
 [accesscore]
-  → 校验 env 凭据（空则 fail-fast）
-  → setup/admin endpoint 以 HTTP Basic Auth 保护
+  → validates env credentials (empty = fail-fast)
+  → setup/admin endpoint protected by HTTP Basic Auth
 
-[运维操作]
+[operator action]
   POST /api/v1/access/setup/admin
   Authorization: Basic <base64(ops:OpsPass123!)>
   { "username":"admin","email":"admin@corp.example","password":"AdminPass456!" }
   → 201 Created
 
-[再次调用 setup/admin]
-  → 410 Gone（永久；Basic Auth 通过后；未通过仍 401）
+[calling setup/admin again]
+  → 410 Gone (permanent; after Basic Auth passes; 401 if auth fails)
 
-[用业务凭据登录]
+[login with business credentials]
   POST /api/v1/access/sessions/login
   { "username": "admin", "password": "AdminPass456!" }
   → 201 Created + access/refresh tokens
@@ -60,20 +60,20 @@ admin 创建后 setup endpoint 永久返回 410 Gone（Basic Auth 通过后）�
 
 ---
 
-## 3. curl 示例
+## 3. curl Examples
 
 ```bash
 OPS_USER="ops"
 OPS_PASS="OpsPass123!"
 
-# 设置 admin（HTTP Basic Auth 验证操作员身份）
+# Set up admin (HTTP Basic Auth verifies operator identity)
 curl -sS -X POST https://gocell.example/api/v1/access/setup/admin \
   -u "${OPS_USER}:${OPS_PASS}" \
   -H 'content-type: application/json' \
   -d '{"username":"admin","email":"admin@corp.example","password":"AdminPass456!"}'
 # 201 Created
 
-# admin 已存在时
+# When admin already exists
 curl -sS -X POST https://gocell.example/api/v1/access/setup/admin \
   -u "${OPS_USER}:${OPS_PASS}" \
   -H 'content-type: application/json' \
@@ -81,9 +81,9 @@ curl -sS -X POST https://gocell.example/api/v1/access/setup/admin \
 # {"error":{"code":"ERR_SETUP_ALREADY_INITIALIZED","message":"first-run admin already provisioned; this endpoint is retired","details":[{"key":"nextAction","value":"login"}]}}
 ```
 
-## 4. K8s Secret 滚动轮换
+## 4. K8s Secret Rolling Rotation
 
-operator 凭据轮换走滚动替换 K8s Secret + restart：
+Rotate operator credentials via a rolling K8s Secret replacement + restart:
 
 ```bash
 kubectl create secret generic gocell-bootstrap \
@@ -95,9 +95,9 @@ kubectl rollout status deployment/gocell
 
 ---
 
-## 5. `410 Gone` 响应 body 示例
+## 5. `410 Gone` Response Body Example
 
-setup 端点退休后，所有 `POST /api/v1/access/setup/admin` 请求得到统一形态的错误信封：
+Once the setup endpoint is retired, all `POST /api/v1/access/setup/admin` requests receive a uniform error envelope:
 
 ```json
 {
@@ -111,14 +111,14 @@ setup 端点退休后，所有 `POST /api/v1/access/setup/admin` 请求得到统
 }
 ```
 
-- `details` 是 `array<{key,value}>`（共享 envelope `contracts/shared/errors/error-response-v1.schema.json`），客户端按 key 匹配条目而非 map 索引
-- `details` 上只暴露语义动词 `nextAction`，不嵌入任何 HTTP path 字面量
-- login 端点的实际路径由 contract 定义（`http.auth.login.v1`），客户端通过 OpenAPI / contract registry / 自身路由表解析
-- 该响应跨部署稳定——即便 sessions/login 路径未来改版，410 body 字段不变
+- `details` is an `array<{key,value}>` (shared envelope `contracts/shared/errors/error-response-v1.schema.json`); clients match entries by key, not by map index
+- `details` only exposes the semantic verb `nextAction`; no HTTP path literals are embedded
+- The actual path of the login endpoint is defined by the contract (`http.auth.login.v1`); clients resolve it via OpenAPI, a contract registry, or their own routing table
+- This response is stable across deployments — even if the sessions/login path changes in a future version, the 410 body fields remain unchanged
 
 ---
 
-## 6. Go 客户端伪代码
+## 6. Go Client Pseudocode
 
 ```go
 type errDetail struct {
@@ -151,7 +151,7 @@ func provisionOrLogin(ctx context.Context, c *Client, in AdminSeed) error {
     defer resp.Body.Close()
 
     if resp.StatusCode == http.StatusCreated {
-        return nil // 我们就是首位 admin
+        return nil // we are the first admin
     }
     if resp.StatusCode != http.StatusGone {
         return fmt.Errorf("setup: unexpected status %d", resp.StatusCode)
@@ -164,25 +164,25 @@ func provisionOrLogin(ctx context.Context, c *Client, in AdminSeed) error {
     if v, ok := env.detail("nextAction"); !ok || v != "login" {
         return fmt.Errorf("setup: 410 with unexpected nextAction %v", env.Error.Details)
     }
-    // login 路径由 contract registry 提供，不读 410 body 上的字面量
+    // login path is provided by the contract registry, not read from the 410 body literal
     return c.LoginByContractID(ctx, "http.auth.login.v1", in.LoginCreds())
 }
 ```
 
 ---
 
-## 7. `400` / `401` / `409` / `410` 区分
+## 7. Distinguishing `400` / `401` / `409` / `410`
 
-| 状态 | errcode | 触发条件 | 客户端建议处理 |
+| Status | errcode | Trigger condition | Recommended client handling |
 |---|---|---|---|
-| **400** | `ERR_AUTH_IDENTITY_INVALID_INPUT` | 请求体字段缺失、超长、非可打印 ASCII 密码、控制字符 | 校验输入 → 提示用户 → 重发 |
-| **400** | `ERR_VALIDATION_FAILED` | JSON malformed、未知字段、Content-Type 错误 | 修请求体格式 → 重发 |
-| **401** | `ERR_AUTH_BOOTSTRAP_FAILED` | Basic Auth 凭据错误 | 核对 env 操作员凭据；不要自动重试（防枚举） |
-| **409** | `ERR_AUTH_USER_DUPLICATE` | 请求 username 已被其他 user 占用，但还没成为 admin | 换 username → 重试；不要静默 retry 同名 |
-| **410** | `ERR_SETUP_ALREADY_INITIALIZED` | Basic Auth 通过 + admin role 已有 user | 进入 login 流；**不要重试 setup**；视为终态 |
-| **429** | `ERR_RATE_LIMITED` | per-IP rate limit 触发（默认 5 req/min, burst 10） | 等待 rate limit 窗口；检查请求来源 |
+| **400** | `ERR_AUTH_IDENTITY_INVALID_INPUT` | Missing body fields, field too long, non-printable ASCII password, control characters | Validate input → prompt user → retry |
+| **400** | `ERR_VALIDATION_FAILED` | Malformed JSON, unknown fields, wrong Content-Type | Fix request body format → retry |
+| **401** | `ERR_AUTH_BOOTSTRAP_FAILED` | Basic Auth credentials incorrect | Verify env operator credentials; do not auto-retry (prevents enumeration) |
+| **409** | `ERR_AUTH_USER_DUPLICATE` | Requested username is taken by another user, but that user is not yet admin | Change username → retry; do not silently retry with the same name |
+| **410** | `ERR_SETUP_ALREADY_INITIALIZED` | Basic Auth passed + admin role already has a user | Proceed to login flow; **do not retry setup**; treat as terminal state |
+| **429** | `ERR_RATE_LIMITED` | Per-IP rate limit triggered (default 5 req/min, burst 10) | Wait for the rate limit window; check request origin |
 
-判定顺序：
+Decision order:
 
 ```
         ┌────────────────────────────┐
@@ -190,38 +190,38 @@ func provisionOrLogin(ctx context.Context, c *Client, in AdminSeed) error {
         └──────────┬─────────────────┘
                    │
        ┌───────────┴────────────┐
-       │ rate limit 通过?       │
+       │ Rate limit passed?     │
        └────┬──────────────┬────┘
-            │ 否            │ 是
+            │ No            │ Yes
             ▼              ▼
          429 Too Many     ┌──────────────────┐
-         Requests         │ Basic Auth 通过? │
+         Requests         │ Basic Auth OK?   │
                           └────┬──────────┬──┘
-                               │ 否        │ 是
+                               │ No        │ Yes
                                ▼          ▼
                           401 Unauthorized ┌────────────────────┐
-                                           │ admin 已存在?       │
+                                           │ Admin exists?      │
                                            └────┬──────────┬────┘
-                                                │ 否        │ 是
+                                                │ No        │ Yes
                                                 ▼          ▼
-                                       ┌────────────────┐  410 Gone（终态）
-                                       │ 输入合法?      │
+                                       ┌────────────────┐  410 Gone (terminal)
+                                       │ Input valid?   │
                                        └─┬──────────┬───┘
-                                         │ 否        │ 是
+                                         │ No        │ Yes
                                          ▼          ▼
                                        400 Bad    ┌─────────────────┐
-                                       Request    │ username 已占?   │
+                                       Request    │ Username taken? │
                                                   └─┬───────────┬───┘
-                                                    │ 是         │ 否
+                                                    │ Yes        │ No
                                                     ▼           ▼
                                                  409 Conflict  201 Created
 ```
 
 ---
 
-## 8. 相关文档
+## 8. Related Documentation
 
-- [`docs/ops/first-run-setup.md`](../ops/first-run-setup.md) — 环境变量配置、Docker / K8s 部署细节、密码重置流程
-- [`docs/architecture/202605061600-adr-bootstrap-admin-boundary.md`](../architecture/202605061600-adr-bootstrap-admin-boundary.md) — 安全边界 ADR（D1–D5）
-- [`contracts/http/auth/setup/admin/v1/contract.yaml`](../../contracts/http/auth/setup/admin/v1/contract.yaml) — setup admin 端点契约（含 400 / 401 / 409 / 410 声明）
-- [`contracts/http/auth/setup/status/v1/contract.yaml`](../../contracts/http/auth/setup/status/v1/contract.yaml) — setup status 端点契约
+- [`docs/ops/first-run-setup.md`](../ops/first-run-setup.md) — Environment variable configuration, Docker / K8s deployment details, password reset procedure
+- [`docs/architecture/202605061600-adr-bootstrap-admin-boundary.md`](../architecture/202605061600-adr-bootstrap-admin-boundary.md) — Security boundary ADR (D1–D5)
+- [`contracts/http/auth/setup/admin/v1/contract.yaml`](../../contracts/http/auth/setup/admin/v1/contract.yaml) — Setup admin endpoint contract (includes 400 / 401 / 409 / 410 declarations)
+- [`contracts/http/auth/setup/status/v1/contract.yaml`](../../contracts/http/auth/setup/status/v1/contract.yaml) — Setup status endpoint contract

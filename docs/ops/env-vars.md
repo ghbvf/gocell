@@ -24,7 +24,7 @@ Missing required variables cause fail-fast before any assembly initialization.
 
 | Variable | Purpose | Default | Required | Notes |
 |---|---|---|---|---|
-| `GOCELL_SERVICE_SECRET` | HMAC-SHA256 secret (≥ 32 bytes) for `ServiceTokenMiddleware` protecting `/internal/v1/*` | — | **All modes** | Introduced in PR #AUTH-TRUST-BOUNDARY-160 (C6). Value is used as raw UTF-8 bytes (not base64-decoded); any UTF-8 string of ≥ 32 bytes is acceptable. Recommended generators: `openssl rand -base64 32` → 44 printable chars (base64 padded), used as raw bytes; `openssl rand -hex 32` → 64 hex chars, used as raw bytes. Both meet the 32-byte minimum. Startup fails fast with `ERR_CONTROLPLANE_SERVICE_SECRET_MISSING` in every adapter mode if the env var is empty. PR-A25: when the guard is installed, a replay-defense `NonceStore` is wired automatically so a captured token cannot be replayed within `auth.ServiceTokenNonceTTL` (currently 5 min 30 sec). Real-mode startup also fails fast with `ERR_CONTROLPLANE_NONCE_STORE_MISSING` if the guard was somehow wired without a replay-safe store. Single-pod real deployments may use the in-memory store by setting `GOCELL_SINGLE_POD=1`; real multi-pod deployments must configure Redis with `GOCELL_REDIS_ADDR` so nonce replay protection and outbox idempotency are distributed across pods. |
+| `GOCELL_SERVICE_SECRET` | HMAC-SHA256 secret (≥ 32 bytes) for `ServiceTokenMiddleware` protecting `/internal/v1/*` | — | **All modes** | Value is used as raw UTF-8 bytes (not base64-decoded); any UTF-8 string of ≥ 32 bytes is acceptable. Recommended generators: `openssl rand -base64 32` → 44 printable chars (base64 padded), used as raw bytes; `openssl rand -hex 32` → 64 hex chars, used as raw bytes. Both meet the 32-byte minimum. Startup fails fast with `ERR_CONTROLPLANE_SERVICE_SECRET_MISSING` in every adapter mode if the env var is empty. When the guard is installed, a replay-defense `NonceStore` is wired automatically so a captured token cannot be replayed within `auth.ServiceTokenNonceTTL` (currently 5 min 30 sec). Real-mode startup also fails fast with `ERR_CONTROLPLANE_NONCE_STORE_MISSING` if the guard was somehow wired without a replay-safe store. Single-pod real deployments may use the in-memory store by setting `GOCELL_SINGLE_POD=1`; real multi-pod deployments must configure Redis with `GOCELL_REDIS_ADDR` so nonce replay protection and outbox idempotency are distributed across pods. |
 | `GOCELL_SERVICE_SECRET_PREVIOUS` | Previous HMAC secret for zero-downtime rotation | — | No | Optional; tried after current secret fails verification. |
 | `GOCELL_SINGLE_POD` | Acknowledges that the deployment is single-pod and in-memory replay protection is sufficient | — | **Real mode** (when using default in-memory NonceStore) | Must be `1` in single-pod real-mode deployments to acknowledge in-memory replay defence scope; otherwise startup fails fast with `ERR_CONTROLPLANE_NONCE_STORE_MISSING`. Multi-pod deployments leave unset and configure Redis via `GOCELL_REDIS_ADDR` or `GOCELL_REDIS_CLUSTER_ADDRS` instead. |
 
@@ -36,13 +36,13 @@ Missing required variables cause fail-fast before any assembly initialization.
 2. **Outbox idempotency claiming** (`_runtime` namespace): distributed `Claim/Commit/Release` fencing for event consumer deduplication across pods.
 3. **HTTP idempotency replay store** (`_runtime` namespace, key-space `<tenantID>:{<key>}:lease` / `:resp` / `:fp`): records response blobs for `Idempotency-Key` header replay (≤ 256 KiB per unique request, 24h TTL). **Memory model**: plan Redis memory for `peak_QPS × 86400s × avg_response_size` (24h TTL window at peak request rate times average recorded response size). Activated default-ON when Redis is present; inactive in single-pod / memory mode where no cross-pod replay is needed.
 
-Sentinel mode is supported by the adapter but not yet wired into corebundle env loading (see backlog `B2-A-33`).
+Sentinel mode is supported by the adapter but not yet wired into corebundle env loading.
 
 | Variable | Purpose | Default | Required | Notes |
 |---|---|---|---|---|
 | `GOCELL_REDIS_ADDR` | Redis standalone address for distributed nonce and idempotency state | — | **Real mode, multi-pod** (one of `GOCELL_REDIS_ADDR` / `GOCELL_REDIS_CLUSTER_ADDRS`) | Required when `GOCELL_ADAPTER_MODE=real`, `GOCELL_SINGLE_POD` is unset, and `GOCELL_REDIS_CLUSTER_ADDRS` is unset. Remote deployments must use a TLS URL such as `rediss://redis.example.internal:6379`; bare `host:port` is accepted only for loopback dev/CI addresses such as `127.0.0.1:6379` or `localhost:6379`. Mutually exclusive with `GOCELL_REDIS_CLUSTER_ADDRS`. |
-| `GOCELL_REDIS_CLUSTER_ADDRS` | Comma-separated list of Redis Cluster node addresses (AWS ElastiCache Cluster, Azure Cache Cluster, self-hosted Redis Cluster) | — | **Real mode, multi-pod** (alternative to `GOCELL_REDIS_ADDR`) | Selects cluster mode (B10). Each entry is a plain `host:port` for loopback/dev or a TLS URL `rediss://host:port`. Mixing URL and plain forms within a single value is rejected. Leading/trailing whitespace per entry is trimmed; exact-duplicate entries are deduplicated. Empty entries (trailing or double commas) fail fast. `GOCELL_REDIS_DB` must be `0` or unset (Redis Cluster has no `SELECT` command). Mutually exclusive with `GOCELL_REDIS_ADDR`. |
-| `GOCELL_REDIS_PASSWORD` | Redis password (applies to all modes) | — | **Real mode** (yes); **dev mode** (no) | Passed directly to the Redis client. Behavior matrix (B2-A-28 fail-closed): in **real** mode (`GOCELL_ADAPTER_MODE=real` requiring production control plane) the password is **mandatory** — startup fails fast with `ERR_ADAPTER_REDIS_CONNECT` ("`connection credential required`") when both `GOCELL_REDIS_PASSWORD` is unset and the deployment is not single-pod. In **dev** mode (`GOCELL_ADAPTER_MODE=dev` or single-pod) the corebundle automatically enables the `Config.AllowUnsafeNoPassword` opt-in so unauthenticated local Redis instances (testcontainers, `127.0.0.1` dev) work without a password. URL-embedded credentials in cluster URLs (`rediss://user:pass@host`) must equal `GOCELL_REDIS_PASSWORD` if both are set; conflicting values fail fast at startup with `ERR_ADAPTER_REDIS_CONNECT`. |
+| `GOCELL_REDIS_CLUSTER_ADDRS` | Comma-separated list of Redis Cluster node addresses (AWS ElastiCache Cluster, Azure Cache Cluster, self-hosted Redis Cluster) | — | **Real mode, multi-pod** (alternative to `GOCELL_REDIS_ADDR`) | Selects Redis Cluster mode. Each entry is a plain `host:port` for loopback/dev or a TLS URL `rediss://host:port`. Mixing URL and plain forms within a single value is rejected. Leading/trailing whitespace per entry is trimmed; exact-duplicate entries are deduplicated. Empty entries (trailing or double commas) fail fast. `GOCELL_REDIS_DB` must be `0` or unset (Redis Cluster has no `SELECT` command). Mutually exclusive with `GOCELL_REDIS_ADDR`. |
+| `GOCELL_REDIS_PASSWORD` | Redis password (applies to all modes) | — | **Real mode** (yes); **dev mode** (no) | Passed directly to the Redis client. Fail-closed behavior: in **real** mode (`GOCELL_ADAPTER_MODE=real` requiring production control plane) the password is **mandatory** — startup fails fast with `ERR_ADAPTER_REDIS_CONNECT` ("`connection credential required`") when both `GOCELL_REDIS_PASSWORD` is unset and the deployment is not single-pod. In **dev** mode (`GOCELL_ADAPTER_MODE=dev` or single-pod) the corebundle automatically enables the `Config.AllowUnsafeNoPassword` opt-in so unauthenticated local Redis instances (testcontainers, `127.0.0.1` dev) work without a password. URL-embedded credentials in cluster URLs (`rediss://user:pass@host`) must equal `GOCELL_REDIS_PASSWORD` if both are set; conflicting values fail fast at startup with `ERR_ADAPTER_REDIS_CONNECT`. |
 | `GOCELL_REDIS_DB` | Redis database number | `0` | No | Must be a non-negative integer. Invalid values fail fast at startup. **Cluster mode forbids non-zero values** (Redis Cluster has no `SELECT` command). |
 
 ## Per-Cell Session and Cursor Keys
@@ -71,7 +71,7 @@ Each Cell reads its own env variables. The naming pattern is `GOCELL_<CELLID>_<R
 |---|---|---|---|
 | `GOCELL_ACCESSCORE_CURSOR_KEY` | HMAC key for access cursor codec | `corebundle-access-cursor-key32!!` | **Real mode** |
 | `GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY` | Previous access cursor key (rotation) | — | No |
-| `GOCELL_ACCESSCORE_IP_HASH_SALT` | HMAC salt for the bootstrap-failed event client-IP hash (≥32 bytes; #1488). Keeps plaintext IP off outbox/broker/DLX + the audit ledger. Real mode fails fast if unset or a well-known demo value. | `dev-ip-hash-salt-accesscore-32b!` | **Real mode** |
+| `GOCELL_ACCESSCORE_IP_HASH_SALT` | HMAC salt for the bootstrap-failed event client-IP hash (≥32 bytes). Keeps plaintext IP off outbox/broker/DLX + the audit ledger. Real mode fails fast if unset or a well-known demo value. | `dev-ip-hash-salt-accesscore-32b!` | **Real mode** |
 
 ### accesscore first-admin provisioning
 
@@ -149,11 +149,11 @@ path "transit/decrypt/<keyname>"            { capabilities = ["create","update"]
 
 Substitute `<keyname>` with the value of `GOCELL_VAULT_TRANSIT_KEY` (default `gocell-config`). The startup readiness check only exercises `transit/keys/<keyname>` (the `read` cap), so a missing `datakey/plaintext` capability slips past startup and surfaces as `ErrKeyProviderEncryptFailed` on the first encrypt — apply the policy before the first deploy.
 
-> Migration note: pre-PR-A18 deployments granted `transit/encrypt/<keyname>` instead of `transit/datakey/plaintext/<keyname>`. The legacy `encrypt` path is no longer used; the new policy above replaces it.
+> Migration note: older deployments granted `transit/encrypt/<keyname>` instead of `transit/datakey/plaintext/<keyname>`. The legacy `encrypt` path is no longer used; the new policy above replaces it.
 
-## HTTP Listeners (PR-A14b three-listener topology)
+## HTTP Listeners (three-listener topology)
 
-> **Breaking change (PR-A14b):** `/healthz`、`/readyz`、`/metrics` 从 primary 端口迁到 health listener，更新 k8s probe + Prometheus 配置。详见 [listener-topology](listener-topology.md)。
+> **Breaking change:** `/healthz`, `/readyz`, and `/metrics` have moved from the primary port to the health listener. Update your k8s probes and Prometheus scrape configuration accordingly. See [listener-topology](listener-topology.md) for details.
 
 `cmd/corebundle` binds three HTTP servers. See `docs/ops/listener-topology.md` for the full topology diagram and k8s probe migration notes.
 
@@ -175,8 +175,8 @@ All three addresses must be non-empty and distinct; startup fails fast otherwise
 | Variable | Purpose | Default | Required |
 |---|---|---|---|
 | `GOCELL_METRICS_TOKEN` | Bearer token for `/metrics` scraper authentication (`X-Metrics-Token` header) | — | **Real mode** |
-| `GOCELL_READYZ_VERBOSE_TOKEN` | Bearer token for `/readyz?verbose` (exposes internal topology). After PR-A35 required in every mode unless `GOCELL_READYZ_VERBOSE_DISABLED=1` is set; verbose requests without a matching token return 401 `ERR_READYZ_VERBOSE_DENIED`. See `docs/ops/readyz.md`. | — | **All modes** |
-| `GOCELL_READYZ_VERBOSE_DISABLED` | Set to `1` to waive the `/readyz?verbose` endpoint entirely. Lets ephemeral deployments (test harnesses, single-node demos) satisfy the PR-A35 invariant without minting a token. Rejected when `GOCELL_ADAPTER_MODE=real`. | `0` | Optional |
+| `GOCELL_READYZ_VERBOSE_TOKEN` | Bearer token for `/readyz?verbose` (exposes internal topology). Required in every mode unless `GOCELL_READYZ_VERBOSE_DISABLED=1` is set; verbose requests without a matching token return 401 `ERR_READYZ_VERBOSE_DENIED`. See `docs/ops/readyz.md`. | — | **All modes** |
+| `GOCELL_READYZ_VERBOSE_DISABLED` | Set to `1` to waive the `/readyz?verbose` endpoint entirely. Lets ephemeral deployments (test harnesses, single-node demos) satisfy the verbose-readiness invariant without minting a token. Rejected when `GOCELL_ADAPTER_MODE=real`. | `0` | Optional |
 
 ## Adapter Mode
 
@@ -207,7 +207,7 @@ Set `GOCELL_STATE_DIR` to override the platform default for all stateful files.
 
 ## Migration from pre-T6 env names
 
-Old names are removed in GoCell PR-A3 / T6. Operators must update environment configuration before upgrading.
+The old global PostgreSQL env names have been removed. Operators must update environment configuration before upgrading.
 
 | Old name (pre-T6, removed) | New name |
 |---|---|

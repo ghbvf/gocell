@@ -1,13 +1,13 @@
-# External Repository Quickstart (Operator-SDK 模式)
+# External Repository Quickstart (Operator-SDK Mode)
 
-> **范围**：本文档展示在**自己的 Go module 内**开发 Cell 的最小步骤。完整 starter repo + 真实业务样板属于 M11 (#1092) 范围；本 quickstart 只覆盖 M1 落地后已经跑得通的最小闭环：让 `gocell validate` / `gocell check` 在外部仓库识别你的 cell.yaml / slice.yaml / contract.yaml。
+> **Scope**: This document shows the minimal steps to develop a Cell inside your own Go module. A complete starter repo with real-world business boilerplate is not yet available; this quickstart covers only the minimal end-to-end flow that already works: making `gocell validate` / `gocell check` recognize your `cell.yaml` / `slice.yaml` / `contract.yaml` in an external repository.
 >
-> 完整的双模式产品方向背景见 ADR `docs/architecture/202605281200-adr-cell-development-external-repo.md`。
+> Full background on the dual-mode product direction is in ADR `docs/architecture/202605281200-adr-cell-development-external-repo.md`.
 
-## 前置
+## Prerequisites
 
 - Go 1.25.11+
-- `gocell` CLI：从本仓源码安装（当前唯一可用入口）：
+- `gocell` CLI: install from this repo's source (the only available entry point at present):
 
   ```bash
   git clone https://github.com/ghbvf/gocell.git
@@ -15,15 +15,11 @@
   go install ./cmd/gocell
   ```
 
-  框架本体已是 public module，`go get github.com/ghbvf/gocell@v0.1.0` 即可消费（无需
-  GOPRIVATE）。但 `go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` 仍不可用——
-  `cmd/gocell` 是卫星 module（其 go.mod 含本地 `replace`，且 release 流水线只切 root
-  tag、未切 `cmd/gocell/vX.Y.Z` 子模块 tag），`go install pkg@version` 因此受阻。稳定的
-  CLI 独立安装入口跟踪于 #1088。
+  The framework itself is a public module; `go get github.com/ghbvf/gocell@v0.1.0` works without GOPRIVATE. However, `go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` is not yet available — `cmd/gocell` is a satellite module (its `go.mod` contains a local `replace` directive, and the release pipeline only tags the root, not the `cmd/gocell/vX.Y.Z` sub-module tag), which prevents `go install pkg@version` from working. A stable standalone CLI installation path is planned for a future release.
 
-## 步骤
+## Steps
 
-### 1. 初始化 module
+### 1. Initialise the Module
 
 ```bash
 mkdir -p ~/work/acme-payment-cell && cd ~/work/acme-payment-cell
@@ -31,7 +27,7 @@ go mod init github.com/acme/payment-cell
 go get github.com/ghbvf/gocell@v0.1.0   # pin a stable tag (@develop = prerelease snapshot)
 ```
 
-### 2. 放 manifest 文件
+### 2. Place the Manifest File
 
 ```bash
 mkdir -p .gocell
@@ -45,9 +41,9 @@ modules:
 EOF
 ```
 
-Locator 探测到 `.gocell/manifest.yaml` 即自动切到 manifest 模式（auto-detect）。
+Locator switches to manifest mode automatically (auto-detect) when it finds `.gocell/manifest.yaml`.
 
-### 3. 声明 cell + slice + contract
+### 3. Declare the Cell, Slice, and Contract
 
 ```bash
 mkdir -p cells/payment/slices/charge
@@ -76,7 +72,7 @@ verify:
 
 ```yaml
 id: charge
-belongsToCell: payment        # 必填（manifest 模式无路径自动派生）
+belongsToCell: payment        # required (no path-based auto-derivation in manifest mode)
 consistencyLevel: L2
 allowedFiles:
   - "cells/payment/slices/charge/**"
@@ -111,29 +107,30 @@ endpoints:
     noContent: true
 ```
 
-### 4. 跑 gocell validate
+### 4. Run gocell validate
 
 ```bash
-# 必须在 module root（go.mod / .gocell/manifest.yaml 所在目录）运行；或用 --root=/path/to/repo 显式指定
+# Must be run from the module root (directory containing go.mod / .gocell/manifest.yaml);
+# or use --root=/path/to/repo to specify explicitly
 gocell validate
 ```
 
-预期：退出码 0，stderr/stdout 中出现 `INFO metadata: locator mode resolved mode=manifest`，stdout 输出 `No issues found.` 或仅 advisory warnings；governance rules 在 conventional-mode-specific 规则上自动 skip（因 `examples/` 子树在外部 repo 不存在）。
+Expected: exit code 0, stderr/stdout contains `INFO metadata: locator mode resolved mode=manifest`, stdout outputs `No issues found.` or advisory warnings only; governance rules that are specific to the conventional layout are automatically skipped (because the `examples/` subtree does not exist in an external repo).
 
-> **说明**：外部仓库无 `examples/` 子树，conventional-layout-specific 规则（如 ADV-04 examples 反向覆盖）在 manifest 模式下自动 skip；详见 ADR § AI-robust 评级。
+> **Note**: External repositories have no `examples/` subtree; conventional-layout-specific rules (such as ADV-04 examples reverse coverage) are automatically skipped in manifest mode. See ADR § AI-robust rating for details.
 
-需要显式 override 时：
+When an explicit override is needed:
 
 ```bash
 gocell validate --layout=manifest
 gocell validate --layout=manifest --manifest=./config/manifest.yaml
 ```
 
-> 跑通上方 `gocell validate` 即表示 M1 (#1082) acceptance criteria 已达到，后续能力见下方已知限制表。
+> Successfully running the `gocell validate` above means the acceptance criteria for external repository support have been reached. See the known limitations table below for remaining capabilities.
 
-### 5. Workspace 模式
+### 5. Workspace Mode
 
-如需同时联调 gocell 自身 + 业务 cell module，用 Go workspace。Workspace 根目录是包含 `go.work` + `.gocell/manifest.yaml` 的目录；所有 `modules[].path` 必须**相对该目录** 且不含 `..`（Locator 会拒绝 `../foo` 形式的 module path，逃逸保护）。
+To develop against both gocell itself and a business cell module simultaneously, use a Go workspace. The workspace root is the directory containing `go.work` + `.gocell/manifest.yaml`; all `modules[].path` entries must be **relative to that directory** and must not contain `..` (Locator rejects `../foo`-style module paths as an escape-protection measure).
 
 ```bash
 mkdir -p ~/work/platform-workspace && cd ~/work/platform-workspace
@@ -143,29 +140,29 @@ git clone https://github.com/acme/payment-cell.git ./acme-payment-cell
 go work init ./gocell ./acme-payment-cell
 ```
 
-workspace 根放 `.gocell/manifest.yaml`：
+Place `.gocell/manifest.yaml` at the workspace root:
 
 ```yaml
 version: v1
 modules:
-  - path: gocell                     # workspace 根的子目录，持 actors / status-board singleton
-  - path: acme-payment-cell          # 第二个 module
+  - path: gocell                     # subdirectory of the workspace root; holds actors / status-board singleton
+  - path: acme-payment-cell          # second module
 ```
 
-> manifest 的 `path:` 字段不需要 `./` 前缀；`path: gocell` 等价于 `./gocell`，Locator 内部 `path.Clean` 会规范化。
+> The `path:` field in the manifest does not require a `./` prefix; `path: gocell` is equivalent to `./gocell` — Locator normalizes it internally with `path.Clean`.
 
-`gocell validate --root=.` 会聚合两个 module 的 cell/slice/contract。预期退出码 0，输出末尾包含 `No issues found.` 或仅 advisory warnings。
+`gocell validate --root=.` aggregates cells/slices/contracts from both modules. Expected exit code 0; output ends with `No issues found.` or advisory warnings only.
 
-### 6. Migrations（per-namespace，M8 #1089）
+### 6. Migrations (Per-Namespace)
 
-外部 Cell module 自带数据库 migration 时，**不**共享平台的全局版本空间——每个 namespace 独立追踪，互不撞号。
+When an external Cell module carries its own database migrations, it does **not** share the platform's global version space — each namespace tracks versions independently with no numbering conflicts.
 
-**写法约定**：
+**Naming convention**:
 
-- migration 文件用 goose-native `NNN_desc.sql` 命名（自己的 `001..N` 序列），**不要**在文件名里加 namespace 前缀。`platform_001_x.sql` 这类前缀会让 goose 的版本解析器（`NumericComponent` = `ParseInt(strings.Cut(name,"_")[0])`）失败；namespace 活在**追踪表名**里，不在文件名里。⚠️ **非 `NNN_` 前缀的 `.sql` 会被 goose 静默跳过、不被应用**（goose 默认非严格收集），所以务必遵守该命名。平台自身的 migration 由 archtest `MIGRATION-FILENAME-GOOSE-PARSEABLE-01` 守，但该规则**只扫 `adapters/postgres/migrations/`**——外部仓库目前不在其覆盖内，需自行遵守约定（随 M3 archtest library #1302 迁入外部规则集后可机器守）。
-- 用 `embed.FS` 嵌入自己的 `migrations/*.sql`。
-- 经 `composition.WithMigrations(ns, fs)` 注册，`ns` 是 `pkg/migration.Namespace`（`migration.ParseNamespace("yourcell")`，小写标识符，长度 ≤ 45）。
-- 该 namespace 的 migration 追踪在独立的 `schema_migrations_<namespace>` 表；平台自身是保留 namespace `"platform"`（追踪表 `schema_migrations_platform`），外部 module **不可**注册 `"platform"`。
+- Migration files use goose-native `NNN_desc.sql` naming (your own `001..N` sequence); **do not** add a namespace prefix to the filename. Prefixes like `platform_001_x.sql` cause goose's version parser (`NumericComponent` = `ParseInt(strings.Cut(name,"_")[0])`) to fail; the namespace lives in the **tracking table name**, not the filename. ⚠️ **`.sql` files that do not start with `NNN_` are silently skipped by goose and never applied** (goose defaults to non-strict collection), so this naming convention is mandatory. The platform's own migrations are guarded by archtest `MIGRATION-FILENAME-GOOSE-PARSEABLE-01`, but that rule **only scans `adapters/postgres/migrations/`** — external repositories are not currently in its scope and must follow the convention on their own.
+- Embed your own `migrations/*.sql` with `embed.FS`.
+- Register via `composition.WithMigrations(ns, fs)`, where `ns` is a `pkg/migration.Namespace` (`migration.ParseNamespace("yourcell")`, lowercase identifier, length ≤ 45).
+- This namespace's migrations are tracked in a dedicated `schema_migrations_<namespace>` table; the platform itself uses the reserved namespace `"platform"` (tracking table `schema_migrations_platform`); external modules **must not** register `"platform"`.
 
 ```go
 //go:embed migrations/*.sql
@@ -181,7 +178,7 @@ builder := composition.New(cellIDs...).
     WithMigrations(paymentNS, paymentFS)
 ```
 
-**执行桥**：`composition.Build()` 本身**不**跑 migration（cell 启动前 schema 必须已就位，且 `runtime/` 不依赖 `adapters/`）。在 composition root（可同时 import 两层）里，于 `Build` **之前**把注册的 migration set drain 进 `adapters/postgres.MigrationSet` 并应用——`NewMigrationSetWithPlatform` 已把平台 namespace 排在最前（platform-first 顺序保证：外部 cell 的 migration 可以 FK 平台表）：
+**Execution bridge**: `composition.Build()` itself does **not** run migrations (the schema must be in place before cells start, and `runtime/` must not depend on `adapters/`). In the composition root (which can import both layers), drain the registered migration set into `adapters/postgres.MigrationSet` and apply it **before** `Build` — `NewMigrationSetWithPlatform` places the platform namespace first (platform-first ordering guarantees: external cell migrations can FK platform tables):
 
 ```go
 set, err := adapterpg.NewMigrationSetWithPlatform() // seeds "platform" first
@@ -194,16 +191,16 @@ if err := set.ApplyAll(ctx, pool); err != nil { return err } // or set.VerifyAll
 app, err := builder.Build(ctx, shared, runtimeOpts)
 ```
 
-## 已知限制（M1 范围）
+## Known Limitations
 
-| 限制 | 影响 | 解锁条件 |
-|------|------|---------|
-| 平台标准规则（PANIC-REGISTERED-01 / ERRCODE-KIND-LITERAL-01 / MESSAGE-CONST-LITERAL-01 / EXPORTED-ERROR-NEW-01 / SCAFFOLD-DERIVED-FORCEOVERWRITE-01）已可通过 `archtest.RunStandardCellRules` 在外部仓库直接使用；外部自定规则通过 `cfg.ExtraRules` 追加。**精确集合以代码 `StandardCellRules()` + `TestStandardCellRulesComposition` 为单源**（本表手写枚举仅供参考，以代码为准） | 仅限上述平台规则；reason about GoCell 自身内部布局的规则（ERROR-FIRST-API-01 / ERROR-FIRST-TYPED-NIL-01 / DETAILS-SEALED-FIELD-FROZEN-01 / SCAFFOLD-LISTENER-MARKER-TYPED-CONST-01）刻意不注册（外部 vacuous，见 external.go StandardCellRules godoc） | M3 #1084 已部分落地，剩余规则迁移追踪 #1302 |
-| `CellModule` 接口在 `cmd/` 包内私有 | 外部仓库无法 wire 进 corebundle | M4 #1085 |
-| 没有 starter repo template | 上面步骤全手抄 | M11 #1092 |
+| Limitation | Impact | Unlock condition |
+|-----------|--------|-----------------|
+| Standard platform rules (`PANIC-REGISTERED-01` / `ERRCODE-KIND-LITERAL-01` / `MESSAGE-CONST-LITERAL-01` / `EXPORTED-ERROR-NEW-01` / `SCAFFOLD-DERIVED-FORCEOVERWRITE-01`) can already be used in external repositories via `archtest.RunStandardCellRules`; custom rules are added via `cfg.ExtraRules`. **The exact set is defined in code at `StandardCellRules()` + `TestStandardCellRulesComposition`** (this table is for reference only; code is authoritative) | Limited to the above platform rules; rules that reason about GoCell's own internal layout (`ERROR-FIRST-API-01` / `ERROR-FIRST-TYPED-NIL-01` / `DETAILS-SEALED-FIELD-FROZEN-01` / `SCAFFOLD-LISTENER-MARKER-TYPED-CONST-01`) are deliberately excluded (vacuous in external repos; see `external.go` `StandardCellRules` godoc) | Partial landing complete; remaining rule migration tracked separately |
+| Stock corebundle does not dynamically load third-party modules | External repositories must build their own composition root and call exported `runtime/composition` module APIs explicitly | Starter repo / template support |
+| No starter repo template | The steps above must be followed manually | Planned future work |
 
-详细路线见 #1081 与 ADR `docs/architecture/202605281200-adr-cell-development-external-repo.md`。
+See ADR `docs/architecture/202605281200-adr-cell-development-external-repo.md` for detailed roadmap.
 
-## 反馈
+## Feedback
 
-外部仓库开发遇到的卡点请直接对 [#1081](https://github.com/ghbvf/gocell/issues/1081) 评论，或为具体 M2-M12 子 issue 提 PR。
+If you hit blockers developing in an external repository, open an issue or submit a PR against the relevant tracking issue.

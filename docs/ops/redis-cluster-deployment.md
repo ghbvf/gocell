@@ -1,9 +1,9 @@
 # Redis Cluster Deployment Guide
 
 GoCell's Redis adapter supports three modes: `standalone`, `sentinel`, and
-`cluster`. This document covers cluster mode (B10 — PR-V1-REDIS-CLUSTER),
-which is required for AWS ElastiCache Cluster, Azure Cache Cluster, and any
-self-hosted Redis Cluster deployment.
+`cluster`. This document covers cluster mode, which is required for AWS
+ElastiCache Cluster, Azure Cache Cluster, and any self-hosted Redis Cluster
+deployment.
 
 ## When to use cluster mode
 
@@ -28,7 +28,7 @@ Two environment variables must be set on every pod:
 | Variable | Example | Notes |
 |---|---|---|
 | `GOCELL_REDIS_CLUSTER_ADDRS` | `rediss://node-a.example.internal:7000,rediss://node-b.example.internal:7000,rediss://node-c.example.internal:7000` | Comma-separated cluster node seed addresses. Production deployments must use `rediss://` URL form (TLS); the GoCell `pkg/secutil.ValidateTLSEndpoint` fail-closed rule rejects bare `host:port` for any non-loopback address. The go-redis client discovers the rest of the topology at startup. |
-| `GOCELL_REDIS_PASSWORD` | _(secret manager)_ | Leave unset if your cluster has no AUTH. |
+| `GOCELL_REDIS_PASSWORD` | _(secret manager)_ | Required for real multi-pod / production cluster deployments. Only dev or single-pod deployments may omit it when corebundle explicitly enables `Config.AllowUnsafeNoPassword`; real multi-pod startup fails closed without credentials. |
 
 `GOCELL_REDIS_ADDR` and `GOCELL_REDIS_CLUSTER_ADDRS` are mutually exclusive; setting
 both fails fast at startup with `ERR_VALIDATION_FAILED`.
@@ -152,8 +152,7 @@ deduplicated even though it shares the store.
 
 *Cross-cell* dedup (routing one **logical command** to a single dedup slot
 regardless of path/listener/cell) is a different, stronger guarantee that
-requires an Idempotency-Key ↔ command_id bridge and remains deferred (#1610,
-blocked-by #1044).
+requires an Idempotency-Key ↔ command_id bridge and remains deferred.
 
 ## Operational notes
 

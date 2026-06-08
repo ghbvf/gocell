@@ -1,81 +1,81 @@
 # GoCell First-Run Admin Setup
 
-> 运维通过 POST /api/v1/access/setup/admin 引导式注册首个 admin。无 mode 选择，单一路径。
+> Operators bootstrap the first admin account by calling `POST /api/v1/access/setup/admin`. There is no mode selection — a single path handles all deployments.
 
-本文档专注**运维侧部署细节**：环境变量配置、Docker / Kubernetes 配置、启动流程与故障排查。
-安全边界决策见 [`docs/architecture/202605061600-adr-bootstrap-admin-boundary.md`](../architecture/202605061600-adr-bootstrap-admin-boundary.md)。
+This document covers the **operator-side deployment details**: environment variable configuration, Docker / Kubernetes setup, startup flow, and troubleshooting.
+For the security boundary design see [`docs/architecture/202605061600-adr-bootstrap-admin-boundary.md`](../architecture/202605061600-adr-bootstrap-admin-boundary.md).
 
-## 概览
+## Overview
 
-GoCell first-run admin 注册走单一路径：运维启动服务后，通过 `POST /api/v1/access/setup/admin` 发送请求创建首个 admin。endpoint 以 HTTP Basic Auth（env 凭据）保护，admin 创建成功后永久返回 410 Gone。
+GoCell first-run admin registration uses a single path: after the service starts, the operator sends a `POST /api/v1/access/setup/admin` request to create the first admin. The endpoint is protected by HTTP Basic Auth (credentials supplied via env vars); after the admin is created it permanently returns `410 Gone`.
 
-必填凭据 env：
+Required credential env vars:
 
 ```
 GOCELL_BOOTSTRAP_ADMIN_USERNAME=<operator-username>
 GOCELL_BOOTSTRAP_ADMIN_PASSWORD=<operator-password>
 ```
 
-**持久 operator authenticator**：上述 env 是 setup endpoint 的常驻保护，不是一次性 seed。admin 创建后 env **不可删除**；轮换走「滚动替换 K8s Secret + restart」（详见 §凭据轮换）。
+**Persistent operator authenticator**: these env vars are the permanent protection for the setup endpoint, not a one-time seed. After the admin is created the env vars **must not be removed**. Rotation uses a rolling K8s Secret replacement + restart (see the Credential Rotation section below).
 
-**empty config fail-fast**：`GOCELL_BOOTSTRAP_ADMIN_USERNAME` / `GOCELL_BOOTSTRAP_ADMIN_PASSWORD` 任一为空时，启动 fail-fast。
-
----
-
-## 必要环境变量
-
-| 变量 | 说明 |
-|------|------|
-| `GOCELL_BOOTSTRAP_ADMIN_USERNAME` | **必填，持久**；HTTP Basic Auth 操作员身份，保护 setup/admin endpoint |
-| `GOCELL_BOOTSTRAP_ADMIN_PASSWORD` | **必填，持久**；≥8 byte；TrimSpace 自动处理 K8s secret 末尾换行；含控制字符则 fail-fast |
+**Empty config fail-fast**: startup fails immediately if either `GOCELL_BOOTSTRAP_ADMIN_USERNAME` or `GOCELL_BOOTSTRAP_ADMIN_PASSWORD` is empty.
 
 ---
 
-## 启动流程
+## Required Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `GOCELL_BOOTSTRAP_ADMIN_USERNAME` | **Required, persistent.** HTTP Basic Auth operator identity protecting the setup/admin endpoint. |
+| `GOCELL_BOOTSTRAP_ADMIN_PASSWORD` | **Required, persistent.** Minimum 8 bytes; TrimSpace strips trailing newlines automatically (handles K8s secret formatting); control characters cause fail-fast. |
+
+---
+
+## Startup Flow
 
 ```
 [startup]
   GOCELL_BOOTSTRAP_ADMIN_USERNAME=ops
   GOCELL_BOOTSTRAP_ADMIN_PASSWORD=OpsPass123!
 
-  accesscore 启动：校验 env 凭据（空则 fail-fast）
-  → setup/admin endpoint 以 HTTP Basic Auth 保护
+  accesscore starts: validates env credentials (empty => fail-fast)
+  => setup/admin endpoint protected by HTTP Basic Auth
 
-[运维操作]
+[operator action]
   POST /api/v1/access/setup/admin
   Authorization: Basic <base64(ops:OpsPass123!)>
   Content-Type: application/json
   { "username": "admin", "email": "admin@corp.example", "password": "AdminPass456!" }
-  → 201 Created
+  => 201 Created
 
-[再次调用 setup/admin]
-  → 410 Gone（永久）
+[subsequent call to setup/admin]
+  => 410 Gone (permanent)
 
-[用业务凭据登录]
+[log in with business credentials]
   POST /api/v1/access/sessions/login
   { "username": "admin", "password": "AdminPass456!" }
-  → 201 Created + tokens
+  => 201 Created + tokens
 ```
 
-**凭据关系**：`GOCELL_BOOTSTRAP_ADMIN_USERNAME` / `GOCELL_BOOTSTRAP_ADMIN_PASSWORD` 是 **HTTP Basic Auth 操作员凭据**（验证谁有权限发起 setup 请求）。body 中的 `username` / `email` / `password` 是**要创建的 admin 业务凭据**，两者完全独立。
+**Credential relationship**: `GOCELL_BOOTSTRAP_ADMIN_USERNAME` / `GOCELL_BOOTSTRAP_ADMIN_PASSWORD` are the **HTTP Basic Auth operator credentials** (they verify who is authorized to initiate the setup request). The `username` / `email` / `password` fields in the request body are the **business credentials of the admin being created** — the two sets are completely independent.
 
 ---
 
-## curl 示例
+## curl Examples
 
 ```bash
 OPS_USER="ops"
 OPS_PASS="OpsPass123!"
 ADMIN_PASS="AdminPass456!"
 
-# 1. 创建 admin（HTTP Basic Auth 验证操作员身份）
+# 1. Create admin (HTTP Basic Auth verifies operator identity)
 curl -s -X POST http://localhost:8080/api/v1/access/setup/admin \
   -u "${OPS_USER}:${OPS_PASS}" \
   -H 'Content-Type: application/json' \
   -d "{\"username\":\"admin\",\"email\":\"admin@corp.example\",\"password\":\"${ADMIN_PASS}\"}"
 # 201 Created
 
-# 2. 用业务凭据登录
+# 2. Log in with business credentials
 curl -s -X POST http://localhost:8080/api/v1/access/sessions/login \
   -H 'Content-Type: application/json' \
   -d "{\"username\":\"admin\",\"password\":\"${ADMIN_PASS}\"}"
@@ -83,7 +83,7 @@ curl -s -X POST http://localhost:8080/api/v1/access/sessions/login \
 
 ---
 
-## Docker Compose 示例
+## Docker Compose Example
 
 ```yaml
 services:
@@ -96,7 +96,7 @@ services:
       - GOCELL_JWT_AUDIENCE=gocell
 ```
 
-启动后发起 setup：
+After starting, trigger the setup:
 
 ```bash
 docker compose up -d
@@ -108,9 +108,9 @@ curl -s -X POST http://localhost:8080/api/v1/access/setup/admin \
 
 ---
 
-## Kubernetes 示例
+## Kubernetes Example
 
-凭据通过 K8s Secret 注入（不写入镜像）：
+Credentials are injected via a K8s Secret (never baked into the image):
 
 ```yaml
 apiVersion: v1
@@ -145,32 +145,32 @@ spec:
                   key: password
 ```
 
-部署语义：当前 `UserRepository` 仅有 in-memory 实现，进程内 `sync.Mutex` 保证 admin 唯一；first-run admin 必须落到单 pod replica。多 pod 幂等承诺要等 `ACCESSCORE-PG-USERS-MIGRATION-01`（PG `users` 表 + `UNIQUE(role='admin')` 部分索引）落地后才成立——届时第一个 INSERT 胜出，后续 POST 返回 409 或 410。
+Deployment note: the current `UserRepository` has only an in-memory implementation; an in-process `sync.Mutex` guarantees admin uniqueness. First-run admin creation must target a single pod replica. Multi-pod idempotency guarantees will be available once `ACCESSCORE-PG-USERS-MIGRATION-01` (PG `users` table + `UNIQUE(role='admin')` partial index) lands — at that point the first INSERT wins and subsequent POSTs return 409 or 410.
 
 ---
 
-## 故障排查
+## Troubleshooting
 
-启动失败统一返回 `ERR_CELL_INVALID_CONFIG`（K#08 后 bootstrap 校验归类为 cell config 失败），按 `message` 区分根因：
+Startup failures all return `ERR_CELL_INVALID_CONFIG` (bootstrap validation is classified as a cell config failure). Distinguish the root cause by the `message` field:
 
-| 现象 | message | 原因 | 处理 |
-|------|---------|------|------|
-| 启动失败 | `... are required to protect setup/admin endpoint` | 两个 env 同时为空 | 注入 `GOCELL_BOOTSTRAP_ADMIN_USERNAME` 与 `GOCELL_BOOTSTRAP_ADMIN_PASSWORD`；检查 K8s Secret 是否挂载 |
-| 启动失败 | `... must both be set or both be empty` | 两个 env 中只设置了一个 | 同时设置或同时清空两个 env |
-| 启动失败 | `... USERNAME must not contain control characters` | username 含控制字符 | 检查 secret 编码；使用可打印 ASCII |
-| 启动失败 | `... PASSWORD must be at least 8 bytes` | password TrimSpace 后少于 8 字节 | 使用更长密码；K8s secret 末尾换行由 TrimSpace 自动处理 |
-| setup/admin 返回 401 | Basic Auth 凭据错误 | 核对 `GOCELL_BOOTSTRAP_ADMIN_USERNAME` / `GOCELL_BOOTSTRAP_ADMIN_PASSWORD` |
-| setup/admin 返回 409 | 请求 username 已被其他 user 占用 | 换 username → 重试 |
-| setup/admin 返回 410 | Basic Auth 通过 + admin 已创建 | 进入 login 流；admin 已就绪 |
-| setup/admin 返回 429 | per-IP rate limit 触发（默认 5 req/min, burst 10） | 等待 rate limit 窗口重置；检查是否有异常请求来源 |
+| Symptom | Message | Cause | Resolution |
+|---------|---------|-------|------------|
+| Startup fails | `... are required to protect setup/admin endpoint` | Both env vars are empty | Inject `GOCELL_BOOTSTRAP_ADMIN_USERNAME` and `GOCELL_BOOTSTRAP_ADMIN_PASSWORD`; check that the K8s Secret is mounted. |
+| Startup fails | `... must both be set or both be empty` | Only one of the two env vars is set | Set both or clear both. |
+| Startup fails | `... USERNAME must not contain control characters` | Username contains control characters | Check secret encoding; use printable ASCII. |
+| Startup fails | `... PASSWORD must be at least 8 bytes` | Password is fewer than 8 bytes after TrimSpace | Use a longer password; trailing newlines from K8s secrets are handled automatically by TrimSpace. |
+| setup/admin returns 401 | — | Basic Auth credentials incorrect | Verify `GOCELL_BOOTSTRAP_ADMIN_USERNAME` / `GOCELL_BOOTSTRAP_ADMIN_PASSWORD`. |
+| setup/admin returns 409 | — | Requested username is already taken by another user | Use a different username and retry. |
+| setup/admin returns 410 | — | Basic Auth passed but admin already exists | Admin is ready; proceed to login. |
+| setup/admin returns 429 | — | Per-IP rate limit triggered (default 5 req/min, burst 10) | Wait for the rate-limit window to reset; check for unexpected request sources. |
 
 ---
 
-## 管理员密码重置流程
+## Admin Password Reset
 
-### 场景：已知当前密码（正常改密）
+### Scenario: current password is known (normal password change)
 
-已登录的 admin 用户通过 `POST /api/v1/access/users/{id}/password` 改密：
+A logged-in admin changes their password via `POST /api/v1/access/users/{id}/password`:
 
 ```bash
 ACCESS_TOKEN="<your-current-token>"
@@ -180,65 +180,66 @@ curl -s -X POST "http://localhost:8080/api/v1/access/users/${USER_ID}/password" 
   -H "Authorization: Bearer ${ACCESS_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"oldPassword":"<current>","newPassword":"NewStr0ng@Pass!"}'
-# 返回新 TokenPair
+# Returns a new TokenPair
 ```
 
-### 场景：忘记 admin 密码（需 DB 直接操作）
+### Scenario: admin password forgotten (requires direct database access)
 
-> 安全提示：以下操作需要直接访问数据库，必须由有权限的运维人员执行。
+> Security note: the following operation requires direct database access and must be performed by an authorized operator.
 
 ```sql
--- 1. 生成新的 bcrypt hash（cost=12，OWASP 2023 推荐）
+-- 1. Generate a new bcrypt hash (cost=12, OWASP 2023 recommendation)
 --    Go: bcrypt.GenerateFromPassword([]byte("NewPass!"), 12)
 --    htpasswd: htpasswd -bnBC 12 "" "NewPass!" | tr -d ':\n'
 
--- 2. 更新 admin 用户密码
+-- 2. Update the admin user's password
 UPDATE users
 SET password_hash = '$2a$12$<your-bcrypt-hash-here>',
     password_reset_required = true,
     updated_at = NOW()
 WHERE username = 'admin';
 
--- 3. 验证更新成功
+-- 3. Verify the update succeeded
 SELECT id, username, password_reset_required, updated_at FROM users WHERE username = 'admin';
 ```
 
-重置后：
-1. 用新密码 `POST /api/v1/access/sessions/login`
-2. 若 `password_reset_required=true`，按"已知当前密码"流程改密
+After the reset:
+1. Log in with the new password via `POST /api/v1/access/sessions/login`
+2. If `password_reset_required=true`, follow the "current password known" flow above to change it
 
 ---
 
-## 安全说明
+## Security Notes
 
-- **env 凭据生命周期 — 持久 operator authenticator**：bootstrap 凭据是 setup endpoint 的常驻保护层，admin 创建后 env 必须保留，不允许在运行期删除。轮换走「滚动替换 K8s Secret + restart」（详见 §凭据轮换）。
-- **`crypto/subtle.ConstantTimeCompare`**：HTTP Basic Auth 校验使用时间安全比较，防止时序侧信道泄漏操作员凭据。
-- **per-IP token-bucket rate limit**：默认启用（5 req/min, burst 10），防止暴力枚举 Basic Auth 凭据；触发后返回 `429 ERR_RATE_LIMITED`。
-- **oracle-safe 401 envelope**：认证失败统一返回 `ERR_AUTH_BOOTSTRAP_FAILED`，不区分"用户名错误"与"密码错误"，防止枚举攻击。
-- **bcrypt cost = 12**（OWASP 2023 推荐），防止离线暴力破解业务 admin 密码。
+- **Env credential lifetime — persistent operator authenticator**: the bootstrap credentials are the permanent protection layer for the setup endpoint. After admin creation the env vars must be retained; they cannot be deleted while the service is running. Rotation uses a rolling K8s Secret replacement + restart (see Credential Rotation below).
+- **`crypto/subtle.ConstantTimeCompare`**: HTTP Basic Auth verification uses a constant-time comparison to prevent timing side-channel leakage of operator credentials.
+- **Per-IP token-bucket rate limit**: enabled by default (5 req/min, burst 10) to prevent brute-force enumeration of Basic Auth credentials; triggers return `429 ERR_RATE_LIMITED`.
+- **Oracle-safe 401 envelope**: authentication failures always return `ERR_AUTH_BOOTSTRAP_FAILED` without distinguishing "wrong username" from "wrong password", preventing enumeration attacks.
+- **bcrypt cost = 12** (OWASP 2023 recommendation) to resist offline brute-force attacks against the business admin password.
 
 ---
 
-## 凭据轮换
+## Credential Rotation
 
-bootstrap 凭据轮换走「滚动替换 K8s Secret + restart」：
+Bootstrap credential rotation uses a rolling K8s Secret replacement + restart:
 
 ```bash
-# 1. 滚动替换 K8s Secret
+# 1. Replace the K8s Secret
 kubectl create secret generic gocell-bootstrap \
   --from-literal=username=ops --from-literal=password=NewOpsPass456! \
   --dry-run=client -o yaml | kubectl apply -f -
 
-# 2. 滚动重启 deployment 使新 env 生效
+# 2. Rolling-restart the deployment to pick up the new env vars
 kubectl rollout restart deployment/gocell
 
-# 3. 验证 rollout 完成
+# 3. Wait for the rollout to complete
 kubectl rollout status deployment/gocell
 
-# 4. 旧凭据立即失效；新凭据用于后续所有 setup/admin 请求（admin 已存在则 410 响应）
+# 4. Old credentials are immediately invalid; new credentials apply to all
+#    subsequent setup/admin requests (if admin already exists, responses return 410)
 ```
 
-注意事项：
+Notes:
 
-- 轮换前必须确认所有运维 runbook / CI 脚本已更新到新凭据；旧凭据在 rollout 完成后立即失效。
-- env 改名（如 GOCELL_BOOTSTRAP_ADMIN_* → 其他名称）是不兼容变更，需联动 ADR 与 Helm chart 同步发布。
+- Before rotating, ensure all operator runbooks and CI scripts have been updated to use the new credentials; old credentials become invalid as soon as the rollout completes.
+- Renaming the env vars (e.g. `GOCELL_BOOTSTRAP_ADMIN_*` to another name) is a breaking change that requires a coordinated ADR update and Helm chart release.
