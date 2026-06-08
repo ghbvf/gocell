@@ -129,7 +129,7 @@ echo "✅ 已贴评论：$URL"                                           # 回�
 
 **追加机器块**（贴评论前，接口见 `pr-comment.md` §机器块）：verdict 按结论取 `approved`（无 finding）/ `changes-requested`（有 finding）；`bash hack/automation/pr-meta.sh emit-block --kind=pr-review --pr=<N> --phase=review --verdict=<上> --findings='<计数 json>'`（round carry / refs / 熔断全由 emit-block 派生），输出单行追加到填好的 `pm:pr-review` body 末尾再贴。`changes-requested` 且已达 3 轮上限时 emit-block 置 `next.agent=human`（熔断），窗口提示「review↔fix 已达 3 轮上限，转人工」。
 
-贴完按结论切 label（命令见 `issues` B3）：有 finding → `pr-review/changes-requested` + `pr-status/needs-fix`（5-state：review 出 changes-requested 始终切 needs-fix，清对侧 `pr-review/approved` + `pr-status/needs-review-again`）；无 finding → `pr-review/approved`（清 `pr-review/changes-requested`）。
+贴完按结论切 label（命令见 `issues` B3）：有 finding → `pr-review/changes-requested` + `pr-status/needs-fix`（5-state：review 出 changes-requested 始终切 needs-fix，清对侧 `pr-review/approved` + `pr-status/needs-review-again`）；无 finding → `pr-review/approved` + `pr-status/ready`（清 `pr-review/changes-requested` + `pr-status/needs-review-again`）。
 
 ---
 

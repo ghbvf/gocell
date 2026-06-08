@@ -106,6 +106,11 @@ MARKER = "gocell-pr-meta:v1"
 BLOCK_RE = re.compile(r"<!--\s*gocell-pr-meta:v1\s+([A-Za-z0-9+/=]+)\s*-->")
 MAX_ROUNDS = 3  # sealed circuit-breaker ceiling; producer facts cannot raise it
 DERIVED_KEYS = ("schema", "next", "idempotencyKey")  # cycle.maxRounds/exhausted also derived
+ZERO_FINDINGS = {
+    "total": 0, "fixed": 0, "unresolved": 0, "blocking": 0,
+    "byP": {"p0": 0, "p1": 0, "p2": 0, "p3": 0},
+    "byCx": {"cx1": 0, "cx2": 0, "cx3": 0, "cx4": 0},
+}
 
 # Coherent (kind, phase, verdict) triples. Producers report facts; an incoherent
 # triple (e.g. kind=fix with verdict=approved) would route derive_next down the
@@ -223,11 +228,42 @@ def derive_next(verdict, exhausted):
     raise ValueError("unknown verdict %r" % verdict)
 
 
+def validate_kind_facts(obj):
+    kind = obj.get("kind")
+    if kind in ("ship", "fix", "pr-review"):
+        if not isinstance(obj.get("findings"), dict):
+            raise ValueError("kind %s requires explicit findings facts" % kind)
+    elif kind == "ci":
+        ci = obj.get("ci")
+        if not isinstance(ci, dict):
+            raise ValueError("kind ci requires explicit ci facts")
+        if "failedChecks" not in ci:
+            raise ValueError("kind ci requires ci.failedChecks facts")
+        if "passedChecks" not in ci:
+            raise ValueError("kind ci requires ci.passedChecks facts")
+        if "totalChecks" not in ci:
+            raise ValueError("kind ci requires ci.totalChecks facts")
+        if not isinstance(ci.get("failedChecks"), list):
+            raise ValueError("kind ci requires ci.failedChecks to be an array")
+    elif kind == "oos":
+        oos = obj.get("oos")
+        if not isinstance(oos, dict):
+            raise ValueError("kind oos requires explicit oos facts")
+        items = oos.get("items")
+        if not isinstance(items, list) or not items:
+            raise ValueError("kind oos requires non-empty oos.items facts")
+    if kind != "ci" and obj.get("ci") is not None:
+        raise ValueError("kind %s must not carry ci facts" % kind)
+    if kind != "oos" and obj.get("oos") is not None:
+        raise ValueError("kind %s must not carry oos facts" % kind)
+
+
 def derive(facts):
     obj = dict(facts)
     triple = (obj.get("kind"), obj.get("phase"), obj.get("verdict"))
     if triple not in COHERENT:
         raise ValueError("incoherent (kind,phase,verdict)=%r" % (triple,))
+    validate_kind_facts(obj)
     obj["schema"] = SCHEMA_CONST
     rnd = (obj.get("cycle") or {}).get("round")
     if rnd is None:
@@ -240,8 +276,8 @@ def derive(facts):
     obj["next"] = derive_next(obj["verdict"], exhausted)
     obj.setdefault("session", None)
     obj.setdefault("worktree", None)
-    # ci/oos are facts (not derived) — setdefault so every block has identical
-    # key-set for clean canonical comparison.
+    # ci/oos are facts (not derived). After validate_kind_facts has checked the
+    # owning kind's presence contract, set defaults for canonical key equality.
     obj.setdefault("ci", None)
     obj.setdefault("oos", None)
     obj["idempotencyKey"] = "%s#%s@%s:%s/%s#%s" % (
@@ -301,11 +337,34 @@ def derive_facts(minimal):
             raise ValueError("derive_facts: unknown kind %r" % (kind,))
     f["phase"] = phase
 
+    if kind in ("ship", "fix", "pr-review"):
+        if not isinstance(minimal.get("findings"), dict):
+            raise ValueError("derive_facts: kind %s requires explicit findings facts" % kind)
+    if kind == "ci":
+        ci = minimal.get("ci")
+        if not isinstance(ci, dict):
+            raise ValueError("derive_facts: kind ci requires explicit ci facts")
+        if "failedChecks" not in ci:
+            raise ValueError("derive_facts: kind ci requires ci.failedChecks facts")
+        if "passedChecks" not in ci:
+            raise ValueError("derive_facts: kind ci requires ci.passedChecks facts")
+        if "totalChecks" not in ci:
+            raise ValueError("derive_facts: kind ci requires ci.totalChecks facts")
+        if not isinstance(ci.get("failedChecks"), list):
+            raise ValueError("derive_facts: kind ci requires ci.failedChecks to be an array")
+    if kind == "oos":
+        oos = minimal.get("oos")
+        if not isinstance(oos, dict):
+            raise ValueError("derive_facts: kind oos requires explicit oos facts")
+        items = oos.get("items")
+        if not isinstance(items, list) or not items:
+            raise ValueError("derive_facts: kind oos requires non-empty oos.items facts")
+
     # verdict
     if kind in FIXED_VERDICT_BY_KIND:
         verdict = FIXED_VERDICT_BY_KIND[kind]
     elif kind == "ci":
-        failed = (minimal.get("ci") or {}).get("failedChecks") or []
+        failed = minimal["ci"]["failedChecks"]
         verdict = "ci-failed" if failed else "ci-green"
     else:  # pr-review
         verdict = minimal.get("verdict")
@@ -322,12 +381,8 @@ def derive_facts(minimal):
         rnd = round_base
     f["cycle"] = {"round": rnd}
 
-    # findings default (ci/oos carry no counts)
-    f.setdefault("findings", {
-        "total": 0, "fixed": 0, "unresolved": 0, "blocking": 0,
-        "byP": {"p0": 0, "p1": 0, "p2": 0, "p3": 0},
-        "byCx": {"cx1": 0, "cx2": 0, "cx3": 0, "cx4": 0},
-    })
+    # ci/oos carry no review counts; all review-bearing kinds must supply them.
+    f.setdefault("findings", ZERO_FINDINGS)
     return f
 
 
@@ -449,11 +504,7 @@ def _make_facts(kind, phase, verdict, rnd=1, **extra):
         "headRef": "feature/test",
         "headSha": "a" * 40,
         "verdict": verdict,
-        "findings": {
-            "total": 0, "fixed": 0, "unresolved": 0, "blocking": 0,
-            "byP": {"p0": 0, "p1": 0, "p2": 0, "p3": 0},
-            "byCx": {"cx1": 0, "cx2": 0, "cx3": 0, "cx4": 0},
-        },
+        "findings": ZERO_FINDINGS,
         "cycle": {"round": rnd},
     }
     f.update(extra)
@@ -480,8 +531,8 @@ def do_selftest(schema):
     # Update this constant whenever a check is added or removed. Breakdown:
     #   9 round-trip + 2 five-state + 4 schema-reject + 4 forgery + 1 incoherent
     #   + 1 oos-array + 1 ci-array + 2 exhausted + 22 emitblock-derive
-    #   + 5 kind-coverage = 51
-    EXPECTED_CHECKS = 51
+    #   + 5 kind-coverage + 9 kind-facts-contract = 60
+    EXPECTED_CHECKS = 60
 
     checks = 0
     failures = []
@@ -533,7 +584,19 @@ def do_selftest(schema):
     for kind, phase, verdict in kinds:
         name = "round-trip/%s/%s/%s" % (kind, phase, verdict)
         try:
-            facts = _make_facts(kind, phase, verdict, rnd=1)
+            extra = {}
+            if kind == "ci":
+                failed = [] if verdict == "ci-green" else [{"name": "x", "url": "u"}]
+                extra["ci"] = {"failedChecks": failed, "passedChecks": 1, "totalChecks": 2}
+            if kind == "oos":
+                extra["oos"] = {"items": [
+                    {
+                        "fileLine": "path/to/file.go:1",
+                        "rootCause": {"code": "c", "arch": "a", "history": "h"},
+                        "solutionSeeds": {"minimal": "m", "thorough": "t", "refactor": "r"},
+                    }
+                ]}
+            facts = _make_facts(kind, phase, verdict, rnd=1, **extra)
             decoded = _emit_decode(facts, schema)
             expected = derive(facts_of(decoded))
             if canon(decoded) != canon(expected):
@@ -693,7 +756,8 @@ def do_selftest(schema):
     try:
         # ci kind needs a coherent triple: kind=ci, phase=check, verdict=ci-failed
         facts = _make_facts("ci", "check", "ci-failed",
-                            ci={"failedChecks": [{"link": "https://example.com/run/1"}]})
+                            ci={"failedChecks": [{"link": "https://example.com/run/1"}],
+                                "passedChecks": 0, "totalChecks": 1})
         # "name" is required in each failedChecks item per the schema; omitting it
         # must cause decode to reject the block.
         obj = derive(facts)
@@ -740,7 +804,7 @@ def do_selftest(schema):
 
     # ship: phase=ship, verdict=needs-review-again, round=0 (roundBase ignored)
     try:
-        f = derive_facts(_minimal("ship", 5))
+        f = derive_facts(_minimal("ship", 5, findings=ZERO_FINDINGS))
         assert_eq("emitblock/ship/phase", f["phase"], "ship")
         assert_eq("emitblock/ship/verdict", f["verdict"], "needs-review-again")
         assert_eq("emitblock/ship/round", f["cycle"]["round"], 0)
@@ -749,7 +813,7 @@ def do_selftest(schema):
 
     # fix: round = roundBase + 1
     try:
-        f = derive_facts(_minimal("fix", 2))
+        f = derive_facts(_minimal("fix", 2, findings=ZERO_FINDINGS))
         assert_eq("emitblock/fix/phase", f["phase"], "fix")
         assert_eq("emitblock/fix/verdict", f["verdict"], "needs-check-fix")
         assert_eq("emitblock/fix/round", f["cycle"]["round"], 3)
@@ -758,7 +822,13 @@ def do_selftest(schema):
 
     # oos: phase=review, verdict=oos-filed, round=carry
     try:
-        f = derive_facts(_minimal("oos", 2))
+        f = derive_facts(_minimal("oos", 2, oos={"items": [
+            {
+                "fileLine": "path/to/file.go:1",
+                "rootCause": {"code": "c", "arch": "a", "history": "h"},
+                "solutionSeeds": {"minimal": "m", "thorough": "t", "refactor": "r"},
+            }
+        ]}))
         assert_eq("emitblock/oos/phase", f["phase"], "review")
         assert_eq("emitblock/oos/verdict", f["verdict"], "oos-filed")
         assert_eq("emitblock/oos/round", f["cycle"]["round"], 2)
@@ -781,10 +851,12 @@ def do_selftest(schema):
 
     # pr-review: phase + verdict from producer (genuine judgment); round = carry
     try:
-        f = derive_facts(_minimal("pr-review", 1, phase="review", verdict="changes-requested"))
+        f = derive_facts(_minimal(
+            "pr-review", 1, phase="review", verdict="changes-requested", findings=ZERO_FINDINGS))
         assert_eq("emitblock/pr-review-review/phase", f["phase"], "review")
         assert_eq("emitblock/pr-review-review/round", f["cycle"]["round"], 1)
-        f = derive_facts(_minimal("pr-review", 1, phase="check", verdict="ready"))
+        f = derive_facts(_minimal(
+            "pr-review", 1, phase="check", verdict="ready", findings=ZERO_FINDINGS))
         assert_eq("emitblock/pr-review-check/phase", f["phase"], "check")
         assert_eq("emitblock/pr-review-check/verdict", f["verdict"], "ready")
     except Exception as e:
@@ -792,7 +864,7 @@ def do_selftest(schema):
 
     # end-to-end: minimal -> derive_facts -> derive -> encode -> decode canonical
     try:
-        full = derive(derive_facts(_minimal("ship", 0)))
+        full = derive(derive_facts(_minimal("ship", 0, findings=ZERO_FINDINGS)))
         payload = base64.b64encode(canon(full).encode("utf-8")).decode("ascii")
         decoded_list = valid_blocks("<!-- %s %s -->" % (MARKER, payload), schema)
         if not decoded_list or canon(decoded_list[0]) != canon(full):
@@ -809,10 +881,20 @@ def do_selftest(schema):
     for k in list(PHASE_BY_KIND.keys()) + ["pr-review"]:
         try:
             extra = {}
+            if k in ("ship", "fix"):
+                extra["findings"] = ZERO_FINDINGS
             if k == "ci":
-                extra["ci"] = {"failedChecks": []}
+                extra["ci"] = {"failedChecks": [], "passedChecks": 0, "totalChecks": 0}
+            if k == "oos":
+                extra["oos"] = {"items": [
+                    {
+                        "fileLine": "path/to/file.go:1",
+                        "rootCause": {"code": "c", "arch": "a", "history": "h"},
+                        "solutionSeeds": {"minimal": "m", "thorough": "t", "refactor": "r"},
+                    }
+                ]}
             if k == "pr-review":
-                extra.update({"phase": "review", "verdict": "approved"})
+                extra.update({"phase": "review", "verdict": "approved", "findings": ZERO_FINDINGS})
             f = derive_facts(_minimal(k, 0, **extra))
             want_phase = "review" if k == "pr-review" else PHASE_BY_KIND[k]
             assert_eq("emitblock/kind-coverage/%s" % k, f["phase"], want_phase)
@@ -822,10 +904,24 @@ def do_selftest(schema):
     # derive_facts rejects malformed input (fail-closed)
     assert_raises("emitblock/reject/unknown-kind", lambda: derive_facts(_minimal("bogus", 0)))
     assert_raises("emitblock/reject/no-roundbase", lambda: derive_facts({"kind": "ship"}))
+    assert_raises("emitblock/reject/ship-no-findings", lambda: derive_facts(_minimal("ship", 0)))
+    assert_raises("emitblock/reject/fix-no-findings", lambda: derive_facts(_minimal("fix", 0)))
+    assert_raises("emitblock/reject/prreview-no-findings",
+                  lambda: derive_facts(_minimal("pr-review", 0, phase="review", verdict="approved")))
     assert_raises("emitblock/reject/prreview-no-phase",
-                  lambda: derive_facts(_minimal("pr-review", 0, verdict="approved")))
+                  lambda: derive_facts(_minimal("pr-review", 0, findings=ZERO_FINDINGS, verdict="approved")))
     assert_raises("emitblock/reject/prreview-no-verdict",
-                  lambda: derive_facts(_minimal("pr-review", 0, phase="review")))
+                  lambda: derive_facts(_minimal("pr-review", 0, findings=ZERO_FINDINGS, phase="review")))
+    assert_raises("emitblock/reject/ci-no-ci", lambda: derive_facts(_minimal("ci", 0)))
+    assert_raises("emitblock/reject/ci-no-failedchecks",
+                  lambda: derive_facts(_minimal("ci", 0, ci={"passedChecks": 0, "totalChecks": 0})))
+    assert_raises("emitblock/reject/ci-no-passedchecks",
+                  lambda: derive_facts(_minimal("ci", 0, ci={"failedChecks": [], "totalChecks": 0})))
+    assert_raises("emitblock/reject/ci-no-totalchecks",
+                  lambda: derive_facts(_minimal("ci", 0, ci={"failedChecks": [], "passedChecks": 0})))
+    assert_raises("emitblock/reject/oos-no-oos", lambda: derive_facts(_minimal("oos", 0)))
+    assert_raises("emitblock/reject/oos-empty-items",
+                  lambda: derive_facts(_minimal("oos", 0, oos={"items": []})))
 
     # ------------------------------------------------------------------
     # Report
