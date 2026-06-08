@@ -97,19 +97,26 @@ func findOffendingLines(t *testing.T, filePath string, patterns ...*regexp.Regex
 	return hits
 }
 
-// findRepoRoot walks upward from the working directory until it finds a
-// go.mod file. The test was written as `go test ./cmd/corebundle/...` so the
-// working directory is the package dir; repo root is three levels up, but we
-// do the walk defensively in case the harness changes.
+// findRepoRoot walks upward from the working directory until it finds the
+// directory holding go.work — the workspace (repo) root.
+//
+// cmd/corebundle is its own go.work module (#1559), so a "nearest go.mod wins"
+// walk now stops at cmd/corebundle/go.mod and returns the satellite dir, not the
+// repo root. These hardening tests scan the OUTER repo (cmd/*, examples/*,
+// assemblies/, …), which lives at the workspace root — the only directory holding
+// go.work (cmd/corebundle/ holds go.mod but not go.work). Walking up to go.work
+// therefore skips the nested-module boundary and resolves the real repo root,
+// independent of the directory `go test` runs from. (Mirrors the cmd/gocell
+// precedent #1557 — see cmd/gocell/app/graph_test.go::repoRoot.)
 func findRepoRoot(t *testing.T) string {
 	t.Helper()
 	wd, err := os.Getwd()
 	require.NoError(t, err)
 	for dir := wd; dir != "/" && dir != ""; dir = filepath.Dir(dir) {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, "go.work")); err == nil {
 			return dir
 		}
 	}
-	t.Fatalf("could not locate go.mod from %s", wd)
+	t.Fatalf("could not locate go.work from %s", wd)
 	return ""
 }

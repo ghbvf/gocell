@@ -78,7 +78,17 @@ build_out="$(mktemp -d)"
 trap 'rm -rf "${build_out}"' EXIT
 for dir in "${module_dirs[@]}"; do
     gocell::log::status "Building module (GOWORK=off): ${dir}"
-    if ! GOWORK=off go -C "${dir}" build -o "${build_out}/" ./...; then
+    # `-o "${build_out}/"` keeps main-package binaries out of the module dir, but
+    # `go build -o <dir> ./...` errors "no main packages to build" on a library-only
+    # module (no main package, e.g. cellmodules #1559). Such modules build WITHOUT
+    # `-o` — a plain `go build ./...` compile-checks every package and emits no binary
+    # to place. Same library-only handling as Makefile `check-build`.
+    if GOWORK=off go -C "${dir}" list -f '{{.Name}}' ./... 2>/dev/null | grep -qx main; then
+        build_cmd=(go -C "${dir}" build -o "${build_out}/" ./...)
+    else
+        build_cmd=(go -C "${dir}" build ./...)
+    fi
+    if ! GOWORK=off "${build_cmd[@]}"; then
         gocell::log::error "go build ./... failed in module '${dir}' (GOWORK=off)"
         exit 1
     fi

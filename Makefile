@@ -23,15 +23,18 @@
 # `go generate` before their first build. See docs/guides/devtools-catalog.md.
 # examples/* are their own go.work modules (#1556), so a root `./examples/...`
 # pattern matches zero packages here; their release-consistency build is covered
-# by hack/verify-workspace.sh (GOWORK=off per-module). `make build` ships core/cmd.
-# cmd/gocell is its own go.work module too (#1557), so the `./cmd/...` wildcard
-# below stops at its nested-module boundary and no longer emits bin/gocell — it
-# is built explicitly via its module path (the explicit dir path resolves the
+# by hack/verify-workspace.sh (GOWORK=off per-module). `make build` ships the cmd
+# binaries. cmd/gocell (#1557) and cmd/corebundle (#1559) are each their own
+# go.work module now, so a root `./cmd/...` wildcard would match only the
+# cmd/internal library (compiled transitively by both binaries) — both binaries
+# are built explicitly via their dir paths (the explicit dir path resolves the
 # satellite under go.work; CWD stays the repo root so bin/ is the repo bin/).
+# `go generate ./cmd/corebundle/` runs the corebundle catalog codegen in-module
+# (its directive pins --module-path to the base module, #1559).
 build:
 	mkdir -p bin
 	go generate ./cmd/corebundle/
-	go build -tags=catalog_gen -o bin/ ./cmd/...
+	go build -tags=catalog_gen -o bin/ ./cmd/corebundle
 	go build -o bin/ ./cmd/gocell
 
 # check-build is the full-repo compile check (no artefacts). Module-aware
@@ -45,15 +48,24 @@ build:
 # under CodeQL's Go build-tracer the canonical `go build` command form is what
 # the tracing shim recognizes — a leading `-C` flag makes it miss the build and
 # the database ends up empty ("no source code seen during build"). `-o` points at
-# a temp directory so main packages do not leave binaries in satellite dirs.
-# Fail-closed: a broken funnel aborts under `set -e`.
+# a temp directory so main-package modules do not leave binaries in satellite dirs.
+# Library-only modules (no main package, e.g. cellmodules #1559) build WITHOUT `-o`
+# because `go build -o <dir> ./...` errors "no main packages to build" — a plain
+# `go build ./...` compile-checks every package and produces no binary to pollute
+# the dir. Both forms are the canonical `( cd "$$d" && go build ./... )` the CodeQL
+# tracer recognizes. Fail-closed: a broken funnel aborts under `set -e`.
 check-build:
 	@bash -c 'set -euo pipefail; \
 	build_out="$$(mktemp -d)"; trap '\''rm -rf "$$build_out"'\'' EXIT; \
 	source hack/lib/util.sh; source hack/lib/modules.sh; \
 	dirs="$$(gocell::modules::dirs)"; \
 	while IFS= read -r d; do [ -n "$$d" ] || continue; \
-	  echo "+++ go build ($$d)"; ( cd "$$d" && go build -o "$$build_out/" ./... ); \
+	  echo "+++ go build ($$d)"; \
+	  if ( cd "$$d" && go list -f '\''{{.Name}}'\'' ./... 2>/dev/null ) | grep -qx main; then \
+	    ( cd "$$d" && go build -o "$$build_out/" ./... ); \
+	  else \
+	    ( cd "$$d" && go build ./... ); \
+	  fi; \
 	done <<< "$$dirs"'
 
 # Root `./...` stops at nested-module boundaries. Iterate every
@@ -157,6 +169,7 @@ clean:
 		examples/orderfulfillment/orderfulfillment \
 		examples/ssobff/ssobff \
 		examples/todoorder/todoorder
+	rm -f cmd/gocell/gocell cmd/corebundle/corebundle
 
 # ---------------------------------------------------------------------------
 # Docker Compose lifecycle
@@ -189,7 +202,7 @@ test-integration:
 		./adapters/... \
 		./tests/integration/... \
 		./tests/e2e/internal/... \
-		./cmd/corebundle/... \
+		github.com/ghbvf/gocell/cmd/corebundle/... \
 		github.com/ghbvf/gocell/examples/ssobff/... \
 		./cells/accesscore/... \
 		./cells/configcore/... \

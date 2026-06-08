@@ -16,7 +16,11 @@ RUN go mod download
 # Multi-stage isolation: the build stage filesystem is discarded after
 # `go build`; only /out/corebundle crosses into the runtime image.
 COPY . .
-RUN CGO_ENABLED=0 go build -o /out/corebundle ./cmd/corebundle
+# cmd/corebundle is its own go.work module (#1559); `go -C cmd/corebundle build`
+# resolves the sibling cellmodules + base modules via the copied go.work (GOWORK
+# auto-detected from /src). A root-relative `./cmd/corebundle` would not cross the
+# nested-module boundary.
+RUN CGO_ENABLED=0 go -C cmd/corebundle build -o /out/corebundle .
 
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates curl openssl \
