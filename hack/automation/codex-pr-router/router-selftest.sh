@@ -145,9 +145,9 @@ JQ_REAL="$(command -v jq 2>/dev/null || true)"
 if [[ -n "${JQ_REAL}" ]]; then
     ln -sf "${JQ_REAL}" "${STUB_BIN}/jq"
 else
-    # Minimal python3 fallback: enough for the pr-meta emit pipe in router.sh
-    # The router pipes: jq -nc --arg ... --argjson ... '{...}' | bash pr-meta.sh emit
-    # We only need to produce valid JSON that pr-meta emit can read.
+    # Minimal python3 fallback: the router now calls `pr-meta.sh emit-block`,
+    # which assembles its facts JSON with jq internally. A real jq is required for
+    # the S5 emit path; this stub only keeps non-emit scenarios from crashing.
     cat > "${STUB_BIN}/jq" << 'JQSTUB'
 #!/usr/bin/env bash
 # Minimal jq stub: just print empty JSON object and exit 0
@@ -333,7 +333,7 @@ cat > "${VERDICT_BAD_FINDING}" << 'VJSON'
 VJSON
 
 # ---------------------------------------------------------------------------
-# 40-char hex OIDs (pr-meta emit requires headSha to match ^[0-9a-f]{40}$)
+# 40-char hex OIDs (pr-meta emit-block requires headSha to match ^[0-9a-f]{40}$)
 # ---------------------------------------------------------------------------
 OID_REVIEW="aaaa1111bbbb2222cccc3333dddd4444eeee5555"  # S1,S2,S4,S6 standard review OID
 OID_S2="ffff0000aaaa1111bbbb2222cccc3333dddd4444"      # S2 uses different PR#50 OID
@@ -354,12 +354,17 @@ OID_S7="1111aaaa2222bbbb3333cccc4444dddd5555eeee"      # S7 label-gone OID
 #   2. <!-- gocell-pr-meta:v1 <base64> --> line (for extract to find)
 # ---------------------------------------------------------------------------
 
-# S5a block: cx2=1, cx1=1, total=2
-S5A_FACTS_JSON='{"kind":"pr-review","phase":"review","verdict":"changes-requested","repo":"ghbvf/gocell","pr":43,"tool":"codex","baseRef":"develop","headRef":"feat/fix","headSha":"'"${OID_S5}"'","findings":{"total":2,"fixed":0,"unresolved":2,"blocking":0,"byP":{"p0":0,"p1":0,"p2":2,"p3":0},"byCx":{"cx1":1,"cx2":1,"cx3":0,"cx4":0}},"cycle":{"round":1}}'
-
-S5A_BLOCK="$(echo "${S5A_FACTS_JSON}" | bash "${PR_META}" emit 2>/dev/null)" || {
-    echo "FATAL: pr-meta emit failed for S5a — cannot continue selftest" >&2
-    echo "Facts JSON: ${S5A_FACTS_JSON}" >&2
+# S5a block: cx2=1, cx1=1, total=2 (round-base=1 -> pr-review carry round=1).
+# Built via the emit-block funnel with full overrides (offline: refs + round-base
+# supplied, so no gh/git/env access).
+S5A_BLOCK="$(bash "${PR_META}" emit-block \
+    --kind=pr-review --phase=review --verdict=changes-requested \
+    --pr=43 --tool=codex \
+    --head-sha="${OID_S5}" --base-ref=develop --head-ref=feat/fix \
+    --round-base=1 --session= --worktree= \
+    --findings='{"total":2,"fixed":0,"unresolved":2,"blocking":0,"byP":{"p0":0,"p1":0,"p2":2,"p3":0},"byCx":{"cx1":1,"cx2":1,"cx3":0,"cx4":0}}' \
+    2>/dev/null)" || {
+    echo "FATAL: pr-meta emit-block failed for S5a — cannot continue selftest" >&2
     exit 1
 }
 
@@ -368,11 +373,15 @@ S5A_BODY="<!-- pm:pr-review -->
 ## pr-review stub comment
 ${S5A_BLOCK}"
 
-# S5b block: cx2=0, cx1=1, total=1
-S5B_FACTS_JSON='{"kind":"pr-review","phase":"review","verdict":"changes-requested","repo":"ghbvf/gocell","pr":43,"tool":"codex","baseRef":"develop","headRef":"feat/fix","headSha":"'"${OID_S5}"'","findings":{"total":1,"fixed":0,"unresolved":1,"blocking":0,"byP":{"p0":0,"p1":0,"p2":1,"p3":0},"byCx":{"cx1":1,"cx2":0,"cx3":0,"cx4":0}},"cycle":{"round":1}}'
-
-S5B_BLOCK="$(echo "${S5B_FACTS_JSON}" | bash "${PR_META}" emit 2>/dev/null)" || {
-    echo "FATAL: pr-meta emit failed for S5b — cannot continue selftest" >&2
+# S5b block: cx2=0, cx1=1, total=1 (round-base=1 -> pr-review carry round=1)
+S5B_BLOCK="$(bash "${PR_META}" emit-block \
+    --kind=pr-review --phase=review --verdict=changes-requested \
+    --pr=43 --tool=codex \
+    --head-sha="${OID_S5}" --base-ref=develop --head-ref=feat/fix \
+    --round-base=1 --session= --worktree= \
+    --findings='{"total":1,"fixed":0,"unresolved":1,"blocking":0,"byP":{"p0":0,"p1":0,"p2":1,"p3":0},"byCx":{"cx1":1,"cx2":0,"cx3":0,"cx4":0}}' \
+    2>/dev/null)" || {
+    echo "FATAL: pr-meta emit-block failed for S5b — cannot continue selftest" >&2
     exit 1
 }
 
