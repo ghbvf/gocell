@@ -6,13 +6,25 @@ when new modules are added in the future.
 
 ## Current state
 
-Single Go module: `github.com/ghbvf/gocell`, rooted at the repository top level.
-The `go.work` file currently contains only `use .` — one module, one workspace.
+GoCell is a committed multi-module Go workspace. The root module remains
+`github.com/ghbvf/gocell`, and `go.work` also lists first-party satellite
+modules for composition bundles, examples, and adapter-consuming test surfaces.
 
 ```
-go.work          # committed; contains: use .
-go.mod           # module github.com/ghbvf/gocell  (core)
+go.work                         # committed workspace membership
+go.mod                          # module github.com/ghbvf/gocell  (core)
+cellmodules/go.mod              # module github.com/ghbvf/gocell/cellmodules
+cmd/corebundle/go.mod           # module github.com/ghbvf/gocell/cmd/corebundle
+cmd/gocell/go.mod               # module github.com/ghbvf/gocell/cmd/gocell
+examples/*/go.mod               # example satellite modules
+tests/integration/go.mod        # adapter-consuming integration-test satellite
+tests/testutil/pgshare/go.mod   # compatibility testutil satellite
 ```
+
+The test satellites are deliberate: they may depend on adapter packages without
+forcing the root module to retain adapter `replace` entries. Root framework tests
+must stay adapter-free; `hack/verify-root-no-adapter-import.sh` guards that
+boundary.
 
 The ~117 other `go.mod` files tracked under `tools/*/testdata/` are
 **archtest/depgraph fixture-isolation modules**, not workspace members. They are
@@ -26,11 +38,10 @@ exclusively with each other but not together with external modules"
 module in this repository is consumed only within the repository; there are no
 external consumers.
 
-For a single `use .` entry the dependency-resolution behavior is **identical** to
-having no `go.work` — the workspace adds zero semantic change to today's build.
-The value is establishing the **extension point**: when `mdm/` or `zerotrust/`
-modules are added (Phase 1 / 2027 Q1 per Plan D), the CI traversal and module
-enumeration machinery is already in place; no retroactive rewiring is needed.
+For contributors, the committed workspace lets local commands resolve unpublished
+first-party modules together. Release-consistency gates still build and test each
+member with `GOWORK=off`, so each module must keep its own `go.mod` / `go.sum`
+complete and reproducible.
 
 `go.work.sum` is gitignored. A single-module workspace produces no cross-module
 sum entries, so the file stays empty and is correctly excluded.
@@ -55,13 +66,14 @@ kind=<kind> matched zero files"). You must remove the corresponding `includes:`
 entry from `.gocell/manifest.yaml` to reflect the intentional removal; the
 manifest will not silently produce an empty set.
 
-## How to add a future module
+## How to add a module
 
-When a new module (e.g. `mdm/`) is ready:
+When a new module is ready:
 
 1. Add `use ./newmod` to `go.work`.
 2. Add a `modules:` entry to `.gocell/manifest.yaml` with the appropriate
-   `includes:` for that module's cells / slices / contracts.
+   `includes:` for that module's cells / slices / contracts, if it owns
+   metadata.
 3. Add the module's own `go.mod`.
 
 The `hack/verify-workspace.sh` gate (auto-discovered by `make verify` via glob)
@@ -82,8 +94,11 @@ NOT `go.work.sum`, which stays gitignored (intentional).
 ```
 make verify
   └── hack/make-rules/verify.sh          (glob-discovers all hack/verify-*.sh)
-        └── hack/verify-workspace.sh     (go.work drift + per-module release build)
-              └── hack/lib/modules.sh    (single-sourced from go.work; validated DiskPaths)
+        ├── hack/verify-workspace.sh          (go.work drift + per-module release build)
+        ├── hack/verify-workspace-test.sh     (satellite module untagged tests)
+        ├── hack/verify-root-no-adapter-import.sh
+        ├── hack/verify-integration-lint.sh   (narrow integration-tag lint)
+        └── hack/lib/modules.sh               (single-sourced from go.work; validated DiskPaths)
 ```
 
 `make verify` uses a glob-discovery model: adding `hack/verify-workspace.sh` is
@@ -91,11 +106,14 @@ sufficient — no change to the driver script is needed.
 
 `hack/verify-workspace.sh` builds each module with `GOWORK=off go -C "$dir" build
 ./...` so it resolves against the module's own pinned `go.mod` (release-consistent,
-Plan D §5.6), not the workspace-stitched graph. It builds but does **not** `go
-test` per module — that would duplicate the build-test matrix and slow `make
-verify`; test traversal reuses the same `hack/lib/modules.sh` funnel in CI / a
-future workspace-test gate. Once multiple large modules exist and CI budget is a
-concern, `VERIFY_SKIP=workspace make verify` skips this gate (the standard
+Plan D §5.6), not the workspace-stitched graph. `hack/verify-workspace-test.sh`
+runs untagged tests for non-root workspace members through the same module
+enumeration funnel. Tagged integration tests remain in the dedicated
+service-bearing CI lane, while `hack/verify-integration-lint.sh` keeps the narrow
+integration-only helper lint/dependency rules active at PR time.
+
+Once multiple large modules exist and CI budget is a concern,
+`VERIFY_SKIP=workspace make verify` skips the workspace build gate (the standard
 make-verify skip mechanism). The `hack/lib/modules.sh` funnel fail-closed
 validates every `go.work` DiskPath (rejects absolute / `..`-escaping / out-of-repo
 paths) — see `MODULES-PATH-VALIDATION-01`.

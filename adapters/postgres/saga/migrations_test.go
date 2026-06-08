@@ -10,7 +10,7 @@ import (
 )
 
 // TestMigration040_CreatesSagaTables verifies migration 040 produces the two
-// expected relations with PK + lease columns. pgshare's NewPerTestPool runs
+// expected relations with PK + lease columns. pgtest's NewPerTestPool runs
 // the full migration set (014..040) on first call; this test just inspects
 // the resulting schema via pg_catalog.
 //

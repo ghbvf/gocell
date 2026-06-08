@@ -272,6 +272,20 @@ func TestRunJourneyCheckRef_RejectsNonJourneyRef(t *testing.T) {
 func TestResolveJourneyPkg_IntegrationDir(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "tests", "integration"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "tests", "integration", "go.mod"),
+		[]byte("module example.com/project/tests/integration\n\ngo 1.25\n"),
+		0o644,
+	))
+	r := NewRunner(nil, dir)
+	pkg, extra := r.resolveJourneyPkg(&metadata.JourneyMeta{}, resolvedRef{Kind: PrefixJourney})
+	assert.Equal(t, "example.com/project/tests/integration/...", pkg)
+	assert.Contains(t, extra, "-tags=integration")
+}
+
+func TestResolveJourneyPkg_IntegrationDirWithoutGoModFallsBackRelative(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "tests", "integration"), 0o755))
 	r := NewRunner(nil, dir)
 	pkg, extra := r.resolveJourneyPkg(&metadata.JourneyMeta{}, resolvedRef{Kind: PrefixJourney})
 	assert.Equal(t, "./tests/integration/...", pkg)

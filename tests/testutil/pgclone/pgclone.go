@@ -3,7 +3,7 @@
 // Package pgclone owns the process-wide shared PostgreSQL container lifecycle
 // and per-test database minting for integration test packages. It is the
 // single sanctioned holder of tcpostgres.Run in the repo (PG-TESTCONTAINER-
-// FUNNEL): tests/testutil/pgshare and adapters/postgres's in-package test
+// FUNNEL): adapters/postgres/pgtest and adapters/postgres's in-package test
 // helper both delegate here, so no other package needs to import the
 // testcontainers postgres module.
 //
@@ -11,9 +11,9 @@
 // (which needs adapterpg.NewMigrator) is supplied by the caller as a
 // MigrateFunc callback. This dependency inversion is what lets
 // adapters/postgres's own white-box (`package postgres`) tests share one
-// container without an import cycle: pgshare imports adapterpg, so
-// adapters/postgres tests cannot import pgshare; they import pgclone, which
-// has no adapterpg edge.
+// container without an import cycle: pgtest imports adapterpg, so in-package
+// adapters/postgres tests cannot import pgtest; they import pgclone, which has
+// no adapterpg edge.
 //
 // Two per-test paths share one container:
 //   - CloneDSN: a per-test DB cloned from a pre-migrated template
@@ -32,10 +32,11 @@
 // tcpostgres.Run out of every other package. Its AI-robust rating and
 // blind-spot inventory live in tools/archtest/pg_testcontainer_funnel_test.go.
 //
-// Most callers outside adapters/postgres should use tests/testutil/pgshare,
-// which wraps pgclone with a typed *adapterpg.Pool return. Only white-box
-// `package postgres` tests (which cannot import pgshare without an import
-// cycle) use pgclone directly.
+// Most adapter-owning callers should use adapters/postgres/pgtest, which wraps
+// pgclone with a typed *adapterpg.Pool return. Consumer satellite tests may use
+// tests/testutil/pgshare as a compatibility import path. Only white-box
+// `package postgres` tests (which cannot import pgtest without an import cycle)
+// use pgclone directly.
 package pgclone
 
 import (

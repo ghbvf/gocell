@@ -27,7 +27,6 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/test/bufconn"
 
-	adaptersgrpc "github.com/ghbvf/gocell/adapters/grpc"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -37,36 +36,17 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
-	"github.com/ghbvf/gocell/runtime/grpc/interceptor"
-	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
 // GRPCServiceRegistrar is the bootstrap-local narrow interface (defined in grpc_listener.go).
 // We reference it here to verify the fake satisfies it.
 var _ GRPCServiceRegistrar = (*runtimegrpc.ServiceRegistrar)(nil)
 
-// buildDrainAdapterServer builds an adapters/grpc.Server with no auth (all public),
+// buildDrainAdapterServer builds a test GRPCServer with no auth (all public),
 // for use in drain tests that don't care about auth.
-func buildDrainAdapterServer(t *testing.T) *adaptersgrpc.Server {
+func buildDrainAdapterServer(t *testing.T) *testGRPCServer {
 	t.Helper()
-	reg := runtimegrpc.NewServiceRegistrar()
-	drain := runtimegrpc.NewDrainSignal()
-	deps := interceptor.Deps{
-		Collector:       metrics.NewInMemoryGRPCCollector(),
-		Clock:           clock.Real(),
-		Verifier:        &bootstrapTestVerifier{},
-		AuthOptions:     []interceptor.AuthOption{interceptor.WithPublicMethod(func(string) bool { return true })},
-		Registrar:       reg, // Option 3: shared registrar (#1152)
-		CellIDClosedSet: []string{"bootstrap-test-cell"},
-		Drain:           drain,
-	}
-	srv, err := adaptersgrpc.New(adaptersgrpc.Config{
-		Addr:         ":0",
-		TLS:          adaptersgrpc.TLSConfig{AllowInsecure: true},
-		Interceptors: interceptor.NewServerInterceptors(deps),
-	})
-	require.NoError(t, err)
-	return srv
+	return newTestGRPCServer(func(string) bool { return true })
 }
 
 // grpcBufDial dials a bufconn listener with insecure credentials.

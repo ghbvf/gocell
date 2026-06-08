@@ -291,6 +291,7 @@ linters:
           files:
             - "**/adapters/**"
             - "!**/adapters/**/*_test.go"
+            - "!**/adapters/postgres/pgtest/**"
             - "!**/cells/**/adapters/**"
             - "!**/examples/**"
           allow:
@@ -322,6 +323,20 @@ linters:
                 cellmodules/ is a Composition Root layer; adapters/ must not import it
                 (reverse import = layer violation). Belt-and-suspenders alongside strict
                 allow-list; mirrors the existing pgquery / cells deny pattern.
+        postgres-pgtest-isolation:
+          # adapters/postgres/pgtest is an integration-test helper owned by the
+          # Postgres adapter. It wraps the shared pgclone Testcontainers funnel
+          # while applying adapter-owned migrations, so it needs one narrow
+          # testutil import that ordinary adapter packages must not inherit.
+          list-mode: strict
+          files:
+            - "**/adapters/postgres/pgtest/**"
+            - "!**/adapters/postgres/pgtest/**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/ghbvf/gocell/adapters
+            - github.com/ghbvf/gocell/pkg
+            - github.com/ghbvf/gocell/tests/testutil/pgclone
         cells-isolation:
           # LAYER-02: cells/ depend on kernel/ + runtime/ + pkg/. Cell-internal
           # adapters legitimately import SDKs (pgx etc.) — those externals are

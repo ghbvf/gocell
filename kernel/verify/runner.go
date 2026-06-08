@@ -380,8 +380,8 @@ func recordResult(result *VerifyResult, name string, res goTestResult, pkg, patt
 
 // resolveJourneyPkg determines the Go test package and extra args for a journey
 // ref. Example-local journey files run against their owning example tree;
-// project-level journeys still prefer ./tests/integration/... with integration
-// tags, then ./journeys/..., then ./... as last resort.
+// project-level journeys still prefer the tests/integration satellite module
+// with integration tags, then ./journeys/..., then ./... as last resort.
 func (r *Runner) resolveJourneyPkg(j *metadata.JourneyMeta, ref resolvedRef) (pkg string, extraArgs []string) {
 	if ref.Pkg != "" {
 		return ref.Pkg, nil
@@ -393,13 +393,40 @@ func (r *Runner) resolveJourneyPkg(j *metadata.JourneyMeta, ref resolvedRef) (pk
 			}
 		}
 	}
-	if dirExists(filepath.Join(r.root, "tests", "integration")) {
-		return "./tests/integration/...", []string{"-tags=integration"}
+	if pkgPath, ok := integrationJourneyPkgPath(r.root); ok {
+		return pkgPath, []string{"-tags=integration"}
 	}
 	if dirExists(filepath.Join(r.root, "journeys")) {
 		return "./journeys/...", nil
 	}
 	return "./...", nil
+}
+
+func integrationJourneyPkgPath(root string) (string, bool) {
+	dir := filepath.Join(root, "tests", "integration")
+	if !dirExists(dir) {
+		return "", false
+	}
+	modulePath, err := readGoModModulePath(filepath.Join(dir, "go.mod"))
+	if err != nil || modulePath == "" {
+		return "./tests/integration/...", true
+	}
+	return modulePath + "/...", true
+}
+
+func readGoModModulePath(path string) (string, error) {
+	//nolint:gosec // R2-approved: path is the fixed repo-local tests/integration/go.mod assembled from Runner.root.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "module ")), nil
+		}
+	}
+	return "", nil
 }
 
 func exampleNameFromJourneyFile(file string) (string, bool) {

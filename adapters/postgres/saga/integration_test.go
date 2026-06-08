@@ -35,7 +35,7 @@ const (
 // is the PR-04 SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01 entry point — once this
 // file exists, the archtest in tools/archtest considers PGJournal enrolled.
 //
-// Each subtest gets a fresh per-test database via pgshare.NewPerTestPool, so
+// Each subtest gets a fresh per-test database via pgtest.NewPerTestPool, so
 // TRUNCATE is unnecessary; the conformance suite Factory is invoked once per
 // case with an isolated DB.
 func TestPGSagaJournal_ConformanceSuite(t *testing.T) {

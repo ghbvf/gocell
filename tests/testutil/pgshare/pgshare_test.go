@@ -17,8 +17,8 @@ import (
 func TestNew_ReturnsNonNil(t *testing.T) {
 	t.Parallel()
 	s := New("1invalid-name")
-	if s == nil || s.inner == nil {
-		t.Fatal("New must return a non-nil *Shared with non-nil inner")
+	if s == nil {
+		t.Fatal("New must return a non-nil *Shared")
 	}
 }
 

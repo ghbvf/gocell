@@ -5,7 +5,7 @@
 // tests/testutil/pgclone is the single sanctioned holder of
 // `tcpostgres.Run` (testcontainers postgres module). Every PG integration
 // test must obtain a per-test database via pgclone (directly, or via the
-// pgshare wrapper for packages that can import adapters/postgres) — never by
+// pgtest/pgshare wrappers for packages that can import adapters/postgres) — never by
 // starting its own per-test container. This is the recurrence guard for the
 // adapters/postgres test-perf refactor: ~93 per-test container spin-ups
 // (~237s) collapsed onto one shared container + template clones.
@@ -93,7 +93,7 @@ func TestPG_TESTCONTAINER_FUNNEL_01(t *testing.T) {
 	findings := collectPGTestcontainerRunFindings(t, root)
 	assert.Empty(t, findings,
 		"tcpostgres.Run must appear only in tests/testutil/pgclone (or the backlogged carve-outs); "+
-			"use pgclone.CloneDSN/EmptyDSN (or pgshare.NewPerTestPool) instead of starting a per-test container")
+			"use pgclone.CloneDSN/EmptyDSN (or pgtest.NewPerTestPool / pgshare.NewPerTestPool) instead of starting a per-test container")
 }
 
 // TestPG_TESTCONTAINER_FUNNEL_01_AllowlistBoundary pins the #598 narrowing: the
