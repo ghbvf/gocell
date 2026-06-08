@@ -1,12 +1,14 @@
 // mqtt.go wires the optional MQTT publish demo channel for iotdevice. When
 // GOCELL_IOTDEVICE_MQTT_BROKERS is set, the device-register event channel is
-// swapped from the in-memory event bus to a real MQTT v5 broker (adapters/mqtt)
-// so the demo can be observed end-to-end with `mosquitto_sub`. The HTTP/WS main
-// path (register API, command polling) is unchanged. See examples/iotdevice/docs/mqtt.md.
+// mirrored to a real MQTT v5 broker (adapters/mqtt) while still publishing to the
+// in-memory event bus so in-process reactive subscribers keep receiving events.
+// The HTTP/WS main path (register API, command polling) is unchanged. See
+// examples/iotdevice/docs/mqtt.md.
 package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -70,9 +72,8 @@ func mqttConnectDeadline() (time.Duration, error) {
 //
 // Single-backend transform decorator — ref: ThreeDotsLabs/watermill
 // message/decorator.go messageTransformPublisherDecorator (embed Publisher +
-// transform, delegate). No fan-out: the demo swaps the cell's direct publisher
-// to MQTT rather than mirroring to a second sink (device-registered has no
-// in-process subscriber, so there is no second sink to mirror).
+// transform, delegate). Fan-out, when enabled, is owned by teePublisher below so
+// the topic transform remains a single-responsibility wrapper.
 type mqttTopicPublisher struct {
 	inner outbox.Publisher
 	ns    mqtt.TopicNamespace
@@ -98,6 +99,26 @@ func (p *mqttTopicPublisher) Publish(ctx context.Context, topic string, payload 
 // underlying Connection is closed separately via bootstrap.WithManagedCloser.
 func (p *mqttTopicPublisher) Close(ctx context.Context) error {
 	return p.inner.Close(ctx)
+}
+
+// teePublisher publishes to the in-process event bus first, then to the optional
+// external MQTT mirror. Both are attempted so one sink failing does not hide the
+// other sink's outcome; any errors are returned as errors.Join.
+type teePublisher struct {
+	local    outbox.Publisher
+	external outbox.Publisher
+}
+
+var _ outbox.Publisher = (*teePublisher)(nil)
+
+func (p *teePublisher) Publish(ctx context.Context, topic string, payload []byte) error {
+	localErr := p.local.Publish(ctx, topic, payload)
+	externalErr := p.external.Publish(ctx, topic, payload)
+	return errors.Join(localErr, externalErr)
+}
+
+func (p *teePublisher) Close(ctx context.Context) error {
+	return errors.Join(p.local.Close(ctx), p.external.Close(ctx))
 }
 
 // buildMQTTDirectPublisher constructs the MQTT publish channel from the

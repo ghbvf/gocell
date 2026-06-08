@@ -3,6 +3,9 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/idempotency"
 )
 
 // stubModule is a test-only CellModule implementation that returns a fixed ID.
@@ -80,5 +83,44 @@ func TestAssertModuleIDsMatch(t *testing.T) {
 				t.Fatalf("expected no error, got: %v", err)
 			}
 		})
+	}
+}
+
+func TestCommandRelayClaimer_DemoUsesInMemory(t *testing.T) {
+	t.Parallel()
+
+	claimer, err := commandRelayClaimer(clock.Real(), false)
+	if err != nil {
+		t.Fatalf("commandRelayClaimer demo returned error: %v", err)
+	}
+	if got := claimer.Kind(); got != idempotency.ClaimerKindInMemory {
+		t.Fatalf("Kind() = %q, want %q", got, idempotency.ClaimerKindInMemory)
+	}
+}
+
+func TestCommandRelayClaimer_DurableRequiresSinglePodAcknowledgement(t *testing.T) {
+	t.Setenv(envDurableSinglePod, "")
+
+	claimer, err := commandRelayClaimer(clock.Real(), true)
+	if err == nil {
+		t.Fatal("commandRelayClaimer durable without acknowledgement returned nil error")
+	}
+	if claimer != nil {
+		t.Fatalf("claimer = %T, want nil on durable config error", claimer)
+	}
+	if !strings.Contains(err.Error(), envDurableSinglePod) {
+		t.Fatalf("error %q does not mention %s", err.Error(), envDurableSinglePod)
+	}
+}
+
+func TestCommandRelayClaimer_DurableSinglePodOptIn(t *testing.T) {
+	t.Setenv(envDurableSinglePod, "true")
+
+	claimer, err := commandRelayClaimer(clock.Real(), true)
+	if err != nil {
+		t.Fatalf("commandRelayClaimer durable opt-in returned error: %v", err)
+	}
+	if got := claimer.Kind(); got != idempotency.ClaimerKindInMemory {
+		t.Fatalf("Kind() = %q, want %q", got, idempotency.ClaimerKindInMemory)
 	}
 }

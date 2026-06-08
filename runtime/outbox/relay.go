@@ -36,6 +36,8 @@ const (
 	ProbeCleanup healthz.ProbeName = "outbox_relay_cleanup"
 )
 
+const commandReceiptSettleTimeout = 5 * time.Second
+
 // Compile-time interface checks.
 //
 // *Relay intentionally does NOT implement kernel/lifecycle.ManagedResource: see
@@ -760,12 +762,28 @@ func (r *Relay) writeBackResults(ctx context.Context, results []publishResult) (
 	return stats, nil
 }
 
-// writeBackOne settles a single publish result: MarkPublished on success,
-// or delegates to handleFailedEntry on failure. Extracted to keep
-// writeBackResults below the cognitive-complexity ceiling.
+// writeBackOne settles a single publish result: command idempotency Commit then
+// MarkPublished on success, or delegates to handleFailedEntry on failure.
+// Extracted to keep writeBackResults below the cognitive-complexity ceiling.
 func (r *Relay) writeBackOne(ctx context.Context, res publishResult, stats *pollStats) error {
 	if res.err != nil {
 		return r.handleFailedEntry(ctx, res, stats)
+	}
+	// Command dispatch settled successfully — Commit the idempotency lease before
+	// publishing the outbox row so the business side effect and dedup done-key do
+	// not split. If Commit fails, leave the row in claiming; ReclaimStale can make
+	// it retry, but we never mark a command consumed while its done-key was not
+	// durably recorded. receipt is nil for events and non-acquired command claims.
+	if res.receipt != nil {
+		settleCtx, cancel := receiptSettleContext(ctx)
+		err := res.receipt.Commit(settleCtx)
+		cancel()
+		if err != nil {
+			slog.Error("outbox relay: command idempotency Commit failed; leaving row un-published",
+				slog.String("entry_id", res.entry.ID()),
+				slog.Any("error", err))
+			return err
+		}
 	}
 	if err := kout.Transition(kout.StateClaiming, kout.StatePublished); err != nil {
 		return err
@@ -790,18 +808,6 @@ func (r *Relay) writeBackOne(ctx context.Context, res publishResult, stats *poll
 	} else {
 		stats.published++
 	}
-	// Command dispatch settled successfully — Commit the idempotency lease so a
-	// future redelivery of the same source event is deduped (ClaimDone). Commit
-	// failure is logged, not fatal: the row is already MarkPublished (command
-	// consumed); the done-key simply may not persist (lease TTL still bounds it).
-	// receipt is nil for events and for non-acquired command claims.
-	if res.receipt != nil {
-		if err := res.receipt.Commit(ctx); err != nil {
-			slog.Warn("outbox relay: command idempotency Commit failed",
-				slog.String("entry_id", res.entry.ID()),
-				slog.Any("error", err))
-		}
-	}
 	return nil
 }
 
@@ -820,7 +826,10 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 	// command claims. Release failure is logged, not fatal. ref: ConsumerBase
 	// settle semantics — Reject/Requeue → Receipt.Release.
 	if res.receipt != nil {
-		if err := res.receipt.Release(ctx); err != nil {
+		settleCtx, cancel := receiptSettleContext(ctx)
+		err := res.receipt.Release(settleCtx)
+		cancel()
+		if err != nil {
 			slog.Warn("outbox relay: command idempotency Release failed",
 				slog.String("entry_id", res.entry.ID()),
 				slog.Any("error", err))
@@ -971,6 +980,10 @@ func (r *Relay) reclaimStale(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func receiptSettleContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), commandReceiptSettleTimeout)
 }
 
 // reclaimMaxIterations is the per-tick safety cap for the reclaim drain

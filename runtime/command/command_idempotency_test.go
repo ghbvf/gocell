@@ -96,6 +96,28 @@ func TestClaimKeyFromEntry_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestClaimKeyFromEntry_TenantlessUsesNoTenantSentinel(t *testing.T) {
+	t.Parallel()
+
+	em := &captureEmitter{}
+	const (
+		dispatchID = CommandID("command.devicecommand.enqueue.v1")
+		subject    = "device-7"
+		commandID  = "source-event-1"
+	)
+	if err := EmitAsync(context.Background(), clock.Real(), em, dispatchID, subject, commandID, struct{}{}); err != nil {
+		t.Fatalf("EmitAsync: %v", err)
+	}
+
+	key, ok := ClaimKeyFromEntry(em.entry)
+	if !ok {
+		t.Fatal("ClaimKeyFromEntry ok=false for tenantless entry with subject and commandID")
+	}
+	if want := "_notenant\x00device-7\x00source-event-1"; key != want {
+		t.Fatalf("ClaimKeyFromEntry key = %q, want %q", key, want)
+	}
+}
+
 func TestClaimKeyFromEntry_MissingIdentity(t *testing.T) {
 	t.Parallel()
 

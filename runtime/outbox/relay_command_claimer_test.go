@@ -40,17 +40,28 @@ func (c *fakeClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (id
 func (c *fakeClaimer) Kind() idempotency.ClaimerKind { return idempotency.ClaimerKindInMemory }
 
 // spyReceipt records Commit / Release so tests can assert lease settlement. The
-// commitErr / releaseErr fields let a test inject a settle-side store failure to
-// assert it is logged-not-fatal (the row outcome must stand regardless).
+// commitErr / releaseErr fields let a test inject a settle-side store failure.
+// commitCtxErr / releaseCtxErr record whether the settle context was already
+// canceled when the operation was invoked.
 type spyReceipt struct {
-	committed  int
-	released   int
-	commitErr  error
-	releaseErr error
+	committed     int
+	released      int
+	commitErr     error
+	releaseErr    error
+	commitCtxErr  error
+	releaseCtxErr error
 }
 
-func (r *spyReceipt) Commit(context.Context) error                { r.committed++; return r.commitErr }
-func (r *spyReceipt) Release(context.Context) error               { r.released++; return r.releaseErr }
+func (r *spyReceipt) Commit(ctx context.Context) error {
+	r.committed++
+	r.commitCtxErr = ctx.Err()
+	return r.commitErr
+}
+func (r *spyReceipt) Release(ctx context.Context) error {
+	r.released++
+	r.releaseCtxErr = ctx.Err()
+	return r.releaseErr
+}
 func (r *spyReceipt) Extend(context.Context, time.Duration) error { return nil }
 
 // noIdentityEntry builds a command ClaimedEntry with NO idempotency identity
@@ -267,11 +278,11 @@ func TestDispatchCommand_UnknownState_Permanent(t *testing.T) {
 	assert.Equal(t, 0, dispatched, "unknown ClaimState must NOT dispatch")
 }
 
-// TestWriteBack_CommitErrorDoesNotRollbackPublished asserts that when the
-// idempotency Commit fails after a successful dispatch, the row still settles to
-// "published" — the Commit failure is logged-not-fatal (the command was already
-// consumed; only the done-key may not persist).
-func TestWriteBack_CommitErrorDoesNotRollbackPublished(t *testing.T) {
+// TestWriteBack_CommitErrorLeavesRowClaiming asserts that idempotency Commit is
+// part of the command success boundary. A successful dispatch MUST NOT be marked
+// published when the done-key cannot be recorded; leaving the row in claiming lets
+// stale-lease recovery retry instead of silently losing dedup protection.
+func TestWriteBack_CommitErrorLeavesRowClaiming(t *testing.T) {
 	t.Parallel()
 	const cmdID = "command.test.do.v1"
 	store := newMinimalStore()
@@ -284,12 +295,12 @@ func TestWriteBack_CommitErrorDoesNotRollbackPublished(t *testing.T) {
 			cmdID: func(context.Context, *command.Registry, kout.Entry) error { return nil },
 		}, &fakeClaimer{state: idempotency.ClaimAcquired, receipt: rcpt})
 
-	require.NoError(t, r.pollOnce(context.Background()), "Commit failure must not surface as a poll error")
+	require.Error(t, r.pollOnce(context.Background()), "Commit failure must surface as writeBack failure")
 	assert.Equal(t, 1, rcpt.committed, "Commit is attempted")
 	store.mu.Lock()
 	status := store.rows["c1"].status
 	store.mu.Unlock()
-	assert.Equal(t, "published", status, "row stays published despite Commit failure (settle not rolled back)")
+	assert.Equal(t, "claiming", status, "row must not be marked published when Commit fails")
 }
 
 // TestWriteBack_ReleaseErrorDoesNotBlockRetry asserts that when the idempotency
@@ -315,6 +326,30 @@ func TestWriteBack_ReleaseErrorDoesNotBlockRetry(t *testing.T) {
 	status := store.rows["c1"].status
 	store.mu.Unlock()
 	assert.Equal(t, "pending", status, "row goes to pending (retry) despite Release failure")
+}
+
+// TestWriteBack_ReleaseUsesDetachedSettleContext asserts Release is still
+// attempted with a live context even if the poll caller canceled its ctx before
+// writeBack. This prevents cancellation from leaking a busy command claim.
+func TestWriteBack_ReleaseUsesDetachedSettleContext(t *testing.T) {
+	t.Parallel()
+	const cmdID = "command.test.do.v1"
+	store := newMinimalStore()
+	store.seedPendingCommand(cmdID, `{}`)
+
+	rcpt := &spyReceipt{}
+	r := NewRelay(clock.Real(), store, &recordingPublisher{},
+		RelayConfig{MaxAttempts: 5, BaseRetryDelay: time.Millisecond, MaxRetryDelay: time.Second}.WithDefaults())
+	r.WithCommandDispatch(command.NewRegistry(),
+		map[command.CommandID]command.AsyncDispatchFunc{
+			cmdID: func(context.Context, *command.Registry, kout.Entry) error { return errors.New("boom") },
+		}, &fakeClaimer{state: idempotency.ClaimAcquired, receipt: rcpt})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.NoError(t, r.pollOnce(ctx))
+	assert.Equal(t, 1, rcpt.released, "failed dispatch must Release the lease")
+	assert.NoError(t, rcpt.releaseCtxErr, "Release must not inherit caller cancellation")
 }
 
 // TestStart_CommandDispatchWithoutClaimer_FailsFast asserts wiring command

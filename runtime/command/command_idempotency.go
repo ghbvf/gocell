@@ -71,9 +71,10 @@ func EmitAsync[T any](
 // and dead-letter such an entry rather than silently skipping deduplication.
 //
 // The tenant dimension is taken from the entry's principal envelope (injected by
-// NewEntry from ctx at emit time); subject from AggregateID; commandID from the
-// CommandIDMetadataKey metadata entry. These flow through the sealed
-// DeriveCommandKey + Flat funnel so the resulting key is node-agnostic and stable.
+// NewEntry from ctx at emit time, or _notenant when empty); subject from
+// AggregateID; commandID from the CommandIDMetadataKey metadata entry. These flow
+// through the sealed DeriveCommandKey + Flat funnel so the resulting key is
+// node-agnostic and stable.
 func ClaimKeyFromEntry(e kout.Entry) (key string, ok bool) {
 	tenant := string(e.Principal().TenantID)
 	subject := e.AggregateID()

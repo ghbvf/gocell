@@ -219,9 +219,11 @@ sealed `outbox.Entry` wire envelope**（command_id 走 producer-owned business-m
 
 1. relay 经 `command.ClaimKeyFromEntry(entry)` 读回身份三元组 → `DeriveCommandKey(tenant,
    subject, command_id).Flat()` 得 Claimer string-key（tenant = `Principal().TenantID`、
-   subject = `AggregateID()`、command_id = `Metadata()[CommandIDMetadataKey]`；任一空 →
-   `ok=false`）。
-2. `!ok`（缺身份）→ `kout.NewPermanentError` → **`MarkDead`（fail-closed，不静默跳过去重）**。
+   subject = `AggregateID()`、command_id = `Metadata()[CommandIDMetadataKey]`）。tenant 可空，
+   与 HTTP idempotency 一致映射为 `_notenant`（single-tenant / service principal）；subject 或
+   command_id 为空 → `ok=false`。
+2. `!ok`（缺 subject 或 command_id 身份槽）→ `kout.NewPermanentError` → **`MarkDead`
+   （fail-closed，不静默跳过去重）**。
 3. `Claimer.Claim`：**Acquired** → dispatch + Commit/Release；**Done**（重复）→ 跳过 dispatch +
    `MarkPublished`（去重）；**Busy** → `MarkRetry`；**Claim infra err** → `MarkRetry`。
 

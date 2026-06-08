@@ -47,6 +47,8 @@ import (
 	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
 )
 
+const envDurableSinglePod = "GOCELL_IOTDEVICE_DURABLE_SINGLE_POD"
+
 // runIotdevice is the hand-written runtime helper for the iotdevice assembly.
 // It is called by the generated main.go and owns environment loading +
 // bootstrap wiring.
@@ -78,15 +80,12 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	// In-memory event bus for demo mode.
 	eb := eventbus.New(clk)
 
-	// Event publish channel selection. By default the cell publishes
-	// device-registered events to the in-memory bus, where the in-process
-	// devicebootstrap subscriber reactively consumes them and enqueues a bootstrap
-	// command (the #1698 reactive loop). When GOCELL_IOTDEVICE_MQTT_BROKERS is set,
-	// swap the cell's direct publisher to MQTT so events ALSO flow to a real broker
-	// (observable with `mosquitto_sub`); the MQTT swap only replaces the external
-	// egress channel — the in-process reactive subscriber routes off the same `eb`
-	// regardless. This is a single egress-channel swap, not a parallel mirror. The
-	// HTTP/WS main path is unchanged. See examples/iotdevice/docs/mqtt.md.
+	// Event publish channel selection. The cell always publishes device-registered
+	// events to the in-memory bus, where the in-process devicebootstrap subscriber
+	// reactively consumes them and enqueues a bootstrap command (the #1698 reactive
+	// loop). When GOCELL_IOTDEVICE_MQTT_BROKERS is set, directPub becomes a tee:
+	// local eb first, plus MQTT as an external observable mirror for mosquitto_sub.
+	// The HTTP/WS main path is unchanged. See examples/iotdevice/docs/mqtt.md.
 	var directPub outbox.Publisher = eb
 	var mqttBootstrapOpts []bootstrap.Option
 	mqttPub, mqttConn, mqttOK, err := buildMQTTDirectPublisher(ctx, clk, logger)
@@ -94,7 +93,7 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		return fmt.Errorf("build mqtt publish channel: %w", err)
 	}
 	if mqttOK {
-		directPub = mqttPub
+		directPub = &teePublisher{local: eb, external: mqttPub}
 		// Register BOTH the connection (managed resource: mqtt_ready probe +
 		// disconnect) AND the publisher (managed closer: drains in-flight
 		// publishes). Connection.Close only disconnects — it does NOT drain, so
@@ -278,8 +277,10 @@ type commandRelaySubsystem struct {
 // implements both outbox.Store and kout.Writer). In durable mode they are an
 // adapterpg.PGOutboxStore (relay poll) + adapterpg.OutboxWriter (producer write)
 // over the shared pool — iotdevice durable already applies the platform outbox
-// migration. iotdevice is single-pod, so an in-memory idempotency Claimer is a
-// real choice, not a fallback; the same claimer feeds the relay and ConsumerBase.
+// migration. Durable mode refuses a process-local command Claimer unless the
+// operator explicitly acknowledges this iotdevice process is single-pod; a PG
+// outbox store coordinates row leases across pods, but an in-memory Claimer does
+// not coordinate command_id dedup across pods.
 func buildCommandRelaySubsystem(
 	clk clock.Clock,
 	eb outbox.Publisher,
@@ -311,9 +312,12 @@ func buildCommandRelaySubsystem(
 	if err != nil {
 		return commandRelaySubsystem{}, fmt.Errorf("bootstrap writer emitter: %w", err)
 	}
-	// Single shared in-memory Claimer feeds both the relay's command-dispatch
-	// path and the ConsumerBase event-subscriber path (single-pod).
-	claimer := idempotency.NewInMemClaimer(clk)
+	// Single shared Claimer feeds both the relay's command-dispatch path and the
+	// ConsumerBase event-subscriber path.
+	claimer, err := commandRelayClaimer(clk, pool != nil)
+	if err != nil {
+		return commandRelaySubsystem{}, err
+	}
 
 	consumerBase, err := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{}, clk)
 	if err != nil {
@@ -333,6 +337,16 @@ func buildCommandRelaySubsystem(
 		consumerBase:       consumerBase,
 		relay:              relay,
 	}, nil
+}
+
+func commandRelayClaimer(clk clock.Clock, durable bool) (idempotency.Claimer, error) {
+	if durable && !envTrue(envDurableSinglePod) {
+		return nil, fmt.Errorf(
+			"iotdevice durable command relay requires a distributed idempotency claimer; "+
+				"set %s=true only for an explicitly single-pod demo deployment",
+			envDurableSinglePod)
+	}
+	return idempotency.NewInMemClaimer(clk), nil
 }
 
 // deviceCommandQueue is the runtime contract devicecell expects — a single
