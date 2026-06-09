@@ -15,4 +15,5 @@ use (
 	./examples/webhookdemo
 	./tests/integration
 	./tests/testutil/pgshare
+	./tools
 )

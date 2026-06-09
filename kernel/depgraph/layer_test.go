@@ -186,6 +186,53 @@ func TestClassifier_MultiModule(t *testing.T) {
 	}
 }
 
+func TestClassifier_KnownLayerSatelliteWithoutBase(t *testing.T) {
+	t.Parallel()
+	const toolsModule = testModule + "/tools"
+	c := NewClassifier([]string{toolsModule})
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"module_root", toolsModule, LayerTools},
+		{"module_subpackage", toolsModule + "/depgraph", LayerTools},
+		{"module_nested_package", toolsModule + "/archtest/internal/scanner", LayerTools},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := c.Layer(tt.path); got != tt.want {
+				t.Errorf("Layer(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClassifier_ExternalSingleModuleNamedLikeLayer(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		module string
+		path   string
+		want   string
+	}{
+		{"tools_root", "example.com/tools", "example.com/tools", LayerRoot},
+		{"tools_subpackage", "example.com/tools", "example.com/tools/depgraph", LayerUnknown},
+		{"cmd_root", "example.com/cmd", "example.com/cmd", LayerRoot},
+		{"cmd_subpackage", "example.com/cmd", "example.com/cmd/app", LayerUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := NewClassifier([]string{tt.module})
+			if got := c.Layer(tt.path); got != tt.want {
+				t.Errorf("Layer(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsStdlib(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

@@ -10,11 +10,11 @@
 # the cold cost is unavoidable CI work that the push pays regardless.
 #
 # Not a 1:1 CI mirror — four deliberate deviations:
-#   - The gofumpt gate runs `go run mvdan.cc/gofumpt` (version resolved from the repo
-#     go.mod) rather than an ambient $PATH `gofumpt`. A host-installed
+#   - The gofumpt gate runs `go -C tools run mvdan.cc/gofumpt` (version
+#     resolved from tools/go.mod) rather than an ambient $PATH `gofumpt`. A host-installed
 #     gofumpt drifts from the version the CI formatter gate enforces
 #     (golangci-lint's vendored copy — see hack/lib/golangci-lint.sh),
-#     producing "local hook passes / CI red" or the reverse. go.mod is the
+#     producing "local hook passes / CI red" or the reverse. tools/go.mod is the
 #     single source of truth; there is no hook-side version constant.
 #   - It checks the WORKING TREE, not the pushed commit snapshot. Git does
 #     not check out the push range; every tier (gofumpt / build / vet /
@@ -202,14 +202,23 @@ fail=0
 # The caller pre-filters to existing files (`-f`), so a non-zero exit is
 # unambiguously a tooling failure, never "found drift". Output goes to
 # stdout (run_bg captures it to the job's isolated logfile).
-# `go run mvdan.cc/gofumpt` pins the version via go.mod (header deviation
-# 1: go.mod is the only SoR, no PATH ambient). Cost: warm ~200ms; cold
+# `go -C tools run mvdan.cc/gofumpt` pins the version via tools/go.mod
+# (header deviation 1: tools/go.mod is the only SoR, no PATH ambient). Cost: warm ~200ms; cold
 # gofumpt compile +~2-3s; first-ever module download +~1-2s — still well
 # under the build/vet cost that dominates a cold-cache push.
 gofumpt_gate() {
     local out
-    if ! out="$(go run mvdan.cc/gofumpt -l "$@" 2>&1)"; then
-        printf 'gofumpt gate failed to run (go run mvdan.cc/gofumpt):\n%s\n' "${out}"
+    local -a tool_args=()
+    local f
+    for f in "$@"; do
+        if [[ "${f}" == /* ]]; then
+            tool_args+=("${f}")
+        else
+            tool_args+=("../${f}")
+        fi
+    done
+    if ! out="$(go -C tools run mvdan.cc/gofumpt -l "${tool_args[@]}" 2>&1)"; then
+        printf 'gofumpt gate failed to run (go -C tools run mvdan.cc/gofumpt):\n%s\n' "${out}"
         return 1
     fi
     if [[ -n "${out}" ]]; then

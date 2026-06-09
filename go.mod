@@ -12,7 +12,6 @@ require (
 	github.com/eclipse/paho.golang v0.23.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/golang-jwt/jwt/v5 v5.3.1
-	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/vault/api v1.23.0
 	github.com/jackc/pgx/v5 v5.10.0
@@ -37,13 +36,10 @@ require (
 	go.opentelemetry.io/otel/trace v1.44.0
 	go.uber.org/goleak v1.3.0
 	golang.org/x/crypto v0.52.0
-	golang.org/x/mod v0.36.0
 	golang.org/x/oauth2 v0.36.0
-	golang.org/x/tools v0.45.0
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
-	mvdan.cc/gofumpt v0.9.2
 )
 
 require (

@@ -183,7 +183,7 @@ func runVerifyArchtestForNames(repoRoot string, extraEnv []string) (map[string]s
 	defer cancel()
 	//nolint:gosec // G204: repoRoot is the discovered go.mod ancestor (test-time, no user input)
 	cmd := exec.CommandContext(ctx, "bash", filepath.Join(repoRoot, "hack", "verify-archtest.sh"))
-	cmd.Env = append(os.Environ(), extraEnv...)
+	cmd.Env = append(os.Environ(), append(extraEnv, "GOWORK="+filepath.Join(repoRoot, "go.work"))...)
 	cmd.Dir = repoRoot
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

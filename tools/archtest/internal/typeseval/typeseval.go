@@ -30,6 +30,8 @@ import (
 	"go/ast"
 	"go/constant"
 	"go/types"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -37,6 +39,7 @@ import (
 	"golang.org/x/tools/go/packages"
 
 	"github.com/ghbvf/gocell/tools/packagesload"
+	"github.com/ghbvf/gocell/tools/workspace"
 )
 
 // EvaluateConstString returns the compile-time string constant value of expr,
@@ -125,6 +128,19 @@ func LoadPackages(modRoot string, tests bool, tags []string, patterns ...string)
 func loadPackagesMode(
 	mode packagesload.Mode, dir string, tests bool, tags []string, patterns ...string,
 ) ([]*packages.Package, []packages.Error, error) {
+	if mode == packagesload.ModeModule {
+		if groups, ok := workspacePatternGroups(dir, patterns); ok {
+			if len(groups) > 1 {
+				return loadPackageGroups(
+					packagesload.ModeWorkspace,
+					tests,
+					tags,
+					[]patternGroup{{dir: dir, patterns: patterns}},
+				)
+			}
+			return loadPackageGroups(mode, tests, tags, groups)
+		}
+	}
 	cfg := &packages.Config{
 		Mode:  loadMode,
 		Dir:   dir,
@@ -145,6 +161,96 @@ func loadPackagesMode(
 		errs = append(errs, p.Errors...)
 	})
 	return pkgs, errs, nil
+}
+
+type patternGroup struct {
+	dir      string
+	patterns []string
+}
+
+func loadPackageGroups(
+	mode packagesload.Mode, tests bool, tags []string, groups []patternGroup,
+) ([]*packages.Package, []packages.Error, error) {
+	var all []*packages.Package
+	var allErrs []packages.Error
+	for _, g := range groups {
+		cfg := &packages.Config{
+			Mode:  loadMode,
+			Dir:   g.dir,
+			Tests: tests,
+		}
+		if len(tags) > 0 {
+			cfg.BuildFlags = []string{"-tags=" + strings.Join(tags, ",")}
+		}
+		pkgs, err := packagesload.Load(mode, cfg, g.patterns...)
+		if err != nil {
+			return nil, nil, fmt.Errorf("packages.Load: %w", err)
+		}
+		packages.Visit(pkgs, nil, func(p *packages.Package) {
+			for i := range p.Errors {
+				p.Errors[i].Msg = g.dir + ": " + p.Errors[i].Msg
+			}
+			allErrs = append(allErrs, p.Errors...)
+		})
+		all = append(all, pkgs...)
+	}
+	return all, allErrs, nil
+}
+
+func workspacePatternGroups(root string, patterns []string) ([]patternGroup, bool) {
+	if _, err := os.Stat(filepath.Join(root, "go.work")); err != nil {
+		return nil, false
+	}
+	mods, err := workspace.Modules(root)
+	if err != nil {
+		return nil, false
+	}
+	groups := make([]patternGroup, 0, len(mods))
+	groupByDir := map[string]int{}
+	add := func(dir, pattern string) {
+		if i, ok := groupByDir[dir]; ok {
+			groups[i].patterns = append(groups[i].patterns, pattern)
+			return
+		}
+		groupByDir[dir] = len(groups)
+		groups = append(groups, patternGroup{dir: dir, patterns: []string{pattern}})
+	}
+	for _, pattern := range patterns {
+		moduleDir, modulePattern := splitWorkspacePattern(mods, pattern)
+		add(filepath.Join(root, moduleDir), modulePattern)
+	}
+	return groups, true
+}
+
+func splitWorkspacePattern(mods []workspace.Module, pattern string) (string, string) {
+	bestDir := "."
+	bestPattern := pattern
+	bestScore := -1
+	consider := func(score int, dir, modulePattern string) {
+		if score <= bestScore {
+			return
+		}
+		bestScore = score
+		bestDir = dir
+		bestPattern = modulePattern
+	}
+	for _, m := range mods {
+		dir := filepath.ToSlash(filepath.Clean(m.Dir))
+		if dir == "." || dir == "" {
+			continue
+		}
+		prefix := "./" + dir
+		switch {
+		case pattern == prefix:
+			consider(len(dir), dir, ".")
+		case strings.HasPrefix(pattern, prefix+"/"):
+			consider(len(dir), dir, "."+strings.TrimPrefix(pattern, prefix))
+		}
+		if pattern == m.ImportPath || strings.HasPrefix(pattern, m.ImportPath+"/") {
+			consider(len(m.ImportPath), dir, pattern)
+		}
+	}
+	return bestDir, bestPattern
 }
 
 var (

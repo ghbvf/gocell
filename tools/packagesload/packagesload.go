@@ -22,6 +22,7 @@ package packagesload
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -37,12 +38,11 @@ const (
 	// the workspace `use` set (archtest / depgraph testdata fixtures) and for
 	// release-pinned per-module builds.
 	ModeModule Mode = iota
-	// ModeWorkspace uses the ambient workspace (the repo-root go.work): the load
-	// resolves across all `use` member modules. For loaders that genuinely need
-	// a cross-module view. GOWORK=off is rejected fail-closed here — under it the
-	// `go` tool silently falls back to a single-module context, dropping every
-	// non-core member from the scan (the exact silent-coverage-loss #1555
-	// prevents). See [applyMode].
+	// ModeWorkspace uses the target workspace: the load resolves across all
+	// `use` member modules. For loaders that genuinely need a cross-module view.
+	// If the process has GOWORK=off but cfg.Dir points at a directory containing
+	// go.work, [applyMode] pins that exact go.work path; otherwise GOWORK=off is
+	// rejected fail-closed so the scan cannot silently degrade to one module.
 	ModeWorkspace
 )
 
@@ -69,17 +69,16 @@ func applyMode(mode Mode, cfg *packages.Config) error {
 		// Appended last so it overrides any inherited / caller-set GOWORK.
 		cfg.Env = append(baseEnv(cfg.Env), "GOWORK=off")
 	case ModeWorkspace:
-		// Inherit the ambient workspace; leave GOWORK untouched — UNLESS it is
-		// explicitly off, in which case `go` would silently degrade to a
-		// single-module context and drop every non-core workspace member from
-		// the scan. That is the exact silent-coverage-loss #1555 guards against,
-		// so reject it fail-closed rather than producing a partial graph.
+		// Inherit the ambient workspace. If a module-level test has forced
+		// GOWORK=off but the caller supplied the workspace root as cfg.Dir, pin
+		// that exact go.work path so cross-module scans stay deterministic.
 		env := baseEnv(cfg.Env)
 		if v, ok := effectiveGOWORK(env); ok && v == "off" {
-			return fmt.Errorf(
-				"packagesload: ModeWorkspace requires an active go.work workspace, but GOWORK=off is set; " +
-					"unset GOWORK (or point it at the target go.work) so the cross-module scan covers every member",
-			)
+			goWork, err := workspaceFileForDir(cfg.Dir)
+			if err != nil {
+				return err
+			}
+			env = append(withoutGOWORK(env), "GOWORK="+goWork)
 		}
 		cfg.Env = env
 	default:
@@ -97,9 +96,41 @@ func baseEnv(cfgEnv []string) []string {
 	return cfgEnv
 }
 
+func workspaceFileForDir(dir string) (string, error) {
+	if dir == "" {
+		return "", fmt.Errorf(
+			"packagesload: ModeWorkspace requires an active go.work workspace, but GOWORK=off is set and cfg.Dir is empty; " +
+				"unset GOWORK or set cfg.Dir to the target workspace root",
+		)
+	}
+	goWork := filepath.Join(dir, "go.work")
+	if _, err := os.Stat(goWork); err != nil {
+		return "", fmt.Errorf(
+			"packagesload: ModeWorkspace requires an active go.work workspace, but GOWORK=off is set and %s is not readable: %w",
+			goWork, err,
+		)
+	}
+	abs, err := filepath.Abs(goWork)
+	if err != nil {
+		return "", fmt.Errorf("packagesload: resolve go.work path %s: %w", goWork, err)
+	}
+	return abs, nil
+}
+
+func withoutGOWORK(env []string) []string {
+	out := env[:0]
+	for _, e := range env {
+		if strings.HasPrefix(e, "GOWORK=") {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
 // effectiveGOWORK returns the value of the LAST GOWORK= entry in env (later
 // entries override earlier ones, matching exec semantics), and whether any was
-// present. Used by [applyMode] to reject GOWORK=off under ModeWorkspace.
+// present. Used by [applyMode] to detect GOWORK=off under ModeWorkspace.
 func effectiveGOWORK(env []string) (string, bool) {
 	val, found := "", false
 	for _, e := range env {

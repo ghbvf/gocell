@@ -87,7 +87,9 @@ test:
 # fmt rewrites Go sources in place via every formatter declared under
 # .golangci.yml `formatters.enable` (currently gofmt + goimports + gofumpt).
 # Pair-mate of `make verify` (specifically hack/verify-gofumpt.sh): fmt fixes,
-# verify checks.
+# verify checks. Root `./...` stops at nested-module boundaries, so iterate every
+# go.work member through hack/lib/modules.sh and run the formatter in that
+# module with the repo-root config.
 #
 # golangci-lint is bootstrapped from hack/lib/golangci-lint.sh at the version
 # pinned to .github/workflows/_build-lint.yml — never from $PATH — so local
@@ -95,7 +97,15 @@ test:
 #
 # ref: kubernetes/kubernetes hack/update-gofmt.sh + hack/verify-golangci-lint.sh.
 fmt:
-	@bash -c 'source hack/lib/golangci-lint.sh && exec "$$(gocell::golangci_lint::ensure)" fmt ./...'
+	@bash -c 'set -euo pipefail; \
+	repo_root="$$(pwd -P)"; \
+	source hack/lib/util.sh; source hack/lib/modules.sh; source hack/lib/golangci-lint.sh; \
+	golangci_lint="$$(gocell::golangci_lint::ensure)"; \
+	dirs="$$(gocell::modules::dirs)"; \
+	while IFS= read -r d; do [ -n "$$d" ] || continue; \
+	  echo "+++ golangci-lint fmt ($$d)"; \
+	  ( cd "$$d" && "$$golangci_lint" fmt -c "$$repo_root/.golangci.yml" ./... ); \
+	done <<< "$$dirs"'
 
 # update-archtest-golden regenerates the diagnostic golden files of golden-based
 # archtests (errcode / clock / span / … fixtures), then leaves the diff for

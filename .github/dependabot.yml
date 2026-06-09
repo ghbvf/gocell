@@ -43,3 +43,21 @@ updates:
       # （见 hack/lib/golangci-lint.sh 的 SYNC 契约）。PR #534 / #910 均因
       # 自动升级到 v0.10.0 被回滚。
       - dependency-name: "mvdan.cc/gofumpt"
+
+  - package-ecosystem: "gomod"
+    directory: "/tools"
+    schedule:
+      interval: "weekly"
+    groups:
+      go-x-modules:
+        patterns:
+          - "golang.org/x/*"
+      go-other-modules:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "golang.org/x/*"
+    ignore:
+      # keep in sync with the root gomod entry: gofumpt is pinned to the
+      # version vendored by the pinned golangci-lint release.
+      - dependency-name: "mvdan.cc/gofumpt"
