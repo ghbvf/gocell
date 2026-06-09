@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecert"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecmd"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	dto "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
@@ -163,9 +164,11 @@ type DeviceCell struct {
 	cursorCodec        *query.CursorCodec
 	logger             *slog.Logger
 	metricsProvider    metrics.Provider
+	reconcileMetrics   *reconcile.Metrics
 	commandQueue       commandQueueStore
 	commandRegistry    *commandruntime.Registry // required; sync command-bus handler registry (#1580)
 	commandSweeper     *reconcile.Loop          // device-command expiry sweep, driven on a TickerTrigger cadence
+	certRenewalLoop    *reconcile.Loop          // device certificate renewal sweep, driven on a TickerTrigger cadence
 	clk                clock.Clock              // injected from reg.Config during initInternal
 
 	// +slice:route:slice=deviceregister,subPath=/api/v1/devices
@@ -359,6 +362,9 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 				"writerEmitter is an outbox.WriterEmitter over the mode's outbox Writer "+
 				"(demo: outboxtest.FakeStore; durable: adapterpg.NewOutboxWriter(clk))")
 	}
+	if c.bootstrapTxManager == nil {
+		c.bootstrapTxManager = outbox.DemoCellTxManager()
+	}
 	bootstrapSvc, err := devicebootstrap.NewService(
 		c.clk,
 		devicebootstrap.WithEmitter(c.bootstrapEmitter),
@@ -442,6 +448,9 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	if err := c.buildCommandSweeper(cmdQueue); err != nil {
 		return err
 	}
+	if err := c.buildCertRenewalLoop(); err != nil {
+		return err
+	}
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicecommand.SliceMetadata()))
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicecommandinternal.SliceMetadata()))
 
@@ -476,6 +485,8 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 // sweep would run ~twice per cycle.)
 const commandSweepInterval = 30 * time.Second
 
+const certRenewalInterval = 30 * time.Second
+
 // buildCommandSweeper constructs the device-command expiry reconcile.Loop. The
 // kernel Sweeper implements reconcile.Reconciler; a TickerTrigger off the cell's
 // business clock (c.clk) drives a resync-all pulse every commandSweepInterval,
@@ -501,11 +512,9 @@ func (c *DeviceCell) buildCommandSweeper(cmdQueue commandQueueStore) error {
 		WithName("devicecommand.sweeper").
 		WithReconcilerID("devicecommand_sweeper"). // label-safe: [a-z0-9_], no dots
 		WithoutDefaultRequeue()                    // ticker is the sole periodic source
-	if c.metricsProvider != nil {
-		m, err := reconcile.RegisterMetrics(c.metricsProvider)
-		if err != nil {
-			return fmt.Errorf("device-command reconcile metrics: %w", err)
-		}
+	if m, ok, err := c.sharedReconcileMetrics(); err != nil {
+		return fmt.Errorf("device-command reconcile metrics: %w", err)
+	} else if ok {
 		b = b.WithMetrics(m)
 	}
 	loop, err := b.Build()
@@ -516,7 +525,51 @@ func (c *DeviceCell) buildCommandSweeper(cmdQueue commandQueueStore) error {
 	return nil
 }
 
-// registerHealthAndLifecycle registers health probes and the sweeper lifecycle hook.
+func (c *DeviceCell) buildCertRenewalLoop() error {
+	rec, err := devicecert.NewReconciler(
+		c.clk,
+		c.deviceRepo,
+		c.bootstrapEmitter,
+		c.bootstrapTxManager,
+		devicecert.WithLogger(c.logger),
+	)
+	if err != nil {
+		return fmt.Errorf("device-cert renewal reconciler: %w", err)
+	}
+	b := reconcile.New(rec).
+		WithTrigger(reconcile.TickerTrigger(c.clk, certRenewalInterval)).
+		WithName("devicecert.renewal").
+		WithReconcilerID("devicecert_renewal").
+		WithoutDefaultRequeue()
+	if m, ok, err := c.sharedReconcileMetrics(); err != nil {
+		return fmt.Errorf("device-cert reconcile metrics: %w", err)
+	} else if ok {
+		b = b.WithMetrics(m)
+	}
+	loop, err := b.Build()
+	if err != nil {
+		return fmt.Errorf("device-cert reconcile loop: %w", err)
+	}
+	c.certRenewalLoop = loop
+	return nil
+}
+
+func (c *DeviceCell) sharedReconcileMetrics() (reconcile.Metrics, bool, error) {
+	if c.metricsProvider == nil {
+		return reconcile.Metrics{}, false, nil
+	}
+	if c.reconcileMetrics != nil {
+		return *c.reconcileMetrics, true, nil
+	}
+	m, err := reconcile.RegisterMetrics(c.metricsProvider)
+	if err != nil {
+		return reconcile.Metrics{}, false, err
+	}
+	c.reconcileMetrics = &m
+	return m, true, nil
+}
+
+// registerHealthAndLifecycle registers health probes and reconcile lifecycle hooks.
 func (c *DeviceCell) registerHealthAndLifecycle(reg cell.Registrar) error {
 	if err := cell.RegisterEmitterHealthProbes(reg, c.emitter); err != nil {
 		return err
@@ -538,6 +591,11 @@ func (c *DeviceCell) registerHealthAndLifecycle(reg cell.Registrar) error {
 		Name:    "devicecommand.sweeper",
 		OnStart: c.commandSweeper.Start,
 		OnStop:  c.commandSweeper.Stop,
+	})
+	reg.Lifecycle(cell.LifecycleHook{
+		Name:    "devicecert.renewal",
+		OnStart: c.certRenewalLoop.Start,
+		OnStop:  c.certRenewalLoop.Stop,
 	})
 	return nil
 }

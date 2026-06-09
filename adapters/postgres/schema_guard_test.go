@@ -93,9 +93,11 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// for the sessions tenant carrier (EPIC #1337 PR-3b, #1617);
 	// 055 rebuilds audit_entries per-(namespace, tenant) (DROP+CREATE — UNIQUE(namespace,
 	// tenant_id, seq_no)) + FORCE RLS with the OR tenant_id='' system-rows policy
-	// (EPIC #1337 #1618).
-	assert.Equal(t, int64(55), v,
-		"expected version should be exactly 55 (current migration max — 055_audit_entries_per_tenant_rls)")
+	// (EPIC #1337 #1618);
+	// 056 adds devices.cert_epoch / cert_expires_at for devicecell certificate
+	// renewal reconcile (#1757).
+	assert.Equal(t, int64(56), v,
+		"expected version should be exactly 56 (current migration max — 056_devices_cert_renewal)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {
@@ -356,6 +358,29 @@ func containsCheck(table, name string) bool {
 	return false
 }
 
+// containsDefault returns true when expectedDefaults contains an entry with the
+// given table, column, and default expression.
+func containsDefault(table, column, def string) bool {
+	for _, d := range expectedDefaults {
+		if d.Table == table && d.Column == column && d.Default == def {
+			return true
+		}
+	}
+	return false
+}
+
+// containsIndex returns true when expectedIndexes contains an entry with the
+// given table, index name, uniqueness, and key columns.
+func containsIndex(table, name string, unique bool, columns []string) bool {
+	for _, idx := range expectedIndexes {
+		if idx.Table == table && idx.Name == name &&
+			idx.Unique == unique && slices.Equal(idx.Columns, columns) {
+			return true
+		}
+	}
+	return false
+}
+
 // TestVerifyExpectedShape_RequiresAuthzEpochPositiveChecks verifies that all
 // three CHECK constraints added by migration 028 are declared in expectedChecks.
 // Each constraint enforces authz_epoch > 0 at the DB level as a hard invariant
@@ -428,6 +453,36 @@ func TestVerifyExpectedShape_RequiresLockoutCountPositiveCheck(t *testing.T) {
 		containsCheck("users", "users_failed_login_count_positive"),
 		"expectedChecks must include users.users_failed_login_count_positive "+
 			"(migration 032 auto-lockout counter non-negativity)",
+	)
+}
+
+// TestVerifyExpectedShape_RequiresDeviceCertRenewalShape verifies that
+// migration 056's certificate renewal columns and storage-level invariants are
+// declared in the schema guard registry.
+func TestVerifyExpectedShape_RequiresDeviceCertRenewalShape(t *testing.T) {
+	for _, tc := range []struct {
+		column string
+		def    string
+	}{
+		{column: "cert_epoch", def: "1"},
+		{column: "cert_expires_at", def: "(now() + '90 days'::interval)"},
+	} {
+		tc := tc
+		t.Run("devices/"+tc.column, func(t *testing.T) {
+			assert.True(t, containsColumn("devices", tc.column),
+				"expectedColumns must include devices.%s (migration 056 cert renewal)", tc.column)
+			assert.True(t, containsDefault("devices", tc.column, tc.def),
+				"expectedDefaults must include devices.%s default %s (migration 056 cert renewal)",
+				tc.column, tc.def)
+		})
+	}
+	assert.True(t,
+		containsCheck("devices", "devices_cert_epoch_positive"),
+		"expectedChecks must include devices.devices_cert_epoch_positive (migration 056 cert renewal)",
+	)
+	assert.True(t,
+		containsIndex("devices", "idx_devices_cert_expires_at", false, []string{"cert_expires_at", "id"}),
+		"expectedIndexes must include devices.idx_devices_cert_expires_at (migration 056 cert renewal)",
 	)
 }
 

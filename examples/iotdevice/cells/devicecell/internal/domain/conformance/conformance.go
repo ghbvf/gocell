@@ -53,6 +53,9 @@ func RunDeviceRepoConformance(t *testing.T, factory DeviceRepoFactory, features 
 	t.Run("List/SortByNameASC", func(t *testing.T) { runListSortName(t, factory, features) })
 	t.Run("List/Pagination", func(t *testing.T) { runListPagination(t, factory, features) })
 	t.Run("List/SecondPage", func(t *testing.T) { runListSecondPage(t, factory, features) })
+	t.Run("CertRenewalCandidates/NearExpiryOnly", func(t *testing.T) {
+		runCertRenewalCandidatesNearExpiry(t, factory, features)
+	})
 }
 
 func inTx(t *testing.T, ctx context.Context, txRunner persistence.TxRunner, features Features, fn func(ctx context.Context) error) error {
@@ -76,6 +79,17 @@ func createDevice(
 		return repo.Create(c, d)
 	}); err != nil {
 		t.Fatalf("createDevice %q: %v", d.ID, err)
+	}
+}
+
+func device(id, name string, now time.Time) *domain.Device {
+	return &domain.Device{
+		ID:            id,
+		Name:          name,
+		Status:        "online",
+		LastSeen:      now,
+		CertEpoch:     domain.DefaultCertEpoch,
+		CertExpiresAt: now.Add(domain.DefaultCertTTL),
 	}
 }
 
@@ -107,7 +121,7 @@ func runCreateHappy(t *testing.T, factory DeviceRepoFactory, features Features) 
 	defer cleanup()
 	ctx := context.Background()
 
-	d := &domain.Device{ID: "dev-1", Name: "Edge-01", Status: "online", LastSeen: now()}
+	d := device("dev-1", "Edge-01", now())
 	createDevice(t, ctx, repo, tx, features, d)
 
 	got, err := repo.GetByID(ctx, "dev-1")
@@ -117,6 +131,9 @@ func runCreateHappy(t *testing.T, factory DeviceRepoFactory, features Features) 
 	if got.ID != "dev-1" || got.Name != "Edge-01" || got.Status != "online" {
 		t.Fatalf("unexpected device: %+v", got)
 	}
+	if got.CertEpoch != domain.DefaultCertEpoch || got.CertExpiresAt.IsZero() {
+		t.Fatalf("unexpected cert state: %+v", got)
+	}
 }
 
 func runCreateDuplicate(t *testing.T, factory DeviceRepoFactory, features Features) {
@@ -125,11 +142,12 @@ func runCreateDuplicate(t *testing.T, factory DeviceRepoFactory, features Featur
 	defer cleanup()
 	ctx := context.Background()
 
-	d := &domain.Device{ID: "dup", Name: "first", Status: "online", LastSeen: now()}
+	nowTime := now()
+	d := device("dup", "first", nowTime)
 	createDevice(t, ctx, repo, tx, features, d)
 
 	err := inTx(t, ctx, tx, features, func(c context.Context) error {
-		return repo.Create(c, &domain.Device{ID: "dup", Name: "second", Status: "online", LastSeen: now()})
+		return repo.Create(c, device("dup", "second", nowTime))
 	})
 	requireErrCode(t, err, errcode.ErrConflict)
 }
@@ -144,7 +162,7 @@ func runGetByIDHappy(t *testing.T, factory DeviceRepoFactory, features Features)
 	defer cleanup()
 	ctx := context.Background()
 
-	createDevice(t, ctx, repo, tx, features, &domain.Device{ID: "g-1", Name: "n", Status: "online", LastSeen: now()})
+	createDevice(t, ctx, repo, tx, features, device("g-1", "n", now()))
 	got, err := repo.GetByID(ctx, "g-1")
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
@@ -193,9 +211,10 @@ func runListSortName(t *testing.T, factory DeviceRepoFactory, features Features)
 	defer cleanup()
 	ctx := context.Background()
 
-	createDevice(t, ctx, repo, tx, features, &domain.Device{ID: "id-1", Name: "Charlie", Status: "online", LastSeen: now()})
-	createDevice(t, ctx, repo, tx, features, &domain.Device{ID: "id-2", Name: "Alpha", Status: "online", LastSeen: now()})
-	createDevice(t, ctx, repo, tx, features, &domain.Device{ID: "id-3", Name: "Bravo", Status: "online", LastSeen: now()})
+	nowTime := now()
+	createDevice(t, ctx, repo, tx, features, device("id-1", "Charlie", nowTime))
+	createDevice(t, ctx, repo, tx, features, device("id-2", "Alpha", nowTime))
+	createDevice(t, ctx, repo, tx, features, device("id-3", "Bravo", nowTime))
 
 	params := query.ListParams{
 		Limit: 20,
@@ -219,9 +238,10 @@ func runListPagination(t *testing.T, factory DeviceRepoFactory, features Feature
 	defer cleanup()
 	ctx := context.Background()
 
-	createDevice(t, ctx, repo, tx, features, &domain.Device{ID: "p-1", Name: "A", Status: "online", LastSeen: now()})
-	createDevice(t, ctx, repo, tx, features, &domain.Device{ID: "p-2", Name: "B", Status: "online", LastSeen: now()})
-	createDevice(t, ctx, repo, tx, features, &domain.Device{ID: "p-3", Name: "C", Status: "online", LastSeen: now()})
+	nowTime := now()
+	createDevice(t, ctx, repo, tx, features, device("p-1", "A", nowTime))
+	createDevice(t, ctx, repo, tx, features, device("p-2", "B", nowTime))
+	createDevice(t, ctx, repo, tx, features, device("p-3", "C", nowTime))
 
 	// Repo returns FetchLimit() = Limit+1 rows so the service can detect HasMore.
 	params := query.ListParams{
@@ -263,9 +283,7 @@ func runListSecondPage(t *testing.T, factory DeviceRepoFactory, features Feature
 		{"kp-1", "A"}, {"kp-2", "B"}, {"kp-3", "C"}, {"kp-4", "D"}, {"kp-5", "E"},
 	}
 	for _, s := range seeds {
-		createDevice(t, ctx, repo, tx, features, &domain.Device{
-			ID: s.id, Name: s.name, Status: "online", LastSeen: now(),
-		})
+		createDevice(t, ctx, repo, tx, features, device(s.id, s.name, now()))
 	}
 
 	// Page 1: no cursor.
@@ -308,5 +326,46 @@ func runListSecondPage(t *testing.T, factory DeviceRepoFactory, features Feature
 	}
 	if p3[0].Name != "E" {
 		t.Fatalf("page3: expected [E], got [%s]", p3[0].Name)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Certificate renewal candidates
+// ---------------------------------------------------------------------------
+
+func runCertRenewalCandidatesNearExpiry(t *testing.T, factory DeviceRepoFactory, features Features) {
+	t.Helper()
+	repo, tx, now, cleanup := factory(t)
+	defer cleanup()
+	ctx := context.Background()
+	base := now()
+	cutoff := base.Add(7 * 24 * time.Hour)
+
+	near := device("cert-a", "near", base)
+	near.CertEpoch = 2
+	near.CertExpiresAt = cutoff.Add(-time.Hour)
+	atCutoff := device("cert-b", "edge", base)
+	atCutoff.CertEpoch = 3
+	atCutoff.CertExpiresAt = cutoff
+	later := device("cert-c", "later", base)
+	later.CertEpoch = 4
+	later.CertExpiresAt = cutoff.Add(time.Hour)
+
+	createDevice(t, ctx, repo, tx, features, later)
+	createDevice(t, ctx, repo, tx, features, atCutoff)
+	createDevice(t, ctx, repo, tx, features, near)
+
+	got, err := repo.ListCertificateRenewalCandidates(ctx, cutoff)
+	if err != nil {
+		t.Fatalf("ListCertificateRenewalCandidates: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 renewal candidates, got %d: %+v", len(got), got)
+	}
+	if got[0].DeviceID != "cert-a" || got[0].CertEpoch != 2 {
+		t.Fatalf("candidate[0] = %+v, want cert-a epoch 2", got[0])
+	}
+	if got[1].DeviceID != "cert-b" || got[1].CertEpoch != 3 {
+		t.Fatalf("candidate[1] = %+v, want cert-b epoch 3", got[1])
 	}
 }

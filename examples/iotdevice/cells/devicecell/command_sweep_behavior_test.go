@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
@@ -85,10 +86,20 @@ func startSweeperHook(t *testing.T, c *DeviceCell, ctx context.Context) func(con
 	rec := newTestRec()
 	require.NoError(t, c.Init(context.Background(), rec))
 	snap := rec.Snapshot()
-	require.Len(t, snap.LifecycleHooks, 1, "expect one lifecycle hook (sweeper)")
-	hook := snap.LifecycleHooks[0]
+	hook := lifecycleHookByName(t, snap.LifecycleHooks, "devicecommand.sweeper")
 	require.NoError(t, hook.OnStart(ctx), "OnStart must start the loop without error")
 	return hook.OnStop
+}
+
+func lifecycleHookByName(t *testing.T, hooks []cell.LifecycleHook, name string) cell.LifecycleHook {
+	t.Helper()
+	for _, hook := range hooks {
+		if hook.Name == name {
+			return hook
+		}
+	}
+	t.Fatalf("lifecycle hook %q not registered", name)
+	return cell.LifecycleHook{}
 }
 
 // TestDeviceCell_CommandSweep_ExpiresOverdueCommand pins the end-to-end expiry

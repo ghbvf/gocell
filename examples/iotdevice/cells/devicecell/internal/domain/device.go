@@ -8,12 +8,27 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
+const (
+	DefaultCertEpoch = int64(1)
+	DefaultCertTTL   = 90 * 24 * time.Hour
+)
+
 // Device represents an IoT device aggregate.
 type Device struct {
-	ID       string
-	Name     string
-	Status   string // online, offline
-	LastSeen time.Time
+	ID            string
+	Name          string
+	Status        string // online, offline
+	LastSeen      time.Time
+	CertEpoch     int64
+	CertExpiresAt time.Time
+}
+
+// CertificateRenewalCandidate is the minimal snapshot the cert-renewal
+// reconciler needs to derive an idempotent rotate-cert command.
+type CertificateRenewalCandidate struct {
+	DeviceID      string
+	CertEpoch     int64
+	CertExpiresAt time.Time
 }
 
 // DeviceRepository abstracts device persistence.
@@ -22,6 +37,7 @@ type DeviceRepository interface {
 	GetByID(ctx context.Context, id string) (*Device, error)
 	// List returns a paginated list of devices sorted by name ASC, id ASC.
 	List(ctx context.Context, params query.ListParams) ([]*Device, error)
+	ListCertificateRenewalCandidates(ctx context.Context, expiresBefore time.Time) ([]CertificateRenewalCandidate, error)
 	// RepoReady verifies the devices table is reachable and readable.
 	// Used by the cell-level readiness probe registered as "devicecell_repo_ready".
 	RepoReady(ctx context.Context) error

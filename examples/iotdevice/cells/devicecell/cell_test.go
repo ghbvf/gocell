@@ -487,17 +487,24 @@ func TestDeviceCell_Probes_WithDirectEmitter(t *testing.T) {
 }
 
 // TestDeviceCell_LifecycleHookRegistered verifies that Init registers the
-// command sweeper lifecycle hook via reg.Lifecycle.
+// reconcile lifecycle hooks via reg.Lifecycle.
 func TestDeviceCell_LifecycleHookRegistered(t *testing.T) {
 	c := newTestCell()
 	rec := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
 	snap := rec.Snapshot()
 
-	require.Len(t, snap.LifecycleHooks, 1, "Init must register exactly one lifecycle hook (command sweeper)")
-	assert.Equal(t, "devicecommand.sweeper", snap.LifecycleHooks[0].Name)
-	assert.NotNil(t, snap.LifecycleHooks[0].OnStart)
-	assert.NotNil(t, snap.LifecycleHooks[0].OnStop)
+	require.Len(t, snap.LifecycleHooks, 2, "Init must register command and cert reconcile lifecycle hooks")
+	got := map[string]cell.LifecycleHook{}
+	for _, hook := range snap.LifecycleHooks {
+		got[hook.Name] = hook
+	}
+	for _, name := range []string{"devicecommand.sweeper", "devicecert.renewal"} {
+		hook, ok := got[name]
+		require.True(t, ok, "missing lifecycle hook %s", name)
+		assert.NotNil(t, hook.OnStart)
+		assert.NotNil(t, hook.OnStop)
+	}
 }
 
 // TestDeviceCell_CommandSweeper_MetricsBranches verifies that Init (and

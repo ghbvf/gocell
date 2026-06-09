@@ -98,11 +98,14 @@ func (s *Service) registerInternal(ctx context.Context, name string) (*domain.De
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "device name must not be empty")
 	}
 
+	now := s.clock.Now()
 	device := &domain.Device{
-		ID:       "dev" + "-" + uuid.NewString(),
-		Name:     name,
-		Status:   "online",
-		LastSeen: s.clock.Now(),
+		ID:            "dev" + "-" + uuid.NewString(),
+		Name:          name,
+		Status:        "online",
+		LastSeen:      now,
+		CertEpoch:     domain.DefaultCertEpoch,
+		CertExpiresAt: now.Add(domain.DefaultCertTTL),
 	}
 
 	if err := s.repo.Create(ctx, device); err != nil {

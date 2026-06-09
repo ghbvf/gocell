@@ -69,13 +69,19 @@ func NewPGDeviceRepository(pool *pgxpool.Pool, txRunner persistence.TxRunner, cl
 
 const (
 	insertDeviceSQL = `
-INSERT INTO devices (id, name, status, last_seen)
-VALUES ($1, $2, $3, $4)`
+INSERT INTO devices (id, name, status, last_seen, cert_epoch, cert_expires_at)
+VALUES ($1, $2, $3, $4, $5, $6)`
 
 	selectDeviceByIDSQL = `
-SELECT id, name, status, last_seen
+SELECT id, name, status, last_seen, cert_epoch, cert_expires_at
 FROM devices
 WHERE id = $1`
+
+	selectCertificateRenewalCandidatesSQL = `
+SELECT id, cert_epoch, cert_expires_at
+FROM devices
+WHERE cert_expires_at <= $1
+ORDER BY cert_expires_at ASC, id ASC`
 )
 
 // Create inserts a new device row. Returns ErrConflict on unique constraint violation.
@@ -85,6 +91,8 @@ func (r *PGDeviceRepository) Create(ctx context.Context, device *domain.Device) 
 		device.Name,
 		device.Status,
 		device.LastSeen,
+		device.CertEpoch,
+		device.CertExpiresAt,
 	)
 	if err != nil {
 		if pgquery.IsUniqueViolation(err) {
@@ -170,7 +178,7 @@ func buildListQuery(params query.ListParams) (string, []any, error) {
 
 	if len(params.CursorValues) == 0 {
 		// First page: no keyset predicate.
-		sqlStr := "SELECT id, name, status, last_seen FROM devices ORDER BY " + orderBy + " LIMIT $1"
+		sqlStr := "SELECT id, name, status, last_seen, cert_epoch, cert_expires_at FROM devices ORDER BY " + orderBy + " LIMIT $1"
 		return sqlStr, []any{params.FetchLimit()}, nil
 	}
 
@@ -212,7 +220,7 @@ func buildListQuery(params query.ListParams) (string, []any, error) {
 	limitPlaceholder := fmt.Sprintf("$%d", len(params.Sort)+1)
 
 	sqlStr := fmt.Sprintf(
-		"SELECT id, name, status, last_seen FROM devices WHERE (%s) %s (%s) ORDER BY %s LIMIT %s",
+		"SELECT id, name, status, last_seen, cert_epoch, cert_expires_at FROM devices WHERE (%s) %s (%s) ORDER BY %s LIMIT %s",
 		strings.Join(colNames, ", "),
 		op,
 		strings.Join(placeholders, ", "),
@@ -256,12 +264,42 @@ func trustedDeviceColumn(name string) string {
 	}
 }
 
+// ListCertificateRenewalCandidates returns devices whose cert expires at or
+// before expiresBefore. The stable order keeps reconcile tests and command
+// emission deterministic.
+func (r *PGDeviceRepository) ListCertificateRenewalCandidates(
+	ctx context.Context, expiresBefore time.Time,
+) ([]domain.CertificateRenewalCandidate, error) {
+	rows, err := r.db.Query(ctx, selectCertificateRenewalCandidatesSQL, expiresBefore)
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"device_repo: list certificate renewal candidates", err)
+	}
+	defer rows.Close()
+
+	var out []domain.CertificateRenewalCandidate
+	for rows.Next() {
+		var c domain.CertificateRenewalCandidate
+		if err := rows.Scan(&c.DeviceID, &c.CertEpoch, &c.CertExpiresAt); err != nil {
+			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+				"device_repo: scan certificate renewal candidate", err)
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"device_repo: list certificate renewal candidates rows", err)
+	}
+	return out, nil
+}
+
 // scanDevice scans a pgx.Row into a domain.Device.
 func scanDevice(row pgx.Row) (*domain.Device, error) {
 	var d domain.Device
 	var status string
 	var lastSeen time.Time
-	err := row.Scan(&d.ID, &d.Name, &status, &lastSeen)
+	var certExpiresAt time.Time
+	err := row.Scan(&d.ID, &d.Name, &status, &lastSeen, &d.CertEpoch, &certExpiresAt)
 	if err != nil {
 		return nil, err
 	}
@@ -273,6 +311,7 @@ func scanDevice(row pgx.Row) (*domain.Device, error) {
 	}
 	d.Status = status
 	d.LastSeen = lastSeen
+	d.CertExpiresAt = certExpiresAt
 	return &d, nil
 }
 
@@ -281,7 +320,8 @@ func scanDeviceFromRows(rows pgx.Rows) (*domain.Device, error) {
 	var d domain.Device
 	var status string
 	var lastSeen time.Time
-	err := rows.Scan(&d.ID, &d.Name, &status, &lastSeen)
+	var certExpiresAt time.Time
+	err := rows.Scan(&d.ID, &d.Name, &status, &lastSeen, &d.CertEpoch, &certExpiresAt)
 	if err != nil {
 		return nil, err
 	}
@@ -293,6 +333,7 @@ func scanDeviceFromRows(rows pgx.Rows) (*domain.Device, error) {
 	}
 	d.Status = status
 	d.LastSeen = lastSeen
+	d.CertExpiresAt = certExpiresAt
 	return &d, nil
 }
 

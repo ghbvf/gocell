@@ -27,8 +27,8 @@ const sweeperOnStartReturnTimeout = 2 * time.Second
 // reconcile.Loop is wired into the cell as a lifecycle hook whose OnStart is
 // invoked safely (no panic) and whose OnStop is idempotent + nil-safe. This is
 // the devicecell-level integration of the kernel Sweeper → reconcile.Reconciler
-// migration: Init builds exactly one lifecycle hook named "devicecommand.sweeper"
-// backed by Loop.Start / Loop.Stop, and the worker exits cleanly on ctx cancel.
+// migration: Init builds a lifecycle hook named "devicecommand.sweeper" backed
+// by Loop.Start / Loop.Stop, and the worker exits cleanly on ctx cancel.
 //
 // The historical regression this guards (PR 441 F2): a Sweeper constructed
 // without a clock would panic at clock.MustHaveClock inside the lifecycle
@@ -40,9 +40,7 @@ func TestDeviceCell_CommandSweeperLoop_OnStartClean(t *testing.T) {
 	rec := newTestRec()
 	require.NoError(t, c.Init(context.Background(), rec))
 	snap := rec.Snapshot()
-	require.Len(t, snap.LifecycleHooks, 1, "expect one lifecycle hook (sweeper)")
-	hook := snap.LifecycleHooks[0]
-	require.Equal(t, "devicecommand.sweeper", hook.Name)
+	hook := lifecycleHookByName(t, snap.LifecycleHooks, "devicecommand.sweeper")
 	require.NotNil(t, hook.OnStart)
 	require.NotNil(t, hook.OnStop)
 

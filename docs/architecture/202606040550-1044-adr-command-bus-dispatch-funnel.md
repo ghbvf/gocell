@@ -66,7 +66,7 @@ PR-1 同步核心是 W3 的第一片。`Registry` map signature 与生成码 fun
 - **⑤ idempotency 桥（#1669 映射半 + #1698 消费半，已落地）**：HTTP Idempotency-Key ↔ command_id 映射（复用 `runtime/http/idempotency` 派生 key + `kernel/idempotency.Claimer` 两阶段）。**映射原语半已落地（#1669 PR-A）**：`runtime/http/idempotency` sealed funnel 扩第二构造器 `DeriveCommandKey(tenant, subject, command_id)`——纯编译期形态，产同一 sealed `IdempotencyKey`、流同一 `Store.Claim` sink（详见 ADR-1449 §Amendment 2026-06-07）；#1610 cross-cell 同槽路由消费它。**Claimer-wrap 消费半已落地（#1698 PR-B，见 §Amendment 2026-06-08）**：`kernel/idempotency.Claimer` 两阶段包裹 relay 命令分发 + 三态生命周期；sealed-key→Claimer string-key 经新增 `IdempotencyKey.Flat()` 扁平化（node-agnostic）；per-instance 身份经 `outbox.Entry` 的 `AggregateID(subject)` + business-metadata（command_id）承载，随真实 devicecell 异步 command producer 一并落地。**§4 评级矩阵新增「命令幂等身份双向锁 funnel」行（见 §Amendment 2026-06-08）**，无 ✅→⚠️/❌ 降格。
 - ~~**command-entry 值校验 funnel（#1588，Blocked-by ④）**：`DispatchAsync` 只做 typed JSON unmarshal，不执行 schema 值约束~~ **已交付（#1588，见 §Amendment 2026-06-08）**：`DispatchAsync` 在 topic-guard 之后、unmarshal 之前对 `entry.Payload()`（已是 wire JSON bytes）跑 `runtime/schemavalidate.Validator.Validate` 强制 request schema 值约束（minLength/maxLength/required/additionalProperties），违例 → `kout.NewPermanentError` → relay `MarkDead`。复用 HTTP 同源 validator（抽中性包 `runtime/schemavalidate`）；honor D4——async bytes 校验非 marshal round-trip（round-trip 仅在校验 sync typed 输入时出现，sync `Dispatch` 不变）。
 - ~~**command consistencyLevel governance（#1044 子 issue）**：PR-1 不锁 level~~ **已交付（#1668，双层）**：`COMMAND-CONTRACT-CONSISTENCY-LEVEL-01` 下界约束 `consistencyLevel ≥ L1`，仅拒 `L0`（命令跨本地边界至少需 L1 LocalTx 原子性，L0 LocalOnly 结构上不适用）。**双层**（同 PROJECTION-CONSISTENCY-01 单 ID 双层范式）：Hard = `types.tmpl` 编译期 `const _ = uint(cellvocab.<level> - cellvocab.L1)` 对 codegen:true 命令契约 uint 下溢拦 L0；Medium = governance rule 兜底 codegen:false + in-memory fixture。下界（非 exact-lock）使现有 active L4 `devicecommand` 契约全部通过、零误伤。详见 §Amendment 2026-06-06（#1668）。
-- **真实 binary async producer 接线（#1698 PR-B，已落地——见 §Amendment 2026-06-08）**：archetype ① **事件反应式**——`examples/iotdevice/cells/devicecell/slices/devicebootstrap` 订阅 `event.device-registered.v1` → handler 经 `command.EmitAsync` emit `command.devicecommand.enqueue.v1`（包进 `CellTxManager.RunInTx`，durable PG outbox writer 要 tx）；`examples/iotdevice/run.go` demo + durable 两模式都接命令-relay 子系统（首个生产 `WithCommandDispatch` callsite）。其余 producer archetype（② #1757 同步 HTTP→command、③ #1758 saga step→command）仍复用本 wrap，随各自 PR 落地。
+- **真实 binary async producer 接线（#1698 PR-B，已落地——见 §Amendment 2026-06-08）**：archetype ① **事件反应式**——`examples/iotdevice/cells/devicecell/slices/devicebootstrap` 订阅 `event.device-registered.v1` → handler 经 `command.EmitAsync` emit `command.devicecommand.enqueue.v1`（包进 `CellTxManager.RunInTx`，durable PG outbox writer 要 tx）；`examples/iotdevice/run.go` demo + durable 两模式都接命令-relay 子系统（首个生产 `WithCommandDispatch` callsite）。archetype ② **level-based reconcile** 已随 #1757 落地：devicecell 证书续期 reconciler 周期扫描 near-expiry cert state，经同一 `command.EmitAsync` + relay Claimer funnel 发 `rotate-cert` enqueue（见 §Amendment 2026-06-10）。其余 producer archetype（③ #1758 saga step→command）仍复用本 wrap，随各自 PR 落地。
 
 amend 时须回到 §4 矩阵逐行重评（ai-robust.md ADR amendment 必查）：见 §Amendment 2026-06-06。
 
@@ -250,3 +250,26 @@ empty / 非法 level 不由本规则报——由 `FMT-03`（contract consistency
 enforcement 索引（§7）**无新增**——值校验由 §4 既有三 funnel 覆盖；`runtime/schemavalidate` 为运行时 validator 载体（非 enforcement 机制）。
 
 **范围（显式，非 silent defer）**：HTTP→command 不在本 PR（仓内无 HTTP→command wiring；真落地时复用 HTTP handler 既有 validator，结构上已覆盖）。真实 binary async producer 接线 = #1698（正交）。
+
+---
+
+## Amendment 2026-06-10 — archetype ② level-based reconcile async producer 落地（#1757）
+
+**触发**：#1757 将 devicecell 证书续期从隐含状态推进为 level-based reconcile producer：周期观察 `Device.CertExpiresAt` / `CertEpoch`，对 near-expiry 当前 epoch 发出异步 `rotate-cert` 设备命令。按 ai-robust.md「ADR amendment 必查」重评 §4。
+
+**交付**：
+
+1. **建模与存储**：`domain.Device` 破坏式增加 `CertEpoch` / `CertExpiresAt`，`DeviceRepository` 增加 `ListCertificateRenewalCandidates(ctx, expiresBefore)`；mem / PG repo 同步实现。PG migration 056 增加列、`devices_cert_epoch_positive` CHECK、`idx_devices_cert_expires_at`，并进 `schema_guard` columns/default/check/index 注册与静态 membership 测试。
+2. **producer archetype ②：level-based reconcile**：devicecell 增加 `devicecert.renewal` lifecycle hook，基于 `kernel/reconcile.Loop` 每 tick 扫描 `now+7d` 前过期证书。该 producer 不依赖一次性 event，符合 controller-runtime level-based reconcile 语义。
+3. **复用现有 command async funnel**：reconciler 只调用 `command.EmitAsync(ctx, clk, emitter, cmdenqueue.DispatchID, deviceID, deterministicCommandID, req)`；`req` 仍是既有 `command.devicecommand.enqueue.v1`，`CommandType="rotate-cert"`。不新增 rotate-cert command 契约、不新增 dispatcher、不新增 funnel。
+4. **幂等身份**：`commandID = f(deviceID, certEpoch)`，同一设备同一证书 epoch 跨 tick 派生相同 Claimer key；payload 为 full context JSON（`deviceId` / `certEpoch` / `certExpiresAt` / `requestedAt`）。本 PR 不实现设备续期 ack 后 epoch 推进，epoch 推进属于后续设备完成续期语义。
+5. **端到端覆盖**：单测锁定 outbox topic / aggregate / command-id metadata / payload；E2E 锁定两次 tick 只 enqueue 一条 `rotate-cert` 且设备可 dequeue。
+
+**§4 评级矩阵逐行重评（无格降级）**：
+
+- `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`：**不变**（上游 Hard / 下游 Medium）。#1757 不新增 typed command contract，也不手写 `Handler/Register/Dispatch/DispatchAsync` look-alike；仍复用生成的 `enqueue.DispatchID` / `DispatchAsync`。
+- `COMMAND-DISPATCH-REGISTER-CALLER-01`：**不变**（上游 Medium / 下游 Hard）。reconcile producer 不直接调用 `RegisterHandler` / `LookupHandler`。
+- `COMMAND-ASYNC-DISPATCH-CALLER-01`：**不变**（上游 Medium / 下游 Hard）。生产 dispatch 仍走既有 `WithCommandDispatch(reg, {enqueue.DispatchID: enqueue.DispatchAsync}, claimer)` 3-arg 形态；#1757 未新增 callsite 形态。
+- `COMMAND-ASYNC-EMIT-FUNNEL-01`：**不变**（上游 Medium / 下游 Hard）。新增 producer 通过 sanctioned `command.EmitAsync` 出口构造 command-topic entry，subject / commandID 为必填位置参；无 funnel 外 `kout.NewEntry` / `Emit` 构造 command-topic entry。
+
+**无 contract-fanout / 无降级**：没有新增 `contract.yaml` command、没有修改 `kernel/outbox.Entry` wire envelope、没有新增 errcode / schemaRef / generated handler；PG schema 变更只服务 devicecell repository state，并由 migration 056 + schema_guard 守护。§4 所有既有 invariant 无 ✅→⚠️/❌ 降格，无补偿措施缺口。

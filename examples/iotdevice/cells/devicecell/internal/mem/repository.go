@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -73,6 +74,39 @@ func (r *DeviceRepository) List(_ context.Context, params query.ListParams) ([]*
 		return nil, fmt.Errorf("device-repo: list: %w", err)
 	}
 	return result, nil
+}
+
+// ListCertificateRenewalCandidates returns devices whose current cert expires
+// before or exactly at expiresBefore, ordered by cert expiry then device id.
+func (r *DeviceRepository) ListCertificateRenewalCandidates(
+	_ context.Context, expiresBefore time.Time,
+) ([]domain.CertificateRenewalCandidate, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	out := make([]domain.CertificateRenewalCandidate, 0)
+	for _, d := range r.devices {
+		if d.CertExpiresAt.IsZero() || d.CertExpiresAt.After(expiresBefore) {
+			continue
+		}
+		out = append(out, domain.CertificateRenewalCandidate{
+			DeviceID:      d.ID,
+			CertEpoch:     d.CertEpoch,
+			CertExpiresAt: d.CertExpiresAt,
+		})
+	}
+	compare := func(a, b domain.CertificateRenewalCandidate) int {
+		if c := a.CertExpiresAt.Compare(b.CertExpiresAt); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.DeviceID, b.DeviceID)
+	}
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && compare(out[j], out[j-1]) < 0; j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	return out, nil
 }
 
 // RepoReady always returns nil for the in-memory store (no external dependency).
