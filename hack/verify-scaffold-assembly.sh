@@ -61,8 +61,7 @@ run_smoke() {
     --cells="${CELL_ID}" \
     --team=scaffoldsmoke \
     --role=maintainer \
-    --deploy=k8s \
-    --layout=conventional
+    --deploy=k8s
 
   # Auto-generate ran inside `scaffold assembly`; verify the result builds.
   go build -o /dev/null "./cmd/${ASM_ID}/..."

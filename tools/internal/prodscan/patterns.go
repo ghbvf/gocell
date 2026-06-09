@@ -12,6 +12,7 @@ var topLevelDirs = []string{
 	"runtime",
 	"adapters",
 	"cells",
+	"corecells",
 	"cellmodules",
 	"examples",
 	"pkg",
@@ -39,6 +40,23 @@ func Patterns(root string) []string {
 	for _, dir := range topLevelDirs {
 		full := filepath.Join(root, dir)
 		if !dirExists(full) || IsModuleRoot(full) {
+			continue
+		}
+		patterns = append(patterns, "./"+dir+"/...")
+	}
+	return patterns
+}
+
+// WorkspacePatterns returns production package patterns for ModeWorkspace
+// scans. Unlike Patterns, workspace mode can address go.work satellite module
+// roots such as corecells/, so existing module roots are retained.
+func WorkspacePatterns(root string) []string {
+	var patterns []string
+	if dirHasNonTestGoFiles(root) {
+		patterns = append(patterns, ".")
+	}
+	for _, dir := range topLevelDirs {
+		if !dirExists(filepath.Join(root, dir)) {
 			continue
 		}
 		patterns = append(patterns, "./"+dir+"/...")

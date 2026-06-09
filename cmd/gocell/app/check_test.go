@@ -537,6 +537,30 @@ func TestLoadCellImports_NonExistentDir(t *testing.T) {
 	// Non-fatal (empty dir) is also fine — just assert no panic.
 }
 
+func TestLoadCellImports_DetectsRootLocalCellImport(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"),
+		[]byte("module github.com/ghbvf/gocell\n\ngo "+goModVersion()+"\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "cells", "source"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "cells", "target", "api"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "cells", "source", "cell.go"), []byte(`package source
+
+import _ "github.com/ghbvf/gocell/cells/target/api"
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "cells", "target", "api", "api.go"),
+		[]byte("package api\n"), 0o644))
+
+	cm := &metadata.CellMeta{
+		ID:               "source",
+		ConsistencyLevel: "L0",
+		File:             "cells/source/cell.yaml",
+	}
+	imported, loadResults, fatal := loadCellImports(root, cm)
+	require.False(t, fatal, "fixture packages should load: %#v", loadResults)
+	require.Empty(t, loadResults)
+	assert.True(t, imported["target"], "root local cells/<target> imports must be detected")
+}
+
 // TestCheckL0ImportsForSingleCell_OnMissingCell_FailsWithNotFoundMessage verifies error when cell not in project.
 func TestCheckL0ImportsForSingleCell_OnMissingCell_FailsWithNotFoundMessage(t *testing.T) {
 	root := t.TempDir()

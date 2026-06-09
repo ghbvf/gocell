@@ -409,6 +409,35 @@ func TestVerifyCell_NoSmoke(t *testing.T) {
 	assert.Contains(t, result.Results[0].Output, "warning")
 }
 
+func TestVerifyCell_UsesMetadataCellDirectory(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"),
+		[]byte("module github.com/ghbvf/gocell\n\ngo 1.25\n"), 0o644))
+	cellDir := filepath.Join(root, "corecells", "accesscore")
+	require.NoError(t, os.MkdirAll(cellDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cellDir, "startup_test.go"), []byte(`package accesscore
+
+import "testing"
+
+func TestStartup(t *testing.T) {}
+`), 0o644))
+
+	r := NewRunner(&metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			metadatatest.CellIDAccessCore: {
+				ID:     metadatatest.CellIDAccessCore,
+				File:   "corecells/accesscore/cell.yaml",
+				Verify: metadata.CellVerifyMeta{Smoke: []string{"smoke.accesscore.startup"}},
+			},
+		},
+	}, root)
+
+	result, err := r.VerifyCell(context.Background(), metadatatest.CellIDAccessCore)
+	require.NoError(t, err)
+	require.Len(t, result.Results, 1)
+	assert.True(t, result.Results[0].Passed, result.Results[0].Output)
+}
+
 func TestRunRefs_AllInvalid(t *testing.T) {
 	r := NewRunner(&metadata.ProjectMeta{
 		Slices: map[string]*metadata.SliceMeta{

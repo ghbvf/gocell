@@ -2,8 +2,8 @@
 # kg-verify.sh — Knowledge-Graph verification script
 #
 # Checks:
-#   1. Layer isolation: kernel/ must not import runtime/, adapters/, cells/
-#   2. Layer isolation: runtime/ must not import cells/, adapters/
+#   1. Layer isolation: kernel/ must not import runtime/, adapters/, cells/, corecells/
+#   2. Layer isolation: runtime/ must not import cells/, corecells/, adapters/
 #   3. Layer isolation: corecells/ must not cross-import other corecells
 #   4. go.mod whitelist: only allowed direct dependencies
 #   5. Banned field names: legacy field names must not appear in YAML metadata
@@ -22,11 +22,11 @@ green() { printf '\033[0;32m%s\033[0m\n' "$1"; }
 header(){ printf '\n=== %s ===\n' "$1"; }
 
 # ---------------------------------------------------------------
-# 1. kernel/ must not import runtime/, adapters/, cells/
+# 1. kernel/ must not import runtime/, adapters/, cells/, corecells/
 # ---------------------------------------------------------------
 header "Check 1: kernel/ layer isolation"
 
-KERNEL_VIOLATIONS=$(grep -rn '"github.com/ghbvf/gocell/\(runtime\|adapters\|cells\)' "${SRC_DIR}/kernel/" --include='*.go' 2>/dev/null || true)
+KERNEL_VIOLATIONS=$(grep -rn '"github.com/ghbvf/gocell/\(runtime\|adapters\|cells\|corecells\)' "${SRC_DIR}/kernel/" --include='*.go' 2>/dev/null || true)
 if [ -n "${KERNEL_VIOLATIONS}" ]; then
     red "FAIL: kernel/ imports forbidden layers:"
     echo "${KERNEL_VIOLATIONS}"
@@ -36,11 +36,11 @@ else
 fi
 
 # ---------------------------------------------------------------
-# 2. runtime/ must not import cells/ or adapters/
+# 2. runtime/ must not import cells/, corecells/, or adapters/
 # ---------------------------------------------------------------
 header "Check 2: runtime/ layer isolation"
 
-RUNTIME_VIOLATIONS=$(grep -rn '"github.com/ghbvf/gocell/\(cells\|adapters\)' "${SRC_DIR}/runtime/" --include='*.go' 2>/dev/null || true)
+RUNTIME_VIOLATIONS=$(grep -rn '"github.com/ghbvf/gocell/\(cells\|corecells\|adapters\)' "${SRC_DIR}/runtime/" --include='*.go' 2>/dev/null || true)
 if [ -n "${RUNTIME_VIOLATIONS}" ]; then
     red "FAIL: runtime/ imports forbidden layers:"
     echo "${RUNTIME_VIOLATIONS}"

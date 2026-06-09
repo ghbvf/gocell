@@ -278,6 +278,7 @@ func TestWrite(t *testing.T) {}
 		Cells: map[string]*metadata.CellMeta{
 			metadatatest.CellIDAuditCore: {
 				ID:     metadatatest.CellIDAuditCore,
+				File:   "cells/auditcore/cell.yaml",
 				Verify: metadata.CellVerifyMeta{Smoke: []string{"smoke.auditcore.write"}},
 			},
 		},
@@ -294,11 +295,17 @@ func TestWrite(t *testing.T) {}
 }
 
 func TestVerifyCell_InvalidSmokeRef(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0o644))
 	r := NewRunner(&metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			metadatatest.CellIDCC: {ID: metadatatest.CellIDCC, Verify: metadata.CellVerifyMeta{Smoke: []string{"totally-invalid"}}},
+			metadatatest.CellIDCC: {
+				ID:     metadatatest.CellIDCC,
+				File:   "cells/cc/cell.yaml",
+				Verify: metadata.CellVerifyMeta{Smoke: []string{"totally-invalid"}},
+			},
 		},
-	}, t.TempDir())
+	}, dir)
 
 	res, err := r.VerifyCell(context.Background(), metadatatest.CellIDCC)
 	require.NoError(t, err)

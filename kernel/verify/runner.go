@@ -128,11 +128,32 @@ func (r *Runner) VerifyCell(ctx context.Context, cellID string) (*VerifyResult, 
 		return result, nil
 	}
 
-	cellPkg := fmt.Sprintf("./cells/%s/...", cellID)
+	cellDir, ok := metadata.CellDirFromMetadataFile(cm.File)
+	if !ok {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cell metadata file is not under a supported cell layout",
+			errcode.WithDetails(
+				errcode.PublicString("cell", cellID),
+				errcode.PublicString("file", cm.File),
+			))
+	}
+	cellPkg := fmt.Sprintf("./%s/...", cellDir)
 	for _, ref := range smokeRefs {
 		resolved, err := resolveRef(ref)
 		if err != nil {
 			result.Errors = append(result.Errors, err)
+			result.Results = append(result.Results, TestResult{Name: ref, Passed: false})
+			result.Passed = false
+			continue
+		}
+		if resolved.Kind == PrefixSmoke && resolved.Scope != "" && resolved.Scope != cellID {
+			result.Errors = append(result.Errors, errcode.New(errcode.KindInvalid, errcode.ErrCheckRefInvalid,
+				"smoke checkRef belongs to a different cell",
+				errcode.WithDetails(
+					errcode.PublicString("ref", ref),
+					errcode.PublicString("scope", resolved.Scope),
+					errcode.PublicString("cell", cellID),
+				)))
 			result.Results = append(result.Results, TestResult{Name: ref, Passed: false})
 			result.Passed = false
 			continue

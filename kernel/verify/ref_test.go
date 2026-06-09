@@ -22,7 +22,7 @@ func TestResolveRef(t *testing.T) {
 		{
 			name: "smoke ref",
 			ref:  "smoke.accesscore.startup",
-			want: resolvedRef{Kind: "smoke", Pkg: "./cells/accesscore/...", RunPattern: "Startup"},
+			want: resolvedRef{Kind: "smoke", Scope: "accesscore", Pkg: "", RunPattern: "Startup"},
 		},
 		{
 			name: "unit ref",

@@ -1,7 +1,6 @@
 package verify
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 
@@ -22,7 +21,7 @@ type resolvedRef struct {
 // Supported formats:
 //
 //	journey.{journeyID}.{suffix} → pkg resolved by Runner, pattern=^Test{CamelCase(journeyID)}{CamelCase(suffix)}$
-//	smoke.{cellID}.{suffix}     → pkg="./cells/{cellID}/...", pattern=CamelCase(suffix)
+//	smoke.{cellID}.{suffix}     → pkg resolved by Runner, pattern=CamelCase(suffix)
 //	unit.{scope}.{suffix}       → pkg="" (caller provides), pattern=CamelCase(suffix)
 //	contract.{id...}.{role}     → pkg="" (caller provides), pattern=CamelCase(role)
 //
@@ -65,7 +64,8 @@ func resolveRef(ref string) (resolvedRef, error) {
 		}
 		return resolvedRef{
 			Kind:       PrefixSmoke,
-			Pkg:        fmt.Sprintf("./cells/%s/...", cellID),
+			Scope:      cellID,
+			Pkg:        "",
 			RunPattern: kebabToCamelCase(suffix),
 		}, nil
 

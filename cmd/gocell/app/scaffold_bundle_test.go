@@ -87,6 +87,63 @@ func TestRunScaffoldCell_BundleWithAutoGenerate(t *testing.T) {
 	}
 }
 
+func TestRunScaffoldCell_UpdatesManifestForRootLocalCells(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"),
+		[]byte("module github.com/ghbvf/gocell\n\ngo 1.23\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifestDir := filepath.Join(root, ".gocell")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `version: v1
+modules:
+  - path: .
+    includes:
+      contracts:
+        - "contracts/**/contract.yaml"
+  - path: corecells
+    includes:
+      cells:
+        - "*/cell.yaml"
+      slices:
+        - "*/slices/*/slice.yaml"
+`
+	if err := os.WriteFile(filepath.Join(manifestDir, "manifest.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	args := []string{
+		"--id=manifestcell",
+		"--type=core",
+		"--level=L2",
+		"--team=platform",
+		"--role=cell-owner",
+		"--skip-generate",
+	}
+	if err := scaffoldCell(root, args); err != nil {
+		t.Fatalf("scaffoldCell: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(manifestDir, "manifest.yaml")) //nolint:gosec // tempdir fixture
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`      cells:
+        - "cells/*/cell.yaml"`,
+		`      slices:
+        - "cells/*/slices/*/slice.yaml"`,
+	} {
+		if !strings.Contains(string(got), want) {
+			t.Fatalf("manifest missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func setupBundleTestProject(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()

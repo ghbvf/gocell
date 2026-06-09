@@ -95,6 +95,7 @@ var locatorLayoutPrefixes = []string{
 // (IsConventionalAssemblyPath, IsInExamplesSubtree) as legitimate funnel
 // exit points — these are intentionally inside the funnel allowlist.
 var locatorFunnelFiles = map[string]bool{
+	"cell_layout.go":          true,
 	"locator.go":              true,
 	"locator_conventional.go": true,
 	"locator_manifest.go":     true,

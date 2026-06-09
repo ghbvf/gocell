@@ -74,18 +74,20 @@ func TestImplDeclCover(t *testing.T) {
 func TestImplDeclCover_DetectsMissingImport(t *testing.T) {
 	t.Parallel()
 	const modPath = PlatformModulePath
-	cellsPrefix := modPath + "/corecells/"
 
 	// 1. String-utility path.
 	impPath := modPath + "/corecells/auditcore/internal/domain"
-	cell := extractCellNameFromImport(cellsPrefix, impPath)
+	cell := extractCellNameFromImport(modPath, impPath)
 	if cell != "auditcore" {
 		t.Fatalf("extractCellNameFromImport: want auditcore, got %q", cell)
 	}
 	ownerCell := "accesscore"
 	// test-helper boundary: auditcoretest — NOT a prefix of auditcore/internal/domain
-	testBoundary := cellsPrefix + "auditcore/auditcoretest/"
-	if strings.HasPrefix(impPath, testBoundary) {
+	_, impRest, ok := cellImportParts(modPath, impPath)
+	if !ok {
+		t.Fatal("synthetic cross-cell import must parse as a cell import")
+	}
+	if isCellTestHelperRest("auditcore", impRest) {
 		t.Fatal("synthetic cross-cell import must NOT match test-helper boundary")
 	}
 	if cell == ownerCell {
@@ -115,15 +117,14 @@ import (
 			continue
 		}
 		ip := strings.Trim(imp.Path.Value, `"`)
-		if !strings.HasPrefix(ip, cellsPrefix) {
+		impCellName, impRest, ok := cellImportParts(modPath, ip)
+		if !ok {
 			continue
 		}
-		impCellName := extractCellNameFromImport(cellsPrefix, ip)
 		if impCellName == "" || impCellName == synOwnerCell {
 			continue
 		}
-		tb := cellsPrefix + impCellName + "/" + impCellName + "test/"
-		if strings.HasPrefix(ip, tb) {
+		if isCellTestHelperRest(impCellName, impRest) {
 			continue
 		}
 		crossCellDiags++
@@ -132,6 +133,47 @@ import (
 	// Two imports of auditcore packages → both must be flagged.
 	if crossCellDiags != 2 {
 		t.Errorf("AST scanner path: want 2 cross-cell diagnostics (qualified + blank import), got %d", crossCellDiags)
+	}
+}
+
+func TestImplDeclCover_CellLayoutHelpersCoverSupportedRoots(t *testing.T) {
+	t.Parallel()
+	const modPath = PlatformModulePath
+	for _, tc := range []struct {
+		name       string
+		rel        string
+		importPath string
+		wantCell   string
+	}{
+		{
+			name:       "local_cells",
+			rel:        "cells/source/slices/a/service.go",
+			importPath: modPath + "/cells/target/slices/b",
+			wantCell:   "target",
+		},
+		{
+			name:       "platform_corecells",
+			rel:        "corecells/accesscore/slices/login/service.go",
+			importPath: modPath + "/corecells/auditcore/internal/domain",
+			wantCell:   "auditcore",
+		},
+		{
+			name:       "example_cells",
+			rel:        "examples/todoorder/cells/order/slices/create/service.go",
+			importPath: modPath + "/examples/todoorder/cells/payment/slices/capture",
+			wantCell:   "payment",
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := extractCellName(tc.rel); got == "" {
+				t.Fatalf("extractCellName(%q) returned empty", tc.rel)
+			}
+			if got := extractCellNameFromImport(modPath, tc.importPath); got != tc.wantCell {
+				t.Fatalf("extractCellNameFromImport(%q)=%q, want %q", tc.importPath, got, tc.wantCell)
+			}
+		})
 	}
 }
 

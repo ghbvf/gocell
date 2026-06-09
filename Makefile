@@ -157,8 +157,7 @@ proto-gen:
 	go run github.com/bufbuild/buf/cmd/buf@$(BUF_VERSION) generate
 
 cover:
-	go test ./... -coverprofile=coverage.out
-	go tool cover -func=coverage.out | tail -1
+	hack/cover-workspace.sh
 
 clean:
 	rm -rf bin/

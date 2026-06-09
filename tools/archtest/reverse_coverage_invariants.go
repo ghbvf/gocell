@@ -219,12 +219,10 @@ type sliceSubscriberEntry struct {
 	ContractID    string
 }
 
-// loadSliceSubscribers reads slice.yaml subscribe usages from cells/ and examples/.
-//
-//nolint:dupl // mirrors grpc_service_in_contract; different result type
+// loadSliceSubscribers reads slice.yaml subscribe usages from supported cell roots.
 func loadSliceSubscribers(root string) ([]sliceSubscriberEntry, error) {
 	scope := DirsScope(
-		root, []string{"cells", "examples"},
+		root, businessCellScanDirs(),
 		MatchRels(func(rel string) bool {
 			return strings.HasSuffix(rel, "/slice.yaml")
 		}),
@@ -259,7 +257,7 @@ func loadSliceSubscribers(root string) ([]sliceSubscriberEntry, error) {
 
 func loadSliceWebhookWiring(root string) (map[string]bool, error) {
 	scope := DirsScope(
-		root, []string{"cells", "examples"},
+		root, businessCellScanDirs(),
 		MatchRels(func(rel string) bool {
 			return strings.HasSuffix(rel, "/slice.yaml")
 		}),
@@ -295,54 +293,81 @@ func loadSliceWebhookWiring(root string) (map[string]bool, error) {
 // Cell name extraction helpers
 // ---------------------------------------------------------------------------
 
-func extractCellName(rel string) string {
-	const pfx = "cells/"
-	if !strings.HasPrefix(rel, pfx) {
-		return ""
-	}
-	rest := rel[len(pfx):]
-	idx := strings.Index(rest, "/")
-	if idx < 0 {
-		return rest
-	}
-	return rest[:idx]
+func businessCellScanDirs() []string {
+	return []string{"cells", "corecells", "examples"}
 }
 
-func extractCellIDFromPkgPath(modPath, pkgPath string) string {
-	if !strings.HasPrefix(pkgPath, modPath+"/") {
+func extractCellName(rel string) string {
+	cellID, ok := metadata.CellIDFromRel(rel)
+	if !ok {
 		return ""
-	}
-	const marker = "/cells/"
-	idx := strings.Index(pkgPath, marker)
-	if idx < 0 {
-		return ""
-	}
-	tail := pkgPath[idx+len(marker):]
-	cellID := tail
-	if next := strings.Index(tail, "/"); next >= 0 {
-		cellID = tail[:next]
-		rest := tail[next+1:]
-		nextSeg := rest
-		if slashIdx := strings.Index(rest, "/"); slashIdx >= 0 {
-			nextSeg = rest[:slashIdx]
-		}
-		if nextSeg == cellID+"test" {
-			return ""
-		}
 	}
 	return cellID
 }
 
-func extractCellNameFromImport(cellsImportPrefix, impPath string) string {
-	if !strings.HasPrefix(impPath, cellsImportPrefix) {
+func extractCellIDFromPkgPath(modPath, pkgPath string) string {
+	cellID, rest, ok := cellImportParts(modPath, pkgPath)
+	if !ok {
 		return ""
 	}
-	rest := impPath[len(cellsImportPrefix):]
-	idx := strings.Index(rest, "/")
-	if idx < 0 {
-		return rest
+	if isCellTestHelperRest(cellID, rest) {
+		return ""
 	}
-	return rest[:idx]
+	return cellID
+}
+
+func extractCellNameFromImport(modPath, impPath string) string {
+	cellID, _, ok := cellImportParts(modPath, impPath)
+	if !ok {
+		return ""
+	}
+	return cellID
+}
+
+func cellImportParts(modPath, importPath string) (cellID, rest string, ok bool) {
+	for _, prefix := range []string{modPath + "/cells/", modPath + "/corecells/"} {
+		tail, found := strings.CutPrefix(importPath, prefix)
+		if !found {
+			continue
+		}
+		parts := strings.SplitN(tail, "/", 2)
+		if parts[0] == "" {
+			return "", "", false
+		}
+		if len(parts) == 2 {
+			return parts[0], parts[1], true
+		}
+		return parts[0], "", true
+	}
+
+	tail, found := strings.CutPrefix(importPath, modPath+"/examples/")
+	if !found {
+		return "", "", false
+	}
+	parts := strings.SplitN(tail, "/", 4)
+	if len(parts) < 3 || parts[1] != "cells" || parts[2] == "" {
+		return "", "", false
+	}
+	if len(parts) == 4 {
+		return parts[2], parts[3], true
+	}
+	return parts[2], "", true
+}
+
+func isCellTestHelperRest(cellID, rest string) bool {
+	if rest == "" {
+		return false
+	}
+	nextSeg := rest
+	if slashIdx := strings.Index(rest, "/"); slashIdx >= 0 {
+		nextSeg = rest[:slashIdx]
+	}
+	return nextSeg == cellID+"test"
+}
+
+func isCellPackage(modPath, pkgPath string) bool {
+	_, ok := metadata.CellIDFromImportPath(modPath, pkgPath)
+	return ok
 }
 
 // ---------------------------------------------------------------------------
@@ -350,9 +375,9 @@ func extractCellNameFromImport(cellsImportPrefix, impPath string) string {
 // ---------------------------------------------------------------------------
 
 // CheckImplDeclCover enforces IMPL-DECL-COVER-01:
-// Production Go files under cells/<A>/... must not import packages from a
-// different cell cells/<B>/... unless the import path is under
-// cells/<B>/<B>test/ (the public test helper boundary).
+// Production Go files under a supported cell root must not import packages from
+// a different cell unless the import path is under the public test helper
+// boundary (<cell>/<cell>test/*).
 //
 // Portable cell-architecture rule (cross-cell import boundary). NOT registered
 // in StandardCellRules in this batch to preserve behavior-zero-change
@@ -367,18 +392,16 @@ func CheckImplDeclCover(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 	if err != nil {
 		t.Fatalf("IMPL-DECL-COVER-01: read module path: %v", err)
 	}
-	cellsPrefix := modPath + "/corecells/"
-
-	scope := DirsScope(root, []string{"cells"}, MatchRels(func(rel string) bool {
+	scope := DirsScope(root, businessCellScanDirs(), MatchRels(func(rel string) bool {
 		return !strings.HasSuffix(rel, "_test.go") && !strings.Contains(rel, "/testdata/")
 	}))
 
 	return Run(t, AST(scope), func(p *Pass) []Diagnostic {
-		return collectImplDeclViolations(p, cellsPrefix)
+		return collectImplDeclViolations(p, modPath)
 	})
 }
 
-func collectImplDeclViolations(p *Pass, cellsPrefix string) []Diagnostic {
+func collectImplDeclViolations(p *Pass, modPath string) []Diagnostic {
 	var d []Diagnostic
 	for _, f := range p.Files {
 		rel := p.Rel(f)
@@ -386,35 +409,34 @@ func collectImplDeclViolations(p *Pass, cellsPrefix string) []Diagnostic {
 		if ownerCell == "" {
 			continue
 		}
-		d = append(d, collectCrossCellImports(p, f, rel, ownerCell, cellsPrefix)...)
+		d = append(d, collectCrossCellImports(p, f, rel, ownerCell, modPath)...)
 	}
 	return d
 }
 
-func collectCrossCellImports(p *Pass, f *ast.File, rel, ownerCell, cellsPrefix string) []Diagnostic {
+func collectCrossCellImports(p *Pass, f *ast.File, rel, ownerCell, modPath string) []Diagnostic {
 	var d []Diagnostic
 	for _, imp := range f.Imports {
 		if imp.Path == nil {
 			continue
 		}
 		impPath := strings.Trim(imp.Path.Value, `"`)
-		if !strings.HasPrefix(impPath, cellsPrefix) {
+		impCell, impRest, ok := cellImportParts(modPath, impPath)
+		if !ok {
 			continue
 		}
-		impCell := extractCellNameFromImport(cellsPrefix, impPath)
 		if impCell == "" || impCell == ownerCell {
 			continue
 		}
-		testBoundary := cellsPrefix + impCell + "/" + impCell + "test/"
-		if strings.HasPrefix(impPath, testBoundary) {
+		if isCellTestHelperRest(impCell, impRest) {
 			continue
 		}
 		pos := p.Fset.Position(imp.Pos())
 		d = append(d, Diagnostic{
 			Rel:  rel,
 			Line: pos.Line,
-			Message: "cross-cell import from " + ownerCell + " to cells/" + impCell +
-				" bypasses contract boundary (only cells/<X>/<X>test/* allowed): " + impPath,
+			Message: "cross-cell import from " + ownerCell + " to cell " + impCell +
+				" bypasses contract boundary (only <cell>/<cell>test/* allowed): " + impPath,
 		})
 	}
 	return d
@@ -484,7 +506,7 @@ func collectHandlerNamedTypes(pkg *packages.Package, pkgPath string, out *[]hand
 // Returns true if the caller should skip to the next package (pkg was a generated iface pkg).
 func classifyHandlerPkg(
 	pkg *packages.Package,
-	generatedHTTPPrefix, cellsPrefix, examplesPrefix, demoExamplePrefix string,
+	modPath, generatedHTTPPrefix, demoExamplePrefix string,
 	genServiceIfaces *[]handlerIfaceEntry,
 	cellImplTypes *[]handlerImplEntry,
 	sawSatelliteExample *bool,
@@ -502,12 +524,10 @@ func classifyHandlerPkg(
 		}
 		return
 	}
-	isCells := strings.HasPrefix(pkgPath, cellsPrefix)
-	isExamples := strings.HasPrefix(pkgPath, examplesPrefix)
-	if !isCells && !isExamples {
+	if !isCellPackage(modPath, pkgPath) {
 		return
 	}
-	if isExamples && !strings.HasPrefix(pkgPath, demoExamplePrefix) {
+	if strings.HasPrefix(pkgPath, modPath+"/examples/") && !strings.HasPrefix(pkgPath, demoExamplePrefix) {
 		*sawSatelliteExample = true
 	}
 	collectHandlerNamedTypes(pkg, pkgPath, cellImplTypes)
@@ -515,8 +535,7 @@ func classifyHandlerPkg(
 
 // collectHandlerTypeUniverse loads the ModeWorkspace type universe and returns
 // (genServiceIfaces, cellImplTypes, sawSatelliteExample, error).
-func collectHandlerTypeUniverse(t *testing.T, root,
-	generatedHTTPPrefix, cellsPrefix, examplesPrefix string,
+func collectHandlerTypeUniverse(t *testing.T, root, modPath, generatedHTTPPrefix string,
 ) ([]handlerIfaceEntry, []handlerImplEntry, bool, error) {
 	t.Helper()
 	modules := findWorkspaceModules(t, root)
@@ -528,7 +547,7 @@ func collectHandlerTypeUniverse(t *testing.T, root,
 	var genServiceIfaces []handlerIfaceEntry
 	var cellImplTypes []handlerImplEntry
 	sawSatelliteExample := false
-	demoExamplePrefix := examplesPrefix + "demo/"
+	demoExamplePrefix := modPath + "/examples/demo/"
 
 	for _, pkg := range resolver.All() {
 		if pkg == nil || pkg.Types == nil {
@@ -536,7 +555,7 @@ func collectHandlerTypeUniverse(t *testing.T, root,
 		}
 		classifyHandlerPkg(
 			pkg,
-			generatedHTTPPrefix, cellsPrefix, examplesPrefix, demoExamplePrefix,
+			modPath, generatedHTTPPrefix, demoExamplePrefix,
 			&genServiceIfaces, &cellImplTypes, &sawSatelliteExample,
 		)
 	}
@@ -615,11 +634,9 @@ func CheckHandlerDeclCover(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 	activeHTTPContracts := buildActiveHTTPContractSet(genHTTPSourceMap)
 
 	generatedHTTPPrefix := modPath + "/generated/contracts/http/"
-	cellsPrefix := modPath + "/corecells/"
-	examplesPrefix := modPath + "/examples/"
 
 	genServiceIfaces, cellImplTypes, sawSatelliteExample, universeErr := collectHandlerTypeUniverse(
-		t, root, generatedHTTPPrefix, cellsPrefix, examplesPrefix,
+		t, root, modPath, generatedHTTPPrefix,
 	)
 	if universeErr != nil {
 		t.Fatalf("HANDLER-DECL-COVER-01: LoadProductionPackages: %v", universeErr)
@@ -862,8 +879,6 @@ func collectDeadContractTypeUniverse(t *testing.T, root, modPath string) ([]dcIf
 	t.Helper()
 	generatedHTTPPrefix := modPath + "/generated/contracts/http/"
 	generatedCommandPrefix := modPath + "/generated/contracts/command/"
-	cellsPrefix := modPath + "/corecells/"
-	examplesPrefix := modPath + "/examples/"
 
 	modules := findWorkspaceModules(t, root)
 	resolver, lpErr := typeseval.LoadProductionPackages(root, modules, false, nil)
@@ -885,7 +900,7 @@ func collectDeadContractTypeUniverse(t *testing.T, root, modPath string) ([]dcIf
 			collectDCServiceIface(pkg, pkgPath, "Service", &genServiceIfaces)
 		case strings.HasPrefix(pkgPath, generatedCommandPrefix):
 			collectDCServiceIface(pkg, pkgPath, "Handler", &genCommandHandlerIfaces)
-		case strings.HasPrefix(pkgPath, cellsPrefix) || strings.HasPrefix(pkgPath, examplesPrefix):
+		case isCellPackage(modPath, pkgPath):
 			collectDCNamedTypes(pkg, &cellNamedTypes)
 		}
 	}

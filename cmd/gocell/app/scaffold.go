@@ -489,6 +489,10 @@ func scaffoldCell(root string, args []string) error {
 		return nil
 	}
 
+	if err := ensureRootManifestCellIncludes(realRoot); err != nil {
+		return fmt.Errorf("scaffold cell: update manifest: %w", err)
+	}
+
 	reportScaffold(scaffoldReport{
 		Kind:   "cell",
 		ID:     *id,
@@ -501,6 +505,82 @@ func scaffoldCell(root string, args []string) error {
 			*id)
 	}
 	return nil
+}
+
+func ensureRootManifestCellIncludes(root string) error {
+	manifestPath := filepath.Join(root, ".gocell", "manifest.yaml")
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	updated, changed := addRootManifestCellIncludes(string(raw))
+	if !changed {
+		return nil
+	}
+	return pathsafe.WriteFileForce(root, manifestPath, []byte(updated), 0o644)
+}
+
+func addRootManifestCellIncludes(src string) (string, bool) {
+	lines := strings.SplitAfter(src, "\n")
+	rootIdx := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "- path: ." {
+			rootIdx = i
+			break
+		}
+	}
+	if rootIdx < 0 {
+		return src, false
+	}
+
+	includesIdx := -1
+	nextModuleIdx := len(lines)
+	for i := rootIdx + 1; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(trimmed, "- path: ") {
+			nextModuleIdx = i
+			break
+		}
+		if trimmed == "includes:" && includesIdx < 0 {
+			includesIdx = i
+		}
+	}
+	if includesIdx < 0 {
+		return src, false
+	}
+
+	hasCells := false
+	hasSlices := false
+	for i := includesIdx + 1; i < nextModuleIdx; i++ {
+		switch strings.TrimSpace(lines[i]) {
+		case "cells:":
+			hasCells = true
+		case "slices:":
+			hasSlices = true
+		}
+	}
+	if hasCells && hasSlices {
+		return src, false
+	}
+
+	var insert strings.Builder
+	if !hasCells {
+		insert.WriteString("      cells:\n")
+		insert.WriteString("        - \"cells/*/cell.yaml\"\n")
+	}
+	if !hasSlices {
+		insert.WriteString("      slices:\n")
+		insert.WriteString("        - \"cells/*/slices/*/slice.yaml\"\n")
+	}
+
+	out := make([]string, 0, len(lines)+4)
+	out = append(out, lines[:includesIdx+1]...)
+	out = append(out, insert.String())
+	out = append(out, lines[includesIdx+1:]...)
+	return strings.Join(out, ""), true
 }
 
 // cellIDToPascalCase converts a cell ID (possibly hyphenated or underscored)

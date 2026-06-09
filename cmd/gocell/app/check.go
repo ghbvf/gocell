@@ -800,8 +800,31 @@ func cellDeclaresL0Dependencies(root string, cm *metadata.CellMeta) bool {
 // not from "cells/<cm.ID>", so cells under examples/**/cells/ are also resolved
 // correctly. This mirrors sliceMetaCheck which already uses cellMeta.File.
 func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []governance.ValidationResult, bool) {
-	const cellsImportPrefix = "github.com/ghbvf/gocell/corecells/"
-	cellDir := filepath.Dir(filepath.FromSlash(cm.File))
+	cellDir, ok := metadata.CellDirFromMetadataFile(cm.File)
+	if !ok {
+		return nil, []governance.ValidationResult{{
+			Code:      governance.RuleCode("CHECK-L0-LOAD-ERROR"),
+			Severity:  governance.SeverityError,
+			IssueType: governance.IssueInvalid,
+			File:      filepath.ToSlash(cm.File),
+			Scope:     cmdL0Imports,
+			Message:   fmt.Sprintf("cannot derive cell directory for cell %q from %q", cm.ID, cm.File),
+			Fix:       "move cell.yaml under cells/<cellID>/, corecells/<cellID>/, or examples/<app>/cells/<cellID>/",
+		}}, true
+	}
+	modulePath, moduleErr := readModule(root)
+	if moduleErr != nil {
+		return nil, []governance.ValidationResult{{
+			Code:      governance.RuleCode("CHECK-L0-LOAD-ERROR"),
+			Severity:  governance.SeverityError,
+			IssueType: governance.IssueInvalid,
+			File:      filepath.ToSlash(cm.File),
+			Scope:     cmdL0Imports,
+			Message:   fmt.Sprintf("cannot read module path for cell %q: %v", cm.ID, moduleErr),
+			Fix:       "ensure the project root has a valid go.mod before running l0-imports",
+		}}, true
+	}
+	cellPkgPattern := "./" + filepath.ToSlash(cellDir) + "/..."
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedImports,
 		Dir:  filepath.Join(root, cellDir),
@@ -818,7 +841,7 @@ func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []gov
 			File:      filepath.ToSlash(cm.File),
 			Scope:     cmdL0Imports,
 			Message:   fmt.Sprintf("packages.Load failed for cell %q: %v", cm.ID, err),
-			Fix:       "ensure the cell directory compiles cleanly; run `go build ./cells/<cellID>/...` to identify build errors",
+			Fix:       fmt.Sprintf("ensure the cell directory compiles cleanly; run `go build %s` to identify build errors", cellPkgPattern),
 		}}, true
 	}
 
@@ -834,16 +857,15 @@ func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []gov
 					File:      filepath.ToSlash(cm.File),
 					Scope:     cmdL0Imports,
 					Message:   fmt.Sprintf("packages.Load error for cell %q package %q: %v", cm.ID, pkg.PkgPath, pe),
-					Fix:       "fix the compilation error in the listed package; run `go build ./cells/<cellID>/...` to reproduce",
+					Fix:       fmt.Sprintf("fix the compilation error in the listed package; run `go build %s` to reproduce", cellPkgPattern),
 				})
 			}
 		}
 		for importPath := range pkg.Imports {
-			after, ok := strings.CutPrefix(importPath, cellsImportPrefix)
+			importedCellID, ok := metadata.CellIDFromImportPath(modulePath, importPath)
 			if !ok {
 				continue
 			}
-			importedCellID := strings.SplitN(after, "/", 2)[0]
 			if importedCellID != cm.ID {
 				imported[importedCellID] = true
 			}
