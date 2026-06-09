@@ -86,52 +86,70 @@ func TestReadManifestModulePaths(t *testing.T) {
 // escaping the root ("path escapes from parent" at the syscall layer).
 func TestReadManifestModulePathsRoot(t *testing.T) {
 	t.Run("normal on-disk layout returns module paths in declaration order", func(t *testing.T) {
-		root := t.TempDir()
-		writeFile(t, filepath.Join(root, ".gocell", "manifest.yaml"),
-			"version: v1\nmodules:\n  - path: .\n  - path: sub\n")
-		// modules[1].path "sub" must exist and be a directory (validateManifestModuleDir).
-		writeFile(t, filepath.Join(root, "sub", "cells", "x", "cell.yaml"),
-			cellYAML("x", "team", "x.primary"))
-
-		got, err := ReadManifestModulePathsRoot(root, DefaultManifestPath)
-		if err != nil {
-			t.Fatalf("ReadManifestModulePathsRoot: %v", err)
-		}
-		if want := []string{".", "sub"}; !reflect.DeepEqual(got, want) {
-			t.Fatalf("ReadManifestModulePathsRoot = %v, want %v", got, want)
-		}
+		assertReadManifestModulePathsRootNormal(t)
 	})
 
 	t.Run("open-root error on missing root fails closed", func(t *testing.T) {
-		missing := filepath.Join(t.TempDir(), "does", "not", "exist")
-		_, err := ReadManifestModulePathsRoot(missing, DefaultManifestPath)
-		if err == nil {
-			t.Fatalf("ReadManifestModulePathsRoot(%q) = nil error; want open-root failure", missing)
-		}
-		if !strings.Contains(err.Error(), "open root") {
-			t.Fatalf("error = %q, want substring %q", err.Error(), "open root")
-		}
+		assertReadManifestModulePathsRootMissing(t)
 	})
 
 	t.Run("symlinked manifest escaping root fails closed", func(t *testing.T) {
-		root := t.TempDir()
-		external := t.TempDir() // OUTSIDE root
-		writeFile(t, filepath.Join(external, "manifest.yaml"),
-			"version: v1\nmodules:\n  - path: .\n")
-		if err := os.MkdirAll(filepath.Join(root, ".gocell"), 0o755); err != nil {
-			t.Fatalf("MkdirAll .gocell: %v", err)
-		}
-		// root/.gocell/manifest.yaml -> external/manifest.yaml (escapes root).
-		if err := os.Symlink(filepath.Join(external, "manifest.yaml"),
-			filepath.Join(root, ".gocell", "manifest.yaml")); err != nil {
-			t.Skipf("symlink unsupported on this platform: %v", err)
-		}
-		_, err := ReadManifestModulePathsRoot(root, DefaultManifestPath)
-		if err == nil {
-			t.Fatalf("ReadManifestModulePathsRoot = nil error; want fail-closed (manifest symlink escapes root)")
-		}
-		if !strings.Contains(err.Error(), "escapes") {
-			t.Fatalf("error = %q, want root-confinement signal %q", err.Error(), "escapes")
-		}
+		assertReadManifestModulePathsRootSymlinkEscape(t)
 	})
+}
+
+func assertReadManifestModulePathsRootNormal(t *testing.T) {
+	t.Helper()
+
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, ".gocell", "manifest.yaml"),
+		"version: v1\nmodules:\n  - path: .\n  - path: sub\n")
+	// modules[1].path "sub" must exist and be a directory (validateManifestModuleDir).
+	writeFile(t, filepath.Join(root, "sub", "cells", "x", "cell.yaml"),
+		cellYAML("x", "team", "x.primary"))
+
+	got, err := ReadManifestModulePathsRoot(root, DefaultManifestPath)
+	if err != nil {
+		t.Fatalf("ReadManifestModulePathsRoot: %v", err)
+	}
+	if want := []string{".", "sub"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ReadManifestModulePathsRoot = %v, want %v", got, want)
+	}
+}
+
+func assertReadManifestModulePathsRootMissing(t *testing.T) {
+	t.Helper()
+
+	missing := filepath.Join(t.TempDir(), "does", "not", "exist")
+	_, err := ReadManifestModulePathsRoot(missing, DefaultManifestPath)
+	if err == nil {
+		t.Fatalf("ReadManifestModulePathsRoot(%q) = nil error; want open-root failure", missing)
+	}
+	if !strings.Contains(err.Error(), "open root") {
+		t.Fatalf("error = %q, want substring %q", err.Error(), "open root")
+	}
+}
+
+func assertReadManifestModulePathsRootSymlinkEscape(t *testing.T) {
+	t.Helper()
+
+	root := t.TempDir()
+	external := t.TempDir() // OUTSIDE root
+	writeFile(t, filepath.Join(external, "manifest.yaml"),
+		"version: v1\nmodules:\n  - path: .\n")
+	if err := os.MkdirAll(filepath.Join(root, ".gocell"), 0o755); err != nil {
+		t.Fatalf("MkdirAll .gocell: %v", err)
+	}
+	// root/.gocell/manifest.yaml -> external/manifest.yaml (escapes root).
+	if err := os.Symlink(filepath.Join(external, "manifest.yaml"),
+		filepath.Join(root, ".gocell", "manifest.yaml")); err != nil {
+		t.Skipf("symlink unsupported on this platform: %v", err)
+	}
+	_, err := ReadManifestModulePathsRoot(root, DefaultManifestPath)
+	if err == nil {
+		t.Fatalf("ReadManifestModulePathsRoot = nil error; want fail-closed (manifest symlink escapes root)")
+	}
+	if !strings.Contains(err.Error(), "escapes") {
+		t.Fatalf("error = %q, want root-confinement signal %q", err.Error(), "escapes")
+	}
 }

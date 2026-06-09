@@ -22,6 +22,7 @@ var _ ports.ConfigRepository = (*ConfigRepository)(nil)
 
 const (
 	configInternalKeyQuotedFmt = "key=%q"
+	msgConfigInvalidTenant     = "config repo: invalid tenant"
 	msgConfigNotFound          = "config not found"
 )
 
@@ -77,7 +78,7 @@ func (r *ConfigRepository) tenantVersions(t tenant.TenantID) map[string][]*domai
 
 func (r *ConfigRepository) Create(_ context.Context, t tenant.TenantID, entry *domain.ConfigEntry) error {
 	if err := t.Validate(); err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgConfigInvalidTenant, err)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -95,7 +96,7 @@ func (r *ConfigRepository) Create(_ context.Context, t tenant.TenantID, entry *d
 //nolint:dupl // mirrors FlagRepository.GetByKey; typed differences (ConfigEntry vs FeatureFlag, distinct codes) preclude shared helper
 func (r *ConfigRepository) GetByKey(_ context.Context, t tenant.TenantID, key string) (*domain.ConfigEntry, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgConfigInvalidTenant, err)
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -119,7 +120,7 @@ func (r *ConfigRepository) Update(
 	_ context.Context, t tenant.TenantID, key string, expectedVersion int, value string,
 ) (*domain.ConfigEntry, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgConfigInvalidTenant, err)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -145,7 +146,7 @@ func (r *ConfigRepository) UpdateForRollback(
 	_ context.Context, t tenant.TenantID, key string, expectedVersion int, value string, sensitive bool,
 ) (*domain.ConfigEntry, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgConfigInvalidTenant, err)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -169,7 +170,7 @@ func (r *ConfigRepository) UpdateForRollback(
 
 func (r *ConfigRepository) Delete(_ context.Context, t tenant.TenantID, key string, expectedVersion int) (*domain.ConfigEntry, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgConfigInvalidTenant, err)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -193,7 +194,7 @@ func (r *ConfigRepository) Delete(_ context.Context, t tenant.TenantID, key stri
 // for N+1 hasMore detection.
 func (r *ConfigRepository) List(_ context.Context, t tenant.TenantID, params query.ListParams) ([]*domain.ConfigEntry, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgConfigInvalidTenant, err)
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -255,7 +256,7 @@ func configFieldValue(e *domain.ConfigEntry, field string) any {
 
 func (r *ConfigRepository) PublishVersion(_ context.Context, t tenant.TenantID, version *domain.ConfigVersion) error {
 	if err := t.Validate(); err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgConfigInvalidTenant, err)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -274,7 +275,7 @@ func (r *ConfigRepository) RepoReady(_ context.Context) error {
 
 func (r *ConfigRepository) GetVersion(_ context.Context, t tenant.TenantID, configID string, version int) (*domain.ConfigVersion, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgConfigInvalidTenant, err)
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()

@@ -11,6 +11,11 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
+const (
+	msgSweeperNilReceiver    = "command.Sweeper: nil receiver; use NewSweeper to construct"
+	msgSweeperNotConstructed = "command.Sweeper must be constructed via NewSweeper"
+)
+
 // ExpiryTransition describes a single status change recommended by SweepOnce.
 type ExpiryTransition struct {
 	CommandID string
@@ -176,11 +181,11 @@ func NewSweeper(scanner ActiveScanner, queue Queue, clk clock.Clock, opts ...Swe
 func (s *Sweeper) Validate() error {
 	if s == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"command.Sweeper: nil receiver; use NewSweeper to construct")
+			msgSweeperNilReceiver)
 	}
 	if !s.built {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"command.Sweeper must be constructed via NewSweeper")
+			msgSweeperNotConstructed)
 	}
 	if validation.IsNilInterface(s.scanner) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -215,11 +220,11 @@ func (s *Sweeper) Validate() error {
 func (s *Sweeper) SweepTick(ctx context.Context, now time.Time) error {
 	if s == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"command.Sweeper: nil receiver; use NewSweeper to construct")
+			msgSweeperNilReceiver)
 	}
 	if !s.built {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"command.Sweeper must be constructed via NewSweeper")
+			msgSweeperNotConstructed)
 	}
 
 	entries, scanErr := s.scanner.ScanActive(ctx, s.filter)
@@ -258,11 +263,11 @@ func (s *Sweeper) SweepTick(ctx context.Context, now time.Time) error {
 func (s *Sweeper) Reconcile(ctx context.Context, _ reconcile.Request) (reconcile.Result, error) {
 	if s == nil {
 		return reconcile.Result{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"command.Sweeper: nil receiver; use NewSweeper to construct")
+			msgSweeperNilReceiver)
 	}
 	if !s.built {
 		return reconcile.Result{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"command.Sweeper must be constructed via NewSweeper")
+			msgSweeperNotConstructed)
 	}
 	if err := s.SweepTick(ctx, s.clk.Now()); err != nil {
 		return reconcile.Result{}, err

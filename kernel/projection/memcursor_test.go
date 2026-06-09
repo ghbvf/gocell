@@ -9,6 +9,18 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
+type memCursorCase struct {
+	name       string
+	entry      ProjectionEvent
+	wantPos    int64
+	wantPerm   bool // expect a *outbox.PermanentError
+	wantErrNil bool // expect nil error
+	// Note: wantPerm=false && !wantErrNil is structurally unreachable for
+	// MemCursor: an absent entry always returns a *outbox.PermanentError,
+	// so every non-nil error case has wantPerm=true. The field is kept
+	// for future implementations that may return non-permanent errors.
+}
+
 // TestMemCursor verifies MemCursor.Position behavior:
 //
 //	(a) entry present in the paired source → returns 1-based position, nil error
@@ -34,17 +46,7 @@ func TestMemCursor(t *testing.T) {
 		t.Fatalf("NewMemCursor() error = %v, want nil", err)
 	}
 
-	tests := []struct {
-		name       string
-		entry      ProjectionEvent
-		wantPos    int64
-		wantPerm   bool // expect a *outbox.PermanentError
-		wantErrNil bool // expect nil error
-		// Note: wantPerm=false && !wantErrNil is structurally unreachable for
-		// MemCursor: an absent entry always returns a *outbox.PermanentError,
-		// so every non-nil error case has wantPerm=true. The field is kept
-		// for future implementations that may return non-permanent errors.
-	}{
+	tests := []memCursorCase{
 		{
 			name:       "first entry returns position 1",
 			entry:      e1,
@@ -69,26 +71,32 @@ func TestMemCursor(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			pos, err := cur.Position(tc.entry)
-			if pos != tc.wantPos {
-				t.Errorf("Position() pos = %d, want %d", pos, tc.wantPos)
-			}
-			if tc.wantErrNil {
-				if err != nil {
-					t.Errorf("Position() error = %v, want nil", err)
-				}
-				return
-			}
-			if err == nil {
-				t.Fatal("Position() error = nil, want non-nil")
-			}
-			if tc.wantPerm {
-				var pe *outbox.PermanentError
-				if !errors.As(err, &pe) {
-					t.Errorf("Position() error %v is not a *outbox.PermanentError", err)
-				}
-			}
+			assertMemCursorPosition(t, cur, tc)
 		})
+	}
+}
+
+func assertMemCursorPosition(t *testing.T, cur *MemCursor, tc memCursorCase) {
+	t.Helper()
+
+	pos, err := cur.Position(tc.entry)
+	if pos != tc.wantPos {
+		t.Errorf("Position() pos = %d, want %d", pos, tc.wantPos)
+	}
+	if tc.wantErrNil {
+		if err != nil {
+			t.Errorf("Position() error = %v, want nil", err)
+		}
+		return
+	}
+	if err == nil {
+		t.Fatal("Position() error = nil, want non-nil")
+	}
+	if tc.wantPerm {
+		var pe *outbox.PermanentError
+		if !errors.As(err, &pe) {
+			t.Errorf("Position() error %v is not a *outbox.PermanentError", err)
+		}
 	}
 }
 

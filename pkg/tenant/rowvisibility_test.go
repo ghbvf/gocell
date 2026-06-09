@@ -2,14 +2,27 @@ package tenant
 
 import "testing"
 
+type newRowVisibilityCase struct {
+	name    string
+	scope   RowScope
+	subject string
+	wantErr bool
+}
+
+type sqlPredicateCase struct {
+	name       string
+	scope      RowScope
+	subject    string
+	ownerCol   string
+	wantApply  bool
+	wantPrefix string
+	wantArg    any
+	wantErr    bool
+}
+
 func TestNewRowVisibility(t *testing.T) {
 	t.Parallel()
-	tests := []struct {
-		name    string
-		scope   RowScope
-		subject string
-		wantErr bool
-	}{
+	tests := []newRowVisibilityCase{
 		{name: "self requires subject", scope: RowScopeSelf, subject: "u1"},
 		{name: "self empty subject rejected", scope: RowScopeSelf, subject: "", wantErr: true},
 		{name: "device requires subject", scope: RowScopeDevice, subject: "d1"},
@@ -24,26 +37,32 @@ func TestNewRowVisibility(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			v, err := NewRowVisibility(tt.scope, tt.subject)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("NewRowVisibility(%v, %q) = nil err, want err", tt.scope, tt.subject)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("NewRowVisibility(%v, %q) unexpected err: %v", tt.scope, tt.subject, err)
-			}
-			if v.Scope() != tt.scope {
-				t.Errorf("Scope() = %v, want %v", v.Scope(), tt.scope)
-			}
-			if v.Subject() != tt.subject {
-				t.Errorf("Subject() = %q, want %q", v.Subject(), tt.subject)
-			}
-			if err := v.Validate(); err != nil {
-				t.Errorf("Validate() = %v, want nil", err)
-			}
+			assertNewRowVisibility(t, tt)
 		})
+	}
+}
+
+func assertNewRowVisibility(t *testing.T, tt newRowVisibilityCase) {
+	t.Helper()
+
+	v, err := NewRowVisibility(tt.scope, tt.subject)
+	if tt.wantErr {
+		if err == nil {
+			t.Fatalf("NewRowVisibility(%v, %q) = nil err, want err", tt.scope, tt.subject)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("NewRowVisibility(%v, %q) unexpected err: %v", tt.scope, tt.subject, err)
+	}
+	if v.Scope() != tt.scope {
+		t.Errorf("Scope() = %v, want %v", v.Scope(), tt.scope)
+	}
+	if v.Subject() != tt.subject {
+		t.Errorf("Subject() = %q, want %q", v.Subject(), tt.subject)
+	}
+	if err := v.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want nil", err)
 	}
 }
 
@@ -57,16 +76,7 @@ func TestRowVisibility_ZeroValueInvalid(t *testing.T) {
 
 func TestRowVisibility_SQLPredicate(t *testing.T) {
 	t.Parallel()
-	tests := []struct {
-		name       string
-		scope      RowScope
-		subject    string
-		ownerCol   string
-		wantApply  bool
-		wantPrefix string
-		wantArg    any
-		wantErr    bool
-	}{
+	tests := []sqlPredicateCase{
 		{
 			name: "self emits owner predicate", scope: RowScopeSelf, subject: "u1", ownerCol: "actor_id",
 			wantApply: true, wantPrefix: " AND actor_id = ", wantArg: "u1",
@@ -101,32 +111,38 @@ func TestRowVisibility_SQLPredicate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			v, err := NewRowVisibility(tt.scope, tt.subject)
-			if err != nil {
-				t.Fatalf("NewRowVisibility: %v", err)
-			}
-			p, err := v.SQLPredicate(tt.ownerCol)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("SQLPredicate(%q) = nil err, want err", tt.ownerCol)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("SQLPredicate(%q) unexpected err: %v", tt.ownerCol, err)
-			}
-			if p.Apply != tt.wantApply {
-				t.Errorf("Apply = %v, want %v", p.Apply, tt.wantApply)
-			}
-			if p.Apply {
-				if p.Prefix != tt.wantPrefix {
-					t.Errorf("Prefix = %q, want %q", p.Prefix, tt.wantPrefix)
-				}
-				if p.Arg != tt.wantArg {
-					t.Errorf("Arg = %v, want %v", p.Arg, tt.wantArg)
-				}
-			}
+			assertSQLPredicate(t, tt)
 		})
+	}
+}
+
+func assertSQLPredicate(t *testing.T, tt sqlPredicateCase) {
+	t.Helper()
+
+	v, err := NewRowVisibility(tt.scope, tt.subject)
+	if err != nil {
+		t.Fatalf("NewRowVisibility: %v", err)
+	}
+	p, err := v.SQLPredicate(tt.ownerCol)
+	if tt.wantErr {
+		if err == nil {
+			t.Fatalf("SQLPredicate(%q) = nil err, want err", tt.ownerCol)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("SQLPredicate(%q) unexpected err: %v", tt.ownerCol, err)
+	}
+	if p.Apply != tt.wantApply {
+		t.Errorf("Apply = %v, want %v", p.Apply, tt.wantApply)
+	}
+	if p.Apply {
+		if p.Prefix != tt.wantPrefix {
+			t.Errorf("Prefix = %q, want %q", p.Prefix, tt.wantPrefix)
+		}
+		if p.Arg != tt.wantArg {
+			t.Errorf("Arg = %v, want %v", p.Arg, tt.wantArg)
+		}
 	}
 }
 

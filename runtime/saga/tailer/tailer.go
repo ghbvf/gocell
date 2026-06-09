@@ -128,12 +128,12 @@ type Tailer struct {
 // owner-token claim race-free. A single-process demo passes a real in-memory
 // distlock.Locker.
 //
-// replay and cursor are commonly the same object. For example,
+// Replay and Cursor are commonly the same object. For example,
 // sagaprojection.SagaJournalSource implements both projection.ReplaySource (via
 // Replay/Head) and projection.Cursor (via Position), so callers typically pass
-// the same value for both parameters. They are kept as distinct parameters so
-// the Tailer is not hard-coupled to a concrete type and so that read-only
-// replay sources can be paired with a separately-provided cursor if needed.
+// the same value twice. They remain distinct positional dependencies so the
+// Tailer is not hard-coupled to a concrete type and so the architecture test can
+// enforce nil guards for every required interface dependency.
 func NewTailer(
 	clk clock.Clock,
 	replay projection.ReplaySource,
@@ -142,7 +142,8 @@ func NewTailer(
 	txRunner persistence.TxRunner,
 	apply projection.Apply,
 	locker distlock.Locker,
-	cellID, projectionID string,
+	cellID string,
+	projectionID string,
 	opts ...Option,
 ) (*Tailer, error) {
 	clock.MustHaveClock(clk, "tailer.NewTailer")

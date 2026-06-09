@@ -14,6 +14,15 @@ import (
 // TEST-TIME-LITERAL-01.
 const snapshotTestLagOffset = 10 * time.Second
 
+type snapshotValueCase struct {
+	name         string
+	headEntries  int   // number of replay entries (= head)
+	checkpoint   int64 // stored offset
+	lastAppliedT bool  // when true, lastApplied = now-lagOffset; else 0 (startup grace)
+	wantPending  int64
+	wantLagSecs  float64
+}
+
 // TestCoordinator_Snapshot_Values exercises the value cases of Coordinator.Snapshot:
 // the Phase is always reported, and PendingEvents / ReplayLagSeconds are derived
 // from the replay head, checkpoint, and last-applied domain time via the shared
@@ -21,14 +30,7 @@ const snapshotTestLagOffset = 10 * time.Second
 func TestCoordinator_Snapshot_Values(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		name         string
-		headEntries  int   // number of replay entries (= head)
-		checkpoint   int64 // stored offset
-		lastAppliedT bool  // when true, lastApplied = now-lagOffset; else 0 (startup grace)
-		wantPending  int64
-		wantLagSecs  float64
-	}{
+	cases := []snapshotValueCase{
 		{name: "live empty", headEntries: 0, checkpoint: 0, lastAppliedT: false, wantPending: 0, wantLagSecs: 0},
 		{
 			name: "pending with recent apply", headEntries: 2, checkpoint: 0,
@@ -43,38 +45,44 @@ func TestCoordinator_Snapshot_Values(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			now := time.Now()
-			clk := clockmock.New(now)
-			entryClk := clockmock.New(now)
-			src := NewMemReplaySource()
-			for i := 0; i < tc.headEntries; i++ {
-				src.Append(mustNewTestEntry(t, entryClk, "topic.v1"))
-			}
-			store := NewMemCheckpointStore()
-			if tc.checkpoint > 0 {
-				if err := store.SaveOffset(context.Background(), "testcell", "p1", tc.checkpoint); err != nil {
-					t.Fatalf("SaveOffset: %v", err)
-				}
-			}
-			c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, store: store, replay: src})
-			if tc.lastAppliedT {
-				c.lastAppliedUnixNano.Store(now.Add(-snapshotTestLagOffset).UnixNano())
-			}
-
-			snap, err := c.Snapshot(context.Background())
-			if err != nil {
-				t.Fatalf("Snapshot: unexpected error: %v", err)
-			}
-			if snap.Phase != PhaseLive {
-				t.Errorf("Phase = %v, want PhaseLive", snap.Phase)
-			}
-			if snap.PendingEvents != tc.wantPending {
-				t.Errorf("PendingEvents = %d, want %d", snap.PendingEvents, tc.wantPending)
-			}
-			if snap.ReplayLagSeconds != tc.wantLagSecs {
-				t.Errorf("ReplayLagSeconds = %v, want %v", snap.ReplayLagSeconds, tc.wantLagSecs)
-			}
+			assertSnapshotValue(t, tc)
 		})
+	}
+}
+
+func assertSnapshotValue(t *testing.T, tc snapshotValueCase) {
+	t.Helper()
+
+	now := time.Now()
+	clk := clockmock.New(now)
+	entryClk := clockmock.New(now)
+	src := NewMemReplaySource()
+	for i := 0; i < tc.headEntries; i++ {
+		src.Append(mustNewTestEntry(t, entryClk, "topic.v1"))
+	}
+	store := NewMemCheckpointStore()
+	if tc.checkpoint > 0 {
+		if err := store.SaveOffset(context.Background(), "testcell", "p1", tc.checkpoint); err != nil {
+			t.Fatalf("SaveOffset: %v", err)
+		}
+	}
+	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, store: store, replay: src})
+	if tc.lastAppliedT {
+		c.lastAppliedUnixNano.Store(now.Add(-snapshotTestLagOffset).UnixNano())
+	}
+
+	snap, err := c.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: unexpected error: %v", err)
+	}
+	if snap.Phase != PhaseLive {
+		t.Errorf("Phase = %v, want PhaseLive", snap.Phase)
+	}
+	if snap.PendingEvents != tc.wantPending {
+		t.Errorf("PendingEvents = %d, want %d", snap.PendingEvents, tc.wantPending)
+	}
+	if snap.ReplayLagSeconds != tc.wantLagSecs {
+		t.Errorf("ReplayLagSeconds = %v, want %v", snap.ReplayLagSeconds, tc.wantLagSecs)
 	}
 }
 

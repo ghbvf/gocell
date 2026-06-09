@@ -11,19 +11,21 @@ type fakeOperatorLimiter struct{ allow bool }
 
 func (f fakeOperatorLimiter) Allow(string) bool { return f.allow }
 
+type newAuthOperatorCase struct {
+	name     string
+	username []byte
+	password []byte
+	limiter  OperatorRateLimiter
+	onFail   func(context.Context, string)
+	wantErr  bool
+}
+
 func TestNewAuthOperator(t *testing.T) {
 	t.Parallel()
 	lim := fakeOperatorLimiter{allow: true}
 	obs := func(context.Context, string) {}
 
-	cases := []struct {
-		name     string
-		username []byte
-		password []byte
-		limiter  OperatorRateLimiter
-		onFail   func(context.Context, string)
-		wantErr  bool
-	}{
+	cases := []newAuthOperatorCase{
 		{"valid with observer", []byte("ops"), []byte("s3cretpwd"), lim, obs, false},
 		{"valid nil observer ok", []byte("ops"), []byte("s3cretpwd"), lim, nil, false},
 		{"min-length password (8) accepted", []byte("ops"), []byte("8bytespw"), lim, obs, false},
@@ -38,23 +40,29 @@ func TestNewAuthOperator(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := NewAuthOperator(tc.username, tc.password, tc.limiter, tc.onFail)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("NewAuthOperator(%q) = nil error, want error", tc.name)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("NewAuthOperator(%q) unexpected error: %v", tc.name, err)
-			}
-			if !bytes.Equal(got.Username, tc.username) || !bytes.Equal(got.Password, tc.password) {
-				t.Errorf("NewAuthOperator credentials not preserved: got %q/%q", got.Username, got.Password)
-			}
-			if got.Limiter == nil {
-				t.Error("NewAuthOperator limiter not preserved")
-			}
+			assertNewAuthOperator(t, tc)
 		})
+	}
+}
+
+func assertNewAuthOperator(t *testing.T, tc newAuthOperatorCase) {
+	t.Helper()
+
+	got, err := NewAuthOperator(tc.username, tc.password, tc.limiter, tc.onFail)
+	if tc.wantErr {
+		if err == nil {
+			t.Fatalf("NewAuthOperator(%q) = nil error, want error", tc.name)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("NewAuthOperator(%q) unexpected error: %v", tc.name, err)
+	}
+	if !bytes.Equal(got.Username, tc.username) || !bytes.Equal(got.Password, tc.password) {
+		t.Errorf("NewAuthOperator credentials not preserved: got %q/%q", got.Username, got.Password)
+	}
+	if got.Limiter == nil {
+		t.Error("NewAuthOperator limiter not preserved")
 	}
 }
 

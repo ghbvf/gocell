@@ -124,7 +124,9 @@ func (AuthOperator) authPlanKind() AuthKind { return AuthKindOperator }
 func (AuthOperator) Describe() string       { return "operator" }
 
 // listenerAuthOK seals the ListenerAuth interface (see AuthNone.listenerAuthOK).
-func (AuthOperator) listenerAuthOK() {}
+func (AuthOperator) listenerAuthOK() {
+	// Marker method only: AuthOperator is an allowed listener auth variant.
+}
 
 // Compile-time assertion.
 var _ ListenerAuth = AuthOperator{}

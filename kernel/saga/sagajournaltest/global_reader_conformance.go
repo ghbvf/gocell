@@ -13,6 +13,8 @@ import (
 	"github.com/ghbvf/gocell/pkg/idutil"
 )
 
+const loadSinceErrFmt = "LoadSince: %v"
+
 // RunGlobalReaderConformance runs the conformance suite for the
 // [journal.GlobalReader] global-ordered-scan contract (#1609 PR-02) against the
 // supplied factory. It is deliberately SEPARATE from RunConformanceSuite (which
@@ -127,7 +129,7 @@ func conformGlobalSeqMonotonicAcrossInstances(t *testing.T, factory Factory) {
 
 	events, err := gr.LoadSince(context.Background(), 0, 100)
 	if err != nil {
-		t.Fatalf("LoadSince: %v", err)
+		t.Fatalf(loadSinceErrFmt, err)
 	}
 	if len(events) != 4 {
 		t.Fatalf("LoadSince returned %d events; want 4 (seqs=%v)", len(events), globalSeqs(events))
@@ -350,7 +352,7 @@ func conformGlobalCompensatedTerminalScannable(t *testing.T, factory Factory) {
 
 	events, err := gr.LoadSince(context.Background(), 0, 100)
 	if err != nil {
-		t.Fatalf("LoadSince: %v", err)
+		t.Fatalf(loadSinceErrFmt, err)
 	}
 	if len(events) != 4 {
 		t.Fatalf("LoadSince returned %d events; want 4 (step+compStarted+compensated+terminal), seqs=%v",
@@ -411,7 +413,7 @@ func conformGlobalTerminalEventScannable(t *testing.T, factory Factory) {
 
 	events, err := gr.LoadSince(context.Background(), 0, 100)
 	if err != nil {
-		t.Fatalf("LoadSince: %v", err)
+		t.Fatalf(loadSinceErrFmt, err)
 	}
 	if len(events) != 2 {
 		t.Fatalf("LoadSince returned %d events; want 2 (step + terminal), seqs=%v",
@@ -509,7 +511,7 @@ func conformGlobalSeqConcurrentAppend(t *testing.T, factory Factory) {
 	total := instances * perInstance
 	events, err := gr.LoadSince(context.Background(), 0, total*2)
 	if err != nil {
-		t.Fatalf("LoadSince: %v", err)
+		t.Fatalf(loadSinceErrFmt, err)
 	}
 	if len(events) != total {
 		t.Fatalf("LoadSince returned %d events; want %d", len(events), total)

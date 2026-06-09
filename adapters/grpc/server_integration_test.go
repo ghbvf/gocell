@@ -720,70 +720,80 @@ func streamerServiceDesc(started chan<- struct{}) grpc.ServiceDesc {
 			{
 				StreamName:    "ServerStream",
 				ServerStreams: true,
-				Handler: func(_ any, ss grpc.ServerStream) error {
-					if err := ss.RecvMsg(healthReq()); err != nil {
-						return err
-					}
-					for i := 0; i < 3; i++ {
-						if err := ss.Context().Err(); err != nil {
-							return err
-						}
-						if err := ss.SendMsg(healthResp()); err != nil {
-							return err
-						}
-					}
-					return nil
-				},
+				Handler:       serverStreamHandler,
 			},
 			{
 				StreamName:    "ClientStream",
 				ClientStreams: true,
-				Handler: func(_ any, ss grpc.ServerStream) error {
-					for {
-						if err := ss.RecvMsg(healthReq()); err != nil {
-							if errors.Is(err, io.EOF) {
-								break
-							}
-							return err
-						}
-					}
-					return ss.SendMsg(healthResp())
-				},
+				Handler:       clientStreamHandler,
 			},
 			{
 				StreamName:    "Bidi",
 				ServerStreams: true,
 				ClientStreams: true,
-				Handler: func(_ any, ss grpc.ServerStream) error {
-					for {
-						if err := ss.RecvMsg(healthReq()); err != nil {
-							if errors.Is(err, io.EOF) {
-								return nil
-							}
-							return err
-						}
-						if err := ss.SendMsg(healthResp()); err != nil {
-							return err
-						}
-					}
-				},
+				Handler:       bidiStreamHandler,
 			},
 			{
 				StreamName:    "BlockStream",
 				ServerStreams: true,
-				Handler: func(_ any, ss grpc.ServerStream) error {
-					if err := ss.RecvMsg(healthReq()); err != nil {
-						return err
-					}
-					if err := ss.SendMsg(healthResp()); err != nil {
-						return err
-					}
-					close(started)
-					<-ss.Context().Done() // block until the drain cancels the stream ctx
-					return ss.Context().Err()
-				},
+				Handler:       blockingStreamHandler(started),
 			},
 		},
+	}
+}
+
+func serverStreamHandler(_ any, ss grpc.ServerStream) error {
+	if err := ss.RecvMsg(healthReq()); err != nil {
+		return err
+	}
+	for i := 0; i < 3; i++ {
+		if err := ss.Context().Err(); err != nil {
+			return err
+		}
+		if err := ss.SendMsg(healthResp()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func clientStreamHandler(_ any, ss grpc.ServerStream) error {
+	for {
+		if err := ss.RecvMsg(healthReq()); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return err
+		}
+	}
+	return ss.SendMsg(healthResp())
+}
+
+func bidiStreamHandler(_ any, ss grpc.ServerStream) error {
+	for {
+		if err := ss.RecvMsg(healthReq()); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		if err := ss.SendMsg(healthResp()); err != nil {
+			return err
+		}
+	}
+}
+
+func blockingStreamHandler(started chan<- struct{}) grpc.StreamHandler {
+	return func(_ any, ss grpc.ServerStream) error {
+		if err := ss.RecvMsg(healthReq()); err != nil {
+			return err
+		}
+		if err := ss.SendMsg(healthResp()); err != nil {
+			return err
+		}
+		close(started)
+		<-ss.Context().Done() // block until the drain cancels the stream ctx
+		return ss.Context().Err()
 	}
 }
 

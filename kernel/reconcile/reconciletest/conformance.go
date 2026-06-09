@@ -14,6 +14,16 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
+const (
+	holderA        = "holder-A"
+	holderB        = "holder-B"
+	acquireA       = "acquire A"
+	releaseA       = "release A"
+	acquireB       = "acquire B"
+	basicEntityID  = "basic-entity-1"
+	leaderEntityID = "leader-entity-1"
+)
+
 // ElectorFactory builds a LeaderElector for the given holderID, all sharing one
 // backend (same redis client / pg pool / FakeLeaseBackend) so two holders
 // contend for the same lease. Distinct holderIDs simulate distinct replicas.
@@ -47,7 +57,7 @@ func RunLeaderConformance(t *testing.T, newElector ElectorFactory) {
 func confReacquireAfterReleaseBumps(t *testing.T, newElector ElectorFactory) {
 	ctx := context.Background()
 	const rid = "conf-reacquire"
-	a := newElector("holder-A")
+	a := newElector(holderA)
 
 	tok1, err := a.AcquireLease(ctx, rid)
 	mustNoErr(t, err, "first acquire")
@@ -64,7 +74,7 @@ func confReacquireAfterReleaseBumps(t *testing.T, newElector ElectorFactory) {
 func confAcquireExclusive(t *testing.T, newElector ElectorFactory) {
 	ctx := context.Background()
 	const rid = "conf-exclusive"
-	a, b := newElector("holder-A"), newElector("holder-B")
+	a, b := newElector(holderA), newElector(holderB)
 
 	tokA, err := a.AcquireLease(ctx, rid)
 	mustNoErr(t, err, "first holder must acquire")
@@ -78,11 +88,11 @@ func confAcquireExclusive(t *testing.T, newElector ElectorFactory) {
 func confReleaseUnblocksFollower(t *testing.T, newElector ElectorFactory) {
 	ctx := context.Background()
 	const rid = "conf-release"
-	a, b := newElector("holder-A"), newElector("holder-B")
+	a, b := newElector(holderA), newElector(holderB)
 
 	tokA, err := a.AcquireLease(ctx, rid)
-	mustNoErr(t, err, "acquire A")
-	mustNoErr(t, a.ReleaseLease(ctx, tokA), "release A")
+	mustNoErr(t, err, acquireA)
+	mustNoErr(t, a.ReleaseLease(ctx, tokA), releaseA)
 
 	tokB, err := b.AcquireLease(ctx, rid)
 	mustNoErr(t, err, "follower must acquire after the leader releases")
@@ -92,10 +102,10 @@ func confReleaseUnblocksFollower(t *testing.T, newElector ElectorFactory) {
 func confRenewKeepsLeaseAndEpoch(t *testing.T, newElector ElectorFactory) {
 	ctx := context.Background()
 	const rid = "conf-renew"
-	a, b := newElector("holder-A"), newElector("holder-B")
+	a, b := newElector(holderA), newElector(holderB)
 
 	tokA, err := a.AcquireLease(ctx, rid)
-	mustNoErr(t, err, "acquire A")
+	mustNoErr(t, err, acquireA)
 	defer func() { _ = a.ReleaseLease(ctx, tokA) }()
 	mustNoErr(t, a.RenewLease(ctx, tokA), "renew must succeed while held")
 
@@ -114,14 +124,14 @@ func confRenewKeepsLeaseAndEpoch(t *testing.T, newElector ElectorFactory) {
 func confHandoffBumpsEpoch(t *testing.T, newElector ElectorFactory) {
 	ctx := context.Background()
 	const rid = "conf-handoff"
-	a, b := newElector("holder-A"), newElector("holder-B")
+	a, b := newElector(holderA), newElector(holderB)
 
 	tokA, err := a.AcquireLease(ctx, rid)
-	mustNoErr(t, err, "acquire A")
-	mustNoErr(t, a.ReleaseLease(ctx, tokA), "release A")
+	mustNoErr(t, err, acquireA)
+	mustNoErr(t, a.ReleaseLease(ctx, tokA), releaseA)
 
 	tokB, err := b.AcquireLease(ctx, rid)
-	mustNoErr(t, err, "acquire B")
+	mustNoErr(t, err, acquireB)
 	defer func() { _ = b.ReleaseLease(ctx, tokB) }()
 	if tokB.Epoch <= tokA.Epoch {
 		t.Fatalf("a holder change must bump the monotonic epoch: B=%d not > A=%d", tokB.Epoch, tokA.Epoch)
@@ -131,13 +141,13 @@ func confHandoffBumpsEpoch(t *testing.T, newElector ElectorFactory) {
 func confRenewAfterTakeoverIsLost(t *testing.T, newElector ElectorFactory) {
 	ctx := context.Background()
 	const rid = "conf-renew-lost"
-	a, b := newElector("holder-A"), newElector("holder-B")
+	a, b := newElector(holderA), newElector(holderB)
 
 	tokA, err := a.AcquireLease(ctx, rid)
-	mustNoErr(t, err, "acquire A")
-	mustNoErr(t, a.ReleaseLease(ctx, tokA), "release A")
+	mustNoErr(t, err, acquireA)
+	mustNoErr(t, a.ReleaseLease(ctx, tokA), releaseA)
 	tokB, err := b.AcquireLease(ctx, rid)
-	mustNoErr(t, err, "acquire B")
+	mustNoErr(t, err, acquireB)
 	defer func() { _ = b.ReleaseLease(ctx, tokB) }()
 
 	// A's renew must now report the lease lost (B owns it).
@@ -153,10 +163,10 @@ func confRenewAfterTakeoverIsLost(t *testing.T, newElector ElectorFactory) {
 func confReleaseAfterTakeoverIsNoop(t *testing.T, newElector ElectorFactory) {
 	ctx := context.Background()
 	const rid = "conf-release-after-takeover"
-	a, b, c := newElector("holder-A"), newElector("holder-B"), newElector("holder-C")
+	a, b, c := newElector(holderA), newElector(holderB), newElector("holder-C")
 
 	tokA, err := a.AcquireLease(ctx, rid)
-	mustNoErr(t, err, "acquire A")
+	mustNoErr(t, err, acquireA)
 	mustNoErr(t, a.ReleaseLease(ctx, tokA), "A releases")
 
 	tokB, err := b.AcquireLease(ctx, rid)
@@ -195,14 +205,14 @@ func RunFencingConformance(t *testing.T, newElector ElectorFactory) {
 		entity = "device-1"
 	)
 
-	a := newElector("holder-A")
+	a := newElector(holderA)
 	tokA, err := a.AcquireLease(ctx, rid)
-	mustNoErr(t, err, "acquire A")
+	mustNoErr(t, err, acquireA)
 	mustNoErr(t, a.ReleaseLease(ctx, tokA), "old leader hands off")
 
-	b := newElector("holder-B")
+	b := newElector(holderB)
 	tokB, err := b.AcquireLease(ctx, rid)
-	mustNoErr(t, err, "acquire B")
+	mustNoErr(t, err, acquireB)
 	defer func() { _ = b.ReleaseLease(ctx, tokB) }()
 	if tokB.Epoch <= tokA.Epoch {
 		t.Fatalf("takeover must bump the fencing epoch: B=%d not > A=%d", tokB.Epoch, tokA.Epoch)
@@ -384,12 +394,12 @@ func confBasicReconcile(t *testing.T, newHarness HarnessFactory) {
 	mustNoErr(t, l.Start(ownerCtx), "Start")
 	defer confStop(t, l)
 
-	submit(reconcile.Request{EntityID: "basic-entity-1"})
+	submit(reconcile.Request{EntityID: basicEntityID})
 
 	select {
 	case got := <-invoked:
-		if got.EntityID != "basic-entity-1" {
-			t.Fatalf("BasicReconcile: got entity %q, want %q", got.EntityID, "basic-entity-1")
+		if got.EntityID != basicEntityID {
+			t.Fatalf("BasicReconcile: got entity %q, want %q", got.EntityID, basicEntityID)
 		}
 	case <-time.After(confEventualWait):
 		t.Fatal("BasicReconcile: Reconcile never called within budget")
@@ -709,12 +719,12 @@ func confLeaderFlow(t *testing.T, newHarness HarnessFactory) {
 	mustNoErr(t, l.Start(ownerCtx), "Start")
 	defer confStop(t, l)
 
-	submit(reconcile.Request{EntityID: "leader-entity-1"})
+	submit(reconcile.Request{EntityID: leaderEntityID})
 
 	select {
 	case got := <-dispatched:
-		if got.EntityID != "leader-entity-1" {
-			t.Fatalf("LeaderFlow: got entity %q, want %q", got.EntityID, "leader-entity-1")
+		if got.EntityID != leaderEntityID {
+			t.Fatalf("LeaderFlow: got entity %q, want %q", got.EntityID, leaderEntityID)
 		}
 	case <-time.After(confEventualWait):
 		t.Fatal("LeaderFlow: work not dispatched within budget — Loop may not have acquired leadership")

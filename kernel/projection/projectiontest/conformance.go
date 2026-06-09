@@ -43,6 +43,7 @@ import (
 const (
 	testIsoCellA = "cellA-iso"
 	testIsoProj1 = "p1-iso"
+	headErrFmt   = "Head: %v"
 
 	testBackCell     = "cell-back"
 	testBackProj     = "proj-back"
@@ -260,12 +261,12 @@ func checkReplayHeadAccounting(t *testing.T, src projection.ReplaySource, seed f
 	t.Helper()
 	before, err := src.Head(context.Background())
 	if err != nil {
-		t.Fatalf("Head: %v", err)
+		t.Fatalf(headErrFmt, err)
 	}
 	seed(3)
 	after, err := src.Head(context.Background())
 	if err != nil {
-		t.Fatalf("Head: %v", err)
+		t.Fatalf(headErrFmt, err)
 	}
 	if after < before+3 {
 		t.Errorf("Head = %d after seeding 3 (was %d), want >= %d", after, before, before+3)
@@ -278,7 +279,7 @@ func checkReplayDeliversInOrder(t *testing.T, src projection.ReplaySource, seed 
 	t.Helper()
 	before, err := src.Head(context.Background())
 	if err != nil {
-		t.Fatalf("Head: %v", err)
+		t.Fatalf(headErrFmt, err)
 	}
 	want := idsOf(seed(4))
 	got := collectReplayIDs(t, src, before)
@@ -294,7 +295,7 @@ func checkReplayFromOffsetSkips(t *testing.T, src projection.ReplaySource, seed 
 	firstIDs := toSet(idsOf(seed(2)))
 	mid, err := src.Head(context.Background())
 	if err != nil {
-		t.Fatalf("Head: %v", err)
+		t.Fatalf(headErrFmt, err)
 	}
 	second := idsOf(seed(2))
 	got := collectReplayIDs(t, src, mid)
@@ -312,7 +313,7 @@ func checkReplayStable(t *testing.T, src projection.ReplaySource, seed func(n in
 	t.Helper()
 	before, err := src.Head(context.Background())
 	if err != nil {
-		t.Fatalf("Head: %v", err)
+		t.Fatalf(headErrFmt, err)
 	}
 	want := idsOf(seed(3))
 	first := collectReplayIDs(t, src, before)

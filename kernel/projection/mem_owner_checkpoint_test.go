@@ -9,6 +9,17 @@ import (
 	"github.com/ghbvf/gocell/kernel/projection/projectiontest"
 )
 
+type ownerCheckpointFencingCase struct {
+	name        string
+	seedToken   string // "" = cold (no prior advance)
+	seedOffset  int64
+	token       string
+	offset      int64
+	wantErr     bool // true => expect ErrStaleOwner
+	wantOffset  int64
+	wantOwnerOK bool // after the call, token should be able to advance forward
+}
+
 // TestMemOwnerCheckpointStore_CheckpointConformance enrolls MemOwnerCheckpointStore
 // in the base CheckpointStore conformance suite (it implements CheckpointStore via
 // LoadOffset + SaveOffset). Required by PROJECTION-CHECKPOINT-CONFORMANCE-ENROLL-01.
@@ -28,16 +39,7 @@ func TestMemOwnerCheckpointStore_OwnerConformance(t *testing.T) {
 // otherwise ErrStaleOwner), beyond what the shared conformance covers.
 func TestMemOwnerCheckpointStore_FencingTruthTable(t *testing.T) {
 	const tokA, tokB = "tok-a", "tok-b"
-	tests := []struct {
-		name        string
-		seedToken   string // "" = cold (no prior advance)
-		seedOffset  int64
-		token       string
-		offset      int64
-		wantErr     bool // true => expect ErrStaleOwner
-		wantOffset  int64
-		wantOwnerOK bool // after the call, token should be able to advance forward
-	}{
+	tests := []ownerCheckpointFencingCase{
 		{name: "cold claim ahead", seedToken: "", token: tokA, offset: 5, wantOffset: 5, wantOwnerOK: true},
 		{name: "same owner forward", seedToken: tokA, seedOffset: 5, token: tokA, offset: 9, wantOffset: 9, wantOwnerOK: true},
 		{name: "same owner idempotent same offset", seedToken: tokA, seedOffset: 9, token: tokA, offset: 9, wantOffset: 9, wantOwnerOK: true},
@@ -48,29 +50,35 @@ func TestMemOwnerCheckpointStore_FencingTruthTable(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			store := projection.NewMemOwnerCheckpointStore()
-			ctx := context.Background()
-			const cell, proj = "c", "p"
-			if tt.seedToken != "" {
-				if err := store.AdvanceIfOwner(ctx, cell, proj, tt.seedToken, tt.seedOffset); err != nil {
-					t.Fatalf("seed AdvanceIfOwner(%s, %d): %v", tt.seedToken, tt.seedOffset, err)
-				}
-			}
-			err := store.AdvanceIfOwner(ctx, cell, proj, tt.token, tt.offset)
-			switch {
-			case tt.wantErr && !errors.Is(err, projection.ErrStaleOwner):
-				t.Fatalf("AdvanceIfOwner = %v, want ErrStaleOwner", err)
-			case !tt.wantErr && err != nil:
-				t.Fatalf("AdvanceIfOwner = %v, want nil", err)
-			}
-			got, err := store.LoadOffset(ctx, cell, proj)
-			if err != nil {
-				t.Fatalf("LoadOffset: %v", err)
-			}
-			if got != tt.wantOffset {
-				t.Errorf("LoadOffset = %d, want %d", got, tt.wantOffset)
-			}
+			assertOwnerCheckpointFencing(t, tt)
 		})
+	}
+}
+
+func assertOwnerCheckpointFencing(t *testing.T, tt ownerCheckpointFencingCase) {
+	t.Helper()
+
+	store := projection.NewMemOwnerCheckpointStore()
+	ctx := context.Background()
+	const cell, proj = "c", "p"
+	if tt.seedToken != "" {
+		if err := store.AdvanceIfOwner(ctx, cell, proj, tt.seedToken, tt.seedOffset); err != nil {
+			t.Fatalf("seed AdvanceIfOwner(%s, %d): %v", tt.seedToken, tt.seedOffset, err)
+		}
+	}
+	err := store.AdvanceIfOwner(ctx, cell, proj, tt.token, tt.offset)
+	switch {
+	case tt.wantErr && !errors.Is(err, projection.ErrStaleOwner):
+		t.Fatalf("AdvanceIfOwner = %v, want ErrStaleOwner", err)
+	case !tt.wantErr && err != nil:
+		t.Fatalf("AdvanceIfOwner = %v, want nil", err)
+	}
+	got, err := store.LoadOffset(ctx, cell, proj)
+	if err != nil {
+		t.Fatalf("LoadOffset: %v", err)
+	}
+	if got != tt.wantOffset {
+		t.Errorf("LoadOffset = %d, want %d", got, tt.wantOffset)
 	}
 }
 

@@ -65,96 +65,19 @@ func TestHandleDeviceRegistered(t *testing.T) {
 	})
 
 	t.Run("ack emits enqueue command", func(t *testing.T) {
-		rec := outboxtest.NewRecorder()
-		svc, err := NewService(clk, WithEmitter(rec.CellEmitter()))
-		if err != nil {
-			t.Fatalf("NewService: %v", err)
-		}
-
-		res := svc.HandleDeviceRegistered(context.Background(), registeredEntry(t, clk, validPayload))
-		if res.Disposition != outbox.DispositionAck {
-			t.Fatalf("Disposition = %v, want Ack; err=%v", res.Disposition, res.Err)
-		}
-
-		entries := rec.Entries()
-		if len(entries) != 1 {
-			t.Fatalf("emitted %d entries, want 1", len(entries))
-		}
-		got := entries[0]
-		if got.RoutingTopic() != string(cmdenqueue.DispatchID) {
-			t.Errorf("RoutingTopic = %q, want %q", got.RoutingTopic(), cmdenqueue.DispatchID)
-		}
-		if got.AggregateID() != testDeviceID {
-			t.Errorf("AggregateID = %q, want %q", got.AggregateID(), testDeviceID)
-		}
-		if cid := got.Metadata()[rtcommand.CommandIDMetadataKey]; cid != testEntryID {
-			t.Errorf("command_id metadata = %q, want source entry ID %q", cid, testEntryID)
-		}
-
-		var req cmdenqueue.Request
-		if err := json.Unmarshal(got.Payload(), &req); err != nil {
-			t.Fatalf("decode emitted command payload: %v", err)
-		}
-		if req.DeviceID != testDeviceID {
-			t.Errorf("req.DeviceID = %q, want %q", req.DeviceID, testDeviceID)
-		}
-		if req.CommandType != bootstrapCommandType {
-			t.Errorf("req.CommandType = %q, want %q", req.CommandType, bootstrapCommandType)
-		}
+		assertHandleDeviceRegisteredAck(t, clk, validPayload)
 	})
 
 	t.Run("reject on undecodable payload", func(t *testing.T) {
-		rec := outboxtest.NewRecorder()
-		svc, err := NewService(clk, WithEmitter(rec.CellEmitter()))
-		if err != nil {
-			t.Fatalf("NewService: %v", err)
-		}
-
-		bad := registeredEntry(t, clk, []byte("{not json"))
-		res := svc.HandleDeviceRegistered(context.Background(), bad)
-		if res.Disposition != outbox.DispositionReject {
-			t.Fatalf("Disposition = %v, want Reject", res.Disposition)
-		}
-		var perm *outbox.PermanentError
-		if !errors.As(res.Err, &perm) {
-			t.Errorf("err = %v, want a *outbox.PermanentError", res.Err)
-		}
-		if n := len(rec.Entries()); n != 0 {
-			t.Errorf("emitted %d entries on decode failure, want 0", n)
-		}
+		assertHandleDeviceRegisteredRejectsBadPayload(t, clk)
 	})
 
 	t.Run("with logger and explicit emitter still acks", func(t *testing.T) {
-		rec := outboxtest.NewRecorder()
-		svc, err := NewService(clk,
-			WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
-			WithEmitter(rec.CellEmitter()))
-		if err != nil {
-			t.Fatalf("NewService: %v", err)
-		}
-		res := svc.HandleDeviceRegistered(context.Background(), registeredEntry(t, clk, validPayload))
-		if res.Disposition != outbox.DispositionAck {
-			t.Fatalf("Disposition = %v, want Ack", res.Disposition)
-		}
-		if n := len(rec.Entries()); n != 1 {
-			t.Fatalf("emitted %d entries, want 1", n)
-		}
+		assertHandleDeviceRegisteredLoggerAndEmitterAck(t, clk, validPayload)
 	})
 
 	t.Run("requeue on emit failure", func(t *testing.T) {
-		emitErr := errors.New("broker unavailable")
-		svc, err := NewService(clk, WithEmitter(outbox.WrapEmitterForCell(failingEmitter{err: emitErr})))
-		if err != nil {
-			t.Fatalf("NewService: %v", err)
-		}
-
-		res := svc.HandleDeviceRegistered(context.Background(), registeredEntry(t, clk, validPayload))
-		if res.Disposition != outbox.DispositionRequeue {
-			t.Fatalf("Disposition = %v, want Requeue", res.Disposition)
-		}
-		if !errors.Is(res.Err, emitErr) {
-			t.Errorf("err = %v, want it to wrap %v", res.Err, emitErr)
-		}
+		assertHandleDeviceRegisteredRequeuesOnEmitFailure(t, clk, validPayload)
 	})
 
 	// txRunner wraps EmitAsync: an error inside the RunInTx closure (i.e. a
@@ -163,22 +86,136 @@ func TestHandleDeviceRegistered(t *testing.T) {
 	// we exercise the error path via a failing writer: WriterEmitter.Emit calls
 	// writer.Write(ctx) which fails, RunInTx returns the error, handler Requeues.
 	t.Run("requeue when emit fails inside txRunner", func(t *testing.T) {
-		writeErr := errors.New("outbox write: no tx in context")
-		writerEmitter, werr := outbox.NewWriterEmitter(errorWriter{err: writeErr})
-		if werr != nil {
-			t.Fatalf("NewWriterEmitter: %v", werr)
-		}
-		svc, err := NewService(clk, WithEmitter(outbox.WrapEmitterForCell(writerEmitter)))
-		if err != nil {
-			t.Fatalf("NewService: %v", err)
-		}
-
-		res := svc.HandleDeviceRegistered(context.Background(), registeredEntry(t, clk, validPayload))
-		if res.Disposition != outbox.DispositionRequeue {
-			t.Fatalf("Disposition = %v, want Requeue", res.Disposition)
-		}
-		if !errors.Is(res.Err, writeErr) {
-			t.Errorf("err = %v, want it to wrap %v", res.Err, writeErr)
-		}
+		assertHandleDeviceRegisteredRequeuesInsideTxRunner(t, clk, validPayload)
 	})
+}
+
+func assertHandleDeviceRegisteredAck(t *testing.T, clk clock.Clock, validPayload []byte) {
+	t.Helper()
+
+	rec := outboxtest.NewRecorder()
+	svc, err := NewService(clk, WithEmitter(rec.CellEmitter()))
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	res := svc.HandleDeviceRegistered(context.Background(), registeredEntry(t, clk, validPayload))
+	if res.Disposition != outbox.DispositionAck {
+		t.Fatalf("Disposition = %v, want Ack; err=%v", res.Disposition, res.Err)
+	}
+
+	assertBootstrapCommandEmitted(t, rec)
+}
+
+func assertBootstrapCommandEmitted(t *testing.T, rec *outboxtest.Recorder) {
+	t.Helper()
+
+	entries := rec.Entries()
+	if len(entries) != 1 {
+		t.Fatalf("emitted %d entries, want 1", len(entries))
+	}
+	got := entries[0]
+	if got.RoutingTopic() != string(cmdenqueue.DispatchID) {
+		t.Errorf("RoutingTopic = %q, want %q", got.RoutingTopic(), cmdenqueue.DispatchID)
+	}
+	if got.AggregateID() != testDeviceID {
+		t.Errorf("AggregateID = %q, want %q", got.AggregateID(), testDeviceID)
+	}
+	if cid := got.Metadata()[rtcommand.CommandIDMetadataKey]; cid != testEntryID {
+		t.Errorf("command_id metadata = %q, want source entry ID %q", cid, testEntryID)
+	}
+
+	var req cmdenqueue.Request
+	if err := json.Unmarshal(got.Payload(), &req); err != nil {
+		t.Fatalf("decode emitted command payload: %v", err)
+	}
+	if req.DeviceID != testDeviceID {
+		t.Errorf("req.DeviceID = %q, want %q", req.DeviceID, testDeviceID)
+	}
+	if req.CommandType != bootstrapCommandType {
+		t.Errorf("req.CommandType = %q, want %q", req.CommandType, bootstrapCommandType)
+	}
+}
+
+func assertHandleDeviceRegisteredRejectsBadPayload(t *testing.T, clk clock.Clock) {
+	t.Helper()
+
+	rec := outboxtest.NewRecorder()
+	svc, err := NewService(clk, WithEmitter(rec.CellEmitter()))
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	bad := registeredEntry(t, clk, []byte("{not json"))
+	res := svc.HandleDeviceRegistered(context.Background(), bad)
+	if res.Disposition != outbox.DispositionReject {
+		t.Fatalf("Disposition = %v, want Reject", res.Disposition)
+	}
+	var perm *outbox.PermanentError
+	if !errors.As(res.Err, &perm) {
+		t.Errorf("err = %v, want a *outbox.PermanentError", res.Err)
+	}
+	if n := len(rec.Entries()); n != 0 {
+		t.Errorf("emitted %d entries on decode failure, want 0", n)
+	}
+}
+
+func assertHandleDeviceRegisteredLoggerAndEmitterAck(t *testing.T, clk clock.Clock, validPayload []byte) {
+	t.Helper()
+
+	rec := outboxtest.NewRecorder()
+	svc, err := NewService(clk,
+		WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
+		WithEmitter(rec.CellEmitter()))
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	res := svc.HandleDeviceRegistered(context.Background(), registeredEntry(t, clk, validPayload))
+	if res.Disposition != outbox.DispositionAck {
+		t.Fatalf("Disposition = %v, want Ack", res.Disposition)
+	}
+	if n := len(rec.Entries()); n != 1 {
+		t.Fatalf("emitted %d entries, want 1", n)
+	}
+}
+
+func assertHandleDeviceRegisteredRequeuesOnEmitFailure(t *testing.T, clk clock.Clock, validPayload []byte) {
+	t.Helper()
+
+	emitErr := errors.New("broker unavailable")
+	svc, err := NewService(clk, WithEmitter(outbox.WrapEmitterForCell(failingEmitter{err: emitErr})))
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	res := svc.HandleDeviceRegistered(context.Background(), registeredEntry(t, clk, validPayload))
+	assertRequeueWraps(t, res, emitErr)
+}
+
+func assertHandleDeviceRegisteredRequeuesInsideTxRunner(t *testing.T, clk clock.Clock, validPayload []byte) {
+	t.Helper()
+
+	writeErr := errors.New("outbox write: no tx in context")
+	writerEmitter, werr := outbox.NewWriterEmitter(errorWriter{err: writeErr})
+	if werr != nil {
+		t.Fatalf("NewWriterEmitter: %v", werr)
+	}
+	svc, err := NewService(clk, WithEmitter(outbox.WrapEmitterForCell(writerEmitter)))
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	res := svc.HandleDeviceRegistered(context.Background(), registeredEntry(t, clk, validPayload))
+	assertRequeueWraps(t, res, writeErr)
+}
+
+func assertRequeueWraps(t *testing.T, res outbox.HandleResult, want error) {
+	t.Helper()
+
+	if res.Disposition != outbox.DispositionRequeue {
+		t.Fatalf("Disposition = %v, want Requeue", res.Disposition)
+	}
+	if !errors.Is(res.Err, want) {
+		t.Errorf("err = %v, want it to wrap %v", res.Err, want)
+	}
 }

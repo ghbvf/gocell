@@ -15,6 +15,8 @@ import (
 
 var _ ports.RoleRepository = (*RoleRepository)(nil)
 
+const msgRoleInvalidTenant = "role_repo: invalid tenant"
+
 // RoleRepository is the in-memory implementation of ports.RoleRepository.
 // It is always vended by Store.RoleRepository() so the shared mutex covers
 // any cross-repo invariant — most importantly, CountEffectiveAdmins and the
@@ -60,7 +62,7 @@ func (r *RoleRepository) SeedUserRoleAssignment(t tenant.TenantID, userID, roleI
 // a RunInTx closure; see the lock contract on UserRepository.
 func (r *RoleRepository) Create(ctx context.Context, t tenant.TenantID, role *domain.Role) error {
 	if err := t.Validate(); err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgRoleInvalidTenant, err)
 	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
@@ -79,7 +81,7 @@ func (r *RoleRepository) Create(ctx context.Context, t tenant.TenantID, role *do
 // UserRepository.
 func (r *RoleRepository) GetByID(ctx context.Context, t tenant.TenantID, id string) (*domain.Role, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgRoleInvalidTenant, err)
 	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
@@ -102,7 +104,7 @@ func (r *RoleRepository) GetByID(ctx context.Context, t tenant.TenantID, id stri
 // UserRepository.
 func (r *RoleRepository) GetByUserID(ctx context.Context, t tenant.TenantID, userID string) ([]*domain.Role, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgRoleInvalidTenant, err)
 	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
@@ -135,7 +137,7 @@ func (r *RoleRepository) GetByUserID(ctx context.Context, t tenant.TenantID, use
 // Agent A. Returns ErrAuthUserNotFound when the user does not exist in t.
 func (r *RoleRepository) AssignToUser(ctx context.Context, t tenant.TenantID, userID, roleID string) (bool, error) {
 	if err := t.Validate(); err != nil {
-		return false, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+		return false, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgRoleInvalidTenant, err)
 	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
@@ -173,7 +175,7 @@ func (r *RoleRepository) AssignToUser(ctx context.Context, t tenant.TenantID, us
 // Safe to call both inside and outside a RunInTx closure.
 func (r *RoleRepository) RemoveFromUser(ctx context.Context, t tenant.TenantID, userID, roleID string) error {
 	if err := t.Validate(); err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgRoleInvalidTenant, err)
 	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
@@ -192,7 +194,7 @@ func (r *RoleRepository) RemoveFromUser(ctx context.Context, t tenant.TenantID, 
 // admins. Mirrors the PG removeIfNotLastSQL per-tenant CTE semantics (#1337 PR-2).
 func (r *RoleRepository) RemoveFromUserIfNotLast(ctx context.Context, t tenant.TenantID, userID, roleID string) (bool, error) {
 	if err := t.Validate(); err != nil {
-		return false, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+		return false, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgRoleInvalidTenant, err)
 	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
@@ -258,7 +260,7 @@ func (r *RoleRepository) rolesByUserSnapshot(ctx context.Context, t tenant.Tenan
 	// map with a bad key. Closes the mem/PG drift the PG path already guards via
 	// its GetByUserID delegation (review F4).
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgRoleInvalidTenant, err)
 	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
@@ -311,7 +313,7 @@ func roleFieldValue(r *domain.Role, field string) any {
 // see CountEffectiveAdmins.
 func (r *RoleRepository) CountByRole(ctx context.Context, t tenant.TenantID, roleID string) (int, error) {
 	if err := t.Validate(); err != nil {
-		return 0, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+		return 0, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgRoleInvalidTenant, err)
 	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
@@ -332,7 +334,7 @@ func (r *RoleRepository) CountByRole(ctx context.Context, t tenant.TenantID, rol
 // domain.EffectiveAdminCounter sealed interface (S4.0 invariant counter).
 func (r *RoleRepository) CountEffectiveAdmins(ctx context.Context, t tenant.TenantID) (int, error) {
 	if err := t.Validate(); err != nil {
-		return 0, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+		return 0, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgRoleInvalidTenant, err)
 	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
@@ -359,7 +361,7 @@ func (r *RoleRepository) CountEffectiveAdmins(ctx context.Context, t tenant.Tena
 // for fast-path semantics. Returns true on the first match within the tenant.
 func (r *RoleRepository) EffectiveAdminExists(ctx context.Context, t tenant.TenantID) (bool, error) {
 	if err := t.Validate(); err != nil {
-		return false, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+		return false, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgRoleInvalidTenant, err)
 	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()

@@ -29,6 +29,7 @@ import (
 )
 
 const (
+	internalListenerFmt            = "listener=%q"
 	internalListenerPositionFmt    = "listener=%q position=%d"
 	internalListenerPositionMinFmt = internalListenerPositionFmt + " got=%d min=%d"
 )
@@ -184,7 +185,7 @@ func (b *Bootstrap) validateAuthNoneExclusive() error {
 				"AuthNone cannot be mixed with other ListenerAuth plans; "+
 					"use []auth.ListenerAuth{auth.AuthNone{}} only for no-auth "+
 					"listeners or remove AuthNone from protected chains",
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("listener=%q", ref.String()))))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalListenerFmt, ref.String()))))
 		}
 	}
 	return nil
@@ -220,7 +221,7 @@ func (b *Bootstrap) validateAuthServiceTokenPlans() error {
 			if seen > 1 {
 				return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 					"at most one AuthServiceToken plan allowed in authChain",
-					errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("listener=%q", ref.String()))))
+					errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalListenerFmt, ref.String()))))
 			}
 			if err := validateAuthServiceTokenPlan(ref.String(), i, p, enforceReplaySafe, requireDistributed); err != nil {
 				return err
@@ -320,7 +321,7 @@ func validateAuthOperatorChain(ref cell.ListenerRef, chain []auth.ListenerAuth) 
 			"cell.AdminListener requires an AuthOperator plan; the operator control-plane must be "+
 				"authenticated (loopback isolation alone is not sufficient). Wire "+
 				"bootstrap.WithListener(cell.AdminListener, addr, []kauth.ListenerAuth{<auth.NewAuthOperator(...)>})",
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("listener=%q", ref.String()))))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalListenerFmt, ref.String()))))
 	}
 	return nil
 }
@@ -330,7 +331,7 @@ func validateAuthOperatorPlan(ref cell.ListenerRef, position, seen int, p auth.A
 	if seen > 1 {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"at most one AuthOperator plan allowed in authChain",
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("listener=%q", ref.String()))))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalListenerFmt, ref.String()))))
 	}
 	if ref != cell.AdminListener {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,

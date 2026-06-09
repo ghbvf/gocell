@@ -65,6 +65,15 @@ func (h *testCaptureHandler) Handle(_ context.Context, r slog.Record) error {
 func (h *testCaptureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
 func (h *testCaptureHandler) WithGroup(_ string) slog.Handler      { return h }
 
+type auditVisibilityCase struct {
+	name          string
+	subject       string
+	roles         []string
+	tenantID      string
+	wantCount     int
+	wantSystemRow bool // #1618 F7: a tenant-less system row appears, marked scope="system"
+}
+
 // auditQueryTestTenant is a canonical tenant UUID for handler tests. auditquery
 // fail-closes on an empty principal tenant (epic #1337 PR-2a, F1), so every
 // handler test that expects to reach the query path must carry a tenant.
@@ -144,6 +153,103 @@ func TestHandleQuery_InvalidTimeFormat(t *testing.T) {
 			}
 		})
 	}
+}
+
+func assertAuditVisibilityCase(t *testing.T, mux http.Handler, tc auditVisibilityCase) {
+	t.Helper()
+
+	p := &auth.Principal{
+		Kind:       auth.PrincipalUser,
+		Subject:    tc.subject,
+		Roles:      tc.roles,
+		TenantID:   tc.tenantID,
+		AuthMethod: "test",
+	}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
+	req = req.WithContext(auth.WithPrincipal(context.Background(), p))
+	mux.ServeHTTP(w, req)
+
+	if isSuperAdmin(tc.roles) {
+		// #1618 merge: RowScopeAll fail-closes under FORCE RLS (deferred);
+		// the handler surfaces RowScopeAllUnsupportedError (KindNotImplemented)
+		// as a 501 — policy-authorized but capability-deferred (review F5).
+		// The FR-007 audit is still emitted (asserted by caller).
+		require.Equal(t, http.StatusNotImplemented, w.Code,
+			"tc=%s: super-admin RowScopeAll must fail-closed (501) under FORCE RLS, body=%s", tc.name, w.Body.String())
+		return
+	}
+
+	require.Equal(t, http.StatusOK, w.Code, "tc=%s body=%s", tc.name, w.Body.String())
+	var resp struct {
+		Data []struct {
+			Scope string `json:"scope"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp), "tc=%s", tc.name)
+	assert.Len(t, resp.Data, tc.wantCount, "tc=%s: wrong row count", tc.name)
+	assertAuditRowScopes(t, resp.Data, tc)
+}
+
+func assertAuditRowScopes(t *testing.T, rows []struct {
+	Scope string `json:"scope"`
+}, tc auditVisibilityCase,
+) {
+	t.Helper()
+
+	// #1618 F7: every returned row carries a scope marker; the admin's
+	// tenant-wide read surfaces the tenant-less system row marked
+	// "system", own-tenant rows "tenant".
+	sawSystem := false
+	for _, row := range rows {
+		assert.Contains(t, []string{"tenant", "system"}, row.Scope,
+			"tc=%s: row scope must be tenant|system, got %q", tc.name, row.Scope)
+		if row.Scope == "system" {
+			sawSystem = true
+		}
+	}
+	assert.Equal(t, tc.wantSystemRow, sawSystem,
+		"tc=%s: system-row scope visibility mismatch", tc.name)
+}
+
+func countAuditMandatoryRecords(records []slog.Record) int {
+	errorCount := 0
+	for _, rec := range records {
+		if rec.Level != slog.LevelError {
+			continue
+		}
+		if auditRecordHasMandatoryKeys(rec) {
+			errorCount++
+		}
+	}
+	return errorCount
+}
+
+func auditRecordHasMandatoryKeys(rec slog.Record) bool {
+	hasActor, hasScope, hasTenant, hasReason := false, false, false, false
+	rec.Attrs(func(a slog.Attr) bool {
+		switch a.Key {
+		case "actor":
+			hasActor = true
+		case "scope":
+			hasScope = true
+		case "tenant":
+			hasTenant = true
+		case "reason":
+			hasReason = true
+		}
+		return true
+	})
+	return hasActor && hasScope && hasTenant && hasReason
+}
+
+func isSuperAdmin(roles []string) bool {
+	for _, r := range roles {
+		if r == auth.RoleSuperAdmin {
+			return true
+		}
+	}
+	return false
 }
 
 func TestHandleQuery_InvalidLimit(t *testing.T) {
@@ -1032,16 +1138,7 @@ func TestHandleQuery_RowScopeVisibilityMatrix(t *testing.T) {
 		require.NoError(t, store.Append(context.Background(), e))
 	}
 
-	type visCase struct {
-		name          string
-		subject       string
-		roles         []string
-		tenantID      string
-		wantCount     int
-		wantSystemRow bool // #1618 F7: a tenant-less system row appears, marked scope="system"
-	}
-
-	cases := []visCase{
+	cases := []auditVisibilityCase{
 		{
 			// non-admin usrA: RowScopeSelf → sees only its own row (vsm-a1). The
 			// system row (actor=system:bootstrap) is filtered out by the owner axis.
@@ -1075,89 +1172,12 @@ func TestHandleQuery_RowScopeVisibilityMatrix(t *testing.T) {
 		},
 	}
 
-	isSuperAdmin := func(roles []string) bool {
-		for _, r := range roles {
-			if r == auth.RoleSuperAdmin {
-				return true
-			}
-		}
-		return false
-	}
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			capture.records = capture.records[:0] // reset between sub-tests
 
-			p := &auth.Principal{
-				Kind:       auth.PrincipalUser,
-				Subject:    tc.subject,
-				Roles:      tc.roles,
-				TenantID:   tc.tenantID,
-				AuthMethod: "test",
-			}
-			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
-			req = req.WithContext(auth.WithPrincipal(context.Background(), p))
-			mux.ServeHTTP(w, req)
-
-			if isSuperAdmin(tc.roles) {
-				// #1618 merge: RowScopeAll fail-closes under FORCE RLS (deferred);
-				// the handler surfaces RowScopeAllUnsupportedError (KindNotImplemented)
-				// as a 501 — policy-authorized but capability-deferred (review F5).
-				// The FR-007 audit is still emitted (asserted below).
-				require.Equal(t, http.StatusNotImplemented, w.Code,
-					"tc=%s: super-admin RowScopeAll must fail-closed (501) under FORCE RLS, body=%s", tc.name, w.Body.String())
-			} else {
-				require.Equal(t, http.StatusOK, w.Code, "tc=%s body=%s", tc.name, w.Body.String())
-				var resp struct {
-					Data []struct {
-						Scope string `json:"scope"`
-					} `json:"data"`
-				}
-				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp), "tc=%s", tc.name)
-				assert.Len(t, resp.Data, tc.wantCount, "tc=%s: wrong row count", tc.name)
-				// #1618 F7: every returned row carries a scope marker; the admin's
-				// tenant-wide read surfaces the tenant-less system row marked
-				// "system", own-tenant rows "tenant".
-				sawSystem := false
-				for _, row := range resp.Data {
-					assert.Contains(t, []string{"tenant", "system"}, row.Scope,
-						"tc=%s: row scope must be tenant|system, got %q", tc.name, row.Scope)
-					if row.Scope == "system" {
-						sawSystem = true
-					}
-				}
-				assert.Equal(t, tc.wantSystemRow, sawSystem,
-					"tc=%s: system-row scope visibility mismatch", tc.name)
-			}
-
-			// FR-007: super-admin path must emit exactly one slog.Error cross-tenant
-			// audit record with actor+scope+tenant+reason keys. Non-super-admin paths
-			// must NOT emit an Error-level record matching those keys.
-			errorCount := 0
-			for _, rec := range capture.records {
-				if rec.Level != slog.LevelError {
-					continue
-				}
-				hasActor, hasScope, hasTenant, hasReason := false, false, false, false
-				rec.Attrs(func(a slog.Attr) bool {
-					switch a.Key {
-					case "actor":
-						hasActor = true
-					case "scope":
-						hasScope = true
-					case "tenant":
-						hasTenant = true
-					case "reason":
-						hasReason = true
-					}
-					return true
-				})
-				if hasActor && hasScope && hasTenant && hasReason {
-					errorCount++
-				}
-			}
-
+			assertAuditVisibilityCase(t, mux, tc)
+			errorCount := countAuditMandatoryRecords(capture.records)
 			wantError := isSuperAdmin(tc.roles)
 			if wantError && errorCount == 0 {
 				t.Errorf("tc=%s: expected FR-007 slog.Error audit record with {actor,scope,tenant,reason}, got 0 (total records: %d)",

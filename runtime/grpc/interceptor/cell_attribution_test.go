@@ -52,7 +52,7 @@ func TestUnaryCellAttribution(t *testing.T) {
 
 func TestUnaryCellAttributionNilResolverPanics(t *testing.T) {
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Fatalf("UnaryCellAttribution with nil resolver must panic at construction")
 		}
 	}()

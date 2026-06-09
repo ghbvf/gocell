@@ -31,6 +31,20 @@ func (f funcReconciler) Reconcile(ctx context.Context, req Request) (Result, err
 	return f(ctx, req)
 }
 
+func testReconcileDispatcher(
+	l *Loop,
+	addCh chan<- waitingItem,
+	cancelCh chan<- string,
+	backoff *entityBackoff,
+) reconcileDispatcher {
+	return reconcileDispatcher{
+		loop:     l,
+		addCh:    addCh,
+		cancelCh: cancelCh,
+		backoff:  backoff,
+	}
+}
+
 // blockingReconciler blocks each Reconcile on a release channel and tracks
 // global / per-entity concurrency so tests can assert the worker-pool bound and
 // same-entity serialization.
@@ -710,6 +724,7 @@ func TestLoop_F5_LostWakeupStress(t *testing.T) {
 	// block; the invariant under test is the dirty map state, not re-run execution.
 	addCh := make(chan waitingItem, triggers*4)
 	cancelCh := make(chan string, triggers*4)
+	dispatcher := testReconcileDispatcher(l, addCh, cancelCh, backoff)
 	drainDone := make(chan struct{})
 	go func() {
 		for {
@@ -728,7 +743,7 @@ func TestLoop_F5_LostWakeupStress(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			runtime.Gosched()
-			l.process(runCtx, Request{EntityID: entity}, addCh, cancelCh, backoff)
+			l.process(runCtx, Request{EntityID: entity}, dispatcher)
 		}()
 	}
 	wg.Wait()
@@ -833,7 +848,7 @@ func TestCancelPending_RemovesFromHeapAndPending(t *testing.T) {
 }
 
 // TestDispatchResult_PermanentCancelsPendingNotRequeue proves F1-(c): on a
-// permanent result, dispatchResult sends the entity on cancelCh (to evict any
+// permanent result, dispatch sends the entity on cancelCh (to evict any
 // stale pre-existing requeue) and does NOT enqueue a new requeue. This is the
 // "stale pending then permanent" path the prior code left uncovered: an earlier
 // success/transient could have enqueued a long requeue that, without this
@@ -845,9 +860,10 @@ func TestDispatchResult_PermanentCancelsPendingNotRequeue(t *testing.T) {
 	addCh := make(chan waitingItem, 1)
 	cancelCh := make(chan string, 1)
 	backoff := newEntityBackoff(defaultBackoffBase, defaultBackoffMax)
+	runCtx := context.Background()
+	dispatcher := testReconcileDispatcher(l, addCh, cancelCh, backoff)
 
-	l.dispatchResult(context.Background(), Request{EntityID: "dead"}, Result{},
-		PermanentError(errors.New("boom")), resultPermanent, addCh, cancelCh, backoff)
+	dispatcher.dispatch(runCtx, Request{EntityID: "dead"}, Result{}, PermanentError(errors.New("boom")), resultPermanent)
 
 	select {
 	case id := <-cancelCh:
@@ -866,9 +882,10 @@ func TestDispatchResult_SuccessEnqueuesNotCancel(t *testing.T) {
 	addCh := make(chan waitingItem, 1)
 	cancelCh := make(chan string, 1)
 	backoff := newEntityBackoff(defaultBackoffBase, defaultBackoffMax)
+	runCtx := context.Background()
+	dispatcher := testReconcileDispatcher(l, addCh, cancelCh, backoff)
 
-	l.dispatchResult(context.Background(), Request{EntityID: "ok"}, Result{RequeueAfter: testtime.D1h},
-		nil, resultSuccess, addCh, cancelCh, backoff)
+	dispatcher.dispatch(runCtx, Request{EntityID: "ok"}, Result{RequeueAfter: testtime.D1h}, nil, resultSuccess)
 
 	assert.Len(t, addCh, 1, "success must enqueue a requeue")
 	assert.Empty(t, cancelCh, "success must NOT cancel")
@@ -908,8 +925,9 @@ func TestDispatchResult_NoDefaultRequeue(t *testing.T) {
 		t.Parallel()
 		l := newLoop(true)
 		c := newChans()
-		l.dispatchResult(context.Background(), Request{EntityID: "ok"}, Result{},
-			nil, resultSuccess, c.add, c.cancel, c.bo)
+		runCtx := context.Background()
+		dispatcher := testReconcileDispatcher(l, c.add, c.cancel, c.bo)
+		dispatcher.dispatch(runCtx, Request{EntityID: "ok"}, Result{}, nil, resultSuccess)
 		assert.Empty(t, c.add, "WithoutDefaultRequeue: success zero-Result must NOT self-requeue (Trigger is sole driver)")
 		assert.Empty(t, c.cancel, "success must NOT cancel")
 	})
@@ -918,8 +936,9 @@ func TestDispatchResult_NoDefaultRequeue(t *testing.T) {
 		t.Parallel()
 		l := newLoop(true)
 		c := newChans()
-		l.dispatchResult(context.Background(), Request{EntityID: "ok"}, Result{RequeueAfter: testtime.D30ms},
-			nil, resultSuccess, c.add, c.cancel, c.bo)
+		runCtx := context.Background()
+		dispatcher := testReconcileDispatcher(l, c.add, c.cancel, c.bo)
+		dispatcher.dispatch(runCtx, Request{EntityID: "ok"}, Result{RequeueAfter: testtime.D30ms}, nil, resultSuccess)
 		assert.Len(t, c.add, 1, "explicit RequeueAfter>0 must still enqueue even when opted out")
 	})
 
@@ -927,8 +946,9 @@ func TestDispatchResult_NoDefaultRequeue(t *testing.T) {
 		t.Parallel()
 		l := newLoop(true)
 		c := newChans()
-		l.dispatchResult(context.Background(), Request{EntityID: "boom"}, Result{},
-			errors.New("transient"), resultTransient, c.add, c.cancel, c.bo)
+		runCtx := context.Background()
+		dispatcher := testReconcileDispatcher(l, c.add, c.cancel, c.bo)
+		dispatcher.dispatch(runCtx, Request{EntityID: "boom"}, Result{}, errors.New("transient"), resultTransient)
 		assert.Len(t, c.add, 1, "transient error must still backoff-requeue when opted out")
 	})
 
@@ -936,8 +956,9 @@ func TestDispatchResult_NoDefaultRequeue(t *testing.T) {
 		t.Parallel()
 		l := newLoop(false)
 		c := newChans()
-		l.dispatchResult(context.Background(), Request{EntityID: "ok"}, Result{},
-			nil, resultSuccess, c.add, c.cancel, c.bo)
+		runCtx := context.Background()
+		dispatcher := testReconcileDispatcher(l, c.add, c.cancel, c.bo)
+		dispatcher.dispatch(runCtx, Request{EntityID: "ok"}, Result{}, nil, resultSuccess)
 		assert.Len(t, c.add, 1, "default behavior: success zero-Result self-requeues at the default tick")
 	})
 }
@@ -1210,7 +1231,7 @@ func TestLoop_ResyncSentinelIsolation(t *testing.T) {
 // TestLoop_SuccessRequeueAfterPositive verifies that a Reconciler returning
 // Result{RequeueAfter: d} (d > 0) causes the entity to be re-enqueued via the
 // shared delaying queue at delay d — specifically that the
-// `delay = res.normalizedRequeueAfter()` branch in dispatchResult is exercised
+// `delay = res.normalizedRequeueAfter()` branch in dispatch is exercised
 // and the entity is reconciled a second time.
 //
 // Design: the reconciler returns a small positive RequeueAfter on the first call

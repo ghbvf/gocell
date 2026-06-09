@@ -3,8 +3,12 @@
 --
 -- Runbook (DESTRUCTIVE FORWARD — operator steps required before `goose up`):
 --   1. Stop all producer traffic, then drain the relay. The drain is complete
---      when there are ZERO undelivered rows:
---          SELECT count(*) FROM outbox_entries WHERE status <> 'published';   -- must be 0
+--      when this direct status count returns ZERO undelivered rows:
+--
+--          SELECT count(*) AS undelivered
+--          FROM outbox_entries
+--          WHERE status <> 'published';
+--
 --      Do NOT use CountPending / outbox_pending_depth as the drain signal: that
 --      query counts only status='pending' rows whose backoff has elapsed
 --      (next_retry_at <= now()), so it EXCLUDES rows still in retry backoff and

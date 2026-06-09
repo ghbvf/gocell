@@ -27,7 +27,8 @@ const msgTokenIntentFailed = "token intent validation failed"
 // JOSE typ header values written per TokenIntent. RFC 9068 §2.1 mandates
 // "at+jwt" for access tokens.
 const (
-	jwtTypAccess = "at+jwt"
+	jwtTypAccess    = "at+jwt"
+	msgInvalidToken = "invalid token"
 	// tokenUseClaim is the JWT payload key carrying the TokenIntent value.
 	// Named after AWS Cognito's convention, which is the most widely-adopted
 	// community precedent.
@@ -317,7 +318,7 @@ func (v *JWTVerifier) parseAndVerify(_ context.Context, tokenStr string) (Claims
 		return Claims{}, nil, errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "token verification failed", err)
 	}
 	if !token.Valid {
-		return Claims{}, nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "invalid token")
+		return Claims{}, nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgInvalidToken)
 	}
 
 	mapClaims, ok := token.Claims.(jwt.MapClaims)
@@ -352,14 +353,14 @@ func validateAndCanonicalizeTenant(mc jwt.MapClaims, claims *Claims) error {
 	s, ok := raw.(string)
 	if !ok {
 		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
-			"invalid token",
+			msgInvalidToken,
 			errcode.WithInternal(errcode.InternalAttr("_", "tenant_id claim is not a string")),
 			errcode.WithCategory(errcode.CategoryAuth))
 	}
 	tid, err := tenant.ParseTenantID(s)
 	if err != nil {
 		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
-			"invalid token",
+			msgInvalidToken,
 			errcode.WithInternal(errcode.InternalAttr("_", "tenant_id claim is not a valid UUID")),
 			errcode.WithCategory(errcode.CategoryAuth))
 	}

@@ -127,8 +127,17 @@ func RunSignerVerifierConformance(
 	runTamperBody(t, src, basePayload, goodHeaders, base, verifierAt)
 	runTamperSignature(t, src, basePayload, goodHeaders, base, verifierAt)
 	runTamperTimestampExpired(t, src, basePayload, goodHeaders, base, verifierAt)
-	runMultiTokenFirstMatches(t, src, basePayload, goodHeaders, base, deliveryID, newSigner, verifierAt)
-	runMultiTokenSecondMatches(t, src, basePayload, goodHeaders, base, deliveryID, newSigner, verifierAt)
+	multiToken := multiTokenFixture{
+		Source:     src,
+		Payload:    basePayload,
+		Headers:    goodHeaders,
+		Base:       base,
+		DeliveryID: deliveryID,
+		NewSigner:  newSigner,
+		VerifierAt: verifierAt,
+	}
+	runMultiTokenFirstMatches(t, multiToken)
+	runMultiTokenSecondMatches(t, multiToken)
 	runTimestampOutsideWindow(t, src, basePayload, goodHeaders, base, verifierAt)
 	runEmptySecretSourceRejected(t, newSigner)
 	runEmptySecretSourceRejectedByVerifier(t, basePayload, goodHeaders, base, verifierAt)
@@ -226,41 +235,39 @@ func runTamperTimestampExpired(
 	})
 }
 
-func runMultiTokenFirstMatches(
-	t *testing.T, src webhook.Source, payload []byte,
-	headers webhook.Headers, base time.Time,
-	deliveryID webhook.DeliveryID,
-	newSigner func(webhook.Source) (webhook.Signer, error),
-	verifierAt func(*testing.T, time.Time) webhook.Verifier,
-) {
+type multiTokenFixture struct {
+	Source     webhook.Source
+	Payload    []byte
+	Headers    webhook.Headers
+	Base       time.Time
+	DeliveryID webhook.DeliveryID
+	NewSigner  func(webhook.Source) (webhook.Signer, error)
+	VerifierAt func(*testing.T, time.Time) webhook.Verifier
+}
+
+func runMultiTokenFirstMatches(t *testing.T, f multiTokenFixture) {
 	t.Helper()
 	t.Run("multi_token_rotation_first_matches", func(t *testing.T) {
 		t.Parallel()
-		altHeaders := buildAltHeaders(t, payload, base, deliveryID, "test-source-2", newSigner)
-		combined := headers
-		combined.Signature = headers.Signature + " " + altHeaders.Signature
-		v := verifierAt(t, base)
-		requireNoError(t, v.Verify(payload, combined, src),
+		altHeaders := buildAltHeaders(t, f.Payload, f.Base, f.DeliveryID, "test-source-2", f.NewSigner)
+		combined := f.Headers
+		combined.Signature = f.Headers.Signature + " " + altHeaders.Signature
+		v := f.VerifierAt(t, f.Base)
+		requireNoError(t, v.Verify(f.Payload, combined, f.Source),
 			"first matching token should satisfy verification")
 	})
 }
 
-func runMultiTokenSecondMatches(
-	t *testing.T, src webhook.Source, payload []byte,
-	headers webhook.Headers, base time.Time,
-	deliveryID webhook.DeliveryID,
-	newSigner func(webhook.Source) (webhook.Signer, error),
-	verifierAt func(*testing.T, time.Time) webhook.Verifier,
-) {
+func runMultiTokenSecondMatches(t *testing.T, f multiTokenFixture) {
 	t.Helper()
 	t.Run("multi_token_rotation_second_matches", func(t *testing.T) {
 		t.Parallel()
-		altHeaders := buildAltHeaders(t, payload, base, deliveryID, "test-source-b", newSigner)
+		altHeaders := buildAltHeaders(t, f.Payload, f.Base, f.DeliveryID, "test-source-b", f.NewSigner)
 		// Put the "wrong" token first, then the correct one.
-		combined := headers
-		combined.Signature = altHeaders.Signature + " " + headers.Signature
-		v := verifierAt(t, base)
-		requireNoError(t, v.Verify(payload, combined, src),
+		combined := f.Headers
+		combined.Signature = altHeaders.Signature + " " + f.Headers.Signature
+		v := f.VerifierAt(t, f.Base)
+		requireNoError(t, v.Verify(f.Payload, combined, f.Source),
 			"any matching token anywhere in the header should satisfy verification")
 	})
 }

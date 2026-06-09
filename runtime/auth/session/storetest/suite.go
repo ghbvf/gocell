@@ -565,7 +565,7 @@ func runTS4D1GetRoundtripsEpoch(t *testing.T, factory Factory) {
 	const wantEpoch int64 = 42
 	fixture := NewSessionFixture(t, subjectA, "jti-epoch-rt", wantEpoch, caseTTL, fc.Now())
 	if err := store.Create(context.Background(), testTenantID, fixture); err != nil {
-		t.Fatalf("Create: %v", err)
+		t.Fatalf(errFmtCreate, err)
 	}
 	got, err := store.Get(context.Background(), fixture.ID)
 	if err != nil {
@@ -597,7 +597,7 @@ func runCreateGetRoundtripsTenantID(t *testing.T, factory Factory) {
 
 	fixture := NewSessionFixture(t, subjectA, "jti-tid-rt", caseEpoch, caseTTL, fc.Now())
 	if err := store.Create(context.Background(), testTenantID, fixture); err != nil {
-		t.Fatalf("Create: %v", err)
+		t.Fatalf(errFmtCreate, err)
 	}
 	got, err := store.Get(context.Background(), fixture.ID)
 	if err != nil {

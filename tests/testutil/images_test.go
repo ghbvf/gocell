@@ -71,32 +71,44 @@ func imageConstsFromSource(t *testing.T) map[string]string {
 
 	out := make(map[string]string)
 	for _, decl := range file.Decls {
-		gd, isGen := decl.(*ast.GenDecl)
-		if !isGen || gd.Tok != token.CONST {
-			continue
-		}
-		for _, spec := range gd.Specs {
-			vs, isVal := spec.(*ast.ValueSpec)
-			if !isVal {
-				continue
-			}
-			for i, ident := range vs.Names {
-				if !strings.HasSuffix(ident.Name, "Image") {
-					continue
-				}
-				require.Lessf(t, i, len(vs.Values),
-					"%s: *Image const must have an explicit string-literal initializer (no iota/implicit-repeat)", ident.Name)
-				lit, isLit := vs.Values[i].(*ast.BasicLit)
-				require.Truef(t, isLit && lit.Kind == token.STRING,
-					"%s: *Image const must be a plain string literal; an indirect "+
-						"value (var/concat/cross-pkg const) escapes the digest pin check", ident.Name)
-				val, uerr := strconv.Unquote(lit.Value)
-				require.NoError(t, uerr, "unquote %s", ident.Name)
-				out[ident.Name] = val
-			}
-		}
+		collectImageConstsFromDecl(t, decl, out)
 	}
 	return out
+}
+
+func collectImageConstsFromDecl(t *testing.T, decl ast.Decl, out map[string]string) {
+	t.Helper()
+
+	gd, isGen := decl.(*ast.GenDecl)
+	if !isGen || gd.Tok != token.CONST {
+		return
+	}
+	for _, spec := range gd.Specs {
+		collectImageConstsFromSpec(t, spec, out)
+	}
+}
+
+func collectImageConstsFromSpec(t *testing.T, spec ast.Spec, out map[string]string) {
+	t.Helper()
+
+	vs, isVal := spec.(*ast.ValueSpec)
+	if !isVal {
+		return
+	}
+	for i, ident := range vs.Names {
+		if !strings.HasSuffix(ident.Name, "Image") {
+			continue
+		}
+		require.Lessf(t, i, len(vs.Values),
+			"%s: *Image const must have an explicit string-literal initializer (no iota/implicit-repeat)", ident.Name)
+		lit, isLit := vs.Values[i].(*ast.BasicLit)
+		require.Truef(t, isLit && lit.Kind == token.STRING,
+			"%s: *Image const must be a plain string literal; an indirect "+
+				"value (var/concat/cross-pkg const) escapes the digest pin check", ident.Name)
+		val, uerr := strconv.Unquote(lit.Value)
+		require.NoError(t, uerr, "unquote %s", ident.Name)
+		out[ident.Name] = val
+	}
 }
 
 // TestContainerImagesPinned_RejectsFloating verifies that floating tags (no

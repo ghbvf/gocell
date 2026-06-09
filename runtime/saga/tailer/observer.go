@@ -102,19 +102,29 @@ const (
 type NopObserver struct{}
 
 // ObserveLockAcquire implements Observer.
-func (NopObserver) ObserveLockAcquire(context.Context, string, LockAcquireResult) {}
+func (NopObserver) ObserveLockAcquire(context.Context, string, LockAcquireResult) {
+	// Default observer intentionally drops lock-acquire events.
+}
 
 // ObserveDrain implements Observer.
-func (NopObserver) ObserveDrain(context.Context, string, DrainResult) {}
+func (NopObserver) ObserveDrain(context.Context, string, DrainResult) {
+	// Default observer intentionally drops drain events.
+}
 
 // ObserveCheckpointAdvance implements Observer.
-func (NopObserver) ObserveCheckpointAdvance(context.Context, string, AdvanceResult) {}
+func (NopObserver) ObserveCheckpointAdvance(context.Context, string, AdvanceResult) {
+	// Default observer intentionally drops checkpoint-advance events.
+}
 
 // ObserveLag implements Observer.
-func (NopObserver) ObserveLag(context.Context, string, int64) {}
+func (NopObserver) ObserveLag(context.Context, string, int64) {
+	// Default observer intentionally drops lag observations.
+}
 
 // ObserveLastSuccess implements Observer.
-func (NopObserver) ObserveLastSuccess(context.Context, string, time.Time) {}
+func (NopObserver) ObserveLastSuccess(context.Context, string, time.Time) {
+	// Default observer intentionally drops last-success observations.
+}
 
 // Compile-time interface satisfaction check.
 var _ Observer = NopObserver{}

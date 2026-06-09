@@ -14,6 +14,12 @@ import (
 	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
+const (
+	msgPolicySaveUnexpected         = "Save() unexpected error: %v"
+	msgPolicyGetByIDUnexpected      = "GetByID() unexpected error: %v"
+	msgPolicyListByTenantUnexpected = "ListByTenant() unexpected error: %v"
+)
+
 // PolicyRepoFactory constructs a fresh ports.PolicyRepository for use in a
 // single conformance sub-test. The factory must return a zero-state (empty)
 // repository; state accumulated across calls is a test error. No TxRunner is
@@ -123,11 +129,11 @@ func conformPolicySaveAndGetByID(t *testing.T, factory PolicyRepoFactory) {
 	p := conformTestPolicy("pol-1", testTenantID)
 
 	if err := repo.Save(ctx, testTenantID, p); err != nil {
-		t.Fatalf("Save() unexpected error: %v", err)
+		t.Fatalf(msgPolicySaveUnexpected, err)
 	}
 	got, err := repo.GetByID(ctx, testTenantID, "pol-1")
 	if err != nil {
-		t.Fatalf("GetByID() unexpected error: %v", err)
+		t.Fatalf(msgPolicyGetByIDUnexpected, err)
 	}
 	if got.ID != p.ID {
 		t.Errorf("GetByID().ID = %q, want %q", got.ID, p.ID)
@@ -157,7 +163,7 @@ func conformPolicyListByTenantEmpty(t *testing.T, factory PolicyRepoFactory) {
 
 	list, err := repo.ListByTenant(ctx, testTenantID)
 	if err != nil {
-		t.Fatalf("ListByTenant() unexpected error: %v", err)
+		t.Fatalf(msgPolicyListByTenantUnexpected, err)
 	}
 	if list == nil {
 		t.Error("ListByTenant() returned nil slice, want non-nil empty slice")
@@ -182,7 +188,7 @@ func conformPolicyListByTenant(t *testing.T, factory PolicyRepoFactory) {
 
 	list, err := repo.ListByTenant(ctx, testTenantID)
 	if err != nil {
-		t.Fatalf("ListByTenant() unexpected error: %v", err)
+		t.Fatalf(msgPolicyListByTenantUnexpected, err)
 	}
 	if len(list) != 2 {
 		t.Errorf("ListByTenant() returned %d items, want 2", len(list))
@@ -196,7 +202,7 @@ func conformPolicyDeleteSucceeds(t *testing.T, factory PolicyRepoFactory) {
 	p := conformTestPolicy("pol-1", testTenantID)
 
 	if err := repo.Save(ctx, testTenantID, p); err != nil {
-		t.Fatalf("Save() unexpected error: %v", err)
+		t.Fatalf(msgPolicySaveUnexpected, err)
 	}
 	if err := repo.Delete(ctx, testTenantID, "pol-1"); err != nil {
 		t.Fatalf("Delete() unexpected error: %v", err)
@@ -228,7 +234,7 @@ func conformPolicyCrossTenantIsolation(t *testing.T, factory PolicyRepoFactory) 
 	p := conformTestPolicy("pol-1", testTenantID)
 
 	if err := repo.Save(ctx, testTenantID, p); err != nil {
-		t.Fatalf("Save() unexpected error: %v", err)
+		t.Fatalf(msgPolicySaveUnexpected, err)
 	}
 
 	// Other tenant must not see tenant 1's policy.
@@ -262,11 +268,11 @@ func conformPolicyCloneGetByIDIsIndependent(t *testing.T, factory PolicyRepoFact
 	p := conformTestPolicy("pol-1", testTenantID)
 
 	if err := repo.Save(ctx, testTenantID, p); err != nil {
-		t.Fatalf("Save() unexpected error: %v", err)
+		t.Fatalf(msgPolicySaveUnexpected, err)
 	}
 	got, err := repo.GetByID(ctx, testTenantID, "pol-1")
 	if err != nil {
-		t.Fatalf("GetByID() unexpected error: %v", err)
+		t.Fatalf(msgPolicyGetByIDUnexpected, err)
 	}
 
 	// Mutate the returned clone.
@@ -299,11 +305,11 @@ func conformPolicyCloneListByTenantIsIndependent(t *testing.T, factory PolicyRep
 	p := conformTestPolicy("pol-1", testTenantID)
 
 	if err := repo.Save(ctx, testTenantID, p); err != nil {
-		t.Fatalf("Save() unexpected error: %v", err)
+		t.Fatalf(msgPolicySaveUnexpected, err)
 	}
 	list, err := repo.ListByTenant(ctx, testTenantID)
 	if err != nil {
-		t.Fatalf("ListByTenant() unexpected error: %v", err)
+		t.Fatalf(msgPolicyListByTenantUnexpected, err)
 	}
 	if len(list) == 0 {
 		t.Fatal("ListByTenant() returned empty list, want 1 item")
@@ -333,11 +339,11 @@ func conformPolicyCloneFieldMaskIsIndependent(t *testing.T, factory PolicyRepoFa
 	p := conformTestPolicyWithFieldMask("pol-1", testTenantID)
 
 	if err := repo.Save(ctx, testTenantID, p); err != nil {
-		t.Fatalf("Save() unexpected error: %v", err)
+		t.Fatalf(msgPolicySaveUnexpected, err)
 	}
 	got, err := repo.GetByID(ctx, testTenantID, "pol-1")
 	if err != nil {
-		t.Fatalf("GetByID() unexpected error: %v", err)
+		t.Fatalf(msgPolicyGetByIDUnexpected, err)
 	}
 	if len(got.Rules[0].Obligations.FieldMask.Fields) == 0 {
 		t.Fatal("GetByID() returned policy with no FieldMask.Fields; test fixture requires non-empty FieldMask")
@@ -499,7 +505,7 @@ func conformPolicySaveInputCloneIsIndependent(t *testing.T, factory PolicyRepoFa
 	origField := p.Rules[0].Obligations.FieldMask.Fields[0]
 
 	if err := repo.Save(ctx, testTenantID, p); err != nil {
-		t.Fatalf("Save() unexpected error: %v", err)
+		t.Fatalf(msgPolicySaveUnexpected, err)
 	}
 
 	// Mutate the ORIGINAL p after Save.
@@ -510,7 +516,7 @@ func conformPolicySaveInputCloneIsIndependent(t *testing.T, factory PolicyRepoFa
 	// GetByID must reflect the at-Save snapshot, not the mutations.
 	got, err := repo.GetByID(ctx, testTenantID, "pol-clone-input")
 	if err != nil {
-		t.Fatalf("GetByID() unexpected error: %v", err)
+		t.Fatalf(msgPolicyGetByIDUnexpected, err)
 	}
 	if got.Name != origName {
 		t.Errorf("GetByID(): Name = %q, want %q (mutation of original leaked into store)", got.Name, origName)
@@ -529,7 +535,7 @@ func conformPolicySaveInputCloneIsIndependent(t *testing.T, factory PolicyRepoFa
 	// ListByTenant must also reflect the at-Save snapshot.
 	list, err := repo.ListByTenant(ctx, testTenantID)
 	if err != nil {
-		t.Fatalf("ListByTenant() unexpected error: %v", err)
+		t.Fatalf(msgPolicyListByTenantUnexpected, err)
 	}
 	if len(list) == 0 {
 		t.Fatal("ListByTenant() returned empty list, want 1 item")

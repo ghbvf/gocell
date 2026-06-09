@@ -12,6 +12,8 @@ import (
 
 var _ ports.PolicyRepository = (*PolicyRepository)(nil)
 
+const msgPolicyInvalidTenant = "policy_repo: invalid tenant"
+
 // PolicyRepository is the in-memory implementation of ports.PolicyRepository.
 //
 // Unlike RoleRepository, PolicyRepository owns its own mutex and its own
@@ -46,7 +48,7 @@ func NewPolicyRepository() *PolicyRepository {
 // violation.
 func (r *PolicyRepository) Save(ctx context.Context, t tenant.TenantID, p *abac.Policy) error {
 	if err := t.Validate(); err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: invalid tenant", err)
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgPolicyInvalidTenant, err)
 	}
 	if p == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: policy must not be nil")
@@ -74,7 +76,7 @@ func (r *PolicyRepository) Save(ctx context.Context, t tenant.TenantID, p *abac.
 // when the policy does not exist.
 func (r *PolicyRepository) GetByID(ctx context.Context, t tenant.TenantID, id string) (*abac.Policy, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgPolicyInvalidTenant, err)
 	}
 
 	r.mu.RLock()
@@ -95,7 +97,7 @@ func (r *PolicyRepository) GetByID(ctx context.Context, t tenant.TenantID, id st
 // defensive clone.
 func (r *PolicyRepository) ListByTenant(ctx context.Context, t tenant.TenantID) ([]*abac.Policy, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgPolicyInvalidTenant, err)
 	}
 
 	r.mu.RLock()
@@ -115,7 +117,7 @@ func (r *PolicyRepository) ListByTenant(ctx context.Context, t tenant.TenantID) 
 // KindNotFound when the policy does not exist in t.
 func (r *PolicyRepository) Delete(ctx context.Context, t tenant.TenantID, id string) error {
 	if err := t.Validate(); err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: invalid tenant", err)
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgPolicyInvalidTenant, err)
 	}
 
 	r.mu.Lock()

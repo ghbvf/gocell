@@ -20,6 +20,7 @@ var _ ports.FlagRepository = (*FlagRepository)(nil)
 
 const (
 	flagInternalKeyQuotedFmt = "key=%q"
+	msgFlagInvalidTenant     = "flag repo: invalid tenant"
 	msgFlagNotFound          = "flag not found"
 )
 
@@ -60,7 +61,7 @@ func (r *FlagRepository) tenantFlags(t tenant.TenantID) map[string]*domain.Featu
 
 func (r *FlagRepository) Create(_ context.Context, t tenant.TenantID, flag *domain.FeatureFlag) error {
 	if err := t.Validate(); err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgFlagInvalidTenant, err)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -78,7 +79,7 @@ func (r *FlagRepository) Create(_ context.Context, t tenant.TenantID, flag *doma
 //nolint:dupl // mirrors ConfigRepository.GetByKey; typed differences (FeatureFlag vs ConfigEntry, distinct codes) preclude shared helper
 func (r *FlagRepository) GetByKey(_ context.Context, t tenant.TenantID, key string) (*domain.FeatureFlag, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgFlagInvalidTenant, err)
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -105,7 +106,7 @@ func (r *FlagRepository) Update(
 	_ context.Context, t tenant.TenantID, key string, expectedVersion int, enabled bool, rolloutPercentage int, description string,
 ) (*domain.FeatureFlag, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgFlagInvalidTenant, err)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -133,7 +134,7 @@ func (r *FlagRepository) Update(
 // or ErrVersionConflict if expectedVersion does not match.
 func (r *FlagRepository) Delete(_ context.Context, t tenant.TenantID, key string, expectedVersion int) (*domain.FeatureFlag, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgFlagInvalidTenant, err)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -163,7 +164,7 @@ func (r *FlagRepository) Toggle(
 	_ context.Context, t tenant.TenantID, key string, expectedVersion int, enabled bool,
 ) (*domain.FeatureFlag, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgFlagInvalidTenant, err)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -189,7 +190,7 @@ func (r *FlagRepository) Toggle(
 // for N+1 hasMore detection.
 func (r *FlagRepository) List(_ context.Context, t tenant.TenantID, params query.ListParams) ([]*domain.FeatureFlag, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgFlagInvalidTenant, err)
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()

@@ -38,6 +38,8 @@ import (
 // subscriptions via the metrics-side collector).
 var _ eventrouter.EventCollector = (*metricsmiddleware.EventRouterCollector)(nil)
 
+const msgAddWithSubscriber = "add WithSubscriber to bootstrap options"
+
 // phase6StartEventRouter registers subscriptions and starts the event router
 // using state.runCtx (independent of the external context).
 //
@@ -335,17 +337,17 @@ func (b *Bootstrap) checkNoEventConsumersWhenSubscriberNil(s *phaseState) error 
 		if len(snap.Subscriptions) > 0 {
 			return fmt.Errorf(
 				"bootstrap: cell %s registered subscriptions but no subscriber is configured; "+
-					"add WithSubscriber to bootstrap options", id)
+					msgAddWithSubscriber, id)
 		}
 		if len(snap.Projections) > 0 {
 			return fmt.Errorf(
 				"bootstrap: cell %s registered a projection but no subscriber is configured; "+
-					"add WithSubscriber to bootstrap options", id)
+					msgAddWithSubscriber, id)
 		}
 		if len(snap.WebhookDispatchers) > 0 {
 			return fmt.Errorf(
 				"bootstrap: cell %s registered a webhook dispatcher but no subscriber is configured; "+
-					"add WithSubscriber to bootstrap options", id)
+					msgAddWithSubscriber, id)
 		}
 	}
 	return nil

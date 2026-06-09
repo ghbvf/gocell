@@ -290,14 +290,7 @@ func TestAdvanceOffsetPastForeign_ErrorBranches(t *testing.T) {
 	clk := clockmock.New(time.Now())
 	entry := mustNewTestEntry(t, clk, "other.stream.v1")
 
-	tests := []struct {
-		name      string
-		store     CheckpointStore
-		cursor    Cursor
-		wantErr   bool
-		wantPerm  bool
-		errSubstr string
-	}{
+	tests := []advanceOffsetPastForeignCase{
 		{
 			name:      "LoadOffset error",
 			store:     &seededStore{offsets: map[string]int64{}, loadErr: errors.New("load boom")},
@@ -339,29 +332,44 @@ func TestAdvanceOffsetPastForeign_ErrorBranches(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			c := newCoordinatorFull(t, coordinatorFullParams{
-				clk: clk, store: tc.store, cursor: tc.cursor, replay: NewMemReplaySource(),
-			})
-			err := c.advanceOffsetPastForeign(context.Background(), entry)
-			if !tc.wantErr {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				return
-			}
-			if err == nil {
-				t.Fatalf("expected error, got nil")
-			}
-			if tc.errSubstr != "" && !strings.Contains(err.Error(), tc.errSubstr) {
-				t.Errorf("error = %q, want substring %q", err.Error(), tc.errSubstr)
-			}
-			if tc.wantPerm {
-				var pe *outbox.PermanentError
-				if !errors.As(err, &pe) {
-					t.Errorf("expected *outbox.PermanentError, got %T", err)
-				}
-			}
+			assertAdvanceOffsetPastForeign(t, clk, entry, tc)
 		})
+	}
+}
+
+type advanceOffsetPastForeignCase struct {
+	name      string
+	store     CheckpointStore
+	cursor    Cursor
+	wantErr   bool
+	wantPerm  bool
+	errSubstr string
+}
+
+func assertAdvanceOffsetPastForeign(t *testing.T, clk *clockmock.FakeClock, entry ProjectionEvent, tc advanceOffsetPastForeignCase) {
+	t.Helper()
+
+	c := newCoordinatorFull(t, coordinatorFullParams{
+		clk: clk, store: tc.store, cursor: tc.cursor, replay: NewMemReplaySource(),
+	})
+	err := c.advanceOffsetPastForeign(context.Background(), entry)
+	if !tc.wantErr {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		return
+	}
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if tc.errSubstr != "" && !strings.Contains(err.Error(), tc.errSubstr) {
+		t.Errorf("error = %q, want substring %q", err.Error(), tc.errSubstr)
+	}
+	if tc.wantPerm {
+		var pe *outbox.PermanentError
+		if !errors.As(err, &pe) {
+			t.Errorf("expected *outbox.PermanentError, got %T", err)
+		}
 	}
 }
 

@@ -868,14 +868,27 @@ func (l *Loop) runWorker(
 	cancelCh chan<- string,
 	backoff *entityBackoff,
 ) {
+	dispatcher := reconcileDispatcher{
+		loop:     l,
+		addCh:    addCh,
+		cancelCh: cancelCh,
+		backoff:  backoff,
+	}
 	for {
 		select {
 		case <-runCtx.Done():
 			return
 		case req := <-queue:
-			l.process(runCtx, req, addCh, cancelCh, backoff)
+			l.process(runCtx, req, dispatcher)
 		}
 	}
+}
+
+type reconcileDispatcher struct {
+	loop     *Loop
+	addCh    chan<- waitingItem
+	cancelCh chan<- string
+	backoff  *entityBackoff
 }
 
 // process reconciles one Request: it serializes per EntityID (F5: dirty/processing
@@ -897,7 +910,7 @@ func (l *Loop) runWorker(
 //
 // Scope note (ADR §2.2): F5+F6 are the PR-A5 features that complete the
 // controller-runtime dirty/processing + rate-limited delaying queue equivalence.
-func (l *Loop) process(runCtx context.Context, req Request, addCh chan<- waitingItem, cancelCh chan<- string, backoff *entityBackoff) {
+func (l *Loop) process(runCtx context.Context, req Request, dispatcher reconcileDispatcher) {
 	// F5: check/set processing under entityMu.
 	l.entityMu.Lock()
 	if l.processing[req.EntityID] {
@@ -935,7 +948,7 @@ func (l *Loop) process(runCtx context.Context, req Request, addCh chan<- waiting
 	label := classify(err)
 	l.metrics.recordResult(runCtx, l.reconcilerID, label)
 
-	l.dispatchResult(runCtx, req, res, err, label, addCh, cancelCh, backoff)
+	dispatcher.dispatch(runCtx, req, res, err, label)
 
 	// F5: clear processing and check dirty under entityMu.
 	l.entityMu.Lock()
@@ -948,7 +961,7 @@ func (l *Loop) process(runCtx context.Context, req Request, addCh chan<- waiting
 		// Re-enqueue the coalesced dirty trigger immediately (delay=0).
 		// This is a fresh convergence run, not a backoff retry.
 		//
-		// dispatchResult already enqueued the normal success/transient requeue
+		// dispatcher.dispatch already enqueued the normal success/transient requeue
 		// above (at the Interval or backoff delay). addOrMergeWaiting MERGES this
 		// delay=0 re-run with that later entry for the same entity (earlier
 		// readyAt wins), so the entity ends up with ONE heap entry that fires
@@ -956,28 +969,20 @@ func (l *Loop) process(runCtx context.Context, req Request, addCh chan<- waiting
 		// without leaving a duplicate pending item.
 		//
 		// Suppressed on resultPermanent: a permanent dead-letter must NOT be
-		// re-reconciled. The dispatchResult permanent branch already canceled the
+		// re-reconciled. The dispatcher.dispatch permanent branch already canceled the
 		// entity's pending item (cancelCh); re-running the in-flight dirty trigger
 		// here would resurrect it and race the cancel across two channels. A fresh
 		// Source trigger re-observes the entity if the consumer resets its state.
-		l.enqueueDelayed(runCtx, dirtyReq, 0, addCh)
+		l.enqueueDelayed(runCtx, dirtyReq, 0, dispatcher.addCh)
 	}
 }
 
-// dispatchResult routes the reconcile outcome to the appropriate requeue action.
-func (l *Loop) dispatchResult(
-	runCtx context.Context,
-	req Request,
-	res Result,
-	err error,
-	label resultLabel,
-	addCh chan<- waitingItem,
-	cancelCh chan<- string,
-	backoff *entityBackoff,
-) {
+// dispatch routes the reconcile outcome to the appropriate requeue action.
+func (d reconcileDispatcher) dispatch(runCtx context.Context, req Request, res Result, err error, label resultLabel) {
+	l := d.loop
 	switch label {
 	case resultSuccess:
-		backoff.Forget(req.EntityID)
+		d.backoff.Forget(req.EntityID)
 		delay := res.normalizedRequeueAfter()
 		if delay <= 0 {
 			if l.noDefaultRequeue {
@@ -990,14 +995,14 @@ func (l *Loop) dispatchResult(
 			}
 			delay = l.interval
 		}
-		l.enqueueDelayed(runCtx, req, delay, addCh)
+		l.enqueueDelayed(runCtx, req, delay, d.addCh)
 	case resultPermanent:
-		backoff.Forget(req.EntityID)
+		d.backoff.Forget(req.EntityID)
 		// Cancel any pending requeue for this entity: an earlier success/transient
 		// may have enqueued a (possibly long) interval/backoff item that, left in
 		// place, would re-reconcile a now-dead-lettered entity once it fires. A
 		// fresh source trigger re-observes it if the consumer resets its state.
-		l.enqueueCancel(runCtx, req.EntityID, cancelCh)
+		l.enqueueCancel(runCtx, req.EntityID, d.cancelCh)
 		// ErrFencedWriteStale is an expected fencing race (this replica is no longer
 		// the epoch owner); log at Warn, not Error, to avoid false-alarm alerting.
 		// All other permanent errors are real dead-letters and warrant Error level.
@@ -1014,14 +1019,14 @@ func (l *Loop) dispatchResult(
 				slog.Any("error", redaction.RedactError(err)))
 		}
 	default: // resultTransient (including recovered panics)
-		delay := backoff.When(req.EntityID)
+		delay := d.backoff.When(req.EntityID)
 		l.logger.Warn("reconcile: transient error (requeued with backoff)",
 			slog.String("loop", l.name),
 			slog.String("reconciler", l.reconcilerID),
 			slog.String("entity", req.EntityID),
 			slog.Duration("backoff_delay", delay),
 			slog.Any("error", redaction.RedactError(err)))
-		l.enqueueDelayed(runCtx, req, delay, addCh)
+		l.enqueueDelayed(runCtx, req, delay, d.addCh)
 	}
 }
 

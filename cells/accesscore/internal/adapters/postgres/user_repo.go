@@ -26,6 +26,8 @@ import (
 // Compile-time assertion: PGUserRepo implements ports.UserRepository.
 var _ ports.UserRepository = (*PGUserRepo)(nil)
 
+const msgUserInvalidTenant = "user_repo: invalid tenant"
+
 // PGUserRepo is the cell-private PostgreSQL implementation of ports.UserRepository.
 // It reads/writes the `users` table (migration 017).
 //
@@ -233,7 +235,7 @@ func validateFailedLoginCount(userID string, count int) (int32, error) {
 // constraint violation (username or email already taken within the tenant).
 func (r *PGUserRepo) Create(ctx context.Context, t tenant.TenantID, user *domain.User) error {
 	if err := t.Validate(); err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgUserInvalidTenant, err)
 	}
 	_, err := r.db.Exec(
 		ctx, insertUserSQL,
@@ -265,7 +267,7 @@ func (r *PGUserRepo) Create(ctx context.Context, t tenant.TenantID, user *domain
 // both cases produce pgx.ErrNoRows from `WHERE id=$1 AND tenant_id=$2`.
 func (r *PGUserRepo) GetByIDInTenant(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgUserInvalidTenant, err)
 	}
 	row := r.db.QueryRow(ctx, selectUserByIDInTenantSQL, id, string(t))
 	u, err := scanUser(row)
@@ -287,7 +289,7 @@ func (r *PGUserRepo) GetByIDInTenant(ctx context.Context, t tenant.TenantID, id 
 // GetByUsername fetches a user by (tenant_id, username). Returns ErrAuthUserNotFound when absent.
 func (r *PGUserRepo) GetByUsername(ctx context.Context, t tenant.TenantID, username string) (*domain.User, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgUserInvalidTenant, err)
 	}
 	row := r.db.QueryRow(ctx, selectUserByUsernameSQL, string(t), username)
 	u, err := scanUser(row)
@@ -333,7 +335,7 @@ func (r *PGUserRepo) getForUpdateBy(
 		return nil, err
 	}
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgUserInvalidTenant, err)
 	}
 	var (
 		sqlStr   string
@@ -415,7 +417,7 @@ func (r *PGUserRepo) UpdateProfile(
 	now time.Time,
 ) (*domain.User, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgUserInvalidTenant, err)
 	}
 	// pgx binds *string (PG TEXT) directly; *domain.NonEmpty is type-renamed
 	// string but pgx's reflect path treats it as plain text. We convert to
@@ -463,7 +465,7 @@ func (r *PGUserRepo) UpdateLockState(
 	now time.Time,
 ) error {
 	if err := t.Validate(); err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgUserInvalidTenant, err)
 	}
 	// updateLockStateSQL: $1=id, $2=status, $3=now, $4=tenant_id
 	tag, err := r.db.Exec(ctx, updateLockStateSQL, userID, string(status), now, string(t))
@@ -493,7 +495,7 @@ func (r *PGUserRepo) UpdatePasswordResetFlag(
 	now time.Time,
 ) error {
 	if err := t.Validate(); err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgUserInvalidTenant, err)
 	}
 	// updatePasswordResetFlagSQL: $1=id, $2=required, $3=now, $4=tenant_id
 	tag, err := r.db.Exec(ctx, updatePasswordResetFlagSQL, userID, required, now, string(t))
@@ -516,7 +518,7 @@ func (r *PGUserRepo) UpdatePasswordResetFlag(
 // layer caught the violation.
 func (r *PGUserRepo) Delete(ctx context.Context, t tenant.TenantID, id string) error {
 	if err := t.Validate(); err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgUserInvalidTenant, err)
 	}
 	// deleteUserSQL: $1=tenant_id, $2=id
 	tag, err := r.db.Exec(ctx, deleteUserSQL, string(t), id)
@@ -547,7 +549,7 @@ func (r *PGUserRepo) Delete(ctx context.Context, t tenant.TenantID, id string) e
 // before the caller's surrounding atomic sequence completes.
 func (r *PGUserRepo) BumpAuthzEpoch(ctx context.Context, t tenant.TenantID, userID string, tok credentialfence.FenceToken) (int64, error) {
 	if err := t.Validate(); err != nil {
-		return 0, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+		return 0, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgUserInvalidTenant, err)
 	}
 	credentialfence.MustHave(tok, "ports.UserRepository.BumpAuthzEpoch")
 	if err := assertAmbientTx(ctx); err != nil {
@@ -659,7 +661,7 @@ func scanUser(row pgx.Row) (*domain.User, error) {
 // the password-change path (UpdatePassword); they are NOT mutated here.
 func (r *PGUserRepo) UpdateLockoutFields(ctx context.Context, t tenant.TenantID, user *domain.User) error {
 	if err := t.Validate(); err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgUserInvalidTenant, err)
 	}
 	count32, err := validateFailedLoginCount(user.ID, user.FailedLoginCount())
 	if err != nil {
@@ -702,7 +704,7 @@ func (r *PGUserRepo) UpdatePassword(
 	expectedPV int64,
 ) (int64, error) {
 	if err := t.Validate(); err != nil {
-		return 0, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+		return 0, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgUserInvalidTenant, err)
 	}
 	now := r.clock.Now()
 	var newPV int64

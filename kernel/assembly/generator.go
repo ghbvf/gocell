@@ -70,11 +70,13 @@ type boundaryContext struct {
 
 const (
 	internalAssemblyQuotedFmt = "assembly=%q"
+	internalAssemblyCellFmt   = "assembly=%q cell=%q"
 	internalTemplateQuotedFmt = "template=%q"
 	// msgAssemblyNotFound is the public message for ErrAssemblyNotFound;
 	// shared by GenerateEntrypoint / GenerateBoundary / GenerateModulesGen so
 	// the wire wording stays in one place.
-	msgAssemblyNotFound = "assembly not found"
+	msgAssemblyNotFound    = "assembly not found"
+	msgAssemblyUnknownCell = "assembly references unknown cell"
 )
 
 // GenerateEntrypoint generates the main.go content for an assembly.
@@ -282,8 +284,8 @@ func (g *Generator) collectCapabilityConsts(assemblyID string, cellRefs []metada
 		cm := g.cells.Get(ref.ID)
 		if cm == nil {
 			return nil, errcode.New(errcode.KindNotFound, errcode.ErrMetadataInvalid,
-				"assembly references unknown cell",
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q cell=%q", assemblyID, ref.ID))))
+				msgAssemblyUnknownCell,
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalAssemblyCellFmt, assemblyID, ref.ID))))
 		}
 		for _, c := range cm.Requires {
 			capSet[c] = struct{}{}
@@ -328,13 +330,13 @@ func (g *Generator) generateModulesGenLegacy(
 		cm := g.cells.Get(ref.ID)
 		if cm == nil {
 			return nil, errcode.New(errcode.KindNotFound, errcode.ErrMetadataInvalid,
-				"assembly references unknown cell",
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q cell=%q", assemblyID, ref.ID))))
+				msgAssemblyUnknownCell,
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalAssemblyCellFmt, assemblyID, ref.ID))))
 		}
 		if cm.GoStructName.IsZero() {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 				"cell missing GoStructName for modules_gen factory derivation",
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q cell=%q", assemblyID, ref.ID))))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalAssemblyCellFmt, assemblyID, ref.ID))))
 		}
 		modules = append(modules, cm.GoStructName.String()+"Module")
 	}
@@ -386,8 +388,8 @@ func (g *Generator) generateModulesGenComposition(
 		cm := g.cells.Get(ref.ID)
 		if cm == nil {
 			return nil, errcode.New(errcode.KindNotFound, errcode.ErrMetadataInvalid,
-				"assembly references unknown cell",
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q cell=%q", assemblyID, ref.ID))))
+				msgAssemblyUnknownCell,
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalAssemblyCellFmt, assemblyID, ref.ID))))
 		}
 		alias := "cellmodules" + ref.ID
 		if !seen[ref.ID] {

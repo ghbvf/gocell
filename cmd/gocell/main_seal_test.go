@@ -25,44 +25,7 @@ func TestMainSealsLogsToStderr(t *testing.T) {
 		t.Fatalf("parse main.go: %v", err)
 	}
 
-	var found, writerStderr bool
-	ast.Inspect(f, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel == nil || sel.Sel.Name != "NewHandler" {
-			return true
-		}
-		if len(call.Args) != 1 {
-			return true
-		}
-		lit, ok := call.Args[0].(*ast.CompositeLit)
-		if !ok {
-			return true
-		}
-		found = true
-		for _, elt := range lit.Elts {
-			kv, ok := elt.(*ast.KeyValueExpr)
-			if !ok {
-				continue
-			}
-			key, ok := kv.Key.(*ast.Ident)
-			if !ok || key.Name != "Writer" {
-				continue
-			}
-			vsel, ok := kv.Value.(*ast.SelectorExpr)
-			if !ok || vsel.Sel == nil {
-				continue
-			}
-			if vx, ok := vsel.X.(*ast.Ident); ok && vx.Name == "os" && vsel.Sel.Name == "Stderr" {
-				writerStderr = true
-			}
-		}
-		return true
-	})
-
+	found, writerStderr := loggingSealWritesToStderr(f)
 	if !found {
 		t.Fatal("cmd/gocell/main.go: no logging.NewHandler(logging.Options{...}) seal found")
 	}
@@ -71,4 +34,61 @@ func TestMainSealsLogsToStderr(t *testing.T) {
 			" logging.NewHandler defaults to os.Stdout, which would corrupt machine output" +
 			" (export JSON/YAML/SARIF) written to stdout (#1432 C1)")
 	}
+}
+
+func loggingSealWritesToStderr(f *ast.File) (found bool, writerStderr bool) {
+	ast.Inspect(f, func(n ast.Node) bool {
+		lit, ok := loggingNewHandlerOptions(n)
+		if !ok {
+			return true
+		}
+		found = true
+		if optionsWriterIsStderr(lit) {
+			writerStderr = true
+		}
+		return true
+	})
+	return found, writerStderr
+}
+
+func loggingNewHandlerOptions(n ast.Node) (*ast.CompositeLit, bool) {
+	call, ok := n.(*ast.CallExpr)
+	if !ok {
+		return nil, false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel == nil || sel.Sel.Name != "NewHandler" {
+		return nil, false
+	}
+	if len(call.Args) != 1 {
+		return nil, false
+	}
+	lit, ok := call.Args[0].(*ast.CompositeLit)
+	return lit, ok
+}
+
+func optionsWriterIsStderr(lit *ast.CompositeLit) bool {
+	for _, elt := range lit.Elts {
+		kv, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		key, ok := kv.Key.(*ast.Ident)
+		if !ok || key.Name != "Writer" {
+			continue
+		}
+		if selectorIsOSStderr(kv.Value) {
+			return true
+		}
+	}
+	return false
+}
+
+func selectorIsOSStderr(expr ast.Expr) bool {
+	vsel, ok := expr.(*ast.SelectorExpr)
+	if !ok || vsel.Sel == nil {
+		return false
+	}
+	vx, ok := vsel.X.(*ast.Ident)
+	return ok && vx.Name == "os" && vsel.Sel.Name == "Stderr"
 }

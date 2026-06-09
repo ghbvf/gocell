@@ -19,9 +19,9 @@ type fakeHandler struct{ called bool }
 
 func (h *fakeHandler) Handle() { h.called = true }
 
-// fakeHandlerIface is the interface a generated Dispatch function would
+// fakeHandlerContract is the interface a generated Dispatch function would
 // type-assert to after LookupHandler, proving the generated-code pattern works.
-type fakeHandlerIface interface {
+type fakeHandlerContract interface {
 	Handle()
 }
 
@@ -45,7 +45,7 @@ func TestRegistry_RegisterThenLookup(t *testing.T) {
 
 // TestRegistry_TypeAssertBack proves that the boxed-as-any storage supports the
 // generated Dispatch pattern: box a concrete *fakeHandler, register, lookup,
-// type-assert back to fakeHandlerIface, invoke a method.
+// type-assert back to fakeHandlerContract, invoke a method.
 func TestRegistry_TypeAssertBack(t *testing.T) {
 	t.Parallel()
 	r := NewRegistry()
@@ -57,7 +57,7 @@ func TestRegistry_TypeAssertBack(t *testing.T) {
 	require.True(t, ok)
 
 	// Simulate what generated Dispatch code does.
-	typed, ok := got.(fakeHandlerIface)
+	typed, ok := got.(fakeHandlerContract)
 	require.True(t, ok, "type-assert from boxed any to handler interface must succeed")
 	typed.Handle()
 	assert.True(t, h.called, "Handle() invoked via type-asserted interface must reach concrete handler")

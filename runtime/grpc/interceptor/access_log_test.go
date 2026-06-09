@@ -67,7 +67,7 @@ func TestUnaryAccessLog(t *testing.T) {
 
 func TestUnaryAccessLogNilClockPanics(t *testing.T) {
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Fatalf("UnaryAccessLog with nil clock must panic at construction")
 		}
 	}()

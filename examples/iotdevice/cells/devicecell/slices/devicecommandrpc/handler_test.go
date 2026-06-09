@@ -75,34 +75,11 @@ func TestServer_IssueCommand_Direct(t *testing.T) {
 	srv := newTestServer(t)
 
 	t.Run("success enqueues and returns the command id", func(t *testing.T) {
-		resp, err := srv.IssueCommand(operatorCtx(context.Background()), &commandv1.IssueCommandRequest{
-			DeviceId:    seededDeviceID,
-			CommandType: "reboot",
-			Payload:     []byte("{}"),
-		})
-		if err != nil {
-			t.Fatalf("IssueCommand: unexpected error: %v", err)
-		}
-		// ack_id carries the real enqueued command id (cmd-<hex>), not a throwaway uuid.
-		if !strings.HasPrefix(resp.GetAckId(), "cmd-") {
-			t.Errorf("ack_id = %q, want a cmd- prefixed enqueued command id", resp.GetAckId())
-		}
-		if got := resp.GetAcknowledgedAtUnixNano(); got != fixedTime.UnixNano() {
-			t.Errorf("acknowledged_at_unix_nano = %d, want %d (injected clock)", got, fixedTime.UnixNano())
-		}
+		assertIssueCommandSuccess(t, srv)
 	})
 
 	t.Run("unauthorized caller is denied", func(t *testing.T) {
-		// No principal in context → permission denied (mirrors the HTTP route policy).
-		_, err := srv.IssueCommand(context.Background(), &commandv1.IssueCommandRequest{
-			DeviceId:    seededDeviceID,
-			CommandType: "reboot",
-			Payload:     []byte("{}"),
-		})
-		var ce *errcode.Error
-		if !errors.As(err, &ce) || ce.Code != errcode.ErrAuthForbidden {
-			t.Fatalf("want ErrAuthForbidden, got %v", err)
-		}
+		assertIssueCommandUnauthorized(t, srv)
 	})
 
 	cases := []struct {
@@ -114,18 +91,59 @@ func TestServer_IssueCommand_Direct(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			resp, err := srv.IssueCommand(operatorCtx(context.Background()), tc.req)
-			if err == nil {
-				t.Fatalf("expected error for %s, got resp=%v", tc.name, resp)
-			}
-			var ce *errcode.Error
-			if !errors.As(err, &ce) {
-				t.Fatalf("error is not *errcode.Error: %v", err)
-			}
-			if ce.Code != errcode.ErrValidationFailed {
-				t.Errorf("Code = %q, want %q", ce.Code, errcode.ErrValidationFailed)
-			}
+			assertIssueCommandValidationError(t, srv, tc.name, tc.req)
 		})
+	}
+}
+
+func assertIssueCommandSuccess(t *testing.T, srv *Server) {
+	t.Helper()
+
+	resp, err := srv.IssueCommand(operatorCtx(context.Background()), &commandv1.IssueCommandRequest{
+		DeviceId:    seededDeviceID,
+		CommandType: "reboot",
+		Payload:     []byte("{}"),
+	})
+	if err != nil {
+		t.Fatalf("IssueCommand: unexpected error: %v", err)
+	}
+	// ack_id carries the real enqueued command id (cmd-<hex>), not a throwaway uuid.
+	if !strings.HasPrefix(resp.GetAckId(), "cmd-") {
+		t.Errorf("ack_id = %q, want a cmd- prefixed enqueued command id", resp.GetAckId())
+	}
+	if got := resp.GetAcknowledgedAtUnixNano(); got != fixedTime.UnixNano() {
+		t.Errorf("acknowledged_at_unix_nano = %d, want %d (injected clock)", got, fixedTime.UnixNano())
+	}
+}
+
+func assertIssueCommandUnauthorized(t *testing.T, srv *Server) {
+	t.Helper()
+
+	// No principal in context → permission denied (mirrors the HTTP route policy).
+	_, err := srv.IssueCommand(context.Background(), &commandv1.IssueCommandRequest{
+		DeviceId:    seededDeviceID,
+		CommandType: "reboot",
+		Payload:     []byte("{}"),
+	})
+	var ce *errcode.Error
+	if !errors.As(err, &ce) || ce.Code != errcode.ErrAuthForbidden {
+		t.Fatalf("want ErrAuthForbidden, got %v", err)
+	}
+}
+
+func assertIssueCommandValidationError(t *testing.T, srv *Server, name string, req *commandv1.IssueCommandRequest) {
+	t.Helper()
+
+	resp, err := srv.IssueCommand(operatorCtx(context.Background()), req)
+	if err == nil {
+		t.Fatalf("expected error for %s, got resp=%v", name, resp)
+	}
+	var ce *errcode.Error
+	if !errors.As(err, &ce) {
+		t.Fatalf("error is not *errcode.Error: %v", err)
+	}
+	if ce.Code != errcode.ErrValidationFailed {
+		t.Errorf("Code = %q, want %q", ce.Code, errcode.ErrValidationFailed)
 	}
 }
 

@@ -24,6 +24,11 @@ import (
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
+const (
+	testSessionsRoute = "/api/v1/sessions"
+	testUploadRoute   = "/api/v1/upload"
+)
+
 // Label builds a [metrics.CellLabel] for a genuine closed-set MEMBER by routing
 // a cell id through the sole [metrics.ResolveCellLabel] funnel (ctx-injected cell
 // + singleton allow-set in which id IS a member). The suite therefore constructs
@@ -138,10 +143,10 @@ func conformRecordRequestCount(t *testing.T, h CollectorHarness) {
 	col, obs := h.New(t)
 
 	ctx := context.Background()
-	col.RecordRequest(ctx, Label("accesscore"), "GET", "/api/v1/sessions", 200, 0.01)
-	col.RecordRequest(ctx, Label("accesscore"), "GET", "/api/v1/sessions", 200, 0.02)
+	col.RecordRequest(ctx, Label("accesscore"), "GET", testSessionsRoute, 200, 0.01)
+	col.RecordRequest(ctx, Label("accesscore"), "GET", testSessionsRoute, 200, 0.02)
 
-	key := RequestKey{Cell: "accesscore", Method: "GET", Route: "/api/v1/sessions", Status: 200}
+	key := RequestKey{Cell: "accesscore", Method: "GET", Route: testSessionsRoute, Status: 200}
 	got := obs.RequestCount(key)
 	if got != 2 {
 		t.Errorf("RecordRequest count: got %d, want 2 (two calls same key)", got)
@@ -156,11 +161,11 @@ func conformRecordRequestLabelIsolation(t *testing.T, h CollectorHarness) {
 	col, obs := h.New(t)
 
 	ctx := context.Background()
-	col.RecordRequest(ctx, Label("accesscore"), "GET", "/api/v1/sessions", 200, 0.01)
-	col.RecordRequest(ctx, Label("auditcore"), "GET", "/api/v1/sessions", 200, 0.01)
+	col.RecordRequest(ctx, Label("accesscore"), "GET", testSessionsRoute, 200, 0.01)
+	col.RecordRequest(ctx, Label("auditcore"), "GET", testSessionsRoute, 200, 0.01)
 
-	key1 := RequestKey{Cell: "accesscore", Method: "GET", Route: "/api/v1/sessions", Status: 200}
-	key2 := RequestKey{Cell: "auditcore", Method: "GET", Route: "/api/v1/sessions", Status: 200}
+	key1 := RequestKey{Cell: "accesscore", Method: "GET", Route: testSessionsRoute, Status: 200}
+	key2 := RequestKey{Cell: "auditcore", Method: "GET", Route: testSessionsRoute, Status: 200}
 	if got := obs.RequestCount(key1); got != 1 {
 		t.Errorf("accesscore count: got %d, want 1", got)
 	}
@@ -176,10 +181,10 @@ func conformBodyLimitRejectionCount(t *testing.T, h CollectorHarness) {
 	col, obs := h.New(t)
 
 	ctx := context.Background()
-	col.RecordBodyLimitRejection(ctx, Label("accesscore"), "/api/v1/upload")
-	col.RecordBodyLimitRejection(ctx, Label("accesscore"), "/api/v1/upload")
+	col.RecordBodyLimitRejection(ctx, Label("accesscore"), testUploadRoute)
+	col.RecordBodyLimitRejection(ctx, Label("accesscore"), testUploadRoute)
 
-	key := BodyLimitRejectionKey{Cell: "accesscore", Route: "/api/v1/upload"}
+	key := BodyLimitRejectionKey{Cell: "accesscore", Route: testUploadRoute}
 	if got := obs.BodyLimitRejectionCount(key); got != 2 {
 		t.Errorf("BodyLimitRejection count: got %d, want 2", got)
 	}
@@ -195,7 +200,7 @@ func conformBodyLimitRejectionCtxForwarded(t *testing.T, h CollectorHarness) {
 	type sentinelKey struct{}
 	want := "sentinel-ctx-value"
 	ctx := context.WithValue(context.Background(), sentinelKey{}, want)
-	col.RecordBodyLimitRejection(ctx, Label("accesscore"), "/api/v1/upload")
+	col.RecordBodyLimitRejection(ctx, Label("accesscore"), testUploadRoute)
 
 	lastCtx := obs.LastCtxForBodyLimitRejection()
 	if lastCtx == nil {
@@ -236,10 +241,10 @@ func conformBodyLimitRejectionKeyIsolation(t *testing.T, h CollectorHarness) {
 	col, obs := h.New(t)
 
 	ctx := context.Background()
-	col.RecordBodyLimitRejection(ctx, Label("accesscore"), "/api/v1/upload")
+	col.RecordBodyLimitRejection(ctx, Label("accesscore"), testUploadRoute)
 	col.RecordBodyLimitRejection(ctx, Label("configcore"), "/api/v1/config")
 
-	key1 := BodyLimitRejectionKey{Cell: "accesscore", Route: "/api/v1/upload"}
+	key1 := BodyLimitRejectionKey{Cell: "accesscore", Route: testUploadRoute}
 	key2 := BodyLimitRejectionKey{Cell: "configcore", Route: "/api/v1/config"}
 	if got := obs.BodyLimitRejectionCount(key1); got != 1 {
 		t.Errorf("accesscore/upload count: got %d, want 1", got)

@@ -34,6 +34,8 @@ const flagColumns = "id, key, enabled, rollout_percentage, description, version,
 // uniform and grep for the literal returns one source of truth.
 const msgFlagRepoQueryFailed = "flag repo query failed"
 
+const msgFlagInvalidTenant = "flag repo: invalid tenant"
+
 // FlagRepository implements ports.FlagRepository using PostgreSQL.
 //
 // Write paths (Create/Update/Delete/Toggle) require an ambient pgx.Tx in ctx
@@ -128,7 +130,7 @@ func scanFlagRow(row RowScanner) (*domain.FeatureFlag, error) {
 // Create inserts a new feature flag. All 8 columns are written plus tenant_id.
 func (r *FlagRepository) Create(ctx context.Context, t tenant.TenantID, flag *domain.FeatureFlag) error {
 	if err := t.Validate(); err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgFlagInvalidTenant, err)
 	}
 	const sql = `INSERT INTO feature_flags
 		(tenant_id, ` + flagColumns + `)
@@ -169,7 +171,7 @@ func (r *FlagRepository) Create(ctx context.Context, t tenant.TenantID, flag *do
 // GetByKey retrieves a feature flag by key.
 func (r *FlagRepository) GetByKey(ctx context.Context, t tenant.TenantID, key string) (*domain.FeatureFlag, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgFlagInvalidTenant, err)
 	}
 	const sql = `SELECT ` + flagColumns + ` FROM feature_flags WHERE tenant_id = $1 AND key = $2`
 	return r.scanFlagOrMapError(ctx, r.resolveDB(ctx).QueryRow(ctx, sql, string(t), key), "GetByKey", key)
@@ -187,7 +189,7 @@ func (r *FlagRepository) Update(
 	ctx context.Context, t tenant.TenantID, key string, expectedVersion int, enabled bool, rolloutPercentage int, description string,
 ) (*domain.FeatureFlag, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgFlagInvalidTenant, err)
 	}
 	const sql = `UPDATE feature_flags
 		SET enabled=$1, rollout_percentage=$2, description=$3, version=version+1, updated_at=now()
@@ -219,7 +221,7 @@ func (r *FlagRepository) Update(
 // Requires composite index: CREATE INDEX idx_feature_flags_tenant_key_id ON feature_flags (tenant_id ASC, key ASC, id ASC).
 func (r *FlagRepository) List(ctx context.Context, t tenant.TenantID, params query.ListParams) ([]*domain.FeatureFlag, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgFlagInvalidTenant, err)
 	}
 	b := pgquery.NewBuilder()
 	b.AppendParam("SELECT "+flagColumns+" FROM feature_flags WHERE tenant_id = ", string(t))
@@ -262,7 +264,7 @@ func (r *FlagRepository) List(ctx context.Context, t tenant.TenantID, params que
 //   - not found → ErrFlagNotFound (404)
 func (r *FlagRepository) Delete(ctx context.Context, t tenant.TenantID, key string, expectedVersion int) (*domain.FeatureFlag, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgFlagInvalidTenant, err)
 	}
 	const sql = `DELETE FROM feature_flags WHERE key=$1 AND version=$2 AND tenant_id=$3 RETURNING ` + flagColumns
 
@@ -303,7 +305,7 @@ func (r *FlagRepository) Toggle(
 	ctx context.Context, t tenant.TenantID, key string, expectedVersion int, enabled bool,
 ) (*domain.FeatureFlag, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgFlagInvalidTenant, err)
 	}
 	const sql = `UPDATE feature_flags
 		SET enabled=$1, version=version+1, updated_at=now()

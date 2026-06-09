@@ -21,7 +21,7 @@ import (
 func TestServiceRegistrar_RegisterBeforeBindServer_Panics(t *testing.T) {
 	reg := runtimegrpc.NewServiceRegistrar()
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Fatalf("Register before BindServer must panic (delegation target unbound)")
 		}
 	}()
@@ -45,7 +45,7 @@ func TestServiceRegistrar_BindServerTwice_Panics(t *testing.T) {
 	reg := runtimegrpc.NewServiceRegistrar()
 	reg.BindServer(grpc.NewServer())
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Fatalf("second BindServer must panic (delegation target already bound)")
 		}
 	}()
