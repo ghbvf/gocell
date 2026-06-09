@@ -7,6 +7,13 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
+type grpcServiceGoNameCase struct {
+	name     string
+	service  string
+	wantName string
+	wantErr  string // substring; "" = expect nil error
+}
+
 // TestMatchCellID covers the CellIDPattern regex semantics (^[a-z][a-z0-9]{1,31}$):
 // lowercase ASCII letters + digits only, 2-32 chars, must start with a letter.
 // Identical to AssemblyIDPattern by design — the no-dash convention enforced
@@ -258,12 +265,7 @@ func TestValidateGRPCProtoPath(t *testing.T) {
 func TestGRPCServiceGoName(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		name     string
-		service  string
-		wantName string
-		wantErr  string // substring; "" = expect nil error
-	}{
+	cases := []grpcServiceGoNameCase{
 		// Valid — exported Go identifiers.
 		{
 			name:     "FQN exported service",
@@ -317,23 +319,29 @@ func TestGRPCServiceGoName(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := metadata.GRPCServiceGoName(tc.service)
-			if tc.wantErr == "" {
-				if err != nil {
-					t.Fatalf("GRPCServiceGoName(%q) = %v, want nil", tc.service, err)
-				}
-				if got != tc.wantName {
-					t.Fatalf("GRPCServiceGoName(%q) = %q, want %q", tc.service, got, tc.wantName)
-				}
-				return
-			}
-			if err == nil {
-				t.Fatalf("GRPCServiceGoName(%q) = %q, want error containing %q", tc.service, got, tc.wantErr)
-			}
-			if !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("GRPCServiceGoName(%q) error = %q, want substring %q", tc.service, err.Error(), tc.wantErr)
-			}
+			assertGRPCServiceGoName(t, tc)
 		})
+	}
+}
+
+func assertGRPCServiceGoName(t *testing.T, tc grpcServiceGoNameCase) {
+	t.Helper()
+
+	got, err := metadata.GRPCServiceGoName(tc.service)
+	if tc.wantErr == "" {
+		if err != nil {
+			t.Fatalf("GRPCServiceGoName(%q) = %v, want nil", tc.service, err)
+		}
+		if got != tc.wantName {
+			t.Fatalf("GRPCServiceGoName(%q) = %q, want %q", tc.service, got, tc.wantName)
+		}
+		return
+	}
+	if err == nil {
+		t.Fatalf("GRPCServiceGoName(%q) = %q, want error containing %q", tc.service, got, tc.wantErr)
+	}
+	if !strings.Contains(err.Error(), tc.wantErr) {
+		t.Fatalf("GRPCServiceGoName(%q) error = %q, want substring %q", tc.service, err.Error(), tc.wantErr)
 	}
 }
 

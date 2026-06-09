@@ -27,6 +27,8 @@ import (
 // Compile-time assertion: PGRoleRepo implements ports.RoleRepository.
 var _ ports.RoleRepository = (*PGRoleRepo)(nil)
 
+const msgRoleInvalidTenant = "role_repo: invalid tenant"
+
 // PGRoleRepo is the cell-private PostgreSQL implementation of ports.RoleRepository.
 // It reads/writes the `roles` and `role_assignments` tables (migration 019).
 type PGRoleRepo struct {
@@ -172,7 +174,7 @@ WHERE ra.tenant_id = $1 AND ra.role_id = 'admin' AND u.status = 'active'`
 // here; any error is a genuine infra failure, classified as ErrInternal.
 func (r *PGRoleRepo) Create(ctx context.Context, t tenant.TenantID, role *domain.Role) error {
 	if err := t.Validate(); err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgRoleInvalidTenant, err)
 	}
 	permJSON, err := json.Marshal(role.Permissions)
 	if err != nil {
@@ -195,7 +197,7 @@ func (r *PGRoleRepo) Create(ctx context.Context, t tenant.TenantID, role *domain
 // GetByID fetches a role by composite (tenant_id, id) key. Returns ErrAuthRoleNotFound when absent.
 func (r *PGRoleRepo) GetByID(ctx context.Context, t tenant.TenantID, id string) (*domain.Role, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgRoleInvalidTenant, err)
 	}
 	row := r.db.QueryRow(ctx, selectRoleByIDSQL, string(t), id)
 	role, err := scanRole(row)
@@ -214,7 +216,7 @@ func (r *PGRoleRepo) GetByID(ctx context.Context, t tenant.TenantID, id string) 
 // Returns an empty slice when the user has no roles (mirrors mem behavior).
 func (r *PGRoleRepo) GetByUserID(ctx context.Context, t tenant.TenantID, userID string) ([]*domain.Role, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgRoleInvalidTenant, err)
 	}
 	rows, err := r.db.Query(ctx, selectRolesByUserIDSQL, string(t), userID)
 	if err != nil {
@@ -251,7 +253,7 @@ func fkConstraintName(err error) string {
 // exist (FK on user_id). Fallback for unknown FK violations returns ErrAuthRoleNotFound.
 func (r *PGRoleRepo) AssignToUser(ctx context.Context, t tenant.TenantID, userID, roleID string) (bool, error) {
 	if err := t.Validate(); err != nil {
-		return false, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+		return false, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgRoleInvalidTenant, err)
 	}
 	tag, err := r.db.Exec(
 		ctx, insertAssignmentSQL,
@@ -300,7 +302,7 @@ func (r *PGRoleRepo) AssignToUser(ctx context.Context, t tenant.TenantID, userID
 // the operator with a usable account rather than an unusable system.
 func (r *PGRoleRepo) RemoveFromUser(ctx context.Context, t tenant.TenantID, userID, roleID string) error {
 	if err := t.Validate(); err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgRoleInvalidTenant, err)
 	}
 	_, err := r.db.Exec(ctx, deleteAssignmentSQL, string(t), userID, roleID)
 	if err != nil {
@@ -340,7 +342,7 @@ func (r *PGRoleRepo) RemoveFromUser(ctx context.Context, t tenant.TenantID, user
 //     handlers match a single business invariant.
 func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, t tenant.TenantID, userID, roleID string) (bool, error) {
 	if err := t.Validate(); err != nil {
-		return false, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+		return false, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgRoleInvalidTenant, err)
 	}
 	if roleID != auth.RoleAdmin {
 		// Non-admin role: plain DELETE, no last-holder check. Trigger
@@ -396,7 +398,7 @@ func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, t tenant.Tenan
 // see CountEffectiveAdmins.
 func (r *PGRoleRepo) CountByRole(ctx context.Context, t tenant.TenantID, roleID string) (int, error) {
 	if err := t.Validate(); err != nil {
-		return 0, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+		return 0, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgRoleInvalidTenant, err)
 	}
 	var count int
 	row := r.db.QueryRow(ctx, countByRoleSQL, string(t), roleID)
@@ -425,7 +427,7 @@ func (r *PGRoleRepo) CountByRole(ctx context.Context, t tenant.TenantID, roleID 
 // the advisory-lock CTE rather than relaxing this contract.
 func (r *PGRoleRepo) CountEffectiveAdmins(ctx context.Context, t tenant.TenantID) (int, error) {
 	if err := t.Validate(); err != nil {
-		return 0, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+		return 0, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgRoleInvalidTenant, err)
 	}
 	tx, ok := ctx.Value(persistence.TxCtxKey).(pgx.Tx)
 	if !ok || tx == nil {
@@ -458,7 +460,7 @@ SELECT EXISTS (
 // for fast-path semantics. Pool-driven (no tx required, no advisory lock).
 func (r *PGRoleRepo) EffectiveAdminExists(ctx context.Context, t tenant.TenantID) (bool, error) {
 	if err := t.Validate(); err != nil {
-		return false, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+		return false, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgRoleInvalidTenant, err)
 	}
 	var exists bool
 	row := r.db.QueryRow(ctx, effectiveAdminExistsSQL, string(t))

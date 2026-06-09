@@ -9,6 +9,8 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+const metricAlreadyOwnedFmt = "(likely duplicate — another collector on this Provider may already own the name): %w"
+
 // DefaultDurationBuckets are the histogram buckets previously hardcoded in
 // adapters/prometheus.Collector. Matching them keeps existing Grafana
 // dashboards valid after the migration to the provider-neutral surface.
@@ -57,7 +59,7 @@ func NewProviderCollector(p kernelmetrics.Provider, cfg ProviderCollectorConfig)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("runtime/observability/metrics: register http_requests_total "+
-			"(likely duplicate — another collector on this Provider may already own the name): %w", err)
+			metricAlreadyOwnedFmt, err)
 	}
 	dur, err := p.HistogramVec(kernelmetrics.HistogramOpts{
 		Name:       "http_request_duration_seconds",
@@ -67,7 +69,7 @@ func NewProviderCollector(p kernelmetrics.Provider, cfg ProviderCollectorConfig)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("runtime/observability/metrics: register http_request_duration_seconds "+
-			"(likely duplicate — another collector on this Provider may already own the name): %w", err)
+			metricAlreadyOwnedFmt, err)
 	}
 
 	blr, err := p.CounterVec(kernelmetrics.CounterOpts{
@@ -77,7 +79,7 @@ func NewProviderCollector(p kernelmetrics.Provider, cfg ProviderCollectorConfig)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("runtime/observability/metrics: register http_request_body_limit_rejections_total "+
-			"(likely duplicate — another collector on this Provider may already own the name): %w", err)
+			metricAlreadyOwnedFmt, err)
 	}
 
 	return &providerCollector{requests: reqs, duration: dur, bodyLimitRejections: blr}, nil

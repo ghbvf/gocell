@@ -37,6 +37,10 @@ import (
 // reuse — kept in this file).
 const concurrencyDeadlineBudget = 30 * time.Second
 
+// conformanceBcryptFixtureHash is a syntactically valid bcrypt-shaped string
+// used only as a repository conformance placeholder.
+const conformanceBcryptFixtureHash = "$2a$12$conformancefakehash"
+
 // quickGracePeriod is the small wall-time used to differentiate "immediately
 // returned" from "blocked on lock" in conformGetByIDForUpdateLockContention.
 // 50ms is large enough to avoid scheduler-noise false positives on typical CI
@@ -260,11 +264,11 @@ func seedActiveInTenant(
 ) *domain.User {
 	t.Helper()
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	u, err := domain.ReconstituteUser(domain.ReconstituteUserParams{ //nolint:gosec // test helper, not real credentials
+	u, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
 		ID:           id,
 		Username:     username,
 		Email:        username + exampleEmailDomain,
-		PasswordHash: "$2a$12$conformancefakehash",
+		PasswordHash: conformanceBcryptFixtureHash,
 		Status:       domain.StatusActive,
 		Source:       domain.UserSourceIdentity,
 		AuthzEpoch:   1,
@@ -722,11 +726,11 @@ func conformCrossTenantWriteProbes(t *testing.T, repo ports.UserRepository, id, 
 	}
 	// UpdateLockoutFields cross-tenant: build a minimal domain.User with the seeded id.
 	crossTenantUser, reconErr := domain.ReconstituteUser(
-		domain.ReconstituteUserParams{ //nolint:gosec // G101: test constant, not real credentials
+		domain.ReconstituteUserParams{
 			ID:           id,
 			Username:     username,
 			Email:        username + exampleEmailDomain,
-			PasswordHash: "$2a$12$conformancefakehash",
+			PasswordHash: conformanceBcryptFixtureHash,
 			Status:       domain.StatusActive,
 			Source:       domain.UserSourceIdentity,
 			AuthzEpoch:   1,
@@ -908,7 +912,7 @@ func conformUpdateLockoutFieldsNotFound(t *testing.T, factory UserRepoFactory) e
 	now := time.Now().UTC()
 	// fakeHash is a syntactically valid bcrypt string used only as a test
 	// placeholder; it is not a real credential.
-	const fakeHash = "$2a$12$conformancefakehash"
+	fakeHash := conformanceBcryptFixtureHash
 	ghost, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
 		ID:           phantom,
 		Username:     "ghost_" + phantom,
@@ -1494,11 +1498,11 @@ func conformUserInvalidTenantRejected(t *testing.T, factory UserRepoFactory, fea
 	}
 
 	// UpdateLockoutFields cross-tenant: build a minimal domain.User to call it.
-	ghost, err := domain.ReconstituteUser(domain.ReconstituteUserParams{ //nolint:gosec // test helper
+	ghost, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
 		ID:           uuid.NewString(),
 		Username:     "invalid_tenant_ghost",
 		Email:        "invalid_tenant_ghost" + exampleEmailDomain,
-		PasswordHash: "$2a$12$conformancefakehash",
+		PasswordHash: conformanceBcryptFixtureHash,
 		Status:       domain.StatusActive,
 		Source:       domain.UserSourceIdentity,
 		AuthzEpoch:   1,

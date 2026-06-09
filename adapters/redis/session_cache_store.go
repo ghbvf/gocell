@@ -171,10 +171,21 @@ type cacheMetricsRecorder interface {
 // recorder) must still function — these no-ops carry that decision.
 type nopCacheMetrics struct{}
 
-func (nopCacheMetrics) RecordHit(context.Context)            {}
-func (nopCacheMetrics) RecordMiss(context.Context)           {}
-func (nopCacheMetrics) RecordError(context.Context)          {}
-func (nopCacheMetrics) RecordRevokeDelError(context.Context) {}
+func (nopCacheMetrics) RecordHit(context.Context) {
+	// Metrics are optional; nil collectors intentionally record nothing.
+}
+
+func (nopCacheMetrics) RecordMiss(context.Context) {
+	// Metrics are optional; nil collectors intentionally record nothing.
+}
+
+func (nopCacheMetrics) RecordError(context.Context) {
+	// Metrics are optional; nil collectors intentionally record nothing.
+}
+
+func (nopCacheMetrics) RecordRevokeDelError(context.Context) {
+	// Metrics are optional; nil collectors intentionally record nothing.
+}
 
 // sessionCacheKey is the per-id key prefix written under the Cache's
 // KeyNamespace. Final Redis key = "<namespace>:session:<sessionID>".

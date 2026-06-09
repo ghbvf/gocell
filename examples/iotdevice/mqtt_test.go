@@ -213,17 +213,19 @@ func TestBuildMQTTDirectPublisher_EarlyReturns(t *testing.T) {
 	})
 }
 
+type mqttConnectDeadlineCase struct {
+	name    string
+	set     bool
+	val     string
+	want    time.Duration
+	wantErr bool
+}
+
 // TestMQTTConnectDeadline covers the env-driven bootstrap connect-deadline
 // resolver: unset → default constant; valid override; and the fail-fast paths
 // (malformed duration / non-positive) that must NOT silently revert to default.
 func TestMQTTConnectDeadline(t *testing.T) {
-	tests := []struct {
-		name    string
-		set     bool
-		val     string
-		want    time.Duration
-		wantErr bool
-	}{
+	tests := []mqttConnectDeadlineCase{
 		{name: "unset uses default", set: false, want: defaultMQTTConnectDeadline},
 		{name: "valid override", set: true, val: "10s", want: testtime.D10s},
 		{name: "malformed rejected", set: true, val: "notaduration", wantErr: true},
@@ -233,24 +235,30 @@ func TestMQTTConnectDeadline(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.set {
-				t.Setenv(envMQTTConnectDeadline, tc.val)
-			} else {
-				t.Setenv(envMQTTConnectDeadline, "")
-			}
-			got, err := mqttConnectDeadline()
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("mqttConnectDeadline(%q) err = nil, want non-nil", tc.val)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("mqttConnectDeadline(%q) err = %v, want nil", tc.val, err)
-			}
-			if got != tc.want {
-				t.Fatalf("mqttConnectDeadline(%q) = %v, want %v", tc.val, got, tc.want)
-			}
+			assertMQTTConnectDeadline(t, tc)
 		})
+	}
+}
+
+func assertMQTTConnectDeadline(t *testing.T, tc mqttConnectDeadlineCase) {
+	t.Helper()
+
+	if tc.set {
+		t.Setenv(envMQTTConnectDeadline, tc.val)
+	} else {
+		t.Setenv(envMQTTConnectDeadline, "")
+	}
+	got, err := mqttConnectDeadline()
+	if tc.wantErr {
+		if err == nil {
+			t.Fatalf("mqttConnectDeadline(%q) err = nil, want non-nil", tc.val)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("mqttConnectDeadline(%q) err = %v, want nil", tc.val, err)
+	}
+	if got != tc.want {
+		t.Fatalf("mqttConnectDeadline(%q) = %v, want %v", tc.val, got, tc.want)
 	}
 }

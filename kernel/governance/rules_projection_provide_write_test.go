@@ -3,6 +3,7 @@ package governance
 // INVARIANT: PROJECTION-PROVIDE-NEEDS-WRITE-CU-01
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -112,6 +113,18 @@ func buildProjectionProvideProject(
 	}
 }
 
+type projectionProvideNeedsWriteCase struct {
+	name            string
+	projectionID    string
+	contractKind    string
+	subProjection   string
+	missingContract bool
+	missingCell     bool
+	missingProvide  bool
+	wantErrCount    int
+	wantFieldPrefix string
+}
+
 // TestProjectionProvideNeedsWriteCU01 is a table-driven test for
 // validatePROJECTIONPROVIDENEEDSWRITECU01
 // (PROJECTION-PROVIDE-NEEDS-WRITE-CU-01).
@@ -122,17 +135,7 @@ func buildProjectionProvideProject(
 func TestProjectionProvideNeedsWriteCU01(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name            string
-		projectionID    string
-		contractKind    string
-		subProjection   string
-		missingContract bool
-		missingCell     bool
-		missingProvide  bool
-		wantErrCount    int
-		wantFieldPrefix string
-	}{
+	tests := []projectionProvideNeedsWriteCase{
 		{
 			name:            "provide→projection, no write CU → error",
 			projectionID:    "projection.order.status.v1",
@@ -185,52 +188,57 @@ func TestProjectionProvideNeedsWriteCU01(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-
-			project := buildProjectionProvideProject(
-				tc.projectionID,
-				tc.contractKind,
-				tc.subProjection,
-				tc.missingContract,
-				tc.missingCell,
-				tc.missingProvide,
-			)
-
-			v := NewValidator(project, "", clock.Real())
-			results := v.validatePROJECTIONPROVIDENEEDSWRITECU01()
-
-			var got []ValidationResult
-			for _, r := range results {
-				if r.Code == codePROJECTIONPROVIDENEEDSWRITECU01 {
-					got = append(got, r)
-				}
-			}
-
-			if len(got) != tc.wantErrCount {
-				t.Fatalf("expected %d result(s) with code %s, got %d: %v",
-					tc.wantErrCount, codePROJECTIONPROVIDENEEDSWRITECU01, len(got), got)
-			}
-			if tc.wantErrCount == 0 {
-				return
-			}
-			r := got[0]
-			if r.Severity != SeverityError {
-				t.Errorf("expected SeverityError, got %s", r.Severity)
-			}
-			if tc.wantFieldPrefix != "" {
-				// Field should start with contractUsages[N].role
-				if len(r.Field) < len(tc.wantFieldPrefix) {
-					t.Errorf("expected field with prefix %q, got %q", tc.wantFieldPrefix, r.Field)
-				}
-				for i := range tc.wantFieldPrefix {
-					if r.Field[i] != tc.wantFieldPrefix[i] {
-						t.Errorf("expected field with prefix %q, got %q", tc.wantFieldPrefix, r.Field)
-						break
-					}
-				}
-			}
-			if r.Fix == "" {
-				t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
-			}
+			assertProjectionProvideNeedsWrite(t, tc)
 		})
+	}
+}
+
+func assertProjectionProvideNeedsWrite(t *testing.T, tc projectionProvideNeedsWriteCase) {
+	t.Helper()
+
+	project := buildProjectionProvideProject(
+		tc.projectionID,
+		tc.contractKind,
+		tc.subProjection,
+		tc.missingContract,
+		tc.missingCell,
+		tc.missingProvide,
+	)
+
+	v := NewValidator(project, "", clock.Real())
+	results := v.validatePROJECTIONPROVIDENEEDSWRITECU01()
+
+	got := projectionProvideNeedsWriteResults(results)
+	if len(got) != tc.wantErrCount {
+		t.Fatalf("expected %d result(s) with code %s, got %d: %v",
+			tc.wantErrCount, codePROJECTIONPROVIDENEEDSWRITECU01, len(got), got)
+	}
+	if tc.wantErrCount == 0 {
+		return
+	}
+	assertProjectionProvideFinding(t, got[0], tc)
+}
+
+func projectionProvideNeedsWriteResults(results []ValidationResult) []ValidationResult {
+	var got []ValidationResult
+	for _, r := range results {
+		if r.Code == codePROJECTIONPROVIDENEEDSWRITECU01 {
+			got = append(got, r)
+		}
+	}
+	return got
+}
+
+func assertProjectionProvideFinding(t *testing.T, r ValidationResult, tc projectionProvideNeedsWriteCase) {
+	t.Helper()
+
+	if r.Severity != SeverityError {
+		t.Errorf("expected SeverityError, got %s", r.Severity)
+	}
+	if tc.wantFieldPrefix != "" && !strings.HasPrefix(r.Field, tc.wantFieldPrefix) {
+		t.Errorf("expected field with prefix %q, got %q", tc.wantFieldPrefix, r.Field)
+	}
+	if r.Fix == "" {
+		t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
 	}
 }

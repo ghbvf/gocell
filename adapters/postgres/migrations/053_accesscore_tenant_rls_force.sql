@@ -28,7 +28,7 @@
 --   USING / WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
 --   current_setting(..., true) = missing_ok → NULL when the GUC was never set
 --   (probes / migrations / any path that did not run SET LOCAL); NULLIF(...,'')
---   maps the empty-string GUC to NULL; tenant_id = NULL is never true → 0 rows
+--   maps the empty-string GUC to NULL; equality against that NULL is never true → 0 rows
 --   visible AND 0 rows insertable (fail-closed). The tenant_id columns are TEXT
 --   (migration 050) and the GUC value is a Validate()-canonical lowercase UUID
 --   string, so TEXT=TEXT compare is exact and index-friendly (idx_users_tenant_id_id

@@ -94,7 +94,7 @@ func TestStreamCellAttribution_WritesCellID(t *testing.T) {
 
 func TestStreamCellAttribution_NilResolverPanics(t *testing.T) {
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Fatalf("StreamCellAttribution with a nil resolver must panic")
 		}
 	}()
@@ -150,7 +150,7 @@ func TestStreamAuth_ValidTokenReachesHandlerWithPrincipal(t *testing.T) {
 
 func TestStreamAuth_NilVerifierPanics(t *testing.T) {
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Fatalf("StreamAuth with a nil verifier must panic at construction")
 		}
 	}()
@@ -196,7 +196,7 @@ func TestStreamMetrics_RecordsRPC(t *testing.T) {
 
 func TestStreamMetrics_NilCollectorPanics(t *testing.T) {
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Fatalf("StreamMetrics with a nil collector must panic at construction")
 		}
 	}()
@@ -273,7 +273,7 @@ func TestStreamDrain_NoCancelOnNormalCompletion(t *testing.T) {
 
 func TestStreamDrain_NilPanics(t *testing.T) {
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Fatalf("StreamDrain with a nil DrainSignal must panic at construction")
 		}
 	}()
@@ -301,7 +301,7 @@ func TestNewStreamChain_Smoke(t *testing.T) {
 
 func TestNewStreamChain_NilDrainPanics(t *testing.T) {
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Fatalf("NewStreamChain with a nil Deps.Drain must panic (streams would be un-drainable)")
 		}
 	}()
@@ -312,7 +312,7 @@ func TestNewStreamChain_NilDrainPanics(t *testing.T) {
 
 func TestNewStreamChain_NilRegistrarPanics(t *testing.T) {
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Fatalf("NewStreamChain with a nil Deps.Registrar must panic")
 		}
 	}()
@@ -323,7 +323,7 @@ func TestNewStreamChain_NilRegistrarPanics(t *testing.T) {
 
 func TestNewStreamChain_ZeroValueDrainPanics(t *testing.T) {
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Fatalf("NewStreamChain with a zero-value new(DrainSignal) must panic (nil cancel → panic at GracefulStop)")
 		}
 	}()
@@ -334,7 +334,7 @@ func TestNewStreamChain_ZeroValueDrainPanics(t *testing.T) {
 
 func TestNewStreamChain_EmptyCellIDClosedSetPanics(t *testing.T) {
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Fatalf("NewStreamChain with an empty Deps.CellIDClosedSet must panic (would relabel every RPC _runtime)")
 		}
 	}()

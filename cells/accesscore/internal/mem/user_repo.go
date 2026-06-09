@@ -18,9 +18,10 @@ import (
 var _ ports.UserRepository = (*UserRepository)(nil)
 
 const (
-	msgUserNotFound   = "user not found"
-	errMsgUsernameFmt = "username=%q"
-	errMsgIDFmt       = "id=%q"
+	msgUserNotFound      = "user not found"
+	msgUserInvalidTenant = "user_repo: invalid tenant"
+	errMsgUsernameFmt    = "username=%q"
+	errMsgIDFmt          = "id=%q"
 )
 
 // UserRepository is the in-memory implementation of ports.UserRepository.
@@ -51,7 +52,7 @@ type UserRepository struct {
 // outside a RunInTx closure; see UserRepository lock contract.
 func (r *UserRepository) Create(ctx context.Context, t tenant.TenantID, user *domain.User) error {
 	if err := t.Validate(); err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgUserInvalidTenant, err)
 	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
@@ -106,7 +107,7 @@ func checkProfileUniqueLocked(tByName, tByEmail map[string]*domain.User, userID,
 // collapsing both cases to prevent cross-tenant existence enumeration.
 func (r *UserRepository) GetByIDInTenant(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgUserInvalidTenant, err)
 	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
@@ -126,7 +127,7 @@ func (r *UserRepository) GetByIDInTenant(ctx context.Context, t tenant.TenantID,
 // Safe to call both inside and outside a RunInTx closure.
 func (r *UserRepository) GetByUsername(ctx context.Context, t tenant.TenantID, username string) (*domain.User, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgUserInvalidTenant, err)
 	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
@@ -170,7 +171,7 @@ func (r *UserRepository) UpdateProfile(
 	now time.Time,
 ) (*domain.User, error) {
 	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgUserInvalidTenant, err)
 	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
@@ -245,7 +246,7 @@ func (r *UserRepository) UpdateLockState(
 	now time.Time,
 ) error {
 	if err := t.Validate(); err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgUserInvalidTenant, err)
 	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
@@ -318,7 +319,7 @@ func (r *UserRepository) UpdatePasswordResetFlag(
 	now time.Time,
 ) error {
 	if err := t.Validate(); err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgUserInvalidTenant, err)
 	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
@@ -450,7 +451,7 @@ func (r *UserRepository) UpdatePassword(
 	expectedPV int64,
 ) (int64, error) {
 	if err := t.Validate(); err != nil {
-		return 0, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+		return 0, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgUserInvalidTenant, err)
 	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
@@ -510,7 +511,7 @@ func (r *UserRepository) BumpAuthzEpoch(
 	ctx context.Context, t tenant.TenantID, userID string, tok credentialfence.FenceToken,
 ) (int64, error) {
 	if err := t.Validate(); err != nil {
-		return 0, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+		return 0, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgUserInvalidTenant, err)
 	}
 	credentialfence.MustHave(tok, "ports.UserRepository.BumpAuthzEpoch")
 	if !r.store.inLiveTx(ctx) {
@@ -557,7 +558,7 @@ func (r *UserRepository) BumpAuthzEpoch(
 // within the tenant. Safe to call both inside and outside a RunInTx closure.
 func (r *UserRepository) UpdateLockoutFields(ctx context.Context, t tenant.TenantID, user *domain.User) error {
 	if err := t.Validate(); err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgUserInvalidTenant, err)
 	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
@@ -584,7 +585,7 @@ func (r *UserRepository) UpdateLockoutFields(ctx context.Context, t tenant.Tenan
 // both inside and outside a RunInTx closure.
 func (r *UserRepository) Delete(ctx context.Context, t tenant.TenantID, id string) error {
 	if err := t.Validate(); err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgUserInvalidTenant, err)
 	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()

@@ -30,136 +30,201 @@ func TestUnaryAuth(t *testing.T) {
 	info := &grpc.UnaryServerInfo{FullMethod: "/pkg.Svc/Do"}
 
 	t.Run("valid token forwards principal-enriched ctx", func(t *testing.T) {
-		v := stubVerifier{claims: kauth.Claims{Subject: "user-1"}}
-		var gotPrincipal *auth.Principal
-		_, err := UnaryAuth(v)(bearerCtx(), nil, info,
-			func(ctx context.Context, _ any) (any, error) {
-				p, _ := auth.FromContext(ctx)
-				gotPrincipal = p
-				return "ok", nil
-			})
-		if err != nil {
-			t.Fatalf("err = %v", err)
-		}
-		if gotPrincipal == nil || gotPrincipal.Subject != "user-1" {
-			t.Fatalf("principal = %+v, want user-1", gotPrincipal)
-		}
+		assertUnaryAuthForwardsPrincipal(t, info)
 	})
 
 	t.Run("missing metadata -> Unauthenticated", func(t *testing.T) {
-		v := stubVerifier{claims: kauth.Claims{Subject: "x"}}
-		called := false
-		_, err := UnaryAuth(v)(context.Background(), nil, info, okHandler(&called))
-		if status.Code(err) != codes.Unauthenticated {
-			t.Fatalf("code = %v, want Unauthenticated", status.Code(err))
-		}
-		if called {
-			t.Fatalf("handler must not run on missing auth")
-		}
+		assertUnaryAuthMissingMetadata(t, info)
 	})
 
 	t.Run("non-bearer scheme -> Unauthenticated", func(t *testing.T) {
-		v := stubVerifier{claims: kauth.Claims{Subject: "x"}}
-		md := metadata.Pairs(authMetadataKey, "Basic abc")
-		ctx := metadata.NewIncomingContext(context.Background(), md)
-		called := false
-		_, err := UnaryAuth(v)(ctx, nil, info, okHandler(&called))
-		if status.Code(err) != codes.Unauthenticated {
-			t.Fatalf("code = %v, want Unauthenticated", status.Code(err))
-		}
+		assertUnaryAuthNonBearerScheme(t, info)
 	})
 
 	t.Run("verify infra outage -> Unavailable", func(t *testing.T) {
-		v := stubVerifier{err: errcode.New(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable, "jwks down")}
-		_, err := UnaryAuth(v)(bearerCtx(), nil, info,
-			func(context.Context, any) (any, error) { return "ok", nil })
-		if status.Code(err) != codes.Unavailable {
-			t.Fatalf("code = %v, want Unavailable", status.Code(err))
-		}
+		assertUnaryAuthVerifyOutage(t, info)
 	})
 
 	t.Run("intent mismatch maps to same Unauthenticated as invalid token (enumeration-safe)", func(t *testing.T) {
-		intentErr := stubVerifier{err: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent, "wrong intent")}
-		plainErr := stubVerifier{err: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "bad signature")}
-		pass := func(context.Context, any) (any, error) { return "ok", nil }
-
-		_, e1 := UnaryAuth(intentErr)(bearerCtx(), nil, info, pass)
-		_, e2 := UnaryAuth(plainErr)(bearerCtx(), nil, info, pass)
-		s1, s2 := status.Convert(e1), status.Convert(e2)
-		if s1.Code() != codes.Unauthenticated || s2.Code() != codes.Unauthenticated {
-			t.Fatalf("codes = %v / %v, want both Unauthenticated", s1.Code(), s2.Code())
-		}
-		if s1.Message() != s2.Message() {
-			t.Fatalf("messages differ (%q vs %q): token-type leak via gRPC status", s1.Message(), s2.Message())
-		}
+		assertUnaryAuthIntentMismatchIsEnumerationSafe(t, info)
 	})
 
 	t.Run("verify reject -> Unauthenticated", func(t *testing.T) {
-		v := stubVerifier{err: errcode.New(errcode.KindUnauthenticated, errcode.ErrInternal, "bad")}
-		_, err := UnaryAuth(v)(bearerCtx(), nil, info,
-			func(context.Context, any) (any, error) { return "ok", nil })
-		if status.Code(err) != codes.Unauthenticated {
-			t.Fatalf("code = %v, want Unauthenticated", status.Code(err))
-		}
+		assertUnaryAuthVerifyReject(t, info)
 	})
 
 	t.Run("password reset blocks non-exempt method", func(t *testing.T) {
-		v := stubVerifier{claims: kauth.Claims{Subject: "u", PasswordResetRequired: true}}
-		called := false
-		_, err := UnaryAuth(v)(bearerCtx(), nil, info, okHandler(&called))
-		if status.Code(err) != codes.PermissionDenied {
-			t.Fatalf("code = %v, want PermissionDenied", status.Code(err))
-		}
-		if called {
-			t.Fatalf("handler must not run when reset blocks")
-		}
+		assertUnaryAuthPasswordResetBlocks(t, info)
 	})
 
 	t.Run("password reset exempt method passes", func(t *testing.T) {
-		v := stubVerifier{claims: kauth.Claims{Subject: "u", PasswordResetRequired: true}}
-		called := false
-		exempt := WithPasswordResetExempt(func(m string) bool { return m == info.FullMethod })
-		_, err := UnaryAuth(v, exempt)(bearerCtx(), nil, info, okHandler(&called))
-		if err != nil {
-			t.Fatalf("err = %v, want nil", err)
-		}
-		if !called {
-			t.Fatalf("handler must run for exempt method")
-		}
+		assertUnaryAuthPasswordResetExempt(t, info)
 	})
 
 	t.Run("public method bypasses auth", func(t *testing.T) {
-		v := stubVerifier{claims: kauth.Claims{Subject: "u"}}
-		called := false
-		pub := WithPublicMethod(func(m string) bool { return true })
-		// No auth metadata at all; public predicate must bypass before extraction.
-		_, err := UnaryAuth(v, pub)(context.Background(), nil, info, okHandler(&called))
-		if err != nil {
-			t.Fatalf("err = %v, want nil", err)
-		}
-		if !called {
-			t.Fatalf("handler must run for public method")
-		}
+		assertUnaryAuthPublicMethodBypasses(t, info)
 	})
 
 	t.Run("panicking publicMethod predicate returns Internal (not a raw panic)", func(t *testing.T) {
-		v := stubVerifier{claims: kauth.Claims{Subject: "u"}}
-		panicPred := WithPublicMethod(func(m string) bool { panic("predicate exploded") })
-		_, err := UnaryAuth(v, panicPred)(context.Background(), nil, info,
-			func(context.Context, any) (any, error) { return "ok", nil })
-		if status.Code(err) != codes.Internal {
-			t.Fatalf("code = %v, want Internal (predicate panic must not escape)", status.Code(err))
-		}
+		assertUnaryAuthPublicMethodPanic(t, info)
 	})
 
 	t.Run("nil verifier panics at construction (fail-fast wiring)", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r == nil {
-				t.Fatalf("UnaryAuth(nil) must panic at construction (security dep is required)")
-			}
-		}()
-		_ = UnaryAuth(nil)
+		assertUnaryAuthNilVerifierPanics(t)
 	})
+}
+
+func assertUnaryAuthForwardsPrincipal(t *testing.T, info *grpc.UnaryServerInfo) {
+	t.Helper()
+
+	v := stubVerifier{claims: kauth.Claims{Subject: "user-1"}}
+	var gotPrincipal *auth.Principal
+	_, err := UnaryAuth(v)(bearerCtx(), nil, info,
+		func(ctx context.Context, _ any) (any, error) {
+			p, _ := auth.FromContext(ctx)
+			gotPrincipal = p
+			return "ok", nil
+		})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if gotPrincipal == nil || gotPrincipal.Subject != "user-1" {
+		t.Fatalf("principal = %+v, want user-1", gotPrincipal)
+	}
+}
+
+func assertUnaryAuthMissingMetadata(t *testing.T, info *grpc.UnaryServerInfo) {
+	t.Helper()
+
+	v := stubVerifier{claims: kauth.Claims{Subject: "x"}}
+	called := false
+	_, err := UnaryAuth(v)(context.Background(), nil, info, okHandler(&called))
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("code = %v, want Unauthenticated", status.Code(err))
+	}
+	if called {
+		t.Fatalf("handler must not run on missing auth")
+	}
+}
+
+func assertUnaryAuthNonBearerScheme(t *testing.T, info *grpc.UnaryServerInfo) {
+	t.Helper()
+
+	v := stubVerifier{claims: kauth.Claims{Subject: "x"}}
+	md := metadata.Pairs(authMetadataKey, "Basic abc")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+	called := false
+	_, err := UnaryAuth(v)(ctx, nil, info, okHandler(&called))
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("code = %v, want Unauthenticated", status.Code(err))
+	}
+}
+
+func assertUnaryAuthVerifyOutage(t *testing.T, info *grpc.UnaryServerInfo) {
+	t.Helper()
+
+	v := stubVerifier{err: errcode.New(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable, "jwks down")}
+	_, err := UnaryAuth(v)(bearerCtx(), nil, info,
+		func(context.Context, any) (any, error) { return "ok", nil })
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", status.Code(err))
+	}
+}
+
+func assertUnaryAuthIntentMismatchIsEnumerationSafe(t *testing.T, info *grpc.UnaryServerInfo) {
+	t.Helper()
+
+	intentErr := stubVerifier{err: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent, "wrong intent")}
+	plainErr := stubVerifier{err: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "bad signature")}
+	pass := func(context.Context, any) (any, error) { return "ok", nil }
+
+	_, e1 := UnaryAuth(intentErr)(bearerCtx(), nil, info, pass)
+	_, e2 := UnaryAuth(plainErr)(bearerCtx(), nil, info, pass)
+	s1, s2 := status.Convert(e1), status.Convert(e2)
+	if s1.Code() != codes.Unauthenticated || s2.Code() != codes.Unauthenticated {
+		t.Fatalf("codes = %v / %v, want both Unauthenticated", s1.Code(), s2.Code())
+	}
+	if s1.Message() != s2.Message() {
+		t.Fatalf("messages differ (%q vs %q): token-type leak via gRPC status", s1.Message(), s2.Message())
+	}
+}
+
+func assertUnaryAuthVerifyReject(t *testing.T, info *grpc.UnaryServerInfo) {
+	t.Helper()
+
+	v := stubVerifier{err: errcode.New(errcode.KindUnauthenticated, errcode.ErrInternal, "bad")}
+	_, err := UnaryAuth(v)(bearerCtx(), nil, info,
+		func(context.Context, any) (any, error) { return "ok", nil })
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("code = %v, want Unauthenticated", status.Code(err))
+	}
+}
+
+func assertUnaryAuthPasswordResetBlocks(t *testing.T, info *grpc.UnaryServerInfo) {
+	t.Helper()
+
+	v := stubVerifier{claims: kauth.Claims{Subject: "u", PasswordResetRequired: true}}
+	called := false
+	_, err := UnaryAuth(v)(bearerCtx(), nil, info, okHandler(&called))
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("code = %v, want PermissionDenied", status.Code(err))
+	}
+	if called {
+		t.Fatalf("handler must not run when reset blocks")
+	}
+}
+
+func assertUnaryAuthPasswordResetExempt(t *testing.T, info *grpc.UnaryServerInfo) {
+	t.Helper()
+
+	v := stubVerifier{claims: kauth.Claims{Subject: "u", PasswordResetRequired: true}}
+	called := false
+	exempt := WithPasswordResetExempt(func(m string) bool { return m == info.FullMethod })
+	_, err := UnaryAuth(v, exempt)(bearerCtx(), nil, info, okHandler(&called))
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if !called {
+		t.Fatalf("handler must run for exempt method")
+	}
+}
+
+func assertUnaryAuthPublicMethodBypasses(t *testing.T, info *grpc.UnaryServerInfo) {
+	t.Helper()
+
+	v := stubVerifier{claims: kauth.Claims{Subject: "u"}}
+	called := false
+	pub := WithPublicMethod(func(m string) bool { return true })
+	// No auth metadata at all; public predicate must bypass before extraction.
+	_, err := UnaryAuth(v, pub)(context.Background(), nil, info, okHandler(&called))
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if !called {
+		t.Fatalf("handler must run for public method")
+	}
+}
+
+func assertUnaryAuthPublicMethodPanic(t *testing.T, info *grpc.UnaryServerInfo) {
+	t.Helper()
+
+	v := stubVerifier{claims: kauth.Claims{Subject: "u"}}
+	panicPred := WithPublicMethod(func(m string) bool { panic("predicate exploded") })
+	_, err := UnaryAuth(v, panicPred)(context.Background(), nil, info,
+		func(context.Context, any) (any, error) { return "ok", nil })
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("code = %v, want Internal (predicate panic must not escape)", status.Code(err))
+	}
+}
+
+func assertUnaryAuthNilVerifierPanics(t *testing.T) {
+	t.Helper()
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("UnaryAuth(nil) must panic at construction (security dep is required)")
+		}
+	}()
+	_ = UnaryAuth(nil)
 }
 
 func TestBearerFromMetadata(t *testing.T) {

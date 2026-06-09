@@ -42,6 +42,15 @@ func assertSpecEqual(t *testing.T, got, want contractspec.ContractSpec) {
 	}
 }
 
+type eventDerivationInvalidCase struct {
+	name    string
+	sub     outbox.Subscription
+	wantMsg string
+	// subLayer asserts the error came from sub.Validate (shape gate)
+	// rather than the derived spec.Validate (defense in depth).
+	subLayer bool
+}
+
 // TestNewFrameworkHTTP verifies that NewFrameworkHTTP produces a ContractSpec
 // with the correct field values for each input combination, and that the
 // resulting spec passes Validate(). The bad-prefix panic path is covered
@@ -361,14 +370,7 @@ func TestNewEventDerivation_Invalid(t *testing.T) {
 	badKind := validEventSub() // valid Subscription, but kind is not a real ContractKind
 	badKind.ContractKind = "garbage"
 
-	cases := []struct {
-		name    string
-		sub     outbox.Subscription
-		wantMsg string
-		// subLayer asserts the error came from sub.Validate (shape gate)
-		// rather than the derived spec.Validate (defense in depth).
-		subLayer bool
-	}{
+	cases := []eventDerivationInvalidCase{
 		{
 			name:     "subscription missing topic — shape gate",
 			sub:      missingTopic,
@@ -392,25 +394,31 @@ func TestNewEventDerivation_Invalid(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := contractbuild.NewEventDerivation(tc.sub)
-			if err == nil {
-				t.Fatalf("expected error, got nil (spec=%+v)", got)
-			}
-			if !strings.Contains(err.Error(), tc.wantMsg) {
-				t.Errorf("error message = %q, want substring %q", err.Error(), tc.wantMsg)
-			}
-			if !strings.Contains(err.Error(), "NewEventDerivation") {
-				t.Errorf("error message = %q, want funnel context %q", err.Error(), "NewEventDerivation")
-			}
-			if gotSubLayer := strings.Contains(err.Error(), "subscription invalid"); gotSubLayer != tc.subLayer {
-				t.Errorf("validation layer mismatch: err=%q subLayer=%v want=%v", err.Error(), gotSubLayer, tc.subLayer)
-			}
-			// Returned spec must be zero on error (fail-closed contract).
-			assertSpecEqual(t, got, contractspec.ContractSpec{})
-			// errors.Is contract: underlying validator error is wrapped via %w.
-			if errors.Unwrap(err) == nil {
-				t.Errorf("error is not wrapping a cause; expected %%w chain")
-			}
+			assertEventDerivationInvalid(t, tc)
 		})
+	}
+}
+
+func assertEventDerivationInvalid(t *testing.T, tc eventDerivationInvalidCase) {
+	t.Helper()
+
+	got, err := contractbuild.NewEventDerivation(tc.sub)
+	if err == nil {
+		t.Fatalf("expected error, got nil (spec=%+v)", got)
+	}
+	if !strings.Contains(err.Error(), tc.wantMsg) {
+		t.Errorf("error message = %q, want substring %q", err.Error(), tc.wantMsg)
+	}
+	if !strings.Contains(err.Error(), "NewEventDerivation") {
+		t.Errorf("error message = %q, want funnel context %q", err.Error(), "NewEventDerivation")
+	}
+	if gotSubLayer := strings.Contains(err.Error(), "subscription invalid"); gotSubLayer != tc.subLayer {
+		t.Errorf("validation layer mismatch: err=%q subLayer=%v want=%v", err.Error(), gotSubLayer, tc.subLayer)
+	}
+	// Returned spec must be zero on error (fail-closed contract).
+	assertSpecEqual(t, got, contractspec.ContractSpec{})
+	// errors.Is contract: underlying validator error is wrapped via %w.
+	if errors.Unwrap(err) == nil {
+		t.Errorf("error is not wrapping a cause; expected %%w chain")
 	}
 }

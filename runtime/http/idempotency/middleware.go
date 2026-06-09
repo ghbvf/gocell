@@ -295,10 +295,20 @@ func Middleware(clk clock.Clock, store Store, opts ...Option) func(http.Handler)
 	}
 
 	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			serveWithIdempotency(w, r, next, clk, store, cfg)
-		})
+		return idempotencyHandler{
+			next:   next,
+			clk:    clk,
+			store:  store,
+			config: cfg,
+		}
 	}
+}
+
+type idempotencyHandler struct {
+	next   http.Handler
+	clk    clock.Clock
+	store  Store
+	config middlewareConfig
 }
 
 // validateIdempotencyKey validates the key length and character set, writing
@@ -340,31 +350,25 @@ func readBodyFingerprint(ctx context.Context, w http.ResponseWriter, r *http.Req
 	return computeFingerprint(body), true
 }
 
-// serveWithIdempotency executes the per-request idempotency decision for a
+// ServeHTTP executes the per-request idempotency decision for a
 // single request, reducing the cognitive complexity of the closure returned by
 // Middleware. It checks exempt status first (before body read), then the method
 // gate, then principal identity, key validation, and finally the full claim flow.
-func serveWithIdempotency(
-	w http.ResponseWriter,
-	r *http.Request,
-	next http.Handler,
-	clk clock.Clock,
-	store Store,
-	cfg middlewareConfig,
-) {
+func (h idempotencyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Exempt check runs first — before method gate and before body read,
 	// so exempt routes pay zero body-buffering cost.
+	cfg := h.config
 	if cfg.exemptMatcher != nil && cfg.exemptMatcher(r) {
-		next.ServeHTTP(w, r)
+		h.next.ServeHTTP(w, r)
 		return
 	}
 	if !shouldIntercept(r) {
-		next.ServeHTTP(w, r)
+		h.next.ServeHTTP(w, r)
 		return
 	}
 	p, ok := extractIdentity(r.Context())
 	if !ok {
-		next.ServeHTTP(w, r)
+		h.next.ServeHTTP(w, r)
 		return
 	}
 	idemKey := r.Header.Get(headerIdempotencyKey)
@@ -375,7 +379,7 @@ func serveWithIdempotency(
 	if !ok {
 		return
 	}
-	handleWithIdempotency(w, r, next, p, idemKey, fp, clk, store, cfg)
+	h.handle(w, r, p, idemKey, fp)
 }
 
 // shouldIntercept returns true when the request method and Idempotency-Key
@@ -385,35 +389,28 @@ func shouldIntercept(r *http.Request) bool {
 }
 
 // handleWithIdempotency executes the full idempotency flow for a qualifying request.
-func handleWithIdempotency(
-	w http.ResponseWriter,
-	r *http.Request,
-	next http.Handler,
-	p *auth.Principal,
-	idemKey string,
-	fingerprint string,
-	clk clock.Clock,
-	store Store,
-	cfg middlewareConfig,
-) {
+func (h idempotencyHandler) handle(w http.ResponseWriter, r *http.Request, p *auth.Principal, idemKey string, fp string) {
+	cfg := h.config
 	k := DeriveKey(p.TenantID, p.Subject, r.Method, r.URL.Path, idemKey)
 	ns := k.Namespace() // for slog correlation + recordOrRelease below
 	ctx := r.Context()
 	keyHash := keyShortHash(idemKey)
 
-	state, rec, receipt, err := store.Claim(ctx, k, fingerprint, cfg.leaseTTL)
+	state, rec, receipt, err := h.store.Claim(ctx, k, fp, cfg.leaseTTL)
 	if err != nil {
 		if errors.Is(err, ErrFingerprintMismatch) {
-			slog.WarnContext(ctx, "idempotency: fingerprint mismatch — key reused with different body",
+			slog.WarnContext(
+				ctx, "idempotency: fingerprint mismatch — key reused with different body",
 				"idempotency_key_hash", keyHash,
 				"subject", p.Subject,
 				"tenant_id", ns,
 			)
 			cfg.observeState(ctx, StateKeyReused)
-			httputil.WriteError(ctx, w, keyReusedError(err, fingerprint))
+			httputil.WriteError(ctx, w, keyReusedError(err, fp))
 			return
 		}
-		slog.ErrorContext(ctx, "idempotency: store claim failed",
+		slog.ErrorContext(
+			ctx, "idempotency: store claim failed",
 			"err", err,
 			"idempotency_key_hash", keyHash,
 			"subject", p.Subject,
@@ -438,7 +435,8 @@ func handleWithIdempotency(
 		// authorized. Re-checking authz on replay would let a previously-succeeded
 		// key later return 403, violating Idempotency-Key semantics (same key →
 		// same response). See ADR 202606021000-1043 威胁矩阵 row "回放跳过当前授权再校验".
-		slog.DebugContext(ctx, "idempotency: replay hit",
+		slog.DebugContext(
+			ctx, "idempotency: replay hit",
 			"idempotency_key_hash", keyHash,
 			"subject", p.Subject,
 			"tenant_id", ns,
@@ -447,7 +445,8 @@ func handleWithIdempotency(
 		replayResponse(w, rec)
 
 	case idempotency.ClaimBusy:
-		slog.WarnContext(ctx, "idempotency: key in progress",
+		slog.WarnContext(
+			ctx, "idempotency: key in progress",
 			"idempotency_key_hash", keyHash,
 			"subject", p.Subject,
 			"tenant_id", ns,
@@ -460,7 +459,7 @@ func handleWithIdempotency(
 
 	default: // ClaimAcquired
 		cfg.observeState(ctx, StateAcquired)
-		recordOrRelease(ctx, w, r, next, clk, receipt, cfg, keyHash, ns, p.Subject)
+		h.recordOrRelease(w, r, receipt, keyHash, ns, p.Subject)
 	}
 }
 
@@ -490,7 +489,13 @@ func replayResponse(w http.ResponseWriter, rec *RecordedResponse) {
 	}
 	w.Header().Set(headerIdempotencyReplayed, "true")
 	w.WriteHeader(rec.Status())
-	_, _ = w.Write(rec.Body()) //nolint:gosec // G705: Body() returns a cloned []byte from a trusted store; no user-controlled taint path
+	writeRecordedBody(w, rec.Body())
+}
+
+func writeRecordedBody(w http.ResponseWriter, body []byte) {
+	if _, err := io.Copy(w, bytes.NewReader(body)); err != nil {
+		slog.Error("idempotency: replay response body write failed", slog.Any("error", err))
+	}
 }
 
 // recordOrRelease wraps the handler invocation: runs next inside a
@@ -498,21 +503,19 @@ func replayResponse(w http.ResponseWriter, rec *RecordedResponse) {
 // releases the lease (on failure or oversized body) so the key can be
 // re-tried.
 //
-// A defer ensures Release is called even if the handler panics, so the
-// lease is not held indefinitely after a panic. The panic propagates
-// naturally after Release.
-func recordOrRelease(
-	ctx context.Context,
+// A defer ensures Release is called even if the handler panics, so the lease is
+// not held indefinitely after a panic. The panic propagates naturally after
+// Release.
+func (h idempotencyHandler) recordOrRelease(
 	w http.ResponseWriter,
 	r *http.Request,
-	next http.Handler,
-	clk clock.Clock,
 	receipt Receipt,
-	cfg middlewareConfig,
 	keyHash string,
-	ns string,
+	namespace string,
 	subject string,
 ) {
+	ctx := r.Context()
+	cfg := h.config
 	bw := newBufferingWriter(w, cfg.maxBodyBytes)
 
 	recorded := false
@@ -522,40 +525,43 @@ func recordOrRelease(
 			// if the request context was canceled during handler execution.
 			// The lease will expire via TTL regardless; log at Warn on error.
 			if err := receipt.Release(context.WithoutCancel(ctx)); err != nil {
-				slog.WarnContext(ctx, "idempotency: lease release failed (will expire via TTL)",
+				slog.WarnContext(
+					ctx, "idempotency: lease release failed (will expire via TTL)",
 					"err", err,
 					"idempotency_key_hash", keyHash,
 					"subject", subject,
-					"tenant_id", ns,
+					"tenant_id", namespace,
 				)
 			}
 		}
 	}()
 
-	next.ServeHTTP(bw, r)
+	h.next.ServeHTTP(bw, r)
 
 	// Only record if the handler committed a successful (2xx/3xx) response
 	// and the body did not overflow the capture limit.
 	if bw.committed() && shouldRecord(bw.status()) && !bw.isOversized() {
 		filteredHeader := filterSensitiveHeaders(bw.capturedHeader())
-		resp := newRecordedResponse(clk, bw.status(), bw.bufferedBody(), filteredHeader)
+		resp := newRecordedResponse(h.clk, bw.status(), bw.bufferedBody(), filteredHeader)
 		if err := receipt.Record(context.WithoutCancel(ctx), &resp, cfg.doneTTL); err != nil {
-			slog.ErrorContext(ctx, "idempotency: receipt record failed",
+			slog.ErrorContext(
+				ctx, "idempotency: receipt record failed",
 				"err", err,
 				"idempotency_key_hash", keyHash,
 				"subject", subject,
-				"tenant_id", ns,
+				"tenant_id", namespace,
 			)
 			// Fall through to Release via defer.
 		} else {
 			recorded = true
 		}
 	} else if bw.committed() && bw.isOversized() {
-		slog.WarnContext(ctx, "idempotency: response body oversized, not recorded",
+		slog.WarnContext(
+			ctx, "idempotency: response body oversized, not recorded",
 			"max_body_bytes", cfg.maxBodyBytes,
 			"idempotency_key_hash", keyHash,
 			"subject", subject,
-			"tenant_id", ns,
+			"tenant_id", namespace,
 		)
 		cfg.observeState(ctx, StateOversize)
 	}

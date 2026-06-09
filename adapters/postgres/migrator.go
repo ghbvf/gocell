@@ -128,7 +128,9 @@ func AllowForwardRebuild(migrationNumber int64, reason string) (ForwardRebuildPe
 	return forwardRebuildPermit{migrationNumber: migrationNumber, reason: reason}, nil
 }
 
-func (forwardRebuildPermit) forwardRebuildPermit() {}
+func (forwardRebuildPermit) forwardRebuildPermit() {
+	// Marker method only: the unexported method seals ForwardRebuildPermit.
+}
 
 // MigrationNumber returns the migration version this permit authorizes.
 func (p forwardRebuildPermit) MigrationNumber() int64 { return p.migrationNumber }

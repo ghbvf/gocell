@@ -17,6 +17,8 @@ import (
 	"github.com/ghbvf/gocell/pkg/migration"
 )
 
+const gotWantQuotedFmt = "got %q want %q"
+
 // Tables owned by the adapters/postgres migration set (in migration order).
 // Append here when a new table is introduced by a migration file so that
 // schema_guard documentation stays in sync with the embedded SQL.
@@ -1028,7 +1030,7 @@ func checkRLSPolicyShape(r expectedRLS, policies []rlsPolicyRow) error {
 	if p.name != r.Policy {
 		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
 			"schema_guard: row-security policy has unexpected name",
-			rlsPolicyShapeDetails(r, fmt.Sprintf("got %q want %q", p.name, r.Policy))...)
+			rlsPolicyShapeDetails(r, fmt.Sprintf(gotWantQuotedFmt, p.name, r.Policy))...)
 	}
 	if !strings.EqualFold(p.permissive, "PERMISSIVE") {
 		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
@@ -1221,7 +1223,7 @@ func verifyColumns(ctx context.Context, pool *Pool) error {
 					errcode.PublicString("table", ec.Table),
 					errcode.PublicString("column", ec.Column),
 				),
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got %q want %q", gotType, ec.Type))),
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(gotWantQuotedFmt, gotType, ec.Type))),
 			)
 		}
 		if gotNotNull != ec.NotNull {
@@ -1286,7 +1288,7 @@ func verifyDefaults(ctx context.Context, pool *Pool) error {
 					errcode.PublicString("table", ed.Table),
 					errcode.PublicString("column", ed.Column),
 				),
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got %q want %q", gotDefault, ed.Default))),
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(gotWantQuotedFmt, gotDefault, ed.Default))),
 			)
 		}
 	}

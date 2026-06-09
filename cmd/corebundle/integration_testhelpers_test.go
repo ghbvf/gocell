@@ -22,10 +22,10 @@ import (
 	"github.com/ghbvf/gocell/runtime/composition"
 )
 
-// runnable is the minimal interface shared by *bootstrap.Bootstrap and
+// runner is the minimal interface shared by *bootstrap.Bootstrap and
 // *composition.App, both of which expose Run(ctx) error. Tests use this to
 // avoid coupling to a concrete type.
-type runnable interface {
+type runner interface {
 	Run(ctx context.Context) error
 }
 
@@ -48,7 +48,7 @@ func buildTestSharedDeps(t *testing.T) *composition.SharedDeps {
 // modules (configcore → auditcore → accesscore).
 func buildBootstrapFromShared(
 	t *testing.T, shared *composition.SharedDeps, primaryLn net.Listener, extra ...bootstrap.Option,
-) (runnable, error) {
+) (runner, error) {
 	t.Helper()
 	ctx := context.Background()
 	_, locals := buildTestSharedDepsAndLocals(t)

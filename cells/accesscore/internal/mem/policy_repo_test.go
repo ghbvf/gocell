@@ -327,69 +327,81 @@ func TestPolicyRepository_ConcurrentSaveGet(t *testing.T) {
 	repo := mem.NewPolicyRepository()
 	ctx := context.Background()
 
-	var (
-		wg         sync.WaitGroup
-		mu         sync.Mutex
-		saveErrs   []error
-		getErrs    []error
-		listErrs   []error
-		deleteErrs []error
-	)
+	var wg sync.WaitGroup
+	errs := &concurrentPolicyErrors{}
 	const goroutines = 20
 
 	for i := range goroutines {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			policyID := "policy-concurrent"
-			p := makeTestPolicy(policyID, testTenant1)
-
-			if err := repo.Save(ctx, testTenant1, p); err != nil {
-				mu.Lock()
-				saveErrs = append(saveErrs, err)
-				mu.Unlock()
-			}
-			if _, err := repo.GetByID(ctx, testTenant1, policyID); err != nil {
-				// Not-found is acceptable when a concurrent Delete races ahead
-				var ec *errcode.Error
-				if !errors.As(err, &ec) || ec.Kind != errcode.KindNotFound {
-					mu.Lock()
-					getErrs = append(getErrs, err)
-					mu.Unlock()
-				}
-			}
-			if _, err := repo.ListByTenant(ctx, testTenant1); err != nil {
-				mu.Lock()
-				listErrs = append(listErrs, err)
-				mu.Unlock()
-			}
-			// Interleave Delete on even goroutines to exercise concurrent write paths
-			if idx%2 == 0 {
-				if err := repo.Delete(ctx, testTenant1, policyID); err != nil {
-					// Not-found is acceptable when another goroutine already deleted it
-					var ec *errcode.Error
-					if !errors.As(err, &ec) || ec.Kind != errcode.KindNotFound {
-						mu.Lock()
-						deleteErrs = append(deleteErrs, err)
-						mu.Unlock()
-					}
-				}
-			}
+			runConcurrentPolicyOperation(ctx, repo, idx, errs)
 		}(i)
 	}
 	wg.Wait()
 
 	// No unexpected infrastructure errors from any operation
-	if len(saveErrs) > 0 {
-		t.Errorf("concurrent Save() produced %d unexpected error(s): first=%v", len(saveErrs), saveErrs[0])
+	errs.assertEmpty(t)
+}
+
+type concurrentPolicyErrors struct {
+	mu         sync.Mutex
+	saveErrs   []error
+	getErrs    []error
+	listErrs   []error
+	deleteErrs []error
+}
+
+func (e *concurrentPolicyErrors) addSave(err error)   { e.add(&e.saveErrs, err) }
+func (e *concurrentPolicyErrors) addGet(err error)    { e.add(&e.getErrs, err) }
+func (e *concurrentPolicyErrors) addList(err error)   { e.add(&e.listErrs, err) }
+func (e *concurrentPolicyErrors) addDelete(err error) { e.add(&e.deleteErrs, err) }
+
+func (e *concurrentPolicyErrors) add(dst *[]error, err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	*dst = append(*dst, err)
+}
+
+func (e *concurrentPolicyErrors) assertEmpty(t *testing.T) {
+	t.Helper()
+
+	if len(e.saveErrs) > 0 {
+		t.Errorf("concurrent Save() produced %d unexpected error(s): first=%v", len(e.saveErrs), e.saveErrs[0])
 	}
-	if len(getErrs) > 0 {
-		t.Errorf("concurrent GetByID() produced %d unexpected error(s): first=%v", len(getErrs), getErrs[0])
+	if len(e.getErrs) > 0 {
+		t.Errorf("concurrent GetByID() produced %d unexpected error(s): first=%v", len(e.getErrs), e.getErrs[0])
 	}
-	if len(listErrs) > 0 {
-		t.Errorf("concurrent ListByTenant() produced %d unexpected error(s): first=%v", len(listErrs), listErrs[0])
+	if len(e.listErrs) > 0 {
+		t.Errorf("concurrent ListByTenant() produced %d unexpected error(s): first=%v", len(e.listErrs), e.listErrs[0])
 	}
-	if len(deleteErrs) > 0 {
-		t.Errorf("concurrent Delete() produced %d unexpected error(s): first=%v", len(deleteErrs), deleteErrs[0])
+	if len(e.deleteErrs) > 0 {
+		t.Errorf("concurrent Delete() produced %d unexpected error(s): first=%v", len(e.deleteErrs), e.deleteErrs[0])
 	}
+}
+
+func runConcurrentPolicyOperation(ctx context.Context, repo *mem.PolicyRepository, idx int, errs *concurrentPolicyErrors) {
+	policyID := "policy-concurrent"
+	p := makeTestPolicy(policyID, testTenant1)
+
+	if err := repo.Save(ctx, testTenant1, p); err != nil {
+		errs.addSave(err)
+	}
+	if _, err := repo.GetByID(ctx, testTenant1, policyID); err != nil && !isNotFoundError(err) {
+		errs.addGet(err)
+	}
+	if _, err := repo.ListByTenant(ctx, testTenant1); err != nil {
+		errs.addList(err)
+	}
+	// Interleave Delete on even goroutines to exercise concurrent write paths.
+	if idx%2 == 0 {
+		if err := repo.Delete(ctx, testTenant1, policyID); err != nil && !isNotFoundError(err) {
+			errs.addDelete(err)
+		}
+	}
+}
+
+func isNotFoundError(err error) bool {
+	var ec *errcode.Error
+	return errors.As(err, &ec) && ec.Kind == errcode.KindNotFound
 }

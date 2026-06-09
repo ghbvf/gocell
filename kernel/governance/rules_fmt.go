@@ -379,6 +379,11 @@ var bannedFieldNames = map[string]string{
 	"consumes":          "contractUsages with role subscribe",
 }
 
+const (
+	fieldEndpointsClients = "endpoints.clients"
+	contractMessageFmt    = "contract %q %s"
+)
+
 // validateFMT10 checks that no metadata entity uses banned legacy field names
 // as its ID. This is a heuristic check — it flags cells, slices, contracts,
 // journeys, and assemblies whose ID exactly matches a banned field name.
@@ -900,7 +905,7 @@ func (v *Validator) validateFMT37ForContract(c *metadata.ContractMeta) []Validat
 	// so a nil slice unambiguously means the key was not declared.
 	if c.Endpoints.Clients == nil {
 		results = append(results, v.newError(
-			codeFMT37, IssueRequired, file, "endpoints.clients",
+			codeFMT37, IssueRequired, file, fieldEndpointsClients,
 			fmt.Sprintf("grpc contract %q must declare endpoints.clients (use [] when no cell calls it)", c.ID),
 			"add clients: [] under endpoints (or the list of caller cells/actors)",
 		))
@@ -1364,7 +1369,7 @@ func (v *Validator) validateFMT28() []ValidationResult {
 			results = append(results, v.newError(
 				codeFMT28, IssueRequired,
 				contractFile(c),
-				"endpoints.clients",
+				fieldEndpointsClients,
 				fmt.Sprintf(
 					"contract %q has auth.clientsOnly:true but endpoints.clients is empty; "+
 						"clientsOnly auth requires at least one declared client cell",
@@ -1423,7 +1428,7 @@ func (v *Validator) validateFMT31() []ValidationResult {
 		results = append(results, v.newError(
 			codeFMT31, IssueRequired,
 			contractFile(c),
-			"endpoints.clients",
+			fieldEndpointsClients,
 			fmt.Sprintf(
 				"internal HTTP contract %q (path %q) has empty endpoints.clients; "+
 					"/internal/v1/ contracts must declare at least one caller cell "+
@@ -2000,32 +2005,32 @@ func (v *Validator) validateFMT40ForContract(c *metadata.ContractMeta) []Validat
 		case metadata.HeaderViolationName:
 			results = append(results, v.newError(
 				codeFMT40, fmt40IssueType(viol.Kind), file, field,
-				fmt.Sprintf("contract %q %s", c.ID, viol.Message),
+				fmt.Sprintf(contractMessageFmt, c.ID, viol.Message),
 				"use a canonical header name matching ^[A-Za-z][A-Za-z0-9-]*$ (e.g. X-Tenant-ID)",
 			))
 		case metadata.HeaderViolationType:
 			results = append(results, v.newError(
 				codeFMT40, fmt40IssueType(viol.Kind), file, field,
-				fmt.Sprintf("contract %q %s", c.ID, viol.Message),
+				fmt.Sprintf(contractMessageFmt, c.ID, viol.Message),
 				"declare type: string on the header schema (headers are populate-only; only string can be generated)",
 			))
 		case metadata.HeaderViolationConstraint:
 			results = append(results, v.newError(
 				codeFMT40, fmt40IssueType(viol.Kind), file, field,
-				fmt.Sprintf("contract %q %s", c.ID, viol.Message),
+				fmt.Sprintf(contractMessageFmt, c.ID, viol.Message),
 				"remove the length/numeric constraint and validate the header value in the cell adapter "+
 					"(e.g. tenant.ParseTenantID), which owns the per-endpoint fail behavior",
 			))
 		case metadata.HeaderViolationDuplicate:
 			results = append(results, v.newError(
 				codeFMT40, fmt40IssueType(viol.Kind), file, field,
-				fmt.Sprintf("contract %q %s", c.ID, viol.Message),
+				fmt.Sprintf(contractMessageFmt, c.ID, viol.Message),
 				"declare each HTTP header once (names are case-insensitive); remove the duplicate",
 			))
 		default:
 			results = append(results, v.newError(
 				codeFMT40, fmt40IssueType(viol.Kind), file, field,
-				fmt.Sprintf("contract %q %s", c.ID, viol.Message),
+				fmt.Sprintf(contractMessageFmt, c.ID, viol.Message),
 				"fix the endpoints.http.headers declaration",
 			))
 		}

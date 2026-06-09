@@ -128,56 +128,57 @@ type Tailer struct {
 // owner-token claim race-free. A single-process demo passes a real in-memory
 // distlock.Locker.
 //
-// replay and cursor are commonly the same object. For example,
-// sagaprojection.SagaJournalSource implements both projection.ReplaySource (via
-// Replay/Head) and projection.Cursor (via Position), so callers typically pass
-// the same value for both parameters. They are kept as distinct parameters so
-// the Tailer is not hard-coupled to a concrete type and so that read-only
-// replay sources can be paired with a separately-provided cursor if needed.
-func NewTailer(
-	clk clock.Clock,
-	replay projection.ReplaySource,
-	cursor projection.Cursor,
-	store projection.OwnerCheckpointStore,
-	txRunner persistence.TxRunner,
-	apply projection.Apply,
-	locker distlock.Locker,
-	cellID, projectionID string,
-	opts ...Option,
-) (*Tailer, error) {
+// TailerDeps bundles the Tailer's required collaborators. Replay and Cursor are
+// commonly the same object. For example, sagaprojection.SagaJournalSource
+// implements both projection.ReplaySource (via Replay/Head) and projection.Cursor
+// (via Position), so callers typically pass the same value for both fields. They
+// remain distinct so the Tailer is not hard-coupled to a concrete type and so
+// read-only replay sources can be paired with a separately-provided cursor.
+type TailerDeps struct {
+	Replay       projection.ReplaySource
+	Cursor       projection.Cursor
+	Store        projection.OwnerCheckpointStore
+	TxRunner     persistence.TxRunner
+	Apply        projection.Apply
+	Locker       distlock.Locker
+	CellID       string
+	ProjectionID string
+}
+
+func NewTailer(clk clock.Clock, deps TailerDeps, opts ...Option) (*Tailer, error) {
 	clock.MustHaveClock(clk, "tailer.NewTailer")
-	if validation.IsNilInterface(replay) {
+	if validation.IsNilInterface(deps.Replay) {
 		return nil, nilDepErr("replay")
 	}
-	if validation.IsNilInterface(cursor) {
+	if validation.IsNilInterface(deps.Cursor) {
 		return nil, nilDepErr("cursor")
 	}
-	if validation.IsNilInterface(store) {
+	if validation.IsNilInterface(deps.Store) {
 		return nil, nilDepErr("store")
 	}
-	if validation.IsNilInterface(txRunner) {
+	if validation.IsNilInterface(deps.TxRunner) {
 		return nil, nilDepErr("txRunner")
 	}
-	if apply == nil {
+	if deps.Apply == nil {
 		return nil, nilDepErr("apply")
 	}
-	if validation.IsNilInterface(locker) {
+	if validation.IsNilInterface(deps.Locker) {
 		return nil, nilDepErr("locker")
 	}
-	if cellID == "" || projectionID == "" {
+	if deps.CellID == "" || deps.ProjectionID == "" {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"tailer.NewTailer: cellID and projectionID must be non-empty")
 	}
 	t := &Tailer{
-		replay:               replay,
-		cursor:               cursor,
-		store:                store,
-		txRunner:             txRunner,
-		apply:                apply,
-		locker:               locker,
-		cellID:               cellID,
-		projectionID:         projectionID,
-		lockKey:              tailerLockKey(projectionID),
+		replay:               deps.Replay,
+		cursor:               deps.Cursor,
+		store:                deps.Store,
+		txRunner:             deps.TxRunner,
+		apply:                deps.Apply,
+		locker:               deps.Locker,
+		cellID:               deps.CellID,
+		projectionID:         deps.ProjectionID,
+		lockKey:              tailerLockKey(deps.ProjectionID),
 		clk:                  clk,
 		logger:               slog.Default(),
 		cfg:                  DefaultConfig(),
@@ -195,7 +196,7 @@ func NewTailer(
 			"tailer.NewTailer: Config.LeaseTTL must be ≥ distlock.MinTTL (it doubles as the distlock TTL)",
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("leaseTTL=%s minTTL=%s", t.cfg.LeaseTTL, distlock.MinTTL))))
 	}
-	rpn, err := healthz.SagaTailerReadyProbeName(cellID, projectionID)
+	rpn, err := healthz.SagaTailerReadyProbeName(deps.CellID, deps.ProjectionID)
 	if err != nil {
 		return nil, fmt.Errorf("tailer.NewTailer: readiness probe name: %w", err)
 	}

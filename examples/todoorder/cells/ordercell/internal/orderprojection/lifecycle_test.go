@@ -82,32 +82,33 @@ func eventSpec(id, topic string) contractspec.ContractSpec {
 	return contractspec.ContractSpec{ID: id, Kind: "event", Transport: "amqp", Topic: topic}
 }
 
+type projectionCoordFixture struct {
+	ProjectionID string
+	Store        projection.CheckpointStore
+	Replay       projection.ReplaySource
+	Cursor       projection.Cursor
+	Spec         contractspec.ContractSpec
+	Apply        projection.Apply
+	OnReset      projection.OnReset
+}
+
 // newProjectionCoord builds a Coordinator for one projection over the shared
 // whole-journal replay source and returns it plus its registered live handler.
-func newProjectionCoord(
-	t *testing.T,
-	projectionID string,
-	store projection.CheckpointStore,
-	replay projection.ReplaySource,
-	cursor projection.Cursor,
-	spec contractspec.ContractSpec,
-	apply projection.Apply,
-	onReset projection.OnReset,
-) (*projection.Coordinator, outbox.EntryHandler) {
+func newProjectionCoord(t *testing.T, f projectionCoordFixture) (*projection.Coordinator, outbox.EntryHandler) {
 	t.Helper()
 	reg := &lifecycleRegistrar{}
 	coord, err := projection.NewCoordinator(clock.Real(), projection.CoordinatorConfig{
 		Registrar:    reg,
 		CellID:       "ordercell",
-		ProjectionID: projectionID,
+		ProjectionID: f.ProjectionID,
 		TxRunner:     lifecycleDemoTxRunner{},
-		Store:        store,
-		Cursor:       cursor,
-		Replay:       replay,
+		Store:        f.Store,
+		Cursor:       f.Cursor,
+		Replay:       f.Replay,
 		Tracer:       nopLifecycleTracer{},
 	})
 	require.NoError(t, err)
-	require.NoError(t, coord.Subscribe(context.Background(), spec, apply, projection.WithOnReset(onReset)))
+	require.NoError(t, coord.Subscribe(context.Background(), f.Spec, f.Apply, projection.WithOnReset(f.OnReset)))
 	require.NotNil(t, reg.handler, "coordinator must register an event handler")
 	return coord, reg.handler
 }
@@ -163,15 +164,25 @@ func TestOrderProjection_FanInLifecycle(t *testing.T) {
 	svc, err := orderprojection.NewService()
 	require.NoError(t, err)
 
-	createdCoord, createdHandler := newProjectionCoord(t, "order_status",
-		checkpointStore, replaySource, cursor,
-		eventSpec(topicOrderCreated, topicOrderCreated),
-		svc.HandleOrderCreated, svc.ResetOrderStatus)
+	createdCoord, createdHandler := newProjectionCoord(t, projectionCoordFixture{
+		ProjectionID: "order_status",
+		Store:        checkpointStore,
+		Replay:       replaySource,
+		Cursor:       cursor,
+		Spec:         eventSpec(topicOrderCreated, topicOrderCreated),
+		Apply:        svc.HandleOrderCreated,
+		OnReset:      svc.ResetOrderStatus,
+	})
 
-	transitionCoord, transitionHandler := newProjectionCoord(t, "order_transition",
-		checkpointStore, replaySource, cursor,
-		eventSpec(topicOrderStatusChanged, topicOrderStatusChanged),
-		svc.HandleOrderStatusChanged, svc.ResetOrderTransition)
+	transitionCoord, transitionHandler := newProjectionCoord(t, projectionCoordFixture{
+		ProjectionID: "order_transition",
+		Store:        checkpointStore,
+		Replay:       replaySource,
+		Cursor:       cursor,
+		Spec:         eventSpec(topicOrderStatusChanged, topicOrderStatusChanged),
+		Apply:        svc.HandleOrderStatusChanged,
+		OnReset:      svc.ResetOrderTransition,
+	})
 
 	// -- Phase 1: cold-start live delivery (both streams) --
 	eCreatedA := appendCreated(t, replaySource, "order-A", "pending")

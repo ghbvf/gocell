@@ -8,6 +8,16 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+type newTopologyCase struct {
+	name            string
+	adapterMode     string
+	storageBackend  string
+	singlePod       bool
+	wantErr         bool
+	wantStorage     string
+	wantRequireProd bool
+}
+
 // INVARIANT: TOPOLOGY-SEALED-FIELD-FROZEN-01
 //
 // TestTopologyZeroExportedFields enforces the sealed-construction invariant: a
@@ -29,15 +39,7 @@ func TestTopologyZeroExportedFields(t *testing.T) {
 }
 
 func TestNewTopology(t *testing.T) {
-	cases := []struct {
-		name            string
-		adapterMode     string
-		storageBackend  string
-		singlePod       bool
-		wantErr         bool
-		wantStorage     string
-		wantRequireProd bool
-	}{
+	cases := []newTopologyCase{
 		{"empty normalizes to memory dev", "", "", false, false, "memory", false},
 		{"explicit memory dev", "", "memory", false, false, "memory", false},
 		{"memory real", "real", "memory", false, false, "memory", true},
@@ -48,28 +50,34 @@ func TestNewTopology(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			topo, err := NewTopology(tc.adapterMode, tc.storageBackend, tc.singlePod)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("expected error, got nil (topo=%+v)", topo)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if topo.StorageBackend() != tc.wantStorage {
-				t.Errorf("StorageBackend() = %q, want %q", topo.StorageBackend(), tc.wantStorage)
-			}
-			if topo.RequireProductionControlPlane() != tc.wantRequireProd {
-				t.Errorf("RequireProductionControlPlane() = %v, want %v",
-					topo.RequireProductionControlPlane(), tc.wantRequireProd)
-			}
-			if topo.SinglePodReplayProtection() != tc.singlePod {
-				t.Errorf("SinglePodReplayProtection() = %v, want %v",
-					topo.SinglePodReplayProtection(), tc.singlePod)
-			}
+			assertNewTopology(t, tc)
 		})
+	}
+}
+
+func assertNewTopology(t *testing.T, tc newTopologyCase) {
+	t.Helper()
+
+	topo, err := NewTopology(tc.adapterMode, tc.storageBackend, tc.singlePod)
+	if tc.wantErr {
+		if err == nil {
+			t.Fatalf("expected error, got nil (topo=%+v)", topo)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if topo.StorageBackend() != tc.wantStorage {
+		t.Errorf("StorageBackend() = %q, want %q", topo.StorageBackend(), tc.wantStorage)
+	}
+	if topo.RequireProductionControlPlane() != tc.wantRequireProd {
+		t.Errorf("RequireProductionControlPlane() = %v, want %v",
+			topo.RequireProductionControlPlane(), tc.wantRequireProd)
+	}
+	if topo.SinglePodReplayProtection() != tc.singlePod {
+		t.Errorf("SinglePodReplayProtection() = %v, want %v",
+			topo.SinglePodReplayProtection(), tc.singlePod)
 	}
 }
 

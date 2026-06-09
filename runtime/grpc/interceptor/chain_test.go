@@ -82,7 +82,7 @@ func TestNewUnaryChain(t *testing.T) {
 // runtime sentinel, so NewUnaryChain panics at construction (#1152 F1).
 func TestNewUnaryChainNilRegistrarPanics(t *testing.T) {
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Fatalf("NewUnaryChain with a nil Deps.Registrar must panic")
 		}
 	}()

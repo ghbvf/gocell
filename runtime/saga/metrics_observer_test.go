@@ -149,16 +149,18 @@ func TestLeaderSkipLogLevel(t *testing.T) {
 	}
 }
 
+type acquireLeadSkipCase struct {
+	name   string
+	err    error
+	reason executor.LeaderSkipReason
+}
+
 // ---------------------------------------------------------------------------
 // acquireLead emits ObserveLeaderSkip with the classified reason
 // ---------------------------------------------------------------------------
 
 func TestAcquireLead_Skip_EmitsLeaderSkipReason(t *testing.T) {
-	cases := []struct {
-		name   string
-		err    error
-		reason executor.LeaderSkipReason
-	}{
+	cases := []acquireLeadSkipCase{
 		{"contended", errcode.New(errcode.KindConflict, errcode.ErrDistlockTimeout, "held"), executor.LeaderSkipContended},
 		{"ctx_canceled", context.Canceled, executor.LeaderSkipCtxCanceled},
 		{"backend_error", errors.New("redis down"), executor.LeaderSkipBackendError},
@@ -176,32 +178,38 @@ func TestAcquireLead_Skip_EmitsLeaderSkipReason(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			clk := newFakeClock()
-			obs := &recordingObserver{}
-			c, err := NewCoordinator(newMemJournal(clk), newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk,
-				WithConfig(leaderElectCfg()), WithObserver(obs), WithLeaderElect(errLocker{err: tc.err}))
-			if err != nil {
-				t.Fatalf("NewCoordinator: %v", err)
-			}
-			ci := journal.ClaimedInstance{
-				Instance: ksaga.NewInstance(mustNewUUID(t), "def-skip", clk.Now()),
-				LeaseID:  "lease-1",
-			}
-			_, _, lead := c.acquireLead(context.Background(), ci)
-			if lead {
-				t.Fatal("acquireLead returned lead=true on Acquire error")
-			}
-			skips := obs.snapshotSkips()
-			if len(skips) != 1 {
-				t.Fatalf("ObserveLeaderSkip calls = %d, want 1", len(skips))
-			}
-			if skips[0].reason != tc.reason {
-				t.Errorf("reason = %q, want %q", skips[0].reason, tc.reason)
-			}
-			if skips[0].definitionID != "def-skip" {
-				t.Errorf("definitionID = %q, want def-skip", skips[0].definitionID)
-			}
+			assertAcquireLeadSkipReason(t, reg, tc)
 		})
+	}
+}
+
+func assertAcquireLeadSkipReason(t *testing.T, reg *ksaga.InMemoryRegistry, tc acquireLeadSkipCase) {
+	t.Helper()
+
+	clk := newFakeClock()
+	obs := &recordingObserver{}
+	c, err := NewCoordinator(newMemJournal(clk), newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk,
+		WithConfig(leaderElectCfg()), WithObserver(obs), WithLeaderElect(errLocker{err: tc.err}))
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	ci := journal.ClaimedInstance{
+		Instance: ksaga.NewInstance(mustNewUUID(t), "def-skip", clk.Now()),
+		LeaseID:  "lease-1",
+	}
+	_, _, lead := c.acquireLead(context.Background(), ci)
+	if lead {
+		t.Fatal("acquireLead returned lead=true on Acquire error")
+	}
+	skips := obs.snapshotSkips()
+	if len(skips) != 1 {
+		t.Fatalf("ObserveLeaderSkip calls = %d, want 1", len(skips))
+	}
+	if skips[0].reason != tc.reason {
+		t.Errorf("reason = %q, want %q", skips[0].reason, tc.reason)
+	}
+	if skips[0].definitionID != "def-skip" {
+		t.Errorf("definitionID = %q, want def-skip", skips[0].definitionID)
 	}
 }
 

@@ -37,165 +37,207 @@ func TestNewBearerHeaderAuthenticator(t *testing.T) {
 	}
 
 	t.Run("success delegates to shared bearer core", func(t *testing.T) {
-		v := bearerCoreVerifier{claims: claims}
-		a := NewBearerHeaderAuthenticator(v)
-		req := httptest.NewRequest(http.MethodGet, "/ws", nil)
-		req.Header.Set("Authorization", "Bearer tok")
-
-		p, ok, err := a.Authenticate(req)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if !ok {
-			t.Fatal("expected ok=true")
-		}
-		if p == nil {
-			t.Fatal("expected non-nil principal")
-		}
-		if p.Subject != claims.Subject {
-			t.Errorf("Subject = %q, want %q", p.Subject, claims.Subject)
-		}
-		if p.TenantID != claims.TenantID {
-			t.Errorf("TenantID = %q, want %q", p.TenantID, claims.TenantID)
-		}
-		if !p.PasswordResetRequired {
-			t.Error("PasswordResetRequired = false, want true")
-		}
-		if p.Claims["sid"] != claims.SessionID {
-			t.Errorf("Claims[sid] = %q, want %q", p.Claims["sid"], claims.SessionID)
-		}
-		if p.Claims["iss"] != claims.Issuer {
-			t.Errorf("Claims[iss] = %q, want %q", p.Claims["iss"], claims.Issuer)
-		}
-		if p.Claims["token_use"] != string(claims.TokenUse) {
-			t.Errorf("Claims[token_use] = %q, want %q", p.Claims["token_use"], claims.TokenUse)
-		}
-		if !p.ExpiresAt.Equal(exp) {
-			t.Errorf("ExpiresAt = %v, want %v", p.ExpiresAt, exp)
-		}
-		originalFirstRole := claims.Roles[0]
-		p.Roles[0] = "mutated"
-		if claims.Roles[0] != originalFirstRole {
-			t.Error("Roles must be a defensive copy")
-		}
+		runBearerHeaderSuccess(t, claims, exp)
 	})
 
 	t.Run("missing header is absent", func(t *testing.T) {
-		a := NewBearerHeaderAuthenticator(bearerCoreVerifier{})
-		p, ok, err := a.Authenticate(httptest.NewRequest(http.MethodGet, "/ws", nil))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if ok {
-			t.Fatal("expected ok=false")
-		}
-		if p == nil {
-			t.Fatal("expected absent principal sentinel")
-		}
+		runBearerHeaderMissing(t)
 	})
 
 	t.Run("wrong scheme is absent", func(t *testing.T) {
-		a := NewBearerHeaderAuthenticator(bearerCoreVerifier{})
-		req := httptest.NewRequest(http.MethodGet, "/ws", nil)
-		req.Header.Set("Authorization", "ServiceToken abc")
-
-		p, ok, err := a.Authenticate(req)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if ok {
-			t.Fatal("expected ok=false")
-		}
-		if p == nil {
-			t.Fatal("expected absent principal sentinel")
-		}
+		runBearerHeaderWrongScheme(t)
 	})
 
 	t.Run("verify failure returns error and nil principal", func(t *testing.T) {
-		sentinel := errors.New("verify boom")
-		a := NewBearerHeaderAuthenticator(bearerCoreVerifier{err: sentinel})
-		req := httptest.NewRequest(http.MethodGet, "/ws", nil)
-		req.Header.Set("Authorization", "Bearer bad")
-
-		p, ok, err := a.Authenticate(req)
-		if !errors.Is(err, sentinel) {
-			t.Fatalf("err = %v, want sentinel", err)
-		}
-		if ok {
-			t.Fatal("expected ok=false")
-		}
-		if p != nil {
-			t.Fatalf("principal = %+v, want nil", p)
-		}
+		runBearerHeaderVerifyFailure(t)
 	})
 
 	t.Run("empty subject is rejected by shared bearer core", func(t *testing.T) {
-		a := NewBearerHeaderAuthenticator(bearerCoreVerifier{claims: Claims{Subject: ""}})
-		req := httptest.NewRequest(http.MethodGet, "/ws", nil)
-		req.Header.Set("Authorization", "Bearer tok")
-
-		p, ok, err := a.Authenticate(req)
-		if err == nil {
-			t.Fatal("expected error for empty subject")
-		}
-		if ok {
-			t.Fatal("expected ok=false")
-		}
-		if p != nil {
-			t.Fatalf("principal = %+v, want nil", p)
-		}
-		var ecErr *errcode.Error
-		if !errors.As(err, &ecErr) {
-			t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
-		}
-		if ecErr.Code != errcode.ErrAuthUnauthorized {
-			t.Errorf("Code = %v, want %v", ecErr.Code, errcode.ErrAuthUnauthorized)
-		}
+		runBearerHeaderEmptySubject(t)
 	})
 }
 
 func TestAuthenticateBearer(t *testing.T) {
 	t.Run("success injects principal and ctxkeys", func(t *testing.T) {
-		v := bearerCoreVerifier{claims: Claims{Subject: "user-1", SessionID: "sess-9"}}
-
-		ctx, p, err := AuthenticateBearer(context.Background(), v, "tok")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if p == nil || p.Subject != "user-1" {
-			t.Fatalf("principal subject = %+v, want user-1", p)
-		}
-		if got, ok := FromContext(ctx); !ok || got.Subject != "user-1" {
-			t.Fatalf("FromContext = %+v ok=%v, want user-1", got, ok)
-		}
-		if actor, ok := ctxkeys.ActorIDFrom(ctx); !ok || actor != "user-1" {
-			t.Fatalf("actor ctxkey = %q ok=%v, want user-1", actor, ok)
-		}
-		if sub, ok := ctxkeys.SubjectIDFrom(ctx); !ok || sub != "user-1" {
-			t.Fatalf("subject ctxkey = %q ok=%v, want user-1", sub, ok)
-		}
-		if sid, ok := ctxkeys.SessionIDFrom(ctx); !ok || sid != "sess-9" {
-			t.Fatalf("session ctxkey = %q ok=%v, want sess-9", sid, ok)
-		}
+		runAuthenticateBearerSuccess(t)
 	})
 
 	t.Run("verify failure returns ctx unchanged and nil principal", func(t *testing.T) {
-		sentinel := errors.New("verify boom")
-		v := bearerCoreVerifier{err: sentinel}
-		base := context.Background()
-
-		ctx, p, err := AuthenticateBearer(base, v, "tok")
-		if !errors.Is(err, sentinel) {
-			t.Fatalf("err = %v, want sentinel", err)
-		}
-		if p != nil {
-			t.Fatalf("principal = %+v, want nil on failure", p)
-		}
-		// ctx returned unchanged: no principal must leak from a failed verify.
-		if _, ok := FromContext(ctx); ok {
-			t.Fatalf("principal leaked into ctx after verify failure")
-		}
+		runAuthenticateBearerVerifyFailure(t)
 	})
+}
+
+func runBearerHeaderSuccess(t *testing.T, claims Claims, exp time.Time) {
+	t.Helper()
+
+	v := bearerCoreVerifier{claims: claims}
+	a := NewBearerHeaderAuthenticator(v)
+	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+
+	p, ok, err := a.Authenticate(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if p == nil {
+		t.Fatal("expected non-nil principal")
+	}
+	if p.Subject != claims.Subject {
+		t.Errorf("Subject = %q, want %q", p.Subject, claims.Subject)
+	}
+	if p.TenantID != claims.TenantID {
+		t.Errorf("TenantID = %q, want %q", p.TenantID, claims.TenantID)
+	}
+	if !p.PasswordResetRequired {
+		t.Error("PasswordResetRequired = false, want true")
+	}
+	if p.Claims["sid"] != claims.SessionID {
+		t.Errorf("Claims[sid] = %q, want %q", p.Claims["sid"], claims.SessionID)
+	}
+	if p.Claims["iss"] != claims.Issuer {
+		t.Errorf("Claims[iss] = %q, want %q", p.Claims["iss"], claims.Issuer)
+	}
+	if p.Claims["token_use"] != string(claims.TokenUse) {
+		t.Errorf("Claims[token_use] = %q, want %q", p.Claims["token_use"], claims.TokenUse)
+	}
+	if !p.ExpiresAt.Equal(exp) {
+		t.Errorf("ExpiresAt = %v, want %v", p.ExpiresAt, exp)
+	}
+	originalFirstRole := claims.Roles[0]
+	p.Roles[0] = "mutated"
+	if claims.Roles[0] != originalFirstRole {
+		t.Error("Roles must be a defensive copy")
+	}
+}
+
+func runBearerHeaderMissing(t *testing.T) {
+	t.Helper()
+
+	a := NewBearerHeaderAuthenticator(bearerCoreVerifier{})
+	p, ok, err := a.Authenticate(httptest.NewRequest(http.MethodGet, "/ws", nil))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Fatal("expected ok=false")
+	}
+	if p == nil {
+		t.Fatal("expected absent principal sentinel")
+	}
+}
+
+func runBearerHeaderWrongScheme(t *testing.T) {
+	t.Helper()
+
+	a := NewBearerHeaderAuthenticator(bearerCoreVerifier{})
+	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	req.Header.Set("Authorization", "ServiceToken abc")
+
+	p, ok, err := a.Authenticate(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Fatal("expected ok=false")
+	}
+	if p == nil {
+		t.Fatal("expected absent principal sentinel")
+	}
+}
+
+func runBearerHeaderVerifyFailure(t *testing.T) {
+	t.Helper()
+
+	sentinel := errors.New("verify boom")
+	a := NewBearerHeaderAuthenticator(bearerCoreVerifier{err: sentinel})
+	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	req.Header.Set("Authorization", "Bearer bad")
+
+	p, ok, err := a.Authenticate(req)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("err = %v, want sentinel", err)
+	}
+	if ok {
+		t.Fatal("expected ok=false")
+	}
+	if p != nil {
+		t.Fatalf("principal = %+v, want nil", p)
+	}
+}
+
+func runBearerHeaderEmptySubject(t *testing.T) {
+	t.Helper()
+
+	a := NewBearerHeaderAuthenticator(bearerCoreVerifier{claims: Claims{Subject: ""}})
+	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+
+	p, ok, err := a.Authenticate(req)
+	if err == nil {
+		t.Fatal("expected error for empty subject")
+	}
+	if ok {
+		t.Fatal("expected ok=false")
+	}
+	if p != nil {
+		t.Fatalf("principal = %+v, want nil", p)
+	}
+	var ecErr *errcode.Error
+	if !errors.As(err, &ecErr) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+	if ecErr.Code != errcode.ErrAuthUnauthorized {
+		t.Errorf("Code = %v, want %v", ecErr.Code, errcode.ErrAuthUnauthorized)
+	}
+}
+
+func runAuthenticateBearerSuccess(t *testing.T) {
+	t.Helper()
+
+	v := bearerCoreVerifier{claims: Claims{Subject: "user-1", SessionID: "sess-9"}}
+
+	ctx, p, err := AuthenticateBearer(context.Background(), v, "tok")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p == nil || p.Subject != "user-1" {
+		t.Fatalf("principal subject = %+v, want user-1", p)
+	}
+	if got, ok := FromContext(ctx); !ok || got.Subject != "user-1" {
+		t.Fatalf("FromContext = %+v ok=%v, want user-1", got, ok)
+	}
+	if actor, ok := ctxkeys.ActorIDFrom(ctx); !ok || actor != "user-1" {
+		t.Fatalf("actor ctxkey = %q ok=%v, want user-1", actor, ok)
+	}
+	if sub, ok := ctxkeys.SubjectIDFrom(ctx); !ok || sub != "user-1" {
+		t.Fatalf("subject ctxkey = %q ok=%v, want user-1", sub, ok)
+	}
+	if sid, ok := ctxkeys.SessionIDFrom(ctx); !ok || sid != "sess-9" {
+		t.Fatalf("session ctxkey = %q ok=%v, want sess-9", sid, ok)
+	}
+}
+
+func runAuthenticateBearerVerifyFailure(t *testing.T) {
+	t.Helper()
+
+	sentinel := errors.New("verify boom")
+	v := bearerCoreVerifier{err: sentinel}
+	base := context.Background()
+
+	ctx, p, err := AuthenticateBearer(base, v, "tok")
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("err = %v, want sentinel", err)
+	}
+	if p != nil {
+		t.Fatalf("principal = %+v, want nil on failure", p)
+	}
+	// ctx returned unchanged: no principal must leak from a failed verify.
+	if _, ok := FromContext(ctx); ok {
+		t.Fatalf("principal leaked into ctx after verify failure")
+	}
 }
 
 func TestAuthenticateBearer_EmptySubject(t *testing.T) {

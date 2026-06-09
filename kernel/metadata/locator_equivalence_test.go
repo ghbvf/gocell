@@ -75,6 +75,22 @@ func TestLocator_RealTreeConventionalManifestEquivalence(t *testing.T) {
 	conv := summariseSources(convSrc)
 	man := summariseSources(manSrc)
 
+	assertConventionalDiscoveryNonVacuous(t, conv, convSrc)
+
+	if !reflect.DeepEqual(conv, man) {
+		onlyConv := difference(conv, man)
+		onlyMan := difference(man, conv)
+		t.Errorf("conventional vs manifest discovery diverge — the committed "+
+			".gocell/manifest.yaml must mirror conventional scope.\n"+
+			"only in conventional (manifest dropped these): %v\n"+
+			"only in manifest (manifest added these): %v",
+			onlyConv, onlyMan)
+	}
+}
+
+func assertConventionalDiscoveryNonVacuous(t *testing.T, conv []string, convSrc []MetadataSource) {
+	t.Helper()
+
 	// Anti-vacuity: the comparison only proves something if conventional mode
 	// actually discovered sources, including the examples/ subtree that a
 	// minimal manifest would drop. Without this, two empty slices would pass.
@@ -85,6 +101,12 @@ func TestLocator_RealTreeConventionalManifestEquivalence(t *testing.T) {
 		t.Fatal("vacuous guard: conventional mode discovered no examples/ source; " +
 			"the equivalence assertion would not catch a manifest that drops the examples subtree")
 	}
+	assertExamplesCellsHaveIDs(t, convSrc)
+}
+
+func assertExamplesCellsHaveIDs(t *testing.T, convSrc []MetadataSource) {
+	t.Helper()
+
 	// CellID-dimension anti-vacuity: summariseSources compares "kind:path:cellID",
 	// so the DeepEqual would still pass if BOTH modes derived an empty CellID for
 	// examples cells. Assert at least one examples/ SourceCell carries a non-empty
@@ -103,16 +125,6 @@ func TestLocator_RealTreeConventionalManifestEquivalence(t *testing.T) {
 	if !examplesCellWithID {
 		t.Fatal("anti-vacuity: no examples/ SourceCell with a non-empty CellID; " +
 			"CellID-dimension equivalence is not proven")
-	}
-
-	if !reflect.DeepEqual(conv, man) {
-		onlyConv := difference(conv, man)
-		onlyMan := difference(man, conv)
-		t.Errorf("conventional vs manifest discovery diverge — the committed "+
-			".gocell/manifest.yaml must mirror conventional scope.\n"+
-			"only in conventional (manifest dropped these): %v\n"+
-			"only in manifest (manifest added these): %v",
-			onlyConv, onlyMan)
 	}
 }
 

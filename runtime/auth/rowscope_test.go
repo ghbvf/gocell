@@ -31,6 +31,20 @@ func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
 func (h *captureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
 func (h *captureHandler) WithGroup(_ string) slog.Handler      { return h }
 
+type rowVisibilityCase struct {
+	name        string
+	principal   *Principal
+	wantScope   tenant.RowScope
+	wantSubject string
+	wantErr     bool
+}
+
+type superAdminAuditCase struct {
+	name      string
+	principal *Principal
+	wantError bool // true = expect ≥1 Error-level record with actor+scope+tenant+reason keys
+}
+
 // TestPrincipalRowVisibility_DerivationTable verifies the full derivation table
 // for Principal.RowVisibility across all PrincipalKind values and role combos.
 //
@@ -45,13 +59,7 @@ func (h *captureHandler) WithGroup(_ string) slog.Handler      { return h }
 func TestPrincipalRowVisibility_DerivationTable(t *testing.T) {
 	ctx := rowVisibilityTestCtx()
 
-	cases := []struct {
-		name        string
-		principal   *Principal
-		wantScope   tenant.RowScope
-		wantSubject string
-		wantErr     bool
-	}{
+	cases := []rowVisibilityCase{
 		{
 			name:      "nil_receiver_fail_closed",
 			principal: nil,
@@ -155,23 +163,29 @@ func TestPrincipalRowVisibility_DerivationTable(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			vis, err := tc.principal.RowVisibility(ctx)
-			if tc.wantErr {
-				if err == nil {
-					t.Errorf("RowVisibility(%s): expected error, got visibility %v", tc.name, vis)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("RowVisibility(%s): unexpected error: %v", tc.name, err)
-			}
-			if vis.Scope() != tc.wantScope {
-				t.Errorf("RowVisibility(%s): scope = %v, want %v", tc.name, vis.Scope(), tc.wantScope)
-			}
-			if vis.Subject() != tc.wantSubject {
-				t.Errorf("RowVisibility(%s): subject = %q, want %q", tc.name, vis.Subject(), tc.wantSubject)
-			}
+			assertPrincipalRowVisibility(t, ctx, tc)
 		})
+	}
+}
+
+func assertPrincipalRowVisibility(t *testing.T, ctx context.Context, tc rowVisibilityCase) {
+	t.Helper()
+
+	vis, err := tc.principal.RowVisibility(ctx)
+	if tc.wantErr {
+		if err == nil {
+			t.Errorf("RowVisibility(%s): expected error, got visibility %v", tc.name, vis)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("RowVisibility(%s): unexpected error: %v", tc.name, err)
+	}
+	if vis.Scope() != tc.wantScope {
+		t.Errorf("RowVisibility(%s): scope = %v, want %v", tc.name, vis.Scope(), tc.wantScope)
+	}
+	if vis.Subject() != tc.wantSubject {
+		t.Errorf("RowVisibility(%s): subject = %q, want %q", tc.name, vis.Subject(), tc.wantSubject)
 	}
 }
 
@@ -197,11 +211,7 @@ func TestPrincipalRowVisibility_SuperAdminMandatoryAudit(t *testing.T) {
 
 	ctx := rowVisibilityTestCtx()
 
-	cases := []struct {
-		name      string
-		principal *Principal
-		wantError bool // true = expect ≥1 Error-level record with actor+scope+tenant+reason keys
-	}{
+	cases := []superAdminAuditCase{
 		{
 			name: "superadmin_emits_mandatory_audit",
 			principal: &Principal{
@@ -255,42 +265,55 @@ func TestPrincipalRowVisibility_SuperAdminMandatoryAudit(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			capture.records = capture.records[:0] // reset between sub-tests
-
-			_, _ = tc.principal.RowVisibility(ctx) // only testing slog side-effect
-
-			// Count Error-level records with all required FR-007 keys.
-			errorCount := 0
-			for _, r := range capture.records {
-				if r.Level != slog.LevelError {
-					continue
-				}
-				hasActor, hasScope, hasTenant, hasReason := false, false, false, false
-				r.Attrs(func(a slog.Attr) bool {
-					switch a.Key {
-					case "actor":
-						hasActor = true
-					case "scope":
-						hasScope = true
-					case "tenant":
-						hasTenant = true
-					case "reason":
-						hasReason = true
-					}
-					return true
-				})
-				if hasActor && hasScope && hasTenant && hasReason {
-					errorCount++
-				}
-			}
-
-			if tc.wantError && errorCount == 0 {
-				t.Errorf("%s: expected ≥1 slog.Error with keys {actor,scope,tenant,reason}, got 0 matching records (total records: %d)",
-					tc.name, len(capture.records))
-			}
-			if !tc.wantError && errorCount > 0 {
-				t.Errorf("%s: expected no slog.Error audit records, got %d", tc.name, errorCount)
-			}
+			assertSuperAdminAudit(t, ctx, capture, tc)
 		})
 	}
+}
+
+func assertSuperAdminAudit(t *testing.T, ctx context.Context, capture *captureHandler, tc superAdminAuditCase) {
+	t.Helper()
+
+	capture.records = capture.records[:0] // reset between sub-tests
+
+	_, _ = tc.principal.RowVisibility(ctx) // only testing slog side-effect
+
+	errorCount := countMandatoryAuditRecords(capture.records)
+	if tc.wantError && errorCount == 0 {
+		t.Errorf("%s: expected ≥1 slog.Error with keys {actor,scope,tenant,reason}, got 0 matching records (total records: %d)",
+			tc.name, len(capture.records))
+	}
+	if !tc.wantError && errorCount > 0 {
+		t.Errorf("%s: expected no slog.Error audit records, got %d", tc.name, errorCount)
+	}
+}
+
+func countMandatoryAuditRecords(records []slog.Record) int {
+	errorCount := 0
+	for _, r := range records {
+		if r.Level != slog.LevelError {
+			continue
+		}
+		if hasMandatoryAuditAttrs(r) {
+			errorCount++
+		}
+	}
+	return errorCount
+}
+
+func hasMandatoryAuditAttrs(r slog.Record) bool {
+	hasActor, hasScope, hasTenant, hasReason := false, false, false, false
+	r.Attrs(func(a slog.Attr) bool {
+		switch a.Key {
+		case "actor":
+			hasActor = true
+		case "scope":
+			hasScope = true
+		case "tenant":
+			hasTenant = true
+		case "reason":
+			hasReason = true
+		}
+		return true
+	})
+	return hasActor && hasScope && hasTenant && hasReason
 }

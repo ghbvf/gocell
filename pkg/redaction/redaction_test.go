@@ -761,6 +761,14 @@ type stringerWithSecret struct{}
 
 func (stringerWithSecret) String() string { return "api_key=sekret" }
 
+type redactSlogAttrKindCase struct {
+	name      string
+	attr      slog.Attr
+	wantKind  slog.Kind
+	wantMask  bool   // true = result must contain Mask
+	wantValue string // non-empty = exact expected string value
+}
+
 // TestRedactSlogAttr_PassthroughKinds locks the behavior of redactSlogValue for
 // all slog.Value kinds.
 //
@@ -783,13 +791,7 @@ func TestRedactSlogAttr_PassthroughKinds(t *testing.T) {
 
 	fixedTime := time.Unix(1700000000, 0)
 
-	cases := []struct {
-		name      string
-		attr      slog.Attr
-		wantKind  slog.Kind
-		wantMask  bool   // true = result must contain Mask
-		wantValue string // non-empty = exact expected string value
-	}{
+	cases := []redactSlogAttrKindCase{
 		{
 			name:     "bool passthrough",
 			attr:     slog.Bool("flag", true),
@@ -869,30 +871,36 @@ func TestRedactSlogAttr_PassthroughKinds(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := redaction.RedactSlogAttr(tc.attr)
-
-			if got.Key != tc.attr.Key {
-				t.Errorf("RedactSlogAttr key changed: got %q, want %q", got.Key, tc.attr.Key)
-			}
-			if got.Value.Kind() != tc.wantKind {
-				t.Errorf("RedactSlogAttr(%v): got kind %v, want %v",
-					tc.attr, got.Value.Kind(), tc.wantKind)
-			}
-			if tc.wantValue != "" {
-				gotStr := got.Value.String()
-				if gotStr != tc.wantValue {
-					t.Errorf("RedactSlogAttr(%v): got %q, want %q", tc.attr, gotStr, tc.wantValue)
-				}
-			}
-			gotStr := got.Value.String()
-			if tc.wantMask && !strings.Contains(gotStr, redaction.Mask) {
-				t.Errorf("RedactSlogAttr(%v): expected mask %q in output %q",
-					tc.attr, redaction.Mask, gotStr)
-			}
-			if !tc.wantMask && strings.Contains(gotStr, redaction.Mask) {
-				t.Errorf("RedactSlogAttr(%v): unexpected mask in output %q", tc.attr, gotStr)
-			}
+			assertRedactSlogAttrKind(t, tc)
 		})
+	}
+}
+
+func assertRedactSlogAttrKind(t *testing.T, tc redactSlogAttrKindCase) {
+	t.Helper()
+
+	got := redaction.RedactSlogAttr(tc.attr)
+
+	if got.Key != tc.attr.Key {
+		t.Errorf("RedactSlogAttr key changed: got %q, want %q", got.Key, tc.attr.Key)
+	}
+	if got.Value.Kind() != tc.wantKind {
+		t.Errorf("RedactSlogAttr(%v): got kind %v, want %v",
+			tc.attr, got.Value.Kind(), tc.wantKind)
+	}
+	if tc.wantValue != "" {
+		gotStr := got.Value.String()
+		if gotStr != tc.wantValue {
+			t.Errorf("RedactSlogAttr(%v): got %q, want %q", tc.attr, gotStr, tc.wantValue)
+		}
+	}
+	gotStr := got.Value.String()
+	if tc.wantMask && !strings.Contains(gotStr, redaction.Mask) {
+		t.Errorf("RedactSlogAttr(%v): expected mask %q in output %q",
+			tc.attr, redaction.Mask, gotStr)
+	}
+	if !tc.wantMask && strings.Contains(gotStr, redaction.Mask) {
+		t.Errorf("RedactSlogAttr(%v): unexpected mask in output %q", tc.attr, gotStr)
 	}
 }
 

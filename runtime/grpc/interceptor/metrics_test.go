@@ -89,7 +89,7 @@ func TestUnaryMetrics(t *testing.T) {
 
 func TestUnaryMetricsNilCollectorPanics(t *testing.T) {
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Fatalf("UnaryMetrics with nil collector must panic at construction")
 		}
 	}()

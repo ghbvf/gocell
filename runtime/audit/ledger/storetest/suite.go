@@ -44,6 +44,13 @@ import (
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
+const (
+	appendEventErrFmt = "Append %s: %v"
+	tenantNoneEventID = "ti-none"
+	chainAEventID     = "chain-a-1"
+	chainBEventID     = "chain-b-1"
+)
+
 const fmtErrGetBySeq1 = "GetBySeq(1): %v"
 
 // passthroughTxRunner is a no-op TxRunner used by MemStore conformance tests.
@@ -869,7 +876,7 @@ func runQueryOrderingTimestampDescIDAsc(t *testing.T, factory Factory) {
 			Payload:   []byte(`{}`),
 		}
 		if err := store.Append(context.Background(), e); err != nil {
-			t.Fatalf("Append %s: %v", en.id, err)
+			t.Fatalf(appendEventErrFmt, en.id, err)
 		}
 	}
 
@@ -1074,7 +1081,7 @@ func runQueryTenantIsolation(t *testing.T, factory Factory) {
 		{"ti-a1", isoTenantA},
 		{"ti-a2", isoTenantA},
 		{"ti-b1", isoTenantB},
-		{"ti-none", ""},
+		{tenantNoneEventID, ""},
 	}
 	for _, s := range seed {
 		e := &ledger.Entry{
@@ -1086,7 +1093,7 @@ func runQueryTenantIsolation(t *testing.T, factory Factory) {
 			Payload:   []byte(`{}`),
 		}
 		if err := store.Append(context.Background(), e); err != nil {
-			t.Fatalf("Append %s: %v", s.eventID, err)
+			t.Fatalf(appendEventErrFmt, s.eventID, err)
 		}
 	}
 
@@ -1096,12 +1103,12 @@ func runQueryTenantIsolation(t *testing.T, factory Factory) {
 		wantIDs []string
 	}{
 		// tenant-A: sees its OWN rows + system ("") rows, never tenant-B rows.
-		{"tenant-A sees its rows + system, not tenant-B", isoTenantA, []string{"ti-a1", "ti-a2", "ti-none"}},
+		{"tenant-A sees its rows + system, not tenant-B", isoTenantA, []string{"ti-a1", "ti-a2", tenantNoneEventID}},
 		// tenant-B: sees its row + system ("") rows, never tenant-A rows.
-		{"tenant-B sees its row + system, not tenant-A", isoTenantB, []string{"ti-b1", "ti-none"}},
+		{"tenant-B sees its row + system, not tenant-A", isoTenantB, []string{"ti-b1", tenantNoneEventID}},
 		// Empty tenant "" is the internal system-chain read: sees ONLY tenant-less
 		// system rows, never any tenant's rows (predicate collapses to tenant_id = '').
-		{"empty tenant is system-chain read (system rows only)", "", []string{"ti-none"}},
+		{"empty tenant is system-chain read (system rows only)", "", []string{tenantNoneEventID}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1166,7 +1173,7 @@ func appendChainEntry(t *testing.T, store ledger.Store, eventID, tenantID string
 		TenantID: tenantID, Timestamp: now, Payload: []byte(`{}`),
 	}
 	if err := store.Append(context.Background(), e); err != nil {
-		t.Fatalf("Append %s: %v", eventID, err)
+		t.Fatalf(appendEventErrFmt, eventID, err)
 	}
 }
 
@@ -1183,8 +1190,8 @@ func runPerTenantChains(t *testing.T, factory Factory) {
 
 	// Interleave two tenants' appends; each chain is independent (per-tenant
 	// seq_no), so both reach SeqNo==2 on their own (namespace, tenant) chain.
-	appendChainEntry(t, store, "chain-a-1", conformanceTenantA, fc.Now())
-	appendChainEntry(t, store, "chain-b-1", conformanceTenantB, fc.Now())
+	appendChainEntry(t, store, chainAEventID, conformanceTenantA, fc.Now())
+	appendChainEntry(t, store, chainBEventID, conformanceTenantB, fc.Now())
 	appendChainEntry(t, store, "chain-a-2", conformanceTenantA, fc.Now())
 	appendChainEntry(t, store, "chain-b-2", conformanceTenantB, fc.Now())
 
@@ -1214,8 +1221,8 @@ func runPerTenantChains(t *testing.T, factory Factory) {
 	if err != nil {
 		t.Fatalf("GetBySeq(tenant-a, seq=1): %v", err)
 	}
-	if gotA1.EventID != "chain-a-1" {
-		t.Errorf("GetBySeq(tenant-a, seq=1): got EventID=%q, want %q", gotA1.EventID, "chain-a-1")
+	if gotA1.EventID != chainAEventID {
+		t.Errorf("GetBySeq(tenant-a, seq=1): got EventID=%q, want %q", gotA1.EventID, chainAEventID)
 	}
 
 	// GetBySeq isolation: tenant-b seq 1 must return chain-b-1, not chain-a-1.
@@ -1223,8 +1230,8 @@ func runPerTenantChains(t *testing.T, factory Factory) {
 	if err != nil {
 		t.Fatalf("GetBySeq(tenant-b, seq=1): %v", err)
 	}
-	if gotB1.EventID != "chain-b-1" {
-		t.Errorf("GetBySeq(tenant-b, seq=1): got EventID=%q, want %q", gotB1.EventID, "chain-b-1")
+	if gotB1.EventID != chainBEventID {
+		t.Errorf("GetBySeq(tenant-b, seq=1): got EventID=%q, want %q", gotB1.EventID, chainBEventID)
 	}
 
 	// System chain (unscoped ctx) is separate from both tenant chains.
@@ -1321,7 +1328,7 @@ func runQueryByTraceID(t *testing.T, factory Factory) {
 			Payload:   []byte(`{}`),
 		}
 		if err := store.Append(context.Background(), e); err != nil {
-			t.Fatalf("Append %s: %v", en.eventID, err)
+			t.Fatalf(appendEventErrFmt, en.eventID, err)
 		}
 	}
 

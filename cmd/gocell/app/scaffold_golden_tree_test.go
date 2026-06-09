@@ -146,35 +146,52 @@ func TestScaffoldCell_GoldenTree(t *testing.T) {
 
 	planRels := make([]string, 0, len(plan))
 	for _, pf := range plan {
-		rel, err := filepath.Rel(realRoot, pf.AbsPath)
-		if err != nil {
-			t.Fatalf("Rel(%s): %v", pf.AbsPath, err)
-		}
-		rel = filepath.ToSlash(rel)
+		rel := scaffoldPlanRel(t, realRoot, pf.AbsPath)
 		planRels = append(planRels, rel)
-
-		goldenPath := filepath.Join(scaffoldGoldenDir, filepath.FromSlash(rel)) + ".golden"
-		if *updateScaffoldGolden {
-			if err := os.MkdirAll(filepath.Dir(goldenPath), 0o755); err != nil {
-				t.Fatalf("mkdir golden: %v", err)
-			}
-			if err := os.WriteFile(goldenPath, pf.Content, 0o644); err != nil {
-				t.Fatalf("write golden %s: %v", goldenPath, err)
-			}
-			continue
-		}
-		want, err := os.ReadFile(goldenPath) //nolint:gosec // golden path derived from the in-repo plan, not user input
-		if err != nil {
-			t.Errorf("missing golden for planned file %q (run -update-scaffold-golden): %v", rel, err)
-			continue
-		}
-		if !bytes.Equal(pf.Content, want) {
-			t.Errorf("scaffold golden drift: %s\n--- got ---\n%s\n--- want ---\n%s",
-				rel, pf.Content, want)
-		}
+		assertScaffoldPlanFileGolden(t, rel, pf.Content)
 	}
 
 	assertGoldenFileSet(t, planRels)
+}
+
+func scaffoldPlanRel(t *testing.T, realRoot, absPath string) string {
+	t.Helper()
+
+	rel, err := filepath.Rel(realRoot, absPath)
+	if err != nil {
+		t.Fatalf("Rel(%s): %v", absPath, err)
+	}
+	return filepath.ToSlash(rel)
+}
+
+func assertScaffoldPlanFileGolden(t *testing.T, rel string, content []byte) {
+	t.Helper()
+
+	goldenPath := filepath.Join(scaffoldGoldenDir, filepath.FromSlash(rel)) + ".golden"
+	if *updateScaffoldGolden {
+		writeScaffoldGolden(t, goldenPath, content)
+		return
+	}
+	want, err := os.ReadFile(goldenPath) //nolint:gosec // golden path derived from the in-repo plan, not user input
+	if err != nil {
+		t.Errorf("missing golden for planned file %q (run -update-scaffold-golden): %v", rel, err)
+		return
+	}
+	if !bytes.Equal(content, want) {
+		t.Errorf("scaffold golden drift: %s\n--- got ---\n%s\n--- want ---\n%s",
+			rel, content, want)
+	}
+}
+
+func writeScaffoldGolden(t *testing.T, goldenPath string, content []byte) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(goldenPath), 0o755); err != nil {
+		t.Fatalf("mkdir golden: %v", err)
+	}
+	if err := os.WriteFile(goldenPath, content, 0o644); err != nil {
+		t.Fatalf("write golden %s: %v", goldenPath, err)
+	}
 }
 
 // assertGoldenFileSet is the completeness (reverse) guard: the set of planned
