@@ -15,6 +15,9 @@
 package archtest
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"path/filepath"
 	"testing"
 )
@@ -159,6 +162,82 @@ func TestProdClockInjection(t *testing.T) {
 func TestClockPositionalInjection(t *testing.T) {
 	t.Parallel()
 	Report(t, "CLOCK-POSITIONAL-INJECTION-01", CheckClockPositionalInjection(t, ConfigForExternalCell{}))
+}
+
+func TestClockWorkspaceScopeIncludesSatellites(t *testing.T) {
+	t.Parallel()
+
+	required := map[string]bool{
+		"cmd/gocell/main.go":      false,
+		"cmd/gocell/app/check.go": false,
+		"cmd/corebundle/main.go":  false,
+	}
+
+	_ = Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
+		for _, f := range p.Files {
+			rel := filepath.ToSlash(p.Rel(f))
+			if _, ok := required[rel]; ok {
+				required[rel] = true
+			}
+		}
+		return nil
+	})
+
+	for rel, seen := range required {
+		if !seen {
+			t.Errorf("clock workspace production scope did not visit %s; satellite module coverage would be vacuous", rel)
+		}
+	}
+}
+
+func TestClockChecksDoNotUseProdscanPatternsExtended(t *testing.T) {
+	t.Parallel()
+
+	root := findModuleRoot(t)
+	path := filepath.Join(root, "tools", "archtest", "clock_invariants.go")
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse clock_invariants.go: %v", err)
+	}
+
+	checks := map[string]bool{
+		"CheckKernelClockLeafFallback":      false,
+		"CheckKernelClockResetRelativeProd": false,
+		"CheckProdClockInjection":           false,
+		"CheckClockPositionalInjection":     false,
+	}
+
+	EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		if fn.Name == nil || fn.Body == nil {
+			return
+		}
+		if _, ok := checks[fn.Name.Name]; !ok {
+			return
+		}
+		EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+			switch fun := call.Fun.(type) {
+			case *ast.Ident:
+				if fun.Name == "Production" {
+					checks[fn.Name.Name] = true
+				}
+				if fun.Name == "Typed" {
+					t.Errorf("%s must use Production scope, not Typed", fn.Name.Name)
+				}
+			case *ast.SelectorExpr:
+				if ident, ok := fun.X.(*ast.Ident); ok &&
+					ident.Name == "prodscan" && fun.Sel.Name == "PatternsExtended" {
+					t.Errorf("%s must not call prodscan.PatternsExtended; it drops go.work satellite modules", fn.Name.Name)
+				}
+			}
+		})
+	})
+
+	for name, sawProduction := range checks {
+		if !sawProduction {
+			t.Errorf("%s must call Production(...) so clock invariants scan go.work satellite modules", name)
+		}
+	}
 }
 
 // runClockPositionalInjectionFixtureScan loads the fixture package at fixtureDir
