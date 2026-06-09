@@ -9,12 +9,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ghbvf/gocell/cmd/internal/wiresummary"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/csvparam"
 	"github.com/ghbvf/gocell/runtime/devtools/catalog"
+	"github.com/ghbvf/gocell/tools/wiresummary"
 )
 
 // errExportPrefix wraps validation errors surfaced by `gocell export <sub>`

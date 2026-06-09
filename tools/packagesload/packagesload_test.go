@@ -1,6 +1,9 @@
 package packagesload
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/tools/go/packages"
@@ -9,6 +12,16 @@ import (
 func hasGoworkOff(env []string) bool {
 	for _, e := range env {
 		if e == "GOWORK=off" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasGoworkPath(env []string, path string) bool {
+	want := "GOWORK=" + path
+	for _, e := range env {
+		if e == want {
 			return true
 		}
 	}
@@ -49,10 +62,28 @@ func TestApplyMode(t *testing.T) {
 		}
 	})
 
-	t.Run("ModeWorkspace rejects ambient GOWORK=off", func(t *testing.T) {
-		cfg := &packages.Config{Env: []string{"FOO=1", "GOWORK=off"}}
+	t.Run("ModeWorkspace pins cfg.Dir go.work when ambient GOWORK=off", func(t *testing.T) {
+		root := t.TempDir()
+		goWork := filepath.Join(root, "go.work")
+		if err := os.WriteFile(goWork, []byte("go 1.25\n\nuse .\n"), 0o600); err != nil {
+			t.Fatalf("write go.work: %v", err)
+		}
+		cfg := &packages.Config{Dir: root, Env: []string{"FOO=1", "GOWORK=off"}}
+		if err := applyMode(ModeWorkspace, cfg); err != nil {
+			t.Fatalf("applyMode(ModeWorkspace) with cfg.Dir go.work: %v", err)
+		}
+		if hasGoworkOff(cfg.Env) {
+			t.Errorf("ModeWorkspace left GOWORK=off in env: %v", cfg.Env)
+		}
+		if !hasGoworkPath(cfg.Env, goWork) {
+			t.Errorf("ModeWorkspace did not pin cfg.Dir go.work %q: %v", goWork, cfg.Env)
+		}
+	})
+
+	t.Run("ModeWorkspace rejects GOWORK=off without cfg.Dir go.work", func(t *testing.T) {
+		cfg := &packages.Config{Dir: t.TempDir(), Env: []string{"FOO=1", "GOWORK=off"}}
 		if err := applyMode(ModeWorkspace, cfg); err == nil {
-			t.Error("applyMode(ModeWorkspace) with GOWORK=off = nil error, want fail-closed")
+			t.Error("applyMode(ModeWorkspace) without cfg.Dir go.work = nil error, want fail-closed")
 		}
 	})
 
@@ -81,5 +112,16 @@ func TestApplyMode(t *testing.T) {
 func TestLoadRejectsNilConfig(t *testing.T) {
 	if _, err := Load(ModeModule, nil); err == nil {
 		t.Error("Load(nil cfg) = nil error, want error")
+	}
+}
+
+func TestWithoutGOWORK(t *testing.T) {
+	got := withoutGOWORK([]string{"A=1", "GOWORK=off", "B=2", "GOWORK=/repo/go.work"})
+	joined := strings.Join(got, ",")
+	if strings.Contains(joined, "GOWORK=") {
+		t.Fatalf("withoutGOWORK kept GOWORK entry: %v", got)
+	}
+	if joined != "A=1,B=2" {
+		t.Fatalf("withoutGOWORK = %v, want A=1,B=2", got)
 	}
 }

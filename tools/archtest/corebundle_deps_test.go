@@ -3,6 +3,7 @@ package archtest
 
 import (
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -14,8 +15,8 @@ func TestCorebundleDoesNotDependOnToolsDepgraph(t *testing.T) {
 	root := findModuleRoot(t)
 	module := readModulePath(t, root)
 
-	cmd := exec.Command("go", "list", "-deps", "./cmd/corebundle")
-	cmd.Dir = root
+	cmd := exec.Command("go", "list", "-deps", ".")
+	cmd.Dir = filepath.Join(root, "cmd", "corebundle")
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
 

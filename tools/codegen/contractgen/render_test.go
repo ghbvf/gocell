@@ -115,19 +115,17 @@ var updateGolden = flag.Bool("update", false, "update golden files")
 // repoRoot returns the absolute path to the worktree root.
 func repoRoot(t *testing.T) string {
 	t.Helper()
-	// Navigate up from testdata to find the repo root (go.mod).
 	dir, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
 	}
-	// Walk up until we find go.mod.
 	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, "go.work")); err == nil {
 			return dir
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			t.Fatal("could not find go.mod walking up from cwd")
+			t.Fatal("could not find go.work walking up from cwd")
 		}
 		dir = parent
 	}
@@ -1281,19 +1279,19 @@ func loadTodoorderProject(t *testing.T, root string) *metadata.ProjectMeta {
 	return p
 }
 
-// findRepoRoot walks up from cwd to find the go.mod root.
+// findRepoRoot walks up from cwd to find the workspace root.
 func findRepoRoot() string {
 	dir, err := os.Getwd()
 	if err != nil {
 		panic(fmt.Sprintf("getwd: %v", err))
 	}
 	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, "go.work")); err == nil {
 			return dir
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			panic("could not find go.mod walking up from cwd")
+			panic("could not find go.work walking up from cwd")
 		}
 		dir = parent
 	}

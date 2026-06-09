@@ -156,6 +156,14 @@ func (c Classifier) Layer(importPath string) string {
 			return layer
 		}
 	}
+	// Scoped GoCell workspace loads may include only a satellite module such as
+	// github.com/ghbvf/gocell/tools. Preserve its repo layer even when the core
+	// module is absent from the classifier's module set. This is deliberately
+	// limited to GoCell module paths; an unrelated single-module repo named
+	// example.com/tools must keep the old module-root/unknown classification.
+	if layer, ok := layerByGoCellModulePath(owner); ok {
+		return layer
+	}
 	// Longest-owner-relative fallback: a satellite that DOES mirror the core layer
 	// structure beneath its own root (e.g. a future mdm module with mdm/cells/foo)
 	// classifies LayerCells by its module-internal first segment when the
@@ -196,6 +204,17 @@ func layerByFirstSegment(rel string) (string, bool) {
 	}
 	layer, ok := internalLayerByDir[seg]
 	return layer, ok
+}
+
+// layerByGoCellModulePath maps a GoCell satellite module path's first
+// base-relative segment to a layer.
+func layerByGoCellModulePath(module string) (string, bool) {
+	const gocellPrefix = "github.com/ghbvf/gocell/"
+	rel, ok := strings.CutPrefix(module, gocellPrefix)
+	if !ok || rel == "" {
+		return "", false
+	}
+	return layerByFirstSegment(rel)
 }
 
 // Cell returns the cell ID for a package under <owningModule>/cells/<id>/...,

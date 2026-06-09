@@ -4,6 +4,7 @@ go 1.25.11
 
 require (
 	github.com/ghbvf/gocell v0.0.0
+	github.com/ghbvf/gocell/tools v0.0.0
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/tools v0.45.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -28,3 +29,5 @@ require (
 // release-consistency build in hack/verify-workspace.sh) this replace makes the
 // unpublished core module resolve to the repo root instead of being fetched.
 replace github.com/ghbvf/gocell => ../../
+
+replace github.com/ghbvf/gocell/tools => ../../tools

@@ -74,8 +74,8 @@ func TestRunGraphJSON(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &graph); err != nil {
 		t.Fatalf("json.Unmarshal: %v\noutput=%s", err, buf.String())
 	}
-	if len(graph.Modules) != 1 || graph.Modules[0] != "github.com/ghbvf/gocell" {
-		t.Errorf("Modules = %v, want [github.com/ghbvf/gocell]", graph.Modules)
+	if len(graph.Modules) != 1 || graph.Modules[0] != "github.com/ghbvf/gocell/tools" {
+		t.Errorf("Modules = %v, want [github.com/ghbvf/gocell/tools]", graph.Modules)
 	}
 	if graph.Stats.Packages == 0 {
 		t.Error("Stats.Packages = 0, want > 0")

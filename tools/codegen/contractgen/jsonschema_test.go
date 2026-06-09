@@ -10,8 +10,7 @@ import (
 )
 
 // findModuleRoot walks up from the directory of this test file until it finds
-// a go.mod, returning the directory that contains it. This lets tests locate
-// the repo root without hard-coding an absolute path.
+// go.work, returning the workspace root without hard-coding an absolute path.
 func findModuleRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := filepath.Abs(".")
@@ -19,12 +18,12 @@ func findModuleRoot(t *testing.T) string {
 		t.Fatalf("findModuleRoot: filepath.Abs: %v", err)
 	}
 	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, "go.work")); err == nil {
 			return dir
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			t.Fatal("findModuleRoot: go.mod not found")
+			t.Fatal("findModuleRoot: go.work not found")
 		}
 		dir = parent
 	}
