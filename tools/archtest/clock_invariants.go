@@ -42,7 +42,6 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/tools/internal/fileroles"
-	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
 
 // ---------------------------------------------------------------------------
@@ -171,17 +170,14 @@ func clockMatchedKernelClockReal(info *types.Info, ident *ast.Ident) bool {
 }
 
 // CheckKernelClockLeafFallback runs KERNEL-CLOCK-LEAF-FALLBACK-01 against the
-// running module and returns its diagnostics. Does not call t.Errorf —
+// go.work workspace production scope and returns its diagnostics. Does not call t.Errorf —
 // callers funnel diagnostics through Report.
 //
 // Not registered in StandardCellRules: see file godoc.
 func CheckKernelClockLeafFallback(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 
-	root := findModuleRoot(t)
-	patterns := prodscan.PatternsExtended(root)
-
-	return Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns),
+	return Run(t, Production(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
@@ -218,8 +214,8 @@ func CheckKernelClockLeafFallback(t *testing.T, _ ConfigForExternalCell) []Diagn
 //
 // # Not registered in StandardCellRules
 //
-// Scan scope is the entire GoCell module (prodscan.PatternsExtended); there is
-// no ConfigForExternalCell consumer-extension for the exempt paths
+// Scan scope is the go.work workspace production scope; there is no
+// ConfigForExternalCell consumer-extension for the exempt paths
 // (clockResetRelativeExemptPaths) -> would be vacuous-green in an external repo.
 
 // clockResetRelativeExemptPaths lists path prefixes exempt from the gate.
@@ -358,7 +354,7 @@ func clockIsTimeTimeType(t types.Type) bool {
 }
 
 // CheckKernelClockResetRelativeProd runs KERNEL-CLOCK-RESET-RELATIVE-PROD-01
-// against the running module and returns its diagnostics. Does not call
+// against the go.work workspace production scope and returns its diagnostics. Does not call
 // t.Errorf — callers funnel diagnostics through Report.
 //
 // Not registered in StandardCellRules: see file godoc.
@@ -368,10 +364,7 @@ func CheckKernelClockResetRelativeProd(t *testing.T, _ ConfigForExternalCell) []
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
-	root := findModuleRoot(t)
-	patterns := prodscan.PatternsExtended(root)
-
-	return Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, patterns),
+	return Run(t, Production(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
@@ -422,8 +415,8 @@ func CheckKernelClockResetRelativeProd(t *testing.T, _ ConfigForExternalCell) []
 //
 // # Not registered in StandardCellRules
 //
-// Scan scope is the entire GoCell module plus composition-root carve-outs
-// (clockControlPlaneCarveOut) that are gocell-hardcoded with no
+// Scan scope is the go.work workspace production scope plus composition-root
+// carve-outs (clockControlPlaneCarveOut) that are gocell-hardcoded with no
 // ConfigForExternalCell consumer-extension -> vacuous-green in an external repo.
 
 // clockAllowedRealClockPaths lists the paths whose files may legitimately
@@ -711,19 +704,16 @@ func scanProdClockInjectionAST(fset *token.FileSet, file *ast.File, rel string, 
 	return out
 }
 
-// CheckProdClockInjection runs PROD-CLOCK-INJECTION-01 against the running
-// module and returns its diagnostics. Does not call t.Errorf — callers funnel
-// diagnostics through Report.
+// CheckProdClockInjection runs PROD-CLOCK-INJECTION-01 against the go.work
+// workspace production scope and returns its diagnostics. Does not call t.Errorf
+// — callers funnel diagnostics through Report.
 //
 // Not registered in StandardCellRules: see file godoc.
 func CheckProdClockInjection(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	// Intentionally not honoring testing.Short — see original TestProdClockInjection.
 
-	root := findModuleRoot(t)
-	patterns := prodscan.PatternsExtended(root)
-
-	return Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns),
+	return Run(t, Production(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
@@ -775,8 +765,8 @@ func CheckProdClockInjection(t *testing.T, _ ConfigForExternalCell) []Diagnostic
 //
 // # Not registered in StandardCellRules
 //
-// Scan scope is the entire GoCell module; carve-outs are gocell-hardcoded
-// (composition-root naming convention) with no ConfigForExternalCell
+// Scan scope is the go.work workspace production scope; carve-outs are
+// gocell-hardcoded (composition-root naming convention) with no ConfigForExternalCell
 // consumer-extension -> vacuous-green in an external repo.
 
 // clockIsMustHaveClockCall reports whether call is a call to
@@ -1138,7 +1128,7 @@ func scanClockPositionalInjectionAST(fset *token.FileSet, file *ast.File, rel st
 }
 
 // CheckClockPositionalInjection runs CLOCK-POSITIONAL-INJECTION-01 against the
-// running module and returns its diagnostics. Does not call t.Errorf — callers
+// go.work workspace production scope and returns its diagnostics. Does not call t.Errorf — callers
 // funnel diagnostics through Report.
 //
 // Not registered in StandardCellRules: see file godoc.
@@ -1148,10 +1138,7 @@ func CheckClockPositionalInjection(t *testing.T, _ ConfigForExternalCell) []Diag
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
-	root := findModuleRoot(t)
-	patterns := prodscan.PatternsExtended(root)
-
-	return Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, patterns),
+	return Run(t, Production(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
