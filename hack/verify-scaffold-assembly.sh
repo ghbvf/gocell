@@ -35,7 +35,7 @@ run_smoke() {
   pushd "$root" >/dev/null
 
   cleanup_smoke_artifacts() {
-    rm -rf "corecells/${CELL_ID}" \
+    rm -rf "cells/${CELL_ID}" \
            "contracts/http/${CELL_ID}" \
            "generated/contracts/http/${CELL_ID}" \
            "assemblies/${ASM_ID}" \
@@ -61,7 +61,8 @@ run_smoke() {
     --cells="${CELL_ID}" \
     --team=scaffoldsmoke \
     --role=maintainer \
-    --deploy=k8s
+    --deploy=k8s \
+    --layout=conventional
 
   # Auto-generate ran inside `scaffold assembly`; verify the result builds.
   go build -o /dev/null "./cmd/${ASM_ID}/..."

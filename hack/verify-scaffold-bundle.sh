@@ -39,7 +39,7 @@ run_smoke() {
   pushd "$root" >/dev/null
 
   cleanup_smoke_artifacts() {
-    rm -rf "corecells/${CELL_ID}" \
+    rm -rf "cells/${CELL_ID}" \
            "contracts/http/${CELL_ID}" \
            "generated/contracts/http/${CELL_ID}"
   }
@@ -56,7 +56,7 @@ run_smoke() {
     --team=scaffoldsmoke \
     --role=cell-owner
 
-  go test "./corecells/${CELL_ID}/..."
+  go test "./cells/${CELL_ID}/..."
 
   popd >/dev/null
 }
