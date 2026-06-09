@@ -59,6 +59,44 @@ type Service struct {
 	}
 }
 
+func TestFindSlicePathsIncludesCorecells(t *testing.T) {
+	root := t.TempDir()
+	fixtures := []string{
+		"cells/localcore/slices/localread",
+		"cells/localcore/internal/localrepo",
+		"corecells/accesscore/slices/sessionlogin",
+		"corecells/accesscore/internal/accountlockout",
+		"examples/demo/cells/democore/slices/hello",
+	}
+	for _, rel := range fixtures {
+		dir := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "service.go"), []byte("package fixture\n"), 0o644); err != nil {
+			t.Fatalf("write service %s: %v", rel, err)
+		}
+	}
+
+	paths, err := requireddepsgen.FindSlicePaths(root)
+	if err != nil {
+		t.Fatalf("FindSlicePaths: %v", err)
+	}
+	got := map[string]bool{}
+	for _, path := range paths {
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			t.Fatalf("rel %s: %v", path, err)
+		}
+		got[filepath.ToSlash(rel)] = true
+	}
+	for _, rel := range fixtures {
+		if !got[rel] {
+			t.Fatalf("FindSlicePaths missing %s; got %v", rel, got)
+		}
+	}
+}
+
 func TestGenerate_AllInterfaceFields_BasicFunnel(t *testing.T) {
 	src := `package mypkg
 

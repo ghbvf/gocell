@@ -150,8 +150,9 @@ func GenerateWithOpts(slicePath string, opts Opts) ([]byte, error) {
 	return renderOutput(pkgName, guards, opts)
 }
 
-// GenerateAll walks modRoot for all cells/*/slices/*/service.go files and
-// returns a map from slice directory path to generated file contents.
+// GenerateAll walks modRoot for all cells/*, corecells/*, and example-cell
+// service.go files and returns a map from slice directory path to generated file
+// contents.
 //
 // Slices whose service.go does not declare a "Service" struct are silently
 // skipped (ErrNoServiceStruct). All other errors are fatal.
@@ -438,14 +439,18 @@ func writeGuard(buf *bytes.Buffer, g fieldGuard) {
 }
 
 // FindSlicePaths discovers all slice directories containing a service.go under
-// modRoot. Exported so the REQUIRED-DEP-NIL-GUARD-01 A1 archtest regen-diffs the
-// exact same set of gen files the generator emits — generator and verifier share
-// one discovery, so no gen file can escape the byte-granularity Hard check.
+// modRoot's cells/, corecells/, and examples/*/cells/ trees. Exported so the
+// REQUIRED-DEP-NIL-GUARD-01 A1 archtest regen-diffs the exact same set of gen
+// files the generator emits — generator and verifier share one discovery, so no
+// gen file can escape the byte-granularity Hard check.
 func FindSlicePaths(modRoot string) ([]string, error) {
 	patterns := []string{
 		filepath.Join(modRoot, "cells", "*", "slices", "*"),
 		filepath.Join(modRoot, "cells", "*", "slices", "*", "*"),
 		filepath.Join(modRoot, "cells", "*", "internal", "*"),
+		filepath.Join(modRoot, "corecells", "*", "slices", "*"),
+		filepath.Join(modRoot, "corecells", "*", "slices", "*", "*"),
+		filepath.Join(modRoot, "corecells", "*", "internal", "*"),
 		filepath.Join(modRoot, "examples", "*", "cells", "*", "slices", "*"),
 		filepath.Join(modRoot, "examples", "*", "cells", "*", "internal", "*"),
 	}

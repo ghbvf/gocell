@@ -48,25 +48,33 @@ func TestGenerateRequiredDeps_AllMode_RegeneratesAllFiles(t *testing.T) {
 	// Not parallel: uses os.Chdir.
 	root := makeMinimalProject(t)
 
-	// cells/myapp/slices/login/service.go with a required field.
+	// cells/myapp/slices/login/service.go and
+	// corecells/accesscore/slices/setup/service.go with required fields.
 	sliceDir := filepath.Join(root, "cells", "myapp", "slices", "login")
 	if err := os.MkdirAll(sliceDir, 0o755); err != nil {
 		t.Fatalf("mkdir slice: %v", err)
 	}
 	writeServiceGo(t, sliceDir, "login")
+	coreSliceDir := filepath.Join(root, "corecells", "accesscore", "slices", "setup")
+	if err := os.MkdirAll(coreSliceDir, 0o755); err != nil {
+		t.Fatalf("mkdir core slice: %v", err)
+	}
+	writeServiceGo(t, coreSliceDir, "setup")
 
 	if err := generateRequiredDeps([]string{"--all"}); err != nil {
 		t.Fatalf("generateRequiredDeps --all: %v", err)
 	}
 
-	genFile := filepath.Join(sliceDir, "service_required_gen.go")
-	//nolint:gosec // genFile is a controlled test path built from t.TempDir()
-	content, err := os.ReadFile(genFile)
-	if err != nil {
-		t.Fatalf("expected service_required_gen.go at %s: %v", genFile, err)
-	}
-	if !strings.Contains(string(content), "validateRequired") {
-		t.Errorf("generated file missing validateRequired; content:\n%s", content)
+	for _, dir := range []string{sliceDir, coreSliceDir} {
+		genFile := filepath.Join(dir, "service_required_gen.go")
+		//nolint:gosec // genFile is a controlled test path built from t.TempDir()
+		content, err := os.ReadFile(genFile)
+		if err != nil {
+			t.Fatalf("expected service_required_gen.go at %s: %v", genFile, err)
+		}
+		if !strings.Contains(string(content), "validateRequired") {
+			t.Errorf("generated file missing validateRequired; content:\n%s", content)
+		}
 	}
 }
 

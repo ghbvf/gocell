@@ -23,7 +23,7 @@ const requiredDepsKind = "required-deps"
 // Modes:
 //
 //	<slicePath>  : regenerate one slice's service_required_gen.go
-//	--all        : walk cells/**/slices/**/service.go + examples/**/service.go
+//	--all        : walk cells/**, corecells/**, and examples/** service.go files
 //	--verify     : regenerate in-memory and diff against committed files; exit 1 on drift
 //	--dry-run    : print planned output to stdout instead of writing
 func generateRequiredDeps(args []string) error {
