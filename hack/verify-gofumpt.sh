@@ -50,13 +50,31 @@ fi
 echo "verify-gofumpt: using ${golangci_lint}" >&2
 "${golangci_lint}" --version >&2 || true
 
-# Capture stderr alongside stdout so a misconfigured linter surface lands
-# in the log; check the exit code explicitly via `if !` (see comment above).
-if ! diff_output="$("${golangci_lint}" fmt -d ./... 2>&1)"; then
-    echo "verify-gofumpt: 'golangci-lint fmt -d ./...' exited non-zero" >&2
-    echo "${diff_output}" >&2
+# shellcheck source=lib/util.sh
+source hack/lib/util.sh
+# shellcheck source=lib/modules.sh
+source hack/lib/modules.sh
+
+repo_root="$(pwd -P)"
+if ! modules_raw="$(gocell::modules::dirs)"; then
+    echo "verify-gofumpt: workspace module enumeration failed" >&2
     exit 1
 fi
+
+# Capture stderr alongside stdout so a misconfigured linter surface lands
+# in the log; check the exit code explicitly via `if !` (see comment above).
+diff_output=""
+while IFS= read -r moddir; do
+    [[ -n "${moddir}" ]] || continue
+    if ! module_diff="$(cd "${moddir}" && "${golangci_lint}" fmt -c "${repo_root}/.golangci.yml" -d ./... 2>&1)"; then
+        echo "verify-gofumpt: 'golangci-lint fmt -d ./...' exited non-zero in ${moddir}" >&2
+        echo "${module_diff}" >&2
+        exit 1
+    fi
+    if [[ -n "${module_diff}" ]]; then
+        diff_output+=$'\n'"+++ formatter drift (${moddir})"$'\n'"${module_diff}"$'\n'
+    fi
+done <<<"${modules_raw}"
 if [[ -n "${diff_output}" ]]; then
     echo "formatter drift detected; run 'make fmt' to fix:" >&2
     echo "${diff_output}"
