@@ -802,17 +802,11 @@ func cellDeclaresL0Dependencies(root string, cm *metadata.CellMeta) bool {
 func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []governance.ValidationResult, bool) {
 	cellDir, ok := metadata.CellDirFromMetadataFile(cm.File)
 	if !ok {
-		return nil, l0ImportLoadError(cm,
-			fmt.Sprintf("cannot derive cell directory for cell %q from %q", cm.ID, cm.File),
-			"move cell.yaml under cells/<cellID>/, corecells/<cellID>/, or examples/<app>/cells/<cellID>/",
-		), true
+		return nil, l0CellDirLoadError(cm), true
 	}
 	modulePath, moduleErr := readModule(root)
 	if moduleErr != nil {
-		return nil, l0ImportLoadError(cm,
-			fmt.Sprintf("cannot read module path for cell %q: %v", cm.ID, moduleErr),
-			"ensure the project root has a valid go.mod before running l0-imports",
-		), true
+		return nil, l0ModuleLoadError(cm, moduleErr), true
 	}
 	cellPkgPattern := "./" + filepath.ToSlash(cellDir) + "/..."
 	pkgs, results, fatal := loadCellPackages(root, cm, cellDir, cellPkgPattern)
@@ -837,10 +831,7 @@ func loadCellPackages(
 	// splits into its own module. See tools/packagesload.
 	pkgs, err := packagesload.Load(packagesload.ModeModule, cfg, "./...")
 	if err != nil {
-		return nil, l0ImportLoadError(cm,
-			fmt.Sprintf("packages.Load failed for cell %q: %v", cm.ID, err),
-			fmt.Sprintf("ensure the cell directory compiles cleanly; run `go build %s` to identify build errors", cellPkgPattern),
-		), true
+		return nil, l0PackagesLoadError(cm, cellPkgPattern, err), true
 	}
 	return pkgs, l0PackageLoadErrors(cm, cellPkgPattern, pkgs), false
 }
@@ -879,15 +870,39 @@ func l0PackageLoadErrors(cm *metadata.CellMeta, cellPkgPattern string, pkgs []*p
 	return results
 }
 
-func l0ImportLoadError(cm *metadata.CellMeta, message, fix string) []governance.ValidationResult {
+func l0CellDirLoadError(cm *metadata.CellMeta) []governance.ValidationResult {
 	return []governance.ValidationResult{{
 		Code:      governance.RuleCode("CHECK-L0-LOAD-ERROR"),
 		Severity:  governance.SeverityError,
 		IssueType: governance.IssueInvalid,
 		File:      filepath.ToSlash(cm.File),
 		Scope:     cmdL0Imports,
-		Message:   message,
-		Fix:       fix,
+		Message:   fmt.Sprintf("cannot derive cell directory for cell %q from %q", cm.ID, cm.File),
+		Fix:       "move cell.yaml under cells/<cellID>/, corecells/<cellID>/, or examples/<app>/cells/<cellID>/",
+	}}
+}
+
+func l0ModuleLoadError(cm *metadata.CellMeta, err error) []governance.ValidationResult {
+	return []governance.ValidationResult{{
+		Code:      governance.RuleCode("CHECK-L0-LOAD-ERROR"),
+		Severity:  governance.SeverityError,
+		IssueType: governance.IssueInvalid,
+		File:      filepath.ToSlash(cm.File),
+		Scope:     cmdL0Imports,
+		Message:   fmt.Sprintf("cannot read module path for cell %q: %v", cm.ID, err),
+		Fix:       "ensure the project root has a valid go.mod before running l0-imports",
+	}}
+}
+
+func l0PackagesLoadError(cm *metadata.CellMeta, cellPkgPattern string, err error) []governance.ValidationResult {
+	return []governance.ValidationResult{{
+		Code:      governance.RuleCode("CHECK-L0-LOAD-ERROR"),
+		Severity:  governance.SeverityError,
+		IssueType: governance.IssueInvalid,
+		File:      filepath.ToSlash(cm.File),
+		Scope:     cmdL0Imports,
+		Message:   fmt.Sprintf("packages.Load failed for cell %q: %v", cm.ID, err),
+		Fix:       fmt.Sprintf("ensure the cell directory compiles cleanly; run `go build %s` to identify build errors", cellPkgPattern),
 	}}
 }
 
