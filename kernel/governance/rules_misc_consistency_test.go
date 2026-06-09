@@ -196,7 +196,7 @@ func TestCONTRACTCONSISTENCYEMIT01_CaseA(t *testing.T) {
 
 import (
 	"context"
-	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/corecells/testcell/internal/dto"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
@@ -284,7 +284,7 @@ func TestCONTRACTCONSISTENCYEMIT01_CaseD(t *testing.T) {
 
 import (
 	"context"
-	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/corecells/testcell/internal/dto"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
@@ -349,7 +349,7 @@ const (
 
 import (
 	"context"
-	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/corecells/testcell/internal/dto"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
@@ -449,7 +449,7 @@ func TestCONTRACTCONSISTENCYEMIT01_ReceiverEmitInlineCompLit(t *testing.T) {
 
 import (
 	"context"
-	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/corecells/testcell/internal/dto"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
@@ -491,7 +491,7 @@ func TestCONTRACTCONSISTENCYEMIT01_ReceiverEmitPreBuiltEntry(t *testing.T) {
 
 import (
 	"context"
-	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/corecells/testcell/internal/dto"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
@@ -539,7 +539,7 @@ func TestCONTRACTCONSISTENCYEMIT01_ReceiverEmitNewEntry(t *testing.T) {
 
 import (
 	"context"
-	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/corecells/testcell/internal/dto"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
@@ -586,7 +586,7 @@ func TestCONTRACTCONSISTENCYEMIT01_IndirectHelper(t *testing.T) {
 
 import (
 	"context"
-	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/corecells/testcell/internal/dto"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
@@ -711,7 +711,7 @@ func TestCONTRACTCONSISTENCYEMIT01_SubscriberTopicNotCollected(t *testing.T) {
 
 import (
 	"context"
-	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/corecells/testcell/internal/dto"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
@@ -731,7 +731,7 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 
 import (
 	"context"
-	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/corecells/testcell/internal/dto"
 )
 
 type handler func(ctx context.Context, topic string) error
@@ -820,7 +820,7 @@ func TestCONTRACTCONSISTENCYEMIT01_CaseD_ReceiverStyle(t *testing.T) {
 
 import (
 	"context"
-	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/corecells/testcell/internal/dto"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
@@ -885,7 +885,7 @@ func TestCONTRACTCONSISTENCYEMIT01_MultiContractNoDuplicateFindings(t *testing.T
 
 import (
 	"context"
-	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/corecells/testcell/internal/dto"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
@@ -959,7 +959,7 @@ func TestCONTRACTCONSISTENCYEMIT01_SubscriberSelectorIgnored(t *testing.T) {
 
 import (
 	"context"
-	"github.com/ghbvf/gocell/cells/foo/internal/dto"
+	"github.com/ghbvf/gocell/corecells/foo/internal/dto"
 )
 
 type subscribeFn func(ctx context.Context, topic string, handler func()) error
@@ -1026,7 +1026,7 @@ func handle() error {
 
 import (
 	"context"
-	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/corecells/testcell/internal/dto"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
@@ -1070,7 +1070,7 @@ func TestCONTRACTCONSISTENCYEMIT01_TriggerMustReferenceExistingEventContract(t *
 
 import (
 	"context"
-	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/corecells/testcell/internal/dto"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
@@ -1105,7 +1105,7 @@ func TestCONTRACTCONSISTENCYEMIT01_TriggerMustReferenceEventKind(t *testing.T) {
 
 import (
 	"context"
-	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/corecells/testcell/internal/dto"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
@@ -1234,7 +1234,7 @@ func TestCONTRACTCONSISTENCYEMIT01_HelperAndEntryEvidenceScoped(t *testing.T) {
 
 import (
 	"context"
-	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/corecells/testcell/internal/dto"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
@@ -1285,7 +1285,7 @@ func publish(ctx context.Context, e outbox.Emitter, topic string) error {
 
 import (
 	"context"
-	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/corecells/testcell/internal/dto"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
@@ -1358,7 +1358,7 @@ const (
 
 import (
 	"context"
-	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/corecells/testcell/internal/dto"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )

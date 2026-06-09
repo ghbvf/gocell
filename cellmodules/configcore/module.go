@@ -2,8 +2,8 @@
 // It implements [composition.CellModule] and wires all configcore-specific
 // dependencies from [composition.SharedDeps].
 //
-// This is a composition-root-layer package: it may import cells/, adapters/,
-// and cellmodules/cellsecrets/. It must NOT be imported by cells/, runtime/, or
+// This is a composition-root-layer package: it may import corecells/, adapters/,
+// and cellmodules/cellsecrets/. It must NOT be imported by corecells/, runtime/, or
 // adapters/.
 //
 // # Key provider routing
@@ -26,7 +26,7 @@ import (
 	"fmt"
 
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
-	configcell "github.com/ghbvf/gocell/cells/configcore"
+	configcell "github.com/ghbvf/gocell/corecells/configcore"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/composition"

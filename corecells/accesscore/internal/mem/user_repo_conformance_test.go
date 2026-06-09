@@ -1,0 +1,26 @@
+package mem
+
+import (
+	"testing"
+
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/ports/conformance"
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/persistence"
+)
+
+func TestMemUserRepo_Conformance(t *testing.T) {
+	conformance.RunUserRepoConformance(t, memUserRepoFactory, conformance.Features{
+		RequiresAmbientTx: false,
+		// CAS conflict path is not exercised by this conformance suite.
+		// It is covered by identitymanage.TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds
+		// (non-store-bound TxRunner, exposes the CAS race, asserts exactly-one-success).
+		SupportsCASConflict: false,
+	})
+}
+
+func memUserRepoFactory(t *testing.T) (ports.UserRepository, persistence.TxRunner, func()) {
+	t.Helper()
+	s := NewStore(clock.Real())
+	return s.UserRepository(), s.TxRunner(), func() {}
+}

@@ -156,8 +156,8 @@ func TestRoleAdminCallSiteLiteralIsForbidden(t *testing.T) {
 
 	// tests=false matches the original DirsScope(searchDirsRoleAdmin) which
 	// excluded *_test.go by default.
-	diags := Run(t, Typed(TypedOpts{}, []string{
-		"./runtime/...", "./cells/...", "./adapters/...", "./cmd/...",
+	diags := Run(t, WorkspaceTyped(TypedOpts{}, []string{
+		"./runtime/...", "./corecells/...", "./adapters/...", "./cmd/...",
 	}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {

@@ -67,11 +67,11 @@ const (
 // fenceTokenMintAllowlistPrefixes lists the module-relative path prefixes
 // permitted to call credentialfence.Mint in non-test production code.
 //
-//   - cells/accesscore/internal/credentialinvalidate/ — the production
+//   - corecells/accesscore/internal/credentialinvalidate/ — the production
 //     funnel; Invalidator.Apply is the only call site that constructs a
 //     FenceToken in real traffic.
 //   - runtime/auth/session/storetest/, runtime/auth/refresh/storetest/,
-//     cells/accesscore/internal/ports/conformance/ — conformance suites that
+//     corecells/accesscore/internal/ports/conformance/ — conformance suites that
 //     must exercise the contract end-to-end; they need real FenceTokens to
 //     call the mutation methods.
 //
@@ -82,10 +82,10 @@ const (
 // must add a path here. The reviewer's question — "should this package own a
 // FenceToken?" — is the point.
 var fenceTokenMintAllowlistPrefixes = []string{
-	"cells/accesscore/internal/credentialinvalidate/",
+	"corecells/accesscore/internal/credentialinvalidate/",
 	"runtime/auth/session/storetest/",
 	"runtime/auth/refresh/storetest/",
-	"cells/accesscore/internal/ports/conformance/",
+	"corecells/accesscore/internal/ports/conformance/",
 }
 
 // isFenceTokenMintAllowlisted reports whether rel is a permitted Mint caller.
@@ -133,7 +133,7 @@ func CheckFenceTokenMintFunnel(t *testing.T, _ ConfigForExternalCell) []Diagnost
 	// cmd/ are included so a stray demo or composition root that fishes a
 	// FenceToken on its own is caught.
 	patterns := []string{
-		"./cells/...",
+		"./corecells/...",
 		"./runtime/...",
 		"./adapters/...",
 		"./cmd/...",
@@ -141,7 +141,7 @@ func CheckFenceTokenMintFunnel(t *testing.T, _ ConfigForExternalCell) []Diagnost
 	}
 
 	var diags []Diagnostic
-	_ = Run(t, Typed(TypedOpts{Tests: false}, patterns), func(p *Pass) []Diagnostic {
+	_ = Run(t, WorkspaceTyped(TypedOpts{Tests: false}, patterns), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
@@ -219,7 +219,7 @@ func verifyFenceTokenMintRedFixture(t *testing.T, fixturePattern, label string, 
 	t.Helper()
 
 	var found []Diagnostic
-	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{fixturePattern}), func(p *Pass) []Diagnostic {
+	_ = Run(t, WorkspaceTyped(TypedOpts{Tests: false}, []string{fixturePattern}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}

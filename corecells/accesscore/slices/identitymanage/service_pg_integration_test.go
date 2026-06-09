@@ -1,0 +1,261 @@
+//go:build integration
+
+// Package identitymanage — PG integration test for ChangePassword concurrent CAS semantics.
+//
+// Build tag: integration. Run with: go test -tags=integration ./...
+// Not included in the default go test ./... run.
+//
+// Rationale: mem-store CAS-conflict correctness is covered deterministically
+// by TestUserRepo_UpdatePassword_VersionMismatch (internal/mem) and
+// TestChangePassword_StalePasswordVersion_ReturnsConflict. The STRONG
+// exactly-once property under TRUE concurrency (two txs both read version 0,
+// exactly one gets ErrVersionConflict) is a real-MVCC property the mem store
+// cannot model — its only concurrency primitive is the all-or-nothing
+// store.mu (see ADR 202605171846-adr-mem-tx-lock-ownership.md). This test is
+// that property's only faithful home: it proves the SQL CAS guard
+// (WHERE password_version=$expected) delivers exactly-once semantics under
+// concurrent goroutine load against a real PostgreSQL instance via
+// testcontainers. Its mem-store sibling
+// TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds asserts only the
+// race-safe invariants (no corruption; exactly one winner; loser is a
+// legitimate per-call-locked race outcome).
+package identitymanage
+
+import (
+	"context"
+	"errors"
+	"io/fs"
+	"log/slog"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"golang.org/x/crypto/bcrypt"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+
+	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	accesspgrepo "github.com/ghbvf/gocell/corecells/accesscore/internal/adapters/postgres"
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/credentialinvalidate"
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/dto"
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/testutil"
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/migration"
+	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
+	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
+	globaltestutil "github.com/ghbvf/gocell/tests/testutil"
+)
+
+// pgIntegTenantID is the canonical test tenant UUID for this PG integration
+// test. Seed and query must use the same value.
+var pgIntegTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("service_pg_integration_test: invalid pgIntegTenantID: " + err.Error())
+	}
+	return t
+}()
+
+// pgIntegMigrationsFS returns the shared adapters/postgres migration FS.
+// Duplicate of adapters/postgres test helper — needed because _test.go files
+// cannot be imported across packages.
+func pgIntegMigrationsFS(t testing.TB) fs.FS {
+	t.Helper()
+	fsys, err := adapterpg.MigrationsFS()
+	require.NoError(t, err)
+	return fsys
+}
+
+// setupIdentityManagePG starts a PostgreSQL testcontainer, applies all migrations,
+// and returns a PGUserRepo + TxManager + cleanup func.
+func setupIdentityManagePG(t *testing.T) (*accesspgrepo.PGUserRepo, *adapterpg.TxManager, func()) {
+	t.Helper()
+	globaltestutil.RequireDocker(t)
+
+	ctx := context.Background()
+
+	container, err := tcpostgres.Run(
+		ctx, globaltestutil.PostgresImage,
+		tcpostgres.WithDatabase("test"),
+		tcpostgres.WithUsername("test"),
+		tcpostgres.WithPassword("test"),
+		tcpostgres.BasicWaitStrategies(),
+	)
+	require.NoError(t, err, "failed to start postgres container")
+
+	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
+	require.NoError(t, err)
+
+	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
+	require.NoError(t, err)
+
+	migrator, err := adapterpg.NewMigrator(pool, pgIntegMigrationsFS(t), migration.PlatformNamespace)
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	txMgr := adapterpg.NewTxManager(pool)
+	repo, err := accesspgrepo.NewPGUserRepo(pool.DB(), txMgr, clock.Real())
+	require.NoError(t, err)
+
+	cleanup := func() {
+		if err := pool.Close(ctx); err != nil {
+			t.Logf("WARN: pool close: %v", err)
+		}
+		if err := container.Terminate(ctx); err != nil {
+			t.Logf("WARN: failed to terminate postgres container: %v", err)
+		}
+	}
+
+	return repo, txMgr, cleanup
+}
+
+// newPGIntegRefreshStore returns an in-memory refresh.Store for use in PG integration tests.
+// Refresh token revocation is in-memory in both tests and production (separate store);
+// the CAS guard under test lives entirely in the user table via PGUserRepo.
+func newPGIntegRefreshStore() refresh.Store {
+	clk := storetest.NewFakeClock(time.Now())
+	store, err := refreshmem.New(refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         time.Hour,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}, clk, nil)
+	if err != nil {
+		panic("pg integration test setup: " + err.Error())
+	}
+	return store
+}
+
+// pgStubTokenIssuer is a minimal stub for the TokenIssuer interface. The PG
+// concurrent test only needs to verify CAS semantics, not token content.
+type pgStubTokenIssuer struct {
+	pair dto.TokenPair
+}
+
+func (s *pgStubTokenIssuer) IssueForUser(_ context.Context, _ string) (dto.TokenPair, error) {
+	return s.pair, nil
+}
+
+// TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds_PG verifies that when
+// two goroutines race to change the same user's password against a real PostgreSQL
+// database, exactly one succeeds and the other receives ErrVersionConflict.
+//
+// This test is the real-DB counterpart of TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds
+// (mem path). It exercises the SQL CAS guard:
+//
+//	UPDATE users SET password_hash=..., password_version=password_version+1, ...
+//	WHERE id=$1 AND password_version=$2
+//	RETURNING password_version
+//
+// Both goroutines read user.PasswordVersion=0 from the same snapshot, hash their
+// respective new passwords, and race to the UPDATE. PostgreSQL row-level locking
+// serialises the two writes: the winner's RETURNING returns the new version, the
+// loser gets 0 rows → ErrVersionConflict (HTTP 409).
+func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds_PG(t *testing.T) {
+	repo, txMgr, cleanup := setupIdentityManagePG(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Seed a user with a known password.
+	oldPassword := "old-secure-password-123"
+	hash, err := bcrypt.GenerateFromPassword([]byte(oldPassword), bcrypt.MinCost)
+	require.NoError(t, err)
+
+	nowTS := time.Now().UTC().Truncate(time.Millisecond)
+	user, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:           uuid.NewString(),
+		Username:     "pg-cas-race-user",
+		Email:        "pg-cas-race@example.com",
+		PasswordHash: string(hash),
+		Status:       domain.StatusActive,
+		Source:       domain.UserSourceIdentity,
+		AuthzEpoch:   1,
+		CreatedAt:    nowTS,
+		UpdatedAt:    nowTS,
+	})
+	require.NoError(t, err)
+	require.NoError(t, repo.Create(ctx, pgIntegTenantID, user))
+
+	stub := &pgStubTokenIssuer{pair: dto.TokenPair{AccessToken: "at-pg", RefreshToken: "rt-pg"}}
+	pgSessionStore := testutil.RealSessionRepo(t)
+	pgRefreshStore := newPGIntegRefreshStore()
+	inv, err := credentialinvalidate.New(repo, pgSessionStore, pgRefreshStore)
+	require.NoError(t, err)
+	svc, err := NewService(
+		clock.Real(),
+		repo,
+		inv,
+		slog.Default(),
+		inertRoleRepo(),
+		WithTokenIssuer(stub),
+		WithTxManager(persistence.WrapForCell(txMgr)),
+	)
+	require.NoError(t, err)
+
+	type result struct{ err error }
+	results := make(chan result, 2)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		newPw := "new-password-goroutine-A"
+		if i == 1 {
+			newPw = "new-password-goroutine-B"
+		}
+		go func(newPw string) {
+			defer wg.Done()
+			_, cerr := svc.ChangePassword(withTenant(context.Background()), ChangePasswordInput{
+				UserID:      user.ID,
+				OldPassword: oldPassword,
+				NewPassword: newPw,
+			})
+			results <- result{cerr}
+		}(newPw)
+	}
+
+	wg.Wait()
+	close(results)
+
+	var (
+		successes        int32
+		versionConflicts int32
+		loginFailures    int32
+	)
+	for r := range results {
+		if r.err == nil {
+			atomic.AddInt32(&successes, 1)
+		} else {
+			var ce *errcode.Error
+			if errors.As(r.err, &ce) && ce.Code == errcode.ErrVersionConflict {
+				atomic.AddInt32(&versionConflicts, 1)
+			} else {
+				atomic.AddInt32(&loginFailures, 1)
+			}
+		}
+	}
+
+	// CAS semantics: exactly one goroutine must succeed and the other must
+	// receive ErrVersionConflict. Any loginFailure indicates a test defect.
+	if loginFailures > 0 {
+		t.Fatalf("unexpected loginFailure(s) in concurrent PG ChangePassword test: successes=%d versionConflicts=%d loginFailures=%d",
+			successes, versionConflicts, loginFailures)
+	}
+	assert.Equal(t, int32(1), successes, "exactly one concurrent ChangePassword must succeed (PG)")
+	assert.Equal(t, int32(1), versionConflicts, "exactly one concurrent ChangePassword must yield ErrVersionConflict (PG)")
+
+	// Version must have advanced exactly once.
+	got, err := repo.GetByIDInTenant(ctx, pgIntegTenantID, user.ID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), got.PasswordVersion, "password_version must be exactly 1 after exactly one success (PG)")
+}

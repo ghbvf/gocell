@@ -12,7 +12,7 @@ package archtest
 // That threat is closed in the TYPE SYSTEM (the sealed txlock package), not in
 // this archtest:
 //
-//   - Upstream Hard (forge): cells/accesscore/internal/mem/internal/txlock.Lease
+//   - Upstream Hard (forge): corecells/accesscore/internal/mem/internal/txlock.Lease
 //     has only unexported fields (mu *sync.Mutex, live *atomic.Bool), so no
 //     package (not even mem) can write txlock.Lease{…} with a real mutex+live
 //     flag. The only way to obtain a Lease whose Live(&store.mu) is true is
@@ -103,7 +103,7 @@ import (
 
 const ruleMemTxLockOwnership01 = "MEM-TX-LOCK-OWNERSHIP-01"
 
-const memPkgRel = "cells/accesscore/internal/mem"
+const memPkgRel = "corecells/accesscore/internal/mem"
 
 // memTxSiteRunLocked is the sole sanctioned lease-mint site: (memTxRunner).runLocked
 // is the only function allowed to call txlock.Acquire, and only as the
@@ -313,7 +313,7 @@ func inLiveTxFormOK(info *types.Info, fd *ast.FuncDecl) (ok bool, why string) {
 }
 
 // scanMemTxLockWitness is the shared lease-funnel detector. It runs over a single
-// package Pass — production (cells/accesscore/internal/mem) and the
+// package Pass — production (corecells/accesscore/internal/mem) and the
 // memtxlockfixture reverse self-check alike — and reports W1 / W2 (see the file
 // INVARIANT block). Requires a typed Pass; returns nil for a bare-AST Pass.
 func scanMemTxLockWitness(p *Pass) []Diagnostic {
@@ -404,7 +404,7 @@ func memProductionScan(t *testing.T) []Diagnostic {
 	// Load mem/... (not just mem) so the typed resolver has the txlock sub-package
 	// in the loaded set — isTxlockAcquireCall → ResolvePackageRef needs it. The
 	// p.Pkg.Path() filter then restricts the scan to the mem package itself.
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./" + memPkgRel + "/..."}),
+	Run(t, WorkspaceTyped(TypedOpts{Tests: false}, []string{"./" + memPkgRel + "/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != memPkgPath {
 				return nil
@@ -445,7 +445,7 @@ func TestMemTxLockOwnership01_FindsSanctionedSites(t *testing.T) {
 
 	var acquireInRunLocked, inLiveTxAccessors int
 
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./" + memPkgRel + "/..."}),
+	Run(t, WorkspaceTyped(TypedOpts{Tests: false}, []string{"./" + memPkgRel + "/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != memPkgPath {
 				return nil

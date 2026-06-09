@@ -19,7 +19,7 @@ import (
 
 // INVARIANT: REFRESH-CROSS-STORE-TX-01
 //
-// cells/accesscore/slices/sessionrefresh.Service.Refresh must wrap the
+// corecells/accesscore/slices/sessionrefresh.Service.Refresh must wrap the
 // validate → update → rotate lookup chain in a single s.txRunner.RunInTx
 // call so that PG refresh-store, PG session-store, and PG user-store reads
 // share one commit boundary. The rule fires on four shape constraints:
@@ -96,14 +96,14 @@ import (
 //   - BS-3 Reflection / dynamic dispatch on a refresh.Store value — out of
 //     scope per ai-robust.md §3 (no Go static rule reaches it).
 //   - BS-4 RED fixture cannot exercise the (ports, UserRepository, GetByID)
-//     guard entry: cells/accesscore/internal/ports is internal-importable
-//     only within cells/accesscore/ and is not reachable from the fixture
+//     guard entry: corecells/accesscore/internal/ports is internal-importable
+//     only within corecells/accesscore/ and is not reachable from the fixture
 //     at tools/archtest/internal/refreshinvariantsfixture/. The
 //     ResolveMethodCall resolution path is structurally identical to the
 //     (refresh, Store, *) entries (which ARE exercised by the fixture),
 //     so the resolver's correctness on the userRepo path is covered by
 //     analogy; the only un-tested layer is the literal pkgPath constant
-//     for `cells/accesscore/internal/ports`. Accepted limitation.
+//     for `corecells/accesscore/internal/ports`. Accepted limitation.
 //   - BS-5 isTxRunnerRunInTxCall is a Soft anchor (pure AST string match
 //     on `s.txRunner.RunInTx`), not type-aware. If the field name
 //     `txRunner` is renamed (e.g. to `tx`), the rule's RunInTx detection
@@ -139,9 +139,9 @@ func TestRefreshCrossStoreTX01(t *testing.T) {
 // to make BS-1 fail-loud rather than fail-silent — the章程级 minimum for
 // any blind-spot disclosure per ai-robust.md "盲区 + 反向自检测试".
 func TestRefreshCrossStoreTX01_BlindSpot_ServiceRefreshReceiverIsS(t *testing.T) {
-	diags := Run(t, Typed(
+	diags := Run(t, WorkspaceTyped(
 		TypedOpts{Tests: false},
-		[]string{"./cells/accesscore/slices/sessionrefresh/..."},
+		[]string{"./corecells/accesscore/slices/sessionrefresh/..."},
 	),
 		func(p *Pass) []Diagnostic {
 			var out []Diagnostic

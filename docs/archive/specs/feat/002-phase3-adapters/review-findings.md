@@ -548,7 +548,7 @@ func WithEventBus(eb *eventbus.InMemoryEventBus) Option {
 | 约束 | 状态 | 说明 |
 |------|------|------|
 | kernel/ 不引入 adapters/ | PASS | `grep '"github.com/ghbvf/gocell/adapters' kernel/` 返回 0 |
-| adapters/ 不引入 cells/ | PASS | `grep '"github.com/ghbvf/gocell/cells' adapters/` 返回 0 |
+| adapters/ 不引入 cells/ | PASS | `grep '"github.com/ghbvf/gocell/corecells' adapters/` 返回 0 |
 | runtime/ 不引入 adapters/ | PASS | 注释中提及 adapters/ 但无实际 import |
 | outbox.Writer 接口断言 | PASS | `var _ outbox.Writer = (*OutboxWriter)(nil)` 存在 |
 | outbox.Relay 接口断言 | PASS | `var _ outbox.Relay = (*OutboxRelay)(nil)` 存在 |

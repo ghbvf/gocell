@@ -144,7 +144,7 @@ func TestL2OutboxAtomicityCoverage(t *testing.T) {
 		info, found := testFuncs[name]
 		if !found {
 			diags = append(diags, Diagnostic{
-				Rel: "cells/",
+				Rel: "corecells/",
 				Message: "L2 unit missing atomicity test " + name +
 					"; add it with //go:build integration",
 			})
@@ -166,19 +166,19 @@ type l2TestFuncInfo struct {
 	hasIntegrationTag bool
 }
 
-// l2EnumerateUnits scans cells/*/cell.yaml and cells/*/slices/*/slice.yaml
+// l2EnumerateUnits scans platform cell.yaml and slices/*/slice.yaml files
 // to collect all L2 units. Uses raw YAML only (no metadata.NewParser) for
 // self-containment.
 func l2EnumerateUnits(t *testing.T, root string) []l2Unit {
 	t.Helper()
 	var units []l2Unit
 
-	// Scan cell.yaml files: cells/<id>/cell.yaml (depth-2 from cells/).
+	// Scan cell.yaml files: corecells/<id>/cell.yaml (depth-2 from corecells/).
 	cellScope := DirsScope(
-		root, []string{"cells"},
+		root, []string{"corecells"},
 		MatchRels(func(rel string) bool {
 			rel = filepath.ToSlash(rel)
-			return strings.HasPrefix(rel, "cells/") &&
+			return strings.HasPrefix(rel, "corecells/") &&
 				strings.Count(rel, "/") == depth2SlashCount &&
 				filepath.Base(rel) == "cell.yaml"
 		}),
@@ -196,14 +196,14 @@ func l2EnumerateUnits(t *testing.T, root string) []l2Unit {
 		}
 	})
 
-	// Scan slice.yaml files: cells/<cell-id>/slices/<slice-id>/slice.yaml.
-	// depth from cells/ is 4: cells/<cell>  /slices/<slice>/slice.yaml = 4 slashes.
+	// Scan slice.yaml files: corecells/<cell-id>/slices/<slice-id>/slice.yaml.
+	// depth from corecells/ is 4: corecells/<cell>/slices/<slice>/slice.yaml = 4 slashes.
 	const sliceDepthSlashCount = 4
 	sliceScope := DirsScope(
-		root, []string{"cells"},
+		root, []string{"corecells"},
 		MatchRels(func(rel string) bool {
 			rel = filepath.ToSlash(rel)
-			return strings.HasPrefix(rel, "cells/") &&
+			return strings.HasPrefix(rel, "corecells/") &&
 				strings.Count(rel, "/") == sliceDepthSlashCount &&
 				filepath.Base(rel) == "slice.yaml"
 		}),
@@ -254,7 +254,7 @@ func l2ResolveSliceInfos(t *testing.T, root string, units []l2Unit) map[string]l
 	require.NoError(t, err, "%s: read module path", ruleL2AtomicityCoverage)
 
 	// wantMap maps each L2 slice's import path → its composite identity key.
-	// Each slice lives at cells/<cellID>/slices/<sliceDir>; the import path is
+	// Each slice lives at corecells/<cellID>/slices/<sliceDir>; the import path is
 	// globally unique, and we record results under the composite key so two
 	// cells with a same-named slice dir cannot collide.
 	wantMap := make(map[string]string)
@@ -262,13 +262,13 @@ func l2ResolveSliceInfos(t *testing.T, root string, units []l2Unit) map[string]l
 		if u.kind != l2UnitSlice {
 			continue
 		}
-		importPath := modPath + "/cells/" + u.cellID + "/slices/" + u.sliceDir
+		importPath := modPath + "/corecells/" + u.cellID + "/slices/" + u.sliceDir
 		wantMap[importPath] = l2SliceKey(u.cellID, u.sliceDir)
 	}
 
 	infos := make(map[string]l2SliceInfo, len(wantMap))
 
-	_ = Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
+	_ = Run(t, WorkspaceTyped(TypedOpts{Tests: false}, []string{"./corecells/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {
 			return nil
 		}

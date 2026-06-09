@@ -1,7 +1,7 @@
 ---
 paths:
   - "kernel/**/*.go"
-  - "cells/**/*.go"
+  - "corecorecells/**/*.go"
   - "runtime/**/*.go"
   - "adapters/**/*.go"
   - "pkg/**/*.go"
@@ -15,15 +15,15 @@ paths:
 
 | 层 | 允许依赖 | 严禁依赖 |
 |----|---------|---------|
-| kernel/ | 标准库 + pkg/ + gopkg.in/yaml.v3（metadata 解析） | runtime/ adapters/ cells/ |
-| cells/ | kernel/ + runtime/ | adapters/（通过接口解耦） |
+| kernel/ | 标准库 + pkg/ + gopkg.in/yaml.v3（metadata 解析） | runtime/ adapters/ corecorecells/ |
+| corecorecells/ | kernel/ + runtime/ | adapters/（通过接口解耦） |
 | runtime/ | kernel/ + pkg/ | cells/ adapters/ |
-| adapters/ | kernel/ + runtime/（实现其接口） | cells/ |
-| pkg/ | 标准库 | kernel/ cells/ runtime/ adapters/ |
+| adapters/ | kernel/ + runtime/（实现其接口） | corecorecells/ |
+| pkg/ | 标准库 | kernel/ corecells/ runtime/ adapters/ |
 | cellmodules/ | 所有层（Composition Root：绑定 cell↔adapter） | — |
 | examples/ | 所有层 | — |
 
-## DDD 分层（适用于 cells/ 和 examples/）
+## DDD 分层（适用于 corecells/ 和 examples/）
 
 | 层 | 职责 | 范围外 |
 |----|------|--------|

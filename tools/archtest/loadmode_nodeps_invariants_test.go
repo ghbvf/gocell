@@ -78,7 +78,7 @@ import (
 func TestLoadModeNoDeps_NonVacuity_CellForbiddenIfaces(t *testing.T) {
 	resolved := map[string]bool{}
 	var cellPasses int
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./cells/...", "./examples/..."}), func(p *Pass) []Diagnostic {
+	Run(t, WorkspaceTyped(TypedOpts{Tests: false}, []string{"./corecells/...", "./examples/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || !isCellSubtreePkgPath(p.Pkg.Path()) {
 			return nil
 		}
@@ -89,7 +89,7 @@ func TestLoadModeNoDeps_NonVacuity_CellForbiddenIfaces(t *testing.T) {
 		return nil
 	})
 
-	require.Positive(t, cellPasses, "must scan >=1 cell-subtree Pass under ./cells/... + ./examples/...")
+	require.Positive(t, cellPasses, "must scan >=1 cell-subtree Pass under ./corecells/... + ./examples/...")
 	for canonical := range rawPublicOptionForbidden {
 		require.Containsf(t, resolved, canonical,
 			"forbidden iface %q resolved in NO cell-subtree Pass under NoDeps via the real "+
@@ -97,11 +97,11 @@ func TestLoadModeNoDeps_NonVacuity_CellForbiddenIfaces(t *testing.T) {
 	}
 }
 
-// isCellSubtreePkgPath reports whether an import path lies in a ".../cells/<id>/…"
-// segment — both platform cells/<id>/… and example examples/<demo>/cells/<id>/… —
-// matching the rule's cell-subtree scan scope.
+// isCellSubtreePkgPath reports whether an import path lies in a cell subtree:
+// platform corecells/<id>/… or example examples/<demo>/cells/<id>/….
 func isCellSubtreePkgPath(pkgPath string) bool {
-	return strings.Contains(pkgPath, "/cells/")
+	return strings.Contains(pkgPath, "/cells/") ||
+		strings.Contains(pkgPath, "/corecells/")
 }
 
 // TestLoadModeNoDeps_NonVacuity_SagaStepFunc asserts resolveSagaStepFuncType still
@@ -110,7 +110,7 @@ func isCellSubtreePkgPath(pkgPath string) bool {
 // if this returned nil).
 func TestLoadModeNoDeps_NonVacuity_SagaStepFunc(t *testing.T) {
 	var found bool
-	Run(t, Typed(TypedOpts{}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
+	Run(t, WorkspaceTyped(TypedOpts{}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {
 			return nil
 		}
@@ -132,7 +132,7 @@ func TestLoadModeNoDeps_NonVacuity_AfterCommitBannedReceivers(t *testing.T) {
 	outboxPath := PlatformModulePath + "/kernel/outbox"
 
 	var pgxFound, outboxWriterFound bool
-	Run(t, Typed(TypedOpts{}, []string{"./adapters/postgres/..."}), func(p *Pass) []Diagnostic {
+	Run(t, WorkspaceTyped(TypedOpts{}, []string{"./adapters/postgres/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {
 			return nil
 		}

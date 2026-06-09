@@ -140,7 +140,7 @@ func TestBuildContractImportIndex(t *testing.T) {
 		},
 		{
 			name: "non_generated",
-			in:   mod + "/cells/accesscore/slices/sessionlogin",
+			in:   mod + "/corecells/accesscore/slices/sessionlogin",
 			want: "",
 		},
 		{

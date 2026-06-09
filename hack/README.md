@@ -53,7 +53,7 @@ itself enforces.
 |---|---|
 | `verify-archtest.sh` | `tools/archtest/*` (LAYER-*, AUTH-*, SEC-FAIL-CLOSED-*, ERROR-FIRST-API-01, META-*, ADV-06) |
 | `verify-contract-health.sh` | `gocell check contract-health` (CH-*) |
-| `verify-examples-import.sh` | `examples/` must not import `cells/*/internal/` or `adapters/*/internal/` |
+| `verify-examples-import.sh` | `examples/` must not import `corecells/*/internal/` or `adapters/*/internal/` |
 | `verify-generated.sh` | metadata-derived generated assembly entrypoints, `boundary.yaml`, and `metrics-schema.yaml` are up to date |
 | `verify-gofumpt.sh` | formatter-only gate: every `.go` file is gofumpt-canonical. Uses `mvdan.cc/gofumpt v0.9.2` (must equal the version vendored by the pinned `golangci-lint v2.11.4` — see `hack/lib/golangci-lint.sh`). Mirrors the formatter verdict the lint shard's `formatters.enable: gofumpt` would emit, runnable in isolation. |
 | `verify-govalidate.sh` | `gocell validate --strict` (FMT, ADV, REF, LAYER, VERIFY, CONTRACT-CONSISTENCY) |

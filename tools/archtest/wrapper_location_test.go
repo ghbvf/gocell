@@ -70,7 +70,7 @@ type wrapperViolation struct {
 //     outboxtest is test-only infrastructure that production code may not
 //     import, so wrapping a Recorder into a sealed CellEmitter here keeps
 //     cell/slice test builders off any direct WrapEmitterForCell call)
-//   - cells/accesscore/{mem,postgres}/bundle.go (cell-owned Bundle factories;
+//   - corecells/accesscore/{mem,postgres}/bundle.go (cell-owned Bundle factories;
 //     ACCESSCORE-BUNDLE-FUNNEL-01 funnel — single sanctioned holder of the
 //     (UserRepo, RoleRepo, SetupLock, TxRunner) quadruple per backend.
 //     persistence.WrapForCell is invoked exactly once inside each factory so
@@ -98,8 +98,8 @@ func isWrapperCallerAllowed(rel string) bool {
 		"kernel/outbox/demo_tx_runner.go",
 		"kernel/outbox/mode_resolver.go",
 		"kernel/outbox/outboxtest/recorder.go",
-		"cells/accesscore/mem/bundle.go",
-		"cells/accesscore/postgres/bundle.go":
+		"corecells/accesscore/mem/bundle.go",
+		"corecells/accesscore/postgres/bundle.go":
 		return true
 	}
 	parts := strings.Split(rel, "/")
@@ -182,7 +182,7 @@ func allowlistDescription() string {
 	return "cmd/* | cellmodules/* | examples/<demo>/main.go | examples/<demo>/app.go | examples/<demo>/run.go | *_test.go | " +
 		"kernel/{persistence,outbox}/cell_marker.go | kernel/outbox/demo_tx_runner.go | " +
 		"kernel/outbox/mode_resolver.go | kernel/outbox/outboxtest/recorder.go | " +
-		"cells/accesscore/{mem,postgres}/bundle.go"
+		"corecells/accesscore/{mem,postgres}/bundle.go"
 }
 
 // wrapperFunctionsList renders the allowed wrapper function set as a

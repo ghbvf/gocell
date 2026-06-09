@@ -116,8 +116,8 @@ type l2TargetCell struct {
 	// pkgPath is the FULL Go import path of the cell package, equal to
 	// `<modulePath>/<yamlDir>`. Phase B's matchTarget compares Pass.Pkg.Path()
 	// with `==`, not HasSuffix — this avoids the failure mode where
-	// `examples/foo/cells/configcore` (an example cell) collides with the
-	// platform cell suffix `/cells/configcore`. The repo-internal convention
+	// `examples/foo/corecells/configcore` (an example cell) collides with the
+	// platform cell suffix `/corecells/configcore`. The repo-internal convention
 	// for package-path matching is exact-equality on Pkg.Path() (see
 	// `tools/archtest/baseslice_ctor_funnel_01_test.go:82,109` and
 	// `tools/archtest/adapter_error_classification_test.go:87,140`).
@@ -294,7 +294,7 @@ func TestConsistencyLevelAtLeastL2(t *testing.T) {
 }
 
 // TestCELL_L2_INIT_CHECKNOTNOOP_CALLED_01 is the end-to-end production check:
-// every L2+ cell in cells/** must have its Init reach CheckNotNoop via same-
+// every L2+ platform cell must have its Init reach CheckNotNoop via same-
 // package callees. Current platform cells (accesscore, auditcore, configcore)
 // already satisfy this; the test exists to guard against future regressions.
 func TestCELL_L2_INIT_CHECKNOTNOOP_CALLED_01(t *testing.T) {
@@ -307,7 +307,7 @@ func TestCELL_L2_INIT_CHECKNOTNOOP_CALLED_01(t *testing.T) {
 	scope := ModuleScope(root)
 	targets, missingDiags := collectL2PlusTargets(t, scope, modPath)
 	require.NotEmpty(t, targets,
-		"expected at least one L2+ cell in cells/** — has the platform cell layout changed?")
+		"expected at least one L2+ platform cell — has the platform cell layout changed?")
 
 	diags := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		return scanCellsForInitCheckNotNoop(p, targets)
@@ -325,12 +325,11 @@ func TestCELL_L2_INIT_CHECKNOTNOOP_CALLED_01(t *testing.T) {
 // for the archtest to locate the Init receiver, so a missing value is itself
 // a rule violation rather than a silent skip (F2 fix in PR #576 round-2).
 //
-// Scope filtering: only cell.yaml files whose module-relative path starts
-// with "cells/" are considered. `examples/<name>/cells/<id>/cell.yaml`
-// (CLAUDE.md allows examples to ship their own cells) does NOT start with
-// "cells/" and is intentionally skipped — the rule guards the platform
-// cell layout only; example cells are demonstration scaffolding outside
-// the deployed platform surface.
+// Scope filtering: only top-level platform cell roots are considered.
+// `examples/<name>/cells/<id>/cell.yaml` (CLAUDE.md allows examples to ship
+// their own cells) is intentionally skipped — the rule guards the platform
+// cell layout only; example cells are demonstration scaffolding outside the
+// deployed platform surface.
 func collectL2PlusTargets(t *testing.T, scope Scope, modPath string) ([]l2TargetCell, []Diagnostic) {
 	t.Helper()
 
@@ -340,13 +339,13 @@ func collectL2PlusTargets(t *testing.T, scope Scope, modPath string) ([]l2Target
 	)
 	EachContentFile(t, scope, []string{".yaml"}, func(t *testing.T, fc ContentContext) {
 		// EachContentFile requires a dot-prefixed suffix; filter by basename
-		// to recover cell.yaml-only scope. cells/X/cell.yaml is the only shape
-		// we care about; ignore examples/* / contracts/* / slice.yaml etc.
+		// to recover cell.yaml-only scope. Ignore examples/* / contracts/* /
+		// slice.yaml etc.
 		rel := filepath.ToSlash(fc.Rel)
 		if filepath.Base(rel) != "cell.yaml" {
 			return
 		}
-		if !strings.HasPrefix(rel, "cells/") {
+		if !strings.HasPrefix(rel, "cells/") && !strings.HasPrefix(rel, "corecells/") {
 			return
 		}
 		target, diag, ok := parseAndIncludeTarget(t, rel, fc.Bytes, modPath)
@@ -450,7 +449,7 @@ func scanCellsForInitCheckNotNoop(p *Pass, targets []l2TargetCell) []Diagnostic 
 
 // matchTarget returns the l2TargetCell whose full import path equals
 // `pkgPath`, or nil if no target matches. Exact equality (not HasSuffix)
-// prevents `examples/foo/cells/configcore` from being mis-attributed as
+// prevents `examples/foo/corecells/configcore` from being mis-attributed as
 // the platform `configcore` cell — F4 fix in PR #576 round-2 review.
 //
 // ref: tools/archtest/baseslice_ctor_funnel_01_test.go:82,109

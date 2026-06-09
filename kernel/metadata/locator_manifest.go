@@ -513,15 +513,13 @@ func buildManifestModulePlan(mod ManifestModule, allowSingletons bool) manifestM
 			{
 				patterns: includes.Cells, kind: SourceCell, userDeclared: cellsDeclared,
 				deriveCell: func(p string) string {
-					id, _ := matchCellPath(stripBase(p, base))
-					return id
+					return deriveManifestCellID(stripBase(p, base))
 				},
 			},
 			{
 				patterns: includes.Slices, kind: SourceSlice, userDeclared: slicesDeclared,
 				deriveCell: func(p string) string {
-					cellID, _ := matchSlicePath(stripBase(p, base))
-					return cellID
+					return deriveManifestSliceCellID(stripBase(p, base))
 				},
 			},
 			{patterns: includes.Contracts, kind: SourceContract, userDeclared: contractsDeclared},
@@ -745,6 +743,28 @@ func stripBase(p, base string) string {
 		return strings.TrimPrefix(p, prefix)
 	}
 	return p
+}
+
+func deriveManifestCellID(rel string) string {
+	if id, ok := matchCellPath(rel); ok {
+		return id
+	}
+	parts := splitConventionalPath(rel)
+	if len(parts) == 2 && parts[1] == "cell.yaml" {
+		return parts[0]
+	}
+	return ""
+}
+
+func deriveManifestSliceCellID(rel string) string {
+	if id, ok := matchSlicePath(rel); ok {
+		return id
+	}
+	parts := splitConventionalPath(rel)
+	if len(parts) == 4 && parts[1] == "slices" && parts[3] == "slice.yaml" {
+		return parts[0]
+	}
+	return ""
 }
 
 // fileExists reports whether p exists as a regular file in fsys.

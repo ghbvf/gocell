@@ -170,7 +170,7 @@ cmd/core-bundle/main.go: relay := postgres.NewOutboxRelay(pool, rabbitPublisher)
 | ID | Constraint | Verification Method |
 |----|-----------|-------------------|
 | C-01 | adapters/ only imports kernel/ + runtime/ + pkg/ + external deps | `go build ./...` + grep imports in adapters/**/*.go for cells/ imports |
-| C-02 | adapters/ does NOT import cells/ | grep `"github.com/ghbvf/gocell/cells` in adapters/**/*.go -- must return 0 matches |
+| C-02 | adapters/ does NOT import cells/ | grep `"github.com/ghbvf/gocell/corecells` in adapters/**/*.go -- must return 0 matches |
 | C-03 | kernel/ does NOT import adapters/ | grep `"github.com/ghbvf/gocell/adapters` in kernel/**/*.go -- must return 0 matches (currently verified: 0 matches) |
 | C-04 | runtime/ does NOT import adapters/ | grep `"github.com/ghbvf/gocell/adapters` in runtime/**/*.go -- must return 0 matches (currently verified: 0 matches) |
 | C-05 | kernel/ does NOT import runtime/ | grep `"github.com/ghbvf/gocell/runtime` in kernel/**/*.go -- must return 0 matches |

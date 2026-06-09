@@ -77,7 +77,7 @@ package archtest
 //	   walk). Covered by red_nested_closure.go.
 //	BS-3 Patterns variance (CLOSED): the loop-amortization invariant is
 //	   independent of the patterns arg shape; subpath patterns like
-//	   ./cells/... must also be caught when wrapped in a tagGroup loop.
+//	   ./corecells/... must also be caught when wrapped in a tagGroup loop.
 //	   Covered by red_subpath_typed_run.go.
 //	BS-4 RangeStmt.X var-indirection (CLOSED): `tags := KnownNonDefaultTags();
 //	   for _, g := range tags { Run(t, Typed(...), ...) }`. condition (i) now

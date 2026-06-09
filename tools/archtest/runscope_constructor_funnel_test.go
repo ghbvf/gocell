@@ -2,10 +2,11 @@
 //
 // # RUNSCOPE-CONSTRUCTOR-FUNNEL-01
 //
-// Invariant: a composite literal of one of the five sealed RunScope structs —
-// astRunScope / typedRunScope / productionRunScope / dirRunScope /
-// fixtureRunScope — may appear ONLY inside its sanctioned constructor body
-// (AST / Typed / Production / StandaloneModule / Fixture). Anywhere else in
+// Invariant: a composite literal of one of the sealed RunScope structs —
+// astRunScope / typedRunScope / workspaceTypedRunScope / productionRunScope /
+// dirRunScope / fixtureRunScope — may appear ONLY inside its sanctioned
+// constructor body (AST / Typed / WorkspaceTyped / Production /
+// StandaloneModule / Fixture). Anywhere else in
 // package archtest it is a violation.
 //
 // # Why this exists (the in-package leg of the RunScope seal)
@@ -119,11 +120,12 @@ const runScopeConstructorFunnelRuleID = "RUNSCOPE-CONSTRUCTOR-FUNNEL-01"
 // struct is constructible anywhere in-package — the red fixture's per-member
 // trip-wire forces this maintenance.
 var runScopeStructToCtor = map[string]string{
-	"astRunScope":        "AST",
-	"typedRunScope":      "Typed",
-	"productionRunScope": "Production",
-	"dirRunScope":        "StandaloneModule",
-	"fixtureRunScope":    "Fixture",
+	"astRunScope":            "AST",
+	"typedRunScope":          "Typed",
+	"workspaceTypedRunScope": "WorkspaceTyped",
+	"productionRunScope":     "Production",
+	"dirRunScope":            "StandaloneModule",
+	"fixtureRunScope":        "Fixture",
 }
 
 // scanRunScopeConstructorViolations walks file for constructions of the five
@@ -149,7 +151,7 @@ func scanRunScopeConstructorViolations(p *Pass, file *ast.File, rel string) []Di
 			Line: p.Fset.Position(node.Pos()).Line,
 			Message: "construction of sealed RunScope " + name + " outside its " +
 				"sanctioned constructor; build the scope via " +
-				"archtest.{AST,Typed,Production,StandaloneModule,Fixture} and pass it " +
+				"archtest.{AST,Typed,WorkspaceTyped,Production,StandaloneModule,Fixture} and pass it " +
 				"to Run(t, <RunScope>, rule) — RUNSCOPE-CONSTRUCTOR-FUNNEL-01",
 		})
 	}
@@ -190,7 +192,7 @@ func scopeConstructionSanctioned(p *Pass, file *ast.File, node ast.Node, structN
 }
 
 // runScopeNamedType resolves t via *types.Info to a named struct in package
-// archtest and returns its name when it is one of the five sealed RunScope
+// archtest and returns its name when it is one of the sealed RunScope
 // structs. types.Unalias is mandatory: under gotypesalias=1 (the default since
 // Go 1.23) the type of a type-alias literal `aliasOfTyped{}` is a *types.Alias,
 // which a bare `.(*types.Named)` assertion would miss — letting an in-package
@@ -215,7 +217,7 @@ func runScopeNamedType(t types.Type) (string, bool) {
 
 // TestRunScopeConstructorFunnel01 is the live gate: production package archtest
 // (loaded WITHOUT the archtest_fixture tag, so the RED fixture is invisible)
-// must construct the five sealed RunScope structs ONLY inside their
+// must construct sealed RunScope structs ONLY inside their
 // constructors. Tests:true includes business *_test.go rules — the actual
 // in-package bypass surface — so a future rule that forges a scope struct
 // directly reds here.
@@ -234,23 +236,23 @@ func TestRunScopeConstructorFunnel01(t *testing.T) {
 // TestRunScopeConstructorFunnel01_FixtureCoverage is the AI-robust reverse
 // self-check: it loads package archtest WITH the archtest_fixture tag (so
 // runscope_ctor_redfixture.go becomes visible) via the sanctioned Fixture
-// loader, and asserts the detector flags each of the five sealed RunScope
+// loader, and asserts the detector flags each sealed RunScope
 // structs exactly once.
 //
 // Tests:false keeps the load to non-test .go (NOT a test-exclusion claim — it
-// just means business *_test.go rules are out of this coverage load; the five
+// just means business *_test.go rules are out of this coverage load; the
 // sanctioned constructors live in pass.go/fixture.go, which are non-test, so
 // they are present and must NOT be flagged). With Tests:true the same property
 // holds — business *_test.go would add only ctor-mediated Run calls, never bare
 // scope-struct literals — but Tests:false keeps this coverage load minimal.
 //
-// The constructions seen are: the five sanctioned constructors (NOT flagged) +
-// the RED fixture constructions (flagged): five direct composite literals + one
+// The constructions seen are: sanctioned constructors (NOT flagged) +
+// the RED fixture constructions (flagged): six direct composite literals + one
 // type-alias literal (Form 1, F2 — proves types.Unalias) + one zero-value var
-// declaration (Form 2, F1 — proves the var-decl scan) = seven. The
+// declaration (Form 2, F1 — proves the var-decl scan) = eight. The
 // GREEN-negative fixture (runScopeConstructorGreenNegatives: TypedOpts /
 // FixtureOpts / Diagnostic literals AND a non-scope var-decl, outside any ctor)
-// MUST add zero — so the exact-count==7 lock is also a false-positive guard: a
+// MUST add zero — so the exact-count==8 lock is also a false-positive guard: a
 // non-scope name mistakenly tracked, or a Form-2 scan that over-flags non-scope
 // vars, would trip a GREEN line and push the count past seven.
 func TestRunScopeConstructorFunnel01_FixtureCoverage(t *testing.T) {
@@ -284,17 +286,17 @@ func TestRunScopeConstructorFunnel01_FixtureCoverage(t *testing.T) {
 			"dropped this struct's construction or the detector regressed for it "+
 			"(per-member regression lock)", runScopeConstructorFunnelRuleID, name)
 	}
-	// Exact-count lock: seven RED constructions (5 direct literals + 1 alias
-	// literal + 1 var-decl), and the five sanctioned constructors + the
+	// Exact-count lock: eight RED constructions (6 direct literals + 1 alias
+	// literal + 1 var-decl), and the sanctioned constructors + the
 	// GREEN-negative non-scope constructions must add zero. Drift (a constructor
 	// wrongly flagged, a non-scope name wrongly tracked, types.Unalias or the
 	// Form-2 var-decl scan dropped, or a new RED construction without updating
 	// this count) fails here.
-	const wantViolations = 7
+	const wantViolations = 8
 	if got := len(diags); got != wantViolations {
 		t.Errorf("%s FixtureCoverage: %d violations, want %d "+
-			"(5 direct + 1 alias + 1 var-decl RED constructions trip once each; the "+
-			"five sanctioned constructors and the GREEN-negative non-scope "+
+			"(6 direct + 1 alias + 1 var-decl RED constructions trip once each; the "+
+			"sanctioned constructors and the GREEN-negative non-scope "+
 			"constructions must add 0) — over/under-detection regression or fixture "+
 			"set changed", runScopeConstructorFunnelRuleID, got, wantViolations)
 	}

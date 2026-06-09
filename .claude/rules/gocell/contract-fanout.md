@@ -40,14 +40,14 @@
 
 | Invariant ID | 方向 | 规则摘要 |
 |---|---|---|
-| **IMPL-DECL-COVER-01** | impl → contract | `cells/<A>` 生产代码禁止直接 import `cells/<B>`（不同 cell），跨 cell 通信必须经 contract；唯一例外是 `cells/<B>/<B>test/*` 公开测试 helper |
-| **HANDLER-DECL-COVER-01** | impl → contract | `cells/*` / `examples/*` 中实现了 `generated/contracts/http/.../Service` 接口的具体类型，必须在对应 contract.yaml 存在且 `lifecycle: active`（无孤儿 impl） |
+| **IMPL-DECL-COVER-01** | impl → contract | `corecorecells/<A>` 生产代码禁止直接 import `corecorecells/<B>`（不同 cell），跨 cell 通信必须经 contract；唯一例外是 `corecorecells/<B>/<B>test/*` 公开测试 helper |
+| **HANDLER-DECL-COVER-01** | impl → contract | `corecorecells/*` / `examples/*` 中实现了 `generated/contracts/http/.../Service` 接口的具体类型，必须在对应 contract.yaml 存在且 `lifecycle: active`（无孤儿 impl） |
 | **EMIT-DECL-COVER-01** | impl → contract | `kernel/outbox.Emit` 调用方所在 cell，必须在 contract.yaml `endpoints.publisher` 或 `triggers` 中声明；topic 常量必须能被 const-eval 解析 |
 | **DEAD-CONTRACT-01** | contract → impl | `lifecycle: active` 的 contract.yaml 必须有对应入口：http → 有 cell impl；event → 有 publisher / subscriber slice / actorSubscriber；其他 → 有 ownerCell 或 endpoints.server（无孤儿契约） |
 | **DEAD-CODE-01** | contract → impl | production Go 代码不得 import `lifecycle: deprecated` contract 的 generated 包，也不得含 deprecated `contract.id` 字符串字面量（今日 0 deprecated 故 vacuous pass） |
 
 > **触发说明**：任何修改 contract.yaml `endpoints` / `ownerCell` / `kind` 字段，或新增/删除 slice，
-> 或修改 `cells/*/slices/*/` 下的接口实现，都可能触发上述 invariant 红灯。
+> 或修改 `corecorecells/*/slices/*/` 下的接口实现，都可能触发上述 invariant 红灯。
 > 修 contract.yaml 时同步检查 5 条 invariant，无需额外步骤——archtest 会在 nightly 自动验证。
 
 ## Implementation matrix 模板

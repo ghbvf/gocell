@@ -2,8 +2,8 @@
 // It implements [composition.CellModule] and wires all accesscore-specific
 // dependencies from [composition.SharedDeps].
 //
-// This is a composition-root-layer package: it may import cells/, adapters/,
-// and cellmodules/cellsecrets/. It must NOT be imported by cells/, runtime/, or
+// This is a composition-root-layer package: it may import corecells/, adapters/,
+// and cellmodules/cellsecrets/. It must NOT be imported by corecells/, runtime/, or
 // adapters/.
 //
 // ref: uber-go/fx fx.Module("accesscore", ...) — self-contained module.
@@ -25,10 +25,10 @@ import (
 	"github.com/ghbvf/gocell/adapters/ratelimit"
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
-	accesscell "github.com/ghbvf/gocell/cells/accesscore"
-	"github.com/ghbvf/gocell/cells/accesscore/configgetter"
-	accessmem "github.com/ghbvf/gocell/cells/accesscore/mem"
-	accesspg "github.com/ghbvf/gocell/cells/accesscore/postgres"
+	accesscell "github.com/ghbvf/gocell/corecells/accesscore"
+	"github.com/ghbvf/gocell/corecells/accesscore/configgetter"
+	accessmem "github.com/ghbvf/gocell/corecells/accesscore/mem"
+	accesspg "github.com/ghbvf/gocell/corecells/accesscore/postgres"
 	"github.com/ghbvf/gocell/kernel/healthz"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"

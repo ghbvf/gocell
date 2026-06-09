@@ -17,11 +17,12 @@
 // irreducibly in-package.
 //
 // Each construction below is at NON-constructor scope (helper func body, never
-// AST / Typed / Production / StandaloneModule / Fixture), so each of the five
-// scope structs must be flagged — making every entry in runScopeStructToCtor a
-// load-bearing per-member trip-wire. The functions are never invoked; they
-// exist only as *ast.CompositeLit / *ast.ValueSpec + *types.Info source for the
-// detector. Total RED count = seven (5 direct + 1 alias + 1 var-decl).
+// AST / Typed / WorkspaceTyped / Production / StandaloneModule / Fixture), so
+// each scope struct must be flagged — making every entry in
+// runScopeStructToCtor a load-bearing per-member trip-wire. The functions are
+// never invoked; they exist only as *ast.CompositeLit / *ast.ValueSpec +
+// *types.Info source for the detector. Total RED count = eight (6 direct + 1
+// alias + 1 var-decl).
 
 package archtest
 
@@ -29,11 +30,12 @@ package archtest
 // structs OUTSIDE its sanctioned constructor — every line is a RED violation
 // (Form 1: composite literal).
 func runScopeConstructorBypassFixture() {
-	_ = astRunScope{}        // bypass: astRunScope outside AST
-	_ = typedRunScope{}      // bypass: typedRunScope outside Typed
-	_ = productionRunScope{} // bypass: productionRunScope outside Production
-	_ = dirRunScope{}        // bypass: dirRunScope outside StandaloneModule
-	_ = fixtureRunScope{}    // bypass: fixtureRunScope outside Fixture
+	_ = astRunScope{}            // bypass: astRunScope outside AST
+	_ = typedRunScope{}          // bypass: typedRunScope outside Typed
+	_ = workspaceTypedRunScope{} // bypass: workspaceTypedRunScope outside WorkspaceTyped
+	_ = productionRunScope{}     // bypass: productionRunScope outside Production
+	_ = dirRunScope{}            // bypass: dirRunScope outside StandaloneModule
+	_ = fixtureRunScope{}        // bypass: fixtureRunScope outside Fixture
 }
 
 // aliasOfTypedRunScope is a same-package type alias to typedRunScope. Under

@@ -785,9 +785,9 @@
 - **验证方式**: [代码审查]
 - **验收条件**:
   - Given 全量代码; When `go build ./...`; Then 编译通过
-  - Given adapters/**/*.go; When grep `github.com/ghbvf/gocell/cells`; Then 0 匹配
+  - Given adapters/**/*.go; When grep `github.com/ghbvf/gocell/corecells`; Then 0 匹配
   - Given kernel/**/*.go; When grep `github.com/ghbvf/gocell/adapters` 或 `github.com/ghbvf/gocell/runtime`; Then 0 匹配
-  - Given runtime/**/*.go; When grep `github.com/ghbvf/gocell/adapters` 或 `github.com/ghbvf/gocell/cells`; Then 0 匹配
+  - Given runtime/**/*.go; When grep `github.com/ghbvf/gocell/adapters` 或 `github.com/ghbvf/gocell/corecells`; Then 0 匹配
 
 ### AC-NFR-1.2 -- 接口合规 [P1]
 

@@ -5,7 +5,7 @@
 // Composition roots must wire accesscore via the typed bundle funnel
 // (WithMemBundle / WithPGBundle). The散装 options
 // WithUserRepository / WithRoleRepository / WithSetupLock / WithTxManager
-// MUST NOT be exported from the cells/accesscore package: keeping them
+// MUST NOT be exported from the corecells/accesscore package: keeping them
 // unexported makes a misconfiguration (e.g. wiring UserRepository from one
 // store and TxRunner from another) inexpressible at compile time outside
 // the cell's own package.
@@ -14,9 +14,9 @@
 //
 // The Hard defense is the Go visibility rule itself:
 //   - Bundle struct fields are private — composite literals from outside the
-//     cells/accesscore package cannot construct a MemBundle / PGBundle.
+//     corecells/accesscore package cannot construct a MemBundle / PGBundle.
 //   - withUserRepository / withRoleRepository / withSetupLock / withTxManager
-//     are unexported — call sites outside cells/accesscore cannot reach them.
+//     are unexported — call sites outside corecells/accesscore cannot reach them.
 //
 // This archtest is the *reverse self-check*: it scans the production source
 // of the cell package for any re-exported variant (e.g. someone restores
@@ -41,7 +41,7 @@ const accesscoreBundleFunnelRuleID = "ACCESSCORE-BUNDLE-FUNNEL-01"
 
 // accesscoreBundleForbiddenExports is the closed set of names that must NOT
 // appear as exported (capitalized) function or value declarations in the
-// cells/accesscore package root. Bundle funnel collapses them to
+// corecells/accesscore package root. Bundle funnel collapses them to
 // unexported call sites only.
 var accesscoreBundleForbiddenExports = map[string]struct{}{
 	"WithUserRepository": {},
@@ -50,14 +50,14 @@ var accesscoreBundleForbiddenExports = map[string]struct{}{
 	"WithTxManager":      {},
 }
 
-// TestAccessCoreBundleFunnel scans cells/accesscore for any production
+// TestAccessCoreBundleFunnel scans corecells/accesscore for any production
 // declaration whose name matches accesscoreBundleForbiddenExports. After the
 // Bundle migration these names must only exist as unexported (lowercase)
 // helpers called from WithMemBundle / WithPGBundle inside the same package.
 func TestAccessCoreBundleFunnel(t *testing.T) {
-	diags := Run(t, Typed(
+	diags := Run(t, WorkspaceTyped(
 		TypedOpts{Tests: false},
-		[]string{"./cells/accesscore"},
+		[]string{"./corecells/accesscore"},
 	),
 
 		scanAccesscoreBundleFunnelViolations)

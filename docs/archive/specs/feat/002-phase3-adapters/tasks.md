@@ -153,7 +153,7 @@
 
 > 以下 5 条任务由 Kernel Guardian 审查 C-01~C-25 约束覆盖时追加，覆盖原任务清单的隐性缺口。
 
-- [x] T86 [S] [DEP:T85] C-01~C-05 分层隔离 grep 验证 — 对 adapters/**/*.go 执行 `grep "github.com/ghbvf/gocell/cells"` 确认 0 匹配 (C-02); 对 kernel/**/*.go 执行 `grep "github.com/ghbvf/gocell/adapters\|github.com/ghbvf/gocell/runtime"` 确认 0 匹配 (C-03, C-05); 对 runtime/**/*.go 执行 `grep "github.com/ghbvf/gocell/adapters\|github.com/ghbvf/gocell/cells"` 确认 0 匹配 (C-04)。注: `go build` 不能捕获非循环的策略违规（如 adapters 导入 cells 可编译但违规），必须显式 grep。
+- [x] T86 [S] [DEP:T85] C-01~C-05 分层隔离 grep 验证 — 对 adapters/**/*.go 执行 `grep "github.com/ghbvf/gocell/corecells"` 确认 0 匹配 (C-02); 对 kernel/**/*.go 执行 `grep "github.com/ghbvf/gocell/adapters\|github.com/ghbvf/gocell/runtime"` 确认 0 匹配 (C-03, C-05); 对 runtime/**/*.go 执行 `grep "github.com/ghbvf/gocell/adapters\|github.com/ghbvf/gocell/corecells"` 确认 0 匹配 (C-04)。注: `go build` 不能捕获非循环的策略违规（如 adapters 导入 cells 可编译但违规），必须显式 grep。
 - [x] T87 [S] [DEP:T10,T16,T21,T30,T35,T39] C-12 Adapter Close 验证 — 确认 6 个 adapter 包（postgres, redis, rabbitmq, oidc, s3, websocket）的所有连接持有 struct 均实现 `Close(ctx context.Context) error` 方法。验证方法: 每个 adapter 包至少 1 个 `var _ io.Closer` 或等效编译断言。
 - [x] T88 [S] [DEP:T85] C-18 go.mod 依赖白名单检查 — `go.mod` diff 对比 Phase 2 基线，新增直接依赖必须限于白名单: pgx/v5, go-redis/v9, amqp091-go, nhooyr.io/websocket, testcontainers-go（+ 各自的间接依赖）。任何超出白名单的直接依赖需书面理由。
 - [x] T89 [S] [DEP:T15,T20,T26,T29,T34,T38,T42] C-19+C-20 Adapter 错误规范验证 — (1) grep `errors\.New\|fmt\.Errorf` in adapters/**/*.go（排除 _test.go），所有非测试代码的对外错误必须使用 `pkg/errcode` 且前缀为 `ERR_ADAPTER_*`; (2) grep 裸露的 `pgx\.\|redis\.\|amqp\.` 错误类型在 return 语句中，确认全部被 `fmt.Errorf("...: %w", err)` 或 `errcode.Wrap` 包装。

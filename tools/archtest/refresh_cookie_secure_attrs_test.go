@@ -18,7 +18,7 @@ import (
 // Claim (two parts):
 //
 //  1. Secure attributes — every http.Cookie composite literal in
-//     cells/accesscore/internal/httpcookie (production code) MUST set the three
+//     corecells/accesscore/internal/httpcookie (production code) MUST set the three
 //     security attributes HttpOnly:true, Secure:true,
 //     SameSite:http.SameSiteStrictMode (scanRefreshCookieSecureAttrs).
 //  2. Host-binding — the package's CookieName const MUST be "__Host-gocell_rt"
@@ -77,7 +77,7 @@ import (
 // REFRESH-COOKIE-SINGLE-WRITER-01
 //
 // Claim: the refresh-cookie name "__Host-gocell_rt" may be written ONLY inside
-// cells/accesscore/internal/httpcookie. Any other production package that emits
+// corecells/accesscore/internal/httpcookie. Any other production package that emits
 // a cookie with this name (via http.Cookie{Name:...}, raw Set-Cookie header, or
 // the httpcookie.CookieName const) is a single-writer violation — it would let
 // a second site mint or weaken the host-bound refresh credential outside the
@@ -207,7 +207,7 @@ func TestRefreshCookieSecureAttrs(t *testing.T) {
 	// Production scope only (default excludes _test.go): the package test file
 	// builds bare inbound http.Cookie{} values that intentionally omit security
 	// attributes; those are not production Set-Cookie construction.
-	scope := DirsScope(root, []string{"cells/accesscore/internal/httpcookie"})
+	scope := DirsScope(root, []string{"corecells/accesscore/internal/httpcookie"})
 
 	diags := Run(t, AST(scope), scanRefreshCookieSecureAttrs)
 
@@ -240,7 +240,7 @@ const refreshCookieName = "__Host-gocell_rt"
 
 // httpcookiePkgRel is the module-relative path of the sole sanctioned writer of
 // the refresh cookie (REFRESH-COOKIE-SINGLE-WRITER-01 skips it).
-const httpcookiePkgRel = "cells/accesscore/internal/httpcookie"
+const httpcookiePkgRel = "corecells/accesscore/internal/httpcookie"
 
 // scanRefreshCookieHostBound enforces the host-binding half of
 // REFRESH-COOKIE-SECURE-ATTRS-01 inside the httpcookie package: CookieName must
@@ -375,7 +375,7 @@ func TestRefreshCookieHostBound(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{"cells/accesscore/internal/httpcookie"})
+	scope := DirsScope(root, []string{"corecells/accesscore/internal/httpcookie"})
 
 	diags := Run(t, AST(scope), scanRefreshCookieHostBound)
 

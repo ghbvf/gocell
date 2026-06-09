@@ -287,7 +287,7 @@ func formatBannedSymbolDeclDiag(authImportPath, name string) string {
 // main invariant test and the BS-1 reverse self-check.
 var productionScanPatterns = []string{
 	"./runtime/...",
-	"./cells/...",
+	"./corecells/...",
 	"./cmd/...",
 	"./kernel/...",
 	"./adapters/...",
@@ -307,7 +307,7 @@ var productionScanPatterns = []string{
 func CheckNoDeletedAuthSymbols01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 
-	return Run(t, Typed(
+	return Run(t, WorkspaceTyped(
 		TypedOpts{Tests: true, Tags: cfg.BuildTags},
 		productionScanPatterns,
 	),

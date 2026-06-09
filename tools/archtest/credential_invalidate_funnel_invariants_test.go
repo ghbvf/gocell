@@ -185,11 +185,11 @@ func TestCredentialInvalidateFunnel_BumpAuthzEpoch_01(t *testing.T) {
 	verifyRedFixtureDetectedPass(
 		t,
 		// Internal-import workaround: ports.UserRepository lives under
-		// cells/accesscore/internal/, so the fixture must sit inside that tree
+		// corecells/accesscore/internal/, so the fixture must sit inside that tree
 		// to satisfy Go's internal-import rules. `testdata/` keeps it out of
 		// `go build ./...` while archtest loads it via explicit pattern. The
 		// previous tools/archtest/testdata location silently failed to load.
-		"./cells/accesscore/internal/credentialinvalidate/testdata/identitymanage_direct_bump_epoch_red",
+		"./corecells/accesscore/internal/credentialinvalidate/testdata/identitymanage_direct_bump_epoch_red",
 		userRepoPkg, userBumpMethod,
 		"USER-AUTHZ-EPOCH-BUMP-FUNNEL-01 RED fixture",
 		1,
@@ -250,7 +250,7 @@ func TestCredentialInvalidateFunnel_RevokeUser_01(t *testing.T) {
 // (see package godoc + ADR §A16) — a new mutator that tries to revoke
 // without going through Invalidator.Apply cannot mint a FenceToken.
 //
-// RED fixture: cells/accesscore/internal/credentialinvalidate/testdata/
+// RED fixture: corecells/accesscore/internal/credentialinvalidate/testdata/
 // sessionlogin_direct_apply_red — the sessionlogin slice is NOT on the
 // allowlist; calling invalidator.Apply from there must be detected.
 func TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01(t *testing.T) {
@@ -260,7 +260,7 @@ func TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01(t *testing.T) {
 
 	verifyRedFixtureDetectedPass(
 		t,
-		"./cells/accesscore/internal/credentialinvalidate/testdata/sessionlogin_direct_apply_red",
+		"./corecells/accesscore/internal/credentialinvalidate/testdata/sessionlogin_direct_apply_red",
 		invalidatorPkg, invalidatorMethod,
 		"CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 RED fixture",
 		1,
@@ -279,8 +279,8 @@ func TestCredentialInvalidateFunnel_AllowlistEntriesAreLive(t *testing.T) {
 	t.Parallel()
 
 	hits := map[string]int{}
-	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{
-		"./cells/accesscore/...",
+	_ = Run(t, WorkspaceTyped(TypedOpts{Tests: false}, []string{
+		"./corecells/accesscore/...",
 		"./cmd/...",
 	}),
 		func(p *Pass) []Diagnostic {
@@ -323,7 +323,7 @@ func TestCredentialInvalidateFunnel_AllowlistEntriesAreLive(t *testing.T) {
 // CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 scan.
 //
 // Mechanism: load credentialinvalidate.Applier.Apply's *types.Func via the
-// package scope; scan caller production packages (./cells/... ./runtime/...
+// package scope; scan caller production packages (./corecells/... ./runtime/...
 // ./cmd/...) for any *types.TypeName whose underlying type is an interface
 // that explicitly declares a method Apply whose *types.Signature is
 // types.Identical to the canonical one. Skip the credentialinvalidate
@@ -351,14 +351,14 @@ func TestCredentialInvalidateApplierInterfaceCanonical_01(t *testing.T) {
 
 	// RED fixture: same dual-scan pattern (canonical + fixture together).
 	redViolations := scanApplierInterfaceCanonical(t, ConfigForExternalCell{}, []string{
-		"./cells/accesscore/internal/credentialinvalidate",
+		"./corecells/accesscore/internal/credentialinvalidate",
 		"./tools/archtest/testdata/credential_invalidate_fixtures/noncanonical_applier_interface_red",
 	})
 	require.GreaterOrEqual(t, len(redViolations), 1,
 		"RED fixture self-check FAILED: noncanonical_applier_interface_red — "+
 			"expected ≥ 1 violation, got %d. Check that the fixture declares an "+
 			"interface with method Apply(ctx, string, session.CredentialEvent) error "+
-			"and that ./cells/accesscore/internal/credentialinvalidate is in the same Load.",
+			"and that ./corecells/accesscore/internal/credentialinvalidate is in the same Load.",
 		len(redViolations))
 }
 
@@ -382,8 +382,8 @@ func TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName(t *testing.T) 
 	}
 
 	var violations []string
-	_ = Run(t, Typed(TypedOpts{Tests: false},
-		[]string{"./cells/accesscore/...", "./runtime/auth/...", "./adapters/...", "./cmd/..."}),
+	_ = Run(t, WorkspaceTyped(TypedOpts{Tests: false},
+		[]string{"./corecells/accesscore/...", "./runtime/auth/...", "./adapters/...", "./cmd/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
@@ -416,7 +416,7 @@ func TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName(t *testing.T) 
 
 // ─── verifyRedFixtureDetectedPass ────────────────────────────────────────────
 
-// verifyRedFixtureDetectedPass loads the given fixture pattern via Run(t, Typed(...)) and
+// verifyRedFixtureDetectedPass loads the given fixture pattern via Run(t, WorkspaceTyped(...)) and
 // asserts the scanner finds ≥ wantMin violations — proving the rule is not
 // permanently GREEN. This is the "反向 RED 自检" (reverse RED self-check)
 // mandated by ai-robust.md. wantMin is the number of distinct banned-method
@@ -441,7 +441,7 @@ func verifyRedFixtureDetectedPass(
 	t.Helper()
 
 	var found int
-	diags := Run(t, Typed(TypedOpts{Tests: false}, []string{fixturePattern}), func(p *Pass) []Diagnostic {
+	diags := Run(t, WorkspaceTyped(TypedOpts{Tests: false}, []string{fixturePattern}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}

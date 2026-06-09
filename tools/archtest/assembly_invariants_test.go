@@ -88,15 +88,15 @@ const depth2SlashCount = 2
 func loadKnownCellIDs(t *testing.T) []string {
 	t.Helper()
 	root := findModuleRoot(t)
-	// Match cells/<id>/cell.yaml only — depth-2 from cells/. A bare
+	// Match corecells/<id>/cell.yaml only — depth-2 from corecells/. A bare
 	// filepath.Base check would also match nested fixtures (e.g.
 	// cells/<id>/sub/cell.yaml), letting future test scaffolding silently
 	// inflate the cell ID set.
 	scope := DirsScope(
-		root, []string{"cells"},
+		root, []string{"corecells"},
 		MatchRels(func(rel string) bool {
 			rel = filepath.ToSlash(rel)
-			return strings.HasPrefix(rel, "cells/") &&
+			return strings.HasPrefix(rel, "corecells/") &&
 				strings.Count(rel, "/") == depth2SlashCount &&
 				filepath.Base(rel) == "cell.yaml"
 		}),
@@ -119,7 +119,7 @@ func loadKnownCellIDs(t *testing.T) []string {
 	})
 
 	require.NotEmpty(t, ids,
-		"%s: no cells/*/cell.yaml found — derived set would be empty (fail-closed)",
+		"%s: no corecells/*/cell.yaml found — derived set would be empty (fail-closed)",
 		ruleAssemblySwitchForbidden02)
 	sort.Strings(ids)
 	return ids

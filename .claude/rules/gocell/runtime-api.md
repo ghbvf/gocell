@@ -3,7 +3,7 @@ paths:
   - "runtime/**/*.go"
   - "cmd/**/*.go"
   - "examples/**/*.go"
-  - "cells/**/*.go"
+  - "corecorecells/**/*.go"
 ---
 
 # Runtime API

@@ -111,7 +111,7 @@ func TestNO_DELETED_AUTH_SYMBOLS_01_FixtureCatchesAllForms(t *testing.T) {
 func TestNO_DELETED_AUTH_SYMBOLS_01_BS1_NoReflectAccess(t *testing.T) {
 	t.Parallel()
 
-	diags := Run(t, Typed(
+	diags := Run(t, WorkspaceTyped(
 		TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
 		productionScanPatterns,
 	),

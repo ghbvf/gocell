@@ -800,7 +800,7 @@ func cellDeclaresL0Dependencies(root string, cm *metadata.CellMeta) bool {
 // not from "cells/<cm.ID>", so cells under examples/**/cells/ are also resolved
 // correctly. This mirrors sliceMetaCheck which already uses cellMeta.File.
 func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []governance.ValidationResult, bool) {
-	const cellsImportPrefix = "github.com/ghbvf/gocell/cells/"
+	const cellsImportPrefix = "github.com/ghbvf/gocell/corecells/"
 	cellDir := filepath.Dir(filepath.FromSlash(cm.File))
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedImports,

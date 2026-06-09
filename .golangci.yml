@@ -282,6 +282,10 @@ linters:
                 imports in adapters/). The explicit deny here remains so that any
                 future relaxation of adapters-isolation scope does not silently
                 re-open this specific boundary.
+            - pkg: github.com/ghbvf/gocell/corecells
+              desc: |
+                adapters/grpc must never import corecells/; platform cells depend
+                on adapters through interfaces, not the reverse.
         adapters-isolation:
           # LAYER-04: adapters/ depend on kernel/ + runtime/ + pkg/ + SDKs.
           # Cell-internal `cells/*/internal/adapters/**` is owned by the cell
@@ -293,6 +297,7 @@ linters:
             - "!**/adapters/**/*_test.go"
             - "!**/adapters/postgres/pgtest/**"
             - "!**/cells/**/adapters/**"
+            - "!**/corecells/**/adapters/**"
             - "!**/examples/**"
           allow:
             - $gostd
@@ -338,10 +343,10 @@ linters:
             - github.com/ghbvf/gocell/pkg
             - github.com/ghbvf/gocell/tests/testutil/pgclone
         cells-isolation:
-          # LAYER-02: cells/ depend on kernel/ + runtime/ + pkg/. Cell-internal
+          # LAYER-02: platform cells depend on kernel/ + runtime/ + pkg/. Cell-internal
           # adapters legitimately import SDKs (pgx etc.) — those externals are
           # listed here, not in adapters-isolation, because the file path is
-          # `cells/<name>/internal/adapters/**`. Cross-cell internal access and
+          # `corecells/<name>/internal/adapters/**`. Cross-cell internal access and
           # cell-owned subpackage isolation are enforced by archtest LAYER-05/06.
           # generated/contracts is allowed because PR-V1-CODEGEN-FULL-MIGRATION
           # made cells/* call <contractpkg>.NewHandler / NewSubscription instead
@@ -349,7 +354,9 @@ linters:
           list-mode: strict
           files:
             - "**/cells/**"
+            - "**/corecells/**"
             - "!**/cells/**/*_test.go"
+            - "!**/corecells/**/*_test.go"
             - "!**/examples/**"
           allow:
             - $gostd
@@ -357,6 +364,7 @@ linters:
             - github.com/ghbvf/gocell/pkg
             - github.com/ghbvf/gocell/runtime
             - github.com/ghbvf/gocell/cells
+            - github.com/ghbvf/gocell/corecells
             - github.com/ghbvf/gocell/generated/contracts
             - github.com/google/uuid
             - github.com/jackc/pgx
@@ -371,12 +379,12 @@ linters:
           deny:
             - pkg: github.com/ghbvf/gocell/cellmodules
               desc: |
-                cellmodules/ is a Composition Root layer; cells/ must not import it
-                (reverse import = layer violation — cellmodules/ imports cells/, not
+                cellmodules/ is a Composition Root layer; corecells/ must not import it
+                (reverse import = layer violation — cellmodules/ imports corecells/, not
                 the other way around). Belt-and-suspenders alongside strict allow-list.
             - pkg: github.com/ghbvf/gocell/runtime/grpc/interceptor
               desc: |
-                cells/ must not import runtime/grpc/interceptor — gRPC interceptor
+                corecells/ must not import runtime/grpc/interceptor — gRPC interceptor
                 wiring (auth/metrics/tracing/recovery via NewUnaryChain) is a
                 composition-root concern: cmd/ and examples/ build the chain and
                 inject it into adapters/grpc.Server via Config.ServerOptions, then
@@ -676,22 +684,22 @@ linters:
           # the accountlockout policy.
           list-mode: lax
           files:
-            - "**/cells/accesscore/slices/sessionlogin/**"
-            - "!**/cells/accesscore/slices/sessionlogin/*_test.go"
-            - "!**/cells/accesscore/slices/sessionlogin/**/*_test.go"
+            - "**/corecells/accesscore/slices/sessionlogin/**"
+            - "!**/corecells/accesscore/slices/sessionlogin/*_test.go"
+            - "!**/corecells/accesscore/slices/sessionlogin/**/*_test.go"
           deny:
-            - pkg: github.com/ghbvf/gocell/cells/accesscore/internal/authzmutate
+            - pkg: github.com/ghbvf/gocell/corecells/accesscore/internal/authzmutate
               desc: |
                 sessionlogin must NOT directly import authzmutate. The
                 auto-lockout path goes through
-                cells/accesscore/internal/accountlockout, which is the typed
+                corecells/accesscore/internal/accountlockout, which is the typed
                 mediator owning failure-window policy + metric + outbox event.
                 (SESSIONLOGIN-LOCKOUT-VIA-ACCOUNTLOCKOUT-01 upstream Hard funnel)
-            - pkg: github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate
+            - pkg: github.com/ghbvf/gocell/corecells/accesscore/internal/credentialinvalidate
               desc: |
                 sessionlogin must NOT directly import credentialinvalidate. The
                 auto-lockout path goes through
-                cells/accesscore/internal/accountlockout, which routes through
+                corecells/accesscore/internal/accountlockout, which routes through
                 authzmutate.Mutator.ApplyInTx (which in turn calls
                 credentialinvalidate inside the same tx).
                 (SESSIONLOGIN-LOCKOUT-VIA-ACCOUNTLOCKOUT-01 upstream Hard funnel)
@@ -749,6 +757,10 @@ linters:
               desc: |
                 cmd/corebundle must not import cells/ directly; cell wiring lives
                 in cellmodules/<cell> behind runtime/composition (#1085 COMPOSITION-MODULE-API-01).
+            - pkg: github.com/ghbvf/gocell/corecells
+              desc: |
+                cmd/corebundle must not import corecells/ directly; cell wiring
+                lives in cellmodules/<cell> behind runtime/composition (#1085).
 
     forbidigo:
       forbid:
@@ -833,7 +845,7 @@ linters:
       # rbacassign/service.go: Assign/Revoke are intentionally mirror-image
       # public APIs (per-action audit trail). Source comment documents the
       # decision; dupl flags the duplication structurally.
-      - path: ^cells/accesscore/slices/rbacassign/service\.go
+      - path: ^corecells/accesscore/slices/rbacassign/service\.go
         linters:
           - dupl
       # generate_contract.go / verify_codegen_contract.go are intentional
@@ -851,7 +863,7 @@ linters:
       # auto-leakage when either struct evolves. Source comment documents the
       # decision; staticcheck S1016 (prefer type conversion) is the wrong
       # advice in this specific spot.
-      - path: ^cells/accesscore/internal/dto/token_pair\.go
+      - path: ^corecells/accesscore/internal/dto/token_pair\.go
         linters:
           - staticcheck
         text: "S1016"
@@ -886,7 +898,7 @@ linters:
         linters:
           - gosec
         text: "G706"
-      - path: ^cells/auditcore/slices/auditquery/handler\.go
+      - path: ^corecells/auditcore/slices/auditquery/handler\.go
         linters:
           - gosec
         text: "G706"

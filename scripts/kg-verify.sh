@@ -58,7 +58,7 @@ CROSS_CELL_VIOLATIONS=""
 for CELL_DIR in "${SRC_DIR}"/cells/*/; do
     CELL_NAME=$(basename "${CELL_DIR}")
     # Find imports of other cells' packages (not self)
-    OTHER_CELLS=$(grep -rn '"github.com/ghbvf/gocell/cells/' "${CELL_DIR}" --include='*.go' 2>/dev/null \
+    OTHER_CELLS=$(grep -rn '"github.com/ghbvf/gocell/corecells/' "${CELL_DIR}" --include='*.go' 2>/dev/null \
         | grep -v "gocell/cells/${CELL_NAME}/" || true)
     if [ -n "${OTHER_CELLS}" ]; then
         CROSS_CELL_VIOLATIONS="${CROSS_CELL_VIOLATIONS}${OTHER_CELLS}\n"

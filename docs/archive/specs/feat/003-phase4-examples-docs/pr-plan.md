@@ -635,7 +635,7 @@ git diff develop -- kernel/ | grep "^[+-]" | grep -v "^[+-]\s*//" | wc -l  # 期
 grep -r "github.com/ghbvf/gocell/\(runtime\|adapters\|cells\)" kernel/  # 0
 grep -r "github.com/ghbvf/gocell/adapters" cells/  # 0
 grep -r "github.com/ghbvf/gocell/\(adapters\|cells\)" runtime/  # 0
-grep -r "github.com/ghbvf/gocell/cells" adapters/  # 0
+grep -r "github.com/ghbvf/gocell/corecells" adapters/  # 0
 grep -r "cells/.*/internal" examples/  # 0
 grep -r "adapters/.*/internal" examples/  # 0
 

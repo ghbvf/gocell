@@ -195,9 +195,9 @@ var errorFirstEnforcedFiles = []string{
 	"runtime/http/health/health.go",
 	"runtime/http/router/router.go",
 	"kernel/persistence/tx.go",
-	"cells/accesscore/slices/sessionlogin/service.go",
-	"cells/accesscore/slices/sessionrefresh/service.go",
-	"cells/accesscore/slices/sessionlogout/service.go",
+	"corecells/accesscore/slices/sessionlogin/service.go",
+	"corecells/accesscore/slices/sessionrefresh/service.go",
+	"corecells/accesscore/slices/sessionlogout/service.go",
 	"adapters/postgres/refresh_store.go",
 }
 
@@ -652,7 +652,7 @@ func CheckErrorFirstTypedNil01(t *testing.T, cfg ConfigForExternalCell) []Diagno
 	}
 	root := findModuleRoot(t)
 	enforced := errorFirstEnforcedFileMap(root)
-	return Run(t, Typed(TypedOpts{Tests: false}, errorFirstPackagePatterns()),
+	return Run(t, WorkspaceTyped(TypedOpts{Tests: false}, errorFirstPackagePatterns()),
 		func(p *Pass) []Diagnostic {
 			var out []Diagnostic
 			for _, file := range p.Files {

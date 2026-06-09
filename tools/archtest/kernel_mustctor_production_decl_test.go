@@ -126,7 +126,7 @@ var allowedMustDecls = map[string]map[string]struct{}{
 		"MustHave": {},
 	},
 	// (b) codegen / sealed funnel
-	"cells/auditcore/internal/appender": {
+	"corecells/auditcore/internal/appender": {
 		"MustNewSpec": {},
 	},
 	// (a) internal validator — NewHub calls it internally, not exposed as constructor
@@ -162,6 +162,7 @@ var testFixturePkgPrefixes = []string{
 	"runtime/auth/keystest",
 	"runtime/audit/ledger/storetest",
 	"cells/internal/testoutbox",
+	"corecells/internal/testoutbox",
 	"kernel/cell/celltest",
 	// tools/archtest/testdata fixtures used by other archtests (panic_registered etc.)
 	"tools/archtest/testdata",
@@ -268,7 +269,7 @@ func TestKernelMustCtorCarveOutLogic(t *testing.T) {
 		{"runtime/http/router", "MustNew", false, "runtime/http/router.MustNew — must be removed"},
 		{"adapters/websocket", "MustUpgradeHandler", false, "adapters/websocket.MustUpgradeHandler — must be removed"},
 		// hypothetical future violation
-		{"cells/accesscore", "MustViolation", false, "hypothetical violation in cells/accesscore must be flagged"},
+		{"corecells/accesscore", "MustViolation", false, "hypothetical violation in corecells/accesscore must be flagged"},
 	}
 	for _, tc := range cases {
 		got := isAllowedMustDecl(tc.relPkg, tc.funcName)

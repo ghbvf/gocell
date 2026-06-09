@@ -32,6 +32,7 @@ require (
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
+	github.com/ghbvf/gocell/corecells v0.0.0
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
@@ -110,3 +111,5 @@ require (
 replace github.com/ghbvf/gocell => ../../
 
 replace github.com/ghbvf/gocell/cellmodules => ../../cellmodules
+
+replace github.com/ghbvf/gocell/corecells => ../../corecells

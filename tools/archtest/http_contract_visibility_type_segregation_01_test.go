@@ -16,8 +16,8 @@
 //
 // Reference implementation: configread pattern —
 //
-//	cells/configcore/slices/configread/handler.go GetAdapter / ListAdapter
-//	cells/configcore/slices/configreadinternal/handler.go InternalGetAdapter
+//	corecells/configcore/slices/configread/handler.go GetAdapter / ListAdapter
+//	corecells/configcore/slices/configreadinternal/handler.go InternalGetAdapter
 //
 // After the F1' refactor, devicecell follows the same pattern:
 //
@@ -248,7 +248,7 @@ func checkPassForVisibilityViolations(pass *Pass, ifaceSet *contractServiceIface
 // passing the right set of patterns.
 //
 // fixture selects the loader façade:
-//   - false → Run(t, Typed(...)) (production scan: real-repo clean check)
+//   - false → Run(t, WorkspaceTyped(...)) (production scan: real-repo clean check)
 //   - true  → Run(t, Fixture(...)) (fixture scan: scanner-catches-violation
 //     check). The archtest_fixture build tag is supplied entirely inside
 //     Run(t, Fixture(...))'s body; this helper never names the tag literal, in
@@ -287,8 +287,8 @@ func runHTTPContractVisibilityCheck(
 		Run(t, Fixture(FixtureOpts{Tests: false}, patterns), phase2Rule)
 	} else {
 		// Production scan: no fixture tag.
-		_ = Run(t, Typed(TypedOpts{Tests: false}, patterns), phase1Rule)
-		Run(t, Typed(TypedOpts{Tests: false}, patterns), phase2Rule)
+		_ = Run(t, WorkspaceTyped(TypedOpts{Tests: false}, patterns), phase1Rule)
+		Run(t, WorkspaceTyped(TypedOpts{Tests: false}, patterns), phase2Rule)
 	}
 
 	return violations
@@ -304,7 +304,7 @@ func runHTTPContractVisibilityCheck(
 // universe (single packages.Load call through SharedResolver).
 var productionPatterns = []string{
 	"./generated/contracts/http/...",
-	"./cells/...",
+	"./corecells/...",
 	"./examples/...",
 	"./runtime/...",
 	"./adapters/...",
@@ -332,7 +332,7 @@ func TestHTTPContractVisibilityTypeSegregation01_RealRepoClean(t *testing.T) {
 				"slices/<slice>/handler.go, internal Adapters in "+
 				"slices/<internalslice>/handler.go. "+
 				"ref: configread pattern "+
-				"(cells/configcore/slices/configread+configreadinternal)",
+				"(corecells/configcore/slices/configread+configreadinternal)",
 			v.Rel, v.Line, v.TypeName, v.PublicContracts, v.InternalContracts,
 		)
 	}

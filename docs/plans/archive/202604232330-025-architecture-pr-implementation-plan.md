@@ -712,7 +712,7 @@
 
 **问题**（三件同 PR）：
 - (a) `event.config.entry-upserted.v1` contract 宣称 "subscribers should apply current value"，但 producer 对 sensitive entry 主动降级为 `******` 占位符，subscriber 还把占位符写进本地 cache——同一事件混用 metadata 通知 + 可应用状态语义
-- (b) `cells/accesscore/slices/configreceive/service.go:11` 直接 `import configevents "github.com/ghbvf/gocell/cells/configcore/events"`，跨 cell 边界退化为 Go 包依赖，contract 不再是唯一事实源
+- (b) `cells/accesscore/slices/configreceive/service.go:11` 直接 `import configevents "github.com/ghbvf/gocell/corecells/configcore/events"`，跨 cell 边界退化为 Go 包依赖，contract 不再是唯一事实源
 - (c) gocell 平台没有 archtest 拦"cells/X import cells/Y/{events,internal,**}"
 
 **修复（激进方案，三件同 PR — 用户 2026-04-25 拍板）**：

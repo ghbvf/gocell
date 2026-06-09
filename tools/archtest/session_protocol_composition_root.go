@@ -49,7 +49,7 @@ var sessionProtocolForbidden = map[string]struct{}{
 //     the AUTH-PLAN-04 / LAYER-09 carve-out for example projects.
 func CheckSessionProtocolCompositionRoot01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
-	return Run(t, Typed(
+	return Run(t, WorkspaceTyped(
 		TypedOpts{Tests: false},
 		sessionProtocolProductionPatterns(),
 	), scanSessionProtocolViolations)
@@ -59,7 +59,7 @@ func CheckSessionProtocolCompositionRoot01(t *testing.T, cfg ConfigForExternalCe
 // the production rule (cells / runtime / adapters).
 func sessionProtocolProductionPatterns() []string {
 	return []string{
-		"./cells/...",
+		"./corecells/...",
 		"./runtime/...",
 		"./adapters/...",
 	}

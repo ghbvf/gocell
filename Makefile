@@ -204,9 +204,9 @@ test-integration:
 		./tests/e2e/internal/... \
 		github.com/ghbvf/gocell/cmd/corebundle/... \
 		github.com/ghbvf/gocell/examples/ssobff/... \
-		./cells/accesscore/... \
-		./cells/configcore/... \
-		./cells/auditcore/... \
+		./corecells/accesscore/... \
+		./corecells/configcore/... \
+		./corecells/auditcore/... \
 		./runtime/bootstrap/... \
 		-count=1 -timeout 15m -v
 

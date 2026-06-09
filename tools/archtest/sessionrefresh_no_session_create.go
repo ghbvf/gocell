@@ -51,7 +51,8 @@ var bannedSessionStoreMethods = map[string]struct{}{
 // TestSessionrefreshNoSessionStoreMutation_01 calls it directly — single source.
 func CheckSessionrefreshNoSessionCreate01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
-	return Run(t, Typed(TypedOpts{Tests: false}, []string{"./cells/accesscore/slices/sessionrefresh/..."}), func(p *Pass) []Diagnostic {
+	patterns := []string{"./corecells/accesscore/slices/sessionrefresh/..."}
+	return Run(t, WorkspaceTyped(TypedOpts{Tests: false}, patterns), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}

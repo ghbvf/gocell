@@ -1,0 +1,427 @@
+//go:build integration
+
+// Package identitymanage — e2e test for the full ChangePassword flow.
+//
+// Build tag: integration. Run with: go test -tags=integration ./...
+// Not included in the default go test ./... run (P1-12 fix: this test starts
+// a full HTTP-routed service and is too heavy for the unit test suite).
+//
+// Flow:
+//  1. Bootstrap an admin user with PasswordResetRequired=true via in-memory repo.
+//  2. Login → assert TokenPair.PasswordResetRequired==true and JWT claim=true.
+//  3. Assert that the password-endpoint path is exempt from reset enforcement
+//     via real AuthMiddleware (no local stub — F-SEC-3 fix from P1-10).
+//  4. Call POST /{id}/password → assert 200 + new TokenPair with PasswordResetRequired==false.
+//  5. Verify new JWT claim is false.
+//  6. Call GET /{id} with new token → assert 200.
+package identitymanage
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
+	"golang.org/x/crypto/bcrypt"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/accountlockout"
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/authzmutate"
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/credentialinvalidate"
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/dto"
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/testutil"
+	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionlogin"
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
+	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/keystest"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
+	"github.com/ghbvf/gocell/runtime/auth/session"
+)
+
+// e2eTestTenantID is the canonical test tenant UUID for this e2e test.
+// Seed and query must use the same value so tenant-scoped repo reads return
+// the seeded rows.
+var e2eTestTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("changepassword_e2e_test: invalid e2eTestTenantID: " + err.Error())
+	}
+	return t
+}()
+
+// e2eTestKeySet holds a key pair shared across the e2e test.
+var e2eTestKeySet, _, _ = keystest.MustNewKeySet(clock.Real())
+
+// e2eIssuer is used by the login service.
+// WithIssuerAudiencesFromSlice(["gocell"]) must match the e2eVerifier's
+// WithExpectedAudiences("gocell") so that VerifyIntent passes audience validation.
+var e2eIssuer = func() *auth.JWTIssuer {
+	i, err := auth.NewJWTIssuer(e2eTestKeySet, "gocell-accesscore", testtime.D15min, clock.Real(),
+		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
+	if err != nil {
+		panic("e2e test setup: " + err.Error())
+	}
+	return i
+}()
+
+// e2eVerifier is used to decode tokens in assertions.
+var e2eVerifier = func() *auth.JWTVerifier {
+	v, err := auth.NewJWTVerifier(e2eTestKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
+	if err != nil {
+		panic("e2e test setup: " + err.Error())
+	}
+	return v
+}()
+
+// e2eTokenIssuer bridges sessionlogin.Service to the identitymanage.TokenIssuer interface.
+// sessionlogin.Service.IssueForUser returns dto.TokenPair so this bridge is a
+// transparent delegation (no conversion needed).
+type e2eTokenIssuer struct {
+	svc *sessionlogin.Service
+}
+
+func (ti *e2eTokenIssuer) IssueForUser(ctx context.Context, userID string) (dto.TokenPair, error) {
+	return ti.svc.IssueForUser(ctx, userID)
+}
+
+// e2eFixture is a minimal but realistic wiring: shared mem repos, real JWT
+// key pair, loginService + identityService with TokenIssuer injection, and a
+// full-path HTTP mux.
+type e2eFixture struct {
+	mux          http.Handler
+	loginSvc     *sessionlogin.Service
+	userRepo     ports.UserRepository
+	sessionStore session.Store
+	roleRepo     ports.RoleRepository
+}
+
+func newE2EFixture() *e2eFixture {
+	sharedStore := mem.NewStore(clock.Real())
+	userRepo := sharedStore.UserRepository()
+	proto, err := session.NewProtocol(
+		session.WithFingerprint(session.FingerprintJTIRef{}),
+		session.WithOrdering(session.OrderingAuthzEpoch{}),
+		session.WithRevokeOnAll(),
+	)
+	if err != nil {
+		panic("newE2EFixture: session protocol setup failed: " + err.Error())
+	}
+	sessionStore, err := session.NewMemStore(proto, clock.Real())
+	if err != nil {
+		panic("newE2EFixture: session store setup failed: " + err.Error())
+	}
+	roleRepo := sharedStore.RoleRepository()
+	refreshStore, err := refreshmem.New(
+		refresh.Policy{
+			ReuseInterval:  testtime.D2s,
+			MaxAge:         time.Hour,
+			MaxIdle:        refresh.DefaultMaxIdle,
+			GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+		},
+		clock.Real(), nil,
+	)
+	if err != nil {
+		panic("test setup: " + err.Error())
+	}
+
+	// Shared stub TxRunner — both services fail-fast on nil after 029 #03
+	// ADR Decision 2 (persistence.NoopTxRunner deletion). The e2e flow has
+	// no DB, so a stub that just invokes fn(ctx) satisfies the L2 contract.
+	// stubTxRunner holds no lock, so each repo method takes its per-call lock:
+	// this e2e does NOT verify cross-method atomicity. Cross-method atomicity (store-bound TxRunner, live lease)
+	// is covered by identitymanage_credential_race_test.go
+	// TestIdentitymanageCredential_ConcurrentChangePassword_EpochPositive.
+	tx := &stubTxRunner{}
+
+	inv, err := credentialinvalidate.New(userRepo, sessionStore, refreshStore)
+	if err != nil {
+		panic("newE2EFixture: invalidator setup failed: " + err.Error())
+	}
+	mut, err := authzmutate.New(inv, userRepo)
+	if err != nil {
+		panic("newE2EFixture: mutator setup failed: " + err.Error())
+	}
+	lockoutSvc, err := accountlockout.NewService(userRepo, mut, outbox.DemoCellEmitter(), clock.Real())
+	if err != nil {
+		panic("newE2EFixture: accountlockout setup failed: " + err.Error())
+	}
+
+	loginSvc, err := sessionlogin.NewService(
+		clock.Real(),
+		sessionlogin.NewServiceParams{
+			UserRepo:     userRepo,
+			SessionStore: sessionStore,
+			RoleRepo:     roleRepo,
+			RefreshStore: refreshStore,
+			Issuer:       e2eIssuer,
+		},
+		slog.Default(),
+		sessionlogin.WithTxManager(persistence.WrapForCell(tx)),
+		sessionlogin.WithSessionTTL(time.Hour),
+		sessionlogin.WithAccountLockout(lockoutSvc),
+	)
+	if err != nil {
+		panic("newE2EFixture: loginSvc setup failed: " + err.Error())
+	}
+	idmSvc, err := NewService(
+		clock.Real(),
+		userRepo, inv, slog.Default(),
+		roleRepo,
+		WithTokenIssuer(&e2eTokenIssuer{svc: loginSvc}),
+		WithTxManager(persistence.WrapForCell(tx)),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	// Build a full-path mux so path values are populated correctly.
+	// RegisterRoutes mounts all generated contract handlers (create/get/update/patch/
+	// delete/lock/unlock/change-password) with their declared auth policies, matching
+	// the production wiring in cell_init.go.
+	mux := celltest.NewTestMux()
+	h := NewHandler(idmSvc)
+	mux.Route("/api/v1/access/users", func(s cell.RouteMux) {
+		if err := h.RegisterRoutes(s); err != nil {
+			panic("newE2EFixture: RegisterRoutes: " + err.Error())
+		}
+	})
+
+	return &e2eFixture{
+		mux:          mux,
+		loginSvc:     loginSvc,
+		userRepo:     userRepo,
+		sessionStore: sessionStore,
+		roleRepo:     roleRepo,
+	}
+}
+
+// bootstrapAdminUser seeds an admin user with PasswordResetRequired=true in
+// the in-memory repos. Returns the userID.
+func bootstrapAdminUser(t *testing.T, f *e2eFixture, username, plainPassword string) string {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte(plainPassword), bcrypt.MinCost)
+	require.NoError(t, err)
+
+	user, err := domain.NewUser(username, username+"@gocell.local", string(hash), time.Now())
+	require.NoError(t, err)
+	// PR-A45: handler edge ParseUUIDPathParam requires canonical UUIDs in
+	// path positions; testID derives a deterministic UUID from the username
+	// so seed and request paths agree.
+	user.ID = testutil.TestID("e2e-" + username)
+	user.SetPasswordResetRequired(true, time.Now())
+	require.NoError(t, f.userRepo.Create(context.Background(), e2eTestTenantID, user))
+
+	// Assign admin role.
+	adminRole := &domain.Role{
+		ID:          auth.RoleAdmin,
+		Name:        auth.RoleAdmin,
+		Permissions: []domain.Permission{{Resource: "*", Action: "*"}},
+	}
+	_ = f.roleRepo.Create(context.Background(), e2eTestTenantID, adminRole)
+	_, err = f.roleRepo.AssignToUser(context.Background(), e2eTestTenantID, user.ID, auth.RoleAdmin)
+	require.NoError(t, err)
+
+	return user.ID
+}
+
+// TestChangePassword_FullFlow is the e2e closure test:
+//
+//  1. Bootstrap admin → PasswordResetRequired=true.
+//  2. Login → assert flag=true in both TokenPair and JWT claim.
+//  3. Assert allowlist: POST /password is exempt; GET /users/{id} is not.
+//  4. POST /{id}/password → 200 + new TokenPair with flag=false.
+//  5. New JWT claim=false.
+//  6. GET /{id} with new token → 200.
+func TestChangePassword_FullFlow(t *testing.T) {
+	f := newE2EFixture()
+	const bootstrapPassword = "B00tstr@pSecret"
+	const newPassword = "NewS3cur3P@ss!"
+
+	userID := bootstrapAdminUser(t, f, "e2e-admin", bootstrapPassword)
+
+	// --- Step 2: Login ---
+	loginPair, err := f.loginSvc.Login(context.Background(), sessionlogin.LoginInput{
+		Username: "e2e-admin",
+		Password: bootstrapPassword,
+		TenantID: string(e2eTestTenantID),
+	})
+	require.NoError(t, err)
+	assert.True(t, loginPair.PasswordResetRequired,
+		"Login must return PasswordResetRequired=true for bootstrap user")
+
+	// Verify JWT claim.
+	loginClaims, err := e2eVerifier.VerifyIntent(context.Background(), loginPair.AccessToken, kauth.TokenIntentAccess)
+	require.NoError(t, err)
+	assert.True(t, loginClaims.PasswordResetRequired,
+		"access token must carry password_reset_required=true claim after bootstrap login")
+
+	// --- Step 3: allowlist assertions via real AuthMiddleware ---
+	// Verify that the actual middleware enforces password-reset correctly:
+	// - GET /users/{id} is NOT exempt → middleware returns 403
+	// - POST /users/{id}/password IS exempt → middleware forwards to handler (200)
+	// - DELETE /sessions/{id} IS exempt → middleware forwards to handler (204)
+	//
+	// We use a real AuthMiddleware wired with the e2eVerifier and a token that
+	// carries PasswordResetRequired=true. The downstream handler is a stub that
+	// always returns 200 (or the method-appropriate code). This avoids the
+	// isPasswordResetExemptLocal stub which mirrored allowlist logic locally and
+	// could diverge from the real implementation (F-SEC-3).
+	exemptMatcher, err := auth.CompilePasswordResetExempts([]string{
+		"POST /api/v1/access/users/{id}/password",
+		"DELETE /api/v1/access/sessions/{id}",
+	})
+	require.NoError(t, err)
+	muxWithMiddleware := func(method, path string) int {
+		stub := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			if method == http.MethodDelete {
+				w.WriteHeader(http.StatusNoContent)
+			} else {
+				w.WriteHeader(http.StatusOK)
+			}
+		})
+		mid := auth.AuthMiddleware(clock.Real(), e2eVerifier,
+			auth.WithPasswordResetExemptMatcher(exemptMatcher))(stub)
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Authorization", "Bearer "+loginPair.AccessToken)
+		rec := httptest.NewRecorder()
+		mid.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	assert.Equal(t, http.StatusForbidden, muxWithMiddleware(http.MethodGet, "/api/v1/access/users/"+userID),
+		"GET /users/{id} must be blocked (403) by password-reset enforcement")
+	assert.Equal(t, http.StatusOK, muxWithMiddleware(http.MethodPost, "/api/v1/access/users/"+userID+"/password"),
+		"POST /users/{id}/password must be exempt from password reset enforcement")
+	// PR-A45: middleware allowlist cares about the path template, not the
+	// concrete id. The stub handler downstream returns 204 unconditionally,
+	// so use a syntactically valid UUID to avoid the upstream
+	// ParseUUIDPathParam guard intercepting before the middleware decision
+	// is observable.
+	assert.Equal(t, http.StatusNoContent, muxWithMiddleware(http.MethodDelete, "/api/v1/access/sessions/"+testutil.TestID("sess-x")),
+		"DELETE /sessions/{id} must be exempt from password reset enforcement")
+
+	// --- Step 4: ChangePassword ---
+	cpBody, _ := json.Marshal(map[string]string{
+		"oldPassword": bootstrapPassword,
+		"newPassword": newPassword,
+	})
+	cpReq := httptest.NewRequest(http.MethodPost, "/api/v1/access/users/"+userID+"/password",
+		bytes.NewReader(cpBody))
+	cpReq.Header.Set("Content-Type", "application/json")
+	cpReq = cpReq.WithContext(withTenant(auth.TestContext(userID, []string{auth.RoleAdmin})))
+	cpW := httptest.NewRecorder()
+	f.mux.ServeHTTP(cpW, cpReq)
+	require.Equal(t, http.StatusOK, cpW.Code, "ChangePassword must return 200; body=%s", cpW.Body.String())
+
+	var cpResp struct {
+		Data struct {
+			AccessToken           string    `json:"accessToken"`
+			RefreshToken          string    `json:"refreshToken"`
+			ExpiresAt             time.Time `json:"expiresAt"`
+			PasswordResetRequired bool      `json:"passwordResetRequired"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(cpW.Body.Bytes(), &cpResp))
+	assert.NotEmpty(t, cpResp.Data.AccessToken, "new access token must not be empty")
+	assert.False(t, cpResp.Data.PasswordResetRequired, "PasswordResetRequired must be false after password change")
+
+	// --- Step 5: Verify new token JWT claim ---
+	newClaims, err := e2eVerifier.VerifyIntent(context.Background(), cpResp.Data.AccessToken, kauth.TokenIntentAccess)
+	require.NoError(t, err)
+	assert.False(t, newClaims.PasswordResetRequired,
+		"new access token JWT claim must be false after ChangePassword")
+
+	// --- Step 6: GET succeeds with new token (unblocked) ---
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/"+userID, nil)
+	getReq = getReq.WithContext(withTenant(auth.TestContext(userID, []string{auth.RoleAdmin})))
+	getW := httptest.NewRecorder()
+	f.mux.ServeHTTP(getW, getReq)
+	assert.Equal(t, http.StatusOK, getW.Code, "GET must succeed after password change")
+}
+
+// withTenantB injects a DIFFERENT, second test tenant into ctx.
+// Used by cross-tenant negative tests to simulate a caller authenticated under
+// tenant-B attempting to access a resource owned by tenant-A.
+func withTenantB(ctx context.Context) context.Context {
+	return ctxkeys.WithTenantID(ctx, "00000000-0000-0000-0000-000000000002")
+}
+
+// TestChangePassword_CrossTenant_NotFound (U16 — #1337 PR-2a review) verifies
+// that an admin authenticated under tenant B cannot mutate a user that belongs
+// to tenant A. The tenant-scoped repo collapses the cross-tenant row to
+// ErrAuthUserNotFound (IDOR-safe 404) — the response must be 404, not 200 or
+// any other leaky status.
+//
+// Flow:
+//  1. Seed user "cross-tenant-victim" under e2eTestTenantID (tenant A).
+//  2. Issue a ChangePassword request with the caller's context set to tenant B
+//     (withTenantB) using an admin principal.
+//  3. Assert 404 — the tenant-scoped GetByIDInTenant collapses the row.
+func TestChangePassword_CrossTenant_NotFound(t *testing.T) {
+	f := newE2EFixture()
+	victimID := bootstrapAdminUser(t, f, "cross-tenant-victim", "OriginalP@ss1")
+
+	// Caller is authenticated under tenant B (different from tenant A where
+	// the victim user was seeded). Admin role is present but wrong tenant.
+	crossTenantCtx := withTenantB(auth.TestContext(victimID, []string{auth.RoleAdmin}))
+
+	body, _ := json.Marshal(map[string]string{
+		"oldPassword": "OriginalP@ss1",
+		"newPassword": "NewP@ss12345",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/users/"+victimID+"/password",
+		bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(crossTenantCtx)
+	w := httptest.NewRecorder()
+	f.mux.ServeHTTP(w, req)
+
+	// IDOR-safe: tenant-scoped GetByIDInTenant collapses the cross-tenant row
+	// to not-found. The caller must not be able to distinguish "user exists in
+	// another tenant" from "user does not exist". Assert via the typed wire
+	// funnel (POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01): a _NotFound
+	// test must pin both the 404 status and the typed ErrAuthUserNotFound code,
+	// not a bare status check (which a different 404-mapped error could satisfy).
+	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrAuthUserNotFound)
+}
+
+// TestChangePassword_RejectsBadOldPassword ensures the e2e flow returns 401
+// when the old password is wrong (correct errcode propagated through HTTP).
+func TestChangePassword_RejectsBadOldPassword(t *testing.T) {
+	f := newE2EFixture()
+	userID := bootstrapAdminUser(t, f, "e2e-wrongpass", "correctpass")
+
+	body, _ := json.Marshal(map[string]string{
+		"oldPassword": "wrongpass1",
+		"newPassword": "newpass1234",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/users/"+userID+"/password",
+		bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(withTenant(auth.TestContext(userID, []string{auth.RoleAdmin})))
+	w := httptest.NewRecorder()
+	f.mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.Contains(t, w.Body.String(), string(errcode.ErrAuthOldPasswordIncorrect))
+}

@@ -80,13 +80,13 @@ func TestPolicyRepoConformanceEnrollment_REDFixture(t *testing.T) {
 	root := findModuleRoot(t)
 
 	// ─── Load production iface + impls ─────────────────────────────────────
-	prodPatterns := prodscan.Patterns(root)
-	ifacePatterns := append([]string{"./cells/accesscore/internal/ports/..."}, prodPatterns...)
+	prodPatterns := append([]string{"./corecells/..."}, prodscan.Patterns(root)...)
+	ifacePatterns := append([]string{"./corecells/accesscore/internal/ports/..."}, prodPatterns...)
 
 	var policyRepoIface *types.Interface
 	var implPkgs []*types.Package
 
-	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns),
+	_ = Run(t, WorkspaceTyped(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil

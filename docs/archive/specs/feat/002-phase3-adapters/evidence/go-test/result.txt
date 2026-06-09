@@ -487,7 +487,7 @@ ok  	github.com/ghbvf/gocell/adapters/websocket	3.619s
 2026/04/05 23:53:22 INFO http request method=GET path=/api/v1/access/roles/user-1 status=200 duration_ms=0 request_id=0dc84223-c7a6-4e08-8f4e-a0a9e7ea1bbf
 --- PASS: TestAccessCore_RouteRolesList (0.00s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/access-core	3.202s
+ok  	github.com/ghbvf/gocell/corecells/access-core	3.202s
 === RUN   TestRole_HasPermission
 === RUN   TestRole_HasPermission/has_exact_permission
 === RUN   TestRole_HasPermission/has_another_permission
@@ -551,9 +551,9 @@ ok  	github.com/ghbvf/gocell/cells/access-core	3.202s
 === RUN   TestUser_Lock_UpdatesTimestamp
 --- PASS: TestUser_Lock_UpdatesTimestamp (0.00s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/access-core/internal/domain	2.824s
-?   	github.com/ghbvf/gocell/cells/access-core/internal/mem	[no test files]
-?   	github.com/ghbvf/gocell/cells/access-core/internal/ports	[no test files]
+ok  	github.com/ghbvf/gocell/corecells/access-core/internal/domain	2.824s
+?   	github.com/ghbvf/gocell/corecells/access-core/internal/mem	[no test files]
+?   	github.com/ghbvf/gocell/corecells/access-core/internal/ports	[no test files]
 === RUN   TestService_Authorize
 === RUN   TestService_Authorize/authorized_via_role_permission
 === RUN   TestService_Authorize/unauthorized_-_no_matching_permission
@@ -563,7 +563,7 @@ ok  	github.com/ghbvf/gocell/cells/access-core/internal/domain	2.824s
     --- PASS: TestService_Authorize/unauthorized_-_no_matching_permission (0.00s)
     --- PASS: TestService_Authorize/unauthorized_-_no_roles (0.00s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/access-core/slices/authorizationdecide	2.440s
+ok  	github.com/ghbvf/gocell/corecells/access-core/slices/authorizationdecide	2.440s
 === RUN   TestHandler
 === RUN   TestHandler/POST_/_valid_user_returns_201
 2026/04/05 23:53:23 INFO user created user_id=usr-e561ef3a-4446-4d16-ae98-56b09f7f4773
@@ -611,7 +611,7 @@ ok  	github.com/ghbvf/gocell/cells/access-core/slices/authorizationdecide	2.440s
 2026/04/05 23:53:24 INFO user updated user_id=usr-376acfa7-321f-44fe-a2bb-b16ff96c5ac0
 --- PASS: TestService_Update_PatchSemantics (0.04s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/access-core/slices/identitymanage	3.216s
+ok  	github.com/ghbvf/gocell/corecells/access-core/slices/identitymanage	3.216s
 === RUN   TestHandler
 === RUN   TestHandler/GET_/{userID}_returns_roles
 === RUN   TestHandler/GET_/{userID}_no_roles_returns_empty
@@ -635,7 +635,7 @@ ok  	github.com/ghbvf/gocell/cells/access-core/slices/identitymanage	3.216s
 === RUN   TestService_ListRolesEmptyInput
 --- PASS: TestService_ListRolesEmptyInput (0.00s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/access-core/slices/rbaccheck	2.901s
+ok  	github.com/ghbvf/gocell/corecells/access-core/slices/rbaccheck	2.901s
 === RUN   TestHandleLogin
 === RUN   TestHandleLogin/valid_credentials_returns_201_with_tokens
 2026/04/05 23:53:24 INFO user logged in user_id=usr-1 session_id=sess-dbe2b82c-49b9-4c4f-abbb-98d79062b0e1
@@ -659,7 +659,7 @@ ok  	github.com/ghbvf/gocell/cells/access-core/slices/rbaccheck	2.901s
     --- PASS: TestService_Login/empty_credentials (0.00s)
     --- PASS: TestService_Login/locked_user (0.04s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/access-core/slices/sessionlogin	2.979s
+ok  	github.com/ghbvf/gocell/corecells/access-core/slices/sessionlogin	2.979s
 === RUN   TestHandleLogout
 === RUN   TestHandleLogout/existing_session_returns_204
 2026/04/05 23:53:24 INFO session revoked session_id=sess-1 user_id=usr-1
@@ -683,7 +683,7 @@ ok  	github.com/ghbvf/gocell/cells/access-core/slices/sessionlogin	2.979s
 2026/04/05 23:53:24 INFO all sessions revoked for user user_id=usr-1
 --- PASS: TestService_LogoutUser (0.00s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/access-core/slices/sessionlogout	3.039s
+ok  	github.com/ghbvf/gocell/corecells/access-core/slices/sessionlogout	3.039s
 === RUN   TestHandleRefresh
 === RUN   TestHandleRefresh/valid_refresh_token_returns_200_with_new_tokens
 2026/04/05 23:53:25 INFO token refreshed user_id=usr-1
@@ -711,7 +711,7 @@ ok  	github.com/ghbvf/gocell/cells/access-core/slices/sessionlogout	3.039s
 === RUN   TestService_Refresh_SigningMethodCheck
 --- PASS: TestService_Refresh_SigningMethodCheck (0.00s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/access-core/slices/sessionrefresh	2.606s
+ok  	github.com/ghbvf/gocell/corecells/access-core/slices/sessionrefresh	2.606s
 === RUN   TestService_Verify
 === RUN   TestService_Verify/valid_token_without_sid
 === RUN   TestService_Verify/valid_token_with_active_session
@@ -733,7 +733,7 @@ ok  	github.com/ghbvf/gocell/cells/access-core/slices/sessionrefresh	2.606s
 === RUN   TestService_Verify_NilSessionRepo
 --- PASS: TestService_Verify_NilSessionRepo (0.00s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/access-core/slices/sessionvalidate	2.676s
+ok  	github.com/ghbvf/gocell/corecells/access-core/slices/sessionvalidate	2.676s
 === RUN   TestAuditCore_Lifecycle
 --- PASS: TestAuditCore_Lifecycle (0.00s)
 === RUN   TestAuditCore_Metadata
@@ -756,7 +756,7 @@ ok  	github.com/ghbvf/gocell/cells/access-core/slices/sessionvalidate	2.676s
 2026/04/05 23:53:26 INFO http request method=GET path=/api/v1/audit/entries status=200 duration_ms=1 request_id=f30566f4-5153-44af-a61c-a38404fbc8e0
 --- PASS: TestAuditCore_RouteQueryEntries (0.00s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/audit-core	2.892s
+ok  	github.com/ghbvf/gocell/corecells/audit-core	2.892s
 === RUN   TestAuditRepository_Append
 --- PASS: TestAuditRepository_Append (0.00s)
 === RUN   TestAuditRepository_Append_ZeroTimestamp
@@ -774,7 +774,7 @@ ok  	github.com/ghbvf/gocell/cells/audit-core	2.892s
 === RUN   TestItoa
 --- PASS: TestItoa (0.00s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/audit-core/internal/adapters/postgres	3.084s
+ok  	github.com/ghbvf/gocell/corecells/audit-core/internal/adapters/postgres	3.084s
 === RUN   TestArchiveStore_Archive
 --- PASS: TestArchiveStore_Archive (0.00s)
 === RUN   TestArchiveStore_Archive_Empty
@@ -782,7 +782,7 @@ ok  	github.com/ghbvf/gocell/cells/audit-core/internal/adapters/postgres	3.084s
 === RUN   TestArchiveStore_Archive_UploadError
 --- PASS: TestArchiveStore_Archive_UploadError (0.00s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/audit-core/internal/adapters/s3archive	3.036s
+ok  	github.com/ghbvf/gocell/corecells/audit-core/internal/adapters/s3archive	3.036s
 === RUN   TestHashChain_Append
 === RUN   TestHashChain_Append/single_entry_has_empty_PrevHash
 === RUN   TestHashChain_Append/three_entries_form_linked_chain
@@ -804,9 +804,9 @@ ok  	github.com/ghbvf/gocell/cells/audit-core/internal/adapters/s3archive	3.036s
 === RUN   TestHashChain_DifferentKeys_DifferentHashes
 --- PASS: TestHashChain_DifferentKeys_DifferentHashes (0.00s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/audit-core/internal/domain	2.760s
-?   	github.com/ghbvf/gocell/cells/audit-core/internal/mem	[no test files]
-?   	github.com/ghbvf/gocell/cells/audit-core/internal/ports	[no test files]
+ok  	github.com/ghbvf/gocell/corecells/audit-core/internal/domain	2.760s
+?   	github.com/ghbvf/gocell/corecells/audit-core/internal/mem	[no test files]
+?   	github.com/ghbvf/gocell/corecells/audit-core/internal/ports	[no test files]
 === RUN   TestService_HandleEvent
 === RUN   TestService_HandleEvent/user_created_event
 2026/04/05 23:53:27 INFO audit entry appended entry_id=audit-fa6e0742-f9b6-40f8-99a5-f5faa3d6f082 event_type=event.user.created.v1
@@ -826,11 +826,11 @@ ok  	github.com/ghbvf/gocell/cells/audit-core/internal/domain	2.760s
 2026/04/05 23:53:27 INFO audit entry appended entry_id=audit-da86e721-782e-4c09-a37c-cf75ae0af0a5 event_type=event.user.created.v1
 --- PASS: TestService_HandleEvent_ChainGrows (0.00s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/audit-core/slices/auditappend	2.973s
+ok  	github.com/ghbvf/gocell/corecells/audit-core/slices/auditappend	2.973s
 === RUN   TestService_Archive_ReturnsNotImplemented
 --- PASS: TestService_Archive_ReturnsNotImplemented (0.00s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/audit-core/slices/auditarchive	3.300s
+ok  	github.com/ghbvf/gocell/corecells/audit-core/slices/auditarchive	3.300s
 === RUN   TestHandleQuery_InvalidTimeFormat
 === RUN   TestHandleQuery_InvalidTimeFormat/invalid_from_parameter
 === RUN   TestHandleQuery_InvalidTimeFormat/invalid_to_parameter
@@ -852,7 +852,7 @@ ok  	github.com/ghbvf/gocell/cells/audit-core/slices/auditarchive	3.300s
     --- PASS: TestService_Query/filter_by_event_type (0.00s)
     --- PASS: TestService_Query/filter_by_actor (0.00s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/audit-core/slices/auditquery	3.300s
+ok  	github.com/ghbvf/gocell/corecells/audit-core/slices/auditquery	3.300s
 === RUN   TestService_VerifyChain_Empty
 2026/04/05 23:53:28 INFO hash chain verification completed valid=true entries_checked=0
 --- PASS: TestService_VerifyChain_Empty (0.00s)
@@ -863,7 +863,7 @@ ok  	github.com/ghbvf/gocell/cells/audit-core/slices/auditquery	3.300s
 2026/04/05 23:53:28 INFO hash chain verification completed valid=false entries_checked=3
 --- PASS: TestService_VerifyChain_TamperedEntry (0.00s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/audit-core/slices/auditverify	3.531s
+ok  	github.com/ghbvf/gocell/corecells/audit-core/slices/auditverify	3.531s
 === RUN   TestConfigCore_Lifecycle
 --- PASS: TestConfigCore_Lifecycle (0.00s)
 === RUN   TestConfigCore_Metadata
@@ -887,7 +887,7 @@ ok  	github.com/ghbvf/gocell/cells/audit-core/slices/auditverify	3.531s
 2026/04/05 23:53:28 INFO http request method=GET path=/api/v1/flags/ status=200 duration_ms=0 request_id=e7675139-1f1b-49f3-87e3-5d7ce089355d
 --- PASS: TestConfigCore_RouteFlagsList (0.00s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/config-core	3.492s
+ok  	github.com/ghbvf/gocell/corecells/config-core	3.492s
 === RUN   TestConfigRepository_Create
 --- PASS: TestConfigRepository_Create (0.00s)
 === RUN   TestConfigRepository_Create_Error
@@ -913,7 +913,7 @@ ok  	github.com/ghbvf/gocell/cells/config-core	3.492s
 === RUN   TestConfigRepository_GetVersion_NotFound
 --- PASS: TestConfigRepository_GetVersion_NotFound (0.00s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/config-core/internal/adapters/postgres	3.493s
+ok  	github.com/ghbvf/gocell/corecells/config-core/internal/adapters/postgres	3.493s
 === RUN   TestFeatureFlag_Evaluate_Boolean
 === RUN   TestFeatureFlag_Evaluate_Boolean/enabled_boolean_flag_returns_true
 === RUN   TestFeatureFlag_Evaluate_Boolean/disabled_boolean_flag_returns_false
@@ -935,9 +935,9 @@ ok  	github.com/ghbvf/gocell/cells/config-core/internal/adapters/postgres	3.493s
 === RUN   TestFeatureFlag_Evaluate_Percentage_Deterministic
 --- PASS: TestFeatureFlag_Evaluate_Percentage_Deterministic (0.00s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/config-core/internal/domain	3.537s
-?   	github.com/ghbvf/gocell/cells/config-core/internal/mem	[no test files]
-?   	github.com/ghbvf/gocell/cells/config-core/internal/ports	[no test files]
+ok  	github.com/ghbvf/gocell/corecells/config-core/internal/domain	3.537s
+?   	github.com/ghbvf/gocell/corecells/config-core/internal/mem	[no test files]
+?   	github.com/ghbvf/gocell/corecells/config-core/internal/ports	[no test files]
 === RUN   TestService_Publish
 === RUN   TestService_Publish/valid_publish
 2026/04/05 23:53:30 INFO config version published key=app.name version=1
@@ -956,7 +956,7 @@ ok  	github.com/ghbvf/gocell/cells/config-core/internal/domain	3.537s
     --- PASS: TestService_Rollback/valid_rollback (0.00s)
     --- PASS: TestService_Rollback/empty_key (0.00s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/config-core/slices/configpublish	3.513s
+ok  	github.com/ghbvf/gocell/corecells/config-core/slices/configpublish	3.513s
 === RUN   TestService_GetByKey
 === RUN   TestService_GetByKey/existing_key
 === RUN   TestService_GetByKey/non-existent_key
@@ -970,7 +970,7 @@ ok  	github.com/ghbvf/gocell/cells/config-core/slices/configpublish	3.513s
     --- PASS: TestService_List/empty (0.00s)
     --- PASS: TestService_List/two_entries (0.00s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/config-core/slices/configread	3.861s
+ok  	github.com/ghbvf/gocell/corecells/config-core/slices/configread	3.861s
 === RUN   TestService_HandleEvent
 === RUN   TestService_HandleEvent/created_event_updates_cache
 2026/04/05 23:53:30 INFO config-subscribe: cache updated key=app.name action=created
@@ -988,7 +988,7 @@ ok  	github.com/ghbvf/gocell/cells/config-core/slices/configread	3.861s
 2026/04/05 23:53:30 ERROR config-subscribe: failed to unmarshal event, routing to dead letter error="invalid character 'o' in literal null (expecting 'u')" entry_id=bad
 --- PASS: TestService_HandleEvent_InvalidPayload (0.00s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/config-core/slices/configsubscribe	3.903s
+ok  	github.com/ghbvf/gocell/corecells/config-core/slices/configsubscribe	3.903s
 === RUN   TestService_Create
 === RUN   TestService_Create/valid_create
 2026/04/05 23:53:31 INFO config entry created key=app.name
@@ -1023,7 +1023,7 @@ ok  	github.com/ghbvf/gocell/cells/config-core/slices/configsubscribe	3.903s
     --- PASS: TestService_Delete/delete_non-existent (0.00s)
     --- PASS: TestService_Delete/empty_key (0.00s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/config-core/slices/configwrite	3.895s
+ok  	github.com/ghbvf/gocell/corecells/config-core/slices/configwrite	3.895s
 === RUN   TestService_GetByKey
 === RUN   TestService_GetByKey/existing_flag
 === RUN   TestService_GetByKey/non-existent
@@ -1041,7 +1041,7 @@ ok  	github.com/ghbvf/gocell/cells/config-core/slices/configwrite	3.895s
     --- PASS: TestService_Evaluate/empty_key (0.00s)
     --- PASS: TestService_Evaluate/empty_subject (0.00s)
 PASS
-ok  	github.com/ghbvf/gocell/cells/config-core/slices/featureflag	3.950s
+ok  	github.com/ghbvf/gocell/corecells/config-core/slices/featureflag	3.950s
 ?   	github.com/ghbvf/gocell/cmd/core-bundle	[no test files]
 === RUN   TestPrintUsage
 Usage: gocell <command> [args]

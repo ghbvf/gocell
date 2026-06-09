@@ -5,48 +5,48 @@ ok  	github.com/ghbvf/gocell/adapters/rabbitmq	2.884s
 ok  	github.com/ghbvf/gocell/adapters/redis	1.994s
 ok  	github.com/ghbvf/gocell/adapters/s3	1.715s
 ok  	github.com/ghbvf/gocell/adapters/websocket	3.011s
-ok  	github.com/ghbvf/gocell/cells/access-core	2.334s
-ok  	github.com/ghbvf/gocell/cells/access-core/internal/domain	3.064s
-?   	github.com/ghbvf/gocell/cells/access-core/internal/mem	[no test files]
-?   	github.com/ghbvf/gocell/cells/access-core/internal/ports	[no test files]
-ok  	github.com/ghbvf/gocell/cells/access-core/slices/authorizationdecide	3.327s
-ok  	github.com/ghbvf/gocell/cells/access-core/slices/identitymanage	4.066s
-ok  	github.com/ghbvf/gocell/cells/access-core/slices/rbaccheck	3.843s
-ok  	github.com/ghbvf/gocell/cells/access-core/slices/sessionlogin	3.580s
-ok  	github.com/ghbvf/gocell/cells/access-core/slices/sessionlogout	3.115s
-ok  	github.com/ghbvf/gocell/cells/access-core/slices/sessionrefresh	3.245s
-ok  	github.com/ghbvf/gocell/cells/access-core/slices/sessionvalidate	3.456s
-ok  	github.com/ghbvf/gocell/cells/audit-core	3.369s
-ok  	github.com/ghbvf/gocell/cells/audit-core/internal/adapters/postgres	3.401s
-ok  	github.com/ghbvf/gocell/cells/audit-core/internal/adapters/s3archive	3.138s
-ok  	github.com/ghbvf/gocell/cells/audit-core/internal/domain	3.300s
-?   	github.com/ghbvf/gocell/cells/audit-core/internal/mem	[no test files]
-?   	github.com/ghbvf/gocell/cells/audit-core/internal/ports	[no test files]
-ok  	github.com/ghbvf/gocell/cells/audit-core/slices/auditappend	3.574s
-ok  	github.com/ghbvf/gocell/cells/audit-core/slices/auditarchive	3.608s
-ok  	github.com/ghbvf/gocell/cells/audit-core/slices/auditquery	3.255s
-ok  	github.com/ghbvf/gocell/cells/audit-core/slices/auditverify	3.415s
-ok  	github.com/ghbvf/gocell/cells/config-core	3.355s
-ok  	github.com/ghbvf/gocell/cells/config-core/internal/adapters/postgres	3.590s
-ok  	github.com/ghbvf/gocell/cells/config-core/internal/domain	3.519s
-?   	github.com/ghbvf/gocell/cells/config-core/internal/mem	[no test files]
-?   	github.com/ghbvf/gocell/cells/config-core/internal/ports	[no test files]
-ok  	github.com/ghbvf/gocell/cells/config-core/slices/configpublish	3.484s
-ok  	github.com/ghbvf/gocell/cells/config-core/slices/configread	3.637s
-ok  	github.com/ghbvf/gocell/cells/config-core/slices/configsubscribe	3.547s
-ok  	github.com/ghbvf/gocell/cells/config-core/slices/configwrite	3.595s
-ok  	github.com/ghbvf/gocell/cells/config-core/slices/featureflag	3.606s
-?   	github.com/ghbvf/gocell/cells/device-cell	[no test files]
-?   	github.com/ghbvf/gocell/cells/device-cell/internal/domain	[no test files]
-?   	github.com/ghbvf/gocell/cells/device-cell/internal/mem	[no test files]
-?   	github.com/ghbvf/gocell/cells/device-cell/slices/device-command	[no test files]
-?   	github.com/ghbvf/gocell/cells/device-cell/slices/device-register	[no test files]
-?   	github.com/ghbvf/gocell/cells/device-cell/slices/device-status	[no test files]
-?   	github.com/ghbvf/gocell/cells/order-cell	[no test files]
-?   	github.com/ghbvf/gocell/cells/order-cell/internal/domain	[no test files]
-?   	github.com/ghbvf/gocell/cells/order-cell/internal/mem	[no test files]
-?   	github.com/ghbvf/gocell/cells/order-cell/slices/order-create	[no test files]
-?   	github.com/ghbvf/gocell/cells/order-cell/slices/order-query	[no test files]
+ok  	github.com/ghbvf/gocell/corecells/access-core	2.334s
+ok  	github.com/ghbvf/gocell/corecells/access-core/internal/domain	3.064s
+?   	github.com/ghbvf/gocell/corecells/access-core/internal/mem	[no test files]
+?   	github.com/ghbvf/gocell/corecells/access-core/internal/ports	[no test files]
+ok  	github.com/ghbvf/gocell/corecells/access-core/slices/authorizationdecide	3.327s
+ok  	github.com/ghbvf/gocell/corecells/access-core/slices/identitymanage	4.066s
+ok  	github.com/ghbvf/gocell/corecells/access-core/slices/rbaccheck	3.843s
+ok  	github.com/ghbvf/gocell/corecells/access-core/slices/sessionlogin	3.580s
+ok  	github.com/ghbvf/gocell/corecells/access-core/slices/sessionlogout	3.115s
+ok  	github.com/ghbvf/gocell/corecells/access-core/slices/sessionrefresh	3.245s
+ok  	github.com/ghbvf/gocell/corecells/access-core/slices/sessionvalidate	3.456s
+ok  	github.com/ghbvf/gocell/corecells/audit-core	3.369s
+ok  	github.com/ghbvf/gocell/corecells/audit-core/internal/adapters/postgres	3.401s
+ok  	github.com/ghbvf/gocell/corecells/audit-core/internal/adapters/s3archive	3.138s
+ok  	github.com/ghbvf/gocell/corecells/audit-core/internal/domain	3.300s
+?   	github.com/ghbvf/gocell/corecells/audit-core/internal/mem	[no test files]
+?   	github.com/ghbvf/gocell/corecells/audit-core/internal/ports	[no test files]
+ok  	github.com/ghbvf/gocell/corecells/audit-core/slices/auditappend	3.574s
+ok  	github.com/ghbvf/gocell/corecells/audit-core/slices/auditarchive	3.608s
+ok  	github.com/ghbvf/gocell/corecells/audit-core/slices/auditquery	3.255s
+ok  	github.com/ghbvf/gocell/corecells/audit-core/slices/auditverify	3.415s
+ok  	github.com/ghbvf/gocell/corecells/config-core	3.355s
+ok  	github.com/ghbvf/gocell/corecells/config-core/internal/adapters/postgres	3.590s
+ok  	github.com/ghbvf/gocell/corecells/config-core/internal/domain	3.519s
+?   	github.com/ghbvf/gocell/corecells/config-core/internal/mem	[no test files]
+?   	github.com/ghbvf/gocell/corecells/config-core/internal/ports	[no test files]
+ok  	github.com/ghbvf/gocell/corecells/config-core/slices/configpublish	3.484s
+ok  	github.com/ghbvf/gocell/corecells/config-core/slices/configread	3.637s
+ok  	github.com/ghbvf/gocell/corecells/config-core/slices/configsubscribe	3.547s
+ok  	github.com/ghbvf/gocell/corecells/config-core/slices/configwrite	3.595s
+ok  	github.com/ghbvf/gocell/corecells/config-core/slices/featureflag	3.606s
+?   	github.com/ghbvf/gocell/corecells/device-cell	[no test files]
+?   	github.com/ghbvf/gocell/corecells/device-cell/internal/domain	[no test files]
+?   	github.com/ghbvf/gocell/corecells/device-cell/internal/mem	[no test files]
+?   	github.com/ghbvf/gocell/corecells/device-cell/slices/device-command	[no test files]
+?   	github.com/ghbvf/gocell/corecells/device-cell/slices/device-register	[no test files]
+?   	github.com/ghbvf/gocell/corecells/device-cell/slices/device-status	[no test files]
+?   	github.com/ghbvf/gocell/corecells/order-cell	[no test files]
+?   	github.com/ghbvf/gocell/corecells/order-cell/internal/domain	[no test files]
+?   	github.com/ghbvf/gocell/corecells/order-cell/internal/mem	[no test files]
+?   	github.com/ghbvf/gocell/corecells/order-cell/slices/order-create	[no test files]
+?   	github.com/ghbvf/gocell/corecells/order-cell/slices/order-query	[no test files]
 ?   	github.com/ghbvf/gocell/cmd/core-bundle	[no test files]
 ok  	github.com/ghbvf/gocell/cmd/gocell	3.475s
 ?   	github.com/ghbvf/gocell/examples/iot-device	[no test files]

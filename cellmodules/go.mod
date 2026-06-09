@@ -14,6 +14,7 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
+	github.com/ghbvf/gocell/corecells v0.0.0
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
@@ -42,3 +43,5 @@ require (
 // release-consistency build in hack/verify-workspace.sh) this replace makes the
 // unpublished core module resolve to the repo root instead of being fetched.
 replace github.com/ghbvf/gocell => ../
+
+replace github.com/ghbvf/gocell/corecells => ../corecells

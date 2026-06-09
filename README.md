@@ -226,7 +226,7 @@ import (
     "context"
     "net/http"
 
-    "github.com/ghbvf/gocell/cells/mycell/slices/myhello"
+    "github.com/ghbvf/gocell/corecells/mycell/slices/myhello"
     "github.com/ghbvf/gocell/kernel/cell"
     "github.com/ghbvf/gocell/runtime/auth"
 )
@@ -276,7 +276,7 @@ import (
     "os/signal"
     "syscall"
 
-    mycell "github.com/ghbvf/gocell/cells/mycell"
+    mycell "github.com/ghbvf/gocell/corecells/mycell"
     "github.com/ghbvf/gocell/kernel/auth"
     "github.com/ghbvf/gocell/kernel/assembly"
     "github.com/ghbvf/gocell/kernel/cell"

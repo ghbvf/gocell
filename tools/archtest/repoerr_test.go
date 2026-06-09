@@ -108,7 +108,7 @@ func (v repoErrViolation) String() string {
 //      errors, so callers must not pre-check.
 //
 // ref: pkg/ctxcancel.Wrap (canonical helper)
-// ref: cells/configcore/internal/adapters/postgres/audit_repo.go (range usage)
+// ref: corecells/configcore/internal/adapters/postgres/audit_repo.go (range usage)
 
 func TestCtxCancelLocalImplBan(t *testing.T) {
 	root := findModuleRoot(t)

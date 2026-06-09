@@ -584,7 +584,7 @@ const (
 	outboxServiceRulePublisherMode   = "OUTBOX-SERVICE-04"
 	outboxServiceRuleWriterAdapter   = "OUTBOX-SERVICE-05_no_writer_adapter_option"
 	outboxRuntimeImportRelPath       = "runtime/outbox"
-	outboxServiceGlobReadablePattern = "cells/**/slices/**/service.go"
+	outboxServiceGlobReadablePattern = "cells|corecells/**/slices/**/service.go"
 )
 
 type outboxServiceViolation struct {
@@ -605,7 +605,7 @@ func (v outboxServiceViolation) String() string {
 // INVARIANT: OUTBOX-SERVICE-05
 //
 // TestSliceServicesDoNotBypassTransactionalOutbox enforces OUTBOX-SERVICE-01..05
-// on cells/**/slices/**/service.go files.
+// on cells|corecells/**/slices/**/service.go files.
 func TestSliceServicesDoNotBypassTransactionalOutbox(t *testing.T) {
 	root := findModuleRoot(t)
 	modPath := readModulePath(t, root)
@@ -684,7 +684,7 @@ func isSliceServiceFile(root, path string) bool {
 		return false
 	}
 	rel = filepath.ToSlash(rel)
-	return strings.HasPrefix(rel, "cells/") &&
+	return (strings.HasPrefix(rel, "cells/") || strings.HasPrefix(rel, "corecells/")) &&
 		strings.Contains(rel, "/slices/") &&
 		strings.HasSuffix(rel, "/service.go")
 }

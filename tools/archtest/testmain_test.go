@@ -17,7 +17,7 @@ import (
 // slowgate budget。
 //
 // 为什么是 1 个 key 而不是多个：探索阶段实测分布显示 ./... 占 16.5%，
-// subpath patterns (./cells/.../, ./cmd/.../, ./runtime/.../) 占 83.5% 但
+// subpath patterns (./corecells/.../, ./cmd/.../, ./runtime/.../) 占 83.5% 但
 // 每个 subpath 各自只被 1-3 个 Test 使用，预热成本 > 收益。其他高频
 // cacheKey 如 SharedResolver(root, true, nil, "./tools/archtest/...")
 // 会撞 PASS-FUNNEL-LOADPACKAGES-01（archtest *_test.go 禁直调

@@ -116,7 +116,7 @@ Phase 4 的核心交付是 examples/ 和文档，这些不直接修改 kernel/ �
 | C-01 | kernel/ 不 import runtime/adapters/cells/ | `grep -r "github.com/ghbvf/gocell/(runtime\|adapters\|cells)" kernel/` | 0 匹配 |
 | C-02 | cells/ 不 import adapters/ | `grep -r "github.com/ghbvf/gocell/adapters" cells/` | 0 匹配 |
 | C-03 | runtime/ 不 import adapters/cells/ | `grep -r "github.com/ghbvf/gocell/(adapters\|cells)" runtime/` | 0 匹配 |
-| C-04 | adapters/ 不 import cells/ | `grep -r "github.com/ghbvf/gocell/cells" adapters/` | 0 匹配 |
+| C-04 | adapters/ 不 import cells/ | `grep -r "github.com/ghbvf/gocell/corecells" adapters/` | 0 匹配 |
 | C-05 | examples/ 不 import cells/*/internal/ | `grep -r "cells/.*/internal" examples/` 或 `examples/` | 0 匹配 |
 | C-06 | examples/ 不 import adapters/*/internal/ | `grep -r "adapters/.*/internal" examples/` | 0 匹配 |
 

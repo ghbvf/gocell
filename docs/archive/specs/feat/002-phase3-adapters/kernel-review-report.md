@@ -95,10 +95,10 @@ kernel/ 在 Phase 3 中没有 Go 代码签名变更。唯一的修改是 godoc �
 |------|----------|------|
 | C-03: kernel/ 不 import adapters/ | `grep "github.com/ghbvf/gocell/adapters" kernel/` | 0 匹配 |
 | C-05: kernel/ 不 import runtime/ | `grep "github.com/ghbvf/gocell/runtime" kernel/` | 0 匹配 |
-| kernel/ 不 import cells/ | `grep "github.com/ghbvf/gocell/cells" kernel/` | 0 匹配 |
-| C-02: adapters/ 不 import cells/ | `grep "github.com/ghbvf/gocell/cells" adapters/` | 0 匹配 |
+| kernel/ 不 import cells/ | `grep "github.com/ghbvf/gocell/corecells" kernel/` | 0 匹配 |
+| C-02: adapters/ 不 import cells/ | `grep "github.com/ghbvf/gocell/corecells" adapters/` | 0 匹配 |
 | C-04: runtime/ 不 import adapters/ | `grep "github.com/ghbvf/gocell/adapters" runtime/` | 0 匹配 |
-| runtime/ 不 import cells/ | `grep "github.com/ghbvf/gocell/cells" runtime/` | 0 匹配 |
+| runtime/ 不 import cells/ | `grep "github.com/ghbvf/gocell/corecells" runtime/` | 0 匹配 |
 
 全部 6 项分层隔离检查 = 0 匹配。
 

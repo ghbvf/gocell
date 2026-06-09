@@ -33,7 +33,7 @@
 // to Hard — is tracked in #1212; a type-state token proving Assert ran is
 // over-engineering for a single call site, so Medium is the documented ceiling.
 //
-// Blind-spot inventory (tools: archtest.Run(t, Typed(...)) + archtest.ResolvePackageRef
+// Blind-spot inventory (tools: archtest.Run(t, WorkspaceTyped(...)) + archtest.ResolvePackageRef
 // + scanner.EachInSubtree[ast.CallExpr]):
 //
 //   - Cross-function extraction: if the Assert call is moved into a helper
@@ -76,9 +76,9 @@
 //
 // Self-check: TestChangePasswordInactiveGate_01_NegativeFixture loads four
 // testdata packages (green / red_no_gate / red_gate_after_mutation /
-// red_conditional_gate_bypass) via archtest.Run(t, Typed(...)), sharing the same
+// red_conditional_gate_bypass) via archtest.Run(t, WorkspaceTyped(...)), sharing the same
 // changePasswordGateDiagnostics core as the production scan. Fixtures live
-// under cells/accesscore/ (not tools/archtest/testdata/) because they import
+// under corecells/accesscore/ (not tools/archtest/testdata/) because they import
 // the internal credentialauthority package.
 package archtest
 
@@ -113,8 +113,8 @@ func TestChangePasswordInactiveGate_01(t *testing.T) {
 	t.Parallel()
 
 	var sawTarget bool
-	diags := Run(t, Typed(TypedOpts{}, []string{
-		"./cells/accesscore/slices/identitymanage/...",
+	diags := Run(t, WorkspaceTyped(TypedOpts{}, []string{
+		"./corecells/accesscore/slices/identitymanage/...",
 	}),
 		func(p *Pass) []Diagnostic {
 			if !p.Typed() || p.Fset == nil {
@@ -137,7 +137,7 @@ func TestChangePasswordInactiveGate_01(t *testing.T) {
 
 	if !sawTarget {
 		t.Fatalf("%s: target function %q not found under "+
-			"cells/accesscore/slices/identitymanage/ — renamed or removed? "+
+			"corecells/accesscore/slices/identitymanage/ — renamed or removed? "+
 			"The inactive-gate ordering check must not be a silent no-op.",
 			ruleChangePasswordInactiveGate01, cpgTargetFunc)
 	}
@@ -151,7 +151,7 @@ func TestChangePasswordInactiveGate_01(t *testing.T) {
 func TestChangePasswordInactiveGate_01_NegativeFixture(t *testing.T) {
 	t.Parallel()
 
-	const fixtureBase = "./cells/accesscore/slices/identitymanage/testdata/changepassword_inactive_gate"
+	const fixtureBase = "./corecells/accesscore/slices/identitymanage/testdata/changepassword_inactive_gate"
 
 	cases := []struct {
 		subdir         string
@@ -169,7 +169,7 @@ func TestChangePasswordInactiveGate_01_NegativeFixture(t *testing.T) {
 			t.Parallel()
 
 			var sawTarget bool
-			diags := Run(t, Typed(TypedOpts{}, []string{fixtureBase + "/" + tc.subdir}),
+			diags := Run(t, WorkspaceTyped(TypedOpts{}, []string{fixtureBase + "/" + tc.subdir}),
 				func(p *Pass) []Diagnostic {
 					if !p.Typed() || p.Fset == nil {
 						return nil

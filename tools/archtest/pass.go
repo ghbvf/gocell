@@ -104,9 +104,10 @@ type TypedOpts struct {
 
 // RunScope is the sealed descriptor of WHAT [Run] analyzes. Obtain a value ONLY
 // from a scope constructor — [AST] (AST-only over a [Scope]), [Typed]
-// (typed main-module patterns), [Production] (typed main module with
-// <module>/generated/ excluded), [Fixture] (typed archtest_fixture-tagged
-// packages), or [StandaloneModule] (typed standalone fixture module).
+// (typed main-module patterns), [WorkspaceTyped] (typed go.work patterns),
+// [Production] (typed workspace production packages with generated/ excluded),
+// [Fixture] (typed archtest_fixture-tagged packages), or [StandaloneModule]
+// (typed standalone fixture module).
 //
 // The sealing method [RunScope] declares is unexported, so no type OUTSIDE
 // package archtest can implement it: an external Cell repo (or any non-archtest
@@ -152,6 +153,13 @@ type typedRunScope struct {
 	patterns []string
 }
 
+// workspaceTypedRunScope dispatches [Run] in typed mode loading patterns from
+// the ambient go.work workspace.
+type workspaceTypedRunScope struct {
+	opts     TypedOpts
+	patterns []string
+}
+
 // productionRunScope dispatches [Run] in typed mode over the main module's
 // production package set ONLY (every <module>/generated/ package excluded).
 type productionRunScope struct{ opts TypedOpts }
@@ -164,10 +172,11 @@ type dirRunScope struct {
 	patterns []string
 }
 
-func (astRunScope) isRunScope()        {}
-func (typedRunScope) isRunScope()      {}
-func (productionRunScope) isRunScope() {}
-func (dirRunScope) isRunScope()        {}
+func (astRunScope) isRunScope()            {}
+func (typedRunScope) isRunScope()          {}
+func (workspaceTypedRunScope) isRunScope() {}
+func (productionRunScope) isRunScope()     {}
+func (dirRunScope) isRunScope()            {}
 
 // AST wraps the file-enumeration [Scope] fs into a dispatch [RunScope] for
 // AST-only rule execution. [Run] parses every file in fs into ONE shared
@@ -188,6 +197,13 @@ func AST(fs Scope) RunScope { return astRunScope{fs: fs} }
 // use [StandaloneModule] instead.
 func Typed(opts TypedOpts, patterns []string) RunScope {
 	return typedRunScope{opts: opts, patterns: patterns}
+}
+
+// WorkspaceTyped builds a typed [RunScope] loading patterns through the
+// ambient go.work workspace. Use this when a bounded scan must include packages
+// from workspace member modules such as corecells.
+func WorkspaceTyped(opts TypedOpts, patterns []string) RunScope {
+	return workspaceTypedRunScope{opts: opts, patterns: patterns}
 }
 
 // Production builds a typed [RunScope] over the main module's production
@@ -262,6 +278,7 @@ func StandaloneModule(dir string, opts TypedOpts, patterns []string) RunScope {
 // scope selects the mode and source. Scope quick-pick:
 //   - No go/types needed (pure AST) → [AST]
 //   - Need go/types over the main module → [Typed]
+//   - Need go/types over a bounded go.work workspace pattern → [WorkspaceTyped]
 //   - Same as Typed but generated/ excluded (hand-written-source rules) → [Production]
 //   - Loading archtest_fixture-tagged fixture packages → [Fixture]
 //   - Standalone testdata module with its own go.mod → [StandaloneModule]
@@ -285,6 +302,8 @@ func Run(t testing.TB, scope RunScope, rule Rule) []Diagnostic {
 		return runAST(t, s.fs, rule)
 	case typedRunScope:
 		return runTypedWithRoot(t, findModuleRoot(t), s.opts, s.patterns, rule)
+	case workspaceTypedRunScope:
+		return runWorkspaceTypedWithRoot(t, findModuleRoot(t), s.opts, s.patterns, rule)
 	case dirRunScope:
 		if !filepath.IsAbs(s.dir) {
 			t.Fatalf("archtest.Run: StandaloneModule requires an absolute module root, got %q", s.dir)
@@ -348,6 +367,19 @@ func runProduction(t testing.TB, opts TypedOpts, rule Rule) []Diagnostic {
 			root, modules, opts.Tests, opts.Tags, err)
 	}
 	return runRulePasses(root, resolver.Production(), rule)
+}
+
+func runWorkspaceTypedWithRoot(t testing.TB, root string, opts TypedOpts, patterns []string, rule Rule) []Diagnostic {
+	t.Helper()
+	if len(patterns) == 0 {
+		t.Fatalf("archtest.Run: workspace typed scope requires at least one pattern; got none")
+	}
+	resolver, err := typeseval.SharedWorkspaceResolver(root, opts.Tests, opts.Tags, patterns...)
+	if err != nil {
+		t.Fatalf("archtest.Run: SharedWorkspaceResolver(root=%s, tests=%v, tags=%v, patterns=%v): %v",
+			root, opts.Tests, opts.Tags, patterns, err)
+	}
+	return runRulePasses(root, resolver.Packages(), rule)
 }
 
 // collectASTFiles enumerates Go files in scope, parses every file into a

@@ -1,6 +1,6 @@
 ---
 paths:
-  - "cells/**/*.go"
+  - "corecorecells/**/*.go"
   - "examples/**/*.go"
   - "contracts/**"
 ---
@@ -35,13 +35,13 @@ JSON 字段命名：HTTP DTO、事件 payload、事件 headers 统一 camelCase�
 
 | 档 | 适用 | 路径 |
 |---|---|---|
-| A | 单 slice 自用 | `cells/{cell}/slices/{slice}/handler.go` 同包 |
-| B | 同 cell 多 slice 共享（publisher + lifecycle / handler + projection 等） | `cells/{cell}/internal/dto/`（HTTP / event payload）或 `internal/domain/`（含不变量） |
+| A | 单 slice 自用 | `corecorecells/{cell}/slices/{slice}/handler.go` 同包 |
+| B | 同 cell 多 slice 共享（publisher + lifecycle / handler + projection 等） | `corecorecells/{cell}/internal/dto/`（HTTP / event payload）或 `internal/domain/`（含不变量） |
 | C | 跨 cell 共享 wire 类型 | **禁止手写共享包** |
 
 C 档的禁止位置（任意均不允许）：
 - `pkg/events/`（污染 pkg 边界，违反"pkg 不依赖 cells"）
-- `cells/{cell}/events/`（非 internal 不等于合规；同样把跨 cell 耦合从 contract 拽回 Go 类型层）
+- `corecorecells/{cell}/events/`（非 internal 不等于合规；同样把跨 cell 耦合从 contract 拽回 Go 类型层）
 - `contracts/event/.../payload.go`（污染权威源目录，schema 才是 SoR）
 - `runtime/events/`（让 runtime 反向知道业务事件形状）
 
@@ -93,7 +93,7 @@ cell 的 `internal/` 子包分两类，`gocell scaffold cell` 只预生成必备
 依赖缺失在 Init() 报错，不降级运行。Cells 持有 sealed marker 字段（`outbox.CellPublisher` / `outbox.CellWriter` / `persistence.CellTxManager`），demo 信号通过包装的 `outbox.DiscardPublisher{}` / `outbox.NoopWriter{}` 透传 `Noop()` 进入 fail-fast 检查。
 
 ```go
-// cells/<x>/cell.go
+// corecells/<x>/cell.go
 type MyCell struct {
     cell.BaseCell
     pendingPublisher outbox.CellPublisher  // sealed marker，非 raw outbox.Publisher
@@ -118,7 +118,7 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registrar) error {
 
 ## Sealed Marker Wrap Pattern
 
-**约束**：cells/* 公开 With* Option 不得直接接受 raw infra 类型；只接 sealed marker，由 composition root 调 wrap 函数转换。
+**约束**：corecells/* 公开 With* Option 不得直接接受 raw infra 类型；只接 sealed marker，由 composition root 调 wrap 函数转换。
 
 | Raw infra（cells 不可见） | Sealed marker（cells 字段类型 + With\* 参数） | Wrapper（composition root 调用） |
 |---|---|---|
@@ -129,7 +129,7 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registrar) error {
 
 按 cell 真实能力声明 cell-specific Option：
 
-- Platform cell L1/L2（`cells/*`）：`WithOutboxDeps(pub outbox.CellPublisher, writer outbox.CellWriter)` + `WithTxManager(tx persistence.CellTxManager)`；预组装 emitter 走 `WithEmitter(e outbox.CellEmitter)`（与 WithOutboxDeps 互斥）
+- Platform cell L1/L2（`corecorecells/*`）：`WithOutboxDeps(pub outbox.CellPublisher, writer outbox.CellWriter)` + `WithTxManager(tx persistence.CellTxManager)`；预组装 emitter 走 `WithEmitter(e outbox.CellEmitter)`（与 WithOutboxDeps 互斥）
 - Example ordercell L2（无 publisher 路径）：`WithOutboxWriter(w outbox.CellWriter)` + `WithTxManager(tx persistence.CellTxManager)`
 - Example devicecell L4（无 writer，无 txRunner）：`WithDirectPublisher(p outbox.CellPublisher)`
 
@@ -146,7 +146,7 @@ Wrapper 函数**仅允许**在以下位置调用（archtest `CELL-RAW-INFRA-WRAP
 - `kernel/outbox/mode_resolver.go`（`ResolveCellEmitter` 把 kernel-built emitter wrap 成 sealed CellEmitter）
 - `kernel/outbox/outboxtest/recorder.go`（`(*Recorder).CellEmitter()` test seam）
 
-**Hard 防线（type system）**：cells/* 持 sealed 字段 + With\* 接 sealed 参数，raw infra 在 compile 期不可入 cell。`Wrap*ForCell` 用 `validation.IsNilInterface` 拒 typed-nil，避免 typed-nil 包成非 nil sealed 值绕过 `Init()` 与 `cell.CheckNotNoop`（PR 441 F1 修复）。
+**Hard 防线（type system）**：corecells/* 持 sealed 字段 + With\* 接 sealed 参数，raw infra 在 compile 期不可入 cell。`Wrap*ForCell` 用 `validation.IsNilInterface` 拒 typed-nil，避免 typed-nil 包成非 nil sealed 值绕过 `Init()` 与 `cell.CheckNotNoop`（PR 441 F1 修复）。
 
 **Medium 双重防线（archtest type-aware）**：type system 单独不可达签名形态空间——`CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01` 拦 inline interface embed (`func WithBad(p interface{ outbox.Publisher })`)；`CELL-RAW-INFRA-WRAPPER-LOCATION-01` 拦 dot-import wrap call (`import . "kernel/persistence"; WrapForCell(p)`)。
 
@@ -236,7 +236,7 @@ owner 信息（如 `sess.SubjectID`）只在 domain state（service 通过 DB �
 **单源 funnel**：`runtime/auth.CheckOwner[T]` 是唯一 sanctioned 出口。lookup-failure 与 owner-mismatch 通过 nil-safe accessor 在 funnel 内自然 collapse（accessor 对 nil resource 返回空字符串，与已校验非空的 callerID 不等，funnel 返回 KindNotFound——与 owner-mismatch 同 envelope）。funnel 签名 4 参（resource, ownerID accessor, callerID, code）——wire message 是 const 字面量 `"not found"` 在 funnel body 内固化（resource type 由 errcode.Code 承载，msg 不再是调用方参数），保证 funnel 自身满足 MESSAGE-CONST-LITERAL-01 无需 carve-out。canonical 形态：
 
 ```go
-// cells/accesscore/slices/sessionlogout/service.go
+// corecells/accesscore/slices/sessionlogout/service.go
 sess, err := s.sessionStore.Get(txCtx, sessionID)
 if err != nil && errcode.IsInfraError(err) {
     return errcode.Wrap(errcode.KindUnavailable, ...)

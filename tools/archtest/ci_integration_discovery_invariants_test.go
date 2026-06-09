@@ -195,7 +195,7 @@ func TestArchtest_CIIntegrationDiscovery_DiscoversE2EPackages(t *testing.T) {
 // TestArchtest_CIIntegrationDiscovery_WorkflowUsesGoList asserts that the
 // integration-test job's main step uses `go list -tags=integration` for
 // package discovery and contains no deeper-than-root package globs (e.g.,
-// `./adapters/...`, `./cells/configcore/...`). The whole-module probe
+// `./adapters/...`, `./corecells/configcore/...`). The whole-module probe
 // `./...` (used inside the `go list` call itself) is allowed — it's the
 // deeper-segment globs that signal hardcoded-list regression.
 //

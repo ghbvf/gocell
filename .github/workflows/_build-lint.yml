@@ -38,7 +38,7 @@ permissions:
 
 jobs:
   # build-test is a matrix of 5 package shards run in parallel. Sharding splits
-  # GoCell's package layout (kernel/tools/runtime/cells/adapters+others) so each
+  # GoCell's package layout (kernel/tools/runtime/corecells/adapters+others) so each
   # shard's timing maps cleanly to an architectural boundary, making per-shard
   # cost easy to interpret. Static (tools/) and concurrency-sensitive
   # (kernel/runtime) shards account for the bulk of test time; isolating tools
@@ -73,7 +73,7 @@ jobs:
             pkgs: ./runtime/... ./pkg/...
             static_checks: false
           - shard: cells
-            pkgs: ./cells/...
+            pkgs: ./corecells/...
             static_checks: false
           # `others` was a single 140s shard covering adapters + cmd +
           # examples + tests + contracts. Splitting along compile cost:
@@ -448,7 +448,7 @@ jobs:
     # New integration test contributors: your package falls into a shard
     # automatically by import-path prefix — no yaml edit needed:
     #   adapters/...                          → adapters shard
-    #   cells/...                             → cells shard
+    #   corecells/...                             → cells shard
     #   cmd/... or examples/...               → corebundle shard
     #   tests/... or kernel/... or runtime/.. → tests shard
     # archtest CI-INTEGRATION-DISCOVERY-01 still gates that every
@@ -476,7 +476,7 @@ jobs:
             run_adapters_extras: false
             run_adapters_race: true
           - shard: cells
-            filter: '^github.com/ghbvf/gocell/cells/'
+            filter: '^github.com/ghbvf/gocell/corecells/'
             run_main_integration: true
             run_adapters_extras: false
             run_adapters_race: false
@@ -529,7 +529,7 @@ jobs:
           SHARD_FILTER: ${{ matrix.filter }}
         # Auto-discover packages by build tag rather than maintaining a
         # hardcoded list. Each prior addition to the explicit list (examples/
-        # ssobff, runtime/bootstrap, cells/accesscore/slices/identitymanage,
+        # ssobff, runtime/bootstrap, corecells/accesscore/slices/identitymanage,
         # tests/testutil) was a documented incident where new integration
         # tests silently never ran in CI because nobody updated this step.
         # archtest CI-INTEGRATION-DISCOVERY-01 prevents regression to a

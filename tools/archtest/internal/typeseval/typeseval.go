@@ -178,12 +178,18 @@ func SharedResolver(modRoot string, tests bool, tags []string, patterns ...strin
 	return sharedResolverMode(packagesload.ModeModule, modRoot, tests, tags, patterns...)
 }
 
-// sharedResolverMode is the mode-parameterized body of SharedResolver. The cache
-// key includes mode so a ModeModule load and a ModeWorkspace load of the same
-// (dir, tests, tags, patterns) never alias. SharedResolver fixes ModeModule
-// (the only public form, kept stable for the funnel meta-archtests); the
-// ModeWorkspace path is reached solely via LoadProductionPackages for the
-// cross-module workspace production scan.
+// SharedWorkspaceResolver returns a process-wide cached Resolver using the
+// ambient go.work workspace. Use it for bounded typed scans that must cross into
+// workspace member modules, such as corecells after the module split.
+func SharedWorkspaceResolver(modRoot string, tests bool, tags []string, patterns ...string) (*Resolver, error) {
+	return sharedResolverMode(packagesload.ModeWorkspace, modRoot, tests, tags, patterns...)
+}
+
+// sharedResolverMode is the mode-parameterized body of SharedResolver and
+// SharedWorkspaceResolver. The cache key includes mode so a ModeModule load and
+// a ModeWorkspace load of the same (dir, tests, tags, patterns) never alias.
+// SharedResolver fixes ModeModule; SharedWorkspaceResolver and
+// LoadProductionPackages are the workspace-aware paths.
 func sharedResolverMode(mode packagesload.Mode, dir string, tests bool, tags []string, patterns ...string) (*Resolver, error) {
 	testsFlag := "0"
 	if tests {

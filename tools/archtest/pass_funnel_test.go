@@ -196,11 +196,11 @@ func diagsEachFile(tgt passFunnelTarget) []scanner.Diagnostic {
 }
 
 // diagsLoadPackages is the pure detector for PASS-FUNNEL-LOADPACKAGES-01.
-// It bans business archtest *_test.go files from directly calling the four
-// typeseval package-load symbols: LoadPackages, SharedResolver,
-// LoadProductionPackages (Stage 1.7 funnel widen), and EachFileInPackage
-// (the INV-1 suppression helper that the Pass funnel replaces — #522 review
-// A1, closes ADR termination-criteria §(c)). Detection is type-aware via
+// It bans business archtest *_test.go files from directly calling typeseval
+// package-load symbols: LoadPackages, SharedResolver, SharedWorkspaceResolver,
+// LoadProductionPackages (Stage 1.7 funnel widen), and EachFileInPackage (the
+// INV-1 suppression helper that the Pass funnel replaces — #522 review A1,
+// closes ADR termination-criteria §(c)). Detection is type-aware via
 // typeseval.ResolvePackageRef on all SelectorExpr / bare Ident nodes.
 //
 // # AI-robust: Medium
@@ -224,8 +224,8 @@ func diagsEachFile(tgt passFunnelTarget) []scanner.Diagnostic {
 //
 // # Per-form fixture coverage
 //
-// LoadPackages, SharedResolver, LoadProductionPackages, and EachFileInPackage
-// are each fixtured in two qualified + alias forms in redfixture.go.
+// LoadPackages, SharedResolver, SharedWorkspaceResolver, LoadProductionPackages,
+// and EachFileInPackage are each fixtured in two qualified + alias forms in redfixture.go.
 // (LoadProductionPackages: Stage 1.7 addition; EachFileInPackage: #522 review A1.)
 // Dot-import of typeseval is infeasible in redfixture.go (conflicting imports).
 // TestPassFunnel_FixtureCoverage enforces ≥1 diagnostic per symbol, so
@@ -244,7 +244,7 @@ func diagsEachFile(tgt passFunnelTarget) []scanner.Diagnostic {
 //
 // PASS-FUNNEL-LOADPACKAGES-01 scope filters by HasSuffix("_test.go"), so
 // non-test .go files in tools/archtest/ can directly call typeseval.
-// {LoadPackages, SharedResolver, LoadProductionPackages, EachFileInPackage}
+// {LoadPackages, SharedResolver, SharedWorkspaceResolver, LoadProductionPackages, EachFileInPackage}
 // without tripping the rule. This is currently exempted by design for the
 // TestMain warm-up bridge: tools/archtest/warm.go calls LoadProductionPackages
 // from a non-test .go file to keep testmain_test.go free of typeseval imports
@@ -263,10 +263,11 @@ func diagsLoadPackages(tgt passFunnelTarget) []scanner.Diagnostic {
 		tgt,
 		map[string]map[string]bool{
 			typesevalPkgPath: {
-				"LoadPackages":           true,
-				"SharedResolver":         true,
-				"LoadProductionPackages": true,
-				"EachFileInPackage":      true,
+				"LoadPackages":            true,
+				"SharedResolver":          true,
+				"SharedWorkspaceResolver": true,
+				"LoadProductionPackages":  true,
+				"EachFileInPackage":       true,
 			},
 		},
 		"archtest.Run(t, Typed(...), rule) / archtest.Run(t, Production(...), rule)",
@@ -455,9 +456,10 @@ var fixtureTagLoaderSet = map[string]map[string]bool{
 		"runTypedWithRoot": true,
 	},
 	typesevalPkgPath: {
-		"SharedResolver":         true,
-		"LoadPackages":           true,
-		"LoadProductionPackages": true,
+		"SharedResolver":          true,
+		"SharedWorkspaceResolver": true,
+		"LoadPackages":            true,
+		"LoadProductionPackages":  true,
 	},
 }
 
@@ -1108,8 +1110,8 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 
 	// Strengthened per-symbol check for PASS-FUNNEL-LOADPACKAGES-01.
 	//
-	// Each of the four banned load symbols (LoadPackages, SharedResolver,
-	// LoadProductionPackages, EachFileInPackage) must generate ≥1 diagnostic
+	// Each banned load symbol (LoadPackages, SharedResolver,
+	// SharedWorkspaceResolver, LoadProductionPackages, EachFileInPackage) must generate ≥1 diagnostic
 	// independently. The ≥1 total check above (now removed from the basicRules
 	// loop) would pass even if a single symbol's fixture lines were deleted
 	// (the other symbols still fire). The per-symbol assertion locks each
@@ -1121,10 +1123,11 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 			lpDiags = append(lpDiags, diagsLoadPackages(tgt)...)
 		}
 		perSymbol := map[string]int{
-			"LoadPackages":           0,
-			"SharedResolver":         0,
-			"LoadProductionPackages": 0,
-			"EachFileInPackage":      0,
+			"LoadPackages":            0,
+			"SharedResolver":          0,
+			"SharedWorkspaceResolver": 0,
+			"LoadProductionPackages":  0,
+			"EachFileInPackage":       0,
 		}
 		for _, d := range lpDiags {
 			for sym := range perSymbol {

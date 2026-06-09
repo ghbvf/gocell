@@ -60,7 +60,7 @@ var casProtocolForbidden = map[string]struct{}{
 //     the AUTH-PLAN-04 / LAYER-09 carve-out for example projects.
 func CheckCASProtocolCompositionRoot01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
-	return Run(t, Typed(
+	return Run(t, WorkspaceTyped(
 		TypedOpts{Tests: false},
 		casProtocolProductionPatterns(),
 	), scanCASProtocolViolations)
@@ -70,7 +70,7 @@ func CheckCASProtocolCompositionRoot01(t *testing.T, cfg ConfigForExternalCell) 
 // production rule (cells / runtime / adapters).
 func casProtocolProductionPatterns() []string {
 	return []string{
-		"./cells/...",
+		"./corecells/...",
 		"./runtime/...",
 		"./adapters/...",
 	}

@@ -39,7 +39,7 @@ secondary: go-kratos/kratos    → cmd/kratos/internal/project/
 goal:      new-cell / new-slice / new-contract，生成目录 + metadata + 测试骨架
 ```
 
-### cells/ — Cell 声明模型 + 生命周期
+### corecells/ — Cell 声明模型 + 生命周期
 
 ```
 primary:   kubernetes/kubernetes → staging/src/k8s.io/api/core/v1/types.go（Pod 声明结构 → cell.yaml 参考）
@@ -47,7 +47,7 @@ secondary: kubernetes/kubernetes → pkg/kubelet/lifecycle/（生命周期钩子
 goal:      cell.yaml 声明式驱动，参考 Pod spec 的字段组织；生命周期参考 kubelet 但更轻量
 ```
 
-### cells/*/slices/ — Slice 声明模型 + 校验
+### corecells/*/slices/ — Slice 声明模型 + 校验
 
 ```
 primary:   kubernetes/kubernetes → staging/src/k8s.io/api/core/v1/types.go（Container spec → slice.yaml 参考）

@@ -120,7 +120,7 @@ interface (the real `examples/iotdevice` uses `*devicecommandrpc.Server`):
 package todoorder
 
 import (
-    "github.com/ghbvf/gocell/cells/todoorder/slices/ordercommand"
+    "github.com/ghbvf/gocell/corecells/todoorder/slices/ordercommand"
 )
 
 type Cell struct {

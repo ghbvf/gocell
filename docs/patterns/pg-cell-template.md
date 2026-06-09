@@ -127,7 +127,7 @@ import (
 	"fmt"
 
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
-	foocorecell "github.com/ghbvf/gocell/cells/foocore"
+	foocorecell "github.com/ghbvf/gocell/corecells/foocore"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -239,7 +239,7 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
-	foocorecell "github.com/ghbvf/gocell/cells/foocore"
+	foocorecell "github.com/ghbvf/gocell/corecells/foocore"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"

@@ -155,6 +155,14 @@ func buildLintGateCases() []lintGateCase {
 			expectFindings: []lintGateFinding{{linter: "depguard", file: "cells/foo/c.go"}},
 		},
 		{
+			name: "depguard_corecells_imports_adapters",
+			files: map[string]string{
+				"corecells/foo/c.go": "package foo\n\nimport _ \"github.com/ghbvf/gocell/adapters\"\n",
+				"adapters/stub.go":   stub("adapters"),
+			},
+			expectFindings: []lintGateFinding{{linter: "depguard", file: "corecells/foo/c.go"}},
+		},
+		{
 			name: "depguard_runtime_imports_cells",
 			files: map[string]string{
 				"runtime/r.go":  "package runtime\n\nimport _ \"github.com/ghbvf/gocell/cells\"\n",
@@ -163,10 +171,26 @@ func buildLintGateCases() []lintGateCase {
 			expectFindings: []lintGateFinding{{linter: "depguard", file: "runtime/r.go"}},
 		},
 		{
+			name: "depguard_runtime_imports_corecells",
+			files: map[string]string{
+				"runtime/r.go":      "package runtime\n\nimport _ \"github.com/ghbvf/gocell/corecells\"\n",
+				"corecells/stub.go": stub("corecells"),
+			},
+			expectFindings: []lintGateFinding{{linter: "depguard", file: "runtime/r.go"}},
+		},
+		{
 			name: "depguard_adapters_imports_cells",
 			files: map[string]string{
 				"adapters/a.go": "package adapters\n\nimport _ \"github.com/ghbvf/gocell/cells\"\n",
 				"cells/stub.go": stub("cells"),
+			},
+			expectFindings: []lintGateFinding{{linter: "depguard", file: "adapters/a.go"}},
+		},
+		{
+			name: "depguard_adapters_imports_corecells",
+			files: map[string]string{
+				"adapters/a.go":     "package adapters\n\nimport _ \"github.com/ghbvf/gocell/corecells\"\n",
+				"corecells/stub.go": stub("corecells"),
 			},
 			expectFindings: []lintGateFinding{{linter: "depguard", file: "adapters/a.go"}},
 		},

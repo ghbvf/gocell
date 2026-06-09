@@ -241,7 +241,7 @@ func computePQFailures(wantCoverage []contractPQParamInfo, coverage *pqCoverage,
 		for _, name := range req.PathParamNames {
 			if !coverage.covered(pqKindPath, req.ID, name) {
 				diags = append(diags, diagFile(rel, fmt.Sprintf(
-					"contract %q (server: %s) pathParam %q has no MustRejectPathParam call site in cells/**/contract_test.go",
+					"contract %q (server: %s) pathParam %q has no MustRejectPathParam call site in cells|corecells/**/contract_test.go",
 					req.ID, req.ServerCell, name,
 				)))
 			}
@@ -249,7 +249,7 @@ func computePQFailures(wantCoverage []contractPQParamInfo, coverage *pqCoverage,
 		for _, name := range req.QueryParamNames {
 			if !coverage.covered(pqKindQuery, req.ID, name) {
 				diags = append(diags, diagFile(rel, fmt.Sprintf(
-					"contract %q (server: %s) queryParam %q has no MustRejectQueryParam call site in cells/**/contract_test.go",
+					"contract %q (server: %s) queryParam %q has no MustRejectQueryParam call site in cells|corecells/**/contract_test.go",
 					req.ID, req.ServerCell, name,
 				)))
 			}
@@ -460,9 +460,9 @@ func sortedMapKeys(m map[string]any) []string {
 }
 
 // isCellsContractTestFile reports whether the module-relative slash path
-// matches cells/**/contract_test.go.
+// matches cells/**/contract_test.go or corecells/**/contract_test.go.
 func isCellsContractTestFile(rel string) bool {
-	return strings.HasPrefix(rel, "cells/") &&
+	return (strings.HasPrefix(rel, "cells/") || strings.HasPrefix(rel, "corecells/")) &&
 		filepath.Base(rel) == "contract_test.go"
 }
 

@@ -191,7 +191,7 @@ ref: ADR `docs/architecture/202606071200-1676-adr-restricted-app-serving-pool.md
 
 **为何不与 `postgres_ready` 合并**：pool 级 `postgres_ready`（`adapters/postgres.*Pool` 注册，bare `Ping`）只覆盖连接活性；cell-level repo probe 执行各 cell 自己关系表上的代表性查询，能捕获 schema/migration 漂移、表级权限丢失、缺失表等 pool Ping 检测不到的失败模式——失败域不同，非同义重复，不在"禁止暴露多个同义 ready probe"范围内。
 
-**注册方式约束**：cell-level repo readiness probe **必须**通过 cellgen 生成的 `<cellpkg>.RegisterReadiness(reg, prober)` 有类型 funnel 注册（`healthz_gen.go` 生成产物）；`reg.RegisterReadiness` 是唯一写面（`Registrar.Healthz()` 已移除，调用是编译错误）；以匿名 duck-type 形式绕过同样不可编译（参数类型 `healthz.Probe` 必须经 `healthz.NewProbe(name ProbeName, ...)` 构造）。enforcement：archtest `PROBENAME-SEALED-FUNNEL-01`（A1/A2/A3 覆盖声明 + 构造 + write 入口）；`kernel/cell/celltest.RunRepoReadinessConformance` 提供 real-failure-injection 合规测试（healthy → nil；PG 表删除 → non-nil；mem → skip）。conformance 入列（每个 `healthz.RepoProber` 实现必须出现在 `RunRepoReadinessConformance` 调用点）由 archtest `CELL-REPO-READYZ-PROBE-01`（Medium，`tools/archtest/cell_repo_readyz_probe_test.go`）守卫——范围 cells/+adapters/+runtime/+examples/，kernel/ 因 CELLTEST-B（`CELLTEST-IMPORT-BOUNDARY-01`：kernel/ 禁 import `kernel/cell/celltest`）层级不变式排除。
+**注册方式约束**：cell-level repo readiness probe **必须**通过 cellgen 生成的 `<cellpkg>.RegisterReadiness(reg, prober)` 有类型 funnel 注册（`healthz_gen.go` 生成产物）；`reg.RegisterReadiness` 是唯一写面（`Registrar.Healthz()` 已移除，调用是编译错误）；以匿名 duck-type 形式绕过同样不可编译（参数类型 `healthz.Probe` 必须经 `healthz.NewProbe(name ProbeName, ...)` 构造）。enforcement：archtest `PROBENAME-SEALED-FUNNEL-01`（A1/A2/A3 覆盖声明 + 构造 + write 入口）；`kernel/cell/celltest.RunRepoReadinessConformance` 提供 real-failure-injection 合规测试（healthy → nil；PG 表删除 → non-nil；mem → skip）。conformance 入列（每个 `healthz.RepoProber` 实现必须出现在 `RunRepoReadinessConformance` 调用点）由 archtest `CELL-REPO-READYZ-PROBE-01`（Medium，`tools/archtest/cell_repo_readyz_probe_test.go`）守卫——范围 corecells/+adapters/+runtime/+examples/，kernel/ 因 CELLTEST-B（`CELLTEST-IMPORT-BOUNDARY-01`：kernel/ 禁 import `kernel/cell/celltest`）层级不变式排除。
 
 emitter health probe（`outbox_failopen_rate_<cell>`）的注册同理收口：cell 统一调 kernel `cell.RegisterEmitterHealthProbes(reg, c.emitter)`（内含 `healthz.ProbeSet` 断言 + `validation.IsNilInterface` 守卫，内部调 `reg.RegisterReadiness(p.Name(), p)`，其中 `p.Name()` 返回 `healthz.EmitterFailOpenProbeName(cellID)` 派生的 `ProbeName`）。注：自 PR-A23 起 `c.emitter` 是 `outbox.CellEmitter`（embed `healthz.ProbeSet`），故 `ProbeSet` 断言对生产 cell 恒成立；非 DirectEmitter 内层时 `Probes()` 返回 nil，循环为空。该 funnel 是 `HEALTHZ-WRITE-01/A2` allowlist 的唯一 kernel/ caller（A2 scan scope 含 kernel/）。AI-robust 评级（两条正交轴，grading 以 `HEALTHZ-WRITE-01` godoc 为准，不在此复制）：**downstream** = `Registrar.Healthz()` 已删，type system Hard gate；`HEALTHZ-WRITE-01/A2` 为 Medium archtest caller-identity backstop，锁 `Aggregator.Register` 直调点；**upstream** 的唯一 Hard 形态是 type-system seal `Aggregator` interface，但不可行（holder 轴 Go 类型系统无法表达「谁能声明某类型的字段」，sealing 仅约束 implementer；且 4 处跨包实现 + `kernel/healthz↔kernel/outbox` import 环阻断单包内实现），故 `HEALTHZ-HOLDER-SEAL-01`（gh #893）won't-do——upstream 的 A3 holder allowlist 维持 Medium archtest 为 Go 下永久天花板。详见 `tools/archtest/healthz_invariants_test.go` 的 A3 godoc。
 
@@ -361,13 +361,13 @@ audit `actor_id` 例外：源自事件 payload 的 domain actor（`appender.extr
 
 ## Audit Payload Redaction
 
-`auditcore` 通过 `runtime/audit/ledger.Store.Append` 落 hash chain；payload 是订阅事件的原始 JSON。从 `auditquery` HTTP 出口下发时，`cells/auditcore/slices/auditquery/handler.go` 强制走 `pkg/redaction.RedactPayload(payload []byte) []byte`：
+`auditcore` 通过 `runtime/audit/ledger.Store.Append` 落 hash chain；payload 是订阅事件的原始 JSON。从 `auditquery` HTTP 出口下发时，`corecells/auditcore/slices/auditquery/handler.go` 强制走 `pkg/redaction.RedactPayload(payload []byte) []byte`：
 
 - payload JSON 解析后，递归剔除敏感 key：`password / passwd / pwd / secret / token / api_key / authorization / private_key / signing_key`（与 `pkg/redaction.RedactError` 同源 key 列表）
 - 不可解析为 JSON object 的 payload（数组 / 标量 / 不合法 JSON）整段替换为 `<REDACTED>` 字符串（fail-closed）
 - 内部 store 落盘 `audit_entries.payload`（JSONB）保留原始数据用于合规审计；redaction 仅在出站 HTTP 路径生效
 
-ref: `cells/auditcore/slices/auditquery/handler.go` 出口；`pkg/redaction/redaction.go` 单源治理。
+ref: `corecells/auditcore/slices/auditquery/handler.go` 出口；`pkg/redaction/redaction.go` 单源治理。
 
 ## Client-IP PII Hash Funnel（replayable payload，#1488）
 
@@ -384,7 +384,7 @@ replayable event payload 里的客户端 IP 一律以 keyed、非可逆 HMAC 哈
 
 ## Audit trace_id 反查（trace → audit）
 
-`audit_entries` 带 `trace_id` 列（observability，**非** HMAC 链字段——`Protocol.ComputeHash` 12-field 输入冻结，`audit_hash_input_frozen_test.go` 守）。注入唯一路径 = `cells/auditcore/internal/appender`，经 `correlation.New(string(obs.TraceID), string(obs.RequestID), string(obs.CorrelationID))`（`obs = entry.Observability()`）从 W0 outbox observability envelope 同时派生 `trace_id` + `correlation_id`（`correlation.Correlation` 全字段 unexported 只防包外 struct literal 构造，但 `New` 是公开通用构造器，故 Correlation seal 不 gate provenance；值的可信 provenance 仅来自上游 sealed `outbox.Entry` 的 Hard 继承——下游 `AUDIT-TRACE-ID-WRITE-CALLER-01` 只锁**写入位置**（appender 为唯一写点，Medium caller-allowlist），**不校验 appender 内部值来源**，该最后一跳由单一审查注入点 + anti-vacuity 兜底）。
+`audit_entries` 带 `trace_id` 列（observability，**非** HMAC 链字段——`Protocol.ComputeHash` 12-field 输入冻结，`audit_hash_input_frozen_test.go` 守）。注入唯一路径 = `corecells/auditcore/internal/appender`，经 `correlation.New(string(obs.TraceID), string(obs.RequestID), string(obs.CorrelationID))`（`obs = entry.Observability()`）从 W0 outbox observability envelope 同时派生 `trace_id` + `correlation_id`（`correlation.Correlation` 全字段 unexported 只防包外 struct literal 构造，但 `New` 是公开通用构造器，故 Correlation seal 不 gate provenance；值的可信 provenance 仅来自上游 sealed `outbox.Entry` 的 Hard 继承——下游 `AUDIT-TRACE-ID-WRITE-CALLER-01` 只锁**写入位置**（appender 为唯一写点，Medium caller-allowlist），**不校验 appender 内部值来源**，该最后一跳由单一审查注入点 + anti-vacuity 兜底）。
 
 反查入口复用 auditquery：`GET /api/v1/audit/entries?traceId=<tid>`（admin 全局；非 admin 经既有 `auditQueryPolicy` AND `actor_id=self`，无后门），复用标准 `nextCursor`/`hasMore` 游标分页。**不新增端点**（端点收敛决策见 ADR）。
 

@@ -43,6 +43,7 @@ var internalLayerByDir = map[string]string{
 	"runtime":   LayerRuntime,
 	"adapters":  LayerAdapters,
 	"cells":     LayerCells,
+	"corecells": LayerCells,
 	"pkg":       LayerPkg,
 	"cmd":       LayerCmd,
 	"examples":  LayerExamples,
@@ -199,19 +200,15 @@ func layerByFirstSegment(rel string) (string, bool) {
 }
 
 // Cell returns the cell ID for a package under <owningModule>/cells/<id>/...,
-// or "" if the package is not under any member module's cells/. The Go-reserved
-// "internal" segment (e.g. cells/internal/testoutbox — shared cell-test
-// helpers) is not a cell ID; Cell returns "" for paths under cells/internal/.
+// <baseModule>/corecells/<id>/..., or a corecells module root package
+// <owningModule>/<id>/.... The Go-reserved "internal" segment (e.g.
+// cells/internal/testoutbox — shared cell-test helpers) is not a cell ID; Cell
+// returns "" for paths under cells/internal/ or corecells/internal/.
 func (c Classifier) Cell(importPath string) string {
-	owner := c.OwningModule(importPath)
-	if owner == "" {
+	rel, ok := c.cellRel(importPath)
+	if !ok {
 		return ""
 	}
-	prefix := owner + "/cells/"
-	if !strings.HasPrefix(importPath, prefix) {
-		return ""
-	}
-	rel := strings.TrimPrefix(importPath, prefix)
 	if rel == "" {
 		return ""
 	}
@@ -225,21 +222,55 @@ func (c Classifier) Cell(importPath string) string {
 	return seg
 }
 
-// Slice returns the slice ID for a package under
-// <owningModule>/cells/<id>/slices/<sliceId>/..., or "" if not under a slice.
+// Slice returns the slice ID for a package under a cells/corecells root's
+// <id>/slices/<sliceId>/..., or "" if not under a slice.
 // Slices may have nested subdirectories; only the immediate slice ID is
 // returned.
 func (c Classifier) Slice(importPath string) string {
-	cell := c.Cell(importPath)
-	if cell == "" {
+	rel, ok := c.cellRel(importPath)
+	if !ok {
 		return ""
 	}
+	cell := firstSegment(rel)
+	if cell == "" || cell == "internal" {
+		return ""
+	}
+	slicePrefix := cell + "/slices/"
+	if !strings.HasPrefix(rel, slicePrefix) {
+		return ""
+	}
+	rel = strings.TrimPrefix(rel, slicePrefix)
+	if i := strings.IndexByte(rel, '/'); i >= 0 {
+		return rel[:i]
+	}
+	return rel
+}
+
+// cellRel returns the path relative to the cell-root directory. It supports the
+// generic cells/ convention, the platform corecells/ directory, and the
+// corecells module itself once it is listed in go.work.
+func (c Classifier) cellRel(importPath string) (string, bool) {
 	owner := c.OwningModule(importPath)
-	prefix := owner + "/cells/" + cell + "/slices/"
-	if !strings.HasPrefix(importPath, prefix) {
-		return ""
+	if owner == "" {
+		return "", false
 	}
-	rel := strings.TrimPrefix(importPath, prefix)
+	for _, prefix := range cellRootPrefixes(owner) {
+		if strings.HasPrefix(importPath, prefix) {
+			return strings.TrimPrefix(importPath, prefix), true
+		}
+	}
+	return "", false
+}
+
+func cellRootPrefixes(owner string) []string {
+	prefixes := []string{owner + "/cells/", owner + "/corecells/"}
+	if firstSegment(lastPathSegment(owner)) == "corecells" {
+		prefixes = append(prefixes, owner+"/")
+	}
+	return prefixes
+}
+
+func firstSegment(rel string) string {
 	if rel == "" {
 		return ""
 	}
@@ -247,6 +278,13 @@ func (c Classifier) Slice(importPath string) string {
 		return rel[:i]
 	}
 	return rel
+}
+
+func lastPathSegment(path string) string {
+	if i := strings.LastIndexByte(path, '/'); i >= 0 {
+		return path[i+1:]
+	}
+	return path
 }
 
 // IsStdlib reports whether importPath is a standard library package.

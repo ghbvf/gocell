@@ -431,7 +431,7 @@ require (
 - `github.com/ghbvf/gocell/kernel/cell` ✅
 - `github.com/ghbvf/gocell/runtime/bootstrap` ✅
 - `github.com/ghbvf/gocell/pkg/errcode` ✅
-- `github.com/ghbvf/gocell/cells/accesscore` ✅
+- `github.com/ghbvf/gocell/corecells/accesscore` ✅
 - `github.com/ghbvf/gocell/contracts/...` ✅
 
 **零修改**——这是顶层 = core 设计的最大收益。

@@ -740,12 +740,13 @@ func TestBuildContextPredicateReExported(t *testing.T) {
 // PASS-FUNNEL-LOADPACKAGES-01 / PACKAGES-IMPORT-01 type-aware detectors).
 func TestFacadeDoesNotLeakLoaders(t *testing.T) {
 	bannedLoaders := map[string]bool{
-		"LoadPackages":           true,
-		"SharedResolver":         true,
-		"LoadProductionPackages": true,
-		"Resolver":               true,
-		"ProductionResolver":     true,
-		"EachFileInPackage":      true,
+		"LoadPackages":            true,
+		"SharedResolver":          true,
+		"SharedWorkspaceResolver": true,
+		"LoadProductionPackages":  true,
+		"Resolver":                true,
+		"ProductionResolver":      true,
+		"EachFileInPackage":       true,
 	}
 
 	// Scan only the direct-child (non-test) .go files in tools/archtest/ itself

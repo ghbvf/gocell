@@ -25,7 +25,7 @@ import (
 // Source of truth:
 //   - contracts/http/auth/login/v1/contract.yaml 401 description
 //   - contracts/shared/errors/error-response-v1.schema.json
-//   - cells/accesscore/slices/sessionlogin/service.go::errMsgInvalidCredentials
+//   - corecells/accesscore/slices/sessionlogin/service.go::errMsgInvalidCredentials
 //   - pkg/errcode/errcode.go::ErrAuthLoginFailed
 func TestL2_LoginUniform401(t *testing.T) {
 	h := newL2Harness(t)

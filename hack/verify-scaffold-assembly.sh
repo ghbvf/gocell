@@ -35,7 +35,7 @@ run_smoke() {
   pushd "$root" >/dev/null
 
   cleanup_smoke_artifacts() {
-    rm -rf "cells/${CELL_ID}" \
+    rm -rf "corecells/${CELL_ID}" \
            "contracts/http/${CELL_ID}" \
            "generated/contracts/http/${CELL_ID}" \
            "assemblies/${ASM_ID}" \

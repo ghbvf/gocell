@@ -226,20 +226,31 @@ func collectMatcherParts0Values(p *Pass, fn *ast.FuncDecl, parserFuncs map[strin
 // RHS of `parts[0] == <val>` BinaryExpr nodes within root.
 func scanParts0Values(p *Pass, root ast.Node) map[string]bool {
 	vals := make(map[string]bool)
+	scanTopLevelCellRootCalls(root, vals)
+	scanParts0Comparisons(p, root, vals)
+	return vals
+}
+
+func scanTopLevelCellRootCalls(root ast.Node, vals map[string]bool) {
+	EachInSubtree[ast.CallExpr](root, func(ce *ast.CallExpr) {
+		callee, ok := ce.Fun.(*ast.Ident)
+		if !ok || callee.Name != "isTopLevelCellRoot" || len(ce.Args) != 1 {
+			return
+		}
+		if !isParts0Expr(ce.Args[0]) {
+			return
+		}
+		vals["cells"] = true
+		vals["corecells"] = true
+	})
+}
+
+func scanParts0Comparisons(p *Pass, root ast.Node, vals map[string]bool) {
 	EachInSubtree[ast.BinaryExpr](root, func(be *ast.BinaryExpr) {
 		if be.Op != token.EQL {
 			return
 		}
-		idx, ok := be.X.(*ast.IndexExpr)
-		if !ok {
-			return
-		}
-		ident, ok := idx.X.(*ast.Ident)
-		if !ok || ident.Name != "parts" {
-			return
-		}
-		idxLit, ok := idx.Index.(*ast.BasicLit)
-		if !ok || idxLit.Kind != token.INT || idxLit.Value != "0" {
+		if !isParts0Expr(be.X) {
 			return
 		}
 		val, ok := EvaluateConstString(p.TypesInfo, be.Y)
@@ -248,7 +259,19 @@ func scanParts0Values(p *Pass, root ast.Node) map[string]bool {
 		}
 		vals[val] = true
 	})
-	return vals
+}
+
+func isParts0Expr(expr ast.Expr) bool {
+	idx, ok := expr.(*ast.IndexExpr)
+	if !ok {
+		return false
+	}
+	ident, ok := idx.X.(*ast.Ident)
+	if !ok || ident.Name != "parts" {
+		return false
+	}
+	idxLit, ok := idx.Index.(*ast.BasicLit)
+	return ok && idxLit.Kind == token.INT && idxLit.Value == "0"
 }
 
 // collectCalleeNames returns the names of bare-ident function calls in root.

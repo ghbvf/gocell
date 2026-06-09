@@ -2,7 +2,7 @@ package archtest
 
 // sessionrefresh_stale_epoch_reject_test.go — guard that locks the
 // corrected (post-P2.b) security model for the stale-epoch branch in
-// cells/accesscore/slices/sessionrefresh/service.go.
+// corecells/accesscore/slices/sessionrefresh/service.go.
 //
 // INVARIANT: SESSIONREFRESH-STALE-EPOCH-REJECT-01
 //
@@ -43,7 +43,7 @@ package archtest
 //     literal — closing the bypass via direct inlining.
 //
 // Rule: the function body of `(*Service).rejectIfStaleEpoch` in
-// cells/accesscore/slices/sessionrefresh/service.go MUST:
+// corecells/accesscore/slices/sessionrefresh/service.go MUST:
 //
 //  1. Be called from `refreshInTx` with args containing SelectorExpr
 //     "AuthzEpochAtIssue" and a CallExpr/SelectorExpr referencing "AuthzEpoch".
@@ -97,7 +97,7 @@ import (
 )
 
 const (
-	staleEpochServiceFile     = "cells/accesscore/slices/sessionrefresh/service.go"
+	staleEpochServiceFile     = "corecells/accesscore/slices/sessionrefresh/service.go"
 	staleEpochFuncName        = "refreshInTx"
 	staleEpochHelperFuncName  = "rejectIfStaleEpoch"
 	staleEpochRowFieldName    = "AuthzEpochAtIssue"

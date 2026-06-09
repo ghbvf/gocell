@@ -32,10 +32,6 @@ version: v1
 modules:
   - path: .
     includes:
-      cells:
-        - "cells/*/cell.yaml"
-      slices:
-        - "cells/*/slices/*/slice.yaml"
       contracts:
         - "contracts/**/contract.yaml"
       journeys:
@@ -44,6 +40,12 @@ modules:
         - "assemblies/*/assembly.yaml"
       actors: "actors.yaml"
       statusBoard: "journeys/status-board.yaml"
+  - path: corecells
+    includes:
+      cells:
+        - "*/cell.yaml"
+      slices:
+        - "*/slices/*/slice.yaml"
   - path: examples/todoorder
     includes:
       cells:

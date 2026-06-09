@@ -28,8 +28,8 @@ const ruleUserRepoConformanceEnrollment01 = "USERREPO-CONFORMANCE-ENROLLMENT-01"
 // ─── platform-symbol path constants (no bare literals) ────────────────────
 
 const (
-	userRepoIfacePkg = PlatformModulePath + "/cells/accesscore/internal/ports"
-	conformancePkg   = PlatformModulePath + "/cells/accesscore/internal/ports/conformance"
+	userRepoIfacePkg = PlatformModulePath + "/corecells/accesscore/internal/ports"
+	conformancePkg   = PlatformModulePath + "/corecells/accesscore/internal/ports/conformance"
 )
 
 // ─── symbol name constants ─────────────────────────────────────────────────
@@ -92,13 +92,13 @@ func canonicalPkgPath(path string) string {
 // It returns (iface, implPkgs); iface is nil if resolution fails.
 func resolveUserRepoIfaceAndImpls(t *testing.T, tags []string, root string) (*types.Interface, []*types.Package) {
 	t.Helper()
-	prodPatterns := prodscan.Patterns(root)
-	ifacePatterns := append([]string{"./cells/accesscore/internal/ports/..."}, prodPatterns...)
+	prodPatterns := append([]string{"./corecells/..."}, prodscan.Patterns(root)...)
+	ifacePatterns := append([]string{"./corecells/accesscore/internal/ports/..."}, prodPatterns...)
 
 	var userRepoIface *types.Interface
 	var implPkgs []*types.Package
 
-	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: tags}, ifacePatterns),
+	_ = Run(t, WorkspaceTyped(TypedOpts{Tests: false, Tags: tags}, ifacePatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -138,8 +138,8 @@ func lookupUserRepoIface(pkg *types.Package) *types.Interface {
 func scanConformanceEnrollments(t *testing.T, tags []string, root string) map[string]bool {
 	t.Helper()
 	enrolledPkgs := make(map[string]bool)
-	testPatterns := prodscan.Patterns(root)
-	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: tags}, testPatterns),
+	testPatterns := append([]string{"./corecells/..."}, prodscan.Patterns(root)...)
+	_ = Run(t, WorkspaceTyped(TypedOpts{Tests: true, Tags: tags}, testPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil

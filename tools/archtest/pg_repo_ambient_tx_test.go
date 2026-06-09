@@ -91,7 +91,7 @@
 //
 // BS-4 *pgxpool.Pool type alias — resolves to the same *types.Named; documented.
 //
-// BS-5 cells/accesscore PGBundle helper accepts *pgxpool.Pool as a param but
+// BS-5 corecells/accesscore PGBundle helper accepts *pgxpool.Pool as a param but
 // does not persist it — reverse check asserts no struct field outside internal/.
 //
 // BS-6 Function-value indirection of pgexec.ExecDirect (`var fn =
@@ -382,12 +382,12 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 	assert.Empty(t, bs3Violations,
 		"BS-3 self-check: pgexec.New must not be used as a function value in production")
 
-	// BS-5: no struct in cells/accesscore (outside internal/) may carry
+	// BS-5: no struct in corecells/accesscore (outside internal/) may carry
 	// *pgxpool.Pool as a field. NewPGBundle accepts pool as a parameter but
 	// does not persist it.
-	bs5Patterns := []string{PlatformModulePath + "/cells/accesscore"}
+	bs5Patterns := []string{PlatformModulePath + "/corecells/accesscore"}
 	var bs5PoolFieldCount int
-	_ = Run(t, Typed(TypedOpts{}, bs5Patterns), func(p *Pass) []Diagnostic {
+	_ = Run(t, WorkspaceTyped(TypedOpts{}, bs5Patterns), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -413,7 +413,7 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 	})
 
 	assert.Equal(t, 0, bs5PoolFieldCount,
-		"BS-5 self-check: no struct in cells/accesscore (outside internal/) may carry "+
+		"BS-5 self-check: no struct in corecells/accesscore (outside internal/) may carry "+
 			"*pgxpool.Pool — PGBundle must hold only derived primitives "+
 			"(userRepo/roleRepo/setupLock/txRunner)")
 

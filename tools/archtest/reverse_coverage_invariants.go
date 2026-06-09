@@ -367,7 +367,7 @@ func CheckImplDeclCover(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 	if err != nil {
 		t.Fatalf("IMPL-DECL-COVER-01: read module path: %v", err)
 	}
-	cellsPrefix := modPath + "/cells/"
+	cellsPrefix := modPath + "/corecells/"
 
 	scope := DirsScope(root, []string{"cells"}, MatchRels(func(rel string) bool {
 		return !strings.HasSuffix(rel, "_test.go") && !strings.Contains(rel, "/testdata/")
@@ -615,7 +615,7 @@ func CheckHandlerDeclCover(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 	activeHTTPContracts := buildActiveHTTPContractSet(genHTTPSourceMap)
 
 	generatedHTTPPrefix := modPath + "/generated/contracts/http/"
-	cellsPrefix := modPath + "/cells/"
+	cellsPrefix := modPath + "/corecells/"
 	examplesPrefix := modPath + "/examples/"
 
 	genServiceIfaces, cellImplTypes, sawSatelliteExample, universeErr := collectHandlerTypeUniverse(
@@ -862,7 +862,7 @@ func collectDeadContractTypeUniverse(t *testing.T, root, modPath string) ([]dcIf
 	t.Helper()
 	generatedHTTPPrefix := modPath + "/generated/contracts/http/"
 	generatedCommandPrefix := modPath + "/generated/contracts/command/"
-	cellsPrefix := modPath + "/cells/"
+	cellsPrefix := modPath + "/corecells/"
 	examplesPrefix := modPath + "/examples/"
 
 	modules := findWorkspaceModules(t, root)

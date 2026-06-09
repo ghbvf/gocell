@@ -19,7 +19,7 @@ import (
 //
 // Source of truth:
 //   - contracts/http/auth/session/delete/v1/contract.yaml (successStatus: 204)
-//   - cells/accesscore/slices/sessionlogout/service.go (owner-guard + revoke)
+//   - corecells/accesscore/slices/sessionlogout/service.go (owner-guard + revoke)
 //   - kernel/auth/middleware — epoch/session-state collapse to ERR_AUTH_UNAUTHORIZED
 func TestL2_LogoutInvalidatesSession(t *testing.T) {
 	h := newL2Harness(t)

@@ -181,14 +181,14 @@ func reflectValueMethodFunc(fn *types.Func) bool {
 func TestReflectStringArgScanner_TypedReceiverAndConstArg(t *testing.T) {
 	t.Parallel()
 
-	// Run(t, Typed(...)) (not a fixture-tagged loader): reflect_string_form_red is a
+	// Run(t, WorkspaceTyped(...)) (not a fixture-tagged loader): reflect_string_form_red is a
 	// testdata/ subpackage of the main module — excluded from `go build ./...`
 	// and `./...` patterns, loaded only via this explicit path. It lives under
-	// cells/accesscore/ because it imports internal/domain (see fixture godoc).
-	const fixture = "./cells/accesscore/internal/credentialauthority/testdata/reflect_string_form_red"
+	// corecells/accesscore/ because it imports internal/domain (see fixture godoc).
+	const fixture = "./corecells/accesscore/internal/credentialauthority/testdata/reflect_string_form_red"
 
 	var fieldHits, methodHits []reflectStringArgHit
-	_ = Run(t, Typed(TypedOpts{}, []string{fixture}), func(p *Pass) []Diagnostic {
+	_ = Run(t, WorkspaceTyped(TypedOpts{}, []string{fixture}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil || p.Fset == nil {
 			return nil
 		}

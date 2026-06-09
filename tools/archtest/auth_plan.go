@@ -459,7 +459,7 @@ func authPlanConstructorCallViolations(p *Pass, file *ast.File, rel, origin stri
 }
 
 // isAuthPlanScannedPkg reports whether the package at relPkg (module-relative
-// slash-path, e.g. "cells/accesscore/slices/setup") is in scope for AUTH-PLAN-04
+// slash-path, e.g. "corecells/accesscore/slices/setup") is in scope for AUTH-PLAN-04
 // (i.e. under cells/ or runtime/ but not runtime/bootstrap/).
 func isAuthPlanScannedPkg(relPkg string) bool {
 	if strings.HasPrefix(relPkg, "runtime/bootstrap") {

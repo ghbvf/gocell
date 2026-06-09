@@ -2,8 +2,8 @@
 // It implements [composition.CellModule] and wires all auditcore-specific
 // dependencies from [composition.SharedDeps].
 //
-// This is a composition-root-layer package: it may import cells/, adapters/,
-// and cellmodules/cellsecrets/. It must NOT be imported by cells/, runtime/, or
+// This is a composition-root-layer package: it may import corecells/, adapters/,
+// and cellmodules/cellsecrets/. It must NOT be imported by corecells/, runtime/, or
 // adapters/.
 //
 // ref: uber-go/fx fx.Module("auditcore", ...) — self-contained module.
@@ -18,7 +18,7 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
-	auditcell "github.com/ghbvf/gocell/cells/auditcore"
+	auditcell "github.com/ghbvf/gocell/corecells/auditcore"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
