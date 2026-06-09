@@ -233,30 +233,23 @@ func newTestTailer(t *testing.T, src *fakeSource, store projection.OwnerCheckpoi
 	apply projection.Apply, obs Observer, locker distlock.Locker, clk clock.Clock,
 ) *Tailer {
 	t.Helper()
-	tl, err := NewTailer(clk, testTailerDeps(src, src, store, apply, locker), WithObserver(obs))
+	tl, err := newTestTailerWithDeps(clk, src, src, store, apply, locker, WithObserver(obs))
 	if err != nil {
 		t.Fatalf("NewTailer: %v", err)
 	}
 	return tl
 }
 
-func testTailerDeps(
+func newTestTailerWithDeps(
+	clk clock.Clock,
 	replay projection.ReplaySource,
 	cursor projection.Cursor,
 	store projection.OwnerCheckpointStore,
 	apply projection.Apply,
 	locker distlock.Locker,
-) TailerDeps {
-	return TailerDeps{
-		Replay:       replay,
-		Cursor:       cursor,
-		Store:        store,
-		TxRunner:     fakeTxRunner{},
-		Apply:        apply,
-		Locker:       locker,
-		CellID:       testCell,
-		ProjectionID: testProj,
-	}
+	opts ...Option,
+) (*Tailer, error) {
+	return NewTailer(clk, replay, cursor, store, fakeTxRunner{}, apply, locker, testCell, testProj, opts...)
 }
 
 func events(seqs ...int64) []*fakeEvent {
@@ -478,41 +471,35 @@ func TestTailer_ConstructorNilGuards(t *testing.T) {
 	apply := func(context.Context, projection.ProjectionEvent) error { return nil }
 	locker := newTestLocker(t, clk)
 	good := func() (*Tailer, error) {
-		return NewTailer(clk, testTailerDeps(src, src, store, apply, locker))
+		return newTestTailerWithDeps(clk, src, src, store, apply, locker)
 	}
 	if _, err := good(); err != nil {
 		t.Fatalf("baseline NewTailer: %v", err)
 	}
 	cases := map[string]func() (*Tailer, error){
 		"nil replay": func() (*Tailer, error) {
-			return NewTailer(clk, testTailerDeps(nil, src, store, apply, locker))
+			return newTestTailerWithDeps(clk, nil, src, store, apply, locker)
 		},
 		"nil cursor": func() (*Tailer, error) {
-			return NewTailer(clk, testTailerDeps(src, nil, store, apply, locker))
+			return newTestTailerWithDeps(clk, src, nil, store, apply, locker)
 		},
 		"nil store": func() (*Tailer, error) {
-			return NewTailer(clk, testTailerDeps(src, src, nil, apply, locker))
+			return newTestTailerWithDeps(clk, src, src, nil, apply, locker)
 		},
 		"nil tx": func() (*Tailer, error) {
-			deps := testTailerDeps(src, src, store, apply, locker)
-			deps.TxRunner = nil
-			return NewTailer(clk, deps)
+			return NewTailer(clk, src, src, store, nil, apply, locker, testCell, testProj)
 		},
 		"nil apply": func() (*Tailer, error) {
-			return NewTailer(clk, testTailerDeps(src, src, store, nil, locker))
+			return newTestTailerWithDeps(clk, src, src, store, nil, locker)
 		},
 		"nil locker": func() (*Tailer, error) {
-			return NewTailer(clk, testTailerDeps(src, src, store, apply, nil))
+			return newTestTailerWithDeps(clk, src, src, store, apply, nil)
 		},
 		"empty cell": func() (*Tailer, error) {
-			deps := testTailerDeps(src, src, store, apply, locker)
-			deps.CellID = ""
-			return NewTailer(clk, deps)
+			return NewTailer(clk, src, src, store, fakeTxRunner{}, apply, locker, "", testProj)
 		},
 		"empty proj": func() (*Tailer, error) {
-			deps := testTailerDeps(src, src, store, apply, locker)
-			deps.ProjectionID = ""
-			return NewTailer(clk, deps)
+			return NewTailer(clk, src, src, store, fakeTxRunner{}, apply, locker, testCell, "")
 		},
 	}
 	for name, ctor := range cases {
@@ -531,18 +518,18 @@ func TestTailer_NilClockPanics(t *testing.T) {
 		}
 	}()
 	src := &fakeSource{}
-	_, _ = NewTailer(nil, testTailerDeps(src, src, projection.NewMemOwnerCheckpointStore(),
+	_, _ = NewTailer(nil, src, src, projection.NewMemOwnerCheckpointStore(), fakeTxRunner{},
 		func(context.Context, projection.ProjectionEvent) error { return nil },
-		newTestLocker(t, clockmock.New(time.Unix(0, 0)))))
+		newTestLocker(t, clockmock.New(time.Unix(0, 0))), testCell, testProj)
 }
 
 func TestTailer_ConfigValidation(t *testing.T) {
 	clk := clockmock.New(time.Unix(0, 0))
 	src := &fakeSource{}
 	mk := func(cfg Config) error {
-		_, err := NewTailer(clk, testTailerDeps(src, src, projection.NewMemOwnerCheckpointStore(),
+		_, err := NewTailer(clk, src, src, projection.NewMemOwnerCheckpointStore(), fakeTxRunner{},
 			func(context.Context, projection.ProjectionEvent) error { return nil },
-			newTestLocker(t, clk)), WithConfig(cfg))
+			newTestLocker(t, clk), testCell, testProj, WithConfig(cfg))
 		return err
 	}
 	if err := mk(Config{PollInterval: 0, LeaseTTL: time.Second}); err == nil {
@@ -839,7 +826,8 @@ func TestTailer_StopTimeoutRetryable(t *testing.T) {
 	}
 
 	// Real clock + short poll interval so the loop ticks into apply promptly.
-	tl, err := NewTailer(clock.Real(), testTailerDeps(src, src, store, apply, newTestLocker(t, clock.Real())),
+	realClock := clock.Real()
+	tl, err := NewTailer(realClock, src, src, store, fakeTxRunner{}, apply, newTestLocker(t, realClock), testCell, testProj,
 		WithConfig(Config{PollInterval: testFastPoll, LeaseTTL: testLockTTL}))
 	if err != nil {
 		t.Fatalf("NewTailer: %v", err)
