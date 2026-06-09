@@ -8,9 +8,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/cmd/internal/wiresummary"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	_ "github.com/ghbvf/gocell/tools/codegen/markergen" // ensure import is resolved
+	"github.com/ghbvf/gocell/tools/wiresummary"
 )
 
 // TestBuildCellWireSummaries_NoCellGo verifies that a project where no cell

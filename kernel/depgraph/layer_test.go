@@ -173,6 +173,29 @@ func TestClassifier_MultiModule(t *testing.T) {
 	}
 }
 
+func TestClassifier_KnownLayerSatelliteWithoutBase(t *testing.T) {
+	t.Parallel()
+	const toolsModule = testModule + "/tools"
+	c := NewClassifier([]string{toolsModule})
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"module_root", toolsModule, LayerTools},
+		{"module_subpackage", toolsModule + "/depgraph", LayerTools},
+		{"module_nested_package", toolsModule + "/archtest/internal/scanner", LayerTools},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := c.Layer(tt.path); got != tt.want {
+				t.Errorf("Layer(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsStdlib(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

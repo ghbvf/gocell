@@ -14,6 +14,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
+
+	"github.com/ghbvf/gocell/tools/workspace"
 )
 
 // TestLoadMode_NoNeedDeps guards the #1499 RSS optimization: the shared
@@ -173,13 +175,13 @@ func init() { fmt.Println(Topic) }
 
 // cacheKey rebuilds the SharedResolver cache key for test cleanup. Tests in
 // this file all pass nil tags, so the cache key collapses to the simpler
-// shape (root + tests-flag + empty + patterns).
+// shape (mode + root + tests-flag + empty + patterns).
 func cacheKey(root string, tests bool, patterns ...string) string {
 	testsFlag := "0"
 	if tests {
 		testsFlag = "1"
 	}
-	out := root + "\x00" + testsFlag + "\x00" + "\x00"
+	out := "0" + "\x00" + root + "\x00" + testsFlag + "\x00" + "\x00"
 	for i, p := range patterns {
 		if i > 0 {
 			out += "\x00"
@@ -187,6 +189,25 @@ func cacheKey(root string, tests bool, patterns ...string) string {
 		out += p
 	}
 	return out
+}
+
+func TestSplitWorkspacePattern_RoutesKnownSatellite(t *testing.T) {
+	mods := []workspace.Module{
+		{Dir: ".", ImportPath: "github.com/ghbvf/gocell"},
+		{Dir: "tools", ImportPath: "github.com/ghbvf/gocell/tools"},
+	}
+
+	dir, pattern := splitWorkspacePattern(mods, "./tools/archtest/internal/typeseval/...")
+	assert.Equal(t, "tools", dir)
+	assert.Equal(t, "./archtest/internal/typeseval/...", pattern)
+
+	dir, pattern = splitWorkspacePattern(mods, "./pkg/...")
+	assert.Equal(t, ".", dir)
+	assert.Equal(t, "./pkg/...", pattern)
+
+	dir, pattern = splitWorkspacePattern(mods, "github.com/ghbvf/gocell/tools/archtest/internal/scanner")
+	assert.Equal(t, "tools", dir)
+	assert.Equal(t, "github.com/ghbvf/gocell/tools/archtest/internal/scanner", pattern)
 }
 
 func TestLoadPackages_HappyPath(t *testing.T) {

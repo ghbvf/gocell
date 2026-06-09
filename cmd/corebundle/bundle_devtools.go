@@ -7,12 +7,12 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ghbvf/gocell/cmd/internal/wiresummary"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
+	"github.com/ghbvf/gocell/tools/wiresummary"
 )
 
 // defaultDevtoolsParseTimeout is the max time allowed for project metadata

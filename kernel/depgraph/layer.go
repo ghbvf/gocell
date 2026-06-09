@@ -156,6 +156,12 @@ func (c Classifier) Layer(importPath string) string {
 			return layer
 		}
 	}
+	// Scoped workspace loads may include only a satellite module such as
+	// github.com/ghbvf/gocell/tools. Preserve its repo layer even when the core
+	// module is absent from the classifier's module set.
+	if layer, ok := layerByLastSegment(owner); ok {
+		return layer
+	}
 	// Longest-owner-relative fallback: a satellite that DOES mirror the core layer
 	// structure beneath its own root (e.g. a future mdm module with mdm/cells/foo)
 	// classifies LayerCells by its module-internal first segment when the
@@ -193,6 +199,19 @@ func layerByFirstSegment(rel string) (string, bool) {
 	seg := rel
 	if i := strings.IndexByte(rel, '/'); i >= 0 {
 		seg = rel[:i]
+	}
+	layer, ok := internalLayerByDir[seg]
+	return layer, ok
+}
+
+// layerByLastSegment maps a module path's final segment to a layer.
+func layerByLastSegment(module string) (string, bool) {
+	if module == "" {
+		return "", false
+	}
+	seg := module
+	if i := strings.LastIndexByte(module, '/'); i >= 0 {
+		seg = module[i+1:]
 	}
 	layer, ok := internalLayerByDir[seg]
 	return layer, ok

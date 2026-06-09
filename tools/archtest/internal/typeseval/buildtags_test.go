@@ -542,20 +542,20 @@ func TestFlatLoadCoverage_DetectsAmbiguousConstraint(t *testing.T) {
 		satisfiedByFlat, satisfiedByDefault, satisfiedByAny)
 }
 
-// repoRoot returns the module root by walking up from the test binary's
-// working directory until it finds a go.mod file.
+// repoRoot returns the workspace root by walking up from the test binary's
+// working directory until it finds go.work.
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	cwd, err := os.Getwd()
 	require.NoError(t, err)
 	d := cwd
 	for {
-		if _, err := os.Stat(filepath.Join(d, "go.mod")); err == nil {
+		if _, err := os.Stat(filepath.Join(d, "go.work")); err == nil {
 			return d
 		}
 		parent := filepath.Dir(d)
 		if parent == d {
-			t.Fatalf("repoRoot: go.mod not found above %s", cwd)
+			t.Fatalf("repoRoot: go.work not found above %s", cwd)
 		}
 		d = parent
 	}

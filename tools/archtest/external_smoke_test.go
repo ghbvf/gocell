@@ -50,7 +50,10 @@ func TestExternalModuleSmoke(t *testing.T) {
 		"package extsmoke\n\nimport (\n\t\"testing\"\n\n\t\"github.com/ghbvf/gocell/tools/archtest\"\n)\n\n"+
 			"func TestConsumerArchitecture(t *testing.T) {\n\tarchtest.RunStandardCellRules(t, archtest.ConfigForExternalCell{})\n}\n")
 	writeSmokeFile(t, tmp, "go.mod",
-		"module gocell.example/extsmoke\n\ngo 1.25\n\nrequire github.com/ghbvf/gocell v0.0.0\n\n"+
+		"module gocell.example/extsmoke\n\ngo 1.25\n\n"+
+			"require github.com/ghbvf/gocell/tools v0.0.0\n"+
+			"require github.com/ghbvf/gocell v0.0.0 // indirect\n\n"+
+			"replace github.com/ghbvf/gocell/tools => "+filepath.Join(root, "tools")+"\n"+
 			"replace github.com/ghbvf/gocell => "+root+"\n")
 
 	cmd := exec.Command(goBin, "test", "./...") //nolint:gosec // G204: const args; cwd is t.TempDir()
@@ -73,9 +76,10 @@ func TestExternalModuleSmoke(t *testing.T) {
 	}
 }
 
-// repoRootFromTest returns this repository's module root (absolute), for the
-// smoke module's replace directive. It walks up from the test's working
-// directory to the go.mod, mirroring findModuleRoot without exporting it.
+// repoRootFromTest returns this repository's workspace root (absolute), for the
+// smoke module's replace directives. It walks up from the test's working
+// directory to go.work so tests running from the tools module still resolve the
+// repository root.
 func repoRootFromTest(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
@@ -83,12 +87,12 @@ func repoRootFromTest(t *testing.T) string {
 		t.Fatalf("getwd: %v", err)
 	}
 	for {
-		if _, statErr := os.Stat(filepath.Join(dir, "go.mod")); statErr == nil {
+		if _, statErr := os.Stat(filepath.Join(dir, "go.work")); statErr == nil {
 			return dir
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			t.Fatalf("repoRootFromTest: no go.mod found walking up from test cwd")
+			t.Fatalf("repoRootFromTest: no go.work found walking up from test cwd")
 		}
 		dir = parent
 	}
