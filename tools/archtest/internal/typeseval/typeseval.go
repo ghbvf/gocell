@@ -223,6 +223,17 @@ func workspacePatternGroups(root string, patterns []string) ([]patternGroup, boo
 }
 
 func splitWorkspacePattern(mods []workspace.Module, pattern string) (string, string) {
+	bestDir := "."
+	bestPattern := pattern
+	bestScore := -1
+	consider := func(score int, dir, modulePattern string) {
+		if score <= bestScore {
+			return
+		}
+		bestScore = score
+		bestDir = dir
+		bestPattern = modulePattern
+	}
 	for _, m := range mods {
 		dir := filepath.ToSlash(filepath.Clean(m.Dir))
 		if dir == "." || dir == "" {
@@ -231,15 +242,15 @@ func splitWorkspacePattern(mods []workspace.Module, pattern string) (string, str
 		prefix := "./" + dir
 		switch {
 		case pattern == prefix:
-			return dir, "."
+			consider(len(dir), dir, ".")
 		case strings.HasPrefix(pattern, prefix+"/"):
-			return dir, "." + strings.TrimPrefix(pattern, prefix)
+			consider(len(dir), dir, "."+strings.TrimPrefix(pattern, prefix))
 		}
 		if pattern == m.ImportPath || strings.HasPrefix(pattern, m.ImportPath+"/") {
-			return dir, pattern
+			consider(len(m.ImportPath), dir, pattern)
 		}
 	}
-	return ".", pattern
+	return bestDir, bestPattern
 }
 
 var (

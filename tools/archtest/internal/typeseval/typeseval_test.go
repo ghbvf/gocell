@@ -210,6 +210,22 @@ func TestSplitWorkspacePattern_RoutesKnownSatellite(t *testing.T) {
 	assert.Equal(t, "github.com/ghbvf/gocell/tools/archtest/internal/scanner", pattern)
 }
 
+func TestSplitWorkspacePattern_PrefersLongestSatellitePrefix(t *testing.T) {
+	mods := []workspace.Module{
+		{Dir: ".", ImportPath: "github.com/ghbvf/gocell"},
+		{Dir: "tools", ImportPath: "github.com/ghbvf/gocell/tools"},
+		{Dir: "tools/nested", ImportPath: "github.com/ghbvf/gocell/tools/nested"},
+	}
+
+	dir, pattern := splitWorkspacePattern(mods, "./tools/nested/pkg/...")
+	assert.Equal(t, "tools/nested", dir)
+	assert.Equal(t, "./pkg/...", pattern)
+
+	dir, pattern = splitWorkspacePattern(mods, "github.com/ghbvf/gocell/tools/nested/pkg")
+	assert.Equal(t, "tools/nested", dir)
+	assert.Equal(t, "github.com/ghbvf/gocell/tools/nested/pkg", pattern)
+}
+
 func TestLoadPackages_HappyPath(t *testing.T) {
 	root := findArchTestModuleRoot(t)
 	pkgs, errs, err := LoadPackages(root, false, nil, "./tools/archtest/internal/typeseval/...")
@@ -225,6 +241,39 @@ func TestLoadPackages_HappyPath(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "expected typeseval package in load result")
+}
+
+func TestLoadPackages_RoutesImportPathPatternToSatellite(t *testing.T) {
+	root := findArchTestModuleRoot(t)
+	pkgs, errs, err := LoadPackages(root, false, nil, "github.com/ghbvf/gocell/tools/archtest/internal/typeseval")
+	require.NoError(t, err)
+	require.Empty(t, errs, "load errors: %v", errs)
+
+	require.NotNil(t, packageByPath(pkgs, "github.com/ghbvf/gocell/tools/archtest/internal/typeseval"))
+}
+
+func TestLoadPackages_MixedRootAndSatellitePatternsShareTypeIdentity(t *testing.T) {
+	root := findArchTestModuleRoot(t)
+	t.Setenv("GOWORK", "off")
+
+	pkgs, errs, err := LoadPackages(root, false, nil, "./kernel/metadata", "./tools/workspace")
+	require.NoError(t, err)
+	require.Empty(t, errs, "load errors: %v", errs)
+
+	metadataPkg := packageByPath(pkgs, "github.com/ghbvf/gocell/kernel/metadata")
+	require.NotNil(t, metadataPkg, "root metadata package should be loaded")
+	workspacePkg := packageByPath(pkgs, "github.com/ghbvf/gocell/tools/workspace")
+	require.NotNil(t, workspacePkg, "tools workspace package should be loaded")
+
+	importedMetadata := workspacePkg.Imports["github.com/ghbvf/gocell/kernel/metadata"]
+	require.NotNil(t, importedMetadata, "tools/workspace should import root kernel/metadata")
+	require.Same(t, metadataPkg.Types, importedMetadata.Types, "workspace load must preserve shared type package identity")
+
+	loadedType := metadataPkg.Types.Scope().Lookup("ManifestSpec")
+	importedType := importedMetadata.Types.Scope().Lookup("ManifestSpec")
+	require.NotNil(t, loadedType)
+	require.NotNil(t, importedType)
+	assert.True(t, types.Identical(loadedType.Type(), importedType.Type()))
 }
 
 func TestLoadPackages_PropagatesErrors(t *testing.T) {
@@ -444,6 +493,18 @@ func packageNames(r *Resolver) map[string]struct{} {
 		names[p.Name] = struct{}{}
 	}
 	return names
+}
+
+func packageByPath(pkgs []*packages.Package, path string) *packages.Package {
+	for _, p := range pkgs {
+		if p.PkgPath == path || p.ID == path {
+			return p
+		}
+		if p.Types != nil && p.Types.Path() == path {
+			return p
+		}
+	}
+	return nil
 }
 
 // findArchTestModuleRoot returns the absolute path of the gocell module root by
