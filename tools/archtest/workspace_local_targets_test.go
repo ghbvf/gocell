@@ -1,3 +1,9 @@
+// INVARIANT: WORKSPACE-LOCAL-TARGETS-01
+//
+// WORKSPACE-LOCAL-TARGETS-01 - local root targets that are expected to cover
+// the whole go.work workspace must traverse hack/lib/modules.sh instead of
+// root-only `./...`, because nested modules such as ./tools are otherwise
+// silently skipped by formatter, verify, and coverage gates.
 package archtest
 
 import (
