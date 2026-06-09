@@ -23,8 +23,9 @@ package archtest
 //   - AUTH-KEYSTEST-A: kernel/** must not import keystest (kernel must not
 //     depend on runtime/ — hard layering violation).
 //
-//   - AUTH-KEYSTEST-B: cells/** non-_test.go files must not import keystest
-//     (cells must not depend on test-only helpers in production code paths).
+//   - AUTH-KEYSTEST-B: cells/** and corecells/** non-_test.go files must not
+//     import keystest (cells must not depend on test-only helpers in production
+//     code paths).
 //
 //   - AUTH-KEYSTEST-C: runtime/** non-_test.go files must not import keystest
 //     (production runtime code must use auth.GenerateRSAKeyPair() instead).
@@ -131,12 +132,12 @@ func keystestRuleFor(rel, dir string, isTest bool, keystestPkgDir string) (sub, 
 	switch {
 	case strings.HasPrefix(rel, "kernel/"):
 		return "AUTH-KEYSTEST-A", "kernel must not depend on runtime/", true
-	case strings.HasPrefix(rel, "cells/"):
+	case strings.HasPrefix(rel, "cells/"), strings.HasPrefix(rel, "corecells/"):
 		if isTest {
 			return "", "", false
 		}
 		return "AUTH-KEYSTEST-B",
-			"cells production code must not import test-only key helpers; use auth.GenerateRSAKeyPair()", true
+			"cell production code must not import test-only key helpers; use auth.GenerateRSAKeyPair()", true
 	case strings.HasPrefix(rel, "runtime/"):
 		if isTest || dir == keystestPkgDir {
 			return "", "", false

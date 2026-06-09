@@ -226,7 +226,7 @@ import (
     "context"
     "net/http"
 
-    "github.com/ghbvf/gocell/corecells/mycell/slices/myhello"
+    "github.com/ghbvf/gocell/cells/mycell/slices/myhello"
     "github.com/ghbvf/gocell/kernel/cell"
     "github.com/ghbvf/gocell/runtime/auth"
 )
@@ -276,7 +276,7 @@ import (
     "os/signal"
     "syscall"
 
-    mycell "github.com/ghbvf/gocell/corecells/mycell"
+    mycell "github.com/ghbvf/gocell/cells/mycell"
     "github.com/ghbvf/gocell/kernel/auth"
     "github.com/ghbvf/gocell/kernel/assembly"
     "github.com/ghbvf/gocell/kernel/cell"
@@ -392,7 +392,8 @@ mode never silently falls back to those no-op dependencies.
 
 ```
 kernel/       — Cell/Slice runtime + governance tools (framework core)
-cells/        — Platform Cell implementations (accesscore / auditcore / configcore)
+corecells/    — Platform Cell implementations (accesscore / auditcore / configcore)
+cells/        — Project-local Cell implementations created by scaffold
 contracts/    — Platform cross-Cell boundary contracts ({kind}/{domain}/{version}/)
 journeys/     — Platform Journey acceptance specs + status-board.yaml
 runtime/      — HTTP middleware, auth, worker, observability, bootstrap
@@ -407,10 +408,11 @@ generated/    — Tool-generated artifacts (indexes, derived views)
 ### Layer Dependencies
 
 ```
-kernel/    ← stdlib + pkg/ + gopkg.in/yaml.v3 (no runtime, adapters, cells)
-runtime/   ← kernel/ + pkg/ (no cells, adapters)
-cells/     ← kernel/ + runtime/ (no adapters — interface decoupling)
-adapters/  ← kernel/ + runtime/ + pkg/ + external libs (no cells)
+kernel/    ← stdlib + pkg/ + gopkg.in/yaml.v3 (no runtime, adapters, corecells/cells)
+runtime/   ← kernel/ + pkg/ (no corecells/cells, adapters)
+corecells/ ← kernel/ + runtime/ (no adapters — interface decoupling)
+cells/     ← kernel/ + runtime/ (project-local cells; no adapters by default)
+adapters/  ← kernel/ + runtime/ + pkg/ + external libs (no corecells/cells)
 examples/  ← all layers
 ```
 

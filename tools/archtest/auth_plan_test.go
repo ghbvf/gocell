@@ -51,6 +51,30 @@ func TestAuthPlan_CellsMustNotConstructAuthPlans(t *testing.T) {
 		CheckAuthPlanCellsMustNotConstructAuthPlans(t, ConfigForExternalCell{}))
 }
 
+func TestAuthPlan_Rule04ScopeIncludesCorecells(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		relPkg     string
+		wantScan   bool
+		wantOrigin string
+	}{
+		{relPkg: "cells/local/slices/login", wantScan: true, wantOrigin: "cells/"},
+		{relPkg: "corecells/accesscore/slices/sessionlogin", wantScan: true, wantOrigin: "corecells/"},
+		{relPkg: "runtime/auth", wantScan: true, wantOrigin: "runtime/ (non-bootstrap)"},
+		{relPkg: "runtime/bootstrap", wantScan: false},
+		{relPkg: "adapters/postgres", wantScan: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.relPkg, func(t *testing.T) {
+			assert.Equal(t, tt.wantScan, isAuthPlanScannedPkg(tt.relPkg))
+			if tt.wantScan {
+				assert.Equal(t, tt.wantOrigin, authPlanPkgOrigin(tt.relPkg))
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Regression fixtures — prove the scanners have teeth
 // ---------------------------------------------------------------------------

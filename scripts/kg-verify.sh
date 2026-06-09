@@ -4,7 +4,7 @@
 # Checks:
 #   1. Layer isolation: kernel/ must not import runtime/, adapters/, cells/
 #   2. Layer isolation: runtime/ must not import cells/, adapters/
-#   3. Layer isolation: cells/ must not cross-import other cells' internal/
+#   3. Layer isolation: corecells/ must not cross-import other corecells
 #   4. go.mod whitelist: only allowed direct dependencies
 #   5. Banned field names: legacy field names must not appear in YAML metadata
 #
@@ -50,27 +50,28 @@ else
 fi
 
 # ---------------------------------------------------------------
-# 3. cells/ must not cross-import other cells' internal/
+# 3. corecells/ must not cross-import other corecells
 # ---------------------------------------------------------------
-header "Check 3: cells/ cross-import isolation"
+header "Check 3: corecells/ cross-import isolation"
 
 CROSS_CELL_VIOLATIONS=""
-for CELL_DIR in "${SRC_DIR}"/cells/*/; do
+for CELL_DIR in "${SRC_DIR}"/corecells/*/; do
+    [ -d "${CELL_DIR}" ] || continue
     CELL_NAME=$(basename "${CELL_DIR}")
     # Find imports of other cells' packages (not self)
     OTHER_CELLS=$(grep -rn '"github.com/ghbvf/gocell/corecells/' "${CELL_DIR}" --include='*.go' 2>/dev/null \
-        | grep -v "gocell/cells/${CELL_NAME}/" || true)
+        | grep -Ev "gocell/corecells/${CELL_NAME}(/|\"|$)|gocell/corecells/internal(/|\"|$)" || true)
     if [ -n "${OTHER_CELLS}" ]; then
         CROSS_CELL_VIOLATIONS="${CROSS_CELL_VIOLATIONS}${OTHER_CELLS}\n"
     fi
 done
 
 if [ -n "${CROSS_CELL_VIOLATIONS}" ]; then
-    red "FAIL: cells/ has cross-cell imports:"
+    red "FAIL: corecells/ has cross-cell imports:"
     printf '%b' "${CROSS_CELL_VIOLATIONS}"
     FAIL=1
 else
-    green "PASS: cells/ has no cross-cell imports"
+    green "PASS: corecells/ has no cross-cell imports"
 fi
 
 # ---------------------------------------------------------------

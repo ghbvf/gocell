@@ -3,7 +3,7 @@
 // Package headerreadfixture is an archtest RED fixture for
 // HTTP-REQUEST-HEADER-READ-FUNNEL-01 (issue #1494).
 //
-// The funnel bans business code (cells/, examples/) from reading an INBOUND
+// The funnel bans business code (cells/, corecells/, examples/) from reading an INBOUND
 // request header directly: every inbound business header must be declared in
 // contract.yaml endpoints.http.headers and consumed via the generated Request
 // field (the generated handler is the sole sanctioned reader). This fixture

@@ -1,6 +1,6 @@
 ---
 paths:
-  - "corecorecells/**/*.go"
+  - "corecells/**/*.go"
   - "examples/**/*.go"
   - "contracts/**"
 ---
@@ -35,13 +35,13 @@ JSON 字段命名：HTTP DTO、事件 payload、事件 headers 统一 camelCase�
 
 | 档 | 适用 | 路径 |
 |---|---|---|
-| A | 单 slice 自用 | `corecorecells/{cell}/slices/{slice}/handler.go` 同包 |
-| B | 同 cell 多 slice 共享（publisher + lifecycle / handler + projection 等） | `corecorecells/{cell}/internal/dto/`（HTTP / event payload）或 `internal/domain/`（含不变量） |
+| A | 单 slice 自用 | `corecells/{cell}/slices/{slice}/handler.go` 同包 |
+| B | 同 cell 多 slice 共享（publisher + lifecycle / handler + projection 等） | `corecells/{cell}/internal/dto/`（HTTP / event payload）或 `internal/domain/`（含不变量） |
 | C | 跨 cell 共享 wire 类型 | **禁止手写共享包** |
 
 C 档的禁止位置（任意均不允许）：
 - `pkg/events/`（污染 pkg 边界，违反"pkg 不依赖 cells"）
-- `corecorecells/{cell}/events/`（非 internal 不等于合规；同样把跨 cell 耦合从 contract 拽回 Go 类型层）
+- `corecells/{cell}/events/`（非 internal 不等于合规；同样把跨 cell 耦合从 contract 拽回 Go 类型层）
 - `contracts/event/.../payload.go`（污染权威源目录，schema 才是 SoR）
 - `runtime/events/`（让 runtime 反向知道业务事件形状）
 
@@ -129,7 +129,7 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registrar) error {
 
 按 cell 真实能力声明 cell-specific Option：
 
-- Platform cell L1/L2（`corecorecells/*`）：`WithOutboxDeps(pub outbox.CellPublisher, writer outbox.CellWriter)` + `WithTxManager(tx persistence.CellTxManager)`；预组装 emitter 走 `WithEmitter(e outbox.CellEmitter)`（与 WithOutboxDeps 互斥）
+- Platform cell L1/L2（`corecells/*`）：`WithOutboxDeps(pub outbox.CellPublisher, writer outbox.CellWriter)` + `WithTxManager(tx persistence.CellTxManager)`；预组装 emitter 走 `WithEmitter(e outbox.CellEmitter)`（与 WithOutboxDeps 互斥）
 - Example ordercell L2（无 publisher 路径）：`WithOutboxWriter(w outbox.CellWriter)` + `WithTxManager(tx persistence.CellTxManager)`
 - Example devicecell L4（无 writer，无 txRunner）：`WithDirectPublisher(p outbox.CellPublisher)`
 

@@ -3,8 +3,8 @@
 // AUDIT-LEDGER-PROTOCOL-COMPOSITION-ROOT-01: ledger.NewProtocol /
 // ledger.MustNewProtocol may only be invoked from cmd/* (composition root)
 // or the enumerated allowlist {runtime/audit/ledger, runtime/audit/ledger/storetest}.
-// Cells, runtime/* (non-ledger), adapters/*, and tests outside ledger/* must
-// receive an injected *ledger.Protocol — not construct one.
+// Cells, corecells, runtime/* (non-ledger), adapters/*, and tests outside
+// ledger/* must receive an injected *ledger.Protocol — not construct one.
 //
 // AI-robust 评级：Medium-true (type-aware via typeseval.LoadProductionPackages
 // + typeseval.ResolvePackageRef). Resolution is by canonical *types.PkgName
@@ -64,8 +64,8 @@ type ledgerHit struct {
 // invocations of forbidden ledger constructors outside the allowlist.
 //
 // When restrictScopeDirs is true (real-repo invariant), only packages whose
-// module-relative path starts with /cells/, /runtime/, or /adapters/ are
-// scanned; cmd/* and examples/* are exempted because they own their own
+// module-relative path starts with /cells/, /corecells/, /runtime/, or
+// /adapters/ are scanned; cmd/* and examples/* are exempted because they own their own
 // composition roots and are the legitimate construction sites. When false
 // (fixture detection test), all supplied files are scanned so a fixture
 // living under tools/archtest/internal/ still produces hits.
@@ -84,9 +84,7 @@ func scanLedgerCompositionRootPass(p *Pass, modulePath string, restrictScopeDirs
 		if strings.HasPrefix(pkgSuffix, "/cmd/") || strings.HasPrefix(pkgSuffix, "/examples/") {
 			return nil
 		}
-		if !strings.HasPrefix(pkgSuffix, "/cells/") &&
-			!strings.HasPrefix(pkgSuffix, "/runtime/") &&
-			!strings.HasPrefix(pkgSuffix, "/adapters/") {
+		if !isLedgerCompositionRootRestrictedPkgSuffix(pkgSuffix) {
 			return nil
 		}
 	}
@@ -113,6 +111,13 @@ func scanLedgerCompositionRootPass(p *Pass, modulePath string, restrictScopeDirs
 	return hits
 }
 
+func isLedgerCompositionRootRestrictedPkgSuffix(pkgSuffix string) bool {
+	return strings.HasPrefix(pkgSuffix, "/cells/") ||
+		strings.HasPrefix(pkgSuffix, "/corecells/") ||
+		strings.HasPrefix(pkgSuffix, "/runtime/") ||
+		strings.HasPrefix(pkgSuffix, "/adapters/")
+}
+
 func TestAuditLedgerProtocol_CompositionRootOnly(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -132,7 +137,29 @@ func TestAuditLedgerProtocol_CompositionRootOnly(t *testing.T) {
 	assert.Empty(t, hits,
 		"AUDIT-LEDGER-PROTOCOL-COMPOSITION-ROOT-01: ledger.NewProtocol / ledger.MustNewProtocol "+
 			"must only be called from cmd/* (composition root) or the enumerated allowlist; "+
-			"cells/runtime/adapters must consume an injected *ledger.Protocol")
+			"cells/corecells/runtime/adapters must consume an injected *ledger.Protocol")
+}
+
+func TestAuditLedgerProtocol_RestrictedScopeIncludesCorecells(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		pkgSuffix string
+		want      bool
+	}{
+		{pkgSuffix: "/cells/localcore", want: true},
+		{pkgSuffix: "/corecells/auditcore", want: true},
+		{pkgSuffix: "/runtime/audit", want: true},
+		{pkgSuffix: "/adapters/postgres", want: true},
+		{pkgSuffix: "/cmd/corebundle", want: false},
+		{pkgSuffix: "/examples/ssobff", want: false},
+		{pkgSuffix: "/pkg/errcode", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.pkgSuffix, func(t *testing.T) {
+			assert.Equal(t, tt.want, isLedgerCompositionRootRestrictedPkgSuffix(tt.pkgSuffix))
+		})
+	}
 }
 
 // TestAuditLedgerProtocol_ScannerCatchesAliasBypass loads the build-tag-gated

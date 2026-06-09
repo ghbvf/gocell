@@ -97,7 +97,7 @@ app.Run(ctx)   // *composition.App.Run → bootstrap.New(opts...).Run(ctx)
 ### Step 1. 新建 cell.yaml
 
 ```yaml
-# cells/foocore/cell.yaml
+# corecells/foocore/cell.yaml
 id: foocore
 type: core
 consistencyLevel: L2
@@ -107,7 +107,7 @@ owner:
 schema:
   primary: foo_entries
 verify:
-  smoke: go test ./cells/foocore/... -run TestSmoke -count=1
+  smoke: go test ./corecells/foocore/... -run TestSmoke -count=1
 ```
 
 ### Step 2. 新建 `cellmodules/foocore/module.go`
@@ -117,7 +117,7 @@ verify:
 // It implements [composition.CellModule] and wires all foocore-specific
 // dependencies from [composition.SharedDeps].
 //
-// This is a composition-root-layer package: it may import cells/, adapters/,
+// This is a composition-root-layer package: it may import corecells/, adapters/,
 // and cellmodules/cellsecrets/. It must NOT be imported by cells/, runtime/, or
 // adapters/.
 package foocore

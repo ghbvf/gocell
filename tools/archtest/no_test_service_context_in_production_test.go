@@ -7,8 +7,8 @@
 // Calling TestServiceContext in production code bypasses service-token
 // authentication and would silently skip the HMAC guard in non-test builds.
 //
-// Detection: AST walk of all .go files under runtime/, cells/, cmd/, kernel/,
-// adapters/, examples/, and tests/, scanning for auth.TestServiceContext(...)
+// Detection: AST walk of all .go files under runtime/, cells/, corecells/, cmd/,
+// kernel/, adapters/, examples/, and tests/, scanning for auth.TestServiceContext(...)
 // call expressions. Files ending in _test.go or containing "_test_" in their
 // base name are excluded from the check.
 package archtest
@@ -47,6 +47,7 @@ func TestNO_TEST_SERVICE_CONTEXT_IN_PRODUCTION_01(t *testing.T) {
 	searchDirs := []string{
 		filepath.Join(root, "runtime"),
 		filepath.Join(root, "cells"),
+		filepath.Join(root, "corecells"),
 		filepath.Join(root, "cmd"),
 		filepath.Join(root, "kernel"),
 		filepath.Join(root, "adapters"),

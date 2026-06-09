@@ -168,9 +168,9 @@ func cellTestAdapterImportFindings(root string) ([]string, error) {
 }
 
 // isCellOrExampleCellPath reports whether a module-relative slash path is under
-// cells/ or examples/<x>/cells/.
+// cells/, corecells/, or examples/<x>/cells/.
 func isCellOrExampleCellPath(relSlash string) bool {
-	if strings.HasPrefix(relSlash, "cells/") {
+	if strings.HasPrefix(relSlash, "cells/") || strings.HasPrefix(relSlash, "corecells/") {
 		return true
 	}
 	if !strings.HasPrefix(relSlash, "examples/") {
@@ -248,6 +248,12 @@ func TestCellTestNoAdapterImport_FixtureMetaTest(t *testing.T) {
 		{
 			name:    "plain_cell_unit_import",
 			rel:     "cells/a/x_test.go",
+			content: "package a\nimport _ \"github.com/ghbvf/gocell/adapters/postgres\"\n",
+			wantHit: true,
+		},
+		{
+			name:    "plain_corecells_unit_import",
+			rel:     "corecells/a/x_test.go",
 			content: "package a\nimport _ \"github.com/ghbvf/gocell/adapters/postgres\"\n",
 			wantHit: true,
 		},

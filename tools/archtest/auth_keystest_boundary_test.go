@@ -91,6 +91,35 @@ func TestAuthKeystestBoundary_NegativeProbes(t *testing.T) {
 	})
 }
 
+func TestAuthKeystestBoundary_RuleForIncludesCorecells(t *testing.T) {
+	t.Parallel()
+
+	keystestPkgDir := filepath.Join("runtime", "auth", "keystest")
+	tests := []struct {
+		name   string
+		rel    string
+		isTest bool
+		want   string
+	}{
+		{name: "corecells_production", rel: "corecells/accesscore/app.go", want: "AUTH-KEYSTEST-B"},
+		{name: "corecells_test_exempt", rel: "corecells/accesscore/app_test.go", isTest: true},
+		{name: "cells_production", rel: "cells/local/app.go", want: "AUTH-KEYSTEST-B"},
+		{name: "runtime_production", rel: "runtime/auth/keypair.go", want: "AUTH-KEYSTEST-C"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sub, _, ok := keystestRuleFor(tt.rel, filepath.Dir(tt.rel), tt.isTest, keystestPkgDir)
+			if tt.want == "" {
+				assert.False(t, ok)
+				assert.Empty(t, sub)
+				return
+			}
+			assert.True(t, ok)
+			assert.Equal(t, tt.want, sub)
+		})
+	}
+}
+
 // writeTempGoFile writes content to a file named filename inside t.TempDir()
 // and returns the absolute path. The file is automatically removed when the
 // test ends.

@@ -117,10 +117,11 @@ func TestHANDLER_POLICY_REQUIRED_01_NegativeFixture(t *testing.T) {
 	}
 }
 
-// collectProductionGoFiles returns all production Go files in cells/ and examples/ subtrees.
+// collectProductionGoFiles returns all production Go files in cells/, corecells/,
+// and examples/ subtrees.
 func collectProductionGoFiles(t *testing.T, root string) []string {
 	t.Helper()
-	scope := scanner.DirsScope(root, []string{"cells", "examples"})
+	scope := scanner.DirsScope(root, []string{"cells", "corecells", "examples"})
 	files, err := scope.Files()
 	require.NoError(t, err, "collectProductionGoFiles: DirsScope.Files")
 	sort.Strings(files)

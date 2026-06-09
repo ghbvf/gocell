@@ -108,9 +108,9 @@ func isInternal(importPath string) bool {
 
 // cellOwnedSubpackages lists public cell subpackages that are semantically
 // owned by a single cell and must not be imported by sibling cells. Each
-// entry's key is the relative import path of the owned subpackage (without
-// module prefix); the value is the relative prefix of the owning cell tree
-// that is exempt from the rule.
+// entry's key is the cell-root-relative import path of the owned subpackage
+// (without module/cell-root prefix); the value is the cell-root-relative prefix
+// of the owning cell tree that is exempt from the rule.
 //
 // This is LAYER-06's data table: unlike LAYER-05 (which catches any
 // cells/X/Y/internal import), LAYER-06 targets public subpackages whose
@@ -122,9 +122,9 @@ func isInternal(importPath string) bool {
 // cmd/ and examples/ are always exempt (composition roots and unrestricted
 // consumers respectively; see the layering conventions in archtest's doc.go).
 var cellOwnedSubpackages = map[string]string{
-	"corecells/accesscore/configgetter": "corecells/accesscore/",
-	"corecells/accesscore/initialadmin": "corecells/accesscore/",
-	"corecells/configcore/postgres":     "corecells/configcore/",
+	"accesscore/configgetter": "accesscore/",
+	"accesscore/initialadmin": "accesscore/",
+	"configcore/postgres":     "configcore/",
 }
 
 // checkLayering runs 4 metadata-aware layering rules (LAYER-05/06/09/10)
@@ -207,7 +207,7 @@ func checkLayering(cls kerneldepgraph.Classifier, g *kerneldepgraph.Graph) []vio
 // public subpackage entry, returning the owner-tree prefix (with trailing
 // slash) when it does. Pure lookup — no exemption logic.
 func matchCellOwnedSubpackage(cls kerneldepgraph.Classifier, dep string) (ownerPrefix string, ok bool) {
-	impRel := relWithinOwner(cls, dep)
+	impRel := normalizeCellOwnedRel(relWithinOwner(cls, dep))
 	for ownedRel, ownerPrefix := range cellOwnedSubpackages {
 		if impRel == ownedRel || strings.HasPrefix(impRel, ownedRel+"/") {
 			return ownerPrefix, true
@@ -225,9 +225,9 @@ func isCellOwnedSubpackageExempt(cls kerneldepgraph.Classifier, srcPath, srcLaye
 	if srcLayer == "cmd" || srcLayer == "cellmodules" || srcLayer == "examples" {
 		return true
 	}
-	srcRel := relWithinOwner(cls, srcPath)
+	srcRel := normalizeCellOwnedRel(relWithinOwner(cls, srcPath))
 	// ownerRoot covers the case where srcRel is the cell root itself
-	// (e.g. "corecells/accesscore") which HasPrefix("corecells/accesscore/") would
+	// (e.g. "accesscore") which HasPrefix("accesscore/") would
 	// reject due to the missing trailing slash.
 	ownerRoot := strings.TrimSuffix(ownerPrefix, "/")
 	return srcRel == ownerRoot || strings.HasPrefix(srcRel, ownerPrefix)
@@ -274,6 +274,13 @@ func trimCellRootPrefix(rel string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func normalizeCellOwnedRel(rel string) string {
+	if tail, ok := trimCellRootPrefix(rel); ok {
+		return tail
+	}
+	return rel
 }
 
 func cellRelHasSubpath(rel, cellID, subpath string) bool {
@@ -1252,6 +1259,28 @@ func TestCheckLayering(t *testing.T) {
 	}
 }
 
+func TestCheckLayering_LAYER06CorecellsWorkspaceModule(t *testing.T) {
+	t.Parallel()
+
+	const module = PlatformModulePath
+	corecellsModule := module + "/corecells"
+	auditcore := module + "/corecells/auditcore"
+	initialadmin := module + "/corecells/accesscore/initialadmin"
+
+	g := depgraph.FromPackages([]string{module, corecellsModule}, []*packages.Package{
+		synthPkg(auditcore, initialadmin),
+		synthPkg(initialadmin),
+	})
+	cls := kerneldepgraph.NewClassifier(g.Modules)
+
+	violations := checkLayering(cls, g)
+	require.Len(t, violations, 1,
+		"LAYER-06 negative probe must still flag corecells sibling imports when corecells is a workspace module")
+	assert.Equal(t, "LAYER-06", violations[0].Rule)
+	assert.Equal(t, auditcore, violations[0].Pkg)
+	assert.Equal(t, initialadmin, violations[0].Import)
+}
+
 // TestLayeringRules_LAYER07_NegativeProbe is the "test the test" meta-test for
 // LAYER-07 (TEST-01). It builds a synthetic graph that contains a cells/
 // package directly importing runtime/http/router, then runs the LAYER-07
@@ -1444,11 +1473,12 @@ func TestLayeringRules_LAYER06T_NegativeProbe(t *testing.T) {
 	t.Parallel()
 
 	const module = PlatformModulePath
+	corecellsModule := module + "/corecells"
 	auditcore := module + "/corecells/auditcore"
 	util := module + "/pkg/util"
 	initialadmin := module + "/corecells/accesscore/initialadmin"
 
-	g := depgraph.FromPackages([]string{module}, []*packages.Package{
+	g := depgraph.FromPackages([]string{module, corecellsModule}, []*packages.Package{
 		synthPkg(auditcore, util),
 		synthPkg(util, initialadmin),
 		synthPkg(initialadmin),

@@ -100,7 +100,7 @@ Option 签名直接接受了 `persistence.TxRunner` / `outbox.Publisher` / `outb
 import (
     "github.com/ghbvf/gocell/kernel/outbox"
     "github.com/ghbvf/gocell/kernel/persistence"
-    "github.com/ghbvf/gocell/corecells/mycell"
+    "github.com/ghbvf/gocell/cells/mycell"
 )
 
 cell, err := mycell.New(
@@ -126,7 +126,7 @@ warn 日志提示当前运行在 demo 模式——这是预期行为。
 import (
     "github.com/ghbvf/gocell/kernel/outbox"
     "github.com/ghbvf/gocell/kernel/persistence"
-    "github.com/ghbvf/gocell/corecells/mycell"
+    "github.com/ghbvf/gocell/cells/mycell"
     "github.com/ghbvf/gocell/adapters/postgres"
     "github.com/ghbvf/gocell/adapters/rabbitmq"
 )
@@ -156,7 +156,7 @@ wrap 函数在测试文件中可以任意调用：
 import (
     "github.com/ghbvf/gocell/kernel/outbox"
     "github.com/ghbvf/gocell/kernel/persistence"
-    "github.com/ghbvf/gocell/corecells/mycell"
+    "github.com/ghbvf/gocell/cells/mycell"
 )
 
 func TestMyCell_Init(t *testing.T) {

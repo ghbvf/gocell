@@ -14,7 +14,7 @@
 //     on HTTPTransportMeta.Headers (the field can't be renamed/retyped/retagged
 //     without an explicit review checkpoint).
 //  2. UPSTREAM is locked by HTTP-REQUEST-HEADER-READ-FUNNEL-01: business code
-//     (cells/, examples/) may NOT read an inbound request header raw. Forcing every
+//     (cells/, corecells/, examples/) may NOT read an inbound request header raw. Forcing every
 //     inbound business header through the contract declaration is what stops the
 //     next developer from re-opening the "two truths" hole this issue closed (a new
 //     undeclared header read piped into a handler). The sole sanctioned reader is
@@ -50,8 +50,8 @@
 //     (the Medium ceiling above, NOT a cheap bypass): multi-hop alias (`h2 := h`),
 //     passing r.Header to a helper (inter-procedural data flow), and `r.Header.Clone()`
 //     / `range r.Header` (not value reads). The contract-declared path is the norm.
-//   - The production scan is scoped to cells/ + examples/ (business layers that own
-//     contracts). Framework header reads in runtime/ + adapters/ (auth /
+//   - The production scan is scoped to cells/ + corecells/ + examples/ (business
+//     layers that own contracts). Framework header reads in runtime/ + adapters/ (auth /
 //     idempotency / readyz-token middleware) are transport concerns, deliberately
 //     out of scope.
 //   - The RED fixture (internal/headerreadfixture) proves the detector fires on the
@@ -188,7 +188,7 @@ func scanInboundHeaderReads(info *types.Info, file *ast.File, rel string, positi
 			Line: line,
 			Message: fmt.Sprintf(
 				"HTTP-REQUEST-HEADER-READ-FUNNEL-01: %s reads an inbound request header via %s. Business "+
-					"code (cells/, examples/) must not read inbound headers raw — declare the header in "+
+					"code (cells/, corecells/, examples/) must not read inbound headers raw — declare the header in "+
 					"contract.yaml endpoints.http.headers and read the generated Request field instead "+
 					"(the generated handler is the sole sanctioned reader). This keeps the header "+
 					"single-sourced; a raw read re-opens the 'two truths' gap #1494 closed.",
@@ -215,9 +215,9 @@ func scanInboundHeaderReads(info *types.Info, file *ast.File, rel string, positi
 	return d
 }
 
-// TestHTTPRequestHeaderReadFunnel01 asserts no production file under cells/ or
-// examples/ reads an inbound request header raw. The sanctioned reader is the
-// generated handler (under generated/, not scanned here).
+// TestHTTPRequestHeaderReadFunnel01 asserts no production file under cells/,
+// corecells/, or examples/ reads an inbound request header raw. The sanctioned
+// reader is the generated handler (under generated/, not scanned here).
 func TestHTTPRequestHeaderReadFunnel01(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -230,7 +230,7 @@ func TestHTTPRequestHeaderReadFunnel01(t *testing.T) {
 		var d []Diagnostic
 		for _, file := range p.Files {
 			rel := p.Rel(file)
-			if !strings.HasPrefix(rel, "cells/") && !strings.HasPrefix(rel, "examples/") {
+			if !isHTTPRequestHeaderReadScannedRel(rel) {
 				continue
 			}
 			pos := func(n ast.Node) (int, int) {
@@ -242,6 +242,29 @@ func TestHTTPRequestHeaderReadFunnel01(t *testing.T) {
 		return d
 	})
 	Report(t, "HTTP-REQUEST-HEADER-READ-FUNNEL-01", diags)
+}
+
+func isHTTPRequestHeaderReadScannedRel(rel string) bool {
+	return strings.HasPrefix(rel, "cells/") ||
+		strings.HasPrefix(rel, "corecells/") ||
+		strings.HasPrefix(rel, "examples/")
+}
+
+func TestHTTPRequestHeaderReadFunnel01_ScansCorecells(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		rel  string
+		want bool
+	}{
+		{rel: "cells/localcore/slices/login/handler.go", want: true},
+		{rel: "corecells/accesscore/slices/login/handler.go", want: true},
+		{rel: "examples/ssobff/auth.go", want: true},
+		{rel: "runtime/http/middleware.go", want: false},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, isHTTPRequestHeaderReadScannedRel(tt.rel), tt.rel)
+	}
 }
 
 // TestHTTPRequestHeaderReadFunnel01_FixtureFires is the reverse self-check (teeth
