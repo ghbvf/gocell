@@ -61,7 +61,7 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 
 ## Go 编码规范
 
-- 错误用 `pkg/errcode` 包；新 `ERR_` 前缀命名空间须注册所有权并更新 golden，见 `.claude/rules/gocell/error-handling.md` §"错误码前缀所有权 (#1091)"
+- 错误用 `pkg/errcode` 包；新 `ERR_` 前缀命名空间须注册所有权并更新 golden，见 `.claude/rules/gocell/error-handling.md` §"错误码前缀"
 - 日志用 `slog`（结构化字段）
 - DB 字段 `snake_case`，JSON/Query/Path `camelCase`
 - 函数认知复杂度 ≤ 15

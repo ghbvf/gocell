@@ -67,8 +67,7 @@ gh pr view <N> --json title,body,files,headRefOid
 
 必读：CLAUDE.md + `docs/guides/agent-instruction-surfaces.md` +
 `.github/project-template/PROJECT.md` §3（P/Cx 评级单源）+
-`.claude/rules/gocell/*.md`。rules 已瘦身，review 阶段全量读取，避免写代码、
-fix、review、ship 等入口因条件过滤漏加载规则。
+`.claude/rules/gocell/*.md`。rules 已瘦身，pr-review 阶段全量读取，避免本审查流程因条件过滤漏加载规则。
 
 ---
 

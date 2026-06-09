@@ -24,6 +24,9 @@ import (
 
 const agentRulesGovernanceRuleID = "AGENT-RULES-GOVERNANCE-01"
 
+// These prompt-context limits are deliberately loose upper bounds: each is
+// more than 2x the current largest rule file, so threshold changes should be
+// explicit policy updates rather than incidental edits.
 const (
 	agentRuleMaxBytes = 16 * 1024
 	agentRuleMaxLines = 220
@@ -40,6 +43,7 @@ var agentRuleHistoryPatterns = []struct {
 	{name: "review finding marker", re: regexp.MustCompile(`(?i)\breview\s+(?:F[0-9]+|finding)\b`)},
 	{name: "deferred backlog marker", re: regexp.MustCompile(`推迟 backlog`)},
 	{name: "PR number changelog marker", re: regexp.MustCompile(`\bPR\s*#[0-9]+\b`)},
+	{name: "PR hyphen changelog marker", re: regexp.MustCompile(`\bPR-[0-9]+\b`)},
 	{name: "PR token changelog marker", re: regexp.MustCompile(`\bPR-[A-Z]+[0-9]+[A-Za-z0-9_-]*\b`)},
 }
 
@@ -61,17 +65,25 @@ func CheckAgentRulesGovernance(t testing.TB, cfg ConfigForExternalCell) []Diagno
 
 	root := findModuleRoot(t)
 	scope := DirsScope(root, []string{".claude/rules/gocell"})
-	files, err := loadContentFiles(scope, []string{".md"})
+	contentFiles, err := loadContentFiles(scope, []string{".md"})
 	if err != nil {
 		return []Diagnostic{diagFile(".claude/rules/gocell", fmt.Sprintf("cannot scan agent rules: %v", err))}
 	}
+	files := make([]agentRuleFile, 0, len(contentFiles))
+	for _, fc := range contentFiles {
+		files = append(files, agentRuleFile{rel: fc.Rel, bytes: fc.Bytes})
+	}
+	return checkAgentRulesGovernanceFiles(files)
+}
+
+func checkAgentRulesGovernanceFiles(files []agentRuleFile) []Diagnostic {
 	if len(files) == 0 {
 		return []Diagnostic{diagFile(".claude/rules/gocell", "agent rules scan is vacuous: no .md files found")}
 	}
 
 	var out []Diagnostic
-	for _, fc := range files {
-		out = append(out, checkAgentRuleFile(agentRuleFile{rel: fc.Rel, bytes: fc.Bytes})...)
+	for _, file := range files {
+		out = append(out, checkAgentRuleFile(file)...)
 	}
 	return Canonical(out)
 }
@@ -94,15 +106,36 @@ func testAgentRulesGovernanceSyntheticRedCases(t *testing.T) {
 		{
 			name: "history_markers",
 			rel:  ".claude/rules/gocell/history.md",
-			body: "# History\n本 PR 已落 review F2 round-3 推迟 backlog PR #123 PR-A10\n",
+			body: "# History\n本 PR 已落 review F2 round-3 推迟 backlog PR #123 PR-1798 PR-A10\n",
 			wantSubstr: []string{
 				"historical marker",
+			},
+		},
+		{
+			name: "byte_limit",
+			rel:  ".claude/rules/gocell/byte-limit.md",
+			body: "# Big\n" + strings.Repeat(strings.Repeat("x", 200)+"\n", agentRuleMaxBytes/201+2),
+			wantSubstr: []string{
+				"exceeds 16384 bytes",
+			},
+		},
+		{
+			name: "line_limit",
+			rel:  ".claude/rules/gocell/line-limit.md",
+			body: "# Big\n" + strings.Repeat("line\n", agentRuleMaxLines+1),
+			wantSubstr: []string{
+				"exceeds 220 lines",
 			},
 		},
 		{
 			name: "legitimate_future_words",
 			rel:  ".claude/rules/gocell/future.md",
 			body: "# Future\nUse round-robin retry and PR-time checks for current behavior.\n",
+		},
+		{
+			name: "bom_crlf_heading",
+			rel:  ".claude/rules/gocell/bom-crlf.md",
+			body: string([]byte{0xef, 0xbb, 0xbf}) + "# Future\r\nUse current behavior.\r\n",
 		},
 		{
 			name: "oversized_shape",
@@ -128,20 +161,27 @@ func testAgentRulesGovernanceSyntheticRedCases(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("vacuous_scan", func(t *testing.T) {
+		diags := checkAgentRulesGovernanceFiles(nil)
+		require.NotEmpty(t, diags)
+		assert.Contains(t, diagnosticsJoined(diags), "agent rules scan is vacuous")
+	})
 }
 
 func checkAgentRuleFile(file agentRuleFile) []Diagnostic {
 	var out []Diagnostic
-	if !bytes.HasPrefix(file.bytes, []byte("# ")) {
+	b := normalizeAgentRuleBytes(file.bytes)
+	if !bytes.HasPrefix(b, []byte("# ")) {
 		out = append(out, diagFile(file.rel, "agent rule must start with a Markdown H1 heading"))
 	}
-	if len(file.bytes) > agentRuleMaxBytes {
+	if len(b) > agentRuleMaxBytes {
 		out = append(out, diagFile(file.rel, fmt.Sprintf(
 			"rule file exceeds %d bytes; move rationale/history to docs, ADR, archtest godoc, or GitHub Issues",
 			agentRuleMaxBytes)))
 	}
 
-	lines := bytes.Split(file.bytes, []byte("\n"))
+	lines := bytes.Split(b, []byte("\n"))
 	if len(lines) > 0 && len(lines[len(lines)-1]) == 0 {
 		lines = lines[:len(lines)-1]
 	}
@@ -159,7 +199,7 @@ func checkAgentRuleFile(file agentRuleFile) []Diagnostic {
 		}
 	}
 
-	for lineNo, text := range ruleBodyLines(file.bytes) {
+	for lineNo, text := range ruleBodyLines(b) {
 		for _, pat := range agentRuleHistoryPatterns {
 			if pat.re.MatchString(text) {
 				out = append(out, diagAt(file.rel, lineNo, fmt.Sprintf(
@@ -172,9 +212,17 @@ func checkAgentRuleFile(file agentRuleFile) []Diagnostic {
 	return Canonical(out)
 }
 
+func normalizeAgentRuleBytes(b []byte) []byte {
+	b = bytes.TrimPrefix(b, []byte{0xef, 0xbb, 0xbf})
+	return bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n"))
+}
+
 func ruleBodyLines(b []byte) map[int]string {
 	out := make(map[int]string)
 	lines := strings.Split(string(b), "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
 	for i := 0; i < len(lines); i++ {
 		out[i+1] = lines[i]
 	}

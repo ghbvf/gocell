@@ -59,7 +59,7 @@ archtest package godoc、ADR 或代码注释中。
 - 文件头必须列 `INVARIANT: <ID>`
 - 内容扫描规则必须有 synthetic red case 和 anti-vacuity
 
-CI、本地触发方式和 shard 策略见 `CLAUDE.md`；规则文件不复制执行细节。
+CI、本地触发方式和 shard 策略见 `hack/README.md`；规则文件不复制执行细节。
 
 ## 审查要求
 

@@ -51,7 +51,7 @@ itself enforces.
 
 | Script | Enforces |
 |---|---|
-| `verify-archtest.sh` | `tools/archtest/*` (LAYER-*, AUTH-*, SEC-FAIL-CLOSED-*, ERROR-FIRST-API-01, META-*, ADV-06) |
+| `verify-archtest.sh` | `tools/archtest/*` (LAYER-*, AUTH-*, SEC-FAIL-CLOSED-*, ERROR-FIRST-API-01, META-*, ADV-06). Local `make verify` defaults to `SHARD_COUNT=1`; nightly CI runs `.github/workflows/archtest-nightly.yml` with `SHARD_COUNT=24`; manual runs may use `SHARD_TARGET=N`, `SHARD_COUNT=1`, or `SHARD_COUNT>1`. Production scans require active `GOWORK` when workspace modules exist; do not run archtest with `GOWORK=off`. |
 | `verify-contract-health.sh` | `gocell check contract-health` (CH-*) |
 | `verify-examples-import.sh` | `examples/` must not import `cells/*/internal/` or `adapters/*/internal/` |
 | `verify-generated.sh` | metadata-derived generated assembly entrypoints, `boundary.yaml`, and `metrics-schema.yaml` are up to date |

@@ -44,6 +44,8 @@ runbook, or package godoc and link to it.
 
 `AGENT-RULES-GOVERNANCE-01` enforces the Markdown shape for GoCell rules:
 
+- AI-robust rating: Medium — CI-blocking text-shape gate with synthetic red
+  cases; prose semantics cannot be type-system Hard.
 - bounded file size, line count, and line length;
 - no history-style markers in rules;
 - synthetic red cases plus production anti-vacuity.
