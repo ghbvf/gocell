@@ -508,8 +508,11 @@ func scaffoldCell(root string, args []string) error {
 }
 
 func ensureRootManifestCellIncludes(root string) error {
-	manifestPath := filepath.Join(root, ".gocell", "manifest.yaml")
-	raw, err := os.ReadFile(manifestPath)
+	manifestPath, err := pathsafe.ContainPath(root, filepath.Join(".gocell", "manifest.yaml"))
+	if err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(manifestPath) //nolint:gosec // G304: manifestPath is root-contained by pathsafe.ContainPath.
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -525,43 +528,11 @@ func ensureRootManifestCellIncludes(root string) error {
 
 func addRootManifestCellIncludes(src string) (string, bool) {
 	lines := strings.SplitAfter(src, "\n")
-	rootIdx := -1
-	for i, line := range lines {
-		if strings.TrimSpace(line) == "- path: ." {
-			rootIdx = i
-			break
-		}
-	}
-	if rootIdx < 0 {
+	includesIdx, nextModuleIdx, ok := rootModuleIncludesRange(lines)
+	if !ok {
 		return src, false
 	}
-
-	includesIdx := -1
-	nextModuleIdx := len(lines)
-	for i := rootIdx + 1; i < len(lines); i++ {
-		trimmed := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(trimmed, "- path: ") {
-			nextModuleIdx = i
-			break
-		}
-		if trimmed == "includes:" && includesIdx < 0 {
-			includesIdx = i
-		}
-	}
-	if includesIdx < 0 {
-		return src, false
-	}
-
-	hasCells := false
-	hasSlices := false
-	for i := includesIdx + 1; i < nextModuleIdx; i++ {
-		switch strings.TrimSpace(lines[i]) {
-		case "cells:":
-			hasCells = true
-		case "slices:":
-			hasSlices = true
-		}
-	}
+	hasCells, hasSlices := rootManifestCellIncludes(lines, includesIdx+1, nextModuleIdx)
 	if hasCells && hasSlices {
 		return src, false
 	}
@@ -581,6 +552,50 @@ func addRootManifestCellIncludes(src string) (string, bool) {
 	out = append(out, insert.String())
 	out = append(out, lines[includesIdx+1:]...)
 	return strings.Join(out, ""), true
+}
+
+func rootModuleIncludesRange(lines []string) (int, int, bool) {
+	rootIdx := rootModuleLineIndex(lines)
+	if rootIdx < 0 {
+		return 0, 0, false
+	}
+
+	includesIdx := -1
+	nextModuleIdx := len(lines)
+	for i := rootIdx + 1; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(trimmed, "- path: ") {
+			nextModuleIdx = i
+			break
+		}
+		if trimmed == "includes:" && includesIdx < 0 {
+			includesIdx = i
+		}
+	}
+	return includesIdx, nextModuleIdx, includesIdx >= 0
+}
+
+func rootModuleLineIndex(lines []string) int {
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "- path: ." {
+			return i
+		}
+	}
+	return -1
+}
+
+func rootManifestCellIncludes(lines []string, start, end int) (bool, bool) {
+	hasCells := false
+	hasSlices := false
+	for i := start; i < end; i++ {
+		switch strings.TrimSpace(lines[i]) {
+		case "cells:":
+			hasCells = true
+		case "slices:":
+			hasSlices = true
+		}
+	}
+	return hasCells, hasSlices
 }
 
 // cellIDToPascalCase converts a cell ID (possibly hyphenated or underscored)

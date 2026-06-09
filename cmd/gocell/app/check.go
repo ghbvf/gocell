@@ -802,29 +802,32 @@ func cellDeclaresL0Dependencies(root string, cm *metadata.CellMeta) bool {
 func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []governance.ValidationResult, bool) {
 	cellDir, ok := metadata.CellDirFromMetadataFile(cm.File)
 	if !ok {
-		return nil, []governance.ValidationResult{{
-			Code:      governance.RuleCode("CHECK-L0-LOAD-ERROR"),
-			Severity:  governance.SeverityError,
-			IssueType: governance.IssueInvalid,
-			File:      filepath.ToSlash(cm.File),
-			Scope:     cmdL0Imports,
-			Message:   fmt.Sprintf("cannot derive cell directory for cell %q from %q", cm.ID, cm.File),
-			Fix:       "move cell.yaml under cells/<cellID>/, corecells/<cellID>/, or examples/<app>/cells/<cellID>/",
-		}}, true
+		return nil, l0ImportLoadError(cm,
+			fmt.Sprintf("cannot derive cell directory for cell %q from %q", cm.ID, cm.File),
+			"move cell.yaml under cells/<cellID>/, corecells/<cellID>/, or examples/<app>/cells/<cellID>/",
+		), true
 	}
 	modulePath, moduleErr := readModule(root)
 	if moduleErr != nil {
-		return nil, []governance.ValidationResult{{
-			Code:      governance.RuleCode("CHECK-L0-LOAD-ERROR"),
-			Severity:  governance.SeverityError,
-			IssueType: governance.IssueInvalid,
-			File:      filepath.ToSlash(cm.File),
-			Scope:     cmdL0Imports,
-			Message:   fmt.Sprintf("cannot read module path for cell %q: %v", cm.ID, moduleErr),
-			Fix:       "ensure the project root has a valid go.mod before running l0-imports",
-		}}, true
+		return nil, l0ImportLoadError(cm,
+			fmt.Sprintf("cannot read module path for cell %q: %v", cm.ID, moduleErr),
+			"ensure the project root has a valid go.mod before running l0-imports",
+		), true
 	}
 	cellPkgPattern := "./" + filepath.ToSlash(cellDir) + "/..."
+	pkgs, results, fatal := loadCellPackages(root, cm, cellDir, cellPkgPattern)
+	if fatal {
+		return nil, results, true
+	}
+	return collectCellImports(cm, modulePath, pkgs), results, false
+}
+
+func loadCellPackages(
+	root string,
+	cm *metadata.CellMeta,
+	cellDir string,
+	cellPkgPattern string,
+) ([]*packages.Package, []governance.ValidationResult, bool) {
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedImports,
 		Dir:  filepath.Join(root, cellDir),
@@ -834,33 +837,17 @@ func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []gov
 	// splits into its own module. See tools/packagesload.
 	pkgs, err := packagesload.Load(packagesload.ModeModule, cfg, "./...")
 	if err != nil {
-		return nil, []governance.ValidationResult{{
-			Code:      governance.RuleCode("CHECK-L0-LOAD-ERROR"),
-			Severity:  governance.SeverityError,
-			IssueType: governance.IssueInvalid,
-			File:      filepath.ToSlash(cm.File),
-			Scope:     cmdL0Imports,
-			Message:   fmt.Sprintf("packages.Load failed for cell %q: %v", cm.ID, err),
-			Fix:       fmt.Sprintf("ensure the cell directory compiles cleanly; run `go build %s` to identify build errors", cellPkgPattern),
-		}}, true
+		return nil, l0ImportLoadError(cm,
+			fmt.Sprintf("packages.Load failed for cell %q: %v", cm.ID, err),
+			fmt.Sprintf("ensure the cell directory compiles cleanly; run `go build %s` to identify build errors", cellPkgPattern),
+		), true
 	}
+	return pkgs, l0PackageLoadErrors(cm, cellPkgPattern, pkgs), false
+}
 
-	var loadErrs []governance.ValidationResult
-	imported := make(map[string]bool)
+func collectCellImports(cm *metadata.CellMeta, modulePath string, pkgs []*packages.Package) map[string]bool {
+	imported := make(map[string]bool, len(pkgs))
 	for _, pkg := range pkgs {
-		if len(pkg.Errors) > 0 {
-			for _, pe := range pkg.Errors {
-				loadErrs = append(loadErrs, governance.ValidationResult{
-					Code:      governance.RuleCode("CHECK-L0-LOAD-ERROR"),
-					Severity:  governance.SeverityError,
-					IssueType: governance.IssueInvalid,
-					File:      filepath.ToSlash(cm.File),
-					Scope:     cmdL0Imports,
-					Message:   fmt.Sprintf("packages.Load error for cell %q package %q: %v", cm.ID, pkg.PkgPath, pe),
-					Fix:       fmt.Sprintf("fix the compilation error in the listed package; run `go build %s` to reproduce", cellPkgPattern),
-				})
-			}
-		}
 		for importPath := range pkg.Imports {
 			importedCellID, ok := metadata.CellIDFromImportPath(modulePath, importPath)
 			if !ok {
@@ -871,7 +858,37 @@ func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []gov
 			}
 		}
 	}
-	return imported, loadErrs, false
+	return imported
+}
+
+func l0PackageLoadErrors(cm *metadata.CellMeta, cellPkgPattern string, pkgs []*packages.Package) []governance.ValidationResult {
+	var results []governance.ValidationResult
+	for _, pkg := range pkgs {
+		for _, pe := range pkg.Errors {
+			results = append(results, governance.ValidationResult{
+				Code:      governance.RuleCode("CHECK-L0-LOAD-ERROR"),
+				Severity:  governance.SeverityError,
+				IssueType: governance.IssueInvalid,
+				File:      filepath.ToSlash(cm.File),
+				Scope:     cmdL0Imports,
+				Message:   fmt.Sprintf("packages.Load error for cell %q package %q: %v", cm.ID, pkg.PkgPath, pe),
+				Fix:       fmt.Sprintf("fix the compilation error in the listed package; run `go build %s` to reproduce", cellPkgPattern),
+			})
+		}
+	}
+	return results
+}
+
+func l0ImportLoadError(cm *metadata.CellMeta, message, fix string) []governance.ValidationResult {
+	return []governance.ValidationResult{{
+		Code:      governance.RuleCode("CHECK-L0-LOAD-ERROR"),
+		Severity:  governance.SeverityError,
+		IssueType: governance.IssueInvalid,
+		File:      filepath.ToSlash(cm.File),
+		Scope:     cmdL0Imports,
+		Message:   message,
+		Fix:       fix,
+	}}
 }
 
 // l0UndeclaredImports finds imported cells not declared as L0 dependencies.
