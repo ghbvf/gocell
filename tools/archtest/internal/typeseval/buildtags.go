@@ -30,6 +30,16 @@ func KnownNonDefaultTags() [][]string {
 		{"integration", "otelcollector"},
 		{"integration", "mqtt_tls"},
 		{"integration_cluster"},
+		// archtest gates the archtest leaf suite itself (every
+		// tools/archtest/*_test.go carries //go:build archtest —
+		// ARCHTEST-LEAF-BUILD-TAG-01 — to keep the ~1200-test suite off the bare
+		// `go test ./...` execution path; see ADR 202605120000 §Amendment
+		// 2026-06-10). Unlike archtest_fixture below, archtest gates REAL rule
+		// files (not RED fixtures): the meta-scanners that load PatternsExtended
+		// (which spans ./tools/...) under FlatNonDefaultTags MUST still see those
+		// rule files (TEST-TIME-LITERAL / TEST-SLEEP-DISCIPLINE / MODULE-PATH-FUNNEL
+		// etc. apply to them), exactly as they did before the suite was tagged.
+		{"archtest"},
 		// archtest_fixture is deliberately ABSENT (#944): the fixture build tag
 		// is NOT a generic production tag and must never enter this union, or a
 		// business Run(t, Typed(TypedOpts{Tags: FlatNonDefaultTags()}, ...)) scan

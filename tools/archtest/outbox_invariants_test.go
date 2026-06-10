@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: OUTBOX-LEASE-ID-CAS-01
 //   - INVARIANT: OUTBOX-MARK-RETURNS-BOOL-01

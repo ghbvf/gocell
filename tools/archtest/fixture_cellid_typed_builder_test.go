@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants asserted in this file:
 //   - INVARIANT: FIXTURE-CELLID-TYPED-BUILDER-01
 //   - INVARIANT: METADATATEST-IMPORT-SCOPE-01

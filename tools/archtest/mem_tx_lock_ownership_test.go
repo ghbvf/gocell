@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // INVARIANT: MEM-TX-LOCK-OWNERSHIP-01

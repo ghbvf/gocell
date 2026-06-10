@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: SQLSTATE-SINGLE-SOURCE-01
 //
 // # Package archtest — SQLSTATE-SINGLE-SOURCE-01

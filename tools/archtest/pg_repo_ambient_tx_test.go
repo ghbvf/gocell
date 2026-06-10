@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: PG-REPO-AMBIENT-TX-01
 //

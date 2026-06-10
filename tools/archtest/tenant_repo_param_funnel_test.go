@@ -1,3 +1,5 @@
+//go:build archtest
+
 // tenant_repo_param_funnel_test.go — guards that every tenant-scoped platform
 // repo interface method carries a tenant.TenantID positional parameter.
 // Enrolled repos: accesscore (RoleRepository, UserRepository, PolicyRepository)

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: MESSAGE-CONST-LITERAL-01
 //
 // errcode_message_const_fixtures_test.go — fixture-based regression tests

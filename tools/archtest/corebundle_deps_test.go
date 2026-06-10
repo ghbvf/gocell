@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: COREBUNDLE-DEPS-01: cmd/corebundle must not depend on tools/depgraph or golang.org/x/tools
 package archtest
 

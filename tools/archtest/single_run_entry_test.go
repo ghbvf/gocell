@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: ARCHTEST-SINGLE-RUN-ENTRY-01
 //
 // ARCHTEST-SINGLE-RUN-ENTRY-01 enforces that the archtest package exposes

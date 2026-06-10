@@ -9,10 +9,12 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecert"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecmd"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	dto "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
 	devicebootstrap "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicebootstrap"
+	devicecertrenewal "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecertrenewal"
 	devicecommand "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommand"
 	devicecommandinternal "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommandinternal"
 	devicecommandrpc "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommandrpc"
@@ -122,12 +124,14 @@ func WithBootstrapEmitter(e outbox.CellEmitter) Option {
 	return func(c *DeviceCell) { c.bootstrapEmitter = e }
 }
 
-// WithBootstrapTxManager sets the CellTxManager injected into the
-// devicebootstrap reactive slice. The slice wraps command.EmitAsync in
-// txRunner.RunInTx so durable mode (PG outbox writer) gets a real transaction
-// in ctx. Demo mode and tests use the default outbox.DemoCellTxManager() no-op.
+// WithBootstrapTxManager sets the CellTxManager injected into BOTH async command
+// producers: the devicebootstrap reactive slice and the cert-renewal reconcile
+// loop (#1757). Each wraps command.EmitAsync in txRunner.RunInTx so durable mode
+// (PG outbox writer) gets a real transaction in ctx. The cell defaults the field
+// to outbox.DemoCellTxManager() (no-op) in NewDeviceCell, so demo mode and tests
+// work without wiring it.
 //
-// Accumulative: a nil tx leaves the previously-set value in place. NOT
+// Accumulative: a nil tx leaves the previously-set (default) value in place. NOT
 // required (no fail-fast guard): DemoCellTxManager is the safe default for
 // assemblies that do not wire a real PG pool.
 func WithBootstrapTxManager(tx persistence.CellTxManager) Option {
@@ -137,6 +141,24 @@ func WithBootstrapTxManager(tx persistence.CellTxManager) Option {
 		}
 	}
 }
+
+// WithCertStore wires the cell-internal, ephemeral certificate store the
+// cert-renewal reconcile loop scans for near-expiry certs and the device-register
+// slice seeds an initial cert into. See internal/devicecert for its ephemeral,
+// non-persisted scope (issue #1757).
+//
+// One-shot wiring option (like WithDeviceRepository): a nil store is stored as-is
+// and rejected by the initDeps fail-fast guard; it does not preserve a
+// previously-set value. The dependency is required.
+func WithCertStore(s *devicecert.Store) Option {
+	return func(c *DeviceCell) { c.certStore = s }
+}
+
+// NewCertStore constructs the cell's ephemeral certificate store. It re-exports
+// the internal/devicecert constructor so the composition root (which cannot import
+// the cell's internal/ tree) can build a store to pass to WithCertStore, mirroring
+// the mem/postgres repository façades.
+func NewCertStore() *devicecert.Store { return devicecert.NewStore() }
 
 // WithLogger sets the structured logger.
 func WithLogger(l *slog.Logger) Option {
@@ -166,6 +188,10 @@ type DeviceCell struct {
 	commandQueue       commandQueueStore
 	commandRegistry    *commandruntime.Registry // required; sync command-bus handler registry (#1580)
 	commandSweeper     *reconcile.Loop          // device-command expiry sweep, driven on a TickerTrigger cadence
+	certStore          *devicecert.Store        // ephemeral cell-internal cert state; scanned by certRenewalSweeper, seeded at register
+	certRenewalSweeper *reconcile.Loop          // cert-renewal producer (archetype ② reconcile→command, #1757)
+	reconcileMetrics   reconcile.Metrics        // shared by both reconcile.Loops; registered once via reconcileLoopMetrics
+	reconcileMetricsOK bool                     // true once reconcileMetrics is registered (provider was wired)
 	clk                clock.Clock              // injected from reg.Config during initInternal
 
 	// +slice:route:slice=deviceregister,subPath=/api/v1/devices
@@ -216,6 +242,10 @@ func NewDeviceCell(clk clock.Clock, opts ...Option) *DeviceCell {
 		BaseCell: cell.MustNewBaseCell(loadCellMetadata()),
 		clk:      clk,
 		logger:   slog.Default(),
+		// Demo default mirroring devicebootstrap's own txRunner default: the
+		// cert-renewal reconciler requires a non-nil CellTxManager. Durable mode
+		// overrides it via WithBootstrapTxManager (accumulative, nil-ignored).
+		bootstrapTxManager: outbox.DemoCellTxManager(),
 	}
 	for _, o := range opts {
 		o(c)
@@ -285,6 +315,17 @@ func (c *DeviceCell) initDeps(durabilityMode outbox.DurabilityMode) error {
 				"WithDeviceRepository(postgres.NewDeviceRepository(pool.DB(), txMgr, clk)) for durable mode")
 	}
 
+	// CertStore is required in every mode (no soft fallback): the device-register
+	// slice seeds an initial cert into it and the cert-renewal loop scans it. The
+	// composition root wires devicecell.NewCertStore() — the exported façade over
+	// the ephemeral, cell-internal store (internal/devicecert is not importable from
+	// the composition root), the same instance in demo and durable mode.
+	if c.certStore == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"devicecell requires a cert store; from the composition root, "+
+				"call WithCertStore(devicecell.NewCertStore())")
+	}
+
 	// Publisher is required (NIL-PUB-P1). For demo mode, the composition
 	// root must wrap a publisher via outbox.WrapPublisherForCell, e.g.
 	//   WithDirectPublisher(outbox.WrapPublisherForCell(&outbox.DiscardPublisher{}))
@@ -337,6 +378,7 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	registerSvc, err := deviceregister.NewService(
 		c.clk, c.deviceRepo, c.logger,
 		deviceregister.WithEmitter(c.emitter),
+		deviceregister.WithCertStore(c.certStore),
 	)
 	if err != nil {
 		return fmt.Errorf("device-register: %w", err)
@@ -442,6 +484,14 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	if err := c.buildCommandSweeper(cmdQueue); err != nil {
 		return err
 	}
+	if err := c.buildCertRenewalSweeper(); err != nil {
+		return err
+	}
+	// devicecertrenewal slice: declaration-only owner of the cell's second
+	// command.devicecommand.enqueue.v1 producer (the cert-renewal reconciler). It
+	// has no routes/subscribers/grpc, so cell_gen.go does not reference it; the
+	// reconcile.Loop is lifecycle-registered in registerHealthAndLifecycle.
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicecertrenewal.SliceMetadata()))
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicecommand.SliceMetadata()))
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicecommandinternal.SliceMetadata()))
 
@@ -501,11 +551,11 @@ func (c *DeviceCell) buildCommandSweeper(cmdQueue commandQueueStore) error {
 		WithName("devicecommand.sweeper").
 		WithReconcilerID("devicecommand_sweeper"). // label-safe: [a-z0-9_], no dots
 		WithoutDefaultRequeue()                    // ticker is the sole periodic source
-	if c.metricsProvider != nil {
-		m, err := reconcile.RegisterMetrics(c.metricsProvider)
-		if err != nil {
-			return fmt.Errorf("device-command reconcile metrics: %w", err)
-		}
+	m, ok, err := c.reconcileLoopMetrics()
+	if err != nil {
+		return fmt.Errorf("device-command reconcile metrics: %w", err)
+	}
+	if ok {
 		b = b.WithMetrics(m)
 	}
 	loop, err := b.Build()
@@ -513,6 +563,86 @@ func (c *DeviceCell) buildCommandSweeper(cmdQueue commandQueueStore) error {
 		return fmt.Errorf("device-command reconcile loop: %w", err)
 	}
 	c.commandSweeper = loop
+	return nil
+}
+
+// reconcileLoopMetrics registers the shared reconcile metric family once and
+// caches it, so the cell's multiple reconcile.Loops (command sweeper + cert
+// renewal) share ONE registration. Re-calling reconcile.RegisterMetrics per loop
+// would re-register the same collectors and log a Warn per family on every reuse.
+// Returns ok=false when no metrics provider is wired (loops then run unmetered).
+func (c *DeviceCell) reconcileLoopMetrics() (reconcile.Metrics, bool, error) {
+	if c.metricsProvider == nil {
+		return reconcile.Metrics{}, false, nil
+	}
+	if !c.reconcileMetricsOK {
+		m, err := reconcile.RegisterMetrics(c.metricsProvider)
+		if err != nil {
+			return reconcile.Metrics{}, false, err
+		}
+		c.reconcileMetrics = m
+		c.reconcileMetricsOK = true
+	}
+	return c.reconcileMetrics, true, nil
+}
+
+const (
+	// certRenewalSweepInterval is the TickerTrigger cadence for the cert-renewal
+	// reconcile loop. Certificate expiry is slow-moving (days), so an hourly
+	// re-observation is ample; like commandSweepInterval it is the SOLE periodic
+	// source (WithoutDefaultRequeue below).
+	certRenewalSweepInterval = 1 * time.Hour
+	// certRenewalThreshold is the near-expiry window: a device whose certificate
+	// expires within this window of "now" is swept into a rotate-cert command.
+	//
+	// Two co-tuning relationships (not machine-enforced — example tuning, not an
+	// invariant mechanism): (1) threshold is normally >> certRenewalSweepInterval,
+	// so a near-expiry cert is re-observed across many ticks; that is harmless
+	// because the cert store records the renewal-requested epoch and ScanNearExpiry
+	// skips it, so each epoch emits exactly one command for the whole window
+	// (single-emit does NOT depend on the relay's 24h command-done TTL — see
+	// internal/devicecert and the devicecertrenewal slice); (2) the issued cert
+	// validity (deviceregister.certValidity, 90d) MUST exceed this threshold so a
+	// freshly registered device is not swept for renewal immediately.
+	certRenewalThreshold = 30 * 24 * time.Hour
+)
+
+// buildCertRenewalSweeper constructs the certificate-renewal reconcile.Loop —
+// the iotdevice archetype-② reference (reconcile → async command, #1757). It
+// mirrors buildCommandSweeper: a TickerTrigger off the cell's business clock
+// drives a resync-all pulse; on each pulse the devicecertrenewal.Reconciler scans
+// the (ephemeral) cert store for near-expiry certs and enqueues a deduplicated
+// rotate-cert command per device, reusing the bootstrap command emitter + tx
+// manager (the same writer-backed sinks the relay polls) and the already-active
+// async-dispatch path (#1698). The reconciler depends only on the cert store and
+// command emitter — not the device repo. Reconciler construction validates its
+// required deps (certStore, bootstrapEmitter, bootstrapTxManager), all guaranteed
+// non-nil by the initDeps / initSlices fail-fast guards reached before here.
+func (c *DeviceCell) buildCertRenewalSweeper() error {
+	reconciler, err := devicecertrenewal.NewReconciler(
+		c.clk, c.certStore, c.bootstrapEmitter, c.bootstrapTxManager,
+		certRenewalThreshold, c.logger,
+	)
+	if err != nil {
+		return fmt.Errorf("device-cert renewal reconciler: %w", err)
+	}
+	b := reconcile.New(reconciler).
+		WithTrigger(reconcile.TickerTrigger(c.clk, certRenewalSweepInterval)).
+		WithName("devicecert.renewal").
+		WithReconcilerID("devicecert_renewal"). // label-safe: [a-z0-9_], no dots
+		WithoutDefaultRequeue()                 // ticker is the sole periodic source
+	m, ok, err := c.reconcileLoopMetrics()
+	if err != nil {
+		return fmt.Errorf("device-cert reconcile metrics: %w", err)
+	}
+	if ok {
+		b = b.WithMetrics(m)
+	}
+	loop, err := b.Build()
+	if err != nil {
+		return fmt.Errorf("device-cert reconcile loop: %w", err)
+	}
+	c.certRenewalSweeper = loop
 	return nil
 }
 
@@ -538,6 +668,11 @@ func (c *DeviceCell) registerHealthAndLifecycle(reg cell.Registrar) error {
 		Name:    "devicecommand.sweeper",
 		OnStart: c.commandSweeper.Start,
 		OnStop:  c.commandSweeper.Stop,
+	})
+	reg.Lifecycle(cell.LifecycleHook{
+		Name:    "devicecert.renewal",
+		OnStart: c.certRenewalSweeper.Start,
+		OnStop:  c.certRenewalSweeper.Stop,
 	})
 	return nil
 }

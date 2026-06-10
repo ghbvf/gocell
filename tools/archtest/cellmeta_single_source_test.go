@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: CELLMETA-SINGLE-SOURCE-01
 //   - INVARIANT: CELLMETA-SINGLE-SOURCE-02

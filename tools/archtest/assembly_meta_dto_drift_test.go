@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: ASSEMBLY-META-DTO-COVERAGE-01
 //
 // TestAssemblyMetaDTOCoverage enforces that every top-level yaml-bearing

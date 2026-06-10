@@ -1,3 +1,5 @@
+//go:build archtest
+
 // ctxkeys_principal_write_caller_test.go — closes the DOWNSTREAM side of the
 // principal ctx-injection trust boundary.
 //

@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // peer_identity_fields_frozen_test.go locks the curated field set of

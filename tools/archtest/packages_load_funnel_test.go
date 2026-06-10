@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: PACKAGES-LOAD-FUNNEL-01
 //
 // golang.org/x/tools/go/packages.Load may be called directly ONLY from package

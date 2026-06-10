@@ -1,3 +1,5 @@
+//go:build archtest
+
 // authz_eval_clock_injected_test.go — bans wall-clock package functions in the
 // ABAC PDP engine so environment time attributes always come from the injected
 // clock.Clock.

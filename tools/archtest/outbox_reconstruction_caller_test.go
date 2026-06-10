@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: OUTBOX-RECONSTRUCTION-CALLER-01
 //
 // This _test.go dogfoods the rule, runs the anti-vacuity reverse self-check,

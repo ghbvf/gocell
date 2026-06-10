@@ -1,3 +1,5 @@
+//go:build archtest
+
 // session_revoke_caller_intx_test.go — closes the DOWNSTREAM side of the
 // session.Store.Revoke caller funnel.
 //

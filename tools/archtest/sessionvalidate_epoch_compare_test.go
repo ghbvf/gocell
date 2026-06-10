@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // sessionvalidate_epoch_compare_test.go — AST guard for the epoch-compare

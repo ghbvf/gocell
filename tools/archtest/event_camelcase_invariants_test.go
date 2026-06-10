@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: EVENT-PAYLOAD-CAMELCASE-01
 //   - INVARIANT: EVENT-DTO-CAMELCASE-01

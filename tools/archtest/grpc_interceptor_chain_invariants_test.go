@@ -1,3 +1,5 @@
+//go:build archtest
+
 // Package archtest — grpc_interceptor_chain_invariants_test.go
 //
 //   - INVARIANT: GRPC-INTERCEPTOR-CHAIN-ORDER-01

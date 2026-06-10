@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants asserted in this file:
 //   - INVARIANT: CONTRACT-YAML-NO-CODEGEN-TRUE-LITERAL-01
 //

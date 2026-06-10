@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: WEBHOOK-SSRF-GUARD-01
 //
 // WEBHOOK-SSRF-GUARD-01 — outbound network funnel for kernel/webhook and

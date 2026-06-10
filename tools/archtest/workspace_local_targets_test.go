@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: WORKSPACE-LOCAL-TARGETS-01
 //
 // WORKSPACE-LOCAL-TARGETS-01 - local root targets that are expected to cover

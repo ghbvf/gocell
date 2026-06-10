@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // domain_authz_mutation_funnel_invariants_test.go — two invariants completing

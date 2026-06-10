@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: IMPL-DECL-COVER-01
 //   - INVARIANT: HANDLER-DECL-COVER-01

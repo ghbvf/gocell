@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: HTTP-IDEMPOTENCY-CONFORMANCE-ENROLLMENT-01
 //
 // Every concrete type that implements runtime/http/idempotency.Store in the

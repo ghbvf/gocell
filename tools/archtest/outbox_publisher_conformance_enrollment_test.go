@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: OUTBOX-PUBLISHER-CONFORMANCE-ENROLLMENT-01
 //
 // AI-robust: Medium

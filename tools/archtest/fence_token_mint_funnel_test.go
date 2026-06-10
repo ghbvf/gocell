@@ -1,3 +1,5 @@
+//go:build archtest
+
 // fence_token_mint_funnel_test.go — dogfoods CheckFenceTokenMintFunnel against
 // GoCell itself.
 //

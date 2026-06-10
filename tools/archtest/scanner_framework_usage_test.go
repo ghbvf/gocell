@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 //   - INVARIANT: SCANNER-FRAMEWORK-USAGE-01
@@ -32,6 +34,53 @@ import (
 
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
+
+// archtestLeafBuildTag is the build tag gating every tools/archtest leaf
+// *_test.go file (ARCHTEST-LEAF-BUILD-TAG-01). A typed self-scan of the leaf
+// suite MUST activate it, or the load surfaces zero *_test.go files and the rule
+// goes vacuously green. Mirrors the Tags literal at module_path_funnel_test.go
+// and runscope_constructor_funnel_test.go (the sibling leaf self-scans).
+const archtestLeafBuildTag = "archtest"
+
+// scanArchtestLeafTestFiles invokes perFile for every tools/archtest leaf
+// *_test.go file, loading the suite with the archtest build tag active so the
+// gated leaf files are visible. Without the tag the typed load returns "[no test
+// files]" for the leaf package and every SCANNER-FRAMEWORK-USAGE rule built on
+// it would scan an empty set — vacuously green. It fails the test when too few
+// leaf files load, converting a dropped/renamed tag into a hard red instead of a
+// silent pass.
+//
+// loadFixture02 deliberately does NOT route through here: it targets a single
+// internal/usage02fixtures file (not a leaf *_test.go) and carries its own
+// found-or-fatal guard.
+func scanArchtestLeafTestFiles(t *testing.T, perFile func(p *Pass, file *ast.File, rel string)) {
+	t.Helper()
+	seen := 0
+	Run(t, Typed(TypedOpts{Tests: true, Tags: []string{archtestLeafBuildTag}}, []string{"./tools/archtest/..."}),
+		func(p *Pass) []Diagnostic {
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if filepath.ToSlash(filepath.Dir(rel)) != "tools/archtest" {
+					continue
+				}
+				if !strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				seen++
+				perFile(p, file, rel)
+			}
+			return nil
+		})
+	// Anti-vacuity: the leaf suite carries ~289 *_test.go files. A floor of 100
+	// fails loud when the archtest tag did not activate (0 / a handful loaded)
+	// while tolerating a large refactor — mirrors the >200 floor reasoning in
+	// archtest_leaf_build_tag_test.go.
+	if seen < 100 {
+		t.Errorf("anti-vacuity: SCANNER-FRAMEWORK-USAGE live scan visited only %d "+
+			"tools/archtest/*_test.go files; expected the full leaf suite (~289). The "+
+			"archtest build tag likely did not activate — the rule would be vacuously green.", seen)
+	}
+}
 
 // INVARIANT: SCANNER-FRAMEWORK-USAGE-01
 //
@@ -108,22 +157,10 @@ import (
 // New rules MUST go through the scanner framework + EachInSubtree/EachInChildren.
 func TestScannerFrameworkUsage01(t *testing.T) {
 	var diags []scanner.Diagnostic
-	Run(t, Typed(TypedOpts{Tests: true}, []string{"./tools/archtest/..."}),
-		func(p *Pass) []Diagnostic {
-			for _, file := range p.Files {
-				rel := p.Rel(file)
-
-				if filepath.ToSlash(filepath.Dir(rel)) != "tools/archtest" {
-					continue
-				}
-				if !strings.HasSuffix(rel, "_test.go") {
-					continue
-				}
-				diags = append(diags, forbiddenWalkRefs(p.TypesInfo, p.Fset, file, rel)...)
-				diags = append(diags, forbiddenAstListTypeAssertions(p.TypesInfo, p.Fset, file, rel)...)
-			}
-			return nil
-		})
+	scanArchtestLeafTestFiles(t, func(p *Pass, file *ast.File, rel string) {
+		diags = append(diags, forbiddenWalkRefs(p.TypesInfo, p.Fset, file, rel)...)
+		diags = append(diags, forbiddenAstListTypeAssertions(p.TypesInfo, p.Fset, file, rel)...)
+	})
 
 	scanner.Report(t, "SCANNER-FRAMEWORK-USAGE-01", diags)
 }
@@ -1389,21 +1426,9 @@ func _(file *ast.File, other []ast.Decl) {
 //	     is preventive.
 func TestScannerFrameworkUsage02(t *testing.T) {
 	var diags []scanner.Diagnostic
-	// Tests:true required — _test.go files are the scan target of USAGE-02.
-	Run(t, Typed(TypedOpts{Tests: true}, []string{"./tools/archtest/..."}),
-		func(p *Pass) []Diagnostic {
-			for _, file := range p.Files {
-				rel := p.Rel(file)
-				if filepath.ToSlash(filepath.Dir(rel)) != "tools/archtest" {
-					continue
-				}
-				if !strings.HasSuffix(rel, "_test.go") {
-					continue
-				}
-				diags = append(diags, forbiddenClosureDoneSentinel(p.TypesInfo, p.Fset, file, rel)...)
-			}
-			return nil
-		})
+	scanArchtestLeafTestFiles(t, func(p *Pass, file *ast.File, rel string) {
+		diags = append(diags, forbiddenClosureDoneSentinel(p.TypesInfo, p.Fset, file, rel)...)
+	})
 
 	scanner.Report(t, "SCANNER-FRAMEWORK-USAGE-02", diags)
 }
@@ -1960,20 +1985,9 @@ func enclosingFuncBody(file *ast.File, call *ast.CallExpr) ast.Node {
 // reported as a BS3 diagnostic here.
 func TestScannerFrameworkUsage02_BlindSpotReverse(t *testing.T) {
 	var diags []scanner.Diagnostic
-	Run(t, Typed(TypedOpts{Tests: true}, []string{"./tools/archtest/..."}),
-		func(p *Pass) []Diagnostic {
-			for _, file := range p.Files {
-				rel := p.Rel(file)
-				if filepath.ToSlash(filepath.Dir(rel)) != "tools/archtest" {
-					continue
-				}
-				if !strings.HasSuffix(rel, "_test.go") {
-					continue
-				}
-				diags = append(diags, closureDoneSentinelBlindSpots(p.TypesInfo, p.Fset, file, rel)...)
-			}
-			return nil
-		})
+	scanArchtestLeafTestFiles(t, func(p *Pass, file *ast.File, rel string) {
+		diags = append(diags, closureDoneSentinelBlindSpots(p.TypesInfo, p.Fset, file, rel)...)
+	})
 
 	if len(diags) != 0 {
 		t.Errorf("SCANNER-FRAMEWORK-USAGE-02 blind-spot shape present in "+

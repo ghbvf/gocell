@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: SCAFFOLD-WRITE-FUNNEL-01
 //
 // All scaffold/codegen filesystem writes funnel through

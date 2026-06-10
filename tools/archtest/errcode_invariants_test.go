@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // errcode_invariants_test.go consolidates errcode-theme invariants:

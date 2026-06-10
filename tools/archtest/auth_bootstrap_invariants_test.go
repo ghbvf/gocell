@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: CELLS-NO-ROUTEMUX-WRAPPER-01
 //   - INVARIANT: AUTH-ROUTE-BOOTSTRAP-FLAG-REMOVED-01

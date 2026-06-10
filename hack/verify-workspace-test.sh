@@ -11,9 +11,15 @@
 # GOWORK=off so each satellite resolves against its OWN pinned go.mod (the local
 # `replace github.com/ghbvf/gocell => ../../` redirects the unpublished core to
 # the repo root), matching the release-consistency build in verify-workspace.sh.
-# Only untagged tests run here — integration / examples_smoke tagged tests have
-# their own service-bearing CI lanes (_build-lint.yml integration-test +
-# examples-smoke), which iterate this same modules.sh funnel.
+# Only untagged tests run here — integration / examples_smoke / archtest tagged
+# tests have their own lanes (_build-lint.yml integration-test + examples-smoke;
+# hack/verify-archtest.sh + archtest-nightly.yml), which iterate this same
+# modules.sh funnel or opt in via -tags. This matters for the tools module: when
+# #1803 split tools/ into a workspace member, this gate's `go test ./...` started
+# re-running the ~1200-test archtest leaf (+~4min/lane, defeating governance.yml's
+# VERIFY_SKIP=archtest). The `//go:build archtest` leaf tag
+# (ARCHTEST-LEAF-BUILD-TAG-01) keeps it compiled-out here — no special-casing in
+# this script; the heavy suite simply cannot enter a bare `go test ./...`.
 
 set -euo pipefail
 
@@ -111,6 +117,8 @@ gocell::log::status "Satellite modules: ${satellite_dirs[*]}"
 # go.mod (release-consistent), mirroring verify-workspace.sh's build traversal.
 for dir in "${satellite_dirs[@]}"; do
     gocell::log::status "Testing module (GOWORK=off): ${dir}"
+    # The tools/archtest leaf is compiled-out here by its `//go:build archtest`
+    # tag (ARCHTEST-LEAF-BUILD-TAG-01) — no special-casing needed.
     if ! GOWORK=off go -C "${dir}" test ./... -count=1; then
         gocell::log::error "go test ./... failed in module '${dir}' (GOWORK=off)"
         exit 1

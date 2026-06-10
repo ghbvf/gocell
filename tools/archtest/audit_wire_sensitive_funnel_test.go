@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01
 //
 // Locks the audit-domain wire-out sensitive-field codegen funnel

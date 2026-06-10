@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // INVARIANT: TAGGROUP-LOOP-FORBIDS-TYPED-RUN-01

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: MQTT-CONNECT-DEADLINE-DECOUPLED-01
 //
 // adapters/mqtt.Open MUST keep two contexts decoupled:

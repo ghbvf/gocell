@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: USERREPO-METHOD-SET-FROZEN-01
 //
 // USERREPO-METHOD-SET-FROZEN-01 — ports.UserRepository 方法集合 + 每方法签名

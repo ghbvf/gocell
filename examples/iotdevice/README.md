@@ -16,6 +16,9 @@ An IoT device management application demonstrating the GoCell **L4 DeviceLatent*
   - **devicelist** slice: GET lists registered devices with cursor pagination
   - **devicecommand** slice: enqueue commands, device polls pending commands, device acks execution
   - **devicestatus** slice: GET queries current device status
+  - cell-level background `reconcile.Loop`s: a command-expiry sweeper and a
+    cert-renewal producer (enqueues `rotate-cert` commands for near-expiry
+    certificates — see [Scheduled cert renewal](#scheduled-cert-renewal-command))
 
 ## L4 DeviceLatent Model
 
@@ -29,8 +32,12 @@ connectivity, high latency, or constrained bandwidth.
 
 > **Note:** the device-facing L4 command queue (enqueue / dequeue / ack) is an
 > application-layer model in this cell. Separately, the framework `runtime/command`
-> async command bus is wired here (#1698): registering a device reactively enqueues
-> a `bootstrap` command through it — see [Reactive bootstrap command](#reactive-bootstrap-command).
+> async command bus is wired here, with two producer archetypes:
+> ① **event-reactive** — registering a device enqueues a `bootstrap` command
+> (#1698), see [Reactive bootstrap command](#reactive-bootstrap-command);
+> ② **reconcile-driven** — a background loop enqueues a deduplicated `rotate-cert`
+> command for near-expiry device certificates (#1757), see
+> [Scheduled cert renewal](#scheduled-cert-renewal-command).
 
 ## Quick Start (In-Memory Mode)
 
@@ -226,6 +233,55 @@ curl -s "http://localhost:8083/api/v1/devices/${DEV_ID}/commands" \
 #    a redelivery of the SAME registration event dedups to one command (relay-level,
 #    via the Claimer two-phase wrap).
 ```
+
+## Scheduled cert renewal command
+
+A background reconcile loop (`devicecert.renewal`, a `TickerTrigger`-driven
+`reconcile.Loop` alongside the command-expiry sweeper) turns a slow-moving,
+tick-observed condition — a device certificate nearing expiry — into a
+**deduplicated** async `rotate-cert` command through the same `runtime/command`
+bus. This is producer **archetype ②** (reconcile → command, #1757), the
+counterpart to the event-reactive bootstrap producer above.
+
+Flow: each interval the loop scans the cell's cert store for certificates whose
+`NotAfter` is within the renewal threshold → for each, `command.EmitAsync` emits a
+`command.devicecommand.enqueue.v1` entry with `commandType: rotate-cert` →
+the outbox relay dispatches it in-process → a `rotate-cert` command lands in the
+device's queue, dequeued like any other command.
+
+**Idempotent forcing function**: the loop re-observes the same un-renewed cert
+every tick, but after the first emit the cert store records the renewal-requested
+epoch, so subsequent scans skip it — a single un-renewed cert yields exactly
+**one** `rotate-cert` command across its whole (multi-day) near-expiry window,
+never N. This single-emit is owned by the store and holds **independently of the
+outbox relay's 24h command-done TTL**; the relay's Claimer (keyed by the
+`(deviceId, certEpoch)`-derived command id) is only a secondary backstop for
+same-window re-emits. A post-rotation re-issue advances the epoch and yields a
+fresh, dispatchable command.
+
+> **Ephemeral by design**: certificate state lives in an in-memory, cell-internal
+> store (not the `devices` table) — this example demonstrates the producer +
+> dedup mechanic, not certificate PKI durability. **This holds in durable mode
+> too**: even with `GOCELL_IOTDEVICE_DSN` set, the cert store is in-memory and is
+> NOT persisted to PostgreSQL — after a restart, device rows survive but the cert
+> store is empty, so `rotate-cert` commands resume only for devices that
+> re-register. That asymmetry is the deliberate scope boundary (see
+> `internal/devicecert/store.go`).
+>
+> **Observing it**: a freshly registered device gets a healthy (90d) cert and the
+> 30d renewal threshold is not crossed during a short demo, so no `rotate-cert`
+> command appears in a normal run — this is the realistic steady state, not a gap.
+> The full scan → enqueue → cross-tick dedup → dequeue chain is proven
+> deterministically (fake clock) in `cells/devicecell/cert_renewal_e2e_test.go`;
+> to watch it live, lower `certValidity` / `certRenewalThreshold` /
+> `certRenewalSweepInterval` in source and re-run.
+
+> **Single-tenant assumption**: a reconcile loop runs on the cell lifecycle
+> context (no request principal), so the renewal command's dedup key is not
+> tenant-scoped (resolves to the `_notenant` sentinel), and the cert store is
+> per-assembly. Correct for this single-tenant example; copying archetype ② into a
+> multi-tenant cell requires adding a tenant dimension to the cert store and the
+> command id (see `cells/devicecell/slices/devicecertrenewal/reconciler.go`).
 
 ## Full Walkthrough
 

@@ -291,7 +291,7 @@ PR #<N> 含 Cx2 findings，不自动修复（决策 3：Cx1 proven 后再开放 
 
 backlog issue draft（Cx2 follow-up）:
 gh issue create \
-  --label backlog --label pri-p2 --label area-<XX> --label type-fu \
+  --label backlog --label pri-p2 --label area-<XX> --label type-fu --label cx-2 \
   --title "[#<N>] Cx2 finding follow-up: <简述>" \
   --body-file <填好的 .github/project-template/backlog.md>
 ```

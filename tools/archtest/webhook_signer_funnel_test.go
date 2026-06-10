@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: WEBHOOK-SIGNER-FUNNEL-01
 //
 // WEBHOOK-SIGNER-FUNNEL-01 — kernel/webhook signature-header write funnel.

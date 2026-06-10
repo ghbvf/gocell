@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: MQTT-METRIC-LABEL-VALUES-FROZEN-01
 //
 // This file owns ONE invariant: the observable metric surface of

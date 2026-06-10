@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: BOOTSTRAP-REASON-SET-EQUIVALENCE-01
 //
 // # BOOTSTRAP-REASON-SET-EQUIVALENCE-01 — bootstrap auth-fail reason set equivalence (Medium)

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: SEALED-MARKER-NOOP-TRANSPARENCY-01
 //
 // SEALED-MARKER-NOOP-TRANSPARENCY-01 — every internalCell* concrete struct

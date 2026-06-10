@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: SLOWGATE-ALLOWLIST-01
 //
 // SLOWGATE-ALLOWLIST-01 — drift guard for tools/slowgate/allowlist.txt.

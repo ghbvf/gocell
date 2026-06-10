@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01
 //
 // PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01 — projection subscriptions may only

@@ -145,6 +145,10 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		devicecell.WithBootstrapTxManager(crs.bootstrapTxManager),
 		devicecell.WithCursorCodec(cursorCodec),
 		devicecell.WithCommandRegistry(commandReg),
+		// Ephemeral cell-internal cert store: seeded per registered device and
+		// scanned by the cert-renewal reconcile loop (#1757). One instance, shared
+		// by the register slice (writer) and the renewal loop (reader).
+		devicecell.WithCertStore(devicecell.NewCertStore()),
 		devicecell.WithLogger(logger),
 	)
 	dc.RegisterCommandQueue(commandQueue)

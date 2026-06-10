@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // sessionvalidate_epoch_source_test.go — Hard guard on the SOURCE of the

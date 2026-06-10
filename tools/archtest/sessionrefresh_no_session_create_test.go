@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // INVARIANT: SESSIONREFRESH-NO-SESSION-CREATE-01

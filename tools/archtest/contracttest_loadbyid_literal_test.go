@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: CONTRACTTEST-LOADBYID-LITERAL-01
 //
 // CONTRACTTEST-LOADBYID-LITERAL-01 — every call to contracttest.LoadByID

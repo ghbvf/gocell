@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: WEBHOOK-RECEIVER-PIPELINE-01
 //
 // WEBHOOK-RECEIVER-PIPELINE-01 — runtime/webhook receive-pipeline token

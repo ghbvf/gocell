@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: AUTH-AUTHTEST-BOUNDARY-01: authtest sub-package is test-only; auth.Authenticated() must stay deleted
 //
 // Rule logic + helpers live in auth_authtest_boundary.go (CheckAuthAuthtestBoundary)

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: COREBUNDLE-GENERATED-MAIN-NO-INLINE-01
 //
 // corebundle_generated_main_test.go — the generated cmd/corebundle/main.go must

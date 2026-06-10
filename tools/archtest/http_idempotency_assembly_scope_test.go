@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // http_idempotency_assembly_scope_test.go — structural gates for the

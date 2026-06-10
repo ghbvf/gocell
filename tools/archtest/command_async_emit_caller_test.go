@@ -1,3 +1,5 @@
+//go:build archtest
+
 // command_async_emit_caller_test.go — locks the UPSTREAM (producer-side)
 // caller-allowlist of the async command emit funnel: any kernel/outbox.Emit or
 // kernel/outbox.NewEntry callsite whose topic const-evaluates to a `command.*`

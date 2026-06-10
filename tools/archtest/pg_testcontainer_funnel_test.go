@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: PG-TESTCONTAINER-FUNNEL-01
 //
 // # PG-TESTCONTAINER-FUNNEL-01

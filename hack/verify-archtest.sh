@@ -67,6 +67,17 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+# GOWORK must be active so packages.Load resolves across workspace modules.
+# Production archtest scans do not work with GOWORK=off (see hack/README.md).
+if [ "${GOWORK:-}" = "off" ]; then
+  echo "ERROR: verify-archtest.sh must not run with GOWORK=off — workspace modules" >&2
+  echo "       are required for packages.Load. See hack/README.md for correct usage." >&2
+  exit 2
+fi
+
+# shellcheck source=lib/archtest.sh
+source hack/lib/archtest.sh
+
 readonly ARCHTEST_PKG="./tools/archtest"
 # Default 1 (local). CI sets SHARD_COUNT=24 explicitly in
 # .github/workflows/archtest-nightly.yml::verify-archtest (GHA 7 GB RSS budget;
@@ -88,12 +99,12 @@ fi
 # Discover all top-level Test* functions in archtest. Stable sort -> stable
 # modulo partition across runs (so failure logs always point at the same
 # shard).
-TESTS=$(go test -list '^Test' "$ARCHTEST_PKG" | grep -E '^Test' | sort)
+TESTS=$(go test -tags="$ARCHTEST_BUILD_TAGS" -list '^Test' "$ARCHTEST_PKG" | grep -E '^Test' | sort)
 TOTAL=$(printf '%s\n' "$TESTS" | grep -c '^Test')
 
 if [ "$TOTAL" -lt 1 ]; then
   echo "ERROR: no archtest Test* functions discovered in $ARCHTEST_PKG" >&2
-  echo "       discovery command: go test -list '^Test' $ARCHTEST_PKG" >&2
+  echo "       discovery command: go test -tags=\"$ARCHTEST_BUILD_TAGS\" -list '^Test' $ARCHTEST_PKG" >&2
   exit 1
 fi
 
@@ -160,12 +171,12 @@ run_shard() {
     # `if: failure()` artifact upload step exposes these files on failure.
     # set -o pipefail catches a go test failure even when slowgate exits 0.
     local artifact_dir="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
-    go test -count=1 -timeout "$TIMEOUT" -json -run "^($pattern)$" "$ARCHTEST_PKG" \
+    go test -tags="$ARCHTEST_BUILD_TAGS" -count=1 -timeout "$TIMEOUT" -json -run "^($pattern)$" "$ARCHTEST_PKG" \
       | tee "${artifact_dir}/archtest-shard-${shard}.json" \
       | "$SLOWGATE_BIN" --threshold="$SLOWGATE_THRESHOLD" --allowlist="$SLOWGATE_ALLOWLIST"
   else
     # Local path: no slowgate binary, run plain.
-    go test -count=1 -timeout "$TIMEOUT" -run "^($pattern)$" "$ARCHTEST_PKG"
+    go test -tags="$ARCHTEST_BUILD_TAGS" -count=1 -timeout "$TIMEOUT" -run "^($pattern)$" "$ARCHTEST_PKG"
   fi
 }
 

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: OUTBOXTEST-IMPORT-BOUNDARY-01: production Go files must not import
 // kernel/outbox/outboxtest — that package's (*Recorder).CellEmitter() test seam
 // calls outbox.WrapEmitterForCell (a composition-root-only funnel that

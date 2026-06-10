@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: RECONCILE-REQUEUE-ENQUEUE-CALLER-01
 //
 // This file owns ONE invariant: every channel-send statement (SendStmt) that

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: CELL-LIFECYCLE-RANK-COMPLETENESS-01
 //
 // lifecycle_phase_test.go — every cellvocab.CellLifecycle const must appear in

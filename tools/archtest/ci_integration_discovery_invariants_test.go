@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: CI-INTEGRATION-DISCOVERY-01: integration-test discovers via go list over the go.work module funnel, not hardcoded globs
 package archtest
 

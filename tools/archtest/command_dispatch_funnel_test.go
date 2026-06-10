@@ -1,3 +1,5 @@
+//go:build archtest
+
 // command_dispatch_funnel_test.go — locks the COMMAND dispatch funnel as a
 // double-lock: downstream (caller allowlist) + upstream (codegen sole-emitter).
 //

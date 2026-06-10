@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: RELAY-NOT-MANAGEDRESOURCE-01
 //   - INVARIANT: RELAY-SOLE-HOLDER-01

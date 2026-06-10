@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: GRPC-CELL-REGISTRAR-LAYER-01
 //
 // This file owns ONE invariant: the kernel/cell.GRPCServiceSpec.Register field

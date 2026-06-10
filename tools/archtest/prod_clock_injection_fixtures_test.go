@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: PROD-CLOCK-INJECTION-01
 //
 // prod_clock_injection_fixtures_test.go — fixture-based regression tests

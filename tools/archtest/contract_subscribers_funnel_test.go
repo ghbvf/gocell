@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants asserted in this file:
 //   - INVARIANT: SUBSCRIBERS-DERIVED-FIELD-FROZEN-01
 //   - INVARIANT: CONTRACT-YAML-NO-SUBSCRIBERS-KEY-01

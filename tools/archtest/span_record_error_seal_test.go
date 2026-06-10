@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: SPAN-RECORD-ERROR-SEAL-01
 //
 // SPAN-RECORD-ERROR-SEAL-01 — RecordError on any oteltrace.Span within

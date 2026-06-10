@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: RECONCILE-RESULT-LABEL-VALUES-FROZEN-01
 //
 // This file owns ONE invariant: the set of string values assigned to the

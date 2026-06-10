@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: WIRE-CODE-5XX-SINGLE-SOURCE-01
 //
 // WIRE-CODE-5XX-SINGLE-SOURCE-01: 5xx wire-code single-source authority.

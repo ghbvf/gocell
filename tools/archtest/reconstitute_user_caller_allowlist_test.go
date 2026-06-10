@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: RECONSTITUTE-USER-CALLER-01
 //
 // AI-robust: Medium

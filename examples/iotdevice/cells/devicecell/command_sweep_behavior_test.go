@@ -68,6 +68,7 @@ func newSweepTestCell(t *testing.T, fc clock.Clock, q kcommand.Queue, mp metrics
 		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clock.Real()))),
 		WithBootstrapEmitter(testBootstrapEmitter()),
 		WithCommandRegistry(commandruntime.NewRegistry()),
+		WithCertStore(NewCertStore()),
 	}
 	if mp != nil {
 		opts = append(opts, WithMetricsProvider(mp))
@@ -85,8 +86,9 @@ func startSweeperHook(t *testing.T, c *DeviceCell, ctx context.Context) func(con
 	rec := newTestRec()
 	require.NoError(t, c.Init(context.Background(), rec))
 	snap := rec.Snapshot()
-	require.Len(t, snap.LifecycleHooks, 1, "expect one lifecycle hook (sweeper)")
+	require.Len(t, snap.LifecycleHooks, 2, "expect two lifecycle hooks (command sweeper + cert renewal #1757)")
 	hook := snap.LifecycleHooks[0]
+	require.Equal(t, "devicecommand.sweeper", hook.Name, "command sweeper is registered first")
 	require.NoError(t, hook.OnStart(ctx), "OnStart must start the loop without error")
 	return hook.OnStop
 }

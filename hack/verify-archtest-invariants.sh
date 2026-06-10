@@ -15,6 +15,9 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+# shellcheck source=lib/archtest.sh
+source hack/lib/archtest.sh
+
 # nightly-only (whole-module typed scan, not eligible for PR-time due to
 # packages.Load memory/time budget on 2-CPU CI runners):
 #   IMPL-DECL-COVER-01   (TestImplDeclCover)
@@ -49,6 +52,29 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # fail at PR-merge time, not only nightly, or every downstream DirsScope cell rule
 # silently fail-opens for a full day. Cheap here: go.work parse + metadata
 # discovery, NO whole-tree packages.Load. #1560 / PR #1814 review F7.
-go test ./tools/archtest \
-  -run '^(TestProdClockInjection|TestKernelClockLeafFallback|TestKernelClockLeafFallbackFixtures|TestProdClockInjectionFixtures|TestProdDurationConst|TestProdDurationConstFixtures|TestTestTimeLiteralConst|TestTestSleepDiscipline|TestTestTimeLiteralFixtures|TestPanicRegistered|TestPanicRegisteredScannerFixtures|TestArchtestModulePathFunnel|TestModulePathFunnel_TypedReconstruction|TestFenceTokenMintFunnel_AllowlistEnforced|TestMetadatatestImportScope|TestFixtureCellIDTypedBuilder_NewCellIDBodyShape|TestFixtureCellIDTypedBuilder_VarInitializerShape|TestRootModuleNoReplace01|TestRootModuleNoReplace01_NegativeControl|TestPlatformCellScanCoverage01|TestPlatformCellScanCoverage01_AntiVacuity)$' \
-  -count=1 -timeout 5m
+#
+# ARCHTEST-LEAF-BUILD-TAG-01 (TestArchtest_AllLeafTestFiles_HaveArchtestBuildTag)
+# IS in this PR-time set: it is the upstream completeness guard of the build-tag
+# funnel that keeps the heavy archtest suite OFF the make verify critical path. A
+# new leaf *_test.go that forgets `//go:build archtest` re-leaks the suite into
+# the bare `go test ./...` traversal (verify-workspace-test, build-test tools
+# shard) — a SILENT (green) perf regression that must fail at PR-merge, not only
+# nightly. Cheap here: a header-only //go:build parse per file, NO packages.Load.
+#
+# -tags=archtest: the archtest leaf is gated behind `//go:build archtest` so a
+# bare `go test ./...` keeps it off the make verify / PR critical path (build-tag
+# funnel; same convention as integration / e2e). This gate is a sanctioned
+# PR-time OWNER and opts in. The non-vacuity check below converts a missing /
+# renamed tag (which yields "[no test files]" → 0 tests → false green) into a
+# hard failure — `-run` over an empty test set exits 0 otherwise.
+if ! output="$(go test -tags="$ARCHTEST_BUILD_TAGS" ./tools/archtest \
+  -run '^(TestProdClockInjection|TestKernelClockLeafFallback|TestKernelClockLeafFallbackFixtures|TestProdClockInjectionFixtures|TestProdDurationConst|TestProdDurationConstFixtures|TestTestTimeLiteralConst|TestTestSleepDiscipline|TestTestTimeLiteralFixtures|TestPanicRegistered|TestPanicRegisteredScannerFixtures|TestArchtestModulePathFunnel|TestModulePathFunnel_TypedReconstruction|TestFenceTokenMintFunnel_AllowlistEnforced|TestMetadatatestImportScope|TestFixtureCellIDTypedBuilder_NewCellIDBodyShape|TestFixtureCellIDTypedBuilder_VarInitializerShape|TestRootModuleNoReplace01|TestRootModuleNoReplace01_NegativeControl|TestPlatformCellScanCoverage01|TestPlatformCellScanCoverage01_AntiVacuity|TestArchtest_AllLeafTestFiles_HaveArchtestBuildTag|TestArchtest_InvariantsScriptContainsFunnelGuard)$' \
+  -count=1 -timeout 5m 2>&1)"; then
+  printf '%s\n' "$output"
+  exit 1
+fi
+printf '%s\n' "$output"
+if printf '%s' "$output" | grep -qE 'no test files|no tests to run'; then
+  echo "verify-archtest-invariants: ZERO archtest tests ran — missing -tags=archtest? (build-tag funnel, see hack/verify-archtest.sh)" >&2
+  exit 1
+fi

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: KERNEL-CLOCK-LEAF-FALLBACK-01
 //   - INVARIANT: KERNEL-CLOCK-RESET-RELATIVE-PROD-01

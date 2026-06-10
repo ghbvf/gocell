@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: TESTUTIL-BOUNDARY-01: any package whose import path contains a
 // "testutil" segment may only be imported by *_test.go files or by other
 // test-infrastructure packages (segment name ending in "test", paths under

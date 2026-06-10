@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: PLATFORM-CELL-SCAN-COVERAGE-01
 //
 // Keystone anti-vacuity guard for the #1560 go.work P5 split. When the platform

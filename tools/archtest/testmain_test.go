@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: ARCHTEST-TESTMAIN-01
 
 package archtest

@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // INVARIANT: PRODUCTION-LOADER-FUNNEL-01

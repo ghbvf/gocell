@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest_test
 
 // INVARIANT: ARCHTEST-EXTERNAL-SURFACE-01 (cross-module smoke)

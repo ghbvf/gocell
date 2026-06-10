@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: PROJECTION-STATE-PHASE-FROZEN-01
 //
 // PROJECTION-STATE-PHASE-FROZEN-01 — the rebuild-lifecycle Phase enum declared

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // audit_query_tenant_param_test.go — guards that the audit ledger read surface
 // keeps its typed tenant.TenantID positional parameter on Query.
 //

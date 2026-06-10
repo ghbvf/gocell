@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: PROJECTION-SYSTEM-PRINCIPAL-INSTALL-CALLER-01
 //
 // PROJECTION-SYSTEM-PRINCIPAL-INSTALL-CALLER-01 — every production reference to

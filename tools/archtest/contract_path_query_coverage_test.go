@@ -1,3 +1,5 @@
+//go:build archtest
+
 // Package archtest enforces param-level executable contract test coverage.
 //
 //   - INVARIANT: CONTRACT-PATH-QUERY-COVERAGE-01

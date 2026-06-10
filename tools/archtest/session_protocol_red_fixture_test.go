@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: SESSION-PROTOCOL-COMPOSITION-ROOT-01 (RED fixture coverage)
 package archtest

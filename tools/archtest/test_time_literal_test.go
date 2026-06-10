@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: TEST-TIME-LITERAL-01
 //
 // TEST-TIME-LITERAL-01 — invariant-driven gate for *test* code.

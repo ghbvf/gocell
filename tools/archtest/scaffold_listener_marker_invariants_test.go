@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: SCAFFOLD-LISTENER-MARKER-TYPED-CONST-01
 //
 // This _test.go dogfoods the rule against GoCell's own cellgen package +

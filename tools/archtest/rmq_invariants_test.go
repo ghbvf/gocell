@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01
 //   - INVARIANT: RMQ-CHANNEL-MAX-PER-CONN-01

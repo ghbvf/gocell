@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // auth_plan_test.go — dogfoods the AUTH-PLAN Check* functions against GoCell

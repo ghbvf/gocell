@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: ROOT-MODULE-NO-REPLACE-01
 //
 // ROOT-MODULE-NO-REPLACE-01 — the workspace ROOT module (github.com/ghbvf/gocell)

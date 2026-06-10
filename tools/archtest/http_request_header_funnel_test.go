@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants asserted in this file:
 //   - INVARIANT: HTTP-HEADERS-FIELD-FROZEN-01
 //   - INVARIANT: HTTP-REQUEST-HEADER-READ-FUNNEL-01

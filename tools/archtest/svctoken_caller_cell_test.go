@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: SVCTOKEN-CALLER-CELL-REQUIRED-01
 package archtest
 

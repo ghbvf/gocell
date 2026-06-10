@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: CHANGEPASSWORD-INACTIVE-GATE-01
 //
 // Package archtest enforces CHANGEPASSWORD-INACTIVE-GATE-01: the

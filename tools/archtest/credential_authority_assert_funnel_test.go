@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // credential_authority_assert_funnel_test.go — Hard double-prong funnel

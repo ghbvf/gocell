@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: CODEGEN-CELL-GEN-01
 //   - INVARIANT: CODEGEN-CELL-GEN-02

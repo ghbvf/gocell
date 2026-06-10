@@ -1,6 +1,6 @@
-// INVARIANT: MODULES-PATH-VALIDATION-01
-//go:build !windows
+//go:build archtest && !windows
 
+// INVARIANT: MODULES-PATH-VALIDATION-01
 package archtest
 
 // INVARIANT: MODULES-PATH-VALIDATION-01 (runtime arm)

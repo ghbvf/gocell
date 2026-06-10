@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants asserted in this file:
 //   - INVARIANT: CONTRACT-YAML-WEBHOOK-FIELDS-FROZEN-01
 //   - INVARIANT: WEBHOOK-MARKER-RETIRED-01

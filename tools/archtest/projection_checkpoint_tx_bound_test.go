@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: PROJECTION-CHECKPOINT-TX-BOUND-01
 //
 // PROJECTION-CHECKPOINT-TX-BOUND-01 — CheckpointStore ambient-tx contract.

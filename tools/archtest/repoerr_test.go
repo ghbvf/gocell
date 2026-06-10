@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: CTXCANCEL-LOCAL-IMPL-BAN-01
 //   - INVARIANT: REPO-LOG-KEY-ID-REDACT-01

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: GRPC-METRICS-LABEL-CELLID-CTXSOURCE-01 (RED fixture coverage)
 package archtest

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: GRPC-SERVICE-IN-CONTRACT-01
 //
 // GRPC-SERVICE-IN-CONTRACT-01 — reg.GRPCService caller allowlist + contract

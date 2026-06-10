@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: HANDLER-POLICY-REQUIRED-01
 //
 // Package archtest enforces HANDLER-POLICY-REQUIRED-01 — the simplified caller-side

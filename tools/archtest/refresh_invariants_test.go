@@ -1,3 +1,5 @@
+//go:build archtest
+
 // refresh_invariants_test.go consolidates refresh-theme invariants:
 //   - INVARIANT: REFRESH-CROSS-STORE-TX-01
 //   - INVARIANT: REFRESH-INVALID-INDEX-SINGLE-SOURCE-01

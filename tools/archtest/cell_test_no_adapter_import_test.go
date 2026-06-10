@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: CELL-TEST-NO-ADAPTER-IMPORT-01: cell unit tests must not import
 // the platform adapters/ layer; they must use canonical in-mem fakes instead.
 //

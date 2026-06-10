@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: OUTBOX-ENTRY-SEALED-CONSTRUCTION-01
 //
 // This file owns ONE invariant: kernel/outbox.Entry is sealed construction —

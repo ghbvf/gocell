@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: MIGRATION-TRACKING-TABLE-DERIVED-01
 package archtest
 

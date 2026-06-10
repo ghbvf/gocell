@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: AUDITCORE-APPENDER-SINGLE-SOURCE-01
 package archtest
 

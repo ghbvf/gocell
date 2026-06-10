@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: PGQUERY-01
 
 package archtest
