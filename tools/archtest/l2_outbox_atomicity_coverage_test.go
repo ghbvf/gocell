@@ -144,7 +144,7 @@ func TestL2OutboxAtomicityCoverage(t *testing.T) {
 		info, found := testFuncs[name]
 		if !found {
 			diags = append(diags, Diagnostic{
-				Rel: "cells/",
+				Rel: PlatformCellsDir + "/",
 				Message: "L2 unit missing atomicity test " + name +
 					"; add it with //go:build integration",
 			})
@@ -175,10 +175,10 @@ func l2EnumerateUnits(t *testing.T, root string) []l2Unit {
 
 	// Scan cell.yaml files: cells/<id>/cell.yaml (depth-2 from cells/).
 	cellScope := DirsScope(
-		root, []string{"cells"},
+		root, platformCellScanDirs(),
 		MatchRels(func(rel string) bool {
 			rel = filepath.ToSlash(rel)
-			return strings.HasPrefix(rel, "cells/") &&
+			return strings.HasPrefix(rel, PlatformCellsDir+"/") &&
 				strings.Count(rel, "/") == depth2SlashCount &&
 				filepath.Base(rel) == "cell.yaml"
 		}),
@@ -200,10 +200,10 @@ func l2EnumerateUnits(t *testing.T, root string) []l2Unit {
 	// depth from cells/ is 4: cells/<cell>  /slices/<slice>/slice.yaml = 4 slashes.
 	const sliceDepthSlashCount = 4
 	sliceScope := DirsScope(
-		root, []string{"cells"},
+		root, platformCellScanDirs(),
 		MatchRels(func(rel string) bool {
 			rel = filepath.ToSlash(rel)
-			return strings.HasPrefix(rel, "cells/") &&
+			return strings.HasPrefix(rel, PlatformCellsDir+"/") &&
 				strings.Count(rel, "/") == sliceDepthSlashCount &&
 				filepath.Base(rel) == "slice.yaml"
 		}),
@@ -262,7 +262,7 @@ func l2ResolveSliceInfos(t *testing.T, root string, units []l2Unit) map[string]l
 		if u.kind != l2UnitSlice {
 			continue
 		}
-		importPath := modPath + "/cells/" + u.cellID + "/slices/" + u.sliceDir
+		importPath := modPath + "/" + PlatformCellsDir + "/" + u.cellID + "/slices/" + u.sliceDir
 		wantMap[importPath] = l2SliceKey(u.cellID, u.sliceDir)
 	}
 

@@ -40,9 +40,9 @@ import (
 //   - The criterion is "newly-onboarded user can successfully sign in",
 //     proven at the session-row persistence seam; the full user-create →
 //     role-assign → login chain has independent in-package and l2atomicity
-//     coverage (cells/accesscore/slices/identitymanage/* tests +
+//     coverage (corecells/accesscore/slices/identitymanage/* tests +
 //     tests/integration/l2atomicity/login_refresh_e2e_test.go).
-//   - cells/accesscore/internal/... is unreachable from tests/integration/
+//   - corecells/accesscore/internal/... is unreachable from tests/integration/
 //     by Go's internal-package rule, so wiring identitymanage.NewService
 //     from here is not possible Docker-free (it needs *credentialinvalidate.
 //     Invalidator which lives under internal/). The full programmatic proof

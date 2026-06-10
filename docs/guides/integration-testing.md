@@ -30,8 +30,13 @@ GOCELL_TEST_DOCKER_REQUIRED=1 go test -tags=integration,e2e \
   ./tests/e2e/internal/... \
   ./cmd/corebundle/... \
   ./examples/ssobff/... \
-  ./cells/accesscore/slices/identitymanage/... \
   ./runtime/bootstrap/... \
+  -count=1 -timeout 15m -v
+# corecells is its own go.work module (#1560); run from inside the module
+GOCELL_TEST_DOCKER_REQUIRED=1 go -C corecells test -tags=integration,e2e \
+  ./accesscore/... \
+  ./auditcore/... \
+  ./configcore/... \
   -count=1 -timeout 15m -v
 ```
 
@@ -143,9 +148,11 @@ verify cross-platform behaviour that cannot be exercised on Linux alone:
 ```
 go test -count=1 -timeout 5m \
   ./runtime/shutdown/... \
-  ./cells/accesscore/initialadmin/... \
   ./runtime/config/... \
   ./kernel/governance/...
+# corecells is its own go.work module (#1560); run from inside the module
+go -C corecells test -count=1 -timeout 5m \
+  ./accesscore/initialadmin/...
 ```
 
 **When it runs:** on every PR (`pr-check.yml`) and every push to `develop` (`ci.yml`), in
@@ -154,7 +161,7 @@ parallel with the Linux `build-test` job.
 **What it tests:**
 - `runtime/shutdown` — platform-specific signal set (`SIGINT`/`SIGTERM` on Unix, `os.Interrupt`
   on Windows).
-- `cells/accesscore/initialadmin` — per-OS credential file path resolution and DACL security
+- `corecells/accesscore/initialadmin` — per-OS credential file path resolution and DACL security
   descriptor (Windows).
 - `runtime/config` — symlink pivot detection; symlink tests are skipped on Windows via
   `t.Skip("symlink requires SeCreateSymbolicLinkPrivilege on Windows")` so the Windows runner

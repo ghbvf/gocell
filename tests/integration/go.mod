@@ -4,6 +4,7 @@ go 1.25.11
 
 require (
 	github.com/ghbvf/gocell v0.0.0
+	github.com/ghbvf/gocell/corecells v0.0.0-00010101000000-000000000000
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/rabbitmq/amqp091-go v1.11.0
@@ -83,3 +84,5 @@ require (
 )
 
 replace github.com/ghbvf/gocell => ../..
+
+replace github.com/ghbvf/gocell/corecells => ../../corecells

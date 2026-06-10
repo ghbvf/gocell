@@ -41,7 +41,7 @@ const (
 // refreshStorePkg and sessionStorePkg are declared in
 // credential_invalidate_funnel_invariants.go (same package).
 
-const refreshPortsPkg = PlatformModulePath + "/cells/accesscore/internal/ports"
+const refreshPortsPkg = PlatformModulePath + "/corecells/accesscore/internal/ports"
 
 // ─── detection data ────────────────────────────────────────────────────────────
 
@@ -86,7 +86,7 @@ var refreshGuardedMethods = map[refreshGuardedMethod]struct{}{
 // calls it directly — single source.
 func CheckRefreshCrossStoreTX01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
-	patterns := []string{"./cells/accesscore/slices/sessionrefresh/..."}
+	patterns := []string{"./corecells/accesscore/slices/sessionrefresh/..."}
 	diags := Run(t, Typed(TypedOpts{Tests: false}, patterns), scanRefreshCrossStoreTX)
 	// Mirror runErrcodeTypedScan / runFunnelDualScan: scan files behind the
 	// consumer's build tags too so a (*Service).Refresh hidden by a //go:build

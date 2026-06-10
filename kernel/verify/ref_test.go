@@ -22,7 +22,10 @@ func TestResolveRef(t *testing.T) {
 		{
 			name: "smoke ref",
 			ref:  "smoke.accesscore.startup",
-			want: resolvedRef{Kind: "smoke", Pkg: "./cells/accesscore/...", RunPattern: "Startup"},
+			// Pkg is empty: Runner.VerifyCell derives the package path from the
+			// cell's metadata File (e.g. corecells/accesscore/cell.yaml →
+			// ./corecells/accesscore/...) rather than from a hardcoded prefix.
+			want: resolvedRef{Kind: "smoke", Pkg: "", RunPattern: "Startup"},
 		},
 		{
 			name: "unit ref",

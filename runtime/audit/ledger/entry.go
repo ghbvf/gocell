@@ -4,7 +4,7 @@ import "time"
 
 // Entry is the canonical audit ledger record persisted by Store implementations.
 // Field layout is fixed by ADR-AuditLedger D1 (hash chain) and the equivalence
-// requirement with cells/auditcore/internal/domain/audit_entry.go.
+// requirement with corecells/auditcore/internal/domain/audit_entry.go.
 //
 // SeqNo is added by the store on Append — callers constructing Entry for Append
 // leave SeqNo as 0; the store fills it in and returns the updated Entry via

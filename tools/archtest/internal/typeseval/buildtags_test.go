@@ -237,9 +237,9 @@ func TestRepoSkipTagAllowlist_PathScoped(t *testing.T) {
 		{
 			name:          "archtest_fixture partially out of scope flags only the offender",
 			tag:           "archtest_fixture",
-			paths:         []string{"tools/archtest/fixture.go", "cells/accesscore/x.go"},
+			paths:         []string{"tools/archtest/fixture.go", "corecells/accesscore/x.go"},
 			wantAllowed:   true,
-			wantOffending: []string{"cells/accesscore/x.go"},
+			wantOffending: []string{"corecells/accesscore/x.go"},
 		},
 		{
 			name:        "catalog_gen within cmd/corebundle is exempt",
@@ -250,9 +250,9 @@ func TestRepoSkipTagAllowlist_PathScoped(t *testing.T) {
 		{
 			name:          "catalog_gen elsewhere is flagged",
 			tag:           "catalog_gen",
-			paths:         []string{"cells/configcore/x.go"},
+			paths:         []string{"corecells/configcore/x.go"},
 			wantAllowed:   true,
-			wantOffending: []string{"cells/configcore/x.go"},
+			wantOffending: []string{"corecells/configcore/x.go"},
 		},
 		{
 			name:          "never is flagged wherever it appears",

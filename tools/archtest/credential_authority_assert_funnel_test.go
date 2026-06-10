@@ -105,13 +105,13 @@ package archtest
 //      we must extend the upstream prong to interface origin lookup.
 //
 // RED fixtures (must self-fire ≥ 1 violation in each per-detector bucket):
-//   - cells/accesscore/internal/credentialauthority/testdata/outside_caller_red:
+//   - corecells/accesscore/internal/credentialauthority/testdata/outside_caller_red:
 //     non-allowlisted caller invokes credentialauthority.Assert.
-//   - cells/accesscore/internal/credentialauthority/testdata/direct_canauth_skip_red:
+//   - corecells/accesscore/internal/credentialauthority/testdata/direct_canauth_skip_red:
 //     slice file reads user.CanAuthenticate() AND user.PasswordVersion
 //     directly without routing through Assert (must produce ≥ 1 violation
 //     per detector category, not just ≥ 1 aggregate).
-//   - cells/accesscore/internal/credentialauthority/testdata/value_capture_red:
+//   - corecells/accesscore/internal/credentialauthority/testdata/value_capture_red:
 //     three forms of function-value capture (AssignStmt / ValueSpec /
 //     CallExpr-arg) that bypass the direct-CallExpr scan.
 
@@ -153,7 +153,7 @@ func TestCredentialAuthorityAssertFunnel_DownstreamCaller_01(t *testing.T) {
 
 	var violations []Diagnostic
 	_ = Run(t, Typed(TypedOpts{}, []string{
-		"./cells/...",
+		"./corecells/...",
 		"./cmd/...",
 	}),
 		func(p *Pass) []Diagnostic {
@@ -186,7 +186,7 @@ func TestCredentialAuthorityAssertFunnel_DownstreamCaller_01(t *testing.T) {
 
 	verifyAssertCallerRedFixtureDetected(
 		t,
-		"./cells/accesscore/internal/credentialauthority/testdata/outside_caller_red",
+		"./corecells/accesscore/internal/credentialauthority/testdata/outside_caller_red",
 		"CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 downstream RED fixture",
 	)
 }
@@ -228,9 +228,9 @@ func TestCredentialAuthorityAssertFunnel_UpstreamMandatory_02(t *testing.T) {
 
 	var violations []Diagnostic
 	_ = Run(t, Typed(TypedOpts{}, []string{
-		"./cells/accesscore/slices/sessionlogin/...",
-		"./cells/accesscore/slices/sessionrefresh/...",
-		"./cells/accesscore/slices/sessionvalidate/...",
+		"./corecells/accesscore/slices/sessionlogin/...",
+		"./corecells/accesscore/slices/sessionrefresh/...",
+		"./corecells/accesscore/slices/sessionvalidate/...",
 	}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
@@ -268,7 +268,7 @@ func TestCredentialAuthorityAssertFunnel_UpstreamMandatory_02(t *testing.T) {
 
 	verifyDirectReadRedFixtureDetectedPerBucket(
 		t,
-		"./cells/accesscore/internal/credentialauthority/testdata/direct_canauth_skip_red",
+		"./corecells/accesscore/internal/credentialauthority/testdata/direct_canauth_skip_red",
 		"CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 upstream RED fixture",
 	)
 }
@@ -322,7 +322,7 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_MethodValueAssignment(t *test
 
 	var violations []string
 	_ = Run(t, Typed(TypedOpts{}, []string{
-		"./cells/accesscore/...",
+		"./corecells/accesscore/...",
 		"./cmd/...",
 	}),
 		func(p *Pass) []Diagnostic {
@@ -369,7 +369,7 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_ReflectMethodByName(t *testin
 
 	var violations []string
 	_ = Run(t, Typed(TypedOpts{}, []string{
-		"./cells/accesscore/...",
+		"./corecells/accesscore/...",
 		"./cmd/...",
 	}),
 		func(p *Pass) []Diagnostic {
@@ -412,7 +412,7 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_ReflectFieldByName(t *testing
 
 	var violations []string
 	_ = Run(t, Typed(TypedOpts{}, []string{
-		"./cells/accesscore/...",
+		"./corecells/accesscore/...",
 		"./cmd/...",
 	}),
 		func(p *Pass) []Diagnostic {
@@ -447,7 +447,7 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_ReflectFieldByName(t *testing
 
 // TestCredentialAuthorityAssertFunnel_BlindSpot_UnsafePointerRead asserts
 // that no slice file imports "unsafe", which would let unsafe.Pointer offset
-// reads bypass field visibility entirely. Scoped to cells/accesscore/... and
+// reads bypass field visibility entirely. Scoped to corecells/accesscore/... and
 // cmd/... — adapters/postgres legitimately uses unsafe for pgx and is out of
 // scope here.
 func TestCredentialAuthorityAssertFunnel_BlindSpot_UnsafePointerRead(t *testing.T) {
@@ -455,7 +455,7 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_UnsafePointerRead(t *testing.
 
 	var violations []string
 	_ = Run(t, Typed(TypedOpts{}, []string{
-		"./cells/accesscore/...",
+		"./corecells/accesscore/...",
 		"./cmd/...",
 	}),
 		func(p *Pass) []Diagnostic {
@@ -491,7 +491,7 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_UnsafePointerRead(t *testing.
 		t.Log(v)
 	}
 	assert.Empty(t, violations,
-		"credentialauthority blind-spot: unsafe import found in cells/accesscore "+
+		"credentialauthority blind-spot: unsafe import found in corecells/accesscore "+
 			"or cmd/ — verify no unsafe.Pointer reads target funnel-protected fields.")
 }
 
@@ -522,7 +522,7 @@ func TestCredentialAuthorityAssertFunnel_UpstreamSealed_03(t *testing.T) {
 
 	var violations []string
 	_ = Run(t, Typed(TypedOpts{}, []string{
-		"./cells/accesscore/internal/credentialauthority/...",
+		"./corecells/accesscore/internal/credentialauthority/...",
 	}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
@@ -625,7 +625,7 @@ func TestCredentialAuthorityAssertFunnel_UpstreamCalleeReference_04(t *testing.T
 
 	var violations []Diagnostic
 	_ = Run(t, Typed(TypedOpts{}, []string{
-		"./cells/...",
+		"./corecells/...",
 		"./cmd/...",
 		"./runtime/...",
 	}),
@@ -662,7 +662,7 @@ func TestCredentialAuthorityAssertFunnel_UpstreamCalleeReference_04(t *testing.T
 
 	verifyFunnelCalleeReferenceRedFixtureDetected(
 		t,
-		"./cells/accesscore/internal/credentialauthority/testdata/value_capture_red",
+		"./corecells/accesscore/internal/credentialauthority/testdata/value_capture_red",
 		"CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 callee-reference RED fixture",
 	)
 }

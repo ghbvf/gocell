@@ -174,7 +174,7 @@ func TestSubscribeMarkerRetired01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 	scope := scanner.DirsScope(
-		root, []string{"cells", "examples"},
+		root, platformAndExampleCellScanDirs(),
 		scanner.MatchRels(func(rel string) bool {
 			return filepath.Base(rel) == "cell.go"
 		}),

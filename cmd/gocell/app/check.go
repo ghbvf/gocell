@@ -346,9 +346,9 @@ func sliceCoverageForCell(root string, project *metadata.ProjectMeta, cid string
 // messages; cell must be non-nil.
 func sliceDirCheck(root, cid string, cell *metadata.CellMeta) []governance.ValidationResult {
 	// Derive the slices directory from the cell's file path:
-	//   cell.File = "cells/accesscore/cell.yaml"
-	//   cellDir   = "cells/accesscore"
-	//   slicesDir = "<root>/cells/accesscore/slices"
+	//   cell.File = "corecells/accesscore/cell.yaml"
+	//   cellDir   = "corecells/accesscore"
+	//   slicesDir = "<root>/corecells/accesscore/slices"
 	// This works uniformly for conventional and Manifest layouts.
 	cellDir := filepath.Dir(filepath.FromSlash(cell.File))
 	slicesRelDir := filepath.ToSlash(filepath.Join(cellDir, "slices"))
@@ -396,7 +396,7 @@ func sliceMetaCheck(project *metadata.ProjectMeta, cid string) []governance.Vali
 		return nil
 	}
 	// The canonical parent directory for this cell's slices is derived from the
-	// cell's own file path (e.g. "cells/accesscore/cell.yaml" → "cells/accesscore/slices").
+	// cell's own file path (e.g. "corecells/accesscore/cell.yaml" → "corecells/accesscore/slices").
 	// This handles both top-level cells and cells nested under examples/.
 	cellDir := filepath.Dir(cellMeta.File)
 	expectedSlicesParent := filepath.ToSlash(filepath.Join(cellDir, "slices"))
@@ -800,7 +800,7 @@ func cellDeclaresL0Dependencies(root string, cm *metadata.CellMeta) bool {
 // not from "cells/<cm.ID>", so cells under examples/**/cells/ are also resolved
 // correctly. This mirrors sliceMetaCheck which already uses cellMeta.File.
 func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []governance.ValidationResult, bool) {
-	const cellsImportPrefix = "github.com/ghbvf/gocell/cells/"
+	const cellsImportPrefix = "github.com/ghbvf/gocell/corecells/"
 	cellDir := filepath.Dir(filepath.FromSlash(cm.File))
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedImports,

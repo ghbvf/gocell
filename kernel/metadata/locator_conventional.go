@@ -5,8 +5,14 @@
 //     kernel/metadata/** outside locator_manifest.go must reside here, inside
 //     Locator.discoverConventional.
 //   - A2 (form-uniqueness on path-prefix comparison): hardcoded path tokens
-//     {cells, contracts, journeys, assemblies, examples} appear only inside
-//     this file (and locator_manifest.go for default include patterns).
+//     {cells, corecells, contracts, journeys, assemblies, examples} appear only
+//     inside this file (and locator_manifest.go for default include patterns).
+//
+// "cells" vs "corecells": "cells" is the framework-general project-local cell
+// convention (consumer repos + GoCell's own examples/<id>/cells/). "corecells" is
+// GoCell's OWN platform-cell module (#1560 go.work P5), whose cells sit DIRECTLY
+// under the module root (corecells/<id>/cell.yaml). It is a sibling matcher here,
+// like examples/<id>/cells/ — the general "cells" convention is unchanged.
 //
 // The 5 path-pattern matchers were extracted verbatim from the original
 // kernel/metadata/parser.go (matchCellYAML / matchSliceYAML / matchContractYAML
@@ -61,8 +67,8 @@ func (l *Locator) discoverConventional() ([]MetadataSource, error) {
 // returns the zero value and false otherwise.
 //
 // LOCATOR-DISCOVERY-FUNNEL-01 A2 allowlist: the path-token literals
-// {cells, contracts, journeys, assemblies, examples} appear only inside
-// the match*Path helpers below and inside this function's singleton checks.
+// {cells, corecells, contracts, journeys, assemblies, examples} appear only
+// inside the match*Path helpers below and inside this function's singleton checks.
 func classifyConventionalPath(path string) (MetadataSource, bool) {
 	if cellID, ok := matchCellPath(path); ok {
 		return MetadataSource{Path: path, Kind: SourceCell, CellID: cellID}, true
@@ -88,11 +94,15 @@ func classifyConventionalPath(path string) (MetadataSource, bool) {
 	return MetadataSource{}, false
 }
 
-// matchCellPath matches cells/*/cell.yaml and examples/*/cells/*/cell.yaml.
-// Returns the cell directory name (== conventional cell ID) when matched.
+// matchCellPath matches cells/*/cell.yaml, corecells/*/cell.yaml, and
+// examples/*/cells/*/cell.yaml. Returns the cell directory name (== conventional
+// cell ID) when matched.
 func matchCellPath(path string) (string, bool) {
 	parts := splitConventionalPath(path)
 	if len(parts) == 3 && parts[0] == "cells" && parts[2] == "cell.yaml" {
+		return parts[1], true
+	}
+	if len(parts) == 3 && parts[0] == "corecells" && parts[2] == "cell.yaml" {
 		return parts[1], true
 	}
 	if len(parts) == 5 && parts[0] == "examples" && parts[2] == "cells" && parts[4] == "cell.yaml" {
@@ -109,6 +119,9 @@ func matchCellPath(path string) (string, bool) {
 func matchSlicePath(path string) (cellDir string, ok bool) {
 	parts := splitConventionalPath(path)
 	if len(parts) == 5 && parts[0] == "cells" && parts[2] == "slices" && parts[4] == "slice.yaml" {
+		return parts[1], true
+	}
+	if len(parts) == 5 && parts[0] == "corecells" && parts[2] == "slices" && parts[4] == "slice.yaml" {
 		return parts[1], true
 	}
 	if len(parts) == 7 && parts[0] == "examples" && parts[2] == "cells" && parts[4] == "slices" && parts[6] == "slice.yaml" {

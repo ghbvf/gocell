@@ -105,9 +105,10 @@ func CheckServiceownedHandlerOwnerCheck01(t *testing.T, _ ConfigForExternalCell)
 
 	for contractID, servingSlices := range serviceOwnedContracts {
 		for _, sl := range servingSlices {
-			rel := filepath.ToSlash(
-				filepath.Join("cells", sl.CellDir, "slices", sl.Dir, "service.go"),
-			)
+			// Derive service.go as a sibling of the slice's own slice.yaml, so the
+			// path is correct for the corecells platform module (corecells/<cell>/
+			// slices/<slice>/) and example cells alike — never a hardcoded cells/ root.
+			rel := path.Dir(filepath.ToSlash(sl.File)) + "/service.go"
 			absPath := filepath.Join(root, rel)
 			if _, statErr := os.Stat(absPath); os.IsNotExist(statErr) {
 				missingFileDiags = append(missingFileDiags, Diagnostic{
@@ -131,7 +132,7 @@ func CheckServiceownedHandlerOwnerCheck01(t *testing.T, _ ConfigForExternalCell)
 
 	seenRels := map[string]bool{}
 	scanDiags := Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
-		[]string{"./cells/...", "./runtime/auth/..."}),
+		[]string{"./corecells/...", "./runtime/auth/..."}),
 		func(pass *Pass) []Diagnostic {
 			return serviceOwnedScanPass(pass, targets, seenRels)
 		})
@@ -302,7 +303,7 @@ func checkServiceFileCalleeLock(pass *Pass, file *ast.File, rel, contractID stri
 				"handler-adapter-resolved entry set (%v). Service-layer "+
 				"ownership checks must go through the CheckOwner funnel "+
 				"(see runtime/auth/owner_guard.go). Canonical form: "+
-				"cells/accesscore/slices/sessionlogout/service.go "+
+				"corecells/accesscore/slices/sessionlogout/service.go "+
 				"(Service.Logout calls Service.revokeAndPublish which "+
 				"calls auth.CheckOwner) — dead code at file scope and "+
 				"unreachable helpers do not satisfy reachability. "+

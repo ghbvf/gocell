@@ -114,7 +114,7 @@ func TestContractYAML_NoCodegenTrueLiteral(t *testing.T) {
 	root := findModuleRoot(t)
 
 	scope := scanner.DirsScope(
-		root, []string{"contracts", "examples", "cells"},
+		root, []string{"contracts", "examples", PlatformCellsDir},
 		scanner.MatchRels(func(rel string) bool {
 			return filepath.Base(rel) == "contract.yaml"
 		}),

@@ -44,9 +44,9 @@ func TestLocator_AutoDetect(t *testing.T) {
 // are emitted for a conventional layout.
 func TestLocator_ConventionalDiscover(t *testing.T) {
 	fsys := fstest.MapFS{
-		"cells/accesscore/cell.yaml":                          &fstest.MapFile{Data: []byte("id: accesscore\n")},
-		"cells/accesscore/slices/login/slice.yaml":            &fstest.MapFile{Data: []byte("id: login\n")},
-		"cells/auditcore/cell.yaml":                           &fstest.MapFile{Data: []byte("id: auditcore\n")},
+		"corecells/accesscore/cell.yaml":                      &fstest.MapFile{Data: []byte("id: accesscore\n")},
+		"corecells/accesscore/slices/login/slice.yaml":        &fstest.MapFile{Data: []byte("id: login\n")},
+		"corecells/auditcore/cell.yaml":                       &fstest.MapFile{Data: []byte("id: auditcore\n")},
 		"contracts/http/auth/login/v1/contract.yaml":          &fstest.MapFile{Data: []byte("id: http.auth.login.v1\n")},
 		"contracts/event/session/created/v1/contract.yaml":    &fstest.MapFile{Data: []byte("id: event.session.created.v1\n")},
 		"journeys/J-ssologin.yaml":                            &fstest.MapFile{Data: []byte("id: J-ssologin\n")},
@@ -59,7 +59,7 @@ func TestLocator_ConventionalDiscover(t *testing.T) {
 		"examples/ssobff/journeys/J-flow.yaml":                &fstest.MapFile{Data: []byte("id: J-flow\n")},
 		"examples/ssobff/assembly.yaml":                       &fstest.MapFile{Data: []byte("id: ssobff\n")},
 		"README.md":                                           &fstest.MapFile{Data: []byte("ignored\n")},
-		"cells/accesscore/slices/login/handler.go":            &fstest.MapFile{Data: []byte("// ignored\n")},
+		"corecells/accesscore/slices/login/handler.go":        &fstest.MapFile{Data: []byte("// ignored\n")},
 	}
 	l, err := NewLocatorFS(fsys, WithLocatorMode(LocatorConventional))
 	if err != nil {
@@ -74,15 +74,15 @@ func TestLocator_ConventionalDiscover(t *testing.T) {
 		"actors:actors.yaml:",
 		"assembly:assemblies/platform/assembly.yaml:",
 		"assembly:examples/ssobff/assembly.yaml:",
-		"cell:cells/accesscore/cell.yaml:accesscore",
-		"cell:cells/auditcore/cell.yaml:auditcore",
+		"cell:corecells/accesscore/cell.yaml:accesscore",
+		"cell:corecells/auditcore/cell.yaml:auditcore",
 		"cell:examples/ssobff/cells/foo/cell.yaml:foo",
 		"contract:contracts/event/session/created/v1/contract.yaml:",
 		"contract:contracts/http/auth/login/v1/contract.yaml:",
 		"contract:examples/ssobff/contracts/http/x/y/v1/contract.yaml:",
 		"journey:examples/ssobff/journeys/J-flow.yaml:",
 		"journey:journeys/J-ssologin.yaml:",
-		"slice:cells/accesscore/slices/login/slice.yaml:accesscore",
+		"slice:corecells/accesscore/slices/login/slice.yaml:accesscore",
 		"slice:examples/ssobff/cells/foo/slices/bar/slice.yaml:foo",
 		"status-board:journeys/status-board.yaml:",
 	}

@@ -74,10 +74,10 @@ func TestImplDeclCover(t *testing.T) {
 func TestImplDeclCover_DetectsMissingImport(t *testing.T) {
 	t.Parallel()
 	const modPath = PlatformModulePath
-	cellsPrefix := modPath + "/cells/"
+	cellsPrefix := modPath + "/" + PlatformCellsDir + "/"
 
 	// 1. String-utility path.
-	impPath := modPath + "/cells/auditcore/internal/domain"
+	impPath := modPath + "/corecells/auditcore/internal/domain"
 	cell := extractCellNameFromImport(cellsPrefix, impPath)
 	if cell != "auditcore" {
 		t.Fatalf("extractCellNameFromImport: want auditcore, got %q", cell)

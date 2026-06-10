@@ -199,7 +199,7 @@ func TestDomainAuthzFieldPrivate_01(t *testing.T) {
 // Any new function in an already-allowed file is NOT silently permitted; the
 // reviewer must explicitly add a callsite entry.
 //
-// RED fixture: cells/accesscore/internal/domain/testdata/rbacassign_direct_setstatus_red
+// RED fixture: corecells/accesscore/internal/domain/testdata/rbacassign_direct_setstatus_red
 // simulates an rbacassign caller invoking SetStatus directly — must detect ≥ 1.
 func TestAuthzMutationApplyFunnel_SetStatus_01(t *testing.T) {
 	t.Parallel()
@@ -207,12 +207,12 @@ func TestAuthzMutationApplyFunnel_SetStatus_01(t *testing.T) {
 		CheckAuthzMutationApplyFunnel01(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 
 	// RED fixture: rbacassign caller directly invoking SetStatus.
-	// LOCATION: cells/accesscore/internal/domain/testdata/ because domain is an
-	// internal package; the fixture must live under cells/accesscore/ to satisfy
+	// LOCATION: corecells/accesscore/internal/domain/testdata/ because domain is an
+	// internal package; the fixture must live under corecells/accesscore/ to satisfy
 	// Go's internal-import rule, and testdata/ keeps it out of go build ./...
 	verifySetMutatorRedFixtureDetected(
 		t,
-		"./cells/accesscore/internal/domain/testdata/rbacassign_direct_setstatus_red",
+		"./corecells/accesscore/internal/domain/testdata/rbacassign_direct_setstatus_red",
 		domainSetStatusMethod,
 		"AUTHZ-MUTATION-APPLY-FUNNEL-01 Rule (a) RED fixture",
 	)
@@ -236,7 +236,7 @@ func TestAuthzMutationApplyFunnel_AllowlistEntriesAreLive(t *testing.T) {
 
 	hits := map[string]int{}
 	_ = Run(t, Typed(TypedOpts{}, []string{
-		"./cells/accesscore/...",
+		"./corecells/accesscore/...",
 		"./cmd/...",
 	}),
 		func(p *Pass) []Diagnostic {
@@ -286,7 +286,7 @@ func TestDomainAuthzMutation_ValueCapture_Detected(t *testing.T) {
 
 	var found []Diagnostic
 	_ = Run(t, Typed(TypedOpts{}, []string{
-		"./cells/accesscore/internal/domain/testdata/value_capture_setstatus_red",
+		"./corecells/accesscore/internal/domain/testdata/value_capture_setstatus_red",
 	}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
@@ -336,7 +336,7 @@ func TestDomainAuthzMutation_BlindSpot_ReflectMethodByName(t *testing.T) {
 
 	var violations []string
 	_ = Run(t, Typed(TypedOpts{}, []string{
-		"./cells/accesscore/...", "./cmd/...",
+		"./corecells/accesscore/...", "./cmd/...",
 	}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
@@ -377,14 +377,14 @@ func TestDomainAuthzMutation_BlindSpot_ReflectMethodByName(t *testing.T) {
 //
 // Scanner: AST-only search for import of "unsafe" outside the allowlist.
 // The unsafe package is legitimately used in adapters/postgres for pgx scanning;
-// this check is scoped to cells/accesscore/... and cmd/... and specifically
+// this check is scoped to corecells/accesscore/... and cmd/... and specifically
 // flags packages that import "unsafe" outside the allowlist.
 func TestDomainAuthzMutation_BlindSpot_UnsafePointerWrite(t *testing.T) {
 	t.Parallel()
 
 	var violations []string
 	_ = Run(t, Typed(TypedOpts{}, []string{
-		"./cells/accesscore/...", "./cmd/...",
+		"./corecells/accesscore/...", "./cmd/...",
 	}),
 		func(p *Pass) []Diagnostic {
 			if p.Fset == nil {
@@ -419,7 +419,7 @@ func TestDomainAuthzMutation_BlindSpot_UnsafePointerWrite(t *testing.T) {
 		t.Log(v)
 	}
 	assert.Empty(t, violations,
-		"authz-mutation blind-spot: unsafe import found in cells/accesscore or cmd/ — "+
+		"authz-mutation blind-spot: unsafe import found in corecells/accesscore or cmd/ — "+
 			"verify no unsafe.Pointer writes target domain.User private fields.")
 }
 
@@ -442,7 +442,7 @@ func TestDomainAuthzMutation_BlindSpot_ReflectFieldByName(t *testing.T) {
 
 	var violations []string
 	_ = Run(t, Typed(TypedOpts{}, []string{
-		"./cells/accesscore/...", "./cmd/...",
+		"./corecells/accesscore/...", "./cmd/...",
 	}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
@@ -489,7 +489,7 @@ func TestDomainAuthzMutation_BlindSpot_VarInitCall(t *testing.T) {
 
 	var found []Diagnostic
 	_ = Run(t, Typed(TypedOpts{}, []string{
-		"./cells/accesscore/internal/domain/testdata/var_init_setstatus_red",
+		"./corecells/accesscore/internal/domain/testdata/var_init_setstatus_red",
 	}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {

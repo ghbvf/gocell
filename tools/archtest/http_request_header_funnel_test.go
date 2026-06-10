@@ -230,7 +230,7 @@ func TestHTTPRequestHeaderReadFunnel01(t *testing.T) {
 		var d []Diagnostic
 		for _, file := range p.Files {
 			rel := p.Rel(file)
-			if !strings.HasPrefix(rel, "cells/") && !strings.HasPrefix(rel, "examples/") {
+			if !strings.HasPrefix(rel, PlatformCellsDir+"/") && !strings.HasPrefix(rel, "examples/") {
 				continue
 			}
 			pos := func(n ast.Node) (int, int) {

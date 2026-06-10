@@ -44,7 +44,7 @@ var _ = %s
 
 // accesscoreGolden is the gofumpt-aligned literal for the accesscore cell.
 // It must match the `&metadata.CellMeta{...}` block in
-// cells/accesscore/cell_gen.go after normalization via fmtLiteral.
+// corecells/accesscore/cell_gen.go after normalization via fmtLiteral.
 //
 // NOTE: this string is compared through fmtLiteral (see TestRenderCellMetaLiteral_AccesscoreGreenBaseline),
 // so alignment here only needs to be valid Go, not exactly gofumpt-canonical.

@@ -131,7 +131,7 @@ func keystestRuleFor(rel, dir string, isTest bool, keystestPkgDir string) (sub, 
 	switch {
 	case strings.HasPrefix(rel, "kernel/"):
 		return "AUTH-KEYSTEST-A", "kernel must not depend on runtime/", true
-	case strings.HasPrefix(rel, "cells/"):
+	case strings.HasPrefix(rel, PlatformCellsDir+"/"):
 		if isTest {
 			return "", "", false
 		}

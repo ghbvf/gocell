@@ -287,7 +287,7 @@ func formatBannedSymbolDeclDiag(authImportPath, name string) string {
 // main invariant test and the BS-1 reverse self-check.
 var productionScanPatterns = []string{
 	"./runtime/...",
-	"./cells/...",
+	"./corecells/...",
 	"./cmd/...",
 	"./kernel/...",
 	"./adapters/...",

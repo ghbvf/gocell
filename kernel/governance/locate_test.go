@@ -20,18 +20,18 @@ func TestValidator_NewWarning(t *testing.T) {
 	pm := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{},
 	}
-	prepareNode(t, pm, "cells/accesscore/cell.yaml", src)
+	prepareNode(t, pm, "corecells/accesscore/cell.yaml", src)
 	v := NewValidator(pm, "", clock.Real())
 
 	r := v.newWarning(codeREF01, IssueRefNotFound,
-		"cells/accesscore/cell.yaml", "id",
+		"corecells/accesscore/cell.yaml", "id",
 		"advisory: cell id unreferenced by any journey",
 		"reference the cell from a journey or remove it if unused")
 
 	assert.Equal(t, codeREF01, r.Code)
 	assert.Equal(t, SeverityWarning, r.Severity)
 	assert.Equal(t, IssueRefNotFound, r.IssueType)
-	assert.Equal(t, "cells/accesscore/cell.yaml", r.File)
+	assert.Equal(t, "corecells/accesscore/cell.yaml", r.File)
 	assert.Equal(t, "id", r.Field)
 	assert.Equal(t, "advisory: cell id unreferenced by any journey", r.Message)
 	assert.Equal(t, "reference the cell from a journey or remove it if unused", r.Fix)
@@ -106,14 +106,14 @@ func TestValidator_Locate_KnownField(t *testing.T) {
 	pm := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{},
 	}
-	prepareNode(t, pm, "cells/accesscore/cell.yaml", src)
+	prepareNode(t, pm, "corecells/accesscore/cell.yaml", src)
 	v := NewValidator(pm, "", clock.Real())
 
-	line, col := v.locate("cells/accesscore/cell.yaml", "id")
+	line, col := v.locate("corecells/accesscore/cell.yaml", "id")
 	assert.Equal(t, 1, line, "id line")
 	assert.Positive(t, col, "id column")
 
-	line, col = v.locate("cells/accesscore/cell.yaml", "owner.team")
+	line, col = v.locate("corecells/accesscore/cell.yaml", "owner.team")
 	assert.Equal(t, 4, line, "owner.team line")
 	assert.Positive(t, col, "owner.team column")
 }

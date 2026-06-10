@@ -77,19 +77,19 @@ const (
 	// role_assignments table from integration tests that exercise the
 	// DB-level last-admin trigger. The ambient-tx-aware repo path is
 	// intentionally bypassed so the test drives the trigger directly. See
-	// cells/accesscore/internal/adapters/postgres/role_repo_integration_test.go.
+	// corecells/accesscore/internal/adapters/postgres/role_repo_integration_test.go.
 	IntegrationTestDeleteRoleAssignment ApprovalReason = "integration-test-delete-role-assignment"
 
 	// IntegrationTestLockUser authorizes raw UPDATE users SET status='locked'
 	// from integration tests that exercise the effective_admin BEFORE UPDATE
 	// trigger and related cascade paths. See
-	// cells/accesscore/internal/adapters/postgres/role_repo_integration_test.go.
+	// corecells/accesscore/internal/adapters/postgres/role_repo_integration_test.go.
 	IntegrationTestLockUser ApprovalReason = "integration-test-lock-user"
 
 	// IntegrationTestDeleteUser authorizes raw DELETE from the users table
 	// from integration tests that need to remove fixture rows outside the
 	// repo's normal flow. See
-	// cells/accesscore/internal/adapters/postgres/role_repo_integration_test.go.
+	// corecells/accesscore/internal/adapters/postgres/role_repo_integration_test.go.
 	IntegrationTestDeleteUser ApprovalReason = "integration-test-delete-user"
 )
 

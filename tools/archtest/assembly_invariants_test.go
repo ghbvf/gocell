@@ -93,10 +93,10 @@ func loadKnownCellIDs(t *testing.T) []string {
 	// cells/<id>/sub/cell.yaml), letting future test scaffolding silently
 	// inflate the cell ID set.
 	scope := DirsScope(
-		root, []string{"cells"},
+		root, platformCellScanDirs(),
 		MatchRels(func(rel string) bool {
 			rel = filepath.ToSlash(rel)
-			return strings.HasPrefix(rel, "cells/") &&
+			return strings.HasPrefix(rel, PlatformCellsDir+"/") &&
 				strings.Count(rel, "/") == depth2SlashCount &&
 				filepath.Base(rel) == "cell.yaml"
 		}),

@@ -88,7 +88,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/tools/internal/prodscan"
 	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
@@ -109,7 +108,7 @@ const (
 // readyzProbeScopePrefixes are the module-relative package-path prefixes whose
 // RepoProber implementations are enrollable in RunRepoReadinessConformance.
 // kernel/ is deliberately absent (CELLTEST-B forbids the celltest import).
-var readyzProbeScopePrefixes = []string{"cells/", "adapters/", "runtime/", "examples/"}
+var readyzProbeScopePrefixes = []string{PlatformCellsDir + "/", "adapters/", "runtime/", "examples/"}
 
 // TestCellRepoReadyzProbe enforces CELL-REPO-READYZ-PROBE-01: every concrete
 // type implementing kernel/healthz.RepoProber in the enrollable production tree
@@ -130,12 +129,11 @@ func TestCellRepoReadyzProbe(t *testing.T) {
 	// invocation so types.Implements uses pointer-identical *types.Named
 	// descriptors. prodscan.Patterns includes kernel/, so the healthz package is
 	// loaded and the iface is captured here.
-	prodPatterns := prodscan.Patterns(root)
 
 	var repoProberIface *types.Interface
 	var implPkgs []*types.Package
 
-	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns),
+	_ = Run(t, Production(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -183,7 +181,7 @@ func TestCellRepoReadyzProbe(t *testing.T) {
 	// of the N — enrolling one does not cover its same-package siblings.
 	enrolledImpls := make(map[string]bool) // "pkg/path.TypeName" → true
 
-	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, prodPatterns),
+	_ = Run(t, Production(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil

@@ -78,7 +78,7 @@ import (
 func TestLoadModeNoDeps_NonVacuity_CellForbiddenIfaces(t *testing.T) {
 	resolved := map[string]bool{}
 	var cellPasses int
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./cells/...", "./examples/..."}), func(p *Pass) []Diagnostic {
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./corecells/...", "./examples/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || !isCellSubtreePkgPath(p.Pkg.Path()) {
 			return nil
 		}
@@ -101,7 +101,7 @@ func TestLoadModeNoDeps_NonVacuity_CellForbiddenIfaces(t *testing.T) {
 // segment — both platform cells/<id>/… and example examples/<demo>/cells/<id>/… —
 // matching the rule's cell-subtree scan scope.
 func isCellSubtreePkgPath(pkgPath string) bool {
-	return strings.Contains(pkgPath, "/cells/")
+	return strings.Contains(pkgPath, "/"+PlatformCellsDir+"/") || strings.Contains(pkgPath, "/cells/")
 }
 
 // TestLoadModeNoDeps_NonVacuity_SagaStepFunc asserts resolveSagaStepFuncType still

@@ -38,7 +38,7 @@ permissions:
 
 jobs:
   # build-test is a matrix of 5 package shards run in parallel. Sharding splits
-  # GoCell's package layout (kernel/tools/runtime/cells/adapters+others) so each
+  # GoCell's package layout (kernel/tools/runtime/corecells/adapters+others) so each
   # shard's timing maps cleanly to an architectural boundary, making per-shard
   # cost easy to interpret. Static (tools/) and concurrency-sensitive
   # (kernel/runtime) shards account for the bulk of test time; isolating tools
@@ -72,8 +72,14 @@ jobs:
           - shard: runtime
             pkgs: ./runtime/... ./pkg/...
             static_checks: false
-          - shard: cells
-            pkgs: ./cells/...
+          # corecells is its own go.work module (github.com/ghbvf/gocell/corecells,
+          # #1560), so a root `./corecells/...` pattern stops at the nested-module
+          # boundary and matches zero packages. The Test step detects this shard by
+          # name and runs `go -C corecells test ./...` so ./... resolves inside the
+          # module. The go.work funnel (hack/lib/modules.sh) already includes corecells,
+          # so lint and workspace-level steps cover it automatically.
+          - shard: corecells
+            pkgs: ./...
             static_checks: false
           # `others` was a single 140s shard covering adapters + cmd +
           # examples + tests + contracts. Splitting along compile cost:
@@ -239,6 +245,7 @@ jobs:
         run: |
           set -o pipefail
           PKGS='${{ matrix.pkgs }}'
+          SHARD='${{ matrix.shard }}'
           if [ "$PKGS" = "_dynamic_archtest_excluded" ]; then
             # tools shard runtime discovery: every ./tools/<sub> package
             # except archtest (which runs in archtest-nightly.yml — see
@@ -247,14 +254,30 @@ jobs:
             # subpackage not covered" violation unrepresentable.
             PKGS=$(go list ./tools/... | grep -v '^github.com/ghbvf/gocell/tools/archtest$' | tr '\n' ' ')
           fi
-          go test \
-            -covermode=atomic \
-            -coverprofile=coverage-shard-${{ matrix.shard }}.out \
-            -json \
-            $PKGS \
-            -count=1 -timeout 5m \
-            | tee "$RUNNER_TEMP/test-${{ matrix.shard }}.json" \
-            | "$RUNNER_TEMP/slowgate" --threshold=20s --allowlist=tools/slowgate/allowlist.txt
+          if [ "$SHARD" = "corecells" ]; then
+            # corecells is its own go.work module (#1560); a root `./corecells/...`
+            # pattern stops at the nested-module boundary and matches zero packages.
+            # Run from inside the module with `go -C corecells` so ./... resolves
+            # correctly. The coverage profile is written to the repo root (via an
+            # absolute RUNNER_TEMP-based path) so the Upload step finds it there.
+            go -C corecells test \
+              -covermode=atomic \
+              -coverprofile="$PWD/coverage-shard-${SHARD}.out" \
+              -json \
+              $PKGS \
+              -count=1 -timeout 5m \
+              | tee "$RUNNER_TEMP/test-${SHARD}.json" \
+              | "$RUNNER_TEMP/slowgate" --threshold=20s --allowlist=tools/slowgate/allowlist.txt
+          else
+            go test \
+              -covermode=atomic \
+              -coverprofile=coverage-shard-${{ matrix.shard }}.out \
+              -json \
+              $PKGS \
+              -count=1 -timeout 5m \
+              | tee "$RUNNER_TEMP/test-${{ matrix.shard }}.json" \
+              | "$RUNNER_TEMP/slowgate" --threshold=20s --allowlist=tools/slowgate/allowlist.txt
+          fi
 
       # Upload the raw `go test -json` event stream only on Test step
       # failure. Restored as a P1 review fix: without it, a non-slowgate
@@ -448,7 +471,7 @@ jobs:
     # New integration test contributors: your package falls into a shard
     # automatically by import-path prefix — no yaml edit needed:
     #   adapters/...                          → adapters shard
-    #   cells/...                             → cells shard
+    #   corecells/...                         → corecells shard
     #   cmd/... or examples/...               → corebundle shard
     #   tests/... or kernel/... or runtime/.. → tests shard
     # archtest CI-INTEGRATION-DISCOVERY-01 still gates that every
@@ -475,8 +498,8 @@ jobs:
             run_main_integration: false
             run_adapters_extras: false
             run_adapters_race: true
-          - shard: cells
-            filter: '^github.com/ghbvf/gocell/cells/'
+          - shard: corecells
+            filter: '^github.com/ghbvf/gocell/corecells/'
             run_main_integration: true
             run_adapters_extras: false
             run_adapters_race: false
@@ -529,7 +552,7 @@ jobs:
           SHARD_FILTER: ${{ matrix.filter }}
         # Auto-discover packages by build tag rather than maintaining a
         # hardcoded list. Each prior addition to the explicit list (examples/
-        # ssobff, runtime/bootstrap, cells/accesscore/slices/identitymanage,
+        # ssobff, runtime/bootstrap, corecells/accesscore/slices/identitymanage,
         # tests/testutil) was a documented incident where new integration
         # tests silently never ran in CI because nobody updated this step.
         # archtest CI-INTEGRATION-DISCOVERY-01 prevents regression to a
@@ -1040,14 +1063,14 @@ jobs:
         run: |
           set -euo pipefail
           echo "mode: atomic" > coverage-merged.out
-          # build-test profiles: kernel, tools, runtime, cells, others-heavy,
+          # build-test profiles: kernel, tools, runtime, corecells, others-heavy,
           #   others-light (others-* replaces the single former `others`
           #   shard, see build-test matrix above).
-          # integration-test profiles: adapters (main leg), cells, corebundle,
+          # integration-test profiles: adapters (main leg), corecells, corebundle,
           #   tests. adapters-race has no profile (run_main_integration: false).
-          for f in coverage-shard-kernel.out coverage-shard-tools.out coverage-shard-runtime.out coverage-shard-cells.out \
+          for f in coverage-shard-kernel.out coverage-shard-tools.out coverage-shard-runtime.out coverage-shard-corecells.out \
                    coverage-shard-others-heavy.out coverage-shard-others-light.out \
-                   coverage-integration-adapters.out coverage-integration-cells.out coverage-integration-corebundle.out coverage-integration-tests.out; do
+                   coverage-integration-adapters.out coverage-integration-corecells.out coverage-integration-corebundle.out coverage-integration-tests.out; do
             if [ ! -f "$f" ]; then
               echo "FAIL: expected profile $f is missing" >&2
               exit 1

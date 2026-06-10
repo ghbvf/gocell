@@ -195,7 +195,7 @@ func TestArchtest_CIIntegrationDiscovery_DiscoversE2EPackages(t *testing.T) {
 // TestArchtest_CIIntegrationDiscovery_WorkflowUsesGoList asserts that the
 // integration-test job's main step uses `go list -tags=integration` for
 // package discovery and contains no deeper-than-root package globs (e.g.,
-// `./adapters/...`, `./cells/configcore/...`). The whole-module probe
+// `./adapters/...`, `./corecells/configcore/...`). The whole-module probe
 // `./...` (used inside the `go list` call itself) is allowed — it's the
 // deeper-segment globs that signal hardcoded-list regression.
 //
@@ -418,17 +418,15 @@ func TestArchtest_CIRaceLaneSubset_01(t *testing.T) {
 	step := readRaceIntegrationStep(t)
 	require.NotEmpty(t, step.Run, "race-pg-integration step run block missing")
 
-	pathGlobRE := regexp.MustCompile(`\./([a-z][a-zA-Z0-9_/-]*)/\.\.\.`)
-	matches := pathGlobRE.FindAllStringSubmatch(step.Run, -1)
-	require.NotEmpty(t, matches,
+	globs := raceLanePackageGlobs(step.Run)
+	require.NotEmpty(t, globs,
 		"race-pg-integration step must list at least one `./<path>/...` package glob; got run block:\n%s", step.Run)
 
 	root := findModuleRoot(t)
 	intPkgs, err := discoverPackagesUnderTag(root, "integration")
 	require.NoError(t, err)
 
-	for _, m := range matches {
-		glob := m[1] // e.g. "adapters/postgres"
+	for _, glob := range globs {
 		matched := false
 		for _, pkg := range intPkgs {
 			if pkg == glob || strings.HasPrefix(pkg, glob+"/") {
@@ -442,4 +440,34 @@ func TestArchtest_CIRaceLaneSubset_01(t *testing.T) {
 				"or a non-integration package was added to the race lane. "+
 				"See CI-RACE-LANE-SUBSET-01.", glob)
 	}
+}
+
+// raceLanePackageGlobs extracts the repo-root-relative package globs from a
+// race-lane run block, applying any `go -C <module>` working-directory prefix.
+// Nested go.work modules (corecells/examples, #1556/#1560) are tested via
+// `go -C <module> test ... ./<glob>/...` where the glob is module-relative, so
+// the effective repo-relative path is `<module>/<glob>` — matched against
+// [discoverPackagesUnderTag]'s repo-relative discovery set.
+func raceLanePackageGlobs(run string) []string {
+	pathGlobRE := regexp.MustCompile(`\./([a-z][a-zA-Z0-9_/-]*)/\.\.\.`)
+	// A `go [ -C <module> ]` invocation starts a command and sets the working-dir
+	// prefix; it carries across shell line-continuations to the glob arguments on
+	// following lines until the next `go ...` command resets it.
+	goCmdRE := regexp.MustCompile(`(^|\s)go\s+(?:-C\s+([a-zA-Z0-9_./-]+)\s+)?`)
+	var out []string
+	prefix := ""
+	for _, line := range strings.Split(run, "\n") {
+		line = strings.SplitN(line, "#", 2)[0] // drop shell comments (e.g. an example `./x/...` in a note)
+		if cm := goCmdRE.FindStringSubmatch(line); cm != nil {
+			if cm[2] != "" {
+				prefix = strings.TrimSuffix(filepath.ToSlash(cm[2]), "/") + "/"
+			} else {
+				prefix = ""
+			}
+		}
+		for _, m := range pathGlobRE.FindAllStringSubmatch(line, -1) {
+			out = append(out, prefix+m[1])
+		}
+	}
+	return out
 }

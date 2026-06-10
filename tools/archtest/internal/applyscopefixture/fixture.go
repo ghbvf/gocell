@@ -15,7 +15,7 @@
 //
 // The other leg of the funnel — scopedtx.ApplyScope (the accesscore mid-flight
 // helper) — cannot be exercised by a RED fixture here: it lives in
-// cells/accesscore/internal/scopedtx, an internal package that tools/archtest
+// corecells/accesscore/internal/scopedtx, an internal package that tools/archtest
 // cannot import. That internal-package visibility is itself the natural upstream
 // bound for that leg (no external package can call it).
 //

@@ -28,8 +28,8 @@ const rulePolicyRepoConformanceEnrollment01 = "POLICYREPO-CONFORMANCE-ENROLLMENT
 // ─── platform-symbol path constants (no bare literals) ────────────────────
 
 const (
-	policyRepoIfacePkg   = PlatformModulePath + "/cells/accesscore/internal/ports"
-	policyConformancePkg = PlatformModulePath + "/cells/accesscore/internal/ports/conformance"
+	policyRepoIfacePkg   = PlatformModulePath + "/corecells/accesscore/internal/ports"
+	policyConformancePkg = PlatformModulePath + "/corecells/accesscore/internal/ports/conformance"
 )
 
 // ─── symbol name constants ─────────────────────────────────────────────────
@@ -85,7 +85,7 @@ func hasPolicyConformanceCall(file *ast.File, info *types.Info) bool {
 func resolvePolicyRepoIfaceAndImpls(t *testing.T, tags []string, root string) (*types.Interface, []*types.Package) {
 	t.Helper()
 	prodPatterns := prodscan.Patterns(root)
-	ifacePatterns := append([]string{"./cells/accesscore/internal/ports/..."}, prodPatterns...)
+	ifacePatterns := append([]string{"./corecells/..."}, prodPatterns...)
 
 	var policyRepoIface *types.Interface
 	var implPkgs []*types.Package
@@ -130,7 +130,7 @@ func lookupPolicyRepoIface(pkg *types.Package) *types.Interface {
 func scanPolicyConformanceEnrollments(t *testing.T, tags []string, root string) map[string]bool {
 	t.Helper()
 	enrolledPkgs := make(map[string]bool)
-	testPatterns := prodscan.Patterns(root)
+	testPatterns := append([]string{"./corecells/..."}, prodscan.Patterns(root)...)
 	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: tags}, testPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {

@@ -14,7 +14,7 @@
 // in-package drift that the Go type system allows but which would break the seal.
 //
 // Two prongs (both go/types, NOT reflect — the producer DTO lives in
-// cells/accesscore/internal/dto, which tools/archtest cannot import):
+// corecells/accesscore/internal/dto, which tools/archtest cannot import):
 //
 //   - Prong A (pkg/redaction) — IPHash shape + sole-constructor freeze:
 //     IPHash must be a struct with exactly one field, named "v", of type string,
@@ -26,7 +26,7 @@
 //     unmarshal would launder a plaintext into a populated IPHash, defeating the
 //     seal; charter "sealed construction — 任意名 re-export 是闭环必查点").
 //
-//   - Prong B (cells/accesscore/internal/dto) — DTO field type freeze:
+//   - Prong B (corecells/accesscore/internal/dto) — DTO field type freeze:
 //     BootstrapAuthFailedEvent.ClientIPHash must be exactly redaction.IPHash.
 //     Reverting it to string (or any other type) re-opens plaintext assignment
 //     and fails CI.
@@ -75,7 +75,7 @@ import (
 // package); reused here for the IPHash freeze. accessDTOPkgPath is anchored to
 // PlatformModulePath (ARCHTEST-MODULE-PATH-FUNNEL-01: no bare module literals).
 const (
-	accessDTOPkgPath  = PlatformModulePath + "/cells/accesscore/internal/dto"
+	accessDTOPkgPath  = PlatformModulePath + "/corecells/accesscore/internal/dto"
 	ipHashTypeName    = "IPHash"
 	ipHashCtorName    = "HashIP"
 	bootstrapEventDTO = "BootstrapAuthFailedEvent"
@@ -112,7 +112,7 @@ func TestClientIPHashFunnel01(t *testing.T) {
 			"the sealed IPHash freeze (prong A) did not run; package path may have moved."})
 	}
 	if !visited["dto"] {
-		diags = append(diags, Diagnostic{Message: "CLIENT-IP-HASH-FUNNEL-01: cells/accesscore/internal/dto not " +
+		diags = append(diags, Diagnostic{Message: "CLIENT-IP-HASH-FUNNEL-01: corecells/accesscore/internal/dto not " +
 			"scanned — the DTO field-type freeze (prong B) did not run; package path may have moved."})
 	}
 
@@ -228,7 +228,7 @@ var forbiddenIPHashMethods = map[string]bool{
 func checkBootstrapDTOFieldType(p *Pass) []Diagnostic {
 	obj := p.Pkg.Scope().Lookup(bootstrapEventDTO)
 	if obj == nil {
-		return []Diagnostic{{Message: "CLIENT-IP-HASH-FUNNEL-01: cells/accesscore/internal/dto must declare " +
+		return []Diagnostic{{Message: "CLIENT-IP-HASH-FUNNEL-01: corecells/accesscore/internal/dto must declare " +
 			bootstrapEventDTO + " (the bootstrap-failed event payload)."}}
 	}
 	st, ok := obj.Type().Underlying().(*types.Struct)

@@ -25,8 +25,8 @@ import (
 // production code would smuggle test infrastructure into a release binary
 // and signals a layering mistake. Examples currently in tree:
 //
-//   - cells/accesscore/internal/testutil  (per-cell fixtures, t-bound)
-//   - cells/configcore/internal/testutil  (per-cell fixtures)
+//   - corecells/accesscore/internal/testutil  (per-cell fixtures, t-bound)
+//   - corecells/configcore/internal/testutil  (per-cell fixtures)
 //   - pkg/testutil/fileutil               (cross-cutting file I/O helpers, t-bound)
 //   - pkg/testutil/sloghelper             (cross-cutting log parsing helpers)
 //   - pkg/testutil/testtime               (cross-cutting timeout constants)
@@ -97,8 +97,8 @@ func TestLayerTestutil(t *testing.T) {
 //
 // Examples:
 //
-//	cells/accesscore/internal/testutil          → cells/accesscore/internal/testutil
-//	cells/accesscore/internal/testutil/sub      → cells/accesscore/internal/testutil
+//	corecells/accesscore/internal/testutil          → corecells/accesscore/internal/testutil
+//	corecells/accesscore/internal/testutil/sub      → corecells/accesscore/internal/testutil
 //	pkg/testutil/fileutil                       → pkg/testutil
 //	tests/testutil                              → tests/testutil
 //	runtime/foo                                 → "" (no testutil segment)

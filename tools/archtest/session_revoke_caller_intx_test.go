@@ -152,21 +152,21 @@ var sessionRevokeTxScopedHelpers = map[string]bool{
 // after-commit registry that CachingSessionStore.Revoke needs is installed by
 // every conformant RunInTx, including DemoTxRunner):
 //
-//   - cells/accesscore/slices/sessionlogout/service.go → revokeAndPublish:
+//   - corecells/accesscore/slices/sessionlogout/service.go → revokeAndPublish:
 //     s.sessionStore.Revoke(txCtx, sessionID) is called from revokeAndPublish,
 //     itself invoked from inside a persistRevoke → txRunner.RunInTx closure.
 //
-//   - cells/accesscore/slices/sessionlogin/service.go → mintAndPersistSession:
+//   - corecells/accesscore/slices/sessionlogin/service.go → mintAndPersistSession:
 //     called only from loginInTx, which runs inside Login's txRunner.RunInTx
 //     closure. txCtx flows from that RunInTx, so the after-commit registry is
 //     present. context.WithoutCancel preserves ctx values including the registry.
 //
-//   - cells/accesscore/slices/sessionlogin/service.go → persistSessionWithRefresh:
+//   - corecells/accesscore/slices/sessionlogin/service.go → persistSessionWithRefresh:
 //     opens its own txRunner.RunInTx(ctx, do); the Revoke in the compensation
 //     branch uses context.WithoutCancel(txCtx) where txCtx is the closure param,
 //     so the registry from that RunInTx is present.
 //
-//   - cells/accesscore/slices/sessionlogin/service.go → cleanupIssuedSession:
+//   - corecells/accesscore/slices/sessionlogin/service.go → cleanupIssuedSession:
 //     called only from mintAndPersistSession and persistSessionWithRefresh (both
 //     noop-tx branches). DemoTxRunner.RunInTx installs the registry even in demo
 //     mode, so the registry is present in the txCtx propagated to cleanupIssuedSession.
@@ -203,25 +203,25 @@ var sessionRevokeTxScopedHelpers = map[string]bool{
 //     executes inside a RunInTx scope.
 var sessionRevokeAllowlist = map[sessionRevokeCallsite]struct{}{
 	{
-		rel:     "cells/accesscore/slices/sessionlogout/service.go",
+		rel:     "corecells/accesscore/slices/sessionlogout/service.go",
 		fn:      "revokeAndPublish",
 		ordinal: 1,
 		ctx:     "txCtx",
 	}: {},
 	{
-		rel:     "cells/accesscore/slices/sessionlogin/service.go",
+		rel:     "corecells/accesscore/slices/sessionlogin/service.go",
 		fn:      "mintAndPersistSession",
 		ordinal: 1,
 		ctx:     "context.WithoutCancel(txCtx)",
 	}: {},
 	{
-		rel:     "cells/accesscore/slices/sessionlogin/service.go",
+		rel:     "corecells/accesscore/slices/sessionlogin/service.go",
 		fn:      "persistSessionWithRefresh",
 		ordinal: 1,
 		ctx:     "context.WithoutCancel(txCtx)",
 	}: {},
 	{
-		rel:     "cells/accesscore/slices/sessionlogin/service.go",
+		rel:     "corecells/accesscore/slices/sessionlogin/service.go",
 		fn:      "cleanupIssuedSession",
 		ordinal: 1,
 		ctx:     "cleanupCtx",
@@ -274,21 +274,21 @@ var sessionRevokeAllowlist = map[sessionRevokeCallsite]struct{}{
 // methods that contain Revoke callsites.
 var sessionRevokeHelperAllowlist = map[sessionRevokeHelperCallsite]struct{}{
 	{
-		rel:     "cells/accesscore/slices/sessionlogout/service.go",
+		rel:     "corecells/accesscore/slices/sessionlogout/service.go",
 		fn:      "Logout",
 		helper:  "revokeAndPublish",
 		ordinal: 1,
 		ctx:     "txCtx",
 	}: {},
 	{
-		rel:     "cells/accesscore/slices/sessionlogin/service.go",
+		rel:     "corecells/accesscore/slices/sessionlogin/service.go",
 		fn:      "mintAndPersistSession",
 		helper:  "cleanupIssuedSession",
 		ordinal: 1,
 		ctx:     "txCtx",
 	}: {},
 	{
-		rel:     "cells/accesscore/slices/sessionlogin/service.go",
+		rel:     "corecells/accesscore/slices/sessionlogin/service.go",
 		fn:      "persistSessionWithRefresh",
 		helper:  "cleanupIssuedSession",
 		ordinal: 1,

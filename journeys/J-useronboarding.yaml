@@ -26,7 +26,7 @@ contracts:
   - http.auth.role.list.v1
 passCriteria:
   # NOTE: user-create / role-assign / event-publish are mode: manual because the
-  # production code paths cross the cells/accesscore/internal/ boundary
+  # production code paths cross the corecells/accesscore/internal/ boundary
   # (identitymanage.Service / rbacassign.Service constructors require internal
   # credentialinvalidate.Invalidator) and have no Docker-free load-bearing seam
   # reachable from tests/integration/. They will be promoted back to mode: auto

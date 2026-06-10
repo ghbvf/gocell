@@ -52,7 +52,7 @@ import (
 )
 
 // authzDecidePkgPath is the authorizationdecide engine package import path.
-const authzDecidePkgPath = PlatformModulePath + "/cells/accesscore/slices/authorizationdecide"
+const authzDecidePkgPath = PlatformModulePath + "/corecells/accesscore/slices/authorizationdecide"
 
 // TestAuthzEvalAttrNotFoundGuard01 asserts no engine resolve() callsite discards
 // the found bool, and that at least one resolve callsite exists (anti-vacuity).

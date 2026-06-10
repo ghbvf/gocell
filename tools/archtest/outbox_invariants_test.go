@@ -684,7 +684,7 @@ func isSliceServiceFile(root, path string) bool {
 		return false
 	}
 	rel = filepath.ToSlash(rel)
-	return strings.HasPrefix(rel, "cells/") &&
+	return strings.HasPrefix(rel, PlatformCellsDir+"/") &&
 		strings.Contains(rel, "/slices/") &&
 		strings.HasSuffix(rel, "/service.go")
 }

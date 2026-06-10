@@ -246,7 +246,7 @@ func extractGRPCContractIDs(f *ast.File, info *types.Info) []string {
 // This mirrors loadSliceSubscribers in reverse_coverage_invariants_test.go.
 func loadSliceServeUsages(root string) ([]sliceServeEntry, error) {
 	scope := DirsScope(
-		root, []string{"cells", "examples"},
+		root, platformAndExampleCellScanDirs(),
 		MatchRels(func(rel string) bool {
 			return strings.HasSuffix(rel, "/slice.yaml")
 		}),

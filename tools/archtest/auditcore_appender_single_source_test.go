@@ -14,14 +14,14 @@ import (
 )
 
 // auditcoreAppenderSlicePackages is the closed set of slice packages that
-// must remain thin facades over cells/auditcore/internal/appender. Adding a
+// must remain thin facades over corecells/auditcore/internal/appender. Adding a
 // new auditappend* slice requires (1) extending this list and (2) adding the
 // corresponding name to appender.MustNewSpec's whitelist.
 var auditcoreAppenderSlicePackages = []string{
-	"cells/auditcore/slices/auditappenduser",
-	"cells/auditcore/slices/auditappendconfig",
-	"cells/auditcore/slices/auditappendsession",
-	"cells/auditcore/slices/auditappendrole",
+	"corecells/auditcore/slices/auditappenduser",
+	"corecells/auditcore/slices/auditappendconfig",
+	"corecells/auditcore/slices/auditappendsession",
+	"corecells/auditcore/slices/auditappendrole",
 }
 
 // allowedTypeAlias is the exact required shape of slice packages' Service
@@ -30,7 +30,7 @@ const allowedTypeAlias = "type Service = appender.Service"
 
 // TestAuditcoreAppenderSliceFacadesAreThin asserts that the four
 // auditappend{user,config,session,role} slice packages remain pure facades
-// over cells/auditcore/internal/appender.
+// over corecells/auditcore/internal/appender.
 //
 // Slice packages MAY contain (in service.go):
 //   - type Service = appender.Service           (the alias is a Hard defense:
@@ -88,8 +88,8 @@ func TestAuditcoreAppenderSliceFacadesAreThin(t *testing.T) {
 		t.Logf("%s", v)
 	}
 	const failMsg = "rule AUDITCORE-APPENDER-SINGLE-SOURCE-01: slice packages " +
-		"under cells/auditcore/slices/auditappend* must be thin facades over " +
-		"cells/auditcore/internal/appender — only `type Service = appender." +
+		"under corecells/auditcore/slices/auditappend* must be thin facades over " +
+		"corecells/auditcore/internal/appender — only `type Service = appender." +
 		"Service` and `var Spec = appender.MustNewSpec(...)` are permitted; " +
 		"reintroducing local Service struct, methods, NewService, or " +
 		"With*-style options re-forks behavior the appender package was " +

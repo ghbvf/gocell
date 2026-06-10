@@ -24,7 +24,7 @@ const ruleReconstituteUserCaller01 = "RECONSTITUTE-USER-CALLER-01"
 // ─── platform-symbol path constants (no bare literals) ────────────────────
 
 const (
-	reconstituteUserPkg = PlatformModulePath + "/cells/accesscore/internal/domain"
+	reconstituteUserPkg = PlatformModulePath + "/corecells/accesscore/internal/domain"
 )
 
 // ─── symbol name constant ──────────────────────────────────────────────────
@@ -37,15 +37,15 @@ const reconstituteUserName = "ReconstituteUser"
 // whose production code is permitted to call domain.ReconstituteUser directly.
 //
 // Rationale:
-//   - cells/accesscore/internal/mem/: mem store implementations rebuild User
+//   - corecells/accesscore/internal/mem/: mem store implementations rebuild User
 //     aggregates from stored values; ReconstituteUser is the correct rehydration
 //     path for an in-memory store.
-//   - cells/accesscore/internal/adapters/postgres/: PG store implementations
+//   - corecells/accesscore/internal/adapters/postgres/: PG store implementations
 //     use scanUser → ReconstituteUser to rehydrate from DB rows; this is the
 //     canonical persistence boundary.
-//   - cells/accesscore/internal/domain/: the function is defined here; tests and
+//   - corecells/accesscore/internal/domain/: the function is defined here; tests and
 //     internal helpers in the same package are allowed.
-//   - cells/accesscore/internal/ports/conformance/: the UserRepository
+//   - corecells/accesscore/internal/ports/conformance/: the UserRepository
 //     conformance test suite (RunUserRepoConformance) uses ReconstituteUser to
 //     seed live fixtures for repository acceptance tests. The conformance package
 //     is a test infrastructure package, not a slice; it tests the persistence
@@ -53,10 +53,10 @@ const reconstituteUserName = "ReconstituteUser"
 //
 // _test.go files are always allowed (see isReconstituteCallerAllowlisted).
 var reconstituteUserCallerAllowlistPrefixes = []string{
-	"cells/accesscore/internal/mem/",
-	"cells/accesscore/internal/adapters/postgres/",
-	"cells/accesscore/internal/domain/",
-	"cells/accesscore/internal/ports/conformance/",
+	"corecells/accesscore/internal/mem/",
+	"corecells/accesscore/internal/adapters/postgres/",
+	"corecells/accesscore/internal/domain/",
+	"corecells/accesscore/internal/ports/conformance/",
 }
 
 // isReconstituteCallerAllowlisted reports whether a module-relative path is
@@ -122,7 +122,7 @@ func CheckReconstituteUserCallerAllowlist01(t *testing.T, cfg ConfigForExternalC
 	var diags []Diagnostic
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: cfg.BuildTags},
-		[]string{"./cells/accesscore/...", "./cmd/..."}),
+		[]string{"./corecells/accesscore/...", "./cmd/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil

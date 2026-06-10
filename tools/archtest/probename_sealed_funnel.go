@@ -56,9 +56,9 @@ var probeNameSanctionedPkgs = map[string]bool{
 	PlatformModulePath + "/runtime/websocket": true,
 	PlatformModulePath + "/runtime/saga":      true,
 	// Platform cells (cellgen healthz_gen.go — marker required)
-	PlatformModulePath + "/cells/configcore": true,
-	PlatformModulePath + "/cells/auditcore":  true,
-	PlatformModulePath + "/cells/accesscore": true,
+	PlatformModulePath + "/corecells/configcore": true,
+	PlatformModulePath + "/corecells/auditcore":  true,
+	PlatformModulePath + "/corecells/accesscore": true,
 	// Example cells (cellgen healthz_gen.go — marker required)
 	PlatformModulePath + "/examples/demo/cells/democell":                         true,
 	PlatformModulePath + "/examples/iotdevice/cells/devicecell":                  true,
@@ -71,9 +71,9 @@ var probeNameSanctionedPkgs = map[string]bool{
 // the cellgen marker — any ProbeName const in these packages must live in a
 // file with the cellgenMarkerLine header.
 var cellgenSanctionedPkgs = map[string]bool{
-	PlatformModulePath + "/cells/configcore":                                     true,
-	PlatformModulePath + "/cells/auditcore":                                      true,
-	PlatformModulePath + "/cells/accesscore":                                     true,
+	PlatformModulePath + "/corecells/configcore":                                 true,
+	PlatformModulePath + "/corecells/auditcore":                                  true,
+	PlatformModulePath + "/corecells/accesscore":                                 true,
 	PlatformModulePath + "/examples/demo/cells/democell":                         true,
 	PlatformModulePath + "/examples/iotdevice/cells/devicecell":                  true,
 	PlatformModulePath + "/examples/orderfulfillment/cells/orderfulfillmentcell": true,
@@ -102,7 +102,7 @@ var adapterSanctionedPkgs = map[string]bool{
 // of these prefixes is skipped by the main production scanner.
 var probenameInRepoLayerPrefixes = []string{
 	PlatformModulePath + "/kernel/",
-	PlatformModulePath + "/cells/",
+	PlatformCellsModulePath + "/",
 	PlatformModulePath + "/adapters/",
 	PlatformModulePath + "/runtime/",
 	PlatformModulePath + "/cmd/",

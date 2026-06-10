@@ -23,8 +23,8 @@ import (
 //   - validate via JWT-guarded endpoint passes with the refreshed token
 //
 // Source of truth:
-//   - cells/accesscore/slices/sessionlogin/service.go::Login (FOR UPDATE pin)
-//   - cells/accesscore/slices/sessionrefresh/service.go::Refresh (sid stable)
+//   - corecells/accesscore/slices/sessionlogin/service.go::Login (FOR UPDATE pin)
+//   - corecells/accesscore/slices/sessionrefresh/service.go::Refresh (sid stable)
 //   - ADR 202605101400 §A1 / §D2 (S4d row-provenance epoch)
 //   - adapters/postgres/migrations/026_restore_sessions_authz_epoch_at_issue.sql
 func TestL2_LoginRefreshValidate_HappyPath(t *testing.T) {

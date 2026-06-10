@@ -70,7 +70,7 @@ func CheckCASProtocolCompositionRoot01(t *testing.T, cfg ConfigForExternalCell) 
 // production rule (cells / runtime / adapters).
 func casProtocolProductionPatterns() []string {
 	return []string{
-		"./cells/...",
+		"./corecells/...",
 		"./runtime/...",
 		"./adapters/...",
 	}

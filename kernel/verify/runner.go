@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -128,7 +129,7 @@ func (r *Runner) VerifyCell(ctx context.Context, cellID string) (*VerifyResult, 
 		return result, nil
 	}
 
-	cellPkg := fmt.Sprintf("./cells/%s/...", cellID)
+	cellPkg := cellPackagePath(cm.File, cellID)
 	for _, ref := range smokeRefs {
 		resolved, err := resolveRef(ref)
 		if err != nil {
@@ -462,6 +463,19 @@ func resolveSlicePkg(root, cellID, sliceID string) string {
 	}
 	// Last resort: metadata-style path (go test will give clear error).
 	return fmt.Sprintf(fmtSlicePkgPath, base, sliceID)
+}
+
+// cellPackagePath derives the Go test package path for a cell from its
+// metadata File field. If File is set (e.g. "corecells/accesscore/cell.yaml"
+// or "examples/demo/cells/democell/cell.yaml"), the path is constructed from
+// the directory containing cell.yaml. When File is empty, it falls back to the
+// conventional platform layout "./cells/{cellID}/...".
+func cellPackagePath(cellFile, cellID string) string {
+	if cellFile == "" {
+		return fmt.Sprintf("./cells/%s/...", cellID)
+	}
+	dir := path.Dir(strings.ReplaceAll(cellFile, "\\", "/"))
+	return "./" + dir + "/..."
 }
 
 func dirExists(path string) bool {

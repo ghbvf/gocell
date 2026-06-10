@@ -82,14 +82,14 @@ func TestAdapterReturnsDeclaredTypes_BadFixture(t *testing.T) {
 	// Precision oracle (codex #1708 F3): a ≥1 check goes green even if the
 	// scanner degrades to a dummy diagnostic, the wrong line, the wrong status,
 	// or the wrong contract. Pin to the exact known violation —
-	// bad/cells/widgetcell/slices/widgetget/handler.go:16 returns
+	// bad/corecells/widgetcell/slices/widgetget/handler.go:16 returns
 	// Get999JSONResponse, and http.widget.get.v1 declares only [200 404].
 	if len(diags) != 1 {
 		t.Fatalf("%s: bad fixture must produce exactly 1 violation; got %d: %+v",
 			adapterReturnsDeclaredRule, len(diags), diags)
 	}
 	d := diags[0]
-	if d.Rel == "" || !strings.HasSuffix(d.Rel, "cells/widgetcell/slices/widgetget/handler.go") {
+	if d.Rel == "" || !strings.HasSuffix(d.Rel, "corecells/widgetcell/slices/widgetget/handler.go") {
 		t.Errorf("%s: violation Rel = %q; want a handler.go-suffixed structured path", adapterReturnsDeclaredRule, d.Rel)
 	}
 	if d.Line != 16 {
@@ -140,7 +140,7 @@ func TestBuildContractImportIndex(t *testing.T) {
 		},
 		{
 			name: "non_generated",
-			in:   mod + "/cells/accesscore/slices/sessionlogin",
+			in:   mod + "/corecells/accesscore/slices/sessionlogin",
 			want: "",
 		},
 		{

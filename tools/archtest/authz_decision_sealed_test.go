@@ -782,7 +782,7 @@ const authzPkgPath = PlatformModulePath + "/pkg/authz"
 // to reference authz.Allow / authz.Deny. PR-7 (#1345): the sole ABAC PDP engine
 // file is the only sanctioned construction site of an authorization verdict.
 var allowDenyCallerAllowlist = map[string]struct{}{
-	"cells/accesscore/slices/authorizationdecide/evaluator.go": {},
+	"corecells/accesscore/slices/authorizationdecide/evaluator.go": {},
 }
 
 // TestAuthzDecisionAllowDenyCaller01 asserts every production reference to

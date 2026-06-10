@@ -15,7 +15,7 @@
 // This archtest pins every production reference to tenant.WithScope to the sole
 // sanctioned caller:
 //
-//   - cells/configcore/internal/scopedread/scopedread.go — Do(), the one helper
+//   - corecells/configcore/internal/scopedread/scopedread.go — Do(), the one helper
 //     that wraps configcore reads in a tenant-scoped transaction. It scopes to
 //     the SAME TenantID the repo query filters on, so the RLS GUC and the WHERE
 //     predicate are consistent by construction.
@@ -107,14 +107,14 @@ const tenantWithScopeSetter = "WithScope"
 // scope writer on the audit conformance side, mirroring the scopedread/scopedtx
 // production funnels.
 var tenantTxScopeAllowlist = map[string]struct{}{
-	"cells/configcore/internal/scopedread/scopedread.go": {},
-	"cells/accesscore/internal/scopedtx/scopedtx.go":     {},
-	"runtime/audit/ledger/storetest/suite.go":            {},
+	"corecells/configcore/internal/scopedread/scopedread.go": {},
+	"corecells/accesscore/internal/scopedtx/scopedtx.go":     {},
+	"runtime/audit/ledger/storetest/suite.go":                {},
 	// auditcoretest.BuildAuditcoreChain returns a tenant-scoped ctx so that
 	// Tail/Verify read-back targets the per-tenant chain its entries land in
 	// (#1618). Same test-support precedent as storetest/suite.go (non-_test.go
 	// helper imported by other test packages, so it lands in Production() scan).
-	"cells/auditcore/auditcoretest/builders.go": {},
+	"corecells/auditcore/auditcoretest/builders.go": {},
 }
 
 // TestTenantTxScopeWriteCaller01 asserts every production reference to

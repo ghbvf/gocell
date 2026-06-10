@@ -32,10 +32,6 @@ version: v1
 modules:
   - path: .
     includes:
-      cells:
-        - "cells/*/cell.yaml"
-      slices:
-        - "cells/*/slices/*/slice.yaml"
       contracts:
         - "contracts/**/contract.yaml"
       journeys:
@@ -44,6 +40,17 @@ modules:
         - "assemblies/*/assembly.yaml"
       actors: "actors.yaml"
       statusBoard: "journeys/status-board.yaml"
+  # corecells is GoCell's own platform-cell module (#1560 go.work P5): a go.work
+  # member carrying cell/slice metadata, so it MUST appear here (reverse
+  # cross-check). Its cells live DIRECTLY under the module root (corecells/<id>/),
+  # so the module-relative include globs have no cells/ infix — unlike the root
+  # module (which no longer holds platform cells) or examples/<id> below.
+  - path: corecells
+    includes:
+      cells:
+        - "*/cell.yaml"
+      slices:
+        - "*/slices/*/slice.yaml"
   - path: examples/todoorder
     includes:
       cells:

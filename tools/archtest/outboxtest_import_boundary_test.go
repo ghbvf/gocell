@@ -32,7 +32,7 @@ import (
 // Generalizing to all kernel/runtime/adapters/pkg `*test` test-infra packages
 // (runtime/distlock/locktest, runtime/outbox/outboxtest, kernel/persistence/
 // persistencetest, ...) is tracked in gh issue #986: a broad "*test suffix"
-// rule false-positives on cells/accesscore/internal/ports/conformance/
+// rule false-positives on corecells/accesscore/internal/ports/conformance/
 // conformance.go importing runtime/distlock/locktest (a conformance suite whose
 // path has no `*test` segment, so isTestInfraPath does not exempt it). #986
 // resolves that exemption first, then lands the generalized rule.
@@ -169,7 +169,7 @@ func TestOutboxtestImportPath_PatternTable(t *testing.T) {
 		},
 		{
 			name:      "cells celltest (covered by CELLTEST-IMPORT-SCOPE-01)",
-			path:      PlatformModulePath + "/cells/configcore/configcoretest",
+			path:      PlatformModulePath + "/corecells/configcore/configcoretest",
 			wantMatch: false,
 		},
 		{

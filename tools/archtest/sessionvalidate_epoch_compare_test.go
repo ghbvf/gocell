@@ -13,7 +13,7 @@ package archtest
 // once the slice gains multiple callers for enforceSessionState.
 //
 // Rule: the function body of (sessionvalidate.*).enforceSessionState in
-// cells/accesscore/slices/sessionvalidate/service.go must:
+// corecells/accesscore/slices/sessionvalidate/service.go must:
 //  1. Contain a SelectorExpr referencing view.AuthzEpochAtIssue (or any field
 //     named AuthzEpoch, to tolerate minor refactors while keeping the invariant
 //     stable). The compared value is the session row's AuthzEpochAtIssue
@@ -57,7 +57,7 @@ import (
 )
 
 const (
-	sessionvalidateServiceFile = "cells/accesscore/slices/sessionvalidate/service.go"
+	sessionvalidateServiceFile = "corecells/accesscore/slices/sessionvalidate/service.go"
 	enforceFuncName            = "enforceSessionState"
 )
 

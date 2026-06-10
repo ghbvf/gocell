@@ -84,7 +84,7 @@ func scanLedgerCompositionRootPass(p *Pass, modulePath string, restrictScopeDirs
 		if strings.HasPrefix(pkgSuffix, "/cmd/") || strings.HasPrefix(pkgSuffix, "/examples/") {
 			return nil
 		}
-		if !strings.HasPrefix(pkgSuffix, "/cells/") &&
+		if !strings.HasPrefix(pkgSuffix, "/"+PlatformCellsDir+"/") &&
 			!strings.HasPrefix(pkgSuffix, "/runtime/") &&
 			!strings.HasPrefix(pkgSuffix, "/adapters/") {
 			return nil

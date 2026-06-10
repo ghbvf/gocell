@@ -21,7 +21,7 @@ import (
 // Source of truth:
 //   - pkg/errcode/errcode.go::ErrAuthOldPasswordIncorrect
 //   - contracts/http/auth/user/change-password/v1/contract.yaml 401 description
-//   - cells/accesscore/slices/identitymanage/service.go::changePasswordInTx
+//   - corecells/accesscore/slices/identitymanage/service.go::changePasswordInTx
 func TestL2_ChangePasswordOldPasswordIncorrect(t *testing.T) {
 	h := newL2Harness(t)
 

@@ -1,0 +1,280 @@
+// Package sessionvalidate implements the session-validate slice: verifies
+// access tokens and returns Claims. Implements runtime/kauth.IntentTokenVerifier.
+package sessionvalidate
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/credentialauthority"
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/scopedtx"
+	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth/session"
+)
+
+// errMsgAuthFailed is the uniform error message for all session validation
+// failures. Using a single message prevents session-state enumeration attacks.
+const errMsgAuthFailed = "invalid or expired authentication token"
+
+// errMsgServiceUnavailable is the uniform error message when an infrastructure
+// dependency (session store or user repo) is temporarily unreachable.
+const errMsgServiceUnavailable = "authentication service unavailable"
+
+// Compile-time check: Service satisfies runtime/kauth.IntentTokenVerifier so it
+// can be plugged into AuthMiddleware (which now demands intent-aware verifiers
+// by signature).
+var _ kauth.IntentTokenVerifier = (*Service)(nil)
+
+// Service validates JWT access tokens and checks session revocation status.
+type Service struct {
+	verifier     kauth.IntentTokenVerifier `gocell:"required" gocellErr:"session-validate: IntentTokenVerifier required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	sessionStore session.Store
+	userRepo     ports.UserRepository      `gocell:"required" gocellErr:"session-validate: UserRepository required"`                                                                        //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	txRunner     persistence.CellTxManager `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"session-validate: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	logger       *slog.Logger
+}
+
+// Option configures an optional dependency on a Service.
+type Option func(*Service)
+
+// WithTxManager sets the CellTxManager used to scope user-repo reads under the
+// session's tenant RLS context. nil is silently ignored; the final nil check is
+// performed by validateRequired.
+func WithTxManager(tx persistence.CellTxManager) Option {
+	return func(s *Service) {
+		if tx != nil {
+			s.txRunner = tx
+		}
+	}
+}
+
+// NewService creates a session-validate Service. Returns an error when any
+// required dependency is nil (including typed-nil interfaces).
+//
+// sessionStore may be nil: when nil, session revocation and epoch checks are
+// skipped (demo / integration-test mode). If non-nil, it is used to verify
+// session liveness before accepting a token.
+func NewService(
+	verifier kauth.IntentTokenVerifier,
+	sessionStore session.Store,
+	userRepo ports.UserRepository,
+	logger *slog.Logger,
+	opts ...Option,
+) (*Service, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	s := &Service{verifier: verifier, sessionStore: sessionStore, userRepo: userRepo, logger: logger}
+	for _, o := range opts {
+		o(s)
+	}
+	if err := s.validateRequired(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// VerifyIntent validates an access token. This service is intentionally
+// scoped to access tokens (session-revocation checks presume a business
+// endpoint), so any expected intent other than TokenIntentAccess is rejected
+// as ErrAuthInvalidTokenIntent. Callers needing refresh-token validation must
+// use the underlying JWTVerifier directly (see sessionrefresh).
+func (s *Service) VerifyIntent(ctx context.Context, tokenStr string, expected kauth.TokenIntent) (kauth.Claims, error) {
+	if expected != kauth.TokenIntentAccess {
+		s.logger.Warn("session-validate: unsupported intent",
+			slog.String("expected", string(expected)))
+		return kauth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent, errMsgAuthFailed)
+	}
+	claims, err := s.verifyJWTWithIntent(ctx, tokenStr)
+	if err != nil {
+		return kauth.Claims{}, err
+	}
+	if s.sessionStore == nil {
+		return claims, nil
+	}
+	return s.enforceSessionState(ctx, claims)
+}
+
+// verifyJWTWithIntent runs the underlying verifier enforcing token_use=access
+// at both the claim and JOSE header level. Token-side failures collapse to a
+// uniform ErrAuthInvalidToken (401) so token-type / kid / alg / expiry are not
+// enumerable from the wire response. Verifier-side infrastructure failures
+// (KindUnavailable) propagate unchanged so the auth middleware can surface
+// them as 503 — wrapping them as 401 here would mask outages as credential
+// failures and pollute SLO buckets (Finding #2 PR #490 second review).
+func (s *Service) verifyJWTWithIntent(ctx context.Context, tokenStr string) (kauth.Claims, error) {
+	claims, err := s.verifier.VerifyIntent(ctx, tokenStr, kauth.TokenIntentAccess)
+	if err != nil {
+		s.logger.Warn("session-validate: JWT verification failed",
+			slog.Any("error", err))
+		var ec *errcode.Error
+		if errors.As(err, &ec) && ec.Kind == errcode.KindUnavailable {
+			// Verifier already classified as infra (key provider outage).
+			// Propagate so middleware emits 503; do NOT downgrade to 401.
+			return kauth.Claims{}, err
+		}
+		return kauth.Claims{}, errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed, err)
+	}
+	return claims, nil
+}
+
+// enforceSessionState performs session-revocation and epoch-invariant checks
+// that follow a successful JWT verification. Tokens missing the sid claim are
+// rejected when sessionStore is configured (fail-closed).
+//
+// 检查顺序 (ADR §A11 重写 + §A12 wire-uniformity):
+//
+//  1. sessionStore.Get — 返回 view 或 infra/not-found 错误
+//  2. **session-state inline 检查** (RevokedAt != nil) — revoked 直接返回
+//     uniform 401, **不再调用 userRepo.GetByID**. Session-state 检查由
+//     独立 funnel SESSION-REVOKED-FIELD-ACCESS-01 管 (allowlisted), 不再
+//     塞进 credentialauthority funnel.
+//  3. sid/subject 匹配
+//  4. userRepo.GetByID — 此时 session 已确认未 revoked, infra/not-found
+//     可以单独路由 (503 / 401 uniform).
+//  5. credentialauthority.Assert(user) — user-bound 凭证检查 (baseline
+//     CanAuthenticate; 此 service 暂无 PasswordVersion 校验需求).
+//  6. authz_epoch 匹配 — user epoch vs session row epoch.
+//
+// 关键不变量: 一旦 RevokedAt 命中, wire envelope 必然是 uniform 401
+// ErrAuthInvalidToken — user 状态 / userRepo 可用性都不能改变这个结论
+// (P1-A 单 envelope 防枚举: revoked + inactive / revoked + repoErr /
+// revoked alone 全部同 401, 同 errcode, 同 slog 字段集合).
+//
+// JTI is NOT compared. The JWT `jti` claim is per-token uniqueness for
+// RFC 9068 §2.2.4 compliance + observability/log correlation; refresh keeps
+// the session.ID stable across rotations but mints a fresh jti per access
+// token, so comparing claims.JTI against session.JTI (which stores the
+// original login-time jti) would reject every post-refresh token. See ADR
+// 202605101400-adr-credential-session-protocol §A2.
+//
+// Defense-in-depth: after the user is loaded, user.CanAuthenticate() is
+// checked before any epoch comparison. Epoch match alone is insufficient: a
+// token minted for an active user who is then suspended/locked would pass the
+// epoch gate (epoch coincidentally still matches) but must be rejected because
+// the account is no longer eligible. This closes the P1.3 attack window
+// (matching-epoch-but-non-active). Uniform 401 (ErrAuthInvalidToken) is
+// returned for all CanAuthenticate failures — same envelope as revoked-session
+// and epoch-mismatch paths.
+func (s *Service) enforceSessionState(ctx context.Context, claims kauth.Claims) (kauth.Claims, error) {
+	sid := claims.SessionID
+	if sid == "" {
+		s.logger.Warn("session-validate: token missing sid",
+			slog.String("subject", claims.Subject))
+		return kauth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+	}
+
+	// 1) Session row exists.
+	view, err := s.sessionStore.Get(ctx, sid)
+	if err != nil {
+		if errcode.IsInfraError(err) {
+			s.logger.Error("session-validate: session store unavailable",
+				slog.String("sid", sid),
+				slog.String("subject", claims.Subject),
+				slog.Any("error", err))
+			return kauth.Claims{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable,
+				errMsgServiceUnavailable, err)
+		}
+		s.logSessionLookupError(sid, claims.Subject, err)
+		return kauth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+	}
+
+	// 2) Session-state inline check — **must run before userRepo.GetByID**.
+	// Owner package: this file is in the SESSION-REVOKED-FIELD-ACCESS-01
+	// allowlist (corecells/accesscore/slices/sessionvalidate/), so the direct
+	// view.RevokedAt read is legitimate.
+	if view.RevokedAt != nil {
+		s.logger.Warn("session-validate: session revoked",
+			slog.String("subject", claims.Subject),
+			slog.String("sid", sid))
+		return kauth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+	}
+
+	// 3) Defense-in-depth: confirm the live session row owner matches the JWT
+	// sub. Without this check, a signing-path bug that bound a sid to the wrong
+	// subject (e.g. sessionmint reuse-after-rotation regression) would let one
+	// subject's claims authenticate as another live sid's owner. The sid index
+	// is unique so SubjectID is authoritative; mismatch indicates a token
+	// reused across subjects and must be rejected uniformly.
+	if view.SubjectID != claims.Subject {
+		s.logger.Warn("session-validate: sid/subject mismatch",
+			slog.String("sid", sid),
+			slog.String("claim_subject", claims.Subject),
+			slog.String("session_subject", view.SubjectID))
+		return kauth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+	}
+
+	// 4) User lookup. Session is confirmed not-revoked at this point.
+	// view.TenantID is the tenant carrier from sessions.tenant_id (#1337 PR-3b).
+	// scopedtx.Do sets the tenant scope on the context so that the PG RLS
+	// policy on users/roles/role_assignments is satisfied (PR-3b Site 4).
+	user, err := scopedtx.Do(ctx, s.txRunner, view.TenantID, func(txCtx context.Context) (*domain.User, error) {
+		return s.userRepo.GetByIDInTenant(txCtx, view.TenantID, claims.Subject)
+	})
+	if err != nil {
+		if errcode.IsInfraError(err) {
+			s.logger.Error("session-validate: user repo unavailable",
+				slog.String("subject", claims.Subject),
+				slog.Any("error", err))
+			return kauth.Claims{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable,
+				errMsgServiceUnavailable, err)
+		}
+		// Domain not-found: subject deleted or never existed → uniform 401.
+		s.logger.Warn("session-validate: subject not found",
+			slog.String("subject", claims.Subject))
+		return kauth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+	}
+
+	// 5) User-bound credentialauthority funnel: baseline (CanAuthenticate)
+	// only — session-revoked is handled by step 2 above. Failure collapses to
+	// uniform 401 ErrAuthInvalidToken matching all other rejection paths.
+	if assertErr := credentialauthority.Assert(user); assertErr != nil {
+		s.logger.Warn("session-validate: credentialauthority assert failed",
+			slog.String("subject", claims.Subject),
+			slog.String("sid", sid),
+			slog.Any("error", assertErr))
+		return kauth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+	}
+
+	// 6) Epoch invariant: user.authz_epoch must exactly match the epoch
+	// stored on the session row (view.AuthzEpochAtIssue). S4d moves the
+	// epoch source of truth from the JWT claim to the session/refresh
+	// rows — the claim is no longer written. Using != ensures fail-closed
+	// on any mismatch: if a credential event bumped user.authz_epoch after
+	// this session was issued, the row captures the stale epoch and the
+	// comparison rejects. (Finding #2, S4d row provenance.)
+	if user.AuthzEpoch() != view.AuthzEpochAtIssue {
+		s.logger.Warn("session-validate: authz epoch mismatch",
+			slog.String("subject", claims.Subject),
+			slog.Int64("user_epoch", user.AuthzEpoch()),
+			slog.Int64("row_epoch", view.AuthzEpochAtIssue))
+		return kauth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+	}
+
+	return claims, nil
+}
+
+// logSessionLookupError distinguishes "not found" (expected / logged at Warn)
+// from infrastructure failures (Error) so dashboards can alert correctly.
+//
+// Only domain-layer not-found codes on the whitelist (ErrSessionNotFound) are
+// logged at Warn. Any infra error, unclassified error, or non-whitelisted
+// errcode is logged at Error — fail-closed, ref S40.
+func (s *Service) logSessionLookupError(sid, subject string, err error) {
+	if errcode.IsDomainNotFound(err, errcode.ErrSessionNotFound) {
+		s.logger.Warn("session-validate: session not found",
+			slog.String("sid", sid),
+			slog.String("subject", subject))
+		return
+	}
+	s.logger.Error("session-validate: session repo unavailable",
+		slog.String("sid", sid),
+		slog.String("subject", subject),
+		slog.Any("error", err))
+}

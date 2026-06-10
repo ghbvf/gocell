@@ -81,7 +81,7 @@ func TestPolicyRepoConformanceEnrollment_REDFixture(t *testing.T) {
 
 	// ─── Load production iface + impls ─────────────────────────────────────
 	prodPatterns := prodscan.Patterns(root)
-	ifacePatterns := append([]string{"./cells/accesscore/internal/ports/..."}, prodPatterns...)
+	ifacePatterns := append([]string{"./corecells/..."}, prodPatterns...)
 
 	var policyRepoIface *types.Interface
 	var implPkgs []*types.Package
