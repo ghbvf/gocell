@@ -79,6 +79,10 @@ const gotWantQuotedFmt = "got %q want %q"
 //   - projection_checkpoints (045)  CQRS projection harness consumed-offset store
 //                                 + PK(cell_id, projection_id)
 //                                 + owner column reserved, write-guarded (v1 never writes it; reads harmless; ADR §Q5)
+//   - projection_events  (056)  durable append-only projection event journal (#1504)
+//                                 + global_seq BIGINT GENERATED ALWAYS AS IDENTITY PK
+//                                 + idx_projection_events_id UNIQUE(id) (idempotency / cursor key)
+//                                 + JSONB payload/metadata/observability/principal
 //
 // Drift between this comment and verifyChecks/verifyIndexes/... registries is
 // caught by archtest SCHEMA-GUARD-COVERS-EVERY-OWNED-TABLE-01.
@@ -633,6 +637,23 @@ var expectedColumns = []expectedColumn{
 	{Table: "projection_checkpoints", Column: "offset_seq", Type: "bigint", NotNull: true},
 	{Table: "projection_checkpoints", Column: "owner", Type: "text", NotNull: true},
 	{Table: "projection_checkpoints", Column: "updated_at", Type: pgTypeTSTZ, NotNull: true},
+	// projection_events (056_create_projection_events.sql) — durable append-only projection
+	// event journal (#1504). Columns = outbox_entries minus relay-internal delivery state;
+	// only the EntryScan-rebuild columns the source reads are kept.
+	// global_seq is GENERATED ALWAYS AS IDENTITY (Identity:true guards the auto-assign write
+	// contract — the journaling writer omits it, same load-bearing role as outbox_entries.seq).
+	{Table: "projection_events", Column: "global_seq", Type: "bigint", NotNull: true, Identity: true},
+	{Table: "projection_events", Column: "id", Type: "text", NotNull: true},
+	{Table: "projection_events", Column: "aggregate_id", Type: "text", NotNull: true},
+	{Table: "projection_events", Column: "aggregate_type", Type: "text", NotNull: true},
+	{Table: "projection_events", Column: "event_type", Type: "text", NotNull: true},
+	{Table: "projection_events", Column: "topic", Type: "text", NotNull: true},
+	{Table: "projection_events", Column: "payload", Type: "jsonb", NotNull: true},
+	{Table: "projection_events", Column: "metadata", Type: "jsonb", NotNull: false},
+	{Table: "projection_events", Column: "observability", Type: "jsonb", NotNull: false},
+	{Table: "projection_events", Column: "principal", Type: "jsonb", NotNull: true},
+	{Table: "projection_events", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
+	{Table: "projection_events", Column: "occurred_at", Type: pgTypeTSTZ, NotNull: true},
 	// reconcile_leases (046_create_reconcile_leases.sql) — kernel/reconcile
 	// LeaderElector PG backend. epoch is the monotonic fencing token; expires_at is
 	// the row-TTL lease authority (PR-A6 review C2).
@@ -671,6 +692,8 @@ var expectedPKs = []expectedPK{
 	{Table: "saga_events", Columns: []string{"instance_id", "version"}},
 	// projection_checkpoints: composite PK (cell_id, projection_id) (045_create_projection_checkpoints.sql).
 	{Table: "projection_checkpoints", Columns: []string{"cell_id", "projection_id"}},
+	// projection_events: global_seq IDENTITY PK (056_create_projection_events.sql / #1504).
+	{Table: "projection_events", Columns: []string{"global_seq"}},
 	// reconcile_leases: PK on reconciler_id (046_create_reconcile_leases.sql).
 	{Table: "reconcile_leases", Columns: []string{"reconciler_id"}},
 	// config_entries (051_configcore_tenant_id.sql): PK on id (global opaque ID).
@@ -710,6 +733,10 @@ var expectedIndexes = []expectedIndex{
 	// idx_outbox_seq is tracked because the projection ReplaySource/Cursor depend
 	// on it for ordered range scans, so a partial migration must fail fast.
 	{Table: "outbox_entries", Name: "idx_outbox_seq", Unique: true, Columns: []string{"seq"}},
+	// projection_events — idempotency + cursor key (056_create_projection_events.sql / #1504).
+	// global_seq is the PK (its btree serves the replay range scan), so only the id unique
+	// index is registered here; ON CONFLICT (id) DO NOTHING (PR-02) depends on it.
+	{Table: "projection_events", Name: "idx_projection_events_id", Unique: true, Columns: []string{"id"}},
 	// users (017_users.sql)
 	// 050: idx_users_username and idx_users_email are now composite
 	// UNIQUE(tenant_id, username) / UNIQUE(tenant_id, email) — same names, still unique.

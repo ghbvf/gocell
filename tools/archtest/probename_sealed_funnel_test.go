@@ -224,6 +224,7 @@ func goldenProbeNames() []string {
 		"adapters/oidc.ProbeReady=oidc_ready",
 		"adapters/postgres.ProbeAppRoleRestrictedReady=postgres_app_role_restricted_ready",
 		"adapters/postgres.ProbeIndexesValidReady=postgres_indexes_valid_ready",
+		"adapters/postgres.ProbeProjectionJournalReady=projection_journal_ready",
 		"adapters/postgres.ProbeReady=postgres_ready",
 		"adapters/rabbitmq.ProbeReady=rabbitmq_ready",
 		"adapters/redis.ProbeHTTPIdempotencyStoreReady=http_idempotency_store_ready",

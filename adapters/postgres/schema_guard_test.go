@@ -93,9 +93,11 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// for the sessions tenant carrier (EPIC #1337 PR-3b, #1617);
 	// 055 rebuilds audit_entries per-(namespace, tenant) (DROP+CREATE — UNIQUE(namespace,
 	// tenant_id, seq_no)) + FORCE RLS with the OR tenant_id='' system-rows policy
-	// (EPIC #1337 #1618).
-	assert.Equal(t, int64(55), v,
-		"expected version should be exactly 55 (current migration max — 055_audit_entries_per_tenant_rls)")
+	// (EPIC #1337 #1618);
+	// 056 creates projection_events (append-only durable projection journal —
+	// global_seq IDENTITY PK + idx_projection_events_id) for the #1504 retained event store.
+	assert.Equal(t, int64(56), v,
+		"expected version should be exactly 56 (current migration max — 056_create_projection_events)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {

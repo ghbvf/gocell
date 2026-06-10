@@ -143,7 +143,11 @@ var reconstructionFunnelAllowlist = map[string]map[string]struct{}{
 		// outbox_entries rows for the projection ReplaySource. Same sanctioned
 		// "persisted DB row → Entry" infra role as the relay claim path; producers
 		// (cells/examples) cannot reach it.
-		"adapters/postgres/projection_replay_source.go":  {},
+		"adapters/postgres/projection_replay_source.go": {},
+		// Durable projection journal replay (#1504): reconstructs a sealed Entry from
+		// projection_events rows, then wraps it in a projection.JournalEvent carrier.
+		// Same sanctioned "persisted DB row → Entry" infra role as the relay claim path.
+		"adapters/postgres/projection_event_source.go":   {},
 		"runtime/outbox/outboxtest/store_conformance.go": {}, // store-conformance helper lib (not _test.go)
 	},
 }
