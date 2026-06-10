@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/kernel/reconcile"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	rtcommand "github.com/ghbvf/gocell/runtime/command"
 )
 
@@ -44,12 +45,16 @@ func TestReconciler_EmitsSystemTenantlessPrincipalViaLoop(t *testing.T) {
 	t.Cleanup(func() {
 		sc, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = loop.Stop(sc)
+		assert.NoError(t, loop.Stop(sc), "loop should stop cleanly within the cleanup budget")
 	})
 
 	reqCh <- reconcile.Request{} // resync-all sweep (empty EntityID)
 
-	require.Eventually(t, func() bool { return len(rec.Entries()) == 1 },
+	// testwait.External (with a reason literal) is the sanctioned polling funnel —
+	// no bare require.Eventually. The Recorder emits synchronously inside Reconcile,
+	// so one Loop dispatch yields exactly one entry.
+	testwait.External(t, "cert-renewal-loop-emit",
+		func() bool { return len(rec.Entries()) == 1 },
 		3*time.Second, 5*time.Millisecond,
 		"the Loop-driven reconcile must emit exactly one rotate-cert command")
 

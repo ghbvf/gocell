@@ -100,10 +100,18 @@ attack surface (no ambient inheritance) rather than expanding it.
   There is no exported surface to gate.
 - **Downstream Hard**: the ctxkeys writes are caller-allowlisted by
   CTXKEYS-PRINCIPAL-WRITE-CALLER-01 (go/types object resolution; alias/dot-import safe).
+  **Granularity note**: that allowlist is **file-level** (key
+  `kernel/reconcile/identity.go`), NOT the **function/callsite-level** lock of
+  PROJECTION-SYSTEM-PRINCIPAL-INSTALL-CALLER-01. The two are both Hard, but not
+  identical in grain — a second function added to `identity.go` could call the
+  setters without tripping the archtest. That is the accepted same-file residual
+  blind spot below, not an equivalence with the projection funnel.
 - **Residual blind spot (honest)**: a different function inside `kernel/reconcile`
-  could call the unexported installer. Accepted — the package is small trusted
+  (or a second function in `identity.go` writing the setters directly) could install a
+  system identity without the archtest firing. Accepted — the package is small trusted
   framework code and the threat model is external producers, not in-package framework
-  code; a same-package caller-allowlist would be disproportionate machinery.
+  code; a same-package / function-level caller-allowlist would be disproportionate
+  machinery here.
 
 ## Consequences
 
@@ -115,7 +123,17 @@ attack surface (no ambient inheritance) rather than expanding it.
   no version bump. Only the emitted entry's audit identity changes from empty → `"system"`.
 - A **multi-tenant** reconciler must add its own tenant dimension to its command-id /
   store derivation — it cannot rely on an ambient ctx tenant, which the install strips.
-  This is documented at the install site and the cert-renewal reconciler godoc.
+  This is documented at the install site and the cert-renewal reconciler godoc. NOTE
+  this is a **documentation-level (Soft) guard** — there is no machine enforcement and
+  no multi-tenant reconciler exists today; it is forward guidance, not a new mechanism.
+- **Operations / observability**: emitted reconcile commands carry `actor=subject="system"`
+  in the outbox envelope (a recognizable, filterable audit sentinel, consistent with
+  `projection.SystemPrincipalActor`), and their Claimer dedup key sits under the
+  `_notenant` namespace (`idemkey.DeriveCommandKey` with an empty tenant). Operators
+  diagnosing a stuck/duplicate reconcile command or a DLX entry should expect the
+  `system`/`_notenant` dimensions; this is the pre-condition a multi-tenant migration
+  must change first.
 - Tests: kernel/reconcile proves the framework guarantee (install + overwrite + the
-  Loop wires it onto the reconciler ctx); examples/iotdevice proves the cert-renewal
-  producer's emitted entry is system/tenantless end-to-end through a real Loop.
+  Loop wires it onto the reconciler ctx + `outbox.ContextPrincipal` resolves it to a
+  tenantless system principal); examples/iotdevice proves the cert-renewal producer's
+  emitted entry is system/tenantless and `_notenant`-keyed end-to-end through a real Loop.

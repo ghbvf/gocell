@@ -945,6 +945,9 @@ func (l *Loop) process(runCtx context.Context, req Request, dispatcher reconcile
 	// reconciler's emitted commands/events carry a tenantless system principal by
 	// construction, never inheriting (or being changed by) an ambient ctx identity
 	// (issue #1821 / #1808 F5). See installSystemProducerIdentity — it overwrites.
+	// Only reconcileCtx (handed to Reconcile) carries the system identity; the
+	// metrics calls below stay on runCtx and read no principal, so their labels are
+	// unaffected.
 	reconcileCtx = installSystemProducerIdentity(reconcileCtx)
 
 	start := controlPlaneClock{}.now()

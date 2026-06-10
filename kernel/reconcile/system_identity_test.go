@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
@@ -22,11 +23,17 @@ func assertSystemProducerIdentity(t *testing.T, ctx context.Context) {
 	t.Helper()
 	actor, _ := ctxkeys.ActorIDFrom(ctx)
 	subject, _ := ctxkeys.SubjectIDFrom(ctx)
-	tenant, _ := ctxkeys.TenantIDFrom(ctx)
-	session, _ := ctxkeys.SessionIDFrom(ctx)
+	tenant, tenantOK := ctxkeys.TenantIDFrom(ctx)
+	session, sessionOK := ctxkeys.SessionIDFrom(ctx)
 	assert.Equal(t, "system", actor, "reconcile ctx actor must be the system sentinel")
 	assert.Equal(t, "system", subject, "reconcile ctx subject must be the system sentinel")
+	// tenant/session are positively written present-but-empty, NOT left absent: the
+	// install asserts a tenantless identity rather than relying on a missing key, so
+	// deleting the WithTenantID/WithSessionID("") write would surface here (ok=false)
+	// — not only via the overwrite test.
+	assert.True(t, tenantOK, "tenant key must be present (installed-empty, not absent)")
 	assert.Equal(t, "", tenant, "reconcile ctx tenant must be cleared (→ _notenant dedup namespace)")
+	assert.True(t, sessionOK, "session key must be present (installed-empty, not absent)")
 	assert.Equal(t, "", session, "reconcile ctx session must be cleared")
 }
 
@@ -50,6 +57,21 @@ func TestInstallSystemProducerIdentity_Overwrites(t *testing.T) {
 	assertSystemProducerIdentity(t, ctx)
 }
 
+// TestInstallSystemProducerIdentity_YieldsTenantlessPrincipal ties the install to
+// the outbox producer principal it ultimately stamps: outbox.ContextPrincipal (what
+// NewEntry injects at emit time) reads the installed ctx as actor/subject="system",
+// tenant/session="" — so the emitted entry's Claimer key lands under "_notenant".
+// This pins the dedup-key consequence at the kernel layer (the cert-renewal Loop
+// test proves the same end-to-end). A reconcile ctx carries no tenant.WithScope, so
+// ContextPrincipal's scope fallback does not apply here.
+func TestInstallSystemProducerIdentity_YieldsTenantlessPrincipal(t *testing.T) {
+	p := outbox.ContextPrincipal(installSystemProducerIdentity(context.Background()))
+	assert.Equal(t, "system", string(p.ActorID))
+	assert.Equal(t, "system", string(p.SubjectID))
+	assert.Equal(t, "", string(p.TenantID), "tenantless principal → _notenant dedup namespace")
+	assert.Equal(t, "", string(p.SessionID))
+}
+
 // TestLoop_InstallsSystemProducerIdentity is the framework-guarantee proof
 // (#1821 / #1808 F5): every reconcile invocation runs under a positively
 // installed system producer identity, so any emit a reconciler performs carries
@@ -66,6 +88,9 @@ func TestLoop_InstallsSystemProducerIdentity(t *testing.T) {
 		return Result{RequeueAfter: testtime.D1h}, nil
 	})
 	src := make(chan Request)
+	// Bare &Loop{} is the package-internal test idiom (matches loop_test.go); the
+	// public construction API is reconcile.New(r).With*().Build() — a populated
+	// &reconcile.Loop{} literal does not compile outside this package.
 	l := &Loop{reconcilerID: "rc", reconciler: rec, source: src, interval: testtime.D1h}
 
 	ownerCtx, ownerCancel := startCtxs(t)

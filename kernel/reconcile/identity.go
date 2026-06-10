@@ -12,11 +12,17 @@ import (
 // recognizable identity for any work it drives — audit log consumers can filter
 // on it.
 //
-// Value "system" mirrors projection.SystemPrincipalActor (the saga journal
-// replay sentinel); kernel/reconcile cannot import kernel/projection (projection
-// imports kernel/outbox, which would risk a cycle), so the sentinel is duplicated
-// here as a package-local const. Both sites intentionally use the same string so
-// the audit trail is uniform across framework-internal system identities.
+// Value "system" mirrors projection.SystemPrincipalActor (the saga journal replay
+// sentinel). It is duplicated here as a package-local const rather than imported:
+// reconcile importing kernel/projection (a CQRS/saga read-model package) merely to
+// borrow a sentinel string would be an inverted, gratuitous dependency — projection
+// is a higher-level concern than the reconcile harness, not a shared-vocabulary
+// package. (There is no import CYCLE — projection does not depend on reconcile — so
+// this is a layering/coupling choice, not a compile constraint.) Both sites
+// intentionally use the same string so the audit trail is uniform across
+// framework-internal system identities; the duplication is two occurrences, below
+// the rule-of-three extraction threshold. If a third system-identity install site
+// appears, hoist the sentinel into a shared pkg/ constant.
 const systemProducerActor = "system"
 
 // installSystemProducerIdentity returns ctx with the system producer identity
@@ -46,15 +52,24 @@ const systemProducerActor = "system"
 // (idemkey.DeriveCommandKey) lands under the "_notenant" sentinel namespace. That
 // is correct for the single-tenant reconcile archetype; a MULTI-TENANT reconciler
 // MUST add a tenant dimension to its own command-id / store derivation (it cannot
-// rely on an ambient ctx tenant, which this install strips).
+// rely on an ambient ctx tenant, which this install strips). NOTE: that MUST is a
+// documentation-level guard — there is no machine enforcement of it, and no
+// multi-tenant reconciler exists today.
 //
 // # Scope-fallback boundary
 //
-// ContextPrincipal falls back to tenant.ScopeFromContext only when ctxkeys tenant
-// is absent. This install sets ctxkeys tenant to "" (present-but-empty), which is
-// the realistic lifecycle-ctx channel; it does NOT strip a tenant.WithScope (a
-// tx-scope concept absent on the reconcile path). Reconcile ctx never carries a
-// tenant scope, so the dedup namespace is "_notenant" in practice.
+// outbox.ContextPrincipal resolves the tenant from ctxkeys.TenantID, falling back to
+// tenant.ScopeFromContext ONLY when the ctxkeys tenant is absent. This install writes
+// the ctxkeys tenant as "" (present-but-empty) — the realistic lifecycle-ctx principal
+// channel — so for a reconcile ctx the resolved tenant is empty and the Claimer key
+// lands under "_notenant". It deliberately does NOT strip a tenant.WithScope: a tenant
+// scope is the RLS "SET LOCAL" boundary the TxManager injects into a transaction, a
+// mechanism orthogonal to the principal ctxkeys. A reconcile ctx never carries a
+// tenant scope (triggers feed Request data, not a scoped ctx; the tx is opened by the
+// reconciler AFTER this install, with the now-empty principal), so the "_notenant"
+// outcome holds in practice (proven end-to-end by the cert-renewal Loop test). A
+// multi-tenant reconciler that deliberately runs inside a tenant scope would see that
+// scope flow through — exactly why it must derive its own per-tenant dedup dimension.
 //
 // # AI-robust rating (charter §"Funnel 双向锁评级")
 //
@@ -64,9 +79,14 @@ const systemProducerActor = "system"
 //     system identity through this path. No exported producer-facing surface
 //     exists to gate.
 //   - Downstream Hard: the actual ctxkeys writes below are caller-allowlisted by
-//     CTXKEYS-PRINCIPAL-WRITE-CALLER-01 (go/types object resolution); this file
-//     is a sanctioned principal writer alongside the auth bridge, the outbox
-//     consumer restore, and the projection system-principal carrier.
+//     CTXKEYS-PRINCIPAL-WRITE-CALLER-01 (go/types object resolution); this file is
+//     a sanctioned principal writer alongside the auth bridge, the outbox consumer
+//     restore, and the projection system-principal carrier. Granularity note: that
+//     allowlist is FILE-level (key = "kernel/reconcile/identity.go"), NOT the
+//     function/callsite-level lock of PROJECTION-SYSTEM-PRINCIPAL-INSTALL-CALLER-01
+//     — so a second function added to THIS file could call the setters without
+//     tripping the archtest. That is the accepted same-file residual blind spot
+//     below, not an equivalence claim with the projection funnel.
 //
 // Residual blind spot (honest self-check): another function inside
 // kernel/reconcile could call this unexported installer. That is accepted — the
