@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/kernel/reconcile"
 	rtcommand "github.com/ghbvf/gocell/runtime/command"
 )
@@ -203,11 +204,51 @@ func (r markFailRepo) MarkCertRenewalRequested(_ context.Context, _ string, _ in
 	return r.err
 }
 
-// TestReconciler_MarkFailureBubbles proves that a failed MarkCertRenewalRequested
-// propagates out of Reconcile AND that the emit already completed (the entry IS in
-// the recorder). The documented behavior is: mark runs after a successful emit;
-// a failed mark leaves a re-emit that the Claimer dedups.
-func TestReconciler_MarkFailureBubbles(t *testing.T) {
+// txnScopeKey carries the ambient txnScope through ctx, mirroring how the real
+// adapter routes a pgx.Tx via persistence.TxCtxKey.
+type txnScopeKey struct{}
+
+// txnScope buffers the entries emitted inside one RunInTx until it commits.
+type txnScope struct{ entries []outbox.Entry }
+
+// txnStore is a fake transactional outbox modeling ONE ambient tx shared by the
+// rotate-cert emit and the devices mark — the unit-level stand-in for how the PG
+// adapter routes both the outbox write and the devices UPDATE through a single
+// pgx.Tx (pgexec.PGExecutor reads persistence.TxFromContext). committed holds only
+// entries from closures that returned nil; a closure that errors drops its scope,
+// so a failed mark rolls the buffered emit back. (mem repo + recorder are not
+// themselves transactional, hence this fake.)
+type txnStore struct{ committed []outbox.Entry }
+
+func (s *txnStore) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	scope := &txnScope{}
+	if err := fn(context.WithValue(ctx, txnScopeKey{}, scope)); err != nil {
+		return err // rollback: the scope and its buffered emit are discarded
+	}
+	s.committed = append(s.committed, scope.entries...) // commit
+	return nil
+}
+
+// txnEmitter enlists every Emit in the ambient txnScope; an Emit outside RunInTx
+// is a wiring bug (the reconciler MUST wrap it), so it fails closed.
+type txnEmitter struct{}
+
+func (txnEmitter) Emit(ctx context.Context, e outbox.Entry) error {
+	scope, ok := ctx.Value(txnScopeKey{}).(*txnScope)
+	if !ok {
+		return errors.New("emit outside RunInTx")
+	}
+	scope.entries = append(scope.entries, e)
+	return nil
+}
+
+// TestReconciler_MarkFailureRollsBackEmit proves emit+mark atomicity: a failed
+// MarkCertRenewalRequested rolls the rotate-cert emit back (both run on one ambient
+// tx in durable mode), so NO orphan command survives and the cert stays a candidate
+// for the next tick. This is a genuine regression test for F1 — under the old
+// "mark after a committed emit" shape the emit would already be committed when the
+// mark failed, so store.committed would be non-empty and this assertion would fail.
+func TestReconciler_MarkFailureRollsBackEmit(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := mem.NewDeviceRepository()
@@ -216,14 +257,44 @@ func TestReconciler_MarkFailureBubbles(t *testing.T) {
 	wantErr := errors.New("mark failed")
 	repo := markFailRepo{DeviceRepository: base, err: wantErr}
 
-	rec := outboxtest.NewRecorder()
-	r, err := NewReconciler(clockmock.New(certTestBase), repo, rec.CellEmitter(),
-		outbox.DemoCellTxManager(), certRenewalTestThreshold, nil)
+	store := &txnStore{}
+	r, err := NewReconciler(clockmock.New(certTestBase), repo,
+		outbox.WrapEmitterForCell(txnEmitter{}), persistence.WrapForCell(store),
+		certRenewalTestThreshold, nil)
 	require.NoError(t, err)
 
 	_, reconcileErr := r.Reconcile(ctx, reconcile.Request{})
 	require.ErrorIs(t, reconcileErr, wantErr, "mark failure must bubble out of Reconcile")
-	require.Len(t, rec.Entries(), 1, "emit succeeded before the mark; entry must be present")
+	assert.Empty(t, store.committed, "a failed mark rolls the emit back — no orphan rotate-cert command")
+
+	// The mark never took, so the cert is still a candidate the next tick retries.
+	got, err := base.ListCertificateRenewalCandidates(ctx, certTestBase.Add(certRenewalTestThreshold))
+	require.NoError(t, err)
+	assert.Len(t, got, 1, "the cert remains a candidate after a rolled-back renewal")
+}
+
+// TestReconciler_EmitAndMarkCommitTogether is the commit-side companion (and
+// anti-vacuity guard) for the rollback test above: when the mark succeeds the
+// buffered emit IS committed and the cert leaves the candidate set.
+func TestReconciler_EmitAndMarkCommitTogether(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repo := mem.NewDeviceRepository()
+	seedCert(t, ctx, repo, "dev-near", certTestBase.Add(24*time.Hour))
+
+	store := &txnStore{}
+	r, err := NewReconciler(clockmock.New(certTestBase), repo,
+		outbox.WrapEmitterForCell(txnEmitter{}), persistence.WrapForCell(store),
+		certRenewalTestThreshold, nil)
+	require.NoError(t, err)
+
+	_, err = r.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+	assert.Len(t, store.committed, 1, "a successful mark commits the buffered emit")
+
+	got, err := repo.ListCertificateRenewalCandidates(ctx, certTestBase.Add(certRenewalTestThreshold))
+	require.NoError(t, err)
+	assert.Empty(t, got, "the committed mark removes the cert from the candidate set")
 }
 
 func TestNewReconciler_Validation(t *testing.T) {

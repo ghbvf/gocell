@@ -38,11 +38,13 @@ const rotateCertCommandType = "rotate-cert"
 // post-rotation re-issue advances the epoch. Because that state lives on the
 // devices row it survives a restart in durable (PG) mode. That makes a single
 // un-renewed cert yield exactly one command across its whole multi-day near-expiry
-// window (the idempotent forcing function). The relay's Claimer — keyed by
-// (tenant, deviceID, commandID) with commandID from (deviceID, certEpoch) — is a
-// secondary backstop only: it dedups same-tick retries and the rare window where
-// an emit committed but the mark was lost (crash between the two), within the
-// standard 24h idempotency TTL.
+// window (the idempotent forcing function). Because the emit and the renewal mark
+// commit atomically in one ambient transaction (see enqueueRenewal), the relay's
+// Claimer — keyed by (tenant, deviceID, commandID) with commandID from (deviceID,
+// certEpoch) — is a pure defense-in-depth backstop: it dedups any same-window
+// re-emit (e.g. concurrent scans before either commits) within the standard 24h
+// idempotency TTL. The single-emit guarantee itself does NOT depend on it — there
+// is no "emit committed but mark lost" gap to mop up.
 //
 // SINGLE-TENANT ASSUMPTION: a reconcile loop runs on the cell lifecycle context,
 // which carries no request principal — so the tenant dimension of the Claimer key
@@ -125,13 +127,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	return reconcile.Result{}, nil
 }
 
-// enqueueRenewal emits one rotate-cert async command for a near-expiry cert and,
-// once the emit commits, marks the cert's epoch renewal-requested so later ticks
-// skip it. The EmitAsync write is wrapped in txRunner.RunInTx so the durable PG
-// outbox writer gets a tx in ctx; demo mode uses the no-op DemoCellTxManager. The
-// mark runs AFTER a successful RunInTx (never inside): a mark must never outlive a
-// rolled-back emit, so the worst failure mode is a re-emit the Claimer dedups, not
-// a suppressed-but-never-sent renewal.
+// enqueueRenewal emits one rotate-cert async command for a near-expiry cert and
+// marks the cert's epoch renewal-requested so later ticks skip it. BOTH writes run
+// inside a SINGLE txRunner.RunInTx: in durable PG mode the outbox writer and the
+// devices UPDATE both route through the same ambient pgx.Tx (pgexec.PGExecutor
+// reads persistence.TxFromContext), so they commit or roll back atomically. That
+// closes the single-emit gap end to end — a failed mark rolls the emit back, so the
+// cert stays a candidate and the next tick retries (no orphan command, never a
+// suppressed-but-never-sent renewal), and a committed emit always carries its mark
+// (no "emit committed, mark lost" window). The atomicity is why the per-epoch
+// single-emit owned by devices.renewal_requested_epoch holds for the whole window
+// independently of the relay's 24h Claimer TTL. Demo mode wires the no-op
+// DemoCellTxManager: writes are not transactional there, which is acceptable
+// because demo mode makes no durability guarantee (a stray re-emit is Claimer-deduped).
 func (r *Reconciler) enqueueRenewal(ctx context.Context, cand domain.CertificateRenewalCandidate) error {
 	payload, err := rotatePayload(cand)
 	if err != nil {
@@ -144,13 +152,13 @@ func (r *Reconciler) enqueueRenewal(ctx context.Context, cand domain.Certificate
 	}
 	commandID := rotateCommandID(cand.DeviceID, cand.CertEpoch)
 	if err := r.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		return command.EmitAsync(txCtx, r.clk, r.emitter, cmdenqueue.DispatchID,
-			cand.DeviceID, commandID, req)
+		if err := command.EmitAsync(txCtx, r.clk, r.emitter, cmdenqueue.DispatchID,
+			cand.DeviceID, commandID, req); err != nil {
+			return err
+		}
+		return r.repo.MarkCertRenewalRequested(txCtx, cand.DeviceID, cand.CertEpoch)
 	}); err != nil {
-		return fmt.Errorf("devicecertrenewal: emit rotate-cert command: %w", err)
-	}
-	if err := r.repo.MarkCertRenewalRequested(ctx, cand.DeviceID, cand.CertEpoch); err != nil {
-		return fmt.Errorf("devicecertrenewal: mark cert renewal requested: %w", err)
+		return fmt.Errorf("devicecertrenewal: enqueue cert-renewal command: %w", err)
 	}
 	r.logger.Info("devicecertrenewal: enqueued cert-renewal command",
 		slog.String("device_id", cand.DeviceID),

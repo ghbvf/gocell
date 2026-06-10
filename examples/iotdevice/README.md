@@ -83,13 +83,22 @@ cd ../..
 # Export the JWT and GOCELL_IOTDEVICE_SERVICE_SECRET variables from Quick Start first.
 # Set the DSN to enable durable PG mode with automatic migration.
 export GOCELL_IOTDEVICE_DSN="postgres://gocell:${GOCELL_EXAMPLE_POSTGRES_PASSWORD}@localhost:5432/iot_device?sslmode=disable"
+# Durable mode fails fast without these two:
+#   - a real (>=32 byte) cursor-signing key, so the demo key is never used in prod
+export GOCELL_IOTDEVICE_CURSOR_KEY="$(openssl rand -base64 32)"
+#   - an explicit single-pod ack: this demo wires an in-memory idempotency claimer,
+#     correct only for one process. A real multi-pod deployment needs a distributed
+#     claimer; until then this flag is the deliberate single-pod boundary.
+export GOCELL_IOTDEVICE_DURABLE_SINGLE_POD=true
 go run ./examples/iotdevice
 ```
 
 When `GOCELL_IOTDEVICE_DSN` is set, the application switches to durable mode:
 migrations are applied automatically on startup and device + command data is
-persisted to PostgreSQL. Without this variable the application uses in-memory
-storage (demo mode).
+persisted to PostgreSQL. Durable mode also requires `GOCELL_IOTDEVICE_CURSOR_KEY`
+(a `>=32` byte secret) and `GOCELL_IOTDEVICE_DURABLE_SINGLE_POD=true` (the
+single-pod-demo acknowledgement) — startup fails fast if either is missing.
+Without `GOCELL_IOTDEVICE_DSN` the application uses in-memory storage (demo mode).
 
 ## API
 
@@ -264,12 +273,21 @@ the epoch and yields a fresh, dispatchable command.
 > `devices` row and written through the mem and PG device repos — it is **not** an
 > ephemeral in-memory store. In durable PG mode (`GOCELL_IOTDEVICE_DSN` set),
 > cert state **survives restarts**: device rows and their cert state both persist,
-> so `rotate-cert` commands resume for **all** near-expiry devices after a restart,
-> not just re-registered ones. In mem mode (no DSN), cert state is process-local
-> and lost on restart. The per-epoch dedup is owned by the
-> `devices.renewal_requested_epoch` column (written by the device repo); for the
+> so `rotate-cert` commands resume after a restart for **every device registered
+> under the cert schema** (migration 056), not just re-registered ones. In mem
+> mode (no DSN), cert state is process-local and lost on restart. The per-epoch
+> dedup is owned by the `devices.renewal_requested_epoch` column (written by the
+> device repo); the emit and that mark commit in a single transaction, so the
+> single-emit guarantee holds with no "emitted but not marked" gap. For the
 > reconciler and repo implementation see
 > `cells/devicecell/slices/devicecertrenewal/reconciler.go`.
+>
+> **Legacy rows**: device rows that existed *before* migration 056 (or raw-SQL
+> inserts that omit the cert columns) get `cert_expires_at = NULL` — 056 only
+> `ADD COLUMN` with no backfill, and `devices` has no issuance-time column to
+> approximate an expiry from. The renewal scan's `cert_expires_at IS NOT NULL`
+> predicate skips such rows until the device re-registers or its certificate is
+> re-issued. This is a deliberate demo boundary (no backfill source), not a bug.
 >
 > **Observing it**: a freshly registered device gets a healthy (90d) cert and the
 > 30d renewal threshold is not crossed during a short demo, so no `rotate-cert`
