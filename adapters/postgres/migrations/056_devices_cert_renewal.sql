@@ -21,6 +21,12 @@
 --                                pending. DEFAULT 0 is load-bearing for raw-SQL
 --                                inserts that omit the column.
 --
+-- Locking note: ADD COLUMN ... NOT NULL DEFAULT <const> acquires ACCESS EXCLUSIVE
+-- for the catalog-update duration but does NOT rewrite existing rows on PG 11+
+-- (non-volatile constant default). The lock is brief regardless of table size —
+-- safe at the example scale. A zero-downtime production upgrade on a large table
+-- would use: add-nullable → backfill in batches → set NOT NULL.
+--
 -- Idempotency note: the Up section uses "DROP CONSTRAINT IF EXISTS; ADD CONSTRAINT"
 -- because PostgreSQL does not support "ADD CONSTRAINT IF NOT EXISTS" directly.
 -- The DROP+ADD idiom is the canonical rerun-safe equivalent (cf. migration 028

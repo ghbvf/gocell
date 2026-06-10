@@ -429,4 +429,11 @@ func runMarkCertRenewalRequestedCAS(t *testing.T, factory DeviceRepoFactory, fea
 	if got2.RenewalRequestedEpoch != 7 {
 		t.Fatalf("stale-epoch mark must be a no-op; RenewalRequestedEpoch = %d, want 7", got2.RenewalRequestedEpoch)
 	}
+
+	// Absent device -> documented no-op: zero rows affected is not an error.
+	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
+		return repo.MarkCertRenewalRequested(c, "no-such-device", 1)
+	}); err != nil {
+		t.Fatalf("MarkCertRenewalRequested(absent device): %v", err)
+	}
 }

@@ -41,12 +41,15 @@ type Device struct {
 	RenewalRequestedEpoch int64
 }
 
-// NormalizeCertState backfills the zero-valued certificate epoch to the default
-// so a bare Device{} persists consistently in every repository (mem + PG) and
-// satisfies the devices_cert_epoch_positive CHECK. It is the single source for
-// the epoch default and is clock-free: CertExpiresAt is intentionally left as-is
-// (zero -> unset/NULL), and RenewalRequestedEpoch zero is a valid "none yet".
-// Repository Create implementations MUST call it before persisting.
+// NormalizeCertState backfills any CertEpoch below DefaultCertEpoch (e.g. the
+// zero value) to DefaultCertEpoch so a bare Device{} persists consistently in
+// every repository (mem + PG) and satisfies the devices_cert_epoch_positive CHECK
+// (cert_epoch >= 1). It is the single source for the epoch default and is
+// clock-free: CertExpiresAt is intentionally left as-is (zero -> unset/NULL), and
+// RenewalRequestedEpoch zero is a valid "none yet". Repository Create
+// implementations MUST call it before persisting; in practice a missing call is
+// caught loudly — the conformance suite's bare-Device{} case asserts the backfill,
+// and the PG cert_epoch >= 1 CHECK rejects any row that slips through.
 func (d *Device) NormalizeCertState() {
 	if d.CertEpoch < DefaultCertEpoch {
 		d.CertEpoch = DefaultCertEpoch

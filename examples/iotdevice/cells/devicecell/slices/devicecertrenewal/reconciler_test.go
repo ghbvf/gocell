@@ -116,6 +116,13 @@ func TestReconciler_DedupsAcrossTicksPerEpoch(t *testing.T) {
 
 	_, err := r.Reconcile(ctx, reconcile.Request{})
 	require.NoError(t, err)
+
+	// After the first tick the mark must have taken effect: the device is no
+	// longer a candidate because renewal_requested_epoch == cert_epoch.
+	got, err := repo.ListCertificateRenewalCandidates(ctx, certTestBase.Add(certRenewalTestThreshold))
+	require.NoError(t, err)
+	assert.Empty(t, got, "after the first tick marks the epoch, the device is no longer a candidate")
+
 	_, err = r.Reconcile(ctx, reconcile.Request{})
 	require.NoError(t, err)
 
@@ -183,6 +190,40 @@ func TestReconciler_EmitFailureBubbles(t *testing.T) {
 	got, err := repo.ListCertificateRenewalCandidates(ctx, certTestBase.Add(certRenewalTestThreshold))
 	require.NoError(t, err)
 	assert.Len(t, got, 1, "a cert whose renewal emit failed must remain a candidate")
+}
+
+// markFailRepo wraps a mem repo and overrides MarkCertRenewalRequested to
+// return a fixed error, so we can prove the error bubbles out of Reconcile.
+type markFailRepo struct {
+	*mem.DeviceRepository
+	err error
+}
+
+func (r markFailRepo) MarkCertRenewalRequested(_ context.Context, _ string, _ int64) error {
+	return r.err
+}
+
+// TestReconciler_MarkFailureBubbles proves that a failed MarkCertRenewalRequested
+// propagates out of Reconcile AND that the emit already completed (the entry IS in
+// the recorder). The documented behavior is: mark runs after a successful emit;
+// a failed mark leaves a re-emit that the Claimer dedups.
+func TestReconciler_MarkFailureBubbles(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base := mem.NewDeviceRepository()
+	seedCert(t, ctx, base, "dev-near", certTestBase.Add(24*time.Hour))
+
+	wantErr := errors.New("mark failed")
+	repo := markFailRepo{DeviceRepository: base, err: wantErr}
+
+	rec := outboxtest.NewRecorder()
+	r, err := NewReconciler(clockmock.New(certTestBase), repo, rec.CellEmitter(),
+		outbox.DemoCellTxManager(), certRenewalTestThreshold, nil)
+	require.NoError(t, err)
+
+	_, reconcileErr := r.Reconcile(ctx, reconcile.Request{})
+	require.ErrorIs(t, reconcileErr, wantErr, "mark failure must bubble out of Reconcile")
+	require.Len(t, rec.Entries(), 1, "emit succeeded before the mark; entry must be present")
 }
 
 func TestNewReconciler_Validation(t *testing.T) {
