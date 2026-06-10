@@ -50,3 +50,12 @@ type stubVerifier struct {
 func (v stubVerifier) VerifyIntent(_ context.Context, _ string, _ kauth.TokenIntent) (kauth.Claims, error) {
 	return v.claims, v.err
 }
+
+// panicVerifier panics inside VerifyIntent to exercise authorize's stage-level
+// panic guard: the Auth interceptor runs OUTSIDE Recovery, so a verifier that
+// panics must be collapsed into codes.Internal rather than escaping the chain.
+type panicVerifier struct{ val any }
+
+func (v panicVerifier) VerifyIntent(context.Context, string, kauth.TokenIntent) (kauth.Claims, error) {
+	panic(v.val)
+}
