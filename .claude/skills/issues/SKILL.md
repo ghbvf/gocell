@@ -53,7 +53,7 @@ allowed-tools: [Read, Grep, Bash, Agent, AskUserQuestion]
    - `wave(v) = 1` 若 v 无 OPEN blocker；
    - `wave(v) = 1 + max(wave(b) for b in OPEN blockers(v))` 否则。
 5. **有界 cap = Wave 4**：`wave(v) > 4` 的节点标记 **超窗**——不落 Project Wave 字段（A3 清空/不写）。Project Wave 只有 1-4 四档。
-6. **wave 内排序 = 对每个 Wave 内任务并行分析，确认实施顺序**：跨 wave 顺序已由依赖锁定；wave 内无硬 `Blocked-by`，顺序是自由度。对每个 Wave（成员 ≥2）**并行**派 `Agent(Explore)` 分析其中每个任务的 scope / 触碰文件 / 产出↔消费 / 风险，主 agent 汇总后定该 wave 实施顺序：**基础性产出**（被同 wave 他者隐式消费）先 → **同文件任务相邻**防写冲突 → 默认 `pri`(p0>p1>p2>p3) → `Cx`(小先) → issue#。单任务 wave 跳过分析。
+6. **wave 内排序 = 对每个 Wave 内任务并行分析，确认实施顺序**：跨 wave 顺序已由依赖锁定；wave 内无硬 `Blocked-by`，顺序是自由度。对每个 Wave（成员 ≥2）**并行**派 `Agent(Explore)` 分析其中每个任务的 scope / 触碰文件 / 产出↔消费 / 风险，主 agent 汇总后定该 wave 实施顺序：**基础性产出**（被同 wave 他者隐式消费）先 → **同文件任务相邻**防写冲突 → 默认 `pri`(p0>p1>p2>p3) → `Cx`(小先，由 `cx-X` label 提供、REST 可查) → issue#。单任务 wave 跳过分析。
 7. 输出每个 OPEN 子任务的 `(wave, wave 内序)` 或「超窗」。
 
 呈现给用户的 dry-run 表（只列 OPEN；超窗与已完成单列）：
@@ -130,16 +130,17 @@ C
 
 ```bash
 gh issue create \
-  --label backlog --label pri-p2 --label area-eventing --label type-bug \
+  --label backlog --label pri-p2 --label area-eventing --label type-bug [--label cx-2] \
   --title "[<ID>] <简短标题>" --body-file <填好的 backlog.md>
 # body 骨架单源 = .github/project-template/backlog.md（现状 / 修复方向 / Files / Trigger / Source）——本技能不复制其结构
 ```
 
-> **由 review/fix finding（OUT_OF_SCOPE / 派生）成文时**：body 按 `backlog.md` 顶部的字段映射**无损**填充，不得一句话带过——否则后续无法据此修复。
+> **由 review/fix finding（OUT_OF_SCOPE / 派生）成文时**：body 按 `backlog.md` 顶部的字段映射**无损**填充，不得一句话带过——否则后续无法据此修复；并从 finding 的 `[…Cx…]` tag 取 `--label cx-X` 一并贴。
 
 - **area-XX**（1 个，8 选）：见 `.github/project-template/PROJECT.md` §2.1。
 - **type-XX**（1 个，8 选）：见 §2.2。
 - **pri-pX**：评级 rubric 见 `.github/project-template/PROJECT.md` §3。`/fix` 派生默认 `pri-p2`；`pri-p0` 仅 incident-driven，停下 AskUserQuestion 确认。
+- **cx-X**（可选）：复杂度 rubric 见 `.github/project-template/PROJECT.md` §3.2 / §2.6。能定级则贴；finding 派生从 `[…Cx…]` tag 取。
 - **flag-cond**（可选）：条件延后型加此 label + body 写 `## Trigger`。
 
 > P0 红线不得默认贴。area/type 漏贴时用 `gh issue edit <N> --add-label area-X --add-label type-X` 补。

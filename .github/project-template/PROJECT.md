@@ -12,15 +12,15 @@
 | 维度 | 载体 | 写入方 |
 |------|------|--------|
 | 条目内容 / 状态描述 | GitHub Issue body | 人 / 自动化 |
-| 领域 / 类型 / 优先级 | Issue label（area / type / pri） | CLI 显式 `--label` |
-| 进度状态 / 复杂度 / wave | Project v2 字段（Status / Estimate / Wave） | Project UI / 自动化 |
+| 领域 / 类型 / 优先级 / 复杂度 | Issue label（area / type / pri / cx） | CLI 显式 `--label` |
+| 进度状态 / wave | Project v2 字段（Status / Wave） | Project UI / 自动化 |
 | 父子关系 | GitHub 原生 sub-issue | 人 / 自动化 |
 
 > 本仓 issue/PR 全程经 `gh` CLI / 技能创建，body 读 `.github/project-template/` 下对应模版（`--body-file`）。
 
-**新建 backlog**：`gh issue create --label backlog --label pri-pX --label area-XX --label type-XX --title "[<ID>] ..." --body-file <填好的 backlog.md>`。pri/area/type 必须显式贴（取值见 §2/§3）。
+**新建 backlog**：`gh issue create --label backlog --label pri-pX --label area-XX --label type-XX [--label cx-X] --title "[<ID>] ..." --body-file <填好的 backlog.md>`。pri/area/type 必须显式贴；cx 可选（能定级则贴，取值见 §2.6/§3.2）。
 
-**新建 epic**：`gh issue create --label epic --label backlog --label pri-pX --label area-XX --title "[EPIC] ..." --body-file <填好的 epic.md>`；子任务用 GitHub 原生 sub-issue 关联。
+**新建 epic**：`gh issue create --label epic --label backlog --label pri-pX --label area-XX --title "[EPIC] ..." --body-file <填好的 epic.md>`；子任务用 GitHub 原生 sub-issue 关联。epic 不贴 cx（跨多 PR、无单一 diff）。
 
 ---
 
@@ -46,7 +46,7 @@
 
 ### 2.3 pri-XX（优先级，1 个，CLI 显式贴）
 
-`pri-p0` / `pri-p1` / `pri-p2` / `pri-p3`（语义见 §3 rubric）。建 issue 时必须显式 `--label pri-pX`。
+`pri-p0` / `pri-p1` / `pri-p2` / `pri-p3`（语义见 §3 rubric）。建 issue 时必须显式 `--label pri-pX`。复杂度 label（cx）见 §2.6。
 
 ### 2.4 工具 / 标记 label
 
@@ -68,6 +68,10 @@
 | | `pr-review/changes-requested` | review 提出需改项 |
 
 流转见 §5。PR 始终恰好一个 `pr-status/*`，pr-review 轴 `approved` XOR `changes-requested`（切一侧必清同轴对侧）。`/fix` 不能直接到 `ready`——必过 `/pr-review --check` 验证（fix 不能自证完成）。`needs-review-again` 仅用于 ship 首次交接；review 出 changes-requested 后始终切 `needs-fix`（5-state）。
+
+### 2.6 cx-XX（复杂度，1 个，可选 CLI 贴）
+
+`cx-1` / `cx-2` / `cx-3` / `cx-4`（语义见 §3.2 rubric）。与 pri 同为评级两轴之一、载体对称（都是 label），但 cx **可选**：建 issue / 评级时能定级则贴 `--label cx-X`，不强制；review/fix finding 派生的 issue 从 finding 的 `[…Cx…]` tag 自动带上对应 cx。epic 不贴（跨多 PR、无单一 diff）。
 
 ---
 
@@ -101,7 +105,7 @@
 | **Cx3** | 跨包 5–15 文件 | 需 archtest typed / typeseval | 接口扩字段 + 多实现同步、funnel 双向锁、ADR amendment |
 | **Cx4** | ≥15 文件 / ≥3 领域 | 跨包 type info + reflect/codegen | 接口 ctx 透传、cell 接口重构、codegen 链路改造 |
 
-> Cx 映射 Project v2 Estimate 字段（Cx1–Cx4）。Cx5+ 必须拆为多 item / 多 wave。
+> Cx 由 `cx-1`..`cx-4` label 承载（§2.6）。Cx5+ 必须拆为多 item / 多 wave。
 
 ---
 
@@ -110,13 +114,12 @@
 | 字段 | 类型 | 取值 | 写入方 |
 |------|------|------|--------|
 | **Status** | single-select | Backlog / Ready / In progress / In review / Done | 人（Project 内置 workflow + 手动） |
-| **Estimate** | single-select | Cx1 / Cx2 / Cx3 / Cx4 | 人 / 评级时 |
 | **Wave** | single-select | Wave 1 / 2 / 3 / 4（**仅 4 档**） | 自动化（epic OPEN 子任务**滚动**排序：已完成不动、未完成重排 Wave 1-4、超窗 >W4 不入字段。算法见 `issues` Part A） |
 | **Parent issue** | built-in | 自动派生（原生 sub-issue） | GitHub |
 | **Sub-issues progress** | built-in | 自动派生（子 issue close 比例） | GitHub |
 
-> Priority 不是 Project 字段，是 `pri-pX` label（单源）。已删字段：Iteration（原 daily-planner 每日调度，技能已退役）、
-> legacy Size（XS-XL，被 Estimate 取代）。
+> Priority 不是 Project 字段，是 `pri-pX` label（单源）；复杂度（Cx）同理改用 `cx-X` label（§2.6）。已删字段：Iteration（原 daily-planner 每日调度，技能已退役）、
+> Size（XS-XL）、Estimate（原承载 Cx1-Cx4，已改 `cx-X` label）。
 
 ---
 
@@ -173,4 +176,4 @@ gh pr view <N> --json reviews,comments
 gh api repos/{owner}/{repo}/pulls/<N>/comments --jq length   # 探 inline review comments，>0 才一并读取
 ```
 
-> label 维度（area/type/pri）经 REST 可查；Status/Estimate/Wave 仅 Project UI 可见（REST token 缺 `project` scope）。
+> label 维度（area/type/pri/cx）经 REST 可查；Status/Wave 仅 Project UI 可见（REST token 缺 `project` scope）。cx 改 label 后，wave 内 Cx tiebreaker 不再依赖 Project UI。
