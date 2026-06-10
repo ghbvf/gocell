@@ -58,6 +58,13 @@ const subscribeReadyTimeout = 50 * time.Millisecond
 // rather than tweaking individual tests.
 const negativeAssertionWindow = 200 * time.Millisecond
 
+// delayedTier is the per-attempt wait used by testDelayedRedeliveryHonorsSchedule
+// (#1458). Short enough for a fast test, long enough that the cumulative span
+// across attempts is an unambiguous signal that the per-attempt schedule delays
+// were applied — on both the in-memory bus (clock-timed) and rabbitmq (real
+// per-tier queue TTL).
+const delayedTier = 60 * time.Millisecond
+
 // asDelivery converts a slim HandleResult from Ack/Requeue/Reject factory
 // functions to a DeliveryOutcome for use in SubscriberHandler closures.
 // Only for use in conformance test helpers where the test author knows the
@@ -131,6 +138,9 @@ func RunBatch2Disposition(t *testing.T, features Features, constructor PubSubCon
 	})
 	t.Run("ZeroValueDisposition", func(t *testing.T) {
 		testZeroValueDisposition(t, features, constructor)
+	})
+	t.Run("DelayedRedeliveryHonorsSchedule", func(t *testing.T) {
+		testDelayedRedeliveryHonorsSchedule(t, features, constructor)
 	})
 }
 
@@ -541,6 +551,95 @@ func testZeroValueDisposition(t *testing.T, features Features, constructor PubSu
 	assertTrue(t, callCount.Load() >= 2,
 		"zero-value Disposition should be treated as requeue (safe degradation)")
 	h.teardown()
+}
+
+// testDelayedRedeliveryHonorsSchedule verifies that a subscription carrying a
+// BrokerDelaySchedule (#1458) redelivers a transient failure on the per-attempt
+// schedule and stops after the schedule is exhausted (routing to DLX /
+// dead-letter), instead of using the transport's built-in backoff + retry
+// budget. It is the cross-transport guard that keeps rabbitmq (TTL+DLX
+// delay-tier queues) and the in-memory bus (clock-timed schedule) honoring the
+// same Svix timeline: a transport that ignored BrokerDelaySchedule would deliver
+// a different number of times (its own budget — or, for a bare broker requeue,
+// unbounded) and fail the exact-count assertion. Mandatory for every
+// requeue-supporting transport (no opt-out flag).
+func testDelayedRedeliveryHonorsSchedule(t *testing.T, features Features, constructor PubSubConstructor) {
+	if !features.SupportsRequeue {
+		t.Skip("implementation does not support requeue")
+	}
+
+	pub, sub := constructor(t)
+	ctx := t.Context()
+	topic := TestTopic(t)
+
+	// 3 tiers → 4 deliveries (the immediate attempt + one retry per tier); then
+	// the budget is exhausted and the entry routes to DLX/dead-letter (no further
+	// delivery). 4 differs from the transports' built-in retry budgets, so a
+	// transport that ignored BrokerDelaySchedule fails the exact-count assertion.
+	tiers := []time.Duration{delayedTier, delayedTier, delayedTier}
+	wantDeliveries := len(tiers) + 1
+
+	var (
+		mu        sync.Mutex
+		stamps    []time.Time
+		delivered = make(chan struct{}, deliveryEventsBuffer)
+	)
+
+	subCtx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+
+	subDone := make(chan struct{})
+	go func() {
+		defer close(subDone)
+		_ = sub.Subscribe(subCtx, outbox.Subscription{
+			Topic:               topic,
+			ConsumerGroup:       conformanceCG,
+			CellID:              conformanceCG,
+			BrokerDelaySchedule: tiers,
+		}, func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+			mu.Lock()
+			stamps = append(stamps, time.Now())
+			mu.Unlock()
+			select {
+			case delivered <- struct{}{}:
+			default:
+			}
+			return asDelivery(outbox.Requeue(fmt.Errorf("always transient"))), nil
+		})
+	}()
+	waitForSubscription(t, ctx, sub, topic, conformanceCG)
+
+	assertNoError(t, pub.Publish(ctx, topic, wrapV1Envelope(t, topic, []byte(`{"test":"broker-delay"}`))))
+
+	for i := range wantDeliveries {
+		select {
+		case <-delivered:
+		case <-time.After(defaultTimeout):
+			t.Fatalf("broker-delay: delivery %d of %d did not arrive within %s", i+1, wantDeliveries, defaultTimeout)
+		}
+	}
+	// Budget is bounded by the schedule: no delivery beyond wantDeliveries.
+	select {
+	case <-delivered:
+		t.Fatalf("broker-delay: received more than %d deliveries — retry budget not bounded by the schedule", wantDeliveries)
+	case <-time.After(negativeAssertionWindow):
+	}
+
+	cancel()
+	if err := awaitWithBudget(fmt.Sprintf("delayedRedelivery-join(topic=%q)", topic), subDone, defaultTimeout); err != nil {
+		t.Errorf("%v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	assertLen(t, len(stamps), wantDeliveries,
+		"broker-delay: handler must be invoked exactly once per scheduled attempt")
+	// Delays were actually applied: the span across attempts is at least a
+	// generous fraction of the schedule sum (a no-delay impl delivers near-instantly).
+	span := stamps[len(stamps)-1].Sub(stamps[0])
+	minSpan := (delayedTier * time.Duration(len(tiers))) * 2 / 3
+	assertTrue(t, span >= minSpan,
+		fmt.Sprintf("broker-delay: attempts spanned %s, expected >= %s (schedule delays not applied)", span, minSpan))
 }
 
 // ---------------------------------------------------------------------------

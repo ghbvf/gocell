@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -13,13 +14,12 @@ import (
 // wait before retry i+1. The schedule is value-immutable: DefaultSvixSchedule
 // returns a fresh copy and there is no setter.
 //
-// PR-5 ships DefaultSvixSchedule as the canonical default and the seam for the
-// broker-delay follow-up (gh #1458). PR-5 does NOT wire per-attempt delays or a
-// per-dispatcher RetryCount at runtime: the dispatch consumer rides the shared
-// ConsumerBase (default exponential backoff, capped 30 s). Honoring the full
-// Svix timeline (up to ~40 h) needs broker-delay support; DelayFor is the seam
-// the follow-up will consume. The schedule is retained because that follow-up is
-// a real future need, not a dead abstraction.
+// DefaultSvixSchedule is the canonical default. The per-attempt wall-clock
+// delays ARE honored at runtime (gh #1458): the webhook-dispatch bootstrap
+// drain copies Delays() onto outbox.Subscription.BrokerDelaySchedule, and the
+// Subscriber applies broker-native delayed re-delivery (rabbitmq TTL+DLX
+// delay-tier queues / in-memory clock-timed schedule), durable across restarts.
+// DelayFor is the single-tier lookup; Delays is the bulk seam the wiring consumes.
 //
 // See docs/architecture/202606012052-1160-adr-webhook-retry-default.md §D5.
 type RetrySchedule struct {
@@ -68,6 +68,13 @@ func (s RetrySchedule) DelayFor(n int) (delay time.Duration, ok bool) {
 	}
 	return s.delays[n-1], true
 }
+
+// Delays returns a copy of the retry-delay tiers, in retry order (delays[i] is
+// the wait before retry i+1). It is the bulk-read seam the broker-delay wiring
+// (#1458) consumes to build per-tier delay queues / schedule-driven redelivery;
+// DelayFor remains the single-tier lookup. The slice is cloned so callers cannot
+// mutate the schedule's internal state.
+func (s RetrySchedule) Delays() []time.Duration { return slices.Clone(s.delays) }
 
 // Classify maps an outbound delivery outcome to an outbox.Disposition per the
 // webhook retry-default ADR (standard-webhooks / Svix aligned). Exactly one of

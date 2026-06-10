@@ -443,6 +443,12 @@ type SubscriptionRequest struct {
 	// ref: ThreeDotsLabs/watermill router.AddHandler handlerName / NATS subscription metadata.
 	// ref: ADR docs/architecture/202605111000-adr-subscription-cellid-mandatory.md
 	CellID string
+
+	// BrokerDelaySchedule opts the subscription into broker-native delayed
+	// re-delivery (#1458). It flows through to outbox.Subscription.BrokerDelaySchedule;
+	// see that field for semantics. Empty for ordinary event subscriptions;
+	// the webhook-dispatch drain sets it to DefaultSvixSchedule().Delays().
+	BrokerDelaySchedule []time.Duration
 }
 
 // SubscriptionOption mutates a SubscriptionRequest to attach optional metadata.
@@ -452,6 +458,15 @@ type SubscriptionOption func(*SubscriptionRequest)
 func WithSubscriptionSliceID(sliceID string) SubscriptionOption {
 	return func(r *SubscriptionRequest) {
 		r.SliceID = sliceID
+	}
+}
+
+// WithSubscriptionBrokerDelaySchedule opts the subscription into broker-native
+// delayed re-delivery with the given per-attempt wait schedule (#1458). Empty or
+// nil is a no-op (immediate-requeue behavior is preserved).
+func WithSubscriptionBrokerDelaySchedule(delays []time.Duration) SubscriptionOption {
+	return func(r *SubscriptionRequest) {
+		r.BrokerDelaySchedule = delays
 	}
 }
 

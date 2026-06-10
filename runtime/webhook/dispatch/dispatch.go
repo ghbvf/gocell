@@ -38,6 +38,7 @@ package dispatch
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -63,6 +64,10 @@ type Consumer struct {
 	// observability owner.
 	ConsumerGroup string
 	CellID        string
+	// BrokerDelaySchedule is the Svix per-attempt retry timeline
+	// (DefaultSvixSchedule().Delays()) the bootstrap drain copies onto the
+	// outbox.Subscription so the broker honors per-attempt delays (#1458).
+	BrokerDelaySchedule []time.Duration
 }
 
 // Validate checks that all required Consumer fields are populated. buildConsumer
@@ -177,10 +182,11 @@ func buildConsumer(
 		return Consumer{}, err
 	}
 	c := Consumer{
-		Spec:          cs,
-		Handler:       dispatcher.Handle,
-		ConsumerGroup: spec.CellID,
-		CellID:        spec.CellID,
+		Spec:                cs,
+		Handler:             dispatcher.Handle,
+		ConsumerGroup:       spec.CellID,
+		CellID:              spec.CellID,
+		BrokerDelaySchedule: kwh.DefaultSvixSchedule().Delays(),
 	}
 	if err := c.Validate(); err != nil {
 		return Consumer{}, err

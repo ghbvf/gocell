@@ -180,7 +180,10 @@ func (b *Bootstrap) drainWebhookDispatchers(s *phaseState, evtRouter *eventroute
 		return fmt.Errorf("bootstrap: build webhook dispatch consumers: %w", err)
 	}
 	for _, c := range consumers {
-		if err := evtRouter.AddContractHandler(c.Spec, c.Handler, c.ConsumerGroup, c.CellID); err != nil {
+		// #1458: carry the Svix per-attempt retry schedule onto the subscription
+		// so the subscriber honors broker-native delayed re-delivery.
+		if err := evtRouter.AddContractHandler(c.Spec, c.Handler, c.ConsumerGroup, c.CellID,
+			cell.WithSubscriptionBrokerDelaySchedule(c.BrokerDelaySchedule)); err != nil {
 			return fmt.Errorf("bootstrap: webhook dispatch setup failed for contract %q: %w", c.Spec.ID, err)
 		}
 	}
