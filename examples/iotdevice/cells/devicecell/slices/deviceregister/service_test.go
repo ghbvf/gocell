@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecert"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
@@ -50,7 +51,7 @@ func (failPublisher) Close(_ context.Context) error { return nil }
 func newTestService(t testing.TB) (*Service, *mem.DeviceRepository) {
 	t.Helper()
 	repo := mem.NewDeviceRepository()
-	svc, err := NewService(clock.Real(), repo, slog.Default())
+	svc, err := NewService(clock.Real(), repo, slog.Default(), WithCertStore(devicecert.NewStore()))
 	if err != nil {
 		t.Fatalf("newTestService: %v", err)
 	}
@@ -148,7 +149,8 @@ func TestService_Register_PublishFails_StillReturnsDevice(t *testing.T) {
 		metrics.NopProvider{}, clock.Real(), "devicecell", outbox.WithLogger(slog.Default()),
 	)
 	require.NoError(t, err)
-	svc, err := NewService(clock.Real(), repo, slog.Default(), WithEmitter(outbox.WrapEmitterForCell(emitter)))
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
+		WithEmitter(outbox.WrapEmitterForCell(emitter)), WithCertStore(devicecert.NewStore()))
 	require.NoError(t, err)
 
 	resp, err := svc.Register(context.Background(), &registercontract.Request{Name: "sensor-c"})
@@ -166,7 +168,8 @@ func TestService_Register_PublishFails_FailClosedReturnsError(t *testing.T) {
 		metrics.NopProvider{}, clock.Real(), "devicecell", outbox.WithLogger(slog.Default()),
 	)
 	require.NoError(t, err)
-	svc, err := NewService(clock.Real(), repo, slog.Default(), WithEmitter(outbox.WrapEmitterForCell(emitter)))
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
+		WithEmitter(outbox.WrapEmitterForCell(emitter)), WithCertStore(devicecert.NewStore()))
 	require.NoError(t, err)
 
 	resp, err := svc.Register(context.Background(), &registercontract.Request{Name: "sensor-c"})
@@ -185,7 +188,7 @@ func TestService_Register_FailOpenDoesNotLogPublished(t *testing.T) {
 		metrics.NopProvider{}, clock.Real(), "devicecell", outbox.WithLogger(logger),
 	)
 	require.NoError(t, err)
-	svc, err := NewService(clock.Real(), repo, logger, WithEmitter(outbox.WrapEmitterForCell(emitter)))
+	svc, err := NewService(clock.Real(), repo, logger, WithEmitter(outbox.WrapEmitterForCell(emitter)), WithCertStore(devicecert.NewStore()))
 	require.NoError(t, err)
 
 	resp, err := svc.Register(context.Background(), &registercontract.Request{Name: "sensor-log"})
@@ -210,7 +213,7 @@ func TestService_Register_StampsOccurredAtFromDeviceLastSeen(t *testing.T) {
 	clk := &stepClock{FakeClock: clockmock.New(base), step: time.Second}
 	repo := mem.NewDeviceRepository()
 	recorder := outboxtest.NewRecorder()
-	svc, err := NewService(clk, repo, slog.Default(), WithEmitter(recorder.CellEmitter()))
+	svc, err := NewService(clk, repo, slog.Default(), WithEmitter(recorder.CellEmitter()), WithCertStore(devicecert.NewStore()))
 	require.NoError(t, err)
 
 	ctx := context.Background()

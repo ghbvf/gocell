@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecert"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -54,7 +55,8 @@ func newContractHandler() (http.Handler, *recordingPublisher) {
 	if err != nil {
 		panic(err)
 	}
-	svc, err2 := NewService(clock.Real(), repo, slog.Default(), WithEmitter(outbox.WrapEmitterForCell(emitter)))
+	svc, err2 := NewService(clock.Real(), repo, slog.Default(),
+		WithEmitter(outbox.WrapEmitterForCell(emitter)), WithCertStore(devicecert.NewStore()))
 	if err2 != nil {
 		panic(err2)
 	}

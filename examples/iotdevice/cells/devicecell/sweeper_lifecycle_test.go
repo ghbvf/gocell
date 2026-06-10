@@ -40,9 +40,9 @@ func TestDeviceCell_CommandSweeperLoop_OnStartClean(t *testing.T) {
 	rec := newTestRec()
 	require.NoError(t, c.Init(context.Background(), rec))
 	snap := rec.Snapshot()
-	require.Len(t, snap.LifecycleHooks, 1, "expect one lifecycle hook (sweeper)")
+	require.Len(t, snap.LifecycleHooks, 2, "expect two lifecycle hooks (command sweeper + cert renewal #1757)")
 	hook := snap.LifecycleHooks[0]
-	require.Equal(t, "devicecommand.sweeper", hook.Name)
+	require.Equal(t, "devicecommand.sweeper", hook.Name, "command sweeper is registered first")
 	require.NotNil(t, hook.OnStart)
 	require.NotNil(t, hook.OnStop)
 
