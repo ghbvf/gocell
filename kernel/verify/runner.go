@@ -87,7 +87,7 @@ func (r *Runner) VerifySlice(ctx context.Context, sliceKey string) (*VerifyResul
 
 	// Try metadata-style dir first; if it doesn't exist as a Go package,
 	// fall back to the hyphen-stripped variant (e.g., session-login → sessionlogin).
-	pkg := resolveSlicePkg(r.root, cellID, sliceID)
+	pkg := resolveSlicePkg(r.root, sm.File, cellID, sliceID)
 	result := &VerifyResult{TargetID: sliceKey, Passed: true}
 
 	unitRefs := sm.Verify.Unit
@@ -441,28 +441,45 @@ func exampleNameFromJourneyFile(file string) (string, bool) {
 	return parts[1], true
 }
 
-// resolveSlicePkg determines the Go test package path for a slice.
-// In this repo, metadata dirs (session-login/) contain only slice.yaml,
-// while the Go package lives in a hyphen-stripped sibling (sessionlogin/).
-// We check for Go source files, not just directory existence.
+// resolveSlicePkg determines the Go test package path for a slice. The slice's
+// ".../slices" parent and metadata dir name are derived from sliceFile (the
+// slice.yaml path), so it is layout-agnostic: platform slices live under
+// corecells/<cell>/slices/<slice>/ (flat module), example slices under
+// examples/<id>/cells/<cell>/slices/<slice>/. This mirrors cellPackagePath,
+// which derives a cell's package from its metadata File rather than a hardcoded
+// "cells/" literal (the #1560 fail-open: a literal "cells/" stops resolving once
+// platform cells move to the corecells module).
+//
+// In this repo, metadata dirs (session-login/) may contain only slice.yaml while
+// the Go package lives in a hyphen-stripped sibling (sessionlogin/), so we prefer
+// whichever dir actually contains Go source files.
+//
+// When sliceFile is empty (synthetic/in-memory metadata), it falls back to the
+// conventional platform layout ./cells/<cellID>/slices/<sliceID>/.
 //
 // Precondition: cellID and sliceID must have passed parseSliceKey validation.
-func resolveSlicePkg(root, cellID, sliceID string) string {
-	base := filepath.Join("cells", cellID, "slices")
+func resolveSlicePkg(root, sliceFile, cellID, sliceID string) string {
+	base := path.Join("cells", cellID, "slices")
+	leaf := sliceID
+	if sliceFile != "" {
+		metaDir := path.Dir(filepath.ToSlash(sliceFile)) // .../slices/<slice>
+		base = path.Dir(metaDir)
+		leaf = path.Base(metaDir)
+	}
 	// Prefer the dir that actually contains Go files.
-	stripped := strings.ReplaceAll(sliceID, "-", "")
-	if hasGoFiles(filepath.Join(root, base, stripped)) {
+	stripped := strings.ReplaceAll(leaf, "-", "")
+	if hasGoFiles(filepath.Join(root, filepath.FromSlash(base), stripped)) {
 		return fmt.Sprintf(fmtSlicePkgPath, base, stripped)
 	}
-	if hasGoFiles(filepath.Join(root, base, sliceID)) {
-		return fmt.Sprintf(fmtSlicePkgPath, base, sliceID)
+	if hasGoFiles(filepath.Join(root, filepath.FromSlash(base), leaf)) {
+		return fmt.Sprintf(fmtSlicePkgPath, base, leaf)
 	}
 	// Fallback: try stripped dir existence (may have Go files in subdirs).
-	if dirExists(filepath.Join(root, base, stripped)) {
+	if dirExists(filepath.Join(root, filepath.FromSlash(base), stripped)) {
 		return fmt.Sprintf(fmtSlicePkgPath, base, stripped)
 	}
 	// Last resort: metadata-style path (go test will give clear error).
-	return fmt.Sprintf(fmtSlicePkgPath, base, sliceID)
+	return fmt.Sprintf(fmtSlicePkgPath, base, leaf)
 }
 
 // cellPackagePath derives the Go test package path for a cell from its

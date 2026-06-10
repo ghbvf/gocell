@@ -105,7 +105,8 @@ func parseProjectGuarded(root string, locatorOpts ...metadata.LocatorOption) (*m
 			"found cell.yaml/slice.yaml under %q but the parser discovered zero metadata "+
 				"sources — the on-disk layout does not match the active locator mode (the "+
 				"corecells platform module uses a flat layout); run gocell from the workspace "+
-				"root, or pass --layout=manifest with --root <workspace-root>",
+				"root (the directory containing .gocell/manifest.yaml) so manifest-mode "+
+				"discovery resolves the flat layout",
 			root)
 	}
 	return project, nil

@@ -343,14 +343,17 @@ func TestResolveSlicePkg_PrefersGoFiles(t *testing.T) {
 	require.NoError(t, os.MkdirAll(goDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(goDir, "service.go"), []byte("package myslice"), 0o644))
 
-	pkg := resolveSlicePkg(dir, "c", "my-slice")
+	pkg := resolveSlicePkg(dir, "cells/c/slices/my-slice/slice.yaml", "c", "my-slice")
 	assert.Contains(t, pkg, "myslice", "should prefer dir with Go files")
 	assert.NotContains(t, pkg, "my-slice")
 }
 
 func TestResolveSlicePkg_FallbackToMetadata(t *testing.T) {
-	pkg := resolveSlicePkg(t.TempDir(), "c", "nonexistent")
+	// Empty sliceFile exercises the synthetic-metadata fallback to the
+	// conventional ./cells/<cell>/slices/<slice>/ layout.
+	pkg := resolveSlicePkg(t.TempDir(), "", "c", "nonexistent")
 	assert.Contains(t, pkg, "nonexistent")
+	assert.Contains(t, pkg, "cells/c/slices/nonexistent")
 }
 
 func TestResolveSlicePkg_UsesSliceIDDirWhenStrippedHasNoGoFiles(t *testing.T) {
@@ -363,7 +366,7 @@ func TestResolveSlicePkg_UsesSliceIDDirWhenStrippedHasNoGoFiles(t *testing.T) {
 	require.NoError(t, os.MkdirAll(goDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(goDir, "handler.go"), []byte("package myslice"), 0o644))
 
-	pkg := resolveSlicePkg(dir, "c", "my-slice")
+	pkg := resolveSlicePkg(dir, "cells/c/slices/my-slice/slice.yaml", "c", "my-slice")
 	assert.Contains(t, pkg, "my-slice", "should use sliceID dir when stripped dir has no Go files")
 }
 
@@ -377,8 +380,26 @@ func TestResolveSlicePkg_FallbackToStrippedDirWhenNoGoFiles(t *testing.T) {
 	require.NoError(t, os.MkdirAll(strippedDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(strippedDir, "slice.yaml"), []byte("id: my-slice"), 0o644))
 
-	pkg := resolveSlicePkg(dir, "c", "my-slice")
+	pkg := resolveSlicePkg(dir, "cells/c/slices/myslice/slice.yaml", "c", "my-slice")
 	assert.Contains(t, pkg, "myslice", "should use stripped dir when it exists but has no Go files")
+}
+
+func TestResolveSlicePkg_CorecellsFlatLayout(t *testing.T) {
+	// #1560 regression: platform slices live flat under
+	// corecells/<cell>/slices/<slice>/ with slice.yaml and the Go package in the
+	// SAME dir. resolveSlicePkg must derive the path from sm.File, NOT a
+	// hardcoded "cells/" literal (which would resolve to the now-nonexistent
+	// ./cells/accesscore/slices/sessionlogin/ and fail verify slice).
+	dir := t.TempDir()
+	goDir := filepath.Join(dir, "corecells", "accesscore", "slices", "sessionlogin")
+	require.NoError(t, os.MkdirAll(goDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(goDir, "slice.yaml"), []byte("id: sessionlogin"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(goDir, "service.go"), []byte("package sessionlogin"), 0o644))
+
+	pkg := resolveSlicePkg(dir, "corecells/accesscore/slices/sessionlogin/slice.yaml", "accesscore", "sessionlogin")
+	assert.Equal(t, "./corecells/accesscore/slices/sessionlogin/...", pkg,
+		"platform slice must resolve under corecells/, not the hardcoded cells/ literal")
+	assert.NotContains(t, pkg, "/cells/", "must not fall back to the legacy cells/ layout")
 }
 
 func TestIsZeroMatch(t *testing.T) {
