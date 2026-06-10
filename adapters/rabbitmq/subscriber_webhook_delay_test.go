@@ -102,7 +102,7 @@ func TestDeclareTopology_WithDelaySchedule_DeclaresDelayTiers(t *testing.T) {
 
 	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
-	schedule := []time.Duration{200 * time.Millisecond, 500 * time.Millisecond}
+	schedule := []time.Duration{testtime.D200ms, testtime.D500ms}
 	topic := "session.created"
 	queueName := "cg-1.session.created"
 
@@ -238,7 +238,7 @@ func makeDispatchTestSetup(t *testing.T) (*Subscriber, *mockChannel, amqp.Delive
 func TestDispatchDisposition_DelayedRequeue_Attempt1_PublishesAndAcks(t *testing.T) {
 	sub, ch, delivery, entry := makeDispatchTestSetup(t)
 
-	schedule := []time.Duration{200 * time.Millisecond, 500 * time.Millisecond}
+	schedule := []time.Duration{testtime.D200ms, testtime.D500ms}
 	res := outbox.DeliveryOutcome{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
 
 	sub.dispatchDisposition(context.Background(), ch, delivery, "myqueue", schedule, res, nil, "test.topic", entry)
@@ -276,7 +276,7 @@ func TestDispatchDisposition_DelayedRequeue_BudgetExhausted(t *testing.T) {
 	// Set attempt = 3 > len(schedule)=2 to trigger exhaustion.
 	delivery.Headers = amqp.Table{headerWebhookAttempt: int32(3)}
 
-	schedule := []time.Duration{200 * time.Millisecond, 500 * time.Millisecond}
+	schedule := []time.Duration{testtime.D200ms, testtime.D500ms}
 	res := outbox.DeliveryOutcome{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
 
 	notifyCount := 0
@@ -304,7 +304,7 @@ func TestDispatchDisposition_DelayedRequeue_PublishError_FallbackNack(t *testing
 	sub, ch, delivery, entry := makeDispatchTestSetup(t)
 	ch.publishErr = errors.New("channel closed")
 
-	schedule := []time.Duration{200 * time.Millisecond}
+	schedule := []time.Duration{testtime.D200ms}
 	res := outbox.DeliveryOutcome{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
 
 	sub.dispatchDisposition(context.Background(), ch, delivery, "myqueue", schedule, res, nil, "test.topic", entry)
@@ -345,7 +345,7 @@ func TestDispatchDisposition_DelayedRequeue_Attempt2_PublishesRK1(t *testing.T) 
 	sub, ch, delivery, entry := makeDispatchTestSetup(t)
 	delivery.Headers = amqp.Table{headerWebhookAttempt: int32(2)}
 
-	schedule := []time.Duration{200 * time.Millisecond, 500 * time.Millisecond}
+	schedule := []time.Duration{testtime.D200ms, testtime.D500ms}
 	res := outbox.DeliveryOutcome{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
 
 	sub.dispatchDisposition(context.Background(), ch, delivery, "myqueue", schedule, res, nil, "test.topic", entry)
@@ -371,7 +371,7 @@ func TestDispatchDisposition_DelayedRequeue_AttemptEqLen_RepublishesLastTier(t *
 	// attempt = len(schedule) = 2: boundary — must republish, not exhaust.
 	delivery.Headers = amqp.Table{headerWebhookAttempt: int32(2)}
 
-	schedule := []time.Duration{200 * time.Millisecond, 500 * time.Millisecond}
+	schedule := []time.Duration{testtime.D200ms, testtime.D500ms}
 	res := outbox.DeliveryOutcome{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
 
 	sub.dispatchDisposition(context.Background(), ch, delivery, "myqueue", schedule, res, nil, "test.topic", entry)
@@ -421,7 +421,7 @@ func TestSubscribe_DelayedSchedule_ThreadedThroughTopology(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately so Subscribe exits after topology declaration.
 
-	schedule := []time.Duration{100 * time.Millisecond, 300 * time.Millisecond}
+	schedule := []time.Duration{testtime.D100ms, testtime.D300ms}
 	subscription := outbox.Subscription{
 		Topic:               "test.topic",
 		CellID:              "test-cell",
@@ -508,7 +508,7 @@ func TestSubscribe_DelayedSchedule_RequeueRoutesToDelayTier(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	schedule := []time.Duration{200 * time.Millisecond}
+	schedule := []time.Duration{testtime.D200ms}
 	subscription := outbox.Subscription{
 		Topic:               "test.topic",
 		CellID:              "test-cell",

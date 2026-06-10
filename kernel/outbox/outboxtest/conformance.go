@@ -65,6 +65,13 @@ const negativeAssertionWindow = 200 * time.Millisecond
 // per-tier queue TTL).
 const delayedTier = 60 * time.Millisecond
 
+// delayedMinSpan is the lower bound on the cumulative span across the delayed
+// attempts in testDelayedRedeliveryHonorsSchedule (#1458) — at least two tiers'
+// worth of real wait. A no-delay implementation would deliver all attempts
+// near-instantly and fall below this floor. (Package-level const per
+// TEST-TIME-LITERAL-01: no inline duration arithmetic in the test body.)
+const delayedMinSpan = 2 * delayedTier
+
 // asDelivery converts a slim HandleResult from Ack/Requeue/Reject factory
 // functions to a DeliveryOutcome for use in SubscriberHandler closures.
 // Only for use in conformance test helpers where the test author knows the
@@ -634,12 +641,11 @@ func testDelayedRedeliveryHonorsSchedule(t *testing.T, features Features, constr
 	defer mu.Unlock()
 	assertLen(t, len(stamps), wantDeliveries,
 		"broker-delay: handler must be invoked exactly once per scheduled attempt")
-	// Delays were actually applied: the span across attempts is at least a
-	// generous fraction of the schedule sum (a no-delay impl delivers near-instantly).
+	// Delays were actually applied: the span across attempts clears the
+	// delayedMinSpan floor (a no-delay impl delivers near-instantly).
 	span := stamps[len(stamps)-1].Sub(stamps[0])
-	minSpan := (delayedTier * time.Duration(len(tiers))) * 2 / 3
-	assertTrue(t, span >= minSpan,
-		fmt.Sprintf("broker-delay: attempts spanned %s, expected >= %s (schedule delays not applied)", span, minSpan))
+	assertTrue(t, span >= delayedMinSpan,
+		fmt.Sprintf("broker-delay: attempts spanned %s, expected >= %s (schedule delays not applied)", span, delayedMinSpan))
 }
 
 // ---------------------------------------------------------------------------
