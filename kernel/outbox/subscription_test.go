@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -61,6 +62,23 @@ func TestSubscription_Validate(t *testing.T) {
 			mutate:      func(s *Subscription) { s.ContractTransport = "" },
 			wantErr:     true,
 			errContains: "ContractTransport",
+		},
+		{
+			name:        "brokerDelaySchedule with zero duration",
+			mutate:      func(s *Subscription) { s.BrokerDelaySchedule = []time.Duration{time.Second, 0} },
+			wantErr:     true,
+			errContains: "BrokerDelaySchedule",
+		},
+		{
+			name:        "brokerDelaySchedule with negative duration",
+			mutate:      func(s *Subscription) { s.BrokerDelaySchedule = []time.Duration{-time.Second} },
+			wantErr:     true,
+			errContains: "BrokerDelaySchedule",
+		},
+		{
+			name:    "brokerDelaySchedule all positive",
+			mutate:  func(s *Subscription) { s.BrokerDelaySchedule = []time.Duration{time.Second, 5 * time.Second} },
+			wantErr: false,
 		},
 		{
 			name:    "valid",

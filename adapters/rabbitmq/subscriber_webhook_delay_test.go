@@ -92,6 +92,75 @@ func TestReadWebhookAttempt(t *testing.T) {
 }
 
 // =============================================================================
+// deliveryFromDelayTier (x-death provenance) tests
+// =============================================================================
+
+func TestDeliveryFromDelayTier(t *testing.T) {
+	const queueName = "myqueue"
+	tests := []struct {
+		name    string
+		headers amqp.Table
+		want    bool
+	}{
+		{name: "nil headers", headers: nil, want: false},
+		{name: "no x-death", headers: amqp.Table{headerWebhookAttempt: int32(2)}, want: false},
+		{
+			name: "expired from own delay tier",
+			headers: amqp.Table{"x-death": []any{
+				amqp.Table{"reason": "expired", "queue": "myqueue.delay.0"},
+			}},
+			want: true,
+		},
+		{
+			name: "expired from a later own delay tier",
+			headers: amqp.Table{"x-death": []any{
+				amqp.Table{"reason": "expired", "queue": "myqueue.delay.5"},
+			}},
+			want: true,
+		},
+		{
+			name: "rejected (not expired) from delay tier is not provenance",
+			headers: amqp.Table{"x-death": []any{
+				amqp.Table{"reason": "rejected", "queue": "myqueue.delay.0"},
+			}},
+			want: false,
+		},
+		{
+			name: "expired from a different queue is not provenance",
+			headers: amqp.Table{"x-death": []any{
+				amqp.Table{"reason": "expired", "queue": "otherqueue.delay.0"},
+			}},
+			want: false,
+		},
+		{
+			name: "expired from the main queue (not a delay tier) is not provenance",
+			headers: amqp.Table{"x-death": []any{
+				amqp.Table{"reason": "expired", "queue": "myqueue"},
+			}},
+			want: false,
+		},
+		{
+			name:    "x-death wrong type is not provenance",
+			headers: amqp.Table{"x-death": "not-an-array"},
+			want:    false,
+		},
+		{
+			name: "multiple deaths, one matching",
+			headers: amqp.Table{"x-death": []any{
+				amqp.Table{"reason": "rejected", "queue": "myqueue"},
+				amqp.Table{"reason": "expired", "queue": "myqueue.delay.2"},
+			}},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, deliveryFromDelayTier(tt.headers, queueName))
+		})
+	}
+}
+
+// =============================================================================
 // declareTopology — delay topology tests
 // =============================================================================
 
@@ -208,6 +277,11 @@ func makeDispatchTestSetup(t *testing.T) (*Subscriber, *mockChannel, amqp.Delive
 	t.Helper()
 	conn, mockConn := newTestConnection(t)
 	ch := newMockChannel()
+	// F1: the delay-tier republish runs on an ephemeral confirm-mode channel
+	// acquired from the connection (mockConn.nextCh). Auto-confirm publishes so
+	// the happy-path republish completes; failure paths set ch.publishErr (publish
+	// send fails) or autoConfirmation.Ack=false (broker nacks) explicitly.
+	ch.autoConfirmation = &amqp.Confirmation{Ack: true, DeliveryTag: 1}
 	mockConn.nextCh = ch
 
 	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
@@ -227,6 +301,20 @@ func makeDispatchTestSetup(t *testing.T) (*Subscriber, *mockChannel, amqp.Delive
 	}
 
 	return sub, ch, delivery, entry
+}
+
+// delayTierHeaders builds the header table a delivery carries after it has
+// expired (TTL) out of "myqueue.delay.<i>" and been dead-lettered back to the
+// dispatch exchange: the x-webhook-attempt counter plus the broker x-death
+// "expired" provenance that dispatchDelayedRequeue requires before trusting the
+// attempt counter (F6). Without this provenance the attempt header is ignored.
+func delayTierHeaders(attempt int32) amqp.Table {
+	return amqp.Table{
+		headerWebhookAttempt: attempt,
+		"x-death": []any{
+			amqp.Table{"reason": "expired", "queue": "myqueue.delay.0"},
+		},
+	}
 }
 
 // TestDispatchDisposition_DelayedRequeue_Attempt1_PublishesAndAcks verifies that
@@ -273,8 +361,9 @@ func TestDispatchDisposition_DelayedRequeue_Attempt1_PublishesAndAcks(t *testing
 func TestDispatchDisposition_DelayedRequeue_BudgetExhausted(t *testing.T) {
 	sub, ch, delivery, entry := makeDispatchTestSetup(t)
 
-	// Set attempt = 3 > len(schedule)=2 to trigger exhaustion.
-	delivery.Headers = amqp.Table{headerWebhookAttempt: int32(3)}
+	// Set attempt = 3 > len(schedule)=2 to trigger exhaustion. Carry delay-tier
+	// provenance so the attempt counter is trusted (F6).
+	delivery.Headers = delayTierHeaders(3)
 
 	schedule := []time.Duration{testtime.D200ms, testtime.D500ms}
 	res := outbox.DeliveryOutcome{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
@@ -297,10 +386,13 @@ func TestDispatchDisposition_DelayedRequeue_BudgetExhausted(t *testing.T) {
 	_ = notifyCount // used only for assertion above
 }
 
-// TestDispatchDisposition_DelayedRequeue_PublishError_FallbackNack verifies
-// that when PublishWithContext returns an error, the subscriber falls back to
-// Nack(tag, false, true) so the message is not lost.
-func TestDispatchDisposition_DelayedRequeue_PublishError_FallbackNack(t *testing.T) {
+// TestDispatchDisposition_DelayedRequeue_PublishError_FailsClosedToDLX verifies
+// that when the delay-tier publish fails, the subscriber fails closed via
+// Nack(tag, false, false) — routing to the real DLX — instead of an immediate
+// Nack(tag, false, true). An immediate requeue would redeliver the same message
+// with the same, un-advanced x-webhook-attempt, hot-looping forever on a
+// persistent delay-infra fault (F5).
+func TestDispatchDisposition_DelayedRequeue_PublishError_FailsClosedToDLX(t *testing.T) {
 	sub, ch, delivery, entry := makeDispatchTestSetup(t)
 	ch.publishErr = errors.New("channel closed")
 
@@ -312,12 +404,65 @@ func TestDispatchDisposition_DelayedRequeue_PublishError_FallbackNack(t *testing
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
-	// Fallback: Nack(tag, false, true) — do not lose the message.
-	assert.True(t, ch.nackCalled, "fallback Nack must be called on publish error")
-	assert.True(t, ch.nackRequeue, "fallback Nack must use requeue=true to avoid message loss")
+	// Fail closed: Nack(tag, false, false) routes to the real DLX.
+	assert.True(t, ch.nackCalled, "publish failure must Nack to fail closed")
+	assert.False(t, ch.nackRequeue,
+		"fail-closed Nack must use requeue=false (route to DLX, not hot-loop an immediate requeue)")
 
 	// Ack must NOT be called (publish failed before original Ack).
 	assert.False(t, ch.ackCalled, "Ack must NOT be called when publish fails")
+}
+
+// TestDispatchDisposition_DelayedRequeue_BrokerNack_FailsClosedToDLX verifies
+// that when the broker NACKs the delay-tier publish (confirm.Ack == false), the
+// subscriber fails closed to the DLX and does NOT Ack the original delivery —
+// the broker never durably accepted the republished copy, so acking would lose
+// the webhook (F1).
+func TestDispatchDisposition_DelayedRequeue_BrokerNack_FailsClosedToDLX(t *testing.T) {
+	sub, ch, delivery, entry := makeDispatchTestSetup(t)
+	// Broker rejects the publish: confirm arrives with Ack == false.
+	ch.autoConfirmation = &amqp.Confirmation{Ack: false, DeliveryTag: 1}
+
+	schedule := []time.Duration{testtime.D200ms}
+	res := outbox.DeliveryOutcome{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
+
+	sub.dispatchDisposition(context.Background(), ch, delivery, "myqueue", schedule, res, nil, "test.topic", entry)
+
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+
+	assert.True(t, ch.publishCalled, "publish must be attempted")
+	assert.True(t, ch.nackCalled, "broker nack must fail closed via Nack")
+	assert.False(t, ch.nackRequeue, "fail-closed Nack must use requeue=false (route to DLX)")
+	assert.False(t, ch.ackCalled,
+		"original delivery must NOT be Acked when the broker did not confirm the delay publish")
+}
+
+// TestDispatchDisposition_DelayedRequeue_ForgedAttemptWithoutProvenance_TreatedAsAttempt1
+// verifies F6: an x-webhook-attempt header on a delivery that lacks broker
+// x-death "expired from delay tier" provenance is NOT trusted. A forged high
+// attempt (here 99, well past the schedule) must NOT force a premature DLX; the
+// delivery is treated as attempt 1 and republished to tier 0.
+func TestDispatchDisposition_DelayedRequeue_ForgedAttemptWithoutProvenance_TreatedAsAttempt1(t *testing.T) {
+	sub, ch, delivery, entry := makeDispatchTestSetup(t)
+	// Forged attempt header, but NO x-death delay-tier provenance.
+	delivery.Headers = amqp.Table{headerWebhookAttempt: int32(99)}
+
+	schedule := []time.Duration{testtime.D200ms, testtime.D500ms}
+	res := outbox.DeliveryOutcome{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
+
+	sub.dispatchDisposition(context.Background(), ch, delivery, "myqueue", schedule, res, nil, "test.topic", entry)
+
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+
+	// Treated as attempt 1: republished to tier 0, NOT exhausted to DLX.
+	assert.True(t, ch.publishCalled, "forged attempt must be ignored and the delivery republished, not exhausted")
+	assert.Equal(t, "0", ch.publishRoutingKey, "untrusted attempt must default to attempt 1 (routing key \"0\")")
+	assert.True(t, ch.ackCalled, "original delivery must be Acked after successful republish")
+	require.Len(t, ch.publishedMessages, 1)
+	assert.Equal(t, int32(2), ch.publishedMessages[0].Headers[headerWebhookAttempt],
+		"x-webhook-attempt must advance from the trusted base of 1 to 2")
 }
 
 // TestDispatchDisposition_NonDelayed_Requeue_Unchanged verifies that an empty
@@ -343,7 +488,7 @@ func TestDispatchDisposition_NonDelayed_Requeue_Unchanged(t *testing.T) {
 // for attempt=2, routing key "1" is used (tier index = attempt-1).
 func TestDispatchDisposition_DelayedRequeue_Attempt2_PublishesRK1(t *testing.T) {
 	sub, ch, delivery, entry := makeDispatchTestSetup(t)
-	delivery.Headers = amqp.Table{headerWebhookAttempt: int32(2)}
+	delivery.Headers = delayTierHeaders(2)
 
 	schedule := []time.Duration{testtime.D200ms, testtime.D500ms}
 	res := outbox.DeliveryOutcome{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
@@ -369,7 +514,8 @@ func TestDispatchDisposition_DelayedRequeue_AttemptEqLen_RepublishesLastTier(t *
 	sub, ch, delivery, entry := makeDispatchTestSetup(t)
 
 	// attempt = len(schedule) = 2: boundary — must republish, not exhaust.
-	delivery.Headers = amqp.Table{headerWebhookAttempt: int32(2)}
+	// Carry delay-tier provenance so the attempt counter is trusted (F6).
+	delivery.Headers = delayTierHeaders(2)
 
 	schedule := []time.Duration{testtime.D200ms, testtime.D500ms}
 	res := outbox.DeliveryOutcome{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
@@ -485,6 +631,10 @@ func TestSubscribe_NoDelaySchedule_NoDelayTopology(t *testing.T) {
 func TestSubscribe_DelayedSchedule_RequeueRoutesToDelayTier(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 	ch := newMockChannel()
+	// F1: the delay-tier republish runs on a confirm-mode channel acquired from
+	// the connection (same mock channel here); auto-confirm so the republish and
+	// subsequent Ack of the original delivery complete.
+	ch.autoConfirmation = &amqp.Confirmation{Ack: true, DeliveryTag: 1}
 	mockConn.mu.Lock()
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()

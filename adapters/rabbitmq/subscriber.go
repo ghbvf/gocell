@@ -7,6 +7,7 @@ import (
 	"hash/crc32"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -65,6 +66,50 @@ func readWebhookAttempt(h amqp.Table) int {
 	default:
 		return 1
 	}
+}
+
+// isBrokerDeathHeader reports whether k is a RabbitMQ broker-injected dead-letter
+// bookkeeping header (x-death and its x-first-death-* / x-original-* siblings).
+// These accumulate on every dead-letter hop and must not be copied forward when
+// republishing to a delay tier.
+func isBrokerDeathHeader(k string) bool {
+	return k == "x-death" ||
+		strings.HasPrefix(k, "x-first-death-") ||
+		strings.HasPrefix(k, "x-original-")
+}
+
+// deliveryFromDelayTier reports whether the broker attests, via an x-death
+// "expired" record, that this delivery re-entered the dispatch exchange by
+// expiring (TTL) out of one of queueName's own delay tier queues
+// ("<queueName>.delay.<i>"). Only such deliveries carry a trustworthy
+// x-webhook-attempt counter; a message published straight to the dispatch
+// exchange has no expired-from-delay-tier x-death entry (see dispatchDelayedRequeue
+// for why the attempt header is gated on this).
+//
+// x-death is an AMQP array of tables (one per dead-letter event); the relevant
+// entry has reason="expired" and queue="<queueName>.delay.<i>".
+func deliveryFromDelayTier(headers amqp.Table, queueName string) bool {
+	raw, ok := headers["x-death"]
+	if !ok {
+		return false
+	}
+	deaths, ok := raw.([]any)
+	if !ok {
+		return false
+	}
+	delayPrefix := queueName + ".delay."
+	for _, d := range deaths {
+		t, ok := d.(amqp.Table)
+		if !ok {
+			continue
+		}
+		reason, _ := t["reason"].(string)
+		q, _ := t["queue"].(string)
+		if reason == "expired" && strings.HasPrefix(q, delayPrefix) {
+			return true
+		}
+	}
+	return false
 }
 
 const (
@@ -380,11 +425,15 @@ func (s *Subscriber) declareDelayTopology(ch AMQPChannel, topic, queueName strin
 		if _, err := ch.QueueDeclare(tierQueue, true, false, false, false, tierArgs); err != nil {
 			// AMQP 406 PRECONDITION_FAILED is returned when the queue already
 			// exists with different arguments (e.g. a changed x-message-ttl from
-			// a new BrokerDelaySchedule). To apply the new schedule, delete the
-			// existing tier queues ("<queue>.delay.<i>") and restart the consumer.
+			// a new BrokerDelaySchedule). Changing the schedule requires the
+			// drain-before-delete runbook — a non-empty tier queue holds webhooks
+			// still waiting out their retry interval, so deleting it blindly drops
+			// pending retries.
 			return fmt.Errorf("rabbitmq: declare delay tier queue %d (%s): %w"+
-				" (hint: AMQP 406 PRECONDITION_FAILED means the queue exists with"+
-				" a different x-message-ttl; delete %s and retry)", i, tierQueue, err, tierQueue)
+				" (hint: AMQP 406 PRECONDITION_FAILED means the queue exists with a"+
+				" different x-message-ttl; to change the schedule follow the"+
+				" drain-before-delete runbook in"+
+				" docs/ops/rabbitmq-webhook-delay-topology.md)", i, tierQueue, err)
 		}
 		if err := ch.QueueBind(tierQueue, strconv.Itoa(i), delayExchange, false, nil); err != nil {
 			return fmt.Errorf("rabbitmq: bind delay tier queue %d: %w", i, err)
@@ -1064,7 +1113,19 @@ func (s *Subscriber) dispatchDelayedRequeue(
 ) {
 	tag := delivery.DeliveryTag
 	eventID := dp.entry.ID()
-	attempt := readWebhookAttempt(delivery.Headers)
+	// F6: only trust the x-webhook-attempt header on deliveries the broker
+	// attests came from this queue's own delay tier (x-death "expired"
+	// provenance). A message published straight to the dispatch exchange — a
+	// fresh first attempt, or a forged direct publish — carries no such record,
+	// so its attempt header is ignored and the delivery is treated as attempt 1.
+	// This fail-closed gate keeps the retry budget out of reach of producers
+	// that can publish to the dispatch exchange but cannot forge a broker
+	// x-death entry: a forged high attempt no longer forces a premature DLX, and
+	// a forged low attempt cannot extend retries beyond the schedule length.
+	attempt := 1
+	if deliveryFromDelayTier(delivery.Headers, queueName) {
+		attempt = readWebhookAttempt(delivery.Headers)
+	}
 
 	if attempt > len(schedule) {
 		// Retry budget exhausted: route to the real DLX (Nack without requeue).
@@ -1106,9 +1167,13 @@ func (s *Subscriber) exhaustDelayBudget(
 }
 
 // republishToDelayTier publishes the delivery body to the delay tier queue for
-// the given attempt, Acks the original delivery, and releases (not commits) the
-// settlement so the redelivered message can re-enter the Claim/Commit cycle.
-// On publish failure it falls back to Nack(requeue=true) to avoid message loss.
+// the given attempt with broker publisher confirmation, then Acks the original
+// delivery and releases (not commits) the settlement so the redelivered message
+// can re-enter the Claim/Commit cycle. The original is Acked only after the
+// broker confirms the delay-tier publish (F1) — otherwise the consume→publish→
+// ack ownership transfer would lose the webhook on a broker/channel drop between
+// publish and ack. On a publish/confirm failure it fails closed to the real DLX
+// (see failClosedDelayPublish) instead of hot-looping an immediate requeue.
 //
 // queueName is the canonical queue name threaded from subscribeOnce; it is used
 // to build <queueName>.delay so the exchange always matches the one declared by
@@ -1126,16 +1191,13 @@ func (s *Subscriber) republishToDelayTier(
 	delayExchange := queueName + ".delay"
 	routingKey := strconv.Itoa(attempt - 1)
 
-	// Copy headers, skipping RabbitMQ broker system headers that accumulate
-	// across dead-letter cycles and must not be propagated to the delay tier.
-	// x-death and x-first-death-* / x-original-* are injected by the broker
-	// and grow unboundedly on each dead-letter hop; carrying them forward
-	// pollutes headers on redelivery and can confuse broker routing.
-	// x-webhook-attempt and all business headers are preserved.
+	// Copy headers, skipping RabbitMQ broker system headers (x-death,
+	// x-first-death-*, x-original-*) that the broker injects and grows on each
+	// dead-letter hop; carrying them forward pollutes redelivery and can confuse
+	// routing. x-webhook-attempt and all business headers are preserved.
 	headers := make(amqp.Table, len(delivery.Headers)+1)
 	for k, v := range delivery.Headers {
-		if k == "x-death" || len(k) >= len("x-first-death-") && k[:len("x-first-death-")] == "x-first-death-" ||
-			len(k) >= len("x-original-") && k[:len("x-original-")] == "x-original-" {
+		if isBrokerDeathHeader(k) {
 			continue
 		}
 		headers[k] = v
@@ -1155,35 +1217,16 @@ func (s *Subscriber) republishToDelayTier(
 		ContentType:  delivery.ContentType,
 	}
 
-	publishErr := ch.PublishWithContext(ctx, delayExchange, routingKey, false, false, pub)
-	if publishErr != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: republish to delay tier failed, falling back to nack(requeue)",
-			slog.String(logKeyTopic, dp.topic),
-			slog.String(logKeyEventID, eventID),
-			slog.Int("attempt", attempt),
-			slog.Any("error", publishErr))
-		if nackErr := ch.Nack(tag, false, true); nackErr != nil {
-			slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: nack(requeue) fallback failed",
-				slog.String(logKeyTopic, dp.topic),
-				slog.String(logKeyEventID, eventID),
-				slog.Any("error", nackErr))
-			// Both publish and nack fallback failed: settlement result is NackFailed.
-			releaseSettlement(ctx, dp.settlement, dp.topic, eventID, "delay_publish_failed")
-			outbox.NotifySettlement(ctx, dp.res, dp.entry, outbox.DispositionRequeue, outbox.SettlementResultNackFailed, publishErr)
-			return
-		}
-		// Nack fallback succeeded: delivery was requeued immediately and bypassed
-		// the delay schedule. Log at Warn so ops can detect unexpected scheduling gaps.
-		slog.LogAttrs(ctx, slog.LevelWarn, "rabbitmq: delay publish failed; delivery requeued immediately, bypassing delay schedule",
-			slog.String(logKeyTopic, dp.topic),
-			slog.String(logKeyEventID, eventID),
-			slog.Int("attempt", attempt))
-		releaseSettlement(ctx, dp.settlement, dp.topic, eventID, "delay_publish_failed")
-		outbox.NotifySettlement(ctx, dp.res, dp.entry, outbox.DispositionRequeue, outbox.SettlementResultSuccess, nil)
+	// F1: publish to the delay tier with broker confirmation BEFORE acking the
+	// original. The delay round-trip is a consume→publish→ack ownership transfer;
+	// acking before the broker durably holds the republished copy risks losing
+	// the webhook on a broker/channel drop between publish and ack.
+	if publishErr := s.confirmPublishToDelay(ctx, delayExchange, routingKey, pub); publishErr != nil {
+		s.failClosedDelayPublish(ctx, ch, tag, attempt, publishErr, dp)
 		return
 	}
 
-	// Ack the original delivery — the delay queue now owns this message.
+	// Ack the original delivery — the delay queue now durably owns this message.
 	if ackErr := ch.Ack(tag, false); ackErr != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: ack(delay) failed",
 			slog.String(logKeyTopic, dp.topic),
@@ -1198,6 +1241,85 @@ func (s *Subscriber) republishToDelayTier(
 	// must re-enter the Claim path when it exits the delay tier.
 	releaseSettlement(ctx, dp.settlement, dp.topic, eventID, "delay_requeue")
 	outbox.NotifySettlement(ctx, dp.res, dp.entry, outbox.DispositionRequeue, outbox.SettlementResultSuccess, nil)
+}
+
+// confirmPublishToDelay publishes pub to the delay exchange on a dedicated
+// ephemeral channel in confirm mode and blocks until the broker durably
+// confirms receipt (or the confirm times out / the channel drops). Returning
+// nil means the broker accepted the message into the delay tier; only then may
+// the caller Ack the original delivery.
+//
+// A dedicated ephemeral channel is acquired per publish (closed on return)
+// rather than reusing the long-lived consumer channel: putting the consumer
+// channel into confirm mode would let a full NotifyPublish listener block the
+// connection reader and deadlock every channel on the connection. This mirrors
+// the Publisher's ephemeral-channel-per-publish strategy (see publisher.go);
+// webhook retries are low-frequency, so the per-retry channel cost is negligible.
+func (s *Subscriber) confirmPublishToDelay(ctx context.Context, exchange, routingKey string, pub amqp.Publishing) error {
+	ch, err := s.conn.AcquireChannel()
+	if err != nil {
+		return fmt.Errorf("rabbitmq: acquire delay publish channel: %w", err)
+	}
+	defer s.conn.CloseEphemeralChannel(ch)
+
+	if err := ch.Confirm(false); err != nil {
+		return fmt.Errorf("rabbitmq: enable confirm mode for delay publish: %w", err)
+	}
+	confirmCh := ch.NotifyPublish(make(chan amqp.Confirmation, 1))
+	if err := ch.PublishWithContext(ctx, exchange, routingKey, false, false, pub); err != nil {
+		return fmt.Errorf("rabbitmq: publish to delay tier: %w", err)
+	}
+
+	confirmTimer := s.clock.NewTimerAt(s.clock.Now().Add(s.conn.config.ConfirmTimeout))
+	defer confirmTimer.Stop()
+	select {
+	case confirm, ok := <-confirmCh:
+		if !ok {
+			return fmt.Errorf("rabbitmq: delay publish confirm channel closed before broker confirmation")
+		}
+		if !confirm.Ack {
+			return fmt.Errorf("rabbitmq: broker nacked delay publish")
+		}
+		return nil
+	case <-confirmTimer.C():
+		return fmt.Errorf("rabbitmq: delay publish confirm timed out after %s", s.conn.config.ConfirmTimeout)
+	case <-ctx.Done():
+		return fmt.Errorf("rabbitmq: delay publish canceled: %w", ctx.Err())
+	}
+}
+
+// failClosedDelayPublish handles a delay-tier publish/confirm failure by routing
+// the original delivery to the queue's real DLX via Nack(requeue=false). It does
+// NOT immediately requeue (Nack(requeue=true)): an immediate requeue redelivers
+// the SAME message with the SAME, un-advanced x-webhook-attempt, so a persistent
+// delay-infra fault would hot-loop forever without ever exhausting the retry
+// budget. Routing to the DLX is fail-closed — the webhook lands in the
+// dead-letter queue where ops can inspect/replay it, and the retry cycle ends.
+func (s *Subscriber) failClosedDelayPublish(
+	ctx context.Context,
+	ch AMQPChannel,
+	tag uint64,
+	attempt int,
+	publishErr error,
+	dp delayDispatchCtx,
+) {
+	eventID := dp.entry.ID()
+	slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: delay publish failed, routing to DLX (fail-closed)",
+		slog.String(logKeyTopic, dp.topic),
+		slog.String(logKeyEventID, eventID),
+		slog.Int("attempt", attempt),
+		slog.Any("error", publishErr))
+	if nackErr := ch.Nack(tag, false, false); nackErr != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: nack(fail-closed) failed",
+			slog.String(logKeyTopic, dp.topic),
+			slog.String(logKeyEventID, eventID),
+			slog.Any("error", nackErr))
+		releaseSettlement(ctx, dp.settlement, dp.topic, eventID, "delay_publish_failed")
+		outbox.NotifySettlement(ctx, dp.res, dp.entry, outbox.DispositionReject, outbox.SettlementResultNackFailed, nackErr)
+		return
+	}
+	releaseSettlement(ctx, dp.settlement, dp.topic, eventID, "delay_publish_failed")
+	outbox.NotifySettlement(ctx, dp.res, dp.entry, outbox.DispositionReject, outbox.SettlementResultSuccess, nil)
 }
 
 // dispatchAck handles the Commit→Ack path for DispositionAck.

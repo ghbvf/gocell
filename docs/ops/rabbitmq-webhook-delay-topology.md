@@ -53,12 +53,25 @@ The tier `x-message-ttl` values are baked into the queue declaration. RabbitMQ d
 **not** allow redeclaring an existing queue with different arguments, so changing the
 schedule (today fixed at `DefaultSvixSchedule`) and redeploying will fail
 `QueueDeclare` with **406 PRECONDITION_FAILED** — a non-recoverable error that stops
-the affected webhook-dispatch subscription. To apply a new schedule:
+the affected webhook-dispatch subscription.
 
-1. Stop the dispatcher (or the whole service).
-2. Delete the old tier queues: `rabbitmqctl delete_queue Q.delay.0 … Q.delay.N`
-   (and `Q.delay` exchange if the tier count changed).
-3. Redeploy — the subscriber re-declares the queues with the new TTLs.
+> ⚠️ A non-empty `*.delay.<i>` queue holds **webhooks still waiting out their retry
+> interval** (see "Identifying these queues"), not garbage. Deleting it drops those
+> pending retries on the floor — the webhook is never re-attempted. **Drain before
+> you delete.**
 
-The subscriber surfaces a hint in the `declare delay tier queue` error message when
-it hits 406.
+To apply a new schedule **without losing in-flight retries**:
+
+1. Stop the dispatcher (or the whole service) so no new messages enter the tiers.
+2. For every old tier queue, confirm depth is **0**:
+   `rabbitmqctl list_queues name messages | grep '\.delay\.'`.
+   If any tier is non-empty, drain it first — shovel/republish the waiting messages
+   to the dispatch exchange `X` (an immediate re-attempt) or to the real DLX for
+   manual handling — and re-check until every tier reads 0.
+3. Only once every tier reads 0, delete the old tier queues:
+   `rabbitmqctl delete_queue Q.delay.0 … Q.delay.N` (and the `Q.delay` exchange if
+   the tier count changed).
+4. Redeploy — the subscriber re-declares the queues with the new TTLs.
+
+The subscriber surfaces a 406 hint in the `declare delay tier queue` error message
+that points back to this runbook.

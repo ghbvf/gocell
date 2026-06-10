@@ -93,6 +93,16 @@ func (s Subscription) Validate() error {
 	if s.ContractTransport == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "outbox: subscription ContractTransport must not be empty")
 	}
+	// A non-empty BrokerDelaySchedule must carry only positive durations: each
+	// entry becomes a broker delay (rabbitmq writes d.Milliseconds() into
+	// x-message-ttl, the in-memory bus waits d), so a zero or negative tier would
+	// silently collapse the retry interval. Fail fast rather than mis-deliver.
+	for _, d := range s.BrokerDelaySchedule {
+		if d <= 0 {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"outbox: subscription BrokerDelaySchedule entries must be positive durations")
+		}
+	}
 	return nil
 }
 

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cellvocab"
@@ -464,9 +465,13 @@ func WithSubscriptionSliceID(sliceID string) SubscriptionOption {
 // WithSubscriptionBrokerDelaySchedule opts the subscription into broker-native
 // delayed re-delivery with the given per-attempt wait schedule (#1458). Empty or
 // nil is a no-op (immediate-requeue behavior is preserved).
+//
+// The slice is cloned so a caller that mutates its backing array after
+// registration cannot retroactively alter the runtime delay topology (the
+// recorded SubscriptionRequest owns an independent copy).
 func WithSubscriptionBrokerDelaySchedule(delays []time.Duration) SubscriptionOption {
 	return func(r *SubscriptionRequest) {
-		r.BrokerDelaySchedule = delays
+		r.BrokerDelaySchedule = slices.Clone(delays)
 	}
 }
 

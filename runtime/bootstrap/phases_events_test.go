@@ -251,6 +251,75 @@ func TestPhase6_DrainCellSubscriptions_DriftedCellID_ReturnsError(t *testing.T) 
 		"error must identify the drift failure mode")
 }
 
+// TestDrainCellSubscriptions_ForwardsBrokerDelaySchedule verifies F7: a
+// non-webhook cell subscription that opted into broker-native delayed
+// re-delivery actually carries its BrokerDelaySchedule onto the final
+// outbox.Subscription registered on the router. Before the fix, only the
+// webhook-dispatch drain forwarded the schedule, so a cell using
+// reg.Subscribe(..., WithSubscriptionBrokerDelaySchedule(...)) would have the
+// option silently dropped. A capturing SubscriptionValidator observes the
+// candidate subscription the router builds.
+func TestDrainCellSubscriptions_ForwardsBrokerDelaySchedule(t *testing.T) {
+	t.Parallel()
+
+	bus := eventbus.New(clock.Real())
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-delay-forward-test", DurabilityMode: outbox.DurabilityDemo})
+	t.Cleanup(asm.Shutdown)
+	require.NoError(t, asm.Register(newStubEventCell("event.delay.forward.v1")))
+	require.NoError(t, asm.Start(context.Background()))
+
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithPublisher(bus),
+		WithSubscriber(bus),
+		WithConsumerBase(newTestConsumerBase(t)),
+	)
+
+	evtRouter, err := b.buildEventRouter(bus)
+	require.NoError(t, err)
+
+	var captured outbox.Subscription
+	var count int
+	evtRouter.AddSubscriptionValidator(func(sub outbox.Subscription) error {
+		captured = sub
+		count++
+		return nil
+	})
+
+	schedule := []time.Duration{time.Second, 5 * time.Second}
+	noopH := outbox.EntryHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.Ack()
+	})
+
+	_, s := newPhaseState()
+	defer s.runCancel()
+	s.asm = asm
+	s.cellSnapshots = map[string]cell.RegistrySnapshot{
+		"stub": {
+			Subscriptions: []cell.SubscriptionRequest{
+				{
+					Spec: contractspec.ContractSpec{
+						ID:        "event.delay.forward.v1",
+						Kind:      cellvocab.ContractEvent,
+						Transport: "inmem",
+						Topic:     "event.delay.forward.v1",
+					},
+					Handler:             noopH,
+					ConsumerGroup:       "stub-cg",
+					CellID:              "stub",
+					BrokerDelaySchedule: schedule,
+				},
+			},
+		},
+	}
+
+	require.NoError(t, b.drainCellSubscriptions(s, evtRouter))
+	require.Equal(t, 1, count, "exactly one cell subscription must be drained")
+	assert.Equal(t, schedule, captured.BrokerDelaySchedule,
+		"drainCellSubscriptions must forward the cell subscription's BrokerDelaySchedule onto outbox.Subscription")
+}
+
 func TestPhase6_SubscriptionsWithSubscriberButNoConsumerBase_FailsFast(t *testing.T) {
 	t.Parallel()
 

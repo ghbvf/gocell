@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -289,6 +290,32 @@ func TestRegistry_Subscribe_HappyPath_AppendsToSnapshot(t *testing.T) {
 	assert.Equal(t, "ordercell", snap.Subscriptions[0].CellID)
 	assert.Equal(t, "order-slice", snap.Subscriptions[0].SliceID)
 	assert.NotNil(t, snap.Subscriptions[0].Handler)
+}
+
+// ---------------------------------------------------------------------------
+// TestWithSubscriptionBrokerDelaySchedule_ClonesInput (F8)
+// ---------------------------------------------------------------------------
+
+func TestWithSubscriptionBrokerDelaySchedule_ClonesInput(t *testing.T) {
+	rec := NewRegistryRecorder(nil, outbox.DurabilityDurable)
+
+	delays := []time.Duration{time.Second, 5 * time.Second}
+	spec := testRegistrySpec("order.placed")
+	err := rec.Subscribe(spec, noopHandler, "cg-order", "ordercell",
+		WithSubscriptionBrokerDelaySchedule(delays))
+	require.NoError(t, err)
+
+	// Mutating the caller's backing array after registration must NOT alter the
+	// recorded subscription — the option clones its input so the runtime delay
+	// topology cannot be retroactively rewritten.
+	delays[0] = 99 * time.Hour
+
+	snap := rec.Snapshot()
+	require.Len(t, snap.Subscriptions, 1)
+	got := snap.Subscriptions[0].BrokerDelaySchedule
+	require.Len(t, got, 2)
+	assert.Equal(t, time.Second, got[0], "post-registration caller mutation must not leak into the recorded schedule")
+	assert.Equal(t, 5*time.Second, got[1])
 }
 
 // ---------------------------------------------------------------------------

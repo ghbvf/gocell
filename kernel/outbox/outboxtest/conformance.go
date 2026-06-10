@@ -560,6 +560,15 @@ func testZeroValueDisposition(t *testing.T, features Features, constructor PubSu
 	h.teardown()
 }
 
+// deadLetterInspector is an optional capability a Subscriber may implement to let
+// conformance assert that a retry-exhausted entry actually reached the
+// dead-letter store. The in-memory bus implements it (DeadLetterLen); transports
+// whose DLQ is only observable by consuming it (rabbitmq) leave it unimplemented
+// and verify the same property in a dedicated broker integration test.
+type deadLetterInspector interface {
+	DeadLetterLen() int
+}
+
 // testDelayedRedeliveryHonorsSchedule verifies that a subscription carrying a
 // BrokerDelaySchedule (#1458) redelivers a transient failure on the per-attempt
 // schedule and stops after the schedule is exhausted (routing to DLX /
@@ -630,6 +639,18 @@ func testDelayedRedeliveryHonorsSchedule(t *testing.T, features Features, constr
 	case <-delivered:
 		t.Fatalf("broker-delay: received more than %d deliveries — retry budget not bounded by the schedule", wantDeliveries)
 	case <-time.After(negativeAssertionWindow):
+	}
+
+	// The exhausted entry must land in dead-letter, not silently vanish. A
+	// delivery-count assertion alone would pass even if the final
+	// Nack(requeue=false) dropped the message because of a DLX binding/routing
+	// fault. Transports that expose their dead-letter store (the in-memory bus
+	// via DeadLetterLen) are checked here; transports whose DLQ is only observable
+	// by consuming it (rabbitmq) verify this in a dedicated broker integration test.
+	if dli, ok := sub.(deadLetterInspector); ok {
+		assertEventually(t, func() bool { return dli.DeadLetterLen() >= 1 },
+			defaultTimeout, subscribeReadyTimeout,
+			"broker-delay: exhausted entry must be routed to dead-letter, not dropped")
 	}
 
 	cancel()
