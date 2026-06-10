@@ -83,8 +83,12 @@ func fileExclusivelyArchtestGated(path string) (bool, error) {
 	// Necessary: with archtest absent the file must not compile under either
 	// extreme of the other tags (so it never enters a no-archtest build).
 	necessary := !expr.Eval(archtestFalseOthersTrue) && !expr.Eval(allFalse)
-	// Live: with archtest set the file must compile in the owner's default-GOOS
-	// context (rejects a dead `archtest && !archtest` style gate).
+	// Live: onlyArchtest sets archtest=true and all other tags=false (GOOS=false
+	// → !GOOS=true). This accepts the two forms leaf files use — `archtest` (all
+	// others false → expr=true) and `archtest && !GOOS` (GOOS=false → !GOOS=true
+	// → expr=true) — while rejecting a dead gate like `archtest && !archtest`
+	// (would be false). No current leaf uses `archtest && GOOS` (GOOS=false →
+	// expr=false); adding one would require updating this predicate.
 	live := expr.Eval(onlyArchtest)
 	return necessary && live, nil
 }
@@ -142,12 +146,13 @@ func TestArchtest_AllLeafTestFiles_HaveArchtestBuildTag(t *testing.T) {
 	violations, considered, err := findArchtestLeafTagViolations(root)
 	require.NoError(t, err, "error walking tools/archtest leaf")
 
-	// Anti-vacuity: the leaf package holds hundreds of *_test.go files. If the
-	// scan considers too few, the dir filter / scope is broken and an empty
-	// violations set would be a false green.
-	require.Greater(t, considered, 100,
+	// Anti-vacuity: the PR that introduced this guard tagged ~288 leaf *_test.go
+	// files. 200 is a conservative floor: a refactor that halves the suite still
+	// passes, while a misconfigured scan (0 or a handful of files) fails loud.
+	require.Greater(t, considered, 200,
 		"anti-vacuity: expected the tools/archtest leaf to contain many *_test.go files; "+
-			"scan considered only %d — DirsScope/leaf filter likely broken", considered)
+			"scan considered only %d (rootDir=%s) — DirsScope/leaf filter likely broken",
+		considered, root)
 
 	if len(violations) > 0 {
 		t.Logf("Found %d tools/archtest/*_test.go file(s) missing '//go:build archtest':", len(violations))
@@ -200,6 +205,15 @@ func TestArchtest_LeafBuildTag_Violation_Fixture(t *testing.T) {
 			// Constraint after the package clause is invisible to the toolchain.
 			name:          "misplaced_after_package_test.go",
 			content:       "package fixture\n\n//go:build archtest\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) {}\n",
+			wantExclusive: false,
+		},
+		{
+			// OR form: `archtest || integration` leaks under `-tags=integration`
+			// (integration=true → expr=true) — NOT exclusively archtest-gated.
+			// archtestFalseOthersTrue makes integration=true → expr=true →
+			// necessary=false.
+			name:          "or_relaxed_test.go",
+			content:       "//go:build archtest || integration\n\npackage fixture\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) {}\n",
 			wantExclusive: false,
 		},
 	}

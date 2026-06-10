@@ -194,7 +194,9 @@ jobs:
             # the same cross-tag lane idea as `go vet -tags=e2e` below. Other
             # satellites carry no archtest-gated files, so the flag stays empty.
             build_tags=""
-            [ "$dir" = "tools" ] && build_tags="--build-tags=archtest"
+            # gocell::modules::dirs yields `tools` (go work edit -json DiskPath);
+            # ${dir#./} tolerates `./tools` too if the path ever gains a leading ./.
+            [ "${dir#./}" = "tools" ] && build_tags="--build-tags=archtest"
             (
               cd "$dir"
               # shellcheck disable=SC2086 # LINT_ARGS + build_tags are intentionally split into CLI flags.

@@ -117,6 +117,8 @@ gocell::log::status "Satellite modules: ${satellite_dirs[*]}"
 # go.mod (release-consistent), mirroring verify-workspace.sh's build traversal.
 for dir in "${satellite_dirs[@]}"; do
     gocell::log::status "Testing module (GOWORK=off): ${dir}"
+    # The tools/archtest leaf is compiled-out here by its `//go:build archtest`
+    # tag (ARCHTEST-LEAF-BUILD-TAG-01) — no special-casing needed.
     if ! GOWORK=off go -C "${dir}" test ./... -count=1; then
         gocell::log::error "go test ./... failed in module '${dir}' (GOWORK=off)"
         exit 1

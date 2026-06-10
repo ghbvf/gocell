@@ -46,6 +46,37 @@ import (
 	"time"
 )
 
+// TestArchtest_InvariantsScriptContainsFunnelGuard verifies that the string
+// "TestArchtest_AllLeafTestFiles_HaveArchtestBuildTag" appears in
+// hack/verify-archtest-invariants.sh. This is the funnel-completeness guard:
+// if that test is renamed, the invariants script silently stops running it
+// at PR-time (it only runs nightly), defeating ARCHTEST-LEAF-BUILD-TAG-01.
+// Cheap: a single file read, no packages.Load.
+//
+// Why here: runs under -tags=archtest, adjacent to the cross-check tests it
+// complements (ARCHTEST-VERIFY-COVERAGE-01), and is auto-picked by
+// verify-archtest.sh discovery — no separate script needed.
+func TestArchtest_InvariantsScriptContainsFunnelGuard(t *testing.T) {
+	t.Parallel()
+	const guardName = "TestArchtest_AllLeafTestFiles_HaveArchtestBuildTag"
+
+	repoRoot := findModuleRoot(t)
+	scriptPath := filepath.Join(repoRoot, "hack", "verify-archtest-invariants.sh")
+	//nolint:gosec // G304: scriptPath is the go.mod-bearing ancestor + fixed subpath (test-time, no user input)
+	data, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatalf("cannot read %s: %v", scriptPath, err)
+	}
+	if !strings.Contains(string(data), guardName) {
+		t.Fatalf(
+			"ARCHTEST-LEAF-BUILD-TAG-01 funnel break: %q not found in %s\n"+
+				"The PR-time funnel guard must appear in the -run regex of that script;\n"+
+				"if the test was renamed, update both the test and the script together.",
+			guardName, scriptPath,
+		)
+	}
+}
+
 // TestArchtestVerifyCoverage01 runs both arms of the invariant:
 //
 //   - Discovery cross-check (script DRY_RUN set == AST scan set)

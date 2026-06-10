@@ -15,6 +15,9 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+# shellcheck source=lib/archtest.sh
+source hack/lib/archtest.sh
+
 # nightly-only (whole-module typed scan, not eligible for PR-time due to
 # packages.Load memory/time budget on 2-CPU CI runners):
 #   IMPL-DECL-COVER-01   (TestImplDeclCover)
@@ -56,8 +59,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # PR-time OWNER and opts in. The non-vacuity check below converts a missing /
 # renamed tag (which yields "[no test files]" → 0 tests → false green) into a
 # hard failure — `-run` over an empty test set exits 0 otherwise.
-if ! output="$(go test -tags=archtest ./tools/archtest \
-  -run '^(TestProdClockInjection|TestKernelClockLeafFallback|TestKernelClockLeafFallbackFixtures|TestProdClockInjectionFixtures|TestProdDurationConst|TestProdDurationConstFixtures|TestTestTimeLiteralConst|TestTestSleepDiscipline|TestTestTimeLiteralFixtures|TestPanicRegistered|TestPanicRegisteredScannerFixtures|TestArchtestModulePathFunnel|TestModulePathFunnel_TypedReconstruction|TestFenceTokenMintFunnel_AllowlistEnforced|TestMetadatatestImportScope|TestFixtureCellIDTypedBuilder_NewCellIDBodyShape|TestFixtureCellIDTypedBuilder_VarInitializerShape|TestRootModuleNoReplace01|TestRootModuleNoReplace01_NegativeControl|TestArchtest_AllLeafTestFiles_HaveArchtestBuildTag)$' \
+if ! output="$(go test -tags="$ARCHTEST_BUILD_TAGS" ./tools/archtest \
+  -run '^(TestProdClockInjection|TestKernelClockLeafFallback|TestKernelClockLeafFallbackFixtures|TestProdClockInjectionFixtures|TestProdDurationConst|TestProdDurationConstFixtures|TestTestTimeLiteralConst|TestTestSleepDiscipline|TestTestTimeLiteralFixtures|TestPanicRegistered|TestPanicRegisteredScannerFixtures|TestArchtestModulePathFunnel|TestModulePathFunnel_TypedReconstruction|TestFenceTokenMintFunnel_AllowlistEnforced|TestMetadatatestImportScope|TestFixtureCellIDTypedBuilder_NewCellIDBodyShape|TestFixtureCellIDTypedBuilder_VarInitializerShape|TestRootModuleNoReplace01|TestRootModuleNoReplace01_NegativeControl|TestArchtest_AllLeafTestFiles_HaveArchtestBuildTag|TestArchtest_InvariantsScriptContainsFunnelGuard)$' \
   -count=1 -timeout 5m 2>&1)"; then
   printf '%s\n' "$output"
   exit 1

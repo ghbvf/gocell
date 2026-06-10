@@ -67,15 +67,18 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+# GOWORK must be active so packages.Load resolves across workspace modules.
+# Production archtest scans do not work with GOWORK=off (see hack/README.md).
+if [ "${GOWORK:-}" = "off" ]; then
+  echo "ERROR: verify-archtest.sh must not run with GOWORK=off — workspace modules" >&2
+  echo "       are required for packages.Load. See hack/README.md for correct usage." >&2
+  exit 2
+fi
+
+# shellcheck source=lib/archtest.sh
+source hack/lib/archtest.sh
+
 readonly ARCHTEST_PKG="./tools/archtest"
-# The archtest leaf package is gated behind `//go:build archtest` so a bare
-# `go test ./...` (verify-workspace-test, build-test tools shard, any future
-# module traversal) compiles it as "no test files" and CANNOT re-add the ~5min
-# suite to the make verify / PR critical path. This script is one of the
-# sanctioned OWNERS (single-owner with archtest-nightly.yml), so it opts in via
-# -tags. Same convention as integration / e2e / examples_smoke. Missing this tag
-# makes discovery (below) find zero tests and the anti-vacuity guard fail-fast.
-readonly ARCHTEST_BUILD_TAGS="archtest"
 # Default 1 (local). CI sets SHARD_COUNT=24 explicitly in
 # .github/workflows/archtest-nightly.yml::verify-archtest (GHA 7 GB RSS budget;
 # ADR 202605120000 §Amendment 2026-05-28). These two values intentionally
@@ -101,7 +104,7 @@ TOTAL=$(printf '%s\n' "$TESTS" | grep -c '^Test')
 
 if [ "$TOTAL" -lt 1 ]; then
   echo "ERROR: no archtest Test* functions discovered in $ARCHTEST_PKG" >&2
-  echo "       discovery command: go test -list '^Test' $ARCHTEST_PKG" >&2
+  echo "       discovery command: go test -tags=\"$ARCHTEST_BUILD_TAGS\" -list '^Test' $ARCHTEST_PKG" >&2
   exit 1
 fi
 
