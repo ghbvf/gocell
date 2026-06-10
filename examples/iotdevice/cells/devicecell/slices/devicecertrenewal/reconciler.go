@@ -1,4 +1,4 @@
-package devicecert
+package devicecertrenewal
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecert"
 	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -28,11 +29,18 @@ const rotateCertCommandType = "rotate-cert"
 //
 // It is the iotdevice archetype-② reference (reconcile → command, issue #1757):
 // it reuses the already-activated async-dispatch path (#1698 WithCommandDispatch
-// Claimer wrap) and #1699 DeriveCommandKey — zero new dispatch funnel. The
-// Claimer dedups by (tenant, deviceID, commandID); commandID is derived from
-// (deviceID, certEpoch) so every tick within one cert epoch dedups to a single
-// dispatched command (the idempotent forcing function), while a post-rotation
-// re-issue (new epoch) becomes a fresh, dispatchable command.
+// Claimer wrap) and #1699 DeriveCommandKey — zero new dispatch funnel.
+//
+// Per-epoch dedup is owned by the Store, not the relay's command-done TTL: after a
+// successful emit the Reconciler marks the cert's epoch renewal-requested
+// (Store.MarkRenewalRequested), so ScanNearExpiry skips it on every later tick
+// until a post-rotation re-issue advances the epoch. That makes a single
+// un-renewed cert yield exactly one command across its whole multi-day near-expiry
+// window (the idempotent forcing function). The relay's Claimer — keyed by
+// (tenant, deviceID, commandID) with commandID from (deviceID, certEpoch) — is a
+// secondary backstop only: it dedups same-tick retries and the rare window where
+// an emit committed but the mark was lost (crash between the two), within the
+// standard 24h idempotency TTL.
 //
 // SINGLE-TENANT ASSUMPTION: a reconcile loop runs on the cell lifecycle context,
 // which carries no request principal — so the tenant dimension of the Claimer key
@@ -45,7 +53,7 @@ const rotateCertCommandType = "rotate-cert"
 // the other's.
 type Reconciler struct {
 	clk       clock.Clock
-	store     *Store
+	store     *devicecert.Store
 	emitter   outbox.CellEmitter
 	txRunner  persistence.CellTxManager
 	threshold time.Duration
@@ -61,28 +69,28 @@ var _ reconcile.Reconciler = (*Reconciler)(nil)
 // falls back to slog.Default().
 func NewReconciler(
 	clk clock.Clock,
-	store *Store,
+	store *devicecert.Store,
 	emitter outbox.CellEmitter,
 	txRunner persistence.CellTxManager,
 	threshold time.Duration,
 	logger *slog.Logger,
 ) (*Reconciler, error) {
-	clock.MustHaveClock(clk, "devicecert.NewReconciler")
+	clock.MustHaveClock(clk, "devicecertrenewal.NewReconciler")
 	if store == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"devicecert.NewReconciler: store must not be nil")
+			"devicecertrenewal.NewReconciler: store must not be nil")
 	}
 	if validation.IsNilInterface(emitter) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"devicecert.NewReconciler: emitter must not be nil")
+			"devicecertrenewal.NewReconciler: emitter must not be nil")
 	}
 	if validation.IsNilInterface(txRunner) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"devicecert.NewReconciler: txRunner must not be nil")
+			"devicecertrenewal.NewReconciler: txRunner must not be nil")
 	}
 	if threshold <= 0 {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"devicecert.NewReconciler: threshold must be positive")
+			"devicecertrenewal.NewReconciler: threshold must be positive")
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -102,22 +110,27 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	cutoff := r.clk.Now().Add(r.threshold)
 	states, err := r.store.ScanNearExpiry(ctx, cutoff)
 	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("devicecert: scan near-expiry: %w", err)
+		return reconcile.Result{}, fmt.Errorf("devicecertrenewal: scan near-expiry: %w", err)
 	}
 	for _, st := range states {
 		if err := r.enqueueRenewal(ctx, st); err != nil {
 			// Transient: bubble up so the Loop applies backoff and re-sweeps on the
-			// next tick. The Claimer dedups the already-enqueued certs on retry.
+			// next tick. Already-requested epochs are skipped by ScanNearExpiry on
+			// retry, and the Claimer dedups any same-window re-emit.
 			return reconcile.Result{}, err
 		}
 	}
 	return reconcile.Result{}, nil
 }
 
-// enqueueRenewal emits one rotate-cert async command for a near-expiry cert. The
-// EmitAsync write is wrapped in txRunner.RunInTx so the durable PG outbox writer
-// gets a tx in ctx; demo mode uses the no-op DemoCellTxManager.
-func (r *Reconciler) enqueueRenewal(ctx context.Context, st CertState) error {
+// enqueueRenewal emits one rotate-cert async command for a near-expiry cert and,
+// once the emit commits, marks the cert's epoch renewal-requested so later ticks
+// skip it. The EmitAsync write is wrapped in txRunner.RunInTx so the durable PG
+// outbox writer gets a tx in ctx; demo mode uses the no-op DemoCellTxManager. The
+// mark runs AFTER a successful RunInTx (never inside): a mark must never outlive a
+// rolled-back emit, so the worst failure mode is a re-emit the Claimer dedups, not
+// a suppressed-but-never-sent renewal.
+func (r *Reconciler) enqueueRenewal(ctx context.Context, st devicecert.CertState) error {
 	payload, err := rotatePayload(st)
 	if err != nil {
 		return err
@@ -132,9 +145,12 @@ func (r *Reconciler) enqueueRenewal(ctx context.Context, st CertState) error {
 		return command.EmitAsync(txCtx, r.clk, r.emitter, cmdenqueue.DispatchID,
 			st.DeviceID, commandID, req)
 	}); err != nil {
-		return fmt.Errorf("devicecert: emit rotate-cert command: %w", err)
+		return fmt.Errorf("devicecertrenewal: emit rotate-cert command: %w", err)
 	}
-	r.logger.Info("devicecert: enqueued cert-renewal command",
+	if err := r.store.MarkRenewalRequested(ctx, st.DeviceID, st.Epoch); err != nil {
+		return fmt.Errorf("devicecertrenewal: mark cert renewal requested: %w", err)
+	}
+	r.logger.Info("devicecertrenewal: enqueued cert-renewal command",
 		slog.String("device_id", st.DeviceID),
 		slog.Int64("cert_epoch", st.Epoch),
 		slog.Time("not_after", st.NotAfter))
@@ -143,10 +159,11 @@ func (r *Reconciler) enqueueRenewal(ctx context.Context, st CertState) error {
 
 // rotateCommandID is the SINGLE source for the cert-rotation dedup token. The
 // relay derives the Claimer key from (tenant, subject=deviceID, commandID), so a
-// stable id per (deviceID, epoch) makes every reconcile tick within one cert
-// epoch dedup to a single dispatched command, while a post-rotation re-issue (new
-// epoch) yields a fresh id that dispatches again. Callers MUST NOT hand-roll this
-// string.
+// stable id per (deviceID, epoch) makes the secondary Claimer backstop dedup any
+// same-window re-emit of one cert epoch, while a post-rotation re-issue (new epoch)
+// yields a fresh id that dispatches again. (The authoritative per-epoch dedup is
+// the Store's renewal-requested mark — see the Reconciler doc.) Callers MUST NOT
+// hand-roll this string.
 //
 // The id deliberately embeds deviceID even though the Claimer key already scopes
 // by subject=deviceID: this keeps the token self-describing in logs/DLX and safe
@@ -163,13 +180,13 @@ type rotateCertPayload struct {
 	NotAfter string `json:"notAfter"`
 }
 
-func rotatePayload(st CertState) (string, error) {
+func rotatePayload(st devicecert.CertState) (string, error) {
 	b, err := json.Marshal(rotateCertPayload{
 		Epoch:    st.Epoch,
 		NotAfter: st.NotAfter.UTC().Format(time.RFC3339),
 	})
 	if err != nil {
-		return "", fmt.Errorf("devicecert: marshal rotate-cert payload: %w", err)
+		return "", fmt.Errorf("devicecertrenewal: marshal rotate-cert payload: %w", err)
 	}
 	return string(b), nil
 }

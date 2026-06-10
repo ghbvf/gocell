@@ -1,0 +1,21 @@
+id: devicecertrenewal
+belongsToCell: devicecell
+consistencyLevel: L4
+lifecycle: experimental
+contractUsages:
+  - contract: command.devicecommand.enqueue.v1
+    role: invoke
+verify:
+  unit:
+    - unit.devicecertrenewal.reconciler
+  waivers:
+    - contract: command.devicecommand.enqueue.v1
+      owner: examples
+      reason: >-
+        invoke is a declaration-only role (no cellgen derivation, no executable
+        broker contract test); the reconciler emit is covered by the slice unit
+        test asserting the emitted entry's routing topic + idempotency metadata.
+      expiresAt: "2026-12-31"
+
+allowedFiles:
+  - examples/iotdevice/cells/devicecell/slices/devicecertrenewal/**

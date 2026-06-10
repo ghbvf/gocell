@@ -155,6 +155,34 @@ func TestService_Register_PersistsDevice(t *testing.T) {
 	assert.Equal(t, "sensor-b", stored.Name)
 }
 
+// TestService_Register_SeedsCertStore covers the real registration→cert-store
+// seeding path (registerInternal → s.certStore.Issue). The cert-renewal e2e
+// hand-seeds a near-expiry cert because Register issues a far-from-expiry one, so
+// the production seeding path needs its own assertion here: a freshly registered
+// device gets an epoch-1 cert valid for certValidity (now + 90d).
+func TestService_Register_SeedsCertStore(t *testing.T) {
+	base := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
+	clk := clockmock.New(base)
+	repo := mem.NewDeviceRepository()
+	store := devicecert.NewStore()
+	svc, err := NewService(clk, repo, slog.Default(), WithCertStore(store))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	resp, err := svc.Register(ctx, &registercontract.Request{Name: "sensor-seed"})
+	require.NoError(t, err)
+	r := resp.(registercontract.Register201JSONResponse)
+	require.NotNil(t, r.Data)
+
+	// A cutoff just past now+certValidity surfaces exactly the new device's cert.
+	seeded, err := store.ScanNearExpiry(ctx, base.Add(certValidity+time.Hour))
+	require.NoError(t, err)
+	require.Len(t, seeded, 1, "Register must seed exactly one cert into the store")
+	assert.Equal(t, r.Data.ID, seeded[0].DeviceID)
+	assert.Equal(t, int64(1), seeded[0].Epoch, "a fresh registration issues epoch 1")
+	assert.Equal(t, base.Add(certValidity), seeded[0].NotAfter, "cert NotAfter is now+certValidity")
+}
+
 func TestService_Register_PublishFails_StillReturnsDevice(t *testing.T) {
 	repo := mem.NewDeviceRepository()
 	emitter, err := outbox.NewDirectEmitter(

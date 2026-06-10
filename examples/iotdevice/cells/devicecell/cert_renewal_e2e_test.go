@@ -7,11 +7,14 @@ package devicecell
 //	→ relay (Claimer-wrapped dispatch, #1698) → enqueue handler → device command
 //	queue → device dequeue.
 //
-// The headline invariant is CROSS-TICK DEDUP: the reconciler emits one command
-// entry PER tick for the same un-renewed cert, but the relay's Claimer dedups by
-// the (tenant, deviceID, commandID) key — commandID derived from (deviceID,
-// epoch) — so the enqueue handler runs exactly once and exactly one rotate-cert
-// command lands in the queue across two ticks.
+// The headline invariant is CROSS-TICK DEDUP at the cert store: the first tick
+// emits one rotate-cert entry and marks the cert's epoch renewal-requested, so the
+// second tick's ScanNearExpiry skips the same un-renewed cert and emits nothing.
+// One entry is written, the relay dispatches it once, the enqueue handler runs
+// exactly once, and exactly one rotate-cert command lands in the queue across two
+// ticks — single-emit per epoch that does NOT rely on the relay's 24h command-done
+// TTL. (The relay Claimer is a secondary same-window backstop, exercised by
+// command_dedup_e2e_test.go.)
 
 import (
 	"context"
@@ -27,6 +30,7 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecmd"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	devicecertrenewal "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecertrenewal"
 	devicecommand "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommand"
 	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -43,8 +47,9 @@ import (
 )
 
 // countingEnqueueHandler decorates the real enqueue adapter so the test can
-// assert relay-level dedup (handler runs exactly once) while the wrapped adapter
-// still performs the real queue write the device later dequeues.
+// assert the handler runs exactly once (store-level dedup writes a single entry
+// the relay dispatches once) while the wrapped adapter still performs the real
+// queue write the device later dequeues.
 type countingEnqueueHandler struct {
 	inner cmdenqueue.Handler
 	calls int
@@ -91,24 +96,23 @@ func TestCertRenewal_CrossTickDedupToDequeue(t *testing.T) {
 	emitStore := outboxtest.NewFakeStore()
 	we, err := kout.NewWriterEmitter(emitStore)
 	require.NoError(t, err)
-	reconciler, err := devicecert.NewReconciler(fc, certStore, kout.WrapEmitterForCell(we),
+	reconciler, err := devicecertrenewal.NewReconciler(fc, certStore, kout.WrapEmitterForCell(we),
 		kout.DemoCellTxManager(), 7*24*time.Hour, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	require.NoError(t, err)
 
-	// Two ticks: the same un-renewed cert is observed each interval.
+	// Two ticks: the same un-renewed cert is observed each interval, but the first
+	// tick marks its epoch renewal-requested so the second tick's scan skips it —
+	// only one command entry is written (store-level cross-tick dedup, no relay TTL).
 	_, err = reconciler.Reconcile(ctx, reconcile.Request{})
 	require.NoError(t, err)
 	_, err = reconciler.Reconcile(ctx, reconcile.Request{})
 	require.NoError(t, err)
 
 	rows := emitStore.Snapshot()
-	require.Len(t, rows, 2, "each tick writes one rotate-cert command entry for the near-expiry cert")
-	k0, ok0 := command.ClaimKeyFromEntry(rows[0].Entry)
-	k1, ok1 := command.ClaimKeyFromEntry(rows[1].Entry)
-	require.True(t, ok0)
-	require.True(t, ok1)
-	assert.Equal(t, k0, k1, "same (device, epoch) across ticks must derive the SAME claim key")
-	assert.NotEqual(t, rows[0].Entry.ID(), rows[1].Entry.ID(), "store ids differ")
+	require.Len(t, rows, 1, "store-level per-epoch dedup: the second tick skips the already-requested cert")
+	_, ok0 := command.ClaimKeyFromEntry(rows[0].Entry)
+	require.True(t, ok0, "the rotate-cert entry carries an idempotency claim key")
+	assert.Equal(t, "dev-1", rows[0].Entry.AggregateID(), "the single entry is the device's renewal command")
 
 	// Relay with Claimer-wrapped dispatch (#1698) over the emit store.
 	relay := outbox.NewRelay(clock.Real(), emitStore, &kout.DiscardPublisher{},
@@ -123,10 +127,8 @@ func TestCertRenewal_CrossTickDedupToDequeue(t *testing.T) {
 	go func() { defer close(relayDone); _ = relay.Start(relayCtx) }()
 
 	require.NoError(t, emitStore.WaitFor(relayCtx, func(rows []outboxtest.FakeRow) bool {
-		return len(rows) == 2 &&
-			rows[0].Status == kout.StatePublished &&
-			rows[1].Status == kout.StatePublished
-	}), "both command entries settle to published (one dispatched, one deduped)")
+		return len(rows) == 1 && rows[0].Status == kout.StatePublished
+	}), "the single command entry settles to published (dispatched once)")
 
 	// Stop the relay and wait for Start to return before the remaining assertions,
 	// so the dequeue checks below do not race the relay (relayDone gates Start's
@@ -134,7 +136,7 @@ func TestCertRenewal_CrossTickDedupToDequeue(t *testing.T) {
 	cancel()
 	<-relayDone
 
-	assert.Equal(t, 1, handler.calls, "enqueue handler runs exactly once across the two ticks (cross-tick dedup)")
+	assert.Equal(t, 1, handler.calls, "enqueue handler runs exactly once across the two ticks (store-level cross-tick dedup)")
 
 	// Device dequeue: exactly one rotate-cert command is claimable for the device.
 	dequeued, err := queue.Dequeue(ctx, "dev-1", 10, time.Minute)

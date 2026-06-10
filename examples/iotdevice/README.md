@@ -250,11 +250,14 @@ the outbox relay dispatches it in-process → a `rotate-cert` command lands in t
 device's queue, dequeued like any other command.
 
 **Idempotent forcing function**: the loop re-observes the same un-renewed cert
-every tick, but the command id is derived deterministically from
-`(deviceId, certEpoch)`, so the relay's Claimer dedups every tick within one cert
-epoch to a **single** enqueued command — a device is never spammed with N renewal
-commands. A post-rotation re-issue advances the epoch and yields a fresh,
-dispatchable command.
+every tick, but after the first emit the cert store records the renewal-requested
+epoch, so subsequent scans skip it — a single un-renewed cert yields exactly
+**one** `rotate-cert` command across its whole (multi-day) near-expiry window,
+never N. This single-emit is owned by the store and holds **independently of the
+outbox relay's 24h command-done TTL**; the relay's Claimer (keyed by the
+`(deviceId, certEpoch)`-derived command id) is only a secondary backstop for
+same-window re-emits. A post-rotation re-issue advances the epoch and yields a
+fresh, dispatchable command.
 
 > **Ephemeral by design**: certificate state lives in an in-memory, cell-internal
 > store (not the `devices` table) — this example demonstrates the producer +
@@ -278,7 +281,7 @@ dispatchable command.
 > tenant-scoped (resolves to the `_notenant` sentinel), and the cert store is
 > per-assembly. Correct for this single-tenant example; copying archetype ② into a
 > multi-tenant cell requires adding a tenant dimension to the cert store and the
-> command id (see `internal/devicecert/reconciler.go`).
+> command id (see `cells/devicecell/slices/devicecertrenewal/reconciler.go`).
 
 ## Full Walkthrough
 

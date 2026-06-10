@@ -1,10 +1,15 @@
 // Package devicecert holds the devicecell certificate-renewal state.
 //
 // CertState models a device's current TLS/identity certificate as a (NotAfter,
-// Epoch) pair. The renewal reconcile.Loop scans this store for near-expiry certs
-// and enqueues a deduplicated rotate-cert command per epoch (the loop is wired by
-// buildCertRenewalSweeper in cells/devicecell/cell.go over the Reconciler in this
-// package — there is no dedicated slice).
+// Epoch) pair plus the epoch a renewal command was last requested for. The
+// renewal reconcile.Loop scans this store for near-expiry certs and enqueues a
+// rotate-cert command per epoch; after a successful emit it marks the epoch
+// renewal-requested so subsequent scans skip it. That makes the store — not the
+// outbox relay's 24h command-done TTL — the authoritative per-epoch dedup, so a
+// single un-renewed cert yields exactly one command across its whole (multi-day)
+// near-expiry window. The producer is the Reconciler in the devicecertrenewal
+// slice (cells/devicecell/slices/devicecertrenewal), wired by buildCertRenewalSweeper
+// in cells/devicecell/cell.go.
 //
 // EPHEMERAL BY DESIGN: Store is an in-memory, cell-internal operational store —
 // it is NOT persisted to the devices table. This is a deliberate scope choice for
@@ -33,10 +38,17 @@ import (
 // command id deterministic per certificate generation so renewals for the SAME
 // epoch dedup across reconcile ticks, while a post-rotation re-issue (new epoch)
 // becomes a fresh, dispatchable command.
+//
+// RenewalRequestedEpoch is the epoch a renewal command was last successfully
+// enqueued for (0 = none yet). ScanNearExpiry skips a cert while
+// RenewalRequestedEpoch == Epoch, so each epoch is requested at most once
+// regardless of how many ticks observe it. Real epochs start at 1, so the zero
+// value never collides with a live epoch.
 type CertState struct {
-	DeviceID string
-	NotAfter time.Time
-	Epoch    int64
+	DeviceID              string
+	NotAfter              time.Time
+	Epoch                 int64
+	RenewalRequestedEpoch int64
 }
 
 // Store is a thread-safe in-memory device certificate store. See the package doc
@@ -77,21 +89,48 @@ func (s *Store) Issue(_ context.Context, deviceID string, notAfter time.Time) (C
 	return st, nil
 }
 
-// ScanNearExpiry returns every certificate whose NotAfter is at or before cutoff,
-// sorted by DeviceID for deterministic iteration. It is a pure read filter — the
-// caller (renewal loop) supplies cutoff = now + renewal-threshold. The in-memory
-// implementation never returns a non-nil error; the error return preserves the
-// reconciler's contract for a future persisted swap-in.
+// ScanNearExpiry returns every certificate whose NotAfter is at or before cutoff
+// AND whose current epoch has not already been renewal-requested
+// (RenewalRequestedEpoch != Epoch), sorted by DeviceID for deterministic
+// iteration. The caller (renewal loop) supplies cutoff = now + renewal-threshold;
+// the renewal-requested filter is what makes the producer emit at most once per
+// epoch across an arbitrarily long near-expiry window. The in-memory implementation
+// never returns a non-nil error; the error return preserves the reconciler's
+// contract for a future persisted swap-in.
 func (s *Store) ScanNearExpiry(_ context.Context, cutoff time.Time) ([]CertState, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var out []CertState
 	for _, st := range s.certs {
+		if st.RenewalRequestedEpoch == st.Epoch {
+			continue // renewal already requested for the current epoch
+		}
 		if !st.NotAfter.After(cutoff) { // NotAfter <= cutoff
 			out = append(out, st)
 		}
 	}
 	slices.SortFunc(out, func(a, b CertState) int { return cmp.Compare(a.DeviceID, b.DeviceID) })
 	return out, nil
+}
+
+// MarkRenewalRequested records that a rotate-cert command was successfully
+// enqueued for deviceID at the given epoch, so subsequent ScanNearExpiry calls
+// skip it until the cert is re-issued (epoch advances). It is a compare-and-set
+// on epoch: a no-op if the device is gone or its current epoch no longer matches
+// epoch (the cert was re-issued between the scan and this mark) — the newer epoch
+// must be re-observed and dispatched. The in-memory implementation never returns
+// a non-nil error; the error return preserves the contract for a future persisted
+// swap-in.
+func (s *Store) MarkRenewalRequested(_ context.Context, deviceID string, epoch int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	st, ok := s.certs[deviceID]
+	if !ok || st.Epoch != epoch {
+		return nil // re-issued or gone since the scan; the new epoch will be re-observed
+	}
+	st.RenewalRequestedEpoch = epoch
+	s.certs[deviceID] = st
+	return nil
 }

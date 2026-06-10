@@ -88,6 +88,74 @@ func TestStore_ScanNearExpiry_Empty(t *testing.T) {
 	assert.Empty(t, got)
 }
 
+// TestStore_MarkRenewalRequested_SkipsScannedEpoch is the F1 core: once an epoch
+// is marked renewal-requested, ScanNearExpiry stops returning it — the per-epoch
+// single-emit guarantee that no longer leans on the relay's 24h command-done TTL.
+func TestStore_MarkRenewalRequested_SkipsScannedEpoch(t *testing.T) {
+	t.Parallel()
+	s := NewStore()
+	ctx := context.Background()
+	cutoff := certTestBase.Add(24 * time.Hour)
+	require.NoError(t, mustIssue(s, "dev-1", certTestBase.Add(time.Hour)))
+
+	got, err := s.ScanNearExpiry(ctx, cutoff)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "near-expiry cert is scannable before it is requested")
+
+	require.NoError(t, s.MarkRenewalRequested(ctx, "dev-1", 1))
+
+	got, err = s.ScanNearExpiry(ctx, cutoff)
+	require.NoError(t, err)
+	assert.Empty(t, got, "a renewal-requested epoch is skipped on subsequent scans")
+}
+
+// TestStore_MarkRenewalRequested_StaleEpochNoop guards the compare-and-set: a mark
+// for an epoch that no longer matches the stored cert (re-issued since the scan)
+// must NOT suppress the newer epoch.
+func TestStore_MarkRenewalRequested_StaleEpochNoop(t *testing.T) {
+	t.Parallel()
+	s := NewStore()
+	ctx := context.Background()
+	cutoff := certTestBase.Add(24 * time.Hour)
+	require.NoError(t, mustIssue(s, "dev-1", certTestBase.Add(time.Hour)))
+
+	// Marking a stale epoch (2 — the cert is still at epoch 1) is a no-op.
+	require.NoError(t, s.MarkRenewalRequested(ctx, "dev-1", 2))
+	got, err := s.ScanNearExpiry(ctx, cutoff)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "marking a non-matching epoch must not suppress the live epoch")
+
+	// Unknown device is a no-op, no error.
+	require.NoError(t, s.MarkRenewalRequested(ctx, "dev-absent", 1))
+}
+
+// TestStore_Reissue_AfterRequest_IsScannableAgain proves the forcing function: a
+// post-rotation re-issue advances the epoch, which is not yet renewal-requested,
+// so the cert becomes dispatchable again.
+func TestStore_Reissue_AfterRequest_IsScannableAgain(t *testing.T) {
+	t.Parallel()
+	s := NewStore()
+	ctx := context.Background()
+	cutoff := certTestBase.Add(24 * time.Hour)
+	require.NoError(t, mustIssue(s, "dev-1", certTestBase.Add(time.Hour)))
+	require.NoError(t, s.MarkRenewalRequested(ctx, "dev-1", 1))
+
+	got, err := s.ScanNearExpiry(ctx, cutoff)
+	require.NoError(t, err)
+	require.Empty(t, got, "epoch 1 is suppressed after being requested")
+
+	// Re-issue (still near-expiry) advances to epoch 2.
+	st, err := s.Issue(ctx, "dev-1", certTestBase.Add(2*time.Hour))
+	require.NoError(t, err)
+	require.Equal(t, int64(2), st.Epoch)
+	require.Zero(t, st.RenewalRequestedEpoch, "a fresh epoch is not renewal-requested")
+
+	got, err = s.ScanNearExpiry(ctx, cutoff)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "the new epoch is dispatchable again")
+	assert.Equal(t, int64(2), got[0].Epoch)
+}
+
 func mustIssue(s *Store, id string, notAfter time.Time) error {
 	_, err := s.Issue(context.Background(), id, notAfter)
 	return err
