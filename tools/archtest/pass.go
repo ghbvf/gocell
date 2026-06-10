@@ -289,7 +289,7 @@ func Run(t testing.TB, scope RunScope, rule Rule) []Diagnostic {
 		if !filepath.IsAbs(s.dir) {
 			t.Fatalf("archtest.Run: StandaloneModule requires an absolute module root, got %q", s.dir)
 		}
-		return runTypedWithRoot(t, s.dir, s.opts, s.patterns, rule)
+		return runStandaloneModuleWithRoot(t, s.dir, s.opts, s.patterns, rule)
 	case fixtureRunScope:
 		return runTypedWithRoot(t, findModuleRoot(t), TypedOpts{
 			Tests: s.opts.Tests,
@@ -421,6 +421,22 @@ func collectASTFiles(t testing.TB, scope Scope) (
 // Precondition: rule != nil (guaranteed by Run).
 func runTypedWithRoot(t testing.TB, root string, opts TypedOpts, patterns []string, rule Rule) []Diagnostic {
 	t.Helper()
+	pkgs := loadTypedPackages(t, root, opts, patterns)
+	return runRulePasses(root, pkgs, rule)
+}
+
+func runStandaloneModuleWithRoot(t testing.TB, root string, opts TypedOpts, patterns []string, rule Rule) []Diagnostic {
+	t.Helper()
+	pkgs := loadTypedPackages(t, root, opts, patterns)
+	if len(pkgs) == 0 {
+		t.Fatalf("archtest.Run: StandaloneModule: SharedResolver(root=%s, tests=%v, tags=%v, patterns=%v): loaded 0 packages",
+			root, opts.Tests, opts.Tags, patterns)
+	}
+	return runRulePasses(root, pkgs, rule)
+}
+
+func loadTypedPackages(t testing.TB, root string, opts TypedOpts, patterns []string) []*packages.Package {
+	t.Helper()
 	if len(patterns) == 0 {
 		t.Fatalf("archtest.Run: typed scope (Typed/Fixture/StandaloneModule) requires at least one pattern; got none")
 	}
@@ -429,7 +445,7 @@ func runTypedWithRoot(t testing.TB, root string, opts TypedOpts, patterns []stri
 		t.Fatalf("archtest.Run: SharedResolver(root=%s, tests=%v, tags=%v, patterns=%v): %v",
 			root, opts.Tests, opts.Tags, patterns, err)
 	}
-	return runRulePasses(root, resolver.Packages(), rule)
+	return resolver.Packages()
 }
 
 // runRulePasses is the shared Pass-construction loop for [runTypedWithRoot]

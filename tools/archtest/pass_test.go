@@ -1287,6 +1287,32 @@ func TestRun_StandaloneModule_rejectsEmptyPatterns(t *testing.T) {
 	}
 }
 
+// TestRun_StandaloneModule_rejectsEmptyPackageSet verifies that typed fixture
+// loads fail closed when go/packages returns no packages and no error. That is
+// the shape produced by some stale standalone fixture modules when their
+// go.mod needs tidying: the rule must not silently receive zero Passes.
+func TestRun_StandaloneModule_rejectsEmptyPackageSet(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.test/empty\n\ngo 1.25.11\n"), 0o644); err != nil {
+		t.Fatalf("write temp go.mod: %v", err)
+	}
+
+	spy := &tbFatalSpy{TB: t}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		Run(spy, StandaloneModule(dir, TypedOpts{Tests: false}, []string{"./..."}),
+			func(*Pass) []Diagnostic { return nil })
+	}()
+	<-done
+	if !spy.fatal {
+		t.Errorf("Run(t, StandaloneModule(...)) with empty package set: expected t.Fatalf to be called, got none")
+	}
+	if !strings.Contains(spy.lastMsg, "loaded 0 packages") {
+		t.Errorf("Run(t, StandaloneModule(...)) fatal message %q does not mention \"loaded 0 packages\"", spy.lastMsg)
+	}
+}
+
 // TestRun_rejectsNilScope verifies that Run(t, nil, rule) fails loud with a
 // message naming the five constructors, rather than the ambiguous former
 // "nil RunScope" wording that also covered the unknown-type default branch.
