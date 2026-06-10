@@ -293,8 +293,26 @@ func loadSliceWebhookWiring(root string) (map[string]bool, error) {
 // Cell name extraction helpers
 // ---------------------------------------------------------------------------
 
+// businessCellScanDirs is the single source for archtest scan roots that must
+// cover EVERY in-repo cell location, including example-embedded cells: the
+// local scaffold root ("cells"), the platform cell module ("corecells", #1560),
+// and example modules ("examples"). Rules that hold example cells to the same
+// constraint (adapter return types, gRPC-in-contract, subscriber funnel,
+// webhook YAML, …) derive their scan root from here so a future cell-layout
+// rename cannot silently drop a directory and make the rule pass vacuously.
+// TestCellScanDirs_CoverCorecells is the anti-vacuity guard.
 func businessCellScanDirs() []string {
 	return []string{"cells", "corecells", "examples"}
+}
+
+// platformCellScanDirs is the single source for scan roots that cover only the
+// in-repo platform + local cells and intentionally EXCLUDE example modules:
+// the local scaffold root ("cells") and the platform cell module ("corecells").
+// Use this for rules that do not hold example cells to the constraint (event
+// DTO camelCase, no-routemux-wrapper). Mirrors businessCellScanDirs minus
+// "examples"; guarded by TestCellScanDirs_CoverCorecells.
+func platformCellScanDirs() []string {
+	return []string{"cells", "corecells"}
 }
 
 func extractCellName(rel string) string {

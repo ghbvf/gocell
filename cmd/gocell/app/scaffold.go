@@ -205,6 +205,17 @@ const (
 	errFmtScaffoldSlice    = "scaffold slice: %w"
 	errFmtScaffoldContract = "scaffold contract: %w"
 	errFmtScaffoldJourney  = "scaffold journey: %w"
+	// localCellsDir is the project-local cell root directory written by
+	// `gocell scaffold cell` (metadata.CellRootLocal layout). Platform cells
+	// live under corecells/ and are never produced by scaffold; scaffold only
+	// ever writes project-local cells here. Single-sourced across the cell /
+	// slice path builders and the root-manifest include globs below.
+	localCellsDir = "cells"
+	// localCellGlob / localCellSliceGlob are the .gocell/manifest.yaml include
+	// patterns for project-local cells, derived from localCellsDir so the dir
+	// name has one source of truth.
+	localCellGlob      = localCellsDir + "/*/cell.yaml"
+	localCellSliceGlob = localCellsDir + "/*/slices/*/slice.yaml"
 )
 
 // runScaffold implements:
@@ -496,7 +507,7 @@ func scaffoldCell(root string, args []string) error {
 	reportScaffold(scaffoldReport{
 		Kind:   "cell",
 		ID:     *id,
-		Target: filepath.Join("cells", *id),
+		Target: filepath.Join(localCellsDir, *id),
 	})
 
 	if *skipGenerate {
@@ -540,11 +551,11 @@ func addRootManifestCellIncludes(src string) (string, bool) {
 	var insert strings.Builder
 	if !hasCells {
 		insert.WriteString("      cells:\n")
-		insert.WriteString("        - \"cells/*/cell.yaml\"\n")
+		insert.WriteString("        - \"" + localCellGlob + "\"\n")
 	}
 	if !hasSlices {
 		insert.WriteString("      slices:\n")
-		insert.WriteString("        - \"cells/*/slices/*/slice.yaml\"\n")
+		insert.WriteString("        - \"" + localCellSliceGlob + "\"\n")
 	}
 
 	out := make([]string, 0, len(lines)+4)
@@ -693,7 +704,7 @@ func scaffoldSlice(root string, args []string) error {
 	}
 
 	// Verify parent cell exists.
-	cellDirAbs, err := pathsafe.ContainPath(realRoot, filepath.Join("cells", *cellID))
+	cellDirAbs, err := pathsafe.ContainPath(realRoot, filepath.Join(localCellsDir, *cellID))
 	if err != nil {
 		return fmt.Errorf(errFmtScaffoldSlice, err)
 	}
@@ -707,7 +718,7 @@ func scaffoldSlice(root string, args []string) error {
 		return fmt.Errorf("scaffold slice: render: %w", err)
 	}
 
-	sliceRelDir := filepath.Join("cells", *cellID, "slices", *id)
+	sliceRelDir := filepath.Join(localCellsDir, *cellID, "slices", *id)
 	absYAML, err := pathsafe.ContainPath(realRoot, filepath.Join(sliceRelDir, "slice.yaml"))
 	if err != nil {
 		return fmt.Errorf(errFmtScaffoldSlice, err)
@@ -735,7 +746,7 @@ func scaffoldSlice(root string, args []string) error {
 	reportScaffold(scaffoldReport{
 		Kind:   "slice",
 		ID:     *cellID + "/" + *id,
-		Target: filepath.Join("cells", *cellID, "slices", *id, "slice.yaml"),
+		Target: filepath.Join(localCellsDir, *cellID, "slices", *id, "slice.yaml"),
 	})
 	return nil
 }

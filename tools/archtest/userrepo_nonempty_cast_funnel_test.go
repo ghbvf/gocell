@@ -61,6 +61,7 @@ func TestUserRepoNonEmptyCastFunnel(t *testing.T) {
 
 	scope := scanner.DirsScope(root, []string{
 		"cells",
+		"corecells",
 		"runtime",
 		"kernel",
 		"adapters",

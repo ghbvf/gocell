@@ -121,7 +121,7 @@ func TestHANDLER_POLICY_REQUIRED_01_NegativeFixture(t *testing.T) {
 // and examples/ subtrees.
 func collectProductionGoFiles(t *testing.T, root string) []string {
 	t.Helper()
-	scope := scanner.DirsScope(root, []string{"cells", "corecells", "examples"})
+	scope := scanner.DirsScope(root, businessCellScanDirs())
 	files, err := scope.Files()
 	require.NoError(t, err, "collectProductionGoFiles: DirsScope.Files")
 	sort.Strings(files)

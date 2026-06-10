@@ -218,9 +218,18 @@ func assemblyMetaFile(project *metadata.ProjectMeta, id string) string {
 	return ""
 }
 
+// isTopLevelCellRoot reports whether dir is a recognized top-level cell root
+// directory: "cells" (project-local scaffold) or "corecells" (platform cell
+// module, #1560). Mirrors the inline cell-root recognition in
+// kernel/metadata/cell_layout.go (CellLocationFromRel) so canonical ID/slice
+// derivation stays aligned with the metadata layer's layout source.
+func isTopLevelCellRoot(dir string) bool {
+	return dir == "cells" || dir == "corecells"
+}
+
 func canonicalCellID(file string) (string, bool) {
 	parts := strings.Split(file, "/")
-	if len(parts) == 3 && parts[0] == "cells" && parts[2] == "cell.yaml" {
+	if len(parts) == 3 && isTopLevelCellRoot(parts[0]) && parts[2] == "cell.yaml" {
 		return parts[1], true
 	}
 	return "", false
@@ -228,7 +237,7 @@ func canonicalCellID(file string) (string, bool) {
 
 func canonicalSliceKey(file string) (string, bool) {
 	parts := strings.Split(file, "/")
-	if len(parts) == 5 && parts[0] == "cells" && parts[2] == "slices" && parts[4] == "slice.yaml" {
+	if len(parts) == 5 && isTopLevelCellRoot(parts[0]) && parts[2] == "slices" && parts[4] == "slice.yaml" {
 		return parts[1] + "/" + parts[3], true
 	}
 	return "", false

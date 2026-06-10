@@ -336,6 +336,8 @@ gocell scaffold cell --id=foo --team=platform --role=cell-owner
 
 This generates `cells/foo/` with cell.go + cell.yaml + slice + contract + JSON schemas, and runs codegen automatically so that `go test ./cells/foo/...` passes immediately.
 
+Pick the example contract shape with `--with-http` (default), `--with-events`, or `--with-both`; run `gocell scaffold cell --help` for the full flag list.
+
 Create an assembly in one command:
 
 ```bash
