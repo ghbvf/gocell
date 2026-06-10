@@ -46,6 +46,13 @@ func TestCommandSweeper_ReconcileBehaviorPreserved(t *testing.T) {
 	s, err := command.NewSweeper(scanner, q, clk)
 	require.NoError(t, err)
 
+	// Direct Reconcile call, bypassing reconcile.Loop: the Loop is the sole
+	// chokepoint that installs the system producer identity (#1821), so these
+	// unit tests deliberately do not observe it. That is correct — the Sweeper
+	// does not emit to the outbox (it Acks expired commands via the queue), so
+	// the producer principal is immaterial to its behavior; these tests pin only
+	// the scan→expire→Ack effect. A system-identity assertion belongs on the
+	// Loop-driven path (see kernel/reconcile system_identity_test.go), not here.
 	res, err := s.Reconcile(context.Background(), reconcile.Request{})
 	require.NoError(t, err)
 	assert.Equal(t, reconcile.Result{}, res, "success returns zero Result (RequeueAfter=0 → Loop default tick)")
