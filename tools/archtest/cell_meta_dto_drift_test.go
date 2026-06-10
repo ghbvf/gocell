@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: CELL-META-DTO-COVERAGE-01
 //
 // TestCellMetaDTOCoverage enforces that every top-level yaml-bearing exported

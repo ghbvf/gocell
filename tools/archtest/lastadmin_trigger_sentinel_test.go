@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: LASTADMIN-TRIGGER-SENTINEL-CONST-SQL-MATCH-01
 //

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // ctxkeys_realip_read_caller_test.go — closes the SOURCE side of the client-IP
 // PII funnel (#1488).
 //

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: WEBHOOK-ALLOW-LOOPBACK-PROD-BAN-01
 //
 // WEBHOOK-ALLOW-LOOPBACK-PROD-BAN-01 — webhook.WithAllowLoopback is dev/CI-only.

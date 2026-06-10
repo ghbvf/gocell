@@ -1,3 +1,5 @@
+//go:build archtest
+
 // Package archtest_test — pg_schema_guard_invariants_test.go
 //
 // File invariants:

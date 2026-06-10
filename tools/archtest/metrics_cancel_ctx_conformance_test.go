@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: METRICS-CANCEL-CTX-CONFORMANCE-01
 //
 // AI-robust: Medium (test-existence backstop — NOT a funnel upstream lock).

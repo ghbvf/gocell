@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: SPAN-SETATTR-REDACT-01
 //
 // SPAN-SETATTR-REDACT-01 — every string-valued span attribute in

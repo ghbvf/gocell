@@ -1,3 +1,5 @@
+//go:build archtest
+
 // Package archtest guards agent instruction rule files.
 //
 //   - INVARIANT: AGENT-RULES-GOVERNANCE-01

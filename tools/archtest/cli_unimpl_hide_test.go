@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: CLI-UNIMPL-HIDE-01
 //   - INVARIANT: CLI-TOPLEVEL-HELP-REGISTRY-01
 //

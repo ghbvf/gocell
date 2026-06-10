@@ -1,3 +1,5 @@
+//go:build archtest
+
 // tenant_txscope_write_caller_test.go — closes the DOWNSTREAM side of the PR-3
 // transaction tenant-scope write boundary.
 //

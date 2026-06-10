@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: CREDENTIAL-RESPONSE-IDEMPOTENCY-EXEMPT-FUNNEL-01
 //
 // Locks the credential-response idempotency-exempt codegen funnel

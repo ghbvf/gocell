@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: PROBENAME-SEALED-FUNNEL-01
 //
 // probename_sealed_funnel_test.go — typed-string concept funnel for

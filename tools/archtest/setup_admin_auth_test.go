@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: SETUP-ADMIN-NOT-PUBLIC-01
 //   - INVARIANT: AUTH-BOOTSTRAP-PATH-RESTRICTED-01

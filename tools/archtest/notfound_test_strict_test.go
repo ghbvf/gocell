@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // INVARIANT: POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01

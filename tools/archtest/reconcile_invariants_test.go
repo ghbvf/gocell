@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // reconcile_invariants_test.go locks kernel/reconcile's public surface: the

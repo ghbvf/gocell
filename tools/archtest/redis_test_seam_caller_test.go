@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: REDIS-TEST-SEAM-CALLER-01
 //
 // Package archtest — single-rule file for REDIS-TEST-SEAM-CALLER-01.

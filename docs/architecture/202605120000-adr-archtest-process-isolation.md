@@ -64,6 +64,8 @@ Phase 0 本地实测（macOS local，BSD `/usr/bin/time -l` maximum resident set
 
 `.github/workflows/archtest-nightly.yml::verify-archtest` matrix（24 shard per §Amendment 2026-05-28，cron + `workflow_dispatch`）是 archtest 在 CI 上的 **唯一权威 gate**。push / pull_request 不再跑 archtest（PR-time matrix 已删，详见 §Amendment 2026-05-23-pr-time-to-nightly）。`governance.yml::make verify` 通过 `env: VERIFY_SKIP: archtest` 显式委托给 nightly，**不再双跑**。
 
+> **§Amendment 2026-06-10 补强**：`VERIFY_SKIP=archtest` 只 skip 专用的 `verify-archtest.sh` gate，**不**覆盖对含 archtest 的 module 跑裸 `go test ./...` 的其它 gate。#1803 把 `tools/` 拆成 workspace 成员后，`verify-workspace-test.sh` 的通用遍历重新执行了 archtest（+~4min/lane），证明本段「push/PR 不再跑 archtest」仅靠 VERIFY_SKIP 并不成立。真正的编译级保证是 leaf 的 `//go:build archtest` tag（`ARCHTEST-LEAF-BUILD-TAG-01`）；VERIFY_SKIP 与 build tag 互补。详见末尾 §Amendment 2026-06-10。
+
 理由（K8s + Watermill 范式对照）：
 - K8s 每个 verify-*.sh 是独立 Prow job（一 owner / 一 gate）；aggregator `hack/make-rules/verify.sh` 是开发者本地一键入口，不是 CI 上的二次 gate
 - Watermill 用单个 reusable workflow 作为 PR/master 共同实现，调用方只做薄包装；语义差异通过显式 input 表达，不靠 caller-injected env 改 script 行为
@@ -443,3 +445,69 @@ per-shard RSS 实测后再定，不凭 macOS 数字硬拍）：
 / managed-resource 等，与 load mode 正交——WithDeps 与 NoDeps 失败集 byte-identical）中 orderfulfillment
 TEST-POLLING 一项亦由 #1502 修复，**剩余 6 项由 gh issue #1506 跟踪**，均为 nightly-only archtest、
 不在本 amendment 范围。
+
+## Amendment 2026-06-10: archtest leaf build-tag — VERIFY_SKIP 单 gate skip 的漏洞闭合（#1803 workspace-module 回归）
+
+### 触发
+
+`#1803 refactor(tools): split tools into workspace module` 合并（2026-06-09 22:10 UTC）后，
+`Governance Strict`（`make verify`）lane 从 ~6-7min 跳到 ~10-14min。develop push 计时铁证：
+`06-09T06:43` push=7m → `06-09T22:10`（即 #1803 合并）push=11m。`hack/verify-workspace-test.sh` 对每个
+非 root workspace 成员跑 `GOWORK=off go -C <dir> test ./...`；`tools/` 一旦成为成员，`tools/archtest`
+（1218 个 `Test*`，K=1 ~5min）被这条通用遍历拉进 PR 关键路径，本地 `make verify` 还跑两遍。
+
+### 根因
+
+`VERIFY_SKIP=archtest`（§D6）是**按 gate 的 skip**——它只跳过专用的 `hack/verify-archtest.sh`，
+**不是 archtest 套件自身的属性**。任何对含 archtest 的 module 跑裸 `go test ./...` 的 gate 都会重新执行它。
+更深一层：`integration` / `e2e` / `examples_smoke` / `mqtt_tls` 这些重型 opt-in 套件**全部已挂 build tag**，
+天然不泄进 `./...`；**archtest 是唯一「重型但没挂 tag」的套件**——这才是它会从 `verify-workspace-test`
+侧门泄漏、且 §D6 single-owner 原则被静默破坏的本源。
+
+### 决策
+
+- **D1（funnel 口，Hard）**：leaf `tools/archtest/*_test.go`（288 文件，不含 `internal/`）挂
+  `//go:build archtest`。未带 `-tags=archtest` 的 `go test ./...` 编译期即把 leaf 当「no test files」，
+  **不可表达**地无法执行 archtest。与既有重型套件同范式（非新机制）。
+- **D2（owner opt-in）**：`hack/verify-archtest.sh`（含 DRY_RUN/LIST_SHARD discovery）、
+  `hack/verify-archtest-invariants.sh`、`hack/verify-rules-governance.sh`、`archtest-nightly.yml`（经
+  verify-archtest.sh 继承）显式加 `-tags=archtest` + 各自非真空断言（discovery/跑数为 0 即 fail，堵
+  「漏加 -tags → 静默假绿」）。
+- **D3（上游完整性，Medium）**：`ARCHTEST-LEAF-BUILD-TAG-01`（`tools/archtest/archtest_leaf_build_tag_test.go`）
+  typed `//go:build` 扫描断言每个 leaf `*_test.go` 以 archtest 为**必要 tag**（GOOS-无关的布尔必要性检查，
+  正确接受 `archtest && !windows`），配 synthetic red fixture + anti-vacuity；并入
+  `verify-archtest-invariants.sh` PR-time 子集，使「新文件漏 tag → 静默泄漏」在 PR-merge 即红。
+- **D4（build-test grep 角色收窄）**：`_build-lint.yml` build-test tools shard 的
+  `go list ./tools/... | grep -v …/tools/archtest` **保留**，但职责从「执行排除（唯一机制）」收窄为
+  「**coverage-scope 排除**」——leaf 库代码 ~6.7k 语句若进入本 shard profile 会以 0% 拖累覆盖率（实测）；
+  执行排除已由 D1 的 tag 保证。lint parity：satellite lint loop 对 tools 加 `--build-tags=archtest`
+  以保 288 文件 lint 覆盖不回退（`golangci-lint run` 是 package-based / build-tag 敏感；`fmt` 是
+  file-based，无需改 `verify-gofumpt.sh`，已实测）。
+
+### 同 PR 同步载体
+
+| 载体 | 变更 |
+|---|---|
+| `tools/archtest/*_test.go`（288） | 加 `//go:build archtest`（2 个 `!windows` 文件合并为 `archtest && !windows` 并提到首行） |
+| `hack/verify-archtest.sh` / `-invariants.sh` / `verify-rules-governance.sh` | owner opt-in `-tags=archtest` + 非真空断言 |
+| `tools/archtest/archtest_leaf_build_tag_test.go` | 新增 ARCHTEST-LEAF-BUILD-TAG-01（D3） |
+| `.github/workflows/_build-lint.yml` | satellite lint `--build-tags=archtest`（tools）；build-test tools-shard 注释职责收窄（D4） |
+| `hack/verify-workspace-test.sh` / `hack/README.md` | 头注释 / gate 登记记录 build-tag 边界 |
+| 本 ADR | 本 §Amendment 2026-06-10（本节）+ §D6 就地交叉引用 |
+
+### 开源对标
+
+Go 生态「重型套件排出默认 `go test`」标准只有 build tag（编译期排除、默认安全）与 `testing.Short()`
+（运行期跳过、默认*运行* → 要默认排除得每 caller 传 `-short`，回到 callsite-locking，不符）。archtest 对标
+`golang.org/x/tools/go/analysis` 原始范式跑在 `multichecker.Main`（`cmd`，天然在 `go test` 外）；GoCell 选
+`analysistest.Run` 式测试驱动 runner 才把它塞进 `go test` 图——本 amendment 用 build tag 把它收回与 cmd
+范式等效的「默认不在 `./...`」位置，不重构 runner。`ref: golang.org/x/tools/go/analysis multichecker`。
+
+### 逐行重评（per `.claude/rules/gocell/ai-robust.md` §"ADR amendment 落地必查"）
+
+| 载体 | 状态 | 处理 |
+|---|---|---|
+| §D6 / line 65「push / pull_request 不再跑 archtest …不再双跑」 | 直接矛盾（#1803 后 workspace-test 实跑 archtest） | **已同 PR 内就地补强**：line 65 加交叉引用，明确 VERIFY_SKIP 只 skip 专用 gate、build tag（D1）才是「off bare `go test`」的编译级保证 |
+| §D6 single-owner 原则（nightly + verify-archtest.sh 为唯一 owner） | ⚠️ 补强 | 原则不变；本 amendment 把它从「靠 VERIFY_SKIP 约定」升级为「靠 build tag 编译级 + ARCHTEST-LEAF-BUILD-TAG-01 守卫」机器强制 |
+| §D6 `VERIFY_SKIP=archtest` env | ✅ 保留 | 仍 skip 专用 `verify-archtest.sh` gate（避免 governance lane 跑 K=1 全量）；与 build tag 互补，非冗余 |
+| build-test `_dynamic_archtest_excluded` grep | ⚠️ 职责收窄 | 见 D4：执行排除 → coverage-scope 排除 |

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: ARCHTEST-HELPERS-01
 
 package archtest

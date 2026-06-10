@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: PRINCIPAL-SEALED-FIELD-FROZEN-01
 //
 // This file owns ONE invariant: the kernel/outbox.PrincipalMetadata schema is

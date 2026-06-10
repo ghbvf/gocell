@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: INTEGRATION-GUARD-01: vault integration container failures must fail-fast without hanging
 package archtest
 

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: PARSER-MATCHER-EXAMPLES-SYMMETRY-01
 //
 // Every match{Kind}Path function in kernel/metadata/locator_conventional.go must accept both

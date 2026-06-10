@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // INVARIANT: ARCHTEST-VERIFY-COVERAGE-01

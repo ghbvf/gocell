@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants asserted in this file:
 //   - INVARIANT: INVENTORY-ANCHOR-REQUIRED-01
 //   - INVARIANT: INVENTORY-ANCHOR-VALID-ID-01
@@ -206,14 +208,22 @@ func loadGitTrackedSet(t *testing.T, root string) map[string]bool {
 	return set
 }
 
-// hasValidInventoryAnchorInHeader returns true if the file's first
-// CommentGroup contains at least one INVARIANT anchor whose ID matches the
+// hasValidInventoryAnchorInHeader returns true if the file's header CommentGroup
+// (the first comment group, skipping any leading //go:build / // +build
+// constraint group) contains at least one INVARIANT anchor whose ID matches the
 // canonical grammar.
+//
+// The skip matters because every archtest leaf file now carries //go:build
+// archtest (ARCHTEST-LEAF-BUILD-TAG-01); per Go's constraint-placement rule that
+// directive must be separated from the package doc by a blank line, so it forms
+// its OWN CommentGroup ahead of the INVARIANT header. Inspecting only
+// f.Comments[0] would see the build tag and miss the anchor.
 func hasValidInventoryAnchorInHeader(f *ast.File) bool {
-	if len(f.Comments) == 0 {
+	header := fileHeaderCommentGroup(f)
+	if header == nil {
 		return false
 	}
-	for _, c := range f.Comments[0].List {
+	for _, c := range header.List {
 		ref, ok := parseInventoryAnchor(c.Text)
 		if !ok {
 			continue
@@ -223,6 +233,38 @@ func hasValidInventoryAnchorInHeader(f *ast.File) bool {
 		}
 	}
 	return false
+}
+
+// fileHeaderCommentGroup returns the first comment group that is not a pure
+// build-constraint group, or nil if none exists. This equals what f.Comments[0]
+// was before the //go:build archtest line was prepended: some archtest files put
+// their INVARIANT anchor in a leading doc comment (before `package`), others in a
+// detached comment just after `package` — both are legitimate and both were
+// f.Comments[0] pre-tag. Skipping only the leading build-constraint group (never
+// position-bounded) preserves that original semantics for both shapes.
+func fileHeaderCommentGroup(f *ast.File) *ast.CommentGroup {
+	for _, g := range f.Comments {
+		if isBuildConstraintCommentGroup(g) {
+			continue
+		}
+		return g
+	}
+	return nil
+}
+
+// isBuildConstraintCommentGroup reports whether every line in g is a //go:build
+// or legacy // +build directive (a constraint-only group, never a doc header).
+func isBuildConstraintCommentGroup(g *ast.CommentGroup) bool {
+	if len(g.List) == 0 {
+		return false
+	}
+	for _, c := range g.List {
+		t := strings.TrimSpace(strings.TrimPrefix(c.Text, "//"))
+		if !strings.HasPrefix(t, "go:build") && !strings.HasPrefix(t, "+build") {
+			return false
+		}
+	}
+	return true
 }
 
 // parseInventoryAnchor extracts the ID token from a `// INVARIANT: <ID>` or

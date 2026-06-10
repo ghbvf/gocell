@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: PROVISION-STATE-AND-USERSOURCE-BOOTSTRAP-REMOVED-01
 
 package archtest

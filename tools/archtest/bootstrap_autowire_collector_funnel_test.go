@@ -1,3 +1,5 @@
+//go:build archtest
+
 // bootstrap_autowire_collector_funnel_test.go — closes the DOWNSTREAM side of
 // the bootstrap metric-collector auto-wire single-source funnel.
 //

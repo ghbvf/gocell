@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: HTTP-IDEMPOTENCY-RECORDEDRESPONSE-SEALED-01
 //
 // This file owns ONE invariant: runtime/http/idempotency.RecordedResponse is

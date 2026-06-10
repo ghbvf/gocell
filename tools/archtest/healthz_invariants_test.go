@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: HEALTHZ-WRITE-01
 //
 // HEALTHZ-WRITE-01

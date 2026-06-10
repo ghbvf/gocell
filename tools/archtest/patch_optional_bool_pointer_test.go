@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: PATCH-OPTIONAL-BOOL-POINTER-01
 //
 // PATCH-OPTIONAL-BOOL-POINTER-01 — archtest gate.

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // Package archtest_test — contract_schema_naming_invariants_test.go
 //
 // File invariants:

@@ -58,8 +58,13 @@ jobs:
             static_checks: true
           - shard: tools
             # archtest 16-shard matrix runs in .github/workflows/archtest-nightly.yml
-            # (process-isolated, schedule-driven). Excluded here to avoid
-            # duplicate execution + OOM in the PR-time tools shard. See
+            # (process-isolated, schedule-driven). Its EXECUTION is kept off this
+            # PR-time shard by the `//go:build archtest` leaf tag
+            # (ARCHTEST-LEAF-BUILD-TAG-01): a bare `go test` compiles the leaf as
+            # "no test files". The Test step's `go list … | grep -v …/tools/archtest`
+            # additionally keeps the leaf's ~6.7k library statements out of THIS
+            # shard's COVERAGE profile (they are exercised+owned under
+            # -tags=archtest by the nightly suite, not measured here). See
             # hack/verify-archtest.sh + ADR
             # 202605120000-adr-archtest-process-isolation.md §Amendment
             # 2026-05-23-pr-time-to-nightly. The remaining tools/ subpackages
@@ -182,10 +187,18 @@ jobs:
             [ -n "$dir" ] || continue
             [ "$dir" != "." ] || continue
             echo "+++ golangci-lint in module: $dir"
+            # The tools module's archtest leaf is gated behind `//go:build archtest`
+            # (ARCHTEST-LEAF-BUILD-TAG-01); without the tag golangci-lint skips
+            # those ~288 *_test.go files and their lint coverage silently drops.
+            # Lint tools under the tag so the heavy suite's source stays covered —
+            # the same cross-tag lane idea as `go vet -tags=e2e` below. Other
+            # satellites carry no archtest-gated files, so the flag stays empty.
+            build_tags=""
+            [ "$dir" = "tools" ] && build_tags="--build-tags=archtest"
             (
               cd "$dir"
-              # shellcheck disable=SC2086 # LINT_ARGS is intentionally split into CLI flags.
-              "$lint_bin" run --config "$root/.golangci.yml" $LINT_ARGS ./...
+              # shellcheck disable=SC2086 # LINT_ARGS + build_tags are intentionally split into CLI flags.
+              "$lint_bin" run --config "$root/.golangci.yml" $LINT_ARGS $build_tags ./...
             )
           done <<<"$module_dirs"
 
@@ -240,11 +253,15 @@ jobs:
           set -o pipefail
           PKGS='${{ matrix.pkgs }}'
           if [ "$PKGS" = "_dynamic_archtest_excluded" ]; then
-            # tools shard runtime discovery: every ./tools/<sub> package
-            # except archtest (which runs in archtest-nightly.yml — see
-            # ADR 202605120000 §Amendment 2026-05-23-pr-time-to-nightly).
-            # Using `go list` as the ground truth makes "new tools
-            # subpackage not covered" violation unrepresentable.
+            # tools shard runtime discovery: every ./tools/<sub> package except
+            # the archtest leaf. The leaf's EXECUTION is already excluded by its
+            # `//go:build archtest` tag (a bare `go test` sees "no test files");
+            # dropping it from the package list here additionally keeps its ~6.7k
+            # library statements out of this shard's coverage profile (owned +
+            # exercised under -tags=archtest by archtest-nightly.yml, not measured
+            # here — ADR 202605120000 §Amendment 2026-05-23-pr-time-to-nightly).
+            # Using `go list` as the ground truth makes "new tools subpackage not
+            # covered" violation unrepresentable.
             PKGS=$(go list ./tools/... | grep -v '^github.com/ghbvf/gocell/tools/archtest$' | tr '\n' ' ')
           fi
           go test \
@@ -284,9 +301,11 @@ jobs:
       # shard above runs only tools/archtest/internal/{scanner,typeseval,
       # rawparamfixture,wrapfixture} sub-package unit tests (lightweight,
       # do not accumulate *types.Info graph); the top-level archtest package
-      # is excluded by the sentinel _dynamic_archtest_excluded (see the
-      # build-test matrix tools entry). governance.yml's `make verify`
-      # likewise sets VERIFY_SKIP=archtest to delegate to the nightly job.
+      # is excluded from EXECUTION by its `//go:build archtest` leaf tag
+      # (ARCHTEST-LEAF-BUILD-TAG-01) and from this shard's COVERAGE by the
+      # sentinel _dynamic_archtest_excluded (see the build-test matrix tools
+      # entry). governance.yml's `make verify` likewise sets VERIFY_SKIP=archtest
+      # to delegate the full sweep to the nightly job.
       # Push / PR archtest has no local coverage either: hack/githooks/
       # pre-push deliberately omits archtest after PR #887 review round-2
       # (CPU/RSS budget — ~3min wall + 43 GB RSS violates the hook's sub-

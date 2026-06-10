@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: BASESLICE-CTOR-FUNNEL-01
 //
 // # BASESLICE-CTOR-FUNNEL-01

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01
 package archtest
 

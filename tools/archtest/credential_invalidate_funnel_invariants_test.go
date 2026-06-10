@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // credential_invalidate_funnel_invariants_test.go — five closed-caller-set

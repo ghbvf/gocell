@@ -1,3 +1,5 @@
+//go:build archtest
+
 // tenant_applyscope_write_caller_test.go — closes the DOWNSTREAM side of the
 // PR-3b MID-TX tenant-scope write boundary (#1617 review F3).
 //

@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 //   - INVARIANT: SCANNER-FRAMEWORK-USAGE-01

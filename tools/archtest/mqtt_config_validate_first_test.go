@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: MQTT-CONFIG-VALIDATE-FIRST-01
 //
 // mqtt_config_validate_first_test.go — locks the Open function in

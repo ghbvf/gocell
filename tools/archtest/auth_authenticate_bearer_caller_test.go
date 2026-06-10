@@ -1,3 +1,5 @@
+//go:build archtest
+
 // auth_authenticate_bearer_caller_test.go — closes the DOWNSTREAM side of the
 // AuthenticateBearer principal-injection entry point.
 //

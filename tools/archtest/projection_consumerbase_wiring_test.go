@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: PROJECTION-CONSUMERBASE-WIRING-01
 //
 // PROJECTION-CONSUMERBASE-WIRING-01 — composition-root projection↔ConsumerBase

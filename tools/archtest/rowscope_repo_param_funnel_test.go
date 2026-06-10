@@ -1,3 +1,5 @@
+//go:build archtest
+
 // rowscope_repo_param_funnel_test.go — guards that every row-scoped list/get
 // repo interface method carries a tenant.RowVisibility obligation positional
 // parameter. Enrolled repos: auditcore (runtime/audit/ledger.Store and the

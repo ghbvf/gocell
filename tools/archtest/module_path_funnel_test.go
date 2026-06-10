@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // INVARIANT: ARCHTEST-MODULE-PATH-FUNNEL-01
@@ -220,7 +222,10 @@ func TestArchtestModulePathFunnel(t *testing.T) {
 	t.Run("no-reconstruction", func(t *testing.T) {
 		t.Parallel()
 		sawTestFile := false
-		diags := Run(t, Typed(TypedOpts{Tests: true}, []string{"./tools/archtest"}),
+		// Tags: archtest — the rule files are now //go:build archtest gated
+		// (ARCHTEST-LEAF-BUILD-TAG-01); without the tag this typed load surfaces
+		// zero *_test.go and the sawTestFile guard below would red.
+		diags := Run(t, Typed(TypedOpts{Tests: true, Tags: []string{"archtest"}}, []string{"./tools/archtest"}),
 			func(p *Pass) []Diagnostic {
 				if p.Pkg == nil || p.TypesInfo == nil {
 					return nil

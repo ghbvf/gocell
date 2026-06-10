@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: USERREPO-NONEMPTY-CAST-FUNNEL-01
 //
 // USERREPO-NONEMPTY-CAST-FUNNEL-01 — `domain.NonEmpty(_)` 显式转换是 NonEmpty

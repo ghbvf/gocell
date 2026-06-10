@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: SERVICEOWNED-HANDLER-OWNER-CHECK-01
 //
 // Package archtest enforces SERVICEOWNED-HANDLER-OWNER-CHECK-01 (Hard):

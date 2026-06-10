@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: SESSION-PROTOCOL-COMPOSITION-ROOT-01
 package archtest
 

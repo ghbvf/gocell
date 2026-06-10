@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // INVARIANT: TEST-EVENTUALLY-FUNNEL-01

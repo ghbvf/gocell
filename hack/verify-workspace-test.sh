@@ -11,9 +11,15 @@
 # GOWORK=off so each satellite resolves against its OWN pinned go.mod (the local
 # `replace github.com/ghbvf/gocell => ../../` redirects the unpublished core to
 # the repo root), matching the release-consistency build in verify-workspace.sh.
-# Only untagged tests run here — integration / examples_smoke tagged tests have
-# their own service-bearing CI lanes (_build-lint.yml integration-test +
-# examples-smoke), which iterate this same modules.sh funnel.
+# Only untagged tests run here — integration / examples_smoke / archtest tagged
+# tests have their own lanes (_build-lint.yml integration-test + examples-smoke;
+# hack/verify-archtest.sh + archtest-nightly.yml), which iterate this same
+# modules.sh funnel or opt in via -tags. This matters for the tools module: when
+# #1803 split tools/ into a workspace member, this gate's `go test ./...` started
+# re-running the ~1200-test archtest leaf (+~4min/lane, defeating governance.yml's
+# VERIFY_SKIP=archtest). The `//go:build archtest` leaf tag
+# (ARCHTEST-LEAF-BUILD-TAG-01) keeps it compiled-out here — no special-casing in
+# this script; the heavy suite simply cannot enter a bare `go test ./...`.
 
 set -euo pipefail
 

@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // INVARIANT: TEST-POLLING-EXTERNAL-REASON-LITERAL-01

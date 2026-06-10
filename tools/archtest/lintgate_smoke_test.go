@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: LINT-GATE-SMOKE-01
 //
 // LINT-GATE-SMOKE-01 — behavior-level proof that .golangci.yml's depguard /

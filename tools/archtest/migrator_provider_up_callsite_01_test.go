@@ -1,3 +1,5 @@
+//go:build archtest
+
 // Package archtest_test — migrator_provider_up_callsite_01_test.go
 //
 // INVARIANT: MIGRATOR-PROVIDER-UP-CALLSITE-01

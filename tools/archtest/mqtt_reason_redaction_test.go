@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: REASON-NAME-REDACTION-01
 //
 // adapters/mqtt builds error details carrying an MQTT reason code + its spec

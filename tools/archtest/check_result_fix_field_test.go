@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: CMD-VALIDATIONRESULT-FIX-FIELD-01
 //
 // CMD-VALIDATIONRESULT-FIX-FIELD-01 verifies that every governance.ValidationResult{}

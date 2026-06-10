@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: IDEMPOTENCY-FRAMEWORK-STATUS-ORACLE-ALIGN-01
 //
 // The kernel-side oracle metadata.HTTPTransportMeta.IdempotencyFrameworkStatuses()

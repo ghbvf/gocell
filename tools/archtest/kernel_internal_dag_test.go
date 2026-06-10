@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: KERNEL-INTERNAL-DAG-01
 //
 // KERNEL-INTERNAL-DAG-01 — invariant-driven gate.

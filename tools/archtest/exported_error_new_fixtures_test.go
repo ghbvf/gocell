@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: EXPORTED-ERROR-NEW-01
 //
 // exported_error_new_fixtures_test.go — fixture-based regression tests for

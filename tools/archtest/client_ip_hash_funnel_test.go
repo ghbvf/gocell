@@ -1,3 +1,5 @@
+//go:build archtest
+
 // client_ip_hash_funnel_test.go — closes the SINK side of the client-IP PII
 // funnel (#1488): the producer DTO physically cannot carry a plaintext IP.
 //

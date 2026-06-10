@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: RUNSCOPE-CONSTRUCTOR-FUNNEL-01
 //
 // # RUNSCOPE-CONSTRUCTOR-FUNNEL-01
@@ -220,7 +222,10 @@ func runScopeNamedType(t types.Type) (string, bool) {
 // in-package bypass surface — so a future rule that forges a scope struct
 // directly reds here.
 func TestRunScopeConstructorFunnel01(t *testing.T) {
-	diags := Run(t, Typed(TypedOpts{Tests: true}, []string{"./tools/archtest"}),
+	// Tags: archtest — the in-package rule files are //go:build archtest gated
+	// (ARCHTEST-LEAF-BUILD-TAG-01); Tests:true alone no longer surfaces the
+	// *_test.go bypass surface this gate must scan, so the load would go vacuous.
+	diags := Run(t, Typed(TypedOpts{Tests: true, Tags: []string{"archtest"}}, []string{"./tools/archtest"}),
 		func(p *Pass) []Diagnostic {
 			var out []Diagnostic
 			for _, file := range p.Files {

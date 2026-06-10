@@ -1,3 +1,5 @@
+//go:build archtest
+
 // safeid_funnel_test.go — dogfoods the SafeID wire-message funnel Check*
 // functions against GoCell itself; detector logic lives in safeid_funnel.go
 // (non-test) so external Cell repositories can compile and run it.

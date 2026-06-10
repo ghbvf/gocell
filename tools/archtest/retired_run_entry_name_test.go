@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // INVARIANT: ARCHTEST-RETIRED-RUN-NAME-01

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // grpc_metrics_label_test.go — locks the gRPC metrics interceptor's cell-label
 // source contract, the gRPC mirror of the HTTP CELLID-CTXSOURCE invariant in
 // http_metrics_label_test.go.

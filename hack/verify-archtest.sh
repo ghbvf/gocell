@@ -68,6 +68,14 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 readonly ARCHTEST_PKG="./tools/archtest"
+# The archtest leaf package is gated behind `//go:build archtest` so a bare
+# `go test ./...` (verify-workspace-test, build-test tools shard, any future
+# module traversal) compiles it as "no test files" and CANNOT re-add the ~5min
+# suite to the make verify / PR critical path. This script is one of the
+# sanctioned OWNERS (single-owner with archtest-nightly.yml), so it opts in via
+# -tags. Same convention as integration / e2e / examples_smoke. Missing this tag
+# makes discovery (below) find zero tests and the anti-vacuity guard fail-fast.
+readonly ARCHTEST_BUILD_TAGS="archtest"
 # Default 1 (local). CI sets SHARD_COUNT=24 explicitly in
 # .github/workflows/archtest-nightly.yml::verify-archtest (GHA 7 GB RSS budget;
 # ADR 202605120000 §Amendment 2026-05-28). These two values intentionally
@@ -88,7 +96,7 @@ fi
 # Discover all top-level Test* functions in archtest. Stable sort -> stable
 # modulo partition across runs (so failure logs always point at the same
 # shard).
-TESTS=$(go test -list '^Test' "$ARCHTEST_PKG" | grep -E '^Test' | sort)
+TESTS=$(go test -tags="$ARCHTEST_BUILD_TAGS" -list '^Test' "$ARCHTEST_PKG" | grep -E '^Test' | sort)
 TOTAL=$(printf '%s\n' "$TESTS" | grep -c '^Test')
 
 if [ "$TOTAL" -lt 1 ]; then
@@ -160,12 +168,12 @@ run_shard() {
     # `if: failure()` artifact upload step exposes these files on failure.
     # set -o pipefail catches a go test failure even when slowgate exits 0.
     local artifact_dir="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
-    go test -count=1 -timeout "$TIMEOUT" -json -run "^($pattern)$" "$ARCHTEST_PKG" \
+    go test -tags="$ARCHTEST_BUILD_TAGS" -count=1 -timeout "$TIMEOUT" -json -run "^($pattern)$" "$ARCHTEST_PKG" \
       | tee "${artifact_dir}/archtest-shard-${shard}.json" \
       | "$SLOWGATE_BIN" --threshold="$SLOWGATE_THRESHOLD" --allowlist="$SLOWGATE_ALLOWLIST"
   else
     # Local path: no slowgate binary, run plain.
-    go test -count=1 -timeout "$TIMEOUT" -run "^($pattern)$" "$ARCHTEST_PKG"
+    go test -tags="$ARCHTEST_BUILD_TAGS" -count=1 -timeout "$TIMEOUT" -run "^($pattern)$" "$ARCHTEST_PKG"
   fi
 }
 

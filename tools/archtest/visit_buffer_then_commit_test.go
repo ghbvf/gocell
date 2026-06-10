@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: VISIT-BUFFER-THEN-COMMIT-01
 //
 // VISIT-BUFFER-THEN-COMMIT-01 — generated typed response envelope visit

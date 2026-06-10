@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants asserted in this file
 // (LAYER-01..04 enforced by .golangci.yml depguard, see doc.go):
 //   - INVARIANT: LAYER-05

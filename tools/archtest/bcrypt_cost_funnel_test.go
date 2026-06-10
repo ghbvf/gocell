@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: BCRYPT-COST-FUNNEL-01
 package archtest
 

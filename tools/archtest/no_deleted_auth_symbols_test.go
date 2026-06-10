@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: NO-DELETED-AUTH-SYMBOLS-01
 package archtest
 

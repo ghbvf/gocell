@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: PROD-DURATION-CONST-01
 //
 // prod_duration_fixtures_test.go — fixture-based regression tests for the

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: LOCATOR-ROOT-CONFINED-01
 //
 // kernel/metadata AND tools/workspace production code must NOT call os.DirFS.

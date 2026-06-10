@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: CONTRACT-KINDS-CLOSED-SET-01
 //
 // # CONTRACT-KINDS-CLOSED-SET-01

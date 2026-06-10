@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // INVARIANT: REQUIRED-DEP-NIL-GUARD-01

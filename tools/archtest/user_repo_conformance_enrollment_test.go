@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: USERREPO-CONFORMANCE-ENROLLMENT-01
 //
 // AI-robust: Medium
