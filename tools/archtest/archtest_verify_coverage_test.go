@@ -40,18 +40,53 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 )
 
-// TestArchtest_InvariantsScriptContainsFunnelGuard verifies that the string
-// "TestArchtest_AllLeafTestFiles_HaveArchtestBuildTag" appears in
-// hack/verify-archtest-invariants.sh. This is the funnel-completeness guard:
-// if that test is renamed, the invariants script silently stops running it
-// at PR-time (it only runs nightly), defeating ARCHTEST-LEAF-BUILD-TAG-01.
-// Cheap: a single file read, no packages.Load.
+// invariantsRunRegexp captures the alternation payload of the PR-time invariants
+// script's `-run '^(...)$'` selector — the set of tests ACTUALLY EXECUTED at
+// PR-merge. [^']* stops at the closing quote, so the capture is exactly the
+// names between `^(` and `)$`. The script keeps the selector on one physical
+// line; even if reflowed, no test name contains a single quote, so the bound
+// holds.
+var invariantsRunRegexp = regexp.MustCompile(`-run\s+'\^\(([^']*)\)\$'`)
+
+// parseInvariantsRunSet returns the set of Test* names in the script's
+// `-run '^(...)$'` selector. It fails closed: a script with no locatable
+// selector, or an empty one, yields an error rather than an empty (vacuously
+// satisfiable) set. Scoping membership to this payload — NOT a whole-file
+// strings.Contains — is what makes a renamed funnel guard fail loud: a stale
+// comment that still names the old test cannot satisfy the check.
+func parseInvariantsRunSet(script string) (map[string]struct{}, error) {
+	m := invariantsRunRegexp.FindStringSubmatch(script)
+	if m == nil {
+		return nil, fmt.Errorf("no -run '^(...)$' selector found")
+	}
+	set := map[string]struct{}{}
+	for _, name := range strings.Split(m[1], "|") {
+		if name = strings.TrimSpace(name); name != "" {
+			set[name] = struct{}{}
+		}
+	}
+	if len(set) == 0 {
+		return nil, fmt.Errorf("-run selector parsed to an empty test set")
+	}
+	return set, nil
+}
+
+// TestArchtest_InvariantsScriptContainsFunnelGuard verifies that
+// "TestArchtest_AllLeafTestFiles_HaveArchtestBuildTag" is in the EXECUTED
+// `-run '^(...)$'` selector of hack/verify-archtest-invariants.sh. This is the
+// funnel-completeness guard: if that test is dropped from the selector (or
+// renamed), the invariants script silently stops running it at PR-time (it only
+// runs nightly), defeating ARCHTEST-LEAF-BUILD-TAG-01. The check is scoped to
+// the selector payload, NOT the whole file, so a comment that still mentions the
+// name does not paper over a removed selector entry. Cheap: a single file read,
+// no packages.Load.
 //
 // Why here: runs under -tags=archtest, adjacent to the cross-check tests it
 // complements (ARCHTEST-VERIFY-COVERAGE-01), and is auto-picked by
@@ -67,13 +102,58 @@ func TestArchtest_InvariantsScriptContainsFunnelGuard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cannot read %s: %v", scriptPath, err)
 	}
-	if !strings.Contains(string(data), guardName) {
+
+	runSet, err := parseInvariantsRunSet(string(data))
+	if err != nil {
+		t.Fatalf("cannot parse the -run selector of %s: %v\n"+
+			"The funnel guard cannot verify the executed test set without it.",
+			scriptPath, err)
+	}
+	if _, ok := runSet[guardName]; !ok {
 		t.Fatalf(
-			"ARCHTEST-LEAF-BUILD-TAG-01 funnel break: %q not found in %s\n"+
-				"The PR-time funnel guard must appear in the -run regex of that script;\n"+
-				"if the test was renamed, update both the test and the script together.",
-			guardName, scriptPath,
+			"ARCHTEST-LEAF-BUILD-TAG-01 funnel break: %q not in the executed -run "+
+				"selector of %s.\nExecuted set (%d tests): %s\n"+
+				"A comment mentioning the name does NOT count. If the test was renamed, "+
+				"update both the test and the script's -run selector together.",
+			guardName, scriptPath, len(runSet), strings.Join(setDifference(runSet, nil), ", "),
 		)
+	}
+}
+
+// TestParseInvariantsRunSet_CommentDoesNotSatisfy is the synthetic red case for
+// the F2 fix: it proves the payload-scoped parse rejects a name that appears
+// only in a comment (the exact false-green the prior whole-file strings.Contains
+// admitted) while accepting one present in the `-run` selector.
+func TestParseInvariantsRunSet_CommentDoesNotSatisfy(t *testing.T) {
+	t.Parallel()
+	const name = "TestArchtest_AllLeafTestFiles_HaveArchtestBuildTag"
+
+	commentOnly := "#!/usr/bin/env bash\n" +
+		"# " + name + " IS in this PR-time set (stale comment)\n" +
+		"go test -tags=archtest ./tools/archtest \\\n" +
+		"  -run '^(TestOther|TestSomethingElse)$' -count=1\n"
+	set, err := parseInvariantsRunSet(commentOnly)
+	if err != nil {
+		t.Fatalf("parse comment-only script: %v", err)
+	}
+	if _, ok := set[name]; ok {
+		t.Fatalf("payload-scoped parse wrongly admitted %q present only in a comment "+
+			"(this is exactly the false-green the whole-file strings.Contains had)", name)
+	}
+
+	inRun := "go test ./tools/archtest -run '^(TestOther|" + name + ")$' -count=1\n"
+	set, err = parseInvariantsRunSet(inRun)
+	if err != nil {
+		t.Fatalf("parse in-run script: %v", err)
+	}
+	if _, ok := set[name]; !ok {
+		t.Fatalf("payload-scoped parse failed to admit %q present in the -run selector", name)
+	}
+
+	// Fail-closed: a script with no selector at all must error, not yield an
+	// empty (vacuously satisfiable) set.
+	if _, err := parseInvariantsRunSet("# no go test line here\n"); err == nil {
+		t.Fatalf("expected an error parsing a script with no -run selector")
 	}
 }
 

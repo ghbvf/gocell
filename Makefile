@@ -112,8 +112,13 @@ fmt:
 # review as a first-class artifact (see AssertGolden godoc). It does NOT touch
 # ARCHTEST-MODULE-PATH-FUNNEL-01's frozen baseline (testdata/module_path_funnel.baseline),
 # which is shrink-only and hand-maintained by design — never auto-regenerated.
+# -tags=archtest: the golden tests are leaf *_test.go files gated behind
+# //go:build archtest (ARCHTEST-LEAF-BUILD-TAG-01); without the tag the load is
+# `[no test files]` and -update is a silent no-op. Leaf-only (no /...): the
+# -update flag is registered solely in archtest's own test binary, so widening
+# to internal/ subpackages would fail with "flag provided but not defined: -update".
 update-archtest-golden:
-	go test ./tools/archtest/... -update -count=1
+	go test -tags=archtest ./tools/archtest -update -count=1
 
 # verify discovers and runs every hack/verify-*.sh in deterministic order,
 # accumulating failures. Single entry point for static governance gates

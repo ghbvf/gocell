@@ -22,7 +22,7 @@ package archtest
 // explicit update bool, NOT via a real *testing.T with flag parsing, so they do
 // not prove `-update` interacts correctly with `go test` flag parsing — a
 // declared blind spot; local manual verification:
-// `go test ./tools/archtest/... -run TestPanicRegisteredScannerFixtures -update`.
+// `go test -tags=archtest ./tools/archtest -run TestPanicRegisteredScannerFixtures -update`.
 
 import (
 	"flag"
@@ -38,7 +38,7 @@ import (
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
-// updateGolden, when set via `go test ./tools/archtest/... -update`, makes
+// updateGolden, when set via `go test -tags=archtest ./tools/archtest -update`, makes
 // [AssertGolden] (re)write golden files instead of asserting against them.
 // Default false: CI (hack/verify-archtest.sh) always asserts, never updates;
 // golden mismatch surfaces as a t.Errorf test failure, not as git diff --exit-code.
@@ -98,13 +98,14 @@ func writeOrAssertGolden(t testing.TB, goldenPath string, diags []Diagnostic, up
 	wantBytes, err := os.ReadFile(goldenPath)
 	if err != nil {
 		t.Fatalf("archtest.AssertGolden: read golden %s: %v\n"+
-			"(hint: run `go test ./tools/archtest/... -run '%s' -update` to generate it, then review the golden diff)",
+			"(hint: run `go test -tags=archtest ./tools/archtest -run '%s' -update` to generate it, then review the golden diff)",
 			goldenPath, err, t.Name())
 	}
 	if string(wantBytes) != got {
 		t.Errorf("archtest.AssertGolden: diagnostic set mismatch for %s\n"+
 			"--- want (golden) ---\n%s--- got (rule output) ---\n%s--- end ---\n"+
-			"(hint: if intended, run `go test ./tools/archtest/... -run '%s' -update` and review the golden diff as a first-class review artifact)",
+			"(hint: if intended, run `go test -tags=archtest ./tools/archtest -run '%s' -update` "+
+			"and review the golden diff as a first-class review artifact)",
 			goldenPath, string(wantBytes), got, t.Name())
 	}
 }

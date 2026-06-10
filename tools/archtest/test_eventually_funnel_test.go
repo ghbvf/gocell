@@ -332,7 +332,7 @@ func TestEventuallyFunnel(t *testing.T) {
 // fixture packages under tools/archtest/testdata/eventually_funnel_fixtures/.
 // Each fixture dir owns a diag.golden capturing the rule's real output.
 //
-// To regenerate golden files: go test ./tools/archtest/... -run TestEventuallyFunnelFixtures$ -update.
+// To regenerate golden files: go test -tags=archtest ./tools/archtest -run TestEventuallyFunnelFixtures$ -update.
 func TestEventuallyFunnelFixtures(t *testing.T) {
 	t.Parallel()
 
