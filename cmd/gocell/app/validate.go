@@ -11,7 +11,6 @@ import (
 	"github.com/ghbvf/gocell/cmd/gocell/app/printers"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/governance"
-	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // runValidate implements: gocell validate [--root <path>] [--fail-fast] [--strict] [--format text|json|sarif]
@@ -59,10 +58,9 @@ func runValidate(ctx context.Context, args []string) error {
 	}
 
 	// Parse all metadata.
-	parser := metadata.NewParser(rootDir, locatorOpts...)
-	project, err := parser.Parse()
+	project, err := parseProjectGuarded(rootDir, locatorOpts...)
 	if err != nil {
-		return fmt.Errorf("metadata parse: %w", err)
+		return err
 	}
 
 	validator := governance.NewValidator(project, rootDir, clock.Real())

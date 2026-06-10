@@ -1,0 +1,21 @@
+id: configsubscribe
+belongsToCell: configcore
+consistencyLevel: L3
+lifecycle: asset
+contractUsages:
+  - contract: event.config.entry-upserted.v1
+    role: subscribe
+    handler: HandleEntryUpserted
+  - contract: event.config.entry-deleted.v1
+    role: subscribe
+    handler: HandleEntryDeleted
+verify:
+  unit:
+    - unit.configsubscribe.service
+  contract:
+    - contract.event.config.entry-upserted.v1.subscribe
+    - contract.event.config.entry-deleted.v1.subscribe
+  waivers: []
+
+allowedFiles:
+  - corecells/configcore/slices/configsubscribe/**

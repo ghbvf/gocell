@@ -15,7 +15,7 @@ import (
 // FENCE-TOKEN-MINT-FUNNEL-01 (see package godoc).
 type FenceToken interface {
 	// MARKER: do not implement; this is the sealing marker — call
-	// credentialfence.Mint from cells/accesscore/internal/credentialinvalidate
+	// credentialfence.Mint from corecells/accesscore/internal/credentialinvalidate
 	// (or a *_test.go / conformance suite) instead.
 	isCredentialFenceToken()
 }
@@ -30,9 +30,9 @@ func (fenceToken) isCredentialFenceToken() {}
 // constructing a non-nil FenceToken value.
 //
 // Allowed callers (enforced by archtest FENCE-TOKEN-MINT-FUNNEL-01):
-//   - cells/accesscore/internal/credentialinvalidate/ (the production funnel)
+//   - corecells/accesscore/internal/credentialinvalidate/ (the production funnel)
 //   - runtime/auth/session/storetest/, runtime/auth/refresh/storetest/,
-//     cells/accesscore/internal/ports/conformance/ (conformance suites)
+//     corecells/accesscore/internal/ports/conformance/ (conformance suites)
 //   - any *_test.go file (unit / integration test bodies)
 //
 // Any other caller is rejected as a form-uniqueness violation.
@@ -68,7 +68,7 @@ const fenceTokenRequiredMessage = "%s: FenceToken required; must route through c
 // still produce a hard failure here.
 //
 // MustHave is package-public because it is called from impl packages
-// (runtime/auth/session, runtime/auth/refresh, cells/accesscore/internal/mem,
+// (runtime/auth/session, runtime/auth/refresh, corecells/accesscore/internal/mem,
 // adapters/postgres, adapters/redis); it does not weaken the seal because
 // it cannot construct a FenceToken — only Mint can.
 func MustHave(tok FenceToken, site string) {

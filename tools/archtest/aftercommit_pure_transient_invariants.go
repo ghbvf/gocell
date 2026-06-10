@@ -122,11 +122,11 @@ var afterCommitBannedReceivers = map[string]string{
 // call the registry plumbing funcs — exactly the five TxRunner implementations
 // (rule A3 downstream Hard).
 var afterCommitDrainCallerAllowlist = map[string]bool{
-	"adapters/postgres/tx_manager.go":                true,
-	"kernel/outbox/demo_tx_runner.go":                true,
-	"cells/accesscore/internal/mem/store.go":         true,
-	"cells/configcore/internal/testutil/testutil.go": true,
-	"examples/todoorder/run.go":                      true,
+	"adapters/postgres/tx_manager.go":                    true,
+	"kernel/outbox/demo_tx_runner.go":                    true,
+	"corecells/accesscore/internal/mem/store.go":         true,
+	"corecells/configcore/internal/testutil/testutil.go": true,
+	"examples/todoorder/run.go":                          true,
 }
 
 // resolvePkgFuncCall resolves a package-level function call (Selector form

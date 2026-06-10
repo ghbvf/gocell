@@ -24,11 +24,11 @@ permissionMode: auto
 
 ## GoCell 分层约束（所有维度通用）
 
-- `kernel/` 不得依赖 `runtime/`、`adapters/`、`cells/`
-- `cells/` 不得直接 import `adapters/`（通过接口解耦）
+- `kernel/` 不得依赖 `runtime/`、`adapters/`、`corecells/`
+- `corecells/` 不得直接 import `adapters/`（通过接口解耦）
 - 跨 Cell 通信必须走 contract，禁止直接 import 另一个 Cell 的 `internal/`
 - 新增 CUD 操作必须标注一致性级别（L0-L4）
-- 涉及 `kernel/cells/runtime/adapters` 的 commit 须含 `ref:` 标记
+- 涉及 `kernel/corecells/runtime/adapters` 的 commit 须含 `ref:` 标记
 
 ## 审查维度
 

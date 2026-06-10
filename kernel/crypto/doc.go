@@ -11,7 +11,7 @@
 // authoritative contract and external consumers should import it directly.
 //
 // Breaking changes from pre-kernel split: AADForConfig helper moved to
-// cells/configcore/internal/crypto; consumers must update imports from
+// corecells/configcore/internal/crypto; consumers must update imports from
 // kcrypto.AADForConfig to configcrypto.AADForConfig. AAD formatting is
 // configcore business logic (cell:{cellID}/key:{configKey} uses cellID and
 // configKey which are configcore domain concepts), not a generic crypto

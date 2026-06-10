@@ -125,7 +125,7 @@ func TestFMT09_WebhookKindIsValid(t *testing.T) {
 		ID:               metadatatest.CellIDAccessCore,
 		Type:             "core",
 		ConsistencyLevel: "L2",
-		File:             "cells/accesscore/cell.yaml",
+		File:             "corecells/accesscore/cell.yaml",
 	}
 
 	results := NewValidator(project, "", clock.Real()).validateFMT09()

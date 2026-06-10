@@ -46,7 +46,7 @@
 //
 // Carve-outs (allowlisted, backlog #890: migrate to pgclone): cmd/corebundle,
 // tests/integration/outbox_fullchain_test.go (exact file — l2atomicity migrated
-// to pgclone in #598), examples/iotdevice, cells/accesscore/slices/identitymanage —
+// to pgclone in #598), examples/iotdevice, corecells/accesscore/slices/identitymanage —
 // each has a distinct container need (full-app e2e harness / independent
 // migration set / full-chain). They are NOT the adapters/postgres bottleneck.
 // Per ai-robust.md §Funnel 双向锁评级, this Medium-upstream transition form is
@@ -80,9 +80,9 @@ var pgTestcontainerFunnelAllowlist = []string{
 	// Exact file, not the tests/integration/ tree: l2atomicity migrated to
 	// pgclone (#598), leaving outbox_fullchain_test.go as the sole direct caller.
 	// A new per-test container anywhere else under tests/integration/ now fails.
-	"tests/integration/outbox_fullchain_test.go", // backlog #890: full-chain harness
-	"examples/iotdevice/",                        // example with its own PG migration set
-	"cells/accesscore/slices/identitymanage/",    // single-service PG adapter test
+	"tests/integration/outbox_fullchain_test.go",  // backlog #890: full-chain harness
+	"examples/iotdevice/",                         // example with its own PG migration set
+	"corecells/accesscore/slices/identitymanage/", // single-service PG adapter test
 }
 
 // TestPG_TESTCONTAINER_FUNNEL_01 fails if any file outside the allowlist calls

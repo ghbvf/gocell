@@ -539,7 +539,7 @@ func TestRunVerifyTargetsMissingFiles(t *testing.T) {
 
 func TestRunVerifyTargets(t *testing.T) {
 	// Provide a file path; the result depends on project metadata.
-	err := runVerify(context.Background(), []string{"targets", "--files=cells/accesscore/cell.yaml"})
+	err := runVerify(context.Background(), []string{"targets", "--files=corecells/accesscore/cell.yaml"})
 	if err != nil {
 		t.Errorf("verify targets should succeed, got: %v", err)
 	}

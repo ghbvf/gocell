@@ -45,6 +45,14 @@ source hack/lib/archtest.sh
 # packages.Load, so it adds ~0 to the shared-resolver process (warm-up already paid
 # by the tests above). #1723 / PR #1766 review F1.
 #
+# PLATFORM-CELL-SCAN-COVERAGE-01 (TestPlatformCellScanCoverage01 + …_AntiVacuity)
+# IS in this PR-time set: it is the keystone anti-vacuity guard for the #1560
+# go.work P5 split — a relayout that drops corecells from the workspace, empties
+# its scan root, or lets a platform-cell production file escape the scan set must
+# fail at PR-merge time, not only nightly, or every downstream DirsScope cell rule
+# silently fail-opens for a full day. Cheap here: go.work parse + metadata
+# discovery, NO whole-tree packages.Load. #1560 / PR #1814 review F7.
+#
 # ARCHTEST-LEAF-BUILD-TAG-01 (TestArchtest_AllLeafTestFiles_HaveArchtestBuildTag)
 # IS in this PR-time set: it is the upstream completeness guard of the build-tag
 # funnel that keeps the heavy archtest suite OFF the make verify critical path. A
@@ -60,7 +68,7 @@ source hack/lib/archtest.sh
 # renamed tag (which yields "[no test files]" → 0 tests → false green) into a
 # hard failure — `-run` over an empty test set exits 0 otherwise.
 if ! output="$(go test -tags="$ARCHTEST_BUILD_TAGS" ./tools/archtest \
-  -run '^(TestProdClockInjection|TestKernelClockLeafFallback|TestKernelClockLeafFallbackFixtures|TestProdClockInjectionFixtures|TestProdDurationConst|TestProdDurationConstFixtures|TestTestTimeLiteralConst|TestTestSleepDiscipline|TestTestTimeLiteralFixtures|TestPanicRegistered|TestPanicRegisteredScannerFixtures|TestArchtestModulePathFunnel|TestModulePathFunnel_TypedReconstruction|TestFenceTokenMintFunnel_AllowlistEnforced|TestMetadatatestImportScope|TestFixtureCellIDTypedBuilder_NewCellIDBodyShape|TestFixtureCellIDTypedBuilder_VarInitializerShape|TestRootModuleNoReplace01|TestRootModuleNoReplace01_NegativeControl|TestArchtest_AllLeafTestFiles_HaveArchtestBuildTag|TestArchtest_InvariantsScriptContainsFunnelGuard)$' \
+  -run '^(TestProdClockInjection|TestKernelClockLeafFallback|TestKernelClockLeafFallbackFixtures|TestProdClockInjectionFixtures|TestProdDurationConst|TestProdDurationConstFixtures|TestTestTimeLiteralConst|TestTestSleepDiscipline|TestTestTimeLiteralFixtures|TestPanicRegistered|TestPanicRegisteredScannerFixtures|TestArchtestModulePathFunnel|TestModulePathFunnel_TypedReconstruction|TestFenceTokenMintFunnel_AllowlistEnforced|TestMetadatatestImportScope|TestFixtureCellIDTypedBuilder_NewCellIDBodyShape|TestFixtureCellIDTypedBuilder_VarInitializerShape|TestRootModuleNoReplace01|TestRootModuleNoReplace01_NegativeControl|TestPlatformCellScanCoverage01|TestPlatformCellScanCoverage01_AntiVacuity|TestArchtest_AllLeafTestFiles_HaveArchtestBuildTag|TestArchtest_InvariantsScriptContainsFunnelGuard)$' \
   -count=1 -timeout 5m 2>&1)"; then
   printf '%s\n' "$output"
   exit 1

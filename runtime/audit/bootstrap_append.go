@@ -5,7 +5,7 @@
 //
 //  1. runtime/auth.NewBootstrapMiddleware calls the observer closure on 401/429.
 //  2. The observer (constructed in cellmodules/accesscore) calls
-//     cells/accesscore/slices/setup.Service.RecordBootstrapAuthFail, which emits
+//     corecells/accesscore/slices/setup.Service.RecordBootstrapAuthFail, which emits
 //     event.auth.bootstrap-failed.v1 via outbox (inside a transaction).
 //  3. auditcore's auditappendbootstrap slice consumes the event and calls
 //     AppendBootstrapAuthFail → BootstrapLedgerStore.Append.
@@ -33,8 +33,8 @@ import (
 // Bootstrap auth-fail reason values are the authoritative source for valid
 // reason strings. These constants mirror the literal vocabulary used by
 // runtime/auth/bootstrap.go and are re-declared in
-// cells/accesscore/internal/dto (which cannot import runtime/audit) and in
-// cells/accesscore/slices/setup (reason whitelist for RecordBootstrapAuthFail).
+// corecells/accesscore/internal/dto (which cannot import runtime/audit) and in
+// corecells/accesscore/slices/setup (reason whitelist for RecordBootstrapAuthFail).
 //
 // The event contract (event.auth.bootstrap-failed.v1 payload.schema.json)
 // only constrains reason to type string — it does NOT express the closed
@@ -87,7 +87,7 @@ type bootstrapAuthFailPayload struct {
 //
 // clientIPHash is typed string (not redaction.IPHash) by design: this is the
 // CONSUMER side — the sealed type that blocks plaintext lives on the producer
-// (cells/accesscore setup.Service). This function still validates the untrusted
+// (corecells/accesscore setup.Service). This function still validates the untrusted
 // wire value at the trust boundary with redaction.IsIPHashString before writing
 // the ledger. Callers are responsible for passing an already-hashed value; the
 // only producer is the bootstrap observer, which hashes via redaction.HashIP.
@@ -100,7 +100,7 @@ type bootstrapAuthFailPayload struct {
 // redelivery idempotent: a redelivered event carries the same outbox UUID, so
 // the second Append collapses to ErrAuditLedgerAlreadyExists instead of
 // appending a duplicate ledger row. This mirrors the relay-chain appender
-// (cells/auditcore/internal/appender) which also keys on entry.ID().
+// (corecells/auditcore/internal/appender) which also keys on entry.ID().
 // Callers must treat ErrAuditLedgerAlreadyExists (KindConflict) as an
 // idempotent SUCCESS and Ack — see auditappendbootstrap.Service.HandleEvent.
 //

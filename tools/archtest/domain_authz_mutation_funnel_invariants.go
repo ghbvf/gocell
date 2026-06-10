@@ -30,14 +30,14 @@ const (
 // ─── platform-symbol path constants (no bare literals) ───────────────────────
 
 const (
-	domainUserPkg = PlatformModulePath + "/cells/accesscore/internal/domain"
+	domainUserPkg = PlatformCellsModulePath + "/accesscore/internal/domain"
 )
 
 // Per-pkg sub-paths used in setMutatorCallsiteAllowlist key derivation.
 // Note: adminprovisionPkg is new here; identitymanagePkg is declared in
 // credential_invalidate_funnel_invariants.go (same package, single declaration).
 const (
-	adminprovisionPkg = PlatformModulePath + "/cells/accesscore/internal/adminprovision"
+	adminprovisionPkg = PlatformCellsModulePath + "/accesscore/internal/adminprovision"
 )
 
 const (
@@ -110,7 +110,7 @@ var setMutatorCallsiteAllowlist = map[string]string{
 // sanctioned ones (SetStatus / SetPasswordResetRequired).
 func CheckDomainAuthzFieldPrivate01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
-	patterns := []string{"./cells/accesscore/internal/domain"}
+	patterns := []string{"./corecells/accesscore/internal/domain"}
 
 	runOnce := func(tags []string) []Diagnostic {
 		var out []Diagnostic
@@ -154,7 +154,7 @@ func CheckDomainAuthzFieldPrivate01(t *testing.T, cfg ConfigForExternalCell) []D
 func CheckAuthzMutationApplyFunnel01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	patterns := []string{
-		"./cells/accesscore/...",
+		"./corecells/accesscore/...",
 		"./cmd/...",
 	}
 	return runFunnelDualScan(t, cfg, patterns, func(p *Pass, file *ast.File, rel string) []Diagnostic {

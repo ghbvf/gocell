@@ -513,15 +513,13 @@ func buildManifestModulePlan(mod ManifestModule, allowSingletons bool) manifestM
 			{
 				patterns: includes.Cells, kind: SourceCell, userDeclared: cellsDeclared,
 				deriveCell: func(p string) string {
-					id, _ := matchCellPath(stripBase(p, base))
-					return id
+					return deriveManifestCellID(stripBase(p, base))
 				},
 			},
 			{
 				patterns: includes.Slices, kind: SourceSlice, userDeclared: slicesDeclared,
 				deriveCell: func(p string) string {
-					cellID, _ := matchSlicePath(stripBase(p, base))
-					return cellID
+					return deriveManifestSliceCellID(stripBase(p, base))
 				},
 			},
 			{patterns: includes.Contracts, kind: SourceContract, userDeclared: contractsDeclared},
@@ -538,6 +536,40 @@ func buildManifestModulePlan(mod ManifestModule, allowSingletons bool) manifestM
 		}
 	}
 	return plan
+}
+
+// deriveManifestCellID extracts the cell ID from a MODULE-RELATIVE cell.yaml
+// path (the result of stripBase). It first tries the conventional matcher, which
+// covers the cells/<id>/ layout of the root and example modules. The flat
+// fallback handles GoCell's platform-cell module (corecells, #1560), whose cells
+// sit DIRECTLY under the module root, so after stripBase the path is just
+// "<id>/cell.yaml". The flat form is kept here (manifest derivation), not in the
+// conventional matchers, so the repo-relative conventional walk stays strict
+// (cells//corecells//examples-prefixed). Returns "" when no form matches.
+func deriveManifestCellID(moduleRel string) string {
+	if id, ok := matchCellPath(moduleRel); ok {
+		return id
+	}
+	parts := splitConventionalPath(moduleRel)
+	if len(parts) == 2 && parts[1] == "cell.yaml" {
+		return parts[0]
+	}
+	return ""
+}
+
+// deriveManifestSliceCellID extracts the owning cell ID from a MODULE-RELATIVE
+// slice.yaml path. Mirrors [deriveManifestCellID]: conventional cells/<id>/slices/
+// first, then the flat "<id>/slices/<s>/slice.yaml" fallback for the corecells
+// module-root layout.
+func deriveManifestSliceCellID(moduleRel string) string {
+	if cellID, ok := matchSlicePath(moduleRel); ok {
+		return cellID
+	}
+	parts := splitConventionalPath(moduleRel)
+	if len(parts) == 4 && parts[1] == "slices" && parts[3] == "slice.yaml" {
+		return parts[0]
+	}
+	return ""
 }
 
 // appendGeneratedExclude returns a new slice with "generated/**" appended if
@@ -590,7 +622,18 @@ func (l *Locator) discoverManifestPlanEmissions(plan manifestModulePlan) ([]Meta
 // For default patterns (em.userDeclared == false): zero matches across the
 // entire emission emits only a structured slog.Warn for workspaces that
 // legitimately omit certain source kinds.
+//
+// An emission with NO patterns at all is a kind the module intentionally
+// omitted under explicit includes (#1560: corecells declares only cells+slices;
+// contracts/journeys/assemblies stay in the root module). There is nothing to
+// match, so it emits nothing WITHOUT a zero-match warn — that warn is reserved
+// for declared patterns that found no files (a likely typo). A defaults-only
+// module (no explicit includes) always has non-empty patterns, so this guard
+// never silences a genuine zero-match.
 func (l *Locator) discoverEmission(base string, excludes *manifestExcludeSet, em manifestEmission) ([]MetadataSource, error) {
+	if len(em.patterns) == 0 {
+		return nil, nil
+	}
 	var out []MetadataSource
 	for _, g := range em.patterns {
 		emitted, err := l.collectEmissionPattern(base, g, excludes, em)

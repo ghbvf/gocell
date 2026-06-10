@@ -6,9 +6,18 @@
 # to manifest mode. A minimal `modules: [{path: .}]` would use the top-level-only
 # defaults and SILENTLY DROP the entire examples/ subtree from governance scope.
 # These patterns mirror kernel/metadata/locator_conventional.go's matchers
-# (top-level + examples/<id>/ branch) so manifest-mode discovery is byte-identical
-# to conventional mode. The equivalence is machine-guarded by
-# kernel/metadata/locator_equivalence_test.go.
+# (corecells/<id>/ + examples/<id>/ branch) so manifest-mode discovery is
+# byte-identical to conventional mode FOR THE COMMITTED TREE. The equivalence is
+# machine-guarded by kernel/metadata/locator_equivalence_test.go.
+#
+# ONE deliberate divergence (#1560): conventional mode also scans the
+# framework-general root cells/<id>/ convention, but this root module does NOT
+# declare it — GoCell's own platform cells live in the corecells module and the
+# repo holds ZERO root cells, so a `cells:` include here would fail-closed on
+# zero match (see below). Equivalence therefore holds only because root cells/ is
+# empty on the committed tree; a consumer who scaffolds a cell at root cells/ must
+# run conventional mode (no manifest) — which is why hack/verify-scaffold-assembly.sh
+# passes --layout=conventional. This is the intended split semantics, not a bug.
 #
 # Fail-closed: with explicit `includes:`, if a kind's patterns match zero files,
 # `gocell validate` FAILS (hard error) — so deleting the last file of a kind
@@ -32,10 +41,6 @@ version: v1
 modules:
   - path: .
     includes:
-      cells:
-        - "cells/*/cell.yaml"
-      slices:
-        - "cells/*/slices/*/slice.yaml"
       contracts:
         - "contracts/**/contract.yaml"
       journeys:
@@ -44,6 +49,19 @@ modules:
         - "assemblies/*/assembly.yaml"
       actors: "actors.yaml"
       statusBoard: "journeys/status-board.yaml"
+  # corecells is GoCell's own platform-cell module (#1560 go.work P5): a go.work
+  # member carrying cell/slice metadata, so it MUST appear here (reverse
+  # cross-check). Its cells live DIRECTLY under the module root (corecells/<id>/),
+  # so the module-relative include globs have no cells/ infix — unlike the root
+  # module (which no longer holds platform cells) or examples/<id> below.
+  # contracts/journeys/assemblies intentionally stay in the root module
+  # (path: .) and are not declared under this entry.
+  - path: corecells
+    includes:
+      cells:
+        - "*/cell.yaml"
+      slices:
+        - "*/slices/*/slice.yaml"
   - path: examples/todoorder
     includes:
       cells:

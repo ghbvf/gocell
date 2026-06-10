@@ -238,9 +238,9 @@ func goldenProbeNames() []string {
 		"runtime/saga.ProbeCoordinatorReady=saga_coordinator_ready",
 		"runtime/websocket.ProbeReady=websocket_hub_ready",
 		// cellgen repo probes (all _repo_ready suffix)
-		"cells/accesscore.ProbeRepoReady=accesscore_repo_ready",
-		"cells/auditcore.ProbeRepoReady=auditcore_repo_ready",
-		"cells/configcore.ProbeRepoReady=configcore_repo_ready",
+		"corecells/accesscore.ProbeRepoReady=accesscore_repo_ready",
+		"corecells/auditcore.ProbeRepoReady=auditcore_repo_ready",
+		"corecells/configcore.ProbeRepoReady=configcore_repo_ready",
 		"examples/demo/cells/democell.ProbeRepoReady=democell_repo_ready",
 		"examples/iotdevice/cells/devicecell.ProbeRepoReady=devicecell_repo_ready",
 		"examples/orderfulfillment/cells/orderfulfillmentcell.ProbeRepoReady=orderfulfillmentcell_repo_ready",

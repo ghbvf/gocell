@@ -18,7 +18,7 @@
 //     cron in S3+S5; the protocol vocabulary itself does not own GC.
 //   - O(n) RevokeForSubject. The mem implementation scans the session map
 //     under a single RWMutex; this matches the existing same-tier mem
-//     primitives (cells/accesscore/internal/mem/session_repo.go,
+//     primitives (corecells/accesscore/internal/mem/session_repo.go,
 //     runtime/auth/refresh/memstore) and is acceptable at dev/test
 //     subject counts. PG store delivers indexed revoke at scale via
 //     UPDATE ... WHERE user_id = $1.

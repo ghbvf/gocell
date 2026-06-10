@@ -25,7 +25,7 @@ type AuthMetrics struct {
 }
 
 // AccountLockoutMetrics is the standalone observability instrument for the
-// auto-lockout transitions emitted by cells/accesscore/internal/accountlockout.
+// auto-lockout transitions emitted by corecells/accesscore/internal/accountlockout.
 // It registers a single CounterVec (`auth_account_lockout_total`) and lives
 // apart from AuthMetrics so the cell composition root can wire it
 // independently of bootstrap's router-level auth metrics — the two use the

@@ -25,7 +25,7 @@
 // The receiver field types match production sessionrefresh.Service so the
 // type-aware ResolveMethodCall path returns the right *types.Func; the rule
 // validates fn.Pkg().Path() against runtime/auth/{session,refresh} +
-// cells/accesscore/internal/ports.
+// corecells/accesscore/internal/ports.
 package refreshinvariantsfixture
 
 import (
@@ -41,7 +41,7 @@ type txRunner interface {
 	RunInTx(ctx context.Context, fn func(ctx context.Context) error) error
 }
 
-// Service mirrors cells/accesscore/slices/sessionrefresh.Service field
+// Service mirrors corecells/accesscore/slices/sessionrefresh.Service field
 // names and types so the rule's bare-receiver-field match (`s.sessionStore`
 // etc.) lines up. Method receiver `s` matches the rule's hardcoded
 // receiver identifier.

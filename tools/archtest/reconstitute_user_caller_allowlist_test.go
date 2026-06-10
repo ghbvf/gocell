@@ -55,11 +55,11 @@ import (
 // repository interface instead (which internally calls ReconstituteUser from
 // the allowed persistence boundary).
 //
-// Scanning scope: cells/accesscore/... and cmd/... — the layers where a slice
+// Scanning scope: corecells/accesscore/... and cmd/... — the layers where a slice
 // writer could plausibly add a direct call. runtime/ and adapters/ do not
 // know about domain.User and are not scanned.
 //
-// RED fixture: cells/accesscore/internal/domain/testdata/reconstitute_user_caller_red/
+// RED fixture: corecells/accesscore/internal/domain/testdata/reconstitute_user_caller_red/
 // contains a deliberate violation (call from a non-allowlisted path); verified
 // by TestReconstituteUserCallerAllowlist_REDFixture.
 func TestReconstituteUserCallerAllowlist(t *testing.T) {
@@ -71,7 +71,7 @@ func TestReconstituteUserCallerAllowlist(t *testing.T) {
 // the scanner must capture exactly 1 violation in the RED fixture package,
 // proving the scanner is not silently misconfigured.
 //
-// The fixture (cells/accesscore/internal/domain/testdata/reconstitute_user_caller_red/)
+// The fixture (corecells/accesscore/internal/domain/testdata/reconstitute_user_caller_red/)
 // calls domain.ReconstituteUser from a path that is NOT in the production
 // allowlist and is NOT a _test.go file. A count of 0 means the scanner is dead;
 // a count > 1 means the fixture has grown unexpectedly.
@@ -80,7 +80,7 @@ func TestReconstituteUserCallerAllowlist_REDFixture(t *testing.T) {
 
 	var found int
 	Run(t, Typed(TypedOpts{Tests: false},
-		[]string{"./cells/accesscore/internal/domain/testdata/reconstitute_user_caller_red"}),
+		[]string{"./corecells/accesscore/internal/domain/testdata/reconstitute_user_caller_red"}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -125,7 +125,7 @@ func TestReconstituteUser_BlindSpot_NoMethodValueOrReflectInProd(t *testing.T) {
 
 	var allDiags []Diagnostic
 	Run(t, Typed(TypedOpts{Tests: false},
-		[]string{"./cells/accesscore/...", "./cmd/..."}),
+		[]string{"./corecells/accesscore/...", "./cmd/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Fset == nil {
 				return nil

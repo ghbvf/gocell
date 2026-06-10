@@ -26,7 +26,7 @@ import (
 	"fmt"
 
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
-	configcell "github.com/ghbvf/gocell/cells/configcore"
+	configcell "github.com/ghbvf/gocell/corecells/configcore"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/composition"

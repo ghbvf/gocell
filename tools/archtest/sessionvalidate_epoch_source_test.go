@@ -16,7 +16,7 @@ package archtest
 // validate path must compare against the row, never against a claim.
 //
 // Rule: the function body of (*Service).enforceSessionState in
-// cells/accesscore/slices/sessionvalidate/service.go MUST contain a
+// corecells/accesscore/slices/sessionvalidate/service.go MUST contain a
 // BinaryExpr with Op==NEQ whose two operands together reference:
 //   - AuthzEpoch (the live user.authz_epoch read from userRepo)
 //   - AuthzEpochAtIssue (the row provenance field on session.ValidateView)

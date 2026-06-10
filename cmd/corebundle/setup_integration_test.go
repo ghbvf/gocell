@@ -20,9 +20,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	accesscore "github.com/ghbvf/gocell/cells/accesscore"
-	auditcore "github.com/ghbvf/gocell/cells/auditcore"
-	configcore "github.com/ghbvf/gocell/cells/configcore"
+	accesscore "github.com/ghbvf/gocell/corecells/accesscore"
+	auditcore "github.com/ghbvf/gocell/corecells/auditcore"
+	configcore "github.com/ghbvf/gocell/corecells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/auth/authtest"
 	"github.com/ghbvf/gocell/kernel/cell"

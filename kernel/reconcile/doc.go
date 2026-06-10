@@ -140,6 +140,16 @@
 //     sites are pinned to loop.go / fenced.go.
 //   - RECONCILE-LEADER-IMPL-FUNNEL-01 (PR-A6): LeaderElector is implemented only
 //     in adapters/{redis,postgres} + the reconciletest fake (layering hygiene).
+//   - RECONCILE-BUILDER-FUNNEL-01 (PR-A7): reconcile.Loop config fields are
+//     private — no composite literal of reconcile.Loop (incl. the zero-value
+//     Loop{}) compiles outside this package, so a consumer cannot bypass the
+//     Builder's metric / leader / backoff wiring. Retires the transitional
+//     RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01.
+//   - RECONCILE-GOLEAK-TESTMAIN-FUNNEL-01 (#1604): all goroutine-leak checks in
+//     the kernel/reconcile test binaries funnel through a single package-level
+//     goleak.VerifyTestMain, banning the per-test VerifyNone(IgnoreCurrent())
+//     idiom that flakes under -race (the Trigger / watchDrain tails drain
+//     asynchronously on ctx cancel).
 //
 // Leader election (PR-A6) is whole-loop: when a LeaderElector is wired only the
 // lease holder dispatches Reconcile; a lost lease cancels the lease-scoped ctx to

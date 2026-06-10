@@ -3,6 +3,7 @@ package app
 import (
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -75,6 +76,76 @@ func hasRootMarker(dir string) bool {
 // codegen, scaffold, the CLI, and archtest.
 func readModule(root string) (string, error) {
 	return gomodutil.ReadModulePath(root)
+}
+
+// parseProjectGuarded is [parseProject] plus a fail-fast guard against a
+// misresolved root, used by the whole-project inspection commands (validate,
+// check) where zero sources means misconfiguration, not a clean repo. The
+// codegen sub-commands keep the plain parseProject — their root semantics
+// differ (scaffold legitimately runs on an empty project to create the first
+// cell).
+//
+// The foot-gun (#1560 review F2): invoking the CLI from inside a nested go.work
+// module such as corecells/ makes findRoot resolve that nested module; the
+// conventional locator (which looks for a cells/ subtree) then finds zero
+// sources even though corecells holds cell.yaml/slice.yaml in a FLAT layout —
+// validate/check would report a false-green clean pass. The precise signal is
+// "metadata files exist on disk under root but the parser discovered zero
+// sources" (a layout/locator mismatch), which distinguishes corecells from a
+// genuinely empty module (cmd/gocell, kernel, …, and fresh standalone projects)
+// where no cell.yaml exists at all — those still pass clean (see
+// TestDispatch_SuccessPath_ExitZero / TestRunCheckContractHealth).
+func parseProjectGuarded(root string, locatorOpts ...metadata.LocatorOption) (*metadata.ProjectMeta, error) {
+	project, err := parseProject(root, locatorOpts...)
+	if err != nil {
+		return nil, err
+	}
+	if projectHasNoSources(project) && treeHasCellMetadata(root) {
+		return nil, fmt.Errorf(
+			"found cell.yaml/slice.yaml under %q but the parser discovered zero metadata "+
+				"sources — the on-disk layout does not match the active locator mode (the "+
+				"corecells platform module uses a flat layout); run gocell from the workspace "+
+				"root (the directory containing .gocell/manifest.yaml) so manifest-mode "+
+				"discovery resolves the flat layout",
+			root)
+	}
+	return project, nil
+}
+
+// projectHasNoSources reports whether the parsed project contains no metadata
+// source of any kind.
+func projectHasNoSources(pm *metadata.ProjectMeta) bool {
+	return len(pm.Cells) == 0 && len(pm.Slices) == 0 &&
+		len(pm.Contracts) == 0 && len(pm.Journeys) == 0 &&
+		len(pm.Assemblies) == 0
+}
+
+// treeHasCellMetadata reports whether root's subtree contains any cell.yaml or
+// slice.yaml — the precise "metadata exists on disk but the parser returned
+// zero sources" signal (a layout/locator mismatch, e.g. corecells' flat layout
+// scanned in conventional mode) as opposed to a genuinely empty module. Skips
+// VCS, codegen, vendor and test-fixture dirs so synthetic cell.yaml under
+// testdata/ never trips the guard, and stops at the first hit.
+func treeHasCellMetadata(root string) bool {
+	found := false
+	_ = filepath.WalkDir(root, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || found {
+			return nil //nolint:nilerr // best-effort scan; unreadable dirs are skipped, not fatal
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "vendor", "node_modules", "generated", "testdata":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Name() == "cell.yaml" || d.Name() == "slice.yaml" {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found
 }
 
 // buildLocatorOptions translates the --layout and --manifest flags into

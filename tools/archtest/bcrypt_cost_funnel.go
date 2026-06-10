@@ -12,14 +12,14 @@ package archtest
 // # BCRYPT-COST-FUNNEL-01
 //
 // All accesscore password hashing routes through the single
-// cells/accesscore/internal/credential.Hasher, whose bcrypt cost is chosen by
+// corecells/accesscore/internal/credential.Hasher, whose bcrypt cost is chosen by
 // which constructor minted it:
 //
 //   - credential.NewProductionHasher()  — hardwired credential.ProductionCost
 //     (=12). No cost parameter exists, so the production path is structurally
 //     incapable of expressing a weaker cost.
 //   - credential.NewTestHasher(cost)    — the low-cost test door; cuts the
-//     ~1.5s/hash (bcrypt cost 12 under -race) that made cells/accesscore/slices/setup
+//     ~1.5s/hash (bcrypt cost 12 under -race) that made corecells/accesscore/slices/setup
 //     an 82s race-unit outlier and l2atomicity seedAdmin a per-test tax.
 //
 // Two rules close the funnel (per ai-robust.md §Hard 技术族目录):
@@ -81,11 +81,11 @@ import (
 
 const (
 	bcryptModulePath     = "golang.org/x/crypto/bcrypt"
-	credentialModulePath = PlatformModulePath + "/cells/accesscore/internal/credential"
+	credentialModulePath = PlatformCellsModulePath + "/accesscore/internal/credential"
 
 	// bcryptHasherRel is the single sanctioned file allowed to call
 	// bcrypt.GenerateFromPassword (A1). Module-relative, slash form.
-	bcryptHasherRel = "cells/accesscore/internal/credential/hasher.go"
+	bcryptHasherRel = "corecells/accesscore/internal/credential/hasher.go"
 )
 
 // newTestHasherCallerAllowlist holds the module-relative locations permitted to
@@ -101,7 +101,7 @@ const (
 // Hard-ization path is a generic "test-support packages imported only by
 // *_test.go" guard.
 var newTestHasherCallerAllowlist = []string{
-	"cells/accesscore/accesscoretest/", // test-support builders, imported only by *_test.go
+	"corecells/accesscore/accesscoretest/", // test-support builders, imported only by *_test.go
 }
 
 // newTestHasherCallerAllowed reports whether the module-relative path rel is

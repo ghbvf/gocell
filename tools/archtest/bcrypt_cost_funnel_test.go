@@ -52,7 +52,7 @@ func TestBCRYPT_COST_FUNNEL_01_A1_RedFixture(t *testing.T) {
 // TestBCRYPT_COST_FUNNEL_01_A2_RedFixture asserts the A2 detector fires on a
 // known-positive: credential.NewTestHasher called from a (would-be) non-test
 // file. Unlike A1's committed fixture (which imports the public bcrypt package
-// and compiles), an A2 fixture would have to import cells/accesscore/internal/credential
+// and compiles), an A2 fixture would have to import corecells/accesscore/internal/credential
 // — illegal from tools/archtest under Go's internal rule, and committing a
 // //go:build ignore file introduces an "ignore" build tag that the repo's
 // build-tag governance rejects. So the source is written to a temp file and

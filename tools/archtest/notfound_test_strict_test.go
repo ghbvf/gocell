@@ -249,7 +249,7 @@ func TestShouldSkipForNotFoundStrict(t *testing.T) {
 		{"node_modules/foo.go", true},
 		{"testdata/bar.go", true},
 		{"runtime/auth/session/storetest/suite.go", false},
-		{"cells/configcore/slices/configread/handler_test.go", false},
+		{"corecells/configcore/slices/configread/handler_test.go", false},
 		{"pkg/errcode/errcodetest/assertions.go", false},
 	}
 	for _, tc := range cases {

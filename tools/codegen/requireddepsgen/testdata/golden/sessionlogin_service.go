@@ -4,7 +4,7 @@
 package sessionlogin
 
 import (
-	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	session "github.com/ghbvf/gocell/runtime/auth/session"

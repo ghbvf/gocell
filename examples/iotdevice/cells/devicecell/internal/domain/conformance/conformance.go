@@ -3,7 +3,7 @@
 // new implementation enrolls against the same set of t.Run sub-tests so
 // behavior stays in lock-step without resorting to per-impl t.Skip.
 //
-// ref: cells/accesscore/internal/ports/conformance (Factory + Features pattern)
+// ref: corecells/accesscore/internal/ports/conformance (Factory + Features pattern)
 package conformance
 
 import (

@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/cells/auditcore/auditcoretest"
+	"github.com/ghbvf/gocell/corecells/auditcore/auditcoretest"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 

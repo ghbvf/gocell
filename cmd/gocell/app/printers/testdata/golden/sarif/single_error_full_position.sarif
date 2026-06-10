@@ -35,7 +35,7 @@
             {
               "physicalLocation": {
                 "artifactLocation": {
-                  "uri": "cells/accesscore/cell.yaml",
+                  "uri": "corecells/accesscore/cell.yaml",
                   "uriBaseId": "SRCROOT"
                 },
                 "region": {
