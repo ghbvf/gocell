@@ -157,7 +157,7 @@
 - 三级方案种子：最小 <…> / 彻底 <…> / 重构 <…>
 - 影响范围：直接 <…> / 间接 <…> / 同类 <Grep N 处>
 - Files：`other/pkg/z.go:64` `other/pkg/w.go:30`
-- → 建 issue 草稿（确认后跑）：`gh issue create --label backlog --label pri-p2 --label area-XX --label type-XX --title "[<ID>] <标题>" --body-file <backlog.md：现状←证据+根因+影响 / 修复方向←方案种子 / Files←上行 / Source←PR #<N> F3>`
+- → 建 issue 草稿（确认后跑）：`gh issue create --label backlog --label pri-p2 --label area-XX --label type-XX --label cx-2 --title "[<ID>] <标题>" --body-file <backlog.md：现状←证据+根因+影响 / 修复方向←方案种子 / Files←上行 / Source←PR #<N> F3>`（cx 从 finding `[…Cx…]` tag 取，此例 F3=Cx2）
 
 ---
 🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支> · worktree <路径|—> · session <会话id|—>
