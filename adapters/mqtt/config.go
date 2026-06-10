@@ -174,11 +174,38 @@ type ConfigOption func(*Config)
 
 // WithTLS sets the TLS config. Required when any broker uses a tls/ssl/mqtts/wss
 // scheme; rejected (via validate) if it disables certificate verification or
-// floors below TLS 1.2. The config is defensively cloned via (*tls.Config).Clone()
-// so post-construction mutation of the caller's *tls.Config cannot weaken TLS
-// settings (e.g. setting InsecureSkipVerify after NewConfig returned). Clone is
-// nil-safe: WithTLS(nil) results in tlsConfig=nil (no TLS).
-func WithTLS(c *tls.Config) ConfigOption { return func(cfg *Config) { cfg.tlsConfig = c.Clone() } }
+// floors below TLS 1.2. The config is defensively deep-cloned via cloneTLSConfig
+// so post-construction mutation of the caller's *tls.Config — including appending
+// CAs to a shared RootCAs/ClientCAs pool — cannot weaken the sealed Config's TLS
+// settings or widen its trust roots. Nil-safe: WithTLS(nil) leaves tlsConfig=nil
+// (no TLS).
+func WithTLS(c *tls.Config) ConfigOption {
+	return func(cfg *Config) { cfg.tlsConfig = cloneTLSConfig(c) }
+}
+
+// cloneTLSConfig returns a defensive deep copy of c (nil-safe). (*tls.Config).Clone
+// copies the RootCAs / ClientCAs *x509.CertPool by POINTER, so a caller could
+// append CAs to the shared pool after NewConfig returned and silently widen the
+// sealed Config's trust anchors past what validateBrokers verified. We additionally
+// clone both cert pools so the sealed Config's trust roots are frozen at
+// construction. Other *tls.Config fields retain Clone's shallow-copy semantics:
+// only InsecureSkipVerify, MinVersion (scalars, value-copied by Clone) and the two
+// trust-store pools gate certificate verification, and those are exactly the
+// settings validateBrokers checks — so "post-construction mutation cannot weaken
+// validated TLS" holds (see TestNewConfig_DefensivelyClonesTLSPools).
+func cloneTLSConfig(c *tls.Config) *tls.Config {
+	if c == nil {
+		return nil
+	}
+	cloned := c.Clone()
+	if cloned.RootCAs != nil {
+		cloned.RootCAs = cloned.RootCAs.Clone()
+	}
+	if cloned.ClientCAs != nil {
+		cloned.ClientCAs = cloned.ClientCAs.Clone()
+	}
+	return cloned
+}
 
 // WithAuth sets broker authentication credentials (optional). The Password field
 // is defensively copied so post-construction mutation of the caller's slice cannot

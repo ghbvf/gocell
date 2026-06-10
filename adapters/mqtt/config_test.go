@@ -1,9 +1,15 @@
 package mqtt
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"fmt"
+	"math/big"
 	"testing"
 	"time"
 
@@ -542,6 +548,67 @@ func TestNewConfig_DefensivelyClonesTLS(t *testing.T) {
 		"InsecureSkipVerify must not reflect caller mutation after construction")
 	assert.Equal(t, uint16(tls.VersionTLS12), cfg.tlsConfig.MinVersion,
 		"MinVersion must not reflect caller mutation after construction")
+}
+
+// newTestCACert returns a minimal self-signed CA certificate for the cert-pool
+// defensive-copy test. serial distinguishes certs so x509.CertPool.Equal can
+// tell two pools apart.
+func newTestCACert(t *testing.T, serial int64) *x509.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(serial),
+		Subject:               pkix.Name{CommonName: "mqtt-test-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+	cert, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+	return cert
+}
+
+// TestNewConfig_DefensivelyClonesTLSPools verifies that post-construction
+// mutation of the caller's RootCAs / ClientCAs *x509.CertPool cannot widen the
+// sealed Config's trust roots. tls.Config.Clone copies the pools by pointer, so
+// without cloneTLSConfig's extra pool deep-copy a caller could AddCert to the
+// shared pool after NewConfig returned and silently expand what the sealed
+// Config trusts — beyond the trust roots validateBrokers verified.
+func TestNewConfig_DefensivelyClonesTLSPools(t *testing.T) {
+	t.Parallel()
+	ca1 := newTestCACert(t, 1)
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(ca1)
+	clientPool := x509.NewCertPool()
+	clientPool.AddCert(ca1)
+	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: rootPool, ClientCAs: clientPool}
+
+	cfg, err := NewConfig(mustClientID(t), []string{"tls://broker.example.com:8883"}, WithTLS(tlsCfg))
+	require.NoError(t, err)
+
+	// Sealed pools must be distinct objects from the caller's (deep-copied, not aliased).
+	require.NotSame(t, rootPool, cfg.tlsConfig.RootCAs, "RootCAs must be deep-copied, not aliased")
+	require.NotSame(t, clientPool, cfg.tlsConfig.ClientCAs, "ClientCAs must be deep-copied, not aliased")
+
+	// pristine = single CA (ca1): the trust set the sealed Config must keep frozen.
+	pristine := x509.NewCertPool()
+	pristine.AddCert(ca1)
+
+	// Mutate the caller's pools after construction.
+	ca2 := newTestCACert(t, 2)
+	rootPool.AddCert(ca2)
+	clientPool.AddCert(ca2)
+
+	// Sealed Config's trust roots must be unchanged (still only ca1).
+	assert.True(t, cfg.tlsConfig.RootCAs.Equal(pristine),
+		"sealed RootCAs must not reflect caller's post-construction AddCert")
+	assert.True(t, cfg.tlsConfig.ClientCAs.Equal(pristine),
+		"sealed ClientCAs must not reflect caller's post-construction AddCert")
 }
 
 // TestNewConfig_DefensivelyCopiesAuthPassword verifies that post-construction

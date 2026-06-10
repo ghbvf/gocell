@@ -596,7 +596,8 @@ type publishOpts struct {
 //   - (nil, errcode-wrapped error) on transport-level failure from autopaho.
 //
 // The caller is responsible for setting any per-publish timeout via the ctx
-// (the Publisher derives a child ctx from Config.PublishTimeout).
+// (the Publisher derives a child ctx from the configured publish timeout,
+// WithPublishTimeout).
 func (c *Connection) Publish(
 	ctx context.Context, t topicns.PublishableTopic, payload []byte, opts publishOpts,
 ) (*paho.PublishResponse, error) {

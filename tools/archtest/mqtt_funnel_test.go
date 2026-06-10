@@ -157,10 +157,15 @@ func TestMQTTTopicNamespace01(t *testing.T) {
 //     structurally inexpressible, so a non-zero Config can only come from
 //     NewConfig, which validates in its body. "Unvalidated Config" is therefore
 //     unrepresentable in a caller's hands.
-//   - A2 (Medium, construction allowlist): in-package, the sole sanctioned
+//   - A2 (Medium, composite-literal allowlist): in-package, the sole sanctioned
 //     non-zero Config composite literal is inside NewConfig; any other is a
 //     funnel bypass (an in-package path could otherwise build an unvalidated
 //     Config). Zero-value `Config{}` (NewConfig's error return) is allowed.
+//   - A2b (Medium, field-write allowlist): in-package, a `c.field = x` write to
+//     a Config field must be inside NewConfig or a With* option constructor
+//     (signature returns ConfigOption); any other is a field-by-field
+//     construction bypass (`var c Config; c.clientID = id; return c`) the A2
+//     composite-literal scan alone cannot see.
 //
 // # Blind-spot self-check
 //
@@ -744,6 +749,124 @@ func TestMQTTConfigSeal_A2ScannerFires(t *testing.T) {
 	assert.GreaterOrEqual(t, insideCount, 1,
 		"A2 scanner must find ≥1 Config composite literal inside NewConfig — "+
 			"if this fails, the go/types resolution path is silently broken")
+}
+
+// TestMQTTFunnel_FieldWriteScannerFiresOnRedFixture proves the A2b field-write
+// scanner (scanSealedFieldWriteConstruction) fires on a genuine field-write
+// construction bypass — `var c FixtureClientID; c.value = ...; return c` outside
+// the sanctioned ParseFixtureClientID. This is the blind spot the composite-
+// literal scanner (A2) cannot see (a zero-value declaration has no CompositeLit
+// node), so without this self-check a regression disabling the field-write scan
+// would pass silently.
+//
+// See tools/archtest/internal/mqttredfixture/fixture.go::archtestRedFixtureFieldWrite.
+func TestMQTTFunnel_FieldWriteScannerFiresOnRedFixture(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	const ruleID = "MQTT-CLIENT-ID-NAMESPACE-01"
+	const fixturePkgPath = PlatformModulePath + "/tools/archtest/internal/mqttredfixture"
+
+	diags := Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{fixturePkgPath}),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != fixturePkgPath {
+				return nil
+			}
+			var out []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				out = append(out, scanSealedFieldWriteConstruction(
+					p.Fset, f, rel, p.TypesInfo,
+					fixturePkgPath, "FixtureClientID",
+					[]string{fixturePkgPath + ".ParseFixtureClientID"},
+					"", "", // fixture has no option type
+					ruleID,
+				)...)
+			}
+			return out
+		})
+
+	require.NotEmpty(t, diags,
+		"A2b field-write scanner must report ≥1 violation on the red fixture in "+
+			"tools/archtest/internal/mqttredfixture/fixture.go — if this fails, the "+
+			"field-write scan is silently broken")
+
+	foundRedfixture := false
+	for _, d := range diags {
+		if strings.HasSuffix(d.Rel, "fixture.go") {
+			foundRedfixture = true
+			break
+		}
+	}
+	assert.True(t, foundRedfixture,
+		"A2b scanner reported diagnostics but none from the red fixture; got: %+v", diags)
+}
+
+// TestMQTTConfigFieldWriteSeal_ScannerFires proves the A2b field-write scan over
+// production adapters/mqtt: (a) zero violations — every Config field write is
+// inside NewConfig or a With* ConfigOption constructor; AND (b) the scanner
+// actually SEES ≥1 such field write (the With* option closures write
+// cfg.<field>), so the production A2b scan cannot be vacuously green from a
+// silently-broken go/types selection resolver.
+func TestMQTTConfigFieldWriteSeal_ScannerFires(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	root := findModuleRoot(t)
+
+	const newConfigFullName = mqttPkgPath + ".NewConfig"
+	const ruleID = "MQTT-CONFIG-SEALED-FIELD-FROZEN-01"
+	var outsideCount, seenCount int
+
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		prodscan.PatternsExtended(root)),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
+				return nil
+			}
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				// Real allowlist (NewConfig + With* ConfigOption funcs): production
+				// must have ZERO Config field writes outside the funnel.
+				outsideCount += len(scanSealedFieldWriteConstruction(
+					p.Fset, f, rel, p.TypesInfo,
+					mqttPkgPath, "Config",
+					[]string{newConfigFullName},
+					mqttPkgPath, "ConfigOption",
+					ruleID,
+				))
+				// Empty allowlist (no sanctioned writer): every Config field write —
+				// the With* option closures' cfg.<field>=… — becomes a diagnostic, so
+				// this count is the total field writes the scanner SEES. ≥1 proves the
+				// go/types selection-resolution path is live (anti-vacuity); these are
+				// exactly the writes the real allowlist above exempts to reach 0.
+				seenCount += len(scanSealedFieldWriteConstruction(
+					p.Fset, f, rel, p.TypesInfo,
+					mqttPkgPath, "Config",
+					nil, "", "",
+					ruleID,
+				))
+			}
+			return nil
+		})
+
+	assert.Equal(t, 0, outsideCount,
+		"A2b scanner: production code writes Config fields outside NewConfig / With* "+
+			"option constructors — sealed-construction funnel bypass")
+	assert.GreaterOrEqual(t, seenCount, 1,
+		"A2b scanner must SEE ≥1 Config field write (the With* option writes) under an "+
+			"empty allowlist — if this fails, the go/types selection resolver is silently broken")
 }
 
 // TestMQTTFunnel_NonVacuousness documents that the A1 test was confirmed

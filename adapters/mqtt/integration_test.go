@@ -34,24 +34,33 @@ import (
 )
 
 // newITestConfig returns a Config valid for connecting to the shared Mosquitto
-// container. The broker URL is normalized via testutil.LoopbackIPEndpoint so
-// that "localhost"-form URLs pass the loopback-IP-literal validator in
-// Config.validateBrokers (secutil.ValidateTLSEndpoint rejects DNS names for
-// plaintext plaintext schemes).
-func newITestConfig(t *testing.T, role string) Config {
+// container. Extra opts apply after the base options so a caller overrides any
+// knob through the public With* path (e.g. WithKeepAlive, WithPublishTimeout)
+// instead of mutating the sealed Config's unexported fields.
+func newITestConfig(t *testing.T, role string, opts ...ConfigOption) Config {
+	t.Helper()
+	return newITestConfigForBroker(t, role, sharedBrokerURL(t), opts...)
+}
+
+// newITestConfigForBroker is newITestConfig targeting an explicit brokerURL (the
+// shared broker for the default helper). The broker URL is normalized via
+// testutil.LoopbackIPEndpoint so that "localhost"-form URLs pass the
+// loopback-IP-literal validator in Config.validateBrokers (secutil.ValidateTLSEndpoint
+// rejects DNS names for plaintext schemes). Extra opts apply after the base options.
+func newITestConfigForBroker(t *testing.T, role, brokerURL string, opts ...ConfigOption) Config {
 	t.Helper()
 	cid, err := ParseEphemeralClientID("itest", role)
 	if err != nil {
 		t.Fatalf("ParseEphemeralClientID: %v", err)
 	}
-	brokerURL := testutil.LoopbackIPEndpoint(sharedBrokerURL(t))
-	cfg, cfgErr := NewConfig(cid, []string{brokerURL},
+	base := []ConfigOption{
 		WithConnectTimeout(testtime.D5s),
 		WithConnectDeadline(testtime.D10s),
 		WithKeepAlive(testtime.D10s),
 		WithBackoff(BackoffConfig{BaseDelay: testtime.D100ms, MaxDelay: testtime.D2s}),
 		WithPublishTimeout(testtime.D5s),
-	)
+	}
+	cfg, cfgErr := NewConfig(cid, []string{testutil.LoopbackIPEndpoint(brokerURL)}, append(base, opts...)...)
 	if cfgErr != nil {
 		t.Fatalf("NewConfig: %v", cfgErr)
 	}
@@ -105,8 +114,8 @@ func TestIntegration_PublisherReconnect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D30s)
 	defer cancel()
 
-	cfg := newITestConfig(t, "publish-reconnect")
-	cfg.keepAlive = testtime.D2s // tighter keep-alive for quick failure detection
+	// tighter keep-alive (2s) for quick failure detection
+	cfg := newITestConfig(t, "publish-reconnect", WithKeepAlive(testtime.D2s))
 
 	conn, err := Open(ctx, clock.Real(), cfg)
 	if err != nil {
@@ -156,8 +165,8 @@ func TestIntegration_PublisherPubAckTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()
 
-	cfg := newITestConfig(t, "publish-timeout")
-	cfg.publishTimeout = time.Nanosecond // intentionally fires immediately
+	// very short PublishTimeout (1ns) intentionally fires immediately
+	cfg := newITestConfig(t, "publish-timeout", WithPublishTimeout(time.Nanosecond))
 
 	conn, err := Open(ctx, clock.Real(), cfg)
 	if err != nil {
@@ -640,8 +649,7 @@ func itestSessionPhase1Subscribe(t *testing.T, mkCfg func() Config, ns TopicName
 // the persistent-session subscriber is offline. Returns offlineCount.
 func itestSessionPublishOffline(t *testing.T, brokerURL, filter string) int {
 	t.Helper()
-	pubCfg := newITestConfig(t, "session-pub")
-	pubCfg.brokers = []string{testutil.LoopbackIPEndpoint(brokerURL)}
+	pubCfg := newITestConfigForBroker(t, "session-pub", brokerURL)
 	pubCtx, pubCancel := context.WithTimeout(context.Background(), testtime.D20s)
 	pubConn, err := Open(pubCtx, clock.Real(), pubCfg)
 	if err != nil {

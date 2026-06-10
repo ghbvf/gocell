@@ -147,8 +147,7 @@ func TestPublisher_Publish_PayloadTooLarge(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newInternalConfig(t, addr)
-	cfg.maximumPacketSize = 10
+	cfg := newInternalConfig(t, addr, WithMaximumPacketSize(10))
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()
 
@@ -369,8 +368,9 @@ func TestPublisher_Close_TimesOutOnStuckPublish(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
+	// publishTimeout defaults to 0 (no adapter timeout — publish blocks on the
+	// withheld PUBACK); newInternalConfig supplies no WithPublishTimeout.
 	cfg := newInternalConfig(t, addr)
-	cfg.publishTimeout = 0 // no adapter timeout — publish blocks on the withheld PUBACK
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D15s)
 	defer cancel()
 
@@ -853,9 +853,9 @@ func TestPublisher_Publish_NoAdapterTimeout(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
+	// publishTimeout defaults to 0: no adapter-imposed timeout; caller ctx governs.
+	// newInternalConfig supplies no WithPublishTimeout.
 	cfg := newInternalConfig(t, addr)
-	// PublishTimeout = 0: no adapter-imposed timeout; caller ctx governs.
-	cfg.publishTimeout = 0
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()

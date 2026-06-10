@@ -99,8 +99,9 @@ func NewPublisher(clk clock.Clock, conn *Connection, ns TopicNamespace, opts ...
 //
 // QoS 1 is used for every publish (caller cannot override).
 //
-// PublishTimeout: when Config.PublishTimeout > 0, a child ctx with that deadline
-// is derived; when 0, the caller-provided ctx is honored as-is.
+// PublishTimeout: when the configured publish timeout (WithPublishTimeout) > 0, a
+// child ctx with that deadline is derived; when 0, the caller-provided ctx is
+// honored as-is.
 //
 // PUBACK 0x10 (NoMatchingSubscribers) is treated as success — counted in
 // mqtt_publish_total and ack_duration, with an additional slog.Warn for operator
@@ -128,7 +129,8 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 		return err
 	}
 
-	// Payload size enforcement (per Config.MaximumPacketSize when non-zero).
+	// Payload size enforcement (per the configured maximum packet size,
+	// WithMaximumPacketSize, when non-zero).
 	// Compare as int64 to avoid G115 integer overflow: len(payload) fits int64,
 	// and MaximumPacketSize is uint32 (max 2^32-1), both representable in int64.
 	if max := p.conn.cfg.maximumPacketSize; max > 0 && int64(len(payload)) > int64(max) {
@@ -241,8 +243,9 @@ func (p *Publisher) Close(ctx context.Context) error {
 //   - only the adapter PublishTimeout child fired (callerCtx alive) → puback_timeout.
 //   - neither ctx involved → publish_error (transport).
 //
-// When Config.PublishTimeout == 0, publishCtx == callerCtx, so the first branch
-// owns every deadline/cancel and puback_timeout is never (mis)reported.
+// When the configured publish timeout (WithPublishTimeout) == 0, publishCtx ==
+// callerCtx, so the first branch owns every deadline/cancel and puback_timeout is
+// never (mis)reported.
 func classifyPublishErr(callerCtx, publishCtx context.Context, err error) PublishFailureReason {
 	if callerCtx.Err() != nil {
 		return PublishFailureContextCanceled

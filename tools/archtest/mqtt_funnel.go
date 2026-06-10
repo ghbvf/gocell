@@ -296,6 +296,151 @@ func scanSealedCompositeLitConstruction(
 	return out
 }
 
+// ─── A2b: field-write construction allowlist scanner ─────────────────────────
+
+// isSealedFieldWrite reports whether sel selects a field of the sealed struct
+// (targetPkgPath, targetTypeName) — i.e. `x.field` where x is of type T or *T.
+// It uses info.Selections (FieldVal kind only), so a package-qualified
+// identifier (pkg.Name, which is a Uses entry, not a field selection) is never
+// mistaken for a field write.
+func isSealedFieldWrite(info *types.Info, sel *ast.SelectorExpr, targetPkgPath, targetTypeName string) bool {
+	selection, ok := info.Selections[sel]
+	if !ok || selection.Kind() != types.FieldVal {
+		return false
+	}
+	recv := selection.Recv()
+	if ptr, isPtr := recv.(*types.Pointer); isPtr {
+		recv = ptr.Elem()
+	}
+	named, ok := recv.(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := named.Obj()
+	return obj.Pkg() != nil && obj.Pkg().Path() == targetPkgPath && obj.Name() == targetTypeName
+}
+
+// funcReturnsNamed reports whether fn's signature returns the named type
+// (pkgPath, typeName) in any result position. Used to allow field writes inside
+// option constructors (e.g. the mqtt.ConfigOption-returning With* funcs): the
+// returned closure mutates the sealed struct only inside NewConfig's option loop,
+// which validates afterwards.
+func funcReturnsNamed(fn *types.Func, pkgPath, typeName string) bool {
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok {
+		return false
+	}
+	results := sig.Results()
+	for i := 0; i < results.Len(); i++ {
+		named, isNamed := results.At(i).Type().(*types.Named)
+		if !isNamed {
+			continue
+		}
+		obj := named.Obj()
+		if obj.Pkg() != nil && obj.Pkg().Path() == pkgPath && obj.Name() == typeName {
+			return true
+		}
+	}
+	return false
+}
+
+// mqttFieldWriteAllowed reports whether a field write at node is sanctioned: it
+// is enclosed in a func whose typed FullName() is in allowedFullNames, OR (when
+// optionTypeName != "") a func whose signature returns the option type
+// (optionPkgPath, optionTypeName). A write outside any FuncDecl body (package-var
+// init, etc.) is NOT allowed (closed), matching mqttEnclosingFuncAllowed.
+func mqttFieldWriteAllowed(
+	info *types.Info, file *ast.File, node ast.Node,
+	allowedFullNames []string, optionPkgPath, optionTypeName string,
+) bool {
+	fn, ok := ResolveEnclosingFunc(info, file, node)
+	if !ok || fn == nil {
+		return false
+	}
+	for _, key := range allowedFullNames {
+		if fn.FullName() == key {
+			return true
+		}
+	}
+	return optionTypeName != "" && funcReturnsNamed(fn, optionPkgPath, optionTypeName)
+}
+
+// scanSealedFieldWriteConstruction is the A2b scanner: it reports a diagnostic
+// for every assignment that writes a field of the sealed struct
+// (targetPkgPath, targetTypeName) from a location NOT sanctioned by
+// mqttFieldWriteAllowed. This closes the A2 composite-literal scanner's blind
+// spot, where field-by-field construction —
+//
+//	var c Config        // zero-value declaration — allowed
+//	c.clientID = id     // ← field-write construction of a non-zero Config
+//	return c            // escapes unvalidated
+//
+// — would otherwise build an unvalidated sealed struct in-package without ever
+// going through NewConfig.
+//
+// Sanctioned writers: the constructors in allowedFullNames (NewConfig — defensive,
+// it actually builds via a composite literal, but allowing it keeps the rule
+// robust to a future refactor; Parse / assembleClientID for the single-field
+// structs) and every option constructor whose signature returns
+// (optionPkgPath, optionTypeName) — the mqtt.ConfigOption With* funcs. The
+// single-field ClientID / Namespace structs have no option type, so optionTypeName
+// is "" and only their Parse/assemble constructor may write.
+//
+// # Residual blind spot
+//
+// A2b does NOT catch a ConfigOption applied to a locally-declared Config OUTSIDE
+// NewConfig, e.g. `var c Config; WithTLS(x)(&c); use(c)` — the field write happens
+// inside WithTLS (allowed) and `WithTLS(x)(&c)` is a call, not a field write.
+// Production has no such pattern; closing it would need a separate
+// ConfigOption-callsite funnel (out of scope for #1231). Documented here so it is
+// not mistaken for covered.
+func scanSealedFieldWriteConstruction(
+	fset *token.FileSet,
+	file *ast.File,
+	rel string,
+	info *types.Info,
+	targetPkgPath string,
+	targetTypeName string,
+	allowedFullNames []string,
+	optionPkgPath string,
+	optionTypeName string,
+	ruleID string,
+) []Diagnostic {
+	if info == nil {
+		return nil
+	}
+	var out []Diagnostic
+
+	EachInSubtree[ast.AssignStmt](file, func(as *ast.AssignStmt) {
+		for _, lhs := range as.Lhs {
+			sel, ok := lhs.(*ast.SelectorExpr)
+			if !ok {
+				continue
+			}
+			if !isSealedFieldWrite(info, sel, targetPkgPath, targetTypeName) {
+				continue
+			}
+			if mqttFieldWriteAllowed(info, file, sel, allowedFullNames, optionPkgPath, optionTypeName) {
+				continue
+			}
+			pos := fset.Position(sel.Pos())
+			out = append(out, Diagnostic{
+				Rel:  rel,
+				Line: pos.Line,
+				Message: fmt.Sprintf(
+					"%s/A2b: %s field write at %s:%d constructs a non-zero %s outside %v "+
+						"(and outside any sanctioned option constructor) — sealed-struct "+
+						"construction must go through the validating constructor",
+					ruleID, targetTypeName, rel, pos.Line, targetTypeName, allowedFullNames,
+				),
+			})
+		}
+	})
+
+	sort.Slice(out, func(i, j int) bool { return out[i].Line < out[j].Line })
+	return out
+}
+
 // ─── A3: alias / re-shape blind-spot scanner ─────────────────────────────────
 
 // scanMQTTTypeAliases scans file for type alias declarations of the form
@@ -391,6 +536,13 @@ func collectClientIDDiags(p *Pass, a2Diags, a3Diags *[]Diagnostic) {
 				[]string{mqttPkgPath + ".assembleClientID"},
 				ruleID,
 			)...)
+			*a2Diags = append(*a2Diags, scanSealedFieldWriteConstruction(
+				p.Fset, f, rel, p.TypesInfo,
+				mqttPkgPath, "ClientID",
+				[]string{mqttPkgPath + ".assembleClientID"},
+				"", "", // single-field sealed struct: no option type
+				ruleID,
+			)...)
 		}
 		*a3Diags = append(*a3Diags, scanMQTTTypeAliases(
 			p.Fset, f, rel, p.TypesInfo,
@@ -419,6 +571,13 @@ func collectTopicNSDiags(p *Pass, a2Diags, a3Diags *[]Diagnostic) {
 				[]string{mqttTopicNSPkgPath + ".Parse"},
 				ruleID,
 			)...)
+			*a2Diags = append(*a2Diags, scanSealedFieldWriteConstruction(
+				p.Fset, f, rel, p.TypesInfo,
+				mqttTopicNSPkgPath, "Namespace",
+				[]string{mqttTopicNSPkgPath + ".Parse"},
+				"", "", // single-field sealed struct: no option type
+				ruleID,
+			)...)
 		}
 		*a3Diags = append(*a3Diags, scanMQTTTypeAliases(
 			p.Fset, f, rel, p.TypesInfo,
@@ -428,8 +587,9 @@ func collectTopicNSDiags(p *Pass, a2Diags, a3Diags *[]Diagnostic) {
 	}
 }
 
-// CheckMQTTClientIDNamespace runs the MQTT-CLIENT-ID-NAMESPACE-01 A2+A3 scans
-// (the A1 field-freeze is reflect-based and lives in the dogfood Test).
+// CheckMQTTClientIDNamespace runs the MQTT-CLIENT-ID-NAMESPACE-01 A2 (composite
+// literal) + A2b (field write) + A3 (alias) scans (the A1 field-freeze is
+// reflect-based and lives in the dogfood Test).
 //
 // register=no — gocell-internal-layout (scans adapters/mqtt), NOT in
 // StandardCellRules() and NOT promised to run externally — these dogfood-only
@@ -450,8 +610,9 @@ func CheckMQTTClientIDNamespace(t *testing.T, cfg ConfigForExternalCell) []Diagn
 	return append(a2Diags, a3Diags...)
 }
 
-// CheckMQTTTopicNamespace runs the MQTT-TOPIC-NAMESPACE-01 A2+A3 scans
-// (the A1 field-freeze is reflect-based and lives in the dogfood Test).
+// CheckMQTTTopicNamespace runs the MQTT-TOPIC-NAMESPACE-01 A2 (composite literal)
+// + A2b (field write) + A3 (alias) scans (the A1 field-freeze is reflect-based
+// and lives in the dogfood Test).
 //
 // register=no — gocell-internal-layout (scans adapters/mqtt), NOT in
 // StandardCellRules() and NOT promised to run externally — these dogfood-only
@@ -473,12 +634,19 @@ func CheckMQTTTopicNamespace(t *testing.T, cfg ConfigForExternalCell) []Diagnost
 }
 
 // collectConfigDiags is the per-Pass body for CheckMQTTConfigSeal: it scans
-// adapters/mqtt production files for non-zero Config composite literals outside
-// the sole sanctioned constructor NewConfig (A2 — the downstream half of the
-// sealed-construction funnel). The upstream Hard half (unexported fields,
-// blocking outside-package literals) and the A1 field-freeze are reflect-based
-// and live in the dogfood Test. Zero-value `Config{}` literals (NewConfig's
-// error-return path) are allowed by the shared scanner's len(Elts)==0 skip.
+// adapters/mqtt production files for in-package Config construction outside the
+// sanctioned funnel (the downstream half of the sealed-construction funnel; the
+// upstream Hard half — unexported fields blocking outside-package literals — and
+// the A1 field-freeze are reflect-based and live in the dogfood Test). Two
+// complementary scans:
+//
+//   - A2 (composite literal): non-zero `Config{...}` literals must be inside
+//     NewConfig. Zero-value `Config{}` (NewConfig's error-return path) is allowed
+//     by the shared scanner's len(Elts)==0 skip.
+//   - A2b (field write): `c.field = x` writes to a Config field must be inside
+//     NewConfig or a With* option constructor (signature returns ConfigOption) —
+//     closing the field-by-field construction blind spot the composite-literal
+//     scan alone misses (`var c Config; c.clientID = id; return c`).
 func collectConfigDiags(p *Pass, a2Diags *[]Diagnostic) {
 	if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 		return
@@ -495,13 +663,22 @@ func collectConfigDiags(p *Pass, a2Diags *[]Diagnostic) {
 			[]string{mqttPkgPath + ".NewConfig"},
 			ruleID,
 		)...)
+		*a2Diags = append(*a2Diags, scanSealedFieldWriteConstruction(
+			p.Fset, f, rel, p.TypesInfo,
+			mqttPkgPath, "Config",
+			[]string{mqttPkgPath + ".NewConfig"},
+			mqttPkgPath, "ConfigOption",
+			ruleID,
+		)...)
 	}
 }
 
-// CheckMQTTConfigSeal runs the MQTT-CONFIG-SEALED-FIELD-FROZEN-01 A2 construction
-// scan (the A1 reflect field-freeze lives in the dogfood Test). It locks in-package
-// non-zero Config construction to NewConfig; outside-package construction is
-// already impossible at compile time via the unexported fields the A1 freeze pins.
+// CheckMQTTConfigSeal runs the MQTT-CONFIG-SEALED-FIELD-FROZEN-01 A2 (composite
+// literal) + A2b (field write) construction scans (the A1 reflect field-freeze
+// lives in the dogfood Test). Together they lock in-package non-zero Config
+// construction to NewConfig + the With* option constructors; outside-package
+// construction is already impossible at compile time via the unexported fields
+// the A1 freeze pins.
 //
 // register=no — gocell-internal-layout (scans adapters/mqtt), NOT in
 // StandardCellRules() and NOT promised to run externally — these dogfood-only

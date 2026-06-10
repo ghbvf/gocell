@@ -111,16 +111,20 @@ func stopSharedInternalBroker() {
 	}
 }
 
-// newInternalConfig returns a minimal valid Config pointing at addr.
-func newInternalConfig(t *testing.T, addr string) Config {
+// newInternalConfig returns a minimal valid Config pointing at addr. Extra opts
+// apply after the base options so a caller overrides any knob through the public
+// With* path (e.g. WithMaximumPacketSize) instead of mutating the sealed Config's
+// unexported fields.
+func newInternalConfig(t *testing.T, addr string, opts ...ConfigOption) Config {
 	t.Helper()
 	id, _ := ParseEphemeralClientID("testcell", "internal")
-	cfg, err := NewConfig(id, []string{fmt.Sprintf("tcp://%s", addr)},
+	base := []ConfigOption{
 		WithConnectTimeout(testtime.D5s),
 		WithConnectDeadline(testtime.D10s),
 		WithKeepAlive(testtime.D30s),
 		WithBackoff(BackoffConfig{BaseDelay: testtime.D100ms, MaxDelay: testtime.D2s}),
-	)
+	}
+	cfg, err := NewConfig(id, []string{fmt.Sprintf("tcp://%s", addr)}, append(base, opts...)...)
 	require.NoError(t, err)
 	return cfg
 }
