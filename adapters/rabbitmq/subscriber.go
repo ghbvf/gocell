@@ -421,6 +421,14 @@ func (s *Subscriber) declareDelayTopology(ch AMQPChannel, topic, queueName strin
 		tierArgs := amqp.Table{
 			"x-message-ttl":          d.Milliseconds(), // int64 of milliseconds; TTL fires expiry to re-enter dispatch fanout
 			"x-dead-letter-exchange": topic,
+			// Reset the routing key on TTL-expiry dead-letter back to the canonical
+			// empty key. The republish put the message on this tier with routing
+			// key = tier index ("0"/"1"/…); without this reset that index would
+			// ride along when the message later exhausts and the main queue
+			// dead-letters it to the real DLX, so a direct DLX bound on "" would
+			// silently never receive the exhausted webhook. The dispatch exchange
+			// is fanout, so re-entry routing is unaffected by the key.
+			"x-dead-letter-routing-key": "",
 		}
 		if _, err := ch.QueueDeclare(tierQueue, true, false, false, false, tierArgs); err != nil {
 			// AMQP 406 PRECONDITION_FAILED is returned when the queue already

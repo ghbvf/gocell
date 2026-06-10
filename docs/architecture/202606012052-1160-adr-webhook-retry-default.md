@@ -178,12 +178,20 @@ so adapters never import `kernel/webhook`):
 - **rabbitmq (TTL+DLX delay-tier queues)**: on a transient `Requeue` for a
   delayed subscription, the subscriber republishes the delivery to a per-tier
   queue `{queue}.delay.{i}` (`x-message-ttl = schedule[i]`, no consumer) that
-  dead-letters back to the dispatch exchange on expiry. The attempt counter
-  rides the `x-webhook-attempt` AMQP header; once `attempt > len(schedule)` the
-  entry is `Nack(requeue=false)` → DLX. Delays are held in **durable queues**, so
-  the ~40 h envelope survives process and broker-node restarts (unlike the
-  community `x-delayed-message` plugin, which holds delayed messages in node
-  memory — explicitly rejected).
+  dead-letters back to the dispatch exchange on expiry. The republish uses
+  **publisher confirms** on a dedicated ephemeral channel and Acks the original
+  delivery only after the broker confirms the delay-tier copy, so the
+  consume→publish→ack ownership transfer is not lost on a channel/broker drop
+  (#1828 F1); a delay-publish failure **fails closed to the real DLX** rather
+  than hot-looping an immediate requeue that never advances the attempt (#1828
+  F5). The attempt counter rides the `x-webhook-attempt` AMQP header — trusted
+  only on deliveries the broker attests expired from this queue's own `.delay.`
+  tier (`x-death` provenance), never on a header that could be forged by a direct
+  publish (#1828 F6); once `attempt > len(schedule)` the entry is
+  `Nack(requeue=false)` → DLX. Delays are held in **durable queues**, so the
+  ~40 h envelope survives process and broker-node restarts (unlike the community
+  `x-delayed-message` plugin, which holds delayed messages in node memory —
+  explicitly rejected).
 - **in-memory bus**: `handleWithRetry` uses `len(schedule)+1` deliveries as the
   budget and waits `schedule[attempt]` via the injected clock between attempts;
   exhaustion routes to the dead-letter slice.
@@ -201,15 +209,32 @@ so adapters never import `kernel/webhook`):
   `BrokerDelaySchedule` fails CI rather than silently degrading to immediate
   retry. The new `Subscription` field is locked by `SUBSCRIPTION-FIELDS-FROZEN-01`.
 
-**Threat / safety re-evaluation.** The 30 s ConsumerBase ceiling no longer
-applies to webhook dispatch; the full ~40 h Svix envelope is realized.
-At-least-once delivery is unchanged: the delay round-trip **releases (does not
-commit)** the idempotency receipt, so the redelivered same-`entry.ID` message
-re-claims and the handler re-runs — downstream handlers must remain idempotent
-(already required). No new wire field or PII surface is introduced;
-`x-webhook-attempt` is internal broker metadata, never part of the signed
-payload. `RetrySchedule.DelayFor` / `Delays()` remain the single source of the
-tier values.
+**Threat / safety re-evaluation (re-amended 2026-06-11, #1828 review).** The 30 s
+ConsumerBase ceiling no longer applies to webhook dispatch; the full ~40 h Svix
+envelope is realized.
+
+At-least-once across the **application** boundary holds: the delay round-trip
+**releases (does not commit)** the idempotency receipt and the delay-tier
+republish is publisher-confirmed (#1828 F1), so the redelivered same-`entry.ID`
+message re-claims and the handler re-runs — downstream handlers must remain
+idempotent (already required).
+
+One residual gap is **not** closed here and supersedes the earlier blanket
+"at-least-once delivery is unchanged" claim: the per-tier delay queues are
+RabbitMQ **classic** queues, and the broker-internal TTL→dead-letter republish
+on a classic queue is best-effort (the internal hop is not publisher-confirmed).
+On a **single-node** broker this is reliable; on a **multi-node cluster** a node
+failure *during* that internal republish can drop one scheduled retry. The next
+business event or a manual replay recovers it (handlers are idempotent), so the
+delay hop is **at-least-once on single-node and best-effort under clustering** —
+not unconditionally at-least-once. Closing the cluster gap requires quorum queues
+with at-least-once dead-lettering, a separate infrastructure decision tracked at
+**#1835** (#1828 F2).
+
+No new wire field or PII surface is introduced; `x-webhook-attempt` is internal
+broker metadata, never part of the signed payload, and is provenance-gated
+against forgery (#1828 F6). `RetrySchedule.DelayFor` / `Delays()` remain the
+single source of the tier values.
 
 ---
 

@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 func TestSubscription_Validate(t *testing.T) {
@@ -65,19 +67,19 @@ func TestSubscription_Validate(t *testing.T) {
 		},
 		{
 			name:        "brokerDelaySchedule with zero duration",
-			mutate:      func(s *Subscription) { s.BrokerDelaySchedule = []time.Duration{time.Second, 0} },
+			mutate:      func(s *Subscription) { s.BrokerDelaySchedule = []time.Duration{testtime.D1s, 0} },
 			wantErr:     true,
 			errContains: "BrokerDelaySchedule",
 		},
 		{
 			name:        "brokerDelaySchedule with negative duration",
-			mutate:      func(s *Subscription) { s.BrokerDelaySchedule = []time.Duration{-time.Second} },
+			mutate:      func(s *Subscription) { s.BrokerDelaySchedule = []time.Duration{-testtime.D1s} },
 			wantErr:     true,
 			errContains: "BrokerDelaySchedule",
 		},
 		{
 			name:    "brokerDelaySchedule all positive",
-			mutate:  func(s *Subscription) { s.BrokerDelaySchedule = []time.Duration{time.Second, 5 * time.Second} },
+			mutate:  func(s *Subscription) { s.BrokerDelaySchedule = []time.Duration{testtime.D1s, testtime.D5s} },
 			wantErr: false,
 		},
 		{

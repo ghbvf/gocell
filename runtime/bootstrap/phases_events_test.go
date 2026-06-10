@@ -287,7 +287,7 @@ func TestDrainCellSubscriptions_ForwardsBrokerDelaySchedule(t *testing.T) {
 		return nil
 	})
 
-	schedule := []time.Duration{time.Second, 5 * time.Second}
+	schedule := []time.Duration{testtime.D1s, testtime.D5s}
 	noopH := outbox.EntryHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.Ack()
 	})

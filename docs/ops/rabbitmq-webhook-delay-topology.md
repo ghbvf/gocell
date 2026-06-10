@@ -32,6 +32,26 @@ back to `X` → `Q` and is re-consumed. The attempt counter rides the
 payload). Once the attempt exceeds the schedule length the entry is
 `Nack(requeue=false)` → the queue's **real DLX**.
 
+## Reliability (classic-queue caveat)
+
+The subscriber republishes to a delay tier with **publisher confirms** and Acks
+the original delivery only after the broker confirms the copy, so the
+application-side hop does not lose messages on a channel/broker drop. The delay
+queues are **classic** queues, however, and RabbitMQ's broker-internal
+TTL→dead-letter republish on a classic queue is **best-effort** (the internal hop
+is not publisher-confirmed):
+
+- **Single-node broker** — reliable; the durable queue holds the message until TTL
+  expiry and the internal dead-letter re-enters the dispatch queue.
+- **Multi-node cluster** — a node failure *during* the internal TTL→DLX republish
+  can drop that one scheduled retry. The next business event or a manual replay
+  recovers it (webhook handlers are idempotent), so a missed retry is degraded —
+  not corrupting — behaviour.
+
+Upgrading the delay tiers to **quorum queues with at-least-once dead-lettering**
+to close the cluster gap is tracked at **#1835**. Until then, treat clustered
+webhook retry as at-least-once-best-effort on the internal hop.
+
 ## Identifying these queues
 
 - Name pattern: `*.delay` (exchange) and `*.delay.<tier-index>` (queues), where the

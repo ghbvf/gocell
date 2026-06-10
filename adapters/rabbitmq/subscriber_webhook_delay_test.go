@@ -216,9 +216,11 @@ func TestDeclareTopology_WithDelaySchedule_DeclaresDelayTiers(t *testing.T) {
 
 	assert.Equal(t, int64(200), tier0Args["x-message-ttl"], "tier 0 x-message-ttl must be 200ms as int64")
 	assert.Equal(t, topic, tier0Args["x-dead-letter-exchange"], "tier 0 x-dead-letter-exchange must point to dispatch exchange")
+	assert.Equal(t, "", tier0Args["x-dead-letter-routing-key"], "tier 0 must reset routing key to canonical empty")
 
 	assert.Equal(t, int64(500), tier1Args["x-message-ttl"], "tier 1 x-message-ttl must be 500ms as int64")
 	assert.Equal(t, topic, tier1Args["x-dead-letter-exchange"], "tier 1 x-dead-letter-exchange must point to dispatch exchange")
+	assert.Equal(t, "", tier1Args["x-dead-letter-routing-key"], "tier 1 must reset routing key to canonical empty")
 
 	// Bindings: tier 0 bound with routing key "0", tier 1 with "1".
 	var tier0Detail, tier1Detail *queueBindDetail
