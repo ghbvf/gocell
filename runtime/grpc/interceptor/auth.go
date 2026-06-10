@@ -3,7 +3,6 @@ package interceptor
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"strings"
 
 	"google.golang.org/grpc"
@@ -13,7 +12,6 @@ import (
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/panicregister"
-	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -95,12 +93,25 @@ func UnaryAuth(verifier auth.IntentTokenVerifier, opts ...AuthOption) grpc.Unary
 // status error (the context is returned unchanged on the failure paths). The
 // caller forwards the returned context to the handler (wrapping the stream for
 // the streaming path).
-func authorize(ctx context.Context, cfg authConfig, verifier auth.IntentTokenVerifier, fullMethod string) (context.Context, error) {
-	isPublic, err := callPredicate(ctx, cfg.publicMethod, fullMethod)
-	if err != nil {
-		return ctx, err
-	}
-	if isPublic {
+//
+// The whole auth stage runs OUTSIDE UnaryRecovery/StreamRecovery (Recovery wraps
+// only the handler), so authorize installs ONE stage-level panic guard reusing the
+// shared recoverGRPCPanic core (#1790): any panic from a predicate, the bearer
+// verifier, or metadata parsing is collapsed into codes.Internal and logged
+// (redacted) instead of escaping the chain unobserved by the outer Metrics/Tracing
+// interceptors. This is the single chokepoint — no per-callsite guard can be
+// forgotten — so the inner helpers (callPredicate) stay panic-naive.
+func authorize(
+	ctx context.Context, cfg authConfig, verifier auth.IntentTokenVerifier, fullMethod string,
+) (resultCtx context.Context, err error) {
+	resultCtx = ctx
+	defer func() {
+		if v := recover(); v != nil {
+			resultCtx, err = ctx, recoverGRPCPanic(ctx, fullMethod, v)
+		}
+	}()
+
+	if callPredicate(cfg.publicMethod, fullMethod) {
 		return ctx, nil
 	}
 
@@ -109,44 +120,28 @@ func authorize(ctx context.Context, cfg authConfig, verifier auth.IntentTokenVer
 		return ctx, status.Error(codes.Unauthenticated, "missing or invalid authorization metadata")
 	}
 
-	ctx, p, err := auth.AuthenticateBearer(ctx, verifier, token)
-	if err != nil {
-		return ctx, authErrorToStatus(err)
+	authCtx, p, verr := auth.AuthenticateBearer(ctx, verifier, token)
+	if verr != nil {
+		return ctx, authErrorToStatus(verr)
 	}
 
-	exempt, err := callPredicate(ctx, cfg.passwordResetExempt, fullMethod)
-	if err != nil {
-		return ctx, err
-	}
-	if auth.PasswordResetBlocked(p, exempt) {
+	if auth.PasswordResetBlocked(p, callPredicate(cfg.passwordResetExempt, fullMethod)) {
 		return ctx, status.Error(codes.PermissionDenied, "password reset required before accessing this method")
 	}
 
-	return ctx, nil
+	return authCtx, nil
 }
 
 // callPredicate invokes an externally-supplied auth predicate (public-method /
-// password-reset-exempt) and converts any panic into a codes.Internal status.
-// The Auth interceptor runs OUTSIDE UnaryRecovery (Recovery wraps only the
-// handler), so without this guard a panicking predicate would escape the chain
-// unobserved by the outer Metrics/Tracing interceptors and surface as an opaque
-// transport error rather than a clean codes.Internal. A nil predicate reports
-// false (the fail-closed default).
-func callPredicate(ctx context.Context, pred func(string) bool, method string) (result bool, err error) {
+// password-reset-exempt), reporting false for a nil predicate (the fail-closed
+// default). A panicking predicate needs no local recover here: authorize's
+// stage-level guard (the auth stage runs outside Recovery) collapses it into
+// codes.Internal, so this stays a pure dispatch.
+func callPredicate(pred func(string) bool, method string) bool {
 	if pred == nil {
-		return false, nil
+		return false
 	}
-	defer func() {
-		if v := recover(); v != nil {
-			slog.ErrorContext(ctx, "grpc auth predicate panicked",
-				slog.String("method", method),
-				slog.Any("panic", redaction.RedactAny(v)),
-			)
-			result = false
-			err = status.Error(codes.Internal, "internal server error")
-		}
-	}()
-	return pred(method), nil
+	return pred(method)
 }
 
 // bearerFromMetadata extracts the bearer token from the lowercase
