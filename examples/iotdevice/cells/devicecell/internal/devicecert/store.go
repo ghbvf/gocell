@@ -2,8 +2,9 @@
 //
 // CertState models a device's current TLS/identity certificate as a (NotAfter,
 // Epoch) pair. The renewal reconcile.Loop scans this store for near-expiry certs
-// and enqueues a deduplicated rotate-cert command per epoch (see
-// cells/devicecell/slices/devicecertrenewal).
+// and enqueues a deduplicated rotate-cert command per epoch (the loop is wired by
+// buildCertRenewalSweeper in cells/devicecell/cell.go over the Reconciler in this
+// package — there is no dedicated slice).
 //
 // EPHEMERAL BY DESIGN: Store is an in-memory, cell-internal operational store —
 // it is NOT persisted to the devices table. This is a deliberate scope choice for
@@ -78,7 +79,9 @@ func (s *Store) Issue(_ context.Context, deviceID string, notAfter time.Time) (C
 
 // ScanNearExpiry returns every certificate whose NotAfter is at or before cutoff,
 // sorted by DeviceID for deterministic iteration. It is a pure read filter — the
-// caller (renewal loop) supplies cutoff = now + renewal-threshold.
+// caller (renewal loop) supplies cutoff = now + renewal-threshold. The in-memory
+// implementation never returns a non-nil error; the error return preserves the
+// reconciler's contract for a future persisted swap-in.
 func (s *Store) ScanNearExpiry(_ context.Context, cutoff time.Time) ([]CertState, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

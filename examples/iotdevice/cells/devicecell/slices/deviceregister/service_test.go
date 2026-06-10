@@ -74,13 +74,26 @@ func TestNewService_NilRepo(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewService(clock.Real(), tt.repo, slog.Default())
+			_, err := NewService(clock.Real(), tt.repo, slog.Default(), WithCertStore(devicecert.NewStore()))
 			require.Error(t, err)
 			var ecErr *errcode.Error
 			require.ErrorAs(t, err, &ecErr)
 			assert.Equal(t, errcode.KindInternal, ecErr.Kind)
 		})
 	}
+}
+
+// TestNewService_NilCertStore verifies the generated certStore guard
+// (gocell:"required", #1757): omitting WithCertStore — with a valid repo so the
+// repo guard passes first — fails fast.
+func TestNewService_NilCertStore(t *testing.T) {
+	repo := mem.NewDeviceRepository()
+	_, err := NewService(clock.Real(), repo, slog.Default())
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.KindInternal, ecErr.Kind)
+	assert.Contains(t, err.Error(), "certStore")
 }
 
 func TestService_Register(t *testing.T) {

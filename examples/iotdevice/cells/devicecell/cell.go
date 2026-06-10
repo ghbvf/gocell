@@ -123,12 +123,14 @@ func WithBootstrapEmitter(e outbox.CellEmitter) Option {
 	return func(c *DeviceCell) { c.bootstrapEmitter = e }
 }
 
-// WithBootstrapTxManager sets the CellTxManager injected into the
-// devicebootstrap reactive slice. The slice wraps command.EmitAsync in
-// txRunner.RunInTx so durable mode (PG outbox writer) gets a real transaction
-// in ctx. Demo mode and tests use the default outbox.DemoCellTxManager() no-op.
+// WithBootstrapTxManager sets the CellTxManager injected into BOTH async command
+// producers: the devicebootstrap reactive slice and the cert-renewal reconcile
+// loop (#1757). Each wraps command.EmitAsync in txRunner.RunInTx so durable mode
+// (PG outbox writer) gets a real transaction in ctx. The cell defaults the field
+// to outbox.DemoCellTxManager() (no-op) in NewDeviceCell, so demo mode and tests
+// work without wiring it.
 //
-// Accumulative: a nil tx leaves the previously-set value in place. NOT
+// Accumulative: a nil tx leaves the previously-set (default) value in place. NOT
 // required (no fail-fast guard): DemoCellTxManager is the safe default for
 // assemblies that do not wire a real PG pool.
 func WithBootstrapTxManager(tx persistence.CellTxManager) Option {
@@ -187,6 +189,8 @@ type DeviceCell struct {
 	commandSweeper     *reconcile.Loop          // device-command expiry sweep, driven on a TickerTrigger cadence
 	certStore          *devicecert.Store        // ephemeral cell-internal cert state; scanned by certRenewalSweeper, seeded at register
 	certRenewalSweeper *reconcile.Loop          // cert-renewal producer (archetype ② reconcile→command, #1757)
+	reconcileMetrics   reconcile.Metrics        // shared by both reconcile.Loops; registered once via reconcileLoopMetrics
+	reconcileMetricsOK bool                     // true once reconcileMetrics is registered (provider was wired)
 	clk                clock.Clock              // injected from reg.Config during initInternal
 
 	// +slice:route:slice=deviceregister,subPath=/api/v1/devices
@@ -540,11 +544,11 @@ func (c *DeviceCell) buildCommandSweeper(cmdQueue commandQueueStore) error {
 		WithName("devicecommand.sweeper").
 		WithReconcilerID("devicecommand_sweeper"). // label-safe: [a-z0-9_], no dots
 		WithoutDefaultRequeue()                    // ticker is the sole periodic source
-	if c.metricsProvider != nil {
-		m, err := reconcile.RegisterMetrics(c.metricsProvider)
-		if err != nil {
-			return fmt.Errorf("device-command reconcile metrics: %w", err)
-		}
+	m, ok, err := c.reconcileLoopMetrics()
+	if err != nil {
+		return fmt.Errorf("device-command reconcile metrics: %w", err)
+	}
+	if ok {
 		b = b.WithMetrics(m)
 	}
 	loop, err := b.Build()
@@ -555,6 +559,26 @@ func (c *DeviceCell) buildCommandSweeper(cmdQueue commandQueueStore) error {
 	return nil
 }
 
+// reconcileLoopMetrics registers the shared reconcile metric family once and
+// caches it, so the cell's multiple reconcile.Loops (command sweeper + cert
+// renewal) share ONE registration. Re-calling reconcile.RegisterMetrics per loop
+// would re-register the same collectors and log a Warn per family on every reuse.
+// Returns ok=false when no metrics provider is wired (loops then run unmetered).
+func (c *DeviceCell) reconcileLoopMetrics() (reconcile.Metrics, bool, error) {
+	if c.metricsProvider == nil {
+		return reconcile.Metrics{}, false, nil
+	}
+	if !c.reconcileMetricsOK {
+		m, err := reconcile.RegisterMetrics(c.metricsProvider)
+		if err != nil {
+			return reconcile.Metrics{}, false, err
+		}
+		c.reconcileMetrics = m
+		c.reconcileMetricsOK = true
+	}
+	return c.reconcileMetrics, true, nil
+}
+
 const (
 	// certRenewalSweepInterval is the TickerTrigger cadence for the cert-renewal
 	// reconcile loop. Certificate expiry is slow-moving (days), so an hourly
@@ -563,6 +587,13 @@ const (
 	certRenewalSweepInterval = 1 * time.Hour
 	// certRenewalThreshold is the near-expiry window: a device whose certificate
 	// expires within this window of "now" is swept into a rotate-cert command.
+	//
+	// Two co-tuning relationships (not machine-enforced — example tuning, not an
+	// invariant mechanism): (1) threshold MUST be >> certRenewalSweepInterval so a
+	// cert stays in the near-expiry window across many ticks while its single
+	// deduped command is consumed; (2) the issued cert validity
+	// (deviceregister.certValidity, 90d) MUST exceed this threshold so a freshly
+	// registered device is not swept for renewal immediately.
 	certRenewalThreshold = 30 * 24 * time.Hour
 )
 
@@ -590,11 +621,11 @@ func (c *DeviceCell) buildCertRenewalSweeper() error {
 		WithName("devicecert.renewal").
 		WithReconcilerID("devicecert_renewal"). // label-safe: [a-z0-9_], no dots
 		WithoutDefaultRequeue()                 // ticker is the sole periodic source
-	if c.metricsProvider != nil {
-		m, err := reconcile.RegisterMetrics(c.metricsProvider)
-		if err != nil {
-			return fmt.Errorf("device-cert reconcile metrics: %w", err)
-		}
+	m, ok, err := c.reconcileLoopMetrics()
+	if err != nil {
+		return fmt.Errorf("device-cert reconcile metrics: %w", err)
+	}
+	if ok {
 		b = b.WithMetrics(m)
 	}
 	loop, err := b.Build()

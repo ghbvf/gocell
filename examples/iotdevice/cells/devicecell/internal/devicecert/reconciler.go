@@ -33,6 +33,16 @@ const rotateCertCommandType = "rotate-cert"
 // (deviceID, certEpoch) so every tick within one cert epoch dedups to a single
 // dispatched command (the idempotent forcing function), while a post-rotation
 // re-issue (new epoch) becomes a fresh, dispatchable command.
+//
+// SINGLE-TENANT ASSUMPTION: a reconcile loop runs on the cell lifecycle context,
+// which carries no request principal — so the tenant dimension of the Claimer key
+// resolves to the "_notenant" sentinel for every emitted command. The cert Store
+// is likewise per-assembly, not tenant-partitioned. That is correct for this
+// single-tenant iotdevice example (device ids are UUIDs), but anyone copying this
+// archetype into a MULTI-TENANT cell MUST add a tenant dimension to both the cert
+// store and the commandID derivation — otherwise two tenants sharing a device id
+// would collide on the same Claimer key and one tenant's renewal would suppress
+// the other's.
 type Reconciler struct {
 	clk       clock.Clock
 	store     *Store
@@ -137,6 +147,11 @@ func (r *Reconciler) enqueueRenewal(ctx context.Context, st CertState) error {
 // epoch dedup to a single dispatched command, while a post-rotation re-issue (new
 // epoch) yields a fresh id that dispatches again. Callers MUST NOT hand-roll this
 // string.
+//
+// The id deliberately embeds deviceID even though the Claimer key already scopes
+// by subject=deviceID: this keeps the token self-describing in logs/DLX and safe
+// if ever read standalone. The redundancy never causes collisions — distinct
+// (deviceID, epoch) pairs always map to distinct ids.
 func rotateCommandID(deviceID string, epoch int64) string {
 	return fmt.Sprintf("cert-rotate:%s:%d", deviceID, epoch)
 }

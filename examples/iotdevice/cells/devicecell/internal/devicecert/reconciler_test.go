@@ -3,6 +3,7 @@ package devicecert
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -87,6 +88,30 @@ func TestReconciler_NoEmitWhenNoneNearExpiry(t *testing.T) {
 	_, err = r.Reconcile(ctx, reconcile.Request{})
 	require.NoError(t, err)
 	assert.Empty(t, rec.Entries(), "no near-expiry cert -> no command emitted")
+}
+
+// failingEmitter is an outbox.Emitter whose Emit always fails, used to drive the
+// error-bubble path of Reconcile/enqueueRenewal.
+type failingEmitter struct{ err error }
+
+func (f failingEmitter) Emit(context.Context, outbox.Entry) error { return f.err }
+
+func TestReconciler_EmitFailureBubbles(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := NewStore()
+	_, err := store.Issue(ctx, "dev-near", certTestBase.Add(24*time.Hour))
+	require.NoError(t, err)
+
+	wantErr := errors.New("emit failed")
+	r, err := NewReconciler(clockmock.New(certTestBase), store,
+		outbox.WrapEmitterForCell(failingEmitter{err: wantErr}),
+		outbox.DemoCellTxManager(), certRenewalTestThreshold, nil)
+	require.NoError(t, err)
+
+	_, err = r.Reconcile(ctx, reconcile.Request{})
+	require.Error(t, err, "a failing emit must bubble out of Reconcile (loop then backs off + retries)")
+	require.ErrorIs(t, err, wantErr)
 }
 
 func TestNewReconciler_Validation(t *testing.T) {

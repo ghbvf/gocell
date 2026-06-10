@@ -258,10 +258,27 @@ dispatchable command.
 
 > **Ephemeral by design**: certificate state lives in an in-memory, cell-internal
 > store (not the `devices` table) — this example demonstrates the producer +
-> dedup mechanic, not certificate PKI durability. A freshly registered demo device
-> gets a healthy (far-from-expiry) cert, so no `rotate-cert` command appears during
-> a short run; the full scan → enqueue → cross-tick dedup → dequeue chain is proven
-> deterministically in `cells/devicecell/cert_renewal_e2e_test.go`.
+> dedup mechanic, not certificate PKI durability. **This holds in durable mode
+> too**: even with `GOCELL_IOTDEVICE_DSN` set, the cert store is in-memory and is
+> NOT persisted to PostgreSQL — after a restart, device rows survive but the cert
+> store is empty, so `rotate-cert` commands resume only for devices that
+> re-register. That asymmetry is the deliberate scope boundary (see
+> `internal/devicecert/store.go`).
+>
+> **Observing it**: a freshly registered device gets a healthy (90d) cert and the
+> 30d renewal threshold is not crossed during a short demo, so no `rotate-cert`
+> command appears in a normal run — this is the realistic steady state, not a gap.
+> The full scan → enqueue → cross-tick dedup → dequeue chain is proven
+> deterministically (fake clock) in `cells/devicecell/cert_renewal_e2e_test.go`;
+> to watch it live, lower `certValidity` / `certRenewalThreshold` /
+> `certRenewalSweepInterval` in source and re-run.
+
+> **Single-tenant assumption**: a reconcile loop runs on the cell lifecycle
+> context (no request principal), so the renewal command's dedup key is not
+> tenant-scoped (resolves to the `_notenant` sentinel), and the cert store is
+> per-assembly. Correct for this single-tenant example; copying archetype ② into a
+> multi-tenant cell requires adding a tenant dimension to the cert store and the
+> command id (see `internal/devicecert/reconciler.go`).
 
 ## Full Walkthrough
 

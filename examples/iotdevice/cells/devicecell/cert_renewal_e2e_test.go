@@ -55,6 +55,11 @@ func (h *countingEnqueueHandler) HandleEnqueue(ctx context.Context, req *cmdenqu
 	return h.inner.HandleEnqueue(ctx, req)
 }
 
+// NOTE: no goleak here — this test starts the real outbox relay, whose internal
+// worker goroutines are not deterministically joined when Relay.Start returns on
+// ctx cancel (the relay is a long-lived service). This matches the sibling relay
+// E2E command_dedup_e2e_test.go, which also omits goleak. reconcile.Loop goroutine
+// hygiene is covered separately by the goleak'd loop tests (sweeper_lifecycle_test.go).
 func TestCertRenewal_CrossTickDedupToDequeue(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -114,13 +119,20 @@ func TestCertRenewal_CrossTickDedupToDequeue(t *testing.T) {
 
 	relayCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	go func() { _ = relay.Start(relayCtx) }()
+	relayDone := make(chan struct{})
+	go func() { defer close(relayDone); _ = relay.Start(relayCtx) }()
 
 	require.NoError(t, emitStore.WaitFor(relayCtx, func(rows []outboxtest.FakeRow) bool {
 		return len(rows) == 2 &&
 			rows[0].Status == kout.StatePublished &&
 			rows[1].Status == kout.StatePublished
 	}), "both command entries settle to published (one dispatched, one deduped)")
+
+	// Stop the relay and wait for Start to return before the remaining assertions,
+	// so the dequeue checks below do not race the relay (relayDone gates Start's
+	// return deterministically rather than relying on the ctx timeout).
+	cancel()
+	<-relayDone
 
 	assert.Equal(t, 1, handler.calls, "enqueue handler runs exactly once across the two ticks (cross-tick dedup)")
 

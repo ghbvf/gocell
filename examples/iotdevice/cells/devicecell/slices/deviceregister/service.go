@@ -23,9 +23,12 @@ import (
 const TopicDeviceRegistered = "event.device-registered.v1"
 
 // certValidity is the lifetime of a freshly-issued device certificate. A device
-// registers healthy (far from expiry); the cert-renewal reconcile loop only acts
-// once "now" enters certRenewalThreshold of NotAfter. A short-lived device cert
-// validity (90d) with a 30d renewal threshold is a representative L4 policy.
+// registers healthy (far from expiry); the cell's cert-renewal reconcile loop
+// only acts once "now" enters its near-expiry threshold of NotAfter. This value
+// MUST exceed that threshold (90d validity vs the cell's 30d threshold) or a
+// freshly-issued cert would be swept for renewal immediately — a representative
+// L4 policy. (The threshold lives in cells/devicecell/cell.go; the two are
+// co-tuned but in separate packages to avoid a slice→cell import cycle.)
 const certValidity = 90 * 24 * time.Hour
 
 // deviceRegisteredEvent is the event payload DTO for device registration events,
