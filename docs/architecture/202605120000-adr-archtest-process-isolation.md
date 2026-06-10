@@ -516,20 +516,22 @@ Go 生态「重型套件排出默认 `go test`」标准只有 build tag（编译
 
 ## §Amendment 2026-06-10 (PR-A10 #1171, KERNEL-RECONCILE-01 收口) — reconcile invariant 族纳入 archtest 池
 
-epic #661（`kernel/reconcile` L4 收敛控制环）落地后，`tools/archtest/reconcile_*_test.go` 4 个文件新增
-**27 个顶层 Test 函数**（`RECONCILE-*` 族：interface/Request/Result/Trigger/LeaderElector frozen、
+epic #661（`kernel/reconcile` L4 收敛控制环）的 archtest 守卫 `tools/archtest/reconcile_*_test.go`
+（4 文件、**27 个顶层 Test 函数**：interface/Request/Result/Trigger/LeaderElector frozen、
 BUILDER-FUNNEL、FENCED-WRITE-FUNNEL、RESULT-LABEL-VALUES-FROZEN、REQUEUE-ENQUEUE-CALLER、
-LEADER-IMPL-FUNNEL、goleak TestMain funnel）。
+LEADER-IMPL-FUNNEL、goleak TestMain funnel）随 PR-A2…A7 已 merge，早已在 develop archtest 池内。
+本收口 PR（A10）**纯文档、不新增任何 archtest 函数**；本 §Amendment 在 epic 关闭时回溯记录该 invariant
+族的 CI 足迹并再评威胁矩阵，不改决策。
 
 **无 matrix / 脚本编辑**：D1 的 discovery（`go test -list '^Test' ./tools/archtest` modulo `SHARD_COUNT`）
-按设计自动吸收这 27 个函数，无需任何 CI 配置改动——这正是 D1 动态分片相对旧 K=N 静态 enumerate 的目的。
-本 amendment 仅做威胁矩阵再评，不改决策。
+按设计自动吸收这 27 个函数（A2…A7 落地时即生效），无需任何 CI 配置改动——这正是 D1 动态分片相对旧
+K=N 静态 enumerate 的目的。
 
 ### 威胁矩阵再评（per ai-robust.md §"ADR amendment 落地必查"）
 
 | 维度 | 评估 |
 |---|---|
-| per-shard RSS / OOM 包络 | archtest 顶层 Test 函数当前共 **1226**，reconcile 族 27 个占 ~2.2%；K=24 下每 shard ≈ 51 函数，reconcile 增量 ≈ +1.1 函数/shard。OOM 触发源是 `typeseval.SharedResolver` 的 type-graph 累加，27 个新函数不引入新对标语义类别，per-shard RSS 仍落在 §决策 中 K=24 < GHA 7GB 的方向性包络内。|
+| per-shard RSS / OOM 包络 | develop archtest 顶层 Test 函数现共 **1226**（已含 reconcile 族 27 个，非本 PR 新增）；reconcile 占 ~2.2%，K=24 下 ≈ 51 函数/shard、reconcile 贡献 ≈ +1.1。OOM 触发源是 `typeseval.SharedResolver` 的 type-graph 累加，该族不引入新对标语义类别，per-shard RSS 仍落在 §决策 中 K=24 < GHA 7GB 的方向性包络内。|
 | §决策 行的绝对计数（"296 函数"/"per-shard 32"）| 为历史 macOS baseline，早被 line 29 声明为「方向性论点权威、不以绝对数为真值源」；本 PR **不** true-up 该历史数（其漂移源自全仓 archtest 4× 增长，非 reconcile，超出本 PR 范围）。|
 | 一致性守卫 | `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01` / `ARCHTEST-LEAF-BUILD-TAG-01` 不受影响；reconcile 测试文件已带 `//go:build archtest` leaf tag（同 D3 范式），编译级排除 bare `go test` 自动覆盖。|
 

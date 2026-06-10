@@ -48,5 +48,6 @@ L3 最终一致可用 projection / saga；reconcile 用于 L4 跨不可靠边界
 
 - ADR：`docs/architecture/202605291600-661-adr-kernel-reconcile-design.md`
 - 权威 godoc：`kernel/reconcile/doc.go`
-- Invariants：`tools/archtest/reconcile_invariants_test.go`（`RECONCILE-*`，含 BUILDER-FUNNEL /
-  FENCED-WRITE-FUNNEL / 各 FROZEN 族）
+- Invariants：`RECONCILE-*` 族（fields/interface/trigger/leader frozen、builder/fenced-write/leader-impl
+  funnel、requeue-caller、result-label frozen）完整清单与盲区见 `kernel/reconcile/doc.go`
+  §Enforced invariants 与 `tools/archtest/reconcile_invariants_test.go`。
