@@ -303,7 +303,7 @@ PASS），证实生成产物未触发 struct-literal 形式。
 - ADR: `docs/architecture/202605051730-adr-errcode-message-pii-safety.md`
 - Plan: `docs/plans/202605011500-029-master-roadmap.md` Track K#08 W1-G
 - Plan: `docs/plans/202605051600-030-review-0504-implementation.md` Wave 2
-- Constitution: `.claude/rules/gocell/error-handling.md` §"Message PII 静态字面量约束"
-  / §"Assertion vs panic" / §"Details 类型安全"
+- Constitution: `.claude/rules/gocell/error-handling.md` §"Message 与 PII"
+  / §"Panic"
 - Constitution: `.claude/rules/gocell/observability.md` §"errcode 三层 redaction 分工"
 - Feedback: `feedback_constraint_self_close.md`（引入新约束必须同 PR 闭环）

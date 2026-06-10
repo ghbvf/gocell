@@ -206,7 +206,7 @@ var-string，archtest 只能在 helper 自身处豁免。后续工作见 backlog
 - PR #368 errcode 残留收口审计
 - `docs/architecture/202604242030-adr-kernel-wrapper-contract-observability.md` §8（Span Error Redaction）
 - `docs/architecture/202605031600-adr-v1-schema-evolution.md` §5（error envelope 保持 strict）
-- `.claude/rules/gocell/error-handling.md` §"Details 类型安全：PublicDetail" / §"Message PII 静态字面量约束"
+- `.claude/rules/gocell/error-handling.md` §"Message 与 PII"
 
 ## Amendment 2026-05-27 — sealed PublicDetail / InternalDetail newtype (#1035)
 

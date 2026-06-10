@@ -51,7 +51,7 @@ itself enforces.
 
 | Script | Enforces |
 |---|---|
-| `verify-archtest.sh` | `tools/archtest/*` (LAYER-*, AUTH-*, SEC-FAIL-CLOSED-*, ERROR-FIRST-API-01, META-*, ADV-06) |
+| `verify-archtest.sh` | `tools/archtest/*` (LAYER-*, AUTH-*, SEC-FAIL-CLOSED-*, ERROR-FIRST-API-01, META-*, ADV-06). Local `make verify` defaults to `SHARD_COUNT=1`; nightly CI runs `.github/workflows/archtest-nightly.yml` with `SHARD_COUNT=24`; manual runs may use `SHARD_TARGET=N`, `SHARD_COUNT=1`, or `SHARD_COUNT>1`. Production scans require active `GOWORK` when workspace modules exist; do not run archtest with `GOWORK=off`. |
 | `verify-contract-health.sh` | `gocell check contract-health` (CH-*) |
 | `verify-examples-import.sh` | `examples/` must not import `cells/*/internal/` or `adapters/*/internal/` |
 | `verify-generated.sh` | metadata-derived generated assembly entrypoints, `boundary.yaml`, and `metrics-schema.yaml` are up to date |
@@ -60,6 +60,7 @@ itself enforces.
 | `verify-journey.sh` | `gocell verify journey --active` (active journeys carry executable auto checks) |
 | `verify-archtest-invariants.sh` | merged PR-time gate for the cheap (non-`packages.Load`) archtest invariants — clock/duration/sleep injection (PROD-CLOCK-INJECTION-01 + KERNEL-CLOCK-LEAF-FALLBACK[-FIXTURES] + PROD-CLOCK-INJECTION-FIXTURES + PROD-DURATION-CONST-01[-FIXTURES] + TEST-TIME-LITERAL-01[-FIXTURES] + TEST-SLEEP-DISCIPLINE-01), PANIC-REGISTERED-01[-SCANNER-FIXTURES], ARCHTEST-MODULE-PATH-FUNNEL, FENCE-TOKEN-MINT-FUNNEL, METADATATEST-IMPORT-SCOPE, FIXTURE-CELLID-TYPED-BUILDER, and ROOT-MODULE-NO-REPLACE-01 (root go.mod has no replace/exclude — external-consumability promise, #1723); runs the listed invariant `Test*` functions in a single shared-resolver `go test` invocation. The authoritative set is the `-run` regex in the script (guarded by `ARCHTEST-INVARIANTS-COVERAGE-01`) |
 | `verify-local-compose.sh` | `docker-compose.local.yml` structural checks / `Dockerfile.corebundle` JWT env-set guard / Makefile target / `.gitignore` `.env.local` |
+| `verify-rules-governance.sh` | `.claude/rules/gocell/*.md` must stay concise and future-facing (`AGENT-RULES-GOVERNANCE-01`) |
 | `verify-scaffold-reject.sh` | `gocell scaffold slice` rejects kebab-case names |
 | `verify-shellcheck.sh` | `shellcheck` lints every `*.sh` under `scripts/ hack/ tests/`. Disabled lints `SC1090,SC1091,SC2230` mirror `kubernetes/kubernetes hack/verify-shellcheck.sh`. Replaces the regex-only `verify-shell-safety.sh` from PR #350 |
 | `verify-supply-chain-clean.sh` | drift detection: blocks `--exclude/--ignore/-skip` flags + `.govulncheckignore` / `.semgrepignore` / CodeQL `paths-ignore` workarounds |

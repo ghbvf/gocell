@@ -54,11 +54,28 @@ WORKTREE="$(git rev-parse --show-toplevel)/worktrees/review-pr<N>"
 
 ---
 
-## 阶段 3：分级表
+## 阶段 3：PR 元数据与规则上下文
+
+主 agent 必须先取一次 PR 元数据，供所有档位共用：
+
+```bash
+gh pr view <N> --json title,body,files,headRefOid
+```
+
+以下读取全部以 `$WORKTREE` 为根；`gh pr view.files` 只提供 repo-relative path
+输入，不作为文件内容来源。
+
+必读：CLAUDE.md + `docs/guides/agent-instruction-surfaces.md` +
+`.github/project-template/PROJECT.md` §3（P/Cx 评级单源）+
+`.claude/rules/gocell/*.md`。rules 已瘦身，pr-review 阶段全量读取，避免本审查流程因条件过滤漏加载规则。
+
+---
+
+## 阶段 3.5：分级表
 
 **派发档位（reviewer 数 + 维度切分）单源 = `.claude/agents/reviewer.md` §派发分档**，按阶段 2 的 diff 行数定档（区间左闭右开，边界归更高档）。
 
-pr-review 的 `diff < 200` 约定：不派发 sub-agent，主 agent 在自身上下文按 reviewer.md（六维度 / Finding 格式 / 评级）+ PROJECT.md §3 评级 rubric，在 `$WORKTREE` 上 Read/Grep 自审，直接进入阶段 5。`diff ≥ 200` 按 §派发分档 派 2/3/6 个 reviewer。
+pr-review 的 `diff < 200` 约定：不派发 sub-agent，主 agent 在阶段 3 的共享上下文内按 reviewer.md（六维度 / Finding 格式 / 评级）+ PROJECT.md §3 评级 rubric，在 `$WORKTREE` 上 Read/Grep 自审，直接进入阶段 5。`diff ≥ 200` 按 §派发分档 派 2/3/6 个 reviewer。
 
 ---
 
@@ -74,7 +91,7 @@ pr-review 的 `diff < 200` 约定：不派发 sub-agent，主 agent 在自身上
 - 工作目录 `$WORKTREE` 绝对路径，所有 Read/Grep 路径前缀 `$WORKTREE/`
 - Finding 输出的 `文件:行号` 必须是 **repo-relative**（去掉 `$WORKTREE/` 与 `worktrees/<name>/` 前缀），便于主 agent 汇总后排版
 - 分配的维度子集（见 reviewer.md §派发分档）
-- 必读：CLAUDE.md + `.claude/rules/gocell/*.md` + `.github/project-template/PROJECT.md` §3（P/Cx 评级单源）
+- 必读：阶段 3 的共享上下文和全部 `.claude/rules/gocell/*.md`。
 - Finding 格式、Cx 分级、输出契约 → 沿用 `.claude/agents/reviewer.md`
 
 ---
@@ -107,7 +124,7 @@ pr-review 的 `diff < 200` 约定：不派发 sub-agent，主 agent 在自身上
    - `**F{n}** [P·Cx·维度] repo-relative-path:line → 簇 C{m}`
    - 缩进 2 空格的摘要 ≤ 60 字，纯文本，禁反引号包裹中文短语；详细建议放根因簇视图
 3. **复杂度汇总** — 按根因簇 + 按 Finding 两套：`Cx1: N / Cx2: N / Cx3: N / Cx4: N`
-4. **修复分流** — Cx1/Cx2 簇 → `/fix`；Cx3/Cx4 簇 → "需人工决策" + 三级方案种子（最小/彻底/重构）。若 PR body（阶段 4 已取）含 GitHub closing keyword（`close[sd]?` / `fix(e[sd])?` / `resolve[sd]?` / `refs`，大小写不敏感）后跟 `#<N>`，分流条目附 `← issue #<N>`
+4. **修复分流** — Cx1/Cx2 簇 → `/fix`；Cx3/Cx4 簇 → "需人工决策" + 三级方案种子（最小/彻底/重构）。若 PR body（阶段 3 已取）含 GitHub closing keyword（`close[sd]?` / `fix(e[sd])?` / `resolve[sd]?` / `refs`，大小写不敏感）后跟 `#<N>`，分流条目附 `← issue #<N>`
 5. **总体结论** — `通过 / 需修复 / 需讨论` + 一句话理由
 
 输出前自检：① 每个根因簇都 Read 过代表文件？② 根因到了根本层（不停在症状）？③ 系统性判定有 Grep 证据？— 任一不通过 → 补做。
