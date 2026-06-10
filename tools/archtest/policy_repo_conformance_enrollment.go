@@ -85,6 +85,9 @@ func hasPolicyConformanceCall(file *ast.File, info *types.Info) bool {
 func resolvePolicyRepoIfaceAndImpls(t *testing.T, tags []string, root string) (*types.Interface, []*types.Package) {
 	t.Helper()
 	prodPatterns := prodscan.Patterns(root)
+	// corecells is a separate go module, so prodscan.Patterns's root-relative
+	// ./... does not cross the module boundary into it — the explicit
+	// ./corecells/... is required to load the iface + impls in one packages.Load.
 	ifacePatterns := append([]string{"./corecells/..."}, prodPatterns...)
 
 	var policyRepoIface *types.Interface
@@ -130,6 +133,9 @@ func lookupPolicyRepoIface(pkg *types.Package) *types.Interface {
 func scanPolicyConformanceEnrollments(t *testing.T, tags []string, root string) map[string]bool {
 	t.Helper()
 	enrolledPkgs := make(map[string]bool)
+	// corecells is a separate go module, so prodscan.Patterns's root-relative
+	// ./... does not cross the module boundary into it — the explicit
+	// ./corecells/... is required to load the iface + impls in one packages.Load.
 	testPatterns := append([]string{"./corecells/..."}, prodscan.Patterns(root)...)
 	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: tags}, testPatterns),
 		func(p *Pass) []Diagnostic {

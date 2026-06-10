@@ -102,6 +102,8 @@ func matchCellPath(path string) (string, bool) {
 	if len(parts) == 3 && parts[0] == "cells" && parts[2] == "cell.yaml" {
 		return parts[1], true
 	}
+	// corecells/ branch: serves no-manifest/conventional mode (unit tests via
+	// NewLocatorFS without manifest); production uses manifest mode instead.
 	if len(parts) == 3 && parts[0] == "corecells" && parts[2] == "cell.yaml" {
 		return parts[1], true
 	}
@@ -121,6 +123,8 @@ func matchSlicePath(path string) (cellDir string, ok bool) {
 	if len(parts) == 5 && parts[0] == "cells" && parts[2] == "slices" && parts[4] == "slice.yaml" {
 		return parts[1], true
 	}
+	// corecells/ branch: serves no-manifest/conventional mode (unit tests via
+	// NewLocatorFS without manifest); production uses manifest mode instead.
 	if len(parts) == 5 && parts[0] == "corecells" && parts[2] == "slices" && parts[4] == "slice.yaml" {
 		return parts[1], true
 	}

@@ -261,6 +261,68 @@ func TestParentFieldPath(t *testing.T) {
 	}
 }
 
+// TestCanonicalCellID_Corecells verifies that canonicalCellID recognizes the
+// corecells flat layout (corecells/<id>/cell.yaml) and still accepts the
+// conventional cells/ layout. Both must return the correct cell ID. Corecells
+// coverage matters because the resolveFile path in locator.go dispatches
+// through this function, and a mis-classified corecells path silently falls
+// through to the raw-file fallback, producing (0,0) locations.
+func TestCanonicalCellID_Corecells(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		file   string
+		wantID string
+		wantOK bool
+	}{
+		{"corecells/accesscore/cell.yaml", "accesscore", true},
+		{"corecells/auditcore/cell.yaml", "auditcore", true},
+		{"cells/billing/cell.yaml", "billing", true},
+		// Wrong segment count or missing cell.yaml → no match.
+		{"corecells/cell.yaml", "", false},
+		{"corecells/accesscore/slices/s/cell.yaml", "", false},
+		{"contracts/http/foo/v1/contract.yaml", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.file, func(t *testing.T) {
+			id, ok := canonicalCellID(tc.file)
+			assert.Equal(t, tc.wantOK, ok, "ok mismatch for %q", tc.file)
+			if ok {
+				assert.Equal(t, tc.wantID, id, "id mismatch for %q", tc.file)
+			}
+		})
+	}
+}
+
+// TestCanonicalSliceKey_Corecells verifies that canonicalSliceKey recognizes
+// the corecells flat layout (corecells/<cell>/slices/<slice>/slice.yaml) and
+// still accepts the conventional cells/ layout. Both must return the correct
+// "<cellID>/<sliceID>" composite key used by sliceMetaFile to look up SliceMeta.
+func TestCanonicalSliceKey_Corecells(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		file    string
+		wantKey string
+		wantOK  bool
+	}{
+		{"corecells/accesscore/slices/sessionlogin/slice.yaml", "accesscore/sessionlogin", true},
+		{"corecells/auditcore/slices/auditappend/slice.yaml", "auditcore/auditappend", true},
+		{"cells/billing/slices/query/slice.yaml", "billing/query", true},
+		// Wrong segment count → no match.
+		{"corecells/accesscore/slice.yaml", "", false},
+		{"corecells/accesscore/slices/slice.yaml", "", false},
+		{"contracts/http/foo/v1/contract.yaml", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.file, func(t *testing.T) {
+			key, ok := canonicalSliceKey(tc.file)
+			assert.Equal(t, tc.wantOK, ok, "ok mismatch for %q", tc.file)
+			if ok {
+				assert.Equal(t, tc.wantKey, key, "key mismatch for %q", tc.file)
+			}
+		})
+	}
+}
+
 // TestValidator_Locate_FallsBackToParentForMissingLeaf is the CH-03
 // regression: when a rule fires *because* a leaf field is absent
 // (responses[401] declared without a schemaRef), locate must walk up to

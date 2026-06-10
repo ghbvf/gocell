@@ -287,6 +287,41 @@ func TestClassifier_InternalUnknownDistinct(t *testing.T) {
 	}
 }
 
+// TestInternalLayerByDir_CorecellsEntry locks the presence of the
+// "corecells" entry in internalLayerByDir. cellPrefixFor correctness silently
+// depends on this mapping: if the entry were removed, all corecells Cell()
+// calls would return "" (no layer match → no cell prefix → empty cell ID).
+// This test is intentionally a hard assertion on the map key so any "cleanup"
+// that drops the entry turns CI red rather than silently disabling the
+// corecells governance rules.
+func TestInternalLayerByDir_CorecellsEntry(t *testing.T) {
+	t.Parallel()
+
+	// Direct map assertion — the entry must exist and be LayerCells.
+	got, ok := internalLayerByDir["corecells"]
+	if !ok {
+		t.Fatal(`internalLayerByDir["corecells"] entry missing; ` +
+			"cellPrefixFor correctness depends on this mapping — " +
+			"removing it silently drops all corecells Cell() results to \"\"")
+	}
+	if got != LayerCells {
+		t.Fatalf(`internalLayerByDir["corecells"] = %q, want %q; `+
+			"corecells must map to LayerCells", got, LayerCells)
+	}
+
+	// End-to-end: a corecells path must classify as LayerCells and yield a
+	// non-empty Cell() under a single-module classifier (the common unit-test
+	// setup where the whole repo is one module).
+	c := singleModuleClassifier()
+	path := testModule + "/corecells/accesscore/internal/domain"
+	if layer := c.Layer(path); layer != LayerCells {
+		t.Errorf("Layer(%q) = %q, want %q", path, layer, LayerCells)
+	}
+	if cell := c.Cell(path); cell == "" {
+		t.Errorf("Cell(%q) = \"\", want non-empty; corecells cell ID must be derivable", path)
+	}
+}
+
 func TestIsThirdParty(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

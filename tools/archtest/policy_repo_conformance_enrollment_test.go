@@ -81,6 +81,9 @@ func TestPolicyRepoConformanceEnrollment_REDFixture(t *testing.T) {
 
 	// ─── Load production iface + impls ─────────────────────────────────────
 	prodPatterns := prodscan.Patterns(root)
+	// corecells is a separate go module, so prodscan.Patterns's root-relative
+	// ./... does not cross the module boundary into it — the explicit
+	// ./corecells/... is required to load the iface + impls in one packages.Load.
 	ifacePatterns := append([]string{"./corecells/..."}, prodPatterns...)
 
 	var policyRepoIface *types.Interface

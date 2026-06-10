@@ -45,6 +45,8 @@ modules:
   # cross-check). Its cells live DIRECTLY under the module root (corecells/<id>/),
   # so the module-relative include globs have no cells/ infix — unlike the root
   # module (which no longer holds platform cells) or examples/<id> below.
+  # contracts/journeys/assemblies intentionally stay in the root module
+  # (path: .) and are not declared under this entry.
   - path: corecells
     includes:
       cells:

@@ -131,6 +131,8 @@ func CheckServiceownedHandlerOwnerCheck01(t *testing.T, _ ConfigForExternalCell)
 	allDiags = append(allDiags, missingFileDiags...)
 
 	seenRels := map[string]bool{}
+	// ./corecells/... covers the platform cells' serviceOwned slices; example
+	// cells' serviceOwned contracts are intentionally out of scope for this rule.
 	scanDiags := Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
 		[]string{"./corecells/...", "./runtime/auth/..."}),
 		func(pass *Pass) []Diagnostic {

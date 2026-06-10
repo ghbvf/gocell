@@ -93,11 +93,27 @@ func TestPlatformCellScanCoverage01(t *testing.T) {
 func TestPlatformCellScanCoverage01_AntiVacuity(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
+
+	// Case A: non-existent dir — DirsScope must return zero files (or an error).
 	files, err := DirsScope(root, []string{"corecells-does-not-exist-xyz"}).Files()
 	if err != nil {
-		return // erroring on a missing root also proves dir-sensitivity
+		// Erroring on a missing root also proves dir-sensitivity.
+	} else if len(files) != 0 {
+		t.Fatalf("non-existent scan root matched %d files; assertion ② would be vacuous", len(files))
 	}
-	if len(files) != 0 {
-		t.Fatalf("bogus scan root matched %d files; assertion ② would be vacuous", len(files))
+
+	// Case B: existing but EMPTY dir (no .go files) — DirsScope must return zero
+	// files. This rules out a global-scan fallback that would satisfy the
+	// non-emptiness check regardless of which dir is targeted.
+	emptyDir := t.TempDir() // guaranteed to exist and have no .go files
+	// DirsScope takes a parent root + relative dir names; use the temp dir as
+	// root with "." as the only dir so it scans only the (empty) temp dir.
+	files2, err2 := DirsScope(emptyDir, []string{"."}).Files()
+	if err2 != nil {
+		// An error is acceptable — it also proves the scan is not global.
+		return
+	}
+	if len(files2) != 0 {
+		t.Fatalf("empty existing dir matched %d files; DirsScope must not fall back to a global scan", len(files2))
 	}
 }

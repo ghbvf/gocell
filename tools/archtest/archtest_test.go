@@ -130,23 +130,27 @@ func isInternal(importPath string) bool {
 
 // cellOwnedSubpackages lists public cell subpackages that are semantically
 // owned by a single cell and must not be imported by sibling cells. Each
-// entry's key is the relative import path of the owned subpackage (without
-// module prefix); the value is the relative prefix of the owning cell tree
-// that is exempt from the rule.
+// entry's key is the CELL-RELATIVE path "<cellID>/<subpath-within-cell>"; the
+// value is the owning cellID. Keying cell-relative (via [Classifier.Cell] +
+// [relWithinCell]) makes the rule module-agnostic: it matches identically
+// whether the owning cell's module is loaded standalone (owner == that module)
+// or in the workspace where corecells is a separate go.work module (#1560) —
+// the prior repo-relative "corecells/..." keys silently failed to match the
+// owner-relative path the workspace classifier produces.
 //
 // This is LAYER-06's data table: unlike LAYER-05 (which catches any
 // cells/X/Y/internal import), LAYER-06 targets public subpackages whose
 // coupling to the owning cell is as strong as internal/ but cannot use the
-// internal/ compiler guard — e.g. corecells/accesscore/initialadmin, which
-// must stay public so cmd/corebundle can wire it into composition, but
-// must not be imported by other cells.
+// internal/ compiler guard — e.g. accesscore/initialadmin, which must stay
+// public so cmd/corebundle can wire it into composition, but must not be
+// imported by other cells.
 //
 // cmd/ and examples/ are always exempt (composition roots and unrestricted
 // consumers respectively; see the layering conventions in archtest's doc.go).
 var cellOwnedSubpackages = map[string]string{
-	"corecells/accesscore/configgetter": "corecells/accesscore/",
-	"corecells/accesscore/initialadmin": "corecells/accesscore/",
-	"corecells/configcore/postgres":     "corecells/configcore/",
+	"accesscore/configgetter": "accesscore",
+	"accesscore/initialadmin": "accesscore",
+	"configcore/postgres":     "configcore",
 }
 
 // checkLayering runs 4 metadata-aware layering rules (LAYER-05/06/09/10)
@@ -226,13 +230,18 @@ func checkLayering(cls kerneldepgraph.Classifier, g *kerneldepgraph.Graph) []vio
 }
 
 // matchCellOwnedSubpackage reports whether dep falls inside a cell-owned
-// public subpackage entry, returning the owner-tree prefix (with trailing
-// slash) when it does. Pure lookup — no exemption logic.
-func matchCellOwnedSubpackage(cls kerneldepgraph.Classifier, dep string) (ownerPrefix string, ok bool) {
-	impRel := relWithinOwner(cls, dep)
-	for ownedRel, ownerPrefix := range cellOwnedSubpackages {
-		if impRel == ownedRel || strings.HasPrefix(impRel, ownedRel+"/") {
-			return ownerPrefix, true
+// public subpackage entry, returning the owning cellID when it does. Keyed on
+// the cell-relative path "<cellID>/<subpath>" (module-agnostic). Pure lookup —
+// no exemption logic.
+func matchCellOwnedSubpackage(cls kerneldepgraph.Classifier, dep string) (ownerCell string, ok bool) {
+	cell := cls.Cell(dep)
+	if cell == "" {
+		return "", false
+	}
+	depRel := cell + "/" + relWithinCell(cls, dep)
+	for ownedRel, owner := range cellOwnedSubpackages {
+		if depRel == ownedRel || strings.HasPrefix(depRel, ownedRel+"/") {
+			return owner, true
 		}
 	}
 	return "", false
@@ -243,27 +252,24 @@ func matchCellOwnedSubpackage(cls kerneldepgraph.Classifier, dep string) (ownerP
 // examples/ are universally unrestricted composition-root layers; the owning
 // cell's tree may import freely. cellmodules/ is the importable Composition Root
 // layer (#1085 LayerCellModules) and must have the same exemptions as cmd/.
-func isCellOwnedSubpackageExempt(cls kerneldepgraph.Classifier, srcPath, srcLayer, ownerPrefix string) bool {
+func isCellOwnedSubpackageExempt(cls kerneldepgraph.Classifier, srcPath, srcLayer, ownerCell string) bool {
 	if srcLayer == "cmd" || srcLayer == "cellmodules" || srcLayer == "examples" {
 		return true
 	}
-	srcRel := relWithinOwner(cls, srcPath)
-	// ownerRoot covers the case where srcRel is the cell root itself
-	// (e.g. "corecells/accesscore") which HasPrefix("corecells/accesscore/") would
-	// reject due to the missing trailing slash.
-	ownerRoot := strings.TrimSuffix(ownerPrefix, "/")
-	return srcRel == ownerRoot || strings.HasPrefix(srcRel, ownerPrefix)
+	// The owning cell's own tree (any package under that cell) may import freely.
+	// Compared by cell identity so it is module-agnostic (workspace vs standalone).
+	return cls.Cell(srcPath) == ownerCell
 }
 
 // checkCellOwnedSubpackage returns a LAYER-06 violation if imp is a cell-owned
 // public subpackage that src is not permitted to import. Returns nil when the
 // import is allowed or unrelated.
 func checkCellOwnedSubpackage(cls kerneldepgraph.Classifier, srcPath, imp, srcLayer string) *violation {
-	ownerPrefix, ok := matchCellOwnedSubpackage(cls, imp)
+	ownerCell, ok := matchCellOwnedSubpackage(cls, imp)
 	if !ok {
 		return nil
 	}
-	if isCellOwnedSubpackageExempt(cls, srcPath, srcLayer, ownerPrefix) {
+	if isCellOwnedSubpackageExempt(cls, srcPath, srcLayer, ownerCell) {
 		return nil
 	}
 	return &violation{
@@ -271,8 +277,8 @@ func checkCellOwnedSubpackage(cls kerneldepgraph.Classifier, srcPath, imp, srcLa
 		Pkg:    srcPath,
 		Import: imp,
 		Message: fmt.Sprintf(
-			"LAYER-06: %s imports %s (cell-owned subpackage; only %s* / cmd/* / examples/* may import it)",
-			srcPath, imp, ownerPrefix,
+			"LAYER-06: %s imports %s (cell-owned subpackage; only the %s cell / cmd/* / examples/* may import it)",
+			srcPath, imp, ownerCell,
 		),
 	}
 }
@@ -656,7 +662,7 @@ func TestLayeringRules(t *testing.T) {
 }
 
 // filterCellPackages returns the subset of pkgs whose path is under
-// <module>/cells/.
+// <module>/<PlatformCellsDir>/ (corecells/) — platform cells only.
 // double-load pattern.
 func filterCellPackages(module string, pkgs []*packages.Package) []*packages.Package {
 	prefix := module + "/" + PlatformCellsDir + "/"
@@ -1432,6 +1438,45 @@ func TestLayeringRules_LAYER05T_NegativeProbe(t *testing.T) {
 		"LAYER-05T message must name the intermediate package")
 }
 
+// TestLayeringRules_LAYER05T_NegativeProbe_Corecells mirrors
+// TestLayeringRules_LAYER05T_NegativeProbe for the corecells FLAT layout
+// (corecells/<cell>/... rather than cells/<cell>/...). The laundering pattern
+// is: corecells/auditcore → pkg/util → corecells/accesscore/internal/domain.
+// Proves the transitive-closure detection fires identically whether cells use
+// the conventional "cells/" prefix or the corecells flat layout.
+func TestLayeringRules_LAYER05T_NegativeProbe_Corecells(t *testing.T) {
+	t.Parallel()
+
+	const module = PlatformModulePath
+	auditcore := module + "/corecells/auditcore"
+	util := module + "/pkg/util"
+	accesscoreInternal := module + "/corecells/accesscore/internal/domain"
+
+	g := depgraph.FromPackages([]string{module}, []*packages.Package{
+		synthPkg(auditcore, util),
+		synthPkg(util, accesscoreInternal),
+		synthPkg(accesscoreInternal),
+	})
+
+	violations := checkTransitiveCrossCellInternal(kerneldepgraph.NewClassifier([]string{module}), g)
+	// Filter to auditcore only (util also reaches the internal pkg but is pkg/ layer).
+	var auditViolations []violation
+	for _, v := range violations {
+		if v.Pkg == auditcore {
+			auditViolations = append(auditViolations, v)
+		}
+	}
+	require.Len(t, auditViolations, 1,
+		"LAYER-05T corecells probe: must flag auditcore → util → accesscore/internal/domain (got: %v)", violations)
+	assert.Equal(t, "LAYER-05T", auditViolations[0].Rule)
+	assert.Equal(t, auditcore, auditViolations[0].Pkg)
+	assert.Equal(t, accesscoreInternal, auditViolations[0].Import)
+	assert.Contains(t, auditViolations[0].Message, "via: ",
+		"LAYER-05T corecells message must include via: clause")
+	assert.Contains(t, auditViolations[0].Message, util,
+		"LAYER-05T corecells message must name the intermediate package")
+}
+
 // TestLayeringRules_LAYER06T_NegativeProbe verifies the transitive form of
 // LAYER-06: a sibling cell must not reach a cell-owned public subpackage
 // even via an intermediate utility. accesscore/initialadmin is a real
@@ -1502,6 +1547,36 @@ func TestLayeringRules_LAYER09T_NegativeProbe(t *testing.T) {
 		"LAYER-09T message must include via: clause with the closure path")
 	assert.Contains(t, violations[0].Message, util,
 		"LAYER-09T message must name the intermediate package")
+}
+
+// TestLayeringRules_LAYER09T_NegativeProbe_Corecells mirrors
+// TestLayeringRules_LAYER09T_NegativeProbe for the corecells FLAT layout.
+// The laundering pattern is: corecells/auditcore → pkg/util → corecells/configcore/events.
+// Proves the transitive-closure detection fires for the corecells layout.
+func TestLayeringRules_LAYER09T_NegativeProbe_Corecells(t *testing.T) {
+	t.Parallel()
+
+	const module = PlatformModulePath
+	auditcore := module + "/corecells/auditcore"
+	util := module + "/pkg/util"
+	configcoreEvents := module + "/corecells/configcore/events"
+
+	g := depgraph.FromPackages([]string{module}, []*packages.Package{
+		synthPkg(auditcore, util),
+		synthPkg(util, configcoreEvents),
+		synthPkg(configcoreEvents),
+	})
+
+	violations := checkTransitiveCrossCellEvents(kerneldepgraph.NewClassifier([]string{module}), g)
+	require.Len(t, violations, 1,
+		"LAYER-09T corecells probe: must flag auditcore → util → configcore/events (got: %v)", violations)
+	assert.Equal(t, "LAYER-09T", violations[0].Rule)
+	assert.Equal(t, auditcore, violations[0].Pkg)
+	assert.Equal(t, configcoreEvents, violations[0].Import)
+	assert.Contains(t, violations[0].Message, "via: ",
+		"LAYER-09T corecells message must include via: clause")
+	assert.Contains(t, violations[0].Message, util,
+		"LAYER-09T corecells message must name the intermediate package")
 }
 
 // TestLoadModule_IntegrationTagPlumbing verifies that loadModule passes
