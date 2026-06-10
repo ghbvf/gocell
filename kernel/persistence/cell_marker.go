@@ -36,7 +36,7 @@ type CellTxManager interface {
 	// to scope. The real injection lives in adapters/postgres.TxManager.ApplyTenantScope.
 	//
 	// canonicalTenantID is the canonical lowercase-UUID tenant string (the typed
-	// pkg/tenant.TenantID is enforced upstream at the cells/accesscore/internal/scopedtx
+	// pkg/tenant.TenantID is enforced upstream at the corecells/accesscore/internal/scopedtx
 	// funnel; this kernel boundary takes a string so kernel/persistence stays free of
 	// pkg/tenant's transitive deps — google/uuid — which would otherwise ripple into
 	// every satellite module's go.sum). adapters/postgres re-validates it via

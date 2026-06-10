@@ -79,8 +79,8 @@ import (
 // referenced (§A11 / §A12) and the reader must justify why the read cannot
 // be expressed as a wire-uniform comparison inside the listed packages.
 var revokedAtAllowlist = []string{
-	"cells/accesscore/slices/sessionvalidate/",
-	"cells/accesscore/slices/sessionrefresh/",
+	"corecells/accesscore/slices/sessionvalidate/",
+	"corecells/accesscore/slices/sessionrefresh/",
 	"runtime/auth/session/", // field-defining package; internal session model logic
 }
 
@@ -108,7 +108,7 @@ func TestSessionRevokedFieldAccess_Upstream_01(t *testing.T) {
 
 	var violations []string
 	_ = Run(t, Typed(TypedOpts{}, []string{
-		"./cells/...",
+		"./corecells/...",
 		"./runtime/...",
 		"./cmd/...",
 	}),
@@ -138,7 +138,7 @@ func TestSessionRevokedFieldAccess_Upstream_01(t *testing.T) {
 
 	verifyRevokedAtReadRedFixtureDetected(
 		t,
-		"./cells/accesscore/internal/credentialauthority/testdata/session_revoked_field_red",
+		"./corecells/accesscore/internal/credentialauthority/testdata/session_revoked_field_red",
 		"SESSION-REVOKED-FIELD-ACCESS-01 RED fixture",
 	)
 }
@@ -209,14 +209,14 @@ func verifyRevokedAtReadRedFixtureDetected(t *testing.T, pattern, label string) 
 // reflect.Value.FieldByName("RevokedAt") does NOT appear in production code
 // under cells/ + runtime/ + cmd/, confirming the reflect blind spot is not
 // exercised. (CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01's reflect blind-spot
-// test scopes to cells/accesscore + cmd; this one extends the same check
+// test scopes to corecells/accesscore + cmd; this one extends the same check
 // to runtime/auth/session so the field-defining package is also covered.)
 func TestSessionRevokedFieldAccess_BlindSpot_ReflectFieldByName(t *testing.T) {
 	t.Parallel()
 
 	var violations []string
 	_ = Run(t, Typed(TypedOpts{}, []string{
-		"./cells/...",
+		"./corecells/...",
 		"./runtime/...",
 		"./cmd/...",
 	}),
@@ -262,7 +262,7 @@ func TestSessionRevokedFieldAccess_BlindSpot_UnsafePointerImport(t *testing.T) {
 
 	var violations []string
 	_ = Run(t, Typed(TypedOpts{}, []string{
-		"./cells/...",
+		"./corecells/...",
 		"./cmd/...",
 	}),
 		func(p *Pass) []Diagnostic {

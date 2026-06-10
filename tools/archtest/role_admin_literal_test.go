@@ -56,11 +56,14 @@ var roleAdminAllowRels = []string{
 }
 
 // searchDirsRoleAdmin are the directories scanned by both ROLE-ADMIN-LITERAL rules.
-var searchDirsRoleAdmin = []string{"runtime", "cells", "adapters", "cmd"}
+// The platform-cell root is [PlatformCellsDir] (corecells since #1560), not the
+// stale literal "cells"; this keeps the const-scan scope aligned with the
+// typed-scan's "./corecells/..." so neither silently skips platform cells.
+var searchDirsRoleAdmin = []string{"runtime", PlatformCellsDir, "adapters", "cmd"}
 
 // TestRoleAdminLiteralIsForbidden enforces ROLE-ADMIN-LITERAL-01.
 //
-// It walks production .go files under runtime/, cells/, adapters/, and cmd/,
+// It walks production .go files under runtime/, corecells/, adapters/, and cmd/,
 // scanning top-level const declarations for any identifier whose name
 // contains "Admin" or "admin" and whose value is the string literal "admin".
 // The only allowed files are listed in roleAdminAllowRels.
@@ -159,7 +162,7 @@ func TestRoleAdminCallSiteLiteralIsForbidden(t *testing.T) {
 	// tests=false matches the original DirsScope(searchDirsRoleAdmin) which
 	// excluded *_test.go by default.
 	diags := Run(t, Typed(TypedOpts{}, []string{
-		"./runtime/...", "./cells/...", "./adapters/...", "./cmd/...",
+		"./runtime/...", "./corecells/...", "./adapters/...", "./cmd/...",
 	}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {

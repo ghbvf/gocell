@@ -4,7 +4,7 @@
 #   Set-Cookie: __Host-gocell_rt=<refreshToken>; HttpOnly; Secure; SameSite=Strict;
 #               Path=/; Max-Age=<refresh TTL in seconds>
 #     Condition: emitted on 200 only (4xx/5xx leave the cookie untouched).
-#     Source:    httpcookie.Middleware (cells/accesscore/internal/httpcookie)
+#     Source:    httpcookie.Middleware (corecells/accesscore/internal/httpcookie)
 #                wraps the response writer and writes the Set-Cookie header
 #                before the status is committed.
 #     Naming:    the __Host- prefix is browser-enforced host-binding (requires

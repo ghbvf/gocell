@@ -11,7 +11,7 @@ package archtest
 // # SEED-ROLE-IFACE-01
 //
 // Production code (non *_test.go) must not name the concrete
-// `*mem.RoleRepository` type from cells/accesscore/internal/mem in any
+// `*mem.RoleRepository` type from corecells/accesscore/internal/mem in any
 // AST position: function/method signatures, struct fields, type aliases,
 // var declarations, or selector expressions of the form `mem.RoleRepository`.
 //
@@ -37,7 +37,7 @@ package archtest
 //   - Embedding via interface embedding of mem.RoleRepository — not
 //     possible: RoleRepository is a *struct*, not an interface. Compile
 //     would fail. No archtest coverage needed.
-//   - Dot-imports (`import . "cells/accesscore/internal/mem"`) — NOT
+//   - Dot-imports (`import . "corecells/accesscore/internal/mem"`) — NOT
 //     covered by this archtest (memPackageAlias returns "." which is not
 //     a valid Go selector base; bare `RoleRepository` Ident would slip
 //     past the SelectorExpr scan). Out-of-scope here because GoCell's
@@ -49,7 +49,7 @@ package archtest
 //     without a "mem." qualifier, which this archtest does not flag.
 //
 // Not registered in StandardCellRules: the rule names a gocell-internal package
-// path (cells/accesscore/internal/mem) with no ConfigForExternalCell
+// path (corecells/accesscore/internal/mem) with no ConfigForExternalCell
 // consumer-extension → vacuous-green in an external module; kept importable &
 // module-path-agnostic but constrains GoCell's own layout only.
 //
@@ -73,12 +73,12 @@ import (
 // memPackagePath is the import path of the mem package whose concrete
 // *RoleRepository type production code must not name. Derived from
 // PlatformModulePath (ARCHTEST-MODULE-PATH-FUNNEL-01): no bare literal.
-const memPackagePath = PlatformModulePath + "/cells/accesscore/internal/mem"
+const memPackagePath = PlatformCellsModulePath + "/accesscore/internal/mem"
 
 // CheckSeedRoleIface01 runs SEED-ROLE-IFACE-01 over the running module and
 // returns its diagnostics. It scans every production .go file (entire module,
 // excluding _test.go, generated, vendor, worktrees, testdata, internal/mem
-// itself) and reports any file that imports cells/accesscore/internal/mem AND
+// itself) and reports any file that imports corecells/accesscore/internal/mem AND
 // references mem.RoleRepository in any AST position. It is the importable rule
 // body; GoCell's TestSEED_ROLE_IFACE_01 calls it directly — single source, no
 // parallel rule body.
@@ -101,7 +101,7 @@ func CheckSeedRoleIface01(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 		// future contributor *could* in theory import the package by its
 		// full path from inside the same module subtree. We exempt only
 		// the mem directory itself, not "anywhere under accesscore".
-		if strings.Contains(rel, "/cells/accesscore/internal/mem/") {
+		if strings.Contains(rel, "/corecells/accesscore/internal/mem/") {
 			continue
 		}
 		// scanForMemRoleRepositoryUsage already returns structured
@@ -113,7 +113,7 @@ func CheckSeedRoleIface01(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 }
 
 // scanForMemRoleRepositoryUsage returns one structured Diagnostic per violation
-// in the file at path when it (a) imports cells/accesscore/internal/mem and
+// in the file at path when it (a) imports corecells/accesscore/internal/mem and
 // (b) references mem.RoleRepository via any selector expression OR type alias.
 // Each Diagnostic carries the repo-relative path (Rel) and 1-based Line so
 // Report renders an actionable "<rel>:<line>" location; the rule-id prefix is
@@ -204,7 +204,7 @@ func isMemRoleRepositoryExpr(expr ast.Expr, alias string) bool {
 	return false
 }
 
-// memPackageAlias returns the local alias for cells/accesscore/internal/mem
+// memPackageAlias returns the local alias for corecells/accesscore/internal/mem
 // in f, or "" when not imported. Handles explicit aliases, default name "mem",
 // and the blank "_" import.
 func memPackageAlias(f *ast.File) string {

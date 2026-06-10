@@ -29,7 +29,7 @@ import (
 // container-start cost per sub-test. This matches the shared-container
 // pattern used by adapters/postgres command_queue conformance.
 //
-// ref: cells/accesscore/internal/adapters/postgres/user_repo_conformance_integration_test.go
+// ref: corecells/accesscore/internal/adapters/postgres/user_repo_conformance_integration_test.go
 func TestPGDeviceRepository_Conformance(t *testing.T) {
 	testutil.RequireDocker(t)
 	pool, txMgr, terminate := setupSharedDeviceRepoPG(t)
@@ -128,7 +128,7 @@ func TestPGDeviceRepository_RepoReadinessConformance(t *testing.T) {
 }
 
 // testAdapterMigrationsFS returns the shared adapters/postgres migration FS.
-// Mirrors cells/accesscore/internal/adapters/postgres helpers — Go _test.go
+// Mirrors corecells/accesscore/internal/adapters/postgres helpers — Go _test.go
 // files cannot be imported across packages, so we duplicate the accessor.
 func testAdapterMigrationsFS(t testing.TB) fs.FS {
 	t.Helper()

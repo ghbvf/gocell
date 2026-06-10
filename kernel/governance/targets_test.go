@@ -24,14 +24,14 @@ func targetsProject() *metadata.ProjectMeta {
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
-				File:             "cells/" + metadatatest.CellIDAccessCore + "/cell.yaml",
+				File:             "corecells/" + metadatatest.CellIDAccessCore + "/cell.yaml",
 			},
 			metadatatest.CellIDAuditCore: {
 				ID:               metadatatest.CellIDAuditCore,
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
-				File:             "cells/" + metadatatest.CellIDAuditCore + "/cell.yaml",
+				File:             "corecells/" + metadatatest.CellIDAuditCore + "/cell.yaml",
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
@@ -42,7 +42,7 @@ func targetsProject() *metadata.ProjectMeta {
 					{Contract: "http.auth.login.v1", Role: "serve"},
 					{Contract: "event.session.created.v1", Role: "publish"},
 				},
-				File: "cells/" + metadatatest.CellIDAccessCore + "/slices/session-login/slice.yaml",
+				File: "corecells/" + metadatatest.CellIDAccessCore + "/slices/session-login/slice.yaml",
 			},
 			"accesscore/session-refresh": {
 				ID:            "session-refresh",
@@ -50,7 +50,7 @@ func targetsProject() *metadata.ProjectMeta {
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "call"},
 				},
-				File: "cells/" + metadatatest.CellIDAccessCore + "/slices/session-refresh/slice.yaml",
+				File: "corecells/" + metadatatest.CellIDAccessCore + "/slices/session-refresh/slice.yaml",
 			},
 			"auditcore/audit-write": {
 				ID:            "audit-write",
@@ -58,7 +58,7 @@ func targetsProject() *metadata.ProjectMeta {
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "event.session.created.v1", Role: "subscribe"},
 				},
-				File: "cells/" + metadatatest.CellIDAuditCore + "/slices/audit-write/slice.yaml",
+				File: "corecells/" + metadatatest.CellIDAuditCore + "/slices/audit-write/slice.yaml",
 			},
 		},
 		Contracts: map[string]*metadata.ContractMeta{
@@ -111,7 +111,7 @@ func targetsProject() *metadata.ProjectMeta {
 func TestSelectFromFiles_SliceDirectory(t *testing.T) {
 	ts := NewTargetSelector(targetsProject())
 	result := ts.SelectFromFiles([]string{
-		"cells/accesscore/slices/session-login/handler.go",
+		"corecells/accesscore/slices/session-login/handler.go",
 	})
 
 	assert.Equal(t, []string{"accesscore/session-login"}, result.Slices)
@@ -122,9 +122,9 @@ func TestSelectFromFiles_SliceDirectory(t *testing.T) {
 
 func TestSelectFromFiles_CellDirectoryNonSlices(t *testing.T) {
 	ts := NewTargetSelector(targetsProject())
-	// A file directly under cells/accesscore (not in slices/) affects all slices of that cell.
+	// A file directly under corecells/accesscore (not in slices/) affects all slices of that cell.
 	result := ts.SelectFromFiles([]string{
-		"cells/accesscore/cell.yaml",
+		"corecells/accesscore/cell.yaml",
 	})
 
 	assert.Equal(t, []string{"accesscore/session-login", "accesscore/session-refresh"}, result.Slices)
@@ -149,9 +149,9 @@ func TestSelectFromFiles_ContractDirectory(t *testing.T) {
 func TestSelectFromFiles_MultipleFilesMergedAndDeduped(t *testing.T) {
 	ts := NewTargetSelector(targetsProject())
 	result := ts.SelectFromFiles([]string{
-		"cells/accesscore/slices/session-login/handler.go",
-		"cells/accesscore/slices/session-login/types.go", // duplicate slice
-		"cells/auditcore/slices/audit-write/writer.go",
+		"corecells/accesscore/slices/session-login/handler.go",
+		"corecells/accesscore/slices/session-login/types.go", // duplicate slice
+		"corecells/auditcore/slices/audit-write/writer.go",
 	})
 
 	assert.Equal(t, []string{"accesscore/session-login", "auditcore/audit-write"}, result.Slices)
@@ -189,7 +189,7 @@ func TestSelectFromFiles_UnknownCell(t *testing.T) {
 func TestSelectFromFiles_UnknownSlice(t *testing.T) {
 	ts := NewTargetSelector(targetsProject())
 	result := ts.SelectFromFiles([]string{
-		"cells/accesscore/slices/nonexistent-slice/handler.go",
+		"corecells/accesscore/slices/nonexistent-slice/handler.go",
 	})
 
 	// After M1 (#1082)'s Locator funnel, TargetSelector no longer tries to
@@ -256,7 +256,7 @@ func TestSelectFromFiles_EmptyProject(t *testing.T) {
 	ts := NewTargetSelector(project)
 
 	result := ts.SelectFromFiles([]string{
-		"cells/accesscore/slices/session-login/handler.go",
+		"corecells/accesscore/slices/session-login/handler.go",
 		"contracts/http/auth/login/v1/contract.yaml",
 	})
 
@@ -278,9 +278,9 @@ func TestSelectFromFiles_EmptyFileList(t *testing.T) {
 
 func TestSelectFromFiles_CellDirectoryDeepNonSlice(t *testing.T) {
 	ts := NewTargetSelector(targetsProject())
-	// A file under cells/accesscore/internal/ (not slices/) should affect all slices.
+	// A file under corecells/accesscore/internal/ (not slices/) should affect all slices.
 	result := ts.SelectFromFiles([]string{
-		"cells/accesscore/internal/repo/db.go",
+		"corecells/accesscore/internal/repo/db.go",
 	})
 
 	assert.Equal(t, []string{"accesscore/session-login", "accesscore/session-refresh"}, result.Slices)
@@ -384,14 +384,14 @@ func l0Project() *metadata.ProjectMeta {
 					{Cell: metadatatest.CellIDSharedCrypto, Reason: "hashing"},
 					{Cell: metadatatest.CellIDSharedValidate, Reason: "input validation"},
 				},
-				File: "cells/" + metadatatest.CellIDAccessCore + "/cell.yaml",
+				File: "corecells/" + metadatatest.CellIDAccessCore + "/cell.yaml",
 			},
 			metadatatest.CellIDAuditCore: {
 				ID:               metadatatest.CellIDAuditCore,
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				// no L0 dependencies
-				File: "cells/" + metadatatest.CellIDAuditCore + "/cell.yaml",
+				File: "corecells/" + metadatatest.CellIDAuditCore + "/cell.yaml",
 			},
 			metadatatest.CellIDBillingCore: {
 				ID:               metadatatest.CellIDBillingCore,
@@ -402,7 +402,7 @@ func l0Project() *metadata.ProjectMeta {
 				},
 				// NOT referenced by J-l0-test journey — used to test
 				// that journey changes don't trigger L0 propagation.
-				File: "cells/" + metadatatest.CellIDBillingCore + "/cell.yaml",
+				File: "corecells/" + metadatatest.CellIDBillingCore + "/cell.yaml",
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
@@ -418,17 +418,17 @@ func l0Project() *metadata.ProjectMeta {
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "serve"},
 				},
-				File: "cells/" + metadatatest.CellIDAccessCore + "/slices/session-login/slice.yaml",
+				File: "corecells/" + metadatatest.CellIDAccessCore + "/slices/session-login/slice.yaml",
 			},
 			"auditcore/audit-write": {
 				ID:            "audit-write",
 				BelongsToCell: metadatatest.CellIDAuditCore,
-				File:          "cells/" + metadatatest.CellIDAuditCore + "/slices/audit-write/slice.yaml",
+				File:          "corecells/" + metadatatest.CellIDAuditCore + "/slices/audit-write/slice.yaml",
 			},
 			"billingcore/payment": {
 				ID:            "payment",
 				BelongsToCell: metadatatest.CellIDBillingCore,
-				File:          "cells/" + metadatatest.CellIDBillingCore + "/slices/payment/slice.yaml",
+				File:          "corecells/" + metadatatest.CellIDBillingCore + "/slices/payment/slice.yaml",
 			},
 		},
 		Contracts: map[string]*metadata.ContractMeta{
@@ -470,7 +470,7 @@ func TestSelectFromFiles_L0DependencyTracking(t *testing.T) {
 		},
 		{
 			name:  "non-L0 cell change does not trigger L0 tracking",
-			files: []string{"cells/accesscore/slices/session-login/handler.go"},
+			files: []string{"corecells/accesscore/slices/session-login/handler.go"},
 			// accesscore is L2, so no L0 propagation happens.
 			wantSlices:    []string{"accesscore/session-login"},
 			wantCells:     []string{"accesscore"},

@@ -219,12 +219,10 @@ type sliceSubscriberEntry struct {
 	ContractID    string
 }
 
-// loadSliceSubscribers reads slice.yaml subscribe usages from cells/ and examples/.
-//
-//nolint:dupl // mirrors grpc_service_in_contract; different result type
+// loadSliceSubscribers reads slice.yaml subscribe usages from corecells/ and examples/.
 func loadSliceSubscribers(root string) ([]sliceSubscriberEntry, error) {
 	scope := DirsScope(
-		root, []string{"cells", "examples"},
+		root, platformAndExampleCellScanDirs(),
 		MatchRels(func(rel string) bool {
 			return strings.HasSuffix(rel, "/slice.yaml")
 		}),
@@ -259,7 +257,7 @@ func loadSliceSubscribers(root string) ([]sliceSubscriberEntry, error) {
 
 func loadSliceWebhookWiring(root string) (map[string]bool, error) {
 	scope := DirsScope(
-		root, []string{"cells", "examples"},
+		root, platformAndExampleCellScanDirs(),
 		MatchRels(func(rel string) bool {
 			return strings.HasSuffix(rel, "/slice.yaml")
 		}),
@@ -296,7 +294,7 @@ func loadSliceWebhookWiring(root string) (map[string]bool, error) {
 // ---------------------------------------------------------------------------
 
 func extractCellName(rel string) string {
-	const pfx = "cells/"
+	pfx := PlatformCellsDir + "/"
 	if !strings.HasPrefix(rel, pfx) {
 		return ""
 	}
@@ -312,7 +310,7 @@ func extractCellIDFromPkgPath(modPath, pkgPath string) string {
 	if !strings.HasPrefix(pkgPath, modPath+"/") {
 		return ""
 	}
-	const marker = "/cells/"
+	marker := "/" + PlatformCellsDir + "/"
 	idx := strings.Index(pkgPath, marker)
 	if idx < 0 {
 		return ""
@@ -367,9 +365,9 @@ func CheckImplDeclCover(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 	if err != nil {
 		t.Fatalf("IMPL-DECL-COVER-01: read module path: %v", err)
 	}
-	cellsPrefix := modPath + "/cells/"
+	cellsPrefix := modPath + "/" + PlatformCellsDir + "/"
 
-	scope := DirsScope(root, []string{"cells"}, MatchRels(func(rel string) bool {
+	scope := DirsScope(root, platformCellScanDirs(), MatchRels(func(rel string) bool {
 		return !strings.HasSuffix(rel, "_test.go") && !strings.Contains(rel, "/testdata/")
 	}))
 
@@ -615,7 +613,7 @@ func CheckHandlerDeclCover(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 	activeHTTPContracts := buildActiveHTTPContractSet(genHTTPSourceMap)
 
 	generatedHTTPPrefix := modPath + "/generated/contracts/http/"
-	cellsPrefix := modPath + "/cells/"
+	cellsPrefix := modPath + "/" + PlatformCellsDir + "/"
 	examplesPrefix := modPath + "/examples/"
 
 	genServiceIfaces, cellImplTypes, sawSatelliteExample, universeErr := collectHandlerTypeUniverse(
@@ -862,7 +860,7 @@ func collectDeadContractTypeUniverse(t *testing.T, root, modPath string) ([]dcIf
 	t.Helper()
 	generatedHTTPPrefix := modPath + "/generated/contracts/http/"
 	generatedCommandPrefix := modPath + "/generated/contracts/command/"
-	cellsPrefix := modPath + "/cells/"
+	cellsPrefix := modPath + "/" + PlatformCellsDir + "/"
 	examplesPrefix := modPath + "/examples/"
 
 	modules := findWorkspaceModules(t, root)

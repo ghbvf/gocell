@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	auditcore "github.com/ghbvf/gocell/cells/auditcore"
+	auditcore "github.com/ghbvf/gocell/corecells/auditcore"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"

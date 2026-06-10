@@ -24,8 +24,8 @@ func TestClassifier_Layer(t *testing.T) {
 		{"kernel_nested", testModule + "/kernel/governance/depcheck", LayerKernel},
 		{"runtime", testModule + "/runtime/http/middleware", LayerRuntime},
 		{"adapters", testModule + "/adapters/postgres", LayerAdapters},
-		{"cells", testModule + "/cells/accesscore", LayerCells},
-		{"cells_slice", testModule + "/cells/accesscore/slices/sessionlogin", LayerCells},
+		{"cells", testModule + "/corecells/accesscore", LayerCells},
+		{"cells_slice", testModule + "/corecells/accesscore/slices/sessionlogin", LayerCells},
 		{"pkg", testModule + "/pkg/errcode", LayerPkg},
 		{"cmd", testModule + "/cmd/gocell/app", LayerCmd},
 		{"examples", testModule + "/examples/ssobff", LayerExamples},
@@ -61,11 +61,11 @@ func TestClassifier_Cell(t *testing.T) {
 	}{
 		{"non_cell_kernel", testModule + "/kernel/cell", ""},
 		{"non_cell_root", testModule, ""},
-		{"cell_root", testModule + "/cells/accesscore", "accesscore"},
-		{"cell_internal", testModule + "/cells/accesscore/internal/domain", "accesscore"},
-		{"cell_slice", testModule + "/cells/auditcore/slices/journal", "auditcore"},
+		{"cell_root", testModule + "/corecells/accesscore", "accesscore"},
+		{"cell_internal", testModule + "/corecells/accesscore/internal/domain", "accesscore"},
+		{"cell_slice", testModule + "/corecells/auditcore/slices/journal", "auditcore"},
 		{"cells_dir_only", testModule + "/cells", ""},
-		{"shared_internal_helper", testModule + "/cells/internal/testoutbox", ""},
+		{"shared_internal_helper", testModule + "/corecells/internal/testoutbox", ""},
 		{"stdlib", "fmt", ""},
 		{"thirdparty", "github.com/foo/bar", ""},
 	}
@@ -87,10 +87,10 @@ func TestClassifier_Slice(t *testing.T) {
 		path string
 		want string
 	}{
-		{"slice_root", testModule + "/cells/accesscore/slices/sessionlogin", "sessionlogin"},
-		{"slice_nested", testModule + "/cells/accesscore/slices/sessionlogin/handlers", "sessionlogin"},
-		{"cell_root_no_slice", testModule + "/cells/accesscore", ""},
-		{"cell_internal_no_slice", testModule + "/cells/accesscore/internal/domain", ""},
+		{"slice_root", testModule + "/corecells/accesscore/slices/sessionlogin", "sessionlogin"},
+		{"slice_nested", testModule + "/corecells/accesscore/slices/sessionlogin/handlers", "sessionlogin"},
+		{"cell_root_no_slice", testModule + "/corecells/accesscore", ""},
+		{"cell_internal_no_slice", testModule + "/corecells/accesscore/internal/domain", ""},
 		{"non_cell", testModule + "/kernel/cell", ""},
 		{"stdlib", "fmt", ""},
 	}
@@ -133,7 +133,7 @@ func TestClassifier_MultiModule(t *testing.T) {
 	}{
 		{"core_root", core, core, LayerRoot, "", ""},
 		{"core_kernel", core + "/kernel/cell", core, LayerKernel, "", ""},
-		{"core_cell", core + "/cells/accesscore", core, LayerCells, "accesscore", ""},
+		{"core_cell", core + "/corecells/accesscore", core, LayerCells, "accesscore", ""},
 		// Longest-prefix: mdm wins over core for an mdm-owned package.
 		{"mdm_root", mdm, mdm, LayerRoot, "", ""},
 		{"mdm_cell", mdm + "/cells/winmdm", mdm, LayerCells, "winmdm", ""},
@@ -284,6 +284,41 @@ func TestClassifier_InternalUnknownDistinct(t *testing.T) {
 	}
 	if externalThird != LayerThirdParty {
 		t.Errorf("true third-party path: got %q, want %q", externalThird, LayerThirdParty)
+	}
+}
+
+// TestInternalLayerByDir_CorecellsEntry locks the presence of the
+// "corecells" entry in internalLayerByDir. cellPrefixFor correctness silently
+// depends on this mapping: if the entry were removed, all corecells Cell()
+// calls would return "" (no layer match → no cell prefix → empty cell ID).
+// This test is intentionally a hard assertion on the map key so any "cleanup"
+// that drops the entry turns CI red rather than silently disabling the
+// corecells governance rules.
+func TestInternalLayerByDir_CorecellsEntry(t *testing.T) {
+	t.Parallel()
+
+	// Direct map assertion — the entry must exist and be LayerCells.
+	got, ok := internalLayerByDir["corecells"]
+	if !ok {
+		t.Fatal(`internalLayerByDir["corecells"] entry missing; ` +
+			"cellPrefixFor correctness depends on this mapping — " +
+			"removing it silently drops all corecells Cell() results to \"\"")
+	}
+	if got != LayerCells {
+		t.Fatalf(`internalLayerByDir["corecells"] = %q, want %q; `+
+			"corecells must map to LayerCells", got, LayerCells)
+	}
+
+	// End-to-end: a corecells path must classify as LayerCells and yield a
+	// non-empty Cell() under a single-module classifier (the common unit-test
+	// setup where the whole repo is one module).
+	c := singleModuleClassifier()
+	path := testModule + "/corecells/accesscore/internal/domain"
+	if layer := c.Layer(path); layer != LayerCells {
+		t.Errorf("Layer(%q) = %q, want %q", path, layer, LayerCells)
+	}
+	if cell := c.Cell(path); cell == "" {
+		t.Errorf("Cell(%q) = \"\", want non-empty; corecells cell ID must be derivable", path)
 	}
 }
 

@@ -1610,7 +1610,7 @@ func (v *Validator) checkREF12Contract(c *metadata.ContractMeta) []ValidationRes
 // Fix pattern: move shared logic to cells/{cell}/internal/{domain}/, create
 // one public slice (/api) and one internal slice (/internal/v1), each
 // type-aliasing the shared service. Canonical reference: configread +
-// configreadinternal sharing cells/configcore/internal/configreader.
+// configreadinternal sharing corecells/configcore/internal/configreader.
 func (v *Validator) validateFMT33() []ValidationResult {
 	var results []ValidationResult
 	for _, s := range v.project.Slices {

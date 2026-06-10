@@ -38,7 +38,7 @@
 // production producer (the authorizationdecide ABAC evaluator) landed. The
 // archtest AUTHZ-DECISION-ALLOW-DENY-CALLER-01 in
 // tools/archtest/authz_decision_sealed_test.go pins every production reference to
-// Allow()/Deny() to cells/accesscore/slices/authorizationdecide/evaluator.go.
+// Allow()/Deny() to corecells/accesscore/slices/authorizationdecide/evaluator.go.
 //
 // The funnel is now fully closed Hard/Hard (ai-robust.md §"Funnel 双向锁评级"):
 // upstream Hard (sealed unexported fields → literal forge impossible; the only

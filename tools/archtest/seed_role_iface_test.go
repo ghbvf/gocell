@@ -26,10 +26,10 @@ func TestSEED_ROLE_IFACE_01(t *testing.T) {
 func TestSEED_ROLE_IFACE_01_RedFixture_FuncParam(t *testing.T) {
 	t.Parallel()
 	src := `package p
-import "github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+import "github.com/ghbvf/gocell/corecells/accesscore/internal/mem"
 func badParam(repo *mem.RoleRepository) {}
 `
-	violations := scanSrcForViolations(t, src, "cells/accesscore/some_prod.go")
+	violations := scanSrcForViolations(t, src, "corecells/accesscore/some_prod.go")
 	if len(violations) == 0 {
 		t.Errorf("RED fixture (func param *mem.RoleRepository) must produce a violation; got 0")
 	}
@@ -40,12 +40,12 @@ func badParam(repo *mem.RoleRepository) {}
 func TestSEED_ROLE_IFACE_01_RedFixture_StructField(t *testing.T) {
 	t.Parallel()
 	src := `package p
-import "github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+import "github.com/ghbvf/gocell/corecells/accesscore/internal/mem"
 type Bad struct {
 	Repo *mem.RoleRepository
 }
 `
-	violations := scanSrcForViolations(t, src, "cells/accesscore/cell.go")
+	violations := scanSrcForViolations(t, src, "corecells/accesscore/cell.go")
 	if len(violations) == 0 {
 		t.Errorf("RED fixture (struct field *mem.RoleRepository) must produce a violation; got 0")
 	}
@@ -56,10 +56,10 @@ type Bad struct {
 func TestSEED_ROLE_IFACE_01_RedFixture_VarDecl(t *testing.T) {
 	t.Parallel()
 	src := `package p
-import "github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+import "github.com/ghbvf/gocell/corecells/accesscore/internal/mem"
 var bad *mem.RoleRepository
 `
-	violations := scanSrcForViolations(t, src, "cells/accesscore/cell.go")
+	violations := scanSrcForViolations(t, src, "corecells/accesscore/cell.go")
 	if len(violations) == 0 {
 		t.Errorf("RED fixture (var *mem.RoleRepository) must produce a violation; got 0")
 	}
@@ -70,12 +70,12 @@ var bad *mem.RoleRepository
 func TestSEED_ROLE_IFACE_01_RedFixture_AliasedImport(t *testing.T) {
 	t.Parallel()
 	src := `package p
-import accessmem "github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+import accessmem "github.com/ghbvf/gocell/corecells/accesscore/internal/mem"
 type Bad struct {
 	R *accessmem.RoleRepository
 }
 `
-	violations := scanSrcForViolations(t, src, "cells/accesscore/cell.go")
+	violations := scanSrcForViolations(t, src, "corecells/accesscore/cell.go")
 	if len(violations) == 0 {
 		t.Errorf("RED fixture (aliased import) must produce a violation; got 0")
 	}
@@ -92,7 +92,7 @@ type Other struct {
 	Name string
 }
 `
-	violations := scanSrcForViolations(t, src, "cells/accesscore/cell.go")
+	violations := scanSrcForViolations(t, src, "corecells/accesscore/cell.go")
 	if len(violations) != 0 {
 		t.Errorf("GREEN fixture (no mem import) must produce 0 violations; got %d: %v",
 			len(violations), violations)
@@ -105,10 +105,10 @@ type Other struct {
 func TestSEED_ROLE_IFACE_01_RedFixture_TypeAlias(t *testing.T) {
 	t.Parallel()
 	src := `package p
-import "github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+import "github.com/ghbvf/gocell/corecells/accesscore/internal/mem"
 type LocalRoleRepo = mem.RoleRepository
 `
-	violations := scanSrcForViolations(t, src, "cells/accesscore/some_prod.go")
+	violations := scanSrcForViolations(t, src, "corecells/accesscore/some_prod.go")
 	if len(violations) == 0 {
 		t.Errorf("RED fixture (type alias mem.RoleRepository) must produce a violation; got 0")
 	}
@@ -119,10 +119,10 @@ type LocalRoleRepo = mem.RoleRepository
 func TestSEED_ROLE_IFACE_01_RedFixture_TypeAliasPointer(t *testing.T) {
 	t.Parallel()
 	src := `package p
-import "github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+import "github.com/ghbvf/gocell/corecells/accesscore/internal/mem"
 type LocalRoleRepo = *mem.RoleRepository
 `
-	violations := scanSrcForViolations(t, src, "cells/accesscore/some_prod.go")
+	violations := scanSrcForViolations(t, src, "corecells/accesscore/some_prod.go")
 	if len(violations) == 0 {
 		t.Errorf("RED fixture (type alias *mem.RoleRepository) must produce a violation; got 0")
 	}
@@ -134,9 +134,9 @@ type LocalRoleRepo = *mem.RoleRepository
 func TestSEED_ROLE_IFACE_01_GreenFixture_BlankImport(t *testing.T) {
 	t.Parallel()
 	src := `package p
-import _ "github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+import _ "github.com/ghbvf/gocell/corecells/accesscore/internal/mem"
 `
-	violations := scanSrcForViolations(t, src, "cells/accesscore/cell.go")
+	violations := scanSrcForViolations(t, src, "corecells/accesscore/cell.go")
 	if len(violations) != 0 {
 		t.Errorf("GREEN fixture (blank import) must produce 0 violations; got %d: %v",
 			len(violations), violations)
@@ -150,10 +150,10 @@ import _ "github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 func TestSEED_ROLE_IFACE_01_StructuredLocation(t *testing.T) {
 	t.Parallel()
 	src := `package p
-import "github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+import "github.com/ghbvf/gocell/corecells/accesscore/internal/mem"
 func badParam(repo *mem.RoleRepository) {}
 `
-	diags := scanSrcForViolations(t, src, "cells/accesscore/some_prod.go")
+	diags := scanSrcForViolations(t, src, "corecells/accesscore/some_prod.go")
 	if len(diags) == 0 {
 		t.Fatalf("expected ≥1 diagnostic for *mem.RoleRepository param; got 0")
 	}

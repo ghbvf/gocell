@@ -30,10 +30,10 @@ func TestLayerTestutil_NegativeProbe(t *testing.T) {
 		isTestutil  bool
 		description string
 	}{
-		{"production cells/", "cells/auditcore/foo.go", false, false, "production file must not be classified as test infra"},
+		{"production cells/", "corecells/auditcore/foo.go", false, false, "production file must not be classified as test infra"},
 		{"production runtime/", "runtime/http/router/router.go", false, false, "production runtime file must not be classified as test infra"},
 		{"production adapters/", "adapters/postgres/pool.go", false, false, "production adapter file must not be classified as test infra"},
-		{"testutil tree under cells", "cells/accesscore/internal/testutil/sessionrepo.go", true, false, "per-cell testutil dir is test infra"},
+		{"testutil under corecell", "corecells/accesscore/internal/testutil/sessionrepo.go", true, false, "per-cell testutil is test infra"},
 		{"testutil tree under pkg", "pkg/testutil/fileutil/fileutil.go", true, false, "pkg/testutil/* is test infra"},
 		{"*test conformance suite", "kernel/outbox/outboxtest/conformance.go", true, false, "outboxtest is test infra (cross-pkg test helpers)"},
 		{"locktest conformance", "runtime/distlock/locktest/conformance.go", true, false, "locktest is test infra"},
@@ -54,11 +54,11 @@ func TestLayerTestutil_NegativeProbe(t *testing.T) {
 	}{
 		{"pkg/testutil/fileutil", "pkg/testutil"},
 		{"pkg/testutil/testtime", "pkg/testutil"},
-		{"cells/accesscore/internal/testutil", "cells/accesscore/internal/testutil"},
-		{"cells/accesscore/internal/testutil/sub", "cells/accesscore/internal/testutil"},
+		{"corecells/accesscore/internal/testutil", "corecells/accesscore/internal/testutil"},
+		{"corecells/accesscore/internal/testutil/sub", "corecells/accesscore/internal/testutil"},
 		{"tests/testutil", "tests/testutil"},
 		{"runtime/foo", ""},
-		{"cells/auditcore/foo", ""},
+		{"corecells/auditcore/foo", ""},
 	}
 	for _, tc := range importCases {
 		t.Run("extract:"+tc.importPath, func(t *testing.T) {

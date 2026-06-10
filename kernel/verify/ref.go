@@ -1,7 +1,6 @@
 package verify
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 
@@ -63,9 +62,13 @@ func resolveRef(ref string) (resolvedRef, error) {
 		if err := validateSegment(cellID, "smoke cellID"); err != nil {
 			return resolvedRef{}, err
 		}
+		// Pkg is intentionally empty: the caller (Runner.VerifyCell) derives
+		// the package path from the cell's metadata File location so that
+		// platform cells (corecells/) and example cells (examples/.../cells/)
+		// resolve to the correct directory without a hardcoded prefix.
 		return resolvedRef{
 			Kind:       PrefixSmoke,
-			Pkg:        fmt.Sprintf("./cells/%s/...", cellID),
+			Pkg:        "",
 			RunPattern: kebabToCamelCase(suffix),
 		}, nil
 

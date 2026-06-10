@@ -32,7 +32,7 @@ import (
 //     issuer + emitter + tx and would inflate the test surface ~10x
 //     without adding evidence for the row-write contract.
 //   - sessionlogin's internal helpers (mem.UserRepository, etc.) live in
-//     cells/accesscore/internal/... which is unreachable from tests/
+//     corecells/accesscore/internal/... which is unreachable from tests/
 //     integration/ by Go's internal-package visibility rule. Building
 //     parallel fakes here would duplicate ~80 LOC for no gain.
 //   - Future PG store coverage will plug in via the same storetest.Factory

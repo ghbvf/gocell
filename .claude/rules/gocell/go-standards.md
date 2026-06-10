@@ -4,11 +4,11 @@
 
 | 层 | 允许依赖 | 禁止依赖 |
 |----|----------|----------|
-| kernel | 标准库、pkg、yaml parser | runtime、adapters、cells |
-| cells | kernel、runtime | adapters |
-| runtime | kernel、pkg | cells、adapters |
-| adapters | kernel、runtime | cells |
-| pkg | 标准库 | kernel、cells、runtime、adapters |
+| kernel | 标准库、pkg、yaml parser | runtime、adapters、corecells |
+| corecells | kernel、runtime | adapters |
+| runtime | kernel、pkg | corecells、adapters |
+| adapters | kernel、runtime | corecells |
+| pkg | 标准库 | kernel、corecells、runtime、adapters |
 | cellmodules | 所有层 | 无 |
 | examples | 所有层 | 无 |
 

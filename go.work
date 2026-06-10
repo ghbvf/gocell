@@ -5,6 +5,7 @@ use (
 	./cellmodules
 	./cmd/corebundle
 	./cmd/gocell
+	./corecells
 	./examples/corebundlestarter
 	./examples/demo
 	./examples/iotdevice

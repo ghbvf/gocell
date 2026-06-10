@@ -1,0 +1,13 @@
+id: sessionvalidate
+belongsToCell: accesscore
+consistencyLevel: L0
+lifecycle: asset
+contractUsages: []
+verify:
+  unit:
+    - unit.sessionvalidate.service
+  contract: []
+  waivers: []
+
+allowedFiles:
+  - corecells/accesscore/slices/sessionvalidate/**

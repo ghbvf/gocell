@@ -55,6 +55,25 @@ import (
 // which resolves the consumer's own go.mod for external repos.
 const PlatformModulePath = "github.com/ghbvf/gocell"
 
+// PlatformCellsDir is the repo-relative top-level directory and on-disk scan root
+// that holds GoCell's own platform cells (accesscore / auditcore / configcore).
+// Since the go.work P5 split (#1560) those cells live in their own nested module
+// rooted at this directory, NOT under the repo root. It is the ONE sanctioned site
+// for the "corecells" string literal across archtest: every cell-scan helper and
+// layer/classification rule that needs the platform-cells dir derives it from here
+// (or from [PlatformCellsModulePath]) so a future rename touches exactly one place.
+//
+// This is the platform-MODULE dir, distinct from the framework-general "cells/"
+// convention (project-local cells in consumer repos + GoCell's own examples/*/cells/):
+// those are NOT this token and must not be rewritten to it.
+const PlatformCellsDir = "corecells"
+
+// PlatformCellsModulePath is the Go module path of GoCell's platform-cells module.
+// Derived from [PlatformModulePath] (never a bare literal) so ARCHTEST-MODULE-PATH-FUNNEL-01
+// proves no rule reintroduces the hardcoded path; layer classification and import-path
+// golden key off this value.
+const PlatformCellsModulePath = PlatformModulePath + "/" + PlatformCellsDir
+
 // isGoCellPlatformPkgPath reports whether pkgPath is a package inside the GoCell
 // platform module ([PlatformModulePath] itself or any subpackage).
 //

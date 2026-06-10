@@ -31,9 +31,9 @@
 // [Mint] is the sole constructor. Its callers are restricted by archtest
 // FENCE-TOKEN-MINT-FUNNEL-01 to:
 //
-//   - cells/accesscore/internal/credentialinvalidate/ — the production funnel
+//   - corecells/accesscore/internal/credentialinvalidate/ — the production funnel
 //   - runtime/auth/session/storetest/ + runtime/auth/refresh/storetest/ +
-//     cells/accesscore/internal/ports/conformance/ — conformance suites that
+//     corecells/accesscore/internal/ports/conformance/ — conformance suites that
 //     must exercise the contract end-to-end
 //   - *_test.go files in any package — unit tests for impls and stubs
 //

@@ -37,17 +37,17 @@ const (
 
 const (
 	sessionStorePkg = PlatformModulePath + "/runtime/auth/session"
-	userRepoPkg     = PlatformModulePath + "/cells/accesscore/internal/ports"
+	userRepoPkg     = PlatformCellsModulePath + "/accesscore/internal/ports"
 	refreshStorePkg = PlatformModulePath + "/runtime/auth/refresh"
-	invalidatorPkg  = PlatformModulePath + "/cells/accesscore/internal/credentialinvalidate"
+	invalidatorPkg  = PlatformCellsModulePath + "/accesscore/internal/credentialinvalidate"
 )
 
 // Per-pkg sub-paths used in allowlist key derivation.
 const (
-	authzmutatePkg    = PlatformModulePath + "/cells/accesscore/internal/authzmutate"
-	identitymanagePkg = PlatformModulePath + "/cells/accesscore/slices/identitymanage"
-	rbacassignPkg     = PlatformModulePath + "/cells/accesscore/slices/rbacassign"
-	sessionrefreshPkg = PlatformModulePath + "/cells/accesscore/slices/sessionrefresh"
+	authzmutatePkg    = PlatformCellsModulePath + "/accesscore/internal/authzmutate"
+	identitymanagePkg = PlatformCellsModulePath + "/accesscore/slices/identitymanage"
+	rbacassignPkg     = PlatformCellsModulePath + "/accesscore/slices/rbacassign"
+	sessionrefreshPkg = PlatformCellsModulePath + "/accesscore/slices/sessionrefresh"
 )
 
 const (
@@ -96,7 +96,7 @@ var upstreamCallerCallsiteAllowlist = map[string]string{
 // and the funnel itself).
 var funnelAllowlistPathPrefixes = []string{
 	// The funnel itself is the only permitted non-impl caller.
-	"cells/accesscore/internal/credentialinvalidate/",
+	"corecells/accesscore/internal/credentialinvalidate/",
 	// session.Store implementations.
 	"runtime/auth/session/",
 	// refresh.Store implementations.
@@ -114,13 +114,13 @@ var funnelAllowlistPathPrefixes = []string{
 	// directly is caught — only this decorator is permitted.
 	"adapters/redis/session_cache_store.go",
 	// accesscore internal mem implementations.
-	"cells/accesscore/internal/mem/",
-	"cells/accesscore/internal/adapters/postgres/",
+	"corecells/accesscore/internal/mem/",
+	"corecells/accesscore/internal/adapters/postgres/",
 	// storetest suites (conformance test helpers for store impls).
 	"runtime/auth/refresh/storetest/",
 	"runtime/auth/session/storetest/",
 	// ports.UserRepository conformance helper (FU-3 H1/K-B).
-	"cells/accesscore/internal/ports/conformance/",
+	"corecells/accesscore/internal/ports/conformance/",
 }
 
 // isAllowlisted reports whether a module-relative path is in the funnel
@@ -183,7 +183,7 @@ func runFunnelDualScan(
 func CheckCredentialInvalidateFunnel01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	patterns := []string{
-		"./cells/accesscore/...",
+		"./corecells/accesscore/...",
 		"./runtime/auth/...",
 		"./adapters/...",
 		"./cmd/...",
@@ -204,7 +204,7 @@ func CheckCredentialInvalidateFunnel01(t *testing.T, cfg ConfigForExternalCell) 
 func CheckUserAuthzEpochBumpFunnel01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	patterns := []string{
-		"./cells/accesscore/...",
+		"./corecells/accesscore/...",
 		"./adapters/...",
 		"./cmd/...",
 	}
@@ -224,7 +224,7 @@ func CheckUserAuthzEpochBumpFunnel01(t *testing.T, cfg ConfigForExternalCell) []
 func CheckRefreshRevokeUserFunnel01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	patterns := []string{
-		"./cells/accesscore/...",
+		"./corecells/accesscore/...",
 		"./runtime/auth/...",
 		"./adapters/...",
 		"./cmd/...",
@@ -246,7 +246,7 @@ func CheckRefreshRevokeUserFunnel01(t *testing.T, cfg ConfigForExternalCell) []D
 func CheckCredentialInvalidateUpstreamCaller01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	patterns := []string{
-		"./cells/accesscore/...",
+		"./corecells/accesscore/...",
 		"./cmd/...",
 	}
 	return runFunnelDualScan(t, cfg, patterns, func(p *Pass, file *ast.File, rel string) []Diagnostic {
@@ -266,8 +266,8 @@ func CheckCredentialInvalidateUpstreamCaller01(t *testing.T, cfg ConfigForExtern
 func CheckCredentialInvalidateApplierCanonical01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	return scanApplierInterfaceCanonical(t, cfg, []string{
-		"./cells/accesscore/internal/credentialinvalidate",
-		"./cells/...",
+		"./corecells/accesscore/internal/credentialinvalidate",
+		"./corecells/...",
 		"./runtime/...",
 		"./cmd/...",
 	})
@@ -468,7 +468,7 @@ func scanApplierInterfaceCanonical(t *testing.T, cfg ConfigForExternalCell, patt
 
 	require.NotNil(t, canonical,
 		"credentialinvalidate.Applier signature not captured — ensure "+
-			"./cells/accesscore/internal/credentialinvalidate is in the patterns slice")
+			"./corecells/accesscore/internal/credentialinvalidate is in the patterns slice")
 
 	return buildApplierViolations(candidates, canonical)
 }

@@ -17,7 +17,7 @@ import (
 // Lives under runtime/auth/session/ so that the
 // SESSION-PROTOCOL-COMPOSITION-ROOT-01 archtest allowlist covers this
 // constructor; cells/* / adapters/* test helpers (e.g.
-// cells/accesscore/internal/testutil) consume *session.Protocol via this
+// corecells/accesscore/internal/testutil) consume *session.Protocol via this
 // function rather than re-implementing the option list and tripping the
 // archtest.
 //

@@ -11,7 +11,7 @@ import (
 
 // bootstrapTailVerifyStartupTimeout caps VerifyBootstrapTailOnStartup so a
 // slow or hung store cannot stall k8s readiness indefinitely. Mirrors the
-// 30s budget auditcore uses for its own chain (cells/auditcore/cell.go
+// 30s budget auditcore uses for its own chain (corecells/auditcore/cell.go
 // tailVerifyStartupTimeout) so operators see consistent startup latency
 // envelopes across both audit chains.
 const bootstrapTailVerifyStartupTimeout = 30 * time.Second
@@ -23,7 +23,7 @@ const bootstrapTailVerifyStartupTimeout = 30 * time.Second
 // Called by cmd/corebundle.AuditCoreModule.Provide immediately after the
 // bootstrap store is constructed. The bootstrap chain lives outside the
 // auditcore cell (it is the only audit chain owned directly by the
-// composition root), so its tail-verify cannot reuse cells/auditcore's
+// composition root), so its tail-verify cannot reuse corecells/auditcore's
 // strictTailVerifyOnStartup helper. The two helpers share the same fail-
 // closed posture: a corrupted or tampered bootstrap chain surfaces at
 // process startup rather than at the first 401/429, blocking k8s readiness
@@ -36,7 +36,7 @@ const bootstrapTailVerifyStartupTimeout = 30 * time.Second
 // on-demand during relay startup. Full admin enumeration of all per-tenant
 // chains is tracked at gh #1755 (blocked by NOBYPASSRLS serving role).
 //
-// ref: cells/auditcore/cell.go:strictTailVerifyOnStartup — auditcore-side
+// ref: corecells/auditcore/cell.go:strictTailVerifyOnStartup — auditcore-side
 // counterpart for the relay-driven chain.
 // ref: google/trillian log/sequencer.go IntegrateBatch — tree integrity must
 // be verified before accepting new leaves (same fail-fast invariant).

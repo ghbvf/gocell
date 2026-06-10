@@ -4,7 +4,7 @@
 package flagwrite
 
 import (
-	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
+	"github.com/ghbvf/gocell/corecells/configcore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 )

@@ -47,9 +47,9 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
-	accesscore "github.com/ghbvf/gocell/cells/accesscore"
-	"github.com/ghbvf/gocell/cells/accesscore/configgetter"
-	auditcore "github.com/ghbvf/gocell/cells/auditcore"
+	accesscore "github.com/ghbvf/gocell/corecells/accesscore"
+	"github.com/ghbvf/gocell/corecells/accesscore/configgetter"
+	auditcore "github.com/ghbvf/gocell/corecells/auditcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/auth/authtest"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -75,7 +75,7 @@ const (
 )
 
 // configEntryUpsertedBusinessPayload is the business event shape that
-// cells/configcore/slices/configsubscribe/service.go expects on
+// corecells/configcore/slices/configsubscribe/service.go expects on
 // event.config.entry-upserted.v1. If the relay's wire envelope reaches
 // subscribers unwrapped (F1 bug), these fields will all be empty and the
 // regression guard fires.

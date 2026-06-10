@@ -1,0 +1,243 @@
+// Package configpublish implements the config-publish slice: Publish/Rollback
+// versioned config snapshots.
+//
+// All reads and writes happen inside runInTx to eliminate the TOCTOU stale-read
+// race that existed when GetByKey/GetVersion were called before the transaction.
+//
+// ref: flagwrite — same "all-inside-tx" pattern.
+package configpublish
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+
+	"github.com/google/uuid"
+
+	"github.com/ghbvf/gocell/corecells/configcore/internal/domain"
+	configevents "github.com/ghbvf/gocell/corecells/configcore/internal/events"
+	"github.com/ghbvf/gocell/corecells/configcore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/auth"
+)
+
+// Option configures a config-publish Service.
+type Option func(*Service)
+
+// WithEmitter sets the event emitter.
+func WithEmitter(e outbox.CellEmitter) Option {
+	return func(s *Service) {
+		if e != nil {
+			s.emitter = e
+		}
+	}
+}
+
+// WithTxManager sets the CellTxManager for transactional guarantees (L2
+// atomicity). Callers obtain the sealed marker via persistence.WrapForCell
+// from a composition root.
+func WithTxManager(tx persistence.CellTxManager) Option {
+	return func(s *Service) {
+		if tx != nil {
+			s.txRunner = tx
+		}
+	}
+}
+
+// Service implements config publish/rollback business logic.
+type Service struct {
+	repo     ports.ConfigRepository    `gocell:"required"`
+	txRunner persistence.CellTxManager `gocell:"required" gocellErr:"configpublish: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	emitter  outbox.CellEmitter
+	logger   *slog.Logger
+	clock    clock.Clock
+}
+
+// NewService creates a config-publish Service.
+// clk must be non-nil; pass clock.Real() in production and clockmock.New() in tests.
+// TxRunner must be provided via WithTxManager; nil txRunner is rejected to
+// prevent silent loss of L1 atomicity guarantees on snapshot creation.
+func NewService(clk clock.Clock, repo ports.ConfigRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
+	clock.MustHaveClock(clk, "configpublish.NewService")
+	s := &Service{
+		repo:    repo,
+		emitter: outbox.DemoCellEmitter(),
+		logger:  logger,
+		clock:   clk,
+	}
+	for _, o := range opts {
+		o(s)
+	}
+	if err := s.validateRequired(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// actorFromContext extracts the admin actor from the request context.
+// Config publish paths are admin-only; an empty Subject is a wiring error.
+func actorFromContext(ctx context.Context) (string, error) {
+	p, ok := auth.FromContext(ctx)
+	if !ok || p.Subject == "" {
+		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
+			"config-publish: actor required — admin auth must be present")
+	}
+	return p.Subject, nil
+}
+
+// Publish creates a versioned snapshot of a config entry.
+// All reads happen inside runInTx so the snapshot is consistent with the write.
+func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersion, error) {
+	if err := validation.RequireNotEmpty(
+		errcode.ErrConfigPublishInvalidInput,
+		validation.F("key", key),
+	); err != nil {
+		return nil, err
+	}
+
+	actor, err := actorFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	t, err := tenant.FromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("config-publish: publish: tenant: %w", err)
+	}
+
+	var version *domain.ConfigVersion
+	if err := s.runInTx(ctx, func(txCtx context.Context) error {
+		entry, err := s.repo.GetByKey(txCtx, t, key)
+		if err != nil {
+			return fmt.Errorf("config-publish: publish: %w", err)
+		}
+
+		now := s.clock.Now()
+		version = &domain.ConfigVersion{
+			ID:          "ver" + "-" + uuid.NewString(),
+			ConfigID:    entry.ID,
+			Version:     entry.Version,
+			Value:       entry.Value,
+			Sensitive:   entry.Sensitive,
+			PublishedAt: &now,
+		}
+
+		if err := s.repo.PublishVersion(txCtx, t, version); err != nil {
+			return fmt.Errorf("config-publish: publish version: %w", err)
+		}
+		return outbox.Emit(txCtx, s.clock, s.emitter, domain.TopicConfigVersionPublished, domain.ConfigVersionPublishedEvent{
+			Key:      key,
+			ConfigID: entry.ID,
+			Version:  version.Version,
+			ActorID:  actor,
+		})
+	}); err != nil {
+		return nil, err
+	}
+
+	s.logger.Info("config version published",
+		slog.String("key", key), slog.Int("version", version.Version))
+	return version, nil
+}
+
+// Rollback reverts a config entry to a specific version.
+// All reads (GetByKey + GetVersion) and the atomic Update happen inside runInTx
+// to eliminate the TOCTOU stale-read race where a concurrent write could change
+// the entry between the reads and the update.
+// expectedVersion is the CAS guard for the current entry version; returns
+// ErrVersionConflict (409) if a concurrent write changed the entry since the
+// caller read it.
+func (s *Service) Rollback(ctx context.Context, key string, targetVersion int, expectedVersion int) (*domain.ConfigEntry, error) {
+	if err := validation.RequireNotEmpty(
+		errcode.ErrConfigPublishInvalidInput,
+		validation.F("key", key),
+	); err != nil {
+		return nil, err
+	}
+	if targetVersion < 1 {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrConfigPublishInvalidInput,
+			"rollback target version must be >= 1")
+	}
+
+	actor, err := actorFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	t, err := tenant.FromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("config-publish: rollback: tenant: %w", err)
+	}
+
+	var updated *domain.ConfigEntry
+	if err := s.runInTx(ctx, func(txCtx context.Context) error {
+		var err error
+		updated, err = s.rollbackInTx(txCtx, t, key, targetVersion, expectedVersion, actor)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+
+	s.logger.Info("config rolled back",
+		slog.String("key", key), slog.Int("target_version", targetVersion))
+	return updated, nil
+}
+
+// rollbackInTx executes the rollback steps inside an active transaction:
+// resolve current entry, fetch target version snapshot, atomic UPDATE...RETURNING,
+// dual emit (entry-upserted + rollback). Caller MUST invoke inside runInTx.
+func (s *Service) rollbackInTx(
+	txCtx context.Context, t tenant.TenantID, key string, targetVersion int, expectedVersion int, actor string,
+) (*domain.ConfigEntry, error) {
+	entry, err := s.repo.GetByKey(txCtx, t, key)
+	if err != nil {
+		return nil, fmt.Errorf("config-publish: rollback: %w", err)
+	}
+
+	ver, err := s.repo.GetVersion(txCtx, t, entry.ID, targetVersion)
+	if err != nil {
+		return nil, fmt.Errorf("config-publish: rollback: version not found: %w", err)
+	}
+
+	// Atomic UPDATE...RETURNING restores the snapshot's value and sensitivity.
+	// The repo handles version=version+1 and updated_at=now() internally.
+	// expectedVersion is the CAS guard: returns ErrVersionConflict if a concurrent
+	// write changed the entry between GetByKey and now.
+	updated, err := s.repo.UpdateForRollback(txCtx, t, key, expectedVersion, ver.Value, ver.Sensitive)
+	if err != nil {
+		return nil, fmt.Errorf("config-publish: rollback update: %w", err)
+	}
+
+	// Metadata-only: event carries key+version only.
+	// Subscribers MUST refetch via GET /api/v1/config/{key} to obtain the value.
+	// ref: NATS subject+bytes / Watermill payload-bytes boundary.
+	if err := outbox.Emit(txCtx, s.clock, s.emitter, domain.TopicConfigEntryUpserted, configevents.EntryUpserted{
+		Key:     key,
+		Version: updated.Version,
+		ActorID: actor,
+	}); err != nil {
+		return nil, err
+	}
+
+	if err := outbox.Emit(txCtx, s.clock, s.emitter, domain.TopicConfigRollback, domain.ConfigRollbackEvent{
+		Key:           key,
+		TargetVersion: targetVersion,
+		NewVersion:    updated.Version,
+		ActorID:       actor,
+	}); err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+// runInTx wraps fn in a transaction. txRunner is guaranteed non-nil by the
+// constructor's fail-fast check, so this is a thin pass-through; demo mode
+// callers must inject an explicit pass-through TxRunner via WithTxManager.
+func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	return s.txRunner.RunInTx(ctx, fn)
+}
