@@ -100,14 +100,16 @@ func UnaryAuth(verifier auth.IntentTokenVerifier, opts ...AuthOption) grpc.Unary
 // verifier, or metadata parsing is collapsed into codes.Internal and logged
 // (redacted) instead of escaping the chain unobserved by the outer Metrics/Tracing
 // interceptors. This is the single chokepoint — no per-callsite guard can be
-// forgotten — so the inner helpers (callPredicate) stay panic-naive.
+// forgotten — so the inner helpers (callPredicate) stay panic-naive. The named
+// returns exist solely so the deferred guard can rewrite the result on the panic
+// path; the normal paths all return explicitly.
 func authorize(
 	ctx context.Context, cfg authConfig, verifier auth.IntentTokenVerifier, fullMethod string,
 ) (resultCtx context.Context, err error) {
 	resultCtx = ctx
 	defer func() {
 		if v := recover(); v != nil {
-			resultCtx, err = ctx, recoverGRPCPanic(ctx, fullMethod, v)
+			resultCtx, err = ctx, recoverGRPCPanic(ctx, "auth", fullMethod, v)
 		}
 	}()
 

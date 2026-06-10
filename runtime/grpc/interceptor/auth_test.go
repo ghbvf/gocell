@@ -1,7 +1,10 @@
 package interceptor
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -224,6 +227,11 @@ func assertUnaryAuthPublicMethodPanic(t *testing.T, info *grpc.UnaryServerInfo) 
 func assertUnaryAuthVerifierPanic(t *testing.T, info *grpc.UnaryServerInfo) {
 	t.Helper()
 
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
 	called := false
 	_, err := UnaryAuth(panicVerifier{val: "verifier exploded"})(bearerCtx(), nil, info, okHandler(&called))
 	if status.Code(err) != codes.Internal {
@@ -231,6 +239,11 @@ func assertUnaryAuthVerifierPanic(t *testing.T, info *grpc.UnaryServerInfo) {
 	}
 	if called {
 		t.Fatalf("handler must not run when the verifier panics")
+	}
+	// stage=auth lets operators distinguish an auth-stage panic (e.g. a verifier
+	// defect) from a business handler panic without parsing the stack.
+	if !strings.Contains(buf.String(), `"stage":"auth"`) {
+		t.Fatalf("auth-stage panic log must carry stage=auth: %s", buf.String())
 	}
 }
 
