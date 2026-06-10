@@ -121,6 +121,16 @@ func validatePrincipalSafeID(name string, id idutil.SafeID) error {
 // itself Hard-funnel-locked (TENANT-TXSCOPE-WRITE-CALLER-01), so principal-tenant
 // inherits that trust. Post-auth emits set ctxkeys.TenantID (auth middleware),
 // so the ctxkeys branch wins and behavior there is unchanged.
+//
+// Precedence keys on key PRESENCE, not on a non-empty value (#1824 F1): the scope
+// fallback fires ONLY when the ctxkeys tenant key is ABSENT (ok=false). A
+// present-but-EMPTY ctxkeys tenant is authoritative — the system-identity
+// installers (reconcile installSystemProducerIdentity, projection
+// InstallSystemPrincipal, and the consume-path clearAmbientPrincipal) positively
+// write tenant="" to assert a tenantless system principal, and that assertion MUST
+// win over any ambient tenant.WithScope so those emits stay tenantless (→
+// "_notenant" dedup namespace). Conflating present-empty with absent would let a
+// leaked scope override the install and break that code-fact invariant.
 func ContextPrincipal(ctx context.Context) PrincipalMetadata {
 	var p PrincipalMetadata
 	if id, ok := ctxkeys.ActorIDFrom(ctx); ok && id != "" {
@@ -129,7 +139,11 @@ func ContextPrincipal(ctx context.Context) PrincipalMetadata {
 	if id, ok := ctxkeys.SubjectIDFrom(ctx); ok && id != "" {
 		p.SubjectID = idutil.SafeID(id)
 	}
-	if id, ok := ctxkeys.TenantIDFrom(ctx); ok && id != "" {
+	if id, ok := ctxkeys.TenantIDFrom(ctx); ok {
+		// Present (even empty) ctxkeys tenant is authoritative: a present-but-empty
+		// value is a system-identity installer's deliberate tenantless assertion and
+		// suppresses the scope fallback below. Empty id → empty TenantID, exactly as
+		// installed. Scope only fills in when the key is genuinely absent (pre-auth).
 		p.TenantID = idutil.SafeID(id)
 	} else if t, ok := tenant.ScopeFromContext(ctx); ok && t.String() != "" {
 		p.TenantID = idutil.SafeID(t.String())

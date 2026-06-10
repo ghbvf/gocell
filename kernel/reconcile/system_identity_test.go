@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
@@ -62,13 +63,34 @@ func TestInstallSystemProducerIdentity_Overwrites(t *testing.T) {
 // NewEntry injects at emit time) reads the installed ctx as actor/subject="system",
 // tenant/session="" — so the emitted entry's Claimer key lands under "_notenant".
 // This pins the dedup-key consequence at the kernel layer (the cert-renewal Loop
-// test proves the same end-to-end). A reconcile ctx carries no tenant.WithScope, so
-// ContextPrincipal's scope fallback does not apply here.
+// test proves the same end-to-end). The scoped-ctx variant —
+// TestInstallSystemProducerIdentity_SuppressesTenantScopeFallback — proves the
+// outcome holds even when a tenant.WithScope IS present (#1824 F1).
 func TestInstallSystemProducerIdentity_YieldsTenantlessPrincipal(t *testing.T) {
 	p := outbox.ContextPrincipal(installSystemProducerIdentity(context.Background()))
 	assert.Equal(t, "system", string(p.ActorID))
 	assert.Equal(t, "system", string(p.SubjectID))
 	assert.Equal(t, "", string(p.TenantID), "tenantless principal → _notenant dedup namespace")
+	assert.Equal(t, "", string(p.SessionID))
+}
+
+// TestInstallSystemProducerIdentity_SuppressesTenantScopeFallback is the F1
+// (#1824 review) regression: the install must make the tenantless system identity
+// a CODE FACT even when the reconcile ctx ALSO carries a tenant.WithScope. The PR
+// promises "tenantless → _notenant dedup namespace" as a construction guarantee
+// robust against ambient leaks; tenant scope is exactly such an ambient channel.
+// Without the fix, outbox.ContextPrincipal falls back to the scope tenant whenever
+// the ctxkeys tenant is present-but-empty (the `ok && id != ""` branch is false),
+// so the install's cleared tenant does NOT win and the emitted entry's principal
+// tenant becomes the scope tenant — breaking the invariant.
+func TestInstallSystemProducerIdentity_SuppressesTenantScopeFallback(t *testing.T) {
+	scoped := tenant.WithScope(context.Background(),
+		tenant.TenantID("11111111-1111-1111-1111-111111111111"))
+	p := outbox.ContextPrincipal(installSystemProducerIdentity(scoped))
+	assert.Equal(t, "system", string(p.ActorID))
+	assert.Equal(t, "system", string(p.SubjectID))
+	assert.Equal(t, "", string(p.TenantID),
+		"installed system identity must suppress the ambient tenant.WithScope fallback (→ _notenant)")
 	assert.Equal(t, "", string(p.SessionID))
 }
 

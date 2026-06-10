@@ -46,8 +46,15 @@ package archtest
 //     loop with no request principal, so the framework positively installs a
 //     tenantless system identity for every reconciler's emit instead of inheriting
 //     whatever the lifecycle ctx happens to carry. The installer is UNEXPORTED, so
-//     only kernel/reconcile.Loop.process can reach it (Go-visibility Hard upstream);
-//     this allowlist entry is the Hard downstream lock on the ctxkeys write itself.
+//     no producer OUTSIDE kernel/reconcile can reach it (Go visibility bars only
+//     package-external callers). This allowlist entry is FILE-level (key =
+//     "kernel/reconcile/identity.go"), so it is the Hard downstream lock on the
+//     ctxkeys write itself but does NOT pin the in-package callsite the way the
+//     function-level PROJECTION-SYSTEM-PRINCIPAL-INSTALL-CALLER-01 does: today only
+//     Loop.process calls the installer, but a second function added to that same
+//     file could write the setters without tripping this archtest. That is the
+//     accepted same-file residual blind spot (see the installSystemProducerIdentity
+//     godoc) — not a Go-visibility guarantee that "only Loop.process can reach it".
 //
 // No producer (cells/* or examples/*) can write a principal ctx key. Together
 // with OUTBOX-RECONSTRUCTION-CALLER-01 (the reconstruction-funnel lock), this

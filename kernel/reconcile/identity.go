@@ -56,20 +56,23 @@ const systemProducerActor = "system"
 // documentation-level guard — there is no machine enforcement of it, and no
 // multi-tenant reconciler exists today.
 //
-// # Scope-fallback boundary
+// # Scope-fallback boundary (#1824 F1)
 //
 // outbox.ContextPrincipal resolves the tenant from ctxkeys.TenantID, falling back to
-// tenant.ScopeFromContext ONLY when the ctxkeys tenant is absent. This install writes
-// the ctxkeys tenant as "" (present-but-empty) — the realistic lifecycle-ctx principal
-// channel — so for a reconcile ctx the resolved tenant is empty and the Claimer key
-// lands under "_notenant". It deliberately does NOT strip a tenant.WithScope: a tenant
-// scope is the RLS "SET LOCAL" boundary the TxManager injects into a transaction, a
-// mechanism orthogonal to the principal ctxkeys. A reconcile ctx never carries a
-// tenant scope (triggers feed Request data, not a scoped ctx; the tx is opened by the
-// reconciler AFTER this install, with the now-empty principal), so the "_notenant"
-// outcome holds in practice (proven end-to-end by the cert-renewal Loop test). A
-// multi-tenant reconciler that deliberately runs inside a tenant scope would see that
-// scope flow through — exactly why it must derive its own per-tenant dedup dimension.
+// tenant.ScopeFromContext ONLY when the ctxkeys tenant key is ABSENT. This install
+// positively writes the ctxkeys tenant as "" (present-but-empty), and ContextPrincipal
+// treats a present key — even empty — as an AUTHORITATIVE tenantless assertion that
+// wins over (suppresses) the scope fallback. So the emitted entry's principal tenant is
+// empty and the Claimer key lands under "_notenant" BY CONSTRUCTION — not merely because
+// a reconcile ctx happens to carry no tenant.WithScope. Even if a tenant scope is present
+// on the ctx (the RLS "SET LOCAL" boundary the TxManager injects into the reconciler's
+// own tx, opened AFTER this install — or a future ambient leak), the install's empty
+// principal tenant still wins, keeping the tenantless outcome the code fact #1808 F5 asks
+// for (proven end-to-end by the cert-renewal Loop test, and by the scoped-ctx unit test).
+// This holds for EVERY reconciler: a multi-tenant reconciler that runs inside a tenant
+// scope still emits under the tenantless system principal, so it MUST encode its
+// per-tenant dimension in its own command-id / store derivation (see "# Dedup-key
+// consequence" above) — it cannot rely on the ambient scope to color the principal tenant.
 //
 // # AI-robust rating (charter §"Funnel 双向锁评级")
 //
