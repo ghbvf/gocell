@@ -40,9 +40,9 @@ func TestDeviceCell_CommandSweeperLoop_OnStartClean(t *testing.T) {
 	rec := newTestRec()
 	require.NoError(t, c.Init(context.Background(), rec))
 	snap := rec.Snapshot()
-	require.Len(t, snap.LifecycleHooks, 1, "expect one lifecycle hook (sweeper)")
+	require.Len(t, snap.LifecycleHooks, 2, "expect two lifecycle hooks (command sweeper + cert renewal #1757)")
 	hook := snap.LifecycleHooks[0]
-	require.Equal(t, "devicecommand.sweeper", hook.Name)
+	require.Equal(t, "devicecommand.sweeper", hook.Name, "command sweeper is registered first")
 	require.NotNil(t, hook.OnStart)
 	require.NotNil(t, hook.OnStop)
 
@@ -58,6 +58,45 @@ func TestDeviceCell_CommandSweeperLoop_OnStartClean(t *testing.T) {
 	}()
 
 	// Give the sweeper a moment to either panic or settle into the select loop.
+	time.Sleep(sweeperOnStartSettleDelay) //archtest:allow:test-sleep give panic-vs-settle race a deterministic window
+	cancel()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err, "OnStart must not panic and must return nil after ctx cancel")
+	case <-time.After(sweeperOnStartReturnTimeout):
+		t.Fatal("OnStart did not return within budget after ctx cancel")
+	}
+
+	require.NoError(t, hook.OnStop(context.Background()), "OnStop must be idempotent and nil-safe")
+}
+
+// TestDeviceCell_CertRenewalSweeperLoop_OnStartClean is the cert-renewal (#1757)
+// counterpart of the command-sweeper test above: the second reconcile.Loop's
+// lifecycle hook OnStart must start without panic and OnStop must drain cleanly.
+func TestDeviceCell_CertRenewalSweeperLoop_OnStartClean(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	c := newTestCell()
+	rec := newTestRec()
+	require.NoError(t, c.Init(context.Background(), rec))
+	snap := rec.Snapshot()
+	require.Len(t, snap.LifecycleHooks, 2, "expect two lifecycle hooks (command sweeper + cert renewal)")
+	hook := snap.LifecycleHooks[1] // cert renewal is registered second
+	require.Equal(t, "devicecert.renewal", hook.Name)
+	require.NotNil(t, hook.OnStart)
+	require.NotNil(t, hook.OnStop)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				done <- fmt.Errorf("OnStart panicked: %v", r)
+			}
+		}()
+		done <- hook.OnStart(ctx)
+	}()
+
 	time.Sleep(sweeperOnStartSettleDelay) //archtest:allow:test-sleep give panic-vs-settle race a deterministic window
 	cancel()
 

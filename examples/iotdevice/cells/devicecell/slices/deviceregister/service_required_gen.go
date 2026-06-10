@@ -15,5 +15,9 @@ func (s *Service) validateRequired() error {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"deviceregister.NewService: repo required")
 	}
+	if s.certStore == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"deviceregister.NewService: certStore required")
+	}
 	return nil
 }

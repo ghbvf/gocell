@@ -30,6 +30,7 @@ func newWiredCommandCell(t *testing.T, reg *commandruntime.Registry, repo domain
 		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clk))),
 		WithBootstrapEmitter(testBootstrapEmitter()),
 		WithCommandRegistry(reg),
+		WithCertStore(NewCertStore()),
 	)
 	c.RegisterCommandQueue(commandtest.NewInMemQueue())
 	require.NoError(t, c.Init(context.Background(), newTestRec()))
