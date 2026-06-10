@@ -168,6 +168,9 @@ gh issue list --label backlog --label area-eventing --state open
 # 按类型
 gh issue list --label backlog --label type-bug --state open
 
+# 按复杂度（cx 迁 label 后经 REST 可查）
+gh issue list --label backlog --label cx-3 --state open
+
 # epic
 gh issue list --label epic --state open
 
