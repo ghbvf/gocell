@@ -940,6 +940,12 @@ func (l *Loop) process(runCtx context.Context, req Request, dispatcher reconcile
 	if l.fencedRepo != nil {
 		reconcileCtx = withFencedWriter(runCtx, newFencedWriter(l.fencedRepo, l.currentEpoch()))
 	}
+	// A reconcile loop is a background control loop with no request principal.
+	// Install a fixed system producer identity at this single chokepoint so every
+	// reconciler's emitted commands/events carry a tenantless system principal by
+	// construction, never inheriting (or being changed by) an ambient ctx identity
+	// (issue #1821 / #1808 F5). See installSystemProducerIdentity — it overwrites.
+	reconcileCtx = installSystemProducerIdentity(reconcileCtx)
 
 	start := controlPlaneClock{}.now()
 	res, err := recoverReconcile(reconcileCtx, l.reconciler, req, l.logger, l.reconcilerID)

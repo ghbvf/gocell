@@ -42,15 +42,21 @@ const rotateCertCommandType = "rotate-cert"
 // an emit committed but the mark was lost (crash between the two), within the
 // standard 24h idempotency TTL.
 //
-// SINGLE-TENANT ASSUMPTION: a reconcile loop runs on the cell lifecycle context,
-// which carries no request principal — so the tenant dimension of the Claimer key
-// resolves to the "_notenant" sentinel for every emitted command. The cert Store
-// is likewise per-assembly, not tenant-partitioned. That is correct for this
-// single-tenant iotdevice example (device ids are UUIDs), but anyone copying this
-// archetype into a MULTI-TENANT cell MUST add a tenant dimension to both the cert
-// store and the commandID derivation — otherwise two tenants sharing a device id
-// would collide on the same Claimer key and one tenant's renewal would suppress
-// the other's.
+// SINGLE-TENANT ASSUMPTION: a reconcile loop is a background control loop with no
+// request principal. The reconcile framework positively installs a system producer
+// identity at its single reconcile chokepoint (kernel/reconcile.Loop.process →
+// installSystemProducerIdentity, #1821): actor/subject="system", tenant cleared.
+// So the tenant dimension of the Claimer key resolves to the "_notenant" sentinel
+// for every emitted command as a CODE FACT — not because the lifecycle ctx happens
+// to be empty, and not changeable by an ambient principal leaking into that ctx
+// (the install overwrites). The cert Store is likewise per-assembly, not
+// tenant-partitioned. That is correct for this single-tenant iotdevice example
+// (device ids are UUIDs), but anyone copying this archetype into a MULTI-TENANT
+// cell MUST add a tenant dimension to both the cert store and the commandID
+// derivation — the framework system identity is deliberately tenantless, so a
+// multi-tenant reconciler cannot rely on an ambient ctx tenant; otherwise two
+// tenants sharing a device id would collide on the same Claimer key and one
+// tenant's renewal would suppress the other's.
 type Reconciler struct {
 	clk       clock.Clock
 	store     *devicecert.Store
