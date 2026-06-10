@@ -313,7 +313,7 @@ func newSubscriberForITest(t *testing.T, role string) (*Subscriber, *Connection)
 	// `context.WithTimeout + defer cancel()` would fire the moment the helper
 	// returns — killing the manager before the test ever subscribes and leaving
 	// every cm.Subscribe with ConnectionDownError ("subscribe not ready"). Scope
-	// cancel to t.Cleanup so the manager outlives the helper; cfg.ConnectTimeout
+	// cancel to t.Cleanup so the manager outlives the helper; cfg.connectTimeout
 	// already bounds the bootstrap connect inside Open. Mirrors the unit
 	// newTestSubscriber fix.
 	ctx, cancel := context.WithCancel(context.Background())

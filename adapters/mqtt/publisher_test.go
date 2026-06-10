@@ -843,8 +843,8 @@ func TestPublisher_Publish_NilPayload(t *testing.T) {
 	require.NoError(t, err, "nil payload must be accepted (len(nil)==0)")
 }
 
-// TestPublisher_Publish_NoAdapterTimeout verifies that when Config.PublishTimeout
-// is 0, the publisher does NOT derive a child ctx and the caller-provided ctx
+// TestPublisher_Publish_NoAdapterTimeout verifies that when the configured publish
+// timeout (WithPublishTimeout) is 0, the publisher does NOT derive a child ctx and the caller-provided ctx
 // deadline is honored as-is. The test publishes with a generous ctx deadline and
 // confirms the call succeeds (demonstrating no internal timeout was imposed).
 func TestPublisher_Publish_NoAdapterTimeout(t *testing.T) {

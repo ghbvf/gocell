@@ -165,10 +165,10 @@ func TestConnection_Close_IdempotentAndTerminal(t *testing.T) {
 }
 
 // TestConnection_ConnectDeadline_FailFast verifies that Open against an
-// unreachable address fails-fast on the cfg.ConnectDeadline budget — NOT on the
+// unreachable address fails-fast on the cfg.connectDeadline budget — NOT on the
 // lifecycle ctx. The lifecycle ctx passed here is context.Background() (never
 // canceled), so the only thing that can terminate the bootstrap wait is the
-// connectCtx derived from ConnectDeadline. This is the #1388 regression guard:
+// connectCtx derived from connectDeadline. This is the #1388 regression guard:
 // previously a never-canceled ctx meant Open hung forever.
 func TestConnection_ConnectDeadline_FailFast(t *testing.T) {
 	clk := clock.Real()

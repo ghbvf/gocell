@@ -60,7 +60,7 @@ func newTestSubscriber(t *testing.T, addr string, collector SubscriberCollector)
 	// helper — scope its cancel to t.Cleanup (fires at test end, before/with
 	// conn.Close), NOT a defer that fires when newTestSubscriber returns. A
 	// returning-helper defer would cancel the ctx immediately, leaving every
-	// later cm.Subscribe with ConnectionDownError. cfg.ConnectTimeout already
+	// later cm.Subscribe with ConnectionDownError. cfg.connectTimeout already
 	// bounds the bootstrap connect inside Open.
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
