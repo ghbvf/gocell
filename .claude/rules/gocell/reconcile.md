@@ -1,7 +1,7 @@
 # Reconcile 控制环规则
 
 本文件只保留当前行为约束。完整 invariant 清单、符号、盲区写在
-`kernel/reconcile/doc.go` §Enforced invariants、`tools/archtest/reconcile_invariants_test.go`
+`kernel/reconcile/doc.go` §Enforced invariants、`tools/archtest/reconcile*_test.go`
 和 reconcile ADR 中。
 
 ## 适用范围
@@ -47,7 +47,6 @@ L3 最终一致可用 projection / saga；reconcile 用于 L4 跨不可靠边界
 ## 参考
 
 - ADR：`docs/architecture/202605291600-661-adr-kernel-reconcile-design.md`
-- 权威 godoc：`kernel/reconcile/doc.go`
-- Invariants：`RECONCILE-*` 族（fields/interface/trigger/leader frozen、builder/fenced-write/leader-impl
-  funnel、requeue-caller、result-label frozen）完整清单与盲区见 `kernel/reconcile/doc.go`
-  §Enforced invariants 与 `tools/archtest/reconcile_invariants_test.go`。
+- 权威 godoc：`kernel/reconcile/doc.go` §Enforced invariants
+- Invariants：`RECONCILE-*` 族完整清单、符号与盲区以 `tools/archtest/reconcile*_test.go`
+  （4 文件，可执行真源）与 `kernel/reconcile/doc.go` §Enforced invariants 为准；规则文件不另维护清单。

@@ -84,9 +84,12 @@ goal:      outbox 模式 + 幂等消费，不是直接 publish
 
 ```
 primary:   kubernetes-sigs/controller-runtime → pkg/reconcile/reconcile.go（Reconciler 接口、Request/Result）
-secondary: kubernetes/client-go               → tools/leaderelection/（leader election + LeaseToken fencing）
+secondary: kubernetes/client-go               → tools/leaderelection/（leader election lease/renew 模型）
 goal:      比 controller-runtime 更窄——单 opaque EntityID、无 Informer/CRD watch、无 Requeue bool/Priority；
            仅 cell 治理 / 设备收敛（L4），业务编排归 saga、CQRS 读模型归 projection
+deviations:
+  - leader ≠ fencing：client-go leaderelection 不保证 fencing；跨副本写正确性是 GoCell 自有补强——
+    单调 LeaseToken.Epoch 注入 FencedWriter（写路径 CAS）+ 消费方幂等，绝不靠 lease 本身
 ```
 
 ### pkg/errcode/ — 错误模型

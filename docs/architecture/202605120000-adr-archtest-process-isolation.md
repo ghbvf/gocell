@@ -531,7 +531,7 @@ K=N 静态 enumerate 的目的。
 
 | 维度 | 评估 |
 |---|---|
-| per-shard RSS / OOM 包络 | develop archtest 顶层 Test 函数现共 **1226**（已含 reconcile 族 27 个，非本 PR 新增）；reconcile 占 ~2.2%，K=24 下 ≈ 51 函数/shard、reconcile 贡献 ≈ +1.1。OOM 触发源是 `typeseval.SharedResolver` 的 type-graph 累加，该族不引入新对标语义类别，per-shard RSS 仍落在 §决策 中 K=24 < GHA 7GB 的方向性包络内。|
+| per-shard RSS / OOM 包络 | develop archtest 顶层 Test 函数现共 **1223**（D1 discovery 快照、非真值源；已含 reconcile 族 27 个，非本 PR 新增）；reconcile 占 ~2.2%，K=24 下 ≈ 51 函数/shard、reconcile 贡献 ≈ +1.1。OOM 触发源是 `typeseval.SharedResolver` 的 type-graph 累加，该族不引入新对标语义类别，per-shard RSS 仍落在 §决策 中 K=24 < GHA 7GB 的方向性包络内。|
 | §决策 行的绝对计数（"296 函数"/"per-shard 32"）| 为历史 macOS baseline，早被 line 29 声明为「方向性论点权威、不以绝对数为真值源」；本 PR **不** true-up 该历史数（其漂移源自全仓 archtest 4× 增长，非 reconcile，超出本 PR 范围）。|
 | 一致性守卫 | `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01` / `ARCHTEST-LEAF-BUILD-TAG-01` 不受影响；reconcile 测试文件已带 `//go:build archtest` leaf tag（同 D3 范式），编译级排除 bare `go test` 自动覆盖。|
 
