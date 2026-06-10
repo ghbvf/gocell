@@ -1,7 +1,10 @@
 package interceptor
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -67,6 +70,10 @@ func TestUnaryAuth(t *testing.T) {
 
 	t.Run("panicking publicMethod predicate returns Internal (not a raw panic)", func(t *testing.T) {
 		assertUnaryAuthPublicMethodPanic(t, info)
+	})
+
+	t.Run("panicking verifier returns Internal (panic must not escape Recovery-less auth stage)", func(t *testing.T) {
+		assertUnaryAuthVerifierPanic(t, info)
 	})
 
 	t.Run("nil verifier panics at construction (fail-fast wiring)", func(t *testing.T) {
@@ -214,6 +221,29 @@ func assertUnaryAuthPublicMethodPanic(t *testing.T, info *grpc.UnaryServerInfo) 
 		func(context.Context, any) (any, error) { return "ok", nil })
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("code = %v, want Internal (predicate panic must not escape)", status.Code(err))
+	}
+}
+
+func assertUnaryAuthVerifierPanic(t *testing.T, info *grpc.UnaryServerInfo) {
+	t.Helper()
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
+	called := false
+	_, err := UnaryAuth(panicVerifier{val: "verifier exploded"})(bearerCtx(), nil, info, okHandler(&called))
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("code = %v, want Internal (verifier panic must not escape the Recovery-less auth stage)", status.Code(err))
+	}
+	if called {
+		t.Fatalf("handler must not run when the verifier panics")
+	}
+	// stage=auth lets operators distinguish an auth-stage panic (e.g. a verifier
+	// defect) from a business handler panic without parsing the stack.
+	if !strings.Contains(buf.String(), `"stage":"auth"`) {
+		t.Fatalf("auth-stage panic log must carry stage=auth: %s", buf.String())
 	}
 }
 
