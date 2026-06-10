@@ -57,7 +57,7 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 | L1 LocalTx | 单 cell 本地事务 | session 创建、审计写入 |
 | L2 OutboxFact | 本地事务 + outbox 发布 | session.created 事件、config.entry-upserted 事件 |
 | L3 WorkflowEventual | 跨 cell 最终一致 | 查询投影、CQRS、Saga |
-| L4 DeviceLatent | 设备长延迟闭环 | 命令回执、证书续期 |
+| L4 DeviceLatent | 设备长延迟闭环 | 命令回执、证书续期、状态收敛 |
 
 ## Go 编码规范
 

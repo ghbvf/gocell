@@ -12,6 +12,7 @@
 | [go-micro](https://github.com/micro/go-micro) | 23K | Apache 2.0 | Config 热更新、服务注册、Auth 模块、PubSub |
 | [Watermill](https://github.com/ThreeDotsLabs/watermill) | 6K | MIT | 事件驱动 Pub/Sub、多后端 adapter、CQRS |
 | [Kubernetes](https://github.com/kubernetes/kubernetes) | 110K | Apache 2.0 | Cell/Slice 声明模型、生命周期、校验链、编排 |
+| [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime) | 3K | Apache 2.0 | L4 控制环：Reconciler 接口、level-triggered 收敛、RequeueAfter、leader election |
 
 ## 按 GoCell 模块的参考映射
 
@@ -77,6 +78,18 @@ goal:      configcore Cell 通过 outbox 事件推送变更，不是轮询
 primary:   ThreeDotsLabs/watermill → message/（Message 统一模型、Publisher/Subscriber 接口）
 secondary: micro/go-micro          → events/（Event 模型、Store/Stream 抽象）
 goal:      outbox 模式 + 幂等消费，不是直接 publish
+```
+
+### kernel/reconcile/ — L4 desired-state 收敛控制环
+
+```
+primary:   kubernetes-sigs/controller-runtime → pkg/reconcile/reconcile.go（Reconciler 接口、Request/Result）
+secondary: kubernetes/client-go               → tools/leaderelection/（leader election lease/renew 模型）
+goal:      比 controller-runtime 更窄——单 opaque EntityID、无 Informer/CRD watch、无 Requeue bool/Priority；
+           仅 cell 治理 / 设备收敛（L4），业务编排归 saga、CQRS 读模型归 projection
+deviations:
+  - leader ≠ fencing：client-go leaderelection 不保证 fencing；跨副本写正确性是 GoCell 自有补强——
+    单调 LeaseToken.Epoch 注入 FencedWriter（写路径 CAS）+ 消费方幂等，绝不靠 lease 本身
 ```
 
 ### pkg/errcode/ — 错误模型

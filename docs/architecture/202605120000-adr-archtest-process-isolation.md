@@ -511,3 +511,29 @@ Go 生态「重型套件排出默认 `go test`」标准只有 build tag（编译
 | §D6 single-owner 原则（nightly + verify-archtest.sh 为唯一 owner） | ⚠️ 补强 | 原则不变；本 amendment 把它从「靠 VERIFY_SKIP 约定」升级为「靠 build tag 编译级 + ARCHTEST-LEAF-BUILD-TAG-01 守卫」机器强制 |
 | §D6 `VERIFY_SKIP=archtest` env | ✅ 保留 | 仍 skip 专用 `verify-archtest.sh` gate（避免 governance lane 跑 K=1 全量）；与 build tag 互补，非冗余 |
 | build-test `_dynamic_archtest_excluded` grep | ⚠️ 职责收窄 | 见 D4：执行排除 → coverage-scope 排除 |
+
+---
+
+## §Amendment 2026-06-10 (PR-A10 #1171, KERNEL-RECONCILE-01 收口) — reconcile invariant 族纳入 archtest 池
+
+epic #661（`kernel/reconcile` L4 收敛控制环）的 archtest 守卫 `tools/archtest/reconcile_*_test.go`
+（4 文件、**27 个顶层 Test 函数**：interface/Request/Result/Trigger/LeaderElector frozen、
+BUILDER-FUNNEL、FENCED-WRITE-FUNNEL、RESULT-LABEL-VALUES-FROZEN、REQUEUE-ENQUEUE-CALLER、
+LEADER-IMPL-FUNNEL、goleak TestMain funnel）随 PR-A2…A7 已 merge，早已在 develop archtest 池内。
+本收口 PR（A10）**纯文档、不新增任何 archtest 函数**；本 §Amendment 在 epic 关闭时回溯记录该 invariant
+族的 CI 足迹并再评威胁矩阵，不改决策。
+
+**无 matrix / 脚本编辑**：D1 的 discovery（`go test -list '^Test' ./tools/archtest` modulo `SHARD_COUNT`）
+按设计自动吸收这 27 个函数（A2…A7 落地时即生效），无需任何 CI 配置改动——这正是 D1 动态分片相对旧
+K=N 静态 enumerate 的目的。
+
+### 威胁矩阵再评（per ai-robust.md §"ADR amendment 落地必查"）
+
+| 维度 | 评估 |
+|---|---|
+| per-shard RSS / OOM 包络 | reconcile 族 27 个顶层 Test 函数（见上；`grep -hc '^func TestReconcile' tools/archtest/reconcile*_test.go`，随 epic 冻结、增删须过 review）在 develop archtest 全池中占低个位数百分比，且该占比随全仓 archtest 增长只稀释不放大——K=24 下每 shard ≈ +1 函数。**本 ADR 不固化任何全池绝对计数**：池大小以 D1 discovery（`go test -tags archtest -list '^Test' ./tools/archtest`）实时为真源，写死的总数会随无关 PR 漂移（line 535 同理拒绝 true-up 历史 296/32）。OOM 触发源是 `typeseval.SharedResolver` 的 type-graph 累加，该族不引入新对标语义类别，per-shard RSS 仍落在 §决策 中 K=24 < GHA 7GB 的方向性包络内。|
+| §决策 行的绝对计数（"296 函数"/"per-shard 32"）| 为历史 macOS baseline，早被 line 29 声明为「方向性论点权威、不以绝对数为真值源」；本 PR **不** true-up 该历史数（其漂移源自全仓 archtest 4× 增长，非 reconcile，超出本 PR 范围）。|
+| 一致性守卫 | `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01` / `ARCHTEST-LEAF-BUILD-TAG-01` 不受影响；reconcile 测试文件已带 `//go:build archtest` leaf tag（同 D3 范式），编译级排除 bare `go test` 自动覆盖。|
+
+> 关联 ADR2 `202605170000-...`：reconcile.Loop 共用的 control-plane clock carve-out 已由其 §Amendment
+> 2026-06-06（#1169）就地重写，本 PR 不重复 amend（避免双真值源）。
