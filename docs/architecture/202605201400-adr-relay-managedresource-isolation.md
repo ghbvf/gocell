@@ -162,5 +162,5 @@ Dependent contracts (governance scan): none — ManagedResource interface signat
   §`BOOTSTRAP-RELAY-DOUBLE-MANAGED-UPSTREAM-HARD-01`
 - AI-robust 治理章程: `.claude/rules/gocell/ai-robust.md` §"Hard 范本目录"·single
   sanctioned holder + §"Funnel 双向锁评级"
-- Panic taxonomy: `.claude/rules/gocell/error-handling.md` §"Panic taxonomy
-  and Approved funnel" B 类（programmer-error parameter）
+- Panic taxonomy: `.claude/rules/gocell/error-handling.md` §"Panic"
+  B 类（programmer-error parameter）

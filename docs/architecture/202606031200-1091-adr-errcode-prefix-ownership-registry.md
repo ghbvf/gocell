@@ -126,4 +126,4 @@ errcode.RegisteredPrefixes() []PrefixOwner
 - `pkg/errcode/testdata/prefix_set.golden` — 平台注册集 golden snapshot
 - `tools/archtest/errcode_invariants_test.go` — `ERRCODE-PREFIX-OWNERSHIP-01` archtest（AI-robust 评级权威真值源）
 - Issue #1091
-- `.claude/rules/gocell/error-handling.md` §"错误码前缀所有权 (#1091)"
+- `.claude/rules/gocell/error-handling.md` §"错误码前缀"
