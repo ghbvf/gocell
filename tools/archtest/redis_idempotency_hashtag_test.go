@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // INVARIANT: IDEMPOTENCY-LUA-HASHTAG-01

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: CELL-IFACE-ISP-COMPOSITE-01
 //   - INVARIANT: CELL-IFACE-ISP-METHODSETS-01

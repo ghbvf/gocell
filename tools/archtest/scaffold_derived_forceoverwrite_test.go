@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: SCAFFOLD-DERIVED-FORCEOVERWRITE-01
 //
 // This _test.go only dogfoods + precision-gates the rule. The importable rule

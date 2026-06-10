@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: SAGA-STEP-COMPENSATE-PURE-01
 //   - INVARIANT: SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: KERNEL-METADATA-NO-WIRE-01
 //
 // KERNEL-METADATA-NO-WIRE-01 — invariant-driven gate.

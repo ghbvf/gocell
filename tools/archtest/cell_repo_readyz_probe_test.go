@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: CELL-REPO-READYZ-PROBE-01
 //
 // AI-robust: Medium (test-existence backstop — NOT a funnel upstream lock).

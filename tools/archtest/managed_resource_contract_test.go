@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: MANAGED-RESOURCE-COMPLETENESS-01: adapter exported types
 //
 //	with owned lifecycle must implement ManagedResource or be opted-out.

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: AUTH-KEYSTEST-IMPORT-BOUNDARY-01
 //
 // runtime/auth/keystest is test-only. Rule logic lives in auth_keystest_boundary.go

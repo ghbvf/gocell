@@ -1,3 +1,5 @@
+//go:build archtest
+
 // authz_eval_attr_notfound_guard_test.go — guards the fail-closed attribute
 // lookup in the ABAC PDP engine: a resolve() callsite must not discard the
 // found bool.

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: TESTUTIL-BOUNDARY-01: negprobe companion to testutil_boundary_test.go
 // — locks the classification primitives so the parent rule cannot pass silently
 // after a helper regression.

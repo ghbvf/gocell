@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: MODULE-PROVIDE-NO-VALUE-HANDOFF-01
 //
 // # MODULE-PROVIDE-NO-VALUE-HANDOFF-01 — CellModule.Provide signature frozen (Hard)

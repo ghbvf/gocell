@@ -1,3 +1,5 @@
+//go:build archtest
+
 // Package archtest enforces meta-governance over kernel/governance rule registration.
 //
 //   - INVARIANT: GOVERNANCE-RULES-REGISTRATION-GUARD-01

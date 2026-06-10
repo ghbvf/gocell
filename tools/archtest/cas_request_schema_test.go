@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: CAS-CONTRACT-EXPECTED-VERSION-SCHEMA-01
 //
 // The CAS guard field `expectedVersion` has exactly ONE definition: the shared

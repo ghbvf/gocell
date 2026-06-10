@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: WEBHOOK-METRIC-LABEL-VALUES-FROZEN-01
 //
 // This file owns ONE invariant: the value sets of the two sealed string-typed

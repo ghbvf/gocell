@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants asserted in this file:
 //   - INVARIANT: LOCATOR-DISCOVERY-FUNNEL-01
 //

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // audit_trace_id_write_caller_test.go — locks the appender as the SOLE
 // injection write-path for runtime/audit/ledger.Entry.TraceID and
 // runtime/audit/ledger.Entry.CorrelationID, so business/cell code cannot

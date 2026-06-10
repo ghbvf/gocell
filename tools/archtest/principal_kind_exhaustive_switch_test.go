@@ -1,3 +1,5 @@
+//go:build archtest
+
 // principal_kind_exhaustive_switch_test.go — forces every production switch on
 // runtime/auth.PrincipalKind to explicitly handle every declared constant, so
 // adding a new kind (e.g. PrincipalDevice for the multi-tenancy/ABAC epic)

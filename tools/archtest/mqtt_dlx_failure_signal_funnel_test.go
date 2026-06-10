@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01
 //
 // mqtt_dlx_failure_signal_funnel_test.go — the alertable dead-letter outcome

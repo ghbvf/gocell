@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // jwt_claims_no_authz_epoch_test.go — Hard guard that the access JWT claim

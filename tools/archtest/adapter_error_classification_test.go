@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01
 //
 // Hard funnel double-lock for adapter transient-error classification

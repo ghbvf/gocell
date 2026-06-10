@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: OUTBOX-SUBSCRIBER-SETTLEMENT-NOTIFY-01
 //
 // Every terminal outbox.Subscriber implementation must call

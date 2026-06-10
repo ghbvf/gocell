@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // pass_funnel_test.go — meta-archtest: enforce archtest.Pass funnel.
@@ -149,7 +151,11 @@ type passFunnelTarget struct {
 func loadPassFunnelTargets(t *testing.T) []passFunnelTarget {
 	t.Helper()
 	root := findModuleRoot(t)
-	resolver, err := typeseval.SharedResolver(root, true, nil, "./tools/archtest/...")
+	// tags=["archtest"]: archtest leaf *_test.go now carry //go:build archtest
+	// (ARCHTEST-LEAF-BUILD-TAG-01) — the rule files this scan must inspect. Without
+	// the tag SharedResolver drops every *_test.go and the pass-funnel rules go
+	// vacuous.
+	resolver, err := typeseval.SharedResolver(root, true, []string{"archtest"}, "./tools/archtest/...")
 	if err != nil {
 		t.Fatalf("typeseval.SharedResolver: %v", err)
 	}
@@ -982,7 +988,12 @@ func loadDepguardArchtestExemptions(t *testing.T, root string) map[string]bool {
 func loadPackagesImporters(t *testing.T) map[string]bool {
 	t.Helper()
 	root := findModuleRoot(t)
-	resolver, err := typeseval.SharedResolver(root, true, nil, "./tools/archtest/...")
+	// tags=["archtest"]: the three sanctioned go/packages importers
+	// (archtest_test.go, pass_funnel_test.go, pass_test.go) carry //go:build
+	// archtest (ARCHTEST-LEAF-BUILD-TAG-01); loading without the tag drops them
+	// from pkg.Syntax and makes this inventory diverge from
+	// passFunnelPermanentExempt (PASS-FUNNEL-GUARD-SYNC red).
+	resolver, err := typeseval.SharedResolver(root, true, []string{"archtest"}, "./tools/archtest/...")
 	if err != nil {
 		t.Fatalf("typeseval.SharedResolver: %v", err)
 	}

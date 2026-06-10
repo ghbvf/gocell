@@ -1,3 +1,5 @@
+//go:build archtest
+
 // Package archtest — production code invariant gates.
 //
 // Asserted invariants:

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: WEBHOOK-IDEMPOTENCY-CLAIMER-01
 //
 // This file owns ONE invariant: in runtime/webhook, every constructed `claimed`

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: OBS-01
 //   - INVARIANT: METRICS-GAUGEVEC-FUNNEL-01

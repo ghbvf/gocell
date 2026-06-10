@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 import (

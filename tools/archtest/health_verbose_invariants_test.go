@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01
 //   - INVARIANT: HEALTH-REDACTED-ERROR-MSG-FUNNEL-01

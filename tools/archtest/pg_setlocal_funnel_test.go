@@ -1,3 +1,5 @@
+//go:build archtest
+
 // pg_setlocal_funnel_test.go — guards how the PR-3 row-level-security tenant GUC
 // (app.tenant_id) is written in adapters/postgres.
 //

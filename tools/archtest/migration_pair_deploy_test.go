@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: MIGRATION-PAIR-DEPLOY-01
 package archtest
 

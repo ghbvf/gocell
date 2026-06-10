@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: AFTERCOMMIT-HOOK-PURE-TRANSIENT-01
 //
 // aftercommit_pure_transient_test.go — test entry points for

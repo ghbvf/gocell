@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: CELLTEST-IMPORT-SCOPE-01: production Go files must not import
 // packages matching cells/[a-z]+/[a-z]+test$ — the cells/{X}/{X}test/
 // naming pattern designates test-infrastructure packages (cell-level testutil

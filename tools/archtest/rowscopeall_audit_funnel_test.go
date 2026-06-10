@@ -1,3 +1,5 @@
+//go:build archtest
+
 // rowscopeall_audit_funnel_test.go — closes the PRODUCER side of the
 // "RowScope=all ⟹ mandatory cross-tenant audit" funnel (epic #1337 PR-5, #1343).
 //

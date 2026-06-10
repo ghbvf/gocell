@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: TYPESEVAL-EVAL-PREDICATE-CENTRALIZED-01
 //
 // This _test.go only dogfoods + precision-gates the rule. The importable rule

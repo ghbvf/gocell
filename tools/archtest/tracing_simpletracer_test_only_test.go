@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: TRACING-SIMPLETRACER-TEST-ONLY-01: in-process simpleTracer is test-only; runtime/observability/tracing stays deleted
 package archtest
 

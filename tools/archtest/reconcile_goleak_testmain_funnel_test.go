@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: RECONCILE-GOLEAK-TESTMAIN-FUNNEL-01
 //
 // AI-robust: Medium (test-infra funnel; Hard unreachable — permanent ceiling).

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // authz_decision_sealed_test.go — reflect schema freeze for the sealed
 // authz.Decision type and the open obligation types Obligations/FieldMask
 // (#1344 PR-6), plus an AST-based constructor closed-set scan.

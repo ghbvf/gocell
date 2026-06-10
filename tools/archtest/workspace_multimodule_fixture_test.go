@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: WORKSPACE-MULTIMODULE-SCAN-01
 //
 // The reverse fixture for #1555: proves the archtest workspace-root model loads

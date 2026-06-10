@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: OUTBOX-RESERVED-METADATA-KEYS-FROZEN-01
 //
 // This file owns ONE invariant: the kernel/outbox.ReservedMetadataKeys set —

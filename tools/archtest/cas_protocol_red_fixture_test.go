@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: CAS-PROTOCOL-COMPOSITION-ROOT-01 (RED fixture coverage)
 package archtest

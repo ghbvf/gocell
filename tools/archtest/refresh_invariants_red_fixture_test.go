@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: REFRESH-CROSS-STORE-TX-01 (RED fixture coverage)
 package archtest

@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // reflect_string_arg_test.go — single source for the reflect.Value

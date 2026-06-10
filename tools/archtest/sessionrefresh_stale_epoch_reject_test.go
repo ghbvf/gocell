@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // sessionrefresh_stale_epoch_reject_test.go — guard that locks the

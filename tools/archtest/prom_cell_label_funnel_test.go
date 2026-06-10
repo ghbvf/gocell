@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants asserted in this file:
 //   - INVARIANT: PROM-CELL-LABEL-FUNNEL-01
 //

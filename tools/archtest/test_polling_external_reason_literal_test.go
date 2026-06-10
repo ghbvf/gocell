@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // INVARIANT: TEST-POLLING-EXTERNAL-REASON-LITERAL-01
@@ -72,7 +74,7 @@ func TestExternalReasonLiteral(t *testing.T) {
 // fixture packages under tools/archtest/testdata/testwait_external_fixtures/.
 // Each fixture dir owns a diag.golden capturing the rule's real output.
 //
-// To regenerate golden files: go test ./tools/archtest/... -run TestExternalReasonLiteralFixtures$ -update.
+// To regenerate golden files: go test -tags=archtest ./tools/archtest -run TestExternalReasonLiteralFixtures$ -update.
 func TestExternalReasonLiteralFixtures(t *testing.T) {
 	t.Parallel()
 

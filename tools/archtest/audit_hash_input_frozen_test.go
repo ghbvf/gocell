@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: AUDIT-HASH-INPUT-FROZEN-01
 //
 // Locks the canonical 12-field HMAC chain input for the audit ledger so the

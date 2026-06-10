@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: PROJECTION-CHECKPOINT-CONFORMANCE-ENROLL-01
 //
 // PROJECTION-CHECKPOINT-CONFORMANCE-ENROLL-01 — CheckpointStore conformance backstop.

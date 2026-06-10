@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: LISTENER-DX-01: deleted listener option APIs and legacy auth.Route Delegated surface must not be reintroduced
 package archtest
 

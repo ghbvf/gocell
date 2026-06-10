@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: SLOG-HANDLER-SEALED-FUNNEL-01
 //
 // SLOG-HANDLER-SEALED-FUNNEL-01 — every slog.NewJSONHandler / slog.NewTextHandler

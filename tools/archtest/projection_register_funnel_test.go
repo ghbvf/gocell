@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: PROJECTION-REGISTER-FUNNEL-01
 //
 // PROJECTION-REGISTER-FUNNEL-01 — cell.Registrar.RegisterProjection caller allowlist.

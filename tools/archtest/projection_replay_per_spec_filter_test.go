@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: PROJECTION-REPLAY-PER-SPEC-FILTER-01
 //
 // Package archtest enforces PROJECTION-REPLAY-PER-SPEC-FILTER-01: inside the

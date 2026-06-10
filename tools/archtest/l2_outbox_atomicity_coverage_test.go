@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: L2-OUTBOX-ATOMICITY-COVERAGE-01
 //
 // l2_outbox_atomicity_coverage_test.go — every L2 unit (cell-level or

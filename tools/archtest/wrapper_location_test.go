@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: CELL-RAW-INFRA-WRAPPER-LOCATION-01
 //

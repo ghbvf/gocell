@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: SEED-ROLE-IFACE-01
 //
 // Production code must not name the concrete *mem.RoleRepository type. The rule

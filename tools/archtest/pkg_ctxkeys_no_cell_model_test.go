@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: PKG-CTXKEYS-NO-CELL-MODEL-01
 //
 // # PKG-CTXKEYS-NO-CELL-MODEL-01

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: TEST-SLEEP-DISCIPLINE-01
 //
 // TEST-SLEEP-DISCIPLINE-01 — invariant-driven gate for *test* code.

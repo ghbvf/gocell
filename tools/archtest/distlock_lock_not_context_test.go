@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // INVARIANT: DISTLOCK-LOCK-NOT-CONTEXT-01

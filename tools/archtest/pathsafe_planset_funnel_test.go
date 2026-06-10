@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: PATHSAFE-PLANSET-FUNNEL-01
 //
 // pkg/pathsafe.PlanSet is the typed container that pathsafe.WritePlannedFiles

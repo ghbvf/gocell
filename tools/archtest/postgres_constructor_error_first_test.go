@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // INVARIANT: PG-CONSTRUCTOR-MUST-FREE-01

@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: CELL-INIT-CONTRACTUSAGE-01: kernel/cell must not import runtime/* or adapters/*; Registrar type must stay local
 package archtest
 

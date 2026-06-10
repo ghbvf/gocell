@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: ROLE-ADMIN-LITERAL-01
 // INVARIANT: ROLE-ADMIN-LITERAL-02
 //

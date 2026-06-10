@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: TYPESUTIL-IMPLEMENTS-FUNNEL-01
 //
 // TYPESUTIL-IMPLEMENTS-FUNNEL-01: every reference to the stdlib function

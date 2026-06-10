@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: OUTBOX-STATE-TRANSITION-COMPLETENESS-01
 //   - INVARIANT: OUTBOX-STATE-LITERAL-BAN-01

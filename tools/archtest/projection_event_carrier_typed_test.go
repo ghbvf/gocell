@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants:
 //   - INVARIANT: PROJECTION-EVENT-CARRIER-TYPED-01
 //

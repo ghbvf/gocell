@@ -1,3 +1,5 @@
+//go:build archtest
+
 // invariants asserted in this file:
 //   - INVARIANT: CELLGEN-ERRCODE-FUNNEL-01
 //

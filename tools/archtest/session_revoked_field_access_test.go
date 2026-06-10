@@ -1,3 +1,5 @@
+//go:build archtest
+
 package archtest
 
 // session_revoked_field_access_test.go — independent Hard funnel that locks

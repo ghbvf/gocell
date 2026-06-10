@@ -31,7 +31,7 @@ PR #557 的解法：引入 `fixturespec.Violation()` typed marker（Hard funnel�
 **fixture 诊断断言改用 golden-file 单源载体**，取代 #557 的 cardinality-only marker 断言：
 
 1. 规则 R 在 fixture F 上的实际诊断输出（`Rel:Line:Col Severity RuleID Message` 规范化文本）序列化为签入的 golden artifact（`tools/archtest/testdata/<fixture>/diag.golden`）。
-2. `go test ./tools/archtest/... -update`（典型 golden flag）重生成全部 golden。
+2. `make update-archtest-golden`（= `go test -tags=archtest ./tools/archtest -update`，典型 golden flag）重生成全部 golden。
 3. CI 走 `bash hack/verify-archtest.sh`（默认 `-update=false`，只断言不重写），golden 与规则输出不一致 → `AssertGolden` `t.Errorf` → 对应 shard `go test` 失败 → CI 红。`git diff --exit-code` 形态是 K8s 对标的可选 Medium→Hard 升级路径，**本 PR 未实施**（见 §AI-robust 评级表 Medium→Hard 路径与 backlog）。
 4. fixture 退化为**纯触发代码**，不再含任何 `fixturespec.Violation()` 手放 marker——期望完全由规则输出派生。
 

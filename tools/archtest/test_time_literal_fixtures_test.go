@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: TEST-TIME-LITERAL-01
 //
 // test_time_literal_fixtures_test.go — fixture-based regression tests for the

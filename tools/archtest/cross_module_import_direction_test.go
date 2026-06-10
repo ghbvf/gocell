@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: CROSS-MODULE-IMPORT-DIRECTION-01
 //
 // The base (core) workspace module must not import any other workspace member

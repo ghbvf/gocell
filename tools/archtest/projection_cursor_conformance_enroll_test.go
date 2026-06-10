@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: PROJECTION-CURSOR-CONFORMANCE-ENROLL-01
 //
 // PROJECTION-CURSOR-CONFORMANCE-ENROLL-01 — Cursor conformance backstop.

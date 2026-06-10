@@ -1,3 +1,5 @@
+//go:build archtest
+
 // INVARIANT: MIGRATION-FILENAME-GOOSE-PARSEABLE-01
 package archtest
 
