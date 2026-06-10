@@ -95,6 +95,31 @@ func TestMemProjectionEventSource_PositionRejectsForeignCarrier(t *testing.T) {
 	})
 }
 
+// TestMemProjectionEventSource_ReplayHonorsCtxCancel asserts Replay stops with the ctx
+// error before delivering any event when the context is already canceled (covers the
+// ctx.Err() guard in Replay's loop).
+func TestMemProjectionEventSource_ReplayHonorsCtxCancel(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	src := projection.NewMemProjectionEventSource()
+	src.Append(newJournalEntry(t, clk))
+	src.Append(newJournalEntry(t, clk))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel: the first qualifying event must trip the ctx.Err() check
+
+	delivered := 0
+	err := src.Replay(ctx, 0, func(projection.ProjectionEvent) error {
+		delivered++
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Replay error = %v, want context.Canceled", err)
+	}
+	if delivered != 0 {
+		t.Errorf("Replay delivered %d events on a canceled ctx, want 0", delivered)
+	}
+}
+
 func assertPermanent(t *testing.T, err error) {
 	t.Helper()
 	if err == nil {

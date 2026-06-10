@@ -144,11 +144,14 @@ func TestScanProjectionEvent(t *testing.T) {
 }
 
 // TestPGProjectionEventSource_PositionNoDBRoundTrip is the #1504 root-fix regression: Position
-// must read the carrier's own global_seq and issue NO SQL. The source is built on a nil pool
-// (pgexec.New(nil)), so ANY database round-trip in Position would panic on a nil-pointer
-// dereference. Position returning the carrier's seq cleanly proves the structural fix — no
-// `SELECT seq WHERE id=$1` lookup that a deleted row could break (contrast the outbox-backed
-// PGProjectionCursor it replaces, whose Position issues exactly that query).
+// must read the carrier's own global_seq and issue NO SQL. The source's executor wraps a nil
+// pool (pgexec.New(nil)) and Position is called with no ambient tx, so ANY database round-trip
+// would dereference the nil pool and panic. Position returning the carrier's seq cleanly proves
+// the structural fix — no `SELECT seq WHERE id=$1` lookup that a deleted row could break
+// (contrast the outbox-backed PGProjectionCursor it replaces, whose Position issues exactly
+// that query). pgexec.PGExecutor is a sealed interface, so a fail-on-call spy cannot be
+// implemented out-of-package; the nil-pool executor is the sanctioned no-DB test seam (the same
+// one newEventSourceWithTx uses).
 func TestPGProjectionEventSource_PositionNoDBRoundTrip(t *testing.T) {
 	t.Parallel()
 	s := &PGProjectionEventSource{db: pgexec.New(nil)} // nil pool: any query would panic
