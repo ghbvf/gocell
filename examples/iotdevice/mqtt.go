@@ -177,6 +177,7 @@ func buildMQTTDirectPublisher(
 		return nil, nil, false, err
 	}
 
+	// timing/backoff use NewConfig defaults; see adapters/mqtt.With* for TLS/auth/etc.
 	cfg, err := mqtt.NewConfig(clientID, brokers,
 		mqtt.WithConnectDeadline(connectDeadline),
 		mqtt.WithPublishTimeout(5*time.Second),

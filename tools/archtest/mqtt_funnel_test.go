@@ -1,8 +1,8 @@
 //go:build archtest
 
 // INVARIANT: MQTT-CLIENT-ID-NAMESPACE-01
-//   - INVARIANT: MQTT-TOPIC-NAMESPACE-01
-//   - INVARIANT: MQTT-CONFIG-SEALED-FIELD-FROZEN-01
+// INVARIANT: MQTT-TOPIC-NAMESPACE-01
+// INVARIANT: MQTT-CONFIG-SEALED-FIELD-FROZEN-01
 //
 // mqtt_funnel_test.go — dogfood Tests + self-checks for the sealed-struct
 // construction funnels of adapters/mqtt.ClientID, adapters/mqtt.TopicNamespace,
@@ -667,6 +667,83 @@ func TestMQTTFunnel_A2ScannerFiresOnRedFixture(t *testing.T) {
 	}
 	assert.True(t, foundRedfixture,
 		"A2 scanner reported diagnostics but none from the red fixture; got: %+v", diags)
+}
+
+// TestMQTTConfigSeal_A2ScannerFires proves that scanMQTTCompositeLitConstruction
+// produces no violations for the production adapters/mqtt package (all non-zero
+// Config composite literals are inside NewConfig), AND that the go/types
+// resolution path actually finds ≥1 such literal inside NewConfig (so the
+// production A2 scan cannot be vacuously green due to a silently-broken type
+// resolver).
+//
+// Without the insideCount ≥ 1 assertion, a refactor that moved the Config{...}
+// literal out of NewConfig — or broke the go/types resolution path — could leave
+// TestMQTTConfigSealedFieldFrozen01/A2_Construction vacuously passing.
+func TestMQTTConfigSeal_A2ScannerFires(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	root := findModuleRoot(t)
+
+	const newConfigFullName = mqttPkgPath + ".NewConfig"
+
+	var outsideCount, insideCount int
+
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		prodscan.PatternsExtended(root)),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
+				return nil
+			}
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				// Count Config composite literals outside NewConfig (should be zero).
+				diags := scanMQTTCompositeLitConstruction(
+					p.Fset, f, rel, p.TypesInfo,
+					"Config", []string{newConfigFullName}, "MQTT-CONFIG-SEALED-FIELD-FROZEN-01",
+				)
+				outsideCount += len(diags)
+
+				// Count non-zero Config composite literals inside NewConfig (must be ≥1).
+				EachInSubtree[ast.CompositeLit](f, func(lit *ast.CompositeLit) {
+					if lit.Type == nil || len(lit.Elts) == 0 {
+						return
+					}
+					tv, ok := p.TypesInfo.Types[lit.Type]
+					if !ok {
+						return
+					}
+					named, ok := tv.Type.(*types.Named)
+					if !ok {
+						return
+					}
+					tobj := named.Obj()
+					if tobj.Pkg() == nil || tobj.Pkg().Path() != mqttPkgPath || tobj.Name() != "Config" {
+						return
+					}
+					if mqttEnclosingFuncAllowed(p.TypesInfo, f, lit, []string{newConfigFullName}) {
+						insideCount++
+					}
+				})
+			}
+			return nil
+		})
+
+	// All non-zero Config literals must be inside NewConfig.
+	assert.Equal(t, 0, outsideCount,
+		"A2 scanner: production code has Config composite literals outside NewConfig — "+
+			"this means the A2 self-check correctly detects violations when they exist")
+
+	// The inside count must be ≥1: NewConfig constructs the Config{...} literal in its body.
+	// If this fails, the go/types resolution path is broken and cannot see any Config literals.
+	assert.GreaterOrEqual(t, insideCount, 1,
+		"A2 scanner must find ≥1 Config composite literal inside NewConfig — "+
+			"if this fails, the go/types resolution path is silently broken")
 }
 
 // TestMQTTFunnel_NonVacuousness documents that the A1 test was confirmed

@@ -166,15 +166,28 @@ type Config struct {
 // ConfigOption sets an optional Config field inside NewConfig. Required identity
 // and transport (clientID, brokers) are positional arguments of NewConfig;
 // everything else is an option, defaulted where a working zero is not available.
+// Nil options are silently skipped by NewConfig.
 type ConfigOption func(*Config)
 
 // WithTLS sets the TLS config. Required when any broker uses a tls/ssl/mqtts/wss
 // scheme; rejected (via validate) if it disables certificate verification or
-// floors below TLS 1.2.
-func WithTLS(c *tls.Config) ConfigOption { return func(cfg *Config) { cfg.tlsConfig = c } }
+// floors below TLS 1.2. The config is defensively cloned via (*tls.Config).Clone()
+// so post-construction mutation of the caller's *tls.Config cannot weaken TLS
+// settings (e.g. setting InsecureSkipVerify after NewConfig returned). Clone is
+// nil-safe: WithTLS(nil) results in tlsConfig=nil (no TLS).
+func WithTLS(c *tls.Config) ConfigOption { return func(cfg *Config) { cfg.tlsConfig = c.Clone() } }
 
-// WithAuth sets broker authentication credentials (optional).
-func WithAuth(a AuthConfig) ConfigOption { return func(cfg *Config) { cfg.auth = a } }
+// WithAuth sets broker authentication credentials (optional). The Password field
+// is defensively copied so post-construction mutation of the caller's slice cannot
+// corrupt the stored credential.
+func WithAuth(a AuthConfig) ConfigOption {
+	return func(cfg *Config) {
+		if a.Password != nil {
+			a.Password = append([]byte(nil), a.Password...)
+		}
+		cfg.auth = a
+	}
+}
 
 // WithSessionExpiry sets the MQTT session expiry. 0 (default) = clean session;
 // > 0 must be >= 1s (uint32 seconds wire field).
@@ -218,11 +231,24 @@ func WithBackoff(b BackoffConfig) ConfigOption { return func(cfg *Config) { cfg.
 // defaults, applies opts, then validates — returning a sealed, validated Config
 // or an error (and a zero Config). clientID and brokers are the irreducible
 // identity + transport inputs and are compile-required; everything else is an
-// optional With* knob with a working default.
+// optional With* knob with a working default. Nil and empty brokers are both
+// rejected (at-least-one-broker required). Nil options in opts are silently skipped.
 //
 // The brokers slice is defensively copied so a caller cannot mutate the
 // validated transport list after construction (which would bypass the
 // scheme/host checks validate ran).
+//
+// All option fields and their default / zero-semantics:
+//
+//   - connectTimeout  = 10s (per-attempt dial timeout; > 0 required)
+//   - connectDeadline = 30s (bootstrap first-connection wait budget; > 0 required)
+//   - keepAlive       = 30s (MQTT keep-alive; >= 1s, <= 65535s)
+//   - backoff         = {BaseDelay: 500ms, MaxDelay: 30s} (reconnect back-off)
+//   - tlsConfig       = nil (no TLS; required when any broker uses tls/ssl/mqtts/wss scheme)
+//   - auth            = zero (no credentials)
+//   - sessionExpiry   = 0 (clean session; > 0 must be >= 1s)
+//   - maximumPacketSize = 0 (no client-declared limit; no outbound guard in Publisher)
+//   - publishTimeout  = 0 (no adapter-imposed timeout; caller ctx deadline applies)
 //
 // This is the single sanctioned non-zero Config composite-literal site
 // (MQTT-CONFIG-SEALED-FIELD-FROZEN-01/A2).
@@ -236,7 +262,9 @@ func NewConfig(clientID ClientID, brokers []string, opts ...ConfigOption) (Confi
 		backoff:         defaultBackoff,
 	}
 	for _, o := range opts {
-		o(&c)
+		if o != nil {
+			o(&c)
+		}
 	}
 	if err := c.validate(); err != nil {
 		return Config{}, err
@@ -252,6 +280,9 @@ func NewConfig(clientID ClientID, brokers []string, opts ...ConfigOption) (Confi
 // as a zero-value defense-in-depth guard (an ignored NewConfig error must not
 // let a zero Config reach the autopaho wiring). External callers receive
 // validation results as the NewConfig error.
+//
+// Short-circuit order: clientID → brokers → timings → backoff → publishTimeout.
+// A caller fixing multiple errors will encounter them in this sequence.
 //
 // Cognitive-complexity budget: split into validateBrokers + validateTimings +
 // validateBackoff helpers to stay ≤ 15 per function.

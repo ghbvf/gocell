@@ -194,7 +194,12 @@ func WithConnectionCollector(c ConnectionCollector) ConnectionOption {
 // unvalidated Config unrepresentable outside this package
 // (MQTT-CONFIG-SEALED-FIELD-FROZEN-01). Open re-runs cfg.validate() as a
 // zero-value defense-in-depth guard before any side effect: an ignored NewConfig
-// error must not let a zero Config reach the autopaho wiring.
+// error must not let a zero Config reach the autopaho wiring. This guard has NO
+// archtest by design — the upstream Hard compile gate (unexported Config fields)
+// makes an unvalidated Config unrepresentable outside the package, so only a
+// deliberately zero-initialized Config can reach here, which validate rejects
+// immediately. The seal removes the threat that form-lock archtest existed to
+// cover; retaining archtest for an unreachable case would be a stale guard.
 //
 // Bootstrap-fatal CONNACK reason codes (0x81/0x82/0x84/0x85/0x8A/0x95) and TLS
 // handshake errors cause Open to return a non-transient error immediately.

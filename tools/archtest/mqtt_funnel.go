@@ -1,6 +1,6 @@
 // INVARIANT: MQTT-CLIENT-ID-NAMESPACE-01
-//   - INVARIANT: MQTT-TOPIC-NAMESPACE-01
-//   - INVARIANT: MQTT-CONFIG-SEALED-FIELD-FROZEN-01
+// INVARIANT: MQTT-TOPIC-NAMESPACE-01
+// INVARIANT: MQTT-CONFIG-SEALED-FIELD-FROZEN-01
 //
 // mqtt_funnel.go — importable sealed-struct construction funnel logic for
 // adapters/mqtt.ClientID, adapters/mqtt.TopicNamespace, and adapters/mqtt.Config.

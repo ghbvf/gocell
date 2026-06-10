@@ -520,3 +520,90 @@ func TestConfig_BrokerURLs_ReturnsErrorOnInvalidURL(t *testing.T) {
 	_, err := cfg.brokerURLs()
 	require.Error(t, err)
 }
+
+// ─── Security: defensive copies ──────────────────────────────────────────────
+
+// TestNewConfig_DefensivelyClonesTLS verifies that post-construction mutation of
+// the caller's *tls.Config cannot weaken TLS settings that NewConfig validated.
+// WithTLS must clone the config so InsecureSkipVerify/MinVersion changes are
+// isolated to the caller's copy and do not affect the sealed Config.
+func TestNewConfig_DefensivelyClonesTLS(t *testing.T) {
+	t.Parallel()
+	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	cfg, err := NewConfig(mustClientID(t), []string{"tls://broker.example.com:8883"}, WithTLS(tlsCfg))
+	require.NoError(t, err)
+
+	// Mutate the caller's copy after construction.
+	tlsCfg.InsecureSkipVerify = true
+	tlsCfg.MinVersion = tls.VersionTLS10
+
+	// Sealed Config must retain the validated values.
+	assert.False(t, cfg.tlsConfig.InsecureSkipVerify,
+		"InsecureSkipVerify must not reflect caller mutation after construction")
+	assert.Equal(t, uint16(tls.VersionTLS12), cfg.tlsConfig.MinVersion,
+		"MinVersion must not reflect caller mutation after construction")
+}
+
+// TestNewConfig_DefensivelyCopiesAuthPassword verifies that post-construction
+// mutation of the caller's password slice cannot corrupt the stored credential.
+// WithAuth must copy the Password bytes so later caller mutations are isolated.
+func TestNewConfig_DefensivelyCopiesAuthPassword(t *testing.T) {
+	t.Parallel()
+	pw := []byte("secret")
+	cfg, err := NewConfig(mustClientID(t), []string{validBroker}, WithAuth(AuthConfig{Username: "u", Password: pw}))
+	require.NoError(t, err)
+
+	// Mutate the caller's slice after construction.
+	pw[0] = 'X'
+
+	assert.Equal(t, []byte("secret"), cfg.auth.Password,
+		"stored Password must not reflect caller mutation after construction")
+}
+
+// ─── SessionExpiry boundary + WithAuth round-trip ────────────────────────────
+
+// configSessionExpiryOverflow is the smallest SessionExpiry value above
+// maxSessionExpiryDuration; used to assert overflow is rejected.
+const configSessionExpiryOverflow = maxSessionExpiryDuration + time.Second
+
+// TestNewConfig_SessionExpiry_Accepted verifies that positive SessionExpiry
+// values on and above the 1s floor are accepted.
+func TestNewConfig_SessionExpiry_Accepted(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		dur  time.Duration
+	}{
+		{"1s-boundary", testtime.D1s},
+		{"5s-interior", testtime.D5s},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := newTestConfig(t, WithSessionExpiry(tc.dur))
+			require.NoError(t, err)
+		})
+	}
+}
+
+// TestNewConfig_SessionExpiry_OverflowRejected verifies that a SessionExpiry
+// above the uint32-seconds ceiling (maxSessionExpiryDuration) is rejected.
+func TestNewConfig_SessionExpiry_OverflowRejected(t *testing.T) {
+	t.Parallel()
+	_, err := newTestConfig(t, WithSessionExpiry(configSessionExpiryOverflow))
+	requireInvalidConfig(t, err)
+}
+
+// TestNewConfig_OptionsOverrideDefaults_WithAuth extends the existing
+// TestNewConfig_OptionsOverrideDefaults to prove WithAuth round-trips Username
+// and Password correctly through the sealed constructor.
+func TestNewConfig_OptionsOverrideDefaults_WithAuth(t *testing.T) {
+	t.Parallel()
+	cfg, err := NewConfig(mustClientID(t), []string{validBroker},
+		WithAuth(AuthConfig{Username: "u", Password: []byte("p")}),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "u", cfg.auth.Username)
+	assert.Equal(t, "p", string(cfg.auth.Password))
+}
