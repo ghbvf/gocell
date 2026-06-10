@@ -59,8 +59,12 @@ func TestUserRepoNonEmptyCastFunnel(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 
+	// Platform cells live under [PlatformCellsDir] (corecells since #1560);
+	// the allowlist below is already corecells-keyed, but a stale literal
+	// "cells" root would scan an absent dir and silently fail-open the whole
+	// funnel (NonEmpty(_) casts in corecells would go unchecked).
 	scope := scanner.DirsScope(root, []string{
-		"cells",
+		PlatformCellsDir,
 		"runtime",
 		"kernel",
 		"adapters",

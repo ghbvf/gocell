@@ -149,10 +149,8 @@ verify cross-platform behaviour that cannot be exercised on Linux alone:
 go test -count=1 -timeout 5m \
   ./runtime/shutdown/... \
   ./runtime/config/... \
-  ./kernel/governance/...
-# corecells is its own go.work module (#1560); run from inside the module
-go -C corecells test -count=1 -timeout 5m \
-  ./accesscore/initialadmin/...
+  ./kernel/governance/... \
+  ./pkg/pathsafe/...
 ```
 
 **When it runs:** on every PR (`pr-check.yml`) and every push to `develop` (`ci.yml`), in
@@ -161,12 +159,11 @@ parallel with the Linux `build-test` job.
 **What it tests:**
 - `runtime/shutdown` — platform-specific signal set (`SIGINT`/`SIGTERM` on Unix, `os.Interrupt`
   on Windows).
-- `corecells/accesscore/initialadmin` — per-OS credential file path resolution and DACL security
-  descriptor (Windows).
 - `runtime/config` — symlink pivot detection; symlink tests are skipped on Windows via
   `t.Skip("symlink requires SeCreateSymbolicLinkPrivilege on Windows")` so the Windows runner
   passes cleanly while macOS validates the full symlink path.
 - `kernel/governance` — `IsWithinRoot` symlink escape test; same Windows skip applies.
+- `pkg/pathsafe` — cross-platform path containment / symlink-escape checks.
 
 **Coverage:** the `os-smoke` job does NOT upload a coverage profile and does NOT contribute to
 SonarCloud coverage. Coverage is collected exclusively from the Linux `build-test` and

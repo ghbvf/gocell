@@ -148,7 +148,7 @@ distribution = regression of the timing-normalization invariant
 - ADR `docs/architecture/202605101400-adr-credential-session-protocol.md` §3
   threat matrix rows "账号枚举防护 (401 三态归一)" + "timing 旁路均一化"
 - contract: `contracts/http/auth/login/v1/contract.yaml` 401 description
-- code: `cells/accesscore/slices/sessionlogin/service.go` — `errMsgInvalidCredentials`
+- code: `corecells/accesscore/slices/sessionlogin/service.go` — `errMsgInvalidCredentials`
   const + `dummyBcryptHash` + the four Internal templates above
 
 ## Admin path divergence (note)

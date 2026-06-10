@@ -81,7 +81,7 @@ import (
 
 const (
 	bcryptModulePath     = "golang.org/x/crypto/bcrypt"
-	credentialModulePath = PlatformModulePath + "/corecells/accesscore/internal/credential"
+	credentialModulePath = PlatformCellsModulePath + "/accesscore/internal/credential"
 
 	// bcryptHasherRel is the single sanctioned file allowed to call
 	// bcrypt.GenerateFromPassword (A1). Module-relative, slash form.

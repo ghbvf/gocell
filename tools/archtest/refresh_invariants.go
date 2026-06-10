@@ -41,7 +41,7 @@ const (
 // refreshStorePkg and sessionStorePkg are declared in
 // credential_invalidate_funnel_invariants.go (same package).
 
-const refreshPortsPkg = PlatformModulePath + "/corecells/accesscore/internal/ports"
+const refreshPortsPkg = PlatformCellsModulePath + "/accesscore/internal/ports"
 
 // ─── detection data ────────────────────────────────────────────────────────────
 

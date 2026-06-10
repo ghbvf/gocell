@@ -94,8 +94,8 @@ const (
 	// Derived from PlatformModulePath (ARCHTEST-MODULE-PATH-FUNNEL-01) so a
 	// module rename updates exactly one place — never a bare literal.
 	tenantPkgPath      = PlatformModulePath + "/pkg/tenant"
-	accesscorePortsPkg = PlatformModulePath + "/corecells/accesscore/internal/ports"
-	configcorePortsPkg = PlatformModulePath + "/corecells/configcore/internal/ports"
+	accesscorePortsPkg = PlatformCellsModulePath + "/accesscore/internal/ports"
+	configcorePortsPkg = PlatformCellsModulePath + "/configcore/internal/ports"
 	// tenantRepoParamFixPkg is a relative load path for go/packages — NOT a
 	// platform import path — so it is intentionally not derived from PlatformModulePath.
 	tenantRepoParamFixPkg = "./tools/archtest/internal/tenantrepoparamfixture"

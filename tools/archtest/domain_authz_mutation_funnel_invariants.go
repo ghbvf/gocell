@@ -30,14 +30,14 @@ const (
 // ─── platform-symbol path constants (no bare literals) ───────────────────────
 
 const (
-	domainUserPkg = PlatformModulePath + "/corecells/accesscore/internal/domain"
+	domainUserPkg = PlatformCellsModulePath + "/accesscore/internal/domain"
 )
 
 // Per-pkg sub-paths used in setMutatorCallsiteAllowlist key derivation.
 // Note: adminprovisionPkg is new here; identitymanagePkg is declared in
 // credential_invalidate_funnel_invariants.go (same package, single declaration).
 const (
-	adminprovisionPkg = PlatformModulePath + "/corecells/accesscore/internal/adminprovision"
+	adminprovisionPkg = PlatformCellsModulePath + "/accesscore/internal/adminprovision"
 )
 
 const (

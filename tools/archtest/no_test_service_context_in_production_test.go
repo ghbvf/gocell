@@ -44,14 +44,21 @@ func TestNO_TEST_SERVICE_CONTEXT_IN_PRODUCTION_01(t *testing.T) {
 	// is non-cell example code, examples/iotdevice/{auth.go,main.go} are
 	// non-cell wiring code). The scanner skips _test.go in-line so test
 	// helpers can call TestServiceContext freely.
+	//
+	// Platform cells live in the dedicated corecells module since #1560;
+	// route the platform-cell root through [platformCellScanDirs] (the
+	// single source for the on-disk scan root) so a relayout touches one
+	// place instead of a stale literal "cells" silently scanning nothing.
 	searchDirs := []string{
 		filepath.Join(root, "runtime"),
-		filepath.Join(root, "cells"),
 		filepath.Join(root, "cmd"),
 		filepath.Join(root, "kernel"),
 		filepath.Join(root, "adapters"),
 		filepath.Join(root, "examples"),
 		filepath.Join(root, "tests"),
+	}
+	for _, d := range platformCellScanDirs() {
+		searchDirs = append(searchDirs, filepath.Join(root, d))
 	}
 
 	var violations []string

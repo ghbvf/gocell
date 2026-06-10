@@ -70,7 +70,7 @@ var outboxPublisherEnrollmentWaivers = map[string]string{
 	PlatformModulePath + "/kernel/outbox": "kernel noop sink outbox.DiscardPublisher (Noop()==true, rejected by cell.CheckNotNoop " +
 		"in durable mode) — it discards rather than delivers, so a pub→sub roundtrip " +
 		"(outboxtest.TestPubSub) is N/A by design.",
-	PlatformModulePath + "/corecells/configcore/internal/testutil": "test-double publishers " +
+	PlatformCellsModulePath + "/configcore/internal/testutil": "test-double publishers " +
 		"(StubPublisher / FailingPublisher) — not a real transport; outboxtest.TestPubSub " +
 		"roundtrip is N/A for in-memory stubs.",
 	// adapters/mqtt waiver removed in PR-4 (#1142): adapters/mqtt/conformance_test.go

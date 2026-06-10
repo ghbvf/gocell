@@ -836,8 +836,8 @@ func TestLayerOf(t *testing.T) {
 		{PlatformModulePath + "/runtime/auth", "runtime"},
 		{PlatformModulePath + "/runtime/http/middleware", "runtime"},
 		{PlatformModulePath + "/adapters/postgres", "adapters"},
-		{PlatformModulePath + "/corecells/accesscore", "cells"},
-		{PlatformModulePath + "/corecells/accesscore/internal/domain", "cells"},
+		{PlatformCellsModulePath + "/accesscore", "cells"},
+		{PlatformCellsModulePath + "/accesscore/internal/domain", "cells"},
 		{PlatformModulePath + "/pkg/errcode", "pkg"},
 		{PlatformModulePath + "/cmd/gocell", "cmd"},
 		{PlatformModulePath + "/examples/ssobff", "examples"},
@@ -863,10 +863,10 @@ func TestCellOf(t *testing.T) {
 		input string
 		want  string
 	}{
-		{PlatformModulePath + "/corecells/accesscore", "accesscore"},
-		{PlatformModulePath + "/corecells/accesscore/internal/domain", "accesscore"},
-		{PlatformModulePath + "/corecells/auditcore/slices/auditappend", "auditcore"},
-		{PlatformModulePath + "/corecells/configcore", "configcore"},
+		{PlatformCellsModulePath + "/accesscore", "accesscore"},
+		{PlatformCellsModulePath + "/accesscore/internal/domain", "accesscore"},
+		{PlatformCellsModulePath + "/auditcore/slices/auditappend", "auditcore"},
+		{PlatformCellsModulePath + "/configcore", "configcore"},
 		// Non-cell paths return "".
 		{PlatformModulePath + "/kernel/cell", ""},
 		{PlatformModulePath + "/runtime/auth", ""},
@@ -886,10 +886,10 @@ func TestIsRootCellPackage(t *testing.T) {
 		input string
 		want  bool
 	}{
-		{PlatformModulePath + "/corecells/configcore", true},
-		{PlatformModulePath + "/corecells/accesscore", true},
-		{PlatformModulePath + "/corecells/configcore/postgres", false},
-		{PlatformModulePath + "/corecells/configcore/internal/ports", false},
+		{PlatformCellsModulePath + "/configcore", true},
+		{PlatformCellsModulePath + "/accesscore", true},
+		{PlatformCellsModulePath + "/configcore/postgres", false},
+		{PlatformCellsModulePath + "/configcore/internal/ports", false},
 		{PlatformModulePath + "/runtime/auth", false},
 	}
 	for _, tt := range tests {
@@ -924,7 +924,7 @@ func TestIsCellPublicAPIDisallowedType(t *testing.T) {
 func TestCheckCellPublicAPIAdapterTypes_FindsViolations(t *testing.T) {
 	const module = PlatformModulePath
 	cls := kerneldepgraph.NewClassifier([]string{module})
-	rootPkg := types.NewPackage(PlatformModulePath+"/corecells/accesscore", "accesscore")
+	rootPkg := types.NewPackage(PlatformCellsModulePath+"/accesscore", "accesscore")
 	poolPkg := types.NewPackage("github.com/jackc/pgx/v5/pgxpool", "pgxpool")
 	promPkg := types.NewPackage("github.com/prometheus/client_golang/prometheus", "prometheus")
 
@@ -948,7 +948,7 @@ func TestCheckCellPublicAPIAdapterTypes_FindsViolations(t *testing.T) {
 	}
 
 	fakePkg := &packages.Package{
-		PkgPath: PlatformModulePath + "/corecells/accesscore",
+		PkgPath: PlatformCellsModulePath + "/accesscore",
 		Syntax:  []*ast.File{file},
 		Types:   rootPkg,
 		TypesInfo: &types.Info{
@@ -971,7 +971,7 @@ func TestCheckCellPublicAPIAdapterTypes_FindsViolations(t *testing.T) {
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, rootPkg, "pool", poolPtr)), nil, false))
 	fakePkg.TypesInfo.Defs[metricName] = types.NewVar(token.NoPos, rootPkg, "ExportedMetric", counterType)
-	fakePkg.PkgPath = PlatformModulePath + "/corecells/accesscore"
+	fakePkg.PkgPath = PlatformCellsModulePath + "/accesscore"
 
 	violations := checkCellPublicAPIAdapterTypes(cls, []*packages.Package{fakePkg})
 
@@ -989,7 +989,7 @@ func TestCheckCellPublicAPIAdapterTypes_FindsViolations(t *testing.T) {
 func TestCheckCellPublicAPIAdapterTypes_FailsClosedOnIncompleteTypedPackage(t *testing.T) {
 	const module = PlatformModulePath
 	cls := kerneldepgraph.NewClassifier([]string{module})
-	rootPkg := types.NewPackage(PlatformModulePath+"/corecells/accesscore", "accesscore")
+	rootPkg := types.NewPackage(PlatformCellsModulePath+"/accesscore", "accesscore")
 	funcDecl := &ast.FuncDecl{Name: ast.NewIdent("Exported"), Type: &ast.FuncType{}}
 	file := &ast.File{
 		Name:  ast.NewIdent("accesscore"),
@@ -997,7 +997,7 @@ func TestCheckCellPublicAPIAdapterTypes_FailsClosedOnIncompleteTypedPackage(t *t
 	}
 
 	loadErrorPkg := &packages.Package{
-		PkgPath: PlatformModulePath + "/corecells/accesscore",
+		PkgPath: PlatformCellsModulePath + "/accesscore",
 		Syntax:  []*ast.File{file},
 		Types:   rootPkg,
 		TypesInfo: &types.Info{
@@ -1009,17 +1009,17 @@ func TestCheckCellPublicAPIAdapterTypes_FailsClosedOnIncompleteTypedPackage(t *t
 		Errors: []packages.Error{{Msg: "undefined: broken"}},
 	}
 	missingObjectPkg := &packages.Package{
-		PkgPath: PlatformModulePath + "/corecells/configcore",
+		PkgPath: PlatformCellsModulePath + "/configcore",
 		Syntax:  []*ast.File{file},
-		Types:   types.NewPackage(PlatformModulePath+"/corecells/configcore", "configcore"),
+		Types:   types.NewPackage(PlatformCellsModulePath+"/configcore", "configcore"),
 		TypesInfo: &types.Info{
 			Defs: map[*ast.Ident]types.Object{},
 		},
 	}
 	missingTypesInfoPkg := &packages.Package{
-		PkgPath: PlatformModulePath + "/corecells/auditcore",
+		PkgPath: PlatformCellsModulePath + "/auditcore",
 		Syntax:  []*ast.File{file},
-		Types:   types.NewPackage(PlatformModulePath+"/corecells/auditcore", "auditcore"),
+		Types:   types.NewPackage(PlatformCellsModulePath+"/auditcore", "auditcore"),
 	}
 
 	violations := checkCellPublicAPIAdapterTypes(cls, []*packages.Package{
@@ -1044,9 +1044,9 @@ func TestIsInternal(t *testing.T) {
 		input string
 		want  bool
 	}{
-		{PlatformModulePath + "/corecells/accesscore/internal/domain", true},
-		{PlatformModulePath + "/corecells/auditcore/internal", true},
-		{PlatformModulePath + "/corecells/accesscore/slices/sessionlogin", false},
+		{PlatformCellsModulePath + "/accesscore/internal/domain", true},
+		{PlatformCellsModulePath + "/auditcore/internal", true},
+		{PlatformCellsModulePath + "/accesscore/slices/sessionlogin", false},
 		{PlatformModulePath + "/kernel/cell", false},
 		{PlatformModulePath + "/runtime/auth", false},
 	}

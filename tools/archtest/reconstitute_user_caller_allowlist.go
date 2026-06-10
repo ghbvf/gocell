@@ -24,7 +24,7 @@ const ruleReconstituteUserCaller01 = "RECONSTITUTE-USER-CALLER-01"
 // ─── platform-symbol path constants (no bare literals) ────────────────────
 
 const (
-	reconstituteUserPkg = PlatformModulePath + "/corecells/accesscore/internal/domain"
+	reconstituteUserPkg = PlatformCellsModulePath + "/accesscore/internal/domain"
 )
 
 // ─── symbol name constant ──────────────────────────────────────────────────

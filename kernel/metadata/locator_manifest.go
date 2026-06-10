@@ -622,7 +622,18 @@ func (l *Locator) discoverManifestPlanEmissions(plan manifestModulePlan) ([]Meta
 // For default patterns (em.userDeclared == false): zero matches across the
 // entire emission emits only a structured slog.Warn for workspaces that
 // legitimately omit certain source kinds.
+//
+// An emission with NO patterns at all is a kind the module intentionally
+// omitted under explicit includes (#1560: corecells declares only cells+slices;
+// contracts/journeys/assemblies stay in the root module). There is nothing to
+// match, so it emits nothing WITHOUT a zero-match warn — that warn is reserved
+// for declared patterns that found no files (a likely typo). A defaults-only
+// module (no explicit includes) always has non-empty patterns, so this guard
+// never silences a genuine zero-match.
 func (l *Locator) discoverEmission(base string, excludes *manifestExcludeSet, em manifestEmission) ([]MetadataSource, error) {
+	if len(em.patterns) == 0 {
+		return nil, nil
+	}
 	var out []MetadataSource
 	for _, g := range em.patterns {
 		emitted, err := l.collectEmissionPattern(base, g, excludes, em)

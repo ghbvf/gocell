@@ -37,17 +37,17 @@ const (
 
 const (
 	sessionStorePkg = PlatformModulePath + "/runtime/auth/session"
-	userRepoPkg     = PlatformModulePath + "/corecells/accesscore/internal/ports"
+	userRepoPkg     = PlatformCellsModulePath + "/accesscore/internal/ports"
 	refreshStorePkg = PlatformModulePath + "/runtime/auth/refresh"
-	invalidatorPkg  = PlatformModulePath + "/corecells/accesscore/internal/credentialinvalidate"
+	invalidatorPkg  = PlatformCellsModulePath + "/accesscore/internal/credentialinvalidate"
 )
 
 // Per-pkg sub-paths used in allowlist key derivation.
 const (
-	authzmutatePkg    = PlatformModulePath + "/corecells/accesscore/internal/authzmutate"
-	identitymanagePkg = PlatformModulePath + "/corecells/accesscore/slices/identitymanage"
-	rbacassignPkg     = PlatformModulePath + "/corecells/accesscore/slices/rbacassign"
-	sessionrefreshPkg = PlatformModulePath + "/corecells/accesscore/slices/sessionrefresh"
+	authzmutatePkg    = PlatformCellsModulePath + "/accesscore/internal/authzmutate"
+	identitymanagePkg = PlatformCellsModulePath + "/accesscore/slices/identitymanage"
+	rbacassignPkg     = PlatformCellsModulePath + "/accesscore/slices/rbacassign"
+	sessionrefreshPkg = PlatformCellsModulePath + "/accesscore/slices/sessionrefresh"
 )
 
 const (

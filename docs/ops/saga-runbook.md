@@ -220,5 +220,5 @@ WHERE cell_id = '<cell>' AND projection_id = '<projection>';
 }
 ```
 
-若系统已接入 `auditcore`，通过 `cells/auditcore/slices/auditwrite` 写入；
+若系统已接入 `auditcore`，通过 `corecells/auditcore` 的 audit-append 切片（`slices/auditappend*`）写入；
 否则直接写运维 audit log 系统，保存 ≥ 90 天。

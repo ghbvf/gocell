@@ -73,7 +73,7 @@ import (
 // memPackagePath is the import path of the mem package whose concrete
 // *RoleRepository type production code must not name. Derived from
 // PlatformModulePath (ARCHTEST-MODULE-PATH-FUNNEL-01): no bare literal.
-const memPackagePath = PlatformModulePath + "/corecells/accesscore/internal/mem"
+const memPackagePath = PlatformCellsModulePath + "/accesscore/internal/mem"
 
 // CheckSeedRoleIface01 runs SEED-ROLE-IFACE-01 over the running module and
 // returns its diagnostics. It scans every production .go file (entire module,

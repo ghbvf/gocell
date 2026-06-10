@@ -1,9 +1,11 @@
 package metadata
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"reflect"
 	"sort"
 	"strings"
@@ -669,6 +671,55 @@ modules:
 			t.Errorf("expected no error for default-pattern zero-match, got: %v", err)
 		}
 	})
+}
+
+// TestLocator_ManifestExplicitIncludesOmittedKindsNoZeroMatchWarn verifies
+// #1560 F14: a module that declares explicit includes for some kinds (here
+// cells + slices) but omits others (contracts/journeys/assemblies) must NOT emit
+// a zero-match warn for the omitted kinds — those kinds were intentionally not
+// declared (they live in another module), so there is nothing to match. This is
+// distinct from the default-patterns path (no includes at all), where an omitted
+// kind legitimately warns. The corecells module (#1560) declares only cells +
+// slices, so this guards `gocell check` against contract/journey/assembly
+// zero-match WARN noise.
+func TestLocator_ManifestExplicitIncludesOmittedKindsNoZeroMatchWarn(t *testing.T) {
+	manifest := `version: v1
+modules:
+  - path: .
+    includes:
+      cells:
+        - "cells/*/cell.yaml"
+      slices:
+        - "cells/*/slices/*/slice.yaml"
+`
+	fsys := fstest.MapFS{
+		".gocell/manifest.yaml":           &fstest.MapFile{Data: []byte(manifest)},
+		"cells/foo/cell.yaml":             &fstest.MapFile{Data: []byte("id: foo\n")},
+		"cells/foo/slices/bar/slice.yaml": &fstest.MapFile{Data: []byte("id: bar\nbelongsToCell: foo\n")},
+		// No contracts / journeys / assemblies declared OR present.
+	}
+
+	// Capture the default slog so we can assert NO zero-match warn fires for the
+	// omitted kinds. Sequential test (no t.Parallel in this file), restored after.
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(prev)
+
+	l := requireLocatorFS(t, fsys)
+	sources, err := l.Discover()
+	if err != nil {
+		t.Fatalf("Discover unexpected error: %v", err)
+	}
+	got := summariseSources(sources)
+	want := []string{"cell:cells/foo/cell.yaml:foo", "slice:cells/foo/slices/bar/slice.yaml:foo"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Discover output mismatch.\ngot:  %v\nwant: %v", got, want)
+	}
+	if strings.Contains(buf.String(), "matched zero files") {
+		t.Errorf("explicit-includes module omitting contracts/journeys/assemblies "+
+			"must NOT emit a zero-match warn; got log:\n%s", buf.String())
+	}
 }
 
 // requireLocatorFS creates a Locator from fsys and fails the test on error.

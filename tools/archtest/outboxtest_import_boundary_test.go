@@ -169,7 +169,7 @@ func TestOutboxtestImportPath_PatternTable(t *testing.T) {
 		},
 		{
 			name:      "cells celltest (covered by CELLTEST-IMPORT-SCOPE-01)",
-			path:      PlatformModulePath + "/corecells/configcore/configcoretest",
+			path:      PlatformCellsModulePath + "/configcore/configcoretest",
 			wantMatch: false,
 		},
 		{

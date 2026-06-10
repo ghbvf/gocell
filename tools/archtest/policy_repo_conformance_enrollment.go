@@ -28,8 +28,8 @@ const rulePolicyRepoConformanceEnrollment01 = "POLICYREPO-CONFORMANCE-ENROLLMENT
 // ─── platform-symbol path constants (no bare literals) ────────────────────
 
 const (
-	policyRepoIfacePkg   = PlatformModulePath + "/corecells/accesscore/internal/ports"
-	policyConformancePkg = PlatformModulePath + "/corecells/accesscore/internal/ports/conformance"
+	policyRepoIfacePkg   = PlatformCellsModulePath + "/accesscore/internal/ports"
+	policyConformancePkg = PlatformCellsModulePath + "/accesscore/internal/ports/conformance"
 )
 
 // ─── symbol name constants ─────────────────────────────────────────────────

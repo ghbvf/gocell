@@ -100,7 +100,7 @@ const scopedtxApplyScopeFunc = "ApplyScope"
 const cellTxManagerTypeName = "CellTxManager"
 
 // scopedtxPkgPath is the accesscore internal scope funnel package.
-const scopedtxPkgPath = PlatformModulePath + "/corecells/accesscore/internal/scopedtx"
+const scopedtxPkgPath = PlatformCellsModulePath + "/accesscore/internal/scopedtx"
 
 // applyTenantScopeMethodCallerAllowlist: the sole sanctioned caller of the kernel
 // CellTxManager.ApplyTenantScope interface method.

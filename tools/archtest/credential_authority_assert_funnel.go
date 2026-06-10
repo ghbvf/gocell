@@ -26,9 +26,9 @@ const ruleCredentialAuthorityAssertFunnel01 = "CREDENTIAL-AUTHORITY-ASSERT-FUNNE
 // ─── platform-symbol path constants (no bare literals) ────────────────────
 
 const (
-	credAuthorityPkgPath = PlatformModulePath + "/corecells/accesscore/internal/credentialauthority"
+	credAuthorityPkgPath = PlatformCellsModulePath + "/accesscore/internal/credentialauthority"
 	credSessionPkgPath   = PlatformModulePath + "/runtime/auth/session"
-	credDomainUserPkg    = PlatformModulePath + "/corecells/accesscore/internal/domain"
+	credDomainUserPkg    = PlatformCellsModulePath + "/accesscore/internal/domain"
 )
 
 // credDomainUserType is the unqualified name of the domain User type.

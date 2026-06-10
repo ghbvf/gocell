@@ -108,7 +108,7 @@ func TestCelltestImportPath_PatternTable(t *testing.T) {
 			// import path (with a leading module prefix) must NOT match. The
 			// caller is responsible for stripping the module prefix first.
 			name:      "un-stripped absolute path does not match (module-relative only)",
-			path:      PlatformModulePath + "/corecells/configcore/configcoretest",
+			path:      PlatformCellsModulePath + "/configcore/configcoretest",
 			wantMatch: false,
 		},
 		{

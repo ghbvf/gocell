@@ -160,7 +160,7 @@ const (
 	lastAdminSentinelConstName = "lastAdminTriggerSentinel"
 	// Derive the platform import path from PlatformModulePath rather than a bare
 	// literal (ARCHTEST-MODULE-PATH-FUNNEL-01).
-	lastAdminSentinelConstPkg = PlatformModulePath + "/corecells/accesscore/internal/adapters/postgres"
+	lastAdminSentinelConstPkg = PlatformCellsModulePath + "/accesscore/internal/adapters/postgres"
 	lastAdminSentinelConstRel = "corecells/accesscore/internal/adapters/postgres/lastadmin.go"
 
 	// lastAdminMigrationsDir is the flat migrations directory (NNN_xxx.sql). This

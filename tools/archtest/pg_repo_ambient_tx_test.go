@@ -379,7 +379,7 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 	// BS-5: no struct in corecells/accesscore (outside internal/) may carry
 	// *pgxpool.Pool as a field. NewPGBundle accepts pool as a parameter but
 	// does not persist it.
-	bs5Patterns := []string{PlatformModulePath + "/corecells/accesscore"}
+	bs5Patterns := []string{PlatformCellsModulePath + "/accesscore"}
 	var bs5PoolFieldCount int
 	_ = Run(t, Typed(TypedOpts{}, bs5Patterns), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {

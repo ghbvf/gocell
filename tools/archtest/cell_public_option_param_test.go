@@ -85,9 +85,19 @@ func (v rawPublicOptionViolation) String() string {
 // isCellSubtreeFile returns true for any non-codegen, non-test file inside
 // a cell subtree — the full scope where sealed-marker enforcement applies:
 //
-//   - cells/<x>/**/*.go                  (cell-package root + internal/ +
-//     slices/<y>/ + postgres/ + mem/ + ...)
+//   - cells/<x>/**/*.go                  (root/example module cell subtree:
+//     cell-package root + internal/ + slices/<y>/ + postgres/ + mem/ + ...)
 //   - examples/<demo>/cells/<x>/**/*.go  (example cell subtree, same layout)
+//   - the whole platform-cell module      (corecells since #1560 — see below)
+//
+// rel is MODULE-relative (Pass.Rel). GoCell's platform cells live in the
+// dedicated corecells module with a FLAT layout (corecells/<cell>/... → rel
+// "<cell>/..."), so they carry NO "cells"/"corecells" segment for the parts
+// checks below to match. The caller therefore passes inPlatformCellModule,
+// derived from the Pass package path ([PlatformCellsModulePath] prefix); when
+// set, every non-test/non-gen file is cell-subtree code. This mirrors the
+// module-agnostic LAYER-06 fix and keeps the rule correct under both the
+// standalone (GOWORK=off) and workspace module views.
 //
 // Excludes _test.go and _gen.go (codegen output is governed by the codegen
 // contract; tests construct fakes via persistence.WrapForCell from any
@@ -98,13 +108,16 @@ func (v rawPublicOptionViolation) String() string {
 // internal/.../service.go, ...} must accept `persistence.CellTxManager` /
 // `outbox.Cell{Publisher,Writer,Emitter}`, not raw infra. See ADR 202605101900 §D1
 // (boundary extension, Amendment 2026-05-12) for the architectural rationale.
-func isCellSubtreeFile(rel string) bool {
+func isCellSubtreeFile(rel string, inPlatformCellModule bool) bool {
 	rel = filepath.ToSlash(rel)
 	if strings.HasSuffix(rel, "_test.go") {
 		return false
 	}
 	if strings.HasSuffix(rel, "_gen.go") {
 		return false
+	}
+	if inPlatformCellModule {
+		return true
 	}
 	parts := strings.Split(rel, "/")
 	if len(parts) < 3 {
@@ -326,10 +339,15 @@ func scanPassForRawPublicOption(p *Pass, restrictToCellRoots bool) []rawPublicOp
 	// recursion can detect anonymous and named local-interface bypasses.
 	forbiddenIfaces := loadForbiddenIfacesFromPkg(p.Pkg)
 
+	// p.Rel is module-relative, so corecells' flat-layout files have no
+	// "cells" segment to match; decide platform-cell membership from the
+	// Pass package path instead (#1560). p.Pkg is non-nil past the guard above.
+	inPlatformCellModule := strings.HasPrefix(p.Pkg.Path(), PlatformCellsModulePath+"/")
+
 	var out []rawPublicOptionViolation
 	for _, file := range p.Files {
 		relSlash := p.Rel(file)
-		if restrictToCellRoots && !isCellSubtreeFile(relSlash) {
+		if restrictToCellRoots && !isCellSubtreeFile(relSlash, inPlatformCellModule) {
 			continue
 		}
 		EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {

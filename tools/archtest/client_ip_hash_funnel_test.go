@@ -75,7 +75,7 @@ import (
 // package); reused here for the IPHash freeze. accessDTOPkgPath is anchored to
 // PlatformModulePath (ARCHTEST-MODULE-PATH-FUNNEL-01: no bare module literals).
 const (
-	accessDTOPkgPath  = PlatformModulePath + "/corecells/accesscore/internal/dto"
+	accessDTOPkgPath  = PlatformCellsModulePath + "/accesscore/internal/dto"
 	ipHashTypeName    = "IPHash"
 	ipHashCtorName    = "HashIP"
 	bootstrapEventDTO = "BootstrapAuthFailedEvent"

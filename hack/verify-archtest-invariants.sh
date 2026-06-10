@@ -41,6 +41,14 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # only nightly. It is cheap here: a go.mod parse via gomodutil, NO whole-tree
 # packages.Load, so it adds ~0 to the shared-resolver process (warm-up already paid
 # by the tests above). #1723 / PR #1766 review F1.
+#
+# PLATFORM-CELL-SCAN-COVERAGE-01 (TestPlatformCellScanCoverage01 + …_AntiVacuity)
+# IS in this PR-time set: it is the keystone anti-vacuity guard for the #1560
+# go.work P5 split — a relayout that drops corecells from the workspace, empties
+# its scan root, or lets a platform-cell production file escape the scan set must
+# fail at PR-merge time, not only nightly, or every downstream DirsScope cell rule
+# silently fail-opens for a full day. Cheap here: go.work parse + metadata
+# discovery, NO whole-tree packages.Load. #1560 / PR #1814 review F7.
 go test ./tools/archtest \
-  -run '^(TestProdClockInjection|TestKernelClockLeafFallback|TestKernelClockLeafFallbackFixtures|TestProdClockInjectionFixtures|TestProdDurationConst|TestProdDurationConstFixtures|TestTestTimeLiteralConst|TestTestSleepDiscipline|TestTestTimeLiteralFixtures|TestPanicRegistered|TestPanicRegisteredScannerFixtures|TestArchtestModulePathFunnel|TestModulePathFunnel_TypedReconstruction|TestFenceTokenMintFunnel_AllowlistEnforced|TestMetadatatestImportScope|TestFixtureCellIDTypedBuilder_NewCellIDBodyShape|TestFixtureCellIDTypedBuilder_VarInitializerShape|TestRootModuleNoReplace01|TestRootModuleNoReplace01_NegativeControl)$' \
+  -run '^(TestProdClockInjection|TestKernelClockLeafFallback|TestKernelClockLeafFallbackFixtures|TestProdClockInjectionFixtures|TestProdDurationConst|TestProdDurationConstFixtures|TestTestTimeLiteralConst|TestTestSleepDiscipline|TestTestTimeLiteralFixtures|TestPanicRegistered|TestPanicRegisteredScannerFixtures|TestArchtestModulePathFunnel|TestModulePathFunnel_TypedReconstruction|TestFenceTokenMintFunnel_AllowlistEnforced|TestMetadatatestImportScope|TestFixtureCellIDTypedBuilder_NewCellIDBodyShape|TestFixtureCellIDTypedBuilder_VarInitializerShape|TestRootModuleNoReplace01|TestRootModuleNoReplace01_NegativeControl|TestPlatformCellScanCoverage01|TestPlatformCellScanCoverage01_AntiVacuity)$' \
   -count=1 -timeout 5m
