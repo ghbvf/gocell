@@ -462,7 +462,7 @@ func sortedMapKeys(m map[string]any) []string {
 // isCellsContractTestFile reports whether the module-relative slash path
 // matches cells/**/contract_test.go.
 func isCellsContractTestFile(rel string) bool {
-	return strings.HasPrefix(rel, "cells/") &&
+	return strings.HasPrefix(rel, PlatformCellsDir+"/") &&
 		filepath.Base(rel) == "contract_test.go"
 }
 

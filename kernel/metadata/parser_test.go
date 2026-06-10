@@ -16,7 +16,7 @@ import (
 func fullProjectFS() fstest.MapFS {
 	return fstest.MapFS{
 		// --- cells ---
-		"cells/accesscore/cell.yaml": &fstest.MapFile{Data: []byte(`id: accesscore
+		"corecells/accesscore/cell.yaml": &fstest.MapFile{Data: []byte(`id: accesscore
 type: core
 consistencyLevel: L2
 owner:
@@ -29,7 +29,7 @@ verify:
     - smoke.accesscore.startup
 l0Dependencies: []
 `)},
-		"cells/auditcore/cell.yaml": &fstest.MapFile{Data: []byte(`id: auditcore
+		"corecells/auditcore/cell.yaml": &fstest.MapFile{Data: []byte(`id: auditcore
 type: core
 consistencyLevel: L2
 owner:
@@ -44,7 +44,7 @@ l0Dependencies: []
 `)},
 
 		// --- slices ---
-		"cells/accesscore/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-login
+		"corecells/accesscore/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-login
 belongsToCell: accesscore
 consistencyLevel: L0
 contractUsages:
@@ -60,7 +60,7 @@ verify:
     - contract.event.session.created.v1.publish
   waivers: []
 `)},
-		"cells/auditcore/slices/session-ingest/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-ingest
+		"corecells/auditcore/slices/session-ingest/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-ingest
 belongsToCell: auditcore
 consistencyLevel: L2
 contractUsages:
@@ -450,7 +450,7 @@ deliverySemantics: at-least-once
 
 func TestParseFS_NonMetadataFilesIgnored(t *testing.T) {
 	fs := fstest.MapFS{
-		"cells/accesscore/cell.yaml": &fstest.MapFile{Data: []byte(`id: accesscore
+		"corecells/accesscore/cell.yaml": &fstest.MapFile{Data: []byte(`id: accesscore
 type: core
 consistencyLevel: L2
 owner:
@@ -464,7 +464,7 @@ verify:
 `)},
 		// These should be ignored:
 		"README.md":                                &fstest.MapFile{Data: []byte(`# readme`)},
-		"cells/accesscore/main.go":                 &fstest.MapFile{Data: []byte(`package main`)},
+		"corecells/accesscore/main.go":             &fstest.MapFile{Data: []byte(`package main`)},
 		"journeys/status-board.yaml.bak":           &fstest.MapFile{Data: []byte(`backup`)},
 		"contracts/http/auth/login/v1/schema.json": &fstest.MapFile{Data: []byte(`{}`)},
 	}
@@ -514,7 +514,7 @@ passCriteria: []
 
 func TestParseFS_MultipleSlicesSameCell(t *testing.T) {
 	fs := fstest.MapFS{
-		"cells/accesscore/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-login
+		"corecells/accesscore/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-login
 belongsToCell: accesscore
 consistencyLevel: L0
 contractUsages: []
@@ -522,7 +522,7 @@ verify:
   unit: []
   contract: []
 `)},
-		"cells/accesscore/slices/rbac-check/slice.yaml": &fstest.MapFile{Data: []byte(`id: rbac-check
+		"corecells/accesscore/slices/rbac-check/slice.yaml": &fstest.MapFile{Data: []byte(`id: rbac-check
 belongsToCell: accesscore
 consistencyLevel: L0
 contractUsages: []
@@ -543,7 +543,7 @@ verify:
 
 func TestParseFS_SliceWithWaivers(t *testing.T) {
 	fs := fstest.MapFS{
-		"cells/accesscore/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-login
+		"corecells/accesscore/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-login
 belongsToCell: accesscore
 consistencyLevel: L0
 contractUsages:
@@ -588,7 +588,7 @@ func TestParseFS_SliceBelongsToCellDerive(t *testing.T) {
 	}{
 		{
 			name: "omitted belongsToCell is derived from path",
-			path: "cells/accesscore/slices/session-login/slice.yaml",
+			path: "corecells/accesscore/slices/session-login/slice.yaml",
 			yaml: `id: session-login
 consistencyLevel: L0
 contractUsages: []
@@ -601,7 +601,7 @@ verify:
 		},
 		{
 			name: "explicit belongsToCell matching path is preserved",
-			path: "cells/auditcore/slices/write-log/slice.yaml",
+			path: "corecells/auditcore/slices/write-log/slice.yaml",
 			yaml: `id: write-log
 belongsToCell: auditcore
 consistencyLevel: L0
@@ -651,7 +651,7 @@ verify:
 // that contradicts the directory path is rejected with an error.
 func TestParseFS_SliceBelongsToCellMismatch(t *testing.T) {
 	fsys := fstest.MapFS{
-		"cells/accesscore/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-login
+		"corecells/accesscore/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-login
 belongsToCell: wrong-cell
 contractUsages: []
 verify:
@@ -673,7 +673,7 @@ verify:
 
 func TestParseFS_DuplicateCellID(t *testing.T) {
 	fs := fstest.MapFS{
-		"cells/accesscore/cell.yaml": &fstest.MapFile{Data: []byte(`id: accesscore
+		"corecells/accesscore/cell.yaml": &fstest.MapFile{Data: []byte(`id: accesscore
 type: core
 consistencyLevel: L2
 owner:
@@ -685,7 +685,7 @@ verify:
   smoke:
     - smoke.accesscore.startup
 `)},
-		"cells/accesscore-v2/cell.yaml": &fstest.MapFile{Data: []byte(`id: accesscore
+		"corecells/accesscore-v2/cell.yaml": &fstest.MapFile{Data: []byte(`id: accesscore
 type: core
 consistencyLevel: L2
 owner:
@@ -818,7 +818,7 @@ func TestParseFS_DuplicateSliceID(t *testing.T) {
 	// This requires two different slice directories under the same cell, both declaring
 	// the same id in YAML.
 	fs := fstest.MapFS{
-		"cells/accesscore/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: dup-slice
+		"corecells/accesscore/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: dup-slice
 belongsToCell: accesscore
 consistencyLevel: L0
 contractUsages: []
@@ -826,7 +826,7 @@ verify:
   unit: []
   contract: []
 `)},
-		"cells/accesscore/slices/session-logout/slice.yaml": &fstest.MapFile{Data: []byte(`id: dup-slice
+		"corecells/accesscore/slices/session-logout/slice.yaml": &fstest.MapFile{Data: []byte(`id: dup-slice
 belongsToCell: accesscore
 consistencyLevel: L0
 contractUsages: []
@@ -848,7 +848,7 @@ verify:
 
 func TestParseFS_CellWithL0Dependencies(t *testing.T) {
 	fs := fstest.MapFS{
-		"cells/accesscore/cell.yaml": &fstest.MapFile{Data: []byte(`id: accesscore
+		"corecells/accesscore/cell.yaml": &fstest.MapFile{Data: []byte(`id: accesscore
 type: core
 consistencyLevel: L2
 owner:

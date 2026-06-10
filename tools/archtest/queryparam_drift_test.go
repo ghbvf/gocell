@@ -412,12 +412,12 @@ func TestRouteFuncKeysFromCallIncludesCalleeAndArgs(t *testing.T) {
 	expr, err := parser.ParseExpr(`wrapPolicy(auditQueryPolicy, h.HandleQuery)`)
 	require.NoError(t, err)
 
-	got := routeFuncKeys("cells/auditcore/slices/auditquery/handler.go", expr)
+	got := routeFuncKeys("corecells/auditcore/slices/auditquery/handler.go", expr)
 
 	assert.ElementsMatch(t, []string{
-		"cells/auditcore/slices/auditquery/handler.go#wrapPolicy",
-		"cells/auditcore/slices/auditquery/handler.go#auditQueryPolicy",
-		"cells/auditcore/slices/auditquery/handler.go#HandleQuery",
+		"corecells/auditcore/slices/auditquery/handler.go#wrapPolicy",
+		"corecells/auditcore/slices/auditquery/handler.go#auditQueryPolicy",
+		"corecells/auditcore/slices/auditquery/handler.go#HandleQuery",
 	}, got)
 }
 

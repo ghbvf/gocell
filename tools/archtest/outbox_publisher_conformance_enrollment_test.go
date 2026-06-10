@@ -36,7 +36,7 @@
 //   - B2. test-file impls (mocks/fakes in _test.go) are excluded by the
 //     Tests=false production load pass — intentional; only non-test concrete
 //     types must enroll. Test-double publishers that live in non-test .go files
-//     (e.g. cells/configcore/internal/testutil) are explicitly waived below.
+//     (e.g. corecells/configcore/internal/testutil) are explicitly waived below.
 //
 // ref: tools/archtest/user_repo_conformance_enrollment_test.go (template)
 package archtest
@@ -72,7 +72,7 @@ var outboxPublisherEnrollmentWaivers = map[string]string{
 	PlatformModulePath + "/kernel/outbox": "kernel noop sink outbox.DiscardPublisher (Noop()==true, rejected by cell.CheckNotNoop " +
 		"in durable mode) — it discards rather than delivers, so a pub→sub roundtrip " +
 		"(outboxtest.TestPubSub) is N/A by design.",
-	PlatformModulePath + "/cells/configcore/internal/testutil": "test-double publishers " +
+	PlatformCellsModulePath + "/configcore/internal/testutil": "test-double publishers " +
 		"(StubPublisher / FailingPublisher) — not a real transport; outboxtest.TestPubSub " +
 		"roundtrip is N/A for in-memory stubs.",
 	// adapters/mqtt waiver removed in PR-4 (#1142): adapters/mqtt/conformance_test.go

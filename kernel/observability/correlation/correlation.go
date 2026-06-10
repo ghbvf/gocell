@@ -14,7 +14,7 @@
 // forbidden cycle. This package therefore does NOT import kernel/outbox; it
 // takes the three IDs as plain strings. The bridge from the W0 outbox
 // observability envelope (kernel/outbox.ObservabilityMetadata) lives at the
-// sole consumer — the audit appender (cells/auditcore/internal/appender) —
+// sole consumer — the audit appender (corecells/auditcore/internal/appender) —
 // which holds both the outbox.Entry and this read-model. The seal (unexported
 // fields + single constructor) is preserved regardless of where the bridge
 // lives; trust in the IDs is positional (the appender feeds

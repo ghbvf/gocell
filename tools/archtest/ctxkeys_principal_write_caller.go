@@ -126,14 +126,14 @@ const ctxkeysPkgPath = PlatformModulePath + "/pkg/ctxkeys"
 // + clearAmbientPrincipal, PR-03 #1627), and the reconcile-loop system-producer
 // identity installer (installSystemProducerIdentity, #1821).
 //
-// WithTenantID additionally allows cells/configcore/configcoretest/fakes.go
+// WithTenantID additionally allows corecells/configcore/configcoretest/fakes.go
 // (CtxWithTenant helper), which simulates the JWT authenticator's ctx injection
 // in test scenarios — the same path used by the JWT authenticator in production
 // (per the file's own godoc). This is a test-helper package (configcoretest),
 // not a production business code path; the call is semantically equivalent to
 // the auth bridge and thus sanctioned. This entry was introduced alongside the
 // multi-tenancy epic (#1337 PR-1) but missed the initial allowlist update.
-// cells/auditcore/auditcoretest/canonical.go (NewSessionCreatedEntry) is the
+// corecells/auditcore/auditcoretest/canonical.go (NewSessionCreatedEntry) is the
 // same kind of sanctioned test-helper: it stamps a tenant into the ctx so the
 // canonical session.created entry it builds carries one, matching real post-auth
 // emits — required since the auditcore appender fail-closed rejects a tenant-less
@@ -144,7 +144,7 @@ const ctxkeysPkgPath = PlatformModulePath + "/pkg/ctxkeys"
 // "tenant_id" claim. This lifted the former ctx-write half of
 // INV-SINGLE-TENANT-ONLY (#1289) — the single-writer entry was a deliberate
 // placeholder for exactly this moment, not an oversight. The persistence-reach
-// tripwire in cells/auditcore/internal/appender was RETIRED in PR-2a (#1340)
+// tripwire in corecells/auditcore/internal/appender was RETIRED in PR-2a (#1340)
 // once tenant-scoped audit query filtering landed (the auditquery handler passes
 // the authenticated principal's tenant to the tenant-scoped read path): a
 // non-empty principal.TenantID now flows cleanly to audit persistence and is
@@ -170,12 +170,12 @@ var principalSetterAllowlist = map[string]map[string]struct{}{
 		"kernel/reconcile/identity.go":          {}, // reconcile loop system-producer identity (#1821)
 	},
 	"WithTenantID": {
-		"runtime/auth/middleware.go":                 {}, // producer bridge — JWT tenant_id claim (#1337)
-		"kernel/outbox/principal.go":                 {}, // consumer-side RestoreToContext
-		"kernel/projection/system_principal.go":      {}, // saga journal carrier (PR-03 #1627)
-		"kernel/reconcile/identity.go":               {}, // reconcile loop system-producer identity — clears tenant (#1821)
-		"cells/configcore/configcoretest/fakes.go":   {}, // CtxWithTenant test-helper — simulates JWT auth ctx (#1337, missed allowlist)
-		"cells/auditcore/auditcoretest/canonical.go": {}, // NewSessionCreatedEntry test-helper — simulates post-auth ctx (#1618 F1)
+		"runtime/auth/middleware.go":                     {}, // producer bridge — JWT tenant_id claim (#1337)
+		"kernel/outbox/principal.go":                     {}, // consumer-side RestoreToContext
+		"kernel/projection/system_principal.go":          {}, // saga journal carrier (PR-03 #1627)
+		"kernel/reconcile/identity.go":                   {}, // reconcile loop system-producer identity — clears tenant (#1821)
+		"corecells/configcore/configcoretest/fakes.go":   {}, // CtxWithTenant test-helper — simulates JWT auth ctx (#1337, missed allowlist)
+		"corecells/auditcore/auditcoretest/canonical.go": {}, // NewSessionCreatedEntry test-helper — simulates post-auth ctx (#1618 F1)
 	},
 }
 

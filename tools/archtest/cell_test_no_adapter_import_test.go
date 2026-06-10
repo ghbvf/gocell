@@ -24,7 +24,7 @@
 //   - crypto.KeyProvider     → runtime/crypto.LocalAESKeyProvider
 //   - persistence.TxRunner       → kernel/outbox.DemoTxRunner{}        (bare runner, for constructors taking persistence.TxRunner)
 //   - persistence.CellTxManager  → kernel/outbox.DemoCellTxManager()   (sealed marker, for cell WithTxManager options)
-//   - cell ports (repos)     → cells/<cell>/internal/mem, cells/accesscore/mem.Bundle
+//   - cell ports (repos)     → cells/<cell>/internal/mem, corecells/accesscore/mem.Bundle
 //
 // Why NOT an adapters/<name>/<name>fake/ subpackage (the #803 literal ask):
 // (1) cells importing it would make cells/ → adapters/ — a layering violation;
@@ -44,7 +44,7 @@
 // integration / e2e / any future tag) and cannot be silently gamed by renaming a
 // file to *_integration_test.go (a filename-based exemption would be Soft: the
 // repo has integration tests named plainly with only the build tag, e.g.
-// cells/accesscore/slices/identitymanage/service_test.go, so filename is not a
+// corecells/accesscore/slices/identitymanage/service_test.go, so filename is not a
 // reliable proxy and renaming would dodge the rule). To escape this rule an
 // author must add //go:build integration, which removes the test from the normal
 // unit run — a visible behavior change, not a silent bypass.
@@ -170,9 +170,9 @@ func cellTestAdapterImportFindings(root string) ([]string, error) {
 }
 
 // isCellOrExampleCellPath reports whether a module-relative slash path is under
-// cells/ or examples/<x>/cells/.
+// the platform-cell module (corecells/) or examples/<x>/cells/.
 func isCellOrExampleCellPath(relSlash string) bool {
-	if strings.HasPrefix(relSlash, "cells/") {
+	if strings.HasPrefix(relSlash, PlatformCellsDir+"/") {
 		return true
 	}
 	if !strings.HasPrefix(relSlash, "examples/") {
@@ -227,7 +227,7 @@ func fileImportRefs(path string) ([]importRef, error) {
 
 // isPlatformAdapterImport reports whether an import path is the platform
 // adapters/ layer (github.com/ghbvf/gocell/adapters[/...]). It deliberately does
-// NOT match cell-internal adapters (github.com/ghbvf/gocell/cells/.../internal/adapters/...).
+// NOT match cell-internal adapters (github.com/ghbvf/gocell/corecells/.../internal/adapters/...).
 func isPlatformAdapterImport(p string) bool {
 	return p == platformAdapterImportPrefix ||
 		strings.HasPrefix(p, platformAdapterImportPrefix+"/")
@@ -249,38 +249,38 @@ func TestCellTestNoAdapterImport_FixtureMetaTest(t *testing.T) {
 	}{
 		{
 			name:    "plain_cell_unit_import",
-			rel:     "cells/a/x_test.go",
+			rel:     "corecells/a/x_test.go",
 			content: "package a\nimport _ \"github.com/ghbvf/gocell/adapters/postgres\"\n",
 			wantHit: true,
 		},
 		{
 			name:    "integration_gated_exempt",
-			rel:     "cells/b/y_test.go",
+			rel:     "corecells/b/y_test.go",
 			content: "//go:build integration\n\npackage b\nimport _ \"github.com/ghbvf/gocell/adapters/postgres\"\n",
 			wantHit: false,
 		},
 		{
 			name:    "e2e_gated_exempt",
-			rel:     "cells/h/h_test.go",
+			rel:     "corecells/h/h_test.go",
 			content: "//go:build e2e\n\npackage h\nimport _ \"github.com/ghbvf/gocell/adapters/redis\"\n",
 			wantHit: false,
 		},
 		{
 			name:    "aliased_import",
-			rel:     "cells/c/z_test.go",
+			rel:     "corecells/c/z_test.go",
 			content: "package c\nimport pg \"github.com/ghbvf/gocell/adapters/redis\"\nvar _ = pg.Nil\n",
 			wantHit: true,
 		},
 		{
 			name:    "dot_import",
-			rel:     "cells/d/w_test.go",
+			rel:     "corecells/d/w_test.go",
 			content: "package d\nimport . \"github.com/ghbvf/gocell/adapters/s3\"\n",
 			wantHit: true,
 		},
 		{
 			name:    "cell_internal_adapter",
-			rel:     "cells/e/e_test.go",
-			content: "package e\nimport _ \"github.com/ghbvf/gocell/cells/e/internal/adapters/postgres\"\n",
+			rel:     "corecells/e/e_test.go",
+			content: "package e\nimport _ \"github.com/ghbvf/gocell/corecells/e/internal/adapters/postgres\"\n",
 			wantHit: false,
 		},
 		{
@@ -297,7 +297,7 @@ func TestCellTestNoAdapterImport_FixtureMetaTest(t *testing.T) {
 		},
 		{
 			name:    "production_file_out_of_scope",
-			rel:     "cells/i/prod.go",
+			rel:     "corecells/i/prod.go",
 			content: "package i\nimport _ \"github.com/ghbvf/gocell/adapters/postgres\"\n",
 			wantHit: false,
 		},
@@ -305,7 +305,7 @@ func TestCellTestNoAdapterImport_FixtureMetaTest(t *testing.T) {
 			// Reverse self-check: a normal cell unit test importing only canonical
 			// in-mem fakes / kernel / stdlib must NOT be flagged (no false positive).
 			name:    "clean_cell_unit_test",
-			rel:     "cells/k/k_test.go",
+			rel:     "corecells/k/k_test.go",
 			content: "package k\nimport (\n\t\"testing\"\n\t_ \"github.com/ghbvf/gocell/kernel/outbox\"\n)\nfunc TestK(t *testing.T) {}\n",
 			wantHit: false,
 		},

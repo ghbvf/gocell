@@ -42,7 +42,7 @@ func weakCookie() *http.Cookie {
 }
 
 // crossWriterCookie writes the refresh-cookie name "__Host-gocell_rt" from a
-// package OTHER than cells/accesscore/internal/httpcookie. All security
+// package OTHER than corecells/accesscore/internal/httpcookie. All security
 // attributes are correct (so it does NOT trip REFRESH-COOKIE-SECURE-ATTRS-01);
 // the single-writer scan must catch the out-of-package sentinel name. This is
 // the negative case REFRESH-COOKIE-SINGLE-WRITER-01 must catch.

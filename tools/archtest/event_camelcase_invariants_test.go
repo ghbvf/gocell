@@ -100,7 +100,7 @@ func TestEventDTOJSONTagsUseCamelCase(t *testing.T) {
 // name segment (before any comma — e.g. `json:"user_id,omitempty"` would
 // flag "user_id" but pass on ",omitempty").
 func checkEventDTOCamelCase(root string) ([]string, error) {
-	scope := scanner.DirsScope(root, []string{"cells"})
+	scope := scanner.DirsScope(root, platformCellScanDirs())
 	files, err := scope.Files()
 	if err != nil {
 		return nil, err

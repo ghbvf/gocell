@@ -27,7 +27,7 @@ import (
 //
 // Complementary rules:
 //   - TESTUTIL-BOUNDARY-01 (testutil_boundary_test.go): guards "testutil" segment paths.
-//   - This rule: guards the cells/*/*test/ naming form (e.g. cells/configcore/configcoretest).
+//   - This rule: guards the cells/*/*test/ naming form (e.g. corecells/configcore/configcoretest).
 //
 // Blind spots (non-coverage outside declared rule scope):
 //   - Import aliases that rename the package after import: these require type
@@ -56,23 +56,23 @@ func TestCelltestImportPath_PatternTable(t *testing.T) {
 		// Positive: should match (violation) — module-relative form.
 		{
 			name:      "configcoretest direct",
-			path:      "cells/configcore/configcoretest",
+			path:      "corecells/configcore/configcoretest",
 			wantMatch: true,
 		},
 		{
 			name:      "accesscoretest direct",
-			path:      "cells/accesscore/accesscoretest",
+			path:      "corecells/accesscore/accesscoretest",
 			wantMatch: true,
 		},
 		{
 			name:      "auditcoretest direct",
-			path:      "cells/auditcore/auditcoretest",
+			path:      "corecells/auditcore/auditcoretest",
 			wantMatch: true,
 		},
 		// Negative: should NOT match (compliant / out-of-scope)
 		{
 			name:      "production cell package",
-			path:      "cells/configcore/slices/flagread",
+			path:      "corecells/configcore/slices/flagread",
 			wantMatch: false,
 		},
 		{
@@ -87,12 +87,12 @@ func TestCelltestImportPath_PatternTable(t *testing.T) {
 		},
 		{
 			name:      "testutil path (covered by TESTUTIL-BOUNDARY-01)",
-			path:      "cells/configcore/internal/testutil",
+			path:      "corecells/configcore/internal/testutil",
 			wantMatch: false,
 		},
 		{
 			name:      "sub-package of celltest (blind spot — outside declared scope)",
-			path:      "cells/configcore/configcoretest/sub",
+			path:      "corecells/configcore/configcoretest/sub",
 			wantMatch: false,
 		},
 		{
@@ -110,7 +110,7 @@ func TestCelltestImportPath_PatternTable(t *testing.T) {
 			// import path (with a leading module prefix) must NOT match. The
 			// caller is responsible for stripping the module prefix first.
 			name:      "un-stripped absolute path does not match (module-relative only)",
-			path:      PlatformModulePath + "/cells/configcore/configcoretest",
+			path:      PlatformCellsModulePath + "/configcore/configcoretest",
 			wantMatch: false,
 		},
 		{

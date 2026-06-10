@@ -2,7 +2,7 @@
 // composition roots (examples/iotdevice/main.go) while keeping the concrete
 // implementation under the cell's internal adapter tree.
 //
-// ref: cells/accesscore/postgres (mirror pattern)
+// ref: corecells/accesscore/postgres (mirror pattern)
 package postgres
 
 import (
@@ -19,7 +19,7 @@ import (
 // DeviceRepository re-exports the cell-private interface so that composition
 // roots outside the devicecell subtree can name the return type without
 // importing the internal/domain package. Same pattern as
-// cells/accesscore/postgres exposing cell-private ports types.
+// corecells/accesscore/postgres exposing cell-private ports types.
 type DeviceRepository = domain.DeviceRepository
 
 // NewDeviceRepository constructs the PG-backed devicecell DeviceRepository.

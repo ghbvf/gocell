@@ -1,0 +1,13 @@
+id: authorizationdecide
+belongsToCell: accesscore
+consistencyLevel: L0
+lifecycle: asset
+contractUsages: []
+verify:
+  unit:
+    - unit.authorizationdecide.service
+  contract: []
+  waivers: []
+
+allowedFiles:
+  - corecells/accesscore/slices/authorizationdecide/**

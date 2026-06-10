@@ -36,7 +36,7 @@ var healthzHolderAllowlist = map[string]bool{
 // runtime, cmd, examples.
 var healthzAllLayerPrefixes = []string{
 	PlatformModulePath + "/kernel/",
-	PlatformModulePath + "/cells/",
+	PlatformCellsModulePath + "/",
 	PlatformModulePath + "/adapters/",
 	PlatformModulePath + "/runtime/",
 	PlatformModulePath + "/cmd/",
@@ -48,7 +48,7 @@ var healthzAllLayerPrefixes = []string{
 // check): cells, adapters, runtime, cmd, examples — intentionally excludes
 // kernel/ which is not part of that check.
 var healthzNonKernelLayerPrefixes = []string{
-	PlatformModulePath + "/cells/",
+	PlatformCellsModulePath + "/",
 	PlatformModulePath + "/adapters/",
 	PlatformModulePath + "/runtime/",
 	PlatformModulePath + "/cmd/",

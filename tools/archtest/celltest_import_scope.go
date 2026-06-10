@@ -34,7 +34,7 @@ import (
 )
 
 // celltestImportPathPattern matches a MODULE-RELATIVE import path whose final
-// segment is `[a-z]+test` under cells/{X}/ (e.g. cells/configcore/configcoretest).
+// segment is `[a-z]+test` under cells/{X}/ (e.g. corecells/configcore/configcoretest).
 // The pattern is anchored to the module-relative form (no leading module path)
 // so the rule is module-path-agnostic: an external Cell repo whose module path
 // is not `github.com/{org}/{repo}` (a vanity host, a `/v2`-versioned module,
@@ -42,10 +42,13 @@ import (
 // before matching — see celltestScopeCheckFile.
 //
 // The trailing `$` anchors the match to the top-level testutil package — nested
-// sub-packages (cells/configcore/configcoretest/sub) are intentionally NOT
+// sub-packages (corecells/configcore/configcoretest/sub) are intentionally NOT
 // matched here; they should be ban-covered by their parent package's
 // boundary, which an importer must traverse through the matched root first.
-var celltestImportPathPattern = regexp.MustCompile(`^cells/[a-z]+/[a-z]+test$`)
+// Matches both the framework-general cells/ convention (example modules, whose
+// module-relative cell-test path is cells/{X}/{X}test) and GoCell's own platform
+// corecells module (corecells/{X}/{X}test), #1560.
+var celltestImportPathPattern = regexp.MustCompile(`^(?:cells|corecells)/[a-z]+/[a-z]+test$`)
 
 // isCellTestImportPath reports whether a MODULE-RELATIVE import path (the import
 // path with the importing module's path + "/" already stripped) matches the

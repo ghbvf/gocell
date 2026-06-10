@@ -103,7 +103,7 @@ type AuditFilters struct {
 //     never another tenant's rows — fail-closed, NOT "all").
 //
 // This is deliberately NOT a full t.Validate(): the strict post-auth boundary that
-// also rejects an EMPTY tenant lives in cells/auditcore/slices/auditquery
+// also rejects an EMPTY tenant lives in corecells/auditcore/slices/auditquery
 // Service.Query (every user request is tenant-scoped). The store permits empty
 // for the internal system-chain capability above (#1618 F2).
 func ValidateQueryTenant(t tenant.TenantID) error {

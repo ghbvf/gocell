@@ -446,6 +446,15 @@ func FindSlicePaths(modRoot string) ([]string, error) {
 		filepath.Join(modRoot, "cells", "*", "slices", "*"),
 		filepath.Join(modRoot, "cells", "*", "slices", "*", "*"),
 		filepath.Join(modRoot, "cells", "*", "internal", "*"),
+		// corecells is GoCell's dedicated platform-cell module (#1560) with a
+		// FLAT layout — cells sit directly under the module root, e.g.
+		// corecells/accesscore/{slices,internal}/<x>/service.go — so it needs
+		// its own no-"cells"-infix patterns. modRoot is the repo root (the
+		// workspace root from findRoot), under which corecells/ is a physical
+		// subtree, so these glob the corecells gen files the same as cells/.
+		filepath.Join(modRoot, "corecells", "*", "slices", "*"),
+		filepath.Join(modRoot, "corecells", "*", "slices", "*", "*"),
+		filepath.Join(modRoot, "corecells", "*", "internal", "*"),
 		filepath.Join(modRoot, "examples", "*", "cells", "*", "slices", "*"),
 		filepath.Join(modRoot, "examples", "*", "cells", "*", "internal", "*"),
 	}

@@ -18,7 +18,7 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
-	auditcell "github.com/ghbvf/gocell/cells/auditcore"
+	auditcell "github.com/ghbvf/gocell/corecells/auditcore"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"

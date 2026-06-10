@@ -95,7 +95,7 @@ After this the `ADMIN_TOKEN` works for all business endpoints.
 Every endpoint below except `POST /api/v1/access/sessions/login` and
 `POST /api/v1/access/sessions/refresh` requires a `Authorization: Bearer $TOKEN`
 header. Public routes are declared per-Cell via `auth.Mount(mux, auth.Route{Contract: ..., Public: true})`
-inside `cells/accesscore/cell.go`; the composition root (`examples/ssobff/main.go`)
+inside `corecells/accesscore/cell.go`; the composition root (`examples/ssobff/main.go`)
 构造 `auth.NewAuthJWTFromAssembly(asm)` 作为 error-first 工厂返回 `(AuthJWTFromAssembly, error)`，
 然后通过 `bootstrap.WithListener(..., []auth.ListenerAuth{jwtAuth})` 把 JWT 校验装配到 primary
 listener auth chain（典型形式：`jwtAuth, err := auth.NewAuthJWTFromAssembly(asm); if err != nil { ... }`）。

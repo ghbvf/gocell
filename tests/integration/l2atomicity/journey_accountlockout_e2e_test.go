@@ -13,7 +13,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
-// jAccountlockoutThreshold mirrors cells/accesscore/internal/accountlockout.Threshold.
+// jAccountlockoutThreshold mirrors corecells/accesscore/internal/accountlockout.Threshold.
 // The test cannot import the internal/ package, so we pin the literal here.
 // This is a known soft seam — drift between the two surfaces is NOT detected
 // at build/CI time. Do not silently change one surface without the other.

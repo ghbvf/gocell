@@ -157,6 +157,22 @@ func TestStreamAuth_NilVerifierPanics(t *testing.T) {
 	_ = StreamAuth(nil)
 }
 
+func TestStreamAuth_VerifierPanicReturnsInternal(t *testing.T) {
+	// bearerCtx() carries a valid bearer token so authorize reaches the verifier;
+	// the panicking verifier must be collapsed into codes.Internal by authorize's
+	// stage-level guard — the streaming Auth interceptor also runs outside Recovery.
+	handlerReached := false
+	handler := func(any, grpc.ServerStream) error { handlerReached = true; return nil }
+	ss := &fakeServerStream{ctx: bearerCtx()}
+	err := StreamAuth(panicVerifier{val: "verifier exploded"})(nil, ss, streamInfo(), handler)
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("StreamAuth verifier panic must return Internal, got %v", status.Code(err))
+	}
+	if handlerReached {
+		t.Fatalf("handler must not be reached when the verifier panics")
+	}
+}
+
 func TestStreamAccessLog_LogsWithoutBreakingStream(t *testing.T) {
 	// StreamAccessLog logs once at stream close and must pass the handler result
 	// through unchanged (success + error paths). The slog line itself is sink-

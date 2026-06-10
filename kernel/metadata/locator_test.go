@@ -1,9 +1,11 @@
 package metadata
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"reflect"
 	"sort"
 	"strings"
@@ -44,9 +46,9 @@ func TestLocator_AutoDetect(t *testing.T) {
 // are emitted for a conventional layout.
 func TestLocator_ConventionalDiscover(t *testing.T) {
 	fsys := fstest.MapFS{
-		"cells/accesscore/cell.yaml":                          &fstest.MapFile{Data: []byte("id: accesscore\n")},
-		"cells/accesscore/slices/login/slice.yaml":            &fstest.MapFile{Data: []byte("id: login\n")},
-		"cells/auditcore/cell.yaml":                           &fstest.MapFile{Data: []byte("id: auditcore\n")},
+		"corecells/accesscore/cell.yaml":                      &fstest.MapFile{Data: []byte("id: accesscore\n")},
+		"corecells/accesscore/slices/login/slice.yaml":        &fstest.MapFile{Data: []byte("id: login\n")},
+		"corecells/auditcore/cell.yaml":                       &fstest.MapFile{Data: []byte("id: auditcore\n")},
 		"contracts/http/auth/login/v1/contract.yaml":          &fstest.MapFile{Data: []byte("id: http.auth.login.v1\n")},
 		"contracts/event/session/created/v1/contract.yaml":    &fstest.MapFile{Data: []byte("id: event.session.created.v1\n")},
 		"journeys/J-ssologin.yaml":                            &fstest.MapFile{Data: []byte("id: J-ssologin\n")},
@@ -59,7 +61,7 @@ func TestLocator_ConventionalDiscover(t *testing.T) {
 		"examples/ssobff/journeys/J-flow.yaml":                &fstest.MapFile{Data: []byte("id: J-flow\n")},
 		"examples/ssobff/assembly.yaml":                       &fstest.MapFile{Data: []byte("id: ssobff\n")},
 		"README.md":                                           &fstest.MapFile{Data: []byte("ignored\n")},
-		"cells/accesscore/slices/login/handler.go":            &fstest.MapFile{Data: []byte("// ignored\n")},
+		"corecells/accesscore/slices/login/handler.go":        &fstest.MapFile{Data: []byte("// ignored\n")},
 	}
 	l, err := NewLocatorFS(fsys, WithLocatorMode(LocatorConventional))
 	if err != nil {
@@ -74,15 +76,15 @@ func TestLocator_ConventionalDiscover(t *testing.T) {
 		"actors:actors.yaml:",
 		"assembly:assemblies/platform/assembly.yaml:",
 		"assembly:examples/ssobff/assembly.yaml:",
-		"cell:cells/accesscore/cell.yaml:accesscore",
-		"cell:cells/auditcore/cell.yaml:auditcore",
+		"cell:corecells/accesscore/cell.yaml:accesscore",
+		"cell:corecells/auditcore/cell.yaml:auditcore",
 		"cell:examples/ssobff/cells/foo/cell.yaml:foo",
 		"contract:contracts/event/session/created/v1/contract.yaml:",
 		"contract:contracts/http/auth/login/v1/contract.yaml:",
 		"contract:examples/ssobff/contracts/http/x/y/v1/contract.yaml:",
 		"journey:examples/ssobff/journeys/J-flow.yaml:",
 		"journey:journeys/J-ssologin.yaml:",
-		"slice:cells/accesscore/slices/login/slice.yaml:accesscore",
+		"slice:corecells/accesscore/slices/login/slice.yaml:accesscore",
 		"slice:examples/ssobff/cells/foo/slices/bar/slice.yaml:foo",
 		"status-board:journeys/status-board.yaml:",
 	}
@@ -669,6 +671,55 @@ modules:
 			t.Errorf("expected no error for default-pattern zero-match, got: %v", err)
 		}
 	})
+}
+
+// TestLocator_ManifestExplicitIncludesOmittedKindsNoZeroMatchWarn verifies
+// #1560 F14: a module that declares explicit includes for some kinds (here
+// cells + slices) but omits others (contracts/journeys/assemblies) must NOT emit
+// a zero-match warn for the omitted kinds — those kinds were intentionally not
+// declared (they live in another module), so there is nothing to match. This is
+// distinct from the default-patterns path (no includes at all), where an omitted
+// kind legitimately warns. The corecells module (#1560) declares only cells +
+// slices, so this guards `gocell check` against contract/journey/assembly
+// zero-match WARN noise.
+func TestLocator_ManifestExplicitIncludesOmittedKindsNoZeroMatchWarn(t *testing.T) {
+	manifest := `version: v1
+modules:
+  - path: .
+    includes:
+      cells:
+        - "cells/*/cell.yaml"
+      slices:
+        - "cells/*/slices/*/slice.yaml"
+`
+	fsys := fstest.MapFS{
+		".gocell/manifest.yaml":           &fstest.MapFile{Data: []byte(manifest)},
+		"cells/foo/cell.yaml":             &fstest.MapFile{Data: []byte("id: foo\n")},
+		"cells/foo/slices/bar/slice.yaml": &fstest.MapFile{Data: []byte("id: bar\nbelongsToCell: foo\n")},
+		// No contracts / journeys / assemblies declared OR present.
+	}
+
+	// Capture the default slog so we can assert NO zero-match warn fires for the
+	// omitted kinds. Sequential test (no t.Parallel in this file), restored after.
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(prev)
+
+	l := requireLocatorFS(t, fsys)
+	sources, err := l.Discover()
+	if err != nil {
+		t.Fatalf("Discover unexpected error: %v", err)
+	}
+	got := summariseSources(sources)
+	want := []string{"cell:cells/foo/cell.yaml:foo", "slice:cells/foo/slices/bar/slice.yaml:foo"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Discover output mismatch.\ngot:  %v\nwant: %v", got, want)
+	}
+	if strings.Contains(buf.String(), "matched zero files") {
+		t.Errorf("explicit-includes module omitting contracts/journeys/assemblies "+
+			"must NOT emit a zero-match warn; got log:\n%s", buf.String())
+	}
 }
 
 // requireLocatorFS creates a Locator from fsys and fails the test on error.

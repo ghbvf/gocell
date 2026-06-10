@@ -93,7 +93,7 @@
 //
 // BS-4 *pgxpool.Pool type alias — resolves to the same *types.Named; documented.
 //
-// BS-5 cells/accesscore PGBundle helper accepts *pgxpool.Pool as a param but
+// BS-5 corecells/accesscore PGBundle helper accepts *pgxpool.Pool as a param but
 // does not persist it — reverse check asserts no struct field outside internal/.
 //
 // BS-6 Function-value indirection of pgexec.ExecDirect (`var fn =
@@ -121,8 +121,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-
-	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
 
 // fixtureViolation is a (base, ruleID_prefix, line) triple identifying one
@@ -277,12 +275,11 @@ func TestPGRepoAmbientTx_InterfaceSealed(t *testing.T) {
 	// silently finding zero pgexec packages (e.g. prodscan regression) → the
 	// seal guard would vacuously pass.
 	root := findModuleRoot(t)
-	patterns := prodscan.Patterns(root)
 	const anchorPkg = PlatformModulePath + "/adapters/postgres/internal/pgexec"
 
 	var checked []string
 	var sealDiags []Diagnostic
-	_ = Run(t, Typed(TypedOpts{}, patterns), func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || !isPgexecSubpackage(p.Pkg.Path()) {
 			return nil
 		}
@@ -317,13 +314,10 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 		t.Skip("skipping SelfCheck in -short mode")
 	}
 
-	root := findModuleRoot(t)
-	patterns := prodscan.Patterns(root)
-
 	// BS-1: no embedded/anonymous struct field in any production _repo.go /
 	// _store.go file should transitively expose *pgxpool.Pool.
 	var bs1Violations []string
-	_ = Run(t, Typed(TypedOpts{}, patterns), func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -366,7 +360,7 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 	// BS-3: pgexec.New must not appear as a function value (used as a value
 	// rather than directly called) in any production package.
 	var bs3Violations []string
-	_ = Run(t, Typed(TypedOpts{}, patterns), func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -384,10 +378,10 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 	assert.Empty(t, bs3Violations,
 		"BS-3 self-check: pgexec.New must not be used as a function value in production")
 
-	// BS-5: no struct in cells/accesscore (outside internal/) may carry
+	// BS-5: no struct in corecells/accesscore (outside internal/) may carry
 	// *pgxpool.Pool as a field. NewPGBundle accepts pool as a parameter but
 	// does not persist it.
-	bs5Patterns := []string{PlatformModulePath + "/cells/accesscore"}
+	bs5Patterns := []string{PlatformCellsModulePath + "/accesscore"}
 	var bs5PoolFieldCount int
 	_ = Run(t, Typed(TypedOpts{}, bs5Patterns), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
@@ -415,7 +409,7 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 	})
 
 	assert.Equal(t, 0, bs5PoolFieldCount,
-		"BS-5 self-check: no struct in cells/accesscore (outside internal/) may carry "+
+		"BS-5 self-check: no struct in corecells/accesscore (outside internal/) may carry "+
 			"*pgxpool.Pool — PGBundle must hold only derived primitives "+
 			"(userRepo/roleRepo/setupLock/txRunner)")
 
@@ -423,7 +417,7 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 	// value rather than directly called) in any production file. A function-
 	// value call would escape R3's direct-CallExpr callee resolution.
 	var bs6Violations []string
-	_ = Run(t, Typed(TypedOpts{}, patterns), func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}

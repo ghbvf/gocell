@@ -34,7 +34,7 @@ import (
 )
 
 // TestSessionrefreshNoSessionStoreMutation_01 fires when any file in
-// cells/accesscore/slices/sessionrefresh (excluding _test.go) calls a banned
+// corecells/accesscore/slices/sessionrefresh (excluding _test.go) calls a banned
 // method on session.Store. The rule resolves call targets through
 // typeseval.ResolveMethodCall, so method-call (`s.Create(...)`), method-
 // expression (`session.Store.Create(s, ...)`), and embedded-field promotion

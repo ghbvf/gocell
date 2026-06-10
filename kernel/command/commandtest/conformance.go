@@ -4,7 +4,7 @@
 // enroll against the same suite so behavior stays in lock-step.
 //
 // ref: runtime/audit/ledger/storetest (kernel-side conformance shape)
-// ref: cells/accesscore/internal/ports/conformance (Factory + Features pattern)
+// ref: corecells/accesscore/internal/ports/conformance (Factory + Features pattern)
 package commandtest
 
 import (

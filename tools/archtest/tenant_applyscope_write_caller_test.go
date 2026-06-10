@@ -23,9 +23,9 @@
 // callers:
 //
 //   - persistence.CellTxManager.ApplyTenantScope (the kernel interface method) —
-//     only cells/accesscore/internal/scopedtx/scopedtx.go (the ApplyScope helper).
-//   - cells/accesscore/internal/scopedtx.ApplyScope (the accesscore helper) —
-//     only cells/accesscore/slices/sessionrefresh/service.go (the one cross-store
+//     only corecells/accesscore/internal/scopedtx/scopedtx.go (the ApplyScope helper).
+//   - corecells/accesscore/internal/scopedtx.ApplyScope (the accesscore helper) —
+//     only corecells/accesscore/slices/sessionrefresh/service.go (the one cross-store
 //     tx that scopes mid-flight; every other accesscore site scopes at tx-start
 //     via scopedtx.Do).
 //
@@ -51,8 +51,8 @@
 //     the setLocalTenant path) is the SAME ceiling that funnel tracks, won't-do
 //     at **gh #1619** (Go-visibility family, with SPAN-SETATTR-HOLDER-SEAL #851 /
 //     HEALTHZ-HOLDER-SEAL #893 / outbox principal-write #1282). The scopedtx.ApplyScope
-//     rung has a TIGHTER natural bound: it lives in cells/accesscore/internal, so
-//     no package outside cells/accesscore can even reference it (Go internal-import
+//     rung has a TIGHTER natural bound: it lives in corecells/accesscore/internal, so
+//     no package outside corecells/accesscore can even reference it (Go internal-import
 //     visibility — a compile error, not an archtest finding).
 //
 // # Detection + anti-vacuity
@@ -102,18 +102,18 @@ const scopedtxApplyScopeFunc = "ApplyScope"
 const cellTxManagerTypeName = "CellTxManager"
 
 // scopedtxPkgPath is the accesscore internal scope funnel package.
-const scopedtxPkgPath = PlatformModulePath + "/cells/accesscore/internal/scopedtx"
+const scopedtxPkgPath = PlatformCellsModulePath + "/accesscore/internal/scopedtx"
 
 // applyTenantScopeMethodCallerAllowlist: the sole sanctioned caller of the kernel
 // CellTxManager.ApplyTenantScope interface method.
 var applyTenantScopeMethodCallerAllowlist = map[string]struct{}{
-	"cells/accesscore/internal/scopedtx/scopedtx.go": {},
+	"corecells/accesscore/internal/scopedtx/scopedtx.go": {},
 }
 
 // scopedtxApplyScopeCallerAllowlist: the sole sanctioned caller of scopedtx.ApplyScope
 // (mid-flight scoping is only legitimate in the sessionrefresh cross-store tx).
 var scopedtxApplyScopeCallerAllowlist = map[string]struct{}{
-	"cells/accesscore/slices/sessionrefresh/service.go": {},
+	"corecells/accesscore/slices/sessionrefresh/service.go": {},
 }
 
 // TestTenantApplyScopeWriteCaller01 asserts every production reference to the
@@ -268,7 +268,7 @@ func isApplyTenantScopeMethodRef(info *types.Info, id *ast.Ident) bool {
 }
 
 // isScopedtxApplyScopeRef resolves an identifier USE to the free function
-// cells/accesscore/internal/scopedtx.ApplyScope via go/types (info.Uses),
+// corecells/accesscore/internal/scopedtx.ApplyScope via go/types (info.Uses),
 // matching every import form (qualified / alias / dot-import all resolve to the
 // same *types.Func), like the WithScope detector.
 func isScopedtxApplyScopeRef(info *types.Info, id *ast.Ident) bool {

@@ -118,8 +118,8 @@ type l2TargetCell struct {
 	// pkgPath is the FULL Go import path of the cell package, equal to
 	// `<modulePath>/<yamlDir>`. Phase B's matchTarget compares Pass.Pkg.Path()
 	// with `==`, not HasSuffix — this avoids the failure mode where
-	// `examples/foo/cells/configcore` (an example cell) collides with the
-	// platform cell suffix `/cells/configcore`. The repo-internal convention
+	// `examples/foo/corecells/configcore` (an example cell) collides with the
+	// platform cell suffix `/corecells/configcore`. The repo-internal convention
 	// for package-path matching is exact-equality on Pkg.Path() (see
 	// `tools/archtest/baseslice_ctor_funnel_01_test.go:82,109` and
 	// `tools/archtest/adapter_error_classification_test.go:87,140`).
@@ -348,7 +348,7 @@ func collectL2PlusTargets(t *testing.T, scope Scope, modPath string) ([]l2Target
 		if filepath.Base(rel) != "cell.yaml" {
 			return
 		}
-		if !strings.HasPrefix(rel, "cells/") {
+		if !strings.HasPrefix(rel, PlatformCellsDir+"/") {
 			return
 		}
 		target, diag, ok := parseAndIncludeTarget(t, rel, fc.Bytes, modPath)
@@ -452,7 +452,7 @@ func scanCellsForInitCheckNotNoop(p *Pass, targets []l2TargetCell) []Diagnostic 
 
 // matchTarget returns the l2TargetCell whose full import path equals
 // `pkgPath`, or nil if no target matches. Exact equality (not HasSuffix)
-// prevents `examples/foo/cells/configcore` from being mis-attributed as
+// prevents `examples/foo/corecells/configcore` from being mis-attributed as
 // the platform `configcore` cell — F4 fix in PR #576 round-2 review.
 //
 // ref: tools/archtest/baseslice_ctor_funnel_01_test.go:82,109

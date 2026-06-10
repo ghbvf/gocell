@@ -772,13 +772,13 @@ func TestBuildDocument_DepsFilter_Layers(t *testing.T) {
 // set, dependencies.packages only contains packages owned by the focused cells.
 func TestBuildDocument_DepsFilter_PackageCells(t *testing.T) {
 	accessNode := &kerneldepgraph.Node{
-		ID:      "github.com/foo/bar/cells/accesscore/session",
+		ID:      "github.com/foo/bar/corecells/accesscore/session",
 		Layer:   "cells",
 		CellID:  "accesscore",
 		Imports: []string{},
 	}
 	auditNode := &kerneldepgraph.Node{
-		ID:      "github.com/foo/bar/cells/auditcore/audit",
+		ID:      "github.com/foo/bar/corecells/auditcore/audit",
 		Layer:   "cells",
 		CellID:  "auditcore",
 		Imports: []string{},
@@ -808,7 +808,7 @@ func TestBuildDocument_DepsFilter_PackageCells(t *testing.T) {
 	for _, pkg := range doc.Dependencies.Packages.Graph.Packages {
 		ids = append(ids, pkg.ID)
 	}
-	assert.Equal(t, []string{"github.com/foo/bar/cells/accesscore/session"}, ids)
+	assert.Equal(t, []string{"github.com/foo/bar/corecells/accesscore/session"}, ids)
 }
 
 // ---- NEW TESTS (A5 specification) ----

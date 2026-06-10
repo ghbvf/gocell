@@ -1,0 +1,275 @@
+package adminprovision
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/runtime/auth"
+)
+
+// ProvisionOutcome is the result classification returned from Ensure.
+//
+// Callers decide per outcome whether to persist side effects (credfile, event)
+// or surface 409 / silently skip.
+type ProvisionOutcome int
+
+const (
+	// OutcomeUnknown is the zero value; it is never returned successfully.
+	OutcomeUnknown ProvisionOutcome = iota
+	// OutcomeCreated means a fresh admin user + role assignment were persisted.
+	// Caller may emit user.created event and/or write credential file.
+	OutcomeCreated
+	// OutcomeAlreadyExists means at least one admin existed at the fast-path
+	// CountByRole check; no side effects were performed. Caller returns 409
+	// (HTTP) or nil (Lifecycle — silent skip).
+	OutcomeAlreadyExists
+	// OutcomeRaceSkipped means the fast-path CountByRole read zero admins but
+	// a concurrent replica persisted the admin between check and create.
+	// No rows were written. Caller treats the same as OutcomeAlreadyExists.
+	OutcomeRaceSkipped
+)
+
+// ProvisionInput holds the inputs for a single Ensure call.
+//
+// PasswordHash is pre-hashed by the caller (bcrypt). Provisioner never sees
+// plaintext. A duplicate username returns 409 ErrAuthUserDuplicate; the caller
+// must use a unique username (setup path enforces this at HTTP layer).
+// TenantID identifies the tenant for which the admin is being provisioned.
+type ProvisionInput struct {
+	TenantID     tenant.TenantID
+	Username     string
+	Email        string
+	PasswordHash []byte
+	RequireReset bool
+}
+
+// ProvisionResult holds the successful outcome of Ensure.
+type ProvisionResult struct {
+	User    *domain.User
+	Outcome ProvisionOutcome
+}
+
+// UUIDGenerator returns a fresh UUID string. Injected for deterministic tests.
+type UUIDGenerator func() string
+
+// Provisioner is the shared domain service.
+//
+// It is caller-tx-neutral: Ensure does not open a transaction; callers wrap
+// it with their own TxRunner if atomicity across Ensure + adjacent writes is
+// required.
+//
+// Concurrency: Ensure is NOT internally serialized. Callers must serialize
+// concurrent invocations through a transactional boundary that locks the
+// CountByRole-Create-Assign window:
+//
+//   - PG mode: open a transaction via persistence.TxRunner.RunInTx and call
+//     ports.SetupLockAcquirer.Acquire inside it. The PG implementation (PGSetupLock)
+//     uses pg_advisory_xact_lock, which is exclusive across pods and
+//     goroutines until tx commit/rollback.
+//   - Memstore mode: use Store.TxRunner — memTxRunner.RunInTx holds store.mu
+//     for the entire closure, serializing all goroutines (equivalent to PG
+//     SELECT FOR UPDATE held until commit).
+//
+// The single production caller (corecells/accesscore/slices/setup.Service.CreateAdmin)
+// wires both via RunInTx + the mandatory accesscore.WithSetupLock option. PG
+// composition roots inject accesspg.NewBundle(pool, txm, clk).SetupLock(); memstore callers
+// inject accesscore.NoopSetupLock{} (no second lock — store.mu does the work).
+type Provisioner struct {
+	userRepo ports.UserRepository
+	roleRepo ports.RoleRepository
+	logger   *slog.Logger
+	newID    UUIDGenerator
+	clock    clock.Clock
+}
+
+// NewProvisioner constructs a Provisioner. All dependencies are required;
+// passing nil returns an error so mis-wired assemblies fail at startup rather
+// than at the first Ensure call.
+func NewProvisioner(
+	userRepo ports.UserRepository, roleRepo ports.RoleRepository, logger *slog.Logger, newID UUIDGenerator, clk clock.Clock,
+) (*Provisioner, error) {
+	if userRepo == nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "adminprovision: UserRepository is required")
+	}
+	if roleRepo == nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "adminprovision: RoleRepository is required")
+	}
+	if logger == nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "adminprovision: Logger is required")
+	}
+	if newID == nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "adminprovision: UUIDGenerator is required")
+	}
+	clock.MustHaveClock(clk, "adminprovision.NewProvisioner")
+	return &Provisioner{
+		userRepo: userRepo,
+		roleRepo: roleRepo,
+		logger:   logger,
+		newID:    newID,
+		clock:    clk,
+	}, nil
+}
+
+// Status reports whether at least one *effective* admin exists — that is,
+// a user with status='active' AND holding the admin role (S4.0). A
+// locked/suspended admin alone does NOT count: setup-retirement and Ensure
+// fast-paths must allow operator recovery when the only remaining admins
+// can't actually administer (see ADR `docs/architecture/202605101400-adr-admin-invariant.md`).
+//
+// Pre-S4.0 this method counted any role_assignments holder via CountByRole
+// — that semantic was wrong for setup retirement: a system with only
+// locked admins would silently retire setup, leaving the operator with no
+// HTTP recovery path.
+//
+// Infrastructure errors bubble up unchanged so callers can distinguish a
+// known "no effective admin" from a transient RoleRepo outage.
+func (p *Provisioner) Status(ctx context.Context, t tenant.TenantID) (bool, error) {
+	exists, err := p.roleRepo.EffectiveAdminExists(ctx, t)
+	if err != nil {
+		return false, fmt.Errorf("adminprovision: effective-admin-exists: %w", err)
+	}
+	return exists, nil
+}
+
+// Ensure idempotently provisions the first admin. It is race-safe across
+// concurrent replicas; see ProvisionOutcome for branch semantics.
+//
+// Steps:
+//  1. Fast-path CountByRole: if > 0, return OutcomeAlreadyExists (no I/O writes).
+//  2. Ensure admin role exists (tolerate ErrAuthRoleDuplicate).
+//  3. Build user with a fresh UUID, persist via UserRepo.Create.
+//     - On ErrAuthUserDuplicate: recount admins. > 0 → OutcomeRaceSkipped
+//     (concurrent replica finished first). == 0 → 409 ErrAuthUserDuplicate
+//     (username conflict, operator must use a different username).
+//  4. AssignToUser(user, admin) — idempotent per port contract.
+func (p *Provisioner) Ensure(ctx context.Context, in ProvisionInput) (ProvisionResult, error) {
+	if err := in.TenantID.Validate(); err != nil {
+		return ProvisionResult{Outcome: OutcomeUnknown}, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"adminprovision: TenantID is required", err)
+	}
+	if len(in.PasswordHash) == 0 {
+		return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: PasswordHash is required")
+	}
+
+	// 1. Fast path.
+	exists, err := p.Status(ctx, in.TenantID)
+	if err != nil {
+		return ProvisionResult{Outcome: OutcomeUnknown}, err
+	}
+	if exists {
+		p.logger.Debug("admin provision skipped: admin already exists",
+			slog.String("event", "admin_provision_skip"))
+		return ProvisionResult{Outcome: OutcomeAlreadyExists}, nil
+	}
+
+	// 2. Ensure admin role within this tenant.
+	if err := p.ensureAdminRole(ctx, in.TenantID); err != nil {
+		return ProvisionResult{Outcome: OutcomeUnknown}, err
+	}
+
+	// 3. Persist user (with race detection).
+	result, err := p.createAdminUser(ctx, in)
+	if err != nil || result.Outcome == OutcomeRaceSkipped {
+		return result, err
+	}
+
+	// 4. Assign admin role (idempotent).
+	if _, err := p.roleRepo.AssignToUser(ctx, in.TenantID, result.User.ID, auth.RoleAdmin); err != nil {
+		return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: assign admin role: %w", err)
+	}
+
+	return result, nil
+}
+
+// Compensate best-effort removes the admin role assignment and user row after
+// a post-Ensure side effect (e.g., credfile write) fails. Errors are logged,
+// not returned: the operator's immediate concern is the outer failure.
+func (p *Provisioner) Compensate(ctx context.Context, t tenant.TenantID, userID string) {
+	if err := p.roleRepo.RemoveFromUser(ctx, t, userID, auth.RoleAdmin); err != nil {
+		p.logger.Error("admin provision compensate: unassign role failed",
+			slog.String("event", "admin_provision_compensate"),
+			slog.String("user_id", userID),
+			slog.Any("error", err))
+	}
+	if err := p.userRepo.Delete(ctx, t, userID); err != nil {
+		p.logger.Error("admin provision compensate: delete user failed",
+			slog.String("event", "admin_provision_compensate"),
+			slog.String("user_id", userID),
+			slog.Any("error", err))
+		return
+	}
+	p.logger.Warn("admin provision compensated; retry on next invocation",
+		slog.String("event", "admin_provision_compensate"),
+		slog.String("user_id", userID))
+}
+
+func (p *Provisioner) ensureAdminRole(ctx context.Context, t tenant.TenantID) error {
+	adminRole := &domain.Role{
+		ID:   auth.RoleAdmin,
+		Name: auth.RoleAdmin,
+		Permissions: []domain.Permission{
+			{Resource: "*", Action: "*"},
+		},
+	}
+	if err := p.roleRepo.Create(ctx, t, adminRole); err != nil {
+		var ecErr *errcode.Error
+		if !errors.As(err, &ecErr) || ecErr.Code != errcode.ErrAuthRoleDuplicate {
+			return fmt.Errorf("adminprovision: ensure admin role: %w", err)
+		}
+	}
+	return nil
+}
+
+// createAdminUser persists a new admin user with race detection.
+// Return convention:
+//   - {User:user, Outcome:OutcomeCreated}, nil  — fresh row persisted
+//   - {Outcome:OutcomeRaceSkipped}, nil          — concurrent replica finished first
+//   - {Outcome:OutcomeUnknown}, err              — infra error or username conflict (409)
+func (p *Provisioner) createAdminUser(ctx context.Context, in ProvisionInput) (ProvisionResult, error) {
+	now := p.clock.Now()
+	user, err := domain.NewUser(in.Username, in.Email, string(in.PasswordHash), now)
+	if err != nil {
+		return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: construct user: %w", err)
+	}
+	user.ID = p.newID()
+	user.CreationSource = domain.UserSourceSetup
+	if in.RequireReset {
+		// Creation-time only: no live sessions exist for a brand-new user
+		// (epoch=1). This is an allowlisted non-funnel site — the authzmutate
+		// funnel is for mutating existing principals, not initial construction.
+		user.SetPasswordResetRequired(true, now)
+	}
+
+	createErr := p.userRepo.Create(ctx, in.TenantID, user)
+	if createErr == nil {
+		return ProvisionResult{User: user, Outcome: OutcomeCreated}, nil
+	}
+
+	var ecErr *errcode.Error
+	if !errors.As(createErr, &ecErr) || ecErr.Code != errcode.ErrAuthUserDuplicate {
+		return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: create user: %w", createErr)
+	}
+
+	// Duplicate — distinguish race vs true conflict.
+	recount, err := p.roleRepo.CountByRole(ctx, in.TenantID, auth.RoleAdmin)
+	if err != nil {
+		return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: recount after duplicate user: %w", err)
+	}
+	if recount > 0 {
+		// Concurrent replica completed provisioning between our fast-path check and Create.
+		p.logger.Debug("admin provision: duplicate user creation race; admin already exists",
+			slog.String("event", "admin_provision_race"))
+		return ProvisionResult{Outcome: OutcomeRaceSkipped}, nil
+	}
+
+	// True conflict: username already taken, no admin role yet. Return 409.
+	return ProvisionResult{Outcome: OutcomeUnknown}, errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate,
+		"admin provisioning username already exists")
+}

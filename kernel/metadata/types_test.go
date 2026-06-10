@@ -585,10 +585,10 @@ func TestSliceMeta_Clone_Independence(t *testing.T) {
 				},
 			},
 		},
-		AllowedFiles: []string{"cells/accesscore/slices/sessionlogin/**"},
+		AllowedFiles: []string{"corecells/accesscore/slices/sessionlogin/**"},
 		Dir:          "sessionlogin",
 		CellDir:      "accesscore",
-		File:         "cells/accesscore/slices/sessionlogin/slice.yaml",
+		File:         "corecells/accesscore/slices/sessionlogin/slice.yaml",
 	}
 
 	clone := src.Clone()
@@ -614,7 +614,7 @@ func TestSliceMeta_Clone_Independence(t *testing.T) {
 	assert.Equal(t, "unit.sessionlogin.service", clone.Verify.Unit[0], "clone Verify.Unit must be independent")
 	assert.Equal(t, "contract.http.auth.login.v1.serve", clone.Verify.Contract[0], "clone Verify.Contract must be independent")
 	assert.Equal(t, "platform-team", clone.Verify.Waivers[0].Owner, "clone Verify.Waivers must be independent")
-	assert.Equal(t, "cells/accesscore/slices/sessionlogin/**", clone.AllowedFiles[0], "clone AllowedFiles must be independent")
+	assert.Equal(t, "corecells/accesscore/slices/sessionlogin/**", clone.AllowedFiles[0], "clone AllowedFiles must be independent")
 
 	// Mutate clone — source must be unaffected (values already mutated above, reset check on a fresh pair).
 	src2 := &metadata.SliceMeta{

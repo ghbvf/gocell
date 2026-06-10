@@ -47,7 +47,8 @@ run_smoke() {
   cleanup_smoke_artifacts
   trap cleanup_smoke_artifacts RETURN
 
-  # Need a cell first so --cells references are valid.
+  # Need a cell first so --cells references are valid. scaffold cell writes to
+  # the conventional root cells/<id>/ location.
   go run ./cmd/gocell scaffold cell \
     --id="${CELL_ID}" \
     --type=core \
@@ -56,7 +57,16 @@ run_smoke() {
     --role=cell-owner \
     --skip-generate
 
+  # --layout=conventional: this smoke exercises the framework-general CONSUMER
+  # scaffold convention (a cell at root cells/<id>/). The sandbox is a clone of
+  # GoCell's OWN repo, which ships .gocell/manifest.yaml and would otherwise
+  # auto-detect MANIFEST mode — whose root module intentionally does NOT declare
+  # root cells/ (GoCell's platform cells live in the corecells module, #1560), so
+  # manifest-mode discovery cannot see the just-scaffolded cells/asmsmokecell and
+  # --cells would fail "unknown cell". Forcing conventional mode matches the
+  # consumer scenario this gate is actually validating. (#1560 / PR #1814.)
   go run ./cmd/gocell scaffold assembly \
+    --layout=conventional \
     --id="${ASM_ID}" \
     --cells="${CELL_ID}" \
     --team=scaffoldsmoke \
