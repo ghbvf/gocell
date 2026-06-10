@@ -511,3 +511,27 @@ Go 生态「重型套件排出默认 `go test`」标准只有 build tag（编译
 | §D6 single-owner 原则（nightly + verify-archtest.sh 为唯一 owner） | ⚠️ 补强 | 原则不变；本 amendment 把它从「靠 VERIFY_SKIP 约定」升级为「靠 build tag 编译级 + ARCHTEST-LEAF-BUILD-TAG-01 守卫」机器强制 |
 | §D6 `VERIFY_SKIP=archtest` env | ✅ 保留 | 仍 skip 专用 `verify-archtest.sh` gate（避免 governance lane 跑 K=1 全量）；与 build tag 互补，非冗余 |
 | build-test `_dynamic_archtest_excluded` grep | ⚠️ 职责收窄 | 见 D4：执行排除 → coverage-scope 排除 |
+
+---
+
+## §Amendment 2026-06-10 (PR-A10 #1171, KERNEL-RECONCILE-01 收口) — reconcile invariant 族纳入 archtest 池
+
+epic #661（`kernel/reconcile` L4 收敛控制环）落地后，`tools/archtest/reconcile_*_test.go` 4 个文件新增
+**27 个顶层 Test 函数**（`RECONCILE-*` 族：interface/Request/Result/Trigger/LeaderElector frozen、
+BUILDER-FUNNEL、FENCED-WRITE-FUNNEL、RESULT-LABEL-VALUES-FROZEN、REQUEUE-ENQUEUE-CALLER、
+LEADER-IMPL-FUNNEL、goleak TestMain funnel）。
+
+**无 matrix / 脚本编辑**：D1 的 discovery（`go test -list '^Test' ./tools/archtest` modulo `SHARD_COUNT`）
+按设计自动吸收这 27 个函数，无需任何 CI 配置改动——这正是 D1 动态分片相对旧 K=N 静态 enumerate 的目的。
+本 amendment 仅做威胁矩阵再评，不改决策。
+
+### 威胁矩阵再评（per ai-robust.md §"ADR amendment 落地必查"）
+
+| 维度 | 评估 |
+|---|---|
+| per-shard RSS / OOM 包络 | archtest 顶层 Test 函数当前共 **1226**，reconcile 族 27 个占 ~2.2%；K=24 下每 shard ≈ 51 函数，reconcile 增量 ≈ +1.1 函数/shard。OOM 触发源是 `typeseval.SharedResolver` 的 type-graph 累加，27 个新函数不引入新对标语义类别，per-shard RSS 仍落在 §决策 中 K=24 < GHA 7GB 的方向性包络内。|
+| §决策 行的绝对计数（"296 函数"/"per-shard 32"）| 为历史 macOS baseline，早被 line 29 声明为「方向性论点权威、不以绝对数为真值源」；本 PR **不** true-up 该历史数（其漂移源自全仓 archtest 4× 增长，非 reconcile，超出本 PR 范围）。|
+| 一致性守卫 | `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01` / `ARCHTEST-LEAF-BUILD-TAG-01` 不受影响；reconcile 测试文件已带 `//go:build archtest` leaf tag（同 D3 范式），编译级排除 bare `go test` 自动覆盖。|
+
+> 关联 ADR2 `202605170000-...`：reconcile.Loop 共用的 control-plane clock carve-out 已由其 §Amendment
+> 2026-06-06（#1169）就地重写，本 PR 不重复 amend（避免双真值源）。
