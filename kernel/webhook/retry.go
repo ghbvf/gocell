@@ -73,7 +73,8 @@ func (s RetrySchedule) DelayFor(n int) (delay time.Duration, ok bool) {
 // the wait before retry i+1). It is the bulk-read seam the broker-delay wiring
 // (#1458) consumes to build per-tier delay queues / schedule-driven redelivery;
 // DelayFor remains the single-tier lookup. The slice is cloned so callers cannot
-// mutate the schedule's internal state.
+// mutate the schedule's internal state — call it once at wiring time (e.g. in
+// the dispatch consumer builder), not on the per-delivery hot path.
 func (s RetrySchedule) Delays() []time.Duration { return slices.Clone(s.delays) }
 
 // Classify maps an outbound delivery outcome to an outbox.Disposition per the

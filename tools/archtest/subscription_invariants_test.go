@@ -166,7 +166,7 @@ func collectSubscriptionFieldViolations(f *ast.File, fset *token.FileSet, label 
 }
 
 // TestSubscriptionFieldsFrozen enforces SUBSCRIPTION-FIELDS-FROZEN-01:
-// kernel/outbox.Subscription must declare exactly the seven fields listed in
+// kernel/outbox.Subscription must declare exactly the eight fields listed in
 // subscriptionAllowedFields. Drift in this field set silently changes what
 // every cell handler can/must produce on a Subscription literal AND what
 // codegen (contractgen + cellgen) must inject; freezing the set keeps the

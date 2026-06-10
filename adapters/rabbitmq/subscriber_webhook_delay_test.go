@@ -222,8 +222,6 @@ func makeDispatchTestSetup(t *testing.T) (*Subscriber, *mockChannel, amqp.Delive
 		DeliveryTag: 99,
 		Body:        body,
 		ContentType: "application/json",
-		// ConsumerTag matches the format "cg-<queue>-<topic>" so resolveQueueNameFromTopic
-		// can derive "myqueue" from it.
 		ConsumerTag: "cg-myqueue-test.topic",
 		Headers:     amqp.Table{},
 	}
@@ -243,7 +241,7 @@ func TestDispatchDisposition_DelayedRequeue_Attempt1_PublishesAndAcks(t *testing
 	schedule := []time.Duration{200 * time.Millisecond, 500 * time.Millisecond}
 	res := outbox.DeliveryOutcome{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
 
-	sub.dispatchDisposition(context.Background(), ch, delivery, schedule, res, nil, "test.topic", entry)
+	sub.dispatchDisposition(context.Background(), ch, delivery, "myqueue", schedule, res, nil, "test.topic", entry)
 
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
@@ -283,7 +281,7 @@ func TestDispatchDisposition_DelayedRequeue_BudgetExhausted(t *testing.T) {
 
 	notifyCount := 0
 	// We can't inject a settlement observer here; we just assert the broker call.
-	sub.dispatchDisposition(context.Background(), ch, delivery, schedule, res, nil, "test.topic", entry)
+	sub.dispatchDisposition(context.Background(), ch, delivery, "myqueue", schedule, res, nil, "test.topic", entry)
 
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
@@ -309,7 +307,7 @@ func TestDispatchDisposition_DelayedRequeue_PublishError_FallbackNack(t *testing
 	schedule := []time.Duration{200 * time.Millisecond}
 	res := outbox.DeliveryOutcome{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
 
-	sub.dispatchDisposition(context.Background(), ch, delivery, schedule, res, nil, "test.topic", entry)
+	sub.dispatchDisposition(context.Background(), ch, delivery, "myqueue", schedule, res, nil, "test.topic", entry)
 
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
@@ -330,7 +328,7 @@ func TestDispatchDisposition_NonDelayed_Requeue_Unchanged(t *testing.T) {
 	// Empty schedule: non-delayed path.
 	res := outbox.DeliveryOutcome{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
 
-	sub.dispatchDisposition(context.Background(), ch, delivery, nil, res, nil, "test.topic", entry)
+	sub.dispatchDisposition(context.Background(), ch, delivery, "myqueue", nil, res, nil, "test.topic", entry)
 
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
@@ -350,7 +348,7 @@ func TestDispatchDisposition_DelayedRequeue_Attempt2_PublishesRK1(t *testing.T) 
 	schedule := []time.Duration{200 * time.Millisecond, 500 * time.Millisecond}
 	res := outbox.DeliveryOutcome{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
 
-	sub.dispatchDisposition(context.Background(), ch, delivery, schedule, res, nil, "test.topic", entry)
+	sub.dispatchDisposition(context.Background(), ch, delivery, "myqueue", schedule, res, nil, "test.topic", entry)
 
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
@@ -360,6 +358,45 @@ func TestDispatchDisposition_DelayedRequeue_Attempt2_PublishesRK1(t *testing.T) 
 
 	pub := ch.publishedMessages[0]
 	assert.Equal(t, int32(3), pub.Headers[headerWebhookAttempt], "x-webhook-attempt must be 3")
+}
+
+// TestDispatchDisposition_DelayedRequeue_AttemptEqLen_RepublishesLastTier verifies
+// the boundary case where attempt == len(schedule) (e.g. schedule length 2,
+// attempt=2). This is NOT exhaustion — exhaustion only fires when attempt >
+// len(schedule). The message must be republished to the LAST tier (routing key
+// strconv.Itoa(len-1) = "1" for a 2-tier schedule) and Acked normally.
+func TestDispatchDisposition_DelayedRequeue_AttemptEqLen_RepublishesLastTier(t *testing.T) {
+	sub, ch, delivery, entry := makeDispatchTestSetup(t)
+
+	// attempt = len(schedule) = 2: boundary — must republish, not exhaust.
+	delivery.Headers = amqp.Table{headerWebhookAttempt: int32(2)}
+
+	schedule := []time.Duration{200 * time.Millisecond, 500 * time.Millisecond}
+	res := outbox.DeliveryOutcome{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
+
+	sub.dispatchDisposition(context.Background(), ch, delivery, "myqueue", schedule, res, nil, "test.topic", entry)
+
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+
+	// Must publish to last tier (routing key = strconv.Itoa(len-1) = "1").
+	assert.True(t, ch.publishCalled, "must republish to last tier when attempt == len(schedule)")
+	assert.Equal(t, "1", ch.publishRoutingKey, "routing key must be \"1\" (last tier) for attempt == len(schedule)")
+	assert.Equal(t, "myqueue.delay", ch.publishExchange, "must target delay exchange")
+
+	// Must NOT nack with requeue=false (that would exhaust the budget).
+	if ch.nackCalled {
+		assert.True(t, ch.nackRequeue,
+			"if Nack was called it must be requeue=true (not DLX exhaust path)")
+	}
+
+	// Original delivery must be Acked.
+	assert.True(t, ch.ackCalled, "original delivery must be Acked on successful republish")
+
+	// x-webhook-attempt header must be incremented to 3.
+	require.Len(t, ch.publishedMessages, 1)
+	assert.Equal(t, int32(3), ch.publishedMessages[0].Headers[headerWebhookAttempt],
+		"x-webhook-attempt must be incremented to attempt+1")
 }
 
 // =============================================================================

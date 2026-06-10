@@ -48,14 +48,17 @@ a custom `RetrySchedule` via a future `WithSchedule` option (not in PR-5 scope).
 `RetrySchedule.MaxRetries()` returns 7 (the retry count excluding the initial
 attempt); `RetrySchedule.Attempts()` returns 8 (the total delivery count).
 
-**PR-5 ships `DefaultSvixSchedule` as a tested primitive and the documented
-seam for the broker-delay follow-up. PR-5 does NOT wire per-attempt delays or
-a per-dispatcher RetryCount at runtime**: `Dispatcher` has no schedule field,
-`runtime/webhook/dispatch.BuildConsumers` never sets `ConsumerBaseConfig.RetryCount`,
-and the global `kernel/outbox.ConsumerBase` cannot accept a per-dispatcher
-count. The dispatch consumer rides the shared ConsumerBase (default exponential
-backoff, capped 30 s). `RetrySchedule.DelayFor` is the seam the follow-up
-(gh #1458) will consume.
+PR-5 shipped `DefaultSvixSchedule` as a tested primitive and the documented
+seam. The per-attempt wall-clock delays **are now honoured at runtime** (#1458):
+the webhook-dispatch bootstrap drain copies `DefaultSvixSchedule().Delays()` onto
+`outbox.Subscription.BrokerDelaySchedule`, and the Subscriber applies
+broker-native delayed re-delivery. `RetrySchedule.DelayFor`/`Delays()` are the
+seams the wiring consumes. See §D5 for the mechanism and threat re-evaluation.
+
+> **Historical note (pre-#1458):** PR-5 itself did NOT wire the delays — the
+> dispatch consumer rode the shared `kernel/outbox.ConsumerBase` whose in-process
+> exponential backoff is capped at 30 s and is lost on restart. That gap was
+> deliberate and tracked at #1458, now closed (§D5).
 
 ### D2 — HTTP status code → `outbox.HandleResult` mapping (standard-webhooks aligned)
 

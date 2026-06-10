@@ -464,14 +464,21 @@ func (b *InMemoryEventBus) handleWithRetry(
 		// Wait the per-attempt delay — the schedule tier for #1458 broker-delay
 		// subscriptions, else exponential backoff — then retry, or abort on ctx
 		// cancellation. Logged here, the single site that knows the actual wait,
-		// so retry_delay is accurate for both retry modes.
+		// so retry_delay is accurate for both retry modes. The error attr is
+		// omitted when nil (e.g. a zero-value/invalid disposition carries no Err —
+		// handleInvalidDisposition already logged the cause at Error level) so the
+		// field never reads as a spurious "error=<nil>".
 		delay := nextAttemptDelay(schedule, attempt)
-		slog.Warn("eventbus: delivery failed, retrying after delay",
+		retryAttrs := []slog.Attr{
 			slog.String("topic", topic),
 			slog.String("entry_id", entry.ID()),
 			slog.Int("attempt", attempt+1),
 			slog.Duration("retry_delay", delay),
-			slog.Any("error", res.Err))
+		}
+		if res.Err != nil {
+			retryAttrs = append(retryAttrs, slog.Any("error", res.Err))
+		}
+		slog.LogAttrs(ctx, slog.LevelWarn, "eventbus: delivery failed, retrying after delay", retryAttrs...)
 		if !awaitDelay(ctx, b.clk, delay) {
 			return
 		}

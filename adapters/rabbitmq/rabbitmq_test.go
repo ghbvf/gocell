@@ -2935,7 +2935,7 @@ func TestProcessDelivery_Ack_CommitsReceipt(t *testing.T) {
 	sub.processDelivery(ctx, ch, amqp.Delivery{
 		DeliveryTag: 1,
 		Body:        entryBytes,
-	}, "test.topic", nil, handler)
+	}, "test.topic", "", nil, handler)
 
 	ch.mu.Lock()
 	assert.True(t, ch.ackCalled)
@@ -2971,7 +2971,7 @@ func TestProcessDelivery_Reject_ReleasesReceipt(t *testing.T) {
 	sub.processDelivery(ctx, ch, amqp.Delivery{
 		DeliveryTag: 2,
 		Body:        entryBytes,
-	}, "test.topic", nil, handler)
+	}, "test.topic", "", nil, handler)
 
 	ch.mu.Lock()
 	assert.True(t, ch.nackCalled)
@@ -3009,7 +3009,7 @@ func TestProcessDelivery_NilReceipt_NoPanic(t *testing.T) {
 		sub.processDelivery(ctx, ch, amqp.Delivery{
 			DeliveryTag: 3,
 			Body:        entryBytes,
-		}, "test.topic", nil, handler)
+		}, "test.topic", "", nil, handler)
 	})
 }
 
@@ -3061,7 +3061,7 @@ func TestProcessDelivery_PassesThroughContextWithoutRestore(t *testing.T) {
 	sub.processDelivery(parentCtx, ch, amqp.Delivery{
 		DeliveryTag: 5,
 		Body:        entryBytes,
-	}, "test.topic", nil, handler)
+	}, "test.topic", "", nil, handler)
 
 	// Subscriber should NOT restore obs metadata (middleware's job).
 	assert.Empty(t, observed["request_id"], "subscriber should not restore request_id")
@@ -3114,7 +3114,7 @@ func TestProcessDelivery_DoesNotRestoreObservabilityContext(t *testing.T) {
 	sub.processDelivery(context.Background(), ch, amqp.Delivery{
 		DeliveryTag: 6,
 		Body:        entryBytes,
-	}, "test.topic", nil, handler)
+	}, "test.topic", "", nil, handler)
 
 	assert.Empty(t, capturedRequestID,
 		"processDelivery should NOT restore request_id — that is middleware's job")
@@ -3149,7 +3149,7 @@ func TestProcessDelivery_Receipt_UsesDetachedCtx(t *testing.T) {
 	sub.processDelivery(ctx, ch, amqp.Delivery{
 		DeliveryTag: 4,
 		Body:        entryBytes,
-	}, "test.topic", nil, handler)
+	}, "test.topic", "", nil, handler)
 
 	// Receipt should still be committed because processDelivery uses
 	// context.WithoutCancel for Receipt operations. The parent ctx is
@@ -3183,7 +3183,7 @@ func TestProcessDelivery_Requeue_ReleasesReceipt(t *testing.T) {
 	sub.processDelivery(context.Background(), ch, amqp.Delivery{
 		DeliveryTag: 10,
 		Body:        entryBytes,
-	}, "test.topic", nil, handler)
+	}, "test.topic", "", nil, handler)
 
 	ch.mu.Lock()
 	assert.True(t, ch.nackCalled)
@@ -3265,7 +3265,7 @@ func TestProcessDelivery_BrokerAckFails_CommitAlreadyDone(t *testing.T) {
 	sub.processDelivery(ctx, ch, amqp.Delivery{
 		DeliveryTag: 5,
 		Body:        entryBytes,
-	}, "test.topic", nil, handler)
+	}, "test.topic", "", nil, handler)
 
 	receipt.mu.Lock()
 	// With Commit→Ack ordering, Commit is called before Ack.
@@ -3298,7 +3298,7 @@ func TestProcessDelivery_CommitFails_NackRequeueSuccess_ReleasesReceipt(t *testi
 	sub.processDelivery(context.Background(), ch, amqp.Delivery{
 		DeliveryTag: 41,
 		Body:        entryBytes,
-	}, "test.topic", nil, handler)
+	}, "test.topic", "", nil, handler)
 
 	ch.mu.Lock()
 	assert.False(t, ch.ackCalled, "Commit failure must not Ack")
@@ -3336,7 +3336,7 @@ func TestProcessDelivery_CommitFails_NackRequeueFails_ReleasesReceipt(t *testing
 	sub.processDelivery(context.Background(), ch, amqp.Delivery{
 		DeliveryTag: 42,
 		Body:        entryBytes,
-	}, "test.topic", nil, handler)
+	}, "test.topic", "", nil, handler)
 
 	ch.mu.Lock()
 	assert.False(t, ch.ackCalled, "Commit failure must not Ack even if Nack fails")
@@ -3505,7 +3505,7 @@ func TestProcessDelivery_HandlerError_Logged(t *testing.T) {
 	sub.processDelivery(context.Background(), ch, amqp.Delivery{
 		DeliveryTag: 20,
 		Body:        entryBytes,
-	}, "test.topic", nil, handler)
+	}, "test.topic", "", nil, handler)
 
 	// Ack should still be called (error does not affect disposition).
 	ch.mu.Lock()
@@ -3539,7 +3539,7 @@ func TestProcessDelivery_Requeue_BrokerNackFails_ReleasesReceipt(t *testing.T) {
 	sub.processDelivery(context.Background(), ch, amqp.Delivery{
 		DeliveryTag: 30,
 		Body:        entryBytes,
-	}, "test.topic", nil, handler)
+	}, "test.topic", "", nil, handler)
 
 	// Nack was attempted (requeue=true) but failed.
 	ch.mu.Lock()
@@ -3668,7 +3668,7 @@ func TestProcessDelivery_UnknownDisposition_NackWithRequeue(t *testing.T) {
 	sub.processDelivery(context.Background(), ch, amqp.Delivery{
 		DeliveryTag: 42,
 		Body:        entryBytes,
-	}, "test.topic", nil, handler)
+	}, "test.topic", "", nil, handler)
 
 	// Unknown disposition should Nack with requeue=true.
 	ch.mu.Lock()
