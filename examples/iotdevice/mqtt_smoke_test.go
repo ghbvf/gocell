@@ -14,7 +14,6 @@ import (
 	"github.com/mochi-mqtt/server/v2/listeners"
 
 	"github.com/ghbvf/gocell/adapters/mqtt"
-	devicecell "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell"
 	devicemem "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/mem"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/deviceregister"
 	deviceregistered "github.com/ghbvf/gocell/generated/contracts/event/device-registered/v1"
@@ -193,7 +192,7 @@ func TestMQTTSmoke_DeviceRegisterPublishesToBroker(t *testing.T) {
 		t.Fatalf("NewDirectCellEmitter: %v", err)
 	}
 	svc, err := deviceregister.NewService(clk, devicemem.NewDeviceRepository(), logger,
-		deviceregister.WithEmitter(emitter), deviceregister.WithCertStore(devicecell.NewCertStore()))
+		deviceregister.WithEmitter(emitter))
 	if err != nil {
 		t.Fatalf("deviceregister.NewService: %v", err)
 	}

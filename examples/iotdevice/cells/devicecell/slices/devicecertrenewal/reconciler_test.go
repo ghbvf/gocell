@@ -10,7 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecert"
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -22,6 +23,16 @@ import (
 var certTestBase = time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
 
 const certRenewalTestThreshold = 7 * 24 * time.Hour
+
+// seedCert persists a device with the given cert state into a mem repo (the
+// durable substitute for the old store.Issue seeding).
+func seedCert(t *testing.T, ctx context.Context, repo domain.DeviceRepository, id string, expiresAt time.Time) {
+	t.Helper()
+	require.NoError(t, repo.Create(ctx, &domain.Device{
+		ID: id, Name: id, Status: "online", LastSeen: certTestBase,
+		CertEpoch: domain.DefaultCertEpoch, CertExpiresAt: expiresAt,
+	}))
+}
 
 func TestRotateCommandID(t *testing.T) {
 	t.Parallel()
@@ -35,9 +46,9 @@ func TestRotateCommandID(t *testing.T) {
 	assert.NotEqual(t, rotateCommandID("dev-1", 1), rotateCommandID("dev-2", 1))
 }
 
-func newTestReconciler(t *testing.T, fc *clockmock.FakeClock, store *devicecert.Store, rec *outboxtest.Recorder) *Reconciler {
+func newTestReconciler(t *testing.T, fc *clockmock.FakeClock, repo domain.DeviceRepository, rec *outboxtest.Recorder) *Reconciler {
 	t.Helper()
-	r, err := NewReconciler(fc, store, rec.CellEmitter(), outbox.DemoCellTxManager(),
+	r, err := NewReconciler(fc, repo, rec.CellEmitter(), outbox.DemoCellTxManager(),
 		certRenewalTestThreshold, nil)
 	require.NoError(t, err)
 	return r
@@ -46,17 +57,15 @@ func newTestReconciler(t *testing.T, fc *clockmock.FakeClock, store *devicecert.
 func TestReconciler_EmitsRenewalForNearExpiry(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	store := devicecert.NewStore()
+	repo := mem.NewDeviceRepository()
 	// dev-near expires within the threshold; dev-far is well outside it.
-	_, err := store.Issue(ctx, "dev-near", certTestBase.Add(24*time.Hour))
-	require.NoError(t, err)
-	_, err = store.Issue(ctx, "dev-far", certTestBase.Add(30*24*time.Hour))
-	require.NoError(t, err)
+	seedCert(t, ctx, repo, "dev-near", certTestBase.Add(24*time.Hour))
+	seedCert(t, ctx, repo, "dev-far", certTestBase.Add(30*24*time.Hour))
 
 	rec := outboxtest.NewRecorder()
-	r := newTestReconciler(t, clockmock.New(certTestBase), store, rec)
+	r := newTestReconciler(t, clockmock.New(certTestBase), repo, rec)
 
-	_, err = r.Reconcile(ctx, reconcile.Request{})
+	_, err := r.Reconcile(ctx, reconcile.Request{})
 	require.NoError(t, err)
 
 	entries := rec.Entries()
@@ -81,68 +90,70 @@ func TestReconciler_EmitsRenewalForNearExpiry(t *testing.T) {
 func TestReconciler_NoEmitWhenNoneNearExpiry(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	store := devicecert.NewStore()
-	_, err := store.Issue(ctx, "dev-far", certTestBase.Add(30*24*time.Hour))
-	require.NoError(t, err)
+	repo := mem.NewDeviceRepository()
+	seedCert(t, ctx, repo, "dev-far", certTestBase.Add(30*24*time.Hour))
 
 	rec := outboxtest.NewRecorder()
-	r := newTestReconciler(t, clockmock.New(certTestBase), store, rec)
+	r := newTestReconciler(t, clockmock.New(certTestBase), repo, rec)
 
-	_, err = r.Reconcile(ctx, reconcile.Request{})
+	_, err := r.Reconcile(ctx, reconcile.Request{})
 	require.NoError(t, err)
 	assert.Empty(t, rec.Entries(), "no near-expiry cert -> no command emitted")
 }
 
-// TestReconciler_DedupsAcrossTicksPerEpoch is the F1 invariant proven WITHOUT a
-// relay: after the first emit the store marks the epoch renewal-requested, so the
-// second tick's ScanNearExpiry skips it. The per-epoch single-emit therefore does
-// NOT depend on the relay's 24h command-done TTL at all.
+// TestReconciler_DedupsAcrossTicksPerEpoch proves the per-epoch single-emit
+// WITHOUT a relay: after the first emit the reconciler marks the epoch
+// renewal-requested on the devices row, so the second tick's scan skips it. The
+// single-emit therefore does NOT depend on the relay's 24h command-done TTL.
 func TestReconciler_DedupsAcrossTicksPerEpoch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	store := devicecert.NewStore()
-	_, err := store.Issue(ctx, "dev-near", certTestBase.Add(24*time.Hour))
-	require.NoError(t, err)
+	repo := mem.NewDeviceRepository()
+	seedCert(t, ctx, repo, "dev-near", certTestBase.Add(24*time.Hour))
 
 	rec := outboxtest.NewRecorder()
-	r := newTestReconciler(t, clockmock.New(certTestBase), store, rec)
+	r := newTestReconciler(t, clockmock.New(certTestBase), repo, rec)
 
-	_, err = r.Reconcile(ctx, reconcile.Request{})
+	_, err := r.Reconcile(ctx, reconcile.Request{})
 	require.NoError(t, err)
 	_, err = r.Reconcile(ctx, reconcile.Request{})
 	require.NoError(t, err)
 
-	assert.Len(t, rec.Entries(), 1, "one emit per epoch across ticks (store-level dedup, no TTL)")
+	assert.Len(t, rec.Entries(), 1, "one emit per epoch across ticks (repo-level dedup, no TTL)")
 }
 
-// TestReconciler_ReissueReemitsAfterMark proves the forcing function: a
-// post-rotation re-issue advances the epoch, which is not renewal-requested, so a
-// fresh rotate-cert command dispatches for the new epoch.
-func TestReconciler_ReissueReemitsAfterMark(t *testing.T) {
+// TestReconciler_ReemitsWhenEpochAdvancedPastRequested proves the forcing
+// function's != branch: a device whose cert_epoch has advanced past its
+// renewal_requested_epoch (a post-rotation re-issue) is re-dispatched with a
+// fresh per-epoch command id. The epoch-advance itself (re-issue) is out of this
+// reference demo's scope — there is no rotation-completion loop — so the advanced
+// state is seeded directly; what is under test is the reconciler re-dispatching
+// for any epoch not yet renewal-requested.
+func TestReconciler_ReemitsWhenEpochAdvancedPastRequested(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	store := devicecert.NewStore()
-	_, err := store.Issue(ctx, "dev-near", certTestBase.Add(24*time.Hour))
-	require.NoError(t, err)
+	repo := mem.NewDeviceRepository()
+	// epoch 2, but renewal was last requested for epoch 1 -> still a candidate.
+	require.NoError(t, repo.Create(ctx, &domain.Device{
+		ID: "dev-near", Name: "dev-near", Status: "online", LastSeen: certTestBase,
+		CertEpoch: 2, CertExpiresAt: certTestBase.Add(12 * time.Hour), RenewalRequestedEpoch: 1,
+	}))
 
 	rec := outboxtest.NewRecorder()
-	r := newTestReconciler(t, clockmock.New(certTestBase), store, rec)
+	r := newTestReconciler(t, clockmock.New(certTestBase), repo, rec)
 
-	_, err = r.Reconcile(ctx, reconcile.Request{})
-	require.NoError(t, err)
-	require.Len(t, rec.Entries(), 1)
-
-	// Re-issue (still near-expiry) advances to epoch 2.
-	_, err = store.Issue(ctx, "dev-near", certTestBase.Add(12*time.Hour))
-	require.NoError(t, err)
-
-	_, err = r.Reconcile(ctx, reconcile.Request{})
+	_, err := r.Reconcile(ctx, reconcile.Request{})
 	require.NoError(t, err)
 
 	entries := rec.Entries()
-	require.Len(t, entries, 2, "an epoch advance re-dispatches")
-	assert.Equal(t, rotateCommandID("dev-near", 2), entries[1].Metadata()[rtcommand.CommandIDMetadataKey],
-		"the second command carries the new epoch's id")
+	require.Len(t, entries, 1, "an epoch not yet renewal-requested re-dispatches")
+	assert.Equal(t, rotateCommandID("dev-near", 2), entries[0].Metadata()[rtcommand.CommandIDMetadataKey],
+		"the command carries the new epoch's id")
+
+	// A second tick now finds renewal_requested_epoch == cert_epoch -> no re-emit.
+	_, err = r.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+	assert.Len(t, rec.Entries(), 1, "the advanced epoch is requested at most once too")
 }
 
 // failingEmitter is an outbox.Emitter whose Emit always fails, used to drive the
@@ -154,12 +165,11 @@ func (f failingEmitter) Emit(context.Context, outbox.Entry) error { return f.err
 func TestReconciler_EmitFailureBubbles(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	store := devicecert.NewStore()
-	_, err := store.Issue(ctx, "dev-near", certTestBase.Add(24*time.Hour))
-	require.NoError(t, err)
+	repo := mem.NewDeviceRepository()
+	seedCert(t, ctx, repo, "dev-near", certTestBase.Add(24*time.Hour))
 
 	wantErr := errors.New("emit failed")
-	r, err := NewReconciler(clockmock.New(certTestBase), store,
+	r, err := NewReconciler(clockmock.New(certTestBase), repo,
 		outbox.WrapEmitterForCell(failingEmitter{err: wantErr}),
 		outbox.DemoCellTxManager(), certRenewalTestThreshold, nil)
 	require.NoError(t, err)
@@ -168,28 +178,28 @@ func TestReconciler_EmitFailureBubbles(t *testing.T) {
 	require.Error(t, err, "a failing emit must bubble out of Reconcile (loop then backs off + retries)")
 	require.ErrorIs(t, err, wantErr)
 
-	// A failed emit must NOT mark the epoch requested — the cert stays scannable so
-	// the retry re-emits.
-	got, err := store.ScanNearExpiry(ctx, certTestBase.Add(certRenewalTestThreshold))
+	// A failed emit must NOT mark the epoch requested — the cert stays a candidate
+	// so the retry re-emits.
+	got, err := repo.ListCertificateRenewalCandidates(ctx, certTestBase.Add(certRenewalTestThreshold))
 	require.NoError(t, err)
-	assert.Len(t, got, 1, "a cert whose renewal emit failed must remain scannable")
+	assert.Len(t, got, 1, "a cert whose renewal emit failed must remain a candidate")
 }
 
 func TestNewReconciler_Validation(t *testing.T) {
 	t.Parallel()
 	fc := clockmock.New(certTestBase)
-	store := devicecert.NewStore()
+	repo := mem.NewDeviceRepository()
 	rec := outboxtest.NewRecorder()
 
 	_, err := NewReconciler(fc, nil, rec.CellEmitter(), outbox.DemoCellTxManager(), certRenewalTestThreshold, nil)
-	require.Error(t, err, "nil store must fail-fast")
+	require.Error(t, err, "nil repo must fail-fast")
 
-	_, err = NewReconciler(fc, store, nil, outbox.DemoCellTxManager(), certRenewalTestThreshold, nil)
+	_, err = NewReconciler(fc, repo, nil, outbox.DemoCellTxManager(), certRenewalTestThreshold, nil)
 	require.Error(t, err, "nil emitter must fail-fast")
 
-	_, err = NewReconciler(fc, store, rec.CellEmitter(), nil, certRenewalTestThreshold, nil)
+	_, err = NewReconciler(fc, repo, rec.CellEmitter(), nil, certRenewalTestThreshold, nil)
 	require.Error(t, err, "nil txRunner must fail-fast")
 
-	_, err = NewReconciler(fc, store, rec.CellEmitter(), outbox.DemoCellTxManager(), 0, nil)
+	_, err = NewReconciler(fc, repo, rec.CellEmitter(), outbox.DemoCellTxManager(), 0, nil)
 	require.Error(t, err, "non-positive threshold must fail-fast")
 }

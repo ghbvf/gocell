@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecert"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -48,11 +47,10 @@ func toDeviceRegisteredEvent(d *domain.Device) deviceRegisteredEvent {
 
 // Service handles device registration business logic.
 type Service struct {
-	repo      domain.DeviceRepository `gocell:"required"`
-	certStore *devicecert.Store       `gocell:"required"`
-	emitter   outbox.CellEmitter
-	logger    *slog.Logger
-	clock     clock.Clock
+	repo    domain.DeviceRepository `gocell:"required"`
+	emitter outbox.CellEmitter
+	logger  *slog.Logger
+	clock   clock.Clock
 }
 
 // Option configures a device-register Service.
@@ -68,19 +66,8 @@ func WithEmitter(e outbox.CellEmitter) Option {
 	}
 }
 
-// WithCertStore sets the cell-internal certificate store seeded with an initial
-// cert per registered device. Required: the cert-renewal reconcile loop scans it.
-// Accumulative: a nil store leaves the previously-set value in place.
-func WithCertStore(cs *devicecert.Store) Option {
-	return func(s *Service) {
-		if cs != nil {
-			s.certStore = cs
-		}
-	}
-}
-
 // NewService creates a device-register Service. Returns an error if any required
-// dependency is nil (repo, certStore).
+// dependency is nil (repo).
 func NewService(clk clock.Clock, repo domain.DeviceRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
 	clock.MustHaveClock(clk, "deviceregister.NewService")
 	s := &Service{
@@ -120,21 +107,22 @@ func (s *Service) registerInternal(ctx context.Context, name string) (*domain.De
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "device name must not be empty")
 	}
 
+	// The device's initial certificate (epoch 1, NotAfter = now+validity) is
+	// persisted on the device row itself (#1819), so the cert-renewal reconcile
+	// loop has durable, restart-surviving near-expiry state to observe as the
+	// cert ages toward expiry.
+	now := s.clock.Now()
 	device := &domain.Device{
-		ID:       "dev" + "-" + uuid.NewString(),
-		Name:     name,
-		Status:   "online",
-		LastSeen: s.clock.Now(),
+		ID:            "dev" + "-" + uuid.NewString(),
+		Name:          name,
+		Status:        "online",
+		LastSeen:      now,
+		CertEpoch:     domain.DefaultCertEpoch,
+		CertExpiresAt: now.Add(certValidity),
 	}
 
 	if err := s.repo.Create(ctx, device); err != nil {
 		return nil, fmt.Errorf("device-register: persist: %w", err)
-	}
-
-	// Issue the device's initial certificate (epoch 1) so the cert-renewal loop
-	// has near-expiry state to observe as the cert ages toward NotAfter.
-	if _, err := s.certStore.Issue(ctx, device.ID, s.clock.Now().Add(certValidity)); err != nil {
-		return nil, fmt.Errorf("device-register: issue cert: %w", err)
 	}
 
 	payload, err := json.Marshal(toDeviceRegisteredEvent(device))

@@ -3,18 +3,18 @@ package devicecell
 // cert_renewal_e2e_test.go — archetype-② (reconcile → command) end-to-end for
 // #1757. Drives the full chain a near-expiry certificate takes:
 //
-//	cert store (near-expiry) → reconcile tick → command.EmitAsync → outbox store
-//	→ relay (Claimer-wrapped dispatch, #1698) → enqueue handler → device command
-//	queue → device dequeue.
+//	devices row (near-expiry cert) → reconcile tick → command.EmitAsync → outbox
+//	store → relay (Claimer-wrapped dispatch, #1698) → enqueue handler → device
+//	command queue → device dequeue.
 //
-// The headline invariant is CROSS-TICK DEDUP at the cert store: the first tick
-// emits one rotate-cert entry and marks the cert's epoch renewal-requested, so the
-// second tick's ScanNearExpiry skips the same un-renewed cert and emits nothing.
-// One entry is written, the relay dispatches it once, the enqueue handler runs
-// exactly once, and exactly one rotate-cert command lands in the queue across two
-// ticks — single-emit per epoch that does NOT rely on the relay's 24h command-done
-// TTL. (The relay Claimer is a secondary same-window backstop, exercised by
-// command_dedup_e2e_test.go.)
+// The headline invariant is CROSS-TICK DEDUP via the durable devices row (#1819):
+// the first tick emits one rotate-cert entry and marks the cert's epoch
+// renewal-requested on the row, so the second tick's scan skips the same
+// un-renewed cert and emits nothing. One entry is written, the relay dispatches it
+// once, the enqueue handler runs exactly once, and exactly one rotate-cert command
+// lands in the queue across two ticks — single-emit per epoch that does NOT rely on
+// the relay's 24h command-done TTL. (The relay Claimer is a secondary same-window
+// backstop, exercised by command_dedup_e2e_test.go.)
 
 import (
 	"context"
@@ -26,7 +26,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecert"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecmd"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
@@ -47,7 +46,7 @@ import (
 )
 
 // countingEnqueueHandler decorates the real enqueue adapter so the test can
-// assert the handler runs exactly once (store-level dedup writes a single entry
+// assert the handler runs exactly once (repo-level dedup writes a single entry
 // the relay dispatches once) while the wrapped adapter still performs the real
 // queue write the device later dequeues.
 type countingEnqueueHandler struct {
@@ -71,13 +70,14 @@ func TestCertRenewal_CrossTickDedupToDequeue(t *testing.T) {
 	base := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
 	fc := clockmock.New(base)
 
-	// Device + its near-expiry cert. The enqueue handler validates the device
-	// exists, so it must be in the repo.
+	// Device with its near-expiry cert state persisted on the row (#1819): epoch 1,
+	// expiring within the 7d threshold. The enqueue handler validates the device
+	// exists, so it must be in the repo — the same repo the reconciler scans.
 	repo := mem.NewDeviceRepository()
-	require.NoError(t, repo.Create(ctx, &domain.Device{ID: "dev-1", Name: "edge-sensor", Status: "online"}))
-	certStore := devicecert.NewStore()
-	_, err := certStore.Issue(ctx, "dev-1", base.Add(24*time.Hour)) // expires within the 7d threshold
-	require.NoError(t, err)
+	require.NoError(t, repo.Create(ctx, &domain.Device{
+		ID: "dev-1", Name: "edge-sensor", Status: "online", LastSeen: base,
+		CertEpoch: 1, CertExpiresAt: base.Add(24 * time.Hour),
+	}))
 
 	// Real consumer side: enqueue adapter over a devicecmd.Service backed by an
 	// in-memory command queue — the production handler the relay dispatches to.
@@ -91,25 +91,25 @@ func TestCertRenewal_CrossTickDedupToDequeue(t *testing.T) {
 	handler := &countingEnqueueHandler{inner: devicecommand.EnqueueCommandAdapter{S: pubSvc}}
 	require.NoError(t, cmdenqueue.Register(reg, handler))
 
-	// Producer side: the cert-renewal reconciler emitting into the SAME store the
-	// relay polls.
+	// Producer side: the cert-renewal reconciler scans the device repo and emits
+	// into the SAME outbox store the relay polls.
 	emitStore := outboxtest.NewFakeStore()
 	we, err := kout.NewWriterEmitter(emitStore)
 	require.NoError(t, err)
-	reconciler, err := devicecertrenewal.NewReconciler(fc, certStore, kout.WrapEmitterForCell(we),
+	reconciler, err := devicecertrenewal.NewReconciler(fc, repo, kout.WrapEmitterForCell(we),
 		kout.DemoCellTxManager(), 7*24*time.Hour, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	require.NoError(t, err)
 
 	// Two ticks: the same un-renewed cert is observed each interval, but the first
 	// tick marks its epoch renewal-requested so the second tick's scan skips it —
-	// only one command entry is written (store-level cross-tick dedup, no relay TTL).
+	// only one command entry is written (repo-level cross-tick dedup, no relay TTL).
 	_, err = reconciler.Reconcile(ctx, reconcile.Request{})
 	require.NoError(t, err)
 	_, err = reconciler.Reconcile(ctx, reconcile.Request{})
 	require.NoError(t, err)
 
 	rows := emitStore.Snapshot()
-	require.Len(t, rows, 1, "store-level per-epoch dedup: the second tick skips the already-requested cert")
+	require.Len(t, rows, 1, "repo-level per-epoch dedup: the second tick skips the already-requested cert")
 	_, ok0 := command.ClaimKeyFromEntry(rows[0].Entry)
 	require.True(t, ok0, "the rotate-cert entry carries an idempotency claim key")
 	assert.Equal(t, "dev-1", rows[0].Entry.AggregateID(), "the single entry is the device's renewal command")
@@ -136,7 +136,7 @@ func TestCertRenewal_CrossTickDedupToDequeue(t *testing.T) {
 	cancel()
 	<-relayDone
 
-	assert.Equal(t, 1, handler.calls, "enqueue handler runs exactly once across the two ticks (store-level cross-tick dedup)")
+	assert.Equal(t, 1, handler.calls, "enqueue handler runs exactly once across the two ticks (repo-level cross-tick dedup)")
 
 	// Device dequeue: exactly one rotate-cert command is claimable for the device.
 	dequeued, err := queue.Dequeue(ctx, "dev-1", 10, time.Minute)

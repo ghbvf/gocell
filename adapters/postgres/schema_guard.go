@@ -65,6 +65,11 @@ const gotWantQuotedFmt = "got %q want %q"
 //                                   the 12-field canonical-JSON HMAC chain.
 //   - devices            (029)  examples/iotdevice devicecell PG repo (B2.B)
 //                                 + devices_status_chk CHECK (status IN online/offline)
+//                                 + cert_epoch BIGINT NOT NULL DEFAULT 1,
+//                                   cert_expires_at TIMESTAMPTZ (nullable, no default),
+//                                   renewal_requested_epoch BIGINT NOT NULL DEFAULT 0 (056)
+//                                 + devices_cert_epoch_positive CHECK (cert_epoch >= 1) (056)
+//                                 + idx_devices_cert_expires_at (cert_expires_at, id) (057)
 //   - commands           (030)  examples/iotdevice command queue PG adapter (B2.B)
 //                                 + commands.device_id FK → devices(id) ON DELETE RESTRICT
 //                                 + commands_status_chk, commands_attempt_chk
@@ -592,6 +597,10 @@ var expectedColumns = []expectedColumn{
 	{Table: "devices", Column: "name", Type: "text", NotNull: true},
 	{Table: "devices", Column: "status", Type: "text", NotNull: true},
 	{Table: "devices", Column: "last_seen", Type: pgTypeTSTZ, NotNull: true},
+	// 056_devices_cert_renewal.sql — durable cert-renewal state (#1819).
+	{Table: "devices", Column: "cert_epoch", Type: "bigint", NotNull: true},
+	{Table: "devices", Column: "cert_expires_at", Type: pgTypeTSTZ, NotNull: false},
+	{Table: "devices", Column: "renewal_requested_epoch", Type: "bigint", NotNull: true},
 	// commands (030_commands.sql) — kernel/command.Queue PG adapter (B2.B).
 	{Table: "commands", Column: "id", Type: "text", NotNull: true},
 	{Table: "commands", Column: "device_id", Type: "text", NotNull: true},
@@ -695,6 +704,14 @@ var expectedDefaults = []expectedDefault{
 	// adds users_password_version_non_negative CHECK >= 0). A dropped default would
 	// cause every new-user Create to fail at write time.
 	{Table: "users", Column: "password_version", Default: "0"},
+	// devices.cert_epoch (056) — the Go write path normalises zero to 1 on insert
+	// (domain.NormalizeCertState), but raw-SQL inserts that omit the column rely on
+	// DEFAULT 1. A dropped default would cause bare SQL inserts (e.g. test fixtures)
+	// to fail NOT NULL.
+	{Table: "devices", Column: "cert_epoch", Default: "1"},
+	// devices.renewal_requested_epoch (056) — raw-SQL inserts that omit the column
+	// rely on DEFAULT 0 (no pending renewal). NOT NULL constraint requires the default.
+	{Table: "devices", Column: "renewal_requested_epoch", Default: "0"},
 }
 
 // expectedIndexes covers both unique and non-unique indexes across S3F tables.
@@ -751,6 +768,8 @@ var expectedIndexes = []expectedIndex{
 	// filter. See audit_ledger_store.Query.
 	// devices / commands (029, 030, 031) — B2.B.
 	{Table: "devices", Name: "idx_devices_status", Unique: false, Columns: []string{"status"}},
+	// 057_devices_cert_expiry_index.sql — renewal-candidate range scan (#1819).
+	{Table: "devices", Name: "idx_devices_cert_expires_at", Unique: false, Columns: []string{"cert_expires_at", "id"}},
 	// 030_commands.sql partial indexes — Columns lists only key columns, not WHERE predicate columns
 	{Table: "commands", Name: "idx_commands_pending_fifo", Unique: false, Columns: []string{"device_id", "created_at"}},
 	{Table: "commands", Name: "idx_commands_active_lease", Unique: false, Columns: []string{"lease_expiry"}},
@@ -1161,6 +1180,8 @@ var expectedChecks = []expectedCheck{
 	{Table: "refresh_tokens", Name: "refresh_tokens_authz_epoch_at_issue_positive"},
 	// devices / commands (029, 030) — B2.B.
 	{Table: "devices", Name: "devices_status_chk"},
+	// 056_devices_cert_renewal.sql — cert_epoch >= 1 hard DB invariant (#1819).
+	{Table: "devices", Name: "devices_cert_epoch_positive"},
 	{Table: "commands", Name: "commands_status_chk"},
 	{Table: "commands", Name: "commands_attempt_chk"},
 	// audit_entries hash-format guard (020_audit_ledger.sql + 043_audit_entries_v2.sql
