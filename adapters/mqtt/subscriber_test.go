@@ -54,7 +54,7 @@ func (f *fakeFailingClaimer) Kind() idempotency.ClaimerKind { return idempotency
 func newTestSubscriber(t *testing.T, addr string, collector SubscriberCollector) (*Subscriber, *Connection) {
 	t.Helper()
 	clk := clock.Real()
-	cfg := newInternalConfig(addr)
+	cfg := newInternalConfig(t, addr)
 	// autopaho binds the ConnectionManager lifecycle to the ctx passed to Open:
 	// canceling it tears the connection down. This ctx must therefore outlive the
 	// helper — scope its cancel to t.Cleanup (fires at test end, before/with
@@ -144,7 +144,7 @@ func TestNewSubscriber_ZeroNamespace(t *testing.T) {
 	addr, stop := startInternalBroker(t)
 	defer stop()
 	clk := clock.Real()
-	cfg := newInternalConfig(addr)
+	cfg := newInternalConfig(t, addr)
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()
 	conn, err := Open(ctx, clk, cfg)

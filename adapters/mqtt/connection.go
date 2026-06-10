@@ -183,15 +183,18 @@ func WithConnectionCollector(c ConnectionCollector) ConnectionOption {
 // Two contexts, two lifetimes (decoupled per #1388):
 //   - ctx (lifecycle) binds the ConnectionManager — autopaho retries and
 //     reconnects until ctx is canceled. It typically lives for the whole app.
-//   - cfg.ConnectDeadline derives a separate WithTimeout child that bounds ONLY
+//   - cfg.connectDeadline derives a separate WithTimeout child that bounds ONLY
 //     the bootstrap first-connection wait. When the broker is unreachable Open
 //     fails fast on this deadline instead of hanging on an effectively-unbounded
 //     lifecycle ctx. A successful connect is unaffected: the deadline child is
 //     canceled on return without tearing down the ConnectionManager.
 //
-// Validation: Open calls cfg.Validate() before any side effect. Callers do
-// not need to call Validate explicitly. Archtest MQTT-CONFIG-VALIDATE-FIRST-01
-// locks this gate.
+// Validation: cfg arrives pre-validated — NewConfig (the sole Config
+// constructor) validates in its body, and the unexported Config fields make an
+// unvalidated Config unrepresentable outside this package
+// (MQTT-CONFIG-SEALED-FIELD-FROZEN-01). Open re-runs cfg.validate() as a
+// zero-value defense-in-depth guard before any side effect: an ignored NewConfig
+// error must not let a zero Config reach the autopaho wiring.
 //
 // Bootstrap-fatal CONNACK reason codes (0x81/0x82/0x84/0x85/0x8A/0x95) and TLS
 // handshake errors cause Open to return a non-transient error immediately.
@@ -209,7 +212,7 @@ func WithConnectionCollector(c ConnectionCollector) ConnectionOption {
 // separate bounded first-connection wait this split restores).
 func Open(ctx context.Context, clk clock.Clock, cfg Config, opts ...ConnectionOption) (*Connection, error) {
 	clock.MustHaveClock(clk, "mqtt.Open")
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 
@@ -234,16 +237,16 @@ func Open(ctx context.Context, clk clock.Clock, cfg Config, opts ...ConnectionOp
 
 	autoCfg := autopaho.ClientConfig{
 		ServerUrls:                    urls,
-		TlsCfg:                        cfg.TLS,
-		KeepAlive:                     uint16(cfg.KeepAlive.Seconds()),
-		SessionExpiryInterval:         uint32(cfg.SessionExpiry.Seconds()),
-		CleanStartOnInitialConnection: cfg.SessionExpiry == 0,
-		ConnectTimeout:                cfg.ConnectTimeout,
-		ConnectUsername:               cfg.Auth.Username,
-		ConnectPassword:               cfg.Auth.Password,
+		TlsCfg:                        cfg.tlsConfig,
+		KeepAlive:                     uint16(cfg.keepAlive.Seconds()),
+		SessionExpiryInterval:         uint32(cfg.sessionExpiry.Seconds()),
+		CleanStartOnInitialConnection: cfg.sessionExpiry == 0,
+		ConnectTimeout:                cfg.connectTimeout,
+		ConnectUsername:               cfg.auth.Username,
+		ConnectPassword:               cfg.auth.Password,
 		ReconnectBackoff: func(n int) time.Duration {
 			return adapterutil.ExponentialBackoffWithJitter(
-				cfg.Backoff.BaseDelay, cfg.Backoff.MaxDelay, n,
+				cfg.backoff.BaseDelay, cfg.backoff.MaxDelay, n,
 			)
 		},
 		ConnectPacketBuilder: connectPacketBuilder(cfg),
@@ -251,7 +254,7 @@ func Open(ctx context.Context, clk clock.Clock, cfg Config, opts ...ConnectionOp
 		OnConnectionDown:     c.onConnectionDown,
 		OnConnectError:       c.onConnectError,
 		ClientConfig: paho.ClientConfig{
-			ClientID:                   cfg.ClientID.String(),
+			ClientID:                   cfg.clientID.String(),
 			OnServerDisconnect:         c.onServerDisconnect,
 			EnableManualAcknowledgment: true,
 			OnPublishReceived: []func(paho.PublishReceived) (bool, error){
@@ -271,20 +274,20 @@ func Open(ctx context.Context, clk clock.Clock, cfg Config, opts ...ConnectionOp
 	c.cm = cm
 
 	// connectCtx (bootstrap deadline) is a separate child bounded by
-	// cfg.ConnectDeadline. It caps the first-connection wait so an unreachable
+	// cfg.connectDeadline. It caps the first-connection wait so an unreachable
 	// broker fails Open fast instead of hanging on an unbounded lifecycle ctx
 	// (#1388). The deferred cancel does NOT tear down cm — cm lives on ctx.
-	connectCtx, cancel := context.WithTimeout(ctx, cfg.ConnectDeadline)
+	connectCtx, cancel := context.WithTimeout(ctx, cfg.connectDeadline)
 	defer cancel()
 
 	// Block until first outcome (connected or permErr) or connectCtx elapses.
 	if waitErr := c.waitFirstConnection(connectCtx); waitErr != nil {
 		// Best-effort shutdown of the manager; ignore error. Bound by
-		// cfg.ConnectTimeout so a still-unreachable broker cannot make the
+		// cfg.connectTimeout so a still-unreachable broker cannot make the
 		// teardown itself hang on an unbounded ctx — which would partially
 		// reintroduce the #1388 startup stall on the very fail-fast path this
 		// deadline split exists to keep fast.
-		disconnectCtx, disconnectCancel := context.WithTimeout(context.Background(), cfg.ConnectTimeout)
+		disconnectCtx, disconnectCancel := context.WithTimeout(context.Background(), cfg.connectTimeout)
 		defer disconnectCancel()
 		_ = cm.Disconnect(disconnectCtx)
 		return nil, waitErr
@@ -293,15 +296,15 @@ func Open(ctx context.Context, clk clock.Clock, cfg Config, opts ...ConnectionOp
 }
 
 // connectPacketBuilder returns an autopaho ConnectPacketBuilder that injects
-// cfg.MaximumPacketSize into the CONNECT packet's Properties when non-zero.
+// cfg.maximumPacketSize into the CONNECT packet's Properties when non-zero.
 // Returns nil (no builder) when MaximumPacketSize is 0 so autopaho's default
 // CONNECT packet is used unchanged. Wiring this field closes C1 F12 — the
 // MaximumPacketSize Config field was previously declared but unused.
 func connectPacketBuilder(cfg Config) func(*paho.Connect, *url.URL) (*paho.Connect, error) {
-	if cfg.MaximumPacketSize == 0 {
+	if cfg.maximumPacketSize == 0 {
 		return nil
 	}
-	maxSize := cfg.MaximumPacketSize
+	maxSize := cfg.maximumPacketSize
 	return func(cp *paho.Connect, _ *url.URL) (*paho.Connect, error) {
 		if cp.Properties == nil {
 			cp.Properties = &paho.ConnectProperties{}
@@ -312,7 +315,7 @@ func connectPacketBuilder(cfg Config) func(*paho.Connect, *url.URL) (*paho.Conne
 }
 
 // waitFirstConnection blocks until the first bootstrapOutcome arrives on
-// outcomeCh, or connectCtx is done (the cfg.ConnectDeadline-bounded child Open
+// outcomeCh, or connectCtx is done (the cfg.connectDeadline-bounded child Open
 // derives, or lifecycle-ctx cancellation propagated through it). Single-channel
 // design eliminates the prior `select` race between connectedCh and
 // bootstrapErrCh.
@@ -387,7 +390,7 @@ func (c *Connection) onConnectionUp(_ *autopaho.ConnectionManager, _ *paho.Conna
 		c.collector.RecordReconnect(context.Background())
 	}
 	slog.Info("mqtt: connection established",
-		slog.String("client_id", c.cfg.ClientID.String()),
+		slog.String("client_id", c.cfg.clientID.String()),
 		slog.Bool("reconnect", isReconnect))
 
 	// Re-arm all registered subscriptions. autopaho does not replay SUBSCRIBE
@@ -417,7 +420,7 @@ func (c *Connection) resubscribeAll() {
 		// reused so deliveries continue to route to the same handler.
 		if reason, err := c.sendSubscribe(context.Background(), route.filter, route.qos, route.subID); err != nil {
 			slog.Warn("mqtt: resubscribe after reconnect failed; will retry on next reconnect",
-				slog.String("client_id", c.cfg.ClientID.String()),
+				slog.String("client_id", c.cfg.clientID.String()),
 				slog.String("filter", route.filter.String()),
 				slog.Any("error", redactErr(err)))
 			c.collector.RecordSubscribeFailure(context.Background(), reason)
@@ -447,11 +450,11 @@ func (c *Connection) onConnectionDown() bool {
 		// Graceful-shutdown lifecycle event — Info per observability.md (not Debug,
 		// which is off in production and would hide the orderly-stop confirmation).
 		slog.Info("mqtt: connection down after close; stopping retry",
-			slog.String("client_id", c.cfg.ClientID.String()))
+			slog.String("client_id", c.cfg.clientID.String()))
 		return false
 	}
 	slog.Info("mqtt: connection lost; autopaho will reconnect",
-		slog.String("client_id", c.cfg.ClientID.String()))
+		slog.String("client_id", c.cfg.clientID.String()))
 	return true
 }
 
@@ -471,7 +474,7 @@ func (c *Connection) onConnectError(err error) {
 		permErr := errcode.New(errcode.KindInternal, code,
 			"mqtt: connection rejected (fail-fast)", buildConnackOpts(err)...)
 		slog.Error("mqtt: bootstrap-fatal connect error",
-			slog.String("client_id", c.cfg.ClientID.String()),
+			slog.String("client_id", c.cfg.clientID.String()),
 			slog.String("errcode", string(code)),
 			slog.Any("error", redacted))
 		c.recordPermanentLocked(permErr)
@@ -481,7 +484,7 @@ func (c *Connection) onConnectError(err error) {
 		permErr := errcode.New(errcode.KindInternal, code,
 			"mqtt: connection rejected (permanent; retrying until operator fix)", buildConnackOpts(err)...)
 		slog.Warn("mqtt: permanent connect error; will retry until operator fixes",
-			slog.String("client_id", c.cfg.ClientID.String()),
+			slog.String("client_id", c.cfg.clientID.String()),
 			slog.String("errcode", string(code)),
 			slog.Any("error", redacted))
 		c.recordPermanentLocked(permErr)
@@ -496,7 +499,7 @@ func (c *Connection) onConnectError(err error) {
 		}
 		c.mu.Unlock()
 		slog.Warn("mqtt: transient connect error; autopaho will retry",
-			slog.String("client_id", c.cfg.ClientID.String()),
+			slog.String("client_id", c.cfg.clientID.String()),
 			slog.Any("error", redacted))
 	}
 }
@@ -560,7 +563,7 @@ func errClosed() error {
 // codes with different meanings.
 func (c *Connection) onServerDisconnect(d *paho.Disconnect) {
 	slog.Warn("mqtt: server requested disconnect",
-		slog.String("client_id", c.cfg.ClientID.String()),
+		slog.String("client_id", c.cfg.clientID.String()),
 		slog.Int("reason_code", int(d.ReasonCode)),
 		slog.String("reason_name", disconnectReasonName(d.ReasonCode)))
 }
@@ -641,7 +644,7 @@ func (c *Connection) onPublishReceived(pr paho.PublishReceived) (bool, error) {
 		// closed: log and do NOT dispatch / ack (leave unacked for redelivery)
 		// rather than guess a route and risk cross-consumer-group misdelivery.
 		slog.Error("mqtt: received PUBLISH without subscription identifier; dropping (fail-closed)",
-			slog.String("client_id", c.cfg.ClientID.String()),
+			slog.String("client_id", c.cfg.clientID.String()),
 			slog.String("topic", safeTopicForLog(pb.Topic)))
 		return false, nil
 	}
@@ -654,7 +657,7 @@ func (c *Connection) onPublishReceived(pr paho.PublishReceived) (bool, error) {
 	// Sub-id with no matching route: the route was concurrently deregistered
 	// (cancel / close) between delivery and dispatch. Drop (do not ack).
 	slog.Warn("mqtt: received PUBLISH with unknown subscription identifier; route deregistered",
-		slog.String("client_id", c.cfg.ClientID.String()),
+		slog.String("client_id", c.cfg.clientID.String()),
 		slog.Int("subscription_id", subID),
 		slog.String("topic", safeTopicForLog(pb.Topic)))
 	return false, nil
@@ -787,7 +790,7 @@ func (c *Connection) Subscribe(ctx context.Context, f topicns.SubscribableFilter
 				Topics: []string{f.String()},
 			}); unsubErr != nil {
 				slog.Warn("mqtt: unsubscribe on cancel failed",
-					slog.String("client_id", c.cfg.ClientID.String()),
+					slog.String("client_id", c.cfg.clientID.String()),
 					slog.String("filter", f.String()),
 					slog.Any("error", redactErr(unsubErr)))
 			}
@@ -931,7 +934,7 @@ func (c *Connection) unsubscribeAll(ctx context.Context) {
 	}
 	if _, err := c.cm.Unsubscribe(ctx, &paho.Unsubscribe{Topics: filters}); err != nil {
 		slog.Warn("mqtt: unsubscribe-all on close failed",
-			slog.String("client_id", c.cfg.ClientID.String()),
+			slog.String("client_id", c.cfg.clientID.String()),
 			slog.Any("error", redactErr(err)))
 	}
 }

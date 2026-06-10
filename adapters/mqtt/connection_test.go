@@ -100,19 +100,17 @@ func (h *denyAuthHook) OnACLCheck(_ *mqttserver.Client, _ string, _ bool) bool {
 // newValidConfig returns a minimal valid Config pointing at addr.
 // addr is expected to be a loopback "127.0.0.1:port" form so the
 // secutil.ValidateTLSEndpoint plaintext-broker check accepts it.
-func newValidConfig(addr string) mqtt.Config {
+func newValidConfig(t *testing.T, addr string) mqtt.Config {
+	t.Helper()
 	id, _ := mqtt.ParseEphemeralClientID("testcell", "client")
-	return mqtt.Config{
-		ClientID:        id,
-		Brokers:         []string{fmt.Sprintf("tcp://%s", addr)},
-		ConnectTimeout:  testtime.D5s,
-		ConnectDeadline: testtime.D10s,
-		KeepAlive:       testtime.D30s,
-		Backoff: mqtt.BackoffConfig{
-			BaseDelay: testtime.D100ms,
-			MaxDelay:  testtime.D2s,
-		},
-	}
+	cfg, err := mqtt.NewConfig(id, []string{fmt.Sprintf("tcp://%s", addr)},
+		mqtt.WithConnectTimeout(testtime.D5s),
+		mqtt.WithConnectDeadline(testtime.D10s),
+		mqtt.WithKeepAlive(testtime.D30s),
+		mqtt.WithBackoff(mqtt.BackoffConfig{BaseDelay: testtime.D100ms, MaxDelay: testtime.D2s}),
+	)
+	require.NoError(t, err)
+	return cfg
 }
 
 // TestConnection_HappyPath_HealthOk verifies that Open succeeds against a live
@@ -122,7 +120,7 @@ func TestConnection_HappyPath_HealthOk(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newValidConfig(addr)
+	cfg := newValidConfig(t, addr)
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()
@@ -146,7 +144,7 @@ func TestConnection_Close_IdempotentAndTerminal(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newValidConfig(addr)
+	cfg := newValidConfig(t, addr)
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()
@@ -175,22 +173,18 @@ func TestConnection_Close_IdempotentAndTerminal(t *testing.T) {
 func TestConnection_ConnectDeadline_FailFast(t *testing.T) {
 	clk := clock.Real()
 	id, _ := mqtt.ParseEphemeralClientID("test", "never")
-	cfg := mqtt.Config{
-		ClientID: id,
-		Brokers:  []string{"tcp://127.0.0.1:19999"}, // dead port → connection refused (instant, not a dial timeout)
-		// ConnectDeadline (300ms) is deliberately shorter than ConnectTimeout (5s):
-		// connection-refused returns instantly so autopaho keeps retrying with
-		// backoff, and the ONLY thing that ends the wait is the ConnectDeadline
-		// budget — never the per-attempt ConnectTimeout. Equal values would blur
-		// which bound fires; distinct values lock the deadline as the binding one.
-		ConnectTimeout:  testtime.D5s,
-		ConnectDeadline: testtime.D300ms,
-		KeepAlive:       testtime.D30s,
-		Backoff: mqtt.BackoffConfig{
-			BaseDelay: testtime.D50ms,
-			MaxDelay:  testtime.D200ms,
-		},
-	}
+	// ConnectDeadline (300ms) is deliberately shorter than ConnectTimeout (5s):
+	// connection-refused returns instantly so autopaho keeps retrying with
+	// backoff, and the ONLY thing that ends the wait is the ConnectDeadline
+	// budget — never the per-attempt ConnectTimeout. Equal values would blur
+	// which bound fires; distinct values lock the deadline as the binding one.
+	cfg, cfgErr := mqtt.NewConfig(id, []string{"tcp://127.0.0.1:19999"}, // dead port → connection refused (instant, not a dial timeout)
+		mqtt.WithConnectTimeout(testtime.D5s),
+		mqtt.WithConnectDeadline(testtime.D300ms),
+		mqtt.WithKeepAlive(testtime.D30s),
+		mqtt.WithBackoff(mqtt.BackoffConfig{BaseDelay: testtime.D50ms, MaxDelay: testtime.D200ms}),
+	)
+	require.NoError(t, cfgErr)
 
 	// Lifecycle ctx never cancels — only ConnectDeadline can end the wait.
 	start := time.Now()
@@ -217,8 +211,14 @@ func TestConnection_ConnectDeadline_Decoupled_CMSurvives(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newValidConfig(addr)
-	cfg.ConnectDeadline = testtime.D2s // short; connectCtx is canceled on Open return
+	id, _ := mqtt.ParseEphemeralClientID("testcell", "client")
+	cfg, err := mqtt.NewConfig(id, []string{fmt.Sprintf("tcp://%s", addr)},
+		mqtt.WithConnectTimeout(testtime.D5s),
+		mqtt.WithConnectDeadline(testtime.D2s), // short; connectCtx is canceled on Open return
+		mqtt.WithKeepAlive(testtime.D30s),
+		mqtt.WithBackoff(mqtt.BackoffConfig{BaseDelay: testtime.D100ms, MaxDelay: testtime.D2s}),
+	)
+	require.NoError(t, err)
 
 	conn, err := mqtt.Open(context.Background(), clk, cfg)
 	require.NoError(t, err)
@@ -245,17 +245,13 @@ func TestConnection_ConnectDeadline_Decoupled_CMSurvives(t *testing.T) {
 func TestConnection_LifecycleCtxCanceled_ReturnsCanceled(t *testing.T) {
 	clk := clock.Real()
 	id, _ := mqtt.ParseEphemeralClientID("test", "cancel")
-	cfg := mqtt.Config{
-		ClientID:        id,
-		Brokers:         []string{"tcp://127.0.0.1:19999"}, // dead port → transient only
-		ConnectTimeout:  testtime.D5s,
-		ConnectDeadline: testtime.D30s, // large → only the cancel (not deadline) ends the wait
-		KeepAlive:       testtime.D30s,
-		Backoff: mqtt.BackoffConfig{
-			BaseDelay: testtime.D50ms,
-			MaxDelay:  testtime.D200ms,
-		},
-	}
+	cfg, cfgErr := mqtt.NewConfig(id, []string{"tcp://127.0.0.1:19999"}, // dead port → transient only
+		mqtt.WithConnectTimeout(testtime.D5s),
+		mqtt.WithConnectDeadline(testtime.D30s), // large → only the cancel (not deadline) ends the wait
+		mqtt.WithKeepAlive(testtime.D30s),
+		mqtt.WithBackoff(mqtt.BackoffConfig{BaseDelay: testtime.D50ms, MaxDelay: testtime.D200ms}),
+	)
+	require.NoError(t, cfgErr)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	// Cancel the parent lifecycle ctx concurrently. Open blocks on connectCtx
@@ -276,10 +272,14 @@ func TestConnection_DenyBroker_PermanentErrViaHealth(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newValidConfig(addr)
-	cfg.ConnectTimeout = testtime.D500ms
-	cfg.Backoff.BaseDelay = testtime.D50ms
-	cfg.Backoff.MaxDelay = testtime.D200ms
+	id, _ := mqtt.ParseEphemeralClientID("testcell", "client")
+	cfg, cfgErr := mqtt.NewConfig(id, []string{fmt.Sprintf("tcp://%s", addr)},
+		mqtt.WithConnectTimeout(testtime.D500ms),
+		mqtt.WithConnectDeadline(testtime.D10s),
+		mqtt.WithKeepAlive(testtime.D30s),
+		mqtt.WithBackoff(mqtt.BackoffConfig{BaseDelay: testtime.D50ms, MaxDelay: testtime.D200ms}),
+	)
+	require.NoError(t, cfgErr)
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D5s)
 	defer cancel()
@@ -302,10 +302,14 @@ func TestConnection_WaitConnected_PermanentErrSurfaced(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newValidConfig(addr)
-	cfg.ConnectTimeout = testtime.D300ms
-	cfg.Backoff.BaseDelay = testtime.D30ms
-	cfg.Backoff.MaxDelay = testtime.D100ms
+	id, _ := mqtt.ParseEphemeralClientID("testcell", "client")
+	cfg, cfgErr := mqtt.NewConfig(id, []string{fmt.Sprintf("tcp://%s", addr)},
+		mqtt.WithConnectTimeout(testtime.D300ms),
+		mqtt.WithConnectDeadline(testtime.D10s),
+		mqtt.WithKeepAlive(testtime.D30s),
+		mqtt.WithBackoff(mqtt.BackoffConfig{BaseDelay: testtime.D30ms, MaxDelay: testtime.D100ms}),
+	)
+	require.NoError(t, cfgErr)
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D3s)
 	defer cancel()
@@ -338,9 +342,14 @@ func TestConnection_ReconnectMetric_Counted(t *testing.T) {
 	addr, srv := startControlledBroker(t)
 
 	clk := clock.Real()
-	cfg := newValidConfig(addr)
-	cfg.Backoff.BaseDelay = testtime.D50ms
-	cfg.Backoff.MaxDelay = testtime.D500ms
+	id, _ := mqtt.ParseEphemeralClientID("testcell", "client")
+	cfg, cfgErr := mqtt.NewConfig(id, []string{fmt.Sprintf("tcp://%s", addr)},
+		mqtt.WithConnectTimeout(testtime.D5s),
+		mqtt.WithConnectDeadline(testtime.D10s),
+		mqtt.WithKeepAlive(testtime.D30s),
+		mqtt.WithBackoff(mqtt.BackoffConfig{BaseDelay: testtime.D50ms, MaxDelay: testtime.D500ms}),
+	)
+	require.NoError(t, cfgErr)
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D15s)
 	defer cancel()
@@ -365,7 +374,7 @@ func TestConnection_ReconnectMetric_Counted(t *testing.T) {
 	var client *mqttserver.Client
 	testwait.External(t, "mqtt-broker-observes-client", func() bool {
 		var ok bool
-		client, ok = srv.Clients.Get(cfg.ClientID.String())
+		client, ok = srv.Clients.Get(id.String())
 		return ok && !client.Closed()
 	}, testtime.D2s, testtime.D10ms)
 

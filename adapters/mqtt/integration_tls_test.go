@@ -239,23 +239,21 @@ func TestIntegrationTLS_MutualTLS_PublishRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseEphemeralClientID: %v", err)
 	}
-	cfg := Config{
-		ClientID: cid,
-		Brokers:  []string{brokerURL},
-		TLS: &tls.Config{
+	cfg, cfgErr := NewConfig(cid, []string{brokerURL},
+		WithTLS(&tls.Config{
 			RootCAs:      caPool,
 			Certificates: []tls.Certificate{chain.clientCert},
 			ServerName:   "127.0.0.1",
 			MinVersion:   tls.VersionTLS12,
-		},
-		ConnectTimeout:  testtime.D10s,
-		ConnectDeadline: testtime.D10s,
-		KeepAlive:       testtime.D10s,
-		Backoff: BackoffConfig{
-			BaseDelay: testtime.D100ms,
-			MaxDelay:  testtime.D2s,
-		},
-		PublishTimeout: testtime.D5s,
+		}),
+		WithConnectTimeout(testtime.D10s),
+		WithConnectDeadline(testtime.D10s),
+		WithKeepAlive(testtime.D10s),
+		WithBackoff(BackoffConfig{BaseDelay: testtime.D100ms, MaxDelay: testtime.D2s}),
+		WithPublishTimeout(testtime.D5s),
+	)
+	if cfgErr != nil {
+		t.Fatalf("NewConfig: %v", cfgErr)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D30s)
@@ -327,23 +325,21 @@ func TestIntegrationTLS_UntrustedClientCert_Rejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseEphemeralClientID: %v", err)
 	}
-	cfg := Config{
-		ClientID: cid,
-		Brokers:  []string{brokerURL},
-		TLS: &tls.Config{
+	cfg, cfgErr := NewConfig(cid, []string{brokerURL},
+		WithTLS(&tls.Config{
 			RootCAs:      serverCAPool,
 			Certificates: []tls.Certificate{untrusted.clientCert}, // NOT trusted by broker
 			ServerName:   "127.0.0.1",
 			MinVersion:   tls.VersionTLS12,
-		},
-		ConnectTimeout:  testtime.D10s,
-		ConnectDeadline: testtime.D10s,
-		KeepAlive:       testtime.D10s,
-		Backoff: BackoffConfig{
-			BaseDelay: testtime.D100ms,
-			MaxDelay:  testtime.D2s,
-		},
-		PublishTimeout: testtime.D5s,
+		}),
+		WithConnectTimeout(testtime.D10s),
+		WithConnectDeadline(testtime.D10s),
+		WithKeepAlive(testtime.D10s),
+		WithBackoff(BackoffConfig{BaseDelay: testtime.D100ms, MaxDelay: testtime.D2s}),
+		WithPublishTimeout(testtime.D5s),
+	)
+	if cfgErr != nil {
+		t.Fatalf("NewConfig: %v", cfgErr)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D30s)
@@ -389,22 +385,20 @@ func TestIntegrationTLS_NoClientCert_Rejected(t *testing.T) {
 		t.Fatalf("ParseEphemeralClientID: %v", err)
 	}
 	// No Certificates field — client presents no cert during mTLS handshake.
-	cfg := Config{
-		ClientID: cid,
-		Brokers:  []string{brokerURL},
-		TLS: &tls.Config{
+	cfg, cfgErr := NewConfig(cid, []string{brokerURL},
+		WithTLS(&tls.Config{
 			RootCAs:    serverCAPool,
 			ServerName: "127.0.0.1",
 			MinVersion: tls.VersionTLS12,
-		},
-		ConnectTimeout:  testtime.D10s,
-		ConnectDeadline: testtime.D10s,
-		KeepAlive:       testtime.D10s,
-		Backoff: BackoffConfig{
-			BaseDelay: testtime.D100ms,
-			MaxDelay:  testtime.D2s,
-		},
-		PublishTimeout: testtime.D5s,
+		}),
+		WithConnectTimeout(testtime.D10s),
+		WithConnectDeadline(testtime.D10s),
+		WithKeepAlive(testtime.D10s),
+		WithBackoff(BackoffConfig{BaseDelay: testtime.D100ms, MaxDelay: testtime.D2s}),
+		WithPublishTimeout(testtime.D5s),
+	)
+	if cfgErr != nil {
+		t.Fatalf("NewConfig: %v", cfgErr)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D30s)
@@ -429,24 +423,17 @@ func TestIntegrationTLS_InsecureSkipVerify_Rejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseEphemeralClientID: %v", err)
 	}
-	cfg := Config{
-		ClientID: cid,
-		Brokers:  []string{"tls://127.0.0.1:8883"},
-		TLS: &tls.Config{
+	_, valErr := NewConfig(cid, []string{"tls://127.0.0.1:8883"},
+		WithTLS(&tls.Config{
 			InsecureSkipVerify: true, //nolint:gosec // intentional: this is what we are testing rejection of
-		},
-		ConnectTimeout:  testtime.D5s,
-		ConnectDeadline: testtime.D10s,
-		KeepAlive:       testtime.D10s,
-		Backoff: BackoffConfig{
-			BaseDelay: testtime.D100ms,
-			MaxDelay:  testtime.D2s,
-		},
-	}
-
-	valErr := cfg.Validate()
+		}),
+		WithConnectTimeout(testtime.D5s),
+		WithConnectDeadline(testtime.D10s),
+		WithKeepAlive(testtime.D10s),
+		WithBackoff(BackoffConfig{BaseDelay: testtime.D100ms, MaxDelay: testtime.D2s}),
+	)
 	if valErr == nil {
-		t.Fatal("expected Validate to reject InsecureSkipVerify=true, got nil")
+		t.Fatal("expected NewConfig to reject InsecureSkipVerify=true, got nil")
 	}
 	var ec *errcode.Error
 	if !errors.As(valErr, &ec) {

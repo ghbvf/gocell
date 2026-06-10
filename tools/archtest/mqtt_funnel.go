@@ -1,8 +1,9 @@
 // INVARIANT: MQTT-CLIENT-ID-NAMESPACE-01
 //   - INVARIANT: MQTT-TOPIC-NAMESPACE-01
+//   - INVARIANT: MQTT-CONFIG-SEALED-FIELD-FROZEN-01
 //
 // mqtt_funnel.go — importable sealed-struct construction funnel logic for
-// adapters/mqtt.ClientID and adapters/mqtt.TopicNamespace.
+// adapters/mqtt.ClientID, adapters/mqtt.TopicNamespace, and adapters/mqtt.Config.
 //
 // This is the non-test home of the MQTT-CLIENT-ID-NAMESPACE-01 and
 // MQTT-TOPIC-NAMESPACE-01 scanner helpers so they can be compiled by external
@@ -132,6 +133,62 @@ func checkMQTTSealedSingleValueField(name string, dt reflect.Type) []string {
 	return violations
 }
 
+// mqttConfigField is one frozen field of the sealed adapters/mqtt.Config: its
+// expected (unexported) name and reflect.Type identity. The full set is pinned
+// by MQTT-CONFIG-SEALED-FIELD-FROZEN-01/A1 (reflect schema freeze 范本) so that
+// adding, removing, renaming, retyping, or EXPORTING any Config field trips the
+// freeze and forces an ADR amendment + threat-model re-evaluation.
+type mqttConfigField struct {
+	name string
+	typ  reflect.Type
+}
+
+// checkMQTTConfigFieldFreeze verifies dt is a struct whose field set EXACTLY
+// matches want — same field count, same names, same type identities, and EVERY
+// field unexported (PkgPath != ""). Unexported fields are the upstream Hard
+// gate: an outside-package struct literal cannot set them, so the only way to
+// obtain a non-zero Config is the sealed NewConfig constructor (which validates
+// in its body). Exporting any field re-opens literal construction and is
+// reported here. Returns violation messages (empty = clean).
+//
+// Multi-field sibling of checkMQTTSealedSingleValueField (one-field ClientID /
+// TopicNamespace) and errcode_invariants.go's checkSealedKeyValueShape
+// (two-field PublicDetail).
+func checkMQTTConfigFieldFreeze(name string, dt reflect.Type, want []mqttConfigField) []string {
+	var violations []string
+	if dt.Kind() != reflect.Struct {
+		return append(violations, fmt.Sprintf(
+			"%s is not a struct (Kind=%s); the sealed-struct guarantee is gone — "+
+				"type may have been changed to an alias or newtype", name, dt.Kind()))
+	}
+	if dt.NumField() != len(want) {
+		violations = append(violations, fmt.Sprintf(
+			"%s NumField = %d, want %d (adding/removing a field re-opens sealed "+
+				"construction — update the ADR amendment + threat model first)",
+			name, dt.NumField(), len(want)))
+	}
+	for _, w := range want {
+		f, ok := dt.FieldByName(w.name)
+		if !ok {
+			violations = append(violations, fmt.Sprintf(
+				"%s has no %q field (renamed or exported?); sealed-construction invariant broken",
+				name, w.name))
+			continue
+		}
+		if f.PkgPath == "" {
+			violations = append(violations, fmt.Sprintf(
+				"%s.%s is exported (PkgPath empty); outside-package literal construction "+
+					"becomes possible — lowercase it", name, w.name))
+		}
+		if f.Type != w.typ {
+			violations = append(violations, fmt.Sprintf(
+				"%s.%s type = %s, want %s (a field type change can alter wire/validation semantics)",
+				name, w.name, f.Type, w.typ))
+		}
+	}
+	return violations
+}
+
 // ─── A2: CompositeLit construction allowlist scanner ─────────────────────────
 
 // scanMQTTCompositeLitConstruction scans file for composite literals whose
@@ -195,7 +252,7 @@ func isSealedCompositeLitViolation(
 		Line: pos.Line,
 		Message: fmt.Sprintf(
 			"%s/A2: %s composite literal at %s:%d is not enclosed in any of %v — "+
-				"non-zero %s construction must go through the Parse factory",
+				"non-zero %s construction must go through an allowed constructor",
 			ruleID, targetTypeName, rel, pos.Line, allowedFullNames, targetTypeName,
 		),
 	}, true
@@ -413,4 +470,53 @@ func CheckMQTTTopicNamespace(t *testing.T, cfg ConfigForExternalCell) []Diagnost
 			return nil
 		})
 	return append(a2Diags, a3Diags...)
+}
+
+// collectConfigDiags is the per-Pass body for CheckMQTTConfigSeal: it scans
+// adapters/mqtt production files for non-zero Config composite literals outside
+// the sole sanctioned constructor NewConfig (A2 — the downstream half of the
+// sealed-construction funnel). The upstream Hard half (unexported fields,
+// blocking outside-package literals) and the A1 field-freeze are reflect-based
+// and live in the dogfood Test. Zero-value `Config{}` literals (NewConfig's
+// error-return path) are allowed by the shared scanner's len(Elts)==0 skip.
+func collectConfigDiags(p *Pass, a2Diags *[]Diagnostic) {
+	if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
+		return
+	}
+	const ruleID = "MQTT-CONFIG-SEALED-FIELD-FROZEN-01"
+	for _, f := range p.Files {
+		rel := p.Rel(f)
+		if strings.HasSuffix(rel, "_test.go") {
+			continue
+		}
+		*a2Diags = append(*a2Diags, scanMQTTCompositeLitConstruction(
+			p.Fset, f, rel, p.TypesInfo,
+			"Config",
+			[]string{mqttPkgPath + ".NewConfig"},
+			ruleID,
+		)...)
+	}
+}
+
+// CheckMQTTConfigSeal runs the MQTT-CONFIG-SEALED-FIELD-FROZEN-01 A2 construction
+// scan (the A1 reflect field-freeze lives in the dogfood Test). It locks in-package
+// non-zero Config construction to NewConfig; outside-package construction is
+// already impossible at compile time via the unexported fields the A1 freeze pins.
+//
+// register=no — gocell-internal-layout (scans adapters/mqtt), NOT in
+// StandardCellRules() and NOT promised to run externally — these dogfood-only
+// rules target a package an external repo lacks, so a manual ExtraRules caller
+// does not get a clean pass; migrated for unified PlatformModulePath
+// parameterization + fork-safety, dogfooded via the per-rule Tests).
+func CheckMQTTConfigSeal(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
+	t.Helper()
+	root := findModuleRoot(t)
+	var a2Diags []Diagnostic
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: cfg.BuildTags},
+		prodscan.PatternsExtended(root)),
+		func(p *Pass) []Diagnostic {
+			collectConfigDiags(p, &a2Diags)
+			return nil
+		})
+	return a2Diags
 }

@@ -56,7 +56,7 @@ func TestNewPublisher_ZeroNamespace(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newInternalConfig(addr)
+	cfg := newInternalConfig(t, addr)
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()
 
@@ -81,7 +81,7 @@ func TestPublisher_Publish_Success(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newInternalConfig(addr)
+	cfg := newInternalConfig(t, addr)
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()
 
@@ -112,7 +112,7 @@ func TestPublisher_Publish_TopicOutsideNamespace(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newInternalConfig(addr)
+	cfg := newInternalConfig(t, addr)
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()
 
@@ -147,8 +147,8 @@ func TestPublisher_Publish_PayloadTooLarge(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newInternalConfig(addr)
-	cfg.MaximumPacketSize = 10
+	cfg := newInternalConfig(t, addr)
+	cfg.maximumPacketSize = 10
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()
 
@@ -183,7 +183,7 @@ func TestPublisher_Publish_AfterClose(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newInternalConfig(addr)
+	cfg := newInternalConfig(t, addr)
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()
 
@@ -219,7 +219,7 @@ func TestPublisher_Publish_ContextCanceled(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newInternalConfig(addr)
+	cfg := newInternalConfig(t, addr)
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()
 
@@ -262,7 +262,7 @@ func TestPublisher_Close_Idempotent(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newInternalConfig(addr)
+	cfg := newInternalConfig(t, addr)
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()
 
@@ -286,7 +286,7 @@ func TestPublisher_Close_DoesNotCloseConnection(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newInternalConfig(addr)
+	cfg := newInternalConfig(t, addr)
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()
 
@@ -312,7 +312,7 @@ func TestPublisher_Close_DrainsInFlight(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newInternalConfig(addr)
+	cfg := newInternalConfig(t, addr)
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D15s)
 	defer cancel()
 
@@ -369,8 +369,8 @@ func TestPublisher_Close_TimesOutOnStuckPublish(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newInternalConfig(addr)
-	cfg.PublishTimeout = 0 // no adapter timeout — publish blocks on the withheld PUBACK
+	cfg := newInternalConfig(t, addr)
+	cfg.publishTimeout = 0 // no adapter timeout — publish blocks on the withheld PUBACK
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D15s)
 	defer cancel()
 
@@ -524,7 +524,7 @@ func TestPublisher_Publish_ConcurrentSafe(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newInternalConfig(addr)
+	cfg := newInternalConfig(t, addr)
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D15s)
 	defer cancel()
 
@@ -716,7 +716,7 @@ func TestPublisher_Publish_BrokerRejectedPUBACK_RealPath(t *testing.T) {
 			defer stop()
 
 			clk := clock.Real()
-			cfg := newInternalConfig(addr)
+			cfg := newInternalConfig(t, addr)
 			ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 			defer cancel()
 
@@ -785,7 +785,7 @@ func TestPublisher_Publish_NoMatchingSubscribers_Success(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newInternalConfig(addr)
+	cfg := newInternalConfig(t, addr)
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()
 
@@ -823,7 +823,7 @@ func TestPublisher_Publish_NilPayload(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newInternalConfig(addr)
+	cfg := newInternalConfig(t, addr)
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()
 
@@ -853,9 +853,9 @@ func TestPublisher_Publish_NoAdapterTimeout(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newInternalConfig(addr)
+	cfg := newInternalConfig(t, addr)
 	// PublishTimeout = 0: no adapter-imposed timeout; caller ctx governs.
-	cfg.PublishTimeout = 0
+	cfg.publishTimeout = 0
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()

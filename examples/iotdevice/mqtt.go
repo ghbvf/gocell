@@ -177,17 +177,12 @@ func buildMQTTDirectPublisher(
 		return nil, nil, false, err
 	}
 
-	cfg := mqtt.Config{
-		ClientID:        clientID,
-		Brokers:         brokers,
-		ConnectTimeout:  10 * time.Second,
-		ConnectDeadline: connectDeadline,
-		KeepAlive:       30 * time.Second,
-		PublishTimeout:  5 * time.Second,
-		Backoff: mqtt.BackoffConfig{
-			BaseDelay: 500 * time.Millisecond,
-			MaxDelay:  30 * time.Second,
-		},
+	cfg, err := mqtt.NewConfig(clientID, brokers,
+		mqtt.WithConnectDeadline(connectDeadline),
+		mqtt.WithPublishTimeout(5*time.Second),
+	)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("mqtt config: %w", err)
 	}
 
 	conn, err := mqtt.Open(ctx, clk, cfg)

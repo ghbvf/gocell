@@ -2,9 +2,11 @@
 
 // INVARIANT: MQTT-CLIENT-ID-NAMESPACE-01
 //   - INVARIANT: MQTT-TOPIC-NAMESPACE-01
+//   - INVARIANT: MQTT-CONFIG-SEALED-FIELD-FROZEN-01
 //
 // mqtt_funnel_test.go — dogfood Tests + self-checks for the sealed-struct
-// construction funnels of adapters/mqtt.ClientID and adapters/mqtt.TopicNamespace.
+// construction funnels of adapters/mqtt.ClientID, adapters/mqtt.TopicNamespace,
+// and adapters/mqtt.Config.
 //
 // Rule scanner logic lives in mqtt_funnel.go (importable non-test file);
 // this file contains:
@@ -15,12 +17,14 @@
 package archtest
 
 import (
+	"crypto/tls"
 	"fmt"
 	"go/ast"
 	"go/types"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,6 +32,27 @@ import (
 	"github.com/ghbvf/gocell/adapters/mqtt"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
+
+// wantMQTTConfigFields is the frozen field set of adapters/mqtt.Config pinned by
+// MQTT-CONFIG-SEALED-FIELD-FROZEN-01/A1. Editing this list is the deliberate
+// signal that the sealed Config shape changed — it must be accompanied by an
+// ADR amendment + threat-model re-evaluation (ai-robust: reflect schema freeze).
+func wantMQTTConfigFields() []mqttConfigField {
+	dur := reflect.TypeOf(time.Duration(0))
+	return []mqttConfigField{
+		{"clientID", reflect.TypeOf(mqtt.ClientID{})},
+		{"brokers", reflect.TypeOf([]string(nil))},
+		{"tlsConfig", reflect.TypeOf((*tls.Config)(nil))},
+		{"sessionExpiry", dur},
+		{"auth", reflect.TypeOf(mqtt.AuthConfig{})},
+		{"backoff", reflect.TypeOf(mqtt.BackoffConfig{})},
+		{"maximumPacketSize", reflect.TypeOf(uint32(0))},
+		{"connectTimeout", dur},
+		{"connectDeadline", dur},
+		{"keepAlive", dur},
+		{"publishTimeout", dur},
+	}
+}
 
 // assertMQTTSealedSingleValueField is a test-helper wrapper around
 // checkMQTTSealedSingleValueField that reports violations via t.Errorf.
@@ -118,6 +143,141 @@ func TestMQTTTopicNamespace01(t *testing.T) {
 		t.Parallel()
 		Report(t, ruleID, CheckMQTTTopicNamespace(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 	})
+}
+
+// ─── Main archtest: MQTT-CONFIG-SEALED-FIELD-FROZEN-01 ────────────────────────
+
+// TestMQTTConfigSealedFieldFrozen01 enforces the Config sealed-construction
+// funnel — the Hard upgrade of the retired MQTT-CONFIG-VALIDATE-FIRST-01
+// form-lock (#1231).
+//
+//   - A1 (Hard, reflect field freeze): adapters/mqtt.Config has EXACTLY the
+//     frozen field set, every field unexported. Unexported fields are the
+//     upstream compile gate — an outside-package `mqtt.Config{...}` literal is
+//     structurally inexpressible, so a non-zero Config can only come from
+//     NewConfig, which validates in its body. "Unvalidated Config" is therefore
+//     unrepresentable in a caller's hands.
+//   - A2 (Medium, construction allowlist): in-package, the sole sanctioned
+//     non-zero Config composite literal is inside NewConfig; any other is a
+//     funnel bypass (an in-package path could otherwise build an unvalidated
+//     Config). Zero-value `Config{}` (NewConfig's error return) is allowed.
+//
+// # Blind-spot self-check
+//
+// Same go/types composite-literal-resolution blind spots as
+// MQTT-CLIENT-ID-NAMESPACE-01 (reflect field-set / unsafe.Pointer); the
+// repo-wide TestMQTTFunnel_BlindSpot_* tests cover them for adapters/mqtt.
+func TestMQTTConfigSealedFieldFrozen01(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	const ruleID = "MQTT-CONFIG-SEALED-FIELD-FROZEN-01"
+
+	// A1: reflect field freeze (exact field set + unexported + type identity).
+	t.Run("A1_FieldFreeze", func(t *testing.T) {
+		t.Parallel()
+		dt := reflect.TypeOf(mqtt.Config{})
+		for _, v := range checkMQTTConfigFieldFreeze(ruleID+"/A1: Config", dt, wantMQTTConfigFields()) {
+			t.Errorf("%s", v)
+		}
+	})
+
+	// A2: in-package construction allowlist (NewConfig only).
+	t.Run("A2_Construction", func(t *testing.T) {
+		t.Parallel()
+		Report(t, ruleID, CheckMQTTConfigSeal(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
+	})
+}
+
+// TestMQTTConfigFreeze_ScannerFires proves checkMQTTConfigFieldFreeze produces
+// violations on every degenerate Config shape (exported field, missing field,
+// extra field, wrong type, non-struct) and none on a faithful replica of the
+// real field set. Without this reverse self-check, a refactor that silently
+// relaxed the freeze would leave TestMQTTConfigSealedFieldFrozen01/A1 vacuously
+// green.
+func TestMQTTConfigFreeze_ScannerFires(t *testing.T) {
+	t.Parallel()
+
+	pkg := PlatformModulePath + "/tools/archtest"
+	dur := reflect.TypeOf(time.Duration(0))
+	strType := reflect.TypeOf("")
+
+	// want is a deliberately small 2-field frozen spec so the synthetic cases
+	// stay readable; the production A1 test uses the real wantMQTTConfigFields().
+	want := []mqttConfigField{{"clientID", strType}, {"keepAlive", dur}}
+
+	mkField := func(name string, typ reflect.Type, exported bool) reflect.StructField {
+		f := reflect.StructField{Name: name, Type: typ}
+		if !exported {
+			f.PkgPath = pkg
+		}
+		return f
+	}
+
+	cases := []struct {
+		desc    string
+		typ     reflect.Type
+		wantErr bool
+	}{
+		{
+			desc: "faithful: both fields unexported, correct types",
+			typ: reflect.StructOf([]reflect.StructField{
+				mkField("clientID", strType, false), mkField("keepAlive", dur, false),
+			}),
+			wantErr: false,
+		},
+		{
+			desc: "exported field re-opens literal construction",
+			typ: reflect.StructOf([]reflect.StructField{
+				mkField("ClientID", strType, true), mkField("keepAlive", dur, false),
+			}),
+			wantErr: true, // "clientID" missing (it's "ClientID") AND count mismatch
+		},
+		{
+			desc: "missing field",
+			typ: reflect.StructOf([]reflect.StructField{
+				mkField("clientID", strType, false),
+			}),
+			wantErr: true,
+		},
+		{
+			desc: "extra field (count drift)",
+			typ: reflect.StructOf([]reflect.StructField{
+				mkField("clientID", strType, false), mkField("keepAlive", dur, false),
+				mkField("extra", strType, false),
+			}),
+			wantErr: true,
+		},
+		{
+			desc: "wrong field type",
+			typ: reflect.StructOf([]reflect.StructField{
+				mkField("clientID", strType, false), mkField("keepAlive", strType, false),
+			}),
+			wantErr: true,
+		},
+		{
+			desc:    "non-struct",
+			typ:     strType,
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+			violations := checkMQTTConfigFieldFreeze("TestConfig", tc.typ, want)
+			if tc.wantErr {
+				assert.NotEmpty(t, violations,
+					"expected freeze to fire for case %q but got no violations", tc.desc)
+			} else {
+				assert.Empty(t, violations,
+					"expected no violations for case %q but got: %v", tc.desc, violations)
+			}
+		})
+	}
 }
 
 // ─── Reverse self-check: A1 scanner has teeth ────────────────────────────────
@@ -534,4 +694,26 @@ func TestMQTTFunnel_NonVacuousness(t *testing.T) {
 	require.Equal(t, reflect.Struct, dt2.Kind(),
 		"MQTT-TOPIC-NAMESPACE-01/A1: TopicNamespace must be a struct, not a string newtype. "+
 			"If this fails, someone changed the type definition in topicns.go.")
+
+	// MQTT-CONFIG-SEALED-FIELD-FROZEN-01/A1 (#1231): confirmed non-vacuous via a
+	// temporary mutation of config.go (exporting `clientID` → `ClientID`) which
+	// made TestMQTTConfigSealedFieldFrozen01/A1_FieldFreeze fail with:
+	//
+	//	MQTT-CONFIG-SEALED-FIELD-FROZEN-01/A1: Config has no "clientID" field
+	//	  (renamed or exported?); sealed-construction invariant broken
+	//	MQTT-CONFIG-SEALED-FIELD-FROZEN-01/A1: Config.ClientID is exported ...
+	//
+	// The mutation was reverted before committing. Statically reassert the Config
+	// shape here (struct + every field unexported) so the freeze cannot quietly
+	// regress to a string newtype or an exported-field struct.
+	dtCfg := reflect.TypeOf(mqtt.Config{})
+	require.Equal(t, reflect.Struct, dtCfg.Kind(),
+		"MQTT-CONFIG-SEALED-FIELD-FROZEN-01/A1: Config must be a struct. "+
+			"If this fails, someone changed the type definition in config.go.")
+	for i := 0; i < dtCfg.NumField(); i++ {
+		f := dtCfg.Field(i)
+		require.NotEmpty(t, f.PkgPath,
+			"MQTT-CONFIG-SEALED-FIELD-FROZEN-01/A1: Config.%s is exported — the sealed "+
+				"construction funnel requires every field unexported (see config.go NewConfig).", f.Name)
+	}
 }

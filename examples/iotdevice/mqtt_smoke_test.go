@@ -99,17 +99,18 @@ func smokeConfig(t *testing.T, addr, role string) mqtt.Config {
 	if err != nil {
 		t.Fatalf("ParseEphemeralClientID(%q): %v", role, err)
 	}
-	return mqtt.Config{
-		ClientID:        id,
-		Brokers:         []string{fmt.Sprintf("tcp://%s", addr)},
-		ConnectTimeout:  testtime.D5s,
-		ConnectDeadline: testtime.D10s,
-		KeepAlive:       testtime.D30s,
-		Backoff: mqtt.BackoffConfig{
+	cfg, err := mqtt.NewConfig(id, []string{fmt.Sprintf("tcp://%s", addr)},
+		mqtt.WithConnectTimeout(testtime.D5s),
+		mqtt.WithConnectDeadline(testtime.D10s),
+		mqtt.WithBackoff(mqtt.BackoffConfig{
 			BaseDelay: testtime.D100ms,
 			MaxDelay:  testtime.D2s,
-		},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("mqtt.NewConfig: %v", err)
 	}
+	return cfg
 }
 
 // openSmokeConn opens an mqtt.Connection whose lifecycle is bound to t.Cleanup
