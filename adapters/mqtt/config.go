@@ -50,15 +50,18 @@ const maxSessionExpiryDuration = time.Duration(4294967295) * time.Second
 // ref: adapters/rabbitmq/connection.go (*Config).setDefaults — same
 // "construct with sensible defaults, then validate" precedent.
 const (
-	defaultConnectTimeout  = 10 * time.Second
-	defaultConnectDeadline = 30 * time.Second
-	defaultKeepAlive       = 30 * time.Second
+	defaultConnectTimeout   = 10 * time.Second
+	defaultConnectDeadline  = 30 * time.Second
+	defaultKeepAlive        = 30 * time.Second
+	defaultBackoffBaseDelay = 500 * time.Millisecond
+	defaultBackoffMaxDelay  = 30 * time.Second
 )
 
 // defaultBackoff is the reconnect back-off applied when WithBackoff is not
 // supplied. A struct value cannot be a const, hence a package var; it is never
-// mutated (NewConfig copies it into the Config by value).
-var defaultBackoff = BackoffConfig{BaseDelay: 500 * time.Millisecond, MaxDelay: 30 * time.Second}
+// mutated (NewConfig copies it into the Config by value). Its duration fields
+// reference package-level consts so no inline literal trips PROD-DURATION-CONST-01.
+var defaultBackoff = BackoffConfig{BaseDelay: defaultBackoffBaseDelay, MaxDelay: defaultBackoffMaxDelay}
 
 // Error message constants (MESSAGE-CONST-LITERAL-01: all messages are const literals).
 const (
