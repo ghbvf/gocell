@@ -1293,16 +1293,15 @@ func TestConsumerBase_CtxCancelDuringBackoff_ReturnsRequeueWithCtxErr(t *testing
 // ConsumerObserver wiring tests (W2: wire ConsumerObserver into ConsumerBase)
 // =============================================================================
 
-// captureDefaultSlogForConsumerBase replaces the global slog default with a
-// JSON handler writing to a buffer; the original logger is restored via
-// t.Cleanup. Callers must NOT call t.Parallel() when using this helper.
-func captureDefaultSlogForConsumerBase(t *testing.T) *bytes.Buffer {
-	t.Helper()
+// newCapturingLogger returns a slog.Logger writing JSON to the returned buffer
+// for per-test log capture. Injected via ConsumerBaseConfig.Logger (and
+// DeliveryOutcome.Logger for settlement) so tests never mutate the global slog
+// default — that mutation races with t.Parallel() siblings in this package.
+// Tests using it ARE parallel-safe.
+func newCapturingLogger() (*slog.Logger, *bytes.Buffer) {
 	var buf bytes.Buffer
-	orig := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(orig) })
-	return &buf
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	return logger, &buf
 }
 
 // logLevelFromBuf scans JSON log lines in buf for the first entry whose "msg"
@@ -1476,8 +1475,8 @@ func TestConsumerBase_AttachObserver_NilObserver_ReturnsError(t *testing.T) {
 // retry-budget-exhausted log entry is emitted at ERROR level (upgraded from
 // WARN per observability.md: DLX-routed reject is correctness-affecting).
 func TestConsumerBase_RetryExhausted_LogLevelError(t *testing.T) {
-	// Do NOT call t.Parallel(): this test mutates the global slog default logger.
-	buf := captureDefaultSlogForConsumerBase(t)
+	t.Parallel()
+	logger, buf := newCapturingLogger()
 
 	receipt := &fakeReceipt{}
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
@@ -1486,6 +1485,7 @@ func TestConsumerBase_RetryExhausted_LogLevelError(t *testing.T) {
 		RetryCount:           1,
 		RetryBaseDelay:       time.Millisecond,
 		LeaseRenewalInterval: disableLeaseRenewal,
+		Logger:               logger,
 	}, clock.Real())
 	require.NoError(t, err)
 
@@ -1579,13 +1579,15 @@ func TestConsumerBase_RetryExhausted_NoObserveReject_OnCtxCancel(t *testing.T) {
 // RED: consumer_base.go calls cb.observer.ObserveReject(...) without a
 // panic-recovery wrapper, so the panic currently escapes.
 func TestConsumerBase_ObserveReject_PanicingObserver_DoesNotEscape(t *testing.T) {
-	buf := captureDefaultSlogForConsumerBase(t)
+	t.Parallel()
+	logger, buf := newCapturingLogger()
 
 	receipt := &fakeReceipt{}
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
 		LeaseRenewalInterval: disableLeaseRenewal,
+		Logger:               logger,
 	}, clock.Real())
 	require.NoError(t, err)
 	require.NoError(t, cb.AttachObserver(&panicingObserver{}))
@@ -1601,7 +1603,6 @@ func TestConsumerBase_ObserveReject_PanicingObserver_DoesNotEscape(t *testing.T)
 	}, "panic from ConsumerObserver.ObserveReject must NOT escape the Wrap handler")
 
 	// A WARN or ERROR log line must be emitted to record the recovered panic.
-	_ = buf // accessed by logLevelFromBuf when the log sentinel is checked
 	found := false
 	for _, line := range bytes.Split(buf.Bytes(), []byte("\n")) {
 		if bytes.Contains(line, []byte("observer")) || bytes.Contains(line, []byte("panic")) {
