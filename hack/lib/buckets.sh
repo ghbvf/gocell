@@ -11,7 +11,11 @@
 # Keeping the read in one helper stops the three consumers from drifting on the
 # regex. See ADR 202606-1817-adr-governance-lane-parallelization.
 #
-# Bucket name grammar: ^[a-z][a-z0-9-]*$ (lowercase kebab).
+# Bucket name grammar: ^[a-z][a-z0-9-]*$ (lowercase kebab). This excludes every
+# JSON / shell metacharacter (quote, backslash, newline, $, comma), so a derived
+# bucket name is safe to embed UNESCAPED — e.g. in the governance.yml
+# generate-buckets matrix JSON. Do not widen this grammar without re-checking
+# every embedding site.
 
 # gocell::buckets::annotation <gate-file>
 # Echo the gate's declared bucket, or nothing when the file does not have

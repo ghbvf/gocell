@@ -31,7 +31,8 @@ CHECK_COUNT=0
 # EXPECTED_CHECKS is the anti-vacuity anchor: if the script returns early or a
 # scenario is silently skipped, the final count won't match and the selftest
 # fails — the same false-green defence router-selftest.sh uses.
-EXPECTED_CHECKS=11
+# Breakdown: A=1 B=2 C=1 D=1 E=1 F=3 G=1 H=1 I=2 = 13.
+EXPECTED_CHECKS=13
 
 pass() { echo "PASS [$1]"; PASS_COUNT=$(( PASS_COUNT + 1 )); CHECK_COUNT=$(( CHECK_COUNT + 1 )); }
 fail() { echo "FAIL [$1]: $2"; FAIL_COUNT=$(( FAIL_COUNT + 1 )); CHECK_COUNT=$(( CHECK_COUNT + 1 )); }
@@ -173,6 +174,21 @@ set +e
 out="$(GOCELL_VERIFY_HACK_DIR="${H}" VERIFY_BUCKET=inv VERIFY_DRY_RUN=1 bash "${DRIVER}" 2>&1)"; rc=$?
 set -e
 assert_exit "driver/unannotated-in-bucket-mode fails" 1 "${rc}"
+
+# ---------------------------------------------------------------------------
+# Scenario I — guard anti-vacuity #2: a fixture whose gates are all valid but
+# that does NOT contain verify-bucket-coverage.sh must hard-fail, proving the
+# `saw_self` guard fires (discovery must observe the guard itself; otherwise the
+# whole scan could be silently scoped away).
+# ---------------------------------------------------------------------------
+I="${WORKDIR}/I"; mkdir -p "${I}"
+make_gate "${I}" verify-alpha.sh '# verify-bucket: inv'
+make_gate "${I}" verify-beta.sh '# verify-bucket: lint'   # all valid, but no verify-bucket-coverage.sh
+set +e
+out="$(GOCELL_VERIFY_HACK_DIR="${I}" bash "${GUARD}" 2>&1)"; rc=$?
+set -e
+assert_exit "guard/scan-missing-self fails (anti-vacuity #2)" 1 "${rc}"
+assert_contains "guard/scan-missing-self names the cause" "${out}" "discovery is broken"
 
 # ---------------------------------------------------------------------------
 # Summary + anti-vacuity on the check count itself.

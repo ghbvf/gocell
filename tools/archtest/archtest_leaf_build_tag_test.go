@@ -14,7 +14,8 @@
 // Why this guard exists: #1803 split tools/ into its own workspace module, so
 // hack/verify-workspace-test.sh's generic per-module `go test ./...` re-ran the
 // archtest leaf (+~4min on every governance lane, archtest run twice locally),
-// defeating governance.yml's VERIFY_SKIP=archtest. The tag closes that leak at
+// defeating governance.yml's exclusion of archtest from its PR buckets
+// (verify-archtest.sh -> `# verify-bucket: nightly`, #1817). The tag closes that leak at
 // the Go toolchain level (downstream Hard: compile-time exclusion). A new leaf
 // *_test.go that forgets the tag silently leaks back onto that path — a perf
 // regression that is GREEN (extra tests, not a failure) and so invisible without

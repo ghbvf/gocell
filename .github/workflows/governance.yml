@@ -57,6 +57,9 @@ jobs:
           # excluding the reserved `nightly` bucket (archtest → archtest-nightly.yml).
           source hack/lib/util.sh
           source hack/lib/buckets.sh
+          # Bucket names match ^[a-z][a-z0-9-]*$ (hack/lib/buckets.sh grammar),
+          # which excludes every JSON metacharacter — so embedding them in this
+          # JSON string unescaped is safe.
           json='['
           sep=''
           while IFS= read -r b; do
@@ -120,6 +123,11 @@ jobs:
       - name: All buckets passed
         run: |
           set -euo pipefail
+          # needs.<job>.result for a matrix job is the AGGREGATE: success only if
+          # every leg succeeded; failure if any leg failed (fail-fast:false runs
+          # them all first); skipped if generate-buckets failed (legs never ran);
+          # cancelled on runner preempt / manual cancel. Anything other than
+          # success is red — this aggregation is the required check.
           gen='${{ needs.generate-buckets.result }}'
           legs='${{ needs.bucket.result }}'
           echo "generate-buckets=${gen} bucket=${legs}"

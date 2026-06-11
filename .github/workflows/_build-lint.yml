@@ -138,8 +138,10 @@ jobs:
         # `go build ./...` stops at nested-module boundaries: examples/* (#1556)
         # and cmd/gocell (#1557) are not compiled here. Their per-module
         # release-consistency build runs in hack/verify-workspace.sh (GOWORK=off);
-        # cmd/gocell additionally compiles via `go run ./cmd/gocell verify generated`
-        # in the verify-codegen job below.
+        # cmd/gocell additionally compiles via `gocell verify generated` /
+        # `gocell verify codegen-*` in the Governance Strict `codegen` bucket
+        # (hack/verify-generated.sh + hack/verify-codegen-*.sh; the dedicated
+        # verify-codegen job here was removed in #1817 — see NOTE at file end).
         if: matrix.static_checks
         run: go build ./...
 
@@ -329,8 +331,9 @@ jobs:
       # is excluded from EXECUTION by its `//go:build archtest` leaf tag
       # (ARCHTEST-LEAF-BUILD-TAG-01) and from this shard's COVERAGE by the
       # sentinel _dynamic_archtest_excluded (see the build-test matrix tools
-      # entry). governance.yml's `make verify` likewise sets VERIFY_SKIP=archtest
-      # to delegate the full sweep to the nightly job.
+      # entry). governance.yml's `make verify` likewise excludes archtest from
+      # its PR buckets (verify-archtest.sh -> `# verify-bucket: nightly`, #1817),
+      # delegating the full sweep to the nightly job.
       # Push / PR archtest has no local coverage either: hack/githooks/
       # pre-push deliberately omits archtest after PR #887 review round-2
       # (CPU/RSS budget — ~3min wall + 43 GB RSS violates the hook's sub-

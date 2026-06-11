@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: lint
 # verify-bucket-coverage.sh — assert every hack/verify-*.sh gate declares
 # exactly one valid `# verify-bucket: <name>` annotation.
 #
@@ -14,8 +15,6 @@
 # velocity; see ADR 202606-1817-adr-governance-lane-parallelization §AC#3). A
 # new gate must declare a bucket, but nothing here caps how slow that bucket may
 # grow.
-#
-# verify-bucket: lint
 #
 # Single source for reading the annotation: hack/lib/buckets.sh.
 # Regression selftest with synthetic red fixtures (missing / malformed /

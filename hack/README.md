@@ -52,8 +52,8 @@ full rationale and the deliberate CI-mirror deviations.
    leg's gate timings); cost-balance is a manual decision, not machine-enforced.
 3. `cd "$(dirname "${BASH_SOURCE[0]}")/.."` so the script runs from repo root
    regardless of caller's CWD.
-4. `chmod +x hack/verify-<name>.sh` so the file can be invoked directly
-   (`./hack/verify-<name>.sh`) for ad-hoc debugging. The driver itself runs
+4. (optional) `chmod +x hack/verify-<name>.sh` so the file can be invoked
+   directly (`./hack/verify-<name>.sh`) for ad-hoc debugging. The driver runs
    each gate via `bash <script>` and does not depend on the executable bit.
 5. Verify locally: `make verify` (full glob set, unchanged). Confirm routing
    with `VERIFY_BUCKET=<bucket> VERIFY_DRY_RUN=1 make verify`.

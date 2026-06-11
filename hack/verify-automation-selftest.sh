@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# verify-automation-selftest.sh — gate the gocell-pr-meta:v1 protocol helper,
-# the codex-pr-router decision logic, and the # verify-bucket routing funnel.
-# Discovered automatically by make verify (find hack -maxdepth 1 -name 'verify-*.sh').
-#
 # verify-bucket: lint
+# verify-automation-selftest.sh — gate the gocell-pr-meta:v1 protocol helper,
+# the codex-pr-router decision logic, and the bucket routing funnel.
+# Discovered automatically by make verify (find hack -maxdepth 1 -name 'verify-*.sh').
 #
 # ref: kubernetes/kubernetes hack/verify-shellcheck.sh — script shape.
 set -euo pipefail

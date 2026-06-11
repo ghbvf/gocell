@@ -48,7 +48,7 @@ governance lane 还是串行巨石，成为所有新治理检查的垃圾桶。
 
 | 机制 | 载体 | 评级 | 说明 |
 |---|---|---|---|
-| 加 gate 必须声明可路由 bucket | 注解 marker funnel：驱动 bucket 模式 fail-fast + `generate-buckets` fail-fast + `verify-bucket-coverage.sh` guard 三点机器拦截 | **Medium→Hard** | 漏/错注解在 CI 多点硬红，不可静默漏跑（charter §Hard 范本 string-typed concept funnel） |
+| 加 gate 必须声明可路由 bucket | 注解 marker funnel：驱动 bucket 模式 fail-fast + `generate-buckets` fail-fast + `verify-bucket-coverage.sh` guard 三点机器拦截 | **Medium** | 漏/错注解在 CI 运行时多点硬红，不可静默漏跑。**非 Hard**：违反仍可表达（文件合法存在、只缺一行注释），无 compile/golden/field-freeze；Hard 化路径见下行 |
 | 桶划分 anti-vacuity（漏跑 gate → 硬红，AC#4） | `verify-bucket-coverage.sh`（静态守卫）+ `bucket-coverage-selftest.sh`（合成红回归）+ 本 ADR/README（文档契约）= 三件套 | **Medium** | 空目录 / 漏注解 / 重复 / 非法值 / 未观察到自身 均硬红；selftest 11 项含 anti-vacuity 计数锚 |
 | 矩阵从注解单源派生 | `gocell::buckets::list` + `fromJSON` | **Hard** | 矩阵是注解的派生物，无第二源可漂移（charter §载体#1） |
 

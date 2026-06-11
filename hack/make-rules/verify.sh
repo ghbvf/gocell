@@ -32,10 +32,11 @@ if [[ ${#scripts[@]} -eq 0 ]]; then
 fi
 
 # VERIFY_SKIP is a comma-separated list of gate basenames (the part between
-# `verify-` and `.sh`) to skip. CI uses it to drop gates already covered by
-# the build-test matrix — running `go test -race ./tools/archtest/...` twice
-# on every PR (once in build-test (tools), once here) is pure duplicate
-# work. Local `make verify` leaves VERIFY_SKIP empty for full coverage.
+# `verify-` and `.sh`) to skip — a general escape hatch for local debugging or
+# external automation. Governance Strict CI no longer sets it (#1817): archtest
+# is kept off the PR buckets via its `# verify-bucket: nightly` annotation
+# (excluded by the generate-buckets job), not via VERIFY_SKIP. Local
+# `make verify` leaves VERIFY_SKIP empty for full coverage.
 #
 # Stored as a delimited string instead of an associative array so the script
 # stays portable to macOS bash 3.2 (no `declare -A`).
