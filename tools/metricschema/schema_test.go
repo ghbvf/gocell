@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
+	"github.com/ghbvf/gocell/tools/packagesload"
 )
 
 func TestBuild_CorebundleCapturesReachableTypedMetrics(t *testing.T) {
@@ -109,7 +111,10 @@ func TestBuild_CorebundleGeneratedSchemaIsCurrent(t *testing.T) {
 // promwrap export set for the funnel-enforcement side.
 func TestPrometheusConstructor_RecognizesPromwrapFunnel(t *testing.T) {
 	root := repoRoot(t)
-	pkgs, err := loadPackages(t.Context(), root, promwrapPkg)
+	// promwrap now lives in the adapters/prometheus go.work satellite module
+	// (#1558), invisible to a GOWORK=off ModeModule load from the repo root;
+	// ModeWorkspace resolves it as a workspace member.
+	pkgs, err := loadPackagesWithMode(t.Context(), root, false, packagesload.ModeWorkspace, promwrapPkg)
 	require.NoError(t, err)
 
 	var exported []string
@@ -2123,11 +2128,35 @@ func fixtureProject() *metadata.ProjectMeta {
 func writeMetricsFixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
+	writeMetricsFixtureFiles(t, root)
+	// Overwrite the pre-tidy go.mod/go.sum with the tidied canonical pair
+	// (computed once, reused across all fixtures) so the module graph is complete
+	// under -mod=readonly without a tidy per test.
+	mod, sum := canonicalMetricsFixtureMod(t)
+	writeFile(t, root, "go.mod", mod)
+	writeFile(t, root, "go.sum", sum)
+	return root
+}
+
+// writeMetricsFixtureFiles lays down the throwaway metrics-fixture module tree:
+// a clone of the slimmed post-#1558 root go.mod plus the prometheus-adapter
+// require/replace, a cmd/app entrypoint, and reachable/unreachable packages.
+// The go.mod/go.sum it writes are the pre-tidy starting point.
+func writeMetricsFixtureFiles(t *testing.T, root string) {
+	t.Helper()
 	moduleRoot := filepath.ToSlash(repoRoot(t))
 	mod, err := os.ReadFile(filepath.Join(repoRoot(t), "go.mod"))
 	require.NoError(t, err)
 	modText := strings.Replace(string(mod), "module github.com/ghbvf/gocell", "module example.com/metricsfixture", 1)
 	modText += fmt.Sprintf("\nrequire github.com/ghbvf/gocell v0.0.0\nreplace github.com/ghbvf/gocell => %s\n", moduleRoot)
+	// The fixture entrypoint (cmd/app/main.go) imports the prometheus adapter.
+	// Since #1558 split each adapter into its own go.work module, adapters/
+	// prometheus left the core module and its client_golang subtree left the
+	// slimmed root go.mod. Replace the adapter module locally; tidyMetricsFixture
+	// below then completes the require graph + go.sum so the fixture loads under
+	// -mod=readonly (the mode packages.Load / Build use).
+	modText += "require github.com/ghbvf/gocell/adapters/prometheus v0.0.0\n"
+	modText += fmt.Sprintf("replace github.com/ghbvf/gocell/adapters/prometheus => %s/adapters/prometheus\n", moduleRoot)
 	writeFile(t, root, "go.mod", modText)
 	sum, err := os.ReadFile(filepath.Join(repoRoot(t), "go.sum"))
 	require.NoError(t, err)
@@ -2185,7 +2214,78 @@ var UnreachableMetric = metrics.CounterOpts{
 	Help: "must not be scanned",
 }
 `)
-	return root
+}
+
+// metricsFixtureMod caches the tidied go.mod/go.sum for the metrics fixture so
+// the (slow) `go mod tidy` runs once per test binary instead of once per
+// fixture. The replace directives use the absolute repo root, identical for
+// every fixture, so the cached bytes are reusable verbatim.
+var metricsFixtureMod struct {
+	once sync.Once
+	mod  string
+	sum  string
+	err  error
+}
+
+// canonicalMetricsFixtureMod returns the tidied go.mod/go.sum produced by
+// tidying one representative fixture module. See tidyMetricsFixture for why the
+// clone of the slimmed post-#1558 root go.mod needs tidying at all.
+func canonicalMetricsFixtureMod(t *testing.T) (string, string) {
+	t.Helper()
+	metricsFixtureMod.once.Do(func() {
+		dir, err := os.MkdirTemp("", "metricsfixture-canon-")
+		if err != nil {
+			metricsFixtureMod.err = err
+			return
+		}
+		defer func() { _ = os.RemoveAll(dir) }()
+		writeMetricsFixtureFiles(t, dir)
+		tidyMetricsFixture(t, dir)
+		mod, err := os.ReadFile(filepath.Join(dir, "go.mod")) //nolint:gosec // tempdir test fixture
+		if err != nil {
+			metricsFixtureMod.err = err
+			return
+		}
+		sum, err := os.ReadFile(filepath.Join(dir, "go.sum")) //nolint:gosec // tempdir test fixture
+		if err != nil {
+			metricsFixtureMod.err = err
+			return
+		}
+		metricsFixtureMod.mod, metricsFixtureMod.sum = string(mod), string(sum)
+	})
+	require.NoError(t, metricsFixtureMod.err, "tidy canonical metrics fixture module")
+	return metricsFixtureMod.mod, metricsFixtureMod.sum
+}
+
+// tidyMetricsFixture runs `go mod tidy` on the throwaway fixture module so its
+// go.mod lists the full prometheus-adapter dependency subtree (client_golang +
+// indirects). The fixture clones the slimmed post-#1558 root go.mod, which no
+// longer carries those modules, so without tidy the module graph is incomplete
+// and packages.Load / Build fail under -mod=readonly ("updates to go.mod
+// needed"). GOFLAGS=-mod=mod lets tidy write; GOWORK=off keeps it a single
+// standalone module regardless of the ambient workspace mode.
+func tidyMetricsFixture(t *testing.T, dir string) {
+	t.Helper()
+	goPath, lookErr := exec.LookPath("go")
+	require.NoError(t, lookErr, "go not found in PATH")
+	// Strip ambient GOWORK/GOFLAGS/GOTOOLCHAIN before appending ours, so our
+	// values win unambiguously (append-only relies on last-wins, which is
+	// fragile) and GOTOOLCHAIN=local stops tidy from triggering a network
+	// toolchain download in a sandboxed CI runner.
+	env := slices.DeleteFunc(os.Environ(), func(e string) bool {
+		return strings.HasPrefix(e, "GOWORK=") ||
+			strings.HasPrefix(e, "GOFLAGS=") ||
+			strings.HasPrefix(e, "GOTOOLCHAIN=")
+	})
+	env = append(env, "GOWORK=off", "GOFLAGS=-mod=mod", "GOTOOLCHAIN=local")
+	cmd := &exec.Cmd{
+		Path: goPath,
+		Args: []string{"go", "mod", "tidy"},
+		Dir:  dir,
+		Env:  env,
+	}
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "go mod tidy metrics fixture: %s", out)
 }
 
 func productionGoTopLevels(t *testing.T, root string) map[string]bool {

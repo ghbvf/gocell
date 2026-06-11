@@ -2,6 +2,20 @@ go 1.25.11
 
 use (
 	.
+	./adapters/adapterutil
+	./adapters/circuitbreaker
+	./adapters/grpc
+	./adapters/mqtt
+	./adapters/oidc
+	./adapters/otel
+	./adapters/postgres
+	./adapters/prometheus
+	./adapters/rabbitmq
+	./adapters/ratelimit
+	./adapters/redis
+	./adapters/s3
+	./adapters/vault
+	./adapters/websocket
 	./cellmodules
 	./cmd/corebundle
 	./cmd/gocell

@@ -38,8 +38,9 @@ jobs:
     name: govulncheck
     runs-on: ubuntu-latest
     # Module-aware traversal (#1556) runs govulncheck once per go.work member
-    # (root + 5 satellite examples) × 2 passes (text gate + SARIF); the 5-minute
-    # single-module budget no longer fits, so raised to 12.
+    # (root + satellites: examples, cmd, corecells, tools, tests, and the 14
+    # per-adapter modules from #1558) × 2 passes (text gate + SARIF); the
+    # 5-minute single-module budget no longer fits, so raised to 12.
     timeout-minutes: 12
     permissions:
       contents: read
@@ -89,28 +90,54 @@ jobs:
         # stamped with a DISTINCT `automationDetails.id` (= its Code Scanning
         # category) via jq — the CodeQL upload action rejects multiple SARIF
         # runs sharing one category (github.blog 2025-07-21), so a single shared
-        # `category:` input on the upload step below is removed and the per-run
+        # `category:` input on the upload steps below is removed and the per-run
         # id drives a distinct category per module instead.
+        #
+        # GitHub Code Scanning also rejects any single SARIF submission carrying
+        # >20 runs. With one run per go.work module the workspace exceeds that
+        # (29 members after the #1558 adapter-per-module split), so partition the
+        # per-module SARIFs into batch-<n>/ directories of <=BATCH_CAP runs each
+        # and upload each batch in its own step below. The per-run id keeps every
+        # module a distinct analysis, so disjoint batches never clobber each other.
         run: |
           set -euo pipefail
           source hack/lib/util.sh
           source hack/lib/modules.sh
-          mkdir -p govulncheck-sarif
+          BATCH_CAP=19   # margin under GitHub's 20-runs-per-submission limit
           module_dirs="$(gocell::modules::dirs)"
+          i=0
           while IFS= read -r dir; do
             [ -n "$dir" ] || continue
+            batch=$(( i / BATCH_CAP + 1 ))
+            mkdir -p "govulncheck-sarif/batch-$batch"
             if [ "$dir" = "." ]; then slug=root; else slug="$(printf '%s' "${dir#./}" | tr '/' '-')"; fi
-            echo "+++ govulncheck (sarif) in module: $dir -> govulncheck-sarif/govulncheck-$slug.sarif"
+            echo "+++ govulncheck (sarif) module: $dir -> batch-$batch/govulncheck-$slug.sarif"
             ( cd "$dir" && govulncheck -format sarif ./... ) \
               | jq --arg id "govulncheck/$slug" '.runs |= map(.automationDetails = {"id": $id})' \
-              > "govulncheck-sarif/govulncheck-$slug.sarif"
+              > "govulncheck-sarif/batch-$batch/govulncheck-$slug.sarif"
+            i=$(( i + 1 ))
           done <<<"$module_dirs"
+          batches=$(find govulncheck-sarif -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
+          echo "govulncheck SARIF: $i modules in $batches batch(es) of <=$BATCH_CAP runs"
+          # Fail-fast machine guard: only batch-1/batch-2 have upload steps below.
+          # If the workspace grows past 2*BATCH_CAP modules, add a batch-3 upload
+          # step rather than silently dropping a batch from the Security tab.
+          if [ "$batches" -gt 2 ]; then
+            echo "FAIL: $batches SARIF batches but only 2 upload steps exist — add an 'Upload SARIF batch 3' step (workspace exceeded 2*$BATCH_CAP modules)." >&2
+            exit 1
+          fi
 
-      - name: Upload SARIF to GitHub Security
-        if: always() && hashFiles('govulncheck-sarif/*.sarif') != ''
+      - name: Upload SARIF batch 1
+        if: always() && hashFiles('govulncheck-sarif/batch-1/*.sarif') != ''
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v3
         # No `category:` input — each SARIF carries its own per-module
         # `automationDetails.id` (set above) so the runs upload as distinct
         # categories rather than colliding under one shared category.
         with:
-          sarif_file: govulncheck-sarif
+          sarif_file: govulncheck-sarif/batch-1
+
+      - name: Upload SARIF batch 2
+        if: always() && hashFiles('govulncheck-sarif/batch-2/*.sarif') != ''
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v3
+        with:
+          sarif_file: govulncheck-sarif/batch-2

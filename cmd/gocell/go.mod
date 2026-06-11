@@ -31,3 +31,16 @@ require (
 replace github.com/ghbvf/gocell => ../../
 
 replace github.com/ghbvf/gocell/tools => ../../tools
+
+// Transitive replace closure: `tools` requires the unpublished adapter modules
+// (adapterutil/mqtt/postgres/redis) at v0.0.0. Go `replace` is NOT transitive, so
+// `tools`' own replaces do not propagate to this main module — without these,
+// GOWORK=off full module-graph commands (`go list -m all`) fail to resolve v0.0.0
+// even though lazy `go build ./...` passes. Guarded by hack/verify-workspace.sh.
+replace github.com/ghbvf/gocell/adapters/adapterutil => ../../adapters/adapterutil
+
+replace github.com/ghbvf/gocell/adapters/mqtt => ../../adapters/mqtt
+
+replace github.com/ghbvf/gocell/adapters/postgres => ../../adapters/postgres
+
+replace github.com/ghbvf/gocell/adapters/redis => ../../adapters/redis

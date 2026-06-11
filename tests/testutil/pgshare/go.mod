@@ -3,7 +3,7 @@ module github.com/ghbvf/gocell/tests/testutil/pgshare
 go 1.25.11
 
 require (
-	github.com/ghbvf/gocell v0.0.0
+	github.com/ghbvf/gocell/adapters/postgres v0.0.0
 	github.com/google/uuid v1.6.0
 )
 
@@ -24,6 +24,8 @@ require (
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
+	github.com/ghbvf/gocell v0.0.0 // indirect
+	github.com/ghbvf/gocell/adapters/adapterutil v0.0.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
@@ -33,7 +35,6 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/klauspost/compress v1.18.5 // indirect
-	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/magiconair/properties v1.8.10 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
@@ -76,3 +77,7 @@ require (
 )
 
 replace github.com/ghbvf/gocell => ../../..
+
+replace github.com/ghbvf/gocell/adapters/adapterutil => ../../../adapters/adapterutil
+
+replace github.com/ghbvf/gocell/adapters/postgres => ../../../adapters/postgres

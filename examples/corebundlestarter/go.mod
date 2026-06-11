@@ -13,6 +13,10 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
+	github.com/ghbvf/gocell/adapters/adapterutil v0.0.0 // indirect
+	github.com/ghbvf/gocell/adapters/postgres v0.0.0 // indirect
+	github.com/ghbvf/gocell/adapters/ratelimit v0.0.0 // indirect
+	github.com/ghbvf/gocell/adapters/redis v0.0.0 // indirect
 	github.com/ghbvf/gocell/corecells v0.0.0-00010101000000-000000000000 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -47,3 +51,11 @@ replace github.com/ghbvf/gocell => ../../
 replace github.com/ghbvf/gocell/cellmodules => ../../cellmodules
 
 replace github.com/ghbvf/gocell/corecells => ../../corecells
+
+replace github.com/ghbvf/gocell/adapters/adapterutil => ../../adapters/adapterutil
+
+replace github.com/ghbvf/gocell/adapters/postgres => ../../adapters/postgres
+
+replace github.com/ghbvf/gocell/adapters/ratelimit => ../../adapters/ratelimit
+
+replace github.com/ghbvf/gocell/adapters/redis => ../../adapters/redis

@@ -68,7 +68,7 @@ jobs:
             ./kernel/... \
             ./runtime/... \
             ./pkg/... \
-            ./adapters/prometheus/... \
+            github.com/ghbvf/gocell/adapters/prometheus/... \
             ./tools/archtest/internal/typeseval/...
           go -C corecells test -race -count=1 -timeout 10m \
             ./accesscore/slices/setup/...
@@ -127,7 +127,7 @@ jobs:
           GOCELL_TEST_DOCKER_REQUIRED: "1"
         run: |
           go test -race -count=1 -timeout 15m -tags=integration \
-            ./adapters/postgres/... \
+            github.com/ghbvf/gocell/adapters/postgres/... \
             github.com/ghbvf/gocell/tests/integration/l2atomicity/...
           # corecells is its own go.work module (#1560); run from inside the module
           # so ./accesscore/... resolves correctly under workspace mode.
