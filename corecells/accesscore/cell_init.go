@@ -141,6 +141,10 @@ func (c *AccessCore) validateRequiredDeps() error {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"accesscore requires a policy repository: wire WithMemBundle or WithPGBundle")
 	}
+	if c.resourceAttrs == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"accesscore requires a resource attribute provider: wire WithMemBundle or WithPGBundle")
+	}
 	if c.refreshStore == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingTokenIssuer,
 			"refresh.Store required: use WithRefreshStore")
@@ -320,7 +324,7 @@ func (c *AccessCore) initSlices() error {
 	// wired through the bundle funnel (#1346 PR-8): WithMemBundle supplies the
 	// in-memory PolicyRepository, WithPGBundle the durable PG-backed one. Both are
 	// fail-fast at the deps preflight above (c.policyRepo != nil).
-	authzSvc, err := authorizationdecide.NewService(c.clk, c.policyRepo, c.logger,
+	authzSvc, err := authorizationdecide.NewService(c.clk, c.policyRepo, c.resourceAttrs, c.logger,
 		authorizationdecide.WithTxManager(c.txRunner))
 	if err != nil {
 		return err

@@ -93,6 +93,16 @@ func withPolicyRepository(r ports.PolicyRepository) Option {
 	return func(c *AccessCore) { c.policyRepo = r }
 }
 
+// withResourceAttributeProvider sets the ABAC PIP (Policy Information Point)
+// for resource attributes (PR-9 #1347). Unexported — wired through the same
+// WithMemBundle / WithPGBundle funnel as its siblings so composition roots
+// cannot accidentally omit the provider. The mem bundle seeds an empty provider
+// (fail-closed); PG bundle also uses the empty mem provider until the
+// PG-backed resource_attributes store lands (#1347 follow-up).
+func withResourceAttributeProvider(p ports.ResourceAttributeProvider) Option {
+	return func(c *AccessCore) { c.resourceAttrs = p }
+}
+
 // WithEmitter injects a pre-composed outbox.CellEmitter directly into the Cell.
 // Preferred path for tests and for composition roots that have already built
 // a CellEmitter (e.g. outbox.DemoCellEmitter(), a recorder via
@@ -292,12 +302,13 @@ func WithBootstrapAuth(mw func(http.Handler) http.Handler) Option {
 // +cell:listener:ref=cell.InternalListener,prefix=/internal/v1/access
 type AccessCore struct {
 	*cell.BaseCell
-	clk          clock.Clock
-	userRepo     ports.UserRepository
-	sessionStore session.Store
-	roleRepo     ports.RoleRepository
-	policyRepo   ports.PolicyRepository
-	refreshStore refresh.Store
+	clk           clock.Clock
+	userRepo      ports.UserRepository
+	sessionStore  session.Store
+	roleRepo      ports.RoleRepository
+	policyRepo    ports.PolicyRepository
+	resourceAttrs ports.ResourceAttributeProvider
+	refreshStore  refresh.Store
 
 	// sessionStoreNil is set by WithSessionStore when a nil session.Store is
 	// passed. Phase0 validation rejects the cell when this sentinel is true

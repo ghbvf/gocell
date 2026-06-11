@@ -52,10 +52,11 @@ var _ auth.Authorizer = (*Service)(nil)
 
 // Service is the ABAC policy evaluation engine (PDP).
 type Service struct {
-	policyRepo ports.PolicyRepository    `gocell:"required" gocellErr:"authorizationdecide: policyRepo is required"`                                                                         //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	txRunner   persistence.CellTxManager `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"authorizationdecide: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	clk        clock.Clock               `gocell:"required" gocellErr:"authorizationdecide.NewService: clock.Clock required"`                                                                //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	logger     *slog.Logger
+	policyRepo   ports.PolicyRepository          `gocell:"required" gocellErr:"authorizationdecide: policyRepo is required"`                                                                         //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	resourceAttrs ports.ResourceAttributeProvider `gocell:"required" gocellErr:"authorizationdecide: resourceAttrs is required"`                                                                      //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	txRunner     persistence.CellTxManager       `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"authorizationdecide: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	clk          clock.Clock                     `gocell:"required" gocellErr:"authorizationdecide.NewService: clock.Clock required"`                                                                //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	logger       *slog.Logger
 }
 
 // Option configures Service.
@@ -73,15 +74,24 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 
 // NewService creates the ABAC authorization-decide engine. clk is the mandatory
 // injected clock used to resolve environment time attributes (no time.Now() in
-// this package; AUTHZ-EVAL-CLOCK-INJECTED-01). Returns an error when policyRepo
-// or txRunner is nil (typed-nil or bare). logger defaults to slog.Default() when
-// nil.
-func NewService(clk clock.Clock, policyRepo ports.PolicyRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
+// this package; AUTHZ-EVAL-CLOCK-INJECTED-01). resourceAttrs is the PIP
+// (Policy Information Point) source for RESOURCE-category attributes; it is
+// fetched inside the same tenant-scoped tx block as policy loading so the two
+// reads share a single tenant binding (RESOURCE-ATTR-TENANT-SHARING-01).
+// Returns an error when policyRepo, resourceAttrs, or txRunner is nil
+// (typed-nil or bare). logger defaults to slog.Default() when nil.
+func NewService(
+	clk clock.Clock,
+	policyRepo ports.PolicyRepository,
+	resourceAttrs ports.ResourceAttributeProvider,
+	logger *slog.Logger,
+	opts ...Option,
+) (*Service, error) {
 	clock.MustHaveClock(clk, "authorizationdecide.NewService")
 	if logger == nil {
 		logger = slog.Default()
 	}
-	s := &Service{policyRepo: policyRepo, clk: clk, logger: logger}
+	s := &Service{policyRepo: policyRepo, resourceAttrs: resourceAttrs, clk: clk, logger: logger}
 	for _, o := range opts {
 		o(s)
 	}
@@ -97,9 +107,10 @@ func NewService(clk clock.Clock, policyRepo ports.PolicyRepository, logger *slog
 // (authz.Decision{}, err) — never an Allow — and the error's errcode Kind drives
 // the HTTP status (KindUnavailable → 503 on store failure).
 //
-// The resource and action parameters are carried for observability and for
-// future PRs (PR-9 resource-attribute lookup; PR-10 business wiring); under the
-// PR-7 condition-based model they do not themselves gate evaluation.
+// resource is the resourceID passed to ResourceAttributeProvider.GetAttributes
+// inside the same tenant-scoped tx block as policy loading, ensuring policy
+// load and resource attribute fetch share a single tenant binding
+// (RESOURCE-ATTR-TENANT-SHARING-01). action is carried for observability.
 func (s *Service) Authorize(ctx context.Context, subject, resource, action string) (authz.Decision, error) {
 	tid, err := tenant.FromContext(ctx)
 	if err != nil {
@@ -108,13 +119,28 @@ func (s *Service) Authorize(ctx context.Context, subject, resource, action strin
 		return authz.Decision{}, fmt.Errorf("authorization-decide: tenant: %w", err)
 	}
 
-	// Tenant-scoped policy load. scopedtx.Do sets the RLS app.tenant_id GUC for
-	// the PG policy store (PR-8); the mem store ignores the ambient tx.
-	policies, err := scopedtx.Do(ctx, s.txRunner, tid, func(txCtx context.Context) ([]*abac.Policy, error) {
-		return s.policyRepo.ListByTenant(txCtx, tid)
+	// evalInputs carries the two data sources fetched inside the tenant-scoped
+	// block: all tenant policies + the resource attributes for this request's
+	// resource. Both are loaded within the same scopedtx.Do call so they share
+	// one RLS GUC binding (RESOURCE-ATTR-TENANT-SHARING-01).
+	type evalInputs struct {
+		policies      []*abac.Policy
+		resourceAttrs map[string][]string
+	}
+
+	inputs, err := scopedtx.Do(ctx, s.txRunner, tid, func(txCtx context.Context) (evalInputs, error) {
+		pols, polErr := s.policyRepo.ListByTenant(txCtx, tid)
+		if polErr != nil {
+			return evalInputs{}, polErr
+		}
+		resAttrs, attrErr := s.resourceAttrs.GetAttributes(txCtx, resource, tid)
+		if attrErr != nil {
+			return evalInputs{}, attrErr
+		}
+		return evalInputs{policies: pols, resourceAttrs: resAttrs}, nil
 	})
 	if err != nil {
-		// Policy store unreachable: fail-closed. KindUnavailable → 503; the
+		// Store unreachable: fail-closed. KindUnavailable → 503; the
 		// cause is carried for server-side logging and stripped from the wire.
 		return authz.Decision{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrServiceUnavailable,
 			"authorization-decide: policy store unavailable", err)
@@ -132,17 +158,22 @@ func (s *Service) Authorize(ctx context.Context, subject, resource, action strin
 	}
 
 	// Subject attributes come from the authenticated principal (trusted JWT
-	// claims, FR-012); environment attributes from the injected clock.
-	resolver := attributeResolver{principal: principal, now: s.clk.Now()}
+	// claims, FR-012); environment attributes from the injected clock;
+	// resource attributes from the injected ResourceAttributeProvider (PR-9).
+	resolver := attributeResolver{
+		principal:     principal,
+		now:           s.clk.Now(),
+		resourceAttrs: inputs.resourceAttrs,
+	}
 
-	dec := s.evaluate(policies, resolver)
+	dec := s.evaluate(inputs.policies, resolver)
 	s.logger.Debug(
 		"authorization decision",
 		slog.String("subject", subject),
 		slog.String("resource", resource),
 		slog.String("action", action),
 		slog.Bool("allowed", dec.IsAllow()),
-		slog.Int("policy_count", len(policies)),
+		slog.Int("policy_count", len(inputs.policies)),
 	)
 	return dec, nil
 }

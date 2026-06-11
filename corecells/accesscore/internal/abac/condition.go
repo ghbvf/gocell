@@ -33,6 +33,11 @@ const (
 	SourceSubject AttributeSource = iota + 1
 	// SourceResource resolves the attribute from the protected resource's
 	// metadata. Example key: "classification", "owner_id", "sensitivity_level".
+	// Attributes are fetched at evaluation time from the injected
+	// ResourceAttributeProvider (ABAC PIP, PR-9 #1347), scoped to the request
+	// tenant in the same transaction block as policy loading
+	// (RESOURCE-ATTR-TENANT-SHARING-01). An absent key resolves found=false —
+	// fail-closed (condition unsatisfied). PG-backed store is a follow-up issue.
 	SourceResource
 	// SourceEnvironment resolves the attribute from the request context or
 	// ambient environment. Example key: "time_of_day", "ip_region", "device_trust".
