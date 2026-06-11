@@ -204,7 +204,7 @@ func (c *AccessCore) initRefreshGC() error {
 // constraints (login before identity, accountlockout before login, etc.) outweigh
 // the funlen / cognitive-complexity budgets.
 //
-//nolint:funlen,cyclop // sequential cell composition root; readability and ordering
+//nolint:funlen // sequential cell composition root; readability and ordering
 func (c *AccessCore) initSlices() error {
 	// credentialinvalidate: shared invalidator for identity-manage, rbac-assign,
 	// session-refresh, and accountlockout. Atomically bumps authz_epoch, revokes
@@ -223,20 +223,9 @@ func (c *AccessCore) initSlices() error {
 	// routes lock/unlock through authzmutate. sessionlogin imports this package
 	// instead of authzmutate directly (depguard upstream Hard funnel
 	// SESSIONLOGIN-LOCKOUT-VIA-ACCOUNTLOCKOUT-01).
-	lockoutMutator, err := authzmutate.New(c.invalidator, c.userRepo)
+	lockoutSvc, err := c.initAccountLockout()
 	if err != nil {
-		return fmt.Errorf("accesscore: build lockout authzmutator: %w", err)
-	}
-	lockoutOpts := []accountlockout.Option{}
-	if c.lockoutMetrics != nil {
-		lockoutOpts = append(lockoutOpts, accountlockout.WithMetrics(c.lockoutMetrics))
-	}
-	if c.logger != nil {
-		lockoutOpts = append(lockoutOpts, accountlockout.WithLogger(c.logger))
-	}
-	lockoutSvc, err := accountlockout.NewService(c.userRepo, lockoutMutator, c.emitter, c.clk, lockoutOpts...)
-	if err != nil {
-		return fmt.Errorf("accesscore: build accountlockout service: %w", err)
+		return err
 	}
 
 	// session-login must be constructed before identity-manage because
@@ -421,6 +410,29 @@ func (c *AccessCore) initRbacAssign() error {
 	c.rbacAssignHandler = rbacassign.NewHandler(rbacAssignSvc)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(rbacassign.SliceMetadata()))
 	return nil
+}
+
+// initAccountLockout builds the accountlockout mediator: the typed lock/unlock
+// service that sessionlogin routes auto-lockout decisions through. Requires
+// c.invalidator (built earlier in initSlices). Extracted from initSlices to keep
+// that function's cognitive complexity within budget.
+func (c *AccessCore) initAccountLockout() (*accountlockout.Service, error) {
+	lockoutMutator, err := authzmutate.New(c.invalidator, c.userRepo)
+	if err != nil {
+		return nil, fmt.Errorf("accesscore: build lockout authzmutator: %w", err)
+	}
+	lockoutOpts := []accountlockout.Option{}
+	if c.lockoutMetrics != nil {
+		lockoutOpts = append(lockoutOpts, accountlockout.WithMetrics(c.lockoutMetrics))
+	}
+	if c.logger != nil {
+		lockoutOpts = append(lockoutOpts, accountlockout.WithLogger(c.logger))
+	}
+	lockoutSvc, err := accountlockout.NewService(c.userRepo, lockoutMutator, c.emitter, c.clk, lockoutOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("accesscore: build accountlockout service: %w", err)
+	}
+	return lockoutSvc, nil
 }
 
 // initPolicyManageSlice constructs the policymanage slice. policymanage is L2

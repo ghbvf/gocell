@@ -29,8 +29,8 @@ import (
 //     tenant binding (RESOURCE-ATTR-TENANT-SHARING-01). An absent key resolves
 //     found=false — still fail-closed.
 type attributeResolver struct {
-	principal     *auth.Principal   // may be nil → subject attributes fail-closed
-	now           time.Time         // injected clock reading for environment attributes
+	principal     *auth.Principal     // may be nil → subject attributes fail-closed
+	now           time.Time           // injected clock reading for environment attributes
 	resourceAttrs map[string][]string // pre-fetched resource attrs for this request
 }
 

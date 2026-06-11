@@ -95,7 +95,7 @@ func TestWithSetupLock_NilOption_RejectedAtInit(t *testing.T) {
 				withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 				withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 				withPolicyRepository(mem.NewPolicyRepository()),
-		withResourceAttributeProvider(mem.NewResourceAttributeProvider()),
+				withResourceAttributeProvider(mem.NewResourceAttributeProvider()),
 				WithSessionStore(testutil.RealSessionRepo(t)),
 				WithJWTIssuer(testIssuer),
 				WithJWTVerifier(testVerifier),

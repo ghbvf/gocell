@@ -73,7 +73,7 @@ func (src AttributeSource) Validate() error {
 }
 
 // ParseAttributeSource converts a wire/log spelling back to its AttributeSource
-// value (inverse of String). Recognised codes: "subject", "resource",
+// value (inverse of String). Recognized codes: "subject", "resource",
 // "environment". Any other input — including the empty string — returns an
 // error (fail-closed).
 func ParseAttributeSource(s string) (AttributeSource, error) {

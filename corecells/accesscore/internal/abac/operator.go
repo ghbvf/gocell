@@ -59,7 +59,7 @@ func (op Operator) Validate() error {
 }
 
 // ParseOperator converts a wire/log spelling back to its Operator value
-// (inverse of String). Recognised codes: "eq", "neq", "in", "not_in". Any
+// (inverse of String). Recognized codes: "eq", "neq", "in", "not_in". Any
 // other input — including the empty string — returns an error (fail-closed).
 func ParseOperator(s string) (Operator, error) {
 	switch s {

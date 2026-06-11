@@ -52,11 +52,11 @@ var _ auth.Authorizer = (*Service)(nil)
 
 // Service is the ABAC policy evaluation engine (PDP).
 type Service struct {
-	policyRepo   ports.PolicyRepository          `gocell:"required" gocellErr:"authorizationdecide: policyRepo is required"`                                                                         //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	policyRepo    ports.PolicyRepository          `gocell:"required" gocellErr:"authorizationdecide: policyRepo is required"`                                                                         //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	resourceAttrs ports.ResourceAttributeProvider `gocell:"required" gocellErr:"authorizationdecide: resourceAttrs is required"`                                                                      //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	txRunner     persistence.CellTxManager       `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"authorizationdecide: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	clk          clock.Clock                     `gocell:"required" gocellErr:"authorizationdecide.NewService: clock.Clock required"`                                                                //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	logger       *slog.Logger
+	txRunner      persistence.CellTxManager       `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"authorizationdecide: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	clk           clock.Clock                     `gocell:"required" gocellErr:"authorizationdecide.NewService: clock.Clock required"`                                                                //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	logger        *slog.Logger
 }
 
 // Option configures Service.
