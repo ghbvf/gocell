@@ -16,38 +16,43 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// verifyArchtestScriptMarker is the substring that identifies a step actually
-// invoking the verify-archtest script. GitHub Actions step env (`steps[*].env`)
-// only applies during that specific step's process. The validator MUST bind
-// the SHARD_COUNT=24 assertion to the SAME step that runs this script — a
-// dummy/setup step with SHARD_COUNT=24 in env cannot satisfy the contract
-// because its env never reaches the actual `bash hack/verify-archtest.sh`
-// execution. ref: GitHub Docs jobs.<job_id>.steps[*].env.
-const verifyArchtestScriptMarker = "hack/verify-archtest.sh"
+// verifyArchtestCLIMarker is the substring that identifies a step actually
+// invoking the gocell CLI's verify archtest subcommand. The validator MUST
+// bind the --shard=N/K denominator assertion to the SAME step that runs the
+// CLI, not to any sibling step. GitHub Actions step env is step-scoped — a
+// sibling/setup step with the right values cannot satisfy the contract because
+// its values never reach the actual CLI execution context.
+// ref: GitHub Docs jobs.<job_id>.steps[*].env.
+const verifyArchtestCLIMarker = "verify archtest"
 
-// expectedShardCount is the ADR-mandated SHARD_COUNT for the CI matrix.
-// Raised from 16 to 24 per ADR 202605120000 §Amendment 2026-05-28: 4 days of
-// nightly failures (2026-05-24..27) mixed slowgate breach + SIGTERM 143 with
-// repeating-shard distribution suggesting OOM (ADR §11 lineage) under-budgeted
-// K=16 baseline. K=24 stays in the direction of §Phase 0's "more shards =
-// lower per-shard RSS" argument (K=16 baseline is macOS measurement, GHA Linux
-// baseline pending Phase A diagnostic step capture).
-const expectedShardCount = "24"
+// expectedShardTotal is the ADR-mandated shard denominator K for the CI matrix.
+// The matrix array must enumerate exactly [0, 1, …, K-1], and every CLI
+// invocation in the verify-archtest job must use --shard=N/K with this K.
+//
+// Raised from 16 to 24 per ADR 202605120000 §Amendment 2026-05-28:
+// 4 days of nightly failures (2026-05-24..27) mixed slowgate breach + SIGTERM
+// 143 with repeating-shard distribution suggesting OOM under-budgeted K=16
+// baseline. K=24 stays in the direction of §Phase 0's "more shards = lower
+// per-shard RSS" argument.
+const expectedShardTotal = 24
 
 // TestVerifyArchtestCIExplicitShardCount asserts that the verify-archtest
-// CI job in .github/workflows/archtest-nightly.yml sets SHARD_COUNT=24
-// explicitly in step env, rather than relying on the script default.
+// CI job in .github/workflows/archtest-nightly.yml has:
 //
-// Background: hack/verify-archtest.sh default SHARD_COUNT is 1 (local-friendly:
-// single process, ~300 Test* share *types.Info cache, lowest CPU). CI must set
-// SHARD_COUNT=24 explicitly — GHA 2-core 7 GB shard runner cannot survive a
-// single-process run that accumulates 20+ GB peak RSS (PR #445 OOM SIGTERM).
-// If CI yaml drops the explicit value, the script falls through to K=1 and
-// the next CI run blows up.
+//  1. A step that invokes `gocell verify archtest` (or the alias `gocell archtest`)
+//     with a --shard=N/K flag where K == expectedShardTotal.
+//  2. strategy.matrix.shard list == [0, 1, …, expectedShardTotal-1] so every
+//     N value the matrix produces is actually executed.
 //
-// AI-robust: Medium runtime guard. The constraint "CI yaml verify-archtest
-// must explicit SHARD_COUNT=24" cannot be bypassed without modifying this
-// archtest in the same PR. Violation is reviewer-visible diff.
+// Background: archtestrunner.partition uses --shard=N/K to select a modulo
+// subset of tests per shard. If K in the CLI invocation and the matrix array
+// length diverge, some shards silently overlap (tests run twice) or gap
+// (tests never run). This invariant prevents that class of regression.
+//
+// AI-robust: Medium runtime guard. The constraint "CLI verify archtest
+// --shard=N/K denominator must match the matrix array length" cannot be
+// bypassed without modifying this archtest in the same PR. Violation is
+// reviewer-visible diff.
 //
 // The guard targets .github/workflows/archtest-nightly.yml — the sole
 // authoritative CI gate for the archtest matrix (ADR 202605120000
@@ -57,53 +62,48 @@ const expectedShardCount = "24"
 //
 // ref: ADR docs/architecture/202605120000-adr-archtest-process-isolation.md
 // §Amendment 2026-05-23 + §Amendment 2026-05-23-pr-time-to-nightly
-// + §Amendment 2026-05-28 (K=16→24).
+// + §Amendment 2026-05-28 (K=16→24)
+// + §Amendment 2026-06-12 (#1563, CLI migration, SHARD_COUNT env removed).
 func TestVerifyArchtestCIExplicitShardCount(t *testing.T) {
 	root := findModuleRoot(t)
 	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "workflows", "archtest-nightly.yml")))
 	require.NoError(t, err)
-	require.NoError(t, validateVerifyArchtestExplicitShardCount(body))
+	require.NoError(t, validateVerifyArchtestShardDenominator(body))
 }
 
-// TestVerifyArchtestCIExplicitShardCountRejectsMissingEnv is the negative
-// fixture: a verify-archtest job whose step omits SHARD_COUNT must fail
-// validation. Guards against future yaml refactor silently dropping the env.
-func TestVerifyArchtestCIExplicitShardCountRejectsMissingEnv(t *testing.T) {
+// TestVerifyArchtestCIExplicitShardCountRejectsMissingCLIStep is the negative
+// fixture: a verify-archtest job whose step doesn't invoke the gocell CLI
+// verify archtest must fail validation. Guards against future yaml refactor
+// silently dropping the CLI invocation.
+func TestVerifyArchtestCIExplicitShardCountRejectsMissingCLIStep(t *testing.T) {
 	body := []byte(`jobs:
   verify-archtest:
     strategy:
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
     steps:
-      - name: Verify archtest shard ${{ matrix.shard }}
-        env:
-          SHARD_TARGET: ${{ matrix.shard }}
-          TIMEOUT: 5m
-        run: bash hack/verify-archtest.sh
+      - name: Echo only
+        run: echo "no CLI invocation"
 `)
-	require.Error(t, validateVerifyArchtestExplicitShardCount(body))
+	require.Error(t, validateVerifyArchtestShardDenominator(body))
 }
 
-// TestVerifyArchtestCIExplicitShardCountRejectsWrongValue covers the value
-// drift case: env present but value != expectedShardCount. Fixture uses
-// SHARD_COUNT=8, a value never used in production (K=6/K=8 are macOS Phase 0
-// historical measurements only) — this keeps the drift fixture decoupled
-// from any past or future K value, so future K-upgrade PRs only need to bump
-// expectedShardCount without touching this fixture.
-func TestVerifyArchtestCIExplicitShardCountRejectsWrongValue(t *testing.T) {
+// TestVerifyArchtestCIExplicitShardCountRejectsWrongDenominator covers the
+// denominator drift case: --shard=N/16 with a 24-entry matrix → fail.
+// Using K=16 as the wrong value because it's a historically used production
+// value distinct from the current expectedShardTotal=24.
+func TestVerifyArchtestCIExplicitShardCountRejectsWrongDenominator(t *testing.T) {
 	body := []byte(`jobs:
   verify-archtest:
     strategy:
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
     steps:
-      - name: Verify archtest shard ${{ matrix.shard }}
-        env:
-          SHARD_COUNT: 8
-          SHARD_TARGET: ${{ matrix.shard }}
-        run: bash hack/verify-archtest.sh
+      - name: Verify archtest shard
+        run: |
+          "$RUNNER_TEMP/gocell" verify archtest --shard=${{ matrix.shard }}/16 --timeout=5m
 `)
-	require.Error(t, validateVerifyArchtestExplicitShardCount(body))
+	require.Error(t, validateVerifyArchtestShardDenominator(body))
 }
 
 // TestVerifyArchtestCIExplicitShardCountRejectsMissingJob covers the
@@ -116,13 +116,13 @@ func TestVerifyArchtestCIExplicitShardCountRejectsMissingJob(t *testing.T) {
       - name: build
         run: go build ./...
 `)
-	require.Error(t, validateVerifyArchtestExplicitShardCount(body))
+	require.Error(t, validateVerifyArchtestShardDenominator(body))
 }
 
 // TestVerifyArchtestCIExplicitShardCountAcceptsCorrectShape is the GREEN
 // fixture: minimum-required shape (job exists, strategy.matrix.shard covers
-// [0..expectedShardCount-1], step env has SHARD_COUNT=24). Documents the
-// contract the real yaml must satisfy.
+// [0..expectedShardTotal-1], step run contains --shard=N/24).
+// Documents the contract the real yaml must satisfy.
 func TestVerifyArchtestCIExplicitShardCountAcceptsCorrectShape(t *testing.T) {
 	body := []byte(`jobs:
   verify-archtest:
@@ -130,35 +130,32 @@ func TestVerifyArchtestCIExplicitShardCountAcceptsCorrectShape(t *testing.T) {
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
     steps:
-      - name: Verify archtest shard ${{ matrix.shard }}
-        env:
-          SHARD_COUNT: 24
-          SHARD_TARGET: ${{ matrix.shard }}
-        run: bash hack/verify-archtest.sh
+      - name: Verify archtest shard
+        run: |
+          "$RUNNER_TEMP/gocell" verify archtest --shard=${{ matrix.shard }}/24 --timeout=5m
 `)
-	require.NoError(t, validateVerifyArchtestExplicitShardCount(body))
+	require.NoError(t, validateVerifyArchtestShardDenominator(body))
 }
 
 // TestVerifyArchtestCIExplicitShardCountRejectsMissingMatrix covers the matrix
-// gap: SHARD_COUNT present but strategy.matrix.shard absent → no shard
-// dispatch at all, gate silently dead.
+// gap: CLI step present but strategy.matrix.shard absent → no shard dispatch
+// at all, gate silently dead.
 func TestVerifyArchtestCIExplicitShardCountRejectsMissingMatrix(t *testing.T) {
 	body := []byte(`jobs:
   verify-archtest:
     steps:
-      - name: Verify archtest shard ${{ matrix.shard }}
-        env:
-          SHARD_COUNT: 24
-          SHARD_TARGET: ${{ matrix.shard }}
-        run: bash hack/verify-archtest.sh
+      - name: Verify archtest shard
+        run: |
+          "$RUNNER_TEMP/gocell" verify archtest --shard=${{ matrix.shard }}/24 --timeout=5m
 `)
-	require.Error(t, validateVerifyArchtestExplicitShardCount(body))
+	require.Error(t, validateVerifyArchtestShardDenominator(body))
 }
 
 // TestVerifyArchtestCIExplicitShardCountRejectsMatrixLengthMismatch covers the
-// realistic regression introduced by bumping SHARD_COUNT without extending the
-// matrix list: SHARD_COUNT=24 paired with matrix [0..15] would silently skip
-// shards 16-23 (8 shards' tests never executed).
+// realistic regression introduced by bumping expectedShardTotal without
+// extending the matrix list: --shard=N/24 with matrix [0..15] would silently
+// leave shards 16-23 executing tests that overlap with the lower-numbered shards
+// (since the CLI's modulo is applied against K=24 but only 16 runners exist).
 func TestVerifyArchtestCIExplicitShardCountRejectsMatrixLengthMismatch(t *testing.T) {
 	body := []byte(`jobs:
   verify-archtest:
@@ -166,20 +163,18 @@ func TestVerifyArchtestCIExplicitShardCountRejectsMatrixLengthMismatch(t *testin
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     steps:
-      - name: Verify archtest shard ${{ matrix.shard }}
-        env:
-          SHARD_COUNT: 24
-          SHARD_TARGET: ${{ matrix.shard }}
-        run: bash hack/verify-archtest.sh
+      - name: Verify archtest shard
+        run: |
+          "$RUNNER_TEMP/gocell" verify archtest --shard=${{ matrix.shard }}/24 --timeout=5m
 `)
-	require.Error(t, validateVerifyArchtestExplicitShardCount(body))
+	require.Error(t, validateVerifyArchtestShardDenominator(body))
 }
 
 // TestVerifyArchtestCIExplicitShardCountRejectsNonContiguousMatrix covers the
 // case where the matrix has the right length but skips a value (e.g. someone
-// hand-edits and deletes a row mid-list). The script computes SHARD_TARGET as
-// modulo over [0, SHARD_COUNT), so any skipped index leaves its tests
-// permanently unexecuted.
+// hand-edits and deletes a row mid-list). The CLI computes --shard=N/K where
+// N comes from matrix.shard, so any skipped index means some modulo partition
+// is permanently unexecuted.
 func TestVerifyArchtestCIExplicitShardCountRejectsNonContiguousMatrix(t *testing.T) {
 	body := []byte(`jobs:
   verify-archtest:
@@ -187,68 +182,34 @@ func TestVerifyArchtestCIExplicitShardCountRejectsNonContiguousMatrix(t *testing
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24]
     steps:
-      - name: Verify archtest shard ${{ matrix.shard }}
-        env:
-          SHARD_COUNT: 24
-          SHARD_TARGET: ${{ matrix.shard }}
-        run: bash hack/verify-archtest.sh
+      - name: Verify archtest shard
+        run: |
+          "$RUNNER_TEMP/gocell" verify archtest --shard=${{ matrix.shard }}/24 --timeout=5m
 `)
-	require.Error(t, validateVerifyArchtestExplicitShardCount(body))
+	require.Error(t, validateVerifyArchtestShardDenominator(body))
 }
 
-// TestVerifyArchtestCIExplicitShardCountRejectsSiblingStepEnvShadow covers the
-// PR-878 reviewer F1 gap: a dummy/setup step carries `SHARD_COUNT: 16` env
-// (e.g. accidental copy-paste from a former invocation step), but the real
-// `bash hack/verify-archtest.sh` step has no SHARD_COUNT env. GitHub Actions
-// step env is step-scoped — sibling env does NOT propagate, so the real step
-// would silently fall back to script default K=1 and OOM on GHA. The
-// validator MUST reject this shape; pre-F1-fix code falsely accepted it.
-func TestVerifyArchtestCIExplicitShardCountRejectsSiblingStepEnvShadow(t *testing.T) {
+// TestVerifyArchtestCIExplicitShardCountRejectsMissingShardFlag covers the
+// case where the CLI step invokes `gocell verify archtest` but without any
+// --shard flag. Without --shard, the CLI runs ALL tests on every matrix
+// runner (no partitioning), defeating the shard fanout entirely.
+func TestVerifyArchtestCIExplicitShardCountRejectsMissingShardFlag(t *testing.T) {
 	body := []byte(`jobs:
   verify-archtest:
     strategy:
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
     steps:
-      - name: Build slowgate
-        env:
-          SHARD_COUNT: 24
-        run: go build -o "$RUNNER_TEMP/slowgate" ./tools/slowgate
-      - name: Verify archtest shard ${{ matrix.shard }}
-        env:
-          SHARD_TARGET: ${{ matrix.shard }}
-        run: bash hack/verify-archtest.sh
+      - name: Verify archtest shard
+        run: |
+          "$RUNNER_TEMP/gocell" verify archtest --timeout=5m
 `)
-	require.Error(t, validateVerifyArchtestExplicitShardCount(body))
+	require.Error(t, validateVerifyArchtestShardDenominator(body))
 }
 
-// TestVerifyArchtestCIExplicitShardCountRejectsNoInvocationStep covers the
-// case where the verify-archtest job exists but no step actually invokes
-// `hack/verify-archtest.sh` — e.g. someone renamed the step or split the
-// script out without updating the gate. matrix gate is sole CI archtest
-// entry (ADR §D6); silent removal must fail loudly.
-func TestVerifyArchtestCIExplicitShardCountRejectsNoInvocationStep(t *testing.T) {
-	body := []byte(`jobs:
-  verify-archtest:
-    strategy:
-      matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
-    steps:
-      - name: Build slowgate
-        env:
-          SHARD_COUNT: 24
-        run: go build -o "$RUNNER_TEMP/slowgate" ./tools/slowgate
-      - name: Echo only
-        env:
-          SHARD_COUNT: 24
-        run: echo "no script invocation"
-`)
-	require.Error(t, validateVerifyArchtestExplicitShardCount(body))
-}
-
-// archtestWorkflowConfig parses only the subset of _build-lint.yml needed
-// for the verify-archtest SHARD_COUNT assertion. Decoupled from
-// ci_pinning_test.go's workflowStep type so adding env doesn't risk
+// archtestWorkflowConfig parses only the subset of archtest-nightly.yml needed
+// for the verify-archtest shard denominator assertion. Decoupled from
+// ci_pinning_test.go's workflowStep type so adding fields doesn't risk
 // pin-check regressions.
 type archtestWorkflowConfig struct {
 	Jobs map[string]archtestWorkflowJob `yaml:"jobs"`
@@ -268,33 +229,63 @@ type archtestWorkflowMatrix struct {
 }
 
 type archtestWorkflowStep struct {
-	Name string            `yaml:"name"`
-	Env  map[string]string `yaml:"env"`
-	Run  string            `yaml:"run"`
+	Name string `yaml:"name"`
+	Run  string `yaml:"run"`
 }
 
-// validateVerifyArchtestExplicitShardCount enforces ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01:
+// extractShardDenominator parses the denominator K from a --shard=N/K flag in
+// a step's run block. Returns 0 and an error if no --shard flag is found or the
+// denominator is not a valid positive integer.
+func extractShardDenominator(run string) (int, error) {
+	// Match --shard=<anything>/<digits> or --shard <anything>/<digits>.
+	// We use a simpler approach: find "--shard" then scan for "/N" pattern.
+	idx := strings.Index(run, "--shard")
+	if idx == -1 {
+		return 0, fmt.Errorf("no --shard flag found in step run block")
+	}
+	// Extract the shard value after "--shard" (with = or space).
+	after := run[idx+len("--shard"):]
+	after = strings.TrimLeft(after, "= ")
+	// The value is "N/K" where N may be a template expression.
+	// Find the slash that separates N from K.
+	slashIdx := strings.Index(after, "/")
+	if slashIdx == -1 {
+		return 0, fmt.Errorf("--shard flag found but no '/' separator: %q", after)
+	}
+	// K starts after the slash; read digits until whitespace/end.
+	kStr := after[slashIdx+1:]
+	end := strings.IndexAny(kStr, " \t\n\r\\\"')")
+	if end != -1 {
+		kStr = kStr[:end]
+	}
+	k, err := strconv.Atoi(kStr)
+	if err != nil {
+		return 0, fmt.Errorf("--shard denominator %q is not a valid integer: %w", kStr, err)
+	}
+	if k <= 0 {
+		return 0, fmt.Errorf("--shard denominator must be > 0, got %d", k)
+	}
+	return k, nil
+}
+
+// validateVerifyArchtestShardDenominator enforces ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01
+// in its new shape after CLI migration (#1563):
 //
-//  1. Every step in jobs.verify-archtest that invokes `hack/verify-archtest.sh`
-//     must set `SHARD_COUNT=<expectedShardCount>` in **its own** `env:` block.
-//  2. The job's `strategy.matrix.shard` list must equal
-//     `[0, 1, …, expectedShardCount-1]` so every SHARD_TARGET produced by the
-//     matrix is actually executed.
+//  1. Every step in jobs.verify-archtest whose run block contains
+//     `verify archtest` must use a --shard=N/K flag where K == expectedShardTotal.
+//  2. The job's strategy.matrix.shard list must equal [0, 1, …, expectedShardTotal-1]
+//     so every N produced by the matrix is actually executed.
+//  3. The job must have at least one step invoking `verify archtest`.
 //
-// Why bound to the running step, not any step: GitHub Actions step env applies
-// only during that step's process. A dummy/setup step with `SHARD_COUNT: 24`
-// in env never reaches the verify-archtest.sh execution context — relying on
-// "any step has env" would let the real run step silently fall back to the
-// script default (K=1 → 20 GB peak RSS → GHA OOM).
+// Why denominator must match matrix length: archtestrunner.partition uses
+// --shard=N/K modulo arithmetic. If K != len(matrix.shard), some modulo
+// bucket N may be executed by multiple runners (overlap) or by none (gap),
+// silently corrupting test coverage.
 //
-// Why matrix is validated: without (2), bumping SHARD_COUNT from 16 to 24
-// while leaving `matrix.shard: [0..15]` would silently skip shards 16-23
-// (8 shards' tests never executed) and let regressions land unnoticed.
-//
-// Match-all semantics (not first-match): if multiple steps invoke the script,
-// every one must satisfy the contract (defense-in-depth against future yaml
-// refactors that split invocation across steps).
-func validateVerifyArchtestExplicitShardCount(body []byte) error {
+// Match-all semantics (not first-match): if multiple steps invoke the CLI,
+// every one must use the correct denominator (defense-in-depth against future
+// yaml refactors that split invocation across steps).
+func validateVerifyArchtestShardDenominator(body []byte) error {
 	var cfg archtestWorkflowConfig
 	dec := yaml.NewDecoder(bytes.NewReader(body))
 	if err := dec.Decode(&cfg); err != nil {
@@ -309,57 +300,56 @@ func validateVerifyArchtestExplicitShardCount(body []byte) error {
 	}
 	invocations := 0
 	for _, step := range job.Steps {
-		if !strings.Contains(step.Run, verifyArchtestScriptMarker) {
+		if !strings.Contains(step.Run, verifyArchtestCLIMarker) {
 			continue
 		}
 		invocations++
-		v, has := step.Env["SHARD_COUNT"]
-		if !has {
-			return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: step %q runs %s but its env "+
-				"is missing SHARD_COUNT; CI must explicit set SHARD_COUNT=%s on the same step "+
-				"(script default is 1 local-friendly; GHA step env is step-scoped — sibling step env does NOT apply). "+
-				"See ADR 202605120000 §Amendment 2026-05-23 + §Amendment 2026-05-28.",
-				step.Name, verifyArchtestScriptMarker, expectedShardCount)
+		k, err := extractShardDenominator(step.Run)
+		if err != nil {
+			return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: step %q invokes %q "+
+				"but the --shard flag is missing or malformed: %w; "+
+				"CI must pass --shard=N/%d so the partition denominator matches the "+
+				"matrix array length. See ADR 202605120000 §Amendment 2026-06-12 (#1563).",
+				step.Name, verifyArchtestCLIMarker, err, expectedShardTotal)
 		}
-		if v != expectedShardCount {
-			return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: step %q runs %s with SHARD_COUNT=%q; "+
-				"CI must set SHARD_COUNT=%s (GHA 7 GB shard RSS budget; see ADR 202605120000 §Amendment 2026-05-28)",
-				step.Name, verifyArchtestScriptMarker, v, expectedShardCount)
+		if k != expectedShardTotal {
+			return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: step %q invokes %q "+
+				"with --shard denominator %d; expected %d to match the matrix array length "+
+				"(mismatch causes tests to overlap or gap across shards). "+
+				"See ADR 202605120000 §Amendment 2026-06-12 (#1563).",
+				step.Name, verifyArchtestCLIMarker, k, expectedShardTotal)
 		}
 	}
 	if invocations == 0 {
-		return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: jobs.verify-archtest has no step running %s; "+
-			"matrix gate is the sole CI archtest entry, removal is a regression (see ADR 202605120000 §D6)",
-			verifyArchtestScriptMarker)
+		return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: jobs.verify-archtest has no step "+
+			"invoking %q; matrix gate is the sole CI archtest entry, removal is a regression "+
+			"(see ADR 202605120000 §D6). Add a step running `gocell verify archtest --shard=N/%d`.",
+			verifyArchtestCLIMarker, expectedShardTotal)
 	}
 	return nil
 }
 
 // validateMatrixShardCoverage asserts that strategy.matrix.shard equals the
-// contiguous sequence [0, 1, …, expectedShardCount-1]. Mismatch ⇒ some
-// SHARD_TARGET indices the script can produce will never be exercised in CI,
+// contiguous sequence [0, 1, …, expectedShardTotal-1]. Mismatch ⇒ some
+// --shard=N/K values the CLI can receive will never be exercised in CI,
 // silently masking regressions on those shards.
 func validateMatrixShardCoverage(shards []int) error {
-	exp, err := strconv.Atoi(expectedShardCount)
-	if err != nil {
-		return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: invalid expectedShardCount %q: %w",
-			expectedShardCount, err)
-	}
+	exp := expectedShardTotal
 	if len(shards) == 0 {
 		return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: jobs.verify-archtest.strategy.matrix.shard "+
-			"is empty; matrix must enumerate [0..%d] to cover every SHARD_TARGET produced under "+
-			"SHARD_COUNT=%s (see ADR 202605120000 §Amendment 2026-05-28)", exp-1, expectedShardCount)
+			"is empty; matrix must enumerate [0..%d] to cover every shard index produced under "+
+			"--shard=N/%d (see ADR 202605120000 §Amendment 2026-05-28)", exp-1, exp)
 	}
 	if len(shards) != exp {
 		return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: jobs.verify-archtest.strategy.matrix.shard "+
-			"has length %d; expected %d to match SHARD_COUNT=%s (see ADR 202605120000 §Amendment 2026-05-28)",
-			len(shards), exp, expectedShardCount)
+			"has length %d; expected %d to match --shard denominator %d (see ADR 202605120000 §Amendment 2026-05-28)",
+			len(shards), exp, exp)
 	}
 	for i, v := range shards {
 		if v != i {
 			return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: jobs.verify-archtest.strategy.matrix.shard[%d] "+
-				"= %d; expected the contiguous sequence [0..%d] so every SHARD_TARGET is covered "+
-				"(see ADR 202605120000 §Amendment 2026-05-28)", i, v, exp-1)
+				"= %d; expected the contiguous sequence [0..%d] so every --shard=N/%d invocation covers "+
+				"a distinct modulo bucket (see ADR 202605120000 §Amendment 2026-05-28)", i, v, exp-1, exp)
 		}
 	}
 	return nil

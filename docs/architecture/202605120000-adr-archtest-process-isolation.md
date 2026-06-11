@@ -560,3 +560,76 @@ single-owner 模型完整保留）。
 约定」整体替换为「bucket 注解派生 + generate-buckets 排除 + verify-bucket-coverage anti-vacuity
 守卫」，single-owner 从约定升级为机器派生。`VERIFY_SKIP` env 本身仍存在于驱动（通用 escape
 hatch），只是 governance CI 不再使用它。
+
+---
+
+## §Amendment 2026-06-12 (#1563) — archtest 执行入口迁移至 `gocell verify archtest` CLI
+
+### 触发
+
+#1563 在 `cmd/gocell/internal/archtestrunner` 实现了完整的 archtest runner Go API（discovery、
+partition、rule/changed filter、json artifact、slowgate 管道），并在 `cmd/gocell/app` 接线为
+`gocell verify archtest` 子命令（及顶层别名 `gocell archtest`）。本 amendment 把执行逻辑从
+`hack/verify-archtest.sh` 的 226 行 shell 迁移至该 CLI，shell 降为薄 passthrough。
+
+### 决策
+
+#### D1. hack/verify-archtest.sh 降为 thin passthrough
+
+文件缩减为 11 行，仅保留 `# verify-bucket: nightly` 头注解和 `exec go run ./cmd/gocell verify archtest "$@"`。
+所有逻辑（discovery、shard partition、slowgate piping、json artifact、DRY_RUN/LIST_SHARD_TESTS 模式）
+从 shell 删除，移入 Go CLI。passthrough 保留的唯一职责是为 verify-bucket 元系统（`lib/buckets.sh` /
+`verify-bucket-coverage.sh` / `make verify`）提供每 gate 的 bucket 注解入口。
+
+#### D2. archtest-nightly.yml 直接调用 CLI
+
+CI matrix 步骤从 `bash hack/verify-archtest.sh`（注入 SHARD_COUNT/SHARD_TARGET/SLOWGATE_BIN env）
+改为直接调用已构建的 `$RUNNER_TEMP/gocell` 二进制：
+
+```bash
+"$RUNNER_TEMP/gocell" verify archtest \
+  --shard=${{ matrix.shard }}/24 \
+  --timeout=5m \
+  --test-json-out="$RUNNER_TEMP/archtest-shard-${{ matrix.shard }}.json"
+"$RUNNER_TEMP/slowgate" --threshold=25s --allowlist=... \
+  < "$RUNNER_TEMP/archtest-shard-${{ matrix.shard }}.json"
+```
+
+新增 "Build gocell CLI" 步骤（`go build -o "$RUNNER_TEMP/gocell" ./cmd/gocell`），对齐 "Build slowgate" 范式。
+SHARD_COUNT/SHARD_TARGET/SLOWGATE_BIN/SLOWGATE_THRESHOLD env block 全部删除（现为显式 CLI flag）。
+
+#### D3. partition 算法单源迁移
+
+算法从 `hack/verify-archtest.sh::shard_assignment()` 的 `awk 'NR % n == s'` 迁移到
+`archtestrunner.partition()`（1-based NR mirror：`(i+1) % Total == Index`）。
+`ARCHTESTRUNNER-PARTITION-SOLE-SOURCE-01` archtest 守卫（`tools/archtest/archtest_verify_coverage_test.go`）
+已更新为通过 CLI `--list-tests` 和 `--shard=N/K --list-tests` 验证算法性质，不再 shell-out 到旧 env 变量接口。
+
+#### D4. ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01 invariant 重塑
+
+原守卫校验「CI step env 必须含 SHARD_COUNT=24」。CLI 迁移后 SHARD_COUNT env 不再存在，守卫重塑为：
+**`--shard=N/K` 的 K 必须等于 `matrix.shard` 数组长度**（即 K=24）。原有的 matrix 连续性检查保留。
+invariant ID 保持 `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01` 不变（避免 ADR 历史引用扫描）；
+新守卫函数 `validateVerifyArchtestShardDenominator` 替换原 `validateVerifyArchtestExplicitShardCount`。
+
+### 威胁矩阵重评（per ai-robust.md §"ADR amendment 落地必查"）
+
+| 原论点 | 在 amendment 下状态 | 处理 |
+|---|---|---|
+| §D1 「hack/verify-archtest.sh discovery + modulo 分片」 | ✅ 逻辑不变，载体从 shell 迁到 Go CLI；shell 降为 passthrough | `ARCHTESTRUNNER-PARTITION-SOLE-SOURCE-01` 守卫新单源 |
+| §D3 ARCHTEST-VERIFY-COVERAGE-01（discovery==AST + partition exactly-once） | ✅ 不变；调用入口从 env-var 接口改为 `--list-tests` / `--shard=N/K --list-tests` | 同 PR 更新测试 subprocess wiring |
+| §D5 slowgate 接入 | ✅ 不变；`--test-json-out` 写 json，CI 步骤 pipe 入 slowgate | 机制显式化（CLI flag 替代 env） |
+| §D6 single-owner 原则 | ✅ 不变；nightly 仍是 sole CI gate；make verify 仍走 passthrough K=1 | passthrough 保留 bucket 注解 |
+| §Amendment 2026-05-28 ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01 | ⚠️ 守卫逻辑重塑（SHARD_COUNT env → --shard denominator） | 同 PR 重写 `archtest_ci_shard_count_test.go`；fixture 集从 8 扩至 9（新增 missing-shard-flag）|
+| CI 本地并行 fan-out（SHARD_COUNT>1 无 SHARD_TARGET） | ❌ 移除（该路径在 shell 中，无自动化 caller，pre-push 已撤回） | 意图弃置：开发者本地 K=1 或 gocell verify archtest --shard=N/K 手动调用 |
+
+### 同 PR 同步载体
+
+| 载体 | 变更 |
+|---|---|
+| `hack/verify-archtest.sh` | 226 行 → 11 行 thin passthrough |
+| `.github/workflows/archtest-nightly.yml` | 新增 "Build gocell CLI" 步骤；"Verify archtest shard" 步骤改直接调用 CLI；删除 SHARD_COUNT/SHARD_TARGET/SLOWGATE_* env block |
+| `tools/archtest/archtest_verify_coverage_test.go` | subprocess 接口从 DRY_RUN/LIST_SHARD_TESTS env 改为 `--list-tests` / `--shard=N/K --list-tests` CLI flag |
+| `tools/archtest/archtest_ci_shard_count_test.go` | 守卫逻辑重塑（SHARD_COUNT env → --shard denominator）；fixture 集更新 |
+| `hack/README.md` | verify-archtest.sh 条目更新为 "thin passthrough"；记录 `gocell verify archtest` 为 canonical 本地入口 |
+| 本 ADR | 本 §Amendment 2026-06-12（本节）|
