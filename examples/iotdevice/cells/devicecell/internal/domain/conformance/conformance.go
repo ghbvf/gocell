@@ -453,7 +453,11 @@ func runMarkCertRenewalRequestedCAS(t *testing.T, factory DeviceRepoFactory, fea
 	if got.RenewalRequestedEpoch != 7 {
 		t.Fatalf("after mark epoch 7, RenewalRequestedEpoch = %d, want 7", got.RenewalRequestedEpoch)
 	}
-	if !got.RenewalRequestedAt.Equal(requestedAt) {
+	// Compare at microsecond precision: PG TIMESTAMPTZ stores microseconds and
+	// strips the monotonic clock reading, while the in-memory store keeps the
+	// exact time.Now() (nanosecond + monotonic). Truncating both sides keeps the
+	// shared suite green across mem + PG.
+	if !got.RenewalRequestedAt.Truncate(time.Microsecond).Equal(requestedAt.Truncate(time.Microsecond)) {
 		t.Fatalf("after mark, RenewalRequestedAt = %v, want %v", got.RenewalRequestedAt, requestedAt)
 	}
 
@@ -468,7 +472,7 @@ func runMarkCertRenewalRequestedCAS(t *testing.T, factory DeviceRepoFactory, fea
 	if err != nil {
 		t.Fatalf("GetByID after re-mark: %v", err)
 	}
-	if !got2.RenewalRequestedAt.Equal(laterRequestedAt) {
+	if !got2.RenewalRequestedAt.Truncate(time.Microsecond).Equal(laterRequestedAt.Truncate(time.Microsecond)) {
 		t.Fatalf("re-mark same epoch must refresh RenewalRequestedAt: got %v, want %v",
 			got2.RenewalRequestedAt, laterRequestedAt)
 	}
