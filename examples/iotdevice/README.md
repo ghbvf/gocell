@@ -66,7 +66,7 @@ export IOT_ADMIN_TOKEN="$(go run ./examples/iotdevice/localtoken)"
 go run ./examples/iotdevice
 ```
 
-The server starts with primary listener on `:8083` (API), internal listener on `:9083` (control-plane), and health listener on `127.0.0.1:9093` (`/healthz` `/readyz` `/metrics`).
+The server starts with primary listener on `:8083` (API), internal listener on `127.0.0.1:9083` (loopback control-plane), and health listener on `127.0.0.1:9093` (`/healthz` `/readyz` `/metrics`).
 `IOT_ADMIN_TOKEN` is a real RS256 access token signed by the local key above.
 The helper defaults to the roles needed by the walkthrough; override with
 `go run ./examples/iotdevice/localtoken -roles admin,role:operator,role:device`.

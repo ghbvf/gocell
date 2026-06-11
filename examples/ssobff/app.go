@@ -308,6 +308,9 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		// LIFO close: relay registered last → stopped first; relay must stop before pool closes.
 		bootstrap.WithRelay(relayWorker),
 		listenerOption(cell.PrimaryListener, cfg.primary, []kauth.ListenerAuth{primaryAuth}),
+		// internal defaults to loopback (see defaultSSOBFFAppConfig); the cell→cell
+		// control plane is never all-interfaces. Override GOCELL_SSOBFF_INTERNAL_ADDR
+		// + add a NetworkPolicy for a VPC deployment (docs/ops/listener-topology.md).
 		listenerOption(cell.InternalListener, cfg.internal, internalAuthChain),
 		listenerOption(cell.HealthListener, cfg.health, []kauth.ListenerAuth{kauth.AuthNone{}}),
 		bootstrap.WithHealthRoutes(healthRouteOptions()...),
