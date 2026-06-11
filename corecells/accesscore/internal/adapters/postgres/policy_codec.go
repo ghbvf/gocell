@@ -32,6 +32,11 @@ import (
 // invertCodeMap derives the reverse (code→enum) map from a forward (enum→code)
 // map. The forward map is the single source of truth for each enum's persisted
 // codes; deriving the reverse guarantees the two directions can never drift.
+//
+// Precondition: the forward map's values (codes) MUST be unique. Two enum values
+// sharing one code would silently lose one entry in the reverse map. This is
+// guarded by TestPolicyCodec_CodesAreUnique, not enforced here, so the helper
+// stays a pure derivation.
 func invertCodeMap[E comparable](forward map[E]string) map[string]E {
 	rev := make(map[string]E, len(forward))
 	for e, code := range forward {

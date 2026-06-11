@@ -81,6 +81,21 @@ codegen/golden change. A distinct `accesscore_policy_repo_ready` probe was
 considered and rejected as a disproportionate framework-level cellgen change for
 one cell.
 
+### D5 — `ListByTenant` is unpaginated (internal eval-time read path)
+
+`ListByTenant` returns ALL of a tenant's policies in one call, deliberately
+without the pagination that `go-standards.md` §安全检查点 mandates for *list
+endpoints*. This is not an HTTP list endpoint — it is the evaluator's eval-time
+read path (PR-7 full-loads every applicable policy per authorization decision),
+and per-tenant policy count is bounded by management-plane cardinality (policies
+are authored by administrators, not generated at data-plane scale). Paginating it
+would force cursor iteration into hot-path code for no benefit.
+
+**Constraint for PR-9**: the policymanage HTTP management surface (#1347) MUST add
+its own paginated list endpoint (`limit` ≤ 500, `data`/`nextCursor`/`hasMore`) — it
+must NOT re-export `ListByTenant`'s unbounded signature onto the wire. The
+exemption recorded here is scoped to the internal repository read path only.
+
 ## AI-robust ratings
 
 | Mechanism | Carrier | Rating |

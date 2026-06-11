@@ -54,6 +54,17 @@ func TestPolicyCodec_GoldenCodeMaps(t *testing.T) {
 	}, rowScopeToCode, "rowScope codes are frozen")
 }
 
+// TestPolicyCodec_CodesAreUnique guards invertCodeMap's precondition: each
+// forward map's codes are distinct, so the derived reverse map loses no entry. A
+// duplicate code (two enum values sharing one string) would silently corrupt the
+// decode direction — caught here because the reverse map would then be shorter.
+func TestPolicyCodec_CodesAreUnique(t *testing.T) {
+	assert.Len(t, effectFromCode, len(effectToCode), "effect codes must be unique")
+	assert.Len(t, operatorFromCode, len(operatorToCode), "operator codes must be unique")
+	assert.Len(t, sourceFromCode, len(sourceToCode), "attribute source codes must be unique")
+	assert.Len(t, rowScopeFromCode, len(rowScopeToCode), "rowScope codes must be unique")
+}
+
 // ─── exhaustive round-trip + anti-vacuity ──────────────────────────────────
 
 func TestPolicyCodec_EffectExhaustiveRoundTrip(t *testing.T) {

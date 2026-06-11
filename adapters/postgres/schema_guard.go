@@ -678,6 +678,8 @@ var expectedPKs = []expectedPK{
 	{Table: "roles", Columns: []string{"tenant_id", "id"}},
 	// 050: role_assignments PK is now (tenant_id, user_id, role_id).
 	{Table: "role_assignments", Columns: []string{"tenant_id", "user_id", "role_id"}},
+	// 058: policies PK is composite (tenant_id, id) — per-tenant ABAC policies (#1346 PR-8).
+	{Table: "policies", Columns: []string{"tenant_id", "id"}},
 	// audit_entries (020_audit_ledger.sql + 043_audit_entries_v2.sql rebuild)
 	{Table: "audit_entries", Columns: []string{"id"}},
 	// devices / commands (029, 030) — B2.B.

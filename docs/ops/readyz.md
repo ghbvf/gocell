@@ -374,7 +374,7 @@ connection Ping cannot detect.
 | Probe name | Owning Cell | Probed relation(s) | Backend |
 |---|---|---|---|
 | `configcore_repo_ready` | configcore | `config_entries`, `feature_flags` | PG only; mem stores always return nil (ready) |
-| `accesscore_repo_ready` | accesscore | `sessions` | PG only; mem stores always return nil (ready) |
+| `accesscore_repo_ready` | accesscore | `sessions`, `policies` | PG only; mem stores always return nil (ready). Composite — ready only when every probed relation is reachable (#1346) |
 | `auditcore_repo_ready` | auditcore | `audit_entries` (via `Tail`) | PG only; mem stores always return nil (ready) |
 
 ### Adapter-level: serving-role capability probe
@@ -401,9 +401,10 @@ ref: `docs/architecture/202606071200-1676-adr-restricted-app-serving-pool.md` §
 
 These probes are **not synonymous** with `postgres_ready`. A green `postgres_ready`
 and a failing `accesscore_repo_ready` means the PG connection is alive but the
-`sessions` table is inaccessible — a different remediation path (migration replay,
-permission grant) than a connection failure. Operators must monitor both probe
-families independently.
+`sessions` **or** `policies` table is inaccessible (the probe aggregates both and
+fails closed on the first not-ready relation) — a different remediation path
+(migration replay, permission grant) than a connection failure. Operators must
+monitor both probe families independently.
 
 Cell-level repo probe names appear in the verbose breakdown under `dependencies`:
 

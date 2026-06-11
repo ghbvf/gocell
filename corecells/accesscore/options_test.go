@@ -195,6 +195,33 @@ func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
 		"MemStore.RepoReady must return nil (in-memory always ready)")
 }
 
+// okProber / failingProber are minimal healthz.RepoProber stubs for the
+// composite-readiness test below.
+type okProber struct{}
+
+func (okProber) RepoReady(context.Context) error { return nil }
+
+type failingProber struct{ err error }
+
+func (f failingProber) RepoReady(context.Context) error { return f.err }
+
+// TestRepoReadyAll_FailClosed verifies the composite RepoProber that folds the
+// session + policy stores into accesscore_repo_ready: ready only when every
+// member is ready, returning the first not-ready member's error (fail-closed).
+func TestRepoReadyAll_FailClosed(t *testing.T) {
+	ctx := context.Background()
+
+	// Empty + all-ready composites report ready.
+	assert.NoError(t, repoReadyAll{}.RepoReady(ctx), "empty composite is vacuously ready")
+	assert.NoError(t, repoReadyAll{okProber{}, okProber{}}.RepoReady(ctx), "all-ready composite is ready")
+
+	// A single not-ready member makes the whole composite not-ready, surfacing
+	// that member's error unchanged.
+	wantErr := errors.New("policy store unreachable")
+	err := repoReadyAll{okProber{}, failingProber{err: wantErr}}.RepoReady(ctx)
+	assert.ErrorIs(t, err, wantErr, "composite must fail closed with the not-ready member's error")
+}
+
 func TestRegisterSubscriptions(t *testing.T) {
 	c := newTestCell(t)
 	ctx := context.Background()

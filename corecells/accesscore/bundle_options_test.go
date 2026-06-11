@@ -23,14 +23,16 @@ func TestWithMemBundle_WiresFourPrimitives(t *testing.T) {
 
 	assert.NotNil(t, c.userRepo, "WithMemBundle must wire userRepo")
 	assert.NotNil(t, c.roleRepo, "WithMemBundle must wire roleRepo")
+	assert.NotNil(t, c.policyRepo, "WithMemBundle must wire policyRepo")
 	assert.NotNil(t, c.setupLock, "WithMemBundle must wire setupLock")
 	assert.NotNil(t, c.txRunner, "WithMemBundle must wire txRunner")
 	assert.False(t, c.setupLockNil, "non-nil bundle must not flip setupLockNil sentinel")
 
-	// All four primitives are pointer-equal to what the Bundle exposes via
+	// All primitives are pointer-equal to what the Bundle exposes via
 	// its accessor methods — no double-wrap.
 	assert.Equal(t, b.UserRepository(), c.userRepo)
 	assert.Equal(t, b.RoleRepository(), c.roleRepo)
+	assert.Equal(t, b.PolicyRepository(), c.policyRepo)
 	assert.Equal(t, b.SetupLock(), c.setupLock)
 	assert.Equal(t, b.TxRunner(), c.txRunner)
 }
@@ -49,12 +51,14 @@ func TestWithPGBundle_WiresFourPrimitives(t *testing.T) {
 
 	assert.NotNil(t, c.userRepo, "WithPGBundle must wire userRepo")
 	assert.NotNil(t, c.roleRepo, "WithPGBundle must wire roleRepo")
+	assert.NotNil(t, c.policyRepo, "WithPGBundle must wire policyRepo (PGPolicyRepo)")
 	assert.NotNil(t, c.setupLock, "WithPGBundle must wire setupLock (PGSetupLock)")
 	assert.NotNil(t, c.txRunner, "WithPGBundle must wire txRunner (WrapForCell-wrapped)")
 	assert.False(t, c.setupLockNil)
 
 	assert.Equal(t, b.UserRepository(), c.userRepo)
 	assert.Equal(t, b.RoleRepository(), c.roleRepo)
+	assert.Equal(t, b.PolicyRepository(), c.policyRepo)
 	assert.Equal(t, b.SetupLock(), c.setupLock)
 	assert.Equal(t, b.TxRunner(), c.txRunner)
 }

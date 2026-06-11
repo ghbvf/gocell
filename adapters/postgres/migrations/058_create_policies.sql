@@ -61,6 +61,10 @@ CREATE POLICY tenant_isolation ON policies
     WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
 -- +goose Down
--- Reversible: dropping the table removes its tenant_isolation policy and RLS
--- flags with it. No pre-existing data is affected (the table is introduced here).
+-- Reversible: 058 INTRODUCES the table, so DROP TABLE removes the
+-- tenant_isolation policy and the RLS flags (relrowsecurity / relforcerowsecurity)
+-- atomically with it. No explicit DROP POLICY / NO FORCE / DISABLE is needed here
+-- (contrast migration 053, which ENABLE+FORCE RLS on PRE-EXISTING tables and must
+-- therefore restore those flags individually in its Down). No pre-existing data is
+-- affected.
 DROP TABLE IF EXISTS policies;

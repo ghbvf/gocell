@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -17,6 +18,16 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/tenant"
 )
+
+// policyCreatedAt reads the policies.created_at column directly (bypassing the
+// repo) so tests can assert the upsert preserves it.
+func policyCreatedAt(t *testing.T, pool *adapterpg.Pool, tid tenant.TenantID, id string) time.Time {
+	t.Helper()
+	var createdAt time.Time
+	require.NoError(t, pool.DB().QueryRow(context.Background(),
+		`SELECT created_at FROM policies WHERE tenant_id = $1 AND id = $2`, string(tid), id).Scan(&createdAt))
+	return createdAt
+}
 
 // setupPolicyRepoPG clones the package-shared pre-migrated template database into
 // a fresh per-test DB and returns a PGPolicyRepo + Pool (for tests that need
@@ -91,11 +102,12 @@ func TestPGPolicyRepo_NestedPolicyRoundTrip(t *testing.T) {
 // replaces the row atomically (ON CONFLICT DO UPDATE) rather than failing on a
 // duplicate key or creating a second row.
 func TestPGPolicyRepo_UpsertReplace(t *testing.T) {
-	repo, _ := setupPolicyRepoPG(t)
+	repo, pool := setupPolicyRepoPG(t)
 	ctx := context.Background()
 	tid := newIntegrationTenant(t)
 
 	require.NoError(t, repo.Save(ctx, tid, richPolicy("pol-x", tid)))
+	createdAt1 := policyCreatedAt(t, pool, tid, "pol-x")
 
 	v2 := &abac.Policy{
 		ID:       "pol-x",
@@ -110,14 +122,21 @@ func TestPGPolicyRepo_UpsertReplace(t *testing.T) {
 	assert.Equal(t, "Replaced", got.Name)
 	assert.Len(t, got.Rules, 1, "replaced policy must reflect the new rule set")
 
+	// The ON CONFLICT clause advances updated_at but must NOT touch created_at —
+	// guards against a future SQL edit that adds created_at = EXCLUDED.created_at.
+	assert.Equal(t, createdAt1, policyCreatedAt(t, pool, tid, "pol-x"),
+		"upsert must preserve the original created_at")
+
 	list, err := repo.ListByTenant(ctx, tid)
 	require.NoError(t, err)
 	assert.Len(t, list, 1, "upsert must not create a duplicate row")
 }
 
 // TestPGPolicyRepo_CorruptRulesRow_FailsClosed inserts a row carrying an unknown
-// enum code directly (bypassing the codec) and asserts the read fails closed with
-// ErrPGSchemaShape rather than silently mis-decoding a stored policy.
+// enum code directly (bypassing the codec) and asserts BOTH read paths fail closed
+// with ErrPGSchemaShape — GetByID and ListByTenant (the evaluator's hot path) must
+// classify a corrupt/forward-incompatible row identically, never silently
+// mis-decoding a stored policy.
 func TestPGPolicyRepo_CorruptRulesRow_FailsClosed(t *testing.T) {
 	repo, pool := setupPolicyRepoPG(t)
 	ctx := context.Background()
@@ -130,9 +149,20 @@ func TestPGPolicyRepo_CorruptRulesRow_FailsClosed(t *testing.T) {
 		[]byte(`[{"id":"r1","name":"x","effect":"permit","obligations":{}}]`))
 	require.NoError(t, err)
 
-	_, err = repo.GetByID(ctx, tid, "pol-corrupt")
-	require.Error(t, err, "a row with an unknown enum code must fail closed, not silently mis-decode")
-	var ec *errcode.Error
-	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrPGSchemaShape, ec.Code, "corrupt rules JSON → ErrPGSchemaShape")
+	assertSchemaShape := func(t *testing.T, err error) {
+		t.Helper()
+		require.Error(t, err, "an unknown enum code must fail closed, not silently mis-decode")
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.ErrPGSchemaShape, ec.Code, "corrupt rules JSON → ErrPGSchemaShape")
+	}
+
+	t.Run("GetByID", func(t *testing.T) {
+		_, err := repo.GetByID(ctx, tid, "pol-corrupt")
+		assertSchemaShape(t, err)
+	})
+	t.Run("ListByTenant", func(t *testing.T) {
+		_, err := repo.ListByTenant(ctx, tid)
+		assertSchemaShape(t, err)
+	})
 }

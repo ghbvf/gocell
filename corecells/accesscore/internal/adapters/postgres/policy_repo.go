@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -100,8 +99,10 @@ WHERE tenant_id = $1`
 	// deletePolicySQL: $1=tenant_id, $2=id.
 	deletePolicySQL = `DELETE FROM policies WHERE tenant_id = $1 AND id = $2`
 
-	// policyRepoReadySQL is the readiness probe — table reachability only.
-	policyRepoReadySQL = `SELECT 1 FROM policies LIMIT 1`
+	// policyRepoReadySQL is the readiness probe — table reachability only. The
+	// `WHERE false` predicate returns zero rows without a scan (mirrors the
+	// session/ledger PG stores).
+	policyRepoReadySQL = `SELECT 1 FROM policies WHERE false`
 )
 
 // Save persists or replaces the policy within the tenant (upsert by the
@@ -116,10 +117,13 @@ func (r *PGPolicyRepo) Save(ctx context.Context, t tenant.TenantID, p *abac.Poli
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: policy must not be nil")
 	}
 	if p.TenantID != t {
+		// A TenantID mismatch is a programmer error, not user input — the tenant
+		// identifiers go to the server log only (WithInternal), never the wire,
+		// so a future HTTP caller (PR-9) cannot read back an isolation-domain id.
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: policy TenantID does not match the provided tenant",
-			errcode.WithDetails(
-				errcode.PublicString("policyTenantId", string(p.TenantID)),
-				errcode.PublicString("tenantId", string(t)),
+			errcode.WithInternal(
+				errcode.InternalAttr("policyTenantId", string(p.TenantID)),
+				errcode.InternalAttr("tenantId", string(t)),
 			))
 	}
 	if err := p.Validate(); err != nil {
@@ -175,6 +179,14 @@ func (r *PGPolicyRepo) ListByTenant(ctx context.Context, t tenant.TenantID) ([]*
 	for rows.Next() {
 		p, scanErr := scanPolicy(rows, t)
 		if scanErr != nil {
+			// Preserve ErrPGSchemaShape (corrupt/forward-incompatible rules row)
+			// instead of flattening it to ErrInternal — ListByTenant is the
+			// evaluator's hot path, so the decode-failure classification must
+			// survive here exactly as it does in GetByID.
+			var ec *errcode.Error
+			if errors.As(scanErr, &ec) && ec.Code == errcode.ErrPGSchemaShape {
+				return nil, scanErr
+			}
 			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "policy_repo: scan policy", scanErr)
 		}
 		result = append(result, p)
@@ -201,15 +213,17 @@ func (r *PGPolicyRepo) Delete(ctx context.Context, t tenant.TenantID, id string)
 	return nil
 }
 
-// RepoReady verifies that the policies table is reachable via a lightweight
-// probe query. pgx.ErrNoRows means the table exists but is empty — healthy.
-// Registered into the cell-level readiness probe via the composite RepoProber
-// in cell_init (#1346 PR-8, T8.4).
+// RepoReady verifies that the policies table is reachable via a cheap
+// non-transactional probe (`SELECT 1 FROM policies WHERE false` returns zero rows
+// without a scan; success means the relation is reachable). Under FORCE RLS with
+// no app.tenant_id GUC set the predicate is already empty, so readiness does not
+// depend on a tenant scope and the fail-closed isolation stays intact. Errors are
+// wrapped through errcode for uniform classification (mirrors the session/ledger
+// PG stores). Registered into the cell-level readiness probe via the composite
+// RepoProber in cell_init (#1346 PR-8, T8.4).
 func (r *PGPolicyRepo) RepoReady(ctx context.Context) error {
-	var dummy int
-	err := r.db.QueryRow(ctx, policyRepoReadySQL).Scan(&dummy)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("policy_repo: readiness probe: %w", err)
+	if _, err := r.db.Exec(ctx, policyRepoReadySQL); err != nil {
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "policy_repo: readiness probe", err)
 	}
 	return nil
 }
