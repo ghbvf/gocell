@@ -165,7 +165,9 @@ jobs:
     permissions:
       contents: write # push annotated tag + create/delete GitHub Release
     env:
-      GH_TOKEN: ${{ github.token }}
+      # GH_TOKEN (write-scope) is deliberately NOT set at job level — it is scoped
+      # per-step to only the `gh release` API steps, so the repo-code steps
+      # (modrelease `go run`, git tag/push via checkout creds) never see it.
       TAG: ${{ needs.verify.outputs.tag }}
       PRERELEASE: ${{ needs.verify.outputs.prerelease }}
       SHA: ${{ needs.verify.outputs.sha }}
@@ -177,20 +179,19 @@ jobs:
           fetch-tags: true
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
-        # Stable releases run the modrelease tool (bump + tag-path derivation);
-        # snapshots are root-only git operations and need no Go.
-        if: needs.verify.outputs.tag_exists != 'true' && needs.verify.outputs.prerelease != 'true'
+        # Stable (fresh OR resume) runs the modrelease tool (bump / tag-path
+        # derivation / resume tag-set validation); snapshots are root-only git ops.
+        if: needs.verify.outputs.prerelease != 'true'
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
       - name: Pin internal requires & commit (stable only)
         # Synchronized multi-module release (#1843): pin every publishable LIBRARY
-        # module's internal requires v0.0.0 -> vX.Y.Z (keeping replace) on a commit
-        # pushed to develop — the single tag target for root and all satellites.
-        # develop thereafter carries the released version (replace still resolves
-        # locally under GOWORK=off, so verify-workspace stays green; filesystem
-        # replace needs no go.sum, so go.sum is untouched). Snapshots skip this.
+        # module's internal requires v0.0.0 -> vX.Y.Z (keeping replace) on a local
+        # commit — the single tag target for root and all satellites. It is NEITHER
+        # pushed NOR tagged here: the pinned tree is first re-verified (next step),
+        # so the released commit is never an unverified tree (F1). Snapshots skip.
         if: needs.verify.outputs.tag_exists != 'true' && needs.verify.outputs.prerelease != 'true'
         run: |
           set -euo pipefail
@@ -206,17 +207,23 @@ jobs:
               | tee -a "$GITHUB_STEP_SUMMARY"
           else
             git commit -am "release($TAG): pin internal module requires"
-            # A non-fast-forward push means develop advanced since verify (often a
-            # prior pin commit in this same release). Surface a clear ::error:: +
-            # summary: the operator must RE-DISPATCH from the new develop HEAD, not
-            # "Re-run jobs" (re-run replays the stale verified SHA). Also requires
-            # branch protection to permit the github-actions bot to push to develop.
-            if ! git push origin "HEAD:develop"; then
-              echo "::error::push to develop rejected (non-fast-forward, or bot lacks branch-protection write). develop has advanced since verify resolved SHA=$SHA — RE-DISPATCH this workflow from the new develop HEAD (do NOT 'Re-run jobs', which replays the stale SHA)." \
-                | tee -a "$GITHUB_STEP_SUMMARY"
-              exit 1
-            fi
           fi
+
+      - name: Verify pinned tree (stable only)
+        # The verify job ran the build gates on the PRE-pin develop SHA. Re-run the
+        # release-consistency gates on the actual pin commit so the tagged tree is
+        # the verified tree, not just the pre-pin one (F1). Runs before any push or
+        # tag, so a failure leaves develop unadvanced and no tag minted. Skips when
+        # the pin was a no-op (HEAD == SHA, already verified).
+        if: needs.verify.outputs.tag_exists != 'true' && needs.verify.outputs.prerelease != 'true'
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse HEAD)" = "$SHA" ]; then
+            echo "pin was a no-op (HEAD == verified SHA) — skipping re-verify."
+            exit 0
+          fi
+          make check-build
+          bash hack/verify-workspace.sh
 
       - name: Tag modules
         # Root always tags at HEAD. Stable additionally tags every publishable
@@ -225,11 +232,12 @@ jobs:
         # contain the root tag, and is pushed --atomic so a partial set never
         # lands. Snapshots tag root only.
         #
-        # Resume invariant: the verify job's tag_exists check inspects only the
-        # ROOT tag. Correctness of resuming a half-finished stable release relies
-        # on this --atomic push — root + satellites land all-or-nothing, so the
-        # root tag's presence faithfully reflects the whole set. If --atomic is
-        # ever dropped, the resume guard must be extended to check satellites too.
+        # Resume: the verify job's tag_exists check inspects only the ROOT tag.
+        # The --atomic push makes root + satellites land all-or-nothing, so the root
+        # tag normally reflects the whole set — but on a stable resume the next step
+        # ("Validate satellite tag set") additionally proves every satellite tag
+        # exists and peels to the same commit, fail-closed (F3), rather than
+        # trusting the atomic invariant alone.
         if: needs.verify.outputs.tag_exists != 'true'
         run: |
           set -euo pipefail
@@ -254,12 +262,50 @@ jobs:
             echo "### Release $TAG — tagging ${#tags[@]} modules"
             printf -- '- %s\n' "${tags[@]}"
           } >>"$GITHUB_STEP_SUMMARY"
+          # Push the now-verified pin commit to develop (only if one was created).
+          # A non-fast-forward push means develop advanced since verify (often a
+          # prior pin commit in this same release): the operator must RE-DISPATCH
+          # from the new develop HEAD, not "Re-run jobs" (re-run replays the stale
+          # SHA). Requires branch protection to permit the github-actions bot push.
+          if [ "$(git rev-parse HEAD)" != "$SHA" ]; then
+            if ! git push origin "HEAD:develop"; then
+              echo "::error::push to develop rejected (non-fast-forward, or bot lacks branch-protection write). develop has advanced since verify resolved SHA=$SHA — RE-DISPATCH this workflow from the new develop HEAD (do NOT 'Re-run jobs', which replays the stale SHA)." \
+                | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+          fi
           for tag in "${tags[@]}"; do
             git tag -a "$tag" -m "Release $tag"
           done
           git push origin --atomic "${tags[@]}"
 
+      - name: Validate satellite tag set (stable resume)
+        # On resume the root tag exists but the GitHub Release is missing. tag_exists
+        # is set off the ROOT tag only, so before creating the release prove the FULL
+        # synchronized set is present and consistent: every derived tag must exist
+        # and peel to the same commit as the root tag, else fail closed (F3). This
+        # catches a prior run that tagged root but lost the satellite --atomic push.
+        if: needs.verify.outputs.tag_exists == 'true' && needs.verify.outputs.prerelease != 'true'
+        run: |
+          set -euo pipefail
+          root_commit="$(git rev-parse "$TAG^{commit}")"
+          mapfile -t tags < <(go run ./tools/modrelease/cmd --version "$TAG" --print-tag-paths)
+          [ "${#tags[@]}" -ge 2 ] || { echo "::error::derived tag set too small (${#tags[@]})."; exit 1; }
+          missing=0
+          for tag in "${tags[@]}"; do
+            if ! c="$(git rev-parse -q --verify "refs/tags/$tag^{commit}" 2>/dev/null)"; then
+              echo "::error::resume: satellite tag '$tag' is missing (root tagged but satellite set incomplete)."
+              missing=1
+            elif [ "$c" != "$root_commit" ]; then
+              echo "::error::resume: tag '$tag' points at $c, not the root tag commit $root_commit."
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || { echo "::error::resume aborted: satellite tag set incomplete/inconsistent — delete the partial tags and re-dispatch." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }
+
       - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }} # write-scope token scoped to the gh API step only (F5)
         run: |
           set -euo pipefail
           args=(--title "$TAG" --verify-tag --generate-notes)
@@ -280,6 +326,8 @@ jobs:
 
       - name: Prune old daily snapshots
         if: needs.verify.outputs.prerelease == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }} # write-scope token scoped to the gh API step only (F5)
         run: |
           set -euo pipefail
           if ! printf '%s' "$DAILY_RETENTION" | grep -Eq '^[1-9][0-9]*$'; then

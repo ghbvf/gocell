@@ -103,6 +103,24 @@ func TestBumpModule(t *testing.T) {
 			wantRequires: []string{"github.com/ghbvf/gocell/adapters/s3"},
 		},
 		{
+			name: "block-form exclude/retract with internal path untouched, require bumped",
+			in: "module gocell.example/x\n\ngo 1.25\n\n" +
+				"require github.com/ghbvf/gocell/adapters/s3 v0.0.0\n\n" +
+				"exclude (\n" +
+				"\tgithub.com/ghbvf/gocell v0.0.0\n" +
+				"\tgithub.com/ghbvf/gocell/adapters/redis v0.0.0\n" +
+				")\n\n" +
+				"retract (\n\tv0.0.1\n)\n",
+			want: "module gocell.example/x\n\ngo 1.25\n\n" +
+				"require github.com/ghbvf/gocell/adapters/s3 v1.2.3\n\n" +
+				"exclude (\n" +
+				"\tgithub.com/ghbvf/gocell v0.0.0\n" +
+				"\tgithub.com/ghbvf/gocell/adapters/redis v0.0.0\n" +
+				")\n\n" +
+				"retract (\n\tv0.0.1\n)\n",
+			wantRequires: []string{"github.com/ghbvf/gocell/adapters/s3"},
+		},
+		{
 			name: "sibling-namespace false-match guard (gocellxyz must NOT match)",
 			in: "module gocell.example/x\n\ngo 1.25\n\n" +
 				"require github.com/ghbvf/gocellxyz/foo v0.4.0\n" +
@@ -227,9 +245,11 @@ func TestBumpTree(t *testing.T) {
 // the real workspace.
 func TestTagPaths(t *testing.T) {
 	root := workspaceRootForTest(t)
-	for _, bad := range []string{"1.2.3", "v1.2", "v1.2.3-rc1+meta", ""} {
+	// Non-canonical and v2+ (Go semantic import versioning: no /vN module path)
+	// must all be rejected.
+	for _, bad := range []string{"1.2.3", "v1.2", "v1.2.3-rc1+meta", "", "v2.0.0", "v3.1.4"} {
 		if _, err := TagPaths(root, bad); err == nil {
-			t.Errorf("TagPaths must reject non-canonical version %q", bad)
+			t.Errorf("TagPaths must reject version %q", bad)
 		}
 	}
 	tags, err := TagPaths(root, testVersion)

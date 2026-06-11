@@ -103,6 +103,39 @@ func TestExternalGet_IncompleteSet_Fails(t *testing.T) {
 	}
 }
 
+// TestExternalGet_AllPublishable_Build extends the probe-only green path to EVERY
+// publishable module: a consumer that imports each one in turn must compile
+// against the bumped publish, deepening into that module's own internal closure.
+// This proves the synchronized release makes the WHOLE set externally consumable,
+// not just the postgres probe (the detailed go get / go list assertions stay on
+// the probe in TestExternalGet_Bumped_Resolves).
+func TestExternalGet_AllPublishable_Build(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping all-module external build smoke in -short mode")
+	}
+	goBin := mustGo(t)
+	root := repoRoot(t)
+	proxy := buildProxy(t, root, synthVersion)
+	env := offlineEnv(t, proxy)
+
+	mods, err := modrelease.PublishableModules(root)
+	if err != nil {
+		t.Fatalf("PublishableModules: %v", err)
+	}
+	if len(mods) < 10 {
+		t.Fatalf("anti-vacuity: only %d publishable modules enumerated", len(mods))
+	}
+	for _, m := range mods {
+		t.Run(m.ImportPath, func(t *testing.T) {
+			consumer := newConsumerRequiring(t, m.ImportPath, synthVersion)
+			if out, err := run(goBin, consumer, env, "build", "./..."); err != nil {
+				t.Fatalf("RELEASE-EXTERNAL-GET-01: external build against published %s@%s failed:\n%s",
+					m.ImportPath, synthVersion, out)
+			}
+		})
+	}
+}
+
 // buildProxy publishes every publishable module at version into a fresh file
 // GOPROXY directory and returns its path. When bump is true each module's go.mod
 // is release-bumped first; otherwise the as-committed go.mod (with v0.0.0) is used.

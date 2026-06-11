@@ -119,23 +119,40 @@ func PublishableModules(root string) ([]workspace.Module, error) {
 // by the following \s+, so a sibling namespace like github.com/ghbvf/gocellxyz
 // cannot false-match.
 //
-// Out of scope: a BLOCK-form `exclude (` / `retract (` whose inner line carries an
-// internal path (no keyword on that line) WOULD match and be rewritten. This is
-// acceptable — excluding or retracting one's own sibling module is nonsensical and
-// no GoCell go.mod contains it. require blocks are the only multi-line form the
-// bump targets; single-line exclude/retract is keyword-anchored and safe (covered
-// by a test). This sealed assumption is documented rather than guarded because the
-// red case cannot occur in a well-formed monorepo go.mod.
+// A BLOCK-form `exclude (` / `retract (` whose inner line carries an internal path
+// (no keyword on that line) would otherwise match this regex; [bumpModuleRE] guards
+// it with a small block-context state machine that skips lines inside those blocks
+// (see [blockOpens]). require blocks are the only multi-line form the bump targets;
+// single-line exclude/retract is keyword-anchored and never matches. Both forms are
+// covered by tests.
 func internalRequireRE(prefix string) *regexp.Regexp {
 	return regexp.MustCompile(
 		`^(\s*(?:require\s+)?)(` + regexp.QuoteMeta(prefix) + `(?:/\S+)?)(\s+)(v\S+)(.*)$`,
 	)
 }
 
-// validReleaseVersion checks version is a canonical semver tag (e.g. "v1.2.3").
+// blockOpens reports whether trimmed (a whitespace-trimmed line) opens a go.mod
+// directive block for keyword — i.e. `<keyword> (`, tolerating inner whitespace.
+func blockOpens(trimmed []byte, keyword string) bool {
+	if !bytes.HasPrefix(trimmed, []byte(keyword)) {
+		return false
+	}
+	rest := bytes.TrimLeft(trimmed[len(keyword):], " \t")
+	return string(rest) == "("
+}
+
+// validReleaseVersion checks version is a canonical semver tag (e.g. "v1.2.3")
+// whose major is v0 or v1. A v2+ major requires the module path to end in /vN
+// (Go semantic import versioning), which no gocell module carries yet — so a v2
+// release would mint unresolvable adapters/postgres/v2.0.0-style tags. Reject it
+// until that path migration lands. ref: https://go.dev/blog/v2-go-modules
 func validReleaseVersion(version string) error {
 	if !semver.IsValid(version) || semver.Canonical(version) != version {
 		return fmt.Errorf("modrelease: version %q is not a canonical semver tag (want e.g. v1.2.3)", version)
+	}
+	if m := semver.Major(version); m != "v0" && m != "v1" {
+		return fmt.Errorf("modrelease: version %q has major %s; gocell modules have no /vN path suffix, "+
+			"so v2+ tags would be unresolvable (Go semantic import versioning) — migrate module paths to /vN first", version, m)
 	}
 	return nil
 }
@@ -161,31 +178,61 @@ func bumpModuleRE(dir string, re *regexp.Regexp, version string) (Result, error)
 	if err != nil {
 		return Result{}, fmt.Errorf("modrelease: read go.mod: %w", err)
 	}
-
-	lines := bytes.Split(data, []byte("\n"))
-	var requires []string
-	for i, line := range lines {
-		m := re.FindSubmatch(line)
-		if m == nil {
-			continue
-		}
-		path, oldVer := string(m[2]), string(m[4])
-		if oldVer == version {
-			continue // idempotent
-		}
-		requires = append(requires, path)
-		lines[i] = []byte(string(m[1]) + path + string(m[3]) + version + string(m[5]))
-	}
+	out, requires := rewriteRequires(data, re, version)
 	if len(requires) == 0 {
 		return Result{Dir: dir}, nil // no write: nothing internal to bump
 	}
 	// 0o600: BumpModule only rewrites EXISTING go.mod files, so the mode arg is
 	// inert (os.WriteFile preserves an existing file's permissions); 0o600
 	// satisfies gosec G306 without altering the real go.mod mode.
-	if err := os.WriteFile(p, bytes.Join(lines, []byte("\n")), 0o600); err != nil {
+	if err := os.WriteFile(p, out, 0o600); err != nil {
 		return Result{}, fmt.Errorf("modrelease: write go.mod: %w", err)
 	}
 	return Result{Dir: dir, Requires: requires}, nil
+}
+
+// rewriteRequires returns go.mod bytes with every internal require version bumped
+// to version (and the list of bumped paths). Lines inside an `exclude (` /
+// `retract (` block are skipped — an internal-path line there carries a version
+// and would otherwise match and corrupt the directive; require blocks ARE
+// rewritten (that is the bump target). Single-line exclude/retract is
+// keyword-anchored and never matches, so only the block form needs the guard.
+func rewriteRequires(data []byte, re *regexp.Regexp, version string) ([]byte, []string) {
+	lines := bytes.Split(data, []byte("\n"))
+	var requires []string
+	inExcludeRetract := false
+	for i, line := range lines {
+		trimmed := bytes.TrimSpace(line)
+		switch {
+		case blockOpens(trimmed, "exclude") || blockOpens(trimmed, "retract"):
+			inExcludeRetract = true
+		case inExcludeRetract:
+			if string(trimmed) == ")" {
+				inExcludeRetract = false
+			}
+		default:
+			if newLine, path := bumpRequireLine(line, re, version); path != "" {
+				lines[i] = newLine
+				requires = append(requires, path)
+			}
+		}
+	}
+	return bytes.Join(lines, []byte("\n")), requires
+}
+
+// bumpRequireLine rewrites a single internal require line's version to version,
+// returning the new line and the matched module path. It returns ("", path="")
+// when line is not an internal require or is already at version (idempotent).
+func bumpRequireLine(line []byte, re *regexp.Regexp, version string) ([]byte, string) {
+	m := re.FindSubmatch(line)
+	if m == nil {
+		return nil, ""
+	}
+	path, oldVer := string(m[2]), string(m[4])
+	if oldVer == version {
+		return nil, "" // idempotent
+	}
+	return []byte(string(m[1]) + path + string(m[3]) + version + string(m[5])), path
 }
 
 // BumpTree rewrites the internal require versions of every publishable module
