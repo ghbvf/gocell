@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # verify-bucket: workspace
 # verify-workspace asserts the go.work workspace is consistent and every member
-# module builds against its own pinned module graph (GOWORK=off). The
-# module-enumeration funnel (hack/lib/modules.sh, sourced from go.work) is the
-# single source for cross-module traversal. Per-module `go test` is intentionally
-# NOT run here (see step d) — that would duplicate the build-test matrix and
-# slow `make verify`; test traversal reuses the same funnel in CI / a future
-# workspace-test gate.
+# module both BUILDS and RESOLVES ITS FULL MODULE GRAPH against its own pinned
+# go.mod (GOWORK=off go build + go list -m all). `go build ./...` alone uses lazy
+# module loading and would pass even when a transitive `replace` closure is
+# incomplete or go.sum is missing a transitive go.mod checksum; `go list -m all`
+# loads the complete graph and closes that gap (#1558). The module-enumeration
+# funnel (hack/lib/modules.sh, sourced from go.work) is the single source for
+# cross-module traversal. Per-module `go test` is intentionally NOT run here (see
+# step d) — that would duplicate the build-test matrix and slow `make verify`;
+# test traversal reuses the same funnel in CI / a future workspace-test gate.
 
 set -euo pipefail
 
@@ -71,10 +74,11 @@ if ! git diff --exit-code -- "${drift_paths[@]}"; then
     exit 1
 fi
 
-# (d) Build each module with GOWORK=off so it resolves against its OWN pinned
-# go.mod (release-consistent, Plan D §5.6), not the workspace-stitched graph.
-# This is the cross-module BUILD traversal extension point; per-module `go test`
-# is deliberately not run here (see file header).
+# (d) Build each module AND resolve its full module graph with GOWORK=off so it
+# resolves against its OWN pinned go.mod (release-consistent, Plan D §5.6), not the
+# workspace-stitched graph. This is the cross-module BUILD + module-graph traversal
+# extension point; per-module `go test` is deliberately not run here (see file
+# header).
 build_out="$(mktemp -d)"
 trap 'rm -rf "${build_out}"' EXIT
 for dir in "${module_dirs[@]}"; do
@@ -91,6 +95,17 @@ for dir in "${module_dirs[@]}"; do
     fi
     if ! GOWORK=off "${build_cmd[@]}"; then
         gocell::log::error "go build ./... failed in module '${dir}' (GOWORK=off)"
+        exit 1
+    fi
+    # Resolve the FULL module graph. The lazy `go build` above passes even with an
+    # incomplete transitive `replace` closure (replace is non-transitive) or a
+    # go.sum missing a transitive go.mod checksum, because those modules are not in
+    # the pruned build graph. `go list -m all` loads the complete graph and
+    # fails-fast on either — the release-consistency property `go build` cannot
+    # assert on its own (#1558).
+    gocell::log::status "Resolving module graph (GOWORK=off go list -m all): ${dir}"
+    if ! GOWORK=off go -C "${dir}" list -m all >/dev/null; then
+        gocell::log::error "go list -m all failed in module '${dir}' (GOWORK=off) — incomplete transitive replace closure or missing go.sum entry"
         exit 1
     fi
 done

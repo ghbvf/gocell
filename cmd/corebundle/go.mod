@@ -34,6 +34,12 @@ require (
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
+	github.com/ghbvf/gocell/adapters/adapterutil v0.0.0 // indirect
+	github.com/ghbvf/gocell/adapters/postgres v0.0.0
+	github.com/ghbvf/gocell/adapters/prometheus v0.0.0
+	github.com/ghbvf/gocell/adapters/ratelimit v0.0.0 // indirect
+	github.com/ghbvf/gocell/adapters/redis v0.0.0
+	github.com/ghbvf/gocell/adapters/vault v0.0.0
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
@@ -116,3 +122,20 @@ replace github.com/ghbvf/gocell/cellmodules => ../../cellmodules
 replace github.com/ghbvf/gocell/tools => ../../tools
 
 replace github.com/ghbvf/gocell/corecells => ../../corecells
+
+replace github.com/ghbvf/gocell/adapters/adapterutil => ../../adapters/adapterutil
+
+// mqtt enters the full module graph transitively (via tools / cellmodules) but is
+// not a direct require here; Go replace is non-transitive, so it must be declared
+// for GOWORK=off `go list -m all` to resolve its unpublished v0.0.0.
+replace github.com/ghbvf/gocell/adapters/mqtt => ../../adapters/mqtt
+
+replace github.com/ghbvf/gocell/adapters/postgres => ../../adapters/postgres
+
+replace github.com/ghbvf/gocell/adapters/prometheus => ../../adapters/prometheus
+
+replace github.com/ghbvf/gocell/adapters/ratelimit => ../../adapters/ratelimit
+
+replace github.com/ghbvf/gocell/adapters/redis => ../../adapters/redis
+
+replace github.com/ghbvf/gocell/adapters/vault => ../../adapters/vault

@@ -26,6 +26,9 @@ require (
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
+	github.com/ghbvf/gocell/adapters/adapterutil v0.0.0 // indirect
+	github.com/ghbvf/gocell/adapters/postgres v0.0.0
+	github.com/ghbvf/gocell/adapters/ratelimit v0.0.0
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
@@ -85,3 +88,9 @@ require (
 replace github.com/ghbvf/gocell => ../../
 
 replace github.com/ghbvf/gocell/corecells => ../../corecells
+
+replace github.com/ghbvf/gocell/adapters/adapterutil => ../../adapters/adapterutil
+
+replace github.com/ghbvf/gocell/adapters/postgres => ../../adapters/postgres
+
+replace github.com/ghbvf/gocell/adapters/ratelimit => ../../adapters/ratelimit

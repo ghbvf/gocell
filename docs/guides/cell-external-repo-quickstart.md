@@ -180,6 +180,8 @@ builder := composition.New(cellIDs...).
 
 **Execution bridge**: `composition.Build()` itself does **not** run migrations (the schema must be in place before cells start, and `runtime/` must not depend on `adapters/`). In the composition root (which can import both layers), drain the registered migration set into `adapters/postgres.MigrationSet` and apply it **before** `Build` — `NewMigrationSetWithPlatform` places the platform namespace first (platform-first ordering guarantees: external cell migrations can FK platform tables):
 
+> **Note (per-adapter module split, #1558)**: `adapters/postgres` — like every `adapters/*` — is now a **separate satellite module** (`github.com/ghbvf/gocell/adapters/postgres`), no longer part of the root `github.com/ghbvf/gocell` module. The release pipeline currently tags only the root (`@v0.1.0`), not per-adapter tags (`adapters/postgres/vX.Y.Z`) — the same limitation already noted above for `go install .../cmd/gocell@vX.Y.Z`. Consequently `go get github.com/ghbvf/gocell@v0.1.0` does **not** pull `adapters/postgres`, and `go get github.com/ghbvf/gocell/adapters/postgres@<version>` cannot resolve yet. Until per-adapter release tags exist, an external composition root that needs this PG migration bridge must consume the adapter via a Go workspace / local `replace` (Workspace Mode, §5 above). Per-adapter release tagging is planned for a future release (tracked under the #1558 adapter-split epic).
+
 ```go
 set, err := adapterpg.NewMigrationSetWithPlatform() // seeds "platform" first
 if err != nil { return err }

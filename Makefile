@@ -226,7 +226,7 @@ test-integration:
 	# corecells is its own go.work module (#1560); root ./corecells/... matches
 	# zero packages. Run the root packages first, then run corecells in-module.
 	GOCELL_TEST_DOCKER_REQUIRED=1 go test -tags=integration,e2e \
-		./adapters/... \
+		github.com/ghbvf/gocell/adapters/... \
 		github.com/ghbvf/gocell/tests/integration/... \
 		./tests/e2e/internal/... \
 		github.com/ghbvf/gocell/cmd/corebundle/... \
@@ -252,7 +252,7 @@ test-integration-cluster:
 		echo "GOCELL_TEST_REDIS_CLUSTER_ADDRS is unset; cluster tests will skip."; \
 		echo "Launch grokzen/redis-cluster locally and export the seed addresses first."; \
 	fi
-	go test -tags=integration_cluster ./adapters/redis/... -count=1 -timeout 5m -v
+	go test -tags=integration_cluster github.com/ghbvf/gocell/adapters/redis/... -count=1 -timeout 5m -v
 
 # ---------------------------------------------------------------------------
 # examples/ssobff startup smoke
