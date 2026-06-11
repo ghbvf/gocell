@@ -1614,6 +1614,46 @@ func TestConsumerBase_ObserveReject_PanicingObserver_DoesNotEscape(t *testing.T)
 		"expected a log line mentioning observer panic, but found none in captured slog output")
 }
 
+// TestConsumerBase_RetryExhausted_PanicingObserver_LogsViaInjectedLogger guards
+// the SECOND SafeObserve site — the retry-exhausted reject path. The
+// handler-reject panic test above only exercises the first site; this one pins
+// that the retry-exhausted SafeObserve logger also derives from the injected
+// cb.logger (it previously used slog.Default(), so its recovered-panic log
+// escaped buffer capture under injection). Fails RED if that site regresses
+// back to slog.Default().
+func TestConsumerBase_RetryExhausted_PanicingObserver_LogsViaInjectedLogger(t *testing.T) {
+	t.Parallel()
+	logger, buf := newCapturingLogger()
+
+	receipt := &fakeReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		RetryCount:           1,
+		RetryBaseDelay:       time.Millisecond,
+		LeaseRenewalInterval: disableLeaseRenewal,
+		Logger:               logger,
+	}, clock.Real())
+	require.NoError(t, err)
+	require.NoError(t, cb.AttachObserver(&panicingObserver{}))
+
+	sub := Subscription{Topic: "event.test.v1", ConsumerGroup: "cg-test", CellID: "testcell"}
+	handler := cb.Wrap(sub, func(_ context.Context, _ Entry) HandleResult {
+		return Requeue(errors.New("always fail")) // exhausts RetryCount → retry-exhausted reject
+	})
+
+	require.NotPanics(t, func() {
+		_, _ = handler(context.Background(), Entry{id: "evt-retry-exhausted-panic"})
+	}, "panic from ObserveReject on the retry-exhausted path must NOT escape the Wrap handler")
+
+	// SafeObserve logs the recovered panic via the logger it is given. Asserting
+	// the exact "observability hook panic" message proves it reached the INJECTED
+	// buffer (cb.logger), not slog.Default(); a loose substring match would not
+	// discriminate the two SafeObserve loggers.
+	assert.Contains(t, buf.String(), "observability hook panic",
+		"retry-exhausted observer-panic log must be captured via the injected logger (cb.logger), not slog.Default()")
+}
+
 // panicingObserver is a ConsumerObserver that always panics in ObserveReject,
 // used to verify panic isolation in ConsumerBase.Wrap.
 type panicingObserver struct{}

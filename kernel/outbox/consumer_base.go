@@ -139,6 +139,10 @@ type ConsumerBaseConfig struct {
 	// in SetDefaults, so production callers need not set it. Tests inject a
 	// buffer-backed logger here to capture output without mutating the global
 	// slog default (slog.SetDefault races with t.Parallel() siblings).
+	//
+	// ConsumerBase takes the logger as a config field (not a WithLogger option
+	// like DirectEmitter) because SetDefaults resolves the nil fallback once at
+	// construction.
 	Logger *slog.Logger
 }
 
@@ -669,7 +673,7 @@ func (cb *ConsumerBase) retryLoop(
 		slog.Int("retry_count", cb.config.RetryCount),
 		slog.String("process_reason", ProcessReasonRetryExhausted),
 		slog.Any("error", lastResult.Err))
-	observability.SafeObserve(slog.Default().With(
+	observability.SafeObserve(cb.logger.With(
 		slog.String("cell", cellID),
 		slog.String("topic", topic),
 		slog.String("consumer_group", consumerGroup),
