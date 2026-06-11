@@ -235,7 +235,7 @@ func (w *tokenRenewalWorker) Start(ctx context.Context) error {
 	// pkg/manager/runnable_group.Start — readiness flips only when Start
 	// is actually invoked.
 	if w.metrics != nil {
-		w.metrics.authHealthy.Set(1)
+		w.metrics.authHealthy.Set(ctx, 1)
 	}
 
 	for {
@@ -268,7 +268,7 @@ func (w *tokenRenewalWorker) Start(ctx context.Context) error {
 // or (nil, false) if ctx was canceled.
 func (w *tokenRenewalWorker) doReauth(ctx context.Context) (tokenWatcher, bool) {
 	if w.metrics != nil {
-		w.metrics.authHealthy.Set(0)
+		w.metrics.authHealthy.Set(ctx, 0)
 	}
 	watcherBackoff := reauthBackoffInitial
 	for {
@@ -282,7 +282,7 @@ func (w *tokenRenewalWorker) doReauth(ctx context.Context) (tokenWatcher, bool) 
 		newWatcher, err := w.buildWatcher(ctx)
 		if err == nil {
 			if w.metrics != nil {
-				w.metrics.authHealthy.Set(1)
+				w.metrics.authHealthy.Set(ctx, 1)
 			}
 			return newWatcher, true
 		}
@@ -343,7 +343,7 @@ func (w *tokenRenewalWorker) handleDoneCh(ctx context.Context, err error, ok boo
 		return true
 	}
 	if w.metrics != nil {
-		w.metrics.renewFailure.Inc()
+		w.metrics.renewFailure.Inc(ctx)
 	}
 	if err != nil {
 		w.logger.WarnContext(ctx, "vault-transit: token renewal watcher stopped with error; will re-authenticate",
@@ -367,7 +367,7 @@ func (w *tokenRenewalWorker) handleRenewCh(ctx context.Context, renewal *vaultap
 	w.logger.InfoContext(ctx, "vault-transit: token renewed",
 		slog.Int("lease_duration", renewal.Secret.Auth.LeaseDuration))
 	if w.metrics != nil {
-		w.metrics.renewSuccess.Inc()
+		w.metrics.renewSuccess.Inc(ctx)
 	}
 	return false
 }
@@ -386,13 +386,13 @@ func (w *tokenRenewalWorker) reauthenticate(ctx context.Context) error {
 		_, err := w.authMethod.Login(ctx)
 		if err == nil {
 			if w.metrics != nil {
-				w.metrics.loginOutcome.WithLabelValues(methodStr, "success", reasonNone).Inc()
+				w.metrics.recordLoginOutcome(ctx, methodStr, "success", reasonNone)
 			}
 			return nil
 		}
 		reason := classifyAuthLoginError(err)
 		if w.metrics != nil {
-			w.metrics.loginOutcome.WithLabelValues(methodStr, "failure", reason).Inc()
+			w.metrics.recordLoginOutcome(ctx, methodStr, "failure", reason)
 		}
 		w.logger.WarnContext(ctx, "vault-transit: re-authentication failed; will retry",
 			slog.String("method", methodStr),
@@ -711,7 +711,7 @@ func NewTransitKeyProvider(
 	}
 	if metrics == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
-			"vault-transit: metrics is required (use vault.NewTransitMetrics(reg) and pass it in)")
+			"vault-transit: metrics is required (use vault.NewTransitMetrics(provider) and pass it in)")
 	}
 	if mountPath == "" {
 		mountPath = "transit"
@@ -761,11 +761,11 @@ func (p *TransitKeyProvider) authenticate(ctx context.Context) (AuthResult, erro
 	methodStr := string(p.authMethod.Method())
 	result, err := p.authMethod.Login(ctx)
 	if err != nil {
-		p.metrics.loginOutcome.WithLabelValues(methodStr, "failure", classifyAuthLoginError(err)).Inc()
+		p.metrics.recordLoginOutcome(ctx, methodStr, "failure", classifyAuthLoginError(err))
 		return AuthResult{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-transit: initial authentication failed", err)
 	}
-	p.metrics.loginOutcome.WithLabelValues(methodStr, "success", reasonNone).Inc()
+	p.metrics.recordLoginOutcome(ctx, methodStr, "success", reasonNone)
 	return result, nil
 }
 

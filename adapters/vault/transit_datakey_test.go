@@ -15,8 +15,6 @@ import (
 	"strings"
 	"testing"
 
-	prom "github.com/prometheus/client_golang/prometheus"
-
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -155,10 +153,7 @@ func newMalformedDatakeyHandle(t *testing.T, response map[string]any) (*fakeVaul
 		fake.lastWriteData = data
 		return response, nil
 	}
-	metrics, mErr := NewTransitMetrics(prom.NewRegistry())
-	if mErr != nil {
-		t.Fatalf("NewTransitMetrics: %v", mErr)
-	}
+	metrics := newTestTransitMetrics(t)
 	p, err := NewTransitKeyProvider(context.Background(), fake,
 		"transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"), clock.Real(), metrics)
 	if err != nil {

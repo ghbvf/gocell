@@ -306,9 +306,9 @@ func TestMetricsFunnel_SymbolSentinel(t *testing.T) {
 	}
 
 	// Outer ring sentinel: adapters/prometheus must not gain unexpected New*/Register*
-	// prefix exports. Factory exports (NewMetricProvider, NewHookObserver) are
-	// intentionally excluded — we only lock the five funnel-shape symbols.
-	// Any new New*/Register* export not in adapterPromAllowedNewRegisterExports
+	// prefix exports. After issue #885 only the two factory exports remain
+	// (NewMetricProvider, NewHookObserver) — the five outer-ring passthrough wrappers
+	// were deleted. Any new New*/Register* export not in adapterPromAllowedNewRegisterExports
 	// must be explicitly acknowledged in the same PR.
 	outerRingObserved := make(map[string]struct{})
 	outerScan := func(p *Pass) []Diagnostic {
@@ -370,65 +370,31 @@ func TestMetricsFunnel_SymbolSentinel(t *testing.T) {
 // Adding a new public symbol to adapters/prometheus is locked by
 // TestMetricsFunnel_SymbolSentinel (extended to cover this package).
 //
-// # Vault single-file scope (PR #879)
+// # #885 completed
 //
-// The four vault instrument constructors (NewCounter, NewCounterVec, NewGauge,
-// NewGaugeFunc) are pinned to adapters/vault/transit_metrics.go — the dedicated
-// metric construction module extracted by issue #879. No other file in the vault
-// subtree may call these; the per-symbol single-file scope is the funnel form
-// enforced here.
+// The five outer-ring passthrough wrappers (RegisterOrReuseCounter, NewCounter,
+// NewCounterVec, NewGauge, NewGaugeFunc) were deleted in issue #885 when
+// adapters/vault migrated all metric construction to kernel/observability/metrics.Provider.
+// The outer-ring funnel surface is now empty; the inner-ring funnel is enforced solely
+// by Go internal/ visibility on adapters/prometheus/internal/promwrap (Hard constraint).
 //
-// # Funnel grade for the vault entries
-//
-// Upstream (Medium): caller identity is checked by file path against this
-// hand-maintained allowlist. Go has no friend-file mechanism, so
-// archtest-bound file-path matching is the highest tier reachable for
-// file-level funnels in the Go type system.
-//
-// Downstream (Hard): callee resolved via *types.Info to (pkgPath, name);
-// form-uniqueness on (callee-pkg, callee-name) via ResolvePackageRef — alias
-// and dot-import collapse to the same resolved key, so there is no
-// "looks-like-but-isn't" gray zone.
-//
-// Hard upstream upgrade: tracked in gh issue #885 — vault migrates
-// loginOutcome and the remaining bare instrument calls to
-// kernel/observability/metrics.Provider, which seals the outer-ring funnel
-// surface entirely. Once #885 lands, these four entries and the public
-// NewCounter/NewCounterVec/NewGauge/NewGaugeFunc exports are deleted.
-var adapterPromCallerAllowlist = map[string]map[string]struct{}{
-	// RegisterOrReuseCounter has no production caller: configcore's stale-cipher
-	// counter migrated to the kernel MetricsProvider (runtime/observability/metrics)
-	// in #1413, so cmd/corebundle no longer builds it from a raw prom registry. The
-	// symbol stays governed (empty allowlist = no sanctioned external caller); a
-	// future caller must add its file here with justification.
-	"RegisterOrReuseCounter": {},
-	"NewCounter":             {"adapters/vault/transit_metrics.go": {}},
-	// NewCounterVec is a labeled-metric carve-out pending removal (issue #885):
-	// vault's loginOutcome migrates to metrics.Provider.CounterVec, after which
-	// this entry and the public NewCounterVec are deleted. Do NOT add callers.
-	"NewCounterVec": {"adapters/vault/transit_metrics.go": {}},
-	"NewGauge":      {"adapters/vault/transit_metrics.go": {}},
-	"NewGaugeFunc":  {"adapters/vault/transit_metrics.go": {}},
-}
+// This map is kept as the authoritative governance gate: any new outer-ring symbol
+// added to adapters/prometheus must appear here with a justification, and any caller
+// must be co-located in the same PR.
+var adapterPromCallerAllowlist = map[string]map[string]struct{}{}
 
 // adapterPromAllowedNewRegisterExports is the complete set of New*/Register*
 // prefix exports expected in adapters/prometheus. Used by
 // TestMetricsFunnel_SymbolSentinel to detect unexpected new funnel-shape
 // symbols. Any new New*/Register* export must be added here explicitly.
 //
-// Two categories:
-//   - Funnel symbols (also in adapterPromCallerAllowlist): the five passthrough
-//     wrappers for adapter-external callers blocked by Go internal/ closure.
+// After issue #885 the five outer-ring passthrough wrappers
+// (RegisterOrReuseCounter, NewCounter, NewCounterVec, NewGauge, NewGaugeFunc)
+// were deleted. Only the factory exports remain:
 //   - Factory exports (NewMetricProvider, NewHookObserver): structural factory
 //     constructors, NOT instrument construction funnels; they do not need
 //     caller allowlist entries because they are not instrument wrapping paths.
 var adapterPromAllowedNewRegisterExports = map[string]struct{}{
-	// Funnel passthrough wrappers — also locked by adapterPromCallerAllowlist.
-	"RegisterOrReuseCounter": {},
-	"NewCounter":             {},
-	"NewCounterVec":          {},
-	"NewGauge":               {},
-	"NewGaugeFunc":           {},
 	// Factory exports — structural constructors, not instrument funnels.
 	"NewMetricProvider": {},
 	"NewHookObserver":   {},
@@ -436,24 +402,22 @@ var adapterPromAllowedNewRegisterExports = map[string]struct{}{
 
 // TestAdapterPromCallerAllowlist enforces METRICS-ADAPTERPROM-CALLER-ALLOWLIST-01.
 //
-// The five public funnel functions in adapters/prometheus exist for adapter-
-// external callers (adapters/vault, cmd/corebundle) that cannot reach the
-// internal/promwrap subtree due to Go internal/ closure. Any new caller must
-// extend adapterPromCallerAllowlist in the same PR — preventing silent funnel
-// expansion.
+// After issue #885, the outer-ring funnel surface of adapters/prometheus is empty:
+// the five passthrough wrappers (RegisterOrReuseCounter, NewCounter, NewCounterVec,
+// NewGauge, NewGaugeFunc) were deleted when adapters/vault migrated to
+// kernel/observability/metrics.Provider. adapterPromCallerAllowlist now has no entries.
 //
-// # Funnel grade: Medium upstream + Hard downstream
+// This test is kept active as a regression gate: any new outer-ring symbol added
+// to adapters/prometheus with an external caller must extend the allowlist here in
+// the same PR. The BS-A1/BS-A2 reverse self-check below ensures no existing code
+// references a funnel symbol as a value (which would bypass the direct-call rule).
 //
-// Downstream (Hard): callee resolved via *types.Info to the five symbols;
-// form-uniqueness via callee-name set lookup.
+// # Funnel grade: Hard (inner ring enforced by Go internal/ visibility)
 //
-// Upstream (Medium): caller is checked by file path against a hand-maintained
-// allowlist. Go has no friend-package mechanism and functions cannot be
-// sealed, so this is the highest tier reachable for function-level funnels
-// in the Go type system (parallels panicregister.Approved archtest-bound
-// ceiling). Long-term Hard upgrade path tracked in issue #885 — vault &
-// cmd/corebundle migrate to kernel/observability/metrics.Provider so the
-// outer ring (and these five functions) disappear entirely.
+// The inner-ring funnel is now solely governed by Go internal/ closure on
+// adapters/prometheus/internal/promwrap — a compile-time Hard constraint with no
+// escape hatch. The outer-ring Medium caller-allowlist remains as a governance
+// gate for any future outer-ring symbol additions.
 //
 // # Blind spots & reverse self-checks
 //
@@ -800,12 +764,10 @@ func checkPromBannedConstructor(fset *token.FileSet, call *ast.CallExpr, rel str
 		Line: line,
 		Message: fmt.Sprintf(
 			"METRICS-GAUGEVEC-FUNNEL-01: %s calls forbidden %s.%s; "+
-				"route through kernel/observability/metrics.Provider for labeled metrics, "+
-				"OR (adapter-external bare/Func variants only) use adapters/prometheus."+
-				"{NewCounter,NewGauge,NewGaugeFunc} — Go internal/ closure "+
-				"blocks direct adapters/prometheus/internal/promwrap imports outside the "+
-				"prometheus adapter subtree (NewCounterVec is a vault-only carve-out "+
-				"pending removal, not a remedy here — see issue #885)",
+				"route through kernel/observability/metrics.Provider — "+
+				"Go internal/ closure blocks direct adapters/prometheus/internal/promwrap "+
+				"imports outside the prometheus adapter subtree; the outer-ring passthrough "+
+				"wrappers were removed in issue #885",
 			rel, bannedPromPkg, name,
 		),
 	}

@@ -4,7 +4,6 @@ go 1.25.11
 
 require (
 	github.com/ghbvf/gocell v0.0.0
-	github.com/ghbvf/gocell/adapters/prometheus v0.0.0
 	github.com/hashicorp/vault/api v1.23.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2

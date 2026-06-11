@@ -1,28 +1,54 @@
 package vault
 
 import (
-	"errors"
-	"strings"
+	"context"
 	"testing"
 
 	prom "github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
+
+	promadapter "github.com/ghbvf/gocell/adapters/prometheus"
 )
 
-func TestNewTransitMetrics_RegistersAllCollectors(t *testing.T) {
+// buildTestMetrics is a test helper that builds a TransitMetrics using a
+// fresh Prometheus registry via promadapter.NewMetricProvider. It returns
+// both the registry (for scraping) and the constructed *TransitMetrics.
+// Use this when the test needs to scrape metric values from the registry.
+func buildTestMetrics(t *testing.T) (*prom.Registry, *TransitMetrics) {
+	t.Helper()
 	reg := prom.NewRegistry()
-	m, err := NewTransitMetrics(reg)
+	provider, err := promadapter.NewMetricProvider(promadapter.MetricProviderConfig{
+		Registry:  reg,
+		Namespace: "gocell",
+	})
+	if err != nil {
+		t.Fatalf("NewMetricProvider: %v", err)
+	}
+	m, err := NewTransitMetrics(provider)
 	if err != nil {
 		t.Fatalf("NewTransitMetrics: %v", err)
 	}
 	if m == nil {
 		t.Fatal("NewTransitMetrics returned nil metrics on success")
 	}
+	return reg, m
+}
+
+// newTestTransitMetrics is a test helper that builds a TransitMetrics using a
+// fresh Prometheus registry. Use this when the test only needs a valid
+// *TransitMetrics and does not need to scrape metric values from the registry.
+func newTestTransitMetrics(t *testing.T) *TransitMetrics {
+	t.Helper()
+	_, m := buildTestMetrics(t)
+	return m
+}
+
+func TestNewTransitMetrics_RegistersAllCollectors(t *testing.T) {
+	reg, m := buildTestMetrics(t)
 
 	// Seed loginOutcome so its CounterVec family appears in Gather() (CounterVec
 	// families are absent until at least one labeled child is observed).
-	m.loginOutcome.WithLabelValues("token", "success", "none").Add(0)
+	m.recordLoginOutcome(context.Background(), "token", "success", "none")
 
 	families, err := reg.Gather()
 	if err != nil {
@@ -49,76 +75,13 @@ func TestNewTransitMetrics_RegistersAllCollectors(t *testing.T) {
 	// authHealthy must default to 0 (worker transitions 0→1 after start);
 	// constructing TransitMetrics without ever starting a renewal worker
 	// must not produce a false-green healthy signal.
-	if v := testutil.ToFloat64(m.authHealthy); v != 0 {
-		t.Errorf("authHealthy at construction = %v, want 0 (worker starts at 0; transitions to 1 only after Start)", v)
-	}
-}
-
-func TestNewTransitMetrics_DuplicateRegistrationFails(t *testing.T) {
-	reg := prom.NewRegistry()
-	if _, err := NewTransitMetrics(reg); err != nil {
-		t.Fatalf("first NewTransitMetrics: %v", err)
-	}
-	_, err := NewTransitMetrics(reg)
-	if err == nil {
-		t.Fatal("second NewTransitMetrics on same registry: want error, got nil")
-	}
-	var are prom.AlreadyRegisteredError
-	if !errors.As(err, &are) {
-		t.Errorf("want AlreadyRegisteredError in chain; got %v (%T)", err, err)
-	}
-	if !strings.Contains(err.Error(), "register transit metric") {
-		t.Errorf("error message should identify vault transit metric registration site; got %q", err.Error())
-	}
-}
-
-// TestNewTransitMetrics_PartialRegistrationRollsBack verifies the rollback
-// branch of NewTransitMetrics: when the Nth collector (N>1) fails, every
-// previously-registered collector must be Unregister'd so the registry is
-// restored to its pre-call state. Without this, a later retry — or a second
-// caller — would see stale half-registered collectors and the registry would
-// leak the failed-call's first (N-1) collectors.
-//
-// Strategy: pre-register a counter conflicting with the 2nd collector
-// (token_renew_failure_total). NewTransitMetrics will register #1 (success),
-// fail on #2 (conflict), roll back #1. Verify by attempting to standalone-
-// register the #1 collector — if rollback worked, it succeeds; if rollback
-// is broken, the registry still holds #1 and the standalone Register fails.
-func TestNewTransitMetrics_PartialRegistrationRollsBack(t *testing.T) {
-	reg := prom.NewRegistry()
-	conflict := prom.NewCounter(prom.CounterOpts{
-		Namespace: "gocell",
-		Subsystem: "vault",
-		Name:      "token_renew_failure_total", // 2nd in NewTransitMetrics's collector slice
-		Help:      "pre-registered conflict to force NewTransitMetrics to fail at position N>1",
-	})
-	if err := reg.Register(conflict); err != nil {
-		t.Fatalf("pre-register conflict: %v", err)
-	}
-
-	if _, err := NewTransitMetrics(reg); err == nil {
-		t.Fatal("NewTransitMetrics: want error from 2nd-collector conflict, got nil")
-	}
-
-	// If rollback worked, the 1st collector (token_renew_success_total) was
-	// unregistered. Re-register it standalone — must succeed.
-	standalone := prom.NewCounter(prom.CounterOpts{
-		Namespace: "gocell",
-		Subsystem: "vault",
-		Name:      "token_renew_success_total",
-		Help:      "Number of successful Vault token renewals.",
-	})
-	if err := reg.Register(standalone); err != nil {
-		t.Fatalf("rollback failed: token_renew_success_total still registered after NewTransitMetrics rollback: %v", err)
+	if got := scrapeGauge(t, reg, "gocell_vault_token_auth_healthy"); got != 0 {
+		t.Errorf("authHealthy at construction = %v, want 0 (worker starts at 0; transitions to 1 only after Start)", got)
 	}
 }
 
 func TestTransitMetrics_StoreCachedVersion_GaugeReflectsValue(t *testing.T) {
-	reg := prom.NewRegistry()
-	m, err := NewTransitMetrics(reg)
-	if err != nil {
-		t.Fatalf("NewTransitMetrics: %v", err)
-	}
+	reg, m := buildTestMetrics(t)
 
 	cases := []struct {
 		name string
@@ -150,27 +113,24 @@ func TestTransitMetrics_StoreCachedVersion_GaugeReflectsValue(t *testing.T) {
 // the metric set directly models exactly the writes that the worker performs,
 // and the registry observation is the same shape as a Prometheus scrape.
 func TestTransitMetrics_CountersAccumulateAcrossProviderReplacement(t *testing.T) {
-	reg := prom.NewRegistry()
-	m, err := NewTransitMetrics(reg)
-	if err != nil {
-		t.Fatalf("NewTransitMetrics: %v", err)
-	}
+	reg, m := buildTestMetrics(t)
+	ctx := context.Background()
 
 	// Provider A activity.
-	m.renewSuccess.Inc()
-	m.renewSuccess.Inc()
-	m.renewSuccess.Inc()
-	m.renewFailure.Inc()
-	m.loginOutcome.WithLabelValues("approle", "success", "none").Inc()
+	m.renewSuccess.Inc(ctx)
+	m.renewSuccess.Inc(ctx)
+	m.renewSuccess.Inc(ctx)
+	m.renewFailure.Inc(ctx)
+	m.recordLoginOutcome(ctx, "approle", "success", "none")
 	m.StoreCachedVersion(5)
 
 	// "Replace provider" — nothing happens at the registry level; the new
 	// provider simply receives the same *TransitMetrics pointer. Modeled by
 	// continuing to drive the same metric set.
-	m.renewSuccess.Inc()
-	m.renewSuccess.Inc()
-	m.loginOutcome.WithLabelValues("approle", "success", "none").Inc()
-	m.loginOutcome.WithLabelValues("approle", "failure", "transient").Inc()
+	m.renewSuccess.Inc(ctx)
+	m.renewSuccess.Inc(ctx)
+	m.recordLoginOutcome(ctx, "approle", "success", "none")
+	m.recordLoginOutcome(ctx, "approle", "failure", "transient")
 	m.StoreCachedVersion(9)
 
 	if got := scrapeCounter(t, reg, "gocell_vault_token_renew_success_total"); got != 5 {
@@ -192,6 +152,33 @@ func TestTransitMetrics_CountersAccumulateAcrossProviderReplacement(t *testing.T
 	}
 	if failureVal != 1 {
 		t.Errorf("auth_login_total{failure} = %v, want 1", failureVal)
+	}
+}
+
+// TestNewTransitMetrics_ReuseOnDuplicateProvider verifies that calling
+// NewTransitMetrics twice on the SAME MetricProvider succeeds without error
+// (the kernel Provider reuses existing registrations on duplicate names).
+func TestNewTransitMetrics_ReuseOnDuplicateProvider(t *testing.T) {
+	reg := prom.NewRegistry()
+	provider, err := promadapter.NewMetricProvider(promadapter.MetricProviderConfig{
+		Registry:  reg,
+		Namespace: "gocell",
+	})
+	if err != nil {
+		t.Fatalf("NewMetricProvider: %v", err)
+	}
+
+	m1, err := NewTransitMetrics(provider)
+	if err != nil {
+		t.Fatalf("first NewTransitMetrics: %v", err)
+	}
+	m2, err := NewTransitMetrics(provider)
+	if err != nil {
+		t.Fatalf("second NewTransitMetrics on same provider: %v", err)
+	}
+	// Both handles are valid instruments on the same underlying registry.
+	if m1 == nil || m2 == nil {
+		t.Fatal("expected non-nil *TransitMetrics from both calls")
 	}
 }
 
@@ -217,8 +204,7 @@ func scrapeCounter(t *testing.T, reg *prom.Registry, name string) float64 {
 }
 
 // scrapeGauge returns the value of a single-sample Gauge / GaugeFunc family
-// by metric name. Shared with transit_provider_test.go and
-// transit_renewal_metrics_test.go.
+// by metric name.
 func scrapeGauge(t *testing.T, reg *prom.Registry, name string) float64 {
 	t.Helper()
 	families, err := reg.Gather()
@@ -240,8 +226,12 @@ func scrapeGauge(t *testing.T, reg *prom.Registry, name string) float64 {
 }
 
 // scrapeCounterVec returns the value of a CounterVec sample matching the given
-// label set exactly. Used by tests that need to inspect labeled counters
-// without depending on textfile format helpers.
+// label set exactly. Fatals if the family exists but the label set is not found.
+// Fatals if the family does not exist (use tryGatherCounterVec for polling loops).
+// name is kept explicit for parity with scrapeCounter/scrapeGauge and call-site
+// readability even though vault exposes a single CounterVec today.
+//
+//nolint:unparam // metric name parameterised for parity with scrapeCounter/scrapeGauge
 func scrapeCounterVec(t *testing.T, reg *prom.Registry, name string, labels map[string]string) float64 {
 	t.Helper()
 	families, err := reg.Gather()
@@ -260,6 +250,67 @@ func scrapeCounterVec(t *testing.T, reg *prom.Registry, name string, labels map[
 		t.Fatalf("counter vec %q has no sample with labels %v", name, labels)
 	}
 	t.Fatalf("counter vec %q not found; available: %v", name, familyNames(families))
+	return 0
+}
+
+// tryGatherCounterVec is like scrapeCounterVec but returns 0 (no fatal) when
+// the metric family or label set is not yet present. Use this in polling
+// condition lambdas where the metric may not exist on the first few polls.
+func tryGatherCounterVec(reg *prom.Registry, name string, labels map[string]string) float64 {
+	families, err := reg.Gather()
+	if err != nil {
+		return 0
+	}
+	for _, f := range families {
+		if f.GetName() != name {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			if matchLabels(m.GetLabel(), labels) {
+				return m.GetCounter().GetValue()
+			}
+		}
+	}
+	return 0
+}
+
+// tryGatherGauge is like scrapeGauge but returns 0 (no fatal) when the metric
+// family is not yet present. Use this in polling condition lambdas.
+func tryGatherGauge(reg *prom.Registry, name string) float64 {
+	families, err := reg.Gather()
+	if err != nil {
+		return 0
+	}
+	for _, f := range families {
+		if f.GetName() != name {
+			continue
+		}
+		m := f.GetMetric()
+		if len(m) == 0 {
+			return 0
+		}
+		return m[0].GetGauge().GetValue()
+	}
+	return 0
+}
+
+// tryGatherCounter is like scrapeCounter but returns 0 (no fatal) when the
+// metric family is not yet present. Use this in polling condition lambdas.
+func tryGatherCounter(reg *prom.Registry, name string) float64 {
+	families, err := reg.Gather()
+	if err != nil {
+		return 0
+	}
+	for _, f := range families {
+		if f.GetName() != name {
+			continue
+		}
+		m := f.GetMetric()
+		if len(m) == 0 {
+			return 0
+		}
+		return m[0].GetCounter().GetValue()
+	}
 	return 0
 }
 
