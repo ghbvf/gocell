@@ -16,7 +16,9 @@ import (
 	unlockgen "github.com/ghbvf/gocell/generated/contracts/http/auth/user/unlock/v1"
 	updategen "github.com/ghbvf/gocell/generated/contracts/http/auth/user/update/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/projection"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -106,14 +108,20 @@ func (a GetAdapter) Get(ctx context.Context, req *getgen.Request) (getgen.GetRes
 		return nil, err
 	}
 	id, username, email, status, createdAt, updatedAt := toUserResponseData(user)
-	return getgen.Get200JSONResponse{Data: &getgen.ResponseData{
+	item := getgen.ResponseData{
 		ID:        id,
 		Username:  username,
 		Email:     email,
 		Status:    status,
 		CreatedAt: createdAt,
 		UpdatedAt: updatedAt,
-	}}, nil
+	}
+	// Identity projection (epic #1337 PR-12); masking obligation source becomes the ABAC Decision in PR-10.
+	data, err := projection.NewProjection(authz.IdentityFieldMask(), item.ToMap())
+	if err != nil {
+		return nil, err
+	}
+	return getgen.Get200JSONResponse{Data: data}, nil
 }
 
 // UpdateAdapter implements updategen.Service for http.auth.user.update.v1.

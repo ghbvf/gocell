@@ -8,7 +8,9 @@ import (
 	"github.com/ghbvf/gocell/corecells/configcore/internal/dto"
 	internalapig "github.com/ghbvf/gocell/generated/contracts/http/config/internalapi/get/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/projection"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -36,7 +38,13 @@ func (a InternalGetAdapter) Get(ctx context.Context, req *internalapig.Request) 
 	if err != nil {
 		return nil, err
 	}
-	return internalapig.Get200JSONResponse{Data: toInternalGetResponseData(entry)}, nil
+	// identity projection (epic #1337 PR-12); masking obligation source becomes
+	// the ABAC Decision in PR-10.
+	data, err := projection.NewProjection(authz.IdentityFieldMask(), toInternalGetResponseData(entry).ToMap())
+	if err != nil {
+		return nil, err
+	}
+	return internalapig.Get200JSONResponse{Data: data}, nil
 }
 
 // Handler is the route handler for the internal config-read slice. It holds
@@ -77,12 +85,14 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
 }
 
 // toInternalGetResponseData converts a domain.ConfigEntry to internalapig.ResponseData.
-func toInternalGetResponseData(e *domain.ConfigEntry) *internalapig.ResponseData {
+// Sensitive entries have their value redacted before the DTO is handed to the
+// projection funnel; the redacted value flows through unchanged.
+func toInternalGetResponseData(e *domain.ConfigEntry) internalapig.ResponseData {
 	value := e.Value
 	if e.Sensitive {
 		value = dto.RedactedValue
 	}
-	return &internalapig.ResponseData{
+	return internalapig.ResponseData{
 		ID:        e.ID,
 		Key:       e.Key,
 		Value:     value,

@@ -48,6 +48,20 @@ type HTTPTransportMeta struct {
 	// idempotency is a middleware concern, not an authentication mode (#1469
 	// review F7). Omit for default idempotent-eligible routes.
 	Idempotency HTTPIdempotencyMeta `yaml:"idempotency,omitempty" json:"idempotency,omitempty"`
+	// ResponseProjection declares that this endpoint's success response `data`
+	// resource is served through the sealed pkg/projection.ResourceProjection
+	// carrier (epic #1337 PR-12, FR-016). When set, contractgen rewrites the
+	// generated Response.Data field type to projection.ResourceProjection (single
+	// object) or []projection.ResourceProjection (array), forcing the handler to
+	// build the wire data through the column-masking funnel
+	// (projection.NewProjection / NewProjectionList). A full, un-masked view is not
+	// assignable to the field, so column masking cannot be bypassed at the handler
+	// callsite (RESOURCE-PROJECTION-CALLSITE-LOCK-01). Every GET read endpoint
+	// carrying a `data` resource MUST set this (RESOURCE-PROJECTION-COVERAGE-01);
+	// an empty FieldMask obligation yields the identity projection so the wire
+	// field set is unchanged. Default false leaves the response type untouched.
+	// See contracts/http/audit/list/v1/contract.yaml for a worked example.
+	ResponseProjection bool `yaml:"responseProjection,omitempty" json:"responseProjection,omitempty"`
 }
 
 // HTTPIdempotencyMeta carries route-level HTTP-idempotency behavior, orthogonal

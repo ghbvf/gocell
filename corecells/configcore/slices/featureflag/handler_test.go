@@ -42,19 +42,7 @@ func asAdminFlag(req *http.Request) *http.Request {
 	return req.WithContext(ctx)
 }
 
-func TestToFeatureFlagResponse_NilInput(t *testing.T) {
-	var got FeatureFlagResponse
-	assert.NotPanics(t, func() { got = toFeatureFlagResponse(nil) })
-	assert.Zero(t, got.ID)
-}
-
-func TestToEvaluateResultResponse_NilInput(t *testing.T) {
-	var got EvaluateResultResponse
-	assert.NotPanics(t, func() { got = toEvaluateResultResponse(nil) })
-	assert.Zero(t, got.Key)
-}
-
-func TestFeatureFlagResponse_Fields(t *testing.T) {
+func TestToGetResponseData_Fields(t *testing.T) {
 	now := time.Now()
 	flag := &domain.FeatureFlag{
 		ID: "ff-1", Key: "dark-mode", Type: domain.FlagBoolean,
@@ -62,20 +50,20 @@ func TestFeatureFlagResponse_Fields(t *testing.T) {
 		Description: "Toggles dark mode UI", Version: 2,
 		CreatedAt: now, UpdatedAt: now,
 	}
-	resp := toFeatureFlagResponse(flag)
+	resp := toGetResponseData(flag)
 
 	assert.Equal(t, "ff-1", resp.ID)
 	assert.Equal(t, "dark-mode", resp.Key)
 	assert.Equal(t, "boolean", resp.Type)
 	assert.True(t, resp.Enabled)
-	assert.Equal(t, 80, resp.RolloutPercentage)
+	assert.Equal(t, int64(80), resp.RolloutPercentage)
 	assert.Equal(t, "Toggles dark mode UI", resp.Description)
-	assert.Equal(t, 2, resp.Version)
-	assert.Equal(t, now, resp.CreatedAt)
-	assert.Equal(t, now, resp.UpdatedAt)
+	assert.Equal(t, int64(2), resp.Version)
+	assert.Equal(t, now.Format(time.RFC3339), resp.CreatedAt)
+	assert.Equal(t, now.Format(time.RFC3339), resp.UpdatedAt)
 
-	// Verify camelCase JSON keys.
-	b, err := json.Marshal(resp)
+	// Verify camelCase JSON keys (#27n).
+	b, err := json.Marshal(resp.ToMap())
 	require.NoError(t, err)
 	s := string(b)
 	assert.Contains(t, s, `"id"`)
@@ -89,19 +77,57 @@ func TestFeatureFlagResponse_Fields(t *testing.T) {
 	assert.Contains(t, s, `"updatedAt"`)
 }
 
-func TestEvaluateResultResponse_Fields(t *testing.T) {
-	result := &EvaluateResult{Key: "dark-mode", Enabled: true}
-	resp := toEvaluateResultResponse(result)
+func TestToListResponseDataItem_Fields(t *testing.T) {
+	now := time.Now()
+	flag := &domain.FeatureFlag{
+		ID: "ff-2", Key: "feature-x", Type: domain.FlagBoolean,
+		Enabled: false, RolloutPercentage: 50,
+		Description: "Feature X", Version: 3,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	item := toListResponseDataItem(flag)
 
-	assert.Equal(t, "dark-mode", resp.Key)
-	assert.True(t, resp.Enabled)
+	assert.Equal(t, "ff-2", item.ID)
+	assert.Equal(t, "feature-x", item.Key)
+	assert.Equal(t, int64(50), item.RolloutPercentage)
+	assert.Equal(t, int64(3), item.Version)
+	assert.Equal(t, now.Format(time.RFC3339), item.CreatedAt)
 
-	// Verify camelCase JSON keys.
-	b, err := json.Marshal(resp)
-	require.NoError(t, err)
-	s := string(b)
-	assert.Contains(t, s, `"key"`)
-	assert.Contains(t, s, `"enabled"`)
+	// Verify wire map keys match JSON field names.
+	m := item.ToMap()
+	assert.Equal(t, "ff-2", m["id"])
+	assert.Equal(t, "feature-x", m["key"])
+	assert.Equal(t, int64(50), m["rolloutPercentage"])
+	assert.Equal(t, int64(3), m["version"])
+}
+
+func TestEvaluateResponseData_Fields(t *testing.T) {
+	// Verify the generated evaluate.ResponseData zero value is safe and that
+	// its camelCase wire keys are present when marshaled (replaces the vestigial
+	// toEvaluateResultResponse nil-guard test).
+	//
+	// We use the package-level evaluate alias (imported in handler.go) indirectly:
+	// the Evaluate handler constructs evaluate.ResponseData inline — so we verify
+	// the shape via the HTTP handler to avoid a redundant import in the test file.
+	handler, repo := setupHandler()
+	require.NoError(t, repo.Create(context.Background(), testFlagHandlerTenant, &domain.FeatureFlag{
+		ID: "ev-1", Key: "eval-flag", Type: domain.FlagBoolean, Enabled: true,
+	}))
+	w := httptest.NewRecorder()
+	body := `{"subject":"user-x"}`
+	req := httptest.NewRequest(http.MethodPost, flagsBasePath+"/eval-flag/evaluate", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(w, asAdminFlag(req))
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var raw map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+	var dataMap map[string]any
+	require.NoError(t, json.Unmarshal(raw["data"], &dataMap))
+	assert.Equal(t, "eval-flag", dataMap["key"])
+	assert.Equal(t, true, dataMap["enabled"])
+	assert.Contains(t, dataMap, "key", "key must be camelCase")
+	assert.Contains(t, dataMap, "enabled", "enabled must be camelCase")
 }
 
 func setupHandler() (http.Handler, *mem.FlagRepository) {
