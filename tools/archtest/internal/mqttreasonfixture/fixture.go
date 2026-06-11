@@ -27,7 +27,7 @@ package mqttreasonfixture
 type fixtureConnackClass uint8
 
 const (
-	fixtureClassTransient     fixtureConnackClass = 1
+	fixtureClassTransient      fixtureConnackClass = 1
 	fixtureClassBootstrapFatal fixtureConnackClass = 2
 )
 
