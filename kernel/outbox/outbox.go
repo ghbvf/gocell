@@ -797,6 +797,13 @@ type DeliveryOutcome struct {
 	// WrapConfigEventSubscriber) after ConsumerBase has resolved
 	// retry/lease decisions.
 	SettlementObservers []SettlementObserver
+
+	// Logger is the structured logger NotifySettlement uses for the
+	// observer-panic line. Optional: nil falls back to slog.Default() (current
+	// production behavior). Tests set it to capture the settlement-panic log
+	// without mutating the global slog default (slog.SetDefault races with
+	// t.Parallel() siblings).
+	Logger *slog.Logger
 }
 
 // NotifySettlement emits a settlement observation to every observer attached
@@ -807,6 +814,10 @@ func NotifySettlement(
 ) {
 	if len(outcome.SettlementObservers) == 0 {
 		return
+	}
+	logger := outcome.Logger
+	if logger == nil {
+		logger = slog.Default()
 	}
 	obs := SettlementObservation{
 		Entry:         entry,
@@ -822,7 +833,7 @@ func NotifySettlement(
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					slog.LogAttrs(ctx, slog.LevelError, "outbox: settlement observer panicked",
+					logger.LogAttrs(ctx, slog.LevelError, "outbox: settlement observer panicked",
 						slog.String("topic", entry.topic),
 						slog.String("entry_id", entry.id),
 						slog.Any("panic", redaction.RedactAny(r)))
