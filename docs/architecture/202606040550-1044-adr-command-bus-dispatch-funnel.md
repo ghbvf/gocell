@@ -303,7 +303,7 @@ enforcement 索引（§7）**无新增**——值校验由 §4 既有三 funnel 
 - **D_AU2（不安全组合不可表达）**：`runtime/command.WithActiveUniqueness(deadline time.Duration)` 是 `EnqueueOptions.IdempotencyKey` 的**唯一**写入点，同时设 `OverallDeadline`——「有 active-uniqueness key 但无 deadline（命令永不 terminal，key 永不释放）」在 API 上不可构造（`EnqueueOptions.idempotencyKey` 是 unexported 字段，Hard：Go type system 封闭）。
 - **D_AU3（producer 无状态）**：`devices.renewal_requested_at` 和 `renewal_requested_epoch` 列移除（schema guard golden Hard 守）。每 tick 对近过期证书无条件调用 `command.Enqueue(WithActiveUniqueness(deadline))`；命令已在队列且非终态时 enqueue 被幂等 noop（`ON CONFLICT DO NOTHING` / in-mem 集合 rejected）。
 - **D_AU4（relay Claimer 降级）**：relay Claimer 从「single-emit 第一防线」降为「dispatch-time 去重优化」。relay 在 Claimer Acquired 后把 active-uniqueness key+deadline 注入 ctx，供下游 enqueue 使用。
-- **批量扫描上限**：保留 `LIMIT certRenewalScanBatchSize`（100）+ 满批 RequeueAfter 续扫，机制不变。Sweeper（已有）周期 expire 超 OverallDeadline 的 Pending 命令 → 终态 → key 释放 → 下次 tick 正常重 enqueue。
+- **D_AU5（批量扫描上限移除）**：批量扫描上限（`LIMIT certRenewalScanBatchSize` + 满批 `RequeueAfter` drain 循环）与无状态 producer **不兼容，已移除**。无状态 producer 不写任何抑制标记；保留 LIMIT + RequeueAfter 后，expiry-ordered 扫描每次 requeue 从头扫，前 N 条设备被反复 re-emit（`ON CONFLICT DO NOTHING` 吸收 emit，但扫描本身无限循环），tail 设备当前 tick 内永远排不到（正向饥饿）。新形态：每 tick 全量扫描近过期证书，无 LIMIT，逐台 enqueue，返回 `Result{}`（交还 TickerTrigger 按 interval 下次 tick）。正确性由 D1 队列 active-uniqueness 保证（重复 emit 幂等吸收），不依赖 producer 侧任何 drain 边界。Sweeper（已有）周期 expire 超 OverallDeadline 的 Pending 命令 → 终态 → key 释放 → 下次 tick 正常重 enqueue。
 
 **威胁矩阵重评（ai-robust ADR amendment 必查）**：
 

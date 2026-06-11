@@ -118,15 +118,21 @@ Claimer 的接口、wiring、3-arg `WithCommandDispatch` 均不变（ADR-1044 §
 - 队列的 D1 保证至多一条活跃：Pending 时 enqueue 被幂等 rejected（key 冲突）；terminal 后 key 释放，下次扫描正常 enqueue。
 - `renewal_requested_at` 和 `renewal_requested_epoch` 列从 `devices` 表移除（迁移 DROP COLUMN），相关 repo 接口方法（`MarkCertRenewalRequested` / `ListCertificateRenewalCandidates` 的 `retryBefore` 参数）归于简化。
 
-扫描 batch 上限保留（D5），前向进度由 batch requeue 保证。
+前向进度和「每 (device,epoch) 至多一条活跃命令」完全由队列的 active-uniqueness（D1）持有，不依赖任何 producer 侧的扫描边界或 drain 机制。
 
 | Enforcement 载体 | 评级 |
 |-----------------|------|
 | `devices` 表 `renewal_requested_at` / `renewal_requested_epoch` 列不存在（`schema_guard.go` golden 锁列集，列存在即红） | **Hard**（schema guard golden 字节锁） |
 
-### D5：bounded scan — 批量扫描上限保留
+### D5：批量扫描上限移除（与无状态 producer 不兼容）
 
-producer 每 tick 最多扫 `BatchSize`（100）条近过期证书，满批 → `Result{RequeueAfter: batchRequeueDelay}`（1s）继续下一批，非满批 → `Result{}`（回 ticker）。此机制与队列 active-uniqueness 正交，保留不变。
+旧方案保留了 `LIMIT certRenewalScanBatchSize`（100）+ 满批 `RequeueAfter` drain 循环，以避免单 tick 无界扫描。**该机制与无状态 producer 不兼容，已移除。**
+
+**不兼容原因**：无状态 producer 对扫描结果中的每台设备直接 enqueue，不写任何抑制标记。若保留 LIMIT + RequeueAfter drain，expiry-ordered 扫描每次 requeue 后重新从头扫描，无抑制的前 100 条设备会被反复 re-emit（`ON CONFLICT DO NOTHING` 吸收，但扫描本身无限循环），tail 的设备在当前 tick 内永远排不到——正向饥饿（starvation）。
+
+**新形态**：producer 每 tick 对所有近过期证书做**全量扫描**，无 LIMIT，每台设备 enqueue 一次，返回 `Result{}`（交还给 TickerTrigger 按 interval 下次 tick）。重复 emit 由 D1 队列 active-uniqueness 幂等吸收，正确性不依赖 producer 侧的任何 drain 边界。
+
+**规模注解（示例范围内的取舍）**：全量扫描适合示例规模（单个 iotdevice 示例的设备数量有限）。大规模 fleet 部署如需限制单 tick 扫描量，应在**扫描侧**加 `skip if active command exists`（observe-then-decide 的无害优化变体，因 D1 保证正确性与之解耦），而非重新引入有状态 drain 循环。该优化故意超出本 ADR 范围。
 
 ### D6：relay 注入 active-uniqueness key + deadline 到 ctx（ClaimAcquired 路径）
 
