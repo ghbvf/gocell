@@ -27,8 +27,19 @@ type ResourceProjection struct {
 // validates the obligation (authz.FieldMask.Validate — canonical keys, no
 // duplicates), then refuses obligations this PEP cannot discharge
 // (requireEnforceable — fail-closed), then applies the mask onto a private copy
-// of data. An empty FieldMask yields the identity projection (every value
-// visible), keeping the response field set stable.
+// of data.
+//
+// The mask is expected to come from Decision.Obligations().FieldMask. An empty
+// FieldMask is valid and yields the identity projection (every value visible,
+// response field set stable) — passing an empty mask where a populated one was
+// intended therefore returns the FULL view silently; supplying the right mask is
+// the caller's responsibility (locked at the handler callsite in PR-12).
+//
+// Error kinds let the handler map status codes: a validation failure carries
+// KindInvalid (→ 400, client-correctable bad mask); an un-dischargeable
+// obligation carries KindInternal (→ 500, a PEP misconfiguration, not user
+// error). A nil data map projects to an empty JSON object ("{}"), distinct from
+// the zero-value ResourceProjection which marshals to null.
 func NewProjection(mask authz.FieldMask, data map[string]any) (ResourceProjection, error) {
 	if err := mask.Validate(); err != nil {
 		return ResourceProjection{}, err

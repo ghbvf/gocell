@@ -24,6 +24,18 @@
 // Masking is top-level only; an un-dischargeable (dotted/nested) obligation
 // fails closed rather than leaking an un-masked column (see requireEnforceable).
 //
+// The masked sentinel is HTML-escaped by encoding/json on the wire (the bytes
+// are "<REDACTED>", not the literal "<REDACTED>"); consumers matching
+// the sentinel in a JSON body must decode first or compare the escaped form.
+//
+// # Immutability contract
+//
+// Construction never mutates the caller's input. A masked column's value is
+// REPLACED (by the sentinel), so masked data is never aliased — there is no
+// leak path through a shared reference. Un-masked values, however, share their
+// reference with the caller's map (they are meant to be visible), so the caller
+// MUST NOT mutate the input map after construction if a stable snapshot matters.
+//
 // # Seal (RESOURCE-PROJECTION-SEALED-01)
 //
 // ResourceProjection's single field is unexported, so an external populated

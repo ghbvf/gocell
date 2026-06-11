@@ -185,7 +185,9 @@ func TestNewProjectionList(t *testing.T) {
 
 // TestResourceProjection_ZeroValueInert documents the seal's blind spot: a
 // zero-value ResourceProjection{} (the only literal expressible outside this
-// package) carries no forged data — it marshals to JSON null.
+// package) carries no forged data — it marshals to JSON null. A constructed
+// projection over a nil data map, by contrast, marshals to an empty object "{}"
+// — the two empty forms are deliberately distinguishable.
 func TestResourceProjection_ZeroValueInert(t *testing.T) {
 	t.Parallel()
 
@@ -195,5 +197,38 @@ func TestResourceProjection_ZeroValueInert(t *testing.T) {
 	}
 	if string(b) != "null" {
 		t.Errorf("zero ResourceProjection marshaled to %s, want null", b)
+	}
+
+	p, err := NewProjection(authz.FieldMask{Fields: []string{"email"}}, nil)
+	if err != nil {
+		t.Fatalf("NewProjection(mask, nil): %v", err)
+	}
+	nb, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("MarshalJSON nil-data projection: %v", err)
+	}
+	if string(nb) != "{}" {
+		t.Errorf("constructed projection over nil data marshaled to %s, want {}", nb)
+	}
+}
+
+// TestNewProjectionList_NilRow proves a nil row element is projected to an empty
+// object ("{}") rather than panicking or producing a null element.
+func TestNewProjectionList_NilRow(t *testing.T) {
+	t.Parallel()
+
+	got, err := NewProjectionList(authz.FieldMask{Fields: []string{"email"}}, []map[string]any{nil})
+	if err != nil {
+		t.Fatalf("NewProjectionList with nil row: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	b, err := json.Marshal(got[0])
+	if err != nil {
+		t.Fatalf("MarshalJSON nil row: %v", err)
+	}
+	if string(b) != "{}" {
+		t.Errorf("nil row marshaled to %s, want {}", b)
 	}
 }
