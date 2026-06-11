@@ -403,13 +403,22 @@ func (s *Subscriber) declareTopology(ch AMQPChannel, topic, queueName string, sc
 // when BrokerDelaySchedule is non-empty. All operations are idempotent.
 //
 // Topology per tier i:
-//   - Queue: <queueName>.delay.<i>
+//   - Queue: <queueName>.delay.<i> (quorum, at-least-once dead-lettering)
 //   - x-message-ttl: schedule[i] in milliseconds (int64)
 //   - x-dead-letter-exchange: topic (the dispatch fanout exchange)
 //   - Bound to delay exchange with routing key strconv.Itoa(i)
 //
 // On TTL expiry the broker dead-letters the message back to topic (the fanout),
 // which re-enqueues it into the main consumer queue for the next handler attempt.
+//
+// The tiers are quorum queues with x-dead-letter-strategy=at-least-once (#1835):
+// classic queues republish on the internal TTL→dead-letter hop WITHOUT publisher
+// confirms, so a cluster node failure mid-hop can drop a scheduled retry. Quorum
+// at-least-once dead-lettering confirms that internal hop, closing the cluster
+// gap. x-overflow=reject-publish is a hard precondition — at-least-once silently
+// degrades to at-most-once under the default drop-head overflow (the broker
+// raises no error), so it must stay set (ref: rabbitmq docs/dlx + quorum-queues;
+// ref: Particular/NServiceBus.RabbitMQ DelayInfrastructure.cs).
 func (s *Subscriber) declareDelayTopology(ch AMQPChannel, topic, queueName string, schedule []time.Duration) error {
 	delayExchange := queueName + ".delay"
 	if err := ch.ExchangeDeclare(delayExchange, "direct", true, false, false, false, nil); err != nil {
@@ -419,6 +428,9 @@ func (s *Subscriber) declareDelayTopology(ch AMQPChannel, topic, queueName strin
 	for i, d := range schedule {
 		tierQueue := fmt.Sprintf("%s.delay.%d", queueName, i)
 		tierArgs := amqp.Table{
+			// Quorum queue so the broker-internal TTL→dead-letter republish can be
+			// publisher-confirmed (classic queues cannot); see func godoc / #1835.
+			"x-queue-type":           "quorum",
 			"x-message-ttl":          d.Milliseconds(), // int64 of milliseconds; TTL fires expiry to re-enter dispatch fanout
 			"x-dead-letter-exchange": topic,
 			// Reset the routing key on TTL-expiry dead-letter back to the canonical
@@ -429,17 +441,26 @@ func (s *Subscriber) declareDelayTopology(ch AMQPChannel, topic, queueName strin
 			// silently never receive the exhausted webhook. The dispatch exchange
 			// is fanout, so re-entry routing is unaffected by the key.
 			"x-dead-letter-routing-key": "",
+			// at-least-once dead-lettering turns publisher confirms on for the
+			// internal TTL→DLX hop. reject-publish is mandatory: under the default
+			// drop-head overflow the strategy SILENTLY falls back to at-most-once
+			// (no broker error), re-opening the cluster gap #1835 closes. Do not
+			// remove either; the unit test pins both as the regression guard.
+			"x-dead-letter-strategy": "at-least-once",
+			"x-overflow":             "reject-publish",
 		}
 		if _, err := ch.QueueDeclare(tierQueue, true, false, false, false, tierArgs); err != nil {
 			// AMQP 406 PRECONDITION_FAILED is returned when the queue already
-			// exists with different arguments (e.g. a changed x-message-ttl from
-			// a new BrokerDelaySchedule). Changing the schedule requires the
+			// exists with different arguments — either a changed x-message-ttl from
+			// a new BrokerDelaySchedule, or a pre-#1835 classic queue whose
+			// x-queue-type now differs (quorum). Both require the same
 			// drain-before-delete runbook — a non-empty tier queue holds webhooks
 			// still waiting out their retry interval, so deleting it blindly drops
 			// pending retries.
 			return fmt.Errorf("rabbitmq: declare delay tier queue %d (%s): %w"+
-				" (hint: AMQP 406 PRECONDITION_FAILED means the queue exists with a"+
-				" different x-message-ttl; to change the schedule follow the"+
+				" (hint: AMQP 406 PRECONDITION_FAILED means the queue exists with"+
+				" different args — a changed x-message-ttl or a pre-#1835 classic"+
+				" queue being upgraded to quorum; either way follow the"+
 				" drain-before-delete runbook in"+
 				" docs/ops/rabbitmq-webhook-delay-topology.md)", i, tierQueue, err)
 		}

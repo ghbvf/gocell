@@ -217,10 +217,12 @@ func TestDeclareTopology_WithDelaySchedule_DeclaresDelayTiers(t *testing.T) {
 	assert.Equal(t, int64(200), tier0Args["x-message-ttl"], "tier 0 x-message-ttl must be 200ms as int64")
 	assert.Equal(t, topic, tier0Args["x-dead-letter-exchange"], "tier 0 x-dead-letter-exchange must point to dispatch exchange")
 	assert.Equal(t, "", tier0Args["x-dead-letter-routing-key"], "tier 0 must reset routing key to canonical empty")
+	assertQuorumAtLeastOnce(t, tier0Args, "tier 0")
 
 	assert.Equal(t, int64(500), tier1Args["x-message-ttl"], "tier 1 x-message-ttl must be 500ms as int64")
 	assert.Equal(t, topic, tier1Args["x-dead-letter-exchange"], "tier 1 x-dead-letter-exchange must point to dispatch exchange")
 	assert.Equal(t, "", tier1Args["x-dead-letter-routing-key"], "tier 1 must reset routing key to canonical empty")
+	assertQuorumAtLeastOnce(t, tier1Args, "tier 1")
 
 	// Bindings: tier 0 bound with routing key "0", tier 1 with "1".
 	var tier0Detail, tier1Detail *queueBindDetail
@@ -242,6 +244,25 @@ func TestDeclareTopology_WithDelaySchedule_DeclaresDelayTiers(t *testing.T) {
 
 	assert.Equal(t, "1", tier1Detail.key, "tier 1 routing key must be \"1\"")
 	assert.Equal(t, delayExchange, tier1Detail.exchange, "tier 1 must bind to delay exchange")
+}
+
+// assertQuorumAtLeastOnce pins the three arguments that make a delay tier's
+// broker-internal TTL→dead-letter republish at-least-once (#1835): a quorum
+// queue with the at-least-once dead-letter strategy. This is the Medium guard
+// for the change — the assertions fail in CI if a future edit drops any of them.
+//
+// x-overflow=reject-publish is the highest-risk one: RabbitMQ silently falls
+// back to at-most-once dead-lettering if the overflow strategy is the default
+// drop-head (the broker raises NO error), so removing it would re-open the
+// cluster gap with no other signal. The unit assertion is the signal.
+func assertQuorumAtLeastOnce(t *testing.T, args amqp.Table, tier string) {
+	t.Helper()
+	assert.Equal(t, "quorum", args["x-queue-type"],
+		"%s must be a quorum queue (classic internal dead-letter republish is not at-least-once)", tier)
+	assert.Equal(t, "at-least-once", args["x-dead-letter-strategy"],
+		"%s must use at-least-once dead-lettering so the TTL→DLX hop is publisher-confirmed", tier)
+	assert.Equal(t, "reject-publish", args["x-overflow"],
+		"%s must set reject-publish overflow; drop-head silently degrades at-least-once to at-most-once", tier)
 }
 
 func TestDeclareTopology_EmptySchedule_NoDeLlayTopology(t *testing.T) {
