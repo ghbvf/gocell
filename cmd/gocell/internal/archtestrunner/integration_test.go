@@ -5,6 +5,8 @@ package archtestrunner
 import (
 	"context"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -58,51 +60,73 @@ func TestListTests_Shard_ExactlyOnce(t *testing.T) {
 	}
 }
 
-// TestListTests_Changed_RealRepo verifies the --changed selection path
-// against the real git repo.  It calls ListTests with Changed:true, which
-// exercises the real git subprocess path in gitdiff.go:
-// changedArchtestFiles → gitMergeBase → gitDiffNames.
+// TestChangedArchtestFiles_TempRepo exercises the real-git functions in
+// gitdiff.go (changedArchtestFiles → gitMergeBase → gitDiffNames) against a
+// purpose-built temporary git repository.
 //
-// The result set may be empty (no archtest files changed vs origin/develop on
-// this branch) or non-empty (some were touched).  We only assert:
-//  1. err == nil — the git path executed without error.
-//  2. Every returned name starts with "Test" (valid test function name).
-//  3. Every returned name is a subset of the full discovery list.
+// A temp repo is used instead of the real workspace because CI's PR checkout
+// does not have an `origin/develop` ref (git merge-base would exit 128). The
+// temp repo creates that ref explicitly via `git update-ref`, making the test
+// deterministic in CI and locally — independent of the real branch diff.
 //
-// This covers the real-git functions (gitMergeBase, gitDiffNames,
-// changedArchtestFiles) that are not exercised by the discovery-only tests.
-func TestListTests_Changed_RealRepo(t *testing.T) {
-	if os.Getenv("GOWORK") == "off" {
-		t.Skip("GOWORK=off: skipping integration test")
+// It asserts the committed + uncommitted archtest test files are reported and
+// non-archtest changes are filtered out (covering gitMergeBase, gitDiffNames,
+// filterArchtestFiles, dedupe, splitLines).
+func TestChangedArchtestFiles_TempRepo(t *testing.T) {
+	dir := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		//nolint:gosec // G204: git subcommand args are test-controlled literals, not user input
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+		)
+		out, err := cmd.CombinedOutput()
+		require.NoErrorf(t, err, "git %v: %s", args, out)
 	}
-	root := findRepoRoot(t)
-
-	// Full discovery for subset check.
-	all, err := ListTests(context.Background(), Request{
-		WorkspaceRoot: root,
-		Scope:         ScopeWorkspace,
-	})
-	require.NoError(t, err, "full discovery must succeed before running changed check")
-	allSet := make(map[string]bool, len(all))
-	for _, n := range all {
-		allSet[n] = true
+	write := func(rel, content string) {
+		t.Helper()
+		abs := filepath.Join(dir, filepath.FromSlash(rel))
+		require.NoError(t, os.MkdirAll(filepath.Dir(abs), 0o755))
+		require.NoError(t, os.WriteFile(abs, []byte(content), 0o644))
 	}
 
-	// Changed-only selection — exercises gitMergeBase/gitDiffNames/changedArchtestFiles.
-	changed, err := ListTests(context.Background(), Request{
-		WorkspaceRoot: root,
-		Scope:         ScopeWorkspace,
-		Changed:       true,
-	})
-	require.NoError(t, err, "ListTests with Changed:true must not return an error")
+	git("init", "-q")
+	git("config", "commit.gpgsign", "false")
 
-	// The result may be empty (clean branch, no archtest files touched).
-	for _, n := range changed {
-		assert.True(t, len(n) > 4 && n[:4] == "Test",
-			"changed test name %q must start with Test", n)
-		assert.True(t, allSet[n],
-			"changed test %q must be a subset of the full discovery list", n)
+	fooRel := archtestPkgDir + "/foo_test.go"
+	barRel := archtestPkgDir + "/bar_test.go"
+	const kernelRel = "kernel/x.go" // non-archtest file: must be filtered out
+
+	// Base commit; point origin/develop at it so gitMergeBase resolves.
+	write(fooRel, "package archtest\n")
+	write(kernelRel, "package kernel\n")
+	git("add", "-A")
+	git("commit", "-q", "-m", "base")
+	git("update-ref", "refs/remotes/origin/develop", "HEAD")
+
+	// HEAD commit: add an archtest file + modify the non-archtest file.
+	write(barRel, "package archtest\n")
+	write(kernelRel, "package kernel\n\nvar X = 1\n")
+	git("add", "-A")
+	git("commit", "-q", "-m", "head")
+
+	// Uncommitted working-tree change to a tracked archtest file → exercises
+	// the `git diff --name-only HEAD` (working-tree) arm + dedupe.
+	write(fooRel, "package archtest\n\nvar Y = 1\n")
+
+	changed, err := changedArchtestFiles(context.Background(), dir)
+	require.NoError(t, err)
+
+	got := map[string]bool{}
+	for _, c := range changed {
+		got[filepath.ToSlash(c)] = true
 	}
+	assert.Truef(t, got[barRel], "committed archtest file %q must be reported; got %v", barRel, changed)
+	assert.Truef(t, got[fooRel], "uncommitted archtest file %q must be reported; got %v", fooRel, changed)
+	assert.Falsef(t, got[kernelRel], "non-archtest file %q must be filtered out; got %v", kernelRel, changed)
 }
 
 // findRepoRoot walks up from the current working directory to find the
