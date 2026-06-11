@@ -28,6 +28,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	commandruntime "github.com/ghbvf/gocell/runtime/command"
 )
 
 // pendingSort defines the default sort for command listings (FIFO).
@@ -173,9 +174,32 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 		return command.Entry{}, err
 	}
 
-	entry := command.NewEntry(id, deviceID, commandType, []byte(payload), command.Timeouts{}, s.clock.Now())
+	// Read active-uniqueness (key, deadline) injected by the relay when it
+	// dispatches a command that was emitted with command.WithActiveUniqueness.
+	// ok=false for direct HTTP callers (no relay context) → today's behavior:
+	// random id, no dedup, no deadline.
+	opts := command.EnqueueOptions{Authz: s.authz}
+	key, deadline, ok := commandruntime.DispatchedUniqueness(ctx)
+	if ok {
+		opts.IdempotencyKey = key
+	}
 
-	if err := s.queue.Enqueue(ctx, entry, command.EnqueueOptions{Authz: s.authz}); err != nil {
+	var timeouts command.Timeouts
+	if ok {
+		d := deadline.Sub(s.clock.Now())
+		if d <= 0 {
+			// Guard: deadline is in the past (clock skew or test drift). Use a
+			// small positive floor so the command is never left un-sweepable
+			// indefinitely — a command with no OverallDeadline would block the
+			// active-uniqueness slot forever if the Sweeper never sees a deadline.
+			d = time.Second
+		}
+		timeouts = command.Timeouts{OverallDeadline: d}
+	}
+
+	entry := command.NewEntry(id, deviceID, commandType, []byte(payload), timeouts, s.clock.Now())
+
+	if err := s.queue.Enqueue(ctx, entry, opts); err != nil {
 		return command.Entry{}, fmt.Errorf("device-command: enqueue: %w", err)
 	}
 

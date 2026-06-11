@@ -13,7 +13,6 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
-	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/kernel/reconcile"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
@@ -84,33 +83,23 @@ func TestReconciler_EmitsSystemTenantlessPrincipalViaLoop(t *testing.T) {
 		"the dedup key tenant dimension must be the _notenant sentinel; got %q", key)
 }
 
-// TestReconciler_LoopDrainsMultiBatchBacklog is the loop-level proof that
-// RequeueAfter-driven batch continuation actually drains a multi-batch backlog.
+// TestReconciler_OneTickEmitsAllNearExpiry is the full-sweep proof: a single
+// reconcile tick with N>2 near-expiry devices emits ALL N commands in one shot —
+// no LIMIT truncation, no RequeueAfter needed. The queue active-uniqueness
+// coalesces any duplicate emits across ticks (not demonstrated here; see
+// TestCertRenewal_F1_OfflineDeviceNoDuplicates in cert_renewal_e2e_test.go).
 //
-// Setup: 4 near-expiry certs, BatchSize=2 → first Reconcile emits 2 and returns
-// RequeueAfter=BatchRequeue; the Loop re-dispatches; second Reconcile emits the
-// remaining 2 and returns RequeueAfter=0.
-//
-// Asserts that all 4 certs are drained (all 4 entries appear in the recorder)
-// within a bounded wait — proving the RequeueAfter continuation works end-to-end
-// through the real reconcile.Loop.
-func TestReconciler_LoopDrainsMultiBatchBacklog(t *testing.T) {
+// This replaces TestReconciler_LoopDrainsMultiBatchBacklog: the stateless
+// producer + full-sweep design means there is no "batch boundary" to drain —
+// the entire near-expiry set is swept in a single Reconcile call.
+func TestReconciler_OneTickEmitsAllNearExpiry(t *testing.T) {
 	ctx := context.Background()
 	repo := mem.NewDeviceRepository()
 
 	const totalCerts = 4
-	const batchSize = 2
-
-	drainPolicy := Policy{
-		Threshold:     certRenewalTestThreshold,
-		RetryInterval: 24 * time.Hour,
-		BatchSize:     batchSize,
-		BatchRequeue:  5 * time.Millisecond, // small so the drain is fast in tests
-	}
-
 	// Seed 4 near-expiry certs with distinct expiry times.
 	for i := 0; i < totalCerts; i++ {
-		id := "dev-drain-" + string(rune('a'+i))
+		id := "dev-all-" + string(rune('a'+i))
 		require.NoError(t, repo.Create(ctx, &domain.Device{
 			ID: id, Name: id, Status: "online", LastSeen: certTestBase,
 			CertEpoch:     domain.DefaultCertEpoch,
@@ -120,32 +109,31 @@ func TestReconciler_LoopDrainsMultiBatchBacklog(t *testing.T) {
 
 	rec := outboxtest.NewRecorder()
 	fc := clockmock.New(certTestBase)
-	r, err := NewReconciler(fc, repo, rec.CellEmitter(), outbox.DemoCellTxManager(), drainPolicy, nil)
-	require.NoError(t, err)
 
 	reqCh := make(chan reconcile.Request, 1)
+	r, err := NewReconciler(fc, repo, rec.CellEmitter(), certRenewalTestPolicy, nil)
+	require.NoError(t, err)
 	loop, err := reconcile.New(r).
-		WithReconcilerID("certrenewal_drain_test").
+		WithReconcilerID("certrenewal_fullsweep_test").
 		WithTrigger(reconcile.ChannelTrigger(reqCh)).
-		WithoutDefaultRequeue(). // the RequeueAfter continuation is the sole re-dispatch mechanism
+		WithoutDefaultRequeue(). // ticker is the sole periodic source
 		Build()
 	require.NoError(t, err)
 
 	require.NoError(t, loop.Start(ctx))
 
-	// Send the initial resync-all pulse; the RequeueAfter continuation drives the rest.
+	// A single resync-all pulse must drain the full near-expiry set in one shot.
 	reqCh <- reconcile.Request{}
 
-	// All 4 certs must be drained within a short bounded wait (the BatchRequeue of
-	// 5ms ensures the Loop re-dispatches the continuation quickly).
-	testwait.External(t, "cert-renewal-drain",
+	testwait.External(t, "cert-renewal-full-sweep",
 		func() bool { return len(rec.Entries()) == totalCerts },
 		3*time.Second, 10*time.Millisecond,
-		"all %d near-expiry certs must be drained across the RequeueAfter batches", totalCerts)
+		"all %d near-expiry certs must be emitted in a single tick (no batch boundary)", totalCerts)
 
 	// Stop the loop before goleak runs — loop goroutines must be joined first.
 	stopLoop(t, loop)
 	defer goleak.VerifyNone(t)
 
-	assert.Len(t, rec.Entries(), totalCerts, "exactly all certs drained — no duplicates, no misses")
+	assert.Len(t, rec.Entries(), totalCerts,
+		"exactly all certs emitted in one tick — no RequeueAfter needed")
 }

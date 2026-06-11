@@ -1,23 +1,24 @@
 package devicecell
 
-// cert_renewal_e2e_test.go — archetype-② (reconcile → command) end-to-end for
-// #1757. Drives the full chain a near-expiry certificate takes:
+// cert_renewal_e2e_test.go — F1 (#1820) acceptance test.
 //
-//	devices row (near-expiry cert) → reconcile tick → command.EmitAsync → outbox
-//	store → relay (Claimer-wrapped dispatch, #1698) → enqueue handler → device
-//	command queue → device dequeue.
+// HEADLINE INVARIANT: an offline device (never dequeues) does NOT accumulate
+// duplicate rotate-cert commands across reconcile ticks. The queue's
+// active-uniqueness mechanism (IdempotencyKey + non-terminal guard) coalesces
+// duplicate emits to no-ops, so the active command count stays exactly 1
+// regardless of how many ticks fire.
 //
-// The headline invariant is CROSS-TICK DEDUP via the durable devices row (#1819):
-// the first tick emits one rotate-cert entry and marks the cert's epoch
-// renewal-requested on the row, so the second tick's scan skips the same
-// un-renewed cert and emits nothing. One entry is written, the relay dispatches it
-// once, the enqueue handler runs exactly once, and exactly one rotate-cert command
-// lands in the queue across two ticks — single-emit per epoch that does NOT rely on
-// the relay's 24h command-done TTL. (The relay Claimer is a secondary same-window
-// backstop, exercised by command_dedup_e2e_test.go.)
+// After the AttemptTTL elapses and the Sweeper expires the command (terminal),
+// the active-uniqueness key is released. The next reconcile tick then admits a
+// FRESH rotate-cert — proving level-triggered retry works without any
+// producer-side state.
+//
+// NOTE: no goleak — goroutine hygiene is covered by the goleak'd loop tests
+// in slices/devicecertrenewal/reconciler_loop_test.go.
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"testing"
@@ -30,127 +31,146 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	devicecertrenewal "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecertrenewal"
-	devicecommand "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommand"
+	slicecmd "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommand"
 	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
-	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
-	"github.com/ghbvf/gocell/kernel/idempotency"
-	kout "github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/kernel/reconcile"
 	"github.com/ghbvf/gocell/pkg/query"
-	command "github.com/ghbvf/gocell/runtime/command"
-	"github.com/ghbvf/gocell/runtime/outbox"
-	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
+	rtcommand "github.com/ghbvf/gocell/runtime/command"
 )
 
-// countingEnqueueHandler decorates the real enqueue adapter so the test can
-// assert the handler runs exactly once (repo-level dedup writes a single entry
-// the relay dispatches once) while the wrapped adapter still performs the real
-// queue write the device later dequeues.
-type countingEnqueueHandler struct {
-	inner cmdenqueue.Handler
-	calls int
+// dispatchNew dispatches all entries added to rec since the last call to
+// rec.Reset(). For each entry it:
+//   - derives the Claimer key via rtcommand.ClaimKeyFromEntry
+//   - parses the deadline from CommandDeadlineMetadataKey
+//   - injects (key, deadline) into ctx via rtcommand.WithDispatchedUniqueness
+//   - calls the enqueue handler
+//
+// This simulates the relay's active-uniqueness injection path (relay's
+// dispatchCommand, #1698) without starting any relay goroutines.
+// After dispatching, rec is Reset so the next call only dispatches new entries.
+func dispatchNew(t *testing.T, ctx context.Context, h cmdenqueue.Handler, rec *outboxtest.Recorder) {
+	t.Helper()
+	entries := rec.Entries()
+	rec.Reset()
+	for _, entry := range entries {
+		// Derive the active-uniqueness Claimer key (same funnel the relay uses).
+		key, ok := rtcommand.ClaimKeyFromEntry(entry)
+		require.True(t, ok, "all rotate-cert entries must have a valid Claimer key")
+
+		// Parse the deadline from the entry metadata (set by WithActiveUniqueness).
+		dlRaw, hasDL := entry.Metadata()[rtcommand.CommandDeadlineMetadataKey]
+		require.True(t, hasDL, "rotate-cert entry must carry CommandDeadlineMetadataKey")
+		dl, err := time.Parse(time.RFC3339Nano, dlRaw)
+		require.NoError(t, err, "CommandDeadlineMetadataKey must be RFC3339Nano")
+
+		// Inject uniqueness into ctx (relay's WithDispatchedUniqueness call).
+		dctx := rtcommand.WithDispatchedUniqueness(ctx, key, dl)
+
+		// Parse the handler request from the entry payload.
+		var req cmdenqueue.Request
+		require.NoError(t, json.Unmarshal(entry.Payload(), &req), "payload must decode as cmdenqueue.Request")
+
+		_, err = h.HandleEnqueue(dctx, &req)
+		require.NoError(t, err, "enqueue handler must succeed")
+	}
 }
 
-func (h *countingEnqueueHandler) HandleEnqueue(ctx context.Context, req *cmdenqueue.Request) (*cmdenqueue.Response, error) {
-	h.calls++
-	return h.inner.HandleEnqueue(ctx, req)
-}
-
-// NOTE: no goleak here — this test starts the real outbox relay, whose internal
-// worker goroutines are not deterministically joined when Relay.Start returns on
-// ctx cancel (the relay is a long-lived service). This matches the sibling relay
-// E2E command_dedup_e2e_test.go, which also omits goleak. reconcile.Loop goroutine
-// hygiene is covered separately by the goleak'd loop tests (sweeper_lifecycle_test.go).
-func TestCertRenewal_CrossTickDedupToDequeue(t *testing.T) {
+// TestCertRenewal_F1_OfflineDeviceNoDuplicates is the F1 acceptance test for
+// #1820. It proves that:
+//
+//  1. Multiple reconcile ticks with an OFFLINE device (never dequeues) keep
+//     exactly 1 active rotate-cert command in the queue — no accumulation.
+//
+//  2. After AttemptTTL elapses and the Sweeper expires the command, the next
+//     tick enqueues a FRESH rotate-cert (retry works without producer state).
+func TestCertRenewal_F1_OfflineDeviceNoDuplicates(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	base := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
-	fc := clockmock.New(base)
 
-	// Device with its near-expiry cert state persisted on the row (#1819): epoch 1,
-	// expiring within the 7d threshold. The enqueue handler validates the device
-	// exists, so it must be in the repo — the same repo the reconciler scans.
+	const attemptTTL = 36 * time.Hour
+	const threshold = 7 * 24 * time.Hour
+
+	base := time.Date(2026, 6, 12, 0, 0, 0, 0, time.UTC)
+	fc := clockmock.New(base)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Device repo: one offline device with a near-expiry cert.
 	repo := mem.NewDeviceRepository()
 	require.NoError(t, repo.Create(ctx, &domain.Device{
-		ID: "dev-1", Name: "edge-sensor", Status: "online", LastSeen: base,
+		ID: "dev-offline", Name: "offline-sensor", Status: "online", LastSeen: base,
 		CertEpoch: 1, CertExpiresAt: base.Add(24 * time.Hour),
 	}))
 
-	// Real consumer side: enqueue adapter over a devicecmd.Service backed by an
-	// in-memory command queue — the production handler the relay dispatches to.
+	// Producer: cert-renewal reconciler emitting into the Recorder.
+	rec := outboxtest.NewRecorder()
+	reconciler, err := devicecertrenewal.NewReconciler(fc, repo, rec.CellEmitter(),
+		devicecertrenewal.Policy{
+			Threshold:  threshold,
+			AttemptTTL: attemptTTL,
+		}, logger)
+	require.NoError(t, err)
+
+	// Consumer: in-memory command queue + devicecmd.Service + enqueue handler.
+	// The device never calls Dequeue — it stays offline throughout.
 	queue := commandtest.NewInMemQueue()
 	queue.Now = fc.Now
 	codec := newTestCursorCodec(t)
-	pubSvc, err := devicecmd.NewService(fc, queue, repo, codec, slog.New(slog.NewTextHandler(io.Discard, nil)),
-		query.RunModeForDemo(true), devicecmd.WithSliceName("devicecommand"))
+	svc, err := devicecmd.NewService(fc, queue, repo, codec, logger, query.RunModeForDemo(true),
+		devicecmd.WithSliceName("devicecommand"))
 	require.NoError(t, err)
-	reg := command.NewRegistry()
-	handler := &countingEnqueueHandler{inner: devicecommand.EnqueueCommandAdapter{S: pubSvc}}
-	require.NoError(t, cmdenqueue.Register(reg, handler))
+	handler := slicecmd.EnqueueCommandAdapter{S: svc}
 
-	// Producer side: the cert-renewal reconciler scans the device repo and emits
-	// into the SAME outbox store the relay polls.
-	emitStore := outboxtest.NewFakeStore()
-	we, err := kout.NewWriterEmitter(emitStore)
-	require.NoError(t, err)
-	reconciler, err := devicecertrenewal.NewReconciler(fc, repo, kout.WrapEmitterForCell(we),
-		kout.DemoCellTxManager(), devicecertrenewal.Policy{
-			Threshold:     7 * 24 * time.Hour,
-			RetryInterval: 25 * time.Hour,
-			BatchSize:     100,
-			BatchRequeue:  time.Second,
-		}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	require.NoError(t, err)
+	// --- Phase 1: Three ticks, device stays offline. ---
+	// Each tick: reconciler emits 1 entry; relay-sim dispatches it; queue
+	// active-uniqueness coalesces duplicates → active count stays exactly 1.
+	for tick := 1; tick <= 3; tick++ {
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{})
+		require.NoError(t, err, "tick %d: reconcile must not error", tick)
 
-	// Two ticks: the same un-renewed cert is observed each interval, but the first
-	// tick marks its epoch renewal-requested so the second tick's scan skips it —
-	// only one command entry is written (repo-level cross-tick dedup, no relay TTL).
+		dispatchNew(t, ctx, handler, rec)
+
+		active, scanErr := queue.ScanActive(ctx, kcommand.ScanFilter{DeviceID: "dev-offline"})
+		require.NoError(t, scanErr)
+		assert.Len(t, active, 1,
+			"tick %d: offline device must have exactly 1 active rotate-cert (no accumulation)", tick)
+	}
+
+	// Capture the first command's ID to confirm expiry later.
+	active0, err := queue.ScanActive(ctx, kcommand.ScanFilter{DeviceID: "dev-offline"})
+	require.NoError(t, err)
+	require.Len(t, active0, 1)
+	firstCmdID := active0[0].ID
+
+	// --- Phase 2: Advance clock past AttemptTTL + run Sweeper → Expired. ---
+	fc.Advance(attemptTTL + time.Second) // now > OverallDeadline of first command
+
+	sweeper, err := kcommand.NewSweeper(queue, queue, fc)
+	require.NoError(t, err)
+	require.NoError(t, sweeper.SweepTick(ctx, fc.Now()), "sweeper must transition expired command")
+
+	// The first command is now terminal (Expired); active count is 0.
+	afterExpiry, err := queue.ScanActive(ctx, kcommand.ScanFilter{DeviceID: "dev-offline"})
+	require.NoError(t, err)
+	assert.Empty(t, afterExpiry, "active-uniqueness key released: no active commands after expiry")
+
+	// GetCommand still finds the entry but it should be terminal.
+	expiredEntry, err := queue.GetCommand(ctx, firstCmdID)
+	require.NoError(t, err)
+	assert.True(t, expiredEntry.Status.IsTerminal(),
+		"the first command must be terminal (Expired) after SweepTick")
+
+	// --- Phase 3: Next tick re-enqueues a fresh attempt. ---
 	_, err = reconciler.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err, "post-expiry reconcile must not error")
+	dispatchNew(t, ctx, handler, rec)
+
+	afterRetry, err := queue.ScanActive(ctx, kcommand.ScanFilter{DeviceID: "dev-offline"})
 	require.NoError(t, err)
-	_, err = reconciler.Reconcile(ctx, reconcile.Request{})
-	require.NoError(t, err)
-
-	rows := emitStore.Snapshot()
-	require.Len(t, rows, 1, "repo-level per-epoch dedup: the second tick skips the already-requested cert")
-	_, ok0 := command.ClaimKeyFromEntry(rows[0].Entry)
-	require.True(t, ok0, "the rotate-cert entry carries an idempotency claim key")
-	assert.Equal(t, "dev-1", rows[0].Entry.AggregateID(), "the single entry is the device's renewal command")
-
-	// Relay with Claimer-wrapped dispatch (#1698) over the emit store.
-	relay := outbox.NewRelay(clock.Real(), emitStore, &kout.DiscardPublisher{},
-		outbox.RelayConfig{PollInterval: 5 * time.Millisecond, BaseRetryDelay: 5 * time.Millisecond}.WithDefaults())
-	relay.WithCommandDispatch(reg, map[command.CommandID]command.AsyncDispatchFunc{
-		cmdenqueue.DispatchID: cmdenqueue.DispatchAsync,
-	}, idempotency.NewInMemClaimer(clock.Real()))
-
-	relayCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	relayDone := make(chan struct{})
-	go func() { defer close(relayDone); _ = relay.Start(relayCtx) }()
-
-	require.NoError(t, emitStore.WaitFor(relayCtx, func(rows []outboxtest.FakeRow) bool {
-		return len(rows) == 1 && rows[0].Status == kout.StatePublished
-	}), "the single command entry settles to published (dispatched once)")
-
-	// Stop the relay and wait for Start to return before the remaining assertions,
-	// so the dequeue checks below do not race the relay (relayDone gates Start's
-	// return deterministically rather than relying on the ctx timeout).
-	cancel()
-	<-relayDone
-
-	assert.Equal(t, 1, handler.calls, "enqueue handler runs exactly once across the two ticks (repo-level cross-tick dedup)")
-
-	// Device dequeue: exactly one rotate-cert command is claimable for the device.
-	dequeued, err := queue.Dequeue(ctx, "dev-1", 10, time.Minute)
-	require.NoError(t, err)
-	require.Len(t, dequeued, 1, "exactly one rotate-cert command is enqueued for the device")
-	assert.Equal(t, "rotate-cert", dequeued[0].CommandType)
-
-	// And the queue holds no other active command for the device.
-	active, err := queue.ScanActive(ctx, kcommand.ScanFilter{DeviceID: "dev-1"})
-	require.NoError(t, err)
-	assert.Len(t, active, 1, "no duplicate rotate-cert command leaked across ticks")
+	assert.Len(t, afterRetry, 1, "a fresh rotate-cert must be queued after the expired slot is released")
+	assert.NotEqual(t, firstCmdID, afterRetry[0].ID,
+		"the retry command is a different entry (fresh enqueue, not the expired one)")
 }

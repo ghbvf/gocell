@@ -66,10 +66,10 @@ const gotWantQuotedFmt = "got %q want %q"
 //   - devices            (029)  examples/iotdevice devicecell PG repo (B2.B)
 //                                 + devices_status_chk CHECK (status IN online/offline)
 //                                 + cert_epoch BIGINT NOT NULL DEFAULT 1,
-//                                   cert_expires_at TIMESTAMPTZ (nullable, no default),
-//                                   renewal_requested_epoch BIGINT NOT NULL DEFAULT 0 (056)
+//                                   cert_expires_at TIMESTAMPTZ (nullable, no default) (056)
 //                                 + devices_cert_epoch_positive CHECK (cert_epoch >= 1) (056)
 //                                 + idx_devices_cert_expires_at (cert_expires_at, id) (057)
+//                                 + renewal_requested_epoch DROPPED (062, #1820)
 //   - commands           (030)  examples/iotdevice command queue PG adapter (B2.B)
 //                                 + commands.device_id FK → devices(id) ON DELETE RESTRICT
 //                                 + commands_status_chk, commands_attempt_chk
@@ -611,9 +611,9 @@ var expectedColumns = []expectedColumn{
 	{Table: "devices", Column: "status", Type: "text", NotNull: true},
 	{Table: "devices", Column: "last_seen", Type: pgTypeTSTZ, NotNull: true},
 	// 056_devices_cert_renewal.sql — durable cert-renewal state (#1819).
+	// 062_drop_devices_renewal_requested_epoch.sql — dropped renewal_requested_epoch (#1820).
 	{Table: "devices", Column: "cert_epoch", Type: "bigint", NotNull: true},
 	{Table: "devices", Column: "cert_expires_at", Type: pgTypeTSTZ, NotNull: false},
-	{Table: "devices", Column: "renewal_requested_epoch", Type: "bigint", NotNull: true},
 	// commands (030_commands.sql) — kernel/command.Queue PG adapter (B2.B).
 	{Table: "commands", Column: "id", Type: "text", NotNull: true},
 	{Table: "commands", Column: "device_id", Type: "text", NotNull: true},
@@ -743,9 +743,7 @@ var expectedDefaults = []expectedDefault{
 	// DEFAULT 1. A dropped default would cause bare SQL inserts (e.g. test fixtures)
 	// to fail NOT NULL.
 	{Table: "devices", Column: "cert_epoch", Default: "1"},
-	// devices.renewal_requested_epoch (056) — raw-SQL inserts that omit the column
-	// rely on DEFAULT 0 (no pending renewal). NOT NULL constraint requires the default.
-	{Table: "devices", Column: "renewal_requested_epoch", Default: "0"},
+	// devices.renewal_requested_epoch was dropped by 062 (#1820).
 }
 
 // expectedIndexes covers both unique and non-unique indexes across S3F tables.

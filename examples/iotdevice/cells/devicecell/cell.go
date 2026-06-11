@@ -556,50 +556,28 @@ func (c *DeviceCell) reconcileLoopMetrics() (reconcile.Metrics, bool, error) {
 
 const (
 	// certRenewalSweepInterval is the TickerTrigger cadence for the cert-renewal
-	// reconcile loop. Certificate expiry is slow-moving (days), so an hourly
+	// reconcile loop. Certificate expiry is slow-moving (days), so a 12h
 	// re-observation is ample; like commandSweepInterval it is the SOLE periodic
-	// source (WithoutDefaultRequeue below).
-	certRenewalSweepInterval = 1 * time.Hour
+	// source (WithoutDefaultRequeue below). Stateless producer: the sweep cadence
+	// only drives observation frequency, not correctness — the queue active-
+	// uniqueness owns dedup and the Sweeper owns expiry.
+	certRenewalSweepInterval = 12 * time.Hour
 	// certRenewalThreshold is the near-expiry window: a device whose certificate
 	// expires within now+threshold is swept into a rotate-cert command.
 	//
-	// Two co-tuning relationships (not machine-enforced — example tuning, not an
-	// invariant mechanism): (1) threshold is normally >> certRenewalSweepInterval,
-	// so a near-expiry cert is re-observed across many ticks; that is harmless
-	// because each epoch emits at most one command per certRenewalRetryInterval
-	// (the time-window retry release — see devicecertrenewal.Policy.RetryInterval
-	// and certRenewalRetryInterval), co-tuned with the relay's 24h Claimer done-TTL
-	// (see certRenewalRetryInterval); (2) the issued cert validity MUST exceed this
-	// threshold so a freshly registered device is not swept for renewal immediately.
+	// Co-tuning: the issued cert validity MUST exceed this threshold so a freshly
+	// registered device is not swept for renewal immediately.
 	// See deviceregister.certValidity (must exceed certRenewalThreshold).
 	certRenewalThreshold = 30 * 24 * time.Hour
-	// certRenewalRetryInterval is the time-window after which an un-advanced epoch
-	// becomes a renewal candidate again (terminal-failure / never-executed / expired
-	// retry release). Chosen modestly ABOVE the relay command Claimer's 24h
-	// idempotency done-TTL so a re-emit of the same commandID re-dispatches once
-	// the prior attempt's done-key has expired (a terminal-failed prior command
-	// releases the claim sooner, so this is the worst-case bound). This is a
-	// doc-only co-tuning relationship — not a machine-enforced invariant — in the
-	// same class as the certRenewalThreshold co-tuning above.
+	// certRenewalAttemptTTL is the retry-granularity timer: how long one
+	// rotate-cert command attempt stays active (non-terminal) before the Sweeper
+	// expires it. After expiry the active-uniqueness slot is released and the next
+	// reconcile tick re-enqueues a fresh attempt.
 	//
-	// Invariant (guarded by TestCertRenewalRetryIntervalExceedsClaimerDoneTTL):
-	// certRenewalRetryInterval >= relay Claimer done-TTL (24h). Setting it below
-	// means a genuine retry re-emits the same commandID while the prior done-key is
-	// still live → Claimer skips it → renewal silently stuck. Ref: ADR-1044
-	// §Amendment 2026-06-11(#1820).
-	certRenewalRetryInterval = 25 * time.Hour
-	// certRenewalScanBatchSize is the maximum number of near-expiry candidates
-	// scanned and emitted per reconcile tick. A full batch triggers a prompt
-	// continuation requeue (see certRenewalBatchRequeue) so a large near-expiry
-	// backlog drains across ticks without bursting the outbox/relay.
-	//
-	// Worst-case drain: ⌈N/BatchSize⌉ × BatchRequeue wall-time across requeues
-	// (e.g. 10k devices ≈ 100×1s ≈ 100s), which is fine since the ticker is not
-	// the drain driver.
-	certRenewalScanBatchSize = 100
-	// certRenewalBatchRequeue is the delay before continuing to the next batch when
-	// a full batch was returned (paces the drain).
-	certRenewalBatchRequeue = 1 * time.Second
+	// Chosen at 36h — comfortably exceeding a healthy device's daily poll cycle
+	// (worst-case poll+execute round-trip). Stateless producer: this is the ONLY
+	// co-tuning needed (#1820 ADR-1822); no RetryInterval/Claimer-TTL relationship.
+	certRenewalAttemptTTL = 36 * time.Hour
 )
 
 // buildCertRenewalSweeper constructs the certificate-renewal reconcile.Loop —
@@ -615,12 +593,10 @@ const (
 // fail-fast guards reached before here.
 func (c *DeviceCell) buildCertRenewalSweeper() error {
 	reconciler, err := devicecertrenewal.NewReconciler(
-		c.clk, c.deviceRepo, c.bootstrapEmitter, c.bootstrapTxManager,
+		c.clk, c.deviceRepo, c.bootstrapEmitter,
 		devicecertrenewal.Policy{
-			Threshold:     certRenewalThreshold,
-			RetryInterval: certRenewalRetryInterval,
-			BatchSize:     certRenewalScanBatchSize,
-			BatchRequeue:  certRenewalBatchRequeue,
+			Threshold:  certRenewalThreshold,
+			AttemptTTL: certRenewalAttemptTTL,
 		},
 		c.logger,
 	)

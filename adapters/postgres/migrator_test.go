@@ -187,6 +187,10 @@ func TestMigrationsFS_SubDirectory(t *testing.T) {
 		37: "saga/L3 plan §R2 — reserved for parallel PRs preceding 040 (PR-04 #959)",
 		38: "saga/L3 plan §R2 — reserved for parallel PRs preceding 040 (PR-04 #959)",
 		39: "saga/L3 plan §R2 — reserved for parallel PRs preceding 040 (PR-04 #959)",
+		// 060 was planned (devices.renewal_requested_at for time-window retry) but
+		// never created — the approach was superseded by the stateless producer with
+		// queue active-uniqueness before the migration was written (#1820).
+		60: "planned but never created — superseded by stateless producer (#1820)",
 	}
 
 	// Max version must equal file count plus known-gap count.
