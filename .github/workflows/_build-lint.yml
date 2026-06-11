@@ -88,10 +88,20 @@ jobs:
             static_checks: false
           # `others` was a single 140s shard covering adapters + cmd +
           # examples + tests + contracts. Splitting along compile cost:
-          # `others-heavy` carries ./adapters/... (external SDK dependency
-          # surface — postgres / redis / rabbitmq / vault / otel). `others-light`
-          # carries the remaining lightweight subtrees. The split brings the
-          # heavier leg below the kernel-shard critical path.
+          # the `adapters` shard carries the platform adapters (external SDK
+          # dependency surface — postgres / redis / rabbitmq / vault / otel);
+          # `others-light` carries the remaining lightweight subtrees. The split
+          # brings the heavier leg below the kernel-shard critical path.
+          #
+          # Each adapter is its own go.work module (github.com/ghbvf/gocell/
+          # adapters/<x>, #1558), so a root `./adapters/...` relative pattern
+          # stops at the first nested-module boundary and matches zero packages.
+          # The import-path pattern `github.com/ghbvf/gocell/adapters/...` instead
+          # resolves across ALL 14 adapter modules in workspace mode and writes a
+          # single combined coverage-shard-adapters.out — keeping every adapter's
+          # unit coverage in the Sonar merge (adapters are coverage-scope, unlike
+          # examples/cmd). The go.work funnel (hack/lib/modules.sh) also covers
+          # each adapter module for lint + the workspace verify gates.
           #
           # examples/* unit tests are NO LONGER in this shard: each example is its
           # own go.work module (#1556), so a root `./examples/...` pattern would
@@ -105,8 +115,8 @@ jobs:
           # cmd/internal. cmd/gocell + cmd/corebundle unit tests run in
           # hack/verify-workspace-test.sh and their builds in hack/verify-workspace.sh
           # — the same go.work funnel as examples/*.
-          - shard: others-heavy
-            pkgs: ./adapters/...
+          - shard: adapters
+            pkgs: github.com/ghbvf/gocell/adapters/...
             static_checks: false
           - shard: others-light
             pkgs: ./cmd/... ./tests/... ./contracts/...
@@ -693,11 +703,11 @@ jobs:
         # silently pass. Pipe stdout+stderr through grep and fail explicitly.
         run: |
           set -euo pipefail
-          out=$(go test -tags=integration,otelcollector ./adapters/otel/ \
+          out=$(go test -tags=integration,otelcollector github.com/ghbvf/gocell/adapters/otel/ \
             -run '^TestNewTracer_ExportsSpanToOTLPCollector$' -count=1 -timeout 10m 2>&1)
           echo "$out"
           if echo "$out" | grep -q 'no tests to run'; then
-            echo "FAIL: -run selector matched zero tests in ./adapters/otel/; rename/move regression?"
+            echo "FAIL: -run selector matched zero tests in github.com/ghbvf/gocell/adapters/otel/; rename/move regression?"
             exit 1
           fi
 
@@ -720,11 +730,11 @@ jobs:
         # silently disable the race regression防线.
         run: |
           set -euo pipefail
-          out=$(go test -tags=integration -race -count=3 -timeout 5m ./adapters/postgres/ \
+          out=$(go test -tags=integration -race -count=3 -timeout 5m github.com/ghbvf/gocell/adapters/postgres/ \
             -run '^TestMigrator_ConcurrentUp_NoRaceWithSessionLocker$' 2>&1)
           echo "$out"
           if echo "$out" | grep -q 'no tests to run'; then
-            echo "FAIL: -run selector matched zero tests in ./adapters/postgres/; rename/move regression?"
+            echo "FAIL: -run selector matched zero tests in github.com/ghbvf/gocell/adapters/postgres/; rename/move regression?"
             exit 1
           fi
 
@@ -748,11 +758,11 @@ jobs:
         # silently disable the race regression 防线.
         run: |
           set -euo pipefail
-          out=$(go test -tags=integration -race -count=3 -timeout 5m ./adapters/redis/ \
+          out=$(go test -tags=integration -race -count=3 -timeout 5m github.com/ghbvf/gocell/adapters/redis/ \
             -run '^TestRaceStress_' 2>&1)
           echo "$out"
           if echo "$out" | grep -q 'no tests to run'; then
-            echo "FAIL: -run selector matched zero tests in ./adapters/redis/; rename/move regression?"
+            echo "FAIL: -run selector matched zero tests in github.com/ghbvf/gocell/adapters/redis/; rename/move regression?"
             exit 1
           fi
 
@@ -766,7 +776,7 @@ jobs:
         # cluster tag keeps the file from bit-rotting when go-redis API
         # changes or our own cluster paths drift. Real-cluster integration
         # is left to staging and B11 backlog.
-        run: go vet -tags=integration_cluster ./adapters/redis/...
+        run: go vet -tags=integration_cluster github.com/ghbvf/gocell/adapters/redis/...
 
       # adapters/postgres coverage gate (G11 / PR-V1-TEST-GATE-CLOSURE)
       # Closes P3-TD-02 + P4-TD-08 + P4-TD-11: previously coverage-integration.out
@@ -1084,13 +1094,14 @@ jobs:
         run: |
           set -euo pipefail
           echo "mode: atomic" > coverage-merged.out
-          # build-test profiles: kernel, tools, runtime, corecells, others-heavy,
-          #   others-light (others-* replaces the single former `others`
-          #   shard, see build-test matrix above).
+          # build-test profiles: kernel, tools, runtime, corecells, adapters,
+          #   others-light (the `adapters` shard runs the import-path pattern
+          #   github.com/ghbvf/gocell/adapters/... across all 14 adapter modules
+          #   and writes one combined coverage-shard-adapters.out, see #1558).
           # integration-test profiles: adapters (main leg), corecells, corebundle,
           #   tests. adapters-race has no profile (run_main_integration: false).
           for f in coverage-shard-kernel.out coverage-shard-tools.out coverage-shard-runtime.out coverage-shard-corecells.out \
-                   coverage-shard-others-heavy.out coverage-shard-others-light.out \
+                   coverage-shard-adapters.out coverage-shard-others-light.out \
                    coverage-integration-adapters.out coverage-integration-corecells.out coverage-integration-corebundle.out coverage-integration-tests.out; do
             if [ ! -f "$f" ]; then
               echo "FAIL: expected profile $f is missing" >&2

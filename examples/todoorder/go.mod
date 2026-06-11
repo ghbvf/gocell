@@ -14,7 +14,7 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
-	github.com/kr/pretty v0.3.1 // indirect
+	github.com/ghbvf/gocell/adapters/ratelimit v0.0.0
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	go.opentelemetry.io/contrib/propagators/b3 v1.44.0 // indirect
@@ -23,7 +23,6 @@ require (
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
-	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
@@ -32,3 +31,5 @@ require (
 // release-consistency build in hack/verify-workspace.sh) this replace makes the
 // unpublished core module resolve to the repo root instead of being fetched.
 replace github.com/ghbvf/gocell => ../../
+
+replace github.com/ghbvf/gocell/adapters/ratelimit => ../../adapters/ratelimit

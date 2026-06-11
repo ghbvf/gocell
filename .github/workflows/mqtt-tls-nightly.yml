@@ -29,7 +29,7 @@ jobs:
       - name: MQTT mTLS integration
         run: |
           set -o pipefail
-          go test -json -v -tags='integration mqtt_tls' ./adapters/mqtt/... -count=1 -timeout 10m 2>&1 | tee mqtt-tls-nightly.json
+          go test -json -v -tags='integration mqtt_tls' github.com/ghbvf/gocell/adapters/mqtt/... -count=1 -timeout 10m 2>&1 | tee mqtt-tls-nightly.json
 
       - name: Upload failure logs
         if: failure()

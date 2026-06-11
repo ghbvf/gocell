@@ -15,12 +15,15 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
+	github.com/ghbvf/gocell/adapters/adapterutil v0.0.0 // indirect
+	github.com/ghbvf/gocell/adapters/postgres v0.0.0
+	github.com/ghbvf/gocell/adapters/ratelimit v0.0.0
+	github.com/ghbvf/gocell/adapters/redis v0.0.0
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
-	github.com/kr/pretty v0.3.1 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/pressly/goose/v3 v3.27.1 // indirect
@@ -45,3 +48,11 @@ require (
 replace github.com/ghbvf/gocell => ../
 
 replace github.com/ghbvf/gocell/corecells => ../corecells
+
+replace github.com/ghbvf/gocell/adapters/adapterutil => ../adapters/adapterutil
+
+replace github.com/ghbvf/gocell/adapters/postgres => ../adapters/postgres
+
+replace github.com/ghbvf/gocell/adapters/ratelimit => ../adapters/ratelimit
+
+replace github.com/ghbvf/gocell/adapters/redis => ../adapters/redis
