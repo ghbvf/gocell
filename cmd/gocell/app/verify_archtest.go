@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ghbvf/gocell/cmd/gocell/app/printers"
 	"github.com/ghbvf/gocell/cmd/gocell/internal/archtestrunner"
@@ -43,7 +44,9 @@ func parseArchtestFlags(args []string) (req archtestrunner.Request, listTests bo
 
 	root := fs.String("root", "", "workspace root directory (default: auto-detect)")
 	rule := fs.String("rule", "", "optional INVARIANT rule ID, e.g. LAYER-05")
-	changed := fs.Bool("changed", false, "select only changed archtest test files")
+	changed := fs.Bool("changed", false,
+		"run only tests whose tools/archtest/*_test.go file changed vs origin/develop"+
+			" (mechanical; NOT source→affected-rule mapping, see #1877)")
 	shardStr := fs.String("shard", "", "shard selection N/K (e.g. 0/3)")
 	formatFlag := fs.String("format", "text", "output format: "+strings.Join(printers.SupportedFormats(), " | "))
 	testJSONOut := fs.String("test-json-out", "", "optional file: write raw go test -json events")
@@ -62,6 +65,17 @@ func parseArchtestFlags(args []string) (req archtestrunner.Request, listTests bo
 		return req, false, "", fmt.Errorf("--shard: %w", shardErr)
 	}
 
+	dur, durErr := time.ParseDuration(*timeout)
+	if durErr != nil {
+		return req, false, "", fmt.Errorf("--timeout: invalid duration %q: %w", *timeout, durErr)
+	}
+	if dur <= 0 {
+		return req, false, "", fmt.Errorf(
+			"--timeout: must be a positive duration (e.g. 5m); got %q"+
+				" (0 disables go test timeout, hanging CI shards until GHA's 10m backstop)",
+			*timeout)
+	}
+
 	workspaceRoot := *root
 	if workspaceRoot == "" {
 		workspaceRoot, err = findRoot()
@@ -72,12 +86,17 @@ func parseArchtestFlags(args []string) (req archtestrunner.Request, listTests bo
 
 	req = archtestrunner.Request{
 		WorkspaceRoot: workspaceRoot,
-		Scope:         archtestrunner.ScopeWorkspace,
-		Rule:          *rule,
-		Changed:       *changed,
-		Shard:         shard,
-		TestJSONOut:   *testJSONOut,
-		Timeout:       *timeout,
+		// --scope flag intentionally not exposed: framework==workspace execution today
+		// (all archtest is one package requiring GOWORK). Internal Scope/WorkspaceRoot
+		// seam reserved for external-repo archtest (epic gh #1878).
+		Scope: archtestrunner.ScopeWorkspace,
+		Rule:  *rule,
+		// Mechanical --changed: changed archtest test files only; source→affected-rule
+		// mapping deferred (gh #1877).
+		Changed:     *changed,
+		Shard:       shard,
+		TestJSONOut: *testJSONOut,
+		Timeout:     *timeout,
 	}
 	return req, *listTestsFlag, *formatFlag, nil
 }
@@ -120,7 +139,7 @@ func runArchtestReport(ctx context.Context, req archtestrunner.Request, format s
 	}
 
 	if !report.Passed {
-		return fmt.Errorf("archtest: %d failing test(s)", countFailedTests(report))
+		return fmt.Errorf("archtest: %d failing test(s)", len(results))
 	}
 	return nil
 }
@@ -171,7 +190,7 @@ func mapReportToResults(report archtestrunner.Report) []governance.ValidationRes
 		results = append(results, governance.ValidationResult{
 			Code:      ruleCodeForTest(tr),
 			Severity:  governance.SeverityError,
-			IssueType: governance.IssueForbidden,
+			IssueType: governance.IssueInvalid,
 			File:      tr.File,
 			Field:     tr.Name,
 			Message:   trimOutput(tr.Output, tr.Name),
@@ -203,15 +222,4 @@ func trimOutput(output, testName string) string {
 		out = out[:maxArchtestOutputLen] + "…"
 	}
 	return "archtest failure: " + testName + ": " + out
-}
-
-// countFailedTests counts TestResult entries with Status=="fail".
-func countFailedTests(report archtestrunner.Report) int {
-	count := 0
-	for _, tr := range report.Tests {
-		if tr.Status == "fail" {
-			count++
-		}
-	}
-	return count
 }

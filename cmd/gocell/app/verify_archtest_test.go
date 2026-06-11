@@ -71,6 +71,40 @@ func TestVerifyArchtest_BadShard(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// --timeout validation tests
+// ---------------------------------------------------------------------------
+
+func TestVerifyArchtest_TimeoutValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		timeout   string
+		wantError bool
+		errSubstr string
+	}{
+		{name: "valid 5m", timeout: "5m", wantError: false},
+		{name: "valid 10m", timeout: "10m", wantError: false},
+		{name: "valid 30s", timeout: "30s", wantError: false},
+		{name: "invalid abc", timeout: "abc", wantError: true, errSubstr: "--timeout"},
+		{name: "zero disables timeout", timeout: "0", wantError: true, errSubstr: "--timeout"},
+		{name: "negative duration", timeout: "-1s", wantError: true, errSubstr: "--timeout"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, _, err := parseArchtestFlags([]string{"--timeout=" + tc.timeout})
+			if tc.wantError {
+				require.Error(t, err, "expected error for --timeout=%q", tc.timeout)
+				assert.Contains(t, err.Error(), tc.errSubstr)
+			} else if err != nil {
+				// parseArchtestFlags may error later (e.g. findRoot), but the
+				// timeout validation itself must not be the cause.
+				assert.NotContains(t, err.Error(), "--timeout",
+					"unexpected timeout-related error for valid --timeout=%q: %v", tc.timeout, err)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // parseShard unit tests
 // ---------------------------------------------------------------------------
 
@@ -121,6 +155,18 @@ func TestParseShard_Invalid(t *testing.T) {
 // ---------------------------------------------------------------------------
 // mapReportToResults unit tests
 // ---------------------------------------------------------------------------
+
+func TestMapReportToResults_IssueTypeIsInvalid(t *testing.T) {
+	report := archtestrunner.Report{
+		Tests: []archtestrunner.TestResult{
+			{Name: "TestFail", Status: "fail", Rules: []string{"LAYER-01"}},
+		},
+	}
+	results := mapReportToResults(report)
+	require.Len(t, results, 1)
+	assert.Equal(t, governance.IssueInvalid, results[0].IssueType,
+		"archtest failures are invariant violations (IssueInvalid), not forbidden constructs (IssueForbidden)")
+}
 
 func TestMapReportToResults_OnlyFailuresBecomeResults(t *testing.T) {
 	report := archtestrunner.Report{
