@@ -124,7 +124,8 @@ func TestApplyFilters_NoFilters(t *testing.T) {
 	root := t.TempDir()
 	discovered := []string{"TestA", "TestB", "TestC"}
 	req := Request{WorkspaceRoot: root}
-	got, err := applyFilters(t.Context(), req, discovered)
+	e := engine{exec: defaultExec, changed: changedArchtestFiles}
+	got, err := e.applyFilters(t.Context(), req, discovered)
 	require.NoError(t, err)
 	assert.Equal(t, discovered, got)
 }
@@ -134,7 +135,8 @@ func TestApplyFilters_WithShard(t *testing.T) {
 	root := t.TempDir()
 	discovered := []string{"TestA", "TestB", "TestC", "TestD"}
 	req := Request{WorkspaceRoot: root, Shard: Shard{Index: 0, Total: 2}}
-	got, err := applyFilters(t.Context(), req, discovered)
+	e := engine{exec: defaultExec, changed: changedArchtestFiles}
+	got, err := e.applyFilters(t.Context(), req, discovered)
 	require.NoError(t, err)
 	// shard 0 of 2: NR=2 (B), NR=4 (D) → TestB, TestD
 	assert.Equal(t, []string{"TestB", "TestD"}, got)
@@ -158,7 +160,8 @@ func TestLayerB(t *testing.T) {}
 
 	discovered := []string{"TestLayerA", "TestLayerB", "TestOther"}
 	req := Request{WorkspaceRoot: root, Rule: "LAYER-05"}
-	got, err := applyFilters(t.Context(), req, discovered)
+	e := engine{exec: defaultExec, changed: changedArchtestFiles}
+	got, err := e.applyFilters(t.Context(), req, discovered)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"TestLayerA", "TestLayerB"}, got)
 }
@@ -180,7 +183,8 @@ func TestFoo(t *testing.T) {}
 
 	discovered := []string{"TestFoo"}
 	req := Request{WorkspaceRoot: root, Rule: "NONEXISTENT-99"}
-	_, err := applyFilters(t.Context(), req, discovered)
+	e := engine{exec: defaultExec, changed: changedArchtestFiles}
+	_, err := e.applyFilters(t.Context(), req, discovered)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown rule")
 }

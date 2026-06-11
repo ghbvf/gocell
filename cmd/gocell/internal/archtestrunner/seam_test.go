@@ -3,7 +3,6 @@ package archtestrunner
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,62 +13,64 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// stubRunGoCommand replaces runGoCommand for the duration of a test and restores
-// it in t.Cleanup. Tests must use this helper rather than assigning the variable
-// directly so the restore is always registered.
-func stubRunGoCommand(t *testing.T, fn func(ctx context.Context, dir string, extraEnv, args []string) ([]byte, error)) {
-	t.Helper()
-	orig := runGoCommand
-	runGoCommand = fn
-	t.Cleanup(func() { runGoCommand = orig })
-}
-
-// stubDiscovery returns a stub that yields the given sorted test list when the
-// first arg after "test" is "-list", and the given exec output for any other call.
-func stubDiscovery(t *testing.T, listOutput string, execOutput []byte, execErr error) {
-	t.Helper()
-	stubRunGoCommand(t, func(_ context.Context, _ string, _ []string, args []string) ([]byte, error) {
-		// args[0] == "test", args[1] is "-list" or "-tags=archtest"
+// fakeExec builds an execFn stub that returns listOutput for -list calls and
+// execOutput/execErr for all other calls (exec phase).
+func fakeExec(listOutput string, execOutput []byte, execErr error) execFn {
+	return func(_ context.Context, _ string, _ []string, args []string) ([]byte, error) {
 		for _, a := range args {
 			if a == "-list" {
 				return []byte(listOutput), nil
 			}
 		}
 		return execOutput, execErr
-	})
+	}
+}
+
+// fakeDiscoverExec returns an execFn whose list output contains the provided
+// test names (one per line).
+func fakeDiscoverExec(names ...string) execFn {
+	listOut := strings.Join(names, "\n") + "\n"
+	return fakeExec(listOut, nil, nil)
 }
 
 // ---- discoverTests via seam ----
 
 func TestDiscoverTests_ReturnsNames(t *testing.T) {
-	stubRunGoCommand(t, func(_ context.Context, _ string, _ []string, args []string) ([]byte, error) {
-		// Confirm -list flag is present.
-		require.Contains(t, args, "-list", "discover should pass -list")
-		return []byte("TestAlpha\nTestBeta\nTestGamma\nok  ./tools/archtest\t0.001s\n"), nil
-	})
+	e := engine{
+		exec: func(_ context.Context, _ string, _ []string, args []string) ([]byte, error) {
+			require.Contains(t, args, "-list", "discover should pass -list")
+			return []byte("TestAlpha\nTestBeta\nTestGamma\nok  ./tools/archtest\t0.001s\n"), nil
+		},
+		changed: changedArchtestFiles,
+	}
 
-	tests, err := discoverTests(context.Background(), t.TempDir())
+	tests, err := e.discoverTests(context.Background(), t.TempDir())
 	require.NoError(t, err)
 	assert.Equal(t, []string{"TestAlpha", "TestBeta", "TestGamma"}, tests)
 }
 
 func TestDiscoverTests_ZeroDiscovered_Error(t *testing.T) {
-	stubRunGoCommand(t, func(_ context.Context, _ string, _ []string, _ []string) ([]byte, error) {
-		// Only noise, no Test* names.
-		return []byte("ok  ./tools/archtest\t0.001s\n"), nil
-	})
+	e := engine{
+		exec: func(_ context.Context, _ string, _ []string, _ []string) ([]byte, error) {
+			return []byte("ok  ./tools/archtest\t0.001s\n"), nil
+		},
+		changed: changedArchtestFiles,
+	}
 
-	_, err := discoverTests(context.Background(), t.TempDir())
+	_, err := e.discoverTests(context.Background(), t.TempDir())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no archtest Test* functions discovered")
 }
 
 func TestDiscoverTests_RunError_Error(t *testing.T) {
-	stubRunGoCommand(t, func(_ context.Context, _ string, _ []string, _ []string) ([]byte, error) {
-		return nil, fmt.Errorf("go tool not found")
-	})
+	e := engine{
+		exec: func(_ context.Context, _ string, _ []string, _ []string) ([]byte, error) {
+			return nil, errors.New("go tool not found")
+		},
+		changed: changedArchtestFiles,
+	}
 
-	_, err := discoverTests(context.Background(), t.TempDir())
+	_, err := e.discoverTests(context.Background(), t.TempDir())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "discover archtest tests")
 }
@@ -78,14 +79,17 @@ func TestDiscoverTests_RunError_Error(t *testing.T) {
 
 func TestExecGoTest_PassesTimeoutAndRunFlag(t *testing.T) {
 	var capturedArgs []string
-	stubRunGoCommand(t, func(_ context.Context, _ string, _ []string, args []string) ([]byte, error) {
-		capturedArgs = args
-		return []byte(`{"Action":"pass","Test":"TestFoo","Elapsed":0.1}`), nil
-	})
+	e := engine{
+		exec: func(_ context.Context, _ string, _ []string, args []string) ([]byte, error) {
+			capturedArgs = args
+			return []byte(`{"Action":"pass","Test":"TestFoo","Elapsed":0.1}`), nil
+		},
+		changed: changedArchtestFiles,
+	}
 
 	req := Request{WorkspaceRoot: t.TempDir(), Timeout: "3m"}
 	selected := []string{"TestFoo", "TestBar"}
-	_, err := execGoTest(context.Background(), req, selected)
+	_, err := e.execGoTest(context.Background(), req, selected)
 	require.NoError(t, err)
 
 	assert.Contains(t, capturedArgs, "-timeout=3m")
@@ -123,14 +127,16 @@ func TestLayerA(t *testing.T) {}
 `,
 	})
 
-	listOut := "TestLayerA\n"
 	execOut := []byte(
 		`{"Action":"run","Test":"TestLayerA"}` + "\n" +
 			`{"Action":"pass","Test":"TestLayerA","Elapsed":0.05}` + "\n",
 	)
-	stubDiscovery(t, listOut, execOut, nil)
+	e := engine{
+		exec:    fakeExec("TestLayerA\n", execOut, nil),
+		changed: changedArchtestFiles,
+	}
 
-	report, err := Run(context.Background(), Request{WorkspaceRoot: root})
+	report, err := e.run(context.Background(), Request{WorkspaceRoot: root})
 	require.NoError(t, err)
 	assert.True(t, report.Passed)
 	assert.Equal(t, []string{"TestLayerA"}, report.Selected)
@@ -159,7 +165,6 @@ func TestLayerB(t *testing.T) {}
 `,
 	})
 
-	listOut := "TestLayerA\nTestLayerB\n"
 	execOut := []byte(
 		`{"Action":"run","Test":"TestLayerA"}` + "\n" +
 			`{"Action":"output","Test":"TestLayerA","Output":"    violation\n"}` + "\n" +
@@ -167,11 +172,13 @@ func TestLayerB(t *testing.T) {}
 			`{"Action":"run","Test":"TestLayerB"}` + "\n" +
 			`{"Action":"pass","Test":"TestLayerB","Elapsed":0.1}` + "\n",
 	)
-	// Simulate `go test` exit non-zero via *exec.ExitError.
 	fakeExitErr := &exec.ExitError{}
-	stubDiscovery(t, listOut, execOut, fakeExitErr)
+	e := engine{
+		exec:    fakeExec("TestLayerA\nTestLayerB\n", execOut, fakeExitErr),
+		changed: changedArchtestFiles,
+	}
 
-	report, err := Run(context.Background(), Request{WorkspaceRoot: root})
+	report, err := e.run(context.Background(), Request{WorkspaceRoot: root})
 	require.NoError(t, err, "test failure must not be an infra error")
 	assert.False(t, report.Passed)
 
@@ -204,13 +211,54 @@ func TestFoo(t *testing.T) {}
 `,
 	})
 
-	listOut := "TestFoo\n"
 	infraErr := errors.New("context deadline exceeded")
-	stubDiscovery(t, listOut, nil, infraErr)
+	e := engine{
+		exec:    fakeExec("TestFoo\n", nil, infraErr),
+		changed: changedArchtestFiles,
+	}
 
-	_, err := Run(context.Background(), Request{WorkspaceRoot: root})
+	_, err := e.run(context.Background(), Request{WorkspaceRoot: root})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "go test execution failed")
+}
+
+// ---- Run via seam: build-fail path ----
+// Stub exec returns build-fail -json output + a *exec.ExitError.
+// Run must return err==nil, report.Passed==false (NOT an infra error).
+
+func TestRun_BuildFail(t *testing.T) {
+	if os.Getenv("GOWORK") == "off" {
+		t.Skip("GOWORK=off")
+	}
+
+	root := makeFakeArchtestDir(t, map[string]string{
+		"foo_test.go": `//go:build archtest
+
+// INVARIANT: FOO-01
+
+package archtest
+
+import "testing"
+
+func TestFoo(t *testing.T) {}
+`,
+	})
+
+	// Build failure: go test emits build noise (no JSON test events), exit non-zero.
+	buildFailOutput := []byte(
+		"# tools/archtest\n" +
+			"tools/archtest/broken_test.go:5:2: undefined: SomeMissing\n" +
+			"FAIL\ttools/archtest [build failed]\n",
+	)
+	fakeExitErr := &exec.ExitError{}
+	e := engine{
+		exec:    fakeExec("TestFoo\n", buildFailOutput, fakeExitErr),
+		changed: changedArchtestFiles,
+	}
+
+	report, err := e.run(context.Background(), Request{WorkspaceRoot: root})
+	require.NoError(t, err, "build failure is an ExitError, not an infra error")
+	assert.False(t, report.Passed, "build failure must produce Passed=false")
 }
 
 // ---- Run via seam: TestJSONOut written ----
@@ -233,17 +281,19 @@ func TestFoo(t *testing.T) {}
 `,
 	})
 
-	listOut := "TestFoo\n"
 	execOut := []byte(
 		`go: build noise` + "\n" +
 			`{"Action":"run","Test":"TestFoo"}` + "\n" +
 			`{"Action":"pass","Test":"TestFoo","Elapsed":0.1}` + "\n",
 	)
-	stubDiscovery(t, listOut, execOut, nil)
+	e := engine{
+		exec:    fakeExec("TestFoo\n", execOut, nil),
+		changed: changedArchtestFiles,
+	}
 
 	jsonOutPath := filepath.Join(t.TempDir(), "events.json")
 	req := Request{WorkspaceRoot: root, TestJSONOut: jsonOutPath}
-	report, err := Run(context.Background(), req)
+	report, err := e.run(context.Background(), req)
 	require.NoError(t, err)
 	assert.True(t, report.Passed)
 
@@ -254,6 +304,77 @@ func TestFoo(t *testing.T) {}
 	assert.NotContains(t, content, "go: build noise")
 	assert.Contains(t, content, `"Action":"run"`)
 	assert.Contains(t, content, `"Action":"pass"`)
+}
+
+// ---- Run via seam: TestJSONOut written even when output is empty ----
+// Regression: slowgate's `< file` must not fail because the file is missing.
+
+func TestRun_TestJSONOut_WrittenEvenWhenEmpty(t *testing.T) {
+	if os.Getenv("GOWORK") == "off" {
+		t.Skip("GOWORK=off")
+	}
+
+	root := makeFakeArchtestDir(t, map[string]string{
+		"foo_test.go": `//go:build archtest
+
+// INVARIANT: FOO-01
+
+package archtest
+
+import "testing"
+
+func TestFoo(t *testing.T) {}
+`,
+	})
+
+	// Stub returns empty output — simulates a subprocess that wrote nothing.
+	e := engine{
+		exec:    fakeExec("TestFoo\n", []byte{}, nil),
+		changed: changedArchtestFiles,
+	}
+
+	jsonOutPath := filepath.Join(t.TempDir(), "events.json")
+	req := Request{WorkspaceRoot: root, TestJSONOut: jsonOutPath}
+	_, err := e.run(context.Background(), req)
+	require.NoError(t, err)
+
+	// File must exist even though output was empty.
+	_, statErr := os.Stat(jsonOutPath)
+	assert.NoError(t, statErr, "TestJSONOut file must exist even when subprocess output is empty")
+}
+
+// ---- Run via seam: TestJSONOut file in nonexistent dir bubbles error ----
+
+func TestRun_TestJSONOut_BadPath_ReturnsError(t *testing.T) {
+	if os.Getenv("GOWORK") == "off" {
+		t.Skip("GOWORK=off")
+	}
+
+	root := makeFakeArchtestDir(t, map[string]string{
+		"foo_test.go": `//go:build archtest
+
+// INVARIANT: FOO-01
+
+package archtest
+
+import "testing"
+
+func TestFoo(t *testing.T) {}
+`,
+	})
+
+	execOut := []byte(`{"Action":"pass","Test":"TestFoo","Elapsed":0.1}` + "\n")
+	e := engine{
+		exec:    fakeExec("TestFoo\n", execOut, nil),
+		changed: changedArchtestFiles,
+	}
+
+	// Path under a nonexistent directory — os.Create must fail.
+	badPath := filepath.Join(t.TempDir(), "nonexistent-dir", "events.json")
+	req := Request{WorkspaceRoot: root, TestJSONOut: badPath}
+	_, err := e.run(context.Background(), req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "archtestrunner")
 }
 
 // ---- Run via seam: empty selection (--rule filter removes all) ----
@@ -276,22 +397,70 @@ import "testing"
 func TestLayerOnly(t *testing.T) {}
 `,
 	})
+
 	// Discovery returns a test name that is NOT in the rule's test set.
-	stubRunGoCommand(t, func(_ context.Context, _ string, _ []string, args []string) ([]byte, error) {
-		for _, a := range args {
-			if a == "-list" {
-				return []byte("TestOtherTest\n"), nil
+	e := engine{
+		exec: func(_ context.Context, _ string, _ []string, args []string) ([]byte, error) {
+			for _, a := range args {
+				if a == "-list" {
+					return []byte("TestOtherTest\n"), nil
+				}
 			}
-		}
-		t.Error("execGoTest should not be called when selection is empty")
-		return nil, nil
-	})
+			t.Error("execGoTest should not be called when selection is empty")
+			return nil, nil
+		},
+		changed: changedArchtestFiles,
+	}
 
 	req := Request{WorkspaceRoot: root, Rule: "LAYER-05"}
-	report, err := Run(context.Background(), req)
+	report, err := e.run(context.Background(), req)
 	require.NoError(t, err)
 	assert.True(t, report.Passed, "empty selection with no test failures must be Passed=true")
 	assert.Empty(t, report.Selected)
+}
+
+// ---- Run via seam: TestJSONOut written on empty selection ----
+// When no tests are selected, the file must still be created (empty).
+
+func TestRun_EmptySelection_TestJSONOut_Created(t *testing.T) {
+	if os.Getenv("GOWORK") == "off" {
+		t.Skip("GOWORK=off")
+	}
+
+	root := makeFakeArchtestDir(t, map[string]string{
+		"layer_test.go": `//go:build archtest
+
+// INVARIANT: LAYER-05
+
+package archtest
+
+import "testing"
+
+func TestLayerOnly(t *testing.T) {}
+`,
+	})
+
+	e := engine{
+		exec: func(_ context.Context, _ string, _ []string, args []string) ([]byte, error) {
+			for _, a := range args {
+				if a == "-list" {
+					return []byte("TestOtherTest\n"), nil
+				}
+			}
+			t.Error("execGoTest should not be called when selection is empty")
+			return nil, nil
+		},
+		changed: changedArchtestFiles,
+	}
+
+	jsonOutPath := filepath.Join(t.TempDir(), "events.json")
+	req := Request{WorkspaceRoot: root, Rule: "LAYER-05", TestJSONOut: jsonOutPath}
+	report, err := e.run(context.Background(), req)
+	require.NoError(t, err)
+	assert.True(t, report.Passed)
+
+	_, statErr := os.Stat(jsonOutPath)
+	assert.NoError(t, statErr, "TestJSONOut must be created even when selection is empty")
 }
 
 // ---- ListTests via seam ----
@@ -302,18 +471,20 @@ func TestListTests_ReturnsSelectedNames(t *testing.T) {
 	}
 
 	root := t.TempDir()
-	listOut := "TestAlpha\nTestBeta\nTestGamma\n"
-	stubRunGoCommand(t, func(_ context.Context, _ string, _ []string, args []string) ([]byte, error) {
-		for _, a := range args {
-			if a == "-list" {
-				return []byte(listOut), nil
+	e := engine{
+		exec: func(_ context.Context, _ string, _ []string, args []string) ([]byte, error) {
+			for _, a := range args {
+				if a == "-list" {
+					return []byte("TestAlpha\nTestBeta\nTestGamma\n"), nil
+				}
 			}
-		}
-		t.Error("execGoTest must not be called from ListTests")
-		return nil, nil
-	})
+			t.Error("execGoTest must not be called from ListTests")
+			return nil, nil
+		},
+		changed: changedArchtestFiles,
+	}
 
-	names, err := ListTests(context.Background(), Request{WorkspaceRoot: root})
+	names, err := e.listTests(context.Background(), Request{WorkspaceRoot: root})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"TestAlpha", "TestBeta", "TestGamma"}, names)
 }
@@ -328,12 +499,12 @@ func TestListTests_WithShard(t *testing.T) {
 	// [TestAlpha, TestBeta, TestDelta, TestGamma] (alpha sort).
 	// NR=1 (Alpha)→shard1, NR=2 (Beta)→shard0, NR=3 (Delta)→shard1, NR=4 (Gamma)→shard0.
 	// shard 0: [TestBeta, TestGamma].
-	listOut := "TestAlpha\nTestBeta\nTestGamma\nTestDelta\n"
-	stubRunGoCommand(t, func(_ context.Context, _ string, _ []string, _ []string) ([]byte, error) {
-		return []byte(listOut), nil
-	})
+	e := engine{
+		exec:    fakeDiscoverExec("TestAlpha", "TestBeta", "TestGamma", "TestDelta"),
+		changed: changedArchtestFiles,
+	}
 
-	names, err := ListTests(context.Background(), Request{
+	names, err := e.listTests(context.Background(), Request{
 		WorkspaceRoot: root,
 		Shard:         Shard{Index: 0, Total: 2},
 	})
@@ -345,14 +516,113 @@ func TestListTests_InvalidShard_Error(t *testing.T) {
 	if os.Getenv("GOWORK") == "off" {
 		t.Skip("GOWORK=off")
 	}
-	_, err := ListTests(context.Background(), Request{
+	e := newEngine()
+	_, err := e.listTests(context.Background(), Request{
 		WorkspaceRoot: t.TempDir(),
 		Shard:         Shard{Index: 5, Total: 3}, // index out of range
 	})
 	require.Error(t, err)
 }
 
-// ---- resolveSelected via seam: changed-files path ----
+// ---- resolveSelected via seam: changed-files path using changedFilesFn ----
+
+// TestApplyFilters_Changed_EmptySet verifies that Changed=true with empty
+// changed files returns empty selection and Run returns Passed=true without
+// spawning a subprocess.
+func TestApplyFilters_Changed_EmptySet(t *testing.T) {
+	if os.Getenv("GOWORK") == "off" {
+		t.Skip("GOWORK=off")
+	}
+
+	root := makeFakeArchtestDir(t, map[string]string{
+		"alpha_test.go": `//go:build archtest
+
+// INVARIANT: ALPHA-01
+
+package archtest
+
+import "testing"
+
+func TestAlphaX(t *testing.T) {}
+`,
+	})
+
+	execCalled := false
+	e := engine{
+		exec: func(_ context.Context, _ string, _ []string, args []string) ([]byte, error) {
+			for _, a := range args {
+				if a == "-list" {
+					return []byte("TestAlphaX\n"), nil
+				}
+			}
+			execCalled = true
+			return nil, nil
+		},
+		// Changed returns no archtest files.
+		changed: func(_ context.Context, _ string) ([]string, error) {
+			return nil, nil
+		},
+	}
+
+	req := Request{WorkspaceRoot: root, Changed: true}
+	report, err := e.run(context.Background(), req)
+	require.NoError(t, err)
+	assert.True(t, report.Passed)
+	assert.Empty(t, report.Selected)
+	assert.False(t, execCalled, "exec subprocess must not be called when changed set is empty")
+}
+
+// TestApplyFilters_Changed_Subset verifies that Changed=true with a subset of
+// archtest files intersects correctly with the discovered tests.
+func TestApplyFilters_Changed_Subset(t *testing.T) {
+	if os.Getenv("GOWORK") == "off" {
+		t.Skip("GOWORK=off")
+	}
+
+	root := makeFakeArchtestDir(t, map[string]string{
+		"alpha_test.go": `//go:build archtest
+
+// INVARIANT: ALPHA-01
+
+package archtest
+
+import "testing"
+
+func TestAlphaX(t *testing.T) {}
+`,
+		"beta_test.go": `//go:build archtest
+
+// INVARIANT: BETA-01
+
+package archtest
+
+import "testing"
+
+func TestBetaX(t *testing.T) {}
+`,
+	})
+
+	execOut := []byte(
+		`{"Action":"run","Test":"TestAlphaX"}` + "\n" +
+			`{"Action":"pass","Test":"TestAlphaX","Elapsed":0.05}` + "\n",
+	)
+	e := engine{
+		exec: fakeExec("TestAlphaX\nTestBetaX\n", execOut, nil),
+		// Only alpha_test.go changed — BetaX must be excluded.
+		changed: func(_ context.Context, _ string) ([]string, error) {
+			return []string{"tools/archtest/alpha_test.go"}, nil
+		},
+	}
+
+	req := Request{WorkspaceRoot: root, Changed: true}
+	report, err := e.run(context.Background(), req)
+	require.NoError(t, err)
+	assert.True(t, report.Passed)
+	assert.Equal(t, []string{"TestAlphaX"}, report.Selected,
+		"only tests from changed files should be selected")
+}
+
+// ---- resolveSelected via seam: rule-based selection ----
 
 func TestResolveSelected_ChangedPath_IntersectsArchtestFiles(t *testing.T) {
 	if os.Getenv("GOWORK") == "off" {
@@ -383,29 +653,14 @@ func TestBetaX(t *testing.T) {}
 `,
 	})
 
-	// Discovery returns both; we simulate git diff returning only alpha_test.go changed.
-	listOut := "TestAlphaX\nTestBetaX\n"
-	stubRunGoCommand(t, func(_ context.Context, _ string, _ []string, args []string) ([]byte, error) {
-		for _, a := range args {
-			if a == "-list" {
-				return []byte(listOut), nil
-			}
-		}
-		// git calls also go through runGoCommand... but we replaced it.
-		// changedArchtestFiles calls the real git binary via cmdrun.NewTool("git"),
-		// NOT through runGoCommand. So this stub only covers go test calls.
-		// Return something so the test won't hang.
-		return []byte{}, nil
-	})
+	e := engine{
+		exec:    fakeDiscoverExec("TestAlphaX", "TestBetaX"),
+		changed: changedArchtestFiles,
+	}
 
-	// changedFilesToTests is pure (no git); test the pure mapping path directly
-	// by calling applyFilters with a pre-built discovered list and Changed=false
-	// (we already have TestChangedFilesToTests* in gitdiff_test.go).
-	// Here we just verify the shard+rule path through resolveSelected.
-
-	// Verify rule-based selection through resolveSelected (which calls discoverTests via seam).
+	// Verify rule-based selection.
 	req := Request{WorkspaceRoot: root, Rule: "ALPHA-01"}
-	names, err := ListTests(context.Background(), req)
+	names, err := e.listTests(context.Background(), req)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"TestAlphaX"}, names)
 }

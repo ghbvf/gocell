@@ -9,12 +9,16 @@
 // partition is the SOLE implementation of the shard modulo assignment algorithm.
 // It mirrors the shell script's awk 'NR % n == s' 1-based line-number logic:
 // a test at 0-based index i is assigned to shard (i+1) % Total. The legacy
-// hack/verify-archtest.sh shard_assignment() function is the former single
-// source; this Go function replaces it and the shell is deleted in Batch 3.
+// hack/verify-archtest.sh awk implementation was DELETED, so there is one
+// implementation by construction.
 //
-// No other code in this repository may re-implement the shard partition logic.
-// Tests in discover_test.go assert exactly-once coverage and exact NR-mirror
-// split to prevent silent drift.
+// Enforcement grade: Medium.
+//   - Enforced: the partition's exactly-once property is verified through the
+//     CLI by ARCHTEST-VERIFY-COVERAGE-01 (the sole execution path); tests in
+//     discover_test.go assert exact NR-mirror split to prevent silent drift.
+//   - NOT scanner-protected: there is no static guard preventing a future
+//     second partition implementation. Reviewers must reject any re-introduction
+//     of shard-partition logic outside this function.
 package archtestrunner
 
 import (

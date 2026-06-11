@@ -23,6 +23,9 @@ import (
 // selects the empty set and returns a trivially passed Report without running
 // any tests. This is intentional — --changed is a focused filter, not a
 // "run nothing if nothing changed" shortcut.
+//
+// Source-file → affected-rule mapping is deferred (gh #1877); this only
+// selects changed archtest test files.
 func changedArchtestFiles(ctx context.Context, workspaceRoot string) ([]string, error) {
 	gitTool, err := cmdrun.NewTool("git")
 	if err != nil {

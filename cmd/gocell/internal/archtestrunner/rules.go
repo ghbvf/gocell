@@ -183,7 +183,11 @@ func extractTestFuncNames(f *ast.File) []string {
 func selectByRule(idx ruleIndex, ruleID string, discovered []string) ([]string, error) {
 	ruleFuncs, ok := idx[ruleID]
 	if !ok {
-		return nil, fmt.Errorf("archtestrunner: unknown rule: %s (no INVARIANT anchor found in tools/archtest/)", ruleID)
+		return nil, fmt.Errorf(
+			"archtestrunner: unknown rule: %s (no INVARIANT anchor found in tools/archtest/);"+
+				" list rule IDs with: grep -rn '// INVARIANT:' tools/archtest/*_test.go",
+			ruleID,
+		)
 	}
 
 	ruleSet := make(map[string]bool, len(ruleFuncs))

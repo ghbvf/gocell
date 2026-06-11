@@ -124,3 +124,12 @@ not-json
 	assert.Contains(t, string(out[0]), `"Action"`)
 	assert.Contains(t, string(out[1]), `"Action"`)
 }
+
+// TestCollectValidJSONLines_NoActionField verifies that a valid JSON object
+// without an "Action" field is filtered out (not a genuine test2json event).
+func TestCollectValidJSONLines_NoActionField(t *testing.T) {
+	input := []byte(`{"Foo":"bar"}` + "\n" + `{"Action":"pass","Test":"TestX","Elapsed":0.1}` + "\n")
+	out := collectValidJSONLines(input)
+	require.Len(t, out, 1, "JSON object without Action field must be excluded")
+	assert.Contains(t, string(out[0]), `"Action":"pass"`)
+}

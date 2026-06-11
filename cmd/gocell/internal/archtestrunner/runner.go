@@ -10,6 +10,43 @@ import (
 	"github.com/ghbvf/gocell/pkg/cmdrun"
 )
 
+// execFn is the function signature for running a subprocess (go test, go list).
+// Injected via engine to enable unit-testing without spawning real subprocesses.
+type execFn func(ctx context.Context, dir string, extraEnv, args []string) ([]byte, error)
+
+// changedFilesFn is the function signature for retrieving changed archtest files.
+// Injected via engine to enable unit-testing without a live git repo.
+type changedFilesFn func(ctx context.Context, workspaceRoot string) ([]string, error)
+
+// engine holds the injected subprocess functions.
+// Production callers use newEngine(); tests construct engine{exec: fakeExec, changed: fakeChanged}.
+type engine struct {
+	exec    execFn
+	changed changedFilesFn
+}
+
+// newEngine returns an engine wired to the real go tool and git implementations.
+func newEngine() engine {
+	return engine{
+		exec:    defaultExec,
+		changed: changedArchtestFiles,
+	}
+}
+
+// defaultExec resolves the go tool via cmdrun.NewTool and calls cmdrun.RunWith.
+// This is the production subprocess entry point; semantics are unchanged from
+// the former package-level runGoCommand variable.
+func defaultExec(ctx context.Context, dir string, _ []string, args []string) ([]byte, error) {
+	goTool, err := cmdrun.NewTool(goToolName())
+	if err != nil {
+		return nil, fmt.Errorf("archtestrunner: resolve go tool: %w", err)
+	}
+	return cmdrun.RunWith(ctx, goTool, cmdrun.RunOptions{
+		Dir:      filepath.Clean(dir),
+		ExtraEnv: goTestExtraEnv(goTool.Dir()),
+	}, args...)
+}
+
 // Run discovers → selects (shard ∩ rule|changed) → executes
 // `go test -tags=archtest -json -run ...` → parses → Report.
 //
@@ -18,6 +55,19 @@ import (
 // impossibility). Test FAILURES are NOT errors — they live in Report
 // (Passed=false).
 func Run(ctx context.Context, req Request) (Report, error) {
+	return newEngine().run(ctx, req)
+}
+
+// ListTests returns the selected test names (discovery + shard/rule/changed
+// selection) WITHOUT executing them. Backs the CLI `--list-tests` flag.
+//
+// The result is deterministic: sorted discovery + stable partition.
+func ListTests(ctx context.Context, req Request) ([]string, error) {
+	return newEngine().listTests(ctx, req)
+}
+
+// run is the engine-scoped implementation of Run.
+func (e engine) run(ctx context.Context, req Request) (Report, error) {
 	if err := checkGOWORK(); err != nil {
 		return Report{}, err
 	}
@@ -25,19 +75,28 @@ func Run(ctx context.Context, req Request) (Report, error) {
 		return Report{}, err
 	}
 
-	selected, err := resolveSelected(ctx, req)
+	selected, err := e.resolveSelected(ctx, req)
 	if err != nil {
 		return Report{}, err
 	}
 
 	if len(selected) == 0 {
+		// Write an empty TestJSONOut even when selection is empty so that CI's
+		// slowgate pipe (`< file`) does not fail on a missing file. An empty
+		// file is a valid empty JSON stream (slowgate no-op).
+		if req.TestJSONOut != "" {
+			if werr := writeTestJSONOut(req.TestJSONOut, nil); werr != nil {
+				return Report{}, werr
+			}
+		}
 		return buildEmptyReport(), nil
 	}
 
-	output, runErr := execGoTest(ctx, req, selected)
+	output, runErr := e.execGoTest(ctx, req, selected)
 
-	// Write JSON out before processing results, if requested.
-	if req.TestJSONOut != "" && len(output) > 0 {
+	// Write JSON out when set — always create the file so CI's slowgate pipe
+	// does not fail on a missing file for the empty-output edge case.
+	if req.TestJSONOut != "" {
 		validLines := collectValidJSONLines(output)
 		if werr := writeTestJSONOut(req.TestJSONOut, validLines); werr != nil {
 			return Report{}, werr
@@ -60,11 +119,8 @@ func Run(ctx context.Context, req Request) (Report, error) {
 	}, nil
 }
 
-// ListTests returns the selected test names (discovery + shard/rule/changed
-// selection) WITHOUT executing them. Backs the CLI `--list-tests` flag.
-//
-// The result is deterministic: sorted discovery + stable partition.
-func ListTests(ctx context.Context, req Request) ([]string, error) {
+// listTests is the engine-scoped implementation of ListTests.
+func (e engine) listTests(ctx context.Context, req Request) ([]string, error) {
 	if err := checkGOWORK(); err != nil {
 		return nil, err
 	}
@@ -72,21 +128,21 @@ func ListTests(ctx context.Context, req Request) ([]string, error) {
 		return nil, err
 	}
 
-	return resolveSelected(ctx, req)
+	return e.resolveSelected(ctx, req)
 }
 
 // resolveSelected runs discovery and applies all selection filters.
-func resolveSelected(ctx context.Context, req Request) ([]string, error) {
-	discovered, err := discoverTests(ctx, req.WorkspaceRoot)
+func (e engine) resolveSelected(ctx context.Context, req Request) ([]string, error) {
+	discovered, err := e.discoverTests(ctx, req.WorkspaceRoot)
 	if err != nil {
 		return nil, err
 	}
-	return applyFilters(ctx, req, discovered)
+	return e.applyFilters(ctx, req, discovered)
 }
 
 // applyFilters applies shard / rule / changed filters to a pre-discovered test list.
 // Extracted as a pure-ish helper to allow testing without a real `go test -list` call.
-func applyFilters(ctx context.Context, req Request, discovered []string) ([]string, error) {
+func (e engine) applyFilters(ctx context.Context, req Request, discovered []string) ([]string, error) {
 	// Apply shard partitioning first.
 	selected := applyShardSelection(discovered, req.Shard)
 
@@ -104,7 +160,7 @@ func applyFilters(ctx context.Context, req Request, discovered []string) ([]stri
 
 	// Apply changed-files filter (intersect).
 	if req.Changed {
-		changedFiles, err := changedArchtestFiles(ctx, req.WorkspaceRoot)
+		changedFiles, err := e.changed(ctx, req.WorkspaceRoot)
 		if err != nil {
 			return nil, err
 		}
@@ -118,28 +174,11 @@ func applyFilters(ctx context.Context, req Request, discovered []string) ([]stri
 	return selected, nil
 }
 
-// runGoCommand is the single subprocess entry point used by discoverTests and
-// execGoTest. It is a package-level variable so tests can substitute a stub
-// that returns canned output without spawning real subprocesses.
-//
-// Production code must not replace this variable outside of test files.
-// Test code must restore the original via t.Cleanup.
-var runGoCommand = func(ctx context.Context, dir string, extraEnv, args []string) ([]byte, error) {
-	goTool, err := cmdrun.NewTool(goToolName())
-	if err != nil {
-		return nil, fmt.Errorf("archtestrunner: resolve go tool: %w", err)
-	}
-	return cmdrun.RunWith(ctx, goTool, cmdrun.RunOptions{
-		Dir:      filepath.Clean(dir),
-		ExtraEnv: goTestExtraEnv(goTool.Dir()),
-	}, args...)
-}
-
 // discoverTests runs `go test -tags=archtest -list '^Test' ./tools/archtest`
 // and returns the sorted list of Test* function names.
-func discoverTests(ctx context.Context, workspaceRoot string) ([]string, error) {
+func (e engine) discoverTests(ctx context.Context, workspaceRoot string) ([]string, error) {
 	args := buildDiscoverArgs()
-	output, runErr := runGoCommand(ctx, workspaceRoot, nil, args)
+	output, runErr := e.exec(ctx, workspaceRoot, nil, args)
 	if runErr != nil {
 		return nil, fmt.Errorf("archtestrunner: discover archtest tests: %w", runErr)
 	}
@@ -153,9 +192,9 @@ func discoverTests(ctx context.Context, workspaceRoot string) ([]string, error) 
 
 // execGoTest runs `go test -tags=archtest -json -run '^(...)$' ./tools/archtest`
 // and returns the combined output and any run error.
-func execGoTest(ctx context.Context, req Request, selected []string) ([]byte, error) {
+func (e engine) execGoTest(ctx context.Context, req Request, selected []string) ([]byte, error) {
 	args := buildTestArgs(req.Timeout, selected)
-	return runGoCommand(ctx, req.WorkspaceRoot, nil, args)
+	return e.exec(ctx, req.WorkspaceRoot, nil, args)
 }
 
 // enrichWithMeta populates TestResult.File and TestResult.Rules using the
@@ -204,7 +243,8 @@ func intersect(a, b []string) []string {
 // multi-module repo graph.
 func checkGOWORK() error {
 	if os.Getenv("GOWORK") == "off" {
-		return fmt.Errorf("archtestrunner: GOWORK=off — workspace modules are required for packages.Load; do not run with GOWORK=off")
+		return fmt.Errorf("archtestrunner: GOWORK=off — workspace modules are required for packages.Load;" +
+			" unset GOWORK or run without GOWORK=off (e.g. 'unset GOWORK && gocell verify archtest')")
 	}
 	return nil
 }
