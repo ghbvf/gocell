@@ -1114,63 +1114,13 @@ jobs:
         with:
           projectBaseDir: .
 
-  # verify-codegen runs all three codegen drift gates independently of
-  # build-test. Previously these three steps lived in the build-test kernel
-  # shard (static_checks gate), meaning a red Test shard would silently mask
-  # codegen drift. Moving them to an independent job ensures codegen drift
-  # always surfaces regardless of test failures.
-  #
-  # No `needs:` — runs in parallel with build-test and integration-test.
-  # ref: kubernetes/kubernetes hack/verify-*.sh independent Prow presubmit
-  # ref: kubernetes-sigs/kubebuilder .github/workflows/verify.yml
-  verify-codegen:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-
-      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-
-      # Generated-artifact gate (PR-CFG-M follow-up):
-      # assembly.yaml is the source-of-truth for runtime cell order, generated
-      # entrypoint paths, boundary contracts, and assembly-reachable metrics
-      # schemas. The verifier derives the expected artifact manifest from
-      # metadata instead of trusting generator stdout to define the diff scope.
-      - name: Verify generated artifacts are up-to-date
-        run: go run ./cmd/gocell verify generated
-
-      # K#04 codegen-cell gate: cell_gen.go / slice_gen.go must be in sync
-      # with cell.yaml / slice.yaml. Sandbox mode runs the generator inside
-      # an ephemeral git worktree at HEAD and uses `git status --porcelain`
-      # for drift detection, mirroring kubernetes/kubernetes
-      # hack/lib/verify-generated.sh.
-      - name: Verify cell codegen (K#04)
-        run: ./hack/verify-codegen-cell.sh
-
-      # K#06 codegen-contract gate: generated/contracts/**/*_gen.go must be in
-      # sync with contract.yaml + JSON schemas. Sandbox mode mirrors the K#04
-      # cell codegen gate pattern.
-      - name: Verify contract codegen (K#06)
-        run: ./hack/verify-codegen-contract.sh
-
-      - name: Verify assembly codegen (K#10)
-        run: ./hack/verify-codegen-assembly.sh
-
-      - name: Verify shared-schema codegen
-        run: ./hack/verify-codegen-shared-schema.sh
-
-      # Proto codegen gate: generated/contracts/grpc/**/*.pb.go must be in sync
-      # with contracts/grpc/**.proto. The pipeline (buf + protoc-gen-go +
-      # protoc-gen-go-grpc) is hermetic via `go run` — no buf/protoc install,
-      # just the setup-go above + module cache. See contracts/grpc/README.md.
-      - name: Verify proto codegen (buf)
-        run: ./hack/verify-codegen-proto.sh
-
-      - name: Verify scaffold bundle (sandbox)
-        run: ./hack/verify-scaffold-bundle.sh
-      - name: Verify scaffold assembly (sandbox)
-        run: ./hack/verify-scaffold-assembly.sh
-      - name: Verify scaffold rejection (kebab guard)
-        run: ./hack/verify-scaffold-reject.sh
+  # NOTE: the former `verify-codegen` job (generated / codegen-cell /
+  # codegen-contract / codegen-assembly / codegen-shared-schema / codegen-proto
+  # + scaffold gates) was removed in #1817. Those gates already run via
+  # `make verify` (hack/verify-*.sh glob discovery) in the Governance Strict
+  # workflow, which now fans out into parallel buckets — so the dedicated job
+  # here was a duplicate (dual path) running the same gates a second time on
+  # every PR. Governance Strict's triggers (push + pull_request to
+  # develop/main/release/**) are a superset of this reusable workflow's, so
+  # consolidating to a single owner only widens codegen coverage (push to
+  # main/release/** is now covered too), never narrows it.

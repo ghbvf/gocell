@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: inv
 # verify-gitignore-respect: fail if any path in the explicit "must-not-be-tracked"
 # allowlist below is currently committed in HEAD.
 #

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: codegen
 # verify-generated fails when checked-in generated artifacts are not
 # self-consistent with assembly metadata. The Go verifier derives the expected
 # artifact manifest from metadata instead of trusting generator stdout to define

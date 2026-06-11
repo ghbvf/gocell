@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: codegen
 # Proto lint + codegen drift gate.
 #
 # Two enforced checks over contracts/grpc/**.proto (both buf-native, hermetic via

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: scaffold
 # verify-unconditional-skip rejects test files whose t.Skip is unconditional —
 # any blanket skip is a hidden disabled test and must be either deleted or
 # guarded with a runtime predicate.

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: lint
 # verify-gofumpt.sh — formatter-only gate.
 #
 # .golangci.yml lists gofumpt, gofmt, goimports under formatters.enable, and

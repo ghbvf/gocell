@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: codegen
 # K#04 CODEGEN-CELL-GEN gate.
 #
 # Thin wrapper around `gocell verify codegen-cell`. The Go subcommand owns

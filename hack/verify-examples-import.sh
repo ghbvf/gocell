@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: lint
 # verify-examples-import enforces that examples/ never imports cells/*/internal/
 # or adapters/*/internal/ — example cells must consume their dependencies only
 # through public APIs.

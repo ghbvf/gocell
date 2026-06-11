@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: inv
 # Verifies that agent instruction rules stay short and future-facing.
 # `make verify` discovers this gate automatically.
 

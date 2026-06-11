@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: inv
 # verify-archtest-invariants — single entry for the 4 PR-time archtest invariants
 # preserved by ADR 202605120000 §Amendment 2026-05-23 §D8 (4 类 PR-time archtest gate).
 #

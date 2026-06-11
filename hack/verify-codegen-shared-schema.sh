@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: codegen
 # Shared-schema mirror codegen gate.
 #
 # Thin wrapper around `gocell verify codegen-shared-schema`. The Go subcommand

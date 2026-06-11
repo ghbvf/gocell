@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: workspace
 # verify-workspace-test runs `go test ./...` for every NON-root workspace member
 # (the satellite modules). The root module's tests are already
 # covered by the _build-lint.yml build-test matrix; running them here too would

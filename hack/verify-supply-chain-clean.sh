@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: lint
 # verify-supply-chain-clean is a drift-detection / hygiene gate. It rejects
 # accidental additions of supply-chain bypass surfaces:
 #   - Global ignore files (.govulncheckignore / .semgrepignore)

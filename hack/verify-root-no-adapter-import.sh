@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: inv
 # ROOT-FRAMEWORK-TESTS-NO-ADAPTER-IMPORT-01
 #
 # Root-owned framework/test surfaces (kernel/runtime/pkg/tests) must not

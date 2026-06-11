@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: validate
 # verify-govalidate runs `gocell validate --strict` to enforce metadata
 # governance rules (FMT, ADV, REF, LAYER, VERIFY, CH, CONTRACT-CONSISTENCY).
 
