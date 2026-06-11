@@ -25,10 +25,14 @@ package archtest
 //     algorithm is K-independent).
 //
 // Algorithm single source: archtestrunner.partition (discover.go) is the
-// sole implementation of the shard modulo assignment algorithm.
-// ARCHTESTRUNNER-PARTITION-SOLE-SOURCE-01 guards this invariant.
-// The legacy hack/verify-archtest.sh shard_assignment() awk function has
-// been deleted; the shell is now a thin passthrough to the CLI.
+// sole implementation of the shard modulo assignment algorithm as of this
+// writing (the legacy hack/verify-archtest.sh shard_assignment() awk
+// function has been deleted; the shell is now a thin passthrough to the
+// CLI). This property holds by construction today, but is NOT protected
+// by a static scanner against future re-implementation —
+// ARCHTESTRUNNER-PARTITION-SOLE-SOURCE-01 is reviewer-enforced, not a
+// machine-checked invariant. What this test does verify is the partition's
+// exactly-once BEHAVIOR through the CLI, independent of implementation.
 //
 // Subprocess driver: tests drive `bash hack/verify-archtest.sh --list-tests`
 // and `bash hack/verify-archtest.sh --shard=N/K --list-tests`. The thin
@@ -231,15 +235,15 @@ func TestArchtestVerifyCoverage01(t *testing.T) {
 //   - every name in cliSet appears in at least one shard (union == cover)
 //   - no name appears in two or more shards (disjoint)
 //
-// Both go through archtestrunner.partition (the single algorithm source:
-// ARCHTESTRUNNER-PARTITION-SOLE-SOURCE-01), so this is single-source
-// algorithm verification.
+// Both go through archtestrunner.partition (currently the sole algorithm
+// source; single-implementation is reviewer-enforced, not statically
+// scanned), so this is behavioral verification of the partition algorithm.
 //
 // K choice: K=4 is sufficient because the modulo partition is K-independent —
 // exactly-once cover-and-disjoint follows from the pigeonhole property of
 // modular arithmetic, not from any specific shard count. Using K=4 keeps this
 // test under 4×subprocess overhead while still proving the algorithm holds at
-// every K. The CI K=24 path (archtest-nightly.yml; ARCHTEST-CI-SHARD-DENOMINATOR-MATCH-01)
+// every K. The CI K=24 path (archtest-nightly.yml; ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01)
 // is exercised at runtime, not by this conformance test.
 func assertShardPartitionExactlyOnce(t *testing.T, repoRoot string, cliSet map[string]struct{}, k int) {
 	t.Helper()

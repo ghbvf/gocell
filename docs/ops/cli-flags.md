@@ -45,6 +45,25 @@ K#05 W2 改了 `gocell generate cell` / `gocell verify codegen-cell` 默认行�
 
 `hack/verify-codegen-cell.sh` 在 CI 环境无参数时显式注入 `--local=false`，保留 sandbox 隔离行为。这意味着 .github/workflows 不需要更改。CI 调用始终走 sandbox。
 
+## verify archtest
+
+Runs the archtest suite via the CLI (all logic in `cmd/gocell/internal/archtestrunner`). `hack/verify-archtest.sh` and `make verify` use `go run ./cmd/gocell` (thin passthrough — cold-compiles `cmd/gocell` ~10-20s on a cold cache; CI pre-builds the binary with a dedicated step to avoid this cost per-shard).
+
+| Flag | 说明 |
+|---|---|
+| `--root=DIR` | repo root（default: auto-detected from go.mod ancestor） |
+| `--rule=ID` | only run tests matching the given invariant ID |
+| `--changed` | run only mechanically changed test files; source→rule mapping deferred to gh #1877 |
+| `--shard=N/K` | run shard N of K (0-indexed); K must equal matrix.shard length in CI (guarded by ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01) |
+| `--format=text\|json\|sarif` | output format (default: text) |
+| `--test-json-out=FILE` | write go test -json event stream to FILE for slowgate post-processing |
+| `--list-tests` | print discovered test names and exit (no execution) |
+| `--timeout=DUR` | per-shard test timeout (default: 5m) |
+
+`--scope` is not exposed today (workspace scope always); external-repo archtest scope is tracked at gh #1878.
+
+`--changed` selects test files mechanically (changed files only); a semantic source→rule mapping (which archtest rules are impacted by a given source change) is tracked at gh #1877 and is not yet implemented.
+
 ## 历史
 
 - 2026-05-04 K#05 PR-A1 ship：CLI default 不变（--all=false / --local=false）

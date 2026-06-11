@@ -618,10 +618,25 @@ invariant ID 保持 `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01` 不变（避免 ADR �
 |---|---|---|
 | §D1 「hack/verify-archtest.sh discovery + modulo 分片」 | ✅ 逻辑不变，载体从 shell 迁到 Go CLI；shell 降为 passthrough | `ARCHTESTRUNNER-PARTITION-SOLE-SOURCE-01` 守卫新单源 |
 | §D3 ARCHTEST-VERIFY-COVERAGE-01（discovery==AST + partition exactly-once） | ✅ 不变；调用入口从 env-var 接口改为 `--list-tests` / `--shard=N/K --list-tests` | 同 PR 更新测试 subprocess wiring |
-| §D5 slowgate 接入 | ✅ 不变；`--test-json-out` 写 json，CI 步骤 pipe 入 slowgate | 机制显式化（CLI flag 替代 env） |
+| §D5 slowgate 接入 | ✅ 不变；`--test-json-out` 写 json，CI 步骤 pipe 入 slowgate | 机制显式化（CLI flag 替代 env）；slowgate 步骤 parity 修正见下注 |
 | §D6 single-owner 原则 | ✅ 不变；nightly 仍是 sole CI gate；make verify 仍走 passthrough K=1 | passthrough 保留 bucket 注解 |
 | §Amendment 2026-05-28 ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01 | ⚠️ 守卫逻辑重塑（SHARD_COUNT env → --shard denominator） | 同 PR 重写 `archtest_ci_shard_count_test.go`；fixture 集从 8 扩至 9（新增 missing-shard-flag）|
 | CI 本地并行 fan-out（SHARD_COUNT>1 无 SHARD_TARGET） | ❌ 移除（该路径在 shell 中，无自动化 caller，pre-push 已撤回） | 意图弃置：开发者本地 K=1 或 gocell verify archtest --shard=N/K 手动调用 |
+
+**本地 `make verify` K=1 路径不变**：`hack/verify-archtest.sh` 降为 thin passthrough 后，`make verify`
+（无 `VERIFY_BUCKET` env）继续触发该脚本，passthrough 转发 `$@`；无 `--shard` 时 CLI 以
+single-process 模式跑全套，行为等价于旧 SHARD_COUNT=1 默认。本地开发者路径无感知变化。
+
+**`--changed` 语义**：`--changed` 选择机械变更的测试文件（git diff 修改文件），source→rule 映射
+（哪些 archtest 规则受某源文件变更影响）推迟至 gh #1877，当前未实现。
+
+**`--scope` 推迟**：`--scope` flag 未暴露（始终为 workspace scope）；外部 repo archtest 范围跟踪于
+gh #1878。
+
+**slowgate parity 修正**：旧 shell 以管道运行（`go test -json | tee | slowgate`），所以 slowgate
+在每个 shard 运行，无论测试是否通过；初始 CLI 版本的 CI step 在 `set -eo pipefail` 下，CLI 非零退出
+会立即中止 shell，slowgate 被跳过。PR review 期间同步修正：CLI 退出码被捕获而不中止，slowgate
+始终在 JSON artifact 存在时运行，step 在两者之一非零时失败（CLI 优先）。
 
 ### 同 PR 同步载体
 
