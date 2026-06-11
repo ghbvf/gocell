@@ -127,12 +127,14 @@ func buildProjectionProject(slices map[string]*metadata.SliceMeta) *metadata.Pro
 }
 
 // outboxProjectionCU is a valid outbox-sourced projection subscribe CU helper.
-func outboxProjectionCU(contract, projection string) metadata.ContractUsage {
+// The projection id is fixed ("order_read_model") so the duplicate-id tests can
+// collide deterministically; vary the contract per call.
+func outboxProjectionCU(contract string) metadata.ContractUsage {
 	return metadata.ContractUsage{
 		Contract:         contract,
 		Role:             "subscribe",
 		Handler:          "Handle",
-		Projection:       projection,
+		Projection:       "order_read_model",
 		ProjectionSource: "outbox",
 	}
 }
@@ -146,12 +148,12 @@ func TestValidateProjectionUniqueness_DuplicateWithinCell(t *testing.T) {
 		"ordercell/orderquery": {
 			ID:             "orderquery",
 			BelongsToCell:  metadatatest.NewCellID("ordercell"),
-			ContractUsages: []metadata.ContractUsage{outboxProjectionCU("event.order.placed.v1", "order_read_model")},
+			ContractUsages: []metadata.ContractUsage{outboxProjectionCU("event.order.placed.v1")},
 		},
 		"ordercell/orderstatus": {
 			ID:             "orderstatus",
 			BelongsToCell:  metadatatest.NewCellID("ordercell"),
-			ContractUsages: []metadata.ContractUsage{outboxProjectionCU("event.order.updated.v1", "order_read_model")}, // same id, same cell — conflict
+			ContractUsages: []metadata.ContractUsage{outboxProjectionCU("event.order.updated.v1")}, // same id, same cell — conflict
 		},
 	})
 
@@ -171,12 +173,12 @@ func TestValidateProjectionUniqueness_SameIDDifferentCells(t *testing.T) {
 		"ordercell/orderquery": {
 			ID:             "orderquery",
 			BelongsToCell:  metadatatest.NewCellID("ordercell"),
-			ContractUsages: []metadata.ContractUsage{outboxProjectionCU("event.order.placed.v1", "order_read_model")},
+			ContractUsages: []metadata.ContractUsage{outboxProjectionCU("event.order.placed.v1")},
 		},
 		"inventorycell/invquery": {
 			ID:             "invquery",
 			BelongsToCell:  metadatatest.NewCellID("inventorycell"),
-			ContractUsages: []metadata.ContractUsage{outboxProjectionCU("event.order.placed.v1", "order_read_model")}, // same id, different cell — OK
+			ContractUsages: []metadata.ContractUsage{outboxProjectionCU("event.order.placed.v1")}, // same id, different cell — OK
 		},
 	})
 
@@ -194,8 +196,8 @@ func TestValidateProjectionUniqueness_SameSliceDuplicateProjection(t *testing.T)
 			ID:            "orderquery",
 			BelongsToCell: metadatatest.NewCellID("ordercell"),
 			ContractUsages: []metadata.ContractUsage{
-				outboxProjectionCU("event.order.placed.v1", "order_read_model"),
-				outboxProjectionCU("event.order.cancelled.v1", "order_read_model"), // same id in same slice — conflict
+				outboxProjectionCU("event.order.placed.v1"),
+				outboxProjectionCU("event.order.cancelled.v1"), // same id in same slice — conflict
 			},
 		},
 	})
@@ -553,12 +555,12 @@ func TestValidateProjectionUniqueness_DuplicateErrorIncludesContract(t *testing.
 		"ordercell/orderquery": {
 			ID:             "orderquery",
 			BelongsToCell:  metadatatest.NewCellID("ordercell"),
-			ContractUsages: []metadata.ContractUsage{outboxProjectionCU("event.order.placed.v1", "order_read_model")},
+			ContractUsages: []metadata.ContractUsage{outboxProjectionCU("event.order.placed.v1")},
 		},
 		"ordercell/orderstatus": {
 			ID:             "orderstatus",
 			BelongsToCell:  metadatatest.NewCellID("ordercell"),
-			ContractUsages: []metadata.ContractUsage{outboxProjectionCU("event.order.updated.v1", "order_read_model")}, // duplicate — triggers conflict
+			ContractUsages: []metadata.ContractUsage{outboxProjectionCU("event.order.updated.v1")}, // duplicate — triggers conflict
 		},
 	})
 

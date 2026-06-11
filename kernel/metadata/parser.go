@@ -789,7 +789,7 @@ const (
 	msgProjectionSourceRequired    = "projectionSource is required when projection is set (one of: outbox, saga-journal)"
 	msgProjectionSourceWithoutProj = "projectionSource is only valid when projection is set on the same subscribe contractUsage"
 	msgProjectionSourceInvalid     = "projectionSource must be one of: outbox, saga-journal"
-	msgOnResetSagaJournal          = "onReset is not allowed when projectionSource is saga-journal (the saga-journal projection has no rebuild)"
+	msgOnResetSagaJournal          = "onReset is not allowed when projectionSource is saga-journal (no rebuild on that path)"
 )
 
 // checkSliceProjections validates all CUs in a single slice for projection
