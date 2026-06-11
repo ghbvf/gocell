@@ -92,6 +92,20 @@ func RunQueueConformance(t *testing.T, factory QueueFactory, features Features) 
 	t.Run("Enqueue/HappyPath", func(t *testing.T) { runEnqueueHappy(t, factory, features) })
 	t.Run("Enqueue/DuplicateID", func(t *testing.T) { runEnqueueDuplicateID(t, factory, features) })
 	t.Run("Enqueue/IdempotencyKeyDedup", func(t *testing.T) { runEnqueueIdempotencyKey(t, factory, features) })
+	t.Run("Enqueue/ActiveKeyBlocksAcrossNonTerminal", func(t *testing.T) { runEnqueueActiveKeyBlocks(t, factory, features) })
+	t.Run("Enqueue/KeyReleasedOnSucceeded", func(t *testing.T) {
+		runEnqueueKeyReleasedAfterAck(t, factory, features, "rel-ok", command.AckSuccess)
+	})
+	t.Run("Enqueue/KeyReleasedOnFailed", func(t *testing.T) {
+		runEnqueueKeyReleasedAfterAck(t, factory, features, "rel-fail", command.AckFailed)
+	})
+	t.Run("Enqueue/KeyReleasedOnExpired", func(t *testing.T) {
+		runEnqueueKeyReleasedAfterAck(t, factory, features, "rel-exp", command.AckTimeout)
+	})
+	t.Run("Enqueue/KeyReleasedOnRejected", func(t *testing.T) {
+		runEnqueueKeyReleasedAfterAck(t, factory, features, "rel-rej", command.AckRejected)
+	})
+	t.Run("Enqueue/KeyReleasedOnCanceled", func(t *testing.T) { runEnqueueKeyReleasedAfterCancel(t, factory, features) })
 	t.Run("Enqueue/AuthzReject", func(t *testing.T) { runEnqueueAuthzReject(t, factory, features) })
 	t.Run("Enqueue/InvalidEntry", func(t *testing.T) { runEnqueueInvalidEntry(t, factory, features) })
 
@@ -258,6 +272,111 @@ func runEnqueueIdempotencyKey(t *testing.T, factory QueueFactory, features Featu
 	// Only the first ID should exist; the second ID should not.
 	if _, err := scanner.GetCommand(ctx, "idem-2"); err == nil {
 		t.Fatal("expected idem-2 to not exist (idempotency key collapsed)")
+	}
+}
+
+// idemKeySuffix is appended to a sub-test's id base to build its idempotency
+// key, keeping key and id distinct without repeating a literal across cases.
+const idemKeySuffix = ":idem"
+
+// seedEntryWithKey enqueues e under idempotencyKey, failing the test on error.
+func seedEntryWithKey(
+	t *testing.T, ctx context.Context,
+	q command.Queue, txRunner TxRunner, features Features,
+	e command.Entry, key string,
+) {
+	t.Helper()
+	if err := inTx(t, ctx, txRunner, features, func(c context.Context) error {
+		return q.Enqueue(c, e, command.EnqueueOptions{IdempotencyKey: key})
+	}); err != nil {
+		t.Fatalf("seedEntryWithKey: Enqueue %q (key %q): %v", e.ID, key, err)
+	}
+}
+
+// runEnqueueActiveKeyBlocks asserts the idempotency key is state-aware ACTIVE
+// uniqueness: a re-enqueue under the same key is coalesced for as long as the
+// holding command stays non-terminal — across Pending, Sent, AND Delivered.
+// (A permanent-uniqueness implementation also passes this; the release cases
+// below are what distinguish state-aware from permanent.)
+func runEnqueueActiveKeyBlocks(t *testing.T, factory QueueFactory, features Features) {
+	t.Helper()
+	q, scanner, tx, now, cleanup := factory(t)
+	defer cleanup()
+	ctx := context.Background()
+	key := "active" + idemKeySuffix
+
+	seedEntryWithKey(t, ctx, q, tx, features, makeEntry("active-1", "dev-a", now()), key)
+
+	// While Pending: same-key re-enqueue collapses.
+	seedEntryWithKey(t, ctx, q, tx, features, makeEntry("active-2", "dev-a", now()), key)
+	if _, err := scanner.GetCommand(ctx, "active-2"); err == nil {
+		t.Fatal("expected active-2 to collapse while holder is Pending")
+	}
+
+	// Advance holder Pending→Sent, then same-key re-enqueue still collapses.
+	dequeueOne(t, ctx, q, tx, features, "dev-a")
+	seedEntryWithKey(t, ctx, q, tx, features, makeEntry("active-3", "dev-a", now()), key)
+	if _, err := scanner.GetCommand(ctx, "active-3"); err == nil {
+		t.Fatal("expected active-3 to collapse while holder is Sent")
+	}
+
+	// Advance holder Sent→Delivered, then same-key re-enqueue still collapses.
+	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
+		return q.Report(c, "active-1", now())
+	}); err != nil {
+		t.Fatalf("Report: %v", err)
+	}
+	seedEntryWithKey(t, ctx, q, tx, features, makeEntry("active-4", "dev-a", now()), key)
+	if _, err := scanner.GetCommand(ctx, "active-4"); err == nil {
+		t.Fatal("expected active-4 to collapse while holder is Delivered")
+	}
+}
+
+// runEnqueueKeyReleasedAfterAck asserts state-aware release: once the holding
+// command reaches a TERMINAL status via Ack(reason), the idempotency key is
+// freed and a fresh command with the same key enqueues successfully. A
+// permanent-uniqueness implementation FAILS this (the second id never exists).
+func runEnqueueKeyReleasedAfterAck(t *testing.T, factory QueueFactory, features Features, idBase string, reason command.AckReason) {
+	t.Helper()
+	q, scanner, tx, now, cleanup := factory(t)
+	defer cleanup()
+	ctx := context.Background()
+	key := idBase + idemKeySuffix
+
+	seedEntryWithKey(t, ctx, q, tx, features, makeEntry(idBase+"-1", "dev-a", now()), key)
+	dequeueOne(t, ctx, q, tx, features, "dev-a")
+	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
+		return q.Ack(c, idBase+"-1", reason, now())
+	}); err != nil {
+		t.Fatalf("Ack(%s): %v", reason, err)
+	}
+
+	// Key is now released — a fresh command with the same key must enqueue.
+	seedEntryWithKey(t, ctx, q, tx, features, makeEntry(idBase+"-2", "dev-a", now()), key)
+	if _, err := scanner.GetCommand(ctx, idBase+"-2"); err != nil {
+		t.Fatalf("expected %s-2 to exist after key released by terminal %s: %v", idBase, reason, err)
+	}
+}
+
+// runEnqueueKeyReleasedAfterCancel is the Cancel-path analog of
+// runEnqueueKeyReleasedAfterAck: a Pending holder Canceled releases its key.
+func runEnqueueKeyReleasedAfterCancel(t *testing.T, factory QueueFactory, features Features) {
+	t.Helper()
+	q, scanner, tx, now, cleanup := factory(t)
+	defer cleanup()
+	ctx := context.Background()
+	key := "rel-cancel" + idemKeySuffix
+
+	seedEntryWithKey(t, ctx, q, tx, features, makeEntry("rel-cancel-1", "dev-a", now()), key)
+	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
+		return q.Cancel(c, "rel-cancel-1", now())
+	}); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	seedEntryWithKey(t, ctx, q, tx, features, makeEntry("rel-cancel-2", "dev-a", now()), key)
+	if _, err := scanner.GetCommand(ctx, "rel-cancel-2"); err != nil {
+		t.Fatalf("expected rel-cancel-2 to exist after key released by Cancel: %v", err)
 	}
 }
 
