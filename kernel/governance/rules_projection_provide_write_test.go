@@ -242,3 +242,82 @@ func assertProjectionProvideFinding(t *testing.T, r ValidationResult, tc project
 		t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
 	}
 }
+
+// TestProjectionProvideNeedsWriteCU01_SagaJournalWriteCUCounts confirms the
+// provide↔subscribe write-CU pairing is SOURCE-AGNOSTIC (EPIC #1609 PR-05
+// fanout audit ②): a write-side subscribe+projection CU sourced from the saga
+// journal (projectionSource=saga-journal) satisfies the provide's write-side
+// requirement exactly the same as an outbox-sourced one. The pairing keys on the
+// projection NAME, never on the source, so this provide CU must NOT fire.
+func TestProjectionProvideNeedsWriteCU01_SagaJournalWriteCUCounts(t *testing.T) {
+	t.Parallel()
+
+	cellID := metadatatest.CellIDTestCell
+	const (
+		projectionID = "projection.order.saga-summary.v1"
+		sliceAID     = "testcell/projprovide"
+		sliceBID     = "testcell/projwrite"
+		sagaContract = "saga.order.v1"
+	)
+
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			cellID: {
+				ID:               metadatatest.CellIDTestCell,
+				Type:             "core",
+				ConsistencyLevel: "L3",
+				DurabilityMode:   "durable",
+				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+				Schema:           metadata.SchemaMeta{Primary: "cell_test"},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.testcell.startup"}},
+				Dir:              "cells/testcell",
+				File:             "cells/testcell/cell.yaml",
+			},
+		},
+		Slices: map[string]*metadata.SliceMeta{
+			sliceAID: {
+				ID:            sliceAID,
+				BelongsToCell: metadatatest.CellIDTestCell,
+				ContractUsages: []metadata.ContractUsage{
+					{Contract: projectionID, Role: "provide"},
+				},
+				File: "cells/testcell/slices/projprovide/slice.yaml",
+			},
+			sliceBID: {
+				ID:            sliceBID,
+				BelongsToCell: metadatatest.CellIDTestCell,
+				ContractUsages: []metadata.ContractUsage{
+					{
+						Contract:         sagaContract,
+						Role:             "subscribe",
+						Projection:       "order_saga_summary",
+						ProjectionSource: "saga-journal",
+					},
+				},
+				File: "cells/testcell/slices/projwrite/slice.yaml",
+			},
+		},
+		Contracts: map[string]*metadata.ContractMeta{
+			projectionID: {
+				ID:               projectionID,
+				Kind:             "projection",
+				OwnerCell:        metadatatest.CellIDTestCell,
+				ConsistencyLevel: "L3",
+				Lifecycle:        "active",
+				Endpoints:        metadata.EndpointsMeta{Provider: metadatatest.CellIDTestCell},
+				Dir:              "contracts/projection/order/saga-summary/v1",
+				File:             "contracts/projection/order/saga-summary/v1/contract.yaml",
+			},
+			sagaContract: {ID: sagaContract, Kind: "saga"},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(project, "", clock.Real())
+	got := projectionProvideNeedsWriteResults(v.validatePROJECTIONPROVIDENEEDSWRITECU01())
+	if len(got) != 0 {
+		t.Fatalf("saga-journal-sourced subscribe+projection write CU must satisfy the "+
+			"provide write-side pairing (source-agnostic); got %d finding(s): %v", len(got), got)
+	}
+}
