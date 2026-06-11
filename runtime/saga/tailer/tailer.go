@@ -187,7 +187,7 @@ func NewTailer(
 		locker:               locker,
 		cellID:               cellID,
 		projectionID:         projectionID,
-		lockKey:              tailerLockKey(projectionID),
+		lockKey:              tailerLockKey(cellID, projectionID),
 		clk:                  clk,
 		logger:               slog.Default(),
 		cfg:                  DefaultConfig(),
@@ -276,13 +276,19 @@ func nilDepErr(dep string) error {
 		errcode.WithInternal(errcode.InternalAttr("dependency", dep)))
 }
 
-// tailerLockKey builds the per-projection distlock key. projectionID may contain
-// ':' (SafeID charset), so length-prefix for injectivity, mirroring
-// runtime/saga.leaderElectLockKey. The "saga-journal-tailer:" namespace keeps
-// the key disjoint from the saga Coordinator's per-instance "saga:" keys even
-// though both share the same distlock.Locker instance.
-func tailerLockKey(projectionID string) string {
-	return fmt.Sprintf("saga-journal-tailer:%d:%s", len(projectionID), projectionID)
+// tailerLockKey builds the per-(cellID, projectionID) distlock key. The projection
+// identity — and its checkpoint key — is the (cellID, projectionID) pair, and
+// metadata explicitly permits two different cells to declare the SAME projectionID,
+// so the lock key MUST carry both: keying on projectionID alone would make two
+// legitimately-distinct projections in different cells contend for one leader lock
+// (cross-cell availability coupling). Both segments may contain ':' (SafeID
+// charset), so each is length-prefixed for injectivity, mirroring
+// runtime/saga.leaderElectLockKey. The "saga-journal-tailer:" namespace keeps the
+// key disjoint from the saga Coordinator's per-instance "saga:" keys even though
+// both share the same distlock.Locker instance.
+func tailerLockKey(cellID, projectionID string) string {
+	return fmt.Sprintf("saga-journal-tailer:%d:%s:%d:%s",
+		len(cellID), cellID, len(projectionID), projectionID)
 }
 
 // Start launches the tick loop and blocks until ctx is canceled or Stop is

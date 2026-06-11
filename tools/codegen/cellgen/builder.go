@@ -61,11 +61,15 @@ const (
 	roleServe           = "serve"
 )
 
-// projectionSourceSagaJournal mirrors cellvocab.ProjectionSourceSagaJournal,
-// declared locally for the same reason as the role consts above (cellgen resolves
-// slice.yaml via bare strings). Used by the builder kind-check, the import
-// enrichment skip, and ProjectionGenSpec.IsSagaJournal (≥3 uses).
-const projectionSourceSagaJournal = "saga-journal"
+// projectionSourceSagaJournal / projectionSourceOutbox mirror
+// cellvocab.ProjectionSourceSagaJournal / ProjectionSourceOutbox, declared locally
+// for the same reason as the role consts above (cellgen resolves slice.yaml via
+// bare strings). Used by the builder kind-check, the import enrichment skip, and
+// ProjectionGenSpec.IsSagaJournal (≥3 uses).
+const (
+	projectionSourceSagaJournal = "saga-journal"
+	projectionSourceOutbox      = "outbox"
+)
 
 // BuildCellSpec projects (cell.yaml + markergen.WireBundle + fieldIndex) into
 // the CellGenSpec consumed by cell.tmpl. It is the single bridge between
@@ -839,36 +843,52 @@ func buildProjectionSpecFromCU(
 
 // validateProjectionContractKind enforces the consumed contract's kind against
 // the projection source: saga-journal must consume a kind=saga contract; the
-// outbox path ("" or "outbox") must consume a kind=event contract.
+// outbox path ("" or "outbox") must consume a kind=event contract. An unknown
+// ProjectionSource is fail-closed here — the builder is the LAST line of the
+// generation funnel, so it must not assume any non-"saga-journal" value is outbox
+// (that silent fall-through would emit an outbox request for an unrecognized
+// source). The parser/schema reject unknown sources upstream; this guard makes the
+// funnel closed even if a value reaches the builder by another path.
 func validateProjectionContractKind(cellID, sliceID string, cu metadata.ContractUsage, kind string) error {
-	if cu.ProjectionSource == projectionSourceSagaJournal {
+	switch cu.ProjectionSource {
+	case projectionSourceSagaJournal:
 		if kind != "saga" {
-			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"cellgen build: saga-journal projection must consume a saga contract",
-				errcode.WithDetails(
-					errcode.PublicString("cellID", cellID),
-					errcode.PublicString("sliceID", sliceID),
-					errcode.PublicString("contract", cu.Contract),
-					errcode.PublicString("kind", kind),
-				))
+			return projectionKindMismatchErr(cellID, sliceID, cu.Contract,
+				"cellgen build: saga-journal projection must consume a saga contract", kind)
 		}
 		return nil
-	}
-	// Fall-through is the outbox path: empty ProjectionSource and "outbox" are
-	// equivalent here (the parser already required a non-empty value, and
-	// cell.RegisterProjection treats "" == outbox), so both demand a kind=event
-	// contract.
-	if kind != "event" {
+	case projectionSourceOutbox, "":
+		// Empty and "outbox" are equivalent (cell.RegisterProjection treats
+		// "" == outbox); both demand a kind=event contract. The parser already
+		// requires a non-empty value, so "" only reaches here on a non-parser path.
+		if kind != "event" {
+			return projectionKindMismatchErr(cellID, sliceID, cu.Contract,
+				"cellgen build: projection consumes non-event contract", kind)
+		}
+		return nil
+	default:
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"cellgen build: projection consumes non-event contract",
+			"cellgen build: unknown projectionSource",
 			errcode.WithDetails(
 				errcode.PublicString("cellID", cellID),
 				errcode.PublicString("sliceID", sliceID),
 				errcode.PublicString("contract", cu.Contract),
-				errcode.PublicString("kind", kind),
+				errcode.PublicString("projectionSource", cu.ProjectionSource),
 			))
 	}
-	return nil
+}
+
+// projectionKindMismatchErr builds the shared "projection source ↔ contract kind"
+// validation error (DRY: the two source branches differ only in message + the
+// mismatched kind).
+func projectionKindMismatchErr(cellID, sliceID, contract, msg, kind string) error {
+	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msg,
+		errcode.WithDetails(
+			errcode.PublicString("cellID", cellID),
+			errcode.PublicString("sliceID", sliceID),
+			errcode.PublicString("contract", contract),
+			errcode.PublicString("kind", kind),
+		))
 }
 
 // buildGrpcServicesFromSlices scans all slices belonging to cellID and

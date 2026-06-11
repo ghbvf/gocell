@@ -62,21 +62,42 @@ func (b *Bootstrap) drainCellSagaProjections(s *phaseState) error {
 		if len(reqs) == 0 {
 			continue
 		}
-		// Required-dep check runs once per cell that declares any saga-journal
-		// projection; wrap with the cell context so ops sees which cell triggered
-		// the missing-option error (mirrors buildCellProjections).
-		if err := b.checkSagaProjectionDeps(); err != nil {
-			return fmt.Errorf("bootstrap: cell %s: %w", id, err)
+		if err := b.drainOneCellSagaProjections(s, id, reqs); err != nil {
+			return err
 		}
-		for _, req := range reqs {
-			t, err := b.buildOneSagaTailer(req)
-			if err != nil {
-				return fmt.Errorf("bootstrap: cell %s saga-journal projection %q: %w",
-					req.CellID, req.ProjectionID, err)
-			}
-			if err := b.wireOneSagaTailer(s, t, req.CellID, req.ProjectionID); err != nil {
-				return err
-			}
+	}
+	return nil
+}
+
+// drainOneCellSagaProjections runs the required-dep check once for cell id, then
+// builds + wires one Tailer per saga-journal request. Split out of
+// drainCellSagaProjections so each function stays within the cognitive-complexity
+// budget; mirrors the outbox path's buildCellProjections per-cell split.
+func (b *Bootstrap) drainOneCellSagaProjections(s *phaseState, id string, reqs []cell.ProjectionRequest) error {
+	// Required-dep check runs once per cell that declares any saga-journal
+	// projection; wrap with the cell context so ops sees which cell triggered
+	// the missing-option error (mirrors buildCellProjections).
+	if err := b.checkSagaProjectionDeps(); err != nil {
+		return fmt.Errorf("bootstrap: cell %s: %w", id, err)
+	}
+	for _, req := range reqs {
+		// CellID-drift fail-fast, identical to the outbox path
+		// (buildCellProjections): codegen injects req.CellID from cell metadata,
+		// and bootstrap cross-checks it against the snapshot owner so a cellgen
+		// drift cannot bind this Tailer / checkpoint / probe to the wrong cell.
+		if req.CellID != id {
+			return fmt.Errorf(
+				"bootstrap: cell %s saga-journal projection drift: declared CellID=%q but snapshot owner=%q"+
+					" (codegen should inject cellID from cell metadata; check cellgen templates)",
+				id, req.CellID, id)
+		}
+		t, err := b.buildOneSagaTailer(req)
+		if err != nil {
+			return fmt.Errorf("bootstrap: cell %s saga-journal projection %q: %w",
+				req.CellID, req.ProjectionID, err)
+		}
+		if err := b.wireOneSagaTailer(s, t, req.CellID, req.ProjectionID); err != nil {
+			return err
 		}
 	}
 	return nil

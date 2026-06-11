@@ -694,3 +694,28 @@ func TestBuildProjections_OutboxRejectsSagaContract(t *testing.T) {
 		t.Errorf("error should mention non-event, got: %v", err)
 	}
 }
+
+// TestBuildProjections_UnknownSourceFailsClosed is the synthetic red case for the
+// builder's fail-closed default: an unrecognized projectionSource must NOT silently
+// fall through to the outbox path. The parser/schema reject unknown sources
+// upstream, so this exercises the builder gate directly (the last funnel line) by
+// feeding metadata the parser would never produce.
+func TestBuildProjections_UnknownSourceFailsClosed(t *testing.T) {
+	t.Parallel()
+	cell, slc, fieldIndex := projectionFixtureCellSlice(metadata.ContractUsage{
+		Contract:         "event.order-created.v1",
+		Role:             "subscribe",
+		Handler:          "HandleOrder",
+		Projection:       "order_status",
+		ProjectionSource: "bogus-source",
+	})
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{eventOrderCreatedContract()})
+
+	_, err := BuildCellSpec(p, metadatatest.CellIDDemo, markergen.WireBundle{}, fieldIndex)
+	if err == nil {
+		t.Fatal("expected error for unknown projectionSource, got nil (must not fall through to outbox)")
+	}
+	if !strings.Contains(err.Error(), "unknown projectionSource") {
+		t.Errorf("error should mention unknown projectionSource, got: %v", err)
+	}
+}

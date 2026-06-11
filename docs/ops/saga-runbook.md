@@ -118,7 +118,7 @@ GROUP BY definition_id ORDER BY events DESC;
 **处置**：
 
 - 单事件已有 `Event.MaxPayloadBytes`（64 KiB）上限，单行不会无界。
-- 整表归档 / 截断属 **EPIC #1609 Projection / Replay**（从 `saga_events` replay，ADR `202606051200-1609-adr-saga-journal-projection-source.md`，model-a）的范畴：**replay 投影源设计已立项（accepted），能力待 PR-02..06 落地**；**归档/截断本身仍未实现**。归档能力落地前不要手工 `DELETE` 终态实例的事件（破坏 replay/forensic）；落地后截断亦须 **≥ 最慢投影 checkpoint**（#1609 D7），否则丢未投影事件。
+- 整表归档 / 截断属 **EPIC #1609 Projection / Replay**（从 `saga_events` replay，ADR `202606051200-1609-adr-saga-journal-projection-source.md`，model-a）的范畴：**replay 投影源底座 PR-02..05 已落地（载体 / `GlobalReader` / `SagaJournalSource` / `Tailer` + bootstrap wiring），真实消费者 PR-06 待落地**；**归档/截断本身仍未实现**。归档能力落地前不要手工 `DELETE` 终态实例的事件（破坏 replay/forensic）；落地后截断亦须 **≥ 最慢投影 checkpoint**（#1609 D7），否则丢未投影事件。
 - 短期容量压力：扩 PG 存储 / 调整 retention 策略，不删 saga_events。
 - **告警引导**：无专属增长指标；用 PG 表体积监控（`pg_total_relation_size('saga_events')`）设容量阈值告警，或监控 `saga_instances` 中长期非终态行数（`status IN (1,2,3)` 且 `updated_at` 老化）作为驱动停滞的间接信号。
 
@@ -165,7 +165,7 @@ ORDER BY updated_at ASC LIMIT 20;
 
 ## 场景 5：投影 tailer 停滞（#1609 PR-04）
 
-对应告警 `GoCellSagaTailerStalled` / `GoCellSagaTailerLagHigh` / `GoCellSagaTailerLockAcquireFailures` / `GoCellSagaTailerCheckpointAdvanceFailures`（`docs/ops/alerting-rules.md`）。`runtime/saga/tailer.Tailer` 是 saga 终态 model-A 投影的 catch-up 驱动；与场景 4 的 saga Coordinator 是**独立组件、独立 distlock key**（`saga-journal-tailer:<len>:<proj>`，区别于 Coordinator 的 per-instance `saga:<len>:<def>:<inst>`）。PR-05 已将 Tailer 接入 bootstrap phase6 drain（声明式 `projectionSource: saga-journal`）；告警在部署了 saga-journal 投影的 assembly 上即生效。接入真实消费者（orderfulfillment，PR-06）后可预期首次实际触发。
+对应告警 `GoCellSagaTailerStalled` / `GoCellSagaTailerLagHigh` / `GoCellSagaTailerLockAcquireFailures` / `GoCellSagaTailerCheckpointAdvanceFailures`（`docs/ops/alerting-rules.md`）。`runtime/saga/tailer.Tailer` 是 saga 终态 model-A 投影的 catch-up 驱动；与场景 4 的 saga Coordinator 是**独立组件、独立 distlock key**（`saga-journal-tailer:<len>:<cell>:<len>:<proj>`，per-(cellID, projectionID) 粒度——两个 cell 可合法共用同一 projectionID，故 key 必须带 cellID；区别于 Coordinator 的 per-instance `saga:<len>:<def>:<inst>`）。PR-05 已将 Tailer 接入 bootstrap phase6 drain（声明式 `projectionSource: saga-journal`）；告警在部署了 saga-journal 投影的 assembly 上即生效。接入真实消费者（orderfulfillment，PR-06）后可预期首次实际触发。
 
 **症状**：读投影读到陈旧 saga 终态；`last_success_timestamp` 不前进 / `pending_events` 持续增长。
 
@@ -189,7 +189,7 @@ WHERE cell_id = '<cell>' AND projection_id = '<projection>';
 -- pending = head_seq − offset_seq；持续 > 0 且 offset_seq 不动 = 停滞。
 ```
 
-- **distlock key 持有方**：在 distlock 后端（Redis）查 `saga-journal-tailer:<len>:<projection>` key 是否存在。
+- **distlock key 持有方**：在 distlock 后端（Redis）查 `saga-journal-tailer:<len>:<cell>:<len>:<projection>` key 是否存在。
   - key **不存在** 且 checkpoint 不动 → 没有 tailer 在跑（部署问题，根因 1）：检查 tailer pod 副本数 / 启动日志。
   - key **存在** 但 checkpoint 不动 → 持锁 pod 的 drain 在失败：看该 pod 的 `drain_total{result}` / `checkpoint_advance_total{result}` 与 `projection.apply` trace span / DB 健康（根因 2）。
 - 交叉看 `lock_acquire_failed_total{reason}`：`backend_error` 持续 >0 = 根因 3（按 Redis 故障处置，同场景 4b）。

@@ -211,6 +211,27 @@ func TestDrainCellSagaProjections_EmptyNoOp(t *testing.T) {
 	assert.Empty(t, b.workers, "no saga-journal projection must wire no worker")
 }
 
+// TestDrainCellSagaProjections_FailsOnCellIDDrift: a saga-journal ProjectionRequest
+// whose codegen-injected CellID disagrees with its snapshot owner is a codegen
+// drift and must fail-fast BEFORE any Tailer is built, mirroring the outbox path's
+// CellID-drift guard (buildCellProjections). Without the guard the Tailer,
+// checkpoint key and probe would be bound to the wrong cell.
+func TestDrainCellSagaProjections_FailsOnCellIDDrift(t *testing.T) {
+	t.Parallel()
+	b := New(clock.Real(), sagaProjDeps(t)...)
+	// Cell registered under sagaProjCellID but its projection request declares a
+	// different CellID — the simulated codegen drift.
+	driftCell := newSagaProjectionCell()
+	driftCell.overrideCellID = "wrong-owner"
+	s := buildSagaProjectionPhaseState(t, b, driftCell)
+
+	err := b.drainCellSagaProjections(s)
+	require.Error(t, err, "CellID drift must error")
+	assert.Contains(t, err.Error(), "drift")
+	assert.Contains(t, err.Error(), "wrong-owner", "error must name the drifted CellID")
+	assert.Empty(t, b.workers, "no Tailer must be wired when drift is detected")
+}
+
 // ---------------------------------------------------------------------------
 // checkSagaProjectionDeps — fail-fast on each missing dep
 // ---------------------------------------------------------------------------
