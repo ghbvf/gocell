@@ -1,14 +1,17 @@
 package metadata_test
 
-// projection_cu_test.go validates the projection: and onReset: fields on
-// subscribe contractUsages:
+// projection_cu_test.go validates the projection:, onReset: and projectionSource:
+// fields on subscribe contractUsages:
 //
-//   - Both fields parse correctly onto ContractUsage from YAML.
+//   - All three fields parse correctly onto ContractUsage from YAML.
 //   - validateProjectionUniqueness rejects two slices in the same cell
 //     declaring the same projection id (KindConflict).
 //   - onReset without projection on the same CU is rejected (KindInvalid).
-//   - projection or onReset on a non-subscribe role is rejected (KindInvalid).
+//   - projection / onReset / projectionSource on a non-subscribe role is rejected
+//     (KindInvalid).
 //   - group on a projection subscribe CU is rejected (KindInvalid).
+//   - projectionSource is required-when-projection, enum-checked, and saga-journal
+//     forbids onReset (EPIC #1609 PR-05).
 //   - duplicate-projection error includes the contract id in its details.
 //
 // Schema-level acceptance/rejection (bad projectionID pattern, non-subscribe
@@ -28,7 +31,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// YAML unmarshal: projection + onReset round-trip
+// YAML unmarshal: projection + onReset + projectionSource round-trip
 // ---------------------------------------------------------------------------
 
 func TestContractUsage_ProjectionAndOnResetUnmarshal(t *testing.T) {
@@ -39,31 +42,50 @@ func TestContractUsage_ProjectionAndOnResetUnmarshal(t *testing.T) {
 		wantCU metadata.ContractUsage
 	}{
 		{
-			name: "subscribe with projection only",
-			input: `contract: event.order.placed.v1
-role: subscribe
-handler: HandleOrderPlaced
-projection: order_read_model`,
-			wantCU: metadata.ContractUsage{
-				Contract:   "event.order.placed.v1",
-				Role:       "subscribe",
-				Handler:    "HandleOrderPlaced",
-				Projection: "order_read_model",
-			},
-		},
-		{
-			name: "subscribe with projection and onReset",
+			name: "subscribe with outbox projection",
 			input: `contract: event.order.placed.v1
 role: subscribe
 handler: HandleOrderPlaced
 projection: order_read_model
+projectionSource: outbox`,
+			wantCU: metadata.ContractUsage{
+				Contract:         "event.order.placed.v1",
+				Role:             "subscribe",
+				Handler:          "HandleOrderPlaced",
+				Projection:       "order_read_model",
+				ProjectionSource: "outbox",
+			},
+		},
+		{
+			name: "subscribe with projection, projectionSource and onReset",
+			input: `contract: event.order.placed.v1
+role: subscribe
+handler: HandleOrderPlaced
+projection: order_read_model
+projectionSource: outbox
 onReset: ResetOrderProjection`,
 			wantCU: metadata.ContractUsage{
-				Contract:   "event.order.placed.v1",
-				Role:       "subscribe",
-				Handler:    "HandleOrderPlaced",
-				Projection: "order_read_model",
-				OnReset:    "ResetOrderProjection",
+				Contract:         "event.order.placed.v1",
+				Role:             "subscribe",
+				Handler:          "HandleOrderPlaced",
+				Projection:       "order_read_model",
+				ProjectionSource: "outbox",
+				OnReset:          "ResetOrderProjection",
+			},
+		},
+		{
+			name: "subscribe with saga-journal projection",
+			input: `contract: saga.orderfulfillment.v1
+role: subscribe
+handler: ApplySagaTerminal
+projection: order_status
+projectionSource: saga-journal`,
+			wantCU: metadata.ContractUsage{
+				Contract:         "saga.orderfulfillment.v1",
+				Role:             "subscribe",
+				Handler:          "ApplySagaTerminal",
+				Projection:       "order_status",
+				ProjectionSource: "saga-journal",
 			},
 		},
 		{
@@ -104,6 +126,17 @@ func buildProjectionProject(slices map[string]*metadata.SliceMeta) *metadata.Pro
 	}
 }
 
+// outboxProjectionCU is a valid outbox-sourced projection subscribe CU helper.
+func outboxProjectionCU(contract, projection string) metadata.ContractUsage {
+	return metadata.ContractUsage{
+		Contract:         contract,
+		Role:             "subscribe",
+		Handler:          "Handle",
+		Projection:       projection,
+		ProjectionSource: "outbox",
+	}
+}
+
 // TestValidateProjectionUniqueness_DuplicateWithinCell verifies that two slices
 // in the same cell using the same projection id cause Parse to return
 // KindConflict.
@@ -111,28 +144,14 @@ func TestValidateProjectionUniqueness_DuplicateWithinCell(t *testing.T) {
 	t.Parallel()
 	pm := buildProjectionProject(map[string]*metadata.SliceMeta{
 		"ordercell/orderquery": {
-			ID:            "orderquery",
-			BelongsToCell: metadatatest.NewCellID("ordercell"),
-			ContractUsages: []metadata.ContractUsage{
-				{
-					Contract:   "event.order.placed.v1",
-					Role:       "subscribe",
-					Handler:    "Handle",
-					Projection: "order_read_model",
-				},
-			},
+			ID:             "orderquery",
+			BelongsToCell:  metadatatest.NewCellID("ordercell"),
+			ContractUsages: []metadata.ContractUsage{outboxProjectionCU("event.order.placed.v1", "order_read_model")},
 		},
 		"ordercell/orderstatus": {
-			ID:            "orderstatus",
-			BelongsToCell: metadatatest.NewCellID("ordercell"),
-			ContractUsages: []metadata.ContractUsage{
-				{
-					Contract:   "event.order.updated.v1",
-					Role:       "subscribe",
-					Handler:    "Handle",
-					Projection: "order_read_model", // same id, same cell — conflict
-				},
-			},
+			ID:             "orderstatus",
+			BelongsToCell:  metadatatest.NewCellID("ordercell"),
+			ContractUsages: []metadata.ContractUsage{outboxProjectionCU("event.order.updated.v1", "order_read_model")}, // same id, same cell — conflict
 		},
 	})
 
@@ -150,28 +169,14 @@ func TestValidateProjectionUniqueness_SameIDDifferentCells(t *testing.T) {
 	t.Parallel()
 	pm := buildProjectionProject(map[string]*metadata.SliceMeta{
 		"ordercell/orderquery": {
-			ID:            "orderquery",
-			BelongsToCell: metadatatest.NewCellID("ordercell"),
-			ContractUsages: []metadata.ContractUsage{
-				{
-					Contract:   "event.order.placed.v1",
-					Role:       "subscribe",
-					Handler:    "Handle",
-					Projection: "order_read_model",
-				},
-			},
+			ID:             "orderquery",
+			BelongsToCell:  metadatatest.NewCellID("ordercell"),
+			ContractUsages: []metadata.ContractUsage{outboxProjectionCU("event.order.placed.v1", "order_read_model")},
 		},
 		"inventorycell/invquery": {
-			ID:            "invquery",
-			BelongsToCell: metadatatest.NewCellID("inventorycell"),
-			ContractUsages: []metadata.ContractUsage{
-				{
-					Contract:   "event.order.placed.v1",
-					Role:       "subscribe",
-					Handler:    "Handle",
-					Projection: "order_read_model", // same id, different cell — OK
-				},
-			},
+			ID:             "invquery",
+			BelongsToCell:  metadatatest.NewCellID("inventorycell"),
+			ContractUsages: []metadata.ContractUsage{outboxProjectionCU("event.order.placed.v1", "order_read_model")}, // same id, different cell — OK
 		},
 	})
 
@@ -189,18 +194,8 @@ func TestValidateProjectionUniqueness_SameSliceDuplicateProjection(t *testing.T)
 			ID:            "orderquery",
 			BelongsToCell: metadatatest.NewCellID("ordercell"),
 			ContractUsages: []metadata.ContractUsage{
-				{
-					Contract:   "event.order.placed.v1",
-					Role:       "subscribe",
-					Handler:    "Handle",
-					Projection: "order_read_model",
-				},
-				{
-					Contract:   "event.order.cancelled.v1",
-					Role:       "subscribe",
-					Handler:    "Handle",
-					Projection: "order_read_model", // same id in same slice — conflict
-				},
+				outboxProjectionCU("event.order.placed.v1", "order_read_model"),
+				outboxProjectionCU("event.order.cancelled.v1", "order_read_model"), // same id in same slice — conflict
 			},
 		},
 	})
@@ -267,7 +262,7 @@ func TestValidateProjectionUniqueness_OnResetWithoutProjection(t *testing.T) {
 }
 
 // TestValidateProjectionUniqueness_OnResetWithProjection verifies that a CU
-// with both projection and onReset set passes uniqueness validation.
+// with projection, projectionSource=outbox and onReset set passes validation.
 func TestValidateProjectionUniqueness_OnResetWithProjection(t *testing.T) {
 	t.Parallel()
 	pm := buildProjectionProject(map[string]*metadata.SliceMeta{
@@ -276,22 +271,23 @@ func TestValidateProjectionUniqueness_OnResetWithProjection(t *testing.T) {
 			BelongsToCell: metadatatest.NewCellID("ordercell"),
 			ContractUsages: []metadata.ContractUsage{
 				{
-					Contract:   "event.order.placed.v1",
-					Role:       "subscribe",
-					Handler:    "Handle",
-					Projection: "order_read_model",
-					OnReset:    "ResetProjection",
+					Contract:         "event.order.placed.v1",
+					Role:             "subscribe",
+					Handler:          "Handle",
+					Projection:       "order_read_model",
+					ProjectionSource: "outbox",
+					OnReset:          "ResetProjection",
 				},
 			},
 		},
 	})
 
 	err := metadata.ExportedValidateProjectionUniqueness(pm)
-	assert.NoError(t, err, "CU with both projection and onReset must pass validation")
+	assert.NoError(t, err, "CU with projection, outbox source and onReset must pass validation")
 }
 
 // ---------------------------------------------------------------------------
-// F1: projection/onReset on non-subscribe CU must be rejected (fail-closed)
+// F1: projection/onReset/projectionSource on non-subscribe CU must be rejected
 // ---------------------------------------------------------------------------
 
 // TestValidateProjectionUniqueness_NonSubscribeWithProjection verifies that a
@@ -347,6 +343,168 @@ func TestValidateProjectionUniqueness_NonSubscribeWithOnReset(t *testing.T) {
 		"onReset on non-subscribe role must produce KindInvalid")
 }
 
+// TestValidateProjectionUniqueness_NonSubscribeWithProjectionSource verifies that
+// a non-subscribe CU carrying projectionSource is rejected with KindInvalid (F1).
+func TestValidateProjectionUniqueness_NonSubscribeWithProjectionSource(t *testing.T) {
+	t.Parallel()
+	pm := buildProjectionProject(map[string]*metadata.SliceMeta{
+		"ordercell/orderprovide": {
+			ID:            "orderprovide",
+			BelongsToCell: metadatatest.NewCellID("ordercell"),
+			ContractUsages: []metadata.ContractUsage{
+				{
+					Contract:         "data.order.read.v1",
+					Role:             "provide",
+					ProjectionSource: "saga-journal", // invalid: non-subscribe role
+				},
+			},
+		},
+	})
+
+	err := metadata.ExportedValidateProjectionUniqueness(pm)
+	require.Error(t, err, "projectionSource on non-subscribe role must be rejected")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.KindInvalid, ecErr.Kind)
+}
+
+// ---------------------------------------------------------------------------
+// F-source: projectionSource required-when-projection, enum, saga-journal rules
+// ---------------------------------------------------------------------------
+
+// TestProjectionSource_RequiredWhenProjection verifies that a subscribe CU with
+// projection but no projectionSource is rejected (no implicit default).
+func TestProjectionSource_RequiredWhenProjection(t *testing.T) {
+	t.Parallel()
+	pm := buildProjectionProject(map[string]*metadata.SliceMeta{
+		"ordercell/orderquery": {
+			ID:            "orderquery",
+			BelongsToCell: metadatatest.NewCellID("ordercell"),
+			ContractUsages: []metadata.ContractUsage{
+				{
+					Contract:   "event.order.placed.v1",
+					Role:       "subscribe",
+					Handler:    "Handle",
+					Projection: "order_read_model", // no projectionSource — invalid
+				},
+			},
+		},
+	})
+
+	err := metadata.ExportedValidateProjectionUniqueness(pm)
+	require.Error(t, err, "projection without projectionSource must be rejected")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.KindInvalid, ecErr.Kind)
+	assert.Contains(t, ecErr.Message, "projectionSource is required")
+}
+
+// TestProjectionSource_WithoutProjection verifies that a subscribe CU with
+// projectionSource but no projection is rejected.
+func TestProjectionSource_WithoutProjection(t *testing.T) {
+	t.Parallel()
+	pm := buildProjectionProject(map[string]*metadata.SliceMeta{
+		"ordercell/orderquery": {
+			ID:            "orderquery",
+			BelongsToCell: metadatatest.NewCellID("ordercell"),
+			ContractUsages: []metadata.ContractUsage{
+				{
+					Contract:         "event.order.placed.v1",
+					Role:             "subscribe",
+					Handler:          "Handle",
+					ProjectionSource: "outbox", // no projection — invalid
+				},
+			},
+		},
+	})
+
+	err := metadata.ExportedValidateProjectionUniqueness(pm)
+	require.Error(t, err, "projectionSource without projection must be rejected")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.KindInvalid, ecErr.Kind)
+}
+
+// TestProjectionSource_InvalidEnum verifies an unknown projectionSource value is rejected.
+func TestProjectionSource_InvalidEnum(t *testing.T) {
+	t.Parallel()
+	pm := buildProjectionProject(map[string]*metadata.SliceMeta{
+		"ordercell/orderquery": {
+			ID:            "orderquery",
+			BelongsToCell: metadatatest.NewCellID("ordercell"),
+			ContractUsages: []metadata.ContractUsage{
+				{
+					Contract:         "event.order.placed.v1",
+					Role:             "subscribe",
+					Handler:          "Handle",
+					Projection:       "order_read_model",
+					ProjectionSource: "kafka", // not in {outbox, saga-journal}
+				},
+			},
+		},
+	})
+
+	err := metadata.ExportedValidateProjectionUniqueness(pm)
+	require.Error(t, err, "invalid projectionSource enum value must be rejected")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.KindInvalid, ecErr.Kind)
+	assert.Contains(t, ecErr.Message, "projectionSource must be one of")
+}
+
+// TestProjectionSource_SagaJournalForbidsOnReset verifies that onReset is rejected
+// on a saga-journal projection (no rebuild on that path).
+func TestProjectionSource_SagaJournalForbidsOnReset(t *testing.T) {
+	t.Parallel()
+	pm := buildProjectionProject(map[string]*metadata.SliceMeta{
+		"orderfulfillmentcell/sagastatus": {
+			ID:            "sagastatus",
+			BelongsToCell: metadatatest.NewCellID("orderfulfillmentcell"),
+			ContractUsages: []metadata.ContractUsage{
+				{
+					Contract:         "saga.orderfulfillment.v1",
+					Role:             "subscribe",
+					Handler:          "ApplySagaTerminal",
+					Projection:       "order_status",
+					ProjectionSource: "saga-journal",
+					OnReset:          "ResetOrderStatus", // forbidden on saga-journal
+				},
+			},
+		},
+	})
+
+	err := metadata.ExportedValidateProjectionUniqueness(pm)
+	require.Error(t, err, "onReset on saga-journal projection must be rejected")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.KindInvalid, ecErr.Kind)
+	assert.Contains(t, ecErr.Message, "onReset is not allowed")
+}
+
+// TestProjectionSource_SagaJournalHappy verifies a saga-journal projection (no
+// onReset) passes validation.
+func TestProjectionSource_SagaJournalHappy(t *testing.T) {
+	t.Parallel()
+	pm := buildProjectionProject(map[string]*metadata.SliceMeta{
+		"orderfulfillmentcell/sagastatus": {
+			ID:            "sagastatus",
+			BelongsToCell: metadatatest.NewCellID("orderfulfillmentcell"),
+			ContractUsages: []metadata.ContractUsage{
+				{
+					Contract:         "saga.orderfulfillment.v1",
+					Role:             "subscribe",
+					Handler:          "ApplySagaTerminal",
+					Projection:       "order_status",
+					ProjectionSource: "saga-journal",
+				},
+			},
+		},
+	})
+
+	err := metadata.ExportedValidateProjectionUniqueness(pm)
+	assert.NoError(t, err, "saga-journal projection without onReset must pass validation")
+}
+
 // ---------------------------------------------------------------------------
 // F2: group on a projection subscribe CU must be rejected (fail-closed)
 // ---------------------------------------------------------------------------
@@ -363,11 +521,12 @@ func TestValidateProjectionUniqueness_ProjectionWithGroup(t *testing.T) {
 			BelongsToCell: metadatatest.NewCellID("ordercell"),
 			ContractUsages: []metadata.ContractUsage{
 				{
-					Contract:   "event.order.placed.v1",
-					Role:       "subscribe",
-					Handler:    "Handle",
-					Projection: "order_read_model",
-					Group:      "my-custom-group", // invalid: group forbidden on projection CU
+					Contract:         "event.order.placed.v1",
+					Role:             "subscribe",
+					Handler:          "Handle",
+					Projection:       "order_read_model",
+					ProjectionSource: "outbox",
+					Group:            "my-custom-group", // invalid: group forbidden on projection CU
 				},
 			},
 		},
@@ -392,28 +551,14 @@ func TestValidateProjectionUniqueness_DuplicateErrorIncludesContract(t *testing.
 	t.Parallel()
 	pm := buildProjectionProject(map[string]*metadata.SliceMeta{
 		"ordercell/orderquery": {
-			ID:            "orderquery",
-			BelongsToCell: metadatatest.NewCellID("ordercell"),
-			ContractUsages: []metadata.ContractUsage{
-				{
-					Contract:   "event.order.placed.v1",
-					Role:       "subscribe",
-					Handler:    "Handle",
-					Projection: "order_read_model",
-				},
-			},
+			ID:             "orderquery",
+			BelongsToCell:  metadatatest.NewCellID("ordercell"),
+			ContractUsages: []metadata.ContractUsage{outboxProjectionCU("event.order.placed.v1", "order_read_model")},
 		},
 		"ordercell/orderstatus": {
-			ID:            "orderstatus",
-			BelongsToCell: metadatatest.NewCellID("ordercell"),
-			ContractUsages: []metadata.ContractUsage{
-				{
-					Contract:   "event.order.updated.v1",
-					Role:       "subscribe",
-					Handler:    "Handle",
-					Projection: "order_read_model", // duplicate — triggers conflict
-				},
-			},
+			ID:             "orderstatus",
+			BelongsToCell:  metadatatest.NewCellID("ordercell"),
+			ContractUsages: []metadata.ContractUsage{outboxProjectionCU("event.order.updated.v1", "order_read_model")}, // duplicate — triggers conflict
 		},
 	})
 

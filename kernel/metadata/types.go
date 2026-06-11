@@ -211,8 +211,22 @@ type ContractUsage struct {
 	// OnReset names the optional rebuild Reset-phase hook method on the same
 	// slice service field as Handler (cell.ProjectionResetHook). Only meaningful
 	// when Projection is set; exported Go identifier (^[A-Z][A-Za-z0-9_]*$).
-	// Optional; subscribe-only. Forbidden when Projection is empty.
+	// Optional; subscribe-only. Forbidden when Projection is empty AND forbidden
+	// when ProjectionSource is "saga-journal" (the saga-journal path has no rebuild
+	// — EPIC #1609 PR-05).
 	OnReset string `yaml:"onReset,omitempty"`
+	// ProjectionSource selects which input stream feeds the projection (EPIC #1609
+	// PR-05). REQUIRED whenever Projection is set; forbidden otherwise. Values:
+	//   - "outbox": the named event contract's outbox topic (contract.kind=event).
+	//   - "saga-journal": the GLOBAL saga journal (stream saga.journal.v1). The
+	//     contract MUST be kind=saga, but the anchor is for LINEAGE/governance only
+	//     — it is NOT a runtime filter: the saga-journal source is global (reads
+	//     every saga instance/type), so the Apply hook folds the whole journal and
+	//     must itself filter if it cares about one saga (same coarse, existence-only
+	//     semantics as PROJECTION-PROVIDE-NEEDS-WRITE-CU-01).
+	// cellgen branches on this: "outbox" emits <eventpkg>.NewProjectionRequest;
+	// "saga-journal" emits cell.NewSagaJournalProjectionRequest.
+	ProjectionSource string `yaml:"projectionSource,omitempty"`
 }
 
 // SliceVerifyMeta holds verification requirements for a Slice.

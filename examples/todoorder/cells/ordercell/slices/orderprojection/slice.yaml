@@ -8,11 +8,13 @@ contractUsages:
     role: subscribe
     handler: HandleOrderCreated
     projection: order_status
+    projectionSource: outbox
     onReset: ResetOrderStatus
   - contract: event.order-status-changed.v1
     role: subscribe
     handler: HandleOrderStatusChanged
     projection: order_transition
+    projectionSource: outbox
     onReset: ResetOrderTransition
   - contract: projection.order.status-summary.v1
     role: provide
