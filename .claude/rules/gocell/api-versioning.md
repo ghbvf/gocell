@@ -43,4 +43,5 @@ bootstrap admin 路径形状由单一谓词 `metadata.IsBootstrapPath`
 `auth.bootstrap:true` 出现在匹配该谓词的路径上，缺 cell 段的 `/api/v1/setup/admin` 被
 fail-closed 拒绝。破坏式 wire 变更照常走所属 Cell 的版本目录升级，与上文规则一致。
 
-参考 ADR：`202605061600`（bootstrap admin boundary）、`202606021200`（pre-auth tenant header）。
+参考 ADR：`docs/architecture/202605061600-adr-bootstrap-admin-boundary.md`、
+`docs/architecture/202606021200-1160-adr-pre-auth-tenant-header-contract.md`。
