@@ -16,52 +16,66 @@
 // (RecordDeadLetterFailure). If a future edit removed that metric call from a drop
 // path, the drop would become silent and unrecoverable.
 //
-// # The mechanism (Hard, gh #1440)
+// # The mechanism (sealed-construction funnel + type floor, gh #1440)
 //
 // routeDeadLetter does NOT record the metric inline. It RETURNS a sealed
-// dlxoutcome.Outcome whose only producers are dlxoutcome.Dropped (records the
-// alertable RecordDeadLetterFailure) and dlxoutcome.Captured (records the success
-// RecordDeadLetter). Because routeDeadLetter is typed to return Outcome, Go forces
-// every exit path to `return` one — and the only non-forged way to obtain one runs
-// a metric. A new drop branch that forgets the metric cannot produce an Outcome to
-// return → COMPILE ERROR. "Every exit records a metric" is therefore type-enforced,
-// not archtest-enforced. (This relocates the #1356 enforce spine from a same-block
-// control-flow scan to the Go type system.)
+// dlxoutcome.Outcome whose only sanctioned producers are dlxoutcome.Dropped
+// (records the alertable RecordDeadLetterFailure) and dlxoutcome.Captured (records
+// the success RecordDeadLetter). The type system contributes a FLOOR: because
+// routeDeadLetter is typed to return Outcome, every exit must `return` SOME Outcome
+// value — a bare `return` is a compile error. But the type system stops there: it
+// does NOT prove the returned Outcome came from a recording path. A stateless proof
+// token has a zero value that is always constructible (Outcome{}, var o, *new(T), …),
+// so a drop branch CAN forget the metric and still compile by forging a zero value.
+// What closes that gap is the archtest funnel: H2 forbids mqtt forging an Outcome
+// (composite-lit / zero-var / new), H4 forbids dlxoutcome gaining a non-recording
+// producer, H3a checks the two constructors actually record. Floor (H1) + funnel
+// (H2/H4/H3a) ⇒ every Outcome routeDeadLetter returns came from a recording
+// constructor. This is a stronger, sealed-construction form of the #1356 enforce
+// spine — but the closure is archtest, hence Medium (§grading), NOT the literal
+// "metric omission is a compile error" the type system cannot deliver.
 //
 // # AI-robust grading (honest, per .claude/rules/gocell/ai-robust.md)
 //
-//   - Hard (type system): no-silent-exit. A new routeDeadLetter exit cannot omit
-//     the metric without failing to compile (no Outcome to return). This is the
-//     highest-severity failure mode (an entire $dead drop going silent) and is what
-//     #1440 hardens. H1 pins the return type so a refactor back to a void
-//     routeDeadLetter (which removes the compile pressure) is caught.
-//   - Medium residual ① (shape guard, H2): the empty composite literal
-//     `dlxoutcome.Outcome{}` and a zero `var o dlxoutcome.Outcome` are still
-//     constructible from package mqtt — irreducible in Go (no "no zero value"
-//     modifier; same ceiling as internal/topicns sealed tokens). H2 bans both forms
-//     in mqtt production files.
-//   - Medium residual ② (F1 semantic, H3b): the type system forces SOME outcome
-//     metric per exit but cannot force the CORRECT one (it does not know which
-//     return is a drop). A drop branch wrongly using Captured would record a false
-//     success (review F1). H3b pins the `Captured` callsite count == 1 (the single
-//     success fall-through) and `Dropped` >= 1; a single-branch swap trips it. The
-//     per-path failure/success correctness is also covered behaviorally by
+// Medium — a sealed-construction funnel with a type-system floor. Per the
+// ai-robust carrier table, archtest typed scan = Medium; the closure of this
+// invariant is archtest (H2/H4/H3a), so the whole no-silent-exit axis is Medium,
+// NOT Hard. Genuine type-system Hard is unreachable here: it would require proving
+// a SIDE EFFECT (the metric was recorded) happened on every exit, but Go can only
+// prove a VALUE of type Outcome was produced — and a stateless token's zero value
+// is always constructible (no "no zero value" modifier), so the value carries no
+// proof of the side effect. Contrast genuinely-Hard sealed construction
+// (mqtt.ClientID, internal/topicns): those seal a MEANINGFUL unexported field, so a
+// contentful value is package-external compile-gated. Outcome has no state to seal.
+//
+//   - Type floor (Hard sub-property, H1): routeDeadLetter must return an Outcome —
+//     a bare `return` / a refactor back to a void routeDeadLetter is a compile error
+//     caught by H1. This raises the bar (a silent drop must actively FORGE a zero
+//     value) but does not by itself enforce the metric.
+//   - Completion (Medium, H2 + H4 + H3a): H2 forbids mqtt forging an Outcome
+//     (composite-lit / zero-var / new); H4 forbids dlxoutcome gaining a non-recording
+//     producer; H3a checks Dropped/Captured actually record. Together these close the
+//     "the Outcome came from a recording path" gap the type floor leaves open.
+//   - F1 semantic (Medium, H3b + behavioral): the floor forces SOME outcome per exit
+//     but not the CORRECT one. A drop branch wrongly using Captured records a false
+//     success (review F1). H3b pins the Captured callsite count == 1 (single success
+//     fall-through) and Dropped >= 1; per-path correctness is also covered by
 //     deadletter_test.go.
 //
-// This is NOT a "drop -> failure metric is type-enforced" claim — that part stays
-// Medium (H3b + behavioral tests). The ADR must not overclaim.
+// The ADR / ops / dlxoutcome godoc must NOT claim "metric omission is a compile
+// error" or "type-system Hard" — that is the overclaim corrected in gh #1873 F1.
 //
 // # Blind-spot inventory (per ai-robust.md 强制盲区自检)
 //
-//   - empty-literal / zero-var forge → H2 (composite-lit + ValueSpec scan over mqtt
-//     production files). Proven non-vacuous by the dlxoutcomeredfixture synthetic
-//     red case, which uses a sealed-shape REPLICA (a real-type fixture is impossible:
+//   - composite-lit / zero-var / new(T) forge in mqtt → H2 (CompositeLit + ValueSpec +
+//     new-builtin scan over mqtt production files). All three are enumerable AST forms.
+//     Proven non-vacuous by the dlxoutcomeredfixture synthetic red case (three planted
+//     forges), which uses a sealed-shape REPLICA (a real-type fixture is impossible:
 //     dlxoutcome is an internal package the tools module cannot import — same replica
 //     rationale as internal/mqttredfixture).
-//   - new(T) allocation forge → `*new(dlxoutcome.Outcome)` / `var o = *new(...)` produce a
-//     zero Outcome with neither a composite literal nor a typed zero-var, so H2 does not
-//     see them. Irreducible in Go (same ceiling as the empty literal) and equally vacuous;
-//     accepted residual, flagged so it is not mistaken for covered (not a closed hole).
+//   - non-recording third producer in dlxoutcome → H4 (sole-producer allowlist =
+//     {Dropped, Captured}). Proven non-vacuous by the same red fixture, whose three
+//     planted functions return the replica Outcome but are not Dropped/Captured.
 //   - constructor gutted to a no-op → H3a (Dropped calls RecordDeadLetterFailure,
 //     Captured calls RecordDeadLetter; a metric-less constructor would defeat the
 //     seal while still compiling).
@@ -70,12 +84,19 @@
 //     method in the (tiny) dlxoutcome package would yield a false-POSITIVE (over-credit),
 //     never a false-negative; H3b + behavioral tests stay valid regardless.
 //   - drop credited as success (F1) → H3b + deadletter_test.go behavioral tests.
+//   - ACCEPTED RESIDUAL (the Medium ceiling, gh #1873 F1): open-set zero-value
+//     extraction — a zero Outcome pulled from an array/map element, reflect.Zero, or an
+//     IIFE — is not an enumerable AST forge form, so neither H2 nor any archtest can
+//     bound it. This is precisely why no-silent-exit is Medium, not Hard: the type
+//     system cannot forbid zero values and the forge surface is open-ended. Flagged so
+//     it is not mistaken for a closed hole.
 //
 // ref: gh #1356 — MQTT DLT no-loss (this invariant is the resolution's enforce spine)
-// ref: gh #1440 — Hard upgrade (drop decision收口为 sealed dlxoutcome.Outcome)
+// ref: gh #1440 — sealed dlxoutcome.Outcome funnel (drop decision 收口为 sealed token)
+// ref: gh #1873 — F1: no-silent-exit is Medium (funnel), not Hard; new(T) + sole-producer closed
 // ref: ADR docs/architecture/202605281200-048-adr-mqtt-adapter.md §threat matrix + Amendment 2026-06-11
 // ref: ADR docs/architecture/202605301200-050-adr-mqtt-requeue-semantics.md §6 (HoL / Option C)
-// ref: ai-robust.md §Hard 范本 sealed construction
+// ref: ai-robust.md §Hard 范本 sealed construction (pattern followed; graded Medium — stateless token)
 package archtest
 
 import (
@@ -228,13 +249,20 @@ func dlxIsOutcomeType(info *types.Info, expr ast.Expr, pkgPath, typeName string)
 }
 
 // scanForbiddenOutcomeConstruction flags every in-package construction of the
-// sealed (pkgPath, typeName) Outcome token in file: a composite literal of ANY
-// shape (INCLUDING the empty `Outcome{}` — unlike scanSealedCompositeLitConstruction
-// which exempts empty literals) and a zero-value `var o Outcome` declaration. In
-// the dead-letter funnel NO consumer may mint an Outcome; the only sanctioned
-// producers are dlxoutcome.Dropped/Captured (which record a metric) and they live
-// in the dlxoutcome package itself (not scanned here). This closes the irreducible
-// empty-literal forge the type system cannot forbid (residual Medium per the godoc).
+// sealed (pkgPath, typeName) Outcome token in file via the three enumerable
+// zero-value forge forms: a composite literal of ANY shape (INCLUDING the empty
+// `Outcome{}` — unlike scanSealedCompositeLitConstruction which exempts empty
+// literals), a zero-value `var o Outcome` declaration, and a `*new(Outcome)`
+// allocation. In the dead-letter funnel NO consumer may mint an Outcome; the only
+// sanctioned producers are dlxoutcome.Dropped/Captured (which record a metric) and
+// they live in the dlxoutcome package itself (locked by H4, not scanned here).
+//
+// These three are the enumerable forge forms; the genuinely-irreducible residual
+// (open-set zero-value extraction: array/map element, reflect.Zero, an IIFE) is
+// what keeps the no-silent-exit axis Medium, not Hard (see the package godoc
+// §grading). The type floor only forces routeDeadLetter to return SOME Outcome;
+// that it came from a recording path is closed by this scan (H2) + the
+// sole-producer guard (H4), both archtest.
 func scanForbiddenOutcomeConstruction(p *Pass, f *ast.File, rel, pkgPath, typeName string) []Diagnostic {
 	var out []Diagnostic
 	EachInSubtree[ast.CompositeLit](f, func(lit *ast.CompositeLit) {
@@ -257,6 +285,25 @@ func scanForbiddenOutcomeConstruction(p *Pass, f *ast.File, rel, pkgPath, typeNa
 		pos := p.Fset.Position(vs.Pos())
 		out = append(out, Diagnostic{Rel: rel, Line: pos.Line, Message: fmt.Sprintf(
 			"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H2: zero-value `var %s` at %s:%d — a forged Outcome "+
+				"bypasses the recording constructors; obtain it only from dlxoutcome.Dropped/Captured",
+			typeName, rel, pos.Line)})
+	})
+	// new(Outcome) / *new(Outcome): the builtin new has no package object in
+	// TypesInfo.Uses, so identify it by name — no user-defined func may be named
+	// `new` in Go (same pattern as reconcile.Loop's new(T) guard,
+	// reconcile_invariants_test.go). Closes the new(T) forge (gh #1873 review F1):
+	// it is enumerable, not an irreducible residual.
+	EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+		id, ok := call.Fun.(*ast.Ident)
+		if !ok || id.Name != "new" || len(call.Args) != 1 {
+			return
+		}
+		if !dlxIsOutcomeType(p.TypesInfo, call.Args[0], pkgPath, typeName) {
+			return
+		}
+		pos := p.Fset.Position(call.Pos())
+		out = append(out, Diagnostic{Rel: rel, Line: pos.Line, Message: fmt.Sprintf(
+			"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H2: new(%s) at %s:%d — a forged zero Outcome "+
 				"bypasses the recording constructors; obtain it only from dlxoutcome.Dropped/Captured",
 			typeName, rel, pos.Line)})
 	})
@@ -315,12 +362,12 @@ func TestMQTTDLXFailureSignalFunnel_H2_ScannerFiresOnRedFixture(t *testing.T) {
 			}
 			return out
 		})
-	// The fixture plants BOTH forge forms (empty composite literal + zero-value var),
-	// so require ≥2 diagnostics: if only one fires, one of the two scan paths
-	// (CompositeLit vs ValueSpec) is silently broken.
-	assert.GreaterOrEqual(t, len(diags), 2,
-		"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H2: scanner must fire on BOTH dlxoutcomeredfixture forge forms "+
-			"(empty composite literal + zero-value var); <2 means a composite-lit/var type-resolution path is silently broken")
+	// The fixture plants ALL THREE forge forms (empty composite literal + zero-value
+	// var + *new(T) allocation), so require ≥3 diagnostics: if fewer fire, one of the
+	// three scan paths (CompositeLit / ValueSpec / new-builtin) is silently broken.
+	assert.GreaterOrEqual(t, len(diags), 3,
+		"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H2: scanner must fire on ALL THREE dlxoutcomeredfixture forge forms "+
+			"(empty composite literal + zero-value var + *new(T)); <3 means a composite-lit/var/new type-resolution path is silently broken")
 }
 
 // ─── H3a: the dlxoutcome constructors actually record (inseparability spine) ──
@@ -425,4 +472,139 @@ func TestMQTTDLXFailureSignalFunnel_H3b_OutcomeConstructorBalance(t *testing.T) 
 			"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H3b: routeDeadLetter must have ≥1 dlxoutcome.Dropped "+
 				"callsite (the alertable failure exits)")
 	})
+}
+
+// ─── H4: dlxoutcome's ONLY Outcome producers are Dropped/Captured ─────────────
+//
+// H2 forbids mqtt from FORGING an Outcome; H4 closes the upstream side of the
+// funnel — it forbids the dlxoutcome package from gaining a THIRD producer (e.g.
+// `func Silent() Outcome { return Outcome{} }`) that returns an Outcome without
+// recording a metric. Without H4, H2 (downstream) + H3b (aggregate count) would
+// pass while a silent drop routed through such a producer (gh #1873 review F1,
+// "没闭合上游唯一生产者"). Together H1+H2+H4+H3a mean every Outcome mqtt returns came
+// from a recording constructor — the closed funnel that makes no-silent-exit a
+// Medium machine-guarded property (the type system only forces returning SOME
+// Outcome; see the package godoc §grading).
+
+// dlxSanctionedProducers is the allowlist of dlxoutcome functions permitted to
+// return an Outcome. Both record a metric (H3a), so confining production to this
+// set is what makes "any Outcome was minted by a recording path" hold.
+func dlxSanctionedProducers() map[string]bool {
+	return map[string]bool{dlxDroppedFuncName: true, dlxCapturedFuncName: true}
+}
+
+// funcResultIsOutcome reports whether fd's signature returns the sealed
+// (pkgPath, typeName) Outcome in any result position. Generic constructors
+// (Dropped[R]/Captured[R]) still have a concrete Outcome result, so the type-param
+// does not affect the match.
+func funcResultIsOutcome(info *types.Info, fd *ast.FuncDecl, pkgPath, typeName string) bool {
+	if fd.Name == nil {
+		return false
+	}
+	fn, ok := info.Defs[fd.Name].(*types.Func)
+	if !ok {
+		return false
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok {
+		return false
+	}
+	res := sig.Results()
+	for i := 0; i < res.Len(); i++ {
+		named, ok := res.At(i).Type().(*types.Named)
+		if !ok {
+			continue
+		}
+		obj := named.Obj()
+		if obj.Pkg() != nil && obj.Pkg().Path() == pkgPath && obj.Name() == typeName {
+			return true
+		}
+	}
+	return false
+}
+
+// scanOutcomeProducers walks the top-level functions of p's loaded package and
+// returns (diags, found): a diagnostic for every function whose result type is the
+// sealed (pkgPath, typeName) Outcome but whose name is NOT in allowed, and found =
+// the names of ALL Outcome producers (for the non-vacuity assertion).
+func scanOutcomeProducers(p *Pass, pkgPath, typeName string, allowed map[string]bool) (diags []Diagnostic, found []string) {
+	for _, f := range p.Files {
+		rel := p.Rel(f)
+		if strings.HasSuffix(rel, "_test.go") {
+			continue
+		}
+		scanner.EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+			if !funcResultIsOutcome(p.TypesInfo, fd, pkgPath, typeName) {
+				return
+			}
+			found = append(found, fd.Name.Name)
+			if allowed[fd.Name.Name] {
+				return
+			}
+			pos := p.Fset.Position(fd.Pos())
+			diags = append(diags, Diagnostic{Rel: rel, Line: pos.Line, Message: fmt.Sprintf(
+				"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H4: %s returns %s but is not a sanctioned producer "+
+					"(Dropped/Captured) at %s:%d — a non-recording producer mints an Outcome without the "+
+					"alertable metric; the sole producers of %s must record a dead-letter outcome",
+				fd.Name.Name, typeName, rel, pos.Line, typeName)})
+		})
+	}
+	return diags, found
+}
+
+func TestMQTTDLXFailureSignalFunnel_H4_SoleProducers(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+	seen := false
+	var diags []Diagnostic
+	var found []string
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		[]string{mqttDLXOutcomePkgPath}),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttDLXOutcomePkgPath {
+				return nil
+			}
+			seen = true
+			diags, found = scanOutcomeProducers(p, mqttDLXOutcomePkgPath, dlxOutcomeTypeName, dlxSanctionedProducers())
+			return nil
+		})
+	assert.True(t, seen,
+		"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H4: %s package not loaded — gh #1440 mechanism missing", mqttDLXOutcomePkgPath)
+	assert.Empty(t, diags,
+		"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H4: dlxoutcome has a non-sanctioned Outcome producer — only "+
+			"Dropped/Captured (which record a metric) may return Outcome; a third producer reopens silent drop")
+	// Non-vacuity: both sanctioned producers must be present, else the result-type
+	// resolution is silently broken and H4 would pass on an empty producer set.
+	assert.Subset(t, found, []string{dlxDroppedFuncName, dlxCapturedFuncName},
+		"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H4: expected Dropped+Captured among Outcome producers; "+
+			"missing one means the producer scan is broken")
+}
+
+// TestMQTTDLXFailureSignalFunnel_H4_ScannerFiresOnRedFixture proves the H4 producer
+// scan is non-vacuous: the replica fixture declares three Outcome producers
+// (archtestForgedOutcome{Literal,Var,New}), none named Dropped/Captured, so the
+// allowlist scan MUST flag all three.
+func TestMQTTDLXFailureSignalFunnel_H4_ScannerFiresOnRedFixture(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+	var diags []Diagnostic
+	_ = Run(t, Fixture(FixtureOpts{Tests: false}, []string{dlxOutcomeRedFixturePkgPath}),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != dlxOutcomeRedFixturePkgPath {
+				return nil
+			}
+			diags, _ = scanOutcomeProducers(p, dlxOutcomeRedFixturePkgPath, "FixtureOutcome", dlxSanctionedProducers())
+			return nil
+		})
+	assert.GreaterOrEqual(t, len(diags), 3,
+		"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H4: scanner must flag all three non-sanctioned producers in "+
+			"dlxoutcomeredfixture; <3 means the result-type producer scan is silently broken")
+	for _, d := range diags {
+		assert.True(t, strings.HasSuffix(d.Rel, "fixture.go"),
+			"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H4: diagnostic not from the red fixture file: %s", d.Rel)
+	}
 }

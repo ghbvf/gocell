@@ -22,11 +22,14 @@ import (
 //
 // Every exit returns a [dlxoutcome.Outcome]: the metric is recorded by the
 // returning constructor, never inline. [dlxoutcome.Dropped] records the alertable
-// mqtt_dlx_failed_total; [dlxoutcome.Captured] records mqtt_dlx_total. Because the
-// function is typed to return an Outcome and only those two constructors produce
-// one, a drop path that forgets the metric cannot compile (gh #1440 / archtest
-// MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01). The caller discards the Outcome — its job is
-// to force every exit through a recording constructor, not to carry state.
+// mqtt_dlx_failed_total; [dlxoutcome.Captured] records mqtt_dlx_total. The return
+// type is a FLOOR — every exit must return some Outcome — and the archtest funnel
+// MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01 (H2 no-forge + H4 sole-producer + H3a records)
+// makes that Outcome come from a recording path, so a drop branch that forgets the
+// metric is caught (machine-guarded Medium, not a compile error — a stateless token
+// is forgeable as a zero value; see gh #1440 / gh #1873 F1). The caller discards the
+// Outcome — its job is to force every exit through a recording constructor, not to
+// carry state.
 //
 // Fail-closed on every error: if the topic cannot be minted (out-of-namespace /
 // wildcard poison topic) or the $dead publish fails, routeDeadLetter logs at Error

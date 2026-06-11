@@ -1,11 +1,15 @@
 //go:build archtest_fixture
 
 // Package dlxoutcomeredfixture is the red fixture for
-// MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H2's scanner-fires self-check. It declares a
-// REPLICA of adapters/mqtt/internal/dlxoutcome.Outcome (an exported struct with
-// only a blank/unexported field — the sealed-proof-token shape) and plants the
-// two forge forms H2 must detect: an empty composite literal and a zero-value
-// `var` declaration.
+// MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01's H2 and H4 scanner-fires self-checks. It
+// declares a REPLICA of adapters/mqtt/internal/dlxoutcome.Outcome (an exported
+// struct with only a blank/unexported field — the sealed-proof-token shape) and
+// plants the three zero-value forge forms H2 must detect: an empty composite
+// literal, a zero-value `var` declaration, and a `*new(T)` allocation.
+//
+// The same three planted functions double as H4 (sole-producer) red samples:
+// each returns the replica Outcome but is NOT named Dropped/Captured, so the H4
+// producer-allowlist scan must flag all of them as non-sanctioned producers.
 //
 // Why a replica and not the real dlxoutcome.Outcome: dlxoutcome lives under
 // adapters/mqtt/internal, and Go's internal-package rule forbids this tools-module
@@ -21,7 +25,7 @@
 //
 // ref: tools/archtest/mqtt_dlx_failure_signal_funnel_test.go TestMQTTDLXFailureSignalFunnel_H2_ScannerFiresOnRedFixture
 // ref: tools/archtest/internal/mqttredfixture/fixture.go (replica-fixture precedent)
-// ref: gh #1440 — MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01 Hard upgrade
+// ref: gh #1440 — MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01 sealed-construction funnel (Medium, gh #1873 F1)
 package dlxoutcomeredfixture
 
 // FixtureOutcome is a sealed-shape replica of dlxoutcome.Outcome: an exported
@@ -48,4 +52,14 @@ func archtestForgedOutcomeLiteral() FixtureOutcome {
 func archtestForgedOutcomeVar() FixtureOutcome {
 	var o FixtureOutcome
 	return o
+}
+
+// archtestForgedOutcomeNew plants the `*new(T)` allocation forge — a zero Outcome
+// produced by the builtin new, with neither a composite literal nor a typed
+// zero-var, so a composite-lit/var-only scan misses it. This is the third form H2
+// closes (gh #1873 review F1: new(T) is detectable, not an irreducible residual).
+//
+//nolint:unused // referenced exclusively by the archtest scanner via AST loading.
+func archtestForgedOutcomeNew() FixtureOutcome {
+	return *new(FixtureOutcome)
 }
