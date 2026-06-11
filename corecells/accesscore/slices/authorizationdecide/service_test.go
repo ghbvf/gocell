@@ -85,7 +85,7 @@ func memEngineWithPolicies(t *testing.T, policies ...*abac.Policy) *Service {
 	t.Helper()
 	repo := mem.NewPolicyRepository()
 	for _, p := range policies {
-		require.NoError(t, repo.Save(context.Background(), testTenantID, p))
+		require.NoError(t, repo.Create(context.Background(), testTenantID, p))
 	}
 	return newEngine(t, repo, clockmock.New(fixedClockTime))
 }
@@ -351,7 +351,16 @@ func TestAuthorize_ObligationsMerge_NarrowestRowScope_UnionFieldMask(t *testing.
 // errPolicyRepo returns err from every method (store-down simulation).
 type errPolicyRepo struct{ err error }
 
-func (r errPolicyRepo) Save(context.Context, tenant.TenantID, *abac.Policy) error { return r.err }
+func (r errPolicyRepo) Create(context.Context, tenant.TenantID, *abac.Policy) error { return r.err }
+
+func (r errPolicyRepo) Update(_ context.Context, _ tenant.TenantID, _ string, _ int, _ *abac.Policy) (*abac.Policy, error) {
+	return nil, r.err
+}
+
+func (r errPolicyRepo) Delete(_ context.Context, _ tenant.TenantID, _ string, _ int) (*abac.Policy, error) {
+	return nil, r.err
+}
+
 func (r errPolicyRepo) GetByID(context.Context, tenant.TenantID, string) (*abac.Policy, error) {
 	return nil, r.err
 }
@@ -359,8 +368,8 @@ func (r errPolicyRepo) GetByID(context.Context, tenant.TenantID, string) (*abac.
 func (r errPolicyRepo) ListByTenant(context.Context, tenant.TenantID) ([]*abac.Policy, error) {
 	return nil, r.err
 }
-func (r errPolicyRepo) Delete(context.Context, tenant.TenantID, string) error { return r.err }
-func (r errPolicyRepo) RepoReady(context.Context) error                       { return r.err }
+
+func (r errPolicyRepo) RepoReady(context.Context) error { return r.err }
 
 func TestAuthorize_StoreDown_DeniesUnavailable(t *testing.T) {
 	eng := newEngine(t, errPolicyRepo{err: errors.New("connection refused")}, clockmock.New(fixedClockTime))
@@ -419,8 +428,18 @@ type scopeCapturingPolicyRepo struct {
 	capturedOK    bool
 }
 
-func (r *scopeCapturingPolicyRepo) Save(ctx context.Context, t tenant.TenantID, p *abac.Policy) error {
-	return r.inner.Save(ctx, t, p)
+func (r *scopeCapturingPolicyRepo) Create(ctx context.Context, t tenant.TenantID, p *abac.Policy) error {
+	return r.inner.Create(ctx, t, p)
+}
+
+func (r *scopeCapturingPolicyRepo) Update(
+	ctx context.Context, t tenant.TenantID, id string, expectedVersion int, p *abac.Policy,
+) (*abac.Policy, error) {
+	return r.inner.Update(ctx, t, id, expectedVersion, p)
+}
+
+func (r *scopeCapturingPolicyRepo) Delete(ctx context.Context, t tenant.TenantID, id string, expectedVersion int) (*abac.Policy, error) {
+	return r.inner.Delete(ctx, t, id, expectedVersion)
 }
 
 func (r *scopeCapturingPolicyRepo) GetByID(ctx context.Context, t tenant.TenantID, id string) (*abac.Policy, error) {
@@ -430,10 +449,6 @@ func (r *scopeCapturingPolicyRepo) GetByID(ctx context.Context, t tenant.TenantI
 func (r *scopeCapturingPolicyRepo) ListByTenant(ctx context.Context, t tenant.TenantID) ([]*abac.Policy, error) {
 	r.capturedScope, r.capturedOK = tenant.ScopeFromContext(ctx)
 	return r.inner.ListByTenant(ctx, t)
-}
-
-func (r *scopeCapturingPolicyRepo) Delete(ctx context.Context, t tenant.TenantID, id string) error {
-	return r.inner.Delete(ctx, t, id)
 }
 
 func (r *scopeCapturingPolicyRepo) RepoReady(ctx context.Context) error {
@@ -480,7 +495,7 @@ func runAuthorizerConformance(t *testing.T, factory func(t *testing.T) (ports.Po
 	build := func(t *testing.T, policies ...*abac.Policy) *Service {
 		repo, txm := factory(t)
 		for _, p := range policies {
-			require.NoError(t, repo.Save(context.Background(), testTenantID, p))
+			require.NoError(t, repo.Create(context.Background(), testTenantID, p))
 		}
 		svc, err := NewService(clockmock.New(fixedClockTime), repo, slog.Default(), WithTxManager(txm))
 		require.NoError(t, err)

@@ -54,16 +54,21 @@ func makeTestPolicy(policyID string, tid tenant.TenantID) *abac.Policy {
 	}
 }
 
-func TestPolicyRepository_SaveAndGetByID_RoundTrip(t *testing.T) {
+func mustCreate(t *testing.T, repo *mem.PolicyRepository, tid tenant.TenantID, p *abac.Policy) {
+	t.Helper()
+	if err := repo.Create(context.Background(), tid, p); err != nil {
+		t.Fatalf("Create() unexpected error: %v", err)
+	}
+}
+
+func TestPolicyRepository_CreateAndGetByID_RoundTrip(t *testing.T) {
 	t.Parallel()
 
 	repo := mem.NewPolicyRepository()
 	ctx := context.Background()
 	p := makeTestPolicy("policy-1", testTenant1)
 
-	if err := repo.Save(ctx, testTenant1, p); err != nil {
-		t.Fatalf("Save() unexpected error: %v", err)
-	}
+	mustCreate(t, repo, testTenant1, p)
 
 	got, err := repo.GetByID(ctx, testTenant1, "policy-1")
 	if err != nil {
@@ -75,6 +80,9 @@ func TestPolicyRepository_SaveAndGetByID_RoundTrip(t *testing.T) {
 	if got.Name != p.Name {
 		t.Errorf("GetByID().Name = %q, want %q", got.Name, p.Name)
 	}
+	if got.Version != 1 {
+		t.Errorf("GetByID().Version = %d, want 1 after Create", got.Version)
+	}
 }
 
 func TestPolicyRepository_CrossTenantIsolation(t *testing.T) {
@@ -84,9 +92,7 @@ func TestPolicyRepository_CrossTenantIsolation(t *testing.T) {
 	ctx := context.Background()
 	p := makeTestPolicy("policy-1", testTenant1)
 
-	if err := repo.Save(ctx, testTenant1, p); err != nil {
-		t.Fatalf("Save() unexpected error: %v", err)
-	}
+	mustCreate(t, repo, testTenant1, p)
 
 	// T2 should not see T1's policy
 	_, err := repo.GetByID(ctx, testTenant2, "policy-1")
@@ -96,7 +102,7 @@ func TestPolicyRepository_CrossTenantIsolation(t *testing.T) {
 	assertKind(t, err, errcode.KindNotFound, "GetByID() cross-tenant")
 
 	// Delete in T2 should also fail
-	if err := repo.Delete(ctx, testTenant2, "policy-1"); err == nil {
+	if _, err := repo.Delete(ctx, testTenant2, "policy-1", 1); err == nil {
 		t.Fatal("Delete() expected not-found error for cross-tenant access, got nil")
 	}
 }
@@ -107,15 +113,13 @@ func TestPolicyRepository_ListByTenant(t *testing.T) {
 	repo := mem.NewPolicyRepository()
 	ctx := context.Background()
 
-	// Save 2 policies in T1, 1 in T2
+	// Create 2 policies in T1, 1 in T2
 	p1 := makeTestPolicy("policy-a", testTenant1)
 	p2 := makeTestPolicy("policy-b", testTenant1)
 	p3 := makeTestPolicy("policy-c", testTenant2)
 
 	for _, p := range []*abac.Policy{p1, p2, p3} {
-		if err := repo.Save(ctx, p.TenantID, p); err != nil {
-			t.Fatalf("Save(%s) unexpected error: %v", p.ID, err)
-		}
+		mustCreate(t, repo, p.TenantID, p)
 	}
 
 	t1List, err := repo.ListByTenant(ctx, testTenant1)
@@ -142,10 +146,8 @@ func TestPolicyRepository_DeleteThenGetByID(t *testing.T) {
 	ctx := context.Background()
 	p := makeTestPolicy("policy-1", testTenant1)
 
-	if err := repo.Save(ctx, testTenant1, p); err != nil {
-		t.Fatalf("Save() unexpected error: %v", err)
-	}
-	if err := repo.Delete(ctx, testTenant1, "policy-1"); err != nil {
+	mustCreate(t, repo, testTenant1, p)
+	if _, err := repo.Delete(ctx, testTenant1, "policy-1", 1); err != nil {
 		t.Fatalf("Delete() unexpected error: %v", err)
 	}
 
@@ -162,11 +164,26 @@ func TestPolicyRepository_DeleteMissingID(t *testing.T) {
 	repo := mem.NewPolicyRepository()
 	ctx := context.Background()
 
-	err := repo.Delete(ctx, testTenant1, "nonexistent")
+	_, err := repo.Delete(ctx, testTenant1, "nonexistent", 1)
 	if err == nil {
 		t.Fatal("Delete() expected not-found error, got nil")
 	}
 	assertKind(t, err, errcode.KindNotFound, "Delete() nonexistent")
+}
+
+func TestPolicyRepository_DeleteVersionConflict(t *testing.T) {
+	t.Parallel()
+
+	repo := mem.NewPolicyRepository()
+	ctx := context.Background()
+	p := makeTestPolicy("policy-1", testTenant1)
+	mustCreate(t, repo, testTenant1, p)
+
+	_, err := repo.Delete(ctx, testTenant1, "policy-1", 99 /* wrong version */)
+	if err == nil {
+		t.Fatal("Delete() with wrong version expected KindConflict, got nil")
+	}
+	assertKind(t, err, errcode.KindConflict, "Delete() version conflict")
 }
 
 func TestPolicyRepository_GetByIDMissing(t *testing.T) {
@@ -182,7 +199,7 @@ func TestPolicyRepository_GetByIDMissing(t *testing.T) {
 	assertKind(t, err, errcode.KindNotFound, "GetByID() nonexistent")
 }
 
-func TestPolicyRepository_SaveInvalidPolicy(t *testing.T) {
+func TestPolicyRepository_CreateInvalidPolicy(t *testing.T) {
 	t.Parallel()
 
 	repo := mem.NewPolicyRepository()
@@ -195,13 +212,29 @@ func TestPolicyRepository_SaveInvalidPolicy(t *testing.T) {
 		Name:     "", // invalid
 		Rules:    []abac.Rule{makeTestPolicy("x", testTenant1).Rules[0]},
 	}
-	err := repo.Save(ctx, testTenant1, invalid)
+	err := repo.Create(ctx, testTenant1, invalid)
 	if err == nil {
-		t.Fatal("Save() expected validation error, got nil")
+		t.Fatal("Create() expected validation error, got nil")
 	}
 }
 
-func TestPolicyRepository_SaveTenantMismatch(t *testing.T) {
+func TestPolicyRepository_CreateConflict(t *testing.T) {
+	t.Parallel()
+
+	repo := mem.NewPolicyRepository()
+	ctx := context.Background()
+	p := makeTestPolicy("policy-1", testTenant1)
+	mustCreate(t, repo, testTenant1, p)
+
+	// Second Create with same id must fail.
+	err := repo.Create(ctx, testTenant1, makeTestPolicy("policy-1", testTenant1))
+	if err == nil {
+		t.Fatal("Create() second call with same id expected KindConflict, got nil")
+	}
+	assertKind(t, err, errcode.KindConflict, "Create() duplicate")
+}
+
+func TestPolicyRepository_CreateTenantMismatch(t *testing.T) {
 	t.Parallel()
 
 	repo := mem.NewPolicyRepository()
@@ -209,11 +242,74 @@ func TestPolicyRepository_SaveTenantMismatch(t *testing.T) {
 
 	// Policy claims T1 but we pass T2
 	p := makeTestPolicy("policy-1", testTenant1)
-	err := repo.Save(ctx, testTenant2, p)
+	err := repo.Create(ctx, testTenant2, p)
 	if err == nil {
-		t.Fatal("Save() expected error when p.TenantID != t, got nil")
+		t.Fatal("Create() expected error when p.TenantID != t, got nil")
 	}
-	assertKind(t, err, errcode.KindInvalid, "Save() tenant mismatch")
+	assertKind(t, err, errcode.KindInvalid, "Create() tenant mismatch")
+}
+
+func TestPolicyRepository_UpdateCASSuccess(t *testing.T) {
+	t.Parallel()
+
+	repo := mem.NewPolicyRepository()
+	ctx := context.Background()
+	p := makeTestPolicy("policy-1", testTenant1)
+	mustCreate(t, repo, testTenant1, p)
+
+	updated := makeTestPolicy("policy-1", testTenant1)
+	updated.Name = "Updated Name"
+	got, err := repo.Update(ctx, testTenant1, "policy-1", 1, updated)
+	if err != nil {
+		t.Fatalf("Update() unexpected error: %v", err)
+	}
+	if got.Version != 2 {
+		t.Errorf("Update() returned Version = %d, want 2", got.Version)
+	}
+	if got.Name != "Updated Name" {
+		t.Errorf("Update() returned Name = %q, want %q", got.Name, "Updated Name")
+	}
+
+	stored, err := repo.GetByID(ctx, testTenant1, "policy-1")
+	if err != nil {
+		t.Fatalf("GetByID() after Update unexpected error: %v", err)
+	}
+	if stored.Version != 2 {
+		t.Errorf("GetByID() after Update Version = %d, want 2", stored.Version)
+	}
+	if stored.Name != "Updated Name" {
+		t.Errorf("GetByID() after Update Name = %q, want %q", stored.Name, "Updated Name")
+	}
+}
+
+func TestPolicyRepository_UpdateVersionConflict(t *testing.T) {
+	t.Parallel()
+
+	repo := mem.NewPolicyRepository()
+	ctx := context.Background()
+	p := makeTestPolicy("policy-1", testTenant1)
+	mustCreate(t, repo, testTenant1, p)
+
+	updated := makeTestPolicy("policy-1", testTenant1)
+	_, err := repo.Update(ctx, testTenant1, "policy-1", 99 /* wrong */, updated)
+	if err == nil {
+		t.Fatal("Update() with wrong version expected KindConflict, got nil")
+	}
+	assertKind(t, err, errcode.KindConflict, "Update() version conflict")
+}
+
+func TestPolicyRepository_UpdateNotFound(t *testing.T) {
+	t.Parallel()
+
+	repo := mem.NewPolicyRepository()
+	ctx := context.Background()
+
+	updated := makeTestPolicy("nonexistent", testTenant1)
+	_, err := repo.Update(ctx, testTenant1, "nonexistent", 1, updated)
+	if err == nil {
+		t.Fatal("Update() on nonexistent expected KindNotFound, got nil")
+	}
+	assertKind(t, err, errcode.KindNotFound, "Update() nonexistent")
 }
 
 func makeTestPolicyWithFieldMask(policyID string, tid tenant.TenantID) *abac.Policy {
@@ -229,9 +325,7 @@ func TestPolicyRepository_ReturnedCloneIsIndependent(t *testing.T) {
 	ctx := context.Background()
 	p := makeTestPolicyWithFieldMask("policy-1", testTenant1)
 
-	if err := repo.Save(ctx, testTenant1, p); err != nil {
-		t.Fatalf("Save() unexpected error: %v", err)
-	}
+	mustCreate(t, repo, testTenant1, p)
 
 	got, err := repo.GetByID(ctx, testTenant1, "policy-1")
 	if err != nil {
@@ -270,9 +364,7 @@ func TestPolicyRepository_ListReturnsClones(t *testing.T) {
 	ctx := context.Background()
 	p := makeTestPolicy("policy-1", testTenant1)
 
-	if err := repo.Save(ctx, testTenant1, p); err != nil {
-		t.Fatalf("Save() unexpected error: %v", err)
-	}
+	mustCreate(t, repo, testTenant1, p)
 
 	list, err := repo.ListByTenant(ctx, testTenant1)
 	if err != nil {
@@ -295,33 +387,7 @@ func TestPolicyRepository_ListReturnsClones(t *testing.T) {
 	}
 }
 
-func TestPolicyRepository_Upsert(t *testing.T) {
-	t.Parallel()
-
-	repo := mem.NewPolicyRepository()
-	ctx := context.Background()
-	p := makeTestPolicy("policy-1", testTenant1)
-
-	if err := repo.Save(ctx, testTenant1, p); err != nil {
-		t.Fatalf("first Save() unexpected error: %v", err)
-	}
-
-	// Update
-	p.Name = "Updated Name"
-	if err := repo.Save(ctx, testTenant1, p); err != nil {
-		t.Fatalf("second Save() unexpected error: %v", err)
-	}
-
-	got, err := repo.GetByID(ctx, testTenant1, "policy-1")
-	if err != nil {
-		t.Fatalf("GetByID() unexpected error: %v", err)
-	}
-	if got.Name != "Updated Name" {
-		t.Errorf("GetByID().Name = %q, want %q", got.Name, "Updated Name")
-	}
-}
-
-func TestPolicyRepository_ConcurrentSaveGet(t *testing.T) {
+func TestPolicyRepository_ConcurrentCreateGet(t *testing.T) {
 	t.Parallel()
 
 	repo := mem.NewPolicyRepository()
@@ -346,13 +412,13 @@ func TestPolicyRepository_ConcurrentSaveGet(t *testing.T) {
 
 type concurrentPolicyErrors struct {
 	mu         sync.Mutex
-	saveErrs   []error
+	createErrs []error
 	getErrs    []error
 	listErrs   []error
 	deleteErrs []error
 }
 
-func (e *concurrentPolicyErrors) addSave(err error)   { e.add(&e.saveErrs, err) }
+func (e *concurrentPolicyErrors) addCreate(err error) { e.add(&e.createErrs, err) }
 func (e *concurrentPolicyErrors) addGet(err error)    { e.add(&e.getErrs, err) }
 func (e *concurrentPolicyErrors) addList(err error)   { e.add(&e.listErrs, err) }
 func (e *concurrentPolicyErrors) addDelete(err error) { e.add(&e.deleteErrs, err) }
@@ -366,8 +432,8 @@ func (e *concurrentPolicyErrors) add(dst *[]error, err error) {
 func (e *concurrentPolicyErrors) assertEmpty(t *testing.T) {
 	t.Helper()
 
-	if len(e.saveErrs) > 0 {
-		t.Errorf("concurrent Save() produced %d unexpected error(s): first=%v", len(e.saveErrs), e.saveErrs[0])
+	if len(e.createErrs) > 0 {
+		t.Errorf("concurrent Create() produced %d unexpected error(s): first=%v", len(e.createErrs), e.createErrs[0])
 	}
 	if len(e.getErrs) > 0 {
 		t.Errorf("concurrent GetByID() produced %d unexpected error(s): first=%v", len(e.getErrs), e.getErrs[0])
@@ -384,8 +450,9 @@ func runConcurrentPolicyOperation(ctx context.Context, repo *mem.PolicyRepositor
 	policyID := "policy-concurrent"
 	p := makeTestPolicy(policyID, testTenant1)
 
-	if err := repo.Save(ctx, testTenant1, p); err != nil {
-		errs.addSave(err)
+	// Create may return KindConflict if another goroutine already created it.
+	if err := repo.Create(ctx, testTenant1, p); err != nil && !isConflictError(err) {
+		errs.addCreate(err)
 	}
 	if _, err := repo.GetByID(ctx, testTenant1, policyID); err != nil && !isNotFoundError(err) {
 		errs.addGet(err)
@@ -395,8 +462,10 @@ func runConcurrentPolicyOperation(ctx context.Context, repo *mem.PolicyRepositor
 	}
 	// Interleave Delete on even goroutines to exercise concurrent write paths.
 	if idx%2 == 0 {
-		if err := repo.Delete(ctx, testTenant1, policyID); err != nil && !isNotFoundError(err) {
-			errs.addDelete(err)
+		if _, err := repo.Delete(ctx, testTenant1, policyID, 1); err != nil {
+			if !isNotFoundError(err) && !isConflictError(err) {
+				errs.addDelete(err)
+			}
 		}
 	}
 }
@@ -404,4 +473,9 @@ func runConcurrentPolicyOperation(ctx context.Context, repo *mem.PolicyRepositor
 func isNotFoundError(err error) bool {
 	var ec *errcode.Error
 	return errors.As(err, &ec) && ec.Kind == errcode.KindNotFound
+}
+
+func isConflictError(err error) bool {
+	var ec *errcode.Error
+	return errors.As(err, &ec) && ec.Kind == errcode.KindConflict
 }

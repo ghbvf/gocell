@@ -11,9 +11,13 @@ import (
 // semantics (any EffectDeny wins over any number of EffectAllow results),
 // mirroring XACML §7.16 and AWS Cedar's forbid-overrides-permit behavior.
 //
-// No Version or timestamp fields: history is deferred to PR-9. The Policy
-// struct deliberately carries no clock dependency; created/updated times are
-// an infrastructure concern (DB columns, not domain fields).
+// Version is a repo-owned optimistic-concurrency counter: the repository sets
+// Version=1 on Create and increments it on every Update. Callers supply the
+// last-read Version as expectedVersion to Update/Delete (CAS guard). The
+// policy.updated event carries Version so consumers can detect gaps.
+// Validate() does not check Version (it is repo-owned and zero for new
+// aggregates before persistence). Timestamp fields (created_at / updated_at)
+// remain infrastructure-only DB columns, not domain fields.
 //
 // ref: XACML 3.0 §5.8 — Policy element.
 // ref: AWS Cedar policy model — policy set / policy / rule decomposition.
@@ -24,7 +28,8 @@ type Policy struct {
 	ID string
 	// TenantID is the isolation domain that owns this policy. Must be a valid
 	// canonical lowercase UUID (tenant.TenantID.Validate()). Enforced fail-fast
-	// in Save() — a mismatched TenantID is a programmer error, not a user error.
+	// in Create/Update/Delete — a mismatched TenantID is a programmer error, not
+	// a user error.
 	TenantID tenant.TenantID
 	// Name is a human-readable label. Must be non-empty.
 	Name string
@@ -33,6 +38,11 @@ type Policy struct {
 	// Rules is the ordered list of authorization rules. Must contain at least
 	// one rule. Rule IDs must be unique within the policy.
 	Rules []Rule
+	// Version is the optimistic-concurrency counter owned by the repository.
+	// Set to 1 on Create; incremented by 1 on every successful Update.
+	// Callers pass the last-read Version as expectedVersion to Update/Delete.
+	// Zero before first persistence; Validate() does not enforce a minimum.
+	Version int
 }
 
 // Validate returns an error if the Policy is structurally invalid:
