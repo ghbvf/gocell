@@ -227,10 +227,12 @@ type providerPublisherCollector struct {
 
 var _ PublisherCollector = (*providerPublisherCollector)(nil)
 
-// ackDurationBuckets covers MQTT publish ack round-trip times from 1 ms to
-// 10 s, matching a standard Prometheus default-ish bucket set oriented to
-// network-latency distributions.
-var ackDurationBuckets = []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
+// mqttDurationBuckets is the shared network-latency-oriented histogram bucket
+// bounds used by both the publish-ack round-trip histogram
+// (mqtt_publish_ack_duration_seconds) and the consume handler+commit histogram
+// (mqtt_consume_duration_seconds). Covers 1 ms to 10 s; observations outside
+// this range fall into the +Inf bucket.
+var mqttDurationBuckets = []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
 
 // NewProviderPublisherCollector registers 3 metrics on p and returns a
 // PublisherCollector bound to cellID. cellID becomes the "cell" label value.
@@ -289,7 +291,7 @@ func NewProviderPublisherCollector(p metrics.Provider, cellID string) (Publisher
 		Help: "End-to-end MQTT publish ack round-trip duration in seconds, from Publish() call to broker PUBACK. " +
 			"Buckets cover 1 ms to 10 s; values outside this range fall into the +Inf bucket. " + helpCellLabel,
 		LabelNames: []string{"cell"},
-		Buckets:    ackDurationBuckets,
+		Buckets:    mqttDurationBuckets,
 	})
 	if err != nil {
 		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
@@ -447,10 +449,6 @@ type providerSubscriberCollector struct {
 
 var _ SubscriberCollector = (*providerSubscriberCollector)(nil)
 
-// consumeDurationBuckets covers MQTT consume handler+commit times from 1 ms to
-// 10 s, reusing the publish ack bucket choice (network-latency-oriented set).
-var consumeDurationBuckets = []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
-
 // Subscriber metric definitions (data; registered in registration order by
 // NewProviderSubscriberCollector). Extracted to package level to keep the
 // constructor's registration loop short.
@@ -489,7 +487,7 @@ var (
 			"Buckets cover 1 ms to 10 s; values outside this range fall into the +Inf bucket. " +
 			helpCellLabel,
 		LabelNames: []string{"cell"},
-		Buckets:    consumeDurationBuckets,
+		Buckets:    mqttDurationBuckets,
 	}
 	subConsumeInflightOpts = metrics.GaugeOpts{
 		Name: "mqtt_consume_inflight",
