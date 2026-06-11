@@ -813,15 +813,8 @@ func buildProjectionSpecFromCU(
 			"cellgen build: projection consumes unknown contract",
 			errcode.WithDetails(details...))
 	}
-	if contract.Kind != "event" {
-		return ProjectionGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"cellgen build: projection consumes non-event contract",
-			errcode.WithDetails(
-				errcode.PublicString("cellID", cellID),
-				errcode.PublicString("sliceID", sliceID),
-				errcode.PublicString("contract", cu.Contract),
-				errcode.PublicString("kind", contract.Kind),
-			))
+	if err := validateProjectionContractKind(cellID, sliceID, cu, contract.Kind); err != nil {
+		return ProjectionGenSpec{}, err
 	}
 
 	onResetExpr := ""
@@ -834,7 +827,38 @@ func buildProjectionSpecFromCU(
 		ProjectionID: cu.Projection,
 		ApplyExpr:    "c." + fieldName + "." + cu.Handler,
 		OnResetExpr:  onResetExpr,
+		Source:       cu.ProjectionSource,
 	}, nil
+}
+
+// validateProjectionContractKind enforces the consumed contract's kind against
+// the projection source: saga-journal must consume a kind=saga contract; the
+// outbox path ("" or "outbox") must consume a kind=event contract.
+func validateProjectionContractKind(cellID, sliceID string, cu metadata.ContractUsage, kind string) error {
+	if cu.ProjectionSource == "saga-journal" {
+		if kind != "saga" {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"cellgen build: saga-journal projection must consume a saga contract",
+				errcode.WithDetails(
+					errcode.PublicString("cellID", cellID),
+					errcode.PublicString("sliceID", sliceID),
+					errcode.PublicString("contract", cu.Contract),
+					errcode.PublicString("kind", kind),
+				))
+		}
+		return nil
+	}
+	if kind != "event" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: projection consumes non-event contract",
+			errcode.WithDetails(
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("contract", cu.Contract),
+				errcode.PublicString("kind", kind),
+			))
+	}
+	return nil
 }
 
 // buildGrpcServicesFromSlices scans all slices belonging to cellID and
@@ -1039,6 +1063,12 @@ func EnrichSubscriptionsWithModulePath(spec *CellGenSpec, modulePath string) {
 func EnrichProjectionsWithModulePath(spec *CellGenSpec, modulePath string) {
 	for i := range spec.Projections {
 		pr := &spec.Projections[i]
+		// saga-journal projections wire through cell.NewSagaJournalProjectionRequest
+		// and reference no per-event-contract generated package, so they take no
+		// import path / alias. The positional index keeps the outbox aliases stable.
+		if pr.Source == "saga-journal" {
+			continue
+		}
 		pr.SpecPackage = contractpath.ContractIDToImportPath(modulePath, pr.ContractID)
 		pr.SpecAlias = fmt.Sprintf("proj%d", i)
 	}

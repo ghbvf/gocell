@@ -215,7 +215,13 @@ type ProjectionGenSpec struct {
 	ProjectionID string // snake_case probe-name; half of checkpoint key
 	ApplyExpr    string // dotted apply ref, e.g. "c.projSvc.HandleOrderCreated"
 	OnResetExpr  string // dotted onReset ref or "" (renders nil)
-	// Populated by EnrichProjectionsWithModulePath (post-build, FS-derived):
+	// Source selects the projection input stream. "" or "outbox" → outbox path
+	// (per-event-contract NewProjectionRequest with a SpecPackage/SpecAlias import);
+	// "saga-journal" → saga path (cell.NewSagaJournalProjectionRequest, no event Spec,
+	// no OnReset, SpecPackage/SpecAlias stay empty).
+	Source string
+	// Populated by EnrichProjectionsWithModulePath (post-build, FS-derived);
+	// stays empty for saga-journal sources (no per-contract import):
 	SpecPackage string // import path of the generated event contract package
 	SpecAlias   string // "proj0","proj1",... unique import alias
 }

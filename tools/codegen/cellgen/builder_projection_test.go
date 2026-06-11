@@ -582,3 +582,115 @@ func TestEnrichProjectionsWithModulePath(t *testing.T) {
 		t.Errorf("SpecPackage = %q; expected it to contain 'event'", pr.SpecPackage)
 	}
 }
+
+// projectionFixtureCellSlice returns a demo cell + a single-CU slice carrying the
+// given projection contractUsage, plus the field index mapping the slice package
+// to a cell struct field. Shared by the saga/outbox source tests.
+func projectionFixtureCellSlice(cu metadata.ContractUsage) (*metadata.CellMeta, *metadata.SliceMeta, *CellFieldIndex) {
+	cell := &metadata.CellMeta{
+		ID:           metadatatest.CellIDDemo,
+		Dir:          "demo",
+		File:         "cells/demo/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
+	slc := &metadata.SliceMeta{
+		ID:             "projsvc",
+		BelongsToCell:  metadatatest.CellIDDemo,
+		Dir:            "projsvc",
+		File:           "cells/demo/slices/projsvc/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{cu},
+	}
+	return cell, slc, idxOf(map[string]string{"projsvc": "projSvc"})
+}
+
+// TestBuildProjections_SagaJournalSource verifies that a subscribe CU with
+// projectionSource=saga-journal consuming a kind=saga contract produces a
+// ProjectionGenSpec with Source=="saga-journal", ContractID set, and (after
+// enrichment) no SpecPackage — the saga path references no per-contract import.
+func TestBuildProjections_SagaJournalSource(t *testing.T) {
+	t.Parallel()
+	cell, slc, fieldIndex := projectionFixtureCellSlice(metadata.ContractUsage{
+		Contract:         "saga.orderfulfillment.v1",
+		Role:             "subscribe",
+		Handler:          "ApplySagaTerminal",
+		Projection:       "order_status",
+		ProjectionSource: "saga-journal",
+	})
+	sagaContract := &metadata.ContractMeta{ID: "saga.orderfulfillment.v1", Kind: "saga"}
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{sagaContract})
+
+	spec, err := BuildCellSpec(p, metadatatest.CellIDDemo, markergen.WireBundle{}, fieldIndex)
+	if err != nil {
+		t.Fatalf("BuildCellSpec: %v", err)
+	}
+	if len(spec.Projections) != 1 {
+		t.Fatalf("Projections len = %d, want 1", len(spec.Projections))
+	}
+	pr := spec.Projections[0]
+	if pr.Source != "saga-journal" {
+		t.Errorf("Source = %q, want saga-journal", pr.Source)
+	}
+	if pr.ContractID != "saga.orderfulfillment.v1" {
+		t.Errorf("ContractID = %q, want saga.orderfulfillment.v1", pr.ContractID)
+	}
+	if pr.ApplyExpr != "c.projSvc.ApplySagaTerminal" {
+		t.Errorf("ApplyExpr = %q, want c.projSvc.ApplySagaTerminal", pr.ApplyExpr)
+	}
+
+	// Enrichment must skip saga-journal specs — they reference no generated
+	// event-contract package, so SpecPackage/SpecAlias stay empty.
+	EnrichProjectionsWithModulePath(spec, "github.com/ghbvf/gocell")
+	if spec.Projections[0].SpecPackage != "" {
+		t.Errorf("SpecPackage = %q, want empty for saga-journal source", spec.Projections[0].SpecPackage)
+	}
+	if spec.Projections[0].SpecAlias != "" {
+		t.Errorf("SpecAlias = %q, want empty for saga-journal source", spec.Projections[0].SpecAlias)
+	}
+}
+
+// TestBuildProjections_SagaJournalRejectsEventContract verifies that
+// projectionSource=saga-journal pointing at a kind=event contract is rejected:
+// a saga-journal projection must consume a saga contract.
+func TestBuildProjections_SagaJournalRejectsEventContract(t *testing.T) {
+	t.Parallel()
+	cell, slc, fieldIndex := projectionFixtureCellSlice(metadata.ContractUsage{
+		Contract:         "event.order-created.v1",
+		Role:             "subscribe",
+		Handler:          "ApplySagaTerminal",
+		Projection:       "order_status",
+		ProjectionSource: "saga-journal",
+	})
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{eventOrderCreatedContract()})
+
+	_, err := BuildCellSpec(p, metadatatest.CellIDDemo, markergen.WireBundle{}, fieldIndex)
+	if err == nil {
+		t.Fatal("expected error for saga-journal source on event contract, got nil")
+	}
+	if !strings.Contains(err.Error(), "saga-journal projection must consume a saga contract") {
+		t.Errorf("error should mention saga-journal/saga contract, got: %v", err)
+	}
+}
+
+// TestBuildProjections_OutboxRejectsSagaContract verifies that the default/outbox
+// projection source pointing at a kind=saga contract is rejected: the outbox path
+// must consume an event contract.
+func TestBuildProjections_OutboxRejectsSagaContract(t *testing.T) {
+	t.Parallel()
+	cell, slc, fieldIndex := projectionFixtureCellSlice(metadata.ContractUsage{
+		Contract:         "saga.orderfulfillment.v1",
+		Role:             "subscribe",
+		Handler:          "HandleOrder",
+		Projection:       "order_status",
+		ProjectionSource: "outbox",
+	})
+	sagaContract := &metadata.ContractMeta{ID: "saga.orderfulfillment.v1", Kind: "saga"}
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{sagaContract})
+
+	_, err := BuildCellSpec(p, metadatatest.CellIDDemo, markergen.WireBundle{}, fieldIndex)
+	if err == nil {
+		t.Fatal("expected error for outbox source on saga contract, got nil")
+	}
+	if !strings.Contains(err.Error(), "non-event") {
+		t.Errorf("error should mention non-event, got: %v", err)
+	}
+}
