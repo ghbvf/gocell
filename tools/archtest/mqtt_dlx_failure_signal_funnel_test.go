@@ -5,95 +5,69 @@
 // mqtt_dlx_failure_signal_funnel_test.go — the alertable dead-letter outcome
 // signal in (*Subscriber).routeDeadLetter can never be silently dropped.
 //
-// # Why this exists (gh #1356)
+// # Why this exists (gh #1356, hardened gh #1440)
 //
 // MQTT has no broker-native dead-letter exchange, so adapters/mqtt routes a
 // permanently-rejected / poison message to the app-level sink "$dead/<topic>".
 // When that $dead publish ITSELF fails (topic unmintable / broker publish error)
-// the message is acked-as-poison and dropped from the processing flow — a
-// deliberate fail-closed-and-drop (Kafka Connect KIP-298 model), because the
-// only no-loss alternative on MQTT (leave-unacked → reconnect-redeliver) would
-// reintroduce the paho strict-PUBACK-ordering head-of-line stall that ADR-050 §6
-// (Option C) avoids, and would infinitely re-loop a permanent Reject.
+// the message is acked-as-poison and dropped — a deliberate fail-closed-and-drop
+// (Kafka Connect KIP-298 model). Because the message IS dropped on $dead failure,
+// the ONLY operator-recovery hook is the alertable metric mqtt_dlx_failed_total
+// (RecordDeadLetterFailure). If a future edit removed that metric call from a drop
+// path, the drop would become silent and unrecoverable.
 //
-// Because the message IS dropped on $dead failure, the ONLY operator-recovery
-// hook is the alertable metric mqtt_dlx_failed_total (RecordDeadLetterFailure).
-// If a future edit removed that metric call from any drop path, the drop would
-// become silent and unrecoverable. This invariant makes that recovery signal a
-// machine-enforced contract: every exit path of routeDeadLetter MUST record a
-// dead-letter outcome — RecordDeadLetter on the success path, or
-// RecordDeadLetterFailure on every drop path. No silent exit.
+// # The mechanism (Hard, gh #1440)
 //
-// This is the enforceable spine of the #1356 resolution: literal no-loss is
-// unreachable at the MQTT transport layer (proven against Watermill / Spring
-// Kafka / Kafka Connect / autopaho — all achieve no-loss via a durable substrate
-// MQTT lacks), so the adapter contract is fail-closed-drop + alertable signal,
-// and THAT signal is what we lock here. True no-loss is relocated to the
-// consumer-cell transaction layer (deferred; see ADR-048 §threat-matrix amend).
+// routeDeadLetter does NOT record the metric inline. It RETURNS a sealed
+// dlxoutcome.Outcome whose only producers are dlxoutcome.Dropped (records the
+// alertable RecordDeadLetterFailure) and dlxoutcome.Captured (records the success
+// RecordDeadLetter). Because routeDeadLetter is typed to return Outcome, Go forces
+// every exit path to `return` one — and the only non-forged way to obtain one runs
+// a metric. A new drop branch that forgets the metric cannot produce an Outcome to
+// return → COMPILE ERROR. "Every exit records a metric" is therefore type-enforced,
+// not archtest-enforced. (This relocates the #1356 enforce spine from a same-block
+// control-flow scan to the Go type system.)
 //
-// # The invariant (A1)
+// # AI-robust grading (honest, per .claude/rules/gocell/ai-robust.md)
 //
-// In (*Subscriber).routeDeadLetter every *ast.ReturnStmt must be preceded —
-// within the statement list of its directly-enclosing *ast.BlockStmt — by a call
-// resolving to SubscriberCollector.RecordDeadLetterFailure (the alertable DROP
-// signal). routeDeadLetter is a void method whose success path falls through the
-// end (no ReturnStmt), so every explicit return IS a drop/failure exit and must
-// carry the failure signal. The success metric (RecordDeadLetter) deliberately
-// does NOT satisfy A1: crediting a drop return with the success signal would
-// record a dropped message as captured — silent message loss with a false
-// success count (review F1). A return with no preceding failure signal → diagnostic.
+//   - Hard (type system): no-silent-exit. A new routeDeadLetter exit cannot omit
+//     the metric without failing to compile (no Outcome to return). This is the
+//     highest-severity failure mode (an entire $dead drop going silent) and is what
+//     #1440 hardens. H1 pins the return type so a refactor back to a void
+//     routeDeadLetter (which removes the compile pressure) is caught.
+//   - Medium residual ① (shape guard, H2): the empty composite literal
+//     `dlxoutcome.Outcome{}` and a zero `var o dlxoutcome.Outcome` are still
+//     constructible from package mqtt — irreducible in Go (no "no zero value"
+//     modifier; same ceiling as internal/topicns sealed tokens). H2 bans both forms
+//     in mqtt production files.
+//   - Medium residual ② (F1 semantic, H3b): the type system forces SOME outcome
+//     metric per exit but cannot force the CORRECT one (it does not know which
+//     return is a drop). A drop branch wrongly using Captured would record a false
+//     success (review F1). H3b pins the `Captured` callsite count == 1 (the single
+//     success fall-through) and `Dropped` >= 1; a single-branch swap trips it. The
+//     per-path failure/success correctness is also covered behaviorally by
+//     deadletter_test.go.
 //
-// Covered form: metric-call-then-return in the SAME block (the idiom in
-// deadletter.go). A refactor that hoists the metric to an ancestor block before
-// the if is reported (fail-closed: keep the signal adjacent to the return). That
-// is a false-positive on a valid-but-unusual shape, NOT a missed bypass: the only
-// way to PASS is to have a metric call before the return in its block, so a
-// genuine silent drop (return with no metric anywhere) is always caught.
+// This is NOT a "drop -> failure metric is type-enforced" claim — that part stays
+// Medium (H3b + behavioral tests). The ADR must not overclaim.
 //
-// # AI-robust grading (per .claude/rules/gocell/ai-robust.md)
+// # Blind-spot inventory (per ai-robust.md 强制盲区自检)
 //
-// Medium. This is a single-axis structural invariant (a function-body
-// control-shape guard), NOT a funnel — there is no caller-allowlist downstream /
-// sealed-interface upstream split, so the §Funnel 双向锁评级 two-column format
-// does not apply. The detector is type-aware: callee identity is resolved via
-// go/types (ResolveMethodCall → *types.Func.FullName), so an import alias or a
-// same-named method on a different type does not match. Enforcement is
-// archtest-bound (Go cannot make "every exit records a metric" unrepresentable),
-// hence Medium not Hard.
-//
-// Hard-upgrade path: collapse the drop decision into a single typed sink helper
-// (e.g. routeDeadLetter returns a typed Outcome that the caller must record, or a
-// `func dropPoison(ctx, reason)` that wraps log+metric+return so the metric is
-// structurally inseparable from the drop). Then the metric call becomes
-// unrepresentable to omit. Tracked at gh #1440 (recorded in this package godoc
-// per ai-robust.md §Funnel 双向锁评级 "点名 issue 号").
-//
-// # Blind-spot inventory (per ai-robust.md §载体决策原则 强制盲区自检)
-//
-// The A1 scanner matches a metric call only as an *ast.ExprStmt wrapping a
-// *ast.CallExpr with a *ast.SelectorExpr callee. AST forms outside that coverage,
-// each with a reverse self-check below:
-//
-//   - B1 method-value: `f := s.collector.RecordDeadLetterFailure; f(ctx, r)` —
-//     the call site `f(...)` has no SelectorExpr callee, so A1 would not credit
-//     it. B1 asserts no method-value of RecordDeadLetter / RecordDeadLetterFailure
-//     is taken (non-call SelectorExpr) inside routeDeadLetter.
-//   - B2 defer: `defer s.collector.RecordDeadLetterFailure(ctx, r)` is a
-//     *ast.DeferStmt, not the *ast.ExprStmt A1 matches, so A1 would flag the
-//     return as silent (false-positive) — and a reader could "fix" it by moving
-//     the real signal into a defer, making the same-block scan blind. B2 asserts
-//     no defer of either signal method inside routeDeadLetter; the signal must be
-//     a direct same-block ExprStmt before the return so A1 can verify it.
-//   - Non-vacuity: A1NonVacuous asserts ≥2 ReturnStmt are seen and
-//     SignalsPresent asserts ≥1 RecordDeadLetter and ≥1 RecordDeadLetterFailure
-//     callsite resolve inside routeDeadLetter — so an empty/broken scan (wrong
-//     FullName, types resolution down) cannot vacuously pass.
+//   - empty-literal / zero-var forge → H2 (composite-lit + ValueSpec scan over mqtt
+//     production files). Proven non-vacuous by the dlxoutcomeredfixture synthetic
+//     red case, which uses a sealed-shape REPLICA (a real-type fixture is impossible:
+//     dlxoutcome is an internal package the tools module cannot import — same replica
+//     rationale as internal/mqttredfixture).
+//   - constructor gutted to a no-op → H3a (Dropped calls RecordDeadLetterFailure,
+//     Captured calls RecordDeadLetter; a metric-less constructor would defeat the
+//     seal while still compiling).
+//   - drop credited as success (F1) → H3b + deadletter_test.go behavioral tests.
 //
 // ref: gh #1356 — MQTT DLT no-loss (this invariant is the resolution's enforce spine)
-// ref: gh #1334 — bounded $dead retry (deferred, data-driven; out of scope here)
-// ref: ADR docs/architecture/202605281200-048-adr-mqtt-adapter.md §threat matrix ($dead publish failure row)
+// ref: gh #1440 — Hard upgrade (drop decision收口为 sealed dlxoutcome.Outcome)
+// ref: ADR docs/architecture/202605281200-048-adr-mqtt-adapter.md §threat matrix + Amendment 2026-06-11
 // ref: ADR docs/architecture/202605301200-050-adr-mqtt-requeue-semantics.md §6 (HoL / Option C)
-// ref: ai-robust.md §AI-robust 三档分级 (Medium structural invariant)
+// ref: ai-robust.md §Hard 范本 sealed construction
 package archtest
 
 import (
@@ -108,35 +82,36 @@ import (
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
-// routeDeadLetterFuncName is the method whose exit paths must each record a
-// dead-letter outcome metric. routeDeadLetterFullName is its go/types FullName,
-// used for exact identity (not a suffix) so a same-named method on a Subscriber
-// type in another package cannot satisfy the match.
+// mqttDLXOutcomePkgPath is the internal sub-package that owns the sealed
+// dlxoutcome.Outcome proof token + its recording constructors (gh #1440).
+const mqttDLXOutcomePkgPath = mqttPkgPath + "/internal/dlxoutcome"
+
+// dlxOutcomeRedFixturePkgPath is the archtest_fixture-gated red fixture proving
+// the H2 forbidden-construction scanner fires (sealed-shape replica).
+const dlxOutcomeRedFixturePkgPath = PlatformModulePath + "/tools/archtest/internal/dlxoutcomeredfixture"
+
+// routeDeadLetterFuncName / routeDeadLetterFullName identify the method whose
+// signature (H1) and constructor balance (H3b) are pinned. FullName gives exact
+// identity so a same-named method on a Subscriber in another package cannot match.
 const (
 	routeDeadLetterFuncName = "routeDeadLetter"
 	routeDeadLetterFullName = "(*github.com/ghbvf/gocell/adapters/mqtt.Subscriber).routeDeadLetter"
 )
 
-// SubscriberCollector method FullName()s resolved via ResolveMethodCall. These
-// are the two dead-letter outcome signals; RecordDeadLetterFailure is the
-// alertable drop signal (mqtt_dlx_failed_total), RecordDeadLetter the success
-// signal (mqtt_dlx_total).
+// dlxoutcome symbol names. Dropped/Captured are the sole sanctioned Outcome
+// producers; Outcome is the sealed return type. recordDLX* are the
+// SubscriberCollector method names the constructors must call (H3a).
 const (
-	recordDLXFailureFullName = "(github.com/ghbvf/gocell/adapters/mqtt.SubscriberCollector).RecordDeadLetterFailure"
-	recordDLXSuccessFullName = "(github.com/ghbvf/gocell/adapters/mqtt.SubscriberCollector).RecordDeadLetter"
+	dlxOutcomeTypeName     = "Outcome"
+	dlxDroppedFuncName     = "Dropped"
+	dlxCapturedFuncName    = "Captured"
+	recordDLXFailureMethod = "RecordDeadLetterFailure"
+	recordDLXSuccessMethod = "RecordDeadLetter"
 )
 
-// dlxSignalMethodNames is the selector-name set used by the B1 method-value
-// blind-spot scan (name-level reverse self-check; defense-in-depth).
-var dlxSignalMethodNames = map[string]bool{
-	"RecordDeadLetter":        true,
-	"RecordDeadLetterFailure": true,
-}
-
 // findRouteDeadLetter returns the FuncDecl of (*Subscriber).routeDeadLetter in
-// the given production file, or nil. Identity is confirmed via go/types: the
-// resolved object's FullName must be the routeDeadLetter method on *Subscriber,
-// so a same-named free function elsewhere does not match.
+// the given production file, or nil. Identity is confirmed via go/types so a
+// same-named free function elsewhere does not match.
 func findRouteDeadLetter(p *Pass, f *ast.File) *ast.FuncDecl {
 	var result *ast.FuncDecl
 	scanner.EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
@@ -149,13 +124,10 @@ func findRouteDeadLetter(p *Pass, f *ast.File) *ast.FuncDecl {
 		if fd.Recv == nil || len(fd.Recv.List) == 0 {
 			return
 		}
-		obj := p.TypesInfo.Defs[fd.Name]
-		fn, ok := obj.(*types.Func)
+		fn, ok := p.TypesInfo.Defs[fd.Name].(*types.Func)
 		if !ok {
 			return
 		}
-		// Exact FullName match (not HasSuffix): a same-named routeDeadLetter on a
-		// Subscriber type in any OTHER package would otherwise satisfy a suffix.
 		if fn.FullName() == routeDeadLetterFullName {
 			result = fd
 		}
@@ -163,122 +135,12 @@ func findRouteDeadLetter(p *Pass, f *ast.File) *ast.FuncDecl {
 	return result
 }
 
-// dlxStmtIsFailureSignal reports whether stmt is `<recv>.RecordDeadLetterFailure(...)`
-// resolving (via go/types) to the SubscriberCollector method — i.e., the alertable
-// DROP signal. It deliberately does NOT accept RecordDeadLetter (the success
-// signal): in routeDeadLetter every explicit return is a drop/failure exit (the
-// success path falls through the end with no return), so a return credited by the
-// SUCCESS metric would record a dropped message as captured — the exact silent-loss
-// regression this invariant exists to forbid (review F1).
-func dlxStmtIsFailureSignal(info *types.Info, stmt ast.Stmt) bool {
-	es, ok := stmt.(*ast.ExprStmt)
-	if !ok {
-		return false
-	}
-	call, ok := es.X.(*ast.CallExpr)
-	if !ok {
-		return false
-	}
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return false
-	}
-	fn, ok := ResolveMethodCall(info, sel)
-	if !ok || fn == nil {
-		return false
-	}
-	return fn.FullName() == recordDLXFailureFullName
-}
-
-// blockReturnPrecededByFailureSignal reports whether some statement preceding
-// ret in the SAME block (by source position) is a dead-letter FAILURE signal.
-// Extracted from the EachInChildren callback so the callback carries no
-// found/done sentinel flag (SCANNER-FRAMEWORK-USAGE-02). The scan is a raw
-// position-bounded range over block.List (no type assertion), not an Each*
-// walker, so it is outside both SCANNER-FRAMEWORK-USAGE sub-rules.
-func blockReturnPrecededByFailureSignal(info *types.Info, block *ast.BlockStmt, ret *ast.ReturnStmt) bool {
-	for _, prev := range block.List {
-		if prev.Pos() >= ret.Pos() {
-			break
-		}
-		if dlxStmtIsFailureSignal(info, prev) {
-			return true
-		}
-	}
-	return false
-}
-
-// scanRouteDeadLetterReturns walks every BlockStmt in routeDeadLetter and, for
-// each ReturnStmt, checks that some earlier statement in the SAME block is a
-// dead-letter outcome metric. Returns diagnostics for silent returns plus the
-// total ReturnStmt count (for the non-vacuous companion).
-func scanRouteDeadLetterReturns(p *Pass, f *ast.File, fd *ast.FuncDecl) ([]Diagnostic, int) {
-	var diags []Diagnostic
-	var returnCount int
-	// EachInSubtree[BlockStmt] visits every block at any depth (matches the old
-	// ast.Inspect walk); EachInChildren[ReturnStmt] is depth-1 — correct because
-	// a ReturnStmt is always a direct child of its enclosing block, which is the
-	// "same block" the preceding-signal check requires.
-	scanner.EachInSubtree[ast.BlockStmt](fd.Body, func(block *ast.BlockStmt) {
-		scanner.EachInChildren[ast.ReturnStmt](block, func(ret *ast.ReturnStmt) {
-			returnCount++
-			// A return preceded (same block) by a failure-signal statement is
-			// compliant; skip it. The preceding-statement scan lives in a helper
-			// so this callback holds no found/done sentinel flag
-			// (SCANNER-FRAMEWORK-USAGE-02).
-			if blockReturnPrecededByFailureSignal(p.TypesInfo, block, ret) {
-				return
-			}
-			pos := p.Fset.Position(ret.Pos())
-			rel := p.Rel(f)
-			diags = append(diags, Diagnostic{
-				Rel:  rel,
-				Line: pos.Line,
-				Message: fmt.Sprintf(
-					"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/A1: return in routeDeadLetter at %s:%d "+
-						"is not preceded (same block) by RecordDeadLetterFailure — a $dead drop path "+
-						"must record the alertable FAILURE signal (RecordDeadLetter success metric does "+
-						"NOT count: crediting a drop as captured is silent message loss)",
-					rel, pos.Line,
-				),
-			})
-		})
-	})
-	return diags, returnCount
-}
-
-// countRouteDeadLetterSignals returns the number of resolved RecordDeadLetter
-// and RecordDeadLetterFailure callsites inside routeDeadLetter.
-func countRouteDeadLetterSignals(p *Pass, fd *ast.FuncDecl) (success, failure int) {
-	EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return
-		}
-		fn, ok := ResolveMethodCall(p.TypesInfo, sel)
-		if !ok || fn == nil {
-			return
-		}
-		switch fn.FullName() {
-		case recordDLXSuccessFullName:
-			success++
-		case recordDLXFailureFullName:
-			failure++
-		}
-	})
-	return success, failure
-}
-
 // withRouteDeadLetter loads the adapters/mqtt production package and invokes fn
-// with the routeDeadLetter FuncDecl (and its file/Pass). It fails the test if
-// routeDeadLetter is not found, so a rename cannot silently disable the rule.
+// with the routeDeadLetter FuncDecl. It fails the test if routeDeadLetter is not
+// found, so a rename cannot silently disable the rule.
 func withRouteDeadLetter(t *testing.T, fn func(p *Pass, f *ast.File, fd *ast.FuncDecl)) {
 	t.Helper()
 	found := false
-	// FlatNonDefaultTags excludes the integration tag: adapters/mqtt production
-	// files (deadletter.go etc.) carry no special build constraint, so the
-	// default+flat tag set loads routeDeadLetter. If it ever moves behind a tag,
-	// the found==false assertion below fails loudly (rule cannot go vacuous).
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{mqttPkgPath}),
 		func(p *Pass) []Diagnostic {
@@ -298,129 +160,257 @@ func withRouteDeadLetter(t *testing.T, fn func(p *Pass, f *ast.File, fd *ast.Fun
 			}
 			return nil
 		})
-
 	assert.True(t, found,
 		"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01: (*Subscriber).routeDeadLetter not found in adapters/mqtt "+
 			"production AST — the rule target was renamed/removed; update this archtest")
 }
 
-// ─── A1: every routeDeadLetter return records a dead-letter outcome ───────────
+// ─── H1: routeDeadLetter returns the sealed dlxoutcome.Outcome ────────────────
 
-func TestMQTTDLXFailureSignalFunnel_A1_NoSilentReturn(t *testing.T) {
-	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping packages.Load-based archtest in -short mode")
-	}
-	withRouteDeadLetter(t, func(p *Pass, f *ast.File, fd *ast.FuncDecl) {
-		diags, _ := scanRouteDeadLetterReturns(p, f, fd)
-		assert.Empty(t, diags,
-			"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/A1: routeDeadLetter has a return path with no "+
-				"preceding dead-letter outcome metric (silent $dead drop)")
-	})
-}
-
-func TestMQTTDLXFailureSignalFunnel_A1_NonVacuous(t *testing.T) {
-	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping packages.Load-based archtest in -short mode")
-	}
-	withRouteDeadLetter(t, func(p *Pass, f *ast.File, fd *ast.FuncDecl) {
-		_, returnCount := scanRouteDeadLetterReturns(p, f, fd)
-		assert.GreaterOrEqual(t, returnCount, 2,
-			"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/A1: scanner found <2 returns in routeDeadLetter — "+
-				"there are two drop branches (mint failure + publish failure); the AST walk may be broken")
-	})
-}
-
-// ─── A2: both outcome signals are wired (non-vacuous resolution) ──────────────
-
-func TestMQTTDLXFailureSignalFunnel_A2_SignalsPresent(t *testing.T) {
+func TestMQTTDLXFailureSignalFunnel_H1_ReturnsSealedOutcome(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 	withRouteDeadLetter(t, func(p *Pass, _ *ast.File, fd *ast.FuncDecl) {
-		success, failure := countRouteDeadLetterSignals(p, fd)
-		assert.GreaterOrEqual(t, failure, 1,
-			"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/A2: no resolved RecordDeadLetterFailure callsite in "+
-				"routeDeadLetter — the alertable drop signal is missing or the FullName drifted")
-		assert.GreaterOrEqual(t, success, 1,
-			"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/A2: no resolved RecordDeadLetter callsite in "+
-				"routeDeadLetter — the success signal is missing or the FullName drifted")
+		fn, ok := p.TypesInfo.Defs[fd.Name].(*types.Func)
+		if !assert.True(t, ok, "routeDeadLetter has no *types.Func definition") {
+			return
+		}
+		sig, ok := fn.Type().(*types.Signature)
+		if !assert.True(t, ok, "routeDeadLetter is not a *types.Signature") {
+			return
+		}
+		if !assert.Equal(t, 1, sig.Results().Len(),
+			"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H1: routeDeadLetter must return exactly one value "+
+				"(dlxoutcome.Outcome) — a void routeDeadLetter removes the compile pressure that makes "+
+				"the metric structurally inseparable from the drop (gh #1440)") {
+			return
+		}
+		named, ok := sig.Results().At(0).Type().(*types.Named)
+		if !assert.True(t, ok, "routeDeadLetter result is not a named type") {
+			return
+		}
+		obj := named.Obj()
+		assert.True(t,
+			obj.Pkg() != nil && obj.Pkg().Path() == mqttDLXOutcomePkgPath && obj.Name() == dlxOutcomeTypeName,
+			"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H1: routeDeadLetter must return %s.%s, got %s",
+			mqttDLXOutcomePkgPath, dlxOutcomeTypeName, named.String())
 	})
 }
 
-// ─── B1: method-value blind-spot reverse self-check ──────────────────────────
+// ─── H2: no mqtt code forges a dlxoutcome.Outcome ─────────────────────────────
 
-func TestMQTTDLXFailureSignalFunnel_B1_NoMethodValue(t *testing.T) {
+// dlxIsOutcomeType reports whether expr's resolved type is (pkgPath, typeName).
+func dlxIsOutcomeType(info *types.Info, expr ast.Expr, pkgPath, typeName string) bool {
+	if expr == nil {
+		return false
+	}
+	tv, ok := info.Types[expr]
+	if !ok {
+		return false
+	}
+	named, ok := tv.Type.(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := named.Obj()
+	return obj.Pkg() != nil && obj.Pkg().Path() == pkgPath && obj.Name() == typeName
+}
+
+// scanForbiddenOutcomeConstruction flags every in-package construction of the
+// sealed (pkgPath, typeName) Outcome token in file: a composite literal of ANY
+// shape (INCLUDING the empty `Outcome{}` — unlike scanSealedCompositeLitConstruction
+// which exempts empty literals) and a zero-value `var o Outcome` declaration. In
+// the dead-letter funnel NO consumer may mint an Outcome; the only sanctioned
+// producers are dlxoutcome.Dropped/Captured (which record a metric) and they live
+// in the dlxoutcome package itself (not scanned here). This closes the irreducible
+// empty-literal forge the type system cannot forbid (residual Medium per the godoc).
+func scanForbiddenOutcomeConstruction(p *Pass, f *ast.File, rel, pkgPath, typeName string) []Diagnostic {
+	var out []Diagnostic
+	EachInSubtree[ast.CompositeLit](f, func(lit *ast.CompositeLit) {
+		if !dlxIsOutcomeType(p.TypesInfo, lit.Type, pkgPath, typeName) {
+			return
+		}
+		pos := p.Fset.Position(lit.Pos())
+		out = append(out, Diagnostic{Rel: rel, Line: pos.Line, Message: fmt.Sprintf(
+			"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H2: %s composite literal at %s:%d — no mqtt code may "+
+				"mint a dlxoutcome.Outcome; obtain it only from dlxoutcome.Dropped/Captured (which "+
+				"record the alertable metric)", typeName, rel, pos.Line)})
+	})
+	EachInSubtree[ast.ValueSpec](f, func(vs *ast.ValueSpec) {
+		if vs.Type == nil || len(vs.Values) > 0 {
+			return
+		}
+		if !dlxIsOutcomeType(p.TypesInfo, vs.Type, pkgPath, typeName) {
+			return
+		}
+		pos := p.Fset.Position(vs.Pos())
+		out = append(out, Diagnostic{Rel: rel, Line: pos.Line, Message: fmt.Sprintf(
+			"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H2: zero-value `var %s` at %s:%d — a forged Outcome "+
+				"bypasses the recording constructors; obtain it only from dlxoutcome.Dropped/Captured",
+			typeName, rel, pos.Line)})
+	})
+	return out
+}
+
+func TestMQTTDLXFailureSignalFunnel_H2_NoOutcomeForgeInMQTT(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-	withRouteDeadLetter(t, func(p *Pass, f *ast.File, fd *ast.FuncDecl) {
-		// Collect SelectorExprs used as a call callee (allowed); any OTHER
-		// SelectorExpr selecting a dlx signal method is a method-value escape.
-		callFun := map[*ast.SelectorExpr]bool{}
-		EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
-			if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
-				callFun[sel] = true
+	seen := false
+	diags := Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		[]string{mqttPkgPath}),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
+				return nil
 			}
-		})
-		var diags []Diagnostic
-		EachInSubtree[ast.SelectorExpr](fd.Body, func(sel *ast.SelectorExpr) {
-			if sel.Sel == nil || !dlxSignalMethodNames[sel.Sel.Name] || callFun[sel] {
-				return
+			seen = true
+			var out []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				out = append(out, scanForbiddenOutcomeConstruction(p, f, rel, mqttDLXOutcomePkgPath, dlxOutcomeTypeName)...)
 			}
-			pos := p.Fset.Position(sel.Pos())
-			rel := p.Rel(f)
-			diags = append(diags, Diagnostic{
-				Rel:  rel,
-				Line: pos.Line,
-				Message: fmt.Sprintf(
-					"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/B1: dead-letter signal method %q taken as a "+
-						"method-value at %s:%d — A1 cannot credit an indirect call; call it directly",
-					sel.Sel.Name, rel, pos.Line,
-				),
-			})
+			return out
 		})
-		assert.Empty(t, diags,
-			"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/B1: dead-letter signal method taken as a method-value")
-	})
+	assert.True(t, seen, "MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H2: adapters/mqtt production package not loaded")
+	assert.Empty(t, diags,
+		"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H2: mqtt forges a dlxoutcome.Outcome — see diagnostics")
 }
 
-// ─── B2: defer blind-spot reverse self-check ─────────────────────────────────
-
-// TestMQTTDLXFailureSignalFunnel_B2_NoDeferSignal asserts no dead-letter signal
-// method is invoked via `defer` inside routeDeadLetter. A1 only credits a
-// same-block *ast.ExprStmt before the return; a defer (*ast.DeferStmt) would both
-// (a) make A1 false-positive a return it actually covers, and (b) let a reader
-// relocate the real signal out of A1's same-block view. Banning defer keeps the
-// signal a direct, A1-verifiable same-block statement.
-func TestMQTTDLXFailureSignalFunnel_B2_NoDeferSignal(t *testing.T) {
+// TestMQTTDLXFailureSignalFunnel_H2_ScannerFiresOnRedFixture proves the H2 scanner
+// is non-vacuous: it MUST report the planted forge in the sealed-shape replica
+// fixture. Without this, a silently-broken type-resolution path would let H2 pass
+// vacuously (production has no forge).
+func TestMQTTDLXFailureSignalFunnel_H2_ScannerFiresOnRedFixture(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-	withRouteDeadLetter(t, func(p *Pass, f *ast.File, fd *ast.FuncDecl) {
-		var diags []Diagnostic
-		EachInSubtree[ast.DeferStmt](fd.Body, func(d *ast.DeferStmt) {
-			sel, ok := d.Call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel == nil || !dlxSignalMethodNames[sel.Sel.Name] {
-				return
+	diags := Run(t, Fixture(FixtureOpts{Tests: false}, []string{dlxOutcomeRedFixturePkgPath}),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != dlxOutcomeRedFixturePkgPath {
+				return nil
 			}
-			pos := p.Fset.Position(d.Pos())
-			rel := p.Rel(f)
-			diags = append(diags, Diagnostic{
-				Rel:  rel,
-				Line: pos.Line,
-				Message: fmt.Sprintf(
-					"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/B2: dead-letter signal method %q invoked via defer "+
-						"at %s:%d — A1 verifies a direct same-block ExprStmt before the return; call it directly",
-					sel.Sel.Name, rel, pos.Line,
-				),
-			})
+			var out []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				out = append(out, scanForbiddenOutcomeConstruction(p, f, rel, dlxOutcomeRedFixturePkgPath, "FixtureOutcome")...)
+			}
+			return out
 		})
-		assert.Empty(t, diags,
-			"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/B2: dead-letter signal method invoked via defer in routeDeadLetter")
+	assert.NotEmpty(t, diags,
+		"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H2: scanner must fire on the dlxoutcomeredfixture forge — "+
+			"if empty, the composite-lit/var type-resolution path is silently broken")
+}
+
+// ─── H3a: the dlxoutcome constructors actually record (inseparability spine) ──
+
+// dlxConstructorCallsMethod reports whether fd's body contains a call whose
+// selector name is method. The receiver is the anonymous-interface `rec` param,
+// so its FullName() is not a stable mqtt name — a name-level match is the
+// deliberate (documented) choice, safe because the dlxoutcome package's only
+// selector calls are these two collector methods.
+func dlxConstructorCallsMethod(fd *ast.FuncDecl, method string) bool {
+	found := false
+	EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel != nil && sel.Sel.Name == method {
+			found = true
+		}
+	})
+	return found
+}
+
+func TestMQTTDLXFailureSignalFunnel_H3a_ConstructorsRecord(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+	seen := false
+	var foundDropped, foundCaptured, droppedRecords, capturedRecords bool
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		[]string{mqttDLXOutcomePkgPath}),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttDLXOutcomePkgPath {
+				return nil
+			}
+			seen = true
+			for _, f := range p.Files {
+				if strings.HasSuffix(p.Rel(f), "_test.go") {
+					continue
+				}
+				scanner.EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+					if fd.Body == nil || fd.Name == nil {
+						return
+					}
+					switch fd.Name.Name {
+					case dlxDroppedFuncName:
+						foundDropped = true
+						droppedRecords = dlxConstructorCallsMethod(fd, recordDLXFailureMethod)
+					case dlxCapturedFuncName:
+						foundCaptured = true
+						capturedRecords = dlxConstructorCallsMethod(fd, recordDLXSuccessMethod)
+					}
+				})
+			}
+			return nil
+		})
+	assert.True(t, seen,
+		"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H3a: %s package not loaded — gh #1440 mechanism missing", mqttDLXOutcomePkgPath)
+	assert.True(t, foundDropped, "MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H3a: dlxoutcome.Dropped not found")
+	assert.True(t, foundCaptured, "MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H3a: dlxoutcome.Captured not found")
+	assert.True(t, droppedRecords,
+		"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H3a: dlxoutcome.Dropped must call RecordDeadLetterFailure "+
+			"(a no-op constructor would defeat the seal while still compiling)")
+	assert.True(t, capturedRecords,
+		"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H3a: dlxoutcome.Captured must call RecordDeadLetter")
+}
+
+// ─── H3b: F1 semantic balance — one success exit, ≥1 drop exit ────────────────
+
+// dlxCountConstructorCalls counts dlxoutcome.Captured and dlxoutcome.Dropped
+// callsites inside fd. They are package-level funcs, so the callee is resolved
+// via Uses (not ResolveMethodCall, which is for value-receiver method calls).
+func dlxCountConstructorCalls(p *Pass, fd *ast.FuncDecl) (captured, dropped int) {
+	EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel == nil {
+			return
+		}
+		obj, ok := p.TypesInfo.Uses[sel.Sel].(*types.Func)
+		if !ok || obj.Pkg() == nil || obj.Pkg().Path() != mqttDLXOutcomePkgPath {
+			return
+		}
+		switch obj.Name() {
+		case dlxCapturedFuncName:
+			captured++
+		case dlxDroppedFuncName:
+			dropped++
+		}
+	})
+	return captured, dropped
+}
+
+func TestMQTTDLXFailureSignalFunnel_H3b_OutcomeConstructorBalance(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+	withRouteDeadLetter(t, func(p *Pass, _ *ast.File, fd *ast.FuncDecl) {
+		captured, dropped := dlxCountConstructorCalls(p, fd)
+		assert.Equal(t, 1, captured,
+			"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H3b: routeDeadLetter must have exactly one "+
+				"dlxoutcome.Captured callsite (the single success fall-through) — a drop branch wrongly "+
+				"credited as success (review F1) makes this 2; a success path wrongly dropped makes it 0")
+		assert.GreaterOrEqual(t, dropped, 1,
+			"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H3b: routeDeadLetter must have ≥1 dlxoutcome.Dropped "+
+				"callsite (the alertable failure exits)")
 	})
 }
