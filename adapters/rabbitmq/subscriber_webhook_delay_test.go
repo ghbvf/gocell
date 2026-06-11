@@ -265,6 +265,31 @@ func assertQuorumAtLeastOnce(t *testing.T, args amqp.Table, tier string) {
 		"%s must set reject-publish overflow; drop-head silently degrades at-least-once to at-most-once", tier)
 }
 
+// TestDeclareDelayTopology_TierQueueDeclareFailure_WrapsRunbookHint covers the
+// 406 PRECONDITION_FAILED branch of declareDelayTopology: when a tier
+// QueueDeclare fails — e.g. a pre-#1835 classic tier queue whose x-queue-type now
+// differs from the quorum declaration — the returned error must name the failing
+// tier, mention the classic→quorum case, point at the drain-before-delete runbook,
+// and wrap (not swallow) the underlying broker error so an operator can recover.
+func TestDeclareDelayTopology_TierQueueDeclareFailure_WrapsRunbookHint(t *testing.T) {
+	conn, _ := newTestConnection(t)
+	ch := newMockChannel()
+	// Simulate the broker rejecting the quorum redeclare over an existing classic
+	// tier queue (the classic→quorum 406 migration path).
+	ch.queueDeclareErr = errors.New("PRECONDITION_FAILED - inequivalent arg 'x-queue-type'")
+
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{DLXExchange: "test.dlx"})
+
+	err := sub.declareDelayTopology(ch, "session.created", "cg-1.session.created",
+		[]time.Duration{testtime.D200ms})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "declare delay tier queue 0", "error must name the failing tier index")
+	assert.Contains(t, err.Error(), "quorum", "hint must mention the classic→quorum upgrade case")
+	assert.Contains(t, err.Error(), "drain-before-delete runbook", "hint must point operators at the runbook")
+	assert.ErrorContains(t, err, "PRECONDITION_FAILED", "underlying broker error must be wrapped, not swallowed")
+}
+
 func TestDeclareTopology_EmptySchedule_NoDelayTopology(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 	ch := newMockChannel()
