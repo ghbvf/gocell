@@ -111,28 +111,26 @@ func TestHttpAuditListV1Serve(t *testing.T) {
 	c.ValidateHTTPResponseRecorder(t, rec)
 }
 
-// TestHttpAuditListV1Serve_PrincipalProjection pins the auditquery output
-// policy (issue #1229 §4 + review F6/F7c). It is the regression lock for two
-// invariants the DTO must hold simultaneously:
+// TestHttpAuditListV1Serve_PrincipalProjection pins the auditquery output policy
+// after epic #1337 PR-12 (column masking via the sealed ResourceProjection). The
+// caller is a NON-ADMIN user (RowScopeSelf), so auditFieldMask masks the
+// operator-diagnostic columns. It is the regression lock for:
 //
-//   - PRESENT: subjectId and correlationId are surfaced; occurredAt is surfaced
-//     at RFC3339Nano (sub-second) precision — RFC3339 truncation would drop
-//     chain-relevant resolution (F6). correlationId is an opaque cross-cell
-//     observability id (NOT in pkg/redaction's sensitive-key set), so it is
-//     safe to project (issue #1219).
-//   - ABSENT: sessionId and tenantId never appear on the wire, by VALUE or by
-//     KEY, even when the underlying ledger.Entry carries them. sessionId is a
-//     credential-adjacent token (pkg/redaction sensitive-key set); tenantId now
-//     HAS a producer source (epic #1337 PR-2a) and the read path IS tenant-scoped
-//     (the typed Store.Query tenant param, #1618), but a per-row tenantId is
-//     redundant — every returned row already belongs to the caller's own tenant —
-//     so it is deliberately not projected. The caller below carries the same tenant as the
-//     seeded row so the row survives the mandatory tenant scope and the
-//     value-leak assertion stays meaningful. Asserting on the raw JSON (not the
-//     typed DTO) is deliberate: a future PR that adds the fields to
-//     ResponseDataItem would compile-pass but fail here. The audit-domain codegen
-//     funnel (contractgen) is the upstream Hard backstop: it rejects any
-//     sensitive-key field name in an audit wire-out schema at generation time.
+//   - PRESENT/visible: subjectId (a self caller sees the subject-of-record);
+//     tenantId is NOW surfaced too — PR-12 reversed the earlier "omitted as
+//     redundant" stance (it is a maskable column behind the funnel, not a
+//     pkg/redaction sensitive-key); occurredAt at RFC3339Nano (sub-second)
+//     precision (F6); scope marks the own-tenant row.
+//   - MASKED: correlationId and traceId are "<REDACTED>" for a non-admin (self)
+//     caller — present on the wire (the projection does not fission the response
+//     shape) but value-masked. An admin sees them in full (RowScope matrix in
+//     handler_test.go). The raw values must NOT leak.
+//   - ABSENT: sessionId never appears, by key or value — it is not a projected
+//     column at all (the AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01 codegen guard keeps
+//     the credential-adjacent token out of the response schema).
+//
+// Asserting on the raw JSON (not the typed DTO) is deliberate: it pins the wire
+// bytes a consumer actually receives, masked sentinel included.
 func TestHttpAuditListV1Serve_PrincipalProjection(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.audit.list.v1")
@@ -172,10 +170,12 @@ func TestHttpAuditListV1Serve_PrincipalProjection(t *testing.T) {
 
 	body := rec.Body.String()
 
-	// PRESENT — subjectId + correlationId + traceId + scope surfaced.
+	const masked = "<REDACTED>" // pkg/redaction.Mask — value-masked column sentinel.
+
 	var resp struct {
 		Data []struct {
 			SubjectID     string `json:"subjectId"`
+			TenantID      string `json:"tenantId"`
 			CorrelationID string `json:"correlationId"`
 			TraceID       string `json:"traceId"`
 			OccurredAt    string `json:"occurredAt"`
@@ -188,45 +188,50 @@ func TestHttpAuditListV1Serve_PrincipalProjection(t *testing.T) {
 	if len(resp.Data) != 1 {
 		t.Fatalf("want 1 row, got %d\nbody=%s", len(resp.Data), body)
 	}
-	if resp.Data[0].SubjectID != "sub-of-record" {
-		t.Errorf("subjectId = %q, want %q", resp.Data[0].SubjectID, "sub-of-record")
+	row := resp.Data[0]
+	// VISIBLE — subjectId is not masked for a self caller (it is the subject of the
+	// caller's own audited action).
+	if row.SubjectID != "sub-of-record" {
+		t.Errorf("subjectId = %q, want %q (visible to self)", row.SubjectID, "sub-of-record")
 	}
-	if resp.Data[0].CorrelationID != "corr-id-123" {
-		t.Errorf("correlationId = %q, want %q", resp.Data[0].CorrelationID, "corr-id-123")
+	// PRESENT — tenantId is now projected (PR-12 forbidden→present migration). It is
+	// not in the self-scope mask, so the own-tenant value is visible to the caller.
+	if row.TenantID != projTenant {
+		t.Errorf("tenantId = %q, want %q (projected, visible to own-tenant self caller)", row.TenantID, projTenant)
 	}
-	if resp.Data[0].TraceID != "trace-proj-001" {
-		t.Errorf("traceId = %q, want %q", resp.Data[0].TraceID, "trace-proj-001")
+	// MASKED — correlationId / traceId are operator-diagnostic columns the self
+	// scope masks. Present on the wire (no shape fission), value = redaction sentinel.
+	if row.CorrelationID != masked {
+		t.Errorf("correlationId = %q, want %q (masked for non-admin self)", row.CorrelationID, masked)
 	}
-	// PRESENT — scope marks this as a tenant-owned row (#1618 review F7): the
-	// seeded row carries a tenant and the caller is in that tenant, so the row is
-	// the caller's own audit, not a tenant-less system event.
-	if resp.Data[0].Scope != "tenant" {
-		t.Errorf("scope = %q, want %q (own-tenant row)", resp.Data[0].Scope, "tenant")
+	if row.TraceID != masked {
+		t.Errorf("traceId = %q, want %q (masked for non-admin self)", row.TraceID, masked)
+	}
+	// PRESENT — scope marks this as a tenant-owned row (#1618 review F7).
+	if row.Scope != "tenant" {
+		t.Errorf("scope = %q, want %q (own-tenant row)", row.Scope, "tenant")
 	}
 	// PRESENT — occurredAt at nanosecond precision (F6).
-	if want := occurred.Format(time.RFC3339Nano); resp.Data[0].OccurredAt != want {
-		t.Errorf("occurredAt = %q, want %q (RFC3339Nano sub-second precision)", resp.Data[0].OccurredAt, want)
+	if want := occurred.Format(time.RFC3339Nano); row.OccurredAt != want {
+		t.Errorf("occurredAt = %q, want %q (RFC3339Nano sub-second precision)", row.OccurredAt, want)
 	}
-	if !strings.Contains(resp.Data[0].OccurredAt, ".123456789") {
-		t.Errorf("occurredAt %q lost sub-second precision — RFC3339Nano expected", resp.Data[0].OccurredAt)
-	}
-
-	// PRESENT — pin the camelCase wire name for traceId (raw-body check).
-	if !strings.Contains(body, "traceId") {
-		t.Errorf("response body missing %q key — traceId must appear on the wire\nbody=%s", "traceId", body)
+	if !strings.Contains(row.OccurredAt, ".123456789") {
+		t.Errorf("occurredAt %q lost sub-second precision — RFC3339Nano expected", row.OccurredAt)
 	}
 
-	// ABSENT — sessionId / tenantId must not appear by key or by value, in
-	// camelCase (DTO/wire) or snake_case (DB column) form, even though the
-	// underlying ledger.Entry carries them. The tenant UUID (projTenant) must also
-	// not leak as a per-row value — it is a query-scope parameter, not a projected
-	// field (toListResponseDataItem deliberately omits TenantID).
-	for _, forbidden := range []string{
-		"sessionId", "session_id", "tenantId", "tenant_id",
-		"session-must-not-leak", projTenant,
-	} {
+	// The raw correlationId/traceId VALUES must not leak — they are value-masked.
+	for _, leak := range []string{"corr-id-123", "trace-proj-001"} {
+		if strings.Contains(body, leak) {
+			t.Errorf("response leaked raw masked value %q — must be %q for non-admin self\nbody=%s", leak, masked, body)
+		}
+	}
+
+	// ABSENT — sessionId must never appear, by key or value: it is not a projected
+	// column (the AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01 codegen guard keeps the
+	// credential-adjacent token out of the response schema entirely).
+	for _, forbidden := range []string{"sessionId", "session_id", "session-must-not-leak"} {
 		if strings.Contains(body, forbidden) {
-			t.Errorf("response leaked %q — sessionId/tenantId must never reach the wire\nbody=%s", forbidden, body)
+			t.Errorf("response leaked %q — sessionId must never reach the wire\nbody=%s", forbidden, body)
 		}
 	}
 }

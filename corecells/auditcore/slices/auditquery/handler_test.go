@@ -1026,10 +1026,104 @@ func TestHandleQuery_TraceIDFilter_NonAdminScopedToActorSelf(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	// Only ta-1 (usr-1 + trace-abc). ta-2 excluded by actor-self; ta-3 by traceId.
+	// The traceId FILTER selects server-side on the stored entry (pre-projection),
+	// so row selection is unaffected by masking; the OUTPUT traceId is value-masked
+	// for a non-admin (self) caller (epic #1337 PR-12, auditFieldMask).
 	require.Len(t, resp.Data, 1)
 	assert.Equal(t, "evt-ta-1", resp.Data[0].EventID)
 	assert.Equal(t, "usr-1", resp.Data[0].ActorID)
-	assert.Equal(t, "trace-abc", resp.Data[0].TraceID)
+	assert.Equal(t, "<REDACTED>", resp.Data[0].TraceID, "traceId masked for non-admin self")
+}
+
+// TestHandleQuery_ColumnMaskMatrix is the per-principal column-masking matrix
+// (epic #1337 PR-12, T12.4 unit-level analogue): admin / non-admin user / device
+// callers see DIFFERENT visible columns from auditFieldMask, discharged through the
+// ResourceProjection funnel. Same row contents per owner axis isolate masking from
+// data. admin → full view; non-admin self → correlationId+traceId masked; device →
+// subjectId+correlationId+traceId masked. tenantId is visible to all (own-tenant
+// row) — it is projected (PR-12) but not in any per-scope mask.
+func TestHandleQuery_ColumnMaskMatrix(t *testing.T) {
+	const (
+		masked      = "<REDACTED>"
+		selfSubject = "usr-self"
+		deviceID    = "dev-7"
+		subjectVal  = "subject-of-record"
+	)
+	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	// One row per owner axis (actor_id), each carrying identical sensitive column
+	// values so the assertions isolate masking, not data. The owner column is
+	// actor_id (vis.Allows(entry.ActorID)).
+	seedRow := func(id, actor string) *ledger.Entry {
+		return &ledger.Entry{
+			ID: id, EventID: "evt-" + id, EventType: "event.test.v1",
+			ActorID:       actor,
+			SubjectID:     subjectVal,
+			TenantID:      auditQueryTestTenant,
+			CorrelationID: "corr-" + id,
+			TraceID:       "trace-" + id,
+			Timestamp:     base, OccurredAt: base,
+			Payload: []byte("{}"),
+		}
+	}
+	for _, e := range []*ledger.Entry{
+		seedRow("admin", "admin-actor"),
+		seedRow("self", selfSubject),
+		seedRow("dev", deviceID),
+	} {
+		require.NoError(t, store.Append(context.Background(), e))
+	}
+
+	deviceCtx := auth.WithPrincipal(context.Background(), &auth.Principal{
+		Kind: auth.PrincipalDevice, Subject: deviceID, TenantID: auditQueryTestTenant, AuthMethod: "test",
+	})
+
+	cases := []struct {
+		name                             string
+		ctx                              context.Context
+		eventID                          string
+		wantSubject, wantCorr, wantTrace string
+	}{
+		// admin (RowScopeTenant): full view — every column visible.
+		{"admin_full_view", auditTestCtx("admin-x", []string{auth.RoleAdmin}), "evt-admin", subjectVal, "corr-admin", "trace-admin"},
+		// non-admin user (RowScopeSelf): operator-diagnostic columns masked.
+		{"non_admin_self_masks_diagnostics", auditTestCtx(selfSubject, nil), "evt-self", subjectVal, masked, masked},
+		// device (RowScopeDevice): also masks the human subject-of-record.
+		{"device_masks_subject_and_diagnostics", deviceCtx, "evt-dev", masked, masked, masked},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil).WithContext(tc.ctx)
+			mux.ServeHTTP(w, req)
+			require.Equalf(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+			var resp struct {
+				Data []map[string]any `json:"data"`
+			}
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+			var row map[string]any
+			for _, r := range resp.Data {
+				if r["eventId"] == tc.eventID {
+					row = r
+					break
+				}
+			}
+			require.NotNilf(t, row, "row %s not visible to %s; body=%s", tc.eventID, tc.name, w.Body.String())
+
+			assert.Equal(t, tc.wantSubject, row["subjectId"], "subjectId")
+			assert.Equal(t, tc.wantCorr, row["correlationId"], "correlationId")
+			assert.Equal(t, tc.wantTrace, row["traceId"], "traceId")
+			// tenantId is projected (PR-12) and never in a per-scope mask: visible to all.
+			assert.Equal(t, auditQueryTestTenant, row["tenantId"], "tenantId visible (own tenant)")
+		})
+	}
 }
 
 type actorBindingCase struct {
