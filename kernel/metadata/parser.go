@@ -785,7 +785,10 @@ const (
 	msgGroupOnProjectionCU = "group is not allowed on a projection contractUsage" +
 		" (the projection consumer group is derived from cellID and projectionID)"
 	// F-source rules (EPIC #1609 PR-05): projectionSource is required-when-projection
-	// (no implicit default), enum-checked, and saga-journal forbids onReset.
+	// (no implicit default), enum-checked, and saga-journal forbids onReset. The
+	// authoritative enum is cellvocab.AllProjectionSources() (enforced by
+	// isValidProjectionSource); the value list embedded in the two messages below is
+	// a human hint — keep it in sync when AllProjectionSources gains a member.
 	msgProjectionSourceRequired    = "projectionSource is required when projection is set (one of: outbox, saga-journal)"
 	msgProjectionSourceWithoutProj = "projectionSource is only valid when projection is set on the same subscribe contractUsage"
 	msgProjectionSourceInvalid     = "projectionSource must be one of: outbox, saga-journal"

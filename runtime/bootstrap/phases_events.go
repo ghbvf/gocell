@@ -466,13 +466,15 @@ func (b *Bootstrap) checkConsumerBaseConfiguredForSubscriptions(s *phaseState) e
 // "webhook dispatcher") and topic of the first ConsumerBase-backed consumer
 // declared in snap, or found=false when there are none. All three consume via
 // the same ConsumerBase path, so any one of them makes a configured
-// ConsumerBase mandatory.
+// ConsumerBase mandatory. saga-journal projections are EXCLUDED — they are
+// driven by the pull-based Tailer (no ConsumerBase / event-router path), so a
+// cell declaring only saga-journal projections must not trip this guard.
 func firstConsumerInSnapshot(snap cell.RegistrySnapshot) (kind, topic string, found bool) {
 	if len(snap.Subscriptions) > 0 {
 		return "subscription topic", snap.Subscriptions[0].Spec.Topic, true
 	}
-	if len(snap.Projections) > 0 {
-		return "projection topic", snap.Projections[0].Spec.Topic, true
+	if outbox := outboxProjectionRequests(snap.Projections); len(outbox) > 0 {
+		return "projection topic", outbox[0].Spec.Topic, true
 	}
 	if len(snap.WebhookDispatchers) > 0 {
 		return "webhook dispatcher", snap.WebhookDispatchers[0].Spec.ContractID, true

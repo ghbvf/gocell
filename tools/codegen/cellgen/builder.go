@@ -61,6 +61,12 @@ const (
 	roleServe           = "serve"
 )
 
+// projectionSourceSagaJournal mirrors cellvocab.ProjectionSourceSagaJournal,
+// declared locally for the same reason as the role consts above (cellgen resolves
+// slice.yaml via bare strings). Used by the builder kind-check, the import
+// enrichment skip, and ProjectionGenSpec.IsSagaJournal (≥3 uses).
+const projectionSourceSagaJournal = "saga-journal"
+
 // BuildCellSpec projects (cell.yaml + markergen.WireBundle + fieldIndex) into
 // the CellGenSpec consumed by cell.tmpl. It is the single bridge between
 // parsed metadata and the renderer.
@@ -835,7 +841,7 @@ func buildProjectionSpecFromCU(
 // the projection source: saga-journal must consume a kind=saga contract; the
 // outbox path ("" or "outbox") must consume a kind=event contract.
 func validateProjectionContractKind(cellID, sliceID string, cu metadata.ContractUsage, kind string) error {
-	if cu.ProjectionSource == "saga-journal" {
+	if cu.ProjectionSource == projectionSourceSagaJournal {
 		if kind != "saga" {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"cellgen build: saga-journal projection must consume a saga contract",
@@ -848,6 +854,10 @@ func validateProjectionContractKind(cellID, sliceID string, cu metadata.Contract
 		}
 		return nil
 	}
+	// Fall-through is the outbox path: empty ProjectionSource and "outbox" are
+	// equivalent here (the parser already required a non-empty value, and
+	// cell.RegisterProjection treats "" == outbox), so both demand a kind=event
+	// contract.
 	if kind != "event" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"cellgen build: projection consumes non-event contract",
@@ -1066,7 +1076,7 @@ func EnrichProjectionsWithModulePath(spec *CellGenSpec, modulePath string) {
 		// saga-journal projections wire through cell.NewSagaJournalProjectionRequest
 		// and reference no per-event-contract generated package, so they take no
 		// import path / alias. The positional index keeps the outbox aliases stable.
-		if pr.Source == "saga-journal" {
+		if pr.Source == projectionSourceSagaJournal {
 			continue
 		}
 		pr.SpecPackage = contractpath.ContractIDToImportPath(modulePath, pr.ContractID)

@@ -226,6 +226,13 @@ type ProjectionGenSpec struct {
 	SpecAlias   string // "proj0","proj1",... unique import alias
 }
 
+// IsSagaJournal reports whether this projection uses the saga-journal source.
+// cell.tmpl branches on it (import guard + wiring constructor) so the template
+// carries no raw "saga-journal" literal — Source stays the single source.
+func (s ProjectionGenSpec) IsSagaJournal() bool {
+	return s.Source == projectionSourceSagaJournal
+}
+
 // SliceGenSpec is the rendering input for slice.tmpl. It declares the
 // canonical Service interface a slice must implement so that the cell can
 // call its handler methods through a typed reference, and projects the

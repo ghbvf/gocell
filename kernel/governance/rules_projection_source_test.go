@@ -68,6 +68,20 @@ func TestProjectionSagaSourceNeedsProjection(t *testing.T) {
 			wantField:    "contractUsages[0].role",
 		},
 		{
+			// Direction (a) fires on the OTHER sub-branch: subscribe on a saga
+			// contract WITH a projection but the wrong (outbox) source. Covers the
+			// `!isSagaJournal` half of direction (a), distinct from the no-projection
+			// half above — guards the rule against silently narrowing to projection-only.
+			name:         "subscribe + saga + projection + outbox source → fires",
+			contractKind: "saga",
+			cu: metadata.ContractUsage{
+				Role: "subscribe", Handler: "OnSaga",
+				Projection: "order_saga_summary", ProjectionSource: "outbox",
+			},
+			wantErrCount: 1,
+			wantField:    "contractUsages[0].role",
+		},
+		{
 			// Direction (b) fires: saga-journal source on a non-saga (event) contract.
 			name:         "projectionSource=saga-journal on non-saga contract → fires",
 			contractKind: "event",

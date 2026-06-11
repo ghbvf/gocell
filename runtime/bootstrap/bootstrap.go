@@ -448,6 +448,7 @@ func New(clk clock.Clock, opts ...Option) *Bootstrap {
 	b.shutdownTimeout = shutdown.DefaultTimeout
 	b.configWatcherFactory = config.NewWatcher
 	b.metricsProvider = kernelmetrics.NopProvider{}
+	b.sagaTailerObservers = make(map[string]tailer.Observer)
 	b.clock = clk
 
 	for _, o := range opts {

@@ -34,6 +34,7 @@ package bootstrap
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cellvocab"
@@ -150,15 +151,20 @@ func (b *Bootstrap) hasRealMetricsProvider() bool {
 	return !isNop
 }
 
-// sagaTailerObserverFor returns the per-cell Tailer metric Observer, building and
-// caching a SagaTailerCollector once per cellID. NewSagaTailerCollector registers
-// a per-cell metric family, so calling it twice for the same cell would be a
-// duplicate-registration conflict — the cache makes it at most once per cell.
+// sagaTailerObserverFor returns the per-cell Tailer metric Observer, or a
+// tailer.NopObserver when no real metrics provider is configured. The nil/Nop
+// guard is inlined here (not a caller obligation) so no Soft "callers must guard
+// first" contract can drift; the always-non-nil return also keeps callers from
+// branching on nil.
 //
-// Callers MUST guard with hasRealMetricsProvider first: this builder always
-// returns a real (non-nil) observer on success, so a nil/Nop provider must not
-// reach it.
+// On a real provider it builds and caches a SagaTailerCollector once per cellID:
+// NewSagaTailerCollector registers a per-cell metric family, so calling it twice
+// for the same cell would be a duplicate-registration conflict — the cache makes
+// it at most once per cell.
 func (b *Bootstrap) sagaTailerObserverFor(cellID string) (tailer.Observer, error) {
+	if !b.hasRealMetricsProvider() {
+		return tailer.NopObserver{}, nil
+	}
 	if obs, ok := b.sagaTailerObservers[cellID]; ok {
 		return obs, nil
 	}
@@ -188,13 +194,13 @@ func (b *Bootstrap) buildOneSagaTailer(req cell.ProjectionRequest) (*tailer.Tail
 	if b.sagaTailerConfigSet {
 		opts = append(opts, tailer.WithConfig(b.sagaTailerConfig))
 	}
-	if b.hasRealMetricsProvider() {
-		obs, err := b.sagaTailerObserverFor(req.CellID)
-		if err != nil {
-			return nil, err
-		}
-		opts = append(opts, tailer.WithObserver(obs))
+	// Always non-nil (real collector or NopObserver); WithObserver(NopObserver{})
+	// is equivalent to the Tailer's default, so an unconditional append is safe.
+	obs, err := b.sagaTailerObserverFor(req.CellID)
+	if err != nil {
+		return nil, err
 	}
+	opts = append(opts, tailer.WithObserver(obs))
 
 	// src is passed as BOTH the replay and cursor args (SagaJournalSource
 	// implements both interfaces); the TxRunner is shared with the outbox path.
@@ -229,5 +235,10 @@ func (b *Bootstrap) wireOneSagaTailer(s *phaseState, t *tailer.Tailer, cellID, p
 	// Named teardown so a Close failure surfaces the offending projection in the
 	// phase10 shutdown phaseError (unnamed teardowns log phase="").
 	s.addNamedTeardown("saga-tailer:"+cellID+"/"+projectionID, t.Close)
+	// Lifecycle Info log (mirrors the outbox Coordinator drain) so ops can confirm
+	// the long-running Tailer was registered at startup.
+	slog.Info("bootstrap: wiring saga-journal projection tailer",
+		slog.String("cell", cellID),
+		slog.String("projection", projectionID))
 	return nil
 }

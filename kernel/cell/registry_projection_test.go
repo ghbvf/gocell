@@ -173,6 +173,9 @@ func TestRegisterProjection_SpecValidate_RejectsInvalidSpec(t *testing.T) {
 
 	err := rec.RegisterProjection(req)
 	require.Error(t, err, "spec with empty Transport must be rejected")
+	// This path returns ContractSpec.Validate()'s bare fmt.Errorf (not an
+	// *errcode.Error), so assert on err.Error() rather than ecErr.Message — unlike
+	// the source/kind guards above which produce typed errcode errors.
 	assert.Contains(t, err.Error(), "Transport", "error must reference the invalid field")
 	assert.Empty(t, rec.Snapshot().Projections, "rejected request must not be recorded")
 }

@@ -165,7 +165,7 @@ ORDER BY updated_at ASC LIMIT 20;
 
 ## 场景 5：投影 tailer 停滞（#1609 PR-04）
 
-对应告警 `GoCellSagaTailerStalled` / `GoCellSagaTailerLagHigh` / `GoCellSagaTailerLockAcquireFailures` / `GoCellSagaTailerCheckpointAdvanceFailures`（`docs/ops/alerting-rules.md`）。`runtime/saga/tailer.Tailer` 是 saga 终态 model-A 投影的 catch-up 驱动；与场景 4 的 saga Coordinator 是**独立组件、独立 distlock key**（`saga-journal-tailer:<len>:<proj>`，区别于 Coordinator 的 per-instance `saga:<len>:<def>:<inst>`）。tailer 接入生产 assembly（PR-05）/ 真实消费者（orderfulfillment，PR-06）前这些告警沉默。
+对应告警 `GoCellSagaTailerStalled` / `GoCellSagaTailerLagHigh` / `GoCellSagaTailerLockAcquireFailures` / `GoCellSagaTailerCheckpointAdvanceFailures`（`docs/ops/alerting-rules.md`）。`runtime/saga/tailer.Tailer` 是 saga 终态 model-A 投影的 catch-up 驱动；与场景 4 的 saga Coordinator 是**独立组件、独立 distlock key**（`saga-journal-tailer:<len>:<proj>`，区别于 Coordinator 的 per-instance `saga:<len>:<def>:<inst>`）。PR-05 已将 Tailer 接入 bootstrap phase6 drain（声明式 `projectionSource: saga-journal`）；告警在部署了 saga-journal 投影的 assembly 上即生效。接入真实消费者（orderfulfillment，PR-06）后可预期首次实际触发。
 
 **症状**：读投影读到陈旧 saga 终态；`last_success_timestamp` 不前进 / `pending_events` 持续增长。
 

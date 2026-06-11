@@ -76,7 +76,7 @@
           },
           "projectionSource": {
             "type": "string",
-            "description": "Input stream selector for a projection subscribe CU. 'outbox' consumes the named event contract's topic (contract.kind=event); 'saga-journal' consumes the global saga journal (contract.kind=saga, stream saga.journal.v1) and makes cellgen emit cell.NewSagaJournalProjectionRequest. REQUIRED when projection is set; subscribe-only.",
+            "description": "Input stream selector for a projection subscribe CU. 'outbox' consumes the named event contract's topic (contract.kind=event). 'saga-journal' consumes the GLOBAL saga journal (contract.kind=saga, stream saga.journal.v1) and makes cellgen emit cell.NewSagaJournalProjectionRequest. NOTE: the saga-journal source reads EVERY saga instance and type — the contract field is a governance/lineage anchor only, NOT a runtime filter, so your Apply handler must itself filter by saga kind if it cares. onReset is forbidden with saga-journal (that path has no rebuild). REQUIRED when projection is set; subscribe-only.",
             "enum": ["outbox", "saga-journal"]
           }
         },

@@ -570,8 +570,11 @@ type ProjectionRequest struct {
 // CU carrying projectionSource=saga-journal, and reg.RegisterProjection is
 // funnel-locked to cell_gen.go by PROJECTION-REGISTER-FUNNEL-01. There is no
 // per-event-contract generated package for the saga journal (it is not an event
-// contract), so — unlike the outbox NewProjectionRequest that embeds a package
-// -private event spec — this constructor lives in kernel/cell.
+// contract), so — unlike the outbox NewProjectionRequest, which is generated per
+// event contract into generated/contracts/event/<path>/<version>/projection_gen.go
+// and embeds that package's private event spec — this saga constructor lives in
+// kernel/cell (do NOT mirror it into generated/; the saga journal has no contract
+// package to host it).
 func NewSagaJournalProjectionRequest(apply ProjectionApply, projectionID, cellID, sliceID string) ProjectionRequest {
 	return ProjectionRequest{
 		Source:       cellvocab.ProjectionSourceSagaJournal,

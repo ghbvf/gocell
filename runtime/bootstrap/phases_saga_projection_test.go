@@ -184,16 +184,19 @@ func TestDrainCellSagaProjections_WiresTailer(t *testing.T) {
 	_, registered := s.registeredCheckers[wantProbe]
 	assert.True(t, registered, "the Tailer readiness probe %q must be registered", wantProbe)
 
-	// Named teardown recorded ("saga-tailer:<cell>/<projection>").
+	// Named teardown recorded ("saga-tailer:<cell>/<projection>") and the Close fn
+	// itself shuts the (never-started) Tailer down cleanly.
 	wantTeardown := "saga-tailer:" + sagaProjCellID + "/" + sagaProjProjID
-	found := false
+	var teardownFn func(context.Context) error
 	for _, td := range s.teardowns {
 		if td.name == wantTeardown {
-			found = true
+			teardownFn = td.fn
 			break
 		}
 	}
-	assert.True(t, found, "a named Close teardown %q must be recorded", wantTeardown)
+	require.NotNil(t, teardownFn, "a named Close teardown %q must be recorded", wantTeardown)
+	assert.NoError(t, teardownFn(context.Background()),
+		"the Tailer Close teardown must return cleanly for a never-started Tailer")
 }
 
 // TestDrainCellSagaProjections_EmptyNoOp: a cell with no saga-journal projection

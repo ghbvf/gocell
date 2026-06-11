@@ -14,7 +14,7 @@ import (
 {{- range .Subscriptions }}
 	{{.SubscriptionAlias}} "{{.SubscriptionPackage}}"
 {{- end }}
-{{- range .Projections }}{{- if ne .Source "saga-journal" }}
+{{- range .Projections }}{{- if not .IsSagaJournal }}
 	{{.SpecAlias}} "{{.SpecPackage}}"
 {{- end }}{{- end }}
 {{- if .GrpcServices }}
@@ -107,7 +107,7 @@ func (c *{{.StructName}}) Init(ctx context.Context, reg cell.Registrar) error {
 	}
 {{ end }}
 {{- range .Projections }}
-{{- if eq .Source "saga-journal" }}
+{{- if .IsSagaJournal }}
 	if err := reg.RegisterProjection(cell.NewSagaJournalProjectionRequest(
 		{{.ApplyExpr}}, {{ printf "%q" .ProjectionID }}, {{ printf "%q" $.CellID }}, {{ printf "%q" .SliceID }},
 	)); err != nil {
