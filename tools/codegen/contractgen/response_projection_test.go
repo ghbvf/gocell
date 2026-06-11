@@ -18,15 +18,19 @@ func TestApplyResponseProjection_FailClosed(t *testing.T) {
 			DTOs:       dtos,
 		}
 	}
+	// respWith builds a single-field Response DTO for the fail-closed cases.
+	respWith := func(field, goType string) []DTOSpec {
+		return []DTOSpec{{Name: "Response", Fields: []DTOField{{Name: field, GoType: goType}}}}
+	}
 	errCases := []struct {
 		name    string
 		spec    *ContractGenSpec
 		wantErr string
 	}{
 		{"no Response DTO", mk([]DTOSpec{{Name: "Request"}}), "no Response DTO"},
-		{"Response has no Data field", mk([]DTOSpec{{Name: "Response", Fields: []DTOField{{Name: "Other", GoType: "string"}}}}), "no `data` resource field"},
-		{"data not projectable (scalar)", mk([]DTOSpec{{Name: "Response", Fields: []DTOField{{Name: "Data", GoType: "string"}}}}), "object or array-of-object"},
-		{"item DTO missing", mk([]DTOSpec{{Name: "Response", Fields: []DTOField{{Name: "Data", GoType: "*ResponseData"}}}}), "item DTO"},
+		{"Response has no Data field", mk(respWith("Other", "string")), "no `data` resource field"},
+		{"data not projectable (scalar)", mk(respWith("Data", "string")), "object or array-of-object"},
+		{"item DTO missing", mk(respWith("Data", "*ResponseData")), "item DTO"},
 	}
 	for _, tc := range errCases {
 		t.Run(tc.name, func(t *testing.T) {
