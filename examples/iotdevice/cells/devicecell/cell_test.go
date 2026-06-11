@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -544,4 +546,23 @@ func mustNewRouter(t *testing.T) *router.Router {
 		t.Fatalf("router.New: %v", err)
 	}
 	return r
+}
+
+// TestCertRenewalRetryIntervalExceedsClaimerDoneTTL guards the co-tuning
+// invariant that certRenewalRetryInterval >= relay Claimer done-TTL
+// (idempotency.DefaultTTL = 24h). Setting certRenewalRetryInterval below that
+// floor means a genuine retry re-emits the same commandID while the prior
+// done-key is still live → Claimer skips it → renewal silently stuck.
+// Ref: ADR-1044 §Amendment 2026-06-11(#1820).
+func TestCertRenewalRetryIntervalExceedsClaimerDoneTTL(t *testing.T) {
+	const claimerDoneTTL = idempotency.DefaultTTL // 24h relay Claimer done-TTL floor
+	if certRenewalRetryInterval < claimerDoneTTL {
+		t.Fatalf("certRenewalRetryInterval (%v) < relay Claimer done-TTL (%v): "+
+			"a genuine retry re-emits the same commandID while the prior done-key is still live → renewal silently stuck",
+			certRenewalRetryInterval, claimerDoneTTL)
+	}
+	// Sanity-check the constant we compared against is exactly 24h.
+	if claimerDoneTTL != 24*time.Hour {
+		t.Fatalf("idempotency.DefaultTTL = %v, expected 24h", claimerDoneTTL)
+	}
 }

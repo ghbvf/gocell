@@ -392,24 +392,34 @@ func runCertRenewalCandidatesNearExpiry(t *testing.T, factory DeviceRepoFactory,
 	cStale.RenewalRequestedAt = staleAt
 	createDevice(t, ctx, repo, tx, features, cStale)
 
+	// c-exactly-retry: same epoch, RenewalRequestedAt == retryBefore exactly
+	// (<= is inclusive) -> candidate.
+	cExact := mk("c-exactly-retry", 7, cutoff.Add(-4*time.Hour), 7)
+	cExact.RenewalRequestedAt = retryBefore
+	createDevice(t, ctx, repo, tx, features, cExact)
+
 	got, err := repo.ListCertificateRenewalCandidates(ctx, cutoff, retryBefore, 100)
 	if err != nil {
 		t.Fatalf("ListCertificateRenewalCandidates: %v", err)
 	}
-	// Expected: c-stale (earliest expiry = cutoff-3h), c-near (cutoff-1h), c-at (cutoff).
-	// c-req-recent is excluded (requested recently, same epoch).
+	// Expected (expiry ASC): c-exactly-retry (cutoff-4h), c-stale (cutoff-3h),
+	// c-near (cutoff-1h), c-at (cutoff).
+	// c-req-recent excluded (requested recently, same epoch).
 	// c-later excluded (after cutoff). c-none excluded (no cert).
-	if len(got) != 3 {
-		t.Fatalf("expected 3 candidates, got %d: %+v", len(got), got)
+	if len(got) != 4 {
+		t.Fatalf("expected 4 candidates, got %d: %+v", len(got), got)
 	}
-	if got[0].DeviceID != "c-stale" {
-		t.Fatalf("candidate[0] = %+v, want c-stale (earliest expiry)", got[0])
+	if got[0].DeviceID != "c-exactly-retry" {
+		t.Fatalf("candidate[0] = %+v, want c-exactly-retry (boundary inclusive)", got[0])
 	}
-	if got[1].DeviceID != "c-near" || got[1].CertEpoch != 2 {
-		t.Fatalf("candidate[1] = %+v, want c-near epoch 2", got[1])
+	if got[1].DeviceID != "c-stale" {
+		t.Fatalf("candidate[1] = %+v, want c-stale (earliest expiry)", got[1])
 	}
-	if got[2].DeviceID != "c-at" || got[2].CertEpoch != 3 {
-		t.Fatalf("candidate[2] = %+v, want c-at epoch 3", got[2])
+	if got[2].DeviceID != "c-near" || got[2].CertEpoch != 2 {
+		t.Fatalf("candidate[2] = %+v, want c-near epoch 2", got[2])
+	}
+	if got[3].DeviceID != "c-at" || got[3].CertEpoch != 3 {
+		t.Fatalf("candidate[3] = %+v, want c-at epoch 3", got[3])
 	}
 }
 
@@ -502,6 +512,7 @@ func runCertRenewalCandidatesBatchLimit(t *testing.T, factory DeviceRepoFactory,
 	retryBefore := base.Add(-100 * 24 * time.Hour)
 
 	// Seed 5 eligible near-expiry devices with distinct ascending expiries.
+	// i=0 is earliest-expiry so bl-0 < bl-1 < ... and the LIMIT returns the earliest N.
 	for i := 0; i < 5; i++ {
 		expiry := cutoff.Add(-time.Duration(5-i) * time.Hour) // i=0 earliest, i=4 latest
 		d := &domain.Device{

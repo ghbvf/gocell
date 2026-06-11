@@ -206,8 +206,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			// Transient: bubble up so the Loop applies backoff and re-sweeps on the
 			// next tick. Already-requested epochs are skipped by the scan on retry,
 			// and the Claimer dedups any same-window re-emit.
+			// Note: a single bad candidate aborts the batch (transient bubble →
+			// backoff retry); a future skip-bad-entry-continue would branch on
+			// reconcile.IsPermanent here.
 			return reconcile.Result{}, err
 		}
+	}
+	if len(candidates) > 0 {
+		r.logger.Info("devicecertrenewal: swept cert-renewal batch",
+			slog.Int("emitted", len(candidates)),
+			slog.Bool("full_batch", len(candidates) == r.policy.BatchSize))
 	}
 	if len(candidates) == r.policy.BatchSize {
 		// Full batch: more candidates may remain — requeue promptly to drain the
@@ -250,7 +258,7 @@ func (r *Reconciler) enqueueRenewal(ctx context.Context, cand domain.Certificate
 	}); err != nil {
 		return fmt.Errorf("devicecertrenewal: enqueue cert-renewal command: %w", err)
 	}
-	r.logger.Info("devicecertrenewal: enqueued cert-renewal command",
+	r.logger.Debug("devicecertrenewal: enqueued cert-renewal command",
 		slog.String("device_id", cand.DeviceID),
 		slog.Int64("cert_epoch", cand.CertEpoch),
 		slog.Time("not_after", cand.CertExpiresAt))

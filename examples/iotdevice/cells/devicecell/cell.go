@@ -569,9 +569,9 @@ const (
 	// because each epoch emits at most one command per certRenewalRetryInterval
 	// (the time-window retry release — see devicecertrenewal.Policy.RetryInterval
 	// and certRenewalRetryInterval), co-tuned with the relay's 24h Claimer done-TTL
-	// (see certRenewalRetryInterval); (2) the issued cert validity
-	// (deviceregister.certValidity, 90d) MUST exceed this threshold so a freshly
-	// registered device is not swept for renewal immediately.
+	// (see certRenewalRetryInterval); (2) the issued cert validity MUST exceed this
+	// threshold so a freshly registered device is not swept for renewal immediately.
+	// See deviceregister.certValidity (must exceed certRenewalThreshold).
 	certRenewalThreshold = 30 * 24 * time.Hour
 	// certRenewalRetryInterval is the time-window after which an un-advanced epoch
 	// becomes a renewal candidate again (terminal-failure / never-executed / expired
@@ -581,11 +581,21 @@ const (
 	// releases the claim sooner, so this is the worst-case bound). This is a
 	// doc-only co-tuning relationship — not a machine-enforced invariant — in the
 	// same class as the certRenewalThreshold co-tuning above.
+	//
+	// Invariant (guarded by TestCertRenewalRetryIntervalExceedsClaimerDoneTTL):
+	// certRenewalRetryInterval >= relay Claimer done-TTL (24h). Setting it below
+	// means a genuine retry re-emits the same commandID while the prior done-key is
+	// still live → Claimer skips it → renewal silently stuck. Ref: ADR-1044
+	// §Amendment 2026-06-11(#1820).
 	certRenewalRetryInterval = 25 * time.Hour
 	// certRenewalScanBatchSize is the maximum number of near-expiry candidates
 	// scanned and emitted per reconcile tick. A full batch triggers a prompt
 	// continuation requeue (see certRenewalBatchRequeue) so a large near-expiry
 	// backlog drains across ticks without bursting the outbox/relay.
+	//
+	// Worst-case drain: ⌈N/BatchSize⌉ × BatchRequeue wall-time across requeues
+	// (e.g. 10k devices ≈ 100×1s ≈ 100s), which is fine since the ticker is not
+	// the drain driver.
 	certRenewalScanBatchSize = 100
 	// certRenewalBatchRequeue is the delay before continuing to the next batch when
 	// a full batch was returned (paces the drain).
@@ -621,7 +631,10 @@ func (c *DeviceCell) buildCertRenewalSweeper() error {
 		WithTrigger(reconcile.TickerTrigger(c.clk, certRenewalSweepInterval)).
 		WithName("devicecert.renewal").
 		WithReconcilerID("devicecert_renewal"). // label-safe: [a-z0-9_], no dots
-		WithoutDefaultRequeue()                 // ticker is the sole periodic source
+		// ticker is the sole periodic re-observation source; a full-batch Reconcile
+		// adds a prompt continuation via RequeueAfter (Policy.BatchRequeue) —
+		// RequeueAfter>0 is honored even under WithoutDefaultRequeue.
+		WithoutDefaultRequeue()
 	m, ok, err := c.reconcileLoopMetrics()
 	if err != nil {
 		return fmt.Errorf("device-cert reconcile metrics: %w", err)

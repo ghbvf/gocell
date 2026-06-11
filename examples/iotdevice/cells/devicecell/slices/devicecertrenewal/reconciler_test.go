@@ -280,6 +280,146 @@ func TestReconciler_BatchBoundaryRequeues(t *testing.T) {
 		"partial batch (< BatchSize) must return RequeueAfter == 0")
 }
 
+// TestReconciler_RetryBoundaryInclusive proves the <= boundary: advancing the
+// clock by EXACTLY RetryInterval puts the cert at exactly retryBefore and the
+// cert re-enters the candidate set (the boundary is inclusive).
+func TestReconciler_RetryBoundaryInclusive(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repo := mem.NewDeviceRepository()
+	seedCert(t, ctx, repo, "dev-near", certTestBase.Add(24*time.Hour))
+
+	rec := outboxtest.NewRecorder()
+	fc := clockmock.New(certTestBase)
+	r := newTestReconciler(t, fc, repo, rec)
+
+	_, err := r.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+	require.Len(t, rec.Entries(), 1, "first emit")
+
+	// Advance by EXACTLY RetryInterval: requestedAt == retryBefore (boundary inclusive).
+	fc.Advance(certRenewalTestPolicy.RetryInterval)
+
+	_, err = r.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+
+	assert.Len(t, rec.Entries(), 2,
+		"advancing clock by exactly RetryInterval puts the cert at the retryBefore boundary — inclusive <= means a re-emit occurs")
+}
+
+// TestReconciler_BatchBoundaryExactSize proves the exact-batch-size behavior:
+// seeding exactly BatchSize near-expiry certs, the first Reconcile emits all
+// BatchSize AND returns RequeueAfter>0 (full batch); the second Reconcile
+// emits 0 new (all marked within window) AND returns RequeueAfter==0 (drained).
+func TestReconciler_BatchBoundaryExactSize(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repo := mem.NewDeviceRepository()
+
+	smallPolicy := Policy{
+		Threshold:     certRenewalTestThreshold,
+		RetryInterval: 24 * time.Hour,
+		BatchSize:     3,
+		BatchRequeue:  10 * time.Millisecond,
+	}
+
+	// Seed exactly BatchSize=3 near-expiry certs.
+	for i := 0; i < smallPolicy.BatchSize; i++ {
+		id := "dev-exact-" + string(rune('a'+i))
+		expiresAt := certTestBase.Add(time.Duration(i+1) * time.Hour)
+		require.NoError(t, repo.Create(ctx, &domain.Device{
+			ID: id, Name: id, Status: "online", LastSeen: certTestBase,
+			CertEpoch: domain.DefaultCertEpoch, CertExpiresAt: expiresAt,
+		}))
+	}
+
+	rec := outboxtest.NewRecorder()
+	fc := clockmock.New(certTestBase)
+	r, err := NewReconciler(fc, repo, rec.CellEmitter(), outbox.DemoCellTxManager(), smallPolicy, nil)
+	require.NoError(t, err)
+
+	// First Reconcile: exactly BatchSize=3 candidates → full batch → RequeueAfter > 0.
+	result1, err := r.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+	assert.Len(t, rec.Entries(), 3, "first reconcile emits all BatchSize=3 candidates")
+	assert.Greater(t, result1.RequeueAfter, time.Duration(0),
+		"full batch (len==BatchSize) must return RequeueAfter>0")
+
+	// Second Reconcile: all 3 already marked within window → 0 new emits, RequeueAfter==0.
+	result2, err := r.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+	assert.Len(t, rec.Entries(), 3, "second reconcile finds no new candidates (all marked within window)")
+	assert.Equal(t, time.Duration(0), result2.RequeueAfter,
+		"drained (partial=0 < BatchSize) must return RequeueAfter==0")
+}
+
+// perDeviceEmitter is an outbox.Emitter that succeeds for device IDs not in
+// failIDs and returns failErr for those that are. It inspects the AggregateID
+// of each emitted entry to identify the device.
+type perDeviceEmitter struct {
+	inner   outbox.CellEmitter
+	failIDs map[string]bool
+	failErr error
+}
+
+func (e *perDeviceEmitter) Emit(ctx context.Context, entry outbox.Entry) error {
+	if e.failIDs[entry.AggregateID()] {
+		return e.failErr
+	}
+	return e.inner.Emit(ctx, entry)
+}
+
+// TestReconciler_PartialBatchFailureRetriesOnlyFailed seeds 2 near-expiry certs
+// (device A and B). The first Reconcile uses an emitter that succeeds for A but
+// fails for B → error bubbles (B failed), A is emitted+marked. After advancing
+// by less than RetryInterval, B's emitter succeeds on the second Reconcile →
+// only B re-emits (A is suppressed within its window).
+func TestReconciler_PartialBatchFailureRetriesOnlyFailed(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repo := mem.NewDeviceRepository()
+
+	seedCert(t, ctx, repo, "dev-a", certTestBase.Add(12*time.Hour))
+	seedCert(t, ctx, repo, "dev-b", certTestBase.Add(18*time.Hour))
+
+	wantErr := errors.New("emit failed for dev-b")
+	rec := outboxtest.NewRecorder()
+	// First pass: fail dev-b, succeed dev-a.
+	failEmitter := &perDeviceEmitter{
+		inner:   rec.CellEmitter(),
+		failIDs: map[string]bool{"dev-b": true},
+		failErr: wantErr,
+	}
+
+	fc := clockmock.New(certTestBase)
+	r, err := NewReconciler(fc, repo, outbox.WrapEmitterForCell(failEmitter), outbox.DemoCellTxManager(),
+		certRenewalTestPolicy, nil)
+	require.NoError(t, err)
+
+	// First Reconcile: candidates are scanned in expiry ASC order: dev-a first,
+	// then dev-b. dev-a emits+marks, dev-b fails → error bubbles.
+	_, reconcileErr := r.Reconcile(ctx, reconcile.Request{})
+	require.ErrorIs(t, reconcileErr, wantErr, "error from dev-b must bubble out of Reconcile")
+	require.Len(t, rec.Entries(), 1, "dev-a was emitted before dev-b errored")
+	assert.Equal(t, "dev-a", rec.Entries()[0].AggregateID(), "the single emit is for dev-a")
+
+	// Advance clock by less than RetryInterval (dev-a stays suppressed).
+	fc.Advance(certRenewalTestPolicy.RetryInterval - time.Minute)
+
+	// Wire a succeeding emitter for the second pass.
+	rec2 := outboxtest.NewRecorder()
+	r2, err := NewReconciler(fc, repo, rec2.CellEmitter(), outbox.DemoCellTxManager(),
+		certRenewalTestPolicy, nil)
+	require.NoError(t, err)
+
+	_, err = r2.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+
+	entries := rec2.Entries()
+	require.Len(t, entries, 1, "second Reconcile emits only dev-b (dev-a suppressed within window)")
+	assert.Equal(t, "dev-b", entries[0].AggregateID(), "only dev-b re-emits on the second tick")
+}
+
 // failingEmitter is an outbox.Emitter whose Emit always fails, used to drive the
 // error-bubble path of Reconcile/enqueueRenewal.
 type failingEmitter struct{ err error }

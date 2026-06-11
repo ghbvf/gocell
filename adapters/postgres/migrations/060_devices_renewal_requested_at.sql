@@ -32,8 +32,17 @@
 -- Index note: the existing idx_devices_cert_expires_at (cert_expires_at, id)
 -- introduced in migration 057 continues to drive the range scan on
 -- cert_expires_at. renewal_requested_at and renewal_requested_epoch are
--- residual filters evaluated after the index range scan — acceptable at
--- example scale. No new index is added.
+-- residual filters evaluated after the index range scan. The (cert_expires_at,
+-- id) range scan already bounds the candidate set to the near-expiry window;
+-- consider a (renewal_requested_at) or partial composite index only beyond
+-- ~10k near-expiry devices. No new index is added at example scale.
+--
+-- First-tick re-emit note: after this migration the first reconcile tick
+-- re-includes every pre-060 already-marked row (renewal_requested_epoch ==
+-- cert_epoch with NULL renewal_requested_at) via the IS-NULL bridge → expect
+-- one renewal re-emit per such device on the first sweep (bounded by BatchSize
+-- per tick; negligible at example scale). MarkCertRenewalRequested then writes
+-- a real timestamp, and these rows enter the normal time-window cycle.
 --
 -- schema_guard.go registers renewal_requested_at in expectedColumns
 -- (NotNull: false). No expectedDefaults entry (nullable, no default).

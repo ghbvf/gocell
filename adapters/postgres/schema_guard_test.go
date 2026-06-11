@@ -44,9 +44,7 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	fsys := testMigrationsFS(t)
 	v, err := ExpectedVersion(fsys)
 	require.NoError(t, err)
-	// Currently 45 migrations: 001-033 contiguous, plus 040-051 (intentional gap
-	// per saga/L3 plan §R2 — 034-039 reserved for parallel PRs; goose sorts
-	// by number, gaps are harmless).
+	// Migration changelog (count is dynamic — verified by assert.Equal below):
 	// 017/018/019 land users/sessions/roles schema for accesscore PG repos (S3+S5);
 	// 020 adds audit_entries table for the ledger.Store PG backend; 021 adds the
 	// (namespace, event_id) UNIQUE INDEX second-line idempotency guard;
