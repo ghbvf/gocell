@@ -15,7 +15,7 @@
   go install ./cmd/gocell
   ```
 
-  The framework itself is a public module; `go get github.com/ghbvf/gocell@v0.1.0` works without GOPRIVATE, and as of #1843 every **library** satellite (`adapters/*`, `corecells`, `cellmodules`, `tools`) is tagged per module at the synchronized version, so `go get github.com/ghbvf/gocell/adapters/postgres@vX.Y.Z` resolves too (see §6). However, `go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` is still **not** available — `cmd/gocell` is a `go install` binary, and `go install pkg@version` is rejected outright when the target module's `go.mod` contains the local `replace` directive it needs for monorepo development. #1843 deliberately excludes the `cmd/*` modules for exactly this reason; making the CLI installable at a version needs release-time replace-strip, tracked as **#1088**. Install from source (above) for now.
+  The framework itself is a public module; `go get github.com/ghbvf/gocell@v0.1.0` works without GOPRIVATE. #1843 adds per-module release tags for every **library** satellite (`adapters/*`, `corecells`, `cellmodules`; `tools` is published for toolchain consumers such as external `archtest` users, not business Cells), synchronized to the same `vX.Y.Z` as the root — so `go get github.com/ghbvf/gocell/adapters/postgres@vX.Y.Z` resolves (see §6). These satellite tags exist **from the first stable release that ships #1843 onward** (the root-only `v0.1.0` predates it and has no satellite tags). `go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` is still **not** available — `cmd/gocell` is a `go install` binary, and `go install pkg@version` is rejected outright when the target module's `go.mod` carries the local `replace` directive it needs for monorepo development. #1843 deliberately excludes the `cmd/*` modules for exactly this reason; making the CLI installable at a version needs release-time replace-strip, tracked as **#1088**. Install from source (above) for now.
 
 ## Steps
 
@@ -24,9 +24,12 @@
 ```bash
 mkdir -p ~/work/acme-payment-cell && cd ~/work/acme-payment-cell
 go mod init github.com/acme/payment-cell
-go get github.com/ghbvf/gocell@v0.1.0   # pin a stable tag (@develop = prerelease snapshot)
-# any library satellite you import (adapters/*, corecells, cellmodules, tools) is
-# tagged at the SAME version — e.g. go get github.com/ghbvf/gocell/adapters/postgres@v0.1.0
+go get github.com/ghbvf/gocell@vX.Y.Z   # pin a stable tag (see Releases; @develop = prerelease snapshot)
+# Synchronized-version contract: pin every library satellite you import at the
+# SAME vX.Y.Z as the core, in one command — Go MVS otherwise resolves a satellite's
+# internal require to a different version and the gocell module graph won't line up:
+go get github.com/ghbvf/gocell@vX.Y.Z github.com/ghbvf/gocell/adapters/postgres@vX.Y.Z
+go list -m all | grep ghbvf/gocell   # verify every gocell module sits at vX.Y.Z
 ```
 
 ### 2. Place the Manifest File

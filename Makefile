@@ -127,8 +127,10 @@ update-modrelease-golden:
 	go test ./tools/modrelease -run TestPublishableModuleSet01 -update -count=1
 
 # release-smoke runs the external-consumer go-get/build smoke for the
-# synchronized multi-module release (RELEASE-EXTERNAL-GET-01). Network-free and
-# Docker-free; also wired as the `nightly`-bucket hack/verify-release-smoke.sh.
+# synchronized multi-module release (RELEASE-EXTERNAL-GET-01). Network-free at
+# test execution, Docker-free. This is a convenience shortcut; the CI gate
+# hack/verify-release-smoke.sh (workspace bucket) additionally enforces the
+# anti-vacuity / build-tag-presence guards a bare `go test` does not.
 release-smoke:
 	go test -tags=releasesmoke -count=1 ./tools/releasesmoke/...
 

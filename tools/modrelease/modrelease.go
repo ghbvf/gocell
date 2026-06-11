@@ -113,14 +113,31 @@ func PublishableModules(root string) ([]workspace.Module, error) {
 //	4: the current version token (vX.Y.Z, pseudo, or v0.0.0)
 //	5: the remainder of the line (e.g. " // indirect")
 //
-// `replace` and `module` lines never match: they begin with their own keyword,
-// so neither the optional `require ` nor the bare path can anchor at line start.
-// The (?:/\S+)? after the quoted prefix is bounded by the following \s+, so a
-// sibling namespace like github.com/ghbvf/gocellxyz cannot false-match.
+// `module`, single-line `replace`/`exclude`/`retract` lines never match: they
+// begin with their own keyword, so neither the optional `require ` nor the bare
+// path can anchor at line start. The (?:/\S+)? after the quoted prefix is bounded
+// by the following \s+, so a sibling namespace like github.com/ghbvf/gocellxyz
+// cannot false-match.
+//
+// Out of scope: a BLOCK-form `exclude (` / `retract (` whose inner line carries an
+// internal path (no keyword on that line) WOULD match and be rewritten. This is
+// acceptable — excluding or retracting one's own sibling module is nonsensical and
+// no GoCell go.mod contains it. require blocks are the only multi-line form the
+// bump targets; single-line exclude/retract is keyword-anchored and safe (covered
+// by a test). This sealed assumption is documented rather than guarded because the
+// red case cannot occur in a well-formed monorepo go.mod.
 func internalRequireRE(prefix string) *regexp.Regexp {
 	return regexp.MustCompile(
 		`^(\s*(?:require\s+)?)(` + regexp.QuoteMeta(prefix) + `(?:/\S+)?)(\s+)(v\S+)(.*)$`,
 	)
+}
+
+// validReleaseVersion checks version is a canonical semver tag (e.g. "v1.2.3").
+func validReleaseVersion(version string) error {
+	if !semver.IsValid(version) || semver.Canonical(version) != version {
+		return fmt.Errorf("modrelease: version %q is not a canonical semver tag (want e.g. v1.2.3)", version)
+	}
+	return nil
 }
 
 // BumpModule rewrites every internal require version in dir/go.mod (a require
@@ -130,16 +147,21 @@ func internalRequireRE(prefix string) *regexp.Regexp {
 // writes the file only when at least one require changed. version must be a valid
 // canonical semver tag (e.g. "v1.2.3").
 func BumpModule(dir, prefix, version string) (Result, error) {
-	if !semver.IsValid(version) || semver.Canonical(version) != version {
-		return Result{}, fmt.Errorf("modrelease: version %q is not a canonical semver tag (want e.g. v1.2.3)", version)
+	if err := validReleaseVersion(version); err != nil {
+		return Result{}, err
 	}
+	return bumpModuleRE(dir, internalRequireRE(prefix), version)
+}
+
+// bumpModuleRE is the core rewrite, taking a precompiled matcher so BumpTree
+// compiles the prefix regexp once across all modules rather than per module.
+func bumpModuleRE(dir string, re *regexp.Regexp, version string) (Result, error) {
 	p := filepath.Clean(filepath.Join(dir, "go.mod"))
 	data, err := os.ReadFile(p)
 	if err != nil {
 		return Result{}, fmt.Errorf("modrelease: read go.mod: %w", err)
 	}
 
-	re := internalRequireRE(prefix)
 	lines := bytes.Split(data, []byte("\n"))
 	var requires []string
 	for i, line := range lines {
@@ -171,6 +193,9 @@ func BumpModule(dir, prefix, version string) (Result, error) {
 // root/go.mod (never a hardcoded literal). Returns one Result per publishable
 // module, in go.work order.
 func BumpTree(root, version string) ([]Result, error) {
+	if err := validReleaseVersion(version); err != nil {
+		return nil, err
+	}
 	prefix, err := gomodutil.ReadModulePath(root)
 	if err != nil {
 		return nil, fmt.Errorf("modrelease: read root module path: %w", err)
@@ -179,9 +204,10 @@ func BumpTree(root, version string) ([]Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	re := internalRequireRE(prefix)
 	results := make([]Result, 0, len(mods))
 	for _, m := range mods {
-		res, err := BumpModule(filepath.Join(root, m.Dir), prefix, version)
+		res, err := bumpModuleRE(filepath.Join(root, m.Dir), re, version)
 		if err != nil {
 			return nil, fmt.Errorf("modrelease: bump %q: %w", m.Dir, err)
 		}
@@ -206,8 +232,8 @@ func tagPathFor(reldir, version string) string {
 // go.work order: root → "vX.Y.Z", satellites → "<reldir>/vX.Y.Z". The release
 // workflow tags exactly these refs at the bump commit.
 func TagPaths(root, version string) ([]string, error) {
-	if !semver.IsValid(version) || semver.Canonical(version) != version {
-		return nil, fmt.Errorf("modrelease: version %q is not a canonical semver tag (want e.g. v1.2.3)", version)
+	if err := validReleaseVersion(version); err != nil {
+		return nil, err
 	}
 	mods, err := PublishableModules(root)
 	if err != nil {

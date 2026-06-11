@@ -17,10 +17,6 @@ import (
 )
 
 func main() {
-	// workspace.Modules' manifest cross-check logs INFO per member via the
-	// default slog logger; quiet it so --print-tag-paths stdout stays clean and
-	// the release-workflow log isn't flooded.
-	slog.SetLogLoggerLevel(slog.LevelWarn)
 	if err := run(); err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "modrelease:", err)
 		os.Exit(1)
@@ -47,6 +43,10 @@ func run() error {
 	}
 
 	if *printTags {
+		// Only --print-tag-paths feeds stdout to a shell `mapfile`; quiet the
+		// workspace manifest cross-check's per-member INFO so the release-workflow
+		// log isn't flooded. --version / --dry-run keep INFO for operator diagnosis.
+		slog.SetLogLoggerLevel(slog.LevelWarn)
 		tags, err := modrelease.TagPaths(root, *version)
 		if err != nil {
 			return err

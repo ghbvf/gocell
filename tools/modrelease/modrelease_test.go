@@ -3,6 +3,7 @@ package modrelease
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -90,6 +91,18 @@ func TestBumpModule(t *testing.T) {
 			wantRequires: nil,
 		},
 		{
+			name: "single-line exclude/retract keyword-anchored: untouched, require bumped",
+			in: "module gocell.example/x\n\ngo 1.25\n\n" +
+				"require github.com/ghbvf/gocell/adapters/s3 v0.0.0\n" +
+				"exclude github.com/ghbvf/gocell v0.0.0\n" +
+				"retract v0.0.1\n",
+			want: "module gocell.example/x\n\ngo 1.25\n\n" +
+				"require github.com/ghbvf/gocell/adapters/s3 v1.2.3\n" +
+				"exclude github.com/ghbvf/gocell v0.0.0\n" +
+				"retract v0.0.1\n",
+			wantRequires: []string{"github.com/ghbvf/gocell/adapters/s3"},
+		},
+		{
 			name: "sibling-namespace false-match guard (gocellxyz must NOT match)",
 			in: "module gocell.example/x\n\ngo 1.25\n\n" +
 				"require github.com/ghbvf/gocellxyz/foo v0.4.0\n" +
@@ -148,6 +161,108 @@ func TestIsPublishable(t *testing.T) {
 			t.Errorf("IsPublishable(%q) = %v, want %v", tt.dir, got, tt.want)
 		}
 	}
+}
+
+// TestBumpTree exercises the actual release entry: it bumps every PUBLISHABLE
+// member of a synthetic workspace (root + adapters), leaves a denied member
+// (examples/*) untouched, preserves replace, and stamps Result.Dir.
+func TestBumpTree(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, content string) {
+		t.Helper()
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("go.mod", "module github.com/ghbvf/gocell\n\ngo 1.25\n")
+	write("go.work", "go 1.25\n\nuse (\n\t.\n\t./adapters/a\n\t./adapters/b\n\t./examples/demo\n)\n")
+	write("adapters/a/go.mod", "module github.com/ghbvf/gocell/adapters/a\n\ngo 1.25\n\n"+
+		"require github.com/ghbvf/gocell v0.0.0\n\nreplace github.com/ghbvf/gocell => ../../\n")
+	write("adapters/b/go.mod", "module github.com/ghbvf/gocell/adapters/b\n\ngo 1.25\n\n"+
+		"require (\n\tgithub.com/ghbvf/gocell v0.0.0\n\tgithub.com/ghbvf/gocell/adapters/a v0.0.0\n)\n")
+	write("examples/demo/go.mod", "module github.com/ghbvf/gocell/examples/demo\n\ngo 1.25\n\n"+
+		"require github.com/ghbvf/gocell v0.0.0\n")
+
+	results, err := BumpTree(root, testVersion)
+	if err != nil {
+		t.Fatalf("BumpTree: %v", err)
+	}
+	// Publishable = root + adapters/a + adapters/b (examples/demo denied).
+	if len(results) != 3 {
+		t.Fatalf("want 3 publishable results, got %d: %+v", len(results), results)
+	}
+	for _, r := range results {
+		if r.Dir == "" {
+			t.Errorf("Result.Dir not stamped: %+v", r)
+		}
+	}
+	a := mustRead(t, filepath.Join(root, "adapters", "a", "go.mod"))
+	if !strings.Contains(a, "require github.com/ghbvf/gocell v1.2.3") {
+		t.Errorf("adapters/a require not bumped:\n%s", a)
+	}
+	if !strings.Contains(a, "replace github.com/ghbvf/gocell => ../../") {
+		t.Errorf("adapters/a replace must be preserved:\n%s", a)
+	}
+	b := mustRead(t, filepath.Join(root, "adapters", "b", "go.mod"))
+	if strings.Contains(b, "v0.0.0") {
+		t.Errorf("adapters/b still has v0.0.0 (both internal requires must bump):\n%s", b)
+	}
+	// Denied member is left as-is.
+	demo := mustRead(t, filepath.Join(root, "examples", "demo", "go.mod"))
+	if !strings.Contains(demo, "v0.0.0") {
+		t.Errorf("examples/demo is denied and must be untouched, got:\n%s", demo)
+	}
+
+	// Invalid version rejected before touching the tree.
+	if _, err := BumpTree(root, "1.2.3"); err == nil {
+		t.Error("BumpTree must reject a non-canonical version")
+	}
+}
+
+// TestTagPaths covers version validation + the root/satellite tag shapes against
+// the real workspace.
+func TestTagPaths(t *testing.T) {
+	root := workspaceRootForTest(t)
+	for _, bad := range []string{"1.2.3", "v1.2", "v1.2.3-rc1+meta", ""} {
+		if _, err := TagPaths(root, bad); err == nil {
+			t.Errorf("TagPaths must reject non-canonical version %q", bad)
+		}
+	}
+	tags, err := TagPaths(root, testVersion)
+	if err != nil {
+		t.Fatalf("TagPaths: %v", err)
+	}
+	if len(tags) < 2 {
+		t.Fatalf("want >=2 tags, got %d", len(tags))
+	}
+	if tags[0] != testVersion {
+		t.Errorf("root tag = %q, want bare %q", tags[0], testVersion)
+	}
+	if !containsString(tags, "adapters/postgres/"+testVersion) {
+		t.Errorf("satellite tag adapters/postgres/%s missing from %v", testVersion, tags)
+	}
+}
+
+func mustRead(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
+}
+
+func containsString(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestTagPathsShape(t *testing.T) {

@@ -206,10 +206,16 @@ jobs:
               | tee -a "$GITHUB_STEP_SUMMARY"
           else
             git commit -am "release($TAG): pin internal module requires"
-            # Non-fast-forward (develop advanced since verify) fails the push;
-            # re-run the workflow to release the new HEAD. Requires branch
-            # protection to permit the github-actions bot to push to develop.
-            git push origin "HEAD:develop"
+            # A non-fast-forward push means develop advanced since verify (often a
+            # prior pin commit in this same release). Surface a clear ::error:: +
+            # summary: the operator must RE-DISPATCH from the new develop HEAD, not
+            # "Re-run jobs" (re-run replays the stale verified SHA). Also requires
+            # branch protection to permit the github-actions bot to push to develop.
+            if ! git push origin "HEAD:develop"; then
+              echo "::error::push to develop rejected (non-fast-forward, or bot lacks branch-protection write). develop has advanced since verify resolved SHA=$SHA — RE-DISPATCH this workflow from the new develop HEAD (do NOT 'Re-run jobs', which replays the stale SHA)." \
+                | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
           fi
 
       - name: Tag modules
@@ -218,6 +224,12 @@ jobs:
         # derived from the same publishable enumeration as the golden guard, must
         # contain the root tag, and is pushed --atomic so a partial set never
         # lands. Snapshots tag root only.
+        #
+        # Resume invariant: the verify job's tag_exists check inspects only the
+        # ROOT tag. Correctness of resuming a half-finished stable release relies
+        # on this --atomic push — root + satellites land all-or-nothing, so the
+        # root tag's presence faithfully reflects the whole set. If --atomic is
+        # ever dropped, the resume guard must be extended to check satellites too.
         if: needs.verify.outputs.tag_exists != 'true'
         run: |
           set -euo pipefail
@@ -237,6 +249,11 @@ jobs:
             *" $TAG "*) ;;
             *) echo "::error::root tag $TAG missing from derived tag set."; exit 1 ;;
           esac
+          # Operator-visible preview of the exact set about to be pushed.
+          {
+            echo "### Release $TAG — tagging ${#tags[@]} modules"
+            printf -- '- %s\n' "${tags[@]}"
+          } >>"$GITHUB_STEP_SUMMARY"
           for tag in "${tags[@]}"; do
             git tag -a "$tag" -m "Release $tag"
           done
