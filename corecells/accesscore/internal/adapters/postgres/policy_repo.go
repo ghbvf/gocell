@@ -24,13 +24,13 @@ const msgPolicyInvalidTenant = "policy_repo: invalid tenant"
 
 // PGPolicyRepo is the cell-private PostgreSQL implementation of
 // ports.PolicyRepository (#1346 PR-8). It reads/writes the `policies` table
-// (migration 058), storing each policy's rule list as a string-coded JSONB
+// (migration 059), storing each policy's rule list as a string-coded JSONB
 // document (see policy_codec.go).
 //
 // Tenant scoping is application-level (every method carries tenant.TenantID and
 // every query includes `WHERE tenant_id = $N`), exactly as the mem store
 // partitions by tenant — this is what the cross-implementation conformance suite
-// asserts. The FORCE ROW LEVEL SECURITY policy on the table (migration 058) is an
+// asserts. The FORCE ROW LEVEL SECURITY policy on the table (migration 059) is an
 // independent DB-kernel backstop, not the primary isolation mechanism.
 //
 // The txRunner field is a construction-time policy declaration (fail-fast on a

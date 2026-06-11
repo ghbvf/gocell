@@ -1,6 +1,6 @@
 <!--
 Backlog issue body 模版 — 经 `gh issue create --body-file <填好的本文件>` 创建。
-labels（`backlog` + `area-XX` + `type-XX` + `pri-pX`）与 title `[<ID>] <简短标题>` 由建 issue 的一方用 `--label` / `--title` 显式给；取值见 PROJECT.md §2/§3。
+labels（`backlog` + `area-XX` + `type-XX` + `pri-pX` + `cx-X`）与 title `[<ID>] <简短标题>` 由建 issue 的一方用 `--label` / `--title` 显式给（非 epic backlog 四轴齐全，cx 必填、无 unknown sentinel）；取值见 PROJECT.md §2/§3。
 
 由 review/fix finding（OUT_OF_SCOPE / 派生）成文时，**无损映射**自 finding 详表（`pr-comment.md` 的 `<details>`），不得一句话带过：
   现状     ← 证据代码片段 + 三维根因（代码/架构/历史）+ 影响范围（直接/间接/同类 Grep N 处）

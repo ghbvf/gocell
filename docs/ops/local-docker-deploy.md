@@ -206,7 +206,7 @@ then run `make local-down && make local-up`.
 
 GoCell uses PostgreSQL Row Level Security (`FORCE ROW LEVEL SECURITY`) on all seven
 standard tenant tables (config_entries / config_versions / feature_flags / users /
-roles / role_assignments / policies, migrations 052–053 + 058; audit_entries
+roles / role_assignments / policies, migrations 052–053 + 059; audit_entries
 carries a system-rows variant, migration 055). RLS is enforced at runtime only when the
 **serving pool role** is a non-owner that lacks superuser and `BYPASSRLS`. A
 superuser ignores all policies regardless of schema correctness.

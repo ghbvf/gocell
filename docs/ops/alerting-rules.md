@@ -1435,7 +1435,7 @@ probe 没有形如 `gocell_..._total` 的专属告警序列；它复用既有的
       /readyz is returning 503. Inspect /readyz?verbose and check the
       dependencies map. If postgres_app_role_restricted_ready is unhealthy, the
       serving PostgreSQL role is a superuser or has BYPASSRLS — RLS policies are
-      defined on all seven tenant tables (incl. policies, migration 058) but bypassed at runtime (cross-tenant leak).
+      defined on all seven tenant tables (incl. policies, migration 059) but bypassed at runtime (cross-tenant leak).
       Remediation for postgres_app_role_restricted_ready:
         1. Point GOCELL_CONFIGCORE_DATABASE_URL at role gocell_app (NOSUPERUSER NOBYPASSRLS).
         2. Ensure deploy/postgres/init/10-restricted-role.sh ran on the target DB

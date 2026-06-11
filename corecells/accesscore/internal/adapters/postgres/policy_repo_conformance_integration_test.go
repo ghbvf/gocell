@@ -17,7 +17,7 @@ import (
 //
 // Each sub-test receives a fresh per-test database (setupPolicyRepoPG →
 // sharedPG.NewPerTestPool), so the factory's "zero-state repository" contract is
-// satisfied. RLS is FORCE-enabled on the policies table (migration 058); the
+// satisfied. RLS is FORCE-enabled on the policies table (migration 059); the
 // superuser test pool bypasses RLS, so the suite's CrossTenant_Isolation passes
 // via the application-level WHERE tenant_id predicates (identical to the PG
 // user/role conformance under their own FORCE RLS tables).

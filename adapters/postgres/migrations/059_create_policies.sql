@@ -1,4 +1,4 @@
--- Migration 058: create the accesscore `policies` table — durable store for ABAC
+-- Migration 059: create the accesscore `policies` table — durable store for ABAC
 -- Policy aggregates (EPIC #1337 PR-8, issue #1346). Until now the policy store
 -- was in-memory only (PR-6 #1344 mem.PolicyRepository); this adds the PG-backed
 -- implementation behind the same ports.PolicyRepository conformance contract.
@@ -61,7 +61,7 @@ CREATE POLICY tenant_isolation ON policies
     WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
 -- +goose Down
--- Reversible: 058 INTRODUCES the table, so DROP TABLE removes the
+-- Reversible: 059 INTRODUCES the table, so DROP TABLE removes the
 -- tenant_isolation policy and the RLS flags (relrowsecurity / relforcerowsecurity)
 -- atomically with it. No explicit DROP POLICY / NO FORCE / DISABLE is needed here
 -- (contrast migration 053, which ENABLE+FORCE RLS on PRE-EXISTING tables and must

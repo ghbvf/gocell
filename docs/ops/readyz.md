@@ -451,6 +451,20 @@ The runtime no longer imposes a hard-coded time budget on probes —
 `CheckCtxRespected`'s budget is caller-supplied and only affects the
 developer test, not production behaviour.
 
+## Projection probes
+
+### projection_journal_ready (deferred to #1504 PR-03)
+
+The `projection_journal_ready` ProbeName is declared in `adapters/postgres`
+(`ProbeProjectionJournalReady`, EPIC #1504 PR-01) and implemented by
+`PGProjectionEventSource.RepoReady`, but is **not yet registered** with any composition
+root — wiring lands in #1504 PR-03 when the durable projection source replaces the
+outbox-backed reader. Until then this probe does **not** appear in `/readyz?verbose`
+output. After registration it reports `projection_events` table reachability + table-level
+permissions (a `SELECT 1 FROM projection_events WHERE false` representative query),
+surfacing schema/migration drift that the pool-level `postgres_ready` ping cannot detect —
+same semantics as the `*_repo_ready` cell probes.
+
 ## Saga probes
 
 ### saga_coordinator_ready (deferred to saga-as-cell migration)

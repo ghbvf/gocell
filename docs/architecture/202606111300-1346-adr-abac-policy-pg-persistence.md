@@ -132,7 +132,7 @@ constraint added by this PR — is closed in-PR by the golden + exhaustiveness g
 ## References
 
 - `corecells/accesscore/internal/adapters/postgres/policy_repo.go`, `policy_codec.go`, `policy_codec_test.go`
-- `adapters/postgres/migrations/058_create_policies.sql`
+- `adapters/postgres/migrations/059_create_policies.sql`
 - `docs/architecture/202606071300-1618-adr-audit-per-tenant-chain-rls.md` (RLS predicate lineage)
 - `docs/plans/specs/1220-tenancy-abac-dataperm/` (tasks.md T8.1–T8.5)
 - ref: AWS Cedar policy model; XACML 3.0 §5.8 (policy element)

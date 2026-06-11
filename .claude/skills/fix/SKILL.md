@@ -262,7 +262,7 @@ push 后按 `issues` B5 ① 验无文件冲突；通过后**立即**进步骤 3�
 
 - **修完** → 贴 fix 评论（命令 + **回显 comment URL/id** 见 `issues` B4；用 `<!-- pm:fix -->` 模板：findings triage + 修复结果 + 遗留 IN_SCOPE，无损写入（约定见 `pr-comment.md`：每条带 `file:line` + 详表入 `<details>`），OUT_OF_SCOPE 仅一行指针（`🚦 OUT_OF_SCOPE（详见本 PR 的 pm:oos 评论）`），含 footer）。**追加机器块**（贴评论前，接口见 `pr-comment.md` §机器块）：`bash hack/automation/pr-meta.sh emit-block --kind=fix --pr=<PR#> --findings='<计数 json>'`（phase/verdict/round 全派生），输出单行追加到 `pm:fix` body 末尾，再走 `issues` B4 贴。再 `gh pr edit` 切 `pr-status/needs-check-fix`（移除 `pr-status/needs-fix`；待 `/pr-review --check` 验证；**fix 不再直接到 ready**）——check-side 执行器从此刻可立即开始，无需等待 CI。
 - **OOS findings → 独立 pm:oos 评论**（仅当有 OUT_OF_SCOPE findings 时，紧接在 pm:fix 之后贴）：用 `<!-- pm:oos -->` 模板，每条 OOS finding 完整无损记录（字段映射见 `pr-comment.md` / `backlog.md`，不得一句话带过）。**追加机器块**（贴评论前）：`bash hack/automation/pr-meta.sh emit-block --kind=oos --pr=<PR#> --oos='{"items":[…]}'`，输出追加到 pm:oos body 末尾，再走 `issues` B4 贴。
-- **未修 / 待办 finding**（非 OOS 的 Cx3+/RELATED deferred）→ §沟通规则闸门输出 `gh issue create` 建议命令（确认后跑，留 open；label = `backlog` + `pri-pX` + `area-XX` + `type-XX` + `cx-X`（可选，从 finding `[…Cx…]` tag 提取）；body 按 `backlog.md` 顶部字段映射**无损**填充，不得一句话带过；条件延后型加 `flag-cond` + Trigger，派生注明 `Discovered via /fix #<original>`）。
+- **未修 / 待办 finding**（非 OOS 的 Cx3+/RELATED deferred）→ §沟通规则闸门输出 `gh issue create` 建议命令（确认后跑，留 open；label = `backlog` + `pri-pX` + `area-XX` + `type-XX` + `cx-X`（必填，从 finding `[…Cx…]` tag 提取——四轴齐全，建单单源命令见 `issues` B1）；body 按 `backlog.md` 顶部字段映射**无损**填充，不得一句话带过；条件延后型加 `flag-cond` + Trigger，派生注明 `Discovered via /fix #<original>`）。
 
 Priority：review finding 用原 `[P0-P3]`；`/fix` 派生默认 `pri-p2`；`pri-p0` 仅 incident（线上故障/数据完整性/CVE），停下 AskUserQuestion 确认。建 issue 必须显式 `--label pri-pX`。
 
