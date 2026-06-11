@@ -64,6 +64,25 @@ func TestRetrySchedule_DelayFor_OutOfRange(t *testing.T) {
 	}
 }
 
+// TestRetrySchedule_Delays verifies the bulk-read accessor consumed by the
+// #1458 broker-delay wiring returns the full tier list in retry order and a
+// defensive copy (mutating the result must not affect the schedule).
+func TestRetrySchedule_Delays(t *testing.T) {
+	t.Parallel()
+	s := DefaultSvixSchedule()
+	want := []time.Duration{
+		goldenSvixDelay1, goldenSvixDelay2, goldenSvixDelay3, goldenSvixDelay4,
+		goldenSvixDelay5, goldenSvixDelay6, goldenSvixDelay7,
+	}
+	got := s.Delays()
+	assert.Equal(t, want, got, "Delays() must return the canonical tiers in retry order")
+
+	// Mutating the returned slice must not corrupt the schedule's internal state.
+	got[0] = time.Nanosecond
+	again := s.Delays()
+	assert.Equal(t, want, again, "Delays() must return a defensive copy")
+}
+
 func TestClassify(t *testing.T) {
 	t.Parallel()
 	ssrf := errcode.New(errcode.KindPermissionDenied, errcode.ErrWebhookSSRFBlocked, "blocked")

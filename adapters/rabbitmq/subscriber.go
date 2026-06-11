@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"hash/crc32"
 	"log/slog"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,6 +30,87 @@ var errSubscriptionLost = errors.New("rabbitmq: subscription lost")
 // Aligned with AMQP 0-9-1 shortstr limit (255 octets) to ensure the ID
 // can be safely embedded in AMQP message headers without truncation.
 const maxEntryIDLength = 255
+
+// headerWebhookAttempt is the AMQP message header key used to track the
+// current delivery attempt number for webhook retry delay tiers.
+// Value is int32. Absent / zero / negative / malformed → treated as attempt 1.
+const headerWebhookAttempt = "x-webhook-attempt"
+
+// readWebhookAttempt reads the attempt counter from an AMQP message header
+// table. Returns 1 when the key is absent, zero, negative, or of an
+// unrecognized type — i.e., the first delivery is always attempt 1.
+func readWebhookAttempt(h amqp.Table) int {
+	if h == nil {
+		return 1
+	}
+	v, ok := h[headerWebhookAttempt]
+	if !ok {
+		return 1
+	}
+	switch n := v.(type) {
+	case int32:
+		if n <= 0 {
+			return 1
+		}
+		return int(n)
+	case int64:
+		if n <= 0 {
+			return 1
+		}
+		return int(n)
+	case int:
+		if n <= 0 {
+			return 1
+		}
+		return n
+	default:
+		return 1
+	}
+}
+
+// isBrokerDeathHeader reports whether k is a RabbitMQ broker-injected dead-letter
+// bookkeeping header (x-death and its x-first-death-* / x-original-* siblings).
+// These accumulate on every dead-letter hop and must not be copied forward when
+// republishing to a delay tier.
+func isBrokerDeathHeader(k string) bool {
+	return k == "x-death" ||
+		strings.HasPrefix(k, "x-first-death-") ||
+		strings.HasPrefix(k, "x-original-")
+}
+
+// deliveryFromDelayTier reports whether the broker attests, via an x-death
+// "expired" record, that this delivery re-entered the dispatch exchange by
+// expiring (TTL) out of one of queueName's own delay tier queues
+// ("<queueName>.delay.<i>"). Only such deliveries carry a trustworthy
+// x-webhook-attempt counter; a message published straight to the dispatch
+// exchange has no expired-from-delay-tier x-death entry (see dispatchDelayedRequeue
+// for why the attempt header is gated on this).
+//
+// x-death is an AMQP array of tables (one per dead-letter event); the relevant
+// entry has reason="expired" and queue="<queueName>.delay.<i>".
+func deliveryFromDelayTier(headers amqp.Table, queueName string) bool {
+	raw, ok := headers["x-death"]
+	if !ok {
+		return false
+	}
+	deaths, ok := raw.([]any)
+	if !ok {
+		return false
+	}
+	delayPrefix := queueName + ".delay."
+	for _, d := range deaths {
+		t, ok := d.(amqp.Table)
+		if !ok {
+			continue
+		}
+		reason, _ := t["reason"].(string)
+		q, _ := t["queue"].(string)
+		if reason == "expired" && strings.HasPrefix(q, delayPrefix) {
+			return true
+		}
+	}
+	return false
+}
 
 const (
 	// defaultRMQReconnectWaitTimeout is the graceful-shutdown wait budget when
@@ -261,10 +344,16 @@ func (s *Subscriber) resolveQueueName(topic, consumerGroup string) string {
 // declareTopology declares the exchange, DLX, queue, and binding on the given
 // channel. All operations are idempotent — safe to call multiple times.
 //
+// When schedule is non-empty the function additionally declares a "direct"
+// delay exchange (<queueName>.delay) and one TTL+DLX queue per tier. On TTL
+// expiry the broker re-routes the message back to the dispatch exchange (topic)
+// so it re-enters the main consumer queue. No additional topology is declared
+// when schedule is empty — non-delayed subscriptions are regression-protected.
+//
 // Precondition: s.config.DLXExchange must be non-empty. Both call sites
 // (Subscribe, Setup) validate this, but the guard here prevents accidental
 // misuse from future code paths.
-func (s *Subscriber) declareTopology(ch AMQPChannel, topic, queueName string) error {
+func (s *Subscriber) declareTopology(ch AMQPChannel, topic, queueName string, schedule []time.Duration) error {
 	if s.config.DLXExchange == "" {
 		return fmt.Errorf("rabbitmq: declareTopology: DLXExchange must not be empty")
 	}
@@ -298,6 +387,66 @@ func (s *Subscriber) declareTopology(ch AMQPChannel, topic, queueName string) er
 		return fmt.Errorf("rabbitmq: bind queue: %w", err)
 	}
 
+	// Declare delay topology when the subscription carries a retry schedule.
+	// Non-delayed subscriptions declare nothing extra (regression-protected).
+	if len(schedule) > 0 {
+		if err := s.declareDelayTopology(ch, topic, queueName, schedule); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// declareDelayTopology declares the delay exchange and per-tier queues for
+// broker-side webhook retry delays (TTL+DLX pure AMQP pattern). Called only
+// when BrokerDelaySchedule is non-empty. All operations are idempotent.
+//
+// Topology per tier i:
+//   - Queue: <queueName>.delay.<i>
+//   - x-message-ttl: schedule[i] in milliseconds (int64)
+//   - x-dead-letter-exchange: topic (the dispatch fanout exchange)
+//   - Bound to delay exchange with routing key strconv.Itoa(i)
+//
+// On TTL expiry the broker dead-letters the message back to topic (the fanout),
+// which re-enqueues it into the main consumer queue for the next handler attempt.
+func (s *Subscriber) declareDelayTopology(ch AMQPChannel, topic, queueName string, schedule []time.Duration) error {
+	delayExchange := queueName + ".delay"
+	if err := ch.ExchangeDeclare(delayExchange, "direct", true, false, false, false, nil); err != nil {
+		return fmt.Errorf("rabbitmq: declare delay exchange: %w", err)
+	}
+
+	for i, d := range schedule {
+		tierQueue := fmt.Sprintf("%s.delay.%d", queueName, i)
+		tierArgs := amqp.Table{
+			"x-message-ttl":          d.Milliseconds(), // int64 of milliseconds; TTL fires expiry to re-enter dispatch fanout
+			"x-dead-letter-exchange": topic,
+			// Reset the routing key on TTL-expiry dead-letter back to the canonical
+			// empty key. The republish put the message on this tier with routing
+			// key = tier index ("0"/"1"/…); without this reset that index would
+			// ride along when the message later exhausts and the main queue
+			// dead-letters it to the real DLX, so a direct DLX bound on "" would
+			// silently never receive the exhausted webhook. The dispatch exchange
+			// is fanout, so re-entry routing is unaffected by the key.
+			"x-dead-letter-routing-key": "",
+		}
+		if _, err := ch.QueueDeclare(tierQueue, true, false, false, false, tierArgs); err != nil {
+			// AMQP 406 PRECONDITION_FAILED is returned when the queue already
+			// exists with different arguments (e.g. a changed x-message-ttl from
+			// a new BrokerDelaySchedule). Changing the schedule requires the
+			// drain-before-delete runbook — a non-empty tier queue holds webhooks
+			// still waiting out their retry interval, so deleting it blindly drops
+			// pending retries.
+			return fmt.Errorf("rabbitmq: declare delay tier queue %d (%s): %w"+
+				" (hint: AMQP 406 PRECONDITION_FAILED means the queue exists with a"+
+				" different x-message-ttl; to change the schedule follow the"+
+				" drain-before-delete runbook in"+
+				" docs/ops/rabbitmq-webhook-delay-topology.md)", i, tierQueue, err)
+		}
+		if err := ch.QueueBind(tierQueue, strconv.Itoa(i), delayExchange, false, nil); err != nil {
+			return fmt.Errorf("rabbitmq: bind delay tier queue %d: %w", i, err)
+		}
+	}
 	return nil
 }
 
@@ -320,7 +469,7 @@ func (s *Subscriber) Setup(ctx context.Context, sub outbox.Subscription) error {
 	defer s.conn.ReleaseChannel(ch)
 
 	queueName := s.resolveQueueName(sub.Topic, sub.ConsumerGroup)
-	return s.declareTopology(ch, sub.Topic, queueName)
+	return s.declareTopology(ch, sub.Topic, queueName, sub.BrokerDelaySchedule)
 }
 
 // Ready implements outbox.Subscriber. RabbitMQ topology is declared synchronously
@@ -372,9 +521,10 @@ func (s *Subscriber) Subscribe(ctx context.Context, sub outbox.Subscription, han
 	}()
 
 	queueName := s.resolveQueueName(topic, consumerGroup)
+	schedule := sub.BrokerDelaySchedule
 
 	for {
-		err := s.subscribeOnce(subCtx, topic, queueName, handler)
+		err := s.subscribeOnce(subCtx, topic, queueName, schedule, handler)
 		if err == nil {
 			return nil // Clean exit: ctx canceled or subscriber closed.
 		}
@@ -450,6 +600,7 @@ func (s *Subscriber) awaitReconnect(ctx context.Context, topic, queueName string
 func (s *Subscriber) subscribeOnce(
 	ctx context.Context,
 	topic, queueName string,
+	schedule []time.Duration,
 	handler outbox.SubscriberHandler,
 ) error {
 	ch, err := s.conn.AcquireChannel()
@@ -478,7 +629,7 @@ func (s *Subscriber) subscribeOnce(
 	}
 
 	// Declare topology (exchange, DLX, queue, binding) — idempotent.
-	if err := s.declareTopology(ch, topic, queueName); err != nil {
+	if err := s.declareTopology(ch, topic, queueName, schedule); err != nil {
 		return setupErr("rabbitmq: declare topology", err, func() error {
 			return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPSubscribe, "rabbitmq: declare topology failed", err)
 		})
@@ -517,7 +668,7 @@ func (s *Subscriber) subscribeOnce(
 		slog.String("consumer", consumerTag),
 		slog.Int("prefetch", s.config.PrefetchCount))
 
-	loopErr := s.consumeLoop(ctx, run, deliveries, topic, handler)
+	loopErr := s.consumeLoop(ctx, run, deliveries, topic, queueName, schedule, handler)
 
 	// A19 fix: wait for all in-flight processDelivery goroutines of THIS run
 	// before closing the AMQP channel. This prevents Ack/Nack calls on a
@@ -616,7 +767,8 @@ func (s *Subscriber) consumeLoop(
 	ctx context.Context,
 	run *subscriptionRun,
 	deliveries <-chan amqp.Delivery,
-	topic string,
+	topic, queueName string,
+	schedule []time.Duration,
 	handler outbox.SubscriberHandler,
 ) error {
 	ch := run.ch
@@ -636,7 +788,7 @@ func (s *Subscriber) consumeLoop(
 			slog.Info("rabbitmq: intake stopped, entering drain mode",
 				slog.String(logKeyTopic, topic))
 			drainCtx := context.WithoutCancel(ctx)
-			return s.drainRemaining(drainCtx, run, deliveries, topic, handler)
+			return s.drainRemaining(drainCtx, run, deliveries, topic, queueName, schedule, handler)
 		default:
 		}
 
@@ -645,7 +797,7 @@ func (s *Subscriber) consumeLoop(
 			slog.Info("rabbitmq: intake stopped, entering drain mode",
 				slog.String(logKeyTopic, topic))
 			drainCtx := context.WithoutCancel(ctx)
-			return s.drainRemaining(drainCtx, run, deliveries, topic, handler)
+			return s.drainRemaining(drainCtx, run, deliveries, topic, queueName, schedule, handler)
 
 		case <-ctx.Done():
 			slog.Info("rabbitmq: subscriber context canceled",
@@ -669,7 +821,7 @@ func (s *Subscriber) consumeLoop(
 			go func(d amqp.Delivery) {
 				defer s.wg.Done()
 				defer run.markDeliveryDone()
-				s.processDelivery(ctx, ch, d, topic, handler)
+				s.processDelivery(ctx, ch, d, topic, queueName, schedule, handler)
 			}(delivery)
 		}
 	}
@@ -720,7 +872,8 @@ func (s *Subscriber) drainRemaining(
 	ctx context.Context,
 	run *subscriptionRun,
 	deliveries <-chan amqp.Delivery,
-	topic string,
+	topic, queueName string,
+	schedule []time.Duration,
 	handler outbox.SubscriberHandler,
 ) error {
 	ch := run.ch
@@ -740,7 +893,7 @@ func (s *Subscriber) drainRemaining(
 			go func(d amqp.Delivery) {
 				defer s.wg.Done()
 				defer run.markDeliveryDone()
-				s.processDelivery(ctx, ch, d, topic, handler)
+				s.processDelivery(ctx, ch, d, topic, queueName, schedule, handler)
 			}(d)
 		case <-timer.C():
 			slog.Warn("rabbitmq: drain deadline reached, broker did not acknowledge basic.cancel",
@@ -783,7 +936,8 @@ func (s *Subscriber) processDelivery(
 	ctx context.Context,
 	ch AMQPChannel,
 	delivery amqp.Delivery,
-	topic string,
+	topic, queueName string,
+	schedule []time.Duration,
 	handler outbox.SubscriberHandler,
 ) {
 	entry, err := unmarshalDelivery(delivery.Body)
@@ -849,7 +1003,7 @@ func (s *Subscriber) processDelivery(
 			slog.Any("error", res.Err))
 	}
 
-	s.dispatchDisposition(deliveryCtx, ch, delivery.DeliveryTag, res, settlement, topic, entry)
+	s.dispatchDisposition(deliveryCtx, ch, delivery, queueName, schedule, res, settlement, topic, entry)
 }
 
 // dispatchDisposition executes the broker-level disposition and settles the
@@ -864,15 +1018,23 @@ func (s *Subscriber) processDelivery(
 //
 // DispositionReject/Requeue: broker Nack first, then Release the receipt so
 // DLQ replay or redelivery can re-enter the Claim/Commit cycle cleanly.
+//
+// DispositionRequeue with non-empty schedule: uses TTL+DLX delay tiers instead
+// of immediate Nack(requeue=true). The delivery is republished to the per-tier
+// delay queue; the original message is Acked. Settlement is Released (not
+// Committed) so the redelivered message can re-enter the Claim/Commit cycle.
 func (s *Subscriber) dispatchDisposition(
 	ctx context.Context,
 	ch AMQPChannel,
-	tag uint64,
+	delivery amqp.Delivery,
+	queueName string,
+	schedule []time.Duration,
 	res outbox.DeliveryOutcome,
 	settlement outbox.Settlement,
 	topic string,
 	entry outbox.Entry,
 ) {
+	tag := delivery.DeliveryTag
 	eventID := entry.ID()
 	switch res.Disposition {
 	case outbox.DispositionAck:
@@ -891,6 +1053,12 @@ func (s *Subscriber) dispatchDisposition(
 		releaseSettlement(ctx, settlement, topic, eventID, "reject")
 		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, rejectResult, nil)
 	case outbox.DispositionRequeue:
+		if len(schedule) > 0 {
+			dp := delayDispatchCtx{res: res, settlement: settlement, topic: topic, entry: entry}
+			s.dispatchDelayedRequeue(ctx, ch, delivery, queueName, schedule, dp)
+			return
+		}
+		// Non-delayed requeue: immediate Nack+requeue (unchanged).
 		if nackErr := ch.Nack(tag, false, true); nackErr != nil {
 			slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: nack(requeue) failed",
 				slog.String(logKeyTopic, topic),
@@ -919,6 +1087,247 @@ func (s *Subscriber) dispatchDisposition(
 		releaseSettlement(ctx, settlement, topic, eventID, "unknown")
 		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultSuccess, nil)
 	}
+}
+
+// delayDispatchCtx bundles the settlement-tracking parameters threaded through
+// the delayed-requeue dispatch chain (dispatchDelayedRequeue →
+// republishToDelayTier / exhaustDelayBudget). Bundled to keep those helpers
+// under the 7-parameter threshold.
+type delayDispatchCtx struct {
+	res        outbox.DeliveryOutcome
+	settlement outbox.Settlement
+	topic      string
+	entry      outbox.Entry
+}
+
+// dispatchDelayedRequeue handles DispositionRequeue when BrokerDelaySchedule is
+// non-empty. It routes the message through a TTL+DLX delay tier queue instead
+// of immediate requeue. Cognitive complexity kept low by delegating the two
+// outcome branches to named helpers.
+//
+// queueName is threaded from subscribeOnce via the consume chain
+// (subscribeOnce → consumeLoop → drainRemaining → processDelivery →
+// dispatchDisposition → dispatchDelayedRequeue → republishToDelayTier).
+// It is used to build the delay exchange name (<queueName>.delay) so that
+// the publish always targets the exchange declared by declareDelayTopology,
+// regardless of ConsumerTag truncation or topic-substring ambiguity.
+func (s *Subscriber) dispatchDelayedRequeue(
+	ctx context.Context,
+	ch AMQPChannel,
+	delivery amqp.Delivery,
+	queueName string,
+	schedule []time.Duration,
+	dp delayDispatchCtx,
+) {
+	tag := delivery.DeliveryTag
+	eventID := dp.entry.ID()
+	// F6: only trust the x-webhook-attempt header on deliveries the broker
+	// attests came from this queue's own delay tier (x-death "expired"
+	// provenance). A message published straight to the dispatch exchange — a
+	// fresh first attempt, or a forged direct publish — carries no such record,
+	// so its attempt header is ignored and the delivery is treated as attempt 1.
+	// This fail-closed gate keeps the retry budget out of reach of producers
+	// that can publish to the dispatch exchange but cannot forge a broker
+	// x-death entry: a forged high attempt no longer forces a premature DLX, and
+	// a forged low attempt cannot extend retries beyond the schedule length.
+	attempt := 1
+	if deliveryFromDelayTier(delivery.Headers, queueName) {
+		attempt = readWebhookAttempt(delivery.Headers)
+	}
+
+	if attempt > len(schedule) {
+		// Retry budget exhausted: route to the real DLX (Nack without requeue).
+		s.exhaustDelayBudget(ctx, ch, tag, eventID, dp)
+		return
+	}
+
+	// Republish to the delay tier for this attempt.
+	s.republishToDelayTier(ctx, ch, delivery, queueName, attempt, dp)
+}
+
+// exhaustDelayBudget handles the retry-budget-exhausted path: Nack(requeue=false)
+// routes to the queue's real DLX, then releases the settlement.
+// Log level is Error (not Warn) because routing to DLX is correctness-affecting:
+// the message is permanently removed from the retry cycle.
+// Mirrors consumer_base.go:648 which also logs Error on retry-exhausted → DLX.
+func (s *Subscriber) exhaustDelayBudget(
+	ctx context.Context,
+	ch AMQPChannel,
+	tag uint64,
+	eventID string,
+	dp delayDispatchCtx,
+) {
+	slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: webhook retry budget exhausted, routing to DLX",
+		slog.String(logKeyTopic, dp.topic),
+		slog.String(logKeyEventID, eventID),
+		slog.String("process_reason", outbox.ProcessReasonRetryExhausted))
+	if nackErr := ch.Nack(tag, false, false); nackErr != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: nack(exhaust) failed",
+			slog.String(logKeyTopic, dp.topic),
+			slog.String(logKeyEventID, eventID),
+			slog.Any("error", nackErr))
+		releaseSettlement(ctx, dp.settlement, dp.topic, eventID, "exhaust")
+		outbox.NotifySettlement(ctx, dp.res, dp.entry, outbox.DispositionReject, outbox.SettlementResultNackFailed, nackErr)
+		return
+	}
+	releaseSettlement(ctx, dp.settlement, dp.topic, eventID, "exhaust")
+	outbox.NotifySettlement(ctx, dp.res, dp.entry, outbox.DispositionReject, outbox.SettlementResultRetryExhausted, nil)
+}
+
+// republishToDelayTier publishes the delivery body to the delay tier queue for
+// the given attempt with broker publisher confirmation, then Acks the original
+// delivery and releases (not commits) the settlement so the redelivered message
+// can re-enter the Claim/Commit cycle. The original is Acked only after the
+// broker confirms the delay-tier publish (F1) — otherwise the consume→publish→
+// ack ownership transfer would lose the webhook on a broker/channel drop between
+// publish and ack. On a publish/confirm failure it fails closed to the real DLX
+// (see failClosedDelayPublish) instead of hot-looping an immediate requeue.
+//
+// queueName is the canonical queue name threaded from subscribeOnce; it is used
+// to build <queueName>.delay so the exchange always matches the one declared by
+// declareDelayTopology regardless of ConsumerTag truncation.
+func (s *Subscriber) republishToDelayTier(
+	ctx context.Context,
+	ch AMQPChannel,
+	delivery amqp.Delivery,
+	queueName string,
+	attempt int,
+	dp delayDispatchCtx,
+) {
+	tag := delivery.DeliveryTag
+	eventID := dp.entry.ID()
+	delayExchange := queueName + ".delay"
+	routingKey := strconv.Itoa(attempt - 1)
+
+	// Copy headers, skipping RabbitMQ broker system headers (x-death,
+	// x-first-death-*, x-original-*) that the broker injects and grows on each
+	// dead-letter hop; carrying them forward pollutes redelivery and can confuse
+	// routing. x-webhook-attempt and all business headers are preserved.
+	headers := make(amqp.Table, len(delivery.Headers)+1)
+	for k, v := range delivery.Headers {
+		if isBrokerDeathHeader(k) {
+			continue
+		}
+		headers[k] = v
+	}
+	// attempt is bounded by len(schedule) which is a small slice in practice,
+	// so the int32 conversion is safe. Use explicit bounds to satisfy gosec G115.
+	nextAttempt := attempt + 1
+	if nextAttempt > 1<<30 { // defensive cap well within int32 range
+		nextAttempt = 1 << 30
+	}
+	headers[headerWebhookAttempt] = int32(nextAttempt)
+
+	pub := amqp.Publishing{
+		Headers:      headers,
+		Body:         delivery.Body,
+		DeliveryMode: amqp.Persistent,
+		ContentType:  delivery.ContentType,
+	}
+
+	// F1: publish to the delay tier with broker confirmation BEFORE acking the
+	// original. The delay round-trip is a consume→publish→ack ownership transfer;
+	// acking before the broker durably holds the republished copy risks losing
+	// the webhook on a broker/channel drop between publish and ack.
+	if publishErr := s.confirmPublishToDelay(ctx, delayExchange, routingKey, pub); publishErr != nil {
+		s.failClosedDelayPublish(ctx, ch, tag, attempt, publishErr, dp)
+		return
+	}
+
+	// Ack the original delivery — the delay queue now durably owns this message.
+	if ackErr := ch.Ack(tag, false); ackErr != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: ack(delay) failed",
+			slog.String(logKeyTopic, dp.topic),
+			slog.String(logKeyEventID, eventID),
+			slog.Any("error", ackErr))
+		releaseSettlement(ctx, dp.settlement, dp.topic, eventID, "delay_ack_failed")
+		outbox.NotifySettlement(ctx, dp.res, dp.entry, outbox.DispositionRequeue, outbox.SettlementResultNackFailed, ackErr)
+		return
+	}
+
+	// Release (not Commit) — the redelivered message has the same entry.ID and
+	// must re-enter the Claim path when it exits the delay tier.
+	releaseSettlement(ctx, dp.settlement, dp.topic, eventID, "delay_requeue")
+	outbox.NotifySettlement(ctx, dp.res, dp.entry, outbox.DispositionRequeue, outbox.SettlementResultSuccess, nil)
+}
+
+// confirmPublishToDelay publishes pub to the delay exchange on a dedicated
+// ephemeral channel in confirm mode and blocks until the broker durably
+// confirms receipt (or the confirm times out / the channel drops). Returning
+// nil means the broker accepted the message into the delay tier; only then may
+// the caller Ack the original delivery.
+//
+// A dedicated ephemeral channel is acquired per publish (closed on return)
+// rather than reusing the long-lived consumer channel: putting the consumer
+// channel into confirm mode would let a full NotifyPublish listener block the
+// connection reader and deadlock every channel on the connection. This mirrors
+// the Publisher's ephemeral-channel-per-publish strategy (see publisher.go);
+// webhook retries are low-frequency, so the per-retry channel cost is negligible.
+func (s *Subscriber) confirmPublishToDelay(ctx context.Context, exchange, routingKey string, pub amqp.Publishing) error {
+	ch, err := s.conn.AcquireChannel()
+	if err != nil {
+		return fmt.Errorf("rabbitmq: acquire delay publish channel: %w", err)
+	}
+	defer s.conn.CloseEphemeralChannel(ch)
+
+	if err := ch.Confirm(false); err != nil {
+		return fmt.Errorf("rabbitmq: enable confirm mode for delay publish: %w", err)
+	}
+	confirmCh := ch.NotifyPublish(make(chan amqp.Confirmation, 1))
+	if err := ch.PublishWithContext(ctx, exchange, routingKey, false, false, pub); err != nil {
+		return fmt.Errorf("rabbitmq: publish to delay tier: %w", err)
+	}
+
+	confirmTimer := s.clock.NewTimerAt(s.clock.Now().Add(s.conn.config.ConfirmTimeout))
+	defer confirmTimer.Stop()
+	select {
+	case confirm, ok := <-confirmCh:
+		if !ok {
+			return fmt.Errorf("rabbitmq: delay publish confirm channel closed before broker confirmation")
+		}
+		if !confirm.Ack {
+			return fmt.Errorf("rabbitmq: broker nacked delay publish")
+		}
+		return nil
+	case <-confirmTimer.C():
+		return fmt.Errorf("rabbitmq: delay publish confirm timed out after %s", s.conn.config.ConfirmTimeout)
+	case <-ctx.Done():
+		return fmt.Errorf("rabbitmq: delay publish canceled: %w", ctx.Err())
+	}
+}
+
+// failClosedDelayPublish handles a delay-tier publish/confirm failure by routing
+// the original delivery to the queue's real DLX via Nack(requeue=false). It does
+// NOT immediately requeue (Nack(requeue=true)): an immediate requeue redelivers
+// the SAME message with the SAME, un-advanced x-webhook-attempt, so a persistent
+// delay-infra fault would hot-loop forever without ever exhausting the retry
+// budget. Routing to the DLX is fail-closed — the webhook lands in the
+// dead-letter queue where ops can inspect/replay it, and the retry cycle ends.
+func (s *Subscriber) failClosedDelayPublish(
+	ctx context.Context,
+	ch AMQPChannel,
+	tag uint64,
+	attempt int,
+	publishErr error,
+	dp delayDispatchCtx,
+) {
+	eventID := dp.entry.ID()
+	slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: delay publish failed, routing to DLX (fail-closed)",
+		slog.String(logKeyTopic, dp.topic),
+		slog.String(logKeyEventID, eventID),
+		slog.Int("attempt", attempt),
+		slog.Any("error", publishErr))
+	if nackErr := ch.Nack(tag, false, false); nackErr != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: nack(fail-closed) failed",
+			slog.String(logKeyTopic, dp.topic),
+			slog.String(logKeyEventID, eventID),
+			slog.Any("error", nackErr))
+		releaseSettlement(ctx, dp.settlement, dp.topic, eventID, "delay_publish_failed")
+		outbox.NotifySettlement(ctx, dp.res, dp.entry, outbox.DispositionReject, outbox.SettlementResultNackFailed, nackErr)
+		return
+	}
+	releaseSettlement(ctx, dp.settlement, dp.topic, eventID, "delay_publish_failed")
+	outbox.NotifySettlement(ctx, dp.res, dp.entry, outbox.DispositionReject, outbox.SettlementResultSuccess, nil)
 }
 
 // dispatchAck handles the Commit→Ack path for DispositionAck.

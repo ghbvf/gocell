@@ -364,6 +364,119 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	_ = sub.Close(context.Background())
 }
 
+// TestIntegration_WebhookDelaySchedule_RoutesToDLQAfterExhaustion verifies the
+// broker-native delayed re-delivery path end to end against a real broker
+// (#1458, F3): an always-Requeue handler is redelivered through the TTL+DLX delay
+// tiers per the schedule and, once the attempt count exceeds the schedule length,
+// is Nack(requeue=false)'d to the queue's real DLX — where this test consumes it
+// and verifies the entry survived intact. The shared conformance suite asserts
+// the per-attempt delivery count; this test closes the gap that a count-only
+// assertion would pass even if the exhausted message were silently dropped
+// (DLX binding/routing fault) instead of dead-lettered.
+func TestIntegration_WebhookDelaySchedule_RoutesToDLQAfterExhaustion(t *testing.T) {
+	conn, cleanup := startRabbitMQ(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	pub := NewPublisher(clock.Real(), conn)
+
+	const (
+		topic       = "test.webhookdelay.e2e"
+		dlxExchange = "test.webhookdelay.e2e.dlx"
+		dlxQueue    = "test.webhookdelay.e2e.dlq"
+		mainQueue   = "test.webhookdelay.e2e.main"
+	)
+	// Two short tiers: deliver → delay.0 → delay.1 → exhaust → real DLX. Tiny
+	// TTLs keep the test fast while still exercising the real broker TTL→DLX hop
+	// (and the F1 publisher-confirm + F6 x-death provenance on the live path).
+	schedule := []time.Duration{testtime.D200ms, testtime.D200ms}
+	wantHandlerCalls := int32(len(schedule) + 1) // immediate attempt + one per tier
+
+	// --- Set up the real DLX where exhausted messages land ---
+	rawCh, err := conn.AcquireChannel()
+	require.NoError(t, err)
+	require.NoError(t, rawCh.ExchangeDeclare(dlxExchange, "direct", true, false, false, false, nil), "declare DLX exchange")
+	_, err = rawCh.QueueDeclare(dlxQueue, true, false, false, false, nil)
+	require.NoError(t, err, "declare DLQ queue")
+	require.NoError(t, rawCh.QueueBind(dlxQueue, "", dlxExchange, false, nil), "bind DLQ to DLX exchange")
+	conn.ReleaseChannel(rawCh)
+
+	// Broker-delay subscriptions run ConsumerBase in single-attempt pass-through,
+	// so the transport — not the in-process retry budget — owns the schedule.
+	cb, cbErr := outbox.NewConsumerBase(
+		&noopClaimer{},
+		outbox.ConsumerBaseConfig{RetryCount: 2, RetryBaseDelay: testtime.MediumPoll, IdempotencyTTL: time.Hour},
+		clock.Real(),
+	)
+	require.NoError(t, cbErr)
+
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
+		QueueName:     mainQueue,
+		PrefetchCount: 1,
+		DLXExchange:   dlxExchange,
+	})
+
+	subscription := outbox.Subscription{
+		Topic:               topic,
+		ConsumerGroup:       "test-webhookdelay-e2e",
+		CellID:              "test-webhookdelay-e2e",
+		BrokerDelaySchedule: schedule,
+	}
+
+	var callCount atomic.Int32
+	subCtx, subCancel := context.WithTimeout(ctx, testtime.CtxLong)
+	defer subCancel()
+
+	wrappedHandler := cb.Wrap(subscription, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		callCount.Add(1)
+		return outbox.Requeue(assert.AnError)
+	})
+
+	subErrCh := make(chan error, 1)
+	go func() {
+		subErrCh <- sub.Subscribe(subCtx, subscription, wrappedHandler)
+	}()
+
+	waitForSubscriberReady(t, conn, mainQueue, subErrCh, testtime.EventuallyLong)
+
+	entry := mustNewEntry(t, "test.webhookdelay.transient", []byte(`{"delay":"e2e"}`),
+		outbox.WithID("evt-webhookdelay-e2e-001"), outbox.WithCreatedAt(time.Now().UTC()))
+	payload, err := outbox.MarshalEnvelope(entry)
+	require.NoError(t, err)
+	require.NoError(t, pub.Publish(ctx, topic, payload), "publish should succeed")
+
+	// --- Consume the real DLX and verify the exhausted entry arrived intact ---
+	dlxCh, err := conn.AcquireChannel()
+	require.NoError(t, err)
+	defer conn.ReleaseChannel(dlxCh)
+	dlxMsgs, err := dlxCh.Consume(dlxQueue, "webhookdelay-dlx-consumer", true, false, false, false, nil)
+	require.NoError(t, err, "consume from DLQ")
+
+	var dlEntry outbox.Entry
+	testwait.External(t, "amqp-webhookdelay-dlq", func() bool {
+		select {
+		case msg := <-dlxMsgs:
+			decoded, decodeErr := outbox.UnmarshalEnvelope("", msg.Body)
+			if decodeErr != nil {
+				return false
+			}
+			dlEntry = decoded
+			return true
+		default:
+			return false
+		}
+	}, testtime.D15s, testtime.D200ms,
+		"exhausted webhook must reach the DLQ — handler called %d times", callCount.Load())
+
+	assert.Equal(t, "evt-webhookdelay-e2e-001", dlEntry.ID(), "dead-lettered entry ID should match")
+	assert.JSONEq(t, `{"delay":"e2e"}`, string(dlEntry.Payload()))
+	assert.GreaterOrEqual(t, callCount.Load(), wantHandlerCalls,
+		"handler must run once per scheduled attempt (immediate + one per tier) before exhaustion")
+
+	subCancel()
+	_ = sub.Close(context.Background())
+}
+
 // TestIntegration_ConnectionRecovery verifies that the Connection automatically
 // reconnects after the broker forcibly closes all client connections.
 //

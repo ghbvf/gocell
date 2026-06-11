@@ -113,12 +113,13 @@ func WithEventRouterCollector(c EventCollector) Option {
 }
 
 type handlerConfig struct {
-	topic         string
-	handler       outbox.EntryHandler
-	consumerGroup string
-	cellID        string // cellID is the observability owner; must be provided by caller — no fallback to consumerGroup (K#07).
-	sliceID       string
-	contract      contractspec.ContractSpec
+	topic               string
+	handler             outbox.EntryHandler
+	consumerGroup       string
+	cellID              string // cellID is the observability owner; must be provided by caller — no fallback to consumerGroup (K#07).
+	sliceID             string
+	contract            contractspec.ContractSpec
+	brokerDelaySchedule []time.Duration // #1458: per-attempt webhook retry delays (empty for ordinary subscriptions).
 }
 
 // Router manages event subscription lifecycle. It is populated from
@@ -242,10 +243,11 @@ func (r *Router) AddContractHandler(
 	// Validators run outside the lock to avoid holding the subscription store
 	// during potentially slow or user-provided checks.
 	candidateSub := outbox.Subscription{
-		Topic:         spec.Topic,
-		ConsumerGroup: consumerGroup,
-		CellID:        ownerCellID,
-		SliceID:       req.SliceID,
+		Topic:               spec.Topic,
+		ConsumerGroup:       consumerGroup,
+		CellID:              ownerCellID,
+		SliceID:             req.SliceID,
+		BrokerDelaySchedule: req.BrokerDelaySchedule,
 	}
 	r.mu.Lock()
 	currentValidators := make([]cell.SubscriptionValidator, len(r.validators))
@@ -268,12 +270,13 @@ func (r *Router) AddContractHandler(
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.handlers = append(r.handlers, handlerConfig{
-		topic:         spec.Topic,
-		handler:       handler,
-		consumerGroup: consumerGroup,
-		cellID:        ownerCellID,
-		sliceID:       req.SliceID,
-		contract:      spec,
+		topic:               spec.Topic,
+		handler:             handler,
+		consumerGroup:       consumerGroup,
+		cellID:              ownerCellID,
+		sliceID:             req.SliceID,
+		contract:            spec,
+		brokerDelaySchedule: req.BrokerDelaySchedule,
 	})
 	return nil
 }
@@ -589,10 +592,11 @@ func (r *Router) awaitAllReady(ctx context.Context, handlers []handlerConfig) <-
 
 func (h handlerConfig) subscription() outbox.Subscription {
 	sub := outbox.Subscription{
-		Topic:         h.topic,
-		ConsumerGroup: h.consumerGroup,
-		CellID:        h.cellID,
-		SliceID:       h.sliceID,
+		Topic:               h.topic,
+		ConsumerGroup:       h.consumerGroup,
+		CellID:              h.cellID,
+		SliceID:             h.sliceID,
+		BrokerDelaySchedule: h.brokerDelaySchedule,
 	}
 	if h.contract.ID != "" {
 		sub.ContractID = h.contract.ID

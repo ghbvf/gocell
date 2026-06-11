@@ -371,6 +371,8 @@ func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) SubscriberH
 	topic := sub.Topic
 	consumerGroup := sub.ConsumerGroup
 	cellID := sub.CellID
+	passthrough := cb.brokerDelayPassthrough(sub)
+	dims := deliveryDims{cellID: cellID, consumerGroup: consumerGroup, topic: topic}
 	return func(ctx context.Context, entry Entry) (DeliveryOutcome, Settlement) {
 		idempotencyKey := fmt.Sprintf("%s:%s", consumerGroup, entry.id)
 
@@ -383,9 +385,9 @@ func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) SubscriberH
 					slog.String(logKeyTopic, topic),
 					slog.String(logKeyConsumerGroup, consumerGroup),
 					slog.Any("error", err))
-				return cb.retryLoop(ctx, cellID, consumerGroup, topic, entry, handler), nil
+				return cb.retryLoop(ctx, cellID, consumerGroup, topic, entry, handler, passthrough), nil
 			}
-			return cb.handleClaimState(ctx, deliveryDims{cellID: cellID, consumerGroup: consumerGroup, topic: topic}, entry, handler, state, receipt)
+			return cb.handleClaimState(ctx, dims, entry, handler, state, receipt, passthrough)
 		}
 
 		// Fail-closed: claimWithRetry handles all attempts with backoff + jitter.
@@ -399,8 +401,20 @@ func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) SubscriberH
 				slog.Any("error", err))
 			return deliveryFrom(Requeue(err)), nil
 		}
-		return cb.handleClaimState(ctx, deliveryDims{cellID: cellID, consumerGroup: consumerGroup, topic: topic}, entry, handler, state, receipt)
+		return cb.handleClaimState(ctx, dims, entry, handler, state, receipt, passthrough)
 	}
+}
+
+// brokerDelayPassthrough reports whether the subscription delegates retry timing
+// to a broker/in-memory delay schedule (#1458). When true, ConsumerBase runs the
+// handler exactly once and returns its verdict verbatim — it must NOT run its own
+// in-process retry loop, and crucially must NOT convert a transient Requeue into
+// the retry-exhausted Reject, because the transport (rabbitmq TTL+DLX delay
+// tiers / in-memory schedule) owns the per-attempt delay, the retry budget, and
+// the final DLX routing. Stacking ConsumerBase's exhaustion logic here would
+// dead-letter the entry on the first failure and bypass the delay schedule.
+func (cb *ConsumerBase) brokerDelayPassthrough(sub Subscription) bool {
+	return len(sub.BrokerDelaySchedule) > 0
 }
 
 // claimWithRetry attempts Claimer.Claim up to ClaimRetryCount times with
@@ -490,8 +504,9 @@ func (cb *ConsumerBase) handleClaimState(
 	handler EntryHandler,
 	state idempotency.ClaimState,
 	receipt idempotency.Receipt,
+	passthrough bool,
 ) (DeliveryOutcome, Settlement) {
-	cellID, consumerGroup, topic := dims.cellID, dims.consumerGroup, dims.topic
+	topic := dims.topic
 	switch state {
 	case idempotency.ClaimDone:
 		logWithContext(ctx, slog.LevelDebug, "outbox: event already processed, skipping",
@@ -514,7 +529,7 @@ func (cb *ConsumerBase) handleClaimState(
 		return deliveryFrom(Requeue(nil)), nil
 	default:
 		// ClaimAcquired -- start lease-renewal goroutine before invoking handler.
-		result := cb.runWithRenewal(ctx, cellID, consumerGroup, topic, entry, handler, receipt)
+		result := cb.runWithRenewal(ctx, dims, entry, handler, receipt, passthrough)
 		return result, receipt
 	}
 }
@@ -578,7 +593,16 @@ func (cb *ConsumerBase) retryLoop(
 	topic string,
 	entry Entry,
 	handler EntryHandler,
+	passthrough bool,
 ) DeliveryOutcome {
+	if passthrough {
+		// Broker-delay subscriptions (#1458): the transport owns retry timing,
+		// the retry budget, and DLX routing, so run the handler exactly once and
+		// return its verdict verbatim. Crucially this skips the retry-exhausted
+		// → Reject conversion below: a transient Requeue must reach the subscriber
+		// as a Requeue so it can apply the per-attempt delay, not be dead-lettered.
+		return deliveryFrom(handler(ctx, entry))
+	}
 	var lastResult HandleResult
 	for attempt := range cb.config.RetryCount {
 		lastResult = handler(ctx, entry)
@@ -659,17 +683,16 @@ func (cb *ConsumerBase) retryLoop(
 // Cognitive complexity is kept ≤15 by delegating the ticker loop to leaseRenewalLoop.
 func (cb *ConsumerBase) runWithRenewal(
 	ctx context.Context,
-	cellID string,
-	consumerGroup string,
-	topic string,
+	dims deliveryDims,
 	entry Entry,
 	handler EntryHandler,
 	receipt idempotency.Receipt,
+	passthrough bool,
 ) DeliveryOutcome {
 	interval := cb.config.LeaseRenewalInterval
 	// Skip renewal when disabled (negative) or receipt is nil.
 	if interval <= 0 || receipt == nil {
-		return cb.retryLoop(ctx, cellID, consumerGroup, topic, entry, handler)
+		return cb.retryLoop(ctx, dims.cellID, dims.consumerGroup, dims.topic, entry, handler, passthrough)
 	}
 
 	var leaseLost atomic.Bool
@@ -680,13 +703,13 @@ func (cb *ConsumerBase) runWithRenewal(
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		cb.leaseRenewalLoop(renewCtx, topic, entry, receipt, interval, func() {
+		cb.leaseRenewalLoop(renewCtx, dims.topic, entry, receipt, interval, func() {
 			leaseLost.Store(true)
 			cancelRenew()
 		})
 	}()
 
-	result := cb.retryLoop(renewCtx, cellID, consumerGroup, topic, entry, handler)
+	result := cb.retryLoop(renewCtx, dims.cellID, dims.consumerGroup, dims.topic, entry, handler, passthrough)
 
 	// Signal the renewal goroutine to stop and wait for it.
 	cancelRenew()
@@ -700,7 +723,7 @@ func (cb *ConsumerBase) runWithRenewal(
 	if leaseLost.Load() && result.Disposition == DispositionAck {
 		logWithContext(ctx, slog.LevelWarn, "outbox: lease lost during processing, downgrading Ack to Requeue (hard fence)",
 			slog.String(logKeyEventID, entry.id),
-			slog.String(logKeyTopic, topic))
+			slog.String(logKeyTopic, dims.topic))
 		return DeliveryOutcome{
 			Disposition:   DispositionRequeue,
 			Err:           idempotency.ErrLeaseExpired,

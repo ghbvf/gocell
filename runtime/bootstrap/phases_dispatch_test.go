@@ -264,3 +264,36 @@ func TestDrainWebhookDispatchers_HappyPath_RegistersHandler(t *testing.T) {
 	assert.Equal(t, 1, evtRouter.HandlerCount(),
 		"one dispatcher must register exactly one handler on the event router")
 }
+
+// TestDrainWebhookDispatchers_HappyPath_LocksSvixSchedule verifies the full
+// schedule funnel end-to-end (F10): the webhook dispatcher's BrokerDelaySchedule
+// reaches the final outbox.Subscription registered on the event router, equal to
+// the canonical Svix timeline. A capturing SubscriptionValidator observes the
+// candidate subscription the router builds from BuildConsumers →
+// WithSubscriptionBrokerDelaySchedule → eventrouter. HandlerCount alone could not
+// catch a regression that drops the schedule between the consumer and the router.
+func TestDrainWebhookDispatchers_HappyPath_LocksSvixSchedule(t *testing.T) {
+	t.Parallel()
+	dc := newWebhookDispatchCell()
+	s := buildPhaseStateWithWebhookCells(t, dc)
+
+	clk := clockmock.New(whFixedNow)
+	b := New(clk, WithConsumerBase(newTestConsumerBase(t)))
+	b.webhookSourceStore = whTestStore(t)
+
+	evtRouter := newDispatchEvtRouter(t, b)
+
+	var captured outbox.Subscription
+	var count int
+	evtRouter.AddSubscriptionValidator(func(sub outbox.Subscription) error {
+		captured = sub
+		count++
+		return nil
+	})
+
+	err := b.drainWebhookDispatchers(s, evtRouter)
+	require.NoError(t, err, "happy path must not error")
+	require.Equal(t, 1, count, "exactly one webhook dispatch subscription must be registered")
+	assert.Equal(t, kwh.DefaultSvixSchedule().Delays(), captured.BrokerDelaySchedule,
+		"webhook dispatch subscription must carry the full Svix retry schedule end-to-end")
+}
