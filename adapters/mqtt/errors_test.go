@@ -13,6 +13,200 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+// TestClassifyConnackReason_AllSpecCodes exercises every code in the
+// connackReasonTable (MQTT v5 §3.2.2.2) so that a code added to the table
+// without a correct class will fail the test.
+func TestClassifyConnackReason_AllSpecCodes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		reasonCode byte
+		wantClass  connackClass
+		wantCode   errcode.Code
+	}{
+		// §3.2.2.2 full table
+		{"0x00-Success", 0x00, classTransient, ErrAdapterMQTTConnect},
+		{"0x80-UnspecifiedError", 0x80, classTransient, ErrAdapterMQTTConnect},
+		{"0x81-MalformedPacket", 0x81, classBootstrapFatal, ErrAdapterMQTTConnectPermanent},
+		{"0x82-ProtocolError", 0x82, classBootstrapFatal, ErrAdapterMQTTConnectPermanent},
+		{"0x83-ImplementationSpecificError", 0x83, classTransient, ErrAdapterMQTTConnect},
+		{"0x84-UnsupportedProtocolVersion", 0x84, classBootstrapFatal, ErrAdapterMQTTConnectPermanent},
+		{"0x85-ClientIdentifierNotValid", 0x85, classBootstrapFatal, ErrAdapterMQTTConnectPermanent},
+		{"0x86-BadUserNameOrPassword", 0x86, classPermanentRetain, ErrAdapterMQTTConnectPermanent},
+		{"0x87-NotAuthorized", 0x87, classPermanentRetain, ErrAdapterMQTTConnectPermanent},
+		{"0x88-ServerUnavailable", 0x88, classTransient, ErrAdapterMQTTConnect},
+		{"0x89-ServerBusy", 0x89, classTransient, ErrAdapterMQTTConnect},
+		{"0x8A-Banned", 0x8A, classBootstrapFatal, ErrAdapterMQTTConnectPermanent},
+		{"0x8C-BadAuthenticationMethod", 0x8C, classPermanentRetain, ErrAdapterMQTTConnectPermanent},
+		{"0x90-TopicNameInvalid", 0x90, classBootstrapFatal, ErrAdapterMQTTConnectPermanent},
+		{"0x95-PacketTooLarge", 0x95, classBootstrapFatal, ErrAdapterMQTTConnectPermanent},
+		{"0x97-QuotaExceeded", 0x97, classTransient, ErrAdapterMQTTConnect},
+		{"0x99-PayloadFormatInvalid", 0x99, classBootstrapFatal, ErrAdapterMQTTConnectPermanent},
+		{"0x9A-RetainNotSupported", 0x9A, classBootstrapFatal, ErrAdapterMQTTConnectPermanent},
+		{"0x9B-QoSNotSupported", 0x9B, classBootstrapFatal, ErrAdapterMQTTConnectPermanent},
+		{"0x9C-UseAnotherServer", 0x9C, classTransient, ErrAdapterMQTTConnect},
+		{"0x9D-ServerMoved", 0x9D, classBootstrapFatal, ErrAdapterMQTTConnectPermanent},
+		{"0x9F-ConnectionRateExceeded", 0x9F, classTransient, ErrAdapterMQTTConnect},
+		// TLS handshake → bootstrap fatal
+		// (tested separately below as it uses a different error shape)
+		// non-ConnackError → transient
+		// (tested separately below)
+		// unknown non-spec byte → transient
+		{"0xFE-unknown-nonspec", 0xFE, classTransient, ErrAdapterMQTTConnect},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			connackErr := &autopaho.ConnackError{ReasonCode: tc.reasonCode}
+			wrapped := fmt.Errorf("connection failed: %w", connackErr)
+			gotClass, gotCode := classifyConnackReason(wrapped)
+			if gotClass != tc.wantClass {
+				t.Errorf("classifyConnackReason(0x%02x) class = %v, want %v", tc.reasonCode, gotClass, tc.wantClass)
+			}
+			if gotCode != tc.wantCode {
+				t.Errorf("classifyConnackReason(0x%02x) code = %v, want %v", tc.reasonCode, gotCode, tc.wantCode)
+			}
+		})
+	}
+}
+
+func TestClassifyConnackReason_TLSError_BootstrapFatal(t *testing.T) {
+	t.Parallel()
+	tlsErr := &tls.CertificateVerificationError{
+		UnverifiedCertificates: nil,
+		Err:                    x509.UnknownAuthorityError{},
+	}
+	gotClass, gotCode := classifyConnackReason(tlsErr)
+	if gotClass != classBootstrapFatal {
+		t.Errorf("TLS: class = %v, want classBootstrapFatal", gotClass)
+	}
+	if gotCode != ErrAdapterMQTTConnectPermanent {
+		t.Errorf("TLS: code = %v, want ErrAdapterMQTTConnectPermanent", gotCode)
+	}
+}
+
+func TestClassifyConnackReason_NonConnackError_Transient(t *testing.T) {
+	t.Parallel()
+	plainErr := errors.New("dial tcp: connection refused")
+	gotClass, gotCode := classifyConnackReason(plainErr)
+	if gotClass != classTransient {
+		t.Errorf("non-ConnackError: class = %v, want classTransient", gotClass)
+	}
+	if gotCode != ErrAdapterMQTTConnect {
+		t.Errorf("non-ConnackError: code = %v, want ErrAdapterMQTTConnect", gotCode)
+	}
+}
+
+// TestClassifyPubackReason_AllSpecCodes exercises every code in the pubackReasonTable
+// (MQTT v5 §3.4.2.1) including 0x91 (PacketIdentifierInUse) which was previously a
+// silent default.
+func TestClassifyPubackReason_AllSpecCodes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		code     byte
+		wantCode errcode.Code
+		wantKind errcode.Kind
+	}{
+		{"0x00-Success", 0x00, "", errcode.KindInternal},
+		{"0x10-NoMatchingSubscribers", 0x10, ErrAdapterMQTTPublishNoSubscribers, errcode.KindUnavailable},
+		{"0x80-UnspecifiedError", 0x80, ErrAdapterMQTTPublishRejected, errcode.KindInternal},
+		{"0x83-ImplementationSpecificError", 0x83, ErrAdapterMQTTPublishRejected, errcode.KindInternal},
+		{"0x87-NotAuthorized", 0x87, ErrAdapterMQTTPublishNotAuthorized, errcode.KindUnavailable},
+		{"0x90-TopicNameInvalid", 0x90, ErrAdapterMQTTPublishRejected, errcode.KindInvalid},
+		{"0x91-PacketIdentifierInUse", 0x91, ErrAdapterMQTTPublishRejected, errcode.KindInternal}, // was default; now explicit
+		{"0x97-QuotaExceeded", 0x97, ErrAdapterMQTTPublishRateLimited, errcode.KindUnavailable},
+		{"0x99-PayloadFormatInvalid", 0x99, ErrAdapterMQTTPublishPayloadFormatInvalid, errcode.KindInvalid},
+		// unknown byte → default behavior
+		{"0xAB-unknown", 0xAB, ErrAdapterMQTTPublishRejected, errcode.KindInternal},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gotCode, gotKind := classifyPubackReason(tc.code)
+			if gotCode != tc.wantCode {
+				t.Errorf("classifyPubackReason(0x%02x) code = %q, want %q", tc.code, gotCode, tc.wantCode)
+			}
+			if gotKind != tc.wantKind {
+				t.Errorf("classifyPubackReason(0x%02x) kind = %v, want %v", tc.code, gotKind, tc.wantKind)
+			}
+		})
+	}
+}
+
+// TestClassifySubackReason_AllSpecCodes exercises every code in the subackReasonTable
+// (MQTT v5 §3.9.3) including 0x83 and 0x91 which were previously silent defaults.
+func TestClassifySubackReason_AllSpecCodes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		code     byte
+		wantCode errcode.Code
+		wantKind errcode.Kind
+	}{
+		{"0x00-GrantedQoS0", 0x00, "", errcode.KindInternal},
+		{"0x01-GrantedQoS1", 0x01, "", errcode.KindInternal},
+		{"0x02-GrantedQoS2", 0x02, "", errcode.KindInternal},
+		{"0x80-UnspecifiedError", 0x80, ErrAdapterMQTTSubscribe, errcode.KindInternal},
+		{"0x83-ImplementationSpecificError", 0x83, ErrAdapterMQTTSubscribe, errcode.KindInternal}, // was default; now explicit
+		{"0x87-NotAuthorized", 0x87, ErrAdapterMQTTSubscribeNotAuthorized, errcode.KindInternal},
+		{"0x8F-TopicFilterInvalid", 0x8F, ErrAdapterMQTTSubscribe, errcode.KindInternal},
+		{"0x91-PacketIdentifierInUse", 0x91, ErrAdapterMQTTSubscribe, errcode.KindInternal}, // was default; now explicit
+		{"0x97-QuotaExceeded", 0x97, ErrAdapterMQTTSubscribeRateLimited, errcode.KindUnavailable},
+		{"0x9E-SharedSubscriptionsNotSupported", 0x9E, ErrAdapterMQTTSharedSubsUnsupported, errcode.KindInternal},
+		{"0xA1-SubscriptionIdentifiersNotSupported", 0xA1, ErrAdapterMQTTSubscriptionIDsUnsupported, errcode.KindInternal},
+		{"0xA2-WildcardSubscriptionsNotSupported", 0xA2, ErrAdapterMQTTSubscribe, errcode.KindInternal},
+		// unknown byte → default behavior
+		{"0xC0-unknown", 0xC0, ErrAdapterMQTTSubscribe, errcode.KindInternal},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gotCode, gotKind := classifySubackReason(tc.code)
+			if gotCode != tc.wantCode {
+				t.Errorf("classifySubackReason(0x%02x) code = %q, want %q", tc.code, gotCode, tc.wantCode)
+			}
+			if gotKind != tc.wantKind {
+				t.Errorf("classifySubackReason(0x%02x) kind = %v, want %v", tc.code, gotKind, tc.wantKind)
+			}
+		})
+	}
+}
+
+// TestValidateReasonTable_PanicOnDuplicateCode ensures validateReasonTable panics
+// when the same code appears more than once in a connackReason slice.
+func TestValidateReasonTable_PanicOnDuplicateCode(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Errorf("validateReasonTable did not panic on duplicate code")
+		}
+	}()
+	bad := []connackReason{
+		{0x80, "UnspecifiedError", classTransient},
+		{0x80, "UnspecifiedErrorDup", classTransient}, // duplicate
+	}
+	validateConnackReasonTable(bad)
+}
+
+// TestValidateReasonTable_PanicOnClassInvalid ensures validateReasonTable panics
+// when any row carries classInvalid (the zero value sentinel).
+func TestValidateReasonTable_PanicOnClassInvalid(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Errorf("validateReasonTable did not panic on classInvalid row")
+		}
+	}()
+	bad := []connackReason{
+		{0x80, "UnspecifiedError", classInvalid}, // classInvalid is the zero value
+	}
+	validateConnackReasonTable(bad)
+}
+
 func TestClassifyConnackReason(t *testing.T) {
 	tests := []struct {
 		name       string
