@@ -1036,7 +1036,7 @@ func TestHandleQuery_TraceIDFilter_NonAdminScopedToActorSelf(t *testing.T) {
 }
 
 // TestHandleQuery_ColumnMaskMatrix is the per-principal column-masking matrix
-// (epic #1337 PR-12, T12.4 unit-level analogue): admin / non-admin user / device
+// (epic #1337 PR-12, T12.4 unit-level counterpart): admin / non-admin user / device
 // callers see DIFFERENT visible columns from auditFieldMask, discharged through the
 // ResourceProjection funnel. Same row contents per owner axis isolate masking from
 // data. admin → full view; non-admin self → correlationId+traceId masked; device →
