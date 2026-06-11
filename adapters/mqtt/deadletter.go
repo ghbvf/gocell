@@ -36,7 +36,7 @@ func (s *Subscriber) routeDeadLetter(ctx context.Context, originalTopic string, 
 		// in its Internal detail ("topic=<raw>") — sanitize it like the topic field
 		// (redactErr would mask secrets but not strip control chars; CWE-117).
 		slog.LogAttrs(ctx, slog.LevelError, "mqtt: cannot mint $dead topic; skipping DLT publish (message acked-as-poison)",
-			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
+			slog.String(logKeyClientID, s.conn.cfg.clientID.String()),
 			slog.String(logKeyTopic, safeTopicForLog(originalTopic)),
 			slog.String("reason", string(reason)),
 			slog.String("error", safeErrForLog(err)))
@@ -53,7 +53,7 @@ func (s *Subscriber) routeDeadLetter(ctx context.Context, originalTopic string, 
 		// redactErr: broker errors may echo connection strings / credentials
 		// (key=value), consistent with connection.go / publisher.go logging.
 		slog.LogAttrs(ctx, slog.LevelError, "mqtt: dead-letter publish failed; message will be acked-as-poison without DLT capture",
-			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
+			slog.String(logKeyClientID, s.conn.cfg.clientID.String()),
 			slog.String(logKeyDLXTopic, safeTopicForLog(dlt.String())),
 			slog.String("reason", string(reason)),
 			slog.Any("error", redactErr(pubErr)))
@@ -63,7 +63,7 @@ func (s *Subscriber) routeDeadLetter(ctx context.Context, originalTopic string, 
 
 	s.collector.RecordDeadLetter(ctx, reason)
 	slog.LogAttrs(ctx, slog.LevelWarn, "mqtt: routed message to dead-letter sink",
-		slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
+		slog.String(logKeyClientID, s.conn.cfg.clientID.String()),
 		slog.String(logKeyTopic, safeTopicForLog(originalTopic)),
 		slog.String(logKeyDLXTopic, safeTopicForLog(dlt.String())),
 		slog.String("reason", string(reason)))

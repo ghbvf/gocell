@@ -37,6 +37,7 @@ var adapterManagedResourceOptOut = map[string]string{
 	"adapters/mqtt.BackoffConfig":                 "config: construction input value",
 	"adapters/mqtt.ClientID":                      "value-object: sealed typed client identifier string",
 	"adapters/mqtt.Config":                        "config: construction input value",
+	"adapters/mqtt.ConfigOption":                  "config: functional option",
 	"adapters/mqtt.ConnectionCollector":           "interface: observability collector contract, not a resource",
 	"adapters/mqtt.ConnectionOption":              "config: functional option",
 	"adapters/mqtt.ConsumeFailureReason":          "value-object: failure-reason enum",

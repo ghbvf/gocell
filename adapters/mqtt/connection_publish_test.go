@@ -111,20 +111,22 @@ func stopSharedInternalBroker() {
 	}
 }
 
-// newInternalConfig returns a minimal valid Config pointing at addr.
-func newInternalConfig(addr string) Config {
+// newInternalConfig returns a minimal valid Config pointing at addr. Extra opts
+// apply after the base options so a caller overrides any knob through the public
+// With* path (e.g. WithMaximumPacketSize) instead of mutating the sealed Config's
+// unexported fields.
+func newInternalConfig(t *testing.T, addr string, opts ...ConfigOption) Config {
+	t.Helper()
 	id, _ := ParseEphemeralClientID("testcell", "internal")
-	return Config{
-		ClientID:        id,
-		Brokers:         []string{fmt.Sprintf("tcp://%s", addr)},
-		ConnectTimeout:  testtime.D5s,
-		ConnectDeadline: testtime.D10s,
-		KeepAlive:       testtime.D30s,
-		Backoff: BackoffConfig{
-			BaseDelay: testtime.D100ms,
-			MaxDelay:  testtime.D2s,
-		},
+	base := []ConfigOption{
+		WithConnectTimeout(testtime.D5s),
+		WithConnectDeadline(testtime.D10s),
+		WithKeepAlive(testtime.D30s),
+		WithBackoff(BackoffConfig{BaseDelay: testtime.D100ms, MaxDelay: testtime.D2s}),
 	}
+	cfg, err := NewConfig(id, []string{fmt.Sprintf("tcp://%s", addr)}, append(base, opts...)...)
+	require.NoError(t, err)
+	return cfg
 }
 
 // TestConnection_Publish_AfterClose verifies that Publish on a closed connection
@@ -135,7 +137,7 @@ func TestConnection_Publish_AfterClose(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newInternalConfig(addr)
+	cfg := newInternalConfig(t, addr)
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()
@@ -168,7 +170,7 @@ func TestConnection_Publish_QoS1Success(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newInternalConfig(addr)
+	cfg := newInternalConfig(t, addr)
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()
@@ -196,7 +198,7 @@ func TestConnection_Publish_ContextCanceled(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newInternalConfig(addr)
+	cfg := newInternalConfig(t, addr)
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()

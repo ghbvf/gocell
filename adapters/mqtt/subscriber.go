@@ -402,7 +402,7 @@ func (s *Subscriber) adjustInflight(ctx context.Context, delta int64) {
 // broker redelivery) because StopIntake has fired.
 func (s *Subscriber) logIntakeStoppedDrop(pb *paho.Publish) {
 	slog.Info("mqtt: intake stopped, dropping delivery for redelivery",
-		slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
+		slog.String(logKeyClientID, s.conn.cfg.clientID.String()),
 		slog.String(logKeyTopic, safeTopicForLog(pb.Topic)))
 }
 
@@ -420,7 +420,7 @@ func (s *Subscriber) processDelivery(ctx context.Context, pb *paho.Publish, hand
 		poisonErr := errcode.Wrap(errcode.KindInvalid, ErrAdapterMQTTUnmarshalEnvelope,
 			"mqtt: unmarshal envelope failed", err)
 		slog.LogAttrs(ctx, slog.LevelError, "mqtt: unmarshal envelope failed, routing raw payload to $dead then acking poison",
-			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
+			slog.String(logKeyClientID, s.conn.cfg.clientID.String()),
 			slog.String(logKeyTopic, safeTopicForLog(pb.Topic)),
 			slog.Any("error", poisonErr))
 		s.collector.RecordConsumeFailure(ctx, consumeReasonUnmarshal)
@@ -464,7 +464,7 @@ func (s *Subscriber) dispatchDisposition(
 		// rabbitmq's Nack-before-release). routeDeadLetter's broker round-trip would
 		// otherwise widen that window.
 		slog.LogAttrs(ctx, slog.LevelError, "mqtt: handler rejected entry, routing to $dead then acking poison",
-			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
+			slog.String(logKeyClientID, s.conn.cfg.clientID.String()),
 			slog.String(logKeyTopic, entry.Topic()),
 			slog.String(logKeyEventID, entry.ID()),
 			slog.Any("error", res.Err))
@@ -489,7 +489,7 @@ func (s *Subscriber) dispatchDisposition(
 		// is the correct behavior. There is deliberately no app-level re-dispatch
 		// loop and no $dead routing on Requeue (those would be Option A).
 		slog.LogAttrs(ctx, slog.LevelWarn, "mqtt: handler requeued entry, leaving unacked for reconnect redelivery (degraded-state signal)",
-			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
+			slog.String(logKeyClientID, s.conn.cfg.clientID.String()),
 			slog.String(logKeyTopic, entry.Topic()),
 			slog.String(logKeyEventID, entry.ID()),
 			slog.Any("error", res.Err))
@@ -500,7 +500,7 @@ func (s *Subscriber) dispatchDisposition(
 		// Zero / invalid Disposition: treat as Requeue (leave unacked) + Release.
 		// Same Option C reconnect-redelivery semantics as Requeue; no $dead routing.
 		slog.LogAttrs(ctx, slog.LevelError, "mqtt: unknown disposition, leaving unacked (treated as requeue)",
-			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
+			slog.String(logKeyClientID, s.conn.cfg.clientID.String()),
 			slog.String(logKeyTopic, entry.Topic()),
 			slog.String(logKeyEventID, entry.ID()),
 			slog.String("disposition", res.Disposition.String()))
@@ -524,7 +524,7 @@ func (s *Subscriber) dispatchAck(
 		cancel()
 		if commitErr != nil {
 			slog.LogAttrs(ctx, slog.LevelError, "mqtt: settlement commit failed (lease may have expired); leaving unacked",
-				slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
+				slog.String(logKeyClientID, s.conn.cfg.clientID.String()),
 				slog.String(logKeyTopic, entry.Topic()),
 				slog.String(logKeyEventID, entry.ID()),
 				slog.Any("error", commitErr))
@@ -540,7 +540,7 @@ func (s *Subscriber) dispatchAck(
 		// Settlement already committed; broker ack failure means the message is
 		// redelivered, but the idempotency key (ClaimDone) prevents reprocessing.
 		slog.LogAttrs(ctx, slog.LevelError, "mqtt: ack failed after commit; will redeliver (idempotency guards reprocess)",
-			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
+			slog.String(logKeyClientID, s.conn.cfg.clientID.String()),
 			slog.String(logKeyTopic, entry.Topic()),
 			slog.String(logKeyEventID, entry.ID()),
 			slog.Any("error", ackErr))
@@ -560,7 +560,7 @@ func (s *Subscriber) dispatchAck(
 func (s *Subscriber) ackPoison(ctx context.Context, pb *paho.Publish, reason string) error {
 	if ackErr := s.conn.ack(pb); ackErr != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "mqtt: ack of poison message failed",
-			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
+			slog.String(logKeyClientID, s.conn.cfg.clientID.String()),
 			slog.String(logKeyTopic, safeTopicForLog(pb.Topic)),
 			slog.String("reason", reason),
 			slog.Any("error", ackErr))
@@ -581,7 +581,7 @@ func (s *Subscriber) releaseSettlement(ctx context.Context, settlement outbox.Se
 	defer cancel()
 	if relErr := settlement.Release(rctx); relErr != nil {
 		slog.LogAttrs(rctx, slog.LevelError, "mqtt: settlement release failed",
-			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
+			slog.String(logKeyClientID, s.conn.cfg.clientID.String()),
 			slog.String(logKeyTopic, entry.Topic()),
 			slog.String(logKeyEventID, entry.ID()),
 			slog.String("reason", reason),
@@ -619,7 +619,7 @@ func (s *Subscriber) StopIntake(ctx context.Context) error {
 		case <-drainTimer.C():
 			pollTimer.Stop()
 			slog.Warn("mqtt: StopIntake drain timeout, returning fail-closed",
-				slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
+				slog.String(logKeyClientID, s.conn.cfg.clientID.String()),
 				slog.Duration("budget", s.config.StopIntakeDrainTimeout),
 				slog.Int64("residual", s.inflight.Load()))
 			return errcode.New(errcode.KindInternal, ErrAdapterMQTTSubscriberCloseTimeout,
@@ -658,7 +658,7 @@ func (s *Subscriber) cancelWithBudget(ctx context.Context, cancel func()) {
 	case <-done:
 	case <-callCtx.Done():
 		slog.Warn("mqtt: route cancel during StopIntake exceeded per-call budget or ctx canceled",
-			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
+			slog.String(logKeyClientID, s.conn.cfg.clientID.String()),
 			slog.Any("error", callCtx.Err()))
 	}
 }

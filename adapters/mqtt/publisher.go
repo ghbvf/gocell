@@ -58,7 +58,7 @@ func WithPublisherCollector(c PublisherCollector) PublisherOption {
 
 // NewPublisher constructs a Publisher bound to conn and ns. clk is a required
 // positional parameter (CLOCK-POSITIONAL-INJECTION-01). The publish-timeout
-// budget comes from conn.cfg.PublishTimeout — 0 means no adapter timeout (the
+// budget comes from conn.cfg.publishTimeout — 0 means no adapter timeout (the
 // caller-provided ctx deadline is honored as-is).
 //
 // Returns error if conn is nil or ns is the zero-value namespace (which would
@@ -85,7 +85,7 @@ func NewPublisher(clk clock.Clock, conn *Connection, ns TopicNamespace, opts ...
 		conn:           conn,
 		ns:             ns,
 		collector:      NoopPublisherCollector{},
-		publishTimeout: conn.cfg.PublishTimeout,
+		publishTimeout: conn.cfg.publishTimeout,
 	}
 	for _, o := range opts {
 		o(p)
@@ -99,8 +99,9 @@ func NewPublisher(clk clock.Clock, conn *Connection, ns TopicNamespace, opts ...
 //
 // QoS 1 is used for every publish (caller cannot override).
 //
-// PublishTimeout: when Config.PublishTimeout > 0, a child ctx with that deadline
-// is derived; when 0, the caller-provided ctx is honored as-is.
+// PublishTimeout: when the configured publish timeout (WithPublishTimeout) > 0, a
+// child ctx with that deadline is derived; when 0, the caller-provided ctx is
+// honored as-is.
 //
 // PUBACK 0x10 (NoMatchingSubscribers) is treated as success — counted in
 // mqtt_publish_total and ack_duration, with an additional slog.Warn for operator
@@ -128,10 +129,11 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 		return err
 	}
 
-	// Payload size enforcement (per Config.MaximumPacketSize when non-zero).
+	// Payload size enforcement (per the configured maximum packet size,
+	// WithMaximumPacketSize, when non-zero).
 	// Compare as int64 to avoid G115 integer overflow: len(payload) fits int64,
 	// and MaximumPacketSize is uint32 (max 2^32-1), both representable in int64.
-	if max := p.conn.cfg.MaximumPacketSize; max > 0 && int64(len(payload)) > int64(max) {
+	if max := p.conn.cfg.maximumPacketSize; max > 0 && int64(len(payload)) > int64(max) {
 		p.collector.RecordPublishFailure(ctx, PublishFailurePayloadTooLarge)
 		return errcode.New(errcode.KindInvalid, ErrAdapterMQTTPayloadTooLarge,
 			"mqtt: payload exceeds maximum packet size",
@@ -166,7 +168,7 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 	// is a concern for the target sink.
 	if resp != nil && resp.ReasonCode == 0x10 {
 		slog.Warn("mqtt: publish succeeded with no matching subscribers",
-			slog.String("client_id", p.conn.cfg.ClientID.String()),
+			slog.String("client_id", p.conn.cfg.clientID.String()),
 			slog.String("topic", t.String()))
 	}
 	p.collector.RecordPublishSuccess(ctx, p.clk.Since(start))
@@ -241,8 +243,9 @@ func (p *Publisher) Close(ctx context.Context) error {
 //   - only the adapter PublishTimeout child fired (callerCtx alive) → puback_timeout.
 //   - neither ctx involved → publish_error (transport).
 //
-// When Config.PublishTimeout == 0, publishCtx == callerCtx, so the first branch
-// owns every deadline/cancel and puback_timeout is never (mis)reported.
+// When the configured publish timeout (WithPublishTimeout) == 0, publishCtx ==
+// callerCtx, so the first branch owns every deadline/cancel and puback_timeout is
+// never (mis)reported.
 func classifyPublishErr(callerCtx, publishCtx context.Context, err error) PublishFailureReason {
 	if callerCtx.Err() != nil {
 		return PublishFailureContextCanceled

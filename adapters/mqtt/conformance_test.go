@@ -63,7 +63,7 @@ func TestMQTT_Conformance(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
 
-		conn, err := Open(ctx, clock.Real(), newTestConfig(t, "conformance"))
+		conn, err := Open(ctx, clock.Real(), newITestConfig(t, "conformance"))
 		require.NoError(t, err, "Open conformance connection")
 		t.Cleanup(func() {
 			closeCtx, c := context.WithTimeout(context.Background(), testtime.D5s)
