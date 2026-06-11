@@ -3,9 +3,11 @@ package projection
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/authz"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
@@ -103,6 +105,29 @@ func TestNewProjection(t *testing.T) {
 				t.Errorf("projected view = %s, want %s", gotJSON, want)
 			}
 		})
+	}
+}
+
+// TestNewProjection_DottedMaskFailClosedCode pins that an un-dischargeable
+// (dotted) obligation fails closed with the dedicated KindInternal
+// ErrAuthObligationUnenforceable code — so operators can alert on it distinctly
+// from arbitrary 500s, and so the masker never serves an un-masked column.
+func TestNewProjection_DottedMaskFailClosedCode(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewProjection(authz.FieldMask{Fields: []string{"profile.ssn"}}, map[string]any{"profile": "x"})
+	if err == nil {
+		t.Fatal("NewProjection accepted a dotted mask, want fail-closed error")
+	}
+	var ce *errcode.Error
+	if !errors.As(err, &ce) {
+		t.Fatalf("error is not *errcode.Error: %v", err)
+	}
+	if ce.Code != errcode.ErrAuthObligationUnenforceable {
+		t.Errorf("code = %s, want %s", ce.Code, errcode.ErrAuthObligationUnenforceable)
+	}
+	if ce.Kind != errcode.KindInternal {
+		t.Errorf("kind = %v, want KindInternal (fail-closed 500)", ce.Kind)
 	}
 }
 

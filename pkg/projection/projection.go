@@ -73,13 +73,15 @@ func NewProjectionList(mask authz.FieldMask, rows []map[string]any) ([]ResourceP
 // nested path the masker does not traverse. Silently leaving such a column
 // un-masked would be a fail-OPEN leak, so — per XACML's "a PEP that cannot
 // discharge a mandatory obligation MUST NOT permit the access" — we fail closed
-// with a 500 instead of serving an un-masked view. The offending column is
-// recorded as a server-only internal detail (never on the wire). Nested-path
-// masking is deferred until a real nested obligation exists (PR-9/PR-12).
+// instead of serving an un-masked view. The dedicated
+// ErrAuthObligationUnenforceable code (KindInternal → 500) lets operators alert
+// on un-dischargeable obligations distinctly from arbitrary 500s; the offending
+// column is recorded as a server-only internal detail (never on the wire).
+// Nested-path masking is deferred until a real nested obligation exists (PR-9/PR-12).
 func requireEnforceable(mask authz.FieldMask) error {
 	for _, f := range mask.Fields {
 		if strings.ContainsRune(f, '.') {
-			return errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			return errcode.New(errcode.KindInternal, errcode.ErrAuthObligationUnenforceable,
 				"projection: PEP cannot discharge nested field-mask obligation",
 				errcode.WithInternal(errcode.InternalAttr("column", f)))
 		}
