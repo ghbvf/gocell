@@ -20,10 +20,13 @@
 //     gate; AllFieldsUnexported is the REVERSE self-check that pins this property
 //     so a future PR re-exporting the field fails at PR/nightly time instead of
 //     silently re-opening literal construction.
-//   - Hard (downstream / go/types): SoleReconstructionSurface pins the COMPLETE
-//     set of exported producers to {NewProjection, NewProjectionList}, so no
-//     second forge path (a new exported func returning the type) can be added
-//     inside pkg/projection without tripping this archtest.
+//   - Hard (downstream / go/types): SoleReconstructionSurface scans the exported
+//     producer surface — package-level FUNCS and exported TYPES' exported METHODS
+//     (value / pointer / slice / pointer-slice return forms) — and pins it to
+//     {NewProjection, NewProjectionList} with an empty method-mirror set, so no
+//     second forge path (a new exported func OR method returning the type) can be
+//     added inside pkg/projection without tripping this archtest. Mirrors the
+//     func+method scan in outbox_entry_sealed_construction_test.go.
 //
 // SCOPE — what this seal does NOT cover. PR-11 ships the unforgeable carrier
 // only. It does NOT force production read handlers to actually return a
@@ -103,17 +106,31 @@ func TestResourceProjectionSealed01_WireSurfacePresent(t *testing.T) {
 // sets of exported package-level functions in pkg/projection that may RETURN a
 // ResourceProjection (the single-resource funnel) or a []ResourceProjection (the
 // list funnel). Both always discharge the FieldMask obligation.
+// resourceProjectionMirrorTypes is the exhaustive set of exported TYPES whose
+// exported methods may yield a ResourceProjection — currently EMPTY: no type has
+// a producer method (MarshalJSON returns []byte), so the sealed view can only
+// come from the two funcs above. A new type method returning the sealed type
+// trips the mirror diff.
 var (
 	resourceProjectionScalarFuncs = map[string]struct{}{"NewProjection": {}}
 	resourceProjectionSliceFuncs  = map[string]struct{}{"NewProjectionList": {}}
+	resourceProjectionMirrorTypes = map[string]struct{}{}
 )
 
 // TestResourceProjectionSealed01_SoleReconstructionSurface pins the COMPLETE set
-// of exported funcs in pkg/projection that can yield a ResourceProjection (value
-// or pointer) or a []ResourceProjection. The composite-literal seal only blocks
-// `projection.ResourceProjection{...}`; a new exported func returning the type
-// would be a fresh forge path that skips masking and that the literal seal does
-// not cover. This go/types reverse self-check fails when either set drifts.
+// of exported producer surfaces in pkg/projection that can yield a
+// ResourceProjection. It scans both exported package-level FUNCS and exported
+// TYPES' exported METHODS, in value / pointer / slice / pointer-slice return
+// forms (mirroring outbox_entry_sealed_construction_test.go). The
+// composite-literal seal only blocks `projection.ResourceProjection{...}`; a new
+// exported func OR method returning the type would be a fresh forge path that
+// skips masking and that the literal seal does not cover. This go/types reverse
+// self-check fails when any of the three expected sets drifts (funcs→scalar,
+// funcs→slice, types-with-producer-method).
+//
+// Residual blind spot (accepted): exotic container returns (map[K]T, chan T,
+// fixed arrays) are not scanned — they are not realistic producer surfaces for a
+// sealed view type. Extend the scan here if such a surface is ever introduced.
 func TestResourceProjectionSealed01_SoleReconstructionSurface(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -133,34 +150,53 @@ func TestResourceProjectionSealed01_SoleReconstructionSurface(t *testing.T) {
 				return []Diagnostic{{Message: "RESOURCE-PROJECTION-SEALED-01/SoleReconstructionSurface: ResourceProjection not found"}}
 			}
 			projType := obj.Type()
-			sliceType := types.NewSlice(projType)
 
-			var scalarFuncs, sliceFuncs []string
+			var scalarFuncs, sliceFuncs, mirrorTypes []string
 			for _, name := range scope.Names() {
 				o := scope.Lookup(name)
 				if !o.Exported() {
 					continue
 				}
-				fn, ok := o.(*types.Func)
-				if !ok {
-					continue
-				}
-				sig, ok := fn.Type().(*types.Signature)
-				if !ok {
-					continue
-				}
-				if sigReturnsType(sig, projType) {
-					scalarFuncs = append(scalarFuncs, name)
-				}
-				if sigReturnsSlice(sig, sliceType) {
-					sliceFuncs = append(sliceFuncs, name)
+				switch obj := o.(type) {
+				case *types.Func:
+					sig, ok := obj.Type().(*types.Signature)
+					if !ok {
+						continue
+					}
+					if sigReturnsType(sig, projType) {
+						scalarFuncs = append(scalarFuncs, name)
+					}
+					if sigReturnsSliceOf(sig, projType) {
+						sliceFuncs = append(sliceFuncs, name)
+					}
+				case *types.TypeName:
+					named, ok := obj.Type().(*types.Named)
+					if !ok {
+						continue
+					}
+					for i := 0; i < named.NumMethods(); i++ {
+						m := named.Method(i)
+						if !m.Exported() {
+							continue
+						}
+						sig, ok := m.Type().(*types.Signature)
+						if !ok {
+							continue
+						}
+						if sigReturnsType(sig, projType) || sigReturnsSliceOf(sig, projType) {
+							mirrorTypes = append(mirrorTypes, name)
+							break
+						}
+					}
 				}
 			}
 
 			diags = append(diags, diffResourceProjectionSurface(
 				"exported funcs returning ResourceProjection", resourceProjectionScalarFuncs, scalarFuncs)...)
 			diags = append(diags, diffResourceProjectionSurface(
-				"exported funcs returning []ResourceProjection", resourceProjectionSliceFuncs, sliceFuncs)...)
+				"exported funcs returning []ResourceProjection (or []*ResourceProjection)", resourceProjectionSliceFuncs, sliceFuncs)...)
+			diags = append(diags, diffResourceProjectionSurface(
+				"exported types with a method returning ResourceProjection", resourceProjectionMirrorTypes, mirrorTypes)...)
 			return nil
 		})
 
@@ -183,12 +219,16 @@ func TestResourceProjectionSealed01_ZeroLiteralInert(t *testing.T) {
 	}
 }
 
-// sigReturnsSlice reports whether sig has any result identical to want (a slice
-// type). Complements the shared sigReturnsType, which covers value/pointer forms.
-func sigReturnsSlice(sig *types.Signature, want types.Type) bool {
+// sigReturnsSliceOf reports whether sig has any result identical to []elem or
+// []*elem. Complements the shared sigReturnsType (value/pointer forms), closing
+// the slice-of-pointer producer blind spot.
+func sigReturnsSliceOf(sig *types.Signature, elem types.Type) bool {
+	sliceVal := types.NewSlice(elem)
+	slicePtr := types.NewSlice(types.NewPointer(elem))
 	res := sig.Results()
 	for i := 0; i < res.Len(); i++ {
-		if types.Identical(res.At(i).Type(), want) {
+		rt := res.At(i).Type()
+		if types.Identical(rt, sliceVal) || types.Identical(rt, slicePtr) {
 			return true
 		}
 	}

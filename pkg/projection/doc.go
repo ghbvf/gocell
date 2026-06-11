@@ -24,9 +24,11 @@
 // Masking is top-level only; an un-dischargeable (dotted/nested) obligation
 // fails closed rather than leaking an un-masked column (see requireEnforceable).
 //
-// The masked sentinel is HTML-escaped by encoding/json on the wire (the bytes
-// are "<REDACTED>", not the literal "<REDACTED>"); consumers matching
-// the sentinel in a JSON body must decode first or compare the escaped form.
+// On the wire the masked sentinel is HTML-escaped by encoding/json: the JSON
+// bytes are \u003cREDACTED\u003e, not a literal <REDACTED>. A consumer
+// matching the masked value in a raw JSON body must compare that
+// \u003cREDACTED\u003e escaped form (or json-decode first, which restores the
+// literal <REDACTED>).
 //
 // # Immutability contract
 //
