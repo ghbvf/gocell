@@ -9,6 +9,7 @@ package conformance
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -56,6 +57,10 @@ func RunDeviceRepoConformance(t *testing.T, factory DeviceRepoFactory, features 
 	t.Run("Cert/CreateBareDeviceNormalizes", func(t *testing.T) { runCreateBareDeviceNormalizes(t, factory, features) })
 	t.Run("Cert/RenewalCandidatesNearExpiry", func(t *testing.T) { runCertRenewalCandidatesNearExpiry(t, factory, features) })
 	t.Run("Cert/MarkRenewalRequestedCAS", func(t *testing.T) { runMarkCertRenewalRequestedCAS(t, factory, features) })
+	t.Run("Cert/RenewalCandidatesBatchLimit", func(t *testing.T) { runCertRenewalCandidatesBatchLimit(t, factory, features) })
+	t.Run("Cert/RenewalNullRequestedAtMigrationBridge", func(t *testing.T) {
+		runCertRenewalNullRequestedAtMigrationBridge(t, factory, features)
+	})
 }
 
 func inTx(t *testing.T, ctx context.Context, txRunner persistence.TxRunner, features Features, fn func(ctx context.Context) error) error {
@@ -346,8 +351,9 @@ func runCreateBareDeviceNormalizes(t *testing.T, factory DeviceRepoFactory, feat
 }
 
 // runCertRenewalCandidatesNearExpiry covers the scan filter + ordering: only
-// certs expiring at/before the cutoff AND not yet renewal-requested for their
-// current epoch are returned, sorted by expiry ASC then id ASC.
+// certs expiring at/before the cutoff AND renewal-eligible are returned,
+// sorted by expiry ASC then id ASC. Eligibility: new epoch (never requested),
+// OR stale timestamp (<= retryBefore), OR zero/NULL timestamp (migration bridge).
 func runCertRenewalCandidatesNearExpiry(t *testing.T, factory DeviceRepoFactory, features Features) {
 	t.Helper()
 	repo, tx, now, cleanup := factory(t)
@@ -355,6 +361,9 @@ func runCertRenewalCandidatesNearExpiry(t *testing.T, factory DeviceRepoFactory,
 	ctx := context.Background()
 	base := now()
 	cutoff := base.Add(30 * 24 * time.Hour)
+	// retryBefore well in the past — any RenewalRequestedAt set in past tests
+	// is considered stale; a near-recent stamp will be set for the "excluded" case.
+	retryBefore := base.Add(-100 * 24 * time.Hour)
 
 	mk := func(id string, epoch int64, expiresAt time.Time, requested int64) *domain.Device {
 		return &domain.Device{
@@ -362,34 +371,51 @@ func runCertRenewalCandidatesNearExpiry(t *testing.T, factory DeviceRepoFactory,
 			CertEpoch: epoch, CertExpiresAt: expiresAt, RenewalRequestedEpoch: requested,
 		}
 	}
-	// c-near: before cutoff, not requested -> candidate (sorts first by expiry).
+	// c-near: before cutoff, epoch never requested (RenewalRequestedEpoch != CertEpoch) -> candidate.
 	createDevice(t, ctx, repo, tx, features, mk("c-near", 2, cutoff.Add(-time.Hour), 0))
 	// c-at: exactly at cutoff -> candidate (<= is inclusive).
 	createDevice(t, ctx, repo, tx, features, mk("c-at", 3, cutoff, 0))
 	// c-later: after cutoff -> excluded.
 	createDevice(t, ctx, repo, tx, features, mk("c-later", 4, cutoff.Add(time.Hour), 0))
-	// c-req: renewal already requested for the current epoch -> filtered.
-	createDevice(t, ctx, repo, tx, features, mk("c-req", 5, cutoff.Add(-2*time.Hour), 5))
+	// c-req-recent: same epoch, requested RECENTLY (after retryBefore) -> excluded.
+	// RenewalRequestedAt = base (which is after retryBefore = base-100d).
+	cReqRecent := mk("c-req-recent", 5, cutoff.Add(-2*time.Hour), 5)
+	cReqRecent.RenewalRequestedAt = base // recently requested -> within window
+	createDevice(t, ctx, repo, tx, features, cReqRecent)
 	// c-none: zero expiry (no cert issued) -> skipped.
 	createDevice(t, ctx, repo, tx, features, mk("c-none", 1, time.Time{}, 0))
 
-	got, err := repo.ListCertificateRenewalCandidates(ctx, cutoff)
+	// c-stale: same epoch, but RenewalRequestedAt is stale (<= retryBefore) -> re-eligible.
+	// retryBefore = base-100d; staleAt = base-200d (clearly stale).
+	staleAt := base.Add(-200 * 24 * time.Hour)
+	cStale := mk("c-stale", 6, cutoff.Add(-3*time.Hour), 6)
+	cStale.RenewalRequestedAt = staleAt
+	createDevice(t, ctx, repo, tx, features, cStale)
+
+	got, err := repo.ListCertificateRenewalCandidates(ctx, cutoff, retryBefore, 100)
 	if err != nil {
 		t.Fatalf("ListCertificateRenewalCandidates: %v", err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("expected 2 candidates, got %d: %+v", len(got), got)
+	// Expected: c-stale (earliest expiry = cutoff-3h), c-near (cutoff-1h), c-at (cutoff).
+	// c-req-recent is excluded (requested recently, same epoch).
+	// c-later excluded (after cutoff). c-none excluded (no cert).
+	if len(got) != 3 {
+		t.Fatalf("expected 3 candidates, got %d: %+v", len(got), got)
 	}
-	if got[0].DeviceID != "c-near" || got[0].CertEpoch != 2 {
-		t.Fatalf("candidate[0] = %+v, want c-near epoch 2", got[0])
+	if got[0].DeviceID != "c-stale" {
+		t.Fatalf("candidate[0] = %+v, want c-stale (earliest expiry)", got[0])
 	}
-	if got[1].DeviceID != "c-at" || got[1].CertEpoch != 3 {
-		t.Fatalf("candidate[1] = %+v, want c-at epoch 3", got[1])
+	if got[1].DeviceID != "c-near" || got[1].CertEpoch != 2 {
+		t.Fatalf("candidate[1] = %+v, want c-near epoch 2", got[1])
+	}
+	if got[2].DeviceID != "c-at" || got[2].CertEpoch != 3 {
+		t.Fatalf("candidate[2] = %+v, want c-at epoch 3", got[2])
 	}
 }
 
 // runMarkCertRenewalRequestedCAS covers the compare-and-set: a matching epoch
-// marks; a stale epoch (cert re-issued) is a no-op.
+// marks both RenewalRequestedEpoch and RenewalRequestedAt; a stale epoch is a
+// no-op; re-marking the same epoch refreshes RenewalRequestedAt.
 func runMarkCertRenewalRequestedCAS(t *testing.T, factory DeviceRepoFactory, features Features) {
 	t.Helper()
 	repo, tx, now, cleanup := factory(t)
@@ -402,9 +428,11 @@ func runMarkCertRenewalRequestedCAS(t *testing.T, factory DeviceRepoFactory, fea
 		CertEpoch: 7, CertExpiresAt: base.Add(time.Hour),
 	})
 
-	// Matching epoch -> marks.
+	requestedAt := base.Add(-time.Minute)
+
+	// Matching epoch -> marks RenewalRequestedEpoch and RenewalRequestedAt.
 	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
-		return repo.MarkCertRenewalRequested(c, "mark-1", 7)
+		return repo.MarkCertRenewalRequested(c, "mark-1", 7, requestedAt)
 	}); err != nil {
 		t.Fatalf("MarkCertRenewalRequested(7): %v", err)
 	}
@@ -415,25 +443,135 @@ func runMarkCertRenewalRequestedCAS(t *testing.T, factory DeviceRepoFactory, fea
 	if got.RenewalRequestedEpoch != 7 {
 		t.Fatalf("after mark epoch 7, RenewalRequestedEpoch = %d, want 7", got.RenewalRequestedEpoch)
 	}
+	if !got.RenewalRequestedAt.Equal(requestedAt) {
+		t.Fatalf("after mark, RenewalRequestedAt = %v, want %v", got.RenewalRequestedAt, requestedAt)
+	}
 
-	// Stale epoch (cert is at 7, mark 6) -> no-op, leaves 7 intact.
+	// Re-mark the SAME epoch with a later requestedAt -> refreshes RenewalRequestedAt.
+	laterRequestedAt := base
 	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
-		return repo.MarkCertRenewalRequested(c, "mark-1", 6)
+		return repo.MarkCertRenewalRequested(c, "mark-1", 7, laterRequestedAt)
 	}); err != nil {
-		t.Fatalf("MarkCertRenewalRequested(6): %v", err)
+		t.Fatalf("MarkCertRenewalRequested(7, later): %v", err)
 	}
 	got2, err := repo.GetByID(ctx, "mark-1")
 	if err != nil {
+		t.Fatalf("GetByID after re-mark: %v", err)
+	}
+	if !got2.RenewalRequestedAt.Equal(laterRequestedAt) {
+		t.Fatalf("re-mark same epoch must refresh RenewalRequestedAt: got %v, want %v",
+			got2.RenewalRequestedAt, laterRequestedAt)
+	}
+
+	// Stale epoch (cert is at 7, mark 6) -> no-op, leaves 7 intact.
+	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
+		return repo.MarkCertRenewalRequested(c, "mark-1", 6, base)
+	}); err != nil {
+		t.Fatalf("MarkCertRenewalRequested(6): %v", err)
+	}
+	got3, err := repo.GetByID(ctx, "mark-1")
+	if err != nil {
 		t.Fatalf("GetByID after stale mark: %v", err)
 	}
-	if got2.RenewalRequestedEpoch != 7 {
-		t.Fatalf("stale-epoch mark must be a no-op; RenewalRequestedEpoch = %d, want 7", got2.RenewalRequestedEpoch)
+	if got3.RenewalRequestedEpoch != 7 {
+		t.Fatalf("stale-epoch mark must be a no-op; RenewalRequestedEpoch = %d, want 7", got3.RenewalRequestedEpoch)
 	}
 
 	// Absent device -> documented no-op: zero rows affected is not an error.
 	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
-		return repo.MarkCertRenewalRequested(c, "no-such-device", 1)
+		return repo.MarkCertRenewalRequested(c, "no-such-device", 1, base)
 	}); err != nil {
 		t.Fatalf("MarkCertRenewalRequested(absent device): %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Certificate-renewal: batch limit (#1820)
+// ---------------------------------------------------------------------------
+
+// runCertRenewalCandidatesBatchLimit verifies the LIMIT + ORDER BY contract:
+// seeding N=5 near-expiry eligible devices and calling with limit=3 returns
+// exactly 3 rows and they are the 3 with the earliest cert_expires_at.
+func runCertRenewalCandidatesBatchLimit(t *testing.T, factory DeviceRepoFactory, features Features) {
+	t.Helper()
+	repo, tx, now, cleanup := factory(t)
+	defer cleanup()
+	ctx := context.Background()
+	base := now()
+	cutoff := base.Add(30 * 24 * time.Hour)
+	retryBefore := base.Add(-100 * 24 * time.Hour)
+
+	// Seed 5 eligible near-expiry devices with distinct ascending expiries.
+	for i := 0; i < 5; i++ {
+		expiry := cutoff.Add(-time.Duration(5-i) * time.Hour) // i=0 earliest, i=4 latest
+		d := &domain.Device{
+			ID:            fmt.Sprintf("bl-%d", i),
+			Name:          fmt.Sprintf("bl-%d", i),
+			Status:        "online",
+			LastSeen:      base,
+			CertEpoch:     2,
+			CertExpiresAt: expiry,
+		}
+		createDevice(t, ctx, repo, tx, features, d)
+	}
+
+	got, err := repo.ListCertificateRenewalCandidates(ctx, cutoff, retryBefore, 3)
+	if err != nil {
+		t.Fatalf("ListCertificateRenewalCandidates(limit=3): %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected exactly 3 results (limit=3), got %d: %+v", len(got), got)
+	}
+	// The 3 returned must be the 3 with the earliest expiry (bl-0, bl-1, bl-2).
+	for idx, cand := range got {
+		want := fmt.Sprintf("bl-%d", idx)
+		if cand.DeviceID != want {
+			t.Fatalf("result[%d].DeviceID = %q, want %q (earliest-expiry first)", idx, cand.DeviceID, want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Certificate-renewal: IS-NULL migration bridge (#1820)
+// ---------------------------------------------------------------------------
+
+// runCertRenewalNullRequestedAtMigrationBridge is the red-case guarding the
+// IS-NULL/zero bridge in ListCertificateRenewalCandidates. A device whose
+// RenewalRequestedEpoch == CertEpoch but RenewalRequestedAt is zero (the
+// pre-060 marked-row shape written before the column existed) must still be
+// returned as a candidate — the IS NULL / zero disjunct re-includes it so
+// those rows are not permanently stuck after the migration.
+func runCertRenewalNullRequestedAtMigrationBridge(t *testing.T, factory DeviceRepoFactory, features Features) {
+	t.Helper()
+	repo, tx, now, cleanup := factory(t)
+	defer cleanup()
+	ctx := context.Background()
+	base := now()
+	cutoff := base.Add(30 * 24 * time.Hour)
+	retryBefore := base // any retryBefore; zero RenewalRequestedAt must always win
+
+	// Seed a device with epoch == requestedEpoch (same) AND RenewalRequestedAt zero
+	// — this is the pre-migration-bridge shape.
+	d := &domain.Device{
+		ID:                    "bridge-1",
+		Name:                  "bridge-1",
+		Status:                "online",
+		LastSeen:              base,
+		CertEpoch:             3,
+		CertExpiresAt:         cutoff.Add(-time.Hour),
+		RenewalRequestedEpoch: 3,
+		// RenewalRequestedAt intentionally left zero
+	}
+	createDevice(t, ctx, repo, tx, features, d)
+
+	got, err := repo.ListCertificateRenewalCandidates(ctx, cutoff, retryBefore, 100)
+	if err != nil {
+		t.Fatalf("ListCertificateRenewalCandidates: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 candidate (bridge row re-included via IS NULL/zero), got %d: %+v", len(got), got)
+	}
+	if got[0].DeviceID != "bridge-1" {
+		t.Fatalf("expected bridge-1, got %q", got[0].DeviceID)
 	}
 }

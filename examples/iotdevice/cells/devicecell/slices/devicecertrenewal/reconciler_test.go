@@ -25,6 +25,15 @@ var certTestBase = time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
 
 const certRenewalTestThreshold = 7 * 24 * time.Hour
 
+// certRenewalTestPolicy is the standard test policy. RetryInterval is 24h so
+// tests that do not advance the clock (window not elapsed) still see 1 emit.
+var certRenewalTestPolicy = Policy{
+	Threshold:     certRenewalTestThreshold,
+	RetryInterval: 24 * time.Hour,
+	BatchSize:     100,
+	BatchRequeue:  10 * time.Millisecond,
+}
+
 // seedCert persists a device with the given cert state into a mem repo (the
 // durable substitute for the old store.Issue seeding).
 func seedCert(t *testing.T, ctx context.Context, repo domain.DeviceRepository, id string, expiresAt time.Time) {
@@ -33,6 +42,14 @@ func seedCert(t *testing.T, ctx context.Context, repo domain.DeviceRepository, i
 		ID: id, Name: id, Status: "online", LastSeen: certTestBase,
 		CertEpoch: domain.DefaultCertEpoch, CertExpiresAt: expiresAt,
 	}))
+}
+
+func newTestReconciler(t *testing.T, fc *clockmock.FakeClock, repo domain.DeviceRepository, rec *outboxtest.Recorder) *Reconciler {
+	t.Helper()
+	r, err := NewReconciler(fc, repo, rec.CellEmitter(), outbox.DemoCellTxManager(),
+		certRenewalTestPolicy, nil)
+	require.NoError(t, err)
+	return r
 }
 
 func TestRotateCommandID(t *testing.T) {
@@ -45,14 +62,6 @@ func TestRotateCommandID(t *testing.T) {
 		"different epoch must produce a different command id")
 	// Device-sensitive.
 	assert.NotEqual(t, rotateCommandID("dev-1", 1), rotateCommandID("dev-2", 1))
-}
-
-func newTestReconciler(t *testing.T, fc *clockmock.FakeClock, repo domain.DeviceRepository, rec *outboxtest.Recorder) *Reconciler {
-	t.Helper()
-	r, err := NewReconciler(fc, repo, rec.CellEmitter(), outbox.DemoCellTxManager(),
-		certRenewalTestThreshold, nil)
-	require.NoError(t, err)
-	return r
 }
 
 func TestReconciler_EmitsRenewalForNearExpiry(t *testing.T) {
@@ -102,10 +111,10 @@ func TestReconciler_NoEmitWhenNoneNearExpiry(t *testing.T) {
 	assert.Empty(t, rec.Entries(), "no near-expiry cert -> no command emitted")
 }
 
-// TestReconciler_DedupsAcrossTicksPerEpoch proves the per-epoch single-emit
-// WITHOUT a relay: after the first emit the reconciler marks the epoch
-// renewal-requested on the devices row, so the second tick's scan skips it. The
-// single-emit therefore does NOT depend on the relay's 24h command-done TTL.
+// TestReconciler_DedupsAcrossTicksPerEpoch proves that within the RetryInterval
+// window (clock not advanced), the same epoch is NOT re-emitted on the second
+// tick. The mark stamps requestedAt=now which is AFTER retryBefore (now -
+// RetryInterval), so the cert stays suppressed within the window.
 func TestReconciler_DedupsAcrossTicksPerEpoch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -113,21 +122,25 @@ func TestReconciler_DedupsAcrossTicksPerEpoch(t *testing.T) {
 	seedCert(t, ctx, repo, "dev-near", certTestBase.Add(24*time.Hour))
 
 	rec := outboxtest.NewRecorder()
-	r := newTestReconciler(t, clockmock.New(certTestBase), repo, rec)
+	fc := clockmock.New(certTestBase)
+	r := newTestReconciler(t, fc, repo, rec)
 
 	_, err := r.Reconcile(ctx, reconcile.Request{})
 	require.NoError(t, err)
 
-	// After the first tick the mark must have taken effect: the device is no
-	// longer a candidate because renewal_requested_epoch == cert_epoch.
-	got, err := repo.ListCertificateRenewalCandidates(ctx, certTestBase.Add(certRenewalTestThreshold))
+	// After the first tick the mark must have taken effect. Clock not advanced,
+	// so retryBefore = certTestBase - 24h. The mark was stamped at certTestBase
+	// (> retryBefore), so the cert is still suppressed within the window.
+	retryBefore := certTestBase.Add(-certRenewalTestPolicy.RetryInterval)
+	got, err := repo.ListCertificateRenewalCandidates(ctx,
+		certTestBase.Add(certRenewalTestThreshold), retryBefore, 100)
 	require.NoError(t, err)
-	assert.Empty(t, got, "after the first tick marks the epoch, the device is no longer a candidate")
+	assert.Empty(t, got, "after the first tick marks the epoch, the device is no longer a candidate within the window")
 
 	_, err = r.Reconcile(ctx, reconcile.Request{})
 	require.NoError(t, err)
 
-	assert.Len(t, rec.Entries(), 1, "one emit per epoch across ticks (repo-level dedup, no TTL)")
+	assert.Len(t, rec.Entries(), 1, "one emit per epoch within the retry window (repo-level dedup)")
 }
 
 // TestReconciler_ReemitsWhenEpochAdvancedPastRequested proves the forcing
@@ -158,10 +171,113 @@ func TestReconciler_ReemitsWhenEpochAdvancedPastRequested(t *testing.T) {
 	assert.Equal(t, rotateCommandID("dev-near", 2), entries[0].Metadata()[rtcommand.CommandIDMetadataKey],
 		"the command carries the new epoch's id")
 
-	// A second tick now finds renewal_requested_epoch == cert_epoch -> no re-emit.
+	// A second tick now finds renewal_requested_epoch == cert_epoch -> no re-emit within window.
 	_, err = r.Reconcile(ctx, reconcile.Request{})
 	require.NoError(t, err)
-	assert.Len(t, rec.Entries(), 1, "the advanced epoch is requested at most once too")
+	assert.Len(t, rec.Entries(), 1, "the advanced epoch is requested at most once within the retry window too")
+}
+
+// TestReconciler_RetriesAfterRetryInterval proves that after the RetryInterval
+// elapses (clock advanced beyond RetryInterval), the SAME epoch re-enters the
+// candidate set and emits the SAME commandID — the level-triggered retry release.
+func TestReconciler_RetriesAfterRetryInterval(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repo := mem.NewDeviceRepository()
+	seedCert(t, ctx, repo, "dev-near", certTestBase.Add(24*time.Hour))
+
+	rec := outboxtest.NewRecorder()
+	fc := clockmock.New(certTestBase)
+	r := newTestReconciler(t, fc, repo, rec)
+
+	_, err := r.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+	require.Len(t, rec.Entries(), 1, "first emit")
+	firstCommandID := rec.Entries()[0].Metadata()[rtcommand.CommandIDMetadataKey]
+
+	// Advance the clock beyond RetryInterval — the mark is now stale.
+	fc.Advance(certRenewalTestPolicy.RetryInterval + time.Minute)
+
+	_, err = r.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+
+	entries := rec.Entries()
+	require.Len(t, entries, 2, "after RetryInterval the cert re-enters the candidate set and re-emits")
+	assert.Equal(t, firstCommandID, entries[1].Metadata()[rtcommand.CommandIDMetadataKey],
+		"re-emit carries the SAME commandID (same epoch) — the relay Claimer dedups within its TTL window")
+}
+
+// TestReconciler_NoRetryWithinWindow proves that advancing the clock by LESS than
+// RetryInterval keeps the cert suppressed.
+func TestReconciler_NoRetryWithinWindow(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repo := mem.NewDeviceRepository()
+	seedCert(t, ctx, repo, "dev-near", certTestBase.Add(24*time.Hour))
+
+	rec := outboxtest.NewRecorder()
+	fc := clockmock.New(certTestBase)
+	r := newTestReconciler(t, fc, repo, rec)
+
+	_, err := r.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+	require.Len(t, rec.Entries(), 1, "first emit")
+
+	// Advance by less than RetryInterval — cert is still within the suppression window.
+	fc.Advance(certRenewalTestPolicy.RetryInterval - time.Minute)
+
+	_, err = r.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+
+	assert.Len(t, rec.Entries(), 1, "cert is still suppressed within the RetryInterval window")
+}
+
+// TestReconciler_BatchBoundaryRequeues proves the batch-boundary behavior:
+//   - First Reconcile with BatchSize=3 and 5 candidates: emits exactly 3 AND
+//     returns RequeueAfter > 0 (= policy.BatchRequeue).
+//   - Second Reconcile: drains remaining 2 AND returns RequeueAfter == 0.
+func TestReconciler_BatchBoundaryRequeues(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repo := mem.NewDeviceRepository()
+
+	// Small batch policy for this test.
+	smallPolicy := Policy{
+		Threshold:     certRenewalTestThreshold,
+		RetryInterval: 24 * time.Hour,
+		BatchSize:     3,
+		BatchRequeue:  10 * time.Millisecond,
+	}
+
+	// Seed 5 near-expiry certs with distinct expiry times (all within threshold).
+	for i := 0; i < 5; i++ {
+		id := "dev-batch-" + string(rune('a'+i))
+		expiresAt := certTestBase.Add(time.Duration(i+1) * time.Hour)
+		require.NoError(t, repo.Create(ctx, &domain.Device{
+			ID: id, Name: id, Status: "online", LastSeen: certTestBase,
+			CertEpoch: domain.DefaultCertEpoch, CertExpiresAt: expiresAt,
+		}))
+	}
+
+	rec := outboxtest.NewRecorder()
+	fc := clockmock.New(certTestBase)
+	r, err := NewReconciler(fc, repo, rec.CellEmitter(), outbox.DemoCellTxManager(), smallPolicy, nil)
+	require.NoError(t, err)
+
+	// First Reconcile: full batch of 3.
+	result1, err := r.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+	assert.Len(t, rec.Entries(), 3, "first reconcile emits exactly BatchSize candidates")
+	assert.Greater(t, result1.RequeueAfter, time.Duration(0),
+		"full batch must return RequeueAfter > 0 (= BatchRequeue)")
+	assert.Equal(t, smallPolicy.BatchRequeue, result1.RequeueAfter)
+
+	// Second Reconcile: drains remaining 2.
+	result2, err := r.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+	assert.Len(t, rec.Entries(), 5, "second reconcile drains the remaining 2 candidates")
+	assert.Equal(t, time.Duration(0), result2.RequeueAfter,
+		"partial batch (< BatchSize) must return RequeueAfter == 0")
 }
 
 // failingEmitter is an outbox.Emitter whose Emit always fails, used to drive the
@@ -179,7 +295,7 @@ func TestReconciler_EmitFailureBubbles(t *testing.T) {
 	wantErr := errors.New("emit failed")
 	r, err := NewReconciler(clockmock.New(certTestBase), repo,
 		outbox.WrapEmitterForCell(failingEmitter{err: wantErr}),
-		outbox.DemoCellTxManager(), certRenewalTestThreshold, nil)
+		outbox.DemoCellTxManager(), certRenewalTestPolicy, nil)
 	require.NoError(t, err)
 
 	_, err = r.Reconcile(ctx, reconcile.Request{})
@@ -188,7 +304,9 @@ func TestReconciler_EmitFailureBubbles(t *testing.T) {
 
 	// A failed emit must NOT mark the epoch requested — the cert stays a candidate
 	// so the retry re-emits.
-	got, err := repo.ListCertificateRenewalCandidates(ctx, certTestBase.Add(certRenewalTestThreshold))
+	retryBefore := certTestBase.Add(-certRenewalTestPolicy.RetryInterval)
+	got, err := repo.ListCertificateRenewalCandidates(ctx,
+		certTestBase.Add(certRenewalTestThreshold), retryBefore, 100)
 	require.NoError(t, err)
 	assert.Len(t, got, 1, "a cert whose renewal emit failed must remain a candidate")
 }
@@ -200,7 +318,7 @@ type markFailRepo struct {
 	err error
 }
 
-func (r markFailRepo) MarkCertRenewalRequested(_ context.Context, _ string, _ int64) error {
+func (r markFailRepo) MarkCertRenewalRequested(_ context.Context, _ string, _ int64, _ time.Time) error {
 	return r.err
 }
 
@@ -260,7 +378,7 @@ func TestReconciler_MarkFailureRollsBackEmit(t *testing.T) {
 	store := &txnStore{}
 	r, err := NewReconciler(clockmock.New(certTestBase), repo,
 		outbox.WrapEmitterForCell(txnEmitter{}), persistence.WrapForCell(store),
-		certRenewalTestThreshold, nil)
+		certRenewalTestPolicy, nil)
 	require.NoError(t, err)
 
 	_, reconcileErr := r.Reconcile(ctx, reconcile.Request{})
@@ -268,7 +386,9 @@ func TestReconciler_MarkFailureRollsBackEmit(t *testing.T) {
 	assert.Empty(t, store.committed, "a failed mark rolls the emit back — no orphan rotate-cert command")
 
 	// The mark never took, so the cert is still a candidate the next tick retries.
-	got, err := base.ListCertificateRenewalCandidates(ctx, certTestBase.Add(certRenewalTestThreshold))
+	retryBefore := certTestBase.Add(-certRenewalTestPolicy.RetryInterval)
+	got, err := base.ListCertificateRenewalCandidates(ctx,
+		certTestBase.Add(certRenewalTestThreshold), retryBefore, 100)
 	require.NoError(t, err)
 	assert.Len(t, got, 1, "the cert remains a candidate after a rolled-back renewal")
 }
@@ -285,14 +405,16 @@ func TestReconciler_EmitAndMarkCommitTogether(t *testing.T) {
 	store := &txnStore{}
 	r, err := NewReconciler(clockmock.New(certTestBase), repo,
 		outbox.WrapEmitterForCell(txnEmitter{}), persistence.WrapForCell(store),
-		certRenewalTestThreshold, nil)
+		certRenewalTestPolicy, nil)
 	require.NoError(t, err)
 
 	_, err = r.Reconcile(ctx, reconcile.Request{})
 	require.NoError(t, err)
 	assert.Len(t, store.committed, 1, "a successful mark commits the buffered emit")
 
-	got, err := repo.ListCertificateRenewalCandidates(ctx, certTestBase.Add(certRenewalTestThreshold))
+	retryBefore := certTestBase.Add(-certRenewalTestPolicy.RetryInterval)
+	got, err := repo.ListCertificateRenewalCandidates(ctx,
+		certTestBase.Add(certRenewalTestThreshold), retryBefore, 100)
 	require.NoError(t, err)
 	assert.Empty(t, got, "the committed mark removes the cert from the candidate set")
 }
@@ -303,15 +425,34 @@ func TestNewReconciler_Validation(t *testing.T) {
 	repo := mem.NewDeviceRepository()
 	rec := outboxtest.NewRecorder()
 
-	_, err := NewReconciler(fc, nil, rec.CellEmitter(), outbox.DemoCellTxManager(), certRenewalTestThreshold, nil)
+	_, err := NewReconciler(fc, nil, rec.CellEmitter(), outbox.DemoCellTxManager(), certRenewalTestPolicy, nil)
 	require.Error(t, err, "nil repo must fail-fast")
 
-	_, err = NewReconciler(fc, repo, nil, outbox.DemoCellTxManager(), certRenewalTestThreshold, nil)
+	_, err = NewReconciler(fc, repo, nil, outbox.DemoCellTxManager(), certRenewalTestPolicy, nil)
 	require.Error(t, err, "nil emitter must fail-fast")
 
-	_, err = NewReconciler(fc, repo, rec.CellEmitter(), nil, certRenewalTestThreshold, nil)
+	_, err = NewReconciler(fc, repo, rec.CellEmitter(), nil, certRenewalTestPolicy, nil)
 	require.Error(t, err, "nil txRunner must fail-fast")
 
-	_, err = NewReconciler(fc, repo, rec.CellEmitter(), outbox.DemoCellTxManager(), 0, nil)
-	require.Error(t, err, "non-positive threshold must fail-fast")
+	// Policy validation: each non-positive field must fail-fast.
+	_, err = NewReconciler(fc, repo, rec.CellEmitter(), outbox.DemoCellTxManager(),
+		Policy{Threshold: 0, RetryInterval: time.Hour, BatchSize: 10, BatchRequeue: time.Second}, nil)
+	require.Error(t, err, "non-positive Threshold must fail-fast")
+
+	_, err = NewReconciler(fc, repo, rec.CellEmitter(), outbox.DemoCellTxManager(),
+		Policy{Threshold: time.Hour, RetryInterval: 0, BatchSize: 10, BatchRequeue: time.Second}, nil)
+	require.Error(t, err, "non-positive RetryInterval must fail-fast")
+
+	_, err = NewReconciler(fc, repo, rec.CellEmitter(), outbox.DemoCellTxManager(),
+		Policy{Threshold: time.Hour, RetryInterval: time.Hour, BatchSize: 0, BatchRequeue: time.Second}, nil)
+	require.Error(t, err, "non-positive BatchSize must fail-fast")
+
+	_, err = NewReconciler(fc, repo, rec.CellEmitter(), outbox.DemoCellTxManager(),
+		Policy{Threshold: time.Hour, RetryInterval: time.Hour, BatchSize: 10, BatchRequeue: 0}, nil)
+	require.Error(t, err, "non-positive BatchRequeue must fail-fast")
+
+	// Valid policy passes.
+	_, err = NewReconciler(fc, repo, rec.CellEmitter(), outbox.DemoCellTxManager(),
+		certRenewalTestPolicy, nil)
+	require.NoError(t, err, "valid policy must not fail-fast")
 }

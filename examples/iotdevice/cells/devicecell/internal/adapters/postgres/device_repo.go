@@ -71,25 +71,42 @@ const (
 	// deviceColumns is the single source for the full device column list (in
 	// scan order) shared by every SELECT, so the column set and scanDeviceRow
 	// never drift.
-	deviceColumns = "id, name, status, last_seen, cert_epoch, cert_expires_at, renewal_requested_epoch"
+	deviceColumns = "id, name, status, last_seen, cert_epoch, cert_expires_at, renewal_requested_epoch, renewal_requested_at"
 
-	insertDeviceSQL = "INSERT INTO devices (" + deviceColumns + ") VALUES ($1, $2, $3, $4, $5, $6, $7)"
+	insertDeviceSQL = "INSERT INTO devices (" + deviceColumns + ") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
 
 	selectDeviceByIDSQL = "SELECT " + deviceColumns + " FROM devices WHERE id = $1"
 
-	// selectCertRenewalCandidatesSQL returns near-expiry certs whose current
-	// epoch has not yet been renewal-requested. cert_expires_at IS NOT NULL
-	// excludes rows with no issued cert (zero expiry <-> NULL).
+	// selectCertRenewalCandidatesSQL returns near-expiry certs that are
+	// renewal-eligible. cert_expires_at IS NOT NULL excludes rows with no
+	// issued cert (zero expiry <-> NULL).
+	//
+	// Eligibility predicate:
+	//   renewal_requested_epoch <> cert_epoch  — new epoch, never requested
+	//   OR renewal_requested_at IS NULL        — IS NULL is LOAD-BEARING:
+	//     migration bridge for rows marked under the old logic (pre-060) that
+	//     have renewal_requested_epoch == cert_epoch but NULL renewal_requested_at.
+	//     Without this disjunct those rows would be permanently excluded —
+	//     restoring the original single-direction suppression bug on existing rows.
+	//   OR renewal_requested_at <= $2          — stale timestamp → retry window
 	selectCertRenewalCandidatesSQL = `
 SELECT id, cert_epoch, cert_expires_at
 FROM devices
-WHERE cert_expires_at IS NOT NULL AND cert_expires_at <= $1 AND renewal_requested_epoch <> cert_epoch
-ORDER BY cert_expires_at ASC, id ASC`
+WHERE cert_expires_at IS NOT NULL
+  AND cert_expires_at <= $1
+  AND (renewal_requested_epoch <> cert_epoch
+       OR renewal_requested_at IS NULL
+       OR renewal_requested_at <= $2)
+ORDER BY cert_expires_at ASC, id ASC
+LIMIT $3`
 
 	// markCertRenewalRequestedSQL is a compare-and-set on cert_epoch: it records
-	// the renewal-requested epoch only while the row's current epoch still
-	// matches (0 rows affected when re-issued/gone is a valid no-op).
-	markCertRenewalRequestedSQL = "UPDATE devices SET renewal_requested_epoch = $2 WHERE id = $1 AND cert_epoch = $2"
+	// both renewal_requested_epoch and renewal_requested_at while the row's current
+	// cert_epoch still matches. Re-marking the same epoch refreshes the timestamp
+	// (time-window retry). Zero rows affected (re-issued/gone) is a valid no-op.
+	markCertRenewalRequestedSQL = "UPDATE devices" +
+		" SET renewal_requested_epoch = $2, renewal_requested_at = $3" +
+		" WHERE id = $1 AND cert_epoch = $2"
 )
 
 // Create inserts a new device row. Returns ErrConflict on unique constraint violation.
@@ -104,6 +121,7 @@ func (r *PGDeviceRepository) Create(ctx context.Context, device *domain.Device) 
 		d.CertEpoch,
 		nullableTime(d.CertExpiresAt),
 		d.RenewalRequestedEpoch,
+		nullableTime(d.RenewalRequestedAt),
 	)
 	if err != nil {
 		if pgquery.IsUniqueViolation(err) {
@@ -180,13 +198,13 @@ func (r *PGDeviceRepository) List(ctx context.Context, params query.ListParams) 
 	return devices, nil
 }
 
-// ListCertificateRenewalCandidates returns near-expiry certs whose current epoch
-// has not yet been renewal-requested, sorted by expiry then id. See the
-// domain.DeviceRepository contract.
+// ListCertificateRenewalCandidates returns near-expiry certs that are
+// renewal-eligible, sorted by expiry then id, capped at limit. See the
+// domain.DeviceRepository contract for the full eligibility predicate.
 func (r *PGDeviceRepository) ListCertificateRenewalCandidates(
-	ctx context.Context, expiresBefore time.Time,
+	ctx context.Context, expiresBefore time.Time, retryBefore time.Time, limit int,
 ) ([]domain.CertificateRenewalCandidate, error) {
-	rows, err := r.db.Query(ctx, selectCertRenewalCandidatesSQL, expiresBefore)
+	rows, err := r.db.Query(ctx, selectCertRenewalCandidatesSQL, expiresBefore, retryBefore, limit)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "device_repo: list cert renewal candidates", err)
 	}
@@ -208,10 +226,11 @@ func (r *PGDeviceRepository) ListCertificateRenewalCandidates(
 }
 
 // MarkCertRenewalRequested is a compare-and-set on cert_epoch (see the
-// domain.DeviceRepository contract). Zero rows affected (re-issued/gone) is a
-// valid no-op, not an error.
-func (r *PGDeviceRepository) MarkCertRenewalRequested(ctx context.Context, deviceID string, epoch int64) error {
-	if _, err := r.db.Exec(ctx, markCertRenewalRequestedSQL, deviceID, epoch); err != nil {
+// domain.DeviceRepository contract). Records both renewal_requested_epoch and
+// renewal_requested_at. Re-marking the same epoch refreshes the timestamp.
+// Zero rows affected (re-issued/gone) is a valid no-op, not an error.
+func (r *PGDeviceRepository) MarkCertRenewalRequested(ctx context.Context, deviceID string, epoch int64, requestedAt time.Time) error {
+	if _, err := r.db.Exec(ctx, markCertRenewalRequestedSQL, deviceID, epoch, requestedAt); err != nil {
 		slog.Error("device_repo: pg write failed",
 			slog.String("operation", "mark_cert_renewal_requested"),
 			slog.String("device_id", deviceID),
@@ -322,15 +341,20 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-// scanDeviceRow scans a full device row (id..renewal_requested_epoch, in
-// deviceColumns order) into a domain.Device. cert_expires_at is nullable: a SQL
-// NULL leaves CertExpiresAt zero ("no cert issued").
+// scanDeviceRow scans a full device row (id..renewal_requested_at, in
+// deviceColumns order) into a domain.Device. cert_expires_at and
+// renewal_requested_at are nullable: SQL NULL leaves the corresponding field
+// zero ("no cert issued" / "never requested").
 func scanDeviceRow(s rowScanner) (*domain.Device, error) {
 	var d domain.Device
 	var status string
 	var lastSeen time.Time
 	var certExpiresAt *time.Time
-	if err := s.Scan(&d.ID, &d.Name, &status, &lastSeen, &d.CertEpoch, &certExpiresAt, &d.RenewalRequestedEpoch); err != nil {
+	var renewalRequestedAt *time.Time
+	if err := s.Scan(
+		&d.ID, &d.Name, &status, &lastSeen,
+		&d.CertEpoch, &certExpiresAt, &d.RenewalRequestedEpoch, &renewalRequestedAt,
+	); err != nil {
 		return nil, err
 	}
 	if !validDeviceStatus(status) {
@@ -344,11 +368,14 @@ func scanDeviceRow(s rowScanner) (*domain.Device, error) {
 	if certExpiresAt != nil {
 		d.CertExpiresAt = *certExpiresAt
 	}
+	if renewalRequestedAt != nil {
+		d.RenewalRequestedAt = *renewalRequestedAt
+	}
 	return &d, nil
 }
 
-// nullableTime maps a zero time.Time to SQL NULL ("no cert issued") and any
-// other value to itself, so cert_expires_at round-trips zero <-> NULL.
+// nullableTime maps a zero time.Time to SQL NULL and any other value to itself,
+// so nullable timestamp columns round-trip zero <-> NULL.
 func nullableTime(t time.Time) any {
 	if t.IsZero() {
 		return nil

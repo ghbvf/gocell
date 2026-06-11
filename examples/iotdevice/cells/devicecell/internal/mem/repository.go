@@ -82,11 +82,11 @@ func (r *DeviceRepository) List(_ context.Context, params query.ListParams) ([]*
 // It satisfies domain.DeviceRepository and healthz.RepoProber.
 func (r *DeviceRepository) RepoReady(_ context.Context) error { return nil }
 
-// ListCertificateRenewalCandidates returns near-expiry certs whose current epoch
-// has not yet been renewal-requested, sorted by expiry then id. See the
-// domain.DeviceRepository contract.
+// ListCertificateRenewalCandidates returns near-expiry certs that are
+// renewal-eligible, sorted by expiry then id, capped at limit. See the
+// domain.DeviceRepository contract for the full eligibility predicate.
 func (r *DeviceRepository) ListCertificateRenewalCandidates(
-	_ context.Context, expiresBefore time.Time,
+	_ context.Context, expiresBefore time.Time, retryBefore time.Time, limit int,
 ) ([]domain.CertificateRenewalCandidate, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -96,8 +96,13 @@ func (r *DeviceRepository) ListCertificateRenewalCandidates(
 		if d.CertExpiresAt.IsZero() || d.CertExpiresAt.After(expiresBefore) {
 			continue // no cert issued, or not yet near expiry
 		}
-		if d.RenewalRequestedEpoch == d.CertEpoch {
-			continue // renewal already requested for the current epoch
+		// Eligibility: new epoch (never requested), OR timestamp is zero/NULL
+		// (migration bridge for pre-060 rows), OR timestamp is stale (<= retryBefore).
+		eligible := d.RenewalRequestedEpoch != d.CertEpoch ||
+			d.RenewalRequestedAt.IsZero() ||
+			!d.RenewalRequestedAt.After(retryBefore)
+		if !eligible {
+			continue
 		}
 		out = append(out, domain.CertificateRenewalCandidate{
 			DeviceID:      d.ID,
@@ -111,13 +116,17 @@ func (r *DeviceRepository) ListCertificateRenewalCandidates(
 		}
 		return cmp.Compare(a.DeviceID, b.DeviceID)
 	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
 	return out, nil
 }
 
-// MarkCertRenewalRequested is a compare-and-set on CertEpoch: it records the
-// renewal-requested epoch only while the device's current epoch still matches.
-// See the domain.DeviceRepository contract.
-func (r *DeviceRepository) MarkCertRenewalRequested(_ context.Context, deviceID string, epoch int64) error {
+// MarkCertRenewalRequested is a compare-and-set on CertEpoch: it records both
+// RenewalRequestedEpoch and RenewalRequestedAt. Re-marking the same epoch
+// (time-window retry) refreshes RenewalRequestedAt. See the
+// domain.DeviceRepository contract.
+func (r *DeviceRepository) MarkCertRenewalRequested(_ context.Context, deviceID string, epoch int64, requestedAt time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -126,6 +135,7 @@ func (r *DeviceRepository) MarkCertRenewalRequested(_ context.Context, deviceID 
 		return nil // re-issued or gone since the scan; the new epoch will be re-observed
 	}
 	d.RenewalRequestedEpoch = epoch
+	d.RenewalRequestedAt = requestedAt
 	return nil
 }
 

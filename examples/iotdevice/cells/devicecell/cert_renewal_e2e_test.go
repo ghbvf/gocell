@@ -97,7 +97,12 @@ func TestCertRenewal_CrossTickDedupToDequeue(t *testing.T) {
 	we, err := kout.NewWriterEmitter(emitStore)
 	require.NoError(t, err)
 	reconciler, err := devicecertrenewal.NewReconciler(fc, repo, kout.WrapEmitterForCell(we),
-		kout.DemoCellTxManager(), 7*24*time.Hour, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		kout.DemoCellTxManager(), devicecertrenewal.Policy{
+			Threshold:     7 * 24 * time.Hour,
+			RetryInterval: 25 * time.Hour,
+			BatchSize:     100,
+			BatchRequeue:  time.Second,
+		}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	require.NoError(t, err)
 
 	// Two ticks: the same un-renewed cert is observed each interval, but the first

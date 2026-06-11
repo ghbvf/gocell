@@ -1,0 +1,51 @@
+-- Migration 060: add renewal_requested_at column for time-window retry release.
+--
+-- Background: The original cert-renewal reconcile loop (introduced in #1819)
+-- uses renewal_requested_epoch == cert_epoch as a single-direction suppression:
+-- once a renewal command is emitted, the device is permanently excluded from
+-- future scans until the cert is re-issued and the epoch advances. This causes
+-- a silent stuck state when a rotate-cert command enters the DLX (terminal
+-- failure) or the device never executes it (#1820 root cause).
+--
+-- This migration adds renewal_requested_at TIMESTAMPTZ (nullable, no default)
+-- to record WHEN the last renewal command was emitted for the current epoch.
+-- The reconciler can then re-include a device once its renewal_requested_at
+-- falls outside the retry window (retryBefore predicate), providing a bounded
+-- time-window retry release without permanent suppression.
+--
+-- Column semantics:
+--   renewal_requested_at — wall-clock time the last renewal command was emitted
+--                          for the current epoch. NULLABLE, NO DEFAULT.
+--                          NULL = never requested / migration-bridge for pre-060
+--                          rows that were marked under the old logic.
+--
+-- IS NULL disjunct is LOAD-BEARING (migration bridge):
+--   After this migration, existing rows that have
+--   renewal_requested_epoch == cert_epoch but renewal_requested_at = NULL
+--   (marked under the old logic before this column existed) would be permanently
+--   excluded by the new eligibility predicate if the IS NULL check were absent.
+--   The IS NULL disjunct re-includes them as candidates: they emit once, then
+--   MarkCertRenewalRequested writes a real timestamp, and they enter the normal
+--   time-window cycle. No backfill is needed — the IS NULL bridge handles it
+--   atomically on the first reconcile tick after the migration.
+--
+-- Index note: the existing idx_devices_cert_expires_at (cert_expires_at, id)
+-- introduced in migration 057 continues to drive the range scan on
+-- cert_expires_at. renewal_requested_at and renewal_requested_epoch are
+-- residual filters evaluated after the index range scan — acceptable at
+-- example scale. No new index is added.
+--
+-- schema_guard.go registers renewal_requested_at in expectedColumns
+-- (NotNull: false). No expectedDefaults entry (nullable, no default).
+-- No new index or check constraint entry.
+--
+-- ref: adapters/postgres/migrations/056_devices_cert_renewal.sql  (cert-renewal columns)
+-- ref: adapters/postgres/migrations/057_devices_cert_expiry_index.sql (cert_expires_at index)
+-- ref: issue #1819 (durable cert state, prior migration set)
+-- ref: issue #1820 (time-window retry release, this migration)
+
+-- +goose Up
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS renewal_requested_at TIMESTAMPTZ;
+
+-- +goose Down
+ALTER TABLE devices DROP COLUMN IF EXISTS renewal_requested_at;

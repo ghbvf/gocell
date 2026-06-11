@@ -101,8 +101,10 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// global_seq IDENTITY PK + idx_projection_events_id) for the #1504 retained event store.
 	// 059 creates the ABAC policies table (composite PK + string-coded JSONB rules) under
 	// FORCE RLS tenant_isolation for the durable ABAC policy store (EPIC #1337 PR-8, #1346).
-	assert.Equal(t, int64(59), v,
-		"expected version should be exactly 59 (current migration max — 059_create_policies)")
+	// 060 adds devices.renewal_requested_at TIMESTAMPTZ (nullable) for the cert-renewal
+	// time-window retry release (#1820).
+	assert.Equal(t, int64(60), v,
+		"expected version should be exactly 60 (current migration max — 060_devices_renewal_requested_at)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {

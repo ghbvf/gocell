@@ -70,6 +70,7 @@ const gotWantQuotedFmt = "got %q want %q"
 //                                   renewal_requested_epoch BIGINT NOT NULL DEFAULT 0 (056)
 //                                 + devices_cert_epoch_positive CHECK (cert_epoch >= 1) (056)
 //                                 + idx_devices_cert_expires_at (cert_expires_at, id) (057)
+//                                 + renewal_requested_at TIMESTAMPTZ (nullable, no default) (060)
 //   - commands           (030)  examples/iotdevice command queue PG adapter (B2.B)
 //                                 + commands.device_id FK → devices(id) ON DELETE RESTRICT
 //                                 + commands_status_chk, commands_attempt_chk
@@ -614,6 +615,8 @@ var expectedColumns = []expectedColumn{
 	{Table: "devices", Column: "cert_epoch", Type: "bigint", NotNull: true},
 	{Table: "devices", Column: "cert_expires_at", Type: pgTypeTSTZ, NotNull: false},
 	{Table: "devices", Column: "renewal_requested_epoch", Type: "bigint", NotNull: true},
+	// 060_devices_renewal_requested_at.sql — time-window retry release (#1820).
+	{Table: "devices", Column: "renewal_requested_at", Type: pgTypeTSTZ, NotNull: false},
 	// commands (030_commands.sql) — kernel/command.Queue PG adapter (B2.B).
 	{Table: "commands", Column: "id", Type: "text", NotNull: true},
 	{Table: "commands", Column: "device_id", Type: "text", NotNull: true},
