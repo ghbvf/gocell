@@ -400,19 +400,24 @@ func applyResponseProjection(spec *ContractGenSpec) error {
 	if fieldIdx < 0 {
 		return fmt.Errorf("contractgen build: %q responseProjection set but Response has no `data` resource field", spec.ContractID)
 	}
-	itemName, isList, ok := projectionItemType(spec.DTOs[respIdx].Fields[fieldIdx].GoType)
-	if !ok {
+	dataField := &spec.DTOs[respIdx].Fields[fieldIdx]
+	// Structured (not string-parsed) projectability: ItemDTO is non-empty only
+	// when `data` is an object / array-of-object whose item is a generated DTO
+	// (set in collectDTOs). A scalar / array-of-scalar `data` has no ItemDTO and
+	// is not projectable — fail closed so a misplaced marker never yields an
+	// un-guarded full view.
+	if dataField.ItemDTO == "" {
 		return fmt.Errorf("contractgen build: %q responseProjection requires `data` to be an object or array-of-object, got %q",
-			spec.ContractID, spec.DTOs[respIdx].Fields[fieldIdx].GoType)
+			spec.ContractID, dataField.GoType)
 	}
-	if isList {
-		spec.DTOs[respIdx].Fields[fieldIdx].GoType = "[]projection.ResourceProjection"
-	} else {
-		spec.DTOs[respIdx].Fields[fieldIdx].GoType = "projection.ResourceProjection"
-	}
-	itemIdx := indexOfDTO(spec.DTOs, itemName)
+	itemIdx := indexOfDTO(spec.DTOs, dataField.ItemDTO)
 	if itemIdx < 0 {
-		return fmt.Errorf("contractgen build: %q responseProjection item DTO %q not found", spec.ContractID, itemName)
+		return fmt.Errorf("contractgen build: %q responseProjection item DTO %q not found", spec.ContractID, dataField.ItemDTO)
+	}
+	if dataField.IsList {
+		dataField.GoType = "[]projection.ResourceProjection"
+	} else {
+		dataField.GoType = "projection.ResourceProjection"
 	}
 	spec.DTOs[itemIdx].EmitToMap = true
 	return nil
@@ -426,22 +431,6 @@ func indexOfDTO(dtos []DTOSpec, name string) int {
 		}
 	}
 	return -1
-}
-
-// projectionItemType extracts the resource item DTO name from a Response `data`
-// field GoType. It accepts the two shapes schemaGoType produces for an
-// object-valued `data` field: "[]*X" (array-of-object → isList) and "*X" (single
-// object). Any other shape (scalar, []scalar, []any) is not projectable, so a
-// responseProjection marker on such a response fails closed in the caller.
-func projectionItemType(goType string) (item string, isList, ok bool) {
-	switch {
-	case strings.HasPrefix(goType, "[]*"):
-		return strings.TrimPrefix(goType, "[]*"), true, true
-	case strings.HasPrefix(goType, "*"):
-		return strings.TrimPrefix(goType, "*"), false, true
-	default:
-		return "", false, false
-	}
 }
 
 // buildHTTPEndpointSpec is the SOLE constructor of the sealed httpEndpointSpec
@@ -1511,6 +1500,12 @@ func collectDTOs(name string, s *Schema, out *[]DTOSpec) {
 		// (responseProjection item DTOs) uses it so the projected column map keys
 		// equal the wire field names.
 		field.BareJSONTag = key
+		// Structured projection-item metadata (F5): nestedName is the generated
+		// item DTO name when the property is an object or array-of-object (empty
+		// for scalars / arrays-of-scalar). Captured here so applyResponseProjection
+		// reads typed fields instead of re-parsing the rendered GoType string.
+		field.ItemDTO = nestedName
+		field.IsList = prop.Type == "array"
 		dto.Fields = append(dto.Fields, field)
 
 		// Track nested objects for recursive collection after the parent is appended.

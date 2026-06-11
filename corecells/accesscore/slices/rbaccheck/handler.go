@@ -58,7 +58,7 @@ func toRoleProjectionRows(roles []*domain.Role) ([]projection.ResourceProjection
 		}
 		rows = append(rows, item.ToMap())
 	}
-	return projection.NewProjectionList(authz.FieldMask{}, rows)
+	return projection.NewProjectionList(authz.IdentityFieldMask(), rows)
 }
 
 // CheckAdapter implements checkg.Service for http.auth.role.check.v1.
@@ -72,7 +72,7 @@ func (a CheckAdapter) Check(ctx context.Context, req *checkg.Request) (checkg.Ch
 		return nil, err
 	}
 	// Identity projection (epic #1337 PR-12); masking obligation source becomes the ABAC Decision in PR-10.
-	data, err := projection.NewProjection(authz.FieldMask{}, checkg.ResponseData{HasRole: has}.ToMap())
+	data, err := projection.NewProjection(authz.IdentityFieldMask(), checkg.ResponseData{HasRole: has}.ToMap())
 	if err != nil {
 		return nil, err
 	}

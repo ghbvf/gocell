@@ -149,6 +149,17 @@ type DTOField struct {
 	BareJSONTag string
 	// GoType is the Go type expression, e.g. "string", "int64", "*ResponseData".
 	GoType string
+	// ItemDTO is the generated resource item DTO name when this field is an
+	// object or array-of-object whose item is a generated struct (e.g. the
+	// Response `data` field), else "". It is the STRUCTURED projection-item
+	// signal captured at schema-traversal time so applyResponseProjection does
+	// not re-parse the rendered GoType string (epic #1337 PR-12, F5). A non-empty
+	// ItemDTO ⇒ the field is projectable through the column-masking funnel.
+	ItemDTO string
+	// IsList reports whether this field is an array (schema type=array). Paired
+	// with ItemDTO it distinguishes []projection.ResourceProjection (list) from
+	// projection.ResourceProjection (single) without inspecting GoType.
+	IsList bool
 	// Required indicates whether the field is in the schema's required list.
 	Required bool
 	// Doc is an optional comment, used for format hints (uuid, date-time).

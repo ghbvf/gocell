@@ -41,7 +41,7 @@ func (a StatusAdapter) Status(ctx context.Context, req *statusGen.Request) (stat
 // toStatusProjection wraps a HasAdmin boolean into the sealed projection envelope.
 // Identity projection (epic #1337 PR-12); masking obligation source becomes the ABAC Decision in PR-10.
 func toStatusProjection(hasAdmin bool) (statusGen.StatusResponseObject, error) {
-	data, err := projection.NewProjection(authz.FieldMask{}, statusGen.ResponseData{HasAdmin: hasAdmin}.ToMap())
+	data, err := projection.NewProjection(authz.IdentityFieldMask(), statusGen.ResponseData{HasAdmin: hasAdmin}.ToMap())
 	if err != nil {
 		return nil, err
 	}

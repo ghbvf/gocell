@@ -9,7 +9,9 @@ import (
 // responseProjection rewrite (epic #1337 PR-12): a marker set on a response that
 // has no projectable `data` resource is a codegen error, never a silent no-op —
 // so a misplaced marker can never produce an un-guarded full view. Also covers
-// the marker-off no-op and the happy single/list rewrites.
+// the marker-off no-op and the happy single/list rewrites. Projectability is now
+// read from the structured DTOField.ItemDTO / IsList (set in collectDTOs), not
+// parsed from the rendered GoType string (F5).
 func TestApplyResponseProjection_FailClosed(t *testing.T) {
 	mk := func(dtos []DTOSpec) *ContractGenSpec {
 		return &ContractGenSpec{
@@ -18,9 +20,12 @@ func TestApplyResponseProjection_FailClosed(t *testing.T) {
 			DTOs:       dtos,
 		}
 	}
-	// respWith builds a single-field Response DTO for the fail-closed cases.
-	respWith := func(field, goType string) []DTOSpec {
-		return []DTOSpec{{Name: "Response", Fields: []DTOField{{Name: field, GoType: goType}}}}
+	// dataField builds a single-field Response DTO whose field carries the given
+	// structured projection metadata (itemDTO empty ⇒ not projectable).
+	dataField := func(name, goType, itemDTO string, isList bool) []DTOSpec {
+		return []DTOSpec{{Name: "Response", Fields: []DTOField{
+			{Name: name, GoType: goType, ItemDTO: itemDTO, IsList: isList},
+		}}}
 	}
 	errCases := []struct {
 		name    string
@@ -28,9 +33,9 @@ func TestApplyResponseProjection_FailClosed(t *testing.T) {
 		wantErr string
 	}{
 		{"no Response DTO", mk([]DTOSpec{{Name: "Request"}}), "no Response DTO"},
-		{"Response has no Data field", mk(respWith("Other", "string")), "no `data` resource field"},
-		{"data not projectable (scalar)", mk(respWith("Data", "string")), "object or array-of-object"},
-		{"item DTO missing", mk(respWith("Data", "*ResponseData")), "item DTO"},
+		{"Response has no Data field", mk(dataField("Other", "string", "", false)), "no `data` resource field"},
+		{"data not projectable (scalar)", mk(dataField("Data", "string", "", false)), "object or array-of-object"},
+		{"item DTO missing", mk(dataField("Data", "*ResponseData", "ResponseData", false)), "item DTO"},
 	}
 	for _, tc := range errCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -43,7 +48,7 @@ func TestApplyResponseProjection_FailClosed(t *testing.T) {
 
 	t.Run("happy single object", func(t *testing.T) {
 		spec := mk([]DTOSpec{
-			{Name: "Response", Fields: []DTOField{{Name: "Data", GoType: "*ResponseData"}}},
+			{Name: "Response", Fields: []DTOField{{Name: "Data", GoType: "*ResponseData", ItemDTO: "ResponseData"}}},
 			{Name: "ResponseData"},
 		})
 		if err := applyResponseProjection(spec); err != nil {
@@ -59,7 +64,7 @@ func TestApplyResponseProjection_FailClosed(t *testing.T) {
 
 	t.Run("happy list", func(t *testing.T) {
 		spec := mk([]DTOSpec{
-			{Name: "Response", Fields: []DTOField{{Name: "Data", GoType: "[]*ResponseDataItem"}}},
+			{Name: "Response", Fields: []DTOField{{Name: "Data", GoType: "[]*ResponseDataItem", ItemDTO: "ResponseDataItem", IsList: true}}},
 			{Name: "ResponseDataItem"},
 		})
 		if err := applyResponseProjection(spec); err != nil {
@@ -76,7 +81,7 @@ func TestApplyResponseProjection_FailClosed(t *testing.T) {
 	t.Run("marker off is a no-op", func(t *testing.T) {
 		spec := &ContractGenSpec{
 			Endpoint: &httpEndpointSpec{ResponseProjection: false},
-			DTOs:     []DTOSpec{{Name: "Response", Fields: []DTOField{{Name: "Data", GoType: "*Foo"}}}},
+			DTOs:     []DTOSpec{{Name: "Response", Fields: []DTOField{{Name: "Data", GoType: "*Foo", ItemDTO: "Foo"}}}},
 		}
 		if err := applyResponseProjection(spec); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -94,27 +99,49 @@ func TestApplyResponseProjection_FailClosed(t *testing.T) {
 	})
 }
 
-// TestProjectionItemType pins the resource-item extraction: array-of-pointer and
-// single-pointer are the only projectable shapes schemaGoType emits for an
-// object-valued `data` field; anything else is rejected (fail-closed in caller).
-func TestProjectionItemType(t *testing.T) {
+// TestCollectDTOs_ProjectionItemMetadata pins the STRUCTURED projection-item
+// derivation at its source: collectDTOs must set DTOField.ItemDTO (the generated
+// item DTO name) and IsList directly from the schema shape, so the downstream
+// applyResponseProjection never has to re-parse a rendered Go type string (F5).
+// A single object and an array-of-object are projectable (ItemDTO set); a scalar
+// and an array-of-scalar are not (ItemDTO empty), while IsList still tracks the
+// array-ness independently.
+func TestCollectDTOs_ProjectionItemMetadata(t *testing.T) {
+	str := &Schema{Type: "string"}
+	obj := &Schema{Type: "object", PropertyOrder: []string{"id"}, Properties: map[string]*Schema{"id": str}}
+	root := &Schema{
+		Type:          "object",
+		PropertyOrder: []string{"single", "list", "scalar", "scalarList"},
+		Properties: map[string]*Schema{
+			"single":     obj,                         // object → projectable, not a list
+			"list":       {Type: "array", Items: obj}, // array-of-object → projectable list
+			"scalar":     str,                         // scalar → not projectable
+			"scalarList": {Type: "array", Items: str}, // array-of-scalar → not projectable, IS a list
+		},
+	}
+	dtos, err := schemaToDTOs("Response", root)
+	if err != nil {
+		t.Fatalf("schemaToDTOs: %v", err)
+	}
+	byName := map[string]DTOField{}
+	for _, f := range dtos[0].Fields {
+		byName[f.Name] = f
+	}
 	cases := []struct {
-		in         string
+		field      string
 		wantItem   string
 		wantIsList bool
-		wantOK     bool
 	}{
-		{"[]*Foo", "Foo", true, true},
-		{"*Foo", "Foo", false, true},
-		{"string", "", false, false},
-		{"[]string", "", false, false},
-		{"int64", "", false, false},
+		{"Single", "ResponseSingle", false},
+		{"List", "ResponseListItem", true},
+		{"Scalar", "", false},
+		{"ScalarList", "", true},
 	}
 	for _, c := range cases {
-		item, isList, ok := projectionItemType(c.in)
-		if item != c.wantItem || isList != c.wantIsList || ok != c.wantOK {
-			t.Errorf("projectionItemType(%q) = (%q, %v, %v), want (%q, %v, %v)",
-				c.in, item, isList, ok, c.wantItem, c.wantIsList, c.wantOK)
+		f := byName[c.field]
+		if f.ItemDTO != c.wantItem || f.IsList != c.wantIsList {
+			t.Errorf("field %s: ItemDTO=%q IsList=%v, want ItemDTO=%q IsList=%v",
+				c.field, f.ItemDTO, f.IsList, c.wantItem, c.wantIsList)
 		}
 	}
 }

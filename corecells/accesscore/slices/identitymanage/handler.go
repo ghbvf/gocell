@@ -117,7 +117,7 @@ func (a GetAdapter) Get(ctx context.Context, req *getgen.Request) (getgen.GetRes
 		UpdatedAt: updatedAt,
 	}
 	// Identity projection (epic #1337 PR-12); masking obligation source becomes the ABAC Decision in PR-10.
-	data, err := projection.NewProjection(authz.FieldMask{}, item.ToMap())
+	data, err := projection.NewProjection(authz.IdentityFieldMask(), item.ToMap())
 	if err != nil {
 		return nil, err
 	}

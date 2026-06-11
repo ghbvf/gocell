@@ -68,8 +68,9 @@
 // owns only the carrier + masking funnel; the field-type pin and coverage live
 // in the archtest layer.
 //
-// Note: the 9 non-audit GET reads added in PR-12 all pass authz.FieldMask{}
-// (identity projection — all columns visible). Per-principal column obligations
-// for those endpoints arrive when the ABAC decision engine is wired in PR-10
-// (#1348).
+// Note: the 9 non-audit GET reads added in PR-12 all pass
+// authz.IdentityFieldMask() (identity projection — all columns visible). That
+// NAMED helper, rather than an anonymous authz.FieldMask{}, makes every
+// not-yet-constrained read greppable, so when the ABAC decision engine is wired
+// in PR-10 (#1348) each site is a one-line swap to Decision.Obligations().FieldMask.
 package projection

@@ -33,7 +33,10 @@ type ResourceProjection struct {
 // FieldMask is valid and yields the identity projection (every value visible,
 // response field set stable) — passing an empty mask where a populated one was
 // intended therefore returns the FULL view silently; supplying the right mask is
-// the caller's responsibility (locked at the handler callsite in PR-12).
+// the caller's responsibility (locked at the handler callsite in PR-12). A read
+// that is deliberately unconstrained should pass authz.IdentityFieldMask() (the
+// named identity marker) rather than a bare authz.FieldMask{}, so the site stays
+// greppable for the eventual ABAC-mask swap.
 //
 // Error kinds let the handler map status codes: a validation failure carries
 // KindInvalid (→ 400, client-correctable bad mask); an un-dischargeable

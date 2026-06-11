@@ -135,6 +135,16 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 
 	logAdminAuditQuery(ctx, p, subject, req.ActorID)
 
+	// Column masking (epic #1337 PR-12, FR-016/FR-017): derive the mask obligation
+	// from the row-visibility scope ONCE here — it gates both the query predicates
+	// (rejectMaskedFilters, below) and the response projection (NewProjectionList,
+	// below). A masked column must not be usable as a filter, else the predicate
+	// leaks a match/no-match oracle on a value the response redacts (F1).
+	mask := auditFieldMask(vis.Scope())
+	if err := rejectMaskedFilters(mask, req); err != nil {
+		return nil, err
+	}
+
 	// Tenant axis (#1618): the typed tenant scope, re-parsed from the
 	// authenticated principal at this repo boundary (auth.Principal.TenantID is a
 	// canonicalized string; the JWT authenticator already validated it). It is
@@ -197,8 +207,8 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 		return nil, err
 	}
 
-	// Column masking (epic #1337 PR-12, FR-016/FR-017): see auditFieldMask godoc.
-	mask := auditFieldMask(vis.Scope())
+	// Discharge the column mask derived above onto every row (the same obligation
+	// that gated the query predicates), via the sealed projection funnel.
 	rows := make([]map[string]any, 0, len(result.Items))
 	for _, e := range result.Items {
 		rows = append(rows, toListResponseDataItem(e).ToMap())
@@ -241,17 +251,67 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 func auditFieldMask(scope tenant.RowScope) authz.FieldMask {
 	switch scope {
 	case tenant.RowScopeSelf:
-		return authz.FieldMask{Fields: []string{"correlationId", "traceId"}}
+		return authz.FieldMask{Fields: append([]string(nil), auditMaskDiagnostics...)}
 	case tenant.RowScopeDevice:
-		return authz.FieldMask{Fields: []string{"subjectId", "correlationId", "traceId"}}
+		return authz.FieldMask{Fields: append([]string(nil), auditMaskDevice...)}
 	case tenant.RowScopeTenant, tenant.RowScopeAll:
 		// admin / super-admin: full column view (identity projection).
-		return authz.FieldMask{}
+		return authz.IdentityFieldMask()
 	default:
-		// Unknown/unenumerated scope: fail-closed with the most restrictive mask.
-		// An unenumerated scope must never silently widen column visibility.
-		return authz.FieldMask{Fields: []string{"subjectId", "correlationId", "traceId"}}
+		// Unknown/unenumerated scope: fail-closed with the most restrictive mask
+		// (same as a device). An unenumerated scope must never silently widen
+		// column visibility.
+		return authz.FieldMask{Fields: append([]string(nil), auditMaskDevice...)}
 	}
+}
+
+// Audit column names that the per-scope FieldMask obligation governs. These are
+// the wire JSON keys (camelCase) the ResourceProjection funnel masks; they are
+// also the columns a caller may NOT use as a query predicate when masked (a
+// masked-column filter would leak a match/no-match oracle — see
+// rejectMaskedFilters). Defined once as consts so the mask derivation and the
+// filter gate cannot drift to differently-spelled literals.
+const (
+	auditColSubjectID     = "subjectId"
+	auditColCorrelationID = "correlationId"
+	auditColTraceID       = "traceId"
+)
+
+// Pre-built per-scope mask column sets. auditMaskDiagnostics masks the
+// operator-diagnostic columns (non-admin self); auditMaskDevice additionally
+// masks the human subject-of-record (device, and the fail-closed default). The
+// FieldMask constructor copies these so the package-level slices stay immutable.
+var (
+	auditMaskDiagnostics = []string{auditColCorrelationID, auditColTraceID}
+	auditMaskDevice      = []string{auditColSubjectID, auditColCorrelationID, auditColTraceID}
+)
+
+// rejectMaskedFilters fails closed when a caller supplies a query predicate on a
+// column its row-visibility scope masks (epic #1337 PR-12, F1). Column masking is
+// an obligation the PEP must discharge on the WHOLE read, not just response
+// serialization: leaving a masked column usable as a filter would leak a
+// match/no-match oracle — a non-admin could binary-search the very traceId the
+// response redacts, a device could enumerate the subject it cannot see. Only
+// columns that are BOTH filterable and maskable need gating; for the audit read
+// that is subjectId and traceId (correlationId is masked but has no filter param).
+// Returns KindPermissionDenied (403, already a declared response): the caller is
+// not malformed, it is asking to filter by a column outside its visibility.
+func rejectMaskedFilters(mask authz.FieldMask, req *auditlist.Request) error {
+	maskedFilters := []struct {
+		column string
+		value  string
+	}{
+		{auditColSubjectID, req.SubjectID},
+		{auditColTraceID, req.TraceID},
+	}
+	for _, mf := range maskedFilters {
+		if mf.value != "" && mask.Masks(mf.column) {
+			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
+				"audit query cannot filter by a column masked for your access scope",
+				errcode.WithDetails(errcode.PublicString("column", mf.column)))
+		}
+	}
+	return nil
 }
 
 // Handler is the composite route handler for the auditquery slice.
@@ -332,8 +392,10 @@ func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 // rows PLUS tenant-less system/framework rows (tenant_id == "" — e.g.
 // bootstrap.auth.fail), which the per-tenant RLS `OR tenant_id=”` read clause
 // surfaces to every tenant. Marking each row "system" vs "tenant" lets a tenant
-// admin distinguish global system events from their own audit trail WITHOUT
-// exposing any other tenant's id (per-row tenantId is still deliberately omitted).
+// admin distinguish global system events from their own audit trail. (Per-row
+// tenantId IS now projected since PR-12 — see toListResponseDataItem — but it is
+// always the caller's OWN tenant id, so `scope` remains the system-vs-tenant
+// signal; it never carries another tenant's id.)
 func rowScope(tenantID string) string {
 	if tenantID == "" {
 		return scopeSystem

@@ -41,7 +41,7 @@ func (a GetAdapter) Get(ctx context.Context, req *flagsget.Request) (flagsget.Ge
 	}
 	// identity projection (epic #1337 PR-12); masking obligation source becomes
 	// the ABAC Decision in PR-10.
-	data, err := projection.NewProjection(authz.FieldMask{}, toGetResponseData(flag).ToMap())
+	data, err := projection.NewProjection(authz.IdentityFieldMask(), toGetResponseData(flag).ToMap())
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +75,7 @@ func (a ListAdapter) List(ctx context.Context, req *flagslist.Request) (flagslis
 	}
 	// identity projection (epic #1337 PR-12); masking obligation source becomes
 	// the ABAC Decision in PR-10.
-	data, err := projection.NewProjectionList(authz.FieldMask{}, rows)
+	data, err := projection.NewProjectionList(authz.IdentityFieldMask(), rows)
 	if err != nil {
 		return nil, err
 	}

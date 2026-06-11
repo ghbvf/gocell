@@ -40,7 +40,7 @@ func (a InternalGetAdapter) Get(ctx context.Context, req *internalapig.Request) 
 	}
 	// identity projection (epic #1337 PR-12); masking obligation source becomes
 	// the ABAC Decision in PR-10.
-	data, err := projection.NewProjection(authz.FieldMask{}, toInternalGetResponseData(entry).ToMap())
+	data, err := projection.NewProjection(authz.IdentityFieldMask(), toInternalGetResponseData(entry).ToMap())
 	if err != nil {
 		return nil, err
 	}

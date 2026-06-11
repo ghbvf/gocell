@@ -976,63 +976,74 @@ func TestHandleQuery_TraceIDFilter_EmptyParam(t *testing.T) {
 	assert.Len(t, resp.Data, 2, "empty ?traceId= must act as no filter and return all rows")
 }
 
-// TestHandleQuery_TraceIDFilter_NonAdminScopedToActorSelf verifies that a
-// non-admin caller with ?traceId=X still only sees their own actor_id rows.
-// The traceId filter is AND-ed with the actor-self policy enforced by
-// auditQueryPolicy — it does NOT widen scope beyond the caller's own actions.
-func TestHandleQuery_TraceIDFilter_NonAdminScopedToActorSelf(t *testing.T) {
+// TestHandleQuery_MaskedFilterOracle_Rejected locks the F1 invariant (epic #1337
+// PR-12): a caller may NOT use a query predicate on a column its row-visibility
+// scope masks. Allowing such a filter would leak a match/no-match oracle — a
+// non-admin (self) could binary-search the very traceId the response redacts; a
+// device could enumerate the subject it cannot see. The matrix drives every
+// (scope × filterable-maskable column) pair and asserts the gate rejects exactly
+// the masked ones (403) and admits the visible ones (200). It also pins the
+// relationship anti-drift: the maximal (device) mask rejects BOTH gated columns.
+func TestHandleQuery_MaskedFilterOracle_Rejected(t *testing.T) {
+	const deviceID = "dev-oracle"
+	deviceCtx := auth.WithPrincipal(context.Background(), &auth.Principal{
+		Kind: auth.PrincipalDevice, Subject: deviceID, TenantID: auditQueryTestTenant, AuthMethod: "test",
+	})
+
+	cases := []struct {
+		name       string
+		ctx        context.Context
+		query      string
+		wantStatus int
+	}{
+		// non-admin user → RowScopeSelf masks {correlationId, traceId}.
+		{"self_traceId_filter_rejected", auditTestCtx("usr-1", nil), "traceId=trace-abc", http.StatusForbidden},
+		// subjectId is NOT masked for self → the filter is admitted.
+		{"self_subjectId_filter_allowed", auditTestCtx("usr-1", nil), "subjectId=victim", http.StatusOK},
+		// device → RowScopeDevice masks {subjectId, correlationId, traceId}: BOTH gated.
+		{"device_traceId_filter_rejected", deviceCtx, "traceId=trace-abc", http.StatusForbidden},
+		{"device_subjectId_filter_rejected", deviceCtx, "subjectId=victim", http.StatusForbidden},
+		// admin → RowScopeTenant masks nothing: every filter is admitted.
+		{"admin_traceId_filter_allowed", auditTestCtx("admin-x", []string{auth.RoleAdmin}), "traceId=trace-abc", http.StatusOK},
+		{"admin_subjectId_filter_allowed", auditTestCtx("admin-x", []string{auth.RoleAdmin}), "subjectId=victim", http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newHandlerStore(t)
+			svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
+			require.NoError(t, err)
+			mux := newHandlerMux(svc)
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?"+tc.query, nil).WithContext(tc.ctx)
+			mux.ServeHTTP(w, req)
+
+			require.Equalf(t, tc.wantStatus, w.Code, "body=%s", w.Body.String())
+			if tc.wantStatus == http.StatusForbidden {
+				// The rejection must name the masked column (PublicString detail), not
+				// leak whether any row matched — it fails before the store is queried.
+				assert.Contains(t, w.Body.String(), "masked for your access scope",
+					"403 must be the masked-column gate, not an unrelated forbidden")
+			}
+		})
+	}
+}
+
+// TestHandleQuery_EmptyMaskedFilterParam_NotRejected verifies an EMPTY masked
+// filter param (?traceId=) is treated as "no filter" and does NOT trip the F1
+// gate — the oracle only exists for a non-empty predicate.
+func TestHandleQuery_EmptyMaskedFilterParam_NotRejected(t *testing.T) {
 	store := newHandlerStore(t)
 	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
-	base := time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC)
-	seed := []*ledger.Entry{
-		// usr-1's own action under trace-abc — must be visible.
-		{
-			ID: "ta-1", EventID: "evt-ta-1", EventType: "event.test.v1",
-			ActorID: "usr-1", TraceID: "trace-abc",
-			Timestamp: base, Payload: []byte("{}"),
-		},
-		// usr-2's action under the same trace-abc — must NOT be visible to usr-1.
-		{
-			ID: "ta-2", EventID: "evt-ta-2", EventType: "event.test.v1",
-			ActorID: "usr-2", TraceID: "trace-abc",
-			Timestamp: base.Add(time.Hour), Payload: []byte("{}"),
-		},
-		// usr-1's action under a different trace — excluded by the traceId filter.
-		{
-			ID: "ta-3", EventID: "evt-ta-3", EventType: "event.test.v1",
-			ActorID: "usr-1", TraceID: "trace-xyz",
-			Timestamp: base.Add(seedThirdEntryOffset), Payload: []byte("{}"),
-		},
-	}
-	for _, e := range seed {
-		require.NoError(t, store.Append(context.Background(), e))
-	}
-
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?traceId=trace-abc", nil)
-	req = req.WithContext(auditTestCtx("usr-1", nil)) // non-admin
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?traceId=", nil)
+	req = req.WithContext(auditTestCtx("usr-1", nil)) // non-admin (masks traceId)
 	mux.ServeHTTP(w, req)
 
-	require.Equal(t, http.StatusOK, w.Code)
-	var resp struct {
-		Data []struct {
-			EventID string `json:"eventId"`
-			ActorID string `json:"actorId"`
-			TraceID string `json:"traceId"`
-		} `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	// Only ta-1 (usr-1 + trace-abc). ta-2 excluded by actor-self; ta-3 by traceId.
-	// The traceId FILTER selects server-side on the stored entry (pre-projection),
-	// so row selection is unaffected by masking; the OUTPUT traceId is value-masked
-	// for a non-admin (self) caller (epic #1337 PR-12, auditFieldMask).
-	require.Len(t, resp.Data, 1)
-	assert.Equal(t, "evt-ta-1", resp.Data[0].EventID)
-	assert.Equal(t, "usr-1", resp.Data[0].ActorID)
-	assert.Equal(t, "<REDACTED>", resp.Data[0].TraceID, "traceId masked for non-admin self")
+	require.Equalf(t, http.StatusOK, w.Code, "empty masked filter must act as no filter; body=%s", w.Body.String())
 }
 
 // TestHandleQuery_ColumnMaskMatrix is the per-principal column-masking matrix

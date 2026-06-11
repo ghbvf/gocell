@@ -38,6 +38,13 @@
 //     governance-style archtest scan — the Go ceiling for a metadata predicate.
 //     The marker's EFFECT is escalated to Hard downstream by
 //     RESOURCE-PROJECTION-CALLSITE-LOCK-01 (go/types field pin).
+//   - SINGLE-SOURCE schema parse: the resource-shape predicate resolves the
+//     response schema through the SAME parser the code generator uses
+//     (contractgen.Parse — recursive $ref resolution included), not a second
+//     hand-rolled JSON walk. So the guard cannot diverge from what the generator
+//     actually materializes: a `data` that generates a DTO is seen as a resource
+//     here, closing the funnel's discovery side at the same fidelity as its
+//     production side.
 //
 // # Tool blind spots (charter §强制盲区自检)
 //
@@ -58,12 +65,11 @@
 //     envelope convention (`data` / `nextCursor` / `hasMore`) is the single
 //     structural signal. Responses that are pure scalars / status objects
 //     (no `data`) are correctly exempt (the green control proves this).
-//   - $ref not resolved. responseHasTopLevelDataResource does not resolve $ref
-//     in the `data` property: a future response schema that uses a $ref for the
-//     `data` value instead of an inline type/items object would not be detected
-//     as resource-bearing and would silently skip enforcement. No current platform
-//     contract uses $ref for `data`; revisit this blind spot if that convention
-//     is introduced.
+//   - $ref IS resolved. Because the predicate parses via contractgen.Parse, a
+//     response that uses a $ref for the `data` value (or for `data.items`) is
+//     resolved to its target schema and detected as resource-bearing — it cannot
+//     skip enforcement. The red fixtures red_data_ref / red_data_items_ref pin
+//     this (previously a documented blind spot; closed in PR-12 F2).
 //   - Anti-vacuity is the non-empty resource-read-GET set assertion (≥1; ≥10
 //     after PR-12). If the enumeration collapses to zero (e.g. the parser stops
 //     surfacing GET endpoints), the production test FAILS rather than passing
@@ -71,14 +77,13 @@
 package archtest
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/tools/codegen/contractgen"
 )
 
 // resourceReadProjectionCarveOut is the function-level carve-out registry for GET
@@ -87,27 +92,44 @@ import (
 // before changing this; every change syncs the carve-out ADR registry.
 var resourceReadProjectionCarveOut = map[string]struct{}{}
 
+// minExpectedResourceReadGETs is the anti-vacuity floor for the resource-read GET
+// scan. Update when platform GET resource-reads are added or removed; the floor
+// catches a schema-predicate regression that silently drops contracts from the
+// scan (e.g. if responseHasTopLevelDataResource stops detecting the data envelope
+// shape, the count would collapse to zero and the test would pass vacuously).
+// After PR-12 there are 10 platform GET reads (all marked).
+const minExpectedResourceReadGETs = 10
+
 // TestResourceProjectionCoverage01 asserts every resource-bearing GET read
 // contract is responseProjection-marked (or carved out), and that no carve-out
-// slot is stale.
+// slot is stale. It orchestrates three steps — scan, anti-vacuity floor, stale
+// carve-out reverse check — each factored into a helper to stay within the
+// project cognitive-complexity budget.
 func TestResourceProjectionCoverage01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 	project := mustParseProjectContracts(t, root)
 
-	var diags []Diagnostic
-	resourceReadCount := 0
-	observedCarveOut := map[string]struct{}{}
+	diags, resourceReadCount, observedCarveOut := scanResourceReadCoverage(root, project.Contracts)
+	assertAntiVacuityFloor(t, resourceReadCount)
+	diags = append(diags, staleCarveOutDiags(observedCarveOut)...)
+	Report(t, "RESOURCE-PROJECTION-COVERAGE-01", diags)
+}
 
-	for _, c := range project.Contracts {
-		if c.Kind != "http" || c.Endpoints.HTTP == nil || c.Endpoints.HTTP.Method != "GET" {
+// scanResourceReadCoverage walks every platform GET contract, classifies the
+// resource-bearing ones, and returns the coverage diagnostics, the count of
+// resource-read GETs seen (for the anti-vacuity floor), and the set of carve-out
+// IDs actually observed (for the stale-slot reverse check).
+func scanResourceReadCoverage(
+	root string, contracts map[string]*metadata.ContractMeta,
+) (diags []Diagnostic, resourceReadCount int, observedCarveOut map[string]struct{}) {
+	observedCarveOut = map[string]struct{}{}
+	for _, c := range contracts {
+		if !isGETPlatformContract(c) {
 			continue
 		}
-		if !isPlatformContract(c) {
-			continue // examples/* projects are out of the platform masking scope
-		}
-		schemaPath := filepath.Join(root, c.Dir, c.SchemaRefs.Response)
-		hasResource, err := responseHasTopLevelDataResource(schemaPath)
+		refPath := filepath.Join(c.Dir, c.SchemaRefs.Response)
+		hasResource, err := responseHasTopLevelDataResource(root, refPath)
 		if err != nil {
 			diags = append(diags, Diagnostic{Message: fmt.Sprintf(
 				"RESOURCE-PROJECTION-COVERAGE-01: GET contract %q response schema %s could not be read/parsed: %v",
@@ -118,31 +140,51 @@ func TestResourceProjectionCoverage01(t *testing.T) {
 			continue // bare scalar / status response, no maskable resource
 		}
 		resourceReadCount++
-
-		marked := c.Endpoints.HTTP.ResponseProjection
-		_, carved := resourceReadProjectionCarveOut[c.ID]
-		if carved {
-			observedCarveOut[c.ID] = struct{}{}
-			if marked {
-				diags = append(diags, Diagnostic{Message: fmt.Sprintf(
-					"RESOURCE-PROJECTION-COVERAGE-01: contract %q is BOTH carved out AND responseProjection-marked "+
-						"— the carve-out slot is stale. Remove it from resourceReadProjectionCarveOut (and the "+
-						"carve-out ADR registry) so it cannot mask a future regression.", c.ID)})
-			}
-			continue
-		}
-		if !marked {
-			diags = append(diags, projectionCoverageDiag(c.ID))
+		if d := coverageDiagForContract(c, observedCarveOut); d != nil {
+			diags = append(diags, *d)
 		}
 	}
+	return diags, resourceReadCount, observedCarveOut
+}
 
-	// minExpectedResourceReadGETs is the anti-vacuity floor for the resource-read
-	// GET scan. Update this constant when platform GET resource-reads are added or
-	// removed; the floor catches a schema-predicate regression that silently drops
-	// contracts from the scan (e.g. if responseHasTopLevelDataResource stops
-	// detecting the data envelope shape, resourceReadCount would collapse to zero
-	// and the test would pass vacuously with no enforcement).
-	const minExpectedResourceReadGETs = 10
+// isGETPlatformContract reports whether c is an in-scope platform GET http
+// contract (the cheap metadata gate before the schema parse).
+func isGETPlatformContract(c *metadata.ContractMeta) bool {
+	if c.Kind != "http" || c.Endpoints.HTTP == nil || c.Endpoints.HTTP.Method != "GET" {
+		return false
+	}
+	return isPlatformContract(c)
+}
+
+// coverageDiagForContract classifies one resource-bearing GET read: it records a
+// carve-out observation and returns a diagnostic when the contract is unmarked
+// (and not carved) or when it is a stale carve-out slot (carved AND marked), else
+// nil. observedCarveOut is mutated to record carve-out hits for the reverse check.
+func coverageDiagForContract(c *metadata.ContractMeta, observedCarveOut map[string]struct{}) *Diagnostic {
+	marked := c.Endpoints.HTTP.ResponseProjection
+	if _, carved := resourceReadProjectionCarveOut[c.ID]; carved {
+		observedCarveOut[c.ID] = struct{}{}
+		if marked {
+			d := Diagnostic{Message: fmt.Sprintf(
+				"RESOURCE-PROJECTION-COVERAGE-01: contract %q is BOTH carved out AND responseProjection-marked "+
+					"— the carve-out slot is stale. Remove it from resourceReadProjectionCarveOut (and the "+
+					"carve-out ADR registry) so it cannot mask a future regression.", c.ID)}
+			return &d
+		}
+		return nil
+	}
+	if !marked {
+		d := projectionCoverageDiag(c.ID)
+		return &d
+	}
+	return nil
+}
+
+// assertAntiVacuityFloor fails the test when fewer than the expected floor of
+// resource-read GETs were enumerated — the scan would otherwise pass vacuously if
+// the schema predicate silently stopped surfacing contracts.
+func assertAntiVacuityFloor(t *testing.T, resourceReadCount int) {
+	t.Helper()
 	if resourceReadCount < minExpectedResourceReadGETs {
 		t.Fatalf("RESOURCE-PROJECTION-COVERAGE-01: only %d resource-bearing GET reads enumerated (floor: %d) — "+
 			"the coverage check may be vacuous or contracts were removed without updating the floor. "+
@@ -150,9 +192,12 @@ func TestResourceProjectionCoverage01(t *testing.T) {
 			"fix the parse or the response-schema convention, or update minExpectedResourceReadGETs.",
 			resourceReadCount, minExpectedResourceReadGETs)
 	}
+}
 
-	// No-stale carve-out reverse check: every carve-out entry must correspond to a
-	// live resource-read GET, else it is a dead bypass slot.
+// staleCarveOutDiags is the no-stale-carve-out reverse check: every carve-out
+// entry must correspond to a live resource-read GET, else it is a dead bypass slot.
+func staleCarveOutDiags(observedCarveOut map[string]struct{}) []Diagnostic {
+	var diags []Diagnostic
 	for id := range resourceReadProjectionCarveOut {
 		if _, seen := observedCarveOut[id]; !seen {
 			diags = append(diags, Diagnostic{Message: fmt.Sprintf(
@@ -161,8 +206,7 @@ func TestResourceProjectionCoverage01(t *testing.T) {
 					"bypass.", id)})
 		}
 	}
-
-	Report(t, "RESOURCE-PROJECTION-COVERAGE-01", diags)
+	return diags
 }
 
 // projectionCoverageDiag is the single diagnostic constructor for an unmarked
@@ -178,27 +222,31 @@ func projectionCoverageDiag(contractID string) Diagnostic {
 
 // TestResourceProjectionCoverage01_ScannerCatchesViolation is the reverse
 // self-check: it drives the SAME schema predicate (responseHasTopLevelDataResource)
-// + marker logic over synthetic fixtures. The RED fixture (a `data`-object
-// response, simulating an UNMARKED GET) must be flagged; the GREEN control (a
-// scalar response with no `data`) must NOT be flagged.
+// over synthetic fixtures. The RED fixtures — an inline `data`-object response,
+// plus a `data: {$ref}` and a `data.items: {$ref}` — must ALL be flagged as
+// resource-bearing; the GREEN control (a scalar response with no `data`) must NOT
+// be. The $ref reds prove the predicate resolves references (F2 blind-spot close).
 func TestResourceProjectionCoverage01_ScannerCatchesViolation(t *testing.T) {
 	t.Parallel()
 	archDir := findArchTestDir(t)
-	base := filepath.Join(archDir, "testdata", "resource_projection_coverage_fixtures")
+	relBase := filepath.Join("testdata", "resource_projection_coverage_fixtures")
 
-	red := filepath.Join(base, "red_unmarked_get", "response.schema.json")
-	hasResource, err := responseHasTopLevelDataResource(red)
-	if err != nil {
-		t.Fatalf("RESOURCE-PROJECTION-COVERAGE-01 self-check: red fixture parse error: %v", err)
-	}
-	// RED: resource present + (simulated) marker absent ⇒ predicate must require it.
-	if !hasResource {
-		t.Error("RESOURCE-PROJECTION-COVERAGE-01 self-check: red fixture has a `data` object resource but the " +
-			"predicate did not detect it — the scanner is vacuous and would not flag an unmarked resource-read GET.")
+	reds := []string{"red_unmarked_get", "red_data_ref", "red_data_items_ref"}
+	for _, name := range reds {
+		refPath := filepath.Join(relBase, name, "response.schema.json")
+		hasResource, err := responseHasTopLevelDataResource(archDir, refPath)
+		if err != nil {
+			t.Fatalf("RESOURCE-PROJECTION-COVERAGE-01 self-check: red fixture %q parse error: %v", name, err)
+		}
+		if !hasResource {
+			t.Errorf("RESOURCE-PROJECTION-COVERAGE-01 self-check: red fixture %q has a `data` object resource but "+
+				"the predicate did not detect it — the scanner is vacuous and would not flag an unmarked "+
+				"resource-read GET.", name)
+		}
 	}
 
-	green := filepath.Join(base, "green_scalar_no_data", "response.schema.json")
-	hasResourceGreen, err := responseHasTopLevelDataResource(green)
+	greenRef := filepath.Join(relBase, "green_scalar_no_data", "response.schema.json")
+	hasResourceGreen, err := responseHasTopLevelDataResource(archDir, greenRef)
 	if err != nil {
 		t.Fatalf("RESOURCE-PROJECTION-COVERAGE-01 self-check: green fixture parse error: %v", err)
 	}
@@ -217,29 +265,23 @@ func isPlatformContract(c *metadata.ContractMeta) bool {
 	return strings.HasPrefix(filepath.ToSlash(c.Dir), "contracts/")
 }
 
-// jsonSchemaNode is the minimal shape of a JSON Schema this rule inspects: the
-// node `type`, its object `properties`, and (for arrays) `items`.
-type jsonSchemaNode struct {
-	Type       string                     `json:"type"`
-	Properties map[string]*jsonSchemaNode `json:"properties"`
-	Items      *jsonSchemaNode            `json:"items"`
-}
-
 // responseHasTopLevelDataResource reports whether the response JSON Schema at
-// path declares a top-level `data` property that is an object (single resource)
-// or an array whose items are an object (resource list) — the maskable-resource
-// envelope shape. A `data` of any other shape (scalar, missing) is not a
-// maskable resource.
-func responseHasTopLevelDataResource(path string) (bool, error) {
-	raw, err := os.ReadFile(path) //nolint:gosec // archtest reads a schema path it derived from metadata
+// refPath (relative to root) declares a top-level `data` property that is an
+// object (single resource) or an array whose items are an object (resource list)
+// — the maskable-resource envelope shape. A `data` of any other shape (scalar,
+// missing) is not a maskable resource.
+//
+// It parses through contractgen.Parse — the SAME parser the code generator uses,
+// with recursive $ref resolution — so a `data` (or `data.items`) expressed as a
+// $ref is resolved to its target schema and detected identically to an inline
+// one. This single-source parse is what makes the guard's resource detection
+// match the generator's DTO materialization (no second weak parser to diverge).
+func responseHasTopLevelDataResource(root, refPath string) (bool, error) {
+	schema, err := contractgen.Parse(root, refPath)
 	if err != nil {
 		return false, err
 	}
-	var root jsonSchemaNode
-	if err := json.Unmarshal(raw, &root); err != nil {
-		return false, err
-	}
-	data := root.Properties["data"]
+	data := schema.Properties["data"]
 	if data == nil {
 		return false, nil
 	}
