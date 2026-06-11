@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fixture.red.data.items.ref.item",
+  "description": "Sibling resource schema referenced by red_data_items_ref/response.schema.json's `data.items` $ref.",
+  "type": "object",
+  "required": ["id", "secret"],
+  "properties": {
+    "id": { "type": "string" },
+    "secret": { "type": "string" }
+  }
+}

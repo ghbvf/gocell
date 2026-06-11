@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.sample.responseprojectionlist.v1.response",
+  "type": "object",
+  "properties": {
+    "data": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" }
+        },
+        "required": ["id"]
+      }
+    },
+    "nextCursor": { "type": "string" },
+    "hasMore": { "type": "boolean" }
+  },
+  "required": ["data", "nextCursor", "hasMore"]
+}

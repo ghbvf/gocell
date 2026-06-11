@@ -7,6 +7,8 @@ import (
 	adminGen "github.com/ghbvf/gocell/generated/contracts/http/auth/setup/admin/v1"
 	statusGen "github.com/ghbvf/gocell/generated/contracts/http/auth/setup/status/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/authz"
+	"github.com/ghbvf/gocell/pkg/projection"
 	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
@@ -27,18 +29,23 @@ func (a StatusAdapter) Status(ctx context.Context, req *statusGen.Request) (stat
 		// an invalid/absent X-Tenant-ID must not let a caller distinguish tenants.
 		// This fail-soft DELIBERATELY supersedes the fail-closed reading of review
 		// F3 — see ADR 1160 §"setup/status fail-soft ... supersedes ... (F3)".
-		//nolint:nilerr // intentional fail-soft: invalid tenant ⇒ non-enumerable false
-		return statusGen.Status200JSONResponse{
-			Data: &statusGen.ResponseData{HasAdmin: false},
-		}, nil
+		return toStatusProjection(false)
 	}
 	out, err := a.S.Status(ctx, tid)
 	if err != nil {
 		return nil, err
 	}
-	return statusGen.Status200JSONResponse{
-		Data: &statusGen.ResponseData{HasAdmin: out.HasAdmin},
-	}, nil
+	return toStatusProjection(out.HasAdmin)
+}
+
+// toStatusProjection wraps a HasAdmin boolean into the sealed projection envelope.
+// Identity projection (epic #1337 PR-12); masking obligation source becomes the ABAC Decision in PR-10.
+func toStatusProjection(hasAdmin bool) (statusGen.StatusResponseObject, error) {
+	data, err := projection.NewProjection(authz.IdentityFieldMask(), statusGen.ResponseData{HasAdmin: hasAdmin}.ToMap())
+	if err != nil {
+		return nil, err
+	}
+	return statusGen.Status200JSONResponse{Data: data}, nil
 }
 
 // AdminAdapter implements adminGen.Service for http.auth.setup.admin.v1.

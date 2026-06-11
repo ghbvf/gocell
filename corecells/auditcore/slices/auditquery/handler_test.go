@@ -976,60 +976,183 @@ func TestHandleQuery_TraceIDFilter_EmptyParam(t *testing.T) {
 	assert.Len(t, resp.Data, 2, "empty ?traceId= must act as no filter and return all rows")
 }
 
-// TestHandleQuery_TraceIDFilter_NonAdminScopedToActorSelf verifies that a
-// non-admin caller with ?traceId=X still only sees their own actor_id rows.
-// The traceId filter is AND-ed with the actor-self policy enforced by
-// auditQueryPolicy — it does NOT widen scope beyond the caller's own actions.
-func TestHandleQuery_TraceIDFilter_NonAdminScopedToActorSelf(t *testing.T) {
+// TestHandleQuery_MaskedFilterOracle_Rejected locks the F1 invariant (epic #1337
+// PR-12): a caller may NOT use a query predicate on a column its row-visibility
+// scope masks. Allowing such a filter would leak a match/no-match oracle — a
+// non-admin (self) could binary-search the very traceId the response redacts; a
+// device could enumerate the subject it cannot see. The matrix drives every
+// (scope × filterable-maskable column) pair and asserts the gate rejects exactly
+// the masked ones (403) and admits the visible ones (200). It also pins the
+// relationship anti-drift: the maximal (device) mask rejects BOTH gated columns.
+func TestHandleQuery_MaskedFilterOracle_Rejected(t *testing.T) {
+	const deviceID = "dev-oracle"
+	deviceCtx := auth.WithPrincipal(context.Background(), &auth.Principal{
+		Kind: auth.PrincipalDevice, Subject: deviceID, TenantID: auditQueryTestTenant, AuthMethod: "test",
+	})
+
+	cases := []struct {
+		name       string
+		ctx        context.Context
+		query      string
+		wantStatus int
+	}{
+		// non-admin user → RowScopeSelf masks {correlationId, traceId}.
+		{"self_traceId_filter_rejected", auditTestCtx("usr-1", nil), "traceId=trace-abc", http.StatusForbidden},
+		// subjectId is NOT masked for self → the filter is admitted.
+		{"self_subjectId_filter_allowed", auditTestCtx("usr-1", nil), "subjectId=victim", http.StatusOK},
+		// device → RowScopeDevice masks {subjectId, correlationId, traceId}: BOTH gated.
+		{"device_traceId_filter_rejected", deviceCtx, "traceId=trace-abc", http.StatusForbidden},
+		{"device_subjectId_filter_rejected", deviceCtx, "subjectId=victim", http.StatusForbidden},
+		// admin → RowScopeTenant masks nothing: every filter is admitted.
+		{"admin_traceId_filter_allowed", auditTestCtx("admin-x", []string{auth.RoleAdmin}), "traceId=trace-abc", http.StatusOK},
+		{"admin_subjectId_filter_allowed", auditTestCtx("admin-x", []string{auth.RoleAdmin}), "subjectId=victim", http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newHandlerStore(t)
+			svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
+			require.NoError(t, err)
+			mux := newHandlerMux(svc)
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?"+tc.query, nil).WithContext(tc.ctx)
+			mux.ServeHTTP(w, req)
+
+			require.Equalf(t, tc.wantStatus, w.Code, "body=%s", w.Body.String())
+			if tc.wantStatus == http.StatusForbidden {
+				// The rejection must name the masked column (PublicString detail), not
+				// leak whether any row matched — it fails before the store is queried.
+				assert.Contains(t, w.Body.String(), "masked for your access scope",
+					"403 must be the masked-column gate, not an unrelated forbidden")
+			}
+		})
+	}
+}
+
+// TestHandleQuery_EmptyMaskedFilterParam_NotRejected verifies an EMPTY masked
+// filter param (?traceId=) is treated as "no filter" and does NOT trip the F1
+// gate — the oracle only exists for a non-empty predicate.
+func TestHandleQuery_EmptyMaskedFilterParam_NotRejected(t *testing.T) {
 	store := newHandlerStore(t)
 	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
-	base := time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC)
-	seed := []*ledger.Entry{
-		// usr-1's own action under trace-abc — must be visible.
-		{
-			ID: "ta-1", EventID: "evt-ta-1", EventType: "event.test.v1",
-			ActorID: "usr-1", TraceID: "trace-abc",
-			Timestamp: base, Payload: []byte("{}"),
-		},
-		// usr-2's action under the same trace-abc — must NOT be visible to usr-1.
-		{
-			ID: "ta-2", EventID: "evt-ta-2", EventType: "event.test.v1",
-			ActorID: "usr-2", TraceID: "trace-abc",
-			Timestamp: base.Add(time.Hour), Payload: []byte("{}"),
-		},
-		// usr-1's action under a different trace — excluded by the traceId filter.
-		{
-			ID: "ta-3", EventID: "evt-ta-3", EventType: "event.test.v1",
-			ActorID: "usr-1", TraceID: "trace-xyz",
-			Timestamp: base.Add(seedThirdEntryOffset), Payload: []byte("{}"),
-		},
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?traceId=", nil)
+	req = req.WithContext(auditTestCtx("usr-1", nil)) // non-admin (masks traceId)
+	mux.ServeHTTP(w, req)
+
+	require.Equalf(t, http.StatusOK, w.Code, "empty masked filter must act as no filter; body=%s", w.Body.String())
+}
+
+// TestHandleQuery_ColumnMaskMatrix is the per-principal column-masking matrix
+// (epic #1337 PR-12, T12.4 unit-level counterpart): admin / non-admin user / device
+// callers see DIFFERENT visible columns from auditFieldMask, discharged through the
+// ResourceProjection funnel. Same row contents per owner axis isolate masking from
+// data. admin → full view; non-admin self → correlationId+traceId masked; device →
+// subjectId+correlationId+traceId masked. tenantId is visible to all (own-tenant
+// row) — it is projected (PR-12) but not in any per-scope mask.
+func TestHandleQuery_ColumnMaskMatrix(t *testing.T) {
+	const (
+		masked      = "<REDACTED>"
+		selfSubject = "usr-self"
+		deviceID    = "dev-7"
+		subjectVal  = "subject-of-record"
+	)
+	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	// One row per owner axis (actor_id), each carrying identical sensitive column
+	// values so the assertions isolate masking, not data. The owner column is
+	// actor_id (vis.Allows(entry.ActorID)).
+	seedRow := func(id, actor string) *ledger.Entry {
+		return &ledger.Entry{
+			ID: id, EventID: "evt-" + id, EventType: "event.test.v1",
+			ActorID:       actor,
+			SubjectID:     subjectVal,
+			TenantID:      auditQueryTestTenant,
+			CorrelationID: "corr-" + id,
+			TraceID:       "trace-" + id,
+			Timestamp:     base, OccurredAt: base,
+			Payload: []byte("{}"),
+		}
 	}
-	for _, e := range seed {
+	for _, e := range []*ledger.Entry{
+		seedRow("admin", "admin-actor"),
+		seedRow("self", selfSubject),
+		seedRow("dev", deviceID),
+	} {
 		require.NoError(t, store.Append(context.Background(), e))
 	}
 
-	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?traceId=trace-abc", nil)
-	req = req.WithContext(auditTestCtx("usr-1", nil)) // non-admin
-	mux.ServeHTTP(w, req)
+	deviceCtx := auth.WithPrincipal(context.Background(), &auth.Principal{
+		Kind: auth.PrincipalDevice, Subject: deviceID, TenantID: auditQueryTestTenant, AuthMethod: "test",
+	})
 
-	require.Equal(t, http.StatusOK, w.Code)
-	var resp struct {
-		Data []struct {
-			EventID string `json:"eventId"`
-			ActorID string `json:"actorId"`
-			TraceID string `json:"traceId"`
-		} `json:"data"`
+	cases := []struct {
+		name                             string
+		ctx                              context.Context
+		eventID                          string
+		wantSubject, wantCorr, wantTrace string
+	}{
+		// admin (RowScopeTenant): full view — every column visible.
+		{"admin_full_view", auditTestCtx("admin-x", []string{auth.RoleAdmin}), "evt-admin", subjectVal, "corr-admin", "trace-admin"},
+		// non-admin user (RowScopeSelf): operator-diagnostic columns masked.
+		{"non_admin_self_masks_diagnostics", auditTestCtx(selfSubject, nil), "evt-self", subjectVal, masked, masked},
+		// device (RowScopeDevice): also masks the human subject-of-record.
+		{"device_masks_subject_and_diagnostics", deviceCtx, "evt-dev", masked, masked, masked},
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	// Only ta-1 (usr-1 + trace-abc). ta-2 excluded by actor-self; ta-3 by traceId.
-	require.Len(t, resp.Data, 1)
-	assert.Equal(t, "evt-ta-1", resp.Data[0].EventID)
-	assert.Equal(t, "usr-1", resp.Data[0].ActorID)
-	assert.Equal(t, "trace-abc", resp.Data[0].TraceID)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil).WithContext(tc.ctx)
+			mux.ServeHTTP(w, req)
+			require.Equalf(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+			var resp struct {
+				Data []map[string]any `json:"data"`
+			}
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+			var row map[string]any
+			for _, r := range resp.Data {
+				if r["eventId"] == tc.eventID {
+					row = r
+					break
+				}
+			}
+			require.NotNilf(t, row, "row %s not visible to %s; body=%s", tc.eventID, tc.name, w.Body.String())
+
+			assert.Equal(t, tc.wantSubject, row["subjectId"], "subjectId")
+			assert.Equal(t, tc.wantCorr, row["correlationId"], "correlationId")
+			assert.Equal(t, tc.wantTrace, row["traceId"], "traceId")
+			// tenantId is projected (PR-12) and never in a per-scope mask: visible to all.
+			assert.Equal(t, auditQueryTestTenant, row["tenantId"], "tenantId visible (own tenant)")
+
+			// Raw-value non-leak assertions: the actual sensitive values for THIS row
+			// must not appear anywhere in the body when the scope masks them.
+			body := w.Body.String()
+			switch tc.name {
+			case "non_admin_self_masks_diagnostics":
+				// self row's correlationId and traceId are masked; raw values must not leak.
+				assert.NotContains(t, body, "corr-self", "corr-self raw value must not appear in self-scoped body")
+				assert.NotContains(t, body, "trace-self", "trace-self raw value must not appear in self-scoped body")
+			case "device_masks_subject_and_diagnostics":
+				// device query is scoped to actor_id==deviceID, so only the device row is returned.
+				require.Lenf(t, resp.Data, 1, "device scope must return exactly 1 row; body=%s", body)
+				// device row's correlationId and traceId are masked; raw values must not leak.
+				assert.NotContains(t, body, "corr-dev", "corr-dev raw value must not appear in device-scoped body")
+				assert.NotContains(t, body, "trace-dev", "trace-dev raw value must not appear in device-scoped body")
+				// subjectVal is unique to the device's own row in this single-row response.
+				assert.NotContains(t, body, subjectVal, "subjectVal must not appear in device-scoped body (single-row response)")
+			}
+		})
+	}
 }
 
 type actorBindingCase struct {

@@ -40,6 +40,12 @@ func KnownNonDefaultTags() [][]string {
 		// rule files (TEST-TIME-LITERAL / TEST-SLEEP-DISCIPLINE / MODULE-PATH-FUNNEL
 		// etc. apply to them), exactly as they did before the suite was tagged.
 		{"archtest"},
+		// releasesmoke gates the single external-consumer release smoke
+		// (tools/releasesmoke/external_get_smoke_test.go, RELEASE-EXTERNAL-GET-01,
+		// #1843), kept off the bare `go test ./...` path because it spawns nested
+		// `go get`/`go build`. Like archtest above (and unlike archtest_fixture), it
+		// gates a REAL test file the meta-scanners should still see.
+		{"releasesmoke"},
 		// archtest_fixture is deliberately ABSENT (#944): the fixture build tag
 		// is NOT a generic production tag and must never enter this union, or a
 		// business Run(t, Typed(TypedOpts{Tags: FlatNonDefaultTags()}, ...)) scan

@@ -58,6 +58,7 @@ endpoints:
       responses:
         - 503
     noContent: false
+    responseProjection: true
     responses:
       400:
         description: "Bad request — invalid query parameter format (e.g. from/to not RFC3339, invalid cursor or limit)"

@@ -1,0 +1,10 @@
+go 1.25
+
+use (
+	.
+	./adapters/keep
+	./corecells
+	./examples/foo
+	./tests/bar
+	./cmd/baz
+)
