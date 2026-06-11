@@ -18,7 +18,7 @@
 
 > 本仓 issue/PR 全程经 `gh` CLI / 技能创建，body 读 `.github/project-template/` 下对应模版（`--body-file`）。
 
-**新建 backlog**：`gh issue create --label backlog --label pri-pX --label area-XX --label type-XX [--label cx-X] --title "[<ID>] ..." --body-file <填好的 backlog.md>`。pri/area/type 必须显式贴；cx 可选（能定级则贴，取值见 §2.6/§3.2）。
+**新建 backlog**：`gh issue create --label backlog --label pri-pX --label area-XX --label type-XX --label cx-X --title "[<ID>] ..." --body-file <填好的 backlog.md>`。area/type/pri/cx 四轴必须显式贴（cx 取值见 §2.6/§3.2，无 unknown sentinel）；建单前先经 `hack/automation/issue-labels.sh validate` 校验完整性（`issues` B1 强制门）。
 
 **新建 epic**：`gh issue create --label epic --label backlog --label pri-pX --label area-XX --title "[EPIC] ..." --body-file <填好的 epic.md>`；子任务用 GitHub 原生 sub-issue 关联。epic 不贴 cx（跨多 PR、无单一 diff）。
 
@@ -69,9 +69,9 @@
 
 流转见 §5。PR 始终恰好一个 `pr-status/*`，pr-review 轴 `approved` XOR `changes-requested`（切一侧必清同轴对侧）。`/fix` 不能直接到 `ready`——必过 `/pr-review --check` 验证（fix 不能自证完成）。`needs-review-again` 仅用于 ship 首次交接；review 出 changes-requested 后始终切 `needs-fix`（5-state）。
 
-### 2.6 cx-XX（复杂度，1 个，可选 CLI 贴）
+### 2.6 cx-XX（复杂度，1 个，必填 CLI 贴）
 
-`cx-1` / `cx-2` / `cx-3` / `cx-4`（语义见 §3.2 rubric）。与 pri 同为评级两轴之一、载体对称（都是 label），但 cx **可选**：建 issue / 评级时能定级则贴 `--label cx-X`，不强制；review/fix finding 派生的 issue 从 finding 的 `[…Cx…]` tag 自动带上对应 cx。epic 不贴（跨多 PR、无单一 diff）。
+`cx-1` / `cx-2` / `cx-3` / `cx-4`（语义见 §3.2 rubric）。与 pri 同为评级两轴之一、载体对称（都是 label），cx **必填**：建 issue 时必须定级并显式 `--label cx-X`（与 pri 对称，无 unknown sentinel——定不到级也要在 §3.2 rubric 里就近取一档）；review/fix finding 派生的 issue 从 finding 的 `[…Cx…]` tag 自动带上对应 cx。epic 不贴（跨多 PR、无单一 diff）。非 epic backlog issue 的 area/type/pri/cx 完整性由 `hack/automation/issue-labels.sh validate` 守卫（`issues` B1 建单前强制门 + `make verify` 经 `verify-automation-selftest.sh` selftest 回归）。
 
 ---
 
