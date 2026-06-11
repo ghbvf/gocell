@@ -48,4 +48,11 @@ type PolicyRepository interface {
 	// Delete removes the policy identified by id from the tenant. Returns
 	// KindNotFound when the policy does not exist in t.
 	Delete(ctx context.Context, t tenant.TenantID, id string) error
+	// RepoReady reports whether the backing store is reachable. It satisfies
+	// kernel/healthz.RepoProber so the cell can fold policy-store readiness into
+	// the cell-level readiness probe (#1346 PR-8, T8.4). mem returns nil
+	// unconditionally (in-memory is always ready); PG runs a lightweight probe
+	// against the policies table (table reachable ⇒ ready, including the empty
+	// table). The signature matches healthz.RepoProber.RepoReady exactly.
+	RepoReady(ctx context.Context) error
 }

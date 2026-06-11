@@ -21,14 +21,15 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
-// Bundle is the PG-backed (UserRepository, RoleRepository, SetupLock,
-// TxRunner) quadruple. Fields are unexported; corecells/accesscore.WithPGBundle
-// consumes the values via the exported accessor methods.
+// Bundle is the PG-backed (UserRepository, RoleRepository, PolicyRepository,
+// SetupLock, TxRunner) quintuple. Fields are unexported; corecells/accesscore.
+// WithPGBundle consumes the values via the exported accessor methods.
 type Bundle struct {
-	userRepo  ports.UserRepository
-	roleRepo  ports.RoleRepository
-	setupLock ports.SetupLockAcquirer
-	txRunner  persistence.CellTxManager
+	userRepo   ports.UserRepository
+	roleRepo   ports.RoleRepository
+	policyRepo ports.PolicyRepository
+	setupLock  ports.SetupLockAcquirer
+	txRunner   persistence.CellTxManager
 }
 
 // NewBundle constructs a PG-backed accesscore bundle. All four wired
@@ -58,15 +59,20 @@ func NewBundle(pool *pgxpool.Pool, txMgr persistence.TxRunner, clk clock.Clock) 
 	if err != nil {
 		return Bundle{}, err
 	}
+	policyRepo, err := accessrepo.NewPGPolicyRepo(pool, txMgr, clk)
+	if err != nil {
+		return Bundle{}, err
+	}
 	setupLock, err := accessrepo.NewPGSetupLock(txMgr)
 	if err != nil {
 		return Bundle{}, err
 	}
 	return Bundle{
-		userRepo:  userRepo,
-		roleRepo:  roleRepo,
-		setupLock: setupLock,
-		txRunner:  persistence.WrapForCell(txMgr),
+		userRepo:   userRepo,
+		roleRepo:   roleRepo,
+		policyRepo: policyRepo,
+		setupLock:  setupLock,
+		txRunner:   persistence.WrapForCell(txMgr),
 	}, nil
 }
 
@@ -75,6 +81,9 @@ func (b Bundle) UserRepository() ports.UserRepository { return b.userRepo }
 
 // RoleRepository returns the bundle-paired PG RoleRepository.
 func (b Bundle) RoleRepository() ports.RoleRepository { return b.roleRepo }
+
+// PolicyRepository returns the bundle-paired PG PolicyRepository (#1346 PR-8).
+func (b Bundle) PolicyRepository() ports.PolicyRepository { return b.policyRepo }
 
 // SetupLock returns the bundle-paired PG advisory lock.
 func (b Bundle) SetupLock() ports.SetupLockAcquirer { return b.setupLock }

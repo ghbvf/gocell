@@ -54,10 +54,12 @@ func (r *PolicyRepository) Save(ctx context.Context, t tenant.TenantID, p *abac.
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: policy must not be nil")
 	}
 	if p.TenantID != t {
+		// Programmer error, not user input — keep the isolation-domain ids on the
+		// server log only (WithInternal), never the wire. Mirrors the PG store.
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: policy TenantID does not match the provided tenant",
-			errcode.WithDetails(
-				errcode.PublicString("policyTenantId", string(p.TenantID)),
-				errcode.PublicString("tenantId", string(t)),
+			errcode.WithInternal(
+				errcode.InternalAttr("policyTenantId", string(p.TenantID)),
+				errcode.InternalAttr("tenantId", string(t)),
 			))
 	}
 	if err := p.Validate(); err != nil {
@@ -132,6 +134,13 @@ func (r *PolicyRepository) Delete(ctx context.Context, t tenant.TenantID, id str
 	delete(m, id)
 	return nil
 }
+
+// RepoReady reports store readiness. The in-memory PolicyRepository has no
+// external dependency, so it is always ready (returns nil). It exists to satisfy
+// ports.PolicyRepository (and thus kernel/healthz.RepoProber) uniformly across
+// implementations: the cell folds every repo's readiness into one probe, and a
+// mem store that omitted this would be invisible to that aggregate (#1346 PR-8).
+func (r *PolicyRepository) RepoReady(_ context.Context) error { return nil }
 
 // tenantPolicies returns (or lazily initializes) the per-tenant inner map.
 // Caller MUST hold r.mu (write).

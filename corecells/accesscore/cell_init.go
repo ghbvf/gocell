@@ -11,7 +11,6 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/adminprovision"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/authzmutate"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/credentialinvalidate"
-	"github.com/ghbvf/gocell/corecells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/authorizationdecide"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/configreceive"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/identitymanage"
@@ -23,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -136,6 +136,10 @@ func (c *AccessCore) validateRequiredDeps() error {
 	if c.roleRepo == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"accesscore requires a role repository: wire WithMemBundle or WithPGBundle")
+	}
+	if c.policyRepo == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"accesscore requires a policy repository: wire WithMemBundle or WithPGBundle")
 	}
 	if c.refreshStore == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingTokenIssuer,
@@ -312,13 +316,11 @@ func (c *AccessCore) initSlices() error {
 	c.logoutHandler = sessionlogout.NewHandler(logoutSvc, DefaultRefreshMaxAge)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(sessionlogout.SliceMetadata()))
 
-	// authorization-decide (ABAC PDP engine, #1345 PR-7). The cell owns its
-	// policy store: the in-memory PolicyRepository is the only implementation in
-	// PR-7 (mem in both demo and PG modes). The injectable PG policy store lands
-	// in PR-8 (#1346), which will route this through the bundle like the other
-	// repos; until then there is no mem-vs-PG fork to make.
-	policyRepo := mem.NewPolicyRepository()
-	authzSvc, err := authorizationdecide.NewService(c.clk, policyRepo, c.logger,
+	// authorization-decide (ABAC PDP engine, #1345 PR-7). The policy store is
+	// wired through the bundle funnel (#1346 PR-8): WithMemBundle supplies the
+	// in-memory PolicyRepository, WithPGBundle the durable PG-backed one. Both are
+	// fail-fast at the deps preflight above (c.policyRepo != nil).
+	authzSvc, err := authorizationdecide.NewService(c.clk, c.policyRepo, c.logger,
 		authorizationdecide.WithTxManager(c.txRunner))
 	if err != nil {
 		return err
@@ -435,11 +437,31 @@ func (c *AccessCore) initInternal(ctx context.Context, reg cell.Registrar) error
 	return nil
 }
 
+// repoReadyAll aggregates several healthz.RepoProber values into one cell-level
+// readiness signal: ready only when EVERY backing repo is ready (fail-closed —
+// the first not-ready repo's error is returned). cellgen emits exactly one
+// readiness probe per cell (accesscore_repo_ready), so a cell with multiple
+// independently-failable stores folds them through this composite rather than
+// minting per-repo probes (#1346 PR-8, T8.4 — observability.md "cell repo
+// readiness 由 cell 边界显式注册，禁止静默吞掉缺失 repo").
+type repoReadyAll []healthz.RepoProber
+
+func (rs repoReadyAll) RepoReady(ctx context.Context) error {
+	for _, r := range rs {
+		if err := r.RepoReady(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // registerHealthAndLifecycle registers health probes and lifecycle hooks into reg.
 func (c *AccessCore) registerHealthAndLifecycle(reg cell.Registrar) error {
-	// session.Store satisfies healthz.RepoProber via its RepoReady method.
-	// RegisterReadiness is the cellgen-generated typed funnel.
-	if err := RegisterReadiness(reg, c.sessionStore); err != nil {
+	// Cell-level readiness aggregates every independently-failable repo: the
+	// session store and (since #1346 PR-8) the ABAC policy store. Both satisfy
+	// healthz.RepoProber via RepoReady; the composite is registered through the
+	// cellgen-generated RegisterReadiness funnel as accesscore_repo_ready.
+	if err := RegisterReadiness(reg, repoReadyAll{c.sessionStore, c.policyRepo}); err != nil {
 		return err
 	}
 	if err := cell.RegisterEmitterHealthProbes(reg, c.emitter); err != nil {

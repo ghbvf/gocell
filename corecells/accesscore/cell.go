@@ -86,6 +86,13 @@ func withRoleRepository(r ports.RoleRepository) Option {
 	return func(c *AccessCore) { c.roleRepo = r }
 }
 
+// withPolicyRepository sets the ABAC PolicyRepository (#1346 PR-8). Unexported —
+// see withUserRepository godoc for the bundle funnel rationale; the policy store
+// is wired through the same WithMemBundle / WithPGBundle funnel as its siblings.
+func withPolicyRepository(r ports.PolicyRepository) Option {
+	return func(c *AccessCore) { c.policyRepo = r }
+}
+
 // WithEmitter injects a pre-composed outbox.CellEmitter directly into the Cell.
 // Preferred path for tests and for composition roots that have already built
 // a CellEmitter (e.g. outbox.DemoCellEmitter(), a recorder via
@@ -289,6 +296,7 @@ type AccessCore struct {
 	userRepo     ports.UserRepository
 	sessionStore session.Store
 	roleRepo     ports.RoleRepository
+	policyRepo   ports.PolicyRepository
 	refreshStore refresh.Store
 
 	// sessionStoreNil is set by WithSessionStore when a nil session.Store is

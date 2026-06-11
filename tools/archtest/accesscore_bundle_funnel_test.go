@@ -46,10 +46,11 @@ const accesscoreBundleFunnelRuleID = "ACCESSCORE-BUNDLE-FUNNEL-01"
 // corecells/accesscore package root. Bundle funnel collapses them to
 // unexported call sites only.
 var accesscoreBundleForbiddenExports = map[string]struct{}{
-	"WithUserRepository": {},
-	"WithRoleRepository": {},
-	"WithSetupLock":      {},
-	"WithTxManager":      {},
+	"WithUserRepository":   {},
+	"WithRoleRepository":   {},
+	"WithPolicyRepository": {}, // #1346 PR-8 — policy store joins the bundle funnel
+	"WithSetupLock":        {},
+	"WithTxManager":        {},
 }
 
 // TestAccessCoreBundleFunnel scans corecells/accesscore for any production

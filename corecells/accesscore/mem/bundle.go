@@ -37,14 +37,15 @@ type noopSetupLock struct{}
 
 func (noopSetupLock) Acquire(context.Context) error { return nil }
 
-// Bundle is the mem-backed (UserRepository, RoleRepository, SetupLock,
-// TxRunner) quadruple. Fields are unexported; corecells/accesscore.WithMemBundle
-// consumes the values via the exported accessor methods.
+// Bundle is the mem-backed (UserRepository, RoleRepository, PolicyRepository,
+// SetupLock, TxRunner) quintuple. Fields are unexported; corecells/accesscore.
+// WithMemBundle consumes the values via the exported accessor methods.
 type Bundle struct {
-	userRepo  ports.UserRepository
-	roleRepo  ports.RoleRepository
-	setupLock ports.SetupLockAcquirer
-	txRunner  persistence.CellTxManager
+	userRepo   ports.UserRepository
+	roleRepo   ports.RoleRepository
+	policyRepo ports.PolicyRepository
+	setupLock  ports.SetupLockAcquirer
+	txRunner   persistence.CellTxManager
 }
 
 // NewBundle constructs a mem-backed accesscore bundle. All four wired
@@ -57,10 +58,14 @@ type Bundle struct {
 func NewBundle(clk clock.Clock) Bundle {
 	store := mem.NewStore(clk)
 	return Bundle{
-		userRepo:  store.UserRepository(),
-		roleRepo:  store.RoleRepository(),
-		setupLock: noopSetupLock{},
-		txRunner:  persistence.WrapForCell(store.TxRunner()),
+		userRepo: store.UserRepository(),
+		roleRepo: store.RoleRepository(),
+		// The mem PolicyRepository is standalone — it shares no cross-repo
+		// invariant with users/roles (see its godoc), so it is constructed
+		// directly rather than derived from the shared store.
+		policyRepo: mem.NewPolicyRepository(),
+		setupLock:  noopSetupLock{},
+		txRunner:   persistence.WrapForCell(store.TxRunner()),
 	}
 }
 
@@ -69,6 +74,9 @@ func (b Bundle) UserRepository() ports.UserRepository { return b.userRepo }
 
 // RoleRepository returns the bundle-paired RoleRepository view.
 func (b Bundle) RoleRepository() ports.RoleRepository { return b.roleRepo }
+
+// PolicyRepository returns the bundle-paired mem PolicyRepository (#1346 PR-8).
+func (b Bundle) PolicyRepository() ports.PolicyRepository { return b.policyRepo }
 
 // SetupLock returns the bundle-paired SetupLock (NoopSetupLock for mem;
 // the store-paired TxRunner already serializes via store.mu).

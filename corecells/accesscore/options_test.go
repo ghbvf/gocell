@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -50,6 +51,7 @@ func TestInit_MissingSetupLock_FailsFast(t *testing.T) {
 		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		withPolicyRepository(mem.NewPolicyRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
@@ -91,6 +93,7 @@ func TestWithSetupLock_NilOption_RejectedAtInit(t *testing.T) {
 				clock.Real(),
 				withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 				withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+				withPolicyRepository(mem.NewPolicyRepository()),
 				WithSessionStore(testutil.RealSessionRepo(t)),
 				WithJWTIssuer(testIssuer),
 				WithJWTVerifier(testVerifier),
@@ -115,6 +118,7 @@ func TestWithInMemoryDefaults(t *testing.T) {
 		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		withPolicyRepository(mem.NewPolicyRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
@@ -143,6 +147,7 @@ func TestHealthCheckers_InMemory(t *testing.T) {
 		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		withPolicyRepository(mem.NewPolicyRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
@@ -172,6 +177,7 @@ func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
 		WithJWTVerifier(testVerifier),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		withPolicyRepository(mem.NewPolicyRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
@@ -188,6 +194,43 @@ func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
 		"session.Store satisfies RepoProber; repo probe must be registered")
 	assert.NoError(t, agg.Probe(ProbeRepoReady).Check(context.Background()),
 		"MemStore.RepoReady must return nil (in-memory always ready)")
+}
+
+// okProber / failingProber are minimal healthz.RepoProber stubs for the
+// composite-readiness test below.
+type okProber struct{}
+
+func (okProber) RepoReady(context.Context) error { return nil }
+
+type failingProber struct{ err error }
+
+func (f failingProber) RepoReady(context.Context) error { return f.err }
+
+// TestRepoReadyAll_FailClosed verifies the composite RepoProber that folds the
+// session + policy stores into accesscore_repo_ready: ready only when every
+// member is ready, returning the first not-ready member's error (fail-closed).
+func TestRepoReadyAll_FailClosed(t *testing.T) {
+	ctx := context.Background()
+
+	// Empty + all-ready composites report ready.
+	assert.NoError(t, repoReadyAll{}.RepoReady(ctx), "empty composite is vacuously ready")
+	assert.NoError(t, repoReadyAll{okProber{}, okProber{}}.RepoReady(ctx), "all-ready composite is ready")
+
+	// A single not-ready member makes the whole composite not-ready, surfacing
+	// that member's error unchanged.
+	wantErr := errors.New("policy store unreachable")
+	err := repoReadyAll{okProber{}, failingProber{err: wantErr}}.RepoReady(ctx)
+	assert.ErrorIs(t, err, wantErr, "composite must fail closed with the not-ready member's error")
+}
+
+// TestRepoReadyAll_Conformance enrolls the composite RepoProber in the
+// healthz.RepoProber readiness conformance (CELL-REPO-READYZ-PROBE-01). It has a
+// differentiated failure domain (any not-ready member), so a non-nil broken
+// prober is supplied.
+func TestRepoReadyAll_Conformance(t *testing.T) {
+	celltest.RunRepoReadinessConformance(t, "accesscore-repo-all",
+		repoReadyAll{okProber{}},
+		repoReadyAll{failingProber{err: errors.New("member store unreachable")}})
 }
 
 func TestRegisterSubscriptions(t *testing.T) {
@@ -241,6 +284,7 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		withPolicyRepository(mem.NewPolicyRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithRefreshStore(newTestRefreshStore()),
 		WithJWTIssuer(testIssuer),
@@ -282,6 +326,7 @@ func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		withPolicyRepository(mem.NewPolicyRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithRefreshStore(newTestRefreshStore()),
 		WithJWTIssuer(testIssuer),
@@ -317,6 +362,7 @@ func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		withPolicyRepository(mem.NewPolicyRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
@@ -358,6 +404,7 @@ func TestInit_MissingCASProtocol_FailsFast(t *testing.T) {
 		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		withPolicyRepository(mem.NewPolicyRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
@@ -385,6 +432,7 @@ func TestWithCASProtocol_NilOption_IgnoredAndCaughtAtInit(t *testing.T) {
 		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		withPolicyRepository(mem.NewPolicyRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
