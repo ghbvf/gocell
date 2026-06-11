@@ -328,9 +328,11 @@ func mqttCheckReasonTableInPass(p *Pass, varName string, golden map[byte]bool) [
 	found, codes := mqttExtractReasonTableCodes(p, varName)
 	if !found {
 		return []Diagnostic{{
-			Rel:     "errors.go",
-			Line:    0,
-			Message: fmt.Sprintf("MQTT-REASON-TABLE-COMPLETE: var %q not found in package %s (expected in adapters/mqtt/errors.go)", varName, p.Pkg.Path()),
+			Rel:  "errors.go",
+			Line: 0,
+			Message: fmt.Sprintf(
+				"MQTT-REASON-TABLE-COMPLETE: var %q not found in package %s "+
+					"(expected in adapters/mqtt/errors.go)", varName, p.Pkg.Path()),
 		}}
 	}
 	return mqttCompareCodeSets(varName, codes, golden)
@@ -375,9 +377,11 @@ func mqttExtractReasonTableCodes(p *Pass, varName string) (ok bool, codes map[by
 						if !tvOK || tv.Value == nil {
 							return
 						}
-						// Extract the integer value of the byte literal.
+						// Extract the integer value of the byte literal. Reason codes
+						// are 0x00–0xFF; the range guard keeps the byte conversion
+						// provably in-bounds (gosec G115).
 						intVal, exact := constant.Int64Val(constant.ToInt(tv.Value))
-						if exact {
+						if exact && intVal >= 0 && intVal <= 255 {
 							codes[byte(intVal)] = true
 						}
 					})
@@ -542,4 +546,3 @@ func TestMQTTReasonTablePositional01_NonVacuous(t *testing.T) {
 		"MQTT-REASON-TABLE-POSITIONAL-01 non-vacuity: scanner found 0 rows in connackReasonTable "+
 			"— the scanner is broken or the var was renamed")
 }
-
