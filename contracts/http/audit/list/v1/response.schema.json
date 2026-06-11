@@ -23,6 +23,10 @@
           "subjectId": {
             "type": "string"
           },
+          "tenantId": {
+            "type": "string",
+            "description": "Tenant boundary id the audit row belongs to (epic #1337 PR-12). Surfaced behind the ResourceProjection column-masking funnel: an admin sees the value, lower-privilege/device callers may see it masked per the FieldMask obligation. Empty for tenant-less system rows (scope=\"system\") and for entries predating its introduction."
+          },
           "correlationId": {
             "type": "string",
             "description": "Opaque cross-cell correlation identifier from the originating request context. Lets consumers stitch an audited action back to its request. Empty for entries predating its introduction."
