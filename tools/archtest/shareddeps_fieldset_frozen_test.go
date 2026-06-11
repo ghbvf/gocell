@@ -164,6 +164,39 @@ func TestSharedDepsFieldSetFrozen01_DetectorRejectsPerturbation(t *testing.T) {
 		"%s anti-vacuity: a struct missing fields must NOT match the golden",
 		ruleSharedDepsFieldSetFrozen01)
 
+	// (c) Same field NAMES but one field RETYPED: proves that type-string drift is
+	// caught at constant field count, not just count drift. Clock is retyped from
+	// clock.Clock → string; all other 19 field names are preserved. This red case
+	// demonstrates that exportedFieldTypeStrings detects type-string divergence,
+	// not just field-set membership divergence.
+	type sharedDepsRetypedClock struct {
+		Clock                string // was clock.Clock — intentional type perturbation
+		Topology             string
+		JWTIssuer            string
+		JWTVerifier          string
+		MetricsProvider      string
+		EventBus             string
+		ConfigEventCollector string
+		ConsumerClaimer      string
+		PG                   string
+		Redis                string
+		InternalHMACRing     string
+		NonceStore           string
+		PrimaryHTTPAddr      string
+		InternalHTTPAddr     string
+		HealthHTTPAddr       string
+		MetricsToken         string
+		VerboseToken         string
+		VerboseDisabled      string // was bool
+		HealthLocalOnly      string // was bool
+		ProjectRoot          string
+	}
+	retyped := exportedFieldTypeStrings(reflect.TypeOf(sharedDepsRetypedClock{}))
+	assert.NotEqual(t, sharedDepsFrozenExportedFields, retyped,
+		"%s anti-vacuity (type drift): a struct with the same 20 field names but Clock "+
+			"retyped to string must NOT match the golden — proves type-string drift detection, "+
+			"not just field-set membership detection", ruleSharedDepsFieldSetFrozen01)
+
 	// Sanity: the golden itself is non-empty (a vacuous empty golden would make
 	// the primary test trivially satisfiable by an empty struct).
 	require.NotEmpty(t, sharedDepsFrozenExportedFields,

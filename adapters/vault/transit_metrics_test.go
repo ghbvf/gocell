@@ -2,12 +2,15 @@ package vault
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	prom "github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 
 	promadapter "github.com/ghbvf/gocell/adapters/prometheus"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // buildTestMetrics is a test helper that builds a TransitMetrics using a
@@ -41,6 +44,29 @@ func newTestTransitMetrics(t *testing.T) *TransitMetrics {
 	t.Helper()
 	_, m := buildTestMetrics(t)
 	return m
+}
+
+// TestNewTransitMetrics_NilProvider_ReturnsError verifies that NewTransitMetrics
+// rejects a nil metrics.Provider with a non-nil error carrying errcode.ErrInternal.
+// A nil provider would silently skip registration and panic on the first metric
+// write; the nil-guard must fire before any instrument construction.
+func TestNewTransitMetrics_NilProvider_ReturnsError(t *testing.T) {
+	var nilProvider metrics.Provider // typed nil
+
+	m, err := NewTransitMetrics(nilProvider)
+
+	if err == nil {
+		t.Fatal("expected error for nil metrics.Provider, got nil")
+	}
+	if m != nil {
+		t.Errorf("expected nil *TransitMetrics on error, got non-nil")
+	}
+	var ecErr *errcode.Error
+	if !errors.As(err, &ecErr) {
+		t.Logf("error is not *errcode.Error (acceptable); message: %v", err)
+	} else if ecErr.Code != errcode.ErrInternal {
+		t.Errorf("errcode.Code = %v, want %v", ecErr.Code, errcode.ErrInternal)
+	}
 }
 
 func TestNewTransitMetrics_RegistersAllCollectors(t *testing.T) {

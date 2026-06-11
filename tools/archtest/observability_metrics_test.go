@@ -440,6 +440,11 @@ func TestAdapterPromCallerAllowlist(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
+	require.Empty(t, adapterPromCallerAllowlist,
+		"post-#885 the outer-ring funnel wrappers are deleted; the caller allowlist is empty "+
+			"and the live guard is TestMetricsFunnel_SymbolSentinel (outer-ring exports) + "+
+			"Go internal/ visibility on internal/promwrap. A non-empty allowlist would mean "+
+			"a funnel symbol was re-added — update this test deliberately.")
 	diags := Run(t, Production(TypedOpts{}), adapterPromCallerAllowlistRule)
 	for _, d := range diags {
 		t.Errorf("METRICS-ADAPTERPROM-CALLER-ALLOWLIST-01 %s:%d: %s", d.Rel, d.Line, d.Message)

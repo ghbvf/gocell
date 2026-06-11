@@ -177,8 +177,9 @@ func resolveValueTransformer(kp kcrypto.KeyProvider, postgresStorage bool) (kcry
 	if kp == nil {
 		if postgresStorage {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"configcore: postgres storage requires a ConfigKeyProvider; NoopTransformer "+
-					"is dev-only (refusing to persist config values unencrypted)")
+				"configcore: postgres storage requires a key provider; set "+
+					"GOCELL_CONFIGCORE_KEY_PROVIDER (known values: \"local-aes\", \"vault-transit\"). "+
+					"NoopTransformer is dev-only (refusing to persist config values unencrypted)")
 		}
 		return crypto.NoopTransformer{}, nil
 	}

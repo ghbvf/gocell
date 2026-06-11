@@ -22,6 +22,9 @@ package vault
 // accumulating across rebuilds and the cached-version gauge reads from a single
 // physical atomic shared between the metric and whichever provider currently
 // writes it.
+//
+// ref: opentelemetry-specification metrics/api.md — subscribe-to-change value
+// → synchronous (push) gauge (cachedVersion).
 
 import (
 	"context"
@@ -31,6 +34,11 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
+
+// errMsgRegisterTransitMetric is the errcode.Wrap message used by every
+// NewTransitMetrics instrument registration failure. MESSAGE-CONST-LITERAL-01
+// permits a const identifier referencing a string literal.
+const errMsgRegisterTransitMetric = "vault: register transit metric"
 
 // loginOutcomeLabels is the ordered label set of the gocell_vault_auth_login_total
 // CounterVec. Record sites build a metrics.Labels map keyed by exactly these names.
@@ -90,7 +98,7 @@ func NewTransitMetrics(provider metrics.Provider) (*TransitMetrics, error) {
 	})
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-			"vault: register transit metric", err)
+			errMsgRegisterTransitMetric, err)
 	}
 	renewFailureVec, err := provider.CounterVec(metrics.CounterOpts{
 		Name: "vault_token_renew_failure_total",
@@ -98,7 +106,7 @@ func NewTransitMetrics(provider metrics.Provider) (*TransitMetrics, error) {
 	})
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-			"vault: register transit metric", err)
+			errMsgRegisterTransitMetric, err)
 	}
 	authHealthyVec, err := provider.GaugeVec(metrics.GaugeOpts{
 		Name: "vault_token_auth_healthy",
@@ -107,7 +115,7 @@ func NewTransitMetrics(provider metrics.Provider) (*TransitMetrics, error) {
 	})
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-			"vault: register transit metric", err)
+			errMsgRegisterTransitMetric, err)
 	}
 	loginOutcome, err := provider.CounterVec(metrics.CounterOpts{
 		Name:       "vault_auth_login_total",
@@ -116,7 +124,7 @@ func NewTransitMetrics(provider metrics.Provider) (*TransitMetrics, error) {
 	})
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-			"vault: register transit metric", err)
+			errMsgRegisterTransitMetric, err)
 	}
 	cachedVersionVec, err := provider.GaugeVec(metrics.GaugeOpts{
 		Name: "vault_cached_key_version",
@@ -124,7 +132,7 @@ func NewTransitMetrics(provider metrics.Provider) (*TransitMetrics, error) {
 	})
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-			"vault: register transit metric", err)
+			errMsgRegisterTransitMetric, err)
 	}
 
 	m := &TransitMetrics{

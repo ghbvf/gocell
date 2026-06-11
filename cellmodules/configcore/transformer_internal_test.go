@@ -24,7 +24,7 @@ func TestResolveValueTransformer(t *testing.T) {
 		vt, err := resolveValueTransformer(nil, true)
 		require.Error(t, err)
 		assert.Nil(t, vt)
-		assert.Contains(t, err.Error(), "ConfigKeyProvider")
+		assert.Contains(t, err.Error(), "GOCELL_CONFIGCORE_KEY_PROVIDER")
 		assert.Contains(t, err.Error(), "dev-only")
 	})
 }

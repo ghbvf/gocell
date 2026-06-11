@@ -83,7 +83,7 @@ func buildVaultTransitKeyProvider(
 ) (kcrypto.KeyProvider, error) {
 	m, err := adaptervault.NewTransitMetrics(metricsProvider)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("vault-transit metrics: %w", err)
 	}
 	kp, err := adaptervault.NewTransitKeyProviderFromEnv(cellsecrets.IsRealMode(adapterMode), clk, m)
 	if err != nil {

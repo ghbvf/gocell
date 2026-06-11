@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/cellmodules/configcore"
 	"github.com/ghbvf/gocell/kernel/clock"
+	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -95,6 +96,36 @@ func TestModule_Provide_CollectorRegistrationError(t *testing.T) {
 	_, err := configcore.Module().Provide(ctx, shared)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "collector")
+}
+
+// fakeKeyProvider is a minimal kcrypto.KeyProvider for testing the
+// WithKeyProviderOverride non-nil path. It satisfies the interface without
+// performing any real cryptographic operations.
+type fakeKeyProvider struct{}
+
+func (fakeKeyProvider) Current(_ context.Context) (kcrypto.KeyHandle, error) {
+	return nil, errors.New("fakeKeyProvider: not implemented")
+}
+
+func (fakeKeyProvider) ByID(_ context.Context, _ string) (kcrypto.KeyHandle, error) {
+	return nil, errors.New("fakeKeyProvider: not implemented")
+}
+
+func (fakeKeyProvider) Rotate(_ context.Context) (string, error) {
+	return "", errors.New("fakeKeyProvider: not implemented")
+}
+
+// TestModule_Provide_MemMode_WithKeyProviderOverride_NonNil verifies that passing
+// a non-nil KeyProvider via WithKeyProviderOverride bypasses the self-build path
+// and propagates the override to the cell, and that Provide succeeds in memory mode.
+// This covers the override!=nil branch of resolveKeyProvider end-to-end.
+func TestModule_Provide_MemMode_WithKeyProviderOverride_NonNil(t *testing.T) {
+	ctx := context.Background()
+	shared := buildMemSharedDeps(t)
+
+	res, err := configcore.Module(configcore.WithKeyProviderOverride(fakeKeyProvider{})).Provide(ctx, shared)
+	require.NoError(t, err)
+	require.NotNil(t, res.Cell)
 }
 
 // buildMemSharedDeps constructs a memory-mode *composition.SharedDeps for tests.

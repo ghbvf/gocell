@@ -94,3 +94,22 @@ func TestBuildKeyProviderFromName_VaultTransit_NoEnv(t *testing.T) {
 	require.Error(t, err, "vault-transit without VAULT_ADDR must fail")
 	assert.Nil(t, kp)
 }
+
+// TestBuildKeyProviderFromName_VaultTransit_NilMetricsProvider verifies that
+// passing a nil metrics.Provider for vault-transit returns an error (from the
+// NewTransitMetrics nil-guard) without panicking. The nil-provider guard fires
+// before any vault network access, so no VAULT_ADDR is needed.
+func TestBuildKeyProviderFromName_VaultTransit_NilMetricsProvider(t *testing.T) {
+	var nilProvider kernelmetrics.Provider // typed nil
+
+	kp, err := buildKeyProviderFromName(
+		"postgres", "", "vault-transit", "", "", clock.Real(), nilProvider)
+
+	require.Error(t, err, "vault-transit with nil metrics.Provider must return an error")
+	assert.Nil(t, kp)
+	var ecErr *errcode.Error
+	if assert.ErrorAs(t, err, &ecErr) {
+		assert.Equal(t, errcode.ErrInternal, ecErr.Code,
+			"nil-provider error must carry ErrInternal")
+	}
+}
