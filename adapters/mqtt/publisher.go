@@ -168,8 +168,8 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 	// is a concern for the target sink.
 	if resp != nil && resp.ReasonCode == 0x10 {
 		slog.LogAttrs(ctx, slog.LevelWarn, "mqtt: publish succeeded with no matching subscribers",
-			slog.String("client_id", p.conn.cfg.clientID.String()),
-			slog.String("topic", t.String()))
+			slog.String(logKeyClientID, p.conn.cfg.clientID.String()),
+			slog.String(logKeyTopic, t.String()))
 	}
 	p.collector.RecordPublishSuccess(ctx, p.clk.Since(start))
 	return nil

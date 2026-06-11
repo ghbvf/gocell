@@ -39,6 +39,9 @@ const (
 const (
 	maxNamespaceLen = 128
 
+	// The "128" literal below must stay in sync with maxNamespaceLen above. errcode
+	// messages are required to be const literals (MESSAGE-CONST-LITERAL-01), so the
+	// constant cannot be interpolated into the string.
 	msgInvalidNamespaceLength   = "mqtt topic namespace: must be non-empty and at most 128 chars"
 	msgInvalidNamespaceSlash    = "mqtt topic namespace: must not have a leading or trailing slash"
 	msgInvalidNamespaceWildcard = "mqtt topic namespace: must not contain MQTT wildcards (+ or #)"

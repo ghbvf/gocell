@@ -463,6 +463,11 @@ func (s *Subscriber) dispatchDisposition(
 		// the message to another instance that then re-claims a freed claim (mirrors
 		// rabbitmq's Nack-before-release). routeDeadLetter's broker round-trip would
 		// otherwise widen that window.
+		// res.Err is logged bare (no redactErr): runtime/observability/logging's
+		// contextHandler redacts every slog attr at the sink (process-global
+		// barrier), and a domain handler error is not a broker secret. Mirrors the
+		// rabbitmq canonical (adapters/rabbitmq/subscriber.go). Call-site redact
+		// stays reserved for broker errors that also feed spans / persisted last_error.
 		slog.LogAttrs(ctx, slog.LevelError, "mqtt: handler rejected entry, routing to $dead then acking poison",
 			slog.String(logKeyClientID, s.conn.cfg.clientID.String()),
 			slog.String(logKeyTopic, entry.Topic()),
@@ -488,6 +493,8 @@ func (s *Subscriber) dispatchDisposition(
 		// idempotency backend down / claim contention), where reconnect-redelivery
 		// is the correct behavior. There is deliberately no app-level re-dispatch
 		// loop and no $dead routing on Requeue (those would be Option A).
+		// res.Err logged bare — see the reject-path note above (domain error scrubbed
+		// at the slog sink, not a broker secret).
 		slog.LogAttrs(ctx, slog.LevelWarn, "mqtt: handler requeued entry, leaving unacked for reconnect redelivery (degraded-state signal)",
 			slog.String(logKeyClientID, s.conn.cfg.clientID.String()),
 			slog.String(logKeyTopic, entry.Topic()),
