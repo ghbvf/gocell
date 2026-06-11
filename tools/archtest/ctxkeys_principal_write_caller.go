@@ -40,6 +40,21 @@ package archtest
 //     four keys with the "system" sentinel; saga journal replay path, PR-03 #1627)
 //     and clearAmbientPrincipal (zeroes all four keys at the Rebuild detach boundary).
 //     Both are sanctioned overwrite-writers for the projection principal contract.
+//   - kernel/reconcile/identity.go — installSystemProducerIdentity (overwrites all
+//     four keys with the "system" sentinel / cleared tenant+session at the Loop's
+//     single reconcile chokepoint; #1821). A reconcile loop is a background control
+//     loop with no request principal, so the framework positively installs a
+//     tenantless system identity for every reconciler's emit instead of inheriting
+//     whatever the lifecycle ctx happens to carry. The installer is UNEXPORTED, so
+//     no producer OUTSIDE kernel/reconcile can reach it (Go visibility bars only
+//     package-external callers). This allowlist entry is FILE-level (key =
+//     "kernel/reconcile/identity.go"), so it is the Hard downstream lock on the
+//     ctxkeys write itself but does NOT pin the in-package callsite the way the
+//     function-level PROJECTION-SYSTEM-PRINCIPAL-INSTALL-CALLER-01 does: today only
+//     Loop.process calls the installer, but a second function added to that same
+//     file could write the setters without tripping this archtest. That is the
+//     accepted same-file residual blind spot (see the installSystemProducerIdentity
+//     godoc) — not a Go-visibility guarantee that "only Loop.process can reach it".
 //
 // No producer (cells/* or examples/*) can write a principal ctx key. Together
 // with OUTBOX-RECONSTRUCTION-CALLER-01 (the reconstruction-funnel lock), this
@@ -106,9 +121,10 @@ const ctxkeysPkgPath = PlatformModulePath + "/pkg/ctxkeys"
 
 // principalSetterAllowlist maps each principal ctx-key setter to the
 // module-relative production files allowed to call it. All four setters share
-// three writers: the auth request-boundary bridge (producer), the
-// consumer-side RestoreToContext, and the projection system-principal writer
-// (InstallSystemPrincipal + clearAmbientPrincipal, PR-03 #1627).
+// four writers: the auth request-boundary bridge (producer), the consumer-side
+// RestoreToContext, the projection system-principal writer (InstallSystemPrincipal
+// + clearAmbientPrincipal, PR-03 #1627), and the reconcile-loop system-producer
+// identity installer (installSystemProducerIdentity, #1821).
 //
 // WithTenantID additionally allows corecells/configcore/configcoretest/fakes.go
 // (CtxWithTenant helper), which simulates the JWT authenticator's ctx injection
@@ -139,21 +155,25 @@ var principalSetterAllowlist = map[string]map[string]struct{}{
 		"runtime/auth/middleware.go":            {}, // producer bridge (JWT + service-token)
 		"kernel/outbox/principal.go":            {}, // consumer-side RestoreToContext
 		"kernel/projection/system_principal.go": {}, // saga journal carrier: InstallSystemPrincipal + clearAmbientPrincipal (PR-03 #1627)
+		"kernel/reconcile/identity.go":          {}, // reconcile loop system-producer identity: installSystemProducerIdentity (#1821)
 	},
 	"WithSubjectID": {
 		"runtime/auth/middleware.go":            {},
 		"kernel/outbox/principal.go":            {},
 		"kernel/projection/system_principal.go": {}, // saga journal carrier (PR-03 #1627)
+		"kernel/reconcile/identity.go":          {}, // reconcile loop system-producer identity (#1821)
 	},
 	"WithSessionID": {
 		"runtime/auth/middleware.go":            {},
 		"kernel/outbox/principal.go":            {},
 		"kernel/projection/system_principal.go": {}, // saga journal carrier (PR-03 #1627)
+		"kernel/reconcile/identity.go":          {}, // reconcile loop system-producer identity (#1821)
 	},
 	"WithTenantID": {
 		"runtime/auth/middleware.go":                     {}, // producer bridge — JWT tenant_id claim (#1337)
 		"kernel/outbox/principal.go":                     {}, // consumer-side RestoreToContext
 		"kernel/projection/system_principal.go":          {}, // saga journal carrier (PR-03 #1627)
+		"kernel/reconcile/identity.go":                   {}, // reconcile loop system-producer identity — clears tenant (#1821)
 		"corecells/configcore/configcoretest/fakes.go":   {}, // CtxWithTenant test-helper — simulates JWT auth ctx (#1337, missed allowlist)
 		"corecells/auditcore/auditcoretest/canonical.go": {}, // NewSessionCreatedEntry test-helper — simulates post-auth ctx (#1618 F1)
 	},

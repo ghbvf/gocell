@@ -407,4 +407,19 @@ func TestContextPrincipal(t *testing.T) {
 		assert.Equal(t, idutil.SafeID("ctxkeys-tenant"), p.TenantID,
 			"post-auth ctxkeys tenant must take precedence over the scope fallback")
 	})
+
+	// #1824 F1: a present-but-EMPTY ctxkeys tenant is authoritative — it is the
+	// system-identity installers' deliberate tenantless assertion (reconcile
+	// installSystemProducerIdentity / projection InstallSystemPrincipal /
+	// consume-path clearAmbientPrincipal) and MUST suppress the scope fallback so
+	// those system emits stay tenantless (→ "_notenant"). Precedence keys on key
+	// PRESENCE (ok), not on a non-empty value: conflating present-empty with absent
+	// would let a leaked tenant.WithScope override the install.
+	t.Run("present-empty ctxkeys tenant suppresses scope fallback", func(t *testing.T) {
+		ctx := tenant.WithScope(context.Background(), tenant.TenantID(scopeTenantUUID))
+		ctx = ctxkeys.WithTenantID(ctx, "")
+		p := ContextPrincipal(ctx)
+		assert.Equal(t, idutil.SafeID(""), p.TenantID,
+			"installed tenantless system identity must win over the ambient scope")
+	})
 }

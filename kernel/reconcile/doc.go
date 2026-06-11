@@ -158,7 +158,25 @@
 // (write-path CAS) plus consumer idempotency, never the lease. A nil LeaderElector
 // is single-process mode (always leader, Epoch 0, no fencing).
 //
+// # System producer identity (#1821)
+//
+// INVARIANT: every Reconcile runs under a positively installed SYSTEM PRODUCER
+// IDENTITY. A reconcile loop is a background control loop with no request
+// principal, so Loop.process installs a fixed identity on the reconcile ctx ahead
+// of every Reconcile (installSystemProducerIdentity): actor/subject="system",
+// tenant+session cleared, OVERWRITING any ambient principal. Consequence: any
+// command/event a reconciler emits (via outbox.NewEntry, which injects the
+// producer principal from ctx) carries a tenantless system principal by
+// construction — its Claimer dedup key lands under the "_notenant" namespace as a
+// code fact, never inheriting or being changed by an ambient lifecycle-ctx
+// identity (#1808 F5). Enforcement is two-axis Hard: the installer is unexported
+// (Go visibility — only Loop.process reaches it) and its ctxkeys writes are
+// caller-allowlisted by CTXKEYS-PRINCIPAL-WRITE-CALLER-01. A multi-tenant
+// reconciler must add its own tenant dimension (the system identity is
+// deliberately tenantless) — see the ADR.
+//
 // ref: kubernetes-sigs/controller-runtime pkg/reconcile/reconcile.go
 // ref: kubernetes/client-go tools/leaderelection/leaderelection.go
 // ref: docs/architecture/202605291600-661-adr-kernel-reconcile-design.md
+// ref: docs/architecture/202606101200-1821-adr-reconcile-system-producer-identity.md
 package reconcile
