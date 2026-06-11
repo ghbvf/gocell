@@ -92,7 +92,7 @@ ran=0
 for script in "${scripts[@]}"; do
     name="$(basename "${script}")"
     if [[ "${skip_list}" == *"|${name}|"* ]]; then
-        results+=("${name}|SKIP")
+        results+=("${name}|SKIP|-")
         gocell::log::status "SKIP: ${name} (VERIFY_SKIP)"
         continue
     fi
@@ -104,19 +104,26 @@ for script in "${scripts[@]}"; do
     fi
     if [[ -n "${VERIFY_DRY_RUN:-}" ]]; then
         ran=$((ran + 1))
-        results+=("${name}|DRYRUN")
+        results+=("${name}|DRYRUN|-")
         gocell::log::status "WOULD-RUN: ${name}"
         continue
     fi
     ran=$((ran + 1))
     gocell::log::status "Running ${name}"
+    # Wall-clock per gate (SECONDS is a bash builtin, macOS bash 3.2 safe). The
+    # elapsed feeds the job-summary Duration column so a leg's per-gate timings
+    # are the single observable source for the manual bucket rebalance the
+    # cost-descope relies on (hack/README.md "Bucket parallel model").
+    gate_start=${SECONDS}
     if ! bash "${script}"; then
+        gate_dur=$(( SECONDS - gate_start ))
         fails+=("${name}")
-        results+=("${name}|FAIL")
-        gocell::log::status "FAIL: ${name}"
+        results+=("${name}|FAIL|${gate_dur}")
+        gocell::log::status "FAIL: ${name} (${gate_dur}s)"
     else
-        results+=("${name}|PASS")
-        gocell::log::status "PASS: ${name}"
+        gate_dur=$(( SECONDS - gate_start ))
+        results+=("${name}|PASS|${gate_dur}")
+        gocell::log::status "PASS: ${name} (${gate_dur}s)"
     fi
 done
 
@@ -127,16 +134,16 @@ if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
     {
         echo "## make verify gates"
         echo
-        echo "| Gate | Status |"
-        echo "| --- | --- |"
+        echo "| Gate | Status | Duration |"
+        echo "| --- | --- | --- |"
         for entry in "${results[@]}"; do
-            gate="${entry%|*}"
-            status="${entry##*|}"
+            IFS='|' read -r gate status dur <<< "${entry}"
+            if [[ "${dur}" == "-" ]]; then shown="—"; else shown="${dur}s"; fi
             case "${status}" in
-                PASS)   echo "| \`${gate}\` | ✅ PASS |" ;;
-                SKIP)   echo "| \`${gate}\` | ⏭️ SKIP |" ;;
-                DRYRUN) echo "| \`${gate}\` | 🔎 DRY-RUN |" ;;
-                *)      echo "| \`${gate}\` | ❌ FAIL |" ;;
+                PASS)   echo "| \`${gate}\` | ✅ PASS | ${shown} |" ;;
+                SKIP)   echo "| \`${gate}\` | ⏭️ SKIP | ${shown} |" ;;
+                DRYRUN) echo "| \`${gate}\` | 🔎 DRY-RUN | ${shown} |" ;;
+                *)      echo "| \`${gate}\` | ❌ FAIL | ${shown} |" ;;
             esac
         done
     } >> "${GITHUB_STEP_SUMMARY}"
