@@ -360,28 +360,27 @@ func mqttExtractReasonTableCodes(p *Pass, varName string) (ok bool, codes map[by
 					if !isLit {
 						return
 					}
-					// Each element of the outer slice literal is a row: T{code, name, ...}
-					for _, elt := range outerLit.Elts {
-						rowLit, isRowLit := elt.(*ast.CompositeLit)
-						if !isRowLit || len(rowLit.Elts) == 0 {
-							continue
+					// Each direct child CompositeLit of outerLit is a row: T{code, name, ...}
+					EachInChildren[ast.CompositeLit](outerLit, func(rowLit *ast.CompositeLit) {
+						if len(rowLit.Elts) == 0 {
+							return
 						}
 						// First positional element is the byte code.
 						firstElt := rowLit.Elts[0]
 						// For named-field rows, skip (POSITIONAL-01 handles those).
 						if _, isKV := firstElt.(*ast.KeyValueExpr); isKV {
-							continue
+							return
 						}
 						tv, tvOK := p.TypesInfo.Types[firstElt]
 						if !tvOK || tv.Value == nil {
-							continue
+							return
 						}
 						// Extract the integer value of the byte literal.
 						intVal, exact := constant.Int64Val(constant.ToInt(tv.Value))
 						if exact {
 							codes[byte(intVal)] = true
 						}
-					}
+					})
 				}
 			})
 		})
@@ -438,16 +437,15 @@ func mqttCheckReasonTablePositionalInPass(p *Pass, varName string) []Diagnostic 
 					if !isLit {
 						return
 					}
-					for rowIdx, elt := range outerLit.Elts {
-						rowLit, isRowLit := elt.(*ast.CompositeLit)
-						if !isRowLit {
-							continue
-						}
-						for _, rowElt := range rowLit.Elts {
-							if _, isKV := rowElt.(*ast.KeyValueExpr); !isKV {
-								continue
-							}
-							pos := p.Fset.Position(rowElt.Pos())
+					// rowIdx tracks the row index for the diagnostic message.
+					// All direct CompositeLit children of outerLit are rows (same
+					// set the prior for-range hit), so incrementing once per
+					// EachInChildren callback is equivalent to the prior range index.
+					rowIdx := -1
+					EachInChildren[ast.CompositeLit](outerLit, func(rowLit *ast.CompositeLit) {
+						rowIdx++
+						EachInChildren[ast.KeyValueExpr](rowLit, func(kv *ast.KeyValueExpr) {
+							pos := p.Fset.Position(kv.Pos())
 							diags = append(diags, Diagnostic{
 								Rel:  p.Rel(f),
 								Line: pos.Line,
@@ -457,8 +455,8 @@ func mqttCheckReasonTablePositionalInPass(p *Pass, varName string) []Diagnostic 
 										"adding a field is a compile error at every existing row",
 									varName, rowIdx, p.Rel(f), pos.Line),
 							})
-						}
-					}
+						})
+					})
 				}
 			})
 		})
