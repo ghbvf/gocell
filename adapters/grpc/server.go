@@ -209,6 +209,13 @@ func (s *Server) serve(ctx context.Context, lis net.Listener) error {
 	addr := lis.Addr().String()
 	warnIfInsecureNonLoopback(s.cfg.TLS.AllowInsecure, lis.Addr())
 
+	// srvLog carries the resolved bound addr on every serve-lifecycle log line
+	// (started / serve-returned / force-stopped) so the field never drifts as new
+	// lifecycle logs are added here (#1791). gracefulStop's drain log lives in a
+	// separate method where addr is out of scope and is server-wide, not
+	// addr-specific, so it stays on the package logger.
+	srvLog := slog.Default().With(slog.String("addr", addr))
+
 	go func() {
 		err := s.grpcServer.Serve(lis)
 		s.serveErr = err
@@ -216,7 +223,7 @@ func (s *Server) serve(ctx context.Context, lis net.Listener) error {
 	}()
 
 	s.serving.Store(true)
-	slog.Info("grpc: server started serving")
+	srvLog.Info("grpc: server started serving")
 
 	select {
 	case <-s.serveDone:
@@ -230,8 +237,7 @@ func (s *Server) serve(ctx context.Context, lis net.Listener) error {
 			// with structured context, mirroring the net.Listen failure path, so
 			// operators see the cause even when the returned errcode is unwrapped
 			// upstream. The raw addr stays in InternalAttr (server-side only).
-			slog.Error("grpc: Serve returned unexpectedly",
-				slog.String("addr", addr),
+			srvLog.Error("grpc: Serve returned unexpectedly",
 				slog.Any("error", err))
 			return errcode.Wrap(errcode.KindInternal, ErrAdapterGRPCServe,
 				"grpc: Serve returned unexpectedly", err,
@@ -247,7 +253,7 @@ func (s *Server) serve(ctx context.Context, lis net.Listener) error {
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.cfg.ShutdownTimeout)
 		defer cancel()
 		if err := s.gracefulStop(shutdownCtx); err != nil {
-			slog.Warn("grpc: graceful stop exceeded shutdown budget; server force-stopped",
+			srvLog.Warn("grpc: graceful stop exceeded shutdown budget; server force-stopped",
 				slog.Any("error", err))
 		}
 		return ctx.Err()
