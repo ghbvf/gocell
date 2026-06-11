@@ -22,8 +22,8 @@
 ## 用法
 
 ```bash
-gh issue create --label backlog --label pri-pX --label area-XX --label type-XX [--label cx-X] \
-  --title "[<ID>] ..." --body-file <填好的 backlog.md>
+gh issue create --label backlog --label pri-pX --label area-XX --label type-XX --label cx-X \
+  --title "[<ID>] ..." --body-file <填好的 backlog.md>   # area/type/pri/cx 四轴必填，见 PROJECT.md §2.6
 gh pr create --title "..." --body-file <填好的 pull_request_template.md>
 gh pr comment <N> --body-file <填好的 pr-comment.md 模板>
 ```

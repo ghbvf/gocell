@@ -113,6 +113,16 @@ const (
 	ErrAuthRoleDuplicate  Code = "ERR_AUTH_ROLE_DUPLICATE"
 	ErrAuthPolicyNotFound Code = "ERR_AUTH_POLICY_NOT_FOUND"
 	ErrAuthInvalidInput   Code = "ERR_AUTH_INVALID_INPUT"
+	// ErrAuthObligationUnenforceable signals that a PEP (policy enforcement
+	// point) was handed a mandatory authorization obligation it cannot
+	// discharge — e.g. a column FieldMask naming a nested (dotted) path the
+	// top-level masker does not traverse. Per XACML, a PEP that cannot fulfill a
+	// mandatory obligation MUST NOT permit the access, so the enforcement point
+	// fails closed. Constructed with KindInternal → HTTP 500: this is a PEP /
+	// policy-authoring misconfiguration, not a client error, and is distinct
+	// from generic ERR_INTERNAL so operator dashboards can alert on
+	// un-dischargeable obligations separately from arbitrary 500s.
+	ErrAuthObligationUnenforceable Code = "ERR_AUTH_OBLIGATION_UNENFORCEABLE"
 	// ErrAuthUserNotActive signals the user's status is not 'active' (i.e.,
 	// locked or suspended). Authentication surfaces (login / refresh /
 	// validate) reject any non-active user fail-closed: a suspended user

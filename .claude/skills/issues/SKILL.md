@@ -126,11 +126,13 @@ C
 
 ## B1. 新建 backlog issue
 
-三维 label 齐全（area + type + pri）+ `backlog`，全部 CLI 显式贴（必须显式 `--label pri-pX`）：
+四轴 label 齐全（area + type + pri + cx）+ `backlog`，全部 CLI 显式贴（pri/cx 必填，cx 无 unknown sentinel）：
 
 ```bash
+# 建单前强制门：校验 area/type/pri/cx 四轴完整（exit 0 才执行 create；下游 selftest-locked，见 PROJECT.md §2.6）
+bash hack/automation/issue-labels.sh validate --labels "backlog,pri-p2,area-eventing,type-bug,cx-2"
 gh issue create \
-  --label backlog --label pri-p2 --label area-eventing --label type-bug [--label cx-2] \
+  --label backlog --label pri-p2 --label area-eventing --label type-bug --label cx-2 \
   --title "[<ID>] <简短标题>" --body-file <填好的 backlog.md>
 # body 骨架单源 = .github/project-template/backlog.md（现状 / 修复方向 / Files / Trigger / Source）——本技能不复制其结构
 ```
@@ -140,10 +142,10 @@ gh issue create \
 - **area-XX**（1 个，8 选）：见 `.github/project-template/PROJECT.md` §2.1。
 - **type-XX**（1 个，8 选）：见 §2.2。
 - **pri-pX**：评级 rubric 见 `.github/project-template/PROJECT.md` §3。`/fix` 派生默认 `pri-p2`；`pri-p0` 仅 incident-driven，停下 AskUserQuestion 确认。
-- **cx-X**（可选）：复杂度 rubric 见 `.github/project-template/PROJECT.md` §3.2 / §2.6。能定级则贴；finding 派生从 `[…Cx…]` tag 取。
+- **cx-X**（必填）：复杂度 rubric 见 `.github/project-template/PROJECT.md` §3.2 / §2.6。建单前必须定级并显式 `--label cx-X`（与 pri 对称，无 unknown sentinel——定不到级也要就近取一档）；finding 派生从 `[…Cx…]` tag 取。epic 例外（不贴 cx）。
 - **flag-cond**（可选）：条件延后型加此 label + body 写 `## Trigger`。
 
-> P0 红线不得默认贴。area/type 漏贴时用 `gh issue edit <N> --add-label area-X --add-label type-X` 补。
+> P0 红线不得默认贴。area/type/cx 漏贴时用 `gh issue edit <N> --add-label area-X --add-label type-X --add-label cx-X` 补；建单前 `issue-labels.sh validate` 强制门正常会先拦截，此为绕过门（raw gh / web UI）后的补救。
 
 ## B2. 编辑 label / 关闭 issue
 
