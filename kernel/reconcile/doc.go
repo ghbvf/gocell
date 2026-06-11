@@ -140,6 +140,16 @@
 //     sites are pinned to loop.go / fenced.go.
 //   - RECONCILE-LEADER-IMPL-FUNNEL-01 (PR-A6): LeaderElector is implemented only
 //     in adapters/{redis,postgres} + the reconciletest fake (layering hygiene).
+//   - RECONCILE-BUILDER-FUNNEL-01 (PR-A7): reconcile.Loop config fields are
+//     private — no composite literal of reconcile.Loop (incl. the zero-value
+//     Loop{}) compiles outside this package, so a consumer cannot bypass the
+//     Builder's metric / leader / backoff wiring. Retires the transitional
+//     RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01.
+//   - RECONCILE-GOLEAK-TESTMAIN-FUNNEL-01 (#1604): all goroutine-leak checks in
+//     the kernel/reconcile test binaries funnel through a single package-level
+//     goleak.VerifyTestMain, banning the per-test VerifyNone(IgnoreCurrent())
+//     idiom that flakes under -race (the Trigger / watchDrain tails drain
+//     asynchronously on ctx cancel).
 //
 // Leader election (PR-A6) is whole-loop: when a LeaderElector is wired only the
 // lease holder dispatches Reconcile; a lost lease cancels the lease-scoped ctx to
@@ -148,7 +158,25 @@
 // (write-path CAS) plus consumer idempotency, never the lease. A nil LeaderElector
 // is single-process mode (always leader, Epoch 0, no fencing).
 //
+// # System producer identity (#1821)
+//
+// INVARIANT: every Reconcile runs under a positively installed SYSTEM PRODUCER
+// IDENTITY. A reconcile loop is a background control loop with no request
+// principal, so Loop.process installs a fixed identity on the reconcile ctx ahead
+// of every Reconcile (installSystemProducerIdentity): actor/subject="system",
+// tenant+session cleared, OVERWRITING any ambient principal. Consequence: any
+// command/event a reconciler emits (via outbox.NewEntry, which injects the
+// producer principal from ctx) carries a tenantless system principal by
+// construction — its Claimer dedup key lands under the "_notenant" namespace as a
+// code fact, never inheriting or being changed by an ambient lifecycle-ctx
+// identity (#1808 F5). Enforcement is two-axis Hard: the installer is unexported
+// (Go visibility — only Loop.process reaches it) and its ctxkeys writes are
+// caller-allowlisted by CTXKEYS-PRINCIPAL-WRITE-CALLER-01. A multi-tenant
+// reconciler must add its own tenant dimension (the system identity is
+// deliberately tenantless) — see the ADR.
+//
 // ref: kubernetes-sigs/controller-runtime pkg/reconcile/reconcile.go
 // ref: kubernetes/client-go tools/leaderelection/leaderelection.go
 // ref: docs/architecture/202605291600-661-adr-kernel-reconcile-design.md
+// ref: docs/architecture/202606101200-1821-adr-reconcile-system-producer-identity.md
 package reconcile

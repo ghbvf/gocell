@@ -13,7 +13,7 @@
 // read as s.clk.Now()). Reading the wall clock directly (time.Now / time.Since /
 // time.Until) would make time-based policy decisions non-deterministic and
 // untestable. This archtest forbids those package-level time functions in every
-// production file under cells/accesscore/slices/authorizationdecide/. Methods on
+// production file under corecells/accesscore/slices/authorizationdecide/. Methods on
 // time.Time (t.Hour(), t.Weekday()) are allowed — they read the injected reading,
 // not the wall clock.
 //
@@ -54,7 +54,7 @@ import (
 
 // authzEvalRelPrefix is the module-relative path prefix of the ABAC PDP engine
 // production files scanned by AUTHZ-EVAL-CLOCK-INJECTED-01.
-const authzEvalRelPrefix = "cells/accesscore/slices/authorizationdecide/"
+const authzEvalRelPrefix = "corecells/accesscore/slices/authorizationdecide/"
 
 // authzEvalBannedTimeFuncs is the set of package-level time functions forbidden
 // in the engine; time must come from the injected clock.Clock.

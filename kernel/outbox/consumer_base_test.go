@@ -504,6 +504,54 @@ func TestConsumerBase_Wrap_ExplicitReject_NoRetry(t *testing.T) {
 	assert.Same(t, receipt, settlement)
 }
 
+// TestConsumerBase_Wrap_BrokerDelaySchedule_PassesThroughVerbatim locks the
+// #1458 invariant: a subscription carrying a BrokerDelaySchedule delegates retry
+// timing/budget/DLX to the transport, so ConsumerBase runs the handler EXACTLY
+// ONCE and returns its verdict verbatim — even with RetryCount=3. Crucially a
+// transient Requeue must NOT be converted into the retry-exhausted Reject (which
+// would dead-letter the entry on the first failure and bypass the delay
+// schedule); it must reach the subscriber as a Requeue so the broker/in-memory
+// schedule can apply the per-attempt delay.
+func TestConsumerBase_Wrap_BrokerDelaySchedule_PassesThroughVerbatim(t *testing.T) {
+	tests := []struct {
+		name   string
+		result HandleResult
+		want   Disposition
+	}{
+		{"requeue passes through, not exhaustion-reject", Requeue(errors.New("transient")), DispositionRequeue},
+		{"ack passes through", Ack(), DispositionAck},
+		{"reject passes through", Reject(errors.New("permanent")), DispositionReject},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			receipt := &fakeReceipt{}
+			claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+			cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+				RetryCount:     3,
+				RetryBaseDelay: time.Millisecond,
+			}, clock.Real())
+			require.NoError(t, err)
+
+			attempts := 0
+			sub := Subscription{
+				Topic:               "topic",
+				ConsumerGroup:       "cg",
+				BrokerDelaySchedule: []time.Duration{time.Second, time.Minute},
+			}
+			handler := cb.Wrap(sub, func(_ context.Context, _ Entry) HandleResult {
+				attempts++
+				return tt.result
+			})
+
+			res, settlement := handler(context.Background(), Entry{id: "evt-broker-delay"})
+			assert.Equal(t, 1, attempts, "broker-delay sub must invoke the handler exactly once (transport owns retries)")
+			assert.Equal(t, tt.want, res.Disposition)
+			assert.Same(t, receipt, settlement)
+		})
+	}
+}
+
 // TestConsumerBase_Wrap_WrappedPermanentErrorInRequeue_NotEscalated locks the
 // Q2 decision (029 #03 ADR Decision 4): when a handler returns Requeue with a
 // PermanentError-wrapped Err, ConsumerBase MUST keep the Disposition as

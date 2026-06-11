@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecert"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
@@ -51,7 +50,7 @@ func (failPublisher) Close(_ context.Context) error { return nil }
 func newTestService(t testing.TB) (*Service, *mem.DeviceRepository) {
 	t.Helper()
 	repo := mem.NewDeviceRepository()
-	svc, err := NewService(clock.Real(), repo, slog.Default(), WithCertStore(devicecert.NewStore()))
+	svc, err := NewService(clock.Real(), repo, slog.Default())
 	if err != nil {
 		t.Fatalf("newTestService: %v", err)
 	}
@@ -74,26 +73,13 @@ func TestNewService_NilRepo(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewService(clock.Real(), tt.repo, slog.Default(), WithCertStore(devicecert.NewStore()))
+			_, err := NewService(clock.Real(), tt.repo, slog.Default())
 			require.Error(t, err)
 			var ecErr *errcode.Error
 			require.ErrorAs(t, err, &ecErr)
 			assert.Equal(t, errcode.KindInternal, ecErr.Kind)
 		})
 	}
-}
-
-// TestNewService_NilCertStore verifies the generated certStore guard
-// (gocell:"required", #1757): omitting WithCertStore — with a valid repo so the
-// repo guard passes first — fails fast.
-func TestNewService_NilCertStore(t *testing.T) {
-	repo := mem.NewDeviceRepository()
-	_, err := NewService(clock.Real(), repo, slog.Default())
-	require.Error(t, err)
-	var ecErr *errcode.Error
-	require.ErrorAs(t, err, &ecErr)
-	assert.Equal(t, errcode.KindInternal, ecErr.Kind)
-	assert.Contains(t, err.Error(), "certStore")
 }
 
 func TestService_Register(t *testing.T) {
@@ -155,17 +141,17 @@ func TestService_Register_PersistsDevice(t *testing.T) {
 	assert.Equal(t, "sensor-b", stored.Name)
 }
 
-// TestService_Register_SeedsCertStore covers the real registration→cert-store
-// seeding path (registerInternal → s.certStore.Issue). The cert-renewal e2e
-// hand-seeds a near-expiry cert because Register issues a far-from-expiry one, so
-// the production seeding path needs its own assertion here: a freshly registered
-// device gets an epoch-1 cert valid for certValidity (now + 90d).
-func TestService_Register_SeedsCertStore(t *testing.T) {
+// TestService_Register_SeedsCertStateOnDeviceRow covers the real
+// registration→cert-state seeding path (registerInternal writes cert fields on
+// the device row, #1819). The cert-renewal e2e hand-seeds a near-expiry cert
+// because Register issues a far-from-expiry one, so the production seeding path
+// needs its own assertion here: a freshly registered device row carries an
+// epoch-1 cert valid for certValidity (now + 90d).
+func TestService_Register_SeedsCertStateOnDeviceRow(t *testing.T) {
 	base := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
 	clk := clockmock.New(base)
 	repo := mem.NewDeviceRepository()
-	store := devicecert.NewStore()
-	svc, err := NewService(clk, repo, slog.Default(), WithCertStore(store))
+	svc, err := NewService(clk, repo, slog.Default())
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -174,13 +160,11 @@ func TestService_Register_SeedsCertStore(t *testing.T) {
 	r := resp.(registercontract.Register201JSONResponse)
 	require.NotNil(t, r.Data)
 
-	// A cutoff just past now+certValidity surfaces exactly the new device's cert.
-	seeded, err := store.ScanNearExpiry(ctx, base.Add(certValidity+time.Hour))
+	stored, err := repo.GetByID(ctx, r.Data.ID)
 	require.NoError(t, err)
-	require.Len(t, seeded, 1, "Register must seed exactly one cert into the store")
-	assert.Equal(t, r.Data.ID, seeded[0].DeviceID)
-	assert.Equal(t, int64(1), seeded[0].Epoch, "a fresh registration issues epoch 1")
-	assert.Equal(t, base.Add(certValidity), seeded[0].NotAfter, "cert NotAfter is now+certValidity")
+	assert.Equal(t, domain.DefaultCertEpoch, stored.CertEpoch, "a fresh registration issues epoch 1")
+	assert.Equal(t, base.Add(certValidity), stored.CertExpiresAt, "cert expiry is now+certValidity")
+	assert.Zero(t, stored.RenewalRequestedEpoch, "a fresh cert has no renewal requested yet")
 }
 
 func TestService_Register_PublishFails_StillReturnsDevice(t *testing.T) {
@@ -191,7 +175,7 @@ func TestService_Register_PublishFails_StillReturnsDevice(t *testing.T) {
 	)
 	require.NoError(t, err)
 	svc, err := NewService(clock.Real(), repo, slog.Default(),
-		WithEmitter(outbox.WrapEmitterForCell(emitter)), WithCertStore(devicecert.NewStore()))
+		WithEmitter(outbox.WrapEmitterForCell(emitter)))
 	require.NoError(t, err)
 
 	resp, err := svc.Register(context.Background(), &registercontract.Request{Name: "sensor-c"})
@@ -210,7 +194,7 @@ func TestService_Register_PublishFails_FailClosedReturnsError(t *testing.T) {
 	)
 	require.NoError(t, err)
 	svc, err := NewService(clock.Real(), repo, slog.Default(),
-		WithEmitter(outbox.WrapEmitterForCell(emitter)), WithCertStore(devicecert.NewStore()))
+		WithEmitter(outbox.WrapEmitterForCell(emitter)))
 	require.NoError(t, err)
 
 	resp, err := svc.Register(context.Background(), &registercontract.Request{Name: "sensor-c"})
@@ -229,7 +213,7 @@ func TestService_Register_FailOpenDoesNotLogPublished(t *testing.T) {
 		metrics.NopProvider{}, clock.Real(), "devicecell", outbox.WithLogger(logger),
 	)
 	require.NoError(t, err)
-	svc, err := NewService(clock.Real(), repo, logger, WithEmitter(outbox.WrapEmitterForCell(emitter)), WithCertStore(devicecert.NewStore()))
+	svc, err := NewService(clock.Real(), repo, logger, WithEmitter(outbox.WrapEmitterForCell(emitter)))
 	require.NoError(t, err)
 
 	resp, err := svc.Register(context.Background(), &registercontract.Request{Name: "sensor-log"})
@@ -254,7 +238,7 @@ func TestService_Register_StampsOccurredAtFromDeviceLastSeen(t *testing.T) {
 	clk := &stepClock{FakeClock: clockmock.New(base), step: time.Second}
 	repo := mem.NewDeviceRepository()
 	recorder := outboxtest.NewRecorder()
-	svc, err := NewService(clk, repo, slog.Default(), WithEmitter(recorder.CellEmitter()), WithCertStore(devicecert.NewStore()))
+	svc, err := NewService(clk, repo, slog.Default(), WithEmitter(recorder.CellEmitter()))
 	require.NoError(t, err)
 
 	ctx := context.Background()

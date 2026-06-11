@@ -103,12 +103,35 @@ func TestRequiredDepNilGuard_A1_GeneratorOutputGroundTruth(t *testing.T) {
 	t.Run("production_scan", func(t *testing.T) {
 		root := findModuleRoot(t)
 		slicePaths := discoverSlicePaths(t, root)
+		// Anti-vacuity (#1560): generator and verifier share FindSlicePaths, so a
+		// missing corecells flat-layout glob makes the A1 byte-check silently
+		// regen-diff ZERO corecells gen files (fail-open for the whole platform
+		// module). Assert the discovery actually reaches corecells before trusting
+		// a clean scan.
+		assertDiscoversCorecells(t, root, slicePaths)
 		var allDiags []Diagnostic
 		for _, sp := range slicePaths {
 			allDiags = append(allDiags, runA1Check(t, root, sp, "")...)
 		}
 		Report(t, requiredDepNilGuardRule+"-A1", allDiags)
 	})
+}
+
+// assertDiscoversCorecells fails the test when FindSlicePaths discovered no
+// slice directory under the corecells platform-cell module (#1560) — the
+// dir-sensitive anti-vacuity proof that the corecells flat-layout glob patterns
+// in requireddepsgen.FindSlicePaths are live, not silently matching nothing.
+func assertDiscoversCorecells(t *testing.T, modRoot string, slicePaths []string) {
+	t.Helper()
+	for _, sp := range slicePaths {
+		if strings.HasPrefix(requiredDepSlashRel(modRoot, sp), "corecells/") {
+			return
+		}
+	}
+	t.Fatalf("REQUIRED-DEP-NIL-GUARD-01-A1 anti-vacuity: FindSlicePaths discovered "+
+		"zero slice dirs under corecells/ — the corecells flat-layout patterns in "+
+		"requireddepsgen.FindSlicePaths must reach the platform-cell module (#1560); "+
+		"discovered %d slice dirs total", len(slicePaths))
 }
 
 // runA1Check regenerates the gen file in-memory and diffs against the committed

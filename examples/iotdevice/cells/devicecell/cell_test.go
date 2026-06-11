@@ -38,7 +38,6 @@ func newTestCell() *DeviceCell {
 		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clock.Real()))),
 		WithBootstrapEmitter(testBootstrapEmitter()),
 		WithCommandRegistry(commandruntime.NewRegistry()),
-		WithCertStore(NewCertStore()),
 	)
 	c.RegisterCommandQueue(commandtest.NewInMemQueue())
 	return c
@@ -136,7 +135,6 @@ func TestDeviceCell_InitNoCommandQueue_FailsFast(t *testing.T) {
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clock.Real()))),
 		WithBootstrapEmitter(testBootstrapEmitter()),
-		WithCertStore(NewCertStore()),
 	)
 	err := c.Init(context.Background(), newTestRec())
 	require.Error(t, err)
@@ -157,7 +155,6 @@ func TestDeviceCell_InitNoCommandRegistry_FailsFast(t *testing.T) {
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clock.Real()))),
 		WithBootstrapEmitter(testBootstrapEmitter()),
-		WithCertStore(NewCertStore()),
 	)
 	c.RegisterCommandQueue(commandtest.NewInMemQueue())
 	err := c.Init(context.Background(), newTestRec())
@@ -173,7 +170,6 @@ func TestDeviceCell_InitNoPublisher(t *testing.T) {
 	c := NewDeviceCell(
 		clock.Real(),
 		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithCertStore(NewCertStore()),
 	)
 	ctx := context.Background()
 	rec := newTestRec()
@@ -181,24 +177,6 @@ func TestDeviceCell_InitNoPublisher(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "publisher")
 	assert.Contains(t, err.Error(), "DiscardPublisher")
-}
-
-func TestDeviceCell_InitNoCertStore_FailsFast(t *testing.T) {
-	// "No soft fallback": the ephemeral cert store is a required cell dependency
-	// (#1757). The cert-renewal loop scans it and device-register seeds it; a
-	// missing store must fail fast in Init, not silently run a renewal loop over a
-	// store nothing seeds. deviceRepo is provided so Init reaches the certStore
-	// guard (which sits right after the deviceRepo guard).
-	c := NewDeviceCell(
-		clock.Real(),
-		WithDeviceRepository(mem.NewDeviceRepository()),
-	)
-	err := c.Init(context.Background(), newTestRec())
-	require.Error(t, err)
-	var ec *errcode.Error
-	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
-	assert.Contains(t, err.Error(), "cert store")
 }
 
 func TestDeviceCell_RouteGroups(t *testing.T) {
@@ -438,7 +416,6 @@ func TestDeviceCell_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 		clock.Real(),
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clock.Real()))),
-		WithCertStore(NewCertStore()),
 
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
@@ -462,7 +439,6 @@ func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsCreated(t *testing.
 
 		WithCursorCodec(newTestCursorCodec(t)),
 		WithCommandRegistry(commandruntime.NewRegistry()),
-		WithCertStore(NewCertStore()),
 	)
 	c.RegisterCommandQueue(commandtest.NewInMemQueue())
 	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo)))
@@ -483,7 +459,6 @@ func TestDeviceCell_DemoMode_RegisterPublishFailureReturnsCreated(t *testing.T) 
 		WithDirectPublisher(outbox.WrapPublisherForCell(failingPublisher{})),
 		WithBootstrapEmitter(testBootstrapEmitter()),
 		WithCommandRegistry(commandruntime.NewRegistry()),
-		WithCertStore(NewCertStore()),
 	)
 	c.RegisterCommandQueue(commandtest.NewInMemQueue())
 	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo)))
@@ -554,7 +529,6 @@ func TestDeviceCell_CommandSweeper_MetricsBranches(t *testing.T) {
 			WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clock.Real()))),
 			WithBootstrapEmitter(testBootstrapEmitter()),
 			WithCommandRegistry(commandruntime.NewRegistry()),
-			WithCertStore(NewCertStore()),
 			WithMetricsProvider(metrics.NopProvider{}),
 		)
 		c.RegisterCommandQueue(commandtest.NewInMemQueue())

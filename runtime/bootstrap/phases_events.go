@@ -180,7 +180,10 @@ func (b *Bootstrap) drainWebhookDispatchers(s *phaseState, evtRouter *eventroute
 		return fmt.Errorf("bootstrap: build webhook dispatch consumers: %w", err)
 	}
 	for _, c := range consumers {
-		if err := evtRouter.AddContractHandler(c.Spec, c.Handler, c.ConsumerGroup, c.CellID); err != nil {
+		// #1458: carry the Svix per-attempt retry schedule onto the subscription
+		// so the subscriber honors broker-native delayed re-delivery.
+		if err := evtRouter.AddContractHandler(c.Spec, c.Handler, c.ConsumerGroup, c.CellID,
+			cell.WithSubscriptionBrokerDelaySchedule(c.BrokerDelaySchedule)); err != nil {
 			return fmt.Errorf("bootstrap: webhook dispatch setup failed for contract %q: %w", c.Spec.ID, err)
 		}
 	}
@@ -272,19 +275,38 @@ func (b *Bootstrap) drainCellSubscriptions(s *phaseState, evtRouter *eventrouter
 			continue
 		}
 		for _, sub := range snap.Subscriptions {
-			if sub.CellID != id {
-				return fmt.Errorf("bootstrap: cell %s subscription drift: declared CellID=%q but snapshot owner=%q"+
-					" (codegen should inject cellID from cell metadata; check cellgen + contractgen templates)",
-					id, sub.CellID, id)
-			}
-			var opts []cell.SubscriptionOption
-			if sub.SliceID != "" {
-				opts = append(opts, cell.WithSubscriptionSliceID(sub.SliceID))
-			}
-			if err := evtRouter.AddContractHandler(sub.Spec, sub.Handler, sub.ConsumerGroup, sub.CellID, opts...); err != nil {
-				return fmt.Errorf("bootstrap: cell %s subscription setup failed: %w", id, err)
+			if err := registerCellSubscription(evtRouter, id, sub); err != nil {
+				return err
 			}
 		}
+	}
+	return nil
+}
+
+// registerCellSubscription registers one cell snapshot subscription onto the
+// router. It cross-checks CellID against the snapshot owner (fail-fast on drift —
+// see drainCellSubscriptions) and forwards optional per-subscription metadata:
+// the slice owner and, for opted-in subscriptions, the broker-delay schedule.
+func registerCellSubscription(evtRouter *eventrouter.Router, id string, sub cell.SubscriptionRequest) error {
+	if sub.CellID != id {
+		return fmt.Errorf("bootstrap: cell %s subscription drift: declared CellID=%q but snapshot owner=%q"+
+			" (codegen should inject cellID from cell metadata; check cellgen + contractgen templates)",
+			id, sub.CellID, id)
+	}
+	var opts []cell.SubscriptionOption
+	if sub.SliceID != "" {
+		opts = append(opts, cell.WithSubscriptionSliceID(sub.SliceID))
+	}
+	// F7: forward an opted-in broker-delay schedule so a non-webhook cell
+	// subscription that requested broker-native delayed re-delivery actually
+	// carries it onto outbox.Subscription — without this the option would be
+	// silently dropped (only the webhook-dispatch drain forwarded it, see
+	// drainWebhookDispatchers).
+	if len(sub.BrokerDelaySchedule) > 0 {
+		opts = append(opts, cell.WithSubscriptionBrokerDelaySchedule(sub.BrokerDelaySchedule))
+	}
+	if err := evtRouter.AddContractHandler(sub.Spec, sub.Handler, sub.ConsumerGroup, sub.CellID, opts...); err != nil {
+		return fmt.Errorf("bootstrap: cell %s subscription setup failed: %w", id, err)
 	}
 	return nil
 }

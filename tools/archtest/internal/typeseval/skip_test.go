@@ -23,7 +23,7 @@ func TestIsGeneratedRelPath(t *testing.T) {
 		// Hand-written paths must not match.
 		{"kernel/outbox/result.go", false},
 		{"runtime/foo/bar.go", false},
-		{"cells/auditcore/internal/generated/sub.go", false},
+		{"corecells/auditcore/internal/generated/sub.go", false},
 		// Empty edge case.
 		{"", false},
 	}

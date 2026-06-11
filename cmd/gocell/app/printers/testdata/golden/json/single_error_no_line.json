@@ -4,7 +4,7 @@
       "code": "REF-02",
       "severity": "error",
       "issueType": "",
-      "file": "cells/accesscore/cell.yaml",
+      "file": "corecells/accesscore/cell.yaml",
       "scope": "",
       "field": "owner",
       "message": "owner missing",

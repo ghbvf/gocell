@@ -108,6 +108,13 @@ func (r *callOrderRecorder) snapshot() []string {
 	return out
 }
 
+// queueBindDetail records all fields of a QueueBind call for precise assertion.
+type queueBindDetail struct {
+	queue    string
+	key      string
+	exchange string
+}
+
 // --- Mock AMQP Channel ---
 
 type mockChannel struct {
@@ -121,6 +128,7 @@ type mockChannel struct {
 	publishCalled     bool
 	publishedMessages []amqp.Publishing
 	publishExchange   string
+	publishRoutingKey string
 	publishErr        error
 
 	consumeDeliveries chan amqp.Delivery
@@ -151,6 +159,7 @@ type mockChannel struct {
 	queueDeclareArgs   []amqp.Table
 	queueDeclareErr    error
 	queueBindings      []string
+	queueBindDetails   []queueBindDetail
 	queueBindErr       error
 
 	notifyPublishCh chan amqp.Confirmation
@@ -189,6 +198,7 @@ func (m *mockChannel) Publish(exchange, key string, mandatory, immediate bool, m
 	defer m.mu.Unlock()
 	m.publishCalled = true
 	m.publishExchange = exchange
+	m.publishRoutingKey = key
 	m.publishedMessages = append(m.publishedMessages, msg)
 	return m.publishErr
 }
@@ -300,6 +310,7 @@ func (m *mockChannel) QueueBind(name, key, exchange string, noWait bool, args am
 		return m.queueBindErr
 	}
 	m.queueBindings = append(m.queueBindings, name+"->"+exchange)
+	m.queueBindDetails = append(m.queueBindDetails, queueBindDetail{queue: name, key: key, exchange: exchange})
 	return nil
 }
 
@@ -2046,7 +2057,7 @@ func TestSubscriber_SubscribeOnce_AcquireChannelFails(t *testing.T) {
 	})
 
 	// subscribeOnce should return an error (channel acquisition failure).
-	err = sub.subscribeOnce(context.Background(), "test.topic", "test-queue",
+	err = sub.subscribeOnce(context.Background(), "test.topic", "test-queue", nil,
 		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.Ack()
 		}))
@@ -2924,7 +2935,7 @@ func TestProcessDelivery_Ack_CommitsReceipt(t *testing.T) {
 	sub.processDelivery(ctx, ch, amqp.Delivery{
 		DeliveryTag: 1,
 		Body:        entryBytes,
-	}, "test.topic", handler)
+	}, "test.topic", "", nil, handler)
 
 	ch.mu.Lock()
 	assert.True(t, ch.ackCalled)
@@ -2960,7 +2971,7 @@ func TestProcessDelivery_Reject_ReleasesReceipt(t *testing.T) {
 	sub.processDelivery(ctx, ch, amqp.Delivery{
 		DeliveryTag: 2,
 		Body:        entryBytes,
-	}, "test.topic", handler)
+	}, "test.topic", "", nil, handler)
 
 	ch.mu.Lock()
 	assert.True(t, ch.nackCalled)
@@ -2998,7 +3009,7 @@ func TestProcessDelivery_NilReceipt_NoPanic(t *testing.T) {
 		sub.processDelivery(ctx, ch, amqp.Delivery{
 			DeliveryTag: 3,
 			Body:        entryBytes,
-		}, "test.topic", handler)
+		}, "test.topic", "", nil, handler)
 	})
 }
 
@@ -3050,7 +3061,7 @@ func TestProcessDelivery_PassesThroughContextWithoutRestore(t *testing.T) {
 	sub.processDelivery(parentCtx, ch, amqp.Delivery{
 		DeliveryTag: 5,
 		Body:        entryBytes,
-	}, "test.topic", handler)
+	}, "test.topic", "", nil, handler)
 
 	// Subscriber should NOT restore obs metadata (middleware's job).
 	assert.Empty(t, observed["request_id"], "subscriber should not restore request_id")
@@ -3103,7 +3114,7 @@ func TestProcessDelivery_DoesNotRestoreObservabilityContext(t *testing.T) {
 	sub.processDelivery(context.Background(), ch, amqp.Delivery{
 		DeliveryTag: 6,
 		Body:        entryBytes,
-	}, "test.topic", handler)
+	}, "test.topic", "", nil, handler)
 
 	assert.Empty(t, capturedRequestID,
 		"processDelivery should NOT restore request_id — that is middleware's job")
@@ -3138,7 +3149,7 @@ func TestProcessDelivery_Receipt_UsesDetachedCtx(t *testing.T) {
 	sub.processDelivery(ctx, ch, amqp.Delivery{
 		DeliveryTag: 4,
 		Body:        entryBytes,
-	}, "test.topic", handler)
+	}, "test.topic", "", nil, handler)
 
 	// Receipt should still be committed because processDelivery uses
 	// context.WithoutCancel for Receipt operations. The parent ctx is
@@ -3172,7 +3183,7 @@ func TestProcessDelivery_Requeue_ReleasesReceipt(t *testing.T) {
 	sub.processDelivery(context.Background(), ch, amqp.Delivery{
 		DeliveryTag: 10,
 		Body:        entryBytes,
-	}, "test.topic", handler)
+	}, "test.topic", "", nil, handler)
 
 	ch.mu.Lock()
 	assert.True(t, ch.nackCalled)
@@ -3254,7 +3265,7 @@ func TestProcessDelivery_BrokerAckFails_CommitAlreadyDone(t *testing.T) {
 	sub.processDelivery(ctx, ch, amqp.Delivery{
 		DeliveryTag: 5,
 		Body:        entryBytes,
-	}, "test.topic", handler)
+	}, "test.topic", "", nil, handler)
 
 	receipt.mu.Lock()
 	// With Commit→Ack ordering, Commit is called before Ack.
@@ -3287,7 +3298,7 @@ func TestProcessDelivery_CommitFails_NackRequeueSuccess_ReleasesReceipt(t *testi
 	sub.processDelivery(context.Background(), ch, amqp.Delivery{
 		DeliveryTag: 41,
 		Body:        entryBytes,
-	}, "test.topic", handler)
+	}, "test.topic", "", nil, handler)
 
 	ch.mu.Lock()
 	assert.False(t, ch.ackCalled, "Commit failure must not Ack")
@@ -3325,7 +3336,7 @@ func TestProcessDelivery_CommitFails_NackRequeueFails_ReleasesReceipt(t *testing
 	sub.processDelivery(context.Background(), ch, amqp.Delivery{
 		DeliveryTag: 42,
 		Body:        entryBytes,
-	}, "test.topic", handler)
+	}, "test.topic", "", nil, handler)
 
 	ch.mu.Lock()
 	assert.False(t, ch.ackCalled, "Commit failure must not Ack even if Nack fails")
@@ -3494,7 +3505,7 @@ func TestProcessDelivery_HandlerError_Logged(t *testing.T) {
 	sub.processDelivery(context.Background(), ch, amqp.Delivery{
 		DeliveryTag: 20,
 		Body:        entryBytes,
-	}, "test.topic", handler)
+	}, "test.topic", "", nil, handler)
 
 	// Ack should still be called (error does not affect disposition).
 	ch.mu.Lock()
@@ -3528,7 +3539,7 @@ func TestProcessDelivery_Requeue_BrokerNackFails_ReleasesReceipt(t *testing.T) {
 	sub.processDelivery(context.Background(), ch, amqp.Delivery{
 		DeliveryTag: 30,
 		Body:        entryBytes,
-	}, "test.topic", handler)
+	}, "test.topic", "", nil, handler)
 
 	// Nack was attempted (requeue=true) but failed.
 	ch.mu.Lock()
@@ -3657,7 +3668,7 @@ func TestProcessDelivery_UnknownDisposition_NackWithRequeue(t *testing.T) {
 	sub.processDelivery(context.Background(), ch, amqp.Delivery{
 		DeliveryTag: 42,
 		Body:        entryBytes,
-	}, "test.topic", handler)
+	}, "test.topic", "", nil, handler)
 
 	// Unknown disposition should Nack with requeue=true.
 	ch.mu.Lock()

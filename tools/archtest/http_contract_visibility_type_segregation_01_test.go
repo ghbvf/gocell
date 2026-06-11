@@ -18,8 +18,8 @@
 //
 // Reference implementation: configread pattern —
 //
-//	cells/configcore/slices/configread/handler.go GetAdapter / ListAdapter
-//	cells/configcore/slices/configreadinternal/handler.go InternalGetAdapter
+//	corecells/configcore/slices/configread/handler.go GetAdapter / ListAdapter
+//	corecells/configcore/slices/configreadinternal/handler.go InternalGetAdapter
 //
 // After the F1' refactor, devicecell follows the same pattern:
 //
@@ -306,7 +306,7 @@ func runHTTPContractVisibilityCheck(
 // universe (single packages.Load call through SharedResolver).
 var productionPatterns = []string{
 	"./generated/contracts/http/...",
-	"./cells/...",
+	"./corecells/...",
 	"./examples/...",
 	"./runtime/...",
 	"./adapters/...",
@@ -334,7 +334,7 @@ func TestHTTPContractVisibilityTypeSegregation01_RealRepoClean(t *testing.T) {
 				"slices/<slice>/handler.go, internal Adapters in "+
 				"slices/<internalslice>/handler.go. "+
 				"ref: configread pattern "+
-				"(cells/configcore/slices/configread+configreadinternal)",
+				"(corecells/configcore/slices/configread+configreadinternal)",
 			v.Rel, v.Line, v.TypeName, v.PublicContracts, v.InternalContracts,
 		)
 	}

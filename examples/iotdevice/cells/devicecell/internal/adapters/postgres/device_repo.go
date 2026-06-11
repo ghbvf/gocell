@@ -68,23 +68,42 @@ func NewPGDeviceRepository(pool *pgxpool.Pool, txRunner persistence.TxRunner, cl
 }
 
 const (
-	insertDeviceSQL = `
-INSERT INTO devices (id, name, status, last_seen)
-VALUES ($1, $2, $3, $4)`
+	// deviceColumns is the single source for the full device column list (in
+	// scan order) shared by every SELECT, so the column set and scanDeviceRow
+	// never drift.
+	deviceColumns = "id, name, status, last_seen, cert_epoch, cert_expires_at, renewal_requested_epoch"
 
-	selectDeviceByIDSQL = `
-SELECT id, name, status, last_seen
+	insertDeviceSQL = "INSERT INTO devices (" + deviceColumns + ") VALUES ($1, $2, $3, $4, $5, $6, $7)"
+
+	selectDeviceByIDSQL = "SELECT " + deviceColumns + " FROM devices WHERE id = $1"
+
+	// selectCertRenewalCandidatesSQL returns near-expiry certs whose current
+	// epoch has not yet been renewal-requested. cert_expires_at IS NOT NULL
+	// excludes rows with no issued cert (zero expiry <-> NULL).
+	selectCertRenewalCandidatesSQL = `
+SELECT id, cert_epoch, cert_expires_at
 FROM devices
-WHERE id = $1`
+WHERE cert_expires_at IS NOT NULL AND cert_expires_at <= $1 AND renewal_requested_epoch <> cert_epoch
+ORDER BY cert_expires_at ASC, id ASC`
+
+	// markCertRenewalRequestedSQL is a compare-and-set on cert_epoch: it records
+	// the renewal-requested epoch only while the row's current epoch still
+	// matches (0 rows affected when re-issued/gone is a valid no-op).
+	markCertRenewalRequestedSQL = "UPDATE devices SET renewal_requested_epoch = $2 WHERE id = $1 AND cert_epoch = $2"
 )
 
 // Create inserts a new device row. Returns ErrConflict on unique constraint violation.
 func (r *PGDeviceRepository) Create(ctx context.Context, device *domain.Device) error {
+	d := *device
+	d.NormalizeCertState() // single source: backfill zero cert_epoch -> 1 (satisfies CHECK)
 	_, err := r.db.Exec(ctx, insertDeviceSQL,
-		device.ID,
-		device.Name,
-		device.Status,
-		device.LastSeen,
+		d.ID,
+		d.Name,
+		d.Status,
+		d.LastSeen,
+		d.CertEpoch,
+		nullableTime(d.CertExpiresAt),
+		d.RenewalRequestedEpoch,
 	)
 	if err != nil {
 		if pgquery.IsUniqueViolation(err) {
@@ -104,7 +123,7 @@ func (r *PGDeviceRepository) Create(ctx context.Context, device *domain.Device) 
 // GetByID fetches a device by primary key. Returns ErrDeviceNotFound when absent.
 func (r *PGDeviceRepository) GetByID(ctx context.Context, id string) (*domain.Device, error) {
 	row := r.db.QueryRow(ctx, selectDeviceByIDSQL, id)
-	d, err := scanDevice(row)
+	d, err := scanDeviceRow(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errcode.New(errcode.KindNotFound, errcode.ErrDeviceNotFound,
@@ -145,7 +164,7 @@ func (r *PGDeviceRepository) List(ctx context.Context, params query.ListParams) 
 
 	var devices []*domain.Device
 	for rows.Next() {
-		d, scanErr := scanDeviceFromRows(rows)
+		d, scanErr := scanDeviceRow(rows)
 		if scanErr != nil {
 			var ec *errcode.Error
 			if errors.As(scanErr, &ec) && ec.Code == errcode.ErrPGSchemaShape {
@@ -161,6 +180,47 @@ func (r *PGDeviceRepository) List(ctx context.Context, params query.ListParams) 
 	return devices, nil
 }
 
+// ListCertificateRenewalCandidates returns near-expiry certs whose current epoch
+// has not yet been renewal-requested, sorted by expiry then id. See the
+// domain.DeviceRepository contract.
+func (r *PGDeviceRepository) ListCertificateRenewalCandidates(
+	ctx context.Context, expiresBefore time.Time,
+) ([]domain.CertificateRenewalCandidate, error) {
+	rows, err := r.db.Query(ctx, selectCertRenewalCandidatesSQL, expiresBefore)
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "device_repo: list cert renewal candidates", err)
+	}
+	defer rows.Close()
+
+	out := make([]domain.CertificateRenewalCandidate, 0)
+	for rows.Next() {
+		var c domain.CertificateRenewalCandidate
+		// cert_expires_at is guaranteed non-NULL by the WHERE clause.
+		if scanErr := rows.Scan(&c.DeviceID, &c.CertEpoch, &c.CertExpiresAt); scanErr != nil {
+			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "device_repo: scan cert renewal candidate", scanErr)
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "device_repo: list cert renewal candidates rows", err)
+	}
+	return out, nil
+}
+
+// MarkCertRenewalRequested is a compare-and-set on cert_epoch (see the
+// domain.DeviceRepository contract). Zero rows affected (re-issued/gone) is a
+// valid no-op, not an error.
+func (r *PGDeviceRepository) MarkCertRenewalRequested(ctx context.Context, deviceID string, epoch int64) error {
+	if _, err := r.db.Exec(ctx, markCertRenewalRequestedSQL, deviceID, epoch); err != nil {
+		slog.Error("device_repo: pg write failed",
+			slog.String("operation", "mark_cert_renewal_requested"),
+			slog.String("device_id", deviceID),
+			slog.Any("error", err))
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "device_repo: mark cert renewal requested", err)
+	}
+	return nil
+}
+
 // buildListQuery constructs the SELECT SQL and placeholder args for a List call.
 // When CursorValues is nil the query is a plain ORDER BY ... LIMIT.
 // When CursorValues is non-nil a keyset WHERE predicate is prepended.
@@ -170,7 +230,7 @@ func buildListQuery(params query.ListParams) (string, []any, error) {
 
 	if len(params.CursorValues) == 0 {
 		// First page: no keyset predicate.
-		sqlStr := "SELECT id, name, status, last_seen FROM devices ORDER BY " + orderBy + " LIMIT $1"
+		sqlStr := "SELECT " + deviceColumns + " FROM devices ORDER BY " + orderBy + " LIMIT $1"
 		return sqlStr, []any{params.FetchLimit()}, nil
 	}
 
@@ -212,7 +272,7 @@ func buildListQuery(params query.ListParams) (string, []any, error) {
 	limitPlaceholder := fmt.Sprintf("$%d", len(params.Sort)+1)
 
 	sqlStr := fmt.Sprintf(
-		"SELECT id, name, status, last_seen FROM devices WHERE (%s) %s (%s) ORDER BY %s LIMIT %s",
+		"SELECT "+deviceColumns+" FROM devices WHERE (%s) %s (%s) ORDER BY %s LIMIT %s",
 		strings.Join(colNames, ", "),
 		op,
 		strings.Join(placeholders, ", "),
@@ -256,13 +316,21 @@ func trustedDeviceColumn(name string) string {
 	}
 }
 
-// scanDevice scans a pgx.Row into a domain.Device.
-func scanDevice(row pgx.Row) (*domain.Device, error) {
+// rowScanner is the common Scan surface of pgx.Row and pgx.Rows, so a single
+// scanDeviceRow serves both GetByID (Row) and List (Rows) without drift.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// scanDeviceRow scans a full device row (id..renewal_requested_epoch, in
+// deviceColumns order) into a domain.Device. cert_expires_at is nullable: a SQL
+// NULL leaves CertExpiresAt zero ("no cert issued").
+func scanDeviceRow(s rowScanner) (*domain.Device, error) {
 	var d domain.Device
 	var status string
 	var lastSeen time.Time
-	err := row.Scan(&d.ID, &d.Name, &status, &lastSeen)
-	if err != nil {
+	var certExpiresAt *time.Time
+	if err := s.Scan(&d.ID, &d.Name, &status, &lastSeen, &d.CertEpoch, &certExpiresAt, &d.RenewalRequestedEpoch); err != nil {
 		return nil, err
 	}
 	if !validDeviceStatus(status) {
@@ -273,27 +341,19 @@ func scanDevice(row pgx.Row) (*domain.Device, error) {
 	}
 	d.Status = status
 	d.LastSeen = lastSeen
+	if certExpiresAt != nil {
+		d.CertExpiresAt = *certExpiresAt
+	}
 	return &d, nil
 }
 
-// scanDeviceFromRows scans a pgx.Rows cursor into a domain.Device.
-func scanDeviceFromRows(rows pgx.Rows) (*domain.Device, error) {
-	var d domain.Device
-	var status string
-	var lastSeen time.Time
-	err := rows.Scan(&d.ID, &d.Name, &status, &lastSeen)
-	if err != nil {
-		return nil, err
+// nullableTime maps a zero time.Time to SQL NULL ("no cert issued") and any
+// other value to itself, so cert_expires_at round-trips zero <-> NULL.
+func nullableTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
 	}
-	if !validDeviceStatus(status) {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrPGSchemaShape,
-			"device row has invalid status enum",
-			errcode.WithDetails(errcode.PublicString("table", "devices"), errcode.PublicString("column", "status")),
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("scanned status=%q", status))))
-	}
-	d.Status = status
-	d.LastSeen = lastSeen
-	return &d, nil
+	return t
 }
 
 // RepoReady verifies that the devices table is reachable by executing a

@@ -2,9 +2,12 @@ package outbox
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 func TestSubscription_Validate(t *testing.T) {
@@ -61,6 +64,23 @@ func TestSubscription_Validate(t *testing.T) {
 			mutate:      func(s *Subscription) { s.ContractTransport = "" },
 			wantErr:     true,
 			errContains: "ContractTransport",
+		},
+		{
+			name:        "brokerDelaySchedule with zero duration",
+			mutate:      func(s *Subscription) { s.BrokerDelaySchedule = []time.Duration{testtime.D1s, 0} },
+			wantErr:     true,
+			errContains: "BrokerDelaySchedule",
+		},
+		{
+			name:        "brokerDelaySchedule with negative duration",
+			mutate:      func(s *Subscription) { s.BrokerDelaySchedule = []time.Duration{-testtime.D1s} },
+			wantErr:     true,
+			errContains: "BrokerDelaySchedule",
+		},
+		{
+			name:    "brokerDelaySchedule all positive",
+			mutate:  func(s *Subscription) { s.BrokerDelaySchedule = []time.Duration{testtime.D1s, testtime.D5s} },
+			wantErr: false,
 		},
 		{
 			name:    "valid",

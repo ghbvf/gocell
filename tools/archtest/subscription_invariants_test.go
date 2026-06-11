@@ -96,19 +96,28 @@ func parseSubscriptionFixtureSrc(t *testing.T, src string) (*ast.File, *token.Fi
 // ---------------------------------------------------------------------------
 
 // subscriptionAllowedFields is the verbatim field set of kernel/outbox.Subscription.
-// Adding an eighth field requires extending this allowlist deliberately, which
-// is the moment to (a) decide whether the field belongs on the cross-middleware
+// Adding a field requires extending this allowlist deliberately, which is the
+// moment to (a) decide whether the field belongs on the cross-middleware
 // Subscription identity or on SubscriptionRequest/handlerConfig (eventrouter
 // internal), (b) re-read ADR 202605111000-adr-subscription-cellid-mandatory.md
 // (W2 of K#07), and (c) confirm whether codegen/cellgen must inject the value.
+//
+// BrokerDelaySchedule (#1458) belongs on the cross-middleware Subscription
+// because the Subscriber (the consume-side adapter) is what honors the
+// per-attempt delay. Unlike CellID/SliceID it is NOT codegen-injected on
+// reg.Subscribe: it is wiring-injected by the webhook-dispatch bootstrap drain
+// (runtime/bootstrap/phases_events.go) via cell.WithSubscriptionBrokerDelaySchedule,
+// so contractgen/cellgen templates intentionally do not set it (the zero value —
+// nil — is correct for every codegen-registered cell subscription).
 var subscriptionAllowedFields = map[string]struct{}{
-	"Topic":             {},
-	"ConsumerGroup":     {},
-	"CellID":            {},
-	"SliceID":           {},
-	"ContractID":        {},
-	"ContractKind":      {},
-	"ContractTransport": {},
+	"Topic":               {},
+	"ConsumerGroup":       {},
+	"CellID":              {},
+	"SliceID":             {},
+	"ContractID":          {},
+	"ContractKind":        {},
+	"ContractTransport":   {},
+	"BrokerDelaySchedule": {},
 }
 
 // collectSubscriptionFieldViolations walks an AST for a struct named
@@ -157,7 +166,7 @@ func collectSubscriptionFieldViolations(f *ast.File, fset *token.FileSet, label 
 }
 
 // TestSubscriptionFieldsFrozen enforces SUBSCRIPTION-FIELDS-FROZEN-01:
-// kernel/outbox.Subscription must declare exactly the seven fields listed in
+// kernel/outbox.Subscription must declare exactly the eight fields listed in
 // subscriptionAllowedFields. Drift in this field set silently changes what
 // every cell handler can/must produce on a Subscription literal AND what
 // codegen (contractgen + cellgen) must inject; freezing the set keeps the
@@ -212,16 +221,17 @@ func TestSubscriptionFieldsFrozen_DetectorFixtures(t *testing.T) {
 		wantMissing bool
 	}{
 		{
-			name: "green_exact_seven",
+			name: "green_exact_allowlist",
 			src: `package fixture
 type Subscription struct {
-	Topic             string
-	ConsumerGroup     string
-	CellID            string
-	SliceID           string
-	ContractID        string
-	ContractKind      string
-	ContractTransport string
+	Topic               string
+	ConsumerGroup       string
+	CellID              string
+	SliceID             string
+	ContractID          string
+	ContractKind        string
+	ContractTransport   string
+	BrokerDelaySchedule []time.Duration
 }`,
 			wantFound: true,
 		},
@@ -229,14 +239,15 @@ type Subscription struct {
 			name: "red_extra_field",
 			src: `package fixture
 type Subscription struct {
-	Topic             string
-	ConsumerGroup     string
-	CellID            string
-	SliceID           string
-	ContractID        string
-	ContractKind      string
-	ContractTransport string
-	Extra             string
+	Topic               string
+	ConsumerGroup       string
+	CellID              string
+	SliceID             string
+	ContractID          string
+	ContractKind        string
+	ContractTransport   string
+	BrokerDelaySchedule []time.Duration
+	Extra               string
 }`,
 			wantFound:   true,
 			wantUnknown: true,
@@ -245,12 +256,13 @@ type Subscription struct {
 			name: "red_missing_cellid",
 			src: `package fixture
 type Subscription struct {
-	Topic             string
-	ConsumerGroup     string
-	SliceID           string
-	ContractID        string
-	ContractKind      string
-	ContractTransport string
+	Topic               string
+	ConsumerGroup       string
+	SliceID             string
+	ContractID          string
+	ContractKind        string
+	ContractTransport   string
+	BrokerDelaySchedule []time.Duration
 }`,
 			wantFound:   true,
 			wantMissing: true,
@@ -259,13 +271,14 @@ type Subscription struct {
 			name: "red_embedded_field",
 			src: `package fixture
 type Subscription struct {
-	Topic             string
-	ConsumerGroup     string
-	CellID            string
-	SliceID           string
-	ContractID        string
-	ContractKind      string
-	ContractTransport string
+	Topic               string
+	ConsumerGroup       string
+	CellID              string
+	SliceID             string
+	ContractID          string
+	ContractKind        string
+	ContractTransport   string
+	BrokerDelaySchedule []time.Duration
 	EmbeddedBase
 }`,
 			wantFound:   true,

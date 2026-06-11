@@ -327,7 +327,7 @@ func TestBaseSliceAllowedFilesNilWhenUnset(t *testing.T) {
 
 func TestBaseSliceAllowedFilesExplicit(t *testing.T) {
 	s := MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "login", BelongsToCell: metadatatest.CellIDAccessCore, ConsistencyLevel: "L1"})
-	custom := []string{"cells/accesscore/slices/login/**"}
+	custom := []string{"corecells/accesscore/slices/login/**"}
 	s.SetAllowedFiles(custom)
 	assert.Equal(t, custom, s.AllowedFiles())
 }
@@ -576,7 +576,7 @@ func TestNewBaseSliceFromMeta_ProjectsVerifyAndAllowedFiles(t *testing.T) {
 				},
 			},
 		},
-		AllowedFiles: []string{"cells/accesscore/slices/sessionlogin/**"},
+		AllowedFiles: []string{"corecells/accesscore/slices/sessionlogin/**"},
 	}
 
 	s, err := NewBaseSliceFromMeta(meta)
@@ -592,7 +592,7 @@ func TestNewBaseSliceFromMeta_ProjectsVerifyAndAllowedFiles(t *testing.T) {
 	assert.Equal(t, "platform-team", v.Waivers[0].Owner)
 
 	af := s.AllowedFiles()
-	require.Equal(t, []string{"cells/accesscore/slices/sessionlogin/**"}, af)
+	require.Equal(t, []string{"corecells/accesscore/slices/sessionlogin/**"}, af)
 
 	// --- Defensive copy: mutate meta, BaseSlice must be unaffected ---
 	meta.Verify.Unit[0] = "MUTATED"
@@ -605,7 +605,7 @@ func TestNewBaseSliceFromMeta_ProjectsVerifyAndAllowedFiles(t *testing.T) {
 	assert.Equal(t, "contract.http.auth.login.v1.serve", v2.Contract[0], "meta mutation must not affect BaseSlice.Verify.Contract")
 	assert.Equal(t, "platform-team", v2.Waivers[0].Owner, "meta mutation must not affect BaseSlice.Verify.Waivers")
 	af2 := s.AllowedFiles()
-	assert.Equal(t, "cells/accesscore/slices/sessionlogin/**", af2[0], "meta mutation must not affect BaseSlice.AllowedFiles")
+	assert.Equal(t, "corecells/accesscore/slices/sessionlogin/**", af2[0], "meta mutation must not affect BaseSlice.AllowedFiles")
 }
 
 // TestNewBaseSliceFromMeta_EmptyVerifyAndAllowedFiles asserts that a meta with

@@ -75,8 +75,8 @@ func TestMasterKeyDemoHex_IsInWellKnownDemoKeys(t *testing.T) {
 // cellsecrets.WellKnownDemoKeys.
 func TestCellDemoKeys_AreAllInWellKnownDemoKeys(t *testing.T) {
 	cellDemoKeys := []string{
-		"gocell-demo-AUDIT--CORE-key-32!!", // cells/auditcore/cell.go
-		"gocell-demo-CONFIG-CORE-key-32!!", // cells/configcore/cell.go
+		"gocell-demo-AUDIT--CORE-key-32!!", // corecells/auditcore/cell.go
+		"gocell-demo-CONFIG-CORE-key-32!!", // corecells/configcore/cell.go
 		"gocell-demo-ORDER-CELL-key-32b!!", // examples/todoorder/cells/ordercell/cell.go
 		"gocell-demo-DEVICE-CELL-key-32!!", // examples/iotdevice/cells/devicecell/cell.go
 	}

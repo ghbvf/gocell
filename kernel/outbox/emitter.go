@@ -264,7 +264,7 @@ var ErrDegraded = errcode.New(errcode.KindUnavailable, errcode.ErrOutboxDegraded
 // counter for the actionable signal.
 //
 // ref: kernel/outbox/emitter.go ErrDegraded
-// ref: cells/accesscore/cell_providers.go:22-38 — kebab-case checker name convention
+// ref: corecells/accesscore/cell_providers.go:22-38 — kebab-case checker name convention
 var _ healthz.ProbeSet = (*DirectEmitter)(nil)
 
 // Probes returns the fail-open rate probe for this emitter.

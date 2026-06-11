@@ -39,8 +39,9 @@ envelope）原样透传。
 broker 再跑 demo**；仅"未设环境变量"是合法的关闭方式。
 
 **认证**：当前 demo 仅连接**无认证** broker（示例用 `mosquitto-no-auth.conf`）。未提供
-用户名/密码环境变量；连接有认证的 broker 需扩展 `buildMQTTDirectPublisher` 注入
-`mqtt.Config.Auth`（out-of-scope for this demo）。
+用户名/密码环境变量；连接有认证的 broker 需扩展 `buildMQTTDirectPublisher`，在
+`mqtt.NewConfig(...)` 调用里加一个 `mqtt.WithAuth(mqtt.AuthConfig{...})` 选项
+（out-of-scope for this demo）。
 
 ## 跑通命令
 

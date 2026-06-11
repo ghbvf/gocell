@@ -33,30 +33,38 @@ import (
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
-// newTestConfig returns a Config valid for connecting to the shared Mosquitto
-// container. The broker URL is normalized via testutil.LoopbackIPEndpoint so
-// that "localhost"-form URLs pass the loopback-IP-literal validator in
-// Config.validateBrokers (secutil.ValidateTLSEndpoint rejects DNS names for
-// plaintext plaintext schemes).
-func newTestConfig(t *testing.T, role string) Config {
+// newITestConfig returns a Config valid for connecting to the shared Mosquitto
+// container. Extra opts apply after the base options so a caller overrides any
+// knob through the public With* path (e.g. WithKeepAlive, WithPublishTimeout)
+// instead of mutating the sealed Config's unexported fields.
+func newITestConfig(t *testing.T, role string, opts ...ConfigOption) Config {
+	t.Helper()
+	return newITestConfigForBroker(t, role, sharedBrokerURL(t), opts...)
+}
+
+// newITestConfigForBroker is newITestConfig targeting an explicit brokerURL (the
+// shared broker for the default helper). The broker URL is normalized via
+// testutil.LoopbackIPEndpoint so that "localhost"-form URLs pass the
+// loopback-IP-literal validator in Config.validateBrokers (secutil.ValidateTLSEndpoint
+// rejects DNS names for plaintext schemes). Extra opts apply after the base options.
+func newITestConfigForBroker(t *testing.T, role, brokerURL string, opts ...ConfigOption) Config {
 	t.Helper()
 	cid, err := ParseEphemeralClientID("itest", role)
 	if err != nil {
 		t.Fatalf("ParseEphemeralClientID: %v", err)
 	}
-	brokerURL := testutil.LoopbackIPEndpoint(sharedBrokerURL(t))
-	return Config{
-		ClientID:        cid,
-		Brokers:         []string{brokerURL},
-		ConnectTimeout:  testtime.D5s,
-		ConnectDeadline: testtime.D10s,
-		KeepAlive:       testtime.D10s,
-		Backoff: BackoffConfig{
-			BaseDelay: testtime.D100ms,
-			MaxDelay:  testtime.D2s,
-		},
-		PublishTimeout: testtime.D5s,
+	base := []ConfigOption{
+		WithConnectTimeout(testtime.D5s),
+		WithConnectDeadline(testtime.D10s),
+		WithKeepAlive(testtime.D10s),
+		WithBackoff(BackoffConfig{BaseDelay: testtime.D100ms, MaxDelay: testtime.D2s}),
+		WithPublishTimeout(testtime.D5s),
 	}
+	cfg, cfgErr := NewConfig(cid, []string{testutil.LoopbackIPEndpoint(brokerURL)}, append(base, opts...)...)
+	if cfgErr != nil {
+		t.Fatalf("NewConfig: %v", cfgErr)
+	}
+	return cfg
 }
 
 // TestIntegration_PublisherQoS1 verifies end-to-end publish against a real
@@ -66,7 +74,7 @@ func TestIntegration_PublisherQoS1(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D20s)
 	defer cancel()
 
-	cfg := newTestConfig(t, "publish-qos1")
+	cfg := newITestConfig(t, "publish-qos1")
 	conn, err := Open(ctx, clock.Real(), cfg)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -106,8 +114,8 @@ func TestIntegration_PublisherReconnect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D30s)
 	defer cancel()
 
-	cfg := newTestConfig(t, "publish-reconnect")
-	cfg.KeepAlive = testtime.D2s // tighter keep-alive for quick failure detection
+	// tighter keep-alive (2s) for quick failure detection
+	cfg := newITestConfig(t, "publish-reconnect", WithKeepAlive(testtime.D2s))
 
 	conn, err := Open(ctx, clock.Real(), cfg)
 	if err != nil {
@@ -157,8 +165,8 @@ func TestIntegration_PublisherPubAckTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()
 
-	cfg := newTestConfig(t, "publish-timeout")
-	cfg.PublishTimeout = time.Nanosecond // intentionally fires immediately
+	// very short PublishTimeout (1ns) intentionally fires immediately
+	cfg := newITestConfig(t, "publish-timeout", WithPublishTimeout(time.Nanosecond))
 
 	conn, err := Open(ctx, clock.Real(), cfg)
 	if err != nil {
@@ -225,17 +233,15 @@ func TestIntegration_PublisherTrueReconnect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseEphemeralClientID: %v", err)
 	}
-	cfg := Config{
-		ClientID:        cid,
-		Brokers:         []string{testutil.LoopbackIPEndpoint(dedicatedURL)},
-		ConnectTimeout:  testtime.D5s,
-		ConnectDeadline: testtime.D10s,
-		KeepAlive:       testtime.D10s,
-		Backoff: BackoffConfig{
-			BaseDelay: testtime.D100ms,
-			MaxDelay:  testtime.D2s,
-		},
-		PublishTimeout: testtime.D5s,
+	cfg, cfgErr := NewConfig(cid, []string{testutil.LoopbackIPEndpoint(dedicatedURL)},
+		WithConnectTimeout(testtime.D5s),
+		WithConnectDeadline(testtime.D10s),
+		WithKeepAlive(testtime.D10s),
+		WithBackoff(BackoffConfig{BaseDelay: testtime.D100ms, MaxDelay: testtime.D2s}),
+		WithPublishTimeout(testtime.D5s),
+	)
+	if cfgErr != nil {
+		t.Fatalf("NewConfig: %v", cfgErr)
 	}
 
 	conn, err := Open(ctx, clock.Real(), cfg)
@@ -307,12 +313,12 @@ func newSubscriberForITest(t *testing.T, role string) (*Subscriber, *Connection)
 	// `context.WithTimeout + defer cancel()` would fire the moment the helper
 	// returns — killing the manager before the test ever subscribes and leaving
 	// every cm.Subscribe with ConnectionDownError ("subscribe not ready"). Scope
-	// cancel to t.Cleanup so the manager outlives the helper; cfg.ConnectTimeout
+	// cancel to t.Cleanup so the manager outlives the helper; cfg.connectTimeout
 	// already bounds the bootstrap connect inside Open. Mirrors the unit
 	// newTestSubscriber fix.
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	cfg := newTestConfig(t, role)
+	cfg := newITestConfig(t, role)
 	conn, err := Open(ctx, clock.Real(), cfg)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -557,16 +563,18 @@ func TestIntegration_Subscriber_SessionRecovery(t *testing.T) {
 		t.Fatalf("ParseStableClientID: %v", err)
 	}
 	mkCfg := func() Config {
-		return Config{
-			ClientID:        stableID,
-			Brokers:         []string{testutil.LoopbackIPEndpoint(dedicatedURL)},
-			ConnectTimeout:  testtime.D5s,
-			ConnectDeadline: testtime.D10s,
-			KeepAlive:       testtime.D10s,
-			SessionExpiry:   testtime.D30s,
-			Backoff:         BackoffConfig{BaseDelay: testtime.D100ms, MaxDelay: testtime.D2s},
-			PublishTimeout:  testtime.D5s,
+		cfg, cfgErr := NewConfig(stableID, []string{testutil.LoopbackIPEndpoint(dedicatedURL)},
+			WithConnectTimeout(testtime.D5s),
+			WithConnectDeadline(testtime.D10s),
+			WithKeepAlive(testtime.D10s),
+			WithSessionExpiry(testtime.D30s),
+			WithBackoff(BackoffConfig{BaseDelay: testtime.D100ms, MaxDelay: testtime.D2s}),
+			WithPublishTimeout(testtime.D5s),
+		)
+		if cfgErr != nil {
+			t.Fatalf("mkCfg: NewConfig: %v", cfgErr)
 		}
+		return cfg
 	}
 
 	ns, err := ParseTopicNamespace("itest")
@@ -641,8 +649,7 @@ func itestSessionPhase1Subscribe(t *testing.T, mkCfg func() Config, ns TopicName
 // the persistent-session subscriber is offline. Returns offlineCount.
 func itestSessionPublishOffline(t *testing.T, brokerURL, filter string) int {
 	t.Helper()
-	pubCfg := newTestConfig(t, "session-pub")
-	pubCfg.Brokers = []string{testutil.LoopbackIPEndpoint(brokerURL)}
+	pubCfg := newITestConfigForBroker(t, "session-pub", brokerURL)
 	pubCtx, pubCancel := context.WithTimeout(context.Background(), testtime.D20s)
 	pubConn, err := Open(pubCtx, clock.Real(), pubCfg)
 	if err != nil {
@@ -741,15 +748,17 @@ func TestIntegration_Subscriber_ClientIDConflict(t *testing.T) {
 		t.Fatalf("ParseStableClientID: %v", err)
 	}
 	mkCfg := func() Config {
-		return Config{
-			ClientID:        stableID,
-			Brokers:         []string{testutil.LoopbackIPEndpoint(dedicatedURL)},
-			ConnectTimeout:  testtime.D5s,
-			ConnectDeadline: testtime.D10s,
-			KeepAlive:       testtime.D10s,
-			Backoff:         BackoffConfig{BaseDelay: testtime.D100ms, MaxDelay: testtime.D2s},
-			PublishTimeout:  testtime.D5s,
+		cfg, cfgErr := NewConfig(stableID, []string{testutil.LoopbackIPEndpoint(dedicatedURL)},
+			WithConnectTimeout(testtime.D5s),
+			WithConnectDeadline(testtime.D10s),
+			WithKeepAlive(testtime.D10s),
+			WithBackoff(BackoffConfig{BaseDelay: testtime.D100ms, MaxDelay: testtime.D2s}),
+			WithPublishTimeout(testtime.D5s),
+		)
+		if cfgErr != nil {
+			t.Fatalf("mkCfg: NewConfig: %v", cfgErr)
 		}
+		return cfg
 	}
 
 	ctx1, cancel1 := context.WithTimeout(context.Background(), testtime.D20s)

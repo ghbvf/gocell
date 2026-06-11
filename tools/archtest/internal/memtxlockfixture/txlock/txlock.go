@@ -1,7 +1,7 @@
 //go:build archtest_fixture
 
 // Package txlock mirrors the production
-// cells/accesscore/internal/mem/internal/txlock sealed lock-lease package so the
+// corecells/accesscore/internal/mem/internal/txlock sealed lock-lease package so the
 // MEM-TX-LOCK-OWNERSHIP-01 reverse self-check can exercise the witness-funnel
 // detector (W1 Acquire-call-site + arg + nesting, W2 inLiveTx form) against a
 // real, build-tag-gated source corpus. Acquire is the sole lease mint; the

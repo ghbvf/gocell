@@ -218,9 +218,15 @@ func assemblyMetaFile(project *metadata.ProjectMeta, id string) string {
 	return ""
 }
 
+// isCellRootSeg reports whether a top-level path segment is a cell-root dir:
+// the framework-general "cells" (project-local convention) or GoCell's own
+// platform-cell module dir "corecells" (#1560 go.work P5). Example-nested cells
+// (examples/<id>/cells/) are out of scope for these root-level canonicalizers.
+func isCellRootSeg(seg string) bool { return seg == "cells" || seg == "corecells" }
+
 func canonicalCellID(file string) (string, bool) {
 	parts := strings.Split(file, "/")
-	if len(parts) == 3 && parts[0] == "cells" && parts[2] == "cell.yaml" {
+	if len(parts) == 3 && isCellRootSeg(parts[0]) && parts[2] == "cell.yaml" {
 		return parts[1], true
 	}
 	return "", false
@@ -228,7 +234,7 @@ func canonicalCellID(file string) (string, bool) {
 
 func canonicalSliceKey(file string) (string, bool) {
 	parts := strings.Split(file, "/")
-	if len(parts) == 5 && parts[0] == "cells" && parts[2] == "slices" && parts[4] == "slice.yaml" {
+	if len(parts) == 5 && isCellRootSeg(parts[0]) && parts[2] == "slices" && parts[4] == "slice.yaml" {
 		return parts[1] + "/" + parts[3], true
 	}
 	return "", false

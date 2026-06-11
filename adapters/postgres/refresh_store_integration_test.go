@@ -670,7 +670,7 @@ func TestPGRefreshStore_RevokeSessionDetachedSurvivesAmbientRollback(t *testing.
 //
 //  1. pkg/ctxutil/detach_test.go asserts that WithDetachedTimeout's returned
 //     ctx is unaffected by parent cancel and carries an independent deadline.
-//  2. cells/accesscore/slices/sessionrefresh/service_test.go::
+//  2. corecells/accesscore/slices/sessionrefresh/service_test.go::
 //     TestService_CascadeRevoke_UsesDetachedStoreMethod asserts that the
 //     service-level cascade path routes to RevokeSessionDetached rather than
 //     the ambient business revoke.

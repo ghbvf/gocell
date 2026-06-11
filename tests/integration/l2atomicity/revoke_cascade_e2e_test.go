@@ -14,7 +14,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
-// eventRoleRevokedV1 mirrors cells/accesscore/internal/dto.TopicRoleRevoked.
+// eventRoleRevokedV1 mirrors corecells/accesscore/internal/dto.TopicRoleRevoked.
 // The constant lives in an internal package that tests/integration/l2atomicity
 // cannot import; per cell-patterns.md the duplication is "expected cost" of
 // cell isolation. If the producer-side constant changes, this test must be
@@ -34,7 +34,7 @@ const eventRoleRevokedV1 = "event.role.revoked.v1"
 //     victim until the cascade settles
 //
 // This is the e2e regression for B2-C-13: "L2 cross-layer e2e gap" — the
-// existing service-layer integration test (cells/accesscore/auth_integration_test.go)
+// existing service-layer integration test (corecells/accesscore/auth_integration_test.go)
 // uses a stub outbox; T4 drives the same path via real HTTP + real PG +
 // in-process eventbus subscriber.
 func TestL2_RbacRevokeRevokesSessions(t *testing.T) {

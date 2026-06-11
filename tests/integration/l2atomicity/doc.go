@@ -24,7 +24,7 @@
 //     RoleChangedEvent.ActorID from the service-token caller cell,
 //     satisfying auditcore's ActorRequireExplicit mode that previously
 //     DLX-rejected role events) — see contracts/event/role/{assigned,revoked}/v1
-//     schema additions and cells/accesscore/internal/dto/role_event.go.
+//     schema additions and corecells/accesscore/internal/dto/role_event.go.
 //   - sessionvalidate epoch mismatch → 401 (session.authz_epoch_at_issue <
 //     users.authz_epoch via row provenance)
 //   - login uniform 401 wire shape: missing user / wrong password / inactive

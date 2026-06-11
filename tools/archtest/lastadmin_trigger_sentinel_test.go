@@ -4,7 +4,7 @@
 //   - INVARIANT: LASTADMIN-TRIGGER-SENTINEL-CONST-SQL-MATCH-01
 //
 // LASTADMIN-TRIGGER-SENTINEL-CONST-SQL-MATCH-01 — the Go const
-// `lastAdminTriggerSentinel` (cells/accesscore/internal/adapters/postgres/
+// `lastAdminTriggerSentinel` (corecells/accesscore/internal/adapters/postgres/
 // lastadmin.go) and the `RAISE EXCEPTION` message of the
 // effective_admin_invariant_fn trigger (adapters/postgres/migrations/
 // 024_effective_admin_invariant.sql and its per-tenant rebuild in
@@ -38,7 +38,7 @@
 // tier Go affords for this shape. There is NO gh-tracked Hard upgrade path
 // because none exists; do not re-open this as a Soft→Hard candidate.
 //
-// ref: cells/accesscore/internal/adapters/postgres/lastadmin.go (const + isLastAdminProtected)
+// ref: corecells/accesscore/internal/adapters/postgres/lastadmin.go (const + isLastAdminProtected)
 // ref: adapters/postgres/migrations/024_effective_admin_invariant.sql (RAISE EXCEPTION)
 // ref: ai-robust.md §"载体决策原则" 元数据/外部文件派生 → EachContentFile + typed const-eval
 package archtest
@@ -162,8 +162,8 @@ const (
 	lastAdminSentinelConstName = "lastAdminTriggerSentinel"
 	// Derive the platform import path from PlatformModulePath rather than a bare
 	// literal (ARCHTEST-MODULE-PATH-FUNNEL-01).
-	lastAdminSentinelConstPkg = PlatformModulePath + "/cells/accesscore/internal/adapters/postgres"
-	lastAdminSentinelConstRel = "cells/accesscore/internal/adapters/postgres/lastadmin.go"
+	lastAdminSentinelConstPkg = PlatformCellsModulePath + "/accesscore/internal/adapters/postgres"
+	lastAdminSentinelConstRel = "corecells/accesscore/internal/adapters/postgres/lastadmin.go"
 
 	// lastAdminMigrationsDir is the flat migrations directory (NNN_xxx.sql). This
 	// is a module-root-relative filesystem path for EachContentFile, NOT a Go

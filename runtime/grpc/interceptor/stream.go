@@ -173,7 +173,7 @@ func StreamRecovery() grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) (err error) {
 		defer func() {
 			if v := recover(); v != nil {
-				err = recoverGRPCPanic(ss.Context(), info.FullMethod, v)
+				err = recoverGRPCPanic(ss.Context(), "handler", info.FullMethod, v)
 			}
 		}()
 		return handler(srv, ss)

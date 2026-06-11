@@ -1,10 +1,12 @@
 //go:build archtest
 
 // INVARIANT: MQTT-CLIENT-ID-NAMESPACE-01
-//   - INVARIANT: MQTT-TOPIC-NAMESPACE-01
+// INVARIANT: MQTT-TOPIC-NAMESPACE-01
+// INVARIANT: MQTT-CONFIG-SEALED-FIELD-FROZEN-01
 //
 // mqtt_funnel_test.go — dogfood Tests + self-checks for the sealed-struct
-// construction funnels of adapters/mqtt.ClientID and adapters/mqtt.TopicNamespace.
+// construction funnels of adapters/mqtt.ClientID, adapters/mqtt.TopicNamespace,
+// and adapters/mqtt.Config.
 //
 // Rule scanner logic lives in mqtt_funnel.go (importable non-test file);
 // this file contains:
@@ -15,12 +17,14 @@
 package archtest
 
 import (
+	"crypto/tls"
 	"fmt"
 	"go/ast"
 	"go/types"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,6 +32,27 @@ import (
 	"github.com/ghbvf/gocell/adapters/mqtt"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
+
+// wantMQTTConfigFields is the frozen field set of adapters/mqtt.Config pinned by
+// MQTT-CONFIG-SEALED-FIELD-FROZEN-01/A1. Editing this list is the deliberate
+// signal that the sealed Config shape changed — it must be accompanied by an
+// ADR amendment + threat-model re-evaluation (ai-robust: reflect schema freeze).
+func wantMQTTConfigFields() []mqttConfigField {
+	dur := reflect.TypeOf(time.Duration(0))
+	return []mqttConfigField{
+		{"clientID", reflect.TypeOf(mqtt.ClientID{})},
+		{"brokers", reflect.TypeOf([]string(nil))},
+		{"tlsConfig", reflect.TypeOf((*tls.Config)(nil))},
+		{"sessionExpiry", dur},
+		{"auth", reflect.TypeOf(mqtt.AuthConfig{})},
+		{"backoff", reflect.TypeOf(mqtt.BackoffConfig{})},
+		{"maximumPacketSize", reflect.TypeOf(uint32(0))},
+		{"connectTimeout", dur},
+		{"connectDeadline", dur},
+		{"keepAlive", dur},
+		{"publishTimeout", dur},
+	}
+}
 
 // assertMQTTSealedSingleValueField is a test-helper wrapper around
 // checkMQTTSealedSingleValueField that reports violations via t.Errorf.
@@ -118,6 +143,146 @@ func TestMQTTTopicNamespace01(t *testing.T) {
 		t.Parallel()
 		Report(t, ruleID, CheckMQTTTopicNamespace(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 	})
+}
+
+// ─── Main archtest: MQTT-CONFIG-SEALED-FIELD-FROZEN-01 ────────────────────────
+
+// TestMQTTConfigSealedFieldFrozen01 enforces the Config sealed-construction
+// funnel — the Hard upgrade of the retired MQTT-CONFIG-VALIDATE-FIRST-01
+// form-lock (#1231).
+//
+//   - A1 (Hard, reflect field freeze): adapters/mqtt.Config has EXACTLY the
+//     frozen field set, every field unexported. Unexported fields are the
+//     upstream compile gate — an outside-package `mqtt.Config{...}` literal is
+//     structurally inexpressible, so a non-zero Config can only come from
+//     NewConfig, which validates in its body. "Unvalidated Config" is therefore
+//     unrepresentable in a caller's hands.
+//   - A2 (Medium, composite-literal allowlist): in-package, the sole sanctioned
+//     non-zero Config composite literal is inside NewConfig; any other is a
+//     funnel bypass (an in-package path could otherwise build an unvalidated
+//     Config). Zero-value `Config{}` (NewConfig's error return) is allowed.
+//   - A2b (Medium, field-write allowlist): in-package, a `c.field = x` write to
+//     a Config field must be inside NewConfig or a With* option constructor
+//     (signature returns ConfigOption); any other is a field-by-field
+//     construction bypass (`var c Config; c.clientID = id; return c`) the A2
+//     composite-literal scan alone cannot see.
+//
+// # Blind-spot self-check
+//
+// Same go/types composite-literal-resolution blind spots as
+// MQTT-CLIENT-ID-NAMESPACE-01 (reflect field-set / unsafe.Pointer); the
+// repo-wide TestMQTTFunnel_BlindSpot_* tests cover them for adapters/mqtt.
+func TestMQTTConfigSealedFieldFrozen01(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	const ruleID = "MQTT-CONFIG-SEALED-FIELD-FROZEN-01"
+
+	// A1: reflect field freeze (exact field set + unexported + type identity).
+	t.Run("A1_FieldFreeze", func(t *testing.T) {
+		t.Parallel()
+		dt := reflect.TypeOf(mqtt.Config{})
+		for _, v := range checkMQTTConfigFieldFreeze(ruleID+"/A1: Config", dt, wantMQTTConfigFields()) {
+			t.Errorf("%s", v)
+		}
+	})
+
+	// A2: in-package construction allowlist (NewConfig only).
+	t.Run("A2_Construction", func(t *testing.T) {
+		t.Parallel()
+		Report(t, ruleID, CheckMQTTConfigSeal(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
+	})
+}
+
+// TestMQTTConfigFreeze_ScannerFires proves checkMQTTConfigFieldFreeze produces
+// violations on every degenerate Config shape (exported field, missing field,
+// extra field, wrong type, non-struct) and none on a faithful replica of the
+// real field set. Without this reverse self-check, a refactor that silently
+// relaxed the freeze would leave TestMQTTConfigSealedFieldFrozen01/A1 vacuously
+// green.
+func TestMQTTConfigFreeze_ScannerFires(t *testing.T) {
+	t.Parallel()
+
+	pkg := PlatformModulePath + "/tools/archtest"
+	dur := reflect.TypeOf(time.Duration(0))
+	strType := reflect.TypeOf("")
+
+	// want is a deliberately small 2-field frozen spec so the synthetic cases
+	// stay readable; the production A1 test uses the real wantMQTTConfigFields().
+	want := []mqttConfigField{{"clientID", strType}, {"keepAlive", dur}}
+
+	mkField := func(name string, typ reflect.Type, exported bool) reflect.StructField {
+		f := reflect.StructField{Name: name, Type: typ}
+		if !exported {
+			f.PkgPath = pkg
+		}
+		return f
+	}
+
+	cases := []struct {
+		desc    string
+		typ     reflect.Type
+		wantErr bool
+	}{
+		{
+			desc: "faithful: both fields unexported, correct types",
+			typ: reflect.StructOf([]reflect.StructField{
+				mkField("clientID", strType, false), mkField("keepAlive", dur, false),
+			}),
+			wantErr: false,
+		},
+		{
+			desc: "exported field re-opens literal construction",
+			typ: reflect.StructOf([]reflect.StructField{
+				mkField("ClientID", strType, true), mkField("keepAlive", dur, false),
+			}),
+			wantErr: true, // "clientID" missing (it's "ClientID") AND count mismatch
+		},
+		{
+			desc: "missing field",
+			typ: reflect.StructOf([]reflect.StructField{
+				mkField("clientID", strType, false),
+			}),
+			wantErr: true,
+		},
+		{
+			desc: "extra field (count drift)",
+			typ: reflect.StructOf([]reflect.StructField{
+				mkField("clientID", strType, false), mkField("keepAlive", dur, false),
+				mkField("extra", strType, false),
+			}),
+			wantErr: true,
+		},
+		{
+			desc: "wrong field type",
+			typ: reflect.StructOf([]reflect.StructField{
+				mkField("clientID", strType, false), mkField("keepAlive", strType, false),
+			}),
+			wantErr: true,
+		},
+		{
+			desc:    "non-struct",
+			typ:     strType,
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+			violations := checkMQTTConfigFieldFreeze("TestConfig", tc.typ, want)
+			if tc.wantErr {
+				assert.NotEmpty(t, violations,
+					"expected freeze to fire for case %q but got no violations", tc.desc)
+			} else {
+				assert.Empty(t, violations,
+					"expected no violations for case %q but got: %v", tc.desc, violations)
+			}
+		})
+	}
 }
 
 // ─── Reverse self-check: A1 scanner has teeth ────────────────────────────────
@@ -509,6 +674,201 @@ func TestMQTTFunnel_A2ScannerFiresOnRedFixture(t *testing.T) {
 		"A2 scanner reported diagnostics but none from the red fixture; got: %+v", diags)
 }
 
+// TestMQTTConfigSeal_A2ScannerFires proves that scanMQTTCompositeLitConstruction
+// produces no violations for the production adapters/mqtt package (all non-zero
+// Config composite literals are inside NewConfig), AND that the go/types
+// resolution path actually finds ≥1 such literal inside NewConfig (so the
+// production A2 scan cannot be vacuously green due to a silently-broken type
+// resolver).
+//
+// Without the insideCount ≥ 1 assertion, a refactor that moved the Config{...}
+// literal out of NewConfig — or broke the go/types resolution path — could leave
+// TestMQTTConfigSealedFieldFrozen01/A2_Construction vacuously passing.
+func TestMQTTConfigSeal_A2ScannerFires(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	root := findModuleRoot(t)
+
+	const newConfigFullName = mqttPkgPath + ".NewConfig"
+
+	var outsideCount, insideCount int
+
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		prodscan.PatternsExtended(root)),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
+				return nil
+			}
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				// Count Config composite literals outside NewConfig (should be zero).
+				diags := scanMQTTCompositeLitConstruction(
+					p.Fset, f, rel, p.TypesInfo,
+					"Config", []string{newConfigFullName}, "MQTT-CONFIG-SEALED-FIELD-FROZEN-01",
+				)
+				outsideCount += len(diags)
+
+				// Count non-zero Config composite literals inside NewConfig (must be ≥1).
+				EachInSubtree[ast.CompositeLit](f, func(lit *ast.CompositeLit) {
+					if lit.Type == nil || len(lit.Elts) == 0 {
+						return
+					}
+					tv, ok := p.TypesInfo.Types[lit.Type]
+					if !ok {
+						return
+					}
+					named, ok := tv.Type.(*types.Named)
+					if !ok {
+						return
+					}
+					tobj := named.Obj()
+					if tobj.Pkg() == nil || tobj.Pkg().Path() != mqttPkgPath || tobj.Name() != "Config" {
+						return
+					}
+					if mqttEnclosingFuncAllowed(p.TypesInfo, f, lit, []string{newConfigFullName}) {
+						insideCount++
+					}
+				})
+			}
+			return nil
+		})
+
+	// All non-zero Config literals must be inside NewConfig.
+	assert.Equal(t, 0, outsideCount,
+		"A2 scanner: production code has Config composite literals outside NewConfig — "+
+			"this means the A2 self-check correctly detects violations when they exist")
+
+	// The inside count must be ≥1: NewConfig constructs the Config{...} literal in its body.
+	// If this fails, the go/types resolution path is broken and cannot see any Config literals.
+	assert.GreaterOrEqual(t, insideCount, 1,
+		"A2 scanner must find ≥1 Config composite literal inside NewConfig — "+
+			"if this fails, the go/types resolution path is silently broken")
+}
+
+// TestMQTTFunnel_FieldWriteScannerFiresOnRedFixture proves the A2b field-write
+// scanner (scanSealedFieldWriteConstruction) fires on a genuine field-write
+// construction bypass — `var c FixtureClientID; c.value = ...; return c` outside
+// the sanctioned ParseFixtureClientID. This is the blind spot the composite-
+// literal scanner (A2) cannot see (a zero-value declaration has no CompositeLit
+// node), so without this self-check a regression disabling the field-write scan
+// would pass silently.
+//
+// See tools/archtest/internal/mqttredfixture/fixture.go::archtestRedFixtureFieldWrite.
+func TestMQTTFunnel_FieldWriteScannerFiresOnRedFixture(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	const ruleID = "MQTT-CLIENT-ID-NAMESPACE-01"
+	const fixturePkgPath = PlatformModulePath + "/tools/archtest/internal/mqttredfixture"
+
+	diags := Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{fixturePkgPath}),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != fixturePkgPath {
+				return nil
+			}
+			var out []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				out = append(out, scanSealedFieldWriteConstruction(
+					p.Fset, f, rel, p.TypesInfo,
+					fixturePkgPath, "FixtureClientID",
+					[]string{fixturePkgPath + ".ParseFixtureClientID"},
+					"", "", // fixture has no option type
+					ruleID,
+				)...)
+			}
+			return out
+		})
+
+	require.NotEmpty(t, diags,
+		"A2b field-write scanner must report ≥1 violation on the red fixture in "+
+			"tools/archtest/internal/mqttredfixture/fixture.go — if this fails, the "+
+			"field-write scan is silently broken")
+
+	foundRedfixture := false
+	for _, d := range diags {
+		if strings.HasSuffix(d.Rel, "fixture.go") {
+			foundRedfixture = true
+			break
+		}
+	}
+	assert.True(t, foundRedfixture,
+		"A2b scanner reported diagnostics but none from the red fixture; got: %+v", diags)
+}
+
+// TestMQTTConfigFieldWriteSeal_ScannerFires proves the A2b field-write scan over
+// production adapters/mqtt: (a) zero violations — every Config field write is
+// inside NewConfig or a With* ConfigOption constructor; AND (b) the scanner
+// actually SEES ≥1 such field write (the With* option closures write
+// cfg.<field>), so the production A2b scan cannot be vacuously green from a
+// silently-broken go/types selection resolver.
+func TestMQTTConfigFieldWriteSeal_ScannerFires(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	root := findModuleRoot(t)
+
+	const newConfigFullName = mqttPkgPath + ".NewConfig"
+	const ruleID = "MQTT-CONFIG-SEALED-FIELD-FROZEN-01"
+	var outsideCount, seenCount int
+
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		prodscan.PatternsExtended(root)),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
+				return nil
+			}
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				// Real allowlist (NewConfig + With* ConfigOption funcs): production
+				// must have ZERO Config field writes outside the funnel.
+				outsideCount += len(scanSealedFieldWriteConstruction(
+					p.Fset, f, rel, p.TypesInfo,
+					mqttPkgPath, "Config",
+					[]string{newConfigFullName},
+					mqttPkgPath, "ConfigOption",
+					ruleID,
+				))
+				// Empty allowlist (no sanctioned writer): every Config field write —
+				// the With* option closures' cfg.<field>=… — becomes a diagnostic, so
+				// this count is the total field writes the scanner SEES. ≥1 proves the
+				// go/types selection-resolution path is live (anti-vacuity); these are
+				// exactly the writes the real allowlist above exempts to reach 0.
+				seenCount += len(scanSealedFieldWriteConstruction(
+					p.Fset, f, rel, p.TypesInfo,
+					mqttPkgPath, "Config",
+					nil, "", "",
+					ruleID,
+				))
+			}
+			return nil
+		})
+
+	assert.Equal(t, 0, outsideCount,
+		"A2b scanner: production code writes Config fields outside NewConfig / With* "+
+			"option constructors — sealed-construction funnel bypass")
+	assert.GreaterOrEqual(t, seenCount, 1,
+		"A2b scanner must SEE ≥1 Config field write (the With* option writes) under an "+
+			"empty allowlist — if this fails, the go/types selection resolver is silently broken")
+}
+
 // TestMQTTFunnel_NonVacuousness documents that the A1 test was confirmed
 // non-vacuous via a temporary mutation of clientid.go (changing
 // `type ClientID struct{value string}` → `type ClientID string`) which caused
@@ -534,4 +894,26 @@ func TestMQTTFunnel_NonVacuousness(t *testing.T) {
 	require.Equal(t, reflect.Struct, dt2.Kind(),
 		"MQTT-TOPIC-NAMESPACE-01/A1: TopicNamespace must be a struct, not a string newtype. "+
 			"If this fails, someone changed the type definition in topicns.go.")
+
+	// MQTT-CONFIG-SEALED-FIELD-FROZEN-01/A1 (#1231): confirmed non-vacuous via a
+	// temporary mutation of config.go (exporting `clientID` → `ClientID`) which
+	// made TestMQTTConfigSealedFieldFrozen01/A1_FieldFreeze fail with:
+	//
+	//	MQTT-CONFIG-SEALED-FIELD-FROZEN-01/A1: Config has no "clientID" field
+	//	  (renamed or exported?); sealed-construction invariant broken
+	//	MQTT-CONFIG-SEALED-FIELD-FROZEN-01/A1: Config.ClientID is exported ...
+	//
+	// The mutation was reverted before committing. Statically reassert the Config
+	// shape here (struct + every field unexported) so the freeze cannot quietly
+	// regress to a string newtype or an exported-field struct.
+	dtCfg := reflect.TypeOf(mqtt.Config{})
+	require.Equal(t, reflect.Struct, dtCfg.Kind(),
+		"MQTT-CONFIG-SEALED-FIELD-FROZEN-01/A1: Config must be a struct. "+
+			"If this fails, someone changed the type definition in config.go.")
+	for i := 0; i < dtCfg.NumField(); i++ {
+		f := dtCfg.Field(i)
+		require.NotEmpty(t, f.PkgPath,
+			"MQTT-CONFIG-SEALED-FIELD-FROZEN-01/A1: Config.%s is exported — the sealed "+
+				"construction funnel requires every field unexported (see config.go NewConfig).", f.Name)
+	}
 }

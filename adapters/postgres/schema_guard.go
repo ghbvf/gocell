@@ -65,6 +65,11 @@ const gotWantQuotedFmt = "got %q want %q"
 //                                   the 12-field canonical-JSON HMAC chain.
 //   - devices            (029)  examples/iotdevice devicecell PG repo (B2.B)
 //                                 + devices_status_chk CHECK (status IN online/offline)
+//                                 + cert_epoch BIGINT NOT NULL DEFAULT 1,
+//                                   cert_expires_at TIMESTAMPTZ (nullable, no default),
+//                                   renewal_requested_epoch BIGINT NOT NULL DEFAULT 0 (056)
+//                                 + devices_cert_epoch_positive CHECK (cert_epoch >= 1) (056)
+//                                 + idx_devices_cert_expires_at (cert_expires_at, id) (057)
 //   - commands           (030)  examples/iotdevice command queue PG adapter (B2.B)
 //                                 + commands.device_id FK → devices(id) ON DELETE RESTRICT
 //                                 + commands_status_chk, commands_attempt_chk
@@ -79,7 +84,7 @@ const gotWantQuotedFmt = "got %q want %q"
 //   - projection_checkpoints (045)  CQRS projection harness consumed-offset store
 //                                 + PK(cell_id, projection_id)
 //                                 + owner column reserved, write-guarded (v1 never writes it; reads harmless; ADR §Q5)
-//   - projection_events  (056)  durable append-only projection event journal (#1504)
+//   - projection_events  (058)  durable append-only projection event journal (#1504)
 //                                 + global_seq BIGINT GENERATED ALWAYS AS IDENTITY PK
 //                                 + idx_projection_events_id UNIQUE(id) (idempotency / cursor key)
 //                                 + JSONB payload/metadata/observability/principal
@@ -596,6 +601,10 @@ var expectedColumns = []expectedColumn{
 	{Table: "devices", Column: "name", Type: "text", NotNull: true},
 	{Table: "devices", Column: "status", Type: "text", NotNull: true},
 	{Table: "devices", Column: "last_seen", Type: pgTypeTSTZ, NotNull: true},
+	// 056_devices_cert_renewal.sql — durable cert-renewal state (#1819).
+	{Table: "devices", Column: "cert_epoch", Type: "bigint", NotNull: true},
+	{Table: "devices", Column: "cert_expires_at", Type: pgTypeTSTZ, NotNull: false},
+	{Table: "devices", Column: "renewal_requested_epoch", Type: "bigint", NotNull: true},
 	// commands (030_commands.sql) — kernel/command.Queue PG adapter (B2.B).
 	{Table: "commands", Column: "id", Type: "text", NotNull: true},
 	{Table: "commands", Column: "device_id", Type: "text", NotNull: true},
@@ -637,7 +646,7 @@ var expectedColumns = []expectedColumn{
 	{Table: "projection_checkpoints", Column: "offset_seq", Type: "bigint", NotNull: true},
 	{Table: "projection_checkpoints", Column: "owner", Type: "text", NotNull: true},
 	{Table: "projection_checkpoints", Column: "updated_at", Type: pgTypeTSTZ, NotNull: true},
-	// projection_events (056_create_projection_events.sql) — durable append-only projection
+	// projection_events (058_create_projection_events.sql) — durable append-only projection
 	// event journal (#1504). Columns = outbox_entries minus relay-internal delivery state;
 	// only the EntryScan-rebuild columns the source reads are kept.
 	// global_seq is GENERATED ALWAYS AS IDENTITY (Identity:true guards the auto-assign write
@@ -692,7 +701,7 @@ var expectedPKs = []expectedPK{
 	{Table: "saga_events", Columns: []string{"instance_id", "version"}},
 	// projection_checkpoints: composite PK (cell_id, projection_id) (045_create_projection_checkpoints.sql).
 	{Table: "projection_checkpoints", Columns: []string{"cell_id", "projection_id"}},
-	// projection_events: global_seq IDENTITY PK (056_create_projection_events.sql / #1504).
+	// projection_events: global_seq IDENTITY PK (058_create_projection_events.sql / #1504).
 	{Table: "projection_events", Columns: []string{"global_seq"}},
 	// reconcile_leases: PK on reconciler_id (046_create_reconcile_leases.sql).
 	{Table: "reconcile_leases", Columns: []string{"reconciler_id"}},
@@ -718,6 +727,14 @@ var expectedDefaults = []expectedDefault{
 	// adds users_password_version_non_negative CHECK >= 0). A dropped default would
 	// cause every new-user Create to fail at write time.
 	{Table: "users", Column: "password_version", Default: "0"},
+	// devices.cert_epoch (056) — the Go write path normalises zero to 1 on insert
+	// (domain.NormalizeCertState), but raw-SQL inserts that omit the column rely on
+	// DEFAULT 1. A dropped default would cause bare SQL inserts (e.g. test fixtures)
+	// to fail NOT NULL.
+	{Table: "devices", Column: "cert_epoch", Default: "1"},
+	// devices.renewal_requested_epoch (056) — raw-SQL inserts that omit the column
+	// rely on DEFAULT 0 (no pending renewal). NOT NULL constraint requires the default.
+	{Table: "devices", Column: "renewal_requested_epoch", Default: "0"},
 }
 
 // expectedIndexes covers both unique and non-unique indexes across S3F tables.
@@ -733,7 +750,7 @@ var expectedIndexes = []expectedIndex{
 	// idx_outbox_seq is tracked because the projection ReplaySource/Cursor depend
 	// on it for ordered range scans, so a partial migration must fail fast.
 	{Table: "outbox_entries", Name: "idx_outbox_seq", Unique: true, Columns: []string{"seq"}},
-	// projection_events — idempotency + cursor key (056_create_projection_events.sql / #1504).
+	// projection_events — idempotency + cursor key (058_create_projection_events.sql / #1504).
 	// global_seq is the PK (its btree serves the replay range scan), so only the id unique
 	// index is registered here; ON CONFLICT (id) DO NOTHING (PR-02) depends on it.
 	{Table: "projection_events", Name: "idx_projection_events_id", Unique: true, Columns: []string{"id"}},
@@ -778,6 +795,8 @@ var expectedIndexes = []expectedIndex{
 	// filter. See audit_ledger_store.Query.
 	// devices / commands (029, 030, 031) — B2.B.
 	{Table: "devices", Name: "idx_devices_status", Unique: false, Columns: []string{"status"}},
+	// 057_devices_cert_expiry_index.sql — renewal-candidate range scan (#1819).
+	{Table: "devices", Name: "idx_devices_cert_expires_at", Unique: false, Columns: []string{"cert_expires_at", "id"}},
 	// 030_commands.sql partial indexes — Columns lists only key columns, not WHERE predicate columns
 	{Table: "commands", Name: "idx_commands_pending_fifo", Unique: false, Columns: []string{"device_id", "created_at"}},
 	{Table: "commands", Name: "idx_commands_active_lease", Unique: false, Columns: []string{"lease_expiry"}},
@@ -1188,6 +1207,8 @@ var expectedChecks = []expectedCheck{
 	{Table: "refresh_tokens", Name: "refresh_tokens_authz_epoch_at_issue_positive"},
 	// devices / commands (029, 030) — B2.B.
 	{Table: "devices", Name: "devices_status_chk"},
+	// 056_devices_cert_renewal.sql — cert_epoch >= 1 hard DB invariant (#1819).
+	{Table: "devices", Name: "devices_cert_epoch_positive"},
 	{Table: "commands", Name: "commands_status_chk"},
 	{Table: "commands", Name: "commands_attempt_chk"},
 	// audit_entries hash-format guard (020_audit_ledger.sql + 043_audit_entries_v2.sql

@@ -459,20 +459,20 @@ func authPlanConstructorCallViolations(p *Pass, file *ast.File, rel, origin stri
 }
 
 // isAuthPlanScannedPkg reports whether the package at relPkg (module-relative
-// slash-path, e.g. "cells/accesscore/slices/setup") is in scope for AUTH-PLAN-04
+// slash-path, e.g. "corecells/accesscore/slices/setup") is in scope for AUTH-PLAN-04
 // (i.e. under cells/ or runtime/ but not runtime/bootstrap/).
 func isAuthPlanScannedPkg(relPkg string) bool {
 	if strings.HasPrefix(relPkg, "runtime/bootstrap") {
 		return false
 	}
-	return strings.HasPrefix(relPkg, "cells/") || strings.HasPrefix(relPkg, "runtime/")
+	return strings.HasPrefix(relPkg, PlatformCellsDir+"/") || strings.HasPrefix(relPkg, "runtime/")
 }
 
 // authPlanPkgOrigin returns the human-readable origin label used in
 // AUTH-PLAN-04 diagnostics ("cells/" or "runtime/ (non-bootstrap)").
 func authPlanPkgOrigin(relPkg string) string {
-	if strings.HasPrefix(relPkg, "cells/") {
-		return "cells/"
+	if strings.HasPrefix(relPkg, PlatformCellsDir+"/") {
+		return PlatformCellsDir + "/"
 	}
 	return "runtime/ (non-bootstrap)"
 }

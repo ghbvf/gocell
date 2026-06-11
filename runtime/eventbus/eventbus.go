@@ -287,7 +287,7 @@ func (b *InMemoryEventBus) Subscribe(ctx context.Context, sub outbox.Subscriptio
 			if !ok {
 				return nil
 			}
-			b.handleWithRetry(subCtx, topic, entry, handler)
+			b.handleWithRetry(subCtx, sub.BrokerDelaySchedule, topic, entry, handler)
 		}
 	}
 }
@@ -432,10 +432,27 @@ func (b *InMemoryEventBus) removeSub(topic, consumerGroup string, target *subscr
 	}
 }
 
-func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, entry outbox.Entry, handler outbox.SubscriberHandler) {
-	for attempt := range maxRetries {
+// handleWithRetry drives the per-delivery retry loop. For ordinary
+// subscriptions the budget is maxRetries with exponential backoff. For
+// broker-delay subscriptions (#1458, non-empty schedule) the budget is
+// len(schedule)+1 deliveries (the immediate attempt plus one retry per tier)
+// and the inter-attempt wait is the per-tier schedule delay — mirroring the
+// rabbitmq TTL+DLX tier walk so both transports honor the Svix timeline
+// identically (enforced by the shared outboxtest DelayedRedelivery feature).
+func (b *InMemoryEventBus) handleWithRetry(
+	ctx context.Context,
+	schedule []time.Duration,
+	topic string,
+	entry outbox.Entry,
+	handler outbox.SubscriberHandler,
+) {
+	budget := maxRetries
+	if len(schedule) > 0 {
+		budget = len(schedule) + 1
+	}
+	for attempt := range budget {
 		res, settlement := handler(ctx, entry)
-		finalAttempt := attempt == maxRetries-1
+		finalAttempt := attempt == budget-1
 		done, err := b.processResult(ctx, topic, entry, res, settlement, attempt, finalAttempt)
 		if done {
 			return
@@ -444,11 +461,39 @@ func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, en
 			b.notifyRetryExhausted(ctx, topic, entry, res, err)
 			return
 		}
-		// Wait for retry delay or ctx cancellation.
-		if !awaitRetry(ctx, b.clk, res.Disposition, attempt) {
+		// Wait the per-attempt delay — the schedule tier for #1458 broker-delay
+		// subscriptions, else exponential backoff — then retry, or abort on ctx
+		// cancellation. Logged here, the single site that knows the actual wait,
+		// so retry_delay is accurate for both retry modes. The error attr is
+		// omitted when nil (e.g. a zero-value/invalid disposition carries no Err —
+		// handleInvalidDisposition already logged the cause at Error level) so the
+		// field never reads as a spurious "error=<nil>".
+		delay := nextAttemptDelay(schedule, attempt)
+		retryAttrs := []slog.Attr{
+			slog.String("topic", topic),
+			slog.String("entry_id", entry.ID()),
+			slog.Int("attempt", attempt+1),
+			slog.Duration("retry_delay", delay),
+		}
+		if res.Err != nil {
+			retryAttrs = append(retryAttrs, slog.Any("error", res.Err))
+		}
+		slog.LogAttrs(ctx, slog.LevelWarn, "eventbus: delivery failed, retrying after delay", retryAttrs...)
+		if !awaitDelay(ctx, b.clk, delay) {
 			return
 		}
 	}
+}
+
+// nextAttemptDelay returns the wait before the next delivery attempt: the
+// per-tier schedule delay for broker-delay subscriptions (#1458), else
+// exponential backoff. schedule[attempt] is in range because handleWithRetry
+// only waits when attempt < len(schedule).
+func nextAttemptDelay(schedule []time.Duration, attempt int) time.Duration {
+	if len(schedule) > 0 {
+		return schedule[attempt]
+	}
+	return retryDelay(attempt)
 }
 
 func (b *InMemoryEventBus) notifyRetryExhausted(
@@ -511,13 +556,15 @@ func (b *InMemoryEventBus) processResult(
 		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.RejectSettlementResult(res), nil)
 		return true, nil
 	case outbox.DispositionRequeue:
-		return b.handleRequeue(ctx, topic, entry, res, settlement, attempt, finalAttempt)
+		return b.handleRequeue(ctx, topic, entry, res, settlement, finalAttempt)
 	default:
 		return b.handleInvalidDisposition(ctx, topic, entry, res, settlement, attempt, finalAttempt)
 	}
 }
 
-// handleRequeue processes DispositionRequeue: schedule retry with backoff.
+// handleRequeue processes DispositionRequeue: release the receipt and signal a
+// non-final retry (the wait + retry log happen in handleWithRetry, the single
+// site that knows the actual per-attempt delay — backoff or #1458 schedule tier).
 // PermanentError 不再短路 — 与 ConsumerBase 029 #03 ADR Decision 4 对齐：
 // PermanentError 仅作分类标签（用于 logging/metrics），handler 必须显式返回
 // DispositionReject 才会立刻路由 DLX；Requeue 一律走 retry budget，预算耗尽
@@ -528,7 +575,6 @@ func (b *InMemoryEventBus) handleRequeue(
 	entry outbox.Entry,
 	res outbox.DeliveryOutcome,
 	settlement outbox.Settlement,
-	attempt int,
 	finalAttempt bool,
 ) (done bool, lastErr error) {
 	if settlement != nil {
@@ -537,13 +583,6 @@ func (b *InMemoryEventBus) handleRequeue(
 	if finalAttempt {
 		return false, res.Err
 	}
-	delay := retryDelay(attempt)
-	slog.Warn("eventbus: handler requested requeue, retrying",
-		slog.String("topic", topic),
-		slog.Int("attempt", attempt+1),
-		slog.Any("error", res.Err),
-		slog.Duration("retry_delay", delay),
-	)
 	outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultSuccess, nil)
 	return false, res.Err
 }
@@ -573,7 +612,6 @@ func (b *InMemoryEventBus) handleInvalidDisposition(
 		)
 		return false, res.Err
 	}
-	delay := retryDelay(attempt)
 	slog.Error("eventbus: invalid disposition, treating as requeue",
 		slog.String("topic", topic),
 		slog.String("entry_id", entry.ID()),
@@ -581,7 +619,6 @@ func (b *InMemoryEventBus) handleInvalidDisposition(
 		slog.String("event_type", entry.EventType()),
 		slog.String("disposition", res.Disposition.String()),
 		slog.Int("attempt", attempt+1),
-		slog.Duration("retry_delay", delay),
 	)
 	outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultSuccess, nil)
 	return false, res.Err
@@ -596,10 +633,10 @@ func retryDelay(attempt int) time.Duration {
 	return base + jitter
 }
 
-// awaitRetry sleeps for the retry delay then returns true, or returns false
-// if ctx is canceled. For invalid disposition, uses the same delay logic.
-func awaitRetry(ctx context.Context, clk clock.Clock, _ outbox.Disposition, attempt int) bool {
-	delay := retryDelay(attempt)
+// awaitDelay sleeps for the given delay then returns true, or returns false if
+// ctx is canceled. Used for both exponential backoff (retryDelay) and the
+// #1458 broker-delay schedule path (see nextAttemptDelay).
+func awaitDelay(ctx context.Context, clk clock.Clock, delay time.Duration) bool {
 	t := clk.NewTimerAt(clk.Now().Add(delay))
 	defer t.Stop()
 	select {

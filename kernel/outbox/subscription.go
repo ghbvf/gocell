@@ -1,6 +1,10 @@
 package outbox
 
-import "github.com/ghbvf/gocell/pkg/errcode"
+import (
+	"time"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
 
 // Subscription describes the full identity of a single subscription intent.
 // It is the first-class object passed through the middleware chain, ensuring
@@ -48,6 +52,20 @@ type Subscription struct {
 	ContractID        string
 	ContractKind      string
 	ContractTransport string
+
+	// BrokerDelaySchedule, when non-empty, opts this subscription into
+	// broker-native delayed re-delivery (#1458): delays[i] is the wait before
+	// retry i+1. A transient failure (DispositionRequeue) is redelivered after
+	// delays[attempt-1] — rabbitmq via a per-tier TTL+DLX delay queue, the
+	// in-memory bus via a clock-timed wait — and routed to DLX/dead-letter once
+	// the attempt count exceeds len(delays). Empty (the zero value, and the case
+	// for every non-webhook subscription) preserves the existing
+	// immediate-requeue behavior. Carried as transport-neutral []time.Duration
+	// (sourced from kernel/webhook.DefaultSvixSchedule().Delays()) so adapters
+	// need not import kernel/webhook. Honored by every Subscriber implementation
+	// — enforced by the shared outboxtest DelayedRedelivery conformance feature,
+	// not by an opt-in capability flag.
+	BrokerDelaySchedule []time.Duration
 }
 
 // Validate returns an error when required fields are missing.
@@ -74,6 +92,16 @@ func (s Subscription) Validate() error {
 	}
 	if s.ContractTransport == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "outbox: subscription ContractTransport must not be empty")
+	}
+	// A non-empty BrokerDelaySchedule must carry only positive durations: each
+	// entry becomes a broker delay (rabbitmq writes d.Milliseconds() into
+	// x-message-ttl, the in-memory bus waits d), so a zero or negative tier would
+	// silently collapse the retry interval. Fail fast rather than mis-deliver.
+	for _, d := range s.BrokerDelaySchedule {
+		if d <= 0 {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"outbox: subscription BrokerDelaySchedule entries must be positive durations")
+		}
 	}
 	return nil
 }

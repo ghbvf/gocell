@@ -135,7 +135,7 @@ func (c *MyCell) initInternal(ctx context.Context, reg cell.Registrar) error {
 }
 ```
 
-`cell_gen.go::Init` automatically calls `c.BaseCell.Init(ctx, reg) → c.initInternal(ctx, reg)` and generates RouteGroup registration code from the `// +cell:listener` / `// +slice:route` markers in `cell.go`, as well as Subscribe registration code from `slice.yaml` `contractUsages[role=subscribe]` (see `cells/configcore/cell_gen.go` for reference).
+`cell_gen.go::Init` automatically calls `c.BaseCell.Init(ctx, reg) → c.initInternal(ctx, reg)` and generates RouteGroup registration code from the `// +cell:listener` / `// +slice:route` markers in `cell.go`, as well as Subscribe registration code from `slice.yaml` `contractUsages[role=subscribe]` (see `corecells/configcore/cell_gen.go` for reference).
 
 > Health probes can only be registered through typed funnels: the cell repo probe goes through cellgen's `RegisterReadiness`; the emitter probe goes through `cell.RegisterEmitterHealthProbes(reg, emitter)` (which internally asserts `healthz.ProbeSet` + typed-nil guard, no-op for non-ProbeSet / nil emitters). See `.claude/rules/gocell/observability.md` for details.
 
@@ -230,7 +230,7 @@ Different cell capabilities require different Option combinations; choosing the 
 
 | Cell capability | Consistency level | Option shape | Examples |
 |----------------|------------------|--------------|---------|
-| Platform cell (pub + writer + tx) | L1/L2 | `WithOutboxDeps(pub, writer)` + `WithTxManager(tx)` | `cells/accesscore` `cells/configcore` `cells/auditcore` |
+| Platform cell (pub + writer + tx) | L1/L2 | `WithOutboxDeps(pub, writer)` + `WithTxManager(tx)` | `corecells/accesscore` `corecells/configcore` `corecells/auditcore` |
 | L2 outbox-only (writer + tx only) | L2 OutboxFact | `WithOutboxWriter(writer)` + `WithTxManager(tx)` | `examples/todoorder/cells/ordercell` |
 | L4 publish-only (publisher only) | L4 DeviceLatent | `WithDirectPublisher(pub)` | `examples/iotdevice/cells/devicecell` |
 

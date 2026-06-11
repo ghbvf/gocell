@@ -48,14 +48,17 @@ a custom `RetrySchedule` via a future `WithSchedule` option (not in PR-5 scope).
 `RetrySchedule.MaxRetries()` returns 7 (the retry count excluding the initial
 attempt); `RetrySchedule.Attempts()` returns 8 (the total delivery count).
 
-**PR-5 ships `DefaultSvixSchedule` as a tested primitive and the documented
-seam for the broker-delay follow-up. PR-5 does NOT wire per-attempt delays or
-a per-dispatcher RetryCount at runtime**: `Dispatcher` has no schedule field,
-`runtime/webhook/dispatch.BuildConsumers` never sets `ConsumerBaseConfig.RetryCount`,
-and the global `kernel/outbox.ConsumerBase` cannot accept a per-dispatcher
-count. The dispatch consumer rides the shared ConsumerBase (default exponential
-backoff, capped 30 s). `RetrySchedule.DelayFor` is the seam the follow-up
-(gh #1458) will consume.
+PR-5 shipped `DefaultSvixSchedule` as a tested primitive and the documented
+seam. The per-attempt wall-clock delays **are now honoured at runtime** (#1458):
+the webhook-dispatch bootstrap drain copies `DefaultSvixSchedule().Delays()` onto
+`outbox.Subscription.BrokerDelaySchedule`, and the Subscriber applies
+broker-native delayed re-delivery. `RetrySchedule.DelayFor`/`Delays()` are the
+seams the wiring consumes. See §D5 for the mechanism and threat re-evaluation.
+
+> **Historical note (pre-#1458):** PR-5 itself did NOT wire the delays — the
+> dispatch consumer rode the shared `kernel/outbox.ConsumerBase` whose in-process
+> exponential backoff is capped at 30 s and is lost on restart. That gap was
+> deliberate and tracked at #1458, now closed (§D5).
 
 ### D2 — HTTP status code → `outbox.HandleResult` mapping (standard-webhooks aligned)
 
@@ -160,46 +163,96 @@ these header name constants directly.
 > only residual is the package-internal holder axis (`SignedHeaders{valid: true}`
 > in-package), the permanent Go ceiling shared with #851/#893/#1282/#1375.
 
-### D5 — Schedule is the canonical default seam; per-attempt wall-clock delays and RetryCount are NOT yet wired (explicit boundary + tracked follow-up)
+### D5 — Per-attempt wall-clock delays via broker-native delayed re-delivery (amended 2026-06-10, #1458)
 
-This is the most important honesty section of this ADR.
+> **Amendment (2026-06-10, #1458): the PR-5 gap described at the end of this
+> section is now CLOSED.** Webhook dispatch honours the full Svix per-attempt
+> schedule on **both** `outbox.Subscriber` implementations — no broker plugin,
+> durable across restarts on rabbitmq.
 
-**PR-5 does NOT wire per-attempt delays or a per-dispatcher RetryCount at
-runtime.** Specifically:
+**Mechanism.** `outbox.Subscription.BrokerDelaySchedule []time.Duration` is the
+transport-neutral carrier (sourced from `DefaultSvixSchedule().Delays()` by the
+webhook-dispatch bootstrap drain via `cell.WithSubscriptionBrokerDelaySchedule`,
+so adapters never import `kernel/webhook`):
 
-- `Dispatcher` has no schedule field.
-- `runtime/webhook/dispatch.BuildConsumers` never sets
-  `ConsumerBaseConfig.RetryCount` from the schedule.
-- The global `kernel/outbox.ConsumerBase` cannot accept a per-dispatcher retry
-  count; the dispatch consumer rides the shared ConsumerBase with its default
-  exponential backoff capped at 30 s.
+- **rabbitmq (TTL+DLX delay-tier queues)**: on a transient `Requeue` for a
+  delayed subscription, the subscriber republishes the delivery to a per-tier
+  queue `{queue}.delay.{i}` (`x-message-ttl = schedule[i]`, no consumer) that
+  dead-letters back to the dispatch exchange on expiry. The republish uses
+  **publisher confirms** on a dedicated ephemeral channel and Acks the original
+  delivery only after the broker confirms the delay-tier copy, so the
+  consume→publish→ack ownership transfer is not lost on a channel/broker drop
+  (#1828 F1); a delay-publish failure **fails closed to the real DLX** rather
+  than hot-looping an immediate requeue that never advances the attempt (#1828
+  F5). The attempt counter rides the `x-webhook-attempt` AMQP header — trusted
+  only on deliveries the broker attests expired from this queue's own `.delay.`
+  tier (`x-death` provenance), never on a header that could be forged by a direct
+  publish (#1828 F6); once `attempt > len(schedule)` the entry is
+  `Nack(requeue=false)` → DLX. Delays are held in **durable queues**, so the
+  ~40 h envelope survives process and broker-node restarts (unlike the community
+  `x-delayed-message` plugin, which holds delayed messages in node memory —
+  explicitly rejected).
+- **in-memory bus**: `handleWithRetry` uses `len(schedule)+1` deliveries as the
+  budget and waits `schedule[attempt]` via the injected clock between attempts;
+  exhaustion routes to the dead-letter slice.
+- **`ConsumerBase`**: a subscription carrying `BrokerDelaySchedule` runs in
+  single-attempt pass-through mode (`brokerDelayPassthrough`). The handler's
+  verdict (Ack/Requeue/Reject) is returned verbatim and the transport owns the
+  retry budget, the per-attempt delay, and the final DLX routing. ConsumerBase
+  must NOT stack its own exponential backoff nor convert the transient `Requeue`
+  into a retry-exhausted `Reject` — doing so would dead-letter the entry on the
+  first failure and bypass the schedule.
+- **Cross-transport guard**: the shared `outboxtest`
+  `DelayedRedeliveryHonorsSchedule` conformance feature is mandatory for every
+  requeue-supporting Subscriber (it passes a custom short schedule and asserts
+  the exact delivery count + cumulative delay), so a transport that ignored
+  `BrokerDelaySchedule` fails CI rather than silently degrading to immediate
+  retry. The new `Subscription` field is locked by `SUBSCRIPTION-FIELDS-FROZEN-01`.
 
-The exact per-attempt wall-clock delays (5 s → 5 min → 30 min → 2 h → 5 h →
-10 h → 10 h, totalling approximately 40 h) are therefore **NOT honoured at
-runtime**. Honouring the full Svix timeline requires broker-level delayed
-re-delivery (e.g. RabbitMQ `x-delayed-message`, a delayed queue, or a
-scheduler) that GoCell does not yet wire for the dispatch consumer.
+**Threat / safety re-evaluation (re-amended 2026-06-11, #1828 review).** The 30 s
+ConsumerBase ceiling no longer applies to webhook dispatch; the full ~40 h Svix
+envelope is realized.
 
-This gap is **deliberate and explicitly tracked**, not silent. `DefaultSvixSchedule`
-is retained as the canonical default because honouring the full Svix timeline
-is a real future need: `RetrySchedule.DelayFor(n int)` is exactly the per-retry
-delay seam the broker-delay wiring will consume. Removing the schedule now and
-re-adding it later would be churn with no benefit.
+At-least-once across the **application** boundary holds: the delay round-trip
+**releases (does not commit)** the idempotency receipt and the delay-tier
+republish is publisher-confirmed (#1828 F1), so the redelivered same-`entry.ID`
+message re-claims and the handler re-runs — downstream handlers must remain
+idempotent (already required).
 
-The follow-up work — broker-delay long-schedule wiring for the dispatch consumer
-(extend `ConsumerBase` per-attempt delay, or replace with a delay-aware relay
-that calls `DelayFor(attemptNumber)`) — is tracked at **gh #1458**.
+One residual gap is **not** closed here and supersedes the earlier blanket
+"at-least-once delivery is unchanged" claim: the per-tier delay queues are
+RabbitMQ **classic** queues, and the broker-internal TTL→dead-letter republish
+on a classic queue is best-effort (the internal hop is not publisher-confirmed).
+On a **single-node** broker this is reliable; on a **multi-node cluster** a node
+failure *during* that internal republish can drop one scheduled retry. The next
+business event or a manual replay recovers it (handlers are idempotent), so the
+delay hop is **at-least-once on single-node and best-effort under clustering** —
+not unconditionally at-least-once. Closing the cluster gap requires quorum queues
+with at-least-once dead-lettering, a separate infrastructure decision tracked at
+**#1835** (#1828 F2).
 
-The `RetrySchedule` godoc (`kernel/webhook/retry.go`) also states this gap
-explicitly.
+No new wire field or PII surface is introduced; `x-webhook-attempt` is internal
+broker metadata, never part of the signed payload, and is provenance-gated
+against forgery (#1828 F6). `RetrySchedule.DelayFor` / `Delays()` remain the
+single source of the tier values.
+
+---
+
+**Historical context (PR-5).** PR-5 shipped `DefaultSvixSchedule` as the
+canonical default and `RetrySchedule.DelayFor`/`Delays()` as the documented
+seam, but did **not** wire per-attempt delays at runtime: the dispatch consumer
+rode the shared `kernel/outbox.ConsumerBase` whose in-process exponential
+backoff is capped at 30 s and cannot hold a 10 h delay across restarts. That
+gap was deliberate and tracked at #1458 — now resolved by the mechanism above.
 
 ## Consequences
 
-- **Runtime dispatch consumer** (`runtime/webhook/dispatch`) rides the shared
-  `ConsumerBase` with its default exponential back-off (capped at 30 s per
-  retry interval). PR-5 does NOT set a per-dispatcher `ConsumerBaseConfig.RetryCount`
-  from the schedule — `DefaultSvixSchedule` is the canonical default and the
-  seam for the broker-delay follow-up (gh #1458), not yet runtime-honored.
+- **Runtime dispatch consumer** (`runtime/webhook/dispatch`) sources
+  `DefaultSvixSchedule().Delays()` onto `outbox.Subscription.BrokerDelaySchedule`;
+  the Subscriber honours the per-attempt schedule via broker-native delayed
+  re-delivery (#1458, see D5). `ConsumerBase` runs delayed subscriptions in
+  single-attempt pass-through mode, so its 30 s backoff ceiling does not apply to
+  webhook dispatch.
 - **Permanent failures** (amended 2026-06-02) are now only: SSRF-blocked target,
   a selector that signals `ErrWebhookPermanentFailure` (no subscription
   configured), signing failure, delivery-id derivation failure, and URL
@@ -209,19 +262,18 @@ explicitly.
   no longer permanent** — they are retried (review #1455 F3).
 - **Transient failures** — every non-2xx delivery response (3xx/4xx/5xx) and all
   non-SSRF transport errors (DNS resolution failure, timeout, connection
-  refused) — trigger `ConsumerBase` retry with default backoff; on budget
-  exhaustion they are escalated to Reject → DLX. A generic target-selector error
-  is also transient (review #1455 F2): a store/config hiccup retries rather than
-  dead-lettering.
+  refused) — are retried on the Svix per-attempt schedule (#1458); on budget
+  exhaustion (`attempt > len(schedule)`) they are escalated to Reject → DLX. A
+  generic target-selector error is also transient (review #1455 F2): a
+  store/config hiccup retries rather than dead-lettering.
 - **Wire protocol**: receivers that verify GoCell outbound webhooks must use the
   `webhook-id` / `webhook-timestamp` / `webhook-signature` header names, not
   `svix-*`. GoCell's example receiver (`kernel/webhook.Verifier`) already uses
   these names.
-- **Broker-delay gap (tracked gh #1458)**: until the follow-up lands, deliveries
-  exhaust their retry budget faster than the 40 h Svix envelope because
-  ConsumerBase back-off is capped at 30 s per interval rather than honouring
-  the schedule's 2 h / 5 h / 10 h steps. `RetrySchedule.DelayFor` is the seam
-  that follow-up will consume.
+- **Broker-delay (resolved, gh #1458)**: deliveries now honour the full ~40 h
+  Svix envelope (5 s → 5 min → 30 min → 2 h → 5 h → 10 h → 10 h) via TTL+DLX
+  delay-tier queues (rabbitmq) and the clock-timed schedule (in-memory bus),
+  durable across restarts. See D5 for the mechanism and threat re-evaluation.
 
 ## References
 

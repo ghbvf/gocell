@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecert"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -19,7 +18,7 @@ import (
 
 func setupRegisterHandler() *registercontract.Handler {
 	repo := mem.NewDeviceRepository()
-	svc, err := NewService(clock.Real(), repo, slog.Default(), WithCertStore(devicecert.NewStore()))
+	svc, err := NewService(clock.Real(), repo, slog.Default())
 	if err != nil {
 		panic(err)
 	}

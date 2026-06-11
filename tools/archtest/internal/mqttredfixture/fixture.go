@@ -51,3 +51,17 @@ func ParseFixtureClientID(s string) FixtureClientID {
 func archtestRedFixtureOutside() FixtureClientID {
 	return FixtureClientID{value: "intentional-archtest-violation"}
 }
+
+// archtestRedFixtureFieldWrite plants a field-write construction bypass: it
+// builds a non-zero FixtureClientID via direct field assignment OUTSIDE the
+// sanctioned ParseFixtureClientID. The A2b field-write scanner
+// (scanSealedFieldWriteConstruction) must report it. `var c FixtureClientID` is
+// a zero-value declaration (no composite literal), so this case is invisible to
+// the A2 composite-literal scanner — which is exactly the blind spot A2b closes.
+//
+//nolint:unused // referenced exclusively by archtest scanner via AST loading.
+func archtestRedFixtureFieldWrite() FixtureClientID {
+	var c FixtureClientID
+	c.value = "intentional-archtest-fieldwrite-violation"
+	return c
+}

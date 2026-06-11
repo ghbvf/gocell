@@ -223,16 +223,20 @@ local-down:
 # ---------------------------------------------------------------------------
 
 test-integration:
+	# corecells is its own go.work module (#1560); root ./corecells/... matches
+	# zero packages. Run the root packages first, then run corecells in-module.
 	GOCELL_TEST_DOCKER_REQUIRED=1 go test -tags=integration,e2e \
 		./adapters/... \
 		github.com/ghbvf/gocell/tests/integration/... \
 		./tests/e2e/internal/... \
 		github.com/ghbvf/gocell/cmd/corebundle/... \
 		github.com/ghbvf/gocell/examples/ssobff/... \
-		./cells/accesscore/... \
-		./cells/configcore/... \
-		./cells/auditcore/... \
 		./runtime/bootstrap/... \
+		-count=1 -timeout 15m -v
+	GOCELL_TEST_DOCKER_REQUIRED=1 go -C corecells test -tags=integration,e2e \
+		./accesscore/... \
+		./configcore/... \
+		./auditcore/... \
 		-count=1 -timeout 15m -v
 
 # ---------------------------------------------------------------------------

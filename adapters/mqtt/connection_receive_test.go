@@ -322,7 +322,7 @@ func TestConnection_Subscribe_ReceivesPublishedMessage(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newInternalConfig(addr)
+	cfg := newInternalConfig(t, addr)
 
 	ctx, cancelCtx := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancelCtx()
@@ -381,7 +381,7 @@ func TestConnection_Subscribe_CancelUnsubscribes(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newInternalConfig(addr)
+	cfg := newInternalConfig(t, addr)
 
 	ctx, cancelCtx := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancelCtx()
@@ -430,7 +430,7 @@ func TestConnection_Subscribe_ResubscribeOnReconnect(t *testing.T) {
 	defer stop()
 
 	clk := clock.Real()
-	cfg := newInternalConfig(addr)
+	cfg := newInternalConfig(t, addr)
 
 	ctx, cancelCtx := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancelCtx()

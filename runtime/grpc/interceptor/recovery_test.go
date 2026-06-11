@@ -67,6 +67,9 @@ func assertUnaryRecoveryRedactsPanic(t *testing.T, info *grpc.UnaryServerInfo) {
 	if !strings.Contains(out, "panic recovered") {
 		t.Fatalf("slog missing panic log: %s", out)
 	}
+	if !strings.Contains(out, `"stage":"handler"`) {
+		t.Fatalf("handler panic log must carry stage=handler (operator distinguishability): %s", out)
+	}
 	if strings.Contains(out, "hunter2") {
 		t.Fatalf("slog leaked secret (not redacted): %s", out)
 	}

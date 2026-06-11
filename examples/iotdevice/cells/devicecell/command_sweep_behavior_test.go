@@ -68,7 +68,6 @@ func newSweepTestCell(t *testing.T, fc clock.Clock, q kcommand.Queue, mp metrics
 		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clock.Real()))),
 		WithBootstrapEmitter(testBootstrapEmitter()),
 		WithCommandRegistry(commandruntime.NewRegistry()),
-		WithCertStore(NewCertStore()),
 	}
 	if mp != nil {
 		opts = append(opts, WithMetricsProvider(mp))

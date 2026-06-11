@@ -392,7 +392,7 @@ mode never silently falls back to those no-op dependencies.
 
 ```
 kernel/       — Cell/Slice runtime + governance tools (framework core)
-cells/        — Platform Cell implementations (accesscore / auditcore / configcore)
+corecells/    — Platform Cell implementations (accesscore / auditcore / configcore); dedicated go.work module github.com/ghbvf/gocell/corecells (#1560)
 contracts/    — Platform cross-Cell boundary contracts ({kind}/{domain}/{version}/)
 journeys/     — Platform Journey acceptance specs + status-board.yaml
 runtime/      — HTTP middleware, auth, worker, observability, bootstrap
@@ -407,10 +407,10 @@ generated/    — Tool-generated artifacts (indexes, derived views)
 ### Layer Dependencies
 
 ```
-kernel/    ← stdlib + pkg/ + gopkg.in/yaml.v3 (no runtime, adapters, cells)
-runtime/   ← kernel/ + pkg/ (no cells, adapters)
-cells/     ← kernel/ + runtime/ (no adapters — interface decoupling)
-adapters/  ← kernel/ + runtime/ + pkg/ + external libs (no cells)
+kernel/    ← stdlib + pkg/ + gopkg.in/yaml.v3 (no runtime, adapters, corecells)
+runtime/   ← kernel/ + pkg/ (no corecells, adapters)
+corecells/ ← kernel/ + runtime/ (no adapters — interface decoupling)
+adapters/  ← kernel/ + runtime/ + pkg/ + external libs (no corecells)
 examples/  ← all layers
 ```
 

@@ -64,6 +64,10 @@ func TestBuildConsumers_HappyPath(t *testing.T) {
 	assert.Equal(t, "ordercore", c.ConsumerGroup)
 	assert.Equal(t, "ordercore", c.CellID)
 	require.NotNil(t, c.Handler)
+	// #1458: the dispatcher carries the canonical Svix per-attempt retry schedule
+	// so bootstrap can wire broker-native delayed re-delivery onto the subscription.
+	assert.Equal(t, kwh.DefaultSvixSchedule().Delays(), c.BrokerDelaySchedule,
+		"webhook dispatch must source the canonical Svix retry schedule")
 	// Synthesized spec must pass the contractspec event validator (what
 	// eventrouter.AddContractHandler enforces).
 	require.NoError(t, c.Spec.Validate())

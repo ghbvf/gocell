@@ -1,0 +1,229 @@
+package sessionlogin
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"testing"
+	"time"
+
+	"golang.org/x/crypto/bcrypt"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/dto"
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/testutil"
+	"github.com/ghbvf/gocell/corecells/internal/testoutbox"
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
+	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
+	session "github.com/ghbvf/gocell/runtime/auth/session"
+)
+
+func newOutboxRefreshStore() refresh.Store {
+	clk := storetest.NewFakeClock(time.Now())
+	store, err := refreshmem.New(refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         time.Hour,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}, clk, nil)
+	if err != nil {
+		panic("test setup: " + err.Error())
+	}
+	return store
+}
+
+type cleanupRefreshStoreSpy struct {
+	refresh.Store
+	revokeSessionN         int
+	revokeSessionDetachedN int
+}
+
+func (s *cleanupRefreshStoreSpy) RevokeSession(ctx context.Context, sessionID string) error {
+	s.revokeSessionN++
+	return s.Store.RevokeSession(ctx, sessionID)
+}
+
+func (s *cleanupRefreshStoreSpy) RevokeSessionDetached(ctx context.Context, sessionID string) error {
+	s.revokeSessionDetachedN++
+	return s.Store.RevokeSessionDetached(ctx, sessionID)
+}
+
+// --- stubs ---
+
+type stubOutboxWriter struct{ entries []outbox.Entry }
+
+func (s *stubOutboxWriter) Write(_ context.Context, e outbox.Entry) error {
+	s.entries = append(s.entries, e)
+	return nil
+}
+
+type stubTxRunner struct {
+	calls int
+	// committedCleanly records the result of fn for each RunInTx call. true
+	// means fn returned nil (PG would COMMIT); false means fn returned err
+	// (PG would ROLLBACK and discard all writes). This is the test seam for
+	// the auto-lockout counter rollback bug (#585 review P1#1): the previous
+	// `stubTxRunner` always ran fn and ignored its return value, so a closure
+	// that returned 401-error would still appear to "commit" the counter
+	// UPDATE — masking the production-PG rollback semantics. Tests should
+	// assert committedCleanly[N] to enforce the real PG contract.
+	committedCleanly []bool
+}
+
+func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
+	s.calls++
+	err := fn(context.Background())
+	s.committedCleanly = append(s.committedCleanly, err == nil)
+	return err
+}
+
+// noopTxRunner is a pass-through TxRunner that implements outbox.Nooper (Noop()==true),
+// signaling to the service that no real transaction is available (demo/test mode).
+// The service uses isNoopTx to decide whether to run explicit session cleanup on failure.
+// It holds no lock, so repo methods take their per-call lock on the non-PG path.
+type noopTxRunner struct{}
+
+func (noopTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
+func (noopTxRunner) Noop() bool { return true }
+
+// testCredential is a test-only fixture password. Extracted to a variable to
+// avoid static-analysis false positives about hardcoded credentials (go:S6437).
+var testCredential = []byte("test-fixture-password")
+
+// --- tests ---
+
+func seedUserDirect(repo *mem.UserRepository, username, passwordHash string) {
+	user, _ := domain.NewUser(username, username+"@test.com", passwordHash, time.Now())
+	user.ID = "usr-" + username
+	_ = repo.Create(context.Background(), testTenantID, user)
+}
+
+func TestService_WithEmitter(t *testing.T) {
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+	ow := &stubOutboxWriter{}
+	svc := mustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewStore(clock.Real()).RoleRepository(),
+		newOutboxRefreshStore(), testIssuer, slog.Default(),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, ow))),
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+		WithSessionTTL(time.Hour))
+
+	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
+	seedUserDirect(userRepo, "alice", string(hash))
+
+	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "alice", Password: string(testCredential)})
+	require.NoError(t, err)
+
+	require.Len(t, ow.entries, 1)
+	assert.Equal(t, dto.TopicSessionCreated, ow.entries[0].EventType())
+}
+
+func TestService_WithTxManager(t *testing.T) {
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+	tx := &stubTxRunner{}
+	svc := mustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewStore(clock.Real()).RoleRepository(),
+		newOutboxRefreshStore(), testIssuer, slog.Default(),
+		WithTxManager(persistence.WrapForCell(tx)), WithSessionTTL(time.Hour))
+
+	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
+	seedUserDirect(userRepo, "bob", string(hash))
+
+	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "bob", Password: string(testCredential)})
+	require.NoError(t, err)
+	// PR-3b: Login now uses two RunInTx calls per attempt:
+	//   tx[0] = pre-bcrypt read-tx (GetByUsername, RLS requires GUC)
+	//   tx[1] = write-tx (loginInTx: FOR UPDATE + counter + session + outbox)
+	assert.Equal(t, 2, tx.calls)
+}
+
+// failingEmitter returns an error on every Emit call.
+type failingEmitter struct{ err error }
+
+func (f *failingEmitter) Emit(_ context.Context, _ outbox.Entry) error { return f.err }
+
+// trackingOutboxSessionStore wraps session.Store and records Revoke calls.
+type trackingOutboxSessionStore struct {
+	session.Store
+	revoked []string
+}
+
+func (r *trackingOutboxSessionStore) Revoke(ctx context.Context, id string) error {
+	r.revoked = append(r.revoked, id)
+	return r.Store.Revoke(ctx, id)
+}
+
+// TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup verifies
+// that when a durable (non-noop) TxRunner is used and outbox.Emit fails,
+// no explicit cleanupIssuedSession call is made. The tx rollback handles
+// atomicity; explicit cleanup would double-revoke in a real durable setup.
+func TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup(t *testing.T) {
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+	sessionStore := &trackingOutboxSessionStore{Store: testutil.RealSessionRepo(t)}
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+
+	emitter := &failingEmitter{err: fmt.Errorf("broker down")}
+	// stubTxRunner is NOT a Nooper — isNoopTx(tx) returns false.
+	tx := &stubTxRunner{}
+
+	svc := mustNewService(userRepo, sessionStore, roleRepo, newOutboxRefreshStore(), testIssuer, slog.Default(),
+		WithEmitter(outbox.WrapEmitterForCell(emitter)),
+		WithTxManager(persistence.WrapForCell(tx)),
+		WithSessionTTL(time.Hour))
+
+	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
+	seedUserDirect(userRepo, "durable-emit-fail", string(hash))
+
+	_, err := svc.Login(context.Background(), LoginInput{
+		TenantID: testTenantIDStr, Username: "durable-emit-fail", Password: string(testCredential),
+	})
+	require.Error(t, err, "emit failure must propagate as an error")
+
+	// In durable tx mode, cleanupIssuedSession must NOT be called (tx rollback handles it).
+	assert.Len(t, sessionStore.revoked, 0,
+		"durable tx: no explicit Revoke during emit failure — tx rollback is the recovery mechanism")
+}
+
+// TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns verifies
+// that when a Nooper TxRunner (outbox.Nooper.Noop()==true) is in use and outbox.Emit fails,
+// cleanupIssuedSession IS called to compensate the already-written session via Revoke.
+// This is the mirror case of the durable-tx test above.
+func TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns(t *testing.T) {
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+	sessionStore := &trackingOutboxSessionStore{Store: testutil.RealSessionRepo(t)}
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+
+	emitter := &failingEmitter{err: fmt.Errorf("broker down")}
+	// noopTxRunner implements outbox.Nooper (Noop()==true) → isNoopTx returns true,
+	// so the service runs explicit session cleanup on emit failure.
+	refreshStore := &cleanupRefreshStoreSpy{Store: newOutboxRefreshStore()}
+	svc := mustNewService(userRepo, sessionStore, roleRepo, refreshStore, testIssuer, slog.Default(),
+		WithEmitter(outbox.WrapEmitterForCell(emitter)), WithTxManager(persistence.WrapForCell(noopTxRunner{})),
+		WithSessionTTL(time.Hour))
+
+	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
+	seedUserDirect(userRepo, "noop-emit-fail", string(hash))
+
+	_, err := svc.Login(context.Background(), LoginInput{
+		TenantID: testTenantIDStr, Username: "noop-emit-fail", Password: string(testCredential),
+	})
+	require.Error(t, err, "emit failure must propagate as an error")
+
+	// In noop tx mode, cleanupIssuedSession must compensate the session write via Revoke.
+	assert.Len(t, sessionStore.revoked, 1,
+		"noop tx (demo mode): explicit Revoke must run to compensate the already-written session")
+	assert.Equal(t, 1, refreshStore.revokeSessionDetachedN,
+		"cleanupIssuedSession must use RevokeSessionDetached for refresh cleanup")
+	assert.Zero(t, refreshStore.revokeSessionN,
+		"cleanupIssuedSession must not use business RevokeSession")
+}

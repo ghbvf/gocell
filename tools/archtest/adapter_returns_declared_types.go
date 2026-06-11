@@ -236,7 +236,7 @@ func loadContractStatusSets(rootDir string) (map[string]map[int]bool, error) {
 // gatherAdapterFiles collects candidate handler.go and service.go files
 // under cells/ and examples/*/cells/ in the given root directory.
 func gatherAdapterFiles(root string) ([]string, error) {
-	scope := scanner.DirsScope(root, []string{"cells", "examples"})
+	scope := scanner.DirsScope(root, platformAndExampleCellScanDirs())
 	all, err := scope.Files()
 	if err != nil {
 		return nil, err

@@ -14,7 +14,7 @@ import (
 // TestProjectionEvents_AppendOnly_ServingRoleRevoked is the regression guard for
 // the #1504 D7/I4 append-only invariant: the serving role must never be able to
 // UPDATE or DELETE the durable projection_events journal. The guard itself is the
-// DB-engine REVOKE in migration 056 (unbypassable, unlike the I4 archtest which has
+// DB-engine REVOKE in migration 058 (unbypassable, unlike the I4 archtest which has
 // dynamic-SQL/cross-adapter blind spots); this test proves the REVOKE actually
 // fires and survives a re-grant of the deploy default privileges.
 //
@@ -39,7 +39,7 @@ func TestProjectionEvents_AppendOnly_ServingRoleRevoked(t *testing.T) {
 
 	// Reproduce 10-restricted-role.sh ordering: role + default DML grant BEFORE
 	// migrations, so projection_events is born with UPDATE/DELETE for gocell_app
-	// and migration 056's REVOKE has something to remove. ALTER DEFAULT PRIVILEGES
+	// and migration 058's REVOKE has something to remove. ALTER DEFAULT PRIVILEGES
 	// (no FOR ROLE) targets the current migrating role, matching deploy where the
 	// table owner grants to gocell_app.
 	provision := []string{
@@ -56,7 +56,7 @@ func TestProjectionEvents_AppendOnly_ServingRoleRevoked(t *testing.T) {
 		require.NoErrorf(t, err, "provision serving role\nstmt: %s", s)
 	}
 
-	// Run the full platform migration set (056 creates projection_events and, with
+	// Run the full platform migration set (058 creates projection_events and, with
 	// gocell_app present, revokes UPDATE/DELETE).
 	fsys, err := MigrationsFS()
 	require.NoError(t, err)
@@ -75,8 +75,8 @@ func TestProjectionEvents_AppendOnly_ServingRoleRevoked(t *testing.T) {
 		appRole).Scan(&canSelect, &canInsert, &canUpdate, &canDelete))
 	assert.True(t, canSelect, "serving role must keep SELECT (replay/Position read)")
 	assert.True(t, canInsert, "serving role must keep INSERT (same-tx journaling writer)")
-	assert.False(t, canUpdate, "append-only: serving role UPDATE must be revoked (056)")
-	assert.False(t, canDelete, "append-only: serving role DELETE must be revoked (056)")
+	assert.False(t, canUpdate, "append-only: serving role UPDATE must be revoked (058)")
+	assert.False(t, canDelete, "append-only: serving role DELETE must be revoked (058)")
 
 	// Behavioral assertion: connect AS gocell_app and prove it at the wire — INSERT
 	// succeeds, UPDATE/DELETE are denied by the engine (42501 insufficient_privilege).

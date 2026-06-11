@@ -38,7 +38,7 @@ func validProject() *metadata.ProjectMeta {
 				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
 				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.accesscore.startup"}},
 				Dir:              "accesscore",
-				File:             "cells/accesscore/cell.yaml",
+				File:             "corecells/accesscore/cell.yaml",
 			},
 			metadatatest.CellIDAuditCore: {
 				ID:               metadatatest.CellIDAuditCore,
@@ -49,7 +49,7 @@ func validProject() *metadata.ProjectMeta {
 				Schema:           metadata.SchemaMeta{Primary: "cell_audit_core"},
 				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.auditcore.startup"}},
 				Dir:              "auditcore",
-				File:             "cells/auditcore/cell.yaml",
+				File:             "corecells/auditcore/cell.yaml",
 			},
 			metadatatest.CellIDSharedCrypto: {
 				ID:               metadatatest.CellIDSharedCrypto,
@@ -70,7 +70,7 @@ func validProject() *metadata.ProjectMeta {
 				Schema:           metadata.SchemaMeta{Primary: "cell_config_core"},
 				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.configcore.startup"}},
 				Dir:              "configcore",
-				File:             "cells/configcore/cell.yaml",
+				File:             "corecells/configcore/cell.yaml",
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
@@ -92,12 +92,12 @@ func validProject() *metadata.ProjectMeta {
 					},
 				},
 				AllowedFiles: []string{
-					"cells/accesscore/slices/session-login/**",
-					"cells/accesscore/slices/sessionlogin/**",
+					"corecells/accesscore/slices/session-login/**",
+					"corecells/accesscore/slices/sessionlogin/**",
 				},
 				Dir:     "session-login",
 				CellDir: "accesscore",
-				File:    "cells/accesscore/slices/session-login/slice.yaml",
+				File:    "corecells/accesscore/slices/session-login/slice.yaml",
 			},
 			// accesscore/session-projection provides the projection write side for
 			// projection.session.active.v1. Required by PROJECTION-PROVIDE-NEEDS-WRITE-CU-01:
@@ -119,11 +119,11 @@ func validProject() *metadata.ProjectMeta {
 					Contract: []string{"contract.event.session.created.v1.subscribe"},
 				},
 				AllowedFiles: []string{
-					"cells/accesscore/slices/session-projection/**",
+					"corecells/accesscore/slices/session-projection/**",
 				},
 				Dir:     "session-projection",
 				CellDir: "accesscore",
-				File:    "cells/accesscore/slices/session-projection/slice.yaml",
+				File:    "corecells/accesscore/slices/session-projection/slice.yaml",
 			},
 			"auditcore/audit-write": {
 				ID:            "audit-write",
@@ -136,12 +136,12 @@ func validProject() *metadata.ProjectMeta {
 					Contract: []string{"contract.event.session.created.v1.subscribe"},
 				},
 				AllowedFiles: []string{
-					"cells/auditcore/slices/audit-write/**",
-					"cells/auditcore/slices/auditwrite/**",
+					"corecells/auditcore/slices/audit-write/**",
+					"corecells/auditcore/slices/auditwrite/**",
 				},
 				Dir:     "audit-write",
 				CellDir: "auditcore",
-				File:    "cells/auditcore/slices/audit-write/slice.yaml",
+				File:    "corecells/auditcore/slices/audit-write/slice.yaml",
 			},
 		},
 		Contracts: map[string]*metadata.ContractMeta{
@@ -2083,9 +2083,9 @@ func TestContractProviderAndConsumers(t *testing.T) {
 }
 
 func TestFilePathHelpers(t *testing.T) {
-	assert.Equal(t, "cells/accesscore/cell.yaml", cellFile(&metadata.CellMeta{File: "cells/accesscore/cell.yaml"}))
-	assert.Equal(t, "cells/accesscore/slices/session-login/slice.yaml",
-		sliceFile(&metadata.SliceMeta{File: "cells/accesscore/slices/session-login/slice.yaml"}))
+	assert.Equal(t, "corecells/accesscore/cell.yaml", cellFile(&metadata.CellMeta{File: "corecells/accesscore/cell.yaml"}))
+	assert.Equal(t, "corecells/accesscore/slices/session-login/slice.yaml",
+		sliceFile(&metadata.SliceMeta{File: "corecells/accesscore/slices/session-login/slice.yaml"}))
 	assert.Equal(t, "contracts/http/auth/login/v1/contract.yaml",
 		contractFile(&metadata.ContractMeta{File: "contracts/http/auth/login/v1/contract.yaml"}))
 	assert.Equal(t, "journeys/J-ssologin.yaml", journeyFile(&metadata.JourneyMeta{File: "journeys/J-ssologin.yaml"}))
@@ -4622,7 +4622,7 @@ func TestTOPO08(t *testing.T) {
 				pm.Contracts["http.auth.login.v1"].Lifecycle = "deprecated"
 			},
 			wantCount: 1, // session-login uses http.auth.login.v1
-			wantFile:  "cells/accesscore/slices/session-login/slice.yaml",
+			wantFile:  "corecells/accesscore/slices/session-login/slice.yaml",
 		},
 		{
 			name: "deprecated contract referenced by multiple slices",

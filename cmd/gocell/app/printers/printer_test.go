@@ -195,7 +195,7 @@ var goldenCases = []struct {
 				Code:      "REF-01",
 				Severity:  governance.SeverityError,
 				IssueType: governance.IssueRefNotFound,
-				File:      "cells/accesscore/cell.yaml",
+				File:      "corecells/accesscore/cell.yaml",
 				Field:     "contractUsages[0].contractId",
 				Message:   "contract 'auth.session.v1' not found",
 				Line:      14,
@@ -209,7 +209,7 @@ var goldenCases = []struct {
 			{
 				Code:     "REF-02",
 				Severity: governance.SeverityError,
-				File:     "cells/accesscore/cell.yaml",
+				File:     "corecells/accesscore/cell.yaml",
 				Field:    "owner",
 				Message:  "owner missing",
 			},

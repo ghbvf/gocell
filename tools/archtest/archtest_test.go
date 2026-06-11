@@ -103,6 +103,28 @@ func relWithinOwner(cls kerneldepgraph.Classifier, importPath string) string {
 	return strings.TrimPrefix(importPath, owner+"/")
 }
 
+// relWithinCell returns importPath's path relative to its cell root — the part
+// after <owner>/[cells/]<cellID>/ — or "" when importPath is not under a cell or
+// IS the cell root package. Layout-agnostic: handles the corecells flat layout
+// (<cellID>/...) where cells sit directly under the module root, AND the
+// conventional cells/<cellID>/... layout (example modules). #1560.
+func relWithinCell(cls kerneldepgraph.Classifier, importPath string) string {
+	cell := cls.Cell(importPath)
+	if cell == "" {
+		return ""
+	}
+	rel := relWithinOwner(cls, importPath)
+	// Strip an optional leading cells-layer dir: "cells/" for the conventional
+	// (example/core) layout, or PlatformCellsDir+"/" when corecells is seen as a
+	// base-relative subdir of the core module (single-module classifier). The
+	// dedicated corecells module (owner==corecells) has neither — its rel is
+	// "<cell>/..." directly.
+	rel = strings.TrimPrefix(rel, "cells/")
+	rel = strings.TrimPrefix(rel, PlatformCellsDir+"/")
+	// rel is now "<cell>" or "<cell>/<rest>"; return the path within the cell.
+	return strings.TrimPrefix(strings.TrimPrefix(rel, cell), "/")
+}
+
 // isInternal returns true if the import path contains an internal package segment.
 func isInternal(importPath string) bool {
 	return strings.Contains(importPath, "/internal/") || strings.HasSuffix(importPath, "/internal")
@@ -110,23 +132,27 @@ func isInternal(importPath string) bool {
 
 // cellOwnedSubpackages lists public cell subpackages that are semantically
 // owned by a single cell and must not be imported by sibling cells. Each
-// entry's key is the relative import path of the owned subpackage (without
-// module prefix); the value is the relative prefix of the owning cell tree
-// that is exempt from the rule.
+// entry's key is the CELL-RELATIVE path "<cellID>/<subpath-within-cell>"; the
+// value is the owning cellID. Keying cell-relative (via [Classifier.Cell] +
+// [relWithinCell]) makes the rule module-agnostic: it matches identically
+// whether the owning cell's module is loaded standalone (owner == that module)
+// or in the workspace where corecells is a separate go.work module (#1560) —
+// the prior repo-relative "corecells/..." keys silently failed to match the
+// owner-relative path the workspace classifier produces.
 //
 // This is LAYER-06's data table: unlike LAYER-05 (which catches any
 // cells/X/Y/internal import), LAYER-06 targets public subpackages whose
 // coupling to the owning cell is as strong as internal/ but cannot use the
-// internal/ compiler guard — e.g. cells/accesscore/initialadmin, which
-// must stay public so cmd/corebundle can wire it into composition, but
-// must not be imported by other cells.
+// internal/ compiler guard — e.g. accesscore/initialadmin, which must stay
+// public so cmd/corebundle can wire it into composition, but must not be
+// imported by other cells.
 //
 // cmd/ and examples/ are always exempt (composition roots and unrestricted
 // consumers respectively; see the layering conventions in archtest's doc.go).
 var cellOwnedSubpackages = map[string]string{
-	"cells/accesscore/configgetter": "cells/accesscore/",
-	"cells/accesscore/initialadmin": "cells/accesscore/",
-	"cells/configcore/postgres":     "cells/configcore/",
+	"accesscore/configgetter": "accesscore",
+	"accesscore/initialadmin": "accesscore",
+	"configcore/postgres":     "configcore",
 }
 
 // checkLayering runs 4 metadata-aware layering rules (LAYER-05/06/09/10)
@@ -165,8 +191,8 @@ func checkLayering(cls kerneldepgraph.Classifier, g *kerneldepgraph.Graph) []vio
 
 			// LAYER-06: cell-owned public subpackages must stay within the
 			// owning cell's tree (plus cmd/ and examples/ as universally
-			// unrestricted). Flags cases like cells/auditcore importing
-			// cells/accesscore/initialadmin, which would bypass the cell
+			// unrestricted). Flags cases like corecells/auditcore importing
+			// corecells/accesscore/initialadmin, which would bypass the cell
 			// boundary without triggering LAYER-05 (no /internal/ segment).
 			if v := checkCellOwnedSubpackage(cls, pkg.ID, imp, srcLayer); v != nil {
 				out = append(out, *v)
@@ -178,9 +204,8 @@ func checkLayering(cls kerneldepgraph.Classifier, g *kerneldepgraph.Graph) []vio
 			// Same-cell self-import is allowed; cmd/ and examples/ are unrestricted.
 			impCell := cellOf(cls, imp)
 			if isRootCellPackage(cls, pkg.ID) && srcCell != "" {
-				impRel := relWithinOwner(cls, imp)
-				internalAdaptersPrefix := "cells/" + srcCell + "/internal/adapters/"
-				if strings.HasPrefix(impRel, internalAdaptersPrefix) {
+				// imp is in the same cell (srcCell) and under that cell's internal/adapters/.
+				if impCell == srcCell && strings.HasPrefix(relWithinCell(cls, imp), "internal/adapters/") {
 					out = append(out, violation{
 						Rule:    "LAYER-10",
 						Pkg:     pkg.ID,
@@ -191,9 +216,8 @@ func checkLayering(cls kerneldepgraph.Classifier, g *kerneldepgraph.Graph) []vio
 			}
 
 			if srcCell != "" && impCell != "" && srcCell != impCell {
-				impRel := relWithinOwner(cls, imp)
-				eventsPrefix := "cells/" + impCell + "/events"
-				if impRel == eventsPrefix || strings.HasPrefix(impRel, eventsPrefix+"/") {
+				impRel := relWithinCell(cls, imp)
+				if impRel == "events" || strings.HasPrefix(impRel, "events/") {
 					out = append(out, violation{
 						Rule:    "LAYER-09",
 						Pkg:     pkg.ID,
@@ -208,13 +232,18 @@ func checkLayering(cls kerneldepgraph.Classifier, g *kerneldepgraph.Graph) []vio
 }
 
 // matchCellOwnedSubpackage reports whether dep falls inside a cell-owned
-// public subpackage entry, returning the owner-tree prefix (with trailing
-// slash) when it does. Pure lookup — no exemption logic.
-func matchCellOwnedSubpackage(cls kerneldepgraph.Classifier, dep string) (ownerPrefix string, ok bool) {
-	impRel := relWithinOwner(cls, dep)
-	for ownedRel, ownerPrefix := range cellOwnedSubpackages {
-		if impRel == ownedRel || strings.HasPrefix(impRel, ownedRel+"/") {
-			return ownerPrefix, true
+// public subpackage entry, returning the owning cellID when it does. Keyed on
+// the cell-relative path "<cellID>/<subpath>" (module-agnostic). Pure lookup —
+// no exemption logic.
+func matchCellOwnedSubpackage(cls kerneldepgraph.Classifier, dep string) (ownerCell string, ok bool) {
+	cell := cls.Cell(dep)
+	if cell == "" {
+		return "", false
+	}
+	depRel := cell + "/" + relWithinCell(cls, dep)
+	for ownedRel, owner := range cellOwnedSubpackages {
+		if depRel == ownedRel || strings.HasPrefix(depRel, ownedRel+"/") {
+			return owner, true
 		}
 	}
 	return "", false
@@ -225,27 +254,24 @@ func matchCellOwnedSubpackage(cls kerneldepgraph.Classifier, dep string) (ownerP
 // examples/ are universally unrestricted composition-root layers; the owning
 // cell's tree may import freely. cellmodules/ is the importable Composition Root
 // layer (#1085 LayerCellModules) and must have the same exemptions as cmd/.
-func isCellOwnedSubpackageExempt(cls kerneldepgraph.Classifier, srcPath, srcLayer, ownerPrefix string) bool {
+func isCellOwnedSubpackageExempt(cls kerneldepgraph.Classifier, srcPath, srcLayer, ownerCell string) bool {
 	if srcLayer == "cmd" || srcLayer == "cellmodules" || srcLayer == "examples" {
 		return true
 	}
-	srcRel := relWithinOwner(cls, srcPath)
-	// ownerRoot covers the case where srcRel is the cell root itself
-	// (e.g. "cells/accesscore") which HasPrefix("cells/accesscore/") would
-	// reject due to the missing trailing slash.
-	ownerRoot := strings.TrimSuffix(ownerPrefix, "/")
-	return srcRel == ownerRoot || strings.HasPrefix(srcRel, ownerPrefix)
+	// The owning cell's own tree (any package under that cell) may import freely.
+	// Compared by cell identity so it is module-agnostic (workspace vs standalone).
+	return cls.Cell(srcPath) == ownerCell
 }
 
 // checkCellOwnedSubpackage returns a LAYER-06 violation if imp is a cell-owned
 // public subpackage that src is not permitted to import. Returns nil when the
 // import is allowed or unrelated.
 func checkCellOwnedSubpackage(cls kerneldepgraph.Classifier, srcPath, imp, srcLayer string) *violation {
-	ownerPrefix, ok := matchCellOwnedSubpackage(cls, imp)
+	ownerCell, ok := matchCellOwnedSubpackage(cls, imp)
 	if !ok {
 		return nil
 	}
-	if isCellOwnedSubpackageExempt(cls, srcPath, srcLayer, ownerPrefix) {
+	if isCellOwnedSubpackageExempt(cls, srcPath, srcLayer, ownerCell) {
 		return nil
 	}
 	return &violation{
@@ -253,19 +279,18 @@ func checkCellOwnedSubpackage(cls kerneldepgraph.Classifier, srcPath, imp, srcLa
 		Pkg:    srcPath,
 		Import: imp,
 		Message: fmt.Sprintf(
-			"LAYER-06: %s imports %s (cell-owned subpackage; only %s* / cmd/* / examples/* may import it)",
-			srcPath, imp, ownerPrefix,
+			"LAYER-06: %s imports %s (cell-owned subpackage; only the %s cell / cmd/* / examples/* may import it)",
+			srcPath, imp, ownerCell,
 		),
 	}
 }
 
+// isRootCellPackage reports whether importPath is a root cell package — the cell
+// dir itself (<owner>/[cells/]<cellID>) with no further path. Layout-agnostic via
+// [relWithinCell] (corecells flat + conventional cells/ layouts).
 func isRootCellPackage(cls kerneldepgraph.Classifier, importPath string) bool {
-	rel := relWithinOwner(cls, importPath)
-	if !strings.HasPrefix(rel, "cells/") {
-		return false
-	}
-	r := strings.TrimPrefix(rel, "cells/")
-	return r != "" && !strings.Contains(r, "/") && !strings.HasSuffix(r, "_test")
+	cell := cls.Cell(importPath)
+	return cell != "" && !strings.HasSuffix(cell, "_test") && relWithinCell(cls, importPath) == ""
 }
 
 func isCellPublicAPIDisallowedType(cls kerneldepgraph.Classifier, pkgPath string) bool {
@@ -639,10 +664,10 @@ func TestLayeringRules(t *testing.T) {
 }
 
 // filterCellPackages returns the subset of pkgs whose path is under
-// <module>/cells/.
+// <module>/<PlatformCellsDir>/ (corecells/) — platform cells only.
 // double-load pattern.
 func filterCellPackages(module string, pkgs []*packages.Package) []*packages.Package {
-	prefix := module + "/cells/"
+	prefix := module + "/" + PlatformCellsDir + "/"
 	out := pkgs[:0:0]
 	for _, p := range pkgs {
 		if p == nil {
@@ -780,12 +805,9 @@ func checkTransitiveCrossCellEvents(cls kerneldepgraph.Classifier, g *kerneldepg
 			if depCell == "" || depCell == src.CellID {
 				continue
 			}
-			depOwner := cls.OwningModule(dep)
-			if depOwner == "" {
-				continue
-			}
-			eventsPrefix := depOwner + "/cells/" + depCell + "/events"
-			if dep != eventsPrefix && !strings.HasPrefix(dep, eventsPrefix+"/") {
+			// dep is another cell's events package (layout-agnostic via relWithinCell).
+			depRel := relWithinCell(cls, dep)
+			if depRel != "events" && !strings.HasPrefix(depRel, "events/") {
 				continue
 			}
 			out = append(out, violation{
@@ -816,8 +838,8 @@ func TestLayerOf(t *testing.T) {
 		{PlatformModulePath + "/runtime/auth", "runtime"},
 		{PlatformModulePath + "/runtime/http/middleware", "runtime"},
 		{PlatformModulePath + "/adapters/postgres", "adapters"},
-		{PlatformModulePath + "/cells/accesscore", "cells"},
-		{PlatformModulePath + "/cells/accesscore/internal/domain", "cells"},
+		{PlatformCellsModulePath + "/accesscore", "cells"},
+		{PlatformCellsModulePath + "/accesscore/internal/domain", "cells"},
 		{PlatformModulePath + "/pkg/errcode", "pkg"},
 		{PlatformModulePath + "/cmd/gocell", "cmd"},
 		{PlatformModulePath + "/examples/ssobff", "examples"},
@@ -843,10 +865,10 @@ func TestCellOf(t *testing.T) {
 		input string
 		want  string
 	}{
-		{PlatformModulePath + "/cells/accesscore", "accesscore"},
-		{PlatformModulePath + "/cells/accesscore/internal/domain", "accesscore"},
-		{PlatformModulePath + "/cells/auditcore/slices/auditappend", "auditcore"},
-		{PlatformModulePath + "/cells/configcore", "configcore"},
+		{PlatformCellsModulePath + "/accesscore", "accesscore"},
+		{PlatformCellsModulePath + "/accesscore/internal/domain", "accesscore"},
+		{PlatformCellsModulePath + "/auditcore/slices/auditappend", "auditcore"},
+		{PlatformCellsModulePath + "/configcore", "configcore"},
 		// Non-cell paths return "".
 		{PlatformModulePath + "/kernel/cell", ""},
 		{PlatformModulePath + "/runtime/auth", ""},
@@ -866,10 +888,10 @@ func TestIsRootCellPackage(t *testing.T) {
 		input string
 		want  bool
 	}{
-		{PlatformModulePath + "/cells/configcore", true},
-		{PlatformModulePath + "/cells/accesscore", true},
-		{PlatformModulePath + "/cells/configcore/postgres", false},
-		{PlatformModulePath + "/cells/configcore/internal/ports", false},
+		{PlatformCellsModulePath + "/configcore", true},
+		{PlatformCellsModulePath + "/accesscore", true},
+		{PlatformCellsModulePath + "/configcore/postgres", false},
+		{PlatformCellsModulePath + "/configcore/internal/ports", false},
 		{PlatformModulePath + "/runtime/auth", false},
 	}
 	for _, tt := range tests {
@@ -904,7 +926,7 @@ func TestIsCellPublicAPIDisallowedType(t *testing.T) {
 func TestCheckCellPublicAPIAdapterTypes_FindsViolations(t *testing.T) {
 	const module = PlatformModulePath
 	cls := kerneldepgraph.NewClassifier([]string{module})
-	rootPkg := types.NewPackage(PlatformModulePath+"/cells/accesscore", "accesscore")
+	rootPkg := types.NewPackage(PlatformCellsModulePath+"/accesscore", "accesscore")
 	poolPkg := types.NewPackage("github.com/jackc/pgx/v5/pgxpool", "pgxpool")
 	promPkg := types.NewPackage("github.com/prometheus/client_golang/prometheus", "prometheus")
 
@@ -928,7 +950,7 @@ func TestCheckCellPublicAPIAdapterTypes_FindsViolations(t *testing.T) {
 	}
 
 	fakePkg := &packages.Package{
-		PkgPath: PlatformModulePath + "/cells/accesscore",
+		PkgPath: PlatformCellsModulePath + "/accesscore",
 		Syntax:  []*ast.File{file},
 		Types:   rootPkg,
 		TypesInfo: &types.Info{
@@ -951,7 +973,7 @@ func TestCheckCellPublicAPIAdapterTypes_FindsViolations(t *testing.T) {
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, rootPkg, "pool", poolPtr)), nil, false))
 	fakePkg.TypesInfo.Defs[metricName] = types.NewVar(token.NoPos, rootPkg, "ExportedMetric", counterType)
-	fakePkg.PkgPath = PlatformModulePath + "/cells/accesscore"
+	fakePkg.PkgPath = PlatformCellsModulePath + "/accesscore"
 
 	violations := checkCellPublicAPIAdapterTypes(cls, []*packages.Package{fakePkg})
 
@@ -969,7 +991,7 @@ func TestCheckCellPublicAPIAdapterTypes_FindsViolations(t *testing.T) {
 func TestCheckCellPublicAPIAdapterTypes_FailsClosedOnIncompleteTypedPackage(t *testing.T) {
 	const module = PlatformModulePath
 	cls := kerneldepgraph.NewClassifier([]string{module})
-	rootPkg := types.NewPackage(PlatformModulePath+"/cells/accesscore", "accesscore")
+	rootPkg := types.NewPackage(PlatformCellsModulePath+"/accesscore", "accesscore")
 	funcDecl := &ast.FuncDecl{Name: ast.NewIdent("Exported"), Type: &ast.FuncType{}}
 	file := &ast.File{
 		Name:  ast.NewIdent("accesscore"),
@@ -977,7 +999,7 @@ func TestCheckCellPublicAPIAdapterTypes_FailsClosedOnIncompleteTypedPackage(t *t
 	}
 
 	loadErrorPkg := &packages.Package{
-		PkgPath: PlatformModulePath + "/cells/accesscore",
+		PkgPath: PlatformCellsModulePath + "/accesscore",
 		Syntax:  []*ast.File{file},
 		Types:   rootPkg,
 		TypesInfo: &types.Info{
@@ -989,17 +1011,17 @@ func TestCheckCellPublicAPIAdapterTypes_FailsClosedOnIncompleteTypedPackage(t *t
 		Errors: []packages.Error{{Msg: "undefined: broken"}},
 	}
 	missingObjectPkg := &packages.Package{
-		PkgPath: PlatformModulePath + "/cells/configcore",
+		PkgPath: PlatformCellsModulePath + "/configcore",
 		Syntax:  []*ast.File{file},
-		Types:   types.NewPackage(PlatformModulePath+"/cells/configcore", "configcore"),
+		Types:   types.NewPackage(PlatformCellsModulePath+"/configcore", "configcore"),
 		TypesInfo: &types.Info{
 			Defs: map[*ast.Ident]types.Object{},
 		},
 	}
 	missingTypesInfoPkg := &packages.Package{
-		PkgPath: PlatformModulePath + "/cells/auditcore",
+		PkgPath: PlatformCellsModulePath + "/auditcore",
 		Syntax:  []*ast.File{file},
-		Types:   types.NewPackage(PlatformModulePath+"/cells/auditcore", "auditcore"),
+		Types:   types.NewPackage(PlatformCellsModulePath+"/auditcore", "auditcore"),
 	}
 
 	violations := checkCellPublicAPIAdapterTypes(cls, []*packages.Package{
@@ -1024,9 +1046,9 @@ func TestIsInternal(t *testing.T) {
 		input string
 		want  bool
 	}{
-		{PlatformModulePath + "/cells/accesscore/internal/domain", true},
-		{PlatformModulePath + "/cells/auditcore/internal", true},
-		{PlatformModulePath + "/cells/accesscore/slices/sessionlogin", false},
+		{PlatformCellsModulePath + "/accesscore/internal/domain", true},
+		{PlatformCellsModulePath + "/auditcore/internal", true},
+		{PlatformCellsModulePath + "/accesscore/slices/sessionlogin", false},
 		{PlatformModulePath + "/kernel/cell", false},
 		{PlatformModulePath + "/runtime/auth", false},
 	}
@@ -1054,76 +1076,76 @@ func TestCheckLayering(t *testing.T) {
 		{
 			name: "LAYER-05 violation: cross-cell internal import",
 			pkgs: []*packages.Package{
-				synthPkg(module+"/cells/auditcore/slices/auditappend",
-					module+"/cells/accesscore/internal/domain"),
+				synthPkg(module+"/corecells/auditcore/slices/auditappend",
+					module+"/corecells/accesscore/internal/domain"),
 			},
 			wantRules: []string{"LAYER-05"},
 		},
 		{
 			name: "LAYER-05 clean: same-cell internal import (allowed)",
 			pkgs: []*packages.Package{
-				synthPkg(module+"/cells/auditcore/slices/auditappend",
-					module+"/cells/auditcore/internal/domain"),
+				synthPkg(module+"/corecells/auditcore/slices/auditappend",
+					module+"/corecells/auditcore/internal/domain"),
 			},
 		},
 		{
 			name: "LAYER-06 violation: sibling cell imports accesscore/initialadmin",
 			pkgs: []*packages.Package{
-				synthPkg(module+"/cells/auditcore",
-					module+"/cells/accesscore/initialadmin"),
+				synthPkg(module+"/corecells/auditcore",
+					module+"/corecells/accesscore/initialadmin"),
 			},
 			wantRules: []string{"LAYER-06"},
 		},
 		{
 			name: "LAYER-06 violation: sibling cell imports configcore/postgres",
 			pkgs: []*packages.Package{
-				synthPkg(module+"/cells/auditcore",
-					module+"/cells/configcore/postgres"),
+				synthPkg(module+"/corecells/auditcore",
+					module+"/corecells/configcore/postgres"),
 			},
 			wantRules: []string{"LAYER-06"},
 		},
 		{
 			name: "LAYER-10 violation: root cell imports own internal adapter",
 			pkgs: []*packages.Package{
-				synthPkg(module+"/cells/accesscore",
-					module+"/cells/accesscore/internal/adapters/http"),
+				synthPkg(module+"/corecells/accesscore",
+					module+"/corecells/accesscore/internal/adapters/http"),
 			},
 			wantRules: []string{"LAYER-10"},
 		},
 		{
 			name: "LAYER-06 violation: sibling cell slice imports nested path of initialadmin",
 			pkgs: []*packages.Package{
-				synthPkg(module+"/cells/configcore/slices/configpublish",
-					module+"/cells/accesscore/initialadmin/somesubpkg"),
+				synthPkg(module+"/corecells/configcore/slices/configpublish",
+					module+"/corecells/accesscore/initialadmin/somesubpkg"),
 			},
 			wantRules: []string{"LAYER-06"},
 		},
 		{
 			name: "LAYER-06 clean: accesscore itself imports initialadmin (owner)",
 			pkgs: []*packages.Package{
-				synthPkg(module+"/cells/accesscore",
-					module+"/cells/accesscore/initialadmin"),
+				synthPkg(module+"/corecells/accesscore",
+					module+"/corecells/accesscore/initialadmin"),
 			},
 		},
 		{
 			name: "LAYER-06 clean: accesscore slice imports initialadmin (owner tree)",
 			pkgs: []*packages.Package{
-				synthPkg(module+"/cells/accesscore/slices/sessionlogin",
-					module+"/cells/accesscore/initialadmin"),
+				synthPkg(module+"/corecells/accesscore/slices/sessionlogin",
+					module+"/corecells/accesscore/initialadmin"),
 			},
 		},
 		{
 			name: "LAYER-06 clean: cmd imports initialadmin (composition root)",
 			pkgs: []*packages.Package{
 				synthPkg(module+"/cmd/corebundle",
-					module+"/cells/accesscore/initialadmin"),
+					module+"/corecells/accesscore/initialadmin"),
 			},
 		},
 		{
 			name: "LAYER-06 clean: examples imports initialadmin (unrestricted)",
 			pkgs: []*packages.Package{
 				synthPkg(module+"/examples/ssobff",
-					module+"/cells/accesscore/initialadmin"),
+					module+"/corecells/accesscore/initialadmin"),
 			},
 		},
 		{
@@ -1133,7 +1155,7 @@ func TestCheckLayering(t *testing.T) {
 					module+"/kernel/cell",
 					module+"/runtime/auth",
 					module+"/adapters/postgres",
-					module+"/cells/accesscore"),
+					module+"/corecells/accesscore"),
 			},
 		},
 		{
@@ -1143,7 +1165,7 @@ func TestCheckLayering(t *testing.T) {
 					module+"/kernel/cell",
 					module+"/runtime/auth",
 					module+"/adapters/postgres",
-					module+"/cells/accesscore"),
+					module+"/corecells/accesscore"),
 			},
 		},
 		{
@@ -1170,38 +1192,38 @@ func TestCheckLayering(t *testing.T) {
 		{
 			name: "LAYER-07 semantic: cells importing runtime/http/router (checkLayering clean)",
 			pkgs: []*packages.Package{
-				synthPkg(module+"/cells/accesscore",
+				synthPkg(module+"/corecells/accesscore",
 					module+"/runtime/http/router"),
 			},
 		},
 		// LAYER-09: cells/X must not import cells/Y/events (cross-cell public events package).
 		{
-			name: "LAYER-09 violation: cells/auditcore imports cells/configcore/events",
+			name: "LAYER-09 violation: corecells/auditcore imports corecells/configcore/events",
 			pkgs: []*packages.Package{
-				synthPkg(module+"/cells/auditcore/slices/auditappend",
-					module+"/cells/configcore/events"),
+				synthPkg(module+"/corecells/auditcore/slices/auditappend",
+					module+"/corecells/configcore/events"),
 			},
 			wantRules: []string{"LAYER-09"},
 		},
 		{
-			name: "LAYER-09 clean: cells/configcore imports cells/configcore/events (same cell, allowed)",
+			name: "LAYER-09 clean: corecells/configcore imports corecells/configcore/events (same cell, allowed)",
 			pkgs: []*packages.Package{
-				synthPkg(module+"/cells/configcore/slices/configpublish",
-					module+"/cells/configcore/events"),
+				synthPkg(module+"/corecells/configcore/slices/configpublish",
+					module+"/corecells/configcore/events"),
 			},
 		},
 		{
-			name: "LAYER-09 clean: examples imports cells/configcore/events (unrestricted)",
+			name: "LAYER-09 clean: examples imports corecells/configcore/events (unrestricted)",
 			pkgs: []*packages.Package{
 				synthPkg(module+"/examples/ssobff",
-					module+"/cells/configcore/events"),
+					module+"/corecells/configcore/events"),
 			},
 		},
 		{
-			name: "LAYER-09 clean: cmd imports cells/configcore/events (unrestricted)",
+			name: "LAYER-09 clean: cmd imports corecells/configcore/events (unrestricted)",
 			pkgs: []*packages.Package{
 				synthPkg(module+"/cmd/corebundle",
-					module+"/cells/configcore/events"),
+					module+"/corecells/configcore/events"),
 			},
 		},
 	}
@@ -1247,7 +1269,7 @@ func TestLayeringRules_LAYER07_NegativeProbe(t *testing.T) {
 
 	const module = PlatformModulePath
 	routerPkg := module + "/runtime/http/router"
-	cellSlice := module + "/cells/accesscore/slices/some_route_slice"
+	cellSlice := module + "/corecells/accesscore/slices/some_route_slice"
 
 	g := depgraph.FromPackages([]string{module}, []*packages.Package{
 		synthPkg(cellSlice, routerPkg),
@@ -1322,26 +1344,26 @@ func TestLayeringRules_LAYER09_NegativeProbe(t *testing.T) {
 	}{
 		{
 			name:        "cross-cell: auditcore imports configcore/events → violation",
-			src:         module + "/cells/auditcore/slices/auditappend",
-			imp:         module + "/cells/configcore/events",
+			src:         module + "/corecells/auditcore/slices/auditappend",
+			imp:         module + "/corecells/configcore/events",
 			wantViolate: true,
 		},
 		{
 			name:        "same-cell: configcore imports configcore/events → allowed",
-			src:         module + "/cells/configcore/slices/configpublish",
-			imp:         module + "/cells/configcore/events",
+			src:         module + "/corecells/configcore/slices/configpublish",
+			imp:         module + "/corecells/configcore/events",
 			wantViolate: false,
 		},
 		{
 			name:        "examples imports configcore/events → allowed",
 			src:         module + "/examples/ssobff",
-			imp:         module + "/cells/configcore/events",
+			imp:         module + "/corecells/configcore/events",
 			wantViolate: false,
 		},
 		{
 			name:        "cmd imports configcore/events → allowed",
 			src:         module + "/cmd/corebundle",
-			imp:         module + "/cells/configcore/events",
+			imp:         module + "/corecells/configcore/events",
 			wantViolate: false,
 		},
 	}
@@ -1418,6 +1440,45 @@ func TestLayeringRules_LAYER05T_NegativeProbe(t *testing.T) {
 		"LAYER-05T message must name the intermediate package")
 }
 
+// TestLayeringRules_LAYER05T_NegativeProbe_Corecells mirrors
+// TestLayeringRules_LAYER05T_NegativeProbe for the corecells FLAT layout
+// (corecells/<cell>/... rather than cells/<cell>/...). The laundering pattern
+// is: corecells/auditcore → pkg/util → corecells/accesscore/internal/domain.
+// Proves the transitive-closure detection fires identically whether cells use
+// the conventional "cells/" prefix or the corecells flat layout.
+func TestLayeringRules_LAYER05T_NegativeProbe_Corecells(t *testing.T) {
+	t.Parallel()
+
+	const module = PlatformModulePath
+	auditcore := module + "/corecells/auditcore"
+	util := module + "/pkg/util"
+	accesscoreInternal := module + "/corecells/accesscore/internal/domain"
+
+	g := depgraph.FromPackages([]string{module}, []*packages.Package{
+		synthPkg(auditcore, util),
+		synthPkg(util, accesscoreInternal),
+		synthPkg(accesscoreInternal),
+	})
+
+	violations := checkTransitiveCrossCellInternal(kerneldepgraph.NewClassifier([]string{module}), g)
+	// Filter to auditcore only (util also reaches the internal pkg but is pkg/ layer).
+	var auditViolations []violation
+	for _, v := range violations {
+		if v.Pkg == auditcore {
+			auditViolations = append(auditViolations, v)
+		}
+	}
+	require.Len(t, auditViolations, 1,
+		"LAYER-05T corecells probe: must flag auditcore → util → accesscore/internal/domain (got: %v)", violations)
+	assert.Equal(t, "LAYER-05T", auditViolations[0].Rule)
+	assert.Equal(t, auditcore, auditViolations[0].Pkg)
+	assert.Equal(t, accesscoreInternal, auditViolations[0].Import)
+	assert.Contains(t, auditViolations[0].Message, "via: ",
+		"LAYER-05T corecells message must include via: clause")
+	assert.Contains(t, auditViolations[0].Message, util,
+		"LAYER-05T corecells message must name the intermediate package")
+}
+
 // TestLayeringRules_LAYER06T_NegativeProbe verifies the transitive form of
 // LAYER-06: a sibling cell must not reach a cell-owned public subpackage
 // even via an intermediate utility. accesscore/initialadmin is a real
@@ -1428,9 +1489,9 @@ func TestLayeringRules_LAYER06T_NegativeProbe(t *testing.T) {
 	t.Parallel()
 
 	const module = PlatformModulePath
-	auditcore := module + "/cells/auditcore"
+	auditcore := module + "/corecells/auditcore"
 	util := module + "/pkg/util"
-	initialadmin := module + "/cells/accesscore/initialadmin"
+	initialadmin := module + "/corecells/accesscore/initialadmin"
 
 	g := depgraph.FromPackages([]string{module}, []*packages.Package{
 		synthPkg(auditcore, util),
@@ -1488,6 +1549,36 @@ func TestLayeringRules_LAYER09T_NegativeProbe(t *testing.T) {
 		"LAYER-09T message must include via: clause with the closure path")
 	assert.Contains(t, violations[0].Message, util,
 		"LAYER-09T message must name the intermediate package")
+}
+
+// TestLayeringRules_LAYER09T_NegativeProbe_Corecells mirrors
+// TestLayeringRules_LAYER09T_NegativeProbe for the corecells FLAT layout.
+// The laundering pattern is: corecells/auditcore → pkg/util → corecells/configcore/events.
+// Proves the transitive-closure detection fires for the corecells layout.
+func TestLayeringRules_LAYER09T_NegativeProbe_Corecells(t *testing.T) {
+	t.Parallel()
+
+	const module = PlatformModulePath
+	auditcore := module + "/corecells/auditcore"
+	util := module + "/pkg/util"
+	configcoreEvents := module + "/corecells/configcore/events"
+
+	g := depgraph.FromPackages([]string{module}, []*packages.Package{
+		synthPkg(auditcore, util),
+		synthPkg(util, configcoreEvents),
+		synthPkg(configcoreEvents),
+	})
+
+	violations := checkTransitiveCrossCellEvents(kerneldepgraph.NewClassifier([]string{module}), g)
+	require.Len(t, violations, 1,
+		"LAYER-09T corecells probe: must flag auditcore → util → configcore/events (got: %v)", violations)
+	assert.Equal(t, "LAYER-09T", violations[0].Rule)
+	assert.Equal(t, auditcore, violations[0].Pkg)
+	assert.Equal(t, configcoreEvents, violations[0].Import)
+	assert.Contains(t, violations[0].Message, "via: ",
+		"LAYER-09T corecells message must include via: clause")
+	assert.Contains(t, violations[0].Message, util,
+		"LAYER-09T corecells message must name the intermediate package")
 }
 
 // TestLoadModule_IntegrationTagPlumbing verifies that loadModule passes

@@ -2,7 +2,7 @@
 
 // Package memtxlockfixture is the MEM-TX-LOCK-OWNERSHIP-01 reverse self-check
 // corpus for the sealed lock-lease funnel. It mirrors
-// cells/accesscore/internal/mem's lease model (ctx carries a txlock.Lease
+// corecells/accesscore/internal/mem's lease model (ctx carries a txlock.Lease
 // directly — no wrapper struct; runLocked is the only sanctioned Acquire site;
 // inLiveTx delegates to the sealed txlock.Lease.Live). The detector
 // scanMemTxLockWitness, pointed at this package, MUST report exactly the three

@@ -7,9 +7,9 @@
 // type-renamed string 上无法禁掉 explicit conversion，因此本 archtest 锁定
 // 该 callsite 形态的 file allowlist：
 //
-//   - cells/accesscore/internal/domain/nonempty.go       (NonEmpty 类型自身)
-//   - cells/accesscore/slices/identitymanage/handler.go  (nonEmptyPtr 桥接)
-//   - cells/accesscore/internal/ports/conformance/conformance.go (test-helper
+//   - corecells/accesscore/internal/domain/nonempty.go       (NonEmpty 类型自身)
+//   - corecells/accesscore/slices/identitymanage/handler.go  (nonEmptyPtr 桥接)
+//   - corecells/accesscore/internal/ports/conformance/conformance.go (test-helper
 //     pkg 的非 _test.go 但仅被 *_test.go import，等价测试侧)
 //   - *_test.go 任意路径 (fixture)
 //
@@ -28,7 +28,7 @@
 //     不覆盖；codebase 内无此用法 (grep-verified)。
 //
 // ref: ai-robust.md "string-typed concept funnel" + "Funnel 双向锁评级"
-// ref: cells/accesscore/internal/domain/nonempty.go
+// ref: corecells/accesscore/internal/domain/nonempty.go
 // ref: docs/architecture/202605222309-adr-user-repo-narrow-write-methods.md §4
 package archtest
 
@@ -49,9 +49,9 @@ import (
 // Adding a new entry requires the new callsite's necessity to be justified
 // alongside the archtest edit (typically alongside an ADR §4 row update).
 var nonEmptyCastAllowlist = map[string]struct{}{
-	"cells/accesscore/internal/domain/nonempty.go":               {},
-	"cells/accesscore/slices/identitymanage/handler.go":          {},
-	"cells/accesscore/internal/ports/conformance/conformance.go": {},
+	"corecells/accesscore/internal/domain/nonempty.go":               {},
+	"corecells/accesscore/slices/identitymanage/handler.go":          {},
+	"corecells/accesscore/internal/ports/conformance/conformance.go": {},
 }
 
 // TestUserRepoNonEmptyCastFunnel verifies USERREPO-NONEMPTY-CAST-FUNNEL-01:
@@ -61,8 +61,12 @@ func TestUserRepoNonEmptyCastFunnel(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 
+	// Platform cells live under [PlatformCellsDir] (corecells since #1560);
+	// the allowlist below is already corecells-keyed, but a stale literal
+	// "cells" root would scan an absent dir and silently fail-open the whole
+	// funnel (NonEmpty(_) casts in corecells would go unchecked).
 	scope := scanner.DirsScope(root, []string{
-		"cells",
+		PlatformCellsDir,
 		"runtime",
 		"kernel",
 		"adapters",

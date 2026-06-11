@@ -82,7 +82,7 @@ func (s *BootstrapLedgerStore) Verify(ctx context.Context, fromSeq, toSeq int64)
 // RepoReady delegates to the wrapped Store so the bootstrap chain participates
 // in the same differentiated readiness probe surface as the auditcore chain.
 // Without this delegate, registering *BootstrapLedgerStore via the cellgen
-// RepoProber typed funnel (cells/auditcore/healthz_gen.go) would lose the
+// RepoProber typed funnel (corecells/auditcore/healthz_gen.go) would lose the
 // table-level probe — schema/migration drift would only surface at first
 // 401/429 instead of at probe-fail-fast time.
 //

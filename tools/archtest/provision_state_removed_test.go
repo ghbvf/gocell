@@ -11,7 +11,7 @@ import (
 
 // PROVISION-STATE-AND-USERSOURCE-BOOTSTRAP-REMOVED-01
 //
-// Claim: 以下 10 个标识符在 cells/accesscore/... 业务代码中永久禁止出现。
+// Claim: 以下 10 个标识符在 corecells/accesscore/... 业务代码中永久禁止出现。
 // 它们是为 bootstrap headless provision mode 设计的 pending 状态机抽象前提，
 // 随 bootstrap mode 一起删除（ADR §D3 v2）。archtest 防止未来 PR 误恢复。
 //
@@ -34,7 +34,7 @@ func TestProvisionStateAndUserSourceBootstrapRemoved(t *testing.T) {
 
 	root := findModuleRoot(t)
 	scope := DirsScope(
-		root, []string{"cells/accesscore"},
+		root, []string{"corecells/accesscore"},
 		IncludeTests(),
 		ExcludeRels("tools/archtest/provision_state_removed_test.go"),
 	)
