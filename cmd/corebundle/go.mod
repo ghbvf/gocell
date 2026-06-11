@@ -39,7 +39,7 @@ require (
 	github.com/ghbvf/gocell/adapters/prometheus v0.0.0
 	github.com/ghbvf/gocell/adapters/ratelimit v0.0.0 // indirect
 	github.com/ghbvf/gocell/adapters/redis v0.0.0
-	github.com/ghbvf/gocell/adapters/vault v0.0.0
+	github.com/ghbvf/gocell/adapters/vault v0.0.0 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
