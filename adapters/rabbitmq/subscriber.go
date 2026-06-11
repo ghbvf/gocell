@@ -450,19 +450,26 @@ func (s *Subscriber) declareDelayTopology(ch AMQPChannel, topic, queueName strin
 			"x-overflow":             "reject-publish",
 		}
 		if _, err := ch.QueueDeclare(tierQueue, true, false, false, false, tierArgs); err != nil {
-			// AMQP 406 PRECONDITION_FAILED is returned when the queue already
-			// exists with different arguments — either a changed x-message-ttl from
-			// a new BrokerDelaySchedule, or a pre-#1835 classic queue whose
-			// x-queue-type now differs (quorum). Both require the same
-			// drain-before-delete runbook — a non-empty tier queue holds webhooks
-			// still waiting out their retry interval, so deleting it blindly drops
-			// pending retries.
+			// A QueueDeclare failure here has two distinct operator causes, and the
+			// hint must surface both so an old-broker failure is not misrouted to the
+			// drain runbook (#1858 F2):
+			//   1. The queue already EXISTS with different arguments — a changed
+			//      x-message-ttl from a new BrokerDelaySchedule, or a pre-#1835
+			//      classic queue whose x-queue-type now differs (quorum). This is a
+			//      406 PRECONDITION_FAILED, resolved by the drain-before-delete
+			//      runbook (a non-empty tier queue holds webhooks still waiting out
+			//      their retry interval, so deleting it blindly drops pending retries).
+			//   2. A FRESH declare the broker cannot satisfy — RabbitMQ older than
+			//      3.10 or the quorum_queue/stream_queue feature flags disabled — so
+			//      the quorum + at-least-once declaration is rejected or cannot apply.
+			//      Resolved by verifying the broker prerequisite, NOT by draining.
 			return fmt.Errorf("rabbitmq: declare delay tier queue %d (%s): %w"+
-				" (hint: AMQP 406 PRECONDITION_FAILED means the queue exists with"+
-				" different args — a changed x-message-ttl or a pre-#1835 classic"+
-				" queue being upgraded to quorum; either way follow the"+
-				" drain-before-delete runbook in"+
-				" docs/ops/rabbitmq-webhook-delay-topology.md)", i, tierQueue, err)
+				" (hint: two causes — (1) the queue already exists with different args"+
+				" (a changed x-message-ttl, or a pre-#1835 classic queue upgrading to"+
+				" quorum): follow the drain-before-delete runbook in"+
+				" docs/ops/rabbitmq-webhook-delay-topology.md; (2) a fresh declare the"+
+				" broker cannot satisfy: verify RabbitMQ >= 3.10 and the"+
+				" quorum_queue/stream_queue feature flags are enabled)", i, tierQueue, err)
 		}
 		if err := ch.QueueBind(tierQueue, strconv.Itoa(i), delayExchange, false, nil); err != nil {
 			return fmt.Errorf("rabbitmq: bind delay tier queue %d: %w", i, err)

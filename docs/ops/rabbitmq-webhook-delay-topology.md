@@ -8,8 +8,11 @@ subscription** — this doc explains them.
 > **Broker requirement: RabbitMQ ≥ 3.10.** The delay tiers use the
 > `x-dead-letter-strategy=at-least-once` queue argument, a quorum-queue feature
 > introduced in 3.10 (the `quorum_queue` + `stream_queue` feature flags must be
-> enabled — both are on by default from 3.12). On an older broker `QueueDeclare`
-> fails with 406 PRECONDITION_FAILED.
+> enabled — both are on by default from 3.12). A broker that does not meet this
+> prerequisite **rejects the quorum/at-least-once declaration (or, for some
+> version/arg combinations, fails to apply it)** — so a `QueueDeclare` failure on a
+> *fresh* deploy points at the broker version / feature flags, not at a queue-arg
+> mismatch (see the two recovery paths under "Changing the schedule" below).
 
 ## Topology
 
@@ -109,6 +112,14 @@ upgrading a pre-#1835 classic tier to quorum** and redeploying will fail
 `QueueDeclare` with **406 PRECONDITION_FAILED** — a non-recoverable error that stops
 the affected webhook-dispatch subscription. The drain-before-recreate steps below
 cover both cases.
+
+> **Two declare-failure causes — only one is a drain.** The steps below apply when an
+> **existing** queue has different args (schedule change, or classic→quorum upgrade).
+> If a **fresh** declare fails instead (no prior `*.delay.*` queue), the cause is the
+> broker prerequisite — RabbitMQ < 3.10 or disabled `quorum_queue`/`stream_queue`
+> feature flags (see "Broker requirement" at the top) — and draining does nothing; fix
+> the broker, then redeploy. The runtime `declare delay tier queue` error spells out
+> both recovery paths.
 
 > ⚠️ A non-empty `*.delay.<i>` queue holds **webhooks still waiting out their retry
 > interval** (see "Identifying these queues"), not garbage. Deleting it drops those

@@ -288,6 +288,11 @@ func TestDeclareDelayTopology_TierQueueDeclareFailure_WrapsRunbookHint(t *testin
 	assert.Contains(t, err.Error(), "quorum", "hint must mention the classic→quorum upgrade case")
 	assert.Contains(t, err.Error(), "drain-before-delete runbook", "hint must point operators at the runbook")
 	assert.ErrorContains(t, err, "PRECONDITION_FAILED", "underlying broker error must be wrapped, not swallowed")
+	// #1858 F2 (codex): the hint must surface BOTH 406 recovery paths, not just the
+	// existing-queue migration one — a fresh declare can also fail because the broker
+	// is too old / the quorum feature flags are off.
+	assert.Contains(t, err.Error(), "3.10", "hint must surface the RabbitMQ >=3.10 broker-prerequisite recovery path")
+	assert.Contains(t, err.Error(), "feature flag", "hint must mention the quorum_queue/stream_queue feature-flag prerequisite")
 }
 
 func TestDeclareTopology_EmptySchedule_NoDelayTopology(t *testing.T) {
