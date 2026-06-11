@@ -186,8 +186,11 @@ no-loss（leave-unacked 会复活 Option C 的 HoL stall，ADR-050 §1），因�
 消息**确实丢失**——`mqtt_dlx_failed_total > 0` 是运维必须介入的信号，**不是**可容忍的
 降级。RTO 内未恢复死信管道（broker / ACL / topic 配置）即意味着永久消息丢失。
 
-> 该信号"每个 drop 路径必记"由 archtest `MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01` 机器守卫，
-> 不会被代码改动静默移除。真正的 no-loss 保证应由消费 cell 在本地事务捕获 poison 消息
+> 该信号"每个 drop 路径必记"的 no-silent-exit 轴由**类型系统 Hard** 强制（`routeDeadLetter`
+> 返回封印 `dlxoutcome.Outcome`，唯一来源是记指标的构造器 `Dropped`/`Captured`，漏记编译不过——
+> 见 ADR-048 §Amendment 2026-06-11 / #1440）；drop→failure 语义匹配 + 空字面量残留由 archtest
+> `MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01` 降级后的 shape-guard 守。两者均不会被代码改动静默移除。
+> 真正的 no-loss 保证应由消费 cell 在本地事务捕获 poison 消息
 > 实现（重定位，deferred — 见 ADR-048 §Amendment 2026-06-02）。
 >
 > ⚠ **前提:信号仅在 wire 了 provider-backed `SubscriberCollector` 后才发射。**

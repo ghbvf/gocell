@@ -40,7 +40,7 @@ import (
 // messages actually captured.
 func (s *Subscriber) routeDeadLetter(
 	ctx context.Context, originalTopic string, payload []byte, reason ConsumeFailureReason,
-) dlxoutcome.Outcome { //nolint:unparam // gh #1440: Outcome forces each exit through a recording constructor; callers discard it.
+) dlxoutcome.Outcome { //nolint:unparam // R2-approved: gh #1440 — Outcome is a compile-forcing token; callers discard it.
 	dlt, err := s.ns.MintDeadLetter(originalTopic)
 	if err != nil {
 		// safeErrForLog: the mint error (errcode) embeds the untrusted originalTopic

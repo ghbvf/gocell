@@ -58,9 +58,17 @@
 //     red case, which uses a sealed-shape REPLICA (a real-type fixture is impossible:
 //     dlxoutcome is an internal package the tools module cannot import — same replica
 //     rationale as internal/mqttredfixture).
+//   - new(T) allocation forge → `*new(dlxoutcome.Outcome)` / `var o = *new(...)` produce a
+//     zero Outcome with neither a composite literal nor a typed zero-var, so H2 does not
+//     see them. Irreducible in Go (same ceiling as the empty literal) and equally vacuous;
+//     accepted residual, flagged so it is not mistaken for covered (not a closed hole).
 //   - constructor gutted to a no-op → H3a (Dropped calls RecordDeadLetterFailure,
 //     Captured calls RecordDeadLetter; a metric-less constructor would defeat the
 //     seal while still compiling).
+//   - H3a name-level match → H3a matches the recording call by selector NAME (rec is an
+//     anonymous interface, so FullName is not a stable mqtt symbol). A future homonymous
+//     method in the (tiny) dlxoutcome package would yield a false-POSITIVE (over-credit),
+//     never a false-negative; H3b + behavioral tests stay valid regardless.
 //   - drop credited as success (F1) → H3b + deadletter_test.go behavioral tests.
 //
 // ref: gh #1356 — MQTT DLT no-loss (this invariant is the resolution's enforce spine)
@@ -162,7 +170,8 @@ func withRouteDeadLetter(t *testing.T, fn func(p *Pass, f *ast.File, fd *ast.Fun
 		})
 	assert.True(t, found,
 		"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01: (*Subscriber).routeDeadLetter not found in adapters/mqtt "+
-			"production AST — the rule target was renamed/removed; update this archtest")
+			"production AST — the rule target was renamed/removed; update routeDeadLetterFuncName + "+
+			"routeDeadLetterFullName in this file")
 }
 
 // ─── H1: routeDeadLetter returns the sealed dlxoutcome.Outcome ────────────────
@@ -306,9 +315,12 @@ func TestMQTTDLXFailureSignalFunnel_H2_ScannerFiresOnRedFixture(t *testing.T) {
 			}
 			return out
 		})
-	assert.NotEmpty(t, diags,
-		"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H2: scanner must fire on the dlxoutcomeredfixture forge — "+
-			"if empty, the composite-lit/var type-resolution path is silently broken")
+	// The fixture plants BOTH forge forms (empty composite literal + zero-value var),
+	// so require ≥2 diagnostics: if only one fires, one of the two scan paths
+	// (CompositeLit vs ValueSpec) is silently broken.
+	assert.GreaterOrEqual(t, len(diags), 2,
+		"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H2: scanner must fire on BOTH dlxoutcomeredfixture forge forms "+
+			"(empty composite literal + zero-value var); <2 means a composite-lit/var type-resolution path is silently broken")
 }
 
 // ─── H3a: the dlxoutcome constructors actually record (inseparability spine) ──
