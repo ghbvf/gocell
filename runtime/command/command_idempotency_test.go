@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
@@ -153,5 +154,120 @@ func TestCommandIDMetadataKey_NotReserved(t *testing.T) {
 		if k == CommandIDMetadataKey {
 			t.Fatalf("CommandIDMetadataKey %q collides with a reserved metadata key", CommandIDMetadataKey)
 		}
+	}
+}
+
+// TestCommandDeadlineMetadataKey_NotReserved asserts the deadline metadata key
+// does not collide with any kernel-reserved metadata key.
+func TestCommandDeadlineMetadataKey_NotReserved(t *testing.T) {
+	t.Parallel()
+	for _, k := range kout.ReservedMetadataKeys {
+		if k == CommandDeadlineMetadataKey {
+			t.Fatalf("CommandDeadlineMetadataKey %q collides with a reserved metadata key", CommandDeadlineMetadataKey)
+		}
+	}
+}
+
+// activeUniquenessDeadline is a fixed future deadline used across
+// WithActiveUniqueness tests (TEST-TIME-LITERAL-01: no inline duration literals).
+var activeUniquenessDeadline = time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+
+// TestEmitAsync_WithActiveUniqueness_WritesDeadlineMetadata asserts that calling
+// EmitAsync with WithActiveUniqueness writes both CommandIDMetadataKey and
+// CommandDeadlineMetadataKey into the entry metadata, with the deadline as
+// RFC3339Nano UTC.
+func TestEmitAsync_WithActiveUniqueness_WritesDeadlineMetadata(t *testing.T) {
+	t.Parallel()
+
+	em := &captureEmitter{}
+	const (
+		dispatchID = CommandID("command.devicecommand.enqueue.v1")
+		subject    = "device-8"
+		commandID  = "instance-xyz"
+	)
+
+	if err := EmitAsync(context.Background(), clock.Real(), em, dispatchID, subject, commandID, struct{}{},
+		WithActiveUniqueness(activeUniquenessDeadline)); err != nil {
+		t.Fatalf("EmitAsync with WithActiveUniqueness returned error: %v", err)
+	}
+	if em.calls != 1 {
+		t.Fatalf("emitter.Emit called %d times, want 1", em.calls)
+	}
+
+	md := em.entry.Metadata()
+	if md[CommandIDMetadataKey] != commandID {
+		t.Errorf("Metadata[CommandIDMetadataKey] = %q, want %q", md[CommandIDMetadataKey], commandID)
+	}
+	wantDL := activeUniquenessDeadline.UTC().Format(time.RFC3339Nano)
+	if md[CommandDeadlineMetadataKey] != wantDL {
+		t.Errorf("Metadata[CommandDeadlineMetadataKey] = %q, want %q", md[CommandDeadlineMetadataKey], wantDL)
+	}
+}
+
+// TestEmitAsync_WithActiveUniqueness_ZeroDeadline_ReturnsError asserts that
+// WithActiveUniqueness with a zero deadline causes EmitAsync to return an error
+// before reaching the emitter (coupling guard).
+func TestEmitAsync_WithActiveUniqueness_ZeroDeadline_ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	em := &captureEmitter{}
+	err := EmitAsync(context.Background(), clock.Real(), em,
+		CommandID("command.x.v1"), "sub", "cmd", struct{}{},
+		WithActiveUniqueness(time.Time{}))
+	if err == nil {
+		t.Fatal("EmitAsync with zero deadline must return an error, got nil")
+	}
+	if em.calls != 0 {
+		t.Errorf("emitter.Emit called %d times, want 0 (error must be returned before emit)", em.calls)
+	}
+}
+
+// TestWithDispatchedUniqueness_RoundTrip asserts that WithDispatchedUniqueness
+// injects (key, deadline) into ctx and DispatchedUniqueness retrieves them with
+// ok=true and the same values.
+func TestWithDispatchedUniqueness_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	const wantKey = "_notenant\x00device-9\x00cmd-99"
+	wantDL := activeUniquenessDeadline
+
+	ctx := WithDispatchedUniqueness(context.Background(), wantKey, wantDL)
+	gotKey, gotDL, ok := DispatchedUniqueness(ctx)
+	if !ok {
+		t.Fatal("DispatchedUniqueness ok=false after WithDispatchedUniqueness, want true")
+	}
+	if gotKey != wantKey {
+		t.Errorf("DispatchedUniqueness key = %q, want %q", gotKey, wantKey)
+	}
+	if !gotDL.Equal(wantDL) {
+		t.Errorf("DispatchedUniqueness deadline = %v, want %v", gotDL, wantDL)
+	}
+}
+
+// TestDispatchedUniqueness_AbsentOnBareContext asserts DispatchedUniqueness
+// returns ok=false on a plain context that has not had WithDispatchedUniqueness
+// called on it.
+func TestDispatchedUniqueness_AbsentOnBareContext(t *testing.T) {
+	t.Parallel()
+
+	key, dl, ok := DispatchedUniqueness(context.Background())
+	if ok {
+		t.Errorf("DispatchedUniqueness ok=true on bare context, want false (key=%q, dl=%v)", key, dl)
+	}
+}
+
+// TestEmitAsync_NoOpts_AbsentsDeadlineMetadata asserts that EmitAsync without
+// opts does NOT write CommandDeadlineMetadataKey (backward-compatibility).
+func TestEmitAsync_NoOpts_AbsentsDeadlineMetadata(t *testing.T) {
+	t.Parallel()
+
+	em := &captureEmitter{}
+	if err := EmitAsync(context.Background(), clock.Real(), em,
+		CommandID("command.x.v1"), "sub", "cmd", struct{}{}); err != nil {
+		t.Fatalf("EmitAsync returned error: %v", err)
+	}
+	md := em.entry.Metadata()
+	if _, found := md[CommandDeadlineMetadataKey]; found {
+		t.Errorf("CommandDeadlineMetadataKey present in metadata without WithActiveUniqueness, want absent")
 	}
 }

@@ -18,6 +18,10 @@ import (
 	"github.com/ghbvf/gocell/runtime/command"
 )
 
+// activeUniquenessTestDeadline is a fixed future deadline shared across
+// active-uniqueness relay tests (no inline literals per TEST-TIME-LITERAL-01).
+var activeUniquenessTestDeadline = time.Date(2030, 6, 1, 0, 0, 0, 0, time.UTC)
+
 // fakeClaimer is a programmable Claimer for asserting each ClaimState branch.
 type fakeClaimer struct {
 	state    idempotency.ClaimState
@@ -402,4 +406,129 @@ func TestStart_CommandDispatchWithClaimer_StartsAndStops(t *testing.T) {
 	case <-time.After(relayLifecycleTimeout):
 		t.Fatal("relay did not stop")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Active-uniqueness ctx injection tests (#1820)
+// ---------------------------------------------------------------------------
+
+// claimedEntryWithDeadline builds a ClaimedEntry that carries both the full
+// command idempotency identity AND CommandDeadlineMetadataKey set to the given
+// deadline formatted as RFC3339Nano. It is the relay-side counterpart to a
+// producer that called EmitAsync with WithActiveUniqueness.
+func claimedEntryWithDeadline(t *testing.T, id, topic string, dl time.Time) ClaimedEntry {
+	t.Helper()
+	now := time.Now()
+	e, err := kout.EntryScan{
+		ID: id, AggregateID: "subject-" + id, EventType: topic, Topic: topic,
+		Payload: []byte(`{}`),
+		Metadata: map[string]string{
+			command.CommandIDMetadataKey:       "cmd-" + id,
+			command.CommandDeadlineMetadataKey: dl.UTC().Format(time.RFC3339Nano),
+		},
+		CreatedAt:  now,
+		OccurredAt: now,
+	}.ToEntry()
+	require.NoError(t, err)
+	return ClaimedEntry{Entry: e, LeaseID: "lease-1"}
+}
+
+// claimedEntryWithBadDeadline builds a ClaimedEntry with a corrupt (unparseable)
+// CommandDeadlineMetadataKey value to exercise the fail-closed dead-letter path.
+func claimedEntryWithBadDeadline(t *testing.T, id, topic string) ClaimedEntry {
+	t.Helper()
+	now := time.Now()
+	e, err := kout.EntryScan{
+		ID: id, AggregateID: "subject-" + id, EventType: topic, Topic: topic,
+		Payload: []byte(`{}`),
+		Metadata: map[string]string{
+			command.CommandIDMetadataKey:       "cmd-" + id,
+			command.CommandDeadlineMetadataKey: "not-a-valid-rfc3339-timestamp",
+		},
+		CreatedAt:  now,
+		OccurredAt: now,
+	}.ToEntry()
+	require.NoError(t, err)
+	return ClaimedEntry{Entry: e, LeaseID: "lease-1"}
+}
+
+// TestDispatchCommand_ActiveUniqueness_InjectsCtx asserts that when an entry
+// carries a valid CommandDeadlineMetadataKey, the relay injects
+// (claimKey, deadline) into the dispatch ctx via command.WithDispatchedUniqueness,
+// and the handler observes them via command.DispatchedUniqueness.
+func TestDispatchCommand_ActiveUniqueness_InjectsCtx(t *testing.T) {
+	t.Parallel()
+	rcpt := &spyReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: rcpt}
+
+	var (
+		gotKey      string
+		gotDeadline time.Time
+		gotOK       bool
+	)
+	r := relayWithDispatch(
+		func(ctx context.Context, _ *command.Registry, _ kout.Entry) error {
+			gotKey, gotDeadline, gotOK = command.DispatchedUniqueness(ctx)
+			return nil
+		},
+		claimer,
+	)
+
+	results := r.publishBatch(context.Background(),
+		[]ClaimedEntry{claimedEntryWithDeadline(t, "c1", testCmdID, activeUniquenessTestDeadline)})
+	require.Len(t, results, 1)
+	require.NoError(t, results[0].err)
+	assert.True(t, gotOK, "DispatchedUniqueness ok must be true when CommandDeadlineMetadataKey is present")
+	assert.NotEmpty(t, gotKey, "DispatchedUniqueness key must be non-empty")
+	assert.True(t, activeUniquenessTestDeadline.Equal(gotDeadline),
+		"DispatchedUniqueness deadline mismatch: got %v, want %v", gotDeadline, activeUniquenessTestDeadline)
+}
+
+// TestDispatchCommand_NoDeadlineMetadata_NoCtxInjection asserts that when an
+// entry does NOT carry CommandDeadlineMetadataKey, the relay dispatches the
+// handler without injecting anything into ctx (DispatchedUniqueness returns
+// ok=false), preserving exact backward-compatible behavior.
+func TestDispatchCommand_NoDeadlineMetadata_NoCtxInjection(t *testing.T) {
+	t.Parallel()
+	rcpt := &spyReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: rcpt}
+
+	var gotOK bool
+	r := relayWithDispatch(
+		func(ctx context.Context, _ *command.Registry, _ kout.Entry) error {
+			_, _, gotOK = command.DispatchedUniqueness(ctx)
+			return nil
+		},
+		claimer,
+	)
+
+	// claimedEntry (from relay_command_test.go) does not set CommandDeadlineMetadataKey.
+	results := r.publishBatch(context.Background(),
+		[]ClaimedEntry{claimedEntry(t, "c1", testCmdID, `{}`)})
+	require.Len(t, results, 1)
+	require.NoError(t, results[0].err)
+	assert.False(t, gotOK, "DispatchedUniqueness ok must be false when CommandDeadlineMetadataKey is absent")
+}
+
+// TestDispatchCommand_UnparseableDeadline_DeadLetters asserts that a corrupt
+// CommandDeadlineMetadataKey value causes fail-closed dead-letter (permanent
+// error) and the handler is never called.
+func TestDispatchCommand_UnparseableDeadline_DeadLetters(t *testing.T) {
+	t.Parallel()
+	rcpt := &spyReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: rcpt}
+
+	var dispatched int
+	r := relayWithDispatch(
+		func(context.Context, *command.Registry, kout.Entry) error { dispatched++; return nil },
+		claimer,
+	)
+
+	results := r.publishBatch(context.Background(),
+		[]ClaimedEntry{claimedEntryWithBadDeadline(t, "c1", testCmdID)})
+	require.Len(t, results, 1)
+	require.Error(t, results[0].err)
+	assert.True(t, isPermanentDispatch(results[0].err),
+		"unparseable deadline must be permanent (→ MarkDead): %v", results[0].err)
+	assert.Equal(t, 0, dispatched, "unparseable deadline must NOT dispatch the handler")
 }

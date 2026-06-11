@@ -707,7 +707,30 @@ func (r *Relay) dispatchCommand(ctx context.Context, e ClaimedEntry, fn command.
 	case idempotency.ClaimAcquired:
 		// fn is a generated DispatchAsync (COMMAND-ASYNC-DISPATCH-CALLER-01 locks
 		// the map values). Carry the live receipt so writeBack settles the lease.
-		return publishResult{entry: e, err: fn(ctx, r.cmdRegistry, e.Entry), receipt: receipt}
+		//
+		// Opt-in active-uniqueness: if the producer set CommandDeadlineMetadataKey,
+		// parse it and inject (key, deadline) into ctx so the handler can read them
+		// via command.DispatchedUniqueness. Absent key → no injection (zero-overhead
+		// for commands that did not opt in). Corrupt deadline → fail-closed dead-letter
+		// (mirror the missing-identity guard above; a corrupt deadline is a producer bug).
+		dispatchCtx := ctx
+		if dl := e.Metadata()[command.CommandDeadlineMetadataKey]; dl != "" {
+			parsed, parseErr := time.Parse(time.RFC3339Nano, dl)
+			if parseErr != nil {
+				slog.Error("outbox relay: command entry has unparseable deadline, dead-lettering",
+					slog.String("entry_id", e.ID()),
+					slog.String("routing_topic", e.RoutingTopic()),
+					slog.String("command_id", cmdID),
+					slog.String("raw_deadline", dl),
+					slog.Any("error", parseErr))
+				return publishResult{entry: e, err: kout.NewPermanentError(
+					errcode.New(errcode.KindInvalid, errRelayOp,
+						"outbox relay: command entry has unparseable overall_deadline"),
+				)}
+			}
+			dispatchCtx = command.WithDispatchedUniqueness(ctx, key, parsed)
+		}
+		return publishResult{entry: e, err: fn(dispatchCtx, r.cmdRegistry, e.Entry), receipt: receipt}
 	case idempotency.ClaimDone:
 		// Already processed by an earlier delivery — skip dispatch, settle the row
 		// as published (the command is deduped, not re-enqueued). No live receipt.
