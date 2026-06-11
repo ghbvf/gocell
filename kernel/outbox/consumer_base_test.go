@@ -370,6 +370,46 @@ func TestNilConsumerBase_IsConstructed_False(t *testing.T) {
 
 // --- Wrap: happy paths -----------------------------------------------------
 
+// TestConsumerBase_Wrap_ThreadsInjectedLoggerOntoOutcome pins #1871 F2: every
+// outcome ConsumerBase.Wrap produces must carry the consumer's configured
+// logger (ConsumerBaseConfig.Logger) so the subscriber settle loop's
+// NotifySettlement routes its observer-panic line to the SAME sink as the rest
+// of the consumer pipeline — not the global slog.Default(). Before the Wrap
+// funnel set out.Logger, deliveryFrom returned a nil-Logger outcome and the
+// settle-panic line escaped to slog.Default(), defeating the injection.
+func TestConsumerBase_Wrap_ThreadsInjectedLoggerOntoOutcome(t *testing.T) {
+	t.Parallel()
+
+	logger, logBuf := newCapturingLogger()
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: &fakeReceipt{}}
+	cb, err := NewConsumerBase(
+		claimer,
+		ConsumerBaseConfig{Logger: logger, LeaseRenewalInterval: disableLeaseRenewal},
+		clock.Real(),
+	)
+	require.NoError(t, err)
+
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"},
+		func(_ context.Context, _ Entry) HandleResult { return Ack() })
+	out, _ := handler(context.Background(), Entry{id: "evt-logger"})
+
+	// Root cause: the produced outcome must carry the injected logger.
+	require.Same(t, logger, out.Logger,
+		"Wrap must thread cb.logger onto every produced DeliveryOutcome (#1871 F2)")
+
+	// End-to-end: a panicking SettlementObserver (appended by subscriber-layer
+	// middleware) must log to the injected buffer, not slog.Default().
+	out.SettlementObservers = []SettlementObserver{
+		SettlementObserverFunc(func(_ context.Context, _ SettlementObservation) {
+			panic("settlement observer panicked intentionally")
+		}),
+	}
+	NotifySettlement(context.Background(), out, Entry{id: "evt-logger", topic: "topic"},
+		DispositionAck, SettlementResultSuccess, nil)
+	assert.Contains(t, logBuf.String(), "settlement observer panicked",
+		"injected logger must capture the settlement observer-panic line")
+}
+
 func TestConsumerBase_Wrap_ClaimAcquired_Ack_ThreadsReceipt(t *testing.T) {
 	receipt := &fakeReceipt{}
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}

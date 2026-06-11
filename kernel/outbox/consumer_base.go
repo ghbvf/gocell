@@ -394,7 +394,13 @@ func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) SubscriberH
 	cellID := sub.CellID
 	passthrough := cb.brokerDelayPassthrough(sub)
 	dims := deliveryDims{cellID: cellID, consumerGroup: consumerGroup, topic: topic}
-	return func(ctx context.Context, entry Entry) (DeliveryOutcome, Settlement) {
+	return func(ctx context.Context, entry Entry) (out DeliveryOutcome, _ Settlement) {
+		// Single funnel: stamp the consumer's configured logger onto whatever
+		// outcome the dispatch below produces, so the subscriber settle loop's
+		// NotifySettlement routes its observer-panic line to the same sink as the
+		// rest of this consumer's pipeline. cb.logger is always non-nil
+		// (SetDefaults pins slog.Default()); see DeliveryOutcome.Logger (#716/#1871 F2).
+		defer func() { out.Logger = cb.logger }()
 		idempotencyKey := fmt.Sprintf("%s:%s", consumerGroup, entry.id)
 
 		// Fail-open: single Claim attempt, proceed without idempotency on error.

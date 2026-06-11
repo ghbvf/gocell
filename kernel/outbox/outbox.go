@@ -799,11 +799,14 @@ type DeliveryOutcome struct {
 	SettlementObservers []SettlementObserver
 
 	// Logger is the structured logger NotifySettlement uses for the
-	// observer-panic line. Optional: nil falls back to slog.Default() (current
-	// production behavior). Outcomes produced by ConsumerBase.Wrap leave this nil
-	// — production routes settlement-panic logs to slog.Default(); tests that
-	// capture those logs set it directly on the outcome, avoiding the global
-	// slog.SetDefault mutation (which races with t.Parallel() siblings).
+	// observer-panic line. ConsumerBase.Wrap threads the consumer's configured
+	// logger (ConsumerBaseConfig.Logger, itself defaulting to slog.Default())
+	// onto every outcome it produces, so the whole delivery pipeline — internal
+	// logs, ConsumerObserver panics, and settlement observer panics — routes to
+	// one sink. nil falls back to slog.Default(): the no-observer hot path and
+	// directly-constructed literals (tests) may leave it unset; a test capturing
+	// settle logs sets it on the literal to avoid the global slog.SetDefault
+	// mutation (which races with t.Parallel() siblings).
 	Logger *slog.Logger
 }
 

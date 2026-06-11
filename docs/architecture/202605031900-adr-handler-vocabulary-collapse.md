@@ -160,11 +160,16 @@ types so the business handler return surface is minimal:
   (`Ack/Requeue/Reject`) and touched neither removed field, so no cell handler
   changed.
 - **Subscriber face** — new `DeliveryOutcome{Disposition, Err, ProcessReason,
-  SettlementObservers}` carries the kernel-internal `ProcessReason` (today only
-  `"retry_exhausted"`) plus the settlement-observer channel. `ConsumerBase.Wrap`
-  is the sole `HandleResult → DeliveryOutcome` promotion point; `retryLoop` no
-  longer threads observers through its return paths (the EntryHandler return no
-  longer carries them — the propagation plumbing is deleted outright).
+  SettlementObservers, Logger}` carries the kernel-internal `ProcessReason`
+  (today only `"retry_exhausted"`) plus the settlement-observer channel.
+  `ConsumerBase.Wrap` is the sole `HandleResult → DeliveryOutcome` promotion
+  point; `retryLoop` no longer threads observers through its return paths (the
+  EntryHandler return no longer carries them — the propagation plumbing is
+  deleted outright). `Logger` (added #716) is the settle-loop sink:
+  `ConsumerBase.Wrap` stamps the consumer's configured logger onto every outcome
+  so `NotifySettlement`'s observer-panic line routes to the same sink as the rest
+  of the pipeline (nil → `slog.Default()`); read only by `NotifySettlement`, so
+  the subscriber implementations pass the outcome through unchanged.
 - **`SubscriberHandler` now returns `(DeliveryOutcome, Settlement)`** — this
   supersedes the `(HandleResult, Settlement)` wording in Decision 3, Trade-off
   Q1, and the Future-Work K#12 note above. `NotifySettlement` takes a
@@ -178,8 +183,8 @@ types so the business handler return surface is minimal:
   `eventrouter.contractTracingSubscriber` next to `wrapper.WrapSubscriber`.
 
 Enforcement: `OUTBOX-HANDLERESULT-FIELDS-FROZEN-01` now freezes the 2-field
-business set; new `OUTBOX-DELIVERYOUTCOME-FIELDS-FROZEN-01` freezes the 4-field
-carrier. `OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01`'s allowlist drops
+business set; new `OUTBOX-DELIVERYOUTCOME-FIELDS-FROZEN-01` freezes the 5-field
+carrier (`Logger` added #716, reviewed through that guard). `OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01`'s allowlist drops
 `consumer_base.go` (it now constructs `DeliveryOutcome`, not `HandleResult`). No
 `DeliveryOutcome` literal-construction archtest is added: business code has no
 use for the type (it cannot return it from `EntryHandler` nor hand it to a
