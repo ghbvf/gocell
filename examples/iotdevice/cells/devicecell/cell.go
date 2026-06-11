@@ -123,12 +123,15 @@ func WithBootstrapEmitter(e outbox.CellEmitter) Option {
 	return func(c *DeviceCell) { c.bootstrapEmitter = e }
 }
 
-// WithBootstrapTxManager sets the CellTxManager injected into BOTH async command
-// producers: the devicebootstrap reactive slice and the cert-renewal reconcile
-// loop (#1757). Each wraps command.EmitAsync in txRunner.RunInTx so durable mode
-// (PG outbox writer) gets a real transaction in ctx. The cell defaults the field
-// to outbox.DemoCellTxManager() (no-op) in NewDeviceCell, so demo mode and tests
-// work without wiring it.
+// WithBootstrapTxManager sets the CellTxManager injected into the devicebootstrap
+// reactive slice. That slice wraps command.EmitAsync in txRunner.RunInTx so
+// durable mode (PG outbox writer) gets a real transaction in ctx. The cell
+// defaults the field to outbox.DemoCellTxManager() (no-op) in NewDeviceCell, so
+// demo mode and tests work without wiring it.
+//
+// The cert-renewal reconcile loop does NOT use this txManager: its emitter is
+// self-durable (the outbox writer commits atomically in its own internal logic),
+// and buildCertRenewalSweeper does not pass bootstrapTxManager to NewReconciler.
 //
 // Accumulative: a nil tx leaves the previously-set (default) value in place. NOT
 // required (no fail-fast guard): DemoCellTxManager is the safe default for
@@ -607,9 +610,8 @@ func (c *DeviceCell) buildCertRenewalSweeper() error {
 		WithTrigger(reconcile.TickerTrigger(c.clk, certRenewalSweepInterval)).
 		WithName("devicecert.renewal").
 		WithReconcilerID("devicecert_renewal"). // label-safe: [a-z0-9_], no dots
-		// ticker is the sole periodic re-observation source; a full-batch Reconcile
-		// adds a prompt continuation via RequeueAfter (Policy.BatchRequeue) —
-		// RequeueAfter>0 is honored even under WithoutDefaultRequeue.
+		// ticker is the sole periodic re-observation source; Reconcile always
+		// returns Result{} (zero RequeueAfter) so no self-requeue occurs.
 		WithoutDefaultRequeue()
 	m, ok, err := c.reconcileLoopMetrics()
 	if err != nil {

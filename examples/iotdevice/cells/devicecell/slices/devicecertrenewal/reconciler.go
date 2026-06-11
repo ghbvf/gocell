@@ -165,7 +165,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("devicecertrenewal: scan near-expiry: %w", err)
 	}
+	if len(candidates) == 0 {
+		r.logger.Debug("devicecertrenewal: no near-expiry certs",
+			slog.Time("cutoff", cutoff))
+		return reconcile.Result{}, nil
+	}
 	for _, cand := range candidates {
+		if now.After(cand.CertExpiresAt) {
+			r.logger.Warn("devicecertrenewal: cert already expired — device may be stuck",
+				slog.String("device_id", cand.DeviceID),
+				slog.Int64("cert_epoch", cand.CertEpoch),
+				slog.Duration("expired_for", now.Sub(cand.CertExpiresAt)))
+		}
 		if err := r.enqueueRenewal(ctx, cand, now); err != nil {
 			// Transient: bubble up so the Loop applies backoff and re-sweeps on the
 			// next tick. The queue active-uniqueness coalesces any successful prior
@@ -173,19 +184,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			return reconcile.Result{}, err
 		}
 	}
-	if len(candidates) > 0 {
-		r.logger.Info("devicecertrenewal: swept cert-renewal batch",
-			slog.Int("emitted", len(candidates)))
-	}
+	r.logger.Info("devicecertrenewal: swept cert-renewal batch",
+		slog.Int("emitted", len(candidates)),
+		slog.Time("cutoff", cutoff))
 	return reconcile.Result{}, nil
 }
 
-// enqueueRenewal emits one rotate-cert async command for a near-expiry cert with
-// active-uniqueness enabled (command.WithActiveUniqueness). The queue enforces
-// "at most one non-terminal rotate-cert per (device,epoch)" via the IdempotencyKey
-// set from DispatchedUniqueness(ctx); duplicate emits are coalesced to a no-op.
-// The OverallDeadline (now+AttemptTTL) terminal-guarantees the command so the
-// Sweeper can expire it when the device is offline, releasing the slot for retry.
+// enqueueRenewal emits one rotate-cert async outbox entry for a near-expiry cert
+// via command.EmitAsync(..., command.WithActiveUniqueness(deadline)).
+// WithActiveUniqueness stamps CommandDeadlineMetadataKey on the entry; the relay
+// reads that key and injects (claimKey, deadline) into the dispatch ctx via
+// rtcommand.WithDispatchedUniqueness before calling the enqueue handler. The
+// downstream handler (devicecmd.Service.Enqueue) then reads
+// rtcommand.DispatchedUniqueness(ctx) and sets EnqueueOptions.IdempotencyKey +
+// Timeouts.OverallDeadline, so the queue enforces active-uniqueness.
 //
 // No txRunner wrapping is required: the emitter is self-durable (the outbox Writer
 // commits the entry atomically in its own internal logic). There is no second write

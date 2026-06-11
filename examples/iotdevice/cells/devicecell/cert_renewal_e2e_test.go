@@ -131,6 +131,7 @@ func TestCertRenewal_F1_OfflineDeviceNoDuplicates(t *testing.T) {
 		_, err = reconciler.Reconcile(ctx, reconcile.Request{})
 		require.NoError(t, err, "tick %d: reconcile must not error", tick)
 
+		assert.Len(t, rec.Entries(), 1, "tick %d must emit exactly 1 entry", tick)
 		dispatchNew(t, ctx, handler, rec)
 
 		active, scanErr := queue.ScanActive(ctx, kcommand.ScanFilter{DeviceID: "dev-offline"})

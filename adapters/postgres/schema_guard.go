@@ -689,6 +689,14 @@ var forbiddenColumns = []requiredColumn{
 	// S4d (PR S4d) restored sessions.authz_epoch_at_issue via migration 026.
 	// ADR §0 A1 (the original "drop" justification) is RETRACTED — the row is
 	// credential provenance source-of-truth, not a JWT claim mirror. See ADR §A8.
+
+	// #1820 / migration 062: renewal_requested_epoch was DROPPED from devices.
+	// The reconciler-driven cert-renewal state machine uses cert_epoch + the
+	// reconcile loop for convergence; the epoch-at-request field is redundant and
+	// was removed. Asserting absence here causes /readyz to fail loudly if the
+	// column ever reappears via a botched rollback or out-of-band DDL —
+	// symmetric with how sessions.access_token is guarded above.
+	{table: "devices", column: "renewal_requested_epoch"},
 }
 
 // expectedPKs is the primary key registry.

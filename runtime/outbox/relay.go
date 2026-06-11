@@ -717,11 +717,18 @@ func (r *Relay) dispatchCommand(ctx context.Context, e ClaimedEntry, fn command.
 		if dl := e.Metadata()[command.CommandDeadlineMetadataKey]; dl != "" {
 			parsed, parseErr := time.Parse(time.RFC3339Nano, dl)
 			if parseErr != nil {
+				// Cap raw_deadline to bound log size if a malformed value appears
+				// (e.g. a very long string injected by a misbehaving producer).
+				const rawDeadlineLogCap = 64
+				rawSnippet := dl
+				if len(rawSnippet) > rawDeadlineLogCap {
+					rawSnippet = rawSnippet[:rawDeadlineLogCap]
+				}
 				slog.Error("outbox relay: command entry has unparseable deadline, dead-lettering",
 					slog.String("entry_id", e.ID()),
 					slog.String("routing_topic", e.RoutingTopic()),
 					slog.String("command_id", cmdID),
-					slog.String("raw_deadline", dl),
+					slog.String("raw_deadline", rawSnippet),
 					slog.Any("error", parseErr))
 				return publishResult{entry: e, err: kout.NewPermanentError(
 					errcode.New(errcode.KindInvalid, errRelayOp,

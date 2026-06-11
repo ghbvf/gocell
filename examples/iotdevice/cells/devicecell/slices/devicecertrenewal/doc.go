@@ -24,11 +24,11 @@
 // releasing the active-uniqueness key. The next reconcile tick then re-enqueues
 // a fresh attempt — level-triggered retry without any producer-side state.
 //
-// # Bounded batch + requeue continuation
+// # Full sweep per tick
 //
-// Each Reconcile scans and emits at most Policy.BatchSize candidates. When a full
-// batch is returned, Reconcile returns RequeueAfter=Policy.BatchRequeue so the
-// Loop continues draining the next batch promptly, without a single-tick emit
-// burst. Active-uniqueness coalesces already-queued commands to no-ops on the
-// next scan, so the drain terminates monotonically.
+// Each Reconcile scans and emits for ALL near-expiry certs in a single call and
+// returns reconcile.Result{} (zero RequeueAfter). The TickerTrigger cadence
+// (certRenewalSweepInterval, default 12h) is the sole pacing mechanism — there
+// is no self-requeue and no batch boundary. The queue active-uniqueness coalesces
+// duplicate emits across ticks to no-ops, so repeated sweeps are safe.
 package devicecertrenewal

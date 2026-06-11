@@ -106,6 +106,15 @@ func RunQueueConformance(t *testing.T, factory QueueFactory, features Features) 
 		runEnqueueKeyReleasedAfterAck(t, factory, features, "rel-rej", command.AckRejected)
 	})
 	t.Run("Enqueue/KeyReleasedOnCanceled", func(t *testing.T) { runEnqueueKeyReleasedAfterCancel(t, factory, features) })
+	t.Run("Enqueue/KeyReleasedViaDeliveredOnSucceeded", func(t *testing.T) {
+		runEnqueueKeyReleasedAfterAckViaDelivered(t, factory, features, "rel-del-ok", command.AckSuccess)
+	})
+	t.Run("Enqueue/KeyReleasedViaDeliveredOnFailed", func(t *testing.T) {
+		runEnqueueKeyReleasedAfterAckViaDelivered(t, factory, features, "rel-del-fail", command.AckFailed)
+	})
+	t.Run("Enqueue/KeyReleasedViaDeliveredOnExpired", func(t *testing.T) {
+		runEnqueueKeyReleasedAfterAckViaDelivered(t, factory, features, "rel-del-exp", command.AckTimeout)
+	})
 	t.Run("Enqueue/AuthzReject", func(t *testing.T) { runEnqueueAuthzReject(t, factory, features) })
 	t.Run("Enqueue/InvalidEntry", func(t *testing.T) { runEnqueueInvalidEntry(t, factory, features) })
 
@@ -355,6 +364,44 @@ func runEnqueueKeyReleasedAfterAck(t *testing.T, factory QueueFactory, features 
 	seedEntryWithKey(t, ctx, q, tx, features, makeEntry(idBase+"-2", "dev-a", now()), key)
 	if _, err := scanner.GetCommand(ctx, idBase+"-2"); err != nil {
 		t.Fatalf("expected %s-2 to exist after key released by terminal %s: %v", idBase, reason, err)
+	}
+}
+
+// runEnqueueKeyReleasedAfterAckViaDelivered asserts state-aware release on the
+// Delivered→terminal path. Unlike runEnqueueKeyReleasedAfterAck (which ACKs from
+// Sent), this helper advances the holder to Delivered via Report before ACKing,
+// proving the key release fires on the Delivered→terminal arc as well.
+func runEnqueueKeyReleasedAfterAckViaDelivered(
+	t *testing.T, factory QueueFactory, features Features,
+	idBase string, reason command.AckReason,
+) {
+	t.Helper()
+	q, scanner, tx, now, cleanup := factory(t)
+	defer cleanup()
+	ctx := context.Background()
+	key := idBase + idemKeySuffix
+
+	seedEntryWithKey(t, ctx, q, tx, features, makeEntry(idBase+"-1", "dev-a", now()), key)
+	dequeueOne(t, ctx, q, tx, features, "dev-a")
+
+	// Advance Sent→Delivered.
+	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
+		return q.Report(c, idBase+"-1", now())
+	}); err != nil {
+		t.Fatalf("Report: %v", err)
+	}
+
+	// ACK from Delivered — this must release the idempotency key.
+	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
+		return q.Ack(c, idBase+"-1", reason, now())
+	}); err != nil {
+		t.Fatalf("Ack(%s) from Delivered: %v", reason, err)
+	}
+
+	// Key is now released — a fresh command with the same key must enqueue.
+	seedEntryWithKey(t, ctx, q, tx, features, makeEntry(idBase+"-2", "dev-a", now()), key)
+	if _, err := scanner.GetCommand(ctx, idBase+"-2"); err != nil {
+		t.Fatalf("expected %s-2 to exist after key released by Delivered→terminal %s: %v", idBase, reason, err)
 	}
 }
 

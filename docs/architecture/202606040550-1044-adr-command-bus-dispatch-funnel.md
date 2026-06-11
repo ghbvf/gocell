@@ -299,8 +299,8 @@ enforcement 索引（§7）**无新增**——值校验由 §4 既有三 funnel 
 
 **新设计（command-queue active-uniqueness，见 ADR-1822 `docs/architecture/202606121000-1822-adr-command-queue-active-uniqueness.md`）**：
 
-- **D_AU1（队列拥有正确性）**：`kernel/command` 设备命令队列引入**非终态内活跃唯一性**（state-aware active-uniqueness）：`EnqueueOptions.IdempotencyKey` 在命令处于非终态（Pending/Sent/Delivered）时唯一，命令到达终态（Succeeded/Failed/Expired/Canceled）时释放。PG = partial unique index `WHERE status IN (1,2,3)`；in-mem 从 status 派生。两个实现由 `commandtest` 跨存储 conformance 套件强制一致。
-- **D_AU2（不安全组合不可表达）**：`runtime/command.WithActiveUniqueness(deadline time.Duration)` 是 `EnqueueOptions.IdempotencyKey` 的**唯一**写入点，同时设 `OverallDeadline`——「有 active-uniqueness key 但无 deadline（命令永不 terminal，key 永不释放）」在 API 上不可构造（`EnqueueOptions.idempotencyKey` 是 unexported 字段，Hard：Go type system 封闭）。
+- **D_AU1（队列拥有正确性）**：`kernel/command` 设备命令队列引入**非终态内活跃唯一性**（state-aware active-uniqueness）：`EnqueueOptions.IdempotencyKey`（exported `string` 字段）在命令处于非终态（Pending/Sent/Delivered）时唯一，命令到达终态（Succeeded/Failed/Expired/Canceled）时释放。PG = partial unique index on `commands` table，expression column `(metadata->>'_idempotency_key')`，`WHERE metadata->>'_idempotency_key' IS NOT NULL AND status IN (1,2,3)`（DDL 见 `adapters/postgres/migrations/061_commands_idempotency_active_index.sql`，in-transaction 非 CONCURRENTLY——示例规模可接受，生产 fleet 须改 CONCURRENTLY 双步方案）；in-mem 从 status 派生。两个实现由 `commandtest` 跨存储 conformance 套件强制一致。
+- **D_AU2（不安全组合不可表达——EmitAsync 路径）**：`runtime/command.WithActiveUniqueness(deadline time.Time)` 是 `EmitAsync` 的 `EmitOption`，定义在 `runtime/command/command_idempotency.go`。`EmitAsync` 在 `hasActiveUniqueness && deadline.IsZero()` 时 fail-fast，使「有 active-uniqueness key 但 deadline 为零」在受控 emit 路径上不可通过。注：`kernel/command.EnqueueOptions.IdempotencyKey` 是 exported `string` 字段，raw kernel-API caller 可直接构造，但当前生产代码 0 个 raw caller；EmitAsync 是 sanctioned path。
 - **D_AU3（producer 无状态）**：`devices.renewal_requested_at` 和 `renewal_requested_epoch` 列移除（schema guard golden Hard 守）。每 tick 对近过期证书无条件调用 `command.Enqueue(WithActiveUniqueness(deadline))`；命令已在队列且非终态时 enqueue 被幂等 noop（`ON CONFLICT DO NOTHING` / in-mem 集合 rejected）。
 - **D_AU4（relay Claimer 降级）**：relay Claimer 从「single-emit 第一防线」降为「dispatch-time 去重优化」。relay 在 Claimer Acquired 后把 active-uniqueness key+deadline 注入 ctx，供下游 enqueue 使用。
 - **D_AU5（批量扫描上限移除）**：批量扫描上限（`LIMIT certRenewalScanBatchSize` + 满批 `RequeueAfter` drain 循环）与无状态 producer **不兼容，已移除**。无状态 producer 不写任何抑制标记；保留 LIMIT + RequeueAfter 后，expiry-ordered 扫描每次 requeue 从头扫，前 N 条设备被反复 re-emit（`ON CONFLICT DO NOTHING` 吸收 emit，但扫描本身无限循环），tail 设备当前 tick 内永远排不到（正向饥饿）。新形态：每 tick 全量扫描近过期证书，无 LIMIT，逐台 enqueue，返回 `Result{}`（交还 TickerTrigger 按 interval 下次 tick）。正确性由 D1 队列 active-uniqueness 保证（重复 emit 幂等吸收），不依赖 producer 侧任何 drain 边界。Sweeper（已有）周期 expire 超 OverallDeadline 的 Pending 命令 → 终态 → key 释放 → 下次 tick 正常重 enqueue。
@@ -310,12 +310,13 @@ enforcement 索引（§7）**无新增**——值校验由 §4 既有三 funnel 
 | 旧威胁（时间窗方案） | 旧处置 | 新处置（queue active-uniqueness） |
 |-------------------|---------|---------------------------------|
 | 离线设备积压 N 条活跃命令 | 有界（≤28 条），但非零 | **消除**：PG partial index 保证至多 1 条非终态命令 |
-| 命令永久 Pending（Sweeper 未触发） | 无路径 | **消除**：`WithActiveUniqueness(deadline)` 必须带 OverallDeadline → Sweeper expire → 终态 → key 释放 |
+| 命令永久 Pending（Sweeper 未触发） | 无路径 | **消除**：`WithActiveUniqueness(deadline)` 必须带非零 OverallDeadline → Sweeper expire → 终态 → key 释放 |
 | 并发扫描绕过时间窗（多副本 / 多 worker） | 部分（CAS on cert_epoch + 时间窗），有竞态 | **消除**：PG partial index 唯一性由 PG 引擎串行化，并发 `ON CONFLICT DO NOTHING` 安全 |
 | retryInterval ≥ TTL 协调是 Soft doc 约束 | doc-only，无机器守 | **移除该约束**：Claimer 降为优化，queue uniqueness 不依赖 TTL |
-| 新威胁：active-uniqueness key 被 deadline-less 命令永久持有 | （旧设计无此威胁） | **不可表达**（`WithActiveUniqueness` sealed API，`EnqueueOptions.idempotencyKey` unexported，Hard） |
+| 新威胁：active-uniqueness key 被 deadline-less 命令永久持有（经 EmitAsync） | （旧设计无此威胁） | **Hard at EmitAsync**（`EmitAsync` coupling guard：`hasActiveUniqueness && deadline.IsZero()` → fail-fast；受控 emit 路径不可通过） |
+| 新威胁：active-uniqueness key 被 deadline-less 命令永久持有（经 raw kernel Enqueue） | （旧设计无此威胁） | **Medium**（`EnqueueOptions.IdempotencyKey` 是 exported 字段，raw caller 可绕过 coupling guard；0 生产 raw caller；`COMMAND-ASYNC-EMIT-FUNNEL-01` archtest 兜底） |
 
-**新失效模式（诚实记录）**：`commandtest` conformance 套件是 Medium 保证（跨存储一致性可被测试抓住，但 Go 类型系统无法在接口层表达「两实现对 status 集必须一致」）。PG partial index 定义（含 WHERE 谓词）由 schema guard golden Hard 守卫——index 字节 drift 即 CI 红。
+**新失效模式（诚实记录）**：`commandtest` conformance 套件是 Medium+ 保证（跨存储一致性 + WHERE 谓词正确性可被 conformance 测试抓住，但 Go 类型系统无法在接口层直接表达「两实现对 status 集必须一致」或「DDL WHERE 谓词字节精确」）。`schema_guard.go verifyIndexes` 锁定 index 名/唯一性/列（`"(expr)"`），但不读取 `pg_index.indpred`——WHERE 谓词由 conformance 而非 schema_guard 守卫（Medium+，非 Hard）。
 
 **dispatch funnel 不变**：本 amendment 在命令**队列写入层**增加幂等保障，不改变 §5 演进路径中 producer 经 `command.EmitAsync` → outbox → relay → `DispatchAsync` → `kernel/command.Enqueue` 的路径——EmitAsync 仍经 sanctioned 出口，relay 仍用既有 dispatcher-map，`DispatchAsync` 仍是生成码唯一来源。
 
@@ -326,15 +327,15 @@ enforcement 索引（§7）**无新增**——值校验由 §4 既有三 funnel 
 - `COMMAND-ASYNC-DISPATCH-CALLER-01`：✅ **不变**（上游 Medium / 下游 Hard）。relay 经 `DispatchAsync` 到队列 Enqueue 的路径不变；active-uniqueness 是 Enqueue 内部语义，外部 dispatch funnel 感知不到。
 - `COMMAND-ASYNC-EMIT-FUNNEL-01`：✅ **不变**（上游 Medium / 下游 Hard）。`EmitAsync` subject/commandID 位置参不变；producer 无状态化只移除了 Enqueue 之后的 producer-side mark，dispatch funnel 不变。
 
-**无 ✅→⚠️/❌ 降格，无补偿措施**：本 amendment 未改 sealed `Entry` wire envelope、未新增 errcode/Kind/contract/schema——**未触发 contract-fanout 5 载体**。`devices` 列移除（DROP COLUMN migration）由 schema guard golden Hard 守卫。`kernel/command` 层新增 partial index + `WithActiveUniqueness` sealed API 属**队列内部持久化语义**，与 command-bus dispatch funnel 正交。
+**无 ✅→⚠️/❌ 降格，无补偿措施**：本 amendment 未改 sealed `Entry` wire envelope、未新增 errcode/Kind/contract/schema——**未触发 contract-fanout 5 载体**。`devices` 列移除（DROP COLUMN migration）由 schema guard golden Hard 守卫。`kernel/command` 层新增 partial index + `WithActiveUniqueness` EmitAsync coupling guard 属**队列内部持久化语义**，与 command-bus dispatch funnel 正交。
 
 **enforcement 分档（ai-robust「涉及 enforcement 必给评级」）**：
-- PG partial unique index（`device_commands` `WHERE status IN (1,2,3)`）—— **Hard**（`schema_guard.go` expectedIndexes golden 锁 index DDL 字符串含 WHERE 谓词；drift 即 CI 红）。
+- PG partial unique index（table `commands`，expression `(metadata->>'_idempotency_key')`，`WHERE ... AND status IN (1,2,3)`）—— index 存在性 + 唯一性 + 列：**Medium+**（`schema_guard.go verifyIndexes` 锁 name/unique/`"(expr)"`；WHERE 谓词不在 `indpred` 覆盖范围）；PG 引擎在 enqueue 时强制该谓词：**Hard**（`ON CONFLICT DO NOTHING` 不可绕过）；WHERE 谓词正确性由 conformance 守卫：**Medium+（conformance-enforced）**（`commandtest` `ActiveKeyBlocksAcrossNonTerminal` 覆盖 Pending/Sent/Delivered；谓词遗漏任意非终态 status，PG conformance run 红）。
 - in-mem active-uniqueness 与 PG 一致（同 status 集）—— **Medium+**（`commandtest` 跨存储 conformance 套件；两实现偏差 CI 红；Go 类型无法在接口层表达「status 集必须一致」，Medium+ 是正确档位）。
-- `WithActiveUniqueness` 是 `IdempotencyKey` 唯一写入点（不安全组合不可表达）—— **Hard**（`EnqueueOptions.idempotencyKey` unexported 字段，Go type system 封闭；包外字面量 `EnqueueOptions{idempotencyKey: x}` 编译失败）。
+- `WithActiveUniqueness` coupling guard（不安全组合在 EmitAsync 路径不可表达）—— **Hard at EmitAsync**（`runtime/command/command_idempotency.go`：`hasActiveUniqueness && deadline.IsZero()` → fail-fast；`WithActiveUniqueness(deadline time.Time)` 是 `EmitOption`，签名要求非零 `time.Time`）；raw `kernel/command.EnqueueOptions.IdempotencyKey` 是 exported 字段——raw kernel-API 直接使用是 **Medium** residual（0 生产 caller；`COMMAND-ASYNC-EMIT-FUNNEL-01` 兜底）。
 - `devices` 无 `renewal_requested_at` / `renewal_requested_epoch` 列—— **Hard**（`schema_guard.go` expectedColumns golden；列存在即红）。
 - relay identity 注入（active-uniqueness key+deadline 进 ctx）+ E2E 验证—— **Medium**（`TestCertRenewalActiveUniquenessE2E`：单条活跃、离线积压不增长；PG partial index 是最终 Hard 兜底）。
 
 enforcement 索引（§7）**无新增 dispatch-funnel invariant**——active-uniqueness 属 kernel/command queue 层，见 ADR-1822 §8 enforcement 索引。**无 ✅→⚠️/❌ 降格，无补偿措施**。
 
-**范围（显式，非 silent defer）**：terminal-feedback 释放（设备回执 / DLX 驱动 epoch advance）仍在 producer 范围外，登记为独立 follow-up issue（per-key reconcile + terminal-feedback 释放，ADR-1822 §7.1 注明）。批量扫描上限 + RequeueAfter 续扫保留。
+**范围（显式，非 silent defer）**：terminal-feedback 释放（设备回执 / DLX 驱动 epoch advance）仍在 producer 范围外，登记为独立 follow-up issue（per-key reconcile + terminal-feedback 释放，ADR-1822 §7.1 注明）。批量扫描上限 + RequeueAfter 续扫已移除（D_AU5）。

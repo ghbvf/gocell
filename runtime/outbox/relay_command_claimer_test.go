@@ -510,6 +510,54 @@ func TestDispatchCommand_NoDeadlineMetadata_NoCtxInjection(t *testing.T) {
 	assert.False(t, gotOK, "DispatchedUniqueness ok must be false when CommandDeadlineMetadataKey is absent")
 }
 
+// deadlineOnlyEntry builds a ClaimedEntry that carries CommandDeadlineMetadataKey
+// but NO CommandIDMetadataKey (and no AggregateID), so ClaimKeyFromEntry returns
+// ok=false. This is the "deadline present but identity missing" boundary case that
+// must fire the missing-identity guard BEFORE the deadline injection path.
+func deadlineOnlyEntry(t *testing.T, id, topic string, dl time.Time) ClaimedEntry {
+	t.Helper()
+	now := time.Now()
+	e, err := kout.EntryScan{
+		ID: id, EventType: topic, Topic: topic,
+		Payload: []byte(`{}`),
+		Metadata: map[string]string{
+			// Deadline present, but no CommandIDMetadataKey and no AggregateID.
+			command.CommandDeadlineMetadataKey: dl.UTC().Format(time.RFC3339Nano),
+		},
+		CreatedAt:  now,
+		OccurredAt: now,
+	}.ToEntry()
+	require.NoError(t, err)
+	return ClaimedEntry{Entry: e, LeaseID: "lease-1"}
+}
+
+// TestDispatchCommand_DeadlinePresentButIdentityMissing_Permanent asserts that
+// when an entry carries CommandDeadlineMetadataKey but is missing the command
+// idempotency identity (no AggregateID, no CommandIDMetadataKey), dispatchCommand
+// treats it as a PERMANENT error / dead-letter. The missing-identity guard fires
+// BEFORE the deadline injection path — the Claimer is never consulted and the
+// handler is never called. This locks the check ordering (identity-first).
+func TestDispatchCommand_DeadlinePresentButIdentityMissing_Permanent(t *testing.T) {
+	t.Parallel()
+	rcpt := &spyReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: rcpt}
+
+	var dispatched int
+	r := relayWithDispatch(
+		func(context.Context, *command.Registry, kout.Entry) error { dispatched++; return nil },
+		claimer,
+	)
+
+	results := r.publishBatch(context.Background(),
+		[]ClaimedEntry{deadlineOnlyEntry(t, "c1", testCmdID, activeUniquenessTestDeadline)})
+	require.Len(t, results, 1)
+	require.Error(t, results[0].err)
+	assert.True(t, isPermanentDispatch(results[0].err),
+		"deadline-present-but-identity-missing must be permanent (→ MarkDead): %v", results[0].err)
+	assert.Equal(t, 0, dispatched, "missing identity must NOT dispatch the handler")
+	assert.Equal(t, 0, claimer.claims, "missing identity must fail-closed before Claim (identity-first ordering)")
+}
+
 // TestDispatchCommand_UnparseableDeadline_DeadLetters asserts that a corrupt
 // CommandDeadlineMetadataKey value causes fail-closed dead-letter (permanent
 // error) and the handler is never called.

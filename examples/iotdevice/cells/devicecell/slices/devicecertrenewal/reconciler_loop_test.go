@@ -38,6 +38,10 @@ func stopLoop(t *testing.T, loop *reconcile.Loop) {
 // the "_notenant" namespace. (A direct r.Reconcile call does NOT install the
 // identity — that is the Loop's job — so this test drives the Loop.)
 func TestReconciler_EmitsSystemTenantlessPrincipalViaLoop(t *testing.T) {
+	t.Parallel()
+	// Snapshot baseline goroutines before starting the loop so goleak only flags
+	// goroutines spawned by THIS test (parallel siblings are already running).
+	leakOpt := goleak.IgnoreCurrent()
 	ctx := context.Background()
 	repo := mem.NewDeviceRepository()
 	seedCert(t, ctx, repo, "dev-near", certTestBase.Add(24*time.Hour))
@@ -66,7 +70,7 @@ func TestReconciler_EmitsSystemTenantlessPrincipalViaLoop(t *testing.T) {
 
 	// Stop the loop before goleak runs — loop goroutines must be joined first.
 	stopLoop(t, loop)
-	defer goleak.VerifyNone(t)
+	defer goleak.VerifyNone(t, leakOpt)
 
 	got := rec.Entries()[0]
 	p := got.Principal()
@@ -93,6 +97,10 @@ func TestReconciler_EmitsSystemTenantlessPrincipalViaLoop(t *testing.T) {
 // producer + full-sweep design means there is no "batch boundary" to drain —
 // the entire near-expiry set is swept in a single Reconcile call.
 func TestReconciler_OneTickEmitsAllNearExpiry(t *testing.T) {
+	t.Parallel()
+	// Snapshot baseline goroutines before starting the loop so goleak only flags
+	// goroutines spawned by THIS test (parallel siblings are already running).
+	leakOpt := goleak.IgnoreCurrent()
 	ctx := context.Background()
 	repo := mem.NewDeviceRepository()
 
@@ -132,7 +140,7 @@ func TestReconciler_OneTickEmitsAllNearExpiry(t *testing.T) {
 
 	// Stop the loop before goleak runs — loop goroutines must be joined first.
 	stopLoop(t, loop)
-	defer goleak.VerifyNone(t)
+	defer goleak.VerifyNone(t, leakOpt)
 
 	assert.Len(t, rec.Entries(), totalCerts,
 		"exactly all certs emitted in one tick — no RequeueAfter needed")

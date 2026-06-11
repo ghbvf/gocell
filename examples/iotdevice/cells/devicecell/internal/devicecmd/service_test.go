@@ -490,11 +490,11 @@ func TestEnqueue_WithDispatchedUniqueness_SetsIdempotencyKeyAndOverallDeadline(t
 	assert.NotEmpty(t, entry1.ID, "first enqueue must create a command")
 
 	// Second enqueue with same key: must be coalesced to a no-op by the queue.
-	entry2, err := svc.Enqueue(uCtx, "dev-u", "rotate-cert", `{"epoch":1}`)
+	// The Service generates a local ID before calling queue.Enqueue; the queue
+	// silently no-ops (returns nil) so the service returns the locally-built entry.
+	// The observable correctness proof is the active-count assertion below.
+	_, err = svc.Enqueue(uCtx, "dev-u", "rotate-cert", `{"epoch":1}`)
 	require.NoError(t, err)
-	// The queue returns the zero Entry on a no-op; the only observable effect is
-	// that no new active command is added.
-	_ = entry2
 
 	active, scanErr := q.ScanActive(ctx, command.ScanFilter{DeviceID: "dev-u"})
 	require.NoError(t, scanErr)

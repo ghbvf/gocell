@@ -75,8 +75,9 @@ type Service struct {
 	sliceName  string
 
 	// authz is the optional T3 DEVICE-ENQUEUE-RBAC hook. Nil means no authz
-	// check (demo mode). Deployments that need role-based control set this via
-	// WithAuthz option or direct assignment.
+	// check (demo mode). It is set by direct field assignment in test helpers
+	// (e.g. svc.authz = rejectAll) or by the composition root; there is no
+	// exported WithAuthz option.
 	authz command.AuthzFunc
 }
 

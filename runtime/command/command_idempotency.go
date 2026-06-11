@@ -17,6 +17,10 @@ import (
 // single source shared by the producer funnel (EmitAsync writes it) and the relay
 // funnel (ClaimKeyFromEntry reads it back).
 //
+// Sibling key: CommandDeadlineMetadataKey — both keys are written together by
+// WithActiveUniqueness (via EmitAsync) and read together by the relay's
+// dispatchCommand.
+//
 // The "gocell.command." prefix deliberately avoids the kernel-reserved metadata
 // namespace (kout.ReservedMetadataKeys holds observability/principal keys like
 // trace_id / actor_id); a reserved key would be rejected by Entry.Validate at
@@ -29,6 +33,10 @@ const CommandIDMetadataKey = "gocell.command.idempotency_id"
 // async command's opt-in active-uniqueness terminal-deadline is carried. It is
 // written by WithActiveUniqueness (via EmitAsync) and read by the relay's
 // dispatchCommand to inject (key, deadline) into ctx via WithDispatchedUniqueness.
+//
+// Sibling key: CommandIDMetadataKey — both keys are written together by
+// WithActiveUniqueness (via EmitAsync) and read together by the relay's
+// dispatchCommand.
 //
 // The "gocell.command." prefix is in the same producer-owned namespace as
 // CommandIDMetadataKey and is non-reserved (kout.ReservedMetadataKeys holds
@@ -48,9 +56,10 @@ type emitConfig struct {
 }
 
 // EmitOption is a functional option for EmitAsync. It is deliberately narrow:
-// the only available option is WithActiveUniqueness, which couples active-queue
+// the currently available option is WithActiveUniqueness, which couples active-queue
 // uniqueness with a terminal-guaranteeing deadline so "uniqueness without
-// deadline" is inexpressible.
+// deadline" is inexpressible. New options should be reviewed for footgun risk
+// before being added (e.g. options that silently relax the coupling guard).
 type EmitOption func(*emitConfig)
 
 // WithActiveUniqueness opts an async command into queue active-uniqueness and

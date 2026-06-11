@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -190,6 +191,16 @@ func TestReconciler_StatelessEmitsOnEachTick(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, rec.Entries(), 2,
 		"second tick also emits — stateless producer, queue owns dedup via active-uniqueness")
+
+	// Both ticks must carry the SAME CommandIDMetadataKey per device+epoch: the
+	// active-uniqueness key is deterministic (rotateCommandID) and stable across
+	// ticks. If the key drifted between ticks the queue would admit a second
+	// command instead of coalescing, breaking the F1 guarantee.
+	tick1Key := rec.Entries()[0].Metadata()[rtcommand.CommandIDMetadataKey]
+	tick2Key := rec.Entries()[1].Metadata()[rtcommand.CommandIDMetadataKey]
+	assert.NotEmpty(t, tick1Key, "first tick must carry CommandIDMetadataKey")
+	assert.Equal(t, tick1Key, tick2Key,
+		"CommandIDMetadataKey must be identical across ticks for the same (device,epoch)")
 }
 
 // TestReconciler_FullSweepPerTick proves that a single Reconcile tick emits for
@@ -200,10 +211,12 @@ func TestReconciler_FullSweepPerTick(t *testing.T) {
 	ctx := context.Background()
 	repo := mem.NewDeviceRepository()
 
-	// Seed more than any hypothetical old BatchSize=100 would matter.
-	const totalCerts = 5
+	// Seed more than a page-sized batch to prove no LIMIT truncation occurs.
+	// (The old BatchSize=100 design was removed; 12 is well above any small
+	// default and keeps the test fast while being a meaningful falsifier.)
+	const totalCerts = 12
 	for i := 0; i < totalCerts; i++ {
-		id := "dev-sweep-" + string(rune('a'+i))
+		id := fmt.Sprintf("dev-sweep-%02d", i)
 		expiresAt := certTestBase.Add(time.Duration(i+1) * time.Hour)
 		require.NoError(t, repo.Create(ctx, &domain.Device{
 			ID: id, Name: id, Status: "online", LastSeen: certTestBase,

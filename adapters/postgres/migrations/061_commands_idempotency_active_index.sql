@@ -25,10 +25,23 @@
 -- EXACTLY MATCH this index predicate for PG to infer the arbiter and fire
 -- DO NOTHING on duplicate key within the active window.
 --
--- Non-CONCURRENTLY: matches how migration 031 created the original index.
--- This migration runs inside a goose transaction at example scale (no
--- pre-existing production load); plain CREATE avoids the CONCURRENTLY
--- footgun inside a transaction block.
+-- Non-CONCURRENTLY / in-transaction: acceptable ONLY at example/dev scale.
+-- The commands table has no production load in this context. A real fleet
+-- deployment MUST NOT use this form on a live commands table, because
+-- DROP INDEX + CREATE UNIQUE INDEX (non-CONCURRENTLY) holds ACCESS EXCLUSIVE
+-- on commands for the duration of the index build, blocking the entire command
+-- write path (Enqueue, status updates) for that window.
+--
+-- For production fleet deployment use instead:
+--   -- +goose no transaction
+--   DROP INDEX CONCURRENTLY IF EXISTS idx_commands_idempotency_key;
+--   CREATE UNIQUE INDEX CONCURRENTLY idx_commands_idempotency_key ...;
+-- with a phased build-verify-drop rollout (build new index → verify valid →
+-- drop old index) to keep the write path unblocked throughout.
+--
+-- The in-transaction non-CONCURRENTLY form is kept here intentionally: at
+-- small/example scale it provides DROP+CREATE atomicity (both succeed or both
+-- roll back), which is strictly better than the non-atomic CONCURRENTLY pair.
 --
 -- schema_guard.go: idx_commands_idempotency_key registration remains
 -- Unique:true, Columns:[]string{"(expr)"} — the WHERE predicate is not
