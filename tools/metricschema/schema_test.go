@@ -70,7 +70,10 @@ func TestBuild_CorebundleCapturesReachableTypedMetrics(t *testing.T) {
 	assert.Equal(t, "gocell_http_request_body_limit_rejections_total", httpBodyLimitRejections.FQName)
 	assert.Equal(t, "counter", httpBodyLimitRejections.Type)
 
-	vaultLogin := requireMetric(t, schema, "auth_login_total")
+	// #885: vault metrics build through the kernel metrics.Provider (no Subsystem
+	// field), so the schema name folds the former "vault" subsystem into the Name
+	// (auth_login_total → vault_auth_login_total). The FQName is unchanged.
+	vaultLogin := requireMetric(t, schema, "vault_auth_login_total")
 	assert.Equal(t, "gocell_vault_auth_login_total", vaultLogin.FQName)
 	assert.Equal(t, []string{"method", "result", "reason"}, vaultLogin.Labels)
 

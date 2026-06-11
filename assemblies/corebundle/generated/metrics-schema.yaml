@@ -11,17 +11,6 @@ metrics:
       labels:
         - reason
       file: runtime/auth/metrics.go
-    - name: auth_login_total
-      fqName: gocell_vault_auth_login_total
-      namespace: gocell
-      subsystem: vault
-      type: counter
-      help: Count of Vault auth Login attempts.
-      labels:
-        - method
-        - result
-        - reason
-      file: adapters/vault/transit_metrics.go
     - name: auth_refresh_gc_duration_seconds
       fqName: gocell_auth_refresh_gc_duration_seconds
       namespace: gocell
@@ -130,14 +119,6 @@ metrics:
       labels:
         - outcome
       file: runtime/observability/metrics/shutdown.go
-    - name: cached_key_version
-      fqName: gocell_vault_cached_key_version
-      namespace: gocell
-      subsystem: vault
-      type: gauge
-      help: Latest Vault Transit key version cached by this process; 0 means cache miss.
-      labels: []
-      file: adapters/vault/transit_metrics.go
     - name: cell_hook_duration_seconds
       fqName: gocell_cell_hook_duration_seconds
       namespace: gocell
@@ -634,26 +615,40 @@ metrics:
       labels:
         - cell
       file: runtime/observability/metrics/session_cache.go
-    - name: token_auth_healthy
+    - name: vault_auth_login_total
+      fqName: gocell_vault_auth_login_total
+      namespace: gocell
+      type: counter
+      help: Count of Vault auth Login attempts.
+      labels:
+        - method
+        - result
+        - reason
+      file: adapters/vault/transit_metrics.go
+    - name: vault_cached_key_version
+      fqName: gocell_vault_cached_key_version
+      namespace: gocell
+      type: gauge
+      help: Latest Vault Transit key version cached by this process; 0 means cache miss.
+      labels: []
+      file: adapters/vault/transit_metrics.go
+    - name: vault_token_auth_healthy
       fqName: gocell_vault_token_auth_healthy
       namespace: gocell
-      subsystem: vault
       type: gauge
       help: 1 when the Vault token renewal worker is healthy; 0 before the worker starts or while re-authenticating after a terminal renewal failure.
       labels: []
       file: adapters/vault/transit_metrics.go
-    - name: token_renew_failure_total
+    - name: vault_token_renew_failure_total
       fqName: gocell_vault_token_renew_failure_total
       namespace: gocell
-      subsystem: vault
       type: counter
       help: Number of Vault token renewal failures.
       labels: []
       file: adapters/vault/transit_metrics.go
-    - name: token_renew_success_total
+    - name: vault_token_renew_success_total
       fqName: gocell_vault_token_renew_success_total
       namespace: gocell
-      subsystem: vault
       type: counter
       help: Number of successful Vault token renewals.
       labels: []
