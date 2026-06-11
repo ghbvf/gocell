@@ -39,10 +39,18 @@ const (
 // its Layer. Unrecognized segments are reported as LayerUnknown — see
 // Classifier.Layer for the failure-loud rationale.
 var internalLayerByDir = map[string]string{
-	"kernel":    LayerKernel,
-	"runtime":   LayerRuntime,
-	"adapters":  LayerAdapters,
-	"cells":     LayerCells,
+	"kernel":   LayerKernel,
+	"runtime":  LayerRuntime,
+	"adapters": LayerAdapters,
+	"cells":    LayerCells,
+	// corecells/ is GoCell's own platform-cell module (#1560 go.work P5): the
+	// accesscore/auditcore/configcore cells live directly under the corecells
+	// module root (corecells/<cell>/...), not under a cells/ subdir. The
+	// base-relative first segment "corecells" therefore maps to LayerCells.
+	// Distinct from "cells" above, which classifies the framework-general
+	// project-local cells/ convention plus the documented mdm/cells/foo
+	// satellite fallback (see Classifier.Layer) — both are retained.
+	"corecells": LayerCells,
 	"pkg":       LayerPkg,
 	"cmd":       LayerCmd,
 	"examples":  LayerExamples,
@@ -217,16 +225,43 @@ func layerByGoCellModulePath(module string) (string, bool) {
 	return layerByFirstSegment(rel)
 }
 
-// Cell returns the cell ID for a package under <owningModule>/cells/<id>/...,
-// or "" if the package is not under any member module's cells/. The Go-reserved
-// "internal" segment (e.g. cells/internal/testoutbox — shared cell-test
-// helpers) is not a cell ID; Cell returns "" for paths under cells/internal/.
+// cellPrefixFor returns the import-path prefix under which importPath's cells
+// live, mirroring [Classifier.Layer]'s dual view so Cell works whether corecells
+// is seen as a separate workspace module OR a base-relative subdir of the core
+// module (the single-module classifier used by unit tests / core-only tools):
+//
+//   - A dedicated cells module (its own path classifies as LayerCells, e.g.
+//     .../corecells) holds cells directly under the module root → owner+"/".
+//   - Otherwise, if importPath's first owner-relative segment is a cells-layer
+//     dir (cells/ for core/example/mdm modules, OR corecells/ when corecells is
+//     viewed as a subdir of the core module) → owner+"/<seg>/".
+//   - Fallback owner+"/cells/" for the conventional layout.
+func cellPrefixFor(owner, importPath string) string {
+	if layer, ok := layerByGoCellModulePath(owner); ok && layer == LayerCells {
+		return owner + "/"
+	}
+	rel := strings.TrimPrefix(importPath, owner+"/")
+	if i := strings.IndexByte(rel, '/'); i >= 0 {
+		if seg := rel[:i]; internalLayerByDir[seg] == LayerCells {
+			return owner + "/" + seg + "/"
+		}
+	}
+	return owner + "/cells/"
+}
+
+// Cell returns the cell ID for a package under a member module's cells (either
+// <owningModule>/cells/<id>/... for core/example modules, <owningModule>/<id>/...
+// for the dedicated corecells module, or <coreModule>/corecells/<id>/... when
+// corecells is viewed as a base-relative subdir), or "" if the package is not
+// under any member module's cells. The Go-reserved "internal" segment (e.g.
+// corecells/internal/testoutbox — shared cell-test helpers) is not a cell ID;
+// Cell returns "" for paths under that internal/ root.
 func (c Classifier) Cell(importPath string) string {
 	owner := c.OwningModule(importPath)
 	if owner == "" {
 		return ""
 	}
-	prefix := owner + "/cells/"
+	prefix := cellPrefixFor(owner, importPath)
 	if !strings.HasPrefix(importPath, prefix) {
 		return ""
 	}
@@ -254,7 +289,7 @@ func (c Classifier) Slice(importPath string) string {
 		return ""
 	}
 	owner := c.OwningModule(importPath)
-	prefix := owner + "/cells/" + cell + "/slices/"
+	prefix := cellPrefixFor(owner, importPath) + cell + "/slices/"
 	if !strings.HasPrefix(importPath, prefix) {
 		return ""
 	}

@@ -607,7 +607,7 @@ func TestWalkthrough(t *testing.T) {
 		// mirrors the sibling outbox-route audit subtest's posture.
 		//
 		// Admin audit queries with no actorId are global. Non-admin callers keep
-		// the IDOR-safe self default in cells/auditcore/slices/auditquery/handler.go.
+		// the IDOR-safe self default in corecells/auditcore/slices/auditquery/handler.go.
 		var entries []json.RawMessage
 		testwait.External(t, "ssobff-bootstrap-audit-fail-entry-available", func() bool {
 			data, ok := fetchAuditEntries(

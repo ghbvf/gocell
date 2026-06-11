@@ -8,8 +8,8 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
-	configcell "github.com/ghbvf/gocell/cells/configcore"
-	configpg "github.com/ghbvf/gocell/cells/configcore/postgres"
+	configcell "github.com/ghbvf/gocell/corecells/configcore"
+	configpg "github.com/ghbvf/gocell/corecells/configcore/postgres"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"

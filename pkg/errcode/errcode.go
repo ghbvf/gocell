@@ -189,7 +189,7 @@ const (
 	// holder. Maps to HTTP 403 Forbidden — the request is structurally valid
 	// but policy-blocked. The DB-level last_admin_protected trigger
 	// (migrations/019_roles.sql) is the SQL safety net behind the service-
-	// level LastAdminGuard (cells/accesscore/internal/domain/admin.go).
+	// level LastAdminGuard (corecells/accesscore/internal/domain/admin.go).
 	ErrAuthLastAdminProtected Code = "ERR_AUTH_LAST_ADMIN_PROTECTED"
 
 	// Config-core cell error codes.

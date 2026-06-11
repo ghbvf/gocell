@@ -43,7 +43,7 @@ import (
 )
 
 // expectedUserRepoMethodSignatures is the canonical (method name → normalized
-// signature string) map for cells/accesscore/internal/ports.UserRepository
+// signature string) map for corecells/accesscore/internal/ports.UserRepository
 // after the issue #828 split. Signature string format: "(<params>) <results>",
 // where each param is "<name> <type>" (or "<name1>, <name2> <type>" for shared
 // type) and results use the same form. Multiple results are wrapped in `(...)`.
@@ -80,9 +80,9 @@ var expectedUserRepoMethodSignatures = map[string]string{
 func TestUserRepoMethodSetFrozen(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	iface := loadInterfaceType(t, root, "cells/accesscore/internal/ports", "UserRepository")
+	iface := loadInterfaceType(t, root, "corecells/accesscore/internal/ports", "UserRepository")
 	if iface == nil {
-		t.Fatal("USERREPO-METHOD-SET-FROZEN-01: UserRepository interface not found in cells/accesscore/internal/ports")
+		t.Fatal("USERREPO-METHOD-SET-FROZEN-01: UserRepository interface not found in corecells/accesscore/internal/ports")
 	}
 
 	// Explicit embedded-interface ban — keeps the signature map authoritative.
@@ -127,10 +127,10 @@ func TestUserRepoMethodSetFrozen(t *testing.T) {
 func TestUserRepoMethodSetFrozen_BlindSpotReverseSelfTest(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	sibling := loadInterfaceType(t, root, "cells/accesscore/internal/ports", "RoleRepository")
+	sibling := loadInterfaceType(t, root, "corecells/accesscore/internal/ports", "RoleRepository")
 	if sibling == nil {
 		t.Skip("USERREPO-METHOD-SET-FROZEN-01 blind-spot self-test: " +
-			"RoleRepository not found in cells/accesscore/internal/ports; skipping reverse self-test")
+			"RoleRepository not found in corecells/accesscore/internal/ports; skipping reverse self-test")
 		return
 	}
 

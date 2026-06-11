@@ -1,0 +1,25 @@
+id: flagwrite
+belongsToCell: configcore
+consistencyLevel: L1
+lifecycle: asset
+contractUsages:
+  - contract: http.config.flags.create.v1
+    role: serve
+  - contract: http.config.flags.update.v1
+    role: serve
+  - contract: http.config.flags.toggle.v1
+    role: serve
+  - contract: http.config.flags.delete.v1
+    role: serve
+verify:
+  unit:
+    - unit.flagwrite.service
+  contract:
+    - contract.http.config.flags.create.v1.serve
+    - contract.http.config.flags.update.v1.serve
+    - contract.http.config.flags.toggle.v1.serve
+    - contract.http.config.flags.delete.v1.serve
+  waivers: []
+
+allowedFiles:
+  - corecells/configcore/slices/flagwrite/**

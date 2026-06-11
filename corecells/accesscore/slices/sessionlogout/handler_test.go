@@ -1,0 +1,267 @@
+package sessionlogout
+
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/testutil"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
+	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
+	"github.com/ghbvf/gocell/runtime/auth/session"
+)
+
+// testTenantID is the canonical test tenant UUID used in sessionlogout tests.
+var testTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("sessionlogout_test: invalid testTenantID: " + err.Error())
+	}
+	return t
+}()
+
+const (
+	invalidUUID    = "not-a-uuid-string"
+	logoutBasePath = "/api/v1/access/sessions/"
+)
+
+// testCookieTTL mirrors accesscore.DefaultRefreshMaxAge (7 days). Logout only
+// emits a clear cookie (Max-Age=0), so the value is not asserted, but the
+// NewHandler signature now takes a time.Duration; a named const keeps it
+// readable and satisfies TEST-TIME-LITERAL-01.
+const testCookieTTL = 7 * 24 * time.Hour
+
+func newHandlerLogoutRefreshStore() refresh.Store {
+	clk := storetest.NewFakeClock(time.Now())
+	store, err := refreshmem.New(refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         time.Hour,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}, clk, nil)
+	if err != nil {
+		panic("test setup: " + err.Error())
+	}
+	return store
+}
+
+// setup wires the slice handler onto a celltest mux via RegisterRoutes — the
+// same code path cell_routes.go takes in production.
+func setup(t testing.TB) http.Handler {
+	t.Helper()
+	sessionRepo := testutil.RealSessionRepo(t)
+	sessID := testutil.TestID("sess-1")
+	_ = sessionRepo.Create(context.Background(), testTenantID, &session.Session{
+		ID:                sessID,
+		SubjectID:         testutil.TestID("usr-1"),
+		JTI:               "jti-" + sessID,
+		AuthzEpochAtIssue: 1,
+		CreatedAt:         time.Now(),
+		ExpiresAt:         time.Now().Add(time.Hour),
+	})
+	// Victim session owned by a different user — used to prove IDOR guard.
+	victimID := testutil.TestID("sess-victim")
+	_ = sessionRepo.Create(context.Background(), testTenantID, &session.Session{
+		ID:                victimID,
+		SubjectID:         testutil.TestID("usr-victim"),
+		JTI:               "jti-" + victimID,
+		AuthzEpochAtIssue: 1,
+		CreatedAt:         time.Now(),
+		ExpiresAt:         time.Now().Add(time.Hour),
+	})
+
+	svc := mustNewService(sessionRepo, newHandlerLogoutRefreshStore(), slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
+	mux := celltest.NewTestMux()
+	if err := NewHandler(svc, testCookieTTL).RegisterRoutes(mux); err != nil {
+		panic("RegisterRoutes: " + err.Error())
+	}
+	return mux
+}
+
+func TestHandleLogout(t *testing.T) {
+	tests := []struct {
+		name       string
+		sessionID  string
+		caller     string // subject injected into ctx; empty = no auth ctx
+		wantStatus int
+	}{
+		{
+			name:       "own session returns 204",
+			sessionID:  testutil.TestID("sess-1"),
+			caller:     testutil.TestID("usr-1"),
+			wantStatus: http.StatusNoContent,
+		},
+		{
+			name:       "nonexistent session returns 404",
+			sessionID:  testutil.TestID("no-such-sess"),
+			caller:     testutil.TestID("usr-1"),
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			// IDOR: another user's existing session id must look identical
+			// to a non-existent id — 404, not 403 — so attackers cannot
+			// enumerate session ownership.
+			name:       "other user's session returns 404 not 403",
+			sessionID:  testutil.TestID("sess-victim"),
+			caller:     testutil.TestID("usr-attacker"),
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			// Defense-in-depth: if the route is accidentally declared public
+			// (no auth middleware injected subject), the handler must fail
+			// closed rather than allow anonymous revokes.
+			name:       "missing subject in ctx returns 401",
+			sessionID:  testutil.TestID("sess-1"),
+			caller:     "",
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			// Defense-in-depth: Principal is present in context (ok=true) but
+			// Subject is empty — handler must still reject with 401.
+			name:       "principal present but empty subject returns 401",
+			sessionID:  testutil.TestID("sess-1"),
+			caller:     "empty-subject-sentinel",
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "invalid UUID in path returns 400",
+			sessionID:  invalidUUID,
+			caller:     testutil.TestID("usr-1"),
+			wantStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := setup(t)
+			w := httptest.NewRecorder()
+			var ctx context.Context
+			switch {
+			case tc.name == "principal present but empty subject returns 401":
+				// Inject a Principal with ok=true but Subject="" to exercise the
+				// second branch of: if !ok || p.Subject == ""
+				ctx = auth.WithPrincipal(context.Background(), &auth.Principal{
+					Kind:       auth.PrincipalUser,
+					Subject:    "",
+					AuthMethod: "test",
+				})
+			case tc.caller != "":
+				ctx = auth.TestContext(tc.caller, nil)
+			default:
+				ctx = context.Background()
+			}
+			req := httptest.NewRequest(http.MethodDelete, logoutBasePath+tc.sessionID, nil).WithContext(ctx)
+			h.ServeHTTP(w, req)
+			assert.Equal(t, tc.wantStatus, w.Code)
+
+			if tc.name == "invalid UUID in path returns 400" {
+				var body struct {
+					Error struct {
+						Code string `json:"code"`
+					} `json:"error"`
+				}
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+				assert.Equal(t, string(errcode.ErrValidationInvalidUUID), body.Error.Code)
+			}
+		})
+	}
+}
+
+// TestHandleLogout_CookieBehavior verifies that a successful 204 logout emits a
+// clearing Set-Cookie for __Host-gocell_rt, while error responses (401, 404) do not
+// emit any cookie at all. This drives through RegisterRoutes + mux so the
+// httpcookie.Middleware wrapping added in NewHandler is exercised.
+func TestHandleLogout_CookieBehavior(t *testing.T) {
+	t.Run("successful logout clears __Host-gocell_rt cookie", func(t *testing.T) {
+		h := setup(t)
+		w := httptest.NewRecorder()
+		ctx := auth.TestContext(testutil.TestID("usr-1"), nil)
+		req := httptest.NewRequest(http.MethodDelete, logoutBasePath+testutil.TestID("sess-1"), nil).WithContext(ctx)
+		h.ServeHTTP(w, req)
+		require.Equal(t, http.StatusNoContent, w.Code)
+
+		// The middleware emits Set-Cookie on 2xx; assert __Host-gocell_rt is cleared.
+		cookies := w.Result().Cookies()
+		var rtCookie *http.Cookie
+		for _, c := range cookies {
+			if c.Name == "__Host-gocell_rt" {
+				rtCookie = c
+				break
+			}
+		}
+		require.NotNil(t, rtCookie, "expected __Host-gocell_rt Set-Cookie header on 204 logout")
+		// Wire Max-Age=0 is parsed back to -1 by Go's http package.
+		assert.Equal(t, -1, rtCookie.MaxAge, "__Host-gocell_rt cookie should have MaxAge=-1 (wire: Max-Age=0)")
+		assert.Empty(t, rtCookie.Value, "__Host-gocell_rt cookie should have empty value on clear")
+		assert.True(t, rtCookie.HttpOnly, "__Host-gocell_rt cookie must be HttpOnly")
+		assert.True(t, rtCookie.Secure, "__Host-gocell_rt cookie must be Secure")
+		assert.Equal(t, http.SameSiteStrictMode, rtCookie.SameSite, "__Host-gocell_rt cookie must be SameSite=Strict")
+	})
+
+	t.Run("failed logout (404 not-owner) emits no __Host-gocell_rt cookie", func(t *testing.T) {
+		h := setup(t)
+		w := httptest.NewRecorder()
+		// usr-attacker tries to delete a session they don't own → 404
+		ctx := auth.TestContext(testutil.TestID("usr-attacker"), nil)
+		req := httptest.NewRequest(http.MethodDelete, logoutBasePath+testutil.TestID("sess-victim"), nil).WithContext(ctx)
+		h.ServeHTTP(w, req)
+		require.Equal(t, http.StatusNotFound, w.Code)
+
+		for _, c := range w.Result().Cookies() {
+			assert.NotEqual(t, "__Host-gocell_rt", c.Name, "expected no __Host-gocell_rt cookie on 404 error response")
+		}
+	})
+
+	t.Run("failed logout (401 missing auth) emits no __Host-gocell_rt cookie", func(t *testing.T) {
+		h := setup(t)
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodDelete, logoutBasePath+testutil.TestID("sess-1"), nil).WithContext(context.Background())
+		h.ServeHTTP(w, req)
+		require.Equal(t, http.StatusUnauthorized, w.Code)
+
+		for _, c := range w.Result().Cookies() {
+			assert.NotEqual(t, "__Host-gocell_rt", c.Name, "expected no __Host-gocell_rt cookie on 401 error response")
+		}
+	})
+}
+
+// TestHandler_Logout_BlankID tests the service directly with a blank sessionID
+// because the router pattern "/{id}" requires a non-empty path segment, making
+// an empty id unreachable via a real HTTP request. The service-level test
+// ensures the validation message uses the contract field name "id".
+func TestHandler_Logout_BlankID(t *testing.T) {
+	svc, repo := newTestService(t)
+	seedSession(repo, "sess-1", "usr-1")
+
+	err := svc.Logout(context.Background(), "", "usr-1")
+	require.Error(t, err)
+
+	var coded *errcode.Error
+	require.ErrorAs(t, err, &coded)
+	assert.Equal(t, errcode.ErrAuthLogoutInvalidInput, coded.Code)
+	assert.Equal(t, "validation: required field missing", coded.Message)
+	var gotField string
+	for _, attr := range coded.Details {
+		if attr.Key() == "field" {
+			s, ok := attr.Value().(string)
+			require.True(t, ok, "expected string for 'field' detail, got %T", attr.Value())
+			gotField = s
+			break
+		}
+	}
+	assert.Equal(t, "id", gotField, "details must carry the field name")
+}

@@ -5,8 +5,8 @@ package main
 import (
 	"testing"
 
-	accesscore "github.com/ghbvf/gocell/cells/accesscore"
-	accessmem "github.com/ghbvf/gocell/cells/accesscore/mem"
+	accesscore "github.com/ghbvf/gocell/corecells/accesscore"
+	accessmem "github.com/ghbvf/gocell/corecells/accesscore/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/session"
@@ -14,7 +14,7 @@ import (
 )
 
 // testTenantID is the canonical test tenant UUID used across all corebundle
-// integration tests. Matches cells/accesscore/cell_test.go:testTenantID and
+// integration tests. Matches corecells/accesscore/cell_test.go:testTenantID and
 // tests/integration/l2atomicity canonical tenant.
 const testTenantID = "00000000-0000-0000-0000-000000000001"
 

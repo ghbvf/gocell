@@ -1,0 +1,26 @@
+package accesscore
+
+import (
+	"context"
+
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/ports"
+)
+
+// NoopSetupLock is the public typed marker memstore composition roots wire to
+// satisfy the mandatory WithSetupLock option. Memstore mode does not need a
+// separate cross-process lock because memTxRunner.RunInTx holds store.mu for
+// the entire transaction closure (corecells/accesscore/internal/mem/store.go
+// memTxRunner.RunInTx), which by itself serializes all in-process goroutines
+// equivalently to PG SELECT FOR UPDATE held until commit.
+//
+// PG composition roots MUST use accesspg.NewBundle(pool, txm, clk).SetupLock() instead. Wiring
+// NoopSetupLock in PG mode is an upstream-Soft misconfiguration — the type
+// system here cannot distinguish "right shape per mode".
+type NoopSetupLock struct{}
+
+// Compile-time assertion: NoopSetupLock implements ports.SetupLockAcquirer.
+var _ ports.SetupLockAcquirer = NoopSetupLock{}
+
+// Acquire returns nil. The actual serialization happens in the ambient
+// memTxRunner.RunInTx that holds store.mu for the whole closure.
+func (NoopSetupLock) Acquire(context.Context) error { return nil }

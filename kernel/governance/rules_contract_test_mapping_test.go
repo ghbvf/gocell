@@ -113,7 +113,7 @@ func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeMissingContract(t *testing.T) {
 			strings.Contains(r.Message, "does not exist") &&
 			r.Fix != "" {
 			assert.Equal(t, SeverityError, r.Severity)
-			assert.Equal(t, "cells/accesscore/slices/session-login/slice.yaml", r.File)
+			assert.Equal(t, "corecells/accesscore/slices/session-login/slice.yaml", r.File)
 			found = true
 			break
 		}
@@ -331,7 +331,7 @@ func TestCONTRACTENDPOINTTESTMAPPING01_CandidateSliceHint(t *testing.T) {
 		require.Len(t, got, 1)
 		assert.Contains(t, got[0].Message, "candidate slices:",
 			"error message must include candidate slice hint; got: %s", got[0].Message)
-		assert.Contains(t, got[0].Message, "cells/accesscore/slices/session-login/slice.yaml",
+		assert.Contains(t, got[0].Message, "corecells/accesscore/slices/session-login/slice.yaml",
 			"candidate hint must include the actual slice file; got: %s", got[0].Message)
 	})
 
@@ -342,7 +342,7 @@ func TestCONTRACTENDPOINTTESTMAPPING01_CandidateSliceHint(t *testing.T) {
 		pm.Cells[metadatatest.CellIDAuditCore] = &metadata.CellMeta{
 			ID:   metadatatest.CellIDAuditCore,
 			Type: "core",
-			File: "cells/auditcore/cell.yaml",
+			File: "corecells/auditcore/cell.yaml",
 		}
 		val := NewValidator(pm, "", clock.Real())
 		got := findByCode(val.validateCONTRACTENDPOINTTESTMAPPING01(), codeCONTRACTENDPOINTTESTMAPPING01)
@@ -457,7 +457,7 @@ func minimalHTTPProject() *metadata.ProjectMeta {
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke." + cellID + ".startup"}},
 				Dir:              cellID,
-				File:             "cells/" + cellID + "/cell.yaml",
+				File:             "corecells/" + cellID + "/cell.yaml",
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
@@ -472,10 +472,10 @@ func minimalHTTPProject() *metadata.ProjectMeta {
 					// verify.contract intentionally empty — tests add serve entries as needed
 					Contract: []string{},
 				},
-				AllowedFiles: []string{"cells/" + cellID + "/slices/session-login/**"},
+				AllowedFiles: []string{"corecells/" + cellID + "/slices/session-login/**"},
 				Dir:          "session-login",
 				CellDir:      cellID,
-				File:         "cells/" + cellID + "/slices/session-login/slice.yaml",
+				File:         "corecells/" + cellID + "/slices/session-login/slice.yaml",
 			},
 		},
 		Contracts: map[string]*metadata.ContractMeta{

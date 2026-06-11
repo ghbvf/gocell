@@ -14,7 +14,7 @@
 // trace id and cross-cell correlation id extracted from the outbox.Entry
 // observability envelope. They are both populated by exactly one site:
 //
-//   - cells/auditcore/internal/appender/service.go — HandleEvent
+//   - corecells/auditcore/internal/appender/service.go — HandleEvent
 //     composite literal: TraceID: corr.TraceID() and
 //     CorrelationID: corr.CorrelationID(), where corr =
 //     correlation.New(string(obs.TraceID), string(obs.RequestID), string(obs.CorrelationID))
@@ -80,7 +80,7 @@
 //     anti-vacuity check for that last hop. No upstream funnel lock is added
 //     on top of the inherited envelope seal.
 //   - Permanent ceiling rationale: Go package visibility cannot express
-//     "only cells/auditcore/internal/appender may write these exported
+//     "only corecells/auditcore/internal/appender may write these exported
 //     struct fields". A type-system Hard upstream lock would require
 //     unexported fields or sealed constructors on ledger.Entry itself,
 //     which conflicts with the store's need to reconstruct entries from DB
@@ -215,7 +215,7 @@ var observabilityIDInjectionAllowlist = map[string]string{
 	// Writes TraceID: corr.TraceID() and CorrelationID: corr.CorrelationID()
 	// in HandleEvent (via correlation.New(string(obs.TraceID), string(obs.RequestID),
 	// string(obs.CorrelationID)), where obs = entry.Observability()).
-	"cells/auditcore/internal/appender/service.go": "injection: sole sanctioned appender",
+	"corecells/auditcore/internal/appender/service.go": "injection: sole sanctioned appender",
 
 	// TEST CONFORMANCE — ledger/storetest package provides contract tests for
 	// Store implementations; it writes TraceID and CorrelationID in test
@@ -321,7 +321,7 @@ func TestAuditTraceIDWriteCaller01(t *testing.T) {
 	// &e.Field scan-address shape is not caught by the assignment scanner
 	// (blind spot #1).
 	vacuityCheck := []string{
-		"cells/auditcore/internal/appender/service.go",
+		"corecells/auditcore/internal/appender/service.go",
 	}
 	for _, f := range vacuityCheck {
 		if _, seen := observed[f]; !seen {
@@ -444,7 +444,7 @@ func scanObsIDCompositeLitWrites(p *Pass, file *ast.File, rel string) []Diagnost
 						"ledger.Entry.%s at %s:%d is outside the sanctioned "+
 						"injection allowlist. TraceID and CorrelationID must flow "+
 						"exclusively from the outbox observability envelope via "+
-						"cells/auditcore/internal/appender. To add a new sanctioned "+
+						"corecells/auditcore/internal/appender. To add a new sanctioned "+
 						"site, add it to observabilityIDInjectionAllowlist with a rationale.",
 					w.field, rel, pos.Line,
 				),
@@ -486,7 +486,7 @@ func scanObsIDAssignWrites(p *Pass, file *ast.File, rel string) []Diagnostic {
 						"ledger.Entry.%s at %s:%d from %q is outside the sanctioned "+
 						"injection allowlist. TraceID and CorrelationID must flow "+
 						"exclusively from the outbox observability envelope via "+
-						"cells/auditcore/internal/appender "+
+						"corecells/auditcore/internal/appender "+
 						"(AUDIT-TRACE-ID-WRITE-CALLER-01). To add a new sanctioned site, "+
 						"add it to observabilityIDInjectionAllowlist with a rationale.",
 					sel.Sel.Name, rel, pos.Line, rel,

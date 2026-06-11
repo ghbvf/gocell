@@ -64,7 +64,7 @@ type pgExecutor struct {
 //
 // Passing a nil pool is permitted in unit tests that exercise logic firing
 // before any SQL method is called (e.g. ambient-tx guard tests in
-// cells/accesscore/internal/adapters/postgres/tx_assert_test.go). Any SQL
+// corecells/accesscore/internal/adapters/postgres/tx_assert_test.go). Any SQL
 // method invocation on a New(nil) instance will panic at the pool dereference.
 func New(pool *pgxpool.Pool) PGExecutor {
 	return &pgExecutor{pool: pool}

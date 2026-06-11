@@ -26,9 +26,9 @@ const ruleCredentialAuthorityAssertFunnel01 = "CREDENTIAL-AUTHORITY-ASSERT-FUNNE
 // ─── platform-symbol path constants (no bare literals) ────────────────────
 
 const (
-	credAuthorityPkgPath = PlatformModulePath + "/cells/accesscore/internal/credentialauthority"
+	credAuthorityPkgPath = PlatformCellsModulePath + "/accesscore/internal/credentialauthority"
 	credSessionPkgPath   = PlatformModulePath + "/runtime/auth/session"
-	credDomainUserPkg    = PlatformModulePath + "/cells/accesscore/internal/domain"
+	credDomainUserPkg    = PlatformCellsModulePath + "/accesscore/internal/domain"
 )
 
 // credDomainUserType is the unqualified name of the domain User type.
@@ -58,19 +58,19 @@ const (
 // false-positive on. Its gate PLACEMENT is governed independently by
 // CHANGEPASSWORD-INACTIVE-GATE-01. See ADR §A11.2 + §A16.
 var assertCallerAllowlist = []string{
-	"cells/accesscore/internal/credentialauthority/", // funnel itself
-	"cells/accesscore/slices/sessionlogin/",
-	"cells/accesscore/slices/sessionrefresh/",
-	"cells/accesscore/slices/sessionvalidate/",
-	"cells/accesscore/slices/identitymanage/", // #1017 pre-mutation inactive gate
+	"corecells/accesscore/internal/credentialauthority/", // funnel itself
+	"corecells/accesscore/slices/sessionlogin/",
+	"corecells/accesscore/slices/sessionrefresh/",
+	"corecells/accesscore/slices/sessionvalidate/",
+	"corecells/accesscore/slices/identitymanage/", // #1017 pre-mutation inactive gate
 }
 
 // sliceFunnelScopes are the slice prefixes whose production files MUST route
 // CanAuthenticate / PasswordVersion / RevokedAt reads through Assert.
 var sliceFunnelScopes = []string{
-	"cells/accesscore/slices/sessionlogin/",
-	"cells/accesscore/slices/sessionrefresh/",
-	"cells/accesscore/slices/sessionvalidate/",
+	"corecells/accesscore/slices/sessionlogin/",
+	"corecells/accesscore/slices/sessionrefresh/",
+	"corecells/accesscore/slices/sessionvalidate/",
 }
 
 // isAssertCallerAllowlisted reports whether a module-relative path may call
@@ -353,7 +353,7 @@ func typeOwner(t types.Type) *types.TypeName {
 func collectDownstreamCallerViolations(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	return runFunnelDualScan(t, cfg, []string{
-		"./cells/...",
+		"./corecells/...",
 		"./cmd/...",
 	}, func(p *Pass, file *ast.File, rel string) []Diagnostic {
 		if isAssertCallerAllowlisted(rel) {
@@ -368,9 +368,9 @@ func collectDownstreamCallerViolations(t *testing.T, cfg ConfigForExternalCell) 
 func collectUpstreamMandatoryViolations(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	return runFunnelDualScan(t, cfg, []string{
-		"./cells/accesscore/slices/sessionlogin/...",
-		"./cells/accesscore/slices/sessionrefresh/...",
-		"./cells/accesscore/slices/sessionvalidate/...",
+		"./corecells/accesscore/slices/sessionlogin/...",
+		"./corecells/accesscore/slices/sessionrefresh/...",
+		"./corecells/accesscore/slices/sessionvalidate/...",
 	}, func(p *Pass, file *ast.File, rel string) []Diagnostic {
 		if strings.HasSuffix(rel, "_test.go") || !isInSliceFunnelScope(rel) {
 			return nil
@@ -393,7 +393,7 @@ func scanUpstreamMandatoryFile(p *Pass, file *ast.File, rel string) []Diagnostic
 func collectCalleeReferenceViolations(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	return runFunnelDualScan(t, cfg, []string{
-		"./cells/...",
+		"./corecells/...",
 		"./cmd/...",
 		"./runtime/...",
 	}, func(p *Pass, file *ast.File, rel string) []Diagnostic {

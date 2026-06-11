@@ -19,7 +19,7 @@ Cell-native Go 工程底座。只保留稳定的开发规则和架构约束。
 
 ```
 kernel/       — Cell/Slice 运行时 + 治理工具（底座灵魂）
-cells/        — 平台 Cell 实现（accesscore / auditcore / configcore），每个 Cell 下含 slices/
+corecells/    — 平台 Cell 实现（accesscore / auditcore / configcore），每个 Cell 下含 slices/（独立 go.work 模块 github.com/ghbvf/gocell/corecells，#1560）
 contracts/    — 平台跨 Cell 边界契约（按 {kind}/{domain-path}/{version}/ 组织）
 journeys/     — 平台 Journey 验收规格（J-*.yaml）+ status-board.yaml（动态交付状态）
 assemblies/   — 物理打包配置（assembly.yaml）
@@ -36,9 +36,9 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 
 ### 依赖规则
 
-- kernel/ 不依赖 runtime/、adapters/、cells/（只依赖标准库 + pkg/ + gopkg.in/yaml.v3）
-- cells/ 依赖 kernel/ 和 runtime/，不依赖 adapters/（通过接口解耦）
-- runtime/ 可依赖 kernel/ 和 pkg/，不依赖 cells/、adapters/
+- kernel/ 不依赖 runtime/、adapters/、corecells/（只依赖标准库 + pkg/ + gopkg.in/yaml.v3）
+- corecells/ 依赖 kernel/ 和 runtime/，不依赖 adapters/（通过接口解耦）
+- runtime/ 可依赖 kernel/ 和 pkg/，不依赖 corecells/、adapters/
 - adapters/ 实现 kernel/ 或 runtime/ 定义的接口
 - cellmodules/ 是 Composition Root 层，可依赖所有层（绑定 cell↔adapter，对外暴露 Module() composition.CellModule）
 - examples/ 可以依赖所有层
@@ -57,7 +57,7 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 | L1 LocalTx | 单 cell 本地事务 | session 创建、审计写入 |
 | L2 OutboxFact | 本地事务 + outbox 发布 | session.created 事件、config.entry-upserted 事件 |
 | L3 WorkflowEventual | 跨 cell 最终一致 | 查询投影、CQRS、Saga |
-| L4 DeviceLatent | 设备长延迟闭环 | 命令回执、证书续期 |
+| L4 DeviceLatent | 设备长延迟闭环 | 命令回执、证书续期、状态收敛 |
 
 ## Go 编码规范
 

@@ -80,7 +80,7 @@
 // testdata packages (green / red_no_gate / red_gate_after_mutation /
 // red_conditional_gate_bypass) via archtest.Run(t, Typed(...)), sharing the same
 // changePasswordGateDiagnostics core as the production scan. Fixtures live
-// under cells/accesscore/ (not tools/archtest/testdata/) because they import
+// under corecells/accesscore/ (not tools/archtest/testdata/) because they import
 // the internal credentialauthority package.
 package archtest
 
@@ -116,7 +116,7 @@ func TestChangePasswordInactiveGate_01(t *testing.T) {
 
 	var sawTarget bool
 	diags := Run(t, Typed(TypedOpts{}, []string{
-		"./cells/accesscore/slices/identitymanage/...",
+		"./corecells/accesscore/slices/identitymanage/...",
 	}),
 		func(p *Pass) []Diagnostic {
 			if !p.Typed() || p.Fset == nil {
@@ -139,7 +139,7 @@ func TestChangePasswordInactiveGate_01(t *testing.T) {
 
 	if !sawTarget {
 		t.Fatalf("%s: target function %q not found under "+
-			"cells/accesscore/slices/identitymanage/ — renamed or removed? "+
+			"corecells/accesscore/slices/identitymanage/ — renamed or removed? "+
 			"The inactive-gate ordering check must not be a silent no-op.",
 			ruleChangePasswordInactiveGate01, cpgTargetFunc)
 	}
@@ -153,7 +153,7 @@ func TestChangePasswordInactiveGate_01(t *testing.T) {
 func TestChangePasswordInactiveGate_01_NegativeFixture(t *testing.T) {
 	t.Parallel()
 
-	const fixtureBase = "./cells/accesscore/slices/identitymanage/testdata/changepassword_inactive_gate"
+	const fixtureBase = "./corecells/accesscore/slices/identitymanage/testdata/changepassword_inactive_gate"
 
 	cases := []struct {
 		subdir         string

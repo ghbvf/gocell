@@ -22,11 +22,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
-	accesscore "github.com/ghbvf/gocell/cells/accesscore"
-	"github.com/ghbvf/gocell/cells/accesscore/accesscoretest"
-	accesspg "github.com/ghbvf/gocell/cells/accesscore/postgres"
-	auditcore "github.com/ghbvf/gocell/cells/auditcore"
-	configcore "github.com/ghbvf/gocell/cells/configcore"
+	accesscore "github.com/ghbvf/gocell/corecells/accesscore"
+	"github.com/ghbvf/gocell/corecells/accesscore/accesscoretest"
+	accesspg "github.com/ghbvf/gocell/corecells/accesscore/postgres"
+	auditcore "github.com/ghbvf/gocell/corecells/auditcore"
+	configcore "github.com/ghbvf/gocell/corecells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -60,7 +60,7 @@ const (
 // bootstrapPassword and adminPassword are initialized once per test process
 // with crypto/rand-derived base64url strings (16 bytes → 22 ASCII chars,
 // well within MinPasswordBytes=8 / MaxPasswordBytes=72 of
-// cells/accesscore/slices/setup/service.go). Process-scoped (not per-harness)
+// corecells/accesscore/slices/setup/service.go). Process-scoped (not per-harness)
 // so tests reference them by name without threading the value through every
 // helper.
 var (
@@ -272,7 +272,7 @@ func bootL2Assembly(t *testing.T, pgOutboxOverride outbox.Writer) *l2Harness {
 // pgStores bundles the PG-backed accesscore stores plus the pool / tx manager
 // that all of them share. The store wiring is exposed as a slice of
 // accesscore.Option values because the underlying repository types live in
-// `cells/accesscore/internal/ports`, which is not importable from this test
+// `corecells/accesscore/internal/ports`, which is not importable from this test
 // package; storing options sidesteps the visibility constraint without
 // leaking unexported types.
 type pgStores struct {

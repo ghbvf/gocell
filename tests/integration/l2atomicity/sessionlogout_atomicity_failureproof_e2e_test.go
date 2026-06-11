@@ -15,7 +15,7 @@ import (
 )
 
 // Topic literals are kept inlined (not imported from
-// cells/accesscore/internal/dto) because the tests/integration/l2atomicity
+// corecells/accesscore/internal/dto) because the tests/integration/l2atomicity
 // package cannot import internal/. Same "expected duplication" rationale as
 // eventRoleAssignedV1 in rbacassign_atomicity_failureproof_e2e_test.go: if the
 // producer-side constant changes, this test must be updated in lockstep — and

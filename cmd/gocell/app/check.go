@@ -140,10 +140,9 @@ func checkContractHealth(ctx context.Context, args []string) error {
 		return err
 	}
 
-	parser := metadata.NewParser(root, locatorOpts...)
-	project, err := parser.Parse()
+	project, err := parseProjectGuarded(root, locatorOpts...)
 	if err != nil {
-		return fmt.Errorf(errMetadataParse, err)
+		return err
 	}
 
 	reg := registry.NewContractRegistry(project)
@@ -282,10 +281,9 @@ func checkSliceCoverage(args []string) error {
 		return err
 	}
 
-	parser := metadata.NewParser(root, locatorOpts...)
-	project, err := parser.Parse()
+	project, err := parseProjectGuarded(root, locatorOpts...)
 	if err != nil {
-		return fmt.Errorf(errMetadataParse, err)
+		return err
 	}
 
 	if *cellID != "" {
@@ -346,9 +344,9 @@ func sliceCoverageForCell(root string, project *metadata.ProjectMeta, cid string
 // messages; cell must be non-nil.
 func sliceDirCheck(root, cid string, cell *metadata.CellMeta) []governance.ValidationResult {
 	// Derive the slices directory from the cell's file path:
-	//   cell.File = "cells/accesscore/cell.yaml"
-	//   cellDir   = "cells/accesscore"
-	//   slicesDir = "<root>/cells/accesscore/slices"
+	//   cell.File = "corecells/accesscore/cell.yaml"
+	//   cellDir   = "corecells/accesscore"
+	//   slicesDir = "<root>/corecells/accesscore/slices"
 	// This works uniformly for conventional and Manifest layouts.
 	cellDir := filepath.Dir(filepath.FromSlash(cell.File))
 	slicesRelDir := filepath.ToSlash(filepath.Join(cellDir, "slices"))
@@ -396,7 +394,7 @@ func sliceMetaCheck(project *metadata.ProjectMeta, cid string) []governance.Vali
 		return nil
 	}
 	// The canonical parent directory for this cell's slices is derived from the
-	// cell's own file path (e.g. "cells/accesscore/cell.yaml" → "cells/accesscore/slices").
+	// cell's own file path (e.g. "corecells/accesscore/cell.yaml" → "corecells/accesscore/slices").
 	// This handles both top-level cells and cells nested under examples/.
 	cellDir := filepath.Dir(cellMeta.File)
 	expectedSlicesParent := filepath.ToSlash(filepath.Join(cellDir, "slices"))
@@ -461,10 +459,9 @@ func checkAssemblyCompleteness(args []string) error {
 		return err
 	}
 
-	parser := metadata.NewParser(root, locatorOpts...)
-	project, err := parser.Parse()
+	project, err := parseProjectGuarded(root, locatorOpts...)
 	if err != nil {
-		return fmt.Errorf(errMetadataParse, err)
+		return err
 	}
 
 	asm, ok := project.Assemblies[*id]
@@ -528,10 +525,9 @@ func checkJourneyReadiness(args []string) error {
 		return err
 	}
 
-	parser := metadata.NewParser(root, locatorOpts...)
-	project, err := parser.Parse()
+	project, err := parseProjectGuarded(root, locatorOpts...)
 	if err != nil {
-		return fmt.Errorf(errMetadataParse, err)
+		return err
 	}
 
 	statusCount := buildStatusCount(project)
@@ -669,10 +665,9 @@ func checkL0Imports(args []string) error {
 		return err
 	}
 
-	parser := metadata.NewParser(root, locatorOpts...)
-	project, err := parser.Parse()
+	project, err := parseProjectGuarded(root, locatorOpts...)
 	if err != nil {
-		return fmt.Errorf(errMetadataParse, err)
+		return err
 	}
 
 	if *cellID != "" {
@@ -797,18 +792,20 @@ func cellDeclaresL0Dependencies(root string, cm *metadata.CellMeta) bool {
 // returned as error ValidationResults but the import map is still populated.
 //
 // Cell directory is derived from cm.File (the actual parsed cell.yaml path),
-// not from "cells/<cm.ID>", so cells under examples/**/cells/ are also resolved
-// correctly. This mirrors sliceMetaCheck which already uses cellMeta.File.
+// not from "cells/<cm.ID>". The sibling-cell import prefix is then read off a
+// loaded package path (deriveCellImportPrefix), NOT hardcoded to one module, so
+// the check is layout-agnostic: root cells/, the corecells flat module (#1560,
+// import root .../corecells/) and examples/**/cells/ all resolve their sibling
+// L0 imports correctly. This mirrors sliceMetaCheck which uses cellMeta.File.
 func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []governance.ValidationResult, bool) {
-	const cellsImportPrefix = "github.com/ghbvf/gocell/cells/"
 	cellDir := filepath.Dir(filepath.FromSlash(cm.File))
+	buildHint := "run `go build ./...` in " + filepath.ToSlash(cellDir)
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedImports,
 		Dir:  filepath.Join(root, cellDir),
 	}
-	// ModeModule (GOWORK=off): uniform go.work-agnostic loading. Today this loads
-	// a subdir of the root module, but module mode stays correct if cells/ ever
-	// splits into its own module. See tools/packagesload.
+	// ModeModule (GOWORK=off): uniform go.work-agnostic loading — correct now
+	// that the platform cells live in their own corecells module. See tools/packagesload.
 	pkgs, err := packagesload.Load(packagesload.ModeModule, cfg, "./...")
 	if err != nil {
 		return nil, []governance.ValidationResult{{
@@ -818,38 +815,72 @@ func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []gov
 			File:      filepath.ToSlash(cm.File),
 			Scope:     cmdL0Imports,
 			Message:   fmt.Sprintf("packages.Load failed for cell %q: %v", cm.ID, err),
-			Fix:       "ensure the cell directory compiles cleanly; run `go build ./cells/<cellID>/...` to identify build errors",
+			Fix:       "ensure the cell directory compiles cleanly; " + buildHint + " to identify build errors",
 		}}, true
 	}
+
+	// Derive the sibling-cell import prefix from the cell's own loaded package
+	// path so it is module-agnostic; empty means underivable → skip sibling
+	// detection (no false positives) rather than match every import.
+	cellsImportPrefix := deriveCellImportPrefix(pkgs, filepath.Base(cellDir))
 
 	var loadErrs []governance.ValidationResult
 	imported := make(map[string]bool)
 	for _, pkg := range pkgs {
-		if len(pkg.Errors) > 0 {
-			for _, pe := range pkg.Errors {
-				loadErrs = append(loadErrs, governance.ValidationResult{
-					Code:      governance.RuleCode("CHECK-L0-LOAD-ERROR"),
-					Severity:  governance.SeverityError,
-					IssueType: governance.IssueInvalid,
-					File:      filepath.ToSlash(cm.File),
-					Scope:     cmdL0Imports,
-					Message:   fmt.Sprintf("packages.Load error for cell %q package %q: %v", cm.ID, pkg.PkgPath, pe),
-					Fix:       "fix the compilation error in the listed package; run `go build ./cells/<cellID>/...` to reproduce",
-				})
-			}
+		for _, pe := range pkg.Errors {
+			loadErrs = append(loadErrs, governance.ValidationResult{
+				Code:      governance.RuleCode("CHECK-L0-LOAD-ERROR"),
+				Severity:  governance.SeverityError,
+				IssueType: governance.IssueInvalid,
+				File:      filepath.ToSlash(cm.File),
+				Scope:     cmdL0Imports,
+				Message:   fmt.Sprintf("packages.Load error for cell %q package %q: %v", cm.ID, pkg.PkgPath, pe),
+				Fix:       "fix the compilation error in the listed package; " + buildHint + " to reproduce",
+			})
 		}
-		for importPath := range pkg.Imports {
-			after, ok := strings.CutPrefix(importPath, cellsImportPrefix)
-			if !ok {
-				continue
-			}
-			importedCellID := strings.SplitN(after, "/", 2)[0]
-			if importedCellID != cm.ID {
-				imported[importedCellID] = true
-			}
+		if cellsImportPrefix != "" {
+			collectSiblingCellImports(pkg, cellsImportPrefix, cm.ID, imported)
 		}
 	}
 	return imported, loadErrs, false
+}
+
+// collectSiblingCellImports records into imported the sibling cell IDs that pkg
+// imports under cellsImportPrefix (the first path segment after the prefix),
+// skipping the cell's own ID.
+func collectSiblingCellImports(pkg *packages.Package, cellsImportPrefix, selfCellID string, imported map[string]bool) {
+	for importPath := range pkg.Imports {
+		after, ok := strings.CutPrefix(importPath, cellsImportPrefix)
+		if !ok {
+			continue
+		}
+		if id := strings.SplitN(after, "/", 2)[0]; id != selfCellID {
+			imported[id] = true
+		}
+	}
+}
+
+// deriveCellImportPrefix returns the import-path prefix shared by sibling cells
+// of the cell whose own packages are pkgs and whose directory base name is
+// cellDirName. The cell-root package path ends with "/<cellDirName>", so its
+// parent prefix (kept with the trailing slash) is the sibling-cell import root.
+// Reading it off a real loaded path makes the L0-import check layout-agnostic
+// (root cells/, corecells flat module, examples/*/cells/) instead of assuming
+// one module. The shortest qualifying path is the cell root (sub-packages are
+// longer), guarding against a sub-dir that happens to share the cell name.
+// Returns "" when no loaded package qualifies (caller skips sibling detection).
+func deriveCellImportPrefix(pkgs []*packages.Package, cellDirName string) string {
+	suffix := "/" + cellDirName
+	best := ""
+	for _, pkg := range pkgs {
+		if strings.HasSuffix(pkg.PkgPath, suffix) && (best == "" || len(pkg.PkgPath) < len(best)) {
+			best = pkg.PkgPath
+		}
+	}
+	if best == "" {
+		return ""
+	}
+	return strings.TrimSuffix(best, cellDirName) // keeps the trailing "/"
 }
 
 // l0UndeclaredImports finds imported cells not declared as L0 dependencies.

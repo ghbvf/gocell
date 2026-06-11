@@ -81,7 +81,7 @@ func TestCellsNoRouteMuxWrapper(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 
-	scope := DirsScope(root, []string{"cells"})
+	scope := DirsScope(root, platformCellScanDirs())
 	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, f := range p.Files {

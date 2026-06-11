@@ -379,7 +379,7 @@ func scanSliceEmitTopics(root string, ref sliceRef, fileForError string) (map[st
 	}
 
 	// Derive cellDir from the slice's directory (ref.dir is slash-separated,
-	// e.g. "cells/accesscore/slices/sessionlogin"). The cell directory is two
+	// e.g. "corecells/accesscore/slices/sessionlogin"). The cell directory is two
 	// levels up from the slice directory. Using path.Dir twice avoids
 	// hardcoding the "cells" layout token, satisfying
 	// LOCATOR-DISCOVERY-FUNNEL-01.A5.

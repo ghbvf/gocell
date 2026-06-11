@@ -11,7 +11,7 @@
 //
 //  1. runtime/audit — authoritative exported consts (ReasonMissingHeader,
 //     ReasonWrongCredentials, ReasonRateLimited). These are the canonical values.
-//  2. cells/accesscore/slices/setup — the whitelist map in validBootstrapAuthFailReasons
+//  2. corecells/accesscore/slices/setup — the whitelist map in validBootstrapAuthFailReasons
 //     (which now references the runtime/audit consts directly — C5 change).
 //  3. runtime/auth/bootstrap.go — inline string literals in the middleware
 //     (runtime/auth deliberately keeps its own literals per layering — it cannot
@@ -21,8 +21,8 @@
 // ## Why this invariant exists
 //
 // The bootstrap auth-fail event flows from runtime/auth (producer of the reason
-// string) through cells/accesscore/slices/setup (whitelist validation + emit) to
-// cells/auditcore/slices/auditappendbootstrap (consume + append). A drift in any
+// string) through corecells/accesscore/slices/setup (whitelist validation + emit) to
+// corecells/auditcore/slices/auditappendbootstrap (consume + append). A drift in any
 // of the three sites means events are either silently dropped (producer sends
 // unknown reason → whitelist rejects → DLX) or ledger entries carry invalid
 // reasons (AppendBootstrapAuthFail whitelist rejects → DLX).
@@ -32,7 +32,7 @@
 // The archtest uses go/types typed package loading to enumerate exported string
 // constants from runtime/audit (authoritative source) and compares them against
 // string literals extracted via AST scan from runtime/auth/bootstrap.go and
-// the const-eval'd map keys in cells/accesscore/slices/setup. Typed loading
+// the const-eval'd map keys in corecells/accesscore/slices/setup. Typed loading
 // (Run with a Production scope) prevents const-value indirection from bypassing the check.
 //
 // Hard upgrade path: generate a shared compile-time constant set from the three
@@ -85,9 +85,9 @@ const bootstrapGoSuffix = "/runtime/auth/bootstrap.go"
 // authoritative Reason* constants live.
 const runtimeAuditPkgSuffix = "/runtime/audit"
 
-// setupPkgSuffix is the package path suffix for cells/accesscore/slices/setup,
+// setupPkgSuffix is the package path suffix for corecells/accesscore/slices/setup,
 // the producer-side whitelist site (third reason set).
-const setupPkgSuffix = "/cells/accesscore/slices/setup"
+const setupPkgSuffix = "/corecells/accesscore/slices/setup"
 
 // setupWhitelistVarName is the package-level map var whose keys are the
 // producer-side reason whitelist (keyed by audit.Reason* selector exprs).
@@ -98,7 +98,7 @@ const setupWhitelistVarName = "validBootstrapAuthFailReasons"
 //
 //  1. runtime/audit exported Reason* consts (authoritative).
 //  2. runtime/auth/bootstrap.go inline string literals (producer middleware).
-//  3. cells/accesscore/slices/setup/service.go validBootstrapAuthFailReasons map
+//  3. corecells/accesscore/slices/setup/service.go validBootstrapAuthFailReasons map
 //     keys (whitelist validation — after C5 these reference runtime/audit consts,
 //     so the typed-load check verifies the map keys resolve to the same values).
 func TestBootstrapReasonSetEquivalence01(t *testing.T) {
@@ -110,7 +110,7 @@ func TestBootstrapReasonSetEquivalence01(t *testing.T) {
 	setupPkg := modPath + setupPkgSuffix
 
 	// Step 1: collect authoritative Reason* const values from runtime/audit AND
-	// the producer-side whitelist map keys from cells/accesscore/slices/setup,
+	// the producer-side whitelist map keys from corecells/accesscore/slices/setup,
 	// in a single typed pass. The setup keys are audit.Reason* selector exprs;
 	// TypesInfo resolves them to their underlying string const values, so this
 	// catches drift even though the source uses const references (not literals).
@@ -173,7 +173,7 @@ func TestBootstrapReasonSetEquivalence01(t *testing.T) {
 			"runtime/audit Reason* consts (%v) — drift means events may be silently DLX'd",
 		ruleBootstrapReasonSetEquivalence01, authReasons, auditReasons)
 	assert.Equal(t, auditReasons, setupReasons,
-		"%s: %s map keys in cells/accesscore/slices/setup (%v) must equal "+
+		"%s: %s map keys in corecells/accesscore/slices/setup (%v) must equal "+
 			"runtime/audit Reason* consts (%v) — drift means the producer whitelist "+
 			"rejects valid reasons (→ DLX) or admits invalid ones",
 		ruleBootstrapReasonSetEquivalence01, setupWhitelistVarName, setupReasons, auditReasons)

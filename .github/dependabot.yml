@@ -61,3 +61,17 @@ updates:
       # keep in sync with the root gomod entry: gofumpt is pinned to the
       # version vendored by the pinned golangci-lint release.
       - dependency-name: "mvdan.cc/gofumpt"
+
+  - package-ecosystem: "gomod"
+    directory: "/corecells"
+    schedule:
+      interval: "weekly"
+    groups:
+      go-x-modules:
+        patterns:
+          - "golang.org/x/*"
+      go-other-modules:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "golang.org/x/*"

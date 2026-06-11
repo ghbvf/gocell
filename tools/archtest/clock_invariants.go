@@ -85,13 +85,13 @@ const clockMustHaveClockFuncName = "MustHaveClock"
 // clockAllowedRealCallerPaths lists the production-code paths that may call
 // kernel/clock.Real() directly.
 var clockAllowedRealCallerPaths = []string{
-	"kernel/clock/clock.go",                 // Real() factory definition
-	"cmd/corebundle/",                       // main composition root
-	"cmd/gocell/",                           // gocell CLI composition root
-	"gocell.go",                             // top-level entry
-	"tests/e2e/internal/clients/clients.go", // e2e suite composition root
-	"cells/accesscore/internal/testutil/",   // SessionRepoForTest / RealSessionRepo
-	"cells/configcore/configcoretest/",      // BuildWriteService / BuildSubscribeService default clock
+	"kernel/clock/clock.go",                   // Real() factory definition
+	"cmd/corebundle/",                         // main composition root
+	"cmd/gocell/",                             // gocell CLI composition root
+	"gocell.go",                               // top-level entry
+	"tests/e2e/internal/clients/clients.go",   // e2e suite composition root
+	"corecells/accesscore/internal/testutil/", // SessionRepoForTest / RealSessionRepo
+	"corecells/configcore/configcoretest/",    // BuildWriteService / BuildSubscribeService default clock
 }
 
 // clockIsAllowedRealCallerPath reports whether rel is exempt from the gate.

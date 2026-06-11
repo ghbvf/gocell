@@ -22,7 +22,7 @@ func TestFMT13_MissingEndpointsHTTP(t *testing.T) {
 				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
 				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.accesscore.startup"}},
 				Dir:              "accesscore",
-				File:             "cells/accesscore/cell.yaml",
+				File:             "corecells/accesscore/cell.yaml",
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{},

@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/cells/auditcore/auditcoretest"
+	"github.com/ghbvf/gocell/corecells/auditcore/auditcoretest"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -37,7 +37,7 @@ import (
 //
 // The full programmatic proof of accesscore -> outbox -> rabbitmq ->
 // auditcore -> hash-chain commits in one transaction is owned by
-// tests/integration/l2atomicity/ + cells/auditcore/slices/auditappendsession
+// tests/integration/l2atomicity/ + corecells/auditcore/slices/auditappendsession
 // 's in-package conformance suite.
 func TestJAuditlogintrailEventConsume(t *testing.T) {
 	t.Parallel()

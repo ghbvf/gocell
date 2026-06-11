@@ -9,7 +9,7 @@
 #     Naming:    the __Host- prefix is browser-enforced host-binding (requires
 #                Secure, no Domain, Path=/) so a sibling subdomain cannot set or
 #                override this long-lived refresh credential.
-#     Source:    httpcookie.Middleware (cells/accesscore/internal/httpcookie)
+#     Source:    httpcookie.Middleware (corecells/accesscore/internal/httpcookie)
 #                wraps the response writer and writes the Set-Cookie header
 #                before the status is committed.
 #     Note:      the response body also returns refreshToken for clients that
