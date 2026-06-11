@@ -204,13 +204,13 @@ Enforcement 演进：
   4 份 golden 已 `gocell generate metrics-schema --all` regen + `go test ./tools/metricschema/...` 绿；无 wire 改名分支。
 - **无双注册**：两 collector 各仅 configcore 消费；configcore 自建一次 + corebundle 停建 = 恰一次。
 - **`ConfigEventCollector` 前提纠正**：原表述「configcore 专属」有误——它由 accesscore + configcore + corebundle config-event middleware 共同消费且 `Validate` required，是真·跨 cell 字段，**保留**在 `SharedDeps`。
-- **`ConfigKeyProvider` 残留（唯一未收口字段）**：vault-transit 路径经 `adapters/vault.TransitMetrics`（raw prometheus registry），受 `adapterPromCallerAllowlist` 姿态阻挡，configcore 自建被 **#885**（vault TransitMetrics → kernel Provider）gate；#885 落地后该字段随之移入 configcore，`SharedDeps` 即完全 cell-agnostic。`#1413` 保持 open 跟踪此残留。
-- `adapters/prometheus.RegisterOrReuseCounter` 迁移后无生产调用方，其 `adapterPromCallerAllowlist` 置空（symbol 仍受治理，未来调用方须带理由加入）；export + 自测保留（删除留作后续 cleanup）。
+- **`ConfigKeyProvider` 已收口（#885 + #1413 同 PR 落地，2026-06）**：#885 把 `adapters/vault.TransitMetrics` 从 raw `client_golang` registry 迁到 kernel `metrics.Provider`，vault 非 test 代码 client_golang-free；由此 `cellmodules/configcore` 可直接 import vault 并**自建** key provider（env + `shared.MetricsProvider`，与已自建的 cursor codec / collector 同范式），无 client_golang 入 cellmodules。`ConfigKeyProvider` 字段从 `SharedDeps` 移除，cmd 不再构造/透传，`SharedDeps` 即**完全 cell-agnostic**。选 self-build 而非「通用 inbound typed-dep 框架」：本 ADR §参考框架已 reject 全局 registry，且 generated module list 使构造 option 路径与 codegen funnel 冲突；self-build = fx.Private self-provide 范式。
+- **adapter-public prom funnel 已删除（#885）**：5 个 outer-ring passthrough wrapper（`RegisterOrReuseCounter` / `NewCounter` / `NewCounterVec` / `NewGauge` / `NewGaugeFunc`）连同 `adapterPromCallerAllowlist` 条目删除；funnel 仅剩 inner ring `adapters/prometheus/internal/promwrap`，**upstream 评级 Medium→Hard**（Go `internal/` 可见性，外部不可 import）。`TestMetricsFunnel_SymbolSentinel` 收窄到两个工厂导出（`NewMetricProvider` / `NewHookObserver`）。
 
 **参考**：
 - 单源生命周期对标：uber-go/fx `fx.Lifecycle.Append(Hook{OnStart,OnStop})`——一次注册派生 start/stop 双向，对应 `ModuleResult.Resources → {WithManagedResource, rollback}`。
-- Archtest：`WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01`（`tools/archtest/withmanagedresource_cellmodule_funnel_test.go`）；`MODULE-PROVIDE-NO-VALUE-HANDOFF-01`（已扩展 ModuleResult 字段冻结）。
-- gh #885（vault metrics → kernel Provider，解锁 ConfigKeyProvider 收口）；gh #1413（剩余范围跟踪）。
+- Archtest：`WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01`（`tools/archtest/withmanagedresource_cellmodule_funnel_test.go`）；`MODULE-PROVIDE-NO-VALUE-HANDOFF-01`（已扩展 ModuleResult 字段冻结）；`SHAREDDEPS-FIELDSET-FROZEN-01`（`tools/archtest/shareddeps_fieldset_frozen_test.go`，reflect 冻结 `SharedDeps` 导出字段集，把 cell-agnostic invariant 从 Soft 升 Hard——任何字段增/删/改触发 golden diff，强制在本 godoc 论证 cross-cutting；推进 #1412）。
+- gh #885（vault metrics → kernel Provider，funnel Medium→Hard）+ gh #1413（ConfigKeyProvider 收口，SharedDeps cell-agnostic）：**已落地**（#885 + #1413 合并 PR）。对标 ref：uber-go/fx `supply.go` / `module.go`（fx.Private self-provide）、opentelemetry-specification `metrics/api.md`（subscribe-to-change → sync gauge）。
 
 ---
 
