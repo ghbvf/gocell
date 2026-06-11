@@ -257,11 +257,11 @@ enforcement 索引（§7）**无新增**——值校验由 §4 既有三 funnel 
 
 **触发**：#1757 落地 §5 演进路径 **archetype ②（reconcile → command）**——iotdevice 证书续期。按 ai-robust.md「ADR amendment 必查」逐行重评 §4 + 重写矛盾原文（§5 第 5 子项原把 ② 记为「#1757 同步 HTTP→command」，与 #1669 ⑤ 设计选定的 ② = reconcile→command 不符，已就地修正 + 加修订注）。
 
-**落地形态**：`examples/iotdevice/cells/devicecell/slices/devicecertrenewal.Reconciler` 实现 `reconcile.Reconciler`（producer 落在专属 `devicecertrenewal` slice，声明 `command.devicecommand.enqueue.v1` `role: invoke` + waiver——formal contract-usage 所有权，#1812 F3；证书状态（`cert_epoch` / `cert_expires_at` / `renewal_requested_epoch`）以列形式持久化在 `devices` 行，由 deviceregister 播种），由 cell 的第二个 `reconcile.Loop`（`devicecert.renewal`，`TickerTrigger` off `c.clk`，`buildCertRenewalSweeper`，镜像既有 `buildCommandSweeper`）驱动。每 tick 扫 `devices` 表的近过期证书 → 对每台设备经 `command.EmitAsync(ctx, clk, bootstrapEmitter, cmdenqueue.DispatchID, deviceID, commandID, {commandType: "rotate-cert", …})` emit 一条 `command.devicecommand.enqueue.v1`，复用 #1698 已激活的 bootstrap emitter/txRunner + 既有 `WithCommandDispatch` dispatcher-map（**复用同一 enqueue dispatch，无新 map 项、无新契约**）。
+**落地形态**：`examples/iotdevice/cells/devicecell/slices/devicecertrenewal.Reconciler` 实现 `reconcile.Reconciler`（producer 落在专属 `devicecertrenewal` slice，声明 `command.devicecommand.enqueue.v1` `role: invoke` + waiver——formal contract-usage 所有权，#1812 F3；证书状态（`cert_epoch` / `cert_expires_at`）以列形式持久化在 `devices` 行，由 deviceregister 播种），由 cell 的第二个 `reconcile.Loop`（`devicecert.renewal`，`TickerTrigger` off `c.clk`，`buildCertRenewalSweeper`，镜像既有 `buildCommandSweeper`）驱动。每 tick 扫 `devices` 表的近过期证书 → 对每台设备经 `command.EmitAsync(ctx, clk, bootstrapEmitter, cmdenqueue.DispatchID, deviceID, commandID, {commandType: "rotate-cert", …})` emit 一条 `command.devicecommand.enqueue.v1`，复用 #1698 已激活的 bootstrap emitter/txRunner + 既有 `WithCommandDispatch` dispatcher-map（**复用同一 enqueue dispatch，无新 map 项、无新契约**）。
 
-**幂等 forcing function（#1812 F1 重评）**：sweep 每 interval 都扫到同一台未续期设备，但 `devices.renewal_requested_epoch` 列记录该 epoch 已请求续期、`ScanNearExpiry` 跳过已请求 epoch → 同一 epoch 在一个 `certRenewalRetryInterval` 时间窗内仅 emit **一条** entry（per-epoch 抑制由 `devices.renewal_requested_epoch` 列状态保证；**#1820 起该抑制是时间窗而非永久**——超 retryInterval 仍未推进 epoch 即释放重发，retryInterval 与 relay 的 24h command-done TTL **协调**（≥ TTL），见 §Amendment 2026-06-11(#1820)）。`commandID` 由 `(deviceID, certEpoch)` 经单源 helper `rotateCommandID` 确定性派生；emit 与 `renewal_requested_epoch` mark 在**同一 ambient tx** 内提交（durable PG 模式：outbox writer 与 `devices` UPDATE 同走 pgexec ambient `pgx.Tx`），原子提交/回滚——**无「emit 已提交但 mark 丢失」窗口**（#1827 F1 修正，见 §Amendment 2026-06-11）；relay Claimer 按 `DeriveCommandKey(tenant, deviceID, commandID)` 去重，退为纯 defense-in-depth 二级兜底（仅夹同窗口并发扫描重发）。`cert_renewal_e2e_test.go` 全链路锁：2 tick（窗内，fc 不推进）→ **1** outbox entry（per-epoch dedup）→ 1 dispatch → 1 可 dequeue 的 rotate-cert 命令。post-rotation 重签发（新 epoch）→ 新 commandID → 可再 dispatch；超 retryInterval 未推进 epoch → 同 commandID 重发（#1820，见 §Amendment 2026-06-11(#1820)）。
+**幂等 forcing function（#1812 F1，被 §Amendment 2026-06-12(#1820) 取代）**：原设计用 `devices.renewal_requested_epoch` / `renewal_requested_at` 列状态抑制重复 emit（时间窗 25h，与 relay Claimer 24h done-TTL 协调）。**该方案已被 §Amendment 2026-06-12(#1820) 全面替换为 command-queue active-uniqueness**——producer 现在无状态（侧表列已移除），正确性由 `kernel/command` 队列的 partial unique index（D1，ADR-1822）结构性持有。relay Claimer 退为纯 dispatch-time 优化，不再是 single-emit 保证的来源。详见 §Amendment 2026-06-12(#1820)。
 
-**安全声明重评（ai-robust ADR amendment 必查）**：原落地把「设备永不被刷 N 条续期命令」寄托在 relay Claimer 的 24h done-TTL 上，但 near-expiry 窗口为 30d、sweep interval 1h——24h 后 done-key 过期即每日重发（#1812 F1 缺陷）。修正后 single-emit 由 `devices.renewal_requested_epoch` 列状态闭合（**#1820 起：抑制改为 `renewal_requested_at` 时间窗，覆盖一个 `certRenewalRetryInterval`、与 24h TTL **协调**（retryInterval ≥ TTL）而非解耦；威胁「设备被刷命令」由「永久抑制」改为「有界速率：一条 / retryInterval / epoch」——见 §Amendment 2026-06-11(#1820)）；该（原永久抑制）的**原子性前提**——emit 与 mark 必须同 tx 提交——由 #1827 F1 补齐（原落地 mark 在 emit tx 外二次提交，留有 crash 窗口；见 §Amendment 2026-06-11）。威胁「设备被刷命令」由 `devices.renewal_requested_epoch` 列状态保证（Medium：违反可被 reconciler/repo 单测——含 `TestReconciler_MarkFailureRollsBackEmit` 原子回滚回归——+ e2e 抓住），Claimer 退为纯 defense-in-depth 兜底。
+**安全声明重评（ai-robust ADR amendment 必查）**：原落地的「时间窗抑制」威胁模型（离线设备有界积压 ≤ 28 条 / 并发扫描绕过时间窗 / retryInterval ≥ TTL 协调 Soft 约束）均已被 §Amendment 2026-06-12(#1820) 替换——详见该 amendment 的完整威胁矩阵。本节不重复已被取代的威胁分析。
 
 **§4 评级矩阵逐行重评（无降格，零新增 enforcement——骑既有 funnel）**：
 
@@ -272,43 +272,69 @@ enforcement 索引（§7）**无新增**——值校验由 §4 既有三 funnel 
 
 **§4 funnel 矩阵再验证（#1819 cert-state 持久化变更）**：#1819 把 archetype ② producer 的**输入来源**从 ephemeral 内存 store 改为持久化 `devices` 行扫描（`devices` 表 repo），但 dispatch 路径**完全不变**——producer 仍经 sanctioned `command.EmitAsync` 出口、relay 仍经既有 `WithCommandDispatch` dispatcher-map 中的生成 `enqueue.DispatchAsync`，整条 #1698/#1699 async-dispatch funnel 原样复用。§4 四行 invariant 评级均无变化，**无 ✅→⚠️/❌ 降格**。
 
-**无 ✅→⚠️/❌ 降格，无补偿措施**：dispatch 侧未改 sealed `Entry` wire envelope、未新增 command errcode/Kind/contract/schema——**命令侧未触发 contract-fanout 5 载体**（rotate-cert 内嵌既有 `enqueue` 的 opaque `payload`，`commandType` 字段既存）。#1819/#1820 新增的 `devices` 列迁移（056/057/060）与 `DeviceRepository` 接口方法属**持久化层**改动，落在本 ADR 命令分发 funnel 与 §7 enforcement 索引之外——migration↔`schema_guard` 注册一致性由既有 `pg_schema_guard_invariants` archtest 独立守卫（Hard），非本 ADR 新增 enforcement。enforcement 索引（§7）**无新增**。
+**无 ✅→⚠️/❌ 降格，无补偿措施**：dispatch 侧未改 sealed `Entry` wire envelope、未新增 command errcode/Kind/contract/schema——**命令侧未触发 contract-fanout 5 载体**（rotate-cert 内嵌既有 `enqueue` 的 opaque `payload`，`commandType` 字段既存）。migration↔`schema_guard` 注册一致性由既有 `pg_schema_guard_invariants` archtest 独立守卫（Hard），非本 ADR 新增 enforcement。enforcement 索引（§7）**无新增**。
 
-**范围（显式，非 silent defer）**：证书状态（`cert_epoch` / `cert_expires_at` / `renewal_requested_epoch`）以列形式持久化在 `devices` 行，由 mem 和 PG device repo 读写（#1819）——ephemeral `internal/devicecert/store.go` 已删除。在 durable PG 模式（`GOCELL_IOTDEVICE_DSN` 已设）下，cert 状态**跨重启存活**：device 行与 cert 列均持久化，重启后 `rotate-cert` 对**所有在 cert schema（迁移 056）下注册的**近过期设备恢复调度，不只对重注册设备。**边界（#1827 F2 澄清）**：迁移 056 **之前**已存在的 `devices` 行（或省略 cert 列的 raw-SQL 插入）的 `cert_expires_at` 为 NULL（056 只 ADD COLUMN、无 backfill；`devices` 表无 `created_at`/签发时间列可推近似 expiry），被续期扫描的 `cert_expires_at IS NOT NULL` 谓词永久跳过，须重新注册或重签发证书后才进入续期状态机——此为 demo 取舍（无 backfill 数据源），非缺陷。mem 模式（无 DSN）下 cert 状态随进程终止丢失。设备侧轮换完成（epoch advance / 应用新证书）属设备 dequeue 后固件行为，在本 producer 范围外。archetype ③（saga step→command）仍为独立 issue。
+**范围（显式，非 silent defer）**：证书状态（`cert_epoch` / `cert_expires_at`）以列形式持久化在 `devices` 行，由 mem 和 PG device repo 读写（#1819）——ephemeral `internal/devicecert/store.go` 已删除。**边界（#1827 F2 澄清）**：迁移 056 **之前**已存在的 `devices` 行的 `cert_expires_at` 为 NULL（056 只 ADD COLUMN、无 backfill），被续期扫描的 `cert_expires_at IS NOT NULL` 谓词永久跳过，须重新注册或重签发证书后才进入续期状态机——此为 demo 取舍（无 backfill 数据源），非缺陷。mem 模式（无 DSN）下 cert 状态随进程终止丢失。设备侧轮换完成（epoch advance / 应用新证书）属设备 dequeue 后固件行为，在本 producer 范围外。archetype ③（saga step→command）仍为独立 issue。
 
 ## Amendment 2026-06-11 — #1827 codex review fix（F1 emit/mark 原子性 + F2/F3 文档准确性）
 
-**触发**：PR #1827（#1819 durable cert-state 落地）codex review，3 条 finding。按 ai-robust.md「ADR amendment 必查」逐行重评 §4 + 就地重写矛盾原文（上文 §Amendment 2026-06-10「emit 已提交但 mark 丢失」二级兜底 + 「对所有近过期设备恢复调度」均已就地改写）。
+**触发**：PR #1827（#1819 durable cert-state 落地）codex review，3 条 finding。按 ai-robust.md「ADR amendment 必查」逐行重评 §4 + 就地重写矛盾原文（上文 §Amendment 2026-06-10 中「emit 已提交但 mark 丢失」历史原文已被 §Amendment 2026-06-12(#1820) 全面取代，因 renewal_requested_epoch 列本身随 producer 无状态化已移除）。
 
-**F1（P1·架构/原子性）—— emit 与 mark 落同一 tx**：原落地 `enqueueRenewal` 把 `command.EmitAsync` 包进 `RunInTx`，但 `MarkCertRenewalRequested` 在 tx **外**用原始 ctx 二次提交。两次提交边界之间 crash（emit 已提交、mark 未提交）→ 重启后该 cert 仍是 candidate → 重发，single-emit 在此窗口退回依赖 relay 的 24h Claimer TTL——与本 amendment「single-emit 与 24h TTL 解耦」的声明自相矛盾（L3 ADR 内部不一致）。**修正**：mark 移入同一 `RunInTx` closure 并传 `txCtx`——durable PG 模式下 outbox writer 与 `devices` UPDATE 同走 `pgexec.PGExecutor` 的 ambient `pgx.Tx`（`persistence.TxFromContext[pgx.Tx]`），原子提交/回滚。mark 失败 → 整 tx 回滚 → emit 不落库、cert 留为 candidate、下 tick 重试（无 orphan 命令、无 suppressed-but-never-sent renewal）；emit 落库 → mark 必随之落库（无丢失窗口）。原 godoc「mark 必须在 tx 外、绝不在内」的论据**反了**：同 tx 原子性恰恰**保证**「mark 绝不 outlive 已回滚的 emit」。demo 模式（no-op `DemoCellTxManager`）写非事务，可接受——demo 无 durability 承诺，杂散重发由 in-mem Claimer 夹。
+**F1（P1·架构/原子性）—— emit 与 mark 落同一 tx**：原落地 `enqueueRenewal` 把 `command.EmitAsync` 包进 `RunInTx`，但 `MarkCertRenewalRequested` 在 tx **外**用原始 ctx 二次提交，留有 crash 窗口（emit 已提交、mark 未提交）。**修正**：mark 移入同一 `RunInTx` closure 并传 `txCtx`——durable PG 模式下 outbox writer 与 `devices` UPDATE 同走 `pgexec.PGExecutor` 的 ambient `pgx.Tx`，原子提交/回滚。**注**：`renewal_requested_epoch` / `renewal_requested_at` 列已随 §Amendment 2026-06-12(#1820) producer 无状态化移除——本 F1 在新设计下等价为「emit 与任何可选 producer-side mark 必须同 tx」；若 producer 无额外写入，则只有 emit tx，原子性自然满足。
 
-**F2（P1·产品/运维）—— 旧行 NULL expiry 边界**：见上文 §范围「边界（#1827 F2 澄清）」。迁移 056 之前的 `devices` 行 `cert_expires_at` 为 NULL，被续期扫描永久跳过；`devices` 表无签发时间列 → 无 backfill 数据源，故取 doc-accuracy 修正（声明须重注册/重签发），非迁移 backfill 或一次性修复 job（后者对 demo 不成比例）。
+**F2（P1·产品/运维）—— 旧行 NULL expiry 边界**：迁移 056 之前的 `devices` 行 `cert_expires_at` 为 NULL，被续期扫描永久跳过；`devices` 表无签发时间列 → 无 backfill 数据源，须重注册/重签发证书后才进入续期状态机——doc-accuracy 修正，非迁移 backfill 或一次性修复 job。
 
 **F3（P2·运维/DX）—— README durable env 缺失**：`examples/iotdevice/README.md` Docker Mode 块补 `GOCELL_IOTDEVICE_CURSOR_KEY`（≥32 bytes，`run.go` `buildCursorCodec` durable fail-fast）+ `GOCELL_IOTDEVICE_DURABLE_SINGLE_POD=true`（`commandRelayClaimer` durable fail-fast，单 pod demo 边界显式 ack），否则按 README 操作 durable 启动即失败。
 
-**§4 评级矩阵逐行重评（无降格，零新增 enforcement）**：F1 是**业务 bug 修复**（命令 producer 的 tx 边界），非 dispatch/register funnel 改动——§4 四行 invariant（`COMMAND-GEN-FUNNEL-SOLE-EMITTER-01` / `COMMAND-DISPATCH-REGISTER-CALLER-01` / `COMMAND-ASYNC-DISPATCH-CALLER-01` / `COMMAND-ASYNC-EMIT-FUNNEL-01`）评级与符号**全不变**，未改 sealed `Entry`、未新增 errcode/contract/schema/migration、未触发 contract-fanout 5 载体。原子性回归由新增单测 `TestReconciler_MarkFailureRollsBackEmit`（transactional fake：mark 失败 → 0 committed entry，旧形态下会非空 → 真回归）+ commit-side 反真空 `TestReconciler_EmitAndMarkCommitTogether` 守卫（Medium：行为可被单测抓住），ai-robust.md「不把 bug 修复包装成新治理机制」——**不新增 archtest**。enforcement 索引（§7）**无新增**。F2/F3 为纯文档，无 enforcement 面。**无 ✅→⚠️/❌ 降格，无补偿措施**。
+**§4 评级矩阵逐行重评（无降格，零新增 enforcement）**：F1 是**业务 bug 修复**（命令 producer 的 tx 边界），非 dispatch/register funnel 改动——§4 四行 invariant 评级与符号**全不变**，未改 sealed `Entry`、未新增 errcode/contract/schema/migration、未触发 contract-fanout 5 载体。F2/F3 为纯文档，无 enforcement 面。**无 ✅→⚠️/❌ 降格，无补偿措施**。
 
-## Amendment 2026-06-11(#1820) — cert-renewal 批量边界 + 时间窗重试释放（#1820）
+## Amendment 2026-06-12(#1820) — cert-renewal 正确性移交 command-queue active-uniqueness（#1820）
 
-**触发**：#1820（archetype ② cert-renewal producer 的 P1 arch-opt）。按 ai-robust.md「ADR amendment 必查」逐行重评 §4 + 就地重写上文 §Amendment 2026-06-10 §262/§264 的「single-emit 跨整个窗口 / 与 24h TTL 解耦」矛盾原文（已加 §Amendment 2026-06-11(#1820) 指针）。开源对标：controller-runtime v0.18.4（`pkg/internal/controller/controller.go` per-key resync 无永久抑制）+ River（`insert_opts.go` unique-jobs `ByPeriod` 时间窗自动重置）。
+**触发**：#1820（cert-renewal producer 重设计）。按 ai-robust.md「ADR amendment 必查」逐行重评 §4 + 重写上文 §Amendment 2026-06-10 §Amendment 2026-06-11(#1820)（旧时间窗方案）矛盾原文（已加本 amendment 指针，旧内容已就地改写）。
 
-**问题（#1808 簇 C1 延续）**：原落地 per-epoch 抑制是**单向**的——`MarkCertRenewalRequested` 设 `renewal_requested_epoch = cert_epoch` 后，该 epoch 永久从 `ListCertificateRenewalCandidates` 排除，直到 re-issue 推进 epoch。若 rotate-cert 命令 terminal 失败（DLX）/ 设备永不执行 / 证书过期，**无释放或重试路径**——续期静默卡死。且扫描无 `LIMIT`，单 tick 无界扫描 + 逐条 emit，把规模压力推给 outbox/relay（#1808 F2 同款）。
+**根本问题（#1808 簇 C1 根因分析）**：旧设计的 `devices.renewal_requested_at` 时间窗是 observe-then-decide 模式——producer 用侧表状态模拟「命令是否在飞行中」。根本缺陷：
+1. **离线设备积压无界**：每过 retryInterval，即使命令仍在队列 Pending，producer 重发一条新命令进 outbox→relay→队列，活跃命令单调积累（near-expiry 窗口 30d，retryInterval 25h → 最多积压 ≈28 条）。
+2. **并发竞态**：多副本或多 worker 并发扫描时，CAS on cert_epoch 不足以防止同 tick 内多条 emit（与 cert-manager issue #4642 同构）。
+3. **retryInterval ≥ TTL 协调是 doc-only（Soft）约束**：无机器守卫，参数选错即破坏正确性。
 
-**落地形态**：
-1. **时间窗重试释放**（对标 River unique-jobs `ByPeriod`）：`devices` 新增 `renewal_requested_at TIMESTAMPTZ`（nullable，迁移 060）。`ListCertificateRenewalCandidates(ctx, expiresBefore, retryBefore, limit)` 合格谓词改为 `renewal_requested_epoch <> cert_epoch OR renewal_requested_at IS NULL OR renewal_requested_at <= retryBefore`；`MarkCertRenewalRequested(ctx, deviceID, epoch, requestedAt)` 同写 epoch + at（CAS on cert_epoch 不变，重标同 epoch 刷新时间戳）。`retryBefore = now - certRenewalRetryInterval`（25h，**略高于** relay Claimer 24h done-TTL）。`IS NULL` 支是 060 迁移桥接：旧逻辑下已标记（epoch==requested 且 at=NULL）的存量行被一次性拉回候选，否则复发原永久卡死 bug——不向后兼容的桥接，无 backfill（无标记时刻来源）、无双路径 shim。前进态不变式 `epoch==cert_epoch ⟹ renewal_requested_at 非空` 由 mark 原子维护。**运维预期（060 上线后首 tick）**：迁移 060 执行后，首次 reconcile tick 会通过 IS-NULL 桥接将所有旧逻辑下已标记行（epoch==requested 且 at=NULL）重新拉回候选并各发一次 re-emit；每 tick 最多 BatchSize 条（示例默认 100），示例规模可忽略。`MarkCertRenewalRequested` 随即写入真实时间戳，此后进入正常时间窗周期。
-2. **批量边界**：扫描加 `LIMIT certRenewalScanBatchSize`（100）；`Reconcile` 满批 → `Result{RequeueAfter: certRenewalBatchRequeue}`（1s）续扫下一批（标记后的证书在时间窗内退出扫描集，前向进度单调），非满批 → `Result{}`（回到每小时 ticker）。`WithoutDefaultRequeue` 下显式 `RequeueAfter>0` 仍续跑（loop.go dispatch 成功支）。
+**新设计（command-queue active-uniqueness，见 ADR-1822 `docs/architecture/202606121000-1822-adr-command-queue-active-uniqueness.md`）**：
 
-**幂等 forcing function 重评（取代 §262）**：per-epoch dedup 不再「永久仅一条」，而是「每 `certRenewalRetryInterval` **至多一条** / epoch，直到 epoch 推进」。relay Claimer（同一 `rotateCommandID` = `cert-rotate:dev:epoch`，24h done-TTL）夹同窗口重发；retryInterval ≥ TTL 保证超窗重发在 done-key 过期后真正 re-dispatch（terminal-DLX 时 relay 已释放 claim，重发立即 dispatch）。emit + mark 仍同一 ambient tx 原子提交（#1827 F1 不变，mark 现额外 stamp `renewal_requested_at`）。
+- **D_AU1（队列拥有正确性）**：`kernel/command` 设备命令队列引入**非终态内活跃唯一性**（state-aware active-uniqueness）：`EnqueueOptions.IdempotencyKey` 在命令处于非终态（Pending/Sent/Delivered）时唯一，命令到达终态（Succeeded/Failed/Expired/Canceled）时释放。PG = partial unique index `WHERE status IN (1,2,3)`；in-mem 从 status 派生。两个实现由 `commandtest` 跨存储 conformance 套件强制一致。
+- **D_AU2（不安全组合不可表达）**：`runtime/command.WithActiveUniqueness(deadline time.Duration)` 是 `EnqueueOptions.IdempotencyKey` 的**唯一**写入点，同时设 `OverallDeadline`——「有 active-uniqueness key 但无 deadline（命令永不 terminal，key 永不释放）」在 API 上不可构造（`EnqueueOptions.idempotencyKey` 是 unexported 字段，Hard：Go type system 封闭）。
+- **D_AU3（producer 无状态）**：`devices.renewal_requested_at` 和 `renewal_requested_epoch` 列移除（schema guard golden Hard 守）。每 tick 对近过期证书无条件调用 `command.Enqueue(WithActiveUniqueness(deadline))`；命令已在队列且非终态时 enqueue 被幂等 noop（`ON CONFLICT DO NOTHING` / in-mem 集合 rejected）。
+- **D_AU4（relay Claimer 降级）**：relay Claimer 从「single-emit 第一防线」降为「dispatch-time 去重优化」。relay 在 Claimer Acquired 后把 active-uniqueness key+deadline 注入 ctx，供下游 enqueue 使用。
+- **批量扫描上限**：保留 `LIMIT certRenewalScanBatchSize`（100）+ 满批 RequeueAfter 续扫，机制不变。Sweeper（已有）周期 expire 超 OverallDeadline 的 Pending 命令 → 终态 → key 释放 → 下次 tick 正常重 enqueue。
 
-**安全声明重评（ai-robust ADR amendment 必查）**：威胁「设备被刷命令」由「**永久抑制**」改为「**有界速率：一条 / retryInterval / epoch**」——这是对 #1808 簇 C1「静默卡死」威胁的正确闭合（永久卡死本身是更严重的可用性威胁）。永久卡死设备（epoch 永不推进、行不删）→ 有界重发**永远继续**（一条 / retryInterval / epoch）是正确的 level-triggered 行为 + 运维可观测信号，**非泄漏**——controller-runtime（per-key resync 无永久抑制）/ River `ByPeriod`（时间窗自动重置）同此。设备侧轮换完成 / rotate-cert 命令 terminal 态观测（DLX/回执驱动释放）仍在本 producer **范围外**（固件反馈边界，见上文 §范围「设备侧轮换完成…在本 producer 范围外」），登记为独立 follow-up issue（per-key reconcile + terminal-feedback 释放）。
+**威胁矩阵重评（ai-robust ADR amendment 必查）**：
 
-**§4 评级矩阵逐行重评（无降格，零新增 enforcement——骑既有 funnel）**：#1820 改的是 producer 的**输入合格判定 + 批量调度**，dispatch 路径**完全不变**（仍 sanctioned `command.EmitAsync` 出口 + 既有 `WithCommandDispatch` map 的生成 `enqueue.DispatchAsync`）。`COMMAND-GEN-FUNNEL-SOLE-EMITTER-01` / `COMMAND-DISPATCH-REGISTER-CALLER-01` / `COMMAND-ASYNC-DISPATCH-CALLER-01` / `COMMAND-ASYNC-EMIT-FUNNEL-01` 评级与符号**全不变**（同 #1819 持久化变更结论）。未改 sealed `Entry` wire envelope、未新增 errcode/Kind/contract/schema、未触发 contract-fanout 5 载体（rotate-cert 仍内嵌既有 `enqueue` 的 opaque payload）。
+| 旧威胁（时间窗方案） | 旧处置 | 新处置（queue active-uniqueness） |
+|-------------------|---------|---------------------------------|
+| 离线设备积压 N 条活跃命令 | 有界（≤28 条），但非零 | **消除**：PG partial index 保证至多 1 条非终态命令 |
+| 命令永久 Pending（Sweeper 未触发） | 无路径 | **消除**：`WithActiveUniqueness(deadline)` 必须带 OverallDeadline → Sweeper expire → 终态 → key 释放 |
+| 并发扫描绕过时间窗（多副本 / 多 worker） | 部分（CAS on cert_epoch + 时间窗），有竞态 | **消除**：PG partial index 唯一性由 PG 引擎串行化，并发 `ON CONFLICT DO NOTHING` 安全 |
+| retryInterval ≥ TTL 协调是 Soft doc 约束 | doc-only，无机器守 | **移除该约束**：Claimer 降为优化，queue uniqueness 不依赖 TTL |
+| 新威胁：active-uniqueness key 被 deadline-less 命令永久持有 | （旧设计无此威胁） | **不可表达**（`WithActiveUniqueness` sealed API，`EnqueueOptions.idempotencyKey` unexported，Hard） |
+
+**新失效模式（诚实记录）**：`commandtest` conformance 套件是 Medium 保证（跨存储一致性可被测试抓住，但 Go 类型系统无法在接口层表达「两实现对 status 集必须一致」）。PG partial index 定义（含 WHERE 谓词）由 schema guard golden Hard 守卫——index 字节 drift 即 CI 红。
+
+**dispatch funnel 不变**：本 amendment 在命令**队列写入层**增加幂等保障，不改变 §5 演进路径中 producer 经 `command.EmitAsync` → outbox → relay → `DispatchAsync` → `kernel/command.Enqueue` 的路径——EmitAsync 仍经 sanctioned 出口，relay 仍用既有 dispatcher-map，`DispatchAsync` 仍是生成码唯一来源。
+
+**§4 评级矩阵逐行重评（无降格，零新增 enforcement——dispatch funnel 正交）**：
+
+- `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`：✅ **不变**（上游 Hard / 下游 Medium）。本 amendment 改的是队列层（`kernel/command`），不触及 `command.tmpl` 派生的 typed Handler/Register/Dispatch/DispatchAsync。
+- `COMMAND-DISPATCH-REGISTER-CALLER-01`：✅ **不变**（上游 Medium / 下游 Hard）。`RegisterHandler`/`LookupHandler` caller-allowlist 不动。
+- `COMMAND-ASYNC-DISPATCH-CALLER-01`：✅ **不变**（上游 Medium / 下游 Hard）。relay 经 `DispatchAsync` 到队列 Enqueue 的路径不变；active-uniqueness 是 Enqueue 内部语义，外部 dispatch funnel 感知不到。
+- `COMMAND-ASYNC-EMIT-FUNNEL-01`：✅ **不变**（上游 Medium / 下游 Hard）。`EmitAsync` subject/commandID 位置参不变；producer 无状态化只移除了 Enqueue 之后的 producer-side mark，dispatch funnel 不变。
+
+**无 ✅→⚠️/❌ 降格，无补偿措施**：本 amendment 未改 sealed `Entry` wire envelope、未新增 errcode/Kind/contract/schema——**未触发 contract-fanout 5 载体**。`devices` 列移除（DROP COLUMN migration）由 schema guard golden Hard 守卫。`kernel/command` 层新增 partial index + `WithActiveUniqueness` sealed API 属**队列内部持久化语义**，与 command-bus dispatch funnel 正交。
 
 **enforcement 分档（ai-robust「涉及 enforcement 必给评级」）**：
-- `renewal_requested_at` 列存在/类型/nullable —— **Hard**（`schema_guard.go` expectedColumns + golden + 运行时 fail-fast；迁移 060↔代码 drift 即红，由既有 `pg_schema_guard_invariants` archtest 守卫）。
-- 时间窗重试 / 批量边界行为 —— **Medium**（reconciler 单测 `TestReconciler_RetriesAfterRetryInterval` / `NoRetryWithinWindow` / `BatchBoundaryRequeues` + loop 排空测 `TestReconciler_LoopDrainsMultiBatchBacklog` + conformance `Cert/RenewalCandidatesBatchLimit`）。
-- 两列不变式 `epoch==requested ⟹ at 非空` + IS-NULL 桥接 —— **Medium**（conformance `Cert/MarkRenewalRequestedCAS` + `Cert/RenewalNullRequestedAtMigrationBridge` red case）。不用 CHECK 约束（会与存量 NULL 桥接行冲突致迁移失败）→ Medium 是正确档位；违反自愈（NULL → 入选 → 重标补时间戳）。
-- `certRenewalRetryInterval ≥ Claimer done-TTL` 协调 —— **doc-only**（常量 godoc），与既有 `certRenewalThreshold >> sweepInterval` 协调同类（example tuning, 非 invariant 机制），非新增 Soft enforcement 立项。
-enforcement 索引（§7）**无新增**。**无 ✅→⚠️/❌ 降格，无补偿措施**。
+- PG partial unique index（`device_commands` `WHERE status IN (1,2,3)`）—— **Hard**（`schema_guard.go` expectedIndexes golden 锁 index DDL 字符串含 WHERE 谓词；drift 即 CI 红）。
+- in-mem active-uniqueness 与 PG 一致（同 status 集）—— **Medium+**（`commandtest` 跨存储 conformance 套件；两实现偏差 CI 红；Go 类型无法在接口层表达「status 集必须一致」，Medium+ 是正确档位）。
+- `WithActiveUniqueness` 是 `IdempotencyKey` 唯一写入点（不安全组合不可表达）—— **Hard**（`EnqueueOptions.idempotencyKey` unexported 字段，Go type system 封闭；包外字面量 `EnqueueOptions{idempotencyKey: x}` 编译失败）。
+- `devices` 无 `renewal_requested_at` / `renewal_requested_epoch` 列—— **Hard**（`schema_guard.go` expectedColumns golden；列存在即红）。
+- relay identity 注入（active-uniqueness key+deadline 进 ctx）+ E2E 验证—— **Medium**（`TestCertRenewalActiveUniquenessE2E`：单条活跃、离线积压不增长；PG partial index 是最终 Hard 兜底）。
 
-**范围（显式，非 silent defer）**：terminal-feedback 释放 + per-key reconcile 为独立 follow-up issue（#1820 的时间窗在该 issue 中降级为静默设备兜底，列/接口/扫描/conformance/migration/ADR 全部保留，不返工）。
+enforcement 索引（§7）**无新增 dispatch-funnel invariant**——active-uniqueness 属 kernel/command queue 层，见 ADR-1822 §8 enforcement 索引。**无 ✅→⚠️/❌ 降格，无补偿措施**。
+
+**范围（显式，非 silent defer）**：terminal-feedback 释放（设备回执 / DLX 驱动 epoch advance）仍在 producer 范围外，登记为独立 follow-up issue（per-key reconcile + terminal-feedback 释放，ADR-1822 §7.1 注明）。批量扫描上限 + RequeueAfter 续扫保留。
