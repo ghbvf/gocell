@@ -42,6 +42,22 @@ func TestModule_WithKeyProviderOverride_DoesNotPanic(t *testing.T) {
 	require.NotNil(t, m)
 }
 
+// TestModule_Provide_MemMode_SelfBuild_NilOverrideTriggersEnvPath verifies that
+// WithKeyProviderOverride(nil) falls through to the self-build env path.
+// In memory mode with no GOCELL_CONFIGCORE_KEY_PROVIDER set (no env), the
+// self-build returns (nil, nil) → NoopTransformer → Provide succeeds.
+func TestModule_Provide_MemMode_SelfBuild_NilOverrideTriggersEnvPath(t *testing.T) {
+	ctx := context.Background()
+	shared := buildMemSharedDeps(t)
+	// Explicitly unset env so self-build returns no-key sentinel.
+	t.Setenv("GOCELL_CONFIGCORE_KEY_PROVIDER", "")
+
+	// nil override → self-build path; memory mode + no provider → Noop.
+	res, err := configcore.Module(configcore.WithKeyProviderOverride(nil)).Provide(ctx, shared)
+	require.NoError(t, err)
+	require.NotNil(t, res.Cell)
+}
+
 // TestModule_Provide_MemMode exercises configcore.Module().Provide with a
 // memory-mode SharedDeps (no Postgres).  ConfigKeyProvider is left nil
 // (no-key/passthrough provider); ConfigStaleCipherInc is a no-op.

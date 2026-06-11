@@ -8,15 +8,13 @@
 //
 // # Key provider routing
 //
-// The configcore key provider is constructed in cmd/corebundle (which may import
-// adapters/vault and github.com/prometheus/client_golang) and passed via
-// composition.SharedDeps.ConfigKeyProvider, so cellmodules/configcore never
-// imports those adapter-specific packages. This is the last cmd-supplied
-// configcore dependency; its removal is gated on #885 (vault TransitMetrics →
-// kernel MetricsProvider). The stale-cipher and eventbus-cache collectors were
-// moved here (#1413): they route through the kernel MetricsProvider, so this
-// module self-builds them from SharedDeps.MetricsProvider via
-// runtime/observability/metrics without importing client_golang.
+// The configcore key provider is self-built from env + SharedDeps.MetricsProvider
+// (post-#885 vault is client_golang-free in non-test code, so cellmodules/configcore
+// can own adapters/vault.TransitMetrics construction directly). The key provider and
+// stale-cipher / eventbus-cache collectors are all built from the kernel
+// MetricsProvider via runtime/observability/metrics without importing client_golang.
+// cmd/corebundle no longer supplies ConfigKeyProvider; SharedDeps is now fully
+// cell-agnostic. Use [WithKeyProviderOverride] in tests to inject a fake KeyProvider.
 //
 // ref: uber-go/fx fx.Module("configcore", ...) — self-contained module.
 package configcore
@@ -53,8 +51,7 @@ type module struct {
 // Module returns a composition.CellModule that wires the configcore Cell.
 //
 // Pass [WithKeyProviderOverride] in tests that inject a fake KeyProvider.
-// The key provider and stale-cipher callback are read from
-// composition.SharedDeps (populated by cmd/corebundle).
+// In production the key provider is self-built from env + SharedDeps.MetricsProvider.
 func Module(opts ...ModuleOption) composition.CellModule {
 	m := &module{}
 	for _, o := range opts {
@@ -87,8 +84,11 @@ func (m *module) Provide(
 		return composition.ModuleResult{}, fmt.Errorf("configcore cursor codec: %w", err)
 	}
 
-	// 2. KeyProvider (test override OR cmd-supplied via SharedDeps).
-	kp := m.resolveKeyProvider(shared)
+	// 2. KeyProvider (test override OR self-built from env + MetricsProvider).
+	kp, err := m.resolveKeyProvider(shared)
+	if err != nil {
+		return composition.ModuleResult{}, fmt.Errorf("configcore key provider: %w", err)
+	}
 	vt, err := resolveValueTransformer(kp, shared.Topology.StorageBackend() == "postgres")
 	if err != nil {
 		return composition.ModuleResult{}, err
@@ -146,13 +146,19 @@ func (m *module) Provide(
 	return composition.ModuleResult{Cell: builtCell, Opts: opts, Resources: res}, nil
 }
 
-// resolveKeyProvider returns the test override when set, otherwise uses the
-// key provider injected via composition.SharedDeps by cmd/corebundle.
-func (m *module) resolveKeyProvider(shared *composition.SharedDeps) kcrypto.KeyProvider {
+// resolveKeyProvider returns the test override when set, otherwise self-builds
+// the key provider from env + shared.MetricsProvider. A nil override falls
+// through to self-build (env-driven). In memory mode with no env config, this
+// returns (nil, nil) — nil KeyProvider is the documented no-key sentinel that
+// resolveValueTransformer maps to an explicit NoopTransformer.
+func (m *module) resolveKeyProvider(shared *composition.SharedDeps) (kcrypto.KeyProvider, error) {
 	if m.keyProviderOverride != nil {
-		return m.keyProviderOverride
+		return m.keyProviderOverride, nil
 	}
-	return shared.ConfigKeyProvider
+	providerName, masterKey, prevMasterKey := cellsecrets.LoadConfigCoreKeyProvider()
+	return buildKeyProviderFromName(
+		shared.Topology.StorageBackend(), shared.Topology.AdapterMode(),
+		providerName, masterKey, prevMasterKey, shared.Clock, shared.MetricsProvider)
 }
 
 // resolveValueTransformer maps a KeyProvider to its ValueTransformer. A nil

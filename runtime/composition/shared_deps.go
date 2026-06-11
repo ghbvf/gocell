@@ -9,7 +9,6 @@ import (
 
 	kauth "github.com/ghbvf/gocell/kernel/auth"
 	"github.com/ghbvf/gocell/kernel/clock"
-	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -42,13 +41,17 @@ import (
 // violations when in fact they are the natural shape of a composition root.
 //
 // Fields are genuinely cross-cutting (consumed by multiple cells or the runtime
-// itself), with one transitional exception — ConfigKeyProvider, the last
-// configcore-specific field, whose removal is gated on #885 (see its godoc). The
-// former configcore-specific metric fields (EventbusCacheCollector,
-// ConfigStaleCipherInc) were removed in #1413: configcore now self-builds those
-// collectors from MetricsProvider via runtime/observability/metrics, since they
-// route through the kernel Provider (not raw prometheus) and so do not trip the
-// "no client_golang in cellmodules" posture.
+// itself). SharedDeps is now fully cell-agnostic: the former configcore-specific
+// metric fields (EventbusCacheCollector, ConfigStaleCipherInc) were removed in
+// #1413, and ConfigKeyProvider (the last configcore-specific field) was removed in
+// #1413/#885 — configcore now self-builds its key provider from env +
+// MetricsProvider, using adapters/vault.TransitMetrics which is client_golang-free
+// in non-test code post-#885.
+//
+// The exported field set is frozen by archtest SHAREDDEPS-FIELDSET-FROZEN-01
+// (reflect golden): adding a field requires editing that golden AND justifying
+// the newcomer here as genuinely cross-cutting — a cell-specific dep belongs on
+// that cell's module (constructor / self-build), not on this shared bag.
 //
 // ref: uber-go/fx fx.Supply — shared values provided once to all modules.
 // ref: kubernetes/kubernetes cmd/kube-apiserver/app/options/validation.go —
@@ -155,26 +158,6 @@ type SharedDeps struct {
 	// Empty means devtools catalog is disabled; external callers that do not
 	// need devtools functionality should leave this field unset.
 	ProjectRoot string
-
-	// ConfigKeyProvider is the configcore value-encryption key provider.
-	//
-	// This is the LAST configcore-specific field on the shared bag. It remains
-	// here (rather than being self-built inside cellmodules/configcore like the
-	// stale-cipher and eventbus-cache collectors) because the vault-transit
-	// provider needs adapters/vault.TransitMetrics, which is built from a raw
-	// github.com/prometheus/client_golang registry — and the
-	// adapterPromCallerAllowlist governance posture (archtest
-	// observability_metrics_test.go, #1085 Batch 4 Part A) keeps raw-prometheus
-	// construction in cmd/ so cellmodules/configcore never imports client_golang.
-	// configcore self-building the key provider is gated on #885 (migrating vault
-	// TransitMetrics to the kernel MetricsProvider); once #885 lands this field
-	// moves into configcore too and SharedDeps becomes fully cell-agnostic.
-	// Refs #1413 / #885.
-	//
-	// Built in cmd/corebundle, passed to cellmodules/configcore.Module. Nil means
-	// no key provider; in real adapter mode configcore rejects nil (NoopTransformer
-	// is dev-only).
-	ConfigKeyProvider kcrypto.KeyProvider
 }
 
 // NewSharedDeps validates a populated SharedDeps and returns a sealed copy. The
