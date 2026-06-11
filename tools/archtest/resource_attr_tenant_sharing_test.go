@@ -30,7 +30,7 @@
 //     call unrepresentable at the type-system level — the archtest caller-allowlist
 //     is the enforcement. Hard-by-construction (dropping the tenant param or
 //     making the method package-private) was rejected: it would diverge from the
-//     route-A explicit-typed-param funnel that the EPIC (#1347) standardised on
+//     route-A explicit-typed-param funnel that the EPIC (#1347) standardized on
 //     for ALL port interfaces (PolicyRepository, ResourceAttributeProvider). See
 //     TENANT-REPO-PARAM-FUNNEL-01 for the upstream half. This archtest is the
 //     downstream enforcement.
