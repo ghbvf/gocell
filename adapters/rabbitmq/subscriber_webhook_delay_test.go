@@ -217,10 +217,12 @@ func TestDeclareTopology_WithDelaySchedule_DeclaresDelayTiers(t *testing.T) {
 	assert.Equal(t, int64(200), tier0Args["x-message-ttl"], "tier 0 x-message-ttl must be 200ms as int64")
 	assert.Equal(t, topic, tier0Args["x-dead-letter-exchange"], "tier 0 x-dead-letter-exchange must point to dispatch exchange")
 	assert.Equal(t, "", tier0Args["x-dead-letter-routing-key"], "tier 0 must reset routing key to canonical empty")
+	assertQuorumAtLeastOnce(t, tier0Args, "tier 0")
 
 	assert.Equal(t, int64(500), tier1Args["x-message-ttl"], "tier 1 x-message-ttl must be 500ms as int64")
 	assert.Equal(t, topic, tier1Args["x-dead-letter-exchange"], "tier 1 x-dead-letter-exchange must point to dispatch exchange")
 	assert.Equal(t, "", tier1Args["x-dead-letter-routing-key"], "tier 1 must reset routing key to canonical empty")
+	assertQuorumAtLeastOnce(t, tier1Args, "tier 1")
 
 	// Bindings: tier 0 bound with routing key "0", tier 1 with "1".
 	var tier0Detail, tier1Detail *queueBindDetail
@@ -244,7 +246,56 @@ func TestDeclareTopology_WithDelaySchedule_DeclaresDelayTiers(t *testing.T) {
 	assert.Equal(t, delayExchange, tier1Detail.exchange, "tier 1 must bind to delay exchange")
 }
 
-func TestDeclareTopology_EmptySchedule_NoDeLlayTopology(t *testing.T) {
+// assertQuorumAtLeastOnce pins the three arguments that make a delay tier's
+// broker-internal TTL→dead-letter republish at-least-once (#1835): a quorum
+// queue with the at-least-once dead-letter strategy. This is the Medium guard
+// for the change — the assertions fail in CI if a future edit drops any of them.
+//
+// x-overflow=reject-publish is the highest-risk one: RabbitMQ silently falls
+// back to at-most-once dead-lettering if the overflow strategy is the default
+// drop-head (the broker raises NO error), so removing it would re-open the
+// cluster gap with no other signal. The unit assertion is the signal.
+func assertQuorumAtLeastOnce(t *testing.T, args amqp.Table, tier string) {
+	t.Helper()
+	assert.Equal(t, "quorum", args["x-queue-type"],
+		"%s must be a quorum queue (classic internal dead-letter republish is not at-least-once)", tier)
+	assert.Equal(t, "at-least-once", args["x-dead-letter-strategy"],
+		"%s must use at-least-once dead-lettering so the TTL→DLX hop is publisher-confirmed", tier)
+	assert.Equal(t, "reject-publish", args["x-overflow"],
+		"%s must set reject-publish overflow; drop-head silently degrades at-least-once to at-most-once", tier)
+}
+
+// TestDeclareDelayTopology_TierQueueDeclareFailure_WrapsRunbookHint covers the
+// 406 PRECONDITION_FAILED branch of declareDelayTopology: when a tier
+// QueueDeclare fails — e.g. a pre-#1835 classic tier queue whose x-queue-type now
+// differs from the quorum declaration — the returned error must name the failing
+// tier, mention the classic→quorum case, point at the drain-before-delete runbook,
+// and wrap (not swallow) the underlying broker error so an operator can recover.
+func TestDeclareDelayTopology_TierQueueDeclareFailure_WrapsRunbookHint(t *testing.T) {
+	conn, _ := newTestConnection(t)
+	ch := newMockChannel()
+	// Simulate the broker rejecting the quorum redeclare over an existing classic
+	// tier queue (the classic→quorum 406 migration path).
+	ch.queueDeclareErr = errors.New("PRECONDITION_FAILED - inequivalent arg 'x-queue-type'")
+
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{DLXExchange: "test.dlx"})
+
+	err := sub.declareDelayTopology(ch, "session.created", "cg-1.session.created",
+		[]time.Duration{testtime.D200ms})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "declare delay tier queue 0", "error must name the failing tier index")
+	assert.Contains(t, err.Error(), "quorum", "hint must mention the classic→quorum upgrade case")
+	assert.Contains(t, err.Error(), "drain-before-delete runbook", "hint must point operators at the runbook")
+	assert.ErrorContains(t, err, "PRECONDITION_FAILED", "underlying broker error must be wrapped, not swallowed")
+	// #1858 F2 (codex): the hint must surface BOTH 406 recovery paths, not just the
+	// existing-queue migration one — a fresh declare can also fail because the broker
+	// is too old / the quorum feature flags are off.
+	assert.Contains(t, err.Error(), "3.10", "hint must surface the RabbitMQ >=3.10 broker-prerequisite recovery path")
+	assert.Contains(t, err.Error(), "feature flag", "hint must mention the quorum_queue/stream_queue feature-flag prerequisite")
+}
+
+func TestDeclareTopology_EmptySchedule_NoDelayTopology(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 	ch := newMockChannel()
 	mockConn.nextCh = ch

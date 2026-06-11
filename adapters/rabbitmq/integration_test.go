@@ -423,6 +423,14 @@ func TestIntegration_WebhookDelaySchedule_RoutesToDLQAfterExhaustion(t *testing.
 		BrokerDelaySchedule: schedule,
 	}
 
+	// Explicit broker-accept gate (#1835): Setup declares the full topology
+	// synchronously, so a real broker that rejected the quorum delay tiers'
+	// at-least-once + reject-publish arg combo fails HERE with a clear error
+	// instead of surfacing as a downstream subscriber-ready timeout. Idempotent
+	// with the re-declare inside Subscribe below.
+	require.NoError(t, sub.Setup(ctx, subscription),
+		"broker must accept the quorum at-least-once delay-tier topology")
+
 	var callCount atomic.Int32
 	subCtx, subCancel := context.WithTimeout(ctx, testtime.CtxLong)
 	defer subCancel()
