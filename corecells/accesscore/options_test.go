@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -220,6 +221,16 @@ func TestRepoReadyAll_FailClosed(t *testing.T) {
 	wantErr := errors.New("policy store unreachable")
 	err := repoReadyAll{okProber{}, failingProber{err: wantErr}}.RepoReady(ctx)
 	assert.ErrorIs(t, err, wantErr, "composite must fail closed with the not-ready member's error")
+}
+
+// TestRepoReadyAll_Conformance enrolls the composite RepoProber in the
+// healthz.RepoProber readiness conformance (CELL-REPO-READYZ-PROBE-01). It has a
+// differentiated failure domain (any not-ready member), so a non-nil broken
+// prober is supplied.
+func TestRepoReadyAll_Conformance(t *testing.T) {
+	celltest.RunRepoReadinessConformance(t, "accesscore-repo-all",
+		repoReadyAll{okProber{}},
+		repoReadyAll{failingProber{err: errors.New("member store unreachable")}})
 }
 
 func TestRegisterSubscriptions(t *testing.T) {

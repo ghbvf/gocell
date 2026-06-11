@@ -144,6 +144,31 @@ func TestPolicyCodec_UnknownCodeDecodeFails(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// TestPolicyCodec_UnknownFieldRejected proves the field-set is closed: an unknown
+// JSON key at any nesting level (rule / condition / obligation) fails decode, so a
+// forward-incompatible policy can never be read under silently-weakened semantics.
+func TestPolicyCodec_UnknownFieldRejected(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{"rule-level", `[{"id":"r1","name":"x","effect":"allow","bogus":1}]`},
+		{"condition-level", `[{"id":"r1","name":"x","effect":"allow","conditions":` +
+			`[{"source":"subject","key":"d","op":"eq","values":["e"],"bogus":1}]}]`},
+		{"obligation-level", `[{"id":"r1","name":"x","effect":"allow","obligations":{"rowScope":"self","bogus":1}}]`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := unmarshalRules([]byte(tc.raw))
+			assert.Error(t, err, "unknown JSON field must be rejected (fail-closed)")
+		})
+	}
+	// Sanity: the same shapes WITHOUT the unknown field decode cleanly.
+	_, err := unmarshalRules([]byte(`[{"id":"r1","name":"x","effect":"allow","conditions":` +
+		`[{"source":"subject","key":"d","op":"eq","values":["e"]}],"obligations":{"rowScope":"self"}}]`))
+	require.NoError(t, err, "well-formed rule must still decode")
+}
+
 func TestPolicyCodec_OutOfRangeEnumEncodeFails(t *testing.T) {
 	_, err := encodeEffect(0)
 	assert.Error(t, err, "zero Effect must fail closed")

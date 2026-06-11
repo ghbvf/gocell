@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -454,43 +455,55 @@ func TestAuthorize_IsRLSScoped(t *testing.T) {
 
 // --- conformance ----------------------------------------------------------
 
-// TestAuthorizerConformance runs the core decision scenarios against a policy
-// store produced by a factory. PR-8 reuses this with the PG store to prove the
-// engine behaves identically across policy-store backends.
+// TestAuthorizerConformance runs the core decision scenarios against the
+// in-memory policy store. The same suite is enrolled against the PG store by
+// TestAuthorizerConformance_PG (authorizer_conformance_integration_test.go,
+// `-tags=integration`), so the engine is proven to behave identically across
+// policy-store backends — including the persisted-JSON decode and the
+// scopedtx → SET LOCAL → ListByTenant read path exercised by a real
+// adapterpg.TxManager. (RLS *enforcement* under a restricted role is proven
+// separately by the FORCE-RLS policies guards: schema_guard verifyRLS,
+// rls_force negative-drop, and the PolicyRepository CrossTenant conformance.)
 func TestAuthorizerConformance(t *testing.T) {
-	runAuthorizerConformance(t, func() ports.PolicyRepository { return mem.NewPolicyRepository() })
+	runAuthorizerConformance(t, func(t *testing.T) (ports.PolicyRepository, persistence.CellTxManager) {
+		return mem.NewPolicyRepository(), outbox.DemoCellTxManager()
+	})
 }
 
-func runAuthorizerConformance(t *testing.T, newRepo func() ports.PolicyRepository) {
+// runAuthorizerConformance runs the core decision scenarios against a policy
+// store + tx manager produced by factory (called once per sub-test so each gets
+// a fresh, isolated store). The provided CellTxManager wires the engine's
+// scoped policy read: mem passes the demo tx manager, PG passes a real
+// adapterpg.TxManager so the scopedtx SET LOCAL path is genuinely exercised.
+func runAuthorizerConformance(t *testing.T, factory func(t *testing.T) (ports.PolicyRepository, persistence.CellTxManager)) {
 	t.Helper()
-	seed := func(repo ports.PolicyRepository, policies ...*abac.Policy) {
+	build := func(t *testing.T, policies ...*abac.Policy) *Service {
+		repo, txm := factory(t)
 		for _, p := range policies {
 			require.NoError(t, repo.Save(context.Background(), testTenantID, p))
 		}
+		svc, err := NewService(clockmock.New(fixedClockTime), repo, slog.Default(), WithTxManager(txm))
+		require.NoError(t, err)
+		return svc
 	}
 	engPermit := cond(abac.SourceSubject, "department", abac.OpEquals, "eng")
 
 	t.Run("permit", func(t *testing.T) {
-		repo := newRepo()
-		seed(repo, policyWith("p1", permitRule("r1", authz.Obligations{}, engPermit)))
-		eng := newEngine(t, repo, clockmock.New(fixedClockTime))
+		eng := build(t, policyWith("p1", permitRule("r1", authz.Obligations{}, engPermit)))
 		dec, err := eng.Authorize(reqCtx(userPrincipal(map[string]string{"department": "eng"})), "u", "/x", "read")
 		require.NoError(t, err)
 		assert.True(t, dec.IsAllow())
 	})
 
 	t.Run("forbid-wins", func(t *testing.T) {
-		repo := newRepo()
-		seed(repo, policyWith("p1", permitRule("a", authz.Obligations{}, engPermit), forbidRule("d", engPermit)))
-		eng := newEngine(t, repo, clockmock.New(fixedClockTime))
+		eng := build(t, policyWith("p1", permitRule("a", authz.Obligations{}, engPermit), forbidRule("d", engPermit)))
 		dec, err := eng.Authorize(reqCtx(userPrincipal(map[string]string{"department": "eng"})), "u", "/x", "read")
 		require.NoError(t, err)
 		assert.False(t, dec.IsAllow())
 	})
 
 	t.Run("default-deny", func(t *testing.T) {
-		repo := newRepo()
-		eng := newEngine(t, repo, clockmock.New(fixedClockTime))
+		eng := build(t)
 		dec, err := eng.Authorize(reqCtx(userPrincipal(map[string]string{"department": "eng"})), "u", "/x", "read")
 		require.NoError(t, err)
 		assert.False(t, dec.IsAllow())

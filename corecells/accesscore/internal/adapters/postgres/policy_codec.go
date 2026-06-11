@@ -21,6 +21,7 @@ package postgres
 // spelling is tweaked.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -188,10 +189,21 @@ func marshalRules(rules []abac.Rule) ([]byte, error) {
 }
 
 // unmarshalRules decodes the JSONB column representation back to a rule list.
-// Returns an error (fail-closed) on malformed JSON or an unknown enum code.
+// Returns an error (fail-closed) on malformed JSON, an unknown enum code, OR an
+// unknown JSON field at any level (rule / condition / obligation). The
+// DisallowUnknownFields decoder closes the schema field-set: a policy written by
+// a future version that adds a security-bearing field would otherwise be read by
+// an older binary with that field silently dropped (encoding/json ignores unknown
+// keys by default) and authorized under the weaker old semantics. Rejecting the
+// row instead routes through ErrPGSchemaShape → the evaluator denies (fail-closed).
+//
+// ref: encoding/json Decoder.DisallowUnknownFields; AWS Cedar tightened arbitrary
+// fields from ignored to rejected.
 func unmarshalRules(data []byte) ([]abac.Rule, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
 	var dtos []ruleJSON
-	if err := json.Unmarshal(data, &dtos); err != nil {
+	if err := dec.Decode(&dtos); err != nil {
 		return nil, fmt.Errorf("policy_codec: unmarshal rules: %w", err)
 	}
 	rules := make([]abac.Rule, len(dtos))

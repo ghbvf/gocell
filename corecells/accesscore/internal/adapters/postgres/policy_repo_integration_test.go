@@ -13,6 +13,7 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/abac"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -40,6 +41,31 @@ func setupPolicyRepoPG(t *testing.T) (*PGPolicyRepo, *adapterpg.Pool) {
 	repo, err := NewPGPolicyRepo(pool.DB(), txMgr, clock.Real())
 	require.NoError(t, err)
 	return repo, pool
+}
+
+// setupBrokenPolicyRepoPG clones a fresh per-test DB, DROPs the policies table to
+// simulate schema drift / missing migration, and returns a PGPolicyRepo backed by
+// that broken database — the "broken" prober for RunRepoReadinessConformance.
+// Per-test DB isolation (TEMPLATE clone) keeps the DROP from leaking across tests.
+func setupBrokenPolicyRepoPG(t *testing.T) *PGPolicyRepo {
+	t.Helper()
+	pool := sharedPG.NewPerTestPool(t)
+	_, dropErr := pool.DB().Exec(context.Background(), "DROP TABLE policies CASCADE")
+	require.NoError(t, dropErr, "dropping policies to create broken repo")
+	txMgr := adapterpg.NewTxManager(pool)
+	repo, err := NewPGPolicyRepo(pool.DB(), txMgr, clock.Real())
+	require.NoError(t, err)
+	return repo
+}
+
+// TestPGPolicyRepo_Integration_RepoReadiness enrolls PGPolicyRepo in the
+// healthz.RepoProber readiness conformance (CELL-REPO-READYZ-PROBE-01). healthy:
+// full migrations applied → probe returns nil. broken: policies dropped → the
+// probe must return the differentiated error a pool-level ping cannot detect.
+func TestPGPolicyRepo_Integration_RepoReadiness(t *testing.T) {
+	healthy, _ := setupPolicyRepoPG(t)
+	broken := setupBrokenPolicyRepoPG(t)
+	celltest.RunRepoReadinessConformance(t, "accesscore-policy-pg", healthy, broken)
 }
 
 // newIntegrationTenant returns a fresh canonical-UUID tenant.
