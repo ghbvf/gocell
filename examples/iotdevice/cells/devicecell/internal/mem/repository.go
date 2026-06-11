@@ -5,7 +5,9 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"sync"
+	"time"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -37,6 +39,7 @@ func (r *DeviceRepository) Create(_ context.Context, device *domain.Device) erro
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%q", device.ID))))
 	}
 	stored := *device
+	stored.NormalizeCertState() // single source: backfill zero cert_epoch -> 1 (matches PG CHECK)
 	r.devices[device.ID] = &stored
 	return nil
 }
@@ -78,6 +81,53 @@ func (r *DeviceRepository) List(_ context.Context, params query.ListParams) ([]*
 // RepoReady always returns nil for the in-memory store (no external dependency).
 // It satisfies domain.DeviceRepository and healthz.RepoProber.
 func (r *DeviceRepository) RepoReady(_ context.Context) error { return nil }
+
+// ListCertificateRenewalCandidates returns near-expiry certs whose current epoch
+// has not yet been renewal-requested, sorted by expiry then id. See the
+// domain.DeviceRepository contract.
+func (r *DeviceRepository) ListCertificateRenewalCandidates(
+	_ context.Context, expiresBefore time.Time,
+) ([]domain.CertificateRenewalCandidate, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	out := make([]domain.CertificateRenewalCandidate, 0)
+	for _, d := range r.devices {
+		if d.CertExpiresAt.IsZero() || d.CertExpiresAt.After(expiresBefore) {
+			continue // no cert issued, or not yet near expiry
+		}
+		if d.RenewalRequestedEpoch == d.CertEpoch {
+			continue // renewal already requested for the current epoch
+		}
+		out = append(out, domain.CertificateRenewalCandidate{
+			DeviceID:      d.ID,
+			CertEpoch:     d.CertEpoch,
+			CertExpiresAt: d.CertExpiresAt,
+		})
+	}
+	slices.SortFunc(out, func(a, b domain.CertificateRenewalCandidate) int {
+		if c := a.CertExpiresAt.Compare(b.CertExpiresAt); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.DeviceID, b.DeviceID)
+	})
+	return out, nil
+}
+
+// MarkCertRenewalRequested is a compare-and-set on CertEpoch: it records the
+// renewal-requested epoch only while the device's current epoch still matches.
+// See the domain.DeviceRepository contract.
+func (r *DeviceRepository) MarkCertRenewalRequested(_ context.Context, deviceID string, epoch int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	d, ok := r.devices[deviceID]
+	if !ok || d.CertEpoch != epoch {
+		return nil // re-issued or gone since the scan; the new epoch will be re-observed
+	}
+	d.RenewalRequestedEpoch = epoch
+	return nil
+}
 
 func compareDeviceField(a, b *domain.Device, field string) int {
 	switch field {

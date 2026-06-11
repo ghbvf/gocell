@@ -93,9 +93,12 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// for the sessions tenant carrier (EPIC #1337 PR-3b, #1617);
 	// 055 rebuilds audit_entries per-(namespace, tenant) (DROP+CREATE — UNIQUE(namespace,
 	// tenant_id, seq_no)) + FORCE RLS with the OR tenant_id='' system-rows policy
-	// (EPIC #1337 #1618).
-	assert.Equal(t, int64(55), v,
-		"expected version should be exactly 55 (current migration max — 055_audit_entries_per_tenant_rls)")
+	// (EPIC #1337 #1618);
+	// 056 adds cert_epoch/cert_expires_at/renewal_requested_epoch to devices +
+	// devices_cert_epoch_positive CHECK for durable cert-renewal state (#1819);
+	// 057 adds idx_devices_cert_expires_at CONCURRENTLY for renewal-candidate scan (#1819).
+	assert.Equal(t, int64(57), v,
+		"expected version should be exactly 57 (current migration max — 057_devices_cert_expiry_index)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {

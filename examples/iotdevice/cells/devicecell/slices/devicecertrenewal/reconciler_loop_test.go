@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecert"
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/kernel/reconcile"
@@ -27,12 +27,11 @@ import (
 // identity — that is the Loop's job — so this test drives the Loop.)
 func TestReconciler_EmitsSystemTenantlessPrincipalViaLoop(t *testing.T) {
 	ctx := context.Background()
-	store := devicecert.NewStore()
-	_, err := store.Issue(ctx, "dev-near", certTestBase.Add(24*time.Hour))
-	require.NoError(t, err)
+	repo := mem.NewDeviceRepository()
+	seedCert(t, ctx, repo, "dev-near", certTestBase.Add(24*time.Hour))
 
 	rec := outboxtest.NewRecorder()
-	r := newTestReconciler(t, clockmock.New(certTestBase), store, rec)
+	r := newTestReconciler(t, clockmock.New(certTestBase), repo, rec)
 
 	reqCh := make(chan reconcile.Request)
 	loop, err := reconcile.New(r).
