@@ -73,3 +73,39 @@ type ProjectionApply func(ctx context.Context, event ProjectionEvent) error
 // read-model before replay). nil is valid. Aliased by
 // kernel/cell.ProjectionResetHook and kernel/projection.OnReset.
 type ProjectionResetHook func(ctx context.Context) error
+
+// ProjectionSource selects which input stream drives a projection. It is the
+// slice.yaml `projectionSource` selector, threaded through
+// kernel/cell.ProjectionRequest.Source so the bootstrap drain branches on the
+// transport that feeds the projection's Apply hook (EPIC #1609 PR-05, ADR D2/D4):
+//
+//   - ProjectionSourceOutbox: the named event contract's outbox topic, driven by
+//     a push-based kernel/projection.Coordinator wired into the event router. The
+//     ProjectionRequest carries an event-kind Spec (the subscribed topic).
+//   - ProjectionSourceSagaJournal: the GLOBAL saga journal (stream saga.journal.v1,
+//     every saga instance/type), driven by a pull-based runtime/saga/tailer.Tailer.
+//     The ProjectionRequest carries NO event Spec; the subscribe CU's saga-contract
+//     anchor is for lineage/governance only — it is NOT a runtime filter (the
+//     source is global, so the Apply hook folds the whole journal; see
+//     kernel/metadata.ContractUsage.ProjectionSource).
+//
+// A projection has exactly one source — the two values are mutually exclusive
+// transports.
+type ProjectionSource string
+
+const (
+	ProjectionSourceOutbox      ProjectionSource = "outbox"
+	ProjectionSourceSagaJournal ProjectionSource = "saga-journal"
+)
+
+// allProjectionSources is the canonical ordered ProjectionSource set. Single
+// source for AllProjectionSources(); the slice.schema.json `projectionSource`
+// enum and governance validators stay in lockstep with it.
+var allProjectionSources = []ProjectionSource{ProjectionSourceOutbox, ProjectionSourceSagaJournal}
+
+// AllProjectionSources returns a copy of the canonical ordered ProjectionSource set.
+func AllProjectionSources() []ProjectionSource {
+	out := make([]ProjectionSource, len(allProjectionSources))
+	copy(out, allProjectionSources)
+	return out
+}
