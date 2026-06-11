@@ -15,7 +15,7 @@
   go install ./cmd/gocell
   ```
 
-  The framework itself is a public module; `go get github.com/ghbvf/gocell@v0.1.0` works without GOPRIVATE. However, `go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` is not yet available — `cmd/gocell` is a satellite module (its `go.mod` contains a local `replace` directive, and the release pipeline only tags the root, not the `cmd/gocell/vX.Y.Z` sub-module tag), which prevents `go install pkg@version` from working. A stable standalone CLI installation path is planned for a future release.
+  The framework itself is a public module; `go get github.com/ghbvf/gocell@v0.1.0` works without GOPRIVATE, and as of #1843 every **library** satellite (`adapters/*`, `corecells`, `cellmodules`, `tools`) is tagged per module at the synchronized version, so `go get github.com/ghbvf/gocell/adapters/postgres@vX.Y.Z` resolves too (see §6). However, `go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` is still **not** available — `cmd/gocell` is a `go install` binary, and `go install pkg@version` is rejected outright when the target module's `go.mod` contains the local `replace` directive it needs for monorepo development. #1843 deliberately excludes the `cmd/*` modules for exactly this reason; making the CLI installable at a version needs release-time replace-strip, tracked as **#1088**. Install from source (above) for now.
 
 ## Steps
 
@@ -25,6 +25,8 @@
 mkdir -p ~/work/acme-payment-cell && cd ~/work/acme-payment-cell
 go mod init github.com/acme/payment-cell
 go get github.com/ghbvf/gocell@v0.1.0   # pin a stable tag (@develop = prerelease snapshot)
+# any library satellite you import (adapters/*, corecells, cellmodules, tools) is
+# tagged at the SAME version — e.g. go get github.com/ghbvf/gocell/adapters/postgres@v0.1.0
 ```
 
 ### 2. Place the Manifest File
@@ -180,7 +182,7 @@ builder := composition.New(cellIDs...).
 
 **Execution bridge**: `composition.Build()` itself does **not** run migrations (the schema must be in place before cells start, and `runtime/` must not depend on `adapters/`). In the composition root (which can import both layers), drain the registered migration set into `adapters/postgres.MigrationSet` and apply it **before** `Build` — `NewMigrationSetWithPlatform` places the platform namespace first (platform-first ordering guarantees: external cell migrations can FK platform tables):
 
-> **Note (per-adapter module split, #1558)**: `adapters/postgres` — like every `adapters/*` — is now a **separate satellite module** (`github.com/ghbvf/gocell/adapters/postgres`), no longer part of the root `github.com/ghbvf/gocell` module. The release pipeline currently tags only the root (`@v0.1.0`), not per-adapter tags (`adapters/postgres/vX.Y.Z`) — the same limitation already noted above for `go install .../cmd/gocell@vX.Y.Z`. Consequently `go get github.com/ghbvf/gocell@v0.1.0` does **not** pull `adapters/postgres`, and `go get github.com/ghbvf/gocell/adapters/postgres@<version>` cannot resolve yet. Until per-adapter release tags exist, an external composition root that needs this PG migration bridge must consume the adapter via a Go workspace / local `replace` (Workspace Mode, §5 above). Per-adapter release tagging is planned for a future release (tracked under the #1558 adapter-split epic).
+> **Note (per-adapter module split #1558 / external publishing #1843)**: `adapters/postgres` — like every `adapters/*` — is a **separate satellite module** (`github.com/ghbvf/gocell/adapters/postgres`), no longer part of the root `github.com/ghbvf/gocell` module. As of #1843 the release pipeline tags every library satellite per module (`adapters/postgres/vX.Y.Z`), **synchronized to the same `vX.Y.Z` as the root** — so `go get github.com/ghbvf/gocell/adapters/postgres@vX.Y.Z` now resolves directly. **Pin it at the same `vX.Y.Z` you use for the core `go get github.com/ghbvf/gocell@vX.Y.Z`** (the synchronized-release contract holds every gocell module at one version). Note that `go get github.com/ghbvf/gocell@vX.Y.Z` alone does **not** pull `adapters/postgres` — it is a distinct module; add it explicitly. The Go workspace / local `replace` route (Workspace Mode, §5 above) remains available as a dev-time convenience but is no longer required for consumption.
 
 ```go
 set, err := adapterpg.NewMigrationSetWithPlatform() // seeds "platform" first

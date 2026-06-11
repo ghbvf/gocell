@@ -1,5 +1,5 @@
 .PHONY: build check-build test fmt verify validate generate proto-lint proto-gen cover clean \
-        install-hooks update-archtest-golden \
+        install-hooks update-archtest-golden update-modrelease-golden release-smoke \
         up down \
         local-up local-down \
         test-integration \
@@ -119,6 +119,18 @@ fmt:
 # to internal/ subpackages would fail with "flag provided but not defined: -update".
 update-archtest-golden:
 	go test -tags=archtest ./tools/archtest -update -count=1
+
+# update-modrelease-golden regenerates testdata/publishable.golden, the
+# byte-frozen derived publishable module set (PUBLISHABLE-MODULE-SET-01). Run
+# after intentionally adding/removing a go.work member or changing IsPublishable.
+update-modrelease-golden:
+	go test ./tools/modrelease -run TestPublishableModuleSet01 -update -count=1
+
+# release-smoke runs the external-consumer go-get/build smoke for the
+# synchronized multi-module release (RELEASE-EXTERNAL-GET-01). Network-free and
+# Docker-free; also wired as the `nightly`-bucket hack/verify-release-smoke.sh.
+release-smoke:
+	go test -tags=releasesmoke -count=1 ./tools/releasesmoke/...
 
 # verify discovers and runs every hack/verify-*.sh in deterministic order,
 # accumulating failures. Single entry point for static governance gates

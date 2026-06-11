@@ -206,15 +206,17 @@ jobs:
             [ "$dir" != "." ] || continue
             echo "+++ golangci-lint in module: $dir"
             # The tools module's archtest leaf is gated behind `//go:build archtest`
-            # (ARCHTEST-LEAF-BUILD-TAG-01); without the tag golangci-lint skips
-            # those ~288 *_test.go files and their lint coverage silently drops.
-            # Lint tools under the tag so the heavy suite's source stays covered —
-            # the same cross-tag lane idea as `go vet -tags=e2e` below. Other
-            # satellites carry no archtest-gated files, so the flag stays empty.
+            # (ARCHTEST-LEAF-BUILD-TAG-01) and the release smoke behind
+            # `//go:build releasesmoke` (RELEASE-EXTERNAL-GET-01); without the tags
+            # golangci-lint skips those *_test.go files and their lint coverage
+            # silently drops. Lint tools under both tags so the heavy suite + the
+            # smoke source stay covered — the same cross-tag lane idea as
+            # `go vet -tags=e2e` below. Other satellites carry no tag-gated files,
+            # so the flag stays empty.
             build_tags=""
             # gocell::modules::dirs yields `tools` (go work edit -json DiskPath);
             # ${dir#./} tolerates `./tools` too if the path ever gains a leading ./.
-            [ "${dir#./}" = "tools" ] && build_tags="--build-tags=archtest"
+            [ "${dir#./}" = "tools" ] && build_tags="--build-tags=archtest,releasesmoke"
             (
               cd "$dir"
               # shellcheck disable=SC2086 # LINT_ARGS + build_tags are intentionally split into CLI flags.

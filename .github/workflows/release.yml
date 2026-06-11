@@ -176,8 +176,22 @@ jobs:
           fetch-depth: 0 # full history for annotated tag, --generate-notes, prune
           fetch-tags: true
 
-      - name: Create annotated tag
-        if: needs.verify.outputs.tag_exists != 'true' # skip when resuming an existing tag
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        # Stable releases run the modrelease tool (bump + tag-path derivation);
+        # snapshots are root-only git operations and need no Go.
+        if: needs.verify.outputs.tag_exists != 'true' && needs.verify.outputs.prerelease != 'true'
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Pin internal requires & commit (stable only)
+        # Synchronized multi-module release (#1843): pin every publishable LIBRARY
+        # module's internal requires v0.0.0 -> vX.Y.Z (keeping replace) on a commit
+        # pushed to develop — the single tag target for root and all satellites.
+        # develop thereafter carries the released version (replace still resolves
+        # locally under GOWORK=off, so verify-workspace stays green; filesystem
+        # replace needs no go.sum, so go.sum is untouched). Snapshots skip this.
+        if: needs.verify.outputs.tag_exists != 'true' && needs.verify.outputs.prerelease != 'true'
         run: |
           set -euo pipefail
           if [ "$(git rev-parse HEAD)" != "$SHA" ]; then
@@ -186,8 +200,47 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "Release $TAG"
-          git push origin "$TAG"
+          go run ./tools/modrelease/cmd --version "$TAG"
+          if git diff --quiet; then
+            echo "::warning::modrelease pinned no requires (already at $TAG?) — tagging $SHA as-is." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            git commit -am "release($TAG): pin internal module requires"
+            # Non-fast-forward (develop advanced since verify) fails the push;
+            # re-run the workflow to release the new HEAD. Requires branch
+            # protection to permit the github-actions bot to push to develop.
+            git push origin "HEAD:develop"
+          fi
+
+      - name: Tag modules
+        # Root always tags at HEAD. Stable additionally tags every publishable
+        # satellite <reldir>/vX.Y.Z at the same (pin) commit; the tag set is
+        # derived from the same publishable enumeration as the golden guard, must
+        # contain the root tag, and is pushed --atomic so a partial set never
+        # lands. Snapshots tag root only.
+        if: needs.verify.outputs.tag_exists != 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ "$PRERELEASE" = "true" ]; then
+            git tag -a "$TAG" -m "Release $TAG"
+            git push origin "$TAG"
+            exit 0
+          fi
+          mapfile -t tags < <(go run ./tools/modrelease/cmd --version "$TAG" --print-tag-paths)
+          if [ "${#tags[@]}" -lt 2 ]; then
+            echo "::error::expected root + satellite tags from modrelease, got ${#tags[@]}."
+            exit 1
+          fi
+          case " ${tags[*]} " in
+            *" $TAG "*) ;;
+            *) echo "::error::root tag $TAG missing from derived tag set."; exit 1 ;;
+          esac
+          for tag in "${tags[@]}"; do
+            git tag -a "$tag" -m "Release $tag"
+          done
+          git push origin --atomic "${tags[@]}"
 
       - name: Create GitHub Release
         run: |
