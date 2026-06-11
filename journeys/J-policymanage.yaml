@@ -1,6 +1,6 @@
 id: J-policymanage
 goal: 管理员完成 ABAC Policy CRUD 并触发策略变更事件
-lifecycle: active
+lifecycle: experimental
 owner:
   team: platform
   role: journey-owner

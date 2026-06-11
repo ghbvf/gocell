@@ -53,9 +53,9 @@ func pgIntegMigrationsFS(t testing.TB) fs.FS {
 }
 
 type policyIntegBundle struct {
-	pool   *adapterpg.Pool
-	repo   *accesspgrepo.PGPolicyRepo
-	txMgr  *adapterpg.TxManager
+	pool  *adapterpg.Pool
+	repo  *accesspgrepo.PGPolicyRepo
+	txMgr *adapterpg.TxManager
 }
 
 // setupPolicyIntegPG starts a testcontainers PostgreSQL instance, applies all

@@ -172,6 +172,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		withRoleRepository(roleRepo),
 		withPolicyRepository(mem.NewPolicyRepository()),
+		withResourceAttributeProvider(mem.NewResourceAttributeProvider()),
 		WithOutboxDeps(outbox.WrapPublisherForCell(noopPublisher{}), nil),
 		WithJWTIssuer(issuer),
 		WithJWTVerifier(verifier),

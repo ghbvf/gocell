@@ -3,8 +3,11 @@
   "title": "http.policy.list.v1.response",
   "description": "Paginated list of ABAC Policies.",
   "type": "object",
-  "additionalProperties": false,
-  "required": ["data", "nextCursor", "hasMore"],
+  "required": [
+    "data",
+    "nextCursor",
+    "hasMore"
+  ],
   "properties": {
     "data": {
       "type": "array",
