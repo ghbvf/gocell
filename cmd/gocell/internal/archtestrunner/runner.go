@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 
 	"github.com/ghbvf/gocell/pkg/cmdrun"
 )
@@ -119,20 +118,28 @@ func applyFilters(ctx context.Context, req Request, discovered []string) ([]stri
 	return selected, nil
 }
 
-// discoverTests runs `go test -tags=archtest -list '^Test' ./tools/archtest`
-// and returns the sorted list of Test* function names.
-func discoverTests(ctx context.Context, workspaceRoot string) ([]string, error) {
+// runGoCommand is the single subprocess entry point used by discoverTests and
+// execGoTest. It is a package-level variable so tests can substitute a stub
+// that returns canned output without spawning real subprocesses.
+//
+// Production code must not replace this variable outside of test files.
+// Test code must restore the original via t.Cleanup.
+var runGoCommand = func(ctx context.Context, dir string, extraEnv, args []string) ([]byte, error) {
 	goTool, err := cmdrun.NewTool(goToolName())
 	if err != nil {
 		return nil, fmt.Errorf("archtestrunner: resolve go tool: %w", err)
 	}
-
-	args := buildDiscoverArgs()
-	output, runErr := cmdrun.RunWith(ctx, goTool, cmdrun.RunOptions{
-		Dir:      filepath.Clean(workspaceRoot),
+	return cmdrun.RunWith(ctx, goTool, cmdrun.RunOptions{
+		Dir:      filepath.Clean(dir),
 		ExtraEnv: goTestExtraEnv(goTool.Dir()),
 	}, args...)
+}
 
+// discoverTests runs `go test -tags=archtest -list '^Test' ./tools/archtest`
+// and returns the sorted list of Test* function names.
+func discoverTests(ctx context.Context, workspaceRoot string) ([]string, error) {
+	args := buildDiscoverArgs()
+	output, runErr := runGoCommand(ctx, workspaceRoot, nil, args)
 	if runErr != nil {
 		return nil, fmt.Errorf("archtestrunner: discover archtest tests: %w", runErr)
 	}
@@ -147,17 +154,8 @@ func discoverTests(ctx context.Context, workspaceRoot string) ([]string, error) 
 // execGoTest runs `go test -tags=archtest -json -run '^(...)$' ./tools/archtest`
 // and returns the combined output and any run error.
 func execGoTest(ctx context.Context, req Request, selected []string) ([]byte, error) {
-	goTool, err := cmdrun.NewTool(goToolName())
-	if err != nil {
-		return nil, fmt.Errorf("archtestrunner: resolve go tool: %w", err)
-	}
-
 	args := buildTestArgs(req.Timeout, selected)
-	output, runErr := cmdrun.RunWith(ctx, goTool, cmdrun.RunOptions{
-		Dir:      filepath.Clean(req.WorkspaceRoot),
-		ExtraEnv: goTestExtraEnv(goTool.Dir()),
-	}, args...)
-	return output, runErr
+	return runGoCommand(ctx, req.WorkspaceRoot, nil, args)
 }
 
 // enrichWithMeta populates TestResult.File and TestResult.Rules using the
@@ -264,14 +262,4 @@ func prependToPath(dir, existing string) string {
 		return dir
 	}
 	return dir + string(os.PathListSeparator) + existing
-}
-
-// sortedKeys returns sorted keys of a string set (used for deterministic output).
-func sortedKeys(m map[string]bool) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }

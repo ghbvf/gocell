@@ -281,13 +281,6 @@ func TestBuildRunPattern(t *testing.T) {
 	assert.Equal(t, "^(TestA|TestB|TestC)$", pattern)
 }
 
-// TestSortedKeys verifies sorted key ordering.
-func TestSortedKeys(t *testing.T) {
-	m := map[string]bool{"TestC": true, "TestA": true, "TestB": true}
-	got := sortedKeys(m)
-	assert.Equal(t, []string{"TestA", "TestB", "TestC"}, got)
-}
-
 // TestGoTestExtraEnv verifies it returns a non-empty slice with PATH.
 func TestGoTestExtraEnv(t *testing.T) {
 	env := goTestExtraEnv("/usr/local/go/bin")
