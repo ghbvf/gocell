@@ -146,6 +146,16 @@ func TestAuditWireSensitiveFieldFunnel_Response(t *testing.T) {
 			wantErr:    false,
 		},
 		{
+			// tenantId is the isolation-domain id (an organizational scope key),
+			// NOT in pkg/redaction's sensitive-key set — explicitly safe to project
+			// onto the audit wire. Proves the funnel admits it rather than over-
+			// rejecting any *Id field.
+			name:       "audit_response_tenantId_safe",
+			contractID: "http.audit.list.v1",
+			respBody:   listShapedResponse(`"tenantId":{"type":"string"}`),
+			wantErr:    false,
+		},
+		{
 			// Non-audit auth contracts may legitimately return sessionId (the
 			// caller's own session resource id). idempotencyExempt: true is set
 			// here as required by CREDENTIAL-RESPONSE-IDEMPOTENCY-EXEMPT-FUNNEL-01

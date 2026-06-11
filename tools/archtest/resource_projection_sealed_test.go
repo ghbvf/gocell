@@ -28,13 +28,17 @@
 //     added inside pkg/projection without tripping this archtest. Mirrors the
 //     func+method scan in outbox_entry_sealed_construction_test.go.
 //
-// SCOPE — what this seal does NOT cover. PR-11 ships the unforgeable carrier
-// only. It does NOT force production read handlers to actually return a
-// ResourceProjection built from the request's Decision.Obligations().FieldMask —
-// that downstream callsite lock lands in PR-12 (#1350), when real handlers adopt
-// projection. Do NOT read this invariant as "column leakage is already closed";
-// until PR-12 it guarantees only that a ResourceProjection, wherever one is
-// produced, came through the masking funnel.
+// SCOPE — this seal is the UPSTREAM half of a now-CLOSED funnel. PR-11 shipped
+// the unforgeable carrier (this file). PR-12 (#1350) landed the downstream
+// callsite lock: RESOURCE-PROJECTION-CALLSITE-LOCK-01 pins every
+// responseProjection-marked contract's generated Response.Data to the sealed
+// projection.ResourceProjection carrier (go/types Hard), so a full, un-masked
+// view is non-assignable at the handler callsite; RESOURCE-PROJECTION-COVERAGE-01
+// closes it globally by requiring every resource-bearing GET read to carry the
+// marker. The seal makes the carrier unforgeable; those two invariants make the
+// unforgeability load-bearing at the read endpoint. The combined funnel — seal
+// (upstream) + callsite lock + coverage (downstream) — is what closes column
+// leakage; this file owns only the upstream carrier seal.
 //
 // Tool blind spots (per AI-robust §"强制盲区自检"):
 //
