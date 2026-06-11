@@ -58,6 +58,53 @@ func TestListTests_Shard_ExactlyOnce(t *testing.T) {
 	}
 }
 
+// TestListTests_Changed_RealRepo verifies the --changed selection path
+// against the real git repo.  It calls ListTests with Changed:true, which
+// exercises the real git subprocess path in gitdiff.go:
+// changedArchtestFiles → gitMergeBase → gitDiffNames.
+//
+// The result set may be empty (no archtest files changed vs origin/develop on
+// this branch) or non-empty (some were touched).  We only assert:
+//  1. err == nil — the git path executed without error.
+//  2. Every returned name starts with "Test" (valid test function name).
+//  3. Every returned name is a subset of the full discovery list.
+//
+// This covers the real-git functions (gitMergeBase, gitDiffNames,
+// changedArchtestFiles) that are not exercised by the discovery-only tests.
+func TestListTests_Changed_RealRepo(t *testing.T) {
+	if os.Getenv("GOWORK") == "off" {
+		t.Skip("GOWORK=off: skipping integration test")
+	}
+	root := findRepoRoot(t)
+
+	// Full discovery for subset check.
+	all, err := ListTests(context.Background(), Request{
+		WorkspaceRoot: root,
+		Scope:         ScopeWorkspace,
+	})
+	require.NoError(t, err, "full discovery must succeed before running changed check")
+	allSet := make(map[string]bool, len(all))
+	for _, n := range all {
+		allSet[n] = true
+	}
+
+	// Changed-only selection — exercises gitMergeBase/gitDiffNames/changedArchtestFiles.
+	changed, err := ListTests(context.Background(), Request{
+		WorkspaceRoot: root,
+		Scope:         ScopeWorkspace,
+		Changed:       true,
+	})
+	require.NoError(t, err, "ListTests with Changed:true must not return an error")
+
+	// The result may be empty (clean branch, no archtest files touched).
+	for _, n := range changed {
+		assert.True(t, len(n) > 4 && n[:4] == "Test",
+			"changed test name %q must start with Test", n)
+		assert.True(t, allSet[n],
+			"changed test %q must be a subset of the full discovery list", n)
+	}
+}
+
 // findRepoRoot walks up from the current working directory to find the
 // repository root (containing go.work).
 func findRepoRoot(t *testing.T) string {
