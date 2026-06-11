@@ -60,6 +60,7 @@ type HTTPTransportMeta struct {
 	// carrying a `data` resource MUST set this (RESOURCE-PROJECTION-COVERAGE-01);
 	// an empty FieldMask obligation yields the identity projection so the wire
 	// field set is unchanged. Default false leaves the response type untouched.
+	// See contracts/http/audit/list/v1/contract.yaml for a worked example.
 	ResponseProjection bool `yaml:"responseProjection,omitempty" json:"responseProjection,omitempty"`
 }
 

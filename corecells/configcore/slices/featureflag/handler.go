@@ -18,47 +18,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// FeatureFlagResponse is the public DTO for FeatureFlag, retained for unit
-// tests that verify the conversion function directly (TestToFeatureFlagResponse_NilInput,
-// TestFeatureFlagResponse_Fields).
-type FeatureFlagResponse struct {
-	ID                string    `json:"id"`
-	Key               string    `json:"key"`
-	Type              string    `json:"type"`
-	Enabled           bool      `json:"enabled"`
-	RolloutPercentage int       `json:"rolloutPercentage"`
-	Description       string    `json:"description"`
-	Version           int       `json:"version"`
-	CreatedAt         time.Time `json:"createdAt"`
-	UpdatedAt         time.Time `json:"updatedAt"`
-}
-
-func toFeatureFlagResponse(f *domain.FeatureFlag) FeatureFlagResponse {
-	if f == nil {
-		return FeatureFlagResponse{}
-	}
-	return FeatureFlagResponse{
-		ID: f.ID, Key: f.Key, Type: string(f.Type),
-		Enabled: f.Enabled, RolloutPercentage: f.RolloutPercentage,
-		Description: f.Description, Version: f.Version,
-		CreatedAt: f.CreatedAt, UpdatedAt: f.UpdatedAt,
-	}
-}
-
-// EvaluateResultResponse is the public DTO for EvaluateResult, retained for
-// unit tests.
-type EvaluateResultResponse struct {
-	Key     string `json:"key"`
-	Enabled bool   `json:"enabled"`
-}
-
-func toEvaluateResultResponse(r *EvaluateResult) EvaluateResultResponse {
-	if r == nil {
-		return EvaluateResultResponse{}
-	}
-	return EvaluateResultResponse{Key: r.Key, Enabled: r.Enabled}
-}
-
 // GetAdapter wraps Service to implement flagsget.Service for http.config.flags.get.v1.
 type GetAdapter struct{ S *Service }
 

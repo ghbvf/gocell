@@ -1122,6 +1122,24 @@ func TestHandleQuery_ColumnMaskMatrix(t *testing.T) {
 			assert.Equal(t, tc.wantTrace, row["traceId"], "traceId")
 			// tenantId is projected (PR-12) and never in a per-scope mask: visible to all.
 			assert.Equal(t, auditQueryTestTenant, row["tenantId"], "tenantId visible (own tenant)")
+
+			// Raw-value non-leak assertions: the actual sensitive values for THIS row
+			// must not appear anywhere in the body when the scope masks them.
+			body := w.Body.String()
+			switch tc.name {
+			case "non_admin_self_masks_diagnostics":
+				// self row's correlationId and traceId are masked; raw values must not leak.
+				assert.NotContains(t, body, "corr-self", "corr-self raw value must not appear in self-scoped body")
+				assert.NotContains(t, body, "trace-self", "trace-self raw value must not appear in self-scoped body")
+			case "device_masks_subject_and_diagnostics":
+				// device query is scoped to actor_id==deviceID, so only the device row is returned.
+				require.Lenf(t, resp.Data, 1, "device scope must return exactly 1 row; body=%s", body)
+				// device row's correlationId and traceId are masked; raw values must not leak.
+				assert.NotContains(t, body, "corr-dev", "corr-dev raw value must not appear in device-scoped body")
+				assert.NotContains(t, body, "trace-dev", "trace-dev raw value must not appear in device-scoped body")
+				// subjectVal is unique to the device's own row in this single-row response.
+				assert.NotContains(t, body, subjectVal, "subjectVal must not appear in device-scoped body (single-row response)")
+			}
 		})
 	}
 }

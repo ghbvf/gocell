@@ -126,12 +126,14 @@ type DTOSpec struct {
 	// traversal. Callers of buildContractSpec see an empty slice — the builder
 	// promotes nested types to ContractGenSpec.DTOs and clears this field.
 	Nested []DTOSpec
-	// EmitToMap requests a generated unexported `toMap() map[string]any` method
+	// EmitToMap requests a generated exported `ToMap() map[string]any` method
 	// for this DTO (the resource-item type of a responseProjection endpoint).
 	// Set by applyResponseProjection on the `data` resource item DTO so the
 	// handler can convert the schema-typed row into the column map the masking
 	// funnel (projection.NewProjection / NewProjectionList) consumes; map keys
 	// mirror BareJSONTag so the projected field set equals this DTO's field set.
+	// The DTO name follows the convention: ResponseDataItem for data[] array
+	// endpoints (list reads), ResponseData for single-object data endpoints.
 	EmitToMap bool
 }
 

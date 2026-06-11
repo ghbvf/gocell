@@ -67,4 +67,9 @@
 // read endpoint, so column leakage is now closed end to end. This package still
 // owns only the carrier + masking funnel; the field-type pin and coverage live
 // in the archtest layer.
+//
+// Note: the 9 non-audit GET reads added in PR-12 all pass authz.FieldMask{}
+// (identity projection — all columns visible). Per-principal column obligations
+// for those endpoints arrive when the ABAC decision engine is wired in PR-10
+// (#1348).
 package projection

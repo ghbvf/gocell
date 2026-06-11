@@ -13,33 +13,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// RoleResponse is the public DTO for Role, isolating the API contract from the
-// domain model. Kept for unit tests that reference toRoleResponse directly.
-type RoleResponse struct {
-	ID          string               `json:"id"`
-	Name        string               `json:"name"`
-	Permissions []PermissionResponse `json:"permissions"`
-}
-
-// PermissionResponse is the public DTO for Permission.
-type PermissionResponse struct {
-	Resource string `json:"resource"`
-	Action   string `json:"action"`
-}
-
-func toRoleResponse(r *domain.Role) RoleResponse {
-	perms := make([]PermissionResponse, len(r.Permissions))
-	for i, p := range r.Permissions {
-		perms[i] = PermissionResponse{Resource: p.Resource, Action: p.Action}
-	}
-	return RoleResponse{ID: r.ID, Name: r.Name, Permissions: perms}
-}
-
-// HasRoleResponse is the public DTO for role-check results. Kept for unit tests.
-type HasRoleResponse struct {
-	HasRole bool `json:"hasRole"`
-}
-
 // ListAdapter implements listg.Service for http.auth.role.list.v1.
 type ListAdapter struct{ S *Service }
 

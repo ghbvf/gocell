@@ -23,39 +23,52 @@ import (
 
 const invalidUUID = "not-a-uuid-string"
 
-func TestRoleResponse_PermissionMapping(t *testing.T) {
-	role := &domain.Role{
-		ID: "r1", Name: "admin",
-		Permissions: []domain.Permission{
-			{Resource: "users", Action: "read"},
-			{Resource: "orders", Action: "write"},
+func TestRoleProjectionRows_PermissionMapping(t *testing.T) {
+	roles := []*domain.Role{
+		{
+			ID: "r1", Name: "admin",
+			Permissions: []domain.Permission{
+				{Resource: "users", Action: "read"},
+				{Resource: "orders", Action: "write"},
+			},
 		},
 	}
-	resp := toRoleResponse(role)
-
-	assert.Equal(t, "r1", resp.ID)
-	assert.Equal(t, "admin", resp.Name)
-	require.Len(t, resp.Permissions, 2)
-	assert.Equal(t, "users", resp.Permissions[0].Resource)
-	assert.Equal(t, "read", resp.Permissions[0].Action)
-	assert.Equal(t, "orders", resp.Permissions[1].Resource)
-	assert.Equal(t, "write", resp.Permissions[1].Action)
-
-	// Verify camelCase JSON keys (#27n).
-	b, err := json.Marshal(resp)
+	rows, err := toRoleProjectionRows(roles)
 	require.NoError(t, err)
-	s := string(b)
-	assert.Contains(t, s, `"id"`)
-	assert.Contains(t, s, `"name"`)
-	assert.Contains(t, s, `"permissions"`)
-	assert.Contains(t, s, `"resource"`)
-	assert.Contains(t, s, `"action"`)
+	require.Len(t, rows, 1)
+
+	// Round-trip through JSON to verify wire keys (camelCase, #27n).
+	b, marshalErr := json.Marshal(rows[0])
+	require.NoError(t, marshalErr)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(b, &m))
+
+	assert.Equal(t, "r1", m["id"])
+	assert.Equal(t, "admin", m["name"])
+	perms, ok := m["permissions"].([]any)
+	require.True(t, ok)
+	require.Len(t, perms, 2)
+	p0 := perms[0].(map[string]any)
+	assert.Equal(t, "users", p0["resource"])
+	assert.Equal(t, "read", p0["action"])
+	p1 := perms[1].(map[string]any)
+	assert.Equal(t, "orders", p1["resource"])
+	assert.Equal(t, "write", p1["action"])
 }
 
-func TestRoleResponse_EmptyPermissions(t *testing.T) {
-	role := &domain.Role{ID: "r2", Name: "viewer", Permissions: nil}
-	resp := toRoleResponse(role)
-	assert.Empty(t, resp.Permissions)
+func TestRoleProjectionRows_EmptyPermissions(t *testing.T) {
+	roles := []*domain.Role{{ID: "r2", Name: "viewer", Permissions: nil}}
+	rows, err := toRoleProjectionRows(roles)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	b, marshalErr := json.Marshal(rows[0])
+	require.NoError(t, marshalErr)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(b, &m))
+	perms, ok := m["permissions"].([]any)
+	require.True(t, ok, "permissions key must be present")
+	assert.Empty(t, perms)
 }
 
 func setup(t *testing.T, runMode query.RunMode) http.Handler {

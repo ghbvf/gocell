@@ -58,6 +58,12 @@
 //     envelope convention (`data` / `nextCursor` / `hasMore`) is the single
 //     structural signal. Responses that are pure scalars / status objects
 //     (no `data`) are correctly exempt (the green control proves this).
+//   - $ref not resolved. responseHasTopLevelDataResource does not resolve $ref
+//     in the `data` property: a future response schema that uses a $ref for the
+//     `data` value instead of an inline type/items object would not be detected
+//     as resource-bearing and would silently skip enforcement. No current platform
+//     contract uses $ref for `data`; revisit this blind spot if that convention
+//     is introduced.
 //   - Anti-vacuity is the non-empty resource-read-GET set assertion (≥1; ≥10
 //     after PR-12). If the enumeration collapses to zero (e.g. the parser stops
 //     surfacing GET endpoints), the production test FAILS rather than passing
@@ -130,10 +136,19 @@ func TestResourceProjectionCoverage01(t *testing.T) {
 		}
 	}
 
-	if resourceReadCount == 0 {
-		t.Fatal("RESOURCE-PROJECTION-COVERAGE-01: zero resource-bearing GET reads enumerated — the coverage check " +
-			"would be vacuous. After PR-12 there are 10 (all marked); if the enumeration collapsed, fix the parse " +
-			"or the response-schema convention.")
+	// minExpectedResourceReadGETs is the anti-vacuity floor for the resource-read
+	// GET scan. Update this constant when platform GET resource-reads are added or
+	// removed; the floor catches a schema-predicate regression that silently drops
+	// contracts from the scan (e.g. if responseHasTopLevelDataResource stops
+	// detecting the data envelope shape, resourceReadCount would collapse to zero
+	// and the test would pass vacuously with no enforcement).
+	const minExpectedResourceReadGETs = 10
+	if resourceReadCount < minExpectedResourceReadGETs {
+		t.Fatalf("RESOURCE-PROJECTION-COVERAGE-01: only %d resource-bearing GET reads enumerated (floor: %d) — "+
+			"the coverage check may be vacuous or contracts were removed without updating the floor. "+
+			"After PR-12 there are 10 platform GET reads (all marked); if the enumeration collapsed, "+
+			"fix the parse or the response-schema convention, or update minExpectedResourceReadGETs.",
+			resourceReadCount, minExpectedResourceReadGETs)
 	}
 
 	// No-stale carve-out reverse check: every carve-out entry must correspond to a
@@ -156,9 +171,9 @@ func projectionCoverageDiag(contractID string) Diagnostic {
 	return Diagnostic{Message: fmt.Sprintf(
 		"RESOURCE-PROJECTION-COVERAGE-01: GET contract %q returns a `data` resource but does not set "+
 			"endpoints.http.responseProjection: true — a resource-bearing read MUST route its wire data through "+
-			"the column-masking funnel (RESOURCE-PROJECTION-CALLSITE-LOCK-01). Set the marker and regenerate, or "+
-			"if this `data` is a genuinely non-maskable primitive, add %q to resourceReadProjectionCarveOut WITH a "+
-			"carve-out ADR entry.", contractID, contractID)}
+			"the column-masking funnel (RESOURCE-PROJECTION-CALLSITE-LOCK-01). Set the marker and regenerate "+
+			"(`gocell generate contract %s`), or if this `data` is a genuinely non-maskable primitive, add %q "+
+			"to resourceReadProjectionCarveOut WITH a carve-out ADR entry.", contractID, contractID, contractID)}
 }
 
 // TestResourceProjectionCoverage01_ScannerCatchesViolation is the reverse

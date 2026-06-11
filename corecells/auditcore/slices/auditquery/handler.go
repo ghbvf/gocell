@@ -197,16 +197,7 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 		return nil, err
 	}
 
-	// Column masking (epic #1337 PR-12, FR-016/FR-017): derive the FieldMask
-	// obligation from the principal's row-visibility scope and discharge it through
-	// the sealed ResourceProjection funnel. admin/super-admin (tenant/all scope) get
-	// the full column set; a non-admin user (self) and a device get the per-kind
-	// sensitive columns masked (see auditFieldMask). The mask SOURCE is the
-	// identity→scope derivation (PR-5) for now; once authorizationdecide is wired
-	// into the request path (PR-10 #1348) it is swapped for
-	// Decision.Obligations().FieldMask — the PEP funnel below is unchanged. The
-	// generated Response.Data is []projection.ResourceProjection, so an un-masked
-	// ResponseDataItem view cannot be returned here (compile-time callsite lock).
+	// Column masking (epic #1337 PR-12, FR-016/FR-017): see auditFieldMask godoc.
 	mask := auditFieldMask(vis.Scope())
 	rows := make([]map[string]any, 0, len(result.Items))
 	for _, e := range result.Items {
@@ -237,6 +228,12 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 // policy engine is wired into the request path (PR-10 #1348); the projection PEP
 // that discharges the mask is unchanged by that swap.
 //
+// Fail-closed default (defense-in-depth): any future or unknown RowScope value
+// that is not explicitly enumerated here falls through to the MOST RESTRICTIVE
+// mask (same as RowScopeDevice). RowVisibility already validates scopes upstream,
+// so this branch is never reached on the normal path — it is a compile-time safety
+// net that prevents an unenumerated scope from silently widening column visibility.
+//
 // sessionId is never on the wire (it is not a projected column — the
 // AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01 codegen guard keeps it out of the response
 // schema), and payload is already scrubbed by RedactPayload, so neither needs a
@@ -247,9 +244,13 @@ func auditFieldMask(scope tenant.RowScope) authz.FieldMask {
 		return authz.FieldMask{Fields: []string{"correlationId", "traceId"}}
 	case tenant.RowScopeDevice:
 		return authz.FieldMask{Fields: []string{"subjectId", "correlationId", "traceId"}}
-	default:
-		// RowScopeTenant / RowScopeAll (admin / super-admin): full column view.
+	case tenant.RowScopeTenant, tenant.RowScopeAll:
+		// admin / super-admin: full column view (identity projection).
 		return authz.FieldMask{}
+	default:
+		// Unknown/unenumerated scope: fail-closed with the most restrictive mask.
+		// An unenumerated scope must never silently widen column visibility.
+		return authz.FieldMask{Fields: []string{"subjectId", "correlationId", "traceId"}}
 	}
 }
 

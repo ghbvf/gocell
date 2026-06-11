@@ -29,11 +29,11 @@
           },
           "correlationId": {
             "type": "string",
-            "description": "Opaque cross-cell correlation identifier from the originating request context. Lets consumers stitch an audited action back to its request. Empty for entries predating its introduction."
+            "description": "Operator-diagnostic column: opaque cross-cell correlation identifier from the originating request context. Visible to admin/tenant-scope callers; value-masked (\"<REDACTED>\") for non-admin (self) and device callers per the FieldMask obligation (epic #1337 PR-12). Empty for entries predating its introduction."
           },
           "traceId": {
             "type": "string",
-            "description": "Opaque distributed trace identifier from the originating request context. Lets consumers correlate an audited action back to its trace. Empty for entries predating its introduction."
+            "description": "Operator-diagnostic column: opaque distributed trace identifier from the originating request context. Visible to admin/tenant-scope callers; value-masked (\"<REDACTED>\") for non-admin (self) and device callers per the FieldMask obligation (epic #1337 PR-12). Empty for entries predating its introduction."
           },
           "occurredAt": {
             "type": "string",
