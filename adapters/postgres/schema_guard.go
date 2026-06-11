@@ -70,11 +70,10 @@ const gotWantQuotedFmt = "got %q want %q"
 //                                   renewal_requested_epoch BIGINT NOT NULL DEFAULT 0 (056)
 //                                 + devices_cert_epoch_positive CHECK (cert_epoch >= 1) (056)
 //                                 + idx_devices_cert_expires_at (cert_expires_at, id) (057)
-//                                 + renewal_requested_at TIMESTAMPTZ (nullable, no default) (060)
 //   - commands           (030)  examples/iotdevice command queue PG adapter (B2.B)
 //                                 + commands.device_id FK → devices(id) ON DELETE RESTRICT
 //                                 + commands_status_chk, commands_attempt_chk
-//                                 + idx_commands_idempotency_key UNIQUE partial (031)
+//                                 + idx_commands_idempotency_key UNIQUE partial (031→061 state-aware)
 //   - saga_instances     (040)  saga coordinator instance projection + lease fencing
 //                                 + saga_instances_status_range, saga_instances_version_nonneg,
 //                                   saga_instances_lease_paired CHECK
@@ -615,8 +614,6 @@ var expectedColumns = []expectedColumn{
 	{Table: "devices", Column: "cert_epoch", Type: "bigint", NotNull: true},
 	{Table: "devices", Column: "cert_expires_at", Type: pgTypeTSTZ, NotNull: false},
 	{Table: "devices", Column: "renewal_requested_epoch", Type: "bigint", NotNull: true},
-	// 060_devices_renewal_requested_at.sql — time-window retry release (#1820).
-	{Table: "devices", Column: "renewal_requested_at", Type: pgTypeTSTZ, NotNull: false},
 	// commands (030_commands.sql) — kernel/command.Queue PG adapter (B2.B).
 	{Table: "commands", Column: "id", Type: "text", NotNull: true},
 	{Table: "commands", Column: "device_id", Type: "text", NotNull: true},
@@ -815,9 +812,12 @@ var expectedIndexes = []expectedIndex{
 	{Table: "commands", Name: "idx_commands_pending_fifo", Unique: false, Columns: []string{"device_id", "created_at"}},
 	{Table: "commands", Name: "idx_commands_active_lease", Unique: false, Columns: []string{"lease_expiry"}},
 	{Table: "commands", Name: "idx_commands_device_active", Unique: false, Columns: []string{"device_id", "status", "created_at"}},
-	// 031_commands_idempotency_unique.sql: expression index on (metadata->>'_idempotency_key')
+	// 061_commands_idempotency_active_index.sql: expression index on (metadata->>'_idempotency_key')
+	// with WHERE predicate restricting to non-terminal status IN (1,2,3).
 	// The key position is an expression; pg_index.indkey = 0 for expression columns,
 	// pg_attribute.attname is NULL. The sentinel "(expr)" marks this position.
+	// The WHERE predicate is not captured by expectedIndex (only name/unique/columns
+	// are checked); Unique:true and Columns:[]string{"(expr)"} remain correct.
 	{Table: "commands", Name: "idx_commands_idempotency_key", Unique: true, Columns: []string{"(expr)"}},
 	// saga_instances (040_create_saga_tables.sql) — partial index over claimable rows.
 	{Table: "saga_instances", Name: "idx_saga_instances_claimable", Unique: false, Columns: []string{"started_at", "id"}},
