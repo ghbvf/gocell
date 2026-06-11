@@ -150,7 +150,9 @@ func (r *PGPolicyRepo) Create(ctx context.Context, t tenant.TenantID, p *abac.Po
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: policy must not be nil")
 	}
 	if p.TenantID != t {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: policy TenantID does not match the provided tenant",
+		return nil, errcode.New(
+			errcode.KindInvalid, errcode.ErrValidationFailed,
+			"policy_repo: policy TenantID does not match the provided tenant",
 			errcode.WithInternal(
 				errcode.InternalAttr("policyTenantId", string(p.TenantID)),
 				errcode.InternalAttr("tenantId", string(t)),

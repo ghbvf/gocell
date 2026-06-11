@@ -130,8 +130,8 @@ func TestPolicy_Clone(t *testing.T) {
 			},
 		},
 		{
-			name: "original mutation does not affect clone",
-			orig: makeValidPolicy(),
+			name:   "original mutation does not affect clone",
+			orig:   makeValidPolicy(),
 			mutate: func(_ *abac.Policy) {},
 			check: func(t *testing.T, orig *abac.Policy) {
 				// This test verifies the clone is taken before the mutation.

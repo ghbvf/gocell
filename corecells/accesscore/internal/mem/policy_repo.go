@@ -64,7 +64,9 @@ func (r *PolicyRepository) Create(_ context.Context, t tenant.TenantID, p *abac.
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: policy must not be nil")
 	}
 	if p.TenantID != t {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: policy TenantID does not match the provided tenant",
+		return nil, errcode.New(
+			errcode.KindInvalid, errcode.ErrValidationFailed,
+			"policy_repo: policy TenantID does not match the provided tenant",
 			errcode.WithInternal(
 				errcode.InternalAttr("policyTenantId", string(p.TenantID)),
 				errcode.InternalAttr("tenantId", string(t)),
@@ -223,4 +225,3 @@ func (r *PolicyRepository) notFound(id string) error {
 		errcode.WithCategory(errcode.CategoryDomain),
 		errcode.WithInternal(errcode.InternalAttr("policy_id", id)))
 }
-
