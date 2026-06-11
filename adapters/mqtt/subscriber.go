@@ -358,7 +358,7 @@ func (s *Subscriber) makeReceive(subCtx context.Context, handler outbox.Subscrib
 			// Intake stopped: do not process or ack. Leaving the message unacked
 			// lets the broker redeliver after session resume / reconnect.
 			s.adjustInflight(ctx, -1)
-			s.logIntakeStoppedDrop(pb)
+			s.logIntakeStoppedDrop(ctx, pb)
 			return
 		default:
 		}
@@ -371,7 +371,7 @@ func (s *Subscriber) makeReceive(subCtx context.Context, handler outbox.Subscrib
 		case s.workerSem <- struct{}{}:
 		case <-s.stopIntakeCh:
 			s.adjustInflight(ctx, -1)
-			s.logIntakeStoppedDrop(pb)
+			s.logIntakeStoppedDrop(ctx, pb)
 			return
 		}
 		// Prefer the connection-supplied ctx (subscription-scoped); fall back to
@@ -400,8 +400,8 @@ func (s *Subscriber) adjustInflight(ctx context.Context, delta int64) {
 
 // logIntakeStoppedDrop records that a delivery was dropped (left unacked for
 // broker redelivery) because StopIntake has fired.
-func (s *Subscriber) logIntakeStoppedDrop(pb *paho.Publish) {
-	slog.Info("mqtt: intake stopped, dropping delivery for redelivery",
+func (s *Subscriber) logIntakeStoppedDrop(ctx context.Context, pb *paho.Publish) {
+	slog.LogAttrs(ctx, slog.LevelInfo, "mqtt: intake stopped, dropping delivery for redelivery",
 		slog.String(logKeyClientID, s.conn.cfg.clientID.String()),
 		slog.String(logKeyTopic, safeTopicForLog(pb.Topic)))
 }
@@ -618,7 +618,7 @@ func (s *Subscriber) StopIntake(ctx context.Context) error {
 			}
 		case <-drainTimer.C():
 			pollTimer.Stop()
-			slog.Warn("mqtt: StopIntake drain timeout, returning fail-closed",
+			slog.LogAttrs(ctx, slog.LevelWarn, "mqtt: StopIntake drain timeout, returning fail-closed",
 				slog.String(logKeyClientID, s.conn.cfg.clientID.String()),
 				slog.Duration("budget", s.config.StopIntakeDrainTimeout),
 				slog.Int64("residual", s.inflight.Load()))
@@ -657,7 +657,7 @@ func (s *Subscriber) cancelWithBudget(ctx context.Context, cancel func()) {
 	select {
 	case <-done:
 	case <-callCtx.Done():
-		slog.Warn("mqtt: route cancel during StopIntake exceeded per-call budget or ctx canceled",
+		slog.LogAttrs(ctx, slog.LevelWarn, "mqtt: route cancel during StopIntake exceeded per-call budget or ctx canceled",
 			slog.String(logKeyClientID, s.conn.cfg.clientID.String()),
 			slog.Any("error", callCtx.Err()))
 	}

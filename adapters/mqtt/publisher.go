@@ -167,7 +167,7 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 	// identifiers in IoT deployments — configure slog handler redaction if that
 	// is a concern for the target sink.
 	if resp != nil && resp.ReasonCode == 0x10 {
-		slog.Warn("mqtt: publish succeeded with no matching subscribers",
+		slog.LogAttrs(ctx, slog.LevelWarn, "mqtt: publish succeeded with no matching subscribers",
 			slog.String("client_id", p.conn.cfg.clientID.String()),
 			slog.String("topic", t.String()))
 	}

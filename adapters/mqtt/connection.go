@@ -795,7 +795,7 @@ func (c *Connection) Subscribe(ctx context.Context, f topicns.SubscribableFilter
 			if _, unsubErr := c.cm.Unsubscribe(unsubCtx, &paho.Unsubscribe{
 				Topics: []string{f.String()},
 			}); unsubErr != nil {
-				slog.Warn("mqtt: unsubscribe on cancel failed",
+				slog.LogAttrs(unsubCtx, slog.LevelWarn, "mqtt: unsubscribe on cancel failed",
 					slog.String("client_id", c.cfg.clientID.String()),
 					slog.String("filter", f.String()),
 					slog.Any("error", redactErr(unsubErr)))
@@ -939,7 +939,7 @@ func (c *Connection) unsubscribeAll(ctx context.Context) {
 		return
 	}
 	if _, err := c.cm.Unsubscribe(ctx, &paho.Unsubscribe{Topics: filters}); err != nil {
-		slog.Warn("mqtt: unsubscribe-all on close failed",
+		slog.LogAttrs(ctx, slog.LevelWarn, "mqtt: unsubscribe-all on close failed",
 			slog.String("client_id", c.cfg.clientID.String()),
 			slog.Any("error", redactErr(err)))
 	}
