@@ -39,8 +39,10 @@ const (
 const (
 	maxNamespaceLen = 128
 
-	msgInvalidNamespace = "mqtt topic namespace: must be non-empty, no leading/trailing slash, " +
-		"no wildcards, each level ^[a-z0-9_-]+$, max 128 chars"
+	msgInvalidNamespaceLength   = "mqtt topic namespace: must be non-empty and at most 128 chars"
+	msgInvalidNamespaceSlash    = "mqtt topic namespace: must not have a leading or trailing slash"
+	msgInvalidNamespaceWildcard = "mqtt topic namespace: must not contain MQTT wildcards (+ or #)"
+	msgInvalidNamespaceLevel    = "mqtt topic namespace: each level must match ^[a-z0-9_-]+$"
 	msgTopicOutsideNamespace    = "mqtt topic is outside the declared namespace"
 	msgSubscribeOutsideNS       = "mqtt subscribe filter head is outside the declared namespace"
 	msgInvalidWildcardPlacement = "mqtt subscribe filter has invalid wildcard placement (# must be at end, each level must be a lone token)"
@@ -87,21 +89,21 @@ func Parse(ns string) (Namespace, error) {
 	if len(ns) == 0 || len(ns) > maxNamespaceLen {
 		return Namespace{}, errcode.New(
 			errcode.KindInvalid, ErrInvalidNamespace,
-			msgInvalidNamespace,
+			msgInvalidNamespaceLength,
 			errcode.WithDetails(errcode.PublicString(detailKeyNamespace, ns)),
 		)
 	}
 	if strings.HasPrefix(ns, "/") || strings.HasSuffix(ns, "/") {
 		return Namespace{}, errcode.New(
 			errcode.KindInvalid, ErrInvalidNamespace,
-			msgInvalidNamespace,
+			msgInvalidNamespaceSlash,
 			errcode.WithDetails(errcode.PublicString(detailKeyNamespace, ns)),
 		)
 	}
 	if strings.ContainsAny(ns, "+#") {
 		return Namespace{}, errcode.New(
 			errcode.KindInvalid, ErrInvalidNamespace,
-			msgInvalidNamespace,
+			msgInvalidNamespaceWildcard,
 			errcode.WithDetails(errcode.PublicString(detailKeyNamespace, ns)),
 		)
 	}
@@ -110,7 +112,7 @@ func Parse(ns string) (Namespace, error) {
 		if !isValidNSLevel(lvl) {
 			return Namespace{}, errcode.New(
 				errcode.KindInvalid, ErrInvalidNamespace,
-				msgInvalidNamespace,
+				msgInvalidNamespaceLevel,
 				errcode.WithDetails(errcode.PublicString(detailKeyNamespace, ns)),
 			)
 		}
