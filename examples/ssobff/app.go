@@ -351,7 +351,6 @@ func newSSOBFFAuthFailObserver(logger *slog.Logger, acPtr **accesscore.AccessCor
 		ip, _ := ctxkeys.RealIPFrom(ctx)
 		ipHash := redaction.HashIP(salt, ip)
 		logger.ErrorContext(ctx, "bootstrap_auth_failed",
-			slog.String("event", "bootstrap_auth_failed"),
 			slog.String("namespace", "bootstrap"),
 			slog.String("reason", reason),
 			slog.String("client_ip_hash", ipHash.String()))
@@ -359,7 +358,6 @@ func newSSOBFFAuthFailObserver(logger *slog.Logger, acPtr **accesscore.AccessCor
 			// Symmetric with cellmodules/accesscore: surface the cell-not-ready
 			// path so it is not a silent observability hole during debugging.
 			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
-				slog.String("event", "bootstrap_audit_append_failed"),
 				slog.String("namespace", "bootstrap"),
 				slog.String("auth_reason", reason),
 				slog.String("failure", "cell not yet initialized"),
@@ -370,7 +368,6 @@ func newSSOBFFAuthFailObserver(logger *slog.Logger, acPtr **accesscore.AccessCor
 		defer cancel()
 		if err := (*acPtr).RecordBootstrapAuthFail(appendCtx, reason, ipHash); err != nil {
 			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
-				slog.String("event", "bootstrap_audit_append_failed"),
 				slog.String("namespace", "bootstrap"),
 				slog.String("auth_reason", reason),
 				slog.String("client_ip_hash", ipHash.String()),

@@ -1337,6 +1337,12 @@ func TestOutboxHandleResultFieldsFrozen(t *testing.T) {
 //   - SettlementObservers    — subscriber-layer observer chain appended by
 //     WrapConfigEventSubscriber (and similar future wrappers) at the
 //     SubscriberHandler layer; NotifySettlement fans out to all observers.
+//   - Logger                 — the settle-loop logger NotifySettlement uses for
+//     the observer-panic line; ConsumerBase.Wrap threads the consumer's
+//     configured logger onto every outcome so the whole delivery pipeline logs
+//     to one sink. Read only by NotifySettlement (nil → slog.Default()), so the
+//     subscriber implementations (rabbitmq/mqtt/eventbus) need no change — they
+//     pass the outcome through unmodified (#716/#1871).
 //
 // Adding or removing a field silently changes the subscriber-layer protocol.
 var deliveryOutcomeAllowedFields = map[string]struct{}{
@@ -1344,13 +1350,14 @@ var deliveryOutcomeAllowedFields = map[string]struct{}{
 	"Err":                 {},
 	"ProcessReason":       {},
 	"SettlementObservers": {},
+	"Logger":              {},
 }
 
 // INVARIANT: OUTBOX-DELIVERYOUTCOME-FIELDS-FROZEN-01
 //
 // TestOutboxDeliveryOutcomeFieldsFrozen enforces OUTBOX-DELIVERYOUTCOME-FIELDS-FROZEN-01:
-// kernel/outbox.DeliveryOutcome must declare exactly the four fields listed in
-// deliveryOutcomeAllowedFields (#663 type-split from HandleResult).
+// kernel/outbox.DeliveryOutcome must declare exactly the fields listed in
+// deliveryOutcomeAllowedFields (#663 type-split from HandleResult; Logger added #716).
 //
 // DeliveryOutcome is the subscriber-layer carrier: ConsumerBase.Wrap lifts a
 // slim HandleResult into a DeliveryOutcome, SubscriberHandler returns it, and
