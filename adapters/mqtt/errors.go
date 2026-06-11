@@ -16,6 +16,7 @@ import (
 
 	"github.com/ghbvf/gocell/adapters/mqtt/internal/topicns"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
 // MQTT adapter error codes. All codes carry the ERR_ADAPTER_MQTT_ prefix
@@ -300,6 +301,13 @@ const (
 // syntax) so that adding a field to the row type is a compile error at every
 // existing row — making it impossible to add a code without classifying it.
 //
+// To add a reason code:
+//  1. Add a positional row to the relevant table below (connackReasonTable,
+//     pubackReasonTable, or subackReasonTable).
+//  2. Update the matching golden set in
+//     tools/archtest/mqtt_reason_table_invariants_test.go (archtest will fail
+//     until both the table and the golden set match).
+//
 // ref: MQTT v5.0 spec §3.2.2.2 (CONNACK), §3.4.2.1 (PUBACK), §3.9.3 (SUBACK)
 // archtest: MQTT-CONNACK-REASON-TABLE-COMPLETE-01
 //           MQTT-PUBACK-REASON-TABLE-COMPLETE-01
@@ -363,7 +371,8 @@ var connackReasonTable = []connackReason{
 // of §3.4.2.1. MQTT-REASON-TABLE-POSITIONAL-01 asserts no row uses named-field
 // syntax.
 var pubackReasonTable = []ackReason{
-	{0x00, "Success", "", errcode.KindInternal}, // success; caller guards reason != 0x00
+	// 0x00 success: errCode="" never used to build an error; caller guards reason != 0x00 before classifier.
+	{0x00, "Success", "", errcode.KindInternal},
 	{0x10, "NoMatchingSubscribers", ErrAdapterMQTTPublishNoSubscribers, errcode.KindUnavailable},
 	{0x80, "UnspecifiedError", ErrAdapterMQTTPublishRejected, errcode.KindInternal},
 	{0x83, "ImplementationSpecificError", ErrAdapterMQTTPublishRejected, errcode.KindInternal},
@@ -381,9 +390,10 @@ var pubackReasonTable = []ackReason{
 // of §3.9.3. MQTT-REASON-TABLE-POSITIONAL-01 asserts no row uses named-field
 // syntax.
 var subackReasonTable = []ackReason{
-	{0x00, "GrantedQoS0", "", errcode.KindInternal}, // granted-QoS success; caller guards reason >= 0x80
-	{0x01, "GrantedQoS1", "", errcode.KindInternal}, // success
-	{0x02, "GrantedQoS2", "", errcode.KindInternal}, // success
+	// 0x00/0x01/0x02 success: errCode="" never used to build an error; caller guards reason >= 0x80 before classifier.
+	{0x00, "GrantedQoS0", "", errcode.KindInternal},
+	{0x01, "GrantedQoS1", "", errcode.KindInternal}, // success; see comment on 0x00
+	{0x02, "GrantedQoS2", "", errcode.KindInternal}, // success; see comment on 0x00
 	{0x80, "UnspecifiedError", ErrAdapterMQTTSubscribe, errcode.KindInternal},
 	{0x83, "ImplementationSpecificError", ErrAdapterMQTTSubscribe, errcode.KindInternal}, // was default; now explicit
 	{0x87, "NotAuthorized", ErrAdapterMQTTSubscribeNotAuthorized, errcode.KindInternal},
@@ -418,35 +428,43 @@ var (
 
 // ─── Init validation ──────────────────────────────────────────────────────────
 
-// validateConnackReasonTable panics (via errcode.Assertion) if rows contains
-// duplicate codes or any row with class == classInvalid (the zero value). It is
-// the exported validation entry point so tests can call it with a bad slice.
+// validateConnackReasonTable panics (via panicregister.Approved wrapping
+// errcode.Assertion) if rows contains duplicate codes or any row with
+// class == classInvalid (the zero value). It is the exported validation entry
+// point so tests can call it with a bad slice.
 //
-// ref: error-handling.md §Panic — A-class programmer error uses errcode.Assertion.
+// ref: error-handling.md §Panic — A-class programmer error uses errcode.Assertion
+// wrapped in panicregister.Approved (PANIC-REGISTERED-01).
 func validateConnackReasonTable(rows []connackReason) {
 	seen := make(map[byte]bool, len(rows))
 	for _, r := range rows {
 		if seen[r.code] {
-			panic(errcode.Assertion(
-				"mqtt-reason-table-duplicate-connack-code: 0x%02x", r.code))
+			panic(panicregister.Approved(
+				"mqtt-reason-table-duplicate-connack-code",
+				errcode.Assertion("mqtt-reason-table-duplicate-connack-code: 0x%02x", r.code)))
 		}
 		seen[r.code] = true
 		if r.class == classInvalid {
-			panic(errcode.Assertion(
-				"mqtt-reason-table-class-invalid-on-connack-code: 0x%02x", r.code))
+			panic(panicregister.Approved(
+				"mqtt-reason-table-class-invalid-on-connack-code",
+				errcode.Assertion("mqtt-reason-table-class-invalid-on-connack-code: 0x%02x", r.code)))
 		}
 	}
 }
 
-// validateAckReasonTable panics (via errcode.Assertion) if rows contains
-// duplicate codes. PUBACK/SUBACK rows have no class field to validate against
-// a zero sentinel.
+// validateAckReasonTable panics (via panicregister.Approved wrapping
+// errcode.Assertion) if rows contains duplicate codes. PUBACK/SUBACK rows have
+// no class field to validate against a zero sentinel.
+//
+// ref: error-handling.md §Panic — A-class programmer error uses errcode.Assertion
+// wrapped in panicregister.Approved (PANIC-REGISTERED-01).
 func validateAckReasonTable(label string, rows []ackReason) {
 	seen := make(map[byte]bool, len(rows))
 	for _, r := range rows {
 		if seen[r.code] {
-			panic(errcode.Assertion(
-				"mqtt-reason-table-duplicate-%s-code: 0x%02x", label, r.code))
+			panic(panicregister.Approved(
+				"mqtt-reason-table-duplicate-ack-code",
+				errcode.Assertion("mqtt-reason-table-duplicate-%s-code: 0x%02x", label, r.code)))
 		}
 		seen[r.code] = true
 	}
@@ -494,6 +512,16 @@ func subackReasonName(code byte) string {
 
 // errcodeForClass maps a connackClass to its errcode.Code. classTransient maps
 // to ErrAdapterMQTTConnect; all other classes map to ErrAdapterMQTTConnectPermanent.
+//
+// Note: both classBootstrapFatal AND classPermanentRetain map to
+// ErrAdapterMQTTConnectPermanent — the errcode only expresses "permanent connect
+// failure". The differing downstream behavior (classPermanentRetain → readyz 503
+// + autopaho continues retrying; classBootstrapFatal → bootstrap shutdown) is
+// driven by the returned connackClass, not the errcode.
+//
+// Note: classInvalid (zero value) also falls to the else branch, but it is
+// prevented from reaching this function at runtime by validateConnackReasonTable
+// which panics at init time if any row carries classInvalid.
 func errcodeForClass(class connackClass) errcode.Code {
 	if class == classTransient {
 		return ErrAdapterMQTTConnect
@@ -538,6 +566,10 @@ func classifyConnackReason(err error) (connackClass, errcode.Code) {
 // On unrecognized code, returns (ErrAdapterMQTTPublishRejected, KindInternal) —
 // identical to the prior default branch.
 //
+// Returns empty errCode for 0x00 Success; callers MUST check reason code != 0x00
+// (success path) before calling. Passing 0x00 returns ("", KindInternal) which
+// must not be used to construct an error.
+//
 // ref: MQTT v5.0 spec §3.4.2.1 PUBACK Reason Code table
 func classifyPubackReason(code byte) (errcode.Code, errcode.Kind) {
 	if r, ok := pubackIndex[code]; ok {
@@ -554,6 +586,11 @@ func classifyPubackReason(code byte) (errcode.Code, errcode.Kind) {
 // On unrecognized code, returns (ErrAdapterMQTTSubscribe, KindInternal) —
 // identical to the prior default branch.
 //
+// Returns empty errCode for 0x00/0x01/0x02 (GrantedQoS0/1/2 success codes);
+// callers MUST check reason code >= 0x80 (error path) before calling. Passing
+// a success code returns ("", KindInternal) which must not be used to construct
+// an error.
+//
 // ref: MQTT v5.0 spec §3.9.3 Subscribe Reason Code table
 func classifySubackReason(code byte) (errcode.Code, errcode.Kind) {
 	if r, ok := subackIndex[code]; ok {
@@ -564,11 +601,16 @@ func classifySubackReason(code byte) (errcode.Code, errcode.Kind) {
 
 // disconnectReasonNames is the single source of MQTT v5 DISCONNECT reason code →
 // spec-defined name mapping (MQTT v5.0 §3.14.2.1 Disconnect Reason Code table).
-// This is a DISTINCT table from connackReasonNames (§3.2.2.2) and
-// pubackReasonNames (§3.4.2.1): the three packets share some numeric codes with
+// This is a DISTINCT table from connackReasonTable (§3.2.2.2) and
+// pubackReasonTable (§3.4.2.1): the three packets share some numeric codes with
 // different meanings, so a server-initiated DISCONNECT must be decoded with this
 // table, not the CONNACK one. Only the server-initiated subset is enumerated;
 // unrecognized codes fall back to "Unknown".
+//
+// Intentionally kept as a standalone hand-written map (no single-source table
+// + classifier): DISCONNECT has no classifier function, so there is no
+// omission-silent-default risk from a missing code. A standalone map is simpler
+// and sufficient for the logging-only use case. Ref: ADR-048 §2.9 / §Amendment 2026-06-11.
 var disconnectReasonNames = map[byte]string{
 	0x00: "NormalDisconnection",
 	0x04: "DisconnectWithWillMessage",

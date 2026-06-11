@@ -53,7 +53,6 @@ import (
 	"fmt"
 	"go/ast"
 	"go/constant"
-	"go/token"
 	"strings"
 	"testing"
 
@@ -135,6 +134,43 @@ func TestMQTTPubackReasonTableComplete01(t *testing.T) {
 	assert.Empty(t, diags, "MQTT-PUBACK-REASON-TABLE-COMPLETE-01: reason code set mismatch")
 }
 
+// TestMQTTPubackReasonTableComplete01_ReverseFixture proves the scanner fires on
+// the fixture table that deliberately omits code 0x91.
+func TestMQTTPubackReasonTableComplete01_ReverseFixture(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+	diags := scanMQTTReasonTableCodesInFixture(t, "pubackReasonTableMissingFixture", mqttPubackGolden)
+	require.NotEmpty(t, diags,
+		"MQTT-PUBACK-REASON-TABLE-COMPLETE-01 reverse fixture: scanner must flag the incomplete table")
+	// The diagnostic must name the missing code 0x91.
+	joined := diagMessages(diags)
+	assert.Contains(t, joined, "0x91",
+		"MQTT-PUBACK-REASON-TABLE-COMPLETE-01 reverse fixture: diagnostic must name missing code 0x91")
+}
+
+// TestMQTTPubackReasonTableComplete01_NonVacuous proves that the code-extraction
+// scanner actually finds at least the known codes in the production table.
+func TestMQTTPubackReasonTableComplete01_NonVacuous(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+	var codes map[byte]bool
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, []string{mqttPkgPath}),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
+				return nil
+			}
+			_, codes = mqttExtractReasonTableCodes(p, "pubackReasonTable")
+			return nil
+		})
+	assert.GreaterOrEqual(t, len(codes), 1,
+		"MQTT-PUBACK-REASON-TABLE-COMPLETE-01 non-vacuity: scanner found 0 codes in pubackReasonTable "+
+			"— the go/types resolution path may be broken or the var was renamed")
+}
+
 // ─── MQTT-SUBACK-REASON-TABLE-COMPLETE-01 ────────────────────────────────────
 
 // TestMQTTSubackReasonTableComplete01 asserts that subackReasonTable in
@@ -146,6 +182,43 @@ func TestMQTTSubackReasonTableComplete01(t *testing.T) {
 	}
 	diags := scanMQTTReasonTableCodes(t, "subackReasonTable", mqttSubackGolden)
 	assert.Empty(t, diags, "MQTT-SUBACK-REASON-TABLE-COMPLETE-01: reason code set mismatch")
+}
+
+// TestMQTTSubackReasonTableComplete01_ReverseFixture proves the scanner fires on
+// the fixture table that deliberately omits code 0x83.
+func TestMQTTSubackReasonTableComplete01_ReverseFixture(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+	diags := scanMQTTReasonTableCodesInFixture(t, "subackReasonTableMissingFixture", mqttSubackGolden)
+	require.NotEmpty(t, diags,
+		"MQTT-SUBACK-REASON-TABLE-COMPLETE-01 reverse fixture: scanner must flag the incomplete table")
+	// The diagnostic must name the missing code 0x83.
+	joined := diagMessages(diags)
+	assert.Contains(t, joined, "0x83",
+		"MQTT-SUBACK-REASON-TABLE-COMPLETE-01 reverse fixture: diagnostic must name missing code 0x83")
+}
+
+// TestMQTTSubackReasonTableComplete01_NonVacuous proves that the code-extraction
+// scanner actually finds at least the known codes in the production table.
+func TestMQTTSubackReasonTableComplete01_NonVacuous(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+	var codes map[byte]bool
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, []string{mqttPkgPath}),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
+				return nil
+			}
+			_, codes = mqttExtractReasonTableCodes(p, "subackReasonTable")
+			return nil
+		})
+	assert.GreaterOrEqual(t, len(codes), 1,
+		"MQTT-SUBACK-REASON-TABLE-COMPLETE-01 non-vacuity: scanner found 0 codes in subackReasonTable "+
+			"— the go/types resolution path may be broken or the var was renamed")
 }
 
 // ─── MQTT-REASON-TABLE-POSITIONAL-01 ─────────────────────────────────────────
@@ -257,7 +330,7 @@ func mqttCheckReasonTableInPass(p *Pass, varName string, golden map[byte]bool) [
 		return []Diagnostic{{
 			Rel:     "errors.go",
 			Line:    0,
-			Message: fmt.Sprintf("MQTT-REASON-TABLE-COMPLETE: var %q not found in package %s", varName, p.Pkg.Path()),
+			Message: fmt.Sprintf("MQTT-REASON-TABLE-COMPLETE: var %q not found in package %s (expected in adapters/mqtt/errors.go)", varName, p.Pkg.Path()),
 		}}
 	}
 	return mqttCompareCodeSets(varName, codes, golden)
@@ -429,13 +502,6 @@ func TestMQTTConnackReasonTableComplete01_NonVacuous(t *testing.T) {
 			"— the go/types resolution path may be broken or the var was renamed")
 }
 
-// mqttExtractTableCodesForToken extracts codes from the named table in the given
-// token.FileSet-based AST file for the fixture non-vacuity test.
-func mqttExtractTableCodesForToken(_ *token.FileSet, varName string, p *Pass) map[byte]bool {
-	_, codes := mqttExtractReasonTableCodes(p, varName)
-	return codes
-}
-
 // TestMQTTReasonTablePositional01_NonVacuous proves that the positional scanner
 // would fire: it loads the production table and verifies at least one row was
 // inspected for positional compliance.
@@ -479,5 +545,3 @@ func TestMQTTReasonTablePositional01_NonVacuous(t *testing.T) {
 			"— the scanner is broken or the var was renamed")
 }
 
-// Ensure unused import is referenced.
-var _ = mqttExtractTableCodesForToken

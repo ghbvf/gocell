@@ -9,6 +9,10 @@
 //     so the completeness scanner must report it as absent.
 //   - pubackReasonTableFixture uses named-field literals (key:value syntax),
 //     so MQTT-REASON-TABLE-POSITIONAL-01 must flag it.
+//   - pubackReasonTableMissingFixture is MISSING spec code 0x91 (PacketIdentifierInUse),
+//     so MQTT-PUBACK-REASON-TABLE-COMPLETE-01 must report it as absent.
+//   - subackReasonTableMissingFixture is MISSING spec code 0x83 (ImplementationSpecificError),
+//     so MQTT-SUBACK-REASON-TABLE-COMPLETE-01 must report it as absent.
 //
 // Loaded via Run(t, Fixture(FixtureOpts{Tests:false},
 // []string{"./tools/archtest/internal/mqttreasonfixture/..."})) with the
@@ -38,6 +42,8 @@ type fixtureConnackReason struct {
 // so MQTT-CONNACK-REASON-TABLE-COMPLETE-01 must report it as missing.
 // Uses positional literals (correct form) so MQTT-REASON-TABLE-POSITIONAL-01
 // does NOT fire on this table.
+//
+// DO NOT remove — synthetic RED fixture for MQTT-CONNACK-REASON-TABLE-COMPLETE-01 anti-vacuity.
 var connackReasonTableFixture = []fixtureConnackReason{
 	{0x00, "Success", fixtureClassTransient},
 	{0x80, "UnspecifiedError", fixtureClassTransient},
@@ -56,8 +62,53 @@ type fixtureAckReason struct {
 // pubackReasonTableFixture uses NAMED-FIELD literals, which violates
 // MQTT-REASON-TABLE-POSITIONAL-01. The scanner must flag the key:value elements.
 //
+// DO NOT remove — synthetic RED fixture for MQTT-REASON-TABLE-POSITIONAL-01 anti-vacuity.
+//
 //nolint:unused // referenced exclusively by the archtest scanner via AST loading.
 var pubackReasonTableFixture = []fixtureAckReason{
 	{code: 0x00, name: "Success", errCode: "", kind: "KindInternal"},
 	{code: 0x10, name: "NoMatchingSubscribers", errCode: "ERR_NO_SUBSCRIBERS", kind: "KindUnavailable"},
+}
+
+// pubackReasonTableMissingFixture deliberately omits spec code 0x91
+// (PacketIdentifierInUse) so MQTT-PUBACK-REASON-TABLE-COMPLETE-01 must report
+// it as missing. Uses positional literals (correct form) so
+// MQTT-REASON-TABLE-POSITIONAL-01 does NOT fire on this table.
+//
+// DO NOT remove — synthetic RED fixture for MQTT-PUBACK-REASON-TABLE-COMPLETE-01 anti-vacuity.
+//
+//nolint:unused // referenced exclusively by the archtest scanner via AST loading.
+var pubackReasonTableMissingFixture = []fixtureAckReason{
+	{0x00, "Success", "", "KindInternal"},
+	{0x10, "NoMatchingSubscribers", "ERR_NO_SUBSCRIBERS", "KindUnavailable"},
+	{0x80, "UnspecifiedError", "ERR_REJECTED", "KindInternal"},
+	{0x83, "ImplementationSpecificError", "ERR_REJECTED", "KindInternal"},
+	{0x87, "NotAuthorized", "ERR_NOT_AUTH", "KindUnavailable"},
+	{0x90, "TopicNameInvalid", "ERR_REJECTED", "KindInvalid"},
+	// 0x91 PacketIdentifierInUse intentionally omitted — the scanner must detect this
+	{0x97, "QuotaExceeded", "ERR_RATE_LIMITED", "KindUnavailable"},
+	{0x99, "PayloadFormatInvalid", "ERR_PAYLOAD_FORMAT", "KindInvalid"},
+}
+
+// subackReasonTableMissingFixture deliberately omits spec code 0x83
+// (ImplementationSpecificError) so MQTT-SUBACK-REASON-TABLE-COMPLETE-01 must
+// report it as missing. Uses positional literals (correct form) so
+// MQTT-REASON-TABLE-POSITIONAL-01 does NOT fire on this table.
+//
+// DO NOT remove — synthetic RED fixture for MQTT-SUBACK-REASON-TABLE-COMPLETE-01 anti-vacuity.
+//
+//nolint:unused // referenced exclusively by the archtest scanner via AST loading.
+var subackReasonTableMissingFixture = []fixtureAckReason{
+	{0x00, "GrantedQoS0", "", "KindInternal"},
+	{0x01, "GrantedQoS1", "", "KindInternal"},
+	{0x02, "GrantedQoS2", "", "KindInternal"},
+	{0x80, "UnspecifiedError", "ERR_SUBSCRIBE", "KindInternal"},
+	// 0x83 ImplementationSpecificError intentionally omitted — the scanner must detect this
+	{0x87, "NotAuthorized", "ERR_SUBSCRIBE_NOT_AUTH", "KindInternal"},
+	{0x8F, "TopicFilterInvalid", "ERR_SUBSCRIBE", "KindInternal"},
+	{0x91, "PacketIdentifierInUse", "ERR_SUBSCRIBE", "KindInternal"},
+	{0x97, "QuotaExceeded", "ERR_SUBSCRIBE_RATE", "KindUnavailable"},
+	{0x9E, "SharedSubscriptionsNotSupported", "ERR_SHARED_SUBS", "KindInternal"},
+	{0xA1, "SubscriptionIdentifiersNotSupported", "ERR_SUB_IDS", "KindInternal"},
+	{0xA2, "WildcardSubscriptionsNotSupported", "ERR_SUBSCRIBE", "KindInternal"},
 }
