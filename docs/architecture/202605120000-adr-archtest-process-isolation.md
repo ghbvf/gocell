@@ -50,7 +50,7 @@ Phase 0 本地实测（macOS local，BSD `/usr/bin/time -l` maximum resident set
 
 ### D4. `make verify` 委托 archtest 给 nightly gate（D6 single-owner 落地形态）
 
-`.github/workflows/governance.yml::make verify` 保留 `env: VERIFY_SKIP: archtest` 显式委托给 `archtest-nightly.yml::verify-archtest` matrix gate，避免 push/PR 上重复跑 archtest（详见 §D6 single-owner 原则）。timeout-minutes 维持 15 容纳其它 verify-*.sh 子脚本耗时。
+`.github/workflows/governance.yml::make verify` 把 archtest 排除出其 PR bucket 矩阵——`verify-archtest.sh` 声明 `# verify-bucket: nightly`，由 `generate-buckets` job 排除，委托给 `archtest-nightly.yml::verify-archtest` matrix gate（避免 push/PR 上重复跑 archtest，详见 §D6 single-owner 原则）。**#1817 起为此形态；此前本节用 `env: VERIFY_SKIP: archtest` + 单 job timeout 15，现为 bucket 并行（每桶 timeout 10）——机制变更见末尾 §Amendment 2026-06-11。**
 
 本地 `make verify`（无 `VERIFY_SKIP` env）仍包含 `verify-archtest.sh`，按 `SHARD_COUNT` 默认 K=1 单进程跑（见 §D1 + §Amendment 2026-05-23）；CI 上 `archtest-nightly.yml::verify-archtest` (schedule cron + workflow_dispatch，SHARD_COUNT=24 explicit per §Amendment 2026-05-28) 是唯一权威 archtest gate。
 
@@ -62,7 +62,7 @@ Phase 0 本地实测（macOS local，BSD `/usr/bin/time -l` maximum resident set
 
 ### D6. Single-owner 原则：nightly schedule is the sole archtest gate on CI
 
-`.github/workflows/archtest-nightly.yml::verify-archtest` matrix（24 shard per §Amendment 2026-05-28，cron + `workflow_dispatch`）是 archtest 在 CI 上的 **唯一权威 gate**。push / pull_request 不再跑 archtest（PR-time matrix 已删，详见 §Amendment 2026-05-23-pr-time-to-nightly）。`governance.yml::make verify` 通过 `env: VERIFY_SKIP: archtest` 显式委托给 nightly，**不再双跑**。
+`.github/workflows/archtest-nightly.yml::verify-archtest` matrix（24 shard per §Amendment 2026-05-28，cron + `workflow_dispatch`）是 archtest 在 CI 上的 **唯一权威 gate**。push / pull_request 不再跑 archtest（PR-time matrix 已删，详见 §Amendment 2026-05-23-pr-time-to-nightly）。`governance.yml::make verify` 把 `verify-archtest.sh` 标注 `# verify-bucket: nightly`（`generate-buckets` 排除出 PR 矩阵）委托给 nightly，**不再双跑**（#1817 起；此前为 `env: VERIFY_SKIP: archtest`，见末尾 §Amendment 2026-06-11）。
 
 > **§Amendment 2026-06-10 补强**：`VERIFY_SKIP=archtest` 只 skip 专用的 `verify-archtest.sh` gate，**不**覆盖对含 archtest 的 module 跑裸 `go test ./...` 的其它 gate。#1803 把 `tools/` 拆成 workspace 成员后，`verify-workspace-test.sh` 的通用遍历重新执行了 archtest（+~4min/lane），证明本段「push/PR 不再跑 archtest」仅靠 VERIFY_SKIP 并不成立。真正的编译级保证是 leaf 的 `//go:build archtest` tag（`ARCHTEST-LEAF-BUILD-TAG-01`）；VERIFY_SKIP 与 build tag 互补。详见末尾 §Amendment 2026-06-10。
 
@@ -509,7 +509,7 @@ Go 生态「重型套件排出默认 `go test`」标准只有 build tag（编译
 |---|---|---|
 | §D6 / line 65「push / pull_request 不再跑 archtest …不再双跑」 | 直接矛盾（#1803 后 workspace-test 实跑 archtest） | **已同 PR 内就地补强**：line 65 加交叉引用，明确 VERIFY_SKIP 只 skip 专用 gate、build tag（D1）才是「off bare `go test`」的编译级保证 |
 | §D6 single-owner 原则（nightly + verify-archtest.sh 为唯一 owner） | ⚠️ 补强 | 原则不变；本 amendment 把它从「靠 VERIFY_SKIP 约定」升级为「靠 build tag 编译级 + ARCHTEST-LEAF-BUILD-TAG-01 守卫」机器强制 |
-| §D6 `VERIFY_SKIP=archtest` env | ✅ 保留 | 仍 skip 专用 `verify-archtest.sh` gate（避免 governance lane 跑 K=1 全量）；与 build tag 互补，非冗余 |
+| §D6 `VERIFY_SKIP=archtest` env | ❌ 已废止 (#1817) | governance.yml 不再设 VERIFY_SKIP；archtest 改由 `# verify-bucket: nightly` 桶注解排除出 PR 矩阵（同一 single-owner 结果，机制更优雅）。build tag（D1）仍是编译级保证不变。见末尾 §Amendment 2026-06-11 |
 | build-test `_dynamic_archtest_excluded` grep | ⚠️ 职责收窄 | 见 D4：执行排除 → coverage-scope 排除 |
 
 ---
@@ -537,3 +537,26 @@ K=N 静态 enumerate 的目的。
 
 > 关联 ADR2 `202605170000-...`：reconcile.Loop 共用的 control-plane clock carve-out 已由其 §Amendment
 > 2026-06-06（#1169）就地重写，本 PR 不重复 amend（避免双真值源）。
+
+---
+
+## §Amendment 2026-06-11 (#1817) — governance lane bucket 并行：`VERIFY_SKIP=archtest` → `# verify-bucket: nightly`
+
+`make verify`（Governance Strict）从单 job 串行 lane 改为 cost-balanced **bucket 并行矩阵**
+（ADR `202606111200-1817-adr-governance-lane-parallelization.md`）。对本 ADR 的唯一影响是
+**archtest 排除 PR lane 的机制**变更——**结果不变**：archtest 仍只由 `archtest-nightly.yml`
+唯一 own，push/PR governance lane 不跑全量 archtest，本地 `make verify` 仍跑 K=1（D4/D6 的
+single-owner 模型完整保留）。
+
+| 项 | 之前（本 amendment 前） | 现在（#1817 起） |
+|---|---|---|
+| PR lane 排除 archtest 的机制 | `governance.yml` 设 `env: VERIFY_SKIP: archtest` | `verify-archtest.sh` 声明 `# verify-bucket: nightly`，`generate-buckets` job 把 `nightly` 桶排除出 PR 矩阵 |
+| governance job 形态 | 单 job，`timeout-minutes: 15` | `generate-buckets` + bucket matrix（每桶 `timeout-minutes: 10`）+ stable `make verify` 聚合 job |
+| 本地 `make verify` | 无 env → 跑全量含 archtest K=1 | 不变（无 `VERIFY_BUCKET` → 全量含 archtest K=1） |
+
+威胁矩阵重评：D6 single-owner 不变；`ARCHTEST-LEAF-BUILD-TAG-01`（D1 编译级保证）不受影响，
+仍是「archtest off bare `go test`」的机器强制。§Amendment 2026-06-10 关于「VERIFY_SKIP 只 skip
+专用 gate、build tag 才是编译级保证」的论点继续成立——本 amendment 只是把那条「VERIFY_SKIP
+约定」整体替换为「bucket 注解派生 + generate-buckets 排除 + verify-bucket-coverage anti-vacuity
+守卫」，single-owner 从约定升级为机器派生。`VERIFY_SKIP` env 本身仍存在于驱动（通用 escape
+hatch），只是 governance CI 不再使用它。

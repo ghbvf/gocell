@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: workspace
 # verify-workspace-test runs `go test ./...` for every NON-root workspace member
 # (the satellite modules). The root module's tests are already
 # covered by the _build-lint.yml build-test matrix; running them here too would
@@ -17,7 +18,8 @@
 # modules.sh funnel or opt in via -tags. This matters for the tools module: when
 # #1803 split tools/ into a workspace member, this gate's `go test ./...` started
 # re-running the ~1200-test archtest leaf (+~4min/lane, defeating governance.yml's
-# VERIFY_SKIP=archtest). The `//go:build archtest` leaf tag
+# exclusion of archtest from its PR buckets — verify-archtest.sh carries
+# `# verify-bucket: nightly`, #1817). The `//go:build archtest` leaf tag
 # (ARCHTEST-LEAF-BUILD-TAG-01) keeps it compiled-out here — no special-casing in
 # this script; the heavy suite simply cannot enter a bare `go test ./...`.
 

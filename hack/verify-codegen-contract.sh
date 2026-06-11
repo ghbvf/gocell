@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: codegen
 # K#06 CODEGEN-CONTRACT-GEN gate.
 #
 # Thin wrapper around `gocell verify codegen-contract`. The Go subcommand owns

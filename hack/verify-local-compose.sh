@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: validate
 # verify-local-compose: assert local docker deploy artefacts stay in sync.
 #
 # Guards the docker-compose.local.yml / scripts/gen-deploy-secrets.sh /

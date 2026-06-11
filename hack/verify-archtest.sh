@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: nightly
 # verify-archtest runs the architectural unit-test suite (LAYER-*, AUTH-*,
 # SEC-FAIL-CLOSED-*, ERROR-FIRST-API-01, META-QUERYPARAM-DRIFT, ADV-06, etc.)
 # in process-isolated shards.

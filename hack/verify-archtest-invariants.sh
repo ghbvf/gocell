@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: inv
 # verify-archtest-invariants — single entry for the 4 PR-time archtest invariants
 # preserved by ADR 202605120000 §Amendment 2026-05-23 §D8 (4 类 PR-time archtest gate).
 #
@@ -37,7 +38,8 @@ source hack/lib/archtest.sh
 # CI stability — the heavy whole-module form-lock belongs with the nightly suite.
 #
 # ROOT-MODULE-NO-REPLACE-01 (TestRootModuleNoReplace01 + …NegativeControl) IS in
-# this PR-time set even though governance.yml VERIFY_SKIPs the full archtest sweep:
+# this PR-time set even though governance.yml excludes the full archtest sweep
+# from its PR buckets (verify-archtest.sh -> `# verify-bucket: nightly`, #1817):
 # it guards a user-visible release-surface promise (README / external-cell
 # quickstart: "public module, plain `go get` — no GOPRIVATE"), so a regression — a
 # replace/exclude added back to the ROOT go.mod — must fail at PR-merge time, not

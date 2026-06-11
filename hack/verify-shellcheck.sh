@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: lint
 # verify-shellcheck: lint every project shell script with shellcheck.
 #
 # Replaces the regex-only verify-shell-safety.sh added in PR #350. The grep

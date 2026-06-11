@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: workspace
 # verify-workspace asserts the go.work workspace is consistent and every member
 # module builds against its own pinned module graph (GOWORK=off). The
 # module-enumeration funnel (hack/lib/modules.sh, sourced from go.work) is the

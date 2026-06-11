@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: codegen
 # K#10 ASSEMBLY-YAML-MINIMAL gate.
 #
 # Thin wrapper around `gocell verify codegen-assembly`. The Go subcommand owns

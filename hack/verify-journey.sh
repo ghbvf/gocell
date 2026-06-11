@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: validate
 # verify-journey checks that all active journeys carry at least one auto check
 # and that referenced check targets resolve to executable tests.
 

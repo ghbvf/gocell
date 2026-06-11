@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: lint
 # verify-integration-lint.sh — lint integration-build-tagged helper packages
 # whose invariants are invisible to the default, untagged golangci-lint lane.
 #

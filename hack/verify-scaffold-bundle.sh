@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: scaffold
 # K#09 SCAFFOLD-ONE-CMD smoke gate.
 #
 # Verifies that `gocell scaffold cell` produces a compilable + testable bundle:

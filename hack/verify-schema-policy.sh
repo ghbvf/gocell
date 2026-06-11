@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: validate
 # verify-schema-policy: single jq-based tool that enforces the three schema
 # policies declared by ADR-202605031600 (G5 V1-RESPONSE-EVOLVE), replacing
 # verify-schema-lenient.sh + scripts/normalize-schema.sh.

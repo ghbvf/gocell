@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: scaffold
 # K#09 SCAFFOLD-ONE-CMD assembly gate.
 #
 # Verifies that `gocell scaffold assembly` produces a compilable assembly:

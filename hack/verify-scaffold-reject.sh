@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: scaffold
 # verify-scaffold-reject asserts that `gocell scaffold slice` rejects kebab-case
 # slice names (FMT-16 enforced at scaffold time, not just at validate).
 # Also asserts that `gocell scaffold assembly` rejects kebab-case assembly IDs.

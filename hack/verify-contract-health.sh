@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# verify-bucket: validate
 # verify-contract-health runs `gocell check contract-health` to enforce
 # contract metadata health rules (CH-*).
 

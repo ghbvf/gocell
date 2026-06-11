@@ -6,36 +6,97 @@ on:
   pull_request:
     branches: [develop, main, 'release/**']
 
-# Governance Strict is the K8s-style `make verify` runner — it discovers and
-# executes every hack/verify-*.sh gate in deterministic order, accumulating
-# failures. Adding a new gate is a single new file under hack/; this workflow
-# never needs to change.
-# ref: kubernetes/kubernetes hack/make-rules/verify.sh
+# Governance Strict is the K8s-style `make verify` runner, fanned out across
+# cost-balanced parallel BUCKETS instead of one serial 巨石 lane (#1817). Each
+# hack/verify-*.sh gate declares its bucket via a `# verify-bucket: <name>`
+# header annotation (single source: hack/lib/buckets.sh). The matrix below is
+# DERIVED from those annotations by the generate-buckets job — adding a gate to
+# an existing bucket needs ZERO change to this file; a brand-new bucket is
+# picked up automatically too. hack/make-rules/verify.sh stays a glob discovery
+# model, so local `make verify` is unchanged.
+#
+# Wall-clock = slowest single leg (~setup + heaviest bucket), not the sum of all
+# gates. Honest scope (ADR 202606-1817): this fan-out plus the
+# verify-bucket-coverage anti-vacuity guard fix the "串行 + 漏跑" problem;
+# per-bucket cost is NOT machine-bounded (the cost 闸门 was consciously
+# descoped for dev velocity), so bucket balance is a measured, manual decision.
+#
+# archtest is the reserved `nightly` bucket: the full suite (628+ tests) runs in
+# .github/workflows/archtest-nightly.yml (24-shard matrix, schedule-driven), so
+# generate-buckets excludes `nightly` from the PR matrix. The cheap PR-time
+# invariant subset still runs here via hack/verify-archtest-invariants.sh (its
+# own bucket annotation), exactly as before. The local pre-push hook continues
+# to omit archtest (ADR 202605120000 §"pre-push archtest 撤回").
+# ref: kubernetes/kubernetes hack/make-rules/verify.sh (glob discovery)
+# ref: .github/workflows/_build-lint.yml build-test (fail-fast:false matrix)
+
+permissions:
+  contents: read
 
 jobs:
-  verify:
-    name: make verify
+  # generate-buckets derives the PR bucket matrix from the gate annotations and
+  # fails fast (before any fan-out) if a gate lacks a routable bucket. Pure bash,
+  # no setup-go — ~10s, a negligible serial prefix before the parallel legs.
+  generate-buckets:
+    name: derive buckets
     runs-on: ubuntu-latest
-    # `make verify` discovers and runs every hack/verify-*.sh gate. The 4
-    # core invariant groups (clock-injection, duration-const, test-time-literal,
-    # panic-registered) are PR-time gates via hack/verify-archtest-invariants.sh
-    # (~33s, PR #898 measured; single shared-resolver go test invocation).
-    # The complete archtest suite (628+ tests) is delegated to
-    # .github/workflows/archtest-nightly.yml (matrix of 24 shards on a daily
-    # schedule + workflow_dispatch, process-isolated per ADR 202605120000
-    # §Amendment 2026-05-23-pr-time-to-nightly + §Amendment 2026-05-28) —
-    # that job is the **single authoritative owner** of full archtest
-    # enforcement on CI.
-    # hack/githooks/pre-push omits archtest after PR #887 review round-2
-    # (CPU/RSS budget — ~3min wall + 43 GB RSS + 18-core 100% violates the
-    # hook's sub-10s deterministic contract; see ADR §"pre-push archtest 撤回").
-    #
-    # 25 min covers cold module cache plus all verify-*.sh gates running
-    # continue-on-failure (hack/make-rules/verify.sh accumulates failures
-    # across gates). Governance Strict also runs strict journey checkRef
-    # validation and journey smoke gates; cold hosted runners can exceed the
-    # old 15min budget while still making progress.
-    timeout-minutes: 25
+    timeout-minutes: 5
+    outputs:
+      buckets: ${{ steps.derive.outputs.buckets }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Coverage guard + derive bucket matrix
+        id: derive
+        run: |
+          set -euo pipefail
+          # Fail fast if any gate is missing / malformed on its # verify-bucket
+          # annotation — such a gate would be silently dropped from every leg.
+          bash hack/verify-bucket-coverage.sh
+          # Derive the PR matrix from the annotations themselves (single source),
+          # excluding the reserved `nightly` bucket (archtest → archtest-nightly.yml).
+          source hack/lib/util.sh
+          source hack/lib/buckets.sh
+          # Bucket names match ^[a-z][a-z0-9-]*$ (hack/lib/buckets.sh grammar),
+          # which excludes every JSON metacharacter — so embedding them in this
+          # JSON string unescaped is safe.
+          json='['
+          sep=''
+          while IFS= read -r b; do
+            [ -n "$b" ] || continue
+            [ "$b" = "nightly" ] && continue
+            json="${json}${sep}\"${b}\""
+            sep=','
+          done < <(gocell::buckets::list hack)
+          json="${json}]"
+          # anti-vacuity: an empty PR matrix would make the verify job a silent
+          # no-op (zero legs, nothing enforced).
+          if [ "$json" = "[]" ]; then
+            echo "FAIL: no PR buckets derived from # verify-bucket annotations" >&2
+            exit 1
+          fi
+          echo "buckets=${json}" >> "$GITHUB_OUTPUT"
+          echo "PR buckets: ${json}"
+
+  # bucket is the parallel fan-out: one runner per derived bucket. fail-fast:
+  # false so a red leg doesn't cancel its siblings (every bucket reports). Each
+  # leg runs `VERIFY_BUCKET=<bucket> make verify`, which routes only that
+  # bucket's gates (hack/make-rules/verify.sh) and writes a per-leg gate table
+  # to the GitHub job summary.
+  bucket:
+    name: ${{ matrix.bucket }}
+    needs: [generate-buckets]
+    runs-on: ubuntu-latest
+    # Per-leg budget: one bucket's gates plus a cold module cache. 10 min is
+    # generous headroom over the ~3 min wall-clock target (the old serial lane
+    # needed 25 because it summed every gate). gofumpt's one-time golangci-lint
+    # bootstrap (hack/lib/golangci-lint.sh, pinned v2.11.4) lands in whichever
+    # bucket owns verify-gofumpt.sh.
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        bucket: ${{ fromJSON(needs.generate-buckets.outputs.buckets) }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
@@ -44,20 +105,34 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - name: make verify
-        # VERIFY_SKIP=archtest: delegate archtest to the matrix
-        # archtest-nightly.yml job (single-owner principle, see comment
-        # above). gofumpt is NOT in the skip list — hack/verify-gofumpt.sh
-        # bootstraps golangci-lint at the pinned version via
-        # hack/lib/golangci-lint.sh (one-time go install on a cold setup-go
-        # cache). The CI lint shard in _build-lint.yml uses golangci-lint-
-        # action for its build cache and `config verify`; both consumers
-        # share GOLANGCI_LINT_VERSION = v2.11.4.
-        #
-        # Local `make verify` (no env) still runs verify-archtest.sh (K=1
-        # default; PR #878). This is the developer-facing local sweep and
-        # is by-design slowgate-less (the budget gate is a CI concern;
-        # local dev focuses on correctness).
+      - name: make verify (bucket=${{ matrix.bucket }})
         env:
-          VERIFY_SKIP: archtest
+          VERIFY_BUCKET: ${{ matrix.bucket }}
         run: make verify
+
+  # verify is the stable aggregation gate: it keeps the historical
+  # "Governance Strict / make verify" check name so existing branch-protection
+  # required-checks keep matching despite the dynamic matrix leg names. It is
+  # red iff the derive step or any bucket leg was not successful.
+  verify:
+    name: make verify
+    needs: [generate-buckets, bucket]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: All buckets passed
+        run: |
+          set -euo pipefail
+          # needs.<job>.result for a matrix job is the AGGREGATE: success only if
+          # every leg succeeded; failure if any leg failed (fail-fast:false runs
+          # them all first); skipped if generate-buckets failed (legs never ran);
+          # cancelled on runner preempt / manual cancel. Anything other than
+          # success is red — this aggregation is the required check.
+          gen='${{ needs.generate-buckets.result }}'
+          legs='${{ needs.bucket.result }}'
+          echo "generate-buckets=${gen} bucket=${legs}"
+          if [ "${gen}" != "success" ] || [ "${legs}" != "success" ]; then
+            echo "Governance Strict failed (generate-buckets=${gen}, buckets=${legs})" >&2
+            exit 1
+          fi
+          echo "all verify buckets passed"

@@ -8,11 +8,18 @@ change to the driver.
 ## Layout
 
 - `make-rules/verify.sh` — entry point. Globs `hack/verify-*.sh`, runs each,
-  accumulates failures, exits 1 if any failed.
+  accumulates failures, exits 1 if any failed. Honors `VERIFY_SKIP` and
+  `VERIFY_BUCKET` (see "Bucket parallel model" below).
 - `lib/util.sh` — shared logging helpers (`gocell::log::status`,
   `gocell::log::error`).
+- `lib/buckets.sh` — single source for reading a gate's `# verify-bucket:`
+  annotation (`gocell::buckets::annotation`, `gocell::buckets::list`). The
+  driver, the coverage guard, and the Governance Strict matrix all consume it.
 - `verify-*.sh` — individual gates. Each script is independently runnable
-  (`bash hack/verify-X.sh`) and exits non-zero on failure.
+  (`bash hack/verify-X.sh`) and exits non-zero on failure. Each declares a
+  `# verify-bucket: <name>` header line.
+- `verify-bucket-coverage.sh` — meta-gate: asserts every `verify-*.sh` declares
+  exactly one valid bucket (anti-vacuity backbone of the parallel fan-out).
 - `githooks/pre-push` — local fast-feedback hook (see below). Not part of
   the `make verify` gate set; it runs at `git push` time, not in CI.
 
@@ -36,21 +43,59 @@ full rationale and the deliberate CI-mirror deviations.
 ## Adding a new gate
 
 1. Create `hack/verify-<name>.sh` with shebang `#!/usr/bin/env bash`.
-2. `cd "$(dirname "${BASH_SOURCE[0]}")/.."` so the script runs from repo root
+2. Add a `# verify-bucket: <bucket>` header line (lowercase kebab) right after
+   the shebang. This routes the gate into one of the CI parallel buckets (see
+   "Bucket parallel model" below) and is **required**: `verify-bucket-coverage.sh`
+   and the Governance Strict `generate-buckets` job hard-fail if any gate is
+   missing it — an un-bucketed gate would silently never run in CI. Pick the
+   bucket with the most wall-clock headroom (the Actions job summary shows each
+   leg's gate timings); cost-balance is a manual decision, not machine-enforced.
+3. `cd "$(dirname "${BASH_SOURCE[0]}")/.."` so the script runs from repo root
    regardless of caller's CWD.
-3. `chmod +x hack/verify-<name>.sh` so the file can be invoked directly
-   (`./hack/verify-<name>.sh`) for ad-hoc debugging. The driver itself runs
+4. (optional) `chmod +x hack/verify-<name>.sh` so the file can be invoked
+   directly (`./hack/verify-<name>.sh`) for ad-hoc debugging. The driver runs
    each gate via `bash <script>` and does not depend on the executable bit.
-4. Verify locally: `make verify`. The new gate will be picked up automatically.
+5. Verify locally: `make verify` (full glob set, unchanged). Confirm routing
+   with `VERIFY_BUCKET=<bucket> VERIFY_DRY_RUN=1 make verify`.
 
 There is no allow-list, opt-in flag, or violations baseline. Gates are either
 zero-tolerance or paired with an ADR-pinned permanent allow-list that the gate
 itself enforces.
 
+## Bucket parallel model
+
+CI runs `make verify` as a fan-out of cost-balanced **buckets** (Governance
+Strict workflow, #1817), not one serial lane. The single source of truth is the
+`# verify-bucket: <name>` annotation each gate carries:
+
+- **Driver** (`make-rules/verify.sh`): `VERIFY_BUCKET=<name>` runs only the gates
+  annotated with that bucket; an un-annotated gate in bucket mode, or a bucket
+  that matches zero gates, is a hard error (no silent drop). Local `make verify`
+  (no env) runs the full glob set serially — unchanged.
+- **Matrix** (`.github/workflows/governance.yml`): the `generate-buckets` job
+  *derives* the GitHub Actions matrix from the annotations
+  (`gocell::buckets::list`), so adding a gate to an existing bucket needs zero
+  workflow edits. The reserved `nightly` bucket (archtest, owned by
+  `archtest-nightly.yml`) is excluded from the PR matrix.
+- **Guard** (`verify-bucket-coverage.sh`): asserts every gate declares exactly
+  one valid bucket (regression-tested by
+  `automation/bucket-coverage-selftest.sh`, run inside `verify-automation-selftest.sh`).
+
+Honest scope: this guarantees full *routing* coverage and parallel wall-clock,
+but does **not** bound per-bucket cost — the cost 闸门 was consciously descoped
+for dev velocity (see ADR `202606111200-1817-adr-governance-lane-parallelization.md`).
+A new gate must pick a bucket; nothing here caps how slow that bucket grows.
+Rebalance by reading the per-leg timings in the Actions job summaries.
+
 ## Existing gates
+
+Every gate carries a `# verify-bucket: <name>` annotation (see "Bucket parallel
+model"); the codegen/scaffold gates are owned solely by `make verify` since
+#1817 removed the duplicate `verify-codegen` job from `_build-lint.yml`.
 
 | Script | Enforces |
 |---|---|
+| `verify-bucket-coverage.sh` | every `hack/verify-*.sh` declares exactly one valid `# verify-bucket: <name>` annotation (anti-vacuity backbone of the CI parallel-bucket fan-out; #1817). Routing coverage only — does not bound per-bucket cost. |
 | `verify-archtest.sh` | `tools/archtest/*` (LAYER-*, AUTH-*, SEC-FAIL-CLOSED-*, ERROR-FIRST-API-01, META-*, ADV-06). Local `make verify` defaults to `SHARD_COUNT=1`; nightly CI runs `.github/workflows/archtest-nightly.yml` with `SHARD_COUNT=24`; manual runs may use `SHARD_TARGET=N`, `SHARD_COUNT=1`, or `SHARD_COUNT>1`. Production scans require active `GOWORK` when workspace modules exist; do not run archtest with `GOWORK=off`. The leaf `tools/archtest/*_test.go` is gated behind `//go:build archtest` (`ARCHTEST-LEAF-BUILD-TAG-01`) so a bare `go test ./...` (verify-workspace-test, build-test tools shard) compiles it as "no test files" — this script and `archtest-nightly.yml` are the single owners and opt in via `-tags=archtest`. Note: a bare `go test ./tools/archtest/...` without `-tags=archtest` now shows `[no test files]` by design; use this script or pass `-tags=archtest` explicitly. |
 | `verify-contract-health.sh` | `gocell check contract-health` (CH-*) |
 | `verify-examples-import.sh` | `examples/` must not import `cells/*/internal/` or `adapters/*/internal/` |
