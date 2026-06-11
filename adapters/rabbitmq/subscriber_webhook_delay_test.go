@@ -265,7 +265,7 @@ func assertQuorumAtLeastOnce(t *testing.T, args amqp.Table, tier string) {
 		"%s must set reject-publish overflow; drop-head silently degrades at-least-once to at-most-once", tier)
 }
 
-func TestDeclareTopology_EmptySchedule_NoDeLlayTopology(t *testing.T) {
+func TestDeclareTopology_EmptySchedule_NoDelayTopology(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 	ch := newMockChannel()
 	mockConn.nextCh = ch

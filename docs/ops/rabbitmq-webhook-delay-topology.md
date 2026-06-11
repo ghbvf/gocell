@@ -5,6 +5,12 @@ via broker-native delayed re-delivery (#1458, ADR `202606012052-1160-adr-webhook
 §D5). Operators will see **extra RabbitMQ queues and an exchange per webhook-dispatch
 subscription** — this doc explains them.
 
+> **Broker requirement: RabbitMQ ≥ 3.10.** The delay tiers use the
+> `x-dead-letter-strategy=at-least-once` queue argument, a quorum-queue feature
+> introduced in 3.10 (the `quorum_queue` + `stream_queue` feature flags must be
+> enabled — both are on by default from 3.12). On an older broker `QueueDeclare`
+> fails with 406 PRECONDITION_FAILED.
+
 ## Topology
 
 For a webhook-dispatch subscription whose dispatch queue is `Q` (derived from
