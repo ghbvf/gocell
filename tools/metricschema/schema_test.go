@@ -2268,11 +2268,21 @@ func tidyMetricsFixture(t *testing.T, dir string) {
 	t.Helper()
 	goPath, lookErr := exec.LookPath("go")
 	require.NoError(t, lookErr, "go not found in PATH")
+	// Strip ambient GOWORK/GOFLAGS/GOTOOLCHAIN before appending ours, so our
+	// values win unambiguously (append-only relies on last-wins, which is
+	// fragile) and GOTOOLCHAIN=local stops tidy from triggering a network
+	// toolchain download in a sandboxed CI runner.
+	env := slices.DeleteFunc(os.Environ(), func(e string) bool {
+		return strings.HasPrefix(e, "GOWORK=") ||
+			strings.HasPrefix(e, "GOFLAGS=") ||
+			strings.HasPrefix(e, "GOTOOLCHAIN=")
+	})
+	env = append(env, "GOWORK=off", "GOFLAGS=-mod=mod", "GOTOOLCHAIN=local")
 	cmd := &exec.Cmd{
 		Path: goPath,
 		Args: []string{"go", "mod", "tidy"},
 		Dir:  dir,
-		Env:  append(os.Environ(), "GOWORK=off", "GOFLAGS=-mod=mod"),
+		Env:  env,
 	}
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "go mod tidy metrics fixture: %s", out)

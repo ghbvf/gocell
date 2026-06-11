@@ -283,6 +283,13 @@ jobs:
             # covered" violation unrepresentable.
             PKGS=$(go list ./tools/... | grep -v '^github.com/ghbvf/gocell/tools/archtest$' | tr '\n' ' ')
           fi
+          if [ "$SHARD" = "adapters" ]; then
+            # The adapters shard runs ONE import-path wildcard across the 14
+            # go.work adapter modules (#1558). If go.work resolution ever broke
+            # (e.g. a dropped `use` entry), `go test <pattern>` would exit 0 with
+            # zero packages — a silent coverage hole. Fail fast on an empty match.
+            [ -n "$(go list $PKGS 2>/dev/null)" ] || { echo "FAIL: adapters shard pattern '$PKGS' matched zero packages — go.work drift?"; exit 1; }
+          fi
           if [ "$SHARD" = "corecells" ]; then
             # corecells is its own go.work module (#1560); a root `./corecells/...`
             # pattern stops at the nested-module boundary and matches zero packages.
