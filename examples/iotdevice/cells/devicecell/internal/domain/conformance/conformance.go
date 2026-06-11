@@ -56,7 +56,9 @@ func RunDeviceRepoConformance(t *testing.T, factory DeviceRepoFactory, features 
 	t.Run("List/SecondPage", func(t *testing.T) { runListSecondPage(t, factory, features) })
 	t.Run("Cert/CreateBareDeviceNormalizes", func(t *testing.T) { runCreateBareDeviceNormalizes(t, factory, features) })
 	t.Run("Cert/RenewalCandidatesNearExpiry", func(t *testing.T) { runCertRenewalCandidatesNearExpiry(t, factory, features) })
-	t.Run("Cert/RenewalCandidatesReturnsAllNearExpiry", func(t *testing.T) { runCertRenewalCandidatesReturnsAllNearExpiry(t, factory, features) })
+	t.Run("Cert/RenewalCandidatesReturnsAllNearExpiry", func(t *testing.T) {
+		runCertRenewalCandidatesReturnsAllNearExpiry(t, factory, features)
+	})
 }
 
 func inTx(t *testing.T, ctx context.Context, txRunner persistence.TxRunner, features Features, fn func(ctx context.Context) error) error {
