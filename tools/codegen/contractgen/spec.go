@@ -126,6 +126,13 @@ type DTOSpec struct {
 	// traversal. Callers of buildContractSpec see an empty slice — the builder
 	// promotes nested types to ContractGenSpec.DTOs and clears this field.
 	Nested []DTOSpec
+	// EmitToMap requests a generated unexported `toMap() map[string]any` method
+	// for this DTO (the resource-item type of a responseProjection endpoint).
+	// Set by applyResponseProjection on the `data` resource item DTO so the
+	// handler can convert the schema-typed row into the column map the masking
+	// funnel (projection.NewProjection / NewProjectionList) consumes; map keys
+	// mirror BareJSONTag so the projected field set equals this DTO's field set.
+	EmitToMap bool
 }
 
 // DTOField describes a single struct field.
@@ -134,6 +141,10 @@ type DTOField struct {
 	Name string
 	// JSONTag is the JSON tag value, e.g. "item,omitempty".
 	JSONTag string
+	// BareJSONTag is the JSON key without the ",omitempty" suffix, e.g. "item".
+	// Used by the generated toMap() (EmitToMap DTOs) so the projection column map
+	// keys match the wire JSON field names exactly.
+	BareJSONTag string
 	// GoType is the Go type expression, e.g. "string", "int64", "*ResponseData".
 	GoType string
 	// Required indicates whether the field is in the schema's required list.
@@ -257,6 +268,13 @@ type httpEndpointSpec struct {
 	// middleware skips claim/record/replay for this route (credential-rotation /
 	// change-password whose body returns tokens).
 	IdempotencyExempt bool
+	// ResponseProjection is true when contract.yaml endpoints.http.responseProjection
+	// is set. The builder post-pass applyResponseProjection then rewrites the
+	// Response `data` field type to projection.ResourceProjection (single) or
+	// []projection.ResourceProjection (array) and flags the resource item DTO
+	// EmitToMap, so the handler must route wire data through the masking funnel
+	// (epic #1337 PR-12, RESOURCE-PROJECTION-CALLSITE-LOCK-01).
+	ResponseProjection bool
 }
 
 // IsPagination reports whether this endpoint uses the canonical cursor+limit
