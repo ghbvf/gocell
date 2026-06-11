@@ -88,6 +88,23 @@ func RunPolicyRepoConformance(t *testing.T, factory PolicyRepoFactory) {
 	t.Run("SaveInputClone_IsIndependent", func(t *testing.T) {
 		conformPolicySaveInputCloneIsIndependent(t, factory)
 	})
+	t.Run("RepoReady_OK", func(t *testing.T) {
+		conformPolicyRepoReady(t, factory)
+	})
+}
+
+// conformPolicyRepoReady asserts that a freshly-constructed repository reports
+// ready (RepoReady returns nil). mem is always ready; the PG store's policies
+// table is reachable (and empty) in a fresh per-test database. This is the
+// conformance complement to T8.4 — every PolicyRepository implementation feeds
+// the cell-level readiness probe, so each must answer RepoReady on a healthy
+// store.
+func conformPolicyRepoReady(t *testing.T, factory PolicyRepoFactory) {
+	t.Parallel()
+	repo := factory(t)
+	if err := repo.RepoReady(context.Background()); err != nil {
+		t.Errorf("RepoReady() on a healthy repo must return nil, got %v", err)
+	}
 }
 
 // conformTestPolicy builds a minimal valid Policy for conformance tests.

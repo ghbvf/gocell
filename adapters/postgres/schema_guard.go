@@ -564,6 +564,15 @@ var expectedColumns = []expectedColumn{
 	{Table: "roles", Column: "name", Type: "text", NotNull: true},
 	{Table: "roles", Column: "permissions", Type: "jsonb", NotNull: true},
 	{Table: "roles", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
+	// policies (058_create_policies.sql) — ABAC policy store (#1346 PR-8).
+	// PK is composite (tenant_id, id); rules holds the string-coded JSONB rule list.
+	{Table: "policies", Column: "tenant_id", Type: "text", NotNull: true},
+	{Table: "policies", Column: "id", Type: "text", NotNull: true},
+	{Table: "policies", Column: "name", Type: "text", NotNull: true},
+	{Table: "policies", Column: "description", Type: "text", NotNull: true},
+	{Table: "policies", Column: "rules", Type: "jsonb", NotNull: true},
+	{Table: "policies", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
+	{Table: "policies", Column: "updated_at", Type: pgTypeTSTZ, NotNull: true},
 	// role_assignments (019_roles.sql + 050_accesscore_tenant_id.sql)
 	// 050 drops+recreates the table; PK is (tenant_id, user_id, role_id).
 	{Table: "role_assignments", Column: "tenant_id", Type: "text", NotNull: true}, // 050 NEW
@@ -924,6 +933,7 @@ var expectedRLSTables = []expectedRLS{
 	{Table: "users", Policy: "tenant_isolation"},
 	{Table: "roles", Policy: "tenant_isolation"},
 	{Table: "role_assignments", Policy: "tenant_isolation"},
+	{Table: "policies", Policy: "tenant_isolation"}, // 058 NEW — ABAC policy store (#1346 PR-8)
 	// audit_entries (migration 055, #1618): SystemRowsReadable variant — the
 	// `OR tenant_id = ''` clause keeps tenant-less system/framework rows readable
 	// by every tenant AND insertable by the GUC-unset pre-auth appender.

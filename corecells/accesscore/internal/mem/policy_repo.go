@@ -133,6 +133,13 @@ func (r *PolicyRepository) Delete(ctx context.Context, t tenant.TenantID, id str
 	return nil
 }
 
+// RepoReady reports store readiness. The in-memory PolicyRepository has no
+// external dependency, so it is always ready (returns nil). It exists to satisfy
+// ports.PolicyRepository (and thus kernel/healthz.RepoProber) uniformly across
+// implementations: the cell folds every repo's readiness into one probe, and a
+// mem store that omitted this would be invisible to that aggregate (#1346 PR-8).
+func (r *PolicyRepository) RepoReady(_ context.Context) error { return nil }
+
 // tenantPolicies returns (or lazily initializes) the per-tenant inner map.
 // Caller MUST hold r.mu (write).
 func (r *PolicyRepository) tenantPolicies(t tenant.TenantID) map[string]*abac.Policy {

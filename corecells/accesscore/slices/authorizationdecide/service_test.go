@@ -359,6 +359,7 @@ func (r errPolicyRepo) ListByTenant(context.Context, tenant.TenantID) ([]*abac.P
 	return nil, r.err
 }
 func (r errPolicyRepo) Delete(context.Context, tenant.TenantID, string) error { return r.err }
+func (r errPolicyRepo) RepoReady(context.Context) error                       { return r.err }
 
 func TestAuthorize_StoreDown_DeniesUnavailable(t *testing.T) {
 	eng := newEngine(t, errPolicyRepo{err: errors.New("connection refused")}, clockmock.New(fixedClockTime))
@@ -432,6 +433,10 @@ func (r *scopeCapturingPolicyRepo) ListByTenant(ctx context.Context, t tenant.Te
 
 func (r *scopeCapturingPolicyRepo) Delete(ctx context.Context, t tenant.TenantID, id string) error {
 	return r.inner.Delete(ctx, t, id)
+}
+
+func (r *scopeCapturingPolicyRepo) RepoReady(ctx context.Context) error {
+	return r.inner.RepoReady(ctx)
 }
 
 // TestAuthorize_IsRLSScoped asserts the policy load runs inside a tenant-scoped

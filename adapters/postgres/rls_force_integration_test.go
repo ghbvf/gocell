@@ -216,17 +216,17 @@ func TestRLSForce_TenantStrictEquality(t *testing.T) {
 func TestRLSForce_SchemaGuardVerifyRLS(t *testing.T) {
 	ctx := context.Background()
 
-	// Positive: after migrations 052 (config) + 053 (accesscore) all six tenant
-	// tables are FORCE RLS + policy.
+	// Positive: after migrations 052 (config) + 053 (accesscore) + 058 (policies)
+	// every standard-isolation tenant table is FORCE RLS + tenant_isolation policy.
 	require.NoError(t, VerifyExpectedShape(ctx, migratedPool(t)),
-		"VerifyExpectedShape must pass with RLS enabled on all six tenant tables")
+		"VerifyExpectedShape must pass with RLS enabled on all tenant tables")
 
-	// Negative: dropping the tenant_isolation policy on ANY of the six RLS tables
-	// must make verifyRLS fail — each on its own fresh clone so the drops don't
-	// interfere (proves verifyRLS checks every table, not just the first).
+	// Negative: dropping the tenant_isolation policy on ANY of the standard RLS
+	// tables must make verifyRLS fail — each on its own fresh clone so the drops
+	// don't interfere (proves verifyRLS checks every table, not just the first).
 	for _, table := range []string{
 		"config_entries", "config_versions", "feature_flags",
-		"users", "roles", "role_assignments",
+		"users", "roles", "role_assignments", "policies",
 	} {
 		t.Run("drop_policy_"+table, func(t *testing.T) {
 			pool := migratedPool(t)
