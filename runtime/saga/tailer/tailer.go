@@ -30,10 +30,19 @@ import (
 // within one tick). It never escapes drain.
 var errStopAtHead = errors.New("tailer: reached captured head bound")
 
-// compile-time: Tailer is a lifecycle.ManagedResource (bootstrap wires it via
-// WithManagedResource in PR-05) and its own worker.Worker (Start/Stop = the poll
-// loop). HEALTH-AGG-01 requires any runtime type exposing Probes() to implement
-// ManagedResource.
+// compile-time: Tailer is a lifecycle.ManagedResource and its own worker.Worker
+// (Start/Stop = the poll loop). HEALTH-AGG-01 requires any runtime type exposing
+// Probes() to implement ManagedResource.
+//
+// Bootstrap wiring (PR-05): the bootstrap saga-projection drain constructs the
+// Tailer inside phase6 (it needs the per-projection cellID/projectionID from the
+// cell snapshot) and wires its probe/worker/teardown DIRECTLY — registering each
+// Probes() entry on the health aggregator, appending Worker() to the worker set,
+// and recording Close as a named teardown — exactly as the outbox Coordinator is
+// wired. It is NOT registered via bootstrap.WithManagedResource: that option's
+// expandManagedResources pass runs before phase0, so a phase6-built resource
+// could never be reached by it. ManagedResource here is the method surface the
+// drain calls, not the registration vehicle.
 var (
 	_ lifecycle.ManagedResource = (*Tailer)(nil)
 	_ worker.Worker             = (*Tailer)(nil)
