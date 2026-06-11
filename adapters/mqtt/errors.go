@@ -11,7 +11,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
-	"fmt"
 
 	"github.com/eclipse/paho.golang/autopaho"
 
@@ -452,12 +451,6 @@ func validateAckReasonTable(label string, rows []ackReason) {
 		seen[r.code] = true
 	}
 }
-
-// reasonTableFmt is a package-level var to prevent "non-constant format string"
-// vet warnings from errcode.Assertion's variadic format — the format strings
-// used in validateAckReasonTable are not compile-time constants because they
-// embed the label parameter. This blank usage silences the vet check.
-var _ = fmt.Sprintf
 
 func init() {
 	validateConnackReasonTable(connackReasonTable)
