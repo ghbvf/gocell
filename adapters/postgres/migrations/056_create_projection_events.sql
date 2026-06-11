@@ -44,6 +44,32 @@ CREATE TABLE IF NOT EXISTS projection_events (
 -- `WHERE global_seq > $1 ORDER BY global_seq` via its btree, so no extra index.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_projection_events_id ON projection_events (id);
 
+-- Append-only enforcement at the DB-engine layer (#1504 D7 / I4 "真 Hard 升级").
+-- The durable journal must never be UPDATEd or DELETEd by the serving path —
+-- that is the structural guarantee the whole #1504 fix rests on. But
+-- deploy/postgres/init/10-restricted-role.sh runs BEFORE migrations and grants the
+-- serving role gocell_app default SELECT/INSERT/UPDATE/DELETE on every future table
+-- (ALTER DEFAULT PRIVILEGES), so this table is born with the two destructive
+-- privileges. Revoke them here so the DB engine — not application discipline or an
+-- archtest with known blind spots (I4 Medium) — enforces append-only for the
+-- serving role. The role keeps SELECT (read for replay/Position) + INSERT (the
+-- same-transaction journaling writer appends, ON CONFLICT DO NOTHING needs no
+-- UPDATE). TRUNCATE is never default-granted (stays with the table owner).
+--
+-- The IF EXISTS guard keeps this a no-op where gocell_app is not provisioned
+-- (dev/memory mode, the template-build migration in testmain) and applies the real
+-- REVOKE in deploy/e2e where 10-restricted-role.sh created the role first. Mirrors
+-- the #1676 restricted-role hardening posture (DB role = unbypassable boundary).
+-- ref: deploy/postgres/init/10-restricted-role.sh (the default-privilege grant this revokes).
+-- +goose StatementBegin
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gocell_app') THEN
+    REVOKE UPDATE, DELETE ON projection_events FROM gocell_app;
+  END IF;
+END $$;
+-- +goose StatementEnd
+
 -- +goose Down
 -- WARNING: dropping projection_events PERMANENTLY DELETES the durable projection
 -- journal; every projection loses its replay source and cannot rebuild from 0.

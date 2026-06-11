@@ -42,11 +42,23 @@ const projectionJournalReadySQL = `SELECT 1 FROM projection_events WHERE false`
 // PGProjectionEventSource is the durable production projection.ReplaySource + projection.Cursor
 // backed by the append-only projection_events journal (EPIC #1504). Unlike the
 // outbox-backed PGProjectionReplaySource it replaces (PR-03), it reads its monotonic position
-// from projection_events.global_seq — a never-deleted journal — and Position reads that value
-// off the carrier Replay already delivered, with NO `SELECT seq WHERE id=$1` lookup. That
-// deleted-row lookup against the transient outbox was the #1504 root bug (cleaned rows →
-// ErrNoRows → permanent error → dead-letter); the durable journal + carrier-intrinsic
-// position close both the rebuild-from-0 and live-path gaps structurally.
+// from projection_events.global_seq — a never-deleted journal — so a position can never depend
+// on a row the relay may have deleted (the #1504 root bug: a cleaned outbox row →
+// SELECT seq WHERE id=$1 → ErrNoRows → permanent error → dead-letter).
+//
+// Position reads global_seq off the JournalEvent carrier that Replay produced, with NO SQL
+// lookup. That structurally closes the REBUILD-from-0 gap, because Replay itself constructs the
+// position-bearing carrier from each row. The LIVE-path gap is NOT closed by carrier-intrinsic
+// Position alone: the live broker delivers a raw outbox.Entry that carries no global_seq, which
+// PositionFromCarrier rejects as a permanent error. Closing the live path needs the wiring that
+// makes this source the Coordinator's live Cursor (PR-03) to hand the Cursor a position-bearing
+// carrier — resolving the entry's journal global_seq at the delivery boundary. The durable
+// journal is what makes that resolution safe: the D4 same-transaction double-write commits the
+// projection_events row before the event is delivered, and the journal is never cleaned, so the
+// resolution cannot ErrNoRows (the exact failure mode that broke the transient-outbox path).
+// PR-01 ships the rebuild source + the carrier-read Position replay relies on; the live-carrier
+// resolver and its regression coverage land in PR-03 (the durable-source wiring). The live-carrier
+// protocol is recorded in ADR 202606071600-1504 §4.2.
 //
 // It holds a pgexec.PGExecutor (the sealed pool funnel, PG-REPO-AMBIENT-TX-01) rather than a
 // raw pool. Replay is NOT transactional: the Coordinator invokes it outside RunInTx and wraps
