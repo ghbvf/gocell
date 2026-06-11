@@ -10,12 +10,14 @@
 # INVARIANT: non-epic backlog ⇒ exactly-one {area,type,pri,cx}; epic ⇒
 # exactly-one {area,pri} ∧ zero cx. Enforcement is a skill-side pre-create gate
 # (issues B1 runs `validate --labels` and only `gh issue create`s on exit 0).
-# Funnel strength: downstream logic Hard (single decision point, selftest-locked);
-# upstream callsite weak-Medium (skill-routed; a raw `gh` / web-UI create bypasses
-# it). True Hard (违反不可表达) is structurally unreachable — GitHub issue labels
-# are external mutable state no repo-side mechanism can constrain. The unconditional
-# `on: issues` CI backstop (true Medium ceiling) is a deliberate future-hardening
-# path, not built here.
+# Funnel strength (honest, per .claude/rules/gocell/ai-robust.md): overall Medium.
+# Downstream logic Medium (single decision point; selftest is the golden gate, run
+# in CI via make verify — not compile-time un-expressible, so not Hard). Upstream
+# callsite weak-Medium (skill-routed; a raw `gh` / web-UI create bypasses it). True
+# Hard (违反不可表达) is structurally unreachable — GitHub issue labels are external
+# mutable state no repo-side mechanism can constrain. The unconditional `on: issues`
+# CI backstop (the strong-Medium ceiling) is a deliberate future-hardening path,
+# not built here.
 #
 # Usage:
 #   issue-labels.sh validate --labels "<csv>"   pure offline validator
@@ -57,6 +59,13 @@ _require_one() {
 }
 
 # _validate_labels CSV -> 0 ok | 2 violation. Prints violations to stderr.
+#
+# Axis membership: pri/cx use value-exact regexes (pri-p0..p3, cx-1..cx-4) — these
+# axes have small fixed value sets and exactness is load-bearing: it rejects
+# cx-unknown (deliberately unsupported, #1832) and out-of-range typos. area/type use
+# prefix-count: their value sets (PROJECT.md §2.1/§2.2, 8 each) are validated by
+# GitHub label existence + the enum docs, not duplicated here — this guard checks
+# COMPLETENESS (exactly-one per axis), not value membership.
 _validate_labels() {
     local labels
     labels="$(_normalize "$1")"
@@ -64,25 +73,27 @@ _validate_labels() {
     # Out of scope: only backlog issues are governed.
     printf '%s\n' "${labels}" | grep -qx 'backlog' || return 0
 
-    local area type pri cx is_epic
+    local area type pri cx cx_any is_epic
     area="$(_count '^area-' "${labels}")"
     type="$(_count '^type-' "${labels}")"
-    pri="$(_count '^pri-p[0-9]+$' "${labels}")"
+    pri="$(_count '^pri-p[0-3]$' "${labels}")"
     cx="$(_count '^cx-[1-4]$' "${labels}")"
+    cx_any="$(_count '^cx-' "${labels}")"
     is_epic="$(_count '^epic$' "${labels}")"
 
     local rc=0
-    _require_one area "${area}" || rc=1
-    _require_one pri "${pri}" || rc=1
+    _require_one 'area' "${area}" || rc=1
+    _require_one 'pri (pri-p0..p3)' "${pri}" || rc=1
     if [[ "${is_epic}" -gt 0 ]]; then
         # epic 不贴 cx; type not required for epic (epic create cmd omits it).
-        if [[ "${cx}" -gt 0 ]]; then
+        # cx_any (not cx) so a cx-unknown / typo on an epic is also rejected.
+        if [[ "${cx_any}" -gt 0 ]]; then
             echo "  - epic must not carry cx-* (epic 不贴 cx)" >&2
             rc=1
         fi
     else
-        _require_one type "${type}" || rc=1
-        _require_one cx "${cx}" || rc=1
+        _require_one 'type' "${type}" || rc=1
+        _require_one 'cx (cx-1..cx-4)' "${cx}" || rc=1
     fi
 
     if [[ "${rc}" -ne 0 ]]; then
@@ -98,9 +109,11 @@ cmd_validate() {
     local labels="" issue="" have_labels=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --labels)   labels="${2:-}"; have_labels=1; shift 2 ;;
+            --labels)   [[ $# -ge 2 ]] || { echo "issue-labels validate: --labels requires a value" >&2; return 64; }
+                        labels="$2"; have_labels=1; shift 2 ;;
             --labels=*) labels="${1#*=}"; have_labels=1; shift ;;
-            --issue)    issue="${2:-}"; shift 2 ;;
+            --issue)    [[ $# -ge 2 ]] || { echo "issue-labels validate: --issue requires a value" >&2; return 64; }
+                        issue="$2"; shift 2 ;;
             --issue=*)  issue="${1#*=}"; shift ;;
             *) echo "issue-labels validate: unknown flag '$1'" >&2; return 64 ;;
         esac
@@ -150,6 +163,20 @@ cmd_selftest() {
     _expect "non-backlog"   0 --labels "area-tooling,type-debt,pri-p2"
     # tolerates whitespace + orthogonal flag labels
     _expect "ws-and-flag"   0 --labels "backlog, area-tooling , type-debt, pri-p2, cx-3, flag-cond"
+    # empty set -> out of scope (no backlog) — locks _normalize / out-of-scope path
+    _expect "empty-labels"  0 --labels ""
+    # cx-unknown is deliberately unsupported (#1832): not a valid cx -> violation
+    _expect "cx-unknown"    2 --labels "backlog,area-tooling,type-debt,pri-p2,cx-unknown"
+    # out-of-range cx (Cx5+ must be split, §3.2) is not a valid cx -> violation
+    _expect "cx-out-of-range" 2 --labels "backlog,area-tooling,type-debt,pri-p2,cx-5"
+    # invalid pri value (only pri-p0..p3) -> violation
+    _expect "pri-invalid"   2 --labels "backlog,area-tooling,type-debt,pri-p10,cx-1"
+    # epic carrying cx-unknown still rejected (epic forbid uses cx_any, not cx-1..4)
+    _expect "epic-cx-unknown" 2 --labels "epic,backlog,area-tooling,pri-p2,cx-unknown"
+    # usage errors: missing flag value / no flag at all -> 64
+    _expect "labels-no-value" 64 --labels
+    _expect "issue-no-value"  64 --issue
+    _expect "no-flag"       64
 
     echo "issue-labels selftest: ${pass} passed, ${fail} failed"
     [[ "${fail}" -eq 0 ]]
