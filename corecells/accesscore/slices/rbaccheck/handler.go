@@ -7,6 +7,8 @@ import (
 	checkg "github.com/ghbvf/gocell/generated/contracts/http/auth/role/check/v1"
 	listg "github.com/ghbvf/gocell/generated/contracts/http/auth/role/list/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/authz"
+	"github.com/ghbvf/gocell/pkg/projection"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -52,8 +54,23 @@ func (a ListAdapter) List(ctx context.Context, req *listg.Request) (listg.ListRe
 	if err != nil {
 		return nil, err
 	}
-	items := make([]*listg.ResponseDataItem, 0, len(result.Items))
-	for _, role := range result.Items {
+	rows, err := toRoleProjectionRows(result.Items)
+	if err != nil {
+		return nil, err
+	}
+	return listg.List200JSONResponse{
+		Data:       rows,
+		NextCursor: result.NextCursor,
+		HasMore:    result.HasMore,
+	}, nil
+}
+
+// toRoleProjectionRows converts domain roles into the sealed []projection.ResourceProjection
+// required by the list response. Identity projection (epic #1337 PR-12); masking
+// obligation source becomes the ABAC Decision in PR-10.
+func toRoleProjectionRows(roles []*domain.Role) ([]projection.ResourceProjection, error) {
+	rows := make([]map[string]any, 0, len(roles))
+	for _, role := range roles {
 		perms := make([]*listg.ResponseDataItemPermissionsItem, len(role.Permissions))
 		for i, p := range role.Permissions {
 			perms[i] = &listg.ResponseDataItemPermissionsItem{
@@ -61,17 +78,14 @@ func (a ListAdapter) List(ctx context.Context, req *listg.Request) (listg.ListRe
 				Action:   p.Action,
 			}
 		}
-		items = append(items, &listg.ResponseDataItem{
+		item := listg.ResponseDataItem{
 			ID:          role.ID,
 			Name:        role.Name,
 			Permissions: perms,
-		})
+		}
+		rows = append(rows, item.ToMap())
 	}
-	return listg.List200JSONResponse{
-		Data:       items,
-		NextCursor: result.NextCursor,
-		HasMore:    result.HasMore,
-	}, nil
+	return projection.NewProjectionList(authz.FieldMask{}, rows)
 }
 
 // CheckAdapter implements checkg.Service for http.auth.role.check.v1.
@@ -84,7 +98,12 @@ func (a CheckAdapter) Check(ctx context.Context, req *checkg.Request) (checkg.Ch
 	if err != nil {
 		return nil, err
 	}
-	return checkg.Check200JSONResponse{Data: &checkg.ResponseData{HasRole: has}}, nil
+	// Identity projection (epic #1337 PR-12); masking obligation source becomes the ABAC Decision in PR-10.
+	data, err := projection.NewProjection(authz.FieldMask{}, checkg.ResponseData{HasRole: has}.ToMap())
+	if err != nil {
+		return nil, err
+	}
+	return checkg.Check200JSONResponse{Data: data}, nil
 }
 
 // Handler is the composite route handler for the rbaccheck slice.
