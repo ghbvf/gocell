@@ -1,0 +1,14 @@
+id: event.policy.updated.v1
+description: "Metadata-only notification: subscribers MUST refetch current policy via GET /api/v1/access/policies/{id}. Producer-only for now; intended for future MDM (#1051) and zerotrust (#1052) continuous-eval consumers — explains ADV-05 advisory on dead-event check."
+kind: event
+ownerCell: accesscore
+consistencyLevel: L2
+lifecycle: active
+endpoints:
+  publisher: accesscore
+schemaRefs:
+  headers: headers.schema.json
+  payload: payload.schema.json
+replayable: false
+idempotencyKey: eventId
+deliverySemantics: at-least-once

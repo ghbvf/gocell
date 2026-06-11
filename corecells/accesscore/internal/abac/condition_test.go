@@ -3,6 +3,9 @@ package abac_test
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/abac"
 )
 
@@ -73,6 +76,39 @@ func TestAttributeSource_String(t *testing.T) {
 			t.Parallel()
 			if got := tc.src.String(); got != tc.want {
 				t.Errorf("AttributeSource(%d).String() = %q, want %q", tc.src, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseAttributeSource(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		input   string
+		want    abac.AttributeSource
+		wantErr bool
+	}{
+		// valid codes round-trip with String()
+		{"subject round-trips", "subject", abac.SourceSubject, false},
+		{"resource round-trips", "resource", abac.SourceResource, false},
+		{"environment round-trips", "environment", abac.SourceEnvironment, false},
+		// unknown codes → error (fail-closed)
+		{"empty string unknown", "", 0, true},
+		{"action unknown", "action", 0, true},
+		{"SUBJECT uppercase unknown", "SUBJECT", 0, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := abac.ParseAttributeSource(tc.input)
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Zero(t, got)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tc.want, got)
+				assert.Equal(t, tc.input, got.String(), "ParseAttributeSource → String() must be identity")
 			}
 		})
 	}

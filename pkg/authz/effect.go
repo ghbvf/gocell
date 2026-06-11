@@ -45,3 +45,17 @@ func (e Effect) Validate() error {
 	}
 	return nil
 }
+
+// ParseEffect converts a wire/log spelling back to its Effect value (inverse of
+// String). Recognized codes: "allow" → EffectAllow, "deny" → EffectDeny. Any
+// other input — including the empty string — returns an error (fail-closed).
+func ParseEffect(s string) (Effect, error) {
+	switch s {
+	case "allow":
+		return EffectAllow, nil
+	case "deny":
+		return EffectDeny, nil
+	default:
+		return 0, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "authz: unknown Effect wire code")
+	}
+}

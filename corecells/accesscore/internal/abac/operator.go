@@ -57,3 +57,21 @@ func (op Operator) Validate() error {
 	}
 	return nil
 }
+
+// ParseOperator converts a wire/log spelling back to its Operator value
+// (inverse of String). Recognised codes: "eq", "neq", "in", "not_in". Any
+// other input — including the empty string — returns an error (fail-closed).
+func ParseOperator(s string) (Operator, error) {
+	switch s {
+	case "eq":
+		return OpEquals, nil
+	case "neq":
+		return OpNotEquals, nil
+	case "in":
+		return OpIn, nil
+	case "not_in":
+		return OpNotIn, nil
+	default:
+		return 0, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "abac: unknown Operator wire code")
+	}
+}

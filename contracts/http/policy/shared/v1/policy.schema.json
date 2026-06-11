@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gocell.dev/schemas/policy/policy-v1.schema.json",
+  "title": "policy",
+  "description": "ABAC Policy response object. Deliberately carries no createdAt/updatedAt — the Policy domain uses CAS version for conflict detection, not timestamps.",
+  "type": "object",
+  "required": ["id", "name", "version", "rules"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 1024
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Monotonically increasing CAS version."
+    },
+    "rules": {
+      "type": "array",
+      "items": {
+        "$ref": "rule.schema.json"
+      }
+    }
+  }
+}

@@ -55,6 +55,45 @@ func TestRowScope_String(t *testing.T) {
 	}
 }
 
+func TestParseRowScope(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		input   string
+		want    RowScope
+		wantErr bool
+	}{
+		// empty string → zero value (no obligation), no error
+		{"empty string → zero (no obligation)", "", RowScope(0), false},
+		// valid codes round-trip with String()
+		{"self round-trips", "self", RowScopeSelf, false},
+		{"device round-trips", "device", RowScopeDevice, false},
+		{"tenant round-trips", "tenant", RowScopeTenant, false},
+		{"all round-trips", "all", RowScopeAll, false},
+		// unknown non-empty codes → error (fail-closed)
+		{"global unknown", "global", 0, true},
+		{"SELF uppercase unknown", "SELF", 0, true},
+		{"none unknown", "none", 0, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := ParseRowScope(tc.input)
+			if tc.wantErr {
+				assert.Error(t, err)
+				assert.Zero(t, got)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tc.want, got)
+				// non-zero values must round-trip through String()
+				if tc.want != 0 {
+					assert.Equal(t, tc.input, got.String(), "ParseRowScope → String() must be identity")
+				}
+			}
+		})
+	}
+}
+
 // TestRowScope_StrictnessOrdering locks the numeric ordering that Narrower (and
 // any obligation-merge consumer) relies on: self < device < tenant < all, i.e.
 // a smaller value is a stricter scope. Reordering or inserting an out-of-order

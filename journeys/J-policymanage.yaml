@@ -1,0 +1,28 @@
+id: J-policymanage
+goal: 管理员完成 ABAC Policy CRUD 并触发策略变更事件
+lifecycle: active
+owner:
+  team: platform
+  role: journey-owner
+cells:
+  - accesscore
+contracts:
+  # Policy CRUD HTTP contracts + policy.updated event contract.
+  # Journey-level closure for JOURNEY-CONTRACT-EXISTENCE-01.
+  - http.policy.create.v1
+  - http.policy.get.v1
+  - http.policy.update.v1
+  - http.policy.delete.v1
+  - http.policy.list.v1
+  - event.policy.updated.v1
+passCriteria:
+  - text: Policy 创建成功并返回 201 + Policy 对象
+    mode: manual
+  - text: Policy 按 ID 查询返回 200 + Policy 对象
+    mode: manual
+  - text: Policy 更新触发 event.policy.updated.v1 事件
+    mode: manual
+  - text: Policy 删除（CAS 版本一致）返回 204
+    mode: manual
+  - text: Policy 列表返回分页响应
+    mode: manual

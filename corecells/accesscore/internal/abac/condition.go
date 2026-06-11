@@ -72,6 +72,23 @@ func (src AttributeSource) Validate() error {
 	return nil
 }
 
+// ParseAttributeSource converts a wire/log spelling back to its AttributeSource
+// value (inverse of String). Recognised codes: "subject", "resource",
+// "environment". Any other input — including the empty string — returns an
+// error (fail-closed).
+func ParseAttributeSource(s string) (AttributeSource, error) {
+	switch s {
+	case "subject":
+		return SourceSubject, nil
+	case "resource":
+		return SourceResource, nil
+	case "environment":
+		return SourceEnvironment, nil
+	default:
+		return 0, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "abac: unknown AttributeSource wire code")
+	}
+}
+
 // Condition is a single predicate in a Rule. It evaluates to true when the
 // attribute identified by (Source, Key) satisfies Operator relative to Values.
 //
