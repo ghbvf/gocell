@@ -96,9 +96,11 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// (EPIC #1337 #1618);
 	// 056 adds cert_epoch/cert_expires_at/renewal_requested_epoch to devices +
 	// devices_cert_epoch_positive CHECK for durable cert-renewal state (#1819);
-	// 057 adds idx_devices_cert_expires_at CONCURRENTLY for renewal-candidate scan (#1819).
-	assert.Equal(t, int64(57), v,
-		"expected version should be exactly 57 (current migration max — 057_devices_cert_expiry_index)")
+	// 057 adds idx_devices_cert_expires_at CONCURRENTLY for renewal-candidate scan (#1819);
+	// 058 creates projection_events (append-only durable projection journal —
+	// global_seq IDENTITY PK + idx_projection_events_id) for the #1504 retained event store.
+	assert.Equal(t, int64(58), v,
+		"expected version should be exactly 58 (current migration max — 058_create_projection_events)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {
