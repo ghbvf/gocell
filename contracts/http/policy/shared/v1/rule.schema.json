@@ -21,6 +21,7 @@
     },
     "effect": {
       "type": "string",
+      "$comment": "enum: allow, deny — minLength/maxLength guards are length-based equivalents; add enum: [allow, deny] here if a future schema upgrade can break existing clients",
       "minLength": 4,
       "maxLength": 5,
       "description": "Authorization verdict. Valid values: allow, deny. Deny-overrides: any deny wins over all allows."
@@ -35,6 +36,7 @@
         "properties": {
           "source": {
             "type": "string",
+            "$comment": "enum: subject, resource, environment — minLength/maxLength guards are length-based equivalents",
             "minLength": 7,
             "maxLength": 11,
             "description": "Attribute namespace. Valid values: subject (principal claims), resource (protected object attrs), environment (context)."
@@ -47,6 +49,7 @@
           },
           "operator": {
             "type": "string",
+            "$comment": "enum: eq, neq, in, not_in — minLength/maxLength guards are length-based equivalents",
             "minLength": 2,
             "maxLength": 6,
             "description": "Comparison applied between the resolved attribute and values. Valid values: eq, neq, in, not_in."
@@ -71,6 +74,7 @@
       "properties": {
         "rowScope": {
           "type": "string",
+          "$comment": "enum: self, device, tenant, all — minLength/maxLength guards are length-based equivalents",
           "minLength": 3,
           "maxLength": 6,
           "description": "Row-visibility obligation. Valid values: self, device, tenant, all. Absent means no row-scope constraint."

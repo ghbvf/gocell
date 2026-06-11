@@ -56,9 +56,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // resolve the handler function body via the Contract→Handler correlation.
 func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 	return auth.Mount(mux, auth.Route{
-		Contract: contractSpec,
-		Handler:  http.HandlerFunc(h.handle),
-		Policy:   h.policy,
+		Contract:          contractSpec,
+		Handler:           http.HandlerFunc(h.handle),
+		Policy:            h.policy,
+		IdempotencyExempt: true,
 	})
 }
 

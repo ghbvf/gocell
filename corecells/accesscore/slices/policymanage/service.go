@@ -29,6 +29,8 @@ const TopicPolicyUpdated = dto.TopicPolicyUpdated
 
 // policySort defines the stable sort order for the in-memory list operation.
 // Sorted by ID ascending so that cursor pagination is deterministic.
+// Effectively immutable: do not append or replace elements at runtime;
+// query.Sort and query.ApplyCursor both read this value concurrently.
 var policySort = []query.SortColumn{
 	{Name: "id", Direction: query.SortASC},
 }
@@ -73,6 +75,9 @@ type Service struct {
 // txRunner is rejected to prevent silent loss of L2 atomicity guarantees.
 func NewService(clk clock.Clock, policyRepo ports.PolicyRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
 	clock.MustHaveClock(clk, "policymanage.NewService")
+	if logger == nil {
+		logger = slog.Default()
+	}
 	s := &Service{
 		policyRepo: policyRepo,
 		emitter:    outbox.DemoCellEmitter(),
@@ -120,20 +125,20 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*abac.Policy, 
 		return nil, err
 	}
 
+	var created *abac.Policy
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
-		if err := s.policyRepo.Create(txCtx, tid, p); err != nil {
+		var err error
+		created, err = s.policyRepo.Create(txCtx, tid, p)
+		if err != nil {
 			return fmt.Errorf("policymanage: create: %w", err)
 		}
-		// repo.Create sets Version=1 on its internal stored clone; mirror that here
-		// so the returned policy reflects the persisted version.
-		p.Version = 1
-		return s.emitPolicyUpdated(txCtx, p.ID, p.Version, dto.PolicyActionCreated, actor)
+		return s.emitPolicyUpdated(txCtx, created.ID, created.Version, dto.PolicyActionCreated, actor)
 	}); err != nil {
 		return nil, err
 	}
 
-	s.logger.Info("policy created", slog.String("policyId", p.ID))
-	return p, nil
+	s.logger.Info("policy created", slog.String("policyId", created.ID))
+	return created, nil
 }
 
 // Update modifies an existing policy and publishes a policy.updated event.
@@ -221,8 +226,17 @@ type ListResult struct {
 // sorts and applies cursor in-memory via pkg/query, satisfying the
 // "列表强制分页" constraint (max 500 items, default 50).
 //
-// The cursor is the opaque last-seen policy ID (plain ASCII UUID substring).
-// Consumers must treat it as opaque; format may change without notice.
+// Pagination flow:
+//  1. query.PageParams normalises the raw limit (0 → default 50, >500 → 500).
+//  2. The normalised limit is copied into query.ListParams for query.ApplyCursor.
+//     PageParams handles normalisation; ListParams carries sort+cursor state.
+//  3. ApplyCursor fetches limit+1 items to detect hasMore, then trims.
+//
+// The cursor encodes the last-seen policy ID as a plain ASCII UUID substring.
+// Consumers must treat it as opaque; the encoding format may change.
+// Round-trip: the caller passes nextCursor from the previous response as the
+// cursor parameter of the next request; the service skips all items whose id
+// is ≤ cursor before returning the next page.
 func (s *Service) List(ctx context.Context, cursor string, limit int) (ListResult, error) {
 	tid, err := tenant.FromContext(ctx)
 	if err != nil {
@@ -285,7 +299,7 @@ func actorFromContext(ctx context.Context) (string, error) {
 	p, ok := auth.FromContext(ctx)
 	if !ok || p.Subject == "" {
 		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
-			"policymanage: actor required — admin auth must be present")
+			"policymanage: actor required; admin auth must be present")
 	}
 	return p.Subject, nil
 }

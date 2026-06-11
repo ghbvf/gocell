@@ -118,7 +118,8 @@ func TestPGPolicyRepo_NestedPolicyRoundTrip(t *testing.T) {
 	tid := newIntegrationTenant(t)
 	p := richPolicy("pol-rich", tid)
 
-	require.NoError(t, repo.Create(ctx, tid, p))
+	_, err := repo.Create(ctx, tid, p)
+	require.NoError(t, err)
 	got, err := repo.GetByID(ctx, tid, "pol-rich")
 	require.NoError(t, err)
 	assert.Equal(t, 1, got.Version, "version must be 1 after Create")
@@ -135,12 +136,13 @@ func TestPGPolicyRepo_CreateConflict(t *testing.T) {
 	ctx := context.Background()
 	tid := newIntegrationTenant(t)
 
-	require.NoError(t, repo.Create(ctx, tid, richPolicy("pol-x", tid)))
+	_, createErr := repo.Create(ctx, tid, richPolicy("pol-x", tid))
+	require.NoError(t, createErr)
 
-	err := repo.Create(ctx, tid, richPolicy("pol-x", tid))
-	require.Error(t, err)
+	_, dupErr := repo.Create(ctx, tid, richPolicy("pol-x", tid))
+	require.Error(t, dupErr)
 	var ec *errcode.Error
-	require.ErrorAs(t, err, &ec)
+	require.ErrorAs(t, dupErr, &ec)
 	assert.Equal(t, errcode.ErrAuthPolicyDuplicate, ec.Code, "second Create must return ErrAuthPolicyDuplicate")
 }
 
@@ -151,7 +153,8 @@ func TestPGPolicyRepo_UpdateCASSuccess(t *testing.T) {
 	ctx := context.Background()
 	tid := newIntegrationTenant(t)
 
-	require.NoError(t, repo.Create(ctx, tid, richPolicy("pol-x", tid)))
+	_, createErr := repo.Create(ctx, tid, richPolicy("pol-x", tid))
+	require.NoError(t, createErr)
 	createdAt1 := policyCreatedAt(t, pool, tid, "pol-x")
 
 	v2 := &abac.Policy{
@@ -177,7 +180,8 @@ func TestPGPolicyRepo_UpdateVersionConflict(t *testing.T) {
 	ctx := context.Background()
 	tid := newIntegrationTenant(t)
 
-	require.NoError(t, repo.Create(ctx, tid, richPolicy("pol-x", tid)))
+	_, createErr := repo.Create(ctx, tid, richPolicy("pol-x", tid))
+	require.NoError(t, createErr)
 
 	v2 := &abac.Policy{
 		ID:       "pol-x",
@@ -219,7 +223,8 @@ func TestPGPolicyRepo_DeleteCASSuccess(t *testing.T) {
 	ctx := context.Background()
 	tid := newIntegrationTenant(t)
 
-	require.NoError(t, repo.Create(ctx, tid, richPolicy("pol-del", tid)))
+	_, createDelErr := repo.Create(ctx, tid, richPolicy("pol-del", tid))
+	require.NoError(t, createDelErr)
 
 	deleted, err := repo.Delete(ctx, tid, "pol-del", 1)
 	require.NoError(t, err)
@@ -241,7 +246,8 @@ func TestPGPolicyRepo_DeleteVersionConflict(t *testing.T) {
 	ctx := context.Background()
 	tid := newIntegrationTenant(t)
 
-	require.NoError(t, repo.Create(ctx, tid, richPolicy("pol-del", tid)))
+	_, createDelErr := repo.Create(ctx, tid, richPolicy("pol-del", tid))
+	require.NoError(t, createDelErr)
 
 	_, err := repo.Delete(ctx, tid, "pol-del", 99 /* wrong */)
 	require.Error(t, err)

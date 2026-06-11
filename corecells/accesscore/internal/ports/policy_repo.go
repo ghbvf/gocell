@@ -7,6 +7,11 @@ import (
 	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
+// MsgInvalidTenant is the shared error message used by PolicyRepository
+// implementations when the tenant.TenantID parameter fails validation. Exported
+// so both mem and postgres implementations reference the same literal (#6).
+const MsgInvalidTenant = "policy_repo: invalid tenant"
+
 // PolicyRepository persists and retrieves ABAC Policy aggregates owned by a
 // tenant.
 //
@@ -37,9 +42,10 @@ type PolicyRepository interface {
 	// field must equal t; a mismatch is a programmer error returned as
 	// KindInvalid. The policy is validated before being stored (Policy.Validate).
 	// The repository sets Version=1 on the stored copy.
+	// Returns the persisted clone with Version=1 set (symmetry with Update/Delete).
 	// Returns ErrAuthPolicyDuplicate (KindConflict) when (tenant, p.ID) already
 	// exists.
-	Create(ctx context.Context, t tenant.TenantID, p *abac.Policy) error
+	Create(ctx context.Context, t tenant.TenantID, p *abac.Policy) (*abac.Policy, error)
 	// Update atomically replaces the policy and bumps Version if expectedVersion
 	// matches the stored version (CAS guard). The policy's TenantID must equal t.
 	// The policy is validated before being stored (Policy.Validate).

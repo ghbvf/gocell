@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/abac"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/corecells/internal/testoutbox"
 	policyCreate "github.com/ghbvf/gocell/generated/contracts/http/policy/create/v1"
@@ -26,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -57,6 +59,32 @@ type stubPolicyTxRunner struct{}
 func (s *stubPolicyTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
 	return fn(ctx)
 }
+
+// conflictOnCreateRepo is a stub PolicyRepository that returns ErrAuthPolicyDuplicate
+// on every Create call, used to exercise the Create 409 handler mapping.
+type conflictOnCreateRepo struct{}
+
+func (r *conflictOnCreateRepo) Create(_ context.Context, _ tenant.TenantID, _ *abac.Policy) (*abac.Policy, error) {
+	return nil, errcode.New(errcode.KindConflict, errcode.ErrAuthPolicyDuplicate, "policy already exists")
+}
+
+func (r *conflictOnCreateRepo) Update(_ context.Context, _ tenant.TenantID, _ string, _ int, _ *abac.Policy) (*abac.Policy, error) {
+	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthPolicyNotFound, "not found")
+}
+
+func (r *conflictOnCreateRepo) Delete(_ context.Context, _ tenant.TenantID, _ string, _ int) (*abac.Policy, error) {
+	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthPolicyNotFound, "not found")
+}
+
+func (r *conflictOnCreateRepo) GetByID(_ context.Context, _ tenant.TenantID, _ string) (*abac.Policy, error) {
+	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthPolicyNotFound, "not found")
+}
+
+func (r *conflictOnCreateRepo) ListByTenant(_ context.Context, _ tenant.TenantID) ([]*abac.Policy, error) {
+	return nil, nil
+}
+
+func (r *conflictOnCreateRepo) RepoReady(_ context.Context) error { return nil }
 
 // setupPolicyHandler returns an http.Handler backed by in-memory repos and a
 // noop outbox writer, mounted at the cell-level prefix.
@@ -212,11 +240,54 @@ func TestHandler_Create_MissingTenant_403(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(w, withHandlerAdminNoTenant(req))
 
-	// No tenant → service returns KindPermissionDenied (mapped from tenant.ErrMissingTenant
-	// via fmt.Errorf wrapping); handler sees it fall through to default 400 branch or
-	// specific 403 depending on errcode.Kind. In practice, tenant.FromContext returns
-	// KindPermissionDenied → mapXxxError returns 403.
-	assert.GreaterOrEqual(t, w.Code, http.StatusBadRequest)
+	// No tenant → service returns KindPermissionDenied → mapCreateError → 403.
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+}
+
+func TestHandler_Update_MissingTenant_403(t *testing.T) {
+	handler := setupPolicyHandler(t)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, policiesPrefix+"/pol-x", strings.NewReader(minimalUpdateBody))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(w, withHandlerAdminNoTenant(req))
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+}
+
+func TestHandler_Delete_MissingTenant_403(t *testing.T) {
+	handler := setupPolicyHandler(t)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, policiesPrefix+"/pol-x?expectedVersion=1", nil)
+	handler.ServeHTTP(w, withHandlerAdminNoTenant(req))
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+}
+
+func TestHandler_Get_MissingTenant_403(t *testing.T) {
+	handler := setupPolicyHandler(t)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, policiesPrefix+"/pol-x", nil)
+	handler.ServeHTTP(w, withHandlerAdminNoTenant(req))
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+}
+
+func TestHandler_List_MissingTenant_403(t *testing.T) {
+	handler := setupPolicyHandler(t)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, policiesPrefix, nil)
+	handler.ServeHTTP(w, withHandlerAdminNoTenant(req))
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
 }
 
 // --- Get tests ---
@@ -260,7 +331,7 @@ func TestHandler_Get_EmptyID(t *testing.T) {
 	// Direct handler test: the generated get handler enforces minLength:1 on the
 	// {id} path parameter. Send a request with no path value to trigger the guard.
 	getH := policyGet.NewHandler(
-		GetAdapter{S: newServiceForAdapterTest(t)},
+		GetAdapter{s: newServiceForAdapterTest(t)},
 		auth.AnyRole(auth.RoleAdmin),
 	)
 	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/access/policies/", nil)
@@ -472,14 +543,12 @@ func newServiceForAdapterTest(t testing.TB) *Service {
 	return svc
 }
 
-func TestCreateAdapter_NotFound_MapsToConflictTyped(t *testing.T) {
-	// Simulate a duplicate (conflict) coming back from service layer.
-	// We do this by seeding the repo via Create to get a conflict on second create.
+func TestCreateAdapter_HappyPath_Returns201(t *testing.T) {
 	repo := mem.NewPolicyRepository()
 	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithTxManager(persistence.WrapForCell(&stubPolicyTxRunner{})))
 	require.NoError(t, err)
-	ad := CreateAdapter{S: svc}
+	ad := CreateAdapter{s: svc}
 
 	body := &policyCreate.Request{
 		Name:  "P",
@@ -492,8 +561,26 @@ func TestCreateAdapter_NotFound_MapsToConflictTyped(t *testing.T) {
 	assert.True(t, ok, "expected Create201JSONResponse, got %T", resp)
 }
 
+func TestCreateAdapter_Conflict_Returns409(t *testing.T) {
+	// Use a stub repo that always returns ErrAuthPolicyDuplicate on Create to
+	// exercise the KindConflict → Create409ErrorResponse mapping.
+	svc, err := NewService(clock.Real(), &conflictOnCreateRepo{}, slog.Default(),
+		WithTxManager(persistence.WrapForCell(&stubPolicyTxRunner{})))
+	require.NoError(t, err)
+	ad := CreateAdapter{s: svc}
+
+	ctx := ctxkeys.WithTenantID(auth.TestContext(testHandlerAdminSubject, []string{auth.RoleAdmin}), testHandlerTenantStr)
+	resp, err := ad.Create(ctx, &policyCreate.Request{
+		Name:  "P",
+		Rules: []*policyCreate.RequestRulesItem{{ID: "r1", Name: "N", Effect: "allow"}},
+	})
+	require.NoError(t, err)
+	_, ok := resp.(policyCreate.Create409ErrorResponse)
+	assert.True(t, ok, "expected Create409ErrorResponse on duplicate, got %T", resp)
+}
+
 func TestUpdateAdapter_NotFound_Returns404Typed(t *testing.T) {
-	ad := UpdateAdapter{S: newServiceForAdapterTest(t)}
+	ad := UpdateAdapter{s: newServiceForAdapterTest(t)}
 	ctx := ctxkeys.WithTenantID(auth.TestContext(testHandlerAdminSubject, []string{auth.RoleAdmin}), testHandlerTenantStr)
 	resp, err := ad.Update(ctx, &policyUpdate.Request{
 		ID:              "pol-ghost",
@@ -513,7 +600,7 @@ func TestUpdateAdapter_VersionConflict_Returns409Typed(t *testing.T) {
 	p, err := svc.Create(ctx, CreateInput{Name: "P", Rules: minimalRules()})
 	require.NoError(t, err)
 
-	ad := UpdateAdapter{S: svc}
+	ad := UpdateAdapter{s: svc}
 	resp, err := ad.Update(ctx, &policyUpdate.Request{
 		ID:              p.ID,
 		Name:            "X",
@@ -526,7 +613,7 @@ func TestUpdateAdapter_VersionConflict_Returns409Typed(t *testing.T) {
 }
 
 func TestDeleteAdapter_NotFound_Returns404Typed(t *testing.T) {
-	ad := DeleteAdapter{S: newServiceForAdapterTest(t)}
+	ad := DeleteAdapter{s: newServiceForAdapterTest(t)}
 	ctx := ctxkeys.WithTenantID(auth.TestContext(testHandlerAdminSubject, []string{auth.RoleAdmin}), testHandlerTenantStr)
 	resp, err := ad.Delete(ctx, &policyDelete.Request{ID: "pol-ghost", ExpectedVersion: 1})
 	require.NoError(t, err)
@@ -540,9 +627,61 @@ func TestDeleteAdapter_VersionConflict_Returns409Typed(t *testing.T) {
 	p, err := svc.Create(ctx, CreateInput{Name: "P", Rules: minimalRules()})
 	require.NoError(t, err)
 
-	ad := DeleteAdapter{S: svc}
+	ad := DeleteAdapter{s: svc}
 	resp, err := ad.Delete(ctx, &policyDelete.Request{ID: p.ID, ExpectedVersion: 99})
 	require.NoError(t, err)
 	_, ok := resp.(policyDelete.Delete409ErrorResponse)
 	assert.True(t, ok, "expected Delete409ErrorResponse, got %T", resp)
+}
+
+// --- Validation error tests (#12) ---
+// The generated schema validator catches structurally-invalid values (null items,
+// wrong-length enum strings) at 400 before the converter runs. The converter nil
+// guard and KindInvalid → 422 mapping provide defense-in-depth for any case the
+// schema misses, verified here via the adapter layer to bypass the schema validator.
+
+func TestCreateAdapter_NullRule_Returns422(t *testing.T) {
+	// Bypass the schema validator and call the adapter directly with a nil rule
+	// to exercise the converter nil-guard → KindInvalid → Create422ErrorResponse path.
+	svc := newServiceForAdapterTest(t)
+	ad := CreateAdapter{s: svc}
+	ctx := ctxkeys.WithTenantID(auth.TestContext(testHandlerAdminSubject, []string{auth.RoleAdmin}), testHandlerTenantStr)
+
+	resp, err := ad.Create(ctx, &policyCreate.Request{
+		Name:  "P",
+		Rules: []*policyCreate.RequestRulesItem{nil}, // nil rule item
+	})
+	require.NoError(t, err)
+	_, ok := resp.(policyCreate.Create422ErrorResponse)
+	assert.True(t, ok, "expected Create422ErrorResponse for null rule item, got %T", resp)
+}
+
+func TestUpdateAdapter_NullRule_Returns422(t *testing.T) {
+	svc := newServiceForAdapterTest(t)
+	ctx := ctxkeys.WithTenantID(auth.TestContext(testHandlerAdminSubject, []string{auth.RoleAdmin}), testHandlerTenantStr)
+	p, err := svc.Create(ctx, CreateInput{Name: "P", Rules: minimalRules()})
+	require.NoError(t, err)
+
+	ad := UpdateAdapter{s: svc}
+	resp, err := ad.Update(ctx, &policyUpdate.Request{
+		ID:              p.ID,
+		Name:            "P",
+		Rules:           []*policyUpdate.RequestRulesItem{nil}, // nil rule item
+		ExpectedVersion: 1,
+	})
+	require.NoError(t, err)
+	_, ok := resp.(policyUpdate.Update422ErrorResponse)
+	assert.True(t, ok, "expected Update422ErrorResponse for null rule item, got %T", resp)
+}
+
+func TestHandler_Create_NullRuleItem_400(t *testing.T) {
+	// The generated schema validator catches null rule items at 400.
+	handler := setupPolicyHandler(t)
+	body := `{"name":"P","rules":[null]}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, policiesPrefix, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(w, withHandlerAdmin(req))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	errcodetest.AssertWireCode(t, w, http.StatusBadRequest, errcode.ErrValidationFailed)
 }

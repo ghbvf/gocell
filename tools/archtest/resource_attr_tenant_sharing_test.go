@@ -101,7 +101,7 @@ func TestResourceAttrTenantSharing01(t *testing.T) {
 	}
 
 	observed := map[string]struct{}{}
-	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tags: FlatNonDefaultTags()}), func(p *Pass) []Diagnostic {
 		if !p.Typed() {
 			return nil
 		}

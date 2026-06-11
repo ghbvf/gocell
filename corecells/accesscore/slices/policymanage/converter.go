@@ -19,6 +19,10 @@ import (
 func createRulesFromRequest(req *policyCreate.Request) ([]abac.Rule, error) {
 	rules := make([]abac.Rule, 0, len(req.Rules))
 	for _, item := range req.Rules {
+		if item == nil {
+			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"policymanage: rules array contains a null item")
+		}
 		r, err := createRuleItemToDomain(item)
 		if err != nil {
 			return nil, err
@@ -64,9 +68,13 @@ type conditionWire interface {
 }
 
 func createConditionsToDomain(items []*policyCreate.RequestRulesItemConditionsItem) ([]abac.Condition, error) {
-	wires := make([]conditionWire, len(items))
-	for i, c := range items {
-		wires[i] = (*createCondWire)(c)
+	wires := make([]conditionWire, 0, len(items))
+	for _, c := range items {
+		if c == nil {
+			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"policymanage: conditions array contains a null item")
+		}
+		wires = append(wires, (*createCondWire)(c))
 	}
 	return parseConditionWires(wires)
 }
@@ -115,6 +123,10 @@ func createObligationsToDomain(obs *policyCreate.RequestRulesItemObligations) (a
 func updateRulesFromRequest(req *policyUpdate.Request) ([]abac.Rule, error) {
 	rules := make([]abac.Rule, 0, len(req.Rules))
 	for _, item := range req.Rules {
+		if item == nil {
+			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"policymanage: rules array contains a null item")
+		}
 		r, err := updateRuleItemToDomain(item)
 		if err != nil {
 			return nil, err
@@ -149,9 +161,13 @@ func updateRuleItemToDomain(item *policyUpdate.RequestRulesItem) (abac.Rule, err
 }
 
 func updateConditionsToDomain(items []*policyUpdate.RequestRulesItemConditionsItem) ([]abac.Condition, error) {
-	wires := make([]conditionWire, len(items))
-	for i, c := range items {
-		wires[i] = (*updateCondWire)(c)
+	wires := make([]conditionWire, 0, len(items))
+	for _, c := range items {
+		if c == nil {
+			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"policymanage: conditions array contains a null item")
+		}
+		wires = append(wires, (*updateCondWire)(c))
 	}
 	return parseConditionWires(wires)
 }

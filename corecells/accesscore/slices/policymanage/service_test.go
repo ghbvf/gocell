@@ -107,6 +107,7 @@ func TestService_Create_HappyPath(t *testing.T) {
 	// Exactly one outbox event, action=created, correct policyId+version.
 	require.Len(t, writer.Entries, 1, "Create must emit exactly one outbox entry")
 	entry := writer.Entries[0]
+	assert.NotEmpty(t, entry.ID(), "outbox entry must have a non-empty ID")
 	assert.Equal(t, TopicPolicyUpdated, entry.EventType())
 	payload := entry.Payload()
 	var pay dto.PolicyUpdated
@@ -151,11 +152,10 @@ func TestService_Create_EmitterFailureRollsBack(t *testing.T) {
 		Rules: minimalRules(),
 	})
 	require.Error(t, createErr)
+	// emitPolicyUpdated failure propagates out of runInTx; the in-memory txRunner
+	// cannot roll back the repo write (that is the L2 PG guarantee, proven in
+	// service_integration_test.go), but the error does surface to the caller.
 	assert.ErrorIs(t, createErr, failWriter.Err)
-
-	// The noopTxRunner does not give real DB rollback, but the WriterEmitter
-	// error should propagate out of runInTx before any domain state is committed.
-	// For the L2 rollback proof on PG, see service_integration_test.go.
 }
 
 // --- Update tests ---
@@ -178,11 +178,57 @@ func TestService_Update_HappyPath(t *testing.T) {
 	assert.Equal(t, 2, updated.Version)
 
 	require.Len(t, writer.Entries, 1)
+	assert.NotEmpty(t, writer.Entries[0].ID(), "outbox entry must have a non-empty ID")
 	var pay dto.PolicyUpdated
 	require.NoError(t, unmarshalPayload(writer.Entries[0].Payload(), &pay))
 	assert.Equal(t, dto.PolicyActionUpdated, pay.Action)
 	assert.Equal(t, 2, pay.Version)
 	assert.Equal(t, p.ID, pay.PolicyID)
+}
+
+func TestService_Update_NoAuth(t *testing.T) {
+	svc, _ := newDurableTestService(t)
+
+	// Create with admin ctx so we have a valid policy ID.
+	p, err := svc.Create(testSvcAdminCtx(), CreateInput{Name: "P", Rules: minimalRules()})
+	require.NoError(t, err)
+
+	// Update without an auth principal in context.
+	ctx := ctxkeys.WithTenantID(context.Background(), testSvcTenantStr)
+	_, err = svc.Update(ctx, UpdateInput{
+		ID: p.ID, Name: "X", Rules: minimalRules(), ExpectedVersion: 1,
+	})
+	require.Error(t, err)
+	var ce *errcode.Error
+	require.ErrorAs(t, err, &ce)
+	assert.Equal(t, errcode.KindUnauthenticated, ce.Kind)
+}
+
+func TestService_Update_EmitterFailureRollsBack(t *testing.T) {
+	repo := mem.NewPolicyRepository()
+
+	// Create with a healthy emitter first.
+	goodWriter := &recordingWriter{}
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, goodWriter))),
+		WithTxManager(persistence.WrapForCell(&noopTxRunner{})))
+	require.NoError(t, err)
+	p, err := svc.Create(testSvcAdminCtx(), CreateInput{Name: "P", Rules: minimalRules()})
+	require.NoError(t, err)
+
+	// Rebuild service with a failing emitter for the Update call.
+	failWriter := &recordingWriter{Err: errors.New("outbox down")}
+	failSvc, err := NewService(clock.Real(), repo, slog.Default(),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, failWriter))),
+		WithTxManager(persistence.WrapForCell(&noopTxRunner{})))
+	require.NoError(t, err)
+
+	_, updateErr := failSvc.Update(testSvcAdminCtx(), UpdateInput{
+		ID: p.ID, Name: "ShouldFail", Rules: minimalRules(), ExpectedVersion: 1,
+	})
+	require.Error(t, updateErr)
+	// emitPolicyUpdated failure propagates out of runInTx.
+	assert.ErrorIs(t, updateErr, failWriter.Err)
 }
 
 func TestService_Update_VersionConflict(t *testing.T) {
@@ -226,9 +272,47 @@ func TestService_Delete_HappyPath(t *testing.T) {
 	assert.Equal(t, p.ID, deleted.ID)
 
 	require.Len(t, writer.Entries, 1)
+	assert.NotEmpty(t, writer.Entries[0].ID(), "outbox entry must have a non-empty ID")
 	var pay dto.PolicyUpdated
 	require.NoError(t, unmarshalPayload(writer.Entries[0].Payload(), &pay))
 	assert.Equal(t, dto.PolicyActionDeleted, pay.Action)
+}
+
+func TestService_Delete_NoAuth(t *testing.T) {
+	svc, _ := newDurableTestService(t)
+
+	p, err := svc.Create(testSvcAdminCtx(), CreateInput{Name: "P", Rules: minimalRules()})
+	require.NoError(t, err)
+
+	ctx := ctxkeys.WithTenantID(context.Background(), testSvcTenantStr)
+	_, err = svc.Delete(ctx, p.ID, 1)
+	require.Error(t, err)
+	var ce *errcode.Error
+	require.ErrorAs(t, err, &ce)
+	assert.Equal(t, errcode.KindUnauthenticated, ce.Kind)
+}
+
+func TestService_Delete_EmitterFailureRollsBack(t *testing.T) {
+	repo := mem.NewPolicyRepository()
+
+	goodWriter := &recordingWriter{}
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, goodWriter))),
+		WithTxManager(persistence.WrapForCell(&noopTxRunner{})))
+	require.NoError(t, err)
+	p, err := svc.Create(testSvcAdminCtx(), CreateInput{Name: "P", Rules: minimalRules()})
+	require.NoError(t, err)
+
+	failWriter := &recordingWriter{Err: errors.New("outbox down")}
+	failSvc, err := NewService(clock.Real(), repo, slog.Default(),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, failWriter))),
+		WithTxManager(persistence.WrapForCell(&noopTxRunner{})))
+	require.NoError(t, err)
+
+	_, deleteErr := failSvc.Delete(testSvcAdminCtx(), p.ID, 1)
+	require.Error(t, deleteErr)
+	// emitPolicyUpdated failure propagates out of runInTx.
+	assert.ErrorIs(t, deleteErr, failWriter.Err)
 }
 
 func TestService_Delete_VersionConflict(t *testing.T) {
@@ -332,6 +416,46 @@ func TestService_List_SortedByID(t *testing.T) {
 	for i := 1; i < len(result.Items); i++ {
 		assert.LessOrEqual(t, result.Items[i-1].ID, result.Items[i].ID, "list must be sorted by ID asc")
 	}
+}
+
+func TestService_List_LimitZeroDefaultsToPageSize(t *testing.T) {
+	svc, _ := newDurableTestService(t)
+	ctx := testSvcAdminCtx()
+
+	// Create 3 policies; limit=0 should be normalised to DefaultPageSize (50).
+	for i := range 3 {
+		_, err := svc.Create(ctx, CreateInput{
+			Name:  "P" + string(rune('0'+i)),
+			Rules: minimalRules(),
+		})
+		require.NoError(t, err)
+	}
+
+	result, err := svc.List(ctx, "", 0)
+	require.NoError(t, err)
+	// All 3 items fit within DefaultPageSize — no truncation expected.
+	assert.Len(t, result.Items, 3)
+	assert.False(t, result.HasMore)
+}
+
+func TestService_List_LimitAboveMaxClamped(t *testing.T) {
+	svc, _ := newDurableTestService(t)
+	ctx := testSvcAdminCtx()
+
+	// Create 3 policies; requesting limit=600 must be clamped to ≤500.
+	for i := range 3 {
+		_, err := svc.Create(ctx, CreateInput{
+			Name:  "Q" + string(rune('0'+i)),
+			Rules: minimalRules(),
+		})
+		require.NoError(t, err)
+	}
+
+	result, err := svc.List(ctx, "", 600)
+	require.NoError(t, err)
+	// All 3 items fit within clamped limit.
+	assert.Len(t, result.Items, 3)
+	assert.False(t, result.HasMore)
 }
 
 // --- NewService error tests ---

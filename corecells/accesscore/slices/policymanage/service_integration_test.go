@@ -153,9 +153,17 @@ func TestL2Atomicity_policymanage_RollsBack(t *testing.T) {
 	assert.Equal(t, "L2RollbackTest", got.Name)
 	assert.Equal(t, 1, got.Version)
 
-	// Confirm the row is now persisted.
+	// Confirm the policy row is persisted.
 	policies, listErr = bundle.repo.ListByTenant(context.Background(), integTestTenant)
 	require.NoError(t, listErr)
 	assert.Len(t, policies, 1, "negative control: policy row must exist after successful Create")
 
+	// Positive co-commit assertion: the outbox_entries row must also exist in the
+	// same transaction (L2 atomicity proof — policy row and outbox entry committed together).
+	var outboxCount int
+	row := bundle.pool.DB().QueryRow(context.Background(),
+		"SELECT COUNT(*) FROM outbox_entries WHERE event_type = $1", TopicPolicyUpdated)
+	require.NoError(t, row.Scan(&outboxCount))
+	assert.Equal(t, 1, outboxCount,
+		"positive co-commit: one outbox_entries row must exist for the successful Create")
 }

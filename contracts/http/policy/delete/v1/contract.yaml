@@ -24,9 +24,9 @@ endpoints:
     successStatus: 204
     auth:
       responses:
-        - 409
-        - 422
         - 503
+    idempotency:
+      exempt: true
     noContent: true
     responses:
       400:

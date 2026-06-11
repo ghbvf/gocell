@@ -13,7 +13,10 @@ import (
 
 var _ ports.PolicyRepository = (*PolicyRepository)(nil)
 
-const msgPolicyInvalidTenant = "policy_repo: invalid tenant"
+// msgPolicyInvalidTenant is the single-source error message shared with the
+// ports package (#6). Unexported local alias so callers in this package remain
+// concise; the authoritative string lives in ports.MsgInvalidTenant.
+const msgPolicyInvalidTenant = ports.MsgInvalidTenant
 
 // PolicyRepository is the in-memory implementation of ports.PolicyRepository.
 //
@@ -52,35 +55,36 @@ func NewPolicyRepository() *PolicyRepository {
 // checks that p.TenantID == t (programmer-error guard), then runs Policy.Validate
 // before writing. Returns ErrAuthPolicyDuplicate (KindConflict) when a policy
 // with the same id already exists in t. Sets Version=1 on the stored copy.
-func (r *PolicyRepository) Create(_ context.Context, t tenant.TenantID, p *abac.Policy) error {
+// Returns the persisted clone with Version=1 set (symmetry with Update/Delete).
+func (r *PolicyRepository) Create(_ context.Context, t tenant.TenantID, p *abac.Policy) (*abac.Policy, error) {
 	if err := t.Validate(); err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgPolicyInvalidTenant, err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgPolicyInvalidTenant, err)
 	}
 	if p == nil {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: policy must not be nil")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: policy must not be nil")
 	}
 	if p.TenantID != t {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: policy TenantID does not match the provided tenant",
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: policy TenantID does not match the provided tenant",
 			errcode.WithInternal(
 				errcode.InternalAttr("policyTenantId", string(p.TenantID)),
 				errcode.InternalAttr("tenantId", string(t)),
 			))
 	}
 	if err := p.Validate(); err != nil {
-		return err
+		return nil, err
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	m := r.tenantPolicies(t)
 	if _, exists := m[p.ID]; exists {
-		return errcode.New(errcode.KindConflict, errcode.ErrAuthPolicyDuplicate, "policy already exists",
+		return nil, errcode.New(errcode.KindConflict, errcode.ErrAuthPolicyDuplicate, "policy already exists",
 			errcode.WithInternal(errcode.InternalAttr("policy_id", p.ID)))
 	}
-	clone := clonePolicy(p)
+	clone := p.Clone()
 	clone.Version = 1
 	m[p.ID] = clone
-	return nil
+	return clone.Clone(), nil
 }
 
 // Update atomically replaces the policy if expectedVersion matches the stored
@@ -121,10 +125,10 @@ func (r *PolicyRepository) Update(
 	if existing.Version != expectedVersion {
 		return nil, cas.CheckVersionMatch(0, "policy", id)
 	}
-	clone := clonePolicy(p)
+	clone := p.Clone()
 	clone.Version = existing.Version + 1
 	m[id] = clone
-	return clonePolicy(clone), nil
+	return clone.Clone(), nil
 }
 
 // Delete removes the policy if expectedVersion matches the stored version (CAS
@@ -148,7 +152,7 @@ func (r *PolicyRepository) Delete(_ context.Context, t tenant.TenantID, id strin
 	if existing.Version != expectedVersion {
 		return nil, cas.CheckVersionMatch(0, "policy", id)
 	}
-	clone := clonePolicy(existing)
+	clone := existing.Clone()
 	delete(m, id)
 	return clone, nil
 }
@@ -171,7 +175,7 @@ func (r *PolicyRepository) GetByID(_ context.Context, t tenant.TenantID, id stri
 	if !ok {
 		return nil, r.notFound(id)
 	}
-	return clonePolicy(p), nil
+	return p.Clone(), nil
 }
 
 // ListByTenant returns all policies owned by the tenant. Returns an empty
@@ -190,7 +194,7 @@ func (r *PolicyRepository) ListByTenant(_ context.Context, t tenant.TenantID) ([
 	}
 	result := make([]*abac.Policy, 0, len(m))
 	for _, p := range m {
-		result = append(result, clonePolicy(p))
+		result = append(result, p.Clone())
 	}
 	return result, nil
 }
@@ -220,30 +224,3 @@ func (r *PolicyRepository) notFound(id string) error {
 		errcode.WithInternal(errcode.InternalAttr("policy_id", id)))
 }
 
-// clonePolicy returns a deep copy of p so that mutations to the returned
-// pointer do not affect the stored original (and vice versa).
-func clonePolicy(p *abac.Policy) *abac.Policy {
-	clone := *p
-	clone.Rules = make([]abac.Rule, len(p.Rules))
-	for i, r := range p.Rules {
-		rClone := r
-		if r.Conditions != nil {
-			rClone.Conditions = make([]abac.Condition, len(r.Conditions))
-			for j, c := range r.Conditions {
-				cClone := c
-				if c.Values != nil {
-					cClone.Values = make([]string, len(c.Values))
-					copy(cClone.Values, c.Values)
-				}
-				rClone.Conditions[j] = cClone
-			}
-		}
-		if r.Obligations.FieldMask.Fields != nil {
-			fields := make([]string, len(r.Obligations.FieldMask.Fields))
-			copy(fields, r.Obligations.FieldMask.Fields)
-			rClone.Obligations.FieldMask.Fields = fields
-		}
-		clone.Rules[i] = rClone
-	}
-	return &clone
-}

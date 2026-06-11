@@ -159,11 +159,14 @@ func conformTestPolicyWithFieldMask(id string, tid tenant.TenantID) *abac.Policy
 }
 
 // mustCreate is a test helper that calls Create and fails the test on error.
-func mustCreate(t *testing.T, repo ports.PolicyRepository, tid tenant.TenantID, p *abac.Policy) {
+// Returns the persisted policy (Version=1 set by the repository).
+func mustCreate(t *testing.T, repo ports.PolicyRepository, tid tenant.TenantID, p *abac.Policy) *abac.Policy {
 	t.Helper()
-	if err := repo.Create(context.Background(), tid, p); err != nil {
+	created, err := repo.Create(context.Background(), tid, p)
+	if err != nil {
 		t.Fatalf(msgPolicyCreateUnexpected, err)
 	}
+	return created
 }
 
 func conformPolicyCreateAndGetByID(t *testing.T, factory PolicyRepoFactory) {
@@ -172,7 +175,10 @@ func conformPolicyCreateAndGetByID(t *testing.T, factory PolicyRepoFactory) {
 	ctx := context.Background()
 	p := conformTestPolicy("pol-1", testTenantID)
 
-	mustCreate(t, repo, testTenantID, p)
+	created := mustCreate(t, repo, testTenantID, p)
+	if created.Version != 1 {
+		t.Errorf("Create() returned Version = %d, want 1", created.Version)
+	}
 	got, err := repo.GetByID(ctx, testTenantID, "pol-1")
 	if err != nil {
 		t.Fatalf(msgPolicyGetByIDUnexpected, err)
@@ -247,7 +253,7 @@ func conformPolicyCreateConflict(t *testing.T, factory PolicyRepoFactory) error 
 	mustCreate(t, repo, testTenantID, p)
 
 	// Second Create with same id must fail.
-	err := repo.Create(context.Background(), testTenantID, conformTestPolicy("pol-1", testTenantID))
+	_, err := repo.Create(context.Background(), testTenantID, conformTestPolicy("pol-1", testTenantID))
 	if err == nil {
 		t.Fatal("Create() second call with same id expected KindConflict, got nil")
 	}
@@ -535,7 +541,7 @@ func conformPolicyInvalidTenantRejected(t *testing.T, factory PolicyRepoFactory)
 	invalid := tenant.TenantID("") // empty is invalid
 
 	p := conformTestPolicy("pol-1", testTenantID)
-	if err := repo.Create(ctx, invalid, p); err == nil {
+	if _, err := repo.Create(ctx, invalid, p); err == nil {
 		t.Error("Create() with empty TenantID expected error, got nil")
 	}
 	if _, err := repo.GetByID(ctx, invalid, "pol-1"); err == nil {
@@ -573,7 +579,7 @@ func concurrentPolicyWorker(
 		mu.Unlock()
 	}
 
-	_ = repo.Create(ctx, testTenantID, p) // conflict on duplicates is expected
+	_, _ = repo.Create(ctx, testTenantID, p) // conflict on duplicates is expected
 	if _, err := repo.GetByID(ctx, testTenantID, policyID); err != nil {
 		if !isNotFoundErr(err) {
 			recordErr(err)
@@ -630,7 +636,7 @@ func conformPolicyCreateNilPolicyError(t *testing.T, factory PolicyRepoFactory) 
 	repo := factory(t)
 	ctx := context.Background()
 
-	err := repo.Create(ctx, testTenantID, nil)
+	_, err := repo.Create(ctx, testTenantID, nil)
 	if err == nil {
 		t.Fatal("Create(ctx, t, nil) expected non-nil error, got nil")
 	}
@@ -658,7 +664,7 @@ func conformPolicyCreateInputCloneIsIndependent(t *testing.T, factory PolicyRepo
 	origCondVal := p.Rules[0].Conditions[0].Values[0]
 	origField := p.Rules[0].Obligations.FieldMask.Fields[0]
 
-	mustCreate(t, repo, testTenantID, p)
+	_ = mustCreate(t, repo, testTenantID, p)
 
 	// Mutate the ORIGINAL p after Create.
 	p.Name = "mutated-after-create"

@@ -22,7 +22,9 @@ import (
 // Compile-time assertion: PGPolicyRepo implements ports.PolicyRepository.
 var _ ports.PolicyRepository = (*PGPolicyRepo)(nil)
 
-const msgPolicyInvalidTenant = "policy_repo: invalid tenant"
+// msgPolicyInvalidTenant is the single-source error message shared via the
+// ports package (#6). Unexported local alias for conciseness.
+const msgPolicyInvalidTenant = ports.MsgInvalidTenant
 
 // pgConflictCode is the PostgreSQL SQLSTATE for unique-constraint violations.
 const pgConflictCode = "23505"
@@ -137,39 +139,42 @@ WHERE tenant_id = $1`
 // Create inserts a new policy for the tenant. Validates the tenant identity,
 // checks p.TenantID == t (programmer-error guard), then runs Policy.Validate
 // before encoding and writing. Version is set to 1 by the INSERT DEFAULT.
+// Returns the persisted clone with Version=1 set (symmetry with Update/Delete).
 // Returns ErrAuthPolicyDuplicate (KindConflict) when the (tenant_id, id)
 // composite PK already exists.
-func (r *PGPolicyRepo) Create(ctx context.Context, t tenant.TenantID, p *abac.Policy) error {
+func (r *PGPolicyRepo) Create(ctx context.Context, t tenant.TenantID, p *abac.Policy) (*abac.Policy, error) {
 	if err := t.Validate(); err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgPolicyInvalidTenant, err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgPolicyInvalidTenant, err)
 	}
 	if p == nil {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: policy must not be nil")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: policy must not be nil")
 	}
 	if p.TenantID != t {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: policy TenantID does not match the provided tenant",
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "policy_repo: policy TenantID does not match the provided tenant",
 			errcode.WithInternal(
 				errcode.InternalAttr("policyTenantId", string(p.TenantID)),
 				errcode.InternalAttr("tenantId", string(t)),
 			))
 	}
 	if err := p.Validate(); err != nil {
-		return err
+		return nil, err
 	}
 	rulesJSON, err := marshalRules(p.Rules)
 	if err != nil {
-		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "policy_repo: marshal rules", err)
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "policy_repo: marshal rules", err)
 	}
 	now := r.clock.Now()
 	if _, err := r.db.Exec(ctx, insertPolicySQL, string(t), p.ID, p.Name, p.Description, rulesJSON, now); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == pgConflictCode {
-			return errcode.New(errcode.KindConflict, errcode.ErrAuthPolicyDuplicate, "policy already exists",
+			return nil, errcode.New(errcode.KindConflict, errcode.ErrAuthPolicyDuplicate, "policy already exists",
 				errcode.WithInternal(errcode.InternalAttr("policy_id", p.ID)))
 		}
-		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "policy_repo: create", err)
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "policy_repo: create", err)
 	}
-	return nil
+	created := p.Clone()
+	created.Version = 1
+	return created, nil
 }
 
 // Update atomically replaces the policy and bumps version if expectedVersion
@@ -360,7 +365,8 @@ func scanPolicy(s policyRowScanner, t tenant.TenantID) (*abac.Policy, error) {
 
 // clonePolicyFromFields builds a fresh Policy from discrete field values,
 // used by Update to construct the returned post-update aggregate without a
-// redundant SELECT.
+// redundant SELECT. Deep-clones via Policy.Clone so the caller's rule slice
+// reference is not retained.
 func clonePolicyFromFields(t tenant.TenantID, id, name, description string, rules []abac.Rule, version int) *abac.Policy {
 	p := &abac.Policy{
 		ID:          id,
@@ -370,36 +376,7 @@ func clonePolicyFromFields(t tenant.TenantID, id, name, description string, rule
 		Rules:       rules,
 		Version:     version,
 	}
-	// deep-clone the rule slice that was passed in (caller holds a reference).
-	return clonePolicy(p)
-}
-
-// clonePolicy returns a deep copy of p so that mutations to the returned
-// pointer do not affect the stored original (and vice versa).
-func clonePolicy(p *abac.Policy) *abac.Policy {
-	clone := *p
-	clone.Rules = make([]abac.Rule, len(p.Rules))
-	for i, r := range p.Rules {
-		rClone := r
-		if r.Conditions != nil {
-			rClone.Conditions = make([]abac.Condition, len(r.Conditions))
-			for j, c := range r.Conditions {
-				cClone := c
-				if c.Values != nil {
-					cClone.Values = make([]string, len(c.Values))
-					copy(cClone.Values, c.Values)
-				}
-				rClone.Conditions[j] = cClone
-			}
-		}
-		if r.Obligations.FieldMask.Fields != nil {
-			fields := make([]string, len(r.Obligations.FieldMask.Fields))
-			copy(fields, r.Obligations.FieldMask.Fields)
-			rClone.Obligations.FieldMask.Fields = fields
-		}
-		clone.Rules[i] = rClone
-	}
-	return &clone
+	return p.Clone()
 }
 
 // notFoundPolicy returns a KindNotFound error matching the mem store's shape so

@@ -17,8 +17,9 @@
     },
     "action": {
       "type": "string",
-      "minLength": 7,
-      "maxLength": 7,
+      "$comment": "enum: created, updated, deleted — the tight minLength:7/maxLength:7 constraint excluded 'deleted' (7 chars) correctly but would break on future values; relaxed to minLength:1/maxLength:16",
+      "minLength": 1,
+      "maxLength": 16,
       "description": "The mutation that triggered this event. Valid values: created, updated, deleted."
     },
     "actorId": {

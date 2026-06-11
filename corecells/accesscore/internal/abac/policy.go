@@ -45,6 +45,43 @@ type Policy struct {
 	Version int
 }
 
+// Clone returns a deep copy of p so that mutations to the returned pointer do not
+// affect the original and vice versa. The copy covers:
+//   - top-level scalar fields (ID, TenantID, Name, Description, Version)
+//   - Rules slice (new backing array)
+//   - each Rule's Conditions slice (new backing array per rule)
+//   - each Condition's Values slice (new backing array)
+//   - each Rule's Obligations.FieldMask.Fields slice (new backing array)
+//
+// This is the single-source deep-clone used by all PolicyRepository
+// implementations (B2 — eliminates the duplicated clonePolicy helpers in mem and
+// postgres adapters).
+func (p *Policy) Clone() *Policy {
+	c := *p
+	c.Rules = make([]Rule, len(p.Rules))
+	for i, r := range p.Rules {
+		rc := r
+		if r.Conditions != nil {
+			rc.Conditions = make([]Condition, len(r.Conditions))
+			for j, cond := range r.Conditions {
+				cc := cond
+				if cond.Values != nil {
+					cc.Values = make([]string, len(cond.Values))
+					copy(cc.Values, cond.Values)
+				}
+				rc.Conditions[j] = cc
+			}
+		}
+		if r.Obligations.FieldMask.Fields != nil {
+			fields := make([]string, len(r.Obligations.FieldMask.Fields))
+			copy(fields, r.Obligations.FieldMask.Fields)
+			rc.Obligations.FieldMask.Fields = fields
+		}
+		c.Rules[i] = rc
+	}
+	return &c
+}
+
 // Validate returns an error if the Policy is structurally invalid:
 //   - ID must be non-empty.
 //   - TenantID must pass tenant.TenantID.Validate() (non-empty canonical UUID).

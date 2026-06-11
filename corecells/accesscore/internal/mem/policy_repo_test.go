@@ -54,11 +54,13 @@ func makeTestPolicy(policyID string, tid tenant.TenantID) *abac.Policy {
 	}
 }
 
-func mustCreate(t *testing.T, repo *mem.PolicyRepository, tid tenant.TenantID, p *abac.Policy) {
+func mustCreate(t *testing.T, repo *mem.PolicyRepository, tid tenant.TenantID, p *abac.Policy) *abac.Policy {
 	t.Helper()
-	if err := repo.Create(context.Background(), tid, p); err != nil {
+	created, err := repo.Create(context.Background(), tid, p)
+	if err != nil {
 		t.Fatalf("Create() unexpected error: %v", err)
 	}
+	return created
 }
 
 func TestPolicyRepository_CreateAndGetByID_RoundTrip(t *testing.T) {
@@ -212,7 +214,7 @@ func TestPolicyRepository_CreateInvalidPolicy(t *testing.T) {
 		Name:     "", // invalid
 		Rules:    []abac.Rule{makeTestPolicy("x", testTenant1).Rules[0]},
 	}
-	err := repo.Create(ctx, testTenant1, invalid)
+	_, err := repo.Create(ctx, testTenant1, invalid)
 	if err == nil {
 		t.Fatal("Create() expected validation error, got nil")
 	}
@@ -227,7 +229,7 @@ func TestPolicyRepository_CreateConflict(t *testing.T) {
 	mustCreate(t, repo, testTenant1, p)
 
 	// Second Create with same id must fail.
-	err := repo.Create(ctx, testTenant1, makeTestPolicy("policy-1", testTenant1))
+	_, err := repo.Create(ctx, testTenant1, makeTestPolicy("policy-1", testTenant1))
 	if err == nil {
 		t.Fatal("Create() second call with same id expected KindConflict, got nil")
 	}
@@ -242,7 +244,7 @@ func TestPolicyRepository_CreateTenantMismatch(t *testing.T) {
 
 	// Policy claims T1 but we pass T2
 	p := makeTestPolicy("policy-1", testTenant1)
-	err := repo.Create(ctx, testTenant2, p)
+	_, err := repo.Create(ctx, testTenant2, p)
 	if err == nil {
 		t.Fatal("Create() expected error when p.TenantID != t, got nil")
 	}
@@ -451,7 +453,7 @@ func runConcurrentPolicyOperation(ctx context.Context, repo *mem.PolicyRepositor
 	p := makeTestPolicy(policyID, testTenant1)
 
 	// Create may return KindConflict if another goroutine already created it.
-	if err := repo.Create(ctx, testTenant1, p); err != nil && !isConflictError(err) {
+	if _, err := repo.Create(ctx, testTenant1, p); err != nil && !isConflictError(err) {
 		errs.addCreate(err)
 	}
 	if _, err := repo.GetByID(ctx, testTenant1, policyID); err != nil && !isNotFoundError(err) {

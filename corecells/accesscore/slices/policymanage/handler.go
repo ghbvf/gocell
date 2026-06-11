@@ -15,7 +15,7 @@ import (
 )
 
 // CreateAdapter wraps Service to implement policyCreate.Service.
-type CreateAdapter struct{ S *Service }
+type CreateAdapter struct{ s *Service }
 
 // Create implements policyCreate.Service.
 func (a CreateAdapter) Create(ctx context.Context, req *policyCreate.Request) (policyCreate.CreateResponseObject, error) {
@@ -23,12 +23,12 @@ func (a CreateAdapter) Create(ctx context.Context, req *policyCreate.Request) (p
 	if err != nil {
 		var ce *errcode.Error
 		if errors.As(err, &ce) {
-			return policyCreate.Create400ErrorResponse{Body: *ce}, nil
+			return mapCreateError(ce), nil
 		}
 		return nil, err
 	}
 
-	p, err := a.S.Create(ctx, CreateInput{
+	p, err := a.s.Create(ctx, CreateInput{
 		Name:        req.Name,
 		Description: req.Description,
 		Rules:       rules,
@@ -51,17 +51,19 @@ func mapCreateError(ce *errcode.Error) policyCreate.CreateResponseObject {
 		return policyCreate.Create403ErrorResponse{Body: *ce}
 	case errcode.KindConflict:
 		return policyCreate.Create409ErrorResponse{Body: *ce}
+	case errcode.KindInvalid:
+		return policyCreate.Create422ErrorResponse{Body: *ce}
 	default:
 		return policyCreate.Create400ErrorResponse{Body: *ce}
 	}
 }
 
 // GetAdapter wraps Service to implement policyGet.Service.
-type GetAdapter struct{ S *Service }
+type GetAdapter struct{ s *Service }
 
 // Get implements policyGet.Service.
 func (a GetAdapter) Get(ctx context.Context, req *policyGet.Request) (policyGet.GetResponseObject, error) {
-	p, err := a.S.Get(ctx, req.ID)
+	p, err := a.s.Get(ctx, req.ID)
 	if err != nil {
 		var ce *errcode.Error
 		if errors.As(err, &ce) {
@@ -86,7 +88,7 @@ func mapGetError(ce *errcode.Error) policyGet.GetResponseObject {
 }
 
 // UpdateAdapter wraps Service to implement policyUpdate.Service.
-type UpdateAdapter struct{ S *Service }
+type UpdateAdapter struct{ s *Service }
 
 // Update implements policyUpdate.Service.
 func (a UpdateAdapter) Update(ctx context.Context, req *policyUpdate.Request) (policyUpdate.UpdateResponseObject, error) {
@@ -94,12 +96,12 @@ func (a UpdateAdapter) Update(ctx context.Context, req *policyUpdate.Request) (p
 	if err != nil {
 		var ce *errcode.Error
 		if errors.As(err, &ce) {
-			return policyUpdate.Update400ErrorResponse{Body: *ce}, nil
+			return mapUpdateError(ce), nil
 		}
 		return nil, err
 	}
 
-	p, err := a.S.Update(ctx, UpdateInput{
+	p, err := a.s.Update(ctx, UpdateInput{
 		ID:              req.ID,
 		Name:            req.Name,
 		Description:     req.Description,
@@ -126,17 +128,19 @@ func mapUpdateError(ce *errcode.Error) policyUpdate.UpdateResponseObject {
 		return policyUpdate.Update404ErrorResponse{Body: *ce}
 	case errcode.KindConflict:
 		return policyUpdate.Update409ErrorResponse{Body: *ce}
+	case errcode.KindInvalid:
+		return policyUpdate.Update422ErrorResponse{Body: *ce}
 	default:
 		return policyUpdate.Update400ErrorResponse{Body: *ce}
 	}
 }
 
 // DeleteAdapter wraps Service to implement policyDelete.Service.
-type DeleteAdapter struct{ S *Service }
+type DeleteAdapter struct{ s *Service }
 
 // Delete implements policyDelete.Service.
 func (a DeleteAdapter) Delete(ctx context.Context, req *policyDelete.Request) (policyDelete.DeleteResponseObject, error) {
-	_, err := a.S.Delete(ctx, req.ID, int(req.ExpectedVersion))
+	_, err := a.s.Delete(ctx, req.ID, int(req.ExpectedVersion))
 	if err != nil {
 		var ce *errcode.Error
 		if errors.As(err, &ce) {
@@ -163,11 +167,11 @@ func mapDeleteError(ce *errcode.Error) policyDelete.DeleteResponseObject {
 }
 
 // ListAdapter wraps Service to implement policyList.Service.
-type ListAdapter struct{ S *Service }
+type ListAdapter struct{ s *Service }
 
 // List implements policyList.Service.
 func (a ListAdapter) List(ctx context.Context, req *policyList.Request) (policyList.ListResponseObject, error) {
-	result, err := a.S.List(ctx, req.Cursor, int(req.Limit))
+	result, err := a.s.List(ctx, req.Cursor, int(req.Limit))
 	if err != nil {
 		var ce *errcode.Error
 		if errors.As(err, &ce) {
@@ -215,11 +219,11 @@ type Handler struct {
 func NewHandler(svc *Service) *Handler {
 	policy := auth.AnyRole(auth.RoleAdmin)
 	return &Handler{
-		createH: policyCreate.NewHandler(CreateAdapter{svc}, policy),
-		getH:    policyGet.NewHandler(GetAdapter{svc}, policy),
-		updateH: policyUpdate.NewHandler(UpdateAdapter{svc}, policy),
-		deleteH: policyDelete.NewHandler(DeleteAdapter{svc}, policy),
-		listH:   policyList.NewHandler(ListAdapter{svc}, policy),
+		createH: policyCreate.NewHandler(CreateAdapter{s: svc}, policy),
+		getH:    policyGet.NewHandler(GetAdapter{s: svc}, policy),
+		updateH: policyUpdate.NewHandler(UpdateAdapter{s: svc}, policy),
+		deleteH: policyDelete.NewHandler(DeleteAdapter{s: svc}, policy),
+		listH:   policyList.NewHandler(ListAdapter{s: svc}, policy),
 	}
 }
 
