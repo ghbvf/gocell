@@ -55,6 +55,16 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 		return err
 	}
 
+	// Saga-journal projections are driven by a Tailer (pull from the global saga
+	// journal), independent of the event router and any subscriber. Drain them
+	// here, BEFORE the subscriber-nil / router-build branches, so a pure
+	// saga-journal deployment (no subscriber, no outbox projection) still wires its
+	// Tailers. The Tailer's worker/probe/teardown are registered directly (see
+	// phases_saga_projection.go), not through the event router.
+	if err := b.drainCellSagaProjections(s); err != nil {
+		return err
+	}
+
 	sub := s.sub
 	if sub == nil {
 		// Both plain subscriptions and projections (which become event
@@ -361,7 +371,11 @@ func (b *Bootstrap) checkNoEventConsumersWhenSubscriberNil(s *phaseState) error 
 				"bootstrap: cell %s registered subscriptions but no subscriber is configured; "+
 					msgAddWithSubscriber, id)
 		}
-		if len(snap.Projections) > 0 {
+		// Only OUTBOX-source projections need a subscriber (they become event
+		// subscriptions when drained). Saga-journal projections are driven by a
+		// Tailer (pull from the journal) and need no subscriber, so they must not
+		// trip this fail-fast.
+		if len(outboxProjectionRequests(snap.Projections)) > 0 {
 			return fmt.Errorf(
 				"bootstrap: cell %s registered a projection but no subscriber is configured; "+
 					msgAddWithSubscriber, id)

@@ -32,13 +32,17 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/kernel/projection"
+	"github.com/ghbvf/gocell/kernel/saga/journal"
+	"github.com/ghbvf/gocell/kernel/saga/sagaprojection"
 	kwh "github.com/ghbvf/gocell/kernel/webhook"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/config"
+	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	metricsmiddleware "github.com/ghbvf/gocell/runtime/observability/metrics"
 	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
+	"github.com/ghbvf/gocell/runtime/saga/tailer"
 	"github.com/ghbvf/gocell/runtime/shutdown"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
@@ -238,6 +242,32 @@ type Bootstrap struct {
 	// (AuthOperator) — operator→system, no caller-cell allowlist. false =
 	// endpoint not mounted (rebuild remains programmatic-only).
 	projectionRebuildEnabled bool
+
+	// --- saga-journal projection: Tailer harness dependencies (EPIC #1609 PR-05) ---
+	// Injected via WithSagaJournalReader / WithSagaProjectionOwnerCheckpointStore /
+	// WithSagaProjectionLocker (+ optional WithSagaTailerConfig); the TxRunner is
+	// REUSED from b.projectionTxRunner. nil means "not configured"; the phase6
+	// saga-projection drain fail-fasts when any cell registers a saga-journal
+	// projection but a required dep remains nil. Like the outbox projection deps,
+	// these are framework-owned raw infrastructure — cells only record intent via
+	// reg.RegisterProjection (NewSagaJournalProjectionRequest).
+	sagaJournalReader   journal.GlobalReader
+	sagaProjOwnerStore  projection.OwnerCheckpointStore
+	sagaProjLocker      distlock.Locker
+	sagaTailerConfig    tailer.Config
+	sagaTailerConfigSet bool
+	// sagaJournalSource lazily caches the ONE shared SagaJournalSource built from
+	// sagaJournalReader on first use in the drain. It is global + stateless, so all
+	// saga-journal projections share a single instance (passed as both the replay
+	// and cursor args of tailer.NewTailer).
+	sagaJournalSource *sagaprojection.SagaJournalSource
+	// sagaTailerObservers caches the per-cell SagaTailerCollector (a tailer.Observer)
+	// so NewSagaTailerCollector — which registers a per-cell metric family — is
+	// called at most once per cellID (a second call for the same cell would be a
+	// duplicate-registration conflict). nil entries are never stored; a Nop/absent
+	// provider yields a nil observer that the drain skips (WithObserver(nil) keeps
+	// the Tailer's NopObserver).
+	sagaTailerObservers map[string]tailer.Observer
 
 	// --- devtools catalog endpoint (J1 PR-A37) ---
 	// All zero/nil = endpoint not registered.
