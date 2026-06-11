@@ -61,6 +61,9 @@ func (c *AccessCore) Init(ctx context.Context, reg cell.Registrar) error {
 					firstErr = err
 				}
 			}
+			mux.Route("/policies", func(s cell.RouteMux) {
+				captureErr(c.policyHandler.RegisterRoutes(s))
+			})
 			mux.Route("/roles", func(s cell.RouteMux) {
 				captureErr(c.rbacHandler.RegisterRoutes(s))
 			})

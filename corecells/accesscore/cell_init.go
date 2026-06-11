@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/authorizationdecide"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/configreceive"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/identitymanage"
+	"github.com/ghbvf/gocell/corecells/accesscore/slices/policymanage"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/rbacassign"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/rbaccheck"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionlogin"
@@ -332,6 +333,12 @@ func (c *AccessCore) initSlices() error {
 	c.authzSvc = authzSvc
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(authorizationdecide.SliceMetadata()))
 
+	// policymanage: L2 OutboxFact CRUD for ABAC policies (#1347 PR-9).
+	// Emits event.policy.updated.v1 atomically on every create/update/delete.
+	if err := c.initPolicyManageSlice(); err != nil {
+		return err
+	}
+
 	// rbac-check
 	rbacSvc, err := rbaccheck.NewService(c.roleRepo, c.cursorCodec, c.logger, c.rbacRunMode,
 		rbaccheck.WithTxManager(c.txRunner))
@@ -413,6 +420,24 @@ func (c *AccessCore) initRbacAssign() error {
 	}
 	c.rbacAssignHandler = rbacassign.NewHandler(rbacAssignSvc)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(rbacassign.SliceMetadata()))
+	return nil
+}
+
+// initPolicyManageSlice constructs the policymanage slice. policymanage is L2
+// OutboxFact: every policy mutation (Create/Update/Delete) atomically co-commits
+// an event.policy.updated.v1 outbox row inside RunInTx. Runtime emit fidelity
+// depends on outbox.ResolveCellEmitter output — same as initRbacAssign.
+func (c *AccessCore) initPolicyManageSlice() error {
+	pmSvc, err := policymanage.NewService(
+		c.clk, c.policyRepo, c.logger,
+		policymanage.WithEmitter(c.emitter),
+		policymanage.WithTxManager(c.txRunner),
+	)
+	if err != nil {
+		return fmt.Errorf("accesscore: build policymanage service: %w", err)
+	}
+	c.policyHandler = policymanage.NewHandler(pmSvc)
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(policymanage.SliceMetadata()))
 	return nil
 }
 

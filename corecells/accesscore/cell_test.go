@@ -508,7 +508,7 @@ func TestAccessCore_Lifecycle(t *testing.T) {
 
 	// Init
 	require.NoError(t, c.Init(ctx, cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)))
-	assert.Equal(t, 10, len(c.OwnedSlices()), "should have 10 slices")
+	assert.Equal(t, 11, len(c.OwnedSlices()), "should have 11 slices")
 
 	// Start
 	require.NoError(t, c.Start(ctx))

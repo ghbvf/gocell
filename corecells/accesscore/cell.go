@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/authorizationdecide"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/configreceive"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/identitymanage"
+	"github.com/ghbvf/gocell/corecells/accesscore/slices/policymanage"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/rbacassign"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/rbaccheck"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionlogin"
@@ -392,6 +393,9 @@ type AccessCore struct {
 	passwordHasher credential.Hasher
 
 	// Slice handlers.
+	// +slice:route:slice=policymanage,subPath=/policies
+	policyHandler *policymanage.Handler
+
 	// +slice:route:slice=identitymanage,subPath=/users
 	identityHandler *identitymanage.Handler
 
