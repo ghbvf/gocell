@@ -61,11 +61,17 @@ _require_one() {
 # _validate_labels CSV -> 0 ok | 2 violation. Prints violations to stderr.
 #
 # Axis membership: pri/cx use value-exact regexes (pri-p0..p3, cx-1..cx-4) — these
-# axes have small fixed value sets and exactness is load-bearing: it rejects
-# cx-unknown (deliberately unsupported, #1832) and out-of-range typos. area/type use
-# prefix-count: their value sets (PROJECT.md §2.1/§2.2, 8 each) are validated by
-# GitHub label existence + the enum docs, not duplicated here — this guard checks
-# COMPLETENESS (exactly-one per axis), not value membership.
+# axes have small, mathematically-fixed value sets, so value-exactness is drift-free
+# and load-bearing: it rejects cx-unknown (deliberately unsupported, #1832) and
+# out-of-range typos. Because the count is valid-only, an invalid same-axis extra
+# (cx-1 + cx-unknown, pri-p2 + pri-p10) would slip past a valid-count check — so we
+# also require any-count == valid-count for pri/cx (#1838 F1).
+# area/type use prefix-count (completeness, exactly-one): an extra area/type label is
+# caught for free as a count≥2 conflict; a lone invalid value is hard-backstopped by
+# GitHub label existence (gh create rejects an undefined label) + PROJECT.md
+# §2.1/§2.2. The 8-value enums are NOT duplicated here — doing so would add a
+# doc↔code drift surface (a new Soft coupling). A single-source machine-readable axes
+# declaration is the proper path if inline value-validation is ever wanted.
 _validate_labels() {
     local labels
     labels="$(_normalize "$1")"
@@ -73,10 +79,11 @@ _validate_labels() {
     # Out of scope: only backlog issues are governed.
     printf '%s\n' "${labels}" | grep -qx 'backlog' || return 0
 
-    local area type pri cx cx_any is_epic
+    local area type pri pri_any cx cx_any is_epic
     area="$(_count '^area-' "${labels}")"
     type="$(_count '^type-' "${labels}")"
     pri="$(_count '^pri-p[0-3]$' "${labels}")"
+    pri_any="$(_count '^pri-' "${labels}")"
     cx="$(_count '^cx-[1-4]$' "${labels}")"
     cx_any="$(_count '^cx-' "${labels}")"
     is_epic="$(_count '^epic$' "${labels}")"
@@ -84,6 +91,10 @@ _validate_labels() {
     local rc=0
     _require_one 'area' "${area}" || rc=1
     _require_one 'pri (pri-p0..p3)' "${pri}" || rc=1
+    # Value-locked axes: a valid value can coexist with an invalid same-axis label
+    # (pri-p2+pri-p10, cx-1+cx-unknown) that the valid-only count ignores — reject
+    # via any==valid. pri applies to epic + non-epic alike.
+    [[ "${pri_any}" -le "${pri}" ]] || { echo "  - invalid pri-* label present (only pri-p0..p3)" >&2; rc=1; }
     if [[ "${is_epic}" -gt 0 ]]; then
         # epic 不贴 cx; type not required for epic (epic create cmd omits it).
         # cx_any (not cx) so a cx-unknown / typo on an epic is also rejected.
@@ -94,6 +105,7 @@ _validate_labels() {
     else
         _require_one 'type' "${type}" || rc=1
         _require_one 'cx (cx-1..cx-4)' "${cx}" || rc=1
+        [[ "${cx_any}" -le "${cx}" ]] || { echo "  - invalid cx-* label present (only cx-1..cx-4; cx-unknown unsupported, #1832)" >&2; rc=1; }
     fi
 
     if [[ "${rc}" -ne 0 ]]; then
@@ -173,6 +185,10 @@ cmd_selftest() {
     _expect "pri-invalid"   2 --labels "backlog,area-tooling,type-debt,pri-p10,cx-1"
     # epic carrying cx-unknown still rejected (epic forbid uses cx_any, not cx-1..4)
     _expect "epic-cx-unknown" 2 --labels "epic,backlog,area-tooling,pri-p2,cx-unknown"
+    # valid value + invalid same-axis extra must be rejected (#1838 F1, Codex review)
+    _expect "cx1-plus-unknown" 2 --labels "backlog,area-tooling,type-debt,pri-p2,cx-1,cx-unknown"
+    _expect "cx1-plus-cx5"     2 --labels "backlog,area-tooling,type-debt,pri-p2,cx-1,cx-5"
+    _expect "pri2-plus-pri10"  2 --labels "backlog,area-tooling,type-debt,pri-p2,pri-p10,cx-1"
     # usage errors: missing flag value / no flag at all -> 64
     _expect "labels-no-value" 64 --labels
     _expect "issue-no-value"  64 --issue
