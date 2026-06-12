@@ -400,6 +400,14 @@ func TestFlagwriteHandler_ActionPin_FlagWrite(t *testing.T) {
 			req = req.WithContext(ctx)
 			w := httptest.NewRecorder()
 			mux.ServeHTTP(w, req)
+			// HTTP response code pre-assertion: gate must pass (not 401/403) and the
+			// endpoint must be routed (not 404). Mirrors configread/configpublish action-pin style.
+			require.NotEqual(t, http.StatusUnauthorized, w.Code,
+				"flagwrite gate must not block admin with allow Authorizer (endpoint=%s)", ep.name)
+			require.NotEqual(t, http.StatusForbidden, w.Code,
+				"flagwrite gate must not deny admin with allow Authorizer (endpoint=%s)", ep.name)
+			require.NotEqual(t, http.StatusNotFound, w.Code,
+				"flagwrite endpoint must be routed (endpoint=%s)", ep.name)
 			assert.Equal(t, "flag:write", cap.GotAction,
 				"flagwrite gate must request action flag:write to PDP; endpoint %s got %q — "+
 					"a misbinding to a different perm would be masked by baseline allow-all-admin",

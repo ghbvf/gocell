@@ -534,6 +534,13 @@ func TestHandler_ActionPin_FlagRead(t *testing.T) {
 			req = req.WithContext(ctx)
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, req)
+			// Pre-condition: gate passed (2xx). Without this check a routing
+			// misconfiguration or wrong path silently produces a non-200 and the
+			// GotAction assert below would pass vacuously (cap.GotAction == "").
+			require.Equal(t, http.StatusOK, w.Code,
+				"featureflag endpoint %s must return 200 with allow Authorizer "+
+					"(routing or permission misbinding if not); body=%s",
+				ep.name, w.Body)
 			assert.Equal(t, "flag:read", cap.GotAction,
 				"featureflag gate must request action flag:read to PDP; endpoint %s got %q — "+
 					"a misbinding to a different perm would be masked by baseline allow-all-admin",

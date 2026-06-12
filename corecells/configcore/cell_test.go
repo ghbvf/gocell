@@ -387,8 +387,17 @@ func TestConfigCore_RouteConfigCreate(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/config/", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	// Inject admin context so the request passes PDP and reaches the business path.
+	req = req.WithContext(pdpAdminCtx("admin-test"))
 	r.ServeHTTP(rec, req)
 
+	// The route is reachable and past auth: must not be 401 (unauthenticated) or
+	// 403 (auth-forbidden). It may be 201 Created or another business code, but
+	// never a routing 404 either.
+	assert.NotEqual(t, http.StatusUnauthorized, rec.Code,
+		"POST /api/v1/config/ with admin context must not be 401 (got %d body=%s)", rec.Code, rec.Body)
+	assert.NotEqual(t, http.StatusForbidden, rec.Code,
+		"POST /api/v1/config/ with admin context must not be 403 (got %d body=%s)", rec.Code, rec.Body)
 	assert.NotEqual(t, http.StatusNotFound, rec.Code,
 		"POST /api/v1/config/ should not return 404 (got %d)", rec.Code)
 }
@@ -443,26 +452,30 @@ func TestConfigCore_ProductionAuthGateLock(t *testing.T) {
 	r := initCellWithRouter(t)
 
 	type adminWritePath struct {
-		name   string
-		method string
-		path   string
-		body   string
+		name       string
+		method     string
+		path       string
+		body       string
+		wantAction string // expected PDP action string; asserted in the 2xx branch
 	}
 	paths := []adminWritePath{
-		{"config-read:list", http.MethodGet, "/api/v1/config/", ""},
-		{"config-read:get", http.MethodGet, "/api/v1/config/k", ""},
-		{"flag-read:list", http.MethodGet, "/api/v1/flags/", ""},
-		{"flag-read:get", http.MethodGet, "/api/v1/flags/k", ""},
-		{"flag-read:evaluate", http.MethodPost, "/api/v1/flags/k/evaluate", `{"subject":"test"}`},
-		{"config-write:create", http.MethodPost, "/api/v1/config/", `{"key":"k","value":"v"}`},
-		{"config-write:update", http.MethodPut, "/api/v1/config/k", `{"value":"v"}`},
-		{"config-write:delete", http.MethodDelete, "/api/v1/config/k", ``},
-		{"config-publish:publish", http.MethodPost, "/api/v1/config/k/publish", ``},
-		{"config-publish:rollback", http.MethodPost, "/api/v1/config/k/rollback", `{"version":1}`},
-		{"flag-write:create", http.MethodPost, "/api/v1/flags/", `{"key":"k","enabled":false,"rolloutPercentage":0,"description":"d"}`},
-		{"flag-write:update", http.MethodPut, "/api/v1/flags/k", `{"enabled":true,"rolloutPercentage":10,"description":"d"}`},
-		{"flag-write:toggle", http.MethodPost, "/api/v1/flags/k/toggle", `{"enabled":true}`},
-		{"flag-write:delete", http.MethodDelete, "/api/v1/flags/k", ``},
+		{"config-read:list", http.MethodGet, "/api/v1/config/", "", "config:read"},
+		{"config-read:get", http.MethodGet, "/api/v1/config/k", "", "config:read"},
+		{"flag-read:list", http.MethodGet, "/api/v1/flags/", "", "flag:read"},
+		{"flag-read:get", http.MethodGet, "/api/v1/flags/k", "", "flag:read"},
+		{"flag-read:evaluate", http.MethodPost, "/api/v1/flags/k/evaluate", `{"subject":"test"}`, "flag:read"},
+		{"config-write:create", http.MethodPost, "/api/v1/config/", `{"key":"k","value":"v"}`, "config:write"},
+		{"config-write:update", http.MethodPut, "/api/v1/config/k", `{"value":"v"}`, "config:write"},
+		{"config-write:delete", http.MethodDelete, "/api/v1/config/k", ``, "config:write"},
+		{"config-publish:publish", http.MethodPost, "/api/v1/config/k/publish", ``, "config:publish"},
+		{"config-publish:rollback", http.MethodPost, "/api/v1/config/k/rollback", `{"version":1}`, "config:publish"},
+		{
+			"flag-write:create", http.MethodPost, "/api/v1/flags/",
+			`{"key":"k","enabled":false,"rolloutPercentage":0,"description":"d"}`, "flag:write",
+		},
+		{"flag-write:update", http.MethodPut, "/api/v1/flags/k", `{"enabled":true,"rolloutPercentage":10,"description":"d"}`, "flag:write"},
+		{"flag-write:toggle", http.MethodPost, "/api/v1/flags/k/toggle", `{"enabled":true}`, "flag:write"},
+		{"flag-write:delete", http.MethodDelete, "/api/v1/flags/k", ``, "flag:write"},
 	}
 
 	exec := func(t *testing.T, p adminWritePath, ctx context.Context) *httptest.ResponseRecorder {
@@ -504,17 +517,25 @@ func TestConfigCore_ProductionAuthGateLock(t *testing.T) {
 			assert.Equal(t, http.StatusForbidden, rec.Code,
 				"%s %s denied by the PDP must be 403; got body %s", p.method, p.path, rec.Body)
 
-			// --- 2xx: admin + a wired PDP that ALLOWS + valid tenant. We do not pin
-			// the exact success code (some paths 404 because the resource was not
+			// --- 2xx: admin + a capturing PDP that ALLOWS + valid tenant. We do not
+			// pin the exact success code (some paths 404 because the resource was not
 			// seeded), but 401 / 403 must be gone — proving the gate ran and the
-			// granted permission admits the caller. A valid TenantID is injected so
-			// tenant-scoped handlers reach the business path rather than the F6
-			// missing-tenant 403 (a separate gate from the permission under test).
-			rec = exec(t, p, pdpAdminCtx("admin-user"))
+			// granted permission admits the caller. Additionally we assert the exact
+			// PDP action the route requested (wantAction), catching an
+			// endpoint↔permission misbinding the role-agnostic baseline would mask.
+			cap := allowAuthorizer()
+			rec = exec(t, p, configcoretest.WithAuthorizer(
+				ctxkeys.WithTenantID(auth.TestContext("admin-user", []string{"admin"}), gateTenant),
+				cap,
+			))
 			assert.NotEqual(t, http.StatusUnauthorized, rec.Code,
 				"admin %s %s (PDP allow) must not be 401; body %s", p.method, p.path, rec.Body)
 			assert.NotEqual(t, http.StatusForbidden, rec.Code,
 				"admin %s %s (PDP allow) must not be 403; body %s", p.method, p.path, rec.Body)
+			assert.Equal(t, p.wantAction, cap.GotAction,
+				"route %s %s must request PDP action %q (got %q); a misbinding would be masked by "+
+					"the role-agnostic baseline that allows admin for every config/flag perm",
+				p.method, p.path, p.wantAction, cap.GotAction)
 		})
 	}
 }

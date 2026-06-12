@@ -42,6 +42,30 @@ func TestPermAuditRead_StableIdentity(t *testing.T) {
 	}
 }
 
+// TestConfigcorePermissions_StableIdentity pins that each configcore accessor
+// returns the same package-private singleton on every call (the F6 immutability
+// contract from PR-10b: function accessors are not reassignable, so the registry
+// value is immutable to external packages; returning the singleton on every call
+// is the observable proof of that invariant within the package itself).
+func TestConfigcorePermissions_StableIdentity(t *testing.T) {
+	cases := []struct {
+		name      string
+		got       Permission
+		singleton Permission
+	}{
+		{"PermConfigRead", PermConfigRead(), permConfigRead},
+		{"PermConfigWrite", PermConfigWrite(), permConfigWrite},
+		{"PermConfigPublish", PermConfigPublish(), permConfigPublish},
+		{"PermFlagRead", PermFlagRead(), permFlagRead},
+		{"PermFlagWrite", PermFlagWrite(), permFlagWrite},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.singleton {
+			t.Errorf("%s() must return the package-private singleton (stable on every call)", tc.name)
+		}
+	}
+}
+
 func TestPermission_ZeroValueIsInvalid(t *testing.T) {
 	var zero Permission
 	if !zero.IsZero() {

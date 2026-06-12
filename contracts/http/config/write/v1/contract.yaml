@@ -27,7 +27,7 @@ endpoints:
         description: "Unauthorized — missing or invalid bearer token"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       403:
-        description: "Forbidden — the ABAC PDP denied the config:write permission (PR-10b #1348 migrated the role-literal admin gate to permission-based authz; the built-in baseline grants admin/super-admin)"
+        description: "Forbidden — caller lacks the config:write permission; the built-in baseline grants the admin and super-admin roles."
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       413:
         description: "Payload Too Large — request body exceeds the size limit"

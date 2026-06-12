@@ -4,7 +4,14 @@ package configcoretest
 // authz migration (PR-10b #1348). Every configcore slice gated by
 // auth.RequirePermission(authz.Perm*) needs an Authorizer in the request context
 // to pass the gate; these helpers supply an action-capturing Authorizer type and
-// the ctx wiring, defined ONCE here instead of per-slice.
+// the ctx wiring, shared here for slices that can import configcoretest.
+//
+// Note on circular-dependency stubs: slices whose test packages would create an
+// import cycle through configcoretest (e.g. configwrite, because configcoretest
+// imports configwrite) define equivalent local stubs in their own _test.go files
+// rather than importing this package. Those stubs are structurally identical to
+// CapturingAuthorizer and WithAuthorizer but are unexported and local to the slice
+// under test.
 //
 // Verdict construction (Allow/Deny) was moved to each consumer's _test.go under
 // local helpers (allowAuthorizer / withAllowAuthorizer / withDenyAuthorizer).

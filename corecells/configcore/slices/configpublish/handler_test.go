@@ -51,15 +51,17 @@ func withAllowAuthorizer(ctx context.Context) context.Context {
 	return configcoretest.WithAuthorizer(ctx, allowAuthorizer())
 }
 
+// reason is fixed here (unparam: all configpublish deny tests use the same reason); other slices keep a reason param.
 func withDenyAuthorizer(ctx context.Context) context.Context {
 	return configcoretest.WithAuthorizer(ctx, &configcoretest.CapturingAuthorizer{Decision: authz.Deny("test pdp deny")})
 }
 
 // testPublishTenantStr is the test TenantID string for configpublish tests.
-const testPublishTenantStr = "00000000-0000-0000-0000-000000000001"
+// Derived from configcoretest.TestTenant to avoid duplicating the bare literal.
+const testPublishTenantStr = string(configcoretest.TestTenant)
 
 // testPublishTenant is the typed TenantID for direct repo seeding calls.
-var testPublishTenant = tenant.TenantID(testPublishTenantStr)
+const testPublishTenant = configcoretest.TestTenant
 
 // adminCtx returns a request context carrying an admin subject + role, a valid
 // TenantID, and an allow Authorizer. The Authorizer is required because the gate

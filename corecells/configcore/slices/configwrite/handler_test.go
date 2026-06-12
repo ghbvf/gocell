@@ -39,8 +39,9 @@ import (
 const testHandlerTenantStr = "00000000-0000-0000-0000-000000000001"
 
 // --- local authz test helpers ---
-// configcoretest cannot be imported here (cycle: configcoretest imports configwrite).
-// These local stubs are semantically identical to configcoretest's equivalents.
+// configcoretest imports configwrite (BuildWriteService), so it cannot be imported
+// back here — these local stubs mirror configcoretest's CapturingAuthorizer and are
+// semantically identical to its equivalents.
 
 // capturingAuthorizer is a test-only auth.Authorizer that returns a fixed
 // Decision and records the action of the last Authorize call.
@@ -751,12 +752,7 @@ func TestHandler_NoAuthorizer_Write_FailClosed(t *testing.T) {
 // Failure message: configwrite gate must use authz.PermConfigWrite() ("config:write"),
 // not another permission (baseline grants admin for all config perms, masking misbinding).
 func TestHandler_ActionPin_ConfigWrite(t *testing.T) {
-	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), testHandlerTenant, &domain.ConfigEntry{
-		ID: "cfg-pin", Key: "pin.key", Value: "v", Version: 1,
-		CreatedAt: now, UpdatedAt: now,
-	}))
 
 	endpoints := []struct {
 		method string
@@ -776,8 +772,6 @@ func TestHandler_ActionPin_ConfigWrite(t *testing.T) {
 				ID: "cfg-pin2", Key: "pin.key", Value: "v", Version: 1,
 				CreatedAt: now, UpdatedAt: now,
 			}))
-			_ = handler // silence unused warning; sub-test uses h
-			_ = repo
 
 			cap := newAllowAuthorizer()
 			ctx := auth.WithAuthorizer(
