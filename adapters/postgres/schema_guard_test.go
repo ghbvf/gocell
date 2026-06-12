@@ -99,7 +99,8 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// global_seq IDENTITY PK + idx_projection_events_id) for the #1504 retained event store.
 	// 059 creates the ABAC policies table (composite PK + string-coded JSONB rules) under
 	// FORCE RLS tenant_isolation for the durable ABAC policy store (EPIC #1337 PR-8, #1346).
-	// 060 was skipped (planned but never created — numbering gap).
+	// 060 adds policies.version INT NOT NULL DEFAULT 1 for optimistic-concurrency (CAS)
+	// versioning of the ABAC policy aggregate (EPIC #1337 PR-9, #1347).
 	// 061 replaces the permanent idempotency key index with a state-aware active-uniqueness
 	// partial index on commands (status IN 1,2,3) for retry-release semantics (#1820).
 	// 062 drops devices.renewal_requested_epoch (stateless cert-renewal producer, #1820).

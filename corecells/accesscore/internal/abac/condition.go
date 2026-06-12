@@ -33,6 +33,11 @@ const (
 	SourceSubject AttributeSource = iota + 1
 	// SourceResource resolves the attribute from the protected resource's
 	// metadata. Example key: "classification", "owner_id", "sensitivity_level".
+	// Attributes are fetched at evaluation time from the injected
+	// ResourceAttributeProvider (ABAC PIP, PR-9 #1347), scoped to the request
+	// tenant in the same transaction block as policy loading
+	// (RESOURCE-ATTR-TENANT-SHARING-01). An absent key resolves found=false —
+	// fail-closed (condition unsatisfied). PG-backed store is a follow-up issue.
 	SourceResource
 	// SourceEnvironment resolves the attribute from the request context or
 	// ambient environment. Example key: "time_of_day", "ip_region", "device_trust".
@@ -65,6 +70,23 @@ func (src AttributeSource) Validate() error {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "abac: invalid AttributeSource value")
 	}
 	return nil
+}
+
+// ParseAttributeSource converts a wire/log spelling back to its AttributeSource
+// value (inverse of String). Recognized codes: "subject", "resource",
+// "environment". Any other input — including the empty string — returns an
+// error (fail-closed).
+func ParseAttributeSource(s string) (AttributeSource, error) {
+	switch s {
+	case "subject":
+		return SourceSubject, nil
+	case "resource":
+		return SourceResource, nil
+	case "environment":
+		return SourceEnvironment, nil
+	default:
+		return 0, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "abac: unknown AttributeSource wire code")
+	}
 }
 
 // Condition is a single predicate in a Rule. It evaluates to true when the

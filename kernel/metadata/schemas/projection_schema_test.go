@@ -32,7 +32,8 @@ func TestProjectionSliceCU_SubscribeWithProjectionPasses(t *testing.T) {
 				"contract": "event.order.placed.v1",
 				"role": "subscribe",
 				"handler": "HandleOrderPlaced",
-				"projection": "order_read_model"
+				"projection": "order_read_model",
+				"projectionSource": "outbox"
 			}
 		],
 		"verify": {
@@ -61,6 +62,7 @@ func TestProjectionSliceCU_SubscribeWithProjectionAndOnResetPasses(t *testing.T)
 				"role": "subscribe",
 				"handler": "HandleOrderPlaced",
 				"projection": "order_read_model",
+				"projectionSource": "outbox",
 				"onReset": "ResetOrderModel"
 			}
 		],
@@ -175,6 +177,7 @@ func TestProjectionSliceCU_BadOnResetLowercaseFails(t *testing.T) {
 				"role": "subscribe",
 				"handler": "HandleOrderPlaced",
 				"projection": "order_read_model",
+				"projectionSource": "outbox",
 				"onReset": "resetProjection"
 			}
 		],
@@ -265,6 +268,7 @@ func TestProjectionSliceCU_SubscribeProjectionWithGroupFails(t *testing.T) {
 				"role": "subscribe",
 				"handler": "HandleOrderPlaced",
 				"projection": "order_read_model",
+				"projectionSource": "outbox",
 				"group": "my-custom-group"
 			}
 		],
@@ -305,4 +309,163 @@ func TestProjectionSliceCU_WebhookDispatchWithOnResetFails(t *testing.T) {
 
 	assert.Error(t, schema.Validate(doc),
 		"webhook-dispatch role carrying onReset must fail slice schema validation")
+}
+
+// --- projectionSource selector schema rules (EPIC #1609 PR-05) ---
+
+// TestProjectionSliceCU_SagaJournalProjectionPasses verifies a subscribe CU with
+// projection + projectionSource=saga-journal (no onReset) passes. The schema does
+// not see the contract kind — the kind=saga requirement is governance/parser.
+func TestProjectionSliceCU_SagaJournalProjectionPasses(t *testing.T) {
+	schema := compileSliceSchema(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "sagastatus",
+		"belongsToCell": "orderfulfillmentcell",
+		"consistencyLevel": "L3",
+		"contractUsages": [
+			{
+				"contract": "saga.orderfulfillment.v1",
+				"role": "subscribe",
+				"handler": "ApplySagaTerminal",
+				"projection": "order_status",
+				"projectionSource": "saga-journal"
+			}
+		],
+		"verify": {
+			"unit": ["unit.sagastatus.apply"],
+			"contract": ["contract.saga.orderfulfillment.v1.subscribe"]
+		}
+	}`), &doc))
+
+	assert.NoError(t, schema.Validate(doc),
+		"saga-journal projection (no onReset) must pass slice schema validation")
+}
+
+// TestProjectionSliceCU_ProjectionWithoutSourceFails verifies that a projection
+// without projectionSource is rejected (required-when-projection, no default).
+func TestProjectionSliceCU_ProjectionWithoutSourceFails(t *testing.T) {
+	schema := compileSliceSchema(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "orderquery",
+		"belongsToCell": "ordercell",
+		"consistencyLevel": "L3",
+		"contractUsages": [
+			{
+				"contract": "event.order.placed.v1",
+				"role": "subscribe",
+				"handler": "HandleOrderPlaced",
+				"projection": "order_read_model"
+			}
+		],
+		"verify": { "unit": [], "contract": [] }
+	}`), &doc))
+
+	assert.Error(t, schema.Validate(doc),
+		"projection without projectionSource must fail slice schema validation")
+}
+
+// TestProjectionSliceCU_SourceWithoutProjectionFails verifies that projectionSource
+// without projection is rejected.
+func TestProjectionSliceCU_SourceWithoutProjectionFails(t *testing.T) {
+	schema := compileSliceSchema(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "orderquery",
+		"belongsToCell": "ordercell",
+		"consistencyLevel": "L3",
+		"contractUsages": [
+			{
+				"contract": "event.order.placed.v1",
+				"role": "subscribe",
+				"handler": "HandleOrderPlaced",
+				"projectionSource": "outbox"
+			}
+		],
+		"verify": { "unit": [], "contract": [] }
+	}`), &doc))
+
+	assert.Error(t, schema.Validate(doc),
+		"projectionSource without projection must fail slice schema validation")
+}
+
+// TestProjectionSliceCU_SagaJournalWithOnResetFails verifies that onReset on a
+// saga-journal projection is rejected (no rebuild on that path).
+func TestProjectionSliceCU_SagaJournalWithOnResetFails(t *testing.T) {
+	schema := compileSliceSchema(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "sagastatus",
+		"belongsToCell": "orderfulfillmentcell",
+		"consistencyLevel": "L3",
+		"contractUsages": [
+			{
+				"contract": "saga.orderfulfillment.v1",
+				"role": "subscribe",
+				"handler": "ApplySagaTerminal",
+				"projection": "order_status",
+				"projectionSource": "saga-journal",
+				"onReset": "ResetOrderStatus"
+			}
+		],
+		"verify": { "unit": [], "contract": [] }
+	}`), &doc))
+
+	assert.Error(t, schema.Validate(doc),
+		"onReset on saga-journal projection must fail slice schema validation")
+}
+
+// TestProjectionSliceCU_InvalidProjectionSourceEnumFails verifies an unknown
+// projectionSource value fails the enum constraint.
+func TestProjectionSliceCU_InvalidProjectionSourceEnumFails(t *testing.T) {
+	schema := compileSliceSchema(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "orderquery",
+		"belongsToCell": "ordercell",
+		"consistencyLevel": "L3",
+		"contractUsages": [
+			{
+				"contract": "event.order.placed.v1",
+				"role": "subscribe",
+				"handler": "HandleOrderPlaced",
+				"projection": "order_read_model",
+				"projectionSource": "kafka"
+			}
+		],
+		"verify": { "unit": [], "contract": [] }
+	}`), &doc))
+
+	assert.Error(t, schema.Validate(doc),
+		"unknown projectionSource enum value must fail slice schema validation")
+}
+
+// TestProjectionSliceCU_NonSubscribeWithProjectionSourceFails verifies that a
+// non-subscribe role carrying projectionSource is rejected.
+func TestProjectionSliceCU_NonSubscribeWithProjectionSourceFails(t *testing.T) {
+	schema := compileSliceSchema(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "orderprovide",
+		"belongsToCell": "ordercell",
+		"consistencyLevel": "L0",
+		"contractUsages": [
+			{
+				"contract": "data.order.read.v1",
+				"role": "provide",
+				"projectionSource": "saga-journal"
+			}
+		],
+		"verify": { "unit": [], "contract": [] }
+	}`), &doc))
+
+	assert.Error(t, schema.Validate(doc),
+		"non-subscribe role carrying projectionSource must fail slice schema validation")
 }

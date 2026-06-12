@@ -1,0 +1,46 @@
+id: http.policy.delete.v1
+kind: http
+ownerCell: accesscore
+consistencyLevel: L2
+lifecycle: active
+triggers:
+  - event.policy.updated.v1
+endpoints:
+  server: accesscore
+  clients:
+    - edge-bff
+  http:
+    method: DELETE
+    path: /api/v1/access/policies/{id}
+    pathParams:
+      id:
+        type: string
+        minLength: 1
+        maxLength: 128
+    queryParams:
+      expectedVersion:
+        $ref: "../../../../shared/cas/v1/expected_version.schema.json"
+        required: true
+    successStatus: 204
+    auth:
+      responses:
+        - 503
+    idempotency:
+      exempt: true
+    noContent: true
+    responses:
+      400:
+        description: "Bad request — path parameter id fails constraints or expectedVersion is missing/invalid"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — authenticated but lacks admin role"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: "Not Found — policy with given id does not exist"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      409:
+        description: "Conflict — expectedVersion does not match current version (ERR_VERSION_CONFLICT)"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"

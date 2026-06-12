@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	msgPolicySaveUnexpected         = "Save() unexpected error: %v"
+	msgPolicyCreateUnexpected       = "Create() unexpected error: %v"
 	msgPolicyGetByIDUnexpected      = "GetByID() unexpected error: %v"
 	msgPolicyListByTenantUnexpected = "ListByTenant() unexpected error: %v"
 )
@@ -44,8 +44,8 @@ type PolicyRepoFactory func(t *testing.T) ports.PolicyRepository
 //	}
 func RunPolicyRepoConformance(t *testing.T, factory PolicyRepoFactory) {
 	t.Helper()
-	t.Run("SaveAndGetByID_RoundTrip", func(t *testing.T) {
-		conformPolicySaveAndGetByID(t, factory)
+	t.Run("CreateAndGetByID_RoundTrip", func(t *testing.T) {
+		conformPolicyCreateAndGetByID(t, factory)
 	})
 	t.Run("GetByID_NotFound", func(t *testing.T) {
 		err := conformPolicyGetByIDNotFound(t, factory)
@@ -57,8 +57,27 @@ func RunPolicyRepoConformance(t *testing.T, factory PolicyRepoFactory) {
 	t.Run("ListByTenant_ReturnsSavedPolicies", func(t *testing.T) {
 		conformPolicyListByTenant(t, factory)
 	})
-	t.Run("Delete_Succeeds", func(t *testing.T) {
-		conformPolicyDeleteSucceeds(t, factory)
+	t.Run("Create_Conflict", func(t *testing.T) {
+		err := conformPolicyCreateConflict(t, factory)
+		errcodetest.AssertCode(t, err, errcode.ErrAuthPolicyDuplicate)
+	})
+	t.Run("Update_CAS_Success", func(t *testing.T) {
+		conformPolicyUpdateCASSuccess(t, factory)
+	})
+	t.Run("Update_VersionConflict", func(t *testing.T) {
+		err := conformPolicyUpdateVersionConflict(t, factory)
+		errcodetest.AssertCode(t, err, errcode.ErrVersionConflict)
+	})
+	t.Run("Update_NotFound", func(t *testing.T) {
+		err := conformPolicyUpdateNotFound(t, factory)
+		errcodetest.AssertCode(t, err, errcode.ErrAuthPolicyNotFound)
+	})
+	t.Run("Delete_CAS_Success", func(t *testing.T) {
+		conformPolicyDeleteCASSuccess(t, factory)
+	})
+	t.Run("Delete_VersionConflict", func(t *testing.T) {
+		err := conformPolicyDeleteVersionConflict(t, factory)
+		errcodetest.AssertCode(t, err, errcode.ErrVersionConflict)
 	})
 	t.Run("Delete_NotFound", func(t *testing.T) {
 		err := conformPolicyDeleteNotFound(t, factory)
@@ -82,11 +101,14 @@ func RunPolicyRepoConformance(t *testing.T, factory PolicyRepoFactory) {
 	t.Run("Concurrent_NoDataRace", func(t *testing.T) {
 		conformPolicyConcurrentNoDataRace(t, factory)
 	})
-	t.Run("Save_NilPolicy_Error", func(t *testing.T) {
-		conformPolicySaveNilPolicyError(t, factory)
+	t.Run("Update_CAS_Concurrent", func(t *testing.T) {
+		conformPolicyUpdateCASConcurrent(t, factory)
 	})
-	t.Run("SaveInputClone_IsIndependent", func(t *testing.T) {
-		conformPolicySaveInputCloneIsIndependent(t, factory)
+	t.Run("Create_NilPolicy_Error", func(t *testing.T) {
+		conformPolicyCreateNilPolicyError(t, factory)
+	})
+	t.Run("CreateInputClone_IsIndependent", func(t *testing.T) {
+		conformPolicyCreateInputCloneIsIndependent(t, factory)
 	})
 	t.Run("RepoReady_OK", func(t *testing.T) {
 		conformPolicyRepoReady(t, factory)
@@ -139,14 +161,26 @@ func conformTestPolicyWithFieldMask(id string, tid tenant.TenantID) *abac.Policy
 	return p
 }
 
-func conformPolicySaveAndGetByID(t *testing.T, factory PolicyRepoFactory) {
+// mustCreate is a test helper that calls Create and fails the test on error.
+// Returns the persisted policy (Version=1 set by the repository).
+func mustCreate(t *testing.T, repo ports.PolicyRepository, tid tenant.TenantID, p *abac.Policy) *abac.Policy {
+	t.Helper()
+	created, err := repo.Create(context.Background(), tid, p)
+	if err != nil {
+		t.Fatalf(msgPolicyCreateUnexpected, err)
+	}
+	return created
+}
+
+func conformPolicyCreateAndGetByID(t *testing.T, factory PolicyRepoFactory) {
 	t.Parallel()
 	repo := factory(t)
 	ctx := context.Background()
 	p := conformTestPolicy("pol-1", testTenantID)
 
-	if err := repo.Save(ctx, testTenantID, p); err != nil {
-		t.Fatalf(msgPolicySaveUnexpected, err)
+	created := mustCreate(t, repo, testTenantID, p)
+	if created.Version != 1 {
+		t.Errorf("Create() returned Version = %d, want 1", created.Version)
 	}
 	got, err := repo.GetByID(ctx, testTenantID, "pol-1")
 	if err != nil {
@@ -157,6 +191,9 @@ func conformPolicySaveAndGetByID(t *testing.T, factory PolicyRepoFactory) {
 	}
 	if got.Name != p.Name {
 		t.Errorf("GetByID().Name = %q, want %q", got.Name, p.Name)
+	}
+	if got.Version != 1 {
+		t.Errorf("GetByID().Version = %d, want 1 after Create", got.Version)
 	}
 }
 
@@ -193,17 +230,14 @@ func conformPolicyListByTenantEmpty(t *testing.T, factory PolicyRepoFactory) {
 func conformPolicyListByTenant(t *testing.T, factory PolicyRepoFactory) {
 	t.Parallel()
 	repo := factory(t)
-	ctx := context.Background()
 
 	p1 := conformTestPolicy("pol-a", testTenantID)
 	p2 := conformTestPolicy("pol-b", testTenantID)
 	for _, p := range []*abac.Policy{p1, p2} {
-		if err := repo.Save(ctx, testTenantID, p); err != nil {
-			t.Fatalf("Save(%s) unexpected error: %v", p.ID, err)
-		}
+		mustCreate(t, repo, testTenantID, p)
 	}
 
-	list, err := repo.ListByTenant(ctx, testTenantID)
+	list, err := repo.ListByTenant(context.Background(), testTenantID)
 	if err != nil {
 		t.Fatalf(msgPolicyListByTenantUnexpected, err)
 	}
@@ -212,23 +246,149 @@ func conformPolicyListByTenant(t *testing.T, factory PolicyRepoFactory) {
 	}
 }
 
-func conformPolicyDeleteSucceeds(t *testing.T, factory PolicyRepoFactory) {
+// conformPolicyCreateConflict asserts that a second Create with the same id
+// returns ErrAuthPolicyDuplicate (KindConflict).
+func conformPolicyCreateConflict(t *testing.T, factory PolicyRepoFactory) error {
+	t.Parallel()
+	repo := factory(t)
+
+	p := conformTestPolicy("pol-1", testTenantID)
+	mustCreate(t, repo, testTenantID, p)
+
+	// Second Create with same id must fail.
+	_, err := repo.Create(context.Background(), testTenantID, conformTestPolicy("pol-1", testTenantID))
+	if err == nil {
+		t.Fatal("Create() second call with same id expected KindConflict, got nil")
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) || ec.Kind != errcode.KindConflict {
+		t.Errorf("Create() conflict: expected KindConflict, got %v", err)
+	}
+	return err
+}
+
+// conformPolicyUpdateCASSuccess verifies that Update with the correct
+// expectedVersion succeeds, increments Version 1→2, and returns the updated
+// aggregate.
+func conformPolicyUpdateCASSuccess(t *testing.T, factory PolicyRepoFactory) {
+	t.Parallel()
+	repo := factory(t)
+	ctx := context.Background()
+
+	p := conformTestPolicy("pol-1", testTenantID)
+	mustCreate(t, repo, testTenantID, p)
+
+	updated := conformTestPolicy("pol-1", testTenantID)
+	updated.Name = "Updated Name"
+	got, err := repo.Update(ctx, testTenantID, "pol-1", 1, updated)
+	if err != nil {
+		t.Fatalf("Update() unexpected error: %v", err)
+	}
+	if got.Version != 2 {
+		t.Errorf("Update() returned Version = %d, want 2", got.Version)
+	}
+	if got.Name != "Updated Name" {
+		t.Errorf("Update() returned Name = %q, want %q", got.Name, "Updated Name")
+	}
+
+	// GetByID should reflect the new state.
+	stored, err := repo.GetByID(ctx, testTenantID, "pol-1")
+	if err != nil {
+		t.Fatalf(msgPolicyGetByIDUnexpected, err)
+	}
+	if stored.Version != 2 {
+		t.Errorf("GetByID() after Update Version = %d, want 2", stored.Version)
+	}
+	if stored.Name != "Updated Name" {
+		t.Errorf("GetByID() after Update Name = %q, want %q", stored.Name, "Updated Name")
+	}
+}
+
+// conformPolicyUpdateVersionConflict asserts that Update with the wrong
+// expectedVersion returns ErrVersionConflict (KindConflict).
+func conformPolicyUpdateVersionConflict(t *testing.T, factory PolicyRepoFactory) error {
+	t.Parallel()
+	repo := factory(t)
+
+	p := conformTestPolicy("pol-1", testTenantID)
+	mustCreate(t, repo, testTenantID, p)
+
+	updated := conformTestPolicy("pol-1", testTenantID)
+	updated.Name = "Should Not Stick"
+	_, err := repo.Update(context.Background(), testTenantID, "pol-1", 99 /* wrong version */, updated)
+	if err == nil {
+		t.Fatal("Update() with wrong version expected KindConflict, got nil")
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) || ec.Kind != errcode.KindConflict {
+		t.Errorf("Update() version conflict: expected KindConflict, got %v", err)
+	}
+	return err
+}
+
+// conformPolicyUpdateNotFound asserts that Update on a non-existent id returns
+// ErrAuthPolicyNotFound (KindNotFound).
+func conformPolicyUpdateNotFound(t *testing.T, factory PolicyRepoFactory) error {
+	t.Parallel()
+	repo := factory(t)
+
+	updated := conformTestPolicy("nonexistent", testTenantID)
+	_, err := repo.Update(context.Background(), testTenantID, "nonexistent", 1, updated)
+	if err == nil {
+		t.Fatal("Update() on nonexistent id expected KindNotFound, got nil")
+	}
+	assertPolicyKind(t, err, "Update() nonexistent")
+	return err
+}
+
+// conformPolicyDeleteCASSuccess verifies that Delete with the correct
+// expectedVersion removes the policy and returns the deleted aggregate.
+func conformPolicyDeleteCASSuccess(t *testing.T, factory PolicyRepoFactory) {
 	t.Parallel()
 	repo := factory(t)
 	ctx := context.Background()
 	p := conformTestPolicy("pol-1", testTenantID)
 
-	if err := repo.Save(ctx, testTenantID, p); err != nil {
-		t.Fatalf(msgPolicySaveUnexpected, err)
-	}
-	if err := repo.Delete(ctx, testTenantID, "pol-1"); err != nil {
+	mustCreate(t, repo, testTenantID, p)
+	deleted, err := repo.Delete(ctx, testTenantID, "pol-1", 1)
+	if err != nil {
 		t.Fatalf("Delete() unexpected error: %v", err)
 	}
-	_, err := repo.GetByID(ctx, testTenantID, "pol-1")
+	if deleted == nil {
+		t.Fatal("Delete() returned nil policy, want the deleted aggregate")
+	}
+	if deleted.ID != "pol-1" {
+		t.Errorf("Delete() returned ID = %q, want %q", deleted.ID, "pol-1")
+	}
+	if deleted.Version != 1 {
+		t.Errorf("Delete() returned Version = %d, want 1", deleted.Version)
+	}
+
+	_, err = repo.GetByID(ctx, testTenantID, "pol-1")
 	if err == nil {
 		t.Fatal("GetByID() after Delete expected KindNotFound, got nil")
 	}
 	assertPolicyKind(t, err, "GetByID() after Delete")
+}
+
+// conformPolicyDeleteVersionConflict asserts that Delete with the wrong
+// expectedVersion returns ErrVersionConflict (KindConflict).
+func conformPolicyDeleteVersionConflict(t *testing.T, factory PolicyRepoFactory) error {
+	t.Parallel()
+	repo := factory(t)
+
+	p := conformTestPolicy("pol-1", testTenantID)
+	mustCreate(t, repo, testTenantID, p)
+
+	_, err := repo.Delete(context.Background(), testTenantID, "pol-1", 99 /* wrong version */)
+	if err == nil {
+		t.Fatal("Delete() with wrong version expected KindConflict, got nil")
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) || ec.Kind != errcode.KindConflict {
+		t.Errorf("Delete() version conflict: expected KindConflict, got %v", err)
+	}
+	return err
 }
 
 func conformPolicyDeleteNotFound(t *testing.T, factory PolicyRepoFactory) error {
@@ -236,7 +396,7 @@ func conformPolicyDeleteNotFound(t *testing.T, factory PolicyRepoFactory) error 
 	repo := factory(t)
 	ctx := context.Background()
 
-	err := repo.Delete(ctx, testTenantID, "nonexistent")
+	_, err := repo.Delete(ctx, testTenantID, "nonexistent", 1)
 	if err == nil {
 		t.Fatal("Delete() nonexistent expected KindNotFound, got nil")
 	}
@@ -250,9 +410,7 @@ func conformPolicyCrossTenantIsolation(t *testing.T, factory PolicyRepoFactory) 
 	ctx := context.Background()
 	p := conformTestPolicy("pol-1", testTenantID)
 
-	if err := repo.Save(ctx, testTenantID, p); err != nil {
-		t.Fatalf(msgPolicySaveUnexpected, err)
-	}
+	mustCreate(t, repo, testTenantID, p)
 
 	// Other tenant must not see tenant 1's policy.
 	_, err := repo.GetByID(ctx, testTenantIDOther, "pol-1")
@@ -271,10 +429,11 @@ func conformPolicyCrossTenantIsolation(t *testing.T, factory PolicyRepoFactory) 
 	}
 
 	// Delete in other tenant must fail with KindNotFound.
-	if err := repo.Delete(ctx, testTenantIDOther, "pol-1"); err == nil {
+	_, delErr := repo.Delete(ctx, testTenantIDOther, "pol-1", 1)
+	if delErr == nil {
 		t.Fatal("Delete() cross-tenant expected KindNotFound, got nil")
 	} else {
-		assertPolicyKind(t, err, "Delete() cross-tenant")
+		assertPolicyKind(t, delErr, "Delete() cross-tenant")
 	}
 }
 
@@ -284,9 +443,7 @@ func conformPolicyCloneGetByIDIsIndependent(t *testing.T, factory PolicyRepoFact
 	ctx := context.Background()
 	p := conformTestPolicy("pol-1", testTenantID)
 
-	if err := repo.Save(ctx, testTenantID, p); err != nil {
-		t.Fatalf(msgPolicySaveUnexpected, err)
-	}
+	mustCreate(t, repo, testTenantID, p)
 	got, err := repo.GetByID(ctx, testTenantID, "pol-1")
 	if err != nil {
 		t.Fatalf(msgPolicyGetByIDUnexpected, err)
@@ -321,9 +478,7 @@ func conformPolicyCloneListByTenantIsIndependent(t *testing.T, factory PolicyRep
 	ctx := context.Background()
 	p := conformTestPolicy("pol-1", testTenantID)
 
-	if err := repo.Save(ctx, testTenantID, p); err != nil {
-		t.Fatalf(msgPolicySaveUnexpected, err)
-	}
+	mustCreate(t, repo, testTenantID, p)
 	list, err := repo.ListByTenant(ctx, testTenantID)
 	if err != nil {
 		t.Fatalf(msgPolicyListByTenantUnexpected, err)
@@ -355,9 +510,7 @@ func conformPolicyCloneFieldMaskIsIndependent(t *testing.T, factory PolicyRepoFa
 	ctx := context.Background()
 	p := conformTestPolicyWithFieldMask("pol-1", testTenantID)
 
-	if err := repo.Save(ctx, testTenantID, p); err != nil {
-		t.Fatalf(msgPolicySaveUnexpected, err)
-	}
+	mustCreate(t, repo, testTenantID, p)
 	got, err := repo.GetByID(ctx, testTenantID, "pol-1")
 	if err != nil {
 		t.Fatalf(msgPolicyGetByIDUnexpected, err)
@@ -391,8 +544,8 @@ func conformPolicyInvalidTenantRejected(t *testing.T, factory PolicyRepoFactory)
 	invalid := tenant.TenantID("") // empty is invalid
 
 	p := conformTestPolicy("pol-1", testTenantID)
-	if err := repo.Save(ctx, invalid, p); err == nil {
-		t.Error("Save() with empty TenantID expected error, got nil")
+	if _, err := repo.Create(ctx, invalid, p); err == nil {
+		t.Error("Create() with empty TenantID expected error, got nil")
 	}
 	if _, err := repo.GetByID(ctx, invalid, "pol-1"); err == nil {
 		t.Error("GetByID() with empty TenantID expected error, got nil")
@@ -400,7 +553,7 @@ func conformPolicyInvalidTenantRejected(t *testing.T, factory PolicyRepoFactory)
 	if _, err := repo.ListByTenant(ctx, invalid); err == nil {
 		t.Error("ListByTenant() with empty TenantID expected error, got nil")
 	}
-	if err := repo.Delete(ctx, invalid, "pol-1"); err == nil {
+	if _, delErr2 := repo.Delete(ctx, invalid, "pol-1", 1); delErr2 == nil {
 		t.Error("Delete() with empty TenantID expected error, got nil")
 	}
 }
@@ -429,9 +582,7 @@ func concurrentPolicyWorker(
 		mu.Unlock()
 	}
 
-	if err := repo.Save(ctx, testTenantID, p); err != nil {
-		recordErr(err)
-	}
+	_, _ = repo.Create(ctx, testTenantID, p) // conflict on duplicates is expected
 	if _, err := repo.GetByID(ctx, testTenantID, policyID); err != nil {
 		if !isNotFoundErr(err) {
 			recordErr(err)
@@ -441,18 +592,18 @@ func concurrentPolicyWorker(
 		recordErr(err)
 	}
 	if idx%2 == 0 {
-		if err := repo.Delete(ctx, testTenantID, policyID); err != nil {
-			if !isNotFoundErr(err) {
+		if _, err := repo.Delete(ctx, testTenantID, policyID, 1); err != nil {
+			if !isNotFoundErr(err) && !isConflictErr(err) {
 				recordErr(err)
 			}
 		}
 	}
 }
 
-// conformPolicyConcurrentNoDataRace exercises concurrent Save / GetByID /
+// conformPolicyConcurrentNoDataRace exercises concurrent Create / GetByID /
 // ListByTenant / Delete operations against the same repo to surface data races
 // when run with -race. The race detector is the primary assertion; unexpected
-// (non-KindNotFound) errors are also collected and reported.
+// (non-KindNotFound, non-KindConflict) errors are also collected and reported.
 func conformPolicyConcurrentNoDataRace(t *testing.T, factory PolicyRepoFactory) {
 	t.Parallel()
 	repo := factory(t)
@@ -479,58 +630,117 @@ func conformPolicyConcurrentNoDataRace(t *testing.T, factory PolicyRepoFactory) 
 	}
 }
 
-// conformPolicySaveNilPolicyError asserts that Save with a nil *abac.Policy
-// returns a non-nil KindInvalid error without panicking. This is the conformance
-// complement to F7 (mem nil-guard) — PG and any future implementations inherit
-// the same contract.
-func conformPolicySaveNilPolicyError(t *testing.T, factory PolicyRepoFactory) {
+// conformPolicyUpdateCASConcurrent asserts the optimistic-concurrency
+// winner-takes-all guarantee: when N goroutines concurrently Update the SAME
+// policy with the SAME expectedVersion, exactly one succeeds (version 1→2) and
+// every other call returns ErrVersionConflict — no Update silently clobbers
+// another (lost-update prevention). The mem store enforces this under its mutex;
+// the PG store enforces it via the CAS predicate WHERE version=$expected (a
+// losing UPDATE affects 0 rows → ErrVersionConflict). This is the concurrent
+// complement to Update_VersionConflict (which only proves the sequential guard).
+func conformPolicyUpdateCASConcurrent(t *testing.T, factory PolicyRepoFactory) {
 	t.Parallel()
 	repo := factory(t)
 	ctx := context.Background()
 
-	err := repo.Save(ctx, testTenantID, nil)
-	if err == nil {
-		t.Fatal("Save(ctx, t, nil) expected non-nil error, got nil")
+	created := mustCreate(t, repo, testTenantID, conformTestPolicy("pol-cas", testTenantID))
+	if created.Version != 1 {
+		t.Fatalf("Create() Version = %d, want 1", created.Version)
 	}
-	var ec *errcode.Error
-	if !errors.As(err, &ec) {
-		t.Errorf("Save(ctx, t, nil): expected *errcode.Error, got %T: %v", err, err)
-		return
+
+	const goroutines = 16
+	var (
+		wg         sync.WaitGroup
+		mu         sync.Mutex
+		successes  int
+		conflicts  int
+		unexpected []error
+	)
+	for range goroutines {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			patch := conformTestPolicy("pol-cas", testTenantID)
+			patch.Name = "racer"
+			_, uerr := repo.Update(ctx, testTenantID, "pol-cas", 1, patch)
+			mu.Lock()
+			defer mu.Unlock()
+			var ce *errcode.Error
+			switch {
+			case uerr == nil:
+				successes++
+			case errors.As(uerr, &ce) && ce.Code == errcode.ErrVersionConflict:
+				conflicts++
+			default:
+				unexpected = append(unexpected, uerr)
+			}
+		}()
 	}
-	if ec.Kind != errcode.KindInvalid {
-		t.Errorf("Save(ctx, t, nil): expected Kind KindInvalid, got %v (err: %v)", ec.Kind, err)
+	wg.Wait()
+
+	if len(unexpected) > 0 {
+		t.Fatalf("concurrent CAS produced %d unexpected error(s): first=%v", len(unexpected), unexpected[0])
+	}
+	if successes != 1 {
+		t.Errorf("concurrent CAS: expected exactly 1 winning Update, got %d", successes)
+	}
+	if conflicts != goroutines-1 {
+		t.Errorf("concurrent CAS: expected %d ErrVersionConflict, got %d", goroutines-1, conflicts)
+	}
+	stored, err := repo.GetByID(ctx, testTenantID, "pol-cas")
+	if err != nil {
+		t.Fatalf(msgPolicyGetByIDUnexpected, err)
+	}
+	if stored.Version != 2 {
+		t.Errorf("final Version = %d, want 2 (exactly one winning bump)", stored.Version)
 	}
 }
 
-// conformPolicySaveInputCloneIsIndependent asserts that the stored policy is an
-// independent deep copy of the value passed to Save: mutations made to the
-// original after Save must not be visible via GetByID or ListByTenant.
-//
-// This is the "Save-input snapshot boundary" test required by F8.
-func conformPolicySaveInputCloneIsIndependent(t *testing.T, factory PolicyRepoFactory) {
+// conformPolicyCreateNilPolicyError asserts that Create with a nil *abac.Policy
+// returns a non-nil KindInvalid error without panicking. This is the conformance
+// complement to F7 (mem nil-guard) — PG and any future implementations inherit
+// the same contract.
+func conformPolicyCreateNilPolicyError(t *testing.T, factory PolicyRepoFactory) {
 	t.Parallel()
 	repo := factory(t)
 	ctx := context.Background()
 
-	// Build a policy with nested Rules → Conditions (with Values) and
-	// Obligations.FieldMask.Fields — exercising every deep-copy branch.
+	_, err := repo.Create(ctx, testTenantID, nil)
+	if err == nil {
+		t.Fatal("Create(ctx, t, nil) expected non-nil error, got nil")
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Errorf("Create(ctx, t, nil): expected *errcode.Error, got %T: %v", err, err)
+		return
+	}
+	if ec.Kind != errcode.KindInvalid {
+		t.Errorf("Create(ctx, t, nil): expected Kind KindInvalid, got %v (err: %v)", ec.Kind, err)
+	}
+}
+
+// conformPolicyCreateInputCloneIsIndependent asserts that the stored policy is
+// an independent deep copy of the value passed to Create: mutations made to the
+// original after Create must not be visible via GetByID or ListByTenant.
+func conformPolicyCreateInputCloneIsIndependent(t *testing.T, factory PolicyRepoFactory) {
+	t.Parallel()
+	repo := factory(t)
+	ctx := context.Background()
+
 	p := conformTestPolicyWithFieldMask("pol-clone-input", testTenantID)
 
-	// Take a snapshot of all fields we will mutate afterwards.
 	origName := p.Name
 	origCondVal := p.Rules[0].Conditions[0].Values[0]
 	origField := p.Rules[0].Obligations.FieldMask.Fields[0]
 
-	if err := repo.Save(ctx, testTenantID, p); err != nil {
-		t.Fatalf(msgPolicySaveUnexpected, err)
-	}
+	_ = mustCreate(t, repo, testTenantID, p)
 
-	// Mutate the ORIGINAL p after Save.
-	p.Name = "mutated-after-save"
+	// Mutate the ORIGINAL p after Create.
+	p.Name = "mutated-after-create"
 	p.Rules[0].Conditions[0].Values[0] = "mutated-value"
 	p.Rules[0].Obligations.FieldMask.Fields[0] = "mutated_field"
 
-	// GetByID must reflect the at-Save snapshot, not the mutations.
+	// GetByID must reflect the at-Create snapshot, not the mutations.
 	got, err := repo.GetByID(ctx, testTenantID, "pol-clone-input")
 	if err != nil {
 		t.Fatalf(msgPolicyGetByIDUnexpected, err)
@@ -549,7 +759,7 @@ func conformPolicySaveInputCloneIsIndependent(t *testing.T, factory PolicyRepoFa
 		}
 	}
 
-	// ListByTenant must also reflect the at-Save snapshot.
+	// ListByTenant must also reflect the at-Create snapshot.
 	list, err := repo.ListByTenant(ctx, testTenantID)
 	if err != nil {
 		t.Fatalf(msgPolicyListByTenantUnexpected, err)

@@ -395,7 +395,7 @@ func (c *Connection) onConnectionUp(_ *autopaho.ConnectionManager, _ *paho.Conna
 		c.collector.RecordReconnect(context.Background())
 	}
 	slog.Info("mqtt: connection established",
-		slog.String("client_id", c.cfg.clientID.String()),
+		slog.String(logKeyClientID, c.cfg.clientID.String()),
 		slog.Bool("reconnect", isReconnect))
 
 	// Re-arm all registered subscriptions. autopaho does not replay SUBSCRIBE
@@ -425,7 +425,7 @@ func (c *Connection) resubscribeAll() {
 		// reused so deliveries continue to route to the same handler.
 		if reason, err := c.sendSubscribe(context.Background(), route.filter, route.qos, route.subID); err != nil {
 			slog.Warn("mqtt: resubscribe after reconnect failed; will retry on next reconnect",
-				slog.String("client_id", c.cfg.clientID.String()),
+				slog.String(logKeyClientID, c.cfg.clientID.String()),
 				slog.String("filter", route.filter.String()),
 				slog.Any("error", redactErr(err)))
 			c.collector.RecordSubscribeFailure(context.Background(), reason)
@@ -455,11 +455,11 @@ func (c *Connection) onConnectionDown() bool {
 		// Graceful-shutdown lifecycle event — Info per observability.md (not Debug,
 		// which is off in production and would hide the orderly-stop confirmation).
 		slog.Info("mqtt: connection down after close; stopping retry",
-			slog.String("client_id", c.cfg.clientID.String()))
+			slog.String(logKeyClientID, c.cfg.clientID.String()))
 		return false
 	}
 	slog.Info("mqtt: connection lost; autopaho will reconnect",
-		slog.String("client_id", c.cfg.clientID.String()))
+		slog.String(logKeyClientID, c.cfg.clientID.String()))
 	return true
 }
 
@@ -479,7 +479,7 @@ func (c *Connection) onConnectError(err error) {
 		permErr := errcode.New(errcode.KindInternal, code,
 			"mqtt: connection rejected (fail-fast)", buildConnackOpts(err)...)
 		slog.Error("mqtt: bootstrap-fatal connect error",
-			slog.String("client_id", c.cfg.clientID.String()),
+			slog.String(logKeyClientID, c.cfg.clientID.String()),
 			slog.String("errcode", string(code)),
 			slog.Any("error", redacted))
 		c.recordPermanentLocked(permErr)
@@ -489,7 +489,7 @@ func (c *Connection) onConnectError(err error) {
 		permErr := errcode.New(errcode.KindInternal, code,
 			"mqtt: connection rejected (permanent; retrying until operator fix)", buildConnackOpts(err)...)
 		slog.Warn("mqtt: permanent connect error; will retry until operator fixes",
-			slog.String("client_id", c.cfg.clientID.String()),
+			slog.String(logKeyClientID, c.cfg.clientID.String()),
 			slog.String("errcode", string(code)),
 			slog.Any("error", redacted))
 		c.recordPermanentLocked(permErr)
@@ -504,7 +504,7 @@ func (c *Connection) onConnectError(err error) {
 		}
 		c.mu.Unlock()
 		slog.Warn("mqtt: transient connect error; autopaho will retry",
-			slog.String("client_id", c.cfg.clientID.String()),
+			slog.String(logKeyClientID, c.cfg.clientID.String()),
 			slog.Any("error", redacted))
 	}
 }
@@ -568,7 +568,7 @@ func errClosed() error {
 // codes with different meanings.
 func (c *Connection) onServerDisconnect(d *paho.Disconnect) {
 	slog.Warn("mqtt: server requested disconnect",
-		slog.String("client_id", c.cfg.clientID.String()),
+		slog.String(logKeyClientID, c.cfg.clientID.String()),
 		slog.Int("reason_code", int(d.ReasonCode)),
 		slog.String("reason_name", disconnectReasonName(d.ReasonCode)))
 }
@@ -650,8 +650,8 @@ func (c *Connection) onPublishReceived(pr paho.PublishReceived) (bool, error) {
 		// closed: log and do NOT dispatch / ack (leave unacked for redelivery)
 		// rather than guess a route and risk cross-consumer-group misdelivery.
 		slog.Error("mqtt: received PUBLISH without subscription identifier; dropping (fail-closed)",
-			slog.String("client_id", c.cfg.clientID.String()),
-			slog.String("topic", safeTopicForLog(pb.Topic)))
+			slog.String(logKeyClientID, c.cfg.clientID.String()),
+			slog.String(logKeyTopic, safeTopicForLog(pb.Topic)))
 		return false, nil
 	}
 	for _, route := range snapshot {
@@ -663,9 +663,9 @@ func (c *Connection) onPublishReceived(pr paho.PublishReceived) (bool, error) {
 	// Sub-id with no matching route: the route was concurrently deregistered
 	// (cancel / close) between delivery and dispatch. Drop (do not ack).
 	slog.Warn("mqtt: received PUBLISH with unknown subscription identifier; route deregistered",
-		slog.String("client_id", c.cfg.clientID.String()),
+		slog.String(logKeyClientID, c.cfg.clientID.String()),
 		slog.Int("subscription_id", subID),
-		slog.String("topic", safeTopicForLog(pb.Topic)))
+		slog.String(logKeyTopic, safeTopicForLog(pb.Topic)))
 	return false, nil
 }
 
@@ -795,8 +795,8 @@ func (c *Connection) Subscribe(ctx context.Context, f topicns.SubscribableFilter
 			if _, unsubErr := c.cm.Unsubscribe(unsubCtx, &paho.Unsubscribe{
 				Topics: []string{f.String()},
 			}); unsubErr != nil {
-				slog.Warn("mqtt: unsubscribe on cancel failed",
-					slog.String("client_id", c.cfg.clientID.String()),
+				slog.LogAttrs(unsubCtx, slog.LevelWarn, "mqtt: unsubscribe on cancel failed",
+					slog.String(logKeyClientID, c.cfg.clientID.String()),
 					slog.String("filter", f.String()),
 					slog.Any("error", redactErr(unsubErr)))
 			}
@@ -939,8 +939,8 @@ func (c *Connection) unsubscribeAll(ctx context.Context) {
 		return
 	}
 	if _, err := c.cm.Unsubscribe(ctx, &paho.Unsubscribe{Topics: filters}); err != nil {
-		slog.Warn("mqtt: unsubscribe-all on close failed",
-			slog.String("client_id", c.cfg.clientID.String()),
+		slog.LogAttrs(ctx, slog.LevelWarn, "mqtt: unsubscribe-all on close failed",
+			slog.String(logKeyClientID, c.cfg.clientID.String()),
 			slog.Any("error", redactErr(err)))
 	}
 }

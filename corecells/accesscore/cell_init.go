@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/authorizationdecide"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/configreceive"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/identitymanage"
+	"github.com/ghbvf/gocell/corecells/accesscore/slices/policymanage"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/rbacassign"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/rbaccheck"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionlogin"
@@ -99,7 +100,7 @@ func (c *AccessCore) initValidate(durabilityMode outbox.DurabilityMode) error {
 		c.cursorCodec = codec
 		c.logger.Warn("accesscore: using default cursor codec (demo mode)")
 	}
-	c.rbacRunMode = query.RunModeForDemo(durabilityMode == outbox.DurabilityDemo)
+	c.listRunMode = query.RunModeForDemo(durabilityMode == outbox.DurabilityDemo)
 	// resolveEmitter (called above) enforces the (OutboxWriter, TxRunner)
 	// pairing invariant using the original c.txRunner; only after it
 	// succeeds do we install the demoTxRunner fallback so slice constructors
@@ -140,6 +141,10 @@ func (c *AccessCore) validateRequiredDeps() error {
 	if c.policyRepo == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"accesscore requires a policy repository: wire WithMemBundle or WithPGBundle")
+	}
+	if c.resourceAttrs == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"accesscore requires a resource attribute provider: wire WithMemBundle or WithPGBundle")
 	}
 	if c.refreshStore == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingTokenIssuer,
@@ -199,7 +204,7 @@ func (c *AccessCore) initRefreshGC() error {
 // constraints (login before identity, accountlockout before login, etc.) outweigh
 // the funlen / cognitive-complexity budgets.
 //
-//nolint:funlen,cyclop // sequential cell composition root; readability and ordering
+//nolint:funlen // sequential cell composition root; readability and ordering
 func (c *AccessCore) initSlices() error {
 	// credentialinvalidate: shared invalidator for identity-manage, rbac-assign,
 	// session-refresh, and accountlockout. Atomically bumps authz_epoch, revokes
@@ -218,20 +223,9 @@ func (c *AccessCore) initSlices() error {
 	// routes lock/unlock through authzmutate. sessionlogin imports this package
 	// instead of authzmutate directly (depguard upstream Hard funnel
 	// SESSIONLOGIN-LOCKOUT-VIA-ACCOUNTLOCKOUT-01).
-	lockoutMutator, err := authzmutate.New(c.invalidator, c.userRepo)
+	lockoutSvc, err := c.initAccountLockout()
 	if err != nil {
-		return fmt.Errorf("accesscore: build lockout authzmutator: %w", err)
-	}
-	lockoutOpts := []accountlockout.Option{}
-	if c.lockoutMetrics != nil {
-		lockoutOpts = append(lockoutOpts, accountlockout.WithMetrics(c.lockoutMetrics))
-	}
-	if c.logger != nil {
-		lockoutOpts = append(lockoutOpts, accountlockout.WithLogger(c.logger))
-	}
-	lockoutSvc, err := accountlockout.NewService(c.userRepo, lockoutMutator, c.emitter, c.clk, lockoutOpts...)
-	if err != nil {
-		return fmt.Errorf("accesscore: build accountlockout service: %w", err)
+		return err
 	}
 
 	// session-login must be constructed before identity-manage because
@@ -320,7 +314,7 @@ func (c *AccessCore) initSlices() error {
 	// wired through the bundle funnel (#1346 PR-8): WithMemBundle supplies the
 	// in-memory PolicyRepository, WithPGBundle the durable PG-backed one. Both are
 	// fail-fast at the deps preflight above (c.policyRepo != nil).
-	authzSvc, err := authorizationdecide.NewService(c.clk, c.policyRepo, c.logger,
+	authzSvc, err := authorizationdecide.NewService(c.clk, c.policyRepo, c.resourceAttrs, c.logger,
 		authorizationdecide.WithTxManager(c.txRunner))
 	if err != nil {
 		return err
@@ -328,8 +322,14 @@ func (c *AccessCore) initSlices() error {
 	c.authzSvc = authzSvc
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(authorizationdecide.SliceMetadata()))
 
+	// policymanage: L2 OutboxFact CRUD for ABAC policies (#1347 PR-9).
+	// Emits event.policy.updated.v1 atomically on every create/update/delete.
+	if err := c.initPolicyManageSlice(); err != nil {
+		return err
+	}
+
 	// rbac-check
-	rbacSvc, err := rbaccheck.NewService(c.roleRepo, c.cursorCodec, c.logger, c.rbacRunMode,
+	rbacSvc, err := rbaccheck.NewService(c.roleRepo, c.cursorCodec, c.logger, c.listRunMode,
 		rbaccheck.WithTxManager(c.txRunner))
 	if err != nil {
 		return err
@@ -409,6 +409,47 @@ func (c *AccessCore) initRbacAssign() error {
 	}
 	c.rbacAssignHandler = rbacassign.NewHandler(rbacAssignSvc)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(rbacassign.SliceMetadata()))
+	return nil
+}
+
+// initAccountLockout builds the accountlockout mediator: the typed lock/unlock
+// service that sessionlogin routes auto-lockout decisions through. Requires
+// c.invalidator (built earlier in initSlices). Extracted from initSlices to keep
+// that function's cognitive complexity within budget.
+func (c *AccessCore) initAccountLockout() (*accountlockout.Service, error) {
+	lockoutMutator, err := authzmutate.New(c.invalidator, c.userRepo)
+	if err != nil {
+		return nil, fmt.Errorf("accesscore: build lockout authzmutator: %w", err)
+	}
+	lockoutOpts := []accountlockout.Option{}
+	if c.lockoutMetrics != nil {
+		lockoutOpts = append(lockoutOpts, accountlockout.WithMetrics(c.lockoutMetrics))
+	}
+	if c.logger != nil {
+		lockoutOpts = append(lockoutOpts, accountlockout.WithLogger(c.logger))
+	}
+	lockoutSvc, err := accountlockout.NewService(c.userRepo, lockoutMutator, c.emitter, c.clk, lockoutOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("accesscore: build accountlockout service: %w", err)
+	}
+	return lockoutSvc, nil
+}
+
+// initPolicyManageSlice constructs the policymanage slice. policymanage is L2
+// OutboxFact: every policy mutation (Create/Update/Delete) atomically co-commits
+// an event.policy.updated.v1 outbox row inside RunInTx. Runtime emit fidelity
+// depends on outbox.ResolveCellEmitter output — same as initRbacAssign.
+func (c *AccessCore) initPolicyManageSlice() error {
+	pmSvc, err := policymanage.NewService(
+		c.clk, c.policyRepo, c.cursorCodec, c.logger, c.listRunMode,
+		policymanage.WithEmitter(c.emitter),
+		policymanage.WithTxManager(c.txRunner),
+	)
+	if err != nil {
+		return fmt.Errorf("accesscore: build policymanage service: %w", err)
+	}
+	c.policyHandler = policymanage.NewHandler(pmSvc)
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(policymanage.SliceMetadata()))
 	return nil
 }
 

@@ -1774,6 +1774,53 @@ func TestFMT35_HTTPServe_FieldForbidden(t *testing.T) {
 	}
 }
 
+// TestFMT35_Subscribe_ProjectionSourceOptional_NoFinding verifies that a
+// subscribe CU may set projectionSource (it is optional on subscribe) — together
+// with handler+projection — without producing an FMT-35 finding. The
+// required-when-projection coupling is a cross-column constraint owned by the
+// parser, not FMT-35's per-role matrix.
+func TestFMT35_Subscribe_ProjectionSourceOptional_NoFinding(t *testing.T) {
+	cu := metadata.ContractUsage{
+		Role:             "subscribe",
+		Handler:          "OnEvent",
+		Projection:       "order_status",
+		ProjectionSource: "saga-journal",
+	}
+	project := buildFMT35Project("event", cu)
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT35(), codeFMT35)
+	if len(matches) != 0 {
+		t.Fatalf("FMT-35: subscribe with projectionSource set must produce 0 findings, got %d: %v", len(matches), matches)
+	}
+}
+
+// TestFMT35_WebhookReceive_ProjectionSourceForbidden verifies that a
+// webhook-receive CU setting projectionSource produces an FMT-35 finding
+// (projectionSource is forbidden on every non-subscribe role).
+func TestFMT35_WebhookReceive_ProjectionSourceForbidden(t *testing.T) {
+	cu := metadata.ContractUsage{
+		Role:             "webhook-receive",
+		Handler:          "OnHook",
+		SourceID:         "stripe",
+		ProjectionSource: "outbox",
+	}
+	project := buildFMT35Project("webhook", cu)
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT35(), codeFMT35)
+	if len(matches) != 1 {
+		t.Fatalf("FMT-35: webhook-receive with projectionSource set must produce 1 finding, got %d: %v", len(matches), matches)
+	}
+	if matches[0].Field != "contractUsages[0].projectionSource" {
+		t.Errorf("FMT-35: expected Field=contractUsages[0].projectionSource, got %q", matches[0].Field)
+	}
+	if matches[0].Severity != SeverityError {
+		t.Errorf("FMT-35: expected SeverityError, got %v", matches[0].Severity)
+	}
+	if matches[0].Fix == "" {
+		t.Errorf("FMT-35: Fix field must be non-empty")
+	}
+}
+
 // --- FMT-36: cell.requires must be known capability enum values, no duplicates ---
 //
 // Design Y (#855): capability dependency is declared per-cell via cell.yaml

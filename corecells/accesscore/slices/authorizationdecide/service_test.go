@@ -71,10 +71,18 @@ func userPrincipal(claims map[string]string, roles ...string) *auth.Principal {
 	return &auth.Principal{Kind: auth.PrincipalUser, Subject: "usr-1", TenantID: testTenantIDStr, Roles: roles, Claims: claims}
 }
 
-// newEngine builds the ABAC engine over the given policy store and clock.
+// newEngine builds the ABAC engine over the given policy store and clock with
+// an empty (fail-closed) resource attribute provider.
 func newEngine(t *testing.T, repo ports.PolicyRepository, clk clock.Clock) *Service {
 	t.Helper()
-	svc, err := NewService(clk, repo, slog.Default(), WithTxManager(outbox.DemoCellTxManager()))
+	return newEngineWithAttrs(t, repo, mem.NewResourceAttributeProvider(), clk)
+}
+
+// newEngineWithAttrs builds the ABAC engine with an explicit resource attribute
+// provider, for testing SourceResource condition evaluation.
+func newEngineWithAttrs(t *testing.T, repo ports.PolicyRepository, rap ports.ResourceAttributeProvider, clk clock.Clock) *Service {
+	t.Helper()
+	svc, err := NewService(clk, repo, rap, slog.Default(), WithTxManager(outbox.DemoCellTxManager()))
 	require.NoError(t, err)
 	return svc
 }
@@ -85,7 +93,8 @@ func memEngineWithPolicies(t *testing.T, policies ...*abac.Policy) *Service {
 	t.Helper()
 	repo := mem.NewPolicyRepository()
 	for _, p := range policies {
-		require.NoError(t, repo.Save(context.Background(), testTenantID, p))
+		_, err := repo.Create(context.Background(), testTenantID, p)
+		require.NoError(t, err)
 	}
 	return newEngine(t, repo, clockmock.New(fixedClockTime))
 }
@@ -102,7 +111,27 @@ func TestNewService_NilPolicyRepo(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewService(clock.Real(), tt.repo, slog.Default(),
+			_, err := NewService(clock.Real(), tt.repo, mem.NewResourceAttributeProvider(), slog.Default(),
+				WithTxManager(outbox.DemoCellTxManager()))
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.ErrorAs(t, err, &ecErr)
+			assert.Equal(t, errcode.KindInternal, ecErr.Kind)
+		})
+	}
+}
+
+func TestNewService_NilResourceAttrs(t *testing.T) {
+	tests := []struct {
+		name string
+		rap  ports.ResourceAttributeProvider
+	}{
+		{"bare nil", nil},
+		{"typed nil", (*mem.ResourceAttributeProvider)(nil)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewService(clock.Real(), mem.NewPolicyRepository(), tt.rap, slog.Default(),
 				WithTxManager(outbox.DemoCellTxManager()))
 			require.Error(t, err)
 			var ecErr *errcode.Error
@@ -113,7 +142,7 @@ func TestNewService_NilPolicyRepo(t *testing.T) {
 }
 
 func TestNewService_NilTxManager(t *testing.T) {
-	_, err := NewService(clock.Real(), mem.NewPolicyRepository(), slog.Default())
+	_, err := NewService(clock.Real(), mem.NewPolicyRepository(), mem.NewResourceAttributeProvider(), slog.Default())
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -169,7 +198,10 @@ func TestAuthorize_DecisionMatrix(t *testing.T) {
 			wantAllow: true,
 		},
 		{
-			name: "resource condition fails closed (no source in PR-7)",
+			// Regression: empty (default) mem ResourceAttributeProvider → fail-closed.
+			// The resource has no seeded attributes so the condition resolves
+			// found=false → permit rule never grants (behavior-preserving from PR-7).
+			name: "resource condition fails closed when provider is empty (PR-9 regression)",
 			policies: []*abac.Policy{policyWith("p1", permitRule("r1", authz.Obligations{},
 				cond(abac.SourceResource, "classification", abac.OpEquals, "public")))},
 			principal: userPrincipal(map[string]string{"department": "eng"}),
@@ -351,7 +383,18 @@ func TestAuthorize_ObligationsMerge_NarrowestRowScope_UnionFieldMask(t *testing.
 // errPolicyRepo returns err from every method (store-down simulation).
 type errPolicyRepo struct{ err error }
 
-func (r errPolicyRepo) Save(context.Context, tenant.TenantID, *abac.Policy) error { return r.err }
+func (r errPolicyRepo) Create(context.Context, tenant.TenantID, *abac.Policy) (*abac.Policy, error) {
+	return nil, r.err
+}
+
+func (r errPolicyRepo) Update(_ context.Context, _ tenant.TenantID, _ string, _ int, _ *abac.Policy) (*abac.Policy, error) {
+	return nil, r.err
+}
+
+func (r errPolicyRepo) Delete(_ context.Context, _ tenant.TenantID, _ string, _ int) (*abac.Policy, error) {
+	return nil, r.err
+}
+
 func (r errPolicyRepo) GetByID(context.Context, tenant.TenantID, string) (*abac.Policy, error) {
 	return nil, r.err
 }
@@ -359,8 +402,8 @@ func (r errPolicyRepo) GetByID(context.Context, tenant.TenantID, string) (*abac.
 func (r errPolicyRepo) ListByTenant(context.Context, tenant.TenantID) ([]*abac.Policy, error) {
 	return nil, r.err
 }
-func (r errPolicyRepo) Delete(context.Context, tenant.TenantID, string) error { return r.err }
-func (r errPolicyRepo) RepoReady(context.Context) error                       { return r.err }
+
+func (r errPolicyRepo) RepoReady(context.Context) error { return r.err }
 
 func TestAuthorize_StoreDown_DeniesUnavailable(t *testing.T) {
 	eng := newEngine(t, errPolicyRepo{err: errors.New("connection refused")}, clockmock.New(fixedClockTime))
@@ -419,8 +462,18 @@ type scopeCapturingPolicyRepo struct {
 	capturedOK    bool
 }
 
-func (r *scopeCapturingPolicyRepo) Save(ctx context.Context, t tenant.TenantID, p *abac.Policy) error {
-	return r.inner.Save(ctx, t, p)
+func (r *scopeCapturingPolicyRepo) Create(ctx context.Context, t tenant.TenantID, p *abac.Policy) (*abac.Policy, error) {
+	return r.inner.Create(ctx, t, p)
+}
+
+func (r *scopeCapturingPolicyRepo) Update(
+	ctx context.Context, t tenant.TenantID, id string, expectedVersion int, p *abac.Policy,
+) (*abac.Policy, error) {
+	return r.inner.Update(ctx, t, id, expectedVersion, p)
+}
+
+func (r *scopeCapturingPolicyRepo) Delete(ctx context.Context, t tenant.TenantID, id string, expectedVersion int) (*abac.Policy, error) {
+	return r.inner.Delete(ctx, t, id, expectedVersion)
 }
 
 func (r *scopeCapturingPolicyRepo) GetByID(ctx context.Context, t tenant.TenantID, id string) (*abac.Policy, error) {
@@ -430,10 +483,6 @@ func (r *scopeCapturingPolicyRepo) GetByID(ctx context.Context, t tenant.TenantI
 func (r *scopeCapturingPolicyRepo) ListByTenant(ctx context.Context, t tenant.TenantID) ([]*abac.Policy, error) {
 	r.capturedScope, r.capturedOK = tenant.ScopeFromContext(ctx)
 	return r.inner.ListByTenant(ctx, t)
-}
-
-func (r *scopeCapturingPolicyRepo) Delete(ctx context.Context, t tenant.TenantID, id string) error {
-	return r.inner.Delete(ctx, t, id)
 }
 
 func (r *scopeCapturingPolicyRepo) RepoReady(ctx context.Context) error {
@@ -480,9 +529,10 @@ func runAuthorizerConformance(t *testing.T, factory func(t *testing.T) (ports.Po
 	build := func(t *testing.T, policies ...*abac.Policy) *Service {
 		repo, txm := factory(t)
 		for _, p := range policies {
-			require.NoError(t, repo.Save(context.Background(), testTenantID, p))
+			_, err := repo.Create(context.Background(), testTenantID, p)
+			require.NoError(t, err)
 		}
-		svc, err := NewService(clockmock.New(fixedClockTime), repo, slog.Default(), WithTxManager(txm))
+		svc, err := NewService(clockmock.New(fixedClockTime), repo, mem.NewResourceAttributeProvider(), slog.Default(), WithTxManager(txm))
 		require.NoError(t, err)
 		return svc
 	}
@@ -531,4 +581,97 @@ func TestMergeObligations_SkipsZeroRowScope_UnionsFieldMask(t *testing.T) {
 	})
 	assert.Equal(t, tenant.RowScopeSelf, merged.RowScope, "zero RowScope skipped; narrowest non-zero wins")
 	assert.ElementsMatch(t, []string{"a", "b"}, merged.FieldMask.Fields, "FieldMask is the deduped union")
+}
+
+// --- resource attribute provider wiring tests (PR-9 #1347) -------------------
+
+// TestAuthorize_ResourceAttr_FailClosedWhenEmpty is the regression test for
+// behavior preservation: an unseeded mem ResourceAttributeProvider must keep
+// the same fail-closed semantics as PR-7's hardcoded nil,false. A SourceResource
+// condition on an empty provider must deny.
+func TestAuthorize_ResourceAttr_FailClosedWhenEmpty(t *testing.T) {
+	pol := policyWith("p1", permitRule("r1", authz.Obligations{},
+		cond(abac.SourceResource, "classification", abac.OpEquals, "public")))
+
+	repo := mem.NewPolicyRepository()
+	_, createErr := repo.Create(context.Background(), testTenantID, pol)
+	require.NoError(t, createErr)
+	// empty provider — no attributes seeded
+	rap := mem.NewResourceAttributeProvider()
+	eng := newEngineWithAttrs(t, repo, rap, clockmock.New(fixedClockTime))
+
+	dec, err := eng.Authorize(reqCtx(userPrincipal(nil)), "usr-1", "/api/v1/docs/doc-1", "read")
+	require.NoError(t, err)
+	assert.False(t, dec.IsAllow(), "resource condition must deny when provider is empty (fail-closed)")
+}
+
+// TestAuthorize_ResourceAttr_PermitsWhenSeeded proves the full PIP fetch and
+// resolver path: seeding the resource attribute causes the SourceResource
+// condition to evaluate found=true and the permit rule to grant.
+func TestAuthorize_ResourceAttr_PermitsWhenSeeded(t *testing.T) {
+	const resourceID = "/api/v1/docs/doc-public"
+	pol := policyWith("p1", permitRule("r1", authz.Obligations{},
+		cond(abac.SourceResource, "classification", abac.OpEquals, "public")))
+
+	repo := mem.NewPolicyRepository()
+	_, createErr := repo.Create(context.Background(), testTenantID, pol)
+	require.NoError(t, createErr)
+
+	rap := mem.NewResourceAttributeProvider()
+	require.NoError(t, rap.Seed(testTenantID, resourceID,
+		map[string][]string{"classification": {"public"}}))
+
+	eng := newEngineWithAttrs(t, repo, rap, clockmock.New(fixedClockTime))
+
+	dec, err := eng.Authorize(reqCtx(userPrincipal(nil)), "usr-1", resourceID, "read")
+	require.NoError(t, err)
+	assert.True(t, dec.IsAllow(), "resource condition must permit when attribute matches seeded value")
+}
+
+// TestAuthorize_ResourceAttr_DifferentTenantFailsClosed verifies tenant
+// isolation in the resource attribute provider: seeding attrs for tenant A
+// must not affect an evaluation for tenant B.
+func TestAuthorize_ResourceAttr_DifferentTenantFailsClosed(t *testing.T) {
+	const resourceID = "/api/v1/docs/doc-1"
+	otherTenant, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000002")
+	require.NoError(t, err)
+
+	pol := policyWith("p1", permitRule("r1", authz.Obligations{},
+		cond(abac.SourceResource, "classification", abac.OpEquals, "public")))
+
+	repo := mem.NewPolicyRepository()
+	_, createErr := repo.Create(context.Background(), testTenantID, pol)
+	require.NoError(t, createErr)
+
+	rap := mem.NewResourceAttributeProvider()
+	// Seed attrs for the OTHER tenant only — testTenantID should still deny.
+	require.NoError(t, rap.Seed(otherTenant, resourceID,
+		map[string][]string{"classification": {"public"}}))
+
+	eng := newEngineWithAttrs(t, repo, rap, clockmock.New(fixedClockTime))
+	dec, decErr := eng.Authorize(reqCtx(userPrincipal(nil)), "usr-1", resourceID, "read")
+	require.NoError(t, decErr)
+	assert.False(t, dec.IsAllow(), "resource attrs seeded for a different tenant must not bleed across tenant boundary")
+}
+
+// TestAuthorize_ResourceAttr_MultiValuedIn verifies that multi-valued resource
+// attributes work with the OpIn operator (a resource tagged with multiple
+// sensitivity levels satisfies an "in" condition against any of them).
+func TestAuthorize_ResourceAttr_MultiValuedIn(t *testing.T) {
+	const resourceID = "/api/v1/docs/doc-multi"
+	pol := policyWith("p1", permitRule("r1", authz.Obligations{},
+		cond(abac.SourceResource, "tags", abac.OpIn, "sensitive")))
+
+	repo := mem.NewPolicyRepository()
+	_, createErr := repo.Create(context.Background(), testTenantID, pol)
+	require.NoError(t, createErr)
+
+	rap := mem.NewResourceAttributeProvider()
+	require.NoError(t, rap.Seed(testTenantID, resourceID,
+		map[string][]string{"tags": {"public", "sensitive", "pii"}}))
+
+	eng := newEngineWithAttrs(t, repo, rap, clockmock.New(fixedClockTime))
+	dec, err := eng.Authorize(reqCtx(userPrincipal(nil)), "usr-1", resourceID, "read")
+	require.NoError(t, err)
+	assert.True(t, dec.IsAllow(), "multi-valued resource attr with OpIn must permit when any value matches")
 }

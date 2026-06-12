@@ -1,0 +1,40 @@
+id: http.policy.list.v1
+kind: http
+ownerCell: accesscore
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: accesscore
+  clients:
+    - edge-bff
+  http:
+    method: GET
+    path: /api/v1/access/policies
+    queryParams:
+      cursor:
+        type: string
+        required: false
+        minLength: 0
+        maxLength: 4096
+      limit:
+        type: integer
+        required: false
+        minimum: 1
+        maximum: 500
+    successStatus: 200
+    auth:
+      responses:
+        - 503
+    noContent: false
+    responses:
+      400:
+        description: "Bad request — invalid cursor or limit parameter"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — authenticated but lacks admin role"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  response: response.schema.json

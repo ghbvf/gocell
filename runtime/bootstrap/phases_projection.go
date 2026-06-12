@@ -52,6 +52,7 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/projection"
@@ -119,21 +120,28 @@ func (c *captureRegistrar) Subscribe(
 }
 
 // cellSnapshotsHaveProjections reports whether any cell snapshot declared at
-// least one projection. Used alongside cellSnapshotsHaveSubscriptions to decide
-// whether phase6 must build the event router.
+// least one OUTBOX-source projection. Used alongside cellSnapshotsHaveSubscriptions
+// to decide whether phase6 must build the event router. Saga-journal projections
+// are deliberately excluded — they are driven by a Tailer (pull) that needs no
+// event router or subscriber, so a pure-saga-journal deployment must not force the
+// router to be built.
 func cellSnapshotsHaveProjections(s *phaseState) bool {
-	return len(collectProjectionKeys(s)) > 0
+	return len(collectOutboxProjectionKeys(s)) > 0
 }
 
-// collectProjectionKeys returns the "<cellID>/<projectionID>" identifier of every
-// projection declared across the cell snapshots, in assembly cell order. It is the
-// single source for both the phase6 "is there work?" predicate
-// (cellSnapshotsHaveProjections) and the diagnostic that names the affected
-// projections when the serial-delivery guard rejects the wired transport (#1369 F3
-// — without it the failure only carries the subscriber type, not which projections
-// triggered the check). cellID / projectionID are framework snake_case identifiers,
-// not PII.
-func collectProjectionKeys(s *phaseState) []string {
+// collectOutboxProjectionKeys returns the "<cellID>/<projectionID>" identifier of
+// every OUTBOX-source projection declared across the cell snapshots, in assembly
+// cell order. It is the single source for both the phase6 "is there work?"
+// predicate (cellSnapshotsHaveProjections) and the diagnostic that names the
+// affected projections when the serial-delivery guard rejects the wired transport
+// (#1369 F3 — without it the failure only carries the subscriber type, not which
+// projections triggered the check). cellID / projectionID are framework snake_case
+// identifiers, not PII.
+//
+// Saga-journal projections are excluded: the serial-delivery guard is about the
+// event-router transport (the Tailer does not subscribe), and a pure-saga-journal
+// deployment that wires no serial subscriber must not falsely fail the guard.
+func collectOutboxProjectionKeys(s *phaseState) []string {
 	var keys []string
 	for _, id := range s.asm.CellIDs() {
 		snap, ok := s.cellSnapshots[id]
@@ -141,6 +149,9 @@ func collectProjectionKeys(s *phaseState) []string {
 			continue
 		}
 		for _, req := range snap.Projections {
+			if req.Source == cellvocab.ProjectionSourceSagaJournal {
+				continue
+			}
 			keys = append(keys, req.CellID+"/"+req.ProjectionID)
 		}
 	}
@@ -159,16 +170,38 @@ func (b *Bootstrap) buildProjectionCoordinators(ctx context.Context, s *phaseSta
 	var out []projectionWiring
 	for _, id := range s.asm.CellIDs() {
 		snap, ok := s.cellSnapshots[id]
-		if !ok || len(snap.Projections) == 0 {
+		if !ok {
 			continue
 		}
-		wirings, err := b.buildCellProjections(ctx, id, snap.Projections)
+		// Only OUTBOX-source projections build a Coordinator here; saga-journal
+		// projections are drained separately (drainCellSagaProjections → a Tailer).
+		// Filtering BEFORE the dep/metrics check means a cell that declares only
+		// saga-journal projections does not require the outbox Coordinator deps.
+		outboxReqs := outboxProjectionRequests(snap.Projections)
+		if len(outboxReqs) == 0 {
+			continue
+		}
+		wirings, err := b.buildCellProjections(ctx, id, outboxReqs)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, wirings...)
 	}
 	return out, nil
+}
+
+// outboxProjectionRequests filters a snapshot's projection set to the outbox
+// source (the zero value "" and ProjectionSourceOutbox are equivalent). The
+// saga-journal complement is drained by drainCellSagaProjections.
+func outboxProjectionRequests(all []cell.ProjectionRequest) []cell.ProjectionRequest {
+	var out []cell.ProjectionRequest
+	for _, req := range all {
+		if req.Source == cellvocab.ProjectionSourceSagaJournal {
+			continue
+		}
+		out = append(out, req)
+	}
+	return out
 }
 
 // buildCellProjections constructs the coordinators for one cell's projection
@@ -375,7 +408,7 @@ func (b *Bootstrap) drainCellProjections(ctx context.Context, s *phaseState, evt
 	// carried by a transport that guarantees serial in-order delivery. Checked
 	// once here — the transport-meets-projection boundary — before any wiring, so
 	// a concurrent transport fails fast instead of silently dropping events.
-	if keys := collectProjectionKeys(s); len(keys) > 0 {
+	if keys := collectOutboxProjectionKeys(s); len(keys) > 0 {
 		if err := checkSubscriberGuaranteesSerialDelivery(s.sub); err != nil {
 			// Name the projections that triggered the guard so ops sees which
 			// declarations are blocked, not just the offending transport type.

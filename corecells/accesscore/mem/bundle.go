@@ -38,14 +38,16 @@ type noopSetupLock struct{}
 func (noopSetupLock) Acquire(context.Context) error { return nil }
 
 // Bundle is the mem-backed (UserRepository, RoleRepository, PolicyRepository,
-// SetupLock, TxRunner) quintuple. Fields are unexported; corecells/accesscore.
-// WithMemBundle consumes the values via the exported accessor methods.
+// ResourceAttributeProvider, SetupLock, TxRunner) sextuple. Fields are
+// unexported; corecells/accesscore.WithMemBundle consumes the values via the
+// exported accessor methods.
 type Bundle struct {
-	userRepo   ports.UserRepository
-	roleRepo   ports.RoleRepository
-	policyRepo ports.PolicyRepository
-	setupLock  ports.SetupLockAcquirer
-	txRunner   persistence.CellTxManager
+	userRepo      ports.UserRepository
+	roleRepo      ports.RoleRepository
+	policyRepo    ports.PolicyRepository
+	resourceAttrs ports.ResourceAttributeProvider
+	setupLock     ports.SetupLockAcquirer
+	txRunner      persistence.CellTxManager
 }
 
 // NewBundle constructs a mem-backed accesscore bundle. All four wired
@@ -60,12 +62,13 @@ func NewBundle(clk clock.Clock) Bundle {
 	return Bundle{
 		userRepo: store.UserRepository(),
 		roleRepo: store.RoleRepository(),
-		// The mem PolicyRepository is standalone — it shares no cross-repo
-		// invariant with users/roles (see its godoc), so it is constructed
-		// directly rather than derived from the shared store.
-		policyRepo: mem.NewPolicyRepository(),
-		setupLock:  noopSetupLock{},
-		txRunner:   persistence.WrapForCell(store.TxRunner()),
+		// The mem PolicyRepository and ResourceAttributeProvider are standalone —
+		// they share no cross-repo invariant with users/roles (see their godocs),
+		// so they are constructed directly rather than derived from the shared store.
+		policyRepo:    mem.NewPolicyRepository(),
+		resourceAttrs: mem.NewResourceAttributeProvider(),
+		setupLock:     noopSetupLock{},
+		txRunner:      persistence.WrapForCell(store.TxRunner()),
 	}
 }
 
@@ -77,6 +80,11 @@ func (b Bundle) RoleRepository() ports.RoleRepository { return b.roleRepo }
 
 // PolicyRepository returns the bundle-paired mem PolicyRepository (#1346 PR-8).
 func (b Bundle) PolicyRepository() ports.PolicyRepository { return b.policyRepo }
+
+// ResourceAttributeProvider returns the bundle-paired mem ResourceAttributeProvider
+// (ABAC PIP, PR-9 #1347). Empty by default — resource conditions are fail-closed
+// until attributes are seeded. PG-backed store is a follow-up issue.
+func (b Bundle) ResourceAttributeProvider() ports.ResourceAttributeProvider { return b.resourceAttrs }
 
 // SetupLock returns the bundle-paired SetupLock (NoopSetupLock for mem;
 // the store-paired TxRunner already serializes via store.mu).

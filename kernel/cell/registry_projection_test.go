@@ -173,8 +173,68 @@ func TestRegisterProjection_SpecValidate_RejectsInvalidSpec(t *testing.T) {
 
 	err := rec.RegisterProjection(req)
 	require.Error(t, err, "spec with empty Transport must be rejected")
+	// This path returns ContractSpec.Validate()'s bare fmt.Errorf (not an
+	// *errcode.Error), so assert on err.Error() rather than ecErr.Message — unlike
+	// the source/kind guards above which produce typed errcode errors.
 	assert.Contains(t, err.Error(), "Transport", "error must reference the invalid field")
 	assert.Empty(t, rec.Snapshot().Projections, "rejected request must not be recorded")
+}
+
+// --- saga-journal projection source (EPIC #1609 PR-05) ---
+
+func TestNewSagaJournalProjectionRequest_RecordsRequest(t *testing.T) {
+	rec := NewRegistryRecorder(nil, outbox.DurabilityDurable)
+	req := NewSagaJournalProjectionRequest(noopProjectionApply, "order_status", "orderfulfillmentcell", "sagastatus")
+
+	require.NoError(t, rec.RegisterProjection(req), "saga-journal projection (no event Spec) must record")
+
+	snap := rec.Snapshot()
+	require.Len(t, snap.Projections, 1)
+	got := snap.Projections[0]
+	assert.Equal(t, cellvocab.ProjectionSourceSagaJournal, got.Source)
+	assert.Equal(t, "order_status", got.ProjectionID)
+	assert.Equal(t, "orderfulfillmentcell", got.CellID)
+	assert.Equal(t, "sagastatus", got.SliceID)
+	assert.Equal(t, "", got.Spec.Topic, "saga-journal request carries no event Spec")
+	assert.Nil(t, got.OnReset, "saga-journal path never sets OnReset (rebuild out of scope)")
+	require.NotNil(t, got.Apply)
+}
+
+func TestRegisterProjection_SagaJournal_ForbidsEventSpec(t *testing.T) {
+	rec := NewRegistryRecorder(nil, outbox.DurabilityDurable)
+	req := NewSagaJournalProjectionRequest(noopProjectionApply, "order_status", "orderfulfillmentcell", "sagastatus")
+	// Forge an event Spec onto a saga-journal request — must be rejected.
+	req.Spec = testRegistrySpec("order-created")
+
+	err := rec.RegisterProjection(req)
+	require.Error(t, err, "saga-journal projection must not carry an event Spec")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Contains(t, ecErr.Message, "saga-journal projection must not carry an event Spec")
+	assert.Empty(t, rec.Snapshot().Projections, "rejected request must not be recorded")
+}
+
+func TestRegisterProjection_UnknownSource_Rejected(t *testing.T) {
+	rec := NewRegistryRecorder(nil, outbox.DurabilityDurable)
+	req := validProjectionRequest()
+	req.Source = cellvocab.ProjectionSource("bogus")
+
+	err := rec.RegisterProjection(req)
+	require.Error(t, err, "unknown projection source must be rejected")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Contains(t, ecErr.Message, "unknown projection source")
+	assert.Empty(t, rec.Snapshot().Projections)
+}
+
+func TestRegisterProjection_ExplicitOutboxSource_Accepted(t *testing.T) {
+	// An explicit Source=outbox must behave identically to the zero value.
+	rec := NewRegistryRecorder(nil, outbox.DurabilityDurable)
+	req := validProjectionRequest()
+	req.Source = cellvocab.ProjectionSourceOutbox
+
+	require.NoError(t, rec.RegisterProjection(req), "explicit outbox source must record like the zero value")
+	assert.Len(t, rec.Snapshot().Projections, 1)
 }
 
 // Compile-time anchor: ProjectionApply is an alias of cellvocab.ProjectionApply

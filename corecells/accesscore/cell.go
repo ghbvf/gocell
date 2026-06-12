@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/authorizationdecide"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/configreceive"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/identitymanage"
+	"github.com/ghbvf/gocell/corecells/accesscore/slices/policymanage"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/rbacassign"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/rbaccheck"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionlogin"
@@ -91,6 +92,16 @@ func withRoleRepository(r ports.RoleRepository) Option {
 // is wired through the same WithMemBundle / WithPGBundle funnel as its siblings.
 func withPolicyRepository(r ports.PolicyRepository) Option {
 	return func(c *AccessCore) { c.policyRepo = r }
+}
+
+// withResourceAttributeProvider sets the ABAC PIP (Policy Information Point)
+// for resource attributes (PR-9 #1347). Unexported — wired through the same
+// WithMemBundle / WithPGBundle funnel as its siblings so composition roots
+// cannot accidentally omit the provider. The mem bundle seeds an empty provider
+// (fail-closed); PG bundle also uses the empty mem provider until the
+// PG-backed resource_attributes store lands (#1347 follow-up).
+func withResourceAttributeProvider(p ports.ResourceAttributeProvider) Option {
+	return func(c *AccessCore) { c.resourceAttrs = p }
 }
 
 // WithEmitter injects a pre-composed outbox.CellEmitter directly into the Cell.
@@ -292,12 +303,13 @@ func WithBootstrapAuth(mw func(http.Handler) http.Handler) Option {
 // +cell:listener:ref=cell.InternalListener,prefix=/internal/v1/access
 type AccessCore struct {
 	*cell.BaseCell
-	clk          clock.Clock
-	userRepo     ports.UserRepository
-	sessionStore session.Store
-	roleRepo     ports.RoleRepository
-	policyRepo   ports.PolicyRepository
-	refreshStore refresh.Store
+	clk           clock.Clock
+	userRepo      ports.UserRepository
+	sessionStore  session.Store
+	roleRepo      ports.RoleRepository
+	policyRepo    ports.PolicyRepository
+	resourceAttrs ports.ResourceAttributeProvider
+	refreshStore  refresh.Store
 
 	// sessionStoreNil is set by WithSessionStore when a nil session.Store is
 	// passed. Phase0 validation rejects the cell when this sentinel is true
@@ -381,6 +393,9 @@ type AccessCore struct {
 	passwordHasher credential.Hasher
 
 	// Slice handlers.
+	// +slice:route:slice=policymanage,subPath=/policies
+	policyHandler *policymanage.Handler
+
 	// +slice:route:slice=identitymanage,subPath=/users
 	identityHandler *identitymanage.Handler
 
@@ -408,7 +423,10 @@ type AccessCore struct {
 
 	// +slice:route:slice=rbaccheck,subPath=/roles
 	rbacHandler *rbaccheck.Handler
-	rbacRunMode query.RunMode
+	// listRunMode is the cell-wide cursor run mode (fail-closed prod vs stale-key
+	// demo fallback) shared by every list endpoint that uses the cursor codec
+	// (rbaccheck, policymanage). Derived from the durability mode in cell_init.
+	listRunMode query.RunMode
 
 	// +slice:route:slice=rbacassign,listener=cell.InternalListener,subPath=/roles
 	rbacAssignHandler *rbacassign.Handler

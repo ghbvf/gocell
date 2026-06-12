@@ -70,9 +70,14 @@
           },
           "onReset": {
             "type": "string",
-            "description": "Exported Go identifier naming the optional rebuild Reset-phase hook method on the slice service (cell.ProjectionResetHook). Only meaningful when projection is set. Optional; subscribe-only.",
+            "description": "Exported Go identifier naming the optional rebuild Reset-phase hook method on the slice service (cell.ProjectionResetHook). Only meaningful when projection is set. Optional; subscribe-only. Forbidden when projectionSource is saga-journal (no rebuild on that path).",
             "pattern": "^[A-Z][A-Za-z0-9_]*$",
             "minLength": 1
+          },
+          "projectionSource": {
+            "type": "string",
+            "description": "Input stream selector for a projection subscribe CU. 'outbox' consumes the named event contract's topic (contract.kind=event). 'saga-journal' consumes the GLOBAL saga journal (contract.kind=saga, stream saga.journal.v1) and makes cellgen emit cell.NewSagaJournalProjectionRequest. NOTE: the saga-journal source reads EVERY saga instance and type — the contract field is a governance/lineage anchor only, NOT a runtime filter, so your Apply handler must itself filter by saga kind if it cares. onReset is forbidden with saga-journal (that path has no rebuild). REQUIRED when projection is set; subscribe-only.",
+            "enum": ["outbox", "saga-journal"]
           }
         },
         "allOf": [
@@ -94,6 +99,21 @@
             "then": { "not": { "required": ["group"] } }
           },
           {
+            "if": { "required": ["projection"] },
+            "then": { "required": ["projectionSource"] }
+          },
+          {
+            "if": { "required": ["projectionSource"] },
+            "then": { "required": ["projection"] }
+          },
+          {
+            "if": {
+              "properties": { "projectionSource": { "const": "saga-journal" } },
+              "required": ["projectionSource"]
+            },
+            "then": { "not": { "required": ["onReset"] } }
+          },
+          {
             "if": {
               "properties": { "role": { "const": "webhook-receive" } },
               "required": ["role"]
@@ -105,7 +125,8 @@
                   { "required": ["group"] },
                   { "required": ["targetSelector"] },
                   { "required": ["projection"] },
-                  { "required": ["onReset"] }
+                  { "required": ["onReset"] },
+                  { "required": ["projectionSource"] }
                 ]
               }
             }
@@ -122,7 +143,8 @@
                   { "required": ["handler"] },
                   { "required": ["group"] },
                   { "required": ["projection"] },
-                  { "required": ["onReset"] }
+                  { "required": ["onReset"] },
+                  { "required": ["projectionSource"] }
                 ]
               }
             }
@@ -146,7 +168,8 @@
                   { "required": ["sourceID"] },
                   { "required": ["targetSelector"] },
                   { "required": ["projection"] },
-                  { "required": ["onReset"] }
+                  { "required": ["onReset"] },
+                  { "required": ["projectionSource"] }
                 ]
               }
             }

@@ -112,7 +112,12 @@ const (
 	ErrAuthRoleNotFound   Code = "ERR_AUTH_ROLE_NOT_FOUND"
 	ErrAuthRoleDuplicate  Code = "ERR_AUTH_ROLE_DUPLICATE"
 	ErrAuthPolicyNotFound Code = "ERR_AUTH_POLICY_NOT_FOUND"
-	ErrAuthInvalidInput   Code = "ERR_AUTH_INVALID_INPUT"
+	// ErrAuthPolicyDuplicate signals that a Create call was made with a
+	// (tenant_id, policy_id) pair that already exists. KindConflict → HTTP 409.
+	// Distinct from ErrVersionConflict (CAS mismatch on Update/Delete) and
+	// ErrAuthPolicyNotFound. Mirrors ErrAuthRoleDuplicate / ErrConfigDuplicate.
+	ErrAuthPolicyDuplicate Code = "ERR_AUTH_POLICY_DUPLICATE"
+	ErrAuthInvalidInput    Code = "ERR_AUTH_INVALID_INPUT"
 	// ErrAuthObligationUnenforceable signals that a PEP (policy enforcement
 	// point) was handed a mandatory authorization obligation it cannot
 	// discharge — e.g. a column FieldMask naming a nested (dotted) path the

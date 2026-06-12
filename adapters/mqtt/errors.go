@@ -16,6 +16,7 @@ import (
 
 	"github.com/ghbvf/gocell/adapters/mqtt/internal/topicns"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
 // MQTT adapter error codes. All codes carry the ERR_ADAPTER_MQTT_ prefix
@@ -264,11 +265,19 @@ func isAuthRelatedPubackCode(code byte) bool {
 
 // connackClass classifies an OnConnectError into one of three categories.
 // The classification drives autopaho reconnect behavior and the readyz probe.
+//
+// classInvalid is the zero value and is used as a sentinel for init-time
+// table validation — any row whose class field is unset will be caught by
+// validateConnackReasonTable before the process accepts connections.
 type connackClass uint8
 
 const (
+	// classInvalid is the zero value of connackClass. It is never a valid
+	// classification; a row in connackReasonTable that omits its class field
+	// (zero-initialized) will be caught by validateConnackReasonTable at init.
+	classInvalid connackClass = iota
 	// classTransient: network/timeout/0x88/0x97 — autopaho retries normally.
-	classTransient connackClass = iota
+	classTransient
 	// classBootstrapFatal: 0x81 MalformedPacket / 0x82 ProtocolError /
 	// 0x84 UnsupportedProtocolVersion / 0x85 ClientIdentifierNotValid /
 	// 0x8A Banned / 0x95 PacketTooLarge + TLS x509 — operator
@@ -279,26 +288,281 @@ const (
 	classPermanentRetain
 )
 
+// ─── Single-source reason-code tables ────────────────────────────────────────
+//
+// Each packet type (CONNACK / PUBACK / SUBACK) has ONE table that is the sole
+// source of truth for:
+//   - the spec-defined reason code (byte)
+//   - the spec-defined name string
+//   - the classification / errcode mapping
+//
+// All accessor functions and classifiers are derived from these tables via
+// indexReasonsByCode. Positional struct literals are MANDATORY (no key:value
+// syntax) so that adding a field to the row type is a compile error at every
+// existing row — making it impossible to add a code without classifying it.
+//
+// To add a reason code:
+//  1. Add a positional row to the relevant table below (connackReasonTable,
+//     pubackReasonTable, or subackReasonTable).
+//  2. Update the matching golden set in
+//     tools/archtest/mqtt_reason_table_invariants_test.go (archtest will fail
+//     until both the table and the golden set match).
+//
+// ref: MQTT v5.0 spec §3.2.2.2 (CONNACK), §3.4.2.1 (PUBACK), §3.9.3 (SUBACK)
+// archtest: MQTT-CONNACK-REASON-TABLE-COMPLETE-01
+//           MQTT-PUBACK-REASON-TABLE-COMPLETE-01
+//           MQTT-SUBACK-REASON-TABLE-COMPLETE-01
+//           MQTT-REASON-TABLE-POSITIONAL-01
+
+// connackReason is one row of the CONNACK reason-code single-source table.
+// Positional literals are mandatory — named-field literals would allow omitting
+// the class field (leaving classInvalid) without a compile error.
+type connackReason struct {
+	code  byte
+	name  string
+	class connackClass
+}
+
+// ackReason is one row of the PUBACK / SUBACK reason-code single-source tables.
+// Positional literals are mandatory — same rationale as connackReason.
+type ackReason struct {
+	code    byte
+	name    string
+	errCode errcode.Code
+	kind    errcode.Kind
+}
+
+// connackReasonTable is the CONNACK single-source table (MQTT v5 §3.2.2.2).
+// 22 rows, full spec coverage. Classes annotated with inline reasons where they
+// differ from the "obvious" default.
+//
+// archtest MQTT-CONNACK-REASON-TABLE-COMPLETE-01 locks this set to the exact
+// 22 codes of §3.2.2.2. MQTT-REASON-TABLE-POSITIONAL-01 asserts no row uses
+// named-field syntax.
+var connackReasonTable = []connackReason{
+	{0x00, "Success", classTransient}, // success; classifier unreachable (error path only) — parity padding
+	{0x80, "UnspecifiedError", classTransient},
+	{0x81, "MalformedPacket", classBootstrapFatal},
+	{0x82, "ProtocolError", classBootstrapFatal},
+	{0x83, "ImplementationSpecificError", classTransient},
+	{0x84, "UnsupportedProtocolVersion", classBootstrapFatal},
+	{0x85, "ClientIdentifierNotValid", classBootstrapFatal},
+	{0x86, "BadUserNameOrPassword", classPermanentRetain},
+	{0x87, "NotAuthorized", classPermanentRetain},
+	{0x88, "ServerUnavailable", classTransient},
+	{0x89, "ServerBusy", classTransient},
+	{0x8A, "Banned", classBootstrapFatal},
+	{0x8C, "BadAuthenticationMethod", classPermanentRetain},
+	{0x90, "TopicNameInvalid", classBootstrapFatal}, // reclassified transient→fatal: will-topic client config error
+	{0x95, "PacketTooLarge", classBootstrapFatal},
+	{0x97, "QuotaExceeded", classTransient},
+	{0x99, "PayloadFormatInvalid", classBootstrapFatal}, // reclassified: will-payload format error
+	{0x9A, "RetainNotSupported", classBootstrapFatal},   // reclassified: will-retain vs broker capability mismatch
+	{0x9B, "QoSNotSupported", classBootstrapFatal},      // reclassified: will-QoS vs broker capability mismatch
+	{0x9C, "UseAnotherServer", classTransient},          // temporary redirect; may lift, retry safe
+	{0x9D, "ServerMoved", classBootstrapFatal},          // reclassified: permanent redirect; same endpoint never resolves
+	{0x9F, "ConnectionRateExceeded", classTransient},
+}
+
+// pubackReasonTable is the PUBACK single-source table (MQTT v5 §3.4.2.1).
+// 9 rows, full spec coverage. 0x91 is now explicit (was default in old switch).
+//
+// archtest MQTT-PUBACK-REASON-TABLE-COMPLETE-01 locks this set to the 9 codes
+// of §3.4.2.1. MQTT-REASON-TABLE-POSITIONAL-01 asserts no row uses named-field
+// syntax.
+var pubackReasonTable = []ackReason{
+	// 0x00 success: errCode="" never used to build an error; caller guards reason != 0x00 before classifier.
+	{0x00, "Success", "", errcode.KindInternal},
+	{0x10, "NoMatchingSubscribers", ErrAdapterMQTTPublishNoSubscribers, errcode.KindUnavailable},
+	{0x80, "UnspecifiedError", ErrAdapterMQTTPublishRejected, errcode.KindInternal},
+	{0x83, "ImplementationSpecificError", ErrAdapterMQTTPublishRejected, errcode.KindInternal},
+	{0x87, "NotAuthorized", ErrAdapterMQTTPublishNotAuthorized, errcode.KindUnavailable},
+	{0x90, "TopicNameInvalid", ErrAdapterMQTTPublishRejected, errcode.KindInvalid},
+	{0x91, "PacketIdentifierInUse", ErrAdapterMQTTPublishRejected, errcode.KindInternal}, // was default; now explicit
+	{0x97, "QuotaExceeded", ErrAdapterMQTTPublishRateLimited, errcode.KindUnavailable},
+	{0x99, "PayloadFormatInvalid", ErrAdapterMQTTPublishPayloadFormatInvalid, errcode.KindInvalid},
+}
+
+// subackReasonTable is the SUBACK single-source table (MQTT v5 §3.9.3).
+// 12 rows, full spec coverage. 0x83 and 0x91 are now explicit (were default).
+//
+// archtest MQTT-SUBACK-REASON-TABLE-COMPLETE-01 locks this set to the 12 codes
+// of §3.9.3. MQTT-REASON-TABLE-POSITIONAL-01 asserts no row uses named-field
+// syntax.
+var subackReasonTable = []ackReason{
+	// 0x00/0x01/0x02 success: errCode="" never used to build an error; caller guards reason >= 0x80 before classifier.
+	{0x00, "GrantedQoS0", "", errcode.KindInternal},
+	{0x01, "GrantedQoS1", "", errcode.KindInternal}, // success; see comment on 0x00
+	{0x02, "GrantedQoS2", "", errcode.KindInternal}, // success; see comment on 0x00
+	{0x80, "UnspecifiedError", ErrAdapterMQTTSubscribe, errcode.KindInternal},
+	{0x83, "ImplementationSpecificError", ErrAdapterMQTTSubscribe, errcode.KindInternal}, // was default; now explicit
+	{0x87, "NotAuthorized", ErrAdapterMQTTSubscribeNotAuthorized, errcode.KindInternal},
+	{0x8F, "TopicFilterInvalid", ErrAdapterMQTTSubscribe, errcode.KindInternal},
+	{0x91, "PacketIdentifierInUse", ErrAdapterMQTTSubscribe, errcode.KindInternal}, // was default; now explicit
+	{0x97, "QuotaExceeded", ErrAdapterMQTTSubscribeRateLimited, errcode.KindUnavailable},
+	{0x9E, "SharedSubscriptionsNotSupported", ErrAdapterMQTTSharedSubsUnsupported, errcode.KindInternal},
+	{0xA1, "SubscriptionIdentifiersNotSupported", ErrAdapterMQTTSubscriptionIDsUnsupported, errcode.KindInternal},
+	{0xA2, "WildcardSubscriptionsNotSupported", ErrAdapterMQTTSubscribe, errcode.KindInternal},
+}
+
+// ─── Derived index maps ───────────────────────────────────────────────────────
+
+// indexReasonsByCode builds a map[byte]R from a slice of rows, using code(r) to
+// extract the key. It is the single generic helper for all three tables,
+// eliminating repeated build logic (go-standards: abstract when logic repeats 3×).
+// It does NOT silently overwrite duplicates — callers must validate first.
+func indexReasonsByCode[R any](rows []R, code func(R) byte) map[byte]R {
+	m := make(map[byte]R, len(rows))
+	for _, r := range rows {
+		m[code(r)] = r
+	}
+	return m
+}
+
+// Package-level indexes derived from the single-source tables.
+var (
+	connackIndex = indexReasonsByCode(connackReasonTable, func(r connackReason) byte { return r.code })
+	pubackIndex  = indexReasonsByCode(pubackReasonTable, func(r ackReason) byte { return r.code })
+	subackIndex  = indexReasonsByCode(subackReasonTable, func(r ackReason) byte { return r.code })
+)
+
+// ─── Init validation ──────────────────────────────────────────────────────────
+
+// validateConnackReasonTable panics (via panicregister.Approved wrapping
+// errcode.Assertion) if rows contains duplicate codes or any row with
+// class == classInvalid (the zero value). It is the exported validation entry
+// point so tests can call it with a bad slice.
+//
+// ref: error-handling.md §Panic — A-class programmer error uses errcode.Assertion
+// wrapped in panicregister.Approved (PANIC-REGISTERED-01).
+func validateConnackReasonTable(rows []connackReason) {
+	seen := make(map[byte]bool, len(rows))
+	for _, r := range rows {
+		if seen[r.code] {
+			panic(panicregister.Approved(
+				"mqtt-reason-table-duplicate-connack-code",
+				errcode.Assertion("mqtt-reason-table-duplicate-connack-code: 0x%02x", r.code),
+			))
+		}
+		seen[r.code] = true
+		if r.class == classInvalid {
+			panic(panicregister.Approved(
+				"mqtt-reason-table-class-invalid-on-connack-code",
+				errcode.Assertion("mqtt-reason-table-class-invalid-on-connack-code: 0x%02x", r.code),
+			))
+		}
+	}
+}
+
+// validateAckReasonTable panics (via panicregister.Approved wrapping
+// errcode.Assertion) if rows contains duplicate codes, or if any error reason
+// row (code >= 0x80) carries an empty errCode.
+//
+// The empty-errCode check is the ACK-table counterpart of validateConnackReasonTable's
+// classInvalid zero-value sentinel: positional literals guarantee field COUNT but
+// not field SEMANTICS, so a future error row could silently leave errCode == ""
+// (the errcode.Code zero value). The classifiers (classifyPubackReason /
+// classifySubackReason) run only on the error path — publisher.go and connection.go
+// both gate reason >= 0x80 before calling — so an error row with errCode == ""
+// would let that path construct an empty errcode.Code. This init-time guard makes
+// that table state a fail-fast instead of a silent runtime defect. Success rows
+// (code < 0x80, e.g. 0x00/0x01/0x02) legitimately carry "".
+//
+// kind is intentionally NOT validated: errcode.KindInternal is the zero value (a
+// legitimate fail-closed classification, see pkg/errcode/status.go), so an unset
+// kind is indistinguishable from a deliberate KindInternal and carries no gap.
+//
+// ref: error-handling.md §Panic — A-class programmer error uses errcode.Assertion
+// wrapped in panicregister.Approved (PANIC-REGISTERED-01).
+// ref: validateConnackReasonTable (same file) — classInvalid sentinel precedent.
+func validateAckReasonTable(label string, rows []ackReason) {
+	seen := make(map[byte]bool, len(rows))
+	for _, r := range rows {
+		if seen[r.code] {
+			panic(panicregister.Approved(
+				"mqtt-reason-table-duplicate-ack-code",
+				errcode.Assertion("mqtt-reason-table-duplicate-%s-code: 0x%02x", label, r.code),
+			))
+		}
+		seen[r.code] = true
+		if r.code >= 0x80 && r.errCode == "" {
+			panic(panicregister.Approved(
+				"mqtt-reason-table-empty-errcode-on-ack-error-code",
+				errcode.Assertion("mqtt-reason-table-empty-errcode-on-%s-error-code: 0x%02x", label, r.code),
+			))
+		}
+	}
+}
+
+func init() {
+	validateConnackReasonTable(connackReasonTable)
+	validateAckReasonTable("PUBACK", pubackReasonTable)
+	validateAckReasonTable("SUBACK", subackReasonTable)
+}
+
+// ─── Name accessors (derived from tables) ─────────────────────────────────────
+
+// connackReasonName returns the spec name for an MQTT v5 CONNACK reason
+// code. Unknown codes return "Unknown" so operators can still match the
+// numeric reasonCode field.
+func connackReasonName(code byte) string {
+	if r, ok := connackIndex[code]; ok {
+		return r.name
+	}
+	return "Unknown"
+}
+
+// pubackReasonName returns the spec name for an MQTT v5 PUBACK reason code.
+// Unknown codes return "Unknown" so operators can still match the numeric
+// reasonCode field in structured logs.
+func pubackReasonName(code byte) string {
+	if r, ok := pubackIndex[code]; ok {
+		return r.name
+	}
+	return "Unknown"
+}
+
+// subackReasonName returns the spec name for an MQTT v5 SUBACK reason code.
+// Unknown codes return "Unknown" so operators can still match the numeric
+// reasonCode field in structured logs.
+func subackReasonName(code byte) string {
+	if r, ok := subackIndex[code]; ok {
+		return r.name
+	}
+	return "Unknown"
+}
+
+// ─── Classifiers (derived from tables) ───────────────────────────────────────
+
+// errcodeForClass maps a connackClass to its errcode.Code. classTransient maps
+// to ErrAdapterMQTTConnect; all other classes map to ErrAdapterMQTTConnectPermanent.
+//
+// Note: both classBootstrapFatal AND classPermanentRetain map to
+// ErrAdapterMQTTConnectPermanent — the errcode only expresses "permanent connect
+// failure". The differing downstream behavior (classPermanentRetain → readyz 503
+// + autopaho continues retrying; classBootstrapFatal → bootstrap shutdown) is
+// driven by the returned connackClass, not the errcode.
+//
+// Note: classInvalid (zero value) also falls to the else branch, but it is
+// prevented from reaching this function at runtime by validateConnackReasonTable
+// which panics at init time if any row carries classInvalid.
+func errcodeForClass(class connackClass) errcode.Code {
+	if class == classTransient {
+		return ErrAdapterMQTTConnect
+	}
+	return ErrAdapterMQTTConnectPermanent
+}
+
 // classifyConnackReason inspects an OnConnectError and maps it to a
 // connackClass and the errcode.Code to stamp on the returned error.
 //
-// It recovers *autopaho.ConnackError via errors.As and maps the CONNACK
-// ReasonCode field (byte) to a class. TLS handshake errors are classified as
-// classBootstrapFatal regardless of the ConnackError path.
+// It recovers *autopaho.ConnackError via errors.As and looks up the CONNACK
+// ReasonCode in connackReasonTable (the single source of truth). TLS handshake
+// errors are classified as classBootstrapFatal regardless of the ConnackError path.
 //
-// Reason-code → class mapping (ref: MQTT v5.0 spec §3.2.2.2):
-//
-//	0x87 NotAuthorized                → classPermanentRetain + ErrAdapterMQTTConnectPermanent
-//	0x86 BadUserNameOrPassword        → classPermanentRetain + ErrAdapterMQTTConnectPermanent
-//	0x81 MalformedPacket              → classBootstrapFatal  + ErrAdapterMQTTConnectPermanent
-//	0x82 ProtocolError                → classBootstrapFatal  + ErrAdapterMQTTConnectPermanent
-//	0x84 UnsupportedProtocolVersion   → classBootstrapFatal  + ErrAdapterMQTTConnectPermanent
-//	0x85 ClientIdentifierNotValid     → classBootstrapFatal  + ErrAdapterMQTTConnectPermanent
-//	0x8A Banned                       → classBootstrapFatal  + ErrAdapterMQTTConnectPermanent
-//	0x95 PacketTooLarge               → classBootstrapFatal  + ErrAdapterMQTTConnectPermanent
-//	0x88 ServerUnavailable            → classTransient       + ErrAdapterMQTTConnect
-//	0x97 QuotaExceeded                → classTransient       + ErrAdapterMQTTConnect
-//	default                           → classTransient       + ErrAdapterMQTTConnect
+// Full §3.2.2.2 coverage is enforced by archtest
+// MQTT-CONNACK-REASON-TABLE-COMPLETE-01. The classifier is derived entirely from
+// connackReasonTable — adding a code to the table automatically includes it here.
 //
 // ref: MQTT v5.0 spec §3.2.2.2 Connect Reason Code table
 func classifyConnackReason(err error) (connackClass, errcode.Code) {
@@ -311,208 +575,66 @@ func classifyConnackReason(err error) (connackClass, errcode.Code) {
 		return classTransient, ErrAdapterMQTTConnect
 	}
 
-	switch connackErr.ReasonCode {
-	case 0x87, // NotAuthorized
-		0x86, // BadUserNameOrPassword
-		0x8C: // BadAuthenticationMethod — broker rejects auth method itself; operator must fix client config.
-		return classPermanentRetain, ErrAdapterMQTTConnectPermanent
-
-	case 0x81, // MalformedPacket
-		0x82, // ProtocolError
-		0x84, // UnsupportedProtocolVersion
-		0x85, // ClientIdentifierNotValid
-		0x8A, // Banned
-		0x95: // PacketTooLarge (bootstrap fatal: maximum packet size mismatch)
-		return classBootstrapFatal, ErrAdapterMQTTConnectPermanent
-
-	default:
-		// 0x88 ServerUnavailable, 0x97 QuotaExceeded, and all unrecognized codes.
-		return classTransient, ErrAdapterMQTTConnect
+	if r, ok := connackIndex[connackErr.ReasonCode]; ok {
+		return r.class, errcodeForClass(r.class)
 	}
-}
-
-// connackReasonNames is the single source of MQTT v5 CONNACK reason code →
-// spec-defined name mapping (MQTT v5.0 §3.2.2.2 Connect Reason Code table).
-// Encoded as a const-literal map so message PII constraints are satisfied
-// (names are programmer-written, not runtime data).
-var connackReasonNames = map[byte]string{
-	0x00: "Success",
-	0x80: "UnspecifiedError",
-	0x81: "MalformedPacket",
-	0x82: "ProtocolError",
-	0x83: "ImplementationSpecificError",
-	0x84: "UnsupportedProtocolVersion",
-	0x85: "ClientIdentifierNotValid",
-	0x86: "BadUserNameOrPassword",
-	0x87: "NotAuthorized",
-	0x88: "ServerUnavailable",
-	0x89: "ServerBusy",
-	0x8A: "Banned",
-	0x8C: "BadAuthenticationMethod",
-	0x90: "TopicNameInvalid",
-	0x95: "PacketTooLarge",
-	0x97: "QuotaExceeded",
-	0x99: "PayloadFormatInvalid",
-	0x9A: "RetainNotSupported",
-	0x9B: "QoSNotSupported",
-	0x9C: "UseAnotherServer",
-	0x9D: "ServerMoved",
-	0x9F: "ConnectionRateExceeded",
-}
-
-// connackReasonName returns the spec name for an MQTT v5 CONNACK reason
-// code. Unknown codes return "Unknown" so operators can still match the
-// numeric reasonCode field.
-func connackReasonName(code byte) string {
-	if name, ok := connackReasonNames[code]; ok {
-		return name
-	}
-	return "Unknown"
+	// Unrecognized non-spec code: retry safely.
+	return classTransient, ErrAdapterMQTTConnect
 }
 
 // classifyPubackReason maps an MQTT v5 PUBACK reason code (byte) to the
 // corresponding errcode.Code and errcode.Kind.
 //
-// Reason-code → (code, kind) mapping (ref: MQTT v5.0 spec §3.4.2.1):
+// The mapping is derived from pubackReasonTable (the single source of truth).
+// Full §3.4.2.1 coverage is enforced by archtest MQTT-PUBACK-REASON-TABLE-COMPLETE-01.
+// On unrecognized code, returns (ErrAdapterMQTTPublishRejected, KindInternal) —
+// identical to the prior default branch.
 //
-//	0x00 Success                  → ("", KindInternal)               — Ack path; caller MUST guard ReasonCode != 0x00 before calling
-//	0x10 NoMatchingSubscribers    → (ErrAdapterMQTTPublishNoSubscribers, KindUnavailable)
-//	0x80 UnspecifiedError         → (ErrAdapterMQTTPublishRejected,            KindInternal)
-//	0x83 ImplementationSpecific   → (ErrAdapterMQTTPublishRejected,            KindInternal)
-//	0x87 NotAuthorized            → (ErrAdapterMQTTPublishNotAuthorized,       KindUnavailable) — retryable; operator fixes ACL
-//	0x90 TopicNameInvalid         → (ErrAdapterMQTTPublishRejected,            KindInvalid)
-//	0x97 QuotaExceeded            → (ErrAdapterMQTTPublishRateLimited,         KindUnavailable)
-//	0x99 PayloadFormatInvalid     → (ErrAdapterMQTTPublishPayloadFormatInvalid, KindInvalid)
-//	default                       → (ErrAdapterMQTTPublishRejected,            KindInternal)
+// Returns empty errCode for 0x00 Success; callers MUST check reason code != 0x00
+// (success path) before calling. Passing 0x00 returns ("", KindInternal) which
+// must not be used to construct an error.
 //
 // ref: MQTT v5.0 spec §3.4.2.1 PUBACK Reason Code table
 func classifyPubackReason(code byte) (errcode.Code, errcode.Kind) {
-	switch code {
-	case 0x00: // Success — Ack path; caller MUST guard ReasonCode != 0x00 before calling
-		return "", errcode.KindInternal
-	case 0x10: // No Matching Subscribers
-		return ErrAdapterMQTTPublishNoSubscribers, errcode.KindUnavailable
-	case 0x80: // Unspecified Error
-		return ErrAdapterMQTTPublishRejected, errcode.KindInternal
-	case 0x83: // Implementation Specific Error
-		return ErrAdapterMQTTPublishRejected, errcode.KindInternal
-	case 0x87: // Not Authorized — retryable after operator fixes ACL (aligned with CONNACK 0x87 classPermanentRetain)
-		return ErrAdapterMQTTPublishNotAuthorized, errcode.KindUnavailable
-	case 0x90: // Topic Name Invalid
-		return ErrAdapterMQTTPublishRejected, errcode.KindInvalid
-	case 0x97: // Quota Exceeded
-		return ErrAdapterMQTTPublishRateLimited, errcode.KindUnavailable
-	case 0x99: // Payload Format Invalid — distinct from PayloadTooLarge (size)
-		return ErrAdapterMQTTPublishPayloadFormatInvalid, errcode.KindInvalid
-	default:
-		return ErrAdapterMQTTPublishRejected, errcode.KindInternal
+	if r, ok := pubackIndex[code]; ok {
+		return r.errCode, r.kind
 	}
-}
-
-// pubackReasonNames is the single source of MQTT v5 PUBACK reason code →
-// spec-defined name mapping (MQTT v5.0 §3.4.2.1 PUBACK Reason Code table).
-// Distinct from connackReasonNames — the two tables are different despite
-// some overlapping codes (CONNACK §3.2.2.2 vs PUBACK §3.4.2.1).
-var pubackReasonNames = map[byte]string{
-	0x00: "Success",
-	0x10: "NoMatchingSubscribers",
-	0x80: "UnspecifiedError",
-	0x83: "ImplementationSpecificError",
-	0x87: "NotAuthorized",
-	0x90: "TopicNameInvalid",
-	0x91: "PacketIdentifierInUse",
-	0x97: "QuotaExceeded",
-	0x99: "PayloadFormatInvalid",
-}
-
-// pubackReasonName returns the spec name for an MQTT v5 PUBACK reason code.
-// Unknown codes return "Unknown" so operators can still match the numeric
-// reasonCode field in structured logs.
-func pubackReasonName(code byte) string {
-	if name, ok := pubackReasonNames[code]; ok {
-		return name
-	}
-	return "Unknown"
+	return ErrAdapterMQTTPublishRejected, errcode.KindInternal
 }
 
 // classifySubackReason maps an MQTT v5 SUBACK reason code (byte) to the
-// corresponding errcode.Code and errcode.Kind. It mirrors classifyPubackReason
-// but covers the SUBACK reason-code table (MQTT v5.0 §3.9.3).
+// corresponding errcode.Code and errcode.Kind.
 //
-// Reason-code → (code, kind) mapping:
+// The mapping is derived from subackReasonTable (the single source of truth).
+// Full §3.9.3 coverage is enforced by archtest MQTT-SUBACK-REASON-TABLE-COMPLETE-01.
+// On unrecognized code, returns (ErrAdapterMQTTSubscribe, KindInternal) —
+// identical to the prior default branch.
 //
-//	0x80 UnspecifiedError                  → (ErrAdapterMQTTSubscribe,             KindInternal)    — fail-fast
-//	0x87 NotAuthorized                     → (ErrAdapterMQTTSubscribeNotAuthorized, KindInternal)   — ACL config; fail-fast
-//	0x8F TopicFilterInvalid                → (ErrAdapterMQTTSubscribe,             KindInternal)    — fail-fast
-//	0x97 QuotaExceeded                     → (ErrAdapterMQTTSubscribeRateLimited,  KindUnavailable) — transient
-//	0x9E SharedSubsNotSupported            → (ErrAdapterMQTTSharedSubsUnsupported,      KindInternal) — fail-fast
-//	0xA1 SubscriptionIdsNotSupported       → (ErrAdapterMQTTSubscriptionIDsUnsupported, KindInternal) — fail-fast (sub-id routing required)
-//	0xA2 WildcardSubsNotSupported          → (ErrAdapterMQTTSubscribe,                  KindInternal) — fail-fast
-//	default (>= 0x80)                       → (ErrAdapterMQTTSubscribe,             KindInternal)
-//
-// Reason bytes < 0x80 are granted-QoS success values (0x00/0x01/0x02); the caller
-// MUST guard reason >= 0x80 before invoking this function (parallel to
-// classifyPubackReason's 0x00 contract).
+// Returns empty errCode for 0x00/0x01/0x02 (GrantedQoS0/1/2 success codes);
+// callers MUST check reason code >= 0x80 (error path) before calling. Passing
+// a success code returns ("", KindInternal) which must not be used to construct
+// an error.
 //
 // ref: MQTT v5.0 spec §3.9.3 Subscribe Reason Code table
 func classifySubackReason(code byte) (errcode.Code, errcode.Kind) {
-	switch code {
-	case 0x80: // Unspecified Error
-		return ErrAdapterMQTTSubscribe, errcode.KindInternal
-	case 0x87: // Not Authorized — ACL config; fail-fast
-		return ErrAdapterMQTTSubscribeNotAuthorized, errcode.KindInternal
-	case 0x8F: // Topic Filter Invalid
-		return ErrAdapterMQTTSubscribe, errcode.KindInternal
-	case 0x97: // Quota Exceeded — transient, retry
-		return ErrAdapterMQTTSubscribeRateLimited, errcode.KindUnavailable
-	case 0x9E: // Shared Subscriptions Not Supported
-		return ErrAdapterMQTTSharedSubsUnsupported, errcode.KindInternal
-	case 0xA1: // Subscription Identifiers Not Supported — fail-fast (sub-id routing is required)
-		return ErrAdapterMQTTSubscriptionIDsUnsupported, errcode.KindInternal
-	case 0xA2: // Wildcard Subscriptions Not Supported
-		return ErrAdapterMQTTSubscribe, errcode.KindInternal
-	default:
-		return ErrAdapterMQTTSubscribe, errcode.KindInternal
+	if r, ok := subackIndex[code]; ok {
+		return r.errCode, r.kind
 	}
-}
-
-// subackReasonNames is the single source of MQTT v5 SUBACK reason code →
-// spec-defined name mapping (MQTT v5.0 §3.9.3 Subscribe Reason Code table).
-// Distinct from connackReasonNames / pubackReasonNames / disconnectReasonNames —
-// the packets share some numeric codes with different meanings. Granted-QoS
-// success values (0x00/0x01/0x02) are enumerated so diagnostics can render them.
-var subackReasonNames = map[byte]string{
-	0x00: "GrantedQoS0",
-	0x01: "GrantedQoS1",
-	0x02: "GrantedQoS2",
-	0x80: "UnspecifiedError",
-	0x83: "ImplementationSpecificError",
-	0x87: "NotAuthorized",
-	0x8F: "TopicFilterInvalid",
-	0x91: "PacketIdentifierInUse",
-	0x97: "QuotaExceeded",
-	0x9E: "SharedSubscriptionsNotSupported",
-	0xA1: "SubscriptionIdentifiersNotSupported",
-	0xA2: "WildcardSubscriptionsNotSupported",
-}
-
-// subackReasonName returns the spec name for an MQTT v5 SUBACK reason code.
-// Unknown codes return "Unknown" so operators can still match the numeric
-// reasonCode field in structured logs.
-func subackReasonName(code byte) string {
-	if name, ok := subackReasonNames[code]; ok {
-		return name
-	}
-	return "Unknown"
+	return ErrAdapterMQTTSubscribe, errcode.KindInternal
 }
 
 // disconnectReasonNames is the single source of MQTT v5 DISCONNECT reason code →
 // spec-defined name mapping (MQTT v5.0 §3.14.2.1 Disconnect Reason Code table).
-// This is a DISTINCT table from connackReasonNames (§3.2.2.2) and
-// pubackReasonNames (§3.4.2.1): the three packets share some numeric codes with
+// This is a DISTINCT table from connackReasonTable (§3.2.2.2) and
+// pubackReasonTable (§3.4.2.1): the three packets share some numeric codes with
 // different meanings, so a server-initiated DISCONNECT must be decoded with this
 // table, not the CONNACK one. Only the server-initiated subset is enumerated;
 // unrecognized codes fall back to "Unknown".
+//
+// Intentionally kept as a standalone hand-written map (no single-source table
+// + classifier): DISCONNECT has no classifier function, so there is no
+// omission-silent-default risk from a missing code. A standalone map is simpler
+// and sufficient for the logging-only use case. Ref: ADR-048 §2.9 / §Amendment 2026-06-11.
 var disconnectReasonNames = map[byte]string{
 	0x00: "NormalDisconnection",
 	0x04: "DisconnectWithWillMessage",

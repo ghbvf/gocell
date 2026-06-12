@@ -35,8 +35,10 @@
 //   - RoleRepository — no carve-out.
 //   - UserRepository — no carve-out. PR-3b (#1617) deleted the tenant-less
 //     by-PK GetByID; every UserRepository method now carries tenant.TenantID.
-//   - PolicyRepository — no carve-out. PR-6 (#1344) ABAC policy model; a policy
-//     id is unique only within a tenant, so every method must be tenant-scoped.
+//   - PolicyRepository — carve-out: RepoReady (schema-existence probe, not a
+//     tenant-scoped data read). PR-6 (#1344) ABAC policy model; a policy id is
+//     unique only within a tenant, so every DATA method is tenant-scoped — only
+//     the readiness probe is tenant-less.
 //
 // configcore ports (configcorePortsPkg):
 //   - ConfigRepository — carve-out: RepoReady (schema-existence probe, not a
@@ -48,6 +50,9 @@
 //   - ConfigRepository.RepoReady — schema-existence probe (exercises
 //     config_entries + feature_flags table presence); not a tenant-scoped data
 //     read, so a tenant predicate is meaningless.
+//   - PolicyRepository.RepoReady — schema-existence probe (policies table
+//     reachability, #1346 PR-8); not a tenant-scoped data read, so a tenant
+//     predicate is meaningless.
 //
 // RoleRepository has NO carve-out: a role id is unique only within a tenant, so
 // even a by-id read must be tenant-scoped.
@@ -128,6 +133,8 @@ var tenantParamCarveOut = map[string]string{
 	// scope. TENANT-REPO-CALLSITE-FUNNEL-01 was retired together with it.
 	"ConfigRepository.RepoReady": "healthz schema-existence probe (exercises config_entries + " +
 		"feature_flags table presence); not a tenant-scoped data read, so a tenant predicate is meaningless",
+	"PolicyRepository.RepoReady": "healthz schema-existence probe (policies table reachability, " +
+		"#1346 PR-8); not a tenant-scoped data read, so a tenant predicate is meaningless",
 }
 
 // isTenantIDType reports whether t is pkg/tenant.TenantID (alias-proof via the

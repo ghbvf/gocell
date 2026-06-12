@@ -468,15 +468,36 @@ func itestPollDispositionSettlement(
 	wantRelease int,
 ) {
 	t.Helper()
-	deadline := time.Now().Add(testtime.D10s)
-	for time.Now().Before(deadline) {
+	testwait.External(t, "mqtt-disposition-settled", func() bool {
 		s, f, _ := coll.snapshot()
 		_, rel := settlement.counts()
-		if s >= wantSuccess && rel >= wantRelease && (wantReason == "" || f >= 1) {
-			break
-		}
-		time.Sleep(testtime.D10ms) //archtest:allow:test-sleep poll-loop: real broker delivery latency
-	}
+		return s >= wantSuccess && rel >= wantRelease && (wantReason == "" || f >= 1)
+	}, testtime.D10s, testtime.D10ms,
+		dispositionDiag{coll, settlement, wantSuccess, wantReason, wantRelease})
+}
+
+// dispositionDiag renders the live disposition counters at format time (not at
+// call time, which would capture the pre-poll zero state). It is passed as the
+// testwait.External msgAndArg so a poll timeout's Fatalf carries the
+// actual-vs-wanted counters. Without it the diagnostics are lost: External
+// Fatals on timeout, aborting the test before itestAssertDispositionCounts
+// (which prints the per-counter diffs) can run.
+type dispositionDiag struct {
+	coll        *recordingSubCollector
+	settlement  *recordingSettlement
+	wantSuccess int
+	wantReason  ConsumeFailureReason
+	wantRelease int
+}
+
+func (d dispositionDiag) String() string {
+	success, failure, reason := d.coll.snapshot()
+	commit, release := d.settlement.counts()
+	return fmt.Sprintf(
+		"actual success=%d failure=%d reason=%q commit=%d release=%d; "+
+			"want success=%d release=%d reason=%q",
+		success, failure, reason, commit, release,
+		d.wantSuccess, d.wantRelease, d.wantReason)
 }
 
 // itestAssertDispositionCounts reads the final snapshot from coll and settlement
@@ -789,19 +810,11 @@ func TestIntegration_Subscriber_ClientIDConflict(t *testing.T) {
 	// a HARD assertion: conn1 MUST be observed non-healthy within the window. It
 	// is NOT skipped — a broker that never evicts the first session is a real
 	// regression this test exists to catch.
-	observedUnhealthy := false
-	deadline := time.Now().Add(testtime.D10s)
-	for time.Now().Before(deadline) {
-		if conn1.Health(context.Background()) != nil {
-			observedUnhealthy = true
-			break
-		}
-		time.Sleep(testtime.D50ms) //archtest:allow:test-sleep poll-loop: wait for broker session-takeover disconnect
-	}
-	if !observedUnhealthy {
-		t.Fatalf("conn1 never transitioned to unhealthy after a same-clientId reconnect; " +
+	testwait.External(t, "mqtt-session-takeover-disconnect", func() bool {
+		return conn1.Health(context.Background()) != nil
+	}, testtime.D10s, testtime.D50ms,
+		"conn1 never transitioned to unhealthy after a same-clientId reconnect; "+
 			"MQTT v5 session takeover (DISCONNECT 0x8E) did not occur — broker eviction is broken")
-	}
 }
 
 // startDedicatedMosquittoContainer starts an eclipse-mosquitto container for
@@ -1037,19 +1050,17 @@ func TestIntegration_Subscriber_DLTCapture(t *testing.T) {
 	itestPublish(t, conn, originalTopic, envelope)
 
 	// Poll until the DLT watcher receives the message or timeout.
-	deadline := time.Now().Add(testtime.D15s)
-	for time.Now().Before(deadline) {
+	testwait.External(t, "mqtt-broker-delivery", func() bool {
 		select {
 		case <-cap.gotCh:
-			goto assertDLT
+			return true
 		default:
+			return false
 		}
-		time.Sleep(testtime.D50ms) //archtest:allow:test-sleep poll-loop: real broker delivery latency
-	}
-	t.Fatal("dlt capture: DLT watcher did not receive a message within 15s; " +
-		"routeDeadLetter may be broken or $dead/<topic> is not being published")
+	}, testtime.D15s, testtime.D50ms,
+		"dlt capture: DLT watcher did not receive a message within 15s; "+
+			"routeDeadLetter may be broken or $dead/<topic> is not being published")
 
-assertDLT:
 	gotTopic, gotPayload := cap.snapshot()
 	if gotTopic != expectedDLTTopic {
 		t.Errorf("DLT topic = %q, want %q", gotTopic, expectedDLTTopic)

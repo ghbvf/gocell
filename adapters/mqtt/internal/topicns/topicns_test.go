@@ -752,6 +752,81 @@ func TestNamespace_MintFilter_InvalidGroup(t *testing.T) {
 	}
 }
 
+// TestParse_InvalidNamespace_DistinctMessages asserts that each of the four
+// invalid-namespace branches returns its own distinct error message.
+// This is the TDD red test: before the const split, all four branches return
+// the same msgInvalidNamespace value, so wantMsg assertions will fail for the
+// three non-length branches (they will all carry the combined message).
+func TestParse_InvalidNamespace_DistinctMessages(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		ns      string
+		wantMsg string
+	}{
+		{
+			name:    "empty-triggers-length-message",
+			ns:      "",
+			wantMsg: "mqtt topic namespace: must be non-empty and at most 128 chars",
+		},
+		{
+			name:    "too-long-triggers-length-message",
+			ns:      strings.Repeat("a", 129),
+			wantMsg: "mqtt topic namespace: must be non-empty and at most 128 chars",
+		},
+		{
+			name:    "leading-slash-triggers-slash-message",
+			ns:      "/foo",
+			wantMsg: "mqtt topic namespace: must not have a leading or trailing slash",
+		},
+		{
+			name:    "trailing-slash-triggers-slash-message",
+			ns:      "foo/",
+			wantMsg: "mqtt topic namespace: must not have a leading or trailing slash",
+		},
+		{
+			name:    "plus-wildcard-triggers-wildcard-message",
+			ns:      "foo/+",
+			wantMsg: "mqtt topic namespace: must not contain MQTT wildcards (+ or #)",
+		},
+		{
+			name:    "hash-wildcard-triggers-wildcard-message",
+			ns:      "a/#",
+			wantMsg: "mqtt topic namespace: must not contain MQTT wildcards (+ or #)",
+		},
+		{
+			name:    "uppercase-triggers-level-charset-message",
+			ns:      "FOO",
+			wantMsg: "mqtt topic namespace: each level must match ^[a-z0-9_-]+$",
+		},
+		{
+			name:    "mixed-case-triggers-level-charset-message",
+			ns:      "foo/Bar",
+			wantMsg: "mqtt topic namespace: each level must match ^[a-z0-9_-]+$",
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse(tc.ns)
+			if err == nil {
+				t.Fatalf("Parse(%q) expected error, got nil", tc.ns)
+			}
+			var ec *errcode.Error
+			if !errors.As(err, &ec) {
+				t.Fatalf("Parse(%q) error is not *errcode.Error: %T", tc.ns, err)
+			}
+			if ec.Code != ErrInvalidNamespace {
+				t.Errorf("Parse(%q) code = %s, want %s", tc.ns, ec.Code, ErrInvalidNamespace)
+			}
+			if ec.Message != tc.wantMsg {
+				t.Errorf("Parse(%q) message = %q, want %q", tc.ns, ec.Message, tc.wantMsg)
+			}
+		})
+	}
+}
+
 // TestNamespace_SubscribeOK_BareWildcardOutsideNamespace verifies that bare
 // wildcard filters "#" and "+/x" are rejected with ErrTopicOutsideNamespace
 // when the namespace is "ns" — the filter head is empty (before the first "/")
