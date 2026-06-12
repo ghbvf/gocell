@@ -4,12 +4,15 @@
 // MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01's H2 and H4 scanner-fires self-checks. It
 // declares a REPLICA of adapters/mqtt/internal/dlxoutcome.Outcome (an exported
 // struct with only a blank/unexported field — the sealed-proof-token shape) and
-// plants the three zero-value forge forms H2 must detect: an empty composite
-// literal, a zero-value `var` declaration, and a `*new(T)` allocation.
+// plants the four forge forms H2 must detect: an empty composite literal, a
+// zero-value `var` declaration, a `*new(T)` allocation, and an alias-typed
+// construction (Go 1.23+ surfaces a type alias as *types.Alias, so the scanner
+// must types.Unalias before the *types.Named assertion — gh #1873 review F1 r2).
 //
-// The same three planted functions double as H4 (sole-producer) red samples:
-// each returns the replica Outcome but is NOT named Dropped/Captured, so the H4
-// producer-allowlist scan must flag all of them as non-sanctioned producers.
+// The same four planted functions double as H4 (sole-producer) red samples: each
+// returns the replica Outcome (the alias one returns the alias) but is NOT named
+// Dropped/Captured, so the H4 producer-allowlist scan must flag all of them as
+// non-sanctioned producers.
 //
 // Why a replica and not the real dlxoutcome.Outcome: dlxoutcome lives under
 // adapters/mqtt/internal, and Go's internal-package rule forbids this tools-module
@@ -62,4 +65,21 @@ func archtestForgedOutcomeVar() FixtureOutcome {
 //nolint:unused // referenced exclusively by the archtest scanner via AST loading.
 func archtestForgedOutcomeNew() FixtureOutcome {
 	return *new(FixtureOutcome)
+}
+
+// FixtureOutcomeAlias is a type alias of FixtureOutcome. Under Go 1.23+
+// (gotypesalias=1, the default) an alias surfaces as *types.Alias, NOT
+// *types.Named — so a scanner asserting *types.Named WITHOUT types.Unalias misses
+// an alias-typed forge/producer. Same Unalias requirement as reconcile_invariants
+// isReconcileLoopType (gh #1873 review F1 round-2).
+type FixtureOutcomeAlias = FixtureOutcome
+
+// archtestForgedOutcomeAlias exercises BOTH alias-aware paths from one function:
+// its body `FixtureOutcomeAlias{}` is an alias composite-literal (H2 must Unalias
+// to flag it) AND its result type is the alias (H4 must Unalias to recognize it as
+// a non-sanctioned producer). A scanner that skips types.Unalias detects neither.
+//
+//nolint:unused // referenced exclusively by the archtest scanner via AST loading.
+func archtestForgedOutcomeAlias() FixtureOutcomeAlias {
+	return FixtureOutcomeAlias{}
 }

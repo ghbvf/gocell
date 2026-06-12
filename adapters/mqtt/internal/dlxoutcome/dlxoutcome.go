@@ -23,8 +23,8 @@
 // The irreducible residual — a zero Outcome pulled from an open-ended set of
 // extraction sites (array/map element, reflect.Zero, an IIFE) — is what keeps this
 // Medium: Go has no "no zero value" type modifier and the forge surface is
-// open-ended, so no archtest can bound it. The three ENUMERABLE forge forms (empty
-// literal, zero var, new) ARE closed, by H2.
+// open-ended, so no archtest can bound it. The ENUMERABLE forge forms (empty
+// literal, zero var, new — each alias-aware via types.Unalias) ARE closed, by H2.
 //
 // NOTE: the generic type parameter R is load-bearing. It lets the constructors
 // record via the caller's collector WITHOUT importing adapters/mqtt — which would

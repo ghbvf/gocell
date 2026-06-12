@@ -68,14 +68,18 @@
 // # Blind-spot inventory (per ai-robust.md 强制盲区自检)
 //
 //   - composite-lit / zero-var / new(T) forge in mqtt → H2 (CompositeLit + ValueSpec +
-//     new-builtin scan over mqtt production files). All three are enumerable AST forms.
-//     Proven non-vacuous by the dlxoutcomeredfixture synthetic red case (three planted
-//     forges), which uses a sealed-shape REPLICA (a real-type fixture is impossible:
-//     dlxoutcome is an internal package the tools module cannot import — same replica
-//     rationale as internal/mqttredfixture).
+//     new-builtin scan over mqtt production files). All enumerable AST forms, and each
+//     is alias-aware: H2 resolves the type via dlxNamedUnaliased (types.Unalias), so a
+//     `type A = dlxoutcome.Outcome; A{}` / `new(A)` forge is caught too (gh #1873 r2).
+//     Proven non-vacuous by the dlxoutcomeredfixture synthetic red case (four planted
+//     forges incl. an alias literal), which uses a sealed-shape REPLICA (a real-type
+//     fixture is impossible: dlxoutcome is an internal package the tools module cannot
+//     import — same replica rationale as internal/mqttredfixture).
 //   - non-recording third producer in dlxoutcome → H4 (sole-producer allowlist =
-//     {Dropped, Captured}). Proven non-vacuous by the same red fixture, whose three
-//     planted functions return the replica Outcome but are not Dropped/Captured.
+//     {Dropped, Captured}), alias-aware via dlxNamedUnaliased so `func Silent() A`
+//     (A = Outcome alias) is recognized as a producer. Proven non-vacuous by the same
+//     red fixture, whose four planted functions return the replica Outcome (one via the
+//     alias) but are not Dropped/Captured.
 //   - constructor gutted to a no-op → H3a (Dropped calls RecordDeadLetterFailure,
 //     Captured calls RecordDeadLetter; a metric-less constructor would defeat the
 //     seal while still compiling).
@@ -217,7 +221,7 @@ func TestMQTTDLXFailureSignalFunnel_H1_ReturnsSealedOutcome(t *testing.T) {
 				"the metric structurally inseparable from the drop (gh #1440)") {
 			return
 		}
-		named, ok := sig.Results().At(0).Type().(*types.Named)
+		named, ok := dlxNamedUnaliased(sig.Results().At(0).Type())
 		if !assert.True(t, ok, "routeDeadLetter result is not a named type") {
 			return
 		}
@@ -231,7 +235,20 @@ func TestMQTTDLXFailureSignalFunnel_H1_ReturnsSealedOutcome(t *testing.T) {
 
 // ─── H2: no mqtt code forges a dlxoutcome.Outcome ─────────────────────────────
 
-// dlxIsOutcomeType reports whether expr's resolved type is (pkgPath, typeName).
+// dlxNamedUnaliased unwraps a type alias and returns the underlying *types.Named.
+// types.Unalias is REQUIRED because under Go 1.23+ (gotypesalias=1, the default) a
+// `type A = dlxoutcome.Outcome` denotes a *types.Alias, not a *types.Named — so a
+// bare .(*types.Named) assertion would let an alias-typed forge/producer
+// (`A{}` / `new(A)` / `func() A`) slip past H1/H2/H4 (gh #1873 review F1 r2; same
+// requirement as reconcile_invariants isReconcileLoopType). No-op when t is already
+// a *types.Named.
+func dlxNamedUnaliased(t types.Type) (*types.Named, bool) {
+	named, ok := types.Unalias(t).(*types.Named)
+	return named, ok
+}
+
+// dlxIsOutcomeType reports whether expr's resolved type (alias-unwrapped) is
+// (pkgPath, typeName).
 func dlxIsOutcomeType(info *types.Info, expr ast.Expr, pkgPath, typeName string) bool {
 	if expr == nil {
 		return false
@@ -240,7 +257,7 @@ func dlxIsOutcomeType(info *types.Info, expr ast.Expr, pkgPath, typeName string)
 	if !ok {
 		return false
 	}
-	named, ok := tv.Type.(*types.Named)
+	named, ok := dlxNamedUnaliased(tv.Type)
 	if !ok {
 		return false
 	}
@@ -253,9 +270,12 @@ func dlxIsOutcomeType(info *types.Info, expr ast.Expr, pkgPath, typeName string)
 // zero-value forge forms: a composite literal of ANY shape (INCLUDING the empty
 // `Outcome{}` — unlike scanSealedCompositeLitConstruction which exempts empty
 // literals), a zero-value `var o Outcome` declaration, and a `*new(Outcome)`
-// allocation. In the dead-letter funnel NO consumer may mint an Outcome; the only
-// sanctioned producers are dlxoutcome.Dropped/Captured (which record a metric) and
-// they live in the dlxoutcome package itself (locked by H4, not scanned here).
+// allocation. All three resolve the type through dlxNamedUnaliased (types.Unalias),
+// so an alias-typed forge (`type A = Outcome; A{}` / `new(A)`) is caught as well
+// (gh #1873 review F1 r2). In the dead-letter funnel NO consumer may mint an Outcome;
+// the only sanctioned producers are dlxoutcome.Dropped/Captured (which record a
+// metric) and they live in the dlxoutcome package itself (locked by H4, not scanned
+// here).
 //
 // These three are the enumerable forge forms; the genuinely-irreducible residual
 // (open-set zero-value extraction: array/map element, reflect.Zero, an IIFE) is
@@ -362,12 +382,15 @@ func TestMQTTDLXFailureSignalFunnel_H2_ScannerFiresOnRedFixture(t *testing.T) {
 			}
 			return out
 		})
-	// The fixture plants ALL THREE forge forms (empty composite literal + zero-value
-	// var + *new(T) allocation), so require ≥3 diagnostics: if fewer fire, one of the
-	// three scan paths (CompositeLit / ValueSpec / new-builtin) is silently broken.
-	assert.GreaterOrEqual(t, len(diags), 3,
-		"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H2: scanner must fire on ALL THREE dlxoutcomeredfixture forge forms "+
-			"(empty composite literal + zero-value var + *new(T)); <3 means a composite-lit/var/new type-resolution path is silently broken")
+	// The fixture plants ALL FOUR forge forms (empty composite literal + zero-value
+	// var + *new(T) + an alias-typed composite literal), so require ≥4 diagnostics:
+	// if fewer fire, one of the four scan paths (CompositeLit / ValueSpec / new-builtin
+	// / types.Unalias) is silently broken. The 4th specifically requires types.Unalias
+	// in dlxIsOutcomeType (gh #1873 review F1 r2): without it the alias forge is missed.
+	assert.GreaterOrEqual(t, len(diags), 4,
+		"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H2: scanner must fire on ALL FOUR dlxoutcomeredfixture forge forms "+
+			"(empty composite literal + zero-value var + *new(T) + alias literal); <4 means a "+
+			"composite-lit/var/new/unalias type-resolution path is silently broken")
 }
 
 // ─── H3a: the dlxoutcome constructors actually record (inseparability spine) ──
@@ -511,7 +534,7 @@ func funcResultIsOutcome(info *types.Info, fd *ast.FuncDecl, pkgPath, typeName s
 	}
 	res := sig.Results()
 	for i := 0; i < res.Len(); i++ {
-		named, ok := res.At(i).Type().(*types.Named)
+		named, ok := dlxNamedUnaliased(res.At(i).Type())
 		if !ok {
 			continue
 		}
@@ -600,9 +623,10 @@ func TestMQTTDLXFailureSignalFunnel_H4_ScannerFiresOnRedFixture(t *testing.T) {
 			diags, _ = scanOutcomeProducers(p, dlxOutcomeRedFixturePkgPath, "FixtureOutcome", dlxSanctionedProducers())
 			return nil
 		})
-	assert.GreaterOrEqual(t, len(diags), 3,
-		"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H4: scanner must flag all three non-sanctioned producers in "+
-			"dlxoutcomeredfixture; <3 means the result-type producer scan is silently broken")
+	assert.GreaterOrEqual(t, len(diags), 4,
+		"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H4: scanner must flag all four non-sanctioned producers in "+
+			"dlxoutcomeredfixture (incl. the alias-return producer); <4 means the result-type producer "+
+			"scan is silently broken — the alias one needs types.Unalias (gh #1873 review F1 r2)")
 	for _, d := range diags {
 		assert.True(t, strings.HasSuffix(d.Rel, "fixture.go"),
 			"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/H4: diagnostic not from the red fixture file: %s", d.Rel)
