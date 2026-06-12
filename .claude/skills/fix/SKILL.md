@@ -95,7 +95,7 @@ CONFIRMED 后、修复前，先构造一个能**复现问题**的测试用例：
 |------|---------|--------|
 | **IN_SCOPE** | finding 文件在当前分支 diff 中，或 PR 描述含该 finding ID | 在当前分支修复 |
 | **RELATED** | 不在 diff 中但同包 / 同子系统遗留 | 建议搭车修，标注"搭车" |
-| **OUT_OF_SCOPE** | 完全不同的包 / 模块 | 不在当前分支修；按 §沟通规则闸门输出 issue 建议命令 |
+| **OUT_OF_SCOPE** | 完全不同的包 / 模块 | 不在当前分支修；自动建 backlog issue（4.6 step 3；pri-p0/标签判不定除外） |
 
 输出含：代码/架构/历史三维度根因、复杂度、当前分支归属（含理由）、影响范围（直接/间接/同类）、历史修复。
 
@@ -141,7 +141,7 @@ Cx2 及以上问题，**先查参考实现再动手**。三层按权威性递减
 
 **必须给出明确的时机建议**，回答三个问题：
 
-**Q0: 是否属于当前分支？** 取 2.4 归属结果：**OUT_OF_SCOPE** → 按 §沟通规则闸门输出建议命令，跳过 Q1-Q3；**IN_SCOPE / RELATED** → 进 Q1（RELATED 改动量大可 defer）。
+**Q0: 是否属于当前分支？** 取 2.4 归属结果：**OUT_OF_SCOPE** → 自动建 backlog issue（4.6 step 3；pri-p0/标签判不定除外），跳过 Q1-Q3；**IN_SCOPE / RELATED** → 进 Q1（RELATED 改动量大可 defer）。
 
 **Q1: 推荐现在做还是后面做？**（仅 IN_SCOPE / RELATED 继续）
 
@@ -168,7 +168,7 @@ Cx2 及以上问题，**先查参考实现再动手**。三层按权威性递减
 | Cx2 + IN_SCOPE + 能做                                      | — | 执行推荐方案 |
 | Cx2 + 不能做（有前置依赖）                                         | — | 记录报告，标注阻塞 |
 | Cx3/Cx4                                                  | 任何 | 只输出方案，标注"需人工决策" |
-| 任何 + OUT_OF_SCOPE                                        | — | 不修，按 §沟通规则闸门输出建议命令 |
+| 任何 + OUT_OF_SCOPE                                        | — | 不修，自动建 backlog issue（4.6 step 3；pri-p0/判不定除外） |
 
 **不可自动执行**: 并发语义变更、接口签名修改、新依赖、数据流方向变更、Cx2+。
 
@@ -179,7 +179,7 @@ Cx2 及以上问题，**先查参考实现再动手**。三层按权威性递减
 **用 TaskCreate 注册每项任务**，执行时 TaskUpdate 更新状态（✔/◼/◻）。
 
 规则：
-- 所有 finding 都创建 task，OUT_OF_SCOPE 标注 `[→ 输出 issue 建议命令；等用户确认]`
+- 所有 finding 都创建 task，OUT_OF_SCOPE 标注 `[→ 自动建 issue（4.6 step 3）；pri-p0/判不定除外]`
 - 单条 Cx1 IN_SCOPE → 跳过清单直接修；批量或 Cx2+ → 必须创建
 - 最后两项固定：`commit + push` + `闭合/创建 GitHub issues`
 - 创建后立即执行，不等确认
@@ -260,11 +260,12 @@ push 后按 `issues` B5 ① 验无文件冲突；通过后**立即**进步骤 3�
 
 **步骤 3: 立即收尾（评论 + 状态，不等 CI；命令形态见 `issues` Part B）**
 
-- **修完** → 贴 fix 评论（命令 + **回显 comment URL/id** 见 `issues` B4；用 `<!-- pm:fix -->` 模板：findings triage + 修复结果 + 遗留 IN_SCOPE，无损写入（约定见 `pr-comment.md`：每条带 `file:line` + 详表入 `<details>`），OUT_OF_SCOPE 仅一行指针（`🚦 OUT_OF_SCOPE（详见本 PR 的 pm:oos 评论）`），含 footer）。**追加机器块**（贴评论前，接口见 `pr-comment.md` §机器块）：`bash hack/automation/pr-meta.sh emit-block --kind=fix --pr=<PR#> --findings='<计数 json>'`（phase/verdict/round 全派生），输出单行追加到 `pm:fix` body 末尾，再走 `issues` B4 贴。再 `gh pr edit` 切 `pr-status/needs-check-fix`（移除 `pr-status/needs-fix`；待 `/pr-review --check` 验证；**fix 不再直接到 ready**）——check-side 执行器从此刻可立即开始，无需等待 CI。
+- **修完** → 贴 fix 评论（命令 + **回显 comment URL/id** 见 `issues` B4；用 `<!-- pm:fix -->` 模板：findings triage + 修复结果 + 遗留 IN_SCOPE，无损写入（约定见 `pr-comment.md`：每条带 `file:line` + 详表入 `<details>`），OUT_OF_SCOPE 仅一行指针（`🚦 OUT_OF_SCOPE（详见本 PR 的 pm:oos 评论）`），含 footer）。**追加机器块**（贴评论前，接口见 `pr-comment.md` §机器块）：`bash hack/automation/pr-meta.sh emit-block --kind=fix --pr=<PR#> --findings='<计数 json>'`（phase/verdict/round 全派生），输出单行追加到 `pm:fix` body 末尾，再走 `issues` B4 贴。
 - **OOS findings → 自动建 issue + 独立 pm:oos 评论**（仅当有 OUT_OF_SCOPE findings 时，紧接在 pm:fix 之后贴）：
   - **逐条自动建 backlog issue**（建单单源命令见 `issues` B1）：finding 字段无损填 `backlog.md` body（现状←证据+三维根因+影响 / 修复方向←三级方案种子 / Files←file:line 全集 / Source←PR #<PR#> F<k> + `Discovered via /fix #<original>`）；四轴标签派生 `cx`←`[Cx…]` tag、`area`←finding 文件路径（PROJECT.md §2.1）、`type`←性质、`pri`←`[P…]`（默认 `pri-p2`）；先 `bash hack/automation/issue-labels.sh validate --labels "…"` 过门，再 `gh issue create …`，回显 #N/URL。
   - **安全闸门**：`pri-p0`（incident）→ 停下 AskUserQuestion；`validate` 失败（area/type 判不定）→ 标 `deferred=labels-underivable`，回退草稿待人工。
   - **追加机器块**（贴评论前，`<!-- pm:oos -->` 模板）：`bash hack/automation/pr-meta.sh emit-block --kind=oos --pr=<PR#> --oos='{"items":[{…,"issue":"#<N>"},…]}'`——**每个 item 必须带 `issue` 或 `deferred`（`pri-p0-incident`｜`labels-underivable`）之一**，否则 emit-block 拒绝（Hard 闸门）。输出追加到 pm:oos body 末尾，再走 `issues` B4 贴；正文每条回填 `✅ 已建 #N` 或 `🟡 deferred:<原因>`。
+- **切触发 label（OOS 留痕落地后）** → `gh pr edit` 切 `pr-status/needs-check-fix`（移除 `pr-status/needs-fix`；待 `/pr-review --check` 验证；**fix 不再直接到 ready**）——OOS artifact（pm:oos/issue）已先落地、pm:fix 的 `🚦 OUT_OF_SCOPE` 指针不悬空，此刻 check-side 执行器可立即开始，无需等待 CI。**收尾不变式 artifact-before-trigger**：OOS 留痕（建 issue + 贴 pm:oos）必须在切此 label 之前完成，与 ship 阶段 8 同序。
 - **未修 / 待办 finding**（非 OOS 的 Cx3+/RELATED deferred）→ §沟通规则闸门输出 `gh issue create` 建议命令（确认后跑，留 open；label = `backlog` + `pri-pX` + `area-XX` + `type-XX` + `cx-X`（必填，从 finding `[…Cx…]` tag 提取——四轴齐全，建单单源命令见 `issues` B1）；body 按 `backlog.md` 顶部字段映射**无损**填充，不得一句话带过；条件延后型加 `flag-cond` + Trigger，派生注明 `Discovered via /fix #<original>`）。
 
 Priority：review finding 用原 `[P0-P3]`；`/fix` 派生默认 `pri-p2`；`pri-p0` 仅 incident（线上故障/数据完整性/CVE），停下 AskUserQuestion 确认。建 issue 必须显式 `--label pri-pX`。

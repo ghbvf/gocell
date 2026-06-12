@@ -1,6 +1,6 @@
 ---
 name: pr-monitor
-description: "PR 状态单 tick 检查器：观察一个 PR 的 review/check 进展并按 label 路由。默认 report 模式（#1657，仅观察+窗口提示）；auto 模式（#1663）在 Cx1-only + IN_SCOPE + ≤2 文件 + 非 kernel/migration/bootstrap/并发边界内自动调用 /fix。由 `/loop <interval> /pr-monitor <PR#>` 简单 loop 驱动（每 tick 无状态，只读 label + 机器块）；human-in-loop 可随时中断。pr-status/ready 或 PR 关闭时报告终止。"
+description: "PR 状态单 tick 检查器：观察一个 PR 的 review/check 进展并按 label 路由。默认 report 模式（#1657，仅观察+窗口提示）；auto 模式（#1663）在机器可判定的 Cx1-only + needs-fix + 未熔断 时 dispatch /fix，文件级/禁止域安全裁决交由 /fix 自己的 [AUTO-FIX] 门把关。由 `/loop <interval> /pr-monitor <PR#>` 简单 loop 驱动（每 tick 无状态，只读 label + 机器块）；human-in-loop 可随时中断。pr-status/ready 或 PR 关闭时报告终止。"
 argument-hint: "<PR#> [--mode report|auto] [--fix-engine claude|codex] [--role fix|review]"
 allowed-tools: [Bash, Read, Skill, Agent]
 disable-model-invocation: true
@@ -111,26 +111,25 @@ ROUND=$(bash hack/automation/pr-meta.sh round "$PR" 2>/dev/null || echo 0)
 熔断条件：block `cycle.exhausted == true`，或 block `next.agent == "human"`，或 `ROUND >= 3`（maxRounds）。
 命中 → 窗口打印 "PR #N 熔断：review↔fix 已达 3 轮上限，转人工处理（`gh pr view <N> --web`）"，返回（请用户停 `/loop`）。
 
-### §3.4 Claude 自动 /fix 触发（全部成立才触发）
+### §3.4 Claude 自动 /fix 触发（dispatch 门 = 机器可判定条件）
 
-| 条件 | 判定方法 |
+pr-monitor 只凭**机器可判定**的事实（label + 最新机器块）决定是否 dispatch `/fix`；**文件级 / 禁止域安全裁决在 dispatch 之后由 `/fix` 自己的 [AUTO-FIX] 门把关**（fix §3.4——它能读 `git diff --name-only` + 逐个 finding 文件，pr-monitor 读不到）。
+
+| dispatch 门（全部机器可判定，全部成立才 dispatch） | 判定方法 |
 |------|---------|
 | `pr-status/needs-fix` ∈ labels | label check |
 | 未熔断 | §3.3 通过 |
 | **Cx1-only** | block `findings.byCx`：cx2 == 0 ∧ cx3 == 0 ∧ cx4 == 0 ∧ cx1 > 0 |
-| **IN_SCOPE** | finding 文件 ∈ `gh pr diff $PR --name-only` |
-| **≤2 文件** | 受影响文件数 ≤ 2 |
-| **非禁止域** | 不触及 kernel 导出接口 / `*/migrations/*.sql` / `bootstrap/run*.go` / 含 sync·atomic·channel 的文件 |
 
-参照 fix §3.4 [AUTO-FIX] 边界 + §不可自动执行清单：并发语义变更 / 接口签名修改 / 新依赖 / 数据流方向变更 / Cx2+ 均**不可**自动执行。
+> **为什么 dispatch 门不查 IN_SCOPE / ≤2 文件 / 禁止域**：这些是**文件级**事实，机器块只有 `findings.byCx` 聚合计数（无文件清单），pr-monitor 读不到——而本技能全程不 text-scrape 评论体（§3.2/§3.5）。把读不到的事实写进门只会是**不可执行的门禁**。它们改由 `/fix` 在 dispatch 后强制：fix §3.4 [AUTO-FIX] 只对 `IN_SCOPE + ≤2 文件 + 不改 kernel 接口/migration/bootstrap` 直接改，fix §不可自动执行清单挡下并发语义 / 接口签名 / 新依赖 / 数据流 / Cx2+；越界者 fix 自己降级为 surface + 建议人工，不会自动改。**端到端「能否自动改」= 此处 Cx1-only 机器门 ∧ fix 侧文件级门**，缺一不放行。
 
-**`--fix-engine=claude`（默认）且全部条件成立** → host LLM in-session 调用：
+**`--fix-engine=claude`（默认）且 dispatch 门全部成立** → host LLM in-session 调用：
 
 ```
 Skill("fix", args="<N>")
 ```
 
-> auto 模式的 `Skill("fix")` 是 **human-approved loop 内**的自动操作——用户已显式 `--mode=auto` 启动 `/loop`，非无监督自主执行；且仅在上表全部窄条件成立（Cx1-only / IN_SCOPE / ≤2 文件 / 非禁止域）时触发。
+> auto 模式的 `Skill("fix")` 是 **human-approved loop 内**的自动操作——用户已显式 `--mode=auto` 启动 `/loop`，非无监督自主执行；且经 dispatch 门（needs-fix / 未熔断 / Cx1-only）+ fix 侧文件级门双重收窄。
 
 fix 会贴 pm:fix + 切 `pr-status/needs-check-fix`；下个 `/loop` tick 继续等 `/pr-review --check` 结论（非终止）。
 
@@ -175,13 +174,13 @@ gh pr edit "$PR" --add-label ai/local-fix
 
 ## §4 alternate review 能力（`--role=review`）
 
-`--role=review` 且 `--fix-engine=claude`（默认）：
+review 角色 in-session 跑 `/pr-review`（Claude review 引擎）：
 
 ```bash
 claude -p "/pr-review $PR"
 ```
 
-`--fix-engine=codex`：**不**在 session 内跑 /fix，改由 codex-pr-router daemon 的 gated workspace-write 路径接管（daemon 轮询 `pr-status/needs-fix` ∧ `ai/local-fix`）。pr-monitor 只确认 PR 已带 `pr-status/needs-fix`（**不切 needs-review-again**——那会错误路由回 review 侧），提示「需贴 `ai/local-fix` daemon 才接管」，下个 tick 继续等 codex `--check` 结论。
+> `--fix-engine` 是 **fix 侧**引擎 knob（§0），**不作用于 review 角色**——review/fix 是两个独立轴（§0「不混用」），review 角色不读 `--fix-engine`。需要 **codex 引擎做 review** 时，那是 codex-pr-router daemon 的 review phase 职责：daemon 轮询 `pr-status/needs-review-again`、引擎由 router 的 `GOCELL_ROUTER_REVIEW_ENGINE` 选（见 `hack/automation/codex-pr-router/README.md` Role×Engine Matrix），**不经 pr-monitor flag**。`ai/local-fix` 是 **fix phase 专属** label（`pr-status/needs-fix` + `ai/local-fix`），review 角色**绝不**贴它——贴了就把 review 错误路由进 fix daemon（正是本轴交叉要禁止的）。
 
 review 结果由 /pr-review 贴评论 + 切 label；下个 `/loop` tick 继续等 fix 侧响应。
 
