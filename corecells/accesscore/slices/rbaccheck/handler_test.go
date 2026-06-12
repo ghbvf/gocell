@@ -1,6 +1,7 @@
 package rbaccheck
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -17,9 +18,42 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
+
+// rbacTestAuthorizer is a local test double for auth.Authorizer. It cannot
+// live in accesscoretest because that package transitively imports corecells/accesscore
+// (hasher.go), which imports this slice — creating a cycle. The verdict
+// construction (authz.Allow/Deny) is in _test.go, sanctioned by
+// AUTHZ-DECISION-ALLOW-DENY-CALLER-01.
+type rbacTestAuthorizer struct {
+	decision authz.Decision
+}
+
+func (a *rbacTestAuthorizer) Authorize(_ context.Context, _, _, _ string) (authz.Decision, error) {
+	return a.decision, nil
+}
+
+// allowAuthorizer / withAllowAuthorizer / withDenyAuthorizer build the PDP
+// verdicts for tests. authz.Allow/Deny construction lives here in _test.go.
+func allowAuthorizer() *rbacTestAuthorizer {
+	dec, err := authz.Allow(authz.Obligations{})
+	if err != nil {
+		panic("test allowAuthorizer: authz.Allow: " + err.Error())
+	}
+	return &rbacTestAuthorizer{decision: dec}
+}
+
+func withAllowAuthorizer(ctx context.Context) context.Context {
+	return auth.WithAuthorizer(ctx, allowAuthorizer())
+}
+
+func withDenyAuthorizer(ctx context.Context) context.Context {
+	return auth.WithAuthorizer(ctx, &rbacTestAuthorizer{decision: authz.Deny("test: denied")})
+}
 
 const invalidUUID = "not-a-uuid-string"
 
@@ -106,9 +140,13 @@ func TestHandler(t *testing.T) {
 		path       string
 		subject    string
 		roles      []string
+		// ctxFn optionally enriches the auth context (e.g. inject an Authorizer for
+		// the non-self PDP path). Applied after testAuthContext when subject != "".
+		ctxFn      func(context.Context) context.Context
 		wantStatus int
 		checkBody  func(t *testing.T, body []byte)
 	}{
+		// Self-access: subject == userID path param → gate short-circuits, NO Authorizer needed.
 		{
 			name:       "GET /{userID} self-access returns roles with permissions",
 			path:       "/api/v1/access/roles/" + testutil.TestID("user-1"),
@@ -179,26 +217,39 @@ func TestHandler(t *testing.T) {
 				assert.False(t, resp.Data.HasRole)
 			},
 		},
-		// Trust boundary tests (#27r)
+		// Non-self PDP path: subject != userID → RequirePermission(PermRoleRead()) consulted.
+		// Admin reading another user: allow Authorizer → 200 (PDP allows).
 		{
-			name:       "GET /{userID} admin bypass allowed",
+			name:       "GET /{userID} admin PDP allow reads another user",
 			path:       "/api/v1/access/roles/" + testutil.TestID("user-1"),
 			subject:    testutil.TestID("admin-user"),
 			roles:      []string{"admin"},
+			ctxFn:      withAllowAuthorizer,
 			wantStatus: http.StatusOK,
 		},
+		// Non-self, no Authorizer: fail-closed → 403 (gate cannot consult PDP).
 		{
-			name:       "GET /{userID} different user no admin returns 403",
+			name:       "GET /{userID} non-self no Authorizer fail-closed 403",
+			path:       "/api/v1/access/roles/" + testutil.TestID("user-1"),
+			subject:    testutil.TestID("admin-user"),
+			roles:      []string{"admin"},
+			wantStatus: http.StatusForbidden,
+		},
+		// Non-self, PDP deny: viewer reading another user → 403.
+		{
+			name:       "GET /{userID} different user PDP deny returns 403",
 			path:       "/api/v1/access/roles/" + testutil.TestID("user-1"),
 			subject:    testutil.TestID("user-2"),
 			roles:      []string{"viewer"},
+			ctxFn:      withDenyAuthorizer,
 			wantStatus: http.StatusForbidden,
 		},
 		{
-			name:       "GET /{userID}/{roleName} different user no admin returns 403",
+			name:       "GET /{userID}/{roleName} different user PDP deny returns 403",
 			path:       "/api/v1/access/roles/" + testutil.TestID("user-1") + "/admin",
 			subject:    testutil.TestID("user-2"),
 			roles:      []string{"viewer"},
+			ctxFn:      withDenyAuthorizer,
 			wantStatus: http.StatusForbidden,
 		},
 		{
@@ -208,10 +259,13 @@ func TestHandler(t *testing.T) {
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
+			// The invalid UUID is not self (cannot match subject UUID) and the path is
+			// reached for auth check. We inject an allow Authorizer so the gate passes
+			// and the generated handler's UUID validator fires the 400.
 			name:       "GET /{userID} invalid UUID returns 400",
 			path:       "/api/v1/access/roles/" + invalidUUID,
 			subject:    testutil.TestID("user-1"),
-			roles:      []string{"admin"},
+			ctxFn:      withAllowAuthorizer,
 			wantStatus: http.StatusBadRequest,
 			checkBody: func(t *testing.T, body []byte) {
 				var b struct {
@@ -231,7 +285,11 @@ func TestHandler(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
 			if tc.subject != "" {
-				req = req.WithContext(testAuthContext(tc.subject, tc.roles))
+				ctx := testAuthContext(tc.subject, tc.roles)
+				if tc.ctxFn != nil {
+					ctx = tc.ctxFn(ctx)
+				}
+				req = req.WithContext(ctx)
 			}
 			r.ServeHTTP(w, req)
 			assert.Equal(t, tc.wantStatus, w.Code)
@@ -240,6 +298,23 @@ func TestHandler(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestHandler_SelfExemptNoAuthorizer proves that param==subject short-circuits
+// the PDP gate without any Authorizer in context (self-exemption via
+// auth.RequirePermissionOrSelf). If an Authorizer were required for self-access
+// the request would return 403 (fail-closed), not 200.
+func TestHandler_SelfExemptNoAuthorizer(t *testing.T) {
+	r := setup(t, query.RunModeDemo)
+	// Build a context with a subject and tenant but deliberately NO Authorizer.
+	ctx := testAuthContext(testutil.TestID("user-1"), nil)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/roles/"+testutil.TestID("user-1"), nil)
+	req = req.WithContext(ctx)
+	r.ServeHTTP(w, req)
+	// Self-access must pass through without PDP consultation.
+	assert.Equal(t, http.StatusOK, w.Code)
 }
 
 func TestHandleList_ExceedsMaxLimit(t *testing.T) {

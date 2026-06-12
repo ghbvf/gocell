@@ -10,6 +10,7 @@ import (
 	policyList "github.com/ghbvf/gocell/generated/contracts/http/policy/list/v1"
 	policyUpdate "github.com/ghbvf/gocell/generated/contracts/http/policy/update/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -224,15 +225,19 @@ type Handler struct {
 }
 
 // NewHandler creates a policymanage Handler using generated per-contract handlers.
-// All endpoints are admin-only (auth.AnyRole(auth.RoleAdmin)).
+// Read endpoints (GET) are gated by authz.PermPolicyRead() ("policy:read");
+// write endpoints (POST/PUT/DELETE) are gated by authz.PermPolicyWrite()
+// ("policy:write"). The built-in PDP baseline grants both permissions to
+// admin and super-admin.
 func NewHandler(svc *Service) *Handler {
-	policy := auth.AnyRole(auth.RoleAdmin)
+	policyRead := auth.RequirePermission(authz.PermPolicyRead())
+	policyWrite := auth.RequirePermission(authz.PermPolicyWrite())
 	return &Handler{
-		createH: policyCreate.NewHandler(CreateAdapter{s: svc}, policy),
-		getH:    policyGet.NewHandler(GetAdapter{s: svc}, policy),
-		updateH: policyUpdate.NewHandler(UpdateAdapter{s: svc}, policy),
-		deleteH: policyDelete.NewHandler(DeleteAdapter{s: svc}, policy),
-		listH:   policyList.NewHandler(ListAdapter{s: svc}, policy),
+		createH: policyCreate.NewHandler(CreateAdapter{s: svc}, policyWrite),
+		getH:    policyGet.NewHandler(GetAdapter{s: svc}, policyRead),
+		updateH: policyUpdate.NewHandler(UpdateAdapter{s: svc}, policyWrite),
+		deleteH: policyDelete.NewHandler(DeleteAdapter{s: svc}, policyWrite),
+		listH:   policyList.NewHandler(ListAdapter{s: svc}, policyRead),
 	}
 }
 

@@ -29,6 +29,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -55,6 +56,44 @@ var testTenantID = func() tenant.TenantID {
 // withTenant injects the canonical test tenant into a context.
 func withTenant(ctx context.Context) context.Context {
 	return ctxkeys.WithTenantID(ctx, "00000000-0000-0000-0000-000000000001")
+}
+
+// --- ABAC PDP test doubles (PR-10c #1348) ---
+//
+// Local to package accesscore: accesscoretest imports the accesscore cell, so it
+// cannot be imported from package accesscore without a cycle. Verdict construction
+// (authz.Allow/Deny) lives in this _test.go per AUTHZ-DECISION-ALLOW-DENY-CALLER-01.
+
+// capturingTestAuthorizer is a test auth.Authorizer that returns a fixed Decision
+// and records the action the gate asked the PDP for (action-pin in
+// TestAccessCore_ProductionAuthGateLock).
+type capturingTestAuthorizer struct {
+	decision  authz.Decision
+	gotAction string
+}
+
+func (c *capturingTestAuthorizer) Authorize(_ context.Context, _, _, action string) (authz.Decision, error) {
+	c.gotAction = action
+	return c.decision, nil
+}
+
+func allowCapturingAuthorizer() *capturingTestAuthorizer {
+	dec, err := authz.Allow(authz.Obligations{})
+	if err != nil {
+		panic("test allowCapturingAuthorizer: authz.Allow: " + err.Error())
+	}
+	return &capturingTestAuthorizer{decision: dec}
+}
+
+// withAllowAuthorizer wires an allow PDP into ctx — the production composition
+// root installs the real Authorizer on the primary listener, so route tests that
+// hit a permission-gated endpoint as admin need one or RequirePermission fails closed.
+func withAllowAuthorizer(ctx context.Context) context.Context {
+	return auth.WithAuthorizer(ctx, allowCapturingAuthorizer())
+}
+
+func withDenyAuthorizer(ctx context.Context, reason string) context.Context {
+	return auth.WithAuthorizer(ctx, &capturingTestAuthorizer{decision: authz.Deny(reason)})
 }
 
 // durableTxRunner is a test-only TxRunner that simulates a non-noop (real) tx
@@ -565,7 +604,10 @@ func TestAccessCore_Init_DurableMode_UsesProdRBACRunMode(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/roles/usr-1?cursor=not-a-valid-cursor", nil)
-	req = req.WithContext(withTenant(auth.TestContext("admin-user", []string{"admin"})))
+	// Wire the PDP (admin → baseline allow) as the composition root does; the
+	// migrated rbaccheck gate (auth.RequirePermissionOrSelf) fails closed otherwise.
+	// admin-user != "usr-1" → non-self → PDP path → handler runs → 400 (bad cursor/id).
+	req = req.WithContext(withAllowAuthorizer(withTenant(auth.TestContext("admin-user", []string{"admin"}))))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
@@ -706,7 +748,8 @@ func TestAccessCore_RouteUserCreate(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/users/", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(withTenant(auth.TestContext("admin-user", []string{"admin"})))
+	// admin + wired PDP (baseline allow) → user:write granted → 201.
+	req = req.WithContext(withAllowAuthorizer(withTenant(auth.TestContext("admin-user", []string{"admin"}))))
 	r.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusCreated, rec.Code,
 		"POST /api/v1/access/users/ with admin should return 201 (got %d)", rec.Code)
@@ -736,6 +779,137 @@ func TestAccessCore_RouteUserCreate_NonAdmin_Returns403(t *testing.T) {
 	r.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 	assert.Contains(t, rec.Body.String(), "ERR_AUTH_FORBIDDEN")
+}
+
+// TestAccessCore_ProductionAuthGateLock exercises the REAL production routing path
+// (cell.go -> slice.RegisterRoutes -> auth.Mount) and locks the
+// 401 / 403(fail-closed) / 403(PDP-deny) / 2xx spectrum for every permission-gated
+// accesscore endpoint after the PR-10c migration (auth.RequirePermission /
+// auth.RequirePermissionOrSelf). It is the single authoritative home for the
+// endpoint↔permission action-pin: the role-agnostic baseline allows admin for every
+// accesscore perm, so a wrong-permission misbinding (e.g. a write endpoint demanding
+// user:read) would pass the slice tests AND the archtest silently — only the
+// per-endpoint wantAction assertion here catches it.
+//
+// For the SelfOr-migrated endpoints (selfExempt) it additionally pins that a caller
+// naming ITSELF in the path is admitted without any Authorizer (the request-shape
+// self-exemption), while a non-self caller still flows through the PDP.
+func TestAccessCore_ProductionAuthGateLock(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	const (
+		otherID = "00000000-0000-0000-0000-0000000000aa" // target != caller → non-self → PDP path
+		selfID  = "00000000-0000-0000-0000-0000000000bb" // caller subject for the self-exemption case
+	)
+
+	type gate struct {
+		name       string
+		method     string
+		path       string // {id}/{userID} already substituted with otherID
+		selfPath   string // path with selfID substituted; set only when selfExempt
+		body       string
+		wantAction string
+		selfExempt bool
+	}
+	gates := []gate{
+		{name: "policy-read:list", method: http.MethodGet, path: "/api/v1/access/policies", wantAction: "policy:read"},
+		{name: "policy-read:get", method: http.MethodGet, path: "/api/v1/access/policies/" + otherID, wantAction: "policy:read"},
+		{name: "policy-write:create", method: http.MethodPost, path: "/api/v1/access/policies", body: `{}`, wantAction: "policy:write"},
+		{name: "policy-write:update", method: http.MethodPut, path: "/api/v1/access/policies/" + otherID, body: `{}`, wantAction: "policy:write"},
+		{name: "policy-write:delete", method: http.MethodDelete, path: "/api/v1/access/policies/" + otherID, wantAction: "policy:write"},
+		{name: "user-write:create", method: http.MethodPost, path: "/api/v1/access/users", body: `{}`, wantAction: "user:write"},
+		{
+			name: "user-read:get", method: http.MethodGet,
+			path: "/api/v1/access/users/" + otherID, selfPath: "/api/v1/access/users/" + selfID,
+			wantAction: "user:read", selfExempt: true,
+		},
+		{
+			name: "user-write:update", method: http.MethodPut,
+			path: "/api/v1/access/users/" + otherID, selfPath: "/api/v1/access/users/" + selfID,
+			body: `{}`, wantAction: "user:write", selfExempt: true,
+		},
+		{
+			name: "user-write:patch", method: http.MethodPatch,
+			path: "/api/v1/access/users/" + otherID, selfPath: "/api/v1/access/users/" + selfID,
+			body: `{}`, wantAction: "user:write", selfExempt: true,
+		},
+		{name: "user-write:delete", method: http.MethodDelete, path: "/api/v1/access/users/" + otherID, wantAction: "user:write"},
+		{name: "user-write:lock", method: http.MethodPost, path: "/api/v1/access/users/" + otherID + "/lock", body: `{}`, wantAction: "user:write"},
+		{name: "user-write:unlock", method: http.MethodPost, path: "/api/v1/access/users/" + otherID + "/unlock", body: `{}`, wantAction: "user:write"},
+		{
+			name: "user-write:change-password", method: http.MethodPost,
+			path: "/api/v1/access/users/" + otherID + "/password", selfPath: "/api/v1/access/users/" + selfID + "/password",
+			body: `{}`, wantAction: "user:write", selfExempt: true,
+		},
+		{
+			name: "role-read:list", method: http.MethodGet,
+			path: "/api/v1/access/roles/" + otherID, selfPath: "/api/v1/access/roles/" + selfID,
+			wantAction: "role:read", selfExempt: true,
+		},
+		{
+			name: "role-read:check", method: http.MethodGet,
+			path: "/api/v1/access/roles/" + otherID + "/admin", selfPath: "/api/v1/access/roles/" + selfID + "/admin",
+			wantAction: "role:read", selfExempt: true,
+		},
+	}
+
+	exec := func(t *testing.T, g gate, path string, ctx context.Context) *httptest.ResponseRecorder {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(g.method, path, strings.NewReader(g.body))
+		req.Header.Set("Content-Type", "application/json")
+		if ctx != nil {
+			req = req.WithContext(ctx)
+		}
+		r.ServeHTTP(rec, req)
+		return rec
+	}
+	adminCtx := func() context.Context {
+		return withTenant(auth.TestContext("admin-user", []string{"admin"}))
+	}
+
+	for _, g := range gates {
+		t.Run(g.name, func(t *testing.T) {
+			// 401: no authenticated subject (both gate kinds → 401 with no principal).
+			rec := exec(t, g, g.path, context.Background())
+			assert.Equal(t, http.StatusUnauthorized, rec.Code,
+				"unauthenticated %s %s must be 401; body %s", g.method, g.path, rec.Body)
+
+			// 403 fail-closed: admin (non-self, target=otherID) but NO Authorizer wired.
+			rec = exec(t, g, g.path, adminCtx())
+			assert.Equal(t, http.StatusForbidden, rec.Code,
+				"%s %s with no Authorizer must fail closed (403); body %s", g.method, g.path, rec.Body)
+
+			// 403 PDP-deny: authenticated non-admin (non-self) + wired PDP that DENIES.
+			rec = exec(t, g, g.path, withDenyAuthorizer(
+				withTenant(auth.TestContext("user-non-admin", []string{"viewer"})), "policy: no matching allow rule"))
+			assert.Equal(t, http.StatusForbidden, rec.Code,
+				"%s %s denied by PDP must be 403; body %s", g.method, g.path, rec.Body)
+
+			// 2xx + action-pin: admin (non-self) + capturing PDP that ALLOWS. We do not
+			// pin the exact success code (some paths 400/404 on the empty body / unseeded
+			// resource), but 401/403 must be gone and the gate must have demanded the
+			// correct permission string.
+			cap := allowCapturingAuthorizer()
+			rec = exec(t, g, g.path, auth.WithAuthorizer(adminCtx(), cap))
+			assert.NotEqual(t, http.StatusUnauthorized, rec.Code, "admin %s %s (PDP allow) must not be 401; body %s", g.method, g.path, rec.Body)
+			assert.NotEqual(t, http.StatusForbidden, rec.Code, "admin %s %s (PDP allow) must not be 403; body %s", g.method, g.path, rec.Body)
+			assert.Equal(t, g.wantAction, cap.gotAction,
+				"route %s %s must request PDP action %q (got %q); a misbinding would be masked by "+
+					"the role-agnostic baseline that allows admin for every accesscore perm",
+				g.method, g.path, g.wantAction, cap.gotAction)
+
+			// Self-exemption: a non-admin caller naming ITSELF in the path is admitted
+			// with NO Authorizer (request-shape exemption); the PDP is never consulted.
+			if g.selfExempt {
+				rec = exec(t, g, g.selfPath, withTenant(auth.TestContext(selfID, []string{"viewer"})))
+				assert.NotEqual(t, http.StatusUnauthorized, rec.Code,
+					"self %s %s must not be 401 (self-exempt, no Authorizer); body %s", g.method, g.selfPath, rec.Body)
+				assert.NotEqual(t, http.StatusForbidden, rec.Code,
+					"self %s %s must not be 403 (self-exempt, no Authorizer); body %s", g.method, g.selfPath, rec.Body)
+			}
+		})
+	}
 }
 
 func TestAccessCore_RouteSessionLogout(t *testing.T) {
