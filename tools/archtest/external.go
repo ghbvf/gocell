@@ -127,10 +127,7 @@ type CellRule struct {
 // is derived, never a silently-defaulted input). ref: arch-go config.Load.
 //
 // Fields are deliberately minimal (YAGNI): every field is read by a rule that
-// actually ships in [StandardCellRules]. A field reserved for a not-yet-migrated
-// rule (e.g. a composition-root package list for PROD-MAIN-WIRING-NOOP-REJECT-01,
-// issue #1303) is NOT added here until that rule lands — a public no-op field is
-// a premature abstraction. ref: arch-go config.Load.
+// actually ships in [StandardCellRules]. ref: arch-go config.Load.
 type ConfigForExternalCell struct {
 	// BuildTags lists the consumer's production build tags (e.g.
 	// []string{"prod", "amqp"}). Rules that must see code behind build
@@ -140,6 +137,18 @@ type ConfigForExternalCell struct {
 	// own dogfood passes FlatNonDefaultTags() (its full non-default tag union);
 	// an external repo passes whatever tags gate its production files.
 	BuildTags []string
+
+	// ProductionMainPkgs lists the consumer's composition-root (main) package
+	// patterns — e.g. []string{"./cmd/corebundle"}. PROD-MAIN-WIRING-NOOP-REJECT-01
+	// scans ONLY these packages and rejects direct construction of a raw kernel/outbox
+	// noop event sink (see prod_main_wiring_noop_reject.go). Entries are Go-style
+	// relative package patterns matched module-path-agnostically against each
+	// package's module-relative dir: "./cmd/x" (exact package) or "./cmd/x/..."
+	// (recursive). An empty slice means "do not scan composition roots" — opt-in by
+	// declaration, mirroring BuildTags; a repo that has not opted in gets no
+	// main-pkg scan (no false positives). An external repo lists whatever packages
+	// build its production binaries.
+	ProductionMainPkgs []string
 
 	// ExtraRules are consumer-owned custom rules appended to the standard set —
 	// the minimal plugin surface. They use the identical CellRule type (no
@@ -286,6 +295,17 @@ func StandardCellRules() []*CellRule {
 		// persistence interfaces (Compensate must be pure reverse rollback). See
 		// saga_invariants.go godoc.
 		{ID: sagaCompensatePureRuleID, Run: CheckSagaStepCompensatePure},
+		// PROD-MAIN-WIRING-NOOP-REJECT-01: bans a production composition-root (main)
+		// package — those a consumer declares in cfg.ProductionMainPkgs — from
+		// directly constructing a raw kernel/outbox noop sink (NoopWriter /
+		// NewNoopEmitter / NewDirectEmitter / DiscardPublisher / DemoTxRunner). Pure
+		// ban (no allowlist); distinct failure domain from runtime CheckNotNoop (cell
+		// Init) / OUTGUARD-01 (cell.yaml) / CELL-L2-INIT-CHECKNOTNOOP-CALLED-01 (cell
+		// package). Opt-in: empty ProductionMainPkgs → no scan, so it is vacuous for a
+		// consumer that has not declared its composition roots (not a false-safety
+		// register — it is a real ban once opted in). Downstream Hard / upstream Medium.
+		// See prod_main_wiring_noop_reject.go godoc.
+		{ID: ruleProdMainWiringNoopReject01, Run: CheckProdMainWiringNoopReject},
 	}
 }
 

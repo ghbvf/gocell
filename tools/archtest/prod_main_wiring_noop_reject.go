@@ -1,0 +1,270 @@
+// prod_main_wiring_noop_reject.go — importable rule body for
+// PROD-MAIN-WIRING-NOOP-REJECT-01. Lives in a non-test .go (like
+// outbox_reconstruction_caller.go) so an external Cell repo can import and run it
+// via StandardCellRules / RunStandardCellRules. The dogfood, detector reds, green
+// fixture, anti-vacuity and matcher unit tests live in prod_main_wiring_test.go.
+//
+// # PROD-MAIN-WIRING-NOOP-REJECT-01
+//
+// A production composition-root (main) package — those a consumer declares in
+// cfg.ProductionMainPkgs — must not DIRECTLY construct a raw "noop / degraded"
+// outbox event sink. Raw noop sinks silently drop events (or lose L2 atomicity);
+// in a production binary that is data loss, not a missing feature. The five
+// forbidden symbols are the complete raw-noop sink surface of kernel/outbox:
+//
+//	kernel/outbox.NoopWriter        — Writer that validates then discards every entry
+//	kernel/outbox.NewNoopEmitter    — Emitter backed by NoopWriter (discards)
+//	kernel/outbox.NewDirectEmitter  — DirectEmitter ctor that bypasses ResolveEmitter
+//	kernel/outbox.DiscardPublisher  — Publisher that logs+discards (the "noop publisher")
+//	kernel/outbox.DemoTxRunner      — pass-through TxRunner (no real transaction)
+//
+// All five implement (or back) cell.Nooper and are rejected at runtime by
+// outbox.CheckNotNoop in DurabilityDurable mode. This rule is the STATIC,
+// pre-Init counterpart: a composition root could mint one before any cell Init
+// runs, where no pool/cell probe can see it.
+//
+// Sanctioned — deliberately NOT forbidden (the rule pushes raw noop THROUGH
+// these; banning them would break legitimate wiring):
+//
+//	outbox.DemoCellEmitter()    — sealed demo emitter funnel (the sanctioned way to
+//	                              inject a noop emitter into a cell Option)
+//	outbox.DemoCellTxManager()  — sealed demo tx-manager funnel
+//	outbox.NewDirectCellEmitter — intended L4 direct-publish-by-design production
+//	outbox.ResolveEmitter / ResolveCellEmitter — durable-vs-direct resolver funnel
+//	runtime/eventbus.New / InMemoryEventBus — the sole sanctioned in-process
+//	                              publisher (no real-broker alternative is wired
+//	                              anywhere); excluding it is option A of issue #1303.
+//	                              The "in-memory publisher in postgres mode" gap is
+//	                              real but out of scope — recorded in ADR
+//	                              202605281200 (#1303 row) and tracked as backlog
+//	                              issue #1940, not silently accepted.
+//
+// Rule semantic: raw noop sinks must route through the sealed demo funnels or
+// wire real infra.
+//
+// # Non-redundant failure domain (contract-fanout)
+//
+// Three existing guards touch noop outbox; none scans main-package wiring:
+//   - outbox.CheckNotNoop — RUNTIME, inside a cell's Init, durable mode only.
+//   - OUTGUARD-01 — METADATA, over cell.yaml durabilityMode.
+//   - CELL-L2-INIT-CHECKNOTNOOP-CALLED-01 — archtest over a CELL package's Init.
+//
+// This rule's domain is the COMPOSITION-ROOT (main) package, statically, before
+// any cell Init.
+//
+// # AI-robust rating (charter §"Funnel 双向锁评级"), same shape as
+// OUTBOX-RECONSTRUCTION-CALLER-01
+//
+//   - Downstream HARD. The reference is resolved via go/types (ResolvePackageRef
+//     over both SelectorExpr and dot-import bare *ast.Ident), so import alias,
+//     dot-import, and function-value forms all resolve to the same symbol — no
+//     "looks-like-but-isn't" gap. There is NO allowlist (unlike reconstruction):
+//     within the scanned main pkgs this is a PURE BAN — zero exemption surface,
+//     zero allowlist-rot. The anti-vacuity self-test
+//     (TestProdMainWiringNoopReject_AntiVacuity_CorebundleInScope) proves the
+//     workspace Production scan reaches the separate cmd/corebundle module, so a
+//     0-files-scanned vacuous-green cannot pass as a clean dogfood (a downstream
+//     Medium→Soft regression guard).
+//   - Upstream MEDIUM — permanent Go ceiling, NOT a deferred TODO. Go visibility
+//     cannot forbid a main package from calling a PUBLIC func/type; the five
+//     symbols MUST stay public (tests / demos / examples legitimately construct
+//     them). Sealing them is unreachable without breaking those callers. The
+//     consumer's ProductionMainPkgs declaration completeness is also consumer-side
+//     (same ceiling as BuildTags). Same permanent-ceiling family as #851/#893/#1282.
+//   - Charter single-grade floor = Medium (weakest leg governs).
+//
+// # 强制盲区自检 (reverse self-test backs each claim)
+//
+//   - import alias — CAUGHT (go/types). Backed by red_aliasimport fixture.
+//   - dot-import bare ident — CAUGHT (ast.Ident walk). Backed by red_dotimport.
+//   - function value (`f := outbox.NewNoopEmitter`) — CAUGHT (reference walk, not
+//     call-only). Backed by the NewDirectEmitter function-value line in red_qualified.
+//   - cross-package call-graph transitivity / factory wrapping — NOT CAUGHT: a main
+//     pkg that calls a helper in ANOTHER (non-scanned) package which constructs the
+//     sink is invisible to this callsite scan. Permanent Go-language ceiling (a
+//     callsite scan cannot follow arbitrary cross-package call graphs; same family
+//     as reconstruction's upstream Medium). Mitigation: the established wiring goes
+//     through composition.NewSharedDeps / the sealed funnels, and a durable
+//     assembly still trips runtime CheckNotNoop. Documented, not silently accepted.
+//   - //go:build-tagged production files under a non-default tag — covered by the
+//     default + cfg.BuildTags double scan (scanner.Canonical dedups the overlap).
+//
+// # External Cell repo semantics
+//
+// Registered in StandardCellRules. Opt-in by declaration: an external repo lists
+// its composition roots in cfg.ProductionMainPkgs; an empty slice means "do not
+// scan composition roots" (mirrors BuildTags) — no false positives on a repo that
+// has not opted in. The forbidden symbols live in GoCell's kernel/outbox, imported
+// as a dependency, so the go/types resolution works identically in a consumer module.
+package archtest
+
+import (
+	"fmt"
+	"go/ast"
+	"go/token"
+	"go/types"
+	"path"
+	"strings"
+	"testing"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
+)
+
+// ruleProdMainWiringNoopReject01 is the stable rule ID.
+const ruleProdMainWiringNoopReject01 = "PROD-MAIN-WIRING-NOOP-REJECT-01"
+
+// prodMainOutboxPkg is the import path of kernel/outbox, derived from
+// PlatformModulePath so a module rename / /v2 bump updates one place.
+const prodMainOutboxPkg = PlatformModulePath + "/kernel/outbox"
+
+// prodMainForbiddenSinks maps each forbidden kernel/outbox symbol (exported name)
+// to the sanctioned replacement named in its diagnostic. This is the complete
+// raw-noop sink surface of kernel/outbox (#1303 completeness audit). Sealed demo
+// funnels (DemoCellEmitter / DemoCellTxManager), the intended-L4 NewDirectCellEmitter,
+// and the durable resolver (ResolveEmitter) are deliberately ABSENT — the rule
+// pushes raw noop through those, it does not ban them.
+var prodMainForbiddenSinks = map[string]string{
+	"NoopWriter":       "outbox.DemoCellEmitter() (sealed demo funnel) or a real outbox.Writer",
+	"NewNoopEmitter":   "outbox.DemoCellEmitter() (sealed demo funnel) or outbox.ResolveEmitter",
+	"NewDirectEmitter": "outbox.ResolveEmitter / outbox.NewDirectCellEmitter (sealed)",
+	"DiscardPublisher": "a real outbox.Publisher (DiscardPublisher is a test/demo-only discard sink)",
+	"DemoTxRunner":     "outbox.DemoCellTxManager() (sealed demo funnel) or a real persistence.TxRunner",
+}
+
+// CheckProdMainWiringNoopReject enforces PROD-MAIN-WIRING-NOOP-REJECT-01: no
+// production composition-root package listed in cfg.ProductionMainPkgs may
+// directly construct a forbidden raw-noop sink. It returns the diagnostics it
+// observes without calling t.Errorf (the caller — Report / RunStandardCellRules —
+// funnels diagnostics uniformly).
+//
+// It scans the workspace Production package set (go.work-aware, so the separate
+// cmd/corebundle module is reachable) and keeps only Passes whose package dir
+// matches a declared main-pkg pattern. cfg.BuildTags drives a second tagged scan
+// so a sink behind //go:build <tag> is not missed; scanner.Canonical dedups the
+// overlap.
+func CheckProdMainWiringNoopReject(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
+	t.Helper()
+	if len(cfg.ProductionMainPkgs) == 0 {
+		// Opt-in by declaration (mirrors BuildTags): a consumer that does not list
+		// its composition roots gets no main-pkg scan. GoCell's own dogfood passes
+		// ./cmd/corebundle and the anti-vacuity self-test proves it is in scope, so
+		// this early return is not a silent vacuous green for GoCell.
+		return nil
+	}
+	mainPkgs := cfg.ProductionMainPkgs
+	scan := func(p *Pass) []Diagnostic {
+		return collectProdMainWiringViolationsInPkgs(p, mainPkgs)
+	}
+	out := Run(t, Production(TypedOpts{}), scan)
+	if len(cfg.BuildTags) > 0 {
+		out = append(out, Run(t, Production(TypedOpts{Tags: cfg.BuildTags}), scan)...)
+	}
+	return scanner.Canonical(out)
+}
+
+// collectProdMainWiringViolationsInPkgs returns the forward reference-walk
+// violations for p, but only when p's package belongs to one of mainPkgs. A typed
+// Pass is exactly one package, so every file shares one directory — gate the whole
+// Pass on the first file's dir.
+func collectProdMainWiringViolationsInPkgs(p *Pass, mainPkgs []string) []Diagnostic {
+	if !p.Typed() || len(p.Files) == 0 {
+		return nil
+	}
+	if !matchesMainPkg(path.Dir(p.Rel(p.Files[0])), mainPkgs) {
+		return nil
+	}
+	return collectProdMainWiringViolations(p)
+}
+
+// collectProdMainWiringViolations is the per-Pass forward scanner shared by the
+// production Check (after main-pkg filtering) and the detector fixture self-tests
+// (which call it directly, with no main-pkg filter, because the fixtures do not
+// live under a main-pkg dir). It walks BOTH SelectorExpr references (qualified /
+// aliased / method / function-value) AND bare *ast.Ident references (dot-import
+// form), mirroring outbox_reconstruction_caller.go.
+func collectProdMainWiringViolations(p *Pass) []Diagnostic {
+	if !p.Typed() {
+		return nil
+	}
+	var d []Diagnostic
+	for _, file := range p.Files {
+		rel := p.Rel(file)
+		// Qualified / aliased / method / function-value forms (SelectorExpr).
+		EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+			if symbol, ok := prodMainForbiddenSymbol(p.TypesInfo, sel); ok {
+				d = append(d, prodMainDiag(p, rel, sel.Pos(), symbol))
+			}
+		})
+		// Dot-import bare-identifier form. Idents that are the .Sel of a
+		// SelectorExpr are already handled above.
+		EachInSubtree[ast.Ident](file, func(ident *ast.Ident) {
+			if isInsideSelectorExpr(file, ident) {
+				return
+			}
+			if symbol, ok := prodMainForbiddenSymbol(p.TypesInfo, ident); ok {
+				d = append(d, prodMainDiag(p, rel, ident.Pos(), symbol))
+			}
+		})
+	}
+	return d
+}
+
+// prodMainForbiddenSymbol resolves a SelectorExpr or bare Ident reference to a
+// forbidden kernel/outbox sink symbol, alias/dot-import-proof via go/types.
+// Returns ("", false) for any other reference. The returned key is
+// "kernel/outbox.<Name>".
+func prodMainForbiddenSymbol(info *types.Info, expr ast.Expr) (string, bool) {
+	pkgPath, name, ok := ResolvePackageRef(info, expr)
+	if !ok || pkgPath != prodMainOutboxPkg {
+		return "", false
+	}
+	if _, forbidden := prodMainForbiddenSinks[name]; !forbidden {
+		return "", false
+	}
+	return "kernel/outbox." + name, true
+}
+
+// prodMainDiag builds the diagnostic for a forbidden reference at pos.
+func prodMainDiag(p *Pass, rel string, pos token.Pos, symbol string) Diagnostic {
+	return Diagnostic{
+		Rel:     rel,
+		Line:    p.Fset.Position(pos).Line,
+		Message: prodMainViolationMessage(symbol),
+	}
+}
+
+// prodMainViolationMessage is the diagnostic body shared by the SelectorExpr and
+// bare-Ident reference walkers.
+func prodMainViolationMessage(symbol string) string {
+	name := strings.TrimPrefix(symbol, "kernel/outbox.")
+	return fmt.Sprintf(
+		"PROD-MAIN-WIRING-NOOP-REJECT-01: %s is constructed in a production composition-root "+
+			"(main) package; production wiring must not directly mint a raw noop/degraded event "+
+			"sink (a pool/cell probe cannot see a main-package noop minted before cell Init). Route "+
+			"demo wiring through the sealed funnel or wire real infra: %s.",
+		symbol, prodMainForbiddenSinks[name],
+	)
+}
+
+// matchesMainPkg reports whether relDir (a module-relative package directory)
+// belongs to one of patterns. Patterns are Go-style relative package patterns
+// matched module-path-agnostically against the dir: "./cmd/x" or "cmd/x" (exact
+// package) and "./cmd/x/..." (recursive prefix). A leading "./" is optional.
+// Extracted as a pure function so the matcher is unit-testable.
+func matchesMainPkg(relDir string, patterns []string) bool {
+	relDir = path.Clean(relDir)
+	for _, pat := range patterns {
+		pat = strings.TrimPrefix(pat, "./")
+		if rec, ok := strings.CutSuffix(pat, "/..."); ok {
+			rec = path.Clean(rec)
+			if relDir == rec || strings.HasPrefix(relDir, rec+"/") {
+				return true
+			}
+			continue
+		}
+		if relDir == path.Clean(pat) {
+			return true
+		}
+	}
+	return false
+}
