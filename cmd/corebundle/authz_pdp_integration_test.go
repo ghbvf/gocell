@@ -202,12 +202,20 @@ func TestABACPDPGatesAuditQuery(t *testing.T) {
 	// Case 2: non-admin querying ANOTHER actor's audit → PDP default-deny → 403.
 	// This is the T10.4 acceptance criterion: the decision comes from the PDP
 	// (RequirePermission), not a hard-coded role check in the handler.
+	// F7: assert on the response body message ("insufficient permissions") to
+	// distinguish a PDP deny from a fail-closed no-Authorizer 403
+	// ("authorization policy engine not wired"). The admin→200 case (Case 1)
+	// already proves the PDP is reachable and wired; this assertion proves the
+	// deny came from the PDP path, not a configuration gap.
 	t.Run("non_admin_other_actor_403", func(t *testing.T) {
 		resp, body := pdpAuditReq(t, base, userToken, otherActorID)
 		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
 			"non-admin querying another actor must get 403 (PDP default-deny); body=%s", body)
 		assert.Contains(t, body, "ERR_AUTH_FORBIDDEN",
 			"PDP deny must produce ERR_AUTH_FORBIDDEN; body=%s", body)
+		assert.Contains(t, body, "insufficient permissions",
+			"PDP deny message must be %q, not %q (which would indicate a missing Authorizer wiring); body=%s",
+			"insufficient permissions", "authorization policy engine not wired", body)
 	})
 
 	// Case 3: non-admin querying their OWN audit (actorId == subject) → 200.

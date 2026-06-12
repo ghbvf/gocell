@@ -540,8 +540,10 @@ func TestInit_DurableMode_WithBootstrapStore_Succeeds(t *testing.T) {
 
 // TestAuditCore_Wiring_StaleCursor_DemoVsDurable exercises DurabilityMode →
 // cell.Init → service → ExecutePagedQuery with a garbage cursor.
-// An admin identity is injected via auth.TestContext because the
-// audit-query handler calls auth.RequireSelfOrRole.
+// An admin identity is injected so the request reaches the cursor-validation
+// path (auditQueryPolicy self-branch: empty actorId → no PDP call → 200/400).
+// The handler uses auditQueryPolicy + auth.RequirePermission(PermAuditRead)
+// for cross-actor reads; self/empty-actorId bypasses the PDP by design.
 func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
 	t.Parallel()
 	productionKey := []byte("wiring-test-audit-cursor-key-32b")

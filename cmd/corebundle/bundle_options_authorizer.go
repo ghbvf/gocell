@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync/atomic"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/authz"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
@@ -16,6 +18,15 @@ import (
 // Authorizer() auth.Authorizer method (cell_providers.go:23-26). Defined here to
 // avoid importing corecells/ directly, which is forbidden by the
 // corebundle-no-cells depguard rule (COMPOSITION-MODULE-API-01, #1085).
+//
+// AI-robust Grade: Medium — structural duck-type; compile-breaks if AccessCore
+// drops Authorizer() auth.Authorizer. Hard-ification path: generate this
+// interface from contract.yaml → codegen in PR-13.
+//
+// Idempotency contract: Authorizer() MUST be idempotent and side-effect-free
+// post-Init. lazyAuthorizer may call it concurrently from multiple goroutines
+// on the first request (benign TOCTOU: atomic.Pointer is safe, provider must
+// return the same value each time after Init completes).
 type authorizerProvider interface {
 	Authorizer() auth.Authorizer
 }
@@ -39,6 +50,10 @@ type lazyAuthorizer struct {
 	resolved atomic.Pointer[auth.Authorizer]
 }
 
+// msgLazyAuthorizerNilProvider is the const message for the fail-closed guard
+// when the provider returns nil after Init. Required by MESSAGE-CONST-LITERAL-01.
+const msgLazyAuthorizerNilProvider = "authorization provider returned nil Authorizer after Init"
+
 // Authorize implements auth.Authorizer.
 func (l *lazyAuthorizer) Authorize(ctx context.Context, subject, resource, action string) (authz.Decision, error) {
 	if ptr := l.resolved.Load(); ptr != nil {
@@ -46,11 +61,30 @@ func (l *lazyAuthorizer) Authorize(ctx context.Context, subject, resource, actio
 	}
 	a := l.provider.Authorizer()
 	if a == nil {
-		return authz.Decision{}, fmt.Errorf(
-			"lazyAuthorizer: provider %T returned nil Authorizer — Init may not have completed yet", l.provider)
+		// Provider returned nil after Init — this is a programming error in the
+		// cell. Log at Error so operators can diagnose; the %T detail goes to
+		// InternalDetail (server-side only, never on wire).
+		slog.Error(msgLazyAuthorizerNilProvider,
+			slog.String("provider_type", authorizerProviderTypeName(l.provider)),
+		)
+		return authz.Decision{}, errcode.New(
+			errcode.KindUnavailable, errcode.ErrServiceUnavailable,
+			msgLazyAuthorizerNilProvider,
+			errcode.WithInternal(errcode.InternalAttr("provider_type", authorizerProviderTypeName(l.provider))),
+		)
 	}
 	l.resolved.Store(&a)
 	return a.Authorize(ctx, subject, resource, action)
+}
+
+// authorizerProviderTypeName returns the %T string of p for diagnostic use in
+// InternalDetail. Using a helper avoids fmt.Sprintf in the hot path when the
+// provider is non-nil (resolved.Load() short-circuits before this function).
+func authorizerProviderTypeName(p authorizerProvider) string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("%T", p)
 }
 
 var _ auth.Authorizer = (*lazyAuthorizer)(nil)

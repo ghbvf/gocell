@@ -122,6 +122,23 @@ func scanPermissionBasedAuthzViolations(p *Pass, f *ast.File, rel string, allowl
 	return out
 }
 
+// TestPermissionBasedAuthzAllowlist_Ceiling guards that the migration allowlist
+// does not grow past its known maximum (8 entries as of PR-10a). An accidental
+// NEW entry that suppresses a real PERMISSION-BASED-AUTHZ-01 violation would
+// silently increase the ceiling — this test makes that visible in CI.
+//
+// PR-10b intent: each PR-10b commit removes one or more entries and decrements
+// this ceiling toward 0. When the allowlist is empty this test becomes trivially
+// true and can be removed together with the allowlist.
+func TestPermissionBasedAuthzAllowlist_Ceiling(t *testing.T) {
+	const maxAllowlistSize = 8 // PR-10a known maximum; PR-10b decrements toward 0
+	if got := len(permissionBasedAuthzAllowlist); got > maxAllowlistSize {
+		t.Errorf("permissionBasedAuthzAllowlist has %d entries, want ≤ %d — "+
+			"new entries must not be added (migrate to auth.RequirePermission instead); "+
+			"PR-10b shrinks this toward 0", got, maxAllowlistSize)
+	}
+}
+
 // TestPermissionBasedAuthz_01 enforces PERMISSION-BASED-AUTHZ-01 over
 // corecells business handlers. Any auth.AnyRole / auth.SelfOr /
 // auth.RequireAnyRole call outside the migration allowlist is a violation.

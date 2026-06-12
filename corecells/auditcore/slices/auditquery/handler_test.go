@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/authz"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -1282,6 +1283,140 @@ func assertActorBindingCase(t *testing.T, mux *http.ServeMux, tc actorBindingCas
 		gotActorIDs = append(gotActorIDs, item["actorId"].(string))
 	}
 	assert.Equal(t, tc.wantActorIDs, gotActorIDs)
+}
+
+// TestAuditQueryPolicy is a direct table-driven unit test of the auditQueryPolicy
+// function (F11/F3-test fix). It covers all branches of the policy gate without
+// going through the full HTTP handler stack, so failures point precisely at the
+// policy logic rather than at routing or codec layers.
+//
+// Design notes:
+//   - Self branch (empty actorId OR actorId == subject): returns nil immediately,
+//     no PDP call. The comment in TestHandler_RegisterRoutes_AuthzNegative case
+//     "empty_actorId_self_branch_no_authorizer" captures this; the test below pins it.
+//   - Cross-actor branch (actorId != subject): delegates to
+//     auth.RequirePermission(authz.PermAuditRead), which reads the Authorizer from
+//     ctx. No Authorizer → fail-closed 403. Allow Authorizer → nil.
+//     Deny Authorizer → 403. Authorizer returning error → error passes through
+//     (status determined by the error's errcode Kind — e.g. KindUnavailable → 503).
+//   - auditQueryPolicy is NOT involved in row-visibility or column-masking;
+//     those are enforced at the data layer (RowScope / FieldMask obligations).
+func TestAuditQueryPolicy(t *testing.T) {
+	const (
+		selfSubject  = "usr-self"
+		otherSubject = "usr-other"
+	)
+
+	unavailableErr := errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable,
+		"policy store unavailable")
+
+	tests := []struct {
+		name         string
+		principal    *auth.Principal // nil = no principal in ctx
+		actorID      string          // query param value
+		withAuthzCtx func(context.Context) context.Context
+		wantErr      bool
+		wantErrCode  string // errcode.Code string, checked when wantErr=true
+		wantErrNil   bool   // true = error must be nil (allow)
+	}{
+		{
+			// No principal in context → 401 (auditQueryPolicy requires auth.FromContext ok).
+			name:        "no_principal_returns_401",
+			principal:   nil,
+			actorID:     "",
+			wantErr:     true,
+			wantErrCode: "ERR_AUTH_UNAUTHORIZED",
+		},
+		{
+			// Self branch: empty actorId → nil (allow), no PDP consulted.
+			name:       "empty_actorId_self_branch_allows",
+			principal:  &auth.Principal{Kind: auth.PrincipalUser, Subject: selfSubject, TenantID: auditQueryTestTenant, AuthMethod: "test"},
+			actorID:    "",
+			wantErrNil: true,
+		},
+		{
+			// Self branch: actorId == subject → nil (allow), no PDP consulted.
+			name:       "actorId_equals_subject_self_branch_allows",
+			principal:  &auth.Principal{Kind: auth.PrincipalUser, Subject: selfSubject, TenantID: auditQueryTestTenant, AuthMethod: "test"},
+			actorID:    selfSubject,
+			wantErrNil: true,
+		},
+		{
+			// Cross-actor: actorId != subject, no Authorizer in ctx → fail-closed 403.
+			name:        "cross_actor_no_authorizer_failclosed",
+			principal:   &auth.Principal{Kind: auth.PrincipalUser, Subject: selfSubject, TenantID: auditQueryTestTenant, AuthMethod: "test"},
+			actorID:     otherSubject,
+			wantErr:     true,
+			wantErrCode: "ERR_AUTH_FORBIDDEN",
+		},
+		{
+			// Cross-actor: actorId != subject, Allow Authorizer → nil (allow).
+			name:         "cross_actor_allow_authorizer_permits",
+			principal:    &auth.Principal{Kind: auth.PrincipalUser, Subject: selfSubject, TenantID: auditQueryTestTenant, AuthMethod: "test"},
+			actorID:      otherSubject,
+			withAuthzCtx: withAllowAuthorizer,
+			wantErrNil:   true,
+		},
+		{
+			// Cross-actor: actorId != subject, Deny Authorizer → 403.
+			name:      "cross_actor_deny_authorizer_forbids",
+			principal: &auth.Principal{Kind: auth.PrincipalUser, Subject: selfSubject, TenantID: auditQueryTestTenant, AuthMethod: "test"},
+			actorID:   otherSubject,
+			withAuthzCtx: func(ctx context.Context) context.Context {
+				return withDenyAuthorizer(ctx, "policy: no matching allow rule")
+			},
+			wantErr:     true,
+			wantErrCode: "ERR_AUTH_FORBIDDEN",
+		},
+		{
+			// Cross-actor: Authorizer returns error (e.g. KindUnavailable) → error
+			// passes through unchanged (503-mapping upstream in RequirePermission).
+			name:      "cross_actor_authorizer_error_passes_through",
+			principal: &auth.Principal{Kind: auth.PrincipalUser, Subject: selfSubject, TenantID: auditQueryTestTenant, AuthMethod: "test"},
+			actorID:   otherSubject,
+			withAuthzCtx: func(ctx context.Context) context.Context {
+				return auth.WithAuthorizer(ctx, &mockAuthorizer{err: unavailableErr})
+			},
+			wantErr:     true,
+			wantErrCode: "ERR_SERVICE_UNAVAILABLE",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			url := "/api/v1/audit/entries"
+			if tc.actorID != "" {
+				url += "?actorId=" + tc.actorID
+			}
+			req := httptest.NewRequest(http.MethodGet, url, nil)
+
+			// Build context.
+			ctx := context.Background()
+			if tc.principal != nil {
+				ctx = auth.WithPrincipal(ctx, tc.principal)
+			}
+			if tc.withAuthzCtx != nil {
+				ctx = tc.withAuthzCtx(ctx)
+			}
+			req = req.WithContext(ctx)
+
+			err := auditQueryPolicy(req)
+
+			if tc.wantErrNil {
+				assert.NoError(t, err, "expected nil error (allow)")
+				return
+			}
+			if !tc.wantErr {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err, "expected a non-nil error")
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec, "error must be an *errcode.Error")
+			assert.Equal(t, tc.wantErrCode, string(ec.Code),
+				"error code mismatch for case %q", tc.name)
+		})
+	}
 }
 
 // TestHandleQuery_RowScopeVisibilityMatrix is the T5.5 e2e test for EPIC #1337

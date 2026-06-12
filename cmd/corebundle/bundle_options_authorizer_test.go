@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/authz"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
@@ -28,6 +31,41 @@ func (fakeAuthorizer) Authorize(_ context.Context, _, _, _ string) (authz.Decisi
 }
 
 var _ auth.Authorizer = fakeAuthorizer{}
+
+// countingAuthorizer counts how many times Authorize is called. Used to verify
+// that lazyAuthorizer caches the resolved Authorizer and does not call the
+// provider more than once.
+type countingAuthorizer struct {
+	calls atomic.Int64
+}
+
+func (c *countingAuthorizer) Authorize(_ context.Context, _, _, _ string) (authz.Decision, error) {
+	c.calls.Add(1)
+	return authz.Decision{}, nil
+}
+
+var _ auth.Authorizer = (*countingAuthorizer)(nil)
+
+// countingAuthorizerCell wraps a countingAuthorizer behind an authorizerProvider.
+// It also counts how many times Authorizer() is called so we can assert
+// exactly-once resolution across multiple Authorize invocations.
+type countingAuthorizerCell struct {
+	cell.Cell
+	authorizer    *countingAuthorizer
+	providerCalls atomic.Int64
+}
+
+func newCountingAuthorizerCell(id string) *countingAuthorizerCell {
+	return &countingAuthorizerCell{
+		Cell:       cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		authorizer: &countingAuthorizer{},
+	}
+}
+
+func (c *countingAuthorizerCell) Authorizer() auth.Authorizer {
+	c.providerCalls.Add(1)
+	return c.authorizer
+}
 
 // fakeAuthorizerCell is a cell.Cell that also satisfies authorizerProvider.
 // Used to verify the happy-path wiring in primaryAuthorizerOption.
@@ -95,20 +133,25 @@ func TestLazyAuthorizer_DelegatesAfterProviderReady(t *testing.T) {
 }
 
 // TestLazyAuthorizer_CachesAuthorizer verifies that lazyAuthorizer caches the
-// resolved Authorizer so repeated Authorize calls don't invoke the provider
-// redundantly. We verify this indirectly: if caching is broken, calling Authorize
-// twice after resolution would call provider.Authorizer() twice — but since
-// fakeAuthorizer is stateless we just verify both calls succeed.
+// resolved Authorizer so provider.Authorizer() is called exactly once regardless
+// of how many Authorize invocations follow. A broken always-resolve impl would
+// call the provider on every request; this test catches that by asserting the
+// provider call count == 1 across 3 Authorize calls.
 func TestLazyAuthorizer_CachesAuthorizer(t *testing.T) {
 	t.Parallel()
-	provider := newFakeAuthorizerCell("accesscore", fakeAuthorizer{})
+	provider := newCountingAuthorizerCell("accesscore")
 	lazy := &lazyAuthorizer{provider: provider}
 
-	for range 3 {
+	const calls = 3
+	for range calls {
 		_, err := lazy.Authorize(context.Background(), "u", "r", "a")
 		require.NoError(t, err)
 	}
-	// If resolved is populated after first call, subsequent calls use the cache.
+
+	assert.Equal(t, int64(1), provider.providerCalls.Load(),
+		"provider.Authorizer() must be called exactly once across %d Authorize invocations (cache miss on every call = broken caching)", calls)
+	assert.Equal(t, int64(calls), provider.authorizer.calls.Load(),
+		"the underlying Authorizer must be called once per Authorize invocation")
 	require.NotNil(t, lazy.resolved.Load(), "resolved must be populated after first successful Authorize call")
 }
 
@@ -179,6 +222,14 @@ func TestPrimaryAuthorizerOption_NilAuthorizerFromProvider(t *testing.T) {
 	lazy := &lazyAuthorizer{provider: newFakeAuthorizerCell("accesscore", nil)}
 	_, authErr := lazy.Authorize(context.Background(), "user", "resource", "read")
 	require.Error(t, authErr, "lazyAuthorizer must fail closed when provider returns nil Authorizer")
-	assert.Contains(t, authErr.Error(), "nil Authorizer",
-		"error must identify the nil Authorizer to help operators diagnose the cell init state")
+	// The error is now an errcode.Error with KindUnavailable so RequirePermission
+	// maps it to 503. The internal detail carries the provider type for diagnostics;
+	// the message is surfaced via the errcode Message field.
+	var ec *errcode.Error
+	require.True(t, errors.As(authErr, &ec), "lazyAuthorizer nil-provider error must be an errcode.Error")
+	assert.Equal(t, errcode.KindUnavailable, ec.Kind,
+		"nil-provider error must be KindUnavailable so RequirePermission maps it to 503")
+	assert.Equal(t, errcode.ErrServiceUnavailable, ec.Code)
+	assert.Contains(t, ec.Message, "nil Authorizer",
+		"error message must identify the nil Authorizer to help operators diagnose the cell init state")
 }

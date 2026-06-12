@@ -145,13 +145,38 @@ func TestRequirePermission_EmptySubject_Unauthenticated(t *testing.T) {
 	assert.Equal(t, errcode.KindUnauthenticated, ec.Kind)
 }
 
+// --- RequirePermission: zero Permission → fail-closed (403) ---
+
+// TestRequirePermission_ZeroPermission_FailClosed asserts that passing a zero
+// authz.Permission{} to RequirePermission causes a 403 even when an
+// allow-everything Authorizer is in context. A zero Permission is a programmer
+// error and must never reach the PDP.
+func TestRequirePermission_ZeroPermission_FailClosed(t *testing.T) {
+	p := &Principal{Kind: PrincipalUser, Subject: "u1", Roles: []string{"admin"}}
+	allowAll := &mockAuthorizer{allowed: true}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), allowAll))
+
+	policy := RequirePermission(authz.Permission{}) // zero value
+	err := policy(req)
+	require.Error(t, err, "zero Permission must fail-closed even with an allow-everything authorizer")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "zero Permission must return an errcode.Error")
+	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind,
+		"zero Permission must return PermissionDenied (403), not allow")
+	assert.Equal(t, errcode.ErrAuthForbidden, ec.Code)
+}
+
 // --- Full flow via httptest handler: integration check ---
 
 // TestRequirePermission_HTTPIntegration_AllowDeny exercises the Policy through a
 // real HTTP handler using httputil.WriteError so the JSON response body matches the
 // canonical errcode envelope. The deny case produces ERR_AUTH_FORBIDDEN (403),
-// providing assertErrorCode with a second distinct code value.
+// and the unavailable case produces ERR_SERVICE_UNAVAILABLE (503).
 func TestRequirePermission_HTTPIntegration_AllowDeny(t *testing.T) {
+	unavailErr := errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable, "policy store down")
 	tests := []struct {
 		name       string
 		authorizer *mockAuthorizer
@@ -160,6 +185,7 @@ func TestRequirePermission_HTTPIntegration_AllowDeny(t *testing.T) {
 	}{
 		{"allow", &mockAuthorizer{allowed: true}, http.StatusOK, ""},
 		{"deny", &mockAuthorizer{allowed: false}, http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
+		{"unavailable", &mockAuthorizer{err: unavailErr}, http.StatusServiceUnavailable, "ERR_SERVICE_UNAVAILABLE"},
 	}
 
 	for _, tc := range tests {

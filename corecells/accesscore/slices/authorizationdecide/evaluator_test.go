@@ -15,6 +15,11 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+// testAuditRead is the canonical action string for PermAuditRead, used throughout
+// evaluator_test.go to avoid repeated string literals (F13 fix; mirrors the
+// auditReadAction pattern in baseline_test.go — pkg/authz is already imported).
+var testAuditRead = authz.PermAuditRead.String()
+
 // actionResolver builds an attributeResolver with just the principal (no env/resource).
 func actionResolver(p *auth.Principal) attributeResolver {
 	return attributeResolver{principal: p}
@@ -57,15 +62,15 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 		{
 			name: "action matches targeted rule — allows",
 			policies: []*abac.Policy{policyWith("p1",
-				permitRuleWithAction("r1", []string{"audit:read"}, roleCond),
+				permitRuleWithAction("r1", []string{testAuditRead}, roleCond),
 			)},
-			action:    "audit:read",
+			action:    testAuditRead,
 			wantAllow: true,
 		},
 		{
 			name: "action does not match targeted rule — default-deny",
 			policies: []*abac.Policy{policyWith("p1",
-				permitRuleWithAction("r1", []string{"audit:read"}, roleCond),
+				permitRuleWithAction("r1", []string{testAuditRead}, roleCond),
 			)},
 			action:    "config:read",
 			wantAllow: false,
@@ -83,16 +88,16 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 			policies: []*abac.Policy{policyWith("p1",
 				permitRule("r1", authz.Obligations{}, roleCond),
 			)},
-			action:    "audit:read",
+			action:    testAuditRead,
 			wantAllow: true,
 		},
 		{
 			name: "forbid-wins: targeted deny overrides a matching permit for the same action",
 			policies: []*abac.Policy{policyWith("p1",
-				permitRuleWithAction("allow", []string{"audit:read"}, roleCond),
-				forbidRuleWithAction("deny", []string{"audit:read"}),
+				permitRuleWithAction("allow", []string{testAuditRead}, roleCond),
+				forbidRuleWithAction("deny", []string{testAuditRead}),
 			)},
-			action:    "audit:read",
+			action:    testAuditRead,
 			wantAllow: false,
 		},
 		{
@@ -101,7 +106,7 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 				permitRule("allow", authz.Obligations{}, roleCond),
 				forbidRuleWithAction("deny", []string{"config:delete"}),
 			)},
-			action:    "audit:read",
+			action:    testAuditRead,
 			wantAllow: true,
 		},
 		{
@@ -110,13 +115,13 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 				permitRule("allow", authz.Obligations{}, roleCond),
 				forbidRule("deny"),
 			)},
-			action:    "audit:read",
+			action:    testAuditRead,
 			wantAllow: false,
 		},
 		{
 			name: "multi-action target: matches first of the set",
 			policies: []*abac.Policy{policyWith("p1",
-				permitRuleWithAction("r1", []string{"config:read", "audit:read"}, roleCond),
+				permitRuleWithAction("r1", []string{"config:read", testAuditRead}, roleCond),
 			)},
 			action:    "config:read",
 			wantAllow: true,
@@ -124,15 +129,15 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 		{
 			name: "multi-action target: matches second of the set",
 			policies: []*abac.Policy{policyWith("p1",
-				permitRuleWithAction("r1", []string{"config:read", "audit:read"}, roleCond),
+				permitRuleWithAction("r1", []string{"config:read", testAuditRead}, roleCond),
 			)},
-			action:    "audit:read",
+			action:    testAuditRead,
 			wantAllow: true,
 		},
 		{
 			name: "multi-action target: action not in set — denies",
 			policies: []*abac.Policy{policyWith("p1",
-				permitRuleWithAction("r1", []string{"config:read", "audit:read"}, roleCond),
+				permitRuleWithAction("r1", []string{"config:read", testAuditRead}, roleCond),
 			)},
 			action:    "other:write",
 			wantAllow: false,
@@ -157,9 +162,9 @@ func TestEvaluate_BaselineDenyOverridesPermit(t *testing.T) {
 
 	// Tenant policy explicitly forbids audit:read for admin.
 	tenantForbid := policyWith("p1",
-		forbidRuleWithAction("explicit-deny", []string{"audit:read"}),
+		forbidRuleWithAction("explicit-deny", []string{testAuditRead}),
 	)
 
-	dec := svc.evaluate([]*abac.Policy{tenantForbid}, resolver, "audit:read")
+	dec := svc.evaluate([]*abac.Policy{tenantForbid}, resolver, testAuditRead)
 	assert.False(t, dec.IsAllow(), "tenant deny must override baseline allow (forbid-wins)")
 }

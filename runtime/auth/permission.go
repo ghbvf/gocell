@@ -2,11 +2,13 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 
 	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
 // authorizerKey is an unexported private struct type used as the sole context
@@ -24,14 +26,13 @@ import (
 // out-of-package attempt a compile error.
 type authorizerKey struct{}
 
-// WithAuthorizer injects a the PDP Authorizer into the context. It is the sole
+// WithAuthorizer injects the PDP Authorizer into the context. It is the sole
 // upstream funnel entry point for the Authorizer-in-context path.
 //
 // Composition roots (bootstrap, cellmodules) call this once when building the
 // request context chain (e.g. after AuthMiddleware). Business code — cells,
 // handlers, services — must never call this; they consume via
-// AuthorizerFromContext or use the RequirePermission Policy which calls it
-// internally.
+// AuthorizerFromContext, or via RequirePermission which reads it from context.
 //
 // AI-robust Grade: Hard sealed-construction; sole WithAuthorizer upstream +
 // sole AuthorizerFromContext/RequirePermission downstream (funnel 双向锁).
@@ -66,6 +67,33 @@ const msgAuthzPDPNotWired = "authorization policy engine not wired"
 // returned by RequirePermission.
 const msgInsufficientPermissions = "insufficient permissions"
 
+// msgPermissionNotSpecified is the canonical const message for the fail-closed
+// guard when RequirePermission receives a zero authz.Permission{}.
+const msgPermissionNotSpecified = "authorization permission not specified"
+
+// logAuthorizerError logs an Authorizer.Authorize error at the appropriate level.
+// KindPermissionDenied (expected tenant-missing deny) → Warn; all others → Error.
+// The error is redacted before logging per observability.md §Redaction.
+func logAuthorizerError(l *slog.Logger, err error, path, subject, permission string) {
+	var ec *errcode.Error
+	kind := errcode.KindInternal
+	if errors.As(err, &ec) {
+		kind = ec.Kind
+	}
+	args := []any{
+		slog.Any("error", redaction.RedactError(err)),
+		slog.Int("kind_status", kind.Status()),
+		slog.String("path", path),
+		slog.String("subject", subject),
+		slog.String("permission", permission),
+	}
+	if kind == errcode.KindPermissionDenied {
+		l.Warn("authz: Authorizer.Authorize returned error", args...)
+	} else {
+		l.Error("authz: Authorizer.Authorize returned error", args...)
+	}
+}
+
 // RequirePermission returns a Policy that enforces the caller holds the given
 // authz.Permission according to the PDP (Authorizer) wired in context.
 //
@@ -73,17 +101,19 @@ const msgInsufficientPermissions = "insufficient permissions"
 // funnel; business routes declare ABAC gates with this function.
 //
 // Decision logic (fail-closed at every step):
-//  1. Principal absent or PrincipalUser with empty Subject → KindUnauthenticated
+//  1. Zero Permission → KindPermissionDenied (403). A zero authz.Permission{}
+//     is a programmer error; it must never reach the PDP.
+//  2. Principal absent or PrincipalUser with empty Subject → KindUnauthenticated
 //     (HTTP 401). Authentication must precede authorization.
-//  2. Authorizer absent from context → KindPermissionDenied (HTTP 403).
+//  3. Authorizer absent from context → KindPermissionDenied (HTTP 403).
 //     An unwired PDP must never silently permit; this is a misconfiguration
 //     guard that catches routes wired before the composition root injects the
 //     Authorizer.
-//  3. authorizer.Authorize(ctx, subject, r.URL.Path, p.String()) → on error,
+//  4. authorizer.Authorize(ctx, subject, r.URL.Path, p.String()) → on error,
 //     the errcode is returned verbatim so httputil maps the correct HTTP status
 //     (KindUnavailable → 503 when the policy store is down,
 //     KindPermissionDenied → 403 when the request lacks a tenant scope).
-//  4. Decision.IsAllow() → nil (permit). Else → KindPermissionDenied (403).
+//  5. Decision.IsAllow() → nil (permit). Else → KindPermissionDenied (403).
 //
 // RequirePermission intentionally does NOT consume dec.Obligations()
 // (RowScope/FieldMask). This is a coarse allow/deny gate; obligation enforcement
@@ -95,6 +125,11 @@ const msgInsufficientPermissions = "insufficient permissions"
 // sole PDP route entry for permission-based authorization.
 func RequirePermission(p authz.Permission) Policy {
 	return func(r *http.Request) error {
+		// Zero Permission is a programmer error; fail-closed before any I/O.
+		if p.IsZero() {
+			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgPermissionNotSpecified)
+		}
+
 		principal, ok := FromContext(r.Context())
 		if !ok {
 			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgAuthRequired)
@@ -119,17 +154,7 @@ func RequirePermission(p authz.Permission) Policy {
 
 		dec, err := authorizer.Authorize(r.Context(), principal.Subject, r.URL.Path, p.String())
 		if err != nil {
-			// Transparent passthrough: the errcode Kind drives the HTTP status.
-			// KindUnavailable → 503 (policy store down); KindPermissionDenied →
-			// 403 (no tenant scope). Log here so the deny reason is observable
-			// without requiring callers to re-log.
-			loggerFrom(r.Context()).Error(
-				"authz: Authorizer.Authorize returned error",
-				slog.Any("error", err),
-				slog.String("path", r.URL.Path),
-				slog.String("subject", principal.Subject),
-				slog.String("permission", p.String()),
-			)
+			logAuthorizerError(loggerFrom(r.Context()), err, r.URL.Path, principal.Subject, p.String())
 			return err
 		}
 

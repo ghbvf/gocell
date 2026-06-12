@@ -52,3 +52,45 @@ func TestPermissions_NoDuplicates(t *testing.T) {
 		seen[p.String()] = true
 	}
 }
+
+// TestPermissions_KnownVarsEnrolled asserts that each Perm* var exported by
+// this package is present in Permissions(). A new Perm* var that is declared
+// but NOT added to allPermissions is caught here (registry-enrollment contract).
+//
+// Note: Go does not support reflect-based enumeration of package-level vars from
+// within the same package's test, so this test enumerates the known exported vars
+// explicitly. The anti-vacuity property comes from TestPermissions_ClosedRegistry
+// (which pins len==1 for PR-10a) — together they ensure no var is silently
+// un-enrolled: a new Perm* must be added to allPermissions (or len test fails)
+// AND must appear in the explicit membership check below.
+//
+// Registry-enrollment contract: every new Perm* var added to permission.go MUST
+// also be appended to allPermissions in the same commit; omitting the enrollment
+// causes TestPermissions_ClosedRegistry to fail (len mismatch) AND this test to
+// fail (membership miss).
+func TestPermissions_KnownVarsEnrolled(t *testing.T) {
+	registry := Permissions()
+	contains := func(p Permission) bool {
+		for _, r := range registry {
+			if r.String() == p.String() {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Enumerate every exported Perm* var. Update this list when adding new vars.
+	knownVars := []struct {
+		name string
+		perm Permission
+	}{
+		{"PermAuditRead", PermAuditRead},
+	}
+
+	for _, kv := range knownVars {
+		if !contains(kv.perm) {
+			t.Errorf("%s (%q) is declared but missing from Permissions() — add it to allPermissions in permission.go",
+				kv.name, kv.perm.String())
+		}
+	}
+}
