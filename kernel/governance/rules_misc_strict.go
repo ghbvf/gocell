@@ -611,17 +611,19 @@ func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
 //     IssueInvalid.
 //   - No-op lower bound: `noop` is the facet name (only "minLength" today) for
 //     an explicitly-declared zero/negative string lower bound, which constrains
-//     nothing since string length is always >= 0. The producer
-//     (appendNoopLowerBoundViolation) sets issueType to IssueInvalid.
+//     nothing since string length is always >= 0. `noopVal` carries the offending
+//     value so the message prints it accurately (e.g. -1, not a hard-coded 0).
+//     The producer (appendNoopLowerBoundViolation) sets issueType to IssueInvalid.
 //
 // Every emission site calls newError with an explicit fix argument (INV-3
 // GOVERNANCE-RULE-ERROR-FIX-FIELD-01 checks the fix arg, not a Message substring).
 type inputConstraintViolation struct {
-	location  string // JSON pointer or full metadata field path.
-	missing   string // "minLength" | "maxLength" | "minimum" | "maximum" — empty for relation/no-op faults.
-	relMin    string // non-empty when this is a relation fault; pairs with relMax.
-	relMax    string // non-empty when this is a relation fault; pairs with relMin.
-	noop      string // non-empty (facet name) when this is a no-op lower-bound fault.
+	location  string  // JSON pointer or full metadata field path.
+	missing   string  // "minLength" | "maxLength" | "minimum" | "maximum" — empty for relation/no-op faults.
+	relMin    string  // non-empty when this is a relation fault; pairs with relMax.
+	relMax    string  // non-empty when this is a relation fault; pairs with relMin.
+	noop      string  // non-empty (facet name) when this is a no-op lower-bound fault.
+	noopVal   float64 // the offending lower-bound value when noop != "" (e.g. 0 or -1).
 	issueType IssueType
 }
 
@@ -666,6 +668,11 @@ func (e *schemaWalkError) Error() string {
 // required) is deliberate: only the upper bound has a DoS threat model, and a
 // zero string lower bound is dead boilerplate, whereas minimum: 0 rejects
 // negative limit/page values. See issue #1934 / #1932.
+//
+// AI-robust tier: Medium (governance rule — a no-op minLength: 0 is expressible
+// in the YAML/JSON but is rejected at `gocell validate` time, backed by a
+// synthetic red case). For a metadata value this is the Hard-equivalent ceiling:
+// a YAML/JSON value cannot be compile-frozen the way a Go type can.
 //
 // Rule ID: FMT-25.
 //
@@ -751,8 +758,8 @@ func (v *Validator) validateRequestSchemaInputConstraints(c *metadata.ContractMe
 			results = append(results, v.newError(
 				codeFMT25, issueType,
 				resolved.ProjectRel, viol.location,
-				fmt.Sprintf("contract %q request schema field %s declares a no-op %s: 0 (string length is always >= 0)",
-					c.ID, viol.location, viol.noop),
+				fmt.Sprintf("contract %q request schema field %s declares a no-op %s: %g (string length is always >= 0)",
+					c.ID, viol.location, viol.noop, viol.noopVal),
 				fmt.Sprintf("omit %s or declare a meaningful lower bound >= 1 on the schema node at %s", viol.noop, viol.location),
 			))
 			continue
@@ -1025,6 +1032,7 @@ func appendNoopLowerBoundViolation(node map[string]any, path, minKey string, out
 	*out = append(*out, inputConstraintViolation{
 		location:  path,
 		noop:      minKey,
+		noopVal:   val,
 		issueType: IssueInvalid,
 	})
 }

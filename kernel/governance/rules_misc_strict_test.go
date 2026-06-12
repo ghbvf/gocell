@@ -2129,10 +2129,12 @@ func TestFMT25_CleanSchemaProducesNoViolations(t *testing.T) {
 	assert.Empty(t, matches, "fully-constrained schema/params must produce no FMT-25, got: %v", matches)
 }
 
-// TestFMT25_RequestStringNoopMinLengthZeroInvalid verifies the Hard no-op gate:
-// an explicit minLength: 0 in request.schema.json is rejected (string length is
-// always >= 0, so a zero lower bound constrains nothing). This keeps the deleted
-// minLength: 0 boilerplate unexpressible after the lower bound became optional.
+// TestFMT25_RequestStringNoopMinLengthZeroInvalid verifies the no-op gate (FMT-25,
+// Medium tier — a no-op minLength: 0 is expressible in the schema but is rejected
+// at validate time): an explicit minLength: 0 in request.schema.json is rejected
+// (string length is always >= 0, so a zero lower bound constrains nothing). This
+// keeps the deleted minLength: 0 boilerplate from silently regrowing after the
+// lower bound became optional.
 func TestFMT25_RequestStringNoopMinLengthZeroInvalid(t *testing.T) {
 	dir := t.TempDir()
 	body := `{
@@ -2151,7 +2153,61 @@ func TestFMT25_RequestStringNoopMinLengthZeroInvalid(t *testing.T) {
 	require.Len(t, matches, 1, "explicit minLength: 0 must be rejected as a no-op, got: %v", matches)
 	assert.Equal(t, IssueInvalid, matches[0].IssueType)
 	assert.Equal(t, "$.cursor", matches[0].Field)
-	assert.Contains(t, matches[0].Message, "minLength")
+	assert.Contains(t, matches[0].Message, "minLength: 0")
+	assert.Contains(t, matches[0].Fix, ">= 1", "fix must guide toward a meaningful lower bound")
+}
+
+// TestFMT25_RequestStringNoopMinLengthNegativeInvalid pins the negative-value
+// branch the godoc claims ("zero or below"): minLength: -1 is rejected as a no-op
+// and the message prints the actual value, not a hard-coded 0.
+func TestFMT25_RequestStringNoopMinLengthNegativeInvalid(t *testing.T) {
+	dir := t.TempDir()
+	body := `{
+		"type": "object",
+		"additionalProperties": false,
+		"properties": {
+			"cursor": {"type": "string", "minLength": -1, "maxLength": 256}
+		}
+	}`
+	fmt25WriteSchema(t, dir, body)
+	pm := fmt25Project(nil, nil)
+
+	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
+	require.NoError(t, err)
+	matches := findByCode(results, "FMT-25")
+	require.Len(t, matches, 1, "minLength: -1 must be rejected as a no-op, got: %v", matches)
+	assert.Equal(t, IssueInvalid, matches[0].IssueType)
+	assert.Equal(t, "$.cursor", matches[0].Field)
+	assert.Contains(t, matches[0].Message, "minLength: -1", "message must print the actual value, not a hard-coded 0")
+}
+
+// TestFMT25_RequestStringNoopMinLengthZeroMissingMaxLength pins the double-report
+// path: a string with minLength: 0 AND no maxLength yields both the required
+// maxLength violation and the no-op minLength violation (independent faults).
+func TestFMT25_RequestStringNoopMinLengthZeroMissingMaxLength(t *testing.T) {
+	dir := t.TempDir()
+	body := `{
+		"type": "object",
+		"additionalProperties": false,
+		"properties": {
+			"cursor": {"type": "string", "minLength": 0}
+		}
+	}`
+	fmt25WriteSchema(t, dir, body)
+	pm := fmt25Project(nil, nil)
+
+	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
+	require.NoError(t, err)
+	matches := findByCode(results, "FMT-25")
+	require.Len(t, matches, 2, "minLength:0 + missing maxLength must report both, got: %v", matches)
+	for _, m := range matches {
+		assert.Equal(t, "$.cursor", m.Field)
+	}
+	// Deterministic order: missing-facet (maxLength) sorts before no-op (sortKey).
+	assert.Equal(t, IssueRequired, matches[0].IssueType)
+	assert.Contains(t, matches[0].Message, "maxLength")
+	assert.Equal(t, IssueInvalid, matches[1].IssueType)
+	assert.Contains(t, matches[1].Message, "minLength")
 }
 
 // TestFMT25_ParamNoopMinLengthZeroInvalid verifies the same no-op gate fires on a
@@ -2173,7 +2229,54 @@ func TestFMT25_ParamNoopMinLengthZeroInvalid(t *testing.T) {
 	require.Len(t, matches, 1, "explicit minLength: 0 param must be rejected as a no-op, got: %v", matches)
 	assert.Equal(t, IssueInvalid, matches[0].IssueType)
 	assert.Equal(t, "endpoints.http.queryParams.cursor", matches[0].Field)
-	assert.Contains(t, matches[0].Message, "minLength")
+	assert.Contains(t, matches[0].Message, "minLength: 0")
+	assert.Contains(t, matches[0].Fix, ">= 1", "fix must guide toward a meaningful lower bound")
+}
+
+// TestFMT25_ParamNoopMinLengthNegativeInvalid pins the negative-value branch on
+// the param side: minLength: -1 is rejected and the %d-formatted message prints -1.
+func TestFMT25_ParamNoopMinLengthNegativeInvalid(t *testing.T) {
+	dir := t.TempDir()
+	fmt25WriteSchema(t, dir, `{"type": "object", "additionalProperties": false}`)
+	negOne := -1
+	twoFiftySix := 256
+	pm := fmt25Project(
+		map[string]metadata.ParamSchema{
+			"cursor": {Type: "string", MinLength: &negOne, MaxLength: &twoFiftySix},
+		}, nil,
+	)
+
+	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
+	require.NoError(t, err)
+	matches := findByCode(results, "FMT-25")
+	require.Len(t, matches, 1, "minLength: -1 param must be rejected as a no-op, got: %v", matches)
+	assert.Equal(t, IssueInvalid, matches[0].IssueType)
+	assert.Equal(t, "endpoints.http.queryParams.cursor", matches[0].Field)
+	assert.Contains(t, matches[0].Message, "minLength: -1", "message must print the actual value")
+}
+
+// TestFMT25_ParamNoopMinLengthZeroMissingMaxLength pins the param-side
+// double-report: minLength: 0 + missing maxLength yields both faults.
+func TestFMT25_ParamNoopMinLengthZeroMissingMaxLength(t *testing.T) {
+	dir := t.TempDir()
+	fmt25WriteSchema(t, dir, `{"type": "object", "additionalProperties": false}`)
+	zero := 0
+	pm := fmt25Project(
+		map[string]metadata.ParamSchema{
+			"cursor": {Type: "string", MinLength: &zero}, // no MaxLength
+		}, nil,
+	)
+
+	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
+	require.NoError(t, err)
+	matches := findByCode(results, "FMT-25")
+	require.Len(t, matches, 2, "minLength:0 + missing maxLength param must report both, got: %v", matches)
+	// Insertion order: missing-facet (maxLength) before no-op (minLength).
+	assert.Equal(t, IssueRequired, matches[0].IssueType)
+	assert.Equal(t, "endpoints.http.queryParams.cursor.maxLength", matches[0].Field)
+	assert.Equal(t, IssueInvalid, matches[1].IssueType)
+	assert.Equal(t, "endpoints.http.queryParams.cursor", matches[1].Field)
+	assert.Contains(t, matches[1].Message, "minLength")
 }
 
 // TestFMT25_StringMinLengthOneAccepted is the no-op gate's anti-vacuity guard:
