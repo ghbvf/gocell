@@ -65,7 +65,8 @@ func LoadSourceStore(ctx context.Context, shared *composition.SharedDeps) (kwh.S
 			return nil, fmt.Errorf("webhooksource: register source %q: %w", src.ID(), err)
 		}
 	}
-	slog.Info("webhooksource: loaded persistent webhook sources", slog.Int("count", len(sources)))
+	slog.InfoContext(ctx, "webhooksource: loaded persistent webhook sources",
+		slog.Int("count", len(sources)), slog.String("storage", "postgres"))
 	return registry, nil
 }
 

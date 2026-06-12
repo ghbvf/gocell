@@ -29,10 +29,11 @@ const (
 // the same underlying primitives (runtime/crypto local-aes, adapters/vault
 // transit, cellsecrets demo-key rejection); only the env-var namespace differs.
 //
-// Unlike configcore, an empty provider is always an error here: the loader only
-// calls this in postgres-storage mode (memory/demo deployments use the in-memory
-// kwh.SourceRegistry directly), where persisting an unencrypted secret is never
-// acceptable.
+// Unlike configcore's counterpart, this function takes no storageBackend
+// argument: the loader only calls it in postgres-storage mode (memory/demo
+// deployments use the in-memory kwh.SourceRegistry directly), so there is no
+// NoopTransformer path and an empty provider is ALWAYS an error here — persisting
+// an unencrypted webhook secret is never acceptable.
 //
 // The vault-transit branch reuses the SAME vault transit metric names as
 // configcore; the kernel MetricsProvider returns the already-registered

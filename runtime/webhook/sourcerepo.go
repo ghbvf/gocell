@@ -23,7 +23,8 @@ import (
 // each ciphertext to its source id is computed by the kernel funnel, not passed
 // across this interface, so an implementation cannot weaken the binding.
 //
-// Implemented by adapters/postgres.WebhookSourceRepository.
+// A PostgreSQL implementation lives in adapters/postgres; composition-root wiring
+// (build + LoadAll + snapshot) lives in cellmodules/webhooksource.
 type SourceRepo interface {
 	// Upsert seals src's secret and persists it under src.ID(), inserting a new
 	// row or replacing the existing one (idempotent re-seed / secret rotation).

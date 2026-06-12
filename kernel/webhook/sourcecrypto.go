@@ -61,7 +61,7 @@ func (s Source) Encrypt(ctx context.Context, vt kcrypto.ValueTransformer) (kcryp
 // without ever materializing a loose secret slice. The AAD is recomputed from id
 // (see [sourceAAD]); a tuple whose AAD does not match — e.g. a ciphertext moved
 // under a different source id — fails the AES-GCM tag check and is rejected
-// fail-closed with [errcode.ErrWebhookSecretDecryptFailed].
+// fail-closed with [errcode.ErrWebhookSecretCryptoFailed].
 //
 // vt must be non-nil. The recovered secret is still subject to [NewSource]'s
 // length floor, so a too-short decrypted secret is rejected.

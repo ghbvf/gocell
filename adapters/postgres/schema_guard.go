@@ -88,6 +88,9 @@ const gotWantQuotedFmt = "got %q want %q"
 //                                 + global_seq BIGINT GENERATED ALWAYS AS IDENTITY PK
 //                                 + idx_projection_events_id UNIQUE(id) (idempotency / cursor key)
 //                                 + JSONB payload/metadata/observability/principal
+//   - webhook_sources    (063)  global encrypted webhook HMAC secret store (#1540);
+//                                 PK(source_id); NO tenant_id / NO RLS (SourceStore.Lookup
+//                                 carries no tenant); NO plaintext column (value_cipher NOT NULL).
 //
 // Drift between this comment and verifyChecks/verifyIndexes/... registries is
 // caught by archtest SCHEMA-GUARD-COVERS-EVERY-OWNED-TABLE-01.
@@ -744,6 +747,9 @@ var expectedPKs = []expectedPK{
 	{Table: "config_versions", Columns: []string{"id"}},
 	// feature_flags (051_configcore_tenant_id.sql): PK on id.
 	{Table: "feature_flags", Columns: []string{"id"}},
+	// webhook_sources (063_create_webhook_sources.sql): PK on source_id (global,
+	// no tenant — one source identity per deployment).
+	{Table: "webhook_sources", Columns: []string{"source_id"}},
 }
 
 // expectedDefaults is the load-bearing column-default registry. Only defaults a

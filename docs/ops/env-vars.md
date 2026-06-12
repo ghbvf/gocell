@@ -136,6 +136,19 @@ Probe `postgres_app_role_restricted_ready` verifies at runtime that the serving 
 | `GOCELL_VAULT_TRANSIT_KEY` | Vault Transit key name | `gocell-config` | No | |
 | `GOCELL_VAULT_STARTUP_TIMEOUT` | Total startup I/O deadline (auth Login + optional unwrap + initial key metadata read) | `30s` | No | `time.ParseDuration` format (e.g. `45s`, `2m`). Must be positive; malformed or non-positive values fail fast. Increase for high-latency networks or wrapped-token paths that require multiple TLS round-trips. |
 
+### webhook source secret encryption
+
+Persistent, encrypted webhook source HMAC secrets (#1540). Same envelope-encryption
+backends as configcore; vault-transit reuses the shared `VAULT_*` / `GOCELL_VAULT_*`
+settings above. Required only for assemblies that persist webhook sources (postgres
+storage) — memory/demo deployments seed the in-memory `kwh.SourceRegistry` directly.
+
+| Variable | Purpose | Default | Required | Notes |
+|---|---|---|---|---|
+| `GOCELL_WEBHOOK_KEY_PROVIDER` | Selects the encryption backend for persisted webhook source secrets | — | **postgres mode (when persisting webhook sources)** | `"local-aes"` (dev/CI) or `"vault-transit"` (production). The persistent SourceStore loader fails fast if unset; there is no plaintext fallback (the `webhook_sources` table has no plaintext column). |
+| `GOCELL_WEBHOOK_MASTER_KEY` | 32-byte hex-encoded AES key for `local-aes` provider | — | When `GOCELL_WEBHOOK_KEY_PROVIDER=local-aes` | Generate: `openssl rand -hex 32`. Real mode rejects well-known demo keys. |
+| `GOCELL_WEBHOOK_MASTER_KEY_PREVIOUS` | Previous master key for key rotation | — | No | Optional; enables decryption of secrets encrypted with the prior key during the rotation window (`local-aes` only). |
+
 ### Required Vault transit policy
 
 The provider needs `read` on the key metadata, `update` on `datakey/plaintext` (the encrypt path), `update` on `decrypt`, and `update` on `rotate`. Apply this HCL at the role's policy:

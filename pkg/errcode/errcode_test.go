@@ -52,9 +52,10 @@ func TestWebhookSentinelCodes(t *testing.T) {
 		{ErrWebhookPermanentFailure, "ERR_WEBHOOK_PERMANENT_FAILURE"},
 		{ErrWebhookBodyTooLarge, "ERR_WEBHOOK_BODY_TOO_LARGE"},
 		{ErrWebhookConfigInvalid, "ERR_WEBHOOK_CONFIG_INVALID"},
+		{ErrWebhookSecretCryptoFailed, "ERR_WEBHOOK_SECRET_CRYPTO_FAILED"},
 	}
-	if len(cases) != 11 {
-		t.Fatalf("expected 11 webhook sentinels, got %d", len(cases))
+	if len(cases) != 12 {
+		t.Fatalf("expected 12 webhook sentinels, got %d", len(cases))
 	}
 	for _, tc := range cases {
 		tc := tc

@@ -39,7 +39,10 @@
 --
 -- [F-B11] DEPLOYMENT REQUIREMENT (provisioning, not enforced by this migration):
 -- the application PG role MUST be granted read/write on webhook_sources. Same
--- grant model as the other global table outbox_entries.
+-- grant model as the other global table outbox_entries. The startup LoadAll call
+-- in cellmodules/webhooksource.LoadSourceStore serves as an implicit permission
+-- smoke-test: a missing GRANT surfaces as a fail-fast startup error, not a latent
+-- runtime fault.
 --
 -- ref: adapters/postgres/migrations/010_add_config_value_cipher.sql (envelope columns)
 -- ref: adapters/postgres/migrations/001_create_outbox_entries.sql (global, no tenant/RLS)
