@@ -39,11 +39,24 @@
 // delivery and duplicate device acks are absorbed to a no-op. The handler needs
 // no per-message idempotency guard of its own.
 //
+// # Clock semantics
+//
+// The new cert expiry is computed as resolvedAt + domain.CertValidity, where
+// resolvedAt is the RFC3339Nano timestamp written by the producer (the server-side
+// instant the ack was recorded by the OnCommandResolved hook). Using the
+// producer's server clock means that two-server-clock skew does not affect the
+// epoch CAS or expiry advance — the consumer only needs to parse and add
+// CertValidity, not re-read its own wall clock.
+//
 // # Boundary (回执-driven, not Sweeper-driven)
 //
 // Only a device ACK (回执) drives the resolved event. A fully-silent device whose
 // command is Sweeper-expired (StatusExpired) does NOT flow through this slice;
 // that "device may be stuck" condition is observed by the reconciler's existing
-// per-tick warning. Server recording of the reported completion is in scope;
-// device-side cert application (firmware) remains out of scope per ADR-1044 §277.
+// per-tick warning. A rotation-resolved EVENT that itself exhausts consumer retry
+// budget is Rejected to the broker DLX (handled — the DLX is the explicit failure
+// boundary); the silent-device path re-drives via the reconciler on the next tick,
+// so there is no silent gap between the two paths. Server recording of the reported
+// completion is in scope; device-side cert application (firmware) remains out of
+// scope per ADR-1044 §277.
 package devicecertcompletion

@@ -19,6 +19,7 @@ package devicecell
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"testing"
@@ -269,4 +270,102 @@ func TestCertRenewal_CompletionClosesLoop(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, rec.Entries(),
 		"a renewed device must NOT be re-emitted — the L4 convergence loop has closed (#1870)")
+}
+
+// e2eFailingEmitter is an outbox.Emitter that always returns an error from Emit.
+// Used to simulate a failing event bus in the self-heal e2e test.
+type e2eFailingEmitter struct{ err error }
+
+func (f e2eFailingEmitter) Emit(_ context.Context, _ outbox.Entry) error { return f.err }
+
+// TestCertRenewal_EmitFailureSelfHeals proves that when the OnCommandResolved hook
+// fails to emit the rotation-resolved event (e.g. bus unavailable), the cert state
+// is NOT advanced (no rotation-resolved event reaches the consumer) and the next
+// reconcile tick STILL emits a fresh rotate-cert — proving the level-triggered
+// reconcile loop self-heals without any producer-side state.
+//
+// Flow:
+//  1. Tick 1: reconciler emits rotate-cert → dispatched to queue.
+//  2. Device dequeues and acks success — OnCommandResolved fires with a FAILING
+//     emitter, so the rotation-resolved event is silently dropped (logged only).
+//  3. No rotation-resolved event reaches the completion consumer → cert state stays
+//     at epoch 1 / near-expiry.
+//  4. Tick 2: the device is STILL a near-expiry candidate → reconciler emits again,
+//     proving the loop drives a fresh rotate-cert (the self-heal).
+func TestCertRenewal_EmitFailureSelfHeals(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const attemptTTL = 36 * time.Hour
+	const threshold = 30 * 24 * time.Hour
+
+	base := time.Date(2026, 6, 12, 0, 0, 0, 0, time.UTC)
+	fc := clockmock.New(base)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Device with a near-expiry cert (epoch 1, expires in 24h < 30d threshold).
+	repo := mem.NewDeviceRepository()
+	require.NoError(t, repo.Create(ctx, &domain.Device{
+		ID: "dev-failemit", Name: "fail-emit-sensor", Status: "online", LastSeen: base,
+		CertEpoch: 1, CertExpiresAt: base.Add(24 * time.Hour),
+	}))
+
+	// Producer: cert-renewal reconciler emitting into rec.
+	rec := outboxtest.NewRecorder()
+	reconciler, err := devicecertrenewal.NewReconciler(fc, repo, rec.CellEmitter(),
+		devicecertrenewal.Policy{Threshold: threshold, AttemptTTL: attemptTTL}, logger)
+	require.NoError(t, err)
+
+	// Completion service with a FAILING emitter — Emit always errors.
+	// This means the rotation-resolved event is never delivered to the consumer.
+	failEmit := e2eFailingEmitter{err: errors.New("bus unavailable")}
+	completionSvc, err := devicecertcompletion.NewService(fc, repo,
+		devicecertcompletion.WithEmitter(outbox.WrapEmitterForCell(failEmit)))
+	require.NoError(t, err)
+
+	// Command queue + devicecmd.Service with the failing completion hook wired.
+	queue := commandtest.NewInMemQueue()
+	queue.Now = fc.Now
+	codec := newTestCursorCodec(t)
+	svc, err := devicecmd.NewService(fc, queue, repo, codec, logger, query.RunModeForDemo(true),
+		devicecmd.WithSliceName("devicecommand"),
+		devicecmd.WithOnCommandResolved(completionSvc.OnCommandResolved))
+	require.NoError(t, err)
+	handler := slicecmd.EnqueueCommandAdapter{S: svc}
+
+	// --- Tick 1: produce + dispatch the rotate-cert command. ---
+	_, err = reconciler.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+	require.Len(t, rec.Entries(), 1, "tick 1 must emit exactly 1 rotate-cert")
+	dispatchNew(t, ctx, handler, rec)
+
+	active, err := queue.ScanActive(ctx, kcommand.ScanFilter{DeviceID: "dev-failemit"})
+	require.NoError(t, err)
+	require.Len(t, active, 1, "one active rotate-cert after tick 1")
+	cmdID := active[0].ID
+
+	// --- Device dequeues and acks success — emit FAILS silently. ---
+	_, err = queue.Dequeue(ctx, "dev-failemit", 1, kcommand.DefaultLeaseDuration)
+	require.NoError(t, err)
+	fc.Advance(time.Hour)
+	require.NoError(t, svc.Ack(ctx, "dev-failemit", cmdID, kcommand.AckSuccess))
+	// The hook fired, but Emit returned an error — it was logged and swallowed.
+	// No rotation-resolved event was delivered to the consumer.
+
+	// --- Assert: cert state NOT advanced (still epoch 1 / near-expiry). ---
+	got, err := repo.GetByID(ctx, "dev-failemit")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), got.CertEpoch,
+		"cert state must NOT be advanced when emit fails (no resolved event delivered)")
+	assert.True(t, got.CertExpiresAt.Equal(base.Add(24*time.Hour)),
+		"cert expiry must be unchanged when emit fails")
+
+	// --- Tick 2: device is still near-expiry → reconciler must re-emit. ---
+	// The active-uniqueness key was released when the command was acked (terminal).
+	// The next tick can enqueue a FRESH rotate-cert, proving the level-triggered self-heal.
+	rec.Reset()
+	_, err = reconciler.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+	assert.NotEmpty(t, rec.Entries(),
+		"level-triggered self-heal: near-expiry device must still be driven on next tick after emit failure")
 }

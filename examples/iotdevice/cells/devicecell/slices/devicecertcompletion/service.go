@@ -11,6 +11,7 @@ import (
 	rotationresolved "github.com/ghbvf/gocell/generated/contracts/event/devicecert-rotation-resolved/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/command"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -28,15 +29,20 @@ const (
 	outcomeRejected  = "rejected"
 )
 
+// metricRotationResolved is the counter name for rotation outcome observations.
+const metricRotationResolved = "devicecert_rotation_resolved_total"
+
 // Service is the cert-rotation completion slice service. It both PUBLISHES the
 // rotation-resolved event (OnCommandResolved, wired into the devicecmd ack path)
 // and SUBSCRIBES to it (HandleRotationResolved, the cert-state writer). See the
 // package doc for the cert-manager two-controller rationale.
 type Service struct {
-	repo    domain.DeviceRepository `gocell:"required"`
-	emitter outbox.CellEmitter
-	clk     clock.Clock
-	logger  *slog.Logger
+	repo            domain.DeviceRepository `gocell:"required"`
+	emitter         outbox.CellEmitter
+	clk             clock.Clock
+	logger          *slog.Logger
+	metricsProvider metrics.Provider   // transient: used in NewService to register counter
+	rotationCounter metrics.CounterVec // devicecert_rotation_resolved_total{outcome}; nil = nop
 }
 
 // Option configures a devicecertcompletion Service.
@@ -63,17 +69,32 @@ func WithLogger(l *slog.Logger) Option {
 	}
 }
 
+// WithMetricsProvider wires a metrics.Provider so the service can register
+// devicecert_rotation_resolved_total{outcome}. Optional; defaults to
+// metrics.NopProvider{} when not set (the counter is a safe no-op). A nil
+// provider is silently ignored, leaving the prior value in place.
+func WithMetricsProvider(mp metrics.Provider) Option {
+	return func(s *Service) {
+		if mp != nil {
+			s.metricsProvider = mp
+		}
+	}
+}
+
 // NewService creates a devicecertcompletion Service. clk is a mandatory
 // positional dependency; repo is required (the consumer cannot advance cert
 // state without it) and fails fast when nil; the emitter defaults to a demo
-// emitter and the logger to slog.Default().
+// emitter and the logger to slog.Default(). The metrics provider is optional
+// (defaults to metrics.NopProvider{}) — pass WithMetricsProvider to wire a
+// real backend.
 func NewService(clk clock.Clock, repo domain.DeviceRepository, opts ...Option) (*Service, error) {
 	clock.MustHaveClock(clk, "devicecertcompletion.NewService")
 	s := &Service{
-		repo:    repo,
-		emitter: outbox.DemoCellEmitter(),
-		clk:     clk,
-		logger:  slog.Default(),
+		repo:            repo,
+		emitter:         outbox.DemoCellEmitter(),
+		clk:             clk,
+		logger:          slog.Default(),
+		metricsProvider: metrics.NopProvider{},
 	}
 	for _, o := range opts {
 		o(s)
@@ -81,6 +102,16 @@ func NewService(clk clock.Clock, repo domain.DeviceRepository, opts ...Option) (
 	if err := s.validateRequired(); err != nil {
 		return nil, err
 	}
+	counter, err := s.metricsProvider.CounterVec(metrics.CounterOpts{
+		Name:       metricRotationResolved,
+		Help:       "Total rotation-resolved events processed by devicecertcompletion, by outcome (succeeded/failed/rejected).",
+		LabelNames: []string{"outcome"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("devicecertcompletion: register %s: %w", metricRotationResolved, err)
+	}
+	s.rotationCounter = counter
+	s.metricsProvider = nil // provider no longer needed after registration
 	return s, nil
 }
 
@@ -133,13 +164,15 @@ func (s *Service) OnCommandResolved(ctx context.Context, entry command.Entry, re
 	})
 	if err != nil {
 		s.logger.Error("devicecertcompletion: marshal rotation-resolved payload failed",
-			slog.String("device_id", entry.DeviceID), slog.Any("error", err))
+			slog.String("device_id", entry.DeviceID), slog.String("command_id", entry.ID),
+			slog.Any("error", err))
 		return
 	}
 	ev, err := outbox.NewEntry(s.clk, ctx, topicRotationResolved, payload)
 	if err != nil {
 		s.logger.Error("devicecertcompletion: build rotation-resolved entry failed",
-			slog.String("device_id", entry.DeviceID), slog.Any("error", err))
+			slog.String("device_id", entry.DeviceID), slog.String("command_id", entry.ID),
+			slog.Any("error", err))
 		return
 	}
 	if err := s.emitter.Emit(ctx, ev); err != nil {
@@ -185,17 +218,20 @@ func (s *Service) HandleRotationResolved(ctx context.Context, entry outbox.Entry
 
 	switch p.Outcome {
 	case outcomeSucceeded:
+		s.incOutcomeCounter(ctx, p.Outcome)
 		return s.applySuccess(ctx, p, resolvedAt)
 	case outcomeFailed, outcomeRejected:
 		// Failure observability (回执-driven): a device explicitly reported the
-		// rotation did not succeed. A structured, fail-closed-redacted warning is
-		// the example's signal bar; a production deployment would also increment a
-		// bounded failure counter (closed label set). No cert-state change — the
-		// queue active-uniqueness already released the key, so the reconciler
-		// re-drives a fresh attempt on the next tick.
+		// rotation did not succeed. WARN is chosen over Info to raise signal-to-noise
+		// for device-reported failures; device_id is a non-PII device identifier.
+		// A bounded devicecert_rotation_resolved_total{outcome} counter (FIX 3)
+		// carries the aggregate. No cert-state change — the queue active-uniqueness
+		// already released the key, so the reconciler re-drives a fresh attempt on
+		// the next tick.
+		s.incOutcomeCounter(ctx, p.Outcome)
 		s.logger.Warn("devicecertcompletion: device reported rotate-cert did not succeed",
-			slog.String("device_id", p.DeviceID), slog.Int64("epoch", p.Epoch),
-			slog.String("outcome", p.Outcome))
+			slog.String("entry_id", entry.ID()), slog.String("device_id", p.DeviceID),
+			slog.Int64("epoch", p.Epoch), slog.String("outcome", p.Outcome))
 		return outbox.Ack()
 	default:
 		s.logger.Error("devicecertcompletion: unknown outcome, routing to dead letter",
@@ -206,6 +242,9 @@ func (s *Service) HandleRotationResolved(ctx context.Context, entry outbox.Entry
 }
 
 // applySuccess CAS-advances the device's cert state for a succeeded rotation.
+// Security note: newExpiry is ALWAYS server-computed (resolvedAt + domain.CertValidity),
+// never taken from the device ack payload — devices are not trusted to self-report
+// their NotAfter.
 func (s *Service) applySuccess(ctx context.Context, p rotationresolved.Payload, resolvedAt time.Time) outbox.HandleResult {
 	newExpiry := resolvedAt.Add(domain.CertValidity)
 	advanced, err := s.repo.AdvanceCertAfterRotation(ctx, p.DeviceID, p.Epoch, newExpiry)
@@ -216,7 +255,7 @@ func (s *Service) applySuccess(ctx context.Context, p rotationresolved.Payload, 
 	}
 	if advanced {
 		s.logger.Info("devicecertcompletion: cert rotation completed; advanced device cert state",
-			slog.String("device_id", p.DeviceID), slog.Int64("rotated_epoch", p.Epoch),
+			slog.String("device_id", p.DeviceID), slog.Int64("epoch", p.Epoch),
 			slog.Time("new_expiry", newExpiry))
 	} else {
 		// Idempotent no-op: stale epoch (already advanced) or device gone. Safe to Ack.
@@ -224,6 +263,18 @@ func (s *Service) applySuccess(ctx context.Context, p rotationresolved.Payload, 
 			slog.String("device_id", p.DeviceID), slog.Int64("epoch", p.Epoch))
 	}
 	return outbox.Ack()
+}
+
+// incOutcomeCounter increments the devicecert_rotation_resolved_total counter
+// for the given outcome value (one of outcomeSucceeded / outcomeFailed /
+// outcomeRejected — the closed set validated by HandleRotationResolved before
+// this is called). A nil counter (failed registration or NopProvider) is a
+// safe no-op.
+func (s *Service) incOutcomeCounter(ctx context.Context, outcome string) {
+	if s.rotationCounter == nil {
+		return
+	}
+	s.rotationCounter.With(metrics.Labels{"outcome": outcome}).Inc(ctx)
 }
 
 // outcomeFromReason maps a terminal command.AckReason to the resolved-event
@@ -241,17 +292,38 @@ func outcomeFromReason(r command.AckReason) string {
 	}
 }
 
+// Field-length upper bounds for the rotation-resolved event payload. These are
+// defense-in-depth limits against log-injection and parse-DoS attacks; the
+// underlying wire format is trusted to carry reasonable values but the async
+// event boundary is treated as untrusted (permanent error → DLX on violation).
+const (
+	maxDeviceIDLen   = 128
+	maxOutcomeLen    = 32
+	maxResolvedAtLen = 64
+)
+
 // validateResolvedPayload checks the schema-required fields this consumer relies
 // on. A violation is a permanent producer-side error (returned non-nil).
 func validateResolvedPayload(p rotationresolved.Payload) error {
 	if p.DeviceID == "" {
 		return fmt.Errorf("rotation-resolved payload deviceId is empty")
 	}
+	if len(p.DeviceID) > maxDeviceIDLen {
+		return fmt.Errorf("rotation-resolved payload deviceId length %d exceeds limit %d", len(p.DeviceID), maxDeviceIDLen)
+	}
 	if p.Epoch < domain.DefaultCertEpoch {
 		return fmt.Errorf("rotation-resolved payload epoch %d < %d", p.Epoch, domain.DefaultCertEpoch)
 	}
 	if p.ResolvedAt == "" {
 		return fmt.Errorf("rotation-resolved payload resolvedAt is empty")
+	}
+	if len(p.ResolvedAt) > maxResolvedAtLen {
+		return fmt.Errorf("rotation-resolved payload resolvedAt length %d exceeds limit %d", len(p.ResolvedAt), maxResolvedAtLen)
+	}
+	// outcome length is checked here (before the switch) so an overlong value is
+	// a permanent validation failure (DLX) rather than an unknown-outcome Reject.
+	if len(p.Outcome) > maxOutcomeLen {
+		return fmt.Errorf("rotation-resolved payload outcome length %d exceeds limit %d", len(p.Outcome), maxOutcomeLen)
 	}
 	return nil
 }

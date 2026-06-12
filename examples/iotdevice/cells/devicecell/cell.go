@@ -430,6 +430,7 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 		c.clk, c.deviceRepo,
 		devicecertcompletion.WithEmitter(c.emitter),
 		devicecertcompletion.WithLogger(c.logger),
+		devicecertcompletion.WithMetricsProvider(c.metricsProvider),
 	)
 	if err != nil {
 		return fmt.Errorf("device-cert-completion: %w", err)

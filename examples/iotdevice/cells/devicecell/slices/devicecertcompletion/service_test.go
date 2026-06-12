@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,8 +13,10 @@ import (
 	rotationresolved "github.com/ghbvf/gocell/generated/contracts/event/devicecert-rotation-resolved/v1"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
+	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 var testBase = time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
@@ -243,10 +246,20 @@ func TestHandleRotationResolved_RejectsBadOrMissingPayload(t *testing.T) {
 	}{
 		{"undecodable", func(t *testing.T) outbox.Entry { return rawEntry(t, []byte("not json")) }},
 		{"empty deviceId", func(t *testing.T) outbox.Entry { return resolvedEntry(t, "", 2, outcomeSucceeded, testBase) }},
-		{"epoch below 1", func(t *testing.T) outbox.Entry { return resolvedEntry(t, "dev-1", 0, outcomeSucceeded, testBase) }},
+		{"epoch below DefaultCertEpoch", func(t *testing.T) outbox.Entry { return resolvedEntry(t, "dev-1", 0, outcomeSucceeded, testBase) }},
 		{"unknown outcome", func(t *testing.T) outbox.Entry { return resolvedEntry(t, "dev-1", 2, "weird", testBase) }},
 		{"empty resolvedAt", func(t *testing.T) outbox.Entry { return resolvedEntryRawTime(t, "") }},
 		{"unparseable resolvedAt", func(t *testing.T) outbox.Entry { return resolvedEntryRawTime(t, "not-a-time") }},
+		// FIX 2: over-long field length bounds (defense against log-injection / parse-DoS).
+		{"deviceId too long", func(t *testing.T) outbox.Entry {
+			return resolvedEntry(t, strings.Repeat("x", maxDeviceIDLen+1), 2, outcomeSucceeded, testBase)
+		}},
+		{"outcome too long", func(t *testing.T) outbox.Entry {
+			return resolvedEntry(t, "dev-1", 2, strings.Repeat("o", maxOutcomeLen+1), testBase)
+		}},
+		{"resolvedAt too long", func(t *testing.T) outbox.Entry {
+			return resolvedEntryRawTime(t, strings.Repeat("t", maxResolvedAtLen+1))
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -288,6 +301,121 @@ func TestNewService_NilRepo_FailsFast(t *testing.T) {
 	if err == nil {
 		t.Fatal("NewService(nil repo): expected error, got nil")
 	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("NewService(nil repo): want *errcode.Error, got %T: %v", err, err)
+	}
+	if ec.Code != errcode.ErrCellInvalidConfig {
+		t.Fatalf("NewService(nil repo): errcode = %q, want %q", ec.Code, errcode.ErrCellInvalidConfig)
+	}
+}
+
+// TestHandleRotationResolved_UnknownDevice_AckNoOp proves that a rotation-resolved
+// event for a device that does not exist in the repo is an idempotent Ack (no-op),
+// not a Reject or Requeue. The CAS on AdvanceCertAfterRotation returns advanced=false
+// for an unknown device, so the handler safely Acks without any state change.
+func TestHandleRotationResolved_UnknownDevice_AckNoOp(t *testing.T) {
+	// Repo has no devices seeded — "dev-ghost" is unknown.
+	svc, _ := newTestService(t, mem.NewDeviceRepository())
+
+	res := svc.HandleRotationResolved(context.Background(),
+		resolvedEntry(t, "dev-ghost", 1, outcomeSucceeded, testBase))
+	if res.Disposition != outbox.DispositionAck {
+		t.Fatalf("Disposition = %v, want Ack (unknown device is an idempotent no-op); err=%v",
+			res.Disposition, res.Err)
+	}
+}
+
+// TestHandleRotationResolved_OutcomeCounter_Increments proves the metrics counter
+// is incremented for each valid outcome.
+func TestHandleRotationResolved_OutcomeCounter_Increments(t *testing.T) {
+	cases := []struct {
+		outcome string
+		seedID  string // device to seed; empty = no seed
+	}{
+		{outcomeSucceeded, "dev-1"},
+		{outcomeFailed, "dev-metric"},
+		{outcomeRejected, "dev-1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.outcome, func(t *testing.T) {
+			spy := newCounterSpyProvider()
+			repo := mem.NewDeviceRepository()
+			if tc.seedID != "" {
+				seedDevice(t, repo, tc.seedID, 2, testBase.Add(time.Hour))
+			}
+			svc, err := NewService(clockmock.New(testBase), repo,
+				WithMetricsProvider(spy))
+			if err != nil {
+				t.Fatalf("NewService: %v", err)
+			}
+
+			svc.HandleRotationResolved(context.Background(),
+				resolvedEntry(t, "dev-1", 2, tc.outcome, testBase))
+
+			ops := spy.ops[metricRotationResolved]
+			if len(ops) != 1 {
+				t.Fatalf("outcome=%q: want 1 counter inc, got %d", tc.outcome, len(ops))
+			}
+			if ops[0].labels["outcome"] != tc.outcome {
+				t.Fatalf("outcome=%q: counter label outcome=%q, want %q",
+					tc.outcome, ops[0].labels["outcome"], tc.outcome)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// counterSpyProvider — minimal spy implementing metrics.Provider for counter tests.
+// ---------------------------------------------------------------------------
+
+type counterSpyRecord struct {
+	labels kernelmetrics.Labels
+}
+
+type counterSpyProvider struct {
+	ops map[string][]counterSpyRecord
+}
+
+func newCounterSpyProvider() *counterSpyProvider {
+	return &counterSpyProvider{ops: make(map[string][]counterSpyRecord)}
+}
+
+func (p *counterSpyProvider) CounterVec(opts kernelmetrics.CounterOpts) (kernelmetrics.CounterVec, error) {
+	return &counterSpyVec{parent: p, name: opts.Name, labelNames: opts.LabelNames}, nil
+}
+
+func (p *counterSpyProvider) HistogramVec(opts kernelmetrics.HistogramOpts) (kernelmetrics.HistogramVec, error) {
+	return kernelmetrics.NopProvider{}.HistogramVec(opts)
+}
+
+func (p *counterSpyProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
+	return kernelmetrics.NopProvider{}.GaugeVec(opts)
+}
+
+func (p *counterSpyProvider) Unregister(_ kernelmetrics.Collector) error { return nil }
+
+type counterSpyVec struct {
+	parent     *counterSpyProvider
+	name       string
+	labelNames []string
+}
+
+func (v *counterSpyVec) Registered() bool { return true }
+func (v *counterSpyVec) With(l kernelmetrics.Labels) kernelmetrics.Counter {
+	kernelmetrics.MustValidateLabels(v.labelNames, l)
+	return &counterSpyCounter{parent: v.parent, name: v.name, labels: l}
+}
+
+type counterSpyCounter struct {
+	parent *counterSpyProvider
+	name   string
+	labels kernelmetrics.Labels
+}
+
+func (c *counterSpyCounter) Inc(ctx context.Context) { c.Add(ctx, 1) }
+func (c *counterSpyCounter) Add(_ context.Context, _ float64) {
+	c.parent.ops[c.name] = append(c.parent.ops[c.name], counterSpyRecord{labels: c.labels})
 }
 
 func mustJSON(t *testing.T, v any) []byte {

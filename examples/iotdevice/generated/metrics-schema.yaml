@@ -104,6 +104,12 @@ metrics:
       help: Number of config values read that are encrypted with a non-current key version.
       labels: []
       file: runtime/observability/metrics/config_stale_cipher.go
+    - name: devicecert_rotation_resolved_total
+      type: counter
+      help: Total rotation-resolved events processed by devicecertcompletion, by outcome (succeeded/failed/rejected).
+      labels:
+        - outcome
+      file: examples/iotdevice/cells/devicecell/slices/devicecertcompletion/service.go
     - name: event_router_ready_wait_seconds
       type: histogram
       help: Time in seconds waited for event router Ready signal. Ready usually completes in <100ms; bootstrap timeout is 30s.

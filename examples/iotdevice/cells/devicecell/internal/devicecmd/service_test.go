@@ -306,6 +306,40 @@ func TestService_Ack_FiresOnResolvedHook(t *testing.T) {
 	assert.Equal(t, command.AckSuccess, gotReason)
 }
 
+// TestWithOnCommandResolved_WiresAndNilGuard proves that:
+//  1. Constructing a Service via WithOnCommandResolved wires the hook and it fires on Ack.
+//  2. Calling WithOnCommandResolved(nil) leaves a previously-wired hook in place
+//     (accumulative nil-guard semantics — nil is not "clear the hook").
+func TestWithOnCommandResolved_WiresAndNilGuard(t *testing.T) {
+	devRepo := mem.NewDeviceRepository()
+	q := commandtest.NewInMemQueue()
+	seedDevice(devRepo, "dev-1", "sensor-a")
+	ctx := context.Background()
+
+	called := 0
+	hook := func(_ context.Context, _ command.Entry, _ command.AckReason) { called++ }
+
+	// 1. Wire the hook via the public Option path and verify it fires.
+	svc, err := NewService(clock.Real(), q, devRepo, testCodec(), slog.Default(), query.RunModeProd,
+		WithOnCommandResolved(hook))
+	require.NoError(t, err)
+
+	require.NoError(t, enqueueTestCmd(ctx, q))
+	_, _ = q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
+	require.NoError(t, svc.Ack(ctx, "dev-1", "cmd-1", command.AckSuccess))
+	assert.Equal(t, 1, called, "hook must fire once on Ack when wired via WithOnCommandResolved")
+
+	// 2. Apply a nil option — the previously-wired hook must remain in place.
+	WithOnCommandResolved(nil)(svc) // apply nil option directly
+
+	// Re-enqueue a new command and ack it; the original hook must still fire.
+	require.NoError(t, q.Enqueue(ctx, command.NewEntry("cmd-2", "dev-1", "reboot", []byte("x"),
+		command.Timeouts{}, clock.Real().Now()), command.EnqueueOptions{}))
+	_, _ = q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
+	require.NoError(t, svc.Ack(ctx, "dev-1", "cmd-2", command.AckSuccess))
+	assert.Equal(t, 2, called, "nil WithOnCommandResolved must not clear a previously-wired hook")
+}
+
 // TestService_Ack_NilHook_NoPanic proves the common case (no hook wired) is safe.
 func TestService_Ack_NilHook_NoPanic(t *testing.T) {
 	svc, devRepo, q := newTestService() // onResolved nil by default
