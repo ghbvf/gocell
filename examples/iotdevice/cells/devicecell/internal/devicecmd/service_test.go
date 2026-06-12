@@ -281,29 +281,42 @@ func TestService_Ack(t *testing.T) {
 
 // TestService_Ack_FiresOnResolvedHook proves the generic command-resolution hook
 // (#1870) fires exactly once after a terminal ack, carrying the resolved entry
-// (CommandType/DeviceID/ID) and the ack reason — the seam the devicecertcompletion
-// slice rides to emit a rotation-resolved event.
+// (CommandType/DeviceID/ID) and the SAME ack reason — the seam the
+// devicecertcompletion slice rides to emit a rotation-resolved event. Covers
+// every device-driven terminal reason (success/failed/rejected); the hook is
+// reason-agnostic, so the slice — not devicecmd — decides what each outcome means.
 func TestService_Ack_FiresOnResolvedHook(t *testing.T) {
-	svc, devRepo, q := newTestService()
-	seedDevice(devRepo, "dev-1", "sensor-a")
-	ctx := context.Background()
-	require.NoError(t, enqueueTestCmd(ctx, q))
-	_, _ = q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration) // Pending → Sent (ackable)
+	for _, tc := range []struct {
+		name   string
+		reason command.AckReason
+	}{
+		{"success", command.AckSuccess},
+		{"failed", command.AckFailed},
+		{"rejected", command.AckRejected},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, devRepo, q := newTestService()
+			seedDevice(devRepo, "dev-1", "sensor-a")
+			ctx := context.Background()
+			require.NoError(t, enqueueTestCmd(ctx, q))
+			_, _ = q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration) // Pending → Sent (ackable)
 
-	var gotEntry command.Entry
-	var gotReason command.AckReason
-	called := 0
-	svc.onResolved = func(_ context.Context, e command.Entry, r command.AckReason) {
-		called++
-		gotEntry, gotReason = e, r
+			var gotEntry command.Entry
+			var gotReason command.AckReason
+			called := 0
+			svc.onResolved = func(_ context.Context, e command.Entry, r command.AckReason) {
+				called++
+				gotEntry, gotReason = e, r
+			}
+
+			require.NoError(t, svc.Ack(ctx, "dev-1", "cmd-1", tc.reason))
+			require.Equal(t, 1, called, "Ack must fire onResolved exactly once on terminal ack")
+			assert.Equal(t, "cmd-1", gotEntry.ID)
+			assert.Equal(t, "dev-1", gotEntry.DeviceID)
+			assert.Equal(t, "reboot", gotEntry.CommandType)
+			assert.Equal(t, tc.reason, gotReason, "hook must receive the same ack reason")
+		})
 	}
-
-	require.NoError(t, svc.Ack(ctx, "dev-1", "cmd-1", command.AckSuccess))
-	require.Equal(t, 1, called, "Ack must fire onResolved exactly once on terminal ack")
-	assert.Equal(t, "cmd-1", gotEntry.ID)
-	assert.Equal(t, "dev-1", gotEntry.DeviceID)
-	assert.Equal(t, "reboot", gotEntry.CommandType)
-	assert.Equal(t, command.AckSuccess, gotReason)
 }
 
 // TestWithOnCommandResolved_WiresAndNilGuard proves that:

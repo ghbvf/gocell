@@ -42,8 +42,18 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/kernel/reconcile"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
 	rtcommand "github.com/ghbvf/gocell/runtime/command"
 )
+
+// deviceSelfCtx returns ctx with a device-self principal (PrincipalUser, Subject
+// == deviceID) — the identity a device presents when acking its OWN rotate-cert.
+// The completion hook (devicecertcompletion.OnCommandResolved) emits the
+// rotation-resolved event only for such device-self acks, so the ack path must
+// carry this principal for the convergence loop to close.
+func deviceSelfCtx(ctx context.Context, deviceID string) context.Context {
+	return auth.WithPrincipal(ctx, &auth.Principal{Kind: auth.PrincipalUser, Subject: deviceID})
+}
 
 // dispatchNew dispatches all entries added to rec since the last call to
 // rec.Reset(). For each entry it:
@@ -249,7 +259,10 @@ func TestCertRenewal_CompletionClosesLoop(t *testing.T) {
 	require.NoError(t, err)
 	fc.Advance(time.Hour)
 	ackAt := fc.Now()
-	require.NoError(t, svc.Ack(ctx, "dev-online", cmdID, kcommand.AckSuccess))
+	// The device acks its OWN rotate-cert — present a device-self principal so the
+	// completion hook recognizes this as a genuine device observation and emits
+	// (operator/admin acks carry a different subject and would NOT advance state).
+	require.NoError(t, svc.Ack(deviceSelfCtx(ctx, "dev-online"), "dev-online", cmdID, kcommand.AckSuccess))
 
 	// --- The ack hook emitted a rotation-resolved event; relay-sim it to the consumer. ---
 	resolved := rec2.Entries()
@@ -348,7 +361,7 @@ func TestCertRenewal_EmitFailureSelfHeals(t *testing.T) {
 	_, err = queue.Dequeue(ctx, "dev-failemit", 1, kcommand.DefaultLeaseDuration)
 	require.NoError(t, err)
 	fc.Advance(time.Hour)
-	require.NoError(t, svc.Ack(ctx, "dev-failemit", cmdID, kcommand.AckSuccess))
+	require.NoError(t, svc.Ack(deviceSelfCtx(ctx, "dev-failemit"), "dev-failemit", cmdID, kcommand.AckSuccess))
 	// The hook fired, but Emit returned an error — it was logged and swallowed.
 	// No rotation-resolved event was delivered to the consumer.
 

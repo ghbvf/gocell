@@ -17,9 +17,22 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 var testBase = time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
+
+// selfCtx returns a context carrying a device-self principal (PrincipalUser with
+// Subject == deviceID) — the identity a device presents when acking its OWN
+// rotate-cert command. OnCommandResolved emits the completion event only for
+// such device-self acks (operator/admin acks carry a different subject and must
+// not advance cert state).
+func selfCtx(deviceID string) context.Context {
+	return auth.WithPrincipal(context.Background(), &auth.Principal{
+		Kind:    auth.PrincipalUser,
+		Subject: deviceID,
+	})
+}
 
 func newTestService(t *testing.T, repo domain.DeviceRepository) (*Service, *outboxtest.Recorder) {
 	t.Helper()
@@ -97,11 +110,19 @@ func resolvedEntryRawTime(t *testing.T, resolvedAt string) outbox.Entry {
 func TestOnCommandResolved_RotateCertSuccess_EmitsResolvedEvent(t *testing.T) {
 	svc, rec := newTestService(t, mem.NewDeviceRepository())
 
-	svc.OnCommandResolved(context.Background(), rotateCmdEntry(t), kcommand.AckSuccess)
+	svc.OnCommandResolved(selfCtx(testDeviceID), rotateCmdEntry(t), kcommand.AckSuccess)
 
 	entries := rec.Entries()
 	if len(entries) != 1 {
 		t.Fatalf("emitted %d entries, want 1", len(entries))
+	}
+	// Assert the broker routing topic against the contract id LITERAL (not the
+	// topicRotationResolved const the producer uses — that would be tautological):
+	// this pins the publish-side topic to event.devicecert-rotation-resolved.v1 so
+	// a drift of the const away from the contract id fails here. The e2e drives the
+	// consumer directly (bypassing routing), so this is the only topic guard (F4).
+	if got := entries[0].RoutingTopic(); got != "event.devicecert-rotation-resolved.v1" {
+		t.Fatalf("RoutingTopic = %q, want %q", got, "event.devicecert-rotation-resolved.v1")
 	}
 	var got rotationresolved.Payload
 	if err := json.Unmarshal(entries[0].Payload(), &got); err != nil {
@@ -139,7 +160,7 @@ func TestOnCommandResolved_OutcomeMapping(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.want, func(t *testing.T) {
 			svc, rec := newTestService(t, mem.NewDeviceRepository())
-			svc.OnCommandResolved(context.Background(), rotateCmdEntry(t), tc.reason)
+			svc.OnCommandResolved(selfCtx(testDeviceID), rotateCmdEntry(t), tc.reason)
 			entries := rec.Entries()
 			if len(entries) != 1 {
 				t.Fatalf("emitted %d entries, want 1", len(entries))
@@ -160,10 +181,44 @@ func TestOnCommandResolved_UndecodablePayload_NoEmit(t *testing.T) {
 
 	entry := rotateCmdEntry(t)
 	entry.Payload = []byte("not json")
-	svc.OnCommandResolved(context.Background(), entry, kcommand.AckSuccess)
+	// device-self ctx so the undecodable-payload path is reached (not short-circuited
+	// by the device-self guard).
+	svc.OnCommandResolved(selfCtx(testDeviceID), entry, kcommand.AckSuccess)
 
 	if n := len(rec.Entries()); n != 0 {
 		t.Fatalf("emitted %d entries for undecodable payload, want 0 (logged, not emitted)", n)
+	}
+}
+
+// TestOnCommandResolved_NonDeviceSubject_NoEmit proves the device-self guard (F1):
+// an operator/admin acking a device's rotate-cert (subject != entry.DeviceID, the
+// auth.SelfOr bypass-role path) resolves the command but does NOT emit a completion
+// event — so cert state is never advanced on a non-device assertion.
+func TestOnCommandResolved_NonDeviceSubject_NoEmit(t *testing.T) {
+	svc, rec := newTestService(t, mem.NewDeviceRepository())
+
+	operatorCtx := auth.WithPrincipal(context.Background(), &auth.Principal{
+		Kind:    auth.PrincipalUser,
+		Subject: "operator-1", // != testDeviceID ("dev-1")
+		Roles:   []string{"admin"},
+	})
+	svc.OnCommandResolved(operatorCtx, rotateCmdEntry(t), kcommand.AckSuccess)
+
+	if n := len(rec.Entries()); n != 0 {
+		t.Fatalf("emitted %d entries for operator (non-device) ack, want 0", n)
+	}
+}
+
+// TestOnCommandResolved_NoPrincipal_NoEmit proves the guard fail-closes when no
+// principal is present in context (e.g. a server-side Sweeper timeout is not a
+// device observation): no completion event is emitted.
+func TestOnCommandResolved_NoPrincipal_NoEmit(t *testing.T) {
+	svc, rec := newTestService(t, mem.NewDeviceRepository())
+
+	svc.OnCommandResolved(context.Background(), rotateCmdEntry(t), kcommand.AckSuccess)
+
+	if n := len(rec.Entries()); n != 0 {
+		t.Fatalf("emitted %d entries with no principal in ctx, want 0 (fail-closed)", n)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // topicRotationResolved is the canonical event topic for cert rotation
@@ -130,6 +131,22 @@ type rotateCertCmdPayload struct {
 // rotation-resolved event so the (async, idempotent) consumer can advance the
 // device's observed cert state; every other command type is ignored.
 //
+// Device-self proof: only the device acking its OWN rotate-cert is a genuine
+// cert-rotation observation, so the completion event is emitted ONLY when the
+// authenticated subject equals entry.DeviceID. The ack route is
+// auth.SelfOr("id", admin, operator) (slices/devicecommand/handler.go), so an
+// operator/admin can ack any device's command — that override still resolves the
+// command (releases the active-uniqueness key) but MUST NOT advance observed cert
+// state. Treating an operator ack as completion would desync server-observed cert
+// state from the device's actual (still-old, near-expiry) cert and silently drop
+// the device from the re-drive set — violating the cert-manager invariant this
+// slice mirrors (status is OBSERVED, not asserted). No device-token issuer exists
+// yet, so a device is PrincipalUser with Subject==deviceID; the proof is subject
+// identity, not principal kind. Fail-closed when the principal is absent (e.g. a
+// server-side Sweeper timeout is not a device observation). AI-robust: Medium
+// runtime guard (the subject==deviceID relation binds two runtime strings the
+// generic hook signature cannot bind at type level).
+//
 // Emit failures are logged but NOT propagated: the device's ack already
 // succeeded, and the reconcile loop self-heals — a device whose cert state was
 // not advanced stays a near-expiry candidate and is re-driven on the next tick.
@@ -137,6 +154,16 @@ type rotateCertCmdPayload struct {
 // (the level-triggered loop already recovers).
 func (s *Service) OnCommandResolved(ctx context.Context, entry command.Entry, reason command.AckReason) {
 	if entry.CommandType != domain.RotateCertCommandType {
+		return
+	}
+	if p, ok := auth.FromContext(ctx); !ok || p.Subject != entry.DeviceID {
+		ackSubject := ""
+		if ok {
+			ackSubject = p.Subject
+		}
+		s.logger.Warn("devicecertcompletion: rotate-cert ack not from device-self; not advancing cert state",
+			slog.String("device_id", entry.DeviceID), slog.String("command_id", entry.ID),
+			slog.String("ack_subject", ackSubject))
 		return
 	}
 	outcome := outcomeFromReason(reason)
