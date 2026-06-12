@@ -752,6 +752,40 @@ func TestService_CreateAdmin_AlreadyExists_DetailsContainOnlyNextAction(t *testi
 		"loginEndpoint key was retired by PR-A42 — keep details minimal")
 }
 
+// TestCreateAdmin_ZeroTenantID_FailsClosed locks the fail-closed safety net for
+// direct (non-handler) callers of Service.CreateAdmin. An empty typed TenantID
+// (zero value) must cause CreateAdmin to fail — it cannot result in a successful
+// admin creation — even if a caller somehow bypasses the handler's tenant-parse
+// step. The repo's tenant.TenantID Validate() backstop (called by
+// provisioner.EffectiveAdminExists inside scopedtx.Do) rejects the empty tenant
+// with ErrValidationFailed before any user write can proceed. This documents the
+// exact fail-closed error so future callers cannot accidentally soften it.
+func TestCreateAdmin_ZeroTenantID_FailsClosed(t *testing.T) {
+	store := mem.NewStore(clock.Real())
+	svc := newService(t, store.UserRepository(), store.RoleRepository(), nil)
+
+	out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		TenantID: "", // zero value — bypasses handler parse
+		Username: "u",
+		Email:    "e@x",
+		Password: "SecretPass!23",
+	})
+	require.Error(t, err,
+		"zero TenantID must fail closed; successful admin creation must be impossible")
+	assert.Nil(t, out)
+	// The empty tenant is rejected by the tenant.TenantID Validate() backstop
+	// inside the provisioner's EffectiveAdminExists call, which surfaces as a
+	// wrapped ErrValidationFailed. The exact chain is:
+	//   setup: status: adminprovision: effective-admin-exists: [ERR_VALIDATION_FAILED] ...
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec,
+		"zero TenantID must produce an errcode.Error (repo Validate backstop)")
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code,
+		"zero TenantID must produce ErrValidationFailed from tenant.TenantID Validate backstop")
+	assert.Contains(t, err.Error(), "TenantID required",
+		"error must mention TenantID required so the cause is unambiguous")
+}
+
 // --- helpers --------------------------------------------------------------
 
 func seedAdmin(t *testing.T, userRepo ports.UserRepository, roleRepo ports.RoleRepository) {

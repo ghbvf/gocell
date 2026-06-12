@@ -41,6 +41,8 @@ func (a LoginAdapter) Login(ctx context.Context, req *logingen.Request) (loginge
 	}
 	tid, perr := tenant.ParseTenantID(req.XTenantID)
 	if perr != nil {
+		// errMsgInvalidCredentials is defined in service.go (same package); reused here so the
+		// malformed-tenant 401 is byte-identical to the wrong-password 401 (non-enumerable, ADR 1160).
 		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, errMsgInvalidCredentials,
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("invalid tenantId: %v", perr))))
 	}

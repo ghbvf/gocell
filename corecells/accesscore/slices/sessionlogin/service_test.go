@@ -1545,6 +1545,33 @@ func (r *scopeCapturingUserRepo) UpdateLockoutFields(ctx context.Context, t tena
 	return r.inner.UpdateLockoutFields(ctx, t, user)
 }
 
+// TestLogin_ZeroTenantID_FailsClosed locks the fail-closed safety net for
+// direct (non-handler) callers of Service.Login. An empty typed TenantID
+// (zero value) must cause Login to fail — it cannot result in a successful
+// authentication — even if a caller somehow bypasses the handler's
+// tenant-parse step. The repo's Validate() backstop ensures that an empty
+// tenant cannot reach a successful user lookup, funneling the empty-tenant
+// path into the same unified 401 ErrAuthLoginFailed returned for wrong
+// passwords (防枚举).
+func TestLogin_ZeroTenantID_FailsClosed(t *testing.T) {
+	svc, userRepo := newTestService(t)
+	seedUser(userRepo, "alice", "correct-pass")
+
+	_, err := svc.Login(context.Background(), LoginInput{
+		TenantID: "", // zero value — bypasses handler parse
+		Username: "alice",
+		Password: "correct-pass",
+	})
+	require.Error(t, err,
+		"zero TenantID must fail closed; successful login must be impossible")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	// The empty tenant fails the repo RLS-scoped lookup (t.Validate() backstop),
+	// which is treated as a user-not-found credential failure → ErrAuthLoginFailed.
+	assert.Equal(t, errcode.ErrAuthLoginFailed, ec.Code,
+		"zero TenantID must produce ErrAuthLoginFailed (repo Validate backstop, 防枚举)")
+}
+
 // TestLogin_PreBcryptRead_IsRLSScoped (Site 1, PR-3b) asserts that the
 // pre-bcrypt GetByUsername call runs inside a scopedtx.Do, so that
 // tenant.ScopeFromContext is set on the context when the users table is

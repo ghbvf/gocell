@@ -50,6 +50,11 @@ func toStatusProjection(hasAdmin bool) (statusGen.StatusResponseObject, error) {
 	return statusGen.Status200JSONResponse{Data: data}, nil
 }
 
+// errMsgTenantIDRequired is the error message for a missing or malformed
+// X-Tenant-ID header on the setup admin endpoint.
+// Must be a const literal (MESSAGE-CONST-LITERAL-01).
+const errMsgTenantIDRequired = "tenantId is required and must be a valid UUID"
+
 // AdminAdapter implements adminGen.Service for http.auth.setup.admin.v1.
 type AdminAdapter struct{ S *Service }
 
@@ -63,7 +68,7 @@ func (a AdminAdapter) Admin(ctx context.Context, req *adminGen.Request) (adminGe
 	tid, perr := tenant.ParseTenantID(req.XTenantID)
 	if perr != nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput,
-			"tenantId is required and must be a valid UUID",
+			errMsgTenantIDRequired,
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("invalid tenantId: %v", perr))))
 	}
 	out, err := a.S.CreateAdmin(ctx, CreateAdminInput{
