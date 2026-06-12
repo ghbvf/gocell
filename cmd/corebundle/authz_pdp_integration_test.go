@@ -93,7 +93,8 @@ func TestABACPDPGatesAuditQuery(t *testing.T) {
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	ac := accesscore.NewAccessCore(clock.Real(), append(buildAccessCoreMemOptions(t, clock.Real()),
+	ac := accesscore.NewAccessCore(clock.Real(), append(
+		buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -101,7 +102,8 @@ func TestABACPDPGatesAuditQuery(t *testing.T) {
 		accesscore.WithBootstrapAuth(bootstrapMW),
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 	)...)
-	cc := configcore.NewConfigCore(clock.Real(),
+	cc := configcore.NewConfigCore(
+		clock.Real(),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
@@ -131,7 +133,8 @@ func TestABACPDPGatesAuditQuery(t *testing.T) {
 	authzOpt, err := primaryAuthorizerOption(cells)
 	require.NoError(t, err, "primaryAuthorizerOption must succeed with accesscore present")
 
-	app := bootstrap.New(clock.Real(),
+	app := bootstrap.New(
+		clock.Real(),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(
 			cell.PrimaryListener,

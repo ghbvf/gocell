@@ -84,14 +84,14 @@ var permissionBasedAuthzRoleGateSelectors = map[string]struct{}{
 // Paths are module-relative slash paths (p.Rel values from the corecells module).
 // auditquery is deliberately absent — it was migrated in PR-10a.
 var permissionBasedAuthzAllowlist = map[string]struct{}{
-	"corecells/configcore/slices/configread/handler.go":    {},
-	"corecells/configcore/slices/configwrite/handler.go":   {},
-	"corecells/configcore/slices/configpublish/handler.go": {},
-	"corecells/configcore/slices/flagwrite/handler.go":     {},
-	"corecells/configcore/slices/featureflag/handler.go":   {},
-	"corecells/accesscore/slices/policymanage/handler.go":  {},
+	"corecells/configcore/slices/configread/handler.go":     {},
+	"corecells/configcore/slices/configwrite/handler.go":    {},
+	"corecells/configcore/slices/configpublish/handler.go":  {},
+	"corecells/configcore/slices/flagwrite/handler.go":      {},
+	"corecells/configcore/slices/featureflag/handler.go":    {},
+	"corecells/accesscore/slices/policymanage/handler.go":   {},
 	"corecells/accesscore/slices/identitymanage/handler.go": {},
-	"corecells/accesscore/slices/rbaccheck/handler.go":     {},
+	"corecells/accesscore/slices/rbaccheck/handler.go":      {},
 }
 
 // scanPermissionBasedAuthzViolations scans a single file for role-literal

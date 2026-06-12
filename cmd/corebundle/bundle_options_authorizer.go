@@ -64,7 +64,8 @@ func (l *lazyAuthorizer) Authorize(ctx context.Context, subject, resource, actio
 		// Provider returned nil after Init — this is a programming error in the
 		// cell. Log at Error so operators can diagnose; the %T detail goes to
 		// InternalDetail (server-side only, never on wire).
-		slog.Error(msgLazyAuthorizerNilProvider,
+		slog.Error(
+			msgLazyAuthorizerNilProvider,
 			slog.String("provider_type", authorizerProviderTypeName(l.provider)),
 		)
 		return authz.Decision{}, errcode.New(
@@ -111,7 +112,8 @@ func primaryAuthorizerOption(cells []cell.Cell) (bootstrap.Option, error) {
 		if provider != nil {
 			return nil, fmt.Errorf(
 				"primaryAuthorizerOption: multiple cells implement authorizerProvider; "+
-					"exactly one PDP provider is required (duplicate: cell %T)", c)
+					"exactly one PDP provider is required (duplicate: cell %T)", c,
+			)
 		}
 		provider = ap
 	}
@@ -119,7 +121,8 @@ func primaryAuthorizerOption(cells []cell.Cell) (bootstrap.Option, error) {
 		return nil, fmt.Errorf(
 			"primaryAuthorizerOption: no cell implements authorizerProvider " +
 				"(Authorizer() auth.Authorizer); PDP wiring is mandatory — " +
-				"ensure accesscore is included in the assembly")
+				"ensure accesscore is included in the assembly",
+		)
 	}
 	return bootstrap.WithPrimaryAuthorizer(&lazyAuthorizer{provider: provider}), nil
 }

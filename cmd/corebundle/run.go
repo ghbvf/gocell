@@ -178,7 +178,8 @@ func logAssemblyMaturity(cells []cell.Cell) {
 		}
 	}
 
-	slog.Info("corebundle: assembly maturity composition",
+	slog.Info(
+		"corebundle: assembly maturity composition",
 		slog.Int("total_cells", len(cells)),
 		slog.Group("lifecycle", lcAttrs...),
 	)

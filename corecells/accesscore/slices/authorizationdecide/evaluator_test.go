@@ -61,7 +61,8 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 	}{
 		{
 			name: "action matches targeted rule — allows",
-			policies: []*abac.Policy{policyWith("p1",
+			policies: []*abac.Policy{policyWith(
+				"p1",
 				permitRuleWithAction("r1", []string{testAuditRead}, roleCond),
 			)},
 			action:    testAuditRead,
@@ -69,7 +70,8 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 		},
 		{
 			name: "action does not match targeted rule — default-deny",
-			policies: []*abac.Policy{policyWith("p1",
+			policies: []*abac.Policy{policyWith(
+				"p1",
 				permitRuleWithAction("r1", []string{testAuditRead}, roleCond),
 			)},
 			action:    "config:read",
@@ -77,7 +79,8 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 		},
 		{
 			name: "empty Action rule applies to every action (match-all preserved)",
-			policies: []*abac.Policy{policyWith("p1",
+			policies: []*abac.Policy{policyWith(
+				"p1",
 				permitRule("r1", authz.Obligations{}, roleCond),
 			)},
 			action:    "config:read",
@@ -85,7 +88,8 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 		},
 		{
 			name: "empty Action rule applies to every action including audit:read",
-			policies: []*abac.Policy{policyWith("p1",
+			policies: []*abac.Policy{policyWith(
+				"p1",
 				permitRule("r1", authz.Obligations{}, roleCond),
 			)},
 			action:    testAuditRead,
@@ -93,7 +97,8 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 		},
 		{
 			name: "forbid-wins: targeted deny overrides a matching permit for the same action",
-			policies: []*abac.Policy{policyWith("p1",
+			policies: []*abac.Policy{policyWith(
+				"p1",
 				permitRuleWithAction("allow", []string{testAuditRead}, roleCond),
 				forbidRuleWithAction("deny", []string{testAuditRead}),
 			)},
@@ -102,7 +107,8 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 		},
 		{
 			name: "targeted deny does NOT fire for a different action (no forbid-wins for mismatched action)",
-			policies: []*abac.Policy{policyWith("p1",
+			policies: []*abac.Policy{policyWith(
+				"p1",
 				permitRule("allow", authz.Obligations{}, roleCond),
 				forbidRuleWithAction("deny", []string{"config:delete"}),
 			)},
@@ -111,7 +117,8 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 		},
 		{
 			name: "untargeted deny (empty Action) still forbid-wins over any action",
-			policies: []*abac.Policy{policyWith("p1",
+			policies: []*abac.Policy{policyWith(
+				"p1",
 				permitRule("allow", authz.Obligations{}, roleCond),
 				forbidRule("deny"),
 			)},
@@ -120,7 +127,8 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 		},
 		{
 			name: "multi-action target: matches first of the set",
-			policies: []*abac.Policy{policyWith("p1",
+			policies: []*abac.Policy{policyWith(
+				"p1",
 				permitRuleWithAction("r1", []string{"config:read", testAuditRead}, roleCond),
 			)},
 			action:    "config:read",
@@ -128,7 +136,8 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 		},
 		{
 			name: "multi-action target: matches second of the set",
-			policies: []*abac.Policy{policyWith("p1",
+			policies: []*abac.Policy{policyWith(
+				"p1",
 				permitRuleWithAction("r1", []string{"config:read", testAuditRead}, roleCond),
 			)},
 			action:    testAuditRead,
@@ -136,7 +145,8 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 		},
 		{
 			name: "multi-action target: action not in set — denies",
-			policies: []*abac.Policy{policyWith("p1",
+			policies: []*abac.Policy{policyWith(
+				"p1",
 				permitRuleWithAction("r1", []string{"config:read", testAuditRead}, roleCond),
 			)},
 			action:    "other:write",
@@ -161,7 +171,8 @@ func TestEvaluate_BaselineDenyOverridesPermit(t *testing.T) {
 	resolver := actionResolver(adminPrincipal)
 
 	// Tenant policy explicitly forbids audit:read for admin.
-	tenantForbid := policyWith("p1",
+	tenantForbid := policyWith(
+		"p1",
 		forbidRuleWithAction("explicit-deny", []string{testAuditRead}),
 	)
 
