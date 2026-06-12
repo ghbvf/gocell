@@ -19,6 +19,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 
@@ -353,6 +354,15 @@ func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef,
 		opts = append(opts,
 			router.InternalPrefixIsolationResponder(),
 			router.AdminPrefixIsolationResponder())
+		// #1348 Batch-C: install the Authorizer injector middleware when an
+		// Authorizer has been wired via WithPrimaryAuthorizer. The injector runs
+		// as default middleware (AFTER early-responders, BEFORE auth/route
+		// handlers) so RequirePermission policies always find the PDP.
+		// Only the primary listener receives the injector; Internal, Health, and
+		// Admin listeners do not carry ABAC-gated business routes.
+		if b.primaryAuthorizer != nil {
+			opts = append(opts, router.WithDefaultMiddleware(authorizerInjector(b.primaryAuthorizer)))
+		}
 	}
 
 	// Apply the listener's AuthPlan chain: extract non-JWT middleware and
@@ -378,6 +388,25 @@ func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef,
 	}
 
 	return opts, nil
+}
+
+// authorizerInjector returns a middleware that injects the given auth.Authorizer
+// into every request's context via auth.WithAuthorizer. It is installed on the
+// primary listener only (see buildListenerRouterOpts) so that route Policies
+// built with auth.RequirePermission can locate the PDP without any cell code
+// calling WithAuthorizer directly.
+//
+// This is the symmetric counterpart to the JWT AuthMiddleware: both inject
+// per-request state before route handlers run, and neither is a route policy.
+//
+// Cognitive complexity: 1 (single path, no branches).
+func authorizerInjector(a auth.Authorizer) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r = r.WithContext(auth.WithAuthorizer(r.Context(), a))
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // autoWireHTTPMetricsCollector adds a router.WithMetricsCollector option when
