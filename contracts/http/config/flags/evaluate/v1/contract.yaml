@@ -30,7 +30,7 @@ endpoints:
         description: "Unauthorized — missing or invalid bearer token"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       403:
-        description: "Forbidden — authenticated principal lacks the admin role required to evaluate flags (admin-only because evaluation results may include sensitive subject mapping)"
+        description: "Forbidden — the ABAC PDP denied the flag:read permission required to evaluate flags (PR-10b #1348 migrated the role-literal admin gate to permission-based authz; the built-in baseline grants admin/super-admin; evaluation results may include sensitive subject mapping)"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       404:
         description: "Feature flag key not found"

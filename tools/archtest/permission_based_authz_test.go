@@ -30,16 +30,18 @@
 //
 //	下游 Medium — archtest typed callsite scan, fail-loud in CI;
 //	  alias-safe (ResolvePackageRef resolves the import path, not the local name).
-//	上游 Medium — allowlist convergence: PR-10b migrates remaining cells to
-//	  auth.RequirePermission(pkg/authz.Permission) and deletes every entry here.
+//	上游 Medium — allowlist convergence: each PR-10x migrates remaining cells to
+//	  auth.RequirePermission(pkg/authz.Permission) and deletes its entries here
+//	  (PR-10a auditquery, PR-10b configcore done; PR-10c accesscore pending).
 //	Hard-ification tracker: permission-gate codegen funnel → gh #PR-13.
 //
 // # Allowlist
 //
-// The files below legitimately still use role-literal gates as of PR-10a and
-// are allowlisted until the corresponding PR-10b migration. auditquery is NOT
-// allowlisted — it was migrated to auth.RequirePermission(authz.PermAuditRead)
-// in PR-10a (#1348) and must not regress.
+// The 3 files below legitimately still use role-literal gates pending PR-10c
+// (accesscore — they carry SelfOr ownership gates needing custom policy funcs).
+// auditquery (PR-10a) and the 5 configcore slices (PR-10b, #1348) are NOT
+// allowlisted — they were migrated to auth.RequirePermission(authz.Perm*) and
+// must not regress.
 //
 // To migrate a file: replace every auth.AnyRole/SelfOr/RequireAnyRole call
 // with auth.RequirePermission(authz.Perm*), declare the permission in
@@ -80,15 +82,13 @@ var permissionBasedAuthzRoleGateSelectors = map[string]struct{}{
 }
 
 // permissionBasedAuthzAllowlist is the migration ledger: handler files that
-// still legitimately call role-literal gates pending PR-10b migration.
+// still legitimately call role-literal gates pending their PR-10x migration.
 // Paths are module-relative slash paths (p.Rel values from the corecells module).
-// auditquery is deliberately absent — it was migrated in PR-10a.
+// auditquery (PR-10a) and the 5 configcore slices (PR-10b) are deliberately
+// absent — they were migrated to auth.RequirePermission and must not regress.
+// Only the 3 accesscore slices remain, pending PR-10c (they carry SelfOr
+// ownership gates needing custom policy funcs).
 var permissionBasedAuthzAllowlist = map[string]struct{}{
-	"corecells/configcore/slices/configread/handler.go":     {},
-	"corecells/configcore/slices/configwrite/handler.go":    {},
-	"corecells/configcore/slices/configpublish/handler.go":  {},
-	"corecells/configcore/slices/flagwrite/handler.go":      {},
-	"corecells/configcore/slices/featureflag/handler.go":    {},
 	"corecells/accesscore/slices/policymanage/handler.go":   {},
 	"corecells/accesscore/slices/identitymanage/handler.go": {},
 	"corecells/accesscore/slices/rbaccheck/handler.go":      {},
@@ -123,15 +123,17 @@ func scanPermissionBasedAuthzViolations(p *Pass, f *ast.File, rel string, allowl
 }
 
 // TestPermissionBasedAuthzAllowlist_Ceiling guards that the migration allowlist
-// does not grow past its known maximum (8 entries as of PR-10a). An accidental
-// NEW entry that suppresses a real PERMISSION-BASED-AUTHZ-01 violation would
-// silently increase the ceiling — this test makes that visible in CI.
+// does not grow past its known maximum (3 entries as of PR-10b — the 5 configcore
+// slices were migrated and removed). An accidental NEW entry that suppresses a
+// real PERMISSION-BASED-AUTHZ-01 violation would silently increase the ceiling —
+// this test makes that visible in CI.
 //
-// PR-10b intent: each PR-10b commit removes one or more entries and decrements
-// this ceiling toward 0. When the allowlist is empty this test becomes trivially
-// true and can be removed together with the allowlist.
+// Migration intent: each PR-10x commit removes one or more entries and decrements
+// this ceiling toward 0 (PR-10c drains the remaining 3 accesscore slices). When
+// the allowlist is empty this test becomes trivially true and can be removed
+// together with the allowlist (and the rule becomes a zero-allowlist Hard target).
 func TestPermissionBasedAuthzAllowlist_Ceiling(t *testing.T) {
-	const maxAllowlistSize = 8 // PR-10a known maximum; PR-10b decrements toward 0
+	const maxAllowlistSize = 3 // PR-10b: configcore drained; only 3 accesscore slices remain
 	if got := len(permissionBasedAuthzAllowlist); got > maxAllowlistSize {
 		t.Errorf("permissionBasedAuthzAllowlist has %d entries, want ≤ %d — "+
 			"new entries must not be added (migrate to auth.RequirePermission instead); "+

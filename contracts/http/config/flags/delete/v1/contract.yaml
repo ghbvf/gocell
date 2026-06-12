@@ -33,7 +33,7 @@ endpoints:
         description: "Unauthorized — missing or invalid bearer token"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       403:
-        description: "Forbidden — authenticated but lacks admin role"
+        description: "Forbidden — the ABAC PDP denied the flag:write permission (PR-10b #1348 migrated the role-literal admin gate to permission-based authz; the built-in baseline grants admin/super-admin)"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       404:
         description: "Not Found — flag key does not exist (ERR_FLAG_NOT_FOUND)"
