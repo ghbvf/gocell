@@ -16,9 +16,12 @@
 // fail-closed 0 rows under the restricted app-serving pool (#1676). PR #1678
 // finding F1 fixed the three sites that had drifted out of a scoped tx; today
 // there are 0 residual sites. This rule is the FUTURE-DRIFT guard: it freezes the
-// set of files that may reference an accesscore RLS-table read method, so a NEW
-// reader fails CI until it is consciously reviewed (and, by that review, confirmed
-// to run inside a scoped tx) and added to the allowlist with rationale.
+// set of files that may reference an accesscore RLS-table read method DIRECTLY, so
+// a new such reference fails CI until it is consciously reviewed (and, by that
+// review, confirmed to run inside a scoped tx) and added to the allowlist with
+// rationale. A read reached only THROUGH A FACADE METHOD (which references the
+// facade type, not a ports read method) is NOT caught here — see §"Tool blind
+// spots"; the runtime RLS fail-closed (0 rows) is the correctness backstop for it.
 //
 // The scope-WRITE side is already funnel-locked (TENANT-TXSCOPE-WRITE-CALLER-01
 // pins tenant.WithScope; TENANT-APPLYSCOPE-WRITE-CALLER-01 pins the mid-tx GUC
@@ -52,12 +55,17 @@
 // excludes the same-named collisions: policymanage's PolicyRepository.GetByID,
 // the identitymanage *Service.GetByID handler method, and the mem/postgres
 // concrete-repo self-calls (a different receiver type / package) all resolve to a
-// non-matching owner and are skipped. The read-method set excludes WRITE methods
-// (Create / Update* / Delete / Assign* …), which hit the same RLS tables but
-// always run inside RunInTx already (writes are inherently transactional). The
-// anti-vacuity reverse check requires every allowlist entry to reference a read
-// method live, so a scanner regression or a removed reader (which would make the
-// freeze vacuously pass) fails CI. The RED fixture (internal/rlsreadfixture,
+// non-matching owner and are skipped. The protected read set is DERIVED, not
+// hand-listed: it is the live interface method set MINUS the WRITE methods
+// (rlsWriteMethodsByIface — Create / Update* / Delete / Assign* …), which hit the
+// same RLS tables but always run inside RunInTx already (writes are inherently
+// transactional). Deriving from the interface makes read COMPLETENESS structural
+// — a new RLS read method is protected by default, and the classification guard
+// (TestTenantRLSReadCaller01_ReadMethodClassification) fails CI if a new method
+// escapes both sets, a write entry goes stale, or the interface starts embedding.
+// The anti-vacuity reverse check requires every allowlist entry to reference a
+// read method live, so a scanner regression or a removed reader (which would make
+// the freeze vacuously pass) fails CI. The RED fixture (internal/rlsreadfixture,
 // TestTenantRLSReadCaller01_FixtureCatchesRead) proves the detector fires on a
 // genuine read reference and not on a write.
 //
@@ -100,6 +108,18 @@
 //     CURRENT-STATE snapshot, NOT an invariant this rule guards: a new unscoped
 //     caller of an RLS-reading facade method would not be caught here (the runtime
 //     RLS fail-closed backstop still applies).
+//   - The SAME facade limit applies to adminprovision.Provisioner.Status / Ensure,
+//     which wrap roleRepo.EffectiveAdminExists / CountByRole: provisioner.go IS in
+//     the allowlist (it references the ports read methods directly), but the
+//     Provisioner's callers reference Provisioner.Status / Ensure — not a ports read
+//     method — so a NEW unscoped caller of those facade methods is not caught here.
+//     Today the sole production caller (slices/setup/service.go Status / CreateAdmin,
+//     a pre-auth path with no JWT tenant fallback) wraps every call in scopedtx.Do
+//     — again a CURRENT-STATE snapshot, not an invariant this rule guards. The
+//     principled static closure for BOTH facade cases is the sealed ScopedCtx
+//     capability deferred to #1893 (it would make an unscoped read uncompilable
+//     through ANY path, facade or direct); until then the runtime RLS fail-closed
+//     backstop is the correctness boundary.
 //
 // # CI bucket
 //
@@ -127,25 +147,94 @@ const (
 	roleRepositoryTypeName = "RoleRepository"
 )
 
-// rlsReadMethodsByIface maps each RLS-reading repo interface to its READ method
-// set. WRITE methods are deliberately excluded (see godoc §Detection). This set
-// IS the protected-operation definition; the anti-vacuity check pins the
-// load-bearing entries live so it cannot silently drift.
-var rlsReadMethodsByIface = map[string]map[string]struct{}{
+// rlsRepoIfaces are the accesscore ports interfaces whose EVERY method touches an
+// RLS-protected table (users / roles / role_assignments). Because there is no
+// third category — each method is either a read or a write of those tables — the
+// protected READ set is DERIVED as (live interface method set − writes), not
+// hand-listed. That makes read completeness STRUCTURAL: a method newly added to
+// one of these interfaces is, by default, a protected read this rule catches —
+// closing the gap where a hand-list could silently omit a new RLS read method
+// (the anti-vacuity check only proves listed reads still have a live caller, not
+// that the list is complete).
+var rlsRepoIfaces = []string{userRepositoryTypeName, roleRepositoryTypeName}
+
+// rlsWriteMethodsByIface is the SOLE hand-maintained classification: the WRITE
+// methods on each rlsRepoIface. Writes hit the same RLS tables but are inherently
+// transactional (always issued inside RunInTx), so the read-side caller-allowlist
+// does not freeze them. deriveRLSReadMethods subtracts this set from the live
+// interface method set to obtain the protected read set; the classification guard
+// (TestTenantRLSReadCaller01_ReadMethodClassification) fails CI if an entry here
+// is not a live interface method (typo / stale) or if the interface embeds a
+// sub-interface (which would hide promoted methods from the AST scan). A NEW write
+// method must be added here, else it is (mis)derived as a protected read and flags
+// at its call sites — fail-closed toward protection, by design.
+var rlsWriteMethodsByIface = map[string]map[string]struct{}{
 	userRepositoryTypeName: {
-		"GetByIDInTenant":        {},
-		"GetByUsername":          {},
-		"GetByIDForUpdate":       {},
-		"GetByUsernameForUpdate": {},
+		"Create":                  {},
+		"Delete":                  {},
+		"UpdateProfile":           {},
+		"UpdateLockState":         {},
+		"UpdatePasswordResetFlag": {},
+		"UpdatePassword":          {},
+		"BumpAuthzEpoch":          {},
+		"UpdateLockoutFields":     {},
 	},
 	roleRepositoryTypeName: {
-		"GetByID":              {},
-		"GetByUserID":          {},
-		"CountByRole":          {},
-		"CountEffectiveAdmins": {},
-		"EffectiveAdminExists": {},
-		"ListByUserID":         {},
+		"Create":                  {},
+		"AssignToUser":            {},
+		"RemoveFromUser":          {},
+		"RemoveFromUserIfNotLast": {},
 	},
+}
+
+// deriveRLSReadMethods loads the live rlsRepoIface method sets (AST) and returns
+// (iface → read-method set) = full − rlsWriteMethodsByIface[iface]. It fails t on
+// any classification drift: an interface that embeds a sub-interface (promoted
+// methods would escape the AST scan), a write-exclusion entry that is not a live
+// interface method (typo / stale — would shrink the write set and misclassify a
+// real write as a read), or an interface whose derived read set is empty (the
+// whole interface classified as writes — almost certainly a mistake that would
+// make the rule vacuous for it). This is the completeness half the anti-vacuity
+// check cannot give: anti-vacuity proves every observed read has a live caller;
+// this pins the read SET to the interface fact.
+func deriveRLSReadMethods(t *testing.T, root string) map[string]map[string]struct{} {
+	t.Helper()
+	const portsDirRel = "corecells/accesscore/internal/ports"
+	reads := make(map[string]map[string]struct{}, len(rlsRepoIfaces))
+	for _, ifaceName := range rlsRepoIfaces {
+		iface := loadInterfaceType(t, root, portsDirRel, ifaceName)
+		if iface == nil {
+			t.Fatalf("TENANT-RLS-READ-CALLER-01: %s not found in %s", ifaceName, portsDirRel)
+		}
+		if embedded := embeddedTypeNames(iface); len(embedded) > 0 {
+			t.Errorf("TENANT-RLS-READ-CALLER-01: %s must not embed sub-interfaces "+
+				"(promoted methods would escape the read-method derivation); got %v", ifaceName, embedded)
+		}
+		methods := directMethodNames(iface)
+		methodSet := make(map[string]struct{}, len(methods))
+		for _, m := range methods {
+			methodSet[m] = struct{}{}
+		}
+		writes := rlsWriteMethodsByIface[ifaceName]
+		for w := range writes {
+			if _, ok := methodSet[w]; !ok {
+				t.Errorf("TENANT-RLS-READ-CALLER-01: write-exclusion %q is not a method of %s "+
+					"(typo or stale entry); fix rlsWriteMethodsByIface", w, ifaceName)
+			}
+		}
+		read := make(map[string]struct{}, len(methods))
+		for _, m := range methods {
+			if _, isWrite := writes[m]; !isWrite {
+				read[m] = struct{}{}
+			}
+		}
+		if len(read) == 0 {
+			t.Errorf("TENANT-RLS-READ-CALLER-01: derived read set for %s is empty "+
+				"(every method classified as a write); the rule would be vacuous for this interface", ifaceName)
+		}
+		reads[ifaceName] = read
+	}
+	return reads
 }
 
 // rlsReadCallerAllowlist: the files that legitimately reference an accesscore
@@ -220,6 +309,12 @@ func TestTenantRLSReadCaller01(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
+	// Derive the protected read set from the live interface fact (completeness is
+	// structural, not a hand-list). The derivation's classification assertions are
+	// also exercised standalone by TestTenantRLSReadCaller01_ReadMethodClassification
+	// (AST-only, runs even in -short).
+	rlsReadMethodsByIface := deriveRLSReadMethods(t, findModuleRoot(t))
+
 	observed := map[string]struct{}{}
 	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if !p.Typed() {
@@ -271,13 +366,26 @@ func TestTenantRLSReadCaller01(t *testing.T) {
 	Report(t, "TENANT-RLS-READ-CALLER-01", diags)
 }
 
+// TestTenantRLSReadCaller01_ReadMethodClassification pins the read/write
+// classification to the LIVE interface fact (AST-only, so it runs even in -short
+// mode, unlike the packages.Load production scan above). It is the completeness
+// guard: adding a method to UserRepository / RoleRepository without listing it as
+// a write in rlsWriteMethodsByIface makes it a derived protected read; a stale or
+// misspelled write entry, an emptied read set, or a newly embedded sub-interface
+// fails here. deriveRLSReadMethods carries the assertions.
+func TestTenantRLSReadCaller01_ReadMethodClassification(t *testing.T) {
+	t.Parallel()
+	_ = deriveRLSReadMethods(t, findModuleRoot(t))
+}
+
 // TestTenantRLSReadCaller01_FixtureCatchesRead is the reverse self-check: the RED
-// fixture references a read method on a stand-in repository interface from a
-// non-allowlisted file. The detector core (run against the fixture package) must
-// resolve and flag exactly that ONE read reference — and must NOT flag the
-// fixture's write reference. A 0 result means the detector regressed (lost the
-// receiver binding or the read-method-set filter) and a new unscoped RLS read
-// could be added unnoticed.
+// fixture references a read method on EACH of two stand-in repository interfaces
+// (UserRepository + RoleRepository) from a non-allowlisted file. The detector core
+// (run against the fixture package) must resolve and flag exactly those TWO read
+// references — one per interface, proving the receiver binding resolves both — and
+// must NOT flag the fixture's write reference. A wrong count means the detector
+// regressed (lost the receiver binding or the read-method-set filter) and a new
+// unscoped RLS read could be added unnoticed.
 func TestTenantRLSReadCaller01_FixtureCatchesRead(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
