@@ -272,7 +272,7 @@ func buildFooCoreOpts(clk clock.Clock, cfg fooCoreModuleConfig) (fooCoreModuleRe
 		if cfg.pg == nil {
 			return fooCoreModuleResult{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"foocore postgres mode requires the postgres capability provider "+
-					"(provisionCapabilities must run before Build)")
+					"(the composition root must provision the postgres capability on SharedDeps before composition.Build)")
 		}
 		db, err := cellsecrets.PgxPoolFromProvider(cfg.pg)
 		if err != nil {
@@ -435,14 +435,20 @@ func TestFooCoreModule_Postgres_SchemaMatched(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx))
 
-	// Provision PG capability (mirrors composition.Builder.provisionCapabilities)
-	pgCap, err := capability.NewPGProvider(pool)
-	require.NoError(t, err)
-
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 	t.Setenv("GOCELL_FOOCORE_CURSOR_KEY", "foocore-test-cursor-key-32byte!!")
 
-	shared := buildMinimalTestSharedDeps(t) // supply pgCap via composition.NewSharedDeps
+	// Wrap the migrated pool into the sealed PGProvider and inject it into
+	// SharedDeps.PG — the same wiring the composition root performs when it
+	// provisions the postgres capability before composition.Build. Without this,
+	// buildFooCoreOpts sees a nil cfg.pg and fails the postgres branch.
+	shared := buildMinimalTestSharedDeps(t) // cross-cutting deps; PG injected below
+	shared.PG = capability.NewPGProvider(
+		adapterpg.NewTxManager(pool),
+		adapterpg.NewOutboxWriter(shared.Clock),
+		pool.DB(),
+	)
+
 	c, opts, resources, err := foocore.Module().Provide(ctx, shared)
 	require.NoError(t, err)
 	require.NotNil(t, c)
