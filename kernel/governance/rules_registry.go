@@ -119,6 +119,9 @@ var allRules = []Rule{
 	// CONTRACT-CONSISTENCY-EMIT
 	{Code: codeCONTRACTCONSISTENCYEMIT01, Phase: PhaseBase, Detect: (*Validator).validateCONTRACTCONSISTENCYEMIT01},
 
+	// FRAMEWORK-OWNED-CONTRACT-SCOPED — framework owner eligibility + fail-closed lifecycle
+	{Code: codeFRAMEWORKOWNEDCONTRACTSCOPED01, Phase: PhaseBase, Detect: (*Validator).validateFRAMEWORKOWNEDCONTRACTSCOPED01},
+
 	// JOURNEY
 	{Code: codeJOURNEYCONTRACTEXISTENCE01, Phase: PhaseBase, Detect: (*Validator).validateJOURNEYCONTRACTEXISTENCE01},
 	{Code: codeJOURNEYSTATUSLIFECYCLE01, Phase: PhaseBase, Detect: (*Validator).validateJOURNEYSTATUSLIFECYCLE01},
