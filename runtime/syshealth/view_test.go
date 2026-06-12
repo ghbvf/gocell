@@ -11,6 +11,14 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
+// Site-specific probe latencies for the projection tests. TEST-TIME-LITERAL-01
+// requires test-time durations to live in package-level consts, not inline literals.
+const (
+	latency1ms = 1 * time.Millisecond
+	latency2ms = 2 * time.Millisecond
+	latency3ms = 3 * time.Millisecond
+)
+
 // --- fakes -------------------------------------------------------------------
 
 type fakeAgg struct{ snap healthz.Snapshot }
@@ -83,9 +91,9 @@ func TestView_Report_PerCellAndAdapterBucketing(t *testing.T) {
 			"celltwo": newStubCell(t, "celltwo", false),
 		},
 	}, fakeAgg{snap: healthz.Snapshot{Probes: []healthz.ProbeResult{
-		{Name: mustName(t, "cellone_repo_ready"), Status: healthz.StatusUp, Latency: 2 * time.Millisecond},
-		{Name: mustName(t, "celltwo_repo_ready"), Status: healthz.StatusDegraded, Latency: 3 * time.Millisecond},
-		{Name: mustName(t, "postgres_ready"), Status: healthz.StatusUp, Latency: 1 * time.Millisecond},
+		{Name: mustName(t, "cellone_repo_ready"), Status: healthz.StatusUp, Latency: latency2ms},
+		{Name: mustName(t, "celltwo_repo_ready"), Status: healthz.StatusDegraded, Latency: latency3ms},
+		{Name: mustName(t, "postgres_ready"), Status: healthz.StatusUp, Latency: latency1ms},
 		{Name: mustName(t, "redis_ready"), Status: healthz.StatusDown, Err: context.DeadlineExceeded},
 	}}})
 
@@ -205,7 +213,7 @@ func TestView_Report_OverallRanks(t *testing.T) {
 			health: map[string]cell.HealthStatus{"only": {Status: cellStatus}},
 			cells:  map[string]cell.Cell{"only": newStubCell(t, "only", true)},
 		}, fakeAgg{snap: healthz.Snapshot{Probes: []healthz.ProbeResult{
-			{Name: mustName(t, "only_repo_ready"), Status: healthz.StatusUp, Latency: time.Millisecond},
+			{Name: mustName(t, "only_repo_ready"), Status: healthz.StatusUp, Latency: latency1ms},
 		}}})
 	}
 	if got := mk("healthy").Report(context.Background()).Overall; got != "healthy" {
@@ -228,7 +236,7 @@ func TestView_Report_SnapshotProbeMissingFromEvaluate(t *testing.T) {
 		cells:  map[string]cell.Cell{"only": newStubCell(t, "only", true)},
 	}, fakeAgg{snap: healthz.Snapshot{Probes: []healthz.ProbeResult{
 		// aggregator returns ONLY an unrelated adapter probe, NOT only_repo_ready.
-		{Name: mustName(t, "postgres_ready"), Status: healthz.StatusUp, Latency: time.Millisecond},
+		{Name: mustName(t, "postgres_ready"), Status: healthz.StatusUp, Latency: latency1ms},
 	}}})
 
 	rep := v.Report(context.Background())
