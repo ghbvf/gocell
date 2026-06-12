@@ -89,6 +89,16 @@ FROM devices
 WHERE cert_expires_at IS NOT NULL
   AND cert_expires_at <= $1
 ORDER BY cert_expires_at ASC, id ASC`
+
+	// advanceCertAfterRotationSQL CAS-advances a device's cert state on a
+	// successful rotate-cert ack (#1870). The WHERE cert_epoch = $2 predicate makes
+	// the write idempotent: a replay for an already-advanced (stale) epoch — or a
+	// row that no longer exists — affects zero rows. The caller reads RowsAffected
+	// to distinguish a real advance (1) from an idempotent no-op (0).
+	advanceCertAfterRotationSQL = `
+UPDATE devices
+SET cert_epoch = $2 + 1, cert_expires_at = $3
+WHERE id = $1 AND cert_epoch = $2`
 )
 
 // Create inserts a new device row. Returns ErrConflict on unique constraint violation.
@@ -205,6 +215,29 @@ func (r *PGDeviceRepository) ListCertificateRenewalCandidates(
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "device_repo: list cert renewal candidates rows", err)
 	}
 	return out, nil
+}
+
+// AdvanceCertAfterRotation CAS-advances a device's cert state on a successful
+// rotate-cert ack (#1870). RowsAffected==1 means the device was at rotatedEpoch
+// and is now advanced to rotatedEpoch+1 with cert_expires_at=newExpiry;
+// RowsAffected==0 means the epoch was already advanced (stale replay) or the
+// device no longer exists — an idempotent no-op (advanced=false, nil error). See
+// the domain.DeviceRepository contract. newExpiry is a non-zero future time, so
+// it is written directly (never the NULL "no cert issued" sentinel).
+func (r *PGDeviceRepository) AdvanceCertAfterRotation(
+	ctx context.Context, deviceID string, rotatedEpoch int64, newExpiry time.Time,
+) (bool, error) {
+	tag, err := r.db.Exec(ctx, advanceCertAfterRotationSQL, deviceID, rotatedEpoch, newExpiry)
+	if err != nil {
+		slog.Error("device_repo: pg write failed",
+			slog.String("operation", "advance_cert_after_rotation"),
+			slog.String("device_id", deviceID),
+			slog.Int64("rotated_epoch", rotatedEpoch),
+			slog.Any("error", err))
+		return false, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"device_repo: advance cert after rotation", err)
+	}
+	return tag.RowsAffected() == 1, nil
 }
 
 // buildListQuery constructs the SELECT SQL and placeholder args for a List call.

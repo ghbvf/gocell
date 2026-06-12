@@ -9,10 +9,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	dto "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -73,6 +75,22 @@ func newTestRec() *cell.RegistryRecorder {
 	return cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
 }
 
+// TestCertValidityExceedsThreshold is the #1870 convergence-loop correctness
+// regression: domain.CertValidity MUST exceed certRenewalThreshold or a freshly
+// rotated cert stays near-expiry and the completion write never closes the loop.
+// buildCertRenewalSweeper fails Init fast on a violation; this asserts both the
+// guard logic and that the LIVE consts satisfy it (a const change that breaks the
+// invariant turns this red rather than shipping a silent busy-loop).
+func TestCertValidityExceedsThreshold(t *testing.T) {
+	assert.True(t, certValidityExceedsThreshold(90*24*time.Hour, 30*24*time.Hour), "90d validity > 30d threshold")
+	assert.False(t, certValidityExceedsThreshold(30*24*time.Hour, 30*24*time.Hour), "equal must fail (cert would be near-expiry at issue)")
+	assert.False(t, certValidityExceedsThreshold(10*24*time.Hour, 20*24*time.Hour), "shorter validity must fail")
+
+	// The live consts MUST satisfy the invariant — this is the drift guard.
+	assert.True(t, certValidityExceedsThreshold(domain.CertValidity, certRenewalThreshold),
+		"live domain.CertValidity must exceed certRenewalThreshold (#1870 loop-closing precondition)")
+}
+
 func TestDeviceCell_Lifecycle(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
@@ -80,8 +98,8 @@ func TestDeviceCell_Lifecycle(t *testing.T) {
 
 	// Init
 	require.NoError(t, c.Init(ctx, rec))
-	assert.Len(t, c.OwnedSlices(), 8,
-		"8 slices: 7 prior + devicecertrenewal reconcile producer (#1757)")
+	assert.Len(t, c.OwnedSlices(), 9,
+		"9 slices: 8 prior + devicecertcompletion rotation-resolved consumer (#1870)")
 
 	// Start
 	require.NoError(t, c.Start(ctx))

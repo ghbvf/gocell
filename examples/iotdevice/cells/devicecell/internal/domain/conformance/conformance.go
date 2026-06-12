@@ -59,6 +59,32 @@ func RunDeviceRepoConformance(t *testing.T, factory DeviceRepoFactory, features 
 	t.Run("Cert/RenewalCandidatesReturnsAllNearExpiry", func(t *testing.T) {
 		runCertRenewalCandidatesReturnsAllNearExpiry(t, factory, features)
 	})
+	t.Run("Cert/AdvanceAfterRotationSuccess", func(t *testing.T) { runAdvanceCertAfterRotationSuccess(t, factory, features) })
+	t.Run("Cert/AdvanceAfterRotationStaleEpochNoOp", func(t *testing.T) {
+		runAdvanceCertAfterRotationStaleEpochNoOp(t, factory, features)
+	})
+	t.Run("Cert/AdvanceAfterRotationUnknownDevice", func(t *testing.T) {
+		runAdvanceCertAfterRotationUnknownDevice(t, factory, features)
+	})
+}
+
+// advanceCert wraps repo.AdvanceCertAfterRotation in the suite's tx policy (PG
+// requires an ambient tx; mem does not) and returns the advanced flag.
+func advanceCert(
+	t *testing.T, ctx context.Context, repo domain.DeviceRepository,
+	tx persistence.TxRunner, features Features,
+	deviceID string, rotatedEpoch int64, newExpiry time.Time,
+) bool {
+	t.Helper()
+	var advanced bool
+	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
+		var e error
+		advanced, e = repo.AdvanceCertAfterRotation(c, deviceID, rotatedEpoch, newExpiry)
+		return e
+	}); err != nil {
+		t.Fatalf("AdvanceCertAfterRotation(%q, %d): %v", deviceID, rotatedEpoch, err)
+	}
+	return advanced
 }
 
 func inTx(t *testing.T, ctx context.Context, txRunner persistence.TxRunner, features Features, fn func(ctx context.Context) error) error {
@@ -434,5 +460,106 @@ func runCertRenewalCandidatesReturnsAllNearExpiry(t *testing.T, factory DeviceRe
 		if cand.DeviceID != want {
 			t.Fatalf("result[%d].DeviceID = %q, want %q (expiry ASC order)", idx, cand.DeviceID, want)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Certificate-renewal: completion (rotate-cert ack drives cert-state advance, #1870)
+// ---------------------------------------------------------------------------
+
+// runAdvanceCertAfterRotationSuccess proves the completion happy path: a device
+// at the rotated epoch is CAS-advanced to epoch+1 with the new expiry, removing
+// it from the near-expiry candidate set (the cert-manager loop-closing write).
+func runAdvanceCertAfterRotationSuccess(t *testing.T, factory DeviceRepoFactory, features Features) {
+	t.Helper()
+	repo, tx, now, cleanup := factory(t)
+	defer cleanup()
+	ctx := context.Background()
+	base := now()
+	nearExpiry := base.Add(time.Hour) // near-expiry: a renewal candidate
+
+	createDevice(t, ctx, repo, tx, features, &domain.Device{
+		ID: "adv-1", Name: "adv-1", Status: "online", LastSeen: base,
+		CertEpoch: 2, CertExpiresAt: nearExpiry,
+	})
+
+	newExpiry := base.Add(90 * 24 * time.Hour).Truncate(time.Second)
+	advanced := advanceCert(t, ctx, repo, tx, features, "adv-1", 2, newExpiry)
+	if !advanced {
+		t.Fatal("AdvanceCertAfterRotation(adv-1, epoch 2): advanced=false, want true")
+	}
+
+	got, err := repo.GetByID(ctx, "adv-1")
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.CertEpoch != 3 {
+		t.Fatalf("CertEpoch = %d, want 3 (rotatedEpoch+1)", got.CertEpoch)
+	}
+	if !got.CertExpiresAt.Equal(newExpiry) {
+		t.Fatalf("CertExpiresAt = %v, want %v (new expiry)", got.CertExpiresAt, newExpiry)
+	}
+	// Loop-closing: a far-future expiry means the device is no longer a candidate.
+	cands, err := repo.ListCertificateRenewalCandidates(ctx, base.Add(30*24*time.Hour))
+	if err != nil {
+		t.Fatalf("ListCertificateRenewalCandidates: %v", err)
+	}
+	for _, c := range cands {
+		if c.DeviceID == "adv-1" {
+			t.Fatal("adv-1 still a renewal candidate after rotation completion (loop did not close)")
+		}
+	}
+}
+
+// runAdvanceCertAfterRotationStaleEpochNoOp proves idempotent replay: once the
+// device has advanced past the rotated epoch, a second resolve for the same
+// (now stale) epoch is a no-op (advanced=false), leaving state untouched. This
+// is what makes at-least-once delivery + duplicate device acks safe.
+func runAdvanceCertAfterRotationStaleEpochNoOp(t *testing.T, factory DeviceRepoFactory, features Features) {
+	t.Helper()
+	repo, tx, now, cleanup := factory(t)
+	defer cleanup()
+	ctx := context.Background()
+	base := now()
+
+	createDevice(t, ctx, repo, tx, features, &domain.Device{
+		ID: "adv-stale", Name: "adv-stale", Status: "online", LastSeen: base,
+		CertEpoch: 2, CertExpiresAt: base.Add(time.Hour),
+	})
+
+	firstExpiry := base.Add(90 * 24 * time.Hour).Truncate(time.Second)
+	if !advanceCert(t, ctx, repo, tx, features, "adv-stale", 2, firstExpiry) {
+		t.Fatal("first advance: advanced=false, want true")
+	}
+
+	// Replay the SAME resolve (rotatedEpoch=2) — device is now at epoch 3.
+	staleExpiry := base.Add(365 * 24 * time.Hour).Truncate(time.Second)
+	if advanceCert(t, ctx, repo, tx, features, "adv-stale", 2, staleExpiry) {
+		t.Fatal("stale-epoch replay: advanced=true, want false (idempotent no-op)")
+	}
+
+	got, err := repo.GetByID(ctx, "adv-stale")
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.CertEpoch != 3 {
+		t.Fatalf("CertEpoch = %d, want 3 (unchanged by stale replay)", got.CertEpoch)
+	}
+	if !got.CertExpiresAt.Equal(firstExpiry) {
+		t.Fatalf("CertExpiresAt = %v, want %v (unchanged by stale replay)", got.CertExpiresAt, firstExpiry)
+	}
+}
+
+// runAdvanceCertAfterRotationUnknownDevice proves that resolving a rotation for
+// a device that no longer exists is a no-op (advanced=false, no error), so a
+// late/replayed ack for a deleted device is absorbed rather than erroring.
+func runAdvanceCertAfterRotationUnknownDevice(t *testing.T, factory DeviceRepoFactory, features Features) {
+	t.Helper()
+	repo, tx, now, cleanup := factory(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	if advanceCert(t, ctx, repo, tx, features, "ghost", 1, now().Add(90*24*time.Hour)) {
+		t.Fatal("unknown device: advanced=true, want false (idempotent no-op)")
 	}
 }

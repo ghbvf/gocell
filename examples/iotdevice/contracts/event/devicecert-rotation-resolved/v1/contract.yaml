@@ -1,0 +1,14 @@
+id: event.devicecert-rotation-resolved.v1
+kind: event
+transports: [amqp, mqtt]
+ownerCell: devicecell
+consistencyLevel: L4
+lifecycle: active
+endpoints:
+  publisher: devicecell
+schemaRefs:
+  headers: headers.schema.json
+  payload: payload.schema.json
+replayable: true
+idempotencyKey: eventId
+deliverySemantics: at-least-once

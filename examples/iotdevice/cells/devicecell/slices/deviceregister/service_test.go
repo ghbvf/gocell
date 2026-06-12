@@ -146,7 +146,7 @@ func TestService_Register_PersistsDevice(t *testing.T) {
 // the device row, #1819). The cert-renewal e2e hand-seeds a near-expiry cert
 // because Register issues a far-from-expiry one, so the production seeding path
 // needs its own assertion here: a freshly registered device row carries an
-// epoch-1 cert valid for certValidity (now + 90d).
+// epoch-1 cert valid for domain.CertValidity (now + 90d).
 func TestService_Register_SeedsCertStateOnDeviceRow(t *testing.T) {
 	base := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
 	clk := clockmock.New(base)
@@ -163,7 +163,7 @@ func TestService_Register_SeedsCertStateOnDeviceRow(t *testing.T) {
 	stored, err := repo.GetByID(ctx, r.Data.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.DefaultCertEpoch, stored.CertEpoch, "a fresh registration issues epoch 1")
-	assert.Equal(t, base.Add(certValidity), stored.CertExpiresAt, "cert expiry is now+certValidity")
+	assert.Equal(t, base.Add(domain.CertValidity), stored.CertExpiresAt, "cert expiry is now+domain.CertValidity")
 }
 
 func TestService_Register_PublishFails_StillReturnsDevice(t *testing.T) {

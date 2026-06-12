@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "event.devicecert-rotation-resolved.v1.payload",
+  "description": "Emitted when a device acks (回执) a rotate-cert command to a terminal outcome. Drives the cert-renewal completion consumer: succeeded advances the device's observed cert state (epoch+1, new expiry); failed/rejected feed failure observability only.",
+  "type": "object",
+  "properties": {
+    "deviceId": {
+      "type": "string",
+      "description": "Device whose rotate-cert command reached a terminal ack."
+    },
+    "epoch": {
+      "type": "integer",
+      "description": "The cert epoch that was rotated (the rotate-cert command's epoch, >= 1). On succeeded the consumer CAS-advances the device row from this epoch to epoch+1."
+    },
+    "outcome": {
+      "type": "string",
+      "description": "Terminal ack outcome mapped from command.AckReason. One of: succeeded | failed | rejected. The consumer validates the value (a value outside this set is a permanent producer-side violation)."
+    },
+    "resolvedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Instant the device acked the rotate-cert command (ack time). The new cert expiry is computed server-side as resolvedAt + domain.CertValidity."
+    }
+  },
+  "required": ["deviceId", "epoch", "outcome", "resolvedAt"]
+}

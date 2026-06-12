@@ -339,3 +339,30 @@ enforcement 索引（§7）**无新增**——值校验由 §4 既有三 funnel 
 enforcement 索引（§7）**无新增 dispatch-funnel invariant**——active-uniqueness 属 kernel/command queue 层，见 ADR-1822 §8 enforcement 索引。**无 ✅→⚠️/❌ 降格，无补偿措施**。
 
 **范围（显式，非 silent defer）**：terminal-feedback 释放（设备回执 / DLX 驱动 epoch advance）仍在 producer 范围外，登记为独立 follow-up issue（per-key reconcile + terminal-feedback 释放，ADR-1822 §7.1 注明）。批量扫描上限 + RequeueAfter 续扫已移除（D_AU5）。
+
+## Amendment 2026-06-12(#1870) — rotate-cert 完成回执驱动续期状态收敛（completion consumer）
+
+**触发**：上一 amendment（#1820）登记的 follow-up「terminal-feedback 释放（设备回执驱动 epoch advance）」落地。按 ai-robust.md「ADR amendment 必查」重评 §4 funnel 矩阵并就地重写 §277 carve-out 的范围措辞。
+
+**§277 carve-out 范围澄清（就地重写，非新增盲区）**：原 §Amendment 2026-06-10 line 277 写「设备侧轮换完成（epoch advance / 应用新证书）属设备 dequeue 后固件行为，在本 **producer** 范围外」。该句**仍成立**——设备固件**应用**新证书确实在 producer 范围外。但它**遗漏了对称的服务端责任**：设备成功轮换并 **ack（回执）** 后，服务端必须**记录**所报告的完成态（推进 `devices.cert_epoch` / `cert_expires_at`），否则设备永久停留在 near-expiry 候选集、producer 每个 Sweeper 周期无限重发 rotate-cert——L4 收敛环不闭合。**#1870 补齐该服务端记录责任**，边界精确化为：
+
+- **out of scope（不变）**：设备固件侧生成 CSR / 应用新证书 / 本地 epoch 推进。
+- **in scope（#1870 新增）**：服务端观测设备 ack 的 terminal 态 → 记录新 cert 状态（completion consumer）。
+
+**实现是独立 event consumer，不在 producer 内 observe-then-decide（ADR-1822 备选 B 合规）**：新增 `devicecertcompletion` slice，发布 + 订阅 `event.devicecert-rotation-resolved.v1`：
+- 发布侧：`devicecmd.Service.Ack` 终态后触发的**通用** `OnCommandResolved` hook（`WithOnCommandResolved`，nil-safe），仅 `rotate-cert` 命令 emit resolved 事件。devicecmd 保持命令类型无关。
+- 订阅侧：`HandleRotationResolved`（`ConsumerBase` 范式）succeeded → `repo.AdvanceCertAfterRotation` **CAS-on-epoch 幂等**推进；failed/rejected → 结构化 warn（回执驱动失败观测）。
+- **关键**：completion consumer 是 producer **下游**的独立观测者，**不**在 producer 扫描层查询命令队列做抑制判断——ADR-1822 备选 B（cert-manager #4642 同构的 observe-then-decide TOCTOU）依然被拒绝，本 amendment 不复活它。completion consumer 与 active-uniqueness **正交**：ack→terminal 释放 active-uniqueness key（既有行为，#1820）；推进 cert 状态是另一条独立 observed-state 写路径。
+
+**§4 funnel 矩阵再验证（无降格，零新增 dispatch-funnel enforcement）**：
+- `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01` / `COMMAND-DISPATCH-REGISTER-CALLER-01` / `COMMAND-ASYNC-DISPATCH-CALLER-01` / `COMMAND-ASYNC-EMIT-FUNNEL-01`：✅ **全不变**。#1870 **未新增任何 command codegen / dispatch / register / EmitAsync 调用方**——rotation-resolved 是 **event**（非 command），经既有 event 发布/订阅 funnel（`event.device-registered.v1` 同范式：contract.yaml + cellgen 派生 `NewSubscription.Mount`）。`OnCommandResolved` hook 是 `devicecmd.Service` 上的 fire-and-forget 字段，**不触碰** command 的 emit/dispatch/register 任一闸门。
+- **未触发 contract-fanout command 侧**：未改 sealed `Entry` wire envelope、未新增 command errcode/Kind/command-contract。新增的是一条 **event** contract（payload golden Hard）+ 一个 cell-内 event 订阅。
+
+**enforcement 分档（ai-robust「涉及 enforcement 必给评级」）**——均属 cell/domain/event 层，非 command-bus dispatch funnel：
+- `event.devicecert-rotation-resolved.v1` payload/headers schema 字段集 —— **Hard**（codegen golden 字节锁）。
+- `AdvanceCertAfterRotation` CAS-on-epoch 幂等（mem + PG 一致）—— **Medium+**（`domain/conformance` 跨存储套件：success / stale-epoch no-op / unknown-device；偏差 CI 红）。
+- **CertValidity > certRenewalThreshold 收敛前置不变式** —— **Medium**（`buildCertRenewalSweeper` 启动期 fail-fast；`certValidityExceedsThreshold` 纯函数 + `cell_test` 对 live 常量的漂移回归；常量被改至违反即红）。`domain.CertValidity` 单源常量（initial issue + post-rotation re-issue 同源）—— **近 Hard**（重命名/改值同时影响两处编译/测试）。
+- `RotateCertCommandType` 单源常量（producer emit ↔ consumer filter）—— **近 Hard**（domain 单源；漂移即两处编译断裂）。
+- 完成回执闭环 E2E —— **Medium**（`TestCertRenewal_CompletionClosesLoop`：ack success → cert 状态推进 → 下一 tick 不再 emit；emit/hook/consumer/wiring 任一断即红）。
+
+enforcement 索引（§7）**无新增 dispatch-funnel invariant**。威胁矩阵的收敛环闭合细节见 ADR-1822 §7 amendment。**无 ✅→⚠️/❌ 降格，无补偿措施**。

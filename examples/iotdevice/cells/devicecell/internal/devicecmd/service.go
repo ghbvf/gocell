@@ -79,10 +79,33 @@ type Service struct {
 	// (e.g. svc.authz = rejectAll) or by the composition root; there is no
 	// exported WithAuthz option.
 	authz command.AuthzFunc
+
+	// onResolved is an optional GENERIC command-resolution hook fired after a
+	// terminal Ack (success/failure/rejected), carrying the resolved command
+	// entry + the ack reason. It keeps devicecmd command-type agnostic: consumers
+	// (e.g. the devicecertcompletion slice for rotate-cert, #1870) filter and
+	// react. Nil means no hook (the common case). Set via WithOnCommandResolved by
+	// the composition root. It is fire-and-forget — it must not fail the ack.
+	onResolved func(context.Context, command.Entry, command.AckReason)
 }
 
 // Option configures a device-command Service.
 type Option func(*Service)
+
+// WithOnCommandResolved registers a generic hook fired after a command reaches a
+// terminal status via Ack. The hook receives the resolved command entry and the
+// ack reason; it is fire-and-forget (its errors are its own concern and never
+// fail the device's ack). devicecmd stays command-type agnostic — the hook impl
+// (the devicecertcompletion slice) does any command-type-specific filtering and
+// reaction. A nil hook is ignored. Accumulative: a nil argument leaves the prior
+// value in place.
+func WithOnCommandResolved(hook func(context.Context, command.Entry, command.AckReason)) Option {
+	return func(s *Service) {
+		if hook != nil {
+			s.onResolved = hook
+		}
+	}
+}
 
 // NewService creates a device-command Service. sliceName identifies the owning
 // slice in observability labels (e.g. "devicecommand" or "devicecommandinternal");
@@ -240,7 +263,7 @@ func (s *Service) Dequeue(ctx context.Context, deviceID string, limit int, lease
 // Report records that the device has received the command and started work.
 func (s *Service) Report(ctx context.Context, deviceID, cmdID string) error {
 	now := s.clock.Now()
-	if err := s.getOwnedCommand(ctx, deviceID, cmdID); err != nil {
+	if _, err := s.getOwnedCommand(ctx, deviceID, cmdID); err != nil {
 		return err
 	}
 	if err := s.queue.Report(ctx, cmdID, now); err != nil {
@@ -261,7 +284,8 @@ func (s *Service) Ack(ctx context.Context, deviceID, cmdID string, reason comman
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "device-command: invalid ack reason")
 	}
 	now := s.clock.Now()
-	if err := s.getOwnedCommand(ctx, deviceID, cmdID); err != nil {
+	entry, err := s.getOwnedCommand(ctx, deviceID, cmdID)
+	if err != nil {
 		return err
 	}
 
@@ -275,6 +299,14 @@ func (s *Service) Ack(ctx context.Context, deviceID, cmdID string, reason comman
 		slog.String("device_id", deviceID),
 		slog.String("reason", reason.String()),
 	)
+
+	// Fire the generic command-resolution hook (#1870) after the terminal ack
+	// has committed. The entry was fetched pre-ack (CommandType/Payload/DeviceID
+	// do not change on the terminal transition). Fire-and-forget: a nil hook is
+	// the common case, and the hook never fails the ack.
+	if s.onResolved != nil {
+		s.onResolved(ctx, entry, reason)
+	}
 	return nil
 }
 
@@ -287,7 +319,7 @@ func (s *Service) ExtendLease(ctx context.Context, deviceID, cmdID string, exten
 	if extension > MaxLeaseExtension {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "device-command: extension exceeds maximum")
 	}
-	if err := s.getOwnedCommand(ctx, deviceID, cmdID); err != nil {
+	if _, err := s.getOwnedCommand(ctx, deviceID, cmdID); err != nil {
 		return err
 	}
 	if err := s.queue.ExtendLease(ctx, cmdID, extension, s.clock.Now()); err != nil {
@@ -427,16 +459,19 @@ func ParseStatusFilter(raw string) ([]command.Status, error) {
 	return statuses, nil
 }
 
-func (s *Service) getOwnedCommand(ctx context.Context, deviceID, cmdID string) error {
+// getOwnedCommand fetches the command and verifies it belongs to deviceID. It
+// returns the entry (by value) so callers that also need the command shape —
+// e.g. Ack firing the onResolved hook (#1870) — avoid a second GetCommand.
+func (s *Service) getOwnedCommand(ctx context.Context, deviceID, cmdID string) (command.Entry, error) {
 	e, err := s.queue.GetCommand(ctx, cmdID)
 	if err != nil {
-		return fmt.Errorf("device-command: get command: %w", err)
+		return command.Entry{}, fmt.Errorf("device-command: get command: %w", err)
 	}
 
 	if e.DeviceID != deviceID {
-		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
+		return command.Entry{}, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
 			"device-command: command does not belong to this device",
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("command %q does not belong to device %q", cmdID, deviceID))))
 	}
-	return nil
+	return *e, nil
 }
