@@ -95,6 +95,9 @@ func TestAuditQueryColumnMaskE2E(t *testing.T) {
 	seedRow("dev", deviceID)
 
 	principal := func(kind auth.PrincipalKind, subject string, roles ...string) *auth.Principal {
+		if kind == auth.PrincipalDevice {
+			return auth.MustNewTestDevicePrincipal(subject, auditProjTenant)
+		}
 		return &auth.Principal{Kind: kind, Subject: subject, Roles: roles, TenantID: auditProjTenant, AuthMethod: "test"}
 	}
 
