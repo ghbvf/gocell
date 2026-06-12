@@ -1,6 +1,6 @@
 //go:build integration
 
-package testutil
+package rabbitmqctr
 
 import (
 	"context"
@@ -11,6 +11,8 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcrabbitmq "github.com/testcontainers/testcontainers-go/modules/rabbitmq"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	"github.com/ghbvf/gocell/tests/testutil"
 )
 
 const rabbitMQStartupTimeout = 30 * time.Second
@@ -26,9 +28,9 @@ func StartRabbitMQContainer(t *testing.T, ctx context.Context) *tcrabbitmq.Rabbi
 
 func StartRabbitMQContainerE(t *testing.T, ctx context.Context) (*tcrabbitmq.RabbitMQContainer, error) {
 	t.Helper()
-	RequireDocker(t)
+	testutil.RequireDocker(t)
 
-	return tcrabbitmq.Run(ctx, RabbitMQImage,
+	return tcrabbitmq.Run(ctx, testutil.RabbitMQImage,
 		testcontainers.WithAdditionalWaitStrategy(
 			wait.ForListeningPort(tcrabbitmq.DefaultAMQPPort).
 				WithStartupTimeout(rabbitMQStartupTimeout),

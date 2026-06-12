@@ -18,7 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
-	"github.com/ghbvf/gocell/tests/testutil"
+	"github.com/ghbvf/gocell/tests/testutil/rabbitmqctr"
 )
 
 // startRabbitMQDedicatedContainer launches a NEW testcontainers RabbitMQ
@@ -35,7 +35,7 @@ func startRabbitMQDedicatedContainer(t *testing.T, config Config) (*Connection, 
 
 	ctx := context.Background()
 
-	container := testutil.StartRabbitMQContainer(t, ctx)
+	container := rabbitmqctr.StartRabbitMQContainer(t, ctx)
 
 	amqpURL, err := container.AmqpURL(ctx)
 	require.NoError(t, err, "get dedicated rabbitmq amqp url")

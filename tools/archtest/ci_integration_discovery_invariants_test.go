@@ -170,7 +170,8 @@ func TestArchtest_CIIntegrationDiscovery_DiscoversIntegrationPackages(t *testing
 	sentinels := []string{
 		"adapters/postgres",
 		"tests/integration",
-		"tests/testutil",
+		"tests/testutil/minioctr",
+		"tests/testutil/rabbitmqctr",
 		"tests/testutil/pgshare",
 	}
 	for _, s := range sentinels {

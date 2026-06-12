@@ -31,6 +31,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/tests/testutil"
+	"github.com/ghbvf/gocell/tests/testutil/rabbitmqctr"
 )
 
 const (
@@ -88,7 +89,7 @@ func setupRabbitMQContainer(t *testing.T) (*rabbitmq.Connection, func()) {
 
 	ctx := context.Background()
 
-	container := testutil.StartRabbitMQContainer(t, ctx)
+	container := rabbitmqctr.StartRabbitMQContainer(t, ctx)
 
 	amqpURL, err := container.AmqpURL(ctx)
 	require.NoError(t, err, "get rabbitmq amqp url")

@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/tests/testutil"
+	"github.com/ghbvf/gocell/tests/testutil/minioctr"
 )
 
 // s3IntegProbe returns the s3_ready probe from client.Probes().
@@ -183,8 +184,8 @@ func TestIntegration_S3_RecoveryAfterContainerRestart(t *testing.T) {
 
 	volumeName := fmt.Sprintf("s3-integ-restart-%d", time.Now().UnixNano())
 
-	ctr := testutil.StartMinIOContainer(t, ctx,
-		testutil.WithMinIOVolume(volumeName, "/data"))
+	ctr := minioctr.StartMinIOContainer(t, ctx,
+		minioctr.WithMinIOVolume(volumeName, "/data"))
 
 	connStr, err := ctr.ConnectionString(ctx)
 	require.NoError(t, err)
@@ -255,8 +256,8 @@ func TestIntegration_S3_WorkerTickStateTracksContainer(t *testing.T) {
 
 	volumeName := fmt.Sprintf("s3-integ-worker-%d", time.Now().UnixNano())
 
-	ctr := testutil.StartMinIOContainer(t, ctx,
-		testutil.WithMinIOVolume(volumeName, "/data"))
+	ctr := minioctr.StartMinIOContainer(t, ctx,
+		minioctr.WithMinIOVolume(volumeName, "/data"))
 
 	connStr, err := ctr.ConnectionString(ctx)
 	require.NoError(t, err)
