@@ -27,6 +27,7 @@ use (
 	./examples/ssobff
 	./examples/todoorder
 	./examples/webhookdemo
+	./generated
 	./tests/integration
 	./tests/testutil/pgshare
 	./tools

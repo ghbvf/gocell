@@ -45,6 +45,7 @@ require (
 	github.com/ghbvf/gocell/adapters/mqtt v0.0.0
 	github.com/ghbvf/gocell/adapters/postgres v0.0.0
 	github.com/ghbvf/gocell/adapters/redis v0.0.0
+	github.com/ghbvf/gocell/generated v0.0.0
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
@@ -107,3 +108,5 @@ replace github.com/ghbvf/gocell/adapters/postgres => ../adapters/postgres
 replace github.com/ghbvf/gocell/adapters/mqtt => ../adapters/mqtt
 
 replace github.com/ghbvf/gocell/adapters/redis => ../adapters/redis
+
+replace github.com/ghbvf/gocell/generated => ../generated

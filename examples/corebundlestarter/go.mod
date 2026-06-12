@@ -8,6 +8,8 @@ require (
 	github.com/stretchr/testify v1.11.1
 )
 
+require github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
+
 require (
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -20,6 +22,7 @@ require (
 	github.com/ghbvf/gocell/adapters/redis v0.0.0 // indirect
 	github.com/ghbvf/gocell/adapters/vault v0.0.0 // indirect
 	github.com/ghbvf/gocell/corecells v0.0.0-00010101000000-000000000000 // indirect
+	github.com/ghbvf/gocell/generated v0.0.0 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -44,7 +47,6 @@ require (
 	github.com/pressly/goose/v3 v3.27.1 // indirect
 	github.com/redis/go-redis/v9 v9.20.0 // indirect
 	github.com/ryanuber/go-glob v1.0.0 // indirect
-	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
 	go.opentelemetry.io/contrib/propagators/b3 v1.44.0 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect
@@ -81,3 +83,5 @@ replace github.com/ghbvf/gocell/adapters/redis => ../../adapters/redis
 replace github.com/ghbvf/gocell/adapters/vault => ../../adapters/vault
 
 replace github.com/ghbvf/gocell/adapters/prometheus => ../../adapters/prometheus
+
+replace github.com/ghbvf/gocell/generated => ../../generated

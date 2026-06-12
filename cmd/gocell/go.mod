@@ -44,3 +44,5 @@ replace github.com/ghbvf/gocell/adapters/mqtt => ../../adapters/mqtt
 replace github.com/ghbvf/gocell/adapters/postgres => ../../adapters/postgres
 
 replace github.com/ghbvf/gocell/adapters/redis => ../../adapters/redis
+
+replace github.com/ghbvf/gocell/generated => ../../generated

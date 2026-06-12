@@ -29,9 +29,12 @@ import (
 )
 
 // TestCrossModuleImportDirection01_RealRepoVacuous runs the rule over the live
-// workspace graph. It is vacuous today (single module → no other module to
-// import) but exercises the real load + classify path; it becomes a live gate
-// the moment a satellite module is added to go.work.
+// workspace graph and asserts ZERO core→satellite edges. The workspace already
+// holds satellite modules (adapters/*, corecells, cellmodules, cmd/*, tools, and
+// generated as of #1564), so this is a live gate — it stays empty only because
+// the layering holds (no root-module package imports a satellite), not because
+// the workspace is single-module. The firing path is exercised by
+// TestCrossModuleImportDirection01_SyntheticGraph.
 func TestCrossModuleImportDirection01_RealRepoVacuous(t *testing.T) {
 	root := findModuleRoot(t)
 	g, _ := loadModule(t, root)

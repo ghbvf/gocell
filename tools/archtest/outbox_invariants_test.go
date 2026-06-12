@@ -1459,10 +1459,11 @@ func TestOutboxDeliveryOutcomeFieldsFrozen(t *testing.T) {
 // Test files (_test.go) are excluded by tests=false in
 // typeseval.SharedResolver; vendor/, testdata/ are skipped by go list
 // module-load defaults; generated/ is excluded at the package level by
-// Run(t, Production(...)) (NOT by go list — `go list ./...` does include
-// generated/contracts/.../v1 packages; the production-package partition
-// drops them, so no per-file path filter is needed here. Closes PR445-FU
-// finding F4).
+// Run(t, Production(...)). Since #1564 made generated/ its own module, the
+// production loader pulls it via its per-member ./generated/... workspace
+// pattern (ModeWorkspace) and the production-package partition drops every
+// <module>/generated/ package, so no per-file path filter is needed here.
+// Closes PR445-FU finding F4.
 //
 // Type-aware via go/types: the scanner detects two literal forms via
 // pkg.TypesInfo:
@@ -1556,42 +1557,43 @@ func TestIsHandleResultLiteralAllowed(t *testing.T) {
 // TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3 anchors
 // the load-vs-skip decision contract for the HandleResult factory rule.
 //
-// Anchor (informational, not a TDD RED): documents that the default resolver
-// `typeseval.SharedResolver(root, false, nil, "./...")` — the one behind a plain
-// Run(t, Typed(...)) — DOES load generated/ packages. That is exactly why the
-// production rule above uses Run(t, Production(...)), whose package-level
-// partition drops generated/ so no per-file skip is needed there.
+// Anchor (informational, not a TDD RED): documents that the generated/ tree
+// holds real, type-checkable packages, so Run(t, Production(...))'s workspace
+// load encounters them and its package-level partition (drop every
+// <module>/generated/ package) is non-vacuous — which is exactly why the
+// production rule above needs no per-file generated/ skip.
 //
-// The anchor counts the generated/ files a plain Run(t, Typed(TypedOpts{}, []string{"./..."}))
-// loads using Pass.IsGenerated; a non-zero count confirms both that generated/ ARE loaded
-// and that Pass.IsGenerated still recognizes them. If it ever drops to zero, the
-// premise behind the Production scope's generated/ exclusion is invalid and must
-// be re-examined (a packages.Load default change or a tags filter could silently
-// mask it).
+// Since #1564 made generated/ its own module, the default root-relative
+// Run(t, Typed(./...)) (single-module, GOWORK=off) no longer reaches it, so the
+// anchor loads the generated module standalone (its own go.mod) and confirms it
+// yields ≥1 <module>/generated/ package. If it ever drops to zero, the premise
+// behind the Production scope's generated/ exclusion is invalid and must be
+// re-examined. (Pass.IsGenerated path-prefix recognition is unit-tested by
+// TestPass_IsGenerated; it is not re-exercised here because StandaloneModule
+// roots Pass.Rel at the generated module dir, not the repo root.)
 func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing.T) {
 	t.Parallel()
-
-	var generatedFiles []string
-	_ = Run(t, Typed(TypedOpts{}, []string{"./..."}), func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil || p.Fset == nil {
-			return nil
-		}
-		for _, file := range p.Files {
-			if p.IsGenerated(file) {
-				generatedFiles = append(generatedFiles, p.Rel(file))
-			}
-		}
-		return nil
-	})
-
-	if len(generatedFiles) == 0 {
-		t.Fatalf("anchor invalidated: Run(t, Typed(./...)) loaded 0 generated/ files; " +
-			"the rule's outdated comment claiming `go list ./...` default-skips generated/ " +
-			"may now be accurate, but verify by running `go list ./... | grep ^github.com/ghbvf/gocell/generated/` " +
-			"before changing generated-path handling in Pass.IsGenerated / the Production scope")
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-	t.Logf("anchor: Run(t, Typed(./...)) loaded %d generated/ files — Run(t, Production(...)) excludes them; "+
-		"Pass.IsGenerated recognizes them", len(generatedFiles))
+
+	root := findModuleRoot(t)
+	var generatedPkgs []string
+	_ = Run(t, StandaloneModule(filepath.Join(root, "generated"), TypedOpts{}, []string{"./..."}),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg != nil && strings.Contains(p.Pkg.Path(), "/generated/") {
+				generatedPkgs = append(generatedPkgs, p.Pkg.Path())
+			}
+			return nil
+		})
+
+	if len(generatedPkgs) == 0 {
+		t.Fatalf("anchor invalidated: loading the generated module (./generated) yielded 0 packages " +
+			"under <module>/generated/; Run(t, Production(...))'s workspace load would then have nothing " +
+			"to exclude, making the production partition's generated/ drop vacuous")
+	}
+	t.Logf("anchor: the generated module loaded %d <module>/generated/ packages — Run(t, Production(...)) "+
+		"includes them in its workspace load and the production partition excludes them", len(generatedPkgs))
 }
 
 // ---------------------------------------------------------------------------
