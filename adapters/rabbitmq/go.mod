@@ -5,6 +5,7 @@ go 1.25.11
 require (
 	github.com/ghbvf/gocell v0.0.0
 	github.com/ghbvf/gocell/adapters/adapterutil v0.0.0
+	github.com/ghbvf/gocell/tests/testutil/rabbitmqctr v0.0.0-00010101000000-000000000000
 	github.com/rabbitmq/amqp091-go v1.11.0
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go/modules/rabbitmq v0.42.0
@@ -35,7 +36,6 @@ require (
 	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/magiconair/properties v1.8.10 // indirect
-	github.com/mdelapenya/tlscert v0.2.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/go-archive v0.2.0 // indirect
 	github.com/moby/moby/api v1.54.2 // indirect
@@ -68,3 +68,5 @@ require (
 replace github.com/ghbvf/gocell => ../../
 
 replace github.com/ghbvf/gocell/adapters/adapterutil => ../adapterutil
+
+replace github.com/ghbvf/gocell/tests/testutil/rabbitmqctr => ../../tests/testutil/rabbitmqctr
