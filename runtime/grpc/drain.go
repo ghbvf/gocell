@@ -46,9 +46,12 @@ func NewDrainSignal() *DrainSignal {
 // Validate reports whether d is a usable signal built by NewDrainSignal. It is
 // nil-receiver safe. A nil pointer or a zero-value (new(DrainSignal)) has a nil
 // cancel/ctx and would panic at Trigger()/Context(); adapters/grpc Config.validate
-// and NewStreamChain call Validate so a non-constructed signal fails fast at
-// startup rather than at GracefulStop. The sealed-construction Hard upgrade
-// (forbidding a zero-value at compile time) is tracked with #1752.
+// and newStreamChain call Validate so a non-constructed signal fails fast at
+// startup rather than at GracefulStop. Forbidding the zero-value at COMPILE time is
+// a permanent Go ceiling (var d DrainSignal is always constructable), so the
+// runtime Validate fail-fast is the guard; what #1752 DID seal is the
+// same-instance wiring (NewServerInterceptors is the sole minter, so the chains and
+// the adapter can never observe two different DrainSignals).
 func (d *DrainSignal) Validate() error {
 	if d == nil || d.cancel == nil || d.ctx == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,

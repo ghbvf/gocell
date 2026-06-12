@@ -384,10 +384,11 @@ linters:
             - pkg: github.com/ghbvf/gocell/runtime/grpc/interceptor
               desc: |
                 cells/ must not import runtime/grpc/interceptor — gRPC interceptor
-                wiring (auth/metrics/tracing/recovery via NewUnaryChain) is a
-                composition-root concern: cmd/ and examples/ build the chain and
-                inject it into adapters/grpc.Server via Config.ServerOptions, then
-                hand the server to bootstrap.WithGRPCListener. This is the gRPC
+                wiring (auth/metrics/tracing/recovery) is a composition-root
+                concern: cmd/ and examples/ call interceptor.NewServerInterceptors(deps)
+                (the sole public funnel, which mints the shared registrar/drain, #1752)
+                and inject the bundle into adapters/grpc.Server via Config.Interceptors,
+                then hand the server to bootstrap.WithGRPCListener. This is the gRPC
                 extension of AUTH-PLAN-04 (LAYER-09) — cells declare intent,
                 composition roots wire auth (#1148). Layered on top of
                 cells-isolation (which allows runtime/* broadly); this subtracts the

@@ -8,6 +8,7 @@
 //   - INVARIANT: GRPC-CHAIN-STREAM-INTERCEPTOR-CALLER-01
 //   - INVARIANT: GRPC-STREAM-DRAIN-01
 //   - INVARIANT: GRPC-WIRING-REGISTRAR-MINT-FUNNEL-01
+//   - INVARIANT: GRPC-WIRING-BUNDLE-CALLER-01
 //
 // The STREAM-* invariants (PR-10 #1153) are the streaming counterparts of the
 // unary chain guards, with the same AI-robust ratings and Go-ceiling caveats:
@@ -823,8 +824,9 @@ func TestArchtest_GRPCStreamDrain01(t *testing.T) {
 // silently attributed to the runtime sentinel" to be unrepresentable, exactly one
 // site may mint these in production: interceptor.NewServerInterceptors, which mints
 // one of each and wires the SAME instances into both chains and the adapter bundle
-// (#1752). A second production mint site is the only way to obtain a second
-// registrar/drain and thereby reintroduce the mismatch.
+// (#1752). Minting a second instance is one of two ways to reintroduce the
+// mismatch; the other — recombining two already-minted bundles — is closed by the
+// sibling GRPC-WIRING-BUNDLE-CALLER-01 below.
 //
 // This archtest pins the production caller identity of NewServiceRegistrar AND
 // NewDrainSignal to:
@@ -840,18 +842,18 @@ func TestArchtest_GRPCStreamDrain01(t *testing.T) {
 //     minted reg/drain feed both chains and the bundle, so the instances are
 //     provably identical by construction. There is no AST shape to forbid for the
 //     documented path — the type system forbids it before analysis.
-//   - This archtest is the MEDIUM backstop for the residual low-level path the
-//     type system cannot seal: a future production caller could splice
-//     interceptor.UnaryCellAttribution(reg.CellIDForMethod) into grpc.UnaryInterceptor
-//     and a raw runtimegrpc.NewServerInterceptorsBundle with a *different* registrar.
-//     That path necessarily mints a second registrar/drain via these two
-//     constructors, which this caller-allowlist rejects. Downstream: MEDIUM by
-//     go/types caller-allowlist (ResolvePackageRef resolves import aliases and
-//     function-value references to the same symbol — no "looks like but isn't" gap).
-//     Upstream: HARD is UNREACHABLE — NewServiceRegistrar/NewDrainSignal are
-//     EXPORTED (the interceptor package, a different package, must call them), and
-//     Go visibility cannot express "only NewServerInterceptors may call this
-//     exported func". Same permanent ceiling as the CALLER-01 family (#1394/#851/#1282).
+//   - This archtest is the MEDIUM backstop on the registrar/drain SOURCE: the
+//     sealed singletons are unconstructable except via these two functions, so
+//     pinning their callers to the funnel means no production code can obtain a
+//     SECOND registrar/drain to mismatch. (The recombination path — assembling a
+//     fresh bundle from a registrar accessor-lifted off another bundle, which mints
+//     nothing — is NOT caught here; it is caught by GRPC-WIRING-BUNDLE-CALLER-01.)
+//     Downstream: MEDIUM by go/types caller-allowlist (ResolvePackageRef resolves
+//     import aliases and function-value references to the same symbol — no "looks
+//     like but isn't" gap). Upstream: HARD is UNREACHABLE — NewServiceRegistrar/
+//     NewDrainSignal are EXPORTED (the interceptor package, a different package,
+//     must call them), and Go visibility cannot express "only NewServerInterceptors
+//     may call this exported func". Same permanent ceiling as CALLER-01 (#1394/#851/#1282).
 //
 // ## Tool blind spots (charter §"强制盲区自检")
 //
@@ -860,10 +862,49 @@ func TestArchtest_GRPCStreamDrain01(t *testing.T) {
 //     which the SelectorExpr scan does not walk — identical to CALLER-01's
 //     documented dot-import blind spot. runtime/grpc is a foundational package with
 //     no composition-root role; no such call exists. Documented, not enforced.
+//   - Production scope only: _test.go callers are not scanned (Tests:false), so the
+//     adapter-layer test seam (adapters/grpc/{server,readyz}_test.go, which mint +
+//     NewServerInterceptorsBundle directly to avoid importing the interceptor
+//     package per GRPC-ADAPTER-LAYER-01) is intentionally exempt — the same standard
+//     Production-scope convention the CALLER-01 family relies on.
 //   - The anti-vacuity reverse check (the sole allowlisted file must host a live
 //     mint reference) proves the scanner resolves the real references; the RED
 //     fixture (TestArchtest_GRPCWiringRegistrarMintFunnel01_RedFixture) proves the
 //     violation branch fires on an out-of-allowlist mint.
+//
+// # GRPC-WIRING-BUNDLE-CALLER-01
+//
+// runtime/grpc.NewServerInterceptorsBundle is the SOLE constructor of a
+// ServerInterceptors bundle (the value the adapter consumes: it binds the bundle's
+// registrar and triggers the bundle's drain). The mint funnel above proves no
+// production code can obtain a SECOND registrar/drain — but the bundle constructor
+// is a second escape hatch the mint guard cannot see: a caller could lift a
+// registrar/drain off an already-minted bundle via the b.Registrar()/b.Drain()
+// accessors and assemble a FRESH bundle whose options were built from a different
+// registrar (b1.ServerOptions() + b2.Registrar()). The chains then read b1's
+// registrar while the adapter binds b2's → mismatch, with no mint call to catch.
+// This archtest closes that path by pinning the production caller of
+// NewServerInterceptorsBundle to:
+//
+//	{ runtime/grpc/interceptor/chain.go::NewServerInterceptors }
+//
+// ## AI-robust rating
+//
+//   - Downstream: MEDIUM by go/types caller-allowlist (same form as CALLER-01).
+//     Together with the mint funnel this is the closed funnel the charter requires
+//     ("只锁 callsite 不是闭环 funnel"): the registrar/drain SOURCE is locked (mint
+//     funnel) AND the bundle ASSEMBLY is locked (here), so neither a fresh mint nor
+//     a recombination can produce a mismatched bundle in production.
+//   - Upstream: HARD is UNREACHABLE — NewServerInterceptorsBundle is EXPORTED
+//     because interceptor (a different package) must call it; Go cannot seal its
+//     callers. Same permanent ceiling as the rest of the CALLER family.
+//
+// ## Tool blind spots
+//
+//   - Production scope only (same _test.go exemption as the mint funnel: the
+//     adapter test seam calls NewServerInterceptorsBundle directly by design).
+//   - Anti-vacuity + the RED fixture (TestArchtest_GRPCWiringBundleCaller01_RedFixture)
+//     prove the scanner resolves the real reference and the violation branch fires.
 
 // grpcWiringMintFns are the runtime/grpc constructors of the shared gRPC wiring
 // singletons. In production only NewServerInterceptors may call them.
@@ -990,5 +1031,117 @@ func TestArchtest_GRPCWiringRegistrarMintFunnel01_RedFixture(t *testing.T) {
 			"mint call sites in grpcwiringmintfixture (NewServiceRegistrar + NewDrainSignal); got %d. "+
 			"If <2 the scanner missed a mint shape (isGRPCWiringMintSelector / ResolvePackageRef "+
 			"regression); if >2 it over-matched. The fixture proves the allowlist violation branch fires.",
+		found)
+}
+
+// grpcWiringBundleCallerAllowlist is the set of production files allowed to call
+// runtime/grpc.NewServerInterceptorsBundle. The sole sanctioned assembler is
+// NewServerInterceptors in chain.go.
+var grpcWiringBundleCallerAllowlist = map[string]struct{}{
+	"runtime/grpc/interceptor/chain.go": {}, // NewServerInterceptors — sole bundle assembler
+}
+
+// isServerInterceptorsBundleSelector resolves sel via go/types and reports whether
+// it references runtime/grpc.NewServerInterceptorsBundle (alias/value-ref proof).
+func isServerInterceptorsBundleSelector(info *types.Info, sel *ast.SelectorExpr) bool {
+	pkgPath, name, ok := ResolvePackageRef(info, sel)
+	return ok && pkgPath == grpcRuntimePkgPath && name == "NewServerInterceptorsBundle"
+}
+
+// TestArchtest_GRPCWiringBundleCaller01 asserts that every production reference to
+// runtimegrpc.NewServerInterceptorsBundle sits in the caller allowlist (sole
+// assembler = NewServerInterceptors), and that the allowlisted file is actually
+// observed (anti-vacuity reverse check). Together with the mint funnel this closes
+// the recombination escape hatch.
+func TestArchtest_GRPCWiringBundleCaller01(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	observed := map[string]struct{}{}
+
+	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
+		if !p.Typed() {
+			return nil
+		}
+		var d []Diagnostic
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+				if !isServerInterceptorsBundleSelector(p.TypesInfo, sel) {
+					return
+				}
+				observed[rel] = struct{}{}
+				if _, allowed := grpcWiringBundleCallerAllowlist[rel]; !allowed {
+					d = append(d, Diagnostic{
+						Rel:  rel,
+						Line: p.Fset.Position(sel.Pos()).Line,
+						Message: fmt.Sprintf(
+							"GRPC-WIRING-BUNDLE-CALLER-01: runtimegrpc.NewServerInterceptorsBundle is called from "+
+								"%s, which is not the sanctioned bundle assembler. Assembling a ServerInterceptors "+
+								"bundle anywhere but runtime/grpc/interceptor.NewServerInterceptors lets a caller "+
+								"recombine a registrar/drain (e.g. lifted off another bundle via b.Registrar()) with "+
+								"options built from a DIFFERENT registrar — a mismatch the mint funnel cannot see "+
+								"(#1752). Obtain the bundle from NewServerInterceptors(deps) instead. If this IS a new "+
+								"sanctioned assembler, add it to grpcWiringBundleCallerAllowlist with rationale.",
+							rel,
+						),
+					})
+				}
+			})
+		}
+		return d
+	})
+
+	for f := range grpcWiringBundleCallerAllowlist {
+		if _, seen := observed[f]; !seen {
+			diags = append(diags, Diagnostic{
+				Message: fmt.Sprintf(
+					"GRPC-WIRING-BUNDLE-CALLER-01: allowlist entry %q is STALE — no live "+
+						"runtimegrpc.NewServerInterceptorsBundle reference observed. Either the assembler moved or "+
+						"the scanner regressed; drop or update the dead allowlist entry so it cannot become a silent "+
+						"bypass slot.",
+					f,
+				),
+			})
+		}
+	}
+
+	Report(t, "GRPC-WIRING-BUNDLE-CALLER-01", diags)
+}
+
+// TestArchtest_GRPCWiringBundleCaller01_RedFixture verifies the scanner fires
+// against the deliberate out-of-funnel bundle assembly in grpcwiringmintfixture:
+// badBundle calls NewServerInterceptorsBundle from a non-allowlisted file. The
+// scanner must observe exactly one bundle reference.
+func TestArchtest_GRPCWiringBundleCaller01_RedFixture(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	var found int
+	_ = Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/grpcwiringmintfixture"}),
+		func(p *Pass) []Diagnostic {
+			if !p.Typed() {
+				return nil
+			}
+			for _, file := range p.Files {
+				EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+					if isServerInterceptorsBundleSelector(p.TypesInfo, sel) {
+						found++
+					}
+				})
+			}
+			return nil
+		})
+
+	assert.Equal(t, 1, found,
+		"GRPC-WIRING-BUNDLE-CALLER-01 RED fixture self-check FAILED: expected exactly 1 "+
+			"NewServerInterceptorsBundle call site in grpcwiringmintfixture (badBundle); got %d. "+
+			"If 0 the scanner missed it (isServerInterceptorsBundleSelector / ResolvePackageRef "+
+			"regression). The fixture proves the allowlist violation branch fires.",
 		found)
 }

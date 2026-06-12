@@ -12,7 +12,8 @@ the working reference.
 >   **not** touch this — only the assembly owner does. The assembly owner also sets
 >   TLS in `adapters/grpc.Config.TLS`: `AllowInsecure: true` (plaintext) for the demo,
 >   or `CertPEM`/`KeyPEM` (+`ClientCAPEM` for mTLS) for production.
-> - `runtime/grpc/interceptor.NewUnaryChain` is composed and supplied to the server.
+> - `runtime/grpc/interceptor.NewServerInterceptors(deps)` (the sole public funnel; it
+>   mints the shared registrar/drain and composes both chains, #1752) is supplied to the server.
 > - `buf` is installed and `Makefile` `proto-gen` target works.
 >
 > **Not yet live (planned)**: errcode→codes.Code mapping (PR-12); metrics cell

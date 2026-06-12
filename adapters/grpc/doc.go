@@ -23,9 +23,11 @@
 //
 // # Interceptors
 //
-// This package registers zero interceptors. Recovery, metrics, tracing,
-// and auth interceptors are composed at the bootstrap layer (PR-4) and
-// plumbed in via grpc.ServerOption; they are not a concern of this adapter.
+// This package registers zero interceptors. Recovery, metrics, tracing, and auth
+// interceptors are composed at the composition-root layer via
+// interceptor.NewServerInterceptors(deps) (the sole public funnel, which mints the
+// shared registrar/drain, #1752) and plumbed in via Config.Interceptors; they are
+// not a concern of this adapter.
 //
 // # Service registration (PR-7: Form B callback, cell-facing)
 //

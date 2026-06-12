@@ -179,6 +179,33 @@ func integRegisterDesc(t *testing.T, srv *grpcadapter.Server, contractID string,
 
 // ─── Integration tests ────────────────────────────────────────────────────────
 
+// TestIntegration_BundleRegistrarBoundByAdapter is the explicit same-instance
+// proof (#1752): the registrar the adapter binds (srv.Registrar(), the one used
+// for cell attribution at serve time) IS the exact instance the bundle carries —
+// which, by NewServerInterceptors construction, is the one both interceptor chains
+// read. The mismatch this whole change forbids is "chain reads registrar A while
+// the adapter binds registrar B"; require.Same turns the by-construction guarantee
+// into a behavioral assertion at the binding seam.
+func TestIntegration_BundleRegistrarBoundByAdapter(t *testing.T) {
+	t.Parallel()
+	bundle := interceptor.NewServerInterceptors(interceptor.Deps{
+		Collector:       metrics.NewInMemoryGRPCCollector(),
+		Clock:           clock.Real(),
+		Verifier:        integVerifier{},
+		CellIDClosedSet: []string{"_integration-test"},
+	})
+	srv, err := grpcadapter.New(grpcadapter.Config{
+		Addr:            ":0",
+		ShutdownTimeout: integServeTimeout,
+		TLS:             grpcadapter.TLSConfig{AllowInsecure: true},
+		Interceptors:    bundle,
+	})
+	require.NoError(t, err)
+	require.Same(t, bundle.Registrar(), srv.Registrar(),
+		"adapter must bind the exact registrar the bundle carries (the instance both chains read); "+
+			"a different instance would silently attribute every RPC to the runtime sentinel (#1752)")
+}
+
 // TestIntegration_Plaintext_BufconnCheck verifies plaintext gRPC via bufconn.
 func TestIntegration_Plaintext_BufconnCheck(t *testing.T) {
 	t.Parallel()

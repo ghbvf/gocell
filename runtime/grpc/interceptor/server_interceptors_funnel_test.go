@@ -40,10 +40,11 @@ func TestNewServerInterceptors_MintsRegistrarAndDrain(t *testing.T) {
 // own registrar/drain pair — two servers built from the same Deps value never
 // share an attribution map or drain signal.
 //
-// The end-to-end same-instance proof (a method registered on the bundle's
-// registrar is attributed by the chain the adapter runs) lives in
-// adapters/grpc/server_integration_test.go, which drives a real RPC through a
-// server built from this bundle.
+// The explicit same-instance proof (the registrar the adapter binds IS the
+// instance the bundle carries, asserted with require.Same) lives in
+// adapters/grpc/server_integration_test.go::TestIntegration_BundleRegistrarBoundByAdapter;
+// the drain same-instance is exercised end-to-end by
+// TestIntegration_Streaming_DrainCancelsInFlight.
 func TestNewServerInterceptors_MintsFreshPerCall(t *testing.T) {
 	a := NewServerInterceptors(funnelDeps())
 	c := NewServerInterceptors(funnelDeps())
@@ -53,4 +54,20 @@ func TestNewServerInterceptors_MintsFreshPerCall(t *testing.T) {
 	if a.Drain() == c.Drain() {
 		t.Fatalf("each NewServerInterceptors call must mint a fresh drain")
 	}
+}
+
+// TestNewServerInterceptors_EmptyCellIDClosedSetPanics asserts the funnel itself
+// fails closed at the PUBLIC entrypoint (not only via the package-private chain
+// builders' white-box tests): a Deps without the assembly cell-id set would
+// relabel every RPC to the runtime sentinel, so NewServerInterceptors panics
+// rather than minting a half-wired bundle.
+func TestNewServerInterceptors_EmptyCellIDClosedSetPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("NewServerInterceptors with an empty Deps.CellIDClosedSet must panic")
+		}
+	}()
+	deps := funnelDeps()
+	deps.CellIDClosedSet = nil
+	_ = NewServerInterceptors(deps)
 }
