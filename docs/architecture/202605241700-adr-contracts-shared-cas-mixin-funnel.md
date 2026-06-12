@@ -34,7 +34,7 @@ S6 PR 给 6 个 configcore 写接口加 CAS（compare-and-swap）守卫字段
 - **runtime 校验 embed**：`builder.go` embed 路径原先读 raw bytes 不解析 `$ref`，外部 `$ref` 会让
   `schemavalidate.NewValidator`（santhosh-tekuri，`mem:///` base，无 loader）在 codegen 期编译失败。
   **新增 `bundleSchemaRefs`**（`refbundle.go`）：compact 前递归内联 `$ref`、剥离 document-meta
-  （`$schema`/`$id`/`title`）、`governance.IsWithinRoot` 路径守护、无 `$ref` 文件原样透传（golden 不变）。
+  （`$schema`/`$id`/`title`）、`fspath.IsWithinRoot` 路径守护、无 `$ref` 文件原样透传（golden 不变）。
   生成的 embed 自包含、无 `$ref`，runtime 无需文件系统 loader。
 
 ### 载体 2 — DELETE query param（contract.yaml `$ref`，解析期回填）
@@ -62,7 +62,7 @@ governance FMT-25 `inlineCrossFileSchemaRefs`（新，否则 `scanSchemaForInput
 
 1. root-guard：拒绝绝对路径 `$ref` + `IsWithinRoot`/`fs.ValidPath`/allow-list 守护（三者择一，按所在层的 IO）。
 
-**守护基线对齐说明**：三个生产解析者（contractgen DTO/embed bundler、metadata paramRef、governance FMT-25）的守护基线 = **词法 root 限制**（`governance.IsWithinRoot` 或 `os.DirFS(root)` + `fs.ValidPath`，两者等价，均拒绝逃出仓库根）。这是 build/validate 期对**仓库受控**文件的读取，无运行时攻击者输入，root 限制足够。`tests/contracttest` 额外做 symlink 解析 + `contracts/shared/` allow-list，是测试侧的更严防御（非生产强制要求）；三个生产解析者不强制对齐到该层级（symlink 逃逸需提交恶意 symlink，code review 必现，近零真实风险）。若未来引入运行时用户可控的 `$ref`，再统一升级为 symlink-resolved + allow-list。
+**守护基线对齐说明**：三个生产解析者（contractgen DTO/embed bundler、metadata paramRef、governance FMT-25）的守护基线 = **词法 root 限制**（`fspath.IsWithinRoot` 或 `os.DirFS(root)` + `fs.ValidPath`，两者等价，均拒绝逃出仓库根）。这是 build/validate 期对**仓库受控**文件的读取，无运行时攻击者输入，root 限制足够。`tests/contracttest` 额外做 symlink 解析 + `contracts/shared/` allow-list，是测试侧的更严防御（非生产强制要求）；三个生产解析者不强制对齐到该层级（symlink 逃逸需提交恶意 symlink，code review 必现，近零真实风险）。若未来引入运行时用户可控的 `$ref`，再统一升级为 symlink-resolved + allow-list。
 2. 拒绝 `http(s)://` 绝对 URL。
 3. cycle guard（visited set，DFS-scoped）。
 4. missing-file 错误包成本层的领域错误类型（不要裸 `*os.PathError` 泄漏给上层误判），点名缺失的是 `$ref` target 而非引用者。

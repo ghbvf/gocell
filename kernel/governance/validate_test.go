@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -3705,62 +3704,6 @@ func TestActorExists(t *testing.T) {
 	assert.True(t, val.actorExists("accesscore"), "cell should be a known actor")
 	assert.True(t, val.actorExists(metadatatest.CellIDEdgeBFF), "external actor should be known")
 	assert.False(t, val.actorExists("nonexistent"), "unknown ID should not exist")
-}
-
-// --- S1: IsWithinRoot path traversal guard ---
-
-func TestIsWithinRoot(t *testing.T) {
-	tests := []struct {
-		name   string
-		root   string
-		target string
-		want   bool
-	}{
-		{"inside root", "/project/src", "/project/src/cmd/main.go", true},
-		{"equals root", "/project/src", "/project/src", true},
-		{"escapes root", "/project/src", "/project/etc/passwd", false},
-		{"dot-dot escapes", "/project/src", "/project/src/../etc/passwd", false},
-		{"different tree", "/project/src", "/other/place", false},
-	}
-	// Also test relative paths (P1 fix: IsWithinRoot must handle relative root).
-	cwd, err := os.Getwd()
-	require.NoError(t, err)
-	tests = append(tests, struct {
-		name   string
-		root   string
-		target string
-		want   bool
-	}{
-		"relative root dot",
-		".",
-		filepath.Join(cwd, "assemblies", "corebundle", "generated", "boundary.yaml"),
-		true,
-	})
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := IsWithinRoot(tt.root, tt.target)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-func TestIsWithinRoot_Symlink(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlink requires SeCreateSymbolicLinkPrivilege on Windows")
-	}
-	root := t.TempDir()
-	outside := t.TempDir()
-
-	// Create a file outside root.
-	outsideFile := filepath.Join(outside, "secret.yaml")
-	require.NoError(t, os.WriteFile(outsideFile, []byte("x"), 0o644))
-
-	// Create a symlink inside root pointing outside.
-	symlink := filepath.Join(root, "escape")
-	require.NoError(t, os.Symlink(outside, symlink))
-
-	target := filepath.Join(symlink, "secret.yaml")
-	assert.False(t, IsWithinRoot(root, target), "symlink target outside root should be rejected")
 }
 
 // --- S1: REF-11 path traversal ---

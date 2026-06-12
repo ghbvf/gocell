@@ -574,9 +574,9 @@ func TestPrintTargetList(t *testing.T) {
 }
 
 // TestIsWithinRoot / TestEvalExistingPrefix previously lived here as a copy
-// of kernel/governance's tests. Now that cmd/gocell/app delegates to the
-// exported governance.IsWithinRoot / EvalExistingPrefix, coverage lives in
-// kernel/governance/validate_test.go — no duplication here.
+// of kernel/governance's tests. Coverage now lives in pkg/fspath
+// (github.com/ghbvf/gocell/pkg/fspath, see pkg/fspath/fspath_test.go) — no
+// duplication here.
 
 // TestPrintResult and the file:line:col / scope rendering tests previously
 // lived here as direct callers of printResult. They moved to

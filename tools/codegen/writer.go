@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/ghbvf/gocell/kernel/governance"
+	"github.com/ghbvf/gocell/pkg/fspath"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
 )
 
@@ -43,7 +44,7 @@ type WriteOptions struct {
 	Path string
 	// Content is the bytes to compare against / write to the target.
 	Content []byte
-	// RepoRoot gates Path through governance.IsWithinRoot to reject path
+	// RepoRoot gates Path through fspath.IsWithinRoot to reject path
 	// traversal. Must be non-empty (the output of pathsafe.ResolveRoot);
 	// Write returns an error immediately if RepoRoot is empty.
 	RepoRoot string
@@ -75,7 +76,7 @@ type WriteResult struct {
 
 // Write persists Content to opts.Path with two safety guards:
 //
-//  1. opts.Path must be inside opts.RepoRoot (governance.IsWithinRoot);
+//  1. opts.Path must be inside opts.RepoRoot (fspath.IsWithinRoot);
 //     opts.RepoRoot must be non-empty — Write returns an error otherwise.
 //     Out-of-root writes are refused.
 //  2. If opts.Path already exists on disk, its first bytes must match
@@ -93,7 +94,7 @@ func Write(opts WriteOptions) (WriteResult, error) {
 	if opts.RepoRoot == "" {
 		return res, fmt.Errorf("codegen write: RepoRoot is required")
 	}
-	if !governance.IsWithinRoot(opts.RepoRoot, opts.Path) {
+	if !fspath.IsWithinRoot(opts.RepoRoot, opts.Path) {
 		return res, fmt.Errorf("codegen write: path escapes RepoRoot: %s", opts.Path)
 	}
 

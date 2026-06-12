@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ghbvf/gocell/kernel/governance"
+	"github.com/ghbvf/gocell/pkg/fspath"
 )
 
 // bundleSchemaRefs resolves all external $ref entries in raw (a JSON Schema file
@@ -128,7 +128,7 @@ func loadAndStripRef(rootDir, currentFile, refStr string, visited map[string]str
 
 	targetAbs := filepath.Clean(filepath.Join(filepath.Dir(currentFile), refStr))
 
-	if !governance.IsWithinRoot(rootDir, targetAbs) {
+	if !fspath.IsWithinRoot(rootDir, targetAbs) {
 		return nil, fmt.Errorf(
 			"refbundle: $ref %q in %s resolves to %s which is outside root %s",
 			refStr, currentFile, targetAbs, rootDir)

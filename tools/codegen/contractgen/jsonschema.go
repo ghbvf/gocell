@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ghbvf/gocell/kernel/governance"
+	"github.com/ghbvf/gocell/pkg/fspath"
 )
 
 // Schema represents the minimal subset of JSON Schema draft 2020-12 used by contractgen.
@@ -393,7 +393,7 @@ func resolveRef(
 	targetAbs := filepath.Clean(filepath.Join(filepath.Dir(currentFile), ref))
 
 	// B.1: path-traversal guard — resolved target must remain within rootDir.
-	if rootDir != "" && !governance.IsWithinRoot(rootDir, targetAbs) {
+	if rootDir != "" && !fspath.IsWithinRoot(rootDir, targetAbs) {
 		return nil, fmt.Errorf("contractgen/jsonschema: $ref %q at %s resolves to %s which is outside root %s", ref, loc, targetAbs, rootDir)
 	}
 

@@ -150,6 +150,7 @@ go test -count=1 -timeout 5m \
   ./runtime/shutdown/... \
   ./runtime/config/... \
   ./kernel/governance/... \
+  ./pkg/fspath/... \
   ./pkg/pathsafe/...
 ```
 
@@ -162,7 +163,13 @@ parallel with the Linux `build-test` job.
 - `runtime/config` — symlink pivot detection; symlink tests are skipped on Windows via
   `t.Skip("symlink requires SeCreateSymbolicLinkPrivilege on Windows")` so the Windows runner
   passes cleanly while macOS validates the full symlink path.
-- `kernel/governance` — `IsWithinRoot` symlink escape test; same Windows skip applies.
+- `kernel/governance` — contract `$ref` resolution holds OS-divergent absolute-path detection
+  (`isAbsoluteSchemaRef`: `path.IsAbs` ORed with `filepath.IsAbs(filepath.FromSlash(...))`, since
+  `filepath.IsAbs("/etc/passwd")` is `false` on Windows). The `absolute_path_ref_rejected` test is
+  the Windows-only guard that a leading-slash `$ref` is still rejected on windows-latest. This is
+  why governance stays in the matrix even after `IsWithinRoot` moved to `pkg/fspath` (#1255).
+- `pkg/fspath` — `IsWithinRoot` / `EvalExistingPrefix` symlink-escape + missing-leaf tests;
+  same Windows skip applies (the shared root-containment predicate lives here, #1255).
 - `pkg/pathsafe` — cross-platform path containment / symlink-escape checks.
 
 **Coverage:** the `os-smoke` job does NOT upload a coverage profile and does NOT contribute to

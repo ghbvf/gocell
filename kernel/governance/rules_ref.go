@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/fspath"
 )
 
 const fieldBuildEntrypoint = "build.entrypoint"
@@ -217,7 +218,7 @@ func (v *Validator) validateREF11() []ValidationResult {
 		// The entrypoint path is relative to the repository root (parent of go.mod directory).
 		repoRoot := repositoryRoot(v.root)
 		fullPath := filepath.Join(repoRoot, a.Build.Entrypoint)
-		if !IsWithinRoot(repoRoot, fullPath) {
+		if !fspath.IsWithinRoot(repoRoot, fullPath) {
 			results = append(results, v.newError(
 				codeREF11, IssueInvalid,
 				assemblyFile(a),
@@ -320,7 +321,7 @@ func (v *Validator) validateREF16() []ValidationResult {
 	for _, a := range v.project.Assemblies {
 		generatedDir := metadata.AssemblyGeneratedDir(a)
 		boundaryPath := filepath.Join(v.root, filepath.FromSlash(generatedDir), "boundary.yaml")
-		if !IsWithinRoot(v.root, boundaryPath) {
+		if !fspath.IsWithinRoot(v.root, boundaryPath) {
 			results = append(results, v.newError(
 				codeREF16, IssueInvalid,
 				assemblyFile(a),

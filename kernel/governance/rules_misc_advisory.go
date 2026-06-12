@@ -34,6 +34,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/fspath"
 )
 
 // =============================================================================
@@ -754,7 +755,7 @@ func (v *Validator) walkDocNamingInclude(include string, exclude []string, seen 
 	// Don't walk a tree rooted outside the project (addDocNamingTarget would
 	// reject each escaping file anyway, but skipping the walk avoids
 	// enumerating directories outside the root).
-	if !IsWithinRoot(v.root, baseAbs) {
+	if !fspath.IsWithinRoot(v.root, baseAbs) {
 		return nil
 	}
 	info, statErr := os.Stat(baseAbs)
@@ -798,7 +799,7 @@ func (v *Validator) globDocNamingInclude(include string, exclude []string, seen 
 		// Defense-in-depth symmetric with walkDocNamingInclude: skip matches
 		// outside the root before addDocNamingTarget (which also guards). A glob
 		// pattern containing `..` can match parent-dir entries.
-		if !IsWithinRoot(v.root, match) {
+		if !fspath.IsWithinRoot(v.root, match) {
 			continue
 		}
 		v.addDocNamingTarget(match, exclude, seen)
@@ -811,7 +812,7 @@ func (v *Validator) addDocNamingTarget(abs string, exclude []string, seen map[st
 	// escape the project root (a hostile naming-guard.yaml could otherwise read
 	// arbitrary files on the CI worker via `include: ../../...`). Mirrors the
 	// IsWithinRoot guard already used by resolveCrossFileSchemaRef and rules_ref.go.
-	if !IsWithinRoot(v.root, abs) {
+	if !fspath.IsWithinRoot(v.root, abs) {
 		return
 	}
 	info, err := os.Stat(abs)

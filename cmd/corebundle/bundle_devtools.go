@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/fspath"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
 	"github.com/ghbvf/gocell/tools/wiresummary"
@@ -48,7 +48,7 @@ func devtoolsOption(shared *composition.SharedDeps) bootstrap.Option {
 			slog.Any("error", err))
 		return bootstrap.WithDevtoolsCatalog(nil, "", nil)
 	}
-	if !governance.IsWithinRoot(cwd, absRoot) {
+	if !fspath.IsWithinRoot(cwd, absRoot) {
 		slog.Warn("devtools: GOCELL_PROJECT_ROOT escapes working tree; catalog endpoint disabled",
 			slog.String("root", root),
 			slog.String("absRoot", absRoot),
