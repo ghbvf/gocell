@@ -136,10 +136,10 @@ func setup(t *testing.T, runMode query.RunMode) http.Handler {
 
 func TestHandler(t *testing.T) {
 	tests := []struct {
-		name       string
-		path       string
-		subject    string
-		roles      []string
+		name    string
+		path    string
+		subject string
+		roles   []string
 		// ctxFn optionally enriches the auth context (e.g. inject an Authorizer for
 		// the non-self PDP path). Applied after testAuthContext when subject != "".
 		ctxFn      func(context.Context) context.Context

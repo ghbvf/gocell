@@ -888,7 +888,8 @@ func TestAccessCore_ProductionAuthGateLock(t *testing.T) {
 
 			// 403 PDP-deny: authenticated non-admin (non-self) + wired PDP that DENIES.
 			rec = exec(t, g, g.path, withDenyAuthorizer(
-				withTenant(auth.TestContext("user-non-admin", []string{"viewer"})), "policy: no matching allow rule"))
+				withTenant(auth.TestContext("user-non-admin", []string{"viewer"})), "policy: no matching allow rule",
+			))
 			assert.Equal(t, http.StatusForbidden, rec.Code,
 				"%s %s denied by PDP must be 403; body %s", g.method, g.path, rec.Body)
 

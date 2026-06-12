@@ -409,7 +409,8 @@ func buildCells(
 		// Low-cost hasher so seedAdmin + login don't pay bcrypt cost-12 per test.
 		accesscoretest.MinCostPasswordHasherOption(),
 	)...)
-	cc := configcore.NewConfigCore(clock.Real(),
+	cc := configcore.NewConfigCore(
+		clock.Real(),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
@@ -454,7 +455,8 @@ func runBootstrap(
 	// admin via the migrated accesscore gates, which fail closed without the PDP.
 	authzOpt, authzErr := bootstrap.PrimaryAuthorizerOption(authorizerCells)
 	require.NoError(t, authzErr, "primary authorizer wiring must succeed with accesscore present")
-	app := bootstrap.New(clock.Real(),
+	app := bootstrap.New(
+		clock.Real(),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, lns.primary.Addr().String(),
 			[]kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},
