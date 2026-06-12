@@ -207,6 +207,68 @@ func TestVerifyArchtestCIExplicitShardCountRejectsMissingShardFlag(t *testing.T)
 	require.Error(t, validateVerifyArchtestShardDenominator(body))
 }
 
+// TestVerifyArchtestCIExplicitShardCountRejectsCommentedShardOnly is the F3
+// synthetic red case: a doc comment carrying the correct --shard=N/24 above a
+// real invocation that OMITS --shard must NOT satisfy the guard. Before the fix,
+// the whole-block strings.Index(run, "--shard") read the denominator out of the
+// comment and false-greened while CI actually ran every test on every shard.
+func TestVerifyArchtestCIExplicitShardCountRejectsCommentedShardOnly(t *testing.T) {
+	body := []byte(`jobs:
+  verify-archtest:
+    strategy:
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+    steps:
+      - name: Verify archtest shard
+        run: |
+          # canonical form: gocell verify archtest --shard=${{ matrix.shard }}/24
+          "$RUNNER_TEMP/gocell" verify archtest --timeout=5m
+`)
+	require.Error(t, validateVerifyArchtestShardDenominator(body))
+}
+
+// TestVerifyArchtestCIExplicitShardCountIgnoresCommentedWrongShard is the
+// anti-vacuity counterpart: it proves the comment is genuinely IGNORED, not
+// merely OR-ed in. A comment carrying a WRONG denominator (/16) above a real
+// invocation with the CORRECT denominator (/24) must PASS. Under the old
+// whole-block parse this would FAIL (it read /16 from the comment first).
+func TestVerifyArchtestCIExplicitShardCountIgnoresCommentedWrongShard(t *testing.T) {
+	body := []byte(`jobs:
+  verify-archtest:
+    strategy:
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+    steps:
+      - name: Verify archtest shard
+        run: |
+          # legacy: --shard=${{ matrix.shard }}/16 (do not use)
+          "$RUNNER_TEMP/gocell" verify archtest --shard=${{ matrix.shard }}/24 --timeout=5m
+`)
+	require.NoError(t, validateVerifyArchtestShardDenominator(body))
+}
+
+// TestVerifyArchtestCIExplicitShardCountAcceptsMultilineContinuation locks the
+// real archtest-nightly.yml shape: `verify archtest` and `--shard=N/24` on
+// separate backslash-continued lines must be read as ONE logical command line.
+// Without continuation-joining this real shape would false-fail.
+func TestVerifyArchtestCIExplicitShardCountAcceptsMultilineContinuation(t *testing.T) {
+	body := []byte(`jobs:
+  verify-archtest:
+    strategy:
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+    steps:
+      - name: Verify archtest shard
+        run: |
+          set -o pipefail
+          "$RUNNER_TEMP/gocell" verify archtest \
+            --shard=${{ matrix.shard }}/24 \
+            --timeout=5m \
+            --test-json-out="$RUNNER_TEMP/archtest-shard-${{ matrix.shard }}.json"
+`)
+	require.NoError(t, validateVerifyArchtestShardDenominator(body))
+}
+
 // archtestWorkflowConfig parses only the subset of archtest-nightly.yml needed
 // for the verify-archtest shard denominator assertion. Decoupled from
 // ci_pinning_test.go's workflowStep type so adding fields doesn't risk
@@ -233,8 +295,54 @@ type archtestWorkflowStep struct {
 	Run  string `yaml:"run"`
 }
 
-// extractShardDenominator parses the denominator K from a --shard=N/K flag in
-// a step's run block. Returns 0 and an error if no --shard flag is found or the
+// stripInlineComment removes a trailing (or whole-line) shell comment from a
+// line. A '#' starts a comment when it is the first non-space character or is
+// preceded by whitespace — matching shell tokenization. The CI run blocks never
+// embed '#' inside a quoted argument, so this byte scan is exact for them. This
+// is what makes a commented-out `# gocell verify archtest --shard=N/24` example
+// unable to satisfy the denominator assertion (F3 false-green).
+func stripInlineComment(line string) string {
+	for i := 0; i < len(line); i++ {
+		if line[i] != '#' {
+			continue
+		}
+		if i == 0 || line[i-1] == ' ' || line[i-1] == '\t' {
+			return line[:i]
+		}
+	}
+	return line
+}
+
+// runCommandLines splits a workflow step's `run:` block into logical shell
+// command lines: shell comments are stripped (stripInlineComment) and backslash
+// line-continuations are joined. The shard-denominator assertion binds to these
+// — NOT the raw run string — so (a) a commented example above a real shard-less
+// invocation cannot false-green the guard, and (b) the real archtest-nightly.yml
+// invocation, which puts `verify archtest` and `--shard=N/24` on separate
+// continued lines, is still seen as ONE command line.
+func runCommandLines(run string) []string {
+	var cmds []string
+	var cur strings.Builder
+	for _, raw := range strings.Split(run, "\n") {
+		line := stripInlineComment(raw)
+		if strings.HasSuffix(strings.TrimRight(line, " \t"), "\\") {
+			cur.WriteString(strings.TrimSuffix(strings.TrimRight(line, " \t"), "\\"))
+			cur.WriteByte(' ')
+			continue
+		}
+		cur.WriteString(line)
+		cmds = append(cmds, strings.TrimSpace(cur.String()))
+		cur.Reset()
+	}
+	if cur.Len() > 0 {
+		cmds = append(cmds, strings.TrimSpace(cur.String()))
+	}
+	return cmds
+}
+
+// extractShardDenominator parses the denominator K from a --shard=N/K flag on a
+// single logical command line (comment-free, continuations already joined by
+// runCommandLines). Returns 0 and an error if no --shard flag is found or the
 // denominator is not a valid positive integer.
 func extractShardDenominator(run string) (int, error) {
 	// Match --shard=<anything>/<digits> or --shard <anything>/<digits>.
@@ -282,9 +390,16 @@ func extractShardDenominator(run string) (int, error) {
 // bucket N may be executed by multiple runners (overlap) or by none (gap),
 // silently corrupting test coverage.
 //
-// Match-all semantics (not first-match): if multiple steps invoke the CLI,
-// every one must use the correct denominator (defense-in-depth against future
-// yaml refactors that split invocation across steps).
+// Match-all semantics (not first-match): if multiple command lines invoke the
+// CLI, every one must use the correct denominator (defense-in-depth against
+// future yaml refactors that split invocation across steps).
+//
+// Comment-aware: each step's run block is split into logical command lines via
+// runCommandLines (shell comments stripped, backslash-continuations joined), so
+// the marker/denominator detection binds to ACTUAL command text. A commented
+// `# gocell verify archtest --shard=N/24` above a real shard-less invocation
+// cannot satisfy the contract (the F3 false-green the whole-block strings.Index
+// admitted).
 func validateVerifyArchtestShardDenominator(body []byte) error {
 	var cfg archtestWorkflowConfig
 	dec := yaml.NewDecoder(bytes.NewReader(body))
@@ -300,31 +415,42 @@ func validateVerifyArchtestShardDenominator(body []byte) error {
 	}
 	invocations := 0
 	for _, step := range job.Steps {
-		if !strings.Contains(step.Run, verifyArchtestCLIMarker) {
-			continue
-		}
-		invocations++
-		k, err := extractShardDenominator(step.Run)
-		if err != nil {
-			return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: step %q invokes %q "+
-				"but the --shard flag is missing or malformed: %w; "+
-				"CI must pass --shard=N/%d so the partition denominator matches the "+
-				"matrix array length. See ADR 202605120000 §Amendment 2026-06-12 (#1563).",
-				step.Name, verifyArchtestCLIMarker, err, expectedShardTotal)
-		}
-		if k != expectedShardTotal {
-			return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: step %q invokes %q "+
-				"with --shard denominator %d; expected %d to match the matrix array length "+
-				"(mismatch causes tests to overlap or gap across shards). "+
-				"See ADR 202605120000 §Amendment 2026-06-12 (#1563).",
-				step.Name, verifyArchtestCLIMarker, k, expectedShardTotal)
+		for _, cmd := range runCommandLines(step.Run) {
+			if !strings.Contains(cmd, verifyArchtestCLIMarker) {
+				continue
+			}
+			invocations++
+			if err := validateInvocationShard(step.Name, cmd); err != nil {
+				return err
+			}
 		}
 	}
 	if invocations == 0 {
-		return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: jobs.verify-archtest has no step "+
+		return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: jobs.verify-archtest has no command "+
 			"invoking %q; matrix gate is the sole CI archtest entry, removal is a regression "+
 			"(see ADR 202605120000 §D6). Add a step running `gocell verify archtest --shard=N/%d`.",
 			verifyArchtestCLIMarker, expectedShardTotal)
+	}
+	return nil
+}
+
+// validateInvocationShard asserts that one CLI invocation command line carries
+// a --shard=N/K flag whose K equals expectedShardTotal.
+func validateInvocationShard(stepName, cmd string) error {
+	k, err := extractShardDenominator(cmd)
+	if err != nil {
+		return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: step %q invokes %q "+
+			"but the --shard flag is missing or malformed: %w; "+
+			"CI must pass --shard=N/%d so the partition denominator matches the "+
+			"matrix array length. See ADR 202605120000 §Amendment 2026-06-12 (#1563).",
+			stepName, verifyArchtestCLIMarker, err, expectedShardTotal)
+	}
+	if k != expectedShardTotal {
+		return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: step %q invokes %q "+
+			"with --shard denominator %d; expected %d to match the matrix array length "+
+			"(mismatch causes tests to overlap or gap across shards). "+
+			"See ADR 202605120000 §Amendment 2026-06-12 (#1563).",
+			stepName, verifyArchtestCLIMarker, k, expectedShardTotal)
 	}
 	return nil
 }

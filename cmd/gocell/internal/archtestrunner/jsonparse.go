@@ -27,36 +27,65 @@ type testAccumulator struct {
 	status  string
 }
 
+// maxJSONLineBytes bounds a single `go test -json` event line. The default
+// bufio.Scanner cap (bufio.MaxScanTokenSize, 64 KiB) silently STOPS scanning on
+// a longer line, which for archtest means a long failure diff or a long test
+// list would truncate both the report and the slowgate --test-json-out artifact
+// with no signal. 10 MiB comfortably exceeds any single event Output chunk;
+// exceeding it surfaces as a scanner error (see scanJSONLines), never a silent
+// drop.
+const maxJSONLineBytes = 10 << 20
+
+// scanJSONLines invokes fn for each line of output, using a scanner whose token
+// cap is raised to maxJSONLineBytes, and returns any scanner error. A line
+// exceeding the cap yields bufio.ErrTooLong rather than a silent truncation, so
+// callers MUST propagate the error instead of treating the stream as complete.
+func scanJSONLines(output []byte, fn func(line []byte)) error {
+	scanner := bufio.NewScanner(bytes.NewReader(output))
+	scanner.Buffer(make([]byte, 0, 64*1024), maxJSONLineBytes)
+	for scanner.Scan() {
+		fn(scanner.Bytes())
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("archtestrunner: scan go test -json output: %w", err)
+	}
+	return nil
+}
+
 // parseTestJSON parses the combined output of `go test -json` and returns
 // per-test results. Non-JSON lines (build noise written to stderr and merged
-// by cmdrun's CombinedOutput) are silently skipped.
+// by cmdrun's CombinedOutput) are silently skipped. It returns an error only
+// when the output stream cannot be fully scanned (e.g. a line exceeding
+// maxJSONLineBytes) — a truncated parse would yield a silently incomplete
+// report, so the caller must treat that as a failure rather than trusting it.
 //
 // Aggregation rules:
 //   - The final "pass", "fail", or "skip" action for a test name determines Status.
 //   - Output lines for the test are concatenated (only kept for failed tests).
 //   - Elapsed from the final action is used.
 //   - Package-level events (Test=="") are ignored.
-func parseTestJSON(output []byte) []TestResult {
+func parseTestJSON(output []byte) ([]TestResult, error) {
 	state := make(map[string]*testAccumulator)
-	parseTestEvents(output, state)
-	return buildTestResults(state)
+	if err := parseTestEvents(output, state); err != nil {
+		return nil, err
+	}
+	return buildTestResults(state), nil
 }
 
 // parseTestEvents scans the combined `go test -json` output and accumulates
-// per-test state. Non-JSON lines are silently skipped.
-func parseTestEvents(output []byte, state map[string]*testAccumulator) {
-	scanner := bufio.NewScanner(bytes.NewReader(output))
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !looksLikeJSON(line) {
-			continue
+// per-test state. Non-JSON lines are silently skipped; a scan error (truncated
+// stream) is returned, never swallowed.
+func parseTestEvents(output []byte, state map[string]*testAccumulator) error {
+	return scanJSONLines(output, func(line []byte) {
+		if !looksLikeJSON(string(line)) {
+			return
 		}
 		var ev testEvent
-		if err := json.Unmarshal([]byte(line), &ev); err != nil {
-			continue
+		if err := json.Unmarshal(line, &ev); err != nil {
+			return
 		}
 		if ev.Test == "" {
-			continue // package-level event
+			return // package-level event
 		}
 		acc, ok := state[ev.Test]
 		if !ok {
@@ -64,7 +93,7 @@ func parseTestEvents(output []byte, state map[string]*testAccumulator) {
 			state[ev.Test] = acc
 		}
 		applyTestEvent(acc, ev)
-	}
+	})
 }
 
 // applyTestEvent updates the accumulator with a single test event.
@@ -107,43 +136,102 @@ func looksLikeJSON(line string) bool {
 
 // collectValidJSONLines returns the subset of lines from output that are valid
 // JSON objects with an "Action" field (i.e. genuine test2json events). Used to
-// write clean input to TestJSONOut for slowgate consumption.
-func collectValidJSONLines(output []byte) [][]byte {
+// write clean input to TestJSONOut for slowgate consumption. A scan error
+// (truncated stream) is returned rather than producing a silently incomplete
+// artifact.
+func collectValidJSONLines(output []byte) ([][]byte, error) {
 	var result [][]byte
-	scanner := bufio.NewScanner(bytes.NewReader(output))
-	for scanner.Scan() {
-		line := scanner.Bytes()
+	err := scanJSONLines(output, func(line []byte) {
 		if !looksLikeJSON(string(line)) {
-			continue
+			return
 		}
 		var ev struct {
 			Action string `json:"Action"`
 		}
-		if err := json.Unmarshal(line, &ev); err != nil || ev.Action == "" {
-			continue
+		if uerr := json.Unmarshal(line, &ev); uerr != nil || ev.Action == "" {
+			return
 		}
 		cp := make([]byte, len(line))
 		copy(cp, line)
 		result = append(result, cp)
+	})
+	if err != nil {
+		return nil, err
 	}
-	return result
+	return result, nil
 }
 
-// determineInfraErr distinguishes between test failures (exit error) and
-// infrastructure errors (tool not found, build error, etc.).
+// maxBuildDiagnosticBytes caps the build/package-failure diagnostic surfaced
+// inline in the infra error. The full event stream is still written to the
+// --test-json-out artifact; this is the operator-facing excerpt that makes the
+// CLI's own error message actionable.
+const maxBuildDiagnosticBytes = 4096
+
+// buildFailureDiagnostic reconstructs human-readable text from raw `go test
+// -json` output for the path where go test failed but produced NO per-test
+// result (build error, package panic, or timeout before any test completed).
+// It concatenates every event's Output field — build-output and package-level
+// events have Test=="" and are otherwise dropped by parseTestJSON — and passes
+// through non-JSON lines (build errors go test writes to stderr ahead of the
+// JSON stream). The result is trimmed and length-capped. A scan error is
+// returned so an unreadable stream never masquerades as an empty diagnostic.
+func buildFailureDiagnostic(output []byte) (string, error) {
+	var b strings.Builder
+	err := scanJSONLines(output, func(line []byte) {
+		if !looksLikeJSON(string(line)) {
+			b.Write(line)
+			b.WriteByte('\n')
+			return
+		}
+		var ev testEvent
+		if uerr := json.Unmarshal(line, &ev); uerr != nil {
+			return
+		}
+		b.WriteString(ev.Output)
+	})
+	if err != nil {
+		return "", err
+	}
+	diag := strings.TrimSpace(b.String())
+	if len(diag) > maxBuildDiagnosticBytes {
+		diag = diag[:maxBuildDiagnosticBytes] + "\n… (truncated; see --test-json-out artifact for the full stream)"
+	}
+	return diag, nil
+}
+
+// classifyRunError decides whether a `go test` run error is an infrastructure
+// failure (returned to the caller, aborting the Report) or an ordinary test
+// failure (recorded in the Report with Passed=false). The decision needs the
+// PARSED results, because go test exits non-zero for BOTH "some tests failed"
+// and "the package failed to build / panicked / timed out before any test
+// ran" — the two are indistinguishable from the error type alone.
 //
-//   - nil error → no error at all (tests passed)
-//   - *exec.ExitError → tests ran and some failed; this is NOT an infra error
-//   - any other error → infra error (caller should return it, not set Passed=false)
-func determineInfraErr(err error) error {
-	if err == nil {
+//   - nil                              → no error.
+//   - non-*exec.ExitError              → infra (go tool missing, ctx cancel).
+//   - *exec.ExitError, len(tests) > 0  → ordinary test failure (nil); failures
+//     live in the Report.
+//   - *exec.ExitError, len(tests) == 0 → build/package failure: go test -json
+//     emitted no per-test event, so an empty Report would render as a
+//     misleading "0 failing tests". Surface the raw diagnostic as an infra
+//     error so the operator sees the actual compiler/panic output.
+func classifyRunError(runErr error, tests []TestResult, output []byte) error {
+	if runErr == nil {
 		return nil
 	}
 	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		return nil // test failure, not infra failure
+	if !errors.As(runErr, &exitErr) {
+		return fmt.Errorf("archtestrunner: go test execution failed: %w", runErr)
 	}
-	return err
+	if len(tests) > 0 {
+		return nil // tests ran; failures are reported, not an infra error
+	}
+	diag, derr := buildFailureDiagnostic(output)
+	if derr != nil {
+		return fmt.Errorf("archtestrunner: `go test` failed with no test results, "+
+			"and its output could not be scanned: %w", derr)
+	}
+	return fmt.Errorf("archtestrunner: archtest produced no test results but `go test` failed "+
+		"(build error, package panic, or timeout before any test completed):\n%s", diag)
 }
 
 // writeTestJSONOut writes valid JSON event lines to the specified file.

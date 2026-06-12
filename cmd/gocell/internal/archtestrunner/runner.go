@@ -81,34 +81,34 @@ func (e engine) run(ctx context.Context, req Request) (Report, error) {
 	}
 
 	if len(selected) == 0 {
-		// Write an empty TestJSONOut even when selection is empty so that CI's
-		// slowgate pipe (`< file`) does not fail on a missing file. An empty
-		// file is a valid empty JSON stream (slowgate no-op).
-		if req.TestJSONOut != "" {
-			if werr := writeTestJSONOut(req.TestJSONOut, nil); werr != nil {
-				return Report{}, werr
-			}
+		// Empty selection: still create the (empty) TestJSONOut so CI's slowgate
+		// pipe does not fail on a missing file.
+		if werr := writeJSONArtifactIfRequested(req, nil); werr != nil {
+			return Report{}, werr
 		}
 		return buildEmptyReport(), nil
 	}
 
 	output, runErr := e.execGoTest(ctx, req, selected)
 
-	// Write JSON out when set — always create the file so CI's slowgate pipe
-	// does not fail on a missing file for the empty-output edge case.
-	if req.TestJSONOut != "" {
-		validLines := collectValidJSONLines(output)
-		if werr := writeTestJSONOut(req.TestJSONOut, validLines); werr != nil {
-			return Report{}, werr
-		}
+	// Write the JSON artifact BEFORE run-error classification so it exists even
+	// when the run is a build/package failure.
+	if werr := writeJSONArtifactIfRequested(req, output); werr != nil {
+		return Report{}, werr
 	}
 
-	infraErr := determineInfraErr(runErr)
-	if infraErr != nil {
-		return Report{}, fmt.Errorf("archtestrunner: go test execution failed: %w", infraErr)
+	tests, perr := parseTestJSON(output)
+	if perr != nil {
+		return Report{}, perr
 	}
 
-	tests := parseTestJSON(output)
+	// classifyRunError needs the parsed results: a non-zero exit with zero
+	// test-level results is a build/package failure (surfaced as an infra error
+	// with the raw diagnostic), not an empty "0 failing tests" report.
+	if infraErr := classifyRunError(runErr, tests, output); infraErr != nil {
+		return Report{}, infraErr
+	}
+
 	enrichWithMeta(ctx, req.WorkspaceRoot, tests)
 
 	passed := runErr == nil && !hasFailures(tests)
@@ -117,6 +117,21 @@ func (e engine) run(ctx context.Context, req Request) (Report, error) {
 		Tests:    tests,
 		Passed:   passed,
 	}, nil
+}
+
+// writeJSONArtifactIfRequested writes the valid JSON event lines from output to
+// req.TestJSONOut when set (no-op when empty). CI's slowgate pipe (`< file`)
+// must not fail on a missing file, so the file is always created when the flag
+// is set — even for empty output, which is a valid empty JSON stream.
+func writeJSONArtifactIfRequested(req Request, output []byte) error {
+	if req.TestJSONOut == "" {
+		return nil
+	}
+	validLines, err := collectValidJSONLines(output)
+	if err != nil {
+		return err
+	}
+	return writeTestJSONOut(req.TestJSONOut, validLines)
 }
 
 // listTests is the engine-scoped implementation of ListTests.

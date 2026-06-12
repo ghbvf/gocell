@@ -4,21 +4,18 @@
 //
 // # Shard partition algorithm
 //
-// INVARIANT: ARCHTESTRUNNER-PARTITION-SOLE-SOURCE-01
+// partition is the single shard-modulo assignment implementation in the tree
+// today. It mirrors the shell script's awk 'NR % n == s' 1-based line-number
+// logic (a test at 0-based index i is assigned to shard (i+1) % Total), and the
+// legacy hack/verify-archtest.sh awk implementation was DELETED, so only one
+// exists by construction. This single-implementation property is documentation,
+// NOT a machine-checked invariant: there is intentionally no static scanner
+// against a future second implementation, so keep shard math in this function.
 //
-// partition is the SOLE implementation of the shard modulo assignment algorithm.
-// It mirrors the shell script's awk 'NR % n == s' 1-based line-number logic:
-// a test at 0-based index i is assigned to shard (i+1) % Total. The legacy
-// hack/verify-archtest.sh awk implementation was DELETED, so there is one
-// implementation by construction.
-//
-// Enforcement grade: Medium.
-//   - Enforced: the partition's exactly-once property is verified through the
-//     CLI by ARCHTEST-VERIFY-COVERAGE-01 (the sole execution path); tests in
-//     discover_test.go assert exact NR-mirror split to prevent silent drift.
-//   - NOT scanner-protected: there is no static guard preventing a future
-//     second partition implementation. Reviewers must reject any re-introduction
-//     of shard-partition logic outside this function.
+// What IS machine-enforced is the partition's exactly-once BEHAVIOR (every
+// discovered test runs in exactly one shard): ARCHTEST-VERIFY-COVERAGE-01
+// (tools/archtest) drives it through the CLI's --shard=N/K --list-tests path,
+// and discover_test.go asserts the exact NR-mirror split to catch silent drift.
 package archtestrunner
 
 import (
@@ -84,11 +81,12 @@ func validateShard(s Shard) error {
 
 // partition returns the subset of sorted tests assigned to the given shard.
 //
-// INVARIANT: ARCHTESTRUNNER-PARTITION-SOLE-SOURCE-01
-//
 // Algorithm: mirrors the shell awk 'NR % n == s' where NR is 1-based.
 // For 0-based index i in the sorted slice: test i is assigned to shard
 // (i+1) % Total. When Total==0, all tests are returned unchanged.
+//
+// This is the single shard-assignment implementation (see the package doc); its
+// exactly-once property is guarded behaviorally by ARCHTEST-VERIFY-COVERAGE-01.
 //
 // This is a pure function with no side effects. Callers must pass a
 // pre-sorted slice to guarantee stable, deterministic sharding across

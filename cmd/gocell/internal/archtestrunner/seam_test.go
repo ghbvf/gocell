@@ -223,8 +223,9 @@ func TestFoo(t *testing.T) {}
 }
 
 // ---- Run via seam: build-fail path ----
-// Stub exec returns build-fail -json output + a *exec.ExitError.
-// Run must return err==nil, report.Passed==false (NOT an infra error).
+// Stub exec returns build-fail -json output + a *exec.ExitError but NO per-test
+// events. Run must surface an infra error carrying the build diagnostic — an
+// empty Report would render as a misleading "0 failing tests" (F1).
 
 func TestRun_BuildFail(t *testing.T) {
 	if os.Getenv("GOWORK") == "off" {
@@ -256,9 +257,50 @@ func TestFoo(t *testing.T) {}
 		changed: changedArchtestFiles,
 	}
 
-	report, err := e.run(context.Background(), Request{WorkspaceRoot: root})
-	require.NoError(t, err, "build failure is an ExitError, not an infra error")
-	assert.False(t, report.Passed, "build failure must produce Passed=false")
+	_, err := e.run(context.Background(), Request{WorkspaceRoot: root})
+	require.Error(t, err, "build failure with zero test results must surface, not become an empty report")
+	assert.Contains(t, err.Error(), "no test results")
+	assert.Contains(t, err.Error(), "undefined: SomeMissing",
+		"the build diagnostic must reach the operator instead of '0 failing tests'")
+}
+
+// TestRun_BuildFail_TestJSONOut_StillWritten verifies that the --test-json-out
+// artifact is written BEFORE the build-failure error is returned, so CI's
+// slowgate pipe still has its file even on a build break.
+func TestRun_BuildFail_TestJSONOut_StillWritten(t *testing.T) {
+	if os.Getenv("GOWORK") == "off" {
+		t.Skip("GOWORK=off")
+	}
+
+	root := makeFakeArchtestDir(t, map[string]string{
+		"foo_test.go": `//go:build archtest
+
+// INVARIANT: FOO-01
+
+package archtest
+
+import "testing"
+
+func TestFoo(t *testing.T) {}
+`,
+	})
+
+	buildFailOutput := []byte(
+		`{"Action":"build-output","ImportPath":"tools/archtest","Output":"broken_test.go:5:2: undefined: SomeMissing\n"}` + "\n" +
+			`{"Action":"build-fail","ImportPath":"tools/archtest"}` + "\n",
+	)
+	e := engine{
+		exec:    fakeExec("TestFoo\n", buildFailOutput, &exec.ExitError{}),
+		changed: changedArchtestFiles,
+	}
+
+	jsonOutPath := filepath.Join(t.TempDir(), "events.json")
+	req := Request{WorkspaceRoot: root, TestJSONOut: jsonOutPath}
+	_, err := e.run(context.Background(), req)
+	require.Error(t, err, "build failure must still error")
+
+	_, statErr := os.Stat(jsonOutPath)
+	assert.NoError(t, statErr, "TestJSONOut must be written before the build-failure error is returned")
 }
 
 // ---- Run via seam: TestJSONOut written ----

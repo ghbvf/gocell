@@ -25,14 +25,13 @@ package archtest
 //     algorithm is K-independent).
 //
 // Algorithm single source: archtestrunner.partition (discover.go) is the
-// sole implementation of the shard modulo assignment algorithm as of this
-// writing (the legacy hack/verify-archtest.sh shard_assignment() awk
-// function has been deleted; the shell is now a thin passthrough to the
-// CLI). This property holds by construction today, but is NOT protected
-// by a static scanner against future re-implementation —
-// ARCHTESTRUNNER-PARTITION-SOLE-SOURCE-01 is reviewer-enforced, not a
-// machine-checked invariant. What this test does verify is the partition's
-// exactly-once BEHAVIOR through the CLI, independent of implementation.
+// single shard-modulo implementation in the tree today (the legacy
+// hack/verify-archtest.sh shard_assignment() awk function was deleted; the
+// shell is now a thin passthrough to the CLI). That single-implementation
+// property holds by construction and is documentation, NOT a machine-checked
+// invariant — there is no static scanner against a future re-implementation.
+// What this test DOES enforce is the partition's exactly-once BEHAVIOR through
+// the CLI, independent of implementation.
 //
 // Subprocess driver: tests drive `bash hack/verify-archtest.sh --list-tests`
 // and `bash hack/verify-archtest.sh --shard=N/K --list-tests`. The thin
@@ -235,8 +234,8 @@ func TestArchtestVerifyCoverage01(t *testing.T) {
 //   - every name in cliSet appears in at least one shard (union == cover)
 //   - no name appears in two or more shards (disjoint)
 //
-// Both go through archtestrunner.partition (currently the sole algorithm
-// source; single-implementation is reviewer-enforced, not statically
+// Both go through archtestrunner.partition (the single algorithm source today,
+// by construction — single-implementation is documentation, not statically
 // scanned), so this is behavioral verification of the partition algorithm.
 //
 // K choice: K=4 is sufficient because the modulo partition is K-independent —
