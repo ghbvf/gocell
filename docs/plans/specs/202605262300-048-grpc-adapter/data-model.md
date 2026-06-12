@@ -177,7 +177,10 @@ type ServiceRegistrar struct {
     names   map[string]struct{}   // ServiceName dedup across specs
 }
 
-func NewServiceRegistrar(inner grpc.ServiceRegistrar) *ServiceRegistrar
+// As-built: two-phase, no inner arg. interceptor.NewServerInterceptors is the sole
+// minter (#1752); BindServer sets the delegation target after grpc.NewServer.
+func NewServiceRegistrar() *ServiceRegistrar
+func (r *ServiceRegistrar) BindServer(inner grpc.ServiceRegistrar)
 func (r *ServiceRegistrar) Register(spec cell.GRPCServiceSpec) error
 func (r *ServiceRegistrar) CellIDForMethod(fullMethod string) (cellID string, ok bool)
 ```

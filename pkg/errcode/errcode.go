@@ -624,9 +624,9 @@ const (
 	// via WithGRPCListener with a nil (bare or typed) GRPCServer. Bootstrap
 	// phase0 fail-fasts with this code, mirroring WithManagedResource's nil
 	// guard. The composition root owns gRPC auth wiring: the interceptor chain
-	// is built via runtime/grpc/interceptor.NewUnaryChain (which always wires
-	// UnaryAuth and panics on a nil verifier), so the fail-closed auth gate lives
-	// at chain construction; this sentinel guards the bootstrap wiring seam.
+	// is built via runtime/grpc/interceptor.NewServerInterceptors (which always
+	// wires UnaryAuth and panics on a nil verifier), so the fail-closed auth gate
+	// lives at chain construction; this sentinel guards the bootstrap wiring seam.
 	//
 	// ref: docs/plans/specs/202605262300-048-grpc-adapter/plan.md PR 5 (RL-14)
 	ErrGRPCServerMissing Code = "ERR_GRPC_SERVER_MISSING"

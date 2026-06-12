@@ -23,9 +23,11 @@
 //
 // # Interceptors
 //
-// This package registers zero interceptors. Recovery, metrics, tracing,
-// and auth interceptors are composed at the bootstrap layer (PR-4) and
-// plumbed in via grpc.ServerOption; they are not a concern of this adapter.
+// This package registers zero interceptors. Recovery, metrics, tracing, and auth
+// interceptors are composed at the composition-root layer via
+// interceptor.NewServerInterceptors(deps) (the sole public funnel, which mints the
+// shared registrar/drain, #1752) and plumbed in via Config.Interceptors; they are
+// not a concern of this adapter.
 //
 // # Service registration (PR-7: Form B callback, cell-facing)
 //
@@ -37,15 +39,14 @@
 //  3. The Registrar intercepts the spec.Register callback's RegisterService
 //     call to record /{service}/{method}→cellID attribution.
 //
-// Composition-root wiring (cmd/ or examples/). The registrar and drain are
-// created FIRST and put into one interceptor deps object. New derives both unary
-// and streaming chains from that same deps value and binds deps.Registrar to the
-// server, so the adapter and chains cannot observe different registrar/drain
-// instances and a streaming server cannot forget the stream chain (#1752/#1153):
+// Composition-root wiring (cmd/ or examples/). interceptor.NewServerInterceptors
+// mints the ONE shared registrar + drain internally (#1752), builds both the unary
+// and streaming chains from them, and the adapter binds the bundle's registrar +
+// triggers its drain — so the adapter and chains cannot observe different
+// registrar/drain instances and a streaming server cannot forget the stream chain
+// (#1752/#1153). The composition root supplies neither registrar nor drain:
 //
-//	reg := runtimegrpc.NewServiceRegistrar()
-//	drain := runtimegrpc.NewDrainSignal()
-//	deps := interceptor.Deps{..., Registrar: reg, CellIDClosedSet: asm.CellIDs(), Drain: drain}
+//	deps := interceptor.Deps{..., CellIDClosedSet: asm.CellIDs()}
 //	srv, _ := adaptersgrpc.New(adaptersgrpc.Config{
 //	    ..., Interceptors: interceptor.NewServerInterceptors(deps),
 //	})

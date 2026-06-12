@@ -301,16 +301,14 @@ func streamDeps() Deps {
 		Collector:       metrics.NewInMemoryGRPCCollector(),
 		Clock:           clock.Real(),
 		Verifier:        stubVerifier{},
-		Registrar:       runtimegrpc.NewServiceRegistrar(),
 		CellIDClosedSet: []string{"svc-cell"},
-		Drain:           runtimegrpc.NewDrainSignal(),
 	}
 }
 
 func TestNewStreamChain_Smoke(t *testing.T) {
-	opt := NewStreamChain(streamDeps())
+	opt := newStreamChain(streamDeps(), runtimegrpc.NewServiceRegistrar(), runtimegrpc.NewDrainSignal())
 	if opt == nil {
-		t.Fatalf("NewStreamChain returned nil ServerOption")
+		t.Fatalf("newStreamChain returned nil ServerOption")
 	}
 	_ = grpc.NewServer(opt) // must be installable without panicking
 }
@@ -318,43 +316,38 @@ func TestNewStreamChain_Smoke(t *testing.T) {
 func TestNewStreamChain_NilDrainPanics(t *testing.T) {
 	defer func() {
 		if recover() == nil {
-			t.Fatalf("NewStreamChain with a nil Deps.Drain must panic (streams would be un-drainable)")
+			t.Fatalf("newStreamChain with a nil drain must panic (streams would be un-drainable)")
 		}
 	}()
-	d := streamDeps()
-	d.Drain = nil
-	_ = NewStreamChain(d)
+	_ = newStreamChain(streamDeps(), runtimegrpc.NewServiceRegistrar(), nil)
 }
 
 func TestNewStreamChain_NilRegistrarPanics(t *testing.T) {
 	defer func() {
 		if recover() == nil {
-			t.Fatalf("NewStreamChain with a nil Deps.Registrar must panic")
+			t.Fatalf("newStreamChain with a nil registrar must panic")
 		}
 	}()
-	d := streamDeps()
-	d.Registrar = nil
-	_ = NewStreamChain(d)
+	_ = newStreamChain(streamDeps(), nil, runtimegrpc.NewDrainSignal())
 }
 
 func TestNewStreamChain_ZeroValueDrainPanics(t *testing.T) {
 	defer func() {
 		if recover() == nil {
-			t.Fatalf("NewStreamChain with a zero-value new(DrainSignal) must panic (nil cancel → panic at GracefulStop)")
+			t.Fatalf("newStreamChain with a zero-value new(DrainSignal) must panic (nil cancel → panic at GracefulStop)")
 		}
 	}()
-	d := streamDeps()
-	d.Drain = new(runtimegrpc.DrainSignal) // non-nil zero-value → invalid
-	_ = NewStreamChain(d)
+	// non-nil zero-value drain → invalid.
+	_ = newStreamChain(streamDeps(), runtimegrpc.NewServiceRegistrar(), new(runtimegrpc.DrainSignal))
 }
 
 func TestNewStreamChain_EmptyCellIDClosedSetPanics(t *testing.T) {
 	defer func() {
 		if recover() == nil {
-			t.Fatalf("NewStreamChain with an empty Deps.CellIDClosedSet must panic (would relabel every RPC _runtime)")
+			t.Fatalf("newStreamChain with an empty Deps.CellIDClosedSet must panic (would relabel every RPC _runtime)")
 		}
 	}()
 	d := streamDeps()
 	d.CellIDClosedSet = nil
-	_ = NewStreamChain(d)
+	_ = newStreamChain(d, runtimegrpc.NewServiceRegistrar(), runtimegrpc.NewDrainSignal())
 }

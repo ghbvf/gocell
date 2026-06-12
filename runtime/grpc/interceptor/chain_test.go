@@ -35,7 +35,7 @@ func TestChainOrderRecoveryInnermost(t *testing.T) {
 
 	t.Run("metrics observes recovery-converted Internal", func(t *testing.T) {
 		coll := metrics.NewInMemoryGRPCCollector()
-		// Direct interceptor invocation (not via NewUnaryChain): a nil closed set
+		// Direct interceptor invocation (not via newUnaryChain): a nil closed set
 		// is valid here and resolves to the _runtime sentinel — this case asserts
 		// the recovery-converted code/label, not cell attribution.
 		_, err := UnaryMetrics(coll, clock.Real(), nil)(
@@ -63,36 +63,36 @@ func TestChainOrderRecoveryInnermost(t *testing.T) {
 
 func TestNewUnaryChain(t *testing.T) {
 	// Smoke: composition must not panic and must return a usable ServerOption.
-	opt := NewUnaryChain(Deps{
+	opt := newUnaryChain(Deps{
 		Collector:       metrics.NewInMemoryGRPCCollector(),
 		Clock:           clock.Real(),
 		Verifier:        stubVerifier{},
-		Registrar:       runtimegrpc.NewServiceRegistrar(),
 		CellIDClosedSet: []string{"svc-cell"},
-	})
+	}, runtimegrpc.NewServiceRegistrar())
 	if opt == nil {
-		t.Fatalf("NewUnaryChain returned nil ServerOption")
+		t.Fatalf("newUnaryChain returned nil ServerOption")
 	}
 	// It must be installable on a real server without panicking.
 	_ = grpc.NewServer(opt)
 }
 
 // TestNewUnaryChainNilRegistrarPanics asserts the same-instance fail-closed
-// guard: a chain without a Registrar would silently attribute every RPC to the
-// runtime sentinel, so NewUnaryChain panics at construction (#1152 F1).
+// guard: a chain without a registrar would silently attribute every RPC to the
+// runtime sentinel, so newUnaryChain panics at construction (#1152 F1). In
+// production NewServerInterceptors always mints a non-nil registrar (#1752); this
+// white-box test exercises the residual defensive guard directly.
 func TestNewUnaryChainNilRegistrarPanics(t *testing.T) {
 	defer func() {
 		if recover() == nil {
-			t.Fatalf("NewUnaryChain with a nil Deps.Registrar must panic")
+			t.Fatalf("newUnaryChain with a nil registrar must panic")
 		}
 	}()
-	_ = NewUnaryChain(Deps{
+	_ = newUnaryChain(Deps{
 		Collector:       metrics.NewInMemoryGRPCCollector(),
 		Clock:           clock.Real(),
 		Verifier:        stubVerifier{},
 		CellIDClosedSet: []string{"svc-cell"},
-		// Registrar omitted → fail-closed panic.
-	})
+	}, nil) // nil registrar → fail-closed panic.
 }
 
 // testSvc is a minimal gRPC service implementation used by F5 test only.
@@ -126,8 +126,8 @@ var testSvcDesc = grpc.ServiceDesc{
 }
 
 // TestNewUnaryChain_AuthOptionsPassthrough asserts that AuthOptions from Deps
-// are actually forwarded to UnaryAuth by NewUnaryChain. The test drives a real
-// gRPC server built from NewUnaryChain's ServerOption. If deps.AuthOptions...
+// are actually forwarded to UnaryAuth by newUnaryChain. The test drives a real
+// gRPC server built from newUnaryChain's ServerOption. If deps.AuthOptions...
 // is removed from the UnaryAuth call in chain.go, the WithPublicMethod
 // predicate will not take effect and the unauthenticated request will be
 // rejected as codes.Unauthenticated instead of reaching the handler.
@@ -141,11 +141,10 @@ func TestNewUnaryChain_AuthOptionsPassthrough(t *testing.T) {
 			// Mark /svc/Public as public so no token is required.
 			WithPublicMethod(func(m string) bool { return m == "/svc/Public" }),
 		},
-		Registrar:       runtimegrpc.NewServiceRegistrar(),
 		CellIDClosedSet: []string{"svc-cell"},
 	}
 
-	srv := grpc.NewServer(NewUnaryChain(deps))
+	srv := grpc.NewServer(newUnaryChain(deps, runtimegrpc.NewServiceRegistrar()))
 	srv.RegisterService(&testSvcDesc, &testSvc{handlerReached: &handlerReached})
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -169,6 +168,6 @@ func TestNewUnaryChain_AuthOptionsPassthrough(t *testing.T) {
 			callErr, status.Code(callErr))
 	}
 	if !handlerReached {
-		t.Fatalf("handler was not reached — WithPublicMethod option did not propagate through NewUnaryChain")
+		t.Fatalf("handler was not reached — WithPublicMethod option did not propagate through newUnaryChain")
 	}
 }

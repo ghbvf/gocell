@@ -18,22 +18,26 @@ import (
 // ctx.Done() fires, handlers that select on it return promptly, and GracefulStop
 // completes within budget.
 //
-// The composition root constructs ONE DrainSignal inside interceptor.Deps; the
-// adapter derives both the stream chain and graceful-stop trigger from that same
-// deps object. This follows the same Option-3 instance-sharing discipline as the
-// shared ServiceRegistrar (#1152): a missing signal is a composition bug and
-// fails closed at startup.
+// interceptor.NewServerInterceptors mints ONE DrainSignal (#1752) and wires it
+// into both the stream chain (StreamDrain consumer) and the adapter graceful-stop
+// trigger via the bundle. This follows the same Option-3 instance-sharing
+// discipline as the shared ServiceRegistrar (#1152), now compile-proof: the
+// composition root no longer supplies the signal, so it cannot mismatch one. A
+// zero-value signal is a composition bug and fails closed at startup.
 type DrainSignal struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 }
 
 // NewDrainSignal returns a fresh, un-triggered DrainSignal. This is the ONLY way
-// to obtain a usable value: the type is exported (it is a Config/Deps field), so
-// a zero-value new(DrainSignal) / DrainSignal{} IS constructable outside this
-// package, but its fields are nil — Trigger/Context would panic. Validate (called
-// by adapters/grpc Config.validate and NewStreamChain) rejects such a value at
-// startup.
+// to obtain a usable value: the type is exported (it is carried in the
+// ServerInterceptors bundle), so a zero-value new(DrainSignal) / DrainSignal{} IS
+// constructable outside this package, but its fields are nil — Trigger/Context
+// would panic. Validate (called by adapters/grpc Config.validate and
+// newStreamChain) rejects such a value at startup.
+//
+// In production NewServerInterceptors is the sole minter (#1752,
+// GRPC-WIRING-REGISTRAR-MINT-FUNNEL-01); other production callers are archtest-rejected.
 func NewDrainSignal() *DrainSignal {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &DrainSignal{ctx: ctx, cancel: cancel}
@@ -42,9 +46,12 @@ func NewDrainSignal() *DrainSignal {
 // Validate reports whether d is a usable signal built by NewDrainSignal. It is
 // nil-receiver safe. A nil pointer or a zero-value (new(DrainSignal)) has a nil
 // cancel/ctx and would panic at Trigger()/Context(); adapters/grpc Config.validate
-// and NewStreamChain call Validate so a non-constructed signal fails fast at
-// startup rather than at GracefulStop. The sealed-construction Hard upgrade
-// (forbidding a zero-value at compile time) is tracked with #1752.
+// and newStreamChain call Validate so a non-constructed signal fails fast at
+// startup rather than at GracefulStop. Forbidding the zero-value at COMPILE time is
+// a permanent Go ceiling (var d DrainSignal is always constructable), so the
+// runtime Validate fail-fast is the guard; what #1752 DID seal is the
+// same-instance wiring (NewServerInterceptors is the sole minter, so the chains and
+// the adapter can never observe two different DrainSignals).
 func (d *DrainSignal) Validate() error {
 	if d == nil || d.cancel == nil || d.ctx == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,

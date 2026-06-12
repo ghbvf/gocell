@@ -19,9 +19,11 @@ package grpc
 //     fatal (which gives a less helpful message about cross-cell collision).
 //
 //  4. The attribution map built here (method→cellID) is consumed by PR-9 (#1152):
-//     CellIDForMethod feeds interceptor.UnaryCellAttribution (via Deps.Registrar),
-//     which writes ctxkeys.CellID so the gRPC metrics cell label and access log
-//     reflect the owning cell. Streaming interceptors (PR-10) reuse the same map.
+//     CellIDForMethod feeds interceptor.UnaryCellAttribution, which writes
+//     ctxkeys.CellID so the gRPC metrics cell label and access log reflect the
+//     owning cell. Streaming interceptors (PR-10) reuse the same map. The registrar
+//     this reads is the one interceptor.NewServerInterceptors mints and the adapter
+//     binds — one instance for both attribution and registration (#1752).
 //
 // ref: zeromicro/go-zero zrpc/internal/rpcserver.go — RegisterFn (Form B precedent)
 // ref: go-kratos/kratos transport/grpc/server.go — pb.RegisterXxxServer before Start
@@ -66,12 +68,14 @@ type serviceOwner struct {
 }
 
 // NewServiceRegistrar builds a ServiceRegistrar with an empty attribution map and
-// no delegation target (two-phase, Option 3 #1152). The composition root creates
-// it FIRST so reg.CellIDForMethod can be handed to the unary interceptor chain —
-// which is composed BEFORE the gRPC server exists — and binds the delegation
-// target via BindServer once grpc.NewServer has been constructed with that chain.
-// CellIDForMethod is callable immediately (the map exists from construction); it
-// returns matches once Register has populated it during the bootstrap drain.
+// no delegation target (two-phase, Option 3 #1152). interceptor.NewServerInterceptors
+// is the SOLE production caller (#1752, GRPC-WIRING-REGISTRAR-MINT-FUNNEL-01): it
+// mints the registrar, hands reg.CellIDForMethod to the unary + stream chains —
+// composed BEFORE the gRPC server exists — and carries the same instance in the
+// bundle so the adapter binds the delegation target via BindServer once
+// grpc.NewServer has been constructed with that chain. CellIDForMethod is callable
+// immediately (the map exists from construction); it returns matches once Register
+// has populated it during the bootstrap drain.
 func NewServiceRegistrar() *ServiceRegistrar {
 	return &ServiceRegistrar{
 		methods: make(map[string]string),

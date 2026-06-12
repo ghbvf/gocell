@@ -50,11 +50,12 @@ func grpcAddrFromEnv() string {
 // newGRPCServerFromEnv builds the gRPC server, resolving transport security from
 // the environment. addr is the resolved listen address (grpcAddrFromEnv), passed
 // in by the caller so the same value is also handed to WithGRPCListener.
-// grpcDeps carries the single interceptor wiring object: adaptersgrpc.New derives
-// both unary and stream chains from it and binds the same registrar/drain instances
-// to the adapter. That keeps the JWT verifier / metrics collector in run.go while
-// making "forgot NewStreamChain" and mismatched registrar/drain wiring
-// unrepresentable at this call site.
+// grpcDeps carries the interceptor wiring inputs: interceptor.NewServerInterceptors
+// mints the ONE shared registrar + drain (#1752), builds both unary and stream
+// chains from them, and adaptersgrpc.New binds them. That keeps the JWT verifier /
+// metrics collector in run.go while making "forgot the stream chain" and mismatched
+// registrar/drain wiring unrepresentable — the composition root supplies neither
+// registrar nor drain.
 func newGRPCServerFromEnv(
 	durabilityMode outbox.DurabilityMode,
 	addr string,
