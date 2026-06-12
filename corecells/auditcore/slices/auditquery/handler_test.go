@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -95,6 +96,42 @@ func auditTestCtx(subject string, roles []string) context.Context {
 		TenantID:   auditQueryTestTenant,
 		AuthMethod: "test",
 	})
+}
+
+// mockAuthorizer is a test-only implementation of auth.Authorizer that returns
+// a fixed Decision for every Authorize call. Place it in the same-package test
+// file per GoCell's mock placement rule (go-standards.md §Naming).
+type mockAuthorizer struct {
+	decision authz.Decision
+	err      error
+}
+
+func (m *mockAuthorizer) Authorize(_ context.Context, _, _, _ string) (authz.Decision, error) {
+	return m.decision, m.err
+}
+
+// allowAuthorizer returns a mockAuthorizer that always grants permission.
+func allowAuthorizer() *mockAuthorizer {
+	dec, err := authz.Allow(authz.Obligations{})
+	if err != nil {
+		panic("allowAuthorizer: authz.Allow: " + err.Error())
+	}
+	return &mockAuthorizer{decision: dec}
+}
+
+// denyAuthorizer returns a mockAuthorizer that always denies permission.
+func denyAuthorizer(reason string) *mockAuthorizer {
+	return &mockAuthorizer{decision: authz.Deny(reason)}
+}
+
+// withAllowAuthorizer returns a context carrying an allow-all Authorizer.
+func withAllowAuthorizer(ctx context.Context) context.Context {
+	return auth.WithAuthorizer(ctx, allowAuthorizer())
+}
+
+// withDenyAuthorizer returns a context carrying a deny-all Authorizer.
+func withDenyAuthorizer(ctx context.Context, reason string) context.Context {
+	return auth.WithAuthorizer(ctx, denyAuthorizer(reason))
 }
 
 func TestHandleQuery_InvalidTimeFormat(t *testing.T) {
@@ -540,11 +577,12 @@ func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
 	require.NoError(t, h.RegisterRoutes(mux))
 
 	tests := []struct {
-		name       string
-		subject    string
-		roles      []string
-		actorID    string
-		wantStatus int
+		name         string
+		subject      string
+		roles        []string
+		actorID      string
+		withAuthzCtx func(context.Context) context.Context // optional Authorizer injection
+		wantStatus   int
 	}{
 		{
 			name:       "no_auth",
@@ -568,11 +606,43 @@ func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
-			name:       "admin_cross_user",
+			// self_access with no actorId param routes through the self branch
+			// (actorID == "") — Authorizer is NOT needed (no PDP call).
+			name:       "empty_actorId_self_branch_no_authorizer",
+			subject:    "usr-1",
+			roles:      nil,
+			actorID:    "",
+			wantStatus: http.StatusOK,
+		},
+		{
+			// The "other actors" branch now delegates to the PDP via
+			// RequirePermission(PermAuditRead). Callers MUST inject an Authorizer
+			// via auth.WithAuthorizer; without one the policy fails closed → 403.
+			name:       "admin_cross_user_missing_authorizer_failclosed",
 			subject:    "admin-1",
 			roles:      []string{"admin"},
 			actorID:    "usr-2",
-			wantStatus: http.StatusOK,
+			wantStatus: http.StatusForbidden, // fail-closed: no Authorizer in ctx
+		},
+		{
+			// Admin cross-user query with an ALLOW Authorizer in context → 200.
+			name:         "admin_cross_user_allow",
+			subject:      "admin-1",
+			roles:        []string{"admin"},
+			actorID:      "usr-2",
+			withAuthzCtx: withAllowAuthorizer,
+			wantStatus:   http.StatusOK,
+		},
+		{
+			// Admin cross-user query with a DENY Authorizer in context → 403.
+			name:    "admin_cross_user_deny",
+			subject: "admin-1",
+			roles:   []string{"admin"},
+			actorID: "usr-2",
+			withAuthzCtx: func(ctx context.Context) context.Context {
+				return withDenyAuthorizer(ctx, "policy: no matching allow rule")
+			},
+			wantStatus: http.StatusForbidden,
 		},
 	}
 
@@ -585,7 +655,11 @@ func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, url, nil)
 			if tc.subject != "" {
-				req = req.WithContext(auditTestCtx(tc.subject, tc.roles))
+				ctx := auditTestCtx(tc.subject, tc.roles)
+				if tc.withAuthzCtx != nil {
+					ctx = tc.withAuthzCtx(ctx)
+				}
+				req = req.WithContext(ctx)
 			}
 			mux.ServeHTTP(w, req)
 			assert.Equal(t, tc.wantStatus, w.Code)
@@ -742,12 +816,15 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 			wantCount:  -1,
 		},
 		{
-			name:       "other actorId with admin allowed",
-			query:      "?actorId=usr-2",
-			subject:    "admin-user",
-			roles:      []string{"admin"},
-			wantStatus: http.StatusOK,
-			wantCount:  1,
+			// The "other actors" branch now routes through RequirePermission(PermAuditRead).
+			// An ALLOW Authorizer in context is required for the request to succeed.
+			name:         "other actorId with admin and allow authorizer",
+			query:        "?actorId=usr-2",
+			subject:      "admin-user",
+			roles:        []string{"admin"},
+			withAuthzCtx: withAllowAuthorizer,
+			wantStatus:   http.StatusOK,
+			wantCount:    1,
 		},
 		{
 			name:       "no subject returns 401",
@@ -961,9 +1038,11 @@ func TestHandleQuery_TraceIDFilter_EmptyParam(t *testing.T) {
 	}
 
 	// ?traceId= (empty value) must behave as no filter → all rows for the actor.
+	// The admin is querying actorId=usr-ep (another user): the "other actors" branch
+	// is taken, so an ALLOW Authorizer must be in context for the PDP to grant access.
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?actorId=usr-ep&traceId=", nil)
-	req = req.WithContext(auditTestCtx("admin-user", []string{"admin"}))
+	req = req.WithContext(withAllowAuthorizer(auditTestCtx("admin-user", []string{"admin"})))
 	mux.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
@@ -1161,9 +1240,13 @@ type actorBindingCase struct {
 	subject         string
 	roles           []string
 	injectEmptyAuth bool
-	wantStatus      int
-	wantCount       int
-	wantActorIDs    []string
+	// withAuthzCtx optionally wraps the built context to inject an Authorizer.
+	// Required when the test case exercises the "other actors" PDP branch
+	// (actorId set and != subject) and expects a 200 response.
+	withAuthzCtx func(context.Context) context.Context
+	wantStatus   int
+	wantCount    int
+	wantActorIDs []string
 }
 
 func assertActorBindingCase(t *testing.T, mux *http.ServeMux, tc actorBindingCase) {
@@ -1174,7 +1257,11 @@ func assertActorBindingCase(t *testing.T, mux *http.ServeMux, tc actorBindingCas
 	case tc.injectEmptyAuth:
 		req = req.WithContext(auditTestCtx("", tc.roles))
 	case tc.subject != "":
-		req = req.WithContext(auditTestCtx(tc.subject, tc.roles))
+		ctx := auditTestCtx(tc.subject, tc.roles)
+		if tc.withAuthzCtx != nil {
+			ctx = tc.withAuthzCtx(ctx)
+		}
+		req = req.WithContext(ctx)
 	}
 	mux.ServeHTTP(w, req)
 

@@ -20,10 +20,19 @@ import (
 )
 
 // auditQueryPolicy permits the request when:
-//   - actorId query param is empty. List scopes non-admin callers to self and
-//     treats admin callers as tenant-wide queries.
-//   - OR actorId equals authenticated subject (self-access)
-//   - OR subject has the "admin" role
+//   - actorId query param is empty OR equals the authenticated subject (self
+//     branch). This is a request-shape check: it answers "which actor's rows is
+//     the caller asking for?" — it is NOT a role-literal authorization branch.
+//     Row visibility for non-admin callers is governed at the data layer by
+//     RowScope=self (PR-11/PR-12), which restricts store results to actor_id ==
+//     subject regardless of this filter. The self branch returns nil immediately
+//     without consulting the PDP.
+//   - OR the PDP (wired ABAC Authorizer in context) grants authz.PermAuditRead.
+//     When actorId is set and != subject, the caller is asking for another actor's
+//     rows; the authorization decision for that cross-actor read is fully delegated
+//     to the policy engine via auth.RequirePermission(authz.PermAuditRead), which
+//     replaced the role-literal auth.AnyRole(RoleAdmin, RoleSuperAdmin) gate removed
+//     in #914 (PERMISSION-BASED-AUTHZ-01).
 //
 // Tenant isolation (epic #1337 PR-2a, typed param #1618): every query is
 // tenant-scoped. The List adapter always passes the typed tenant.TenantID parsed
@@ -36,8 +45,6 @@ import (
 //
 // SelfOr cannot be used here because "self" is determined by the actorId query
 // parameter, not a path parameter.
-// role-name literal will be migrated to permission-based authz when that work lands.
-// Deferred (S43, tracked by gh issue #914 — PERMISSION-BASED-AUTHZ-01).
 func auditQueryPolicy(r *http.Request) error {
 	ctx := r.Context()
 	p, ok := auth.FromContext(ctx)
@@ -48,7 +55,7 @@ func auditQueryPolicy(r *http.Request) error {
 	if actorID == "" || actorID == p.Subject {
 		return nil
 	}
-	return auth.AnyRole(auth.RoleAdmin, auth.RoleSuperAdmin)(r)
+	return auth.RequirePermission(authz.PermAuditRead)(r)
 }
 
 // logAdminAuditQuery emits an audit-access breadcrumb when an admin queries the
