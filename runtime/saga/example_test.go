@@ -3,6 +3,7 @@ package saga_test
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -12,9 +13,18 @@ import (
 	ksaga "github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/pkg/idutil"
 	obsmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/saga"
+)
+
+// Test-time Duration values live in a package-level const block
+// (TEST-TIME-LITERAL-01), never inline at the call site.
+const (
+	// examplePollInterval shortens the Coordinator's claim cadence so the example
+	// drives its single instance promptly (DefaultConfig uses 200ms).
+	examplePollInterval = 5 * time.Millisecond
+	// exampleSagaTimeout is the overall saga deadline (the Expired ceiling).
+	exampleSagaTimeout = 30 * time.Second
 )
 
 // exampleTxRunner is a minimal in-memory persistence.TxRunner sufficient to run
@@ -59,16 +69,22 @@ func ExampleNewCoordinator() {
 		panic(err)
 	}
 
-	// 2. The saga definition: one forward step that "charges a card".
+	// 2. The saga definition: one forward step that "charges a card". It closes
+	//    stepRan when it runs, letting the example observe forward progress
+	//    without polling (Run executes once on the success path; sync.Once keeps
+	//    the close safe if a copy-paste adaptation ever retries).
+	stepRan := make(chan struct{})
+	var once sync.Once
 	def := &ksaga.Definition{
 		ID: "payment_saga",
 		Steps: []ksaga.Step{{
 			Name: "charge_card",
 			Run: func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+				once.Do(func() { close(stepRan) })
 				return []byte(`{"charged":true}`), nil
 			},
 		}},
-		Timeout: 30 * time.Second,
+		Timeout: exampleSagaTimeout,
 	}
 	reg, err := ksaga.NewInMemoryRegistry(def)
 	if err != nil {
@@ -87,7 +103,7 @@ func ExampleNewCoordinator() {
 	//    so always derive from it) and shorten the poll interval so the tick
 	//    loop claims the enqueued instance promptly.
 	cfg := saga.DefaultConfig()
-	cfg.PollInterval = 5 * time.Millisecond
+	cfg.PollInterval = examplePollInterval
 
 	// 5. Build the Coordinator. One WithObserver / WithTracer reaches both the
 	//    coordinator and the internally-constructed Executor.
@@ -100,7 +116,7 @@ func ExampleNewCoordinator() {
 		panic(err)
 	}
 
-	// 6. Run the control loop, enqueue one instance, and wait for it to finish.
+	// 6. Run the control loop and enqueue one instance.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { _ = coord.Start(ctx) }()
@@ -111,37 +127,23 @@ func ExampleNewCoordinator() {
 		panic(err)
 	}
 
-	final := waitTerminal(ctx, j, inst.ID)
-
-	// Stop drains in-flight work within the supplied budget; context.Background()
-	// suffices for an example, but production should pass a deadline-bounded ctx.
+	// 7. Wait for the step to run, then Stop. Stop drains the in-flight drive —
+	//    including the terminal MarkTerminal write — before it returns, so the
+	//    journal deterministically holds the terminal event afterward, with no
+	//    polling. context.Background() gives Stop an unbounded drain budget;
+	//    production should pass a deadline-bounded ctx.
+	<-stepRan
 	if err := coord.Stop(context.Background()); err != nil {
 		panic(err)
 	}
-	fmt.Println(final)
+
+	// 8. Read the terminal state back via the journal.Reader (Load) — the same
+	//    read path a status-query slice would use.
+	events, err := j.Load(context.Background(), inst.ID)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(events[len(events)-1].Kind)
 	// Output:
 	// saga_succeeded
-}
-
-// waitTerminal tails an instance's event log — the journal.Reader "status-query"
-// pattern (fold Load) — until a terminal event is recorded, returning its kind.
-// It uses the wall clock deliberately (not a clock.Clock): it only observes the
-// Coordinator, which already runs on clock.Real(), so no fake clock is warranted.
-// An Example has no *testing.T, so it panics after a generous real-time deadline
-// to fail loudly instead of hanging.
-func waitTerminal(ctx context.Context, r journal.Reader, id idutil.SafeID) journal.EventKind {
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		events, err := r.Load(ctx, id)
-		if err != nil {
-			panic(err)
-		}
-		if n := len(events); n > 0 && events[n-1].Kind.IsTerminal() {
-			return events[n-1].Kind
-		}
-		if time.Now().After(deadline) {
-			panic("saga did not reach a terminal state in time")
-		}
-		time.Sleep(time.Millisecond)
-	}
 }

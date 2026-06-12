@@ -11,6 +11,15 @@ import (
 	"github.com/ghbvf/gocell/runtime/saga/executor"
 )
 
+// Test-time Duration values live in a package-level const block
+// (TEST-TIME-LITERAL-01), never inline at the call site. Both equal the
+// executor package defaults (DefaultHeartbeatInterval / DefaultLeaseDuration);
+// passed explicitly only to illustrate the options.
+const (
+	exampleHeartbeatInterval = 10 * time.Second
+	exampleLeaseDuration     = 30 * time.Second
+)
+
 // exampleHeartbeater is a minimal executor.Heartbeater for the example: it
 // always reports the lease as still held. A production Heartbeater renews the
 // lease against the saga journal — any journal.Journal satisfies the interface
@@ -33,10 +42,8 @@ func ExampleNewExecutor() {
 
 	exec, err := executor.NewExecutor(exampleHeartbeater{}, clk,
 		executor.WithObserver(executor.NopObserver{}),
-		// Both durations equal the package defaults (DefaultHeartbeatInterval /
-		// DefaultLeaseDuration); passed explicitly only to illustrate the options.
-		executor.WithHeartbeatInterval(10*time.Second),
-		executor.WithLeaseDuration(30*time.Second),
+		executor.WithHeartbeatInterval(exampleHeartbeatInterval),
+		executor.WithLeaseDuration(exampleLeaseDuration),
 	)
 	if err != nil {
 		panic(err)
