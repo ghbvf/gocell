@@ -988,7 +988,7 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
       - name: Vet (cross-platform unit subset)
-        run: go vet ./runtime/shutdown/... ./runtime/config/... ./pkg/fspath/... ./pkg/pathsafe/...
+        run: go vet ./runtime/shutdown/... ./runtime/config/... ./kernel/governance/... ./pkg/fspath/... ./pkg/pathsafe/...
         shell: bash
 
       - name: Cross-platform unit smoke
@@ -996,9 +996,9 @@ jobs:
         # Enable -race on macOS to maximise race-detector coverage.
         run: |
           if [ "${{ matrix.os }}" = "macos-latest" ]; then
-            go test -race -count=1 -timeout 5m ./runtime/shutdown/... ./runtime/config/... ./pkg/fspath/... ./pkg/pathsafe/...
+            go test -race -count=1 -timeout 5m ./runtime/shutdown/... ./runtime/config/... ./kernel/governance/... ./pkg/fspath/... ./pkg/pathsafe/...
           else
-            go test -count=1 -timeout 5m ./runtime/shutdown/... ./runtime/config/... ./pkg/fspath/... ./pkg/pathsafe/...
+            go test -count=1 -timeout 5m ./runtime/shutdown/... ./runtime/config/... ./kernel/governance/... ./pkg/fspath/... ./pkg/pathsafe/...
           fi
         shell: bash
 
