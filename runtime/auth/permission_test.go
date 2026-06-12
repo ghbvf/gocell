@@ -239,3 +239,115 @@ func TestRequirePermission_HTTPIntegration_AllowDeny(t *testing.T) {
 		})
 	}
 }
+
+// --- RequirePermissionOrSelf: request-shape self-exemption + PDP delegation ---
+//
+// The self-exemption and the PDP delegation form a non-vacuous pair: inverting
+// the self-check would flip both TestRequirePermissionOrSelf_Self_ExemptWithoutPDP
+// (self would hit the deny PDP → 403) and _NonSelfNonAdmin_PDPDeny (non-self would
+// exempt → nil), so neither can pass while the other is broken.
+
+const (
+	roselfSubjectA = "11111111-1111-1111-1111-111111111111"
+	roselfOtherB   = "22222222-2222-2222-2222-222222222222"
+)
+
+func TestRequirePermissionOrSelf_Self_ExemptWithoutPDP(t *testing.T) {
+	// A subject naming itself in the path is exempt: even a DENY Authorizer must
+	// not be consulted — the gate returns nil before delegating to the PDP.
+	p := &Principal{Kind: PrincipalUser, Subject: roselfSubjectA, Roles: []string{"user"}}
+	deny := &mockAuthorizer{allowed: false}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/"+roselfSubjectA, nil)
+	req.SetPathValue("id", roselfSubjectA)
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), deny))
+
+	err := RequirePermissionOrSelf("id", authz.PermUserRead())(req)
+	assert.NoError(t, err, "self-access (param==subject) must be exempt without consulting the PDP")
+}
+
+func TestRequirePermissionOrSelf_NonSelfAdmin_PDPAllow(t *testing.T) {
+	p := &Principal{Kind: PrincipalUser, Subject: "admin-1", Roles: []string{"admin"}}
+	allow := &mockAuthorizer{allowed: true}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/"+roselfOtherB, nil)
+	req.SetPathValue("id", roselfOtherB)
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), allow))
+
+	err := RequirePermissionOrSelf("id", authz.PermUserRead())(req)
+	assert.NoError(t, err, "non-self admin must pass via PDP allow")
+}
+
+func TestRequirePermissionOrSelf_NonSelfNonAdmin_PDPDeny(t *testing.T) {
+	p := &Principal{Kind: PrincipalUser, Subject: roselfSubjectA, Roles: []string{"user"}}
+	deny := &mockAuthorizer{allowed: false}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/"+roselfOtherB, nil)
+	req.SetPathValue("id", roselfOtherB)
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), deny))
+
+	err := RequirePermissionOrSelf("id", authz.PermUserRead())(req)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "deny must return an errcode.Error")
+	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind, "non-self non-admin must be denied by the PDP (403)")
+}
+
+func TestRequirePermissionOrSelf_NonSelfNoAuthorizer_FailClosed(t *testing.T) {
+	p := &Principal{Kind: PrincipalUser, Subject: roselfSubjectA, Roles: []string{"user"}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/"+roselfOtherB, nil)
+	req.SetPathValue("id", roselfOtherB)
+	req = req.WithContext(WithPrincipal(req.Context(), p)) // no Authorizer wired
+
+	err := RequirePermissionOrSelf("id", authz.PermUserRead())(req)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind, "non-self with no Authorizer must fail closed (403)")
+}
+
+func TestRequirePermissionOrSelf_EmptyParam_NotExempt(t *testing.T) {
+	// Empty path value ≠ self (tenancy.md): must fall through to the PDP. A deny
+	// Authorizer (403) proves the PDP was consulted rather than self-exempted.
+	p := &Principal{Kind: PrincipalUser, Subject: roselfSubjectA, Roles: []string{"user"}}
+	deny := &mockAuthorizer{allowed: false}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/", nil)
+	// no SetPathValue("id", ...) → empty path value
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), deny))
+
+	err := RequirePermissionOrSelf("id", authz.PermUserRead())(req)
+	require.Error(t, err, "empty param must not self-exempt; PDP deny → 403")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind)
+}
+
+func TestRequirePermissionOrSelf_NonUUIDParamMismatch_NotExempt(t *testing.T) {
+	// A non-UUID path value that does not equal the subject must not self-exempt;
+	// it falls through to the PDP (deny → 403).
+	p := &Principal{Kind: PrincipalUser, Subject: roselfSubjectA, Roles: []string{"user"}}
+	deny := &mockAuthorizer{allowed: false}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/not-a-uuid", nil)
+	req.SetPathValue("id", "not-a-uuid")
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), deny))
+
+	err := RequirePermissionOrSelf("id", authz.PermUserRead())(req)
+	require.Error(t, err, "non-self non-UUID param must not self-exempt; PDP deny → 403")
+}
+
+func TestRequirePermissionOrSelf_ServicePrincipal_NotExempt(t *testing.T) {
+	// A non-user principal never self-exempts even if its Subject coincides with
+	// the path value — service/anonymous fall through to the PDP (fail-closed).
+	p := &Principal{Kind: PrincipalService, Subject: roselfSubjectA}
+	deny := &mockAuthorizer{allowed: false}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/"+roselfSubjectA, nil)
+	req.SetPathValue("id", roselfSubjectA)
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), deny))
+
+	err := RequirePermissionOrSelf("id", authz.PermUserRead())(req)
+	require.Error(t, err, "service principal must not self-exempt; PDP deny → 403")
+}

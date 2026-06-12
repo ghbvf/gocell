@@ -38,6 +38,29 @@ func TestConfigcorePermissions_String(t *testing.T) {
 	}
 }
 
+// TestAccesscorePermissions_String pins the exact action spelling of every
+// accesscore permission minted in PR-10c. The action string IS the wire value
+// carried into the PDP and matched against baseline rule Action targets, so a typo
+// here silently breaks the gate↔baseline binding.
+func TestAccesscorePermissions_String(t *testing.T) {
+	cases := []struct {
+		name string
+		perm Permission
+		want string
+	}{
+		{"PermPolicyRead", PermPolicyRead(), "policy:read"},
+		{"PermPolicyWrite", PermPolicyWrite(), "policy:write"},
+		{"PermUserRead", PermUserRead(), "user:read"},
+		{"PermUserWrite", PermUserWrite(), "user:write"},
+		{"PermRoleRead", PermRoleRead(), "role:read"},
+	}
+	for _, tc := range cases {
+		if got := tc.perm.String(); got != tc.want {
+			t.Errorf("%s.String() = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 // TestPermAuditRead_StableIdentity pins that the accessor returns the closed
 // registry's private singleton (the F6 immutability contract: an external package
 // cannot reassign or fork the registry value because PermAuditRead is a function,
@@ -73,6 +96,29 @@ func TestConfigcorePermissions_StableIdentity(t *testing.T) {
 	}
 }
 
+// TestAccesscorePermissions_StableIdentity pins that each accesscore accessor
+// returns the same package-private singleton on every call (the F6 immutability
+// contract: function accessors are not reassignable, so the registry value is
+// immutable to external packages).
+func TestAccesscorePermissions_StableIdentity(t *testing.T) {
+	cases := []struct {
+		name      string
+		got       Permission
+		singleton Permission
+	}{
+		{"PermPolicyRead", PermPolicyRead(), permPolicyRead},
+		{"PermPolicyWrite", PermPolicyWrite(), permPolicyWrite},
+		{"PermUserRead", PermUserRead(), permUserRead},
+		{"PermUserWrite", PermUserWrite(), permUserWrite},
+		{"PermRoleRead", PermRoleRead(), permRoleRead},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.singleton {
+			t.Errorf("%s() must return the package-private singleton (stable on every call)", tc.name)
+		}
+	}
+}
+
 func TestPermission_ZeroValueIsInvalid(t *testing.T) {
 	var zero Permission
 	if !zero.IsZero() {
@@ -91,8 +137,8 @@ func TestPermissions_ClosedRegistry(t *testing.T) {
 	// Pin the closed set: PR-10a seeds exactly one permission. A new Perm* var
 	// that forgets to enroll in allPermissions (or an accidental extra) trips
 	// this — the anti-vacuity guard for the closed registry.
-	if len(perms) != 6 {
-		t.Fatalf("Permissions() len = %d, want 6 (PR-10a PermAuditRead + PR-10b configcore 5)", len(perms))
+	if len(perms) != 11 {
+		t.Fatalf("Permissions() len = %d, want 11 (PR-10a PermAuditRead + PR-10b configcore 5 + PR-10c accesscore 5)", len(perms))
 	}
 	if perms[0].String() != "audit:read" {
 		t.Fatalf("Permissions()[0] = %q, want audit:read", perms[0].String())
@@ -141,9 +187,9 @@ func TestPermissions_AccessorsEnrolled(t *testing.T) {
 	accessorActions := parsePermissionAccessorActions(t) // action -> accessor name
 
 	// Anti-vacuity: a parser regression that finds nothing must fail, not pass.
-	if len(accessorActions) < 6 {
-		t.Fatalf("self-discovery found %d Perm*() accessors in permission.go, want ≥6 "+
-			"(PermAuditRead + 5 configcore) — the parser likely regressed", len(accessorActions))
+	if len(accessorActions) < 11 {
+		t.Fatalf("self-discovery found %d Perm*() accessors in permission.go, want ≥11 "+
+			"(PermAuditRead + 5 configcore + 5 accesscore) — the parser likely regressed", len(accessorActions))
 	}
 
 	registry := map[string]struct{}{}
