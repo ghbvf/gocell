@@ -18,7 +18,10 @@ import (
 const rabbitMQStartupTimeout = 30 * time.Second
 
 // StartRabbitMQContainer starts a RabbitMQ testcontainer with the shared
-// readiness contract used by all integration tests.
+// readiness contract used by all integration tests. Unlike
+// minioctr.StartMinIOContainer, this helper does NOT register t.Cleanup —
+// the caller owns the returned container's lifetime and MUST Terminate it in
+// its own cleanup path.
 func StartRabbitMQContainer(t *testing.T, ctx context.Context) *tcrabbitmq.RabbitMQContainer {
 	t.Helper()
 	container, err := StartRabbitMQContainerE(t, ctx)
@@ -26,11 +29,16 @@ func StartRabbitMQContainer(t *testing.T, ctx context.Context) *tcrabbitmq.Rabbi
 	return container
 }
 
+// StartRabbitMQContainerE is the error-returning variant of StartRabbitMQContainer.
+// Unlike minioctr.StartMinIOContainer, this helper does NOT register t.Cleanup —
+// the caller owns the returned container's lifetime and MUST Terminate it in
+// its own cleanup path.
 func StartRabbitMQContainerE(t *testing.T, ctx context.Context) (*tcrabbitmq.RabbitMQContainer, error) {
 	t.Helper()
 	testutil.RequireDocker(t)
 
-	return tcrabbitmq.Run(ctx, testutil.RabbitMQImage,
+	return tcrabbitmq.Run(
+		ctx, testutil.RabbitMQImage,
 		testcontainers.WithAdditionalWaitStrategy(
 			wait.ForListeningPort(tcrabbitmq.DefaultAMQPPort).
 				WithStartupTimeout(rabbitMQStartupTimeout),

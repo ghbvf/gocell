@@ -26,11 +26,14 @@
 # so the Hard ceiling (violation un-expressible / compile-or-golden break) is
 # unreachable here — a require line can always be hand-added; CI catches it.
 #
-# Blind spots (documented, not silently absent): only the edges enumerated below are
-# locked. A test-only dep leaking into a DIFFERENT module, or a NEW heavy backend
-# added to `tests/testutil`, is not auto-covered — extend the table when adding
-# backends or adapters. The detector is path-exact (quoted full module path), so a
-# vanity-renamed fork of the same dependency would not be caught.
+# Blind spots (documented, not silently absent): all adapter modules declared in
+# go.work are now auto-enumerated via gocell::modules::dirs, so adding a new adapter
+# to go.work automatically brings it under the minio/rabbitmq forbid checks with zero
+# hardcoded-list maintenance. Remaining blind spots: non-adapter modules (root,
+# corecells, cellmodules, examples) are not covered; and a NEW heavy backend beyond
+# minio/rabbitmq/prometheus would need a new forbid table entry. The detector is
+# path-exact (quoted full module path), so a vanity-renamed fork of the same
+# dependency would not be caught.
 
 set -euo pipefail
 
@@ -38,6 +41,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 # shellcheck source=lib/util.sh
 source hack/lib/util.sh
+# shellcheck source=lib/modules.sh
+source hack/lib/modules.sh
 
 fail=0
 
@@ -78,18 +83,24 @@ gocell::log::status "Checking adapter module graphs for leaked test-only edges"
 readonly MINIO="github.com/testcontainers/testcontainers-go/modules/minio"
 readonly RABBITMQ="github.com/testcontainers/testcontainers-go/modules/rabbitmq"
 
-# #1908 — minio/rabbitmq testcontainer modules must not leak into adapters that only
-# consume the generic (backend-agnostic) tests/testutil helpers.
-for dir in adapters/postgres adapters/redis adapters/otel adapters/vault adapters/mqtt; do
-    forbid "${dir}" "${MINIO}"
-    forbid "${dir}" "${RABBITMQ}"
-done
+# #1908 — minio/rabbitmq testcontainer modules must not leak into any adapter that
+# does not rightfully own that backend. Enumerate ALL adapter modules from the
+# canonical workspace funnel (go.work via gocell::modules::dirs) so future adapters
+# are covered automatically without extending this table.
+if ! _all_modules="$(gocell::modules::dirs)"; then
+    gocell::log::error "workspace module enumeration failed — cannot evaluate adapter module graphs"
+    exit 1
+fi
+while IFS= read -r _mod; do
+    # Keep only entries matching ./adapters/* (strip leading ./).
+    [[ "${_mod}" == ./adapters/* ]] || continue
+    dir="${_mod#./}"
 
-# #1908 (cross-backend) — each backend's own adapter must carry ONLY its backend, not
-# the sibling one (s3 used minio yet inherited rabbitmq; rabbitmq used rabbitmq yet
-# inherited minio — both via the shared tests/testutil package).
-forbid adapters/s3 "${RABBITMQ}"
-forbid adapters/rabbitmq "${MINIO}"
+    # Every adapter must NOT contain the sibling backend's testcontainer module,
+    # unless it IS that backend's rightful owner.
+    [[ "${dir}" == "adapters/s3" ]] || forbid "${dir}" "${MINIO}"
+    [[ "${dir}" == "adapters/rabbitmq" ]] || forbid "${dir}" "${RABBITMQ}"
+done <<< "${_all_modules}"
 
 # #1909 — vault tests must not pull the prometheus adapter or its client into the
 # vault module graph (replaced by an adapter-local recording metrics.Provider).

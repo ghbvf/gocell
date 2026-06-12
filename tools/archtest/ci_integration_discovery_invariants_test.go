@@ -173,6 +173,7 @@ func TestArchtest_CIIntegrationDiscovery_DiscoversIntegrationPackages(t *testing
 		"tests/testutil/minioctr",
 		"tests/testutil/rabbitmqctr",
 		"tests/testutil/pgshare",
+		"tests/testutil/pgclone",
 	}
 	for _, s := range sentinels {
 		assert.Contains(t, pkgs, s,

@@ -61,8 +61,9 @@ func TestNewTransitMetrics_NilProvider_ReturnsError(t *testing.T) {
 func TestNewTransitMetrics_RegistersAllCollectors(t *testing.T) {
 	rec, m := buildTestMetrics(t)
 
-	// Seed loginOutcome so its CounterVec family appears (CounterVec families
-	// are absent until at least one labeled child is observed).
+	// All families are registered at NewTransitMetrics construction (the fake
+	// records the family name in CounterVec/GaugeVec); this call additionally
+	// exercises the labeled counter path.
 	m.recordLoginOutcome(context.Background(), "token", "success", "none")
 
 	want := []string{

@@ -149,7 +149,9 @@ type recPoint struct {
 	key string
 }
 
-func (c recPoint) Inc(ctx context.Context)          { c.Add(ctx, 1) }
+func (c recPoint) Inc(ctx context.Context) { c.Add(ctx, 1) }
+
+// Dec satisfies metrics.Gauge; metrics.Counter has no Dec, so it is unreachable on the counter path.
 func (c recPoint) Dec(ctx context.Context)          { c.Add(ctx, -1) }
 func (c recPoint) Add(_ context.Context, d float64) { c.p.add(c.key, d) }
 func (c recPoint) Set(_ context.Context, v float64) { c.p.set(c.key, v) }
