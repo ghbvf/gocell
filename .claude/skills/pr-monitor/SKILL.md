@@ -130,6 +130,8 @@ ROUND=$(bash hack/automation/pr-meta.sh round "$PR" 2>/dev/null || echo 0)
 Skill("fix", args="<N>")
 ```
 
+> auto 模式的 `Skill("fix")` 是 **human-approved loop 内**的自动操作——用户已显式 `--mode=auto` 启动 `/loop`，非无监督自主执行；且仅在上表全部窄条件成立（Cx1-only / IN_SCOPE / ≤2 文件 / 非禁止域）时触发。
+
 fix 会贴 pm:fix + 切 `pr-status/needs-check-fix`；下个 `/loop` tick 继续等 `/pr-review --check` 结论（非终止）。
 
 ### §3.5 不自动修的情况（报告 + 建议人工，不 AskUserQuestion）
@@ -193,6 +195,7 @@ review 结果由 /pr-review 贴评论 + 切 label；下个 `/loop` tick 继续�
 |------|------------|
 | report | 无（只读 + 窗口打印） |
 | auto | §3.4 满足时 `Skill("fix")`；§3.6 冲突时 git merge + push；§3.7 贴 `ai/local-fix` label |
+| `--role=review` | §4 调 `claude -p "/pr-review"`；review 贴 pm:pr-review 评论 + 切 label 由 /pr-review 完成（非 pr-monitor 自身） |
 
 **label 切换**：pr-monitor 不直接切 `pr-status/*`（由 /fix 或 /pr-review 完成）。唯一例外：§3.7 贴 `ai/local-fix`。
 

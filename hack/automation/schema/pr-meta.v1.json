@@ -179,11 +179,15 @@
       "properties": {
         "items": {
           "type": "array",
-          "description": "Per-finding OOS records. Each item carries the full finding detail plus its disposition: exactly one of a filed `issue` ref or a closed-enum `deferred` reason (the XOR is enforced by pr-meta.sh validate_kind_facts, since this walker does not express oneOf).",
+          "description": "Per-finding OOS records. Each item carries the full finding detail plus its disposition: exactly one of a filed `issue` ref or a closed-enum `deferred` reason. The XOR is declared here in oneOf (schema single source) AND enforced in pr-meta.sh validate_kind_facts on emit+decode. Note: the funnel guarantees a disposition is present, not that it is correct (a real filed issue / right labels) — that is the ship/fix skill's responsibility, not machine-checked.",
           "items": {
             "type": "object",
             "additionalProperties": false,
             "required": ["fileLine", "rootCause", "solutionSeeds"],
+            "oneOf": [
+              { "required": ["issue"] },
+              { "required": ["deferred"] }
+            ],
             "properties": {
               "fileLine": {
                 "type": "string",

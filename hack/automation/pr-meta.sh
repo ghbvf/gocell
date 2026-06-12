@@ -106,12 +106,17 @@ MARKER = "gocell-pr-meta:v1"
 BLOCK_RE = re.compile(r"<!--\s*gocell-pr-meta:v1\s+([A-Za-z0-9+/=]+)\s*-->")
 MAX_ROUNDS = 3  # sealed circuit-breaker ceiling; producer facts cannot raise it
 DERIVED_KEYS = ("schema", "next", "idempotencyKey")  # cycle.maxRounds/exhausted also derived
-# OOS disposition funnel (Hard): every pm:oos items[] entry must carry exactly
-# one of a filed `issue` ref XOR a closed-enum `deferred` reason, so a
-# silently-dropped OOS finding (an item with neither) is unrepresentable — emit
-# and decode both reject it. ship/fix therefore cannot post a pm:oos comment
-# without having auto-filed an issue or explicitly deferred each finding. The
-# closed enum keeps the defer escape hatch machine-bounded (no free-text bypass).
+# OOS disposition funnel: every pm:oos items[] entry must carry exactly one of a
+# filed `issue` ref XOR a closed-enum `deferred` reason. Declared in the schema
+# (oos.items.oneOf) and enforced in validate_kind_facts on BOTH emit and decode,
+# golden-locked by do_selftest — so an item with NEITHER disposition is
+# unrepresentable on the wire (emit-block exits 1; decode drops the block). That
+# makes "silently dropping an OOS finding" a Hard, machine-rejected state, and
+# the closed enum keeps the defer escape hatch bounded (no free-text bypass).
+# Honest scope: the funnel guarantees a disposition is PRESENT, not that it is
+# CORRECT — that `issue` resolves to a real filed issue, or that the backlog
+# labels were derived right, is the ship/fix skill's responsibility and is NOT
+# machine-verified here (that part stays skill-side).
 OOS_DEFERRED_REASONS = ("pri-p0-incident", "labels-underivable")
 ZERO_FINDINGS = {
     "total": 0, "fixed": 0, "unresolved": 0, "blocking": 0,
@@ -156,9 +161,10 @@ def type_ok(obj, t):
 
 # validate is a bounded recursive validator covering exactly the JSON Schema
 # keywords pr-meta.v1.json uses (type/const/enum/pattern/minLength/minimum/
-# required/properties/additionalProperties). The schema file stays the single
-# source of truth — this walker reads it, it does not hard-code field lists.
-# Array items are validated recursively when the schema has type:array + items.
+# required/properties/additionalProperties/oneOf). The schema file stays the
+# single source of truth — this walker reads it, it does not hard-code field
+# lists. Array items are validated recursively when the schema has
+# type:array + items; oneOf requires exactly one matching branch.
 def validate(obj, schema, path="$"):
     errs = []
     if "const" in schema:
@@ -173,6 +179,13 @@ def validate(obj, schema, path="$"):
     if t is not None and not type_ok(obj, t):
         errs.append("%s: expected type %r, got %s" % (path, t, type(obj).__name__))
         return errs
+    if "oneOf" in schema:
+        # Exactly one branch must match. Used by oos.items to declare the
+        # issue-XOR-deferred disposition in the schema itself (so the constraint
+        # has a schema single source, not only the Python validate_kind_facts).
+        matched = sum(1 for sub in schema["oneOf"] if not validate(obj, sub, path))
+        if matched != 1:
+            errs.append("%s: matched %d oneOf branches, expected exactly 1" % (path, matched))
     if isinstance(obj, dict):
         props = schema.get("properties", {})
         for req in schema.get("required", []):
@@ -553,9 +566,9 @@ def do_selftest(schema):
     # selftest rather than printing "OK (N checks)" with a lower-than-expected N.
     # Update this constant whenever a check is added or removed. Breakdown:
     #   9 round-trip + 2 five-state + 4 schema-reject + 4 forgery + 1 incoherent
-    #   + 1 oos-array + 1 ci-array + 2 exhausted + 22 emitblock-derive
-    #   + 5 kind-coverage + 9 kind-facts-contract + 4 oos-disposition = 64
-    EXPECTED_CHECKS = 64
+    #   + 1 oos-array + 1 ci-array + 2 exhausted + 18 emitblock-derive
+    #   + 5 kind-coverage + 13 kind-facts-contract + 5 oos-disposition = 65
+    EXPECTED_CHECKS = 65
 
     checks = 0
     failures = []
@@ -1002,6 +1015,19 @@ def do_selftest(schema):
         payload = base64.b64encode(canon(obj).encode("utf-8")).decode("ascii")
         block_line = "<!-- %s %s -->" % (MARKER, payload)
         assert_decode_fails(name, block_line)
+    except Exception as e:
+        failures.append("FAIL [%s]: %s" % (name, e))
+
+    # schema-layer: the validate() walker's oneOf rejects an undispositioned item
+    # directly — the XOR has a schema single source, not only validate_kind_facts
+    name = "oos-disposition/schema-oneof-walker"
+    try:
+        item_schema = schema["properties"]["oos"]["properties"]["items"]["items"]
+        walker_errs = validate(_oos_item(), item_schema)
+        checks += 1
+        if not any("oneOf" in e for e in walker_errs):
+            failures.append("FAIL [%s]: walker did not flag undispositioned item via oneOf: %r"
+                            % (name, walker_errs))
     except Exception as e:
         failures.append("FAIL [%s]: %s" % (name, e))
 
