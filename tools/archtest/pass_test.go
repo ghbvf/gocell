@@ -1409,23 +1409,34 @@ func TestRun_Production_excludesGeneratedPackages(t *testing.T) {
 		t.Errorf("Run(t, Production(...)) invoked rule %d times over %d files; expected ≥ 1 of each", calls, files)
 	}
 
-	// Contra-positive: Run(t, Typed(...), ./...) must see ≥1 generated/ file
-	// so the exclusion above is non-vacuous (there is actually something to
-	// filter).
-	var generatedCount int
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./..."}), func(p *Pass) []Diagnostic {
-		for _, f := range p.Files {
-			if strings.HasPrefix(p.Rel(f), "generated/") {
-				generatedCount++
-			}
+	// Contra-positive: the workspace production resolver (the loader behind
+	// Run(t, Production(...))) must surface ≥1 generated/ package in its full
+	// set that the production partition drops — else the exclusion above is
+	// vacuous. Since #1564 made generated/ its own module, a root-relative
+	// Run(t, Typed(./...)) (single-module, GOWORK=off) no longer reaches it, so
+	// non-vacuity is proven through the same workspace resolver Production uses.
+	root := findModuleRoot(t)
+	modules := findWorkspaceModules(t, root)
+	resolver, err := typeseval.LoadProductionPackages(root, modules, false, nil)
+	if err != nil {
+		t.Fatalf("LoadProductionPackages: %v", err)
+	}
+	prod := make(map[string]bool)
+	for _, p := range resolver.Production() {
+		if p != nil {
+			prod[p.PkgPath] = true
 		}
-		return nil
-	})
-
+	}
+	var generatedCount int
+	for _, p := range resolver.All() {
+		if p != nil && strings.Contains(p.PkgPath, "/generated/") && !prod[p.PkgPath] {
+			generatedCount++
+		}
+	}
 	if generatedCount == 0 {
-		t.Errorf("contra-positive failed: Run(t, Typed(...), ./...) found 0 generated/ files — " +
-			"the module has no generated/ packages, so Run(t, Production(...))'s exclusion " +
-			"filter is vacuous and the above assertions prove nothing")
+		t.Errorf("contra-positive failed: the workspace production resolver found 0 generated/ " +
+			"packages absent from Production() — the generated/ exclusion is vacuous and the " +
+			"assertions above prove nothing")
 	}
 }
 
