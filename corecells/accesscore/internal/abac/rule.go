@@ -24,6 +24,12 @@ type Rule struct {
 	Effect authz.Effect
 	// Conditions are AND-combined predicates. Zero conditions = unconditional match.
 	Conditions []Condition
+	// Action, when non-empty, restricts this rule to requests whose action is in
+	// the set (e.g. {"audit:read"}). EMPTY = untargeted: the rule applies to every
+	// action (preserving the pre-PR-10 evaluate-all semantics of existing
+	// tenant-authored policies). This is the first-class action target that
+	// condition.go deliberately deferred under YAGNI — PR-10 is the "real need".
+	Action []string
 	// Obligations are mandatory PEP actions on an Allow decision.
 	// See Obligations.Validate() for the zero-value semantics.
 	Obligations authz.Obligations

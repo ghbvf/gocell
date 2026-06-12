@@ -166,7 +166,8 @@ func (s *Service) Authorize(ctx context.Context, subject, resource, action strin
 		resourceAttrs: inputs.resourceAttrs,
 	}
 
-	dec := s.evaluate(inputs.policies, resolver)
+	baseline := builtinBaselineRules()
+	dec := s.evaluate(inputs.policies, resolver, action)
 	s.logger.Debug(
 		"authorization decision",
 		slog.String("subject", subject),
@@ -174,6 +175,7 @@ func (s *Service) Authorize(ctx context.Context, subject, resource, action strin
 		slog.String("action", action),
 		slog.Bool("allowed", dec.IsAllow()),
 		slog.Int("policy_count", len(inputs.policies)),
+		slog.Int("baseline_count", len(baseline)),
 	)
 	return dec, nil
 }

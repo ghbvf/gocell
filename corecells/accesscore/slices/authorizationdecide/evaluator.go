@@ -2,13 +2,20 @@ package authorizationdecide
 
 import (
 	"log/slog"
+	"slices"
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/abac"
 	"github.com/ghbvf/gocell/pkg/authz"
 )
 
 // evaluate applies the default-deny + forbid-wins combining algorithm over every
-// rule of every tenant policy, and returns the sealed authz.Decision.
+// rule of every tenant policy (plus the built-in baseline rules) and returns the
+// sealed authz.Decision.
+//
+// A rule is considered only when its action gate passes: len(rule.Action)==0 (the
+// rule is untargeted and applies to every action, preserving pre-PR-10 semantics)
+// OR slices.Contains(rule.Action, action). The existing matchAllConditions gate
+// must also hold. Both checks must pass for a rule to fire.
 //
 // This is the SOLE construction site of authz.Allow / authz.Deny in the whole
 // repository (caller-allowlist AUTHZ-DECISION-ALLOW-DENY-CALLER-01, the Hard
@@ -16,24 +23,24 @@ import (
 // Allow/Deny here is a genuine policy verdict; infrastructure failures are
 // handled in Authorize, which returns a zero Decision (fail-closed) without
 // touching Allow/Deny.
-func (s *Service) evaluate(policies []*abac.Policy, r attributeResolver) authz.Decision {
+func (s *Service) evaluate(policies []*abac.Policy, r attributeResolver, action string) authz.Decision {
 	var permitObligations []authz.Obligations
+
+	// Baseline rules are evaluated first; tenant policies follow.
+	// Forbid-wins is global: a deny anywhere is final.
+	for _, rule := range builtinBaselineRules() {
+		if done, dec := applyRule(rule, r, action, &permitObligations); done {
+			return dec
+		}
+	}
 	for _, p := range policies {
 		for i := range p.Rules {
-			rule := p.Rules[i]
-			if !matchAllConditions(rule.Conditions, r) {
-				continue
-			}
-			switch rule.Effect {
-			case authz.EffectDeny:
-				// forbid-wins: a single matching deny is final, regardless of
-				// any matching permits (XACML §7.16 / Cedar).
-				return authz.Deny("authorization-decide: denied by policy (forbid-wins)")
-			case authz.EffectAllow:
-				permitObligations = append(permitObligations, rule.Obligations)
+			if done, dec := applyRule(p.Rules[i], r, action, &permitObligations); done {
+				return dec
 			}
 		}
 	}
+
 	if len(permitObligations) == 0 {
 		// default-deny: no rule granted access.
 		return authz.Deny("authorization-decide: no applicable permit (default-deny)")
@@ -46,6 +53,27 @@ func (s *Service) evaluate(policies []*abac.Policy, r attributeResolver) authz.D
 		return authz.Deny("authorization-decide: invalid obligations")
 	}
 	return dec
+}
+
+// applyRule tests the action gate and condition gate for a single rule, then
+// handles the effect. It appends to *permits on Allow, and returns (true, Deny)
+// on the first matching Deny (forbid-wins early exit). It returns (false, {}) when
+// the rule does not fire (gate miss or unknown effect).
+func applyRule(rule abac.Rule, r attributeResolver, action string, permits *[]authz.Obligations) (done bool, dec authz.Decision) {
+	if len(rule.Action) > 0 && !slices.Contains(rule.Action, action) {
+		return false, authz.Decision{}
+	}
+	if !matchAllConditions(rule.Conditions, r) {
+		return false, authz.Decision{}
+	}
+	switch rule.Effect {
+	case authz.EffectDeny:
+		// forbid-wins: a single matching deny is final (XACML §7.16 / Cedar).
+		return true, authz.Deny("authorization-decide: denied by policy (forbid-wins)")
+	case authz.EffectAllow:
+		*permits = append(*permits, rule.Obligations)
+	}
+	return false, authz.Decision{}
 }
 
 // matchAllConditions reports whether every condition matches (AND-combined). A
