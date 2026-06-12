@@ -62,7 +62,16 @@ const pdpAuditPath = "/api/v1/audit/entries"
 // production cost (~12) takes ~1-2s per hash for setup/login.
 var pdpAuditClient = &http.Client{Timeout: testtime.SelectAsyncSettle}
 
-func TestABACPDPGatesAuditQuery(t *testing.T) {
+// startCorebundlePDPApp boots a full corebundle app (ac+cc+auc) with the ABAC
+// PDP wired to the primary listener via bootstrap.PrimaryAuthorizerOption. It
+// returns the base URL of the running app. The caller's t.Cleanup will cancel
+// the context and wait for graceful shutdown.
+//
+// This helper is shared by TestABACPDPGatesAuditQuery and
+// TestABACPDPGatesConfigcore so that app assembly is not duplicated.
+func startCorebundlePDPApp(t *testing.T) string {
+	t.Helper()
+
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	healthLn := newCorebundleLocalListener(t)
@@ -167,7 +176,7 @@ func TestABACPDPGatesAuditQuery(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- app.Run(ctx) }()
-	defer func() {
+	t.Cleanup(func() {
 		cancel()
 		select {
 		case runErr := <-done:
@@ -175,28 +184,49 @@ func TestABACPDPGatesAuditQuery(t *testing.T) {
 		case <-time.After(testtime.SelectShutdown):
 			t.Fatal("bootstrap did not shut down in time")
 		}
-	}()
+	})
 
 	base := "http://" + ln.Addr().String()
 	waitForHealthy(t, healthLn.Addr().String())
+	return base
+}
 
-	// Step 1: bootstrap admin (Basic Auth) so that an admin account exists.
-	// Capture the admin's UUID from the response — used as the "other actor"
-	// in the non-admin cross-actor assertion.
+// provisionPDPAdminAndUser runs the four-step provisioning sequence used by
+// both PDP gate tests:
+//  1. Bootstrap admin via Basic Auth → capture adminID
+//  2. Admin login → adminToken
+//  3. Admin creates a regular user → capture userID
+//  4. User login → userToken
+//
+// Returns (adminToken, userToken, userID, adminID).
+func provisionPDPAdminAndUser(t *testing.T, base string) (adminToken, userToken, userID, adminID string) {
+	t.Helper()
+
+	const pdpBootstrapUser = "pdp-test-op"
+	const pdpBootstrapPass = "pdp-test-op-pass!"
 	const pdpAdminUsername = "pdp-admin"
 	const pdpAdminPassword = "PdpAdminPass!1"
-	adminUserID := pdpSetupAdmin(t, base, pdpBootstrapUser, pdpBootstrapPass, pdpAdminUsername, pdpAdminPassword)
-
-	// Step 2: admin login → JWT with roles=[admin] + tenant claim.
-	adminToken := pdpLogin(t, base, pdpAdminUsername, pdpAdminPassword)
-
-	// Step 3: create a regular user as admin; capture the user's subject ID.
 	const pdpUserUsername = "pdp-regular-user"
 	const pdpUserPassword = "PdpUserPass!99"
-	pdpUserID := pdpCreateUser(t, base, adminToken, pdpUserUsername, "pdp-user@test.local", pdpUserPassword)
 
-	// Step 4: regular user login → JWT with roles=[] (no admin) + tenant claim.
-	userToken := pdpLogin(t, base, pdpUserUsername, pdpUserPassword)
+	// Step 1: bootstrap admin.
+	adminID = pdpSetupAdmin(t, base, pdpBootstrapUser, pdpBootstrapPass, pdpAdminUsername, pdpAdminPassword)
+
+	// Step 2: admin login → JWT with roles=[admin] + tenant claim.
+	adminToken = pdpLogin(t, base, pdpAdminUsername, pdpAdminPassword)
+
+	// Step 3: create a regular user as admin.
+	userID = pdpCreateUser(t, base, adminToken, pdpUserUsername, "pdp-user@test.local", pdpUserPassword)
+
+	// Step 4: regular user login → JWT with roles=[] (no admin).
+	userToken = pdpLogin(t, base, pdpUserUsername, pdpUserPassword)
+
+	return adminToken, userToken, userID, adminID
+}
+
+func TestABACPDPGatesAuditQuery(t *testing.T) {
+	base := startCorebundlePDPApp(t)
+	adminToken, userToken, pdpUserID, adminUserID := provisionPDPAdminAndUser(t, base)
 
 	// adminUserID is the "other actor" for the non-admin cross-actor assertion:
 	// it is a different subject from the regular user, so the non-admin is asking

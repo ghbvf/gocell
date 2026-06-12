@@ -62,15 +62,6 @@ func TestBuiltinBaseline_AuditRead(t *testing.T) {
 			wantAllow: false,
 		},
 		{
-			name: "admin + config:read → NOT allowed by baseline (action-scoped)",
-			principal: &auth.Principal{
-				Kind: auth.PrincipalUser, Subject: "admin-2", TenantID: testTenantIDStr,
-				Roles: []string{auth.RoleAdmin},
-			},
-			action:    "config:read",
-			wantAllow: false,
-		},
-		{
 			name: "admin + other:write → NOT allowed by baseline",
 			principal: &auth.Principal{
 				Kind: auth.PrincipalUser, Subject: "admin-3", TenantID: testTenantIDStr,
@@ -144,6 +135,46 @@ func TestBuiltinBaseline_SystemRead(t *testing.T) {
 			dec := svc.evaluate(nil, resolver, systemReadAction)
 			assert.Equal(t, tt.wantAllow, dec.IsAllow())
 		})
+	}
+}
+
+// TestBuiltinBaseline_ConfigcorePerms proves the PR-10b configcore baseline
+// rules reproduce the existing admin gate: admin/super-admin → Allow, ordinary
+// user / no-roles → Deny, for each of the 5 migrated configcore permissions.
+// One baseline rule per migrated endpoint, mirroring the auditquery rule.
+func TestBuiltinBaseline_ConfigcorePerms(t *testing.T) {
+	svc := &Service{logger: slog.Default()}
+
+	perms := []string{
+		authz.PermConfigRead().String(),
+		authz.PermConfigWrite().String(),
+		authz.PermConfigPublish().String(),
+		authz.PermFlagRead().String(),
+		authz.PermFlagWrite().String(),
+	}
+
+	roleCases := []struct {
+		name      string
+		roles     []string
+		wantAllow bool
+	}{
+		{"admin → Allow", []string{auth.RoleAdmin}, true},
+		{"super-admin → Allow", []string{auth.RoleSuperAdmin}, true},
+		{"ordinary user → Deny", []string{"viewer"}, false},
+		{"no roles → Deny", nil, false},
+	}
+
+	for _, action := range perms {
+		for _, rc := range roleCases {
+			t.Run(action+" / "+rc.name, func(t *testing.T) {
+				resolver := attributeResolver{principal: &auth.Principal{
+					Kind: auth.PrincipalUser, Subject: "subj-1", TenantID: testTenantIDStr,
+					Roles: rc.roles,
+				}}
+				dec := svc.evaluate(nil, resolver, action)
+				assert.Equal(t, rc.wantAllow, dec.IsAllow())
+			})
+		}
 	}
 }
 

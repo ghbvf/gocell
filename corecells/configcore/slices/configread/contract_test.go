@@ -46,10 +46,10 @@ func TestHttpConfigGetV1Serve(t *testing.T) {
 	assert.Equal(t, "GET", c.HTTP.Method)
 	assert.Equal(t, "/api/v1/config/{key}", c.HTTP.Path)
 
-	// PR-CFG-C contract-as-auth-truth: route is admin-gated, so 403 must be a
-	// first-class declared response, not just a runtime artifact.
+	// PR-CFG-C contract-as-auth-truth: route is config:read-gated (PDP), so 403
+	// must be a first-class declared response, not just a runtime artifact.
 	_, has403 := c.HTTP.Responses[403]
-	assert.True(t, has403, "http.config.get.v1 must declare 403 (route is RoleAdmin-gated)")
+	assert.True(t, has403, "http.config.get.v1 must declare 403 (route is config:read-gated (PDP))")
 	c.ValidateErrorResponse(t, 403, []byte(`{"error":{"code":"ERR_AUTH_FORBIDDEN","message":"access denied","details":[]}}`))
 
 	// Non-sensitive entry: sensitive=false, value is the real value.
@@ -78,9 +78,9 @@ func TestHttpConfigListV1Serve(t *testing.T) {
 	assert.Equal(t, "GET", c.HTTP.Method)
 	assert.Equal(t, "/api/v1/config/", c.HTTP.Path)
 
-	// PR-CFG-C contract-as-auth-truth: list endpoint is admin-gated.
+	// PR-CFG-C contract-as-auth-truth: list endpoint is config:read-gated (PDP).
 	_, has403 := c.HTTP.Responses[403]
-	assert.True(t, has403, "http.config.list.v1 must declare 403 (route is RoleAdmin-gated)")
+	assert.True(t, has403, "http.config.list.v1 must declare 403 (route is config:read-gated (PDP))")
 	c.ValidateErrorResponse(t, 403, []byte(`{"error":{"code":"ERR_AUTH_FORBIDDEN","message":"access denied","details":[]}}`))
 
 	// Non-sensitive entry: sensitive=false.
@@ -112,10 +112,10 @@ func TestHttpConfigListV1Serve(t *testing.T) {
 // Do not extract a shared testutil for 2 call sites.
 
 // authzCase models a row in the runtime mux authz negative-test tables.
-// principal=nil produces an anonymous request — the Mount's auth.AnyRole
-// policy short-circuits to ErrAuthUnauthorized before role inspection.
-// A non-nil principal exercises the authenticated-but-unauthorized branch
-// (any role mismatch returns ErrAuthForbidden via principalHasAnyRole).
+// principal=nil produces an anonymous request — the RequirePermission PDP gate
+// short-circuits to ErrAuthUnauthorized (no principal → not authenticated).
+// A non-nil principal with no Authorizer in ctx exercises the fail-closed
+// branch (ErrAuthForbidden — PDP not wired).
 type authzCase struct {
 	name        string
 	principal   *auth.Principal
@@ -164,31 +164,35 @@ func userPrincipal(subject string, roles []string) *auth.Principal {
 	}
 }
 
-// TestHttpConfigGetV1_AuthzNegative locks the runtime auth-guard contract
-// for the admin-gated GET /api/v1/config/{key}: anonymous requests are
-// rejected with 401 ERR_AUTH_UNAUTHORIZED, and authenticated principals
-// without the admin role are rejected with 403 ERR_AUTH_FORBIDDEN. The
-// happy-path response shape is locked by TestHttpConfigGetV1Serve.
+// TestHttpConfigGetV1_AuthzNegative locks the runtime auth-guard contract for
+// the config:read-gated (PDP) GET /api/v1/config/{key}:
+//   - anonymous requests → 401 ERR_AUTH_UNAUTHORIZED (no principal).
+//   - principal present but no Authorizer in ctx → fail-closed 403 ERR_AUTH_FORBIDDEN.
+//
+// The happy-path response shape is locked by TestHttpConfigGetV1Serve.
 func TestHttpConfigGetV1_AuthzNegative(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.get.v1")
 	h, _ := setupHandler()
 	runAuthzCases(t, h, c, http.MethodGet, configBasePath+"/some-key", []authzCase{
 		{"no_auth", nil, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
-		{"non_admin", userPrincipal("user-1", []string{"viewer"}), http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
+		{"no_authorizer_fail_closed", userPrincipal("user-1", []string{"viewer"}), http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
 	})
 }
 
-// TestHttpConfigListV1_AuthzNegative locks the runtime auth-guard contract
-// for the admin-gated GET /api/v1/config/ list endpoint, mirroring the
-// single-entry GET semantics. The base path's trailing slash matches the
-// production registration in cell_gen.go (mux.Route("/config", ...)).
+// TestHttpConfigListV1_AuthzNegative locks the runtime auth-guard contract for
+// the config:read-gated (PDP) GET /api/v1/config/ list endpoint:
+//   - anonymous requests → 401 ERR_AUTH_UNAUTHORIZED (no principal).
+//   - principal present but no Authorizer in ctx → fail-closed 403 ERR_AUTH_FORBIDDEN.
+//
+// The base path's trailing slash matches the production registration in
+// cell_gen.go (mux.Route("/config", ...)).
 func TestHttpConfigListV1_AuthzNegative(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.list.v1")
 	h, _ := setupHandler()
 	runAuthzCases(t, h, c, http.MethodGet, configBasePath+"/", []authzCase{
 		{"no_auth", nil, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
-		{"non_admin", userPrincipal("user-1", []string{"viewer"}), http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
+		{"no_authorizer_fail_closed", userPrincipal("user-1", []string{"viewer"}), http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
 	})
 }

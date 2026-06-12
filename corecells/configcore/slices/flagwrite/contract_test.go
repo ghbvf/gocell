@@ -99,7 +99,7 @@ func TestHttpConfigFlagsCreateV1Serve(t *testing.T) {
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path,
 		strings.NewReader(`{"key":"my-flag","enabled":false,"rolloutPercentage":0,"description":"test"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(configcoretest.CtxWithTenant(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin})))
+	req = req.WithContext(withAllowAuthorizer(configcoretest.CtxWithTenant(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))))
 	mux.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body)
 	c.ValidateHTTPResponseRecorder(t, rec)
@@ -137,7 +137,7 @@ func TestHttpConfigFlagsUpdateV1Serve(t *testing.T) {
 	req := httptest.NewRequest(c.HTTP.Method, path,
 		strings.NewReader(`{"enabled":true,"rolloutPercentage":50,"description":"updated","expectedVersion":1}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(configcoretest.CtxWithTenant(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin})))
+	req = req.WithContext(withAllowAuthorizer(configcoretest.CtxWithTenant(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))))
 	mux.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body)
 	c.ValidateHTTPResponseRecorder(t, rec)
@@ -151,7 +151,10 @@ func TestHttpConfigFlagsUpdateV1Serve(t *testing.T) {
 		recBad := httptest.NewRecorder()
 		reqBad := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(bad))
 		reqBad.Header.Set("Content-Type", "application/json")
-		reqBad = reqBad.WithContext(configcoretest.CtxWithTenant(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin})))
+		badCtx := withAllowAuthorizer(
+			configcoretest.CtxWithTenant(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin})),
+		)
+		reqBad = reqBad.WithContext(badCtx)
 		mux.ServeHTTP(recBad, reqBad)
 		assert.Equal(t, http.StatusBadRequest, recBad.Code,
 			"PUT with out-of-range rolloutPercentage must 400; body %q got %s",
@@ -181,7 +184,7 @@ func TestHttpConfigFlagsToggleV1Serve(t *testing.T) {
 	req := httptest.NewRequest(c.HTTP.Method, path,
 		strings.NewReader(`{"enabled":true,"expectedVersion":1}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(configcoretest.CtxWithTenant(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin})))
+	req = req.WithContext(withAllowAuthorizer(configcoretest.CtxWithTenant(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))))
 	mux.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body)
 	c.ValidateHTTPResponseRecorder(t, rec)
@@ -202,11 +205,13 @@ func TestHttpConfigFlagsDeleteV1Serve(t *testing.T) {
 	path := strings.ReplaceAll(c.HTTP.Path, "{key}", "del-flag") + "?expectedVersion=1"
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, path, http.NoBody)
-	req = req.WithContext(configcoretest.CtxWithTenant(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin})))
+	req = req.WithContext(withAllowAuthorizer(configcoretest.CtxWithTenant(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))))
 	mux.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusNoContent, rec.Code, "body: %s", rec.Body)
 }
 
 func testAdminCtx() context.Context {
-	return configcoretest.CtxWithTenant(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))
+	return withAllowAuthorizer(
+		configcoretest.CtxWithTenant(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin})),
+	)
 }

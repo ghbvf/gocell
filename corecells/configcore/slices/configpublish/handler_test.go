@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/corecells/configcore/configcoretest"
 	"github.com/ghbvf/gocell/corecells/internal/testoutbox"
 
 	"github.com/stretchr/testify/assert"
@@ -25,6 +26,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
@@ -32,17 +34,42 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+// allowAuthorizer / withAllowAuthorizer / withDenyAuthorizer build the PDP
+// verdicts for tests. The authz.Allow/Deny construction lives in _test.go,
+// which AUTHZ-DECISION-ALLOW-DENY-CALLER-01 sanctions for test doubles; the
+// CapturingAuthorizer type and WithAuthorizer ctx wiring are shared via
+// configcoretest (PR-10b #1348).
+func allowAuthorizer() *configcoretest.CapturingAuthorizer {
+	dec, err := authz.Allow(authz.Obligations{})
+	if err != nil {
+		panic("test allowAuthorizer: authz.Allow: " + err.Error())
+	}
+	return &configcoretest.CapturingAuthorizer{Decision: dec}
+}
+
+func withAllowAuthorizer(ctx context.Context) context.Context {
+	return configcoretest.WithAuthorizer(ctx, allowAuthorizer())
+}
+
+// reason is fixed here (unparam: all configpublish deny tests use the same reason); other slices keep a reason param.
+func withDenyAuthorizer(ctx context.Context) context.Context {
+	return configcoretest.WithAuthorizer(ctx, &configcoretest.CapturingAuthorizer{Decision: authz.Deny("test pdp deny")})
+}
+
 // testPublishTenantStr is the test TenantID string for configpublish tests.
-const testPublishTenantStr = "00000000-0000-0000-0000-000000000001"
+// Derived from configcoretest.TestTenant to avoid duplicating the bare literal.
+const testPublishTenantStr = string(configcoretest.TestTenant)
 
 // testPublishTenant is the typed TenantID for direct repo seeding calls.
-var testPublishTenant = tenant.TenantID(testPublishTenantStr)
+const testPublishTenant = configcoretest.TestTenant
 
-// adminCtx returns a request context carrying an admin subject + role AND a
-// valid TenantID for authorized handler tests. configpublish.Service.Publish
-// and Rollback both call tenant.FromContext(ctx), so a tenant is required.
+// adminCtx returns a request context carrying an admin subject + role, a valid
+// TenantID, and an allow Authorizer. The Authorizer is required because the gate
+// now uses auth.RequirePermission(authz.PermConfigPublish()) — without an
+// Authorizer in ctx the gate is fail-closed 403 before reaching the service.
 func adminCtx() context.Context {
-	return ctxkeys.WithTenantID(auth.TestContext("test-admin", []string{"admin"}), testPublishTenantStr)
+	base := ctxkeys.WithTenantID(auth.TestContext("test-admin", []string{"admin"}), testPublishTenantStr)
+	return withAllowAuthorizer(base)
 }
 
 // withAdmin clones req with the admin auth context attached.
@@ -174,11 +201,13 @@ func TestHandler_HandlePublish_NotFound(t *testing.T) {
 
 // --- F6: missing-tenant → typed 403 (not 500) ---
 
-// withAdminNoTenant injects an admin principal but NO TenantID, so the request
-// passes the admin-role policy yet fails Service.tenant.FromContext. The
-// resulting 403 carries ErrAuthForbidden (distinct from the policy's 403).
+// withAdminNoTenant injects an admin principal and an allow Authorizer but NO
+// TenantID. The request passes the config:publish-gated (PDP) policy, then fails
+// Service.tenant.FromContext. The resulting 403 carries ErrAuthForbidden (distinct
+// from the PDP gate's fail-closed 403).
 func withAdminNoTenant(req *http.Request) *http.Request {
-	return req.WithContext(auth.TestContext("test-admin", []string{"admin"}))
+	base := auth.TestContext("test-admin", []string{"admin"})
+	return req.WithContext(withAllowAuthorizer(base))
 }
 
 func TestHandler_HandlePublish_MissingTenant_403(t *testing.T) {
@@ -204,10 +233,12 @@ func TestHandler_HandleRollback_MissingTenant_403(t *testing.T) {
 	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
 }
 
-// PR#155 followup F1 (Cx2, P1): publish + rollback are high-risk write operations
-// that must require an explicit admin role. Authentication alone (any logged-in
-// subject) is not enough — fail-closed at the handler layer mirrors
-// identitymanage/handler.go and matches the K8s/Kratos/go-zero default-deny convention.
+// config:publish-gated (PDP) — publish and rollback are high-risk write operations
+// that require the config:publish permission from the ABAC PDP.
+// 401 path: no principal in ctx → unauthenticated before PDP is consulted.
+// 403 deny path: principal present, PDP denies → ErrAuthForbidden.
+// 403 no-authorizer path: principal present, no Authorizer in ctx → fail-closed 403.
+
 func TestHandler_HandlePublish_RequiresAuth(t *testing.T) {
 	handler, repo := setupHandler()
 	seedForPublish(t, repo)
@@ -219,16 +250,34 @@ func TestHandler_HandlePublish_RequiresAuth(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, w.Code, "publish without subject must be 401")
 }
 
-func TestHandler_HandlePublish_RequiresAdminRole(t *testing.T) {
+// TestHandler_HandlePublish_PDPDeny verifies that a PDP deny response causes a 403.
+func TestHandler_HandlePublish_PDPDeny(t *testing.T) {
 	handler, repo := setupHandler()
 	seedForPublish(t, repo)
 
 	w := httptest.NewRecorder()
+	ctx := withDenyAuthorizer(
+		ctxkeys.WithTenantID(auth.TestContext("user-1", []string{"viewer"}), testPublishTenantStr),
+	)
 	req := httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/publish", nil).
-		WithContext(auth.TestContext("user-1", []string{"viewer"}))
+		WithContext(ctx)
 	handler.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusForbidden, w.Code, "non-admin subject must be 403")
+	assert.Equal(t, http.StatusForbidden, w.Code, "PDP deny must yield 403")
+}
+
+// TestHandler_HandlePublish_NoAuthorizer verifies that absent Authorizer is fail-closed 403.
+func TestHandler_HandlePublish_NoAuthorizer(t *testing.T) {
+	handler, repo := setupHandler()
+	seedForPublish(t, repo)
+
+	w := httptest.NewRecorder()
+	// Principal present but no Authorizer in ctx — RequirePermission must deny.
+	req := httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/publish", nil).
+		WithContext(ctxkeys.WithTenantID(auth.TestContext("user-1", []string{"admin"}), testPublishTenantStr))
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code, "missing Authorizer must be fail-closed 403")
 }
 
 func TestHandler_HandleRollback_RequiresAuth(t *testing.T) {
@@ -243,18 +292,37 @@ func TestHandler_HandleRollback_RequiresAuth(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, w.Code, "rollback without subject must be 401")
 }
 
-func TestHandler_HandleRollback_RequiresAdminRole(t *testing.T) {
+// TestHandler_HandleRollback_PDPDeny verifies that a PDP deny response causes a 403.
+func TestHandler_HandleRollback_PDPDeny(t *testing.T) {
 	handler, repo := setupHandler()
 	seedForPublish(t, repo)
 
 	w := httptest.NewRecorder()
+	ctx := withDenyAuthorizer(
+		ctxkeys.WithTenantID(auth.TestContext("user-1", []string{"viewer"}), testPublishTenantStr),
+	)
 	req := httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/rollback",
 		strings.NewReader(`{"version":1,"expectedVersion":1}`)).
-		WithContext(auth.TestContext("user-1", []string{"viewer"}))
+		WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusForbidden, w.Code, "non-admin subject must be 403")
+	assert.Equal(t, http.StatusForbidden, w.Code, "PDP deny must yield 403")
+}
+
+// TestHandler_HandleRollback_NoAuthorizer verifies that absent Authorizer is fail-closed 403.
+func TestHandler_HandleRollback_NoAuthorizer(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	// Principal present but no Authorizer in ctx — RequirePermission must deny.
+	req := httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/rollback",
+		strings.NewReader(`{"version":1,"expectedVersion":1}`)).
+		WithContext(ctxkeys.WithTenantID(auth.TestContext("user-1", []string{"admin"}), testPublishTenantStr))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code, "missing Authorizer must be fail-closed 403")
 }
 
 // H2-2 CONFIGPUBLISH-REDACT-01: sensitive entries must redact `value` and expose
@@ -609,4 +677,52 @@ func TestPublishAdapter_RepoNotFound_Returns404Typed(t *testing.T) {
 	typed, ok := resp.(configpublishgen.Publish404ErrorResponse)
 	require.True(t, ok, "expected Publish404ErrorResponse, got %T", resp)
 	assert.Equal(t, errcode.ErrConfigRepoNotFound, typed.Body.Code)
+}
+
+// ---------------------------------------------------------------------------
+// Action-pin test (PR-10b #1348): asserts that the configpublish gate asks the
+// PDP for exactly "config:publish". Without this guard, an endpoint↔permission
+// misbinding (e.g. using PermConfigWrite instead of PermConfigPublish) would be
+// masked by the baseline which allows admin for every config:* permission.
+// ---------------------------------------------------------------------------
+
+func TestHandler_ConfigPublishGate_ActionPin(t *testing.T) {
+	handler, repo := setupHandler()
+	seedForPublish(t, repo)
+
+	// Seed a version for rollback to succeed.
+	svcForSeed, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
+	require.NoError(t, err)
+	_, err = svcForSeed.Publish(adminCtx(), "app.name")
+	require.NoError(t, err)
+
+	cap := allowAuthorizer()
+	baseCtx := ctxkeys.WithTenantID(auth.TestContext("test-admin", []string{"admin"}), testPublishTenantStr)
+	authedCtx := configcoretest.WithAuthorizer(baseCtx, cap)
+
+	t.Run("publish gate asks config:publish", func(t *testing.T) {
+		cap.GotAction = "" // reset between sub-tests
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/publish", nil).
+			WithContext(authedCtx)
+		handler.ServeHTTP(w, req)
+		require.Equal(t, http.StatusCreated, w.Code,
+			"publish must succeed with allow Authorizer; got body: %s", w.Body.String())
+		assert.Equal(t, "config:publish", cap.GotAction,
+			"configpublish gate must request config:publish from PDP; a wrong permission would be masked by the admin baseline")
+	})
+
+	t.Run("rollback gate asks config:publish", func(t *testing.T) {
+		cap.GotAction = "" // reset between sub-tests
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/rollback",
+			strings.NewReader(`{"version":1,"expectedVersion":1}`)).
+			WithContext(authedCtx)
+		req.Header.Set("Content-Type", "application/json")
+		handler.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code,
+			"rollback must succeed with allow Authorizer; got body: %s", w.Body.String())
+		assert.Equal(t, "config:publish", cap.GotAction,
+			"configpublish rollback gate must request config:publish from PDP")
+	})
 }
