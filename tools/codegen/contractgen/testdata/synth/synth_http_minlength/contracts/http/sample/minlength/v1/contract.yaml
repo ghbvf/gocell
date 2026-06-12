@@ -1,0 +1,51 @@
+# synth_http_minlength exercises the minLength lower-bound codegen funnel (issue #1914).
+# It byte-locks that an always-false length comparison is never emitted:
+#   - query param minLength:0 -> `len(x) < 0` is always false (length is never negative)
+#   - query param minLength:1 -> the `!= ""` guard already enforces len>=1, so `< 1` is
+#                                always false too
+# while a meaningful lower bound is still emitted:
+#   - query param minLength:2 -> `req.X != "" && len(req.X) < 2` rejects 1-char values
+#   - path  param minLength:1 -> `len(v) < 1` rejects an empty path segment (no `!= ""` guard)
+id: http.sample.minlength.v1
+kind: http
+ownerCell: samplecell
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: samplecell
+  http:
+    method: GET
+    path: /api/v1/samples/{id}
+    pathParams:
+      id:
+        type: string
+        minLength: 1
+        maxLength: 64
+    queryParams:
+      zeroMin:
+        type: string
+        required: false
+        minLength: 0
+        maxLength: 128
+      oneMin:
+        type: string
+        required: false
+        minLength: 1
+        maxLength: 128
+      twoMin:
+        type: string
+        required: false
+        minLength: 2
+    successStatus: 200
+    noContent: false
+    responses:
+      400:
+        description: Bad Request
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      500:
+        description: Internal Server Error
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json
+codegen: true

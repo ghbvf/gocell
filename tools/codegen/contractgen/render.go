@@ -63,11 +63,16 @@ var templates = func() *template.Template {
 		"hasMaximum": func(p *int64) bool {
 			return p != nil
 		},
-		// hasMinLength reports whether a string param/field has a minLength constraint.
-		"hasMinLength": func(p *int) bool {
-			return p != nil
-		},
-		// hasMaxLength reports whether a string param/field has a maxLength constraint.
+		// needsMinLengthCheck / needsGuardedMinLengthCheck gate the minLength
+		// lower-bound branch per render context (see the functions below).
+		// Extracted to top-level functions (like needsStrconv) so the
+		// dead-code-suppression logic is unit-tested directly. Issue #1914.
+		"needsMinLengthCheck":        needsMinLengthCheck,
+		"needsGuardedMinLengthCheck": needsGuardedMinLengthCheck,
+		// hasMaxLength reports whether a string param/field has a maxLength
+		// constraint. Unlike minLength, maxLength:0 stays a real constraint —
+		// `len(x) > 0` rejects every non-empty value — so this predicate
+		// intentionally does not mirror the minLength gating.
 		"hasMaxLength": func(p *int) bool {
 			return p != nil
 		},
@@ -112,6 +117,25 @@ func needsStrconv(spec *ContractGenSpec) bool {
 		}
 	}
 	return false
+}
+
+// needsMinLengthCheck gates the UNGUARDED minLength lower-bound branch emitted
+// for path params (`len(v) < N`, no `!= ""` prefix). minLength:0 would render
+// `len(v) < 0`, which is always false because a string length is never negative
+// — dead code — so only a positive minLength yields a real check. Covered by
+// render_test.TestNeedsMinLengthCheck. Issue #1914.
+func needsMinLengthCheck(p *int) bool {
+	return p != nil && *p > 0
+}
+
+// needsGuardedMinLengthCheck gates the GUARDED minLength lower-bound branch
+// emitted for query params (`req.X != "" && len(req.X) < N`). The `!= ""` guard
+// already enforces len(req.X) >= 1 for any value that reaches the comparison, so
+// N <= 1 (including 0) makes the check always false — dead code — and only
+// N >= 2 can ever reject a non-empty value. Covered by
+// render_test.TestNeedsGuardedMinLengthCheck. Issue #1914.
+func needsGuardedMinLengthCheck(p *int) bool {
+	return p != nil && *p > 1
 }
 
 // Per-template rendering for production goes through Generate /

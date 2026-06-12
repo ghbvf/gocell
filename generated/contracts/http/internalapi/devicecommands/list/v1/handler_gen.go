@@ -66,12 +66,6 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req.Limit = int64(page.Limit)
 
 	req.DeviceID = r.URL.Query().Get("deviceId")
-	if req.DeviceID != "" && len(req.DeviceID) < 0 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"validation: invalid request parameter",
-			errcode.WithDetails(errcode.PublicString("field", "deviceId"), errcode.PublicString("reason", "invalid"))))
-		return
-	}
 	if len(req.DeviceID) > 256 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
@@ -80,12 +74,6 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req.Statuses = r.URL.Query().Get("statuses")
-	if req.Statuses != "" && len(req.Statuses) < 0 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"validation: invalid request parameter",
-			errcode.WithDetails(errcode.PublicString("field", "statuses"), errcode.PublicString("reason", "invalid"))))
-		return
-	}
 	if len(req.Statuses) > 256 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
