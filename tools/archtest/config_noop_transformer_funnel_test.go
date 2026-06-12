@@ -46,8 +46,10 @@ const (
 // 风格的 gocell:"required" nil-guard 守正交威胁，不可互替——
 //   - required nil-guard 走 validation.IsNilInterface 只抓 typed-nil；NoopTransformer{}
 //     是非 nil 具体值（IsNilInterface(NoopTransformer{}) == false），会被放行。
-//   - 本 funnel 抓「非 nil 的无加密 transformer 被 mint 到别处并接入 postgres」（明文落盘），
-//     configpg.WithValueTransformer 即此类入口；其 crypto.NoopTransformer{} 字面量被本扫描捕获。
+//   - 本 funnel 抓「非 nil 的无加密 transformer 被 mint 到别处并接入 postgres」（明文落盘）：
+//     configpg.WithValueTransformer 是这样一个非 allowlist 入口——若有人写
+//     configpg.WithValueTransformer(crypto.NoopTransformer{})，该字面量即被本扫描捕获
+//     （当前无此类调用；唯一 NoopTransformer{} 出生点是 allowlist 的 resolveValueTransformer）。
 //
 // 故给 ConfigRepository.transformer 打 required tag 不能退役本 archtest（原 gh #1411 前提有误：
 // transformer 实为可选依赖，required-guard 与本 funnel 正交，#1411 已 close）。唯一退役路径 =
