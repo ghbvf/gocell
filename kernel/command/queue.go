@@ -74,7 +74,28 @@ func (r AckReason) TargetStatus() Status {
 // leaseDuration parameter of Queue.Dequeue. DefaultLeaseDuration is the
 // recommended default for Dequeue callers.
 type EnqueueOptions struct {
-	// IdempotencyKey dedups retried Enqueue calls; empty = no dedup guarantee.
+	// IdempotencyKey enforces STATE-AWARE ACTIVE uniqueness: at most one command
+	// with this key may be NON-terminal (Pending/Sent/Delivered) at a time. A
+	// re-enqueue under the same key is coalesced (no-op, nil error) while a holder
+	// is non-terminal, and is ADMITTED once the prior holder reaches a terminal
+	// status (Succeeded/Failed/Expired/Canceled) — so a later retry of the same
+	// logical command enqueues a fresh entry. Empty = no uniqueness.
+	//
+	// This is the River UniqueOpts.ByState / Temporal single-open-execution model:
+	// the queue (the owner of active-command state) is the correctness authority
+	// for "at most one in-flight per identity"; producers MUST NOT reconstruct it
+	// from side state. Uniqueness is keyed on Status, so terminal transitions
+	// (Ack/Cancel/Sweeper-AckTimeout) release the key automatically — there is no
+	// separate release call to forget. PG enforces it with a partial unique index
+	// `WHERE … AND status IN (Pending,Sent,Delivered)`; the in-mem store derives it
+	// from Status. Both are pinned by the commandtest conformance suite
+	// (Enqueue/ActiveKeyBlocksAcrossNonTerminal + Enqueue/KeyReleasedOn*).
+	//
+	// CAUTION: a command that never reaches terminal would hold its key forever and
+	// block all retries — so a producer requesting active-uniqueness MUST also give
+	// the command a terminal-guaranteeing deadline (see runtime/command
+	// WithActiveUniqueness, which couples the two so the unsafe combination is
+	// inexpressible).
 	IdempotencyKey string
 	// Authz is invoked before any write; return non-nil to reject. Use nil to skip.
 	Authz AuthzFunc

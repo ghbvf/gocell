@@ -258,29 +258,27 @@ Flow: each interval the loop scans the `devices` table for certificates whose
 the outbox relay dispatches it in-process → a `rotate-cert` command lands in the
 device's queue, dequeued like any other command.
 
-**Idempotent forcing function**: the loop re-observes the same un-renewed cert
-every tick, but after the first emit the `devices.renewal_requested_epoch` column
-records it, so subsequent scans skip it — a single un-renewed cert yields exactly
-**one** `rotate-cert` command across its whole (multi-day) near-expiry window,
-never N. This single-emit is owned by the `devices.renewal_requested_epoch` column
-and holds **independently of the outbox relay's 24h command-done TTL**; the
-relay's Claimer (keyed by the `(deviceId, certEpoch)`-derived command id) is only
-a secondary backstop for same-window re-emits. A post-rotation re-issue advances
-the epoch and yields a fresh, dispatchable command.
+**Active-uniqueness dedup (queue-owned)**: the producer is stateless — it emits
+for every near-expiry cert on every tick. Dedup is owned by the device command
+queue, not the producer. Each `EmitAsync` call sets `WithActiveUniqueness(deadline)`
+so the queue admits at most one non-terminal `rotate-cert` per `(device, epoch)`
+key. Duplicate emits from concurrent or repeated ticks are coalesced to no-ops by
+a partial unique index on `(device_id, command_id, status NOT IN terminal)` (status-aware,
+migration 062). Once the command terminates (device acks, or the Sweeper expires it
+after `AttemptTTL`), the active-uniqueness key is released and the next reconcile
+tick re-enqueues a fresh attempt — level-triggered retry without any producer-side
+state. A post-rotation re-issue advances the cert epoch and yields a fresh, distinct
+command id that is admitted by the queue independently.
 
 > **Durable cert state (#1819)**: certificate state (`cert_epoch` /
-> `cert_expires_at` / `renewal_requested_epoch`) is persisted as columns on the
-> `devices` row and written through the mem and PG device repos — it is **not** an
-> ephemeral in-memory store. In durable PG mode (`GOCELL_IOTDEVICE_DSN` set),
-> cert state **survives restarts**: device rows and their cert state both persist,
-> so `rotate-cert` commands resume after a restart for **every device registered
-> under the cert schema** (migration 056), not just re-registered ones. In mem
-> mode (no DSN), cert state is process-local and lost on restart. The per-epoch
-> dedup is owned by the `devices.renewal_requested_epoch` column (written by the
-> device repo); the emit and that mark commit in a single transaction, so the
-> single-emit guarantee holds with no "emitted but not marked" gap. For the
-> reconciler and repo implementation see
-> `cells/devicecell/slices/devicecertrenewal/reconciler.go`.
+> `cert_expires_at`) is persisted as columns on the `devices` row and written
+> through the mem and PG device repos — it is **not** an ephemeral in-memory
+> store. In durable PG mode (`GOCELL_IOTDEVICE_DSN` set), cert state **survives
+> restarts**: device rows and their cert state both persist, so `rotate-cert`
+> commands resume after a restart for **every device registered under the cert
+> schema** (migration 056), not just re-registered ones. In mem mode (no DSN),
+> cert state is process-local and lost on restart. For the reconciler
+> implementation see `cells/devicecell/slices/devicecertrenewal/reconciler.go`.
 >
 > **Legacy rows**: device rows that existed *before* migration 056 (or raw-SQL
 > inserts that omit the cert columns) get `cert_expires_at = NULL` — 056 only
@@ -292,7 +290,7 @@ the epoch and yields a fresh, dispatchable command.
 > **Observing it**: a freshly registered device gets a healthy (90d) cert and the
 > 30d renewal threshold is not crossed during a short demo, so no `rotate-cert`
 > command appears in a normal run — this is the realistic steady state, not a gap.
-> The full scan → enqueue → cross-tick dedup → dequeue chain is proven
+> The full scan → enqueue → active-uniqueness coalesce → dequeue chain is proven
 > deterministically (fake clock) in `cells/devicecell/cert_renewal_e2e_test.go`;
 > to watch it live, lower `certValidity` / `certRenewalThreshold` /
 > `certRenewalSweepInterval` in source and re-run.

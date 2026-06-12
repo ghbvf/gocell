@@ -164,7 +164,6 @@ func TestService_Register_SeedsCertStateOnDeviceRow(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, domain.DefaultCertEpoch, stored.CertEpoch, "a fresh registration issues epoch 1")
 	assert.Equal(t, base.Add(certValidity), stored.CertExpiresAt, "cert expiry is now+certValidity")
-	assert.Zero(t, stored.RenewalRequestedEpoch, "a fresh cert has no renewal requested yet")
 }
 
 func TestService_Register_PublishFails_StillReturnsDevice(t *testing.T) {

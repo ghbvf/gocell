@@ -44,10 +44,9 @@ const msgCommandNotFound = "commandtest: command not found"
 //   - command.ActiveScanner  (ScanActive/GetCommand)
 //   - command.Writer         (WriteCommand — for test seeding)
 type InMemQueue struct {
-	mu              sync.RWMutex
-	entries         map[string]*command.Entry
-	leases          map[string]time.Time // commandID → lease expiry
-	idempotencyKeys map[string]struct{}  // idempotencyKey → present (O(1) dedup)
+	mu      sync.RWMutex
+	entries map[string]*command.Entry
+	leases  map[string]time.Time // commandID → lease expiry
 
 	// Now supplies the clock. Defaults to time.Now if nil.
 	Now func() time.Time
@@ -63,10 +62,9 @@ var (
 // NewInMemQueue creates a new InMemQueue with the default wall clock.
 func NewInMemQueue() *InMemQueue {
 	return &InMemQueue{
-		entries:         make(map[string]*command.Entry),
-		leases:          make(map[string]time.Time),
-		idempotencyKeys: make(map[string]struct{}),
-		Now:             time.Now,
+		entries: make(map[string]*command.Entry),
+		leases:  make(map[string]time.Time),
+		Now:     time.Now,
 	}
 }
 
@@ -128,17 +126,22 @@ func (q *InMemQueue) Enqueue(ctx context.Context, entry command.Entry, opts comm
 	return q.storeIfNotDup(entry, opts.IdempotencyKey)
 }
 
-// storeIfNotDup acquires the write lock, checks for idempotency key dedup
-// in O(1) via the idempotencyKeys map, and stores the entry.
+// storeIfNotDup acquires the write lock, checks for state-aware idempotency
+// key dedup by scanning entries, and stores the entry.
 // Separated from Enqueue to reduce cognitive complexity.
+//
+// The idempotency check is O(n) over q.entries. This is intentional for a
+// test double: avoiding a separate side-set eliminates the drift-prone release
+// bookkeeping (callers previously had to call release on Cancel but not Ack,
+// causing divergence from the PG implementation). For production use, the PG
+// adapter implements this via a partial index on non-terminal rows, achieving
+// O(log n) on the database side.
 func (q *InMemQueue) storeIfNotDup(entry command.Entry, idempotencyKey string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	if idempotencyKey != "" {
-		if _, exists := q.idempotencyKeys[idempotencyKey]; exists {
-			return nil // idempotent no-op
-		}
+	if idempotencyKey != "" && q.hasActiveKey(idempotencyKey) {
+		return nil // idempotent no-op: active holder exists
 	}
 
 	// Reject duplicate IDs (consistent with PG PK constraint).
@@ -148,12 +151,23 @@ func (q *InMemQueue) storeIfNotDup(entry command.Entry, idempotencyKey string) e
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%q", entry.ID))))
 	}
 
-	if idempotencyKey != "" {
-		q.idempotencyKeys[idempotencyKey] = struct{}{}
-	}
 	cp := entry
 	q.entries[entry.ID] = &cp
 	return nil
+}
+
+// hasActiveKey reports whether any non-terminal entry in q.entries carries the
+// given idempotency key in its metadata. Must be called with q.mu held.
+func (q *InMemQueue) hasActiveKey(key string) bool {
+	for _, e := range q.entries {
+		if e.Status.IsTerminal() {
+			continue
+		}
+		if e.Metadata != nil && e.Metadata["_idempotency_key"] == key {
+			return true
+		}
+	}
+	return false
 }
 
 // Dequeue returns up to n Pending entries for targetID, oldest first.
@@ -296,12 +310,6 @@ func (q *InMemQueue) Cancel(_ context.Context, commandID string, now time.Time) 
 		return fmt.Errorf("commandtest: cancel: %w", err)
 	}
 	delete(q.leases, commandID)
-	// Remove idempotency key so a re-enqueue is allowed after cancel.
-	if e.Metadata != nil {
-		if ikey, ok := e.Metadata["_idempotency_key"]; ok {
-			delete(q.idempotencyKeys, ikey)
-		}
-	}
 	return nil
 }
 

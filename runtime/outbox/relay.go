@@ -643,15 +643,24 @@ func (r *Relay) publishBatch(ctx context.Context, entries []ClaimedEntry) []publ
 	return results
 }
 
-// commandLeaseTTL / commandDoneTTL are the processing-lease and done-key TTLs the
-// relay passes to the command Claimer. They reuse the framework idempotency
-// defaults (5m lease / 24h done) — the lease covers a single in-process dispatch
-// (sub-second) with generous headroom, and the done key dedupes redeliveries of
-// the same source event across the standard 24h idempotency window. They are not
-// exposed as public RelayConfig fields (no real tuning need today, YAGNI).
+// commandLeaseTTL / commandDoneTTL are the processing-lease and default done-key
+// TTLs the relay passes to the command Claimer. They reuse the framework
+// idempotency defaults (5m lease / 24h done) — the lease covers a single
+// in-process dispatch (sub-second) with generous headroom, and the done key
+// dedupes redeliveries of the same source event across the standard 24h window.
+//
+// commandDoneTTL is the default ONLY for non-active-uniqueness commands. An
+// active-uniqueness command (one carrying CommandDeadlineMetadataKey) overrides it
+// with a done-key TTL bounded to the command's terminal deadline (see
+// dispatchCommand / activeUniquenessDoneTTL): the queue owns active-command
+// uniqueness and releases the key on terminal, so a relay done-key that outlived
+// the deadline would skip the next re-emit via ClaimDone and suppress the
+// terminal-release retry (#1820 F1).
+//
+// They are not exposed as public RelayConfig fields (no real tuning need, YAGNI).
 const (
 	commandLeaseTTL = idempotency.DefaultLeaseTTL // 5m
-	commandDoneTTL  = idempotency.DefaultTTL      // 24h
+	commandDoneTTL  = idempotency.DefaultTTL      // 24h (non-active-uniqueness default)
 )
 
 // dispatchCommand wraps a single in-process command dispatch in the two-phase
@@ -659,14 +668,28 @@ const (
 // the cognitive-complexity ceiling. The returned publishResult settles through
 // the shared writeBack:
 //
-//   - missing identity → permanent error → MarkDead (fail-closed; an entry with no
-//     idempotency identity cannot be safely deduplicated).
+//   - missing identity → permanent error → MarkDead (fail-closed, BEFORE Claim; an
+//     entry with no idempotency identity cannot be safely deduplicated).
+//   - corrupt active-uniqueness deadline → permanent error → MarkDead (fail-closed,
+//     BEFORE Claim, so no receipt is held; a corrupt deadline is a producer bug).
 //   - Claim infra error → transient error → MarkRetry (no permanent tag).
 //   - ClaimAcquired → dispatch + carry the live receipt (Commit on success,
 //     Release on failure).
 //   - ClaimDone → already processed → success without dispatch (command deduped).
 //   - ClaimBusy → another worker holds the claim → transient error → MarkRetry.
 //   - unknown state → permanent error → MarkDead (fail-closed).
+//
+// Active-uniqueness (#1820): when the entry carries CommandDeadlineMetadataKey the
+// relay (a) parses the terminal deadline BEFORE Claim — identity and deadline are
+// both pre-Claim fail-closed validations, so a corrupt deadline dead-letters
+// without first acquiring a claim (no receipt to leak) — and (b) bounds the Claimer
+// done-key TTL to that deadline via activeUniquenessDoneTTL. The queue owns
+// active-command uniqueness and releases the key when the command goes terminal
+// (Sweeper expiry at the deadline); a done-key outliving the deadline would make
+// the relay skip the next re-emit via ClaimDone and suppress the terminal-release
+// retry. On ClaimAcquired the (key, deadline) pair is injected into the dispatch
+// ctx via command.WithDispatchedUniqueness. Absent key → no parsing, no injection,
+// default done-TTL (zero-overhead for commands that did not opt in).
 //
 // Dedup observability is a deliberate design decision, not a metric gap: the
 // ClaimDone (deduped) branch settles the row as published — the outbox row WAS
@@ -692,7 +715,27 @@ func (r *Relay) dispatchCommand(ctx context.Context, e ClaimedEntry, fn command.
 		)}
 	}
 
-	state, receipt, err := r.cmdClaimer.Claim(ctx, key, commandLeaseTTL, commandDoneTTL)
+	cmdID := e.Metadata()[command.CommandIDMetadataKey]
+
+	// Parse the opt-in active-uniqueness deadline BEFORE Claim: a corrupt value is a
+	// producer bug and must fail closed without first acquiring a claim (no receipt
+	// to leak — mirrors the missing-identity guard above), and the parsed deadline
+	// bounds the Claimer done-key TTL below. Absent key → non-active command.
+	deadline, hasDeadline, parseErr := activeDeadline(e.Entry)
+	if parseErr != nil {
+		return r.deadLetterUnparseableDeadline(e, cmdID, parseErr)
+	}
+
+	// An active-uniqueness command's done-key MUST NOT outlive its terminal deadline
+	// (#1820 F1): the queue releases the active-uniqueness key on terminal, so a
+	// longer-lived relay done-key would suppress the next tick's terminal-release
+	// retry via ClaimDone. Non-active commands keep the framework default window.
+	doneTTL := commandDoneTTL
+	if hasDeadline {
+		doneTTL = activeUniquenessDoneTTL(deadline, r.clk().Now())
+	}
+
+	state, receipt, err := r.cmdClaimer.Claim(ctx, key, commandLeaseTTL, doneTTL)
 	if err != nil {
 		// Claim infrastructure failure is transient — retry, do not dead-letter.
 		slog.Warn("outbox relay: command claim infra error, will retry",
@@ -702,12 +745,17 @@ func (r *Relay) dispatchCommand(ctx context.Context, e ClaimedEntry, fn command.
 		return publishResult{entry: e, err: err}
 	}
 
-	cmdID := e.Metadata()[command.CommandIDMetadataKey]
 	switch state {
 	case idempotency.ClaimAcquired:
 		// fn is a generated DispatchAsync (COMMAND-ASYNC-DISPATCH-CALLER-01 locks
 		// the map values). Carry the live receipt so writeBack settles the lease.
-		return publishResult{entry: e, err: fn(ctx, r.cmdRegistry, e.Entry), receipt: receipt}
+		// For an active-uniqueness command, inject (key, deadline) into ctx so the
+		// handler can read them via command.DispatchedUniqueness.
+		dispatchCtx := ctx
+		if hasDeadline {
+			dispatchCtx = command.WithDispatchedUniqueness(ctx, key, deadline)
+		}
+		return publishResult{entry: e, err: fn(dispatchCtx, r.cmdRegistry, e.Entry), receipt: receipt}
 	case idempotency.ClaimDone:
 		// Already processed by an earlier delivery — skip dispatch, settle the row
 		// as published (the command is deduped, not re-enqueued). No live receipt.
@@ -735,6 +783,59 @@ func (r *Relay) dispatchCommand(ctx context.Context, e ClaimedEntry, fn command.
 				"outbox relay: command claim returned unknown state"),
 		)}
 	}
+}
+
+// activeDeadline parses an async command's opt-in active-uniqueness terminal
+// deadline from CommandDeadlineMetadataKey. ok=false with a nil error means the
+// key is absent (the command did not opt into active-uniqueness — zero-overhead
+// path). A non-nil error means the value is present but corrupt (a producer bug):
+// the caller fail-closed dead-letters it. Parsing is deliberately done BEFORE Claim
+// so a corrupt deadline is rejected without acquiring (and then leaking) a claim.
+func activeDeadline(e kout.Entry) (deadline time.Time, ok bool, err error) {
+	dl := e.Metadata()[command.CommandDeadlineMetadataKey]
+	if dl == "" {
+		return time.Time{}, false, nil
+	}
+	parsed, parseErr := time.Parse(time.RFC3339Nano, dl)
+	if parseErr != nil {
+		return time.Time{}, false, parseErr
+	}
+	return parsed, true, nil
+}
+
+// activeUniquenessDoneTTL bounds an active-uniqueness command's Claimer done-key
+// TTL to its terminal deadline (#1820 F1). Clamped at 0: a deadline already in the
+// past — the command is, or is about to be, terminal — yields a zero TTL so the
+// done-key expires immediately and the next dispatch re-acquires, which is the
+// correct post-terminal retry behavior.
+func activeUniquenessDoneTTL(deadline, now time.Time) time.Duration {
+	if ttl := deadline.Sub(now); ttl > 0 {
+		return ttl
+	}
+	return 0
+}
+
+// deadLetterUnparseableDeadline logs a corrupt CommandDeadlineMetadataKey and
+// returns a permanent (fail-closed) result. It is reached BEFORE Claim, so no
+// receipt is held — a corrupt deadline is a producer bug and must not dispatch.
+func (r *Relay) deadLetterUnparseableDeadline(e ClaimedEntry, cmdID string, parseErr error) publishResult {
+	// Cap raw_deadline to bound log size if a malformed value appears (e.g. a very
+	// long string injected by a misbehaving producer).
+	const rawDeadlineLogCap = 64
+	rawSnippet := e.Metadata()[command.CommandDeadlineMetadataKey]
+	if len(rawSnippet) > rawDeadlineLogCap {
+		rawSnippet = rawSnippet[:rawDeadlineLogCap]
+	}
+	slog.Error("outbox relay: command entry has unparseable deadline, dead-lettering",
+		slog.String("entry_id", e.ID()),
+		slog.String("routing_topic", e.RoutingTopic()),
+		slog.String("command_id", cmdID),
+		slog.String("raw_deadline", rawSnippet),
+		slog.Any("error", parseErr))
+	return publishResult{entry: e, err: kout.NewPermanentError(
+		errcode.New(errcode.KindInvalid, errRelayOp,
+			"outbox relay: command entry has unparseable overall_deadline"),
+	)}
 }
 
 // errCommandDispatchBusy is the transient sentinel returned when the command

@@ -11,7 +11,6 @@ import (
 	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/kernel/reconcile"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
@@ -23,32 +22,81 @@ import (
 // existing command.devicecommand.enqueue.v1 payload — no new contract.
 const rotateCertCommandType = "rotate-cert"
 
-// Reconciler is the cert-renewal producer: a reconcile.Reconciler that, on each
-// tick, scans the device repository for near-expiry certificates and enqueues a
-// deduplicated rotate-cert async command per device via runtime/command.EmitAsync.
+// Policy holds tuning parameters for the cert-renewal Reconciler. All fields
+// must be positive; NewReconciler validates them via Policy.validate().
+type Policy struct {
+	// Threshold is the near-expiry look-ahead window: a device whose certificate
+	// expires within now+Threshold is a renewal candidate.
+	Threshold time.Duration
+	// AttemptTTL is the single retry-granularity timer: how long one rotate-cert
+	// command attempt stays active (non-terminal) in the queue before the Sweeper
+	// expires it. After expiry the slot is released and the next reconcile tick
+	// re-enqueues a fresh attempt. AttemptTTL must comfortably exceed a healthy
+	// device's poll+execute round-trip (e.g. 36h for a device that polls daily).
+	AttemptTTL time.Duration
+}
+
+// validate returns an error when any Policy field is non-positive.
+func (p Policy) validate() error {
+	if p.Threshold <= 0 {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"devicecertrenewal.Policy: Threshold must be positive")
+	}
+	if p.AttemptTTL <= 0 {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"devicecertrenewal.Policy: AttemptTTL must be positive")
+	}
+	return nil
+}
+
+// Reconciler is a STATELESS cert-renewal producer: a reconcile.Reconciler that,
+// on each tick, scans ALL near-expiry certificates and enqueues a rotate-cert
+// async command per device via runtime/command.EmitAsync with active-uniqueness.
 //
 // It is the iotdevice archetype-② reference (reconcile → command, issue #1757):
 // it reuses the already-activated async-dispatch path (#1698 WithCommandDispatch
 // Claimer wrap) and #1699 DeriveCommandKey — zero new dispatch funnel.
 //
-// Per-epoch dedup is owned by the durable devices.renewal_requested_epoch column
-// (#1819), not the relay's command-done TTL: after a successful emit the Reconciler
-// marks the cert's epoch renewal-requested (DeviceRepository.MarkCertRenewalRequested),
-// so ListCertificateRenewalCandidates skips it on every later tick until a
-// post-rotation re-issue advances the epoch. Because that state lives on the
-// devices row it survives a restart in durable (PG) mode. That makes a single
-// un-renewed cert yield exactly one command across its whole multi-day near-expiry
-// window (the idempotent forcing function). Because the emit and the renewal mark
-// commit atomically in one ambient transaction (see enqueueRenewal), the relay's
-// Claimer — keyed by (tenant, deviceID, commandID) with commandID from (deviceID,
-// certEpoch) — is a pure defense-in-depth backstop: it dedups any same-window
-// re-emit (e.g. concurrent scans before either commits) within the standard 24h
-// idempotency TTL. The single-emit guarantee itself does NOT depend on it — there
-// is no "emit committed but mark lost" gap to mop up.
+// # Correctness: queue-owned active-uniqueness (F1 fix, #1820)
 //
-// SINGLE-TENANT ASSUMPTION: a reconcile loop is a background control loop with no
-// request principal. The reconcile framework positively installs a system producer
-// identity at its single reconcile chokepoint (kernel/reconcile.Loop.process →
+// "At most one active rotate-cert per (device,epoch)" is owned by the QUEUE via
+// the active-uniqueness mechanism (command.WithActiveUniqueness). Each emit sets
+// EnqueueOptions.IdempotencyKey from DispatchedUniqueness(ctx) so the queue
+// admits at most one non-terminal command per key. Duplicate emits (concurrent
+// ticks) are coalesced by the queue to a no-op — no additional command is created.
+//
+// Un-executed commands self-expire: the OverallDeadline is set to
+// now+Policy.AttemptTTL. Once that elapses, the command Sweeper transitions the
+// command to terminal (Expired), releasing the active-uniqueness key. The next
+// reconcile tick then re-enqueues a fresh attempt — level-triggered retry without
+// any producer-side state.
+//
+// This makes F1 (offline devices accumulating unbounded duplicate commands)
+// structurally impossible: the queue rejects all duplicates while a holder is
+// non-terminal, and the Sweeper guarantees eventual termination.
+//
+// # Full sweep per tick
+//
+// Each Reconcile scans and emits for ALL near-expiry certs in a single call and
+// returns reconcile.Result{} (zero RequeueAfter). The queue active-uniqueness
+// coalesces any duplicate emits across ticks to no-ops, so repeated sweeps are
+// safe. The TickerTrigger cadence (certRenewalSweepInterval, default 12h) is the
+// sole pacing mechanism.
+//
+// NOTE: emit-all-per-tick is the correct model for example-scale (IoT example).
+// A fleet-scale deployment with millions of devices should add a scan-side
+// "skip if an active command already exists for this (device,epoch)" filter
+// (observe-then-decide) to avoid emitting into the queue for already-pending
+// renewals. That optimisation does NOT affect correctness — queue active-uniqueness
+// holds regardless — but avoids the O(N) emit+coalesce cost on large fleets.
+// It is intentionally out of scope for this example; the boundary is documented
+// here rather than as a TODO to defer.
+//
+// # SINGLE-TENANT ASSUMPTION
+//
+// A reconcile loop is a background control loop with no request principal. The
+// reconcile framework positively installs a system producer identity at its single
+// reconcile chokepoint (kernel/reconcile.Loop.process →
 // installSystemProducerIdentity, #1821): actor/subject="system", tenant cleared.
 // So the tenant dimension of the Claimer key resolves to the "_notenant" sentinel
 // for every emitted command as a CODE FACT — not because the lifecycle ctx happens
@@ -56,33 +104,31 @@ const rotateCertCommandType = "rotate-cert"
 // (the install overwrites). The devices table is likewise not tenant-partitioned in
 // this example. That is correct for this single-tenant iotdevice example (device
 // ids are UUIDs), but anyone copying this archetype into a MULTI-TENANT cell MUST
-// add a tenant dimension to both the devices scan/mark and the commandID
-// derivation — the framework system identity is deliberately tenantless, so a
-// multi-tenant reconciler cannot rely on an ambient ctx tenant; otherwise two
-// tenants sharing a device id would collide on the same Claimer key and one
-// tenant's renewal would suppress the other's.
+// add a tenant dimension to both the devices scan and the commandID derivation —
+// the framework system identity is deliberately tenantless, so a multi-tenant
+// reconciler cannot rely on an ambient ctx tenant; otherwise two tenants sharing a
+// device id would collide on the same Claimer key and one tenant's renewal would
+// suppress the other's.
 type Reconciler struct {
-	clk       clock.Clock
-	repo      domain.DeviceRepository
-	emitter   outbox.CellEmitter
-	txRunner  persistence.CellTxManager
-	threshold time.Duration
-	logger    *slog.Logger
+	clk     clock.Clock
+	repo    domain.DeviceRepository
+	emitter outbox.CellEmitter
+	policy  Policy
+	logger  *slog.Logger
 }
 
 // Compile-time proof the producer satisfies the reconcile.Reconciler contract.
 var _ reconcile.Reconciler = (*Reconciler)(nil)
 
 // NewReconciler constructs the cert-renewal Reconciler. clk is a mandatory
-// positional dependency; repo, emitter and txRunner are required and fail fast
-// when nil; threshold (the near-expiry window) must be positive; a nil logger
-// falls back to slog.Default().
+// positional dependency; repo and emitter are required and fail fast when nil;
+// policy fields must all be positive (validated by Policy.validate());
+// a nil logger falls back to slog.Default().
 func NewReconciler(
 	clk clock.Clock,
 	repo domain.DeviceRepository,
 	emitter outbox.CellEmitter,
-	txRunner persistence.CellTxManager,
-	threshold time.Duration,
+	policy Policy,
 	logger *slog.Logger,
 ) (*Reconciler, error) {
 	clock.MustHaveClock(clk, "devicecertrenewal.NewReconciler")
@@ -94,59 +140,69 @@ func NewReconciler(
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"devicecertrenewal.NewReconciler: emitter must not be nil")
 	}
-	if validation.IsNilInterface(txRunner) {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"devicecertrenewal.NewReconciler: txRunner must not be nil")
-	}
-	if threshold <= 0 {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"devicecertrenewal.NewReconciler: threshold must be positive")
+	if err := policy.validate(); err != nil {
+		return nil, err
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Reconciler{
-		clk: clk, repo: repo, emitter: emitter, txRunner: txRunner,
-		threshold: threshold, logger: logger,
+		clk: clk, repo: repo, emitter: emitter,
+		policy: policy, logger: logger,
 	}, nil
 }
 
-// Reconcile observes every near-expiry certificate and enqueues a renewal command
+// Reconcile observes ALL near-expiry certificates and enqueues a renewal command
 // for each. req.EntityID is ignored: the loop is driven by a TickerTrigger whose
 // resync-all sentinel (empty EntityID) means "re-observe every cert you own" — the
-// renewal producer always sweeps the full near-expiry set (mirroring the device
-// command sweeper).
+// renewal producer always sweeps the full near-expiry set and returns Result{} (no
+// RequeueAfter). The queue active-uniqueness coalesces duplicate emits to no-ops,
+// so repeated sweeps across ticks are safe.
 func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconcile.Result, error) {
-	cutoff := r.clk.Now().Add(r.threshold)
+	now := r.clk.Now()
+	cutoff := now.Add(r.policy.Threshold)
 	candidates, err := r.repo.ListCertificateRenewalCandidates(ctx, cutoff)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("devicecertrenewal: scan near-expiry: %w", err)
 	}
+	if len(candidates) == 0 {
+		r.logger.Debug("devicecertrenewal: no near-expiry certs",
+			slog.Time("cutoff", cutoff))
+		return reconcile.Result{}, nil
+	}
 	for _, cand := range candidates {
-		if err := r.enqueueRenewal(ctx, cand); err != nil {
+		if now.After(cand.CertExpiresAt) {
+			r.logger.Warn("devicecertrenewal: cert already expired — device may be stuck",
+				slog.String("device_id", cand.DeviceID),
+				slog.Int64("cert_epoch", cand.CertEpoch),
+				slog.Duration("expired_for", now.Sub(cand.CertExpiresAt)))
+		}
+		if err := r.enqueueRenewal(ctx, cand, now); err != nil {
 			// Transient: bubble up so the Loop applies backoff and re-sweeps on the
-			// next tick. Already-requested epochs are skipped by the scan on retry,
-			// and the Claimer dedups any same-window re-emit.
+			// next tick. The queue active-uniqueness coalesces any successful prior
+			// emits for the same (device,epoch), so re-sweeping is safe.
 			return reconcile.Result{}, err
 		}
 	}
+	r.logger.Info("devicecertrenewal: swept cert-renewal batch",
+		slog.Int("emitted", len(candidates)),
+		slog.Time("cutoff", cutoff))
 	return reconcile.Result{}, nil
 }
 
-// enqueueRenewal emits one rotate-cert async command for a near-expiry cert and
-// marks the cert's epoch renewal-requested so later ticks skip it. BOTH writes run
-// inside a SINGLE txRunner.RunInTx: in durable PG mode the outbox writer and the
-// devices UPDATE both route through the same ambient pgx.Tx (pgexec.PGExecutor
-// reads persistence.TxFromContext), so they commit or roll back atomically. That
-// closes the single-emit gap end to end — a failed mark rolls the emit back, so the
-// cert stays a candidate and the next tick retries (no orphan command, never a
-// suppressed-but-never-sent renewal), and a committed emit always carries its mark
-// (no "emit committed, mark lost" window). The atomicity is why the per-epoch
-// single-emit owned by devices.renewal_requested_epoch holds for the whole window
-// independently of the relay's 24h Claimer TTL. Demo mode wires the no-op
-// DemoCellTxManager: writes are not transactional there, which is acceptable
-// because demo mode makes no durability guarantee (a stray re-emit is Claimer-deduped).
-func (r *Reconciler) enqueueRenewal(ctx context.Context, cand domain.CertificateRenewalCandidate) error {
+// enqueueRenewal emits one rotate-cert async outbox entry for a near-expiry cert
+// via command.EmitAsync(..., command.WithActiveUniqueness(deadline)).
+// WithActiveUniqueness stamps CommandDeadlineMetadataKey on the entry; the relay
+// reads that key and injects (claimKey, deadline) into the dispatch ctx via
+// rtcommand.WithDispatchedUniqueness before calling the enqueue handler. The
+// downstream handler (devicecmd.Service.Enqueue) then reads
+// rtcommand.DispatchedUniqueness(ctx) and sets EnqueueOptions.IdempotencyKey +
+// Timeouts.OverallDeadline, so the queue enforces active-uniqueness.
+//
+// No txRunner wrapping is required: the emitter is self-durable (the outbox Writer
+// commits the entry atomically in its own internal logic). There is no second write
+// to coordinate, so RunInTx would add no atomicity value here.
+func (r *Reconciler) enqueueRenewal(ctx context.Context, cand domain.CertificateRenewalCandidate, now time.Time) error {
 	payload, err := rotatePayload(cand)
 	if err != nil {
 		return err
@@ -157,16 +213,13 @@ func (r *Reconciler) enqueueRenewal(ctx context.Context, cand domain.Certificate
 		Payload:     payload,
 	}
 	commandID := rotateCommandID(cand.DeviceID, cand.CertEpoch)
-	if err := r.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		if err := command.EmitAsync(txCtx, r.clk, r.emitter, cmdenqueue.DispatchID,
-			cand.DeviceID, commandID, req); err != nil {
-			return err
-		}
-		return r.repo.MarkCertRenewalRequested(txCtx, cand.DeviceID, cand.CertEpoch)
-	}); err != nil {
+	deadline := now.Add(r.policy.AttemptTTL)
+	if err := command.EmitAsync(ctx, r.clk, r.emitter, cmdenqueue.DispatchID,
+		cand.DeviceID, commandID, req,
+		command.WithActiveUniqueness(deadline)); err != nil {
 		return fmt.Errorf("devicecertrenewal: enqueue cert-renewal command: %w", err)
 	}
-	r.logger.Info("devicecertrenewal: enqueued cert-renewal command",
+	r.logger.Debug("devicecertrenewal: enqueued cert-renewal command",
 		slog.String("device_id", cand.DeviceID),
 		slog.Int64("cert_epoch", cand.CertEpoch),
 		slog.Time("not_after", cand.CertExpiresAt))
@@ -175,11 +228,9 @@ func (r *Reconciler) enqueueRenewal(ctx context.Context, cand domain.Certificate
 
 // rotateCommandID is the SINGLE source for the cert-rotation dedup token. The
 // relay derives the Claimer key from (tenant, subject=deviceID, commandID), so a
-// stable id per (deviceID, epoch) makes the secondary Claimer backstop dedup any
-// same-window re-emit of one cert epoch, while a post-rotation re-issue (new epoch)
-// yields a fresh id that dispatches again. (The authoritative per-epoch dedup is
-// the devices.renewal_requested_epoch mark — see the Reconciler doc.) Callers MUST
-// NOT hand-roll this string.
+// stable id per (deviceID, epoch) makes active-uniqueness dedup any concurrent
+// re-emit of one cert epoch, while a post-rotation re-issue (new epoch) yields a
+// fresh id that dispatches again. Callers MUST NOT hand-roll this string.
 //
 // The id deliberately embeds deviceID even though the Claimer key already scopes
 // by subject=deviceID: this keeps the token self-describing in logs/DLX and safe

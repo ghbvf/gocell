@@ -15,10 +15,12 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	rtcommand "github.com/ghbvf/gocell/runtime/command"
 )
 
 func testCodec() *query.CursorCodec {
@@ -447,4 +449,104 @@ func TestService_Enqueue_ThenDequeue_Report_ThenAck(t *testing.T) {
 	got, err := q.GetCommand(ctx, entry.ID)
 	require.NoError(t, err)
 	assert.True(t, got.Status.IsTerminal())
+}
+
+// TestEnqueue_WithDispatchedUniqueness_SetsIdempotencyKeyAndOverallDeadline
+// proves that when ctx carries a (key, deadline) pair injected by the relay's
+// WithDispatchedUniqueness — the active-uniqueness path (#1820) — the Enqueue
+// method sets both opts.IdempotencyKey and entry Timeouts.OverallDeadline.
+//
+// Setup: inject a uniqueness ctx with a known key and deadline, enqueue a
+// command, then verify:
+//  1. The queue has exactly one command (i.e., Enqueue did not no-op).
+//  2. A second Enqueue with the same key is coalesced to a no-op (dedup).
+//  3. OverallDeadline is carried on the entry (scanned from the queue).
+func TestEnqueue_WithDispatchedUniqueness_SetsIdempotencyKeyAndOverallDeadline(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	base := time.Date(2026, 6, 12, 0, 0, 0, 0, time.UTC)
+	fc := clockmock.New(base)
+
+	devRepo := mem.NewDeviceRepository()
+	require.NoError(t, devRepo.Create(ctx, &domain.Device{
+		ID: "dev-u", Name: "dev-u", Status: "online", LastSeen: base,
+	}))
+
+	q := commandtest.NewInMemQueue()
+	q.Now = fc.Now
+	svc, err := NewService(fc, q, devRepo, testCodec(), slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
+
+	const idemKey = "test-uniqueness-key-1"
+	deadline := base.Add(36 * time.Hour)
+
+	// Inject (key, deadline) as the relay would on dispatch.
+	uCtx := rtcommand.WithDispatchedUniqueness(ctx, idemKey, deadline)
+
+	// First enqueue: must succeed and create exactly one command.
+	entry1, err := svc.Enqueue(uCtx, "dev-u", "rotate-cert", `{"epoch":1}`)
+	require.NoError(t, err)
+	assert.NotEmpty(t, entry1.ID, "first enqueue must create a command")
+
+	// Second enqueue with same key: must be coalesced to a no-op by the queue.
+	// The Service generates a local ID before calling queue.Enqueue; the queue
+	// silently no-ops (returns nil) so the service returns the locally-built entry.
+	// The observable correctness proof is the active-count assertion below.
+	_, err = svc.Enqueue(uCtx, "dev-u", "rotate-cert", `{"epoch":1}`)
+	require.NoError(t, err)
+
+	active, scanErr := q.ScanActive(ctx, command.ScanFilter{DeviceID: "dev-u"})
+	require.NoError(t, scanErr)
+	assert.Len(t, active, 1, "duplicate enqueue with same IdempotencyKey must be coalesced")
+
+	// OverallDeadline: the stored entry must carry the OverallDeadline derived
+	// from deadline.Sub(now). We can verify indirectly via SweepOnce: advancing
+	// past the deadline and sweeping must expire the command.
+	fc.Advance(36*time.Hour + time.Second) // past OverallDeadline
+	transitions := command.SweepOnce(active, fc.Now())
+	require.Len(t, transitions, 1, "the command must be expired after advancing past OverallDeadline")
+	assert.Equal(t, command.StatusExpired, transitions[0].To)
+}
+
+// TestEnqueue_BareCtx_NoIdempotencyKeyNoDeadline proves that when ctx carries
+// NO dispatched uniqueness (a direct HTTP caller — no relay ctx injection) the
+// Enqueue path sets no IdempotencyKey and no OverallDeadline. This preserves
+// the existing behavior for operator-initiated commands (no dedup, no expiry).
+func TestEnqueue_BareCtx_NoIdempotencyKeyNoDeadline(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	devRepo := mem.NewDeviceRepository()
+	require.NoError(t, devRepo.Create(ctx, &domain.Device{
+		ID: "dev-bare", Name: "dev-bare", Status: "online",
+	}))
+
+	q := commandtest.NewInMemQueue()
+	svc, err := NewService(clock.Real(), q, devRepo, testCodec(), slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
+
+	// Bare context: no relay uniqueness injection.
+	_, _, ok := rtcommand.DispatchedUniqueness(ctx)
+	require.False(t, ok, "bare ctx must not carry dispatched uniqueness")
+
+	entry, err := svc.Enqueue(ctx, "dev-bare", "reboot", `{"reason":"test"}`)
+	require.NoError(t, err)
+	assert.NotEmpty(t, entry.ID)
+
+	// A second enqueue with the same payload goes through without dedup
+	// (no IdempotencyKey → the queue does not coalesce it).
+	entry2, err := svc.Enqueue(ctx, "dev-bare", "reboot", `{"reason":"test"}`)
+	require.NoError(t, err)
+	assert.NotEmpty(t, entry2.ID)
+	assert.NotEqual(t, entry.ID, entry2.ID, "bare-ctx enqueues must not be coalesced")
+
+	active, scanErr := q.ScanActive(ctx, command.ScanFilter{DeviceID: "dev-bare"})
+	require.NoError(t, scanErr)
+	assert.Len(t, active, 2, "both bare-ctx commands must be admitted (no dedup)")
+
+	// No OverallDeadline: sweeping at any time within the lease should not expire
+	// the command. (Zero deadline means the Sweeper never triggers PhaseOverall.)
+	transitions := command.SweepOnce(active, time.Now().Add(365*24*time.Hour))
+	assert.Empty(t, transitions, "bare-ctx commands have no OverallDeadline — Sweeper must not expire them")
 }

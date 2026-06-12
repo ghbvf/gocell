@@ -44,9 +44,7 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	fsys := testMigrationsFS(t)
 	v, err := ExpectedVersion(fsys)
 	require.NoError(t, err)
-	// Currently 45 migrations: 001-033 contiguous, plus 040-051 (intentional gap
-	// per saga/L3 plan §R2 — 034-039 reserved for parallel PRs; goose sorts
-	// by number, gaps are harmless).
+	// Migration changelog (count is dynamic — verified by assert.Equal below):
 	// 017/018/019 land users/sessions/roles schema for accesscore PG repos (S3+S5);
 	// 020 adds audit_entries table for the ledger.Store PG backend; 021 adds the
 	// (namespace, event_id) UNIQUE INDEX second-line idempotency guard;
@@ -103,8 +101,11 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// FORCE RLS tenant_isolation for the durable ABAC policy store (EPIC #1337 PR-8, #1346).
 	// 060 adds policies.version INT NOT NULL DEFAULT 1 for optimistic-concurrency (CAS)
 	// versioning of the ABAC policy aggregate (EPIC #1337 PR-9, #1347).
-	assert.Equal(t, int64(60), v,
-		"expected version should be exactly 60 (current migration max — 060_add_policies_version)")
+	// 061 replaces the permanent idempotency key index with a state-aware active-uniqueness
+	// partial index on commands (status IN 1,2,3) for retry-release semantics (#1820).
+	// 062 drops devices.renewal_requested_epoch (stateless cert-renewal producer, #1820).
+	assert.Equal(t, int64(62), v,
+		"expected version should be exactly 62 (current migration max — 062_drop_devices_renewal_requested_epoch)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {

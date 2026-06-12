@@ -123,12 +123,15 @@ func WithBootstrapEmitter(e outbox.CellEmitter) Option {
 	return func(c *DeviceCell) { c.bootstrapEmitter = e }
 }
 
-// WithBootstrapTxManager sets the CellTxManager injected into BOTH async command
-// producers: the devicebootstrap reactive slice and the cert-renewal reconcile
-// loop (#1757). Each wraps command.EmitAsync in txRunner.RunInTx so durable mode
-// (PG outbox writer) gets a real transaction in ctx. The cell defaults the field
-// to outbox.DemoCellTxManager() (no-op) in NewDeviceCell, so demo mode and tests
-// work without wiring it.
+// WithBootstrapTxManager sets the CellTxManager injected into the devicebootstrap
+// reactive slice. That slice wraps command.EmitAsync in txRunner.RunInTx so
+// durable mode (PG outbox writer) gets a real transaction in ctx. The cell
+// defaults the field to outbox.DemoCellTxManager() (no-op) in NewDeviceCell, so
+// demo mode and tests work without wiring it.
+//
+// The cert-renewal reconcile loop does NOT use this txManager: its emitter is
+// self-durable (the outbox writer commits atomically in its own internal logic),
+// and buildCertRenewalSweeper does not pass bootstrapTxManager to NewReconciler.
 //
 // Accumulative: a nil tx leaves the previously-set (default) value in place. NOT
 // required (no fail-fast guard): DemoCellTxManager is the safe default for
@@ -556,23 +559,28 @@ func (c *DeviceCell) reconcileLoopMetrics() (reconcile.Metrics, bool, error) {
 
 const (
 	// certRenewalSweepInterval is the TickerTrigger cadence for the cert-renewal
-	// reconcile loop. Certificate expiry is slow-moving (days), so an hourly
+	// reconcile loop. Certificate expiry is slow-moving (days), so a 12h
 	// re-observation is ample; like commandSweepInterval it is the SOLE periodic
-	// source (WithoutDefaultRequeue below).
-	certRenewalSweepInterval = 1 * time.Hour
+	// source (WithoutDefaultRequeue below). Stateless producer: the sweep cadence
+	// only drives observation frequency, not correctness — the queue active-
+	// uniqueness owns dedup and the Sweeper owns expiry.
+	certRenewalSweepInterval = 12 * time.Hour
 	// certRenewalThreshold is the near-expiry window: a device whose certificate
-	// expires within this window of "now" is swept into a rotate-cert command.
+	// expires within now+threshold is swept into a rotate-cert command.
 	//
-	// Two co-tuning relationships (not machine-enforced — example tuning, not an
-	// invariant mechanism): (1) threshold is normally >> certRenewalSweepInterval,
-	// so a near-expiry cert is re-observed across many ticks; that is harmless
-	// because the devices.renewal_requested_epoch column records the requested
-	// epoch and ListCertificateRenewalCandidates skips it, so each epoch emits
-	// exactly one command for the whole window (single-emit does NOT depend on the
-	// relay's 24h command-done TTL — see the devicecertrenewal slice); (2) the
-	// issued cert validity (deviceregister.certValidity, 90d) MUST exceed this
-	// threshold so a freshly registered device is not swept for renewal immediately.
+	// Co-tuning: the issued cert validity MUST exceed this threshold so a freshly
+	// registered device is not swept for renewal immediately.
+	// See deviceregister.certValidity (must exceed certRenewalThreshold).
 	certRenewalThreshold = 30 * 24 * time.Hour
+	// certRenewalAttemptTTL is the retry-granularity timer: how long one
+	// rotate-cert command attempt stays active (non-terminal) before the Sweeper
+	// expires it. After expiry the active-uniqueness slot is released and the next
+	// reconcile tick re-enqueues a fresh attempt.
+	//
+	// Chosen at 36h — comfortably exceeding a healthy device's daily poll cycle
+	// (worst-case poll+execute round-trip). Stateless producer: this is the ONLY
+	// co-tuning needed (#1820 ADR-1822); no RetryInterval/Claimer-TTL relationship.
+	certRenewalAttemptTTL = 36 * time.Hour
 )
 
 // buildCertRenewalSweeper constructs the certificate-renewal reconcile.Loop —
@@ -588,8 +596,12 @@ const (
 // fail-fast guards reached before here.
 func (c *DeviceCell) buildCertRenewalSweeper() error {
 	reconciler, err := devicecertrenewal.NewReconciler(
-		c.clk, c.deviceRepo, c.bootstrapEmitter, c.bootstrapTxManager,
-		certRenewalThreshold, c.logger,
+		c.clk, c.deviceRepo, c.bootstrapEmitter,
+		devicecertrenewal.Policy{
+			Threshold:  certRenewalThreshold,
+			AttemptTTL: certRenewalAttemptTTL,
+		},
+		c.logger,
 	)
 	if err != nil {
 		return fmt.Errorf("device-cert renewal reconciler: %w", err)
@@ -598,7 +610,9 @@ func (c *DeviceCell) buildCertRenewalSweeper() error {
 		WithTrigger(reconcile.TickerTrigger(c.clk, certRenewalSweepInterval)).
 		WithName("devicecert.renewal").
 		WithReconcilerID("devicecert_renewal"). // label-safe: [a-z0-9_], no dots
-		WithoutDefaultRequeue()                 // ticker is the sole periodic source
+		// ticker is the sole periodic re-observation source; Reconcile always
+		// returns Result{} (zero RequeueAfter) so no self-requeue occurs.
+		WithoutDefaultRequeue()
 	m, ok, err := c.reconcileLoopMetrics()
 	if err != nil {
 		return fmt.Errorf("device-cert reconcile metrics: %w", err)

@@ -66,14 +66,14 @@ const gotWantQuotedFmt = "got %q want %q"
 //   - devices            (029)  examples/iotdevice devicecell PG repo (B2.B)
 //                                 + devices_status_chk CHECK (status IN online/offline)
 //                                 + cert_epoch BIGINT NOT NULL DEFAULT 1,
-//                                   cert_expires_at TIMESTAMPTZ (nullable, no default),
-//                                   renewal_requested_epoch BIGINT NOT NULL DEFAULT 0 (056)
+//                                   cert_expires_at TIMESTAMPTZ (nullable, no default) (056)
 //                                 + devices_cert_epoch_positive CHECK (cert_epoch >= 1) (056)
 //                                 + idx_devices_cert_expires_at (cert_expires_at, id) (057)
+//                                 + renewal_requested_epoch DROPPED (062, #1820)
 //   - commands           (030)  examples/iotdevice command queue PG adapter (B2.B)
 //                                 + commands.device_id FK → devices(id) ON DELETE RESTRICT
 //                                 + commands_status_chk, commands_attempt_chk
-//                                 + idx_commands_idempotency_key UNIQUE partial (031)
+//                                 + idx_commands_idempotency_key UNIQUE partial (031→061 state-aware)
 //   - saga_instances     (040)  saga coordinator instance projection + lease fencing
 //                                 + saga_instances_status_range, saga_instances_version_nonneg,
 //                                   saga_instances_lease_paired CHECK
@@ -611,9 +611,9 @@ var expectedColumns = []expectedColumn{
 	{Table: "devices", Column: "status", Type: "text", NotNull: true},
 	{Table: "devices", Column: "last_seen", Type: pgTypeTSTZ, NotNull: true},
 	// 056_devices_cert_renewal.sql — durable cert-renewal state (#1819).
+	// 062_drop_devices_renewal_requested_epoch.sql — dropped renewal_requested_epoch (#1820).
 	{Table: "devices", Column: "cert_epoch", Type: "bigint", NotNull: true},
 	{Table: "devices", Column: "cert_expires_at", Type: pgTypeTSTZ, NotNull: false},
-	{Table: "devices", Column: "renewal_requested_epoch", Type: "bigint", NotNull: true},
 	// commands (030_commands.sql) — kernel/command.Queue PG adapter (B2.B).
 	{Table: "commands", Column: "id", Type: "text", NotNull: true},
 	{Table: "commands", Column: "device_id", Type: "text", NotNull: true},
@@ -689,6 +689,14 @@ var forbiddenColumns = []requiredColumn{
 	// S4d (PR S4d) restored sessions.authz_epoch_at_issue via migration 026.
 	// ADR §0 A1 (the original "drop" justification) is RETRACTED — the row is
 	// credential provenance source-of-truth, not a JWT claim mirror. See ADR §A8.
+
+	// #1820 / migration 062: renewal_requested_epoch was DROPPED from devices.
+	// The reconciler-driven cert-renewal state machine uses cert_epoch + the
+	// reconcile loop for convergence; the epoch-at-request field is redundant and
+	// was removed. Asserting absence here causes /readyz to fail loudly if the
+	// column ever reappears via a botched rollback or out-of-band DDL —
+	// symmetric with how sessions.access_token is guarded above.
+	{table: "devices", column: "renewal_requested_epoch"},
 }
 
 // expectedPKs is the primary key registry.
@@ -743,9 +751,7 @@ var expectedDefaults = []expectedDefault{
 	// DEFAULT 1. A dropped default would cause bare SQL inserts (e.g. test fixtures)
 	// to fail NOT NULL.
 	{Table: "devices", Column: "cert_epoch", Default: "1"},
-	// devices.renewal_requested_epoch (056) — raw-SQL inserts that omit the column
-	// rely on DEFAULT 0 (no pending renewal). NOT NULL constraint requires the default.
-	{Table: "devices", Column: "renewal_requested_epoch", Default: "0"},
+	// devices.renewal_requested_epoch was dropped by 062 (#1820).
 }
 
 // expectedIndexes covers both unique and non-unique indexes across S3F tables.
@@ -812,9 +818,12 @@ var expectedIndexes = []expectedIndex{
 	{Table: "commands", Name: "idx_commands_pending_fifo", Unique: false, Columns: []string{"device_id", "created_at"}},
 	{Table: "commands", Name: "idx_commands_active_lease", Unique: false, Columns: []string{"lease_expiry"}},
 	{Table: "commands", Name: "idx_commands_device_active", Unique: false, Columns: []string{"device_id", "status", "created_at"}},
-	// 031_commands_idempotency_unique.sql: expression index on (metadata->>'_idempotency_key')
+	// 061_commands_idempotency_active_index.sql: expression index on (metadata->>'_idempotency_key')
+	// with WHERE predicate restricting to non-terminal status IN (1,2,3).
 	// The key position is an expression; pg_index.indkey = 0 for expression columns,
 	// pg_attribute.attname is NULL. The sentinel "(expr)" marks this position.
+	// The WHERE predicate is not captured by expectedIndex (only name/unique/columns
+	// are checked); Unique:true and Columns:[]string{"(expr)"} remain correct.
 	{Table: "commands", Name: "idx_commands_idempotency_key", Unique: true, Columns: []string{"(expr)"}},
 	// saga_instances (040_create_saga_tables.sql) — partial index over claimable rows.
 	{Table: "saga_instances", Name: "idx_saga_instances_claimable", Unique: false, Columns: []string{"started_at", "id"}},

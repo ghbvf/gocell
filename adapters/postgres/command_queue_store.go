@@ -143,15 +143,25 @@ SELECT ` + commandSelectCols + `
 const getCommandSQL = `SELECT ` + commandSelectCols + ` FROM commands WHERE id = $1`
 
 // enqueueInsertSQL writes a new command row. The `ON CONFLICT … DO NOTHING`
-// clause matches migration 031's partial unique index
-// `idx_commands_idempotency_key` on `metadata->>'_idempotency_key'` (predicate
-// `metadata->>'_idempotency_key' IS NOT NULL`). When a row with the same key
-// already exists, PG silently skips the insert — RowsAffected returns 0 and
-// the surrounding transaction stays clean. This is the L4 idempotent-no-op
-// path; PK collisions (different idempotency context, same id) still raise
-// unique_violation and route to ErrConflict in insertEntry.
+// clause matches migration 061's state-aware active partial unique index
+// `idx_commands_idempotency_key` on `metadata->>'_idempotency_key'`. The
+// arbiter predicate MUST EXACTLY MATCH the index predicate:
 //
-// ref: River queue / Hatchet INSERT … ON CONFLICT DO NOTHING dedup pattern.
+//	WHERE metadata->>'_idempotency_key' IS NOT NULL AND status IN (1,2,3)
+//
+// Non-terminal statuses 1=Pending, 2=Sent, 3=Delivered correspond to
+// kernel/command Status.IsTerminal() returning false for those values.
+// Terminal rows (4=Succeeded, 5=Failed, 6=Expired, 7=Canceled) drop out of
+// the index, releasing the key for retry submissions.
+//
+// When an active row already holds the same key, PG silently skips the insert
+// — RowsAffected returns 0 and the surrounding transaction stays clean. This
+// is the L4 idempotent-no-op path. PK collisions (same id, no matching
+// idempotency key) still raise unique_violation and route to ErrConflict.
+// New inserts land at status=1 (Pending), so the arbiter fires correctly.
+//
+// ref: River queue ByState uniqueness / Temporal single-open-workflow model.
+// ref: adapters/postgres/migrations/061_commands_idempotency_active_index.sql
 const enqueueInsertSQL = `
 INSERT INTO commands (
 	id, device_id, command_type, payload, metadata, status, attempt,
@@ -159,7 +169,7 @@ INSERT INTO commands (
 	timeouts_schedule_to_send_ns, timeouts_send_to_complete_ns, timeouts_overall_ns
 ) VALUES ($1, $2, $3, $4, $5, 1, 0, $6, $7, $8, $9)
 ON CONFLICT ((metadata->>'_idempotency_key'))
-   WHERE metadata->>'_idempotency_key' IS NOT NULL
+   WHERE metadata->>'_idempotency_key' IS NOT NULL AND status IN (1,2,3)
    DO NOTHING`
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,57 @@
+-- Migration 062: drop devices.renewal_requested_epoch (retired by #1820).
+--
+-- Runbook (DESTRUCTIVE FORWARD — operator steps required, migrations/README.md
+-- rule 6): this Up DROPs a column the running OLD binary still INSERTs/UPDATEs
+-- (via MarkCertRenewalRequested), so once the column is gone the old binary's
+-- writes fail immediately. GoCell does not maintain old-binary back-compat
+-- (CLAUDE.md "Review 和重构时不考虑向后兼容"), so there is NO rolling-deploy
+-- window — the cutover is a coordinated, drained deploy:
+--   1. Stop / drain all device-command write traffic to the OLD iotdevice binary
+--      (no instance may still execute MarkCertRenewalRequested).
+--   2. Run `goose up` (this migration).
+--   3. Deploy the NEW binary. It has no renewal_requested_epoch reader or writer
+--      (the producer is now stateless — correctness moved to the device command
+--      queue's active-uniqueness, migration 061), so it serves cleanly.
+--   4. Restore traffic.
+-- This migration runs in the same drained window as 061 (both are part of the
+-- #1820 stateful→stateless producer cutover).
+--
+-- Background: the cert-renewal producer was stateful (#1819): it wrote a
+-- renewal_requested_epoch on the devices row to suppress duplicate rotate-cert
+-- commands across ticks. This was F1 (#1820): offline devices could accumulate
+-- unbounded duplicate active commands because the mark only suppressed the
+-- *producer* emit, not the relay re-dispatch.
+--
+-- Fix (#1820): the producer is now STATELESS. Correctness is owned by the
+-- device command queue via active-uniqueness (state-aware IdempotencyKey partial
+-- index, migration 061). The producer emits on every tick; the queue coalesces
+-- duplicates to no-ops; the Sweeper's OverallDeadline releases the key on expiry.
+-- renewal_requested_epoch is neither written nor read by any Go code path and can
+-- be dropped.
+--
+-- schema_guard.go: remove {Table:"devices", Column:"renewal_requested_epoch",...}
+-- from expectedColumns and expectedDefaults. Callers that performed
+-- MarkCertRenewalRequested have been removed; no FK or index references remain.
+--
+-- lock_timeout: injected at session level by the migrator (migrations/README.md
+-- rule 4); this file does not set it.
+--
+-- Down authorization + rollback order: the Down is a NON-destructive
+-- `ADD COLUMN IF NOT EXISTS … DEFAULT 0`, so it needs no destructive-down /
+-- forward-rebuild permit (issue #1248) — it only restores the column shape, not
+-- data (renewal_requested_epoch is producer-side suppression state, not business
+-- data, so there is nothing to restore). To roll back new→old: drain traffic →
+-- `goose down` (re-adds the column at DEFAULT 0) → deploy the OLD binary →
+-- restore traffic; the old binary resumes writing the column from 0.
+--
+-- ref: adapters/postgres/migrations/056_devices_cert_renewal.sql (original ADD COLUMN)
+-- ref: adapters/postgres/migrations/061_commands_idempotency_active_index.sql (state-aware uniqueness)
+-- ref: adapters/postgres/migrations/044_outbox_entries_principal.sql (destructive-forward runbook example)
+-- ref: adapters/postgres/migrations/README.md rule 6 (destructive forward migration runbook)
+-- ref: issue #1820 (stateless cert-renewal producer, F1 fix)
+
+-- +goose Up
+ALTER TABLE devices DROP COLUMN IF EXISTS renewal_requested_epoch;
+
+-- +goose Down
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS renewal_requested_epoch BIGINT NOT NULL DEFAULT 0;

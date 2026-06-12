@@ -70,26 +70,25 @@ func NewPGDeviceRepository(pool *pgxpool.Pool, txRunner persistence.TxRunner, cl
 const (
 	// deviceColumns is the single source for the full device column list (in
 	// scan order) shared by every SELECT, so the column set and scanDeviceRow
-	// never drift.
-	deviceColumns = "id, name, status, last_seen, cert_epoch, cert_expires_at, renewal_requested_epoch"
+	// never drift. renewal_requested_epoch was retired by migration 062 (#1820);
+	// only the cert-expiry columns remain on the devices row.
+	deviceColumns = "id, name, status, last_seen, cert_epoch, cert_expires_at"
 
-	insertDeviceSQL = "INSERT INTO devices (" + deviceColumns + ") VALUES ($1, $2, $3, $4, $5, $6, $7)"
+	insertDeviceSQL = "INSERT INTO devices (" + deviceColumns + ") VALUES ($1, $2, $3, $4, $5, $6)"
 
 	selectDeviceByIDSQL = "SELECT " + deviceColumns + " FROM devices WHERE id = $1"
 
-	// selectCertRenewalCandidatesSQL returns near-expiry certs whose current
-	// epoch has not yet been renewal-requested. cert_expires_at IS NOT NULL
-	// excludes rows with no issued cert (zero expiry <-> NULL).
+	// selectCertRenewalCandidatesSQL returns ALL near-expiry certs eligible for
+	// renewal. cert_expires_at IS NOT NULL excludes rows with no issued cert
+	// (zero expiry <-> NULL). No LIMIT — the reconciler sweeps the full set per
+	// tick. Correctness (dedup, retry throttle) is owned by the command queue
+	// active-uniqueness (#1820); this scan is purely a cert-expiry predicate.
 	selectCertRenewalCandidatesSQL = `
 SELECT id, cert_epoch, cert_expires_at
 FROM devices
-WHERE cert_expires_at IS NOT NULL AND cert_expires_at <= $1 AND renewal_requested_epoch <> cert_epoch
+WHERE cert_expires_at IS NOT NULL
+  AND cert_expires_at <= $1
 ORDER BY cert_expires_at ASC, id ASC`
-
-	// markCertRenewalRequestedSQL is a compare-and-set on cert_epoch: it records
-	// the renewal-requested epoch only while the row's current epoch still
-	// matches (0 rows affected when re-issued/gone is a valid no-op).
-	markCertRenewalRequestedSQL = "UPDATE devices SET renewal_requested_epoch = $2 WHERE id = $1 AND cert_epoch = $2"
 )
 
 // Create inserts a new device row. Returns ErrConflict on unique constraint violation.
@@ -103,7 +102,6 @@ func (r *PGDeviceRepository) Create(ctx context.Context, device *domain.Device) 
 		d.LastSeen,
 		d.CertEpoch,
 		nullableTime(d.CertExpiresAt),
-		d.RenewalRequestedEpoch,
 	)
 	if err != nil {
 		if pgquery.IsUniqueViolation(err) {
@@ -180,13 +178,15 @@ func (r *PGDeviceRepository) List(ctx context.Context, params query.ListParams) 
 	return devices, nil
 }
 
-// ListCertificateRenewalCandidates returns near-expiry certs whose current epoch
-// has not yet been renewal-requested, sorted by expiry then id. See the
-// domain.DeviceRepository contract.
+// ListCertificateRenewalCandidates returns ALL near-expiry certs
+// (cert_expires_at <= cutoff, non-zero), sorted by expiry then id. No LIMIT is
+// applied — the reconciler sweeps the full set on each tick. See the
+// domain.DeviceRepository contract. Correctness (dedup, retry throttle) is
+// delegated to the command queue active-uniqueness (#1820).
 func (r *PGDeviceRepository) ListCertificateRenewalCandidates(
-	ctx context.Context, expiresBefore time.Time,
+	ctx context.Context, cutoff time.Time,
 ) ([]domain.CertificateRenewalCandidate, error) {
-	rows, err := r.db.Query(ctx, selectCertRenewalCandidatesSQL, expiresBefore)
+	rows, err := r.db.Query(ctx, selectCertRenewalCandidatesSQL, cutoff)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "device_repo: list cert renewal candidates", err)
 	}
@@ -205,20 +205,6 @@ func (r *PGDeviceRepository) ListCertificateRenewalCandidates(
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "device_repo: list cert renewal candidates rows", err)
 	}
 	return out, nil
-}
-
-// MarkCertRenewalRequested is a compare-and-set on cert_epoch (see the
-// domain.DeviceRepository contract). Zero rows affected (re-issued/gone) is a
-// valid no-op, not an error.
-func (r *PGDeviceRepository) MarkCertRenewalRequested(ctx context.Context, deviceID string, epoch int64) error {
-	if _, err := r.db.Exec(ctx, markCertRenewalRequestedSQL, deviceID, epoch); err != nil {
-		slog.Error("device_repo: pg write failed",
-			slog.String("operation", "mark_cert_renewal_requested"),
-			slog.String("device_id", deviceID),
-			slog.Any("error", err))
-		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "device_repo: mark cert renewal requested", err)
-	}
-	return nil
 }
 
 // buildListQuery constructs the SELECT SQL and placeholder args for a List call.
@@ -322,15 +308,18 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-// scanDeviceRow scans a full device row (id..renewal_requested_epoch, in
-// deviceColumns order) into a domain.Device. cert_expires_at is nullable: a SQL
-// NULL leaves CertExpiresAt zero ("no cert issued").
+// scanDeviceRow scans a full device row (id..cert_expires_at, in deviceColumns
+// order) into a domain.Device. cert_expires_at is nullable: SQL NULL leaves
+// the field zero ("no cert issued").
 func scanDeviceRow(s rowScanner) (*domain.Device, error) {
 	var d domain.Device
 	var status string
 	var lastSeen time.Time
 	var certExpiresAt *time.Time
-	if err := s.Scan(&d.ID, &d.Name, &status, &lastSeen, &d.CertEpoch, &certExpiresAt, &d.RenewalRequestedEpoch); err != nil {
+	if err := s.Scan(
+		&d.ID, &d.Name, &status, &lastSeen,
+		&d.CertEpoch, &certExpiresAt,
+	); err != nil {
 		return nil, err
 	}
 	if !validDeviceStatus(status) {
@@ -347,8 +336,8 @@ func scanDeviceRow(s rowScanner) (*domain.Device, error) {
 	return &d, nil
 }
 
-// nullableTime maps a zero time.Time to SQL NULL ("no cert issued") and any
-// other value to itself, so cert_expires_at round-trips zero <-> NULL.
+// nullableTime maps a zero time.Time to SQL NULL and any other value to itself,
+// so nullable timestamp columns round-trip zero <-> NULL.
 func nullableTime(t time.Time) any {
 	if t.IsZero() {
 		return nil
