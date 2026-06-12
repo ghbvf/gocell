@@ -769,6 +769,36 @@ rebuild 卡在 Replay 相。下游查询读到陈旧 read-model。
 确保 p95 ≥ 30min 的触发条件可测量而不塌缩入 +Inf。p95 PromQL：
 `histogram_quantile(0.95, sum(rate(gocell_projection_rebuild_duration_seconds_bucket[1h])) by (le, cell, projection))`
 
+### `projection_events` journal 增长监控（#1504 PR-02）
+
+durable 投影 journal `projection_events` 是 **append-only、归档能力尚 out-of-scope（ADR §D8）**，
+故从 PR-02 装饰器部署起持续增长。topic-filter（D4）已把写入面限到真会被 replay 的 projection-source
+事件，但仍须监控表大小并接入容量告警（无内置 metric——表大小由 PG 侧采集，如 postgres_exporter
+`pg_relation_size`）：
+
+```yaml
+# 需 postgres_exporter 暴露 pg_relation_size{relname="projection_events"}（或等价采集）
+- alert: GoCellProjectionEventsJournalGrowthHigh
+  expr: pg_relation_size{relname="projection_events"} > 5e10  # 50 GiB，按部署容量调
+  for: 30m
+  labels:
+    severity: warning
+  annotations:
+    summary: "projection_events journal large (append-only, no archival yet)"
+    description: |
+      The durable projection_events journal exceeds the capacity threshold. It is
+      append-only (ADR 202606071600-1504 §D7) with archival still out-of-scope
+      (§D8): truncation MUST stay ≥ MIN(projection_checkpoints.offset_seq) or
+      rebuildable history is lost. Treat as a capacity-planning signal — provision
+      storage, or prioritise the archival epic (D8). Do NOT manually DELETE/TRUNCATE
+      the table (serving role is REVOKEd UPDATE/DELETE; only a table-owner migration
+      could, and must honour the checkpoint floor).
+```
+
+运维注意（ADR §8）：首次 full rebuild 后 `projection_event_replay_lag_seconds` 快速降至 ~0 仅表示
+读完 journal，**不**代表历史完整（bootstrap gap：journal 仅从 PR-02 部署起 append）；数据完整性须
+经 `projection_checkpoints.offset_seq` + 业务校验确认，不能仅看 lag。
+
 ---
 
 ## Saga-Journal Tailer 可观测性（#1609 PR-04）

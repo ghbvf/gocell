@@ -7,7 +7,7 @@
   - `docs/architecture/202605261620-adr-cqrs-projection-lifecycle-harness.md`（#1100 投影 harness Q1–Q5：Coordinator / CheckpointStore / ReplaySource / Cursor / Apply；本 ADR 即其 §Amendment 2026-06-03 retention-boundary 标注的 C1 设计项）
   - `docs/architecture/202606051200-1609-adr-saga-journal-projection-source.md`（saga 事件的 model-a 投影源：`GlobalReader` + `global_seq` + `cellvocab.ProjectionEvent` 载体——本 ADR 复用其已落地地基，载体不同）
 - Amends：`docs/architecture/202605261620-adr-cqrs-projection-lifecycle-harness.md` §Amendment 2026-06-03 retention-boundary 段 + §6 威胁矩阵 Row 1（同 PR 原地重写，见 §Amendment 段）；`docs/architecture/202606051200-1609-adr-saga-journal-projection-source.md` §1.2 加 back-pointer
-- 范围：EPIC #1504 的 **PR-00**（ADR）。PR-01..05 + PR-PG 见 §9 子 PR 映射；本 ADR 是该 EPIC 的设计权威源。三条新 enforcement invariant（`PROJECTION-EVENT-JOURNAL-APPEND-CALLER-01` / `PROJECTION-EVENT-JOURNAL-NO-DELETE-01` / `PROJECTION-EVENT-JOURNAL-TOPIC-ALLOWLIST-DERIVED-01`）**尚未落地**，随实现 PR 增量回灌 `eventbus.md` 的 Archtest Invariants 导航表。
+- 范围：EPIC #1504 的 **PR-00**（ADR）。PR-01..05 + PR-PG 见 §9 子 PR 映射；本 ADR 是该 EPIC 的设计权威源。三条新 enforcement invariant 中 `PROJECTION-EVENT-JOURNAL-APPEND-CALLER-01`（I2）+ `…-TOPIC-ALLOWLIST-DERIVED-01`（I5）**已随 PR-02（#1769）落地**（权威盲区/反向自检活在各 archtest godoc）；`PROJECTION-EVENT-JOURNAL-NO-DELETE-01`（I4 archtest 纵深）随 PR-05 落地（I4 主守卫 DB-REVOKE 已在 PR-01）。`eventbus.md` projection 段已加导航指针。
 
 > **真值边界**：本 ADR 决策以本文为准。`202605261620` §Amendment 2026-06-03 retention-boundary 段与 §6 Row 1 在同 PR 内原地重写为指向本 ADR 的指针（per `ai-robust.md` §"ADR amendment 落地必查"——原文与 amendment 不得两套真理源共存）。
 
@@ -136,24 +136,33 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_projection_events_id ON projection_events 
 ```go
 // adapters/postgres：journaling Writer 装饰器（emit 期同事务双写）
 // projectionTopics = composition root 从 cellgen 派生的 projection-source topic 集注入。
+// 保留基础 *OutboxWriter 的 BatchWriter 能力（Write + WriteBatch），两者经单一
+// chokepoint journalProjectionSubset 收口，故 I2 caller-allowlist 唯一项即该 chokepoint。
 type journalingOutboxWriter struct {
     inner            *OutboxWriter            // 基础 outbox 写入（保持通用）
     projectionTopics map[string]struct{}      // topic-filtered（D4）
 }
 
 func (w *journalingOutboxWriter) Write(ctx context.Context, e outbox.Entry) error {
-    if err := w.inner.Write(ctx, e); err != nil {     // 写 outbox_entries（已 ambient-tx）
+    if err := w.inner.Write(ctx, e); err != nil {           // 写 outbox_entries（已 ambient-tx）
         return err
     }
-    if _, ok := w.projectionTopics[e.RoutingTopic()]; ok {
-        return w.appendProjectionEvent(ctx, e)        // 同事务、未导出（I2 forge 封口）
-    }
-    return nil
+    return w.journalProjectionSubset(ctx, []outbox.Entry{e})
 }
+
+func (w *journalingOutboxWriter) WriteBatch(ctx context.Context, es []outbox.Entry) error {
+    if err := w.inner.WriteBatch(ctx, es); err != nil {     // 保留多行 INSERT 批写
+        return err
+    }
+    return w.journalProjectionSubset(ctx, es)
+}
+
+// journalProjectionSubset：过滤 projection-source topic，是 appendProjectionEvents 的唯一调用点。
+// appendProjectionEvents 未导出、批量 INSERT ... ON CONFLICT (id) DO NOTHING（I2 forge 封口）。
 ```
 
-- `appendProjectionEvent` **未导出**：包外无任何导出 append API（source 是只读，conformance 走 seed-persists 契约）→ 写侧 forge 封口为 Hard/Hard（I2，§6）。
-- 装饰器作为 `Writer` 注入 `WriterEmitter`，复用既有 emit 漏斗——**无新 emit 路径、producer 零改动**。
+- `appendProjectionEvents` **未导出**：包外无任何导出 append API（source 是只读，conformance 走 seed-persists 契约）→ 写侧 forge 封口为 Hard/Hard（I2，§6）。批量多行 INSERT（复刻 `outbox_writer.go` 的分块），单写经 1 元素切片走同一路径。
+- 装饰器作为 `Writer` 注入 `WriterEmitter`，复用既有 emit 漏斗——**无新 emit 路径、producer 零改动**；保留 `BatchWriter` 故批写不静默退化为顺序写。
 
 ### 4.4 wiring（D5/D9，**分两步：先挂 gate 后默认化**）
 
@@ -186,10 +195,10 @@ func (w *journalingOutboxWriter) Write(ctx context.Context, e outbox.Entry) erro
 | ID（占位，落地 PR 定型） | 摘要 | 评级（双向锁分轴） |
 |---|---|---|
 | **I1 — `PROJECTION-EVENT-JOURNAL-SOURCE-CONFORMANCE-ENROLL`** | 新 source（mem + PG）入既有 `RunReplaySourceConformance`/`RunCursorConformance`——**骑现有** `PROJECTION-REPLAY-SOURCE-CONFORMANCE-ENROLL-01`/`PROJECTION-CURSOR-CONFORMANCE-ENROLL-01`，新 impl 自动纳入，无新 archtest 文件 | **Medium**（typed impl-discovery + conformance 调用扫描；Go 无法编译期要求某类型有 `_test.go`。Hard 路径 = codegen golden 枚举 impl，**共享 gh #1003**） |
-| **I2 — `PROJECTION-EVENT-JOURNAL-APPEND-CALLER-01`**（#1504 forge 防护，封写侧） | append `projection_events` 收口单一 sanctioned 写路径 | **Hard/Hard fully-closed**：上游 = append 是 `adapters/postgres` 包内**未导出**函数（**包外**调用编译不可表达）；下游 = archtest caller-allowlist 扫 `adapters/postgres` **包内所有** callsite、锁到 `decorator.Write` 唯一调用点（闭合"同包其他函数直接调 `appendProjectionEvent`"盲区——上游 unexported 只防包外，包内由下游 whole-package scan 闭环）。生产无任何导出 append API（read-only source + seed-persists conformance）。比 #851/#893/#1282 族更紧：那些 append 与 caller **跨包**、受 Go 可见性天花板限制只能 Medium 上游；本条同包，下游 archtest 可完整闭合 |
+| **I2 — `PROJECTION-EVENT-JOURNAL-APPEND-CALLER-01`**（#1504 forge 防护，封写侧） | append `projection_events` 收口单一 sanctioned 写路径 | **Hard/Hard fully-closed**：上游 = append 是 `adapters/postgres` 包内**未导出**方法 `appendProjectionEvents`（**包外**调用编译不可表达）；下游 = archtest caller-allowlist 扫 `adapters/postgres` **包内所有** callsite、锁到唯一 chokepoint `journalingOutboxWriter.journalProjectionSubset`（`Write` 与 `WriteBatch` 都经此单一收口 append——闭合"同包其他函数直接调 `appendProjectionEvents`"盲区，上游 unexported 只防包外，包内由下游 whole-package scan 闭环）。生产无任何导出 append API（read-only source + seed-persists conformance）。比 #851/#893/#1282 族更紧：那些 append 与 caller **跨包**、受 Go 可见性天花板限制只能 Medium 上游；本条同包，下游 archtest 可完整闭合 |
 | **I3 — `…-APPEND-TX-BOUND`** | ~~append 经 ambient tx 同事务~~ **不单独立项**：被 I2 + 既有 `PG-REPO-AMBIENT-TX-01` 包含——append 就在已 ambient-tx 的 `Write` 体内，同事务是结构性的，独立 archtest 冗余（最小化 enforcement 集） | —（subsumed） |
 | **I4 — `PROJECTION-EVENT-JOURNAL-NO-DELETE-01`**（D7 append-only） | serving role 不能 UPDATE/DELETE `projection_events`（主守卫）；生产代码不发 `DELETE`/`TRUNCATE` 字面量（纵深） | **Hard（DB 引擎 REVOKE，PR-01 已在位）+ Medium archtest 纵深（PR-05）**——主守卫 = migration 058 `REVOKE UPDATE, DELETE ON projection_events FROM gocell_app`，DB 引擎层不可绕（同 #1676 `gocell_app` restricted-role 范式），自 PR-01 起对 serving role 强制 append-only。下游 archtest（PR-05）SQL-literal scan 锁 `DELETE`/`TRUNCATE … projection_events` 字面量为**纵深防御**，补 DB-REVOKE 够不着的盲区：**owner/migration 上下文误删**（migration 以 table owner 跑、保留 DELETE）、动态拼接 SQL、其它 adapter 包的 raw `pgx.Exec`、包内旁路。盲区清单 + 反向自检 RED/GREEN fixture 活在落地 archtest godoc。**gate-flip 阻塞前置**（PR-04 删 gate 前 no-DELETE 守卫须在位）**已由 PR-01 DB 引擎 REVOKE 满足**；PR-05 archtest 为纵深、非阻塞前置。未来 archive 落地需在 allowlist 加 DELETE callsite（须引 archive ADR 章节号 per `contract-fanout.md`） |
-| **I5 — `PROJECTION-EVENT-JOURNAL-TOPIC-ALLOWLIST-DERIVED-01`**（D4 topic-filter） | 双写的 topic 集从投影合约 metadata 派生（cellgen），非手写字面量列表——加投影自动纳入 journal | **Medium**（metadata 派生成员；Hard 路径 = cellgen golden 字节锁，开 gh 跟踪） |
+| **I5 — `PROJECTION-EVENT-JOURNAL-TOPIC-ALLOWLIST-DERIVED-01`**（D4 topic-filter） | 双写的 topic 集从投影合约 metadata 派生（cellgen），非手写字面量列表——加投影自动纳入 journal | **Hard**（双轴，PR-02 落地，原计划 Medium 已上修——见 §Amendment 2026-06-12）：上游 = `generatedProjectionSourceTopics()` 由 `kernel/assembly.GenerateModulesGen` 从 `slice.yaml contractUsages` 派生、`gocell generate assembly --verify`（`tools/generatedverify`）字节锁 `modules_gen.go`，metadata 改而未 regen 即 CI 红；派生正确性由 `TestCollectOutboxProjectionTopics` 守。下游 = 本 archtest 强制每个 `NewJournalingOutboxWriter` callsite 的 topic 实参经 go/types 解析为 `generatedProjectionSourceTopics()`（手写 `[]string{…}` 字面量、别的函数、变量均 fail-closed），闭合"在 callsite 手打绕过 golden 派生"盲区 |
 
 **I2 vs 既有 `PROJECTION-EVENT-CARRIER-TYPED-01`**：后者是**单轴 type-system Hard（API shape）**——只 gate"公开 API 不再裸收 `outbox.Entry`"，`ProjectionEvent` 全导出可实现、载体来源**不**封闭。**I2 才是 #1504 的真 forge 防护**（封*写侧*：只有 sanctioned 装饰器能把行放进 source 读的 journal），与 #1609 §5 forge 行同款 wiring-层（非 interface-构造层）保护。
 
@@ -231,7 +240,7 @@ func (w *journalingOutboxWriter) Write(ctx context.Context, e outbox.Entry) erro
 |----|------|------------|-------------|
 | **PR-00（本 PR）** | 本 ADR + `202605261620` §Amendment 2026-06-03 retention-boundary 段 + §6 Row 1 原地重写 + `202606051200-1609` §1.2 back-pointer + `eventbus.md` nav。`Refs #1504`（**不 Closes**，镜像 #1609 PR-00 不关闭 #1609） | D1–D9（设计） | 无；解锁 PR-01..05 |
 | **PR-01** | `projection_events` migration（only-add `global_seq IDENTITY` + `idx`）+ `schema_guard` 表注册 + mem source + PG source（`Position` 读 `global_seq`）+ 入既有 conformance（I1，**含新增 "Position 返回 carrier 自带 `global_seq`、无额外 DB 往返" 场景断言**——回归 #1504 根 fix，可经 mock tx / statement 计数）+ **`projection_journal_ready` readyz probe**（`RepoReady()` + `CELL-REPO-READYZ-PROBE-01` 入列 + `PROBENAME-SEALED-FUNNEL-01` typed const）+ **扩 `OUTBOX-RECONSTRUCTION-CALLER-01` allowlist +1**（`PGProjectionEventSource` 调 `EntryScan.ToEntry` 重建载体）+ **serving-role `REVOKE UPDATE, DELETE`（migration 058，DB 引擎 append-only Hard，I4 主守卫前移）+ append-only 集成回归**（`TestProjectionEvents_AppendOnly_ServingRoleRevoked`：catalog `has_table_privilege` + 连 `gocell_app` 实测 INSERT 过 / UPDATE·DELETE 返 42501） | D2/D3/D7 | 依赖 PR-00 |
-| **PR-02** | emit 期同事务双写装饰器（D4，topic-filtered）+ `PROJECTION-EVENT-JOURNAL-APPEND-CALLER-01`（I2）+ `…-TOPIC-ALLOWLIST-DERIVED-01`（I5）+ **写路径回归测试**（L2-equiv 原子性，**不甩 PR-04**）：①双写原子性——`outbox_entries` 写成功但 `appendProjectionEvent` 失败时两表同回滚；②topic-filter——非 projection-source topic 事件不入 `projection_events`；③`ON CONFLICT (id) DO NOTHING` 幂等——同 `id` 二次写 `global_seq` 不变 | D4 | 依赖 PR-01 |
+| **PR-02**（#1769，已落地） | emit 期同事务双写装饰器（D4，topic-filtered，**保留 `BatchWriter`**：`Write`+`WriteBatch` 经 `journalProjectionSubset` 收口）+ `PROJECTION-EVENT-JOURNAL-APPEND-CALLER-01`（I2，Hard/Hard）+ `…-TOPIC-ALLOWLIST-DERIVED-01`（I5，**Hard**：cellgen `generatedProjectionSourceTopics()` golden + cap_wiring 消费 archtest）+ composition-root 接线（always-decorate，topic 集 corebundle 今为空）+ `NewJournalingOutboxWriter` 纳入 `CAPABILITY-PROVIDER-FUNNEL-01` + **写路径集成回归测试**（`//go:build integration`，覆盖 `Write`+`WriteBatch`，**不甩 PR-04**）：①双写原子性——回滚两表同回滚；②topic-filter——非 projection-source topic 不入 `projection_events`（含 mixed-batch 子集）；③`ON CONFLICT (id) DO NOTHING` 幂等——同 `id` 二次 append `global_seq` 不变 | D4 | 依赖 PR-01 |
 | **PR-03** | corebundle wiring：durable source 填 `WithProjection*` 槽但**仍挂既有 gate 下**（gate 现选 durable，posture **保持 fail-closed**）+ **删 outbox-backed source**（无双路径）+ **live-carrier resolver**（投递边界把裸 `outbox.Entry` 经 `id → global_seq` 查找包成 `JournalEvent`，§4.2）+ **live-path 回归**（裸 `outbox.Entry` 必须解析、不得 permanent-error）。**不删 gate**（移到 PR-04） | D5 | 依赖 PR-01+02；posture 不变 |
 | **PR-04** | **T-06-2 PG e2e rebuild 证明 + 删 gate（production-default）+ runbook/rollback**：testcontainers cold-start / crash-restart / full-rebuild-from-0 over `projection_events` 证 cleaned-outbox 行不再破坏 rebuild；**e2e 绿后同 PR 删 gate** → fail-closed→production-safe 安全 flip（D9）→ finalize `202605261620` compensation 重写 | D1/D9（验证 + flip） | 依赖 PR-03 **+ PR-05**（no-DELETE 须先到位）；**解锁 T-06-2** |
 | **PR-05** | `PROJECTION-EVENT-JOURNAL-NO-DELETE-01`（I4 archtest，Medium **纵深防御**）+ anti-vacuity + RED/GREEN fixture——锁 code-level `DELETE`/`TRUNCATE` 字面量，补 PR-01 DB 引擎 REVOKE 够不着的 owner/migration 上下文盲区 | D7 | 依赖 PR-01；**非删 gate 阻塞前置**（该前置已由 PR-01 DB 引擎 REVOKE 满足）；纵深守卫，宜在 PR-04 前落地但不阻塞 |
@@ -274,3 +283,35 @@ PR-01（#1825）落地时把 D7(iii) 的 **DB 引擎 serving-role REVOKE 前移�
 5. **F1 — §4.2 / §5 row 2 / §9 PR-03 补全**：补 live-carrier resolution 协议规约（裸 `outbox.Entry` 经 `id → global_seq` 在投递边界解析、包成 `JournalEvent`，落 PR-03），使「live Position 必然解析成功」的断言有规约支撑、PR-03（#1770）有显式验收项；统一 rebuild/live 载体协议。
 
 来源：Codex `pm:pr-review` PR #1825（F1 live 载体 / F2 append-only 权限，均 Cx3），经 `/fix #1825` 收口。
+
+---
+
+## §Amendment 2026-06-12（PR-02 #1769，原地重评）
+
+PR-02（#1769）落地 D4 写路径装饰器 + I2/I5 时做了两处相对 PR-00 设计的强化，per
+`ai-robust.md`「ADR amendment 落地必查——同步重评威胁矩阵/安全模型」，本段记录（§4.3 /
+§6 I2·I5 / §9 PR-02 / §0 已就地重写，本段为审计痕）：
+
+1. **I5 升 Medium→Hard（§6 I5 / §9 PR-02）**：原计划「Medium（metadata 派生成员）；Hard 路径 =
+   cellgen golden 字节锁，开 gh 跟踪」。落地时发现唯一可行派生口就是 codegen（composition-root
+   provisioning 期无运行时 metadata），而既有 `gocell generate assembly --verify`（`generatedverify`）
+   对 `modules_gen.go` 的字节锁是**免费自带**的——故 golden Hard 即得，无需另开 gh 延后。新增
+   `generatedProjectionSourceTopics()`（`GenerateModulesGen` 派生）+ cap_wiring 消费 archtest
+   （`TOPIC-ALLOWLIST-DERIVED-01`）构成双轴 Hard。**无 gh 跟踪项需关闭**（原 Hard 路径从未开
+   issue）。**威胁矩阵无行翻转**：I5 强化只收紧 D4 topic-filter 的派生闭环，不触 §5 任一行。
+2. **装饰器保留 `BatchWriter`（§4.3）**：PR-00 §4.3 草图仅示 `Write`。落地保留基础
+   `*OutboxWriter` 的 `BatchWriter`（`Write`+`WriteBatch`），二者经单一 chokepoint
+   `journalProjectionSubset` → 未导出 `appendProjectionEvents`（批量 INSERT ... ON CONFLICT）收口，
+   故 I2 caller-allowlist 唯一项 = 该 chokepoint（非裸 `Write`）。理由：装饰器是 assembly 唯一
+   outbox writer，丢弃基础类型的 `BatchWriter` 能力会让未来批量 emit 路径静默退化为顺序写——
+   保留是 `不留小尾巴`，且 chokepoint 设计使 I2 仍单入口。**威胁矩阵无行翻转**（写路径原子性行的
+   同事务双写机制不变，`WriteBatch` 同样在 ambient tx 内）。
+3. **always-decorate + 接线归属（§9 PR-02/PR-03）**：corebundle 今无 outbox 投影，
+   `generatedProjectionSourceTopics()` 派生空集；cap_wiring **无条件**包装装饰器（空集即 forward
+   原样），故装饰器在生产路径被真实行使、非死代码，且加投影即自动 journal。**「生产 provider 的
+   writer 必是 journaling 装饰器」的 Hard 守卫不在 PR-02**：该守卫只在读侧消费 journal 时才有意义
+   （PR-03 wiring / PR-04 e2e），ADR enforcement 集刻意不含（`最小化 enforcement 集`），PR-04 T-06-2
+   e2e 为下游网——登记为 **PR-03 验收项**。`NewJournalingOutboxWriter` 已纳入
+   `CAPABILITY-PROVIDER-FUNNEL-01` 禁构造集（仅 cap_wiring + tests）。
+
+来源：`/ship 1769`（内置 review 前自审：彻底/不向后兼容/优雅简洁/AI-HARD 四原则三层自查）。

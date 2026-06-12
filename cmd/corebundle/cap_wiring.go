@@ -13,9 +13,9 @@ import (
 
 // provisionCapabilities is the assembly's single shared-infrastructure
 // provisioning site. It is the sole sanctioned caller of the banned adapter
-// constructors (adapterpg.NewPool / NewTxManager / NewOutboxWriter,
-// adapterredis.NewClient via the factory) — CAPABILITY-PROVIDER-FUNNEL-01
-// downstream allowlist locks construction to this file.
+// constructors (adapterpg.NewPool / NewTxManager / NewOutboxWriter /
+// NewJournalingOutboxWriter, adapterredis.NewClient via the factory) —
+// CAPABILITY-PROVIDER-FUNNEL-01 downstream allowlist locks construction to this file.
 //
 // It iterates the codegen-declared generatedCapabilities() (single source:
 // the derived union of the assembly cells' cell.yaml `requires`, computed in
@@ -100,7 +100,14 @@ func provisionPostgres(ctx context.Context, shared *composition.SharedDeps, loca
 		return vErr
 	}
 	txMgr := adapterpg.NewTxManager(pool)
-	writer := adapterpg.NewOutboxWriter(shared.Clock)
+	// Wrap the base outbox writer so projection-source events are journaled to the
+	// durable projection_events table inside the producer's transaction (EPIC #1504
+	// D4). The topic set is cellgen-derived (generatedProjectionSourceTopics, I5); it
+	// is empty today (corebundle declares no outbox projections), so the decorator
+	// forwards writes unchanged until a projection is added — at which point its topic
+	// auto-enrolls on the next `gocell generate assembly`. Wiring the durable source as
+	// the projection read side lands in PR-03.
+	writer := adapterpg.NewJournalingOutboxWriter(adapterpg.NewOutboxWriter(shared.Clock), generatedProjectionSourceTopics())
 	shared.PG = capability.NewPGProvider(txMgr, writer, pool.DB())
 	locals.poolMR = pool
 	return nil
