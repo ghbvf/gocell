@@ -414,7 +414,7 @@ func TestFooCoreModule_CursorKey_FailFast(t *testing.T) {
 	t.Setenv("GOCELL_FOOCORE_CURSOR_KEY", "") // empty in real mode → fail-fast
 
 	shared := buildMinimalTestSharedDeps(t) // memory topology
-	_, _, _, err := foocore.Module().Provide(context.Background(), shared)
+	_, err := foocore.Module().Provide(context.Background(), shared)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cursor")
 }
