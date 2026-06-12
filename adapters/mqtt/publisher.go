@@ -163,13 +163,17 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 	// via the error branch above — handlePublishError classifies them. 0x10 is
 	// informational: counted as success with an operator warning.
 	//
-	// topic is the operator's actionable field here; it may carry device/tenant
-	// identifiers in IoT deployments — configure slog handler redaction if that
-	// is a concern for the target sink.
+	// The topic is the caller-supplied publish target: Mint/PublishOK enforce the
+	// namespace prefix and reject wildcards, but do NOT strip control characters
+	// or key=value secrets from the suffix levels. Route it through
+	// safeTopicForLog so a CR/LF or `token=` embedded in the topic cannot forge
+	// log lines (CWE-117) — the same output boundary the broker-delivered topic
+	// logs already use. PII in topic levels (device/tenant ids) is orthogonal and
+	// stays a slog-sink redaction concern.
 	if resp != nil && resp.ReasonCode == 0x10 {
-		slog.Warn("mqtt: publish succeeded with no matching subscribers",
-			slog.String("client_id", p.conn.cfg.clientID.String()),
-			slog.String("topic", t.String()))
+		slog.LogAttrs(ctx, slog.LevelWarn, "mqtt: publish succeeded with no matching subscribers",
+			slog.String(logKeyClientID, p.conn.cfg.clientID.String()),
+			slog.String(logKeyTopic, safeTopicForLog(t.String())))
 	}
 	p.collector.RecordPublishSuccess(ctx, p.clk.Since(start))
 	return nil
