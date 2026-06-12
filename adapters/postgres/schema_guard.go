@@ -293,6 +293,9 @@ func VerifyExpectedShape(ctx context.Context, pool *Pool) error {
 	if err := verifyForbiddenColumns(ctx, pool); err != nil {
 		return err
 	}
+	if err := verifyFrozenColumnSets(ctx, pool); err != nil {
+		return err
+	}
 	if err := verifyPrimaryKeys(ctx, pool); err != nil {
 		return err
 	}
@@ -698,6 +701,13 @@ var expectedColumns = []expectedColumn{
 	{Table: "webhook_sources", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
 	{Table: "webhook_sources", Column: "updated_at", Type: pgTypeTSTZ, NotNull: true},
 }
+
+// frozenColumnTables lists tables for which the schema guard enforces an
+// exact-column-set check: any column NOT in expectedColumns for that table is
+// rejected. This catches out-of-band additions (e.g. a plaintext `value`
+// column on webhook_sources) that the positive-existence check in verifyColumns
+// cannot detect.
+var frozenColumnTables = []string{"webhook_sources"}
 
 // forbiddenColumns are legacy columns that must NOT exist after migration.
 var forbiddenColumns = []requiredColumn{
@@ -1401,6 +1411,89 @@ func verifyForbiddenColumns(ctx context.Context, pool *Pool) error {
 					errcode.PublicString("column", r.column),
 				),
 			)
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Dimension helper: frozen column sets
+// ---------------------------------------------------------------------------
+
+// frozenExpectedColumns returns the set of column names registered in
+// expectedColumns for the given table. It is the single source of truth —
+// callers must not re-list columns.
+func frozenExpectedColumns(table string) map[string]bool {
+	set := make(map[string]bool)
+	for _, ec := range expectedColumns {
+		if ec.Table == table {
+			set[ec.Column] = true
+		}
+	}
+	return set
+}
+
+// queryLiveColumns returns all non-system, non-dropped column names for the
+// given table in the current schema. Mirrors the WHERE predicate used by
+// verifyColumns so test-schema parallelism is scoped correctly.
+func queryLiveColumns(ctx context.Context, pool *Pool, table string) ([]string, error) {
+	const q = `
+	SELECT a.attname
+	  FROM pg_attribute a
+	  JOIN pg_class c ON c.oid = a.attrelid
+	  JOIN pg_namespace n ON n.oid = c.relnamespace
+	 WHERE n.nspname = current_schema()
+	   AND c.relname = $1
+	   AND a.attnum > 0
+	   AND NOT a.attisdropped`
+
+	rows, err := pool.inner.Query(ctx, q, table)
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+			"schema_guard: query live columns for frozen-set check", err)
+	}
+	defer rows.Close()
+
+	var cols []string
+	for rows.Next() {
+		var col string
+		if scanErr := rows.Scan(&col); scanErr != nil {
+			return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+				"schema_guard: scan column name for frozen-set check", scanErr)
+		}
+		cols = append(cols, col)
+	}
+	if rows.Err() != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+			"schema_guard: iterate columns for frozen-set check", rows.Err())
+	}
+	return cols, nil
+}
+
+// verifyFrozenColumnSets enforces an exact-column-set constraint on tables
+// listed in frozenColumnTables. Any column present in the live schema but
+// absent from expectedColumns is rejected with ErrAdapterPGSchemaShape.
+// This catches out-of-band column additions that verifyColumns (positive-only)
+// cannot detect — e.g., a plaintext `value` column added to webhook_sources.
+func verifyFrozenColumnSets(ctx context.Context, pool *Pool) error {
+	for _, table := range frozenColumnTables {
+		expected := frozenExpectedColumns(table)
+		live, err := queryLiveColumns(ctx, pool, table)
+		if err != nil {
+			return err
+		}
+		for _, col := range live {
+			if !expected[col] {
+				return errcode.New(
+					errcode.KindInternal, ErrAdapterPGSchemaShape,
+					"schema_guard: unexpected column on frozen table",
+					errcode.WithDetails(
+						errcode.PublicString("dimension", "frozen_column_set"),
+						errcode.PublicString("table", table),
+						errcode.PublicString("column", col),
+					),
+				)
+			}
 		}
 	}
 	return nil

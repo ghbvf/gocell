@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -180,4 +181,65 @@ func mustSourceID(t *testing.T, id string) kwh.SourceID {
 	sid, err := kwh.NewSourceID(id)
 	require.NoError(t, err)
 	return sid
+}
+
+// TestVerifyExpectedShape_FrozenColumnSet_WebhookSources verifies that adding
+// an unexpected column to webhook_sources causes VerifyExpectedShape to return
+// ErrAdapterPGSchemaShape. The extra column is dropped after the assertion so
+// the per-test database is left in a clean state for pool reuse.
+func TestVerifyExpectedShape_FrozenColumnSet_WebhookSources(t *testing.T) {
+	ctx := context.Background()
+	pool := migratedPool(t)
+
+	// Inject an unexpected column (simulates an out-of-band DDL that would
+	// allow persisting a plaintext secret — the exact threat the frozen-set
+	// check guards against).
+	_, err := pool.DB().Exec(ctx, `ALTER TABLE webhook_sources ADD COLUMN value bytea`)
+	require.NoError(t, err, "ADD COLUMN must succeed (superuser in testcontainer)")
+
+	t.Cleanup(func() {
+		_, _ = pool.DB().Exec(ctx, `ALTER TABLE webhook_sources DROP COLUMN IF EXISTS value`)
+	})
+
+	err = VerifyExpectedShape(ctx, pool)
+	require.Error(t, err, "VerifyExpectedShape must reject an unexpected column on webhook_sources")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code, "error code must be ErrAdapterPGSchemaShape")
+	assert.Contains(t, ec.Message, "unexpected column on frozen table",
+		"message must describe the frozen-set fault")
+}
+
+// TestWebhookSourceRepository_LoadAll_CorruptSourceID verifies that a persisted
+// row with an invalid source_id (e.g. uppercase, violating the kernel shape
+// rule) causes LoadAll to return ErrAdapterPGSchemaShape (adapter data-shape
+// error), not the kernel's ErrWebhookConfigInvalid (which would look like a
+// caller config error rather than DB corruption).
+func TestWebhookSourceRepository_LoadAll_CorruptSourceID(t *testing.T) {
+	ctx := context.Background()
+	repo, vt, pool := webhookSourceFixture(t)
+
+	// Build a valid cipher envelope to satisfy NOT NULL column constraints,
+	// then insert it under an invalid source_id (uppercase violates
+	// ^[a-z][a-z0-9_-]*$ enforced by kwh.NewSourceID).
+	gh := mustWebhookSource(t, "github", "github-webhook-shared-secret-01")
+	res, err := gh.Encrypt(ctx, vt)
+	require.NoError(t, err)
+
+	_, err = pool.DB().Exec(ctx, upsertWebhookSourceSQL,
+		"GITHUB", res.Ciphertext, res.KeyID, res.EDK, res.Nonce)
+	require.NoError(t, err, "direct INSERT with invalid source_id must succeed at DB level")
+
+	t.Cleanup(func() {
+		_, _ = pool.DB().Exec(ctx, `DELETE FROM webhook_sources WHERE source_id = 'GITHUB'`)
+	})
+
+	_, err = repo.LoadAll(ctx)
+	require.Error(t, err, "LoadAll must fail when a persisted source_id violates kernel shape")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code,
+		"corrupt persisted source_id must surface as ErrAdapterPGSchemaShape (DB corruption), not ErrWebhookConfigInvalid (caller error)")
 }

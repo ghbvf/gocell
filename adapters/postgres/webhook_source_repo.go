@@ -9,6 +9,7 @@ import (
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	kwh "github.com/ghbvf/gocell/kernel/webhook"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	runtimecrypto "github.com/ghbvf/gocell/runtime/crypto"
 	runtimewebhook "github.com/ghbvf/gocell/runtime/webhook"
 )
 
@@ -58,15 +59,23 @@ var _ runtimewebhook.SourceRepo = (*WebhookSourceRepository)(nil)
 // NewWebhookSourceRepository wraps pool in the sealed pgexec funnel and binds the
 // value transformer used to seal/unseal secrets.
 //
-// transformer is validated first and must be non-nil: persisting a webhook secret
-// without encryption is a security fault, and the table has no plaintext column
-// to fall back to, so there is no NoopTransformer path here (contrast configcore,
-// which permits Noop for non-sensitive entries). pool must also be non-nil.
+// transformer is validated first: nil is rejected (no plaintext fallback), and
+// [runtimecrypto.NoopTransformer] is rejected by a concrete-type guard — passing
+// the passthrough transformer would persist webhook source secrets in plaintext,
+// which the table schema structurally prevents (no plaintext column). This
+// rejection is now ENFORCED by a runtime guard, not merely narrated (contrast
+// configcore, which permits Noop for non-sensitive entries). pool must also be
+// non-nil.
 func NewWebhookSourceRepository(pool *pgxpool.Pool, transformer kcrypto.ValueTransformer) (*WebhookSourceRepository, error) {
 	if transformer == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"postgres.NewWebhookSourceRepository: value transformer must not be nil "+
 				"(webhook source secrets are never persisted in plaintext)")
+	}
+	if _, ok := transformer.(runtimecrypto.NoopTransformer); ok {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"postgres.NewWebhookSourceRepository: NoopTransformer (passthrough) would persist "+
+				"webhook source secrets in plaintext")
 	}
 	if pool == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -109,7 +118,9 @@ func (r *WebhookSourceRepository) LoadAll(ctx context.Context) ([]kwh.Source, er
 		}
 		id, err := kwh.NewSourceID(sourceID)
 		if err != nil {
-			return nil, err
+			return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGSchemaShape,
+				"postgres: persisted webhook source_id violates kernel id shape", err,
+				errcode.WithInternal(errcode.InternalAttr("_", "webhook source load-all")))
 		}
 		src, err := kwh.NewSourceFromCiphertext(ctx, r.transformer, id, cipher, keyID, nonce, edk)
 		if err != nil {

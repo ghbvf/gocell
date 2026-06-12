@@ -49,7 +49,11 @@ Three constraints framed the design:
    decrypts each secret, and populates a `kwh.SourceRegistry` snapshot injected
    via `bootstrap.WithWebhookSourceStore`. The hot `Lookup` path is unchanged —
    persistence is about *where secrets come from at boot*, not runtime mutability.
-   Rotation / add = write the row + restart (matches the issue's "运行时不可变").
+   Rotation / add / **delete** = write or remove the row + restart: the loader
+   builds an immutable snapshot at boot, so a `SourceRepo.Delete` only removes the
+   persisted row and does **not** hot-revoke a source already live in the running
+   `SourceRegistry`. Every mutation — add, rotate, *and delete* — takes effect
+   only on the next restart (matches the issue's "运行时不可变").
 
 3. **A bidirectional sealed crypto funnel in `kernel/webhook`.** `Source.Encrypt`
    and `NewSourceFromCiphertext` seal/unseal the secret; the plaintext bytes
@@ -68,20 +72,26 @@ Three constraints framed the design:
 
 ## Security model (AI-robust grading)
 
-Encryption-at-rest is enforced **Hard** (violations unrepresentable), not by a
-new bespoke scan:
+Encryption-at-rest rests on schema-shape + cryptography + sealed value (Hard)
+plus two Medium machine guards. This is an honest split: PR #1929 review (C1/C2)
+corrected an earlier over-grade that called the plaintext-funnel and the
+column-set freeze Hard when neither was actually enforced.
 
 | Invariant | Carrier | Grade |
 |-----------|---------|-------|
-| A webhook secret must be encrypted at rest | `webhook_sources` has **no plaintext column** (`value_cipher BYTEA NOT NULL`, no `value`); `schema_guard.go` freezes the column set — adding a plaintext column trips `SCHEMA-GUARD-COVERS-EVERY-OWNED-TABLE-01`/shape verify | **Hard** (schema-shape freeze) |
-| Plaintext secret bytes never leave kernel/webhook | sealed `Source` + `Source.Encrypt` / `NewSourceFromCiphertext`; no API returns the raw secret, the only bytes entry is the validated minter `NewSource`; repo/composition handle only ciphertext | **Hard** (type-system funnel) |
+| A webhook secret must be encrypted at rest | `webhook_sources` has **no plaintext column** (`value_cipher BYTEA NOT NULL`); `schema_guard.verifyFrozenColumnSets` freezes the column set **exactly** — any live column not in the registered expected set fails `ErrAdapterPGSchemaShape` (a positive column check alone does NOT catch an added `value`/`secret`; the exact-set check does, with an integration red test) | **Hard** (schema-shape exact freeze) |
 | Cross-source / cross-cell ciphertext transplant rejected | AAD computed by the kernel from the sealed id (`cell:webhook/source:{id}`, distinct from configcore's domain), AES-GCM tag fails closed | **Hard** (cryptographic + unrepresentable wrong AAD) |
 | Secret never logged / to wire | existing `Source.LogValue/String/GoString` redaction + `WEBHOOK-HMAC-FUNNEL-01` | **Hard** (existing) |
-| Postgres persistence requires a transformer | loader fail-closed (nil key provider → error); no `NoopTransformer` path for webhook secrets | Medium (runtime guard) |
+| Plaintext secret is never a loose returnable value | sealed `Source` (unexported `secret`, no getter); the only bytes entry is the validated minter `NewSource`; no API returns the raw secret | **Hard** (type-system: unrepresentable as a returnable value) |
+| Encryption observes the plaintext only inside the trusted transformer | `Source.Encrypt` / `NewSourceFromCiphertext` take a **caller-supplied** `ValueTransformer`, so any holder of a `Source` could pass a capturing transformer — "no in-process code sees the plaintext" is a composition-root *trust* property, not a type-system one. The sole sanctioned caller is the persistence repo, locked by `WEBHOOK-SOURCE-CRYPTO-FUNNEL-01` (caller-allowlist); a future package wiring its own transformer trips CI | **Medium** (caller-allowlist; permanent Go ceiling — an in-process adversary can always implement the leaf `ValueTransformer` / `KeyHandle` interface, so this cannot be type-system Hard — same ceiling family as `WEBHOOK-HMAC-FUNNEL-01/A3-A4`) |
+| Postgres persistence never writes plaintext | loader fail-closed (nil key provider → error); `NewWebhookSourceRepository` **rejects** a `runtime/crypto.NoopTransformer` (passthrough), so a non-nil pass-through cannot write `value_cipher = plaintext` | **Medium** (runtime guard, enforced — previously only narrated) |
 
-No new archtest invariant is added: the three load-bearing properties are locked
-by schema-shape + type-system + cryptography (the AI-robust charter's top-priority
-carriers), which is stronger than a scan.
+Two new machine guards land with this PR: `WEBHOOK-SOURCE-CRYPTO-FUNNEL-01`
+(`tools/archtest`, the caller-allowlist on the crypto funnel, with anti-vacuity +
+RED fixture) and `schema_guard.verifyFrozenColumnSets` (exact-column-set freeze +
+integration red test). The Hard rows remain locked by schema-shape, type-system,
+and cryptography; the Medium rows are honestly graded with their enforcing guard
+named (per the AI-robust charter — Soft is never used as a new mechanism).
 
 ## Alternatives considered
 

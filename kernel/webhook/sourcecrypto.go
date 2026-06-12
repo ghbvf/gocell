@@ -28,12 +28,19 @@ func sourceAAD(id SourceID) []byte {
 }
 
 // Encrypt seals this source's secret under vt's current key, binding the
-// ciphertext to the source id via [sourceAAD]. It is the only sanctioned path
-// to turn a webhook secret into ciphertext: the plaintext secret never leaves
-// this package — callers receive only the [kcrypto.EncryptResult] (ciphertext +
-// key metadata) to persist, never the raw bytes. Together with [Source] having
-// no secret getter, this makes a plaintext webhook secret unrepresentable
-// outside kernel/webhook and the transformer internals.
+// ciphertext to the source id via [sourceAAD]. Callers receive only the
+// [kcrypto.EncryptResult] (ciphertext + key metadata) to persist: the secret
+// never materializes as a loose returnable slice outside this package, and
+// [Source] has no secret getter. That part is Hard — a plaintext webhook secret
+// is unrepresentable as a returnable value outside kernel/webhook.
+//
+// The encryption itself runs inside the caller-supplied vt (vt.Encrypt sees
+// s.secret), so "no in-process code observes the plaintext" is NOT a type-system
+// property — it rests on vt being the trusted, composition-root-built
+// transformer. The sole sanctioned caller is the persistence repo
+// (adapters/postgres.WebhookSourceRepository), enforced at Medium by
+// WEBHOOK-SOURCE-CRYPTO-FUNNEL-01; that repo additionally rejects a passthrough
+// NoopTransformer, so a plaintext secret cannot land at rest either.
 //
 // A zero-value Source (empty secret — i.e. one not built via [NewSource]) is
 // rejected with [errcode.ErrWebhookConfigInvalid]; vt must be non-nil.
@@ -64,7 +71,10 @@ func (s Source) Encrypt(ctx context.Context, vt kcrypto.ValueTransformer) (kcryp
 // fail-closed with [errcode.ErrWebhookSecretCryptoFailed].
 //
 // vt must be non-nil. The recovered secret is still subject to [NewSource]'s
-// length floor, so a too-short decrypted secret is rejected.
+// length floor, so a too-short decrypted secret is rejected. Like
+// [Source.Encrypt], its sole sanctioned caller is the persistence repo
+// (adapters/postgres.WebhookSourceRepository), enforced by
+// WEBHOOK-SOURCE-CRYPTO-FUNNEL-01.
 func NewSourceFromCiphertext(
 	ctx context.Context, vt kcrypto.ValueTransformer,
 	id SourceID, ciphertext []byte, keyID string, nonce, edk []byte,

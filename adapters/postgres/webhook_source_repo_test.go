@@ -9,6 +9,7 @@ import (
 
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	runtimecrypto "github.com/ghbvf/gocell/runtime/crypto"
 )
 
 // webhookStubTransformer is a non-nil ValueTransformer for the constructor-guard
@@ -24,14 +25,26 @@ func (webhookStubTransformer) Decrypt(context.Context, []byte, string, []byte, [
 }
 
 // TestNewWebhookSourceRepository_Guards covers the fail-closed constructor:
-// a nil transformer is rejected first (no plaintext-at-rest path), and a nil pool
-// is rejected. Both fire before any SQL, so no database is required.
+// a nil transformer is rejected first (no plaintext-at-rest path), a
+// NoopTransformer (non-nil but passthrough) is rejected as it would persist
+// secrets in plaintext, and a nil pool is rejected. All guards fire before any
+// SQL, so no database is required.
 func TestNewWebhookSourceRepository_Guards(t *testing.T) {
 	t.Run("nil transformer rejected (no plaintext fallback)", func(t *testing.T) {
 		repo, err := NewWebhookSourceRepository(nil, nil)
 		assert.Nil(t, repo)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+		assert.Contains(t, ec.Message, "plaintext")
+	})
+
+	t.Run("NoopTransformer rejected (plaintext passthrough not allowed)", func(t *testing.T) {
+		repo, err := NewWebhookSourceRepository(nil, runtimecrypto.NoopTransformer{})
+		assert.Nil(t, repo)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.KindInvalid, ec.Kind)
 		assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
 		assert.Contains(t, ec.Message, "plaintext")
 	})

@@ -4,6 +4,10 @@ This document lists all environment variables consumed by `cmd/corebundle` at st
 Variables without a default value are **required** in the indicated adapter mode.
 Missing required variables cause fail-fast before any assembly initialization.
 
+> **Exception:** the [webhook source secret encryption](#webhook-source-secret-encryption)
+> section is consumed by **assemblies that call `cellmodules/webhooksource.LoadSourceStore`**,
+> not by `cmd/corebundle` (which declares no webhook receivers today). It is flagged inline.
+
 ## JWT Configuration (required in all modes)
 
 | Variable | Purpose | Default | Required | Notes |
@@ -140,8 +144,15 @@ Probe `postgres_app_role_restricted_ready` verifies at runtime that the serving 
 
 Persistent, encrypted webhook source HMAC secrets (#1540). Same envelope-encryption
 backends as configcore; vault-transit reuses the shared `VAULT_*` / `GOCELL_VAULT_*`
-settings above. Required only for assemblies that persist webhook sources (postgres
-storage) — memory/demo deployments seed the in-memory `kwh.SourceRegistry` directly.
+settings above.
+
+> **Not consumed by `cmd/corebundle` today** (unlike the rest of this document).
+> These variables are read by `cellmodules/webhooksource.LoadSourceStore`, which a
+> webhook-serving **assembly** calls at boot to load the persistent encrypted
+> `SourceStore`. `cmd/corebundle` declares no webhook receivers and does not invoke
+> the loader, so setting `GOCELL_WEBHOOK_*` has no effect on the current corebundle.
+> Required only for assemblies that persist webhook sources (postgres storage) —
+> memory/demo deployments seed the in-memory `kwh.SourceRegistry` directly.
 
 | Variable | Purpose | Default | Required | Notes |
 |---|---|---|---|---|
