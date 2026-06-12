@@ -25,23 +25,27 @@
 -- EXACTLY MATCH this index predicate for PG to infer the arbiter and fire
 -- DO NOTHING on duplicate key within the active window.
 --
--- Non-CONCURRENTLY / in-transaction: acceptable ONLY at example/dev scale.
--- The commands table has no production load in this context. A real fleet
--- deployment MUST NOT use this form on a live commands table, because
--- DROP INDEX + CREATE UNIQUE INDEX (non-CONCURRENTLY) holds ACCESS EXCLUSIVE
--- on commands for the duration of the index build, blocking the entire command
--- write path (Enqueue, status updates) for that window.
+-- Concurrency: this is index DDL on `commands`, a shared adapters/postgres
+-- table on the general startup path (durable deployments auto-run Migrator.Up).
+-- Per migrations/README.md rule 1 it uses `-- +goose no transaction` so the
+-- DROP/CREATE run CONCURRENTLY and never hold ACCESS EXCLUSIVE on the command
+-- write path — matching the established pattern in 057_devices_cert_expiry_index.
 --
--- For production fleet deployment use instead:
---   -- +goose no transaction
---   DROP INDEX CONCURRENTLY IF EXISTS idx_commands_idempotency_key;
---   CREATE UNIQUE INDEX CONCURRENTLY idx_commands_idempotency_key ...;
--- with a phased build-verify-drop rollout (build new index → verify valid →
--- drop old index) to keep the write path unblocked throughout.
+-- No duplicate-key gap during the swap: this index predicate change is coupled
+-- to the enqueueInsertSQL ON CONFLICT predicate change in the same release, so
+-- the old binary (predicate without `status IN (1,2,3)`) and the new binary are
+-- incompatible with each other's index — the cutover is a coordinated, drained
+-- deploy (drain → goose up → deploy new binary). With writes drained during the
+-- swap, the brief window between DROP and CREATE admits no concurrent Enqueue,
+-- so a same-name DROP+CREATE (rather than a phased build-verify-drop rename) is
+-- both correct and minimal here.
 --
--- The in-transaction non-CONCURRENTLY form is kept here intentionally: at
--- small/example scale it provides DROP+CREATE atomicity (both succeed or both
--- roll back), which is strictly better than the non-atomic CONCURRENTLY pair.
+-- Re-runnability (migrations/README.md rule 2 / MIGRATION-NO-TRANSACTION-RERUN-
+-- SAFE-01): every statement is `IF [NOT] EXISTS`, so an interrupted run is safe
+-- to replay. An INVALID index residue from an interrupted CONCURRENTLY build is
+-- caught by Migrator.Up's DetectInvalidIndexes pre-check (rule 5) before any
+-- migration runs, so the `CREATE … IF NOT EXISTS` silent-skip footgun cannot
+-- bypass it.
 --
 -- schema_guard.go: idx_commands_idempotency_key registration remains
 -- Unique:true, Columns:[]string{"(expr)"} — the WHERE predicate is not
@@ -49,19 +53,22 @@
 --
 -- ref: adapters/postgres/command_queue_store.go::enqueueInsertSQL (arbiter predicate)
 -- ref: adapters/postgres/migrations/031_commands_idempotency_unique.sql (original index)
+-- ref: adapters/postgres/migrations/057_devices_cert_expiry_index.sql (no-transaction CONCURRENTLY pattern)
 -- ref: kernel/command (Status.IsTerminal — defines the non-terminal set 1,2,3)
 -- ref: issue #1820 (devicecert producer state machine, retry-release requirement)
 
+-- +goose no transaction
+
 -- +goose Up
-DROP INDEX IF EXISTS idx_commands_idempotency_key;
-CREATE UNIQUE INDEX idx_commands_idempotency_key
+DROP INDEX CONCURRENTLY IF EXISTS idx_commands_idempotency_key;
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_commands_idempotency_key
     ON commands ((metadata->>'_idempotency_key'))
     WHERE metadata->>'_idempotency_key' IS NOT NULL
       AND status IN (1, 2, 3);
 
 -- +goose Down
 -- Reverse: restore the original permanent unique index from migration 031.
-DROP INDEX IF EXISTS idx_commands_idempotency_key;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_commands_idempotency_key
+DROP INDEX CONCURRENTLY IF EXISTS idx_commands_idempotency_key;
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_commands_idempotency_key
     ON commands ((metadata->>'_idempotency_key'))
     WHERE metadata->>'_idempotency_key' IS NOT NULL;
