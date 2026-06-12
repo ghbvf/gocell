@@ -5,7 +5,6 @@ go 1.25.11
 require (
 	github.com/ghbvf/gocell v0.0.0
 	github.com/ghbvf/gocell/corecells v0.0.0-00010101000000-000000000000
-	github.com/ghbvf/gocell/tests/testutil/rabbitmqctr v0.0.0-00010101000000-000000000000
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/rabbitmq/amqp091-go v1.11.0
@@ -101,5 +100,3 @@ replace github.com/ghbvf/gocell/adapters/rabbitmq => ../../adapters/rabbitmq
 replace github.com/ghbvf/gocell/adapters/redis => ../../adapters/redis
 
 replace github.com/ghbvf/gocell/generated => ../../generated
-
-replace github.com/ghbvf/gocell/tests/testutil/rabbitmqctr => ../../tests/testutil/rabbitmqctr

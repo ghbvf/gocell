@@ -29,8 +29,6 @@ use (
 	./examples/webhookdemo
 	./generated
 	./tests/integration
-	./tests/testutil/minioctr
 	./tests/testutil/pgshare
-	./tests/testutil/rabbitmqctr
 	./tools
 )

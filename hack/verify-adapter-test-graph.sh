@@ -1,43 +1,39 @@
 #!/usr/bin/env bash
 # verify-bucket: workspace
 #
-# INVARIANT: MODULE-GRAPH-TEST-EDGE-01 (Medium): a test-only backend/observability
-# dependency must be confined to the module(s) that genuinely use it, and must not
-# leak into any other workspace module's published graph.
+# INVARIANT: ADAPTER-MODULE-GRAPH-TEST-EDGE-01 (Medium): a test-only dependency
+# must not leak into the published module graph of an adapter that never uses it.
 #
-# Background: per-module `go mod tidy` resolves the FULL (all-build-tags) import
-# closure of every package a module imports, so a test-only backend reachable through
-# a shared fixture package silently becomes an `// indirect` require in every
-# consuming module's go.mod — visible to external consumers even though no code in
-# that module uses it. #1908 moved the minio/rabbitmq testcontainer helpers into their
-# own modules (tests/testutil/{minioctr,rabbitmqctr}) so the root module and every
-# adapter that only consumes generic tests/testutil helpers stop inheriting them;
-# #1909 gave vault an adapter-local recording metrics.Provider so it stops requiring
-# adapters/prometheus. This gate locks both wins against regression: a future re-merge
-# would re-introduce the edge and pass verify-workspace.sh (drift is self-consistent)
-# — only an explicit forbidden-edge assertion catches it.
+# Background: per-adapter `go mod tidy` resolves the FULL (all-build-tags) import
+# closure of every package an adapter imports, so a test-only backend reachable
+# through a shared fixture package silently becomes an `// indirect` require in
+# every consuming adapter's go.mod — visible to external consumers of that module
+# even though no production (or even test) code in the adapter uses it. #1908 split
+# the minio/rabbitmq testcontainer helpers out of `tests/testutil` so postgres/
+# redis/otel/vault/mqtt stop inheriting them; #1909 gave vault an adapter-local
+# recording metrics.Provider so it stops requiring `adapters/prometheus`. This gate
+# locks both wins against regression: a future re-merge would re-introduce the edge
+# and pass `verify-workspace.sh` (drift is self-consistent) — only an explicit
+# forbidden-edge assertion catches it.
 #
 # Detection uses `go mod edit -json` (official tooling, not hand-rolled regex) and
 # checks whether a forbidden module path appears as a require/replace in the target
-# module's own go.mod. EVERY workspace module (via gocell::modules::dirs, including
-# root) is swept: the minio/rabbitmq testcontainer modules are forbidden everywhere
-# EXCEPT their enumerated rightful owners (the helper module that wraps the container
-# plus the adapter/test module whose own code directly drives it). Anti-vacuity
-# positive controls assert those owners DO declare the module, proving the parser
-# reads real require data rather than passing on a misread or empty go.mod.
+# module's own go.mod. Anti-vacuity positive controls assert the REAL backend users
+# still declare the module, proving the parser reads actual require data rather than
+# passing because a go.mod was misread or empty.
 #
 # AI-robust grade: Medium. go.mod content is build metadata, not Go-type-expressible,
 # so the Hard ceiling (violation un-expressible / compile-or-golden break) is
 # unreachable here — a require line can always be hand-added; CI catches it.
 #
-# Blind spots (documented, not silently absent): the forbid sweep auto-covers every
-# module in go.work, so a new module inherits the checks for free — but the OWNER
-# allowlists (minio_is_owner / rabbitmq_is_owner) and the prometheus forbid table are
-# hand-maintained: a NEW module that legitimately drives minio/rabbitmq must be added
-# to the matching owner function (intentional friction), and a NEW heavy backend
-# beyond minio/rabbitmq/prometheus needs a new table entry. The detector is path-exact
-# (quoted full module path), so a vanity-renamed fork of the same dependency would not
-# be caught.
+# Blind spots (documented, not silently absent): all adapter modules declared in
+# go.work are now auto-enumerated via gocell::modules::dirs, so adding a new adapter
+# to go.work automatically brings it under the minio/rabbitmq forbid checks with zero
+# hardcoded-list maintenance. Remaining blind spots: non-adapter modules (root,
+# corecells, cellmodules, examples) are not covered; and a NEW heavy backend beyond
+# minio/rabbitmq/prometheus would need a new forbid table entry. The detector is
+# path-exact (quoted full module path), so a vanity-renamed fork of the same
+# dependency would not be caught.
 
 set -euo pipefail
 
@@ -66,7 +62,7 @@ mod_declares() {
 forbid() {
     local dir="$1" path="$2"
     if mod_declares "${dir}" "${path}"; then
-        gocell::log::error "${dir}/go.mod must NOT declare '${path}' — test-only edge leaked into the module graph (MODULE-GRAPH-TEST-EDGE-01)"
+        gocell::log::error "${dir}/go.mod must NOT declare '${path}' — test-only edge leaked into the module graph (ADAPTER-MODULE-GRAPH-TEST-EDGE-01)"
         fail=1
     fi
 }
@@ -82,33 +78,29 @@ require_present() {
     fi
 }
 
-gocell::log::status "Checking workspace module graphs for leaked test-only edges"
+gocell::log::status "Checking adapter module graphs for leaked test-only edges"
 
 readonly MINIO="github.com/testcontainers/testcontainers-go/modules/minio"
 readonly RABBITMQ="github.com/testcontainers/testcontainers-go/modules/rabbitmq"
 
-# Rightful owners of each testcontainer backend module: the helper module that wraps
-# the container plus the adapter/test module whose own code directly drives it. Any
-# OTHER module declaring the backend is a leak. A new module that legitimately drives
-# the backend must be added here (intentional friction; see Blind spots above).
-minio_is_owner() { case "$1" in adapters/s3 | tests/testutil/minioctr) return 0 ;; *) return 1 ;; esac; }
-rabbitmq_is_owner() { case "$1" in adapters/rabbitmq | tests/integration | tests/testutil/rabbitmqctr) return 0 ;; *) return 1 ;; esac; }
-
-# #1908 — sweep EVERY workspace module; the minio/rabbitmq testcontainer modules must
-# appear ONLY in their rightful owners, never leaked into root or any unrelated
-# module. Enumerated from the canonical workspace funnel so new modules are covered
-# automatically. Command substitution propagates an enumeration failure (a
-# `while read < <(...)` would swallow the funnel's non-zero return in a subshell).
+# #1908 — minio/rabbitmq testcontainer modules must not leak into any adapter that
+# does not rightfully own that backend. Enumerate ALL adapter modules from the
+# canonical workspace funnel (go.work via gocell::modules::dirs) so future adapters
+# are covered automatically without extending this table.
 if ! _all_modules="$(gocell::modules::dirs)"; then
-    gocell::log::error "workspace module enumeration failed — cannot evaluate module graphs"
+    gocell::log::error "workspace module enumeration failed — cannot evaluate adapter module graphs"
     exit 1
 fi
 while IFS= read -r _mod; do
-    [[ -n "${_mod}" ]] || continue
-    dir="${_mod#./}" # './adapters/s3' -> 'adapters/s3'; '.' (root) stays '.'
-    minio_is_owner "${dir}" || forbid "${dir}" "${MINIO}"
-    rabbitmq_is_owner "${dir}" || forbid "${dir}" "${RABBITMQ}"
-done <<<"${_all_modules}"
+    # Keep only entries matching ./adapters/* (strip leading ./).
+    [[ "${_mod}" == ./adapters/* ]] || continue
+    dir="${_mod#./}"
+
+    # Every adapter must NOT contain the sibling backend's testcontainer module,
+    # unless it IS that backend's rightful owner.
+    [[ "${dir}" == "adapters/s3" ]] || forbid "${dir}" "${MINIO}"
+    [[ "${dir}" == "adapters/rabbitmq" ]] || forbid "${dir}" "${RABBITMQ}"
+done <<< "${_all_modules}"
 
 # #1909 — vault tests must not pull the prometheus adapter or its client into the
 # vault module graph (replaced by an adapter-local recording metrics.Provider).
@@ -116,11 +108,7 @@ forbid adapters/vault "github.com/ghbvf/gocell/adapters/prometheus"
 forbid adapters/vault "github.com/prometheus/client_golang"
 forbid adapters/vault "github.com/prometheus/client_model"
 
-# Anti-vacuity positive controls — the rightful owners MUST declare the backend, so a
-# misread / empty go.mod cannot make the forbid sweep vacuously green. Covers both the
-# new helper modules (#1908) and the adapters that directly drive the containers.
-require_present tests/testutil/minioctr "${MINIO}"
-require_present tests/testutil/rabbitmqctr "${RABBITMQ}"
+# Anti-vacuity positive controls — the real backend users keep their direct require.
 require_present adapters/s3 "${MINIO}"
 require_present adapters/rabbitmq "${RABBITMQ}"
 require_present adapters/prometheus "github.com/prometheus/client_golang"
