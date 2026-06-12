@@ -86,10 +86,24 @@ const auditQueryTestTenant = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
 // both tenants; a regular admin must NOT see rows from another tenant.
 const auditQueryTestTenantB = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
 
-// auditTestCtx builds a tenant-bearing principal context for handler tests.
-// auth.TestContext alone leaves TenantID empty, which the F1 isolation guard now
-// rejects; the empty-tenant rejection itself is covered by TestList_EmptyTenant_Forbidden.
+// auditTestCtx builds a production-faithful handler-test context: a tenant-bearing
+// principal PLUS an allow-all Authorizer, mirroring production where the primary
+// listener always injects a PDP. Since F1 made an empty actorId a permissioned
+// ledger read (no longer an implicit self-read), happy-path tests need an
+// Authorizer in context to pass auditQueryPolicy and reach the handler; this
+// helper supplies one. Tests asserting the fail-closed (no-PDP) path use
+// auditTestCtxNoAuthz; deny tests wrap with withDenyAuthorizer (which shadows the
+// allow). auth.TestContext alone leaves TenantID empty, which the F1 isolation
+// guard rejects; the empty-tenant rejection is covered by TestList_EmptyTenant_Forbidden.
 func auditTestCtx(subject string, roles []string) context.Context {
+	return withAllowAuthorizer(auditTestCtxNoAuthz(subject, roles))
+}
+
+// auditTestCtxNoAuthz builds a tenant-bearing principal context WITHOUT an
+// Authorizer — used by tests that exercise the fail-closed path (no PDP wired →
+// auditQueryPolicy denies any non-self read) and by table tests that inject a
+// per-case Authorizer via withAuthzCtx.
+func auditTestCtxNoAuthz(subject string, roles []string) context.Context {
 	return auth.WithPrincipal(context.Background(), &auth.Principal{
 		Kind:       auth.PrincipalUser,
 		Subject:    subject,
@@ -205,7 +219,9 @@ func assertAuditVisibilityCase(t *testing.T, mux http.Handler, tc auditVisibilit
 	}
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
-	req = req.WithContext(auth.WithPrincipal(context.Background(), p))
+	// Allow-all Authorizer: this matrix exercises data-layer RowScope visibility,
+	// which is reached only after the empty-actorId read passes the PDP gate (F1).
+	req = req.WithContext(withAllowAuthorizer(auth.WithPrincipal(context.Background(), p)))
 	mux.ServeHTTP(w, req)
 
 	if isSuperAdmin(tc.roles) {
@@ -502,8 +518,11 @@ func TestList_EmptyTenant_Forbidden(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
-	// auth.TestContext leaves TenantID empty — the exact fail-open vector.
-	req = req.WithContext(auth.TestContext("usr-1", []string{"admin"}))
+	// auth.TestContext leaves TenantID empty — the exact fail-open vector. Wrap an
+	// allow-all Authorizer so the empty-actorId read passes the PDP gate (F1) and
+	// the 403 under test is the tenant-isolation fail-close inside List, not a
+	// no-PDP gate rejection.
+	req = req.WithContext(withAllowAuthorizer(auth.TestContext("usr-1", []string{"admin"})))
 	mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusForbidden, w.Code,
@@ -535,14 +554,16 @@ func TestList_NonCanonicalTenant_InternalError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
 	// Inject a principal whose TenantID is syntactically non-empty but is not a
 	// canonical UUID — this bypasses the empty-tenant 403 gate and reaches the
-	// ParseTenantID call, which must return an error mapped to 500.
-	req = req.WithContext(auth.WithPrincipal(context.Background(), &auth.Principal{
+	// ParseTenantID call, which must return an error mapped to 500. An allow-all
+	// Authorizer lets the empty-actorId read pass the PDP gate (F1) so the failure
+	// under test is the ParseTenantID 500, not a no-PDP gate rejection.
+	req = req.WithContext(withAllowAuthorizer(auth.WithPrincipal(context.Background(), &auth.Principal{
 		Kind:       auth.PrincipalUser,
 		Subject:    "usr-1",
 		Roles:      []string{"admin"},
 		TenantID:   "not-a-uuid",
 		AuthMethod: "test",
-	}))
+	})))
 	mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code,
@@ -607,13 +628,15 @@ func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
-			// self_access with no actorId param routes through the self branch
-			// (actorID == "") — Authorizer is NOT needed (no PDP call).
-			name:       "empty_actorId_self_branch_no_authorizer",
+			// F1: an empty actorId is NO LONGER an implicit self-read — it is a
+			// permissioned ledger read. With no Authorizer wired it fails closed
+			// (403), same as any other non-self read. A non-admin reads its own
+			// rows by naming itself (actorId=subject), covered by self_access.
+			name:       "empty_actorId_requires_permission_failclosed",
 			subject:    "usr-1",
 			roles:      nil,
 			actorID:    "",
-			wantStatus: http.StatusOK,
+			wantStatus: http.StatusForbidden,
 		},
 		{
 			// The "other actors" branch now delegates to the PDP via
@@ -656,7 +679,10 @@ func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, url, nil)
 			if tc.subject != "" {
-				ctx := auditTestCtx(tc.subject, tc.roles)
+				// No-authz base: cases that exercise the fail-closed path rely on
+				// the absence of a PDP; cases that expect success inject one via
+				// withAuthzCtx (allow/deny).
+				ctx := auditTestCtxNoAuthz(tc.subject, tc.roles)
 				if tc.withAuthzCtx != nil {
 					ctx = tc.withAuthzCtx(ctx)
 				}
@@ -710,7 +736,7 @@ func TestHandler_RegisterRoutes_TenantScoped(t *testing.T) {
 		// usr-1 in tenant-A, self-query: sees its tenant-A row, NOT its tenant-B row.
 		p := &auth.Principal{Kind: auth.PrincipalUser, Subject: "usr-1", Roles: []string{"viewer"}, TenantID: tenantA, AuthMethod: "test"}
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil).
-			WithContext(auth.WithPrincipal(context.Background(), p))
+			WithContext(withAllowAuthorizer(auth.WithPrincipal(context.Background(), p)))
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)
 		require.Equal(t, http.StatusOK, w.Code)
@@ -724,7 +750,7 @@ func TestHandler_RegisterRoutes_TenantScoped(t *testing.T) {
 		// tenant-A rows — admin widens the actor axis, never the tenant axis.
 		p := &auth.Principal{Kind: auth.PrincipalUser, Subject: "admin-1", Roles: []string{"admin"}, TenantID: tenantA, AuthMethod: "test"}
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil).
-			WithContext(auth.WithPrincipal(context.Background(), p))
+			WithContext(withAllowAuthorizer(auth.WithPrincipal(context.Background(), p)))
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)
 		require.Equal(t, http.StatusOK, w.Code)
@@ -775,15 +801,22 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 			wantCount:  1,
 		},
 		{
-			name:       "non-admin no actorId defaults to subject",
+			// F1: empty actorId is now a permissioned ledger read, not an implicit
+			// self-read. A non-admin without audit:read (no Authorizer wired) is
+			// denied; it reads its own rows by naming itself (next case).
+			name:       "non-admin empty actorId requires permission (F1)",
 			query:      "",
 			subject:    "usr-1",
-			wantStatus: http.StatusOK,
-			wantCount:  1,
+			roles:      []string{"viewer"},
+			wantStatus: http.StatusForbidden,
+			wantCount:  -1,
 		},
 		{
-			name:         "non-admin eventType without actorId remains self-scoped",
-			query:        "?eventType=bootstrap.auth.fail",
+			// Non-admin self-read via explicit actorId: exempt from the PDP, and
+			// RowScope=self still scopes results. eventType filter narrows within
+			// the caller's own rows (no bootstrap rows for usr-1 → count 0).
+			name:         "non-admin self eventType remains self-scoped",
+			query:        "?eventType=bootstrap.auth.fail&actorId=usr-1",
 			subject:      "usr-1",
 			wantStatus:   http.StatusOK,
 			wantCount:    0,
@@ -794,6 +827,7 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 			query:        "?eventType=bootstrap.auth.fail",
 			subject:      "admin-user",
 			roles:        []string{"admin"},
+			withAuthzCtx: withAllowAuthorizer,
 			wantStatus:   http.StatusOK,
 			wantCount:    1,
 			wantActorIDs: []string{"system:bootstrap"},
@@ -1066,9 +1100,11 @@ func TestHandleQuery_TraceIDFilter_EmptyParam(t *testing.T) {
 // relationship anti-drift: the maximal (device) mask rejects BOTH gated columns.
 func TestHandleQuery_MaskedFilterOracle_Rejected(t *testing.T) {
 	const deviceID = "dev-oracle"
-	deviceCtx := auth.WithPrincipal(context.Background(), &auth.Principal{
+	// Allow-all Authorizer so the empty-actorId read passes the PDP gate (F1) and
+	// the test reaches the data-layer masked-filter gate it exercises.
+	deviceCtx := withAllowAuthorizer(auth.WithPrincipal(context.Background(), &auth.Principal{
 		Kind: auth.PrincipalDevice, Subject: deviceID, TenantID: auditQueryTestTenant, AuthMethod: "test",
-	})
+	}))
 
 	cases := []struct {
 		name       string
@@ -1170,9 +1206,9 @@ func TestHandleQuery_ColumnMaskMatrix(t *testing.T) {
 		require.NoError(t, store.Append(context.Background(), e))
 	}
 
-	deviceCtx := auth.WithPrincipal(context.Background(), &auth.Principal{
+	deviceCtx := withAllowAuthorizer(auth.WithPrincipal(context.Background(), &auth.Principal{
 		Kind: auth.PrincipalDevice, Subject: deviceID, TenantID: auditQueryTestTenant, AuthMethod: "test",
-	})
+	}))
 
 	cases := []struct {
 		name                             string
@@ -1256,9 +1292,11 @@ func assertActorBindingCase(t *testing.T, mux *http.ServeMux, tc actorBindingCas
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries"+tc.query, nil)
 	switch {
 	case tc.injectEmptyAuth:
-		req = req.WithContext(auditTestCtx("", tc.roles))
+		req = req.WithContext(auditTestCtxNoAuthz("", tc.roles))
 	case tc.subject != "":
-		ctx := auditTestCtx(tc.subject, tc.roles)
+		// No-authz base: success cases inject a per-case Authorizer via withAuthzCtx;
+		// fail-closed cases rely on its absence.
+		ctx := auditTestCtxNoAuthz(tc.subject, tc.roles)
 		if tc.withAuthzCtx != nil {
 			ctx = tc.withAuthzCtx(ctx)
 		}
@@ -1291,14 +1329,15 @@ func assertActorBindingCase(t *testing.T, mux *http.ServeMux, tc actorBindingCas
 // policy logic rather than at routing or codec layers.
 //
 // Design notes:
-//   - Self branch (empty actorId OR actorId == subject): returns nil immediately,
-//     no PDP call. The comment in TestHandler_RegisterRoutes_AuthzNegative case
-//     "empty_actorId_self_branch_no_authorizer" captures this; the test below pins it.
-//   - Cross-actor branch (actorId != subject): delegates to
-//     auth.RequirePermission(authz.PermAuditRead), which reads the Authorizer from
-//     ctx. No Authorizer → fail-closed 403. Allow Authorizer → nil.
+//   - Self branch (actorId == subject ONLY): returns nil immediately, no PDP call.
+//     This is the explicit-self-read shape exemption.
+//   - Permissioned branch (actorId empty, OR set and != subject): delegates to
+//     auth.RequirePermission(authz.PermAuditRead()), which reads the Authorizer
+//     from ctx. No Authorizer → fail-closed 403. Allow Authorizer → nil.
 //     Deny Authorizer → 403. Authorizer returning error → error passes through
 //     (status determined by the error's errcode Kind — e.g. KindUnavailable → 503).
+//     F1: empty actorId is in the permissioned branch (a ledger-wide read for an
+//     admin), NOT the self branch, so it cannot skip the PDP.
 //   - auditQueryPolicy is NOT involved in row-visibility or column-masking;
 //     those are enforced at the data layer (RowScope / FieldMask obligations).
 func TestAuditQueryPolicy(t *testing.T) {
@@ -1328,11 +1367,22 @@ func TestAuditQueryPolicy(t *testing.T) {
 			wantErrCode: "ERR_AUTH_UNAUTHORIZED",
 		},
 		{
-			// Self branch: empty actorId → nil (allow), no PDP consulted.
-			name:       "empty_actorId_self_branch_allows",
-			principal:  &auth.Principal{Kind: auth.PrincipalUser, Subject: selfSubject, TenantID: auditQueryTestTenant, AuthMethod: "test"},
-			actorID:    "",
-			wantErrNil: true,
+			// F1: empty actorId is a permissioned read, NOT the self branch. With
+			// no Authorizer in ctx it fails closed → 403 (cannot skip the PDP).
+			name:        "empty_actorId_requires_permission_failclosed",
+			principal:   &auth.Principal{Kind: auth.PrincipalUser, Subject: selfSubject, TenantID: auditQueryTestTenant, AuthMethod: "test"},
+			actorID:     "",
+			wantErr:     true,
+			wantErrCode: "ERR_AUTH_FORBIDDEN",
+		},
+		{
+			// F1: empty actorId with an Allow Authorizer in ctx → nil (the PDP
+			// granted audit:read, e.g. an admin via the baseline).
+			name:         "empty_actorId_with_allow_authorizer_permits",
+			principal:    &auth.Principal{Kind: auth.PrincipalUser, Subject: selfSubject, TenantID: auditQueryTestTenant, AuthMethod: "test"},
+			actorID:      "",
+			withAuthzCtx: withAllowAuthorizer,
+			wantErrNil:   true,
 		},
 		{
 			// Self branch: actorId == subject → nil (allow), no PDP consulted.

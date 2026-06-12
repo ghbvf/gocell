@@ -27,33 +27,49 @@ package authz
 // ai-robust.md Hard 范本目录. Upstream: newPermission is the sole minter,
 // reachable only through this file's registry. Downstream: auth.RequirePermission
 // is the sole route consumer. A new permission cannot be introduced without
-// adding a Perm* var here (which the registry test pins), so the action
-// vocabulary cannot drift via scattered string literals.
+// adding a perm* var + accessor here (which the registry test pins), so the
+// action vocabulary cannot drift via scattered string literals.
+//
+// Permissions are exposed as ACCESSOR FUNCTIONS (e.g. PermAuditRead()), never as
+// exported vars. An exported var would be reassignable from outside
+// (authz.PermAuditRead = Permission{} could zero the global registry value — the
+// F6 gap); a function declaration cannot be reassigned, so the registry value is
+// immutable to every external package. This makes the "sealed value" claim true
+// by the type system (compile error to reassign), not merely by convention.
 //
 // Growth: PR-10a seeds only PermAuditRead (the #914 / auditquery target). PR-10b
-// adds one Perm* var per migrated endpoint; the closed set grows only here.
+// adds one perm* var + accessor per migrated endpoint; the closed set grows only here.
 type Permission struct {
 	s string
 }
 
 // newPermission is the sole minter of Permission values. It is unexported and
-// must be called only from the package-level Perm* var declarations in this
+// must be called only from the package-level perm* var declarations in this
 // file, which is what makes the exported set closed and audited.
 func newPermission(s string) Permission {
 	return Permission{s: s}
 }
 
-// PermAuditRead authorizes reading the audit ledger across actors within the
-// caller's tenant (the gate auditquery's "query other actors" branch consults).
-// Migrated from the role-literal auth.AnyRole(RoleAdmin, RoleSuperAdmin) gate in
-// #914 (PR-10a).
-var PermAuditRead = newPermission("audit:read")
+// permAuditRead is the package-private singleton backing the PermAuditRead()
+// accessor. Unexported so no external package can reassign it.
+var permAuditRead = newPermission("audit:read")
+
+// PermAuditRead returns the permission authorizing reading the audit ledger
+// across actors within the caller's tenant (the gate auditquery's "query other
+// actors" branch consults). Migrated from the role-literal
+// auth.AnyRole(RoleAdmin, RoleSuperAdmin) gate in #914 (PR-10a).
+//
+// It is an accessor function (not an exported var) so the registry value is
+// immutable to external packages — reassigning a func is a compile error.
+func PermAuditRead() Permission {
+	return permAuditRead
+}
 
 // allPermissions is the closed registry of every Permission that exists. It
 // backs Permissions() and lets tests pin the closed set (anti-vacuity: a new
-// Perm* var that is not added here is caught by the registry test).
+// perm* var that is not added here is caught by the registry test).
 var allPermissions = []Permission{
-	PermAuditRead,
+	permAuditRead,
 }
 
 // String returns the action spelling carried into a PDP and stored in policy

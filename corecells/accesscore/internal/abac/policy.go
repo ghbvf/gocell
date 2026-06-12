@@ -49,6 +49,7 @@ type Policy struct {
 // affect the original and vice versa. The copy covers:
 //   - top-level scalar fields (ID, TenantID, Name, Description, Version)
 //   - Rules slice (new backing array)
+//   - each Rule's Action slice (new backing array)
 //   - each Rule's Conditions slice (new backing array per rule)
 //   - each Condition's Values slice (new backing array)
 //   - each Rule's Obligations.FieldMask.Fields slice (new backing array)
@@ -61,6 +62,14 @@ func (p *Policy) Clone() *Policy {
 	c.Rules = make([]Rule, len(p.Rules))
 	for i, r := range p.Rules {
 		rc := r
+		// Action is an action-target slice (PR-10a #1348); deep-copy it like
+		// Conditions/FieldMask so a caller mutating a returned rule's Action
+		// cannot alias back into the stored policy (repo defensive-clone isolation).
+		if r.Action != nil {
+			action := make([]string, len(r.Action))
+			copy(action, r.Action)
+			rc.Action = action
+		}
 		if r.Conditions != nil {
 			rc.Conditions = make([]Condition, len(r.Conditions))
 			for j, cond := range r.Conditions {

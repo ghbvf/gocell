@@ -17,7 +17,7 @@ import (
 func TestBuiltinBaseline_AuditRead(t *testing.T) {
 	svc := &Service{logger: slog.Default()}
 
-	auditReadAction := authz.PermAuditRead.String()
+	auditReadAction := authz.PermAuditRead().String()
 
 	tests := []struct {
 		name      string

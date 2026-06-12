@@ -16,7 +16,7 @@ var builtinBaseline = []abac.Rule{
 		ID:     "baseline-audit-read-admin",
 		Name:   "Baseline: allow admin/super-admin to read audit ledger",
 		Effect: authz.EffectAllow,
-		Action: []string{authz.PermAuditRead.String()},
+		Action: []string{authz.PermAuditRead().String()},
 		Conditions: []abac.Condition{
 			{
 				Source:   abac.SourceSubject,
@@ -35,7 +35,7 @@ var builtinBaseline = []abac.Rule{
 // missing-attr/store-err; the baseline governs the default policy set; the two do
 // not conflict). PR-10b extends one rule per migrated endpoint.
 //
-// PR-10a baseline: exactly one rule — PermAuditRead is allowed for admin and
+// PR-10a baseline: exactly one rule — PermAuditRead() is allowed for admin and
 // super-admin principals. The condition uses Source=subject, Key="roles",
 // Operator=OpIn so it matches any principal whose Roles slice contains at least
 // one of the listed role values. Role constants are imported from runtime/auth so

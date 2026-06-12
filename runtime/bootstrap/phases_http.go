@@ -361,8 +361,10 @@ func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef,
 		// handlers) so RequirePermission policies always find the PDP.
 		// Only the primary listener receives the injector; Internal, Health, and
 		// Admin listeners do not carry ABAC-gated business routes.
-		if b.primaryAuthorizer != nil {
-			opts = append(opts, router.WithDefaultMiddleware(authorizerInjector(b.primaryAuthorizer)))
+		var aerr error
+		opts, aerr = b.appendPrimaryAuthorizerInjector(opts)
+		if aerr != nil {
+			return nil, aerr
 		}
 	}
 
@@ -389,6 +391,27 @@ func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef,
 	}
 
 	return opts, nil
+}
+
+// appendPrimaryAuthorizerInjector resolves the wired primary Authorizer (if any)
+// and appends its injector middleware to opts. It is a no-op when no Authorizer
+// was wired via WithPrimaryAuthorizer.
+//
+// F8 startup fail-fast: this runs at router build (after cell Init, before any
+// listener serves). If the wired Authorizer can eagerly resolve (e.g. the
+// corebundle lazyAuthorizer), it does so now so a nil provider fails the boot
+// here rather than 503-ing on the first request. Authorizers with nothing to
+// resolve simply don't implement the interface and are skipped.
+func (b *Bootstrap) appendPrimaryAuthorizerInjector(opts []router.Option) ([]router.Option, error) {
+	if b.primaryAuthorizer == nil {
+		return opts, nil
+	}
+	if r, ok := b.primaryAuthorizer.(interface{ ResolveAuthorizer() error }); ok {
+		if err := r.ResolveAuthorizer(); err != nil {
+			return nil, fmt.Errorf("bootstrap: primary Authorizer failed to resolve at startup: %w", err)
+		}
+	}
+	return append(opts, router.WithDefaultMiddleware(authorizerInjector(b.primaryAuthorizer))), nil
 }
 
 // authorizerInjector returns a middleware that injects the given auth.Authorizer

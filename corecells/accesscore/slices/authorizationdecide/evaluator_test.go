@@ -18,7 +18,7 @@ import (
 // testAuditRead is the canonical action string for PermAuditRead, used throughout
 // evaluator_test.go to avoid repeated string literals (F13 fix; mirrors the
 // auditReadAction pattern in baseline_test.go — pkg/authz is already imported).
-var testAuditRead = authz.PermAuditRead.String()
+var testAuditRead = authz.PermAuditRead().String()
 
 // actionResolver builds an attributeResolver with just the principal (no env/resource).
 func actionResolver(p *auth.Principal) attributeResolver {

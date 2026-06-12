@@ -155,6 +155,40 @@ func TestLazyAuthorizer_CachesAuthorizer(t *testing.T) {
 	require.NotNil(t, lazy.resolved.Load(), "resolved must be populated after first successful Authorize call")
 }
 
+// TestLazyAuthorizer_ResolveAuthorizer_Success verifies the F8 startup hook: a
+// live provider resolves without error and caches the Authorizer, so a later
+// Authorize takes the cached fast path (provider.Authorizer() not called again).
+func TestLazyAuthorizer_ResolveAuthorizer_Success(t *testing.T) {
+	t.Parallel()
+	provider := newCountingAuthorizerCell("accesscore")
+	lazy := &lazyAuthorizer{provider: provider}
+
+	require.NoError(t, lazy.ResolveAuthorizer(), "ResolveAuthorizer must succeed when the provider yields a live Authorizer")
+	require.NotNil(t, lazy.resolved.Load(), "ResolveAuthorizer must cache the resolved Authorizer")
+
+	_, err := lazy.Authorize(context.Background(), "u", "r", "a")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), provider.providerCalls.Load(),
+		"provider.Authorizer() must be called exactly once (resolved at startup, cached for the request)")
+}
+
+// TestLazyAuthorizer_ResolveAuthorizer_NilFailsFast verifies the F8 startup
+// fail-fast: a provider that yields nil makes ResolveAuthorizer return a
+// KindUnavailable error, so bootstrap aborts at boot rather than 503-ing on the
+// first request.
+func TestLazyAuthorizer_ResolveAuthorizer_NilFailsFast(t *testing.T) {
+	t.Parallel()
+	lazy := &lazyAuthorizer{provider: newFakeAuthorizerCell("accesscore", nil)}
+
+	err := lazy.ResolveAuthorizer()
+	require.Error(t, err, "ResolveAuthorizer must fail-fast when the provider yields nil")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "nil-provider startup error must be an errcode.Error")
+	assert.Equal(t, errcode.KindUnavailable, ec.Kind)
+	assert.Equal(t, errcode.ErrServiceUnavailable, ec.Code)
+	assert.Nil(t, lazy.resolved.Load(), "a failed resolve must not cache anything")
+}
+
 // TestPrimaryAuthorizerOption_NoProvider verifies that an assembly with no
 // authorizerProvider cell causes primaryAuthorizerOption to fail-fast with an
 // error containing "no cell implements authorizerProvider".
@@ -204,9 +238,11 @@ func TestPrimaryAuthorizerOption_MultipleProviders(t *testing.T) {
 
 // TestPrimaryAuthorizerOption_NilAuthorizerFromProvider verifies that a cell
 // implementing authorizerProvider but returning a nil Authorizer produces an
-// option without error at construction time (the nil check is deferred to the
-// first Authorize call, because Init() hasn't run yet when options are built).
-// The lazyAuthorizer then fails closed on the first Authorize call.
+// option without error at construction time (the nil check cannot run yet
+// because Init() hasn't run when options are built). The nil provider is caught
+// at bootstrap startup by ResolveAuthorizer (F8,
+// TestLazyAuthorizer_ResolveAuthorizer_NilFailsFast); this test pins the
+// request-path fail-closed guard that remains as defense-in-depth.
 func TestPrimaryAuthorizerOption_NilAuthorizerFromProvider(t *testing.T) {
 	t.Parallel()
 	cells := []cell.Cell{

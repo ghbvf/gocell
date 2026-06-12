@@ -152,6 +152,14 @@ type Obligations struct {
 	FieldMask FieldMask
 }
 
+// IsZero reports whether the Obligations impose no PEP duty at all: no row-scope
+// constraint (zero RowScope) and an empty FieldMask. A coarse route-gate PEP that
+// cannot discharge obligations uses this to fail closed on any non-zero
+// obligation rather than silently drop it (see runtime/auth.RequirePermission, F5).
+func (o Obligations) IsZero() bool {
+	return o.RowScope == 0 && o.FieldMask.IsZero()
+}
+
 // Validate returns an error if any obligation field is in an invalid state.
 // A zero RowScope is valid (zero = "this policy does not impose a row-scope
 // constraint"; the PR-7 evaluator resolves the effective scope).

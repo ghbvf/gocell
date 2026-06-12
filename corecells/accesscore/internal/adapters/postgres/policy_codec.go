@@ -90,8 +90,15 @@ var (
 // ─── persistence DTOs (string-coded; camelCase JSON) ───────────────────────
 
 type ruleJSON struct {
-	ID          string          `json:"id"`
-	Name        string          `json:"name"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Action is the optional action-target set (PR-10a #1348). Persisted with
+	// omitempty: an untargeted rule (nil Action = match-all) writes no `action`
+	// key, so existing rows (authored before the field existed) stay byte-identical
+	// and an action-scoped rule round-trips its target instead of silently
+	// widening to match-all on read (F3). Decode is bounded by DisallowUnknownFields
+	// like every other field.
+	Action      []string        `json:"action,omitempty"`
 	Effect      string          `json:"effect"`
 	Conditions  []conditionJSON `json:"conditions,omitempty"`
 	Obligations obligationsJSON `json:"obligations"`
@@ -246,6 +253,7 @@ func encodeRule(r abac.Rule) (ruleJSON, error) {
 	return ruleJSON{
 		ID:         r.ID,
 		Name:       r.Name,
+		Action:     r.Action,
 		Effect:     effectCode,
 		Conditions: conds,
 		Obligations: obligationsJSON{
@@ -294,6 +302,7 @@ func decodeRule(dto ruleJSON) (abac.Rule, error) {
 	return abac.Rule{
 		ID:         dto.ID,
 		Name:       dto.Name,
+		Action:     dto.Action,
 		Effect:     effect,
 		Conditions: conds,
 		Obligations: authz.Obligations{

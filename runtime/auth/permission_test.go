@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
 // --- WithAuthorizer / AuthorizerFromContext round-trip ---
@@ -41,7 +42,7 @@ func TestRequirePermission_Allow(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
 	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), mock))
 
-	policy := RequirePermission(authz.PermAuditRead)
+	policy := RequirePermission(authz.PermAuditRead())
 	err := policy(req)
 	assert.NoError(t, err, "allow decision must return nil")
 }
@@ -55,7 +56,7 @@ func TestRequirePermission_Deny(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
 	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), mock))
 
-	policy := RequirePermission(authz.PermAuditRead)
+	policy := RequirePermission(authz.PermAuditRead())
 	err := policy(req)
 	require.Error(t, err)
 
@@ -75,7 +76,7 @@ func TestRequirePermission_AuthorizerError_Passthrough(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
 	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), mock))
 
-	policy := RequirePermission(authz.PermAuditRead)
+	policy := RequirePermission(authz.PermAuditRead())
 	err := policy(req)
 	require.Error(t, err)
 
@@ -92,7 +93,7 @@ func TestRequirePermission_NoAuthorizer_FailClosed(t *testing.T) {
 	// Only Principal injected — no Authorizer.
 	req = req.WithContext(WithPrincipal(req.Context(), p))
 
-	policy := RequirePermission(authz.PermAuditRead)
+	policy := RequirePermission(authz.PermAuditRead())
 	err := policy(req)
 	require.Error(t, err, "absent Authorizer must not silently permit")
 
@@ -111,7 +112,7 @@ func TestRequirePermission_NoPrincipal_Unauthenticated(t *testing.T) {
 	// Only Authorizer injected — no Principal.
 	req = req.WithContext(WithAuthorizer(req.Context(), mock))
 
-	policy := RequirePermission(authz.PermAuditRead)
+	policy := RequirePermission(authz.PermAuditRead())
 	err := policy(req)
 	require.Error(t, err)
 
@@ -131,7 +132,7 @@ func TestRequirePermission_EmptySubject_Unauthenticated(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
 	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), mock))
 
-	policy := RequirePermission(authz.PermAuditRead)
+	policy := RequirePermission(authz.PermAuditRead())
 	// FromContext will return (nil, false) for PrincipalUser with empty Subject
 	// because principalHasAnyRole guard; but actually FromContext only filters
 	// PrincipalUnknown. RequirePermission itself must check for empty subject.
@@ -169,6 +170,31 @@ func TestRequirePermission_ZeroPermission_FailClosed(t *testing.T) {
 	assert.Equal(t, errcode.ErrAuthForbidden, ec.Code)
 }
 
+// --- RequirePermission: Allow with non-zero obligations → fail-closed (403) ---
+
+// TestRequirePermission_AllowWithObligations_FailClosed asserts F5: an Allow
+// decision carrying a non-zero obligation (which this coarse route gate cannot
+// discharge) is denied rather than silently dropped. A baseline allow carries
+// zero obligations and passes (covered by TestRequirePermission_Allow); this
+// pins the tenant-allow-with-obligation case.
+func TestRequirePermission_AllowWithObligations_FailClosed(t *testing.T) {
+	p := &Principal{Kind: PrincipalUser, Subject: "u1", Roles: []string{"admin"}}
+	// Allow, but with a RowScope obligation the route gate cannot enforce.
+	mock := &mockAuthorizer{allowed: true, obligations: authz.Obligations{RowScope: tenant.RowScopeSelf}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), mock))
+
+	err := RequirePermission(authz.PermAuditRead())(req)
+	require.Error(t, err, "Allow with unenforceable obligations must fail-closed, not silently drop")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind,
+		"Allow with non-zero obligations must return PermissionDenied (403)")
+	assert.Equal(t, errcode.ErrAuthForbidden, ec.Code)
+}
+
 // --- Full flow via httptest handler: integration check ---
 
 // TestRequirePermission_HTTPIntegration_AllowDeny exercises the Policy through a
@@ -190,7 +216,7 @@ func TestRequirePermission_HTTPIntegration_AllowDeny(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			policy := RequirePermission(authz.PermAuditRead)
+			policy := RequirePermission(authz.PermAuditRead())
 			p := &Principal{Kind: PrincipalUser, Subject: "u1", Roles: []string{"admin"}}
 
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -71,6 +71,11 @@ const msgInsufficientPermissions = "insufficient permissions"
 // guard when RequirePermission receives a zero authz.Permission{}.
 const msgPermissionNotSpecified = "authorization permission not specified"
 
+// msgObligationsNotEnforceable is the canonical const message for the fail-closed
+// guard when an Allow decision carries obligations this coarse route gate cannot
+// discharge (F5).
+const msgObligationsNotEnforceable = "authorization decision carries obligations not enforceable at this gate"
+
 // logAuthorizerError logs an Authorizer.Authorize error at the appropriate level.
 // KindPermissionDenied (expected tenant-missing deny) → Warn; all others → Error.
 // The error is redacted before logging per observability.md §Redaction.
@@ -115,11 +120,16 @@ func logAuthorizerError(l *slog.Logger, err error, path, subject, permission str
 //     KindPermissionDenied → 403 when the request lacks a tenant scope).
 //  5. Decision.IsAllow() → nil (permit). Else → KindPermissionDenied (403).
 //
-// RequirePermission intentionally does NOT consume dec.Obligations()
-// (RowScope/FieldMask). This is a coarse allow/deny gate; obligation enforcement
-// at the data-read PEPs (repo/projection) lands in PR-11/PR-12. Denying on a
-// non-zero obligation here would wrongly block a legitimately allowed-with-
-// masking request.
+// Obligation handling (F5, amends PR-10a ADR D3): RequirePermission is a coarse
+// allow/deny gate — it does NOT discharge obligations (RowScope/FieldMask); that
+// is the job of the data-read PEPs (repo/projection) in PR-11/PR-12. But it does
+// NOT silently drop them either: an Allow whose dec.Obligations() is non-zero
+// requires a PEP this gate cannot run, and dropping a *restricting* obligation
+// would let the caller see more than the policy intended. So a non-zero
+// obligation on an Allow is fail-closed (deny) until the data PEP lands. The
+// built-in baseline carries zero obligations, so the normal path is unaffected;
+// only a tenant policy that attaches an obligation to an allow trips this — and
+// such a policy is not safely enforceable here yet.
 //
 // AI-robust Grade: Hard — downstream of the sealed authorizerKey funnel;
 // sole PDP route entry for permission-based authorization.
@@ -158,18 +168,39 @@ func RequirePermission(p authz.Permission) Policy {
 			return err
 		}
 
-		if dec.IsAllow() {
-			// RequirePermission does NOT consume dec.Obligations() — see godoc.
-			return nil
-		}
-
-		loggerFrom(r.Context()).Info(
-			"authz: permission denied by PDP",
-			slog.String("path", r.URL.Path),
-			slog.String("subject", principal.Subject),
-			slog.String("permission", p.String()),
-			slog.String("reason", dec.Reason()),
-		)
-		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgInsufficientPermissions)
+		return evaluatePermissionDecision(r.Context(), dec, r.URL.Path, principal.Subject, p.String())
 	}
+}
+
+// evaluatePermissionDecision maps a PDP Decision to the route-gate outcome:
+//   - Allow with zero obligations → nil (permit).
+//   - Allow with a non-zero obligation this coarse gate cannot discharge → deny
+//     (F5 fail-closed; baseline allows carry zero obligations, so the normal path
+//     is unaffected — a tenant allow attaching a RowScope/FieldMask obligation is
+//     denied rather than silently dropped, which would widen what the caller sees).
+//   - Deny → 403.
+//
+// Extracted from RequirePermission to keep its cognitive complexity within budget.
+func evaluatePermissionDecision(ctx context.Context, dec authz.Decision, path, subject, permission string) error {
+	if dec.IsAllow() {
+		if obl := dec.Obligations(); !obl.IsZero() {
+			loggerFrom(ctx).Warn(
+				"authz: Allow carries obligations not enforceable at route gate — denying (fail-closed)",
+				slog.String("path", path),
+				slog.String("subject", subject),
+				slog.String("permission", permission),
+			)
+			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgObligationsNotEnforceable)
+		}
+		return nil
+	}
+
+	loggerFrom(ctx).Info(
+		"authz: permission denied by PDP",
+		slog.String("path", path),
+		slog.String("subject", subject),
+		slog.String("permission", permission),
+		slog.String("reason", dec.Reason()),
+	)
+	return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgInsufficientPermissions)
 }

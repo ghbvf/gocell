@@ -40,9 +40,11 @@ type authorizerProvider interface {
 // returns the live service.
 //
 // Lifecycle guarantee: bootstrap phase3 calls Init before any listener starts,
-// so Authorize is never reachable before the provider's service is ready. If a
-// provider returns nil even after Init (programming error), Authorize fails closed
-// with a clear error rather than panicking.
+// so Authorize is never reachable before the provider's service is ready.
+// Bootstrap then calls ResolveAuthorizer at router build (after Init, before any
+// listener serves), so a provider that returns nil even after Init (programming
+// error) fails the boot there (F8) instead of 503-ing on the first request. The
+// nil guard inside Authorize remains as defense-in-depth.
 type lazyAuthorizer struct {
 	provider authorizerProvider
 	// resolved caches the Authorizer after the first successful lookup to avoid
@@ -53,6 +55,30 @@ type lazyAuthorizer struct {
 // msgLazyAuthorizerNilProvider is the const message for the fail-closed guard
 // when the provider returns nil after Init. Required by MESSAGE-CONST-LITERAL-01.
 const msgLazyAuthorizerNilProvider = "authorization provider returned nil Authorizer after Init"
+
+// ResolveAuthorizer eagerly resolves the provider's Authorizer and caches it.
+// Bootstrap calls it once after all cell Init has run (so provider.Authorizer()
+// returns the live service) and BEFORE any listener serves, so a provider that
+// yields nil fails the whole boot rather than 503-ing on the first request (F8).
+// The request-path nil guard in Authorize remains as defense-in-depth.
+//
+// It is idempotent: a second call re-resolves and re-stores the same value.
+func (l *lazyAuthorizer) ResolveAuthorizer() error {
+	a := l.provider.Authorizer()
+	if a == nil {
+		slog.Error(
+			msgLazyAuthorizerNilProvider,
+			slog.String("provider_type", authorizerProviderTypeName(l.provider)),
+		)
+		return errcode.New(
+			errcode.KindUnavailable, errcode.ErrServiceUnavailable,
+			msgLazyAuthorizerNilProvider,
+			errcode.WithInternal(errcode.InternalAttr("provider_type", authorizerProviderTypeName(l.provider))),
+		)
+	}
+	l.resolved.Store(&a)
+	return nil
+}
 
 // Authorize implements auth.Authorizer.
 func (l *lazyAuthorizer) Authorize(ctx context.Context, subject, resource, action string) (authz.Decision, error) {

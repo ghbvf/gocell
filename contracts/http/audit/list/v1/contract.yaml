@@ -67,7 +67,7 @@ endpoints:
         description: "Unauthorized — missing or invalid bearer token"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       403:
-        description: "Forbidden — authenticated but lacks the admin role for a cross-user query, or the principal carries no tenant (a tenant-scoped audit read requires a tenant; epic #1337 PR-2a)"
+        description: "Forbidden — the ABAC PDP denied the audit:read permission required to read another actor's rows (#914 PR-10a migrated the role-literal gate to permission-based authorization), or the principal carries no tenant (a tenant-scoped audit read requires a tenant; epic #1337 PR-2a)"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   response: response.schema.json

@@ -37,6 +37,9 @@ func (v *mockVerifier) VerifyIntent(_ context.Context, _ string, _ TokenIntent) 
 type mockAuthorizer struct {
 	allowed bool
 	err     error
+	// obligations is attached to the Allow decision (zero by default). Used by the
+	// F5 fail-closed-on-obligations test in permission_test.go.
+	obligations authz.Obligations
 }
 
 func (a *mockAuthorizer) Authorize(_ context.Context, _, _, _ string) (authz.Decision, error) {
@@ -44,7 +47,7 @@ func (a *mockAuthorizer) Authorize(_ context.Context, _, _, _ string) (authz.Dec
 		return authz.Decision{}, a.err
 	}
 	if a.allowed {
-		dec, err := authz.Allow(authz.Obligations{})
+		dec, err := authz.Allow(a.obligations)
 		return dec, err
 	}
 	return authz.Deny("test: not allowed"), nil
