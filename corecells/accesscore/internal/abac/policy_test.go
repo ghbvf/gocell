@@ -130,6 +130,22 @@ func TestPolicy_Clone(t *testing.T) {
 			},
 		},
 		{
+			name: "Action slice is independent (PR-10a #1348 — F4 deep-copy)",
+			orig: func() *abac.Policy {
+				p := makeValidPolicy()
+				p.Rules[0].Action = []string{"audit:read"}
+				return p
+			}(),
+			mutate: func(c *abac.Policy) {
+				c.Rules[0].Action[0] = "mutated:action"
+			},
+			check: func(t *testing.T, orig *abac.Policy) {
+				if orig.Rules[0].Action[0] == "mutated:action" {
+					t.Errorf("Clone Action[0] mutation leaked into original (shallow-copy)")
+				}
+			},
+		},
+		{
 			name:   "original mutation does not affect clone",
 			orig:   makeValidPolicy(),
 			mutate: func(_ *abac.Policy) {},

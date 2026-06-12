@@ -93,6 +93,10 @@ func (b *Bootstrap) validateNilDependencySentinels() error {
 	if b.idempotencyStoreNil {
 		return fmt.Errorf("bootstrap: idempotency store must not be nil in WithIdempotencyStore")
 	}
+	if b.primaryAuthorizerNil {
+		return fmt.Errorf("bootstrap: authorizer must not be nil in WithPrimaryAuthorizer; " +
+			"pass a real auth.Authorizer or omit the option entirely")
+	}
 	if b.grpcServerNil {
 		return errcode.New(errcode.KindInternal, errcode.ErrGRPCServerMissing,
 			"bootstrap: gRPC server must not be nil in WithGRPCListener; "+

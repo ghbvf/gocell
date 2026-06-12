@@ -158,13 +158,15 @@ func TestHttpAuditListV1Serve_PrincipalProjection(t *testing.T) {
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, nil)
 	// Caller carries the same tenant as the seeded row so it survives the
 	// mandatory tenant scope (epic #1337 PR-2a) and the value-leak assertion below
-	// operates on a populated response.
-	req = req.WithContext(auth.WithPrincipal(context.Background(), &auth.Principal{
+	// operates on a populated response. An allow-all Authorizer lets the
+	// empty-actorId read pass the PDP gate (F1) — this test exercises the response
+	// projection, not authorization.
+	req = req.WithContext(withAllowAuthorizer(auth.WithPrincipal(context.Background(), &auth.Principal{
 		Kind:       auth.PrincipalUser,
 		Subject:    "usr-actor",
 		TenantID:   projTenant,
 		AuthMethod: "test",
-	}))
+	})))
 	h.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 

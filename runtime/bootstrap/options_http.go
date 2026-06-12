@@ -5,7 +5,7 @@ package bootstrap
 //
 // Covers: WithRouterOptions, WithTracer, WithRateLimiter, WithCircuitBreaker,
 // WithSecurityHeadersOptions, WithHealthChecker, WithReadyzDeadline,
-// WithAdapterInfo, WithHealthRoutes.
+// WithAdapterInfo, WithHealthRoutes, WithPrimaryAuthorizer.
 //
 // Note: WithRateLimiter and WithCircuitBreaker also append to b.closers (lifecycle teardown).
 //
@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/auth"
 	idemhttp "github.com/ghbvf/gocell/runtime/http/idempotency"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
@@ -66,7 +67,8 @@ func WithRouterOptions(opts ...router.Option) Option {
 // ref: go-zero — observability configuration at app level
 func WithTracer(t wrapper.Tracer) Option {
 	return func(b *Bootstrap) {
-		b.routerOpts = append(b.routerOpts,
+		b.routerOpts = append(
+			b.routerOpts,
 			router.WithTracer(t),
 			// Skip span creation for canonical infra probe endpoints
 			// (/healthz, /readyz, /metrics) so high-rate liveness/readiness
@@ -275,9 +277,40 @@ func WithDevtoolsCatalog(
 // PR-A35 / PR269 round-3 strict semantics: a request with ?verbose= but no
 // matching readyz verbose-token / disabled flag yields 401
 // ErrReadyzVerboseDenied at the health handler layer, never a silent
-// downgrade to plain 200.
+// downgrade to plain 20.
 func WithHealthRoutes(opts ...HealthRouteGroupOption) Option {
 	return func(b *Bootstrap) {
 		b.healthRouteGroupOpts = append(b.healthRouteGroupOpts, opts...)
+	}
+}
+
+// WithPrimaryAuthorizer wires an ABAC Authorizer (PDP) into the primary
+// listener's request context. A middleware installed on the primary listener's
+// router calls auth.WithAuthorizer(ctx, a) on every incoming request so that
+// route Policies built with auth.RequirePermission can find the PDP.
+//
+// This is the symmetric counterpart to the JWT AuthMiddleware already installed
+// on the primary listener: both inject per-request state before route handlers
+// run.
+//
+// Strong-dependency fail-fast (runtime-api.md option 范式): both bare-nil and
+// typed-nil (non-nil interface holding a nil pointer) are rejected at phase0
+// with a clear error. Passing a nil Authorizer would silently leave
+// RequirePermission fail-closed (deny all), masking a misconfiguration. Use
+// this option only when the PDP is ready; omit it entirely when ABAC gating is
+// not required on this assembly.
+//
+// The Authorizer is installed ONLY on cell.PrimaryListener. Internal, Health,
+// and Admin listeners do not receive it: internal routes use service-token
+// identity (no ABAC policy gate), and health/admin listeners are out-of-band.
+//
+// ref: runtime-api.md — strong-dependency fail-fast option pattern.
+func WithPrimaryAuthorizer(a auth.Authorizer) Option {
+	return func(b *Bootstrap) {
+		if validation.IsNilInterface(a) {
+			b.primaryAuthorizerNil = true
+			return
+		}
+		b.primaryAuthorizer = a
 	}
 }

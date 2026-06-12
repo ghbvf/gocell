@@ -37,3 +37,36 @@ PG tenant scope 使用 `SET LOCAL` 注入当前事务。scope 写入只允许通
 app-serving role 必须非 owner 且无 bypass RLS 权限。
 
 相关 enforcement 的完整 ID、评级和盲区写在对应 archtest godoc。
+
+## ABAC authz 接线（permission-based）
+
+业务端点授权迁向 PDP 决策，不在 handler 硬编 role-name 字面量。
+
+- 路由门禁用 `auth.RequirePermission(authz.Permission)`，不用 `auth.AnyRole`/`auth.SelfOr`
+  做授权分支。`authz.Permission` 是 sealed 闭值集（唯一 minter = registry，包外不可伪造）；
+  permission 单例经 accessor 函数（`authz.PermAuditRead()`）暴露而非可重赋值的导出 var——
+  函数不可重赋值 = 注册值类型级不可变（重赋值即编译错）。role 字符串不可传入 Permission 位
+  （概念隔离）。
+- self / ownership 检查（path/query 参数 == subject）是请求形状判定，留 handler 代码；
+  行可见性由数据层 `RowScope` 治理，不进路由 PDP。注意「空参数」不等于 self：如 audit 的
+  空 `actorId` 对 admin 是全 actor 读，按 permissioned 读处理而非隐式 self（只有显式
+  `param == subject` 才豁免 PDP）。
+- Authorizer 经 composition root `bootstrap.WithPrimaryAuthorizer` 注入 primary listener
+  request ctx（唯一 `auth.WithAuthorizer` 上游 + `AuthorizerFromContext`/`RequirePermission`
+  下游）。Cell 不 import 兄弟 cell 的 Authorizer；强依赖缺失 fail-fast；可解析的 Authorizer
+  在 bootstrap router build（Init 后、serve 前）经 `ResolveAuthorizer` 预解析，nil provider
+  在启动期 fail-fast 而非首请求才暴露。
+- PDP fail-closed：缺 Authorizer / 缺租户 / store 不可用 / 无适用 permit → deny。内置 baseline
+  是 action-scoped + role-conditioned 的 allow 规则（复刻既有 role 门禁）；baseline ≠ 降级
+  allow-all。租户 policy 叠加在 baseline 上，可加 allow 也可加 deny（forbid-wins 保证 deny
+  优先）——故租户 allow 可放宽**路由门禁**，但**不能扩大数据访问**：数据可见性由 principal
+  派生的 `RowScope`（身份决定，policy 改不动）独立治理，租户给非 admin 授 `audit:read` 只让其
+  过门禁，数据层仍按 RowScope=self 只返回本人行。路由门禁是 RowScope 之上的纵深防御，不是唯一控制点。
+- 路由门禁是 coarse allow/deny，不**执行** obligation（RowScope/FieldMask 由数据层 PEP 执行），
+  但对 Allow 携带的非零 obligation **fail-closed**（拒绝而非静默丢弃）——baseline obligation
+  为零，正常路径不受影响。
+- 业务 handler 无 role-literal 授权分支由 `PERMISSION-BASED-AUTHZ-01`（Medium，带未迁移 cell
+  allowlist）守卫；allowlist 是迁移进度账，逐 PR 删空。
+
+相关 enforcement 的完整 ID、评级、Hard 化路径和盲区写在对应 archtest godoc 与 PR-10a ADR
+（`docs/architecture/202606121400-1348-adr-pr10a-authz-wiring.md`）。

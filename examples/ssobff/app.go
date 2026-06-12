@@ -287,7 +287,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	relayCfg := outboxruntime.DefaultRelayConfig()
 	relayWorker := outboxruntime.NewRelay(clk, pgOutboxStore, eb, relayCfg)
 
-	asm, cb, primaryAuth, err := buildSSOBFFAssembly(clk, ssobffBuildParams{
+	asm, cb, primaryAuth, authzOpt, err := buildSSOBFFAssembly(clk, ssobffBuildParams{
 		pool: pool, txMgr: txMgr, eb: eb, pgOutboxWriter: pgOutboxWriter,
 		jwtIssuer: jwtIssuer, jwtVerifier: jwtVerifier,
 		bootstrapMW: bootstrapMW, sessionProto: ssobffSessionProto, logger: cfg.logger,
@@ -307,6 +307,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		bootstrap.WithManagedResource(pool),
 		// LIFO close: relay registered last → stopped first; relay must stop before pool closes.
 		bootstrap.WithRelay(relayWorker),
+		authzOpt, // ABAC PDP injector for the primary listener (#1348 PR-10a).
 		listenerOption(cell.PrimaryListener, cfg.primary, []kauth.ListenerAuth{primaryAuth}),
 		// internal defaults to loopback (see defaultSSOBFFAppConfig); the cell→cell
 		// control plane is never all-interfaces. Override GOCELL_SSOBFF_INTERNAL_ADDR
@@ -497,21 +498,23 @@ type ssobffBuildParams struct {
 // buildSSOBFFAssembly wires all three platform cells, registers them in a new
 // CoreAssembly, and constructs the ConsumerBase and primary listener auth.
 // Extracted from NewSSOBFFApp to reduce cognitive complexity.
-func buildSSOBFFAssembly(clk clock.Clock, p ssobffBuildParams) (*assembly.CoreAssembly, *outbox.ConsumerBase, kauth.ListenerAuth, error) {
+func buildSSOBFFAssembly(clk clock.Clock, p ssobffBuildParams) (
+	*assembly.CoreAssembly, *outbox.ConsumerBase, kauth.ListenerAuth, bootstrap.Option, error,
+) {
 	accessStorageOpts, err := buildSSOBFFAccessCoreStorageOpts(clk, p.pool, p.txMgr, p.sessionProto)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	accessCAS, err := cas.NewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("ssobff: cas.NewProtocol (accesscore): %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("ssobff: cas.NewProtocol (accesscore): %w", err)
 	}
 	// accesscore paginates (session/identity list endpoints) so durable mode
 	// requires a cursor codec — same demo-key pattern as config/audit above.
 	// WARNING: demo key only; production deployments must inject from a secret manager.
 	accessCursorCodec, err := query.NewCursorCodec([]byte("ssobff-access-cursor-key-32bytes"))
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("ssobff: create access cursor codec: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("ssobff: create access cursor codec: %w", err)
 	}
 	ac := accesscore.NewAccessCore(clk, append(
 		accessStorageOpts,
@@ -537,11 +540,11 @@ func buildSSOBFFAssembly(clk clock.Clock, p ssobffBuildParams) (*assembly.CoreAs
 
 	configStorageOpts, err := buildSSOBFFConfigCoreStorageOpts(clk, p.pool)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	configCAS, err := cas.NewProtocol(cas.WithVersionField(configcore.VersionField))
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("ssobff: cas.NewProtocol (configcore): %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("ssobff: cas.NewProtocol (configcore): %w", err)
 	}
 	cc := configcore.NewConfigCore(clk, append(
 		configStorageOpts,
@@ -554,7 +557,17 @@ func buildSSOBFFAssembly(clk clock.Clock, p ssobffBuildParams) (*assembly.CoreAs
 
 	asm := assembly.New(clk, assembly.Config{ID: "ssobff", DurabilityMode: outbox.DurabilityDurable})
 	if err := registerSSOBFFCells(asm, ac, auc, cc); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
+	}
+	// Wire the ABAC PDP into the primary listener (accesscore provides it). Post
+	// #1348 PR-10a the auditquery route gate is permission-based, so an
+	// empty-actorId/cross-actor audit read fails closed without a PDP in context;
+	// every auditquery-serving assembly must wire it. Shared discovery+lazy logic
+	// lives in bootstrap.PrimaryAuthorizerOption (also used by cmd/corebundle,
+	// corebundlestarter).
+	authzOpt, err := bootstrap.PrimaryAuthorizerOption([]cell.Cell{ac, auc, cc})
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("ssobff: primary authorizer wiring: %w", err)
 	}
 	cb, err := outbox.NewConsumerBase(
 		idempotency.NewInMemClaimer(clk),
@@ -562,13 +575,13 @@ func buildSSOBFFAssembly(clk clock.Clock, p ssobffBuildParams) (*assembly.CoreAs
 		clk,
 	)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("ssobff: create consumer base: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("ssobff: create consumer base: %w", err)
 	}
 	primaryAuth, err := kauth.NewAuthJWTFromAssembly(asm)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("ssobff: primary listener auth plan: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("ssobff: primary listener auth plan: %w", err)
 	}
-	return asm, cb, primaryAuth, nil
+	return asm, cb, primaryAuth, authzOpt, nil
 }
 
 // newSSOBFFPool opens a PG pool and runs all pending migrations. Callers own

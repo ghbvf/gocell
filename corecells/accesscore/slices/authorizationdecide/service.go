@@ -32,7 +32,6 @@ package authorizationdecide
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/abac"
@@ -116,7 +115,10 @@ func (s *Service) Authorize(ctx context.Context, subject, resource, action strin
 	if err != nil {
 		// No tenant scope on the request: errcode-classified
 		// (KindPermissionDenied → 403). Zero Decision is fail-closed.
-		return authz.Decision{}, fmt.Errorf("authorization-decide: tenant: %w", err)
+		// Wrap preserves the errcode Kind from tenant.FromContext so the
+		// handler's status mapping (KindPermissionDenied → 403) is not lost.
+		return authz.Decision{}, errcode.Wrap(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
+			"authorization-decide: tenant scope missing or invalid", err)
 	}
 
 	// evalInputs carries the two data sources fetched inside the tenant-scoped
@@ -166,7 +168,7 @@ func (s *Service) Authorize(ctx context.Context, subject, resource, action strin
 		resourceAttrs: inputs.resourceAttrs,
 	}
 
-	dec := s.evaluate(inputs.policies, resolver)
+	dec := s.evaluate(inputs.policies, resolver, action)
 	s.logger.Debug(
 		"authorization decision",
 		slog.String("subject", subject),
@@ -174,6 +176,9 @@ func (s *Service) Authorize(ctx context.Context, subject, resource, action strin
 		slog.String("action", action),
 		slog.Bool("allowed", dec.IsAllow()),
 		slog.Int("policy_count", len(inputs.policies)),
+		// baseline_count reads len of the package-level slice — no extra allocation
+		// (builtinBaselineRules returns builtinBaseline directly, F4 fix).
+		slog.Int("baseline_count", len(builtinBaselineRules())),
 	)
 	return dec, nil
 }

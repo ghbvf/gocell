@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/audit"
@@ -540,8 +541,10 @@ func TestInit_DurableMode_WithBootstrapStore_Succeeds(t *testing.T) {
 
 // TestAuditCore_Wiring_StaleCursor_DemoVsDurable exercises DurabilityMode →
 // cell.Init → service → ExecutePagedQuery with a garbage cursor.
-// An admin identity is injected via auth.TestContext because the
-// audit-query handler calls auth.RequireSelfOrRole.
+// An admin identity + allow-all Authorizer is injected (auditCellTestCtx) so the
+// empty-actorId read passes auditQueryPolicy's PDP gate (F1: empty actorId is a
+// permissioned ledger read, not an implicit self-read) and reaches the
+// cursor-validation path (200/400 by mode).
 func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
 	t.Parallel()
 	productionKey := []byte("wiring-test-audit-cursor-key-32b")
@@ -740,15 +743,29 @@ func mustNewRouter(t *testing.T) *router.Router {
 	return r
 }
 
-// auditCellTestCtx builds a tenant-bearing principal context for cell wiring
-// tests. auditquery fail-closes on an empty principal tenant (epic #1337 PR-2a,
-// F1), so a wiring test driving /api/v1/audit/entries must carry a tenant.
+// cellTestAllowAuthorizer is a minimal auth.Authorizer that grants every request,
+// mirroring production where the primary listener always injects a PDP. Cell
+// wiring tests drive /api/v1/audit/entries with an empty actorId, which F1 made a
+// permissioned ledger read (not an implicit self-read), so a PDP must be present
+// in context for the request to pass auditQueryPolicy.
+type cellTestAllowAuthorizer struct{}
+
+func (cellTestAllowAuthorizer) Authorize(_ context.Context, _, _, _ string) (authz.Decision, error) {
+	return authz.Allow(authz.Obligations{})
+}
+
+// auditCellTestCtx builds a production-faithful cell-wiring-test context: a
+// tenant-bearing principal PLUS an allow-all Authorizer. auditquery fail-closes on
+// an empty principal tenant (epic #1337 PR-2a, F1), so a wiring test driving
+// /api/v1/audit/entries must carry a tenant; F1 also requires a PDP in context for
+// the empty-actorId read to pass the route gate.
 func auditCellTestCtx(subject string, roles []string) context.Context {
-	return auth.WithPrincipal(context.Background(), &auth.Principal{
+	ctx := auth.WithPrincipal(context.Background(), &auth.Principal{
 		Kind:       auth.PrincipalUser,
 		Subject:    subject,
 		Roles:      append([]string(nil), roles...),
 		TenantID:   "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
 		AuthMethod: "test",
 	})
+	return auth.WithAuthorizer(ctx, cellTestAllowAuthorizer{})
 }

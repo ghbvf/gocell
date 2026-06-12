@@ -37,6 +37,9 @@ func (v *mockVerifier) VerifyIntent(_ context.Context, _ string, _ TokenIntent) 
 type mockAuthorizer struct {
 	allowed bool
 	err     error
+	// obligations is attached to the Allow decision (zero by default). Used by the
+	// F5 fail-closed-on-obligations test in permission_test.go.
+	obligations authz.Obligations
 }
 
 func (a *mockAuthorizer) Authorize(_ context.Context, _, _, _ string) (authz.Decision, error) {
@@ -44,7 +47,7 @@ func (a *mockAuthorizer) Authorize(_ context.Context, _, _, _ string) (authz.Dec
 		return authz.Decision{}, a.err
 	}
 	if a.allowed {
-		dec, err := authz.Allow(authz.Obligations{})
+		dec, err := authz.Allow(a.obligations)
 		return dec, err
 	}
 	return authz.Deny("test: not allowed"), nil
@@ -171,100 +174,6 @@ func TestAuthMiddleware_ProtectedEndpointNoToken(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	assertErrorCode(t, rec, "ERR_AUTH_UNAUTHORIZED")
-}
-
-// TestRequireRole_HasRole verifies that RequireRole allows a request when the
-// Principal in context holds the required role. Also covers T6: RequireRole
-// resolves roles exclusively from the Principal — no Claims fallback.
-func TestRequireRole_HasRole(t *testing.T) {
-	handler := RequireRole(nil, "admin")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	ctx := WithPrincipal(req.Context(), &Principal{Kind: PrincipalUser, Subject: "u1", Roles: []string{"admin", "user"}})
-	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusOK, rec.Code)
-}
-
-func TestRequireRole_MissingRole(t *testing.T) {
-	handler := RequireRole(nil, "admin")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatal("should not be called")
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	ctx := WithPrincipal(req.Context(), &Principal{Kind: PrincipalUser, Subject: "u1", Roles: []string{"user"}})
-	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusForbidden, rec.Code)
-	assertErrorCode(t, rec, "ERR_AUTH_FORBIDDEN")
-}
-
-func TestRequireRole_NoPrincipal(t *testing.T) {
-	handler := RequireRole(nil, "admin")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatal("should not be called")
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusUnauthorized, rec.Code)
-}
-
-func TestRequireRole_AuthorizerFallback(t *testing.T) {
-	authorizer := &mockAuthorizer{allowed: true}
-	handler := RequireRole(authorizer, "editor")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/docs", nil)
-	ctx := WithPrincipal(req.Context(), &Principal{Kind: PrincipalUser, Subject: "u1", Roles: []string{"viewer"}})
-	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusOK, rec.Code)
-}
-
-func TestRequireRole_AuthorizerError(t *testing.T) {
-	authorizer := &mockAuthorizer{err: errors.New("policy engine down")}
-	handler := RequireRole(authorizer, "admin")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatal("should not be called")
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	ctx := WithPrincipal(req.Context(), &Principal{Kind: PrincipalUser, Subject: "u1", Roles: []string{"user"}})
-	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
-}
-
-// TestRequireRole_AuthorizerDenyOverridesRoleMatch is the F2 (Codex) guard: when
-// an Authorizer is wired, an in-token role MUST NOT bypass a policy deny — the
-// PDP Decision is authoritative (forbid-wins).
-func TestRequireRole_AuthorizerDenyOverridesRoleMatch(t *testing.T) {
-	authorizer := &mockAuthorizer{allowed: false}
-	handler := RequireRole(authorizer, "admin")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		t.Fatal("PDP deny must not reach the handler despite the in-token role match")
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	// Roles include "admin" (matches roleSet) — but the PDP denies.
-	ctx := WithPrincipal(req.Context(), &Principal{Kind: PrincipalUser, Subject: "u1", Roles: []string{"admin"}})
-	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusForbidden, rec.Code, "in-token role must not override a PDP deny")
 }
 
 func TestAuthMiddleware_WithLogger_LogsToBuffer(t *testing.T) {

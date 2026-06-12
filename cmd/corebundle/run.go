@@ -102,6 +102,11 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		if rtErr != nil {
 			return nil, fmt.Errorf("default runtime options: %w", rtErr)
 		}
+		authzOpt, authzErr := bootstrap.PrimaryAuthorizerOption(cells)
+		if authzErr != nil {
+			return nil, fmt.Errorf("primary authorizer wiring: %w", authzErr)
+		}
+		opts = append(opts, authzOpt)
 		return opts, nil
 	}
 
@@ -173,7 +178,8 @@ func logAssemblyMaturity(cells []cell.Cell) {
 		}
 	}
 
-	slog.Info("corebundle: assembly maturity composition",
+	slog.Info(
+		"corebundle: assembly maturity composition",
 		slog.Int("total_cells", len(cells)),
 		slog.Group("lifecycle", lcAttrs...),
 	)

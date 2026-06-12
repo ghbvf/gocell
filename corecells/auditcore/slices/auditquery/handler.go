@@ -20,10 +20,29 @@ import (
 )
 
 // auditQueryPolicy permits the request when:
-//   - actorId query param is empty. List scopes non-admin callers to self and
-//     treats admin callers as tenant-wide queries.
-//   - OR actorId equals authenticated subject (self-access)
-//   - OR subject has the "admin" role
+//   - actorId query param EQUALS the authenticated subject (explicit self-read).
+//     This is a request-shape check: it answers "is the caller asking only for its
+//     OWN actor rows?" — a parameter==subject ownership match, NOT a role-literal
+//     authorization branch. A pure self-read needs no audit:read permission.
+//   - OTHERWISE (actorId empty, or set and != subject) the PDP (wired ABAC
+//     Authorizer in context) must grant authz.PermAuditRead().
+//
+// EMPTY actorId is deliberately NOT exempt (F1, codex review): for an admin /
+// super-admin it is a ledger-WIDE read across every actor, which is exactly the
+// cross-actor read audit:read gates. Exempting it would let an admin's global
+// read skip the PDP entirely (bypassing a tenant forbid policy or an unwired PDP).
+// A non-admin who wants only its own audit rows names itself explicitly
+// (actorId=<subject>); an empty actorId is treated as a permissioned ledger read,
+// not an implicit self-read. The gate stays role-literal-free: it never inspects
+// roles — whether an admin/super-admin's empty-actorId read is granted is decided
+// by the PDP baseline (admin/super-admin → audit:read), and a non-admin without
+// audit:read is denied. This replaced the role-literal
+// auth.AnyRole(RoleAdmin, RoleSuperAdmin) gate removed in #914
+// (PERMISSION-BASED-AUTHZ-01).
+//
+// Row visibility is governed independently at the data layer by the principal's
+// RowScope (self → own rows only), NOT by this gate; the gate is a coarse
+// allow/deny on the audit:read permission.
 //
 // Tenant isolation (epic #1337 PR-2a, typed param #1618): every query is
 // tenant-scoped. The List adapter always passes the typed tenant.TenantID parsed
@@ -36,19 +55,18 @@ import (
 //
 // SelfOr cannot be used here because "self" is determined by the actorId query
 // parameter, not a path parameter.
-// role-name literal will be migrated to permission-based authz when that work lands.
-// Deferred (S43, tracked by gh issue #914 — PERMISSION-BASED-AUTHZ-01).
 func auditQueryPolicy(r *http.Request) error {
 	ctx := r.Context()
 	p, ok := auth.FromContext(ctx)
 	if !ok || p.Subject == "" {
 		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required")
 	}
-	actorID := r.URL.Query().Get("actorId")
-	if actorID == "" || actorID == p.Subject {
+	// Only an explicit self-read (actorId names the caller) is exempt. Empty
+	// actorId is a permissioned ledger read, not an implicit self-read (F1).
+	if r.URL.Query().Get("actorId") == p.Subject {
 		return nil
 	}
-	return auth.AnyRole(auth.RoleAdmin, auth.RoleSuperAdmin)(r)
+	return auth.RequirePermission(authz.PermAuditRead())(r)
 }
 
 // logAdminAuditQuery emits an audit-access breadcrumb when an admin queries the
@@ -87,12 +105,14 @@ type ListAdapter struct {
 // B2-C-09: Payload is redacted of sensitive fields before returning to client.
 //
 // subjectId scoping (#1290): subjectId is a plain additional filter and needs NO
-// dedicated policy gate. auditQueryPolicy already forces non-admin callers to
-// actor_id = self (actorID defaulting below), so a non-admin's query is always
-// AND-ed with actor_id = self; a subjectId filter can therefore only narrow
-// within the caller's own actions and never reaches another user's rows. Admins
-// (actorID may be empty = global) can filter by subjectId to investigate
-// impersonation, where the audited action's actor != subject.
+// dedicated policy gate. The row-visibility obligation (vis, below) restricts a
+// non-admin caller to RowScope=self (actor_id == subject) regardless of filters,
+// so a non-admin's query is always AND-ed with actor_id = self; a subjectId filter
+// can therefore only narrow within the caller's own actions and never reaches
+// another user's rows. Admins (RowScope=tenant, actorID may be empty = global)
+// can filter by subjectId to investigate impersonation, where the audited action's
+// actor != subject. Reaching this point at all required passing auditQueryPolicy
+// (explicit self-read, or audit:read granted by the PDP).
 func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlist.ListResponseObject, error) {
 	p, ok := auth.FromContext(ctx)
 	if !ok || p.Subject == "" {
@@ -165,10 +185,11 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 	filters := ledger.AuditFilters{
 		EventType: req.EventType,
 		// ActorID: admin's explicit actor filter (or empty = all). Non-admin
-		// callers: auditQueryPolicy already enforces req.ActorID == "" || ==
-		// self, but the row-visibility obligation (vis) above is the
-		// real enforcement gate — it restricts store results to actor_id == self
+		// callers: the row-visibility obligation (vis) above is the real
+		// enforcement gate — it restricts store results to actor_id == self
 		// regardless of this filter. The explicit filter narrows further if set.
+		// (auditQueryPolicy already gated entry: a non-admin reached here only via
+		// an explicit self-read or by holding audit:read.)
 		ActorID:   req.ActorID,
 		SubjectID: req.SubjectID,
 		TraceID:   req.TraceID,

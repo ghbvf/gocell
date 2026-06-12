@@ -37,6 +37,7 @@ import (
 	kwh "github.com/ghbvf/gocell/kernel/webhook"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/ghbvf/gocell/runtime/http/router"
@@ -268,6 +269,15 @@ type Bootstrap struct {
 	// provider yields a nil observer that the drain skips (WithObserver(nil) keeps
 	// the Tailer's NopObserver).
 	sagaTailerObservers map[string]tailer.Observer
+
+	// primaryAuthorizer is the ABAC PDP injected into the primary listener's
+	// request context by the authorizerInjector middleware. Set by
+	// WithPrimaryAuthorizer; nil means "not configured" (no injection).
+	// primaryAuthorizerNil is set when WithPrimaryAuthorizer receives a bare-nil
+	// or typed-nil value so phase0 can fail-fast with a clear error before any
+	// side effects start (mirrors rateLimiterNil / idempotencyStoreNil).
+	primaryAuthorizer    auth.Authorizer
+	primaryAuthorizerNil bool // WithPrimaryAuthorizer(nil) sentinel — phase0 fail-fast
 
 	// --- devtools catalog endpoint (J1 PR-A37) ---
 	// All zero/nil = endpoint not registered.

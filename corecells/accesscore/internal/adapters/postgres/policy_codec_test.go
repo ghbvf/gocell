@@ -187,8 +187,11 @@ func TestPolicyCodec_OutOfRangeEnumEncodeFails(t *testing.T) {
 func TestPolicyCodec_RulesRoundTrip(t *testing.T) {
 	rules := []abac.Rule{
 		{
-			ID:     "r1",
-			Name:   "Allow eng non-secret",
+			ID:   "r1",
+			Name: "Allow eng non-secret",
+			// Action-scoped (PR-10a #1348): the target must survive the round-trip,
+			// not silently widen to match-all (F3).
+			Action: []string{"audit:read", "audit:export"},
 			Effect: authz.EffectAllow,
 			Conditions: []abac.Condition{
 				{Source: abac.SourceSubject, Key: "department", Operator: abac.OpEquals, Values: []string{"eng"}},
@@ -200,7 +203,8 @@ func TestPolicyCodec_RulesRoundTrip(t *testing.T) {
 			},
 		},
 		{
-			// No conditions, no obligations — exercises the nil/empty branches.
+			// No action, conditions, or obligations — exercises the nil/empty
+			// branches (untargeted match-all rule, nil Action stays nil on read).
 			ID:     "r2",
 			Name:   "Deny all else",
 			Effect: authz.EffectDeny,
@@ -232,8 +236,30 @@ func TestPolicyCodec_GoldenJSON(t *testing.T) {
 	data, err := marshalRules(rules)
 	require.NoError(t, err)
 
+	// This rule has no Action: the omitempty `action` key is absent, so rows
+	// authored before the field existed serialize byte-identically (no migration).
 	const want = `[{"id":"r1","name":"Allow eng","effect":"allow",` +
 		`"conditions":[{"source":"subject","key":"department","op":"eq","values":["eng"]}],` +
 		`"obligations":{"rowScope":"self","fieldMask":["email"]}}]`
 	assert.JSONEq(t, want, string(data), "the durable JSON shape is frozen — a drift here breaks stored policies")
+}
+
+// TestPolicyCodec_GoldenJSON_ActionScoped freezes the durable shape of an
+// action-scoped rule (PR-10a #1348): the `action` key carries the target set so
+// it round-trips instead of decoding back to nil match-all (F3).
+func TestPolicyCodec_GoldenJSON_ActionScoped(t *testing.T) {
+	rules := []abac.Rule{
+		{
+			ID:     "r1",
+			Name:   "Allow audit read",
+			Action: []string{"audit:read"},
+			Effect: authz.EffectAllow,
+		},
+	}
+	data, err := marshalRules(rules)
+	require.NoError(t, err)
+
+	const want = `[{"id":"r1","name":"Allow audit read","action":["audit:read"],` +
+		`"effect":"allow","obligations":{}}]`
+	assert.JSONEq(t, want, string(data), "action-scoped rule durable JSON shape is frozen")
 }
