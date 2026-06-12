@@ -83,10 +83,14 @@ func (p *Principal) RowVisibility(ctx context.Context) (tenant.RowVisibility, er
 		)
 	}
 	// Unreachable: the switch above covers all five PrincipalKind constants.
-	// This satisfies PRINCIPAL-KIND-EXHAUSTIVE-SWITCH-01 — the default branch
-	// is absent, so a new PrincipalKind constant added without a case here will
-	// be caught by archtest PRINCIPAL-KIND-EXHAUSTIVE-SWITCH-01 (Medium, nightly
-	// archtest — not compile-time).
+	// PRINCIPAL-KIND-EXHAUSTIVE-SWITCH-01 (tools/archtest/principal_kind_exhaustive_switch_test.go)
+	// requires every switch on PrincipalKind in the production tree to have an
+	// explicit case for each defined constant. "Explicit" means listed in at
+	// least one case arm — merged cases (e.g. "case A, B, C:") count as covered
+	// for each value they name; it is only a PrincipalKind constant with NO case
+	// arm anywhere in the switch that triggers a diagnostic. A new PrincipalKind
+	// added to kernel/auth without a corresponding case here is caught at Medium
+	// (nightly archtest), not at compile time.
 	return tenant.RowVisibility{}, errcode.New(
 		errcode.KindInternal,
 		errcode.ErrInternal,

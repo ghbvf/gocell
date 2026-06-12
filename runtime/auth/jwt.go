@@ -459,10 +459,16 @@ type IssueOptions struct {
 	// trusts its caller and does not re-validate.
 	TenantID string
 	// PrincipalKind marks the token's principal kind ("principal_kind" claim).
+	// The type is the wire enum PrincipalKindClaim (string), distinct from the
+	// runtime PrincipalKind (int) enum — pass PrincipalKindClaimDevice, not
+	// PrincipalDevice (which is the int constant for the runtime principal kind).
 	// Empty (PrincipalKindClaimUser) omits the claim — an ordinary user token.
-	// PrincipalKindClaimDevice mints a device bearer token. The issuer trusts
-	// its caller (like TenantID) and does not re-validate; the verifier rejects
-	// an unknown value fail-closed.
+	// PrincipalKindClaimDevice mints a device bearer token; this REQUIRES a
+	// non-empty TenantID in the same IssueOptions — a device principal is always
+	// tenant-scoped, and the verifier rejects a device token without a tenant
+	// claim fail-closed at runtime via mintDevicePrincipal. The issuer trusts its
+	// caller (like TenantID) and does not re-validate; the verifier rejects an
+	// unknown value fail-closed.
 	PrincipalKind PrincipalKindClaim
 }
 

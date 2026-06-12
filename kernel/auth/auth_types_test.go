@@ -1,12 +1,33 @@
 package auth_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 
 	"github.com/ghbvf/gocell/kernel/auth"
 )
+
+// TestPrincipalKindClaim_IsValid pins the closed enumeration of wire
+// principal_kind values. The verifier calls IsValid fail-closed so an unknown
+// value can never silently fall through to a user mint. Table mirrors the
+// pattern in TestTokenIntent_IsValid (auth_plan_test.go).
+func TestPrincipalKindClaim_IsValid(t *testing.T) {
+	tests := []struct {
+		kind  auth.PrincipalKindClaim
+		valid bool
+	}{
+		{auth.PrincipalKindClaimUser, true},
+		{auth.PrincipalKindClaimDevice, true},
+		{auth.PrincipalKindClaim("bogus"), false},
+	}
+	for _, tc := range tests {
+		t.Run(string(tc.kind)+"_valid="+fmt.Sprintf("%v", tc.valid), func(t *testing.T) {
+			assert.Equal(t, tc.valid, tc.kind.IsValid())
+		})
+	}
+}
 
 // TestNonceStoreKind_ReplaySafe pins the single source of truth for "which
 // NonceStoreKind is replay-safe for a topology" (#1410 review F1/F2). Both

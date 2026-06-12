@@ -46,11 +46,13 @@
 //     out-of-package.
 //   - Upstream (only this file mints): HARD at the package boundary (unexported
 //     seal type + field); within runtime/auth it is MEDIUM, this archtest being
-//     the file-discipline backstop. This is the intended split, not a deferred
-//     TODO: Principal is an exported struct with an exported Kind enum (consumed
-//     for metrics/logging/exhaustive-switch), so Go visibility cannot express
-//     "only deviceprincipal.go may set Kind: PrincipalDevice" — the seal makes
-//     the literal inert, and this scan keeps the literal where it belongs.
+//     the file-discipline backstop. This MEDIUM rating is a deliberately accepted
+//     permanent ceiling: Principal is an exported struct with an exported Kind
+//     enum (consumed for metrics/logging/exhaustive-switch), so Go visibility
+//     cannot express "only deviceprincipal.go may set Kind: PrincipalDevice"
+//     without either hiding Principal or collapsing the enum — neither is
+//     acceptable. The seal makes the literal inert regardless; no low-cost Hard
+//     path exists and no backlog Issue is needed for this specific split.
 //
 // # Tool blind spots (charter §"强制盲区自检")
 //

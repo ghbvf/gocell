@@ -66,7 +66,7 @@ func newDeviceSeal() *deviceSeal { return &deviceSeal{} }
 const (
 	msgDeviceSubjectMissing = "device token subject missing"
 	msgDeviceTenantMissing  = "device token tenant missing"
-	msgDeviceRoleForbidden  = "device token must not carry privileged roles"
+	msgDeviceRoleForbidden  = "device token carries a privileged role"
 )
 
 // mintDevicePrincipal builds a sealed PrincipalDevice from verified device-token

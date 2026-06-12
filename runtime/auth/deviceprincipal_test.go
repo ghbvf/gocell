@@ -38,6 +38,33 @@ const deviceTestTenant = "11111111-1111-1111-1111-111111111111"
 
 // --- unit: mintDevicePrincipal (the sole sanctioned PrincipalDevice producer) ---
 
+// TestMintDevicePrincipal_NonPrivilegedRolesAccepted proves that
+// hasPrivilegedRole only rejects admin/superadmin — a device token carrying a
+// non-privileged role (e.g. "viewer") or an empty non-nil Roles slice is
+// accepted by mintDevicePrincipal. This bounds the semantics of the role check
+// so a future maintainer cannot mistake it for "any role is forbidden".
+func TestMintDevicePrincipal_NonPrivilegedRolesAccepted(t *testing.T) {
+	cases := []struct {
+		name  string
+		roles []string
+	}{
+		{"viewer_role_accepted", []string{"viewer"}},
+		{"empty_non_nil_roles_accepted", []string{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := mintDevicePrincipal(Claims{
+				Subject:       "device-1",
+				TenantID:      deviceTestTenant,
+				Roles:         tc.roles,
+				PrincipalKind: PrincipalKindClaimDevice,
+			})
+			require.NoError(t, err, "device mint must succeed for non-privileged roles")
+			assert.Equal(t, PrincipalDevice, p.Kind)
+		})
+	}
+}
+
 func TestMintDevicePrincipal_Valid(t *testing.T) {
 	p, err := mintDevicePrincipal(Claims{
 		Subject:       "device-42",
@@ -51,6 +78,7 @@ func TestMintDevicePrincipal_Valid(t *testing.T) {
 	assert.Equal(t, deviceTestTenant, p.TenantID)
 	assert.Empty(t, p.Roles, "device principal must not carry roles (concept isolation)")
 	assert.Empty(t, p.Claims["sid"], "device principal carries no session baggage")
+	assert.False(t, p.PasswordResetRequired, "device principal carries no password-reset baggage")
 
 	// The seal is what makes RowVisibility grant RowScopeDevice. A device
 	// principal minted here must derive RowScopeDevice with its subject.
@@ -208,8 +236,44 @@ func TestSuperAdmin_EndToEnd_RowScopeAll_Audit(t *testing.T) {
 	vis, err := p.RowVisibility(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, tenant.RowScopeAll, vis.Scope())
-	assert.Equal(t, 1, countMandatoryAuditRecords(capture.records),
+	require.Equal(t, 1, countMandatoryAuditRecords(capture.records),
 		"super-admin production chain must emit the FR-007 mandatory audit (sessionmint.MintAccess is the production issuer)")
+
+	// Strengthen: assert the captured slog.Error record carries correct values,
+	// not just the presence of keys (FR-007 attr value contract).
+	assertAuditAttrValues(t, capture.records, "super-alice", "all", "cross_tenant_read")
+}
+
+// assertAuditAttrValues finds the first slog.Error record that matches
+// hasMandatoryAuditAttrs and asserts the values of actor, scope, and reason.
+// Relies on the captureHandler defined in rowscope_test.go.
+func assertAuditAttrValues(t *testing.T, records []slog.Record, wantActor, wantScope, wantReason string) {
+	t.Helper()
+	for _, r := range records {
+		if r.Level != slog.LevelError {
+			continue
+		}
+		var actor, scope, reason string
+		r.Attrs(func(a slog.Attr) bool {
+			switch a.Key {
+			case "actor":
+				actor = a.Value.String()
+			case "scope":
+				scope = a.Value.String()
+			case "reason":
+				reason = a.Value.String()
+			}
+			return true
+		})
+		if actor == "" && scope == "" && reason == "" {
+			continue // not the mandatory audit record
+		}
+		assert.Equal(t, wantActor, actor, "audit attr 'actor' value")
+		assert.Equal(t, wantScope, scope, "audit attr 'scope' value")
+		assert.Equal(t, wantReason, reason, "audit attr 'reason' value")
+		return
+	}
+	t.Errorf("no slog.Error audit record found to assert attr values")
 }
 
 // TestRoleScopes_EndToEnd_NoAccidentalEscalation proves ordinary admin/user
