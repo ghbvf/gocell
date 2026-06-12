@@ -151,7 +151,10 @@ func TestHttpConfigFlagsUpdateV1Serve(t *testing.T) {
 		recBad := httptest.NewRecorder()
 		reqBad := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(bad))
 		reqBad.Header.Set("Content-Type", "application/json")
-		reqBad = reqBad.WithContext(withAllowAuthorizer(configcoretest.CtxWithTenant(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))))
+		badCtx := withAllowAuthorizer(
+			configcoretest.CtxWithTenant(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin})),
+		)
+		reqBad = reqBad.WithContext(badCtx)
 		mux.ServeHTTP(recBad, reqBad)
 		assert.Equal(t, http.StatusBadRequest, recBad.Code,
 			"PUT with out-of-range rolloutPercentage must 400; body %q got %s",

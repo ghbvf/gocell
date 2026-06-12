@@ -426,7 +426,7 @@ func TestHandler_HandleList_Pagination_FullTraversal(t *testing.T) {
 
 // TestHandler_PDPDeny_Returns403 asserts that a PDP-deny (Authorizer returns
 // Deny) surfaces as 403 ERR_AUTH_FORBIDDEN — confirms flag:read-gated (PDP)
-// behaviour after the role-literal → permission-based migration (PR-10b #1348).
+// behavior after the role-literal → permission-based migration (PR-10b #1348).
 func TestHandler_PDPDeny_Returns403(t *testing.T) {
 	handler, _ := setupHandler()
 

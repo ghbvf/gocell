@@ -215,7 +215,6 @@ func TestHttpConfigPublishV1_Serve_Unauthorized(t *testing.T) {
 		rec := httptest.NewRecorder()
 		ctx := withDenyAuthorizer(
 			auth.TestContext("user-readonly", []string{"viewer"}),
-			"policy deny",
 		)
 		req := httptest.NewRequest(c.HTTP.Method, path, nil).WithContext(ctx)
 		mux.ServeHTTP(rec, req)
@@ -273,7 +272,6 @@ func TestHttpConfigRollbackV1_Serve_Unauthorized(t *testing.T) {
 		rec := httptest.NewRecorder()
 		ctx := withDenyAuthorizer(
 			auth.TestContext("user-readonly", []string{"viewer"}),
-			"policy deny",
 		)
 		req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"version":1}`)).
 			WithContext(ctx)

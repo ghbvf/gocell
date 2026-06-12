@@ -51,8 +51,8 @@ func withAllowAuthorizer(ctx context.Context) context.Context {
 	return configcoretest.WithAuthorizer(ctx, allowAuthorizer())
 }
 
-func withDenyAuthorizer(ctx context.Context, reason string) context.Context {
-	return configcoretest.WithAuthorizer(ctx, &configcoretest.CapturingAuthorizer{Decision: authz.Deny(reason)})
+func withDenyAuthorizer(ctx context.Context) context.Context {
+	return configcoretest.WithAuthorizer(ctx, &configcoretest.CapturingAuthorizer{Decision: authz.Deny("test pdp deny")})
 }
 
 // testPublishTenantStr is the test TenantID string for configpublish tests.
@@ -256,7 +256,6 @@ func TestHandler_HandlePublish_PDPDeny(t *testing.T) {
 	w := httptest.NewRecorder()
 	ctx := withDenyAuthorizer(
 		ctxkeys.WithTenantID(auth.TestContext("user-1", []string{"viewer"}), testPublishTenantStr),
-		"policy deny",
 	)
 	req := httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/publish", nil).
 		WithContext(ctx)
@@ -299,7 +298,6 @@ func TestHandler_HandleRollback_PDPDeny(t *testing.T) {
 	w := httptest.NewRecorder()
 	ctx := withDenyAuthorizer(
 		ctxkeys.WithTenantID(auth.TestContext("user-1", []string{"viewer"}), testPublishTenantStr),
-		"policy deny",
 	)
 	req := httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/rollback",
 		strings.NewReader(`{"version":1,"expectedVersion":1}`)).

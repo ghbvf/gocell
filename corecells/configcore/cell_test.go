@@ -56,6 +56,9 @@ func withDenyAuthorizer(ctx context.Context, reason string) context.Context {
 	return configcoretest.WithAuthorizer(ctx, &configcoretest.CapturingAuthorizer{Decision: authz.Deny(reason)})
 }
 
+// cellTestTenantUUID is the canonical test tenant used across cell-level tests.
+const cellTestTenantUUID = "00000000-0000-0000-0000-000000000001"
+
 func newTestCell() *ConfigCore {
 	return NewConfigCore(
 		clock.Real(),
@@ -358,9 +361,9 @@ func initCellWithRouter(t *testing.T) *router.Router {
 // production and configcore routes now gate via auth.RequirePermission, which
 // fails closed without an Authorizer — so business-path cell tests must supply
 // one (PR-10b #1348).
-func pdpAdminCtx(subject, tenantID string) context.Context {
+func pdpAdminCtx(subject string) context.Context {
 	return withAllowAuthorizer(
-		ctxkeys.WithTenantID(auth.TestContext(subject, []string{"admin"}), tenantID),
+		ctxkeys.WithTenantID(auth.TestContext(subject, []string{"admin"}), cellTestTenantUUID),
 	)
 }
 
@@ -370,7 +373,7 @@ func TestConfigCore_RouteConfigList(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/config/", nil)
 	// Inject a valid tenant so configread handler can call tenant.FromContext.
-	req = req.WithContext(pdpAdminCtx("tester", "00000000-0000-0000-0000-000000000001"))
+	req = req.WithContext(pdpAdminCtx("tester"))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code,
@@ -397,7 +400,7 @@ func TestConfigCore_RouteConfigGetByKey(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/config/app.name", nil)
 	// Inject a valid tenant so the configread handler reaches the business path
 	// rather than the F6 missing-tenant 403 (a separate gate from auth role).
-	req = req.WithContext(pdpAdminCtx("tester", "00000000-0000-0000-0000-000000000001"))
+	req = req.WithContext(pdpAdminCtx("tester"))
 	r.ServeHTTP(rec, req)
 
 	// Handler ran (not routing 404): response must be JSON and must not be an auth rejection.
@@ -415,7 +418,7 @@ func TestConfigCore_RouteFlagsList(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flags/", nil)
 	// Inject a valid tenant so featureflag handler can call tenant.FromContext.
-	req = req.WithContext(pdpAdminCtx("tester", "00000000-0000-0000-0000-000000000001"))
+	req = req.WithContext(pdpAdminCtx("tester"))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code,
@@ -507,7 +510,7 @@ func TestConfigCore_ProductionAuthGateLock(t *testing.T) {
 			// granted permission admits the caller. A valid TenantID is injected so
 			// tenant-scoped handlers reach the business path rather than the F6
 			// missing-tenant 403 (a separate gate from the permission under test).
-			rec = exec(t, p, pdpAdminCtx("admin-user", gateTenant))
+			rec = exec(t, p, pdpAdminCtx("admin-user"))
 			assert.NotEqual(t, http.StatusUnauthorized, rec.Code,
 				"admin %s %s (PDP allow) must not be 401; body %s", p.method, p.path, rec.Body)
 			assert.NotEqual(t, http.StatusForbidden, rec.Code,
@@ -522,13 +525,12 @@ func TestConfigCore_CrossSliceCursorRejection(t *testing.T) {
 	// Seed enough config entries to produce a nextCursor.
 	// Both write and read requests carry the same test tenant so the read sees
 	// what was written.
-	const cellTestTenantStr = "00000000-0000-0000-0000-000000000001"
 	for i := range 3 {
 		body := fmt.Sprintf(`{"key":"cfg-%d","value":"val-%d"}`, i, i)
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/config/", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
-		req = req.WithContext(pdpAdminCtx("admin-test", cellTestTenantStr))
+		req = req.WithContext(pdpAdminCtx("admin-test"))
 		r.ServeHTTP(rec, req)
 		require.Equal(t, http.StatusCreated, rec.Code, "setup: create config entry %d", i)
 	}
@@ -537,7 +539,7 @@ func TestConfigCore_CrossSliceCursorRejection(t *testing.T) {
 	// config-read declares the ABAC PDP permission gate so an admin principal is required.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/config/?limit=1", nil)
-	req = req.WithContext(pdpAdminCtx("tester", cellTestTenantStr))
+	req = req.WithContext(pdpAdminCtx("tester"))
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 
@@ -555,7 +557,7 @@ func TestConfigCore_CrossSliceCursorRejection(t *testing.T) {
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet,
 		"/api/v1/flags/?cursor="+configPage.NextCursor, nil)
-	req = req.WithContext(pdpAdminCtx("tester", cellTestTenantStr))
+	req = req.WithContext(pdpAdminCtx("tester"))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code,
@@ -602,7 +604,7 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 	// Also inject the same tenant used for seeding so the handler can find the flags.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flags/?limit=1", nil)
-	req = req.WithContext(pdpAdminCtx("tester", reverseTestTenantStr))
+	req = req.WithContext(pdpAdminCtx("tester"))
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 
@@ -619,7 +621,7 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet,
 		"/api/v1/config/?cursor="+flagPage.NextCursor, nil)
-	req = req.WithContext(pdpAdminCtx("tester", reverseTestTenantStr))
+	req = req.WithContext(pdpAdminCtx("tester"))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code,

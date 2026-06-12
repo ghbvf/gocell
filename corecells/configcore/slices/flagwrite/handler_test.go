@@ -244,7 +244,7 @@ func setupFlagwriteHTTPHandler(t *testing.T) http.Handler {
 
 // TestFlagwriteHandler_PDPDeny_Returns403 asserts that a PDP-deny Authorizer in
 // ctx surfaces as 403 ERR_AUTH_FORBIDDEN on every flagwrite endpoint — confirms
-// flag:write-gated (PDP) behaviour after the role-literal → permission-based
+// flag:write-gated (PDP) behavior after the role-literal → permission-based
 // migration (PR-10b #1348).
 func TestFlagwriteHandler_PDPDeny_Returns403(t *testing.T) {
 	handler := setupFlagwriteHTTPHandler(t)

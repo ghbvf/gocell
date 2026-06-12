@@ -56,7 +56,7 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 	// "tenant:read" / "other:write" are deliberately NON-baseline synthetic
 	// actions: this test isolates tenant-policy action-targeting, so it must use
 	// actions the built-in baseline does not allow (else baseline allow would mask
-	// the tenant-rule behaviour under test). Do NOT use real permissions like
+	// the tenant-rule behavior under test). Do NOT use real permissions like
 	// config:read here — those are baseline-allowed for admin (PR-10b).
 
 	tests := []struct {

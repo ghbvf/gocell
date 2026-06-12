@@ -587,8 +587,16 @@ func TestHandler_Authz_Delete(t *testing.T) {
 		wantErrCode string
 	}{
 		{"no_auth", "", nil, false, false, nil, "/nonexistent?expectedVersion=1", http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
-		{"no_authorizer_fail_closed", "user-1", []string{"viewer"}, true, false, nil, "/nonexistent?expectedVersion=1", http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
-		{"admin_not_found", testAdminSubject, []string{auth.RoleAdmin}, true, true, nil, "/nonexistent?expectedVersion=1", http.StatusNotFound, ""},
+		{
+			"no_authorizer_fail_closed", "user-1",
+			[]string{"viewer"},
+			true, false, nil, "/nonexistent?expectedVersion=1", http.StatusForbidden, "ERR_AUTH_FORBIDDEN",
+		},
+		{
+			"admin_not_found", testAdminSubject,
+			[]string{auth.RoleAdmin},
+			true, true, nil, "/nonexistent?expectedVersion=1", http.StatusNotFound, "",
+		},
 		{"admin_success", testAdminSubject, []string{auth.RoleAdmin}, true, true, func(r *mem.ConfigRepository) {
 			now := time.Now()
 			_ = r.Create(context.Background(), testHandlerTenant, &domain.ConfigEntry{
