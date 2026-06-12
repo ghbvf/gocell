@@ -26,9 +26,22 @@ type Response struct {
 
 // ResponseData is a generated DTO for contract http.orderfulfillment.orderstatus.v1.
 type ResponseData struct {
-	OrderID string `json:"orderId"`
-	Status  string `json:"status"`
+	OrderID string             `json:"orderId"`
+	Status  ResponseDataStatus `json:"status"`
 }
+
+// ResponseDataStatus enumerates the closed value-set of the status field.
+// The schema enum is the single source; a value removed there drops the const,
+// breaking any reference at compile time (#1935).
+type ResponseDataStatus string
+
+const (
+	ResponseDataStatusAccepted    ResponseDataStatus = "accepted"
+	ResponseDataStatusRunning     ResponseDataStatus = "running"
+	ResponseDataStatusSucceeded   ResponseDataStatus = "succeeded"
+	ResponseDataStatusCompensated ResponseDataStatus = "compensated"
+	ResponseDataStatusFailed      ResponseDataStatus = "failed"
+)
 
 // OrderstatusResponseObject is the typed response envelope for
 // http.orderfulfillment.orderstatus.v1. Service.Orderstatus must return one of the

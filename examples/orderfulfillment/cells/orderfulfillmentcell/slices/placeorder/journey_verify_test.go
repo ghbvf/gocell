@@ -202,7 +202,7 @@ func (e journeyEnv) waitStatus(t *testing.T, orderID, want string) {
 func TestJOrderfulfillmentHappyHappyPath(t *testing.T) {
 	env := newJourneyEnv(t)
 	orderID := env.postOrder(t, `{"item":"widget","amountCents":1299,"idempotencyKey":"jrny-happy-1"}`)
-	env.waitStatus(t, orderID, orderstatus.StatusSucceeded)
+	env.waitStatus(t, orderID, string(orderstatusgen.ResponseDataStatusSucceeded))
 }
 
 // TestJOrderfulfillmentCompensateCompensateOnChargeFail is the journey auto-verify
@@ -214,5 +214,5 @@ func TestJOrderfulfillmentHappyHappyPath(t *testing.T) {
 func TestJOrderfulfillmentCompensateCompensateOnChargeFail(t *testing.T) {
 	env := newJourneyEnv(t)
 	orderID := env.postOrder(t, `{"item":"widget","amountCents":1299,"paymentShouldFail":true,"idempotencyKey":"jrny-comp-1"}`)
-	env.waitStatus(t, orderID, orderstatus.StatusCompensated)
+	env.waitStatus(t, orderID, string(orderstatusgen.ResponseDataStatusCompensated))
 }
