@@ -19,9 +19,12 @@ var builtinBaseline = []abac.Rule{
 		Action:     []string{authz.PermAuditRead().String()},
 		Conditions: []abac.Condition{adminOrSuperAdmin()},
 	},
-	// configcore baseline (PR-10b #1348): one allow rule per migrated slice,
-	// each reproducing the old auth.AnyRole(RoleAdmin) gate. action-scoped +
-	// role-conditioned — same shape as the audit rule above.
+	// configcore baseline (PR-10b #1348): one allow rule per migrated slice via
+	// the shared adminOrSuperAdmin() condition. NOTE: the old configcore gates were
+	// auth.AnyRole(RoleAdmin) — admin-only — so this WIDENS them to admit super-admin
+	// (super-admin ⊇ admin; a deliberate relaxation, zero prod impact as superadmin
+	// is not yet issued). See ADR §"Amendment: PR-10b" threat-model re-eval + ruling.
+	// action-scoped + role-conditioned — same shape as the audit rule above.
 	{
 		ID:         "baseline-config-read-admin",
 		Name:       "Baseline: allow admin/super-admin to read configuration",
@@ -60,8 +63,10 @@ var builtinBaseline = []abac.Rule{
 }
 
 // adminOrSuperAdmin is the shared baseline condition: subject.roles ∈
-// {admin, super-admin}. Extracted because all current baseline rules reproduce
-// the same admin gate (≥3 identical literals → constant, per go-standards).
+// {admin, super-admin}. Extracted because all current baseline rules share this
+// same admin+super-admin condition (≥3 identical literals → constant, per
+// go-standards). For audit this matched the prior gate exactly; for configcore it
+// widens the prior admin-only gate (see configcore baseline note above + the ADR).
 // Role constants come from runtime/auth so the values match exactly what
 // attributeResolver.resolveSubject emits for the "roles" key (r.principal.Roles).
 func adminOrSuperAdmin() abac.Condition {

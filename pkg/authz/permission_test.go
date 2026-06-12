@@ -1,6 +1,13 @@
 package authz
 
-import "testing"
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"strconv"
+	"strings"
+	"testing"
+)
 
 func TestPermission_String(t *testing.T) {
 	if got := PermAuditRead().String(); got != "audit:read" {
@@ -111,50 +118,155 @@ func TestPermissions_NoDuplicates(t *testing.T) {
 	}
 }
 
-// TestPermissions_KnownVarsEnrolled asserts that each Perm* accessor exported by
-// this package is present in Permissions(). A new perm* var whose accessor is
-// declared but NOT added to allPermissions is caught here (registry-enrollment
-// contract).
+// TestPermissions_AccessorsEnrolled SELF-DISCOVERS every exported Perm*() accessor
+// in permission.go (via go/parser, not a hand-maintained list) and asserts the set
+// of actions they expose equals the closed registry returned by Permissions() —
+// bidirectionally:
 //
-// Note: Go does not support reflect-based enumeration of package-level vars from
-// within the same package's test, so this test enumerates the known accessors
-// explicitly. The anti-vacuity property comes from TestPermissions_ClosedRegistry
-// (which pins len==1 for PR-10a) — together they ensure no var is silently
-// un-enrolled: a new perm* must be added to allPermissions (or len test fails)
-// AND its accessor must appear in the explicit membership check below.
+//   - every accessor's action must be in Permissions() (no accessor whose singleton
+//     was forgotten from allPermissions — the F4 double-omission the old hand-written
+//     knownVars list could silently miss);
+//   - every Permissions() action must have an accessor (no registry entry without a
+//     public accessor).
 //
-// Registry-enrollment contract: every new perm* var added to permission.go MUST
-// also be appended to allPermissions in the same commit; omitting the enrollment
-// causes TestPermissions_ClosedRegistry to fail (len mismatch) AND this test to
-// fail (membership miss).
-func TestPermissions_KnownVarsEnrolled(t *testing.T) {
-	registry := Permissions()
-	contains := func(p Permission) bool {
-		for _, r := range registry {
-			if r.String() == p.String() {
-				return true
+// Because the accessors are discovered from source, adding a new Perm*() without
+// enrolling its singleton now fails automatically — no test edit required.
+//
+// AI-robust grade: Medium (machine-decidable static AST scan, self-discovering). A
+// Hard alternative — generate the Perm*() accessors and allPermissions from one
+// registry table + golden — would need a new `gocell generate authz` command, which
+// is NOT a low-cost Hard path, so per ai-robust.md no follow-up issue is filed and
+// this Medium guard stands. TestPermissions_ClosedRegistry keeps the len anchor.
+func TestPermissions_AccessorsEnrolled(t *testing.T) {
+	accessorActions := parsePermissionAccessorActions(t) // action -> accessor name
+
+	// Anti-vacuity: a parser regression that finds nothing must fail, not pass.
+	if len(accessorActions) < 6 {
+		t.Fatalf("self-discovery found %d Perm*() accessors in permission.go, want ≥6 "+
+			"(PermAuditRead + 5 configcore) — the parser likely regressed", len(accessorActions))
+	}
+
+	registry := map[string]struct{}{}
+	for _, p := range Permissions() {
+		registry[p.String()] = struct{}{}
+	}
+
+	for action, fn := range accessorActions {
+		if _, ok := registry[action]; !ok {
+			t.Errorf("accessor %s() exposes %q which is NOT in Permissions() — "+
+				"append its singleton to allPermissions in permission.go", fn, action)
+		}
+	}
+	for action := range registry {
+		if _, ok := accessorActions[action]; !ok {
+			t.Errorf("registry action %q has no exported Perm*() accessor in permission.go", action)
+		}
+	}
+}
+
+// parsePermissionAccessorActions parses permission.go and returns a map from each
+// exported Perm*() accessor's action string to the accessor name, by statically
+// resolving `func PermX() Permission { return permX }` →
+// `var permX = newPermission("action")`. It is the self-discovery engine behind
+// TestPermissions_AccessorsEnrolled.
+func parsePermissionAccessorActions(t *testing.T) map[string]string {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "permission.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse permission.go: %v", err)
+	}
+
+	varAction := map[string]string{}   // perm var name -> action literal
+	accessorVar := map[string]string{} // Perm*() name   -> returned var name
+	for _, decl := range file.Decls {
+		switch d := decl.(type) {
+		case *ast.GenDecl:
+			if d.Tok != token.VAR {
+				continue
+			}
+			for _, spec := range d.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for i, name := range vs.Names {
+					if i < len(vs.Values) {
+						if action, ok := newPermissionLiteral(vs.Values[i]); ok {
+							varAction[name.Name] = action
+						}
+					}
+				}
+			}
+		case *ast.FuncDecl:
+			if d.Recv != nil || !strings.HasPrefix(d.Name.Name, "Perm") || !returnsPermission(d.Type) {
+				continue
+			}
+			if v, ok := singleReturnIdent(d.Body); ok {
+				accessorVar[d.Name.Name] = v
 			}
 		}
+	}
+
+	out := map[string]string{}
+	for fn, varName := range accessorVar {
+		action, ok := varAction[varName]
+		if !ok {
+			t.Errorf("accessor %s() returns %q, which is not a newPermission(...) singleton in permission.go", fn, varName)
+			continue
+		}
+		out[action] = fn
+	}
+	return out
+}
+
+// newPermissionLiteral reports the action string of a `newPermission("action")`
+// call expression.
+func newPermissionLiteral(expr ast.Expr) (string, bool) {
+	call, ok := expr.(*ast.CallExpr)
+	if !ok {
+		return "", false
+	}
+	fn, ok := call.Fun.(*ast.Ident)
+	if !ok || fn.Name != "newPermission" || len(call.Args) != 1 {
+		return "", false
+	}
+	lit, ok := call.Args[0].(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", false
+	}
+	s, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		return "", false
+	}
+	return s, true
+}
+
+// returnsPermission reports whether ft is the signature `() Permission`.
+func returnsPermission(ft *ast.FuncType) bool {
+	if ft.Params != nil && len(ft.Params.List) != 0 {
 		return false
 	}
-
-	// Enumerate every exported Perm* accessor. Update this list when adding new vars.
-	knownVars := []struct {
-		name string
-		perm Permission
-	}{
-		{"PermAuditRead", PermAuditRead()},
-		{"PermConfigRead", PermConfigRead()},
-		{"PermConfigWrite", PermConfigWrite()},
-		{"PermConfigPublish", PermConfigPublish()},
-		{"PermFlagRead", PermFlagRead()},
-		{"PermFlagWrite", PermFlagWrite()},
+	if ft.Results == nil || len(ft.Results.List) != 1 {
+		return false
 	}
+	id, ok := ft.Results.List[0].Type.(*ast.Ident)
+	return ok && id.Name == "Permission"
+}
 
-	for _, kv := range knownVars {
-		if !contains(kv.perm) {
-			t.Errorf("%s (%q) is declared but missing from Permissions() — add it to allPermissions in permission.go",
-				kv.name, kv.perm.String())
-		}
+// singleReturnIdent reports the identifier name of a body that is exactly
+// `{ return someIdent }`.
+func singleReturnIdent(body *ast.BlockStmt) (string, bool) {
+	if body == nil || len(body.List) != 1 {
+		return "", false
 	}
+	ret, ok := body.List[0].(*ast.ReturnStmt)
+	if !ok || len(ret.Results) != 1 {
+		return "", false
+	}
+	id, ok := ret.Results[0].(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	return id.Name, true
 }
