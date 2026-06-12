@@ -20,7 +20,7 @@ var contractSpec = contractspec.ContractSpec{
 	Kind:      cellvocab.ContractHTTP,
 	Transport: "http",
 	Method:    "GET",
-	Path:      "/api/v1/samples/{id}",
+	Path:      "/api/v1/samples/{id}/sub/{id2}",
 }
 
 // Handler wires HTTP decode/encode + auth.Mount for http.sample.minlength.v1.
@@ -79,12 +79,42 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		req.ID = v
 	}
+	{
+		v := r.PathValue("id2")
+		if len(v) > 64 {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(errcode.PublicString("field", "id2"), errcode.PublicString("reason", "invalid"))))
+			return
+		}
+		req.Id2 = v
+	}
 
 	req.OneMin = r.URL.Query().Get("oneMin")
 	if len(req.OneMin) > 128 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
 			errcode.WithDetails(errcode.PublicString("field", "oneMin"), errcode.PublicString("reason", "invalid"))))
+		return
+	}
+
+	req.RequiredTwo = r.URL.Query().Get("requiredTwo")
+	if req.RequiredTwo == "" {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: required field missing",
+			errcode.WithDetails(errcode.PublicString("field", "requiredTwo"))))
+		return
+	}
+	if req.RequiredTwo != "" && len(req.RequiredTwo) < 2 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(errcode.PublicString("field", "requiredTwo"), errcode.PublicString("reason", "invalid"))))
+		return
+	}
+	if len(req.RequiredTwo) > 128 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(errcode.PublicString("field", "requiredTwo"), errcode.PublicString("reason", "invalid"))))
 		return
 	}
 

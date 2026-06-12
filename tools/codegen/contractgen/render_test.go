@@ -1882,23 +1882,27 @@ func TestRender_Golden_Synth_HTTPMinLength(t *testing.T) {
 	}
 	handler := string(renderFile(t, spec, "handler_gen.go"))
 
-	// Always-false branches must NOT appear (the two dead-code classes #1914 kills).
+	// Always-false branches must NOT appear (the two dead-code classes #1914 kills),
+	// across both query params (guarded by != "") and path params (unguarded).
 	for _, dead := range []string{
-		"len(req.ZeroMin) < 0",
-		"len(req.OneMin) < 1",
+		"len(req.ZeroMin) < 0", // query minLength:0 (class 1)
+		"len(req.OneMin) < 1",  // query minLength:1 under != "" guard (class 2)
 		"len(req.ZeroMin) < 1", // guarded zero never widens to 1 either
+		"len(v) < 0",           // path param minLength:0 (id2) — unguarded class 1
 	} {
 		if strings.Contains(handler, dead) {
 			t.Errorf("handler emits always-false dead code %q (issue #1914 regression)", dead)
 		}
 	}
-	// Meaningful lower bounds MUST still appear.
+	// Meaningful checks MUST still appear.
 	for _, live := range []string{
-		`if req.TwoMin != "" && len(req.TwoMin) < 2 {`, // guarded query, N>=2
-		"if len(v) < 1 {", // unguarded path param, rejects empty
+		`if req.TwoMin != "" && len(req.TwoMin) < 2 {`,           // optional guarded query, N>=2
+		`if req.RequiredTwo != "" && len(req.RequiredTwo) < 2 {`, // required query: guarded minLength coexists with...
+		`if req.RequiredTwo == "" {`,                             // ...the required-field "" check (both emitted)
+		"if len(v) < 1 {",                                        // unguarded path param (id), rejects empty
 	} {
 		if !strings.Contains(handler, live) {
-			t.Errorf("handler missing expected lower-bound check %q", live)
+			t.Errorf("handler missing expected check %q", live)
 		}
 	}
 	// maxLength upper bounds are unaffected by the minLength fix.

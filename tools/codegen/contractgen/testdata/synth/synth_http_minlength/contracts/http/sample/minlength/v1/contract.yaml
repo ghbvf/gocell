@@ -1,11 +1,13 @@
 # synth_http_minlength exercises the minLength lower-bound codegen funnel (issue #1914).
-# It byte-locks that an always-false length comparison is never emitted:
-#   - query param minLength:0 -> `len(x) < 0` is always false (length is never negative)
-#   - query param minLength:1 -> the `!= ""` guard already enforces len>=1, so `< 1` is
-#                                always false too
-# while a meaningful lower bound is still emitted:
-#   - query param minLength:2 -> `req.X != "" && len(req.X) < 2` rejects 1-char values
-#   - path  param minLength:1 -> `len(v) < 1` rejects an empty path segment (no `!= ""` guard)
+# It byte-locks that an always-false length comparison is NEVER emitted, while a
+# meaningful lower bound still is — across every (param-kind × required × minLength) cell:
+#
+#   path  param minLength:0 -> NO branch   (`len(v) < 0` is always false)
+#   path  param minLength:1 -> `len(v) < 1` (rejects an empty path segment; no `!= ""` guard)
+#   query param minLength:0 -> NO branch   (`len(x) < 0` is always false)
+#   query param minLength:1 -> NO branch   (the `!= ""` guard already forces len>=1, so `< 1` is dead)
+#   query param minLength:2 -> `req.X != "" && len(req.X) < 2` (rejects 1-char values)
+#   required query minLength:2 -> required `== ""` check AND `!= "" && len < 2` coexist
 id: http.sample.minlength.v1
 kind: http
 ownerCell: samplecell
@@ -15,27 +17,36 @@ endpoints:
   server: samplecell
   http:
     method: GET
-    path: /api/v1/samples/{id}
+    path: /api/v1/samples/{id}/sub/{id2}
     pathParams:
       id:
         type: string
-        minLength: 1
+        minLength: 1   # meaningful: `len(v) < 1` rejects an empty path segment
+        maxLength: 64
+      id2:
+        type: string
+        minLength: 0   # dead code: `len(v) < 0` is always false -> NO branch
         maxLength: 64
     queryParams:
       zeroMin:
         type: string
         required: false
-        minLength: 0
+        minLength: 0   # dead code (class 1): `len(x) < 0` is always false -> NO branch
         maxLength: 128
       oneMin:
         type: string
         required: false
-        minLength: 1
+        minLength: 1   # dead code (class 2): no-op under the `!= ""` guard (len>=1 already) -> NO branch
         maxLength: 128
       twoMin:
         type: string
         required: false
+        minLength: 2   # meaningful: `!= "" && len(req.X) < 2` rejects 1-char values
+      requiredTwo:
+        type: string
+        required: true   # required `== ""` check AND the guarded minLength:2 check must coexist
         minLength: 2
+        maxLength: 128
     successStatus: 200
     noContent: false
     responses:
