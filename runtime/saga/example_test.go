@@ -25,7 +25,31 @@ const (
 	examplePollInterval = 5 * time.Millisecond
 	// exampleSagaTimeout is the overall saga deadline (the Expired ceiling).
 	exampleSagaTimeout = 30 * time.Second
+	// exampleWaitBudget bounds every asynchronous lifecycle wait (Ready, the
+	// step running, Stop's drain). A regression — Start exiting early, the tick
+	// loop never claiming, or the step never running — then fails this Example
+	// locally within the budget instead of hanging until the whole package's
+	// `go test` deadline. It runs on the wall clock deliberately: the Coordinator
+	// below is wired to clock.Real(), so a fake clock would never advance these
+	// real-time waits.
+	exampleWaitBudget = 10 * time.Second
 )
+
+// awaitExample blocks until ch is signaled, but panics if the coordinator's
+// Start goroutine exits first (surfacing its error) or the wait budget elapses.
+// An Example has no *testing.T, so a labeled panic is the only way to turn a
+// regression into a local failure instead of a low-signal whole-package
+// `go test` timeout. It lives outside ExampleNewCoordinator so each wait reads
+// as a single self-documenting line in the godoc-rendered body.
+func awaitExample(what string, ch <-chan struct{}, startErr <-chan error) {
+	select {
+	case <-ch:
+	case err := <-startErr:
+		panic(fmt.Errorf("saga example: coordinator Start exited before %s: %w", what, err))
+	case <-time.After(exampleWaitBudget):
+		panic("saga example: timed out waiting for " + what)
+	}
+}
 
 // exampleTxRunner is a minimal in-memory persistence.TxRunner sufficient to run
 // the example against journal.MemJournal. The Coordinator persists each step
@@ -116,11 +140,14 @@ func ExampleNewCoordinator() {
 		panic(err)
 	}
 
-	// 6. Run the control loop and enqueue one instance.
+	// 6. Run the control loop and enqueue one instance. Start's return is
+	//    captured in a buffered channel (not discarded with `_ =`) so a Start
+	//    failure surfaces and the goroutine's exit is observable.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { _ = coord.Start(ctx) }()
-	<-coord.Ready()
+	startErr := make(chan error, 1)
+	go func() { startErr <- coord.Start(ctx) }()
+	awaitExample("coordinator ready", coord.Ready(), startErr)
 
 	inst := ksaga.NewInstance("payment_inst_1", "payment_saga", clk.Now())
 	if err := j.Enqueue(ctx, inst); err != nil {
@@ -130,10 +157,18 @@ func ExampleNewCoordinator() {
 	// 7. Wait for the step to run, then Stop. Stop drains the in-flight drive —
 	//    including the terminal MarkTerminal write — before it returns, so the
 	//    journal deterministically holds the terminal event afterward, with no
-	//    polling. context.Background() gives Stop an unbounded drain budget;
-	//    production should pass a deadline-bounded ctx.
-	<-stepRan
-	if err := coord.Stop(context.Background()); err != nil {
+	//    polling. Stop is given a deadline-bounded context (the drain budget):
+	//    production should do the same so a wedged step cannot make shutdown hang.
+	awaitExample("charge_card step to run", stepRan, startErr)
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), exampleWaitBudget)
+	defer stopCancel()
+	if err := coord.Stop(stopCtx); err != nil {
+		panic(err)
+	}
+
+	// Stop cancels the Coordinator's internal context, so Start has unwound by
+	// now; confirm its goroutine exited without error.
+	if err := <-startErr; err != nil {
 		panic(err)
 	}
 
