@@ -19,19 +19,36 @@ package rlsreadfixture
 
 import "context"
 
-// UserRepository is a local stand-in mirroring the shape of accesscore's
-// ports.UserRepository: a READ method (in the detector's read-method set) and a
-// WRITE method (excluded). The detector keys on the receiver interface name plus
-// the method name, so this local interface exercises the same resolution path.
+// UserRepository and RoleRepository are local stand-ins mirroring the SHAPE of
+// accesscore's two ports interfaces: each has a READ method (in the detector's
+// read-method set); UserRepository also has a WRITE method (excluded). Both
+// interfaces are declared so the fixture proves the detector's receiver-binding
+// resolves BOTH interface types — a regression that only broke resolution for
+// the second interface would otherwise slip through a single-interface fixture.
+//
+// Parameter types deliberately use string, not tenant.TenantID: the fixture
+// cannot import corecells/accesscore/internal (Go internal-package visibility),
+// and the detector keys on the receiver interface name + method name, NOT on
+// parameter types — so this divergence is intentional and inert.
 type UserRepository interface {
 	GetByIDInTenant(ctx context.Context, t, id string) (any, error) // READ — must flag
 	Create(ctx context.Context, t string, u any) error              // WRITE — must NOT flag
 }
 
-// badUnscopedRead references the read method from this non-allowlisted file. The
-// detector MUST report this reference.
+type RoleRepository interface {
+	CountEffectiveAdmins(ctx context.Context, t string) (int, error) // READ — must flag
+}
+
+// badUnscopedRead references a UserRepository read method from this
+// non-allowlisted file. The detector MUST report this reference.
 func badUnscopedRead(ctx context.Context, r UserRepository) {
 	_, _ = r.GetByIDInTenant(ctx, "t", "id")
+}
+
+// badUnscopedRoleRead references a RoleRepository read method, proving the
+// receiver-binding resolves the SECOND interface type too. MUST be reported.
+func badUnscopedRoleRead(ctx context.Context, r RoleRepository) {
+	_, _ = r.CountEffectiveAdmins(ctx, "t")
 }
 
 // writeOutsideScope references a write method; the read-method-set filter MUST

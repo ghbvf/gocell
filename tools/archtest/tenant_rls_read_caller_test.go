@@ -63,13 +63,22 @@
 //
 // # AI-robust rating (charter §"Funnel 双向锁评级") — MEDIUM
 //
-//   - Downstream (who may reference an RLS read method): MEDIUM. The file
-//     allowlist + use-based resolution catch every import form (a method call
-//     carries no package qualifier; the method binds to the receiver type).
-//   - Upstream (can an RLS read happen WITHOUT referencing these methods): the
-//     repo interface methods are the sole sanctioned read path for these tables;
-//     raw SQL bypassing the repo is out of this rule's scope (the pgexec executor
-//     is separately sealed).
+// Overall MEDIUM: a new unscoped read is expressible and COMPILES; the CI
+// archtest is the enforcement — the same tier as the sibling scope-WRITE guards
+// (a caller-allowlist, not a compile-time seal). The two axes:
+//
+//   - Downstream (detection robustness): alias-proof. Resolution is use-based
+//     (info.Uses → *types.Func) + receiver-bound, so no import form (qualified /
+//     alias / dot-import) and no same-name collision evades it. This matches what
+//     the sibling guards label "HARD" on this axis — but it is robust DETECTION,
+//     not a compile-time Hard tier: a non-allowlisted reference still compiles,
+//     which is exactly what keeps the rule Medium.
+//   - Upstream (can an RLS read happen WITHOUT referencing these methods):
+//     MEDIUM. The ports repo interface methods are the sole sanctioned read path
+//     for these tables, and repo reads route through the sealed ambient-tx
+//     PGExecutor (PG-REPO-AMBIENT-TX-01), so a repo read honors the scoped tx.
+//     Raw SQL issued OUTSIDE the repo methods is NOT covered by this rule (a
+//     separate concern; no claim is made here that it is sealed).
 //
 // # Tool blind spots (charter §"强制盲区自检")
 //
@@ -86,8 +95,18 @@
 //     domain.EffectiveAdminCounter.CountEffectiveAdmins, which RoleRepository
 //     satisfies structurally) is referenced by the facade type, not ports, so it is
 //     not matched — that is why internal/domain/admin.go is not in the allowlist.
-//     Those facades are sealed and their sole production caller chain
-//     (identitymanage.checkLastAdminRemoval) is already inside a scoped tx.
+//     Today the sole such facade's production caller chain
+//     (identitymanage.checkLastAdminRemoval) runs inside a scoped tx, but that is a
+//     CURRENT-STATE snapshot, NOT an invariant this rule guards: a new unscoped
+//     caller of an RLS-reading facade method would not be caught here (the runtime
+//     RLS fail-closed backstop still applies).
+//
+// # CI bucket
+//
+// Discovered + run by `gocell verify archtest` (whole-module packages.Load);
+// routed to the NIGHTLY bucket, NOT the PR-time archtest-invariants gate (per the
+// budget reasoning in hack/verify-archtest-invariants.sh). So a read-caller drift
+// is caught at the next nightly run, not on the introducing PR.
 package archtest
 
 import (
@@ -101,7 +120,7 @@ import (
 
 // accesscorePortsPkg (the package owning the UserRepository / RoleRepository
 // interfaces whose READ methods touch the RLS tables) is declared in
-// tenant_repo_param_funnel_test.go (same package) and reused here.
+// tenant_repo_param_funnel_test.go:104 (same package const) and reused here.
 
 const (
 	userRepositoryTypeName = "UserRepository"
@@ -134,14 +153,16 @@ var rlsReadMethodsByIface = map[string]map[string]struct{}{
 // conformance / fixture packages that exercise the repos). A NEW entry must be
 // added consciously, after confirming the read runs inside a tenant-scoped tx.
 var rlsReadCallerAllowlist = map[string]struct{}{
-	"corecells/accesscore/slices/sessionlogin/service.go":            {},
-	"corecells/accesscore/slices/sessionrefresh/service.go":          {},
-	"corecells/accesscore/slices/sessionvalidate/service.go":         {},
-	"corecells/accesscore/slices/rbacassign/service.go":              {},
-	"corecells/accesscore/slices/rbaccheck/service.go":               {},
-	"corecells/accesscore/slices/identitymanage/service.go":          {},
-	"corecells/accesscore/internal/adminprovision/provisioner.go":    {},
-	"corecells/accesscore/internal/sessionmint/sessionmint.go":       {},
+	"corecells/accesscore/slices/sessionlogin/service.go":         {},
+	"corecells/accesscore/slices/sessionrefresh/service.go":       {},
+	"corecells/accesscore/slices/sessionvalidate/service.go":      {},
+	"corecells/accesscore/slices/rbacassign/service.go":           {},
+	"corecells/accesscore/slices/rbaccheck/service.go":            {},
+	"corecells/accesscore/slices/identitymanage/service.go":       {},
+	"corecells/accesscore/internal/adminprovision/provisioner.go": {},
+	"corecells/accesscore/internal/sessionmint/sessionmint.go":    {},
+	// test-support readers (no scoped-tx obligation — they exercise the repos in
+	// tests, not on a production request path):
 	"corecells/accesscore/accesscoretest/fixture.go":                 {},
 	"corecells/accesscore/internal/ports/conformance/conformance.go": {},
 }
@@ -201,21 +222,25 @@ func TestTenantRLSReadCaller01(t *testing.T) {
 
 	observed := map[string]struct{}{}
 	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
+		if !p.Typed() {
+			return nil // detection is type-dependent (info.Uses); skip AST-only passes.
+		}
 		var d []Diagnostic
 		for _, ref := range collectRLSReadRefs(p, accesscorePortsPkg, rlsReadMethodsByIface) {
 			observed[ref.rel] = struct{}{}
 			if _, allowed := rlsReadCallerAllowlist[ref.rel]; !allowed {
+				// Message carries no ruleID prefix — Report prepends it (avoids a
+				// double "TENANT-RLS-READ-CALLER-01:" in the output).
 				d = append(d, Diagnostic{
 					Rel:  ref.rel,
 					Line: ref.line,
 					Message: fmt.Sprintf(
-						"TENANT-RLS-READ-CALLER-01: %s.%s (a read of an RLS-protected table: users/roles/"+
-							"role_assignments, FORCE ROW LEVEL SECURITY migration 053) is referenced from %s, which is "+
-							"not a sanctioned RLS reader. The read MUST run inside a tenant-scoped tx (scopedtx.Do / "+
-							"scopedtx.ApplyScope / a post-auth RunInTx whose ctxkeys fallback writes app.tenant_id); a "+
-							"bare-pool read fail-closes to 0 rows under the restricted app-serving pool (#1676). If this "+
-							"IS a new sanctioned reader, confirm it runs inside a scoped tx and add %s to "+
-							"rlsReadCallerAllowlist with rationale.",
+						"%s.%s (a read of an RLS-protected table: users/roles/role_assignments, FORCE ROW LEVEL "+
+							"SECURITY migration 053) is referenced from %s, which is not a sanctioned RLS reader. The "+
+							"read MUST run inside a tenant-scoped tx (scopedtx.Do / scopedtx.ApplyScope / a post-auth "+
+							"RunInTx whose ctxkeys fallback writes app.tenant_id); a bare-pool read fail-closes to 0 rows "+
+							"under the restricted app-serving pool (#1676). If this IS a new sanctioned reader, confirm it "+
+							"runs inside a scoped tx and add %s to rlsReadCallerAllowlist with rationale.",
 						ref.iface, ref.method, ref.rel, ref.rel,
 					),
 				})
@@ -229,11 +254,14 @@ func TestTenantRLSReadCaller01(t *testing.T) {
 	// would make the freeze vacuously pass.
 	for f := range rlsReadCallerAllowlist {
 		if _, seen := observed[f]; !seen {
+			// Rel = the stale entry itself, so the diagnostic points at the file to
+			// drop; Message carries no ruleID prefix (Report prepends it).
 			diags = append(diags, Diagnostic{
+				Rel: f,
 				Message: fmt.Sprintf(
-					"TENANT-RLS-READ-CALLER-01: allowlist entry %q is STALE — no live accesscore RLS read-method "+
-						"reference observed. Either the scanner regressed or the reader was removed; drop the dead "+
-						"allowlist entry so it cannot become a silent bypass slot.",
+					"allowlist entry %q is STALE — no live accesscore RLS read-method reference observed. Either "+
+						"the scanner regressed or the reader was removed; drop the dead allowlist entry so it cannot "+
+						"become a silent bypass slot.",
 					f,
 				),
 			})
@@ -263,6 +291,7 @@ func TestTenantRLSReadCaller01_FixtureCatchesRead(t *testing.T) {
 	pattern := "./tools/archtest/internal/rlsreadfixture/..."
 	fixtureReads := map[string]map[string]struct{}{
 		userRepositoryTypeName: {"GetByIDInTenant": {}},
+		roleRepositoryTypeName: {"CountEffectiveAdmins": {}},
 	}
 	diags := Run(t, Fixture(FixtureOpts{Tests: false}, []string{pattern}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != fixturePkg {
@@ -277,7 +306,8 @@ func TestTenantRLSReadCaller01_FixtureCatchesRead(t *testing.T) {
 	for _, dd := range diags {
 		t.Log(dd.Message)
 	}
-	require.Len(t, diags, 1,
-		"the detector must resolve the one out-of-allowlist UserRepository read reference and exclude the write; "+
-			"a 0 result means it regressed and an unscoped RLS read could be added unnoticed")
+	require.Len(t, diags, 2,
+		"the detector must resolve BOTH out-of-allowlist read references (UserRepository + RoleRepository) and "+
+			"exclude the write; a wrong count means receiver-binding or the read-method-set filter regressed and an "+
+			"unscoped RLS read could be added unnoticed")
 }
