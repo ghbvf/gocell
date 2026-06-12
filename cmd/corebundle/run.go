@@ -102,6 +102,11 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		if rtErr != nil {
 			return nil, fmt.Errorf("default runtime options: %w", rtErr)
 		}
+		authzOpt, authzErr := primaryAuthorizerOption(cells)
+		if authzErr != nil {
+			return nil, fmt.Errorf("primary authorizer wiring: %w", authzErr)
+		}
+		opts = append(opts, authzOpt)
 		return opts, nil
 	}
 
