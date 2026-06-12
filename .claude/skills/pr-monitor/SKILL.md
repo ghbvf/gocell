@@ -1,369 +1,201 @@
 ---
 name: pr-monitor
-description: "Claude 自动循环等待 fix 侧：ScheduleWakeup 驱动的 in-session PR 状态监控，human-in-loop 可随时中断。默认 report 模式（#1657，仅观察+提示）；auto 模式（#1663）在 Cx1-only + IN_SCOPE + ≤2 文件 + 非 kernel/migration/bootstrap/并发边界内自动调用 /fix。路由依据为 PR label（非 block 字段）。在 pr-status/ready 或 PR 关闭时自动终止。"
+description: "PR 状态单 tick 检查器：观察一个 PR 的 review/check 进展并按 label 路由。默认 report 模式（#1657，仅观察+窗口提示）；auto 模式（#1663）在机器可判定的 Cx1-only + needs-fix + 未熔断 时 dispatch /fix，文件级/禁止域安全裁决交由 /fix 自己的 [AUTO-FIX] 门把关。由 `/loop <interval> /pr-monitor <PR#>` 简单 loop 驱动（每 tick 无状态，只读 label + 机器块）；human-in-loop 可随时中断。pr-status/ready 或 PR 关闭时报告终止。"
 argument-hint: "<PR#> [--mode report|auto] [--fix-engine claude|codex] [--role fix|review]"
 allowed-tools: [Bash, Read, Skill, Agent]
 disable-model-invocation: true
 ---
 
-# pr-monitor — Claude 自动循环等待（fix 侧）
+# pr-monitor — PR 状态单 tick 检查器（fix 侧）
 
-> **适用场景**：需要 Claude in-session 持续监控一个 PR，观察 review findings 并在满足条件时自动（或提示人工）调用 `/fix`。
-> 由 `/loop` 用户指令触发，或由 `ship/fix` 完成钩子调用。
+> **适用场景**：ship/fix 推完 PR 后，持续观察 review/check 侧进展，在满足条件时自动（或提示人工）调用 `/fix`。
 >
-> **loop 原语**：`ScheduleWakeup(seconds)`，clamps [60, 3600]。tick 状态（pr / cursor / tickCount / mode / fixEngine）由 host LLM 在 ScheduleWakeup wakeup payload 中 tick-to-tick 携带，**不写文件**。
+> **loop 模型（简单）**：本技能是**无状态单 tick**——每次调用只做一次检查就返回。循环交给内建 `/loop` 原语：
+> `/loop 30m /pr-monitor <PR#>` 每 30min 重放同一行命令再调用一次（flag 随命令行原样保留，无需跨 tick 携带状态）。
+> **不自己调 ScheduleWakeup、不携带 tick payload、不写文件**——每 tick 的状态全部从 PR 实时读取（label + 最新机器块）。
+> human-in-loop 全程在场，可随时 Ctrl-C 停 `/loop`。
+>
+> **如何启动**：用户运行 `/loop 30m /pr-monitor <PR#>`（ship/fix 收尾时会打印这行建议）。单次 `/pr-monitor <PR#>` 也合法——只做一次检查就返回。
 
 ---
 
 ## §0 角色与边界
 
-**loop substrate**：Claude in-session ScheduleWakeup 自踏步（human 全程在场，可随时 Ctrl-C 中断）。
+**主要角色**：fix 侧监控（默认）；`--role=review` 时切到 review 侧（见 §4）。
 
-**主要角色**：fix 侧监控（默认）；`--role=review` 时切换为 review 侧（见 §7）。
+**engine knob**：`--fix-engine`（`claude|codex`）选 **fix 侧**引擎，与 codex-pr-router 的 `GOCELL_ROUTER_REVIEW_ENGINE`（review 侧引擎）是**两个独立轴**，不混用。
 
-**engine knob 说明**：`--fix-engine` 选择 **fix 侧**引擎（`claude|codex`）——这是与 codex-pr-router 的 `GOCELL_ROUTER_REVIEW_ENGINE`（review 侧引擎）**完全独立的两个轴**，不要混用或合并。
+**路由依据**：所有分支判定基于 **PR label**（`gh pr view <N> --json state,labels`），不基于机器块 `next.agent`（block 字段仅供 §3.3 熔断判定参考）。
 
-**路由依据**：所有分支判定基于 **PR label**（`gh pr view <N> --json labels,state`），**不基于** block 字段中的 `next.agent`（block 字段仅供 §6.3 熔断判定参考）。
-
-### 两种模式
-
-| 模式 | Issue | 行为 |
-|------|-------|------|
-| **report**（默认） | #1657 | 仅观察 + 窗口打印，不自动执行任何修改，不切 label，不调 /fix |
-| **auto** | #1663 | 在 §6.4 全部条件成立时自动 in-session 调用 /fix；其余情况仍只报告 |
-
-**report 模式绝不做**：不写代码、不切 label、不贴评论、不调 `/fix`。
+| 模式 | 行为 |
+|------|------|
+| **report**（默认，#1657） | 仅观察 + 窗口打印，**绝不**写代码 / 切 label / 贴评论 / 调 /fix |
+| **auto**（#1663） | §3.4 全部条件成立时自动 in-session 调 /fix；其余仍只报告 |
 
 ---
 
 ## §1 输入解析
 
 ```bash
-# PR 号：strip 前导 '#', 断言为正整数
-PR="${1#\#}"
-[[ "$PR" =~ ^[0-9]+$ ]] || { echo "error: invalid PR number: $1"; exit 1; }
-
-# flag defaults
-MODE="report"        # report | auto
-FIX_ENGINE="claude"  # claude | codex
-ROLE="fix"           # fix | review
-
-# 解析剩余参数
-shift
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --mode=*)      MODE="${1#--mode=}" ;;
-    --fix-engine=*) FIX_ENGINE="${1#--fix-engine=}" ;;
-    --role=*)      ROLE="${1#--role=}" ;;
-    *)             echo "unknown flag: $1" >&2; exit 1 ;;
-  esac
-  shift
-done
+PR="${1#\#}"; [[ "$PR" =~ ^[0-9]+$ ]] || { echo "error: invalid PR number: $1"; exit 1; }
+MODE=report; FIX_ENGINE=claude; ROLE=fix        # flag 默认值（每 tick 重解析）
+shift; while [[ $# -gt 0 ]]; do case "$1" in
+  --mode=*)       MODE="${1#--mode=}" ;;
+  --fix-engine=*) FIX_ENGINE="${1#--fix-engine=}" ;;
+  --role=*)       ROLE="${1#--role=}" ;;
+  *) echo "unknown flag: $1" >&2; exit 1 ;;
+esac; shift; done
 ```
 
-**PR 存在性验证**：
-
-```bash
-gh pr view "$PR" --json number,state,labels \
-  || { echo "error: PR #$PR not found or gh auth failed"; exit 1; }
-```
+> flag 在每个 `/loop` tick 重新解析（`/loop` 把同一行命令原样重放），不依赖跨 tick payload。
 
 ---
 
-## §2 游标初始化
+## §2 每 tick 逻辑（顶层控制流）
 
-**首次 tick**：cursor = 当前所有评论中 `created_at` 的最大值（这样启动我们的 ship/fix 评论本身不会被当作新 findings 重复触发）。
+每次 `/pr-monitor` 调用（= 一个 `/loop` tick）按序执行，做完即返回：
 
-> 注意：`gh api repos/.../issues/<N>/comments` REST 端点返回 **snake_case** 字段（`created_at`），
-> 而 `gh pr view --json comments` 返回 camelCase（`createdAt`）。这里统一使用前者，
-> cursor 初始化和 §3 过滤器均使用 `created_at`。
-
-```bash
-# 初始化 cursor（首 tick 时执行）
-CURSOR=$(gh api repos/ghbvf/gocell/issues/${PR}/comments \
-  --jq '[.[].created_at] | max // ""')
-TICK_COUNT=0
-```
-
-**Tick 载荷**（ScheduleWakeup wakeup payload 中携带；结构由 host LLM 在每次调度时维护）：
-
-```json
-{
-  "pr": "<PR#>",
-  "cursor": "<ISO8601 timestamp>",
-  "tickCount": 0,
-  "mode": "report|auto",
-  "fixEngine": "claude|codex",
-  "role": "fix|review"
-}
-```
-
-> `role` 必须随 payload 携带，否则重唤醒后 `--role` 丢失，loop 会静默回退为默认 fix 角色。
-
----
-
-## §3 每 tick 逻辑（顶层控制流）
-
-每次 ScheduleWakeup 唤醒后按以下顺序执行：
-
-1. 读取 PR 当前状态（一次 gh 调用）：
-
+1. **读 PR 状态（一次 gh，兼存在性校验）**：
    ```bash
-   STATE=$(gh pr view "$PR" --json state,labels,comments \
-     --jq '{state:.state, labels:[.labels[].name], commentCount:(.comments|length)}')
+   STATE=$(gh pr view "$PR" --json state,labels --jq '{state:.state, labels:[.labels[].name]}') \
+     || { echo "error: PR #$PR not found / gh auth failed"; exit 1; }
    ```
+2. **§3.1 终止检查**（优先；命中即打印结束语并返回，提示用户停 `/loop`）。
+3. 按 `$ROLE` 分支：`--role=review` → §4；否则按 `$MODE` → report（§3.2）或 auto（§3.3-3.7）。
+4. 返回（**不调 ScheduleWakeup**）；下一 tick 由 `/loop` 调度。
 
-2. **§4 终止检查**（优先，发现终止条件即停，不继续）
-3. 拉取增量评论（`createdAt > cursor`，仅信任来源）：
-
-   ```bash
-   NEW_COMMENTS=$(gh api repos/ghbvf/gocell/issues/${PR}/comments \
-     --jq --arg cur "$CURSOR" \
-     '[.[] | select(.created_at > $cur and
-       (.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") and
-       (.body | test("pm:pr-review|pm:fix|codex review")))]')
-   ```
-
-4. 推进 cursor = 最新评论 `createdAt`（若 `NEW_COMMENTS` 非空）
-5. 按 `$ROLE` / `$MODE` 分支：`--role=review` → §7；否则按 `$MODE` → §5（report）或 §6（auto）
-6. 递增 `TICK_COUNT`；`ScheduleWakeup(1800)` 调度下次 tick（终止条件已在步骤 2 中止）；
-   wakeup payload 携带 `{pr, cursor, tickCount, mode, fixEngine, role}` 全部字段（见 §2），
-   确保 `role` 在每次 re-entry 时正确恢复。
+> **无 cursor / 无时间戳追增量**：「有无待修 findings」由 **label + 最新机器块**判定（§3.2/§3.3）——`pr-status/needs-fix` 在即「review 给了结论待修」，幂等可重报，不怕 `/loop` 重放。
 
 ---
 
-## §4 终止条件（任一成立即停，不再 ScheduleWakeup）
+## §3 fix 侧逻辑
+
+### §3.1 终止条件（命中即报告结束，提示停 `/loop`）
 
 | 条件 | 判定 | 窗口输出 |
 |------|------|---------|
-| `pr-status/ready` 在 label 中 | `echo $LABELS \| grep pr-status/ready` | "PR #N 已 ready，监控结束" |
-| PR 状态 != OPEN | `state != "OPEN"` | "PR #N 已关闭（state=$STATE），监控结束" |
-| tickCount >= 48（约 24h） | `[[ $TICK_COUNT -ge 48 ]]` | "监控超时（48 ticks ~24h），请人工检查 PR #N" |
-| §6.3 熔断触发 | `cycle.exhausted == true` or round >= 3 | 见 §6.3 |
+| `pr-status/ready` ∈ labels | label 含 | "✅ PR #N 已 ready，监控可结束——请停止 /loop" |
+| PR state != OPEN | `state != "OPEN"` | "PR #N 已关闭（state=$STATE），请停止 /loop" |
+| §3.3 熔断触发 | block `cycle.exhausted` / round≥3 | 见 §3.3 |
 
-> **auto /fix 触发（§6.4）不是终止条件**：/fix 完成后 loop 切换到等待 `--check` 结论（`pr-status/needs-check-fix`），继续 ScheduleWakeup。终止只在上表条件之一成立时发生。
+> 无 tickCount / 48-tick 超时——human 全程在场，ready/closed 是唯一正常出口；嫌久直接停 `/loop`。
 
----
+### §3.2 report 模式（默认）
 
-## §5 report 模式（#1657，默认）
+读最新机器块判定有无待修 findings（**不 text-scrape 评论体**）：
 
-**每 tick 逻辑**：
+```bash
+BLOCK=$(bash hack/automation/pr-meta.sh extract "$PR" 2>/dev/null) || BLOCK=""
+```
 
 ```
-if pr-status/needs-fix IN labels AND NEW_COMMENTS 非空 AND 含 findings marker:
-    → STOP loop（不再 ScheduleWakeup）
-    → 窗口打印 to-fix 清单（见下）
-    → 提示人工运行: /fix <N>
+if pr-status/needs-fix ∈ labels:
+    → 窗口打印 to-fix 摘要（从 BLOCK 的 findings.byCx 取 Cx 计数；
+       逐条明细见 PR 上最新 pm:pr-review 评论的 <details>）
+    → 提示人工：/fix <N>
 else:
-    → 窗口打印: "tick $TICK_COUNT — PR #N 无新 findings，下次检查 in ~30min"
-    → ScheduleWakeup(1800)
+    → 窗口打印："tick — PR #N 无待修 label，下次检查由 /loop 调度"
 ```
 
-**findings 清单提取**（text-scrape 最新 pm:pr-review `<details>` Finding 行）：
+> report 模式到此停。不写代码、不切 label、不贴评论。findings 明细不再 `grep -oP` 抓评论体——读结构化机器块，或让用户点开 PR 最新 pm:pr-review 评论。
+
+### §3.3 熔断判定（auto 模式；任一成立 → 不 dispatch，报告熔断）
 
 ```bash
-# 从最新 findings 评论提取 Finding 行（格式：**F1** [P1·Cx2] `path/to/file.go:120` — ...）
-LATEST_REVIEW=$(echo "$NEW_COMMENTS" | jq -r '.[-1].body // ""')
-echo "$LATEST_REVIEW" | grep -oP '\*\*F\d+\*\*[^\n]*`[^`]+:\d+`[^\n]*' || \
-echo "$LATEST_REVIEW" | grep -oP '\*\*F\d+\*\*[^\n]*'
+BLOCK=$(bash hack/automation/pr-meta.sh extract "$PR" 2>/dev/null); EC=$?
+# EC=0 有效 fresh block → 读 findings.byCx / cycle.exhausted / next.agent
+# EC=2 无 block / EC=3 stale → 用 round 兜底
+ROUND=$(bash hack/automation/pr-meta.sh round "$PR" 2>/dev/null || echo 0)
 ```
 
-> 旧 pattern `\bfile:line\b` 匹配字面字符串 "file:line"，永不命中真实 Finding 行（Finding 行
-> 格式为 `` **F1** [Cx1] `path/to/file.go:42` — 描述 ``）。新 pattern 先匹配带有
-> `` `path:lineno` `` 的 bold-F 行，fallback 匹配所有 bold-F 前缀行。
+熔断条件：block `cycle.exhausted == true`，或 block `next.agent == "human"`，或 `ROUND >= 3`（maxRounds）。
+命中 → 窗口打印 "PR #N 熔断：review↔fix 已达 3 轮上限，转人工处理（`gh pr view <N> --web`）"，返回（请用户停 `/loop`）。
 
-**窗口打印格式**：
+### §3.4 Claude 自动 /fix 触发（dispatch 门 = 机器可判定条件）
 
-```
-PR #<N> — 需要修复（pr-status/needs-fix）
-新 findings（来自 <评论 URL>）：
-  F1 [Cx1] cells/foo/bar.go:42 — <描述>
-  F2 [Cx2] ...
-建议：/fix <N>
-（report 模式；如需自动修复请以 --mode=auto 重启 pr-monitor）
-```
+pr-monitor 只凭**机器可判定**的事实（label + 最新机器块）决定是否 dispatch `/fix`；**文件级 / 禁止域安全裁决在 dispatch 之后由 `/fix` 自己的 [AUTO-FIX] 门把关**（fix §3.4——它能读 `git diff --name-only` + 逐个 finding 文件，pr-monitor 读不到）。
 
-> report 模式到此停止。不写任何代码，不切 label，不贴评论。
-
----
-
-## §6 auto 模式（#1663 — "Auto fix 改为 Claude 自动循环等待"）
-
-### §6.1 CI 判定
-
-```bash
-gh pr checks "$PR" --json name,bucket \
-  | jq -r '.[] | select(.bucket=="fail") | .name'
-```
-
-若有失败 check：窗口打印失败列表 + "CI 修复是 producer 的 inline job；pr-monitor 仅报告，不自动 /fix CI"。**不调 /fix 修 CI**（决策 4：CI fix 由 producer 负责）。继续 ScheduleWakeup 等待 CI 恢复。
-
-### §6.2 冲突判定（复用 issues B5）
-
-```bash
-MERGEABLE=$(gh pr view "$PR" --json mergeable,mergeStateStatus \
-  | jq -r '.mergeable')
-```
-
-若 `MERGEABLE == "UNKNOWN"`：轮询（最多 5 次，间隔 10s）直到落定。
-
-若 `MERGEABLE == "CONFLICTING"` 或 `mergeStateStatus == "DIRTY"`：
-
-```bash
-# 解冲突（在 PR 的已有 dev worktree 中执行；不新建 worktree）
-# 优先复用 codex-pr-router 管理的 worktree（若 pr-monitor 在其中运行）；
-# 否则查找 PR 分支对应的已有 dev worktree。
-HEAD_REF=$(gh pr view "$PR" --json headRefName --jq .headRefName)
-WT_PATH=$(git worktree list --porcelain | awk -v b="$HEAD_REF" '
-  /^worktree / { wt=$2 }
-  /^branch / && $2 == "refs/heads/"b { print wt; exit }
-')
-if [[ -z "$WT_PATH" ]]; then
-  echo "pr-monitor: no existing worktree for branch $HEAD_REF; please resolve conflict manually" >&2
-else
-  git -C "$WT_PATH" fetch origin && \
-    git -C "$WT_PATH" merge origin/develop --no-edit && \
-    git -C "$WT_PATH" push
-fi
-```
-
-解冲突后回 §6.2 重检。若无已有 worktree 可用：窗口打印冲突 + 建议人工解决（不新建 worktree，避免与 router 或已有 dev worktree 命名冲突）。
-
-### §6.3 findings 消费 + 熔断判定
-
-**优先用机器块**：
-
-```bash
-BLOCK=$(bash hack/automation/pr-meta.sh extract "$PR" 2>/dev/null)
-EXIT_CODE=$?
-# exit 0 → 有效 fresh block → 解析 byCx / cycle.exhausted / next.agent
-# exit 3 → stale block → 降级 text-scrape
-# exit 2 → 无 block → 降级 text-scrape
-```
-
-**熔断判定**（任一成立则不 dispatch，报告熔断）：
-
-- `cycle.exhausted == true`（block 字段）
-- `next.agent == "human"`（block 字段）
-- text-scrape fallback 时：`bash hack/automation/pr-meta.sh round "$PR"` >= 3（maxRounds）
-
-窗口打印：
-
-```
-PR #<N> 熔断：review↔fix 已达 3 轮上限，转人工处理。
-建议：gh pr view <N> --web
-```
-
-停止 loop（终止，不 ScheduleWakeup）。
-
-### §6.4 Claude 自动 /fix 触发条件（全部成立才触发）
-
-| 条件 | 判定方法 |
+| dispatch 门（全部机器可判定，全部成立才 dispatch） | 判定方法 |
 |------|---------|
-| `pr-status/needs-fix` 在 label 中 | label check |
-| 有新 findings 评论（createdAt > cursor） | `NEW_COMMENTS` 非空 |
-| 未熔断 | §6.3 通过 |
-| **Cx1-only**：block `findings.byCx.cx2 == 0 && cx3 == 0 && cx4 == 0` 且 `cx1 > 0`；text-scrape fallback：finding 标签全为 `[Cx1]` | block 或 text-scrape |
-| **IN_SCOPE**：finding 文件在 PR diff 中 | `gh pr diff $PR --name-only` |
-| **≤2 文件**：受影响文件数 ≤ 2 | count diff files |
-| **非禁止域**：不触及 kernel 接口/migration/bootstrap 初始化/并发语义 | 检查文件路径（kernel//*.go 且改导出接口；*/migrations/*.sql；bootstrap/run*.go；含 sync/atomic/channel send 的文件） |
+| `pr-status/needs-fix` ∈ labels | label check |
+| 未熔断 | §3.3 通过 |
+| **Cx1-only** | block `findings.byCx`：cx2 == 0 ∧ cx3 == 0 ∧ cx4 == 0 ∧ cx1 > 0 |
 
-参照 fix §3.4 [AUTO-FIX] 边界 + §不可自动执行清单：并发语义变更、接口签名修改、新依赖、数据流方向变更、Cx2+ 均**不可自动执行**。
+> **为什么 dispatch 门不查 IN_SCOPE / ≤2 文件 / 禁止域**：这些是**文件级**事实，机器块只有 `findings.byCx` 聚合计数（无文件清单），pr-monitor 读不到——而本技能全程不 text-scrape 评论体（§3.2/§3.5）。把读不到的事实写进门只会是**不可执行的门禁**。它们改由 `/fix` 在 dispatch 后强制：fix §3.4 [AUTO-FIX] 只对 `IN_SCOPE + ≤2 文件 + 不改 kernel 接口/migration/bootstrap` 直接改，fix §不可自动执行清单挡下并发语义 / 接口签名 / 新依赖 / 数据流 / Cx2+；越界者 fix 自己降级为 surface + 建议人工，不会自动改。**端到端「能否自动改」= 此处 Cx1-only 机器门 ∧ fix 侧文件级门**，缺一不放行。
 
-**当 `--fix-engine=claude`（默认）且全部条件成立**：
+**`--fix-engine=claude`（默认）且 dispatch 门全部成立** → host LLM in-session 调用：
 
 ```
-# host LLM in-session 调用（via Skill 工具）
 Skill("fix", args="<N>")
 ```
 
-fix 完成后会贴 pm:fix + 切 `pr-status/needs-check-fix`。继续 ScheduleWakeup 等待 `/pr-review --check` 结果。
+> auto 模式的 `Skill("fix")` 是 **human-approved loop 内**的自动操作——用户已显式 `--mode=auto` 启动 `/loop`，非无监督自主执行；且经 dispatch 门（needs-fix / 未熔断 / Cx1-only）+ fix 侧文件级门双重收窄。
 
-### §6.5 Cx2 → 不自动修（输出 backlog draft）
+fix 会贴 pm:fix + 切 `pr-status/needs-check-fix`；下个 `/loop` tick 继续等 `/pr-review --check` 结论（非终止）。
 
-若 block/text-scrape 显示有 Cx2 findings（且无 Cx1 可独立处理）：
+### §3.5 不自动修的情况（报告 + 建议人工，不 AskUserQuestion）
 
-窗口打印：
+- **Cx2+**：窗口打印 "PR #N 含 Cx2+ findings，不自动修（决策 3：Cx1 proven 后再开放 Cx2 auto-fix）。建议人工 /fix <N>"。
+  **不再打印 backlog 草稿**——OOS finding 的建 issue 已由 `/fix` 自动完成（pm:oos 自动建 issue + 回填 #N，见 fix 4.6 step 3）。
+- **Cx3+/kernel/migration/并发语义**：同样报告 + "建议人工 /fix"（Cx3+ 需人工决策，fix §3.1）。
 
-```
-PR #<N> 含 Cx2 findings，不自动修复（决策 3：Cx1 proven 后再开放 Cx2 auto-fix）。
-建议人工: /fix <N>
+### §3.6 冲突解（auto 模式；复用 issues B5）
 
-backlog issue draft（Cx2 follow-up）:
-gh issue create \
-  --label backlog --label pri-p2 --label area-<XX> --label type-fu --label cx-2 \
-  --title "[#<N>] Cx2 finding follow-up: <简述>" \
-  --body-file <填好的 .github/project-template/backlog.md>
+```bash
+MERGEABLE=$(gh pr view "$PR" --json mergeable,mergeStateStatus --jq '.mergeable')
 ```
 
-对 Cx3+/kernel/migration/并发：同样报告 + "建议人工 /fix"，不输出 backlog draft（Cx3+ 需人工决策，fix §3.1）。
+`UNKNOWN` → 轮询（≤5 次，间隔 10s）落定。`CONFLICTING` / `mergeStateStatus==DIRTY` → 在 PR 的**已有** dev worktree 内解（不新建，避免与 router 命名冲突）：
 
-### §6.6 engine-knob: `--fix-engine=codex`
+```bash
+HEAD_REF=$(gh pr view "$PR" --json headRefName --jq .headRefName)
+WT_PATH=$(git worktree list --porcelain | awk -v b="$HEAD_REF" \
+  '/^worktree / {wt=$2} /^branch / && $2 == "refs/heads/"b {print wt; exit}')
+if [[ -n "$WT_PATH" ]]; then
+  git -C "$WT_PATH" fetch origin && git -C "$WT_PATH" merge origin/develop --no-edit && git -C "$WT_PATH" push
+else
+  echo "pr-monitor: 无 PR 分支对应的已有 worktree，请人工解冲突" >&2
+fi
+```
 
-当 `--fix-engine=codex`：pr-monitor 不在 session 内调用 /fix。
+解完下个 tick 回 §3.1 重检。
 
-行为：确认 PR 需要 `ai/local-fix` label：
+### §3.7 engine-knob：`--fix-engine=codex`
+
+不在 session 内调 /fix。确认 PR 需 `ai/local-fix` label：
 
 ```bash
 gh pr edit "$PR" --add-label ai/local-fix
 ```
 
-窗口打印：
-
-```
-PR #<N> 已贴 ai/local-fix label，等待 codex-pr-router daemon（Batch 4）处理。
-pr-monitor 继续监控，不在 session 内运行 /fix。
-```
-
-继续 ScheduleWakeup 等待 daemon 处理后的状态变更。
-
-### §6.7 终止扩展：连续安静 ticks
-
-在 `pr-status/ready` 出现前，若连续 N（≈ 2-3）个 tick 无新 findings 且无 label 变化，不提前终止——继续等待（ready 才是唯一正常出口）。超时兜底见 §4（48 ticks）。
+窗口打印 "PR #N 已贴 ai/local-fix，等待 codex-pr-router daemon 处理"；下个 `/loop` tick 继续等 daemon 后的状态变更。
 
 ---
 
-## §7 alternate review 能力（`--role=review`）
+## §4 alternate review 能力（`--role=review`）
 
-当 `--role=review`：
+review 角色 in-session 跑 `/pr-review`（Claude review 引擎）：
 
 ```bash
-# Claude engine（默认）
 claude -p "/pr-review $PR"
 ```
 
-`--fix-engine=codex` 时：**不**在 session 内跑 `/fix`，改由 codex-pr-router daemon 的 gated workspace-write 路径接管（daemon 轮询 `pr-status/needs-fix` ∧ `ai/local-fix`）。pr-monitor 只确认 PR 已带 `pr-status/needs-fix`（本就是把我们带到此处的触发标，**不切 needs-review-again** —— 那会错误路由回 review 侧），并提示「需贴 `ai/local-fix` label 该 PR 才会被 daemon 接管」，然后继续 loop 等 codex `--check` 结论。
+> `--fix-engine` 是 **fix 侧**引擎 knob（§0），**不作用于 review 角色**——review/fix 是两个独立轴（§0「不混用」），review 角色不读 `--fix-engine`。需要 **codex 引擎做 review** 时，那是 codex-pr-router daemon 的 review phase 职责：daemon 轮询 `pr-status/needs-review-again`、引擎由 router 的 `GOCELL_ROUTER_REVIEW_ENGINE` 选（见 `hack/automation/codex-pr-router/README.md` Role×Engine Matrix），**不经 pr-monitor flag**。`ai/local-fix` 是 **fix phase 专属** label（`pr-status/needs-fix` + `ai/local-fix`），review 角色**绝不**贴它——贴了就把 review 错误路由进 fix daemon（正是本轴交叉要禁止的）。
 
-review 结果由 /pr-review 技能贴评论 + 切 label，pr-monitor 继续 loop 等待 fix 侧响应。
+review 结果由 /pr-review 贴评论 + 切 label；下个 `/loop` tick 继续等 fix 侧响应。
 
 ---
 
-## §8 沟通规则
+## §5 沟通规则
 
 **窗口打印是主输出**；pr-monitor 自身不贴 PR 评论（贴评论是 /fix 或 /pr-review 的职责）。
 
 | 模式 | 允许的副作用 |
 |------|------------|
 | report | 无（只读 + 窗口打印） |
-| auto | §6.4 满足时调 Skill("fix")；§6.2 冲突时 git merge + push；§6.6 时贴 ai/local-fix label |
+| auto | §3.4 满足时 `Skill("fix")`；§3.6 冲突时 git merge + push；§3.7 贴 `ai/local-fix` label |
+| `--role=review` | §4 调 `claude -p "/pr-review"`；review 贴 pm:pr-review 评论 + 切 label 由 /pr-review 完成（非 pr-monitor 自身） |
 
-**label 切换**：pr-monitor 不直接切 `pr-status/*`（由 /fix 或 /pr-review 完成）。唯一例外：§6.6 贴 `ai/local-fix`。
+**label 切换**：pr-monitor 不直接切 `pr-status/*`（由 /fix 或 /pr-review 完成）。唯一例外：§3.7 贴 `ai/local-fix`。
 
 **不自动处理**的情况统一报告 + 建议人工命令，不 AskUserQuestion（human-in-loop 已在场）。
-
----
-
-## 附：tick wakeup payload 示例
-
-```json
-{
-  "pr": "1234",
-  "cursor": "2026-06-07T10:30:00Z",
-  "tickCount": 3,
-  "mode": "auto",
-  "fixEngine": "claude",
-  "role": "fix"
-}
-```
-
-host LLM 在每次 ScheduleWakeup 调度时将上述 JSON 作为 wakeup payload 传入，唤醒后从 payload 恢复状态，继续 §3 逻辑。

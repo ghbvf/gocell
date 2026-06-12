@@ -106,6 +106,18 @@ MARKER = "gocell-pr-meta:v1"
 BLOCK_RE = re.compile(r"<!--\s*gocell-pr-meta:v1\s+([A-Za-z0-9+/=]+)\s*-->")
 MAX_ROUNDS = 3  # sealed circuit-breaker ceiling; producer facts cannot raise it
 DERIVED_KEYS = ("schema", "next", "idempotencyKey")  # cycle.maxRounds/exhausted also derived
+# OOS disposition funnel: every pm:oos items[] entry must carry exactly one of a
+# filed `issue` ref XOR a closed-enum `deferred` reason. Declared in the schema
+# (oos.items.oneOf) and enforced in validate_kind_facts on BOTH emit and decode,
+# golden-locked by do_selftest — so an item with NEITHER disposition is
+# unrepresentable on the wire (emit-block exits 1; decode drops the block). That
+# makes "silently dropping an OOS finding" a Hard, machine-rejected state, and
+# the closed enum keeps the defer escape hatch bounded (no free-text bypass).
+# Honest scope: the funnel guarantees a disposition is PRESENT, not that it is
+# CORRECT — that `issue` resolves to a real filed issue, or that the backlog
+# labels were derived right, is the ship/fix skill's responsibility and is NOT
+# machine-verified here (that part stays skill-side).
+OOS_DEFERRED_REASONS = ("pri-p0-incident", "labels-underivable")
 ZERO_FINDINGS = {
     "total": 0, "fixed": 0, "unresolved": 0, "blocking": 0,
     "byP": {"p0": 0, "p1": 0, "p2": 0, "p3": 0},
@@ -149,9 +161,10 @@ def type_ok(obj, t):
 
 # validate is a bounded recursive validator covering exactly the JSON Schema
 # keywords pr-meta.v1.json uses (type/const/enum/pattern/minLength/minimum/
-# required/properties/additionalProperties). The schema file stays the single
-# source of truth — this walker reads it, it does not hard-code field lists.
-# Array items are validated recursively when the schema has type:array + items.
+# required/properties/additionalProperties/oneOf). The schema file stays the
+# single source of truth — this walker reads it, it does not hard-code field
+# lists. Array items are validated recursively when the schema has
+# type:array + items; oneOf requires exactly one matching branch.
 def validate(obj, schema, path="$"):
     errs = []
     if "const" in schema:
@@ -166,6 +179,13 @@ def validate(obj, schema, path="$"):
     if t is not None and not type_ok(obj, t):
         errs.append("%s: expected type %r, got %s" % (path, t, type(obj).__name__))
         return errs
+    if "oneOf" in schema:
+        # Exactly one branch must match. Used by oos.items to declare the
+        # issue-XOR-deferred disposition in the schema itself (so the constraint
+        # has a schema single source, not only the Python validate_kind_facts).
+        matched = sum(1 for sub in schema["oneOf"] if not validate(obj, sub, path))
+        if matched != 1:
+            errs.append("%s: matched %d oneOf branches, expected exactly 1" % (path, matched))
     if isinstance(obj, dict):
         props = schema.get("properties", {})
         for req in schema.get("required", []):
@@ -222,10 +242,30 @@ def derive_next(verdict, exhausted):
         return {"agent": "human", "command": None, "sandbox": False,
                 "triggerLabel": None, "requiresSameHeadSha": False}
     if verdict == "oos-filed":
-        # Drafts staged for human `gh issue create`; no auto-filer.
+        # Findings auto-filed as backlog issues by ship/fix (the funnel requires
+        # each item carry a filed issue ref or an explicit deferred reason).
+        # Terminal: filed issues go to human backlog triage, no auto-dispatch.
         return {"agent": "human", "command": None, "sandbox": False,
                 "triggerLabel": None, "requiresSameHeadSha": False}
     raise ValueError("unknown verdict %r" % verdict)
+
+
+def _check_oos_items(items, ctx):
+    """Reject a pm:oos items[] list unless every entry is dispositioned — exactly
+    one of a non-empty filed `issue` ref or a closed-enum `deferred` reason
+    (OOS_DEFERRED_REASONS). Called on emit (derive_facts/derive) and decode
+    (derive via facts_of), so the Hard funnel holds in both directions."""
+    if not isinstance(items, list) or not items:
+        raise ValueError("%s requires non-empty oos.items facts" % ctx)
+    for i, it in enumerate(items):
+        if not isinstance(it, dict):
+            raise ValueError("%s oos.items[%d] must be an object" % (ctx, i))
+        has_issue = isinstance(it.get("issue"), str) and it.get("issue") != ""
+        has_deferred = it.get("deferred") in OOS_DEFERRED_REASONS
+        if has_issue == has_deferred:
+            raise ValueError(
+                "%s oos.items[%d] requires exactly one of filed `issue` or "
+                "`deferred` %r" % (ctx, i, list(OOS_DEFERRED_REASONS)))
 
 
 def validate_kind_facts(obj):
@@ -249,9 +289,7 @@ def validate_kind_facts(obj):
         oos = obj.get("oos")
         if not isinstance(oos, dict):
             raise ValueError("kind oos requires explicit oos facts")
-        items = oos.get("items")
-        if not isinstance(items, list) or not items:
-            raise ValueError("kind oos requires non-empty oos.items facts")
+        _check_oos_items(oos.get("items"), "kind oos")
     if kind != "ci" and obj.get("ci") is not None:
         raise ValueError("kind %s must not carry ci facts" % kind)
     if kind != "oos" and obj.get("oos") is not None:
@@ -356,9 +394,7 @@ def derive_facts(minimal):
         oos = minimal.get("oos")
         if not isinstance(oos, dict):
             raise ValueError("derive_facts: kind oos requires explicit oos facts")
-        items = oos.get("items")
-        if not isinstance(items, list) or not items:
-            raise ValueError("derive_facts: kind oos requires non-empty oos.items facts")
+        _check_oos_items(oos.get("items"), "derive_facts: kind oos")
 
     # verdict
     if kind in FIXED_VERDICT_BY_KIND:
@@ -530,9 +566,9 @@ def do_selftest(schema):
     # selftest rather than printing "OK (N checks)" with a lower-than-expected N.
     # Update this constant whenever a check is added or removed. Breakdown:
     #   9 round-trip + 2 five-state + 4 schema-reject + 4 forgery + 1 incoherent
-    #   + 1 oos-array + 1 ci-array + 2 exhausted + 22 emitblock-derive
-    #   + 5 kind-coverage + 9 kind-facts-contract = 60
-    EXPECTED_CHECKS = 60
+    #   + 1 oos-array + 1 ci-array + 2 exhausted + 18 emitblock-derive
+    #   + 5 kind-coverage + 13 kind-facts-contract + 5 oos-disposition = 65
+    EXPECTED_CHECKS = 65
 
     checks = 0
     failures = []
@@ -594,6 +630,7 @@ def do_selftest(schema):
                         "fileLine": "path/to/file.go:1",
                         "rootCause": {"code": "c", "arch": "a", "history": "h"},
                         "solutionSeeds": {"minimal": "m", "thorough": "t", "refactor": "r"},
+                        "issue": "#1234",
                     }
                 ]}
             facts = _make_facts(kind, phase, verdict, rnd=1, **extra)
@@ -731,9 +768,11 @@ def do_selftest(schema):
         facts["oos"] = {
             "items": [
                 {
-                    # "fileLine" is required but intentionally omitted
+                    # "fileLine" is required but intentionally omitted; a valid
+                    # disposition (issue) isolates the failure to the missing key.
                     "rootCause": {"code": "c", "arch": "a", "history": "h"},
                     "solutionSeeds": {"minimal": "m", "thorough": "t", "refactor": "r"},
+                    "issue": "#1",
                 }
             ]
         }
@@ -827,6 +866,7 @@ def do_selftest(schema):
                 "fileLine": "path/to/file.go:1",
                 "rootCause": {"code": "c", "arch": "a", "history": "h"},
                 "solutionSeeds": {"minimal": "m", "thorough": "t", "refactor": "r"},
+                "issue": "#1234",
             }
         ]}))
         assert_eq("emitblock/oos/phase", f["phase"], "review")
@@ -891,6 +931,7 @@ def do_selftest(schema):
                         "fileLine": "path/to/file.go:1",
                         "rootCause": {"code": "c", "arch": "a", "history": "h"},
                         "solutionSeeds": {"minimal": "m", "thorough": "t", "refactor": "r"},
+                        "issue": "#1234",
                     }
                 ]}
             if k == "pr-review":
@@ -922,6 +963,73 @@ def do_selftest(schema):
     assert_raises("emitblock/reject/oos-no-oos", lambda: derive_facts(_minimal("oos", 0)))
     assert_raises("emitblock/reject/oos-empty-items",
                   lambda: derive_facts(_minimal("oos", 0, oos={"items": []})))
+
+    # ------------------------------------------------------------------
+    # 10. OOS disposition funnel (Hard): every items[] entry must carry exactly
+    # one of a filed `issue` ref XOR a closed-enum `deferred` reason. A pm:oos
+    # block that silently drops a finding (neither) or is ambiguous (both) is
+    # rejected on both emit and decode — ship/fix cannot post pm:oos without
+    # having filed or explicitly deferred each finding.
+    # ------------------------------------------------------------------
+
+    def _oos_item(**over):
+        it = {
+            "fileLine": "path/to/file.go:1",
+            "rootCause": {"code": "c", "arch": "a", "history": "h"},
+            "solutionSeeds": {"minimal": "m", "thorough": "t", "refactor": "r"},
+        }
+        it.update(over)
+        return it
+
+    # positive: a `deferred` (closed enum) item round-trips
+    name = "oos-disposition/deferred-ok"
+    try:
+        facts = _make_facts("oos", "review", "oos-filed",
+                            oos={"items": [_oos_item(deferred="labels-underivable")]})
+        decoded = _emit_decode(facts, schema)
+        if canon(decoded) != canon(derive(facts_of(decoded))):
+            failures.append("FAIL [%s]: decoded != re-derived" % name)
+        else:
+            ok(name)
+    except Exception as e:
+        failures.append("FAIL [%s]: %s" % (name, e))
+
+    # negative: an item with NEITHER issue nor deferred is rejected
+    assert_raises("oos-disposition/neither",
+                  lambda: derive(_make_facts("oos", "review", "oos-filed",
+                                             oos={"items": [_oos_item()]})))
+
+    # negative: an item with BOTH dispositions is ambiguous -> rejected
+    assert_raises("oos-disposition/both",
+                  lambda: derive(_make_facts("oos", "review", "oos-filed",
+                                             oos={"items": [_oos_item(
+                                                 issue="#1", deferred="pri-p0-incident")]})))
+
+    # negative: an out-of-enum `deferred` reason is rejected on decode
+    name = "oos-disposition/bad-enum"
+    try:
+        facts = _make_facts("oos", "review", "oos-filed",
+                            oos={"items": [_oos_item(issue="#1")]})
+        obj = derive(facts)
+        obj["oos"]["items"][0] = _oos_item(deferred="bogus-reason")
+        payload = base64.b64encode(canon(obj).encode("utf-8")).decode("ascii")
+        block_line = "<!-- %s %s -->" % (MARKER, payload)
+        assert_decode_fails(name, block_line)
+    except Exception as e:
+        failures.append("FAIL [%s]: %s" % (name, e))
+
+    # schema-layer: the validate() walker's oneOf rejects an undispositioned item
+    # directly — the XOR has a schema single source, not only validate_kind_facts
+    name = "oos-disposition/schema-oneof-walker"
+    try:
+        item_schema = schema["properties"]["oos"]["properties"]["items"]["items"]
+        walker_errs = validate(_oos_item(), item_schema)
+        checks += 1
+        if not any("oneOf" in e for e in walker_errs):
+            failures.append("FAIL [%s]: walker did not flag undispositioned item via oneOf: %r"
+                            % (name, walker_errs))
+    except Exception as e:
+        failures.append("FAIL [%s]: %s" % (name, e))
 
     # ------------------------------------------------------------------
     # Report

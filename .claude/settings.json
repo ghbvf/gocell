@@ -1,7 +1,4 @@
 {
-  "skillOverrides": {
-    "sonar-scan": "user-invocable-only"
-  },
   "hooks": {
     "PreToolUse": [
       {

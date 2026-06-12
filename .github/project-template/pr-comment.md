@@ -6,7 +6,7 @@
 
 > **评论即 review 结果，无损（关键约定）**：评论是 `/fix <PR#>` 提取 findings 的**唯一来源**。
 > 每条 Finding **必带 `file:line`**（fix 据此定位，不重新 review），根因 + 证据 + 建议 + 三级方案种子写进 `<details>`（人看摘要、fix 读详表，两不丢）。
-> **OUT_OF_SCOPE finding 同享无损区，不准降级成计数 `OUT_OF_SCOPE <k>`**：每条 OOS 在 `<details>` 里带 file:line + 证据 + 三维根因（代码/架构/历史）+ 三级方案种子 + Files 列表 + 建 issue 命令草稿，使后续 `gh issue create`（body 按 `backlog.md` 字段映射：现状←证据+根因+影响 / 修复方向←方案种子 / Files←file:line 全集 / Source←`PR #<N> finding <Fk>`）能无损成文。
+> **OUT_OF_SCOPE finding 同享无损区，不准降级成计数 `OUT_OF_SCOPE <k>`**：每条 OOS 带 file:line + 证据 + 三维根因（代码/架构/历史）+ 三级方案种子 + Files 列表 + **处置（自动建的 issue #N 或 `deferred` 原因）**，由 ship/fix **自动 `gh issue create`**（body 按 `backlog.md` 字段映射：现状←证据+根因+影响 / 修复方向←方案种子 / Files←file:line 全集 / Source←`PR #<N> finding <Fk>`）无损成文，详记入独立 pm:oos 评论。
 > **禁止有损浓缩**——只写计数 / 模糊一句话会让 fix 与后续建 issue 丢失定位与根因，违背本约定。
 
 ## 机器块（`gocell-pr-meta:v1`，隐藏，自动化执行器消费）
@@ -15,7 +15,7 @@
 > `<!-- gocell-pr-meta:v1 <标准 base64(JSON)> -->`（CommonMark 隐藏，肉眼不可见）。
 >
 > - **产**（贴评论的技能/工具）：调 `bash hack/automation/pr-meta.sh emit-block --kind=<kind> --pr=<N> [flags]` 得该行，**追加到填好的 body 末尾**再贴。producer 只供不可推导的事实：`--findings='<json>'`（ship/fix/pr-review 计数）/ `--ci='<json>'`（ci）/ `--oos='<json>'`（oos）；pr-review 另需 `--phase=review|check` + `--verdict=<结论>`。**phase/verdict/cycle.round、refs(repo/baseRef/headRef/headSha)、session/worktree 全部由 emit-block 派生**（refs 经 `gh pr view`、roundBase 经 `round <PR>`、session/worktree 经 env；可经 `--head-sha`/`--base-ref`/`--head-ref`/`--round-base`/`--session`/`--worktree` override——codex-pr-router 传其 gated 值）。无 `jq` 拼 facts JSON、无手写 phase/verdict/round——`schema`/`cycle.exhausted`/`next`/`idempotencyKey` 亦 emit-block 派生，手填无意义。
-> - **kind→{phase,verdict,round} 派生规则单源 = `pr-meta.sh` 的 `derive_facts`（selftest golden-lock）**。本文档只定义 producer contract：ship/fix/pr-review 必须传 `--findings`，ci 必须传完整 `--ci`，oos 必须传非空 `--oos.items`；pr-review 的 phase/verdict 是 caller judgment，ci verdict 从 ci facts 派生。**不在本文档或任何 skill 重述派生映射**（重述=漂移面，本 issue #1774 即为消除它）。
+> - **kind→{phase,verdict,round} 派生规则单源 = `pr-meta.sh` 的 `derive_facts`（selftest golden-lock）**。本文档只定义 producer contract：ship/fix/pr-review 必须传 `--findings`，ci 必须传完整 `--ci`，oos 必须传非空 `--oos.items`（**每条 item 必带 `issue`（已建 issue 号/URL）或 `deferred`（`pri-p0-incident`｜`labels-underivable`）之一——disposition funnel 强制，缺则 emit-block 拒绝**）；pr-review 的 phase/verdict 是 caller judgment，ci verdict 从 ci facts 派生。**不在本文档或任何 skill 重述派生映射**（重述=漂移面，本 issue #1774 即为消除它）。
 > - **消费**：`bash hack/automation/pr-meta.sh extract <PR#>` 拉评论 → 取最新块 → base64 解码 → schema 校验 → 比对 live `headSha`（不一致=过期，丢弃）。
 > - **熔断（auto review↔fix ≤3 轮）**：`cycle.round` = 已完成 fix 轮数；`round ≥ maxRounds(3)` → `cycle.exhausted=true`，且 `changes-requested` 的 `next.agent` 被 helper 强制为 `human`——守护进程必停派、转人工，不得继续 auto 循环。
 > - **标准 base64（非 url）**：CommonMark 禁 HTML 注释正文含 `--`；标准 base64 字母表 `A-Za-z0-9+/=` 无 `-`，结构上不可能产 `--`/`-->`（base64url 含 `-`，会破块）。
@@ -143,13 +143,13 @@
 
 ## pm:oos 评论（`<!-- pm:oos -->`）
 
-> Out-of-scope findings 的**无损**独立记录，供后续 `gh issue create` 消费。每条 finding 为一个 lossless item（file:line + 三维根因 + 三级方案种子），机器块中以 `oos.items[]` 数组携带（详见 schema `pr-meta.v1.json`）。与 pm:ship / pm:fix 解耦：OOS finding 移出主评论详表，改为一行指针（`→ 🚦 OUT_OF_SCOPE（详见本 PR 的 pm:oos 评论）`）。
+> Out-of-scope findings 的**无损**独立记录。ship/fix 在贴本评论前已**自动** `gh issue create` 把每条 finding 落为 backlog issue（建单单源见 `issues` B1），正文回填 issue 号；无法自动建（`pri-p0` incident / area·type 判不定）的标 `deferred` 并回退草稿。每条 finding 为一个 lossless item（file:line + 三维根因 + 三级方案种子 + 处置 `issue`｜`deferred`），机器块中以 `oos.items[]` 数组携带（详见 schema `pr-meta.v1.json`）。与 pm:ship / pm:fix 解耦：OOS finding 移出主评论详表，改为一行指针（`→ 🚦 OUT_OF_SCOPE（详见本 PR 的 pm:oos 评论）`）。
 
 ```markdown
 <!-- pm:oos -->
-## Out-of-Scope Findings（待 gh issue create）
+## Out-of-Scope Findings（已自动建 issue）
 
-**OOS Findings** <k> 条（已从 pm:ship/pm:fix 的主评论分离，本评论为无损存档）
+**OOS Findings** <k> 条（已从 pm:ship/pm:fix 的主评论分离，本评论为无损存档；每条已建 issue 或显式 deferred）
 
 **F3** [P2·Cx2·运维] `other/pkg/z.go:64`（🚦 OUT_OF_SCOPE，属 `other/` 子系统）
 - 证据：`<code 片段>`
@@ -157,9 +157,10 @@
 - 三级方案种子：最小 <…> / 彻底 <…> / 重构 <…>
 - 影响范围：直接 <…> / 间接 <…> / 同类 <Grep N 处>
 - Files：`other/pkg/z.go:64` `other/pkg/w.go:30`
-- → 建 issue 草稿（确认后跑）：`gh issue create --label backlog --label pri-p2 --label area-XX --label type-XX --label cx-2 --title "[<ID>] <标题>" --body-file <backlog.md：现状←证据+根因+影响 / 修复方向←方案种子 / Files←上行 / Source←PR #<N> F3>`（cx 从 finding `[…Cx…]` tag 取，此例 F3=Cx2）
+- → ✅ 已建 issue **#<N>** <url>（body 按 backlog.md：现状←证据+根因+影响 / 修复方向←方案种子 / Files←上行 / Source←PR #<N> F3；四轴 `backlog,pri-p2,area-XX,type-XX,cx-2`，cx 从 finding `[…Cx…]` tag 取，此例 F3=Cx2）
+  - 无法自动建时改记 `🟡 deferred:<pri-p0-incident｜labels-underivable>` + 草稿命令 `gh issue create --label backlog --label pri-pX --label area-XX --label type-XX --label cx-X --title "[<ID>] <标题>" --body-file <backlog.md>`
 
 ---
 🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支> · worktree <路径|—> · session <会话id|—>
-<!-- 机器块占位：贴评论前由 `pr-meta.sh emit-block --kind=oos --oos='{"items":[…]}'` 生成追加于此（items 各 finding 携 fileLine/rootCause/solutionSeeds；phase/verdict/round 派生见 §机器块）；勿手填 base64 -->
+<!-- 机器块占位：贴评论前由 `pr-meta.sh emit-block --kind=oos --oos='{"items":[…]}'` 生成追加于此（items 各 finding 携 fileLine/rootCause/solutionSeeds + 处置 `issue`｜`deferred`，二者必居其一否则 emit 拒绝；phase/verdict/round 派生见 §机器块）；勿手填 base64 -->
 ```
