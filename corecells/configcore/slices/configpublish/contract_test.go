@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/corecells/configcore/configcoretest"
 	"github.com/ghbvf/gocell/corecells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/corecells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/corecells/configcore/internal/testutil"
@@ -97,7 +96,7 @@ func TestHttpConfigPublishV1Serve(t *testing.T) {
 	rec := httptest.NewRecorder()
 	path := strings.Replace(c.HTTP.Path, "{key}", "app.name", 1)
 	req := httptest.NewRequest(c.HTTP.Method, path, nil).
-		WithContext(configcoretest.WithAllowAuthorizer(
+		WithContext(withAllowAuthorizer(
 			ctxkeys.WithTenantID(auth.TestContext("contract-admin", []string{"admin"}), testPublishTenantStr),
 		))
 	mux.ServeHTTP(rec, req)
@@ -116,7 +115,7 @@ func TestHttpConfigRollbackV1Serve(t *testing.T) {
 	seedContractEntry(repo, "value")
 
 	// Publish first to create version 1 so rollback target exists.
-	publishCtx := configcoretest.WithAllowAuthorizer(
+	publishCtx := withAllowAuthorizer(
 		ctxkeys.WithTenantID(auth.TestContext("contract-admin", []string{"admin"}), testPublishTenantStr),
 	)
 	_, err := svc.Publish(publishCtx, "app.name")
@@ -137,7 +136,7 @@ func TestHttpConfigRollbackV1Serve(t *testing.T) {
 	rec := httptest.NewRecorder()
 	path := strings.Replace(c.HTTP.Path, "{key}", "app.name", 1)
 	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"version":1,"expectedVersion":1}`)).
-		WithContext(configcoretest.WithAllowAuthorizer(
+		WithContext(withAllowAuthorizer(
 			ctxkeys.WithTenantID(auth.TestContext("contract-admin", []string{"admin"}), testPublishTenantStr),
 		))
 	req.Header.Set("Content-Type", "application/json")
@@ -166,7 +165,7 @@ func TestHttpConfigPublishV1_Serve_NotFound(t *testing.T) {
 	path := strings.Replace(c.HTTP.Path, "{key}", "no-such-key", 1)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, path, nil).
-		WithContext(configcoretest.WithAllowAuthorizer(
+		WithContext(withAllowAuthorizer(
 			ctxkeys.WithTenantID(auth.TestContext("contract-admin", []string{"admin"}), testPublishTenantStr),
 		))
 	mux.ServeHTTP(rec, req)
@@ -214,7 +213,7 @@ func TestHttpConfigPublishV1_Serve_Unauthorized(t *testing.T) {
 	t.Run("403_pdp_deny", func(t *testing.T) {
 		// Principal present, PDP denies → RequirePermission → ErrAuthForbidden → 403
 		rec := httptest.NewRecorder()
-		ctx := configcoretest.WithDenyAuthorizer(
+		ctx := withDenyAuthorizer(
 			auth.TestContext("user-readonly", []string{"viewer"}),
 			"policy deny",
 		)
@@ -272,7 +271,7 @@ func TestHttpConfigRollbackV1_Serve_Unauthorized(t *testing.T) {
 
 	t.Run("403_pdp_deny", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		ctx := configcoretest.WithDenyAuthorizer(
+		ctx := withDenyAuthorizer(
 			auth.TestContext("user-readonly", []string{"viewer"}),
 			"policy deny",
 		)

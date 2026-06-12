@@ -23,11 +23,33 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
+
+// allowAuthorizer / withAllowAuthorizer / withDenyAuthorizer build the PDP
+// verdicts for tests. The authz.Allow/Deny construction lives in _test.go,
+// which AUTHZ-DECISION-ALLOW-DENY-CALLER-01 sanctions for test doubles; the
+// CapturingAuthorizer type and WithAuthorizer ctx wiring are shared via
+// configcoretest (PR-10b #1348).
+func allowAuthorizer() *configcoretest.CapturingAuthorizer {
+	dec, err := authz.Allow(authz.Obligations{})
+	if err != nil {
+		panic("test allowAuthorizer: authz.Allow: " + err.Error())
+	}
+	return &configcoretest.CapturingAuthorizer{Decision: dec}
+}
+
+func withAllowAuthorizer(ctx context.Context) context.Context {
+	return configcoretest.WithAuthorizer(ctx, allowAuthorizer())
+}
+
+func withDenyAuthorizer(ctx context.Context, reason string) context.Context {
+	return configcoretest.WithAuthorizer(ctx, &configcoretest.CapturingAuthorizer{Decision: authz.Deny(reason)})
+}
 
 // PR464 P2.2: typed 404 / 409 envelope adapter regression coverage.
 // fakeFlagRepoErr wraps mem.FlagRepository and overrides Update/Toggle/Delete
@@ -228,7 +250,7 @@ func TestFlagwriteHandler_PDPDeny_Returns403(t *testing.T) {
 	handler := setupFlagwriteHTTPHandler(t)
 
 	asDenyFlagwrite := func(req *http.Request) *http.Request {
-		ctx := configcoretest.WithDenyAuthorizer(
+		ctx := withDenyAuthorizer(
 			configcoretest.CtxWithTenant(auth.TestContext(testFlagwriteAdmin, []string{auth.RoleAdmin})),
 			"policy deny",
 		)
@@ -325,7 +347,7 @@ func TestFlagwriteHandler_ActionPin_FlagWrite(t *testing.T) {
 
 	// Seed a flag for update/toggle/delete endpoints.
 	_, err = svc.Create(
-		configcoretest.WithAllowAuthorizer(configcoretest.CtxWithTenant(auth.TestContext(testFlagwriteAdmin, []string{auth.RoleAdmin}))),
+		withAllowAuthorizer(configcoretest.CtxWithTenant(auth.TestContext(testFlagwriteAdmin, []string{auth.RoleAdmin}))),
 		CreateInput{Key: "pin-flag", Description: "action-pin seed"},
 	)
 	require.NoError(t, err)
@@ -360,7 +382,7 @@ func TestFlagwriteHandler_ActionPin_FlagWrite(t *testing.T) {
 
 	for _, ep := range endpoints {
 		t.Run(ep.name, func(t *testing.T) {
-			cap := configcoretest.AllowAuthorizer()
+			cap := allowAuthorizer()
 			ctx := configcoretest.WithAuthorizer(
 				configcoretest.CtxWithTenant(auth.TestContext(testFlagwriteAdmin, []string{auth.RoleAdmin})),
 				cap,

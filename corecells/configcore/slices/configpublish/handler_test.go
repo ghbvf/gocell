@@ -26,12 +26,34 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
+
+// allowAuthorizer / withAllowAuthorizer / withDenyAuthorizer build the PDP
+// verdicts for tests. The authz.Allow/Deny construction lives in _test.go,
+// which AUTHZ-DECISION-ALLOW-DENY-CALLER-01 sanctions for test doubles; the
+// CapturingAuthorizer type and WithAuthorizer ctx wiring are shared via
+// configcoretest (PR-10b #1348).
+func allowAuthorizer() *configcoretest.CapturingAuthorizer {
+	dec, err := authz.Allow(authz.Obligations{})
+	if err != nil {
+		panic("test allowAuthorizer: authz.Allow: " + err.Error())
+	}
+	return &configcoretest.CapturingAuthorizer{Decision: dec}
+}
+
+func withAllowAuthorizer(ctx context.Context) context.Context {
+	return configcoretest.WithAuthorizer(ctx, allowAuthorizer())
+}
+
+func withDenyAuthorizer(ctx context.Context, reason string) context.Context {
+	return configcoretest.WithAuthorizer(ctx, &configcoretest.CapturingAuthorizer{Decision: authz.Deny(reason)})
+}
 
 // testPublishTenantStr is the test TenantID string for configpublish tests.
 const testPublishTenantStr = "00000000-0000-0000-0000-000000000001"
@@ -45,7 +67,7 @@ var testPublishTenant = tenant.TenantID(testPublishTenantStr)
 // Authorizer in ctx the gate is fail-closed 403 before reaching the service.
 func adminCtx() context.Context {
 	base := ctxkeys.WithTenantID(auth.TestContext("test-admin", []string{"admin"}), testPublishTenantStr)
-	return configcoretest.WithAllowAuthorizer(base)
+	return withAllowAuthorizer(base)
 }
 
 // withAdmin clones req with the admin auth context attached.
@@ -183,7 +205,7 @@ func TestHandler_HandlePublish_NotFound(t *testing.T) {
 // from the PDP gate's fail-closed 403).
 func withAdminNoTenant(req *http.Request) *http.Request {
 	base := auth.TestContext("test-admin", []string{"admin"})
-	return req.WithContext(configcoretest.WithAllowAuthorizer(base))
+	return req.WithContext(withAllowAuthorizer(base))
 }
 
 func TestHandler_HandlePublish_MissingTenant_403(t *testing.T) {
@@ -232,7 +254,7 @@ func TestHandler_HandlePublish_PDPDeny(t *testing.T) {
 	seedForPublish(t, repo)
 
 	w := httptest.NewRecorder()
-	ctx := configcoretest.WithDenyAuthorizer(
+	ctx := withDenyAuthorizer(
 		ctxkeys.WithTenantID(auth.TestContext("user-1", []string{"viewer"}), testPublishTenantStr),
 		"policy deny",
 	)
@@ -275,7 +297,7 @@ func TestHandler_HandleRollback_PDPDeny(t *testing.T) {
 	seedForPublish(t, repo)
 
 	w := httptest.NewRecorder()
-	ctx := configcoretest.WithDenyAuthorizer(
+	ctx := withDenyAuthorizer(
 		ctxkeys.WithTenantID(auth.TestContext("user-1", []string{"viewer"}), testPublishTenantStr),
 		"policy deny",
 	)
@@ -674,7 +696,7 @@ func TestHandler_ConfigPublishGate_ActionPin(t *testing.T) {
 	_, err = svcForSeed.Publish(adminCtx(), "app.name")
 	require.NoError(t, err)
 
-	cap := configcoretest.AllowAuthorizer()
+	cap := allowAuthorizer()
 	baseCtx := ctxkeys.WithTenantID(auth.TestContext("test-admin", []string{"admin"}), testPublishTenantStr)
 	authedCtx := configcoretest.WithAuthorizer(baseCtx, cap)
 

@@ -21,11 +21,33 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
+
+// allowAuthorizer / withAllowAuthorizer / withDenyAuthorizer build the PDP
+// verdicts for tests. The authz.Allow/Deny construction lives in _test.go,
+// which AUTHZ-DECISION-ALLOW-DENY-CALLER-01 sanctions for test doubles; the
+// CapturingAuthorizer type and WithAuthorizer ctx wiring are shared via
+// configcoretest (PR-10b #1348).
+func allowAuthorizer() *configcoretest.CapturingAuthorizer {
+	dec, err := authz.Allow(authz.Obligations{})
+	if err != nil {
+		panic("test allowAuthorizer: authz.Allow: " + err.Error())
+	}
+	return &configcoretest.CapturingAuthorizer{Decision: dec}
+}
+
+func withAllowAuthorizer(ctx context.Context) context.Context {
+	return configcoretest.WithAuthorizer(ctx, allowAuthorizer())
+}
+
+func withDenyAuthorizer(ctx context.Context, reason string) context.Context {
+	return configcoretest.WithAuthorizer(ctx, &configcoretest.CapturingAuthorizer{Decision: authz.Deny(reason)})
+}
 
 // testFlagHandlerTenant is the typed TenantID for direct repo seeding.
 var testFlagHandlerTenant = configcoretest.TestTenant
@@ -39,7 +61,7 @@ const flagsBasePath = "/api/v1/flags"
 // auth.RequirePermission(authz.PermFlagRead()) PDP gate AND the featureflag
 // handler's tenant.FromContext call.
 func asAdminFlag(req *http.Request) *http.Request {
-	ctx := configcoretest.WithAllowAuthorizer(
+	ctx := withAllowAuthorizer(
 		configcoretest.CtxWithTenant(auth.TestContext("admin-user", []string{auth.RoleAdmin})),
 	)
 	return req.WithContext(ctx)
@@ -235,7 +257,7 @@ func TestHandler_HandleGet_NotFound(t *testing.T) {
 // NO TenantID, so the request passes the PDP gate yet fails tenant.FromContext.
 // F6: this must map to a typed 403, not a framework 500.
 func asAdminFlagNoTenant(req *http.Request) *http.Request {
-	ctx := configcoretest.WithAllowAuthorizer(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
+	ctx := withAllowAuthorizer(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
 	return req.WithContext(ctx)
 }
 
@@ -409,7 +431,7 @@ func TestHandler_PDPDeny_Returns403(t *testing.T) {
 	handler, _ := setupHandler()
 
 	asDenyFlag := func(req *http.Request) *http.Request {
-		ctx := configcoretest.WithDenyAuthorizer(
+		ctx := withDenyAuthorizer(
 			configcoretest.CtxWithTenant(auth.TestContext("admin-user", []string{auth.RoleAdmin})),
 			"policy deny",
 		)
@@ -494,7 +516,7 @@ func TestHandler_ActionPin_FlagRead(t *testing.T) {
 
 	for _, ep := range endpoints {
 		t.Run(ep.name, func(t *testing.T) {
-			cap := configcoretest.AllowAuthorizer()
+			cap := allowAuthorizer()
 			ctx := configcoretest.WithAuthorizer(
 				configcoretest.CtxWithTenant(auth.TestContext("admin-user", []string{auth.RoleAdmin})),
 				cap,

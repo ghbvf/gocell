@@ -3,8 +3,14 @@ package configcoretest
 // authz.go — shared ABAC-PDP test helpers for the configcore permission-based
 // authz migration (PR-10b #1348). Every configcore slice gated by
 // auth.RequirePermission(authz.Perm*) needs an Authorizer in the request context
-// to pass the gate; these helpers supply allow / deny / action-capturing
-// Authorizers and the ctx wiring, defined ONCE here instead of per-slice.
+// to pass the gate; these helpers supply an action-capturing Authorizer type and
+// the ctx wiring, defined ONCE here instead of per-slice.
+//
+// Verdict construction (Allow/Deny) was moved to each consumer's _test.go under
+// local helpers (allowAuthorizer / withAllowAuthorizer / withDenyAuthorizer).
+// AUTHZ-DECISION-ALLOW-DENY-CALLER-01 sanctions authz.Allow/Deny in _test.go
+// files (test doubles) but not in non-test production-scanned packages; this
+// file remains production-scanned so it must not call authz.Allow or authz.Deny.
 
 import (
 	"context"
@@ -33,35 +39,9 @@ func (c *CapturingAuthorizer) Authorize(_ context.Context, subject, resource, ac
 	return c.Decision, c.Err
 }
 
-// AllowAuthorizer returns a CapturingAuthorizer that grants every request
-// (Decision = Allow with no obligations), mirroring a wired PDP that permits.
-func AllowAuthorizer() *CapturingAuthorizer {
-	dec, err := authz.Allow(authz.Obligations{})
-	if err != nil {
-		panic("configcoretest.AllowAuthorizer: authz.Allow: " + err.Error())
-	}
-	return &CapturingAuthorizer{Decision: dec}
-}
-
-// DenyAuthorizer returns a CapturingAuthorizer that denies every request with
-// the given reason — used to assert a wired PDP's deny surfaces as 403.
-func DenyAuthorizer(reason string) *CapturingAuthorizer {
-	return &CapturingAuthorizer{Decision: authz.Deny(reason)}
-}
-
 // WithAuthorizer injects an Authorizer into ctx via the canonical
 // auth.WithAuthorizer funnel (the same one the primary listener uses in
 // production), so tests need not import runtime/auth just for the wiring.
 func WithAuthorizer(ctx context.Context, a auth.Authorizer) context.Context {
 	return auth.WithAuthorizer(ctx, a)
-}
-
-// WithAllowAuthorizer wraps ctx with an allow-all Authorizer (success path).
-func WithAllowAuthorizer(ctx context.Context) context.Context {
-	return auth.WithAuthorizer(ctx, AllowAuthorizer())
-}
-
-// WithDenyAuthorizer wraps ctx with a deny-all Authorizer (PDP-deny → 403 path).
-func WithDenyAuthorizer(ctx context.Context, reason string) context.Context {
-	return auth.WithAuthorizer(ctx, DenyAuthorizer(reason))
 }

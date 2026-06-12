@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -33,6 +34,27 @@ import (
 	"github.com/ghbvf/gocell/runtime/observability/healthz/healthztest"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
+
+// allowAuthorizer / withAllowAuthorizer / withDenyAuthorizer build the PDP
+// verdicts for tests. The authz.Allow/Deny construction lives in _test.go,
+// which AUTHZ-DECISION-ALLOW-DENY-CALLER-01 sanctions for test doubles; the
+// CapturingAuthorizer type and WithAuthorizer ctx wiring are shared via
+// configcoretest (PR-10b #1348).
+func allowAuthorizer() *configcoretest.CapturingAuthorizer {
+	dec, err := authz.Allow(authz.Obligations{})
+	if err != nil {
+		panic("test allowAuthorizer: authz.Allow: " + err.Error())
+	}
+	return &configcoretest.CapturingAuthorizer{Decision: dec}
+}
+
+func withAllowAuthorizer(ctx context.Context) context.Context {
+	return configcoretest.WithAuthorizer(ctx, allowAuthorizer())
+}
+
+func withDenyAuthorizer(ctx context.Context, reason string) context.Context {
+	return configcoretest.WithAuthorizer(ctx, &configcoretest.CapturingAuthorizer{Decision: authz.Deny(reason)})
+}
 
 func newTestCell() *ConfigCore {
 	return NewConfigCore(
@@ -337,7 +359,7 @@ func initCellWithRouter(t *testing.T) *router.Router {
 // fails closed without an Authorizer — so business-path cell tests must supply
 // one (PR-10b #1348).
 func pdpAdminCtx(subject, tenantID string) context.Context {
-	return configcoretest.WithAllowAuthorizer(
+	return withAllowAuthorizer(
 		ctxkeys.WithTenantID(auth.TestContext(subject, []string{"admin"}), tenantID),
 	)
 }
@@ -472,7 +494,7 @@ func TestConfigCore_ProductionAuthGateLock(t *testing.T) {
 				p.method, p.path, rec.Body)
 
 			// --- 403 (PDP deny): authenticated + a wired PDP that DENIES → 403.
-			rec = exec(t, p, configcoretest.WithDenyAuthorizer(
+			rec = exec(t, p, withDenyAuthorizer(
 				ctxkeys.WithTenantID(auth.TestContext("user-non-admin", []string{"viewer"}), gateTenant),
 				"policy: no matching allow rule",
 			))
