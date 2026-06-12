@@ -38,7 +38,7 @@ import (
 )
 
 // testTenantIDStr is the string form of the canonical test tenant UUID, used
-// in CreateAdminInput.TenantID (which is a string, not tenant.TenantID).
+// when setting HTTP headers (X-Tenant-ID) in handler tests.
 const testTenantIDStr = "00000000-0000-0000-0000-000000000001"
 
 type noopTxRunner struct{}
@@ -220,7 +220,7 @@ func TestService_CreateAdmin_FreshSystem_Creates_EmitsEvent(t *testing.T) {
 	svc := newService(t, userRepo, roleRepo, w)
 
 	out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
-		TenantID: testTenantIDStr,
+		TenantID: testTenantID,
 		Username: "root",
 		Email:    "root@local",
 		Password: "SecretPass!23",
@@ -267,7 +267,7 @@ func TestService_CreateAdmin_WithSetupLock_AcquiresInsideTxBeforeEmit(t *testing
 	)
 
 	out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
-		TenantID: testTenantIDStr,
+		TenantID: testTenantID,
 		Username: "root",
 		Email:    "root@local",
 		Password: "SecretPass!23",
@@ -290,7 +290,7 @@ func TestService_CreateAdmin_SetupLockFailure_ShortCircuitsNoSideEffects(t *test
 	svc := newService(t, userRepo, roleRepo, w, setup.WithSetupLock(lock))
 
 	out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
-		TenantID: testTenantIDStr,
+		TenantID: testTenantID,
 		Username: "root",
 		Email:    "root@local",
 		Password: "SecretPass!23",
@@ -328,7 +328,7 @@ func TestService_CreateAdmin_NilSetupLockOptionIgnored_PriorLockWins(t *testing.
 	svc := newService(t, userRepo, roleRepo, w, setup.WithSetupLock(nil))
 
 	out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
-		TenantID: testTenantIDStr,
+		TenantID: testTenantID,
 		Username: "root",
 		Email:    "root@local",
 		Password: "SecretPass!23",
@@ -377,7 +377,7 @@ func TestService_CreateAdmin_AlreadyExists_Returns410_NoEmit(t *testing.T) {
 	svc := newService(t, userRepo, roleRepo, w)
 
 	out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
-		TenantID: testTenantIDStr,
+		TenantID: testTenantID,
 		Username: "root",
 		Email:    "root@local",
 		Password: "SecretPass!23",
@@ -397,9 +397,9 @@ func TestService_CreateAdmin_BlankField_Returns400(t *testing.T) {
 		name string
 		in   setup.CreateAdminInput
 	}{
-		{"blank username", setup.CreateAdminInput{TenantID: testTenantIDStr, Username: "", Email: "e@x", Password: "p"}},
-		{"blank email", setup.CreateAdminInput{TenantID: testTenantIDStr, Username: "u", Email: "", Password: "p"}},
-		{"blank password", setup.CreateAdminInput{TenantID: testTenantIDStr, Username: "u", Email: "e@x", Password: ""}},
+		{"blank username", setup.CreateAdminInput{TenantID: testTenantID, Username: "", Email: "e@x", Password: "p"}},
+		{"blank email", setup.CreateAdminInput{TenantID: testTenantID, Username: "u", Email: "", Password: "p"}},
+		{"blank password", setup.CreateAdminInput{TenantID: testTenantID, Username: "u", Email: "e@x", Password: ""}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -427,7 +427,7 @@ func TestService_CreateAdmin_PasswordLengthOutOfRange_Returns400(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
-				TenantID: testTenantIDStr,
+				TenantID: testTenantID,
 				Username: "root",
 				Email:    "root@local",
 				Password: tc.password,
@@ -450,12 +450,12 @@ func TestService_CreateAdmin_FieldLengthOutOfRange_Returns400(t *testing.T) {
 		{
 			name: "username too long",
 			in: setup.CreateAdminInput{
-				TenantID: testTenantIDStr, Username: strings.Repeat("u", 129), Email: "root@local", Password: "SecretPass!23",
+				TenantID: testTenantID, Username: strings.Repeat("u", 129), Email: "root@local", Password: "SecretPass!23",
 			},
 		},
 		{
 			name: "email too long",
-			in:   setup.CreateAdminInput{TenantID: testTenantIDStr, Username: "root", Email: strings.Repeat("e", 257), Password: "SecretPass!23"},
+			in:   setup.CreateAdminInput{TenantID: testTenantID, Username: "root", Email: strings.Repeat("e", 257), Password: "SecretPass!23"},
 		},
 	}
 	for _, tc := range tests {
@@ -477,7 +477,7 @@ func TestService_CreateAdmin_EmitterFailure_Propagates(t *testing.T) {
 	svc := newService(t, userRepo, roleRepo, w)
 
 	_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
-		TenantID: testTenantIDStr,
+		TenantID: testTenantID,
 		Username: "root",
 		Email:    "root@local",
 		Password: "SecretPass!23",
@@ -494,7 +494,7 @@ func TestService_CreateAdmin_ProvisionerInfraError_Propagates(t *testing.T) {
 	svc := newService(t, userRepo, roleRepo, nil)
 
 	_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
-		TenantID: testTenantIDStr,
+		TenantID: testTenantID,
 		Username: "root",
 		Email:    "root@local",
 		Password: "SecretPass!23",
@@ -586,7 +586,7 @@ func TestService_CreateAdmin_Concurrent_StoreTxRunner_ExactlyOneAdmin(t *testing
 			defer done.Done()
 			start.Wait()
 			out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
-				TenantID: testTenantIDStr,
+				TenantID: testTenantID,
 				Username: "root" + strconv.Itoa(i),
 				Email:    "root" + strconv.Itoa(i) + "@local",
 				Password: "SecretPass!23",
@@ -638,7 +638,7 @@ func TestService_CreateAdmin_AlreadyExists_DoesNotHashPassword(t *testing.T) {
 
 	start := time.Now()
 	_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
-		TenantID: testTenantIDStr,
+		TenantID: testTenantID,
 		Username: "root",
 		Email:    "root@local",
 		Password: "SecretPass!23",
@@ -668,7 +668,7 @@ func TestService_CreateAdmin_DuplicateUsername_Returns409WithoutTakeover(t *test
 	svc := newService(t, userRepo, roleRepo, &stubWriter{})
 
 	out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
-		TenantID: testTenantIDStr,
+		TenantID: testTenantID,
 		Username: "root",
 		Email:    "root@local",
 		Password: "SecretPass!23",
@@ -698,12 +698,12 @@ func TestService_CreateAdmin_ControlCharInField_Returns400(t *testing.T) {
 		in   setup.CreateAdminInput
 	}{
 		{"newline in email", setup.CreateAdminInput{
-			TenantID: testTenantIDStr, Username: "root", Email: "root@local\n", Password: "SecretPass!23",
+			TenantID: testTenantID, Username: "root", Email: "root@local\n", Password: "SecretPass!23",
 		}},
 		{"tab in username", setup.CreateAdminInput{
-			TenantID: testTenantIDStr, Username: "ro\tot", Email: "root@local", Password: "SecretPass!23",
+			TenantID: testTenantID, Username: "ro\tot", Email: "root@local", Password: "SecretPass!23",
 		}},
-		{"cr in email", setup.CreateAdminInput{TenantID: testTenantIDStr, Username: "root", Email: "root\r@local", Password: "SecretPass!23"}},
+		{"cr in email", setup.CreateAdminInput{TenantID: testTenantID, Username: "root", Email: "root\r@local", Password: "SecretPass!23"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -729,7 +729,7 @@ func TestService_CreateAdmin_AlreadyExists_DetailsContainOnlyNextAction(t *testi
 	svc := newService(t, userRepo, roleRepo, &stubWriter{})
 
 	_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
-		TenantID: testTenantIDStr,
+		TenantID: testTenantID,
 		Username: "root",
 		Email:    "root@local",
 		Password: "SecretPass!23",
@@ -750,6 +750,40 @@ func TestService_CreateAdmin_AlreadyExists_DetailsContainOnlyNextAction(t *testi
 		"details must not leak HTTP path literals; resolve via OpenAPI")
 	assert.NotContains(t, string(rendered), "loginEndpoint",
 		"loginEndpoint key was retired by PR-A42 — keep details minimal")
+}
+
+// TestCreateAdmin_ZeroTenantID_FailsClosed locks the fail-closed safety net for
+// direct (non-handler) callers of Service.CreateAdmin. An empty typed TenantID
+// (zero value) must cause CreateAdmin to fail — it cannot result in a successful
+// admin creation — even if a caller somehow bypasses the handler's tenant-parse
+// step. The repo's tenant.TenantID Validate() backstop (called by
+// provisioner.EffectiveAdminExists inside scopedtx.Do) rejects the empty tenant
+// with ErrValidationFailed before any user write can proceed. This documents the
+// exact fail-closed error so future callers cannot accidentally soften it.
+func TestCreateAdmin_ZeroTenantID_FailsClosed(t *testing.T) {
+	store := mem.NewStore(clock.Real())
+	svc := newService(t, store.UserRepository(), store.RoleRepository(), nil)
+
+	out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		TenantID: "", // zero value — bypasses handler parse
+		Username: "u",
+		Email:    "e@x",
+		Password: "SecretPass!23",
+	})
+	require.Error(t, err,
+		"zero TenantID must fail closed; successful admin creation must be impossible")
+	assert.Nil(t, out)
+	// The empty tenant is rejected by the tenant.TenantID Validate() backstop
+	// inside the provisioner's EffectiveAdminExists call, which surfaces as a
+	// wrapped ErrValidationFailed. The exact chain is:
+	//   setup: status: adminprovision: effective-admin-exists: [ERR_VALIDATION_FAILED] ...
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec,
+		"zero TenantID must produce an errcode.Error (repo Validate backstop)")
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code,
+		"zero TenantID must produce ErrValidationFailed from tenant.TenantID Validate backstop")
+	assert.Contains(t, err.Error(), "TenantID required",
+		"error must mention TenantID required so the cause is unambiguous")
 }
 
 // --- helpers --------------------------------------------------------------
@@ -848,7 +882,7 @@ func TestService_CreateAdmin_AlreadyProvisioned_410_OperatorEnvSetIsExpected(t *
 	svc := newService(t, userRepo, roleRepo, w)
 
 	out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
-		TenantID: testTenantIDStr,
+		TenantID: testTenantID,
 		Username: "newadmin",
 		Email:    "newadmin@local",
 		Password: "SecretPass!23",
@@ -880,7 +914,7 @@ func TestService_CreateAdmin_IsRLSScoped(t *testing.T) {
 	)
 
 	_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
-		TenantID: testTenantIDStr,
+		TenantID: testTenantID,
 		Username: "root",
 		Email:    "root@local",
 		Password: "SecretPass!23",
@@ -1015,7 +1049,7 @@ func TestService_CreateAdmin_FastPathStatus_IsRLSScoped(t *testing.T) {
 	// Fresh store has no admin → the fast-path EffectiveAdminExists check runs
 	// (and so does the in-tx Ensure check); assertAllScoped proves BOTH are scoped.
 	_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
-		TenantID: testTenantIDStr, Username: "root", Email: "root@local", Password: "SecretPass!23",
+		TenantID: testTenantID, Username: "root", Email: "root@local", Password: "SecretPass!23",
 	})
 	require.NoError(t, err)
 	roleCap.assertAllScoped(t, testTenantID)

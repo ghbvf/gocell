@@ -122,7 +122,7 @@ func TestService_WithEmitter(t *testing.T) {
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "alice", string(hash))
 
-	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "alice", Password: string(testCredential)})
+	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantID, Username: "alice", Password: string(testCredential)})
 	require.NoError(t, err)
 
 	require.Len(t, ow.entries, 1)
@@ -139,7 +139,7 @@ func TestService_WithTxManager(t *testing.T) {
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "bob", string(hash))
 
-	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "bob", Password: string(testCredential)})
+	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantID, Username: "bob", Password: string(testCredential)})
 	require.NoError(t, err)
 	// PR-3b: Login now uses two RunInTx calls per attempt:
 	//   tx[0] = pre-bcrypt read-tx (GetByUsername, RLS requires GUC)
@@ -185,7 +185,7 @@ func TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup(t *test
 	seedUserDirect(userRepo, "durable-emit-fail", string(hash))
 
 	_, err := svc.Login(context.Background(), LoginInput{
-		TenantID: testTenantIDStr, Username: "durable-emit-fail", Password: string(testCredential),
+		TenantID: testTenantID, Username: "durable-emit-fail", Password: string(testCredential),
 	})
 	require.Error(t, err, "emit failure must propagate as an error")
 
@@ -215,7 +215,7 @@ func TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns(t *testing
 	seedUserDirect(userRepo, "noop-emit-fail", string(hash))
 
 	_, err := svc.Login(context.Background(), LoginInput{
-		TenantID: testTenantIDStr, Username: "noop-emit-fail", Password: string(testCredential),
+		TenantID: testTenantID, Username: "noop-emit-fail", Password: string(testCredential),
 	})
 	require.Error(t, err, "emit failure must propagate as an error")
 

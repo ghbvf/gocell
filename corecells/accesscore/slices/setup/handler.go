@@ -2,12 +2,14 @@ package setup
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	adminGen "github.com/ghbvf/gocell/generated/contracts/http/auth/setup/admin/v1"
 	statusGen "github.com/ghbvf/gocell/generated/contracts/http/auth/setup/status/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/authz"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/projection"
 	"github.com/ghbvf/gocell/pkg/tenant"
 )
@@ -48,17 +50,29 @@ func toStatusProjection(hasAdmin bool) (statusGen.StatusResponseObject, error) {
 	return statusGen.Status200JSONResponse{Data: data}, nil
 }
 
+// errMsgTenantIDRequired is the error message for a missing or malformed
+// X-Tenant-ID header on the setup admin endpoint.
+// Must be a const literal (MESSAGE-CONST-LITERAL-01).
+const errMsgTenantIDRequired = "tenantId is required and must be a valid UUID"
+
 // AdminAdapter implements adminGen.Service for http.auth.setup.admin.v1.
 type AdminAdapter struct{ S *Service }
 
 // Admin implements adminGen.Service. The generated handler validates and decodes
 // username+email+password from the request body and populates req.XTenantID from
-// the X-Tenant-ID header. A missing/malformed tenant fails closed inside
-// Service.CreateAdmin (tenant.ParseTenantID on CreateAdminInput.TenantID) to a
-// 400 ERR_AUTH_IDENTITY_INVALID_INPUT (ADR 1160).
+// the X-Tenant-ID header. Tenant parse and 400 mapping live here: an empty or
+// malformed X-Tenant-ID header causes tenant.ParseTenantID to fail, which this
+// adapter maps to 400 ERR_AUTH_IDENTITY_INVALID_INPUT (ADR 1160). The typed
+// tenant.TenantID is then passed to Service.CreateAdmin, which trusts it.
 func (a AdminAdapter) Admin(ctx context.Context, req *adminGen.Request) (adminGen.AdminResponseObject, error) {
+	tid, perr := tenant.ParseTenantID(req.XTenantID)
+	if perr != nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput,
+			errMsgTenantIDRequired,
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("invalid tenantId: %v", perr))))
+	}
 	out, err := a.S.CreateAdmin(ctx, CreateAdminInput{
-		TenantID: req.XTenantID,
+		TenantID: tid,
 		Username: req.Username,
 		Email:    req.Email,
 		Password: req.Password,

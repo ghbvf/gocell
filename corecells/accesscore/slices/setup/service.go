@@ -173,10 +173,11 @@ func (s *Service) Status(ctx context.Context, t tenant.TenantID) (StatusOutput, 
 }
 
 // CreateAdminInput holds the operator-supplied first-admin fields.
-// TenantID is the tenant for which the admin is being provisioned; it must be
-// a canonical UUID and is required (bootstrap must designate a specific tenant).
+// TenantID is the tenant for which the admin is being provisioned; the handler
+// layer parses and validates the tenant header before constructing this struct,
+// so service.CreateAdmin receives a canonical typed value and trusts it.
 type CreateAdminInput struct {
-	TenantID string
+	TenantID tenant.TenantID
 	Username string
 	Email    string
 	Password string
@@ -219,13 +220,9 @@ func (s *Service) CreateAdmin(ctx context.Context, in CreateAdminInput) (*Create
 		return nil, err
 	}
 
-	// Parse the tenant ID before any expensive operations.
-	tid, err := tenant.ParseTenantID(in.TenantID)
-	if err != nil {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput,
-			"tenantId is required and must be a valid UUID",
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("invalid tenantId: %v", err))))
-	}
+	// tid is already a canonical tenant.TenantID; the handler layer parsed and
+	// validated the X-Tenant-ID header before constructing CreateAdminInput.
+	tid := in.TenantID
 
 	// Fast-path: if admin already exists for this tenant, return 410 without
 	// touching bcrypt. This keeps anonymous floods in O(1) roundtrip. The check
@@ -283,7 +280,6 @@ func (s *Service) CreateAdmin(ctx context.Context, in CreateAdminInput) (*Create
 func validateCreateAdminInput(in CreateAdminInput) error {
 	if err := validation.RequireNotEmpty(
 		errcode.ErrAuthIdentityInvalidInput,
-		validation.F("tenantId", in.TenantID),
 		validation.F("username", in.Username),
 		validation.F("email", in.Email),
 		validation.F("password", in.Password),

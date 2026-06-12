@@ -264,7 +264,7 @@ func TestChangePassword_FullFlow(t *testing.T) {
 	loginPair, err := f.loginSvc.Login(context.Background(), sessionlogin.LoginInput{
 		Username: "e2e-admin",
 		Password: bootstrapPassword,
-		TenantID: string(e2eTestTenantID),
+		TenantID: e2eTestTenantID,
 	})
 	require.NoError(t, err)
 	assert.True(t, loginPair.PasswordResetRequired,

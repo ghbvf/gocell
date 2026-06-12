@@ -182,8 +182,9 @@ func TestHandleLogin(t *testing.T) {
 }
 
 // TestHandler_Login_MissingTenantHeader verifies that a request without the
-// X-Tenant-ID header returns 400 (the service treats an empty tenantId as
-// ErrAuthLoginInvalidInput via RequireNotEmpty).
+// X-Tenant-ID header returns 400 ErrAuthLoginInvalidInput. The HANDLER
+// short-circuits before the service when the X-Tenant-ID header is absent,
+// returning 400 without ever delegating to Service.Login.
 func TestHandler_Login_MissingTenantHeader(t *testing.T) {
 	h := setup(t)
 	body := `{"username":"alice","password":"correct-pass"}`
@@ -200,13 +201,23 @@ func TestHandler_Login_MissingTenantHeader(t *testing.T) {
 // expected error code (from the generated handler's schema validation).
 func assertValidationError(t *testing.T, body []byte, wantCode string) {
 	t.Helper()
+	code, _ := extractErrorCodeAndMessage(t, body)
+	assert.Equal(t, wantCode, code)
+}
+
+// extractErrorCodeAndMessage parses the {"error":{"code":"...","message":"..."}}
+// wire envelope and returns (code, message). Used by non-enumeration tests to
+// assert byte-identical shapes across different 401 paths (ADR 1160).
+func extractErrorCodeAndMessage(t *testing.T, body []byte) (code, message string) {
+	t.Helper()
 	var resp struct {
 		Error struct {
-			Code string `json:"code"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
 		} `json:"error"`
 	}
 	require.NoError(t, json.Unmarshal(body, &resp))
-	assert.Equal(t, wantCode, resp.Error.Code)
+	return resp.Error.Code, resp.Error.Message
 }
 
 // TestHandler_Login_BlankUsername verifies that submitting an empty username
@@ -278,6 +289,45 @@ func TestHandler_Login_SetsRefreshCookie(t *testing.T) {
 	assert.Equal(t, http.SameSiteStrictMode, rtCookie.SameSite, "cookie must be SameSite=Strict")
 	assert.Equal(t, "/", rtCookie.Path, "cookie Path must be / (mandated by __Host- prefix)")
 	assert.Equal(t, int(testCookieTTL.Seconds()), rtCookie.MaxAge, "cookie MaxAge must match cookieTTL arg")
+}
+
+// TestHandler_Login_MalformedTenant_Returns401 locks in the moved two-stage
+// tenant validation: a present-but-malformed X-Tenant-ID (not a canonical UUID)
+// must return 401 ErrAuthLoginFailed (non-enumerable, ADR 1160), not 400.
+//
+// Non-enumeration invariant (ADR 1160): the malformed-tenant 401 response body
+// must be IDENTICAL to the wrong-password 401 so an attacker cannot distinguish
+// the two cases. This test asserts both responses share the same error.code AND
+// error.message (byte-identical shape).
+func TestHandler_Login_MalformedTenant_Returns401(t *testing.T) {
+	h := setup(t)
+
+	// Malformed-tenant 401: present but not a valid UUID.
+	malformedBody := `{"username":"alice","password":"correct-pass"}`
+	wMalformed := httptest.NewRecorder()
+	reqMalformed := httptest.NewRequest(http.MethodPost, loginPath, strings.NewReader(malformedBody))
+	reqMalformed.Header.Set("Content-Type", "application/json")
+	reqMalformed.Header.Set("X-Tenant-ID", "not-a-uuid")
+	h.ServeHTTP(wMalformed, reqMalformed)
+	assert.Equal(t, http.StatusUnauthorized, wMalformed.Code)
+	malformedCode, malformedMsg := extractErrorCodeAndMessage(t, wMalformed.Body.Bytes())
+	assert.Equal(t, "ERR_AUTH_LOGIN_FAILED", malformedCode)
+
+	// Wrong-password 401: valid tenant, correct username, wrong password.
+	wrongPwBody := `{"username":"alice","password":"wrong-password"}`
+	wWrongPw := httptest.NewRecorder()
+	reqWrongPw := httptest.NewRequest(http.MethodPost, loginPath, strings.NewReader(wrongPwBody))
+	reqWrongPw.Header.Set("Content-Type", "application/json")
+	reqWrongPw.Header.Set("X-Tenant-ID", testTenantIDStr)
+	h.ServeHTTP(wWrongPw, reqWrongPw)
+	assert.Equal(t, http.StatusUnauthorized, wWrongPw.Code)
+	wrongPwCode, wrongPwMsg := extractErrorCodeAndMessage(t, wWrongPw.Body.Bytes())
+
+	// Non-enumeration: both 401 paths must produce identical error.code and error.message.
+	assert.Equal(t, wrongPwCode, malformedCode,
+		"non-enumeration (ADR 1160): malformed-tenant 401 and wrong-password 401 must have identical error.code")
+	assert.Equal(t, wrongPwMsg, malformedMsg,
+		"non-enumeration (ADR 1160): malformed-tenant 401 and wrong-password 401 must have identical error.message")
 }
 
 // TestHandler_Login_NoCookieOn401 asserts that a failed login (401) does NOT

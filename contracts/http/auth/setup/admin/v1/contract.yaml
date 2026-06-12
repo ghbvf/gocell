@@ -16,10 +16,10 @@ endpoints:
     headers:
       # X-Tenant-ID carries the pre-bootstrap tenant scope (no JWT yet).
       # Populate-only at codegen → merged into the generated Request field; the
-      # setup admin adapter passes it to CreateAdminInput.TenantID, whose
-      # service-layer tenant.ParseTenantID validation rejects a missing/malformed
-      # value with 400 ERR_AUTH_IDENTITY_INVALID_INPUT (ADR 1160 — adapter-owned
-      # fail, not a codegen gate).
+      # setup admin AdminAdapter (handler) parses it via tenant.ParseTenantID and
+      # rejects a missing/malformed value with 400 ERR_AUTH_IDENTITY_INVALID_INPUT
+      # (ADR 1160 — adapter-owned fail, not a codegen gate); Service.CreateAdmin
+      # receives a canonical typed CreateAdminInput.TenantID and trusts it.
       X-Tenant-ID:
         type: string
         format: uuid
