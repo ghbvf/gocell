@@ -12,6 +12,7 @@ import (
 
 	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
 // --- WithAuthorizer / AuthorizerFromContext round-trip ---
@@ -146,14 +147,19 @@ func TestRequirePermission_EmptySubject_Unauthenticated(t *testing.T) {
 
 // --- Full flow via httptest handler: integration check ---
 
+// TestRequirePermission_HTTPIntegration_AllowDeny exercises the Policy through a
+// real HTTP handler using httputil.WriteError so the JSON response body matches the
+// canonical errcode envelope. The deny case produces ERR_AUTH_FORBIDDEN (403),
+// providing assertErrorCode with a second distinct code value.
 func TestRequirePermission_HTTPIntegration_AllowDeny(t *testing.T) {
 	tests := []struct {
 		name       string
 		authorizer *mockAuthorizer
 		wantCode   int
+		wantErr    string // empty = no error body check
 	}{
-		{"allow", &mockAuthorizer{allowed: true}, http.StatusOK},
-		{"deny", &mockAuthorizer{allowed: false}, http.StatusForbidden},
+		{"allow", &mockAuthorizer{allowed: true}, http.StatusOK, ""},
+		{"deny", &mockAuthorizer{allowed: false}, http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
 	}
 
 	for _, tc := range tests {
@@ -163,7 +169,7 @@ func TestRequirePermission_HTTPIntegration_AllowDeny(t *testing.T) {
 
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if err := policy(r); err != nil {
-					w.WriteHeader(http.StatusForbidden)
+					httputil.WriteError(r.Context(), w, err)
 					return
 				}
 				w.WriteHeader(http.StatusOK)
@@ -175,6 +181,9 @@ func TestRequirePermission_HTTPIntegration_AllowDeny(t *testing.T) {
 			handler.ServeHTTP(rec, req)
 
 			assert.Equal(t, tc.wantCode, rec.Code)
+			if tc.wantErr != "" {
+				assertErrorCode(t, rec, tc.wantErr)
+			}
 		})
 	}
 }
