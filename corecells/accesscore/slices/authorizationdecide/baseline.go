@@ -13,19 +13,64 @@ import (
 // evaluate loop and Authorize log read from the same backing array (F4 fix).
 var builtinBaseline = []abac.Rule{
 	{
-		ID:     "baseline-audit-read-admin",
-		Name:   "Baseline: allow admin/super-admin to read audit ledger",
-		Effect: authz.EffectAllow,
-		Action: []string{authz.PermAuditRead().String()},
-		Conditions: []abac.Condition{
-			{
-				Source:   abac.SourceSubject,
-				Key:      "roles",
-				Operator: abac.OpIn,
-				Values:   []string{runtimeauth.RoleAdmin, runtimeauth.RoleSuperAdmin},
-			},
-		},
+		ID:         "baseline-audit-read-admin",
+		Name:       "Baseline: allow admin/super-admin to read audit ledger",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermAuditRead().String()},
+		Conditions: []abac.Condition{adminOrSuperAdmin()},
 	},
+	// configcore baseline (PR-10b #1348): one allow rule per migrated slice,
+	// each reproducing the old auth.AnyRole(RoleAdmin) gate. action-scoped +
+	// role-conditioned — same shape as the audit rule above.
+	{
+		ID:         "baseline-config-read-admin",
+		Name:       "Baseline: allow admin/super-admin to read configuration",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermConfigRead().String()},
+		Conditions: []abac.Condition{adminOrSuperAdmin()},
+	},
+	{
+		ID:         "baseline-config-write-admin",
+		Name:       "Baseline: allow admin/super-admin to write configuration",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermConfigWrite().String()},
+		Conditions: []abac.Condition{adminOrSuperAdmin()},
+	},
+	{
+		ID:         "baseline-config-publish-admin",
+		Name:       "Baseline: allow admin/super-admin to publish/rollback configuration",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermConfigPublish().String()},
+		Conditions: []abac.Condition{adminOrSuperAdmin()},
+	},
+	{
+		ID:         "baseline-flag-read-admin",
+		Name:       "Baseline: allow admin/super-admin to read/evaluate feature flags",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermFlagRead().String()},
+		Conditions: []abac.Condition{adminOrSuperAdmin()},
+	},
+	{
+		ID:         "baseline-flag-write-admin",
+		Name:       "Baseline: allow admin/super-admin to write feature flags",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermFlagWrite().String()},
+		Conditions: []abac.Condition{adminOrSuperAdmin()},
+	},
+}
+
+// adminOrSuperAdmin is the shared baseline condition: subject.roles ∈
+// {admin, super-admin}. Extracted because all current baseline rules reproduce
+// the same admin gate (≥3 identical literals → constant, per go-standards).
+// Role constants come from runtime/auth so the values match exactly what
+// attributeResolver.resolveSubject emits for the "roles" key (r.principal.Roles).
+func adminOrSuperAdmin() abac.Condition {
+	return abac.Condition{
+		Source:   abac.SourceSubject,
+		Key:      "roles",
+		Operator: abac.OpIn,
+		Values:   []string{runtimeauth.RoleAdmin, runtimeauth.RoleSuperAdmin},
+	}
 }
 
 // builtinBaselineRules returns the tenant-agnostic built-in baseline rule set.
@@ -33,14 +78,12 @@ var builtinBaseline = []abac.Rule{
 // Built-in baseline reproducing the existing role→endpoint gate. action-scoped +
 // role-conditioned — NOT a downgrade allow-all (FR-011 fail-closed governs
 // missing-attr/store-err; the baseline governs the default policy set; the two do
-// not conflict). PR-10b extends one rule per migrated endpoint.
+// not conflict). One rule per migrated endpoint; PR-10b/PR-10c extend it.
 //
-// PR-10a baseline: exactly one rule — PermAuditRead() is allowed for admin and
-// super-admin principals. The condition uses Source=subject, Key="roles",
-// Operator=OpIn so it matches any principal whose Roles slice contains at least
-// one of the listed role values. Role constants are imported from runtime/auth so
-// the values match exactly what attributeResolver.resolveSubject emits for the
-// "roles" key (r.principal.Roles).
+// Current baseline: PermAuditRead() (PR-10a) + the 5 configcore permissions
+// (PR-10b: config:read/write/publish, flag:read/write), each allowed for admin
+// and super-admin principals via adminOrSuperAdmin(). Each rule is action-scoped
+// (Action target) so a baseline allow for one permission never leaks to another.
 //
 // Returns the package-level builtinBaseline slice directly (no allocation).
 func builtinBaselineRules() []abac.Rule {

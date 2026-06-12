@@ -8,6 +8,29 @@ func TestPermission_String(t *testing.T) {
 	}
 }
 
+// TestConfigcorePermissions_String pins the exact action spelling of every
+// configcore permission minted in PR-10b. The action string IS the wire value
+// carried into the PDP (auth.Authorizer.Authorize) and matched against baseline
+// rule Action targets, so a typo here silently breaks the gate↔baseline binding.
+func TestConfigcorePermissions_String(t *testing.T) {
+	cases := []struct {
+		name string
+		perm Permission
+		want string
+	}{
+		{"PermConfigRead", PermConfigRead(), "config:read"},
+		{"PermConfigWrite", PermConfigWrite(), "config:write"},
+		{"PermConfigPublish", PermConfigPublish(), "config:publish"},
+		{"PermFlagRead", PermFlagRead(), "flag:read"},
+		{"PermFlagWrite", PermFlagWrite(), "flag:write"},
+	}
+	for _, tc := range cases {
+		if got := tc.perm.String(); got != tc.want {
+			t.Errorf("%s.String() = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 // TestPermAuditRead_StableIdentity pins that the accessor returns the closed
 // registry's private singleton (the F6 immutability contract: an external package
 // cannot reassign or fork the registry value because PermAuditRead is a function,
@@ -37,8 +60,8 @@ func TestPermissions_ClosedRegistry(t *testing.T) {
 	// Pin the closed set: PR-10a seeds exactly one permission. A new Perm* var
 	// that forgets to enroll in allPermissions (or an accidental extra) trips
 	// this — the anti-vacuity guard for the closed registry.
-	if len(perms) != 1 {
-		t.Fatalf("Permissions() len = %d, want 1 (PR-10a seeds only PermAuditRead)", len(perms))
+	if len(perms) != 6 {
+		t.Fatalf("Permissions() len = %d, want 6 (PR-10a PermAuditRead + PR-10b configcore 5)", len(perms))
 	}
 	if perms[0].String() != "audit:read" {
 		t.Fatalf("Permissions()[0] = %q, want audit:read", perms[0].String())
@@ -97,6 +120,11 @@ func TestPermissions_KnownVarsEnrolled(t *testing.T) {
 		perm Permission
 	}{
 		{"PermAuditRead", PermAuditRead()},
+		{"PermConfigRead", PermConfigRead()},
+		{"PermConfigWrite", PermConfigWrite()},
+		{"PermConfigPublish", PermConfigPublish()},
+		{"PermFlagRead", PermFlagRead()},
+		{"PermFlagWrite", PermFlagWrite()},
 	}
 
 	for _, kv := range knownVars {

@@ -53,6 +53,12 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 	adminPrincipal := &auth.Principal{Kind: auth.PrincipalUser, Subject: "u", TenantID: testTenantIDStr, Roles: []string{auth.RoleAdmin}}
 	resolver := actionResolver(adminPrincipal)
 
+	// "tenant:read" / "other:write" are deliberately NON-baseline synthetic
+	// actions: this test isolates tenant-policy action-targeting, so it must use
+	// actions the built-in baseline does not allow (else baseline allow would mask
+	// the tenant-rule behaviour under test). Do NOT use real permissions like
+	// config:read here — those are baseline-allowed for admin (PR-10b).
+
 	tests := []struct {
 		name      string
 		policies  []*abac.Policy
@@ -74,7 +80,7 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 				"p1",
 				permitRuleWithAction("r1", []string{testAuditRead}, roleCond),
 			)},
-			action:    "config:read",
+			action:    "other:write",
 			wantAllow: false,
 		},
 		{
@@ -83,7 +89,7 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 				"p1",
 				permitRule("r1", authz.Obligations{}, roleCond),
 			)},
-			action:    "config:read",
+			action:    "other:write",
 			wantAllow: true,
 		},
 		{
@@ -129,16 +135,16 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 			name: "multi-action target: matches first of the set",
 			policies: []*abac.Policy{policyWith(
 				"p1",
-				permitRuleWithAction("r1", []string{"config:read", testAuditRead}, roleCond),
+				permitRuleWithAction("r1", []string{"tenant:read", testAuditRead}, roleCond),
 			)},
-			action:    "config:read",
+			action:    "tenant:read",
 			wantAllow: true,
 		},
 		{
 			name: "multi-action target: matches second of the set",
 			policies: []*abac.Policy{policyWith(
 				"p1",
-				permitRuleWithAction("r1", []string{"config:read", testAuditRead}, roleCond),
+				permitRuleWithAction("r1", []string{"tenant:read", testAuditRead}, roleCond),
 			)},
 			action:    testAuditRead,
 			wantAllow: true,
@@ -147,7 +153,7 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 			name: "multi-action target: action not in set — denies",
 			policies: []*abac.Policy{policyWith(
 				"p1",
-				permitRuleWithAction("r1", []string{"config:read", testAuditRead}, roleCond),
+				permitRuleWithAction("r1", []string{"tenant:read", testAuditRead}, roleCond),
 			)},
 			action:    "other:write",
 			wantAllow: false,
