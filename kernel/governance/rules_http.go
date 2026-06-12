@@ -35,6 +35,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/contractpath"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/fspath"
 )
 
 const (
@@ -380,7 +381,7 @@ func safeJoinUnderRoot(root string, segments ...string) (string, bool) {
 		}
 	}
 	full := filepath.Join(append([]string{root}, segments...)...)
-	if !IsWithinRoot(root, full) {
+	if !fspath.IsWithinRoot(root, full) {
 		return "", false
 	}
 	return full, true
@@ -392,7 +393,8 @@ func safeJoinUnderRoot(root string, segments ...string) (string, bool) {
 //
 // Scoped to rules_http.go (CH-04/05 message redaction). Promote to helpers.go
 // if a third rule needs it — it is deliberately separate from the security-
-// oriented IsWithinRoot/repositoryRoot helpers there.
+// oriented helpers there (IsWithinRoot now lives in pkg/fspath;
+// repositoryRoot lives in helpers.go).
 func relToRoot(root, p string) string {
 	if root != "" {
 		if rel, err := filepath.Rel(root, p); err == nil && !strings.HasPrefix(rel, "..") {

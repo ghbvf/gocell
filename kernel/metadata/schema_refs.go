@@ -2,10 +2,11 @@ package metadata
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/ghbvf/gocell/pkg/fspath"
 )
 
 // SchemaRefScope describes the filesystem boundary used to resolve a schema ref.
@@ -137,7 +138,7 @@ func ResolveContractSchemaRef(projectRoot string, c *ContractMeta, ref ContractS
 	if ref.Scope == SchemaRefScopeProjectRoot {
 		bounds = rootAbs
 	}
-	if !isWithinRoot(bounds, target) {
+	if !fspath.IsWithinRoot(bounds, target) {
 		return ResolvedSchemaRef{}, &SchemaRefError{Field: ref.Field, Ref: ref.Ref, Kind: "path escapes project root or " + string(ref.Scope)}
 	}
 	rel, err := filepath.Rel(rootAbs, target)
@@ -174,41 +175,4 @@ func sortedStringKeys(m map[string]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-// isWithinRoot mirrors kernel/governance.IsWithinRoot. The duplication is
-// forced by layering (kernel/metadata cannot import kernel/governance); keep
-// the two in sync. Extracting a shared helper is tracked in #1255.
-func isWithinRoot(root, target string) bool {
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return false
-	}
-	absTarget, err := filepath.Abs(target)
-	if err != nil {
-		return false
-	}
-	if resolved, err := filepath.EvalSymlinks(absRoot); err == nil {
-		absRoot = resolved
-	} else {
-		absRoot = evalExistingPrefix(absRoot)
-	}
-	if resolved, err := filepath.EvalSymlinks(absTarget); err == nil {
-		absTarget = resolved
-	} else {
-		absTarget = evalExistingPrefix(absTarget)
-	}
-	prefix := absRoot + string(os.PathSeparator)
-	return absTarget == absRoot || strings.HasPrefix(absTarget, prefix)
-}
-
-func evalExistingPrefix(path string) string {
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		return resolved
-	}
-	parent := filepath.Dir(path)
-	if parent == path {
-		return path
-	}
-	return filepath.Join(evalExistingPrefix(parent), filepath.Base(path))
 }

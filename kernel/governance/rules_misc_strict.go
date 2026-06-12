@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/fspath"
 )
 
 // =============================================================================
@@ -896,7 +897,7 @@ func resolveCrossFileSchemaRef(ref, dir, projectRoot string, seen map[string]boo
 		return nil, &schemaWalkError{path: ref, msg: fmt.Sprintf("cross-file $ref %q must be relative", ref)}
 	}
 	targetAbs := filepath.Clean(filepath.Join(dir, filepath.FromSlash(ref)))
-	if projectRoot != "" && !IsWithinRoot(projectRoot, targetAbs) {
+	if projectRoot != "" && !fspath.IsWithinRoot(projectRoot, targetAbs) {
 		return nil, &schemaWalkError{path: ref, msg: fmt.Sprintf("cross-file $ref %q escapes project root", ref)}
 	}
 	if seen[targetAbs] {

@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/fspath"
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 	"github.com/ghbvf/gocell/tools/codegen/contractgen"
 	"github.com/ghbvf/gocell/tools/codegen/requireddepsgen"
@@ -474,7 +475,7 @@ func validateArtifactPaths(root string, artifacts []Artifact) error {
 			return fmt.Errorf("%s for assembly %q must be repo-relative: %s",
 				artifact.Kind, artifact.AssemblyID, artifact.Path)
 		}
-		if !governance.IsWithinRoot(root, absPath(root, artifact.Path)) {
+		if !fspath.IsWithinRoot(root, absPath(root, artifact.Path)) {
 			return fmt.Errorf("%s for assembly %q escapes project root: %s",
 				artifact.Kind, artifact.AssemblyID, artifact.Path)
 		}

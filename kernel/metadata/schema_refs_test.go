@@ -176,7 +176,6 @@ func TestResolveContractSchemaRefScopes(t *testing.T) {
 
 func TestResolveContractSchemaRefRejectsEscapes(t *testing.T) {
 	root := t.TempDir()
-	outside := filepath.Join(root, "..", "outside.schema.json")
 	c := &ContractMeta{ID: "http.auth.login.v1", Dir: "contracts/http/auth/login/v1"}
 
 	_, err := ResolveContractSchemaRef(root, c, ContractSchemaRef{
@@ -186,7 +185,6 @@ func TestResolveContractSchemaRefRejectsEscapes(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "path escapes")
-	assert.False(t, isWithinRoot(root, outside))
 }
 
 func TestResolveContractSchemaRefRejectsSymlinkEscape(t *testing.T) {
@@ -234,11 +232,6 @@ func TestResolveContractSchemaRefsSkipsEmptyAndStopsOnError(t *testing.T) {
 	_, err = ResolveContractSchemaRefs(root, c)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "schemaRefs.response")
-}
-
-func TestIsWithinRootHandlesMissingLeaf(t *testing.T) {
-	root := t.TempDir()
-	assert.True(t, isWithinRoot(root, filepath.Join(root, "missing", "schema.json")))
 }
 
 func ensureTestFile(path string) error {

@@ -2,7 +2,6 @@ package governance
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -200,56 +199,6 @@ func repositoryRoot(root string) string {
 		return root
 	}
 	return absRoot
-}
-
-// IsWithinRoot checks that target resolves to a path inside root.
-// Both sides are normalized to absolute paths, and symlinks are resolved
-// when possible, to prevent both relative-path and symlink-based bypasses.
-//
-// Exported so cmd/gocell and other callers share a single implementation
-// rather than carrying a duplicate with a hand-maintained `// SYNC:` note.
-//
-// kernel/metadata.isWithinRoot is a forced duplicate (layering forbids
-// kernel/metadata importing kernel/governance); keep both in sync until the
-// shared-helper extraction tracked in #1255 lands.
-func IsWithinRoot(root, target string) bool {
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return false
-	}
-	absTarget, err := filepath.Abs(target)
-	if err != nil {
-		return false
-	}
-	// Resolve symlinks on root (which should exist).
-	if resolved, err := filepath.EvalSymlinks(absRoot); err == nil {
-		absRoot = resolved
-	}
-	// For target: resolve symlinks if possible. If the target doesn't exist
-	// (common — we're checking *whether* a file exists), resolve the longest
-	// existing ancestor to handle platforms where intermediate dirs are
-	// symlinks (e.g., macOS /tmp → /private/tmp).
-	if resolved, err := filepath.EvalSymlinks(absTarget); err == nil {
-		absTarget = resolved
-	} else {
-		absTarget = EvalExistingPrefix(absTarget)
-	}
-	cleanRoot := absRoot + string(os.PathSeparator)
-	return strings.HasPrefix(absTarget, cleanRoot) || absTarget == absRoot
-}
-
-// EvalExistingPrefix resolves symlinks on the longest existing ancestor of p,
-// then appends the non-existent suffix. This handles platforms where
-// intermediate directories are symlinks (e.g., macOS /tmp → /private/tmp).
-func EvalExistingPrefix(p string) string {
-	if resolved, err := filepath.EvalSymlinks(p); err == nil {
-		return resolved
-	}
-	parent := filepath.Dir(p)
-	if parent == p {
-		return p // filesystem root, stop recursion
-	}
-	return filepath.Join(EvalExistingPrefix(parent), filepath.Base(p))
 }
 
 // --- actor helpers ---
