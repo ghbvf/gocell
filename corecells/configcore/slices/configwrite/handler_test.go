@@ -751,6 +751,31 @@ func TestHandler_NoAuthorizer_Write_FailClosed(t *testing.T) {
 // CapturingAuthorizer to assert the exact action sent to the PDP.
 // Failure message: configwrite gate must use authz.PermConfigWrite() ("config:write"),
 // not another permission (baseline grants admin for all config perms, masking misbinding).
+// TestNewHandler_ProductionWiring covers the slice's production NewHandler — the
+// composite that wires auth.RequirePermission(authz.PermConfigWrite()) onto every
+// write contract. The other handler tests build a re-wired mux via setupHandler,
+// so without this the production NewHandler gate line stays uncovered. An admin
+// request carrying the allow PDP (via withAdmin) must pass the gate (201).
+func TestNewHandler_ProductionWiring(t *testing.T) {
+	repo := mem.NewConfigRepository(clock.Real())
+	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
+	require.NoError(t, err)
+
+	mux := celltest.NewTestMux()
+	mux.Route(configPrefix, func(sub cell.RouteMux) {
+		require.NoError(t, NewHandler(svc).RegisterRoutes(sub))
+	})
+
+	body := `{"key":"prod.wiring","value":"v"}`
+	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix, strings.NewReader(body)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code,
+		"production NewHandler gate must admit admin + allow PDP; body=%s", w.Body.String())
+}
+
 func TestHandler_ActionPin_ConfigWrite(t *testing.T) {
 	now := time.Now()
 
