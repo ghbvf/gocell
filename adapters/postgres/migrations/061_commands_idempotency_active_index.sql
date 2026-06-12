@@ -27,7 +27,7 @@
 --
 -- Concurrency: this is index DDL on `commands`, a shared adapters/postgres
 -- table on the general startup path (durable deployments auto-run Migrator.Up).
--- Per migrations/README.md rule 1 it uses `-- +goose no transaction` so the
+-- Per migrations/README.md rule 1 it carries the no-transaction directive so the
 -- DROP/CREATE run CONCURRENTLY and never hold ACCESS EXCLUSIVE on the command
 -- write path — matching the established pattern in 057_devices_cert_expiry_index.
 --
