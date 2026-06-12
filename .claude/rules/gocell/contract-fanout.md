@@ -35,7 +35,7 @@ HTTP path、auth 语义、consistency level、subscription role 时，必须做�
 
 完整机制、威胁矩阵、评级见 ADR `docs/architecture/202606130635-1939-adr-framework-owned-contract.md`，
 符号/盲区见 `kernel/metadata/owner.go`、`kernel/governance/rules_framework_owned.go`（FRAMEWORK-OWNED-CONTRACT-SCOPED-01）、
-`tools/archtest/contract_owner_cell_funnel_test.go`（CONTRACT-OWNER-CELL-FUNNEL-01）。
+`tools/archtest/contract_owner_cell_funnel_01_test.go`（CONTRACT-OWNER-CELL-FUNNEL-01）。
 
 ## Implementation matrix
 

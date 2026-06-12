@@ -1,6 +1,7 @@
 package governance
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -109,11 +110,44 @@ func fwEventContract(id, lifecycle string) *metadata.ContractMeta {
 // (draft) http + event contract trips none of the cell-owner reference rules
 // (REF-03, REF-13) nor the cell-slice emit-coupling rule (CCE-01), and is clean
 // under the framework-side rule when it is a draft eligible-kind contract.
+//
+// Anti-vacuity (FIX 6): we also add a cell-owned L2 HTTP contract with a serving
+// slice so CCE-01 actually processes cell-owned input. The rule must fire on the
+// cell contract (constraint-1: L2 with no triggers), but must NOT produce any
+// finding that references the framework contract's ID — confirming the framework
+// exclusion is real and not "trivially no input".
 func TestFrameworkOwnedContract_ExcludedFromCellOwnerRules(t *testing.T) {
+	const fwContractID = "http.deviceidentity.enroll.v1"
+	const cellContractID = "http.accesscore.login.v1"
+
+	// Cell-owned L2 HTTP contract with no triggers — CCE-01 constraint-1 will fire on it.
+	cellContract := &metadata.ContractMeta{
+		ID:               cellContractID,
+		Kind:             "http",
+		OwnerCell:        "accesscore",
+		ConsistencyLevel: "L2",
+		Lifecycle:        "active",
+		Endpoints:        metadata.EndpointsMeta{Server: "accesscore"},
+		File:             "contracts/http/accesscore/login/v1/contract.yaml",
+		Dir:              "contracts/http/accesscore/login/v1",
+	}
+	// Serving slice for the cell-owned contract.
+	serveSlice := &metadata.SliceMeta{
+		ID:            "login",
+		BelongsToCell: "accesscore",
+		ContractUsages: []metadata.ContractUsage{
+			{Contract: cellContractID, Role: "serve"},
+		},
+		File: "corecells/accesscore/slices/login/slice.yaml",
+	}
+
 	pm := frameworkOwnedProject(
-		fwHTTPContract("http.deviceidentity.enroll.v1", "draft"),
+		fwHTTPContract(fwContractID, "draft"),
 		fwEventContract("event.deviceidentity.cert-issued.v1", "draft"),
+		cellContract,
 	)
+	pm.Slices["accesscore/login"] = serveSlice
+
 	val := NewValidator(pm, ".", clock.Real())
 
 	if got := findByCode(val.validateREF03(), "REF-03"); len(got) != 0 {
@@ -122,9 +156,19 @@ func TestFrameworkOwnedContract_ExcludedFromCellOwnerRules(t *testing.T) {
 	if got := findByCode(val.validateREF13(), "REF-13"); len(got) != 0 {
 		t.Errorf("REF-13 must skip framework-owned contracts, got %d findings: %v", len(got), got)
 	}
-	if got := findByCode(val.validateCONTRACTCONSISTENCYEMIT01(), "CONTRACT-CONSISTENCY-EMIT-01"); len(got) != 0 {
-		t.Errorf("CCE-01 must skip framework-owned contracts, got %d findings: %v", len(got), got)
+
+	// CCE-01 must fire on the cell-owned contract (anti-vacuity: rule actually runs),
+	// but must not produce any finding that references the framework contract ID.
+	cceFindings := findByCode(val.validateCONTRACTCONSISTENCYEMIT01(), "CONTRACT-CONSISTENCY-EMIT-01")
+	if len(cceFindings) == 0 {
+		t.Fatal("CCE-01 anti-vacuity: must fire on the cell-owned L2 contract with no triggers, got 0 findings")
 	}
+	for _, f := range cceFindings {
+		if strings.Contains(f.Message, fwContractID) || strings.Contains(f.File, fwContractID) {
+			t.Errorf("CCE-01 must not reference the framework contract %q, but got finding: %v", fwContractID, f)
+		}
+	}
+
 	if got := findByCode(val.validateFRAMEWORKOWNEDCONTRACTSCOPED01(), "FRAMEWORK-OWNED-CONTRACT-SCOPED-01"); len(got) != 0 {
 		t.Errorf("draft http/event framework contracts must be clean, got %d findings: %v", len(got), got)
 	}
@@ -142,6 +186,19 @@ func TestFrameworkOwnedContractScoped_ActiveRejected(t *testing.T) {
 	}
 	if got[0].Severity != SeverityError {
 		t.Errorf("expected error severity, got %v", got[0].Severity)
+	}
+}
+
+// TestFrameworkOwnedContractScoped_DeprecatedPermitted proves the fail-closed
+// lifecycle only rejects "active": a deprecated framework contract is permitted
+// (on its way out, not silently dead).
+func TestFrameworkOwnedContractScoped_DeprecatedPermitted(t *testing.T) {
+	pm := frameworkOwnedProject(fwHTTPContract("http.deviceidentity.enroll.v1", "deprecated"))
+	val := NewValidator(pm, ".", clock.Real())
+
+	got := findByCode(val.validateFRAMEWORKOWNEDCONTRACTSCOPED01(), "FRAMEWORK-OWNED-CONTRACT-SCOPED-01")
+	if len(got) != 0 {
+		t.Errorf("deprecated framework contract must produce 0 findings, got %d: %v", len(got), got)
 	}
 }
 

@@ -131,11 +131,15 @@ contract.yaml（无版本化 wire 契约需求，opt-out 是恰当分层，与 P
   （非散落 escape）。serving 延后到 active 化 PR。
 - **后续**：#1899 用框架 owner 落 deviceidentity/devicestate（draft）；framework serving + D3 active 扩展在
   EST wire PR；command/其它 kind 的框架归属按需扩展 D3 allow-set。
+- **framework 契约 draft→active 迁移 PR 必须同步**：(1) wire 框架 serving RouteGroup（`NewFrameworkHTTP`
+  派生自 contract.yaml + bootstrap 挂载）；(2) 扩展 D3 lifecycle 规则为 serving 扫描（`FRAMEWORK-OWNED-CONTRACT-SCOPED-01`
+  放行已 serve 的 active 框架契约，DEAD-CONTRACT-01 的框架版）；(3) 补 Journey coverage
+  （`JOURNEY-CONTRACT-EXISTENCE-01` 对 active 平台契约生效，迁 active 的框架契约必须有对应 Journey 引用）。
 
 ## 参考
 
 - 对标：cert-manager Issuer/CertificateRequest + external-issuer；SPIFFE Workload API + GOVERNANCE；
   k8s CSI/CNI/Gateway-API；smallstep/certificates provisioner。
 - 内部：`kernel/metadata/owner.go`、`kernel/governance/rules_framework_owned.go`、
-  `tools/archtest/contract_owner_cell_funnel_test.go`、ADR `202606121500-1895`、
+  `tools/archtest/contract_owner_cell_funnel_01_test.go`、ADR `202606121500-1895`、
   `202605261620-adr-cqrs-projection-lifecycle-harness.md`、`.claude/rules/gocell/contract-fanout.md`。

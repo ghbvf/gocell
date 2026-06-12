@@ -194,7 +194,7 @@ func (v *Validator) validateVERIFY03() []ValidationResult {
 func (v *Validator) validateVERIFY04() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
-		if c.Lifecycle != "active" {
+		if c.Lifecycle != lifecycleActive {
 			continue
 		}
 		providerID := contractProvider(c)

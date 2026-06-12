@@ -47,6 +47,7 @@ import (
 // boundary is Hard (a framework owner can never be mistaken for a cell); this
 // rule is the Medium governance companion (type-aware scan + synthetic red case
 // in rules_framework_owned_test.go).
+// See: docs/architecture/202606130635-1939-adr-framework-owned-contract.md §D3.
 func (v *Validator) validateFRAMEWORKOWNEDCONTRACTSCOPED01() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
@@ -73,7 +74,8 @@ func (v *Validator) checkFrameworkOwnedKind(c *metadata.ContractMeta) []Validati
 					"only http and event contracts may be framework-owned",
 				c.ID, metadata.FrameworkOwnerSentinel, c.Kind,
 			),
-			"name an existing cell as ownerCell, or restrict framework ownership to http/event kinds",
+			"if this contract has a cell owner, set ownerCell to an existing cell id; "+
+				"if it must be framework-owned, change the kind to http or event",
 		)}
 	}
 }
@@ -82,7 +84,7 @@ func (v *Validator) checkFrameworkOwnedKind(c *metadata.ContractMeta) []Validati
 // "active" is the literal used by the sibling lifecycle rules (ADV-05,
 // DEAD-CONTRACT-01); reusing it keeps the lifecycle vocabulary consistent.
 func (v *Validator) checkFrameworkOwnedLifecycle(c *metadata.ContractMeta) []ValidationResult {
-	if c.Lifecycle != "active" {
+	if c.Lifecycle != lifecycleActive {
 		return nil
 	}
 	return []ValidationResult{v.newError(
@@ -93,6 +95,6 @@ func (v *Validator) checkFrameworkOwnedLifecycle(c *metadata.ContractMeta) []Val
 				"framework contracts must be draft|deprecated (fail-closed)",
 			c.ID, c.Lifecycle,
 		),
-		"set lifecycle to draft until a framework RouteGroup serves this contract",
+		"set lifecycle to draft or deprecated until a framework RouteGroup serves this contract",
 	)}
 }

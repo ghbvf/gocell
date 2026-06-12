@@ -1,6 +1,9 @@
 package metadata
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestContractOwner_Resolution(t *testing.T) {
 	tests := []struct {
@@ -74,5 +77,8 @@ func TestContractOwner_FrameworkYieldsNoCell(t *testing.T) {
 func TestFrameworkOwnerSentinel_NotALegalCellID(t *testing.T) {
 	if FrameworkOwnerSentinel == "" || FrameworkOwnerSentinel[0] != '_' {
 		t.Fatalf("FrameworkOwnerSentinel %q must be a reserved underscore-prefixed value", FrameworkOwnerSentinel)
+	}
+	if strings.Contains(FrameworkOwnerSentinel, "-") {
+		t.Fatalf("FrameworkOwnerSentinel %q must not contain a dash (cell IDs are no-dash concat style)", FrameworkOwnerSentinel)
 	}
 }
