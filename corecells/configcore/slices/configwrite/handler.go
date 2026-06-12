@@ -11,6 +11,7 @@ import (
 	update "github.com/ghbvf/gocell/generated/contracts/http/config/update/v1"
 	write "github.com/ghbvf/gocell/generated/contracts/http/config/write/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -118,9 +119,10 @@ type Handler struct {
 }
 
 // NewHandler creates a configwrite Handler using generated per-contract handlers.
-// All endpoints are admin-only (auth.AnyRole(auth.RoleAdmin)).
+// All endpoints are gated by auth.RequirePermission(authz.PermConfigWrite());
+// the ABAC PDP decides — baseline grants admin/super-admin (PR-10b #1348).
 func NewHandler(svc *Service) *Handler {
-	policy := auth.AnyRole(auth.RoleAdmin)
+	policy := auth.RequirePermission(authz.PermConfigWrite())
 	return &Handler{
 		writeH:  write.NewHandler(WriteAdapter{svc}, policy),
 		updateH: update.NewHandler(UpdateAdapter{svc}, policy),

@@ -11,6 +11,7 @@ import (
 	toggle "github.com/ghbvf/gocell/generated/contracts/http/config/flags/toggle/v1"
 	update "github.com/ghbvf/gocell/generated/contracts/http/config/flags/update/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -124,9 +125,10 @@ type Handler struct {
 }
 
 // NewHandler creates a flagwrite Handler with generated per-contract handlers.
-// All endpoints are admin-only.
+// Endpoints are gated by auth.RequirePermission(authz.PermFlagWrite()); the ABAC
+// PDP decides — baseline grants admin/super-admin (PR-10b #1348).
 func NewHandler(svc *Service) *Handler {
-	policy := auth.AnyRole(auth.RoleAdmin)
+	policy := auth.RequirePermission(authz.PermFlagWrite())
 	return &Handler{
 		createH: create.NewHandler(CreateAdapter{svc}, policy),
 		updateH: update.NewHandler(UpdateAdapter{svc}, policy),

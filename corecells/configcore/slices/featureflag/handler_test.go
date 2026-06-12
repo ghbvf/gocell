@@ -21,11 +21,33 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
+
+// allowAuthorizer / withAllowAuthorizer / withDenyAuthorizer build the PDP
+// verdicts for tests. The authz.Allow/Deny construction lives in _test.go,
+// which AUTHZ-DECISION-ALLOW-DENY-CALLER-01 sanctions for test doubles; the
+// CapturingAuthorizer type and WithAuthorizer ctx wiring are shared via
+// configcoretest (PR-10b #1348).
+func allowAuthorizer() *configcoretest.CapturingAuthorizer {
+	dec, err := authz.Allow(authz.Obligations{})
+	if err != nil {
+		panic("test allowAuthorizer: authz.Allow: " + err.Error())
+	}
+	return &configcoretest.CapturingAuthorizer{Decision: dec}
+}
+
+func withAllowAuthorizer(ctx context.Context) context.Context {
+	return configcoretest.WithAuthorizer(ctx, allowAuthorizer())
+}
+
+func withDenyAuthorizer(ctx context.Context, reason string) context.Context {
+	return configcoretest.WithAuthorizer(ctx, &configcoretest.CapturingAuthorizer{Decision: authz.Deny(reason)})
+}
 
 // testFlagHandlerTenant is the typed TenantID for direct repo seeding.
 var testFlagHandlerTenant = configcoretest.TestTenant
@@ -34,11 +56,14 @@ var flagHandlerTestKey = bytes.Repeat([]byte("f"), 32)
 
 const flagsBasePath = "/api/v1/flags"
 
-// asAdminFlag attaches an admin Principal AND a valid TenantID to req so it
-// satisfies the auth.AnyRole(RoleAdmin) policy AND the featureflag handler's
-// tenant.FromContext call.
+// asAdminFlag attaches an admin Principal, a valid TenantID, and an allow
+// Authorizer to req so it satisfies the
+// auth.RequirePermission(authz.PermFlagRead()) PDP gate AND the featureflag
+// handler's tenant.FromContext call.
 func asAdminFlag(req *http.Request) *http.Request {
-	ctx := configcoretest.CtxWithTenant(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
+	ctx := withAllowAuthorizer(
+		configcoretest.CtxWithTenant(auth.TestContext("admin-user", []string{auth.RoleAdmin})),
+	)
 	return req.WithContext(ctx)
 }
 
@@ -228,11 +253,12 @@ func TestHandler_HandleGet_NotFound(t *testing.T) {
 	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrFlagNotFound)
 }
 
-// asAdminFlagNoTenant attaches an admin Principal but NO TenantID, so the
-// request passes the admin-role policy yet fails tenant.FromContext. F6: this
-// must map to a typed 403, not a framework 500.
+// asAdminFlagNoTenant attaches an admin Principal and an allow Authorizer but
+// NO TenantID, so the request passes the PDP gate yet fails tenant.FromContext.
+// F6: this must map to a typed 403, not a framework 500.
 func asAdminFlagNoTenant(req *http.Request) *http.Request {
-	return req.WithContext(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
+	ctx := withAllowAuthorizer(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
+	return req.WithContext(ctx)
 }
 
 func TestHandler_HandleGet_MissingTenant_403(t *testing.T) {
@@ -395,6 +421,131 @@ func TestHandler_HandleList_Pagination_FullTraversal(t *testing.T) {
 	for _, id := range allIDs {
 		assert.False(t, seen[id], "duplicate ID: %s", id)
 		seen[id] = true
+	}
+}
+
+// TestHandler_PDPDeny_Returns403 asserts that a PDP-deny (Authorizer returns
+// Deny) surfaces as 403 ERR_AUTH_FORBIDDEN — confirms flag:read-gated (PDP)
+// behavior after the role-literal → permission-based migration (PR-10b #1348).
+func TestHandler_PDPDeny_Returns403(t *testing.T) {
+	handler, _ := setupHandler()
+
+	asDenyFlag := func(req *http.Request) *http.Request {
+		ctx := withDenyAuthorizer(
+			configcoretest.CtxWithTenant(auth.TestContext("admin-user", []string{auth.RoleAdmin})),
+			"policy deny",
+		)
+		return req.WithContext(ctx)
+	}
+
+	tests := []struct {
+		name string
+		req  *http.Request
+	}{
+		{"get deny", httptest.NewRequest(http.MethodGet, flagsBasePath+"/some-key", nil)},
+		{"list deny", httptest.NewRequest(http.MethodGet, flagsBasePath+"/", nil)},
+		{"evaluate deny", func() *http.Request {
+			r := httptest.NewRequest(http.MethodPost, flagsBasePath+"/some-key/evaluate", strings.NewReader(`{"subject":"u"}`))
+			r.Header.Set("Content-Type", "application/json")
+			return r
+		}()},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, asDenyFlag(tc.req))
+			errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+		})
+	}
+}
+
+// TestHandler_NoAuthorizer_FailClosed_Returns403 asserts that a request with a
+// valid principal but no Authorizer in ctx is fail-closed to 403 — required by
+// the flag:read-gated (PDP) contract: no PDP wired = deny.
+func TestHandler_NoAuthorizer_FailClosed_Returns403(t *testing.T) {
+	handler, _ := setupHandler()
+
+	asAdminFlagNoPDP := func(req *http.Request) *http.Request {
+		// Principal + tenant present, but no Authorizer injected.
+		ctx := configcoretest.CtxWithTenant(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
+		return req.WithContext(ctx)
+	}
+
+	tests := []struct {
+		name string
+		req  *http.Request
+	}{
+		{"get no-pdp", httptest.NewRequest(http.MethodGet, flagsBasePath+"/some-key", nil)},
+		{"list no-pdp", httptest.NewRequest(http.MethodGet, flagsBasePath+"/", nil)},
+		{"evaluate no-pdp", func() *http.Request {
+			r := httptest.NewRequest(http.MethodPost, flagsBasePath+"/some-key/evaluate", strings.NewReader(`{"subject":"u"}`))
+			r.Header.Set("Content-Type", "application/json")
+			return r
+		}()},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, asAdminFlagNoPDP(tc.req))
+			errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+		})
+	}
+}
+
+// TestHandler_ActionPin_FlagRead pins that every featureflag endpoint sends
+// action "flag:read" to the PDP. This is the only guard that catches an
+// endpoint↔permission misbinding the role-agnostic baseline (admin allowed for
+// every flag perm) would mask (PR-10b #1348).
+func TestHandler_ActionPin_FlagRead(t *testing.T) {
+	handler, repo := setupHandler()
+	// Seed one flag so GET and evaluate don't short-circuit on 404.
+	require.NoError(t, repo.Create(context.Background(), testFlagHandlerTenant, &domain.FeatureFlag{
+		ID: "ap-1", Key: "pin-flag", Type: domain.FlagBoolean, Enabled: true,
+	}))
+
+	endpoints := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{"get", http.MethodGet, flagsBasePath + "/pin-flag", ""},
+		{"list", http.MethodGet, flagsBasePath + "/", ""},
+		{"evaluate", http.MethodPost, flagsBasePath + "/pin-flag/evaluate", `{"subject":"u"}`},
+	}
+
+	for _, ep := range endpoints {
+		t.Run(ep.name, func(t *testing.T) {
+			cap := allowAuthorizer()
+			ctx := configcoretest.WithAuthorizer(
+				configcoretest.CtxWithTenant(auth.TestContext("admin-user", []string{auth.RoleAdmin})),
+				cap,
+			)
+			var reqBody *strings.Reader
+			if ep.body != "" {
+				reqBody = strings.NewReader(ep.body)
+			} else {
+				reqBody = strings.NewReader("")
+			}
+			req := httptest.NewRequest(ep.method, ep.path, reqBody)
+			if ep.body != "" {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			req = req.WithContext(ctx)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			// Pre-condition: gate passed (2xx). Without this check a routing
+			// misconfiguration or wrong path silently produces a non-200 and the
+			// GotAction assert below would pass vacuously (cap.GotAction == "").
+			require.Equal(t, http.StatusOK, w.Code,
+				"featureflag endpoint %s must return 200 with allow Authorizer "+
+					"(routing or permission misbinding if not); body=%s",
+				ep.name, w.Body)
+			assert.Equal(t, "flag:read", cap.GotAction,
+				"featureflag gate must request action flag:read to PDP; endpoint %s got %q — "+
+					"a misbinding to a different perm would be masked by baseline allow-all-admin",
+				ep.name, cap.GotAction)
+		})
 	}
 }
 

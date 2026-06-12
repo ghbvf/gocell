@@ -10,6 +10,7 @@ import (
 	configpublishgen "github.com/ghbvf/gocell/generated/contracts/http/config/publish/v1"
 	rollbackgen "github.com/ghbvf/gocell/generated/contracts/http/config/rollback/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -91,9 +92,10 @@ type Handler struct {
 }
 
 // NewHandler creates a configpublish Handler with generated per-contract handlers.
-// Both endpoints are admin-only.
+// Both endpoints are gated by auth.RequirePermission(authz.PermConfigPublish()); the
+// ABAC PDP decides — baseline grants admin/super-admin (PR-10b #1348).
 func NewHandler(svc *Service) *Handler {
-	policy := auth.AnyRole(auth.RoleAdmin)
+	policy := auth.RequirePermission(authz.PermConfigPublish())
 	return &Handler{
 		publishH:  configpublishgen.NewHandler(PublishAdapter{svc}, policy),
 		rollbackH: rollbackgen.NewHandler(RollbackAdapter{svc}, policy),

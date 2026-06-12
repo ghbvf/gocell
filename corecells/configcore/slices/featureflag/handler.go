@@ -121,9 +121,10 @@ type Handler struct {
 }
 
 // NewHandler creates a featureflag Handler with generated per-contract handlers.
-// All endpoints are admin-only.
+// Endpoints are gated by auth.RequirePermission(authz.PermFlagRead()); the ABAC
+// PDP decides — baseline grants admin/super-admin (PR-10b #1348).
 func NewHandler(svc *Service) *Handler {
-	policy := auth.AnyRole(auth.RoleAdmin)
+	policy := auth.RequirePermission(authz.PermFlagRead())
 	return &Handler{
 		getH:      flagsget.NewHandler(GetAdapter{svc}, policy),
 		listH:     flagslist.NewHandler(ListAdapter{svc}, policy),

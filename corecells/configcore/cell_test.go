@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/corecells/configcore/configcoretest"
 	"github.com/ghbvf/gocell/corecells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/corecells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/corecells/configcore/slices/configpublish"
@@ -22,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -32,6 +34,30 @@ import (
 	"github.com/ghbvf/gocell/runtime/observability/healthz/healthztest"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
+
+// allowAuthorizer / withAllowAuthorizer / withDenyAuthorizer build the PDP
+// verdicts for tests. The authz.Allow/Deny construction lives in _test.go,
+// which AUTHZ-DECISION-ALLOW-DENY-CALLER-01 sanctions for test doubles; the
+// CapturingAuthorizer type and WithAuthorizer ctx wiring are shared via
+// configcoretest (PR-10b #1348).
+func allowAuthorizer() *configcoretest.CapturingAuthorizer {
+	dec, err := authz.Allow(authz.Obligations{})
+	if err != nil {
+		panic("test allowAuthorizer: authz.Allow: " + err.Error())
+	}
+	return &configcoretest.CapturingAuthorizer{Decision: dec}
+}
+
+func withAllowAuthorizer(ctx context.Context) context.Context {
+	return configcoretest.WithAuthorizer(ctx, allowAuthorizer())
+}
+
+func withDenyAuthorizer(ctx context.Context, reason string) context.Context {
+	return configcoretest.WithAuthorizer(ctx, &configcoretest.CapturingAuthorizer{Decision: authz.Deny(reason)})
+}
+
+// cellTestTenantUUID is the canonical test tenant used across cell-level tests.
+const cellTestTenantUUID = "00000000-0000-0000-0000-000000000001"
 
 func newTestCell() *ConfigCore {
 	return NewConfigCore(
@@ -330,13 +356,24 @@ func initCellWithRouter(t *testing.T) *router.Router {
 	return r
 }
 
+// pdpAdminCtx returns a production-faithful admin request context: an admin
+// principal + tenant + an allow Authorizer. The primary listener wires a PDP in
+// production and configcore routes now gate via auth.RequirePermission, which
+// fails closed without an Authorizer — so business-path cell tests must supply
+// one (PR-10b #1348).
+func pdpAdminCtx(subject string) context.Context {
+	return withAllowAuthorizer(
+		ctxkeys.WithTenantID(auth.TestContext(subject, []string{"admin"}), cellTestTenantUUID),
+	)
+}
+
 func TestConfigCore_RouteConfigList(t *testing.T) {
 	r := initCellWithRouter(t)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/config/", nil)
 	// Inject a valid tenant so configread handler can call tenant.FromContext.
-	req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext("tester", []string{"admin"}), "00000000-0000-0000-0000-000000000001"))
+	req = req.WithContext(pdpAdminCtx("tester"))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code,
@@ -350,8 +387,17 @@ func TestConfigCore_RouteConfigCreate(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/config/", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	// Inject admin context so the request passes PDP and reaches the business path.
+	req = req.WithContext(pdpAdminCtx("admin-test"))
 	r.ServeHTTP(rec, req)
 
+	// The route is reachable and past auth: must not be 401 (unauthenticated) or
+	// 403 (auth-forbidden). It may be 201 Created or another business code, but
+	// never a routing 404 either.
+	assert.NotEqual(t, http.StatusUnauthorized, rec.Code,
+		"POST /api/v1/config/ with admin context must not be 401 (got %d body=%s)", rec.Code, rec.Body)
+	assert.NotEqual(t, http.StatusForbidden, rec.Code,
+		"POST /api/v1/config/ with admin context must not be 403 (got %d body=%s)", rec.Code, rec.Body)
 	assert.NotEqual(t, http.StatusNotFound, rec.Code,
 		"POST /api/v1/config/ should not return 404 (got %d)", rec.Code)
 }
@@ -363,7 +409,7 @@ func TestConfigCore_RouteConfigGetByKey(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/config/app.name", nil)
 	// Inject a valid tenant so the configread handler reaches the business path
 	// rather than the F6 missing-tenant 403 (a separate gate from auth role).
-	req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext("tester", []string{"admin"}), "00000000-0000-0000-0000-000000000001"))
+	req = req.WithContext(pdpAdminCtx("tester"))
 	r.ServeHTTP(rec, req)
 
 	// Handler ran (not routing 404): response must be JSON and must not be an auth rejection.
@@ -381,7 +427,7 @@ func TestConfigCore_RouteFlagsList(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flags/", nil)
 	// Inject a valid tenant so featureflag handler can call tenant.FromContext.
-	req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext("tester", []string{"admin"}), "00000000-0000-0000-0000-000000000001"))
+	req = req.WithContext(pdpAdminCtx("tester"))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code,
@@ -390,12 +436,14 @@ func TestConfigCore_RouteFlagsList(t *testing.T) {
 
 // TestConfigCore_ProductionAuthGateLock is the P0 integration test demanded by
 // the PR review: it exercises the REAL production routing path (cell.go ->
-// slice.RegisterRoutes -> auth.Mount) and locks the 401 / 403 / 2xx
-// spectrum end-to-end for each admin-guarded write endpoint.
+// slice.RegisterRoutes -> auth.Mount) and locks the 401 / 403(fail-closed) /
+// 403(PDP-deny) / 2xx spectrum end-to-end for each permission-gated endpoint.
 //
-// This test would have caught the prior drift where cell.go attached raw
-// HandlerFuncs that bypassed the route-level policy — every case below depends
-// on the admin guard actually being wired on the production path.
+// Since PR-10b the gate is auth.RequirePermission(authz.Perm*) (ABAC PDP), not a
+// role literal. This test would have caught the prior drift where cell.go
+// attached raw HandlerFuncs that bypassed the route-level policy, AND now pins
+// the fail-closed contract: even an admin is rejected (403) when no Authorizer is
+// wired, so a composition root that forgets to inject the PDP fails here.
 //
 // ref: kubernetes/kubernetes pkg/endpoints/installer_test.go — integration
 // test reaches the installed handler via the real mux so authz wiring is
@@ -404,26 +452,30 @@ func TestConfigCore_ProductionAuthGateLock(t *testing.T) {
 	r := initCellWithRouter(t)
 
 	type adminWritePath struct {
-		name   string
-		method string
-		path   string
-		body   string
+		name       string
+		method     string
+		path       string
+		body       string
+		wantAction string // expected PDP action string; asserted in the 2xx branch
 	}
 	paths := []adminWritePath{
-		{"config-read:list", http.MethodGet, "/api/v1/config/", ""},
-		{"config-read:get", http.MethodGet, "/api/v1/config/k", ""},
-		{"flag-read:list", http.MethodGet, "/api/v1/flags/", ""},
-		{"flag-read:get", http.MethodGet, "/api/v1/flags/k", ""},
-		{"flag-read:evaluate", http.MethodPost, "/api/v1/flags/k/evaluate", `{"subject":"test"}`},
-		{"config-write:create", http.MethodPost, "/api/v1/config/", `{"key":"k","value":"v"}`},
-		{"config-write:update", http.MethodPut, "/api/v1/config/k", `{"value":"v"}`},
-		{"config-write:delete", http.MethodDelete, "/api/v1/config/k", ``},
-		{"config-publish:publish", http.MethodPost, "/api/v1/config/k/publish", ``},
-		{"config-publish:rollback", http.MethodPost, "/api/v1/config/k/rollback", `{"version":1}`},
-		{"flag-write:create", http.MethodPost, "/api/v1/flags/", `{"key":"k","enabled":false,"rolloutPercentage":0,"description":"d"}`},
-		{"flag-write:update", http.MethodPut, "/api/v1/flags/k", `{"enabled":true,"rolloutPercentage":10,"description":"d"}`},
-		{"flag-write:toggle", http.MethodPost, "/api/v1/flags/k/toggle", `{"enabled":true}`},
-		{"flag-write:delete", http.MethodDelete, "/api/v1/flags/k", ``},
+		{"config-read:list", http.MethodGet, "/api/v1/config/", "", "config:read"},
+		{"config-read:get", http.MethodGet, "/api/v1/config/k", "", "config:read"},
+		{"flag-read:list", http.MethodGet, "/api/v1/flags/", "", "flag:read"},
+		{"flag-read:get", http.MethodGet, "/api/v1/flags/k", "", "flag:read"},
+		{"flag-read:evaluate", http.MethodPost, "/api/v1/flags/k/evaluate", `{"subject":"test"}`, "flag:read"},
+		{"config-write:create", http.MethodPost, "/api/v1/config/", `{"key":"k","value":"v"}`, "config:write"},
+		{"config-write:update", http.MethodPut, "/api/v1/config/k", `{"value":"v"}`, "config:write"},
+		{"config-write:delete", http.MethodDelete, "/api/v1/config/k", ``, "config:write"},
+		{"config-publish:publish", http.MethodPost, "/api/v1/config/k/publish", ``, "config:publish"},
+		{"config-publish:rollback", http.MethodPost, "/api/v1/config/k/rollback", `{"version":1}`, "config:publish"},
+		{
+			"flag-write:create", http.MethodPost, "/api/v1/flags/",
+			`{"key":"k","enabled":false,"rolloutPercentage":0,"description":"d"}`, "flag:write",
+		},
+		{"flag-write:update", http.MethodPut, "/api/v1/flags/k", `{"enabled":true,"rolloutPercentage":10,"description":"d"}`, "flag:write"},
+		{"flag-write:toggle", http.MethodPost, "/api/v1/flags/k/toggle", `{"enabled":true}`, "flag:write"},
+		{"flag-write:delete", http.MethodDelete, "/api/v1/flags/k", ``, "flag:write"},
 	}
 
 	exec := func(t *testing.T, p adminWritePath, ctx context.Context) *httptest.ResponseRecorder {
@@ -438,6 +490,7 @@ func TestConfigCore_ProductionAuthGateLock(t *testing.T) {
 		return rec
 	}
 
+	const gateTenant = "00000000-0000-0000-0000-000000000001"
 	for _, p := range paths {
 		t.Run(p.name, func(t *testing.T) {
 			// --- 401: no authenticated subject on context.
@@ -446,26 +499,43 @@ func TestConfigCore_ProductionAuthGateLock(t *testing.T) {
 				"unauthenticated %s %s must be 401 (auth.Mount -> Authenticated); got body %s",
 				p.method, p.path, rec.Body)
 
-			// --- 403: authenticated but wrong role.
-			rec = exec(t, p, auth.TestContext("user-non-admin", []string{"viewer"}))
+			// --- 403 (fail-closed): authenticated ADMIN but NO Authorizer wired.
+			// auth.RequirePermission fails closed when the PDP is absent — even for
+			// an admin — so a composition root that forgets bootstrap.WithPrimaryAuthorizer
+			// is caught here, not in production. This replaces the old AnyRole(admin)
+			// gate, which admitted the admin without any PDP.
+			rec = exec(t, p, ctxkeys.WithTenantID(auth.TestContext("admin-user", []string{"admin"}), gateTenant))
 			assert.Equal(t, http.StatusForbidden, rec.Code,
-				"non-admin %s %s must be 403 (auth.Mount -> AnyRole(admin)); got body %s",
+				"%s %s with no Authorizer must fail closed (403); got body %s",
 				p.method, p.path, rec.Body)
 
-			// --- 2xx: admin role. We do not pin the exact success code
-			// (some paths return 404 because the resource was not seeded),
-			// but 401 / 403 must be gone — proving the policy ran and admits
-			// the admin. A valid TenantID is injected so the tenant-scoped
-			// handlers reach the business path rather than the F6 missing-tenant
-			// 403 (which is a separate gate from the admin-role policy under test).
-			adminCtx := ctxkeys.WithTenantID(
-				auth.TestContext("admin-user", []string{"admin"}),
-				"00000000-0000-0000-0000-000000000001")
-			rec = exec(t, p, adminCtx)
+			// --- 403 (PDP deny): authenticated + a wired PDP that DENIES → 403.
+			rec = exec(t, p, withDenyAuthorizer(
+				ctxkeys.WithTenantID(auth.TestContext("user-non-admin", []string{"viewer"}), gateTenant),
+				"policy: no matching allow rule",
+			))
+			assert.Equal(t, http.StatusForbidden, rec.Code,
+				"%s %s denied by the PDP must be 403; got body %s", p.method, p.path, rec.Body)
+
+			// --- 2xx: admin + a capturing PDP that ALLOWS + valid tenant. We do not
+			// pin the exact success code (some paths 404 because the resource was not
+			// seeded), but 401 / 403 must be gone — proving the gate ran and the
+			// granted permission admits the caller. Additionally we assert the exact
+			// PDP action the route requested (wantAction), catching an
+			// endpoint↔permission misbinding the role-agnostic baseline would mask.
+			cap := allowAuthorizer()
+			rec = exec(t, p, configcoretest.WithAuthorizer(
+				ctxkeys.WithTenantID(auth.TestContext("admin-user", []string{"admin"}), gateTenant),
+				cap,
+			))
 			assert.NotEqual(t, http.StatusUnauthorized, rec.Code,
-				"admin %s %s must not be 401; body %s", p.method, p.path, rec.Body)
+				"admin %s %s (PDP allow) must not be 401; body %s", p.method, p.path, rec.Body)
 			assert.NotEqual(t, http.StatusForbidden, rec.Code,
-				"admin %s %s must not be 403; body %s", p.method, p.path, rec.Body)
+				"admin %s %s (PDP allow) must not be 403; body %s", p.method, p.path, rec.Body)
+			assert.Equal(t, p.wantAction, cap.GotAction,
+				"route %s %s must request PDP action %q (got %q); a misbinding would be masked by "+
+					"the role-agnostic baseline that allows admin for every config/flag perm",
+				p.method, p.path, p.wantAction, cap.GotAction)
 		})
 	}
 }
@@ -476,22 +546,21 @@ func TestConfigCore_CrossSliceCursorRejection(t *testing.T) {
 	// Seed enough config entries to produce a nextCursor.
 	// Both write and read requests carry the same test tenant so the read sees
 	// what was written.
-	const cellTestTenantStr = "00000000-0000-0000-0000-000000000001"
 	for i := range 3 {
 		body := fmt.Sprintf(`{"key":"cfg-%d","value":"val-%d"}`, i, i)
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/config/", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
-		req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext("admin-test", []string{"admin"}), cellTestTenantStr))
+		req = req.WithContext(pdpAdminCtx("admin-test"))
 		r.ServeHTTP(rec, req)
 		require.Equal(t, http.StatusCreated, rec.Code, "setup: create config entry %d", i)
 	}
 
 	// Get config-read page with limit=1 to obtain a cursor.
-	// config-read declares auth.AnyRole(dto.RoleAdmin) so an admin principal is required.
+	// config-read declares the ABAC PDP permission gate so an admin principal is required.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/config/?limit=1", nil)
-	req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext("tester", []string{"admin"}), cellTestTenantStr))
+	req = req.WithContext(pdpAdminCtx("tester"))
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 
@@ -504,12 +573,12 @@ func TestConfigCore_CrossSliceCursorRejection(t *testing.T) {
 	require.NotEmpty(t, configPage.NextCursor)
 
 	// Use config-read cursor on feature-flag list endpoint — must be rejected.
-	// feature-flag also declares auth.AnyRole(dto.RoleAdmin) so supply an admin principal.
+	// feature-flag also declares the ABAC PDP permission gate so supply an admin principal.
 	// Also inject the same tenant so the handler can reach the cursor-validation step.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet,
 		"/api/v1/flags/?cursor="+configPage.NextCursor, nil)
-	req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext("tester", []string{"admin"}), cellTestTenantStr))
+	req = req.WithContext(pdpAdminCtx("tester"))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code,
@@ -552,11 +621,11 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 	}
 
 	// Get flag page with limit=1 to obtain a cursor.
-	// feature-flag declares auth.AnyRole(dto.RoleAdmin) so an admin principal is required.
+	// feature-flag declares the ABAC PDP permission gate so an admin principal is required.
 	// Also inject the same tenant used for seeding so the handler can find the flags.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flags/?limit=1", nil)
-	req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext("tester", []string{"admin"}), reverseTestTenantStr))
+	req = req.WithContext(pdpAdminCtx("tester"))
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 
@@ -568,12 +637,12 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 	require.True(t, flagPage.HasMore, "need hasMore to get a flag cursor")
 
 	// Use flag cursor on config-read endpoint — must be rejected.
-	// config-read also declares auth.AnyRole(dto.RoleAdmin) so supply an admin principal.
+	// config-read also declares the ABAC PDP permission gate so supply an admin principal.
 	// Inject the same tenant used for seeding so the handler reaches the cursor-validation step.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet,
 		"/api/v1/config/?cursor="+flagPage.NextCursor, nil)
-	req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext("tester", []string{"admin"}), reverseTestTenantStr))
+	req = req.WithContext(pdpAdminCtx("tester"))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code,

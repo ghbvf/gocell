@@ -24,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/tests/contracttest"
@@ -34,6 +35,25 @@ import (
 // Uses a fixed "contract-admin" subject so contract tests are self-contained.
 func contractAdminCtx() context.Context {
 	return ctxkeys.WithTenantID(auth.TestContext("contract-admin", []string{"admin"}), testHandlerTenantStr)
+}
+
+// contractAllowAuthorizer is a local allow-all Authorizer for contract tests.
+// It cannot import configcoretest (cycle: configcoretest imports configwrite).
+// Semantically identical to configcoretest.AllowAuthorizer() — allow with zero obligations.
+type contractAllowAuthorizer struct{}
+
+func (contractAllowAuthorizer) Authorize(_ context.Context, _, _, _ string) (authz.Decision, error) {
+	dec, err := authz.Allow(authz.Obligations{})
+	if err != nil {
+		panic("contractAllowAuthorizer.Authorize: " + err.Error())
+	}
+	return dec, nil
+}
+
+// withContractAllowAuthorizer injects an allow-all Authorizer into ctx for
+// HTTP contract tests that need to pass the RequirePermission PDP gate.
+func withContractAllowAuthorizer(ctx context.Context) context.Context {
+	return auth.WithAuthorizer(ctx, contractAllowAuthorizer{})
 }
 
 func newContractService(t testing.TB) (*Service, *testutil.RecordingWriter) {
@@ -47,9 +67,10 @@ func newContractService(t testing.TB) (*Service, *testutil.RecordingWriter) {
 	return svc, writer
 }
 
-// newContractMux registers all configwrite routes under the canonical API prefix.
+// newContractMux registers all configwrite routes under the canonical API prefix
+// using auth.RequirePermission(authz.PermConfigWrite()) to mirror production.
 func newContractMux(svc *Service) http.Handler {
-	policy := auth.AnyRole(auth.RoleAdmin)
+	policy := auth.RequirePermission(authz.PermConfigWrite())
 	writeH := write.NewHandler(WriteAdapter{svc}, policy)
 	updateH := update.NewHandler(UpdateAdapter{svc}, policy)
 	deleteH := configdelete.NewHandler(DeleteAdapter{svc}, policy)
@@ -106,7 +127,9 @@ func TestHttpConfigWriteV1Serve(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"key":"app.name","value":"myapp"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}), testHandlerTenantStr))
+	req = req.WithContext(withContractAllowAuthorizer(
+		ctxkeys.WithTenantID(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}), testHandlerTenantStr),
+	))
 	mux.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 
@@ -114,7 +137,9 @@ func TestHttpConfigWriteV1Serve(t *testing.T) {
 }
 
 // TestHttpConfigWriteV1_AuthzNegative validates the 401/403 failure semantics
-// that are part of the http.config.write.v1 interface contract.
+// that are part of the http.config.write.v1 interface contract (config:write-gated (PDP)):
+//   - anonymous requests → 401 ERR_AUTH_UNAUTHORIZED (no principal).
+//   - principal present but no Authorizer in ctx → fail-closed 403 ERR_AUTH_FORBIDDEN.
 func TestHttpConfigWriteV1_AuthzNegative(t *testing.T) {
 	svc, _ := newContractService(t)
 	mux := newContractMux(svc)
@@ -129,7 +154,7 @@ func TestHttpConfigWriteV1_AuthzNegative(t *testing.T) {
 		wantErrCode string
 	}{
 		{"no_auth", false, "", nil, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
-		{"non_admin", true, "user-1", []string{"viewer"}, http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
+		{"no_authorizer_fail_closed", true, "user-1", []string{"viewer"}, http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
