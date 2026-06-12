@@ -1,0 +1,19 @@
+id: devicecertcompletion
+belongsToCell: devicecell
+consistencyLevel: L4
+lifecycle: experimental
+contractUsages:
+  - contract: event.devicecert-rotation-resolved.v1
+    role: publish
+  - contract: event.devicecert-rotation-resolved.v1
+    role: subscribe
+    handler: HandleRotationResolved
+verify:
+  unit:
+    - unit.devicecertcompletion.service
+  contract:
+    - contract.event.devicecert-rotation-resolved.v1.publish
+    - contract.event.devicecert-rotation-resolved.v1.subscribe
+
+allowedFiles:
+  - examples/iotdevice/cells/devicecell/slices/devicecertcompletion/**

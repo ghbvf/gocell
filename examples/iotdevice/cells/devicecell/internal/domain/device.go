@@ -31,6 +31,15 @@ const DefaultCertEpoch int64 = 1
 // a slice→cell import cycle, so the startup guard is what keeps them co-tuned.
 const CertValidity = 90 * 24 * time.Hour
 
+// RotateCertCommandType is the command.Entry.CommandType stamped on the device
+// command that instructs a device to rotate (renew) its certificate. It is the
+// SINGLE SOURCE for the producer↔consumer coupling: devicecertrenewal emits a
+// command with this type, and devicecertcompletion filters terminal acks by it
+// to decide whether to emit a rotation-resolved event (#1870). Centralizing the
+// literal makes the emit/filter pair impossible to drift — a rename breaks both
+// compile sites at once.
+const RotateCertCommandType = "rotate-cert"
+
 // Device represents an IoT device aggregate.
 //
 // Certificate-renewal state (CertEpoch / CertExpiresAt) is persisted on the

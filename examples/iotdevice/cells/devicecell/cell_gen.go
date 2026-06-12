@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc"
 
 	sub0 "github.com/ghbvf/gocell/generated/contracts/event/device-registered/v1"
+	sub1 "github.com/ghbvf/gocell/generated/contracts/event/devicecert-rotation-resolved/v1"
 	grpc0 "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -84,6 +85,10 @@ func (c *DeviceCell) Init(ctx context.Context, reg cell.Registrar) error {
 
 	if err := sub0.NewSubscription(c.bootstrapSvc.HandleDeviceRegistered, "devicecell", "devicecell", "devicebootstrap").Mount(reg); err != nil {
 		return fmt.Errorf("devicecell: subscribe event.device-registered.v1: %w", err)
+	}
+
+	if err := sub1.NewSubscription(c.certCompletionSvc.HandleRotationResolved, "devicecell", "devicecell", "devicecertcompletion").Mount(reg); err != nil {
+		return fmt.Errorf("devicecell: subscribe event.devicecert-rotation-resolved.v1: %w", err)
 	}
 
 	if err := reg.GRPCService(cell.GRPCServiceSpec{
