@@ -33,6 +33,8 @@ func ExampleNewExecutor() {
 
 	exec, err := executor.NewExecutor(exampleHeartbeater{}, clk,
 		executor.WithObserver(executor.NopObserver{}),
+		// Both durations equal the package defaults (DefaultHeartbeatInterval /
+		// DefaultLeaseDuration); passed explicitly only to illustrate the options.
 		executor.WithHeartbeatInterval(10*time.Second),
 		executor.WithLeaseDuration(30*time.Second),
 	)
@@ -48,6 +50,9 @@ func ExampleNewExecutor() {
 	}
 	inst := ksaga.NewInstance("payment_inst_1", "payment_saga", clk.Now())
 
+	// In production leaseID is the CAS fencing token from journal.ClaimPending's
+	// ci.LeaseID, not a hand-picked string; "lease_1" works here only because
+	// exampleHeartbeater always reports the lease as still held.
 	res := exec.Execute(context.Background(), &inst, "lease_1", step, ksaga.RetryPolicy{}, nil)
 	fmt.Println(res.Outcome)
 	// Output:

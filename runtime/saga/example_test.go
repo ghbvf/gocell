@@ -23,8 +23,9 @@ import (
 // kick via persistence.RegisterAfterCommit, so a TxRunner MUST install the
 // after-commit registry and drain it on success — a bare fn(ctx) is not enough.
 //
-// Production wiring passes a real, transactional runner (adapters/postgres.TxManager);
-// this in-memory runner exists only to keep the example self-contained.
+// Production wiring passes a real, transactional runner (adapters/postgres.TxManager)
+// that also confines all DB access to fn's ctx; this in-memory runner exists only to
+// keep the example self-contained (it has no connection to misuse).
 type exampleTxRunner struct{}
 
 func (exampleTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
@@ -112,6 +113,8 @@ func ExampleNewCoordinator() {
 
 	final := waitTerminal(ctx, j, inst.ID)
 
+	// Stop drains in-flight work within the supplied budget; context.Background()
+	// suffices for an example, but production should pass a deadline-bounded ctx.
 	if err := coord.Stop(context.Background()); err != nil {
 		panic(err)
 	}
@@ -122,8 +125,10 @@ func ExampleNewCoordinator() {
 
 // waitTerminal tails an instance's event log — the journal.Reader "status-query"
 // pattern (fold Load) — until a terminal event is recorded, returning its kind.
-// It panics after a generous deadline so a stuck example fails loudly instead of
-// hanging.
+// It uses the wall clock deliberately (not a clock.Clock): it only observes the
+// Coordinator, which already runs on clock.Real(), so no fake clock is warranted.
+// An Example has no *testing.T, so it panics after a generous real-time deadline
+// to fail loudly instead of hanging.
 func waitTerminal(ctx context.Context, r journal.Reader, id idutil.SafeID) journal.EventKind {
 	deadline := time.Now().Add(2 * time.Second)
 	for {
