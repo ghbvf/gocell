@@ -32,11 +32,11 @@ Phase 0 本地实测（macOS local，BSD `/usr/bin/time -l` maximum resident set
 
 ### D1. CI 入口改为 process-isolated 24-shard 矩阵（CI 显式 K=24 / 本地默认 K=1）
 
-`hack/verify-archtest.sh` 整体重写：discovery via `go test -list '^Test' ./tools/archtest`，按字母序 modulo `SHARD_COUNT` 分片（**CI: 24 explicit；本地默认: 1**，见 §Amendment 2026-05-23 + §Amendment 2026-05-28），每 shard 独立 `go test -run '^(name1|name2|...)$'` 调用。三种 execution mode 由 env shape 派生（见 §Amendment 2026-05-23-pr-time-to-nightly §决策 3）：`SHARD_TARGET` 设 → 单 shard（GHA matrix）；`SHARD_COUNT=1` 无 `SHARD_TARGET` → 单进程流式（本地 `make verify` 默认）；`SHARD_COUNT>1` 无 `SHARD_TARGET` → 并行 fan-out（background `&` + wait barrier）。旧 K=N 串行 for-loop 已删（每 shard 重 packages.Load 比 K=1 慢）。
+archtest 执行收敛进 `gocell verify archtest` CLI（`cmd/gocell/internal/archtestrunner`，见 §Amendment 2026-06-12）：discovery via `go test -list '^Test' ./tools/archtest`，按字母序 modulo K 分片（`archtestrunner.partition`，1-based NR mirror），每 shard 独立 `go test -run '^(name1|name2|...)$'` 调用。shard 选择由 `--shard=N/K` flag 表达：**CI `--shard=${{ matrix.shard }}/24`；本地默认无 `--shard` → 单进程跑全套**（等价旧 K=1 默认）。`hack/verify-archtest.sh` 降为 thin passthrough（转发 `$@` 给 CLI，保 `# verify-bucket: nightly` 注解）。
 
-`.github/workflows/archtest-nightly.yml` 单一 `verify-archtest` job：`matrix.shard: [0..23]` + 显式 `env: SHARD_COUNT: 24`（GHA 7 GB shard RSS 约束）；每 shard 独立 ubuntu-latest runner。`fail-fast: false` 对齐 K8s `hack/make-rules/verify.sh` continue-on-failure 范式。CI explicit `SHARD_COUNT=24` 由 `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01` archtest 守卫（见 §Amendment 2026-05-28）。
+`.github/workflows/archtest-nightly.yml` 单一 `verify-archtest` job：`matrix.shard: [0..23]` + 每 shard `--shard=N/24`（GHA 7 GB shard RSS 约束）；每 shard 独立 ubuntu-latest runner。`fail-fast: false` 对齐 K8s `hack/make-rules/verify.sh` continue-on-failure 范式。`--shard=N/24` 分母 == matrix 长度由 `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01` archtest 守卫（见 §Amendment 2026-05-28 + §Amendment 2026-06-12）。
 
-> 历史：本节原文为 "无 SHARD_TARGET 时串行跑 SHARD_COUNT 个 shard" + "`.github/workflows/_build-lint.yml` 新增 `verify-archtest` job" + `K=16 / matrix.shard: [0..15]`。§Amendment 2026-05-23-pr-time-to-nightly §决策 3 删 K=N 串行 for-loop 并新增 "Execution modes" 三档，§决策 1 把 verify-archtest job 整段从 `_build-lint.yml` 迁到 `archtest-nightly.yml`。§Amendment 2026-05-28 把 K=16 提升为 K=24（per-shard RSS 方向性延伸 + slowgate threshold 20s → 25s）。本节同 PR 重写（per ai-robust.md §"ADR amendment 落地必查"）。
+> 历史：本节先后经历 "无 SHARD_TARGET 时串行跑 SHARD_COUNT 个 shard" + `_build-lint.yml::verify-archtest` job + `K=16`。§Amendment 2026-05-23-pr-time-to-nightly 删 K=N 串行 for-loop、新增基于 `SHARD_COUNT`/`SHARD_TARGET` env 派生的三档 execution mode、并把 job 迁到 `archtest-nightly.yml`；§Amendment 2026-05-28 K=16→24。**§Amendment 2026-06-12（#1563）把执行从 shell 迁入 CLI，`SHARD_COUNT`/`SHARD_TARGET`/`SLOWGATE_*` env 接口全部删除，改为显式 `--shard=N/K` flag，本地并行 fan-out 路径（无自动化 caller）随之弃置。** 本节同 PR 重写（per ai-robust.md §"ADR amendment 落地必查"）。
 
 ### D2. tools shard 不再 enumerate archtest，pkgs 运行时计算
 
@@ -46,19 +46,23 @@ Phase 0 本地实测（macOS local，BSD `/usr/bin/time -l` maximum resident set
 
 ### D3. discovery vs AST 一致性元规则
 
-`tools/archtest/archtest_verify_coverage_test.go::TestArchtestVerifyCoverage01`（INVARIANT `ARCHTEST-VERIFY-COVERAGE-01`）：shell-out `DRY_RUN=1 bash hack/verify-archtest.sh` → 与 `scanner.EachInSubtree[ast.FuncDecl]` AST 扫到的 top-level Test* 函数集合做对称 diff，非空则 fail。守的风险：维护者改脚本加 `grep -v TestFoo` debug 过滤忘删 → CI silent unenforce（local `go test ./tools/archtest/...` 仍捕获，但 PR Check 漏过）。AI-robust **Medium**（runtime cross-check 双重源）。
+`tools/archtest/archtest_verify_coverage_test.go::TestArchtestVerifyCoverage01`（INVARIANT `ARCHTEST-VERIFY-COVERAGE-01`）：subprocess `bash hack/verify-archtest.sh --list-tests`（thin passthrough → `go run ./cmd/gocell verify archtest --list-tests`）→ 与 `scanner.EachInSubtree[ast.FuncDecl]` AST 扫到的 top-level Test* 函数集合做对称 diff，非空则 fail。守的风险：CLI discovery 收窄 `-list` regex 或 discover 逻辑漂移 → CI silent unenforce（local `go test -tags=archtest ./tools/archtest/...` 仍捕获，但 PR Check 漏过）。AI-robust **Medium**（runtime cross-check 双重源）。
+
+> 历史：本节原文驱动接口为 `DRY_RUN=1 bash hack/verify-archtest.sh`（discovery 由 shell 自带）。§Amendment 2026-06-12（#1563）把执行迁入 CLI、shell 降为 passthrough，驱动接口改为 `--list-tests`；本节同 PR 重写（per ai-robust.md §"ADR amendment 落地必查"）。
 
 ### D4. `make verify` 委托 archtest 给 nightly gate（D6 single-owner 落地形态）
 
 `.github/workflows/governance.yml::make verify` 把 archtest 排除出其 PR bucket 矩阵——`verify-archtest.sh` 声明 `# verify-bucket: nightly`，由 `generate-buckets` job 排除，委托给 `archtest-nightly.yml::verify-archtest` matrix gate（避免 push/PR 上重复跑 archtest，详见 §D6 single-owner 原则）。**#1817 起为此形态；此前本节用 `env: VERIFY_SKIP: archtest` + 单 job timeout 15，现为 bucket 并行（每桶 timeout 10）——机制变更见末尾 §Amendment 2026-06-11。**
 
-本地 `make verify`（无 `VERIFY_SKIP` env）仍包含 `verify-archtest.sh`，按 `SHARD_COUNT` 默认 K=1 单进程跑（见 §D1 + §Amendment 2026-05-23）；CI 上 `archtest-nightly.yml::verify-archtest` (schedule cron + workflow_dispatch，SHARD_COUNT=24 explicit per §Amendment 2026-05-28) 是唯一权威 archtest gate。
+本地 `make verify`（无 `VERIFY_BUCKET` env）仍触发 `verify-archtest.sh`（thin passthrough → CLI），无 `--shard` 时 CLI 单进程跑全套（等价旧 K=1 默认，见 §D1 + §Amendment 2026-06-12）；CI 上 `archtest-nightly.yml::verify-archtest`（schedule cron + workflow_dispatch，每 shard `--shard=N/24` per §Amendment 2026-05-28 + §Amendment 2026-06-12）是唯一权威 archtest gate。
 
 > **历史**：本节原文先后经历："governance.yml 删 VERIFY_SKIP env" + "verify-archtest.sh serial 16-shard" → §D6 加入时反转（恢复 VERIFY_SKIP 避免双跑）→ §Amendment 2026-05-23 把脚本默认 K 改为 1 → §Amendment 2026-05-23-pr-time-to-nightly 把 owner 从 `_build-lint.yml::verify-archtest` 平移至 `archtest-nightly.yml::verify-archtest`。本节同 PR 重写（per ai-robust.md §"ADR amendment 落地必查"）。
 
 ### D5. slowgate 重接
 
-`hack/verify-archtest.sh` 内 shard 路径：若 `$SLOWGATE_BIN` executable，`go test ... -json -run '...'` tee 到 `$RUNNER_TEMP/archtest-shard-N.json` 再管道入 slowgate（与 `_build-lint.yml` 旧 tools shard 同范式）；否则 plain `go test`（local dev）。matrix job 内 `go build -o "$RUNNER_TEMP/slowgate" ./tools/slowgate` 后注入 env；`if: failure()` artifact 上传保留 json event stream 供失败诊断。
+CLI 以 `--test-json-out=$RUNNER_TEMP/archtest-shard-N.json` 写出 `go test -json` event stream（selection 为空时也写合法空流，slowgate no-op）；`archtest-nightly.yml` matrix step 捕获 CLI 退出码（不中止）后无条件把该 json 管道入 slowgate（`$RUNNER_TEMP/slowgate --threshold=25s --allowlist=... < file`），保持「每 shard 都跑 slowgate」语义。matrix job 内 `go build -o "$RUNNER_TEMP/slowgate" ./tools/slowgate` + `go build -o "$RUNNER_TEMP/gocell" ./cmd/gocell` 构建两二进制；`if: failure()` artifact 上传保留 json event stream 供失败诊断。本地 dev 不传 `--test-json-out`，CLI 直接 streaming（无 slowgate budget gate，本地关注正确性）。
+
+> 历史：本节原文 slowgate 由 shell 经 `$SLOWGATE_BIN` env 探测 + `go test … -json | tee | slowgate` 管道。§Amendment 2026-06-12（#1563）把执行迁入 CLI：json 改由 `--test-json-out` flag 写出，slowgate 管道移到 yaml step（显式 flag 替代 env 探测）；同 PR 并修正 `set -eo pipefail` 下 CLI 非零退出会跳过 slowgate 的 parity 缺陷（捕获退出码不中止）。本节同 PR 重写（per ai-robust.md §"ADR amendment 落地必查"）。
 
 ### D6. Single-owner 原则：nightly schedule is the sole archtest gate on CI
 
@@ -69,13 +73,12 @@ Phase 0 本地实测（macOS local，BSD `/usr/bin/time -l` maximum resident set
 理由（K8s + Watermill 范式对照）：
 - K8s 每个 verify-*.sh 是独立 Prow job（一 owner / 一 gate）；aggregator `hack/make-rules/verify.sh` 是开发者本地一键入口，不是 CI 上的二次 gate
 - Watermill 用单个 reusable workflow 作为 PR/master 共同实现，调用方只做薄包装；语义差异通过显式 input 表达，不靠 caller-injected env 改 script 行为
-- 若 governance 在 push / PR 上也跑 archtest：(a) CI 资源 ×2；(b) 同 script 在两个 caller 下行为分叉（matrix 注入 SLOWGATE_BIN 有 budget 门，governance 无）—— 同名 gate 双契约破坏 reproducibility
+- 若 governance 在 push / PR 上也跑 archtest：(a) CI 资源 ×2；(b) 同 gate 在两个 caller 下行为分叉（CI matrix step 在 CLI 的 `--test-json-out` json 上叠 slowgate budget 门，governance 无）—— 同名 gate 双契约破坏 reproducibility
 
 本地路径：
 - 开发者本地 `make verify`（无 `VERIFY_SKIP` env）仍调 `hack/verify-archtest.sh`，作为一键全跑
 - `hack/githooks/pre-push` 因 CPU/RSS 预算（实测 ~3min wall + 43 GB RSS + 18-core 全打满，违反 sub-10s 预算 18×）不跑 archtest（详见 §"pre-push archtest 撤回"）；开发者要 PR-time archtest 反馈走 `make verify` 或 `bash hack/verify-archtest.sh` 显式触发
-- 脚本因 `SLOWGATE_BIN` 缺失走 plain go test 路径——by-design 单本地路径（slowgate budget gate 是 CI 关注点，本地 dev 关注正确性）
-- 故 script 仍有「`SLOWGATE_BIN` 在则 pipe；不在则 plain」的内部分支，但 CI 只有一个 caller（nightly matrix）注入 `SLOWGATE_BIN`，没有 caller-divergent 契约
+- `hack/verify-archtest.sh` 降为 thin passthrough 后内部不再有 slowgate 分支（§Amendment 2026-06-12）：slowgate budget gate 是 CI 关注点，由 `archtest-nightly.yml` matrix step 在 CLI 的 `--test-json-out` json 上叠（见 §D5）；本地 dev 走 CLI streaming（关注正确性）。CI 只有一个 caller（nightly matrix）跑 slowgate，无 caller-divergent 契约
 
 > 历史：本节原文为 "`_build-lint.yml::verify-archtest` matrix 是 push / pull_request 上的唯一权威 archtest gate"。§Amendment 2026-05-23-pr-time-to-nightly 把 owner 平移至 `archtest-nightly.yml`；本节文本同 PR 重写（per ai-robust.md §"ADR amendment 落地必查"，禁止"原文保留作历史脉络"）。
 
@@ -83,12 +86,14 @@ Phase 0 本地实测（macOS local，BSD `/usr/bin/time -l` maximum resident set
 
 `tools/archtest/archtest_verify_coverage_test.go::TestArchtestVerifyCoverage01` 包含两条断言：
 
-1. **Discovery cross-check**（原 D3）：`DRY_RUN=1 bash hack/verify-archtest.sh` 输出 == AST scan `tools/archtest/*_test.go` 中 top-level `func TestX(t *testing.T)` 集合
-2. **Partition exactly-once**（新增）：`LIST_SHARD_TESTS=1 SHARD_COUNT=k SHARD_TARGET=s bash hack/verify-archtest.sh` 对 s ∈ [0, k) 各 emit 一次该 shard 的 assignment，断言（a）所有 shard 并集 == discovery 全集；（b）任何 test 不出现在 ≥ 2 shard
+1. **Discovery cross-check**（原 D3）：`bash hack/verify-archtest.sh --list-tests`（passthrough → CLI）输出 == AST scan `tools/archtest/*_test.go` 中 top-level `func TestX(t *testing.T)` 集合
+2. **Partition exactly-once**（新增）：`bash hack/verify-archtest.sh --shard=s/k --list-tests` 对 s ∈ [0, k) 各 emit 一次该 shard 的 assignment，断言（a）所有 shard 并集 == discovery 全集；（b）任何 test 不出现在 ≥ 2 shard
 
-测试用 K=4（任意小 K，算法正确性与具体 K 无关，K=4 跑得快）。**事实源单源**：脚本里 `shard_assignment()` 是唯一 modulo 算法实现，`run_shard()` 与 `LIST_SHARD_TESTS` 路径都调用它；Go 测试不**复制**算法，只**调用**脚本验证算法性质。负 TDD：用 `awk 'NR % (n+1) == s'`（cover-break）替换 → partition 断言报告 ~50 测试未分配，恢复后立即绿。
+测试用 K=4（任意小 K，算法正确性与具体 K 无关，K=4 跑得快）。**事实源单源**：`archtestrunner.partition()` 是树内唯一 modulo 算法实现（旧脚本 `shard_assignment()` awk 已删，shell 降为 passthrough）；`--list-tests` 与 `--shard=N/K --list-tests` 两路径都经它，Go 测试不**复制**算法，只**调用** CLI 验证算法性质。单实现是 by construction（非静态守卫，是文档说明）。负 TDD：把 `(i+1) % Total == Index` 改成 cover-break 变体 → partition 断言报告 ~50 测试未分配，恢复后立即绿。
 
-刻意不验证：CI yaml `archtest-nightly.yml::matrix.shard: [0..23]` 与同文件 `env: SHARD_COUNT: 24` 的内部一致性——历史上是 deployment value 漂移问题。2026-05-23 amendment：script 默认值已改 `SHARD_COUNT=1`（本地友好），CI yaml 维持 explicit `SHARD_COUNT`，两值差异是 by-design，编码"本地 vs CI 上下文"；`ARCHTEST-SHARDCOUNT-SYNC-GUARD-01` 同 PR 关闭。**§Amendment 2026-05-28 重新接入此一致性验证**：`ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01` 现同步校验 `matrix.shard` 必须等于 `[0..expectedShardCount-1]` 的连续序列，防止"SHARD_COUNT 改 24 但 matrix 仍 [0..15]"导致 8 shards' tests silent 不跑的回归（K=16→24 演化场景下 deployment value 一致性回归首次有机器保证）。
+CI yaml `archtest-nightly.yml::matrix.shard: [0..23]` 与 CLI invocation `--shard=N/24` 分母的内部一致性由 `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01` 守卫：同步校验 `matrix.shard` 必须等于 `[0..expectedShardTotal-1]` 的连续序列，防止"分母改 24 但 matrix 仍 [0..15]"导致 8 shards' tests silent 不跑的回归。
+
+> 历史：本节原文驱动接口为 `DRY_RUN=1` / `LIST_SHARD_TESTS=1 SHARD_COUNT=k SHARD_TARGET=s bash hack/verify-archtest.sh`，事实源为脚本 `shard_assignment()` awk。yaml 一致性段历史上几经反转：2026-05-23 改默认 `SHARD_COUNT=1` 时一度关闭一致性守卫（`ARCHTEST-SHARDCOUNT-SYNC-GUARD-01`），§Amendment 2026-05-28 以 `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01` 重新接入（校验 `env: SHARD_COUNT` == matrix 长度）。**§Amendment 2026-06-12（#1563）把执行迁入 CLI**：驱动接口改为 `--list-tests` / `--shard=N/K --list-tests`，事实源改为 `archtestrunner.partition()`，一致性守卫从 `env: SHARD_COUNT` 重塑为 `--shard=N/K` 分母==matrix 长度（SHARD_COUNT env 随迁移删除）。本节同 PR 重写（per ai-robust.md §"ADR amendment 落地必查"）。
 
 ## K8s 范式对照
 
@@ -560,3 +565,93 @@ single-owner 模型完整保留）。
 约定」整体替换为「bucket 注解派生 + generate-buckets 排除 + verify-bucket-coverage anti-vacuity
 守卫」，single-owner 从约定升级为机器派生。`VERIFY_SKIP` env 本身仍存在于驱动（通用 escape
 hatch），只是 governance CI 不再使用它。
+
+---
+
+## §Amendment 2026-06-12 (#1563) — archtest 执行入口迁移至 `gocell verify archtest` CLI
+
+### 触发
+
+#1563 在 `cmd/gocell/internal/archtestrunner` 实现了完整的 archtest runner Go API（discovery、
+partition、rule/changed filter、json artifact、slowgate 管道），并在 `cmd/gocell/app` 接线为
+`gocell verify archtest` 子命令（及顶层别名 `gocell archtest`）。本 amendment 把执行逻辑从
+`hack/verify-archtest.sh` 的 226 行 shell 迁移至该 CLI，shell 降为薄 passthrough。
+
+### 决策
+
+#### D1. hack/verify-archtest.sh 降为 thin passthrough
+
+文件缩减为 11 行，仅保留 `# verify-bucket: nightly` 头注解和 `exec go run ./cmd/gocell verify archtest "$@"`。
+所有逻辑（discovery、shard partition、slowgate piping、json artifact、DRY_RUN/LIST_SHARD_TESTS 模式）
+从 shell 删除，移入 Go CLI。passthrough 保留的唯一职责是为 verify-bucket 元系统（`lib/buckets.sh` /
+`verify-bucket-coverage.sh` / `make verify`）提供每 gate 的 bucket 注解入口。
+
+#### D2. archtest-nightly.yml 直接调用 CLI
+
+CI matrix 步骤从 `bash hack/verify-archtest.sh`（注入 SHARD_COUNT/SHARD_TARGET/SLOWGATE_BIN env）
+改为直接调用已构建的 `$RUNNER_TEMP/gocell` 二进制：
+
+```bash
+"$RUNNER_TEMP/gocell" verify archtest \
+  --shard=${{ matrix.shard }}/24 \
+  --timeout=5m \
+  --test-json-out="$RUNNER_TEMP/archtest-shard-${{ matrix.shard }}.json"
+"$RUNNER_TEMP/slowgate" --threshold=25s --allowlist=... \
+  < "$RUNNER_TEMP/archtest-shard-${{ matrix.shard }}.json"
+```
+
+新增 "Build gocell CLI" 步骤（`go build -o "$RUNNER_TEMP/gocell" ./cmd/gocell`），对齐 "Build slowgate" 范式。
+SHARD_COUNT/SHARD_TARGET/SLOWGATE_BIN/SLOWGATE_THRESHOLD env block 全部删除（现为显式 CLI flag）。
+
+#### D3. partition 算法单源迁移
+
+算法从 `hack/verify-archtest.sh::shard_assignment()` 的 `awk 'NR % n == s'` 迁移到
+`archtestrunner.partition()`（1-based NR mirror：`(i+1) % Total == Index`），现为树内唯一
+shard-modulo 实现（旧 awk 已删 → by construction 单源；单实现是**文档说明**，非静态守卫——刻意不加
+扫描器拦截「未来第二实现」，因其 BEHAVIOR 已被守）。partition 的 exactly-once 行为由
+`ARCHTEST-VERIFY-COVERAGE-01` 守卫（`tools/archtest/archtest_verify_coverage_test.go`），
+已更新为通过 CLI `--list-tests` 和 `--shard=N/K --list-tests` 验证算法性质，不再 shell-out 到旧 env 变量接口。
+
+#### D4. ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01 invariant 重塑
+
+原守卫校验「CI step env 必须含 SHARD_COUNT=24」。CLI 迁移后 SHARD_COUNT env 不再存在，守卫重塑为：
+**`--shard=N/K` 的 K 必须等于 `matrix.shard` 数组长度**（即 K=24）。原有的 matrix 连续性检查保留。
+invariant ID 保持 `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01` 不变（避免 ADR 历史引用扫描）；
+新守卫函数 `validateVerifyArchtestShardDenominator` 替换原 `validateVerifyArchtestExplicitShardCount`。
+
+### 威胁矩阵重评（per ai-robust.md §"ADR amendment 落地必查"）
+
+| 原论点 | 在 amendment 下状态 | 处理 |
+|---|---|---|
+| §D1 「hack/verify-archtest.sh discovery + modulo 分片」 | ✅ 逻辑不变，载体从 shell 迁到 Go CLI；shell 降为 passthrough | `ARCHTEST-VERIFY-COVERAGE-01` 守 partition exactly-once 行为；单实现 by construction（非静态守卫，是文档说明）|
+| §D3 ARCHTEST-VERIFY-COVERAGE-01（discovery==AST + partition exactly-once） | ✅ 不变；调用入口从 env-var 接口改为 `--list-tests` / `--shard=N/K --list-tests` | 同 PR 更新测试 subprocess wiring |
+| §D5 slowgate 接入 | ✅ 不变；`--test-json-out` 写 json，CI 步骤 pipe 入 slowgate | 机制显式化（CLI flag 替代 env）；slowgate 步骤 parity 修正见下注 |
+| §D6 single-owner 原则 | ✅ 不变；nightly 仍是 sole CI gate；make verify 仍走 passthrough K=1 | passthrough 保留 bucket 注解 |
+| §Amendment 2026-05-28 ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01 | ⚠️ 守卫逻辑重塑（SHARD_COUNT env → --shard denominator） | 同 PR 重写 `archtest_ci_shard_count_test.go`；fixture 集从 8 扩至 9（新增 missing-shard-flag）|
+| CI 本地并行 fan-out（SHARD_COUNT>1 无 SHARD_TARGET） | ❌ 移除（该路径在 shell 中，无自动化 caller，pre-push 已撤回） | 意图弃置：开发者本地 K=1 或 gocell verify archtest --shard=N/K 手动调用 |
+
+**本地 `make verify` K=1 路径不变**：`hack/verify-archtest.sh` 降为 thin passthrough 后，`make verify`
+（无 `VERIFY_BUCKET` env）继续触发该脚本，passthrough 转发 `$@`；无 `--shard` 时 CLI 以
+single-process 模式跑全套，行为等价于旧 SHARD_COUNT=1 默认。本地开发者路径无感知变化。
+
+**`--changed` 语义**：`--changed` 选择机械变更的测试文件（git diff 修改文件），source→rule 映射
+（哪些 archtest 规则受某源文件变更影响）推迟至 gh #1877，当前未实现。
+
+**`--scope` 推迟**：`--scope` flag 未暴露（始终为 workspace scope）；外部 repo archtest 范围跟踪于
+gh #1878。
+
+**slowgate parity 修正**：旧 shell 以管道运行（`go test -json | tee | slowgate`），所以 slowgate
+在每个 shard 运行，无论测试是否通过；初始 CLI 版本的 CI step 在 `set -eo pipefail` 下，CLI 非零退出
+会立即中止 shell，slowgate 被跳过。PR review 期间同步修正：CLI 退出码被捕获而不中止，slowgate
+始终在 JSON artifact 存在时运行，step 在两者之一非零时失败（CLI 优先）。
+
+### 同 PR 同步载体
+
+| 载体 | 变更 |
+|---|---|
+| `hack/verify-archtest.sh` | 226 行 → 11 行 thin passthrough |
+| `.github/workflows/archtest-nightly.yml` | 新增 "Build gocell CLI" 步骤；"Verify archtest shard" 步骤改直接调用 CLI；删除 SHARD_COUNT/SHARD_TARGET/SLOWGATE_* env block |
+| `tools/archtest/archtest_verify_coverage_test.go` | subprocess 接口从 DRY_RUN/LIST_SHARD_TESTS env 改为 `--list-tests` / `--shard=N/K --list-tests` CLI flag |
+| `tools/archtest/archtest_ci_shard_count_test.go` | 守卫逻辑重塑（SHARD_COUNT env → --shard denominator）；fixture 集更新 |
+| `hack/README.md` | verify-archtest.sh 条目更新为 "thin passthrough"；记录 `gocell verify archtest` 为 canonical 本地入口 |
+| 本 ADR | 本 §Amendment 2026-06-12（本节）|

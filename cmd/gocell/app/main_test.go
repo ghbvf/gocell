@@ -43,7 +43,7 @@ func TestPrintUsage(t *testing.T) {
 	for _, want := range []string{
 		"Usage: gocell <command> [args]",
 		"Commands:",
-		"validate", "scaffold", "generate", "check", "verify", "graph", "export",
+		"validate", "scaffold", "generate", "check", "verify", "graph", "export", "archtest",
 		"Generate assembly code and derived files",
 		"Run 'gocell <command> -h' for full flag help on a sub-command.",
 	} {
@@ -126,7 +126,7 @@ func TestCommands(t *testing.T) {
 	// stray addition, the findSub loop catches a removal or rename (a renamed
 	// command leaves its old name unfound). This keeps the anti-drift
 	// guarantee airtight rather than blind to graph/export.
-	want := []string{"validate", "scaffold", "generate", "check", "verify", "graph", "export"}
+	want := []string{"validate", "scaffold", "generate", "check", "verify", "graph", "export", "archtest"}
 	if len(commands) != len(want) {
 		t.Fatalf("commands registry has %d entries, want %d (%v)", len(commands), len(want), subNames(commands))
 	}

@@ -45,6 +45,11 @@ var commands = []subcommand[func(ctx context.Context, args []string) error]{
 	{name: "verify", help: []string{"Run tests and artifact checks            [--id, --active, --files]"}, run: runVerify},
 	{name: "graph", help: []string{"Emit module package dependency graph     [--format, --pattern, --root, --include-tests]"}, run: runGraph},
 	{name: "export", help: []string{"Export project catalog (entities + dep graphs) as JSON/YAML"}, run: runExport},
+	{
+		name: "archtest",
+		help: []string{"Run the GoCell archtest suite (alias: verify archtest) [see: gocell verify archtest -h]"},
+		run:  runArchtestAlias,
+	},
 }
 
 // Exit codes. Follows the common POSIX convention used by tools like go

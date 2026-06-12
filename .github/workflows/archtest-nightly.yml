@@ -7,11 +7,18 @@ name: archtest-nightly
 # (b) tagGroup-loop OOM templates being re-copied across PRs (mitigated PR
 # #870), and (c) GHA runner spot preemption ("runner has received a shutdown
 # signal") with 16× amplification across the shard matrix made PR-time
-# feedback too noisy. Pre-push hook (hack/githooks/pre-push) is now the
-# local fast-feedback path; this nightly is the canonical full-matrix gate.
+# feedback too noisy. Pre-push hook (hack/githooks/pre-push) does NOT run
+# archtest (CPU/RSS budget); this nightly is the canonical full-matrix gate.
 #
 # ref: ADR docs/architecture/202605120000-adr-archtest-process-isolation.md
 # ref: kubernetes/community sig-testing nightly long-test pattern
+#
+# §Amendment 2026-06-12 (#1563): archtest execution moved to
+# `gocell verify archtest` CLI (cmd/gocell/internal/archtestrunner).
+# hack/verify-archtest.sh is now a thin bucket passthrough. CI shards now
+# invoke the CLI directly. Partition algorithm single-sourced in
+# archtestrunner.partition. Guarded by
+# ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01.
 
 on:
   schedule:
@@ -39,7 +46,7 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
+          cache-dependency-path: "**/go.sum"
 
       - name: Pre-download modules
         timeout-minutes: 3
@@ -58,30 +65,43 @@ jobs:
       - name: Build slowgate
         run: go build -o "$RUNNER_TEMP/slowgate" ./tools/slowgate
 
+      - name: Build gocell CLI
+        run: go build -o "$RUNNER_TEMP/gocell" ./cmd/gocell
+
       - name: Verify archtest shard ${{ matrix.shard }}
-        env:
-          # CI must set SHARD_COUNT=24 explicitly on THIS step (GHA step env
-          # is step-scoped — sibling step env does NOT propagate to this
-          # step's process). GHA 2-core 7 GB shard RSS budget; script
-          # default is 1 (local-friendly, pre-push). Guarded by
-          # ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01 archtest (step-scoped
-          # match-all). See ADR 202605120000 §Amendment 2026-05-28
-          # (K=16→24 + SLOWGATE_THRESHOLD 20→25s).
-          SHARD_COUNT: 24
-          SHARD_TARGET: ${{ matrix.shard }}
-          TIMEOUT: 5m
-          SLOWGATE_BIN: ${{ runner.temp }}/slowgate
-          # 25s threshold revisit (ADR 202605120000 §Amendment 2026-05-28):
-          # 20s budget calibrated on macOS 18-core Apple Silicon underestimates
-          # GHA ubuntu-latest 2-core 7GB type-graph-load archtest cost.
-          # 2026-05-25 shard 7 (TestPGRepoAmbientTx_SelfCheck 23.66s) +
-          # 2026-05-27 shard 10 (TestSagaJournalConformanceEnrollment 21.77s)
-          # demonstrated chronic overshoot in the 20-25s band. 25s still
-          # catches regressions (a 100ms sleep drifting to 25.1s+ fires)
-          # without per-test allowlist churn.
-          SLOWGATE_THRESHOLD: 25s
-          SLOWGATE_ALLOWLIST: tools/slowgate/allowlist.txt
-        run: bash hack/verify-archtest.sh
+        # ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: the --shard=N/24 denominator
+        # MUST equal the matrix.shard array length (24). Guarded by
+        # archtest_ci_shard_count_test.go. If the denominator and matrix
+        # diverge, some shards silently overlap or gap (tests mis-covered).
+        # See ADR 202605120000 §Amendment 2026-06-12 (#1563).
+        #
+        # Slowgate parity: the CLI exit code is captured without aborting the
+        # shell so that slowgate always runs on every shard regardless of
+        # test pass/fail (matching the legacy pipe behavior). The step fails
+        # if either the CLI or slowgate exits non-zero; CLI exit takes
+        # precedence. The [ -f ] guard is defense-in-depth: the runner writes
+        # --test-json-out unconditionally when the flag is set (guaranteed by
+        # archtestrunner), but an unexpected pre-exit (OOM, signal) could
+        # leave the file absent.
+        shell: bash
+        run: |
+          set -o pipefail
+          cli_exit=0
+          "$RUNNER_TEMP/gocell" verify archtest \
+            --shard=${{ matrix.shard }}/24 \
+            --timeout=5m \
+            --test-json-out="$RUNNER_TEMP/archtest-shard-${{ matrix.shard }}.json" || cli_exit=$?
+          slow_exit=0
+          if [ -f "$RUNNER_TEMP/archtest-shard-${{ matrix.shard }}.json" ]; then
+            "$RUNNER_TEMP/slowgate" \
+              --threshold=25s \
+              --allowlist=tools/slowgate/allowlist.txt \
+              < "$RUNNER_TEMP/archtest-shard-${{ matrix.shard }}.json" || slow_exit=$?
+          else
+            echo "WARN: no json artifact written; skipping slowgate" >&2
+          fi
+          if [ "$cli_exit" -ne 0 ]; then exit "$cli_exit"; fi
+          exit "$slow_exit"
 
       - name: Post-step memory + dmesg
         if: always()

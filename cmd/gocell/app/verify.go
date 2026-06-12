@@ -109,6 +109,16 @@ var verifySubcommands = []subcommand[func(ctx context.Context, args []string) er
 		},
 		run: verifyCodegenSharedSchema,
 	},
+	{
+		name: "archtest",
+		help: []string{
+			"Run the GoCell archtest suite (tools/archtest).",
+			"[--root=DIR] [--rule=ID] [--changed] [--shard=N/K] [--timeout=DUR]",
+			"[--format text|json|sarif] [--test-json-out=FILE] [--list-tests]",
+			"(--scope not available today; workspace-only execution, see gh #1878)",
+		},
+		run: verifyArchtest,
+	},
 }
 
 // runVerify dispatches `gocell verify <type>` through the
