@@ -834,8 +834,14 @@ func TestAccessCore_ProductionAuthGateLock(t *testing.T) {
 			body: `{}`, wantAction: "user:write", selfExempt: true,
 		},
 		{name: "user-write:delete", method: http.MethodDelete, path: "/api/v1/access/users/" + otherID, wantAction: "user:write"},
-		{name: "user-write:lock", method: http.MethodPost, path: "/api/v1/access/users/" + otherID + "/lock", body: `{}`, wantAction: "user:write"},
-		{name: "user-write:unlock", method: http.MethodPost, path: "/api/v1/access/users/" + otherID + "/unlock", body: `{}`, wantAction: "user:write"},
+		{
+			name: "user-write:lock", method: http.MethodPost,
+			path: "/api/v1/access/users/" + otherID + "/lock", body: `{}`, wantAction: "user:write",
+		},
+		{
+			name: "user-write:unlock", method: http.MethodPost,
+			path: "/api/v1/access/users/" + otherID + "/unlock", body: `{}`, wantAction: "user:write",
+		},
 		{
 			name: "user-write:change-password", method: http.MethodPost,
 			path: "/api/v1/access/users/" + otherID + "/password", selfPath: "/api/v1/access/users/" + selfID + "/password",
