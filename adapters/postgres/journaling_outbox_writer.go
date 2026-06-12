@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strconv"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
 // journalingOutboxWriter decorates the base OutboxWriter with an emit-time
@@ -48,11 +50,19 @@ var (
 
 // NewJournalingOutboxWriter wraps a base OutboxWriter so projection-source events
 // are journaled in the producer's transaction. projectionTopics is the set of
-// routing topics (== projection contract ids) to journal; an empty set means the
-// decorator forwards writes unchanged (journals nothing). Exported because the
+// routing topics (== projection contract ids) to journal; a nil or empty set means
+// the decorator forwards writes unchanged (journals nothing). Exported because the
 // composition root (a different package) wires it; construction is locked to the
 // capability provider funnel (CAPABILITY-PROVIDER-FUNNEL-01).
+//
+// inner is a strong dependency: a nil inner is a composition-root programmer error
+// (NewOutboxWriter never returns nil), so it fail-fasts at construction rather than
+// deferring to a nil-deref on the first Write (Option 范式 fail-fast; mirrors
+// clock.MustHaveClock).
 func NewJournalingOutboxWriter(inner *OutboxWriter, projectionTopics []string) outbox.Writer {
+	if inner == nil {
+		panic(panicregister.Approved("journaling-outbox-writer-nil-inner", nil))
+	}
 	set := make(map[string]struct{}, len(projectionTopics))
 	for _, t := range projectionTopics {
 		set[t] = struct{}{}
@@ -92,7 +102,16 @@ func (w *journalingOutboxWriter) journalProjectionSubset(ctx context.Context, en
 	if len(subset) == 0 {
 		return nil
 	}
-	return w.appendProjectionEvents(ctx, subset)
+	if err := w.appendProjectionEvents(ctx, subset); err != nil {
+		// The append runs in the producer's business tx, so a failure rolls the
+		// whole transaction back (the business fact is discarded with the journal
+		// row — atomicity). Log at the decorator so the journal-specific failure is
+		// diagnosable rather than surfacing only as an opaque business-tx abort.
+		slog.ErrorContext(ctx, "projection journal: append failed, business transaction will roll back",
+			slog.Int("count", len(subset)), slog.Any("error", err))
+		return err
+	}
+	return nil
 }
 
 // projectionEventCols is the column count per projection_events row (global_seq is
@@ -114,9 +133,12 @@ const projectionEventInsertConflict = ` ON CONFLICT (id) DO NOTHING`
 
 // appendProjectionEvents writes the given entries to projection_events on the
 // ambient business transaction, chunked to respect the bind-parameter limit. It is
-// unexported (PROJECTION-EVENT-JOURNAL-APPEND-CALLER-01 upstream Hard): no package
-// outside adapters/postgres can reach a journal-append path. Entries are already
-// validated by the base writer, so this does not re-validate.
+// unexported and is the SOLE site that executes an INSERT into projection_events —
+// the SQL builder it delegates to (buildProjectionInsert) is side-effect-free, so
+// the journal-write path has exactly one executing function for
+// PROJECTION-EVENT-JOURNAL-APPEND-CALLER-01 to lock (no callable INSERT helper to
+// bypass it). No package outside adapters/postgres can reach a journal-append path.
+// Entries are already validated by the base writer, so this does not re-validate.
 func (w *journalingOutboxWriter) appendProjectionEvents(ctx context.Context, entries []outbox.Entry) error {
 	tx, ok := persistence.TxFromContext[pgx.Tx](ctx)
 	if !ok {
@@ -125,15 +147,25 @@ func (w *journalingOutboxWriter) appendProjectionEvents(ctx context.Context, ent
 	}
 	for offset := 0; offset < len(entries); offset += projectionEventChunkSize {
 		end := min(offset+projectionEventChunkSize, len(entries))
-		if err := appendProjectionChunk(ctx, tx, entries[offset:end]); err != nil {
+		query, args, err := buildProjectionInsert(entries[offset:end])
+		if err != nil {
 			return err
+		}
+		if _, err := tx.Exec(ctx, query, args...); err != nil {
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+				"projection journal: failed to append events", err,
+				// 5xx strips public details on the wire; count is server-log only.
+				errcode.WithInternal(errcode.InternalAttr("count", end-offset)))
 		}
 	}
 	return nil
 }
 
-// appendProjectionChunk inserts one chunk of entries via a single multi-row INSERT.
-func appendProjectionChunk(ctx context.Context, tx pgx.Tx, entries []outbox.Entry) error {
+// buildProjectionInsert renders the multi-row INSERT statement + bind args for one
+// chunk. It is PURE — no transaction, no journal side effect — so it is not a
+// journal-write path the append caller-allowlist must lock; the only INSERT
+// execution lives in appendProjectionEvents.
+func buildProjectionInsert(entries []outbox.Entry) (string, []any, error) {
 	var sb strings.Builder
 	sb.WriteString(projectionEventInsertPrefix)
 
@@ -142,7 +174,7 @@ func appendProjectionChunk(ctx context.Context, tx pgx.Tx, entries []outbox.Entr
 	for i, e := range entries {
 		rowArgs, err := encodeProjectionEntry(e)
 		if err != nil {
-			return err
+			return "", nil, err
 		}
 		if i > 0 {
 			sb.WriteString(", ")
@@ -151,13 +183,7 @@ func appendProjectionChunk(ctx context.Context, tx pgx.Tx, entries []outbox.Entr
 		args = append(args, rowArgs...)
 	}
 	sb.WriteString(projectionEventInsertConflict)
-
-	if _, err := tx.Exec(ctx, sb.String(), args...); err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
-			"projection journal: failed to append events", err,
-			errcode.WithDetails(errcode.PublicInt("count", len(entries))))
-	}
-	return nil
+	return sb.String(), args, nil
 }
 
 // encodeProjectionEntry serializes one entry into the fixed projectionEventCols

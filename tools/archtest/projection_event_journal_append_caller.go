@@ -46,6 +46,13 @@ package archtest
 //     initializer) is a hard violation, not silently skipped.
 //   - Reflection / unsafe construction is out of scope (charter §3) — same ceiling
 //     as every identifier-resolution funnel.
+//   - A raw tx.Exec("INSERT INTO projection_events …") that does not call
+//     appendProjectionEvents is not caught here — the same raw/dynamic-SQL blind spot
+//     as I4 / §D7, backstopped by the migration-058 serving-role REVOKE. Note the
+//     SQL builder appendProjectionEvents delegates to (buildProjectionInsert) is
+//     side-effect-free (it returns a string + args, runs no Exec), so there is no
+//     callable Go helper that writes the journal — the single INSERT-executing
+//     function is appendProjectionEvents, which this scan locks.
 //   - The anti-vacuity reverse check requires the chokepoint allowlist entry to have
 //     ≥1 observed live reference, so a removed/renamed caller fails CI rather than
 //     leaving a dead bypass slot.

@@ -50,8 +50,12 @@ import (
 const (
 	journalDecoratorPkg  = PlatformModulePath + "/adapters/postgres"
 	journalDecoratorCtor = "NewJournalingOutboxWriter"
-	// journalTopicsDerivedFunc is the cellgen-derived accessor the topic argument must be.
+	// journalTopicsDerivedFunc / journalTopicsDerivedPkg pin the cellgen-derived
+	// accessor the topic argument must be — BOTH name and owning package, so a
+	// same-named function in any other package cannot satisfy the rule (mirrors the
+	// pkg-path precision of the I2 append-caller scan).
 	journalTopicsDerivedFunc = "generatedProjectionSourceTopics"
+	journalTopicsDerivedPkg  = PlatformModulePath + "/cmd/corebundle"
 )
 
 // TestProjectionEventJournalTopicAllowlistDerived01 asserts that every production
@@ -75,7 +79,10 @@ func TestProjectionEventJournalTopicAllowlistDerived01(t *testing.T) {
 		diags = append(diags, Diagnostic{
 			Message: "PROJECTION-EVENT-JOURNAL-TOPIC-ALLOWLIST-DERIVED-01: no production " +
 				"NewJournalingOutboxWriter call observed — the journaling decorator appears unwired, " +
-				"so the derived-topic-set rule is vacuous. Wire it in cmd/corebundle/cap_wiring.go.",
+				"so the derived-topic-set rule is vacuous. Run `gocell generate assembly` so " +
+				"generatedProjectionSourceTopics() exists in modules_gen.go, then wire it in " +
+				"cmd/corebundle/cap_wiring.go: " +
+				"adapterpg.NewJournalingOutboxWriter(adapterpg.NewOutboxWriter(shared.Clock), generatedProjectionSourceTopics()).",
 		})
 	}
 	Report(t, "PROJECTION-EVENT-JOURNAL-TOPIC-ALLOWLIST-DERIVED-01", diags)
@@ -134,7 +141,8 @@ func isDerivedTopicsArg(info *types.Info, expr ast.Expr) bool {
 		return false
 	}
 	fn, ok := info.Uses[id].(*types.Func)
-	return ok && fn.Name() == journalTopicsDerivedFunc
+	return ok && fn.Name() == journalTopicsDerivedFunc &&
+		fn.Pkg() != nil && fn.Pkg().Path() == journalTopicsDerivedPkg
 }
 
 // TestProjectionEventJournalTopicAllowlistDerived01_RedFixture is the negative

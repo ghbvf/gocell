@@ -54,12 +54,15 @@ func TestCollectOutboxProjectionTopics(t *testing.T) {
 			want:  []string{"event.alpha.v1", "event.beta.v1", "event.gamma.v1"},
 		},
 		{
-			name: "saga-journal projections and non-projection CUs are excluded",
+			name: "saga-journal, non-projection, and unknown-source CUs are excluded",
 			slices: map[string]*metadata.SliceMeta{
 				cellA + "/s": projSlice(cellA, "s",
 					subscribeCU("event.out.v1", "p_out", "outbox"),
 					subscribeCU("saga.journal.v1", "p_saga", "saga-journal"), // excluded: saga source
 					subscribeCU("event.plain.v1", "", ""),                    // excluded: not a projection
+					// positive-allowlist anti-regression: a future projectionSource value
+					// must be excluded by construction, not silently journaled.
+					subscribeCU("event.future.v1", "p_future", "kinesis"),
 				),
 			},
 			cells: []metadata.AssemblyCellRef{{ID: cellA}},

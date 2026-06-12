@@ -318,12 +318,17 @@ func (g *Generator) collectCapabilityConsts(assemblyID string, cellRefs []metada
 	return capConsts, nil
 }
 
-// projectionSourceSagaJournal mirrors cellvocab.ProjectionSourceSagaJournal,
-// declared locally to keep kernel/assembly's codegen dependencies minimal (same
-// convention as tools/codegen/cellgen). Saga-journal projections read the global
-// saga_events journal, NOT the outbox, so they are excluded from the outbox
-// double-write topic set.
-const projectionSourceSagaJournal = "saga-journal"
+// projectionSourceOutbox / projectionSourceSagaJournal mirror
+// cellvocab.ProjectionSourceOutbox / ProjectionSourceSagaJournal, declared locally to
+// keep kernel/assembly's codegen dependencies minimal (same convention as
+// tools/codegen/cellgen). The outbox double-write topic set is a POSITIVE allowlist of
+// these — only outbox-sourced projections (empty == outbox default) flow through the
+// outbox writer; saga-journal reads the global saga_events journal, and any future
+// projectionSource value is excluded by construction rather than silently included.
+const (
+	projectionSourceOutbox      = "outbox"
+	projectionSourceSagaJournal = "saga-journal"
+)
 
 // collectOutboxProjectionTopics returns the sorted, de-duplicated set of contract
 // ids that feed outbox-sourced projections across the assembly's cells — derived
@@ -343,13 +348,9 @@ func (g *Generator) collectOutboxProjectionTopics(cellRefs []metadata.AssemblyCe
 			continue
 		}
 		for _, cu := range s.ContractUsages {
-			if cu.Role != "subscribe" || cu.Projection == "" {
-				continue
+			if isOutboxProjectionUsage(cu) {
+				topicSet[cu.Contract] = struct{}{}
 			}
-			if cu.ProjectionSource == projectionSourceSagaJournal {
-				continue
-			}
-			topicSet[cu.Contract] = struct{}{}
 		}
 	}
 	var topics []string // nil when no outbox projections (corebundle today)
@@ -358,6 +359,18 @@ func (g *Generator) collectOutboxProjectionTopics(cellRefs []metadata.AssemblyCe
 	}
 	sort.Strings(topics)
 	return topics
+}
+
+// isOutboxProjectionUsage reports whether cu declares an outbox-sourced projection:
+// role subscribe + projection set + projectionSource ∈ {"outbox",""} (empty == outbox
+// default, per cellgen validateProjectionContractKind). saga-journal and any future
+// projectionSource value are excluded by this positive allowlist, so a new source
+// cannot be silently double-written to the outbox journal.
+func isOutboxProjectionUsage(cu metadata.ContractUsage) bool {
+	if cu.Role != "subscribe" || cu.Projection == "" {
+		return false
+	}
+	return cu.ProjectionSource == "" || cu.ProjectionSource == projectionSourceOutbox
 }
 
 // generateModulesGenLegacy emits the legacy local-CellModule-type form used

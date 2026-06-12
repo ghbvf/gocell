@@ -76,6 +76,14 @@ func newJournalEntry(t *testing.T, topic string) kout.Entry {
 
 func countRows(t *testing.T, pool *Pool, table, id string) int {
 	t.Helper()
+	// table is interpolated (not bindable), so whitelist it to a closed set — the
+	// helper can never become an injection seam even if a future caller passes a
+	// dynamic value.
+	switch table {
+	case "outbox_entries", "projection_events":
+	default:
+		t.Fatalf("countRows: unexpected table %q", table)
+	}
 	var n int
 	require.NoError(t, pool.DB().QueryRow(context.Background(),
 		"SELECT COUNT(*) FROM "+table+" WHERE id = $1", id).Scan(&n))
@@ -140,26 +148,42 @@ func TestJournalingOutboxWriter_TopicFilter(t *testing.T) {
 	}
 }
 
-// TestJournalingOutboxWriter_OnConflictIdempotency drives the unexported append twice
-// for the same id (this test is in package postgres). A second full Write would abort
-// on the outbox_entries PK; appending directly isolates the journal's ON CONFLICT path.
+// TestJournalingOutboxWriter_OnConflictIdempotency drives the unexported append for
+// the same id twice (this test is in package postgres; a second full Write would
+// abort on the outbox_entries PK, so appending directly isolates the journal's ON
+// CONFLICT path). Covers both shapes the Write and WriteBatch entry points funnel
+// into: a cross-transaction application-layer retry (the ADR §D4 idempotency
+// scenario), and a duplicate id WITHIN one batched multi-row INSERT (the WriteBatch
+// path — single Write only ever passes a 1-element slice).
 func TestJournalingOutboxWriter_OnConflictIdempotency(t *testing.T) {
 	w, txm, pool := newJournalingWriter(t, projTopicA)
 	jw := w.(*journalingOutboxWriter)
 	ctx := context.Background()
-	e := newJournalEntry(t, projTopicA)
 
-	require.NoError(t, txm.RunInTx(ctx, func(txCtx context.Context) error {
-		return jw.appendProjectionEvents(txCtx, []kout.Entry{e})
-	}))
-	firstSeq := journalGlobalSeq(t, pool, e.ID())
+	t.Run("cross-tx re-append", func(t *testing.T) {
+		e := newJournalEntry(t, projTopicA)
+		require.NoError(t, txm.RunInTx(ctx, func(txCtx context.Context) error {
+			return jw.appendProjectionEvents(txCtx, []kout.Entry{e})
+		}))
+		firstSeq := journalGlobalSeq(t, pool, e.ID())
 
-	require.NoError(t, txm.RunInTx(ctx, func(txCtx context.Context) error {
-		return jw.appendProjectionEvents(txCtx, []kout.Entry{e}) // same id again
-	}))
+		require.NoError(t, txm.RunInTx(ctx, func(txCtx context.Context) error {
+			return jw.appendProjectionEvents(txCtx, []kout.Entry{e}) // same id again
+		}))
+		assert.Equal(t, 1, countRows(t, pool, "projection_events", e.ID()),
+			"ON CONFLICT (id) DO NOTHING must keep a single journal row")
+		assert.Equal(t, firstSeq, journalGlobalSeq(t, pool, e.ID()),
+			"global_seq must not advance on a conflicting re-append")
+	})
 
-	assert.Equal(t, 1, countRows(t, pool, "projection_events", e.ID()),
-		"ON CONFLICT (id) DO NOTHING must keep a single journal row")
-	assert.Equal(t, firstSeq, journalGlobalSeq(t, pool, e.ID()),
-		"global_seq must not advance on a conflicting re-append")
+	t.Run("duplicate id within one batched INSERT", func(t *testing.T) {
+		e := newJournalEntry(t, projTopicA)
+		// Two identical-id rows in a single multi-row INSERT (the WriteBatch shape):
+		// ON CONFLICT DO NOTHING must skip the second without erroring the statement.
+		require.NoError(t, txm.RunInTx(ctx, func(txCtx context.Context) error {
+			return jw.appendProjectionEvents(txCtx, []kout.Entry{e, e})
+		}))
+		assert.Equal(t, 1, countRows(t, pool, "projection_events", e.ID()),
+			"a duplicate id within one batched INSERT must yield a single journal row")
+	})
 }
