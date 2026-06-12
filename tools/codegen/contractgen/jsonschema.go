@@ -265,7 +265,10 @@ func fillEnum(s *Schema, rawNode map[string]any, loc string) error {
 		return fmt.Errorf("contractgen/jsonschema: \"enum\" must be a non-empty array at %s", loc)
 	}
 	if s.Type != "string" {
-		return fmt.Errorf("contractgen/jsonschema: \"enum\" only supported on type \"string\" (got %q) at %s", s.Type, loc)
+		// Covers both a non-string type and an omitted type (s.Type == ""): codegen
+		// only generates typed enums for string fields, so the field must declare
+		// "type": "string" explicitly.
+		return fmt.Errorf("contractgen/jsonschema: \"enum\" requires an explicit \"type\": \"string\" (got type %q) at %s", s.Type, loc)
 	}
 	values := make([]string, 0, len(arr))
 	for _, v := range arr {

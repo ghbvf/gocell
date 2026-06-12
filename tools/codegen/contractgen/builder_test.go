@@ -378,6 +378,48 @@ func TestSchemaToDTOs_StringEnum_Nested(t *testing.T) {
 	}
 }
 
+// TestSchemaToDTOs_EnumConstNameCollision asserts two enum values that PascalCase
+// to the same Go identifier (e.g. "in-progress" and "in_progress" → "InProgress")
+// are a fail-fast error rather than a silently shadowed const (#1935).
+func TestSchemaToDTOs_EnumConstNameCollision(t *testing.T) {
+	s := &Schema{
+		Type:          "object",
+		PropertyOrder: []string{"phase"},
+		Properties: map[string]*Schema{
+			"phase": {Type: "string", Enum: []string{"in-progress", "in_progress"}},
+		},
+		Required: []string{"phase"},
+	}
+	_, err := schemaToDTOs("Payload", s)
+	if err == nil {
+		t.Fatal("expected error for colliding enum const names")
+	}
+	if !strings.Contains(err.Error(), "in-progress") || !strings.Contains(err.Error(), "PayloadPhaseInProgress") {
+		t.Errorf("error should name the colliding values + const, got: %v", err)
+	}
+}
+
+// TestSchemaToDTOs_ArrayOfEnum_Rejected asserts enum on array items is rejected
+// fail-fast: schemaGoType would emit "[]<Parent><Field>" while no const block is
+// collected, producing a reference to an undefined type (#1935 array-of-enum guard).
+func TestSchemaToDTOs_ArrayOfEnum_Rejected(t *testing.T) {
+	s := &Schema{
+		Type:          "object",
+		PropertyOrder: []string{"tags"},
+		Properties: map[string]*Schema{
+			"tags": {Type: "array", Items: &Schema{Type: "string", Enum: []string{"a", "b"}}},
+		},
+		Required: []string{"tags"},
+	}
+	_, err := schemaToDTOs("Payload", s)
+	if err == nil {
+		t.Fatal("expected error for enum on array items")
+	}
+	if !strings.Contains(err.Error(), "array items") || !strings.Contains(err.Error(), "tags") {
+		t.Errorf("error should explain array-of-enum is unsupported, got: %v", err)
+	}
+}
+
 // dtoNames returns names for display in test output.
 func dtoNames(dtos []DTOSpec) []string {
 	names := make([]string, len(dtos))

@@ -1512,7 +1512,8 @@ func collectDTOs(name string, s *Schema, out *[]DTOSpec) error {
 
 		// A string field with a closed value-set contributes a typed enum + const
 		// block to this DTO (#1935); GoType already references the named type.
-		if err := collectStringEnum(&dto, name, key, prop); err != nil {
+		// Also rejects unsupported array-of-enum before it reaches codegen.
+		if err := collectFieldEnum(&dto, name, key, prop); err != nil {
 			return err
 		}
 
@@ -1584,10 +1585,19 @@ func enumTypeName(parentName, fieldKey string) string {
 	return parentName + goPascalCase(fieldKey)
 }
 
-// collectStringEnum appends an EnumSpec to dto when prop is a string field with a
+// collectFieldEnum appends an EnumSpec to dto when prop is a string field with a
 // closed value-set (#1935). Kept separate from collectDTOs so the schema-shape
 // branch and its error handling do not push that function's cyclomatic budget.
-func collectStringEnum(dto *DTOSpec, parentName, fieldKey string, prop *Schema) error {
+//
+// Only scalar string fields are supported. An array whose items carry an enum
+// would make schemaGoType emit "[]<Parent><Field>" while no const block is
+// collected here (collection keys off prop.Type=="string", not array items), so
+// the generated code would reference an undefined type — reject it fail-fast
+// instead of emitting broken code. Array-of-enum support is backlog.
+func collectFieldEnum(dto *DTOSpec, parentName, fieldKey string, prop *Schema) error {
+	if prop.Type == "array" && prop.Items != nil && len(prop.Items.Enum) > 0 {
+		return fmt.Errorf("contractgen: enum on array items unsupported (field %q); only scalar string fields generate typed enums", fieldKey)
+	}
 	if prop.Type != "string" || len(prop.Enum) == 0 {
 		return nil
 	}
