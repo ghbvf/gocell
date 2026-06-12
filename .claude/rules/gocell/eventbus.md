@@ -66,8 +66,8 @@ outbox 派生投影的 durable journal（`projection_events`，EPIC #1504）由 
 装饰器写入：append 收口单一 sanctioned 路径（`PROJECTION-EVENT-JOURNAL-APPEND-CALLER-01`），
 双写 topic 集从 `slice.yaml` 投影声明派生、非手写（`PROJECTION-EVENT-JOURNAL-TOPIC-ALLOWLIST-DERIVED-01`）。
 append-only 当前由 serving role 的 DB 引擎 `REVOKE UPDATE, DELETE`（migration 058）保护；code-level
-no-delete archtest（`PROJECTION-EVENT-JOURNAL-NO-DELETE-01`）是 ADR PR-05 的纵深防御计划，尚未落地。
-盲区/评级/符号以对应 archtest godoc 与 ADR `202606071600-1504` 为准。
+no-delete archtest 是 ADR 规划中的纵深防御、尚未落地（ID 与排期以 ADR 为准）。盲区/评级/符号以对应
+archtest godoc 与 ADR `202606071600-1504` 为准。
 
 ## 命名与 payload
 
