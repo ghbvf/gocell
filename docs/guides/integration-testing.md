@@ -162,7 +162,8 @@ parallel with the Linux `build-test` job.
 - `runtime/config` — symlink pivot detection; symlink tests are skipped on Windows via
   `t.Skip("symlink requires SeCreateSymbolicLinkPrivilege on Windows")` so the Windows runner
   passes cleanly while macOS validates the full symlink path.
-- `kernel/governance` — `IsWithinRoot` symlink escape test; same Windows skip applies.
+- `pkg/fspath` — `IsWithinRoot` / `EvalExistingPrefix` symlink-escape + missing-leaf tests;
+  same Windows skip applies (the shared root-containment predicate lives here, #1255).
 - `pkg/pathsafe` — cross-platform path containment / symlink-escape checks.
 
 **Coverage:** the `os-smoke` job does NOT upload a coverage profile and does NOT contribute to

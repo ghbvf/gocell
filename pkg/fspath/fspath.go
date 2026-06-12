@@ -9,11 +9,11 @@
 // and kernel/governance (REF-11/REF-12 path-traversal rules, generated-artifact
 // lookup) depend on it, as do cmd/ and tools/codegen. It lives under pkg/ —
 // rather than in either kernel package — because kernel/metadata cannot import
-// kernel/governance: the kernel-internal import DAG forbids it (metadata's
-// allowlist is {cellvocab}; enforced by archtest KERNEL-INTERNAL-DAG-01). pkg/
-// depends only on the standard library, so it is the one place both kernel
-// layers may reach. Extracting it here is what eliminated the previous
-// hand-synced duplicate pair (the old `// SYNC:` notes, #1255).
+// kernel/governance: the kernel-internal import DAG forbids it (enforced by
+// archtest KERNEL-INTERNAL-DAG-01). pkg/ depends only on the standard library,
+// so it is the one place both kernel layers may reach. Extracting it here is
+// what eliminated the previous hand-synced duplicate pair (the old `// SYNC:`
+// notes, #1255).
 //
 // This package comment is clarifying documentation, not an enforcement
 // mechanism: the import ban that makes a shared home necessary is held by
