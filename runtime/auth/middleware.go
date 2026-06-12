@@ -170,7 +170,13 @@ func AuthenticateBearer(ctx context.Context, verifier IntentTokenVerifier, token
 	if err != nil {
 		return ctx, nil, err
 	}
-	p := jwtClaimsToPrincipal(claims)
+	p, err := jwtClaimsToPrincipal(claims)
+	if err != nil {
+		// Device-token validation failed closed (missing subject/tenant or a
+		// privileged role); surface the raw error so the caller renders its
+		// transport-specific rejection.
+		return ctx, nil, err
+	}
 	if p.Kind == PrincipalUser && p.Subject == "" {
 		return ctx, nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "token subject missing")
 	}

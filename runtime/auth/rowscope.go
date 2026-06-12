@@ -16,10 +16,14 @@ package auth
 // observable without querying the audit ledger, which the super-admin could read
 // themselves.
 //
-// Device and super-admin principals are type-foundation entries: no production
-// token issuer on develop assigns these kinds/roles yet (see PrincipalDevice
-// godoc and RoleSuperAdmin godoc), but the derivation rules are established here
-// for test-injection and downstream ABAC integration (PR-11/12).
+// Production issuers (#1898): a device principal is minted by mintDevicePrincipal
+// (deviceprincipal.go) from a verified device bearer token and carries a sealed
+// Principal.device proof — the device branch below requires that seal, so a
+// forged Principal{Kind: PrincipalDevice} is type-inert (fail-closed). A
+// super-admin principal is minted by the ordinary user path whenever the JWT
+// "roles" claim carries RoleSuperAdmin (sessionmint.MintAccess signs the
+// subject's stored roles with no role allowlist), so the RowScopeAll derivation
+// + mandatory FR-007 audit below are on the live production path.
 
 import (
 	"context"
@@ -36,7 +40,8 @@ import (
 //   - PrincipalUser + HasRole(RoleSuperAdmin)   → RowScopeAll,    subject ""  (+ mandatory audit)
 //   - PrincipalUser + HasRole(RoleAdmin)         → RowScopeTenant, subject ""
 //   - PrincipalUser (neither admin role)         → RowScopeSelf,   subject = p.Subject
-//   - PrincipalDevice                            → RowScopeDevice, subject = p.Subject
+//   - PrincipalDevice (with issuer seal)         → RowScopeDevice, subject = p.Subject
+//   - PrincipalDevice (no seal, i.e. forged)     → KindPermissionDenied error
 //   - PrincipalService / PrincipalAnonymous / PrincipalUnknown → KindPermissionDenied error
 //
 // Super-admin is checked before admin: a principal holding both roles derives
@@ -58,6 +63,17 @@ func (p *Principal) RowVisibility(ctx context.Context) (tenant.RowVisibility, er
 	case PrincipalUser:
 		return deriveUserRowVisibility(ctx, p)
 	case PrincipalDevice:
+		if p.device == nil {
+			// A Principal{Kind: PrincipalDevice} that did not come from
+			// mintDevicePrincipal lacks the device seal — fail closed and never
+			// derive a device row scope from an unsanctioned (forged) principal.
+			// This is the consuming half of DEVICE-PRINCIPAL-MINT-CALLER-01.
+			return tenant.RowVisibility{}, errcode.New(
+				errcode.KindPermissionDenied,
+				errcode.ErrAuthForbidden,
+				"device principal missing issuer seal",
+			)
+		}
 		return tenant.NewRowVisibility(tenant.RowScopeDevice, p.Subject)
 	case PrincipalService, PrincipalAnonymous, PrincipalUnknown:
 		return tenant.RowVisibility{}, errcode.New(

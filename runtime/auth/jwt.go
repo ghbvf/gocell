@@ -33,6 +33,9 @@ const (
 	// Named after AWS Cognito's convention, which is the most widely-adopted
 	// community precedent.
 	tokenUseClaim = "token_use"
+	// principalKindClaim is the JWT payload key carrying the PrincipalKindClaim
+	// value (the signed device-vs-user marker; absent = user).
+	principalKindClaim = "principal_kind"
 )
 
 // jwtTypForIntent returns the JOSE typ header value corresponding to intent.
@@ -190,6 +193,17 @@ func (v *JWTVerifier) VerifyIntent(ctx context.Context, tokenStr string, expecte
 			msgTokenIntentFailed,
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("token_use=%q does not match expected %q",
 				string(claims.TokenUse), string(expected)))),
+			errcode.WithCategory(errcode.CategoryAuth))
+	}
+	// principal_kind fail-closed: reject any value outside the known enum so an
+	// unknown/typo kind can never silently fall through to a user mint. Absent
+	// (empty) is valid and means user. The downstream device-principal issuer
+	// only acts on PrincipalKindClaimDevice.
+	if !claims.PrincipalKind.IsValid() {
+		return Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
+			msgInvalidToken,
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("principal_kind=%q unknown",
+				string(claims.PrincipalKind)))),
 			errcode.WithCategory(errcode.CategoryAuth))
 	}
 	// Audience validation (RFC 8725 §3.3): when expectedAudiences is configured,
@@ -444,6 +458,12 @@ type IssueOptions struct {
 	// The caller is responsible for passing a canonical UUID string; the issuer
 	// trusts its caller and does not re-validate.
 	TenantID string
+	// PrincipalKind marks the token's principal kind ("principal_kind" claim).
+	// Empty (PrincipalKindClaimUser) omits the claim — an ordinary user token.
+	// PrincipalKindClaimDevice mints a device bearer token. The issuer trusts
+	// its caller (like TenantID) and does not re-validate; the verifier rejects
+	// an unknown value fail-closed.
+	PrincipalKind PrincipalKindClaim
 }
 
 // Issue creates a signed JWT token for the given subject and options.
@@ -501,6 +521,9 @@ func (i *JWTIssuer) Issue(intent TokenIntent, subject string, opts IssueOptions)
 	if opts.TenantID != "" {
 		claims["tenant_id"] = opts.TenantID
 	}
+	if opts.PrincipalKind != PrincipalKindClaimUser {
+		claims[principalKindClaim] = string(opts.PrincipalKind)
+	}
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = i.keys.SigningKeyID()
 	token.Header["typ"] = jwtTypForIntent(intent)
@@ -525,6 +548,13 @@ func mapClaimsToClaims(mc jwt.MapClaims) Claims {
 	c.IssuedAt = parseUnixTime(mc["iat"])
 	if tu, ok := mc[tokenUseClaim].(string); ok {
 		c.TokenUse = TokenIntent(tu)
+	}
+	// principal_kind is mapped verbatim here (pure decode, like token_use); the
+	// verifier rejects an unknown value fail-closed so it can never silently
+	// fall through to a user mint. A non-string / absent claim leaves it empty
+	// (= PrincipalKindClaimUser, the default).
+	if pk, ok := mc[principalKindClaim].(string); ok {
+		c.PrincipalKind = PrincipalKindClaim(pk)
 	}
 	if sid, ok := mc["sid"].(string); ok {
 		c.SessionID = sid
@@ -589,6 +619,7 @@ var standardClaims = map[string]struct{}{
 	"sub": {}, "iss": {}, "aud": {},
 	"exp": {}, "iat": {}, "nbf": {}, "roles": {},
 	tokenUseClaim:             {},
+	principalKindClaim:        {},
 	"sid":                     {},
 	"tenant_id":               {},
 	"password_reset_required": {},

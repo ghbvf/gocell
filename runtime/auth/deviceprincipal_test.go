@@ -1,0 +1,250 @@
+package auth
+
+// Tests for the production device-principal issuer (#1898, epic #1895 PR-2):
+// device token → PrincipalDevice, sealed construction (DEVICE-PRINCIPAL-MINT-CALLER-01),
+// fail-closed validation, and concept isolation (service ≠ device).
+
+import (
+	"context"
+	"log/slog"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/tenant"
+)
+
+// mustMintDevice mints a sealed device principal through the sanctioned issuer
+// for tests that need a valid PrincipalDevice (a bare Principal{Kind:
+// PrincipalDevice} literal lacks the seal and is rejected by RowVisibility).
+func mustMintDevice(t *testing.T, subject string) *Principal {
+	t.Helper()
+	p, err := mintDevicePrincipal(Claims{
+		Subject:       subject,
+		TenantID:      deviceTestTenant,
+		PrincipalKind: PrincipalKindClaimDevice,
+	})
+	require.NoError(t, err)
+	return p
+}
+
+// deviceTestTenant is a canonical (non-nil) lowercase UUID accepted by
+// pkg/tenant.ParseTenantID. The nil UUID is illegal per tenancy rules.
+const deviceTestTenant = "11111111-1111-1111-1111-111111111111"
+
+// --- unit: mintDevicePrincipal (the sole sanctioned PrincipalDevice producer) ---
+
+func TestMintDevicePrincipal_Valid(t *testing.T) {
+	p, err := mintDevicePrincipal(Claims{
+		Subject:       "device-42",
+		TenantID:      deviceTestTenant,
+		PrincipalKind: PrincipalKindClaimDevice,
+		ExpiresAt:     time.Unix(1_000_000, 0),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, PrincipalDevice, p.Kind)
+	assert.Equal(t, "device-42", p.Subject)
+	assert.Equal(t, deviceTestTenant, p.TenantID)
+	assert.Empty(t, p.Roles, "device principal must not carry roles (concept isolation)")
+	assert.Empty(t, p.Claims["sid"], "device principal carries no session baggage")
+
+	// The seal is what makes RowVisibility grant RowScopeDevice. A device
+	// principal minted here must derive RowScopeDevice with its subject.
+	vis, err := p.RowVisibility(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, tenant.RowScopeDevice, vis.Scope())
+	assert.Equal(t, "device-42", vis.Subject())
+}
+
+func TestMintDevicePrincipal_FailClosed(t *testing.T) {
+	cases := []struct {
+		name   string
+		claims Claims
+	}{
+		{
+			name:   "missing subject",
+			claims: Claims{TenantID: deviceTestTenant, PrincipalKind: PrincipalKindClaimDevice},
+		},
+		{
+			name:   "missing tenant",
+			claims: Claims{Subject: "device-1", PrincipalKind: PrincipalKindClaimDevice},
+		},
+		{
+			name: "carries admin role",
+			claims: Claims{
+				Subject: "device-1", TenantID: deviceTestTenant,
+				Roles: []string{RoleAdmin}, PrincipalKind: PrincipalKindClaimDevice,
+			},
+		},
+		{
+			name: "carries superadmin role",
+			claims: Claims{
+				Subject: "device-1", TenantID: deviceTestTenant,
+				Roles: []string{RoleSuperAdmin}, PrincipalKind: PrincipalKindClaimDevice,
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := mintDevicePrincipal(tc.claims)
+			require.Error(t, err, "device mint must fail closed")
+			assert.Nil(t, p)
+		})
+	}
+}
+
+// --- Hard seal proof: a forged Principal{Kind: PrincipalDevice} (no seal) is
+// type-inert — RowVisibility refuses to derive RowScopeDevice from it. ---
+
+func TestDevicePrincipal_ForgedWithoutSeal_RowVisibilityFailClosed(t *testing.T) {
+	forged := &Principal{Kind: PrincipalDevice, Subject: "victim-device", TenantID: deviceTestTenant}
+	vis, err := forged.RowVisibility(context.Background())
+	require.Error(t, err, "unsealed device principal must not derive a row scope")
+	assert.Equal(t, tenant.RowVisibility{}, vis)
+}
+
+// --- chain: jwtClaimsToPrincipal dispatch (user vs device) ---
+
+func TestJWTClaimsToPrincipal_DeviceBranch(t *testing.T) {
+	dev, err := jwtClaimsToPrincipal(Claims{
+		Subject:       "device-7",
+		TenantID:      deviceTestTenant,
+		PrincipalKind: PrincipalKindClaimDevice,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, PrincipalDevice, dev.Kind)
+
+	usr, err := jwtClaimsToPrincipal(Claims{Subject: "user-7"})
+	require.NoError(t, err)
+	assert.Equal(t, PrincipalUser, usr.Kind, "absent principal_kind = user (default)")
+}
+
+// --- end-to-end: Issue device token → VerifyIntent → AuthenticateBearer ---
+
+func TestDeviceToken_EndToEnd(t *testing.T) {
+	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour, clock.Real())
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks, clock.Real(), WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	tok, err := issuer.Issue(TokenIntentAccess, "device-42", IssueOptions{
+		PrincipalKind: PrincipalKindClaimDevice,
+		TenantID:      deviceTestTenant,
+		Audience:      []string{"gocell"},
+	})
+	require.NoError(t, err)
+
+	ctx, p, err := AuthenticateBearer(context.Background(), verifier, tok)
+	require.NoError(t, err)
+	assert.Equal(t, PrincipalDevice, p.Kind)
+	assert.Equal(t, "device-42", p.Subject)
+	assert.Equal(t, deviceTestTenant, p.TenantID)
+
+	vis, err := p.RowVisibility(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, tenant.RowScopeDevice, vis.Scope())
+	assert.Equal(t, "device-42", vis.Subject())
+
+	// principal ctxkeys propagate device identity across the async boundary.
+	gotSubject, ok := ctxkeys.SubjectIDFrom(ctx)
+	require.True(t, ok)
+	assert.Equal(t, "device-42", gotSubject)
+	gotTenant, ok := ctxkeys.TenantIDFrom(ctx)
+	require.True(t, ok)
+	assert.Equal(t, deviceTestTenant, gotTenant)
+}
+
+func TestDeviceToken_UnknownPrincipalKind_FailClosed(t *testing.T) {
+	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour, clock.Real())
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks, clock.Real(), WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	// Issuer trusts its caller (like TenantID); the verifier is the fail-closed
+	// gate that rejects an unknown principal_kind so it can never silently
+	// fall through to a user mint.
+	tok, err := issuer.Issue(TokenIntentAccess, "x", IssueOptions{
+		PrincipalKind: PrincipalKindClaim("bogus"),
+		TenantID:      deviceTestTenant,
+		Audience:      []string{"gocell"},
+	})
+	require.NoError(t, err)
+
+	_, _, err = AuthenticateBearer(context.Background(), verifier, tok)
+	require.Error(t, err, "unknown principal_kind must be rejected at verify")
+}
+
+// --- super-admin: production chain mints RowScopeAll + mandatory audit ---
+
+func TestSuperAdmin_EndToEnd_RowScopeAll_Audit(t *testing.T) {
+	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour, clock.Real())
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks, clock.Real(), WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	capture := &captureHandler{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(capture))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	tok, err := issuer.Issue(TokenIntentAccess, "super-alice", IssueOptions{
+		Roles:    []string{RoleSuperAdmin},
+		TenantID: deviceTestTenant,
+		Audience: []string{"gocell"},
+	})
+	require.NoError(t, err)
+
+	ctx, p, err := AuthenticateBearer(context.Background(), verifier, tok)
+	require.NoError(t, err)
+	require.Equal(t, PrincipalUser, p.Kind)
+
+	vis, err := p.RowVisibility(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, tenant.RowScopeAll, vis.Scope())
+	assert.Equal(t, 1, countMandatoryAuditRecords(capture.records),
+		"super-admin production chain must emit the FR-007 mandatory audit (sessionmint.MintAccess is the production issuer)")
+}
+
+// TestRoleScopes_EndToEnd_NoAccidentalEscalation proves ordinary admin/user
+// tokens minted through the production chain cannot accidentally derive the
+// privileged RowScopeAll/RowScopeDevice obligations.
+func TestRoleScopes_EndToEnd_NoAccidentalEscalation(t *testing.T) {
+	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour, clock.Real())
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks, clock.Real(), WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	cases := []struct {
+		name      string
+		roles     []string
+		wantScope tenant.RowScope
+	}{
+		{name: "admin_tenant_scope", roles: []string{RoleAdmin}, wantScope: tenant.RowScopeTenant},
+		{name: "plain_user_self_scope", roles: nil, wantScope: tenant.RowScopeSelf},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tok, err := issuer.Issue(TokenIntentAccess, "subj-"+tc.name, IssueOptions{
+				Roles:    tc.roles,
+				TenantID: deviceTestTenant,
+				Audience: []string{"gocell"},
+			})
+			require.NoError(t, err)
+			ctx, p, err := AuthenticateBearer(context.Background(), verifier, tok)
+			require.NoError(t, err)
+			vis, err := p.RowVisibility(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantScope, vis.Scope())
+			assert.NotEqual(t, tenant.RowScopeAll, vis.Scope())
+			assert.NotEqual(t, tenant.RowScopeDevice, vis.Scope())
+		})
+	}
+}

@@ -41,6 +41,19 @@ const (
 	TokenIntentAccess = kauth.TokenIntentAccess
 )
 
+// PrincipalKindClaim is a type alias of kauth.PrincipalKindClaim so runtime/auth
+// and kernel/auth share the single canonical "principal_kind" wire enum. It is
+// the signed marker distinguishing a device bearer token from a user token.
+type PrincipalKindClaim = kauth.PrincipalKindClaim
+
+const (
+	// PrincipalKindClaimUser is the default (absent claim) = ordinary user.
+	PrincipalKindClaimUser = kauth.PrincipalKindClaimUser
+	// PrincipalKindClaimDevice marks a device bearer token (minted into a
+	// PrincipalDevice by the sole sanctioned issuer mintDevicePrincipal).
+	PrincipalKindClaimDevice = kauth.PrincipalKindClaimDevice
+)
+
 // Claims is a type alias of kauth.Claims so that runtime/auth and kernel/cell
 // share a single canonical struct without conversion at package boundaries.
 // All existing code that references kauth.Claims continues to compile.

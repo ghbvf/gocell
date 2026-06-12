@@ -33,6 +33,39 @@ func (t TokenIntent) IsValid() bool {
 	return t == TokenIntentAccess
 }
 
+// PrincipalKindClaim is the wire value of the "principal_kind" JWT claim — the
+// signed marker that distinguishes a device bearer token from an ordinary user
+// token. It is orthogonal to TokenIntent (access vs refresh): principal_kind
+// answers "who is the subject" (user vs device), not "how is the token used".
+//
+// The claim is absent on every token issued before device tokens existed, which
+// decodes to PrincipalKindClaimUser (the default). Only the values below are
+// legal; an unknown value fails closed at JWTVerifier.VerifyIntent so a typo can
+// never silently fall through to a user mint. The marker is trustworthy because
+// it lives inside the signed JWT payload.
+//
+// runtime/auth.PrincipalKindClaim is a type alias of this type.
+type PrincipalKindClaim string
+
+const (
+	// PrincipalKindClaimUser is the default (absent claim) — an ordinary user
+	// principal. It is the empty string so an unset claim decodes to it.
+	PrincipalKindClaimUser PrincipalKindClaim = ""
+	// PrincipalKindClaimDevice marks a device bearer token. The device-principal
+	// issuer (runtime/auth.mintDevicePrincipal) is the sole sanctioned consumer.
+	PrincipalKindClaimDevice PrincipalKindClaim = "device"
+)
+
+// IsValid reports whether the claim value is one of the known enum values.
+// Mirrors TokenIntent.IsValid — the verifier rejects anything else fail-closed.
+func (k PrincipalKindClaim) IsValid() bool {
+	switch k {
+	case PrincipalKindClaimUser, PrincipalKindClaimDevice:
+		return true
+	}
+	return false
+}
+
 // Claims represents the decoded token claims. This is the canonical definition;
 // runtime/auth.Claims is a type alias of this type so callers share the same struct
 // without conversion at package boundaries.
@@ -65,6 +98,12 @@ type Claims struct {
 	TenantID string
 	// PasswordResetRequired indicates that the subject must change their password.
 	PasswordResetRequired bool
+	// PrincipalKind is the signed "principal_kind" claim marking the token's
+	// principal kind. Empty (claim absent) = user; "device" = a device bearer
+	// token. Validated at JWTVerifier.VerifyIntent (unknown → fail closed); the
+	// device-principal issuer reads it to mint a PrincipalDevice. See
+	// PrincipalKindClaim.
+	PrincipalKind PrincipalKindClaim
 	// JTI is the JWT ID claim ("jti"), a unique identifier for the token.
 	// Empty string when the claim is absent.
 	JTI string
