@@ -20,7 +20,7 @@ func TestService_Login_IssuesDistinctIntents(t *testing.T) {
 	svc, userRepo := newTestService(t)
 	seedUser(userRepo, "alice", "s3cret!")
 
-	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "alice", Password: "s3cret!"})
+	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantID, Username: "alice", Password: "s3cret!"})
 	require.NoError(t, err)
 	require.NotNil(t, pair)
 

@@ -213,11 +213,11 @@ type LoginInput struct {
 	Username string
 	Password string
 	// TenantID is required for pre-auth user lookup (GetByUsername is
-	// tenant-scoped). Parsed from the HTTP request X-Tenant-ID header by the
-	// handler and validated via tenant.ParseTenantID before constructing this
-	// struct (no JWT exists pre-login, so the header is the only source — see
-	// ADR 1160).
-	TenantID string
+	// tenant-scoped). The handler parses the X-Tenant-ID header via
+	// tenant.ParseTenantID and passes a guaranteed-canonical typed value; the
+	// service no longer re-parses. No JWT exists pre-login, so the header is
+	// the only source (ADR 1160).
+	TenantID tenant.TenantID
 }
 
 // Login authenticates a user and returns a JWT token pair.
@@ -252,26 +252,11 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 		errcode.ErrAuthLoginInvalidInput,
 		validation.F("username", input.Username),
 		validation.F("password", input.Password),
-		validation.F("tenantId", input.TenantID),
 	); err != nil {
 		return dto.TokenPair{}, err
 	}
 
-	// Parse and validate the tenant before any DB access. Fail-closed: a
-	// present-but-malformed tenantId returns 401 (ErrAuthLoginFailed) — the same
-	// error as an invalid credential. This is intentional non-enumerable posture:
-	// callers must not be able to distinguish a valid-but-wrong tenant from a
-	// malformed tenant string, preventing cross-tenant tenant ID enumeration. The
-	// setup handler (setup/handler.go, CreateAdmin) uses the same non-enumerable
-	// design for the same reason. Missing tenantId was already rejected above as
-	// 400 (RequireNotEmpty); only a non-empty but syntactically invalid UUID reaches
-	// this branch.
-	tid, parseErr := tenant.ParseTenantID(input.TenantID)
-	if parseErr != nil {
-		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
-			errMsgInvalidCredentials,
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("invalid tenantId: %v", parseErr))))
-	}
+	tid := input.TenantID
 
 	// Authenticate the password outside the tx (bcrypt is CPU-bound and must
 	// not hold a DB transaction open during the hash comparison). We re-fetch

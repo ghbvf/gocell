@@ -256,7 +256,7 @@ func TestEventUserCreatedV1Publish_FromSetup(t *testing.T) {
 	svc := newService(t, sharedStore.UserRepository(), sharedStore.RoleRepository(), w)
 
 	_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
-		TenantID: "00000000-0000-0000-0000-000000000001",
+		TenantID: testTenantID,
 		Username: "root",
 		Email:    "root@local",
 		Password: "SecretPass!23",

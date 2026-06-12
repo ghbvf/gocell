@@ -280,6 +280,21 @@ func TestHandler_Login_SetsRefreshCookie(t *testing.T) {
 	assert.Equal(t, int(testCookieTTL.Seconds()), rtCookie.MaxAge, "cookie MaxAge must match cookieTTL arg")
 }
 
+// TestHandler_Login_MalformedTenant_Returns401 locks in the moved two-stage
+// tenant validation: a present-but-malformed X-Tenant-ID (not a canonical UUID)
+// must return 401 ErrAuthLoginFailed (non-enumerable, ADR 1160), not 400.
+func TestHandler_Login_MalformedTenant_Returns401(t *testing.T) {
+	h := setup(t)
+	body := `{"username":"alice","password":"correct-pass"}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, loginPath, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Tenant-ID", "not-a-uuid")
+	h.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assertValidationError(t, w.Body.Bytes(), "ERR_AUTH_LOGIN_FAILED")
+}
+
 // TestHandler_Login_NoCookieOn401 asserts that a failed login (401) does NOT
 // emit a __Host-gocell_rt cookie — a 4xx must neither mint nor clear the cookie.
 func TestHandler_Login_NoCookieOn401(t *testing.T) {

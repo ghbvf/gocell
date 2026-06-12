@@ -126,7 +126,7 @@ func TestNewService_IssuerDefaultAudienceWrittenToTokens(t *testing.T) {
 	verifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "aud-user", Password: "pass123"})
+	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantID, Username: "aud-user", Password: "pass123"})
 	require.NoError(t, err)
 
 	// The access token must carry the audience from the issuer's configured default.
@@ -312,19 +312,19 @@ func TestService_Login(t *testing.T) {
 		{
 			name:    "valid login",
 			setup:   func(r *mem.UserRepository) { seedUser(r, "alice", "pass123") },
-			input:   LoginInput{TenantID: testTenantIDStr, Username: "alice", Password: "pass123"},
+			input:   LoginInput{TenantID: testTenantID, Username: "alice", Password: "pass123"},
 			wantErr: false,
 		},
 		{
 			name:    "wrong password",
 			setup:   func(r *mem.UserRepository) { seedUser(r, "bob", "correct") },
-			input:   LoginInput{TenantID: testTenantIDStr, Username: "bob", Password: "wrong"},
+			input:   LoginInput{TenantID: testTenantID, Username: "bob", Password: "wrong"},
 			wantErr: true,
 		},
 		{
 			name:    "non-existent user",
 			setup:   func(_ *mem.UserRepository) {},
-			input:   LoginInput{TenantID: testTenantIDStr, Username: "ghost", Password: "pass"},
+			input:   LoginInput{TenantID: testTenantID, Username: "ghost", Password: "pass"},
 			wantErr: true,
 		},
 		{
@@ -340,7 +340,7 @@ func TestService_Login(t *testing.T) {
 				u, _ := r.GetByUsername(context.Background(), testTenantID, "locked")
 				_ = r.UpdateLockState(context.Background(), testTenantID, u.ID, domain.StatusLocked, time.Now())
 			},
-			input:   LoginInput{TenantID: testTenantIDStr, Username: "locked", Password: "pass"},
+			input:   LoginInput{TenantID: testTenantID, Username: "locked", Password: "pass"},
 			wantErr: true,
 		},
 	}
@@ -380,7 +380,7 @@ func TestService_Login_DemoMode_ExplicitCleanup_NoOrphanSession(t *testing.T) {
 		WithSessionTTL(time.Hour))
 	seedUser(userRepo, "refresh-down", "pass123")
 
-	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "refresh-down", Password: "pass123"})
+	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantID, Username: "refresh-down", Password: "pass123"})
 	require.Error(t, err)
 	assert.Empty(t, pair.AccessToken)
 	var ec *errcode.Error
@@ -403,7 +403,7 @@ func TestService_Login_TokensContainSessionID(t *testing.T) {
 	verifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "sid-user", Password: "pass123"})
+	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantID, Username: "sid-user", Password: "pass123"})
 	require.NoError(t, err)
 
 	// Access token must contain sid.
@@ -435,7 +435,7 @@ func TestLogin_PasswordResetRequiredFlagPropagated(t *testing.T) {
 	user.SetPasswordResetRequired(true, time.Now())
 	_ = userRepo.Create(context.Background(), testTenantID, user)
 
-	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "reset-user", Password: "pass123"})
+	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantID, Username: "reset-user", Password: "pass123"})
 	require.NoError(t, err)
 
 	// TokenPair flag must be true.
@@ -453,7 +453,7 @@ func TestLogin_NoResetWhenFlagFalse(t *testing.T) {
 	svc, userRepo := newTestService(t)
 	seedUser(userRepo, "normal-user", "pass123")
 
-	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "normal-user", Password: "pass123"})
+	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantID, Username: "normal-user", Password: "pass123"})
 	require.NoError(t, err)
 
 	assert.False(t, pair.PasswordResetRequired, "TokenPair.PasswordResetRequired must be false for normal user")
@@ -547,12 +547,12 @@ func TestService_Login_BlankFieldsRejected(t *testing.T) {
 	}{
 		{
 			name:        "blank username rejected",
-			input:       LoginInput{TenantID: testTenantIDStr, Username: "", Password: "p"},
+			input:       LoginInput{TenantID: testTenantID, Username: "", Password: "p"},
 			wantMessage: "username",
 		},
 		{
 			name:        "blank password rejected",
-			input:       LoginInput{TenantID: testTenantIDStr, Username: "u", Password: ""},
+			input:       LoginInput{TenantID: testTenantID, Username: "u", Password: ""},
 			wantMessage: "password",
 		},
 	}
@@ -633,7 +633,7 @@ func TestService_Login_RoleFetchFailure_AbortsLogin(t *testing.T) {
 		testIssuer, slog.Default(), WithEmitter(outbox.WrapEmitterForCell(emitter)), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithSessionTTL(time.Hour))
 
-	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "role-outage", Password: "pass123"})
+	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantID, Username: "role-outage", Password: "pass123"})
 	require.Error(t, err, "Login must fail when role fetch fails")
 	assert.Empty(t, pair.AccessToken, "no token on failure")
 
@@ -701,7 +701,7 @@ func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {
 		slog.Default(), WithEmitter(outbox.WrapEmitterForCell(emitter)), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithSessionTTL(time.Hour))
 
-	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "pub-err", Password: "pass123"})
+	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantID, Username: "pub-err", Password: "pass123"})
 	require.NoError(t, err, "publish failure in demo mode should not fail login")
 	assert.NotEmpty(t, pair.AccessToken)
 }
@@ -746,7 +746,7 @@ func TestPersistSessionWithRefresh_DurableTx_RefreshIssueFails_NoExplicitCleanup
 		WithTxManager(persistence.WrapForCell(tx)), WithSessionTTL(time.Hour))
 	seedUser(userRepo, "durable-refresh-fail", "pass123")
 
-	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "durable-refresh-fail", Password: "pass123"})
+	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantID, Username: "durable-refresh-fail", Password: "pass123"})
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -781,7 +781,7 @@ func TestCleanupIssuedSession_Revoke_IdempotentOnAbsent(t *testing.T) {
 	seedUser(userRepo, "cleanup-not-found", "pass123")
 
 	// Should not panic or return an unexpected error — the original refresh issue error propagates.
-	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "cleanup-not-found", Password: "pass123"})
+	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantID, Username: "cleanup-not-found", Password: "pass123"})
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -801,10 +801,8 @@ func TestLogin_EmptyCredentials_AuthErrorCode(t *testing.T) {
 		name  string
 		input LoginInput
 	}{
-		{"empty_password", LoginInput{TenantID: testTenantIDStr, Username: "user@example.com", Password: ""}},
-		{"empty_email", LoginInput{TenantID: testTenantIDStr, Username: "", Password: "secret"}},
-		// U14 (#1337 PR-2a review): blank tenantId must also yield ErrAuthLoginInvalidInput.
-		{"blank_tenant_id", LoginInput{TenantID: "", Username: "user@example.com", Password: "secret"}},
+		{"empty_password", LoginInput{TenantID: testTenantID, Username: "user@example.com", Password: ""}},
+		{"empty_email", LoginInput{TenantID: testTenantID, Username: "", Password: "secret"}},
 	}
 
 	for _, tc := range cases {
@@ -840,7 +838,7 @@ func TestLogin_AccessJWT_NoAuthzEpochClaim(t *testing.T) {
 	verifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "epoch-user", Password: "pass123"})
+	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantID, Username: "epoch-user", Password: "pass123"})
 	require.NoError(t, err)
 
 	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, kauth.TokenIntentAccess)
@@ -861,8 +859,8 @@ func TestLogin_NoLengthOracle(t *testing.T) {
 		name  string
 		input LoginInput
 	}{
-		{"empty_password", LoginInput{TenantID: testTenantIDStr, Username: "user@example.com", Password: ""}},
-		{"empty_email", LoginInput{TenantID: testTenantIDStr, Username: "", Password: "secret"}},
+		{"empty_password", LoginInput{TenantID: testTenantID, Username: "user@example.com", Password: ""}},
+		{"empty_email", LoginInput{TenantID: testTenantID, Username: "", Password: "secret"}},
 	}
 
 	for _, tc := range cases {
@@ -992,7 +990,7 @@ func TestLogin_PasswordVersionRace_OldPasswordRejected(t *testing.T) {
 			)
 
 			pair, loginErr := svc.Login(context.Background(), LoginInput{
-				TenantID: testTenantIDStr,
+				TenantID: testTenantID,
 				Username: "race-user",
 				Password: "old-pass",
 			})
@@ -1063,7 +1061,7 @@ func TestLoginInTx_InfraError_NotCollapsedTo401(t *testing.T) {
 		WithSessionTTL(time.Hour),
 	)
 
-	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "r3-user", Password: "pass123"})
+	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantID, Username: "r3-user", Password: "pass123"})
 	require.Error(t, err, "infra error must propagate, not silently succeed")
 
 	var ec *errcode.Error
@@ -1102,7 +1100,7 @@ func TestLoginInTx_NotFound_CollapsedTo401(t *testing.T) {
 		WithSessionTTL(time.Hour),
 	)
 
-	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "r3-notfound", Password: "pass123"})
+	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantID, Username: "r3-notfound", Password: "pass123"})
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -1140,7 +1138,7 @@ func TestLoginInTx_UnavailableError_NotCollapsedTo401(t *testing.T) {
 		WithSessionTTL(time.Hour),
 	)
 
-	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "r3-unavail", Password: "pass123"})
+	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantID, Username: "r3-unavail", Password: "pass123"})
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -1170,7 +1168,7 @@ func TestService_Login_ConsecutiveFailures_TriggersAutoLock(t *testing.T) {
 
 	// 5 consecutive wrong-password logins. Each must return ErrAuthLoginFailed.
 	for i := range failuresNeeded {
-		_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: username, Password: wrongPass})
+		_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantID, Username: username, Password: wrongPass})
 		require.Error(t, err, "attempt %d: expected error", i+1)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec, "attempt %d: expected errcode.Error", i+1)
@@ -1186,7 +1184,7 @@ func TestService_Login_ConsecutiveFailures_TriggersAutoLock(t *testing.T) {
 
 	// A 6th attempt with the CORRECT password must still return ErrAuthLoginFailed
 	// because the lockout TTL has not elapsed.
-	_, err = svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: username, Password: correctPass})
+	_, err = svc.Login(context.Background(), LoginInput{TenantID: testTenantID, Username: username, Password: correctPass})
 	require.Error(t, err, "locked user must be rejected even with correct password")
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -1349,7 +1347,7 @@ func loginWithThresholdLockoutSetup(
 func TestLogin_WrongPassword_CounterPersistsAcrossTx(t *testing.T) {
 	svc, userRepo, tx, uid := loginWithThresholdLockoutSetup(t, "rollback-bob", "correct", domain.StatusActive)
 
-	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "rollback-bob", Password: "wrong"})
+	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantID, Username: "rollback-bob", Password: "wrong"})
 	require.Error(t, err, "wrong-password must return error to caller")
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -1381,7 +1379,7 @@ func TestLogin_ThresholdReached_AccountLocks(t *testing.T) {
 	svc, userRepo, tx, uid := loginWithThresholdLockoutSetup(t, "lockchain-eve", password, domain.StatusActive)
 
 	for i := 0; i < accountlockout.Threshold; i++ {
-		_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "lockchain-eve", Password: "wrong"})
+		_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantID, Username: "lockchain-eve", Password: "wrong"})
 		require.Error(t, err, "attempt %d: wrong password rejected", i+1)
 	}
 
@@ -1418,7 +1416,7 @@ func TestLogin_SuspendedUser_DoesNotIncrementCounter(t *testing.T) {
 	// suspended user. None of them should advance the counter or change
 	// the status: a suspended user is not a candidate for auto-lock.
 	for i := 0; i < accountlockout.Threshold+2; i++ {
-		_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "suspended-alice", Password: "wrong"})
+		_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantID, Username: "suspended-alice", Password: "wrong"})
 		require.Error(t, err, "attempt %d: suspended user rejected", i+1)
 	}
 
@@ -1574,7 +1572,7 @@ func TestLogin_PreBcryptRead_IsRLSScoped(t *testing.T) {
 	seedUser(inner, "rls-test-user", "pass123")
 
 	_, _ = svc.Login(context.Background(), LoginInput{
-		TenantID: testTenantIDStr,
+		TenantID: testTenantID,
 		Username: "rls-test-user",
 		Password: "pass123",
 	})

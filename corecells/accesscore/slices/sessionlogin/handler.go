@@ -2,6 +2,7 @@ package sessionlogin
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -9,8 +10,14 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/httpcookie"
 	logingen "github.com/ghbvf/gocell/generated/contracts/http/auth/login/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/http/cellmw"
 )
+
+// errMsgTenantIDRequired is the error message for a missing (empty) X-Tenant-ID
+// header on the login endpoint. Must be a const literal (MESSAGE-CONST-LITERAL-01).
+const errMsgTenantIDRequired = "tenantId is required"
 
 // LoginAdapter implements logingen.Service for http.auth.login.v1.
 // It adapts the slice-internal Service (Login takes LoginInput) to the
@@ -21,19 +28,26 @@ type LoginAdapter struct{ S *Service }
 
 // Login implements logingen.Service. The generated handler validates and decodes
 // username+password from the request body and populates req.XTenantID from the
-// X-Tenant-ID header (populate-only — no codegen gate). The tenant header drives
-// a two-stage validation inside Service.Login:
+// X-Tenant-ID header (populate-only — no codegen gate). Two-stage tenant
+// validation runs in this adapter before delegating to Service.Login:
 //
-//   - Absent header (empty string): validation.RequireNotEmpty rejects with 400
-//     (ErrAuthLoginInvalidInput) before any authentication work is attempted.
-//   - Present but malformed UUID: tenant.ParseTenantID rejects with a uniform 401
-//     (ErrAuthLoginFailed), the same shape as wrong-password, to prevent tenant
-//     enumeration (ADR 1160).
+//   - Absent header (empty string): returns 400 ErrAuthLoginInvalidInput.
+//   - Present but malformed UUID: tenant.ParseTenantID fails → returns 401
+//     ErrAuthLoginFailed, the same shape as wrong-password (non-enumerable,
+//     ADR 1160).
 func (a LoginAdapter) Login(ctx context.Context, req *logingen.Request) (logingen.LoginResponseObject, error) {
+	if req.XTenantID == "" {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthLoginInvalidInput, errMsgTenantIDRequired)
+	}
+	tid, perr := tenant.ParseTenantID(req.XTenantID)
+	if perr != nil {
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, errMsgInvalidCredentials,
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("invalid tenantId: %v", perr))))
+	}
 	pair, err := a.S.Login(ctx, LoginInput{
 		Username: req.Username,
 		Password: req.Password,
-		TenantID: req.XTenantID,
+		TenantID: tid,
 	})
 	if err != nil {
 		return nil, err
