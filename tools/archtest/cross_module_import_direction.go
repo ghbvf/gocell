@@ -36,8 +36,11 @@ type CrossModuleViolation struct {
 // core, but core must never import a satellite, or extracting a satellite would
 // drag the whole base with it.
 //
-// It is vacuous in the single-module workspace of today (no other module exists
-// to import); the reverse multi-module fixture exercises the live path.
+// The live workspace already holds satellite modules (adapters/*, corecells,
+// tools, generated, …), so this is an active gate: it reports no violation only
+// because no core-module package imports a satellite (correct layering), not
+// because the workspace is single-module. The synthetic fixture exercises the
+// firing path.
 //
 // AI-robust grade: Medium (archtest type-aware via g.Modules + the
 // kerneldepgraph.Classifier longest-prefix owner resolution on each import edge;
