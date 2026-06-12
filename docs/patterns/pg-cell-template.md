@@ -9,17 +9,19 @@
 > ⚠️ **组装层已迁移（#1085）**：本文档 Chapter 1 起描述的 `BuildApp(...)` +
 > `cmd/corebundle/<cell>_module.go` + `bundle_<cell>_storage.go` 模式**已废弃**。
 > 平台 cell 的 composition module 现在活在 `cellmodules/<cell>/module.go`，实现公开的
-> `composition.CellModule` 接口（`Provide(ctx, shared) (cell.Cell,
-> []bootstrap.Option, []lifecycle.ManagedResource, error)`——Wave-1 #1423 删除了
-> `ModuleExports` 入参与返回值，跨 cell 通信改走事件契约，签名由
-> `MODULE-PROVIDE-NO-VALUE-HANDOFF-01` archtest 冻结），由
+> `composition.CellModule` 接口（`Provide(ctx, shared) (composition.ModuleResult, error)`，
+> `ModuleResult` 含 `{Cell, Opts, Resources}` 三字段——Wave-1 #1423 删除了
+> `ModuleExports` 跨 module 值传递通道，跨 cell 通信改走事件契约；2-out 签名与
+> `ModuleResult` 字段集由 `MODULE-PROVIDE-NO-VALUE-HANDOFF-01` archtest 冻结），由
 > `composition.New().With(modules...).Build(ctx, shared, runtimeOptsFn)` 组装；
 > `SharedDeps` 经 `composition.NewSharedDeps(...)` 构造（sealed marker），`Topology`
 > 经 `bootstrap.NewTopology(...)` 构造（postgres 强制 real）。**canonical 参考实现见
 > `cellmodules/configcore/module.go` + `cellmodules/configcore/storage.go`**。下文的
-> PG storage 接线逻辑（pool / TxManager / OutboxWriter / migration）以及 Chapter 4
-> 的资源生命周期"两处"契约仍然准确，只是承载它的文件位置（`CellModule.Provide` 而非旧
-> `BuildApp`/`cmd/corebundle/<cell>_module.go`）与组装入口变了——按上述新位置套用。
+> PG storage 接线逻辑（pool / TxManager / OutboxWriter / migration）仍然准确，只是
+> 承载它的文件位置（`CellModule.Provide` 而非旧 `BuildApp`/`cmd/corebundle/<cell>_module.go`）
+> 与组装入口变了——按上述新位置套用。Chapter 4 的资源生命周期契约已从旧「两处」收敛为
+> **单源 `ModuleResult.Resources`**（模块禁自调 `bootstrap.WithManagedResource`，由
+> `WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01` archtest 强制），详见该章。
 
 ---
 
@@ -40,7 +42,7 @@ operator env
                GOCELL_<CELLID>_CURSOR_KEY
                GOCELL_<CELLID>_CURSOR_PREVIOUS_KEY
                （PG URL / TxManager / OutboxWriter 经 shared.PG 取得）
-               └─→ (cell.Cell, []bootstrap.Option, []ManagedResource, error)
+               └─→ (composition.ModuleResult, error)   // {Cell, Opts, Resources}
 
      ↓
 composition.New().With(moduleA, moduleB, ...).Build(ctx, shared, runtimeOptsFn)
@@ -143,14 +145,15 @@ func Module() composition.CellModule { return module{} }
 // ID returns the stable identifier used in error messages and logs.
 func (module) ID() string { return "foocore" }
 
-// Provide resolves all foocore-specific dependencies and returns the
-// constructed cell, bootstrap options, and provisional resources.
+// Provide resolves all foocore-specific dependencies and returns a
+// composition.ModuleResult (constructed cell + non-resource bootstrap opts +
+// the single-source ManagedResource list).
 //
 // Reads GOCELL_FOOCORE_CURSOR_KEY, GOCELL_FOOCORE_CURSOR_PREVIOUS_KEY from
 // the environment. PG DSN and pool are supplied via shared.PG.
 func (m module) Provide(
 	_ context.Context, shared *composition.SharedDeps,
-) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+) (composition.ModuleResult, error) {
 	// 1. Cursor codec.
 	pri, prev := cellsecrets.LoadCursorKeys("FOOCORE")
 	cursorCodec, err := cellsecrets.BuildCursorCodec(cellsecrets.CursorCodecConfig{
@@ -163,7 +166,7 @@ func (m module) Provide(
 		Label:       "foo",
 	})
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("foocore cursor codec: %w", err)
+		return composition.ModuleResult{}, fmt.Errorf("foocore cursor codec: %w", err)
 	}
 
 	// 2. Storage-backend branching via shared.Topology + shared.PG.
@@ -173,7 +176,7 @@ func (m module) Provide(
 		publisher: shared.EventBus,
 	})
 	if err != nil {
-		return nil, nil, nil, err
+		return composition.ModuleResult{}, err
 	}
 
 	baseOpts := []foocorecell.Option{
@@ -190,11 +193,13 @@ func (m module) Provide(
 	var opts []bootstrap.Option
 	var provisional []kernellifecycle.ManagedResource
 	opts = append(opts, modResult.bootstrapOpts...)
-	// ManagedResource two-places contract (Chapter 4): resources returned here
-	// are the rollback channel; modResult.bootstrapOpts carries the steady-state
-	// bootstrap.WithManagedResource registrations.
+	// ManagedResource single source (Chapter 4): list every resource this module
+	// opened in ModuleResult.Resources; Builder.Build derives BOTH the steady-state
+	// bootstrap.WithManagedResource registration AND the pre-Run rollback from it.
+	// This module MUST NOT call bootstrap.WithManagedResource itself
+	// (WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01).
 	provisional = append(provisional, modResult.provisional...)
-	return c, opts, provisional, nil
+	return composition.ModuleResult{Cell: c, Opts: opts, Resources: provisional}, nil
 }
 
 var _ composition.CellModule = module{}
@@ -334,60 +339,64 @@ func buildFooCoreOpts(clk clock.Clock, cfg fooCoreModuleConfig) (fooCoreModuleRe
 
 ---
 
-## Chapter 4 — 资源生命周期（两处：steady-state opts + rollback 4th channel）
+## Chapter 4 — 资源生命周期（单源：ModuleResult.Resources）
 
-`CellModule.Provide` 打开的外部资源（pool、vault client、rate-limiter 等带后台
-goroutine/连接的资源）**必须同时出现在两处**——两处服务**不同阶段**，缺一即泄漏：
+`CellModule.Provide` 打开的 cell 独占外部资源（独占 pool、vault client、rate-limiter 等
+带后台 goroutine/连接的资源）**只在一处声明**——`ModuleResult.Resources` 切片。模块自己
+**不**碰 `bootstrap.WithManagedResource`；`Builder.Build` 从这**同一个**切片派生出两个阶段
+的处理，二者永不分叉（旧「两处」模型的 double-write 隐患被结构性消除）：
 
-1. 作为 `bootstrap.WithManagedResource(res)` 追加进 `opts`（Provide 第 3 个返回值）——
+1. **steady-state 注册**：Build 为每个 Resource 自动追加一个 `bootstrap.WithManagedResource(r)`，
    让 `bootstrap.Run` 在**正常运行期**管理生命周期（健康检查 + 后台 worker + phase10
-   shutdown 时 LIFO Close）。**漏这处** → 资源（如 rate-limiter cleanup goroutine）在
-   正常停机时永不 Close（#1385 F1 缺陷的成因：accesscore module 当时返回 `opts=nil`）。
-2. 作为 `[]lifecycle.ManagedResource`（Provide 第 4 个返回值）返回——让
-   `composition.Builder.Build` 累积进内部 `provisional` 栈，在**后续模块 Provide 或
-   `runtimeOptsFn` 失败**（即 `bootstrap.Run` 尚未启动）时逆序（LIFO）Close 已开启的
-   资源。**漏这处** → 启动中途失败时资源泄漏（bootstrap 永不运行，无人 Close）。
+   shutdown 时 LIFO Close）。
+2. **pre-Run rollback**：Build 把同一批 Resource 累积进内部 `provisional` 栈，在**后续模块
+   Provide 或 `runtimeOptsFn` 失败**（即 `bootstrap.Run` 尚未启动）时逆序（LIFO）Close。
+
+模块**禁止**自调 `bootstrap.WithManagedResource`——由 `WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01`
+archtest 强制。旧版要求资源「同时出现在 opts（WithManagedResource）和第 4 个返回值」两处，
+漏任一处即泄漏（#1385 F1：accesscore module 当时返回 `opts=nil`，happy-path 资源正常停机不
+Close）；单源把两个阶段绑定到**同一个** `Resources` 声明——只要资源进 `Resources`，两阶段都
+自动覆盖，不可能「注册了 steady-state 却忘了 rollback」（或反之）。
 
 > **不会 double-close**：rollback 路径只在**失败**时触发（此时 `bootstrap.Run` 不运行），
-> WithManagedResource 路径只在**成功**时由 `bootstrap.Run` 接管——两条路径互斥。Builder
-> **不**把 `provisional` 资源再转成 bootstrap opts（steady-state 注册是模块经 opts 的职责），
-> 所以同一资源在 bootstrap managed 集合中至多出现一次。
+> steady-state 路径只在**成功**时由 `bootstrap.Run` 接管——两条路径互斥，同一资源在 bootstrap
+> managed 集合中至多出现一次。
 
-后台 worker 型资源（例如 outbox relay）通过独立
-`bootstrap.WithRelay(relayWorker)` 返回，但不塞进 Pool。`WithRelay` 是
-relay 的 **唯一** 注册入口：相关的 `Checkers()/Worker()/Close()` 由
-package-private `relayAdapter` 包装到 ManagedResource 流水线
-（详见 ADR `docs/architecture/202605201400-adr-relay-managedresource-isolation.md`
-+ archtest `RELAY-NOT-MANAGEDRESOURCE-01` / `RELAY-SOLE-HOLDER-01`）——
-`*Relay` 自身不实现 ManagedResource，直接传给 `WithManagedResource` 是编译期
-type-mismatch，二次调用 `WithRelay` 会通过 panic-taxonomy funnel 触发
-`panicregister.Approved + errcode.Assertion(B 类)` panic。Pool 直接实现
-`lifecycle.ManagedResource`（其 `Worker()` 为 nil，只表达 pool 健康检查和关闭职责），
-所以 pool 走 `WithManagedResource`，relay 走 `WithRelay`。注册顺序必须是 pool 在前、
-relay opts 在后，bootstrap 的 LIFO shutdown 才会先停 relay、再关 pool。
+后台 worker 型资源（例如 outbox relay）走独立的 `bootstrap.WithRelay(relayWorker)` 进
+`ModuleResult.Opts`（**不**进 `Resources`、**不**经 `WithManagedResource`）。`WithRelay` 是
+relay 的 **唯一** 注册入口：相关的 `Checkers()/Worker()/Close()` 由 package-private
+`relayAdapter` 包装到 ManagedResource 流水线（详见 ADR
+`docs/architecture/202605201400-adr-relay-managedresource-isolation.md` + archtest
+`RELAY-NOT-MANAGEDRESOURCE-01` / `RELAY-SOLE-HOLDER-01`）——`*Relay` 自身不实现
+ManagedResource，直接传给 `WithManagedResource` 是编译期 type-mismatch，二次调用 `WithRelay`
+会通过 panic-taxonomy funnel 触发 `panicregister.Approved + errcode.Assertion(B 类)` panic。
+**共享** PG pool 由 `SharedDeps.PG` 持有，其 ManagedResource 在 composition root 的 base
+options 中先于所有 cell opts 注册 → LIFO 下最后 Close（晚于每个 cell 的 relay）；只有 cell
+**独占**的资源才进 `ModuleResult.Resources`。foocore 走共享 pool，故其 `Resources` 为空，
+只经 `Opts` 返回 `WithRelay`。
 
 ```
-每个 module Provide 返回:
-  opts = [..., bootstrap.WithManagedResource(resX)]   // steady-state（成功时 bootstrap.Run 接管）
-  4th  = [resX]                                       // rollback（失败时 Builder 关）
+每个 module Provide 返回 ModuleResult{Cell, Opts, Resources}:
+  Resources = [resX]                        // 单源——Builder 派生 steady-state + rollback
+  Opts      = [..., bootstrap.WithRelay(w)] // 后台 worker（非 ManagedResource）
 
 —— 全部成功 ——
-allOpts 含各 module 的 WithManagedResource(resX)
+Builder 从各 module 的 Resources 派生 WithManagedResource(resX)
   → bootstrap.Run：phase10 shutdown 时 LIFO Close
 
 —— 中途失败（composition.Builder.Build 内部）——
-module A Provide → 4th=[pgResA] → provisional = [pgResA]
-module B Provide → 4th=[pgResB] → provisional = [pgResA, pgResB]
+module A Provide → Resources=[resA] → provisional = [resA]
+module B Provide → Resources=[resB] → provisional = [resA, resB]
 module C Provide → error
   ↓ rollback（LIFO）:
-  pgResB.Close(ctx)   // B 先关
-  pgResA.Close(ctx)   // 再关 A
-  （bootstrap.Run 不运行 → opts 里的 WithManagedResource 从不注册 → 无 double-close）
+  resB.Close(ctx)   // B 先关
+  resA.Close(ctx)   // 再关 A
+  （bootstrap.Run 不运行 → 派生的 WithManagedResource 从不注册 → 无 double-close）
 ```
 
-两处缺一即泄漏：漏 opts（WithManagedResource）→ 正常停机时 happy-path 资源
-（rate-limiter cleanup goroutine 等）不被 Close（#1385 F1）；漏第 4 个返回值 →
-启动中途失败时 PG pool 等不被回滚关闭。
+漏列 `ModuleResult.Resources` 即泄漏：正常停机时 happy-path 资源（rate-limiter cleanup
+goroutine 等）不被 Close，且启动中途失败时 PG pool 等不被回滚关闭——单源把两个阶段绑定到
+同一个声明，避免各自漏。
 
 ---
 
@@ -449,11 +458,11 @@ func TestFooCoreModule_Postgres_SchemaMatched(t *testing.T) {
 		pool.DB(),
 	)
 
-	c, opts, resources, err := foocore.Module().Provide(ctx, shared)
+	res, err := foocore.Module().Provide(ctx, shared)
 	require.NoError(t, err)
-	require.NotNil(t, c)
-	assert.NotEmpty(t, opts) // relay bootstrap option present
-	_ = resources
+	require.NotNil(t, res.Cell)
+	assert.NotEmpty(t, res.Opts) // relay bootstrap option present
+	_ = res.Resources
 	_ = pool.Close(ctx)
 }
 ```
@@ -473,7 +482,7 @@ go test -tags=integration -timeout=120s ./cellmodules/foocore/...
 | 陷阱 | 后果 | 正确做法 |
 |---|---|---|
 | `cell.yaml` 的 `id` 含 dash（如 `foo-core`） | `gocell validate --strict` 挂起，FMT-C1 违规 | 用 no-dash 格式：`foocore` |
-| `Provide` 不返回 `provisional` | 后续模块失败时 PG pool 泄漏 | 参见 Chapter 4，`provisional` 必须含所有已打开的 cell-exclusive 资源 |
+| `Provide` 漏列 `ModuleResult.Resources` | 正常停机或启动回滚时资源（含 cell 独占 pool）泄漏 | 参见 Chapter 4，`Resources` 必须含所有已打开的 cell 独占资源（Builder 据此派生 steady-state + rollback；模块禁自调 `WithManagedResource`） |
 | `cellsecrets.LoadCursorKeys` 收到坏值 | 运维 typo 导致进程静默启动但连接异常 | fail-fast 已内置；不需要额外检查 |
 | memory 模式下 `shared.PG` 为 nil | 无问题——`buildFooCoreOpts` 走 memory 分支，不会访问 `shared.PG` | 确保 `StorageBackend()` 判断在访问 `shared.PG` 之前 |
 | postgres 模式未配置 `KEY_PROVIDER` | 启动失败（不是警告） | 必须设 `GOCELL_<CELLID>_KEY_PROVIDER=local-aes`（dev/CI）或 `vault-transit`（生产） |
@@ -492,7 +501,7 @@ composition API 形态。旧版所教的 API 已全部删除：
 | `AppDepsFromEnv` | `LoadSharedDepsFromEnv` + 各 `CellModule.Provide` |
 | `BuildBootstrap` | `composition.New().With(...).Build(...)` + `app.Run(ctx)` |
 | `AppDeps` struct | `SharedDeps`（cross-cutting）+ per-cell Module 私有字段 |
-| `AppDeps.PGResource` | `CellModule.Provide` 返回的 `[]ManagedResource` |
+| `AppDeps.PGResource` | `ModuleResult.Resources`（`CellModule.Provide` 返回） |
 | `configCellOpts` 字段 | `ConfigCoreModule.Provide` 返回的 `[]bootstrap.Option` |
 | `BuildApp(ctx, shared, ModuleA{}, ...)` + `cmd/corebundle/<cell>_module.go` + `bundle_<cell>_storage.go` | `composition.New().With(mods...).Build(ctx, shared, runtimeOptsFn)` + `cellmodules/<cell>/module.go` + `cellmodules/<cell>/storage.go`（#1085） |
 
