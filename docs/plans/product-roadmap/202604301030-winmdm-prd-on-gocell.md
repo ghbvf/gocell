@@ -77,7 +77,7 @@
 | 1 | `accesscore` | 已有扩展 | L1 LocalTx | ✅ GoCell 内置 | + `jwtlifecycle` + `ssooidc` | `users`, `sessions`, `idp_config` |
 | 2 | `auditcore` | 已有扩展 | L2 OutboxFact | ✅ GoCell 内置 | + `approvalflow` | `audit_logs`, `approval_chain` |
 | 3 | `rbaccell` | 新建 | L1 LocalTx | — | `rolemgmt` / `permcheck` / `datascope` | `roles`, `permissions`, `user_roles`, `data_scopes` |
-| 4 | `pkicell` | 新建 | L1 LocalTx | — | `wstep` / `scep` / `caworkflow` / `rotation` | `ca_certs`, `device_certs`, `cert_issued` |
+| 4 | `pkicell` | 新建 | L1 LocalTx | — | `wstep` / `scep` / `caworkflow`（**消费**框架 `runtime/certsigning`+`certlifecycle`，不自建 CA/CSR/CRL/签发/续期——`rotation` 退役，#1895/ADR-1895） | `device_certs`, `cert_issued`（CA 私钥归 `adapters/softca`，不在本 cell） |
 | 5 | `deviceidentity` | 新建 | L1 LocalTx | — | `resolve` / `bind` / `lookup` | `unified_devices(id, smbios_uuid, serial_number, mdm_device_id, agent_device_id)` |
 | 6 | `mdmcell` | 新建 | L1+L2+L4 | — | `enroll` / `device` / `command` | `mdm_devices`, `mdm_enrollments`, `syncml_sessions`, `mdm_commands` |
 | 7 | `agentcell` | 新建 | L1+L2+L4 | — | `enroll` / `device` / `checkin` / `taskdispatch` | `agent_devices`, `agent_checkins`, `agent_tasks` |
@@ -396,7 +396,7 @@ DoD：
 
 | 维度 | 方案 |
 |---|---|
-| MDM 通信 | TLS 1.2+ + mTLS 双向（pkicell 签发） |
+| MDM 通信 | TLS 1.2+ + mTLS 双向（经框架 `runtime/certsigning` 签发，pkicell 仅 WSTEP 前端；#1895） |
 | Agent 通信 | TLS 1.2+ + Agent JWT |
 | 字段加密 | BitLocker Recovery Key AES-256-GCM；用户 PII AES-256 字段级 |
 | JWT | RS256 + access 1h + refresh 7d/30d + 轮换 + 黑名单 + DPAPI |

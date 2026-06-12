@@ -34,7 +34,7 @@ description: "PR decomposition & dependency graph for 1895-device-identity-cert-
 | PR-10 | composition wiring + bootstrap option + readyz + docs/ops | cellmodules | US2/3 | ~1100 | PR-6,7,8,9 | 关联 #1085 |
 | PR-11 | 跨层 ADR 收口 + 扇出闭环 + 治理 invariant 汇总 | 治理 | US6 | ~700 | all | 关联 #995 |
 
-**总估算 ~14,100 行 / 11 PR**，平均 ~1280 行/PR。PR-7(~1900) 接受少量超限；实测 >2200 才切（`PR-7a` lifecycle 状态机 / `PR-7b` fencing+多租户 sweep）。
+**总估算 ~15,100 行 / 11 PR**，平均 ~1370 行/PR。PR-7(~1900) 接受少量超限；实测 >2200 才切（`PR-7a` lifecycle 状态机 / `PR-7b` fencing+多租户 sweep）。
 
 ---
 
@@ -150,7 +150,7 @@ graph TD
 - [ ] T5.3 `authorizer.go`：`Authorizer{ AuthorizeEnroll(ctx, EnrollmentClaim)(SignConstraints,error) }`——**独立**于 Signer；nil grant fail-closed；SignConstraints（max TTL / 允许 SAN）。
 - [ ] T5.4 `request.go`：`CertRequest`/`IssuedCert`/`DeviceSubject`/`SubjectAltNames`/`KeyUsages` sealed（unexported + 唯一构造器，typed tenant+deviceID 非裸 string）。
 - [ ] T5.5 `revocation.go`：`RevocationStore{ Revoke; RevocationList; Tidy }`。
-- [ ] T5.6 enforcement：`CERT-VALUE-SEALED-CONSTRUCTION-01`（Hard，证书值不可伪造）+ `CERT-SIGN-FUNNEL-01`（Hard/Medium，Sign 唯一签发入口）+ 反向自检；`doc.go` §Enforced invariants。
+- [ ] T5.6 enforcement：`CERT-VALUE-SEALED-CONSTRUCTION-01`（Hard，证书值不可伪造）+ `CERT-SIGN-FUNNEL-01`（funnel：上游 Hard = CertRequest/IssuedCert sealed 构造；下游 Medium = archtest 扫单一 Sign callsite）+ 反向自检；`doc.go` §Enforced invariants。
 - [ ] T5.7 新增 `ERR_CERT_` 前缀注册 + golden（ERRCODE-PREFIX-OWNERSHIP-01）。
 
 ### PR-6 `adapters/softca` 内置软 CA ~1700 行
@@ -162,7 +162,7 @@ graph TD
 - [ ] T6.3 `ca.go`：CA 层级（root + intermediate）+ key 托管接口（dev mem/file；KMS/HSM 留后续 adapter，明确 no-op 业务理由）。
 - [ ] T6.4 `signer.go`：实现 `certsigning.Signer`（`x509.CreateCertificate` + SignConstraints 强制）。
 - [ ] T6.5 `revocation.go`：实现 `RevocationStore`（`x509.CreateRevocationList` + tidy）。
-- [ ] T6.6 enforcement：`CERT-PRIVATE-KEY-CUSTODY-01`（Hard/Medium，原始私钥不跨 certsigning 边界，archtest 扫 adapter 外无 PrivateKey 字段）+ 反向自检。
+- [ ] T6.6 enforcement：`CERT-PRIVATE-KEY-CUSTODY-01`（custody：上游 Hard = `Signer` 接口不暴露 key getter；下游 Medium = archtest 扫 certsigning 边界外无 PrivateKey 字段）+ 反向自检。
 
 ### PR-7 `runtime/certlifecycle` 生命周期 reconciler ~1900 行 ⚠
 

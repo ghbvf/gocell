@@ -23,8 +23,9 @@ zerotrust 门控 2029 Q1（#1052）。
 2. **「设备证书」今天是时间戳，不是 PKI**。repo 中**零** CA / CSR / CRL / 签名 / 私钥代码；
    唯一「证书」= devices 行 `cert_epoch` + `cert_expires_at` 两列 + 一个发 `rotate-cert`
    字符串命令的 stateless reconciler（`examples/iotdevice/.../devicecertrenewal`）。
-3. **路线图自身存在张力**：gocell-platform §3.7（line 271）已把「pkicell WSTEP 支持」列为
-   **GoCell v1.0 P0 前置**——与 #995「不在框架」立场矛盾。本 ADR 消解该张力。
+3. **路线图自身存在张力**：gocell-platform §3「P0 阻塞项（GoCell v1.0 前置）」callout 已把
+   「pkicell WSTEP 支持」列为 **v1.0 P0 前置**（同文 §3.7 时间估算却把 pkicell 排到 Stage 1 /
+   2027 Q1，本身已不自洽）——且与 #995「不在框架」立场矛盾。本 ADR 消解该张力。
 
 开源对标（SPIFFE/SPIRE + cert-manager + step-ca，三家一致）：**控制面（生命周期 reconcile +
 请求模型 + 续期调度）属框架；签名私钥在 adapter（`crypto.Signer` 永不出边界）；协议前端在
@@ -84,10 +85,11 @@ lifecycle、EST 前端、生产 device 主体。
 
 | 威胁 | 缓解 | 评级 |
 |---|---|---|
-| 包外伪造证书值 / 绕过签发 | `CERT-VALUE-SEALED-CONSTRUCTION-01` + `CERT-SIGN-FUNNEL-01`（Sign 唯一入口） | Hard |
-| 私钥泄漏到 kernel/runtime | `CERT-PRIVATE-KEY-CUSTODY-01`（archtest 扫 certsigning 边界外无 PrivateKey 字段；私钥只在 adapter 的 `crypto.Signer`） | Hard/Medium |
+| 包外伪造证书值 / 绕过签发 | `CERT-VALUE-SEALED-CONSTRUCTION-01`（sealed 构造）+ `CERT-SIGN-FUNNEL-01`（Sign 唯一入口） | 上游 Hard（sealed 值构造）/ 下游 Medium（archtest 扫单一 Sign callsite） |
+| 私钥泄漏到 kernel/runtime | `CERT-PRIVATE-KEY-CUSTODY-01`（私钥只在 adapter 的 `crypto.Signer`） | 上游 Hard（`Signer` 接口不暴露 key getter）/ 下游 Medium（archtest 扫 certsigning 边界外无 PrivateKey 字段） |
 | 授权漏洞放大为越权签发 | `Authorize` / `Sign` 分离；`AuthorizeEnroll` 复用 PDP；nil grant fail-closed；SignConstraints 由 Signer 强制 | Medium |
 | 跨副本重复签发 | 复用 `RECONCILE-FENCED-WRITE-FUNNEL-01`（`LeaseToken.Epoch` 写路径 CAS）+ 队列 active-uniqueness | Hard |
+| 吊销与续期竞态（吊销正在续期的证书） | epoch 单调 CAS（fencing）保证终态一致；`certlifecycle` 状态机 revoke 转换串行化 | Hard（复用 fencing）/ Medium（状态机测试） |
 | 多租户证书 reconcile 串租户 | reconcile system identity 清空 tenant（#1821）；scan + 命令 key + 签发请求自带 tenant 维度 | Medium |
 | EST 注册鉴权绕过 | `EST-ENROLL-AUTH-BOUNDARY-01`（enroll=bootstrap/设备凭证；reenroll=现证书 mTLS；缺则 fail-closed） | Medium |
 | 续期惊群 | jitter 续期窗口（k8s 70-90% 寿命模型） | —（工程） |
@@ -111,11 +113,12 @@ lifecycle、EST 前端、生产 device 主体。
 | `202604301030-winmdm-prd-on-gocell.md` | §2 pkicell（line 72）+ §10 module 归属 | pkicell 框架级 PKI 原语下移 core；winmdm 仅留 WSTEP/SCEP 前端 + caworkflow |
 | `202604300900-gocell-as-platform-foundation.md` | §3 pkicell 映射（191/206）+ §4 mtlscert | PKI 底座=框架 `runtime/certsigning`+`adapters/softca`；pkicell/mtlscert 为消费方 |
 | `202604300950-plan-d-...md` | §10 阶段 0 | 加注：设备证书框架底座落 core（runtime/adapters/contracts），**不**建 mdm/，与「禁止预建 mdm/」一致 |
-| `202604300800-final-form-capability-overview.md` | §3.7 + Tier B | final-form 增列 `runtime/certsigning` + `runtime/certlifecycle` + `adapters/softca` 能力 |
+| `202604300800-final-form-capability-overview.md` | §3.7 运行时能力清单 | final-form 增列「设备身份与证书底座」（`runtime/certsigning` + `runtime/certlifecycle` + `adapters/softca` + EST）能力条目 |
 | #1051 / #1052（issue） | 锚点 | 评论：框架 PKI 原语 + 4 中立契约提前；其余项仍门控 2027/2029 |
 
-> 与 §3.7（line 271）「pkicell WSTEP 作为 v1.0 P0」**一致**——本 ADR 把该 P0 的 PKI 原语部分
-> 明确为框架交付（WSTEP 协议前端仍 winmdm），消解 #995 与 §3.7 的张力。
+> 与 gocell-platform §3「P0 阻塞项」callout「pkicell WSTEP 作为 v1.0 P0」**一致**——本 ADR 把该
+> P0 的 PKI 原语部分明确为框架交付（WSTEP 协议前端仍 winmdm），同时消解 #995「不在框架」与该
+> P0 callout 的张力。
 
 ## 参考
 

@@ -69,7 +69,7 @@ type RevocationStore interface {
 - **关闭** #1811（设备主体签发器，硬前置）、#654（DEVICE-ENQUEUE-RBAC）。
 - **部分提前** #1051（pkicell 框架底座下移 core；winmdm 仅留 WSTEP/SCEP 前端）、#1052（4 中立契约——路线图唯一允许提前项）。
 - **关联** #1870（cert terminal-feedback，PR-7 续期主路径）、#1890（mTLS/SPIFFE service identity，邻接独立，softca 后续可复用）、#822/#1845/#1695/#1591（设备主体硬化）。
-- **路线图冲突**（PR-1 ADR 修订）：#995「不在框架」立场、winmdm PRD pkicell 落点（mdm module）、plan-D §10「v1.0 前不建 mdm/」、#1051/#1052 门控日期、final-form 未列 PKI。**部分支持**：路线图自身把「pkicell WSTEP」列为 v1.0 P0（gocell-platform §3.7 line 271），与本提前一致。
+- **路线图冲突**（PR-1 ADR 修订）：#995「不在框架」立场、winmdm PRD pkicell 落点（mdm module）、plan-D §10「v1.0 前不建 mdm/」、#1051/#1052 门控日期、final-form 未列 PKI。**部分支持**：路线图自身把「pkicell WSTEP」列为 v1.0 P0（gocell-platform §3「P0 阻塞项」callout），与本提前一致。
 
 ## 5. 治理要求
 

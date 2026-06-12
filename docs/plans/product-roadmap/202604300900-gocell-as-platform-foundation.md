@@ -299,7 +299,7 @@ E14 完成后 GoCell 暴露 25 个独立可用包，按典型场景拼装可覆�
 | Z1 IAP | accesscore（JWT/session）+ deviceidentity（设备身份） | iapgateway cell（请求拦截 + 三因素验证：身份/设备/上下文）|
 | Z2 Continuous verify | accesscore + outbox | sessionpolicy cell（按策略触发重验证）+ trustscore cell（连续评估） |
 | Z3 Least privilege + JIT | accesscore + L1 LocalTx + rbaccell（winmdm 阶段已建） | jitgrant cell（短期凭证签发 + workflow 审批）+ policycell（已在 winmdm 阶段建） |
-| Z4 Microsegmentation | runtime/auth + pkicell（winmdm 阶段已建） | service-mesh adapter（Istio / Linkerd）+ mtlscert cell（与 pkicell 集成） |
+| Z4 Microsegmentation | runtime/auth + **框架证书底座**（`runtime/certsigning`+`adapters/softca`，#1895/ADR-1895；不再依赖 winmdm pkicell 自建 PKI） | service-mesh adapter（Istio / Linkerd）+ mtlscert cell（**消费**框架 `certsigning.Signer` 签发 mTLS 证书） |
 | Z5 Device trust | mdmcell + agentcell + devicelifecycle（winmdm 阶段已建） | trustscore cell（聚合设备合规度 + 用户行为评分）|
 | Z6 Behavioral analytics | adapters/postgres + metrics + outbox | eventcorrelation cell（流式聚合）+ ML adapter（外部推理服务） |
 
@@ -309,7 +309,7 @@ E14 完成后 GoCell 暴露 25 个独立可用包，按典型场景拼装可覆�
 2. **sessionpolicy**（L1 LocalTx）—— 会话策略评估
 3. **trustscore**（L3 WorkflowEventual）—— 设备 + 用户连续信任度评估
 4. **jitgrant**（L1 LocalTx）—— JIT 短期凭证签发
-5. **mtlscert**（L2 OutboxFact）—— 服务间 mTLS 证书
+5. **mtlscert**（L2 OutboxFact）—— 服务间 mTLS 证书（**消费**框架 `runtime/certsigning`，不自建 CA；#1895/ADR-1895）
 6. **eventcorrelation**（L3 WorkflowEventual）—— 行为事件流式聚合
 7. **anomalydetection**（L3 WorkflowEventual）—— 异常识别（接入外部 ML）
 8. **compliancereporting**（L1 LocalTx）—— 合规报告 + 仪表盘

@@ -16,7 +16,7 @@
 **Project Type**: 框架底座（library）+ 平台契约 + 示例迁移。
 **Performance Goals**: 单次 softca 签发 p95 < 10ms（无网络）；certlifecycle resync sweep 有界（按 cutoff 范围扫描，不全表）。
 **Constraints**: 私钥永不出 adapter；`Sign` 唯一签发入口；reconcile 多租户须自带 tenant 维度（system identity 清空 tenant）；EST 鉴权 fail-closed。
-**Scale/Scope**: ~11 PR / ~14,100 行；新增 2 个 runtime 包 + 1 个 adapter module + 4 个契约 + 1 个 auth 签发器 + iotdevice 迁移 + 2 ADR。
+**Scale/Scope**: ~11 PR / ~15,100 行；新增 3 个 runtime 包（certsigning/certlifecycle/http·est）+ 1 个 adapter module（softca）+ 4 个契约 + 1 个 auth 签发器 + iotdevice 迁移 + 2 ADR。
 
 ## Constitution Check
 
