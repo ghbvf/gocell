@@ -131,8 +131,9 @@ type modulesCompositionContext struct {
 	Capabilities  []string
 	// ProjectionSourceTopics is the sorted de-duplicated set of outbox-projection
 	// contract ids (== routing topics) declared across the assembly cells'
-	// slice.yaml contractUsages (role: subscribe, projection set, projectionSource
-	// outbox/empty; saga-journal excluded). The composition root injects it into the
+	// slice.yaml contractUsages (role: subscribe, projection set, EXPLICIT
+	// projectionSource: outbox; saga-journal and empty source excluded — empty fails
+	// the generation closed). The composition root injects it into the
 	// journaling outbox writer decorator so only events a projection will replay are
 	// double-written to projection_events (EPIC #1504 D4 / I5). The template ALWAYS
 	// emits generatedProjectionSourceTopics() (even when empty) so the decorator
@@ -322,22 +323,41 @@ func (g *Generator) collectCapabilityConsts(assemblyID string, cellRefs []metada
 // cellvocab.ProjectionSourceOutbox / ProjectionSourceSagaJournal, declared locally to
 // keep kernel/assembly's codegen dependencies minimal (same convention as
 // tools/codegen/cellgen). The outbox double-write topic set is a POSITIVE allowlist of
-// these — only outbox-sourced projections (empty == outbox default) flow through the
-// outbox writer; saga-journal reads the global saga_events journal, and any future
-// projectionSource value is excluded by construction rather than silently included.
+// these — only projections that declare an EXPLICIT projectionSource: outbox flow
+// through the outbox writer; saga-journal reads the global saga_events journal, and any
+// future projectionSource value is excluded by construction rather than silently
+// included. An empty source is NOT defaulted to outbox: it is a parser-invariant
+// violation and fails the generation closed (see collectOutboxProjectionTopics).
 const (
 	projectionSourceOutbox      = "outbox"
 	projectionSourceSagaJournal = "saga-journal"
+
+	// msgProjectionSourceRequiredCodegen is returned when a projection contractUsage
+	// reaches the journal-topic collector with an empty projectionSource — a
+	// parser-invariant violation (metadata.checkProjectionSourcePlacement requires an
+	// explicit source whenever projection is set). The collector fails closed rather
+	// than defaulting empty to outbox and journaling the event into the durable
+	// allowlist (a security boundary, EPIC #1504 I5).
+	msgProjectionSourceRequiredCodegen = "projection contractUsage requires an explicit projectionSource"
 )
 
 // collectOutboxProjectionTopics returns the sorted, de-duplicated set of contract
 // ids that feed outbox-sourced projections across the assembly's cells — derived
-// from slice.yaml contractUsages (role: subscribe + projection set + projectionSource
-// ∈ {"outbox",""}). Each contract id is the event's routing topic (the producer
-// emits with WithTopic == contract id, and the projection Coordinator filters on it),
-// so this set is exactly the topics the journaling decorator must double-write
-// (EPIC #1504 D4 / I5). Saga-journal projections are excluded (different source).
-func (g *Generator) collectOutboxProjectionTopics(cellRefs []metadata.AssemblyCellRef) []string {
+// from slice.yaml contractUsages (role: subscribe + projection set + EXPLICIT
+// projectionSource: outbox). Each contract id is the event's routing topic (the
+// producer emits with WithTopic == contract id, and the projection Coordinator filters
+// on it), so this set is exactly the topics the journaling decorator must double-write
+// (EPIC #1504 D4 / I5). Saga-journal and any future explicit source are excluded by the
+// positive allowlist.
+//
+// It fails CLOSED: a projection contractUsage that reaches here with an empty
+// projectionSource is a parser-invariant violation (the parser requires an explicit
+// source whenever projection is set), so generation errors rather than fail-open-
+// defaulting empty to outbox and journaling it into the durable allowlist — the
+// allowlist bounds journal growth (a security boundary), so the generation funnel must
+// be closed even if a value reaches codegen by a non-parser path. Mirrors the
+// capabilityConstNames "guard bypassed → GenerateModulesGen fails" posture.
+func (g *Generator) collectOutboxProjectionTopics(cellRefs []metadata.AssemblyCellRef) ([]string, error) {
 	inAssembly := make(map[string]bool, len(cellRefs))
 	for _, ref := range cellRefs {
 		inAssembly[ref.ID] = true
@@ -348,7 +368,11 @@ func (g *Generator) collectOutboxProjectionTopics(cellRefs []metadata.AssemblyCe
 			continue
 		}
 		for _, cu := range s.ContractUsages {
-			if isOutboxProjectionUsage(cu) {
+			isOutbox, err := outboxProjectionTopic(s.ID, cu)
+			if err != nil {
+				return nil, err
+			}
+			if isOutbox {
 				topicSet[cu.Contract] = struct{}{}
 			}
 		}
@@ -358,19 +382,28 @@ func (g *Generator) collectOutboxProjectionTopics(cellRefs []metadata.AssemblyCe
 		topics = append(topics, t)
 	}
 	sort.Strings(topics)
-	return topics
+	return topics, nil
 }
 
-// isOutboxProjectionUsage reports whether cu declares an outbox-sourced projection:
-// role subscribe + projection set + projectionSource ∈ {"outbox",""} (empty == outbox
-// default, per cellgen validateProjectionContractKind). saga-journal and any future
-// projectionSource value are excluded by this positive allowlist, so a new source
-// cannot be silently double-written to the outbox journal.
-func isOutboxProjectionUsage(cu metadata.ContractUsage) bool {
+// outboxProjectionTopic classifies cu for the outbox journal allowlist. It returns
+// (true, nil) for a projection (role subscribe + projection set) whose projectionSource
+// is EXPLICITLY outbox; (false, nil) for a non-projection or a non-outbox source
+// (saga-journal / any future explicit source — excluded by the positive allowlist); and
+// (false, err) when cu IS a projection but its projectionSource is empty. An empty
+// source is a parser-invariant violation (the parser requires an explicit source
+// whenever projection is set), so the collector fails closed rather than treating empty
+// as outbox. sliceID is threaded only for the error's diagnostic context.
+func outboxProjectionTopic(sliceID string, cu metadata.ContractUsage) (bool, error) {
 	if cu.Role != "subscribe" || cu.Projection == "" {
-		return false
+		return false, nil
 	}
-	return cu.ProjectionSource == "" || cu.ProjectionSource == projectionSourceOutbox
+	if cu.ProjectionSource == "" {
+		return false, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
+			msgProjectionSourceRequiredCodegen,
+			errcode.WithInternal(errcode.InternalAttr("_",
+				fmt.Sprintf("slice=%q contract=%q", sliceID, cu.Contract))))
+	}
+	return cu.ProjectionSource == projectionSourceOutbox, nil
 }
 
 // generateModulesGenLegacy emits the legacy local-CellModule-type form used
@@ -472,13 +505,17 @@ func (g *Generator) generateModulesGenComposition(
 	// BootstrapLedgerStore handoff was removed in #1423 (cross-cell wiring is now
 	// event-driven), so module Provide order carries no runtime dependency.
 	sort.Strings(importLines)
+	projTopics, err := g.collectOutboxProjectionTopics(asm.Cells)
+	if err != nil {
+		return nil, err
+	}
 	ctx := modulesCompositionContext{
 		AssemblyID:             assemblyID,
 		SourcePath:             asm.File,
 		Modules:                moduleCalls,
 		ModuleImports:          importLines,
 		Capabilities:           capConsts,
-		ProjectionSourceTopics: g.collectOutboxProjectionTopics(asm.Cells),
+		ProjectionSourceTopics: projTopics,
 	}
 	return g.executeTemplate("modules_gen_composition.go.tpl", ctx)
 }

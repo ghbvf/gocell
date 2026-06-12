@@ -21,8 +21,10 @@ import (
 // invariants PR-02 must hold (ADR §9 PR-02), over BOTH Write and WriteBatch so the
 // preserved BatchWriter path is covered identically:
 //
-//   ① atomicity   — a rolled-back business tx discards BOTH the outbox_entries and
-//                    the projection_events rows.
+//   ① atomicity   — the outbox_entries and projection_events rows commit or roll back
+//                    together: a CALLER-initiated abort discards both, and a journal
+//                    append FAILURE (the second write) aborts the business tx so the
+//                    base outbox_entries row is rolled back too.
 //   ② topic-filter — only projection-source topics are journaled; non-source topics
 //                    land in outbox_entries only.
 //   ③ idempotency  — ON CONFLICT (id) DO NOTHING: re-appending the same id is a no-op,
@@ -98,6 +100,16 @@ func journalGlobalSeq(t *testing.T, pool *Pool, id string) int64 {
 	return seq
 }
 
+// breakProjectionJournal makes the projection_events append fail by dropping the table
+// on the test's isolated migrated pool, so a subsequent double-write hits an undefined
+// relation. (Mirrors the broken-pool seam in projection_event_source_integration_test.go;
+// gives the PR-03 live-resolver failure tests a reusable journal-break helper.)
+func breakProjectionJournal(t *testing.T, pool *Pool) {
+	t.Helper()
+	_, err := pool.DB().Exec(context.Background(), `DROP TABLE IF EXISTS projection_events CASCADE`)
+	require.NoError(t, err, "drop projection_events to break the journal")
+}
+
 func TestJournalingOutboxWriter_DoubleWriteAtomicity(t *testing.T) {
 	for _, m := range writeModes() {
 		t.Run(m.name, func(t *testing.T) {
@@ -118,6 +130,31 @@ func TestJournalingOutboxWriter_DoubleWriteAtomicity(t *testing.T) {
 				"outbox_entries row must be rolled back")
 			assert.Equal(t, 0, countRows(t, pool, "projection_events", e.ID()),
 				"projection_events row must be rolled back in the same business tx")
+		})
+	}
+}
+
+// TestJournalingOutboxWriter_AppendFailureRollsBackOutbox proves the SECOND-write
+// failure direction of D4 atomicity: when the base outbox insert succeeds but the
+// projection_events append then fails, the append error propagates out of Write/
+// WriteBatch and aborts the producer's business tx, so the outbox_entries row is rolled
+// back too (no orphaned business fact). DoubleWriteAtomicity only covers a CALLER-
+// initiated abort AFTER a successful double-write; this covers the writer's own failure.
+func TestJournalingOutboxWriter_AppendFailureRollsBackOutbox(t *testing.T) {
+	for _, m := range writeModes() {
+		t.Run(m.name, func(t *testing.T) {
+			w, txm, pool := newJournalingWriter(t, projTopicA)
+			ctx := context.Background()
+			breakProjectionJournal(t, pool) // the append INSERT now hits an undefined relation
+			e := newJournalEntry(t, projTopicA)
+
+			runErr := txm.RunInTx(ctx, func(txCtx context.Context) error {
+				return m.apply(t, txCtx, w, []kout.Entry{e})
+			})
+			require.Error(t, runErr, "journal append failure must propagate out of the business tx")
+
+			assert.Equal(t, 0, countRows(t, pool, "outbox_entries", e.ID()),
+				"base outbox_entries insert must roll back when the journal append fails")
 		})
 	}
 }
