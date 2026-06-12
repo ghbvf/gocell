@@ -75,8 +75,11 @@ lifecycle、EST 前端、生产 device 主体。
 
 ### D5 — MDM/ZT 前期工作 = 4 中立契约 + 设备主体签发器（部分提前 #1051/#1052）
 
-- 定义 `contracts/{deviceidentity,devicestate,devicecompliance,remotecommand}/v1`——路线图
-  唯一允许提前的 MDM/ZT 前期项（#1052「可提前子项」）。`deviceidentity` 是证书/身份之家。
+- 定义 4 个中立设备契约（domain：deviceidentity / devicestate / devicecompliance / remotecommand）——
+  路线图唯一允许提前的 MDM/ZT 前期项（#1052「可提前子项」）。`deviceidentity` 是证书/身份之家。
+  目录按仓库单源 `{kind}/{domain-path}/{version}/` 落 **kind-qualified** 路径（`contracts/http/deviceidentity/.../v1`、
+  `contracts/event/deviceidentity/.../v1`、`contracts/command/{deviceidentity/rotate,remotecommand}/v1` 等，详见 spec FR-013）；
+  「4 个契约」是 domain 简写，非目录真源。
 - 落地 #1811（生产 device / super-admin 主体签发器）——证书底座硬前置。
 - **不建** `mdm/` / `zerotrust/` module 骨架；winmdm `pkicell` 的**框架级 PKI 原语下移 core**，
   winmdm 触发（2027 Q1）后只需建 WSTEP/SCEP 协议前端 + caworkflow，不再自建 PKI 原语。
@@ -91,6 +94,7 @@ lifecycle、EST 前端、生产 device 主体。
 | 跨副本重复签发 | 复用 `RECONCILE-FENCED-WRITE-FUNNEL-01`（`LeaseToken.Epoch` 写路径 CAS）+ 队列 active-uniqueness | Hard |
 | 吊销与续期竞态（吊销正在续期的证书） | epoch 单调 CAS（fencing）保证终态一致；`certlifecycle` 状态机 revoke 转换串行化 | Hard（复用 fencing）/ Medium（状态机测试） |
 | 多租户证书 reconcile 串租户 | reconcile system identity 清空 tenant（#1821）；scan + 命令 key + 签发请求自带 tenant 维度 | Medium |
+| 跨租户吊销（凭裸 serial 吊销他租户证书） | `Revoke`/`RevocationList`/`Tidy` 带 `CertScope`（tenant+issuer+device）typed 位置参，与签发同源；漏传编译错（`CERT-REVOKE-SCOPED-01`）；跨租户/issuer fail-closed | 上游 Hard（typed scope 漏传编译错）/ 下游 Medium（fail-closed 测试） |
 | EST 注册鉴权绕过 | `EST-ENROLL-AUTH-BOUNDARY-01`（enroll=bootstrap/设备凭证；reenroll=现证书 mTLS；缺则 fail-closed） | Medium |
 | 续期惊群 | jitter 续期窗口（k8s 70-90% 寿命模型） | —（工程） |
 | device PII（serial/subject/device_id 入日志/wire） | 复用 `pkg/redaction`（#1695）；审计前 hash/redact | Medium |
@@ -103,7 +107,9 @@ lifecycle、EST 前端、生产 device 主体。
   开箱可用；`Authorize`/`Sign` 分离 + 私钥边界对齐业界最佳实践。
 - **代价**：推翻一条已锁定决策（#995）+ 修订 4 份路线图文档（见下）；新增 2 个 runtime 包 +
   1 个 adapter module + 4 个契约 + iotdevice 破坏式迁移（`rotate-cert` 字符串→真契约，无 shim）。
-- **真值源**：`docs/plans/specs/1895-device-identity-cert-framework/`（spec/plan/tasks/research）。
+- **实施规格 / 设计分解 / 后续 PR 输入**：`docs/plans/specs/1895-device-identity-cert-framework/`
+  （spec/plan/tasks/research）。**项目状态 / 优先级 / wave / 父子关系的唯一真源是 GitHub Issues #1895 + Project**
+  （PROJECT.md / agent-instruction-surfaces 单源）；speckit 目录只承载实施规格内容，不承载项目管理状态。
 
 ## 路线图修订（本 ADR 同改动落地，冲突段落重写——AI-robust §审查）
 
@@ -111,14 +117,16 @@ lifecycle、EST 前端、生产 device 主体。
 |---|---|---|
 | #995（issue） | 全文 | 收口结论=进框架（评论 + PR-11 关闭）；推翻「不在框架 / 消费方自建」 |
 | `202604301030-winmdm-prd-on-gocell.md` | §2 pkicell（line 72）+ §10 module 归属 | pkicell 框架级 PKI 原语下移 core；winmdm 仅留 WSTEP/SCEP 前端 + caworkflow |
-| `202604300900-gocell-as-platform-foundation.md` | §3 pkicell 映射（191/206）+ §4 mtlscert | PKI 底座=框架 `runtime/certsigning`+`adapters/softca`；pkicell/mtlscert 为消费方 |
-| `202604300950-plan-d-...md` | §10 阶段 0 | 加注：设备证书框架底座落 core（runtime/adapters/contracts），**不**建 mdm/，与「禁止预建 mdm/」一致 |
+| `202604300900-gocell-as-platform-foundation.md` | §3 pkicell 映射（M6 / cell 表 / Stage1 / M1）+ §3 P0 callout + §4 mtlscert | inline 重写：PKI 底座=框架 `runtime/certsigning`+`adapters/softca`+EST；pkicell/mtlscert 为消费方；**`rotation` slice 退役**；v1.0 P0 由「pkicell WSTEP」**替换为「框架证书底座（certsigning/softca/EST）」**，winmdm WSTEP/SCEP 前端归 2027 Stage 2 |
+| `202604300950-plan-d-...md` | §10 阶段 0 + §3.1 树（pkicell 内部CA）+ §9 PKIIssuer + PR A1.4 | 加注 + inline：设备证书框架底座落 core（runtime/adapters/contracts），**不**建 mdm/，与「禁止预建 mdm/」一致；pkicell 去 `rotation`/内部CA，改消费框架 |
+| `202604301030-winmdm-prd-on-gocell.md` | §2 pkicell（line 80）+ §10 module + §3 链路 + §7 mTLS | pkicell 框架级 PKI 原语下移 core；winmdm 仅留 WSTEP/SCEP 前端 + caworkflow；`rotation` 退役；CA 私钥归 softca |
 | `202604300800-final-form-capability-overview.md` | §3.7 运行时能力清单 | final-form 增列「设备身份与证书底座」（`runtime/certsigning` + `runtime/certlifecycle` + `adapters/softca` + EST）能力条目 |
 | #1051 / #1052（issue） | 锚点 | 评论：框架 PKI 原语 + 4 中立契约提前；其余项仍门控 2027/2029 |
 
-> 与 gocell-platform §3「P0 阻塞项」callout「pkicell WSTEP 作为 v1.0 P0」**一致**——本 ADR 把该
-> P0 的 PKI 原语部分明确为框架交付（WSTEP 协议前端仍 winmdm），同时消解 #995「不在框架」与该
-> P0 callout 的张力。
+> **v1.0 P0 重定义**：路线图原把「pkicell WSTEP 支持」列为 v1.0 P0（同文 §3.7 时间估算却把 pkicell
+> 排到 Stage 1 / 2027 Q1，本身不自洽）。本 ADR **替换**该 P0 为「框架证书底座（`runtime/certsigning` +
+> `adapters/softca` + EST）」——这是真正属于 core v1.0 的能力；winmdm 的 WSTEP/SCEP 协议前端归 2027
+> Stage 2，不塞进 core v1.0 P0。一并消解 #995「不在框架」与原 P0 callout 的张力。
 
 ## 参考
 

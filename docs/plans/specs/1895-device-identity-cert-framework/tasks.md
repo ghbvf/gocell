@@ -148,9 +148,9 @@ graph TD
 - [ ] T5.1 [TDD] `request_test.go`：CertRequest/IssuedCert 包外不可字面量构造（sealed）；唯一构造器校验。
 - [ ] T5.2 `signer.go`：`Signer{ Sign(ctx, CertRequest)(IssuedCert,error); TrustBundle(ctx) }`。
 - [ ] T5.3 `authorizer.go`：`Authorizer{ AuthorizeEnroll(ctx, EnrollmentClaim)(SignConstraints,error) }`——**独立**于 Signer；nil grant fail-closed；SignConstraints（max TTL / 允许 SAN）。
-- [ ] T5.4 `request.go`：`CertRequest`/`IssuedCert`/`DeviceSubject`/`SubjectAltNames`/`KeyUsages` sealed（unexported + 唯一构造器，typed tenant+deviceID 非裸 string）。
-- [ ] T5.5 `revocation.go`：`RevocationStore{ Revoke; RevocationList; Tidy }`。
-- [ ] T5.6 enforcement：`CERT-VALUE-SEALED-CONSTRUCTION-01`（Hard，证书值不可伪造）+ `CERT-SIGN-FUNNEL-01`（funnel：上游 Hard = CertRequest/IssuedCert sealed 构造；下游 Medium = archtest 扫单一 Sign callsite）+ 反向自检；`doc.go` §Enforced invariants。
+- [ ] T5.4 `request.go`：`CertScope`（`{tenant,issuer,device}`，Sign/Revoke/List 共用）/`CertRequest`/`IssuedCert`/`DeviceSubject`/`SubjectAltNames`/`KeyUsages` sealed（unexported + 唯一构造器，typed tenant+issuer+device 非裸 string/serial）。
+- [ ] T5.5 `revocation.go`：`RevocationStore{ Revoke(ctx,CertScope,serial,reason); RevocationList(ctx,CertScope); Tidy(ctx,CertScope,before) }`——`CertScope` 强制 typed 位置参（漏传编译错 Hard）；跨租户/issuer fail-closed。
+- [ ] T5.6 enforcement：`CERT-VALUE-SEALED-CONSTRUCTION-01`（Hard，证书值不可伪造）+ `CERT-SIGN-FUNNEL-01`（funnel：上游 Hard = CertRequest/IssuedCert sealed 构造；下游 Medium = archtest 扫单一 Sign callsite）+ `CERT-REVOKE-SCOPED-01`（Hard，Revoke/RevocationList 带 `CertScope` typed 位置参，漏传编译错——对齐 tenant typed-param 范式）+ 反向自检；`doc.go` §Enforced invariants。
 - [ ] T5.7 新增 `ERR_CERT_` 前缀注册 + golden（ERRCODE-PREFIX-OWNERSHIP-01）。
 
 ### PR-6 `adapters/softca` 内置软 CA ~1700 行
@@ -181,13 +181,13 @@ graph TD
 
 ### PR-8 EST(RFC 7030) 框架注册前端 ~1600 行
 
-**Goal**：框架级 EST 端点，wiring Authorizer→Signer。依赖 PR-5/6/2。
+**Goal**：框架级 EST 端点，挂**版本化 cell 路径** `/api/v{N}/deviceidentity/est/*`，wiring Authorizer→Signer。依赖 PR-5/6/2。
 
-- [ ] T8.1 [TDD] handler 测试：`/simpleenroll` 200 PKCS#7、畸形/越权 CSR 4xx、缺鉴权 401/403、`/cacerts` 返回信任根。
-- [ ] T8.2 `runtime/http/est/handler.go`：`/cacerts`·`/simpleenroll`·`/simplereenroll`（PKCS#10 in / PKCS#7 out）。
-- [ ] T8.3 鉴权两路径：首次=bootstrap/设备凭证（PR-2），续期=现证书 mTLS client-auth（`runtime/http/middleware/mtls` + PeerIdentity）。
-- [ ] T8.4 EST 契约（`auth.Route` 声明 + bootstrap 豁免边界，对齐 FMT-28/bootstrap path 约定）。
-- [ ] T8.5 enforcement：`EST-ENROLL-AUTH-BOUNDARY-01`（Medium，enroll/reenroll 鉴权路径显式声明，缺则 fail-closed）+ 反向自检。
+- [ ] T8.1 [TDD] handler 测试：`/simpleenroll` 200 PKCS#7、畸形/越权 CSR 4xx、缺鉴权 / setup-bootstrap 冒充 401/403、`/cacerts` 返回信任根。
+- [ ] T8.2 `runtime/http/est/handler.go`：`cacerts`·`simpleenroll`·`simplereenroll`（PKCS#10 in / PKCS#7 out），挂 `/api/v{N}/deviceidentity/est/*`（**非顶级裸路径**，对齐 api-versioning「端点挂所属 cell 版本前缀」）。
+- [ ] T8.3 鉴权两路径：首次=**专用 enrollment-credential / device-token**（PR-2 设备主体，**非** setup `auth.bootstrap:true`），续期=现证书 mTLS client-auth（`runtime/http/middleware/mtls` + PeerIdentity）。
+- [ ] T8.4 EST `auth.Route` 声明：显式 enrollment-credential / mTLS scheme；**不**声明 `auth.bootstrap:true`（FMT-28 限其只在 `^/api/v\d+/[^/]+/setup/admin$`，EST 非该路径，复用 fail-closed）。
+- [ ] T8.5 enforcement：`EST-ENROLL-AUTH-BOUNDARY-01`（Medium，enroll/reenroll 鉴权路径显式声明 + 禁 setup-bootstrap 凭据复用，缺则 fail-closed）+ 反向自检。
 
 ### PR-9 iotdevice 迁移 + `rotate-cert` 真契约 + 设备 enqueue RBAC ~1800 行
 

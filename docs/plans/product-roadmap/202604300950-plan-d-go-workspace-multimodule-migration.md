@@ -86,7 +86,7 @@ github.com/ghbvf/gocell/                      单仓库（全开源 Apache 2.0�
 │   │                                                     timeseries/timescaledb
 │   ├── cells/                                  **依赖 mdm/kernel 接口，不直接 import adapters**
 │   │   ├── rbaccell/                           （L1）角色权限管理
-│   │   ├── pkicell/                            （L1）内部 CA + WSTEP/SCEP + 证书轮换
+│   │   ├── pkicell/                            （L1）WSTEP/SCEP 前端（消费 core certsigning/certlifecycle，不自建 CA/轮换；#1895）
 │   │   ├── deviceidentity/                     （L1）SMBIOS 哈希 → unified_device_id（替代旧 Reconciliation Worker）
 │   │   ├── mdmcell/                            （L1+L2+L4）enroll / device / command 三 slice
 │   │   ├── agentcell/                          （L1+L2+L4）enroll / device / checkin / taskdispatch 四 slice
@@ -205,7 +205,7 @@ mdm / zerotrust **复用 core 分层模式**（kernel + runtime + adapters + cel
 |---|---|---|---|
 | **framework kernel**（不可复制）| 仅在 core | `cell.Cell` interface / metadata parser / assembly / outbox 接口 / idempotency 等 GoCell 框架契约 | mdm/zerotrust 直接 import core，**禁止复制** |
 | **framework runtime**（不可复制）| 仅在 core | `bootstrap` 10-phase / `eventrouter` / `auth` / `http/router` 等 framework 运行时 | 同上 |
-| **业务 kernel**（每个应用 module 自有）| `mdm/kernel/` / `zerotrust/kernel/` | mdm 业务领域抽象接口（如 `mdm/kernel/protocol.MDMProtocolHandler` / `mdm/kernel/pki.PKIIssuer`）| **必须有**，否则 cells 会直接 import adapters 违反 CLAUDE.md |
+| **业务 kernel**（每个应用 module 自有）| `mdm/kernel/` / `zerotrust/kernel/` | mdm 业务领域抽象接口（如 `mdm/kernel/protocol.MDMProtocolHandler`；**通用证书签发 `Signer` 已属 core `runtime/certsigning`，#1895——`mdm/kernel/pki` 仅承载 winmdm 协议特定扩展，不重造签发原语**）| **必须有**，否则 cells 会直接 import adapters 违反 CLAUDE.md |
 | **业务 runtime**（可选）| `mdm/runtime/` | mdm 特有运行时编排（如 mdm 协议 dispatcher）| 按需 |
 
 **依赖方向**（每个 module 内部，与 core 一致）：
@@ -775,7 +775,7 @@ jobs:
 **Stage 1 - 基础设施（2027 Q1）**：
 - PR A1.2：rbaccell（rolemgmt / permcheck / datascope）+ wmcore assembly 骨架
 - PR A1.3：accesscore.{jwtlifecycle, ssooidc} 扩 slice（在 core 内，不在 mdm）+ auditcore.approvalflow 扩 slice
-- PR A1.4：pkicell（wstep / scep / caworkflow / rotation）+ adapters/mdmprotocol/windows 骨架
+- PR A1.4：pkicell（wstep / scep / caworkflow——消费 core certsigning/certlifecycle，rotation 退役 #1895）+ adapters/mdmprotocol/windows 骨架
 - PR A1.5：deviceidentity（resolve / bind / lookup）+ unified_devices 表
 
 **Stage 2 - MDM 通道（2027 Q2-Q3）**：

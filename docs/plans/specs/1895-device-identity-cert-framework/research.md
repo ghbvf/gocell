@@ -32,7 +32,7 @@
 | 请求/证书模型 | 框架 | 协议无关 CertRequest + IssuedCert | CP |
 | 生命周期状态机 | 框架 | requested→issued→active→nearExpiry→renewing→{revoked\|expired} | CP（reconcile） |
 | 续期 reconcile | 框架 | 周期扫 notAfter 入队续期（level-triggered，jitter 70-90% 寿命） | CP（= GoCell 既有 reconcile） |
-| 吊销/CRL/OCSP | adapter | `Revoke(serial,reason)` + `RevocationList` + `Tidy` | DP |
+| 吊销/CRL/OCSP | adapter | `Revoke(scope,serial,reason)` + `RevocationList(scope)` + `Tidy` | DP |
 | 注册协议 adapter | 消费方边缘 | EST/SCEP/ACME/XCEP 终结 wire → 内部 CertRequest | edge |
 | 证明/身份绑定 | 框架 | `Authorize(claim)(grant,error)`——**与 Sign 分离** | CP（GoCell 既有 PDP） |
 | 私钥托管 | adapter | `crypto.Signer`，**私钥永不跨边界** | DP |
@@ -54,12 +54,12 @@ type Signer interface {
 type Authorizer interface { // 独立于 Signer，复用 PDP；nil grant=deny
     AuthorizeEnroll(ctx context.Context, claim EnrollmentClaim) (SignConstraints, error)
 }
-type RevocationStore interface {
-    Revoke(ctx context.Context, serial string, reason RevocationReason) error
-    RevocationList(ctx context.Context) (crlDER []byte, err error)
-    Tidy(ctx context.Context, before time.Time) (purged int, err error)
+type RevocationStore interface { // CertScope = {tenant,issuer,device}，与 Sign 同源隔离；漏传编译错（Hard）
+    Revoke(ctx context.Context, scope CertScope, serial string, reason RevocationReason) error
+    RevocationList(ctx context.Context, scope CertScope) (crlDER []byte, err error)
+    Tidy(ctx context.Context, scope CertScope, before time.Time) (purged int, err error)
 }
-// CertRequest/IssuedCert sealed（unexported + 唯一构造器；typed tenant+deviceID）
+// CertScope/CertRequest/IssuedCert sealed（unexported + 唯一构造器；typed tenant+issuer+device，非裸 string/serial）
 ```
 `certlifecycle.Reconciler` 实现冻结的 `reconcile.Reconciler`，`clock.Clock` 位置参 + `MustHaveClock`，复用 `kernel/reconcile.Loop` + `runtime/command`，不新造控制环。EST 前端在 `runtime/http/est` 终结 PKCS#10/PKCS#7，调用框架 `Signer`。
 

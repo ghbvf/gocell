@@ -181,7 +181,7 @@ E14 完成后 GoCell 暴露 25 个独立可用包，按典型场景拼装可覆�
 | M3 | 状态采集 | DevDetail CSP + Agent 基础硬件 | **遥测 / SMART / 时序聚合（延后）** |
 | M4 | 远程控制 | Wipe / Lock / Reboot + 状态机 + 24h 审批 | **WebSocket 实时 / 远程桌面 / 远程 CLI（延后）** |
 | M5 | 应用分发 | MSI/MSIX/EXE/ZIP/PowerShell + S3 直连 + 断点续传 + 包签名 | **P2P 分发（延后，> 1W 设备规模启动）** |
-| M6 | 证书管理 | 内部 CA + WSTEP / SCEP + 证书轮换 + 4 类证书生命周期 | HSM / KeyVault 集成 |
+| M6 | 证书管理 | 框架证书底座（`runtime/certsigning`+`certlifecycle`+`adapters/softca`+EST，#1895）+ winmdm WSTEP/SCEP 前端 + 4 类证书生命周期 | HSM / KeyVault adapter |
 | M7 | 合规审计 | 完整 actor/target/before/after + 高危操作审批链 | tamper-evident 存储 / SIEM 集成 |
 | M8 | RBAC | 5 角色 + 数据范围 + 自建用户 + SSO（OIDC）| Azure AD（Phase 2 可选 IdP） |
 
@@ -209,7 +209,7 @@ E14 完成后 GoCell 暴露 25 个独立可用包，按典型场景拼装可覆�
 | 1 | `accesscore` | 已有扩展 | L1 | + jwtlifecycle / ssooidc |
 | 2 | `auditcore` | 已有扩展 | L2 | + approvalflow |
 | 3 | `rbaccell` | 新建 | L1 | rolemgmt / permcheck / datascope |
-| 4 | `pkicell` | 新建 | L1 | wstep / scep / caworkflow / rotation |
+| 4 | `pkicell` | 新建 | L1 | wstep / scep / caworkflow（消费框架 certsigning/certlifecycle，rotation 退役；#1895） |
 | 5 | `deviceidentity` | 新建 | L1 | resolve / bind / lookup（**替代旧 Reconciliation Worker**）|
 | 6 | `mdmcell` | 新建 | L1+L2+L4 | enroll / device / command |
 | 7 | `agentcell` | 新建 | L1+L2+L4 | enroll / device / checkin / taskdispatch |
@@ -267,14 +267,14 @@ E14 完成后 GoCell 暴露 25 个独立可用包，按典型场景拼装可覆�
 
 | 阶段 | 时长 | 内容 |
 |---|---|---|
-| **Phase 0**：GoCell v1.0 + P0 5 项 | 6 个月（2026 Q2-Q4） | E1-E10 + E14 + 方案 D 切换 + Windows MDM 协议 + WSTEP + JWT 完整 + 熔断 |
-| **Stage 1**：基础设施（accesscore/auditcore/rbaccell/pkicell/deviceidentity） | 2 个月（2027 Q1） | wmcore 跑通 + RBAC 5 角色 + 审批流 + 内部 CA 链路 |
+| **Phase 0**：GoCell v1.0 + P0 5 项 | 6 个月（2026 Q2-Q4） | E1-E10 + E14 + 方案 D 切换 + Windows MDM 协议 + 框架证书底座（#1895） + JWT 完整 + 熔断 |
+| **Stage 1**：基础设施（accesscore/auditcore/rbaccell/pkicell/deviceidentity） | 2 个月（2027 Q1） | wmcore 跑通 + RBAC 5 角色 + 审批流 + WSTEP/SCEP 链路（消费框架 certsigning，不自建 CA；#1895） |
 | **Stage 2**：MDM 通道（mdmcell + windows adapter） | 3 个月（2027 Q2-Q3） | WSTEP 注册 + DevDetail 采集 + Wipe/Lock/Reboot 命令下发 |
 | **Stage 3**：Agent 通道（agentcell） | 3 个月（2027 Q3-Q4） | MSI 签名校验 + 基础采集 + 15min checkin + 任务派发 |
 | **Stage 4**：上层应用（groupengine + policycell + appcatalog + devicelifecycle）| 3 个月（2027 Q4-2028 Q1） | 分组 + 策略路由 + 软件分发（S3）+ 设备墓碑 |
 | **总计** | **17 个月**（含 Phase 0）/ **11 个月**（仅 winmdm Stage 1-4） | winmdm v1 GA 2028 Q1 |
 
-> **P0 阻塞项**（GoCell v1.0 前置）：方案 D 多 module 切换 / `adapters/mdmprotocol/windows` / pkicell WSTEP 支持 / `accesscore.jwtlifecycle` / `runtime/circuitbreaker` / RBAC 提前到 Stage 1。
+> **P0 阻塞项**（GoCell v1.0 前置）：方案 D 多 module 切换 / `adapters/mdmprotocol/windows` / **框架证书底座（`runtime/certsigning`+`adapters/softca`+EST，#1895；非 winmdm WSTEP 前端）** / `accesscore.jwtlifecycle` / `runtime/circuitbreaker` / RBAC 提前到 Stage 1。winmdm WSTEP/SCEP 协议前端归 2027 Stage 2，不入 core v1.0 P0。
 > **P2 优化项**（明确延后）：WNS / WebRTC / P2P / TimescaleDB / WebSocket / BitLocker 密钥托管 / 补丁管理 / OOBE。
 
 ---
@@ -398,8 +398,8 @@ Phase 0 GoCell v1.0     winmdm Stage 1-4                    winmdm v1 GA + Phase
 
 | 里程碑 | 标志 | 估时 |
 |---|---|---|
-| **M0 GoCell v1.0** | E1-E10 + E14 全部完成；25 包 SemVer 锁定；方案 D 多 module 切换 + Windows MDM 协议 + WSTEP + JWT 完整 + 熔断 5 项 P0 就绪 | 2026 Q4 |
-| **M1 winmdm Stage 1** | wmcore assembly 跑通：accesscore + auditcore + rbaccell + pkicell + deviceidentity；RBAC 5 角色 + 24h 审批流；CA + WSTEP/SCEP 链路 | 2027 Q1 末 |
+| **M0 GoCell v1.0** | E1-E10 + E14 全部完成；25 包 SemVer 锁定；方案 D 多 module 切换 + Windows MDM 协议 + 框架证书底座（#1895） + JWT 完整 + 熔断 5 项 P0 就绪 | 2026 Q4 |
+| **M1 winmdm Stage 1** | wmcore assembly 跑通：accesscore + auditcore + rbaccell + pkicell + deviceidentity；RBAC 5 角色 + 24h 审批流；WSTEP/SCEP 链路（消费框架 certsigning，不自建 CA；#1895） | 2027 Q1 末 |
 | **M2 winmdm Stage 2** | wmmdm assembly：mdmcell（enroll + device + command）；100 台 Win10/11 真机注册 + Wipe/Lock/Reboot 通过 | 2027 Q3 中 |
 | **M3 winmdm Stage 3** | wmagent assembly：agentcell（enroll + device + checkin + taskdispatch）；MSI 签名校验 + 短轮询 + 任务派发 | 2027 Q4 中 |
 | **M4 winmdm v1 GA** | 11 cell + 6 assembly + 1 winmdmall；策略 + 分组 + 软件分发（S3）+ 设备墓碑；5W 设备压测 | 2028 Q1 |
@@ -411,7 +411,7 @@ Phase 0 GoCell v1.0     winmdm Stage 1-4                    winmdm v1 GA + Phase
 
 | 风险 | 严重度 | 缓解 |
 |---|---|---|
-| **GoCell v1.0 延期** | 高 | E1-E10 是 12-16 周固定承诺；P0 5 项（方案 D / Windows 协议 / WSTEP / JWT / 熔断）必须就绪 |
+| **GoCell v1.0 延期** | 高 | E1-E10 是 12-16 周固定承诺；P0 5 项（方案 D / Windows 协议 / 框架证书底座 #1895 / JWT / 熔断）必须就绪 |
 | **WSTEP 证书链复杂度** | 高 | 旧 winmdm Spike-03 单独立项；2026 Q4 v1.0 前置必跑通；先做 Windows 协议（Apple/Android 取消）|
 | **wmcore 单点故障** | 中-高 | 3 副本 HA + JWKS 客户端缓存 + 异步审计 outbox + 熔断器（runtime/circuitbreaker P0 必备）|
 | **零信任合规审计要求** | 中-高 | FedRAMP / SOC2 等审计要求会拖 6-12 个月；从 winmdm Stage 1 起就走 archtest + auditcore.approvalflow 完整路径，不要后期补 |
@@ -432,7 +432,7 @@ Phase 0 GoCell v1.0     winmdm Stage 1-4                    winmdm v1 GA + Phase
 
 ### 5.5 推荐策略
 
-**短期（2026 Q2-Q4）**：GoCell v1.0 + P0 5 项（方案 D / Windows 协议 / WSTEP / JWT / 熔断）；examples/ 加 winmdmsmoke 作为多 assembly 示例。
+**短期（2026 Q2-Q4）**：GoCell v1.0 + P0 5 项（方案 D / Windows 协议 / 框架证书底座 #1895 / JWT / 熔断）；examples/ 加 winmdmsmoke 作为多 assembly 示例。
 
 **中期（2027 Q1-2028 Q1）**：winmdm Stage 1-4 串行落地，11 cell + 6 assembly + 1 winmdmall；M4 GA 时 5W 设备压测通过。
 

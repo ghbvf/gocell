@@ -187,7 +187,7 @@ DoD：
 - SSO 对接 OIDC（Keycloak/Casdoor 互通测试）
 - RBAC 5 角色（Super Admin / MDM Admin / 安全管理员 / Help Desk / Auditor）
 - 审批流（24h 超时 + 紧急越权 + 审计告警）
-- 内部 CA + WSTEP/SCEP 证书签发链路（Spike-03 出清）
+- WSTEP/SCEP 证书签发链路（消费框架 `runtime/certsigning`+`certlifecycle`，不自建 CA；Spike-03 出清；#1895）
 - `wmcore` assembly 可独立启动 + 健康检查
 
 ### Stage 2：MDM 通道（2027 Q2-Q3，~3 个月）
@@ -432,7 +432,7 @@ GoCell v1.0 + P0 5 项     Stage 1 基础设施           Stage 2 MDM    Stage 3
 
 | 里程碑 | 标志 | 时间 |
 |---|---|---|
-| **M0**：GoCell v1.0 + P0 就绪 | core/方案D + Windows MDM 协议 + WSTEP + JWT 完整 + 熔断 | 2026 Q4 |
+| **M0**：GoCell v1.0 + P0 就绪 | core/方案D + Windows MDM 协议 + 框架证书底座（#1895） + JWT 完整 + 熔断 | 2026 Q4 |
 | **M1**：winmdm Stage 1 完成 | wmcore 单 assembly 跑通 + RBAC + 审批流 | 2027 Q1 末 |
 | **M2**：winmdm Stage 2 完成 | wmmdm assembly + 设备注册 + 远程命令 | 2027 Q3 中 |
 | **M3**：winmdm Stage 3 完成 | wmagent assembly + 心跳 + 任务派发 | 2027 Q4 中 |
