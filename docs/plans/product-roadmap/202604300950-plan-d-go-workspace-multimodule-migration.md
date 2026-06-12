@@ -86,7 +86,7 @@ github.com/ghbvf/gocell/                      单仓库（全开源 Apache 2.0�
 │   │                                                     timeseries/timescaledb
 │   ├── cells/                                  **依赖 mdm/kernel 接口，不直接 import adapters**
 │   │   ├── rbaccell/                           （L1）角色权限管理
-│   │   ├── pkicell/                            （L1）内部 CA + WSTEP/SCEP + 证书轮换
+│   │   ├── pkicell/                            （L1）WSTEP/SCEP 前端（消费 core certsigning/certlifecycle，不自建 CA/轮换；#1895）
 │   │   ├── deviceidentity/                     （L1）SMBIOS 哈希 → unified_device_id（替代旧 Reconciliation Worker）
 │   │   ├── mdmcell/                            （L1+L2+L4）enroll / device / command 三 slice
 │   │   ├── agentcell/                          （L1+L2+L4）enroll / device / checkin / taskdispatch 四 slice
@@ -205,7 +205,7 @@ mdm / zerotrust **复用 core 分层模式**（kernel + runtime + adapters + cel
 |---|---|---|---|
 | **framework kernel**（不可复制）| 仅在 core | `cell.Cell` interface / metadata parser / assembly / outbox 接口 / idempotency 等 GoCell 框架契约 | mdm/zerotrust 直接 import core，**禁止复制** |
 | **framework runtime**（不可复制）| 仅在 core | `bootstrap` 10-phase / `eventrouter` / `auth` / `http/router` 等 framework 运行时 | 同上 |
-| **业务 kernel**（每个应用 module 自有）| `mdm/kernel/` / `zerotrust/kernel/` | mdm 业务领域抽象接口（如 `mdm/kernel/protocol.MDMProtocolHandler` / `mdm/kernel/pki.PKIIssuer`）| **必须有**，否则 cells 会直接 import adapters 违反 CLAUDE.md |
+| **业务 kernel**（每个应用 module 自有）| `mdm/kernel/` / `zerotrust/kernel/` | mdm 业务领域抽象接口（如 `mdm/kernel/protocol.MDMProtocolHandler`；**通用证书签发 `Signer` 已属 core `runtime/certsigning`，#1895——`mdm/kernel/pki` 仅承载 winmdm 协议特定扩展，不重造签发原语**）| **必须有**，否则 cells 会直接 import adapters 违反 CLAUDE.md |
 | **业务 runtime**（可选）| `mdm/runtime/` | mdm 特有运行时编排（如 mdm 协议 dispatcher）| 按需 |
 
 **依赖方向**（每个 module 内部，与 core 一致）：
@@ -722,6 +722,8 @@ jobs:
 **禁止动作**：不要预先创建 mdm/ 或 zerotrust/ 空目录；不要预先建 go.work；不要预先做 module 拆分。
 
 > **注（#1554, 2026-06）**：`use .` workspace 地基已由 #1554 前置落地（committed `go.work` + `.gocell/manifest.yaml` + CI 遍历扩展点），与本节不矛盾——本节「不要预先建 go.work」针对的是**真正的 mdm/ 多 module 拆分 + 外部 module 版本选择**，那部分仍按 A1.1 在 Phase 1 落地。`use .` 单 module 形态对依赖解析行为与无 go.work 完全等价，仅为 Phase 1 预设扩展点。
+>
+> **注（#1895 / ADR-1895, 2026-06-12）**：**设备身份与证书框架底座**（`runtime/certsigning` + `runtime/certlifecycle` + `adapters/softca` + `runtime/http/est` + 4 中立设备契约 + 生产 device 主体签发器）在 v1.0 前提前落地，**全部落 core 顶层**（runtime / adapters / contracts），**不**建 `mdm/` / `zerotrust/`——与本节「禁止预建 mdm/」**一致**（core 是业务无关 framework，证书底座是通用原语）。§9 表「业务领域 kernel `mdm/kernel/pki.PKIIssuer` 不应在 core 出现」据此修订：**通用证书签发接口 `runtime/certsigning.Signer` 属 core framework**；`mdm/kernel/pki` 仅在 winmdm 触发后承载 Windows 协议特定扩展（WSTEP/SCEP 解码），不重造签发原语。详见 ADR-1895。
 
 ### 阶段 1：MDM 启动（2027 Q1）
 
@@ -773,7 +775,7 @@ jobs:
 **Stage 1 - 基础设施（2027 Q1）**：
 - PR A1.2：rbaccell（rolemgmt / permcheck / datascope）+ wmcore assembly 骨架
 - PR A1.3：accesscore.{jwtlifecycle, ssooidc} 扩 slice（在 core 内，不在 mdm）+ auditcore.approvalflow 扩 slice
-- PR A1.4：pkicell（wstep / scep / caworkflow / rotation）+ adapters/mdmprotocol/windows 骨架
+- PR A1.4：pkicell（wstep / scep / caworkflow——消费 core certsigning/certlifecycle，rotation 退役 #1895）+ adapters/mdmprotocol/windows 骨架
 - PR A1.5：deviceidentity（resolve / bind / lookup）+ unified_devices 表
 
 **Stage 2 - MDM 通道（2027 Q2-Q3）**：

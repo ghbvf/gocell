@@ -8,6 +8,14 @@
 > - `202604300930-repository-structure-decision.md`（已选方案 D 全开源 MIT）
 > - 旧版本：`/Users/shengming/Documents/winmdm/winmdm-mvp-v3/docs/products/prd-v6.md` v6.0（已废弃）
 
+> **修订（#1895 / ADR-1895，2026-06-12）**：设备证书的**框架级 PKI 原语下移 core**
+> （`runtime/certsigning` 接口 + `runtime/certlifecycle` reconciler + `adapters/softca` +
+> 框架级 EST 前端）。`pkicell`（§2.1 / §10）的 `wstep`/`scep`/`caworkflow` 仍是 winmdm
+> 消费方 Cell（落 `mdm` module，2027 Q1），但**不再自建 CA/CSR/CRL/签发/续期原语**——
+> 改为消费框架 `certsigning.Signer` + `certlifecycle`，只保留 Windows 专属协议前端
+> （XCEP/WSTEP/SCEP/MS-MDE 解码）+ caworkflow（审批集成）。详见
+> `docs/architecture/202606121500-1895-adr-device-cert-framework-pivot.md`。
+
 ---
 
 ## §0 与 v6.0 的差异（核心说明）
@@ -69,7 +77,7 @@
 | 1 | `accesscore` | 已有扩展 | L1 LocalTx | ✅ GoCell 内置 | + `jwtlifecycle` + `ssooidc` | `users`, `sessions`, `idp_config` |
 | 2 | `auditcore` | 已有扩展 | L2 OutboxFact | ✅ GoCell 内置 | + `approvalflow` | `audit_logs`, `approval_chain` |
 | 3 | `rbaccell` | 新建 | L1 LocalTx | — | `rolemgmt` / `permcheck` / `datascope` | `roles`, `permissions`, `user_roles`, `data_scopes` |
-| 4 | `pkicell` | 新建 | L1 LocalTx | — | `wstep` / `scep` / `caworkflow` / `rotation` | `ca_certs`, `device_certs`, `cert_issued` |
+| 4 | `pkicell` | 新建 | L1 LocalTx | — | `wstep` / `scep` / `caworkflow`（**消费**框架 `runtime/certsigning`+`certlifecycle`，不自建 CA/CSR/CRL/签发/续期——`rotation` 退役，#1895/ADR-1895） | `device_certs`, `cert_issued`（CA 私钥归 `adapters/softca`，不在本 cell） |
 | 5 | `deviceidentity` | 新建 | L1 LocalTx | — | `resolve` / `bind` / `lookup` | `unified_devices(id, smbios_uuid, serial_number, mdm_device_id, agent_device_id)` |
 | 6 | `mdmcell` | 新建 | L1+L2+L4 | — | `enroll` / `device` / `command` | `mdm_devices`, `mdm_enrollments`, `syncml_sessions`, `mdm_commands` |
 | 7 | `agentcell` | 新建 | L1+L2+L4 | — | `enroll` / `device` / `checkin` / `taskdispatch` | `agent_devices`, `agent_checkins`, `agent_tasks` |
@@ -179,7 +187,7 @@ DoD：
 - SSO 对接 OIDC（Keycloak/Casdoor 互通测试）
 - RBAC 5 角色（Super Admin / MDM Admin / 安全管理员 / Help Desk / Auditor）
 - 审批流（24h 超时 + 紧急越权 + 审计告警）
-- 内部 CA + WSTEP/SCEP 证书签发链路（Spike-03 出清）
+- WSTEP/SCEP 证书签发链路（消费框架 `runtime/certsigning`+`certlifecycle`，不自建 CA；Spike-03 出清；#1895）
 - `wmcore` assembly 可独立启动 + 健康检查
 
 ### Stage 2：MDM 通道（2027 Q2-Q3，~3 个月）
@@ -388,7 +396,7 @@ DoD：
 
 | 维度 | 方案 |
 |---|---|
-| MDM 通信 | TLS 1.2+ + mTLS 双向（pkicell 签发） |
+| MDM 通信 | TLS 1.2+ + mTLS 双向（经框架 `runtime/certsigning` 签发，pkicell 仅 WSTEP 前端；#1895） |
 | Agent 通信 | TLS 1.2+ + Agent JWT |
 | 字段加密 | BitLocker Recovery Key AES-256-GCM；用户 PII AES-256 字段级 |
 | JWT | RS256 + access 1h + refresh 7d/30d + 轮换 + 黑名单 + DPAPI |
@@ -424,7 +432,7 @@ GoCell v1.0 + P0 5 项     Stage 1 基础设施           Stage 2 MDM    Stage 3
 
 | 里程碑 | 标志 | 时间 |
 |---|---|---|
-| **M0**：GoCell v1.0 + P0 就绪 | core/方案D + Windows MDM 协议 + WSTEP + JWT 完整 + 熔断 | 2026 Q4 |
+| **M0**：GoCell v1.0 + P0 就绪 | core/方案D + Windows MDM 协议 + 框架证书底座（#1895） + JWT 完整 + 熔断 | 2026 Q4 |
 | **M1**：winmdm Stage 1 完成 | wmcore 单 assembly 跑通 + RBAC + 审批流 | 2027 Q1 末 |
 | **M2**：winmdm Stage 2 完成 | wmmdm assembly + 设备注册 + 远程命令 | 2027 Q3 中 |
 | **M3**：winmdm Stage 3 完成 | wmagent assembly + 心跳 + 任务派发 | 2027 Q4 中 |
