@@ -18,4 +18,5 @@ adapters/vault	github.com/ghbvf/gocell/adapters/vault
 adapters/websocket	github.com/ghbvf/gocell/adapters/websocket
 cellmodules	github.com/ghbvf/gocell/cellmodules
 corecells	github.com/ghbvf/gocell/corecells
+generated	github.com/ghbvf/gocell/generated
 tools	github.com/ghbvf/gocell/tools
