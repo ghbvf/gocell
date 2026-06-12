@@ -45,11 +45,14 @@ func (a CreateAdapter) Create(ctx context.Context, req *policyCreate.Request) (p
 }
 
 // mapCreateError maps domain errcodes to the create contract's typed error
-// responses. There is intentionally no conflict (409) mapping: the server
-// generates a fresh pol-<uuid> id and policies are identified by id, not name
-// (Cedar/XACML model — names are non-unique labels), so policy create has no
-// client-reachable conflict. KindInvalid → 422 (semantic, e.g. rowScope=all or
-// an unknown enum value); everything else → 400.
+// responses. There is intentionally no business conflict (409) mapping: the
+// server generates a fresh pol-<uuid> id and policies are identified by id, not
+// name (Cedar/XACML model — names are non-unique labels), so policy create has
+// no client-reachable business conflict. The 409 the create contract still
+// declares in endpoints.http.auth.responses is the idempotency-framework status
+// injected by the listener middleware on a replayed idempotency key (CH-07) — it
+// never originates from this handler. KindInvalid → 422 (semantic, e.g.
+// rowScope=all or an unknown enum value); everything else → 400.
 func mapCreateError(ce *errcode.Error) policyCreate.CreateResponseObject {
 	switch ce.Kind {
 	case errcode.KindUnauthenticated:
