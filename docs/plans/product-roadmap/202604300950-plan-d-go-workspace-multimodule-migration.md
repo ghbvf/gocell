@@ -722,6 +722,8 @@ jobs:
 **禁止动作**：不要预先创建 mdm/ 或 zerotrust/ 空目录；不要预先建 go.work；不要预先做 module 拆分。
 
 > **注（#1554, 2026-06）**：`use .` workspace 地基已由 #1554 前置落地（committed `go.work` + `.gocell/manifest.yaml` + CI 遍历扩展点），与本节不矛盾——本节「不要预先建 go.work」针对的是**真正的 mdm/ 多 module 拆分 + 外部 module 版本选择**，那部分仍按 A1.1 在 Phase 1 落地。`use .` 单 module 形态对依赖解析行为与无 go.work 完全等价，仅为 Phase 1 预设扩展点。
+>
+> **注（#1895 / ADR-1895, 2026-06-12）**：**设备身份与证书框架底座**（`runtime/certsigning` + `runtime/certlifecycle` + `adapters/softca` + `runtime/http/est` + 4 中立设备契约 + 生产 device 主体签发器）在 v1.0 前提前落地，**全部落 core 顶层**（runtime / adapters / contracts），**不**建 `mdm/` / `zerotrust/`——与本节「禁止预建 mdm/」**一致**（core 是业务无关 framework，证书底座是通用原语）。§9 表「业务领域 kernel `mdm/kernel/pki.PKIIssuer` 不应在 core 出现」据此修订：**通用证书签发接口 `runtime/certsigning.Signer` 属 core framework**；`mdm/kernel/pki` 仅在 winmdm 触发后承载 Windows 协议特定扩展（WSTEP/SCEP 解码），不重造签发原语。详见 ADR-1895。
 
 ### 阶段 1：MDM 启动（2027 Q1）
 

@@ -8,6 +8,14 @@
 > - `202604300930-repository-structure-decision.md`（已选方案 D 全开源 MIT）
 > - 旧版本：`/Users/shengming/Documents/winmdm/winmdm-mvp-v3/docs/products/prd-v6.md` v6.0（已废弃）
 
+> **修订（#1895 / ADR-1895，2026-06-12）**：设备证书的**框架级 PKI 原语下移 core**
+> （`runtime/certsigning` 接口 + `runtime/certlifecycle` reconciler + `adapters/softca` +
+> 框架级 EST 前端）。`pkicell`（§2.1 / §10）的 `wstep`/`scep`/`caworkflow` 仍是 winmdm
+> 消费方 Cell（落 `mdm` module，2027 Q1），但**不再自建 CA/CSR/CRL/签发/续期原语**——
+> 改为消费框架 `certsigning.Signer` + `certlifecycle`，只保留 Windows 专属协议前端
+> （XCEP/WSTEP/SCEP/MS-MDE 解码）+ caworkflow（审批集成）。详见
+> `docs/architecture/202606121500-1895-adr-device-cert-framework-pivot.md`。
+
 ---
 
 ## §0 与 v6.0 的差异（核心说明）

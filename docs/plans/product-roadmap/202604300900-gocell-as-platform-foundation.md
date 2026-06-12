@@ -3,6 +3,12 @@
 > 日期：2026-04-30
 > 状态：产品视角探索文档（与 `../engineering-baseline/` 框架视角解耦）
 > 受众：(a) 评估 GoCell 是否适合做 MDM / 零信任平台底座的产品决策者；(b) 想理解 GoCell 库形态能拼出什么应用的工程师；(c) 评估 Tier C 解耦边界的 framework 维护者
+> **修订（#1895 / ADR-1895，2026-06-12）**：设备证书 / PKI 底座**提升为框架能力**并提前落地
+> （`runtime/certsigning` + `runtime/certlifecycle` + `adapters/softca` + EST 前端 + 4 中立设备契约 +
+> 生产 device 主体签发器）。§3 `pkicell`（M6）/ §4 `mtlscert` / `pkicell` 均改为**消费**框架底座，
+> 不自建 CA/CSR/CRL/签发/续期原语；推翻 #995「PKI 不在框架」。详见
+> `docs/architecture/202606121500-1895-adr-device-cert-framework-pivot.md`。
+>
 > 关联：
 > - `../engineering-baseline/202604300600-radical-lightweight-revision.md`（核心 10 落点 E1-E10）
 > - `../engineering-baseline/202604300700-extension-leverages.md`（Tier B 25 个独立包清单）
@@ -188,7 +194,7 @@ E14 完成后 GoCell 暴露 25 个独立可用包，按典型场景拼装可覆�
 | M3 基础状态采集 | adapters/postgres | mdmcell.device + agentcell.device（基础硬件，**遥测时序延后**） |
 | M4 远程控制 | kernel/idempotency + outbox | mdmcell.command（状态机）+ auditcore.approvalflow（24h 审批） |
 | M5 应用分发 | adapters/s3（**已有，复用**） | appcatalog（catalog/signing/scriptlib/s3dispatch） |
-| M6 证书管理 | runtime/crypto | pkicell（wstep/scep/caworkflow/rotation） |
+| M6 证书管理 | **框架底座** `runtime/certsigning` + `runtime/certlifecycle` + `adapters/softca` + EST 前端（#1895/ADR-1895，下移 core） | pkicell（wstep/scep/caworkflow——**消费**框架底座，仅留 Windows 协议前端） |
 | M7 合规审计 | auditcore | + approvalflow slice |
 | M8 RBAC | accesscore | rbaccell（rolemgmt/permcheck/datascope）+ accesscore.{jwtlifecycle, ssooidc} |
 | 设备生命周期 | — | devicelifecycle（基于 unified_device_id 的 5 状态机） |

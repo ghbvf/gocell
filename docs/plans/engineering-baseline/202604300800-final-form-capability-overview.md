@@ -234,7 +234,8 @@ deployTemplate:
 - **Config 热更新**：fsnotify + ConfigMap symlink pivot 检测，无需重启
 - **健康检查**：`/livez` + `/readyz`，cell 注册的所有 health checker 聚合，readyz 翻转 → drain
 - **可观测性**：OTel trace + slog 结构化日志 + Prometheus 指标，metrics-schema.yaml 守护 label cardinality
-- **认证**：JWT 签发 + 验证 + key rotation
+- **认证**：JWT 签发 + 验证 + key rotation；生产 `PrincipalDevice` / super-admin 主体签发（#1811）
+- **设备身份与证书底座**（#1895/ADR-1895）：`runtime/certsigning`（Signer/Authorizer/RevocationStore 接口 + sealed CertRequest/IssuedCert，私钥不出 adapter）+ `runtime/certlifecycle`（复用 kernel/reconcile 的签发/续期/吊销状态机）+ `adapters/softca`（内置软 CA，开箱可用）+ 框架级 EST(RFC 7030) 注册前端。对标 SPIFFE/cert-manager/step-ca。
 - **持久化**：Postgres + advisory lock migration（goose），Redis cache，S3 blob
 - **强结构化守护**：archtest LAYER（11 条规则）+ boundary.yaml fingerprint diff gate
 
