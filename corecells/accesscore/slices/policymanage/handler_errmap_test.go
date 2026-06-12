@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -78,7 +79,7 @@ func (r *fixedKindRepo) RepoReady(_ context.Context) error { return nil }
 func newSvcWithRepo(t testing.TB, repo fixedKindRepoIface) *Service {
 	t.Helper()
 	writer := &recordingWriter{}
-	svc, err := NewService(clock.Real(), repo, slog.Default(),
+	svc, err := NewService(clock.Real(), repo, testCursorCodec, slog.Default(), query.RunModeProd,
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))),
 		WithTxManager(persistence.WrapForCell(&stubPolicyTxRunner{})))
 	require.NoError(t, err)

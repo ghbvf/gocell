@@ -15,7 +15,6 @@ endpoints:
     successStatus: 201
     auth:
       responses:
-        - 409
         - 422
         - 503
     noContent: false
@@ -28,9 +27,6 @@ endpoints:
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       403:
         description: "Forbidden — authenticated but lacks admin role"
-        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
-      409:
-        description: "Conflict — a policy with the same name already exists"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       413:
         description: "Payload Too Large — request body exceeds the size limit"

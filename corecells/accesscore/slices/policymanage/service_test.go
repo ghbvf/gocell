@@ -20,11 +20,23 @@ import (
 	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 const testSvcTenantStr = "10000000-0000-0000-0000-000000000001"
+
+// testCursorCodec is the demo-key cursor codec shared by all policymanage tests
+// (same 32-byte demo key the cell installs in non-durable mode). Built once;
+// a malformed key is a test-setup bug, so it panics rather than taking *testing.T.
+var testCursorCodec = func() *query.CursorCodec {
+	c, err := query.NewCursorCodec([]byte("gocell-demo-ACCESS-CORE-key-32!!"))
+	if err != nil {
+		panic("policymanage_test: cursor codec: " + err.Error())
+	}
+	return c
+}()
 
 // testSvcAdminCtx returns a context with an admin principal and valid tenant.
 func testSvcAdminCtx() context.Context {
@@ -71,7 +83,7 @@ func newDurableTestService(t testing.TB) (*Service, *recordingWriter) {
 	t.Helper()
 	repo := mem.NewPolicyRepository()
 	writer := &recordingWriter{}
-	svc, err := NewService(clock.Real(), repo, slog.Default(),
+	svc, err := NewService(clock.Real(), repo, testCursorCodec, slog.Default(), query.RunModeProd,
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))),
 		WithTxManager(persistence.WrapForCell(&noopTxRunner{})))
 	require.NoError(t, err)
@@ -142,7 +154,7 @@ func TestService_Create_InvalidInput_NoRules(t *testing.T) {
 func TestService_Create_EmitterFailureRollsBack(t *testing.T) {
 	repo := mem.NewPolicyRepository()
 	failWriter := &recordingWriter{Err: errors.New("outbox down")}
-	svc, err := NewService(clock.Real(), repo, slog.Default(),
+	svc, err := NewService(clock.Real(), repo, testCursorCodec, slog.Default(), query.RunModeProd,
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, failWriter))),
 		WithTxManager(persistence.WrapForCell(&noopTxRunner{})))
 	require.NoError(t, err)
@@ -209,7 +221,7 @@ func TestService_Update_EmitterFailureRollsBack(t *testing.T) {
 
 	// Create with a healthy emitter first.
 	goodWriter := &recordingWriter{}
-	svc, err := NewService(clock.Real(), repo, slog.Default(),
+	svc, err := NewService(clock.Real(), repo, testCursorCodec, slog.Default(), query.RunModeProd,
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, goodWriter))),
 		WithTxManager(persistence.WrapForCell(&noopTxRunner{})))
 	require.NoError(t, err)
@@ -218,7 +230,7 @@ func TestService_Update_EmitterFailureRollsBack(t *testing.T) {
 
 	// Rebuild service with a failing emitter for the Update call.
 	failWriter := &recordingWriter{Err: errors.New("outbox down")}
-	failSvc, err := NewService(clock.Real(), repo, slog.Default(),
+	failSvc, err := NewService(clock.Real(), repo, testCursorCodec, slog.Default(), query.RunModeProd,
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, failWriter))),
 		WithTxManager(persistence.WrapForCell(&noopTxRunner{})))
 	require.NoError(t, err)
@@ -296,7 +308,7 @@ func TestService_Delete_EmitterFailureRollsBack(t *testing.T) {
 	repo := mem.NewPolicyRepository()
 
 	goodWriter := &recordingWriter{}
-	svc, err := NewService(clock.Real(), repo, slog.Default(),
+	svc, err := NewService(clock.Real(), repo, testCursorCodec, slog.Default(), query.RunModeProd,
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, goodWriter))),
 		WithTxManager(persistence.WrapForCell(&noopTxRunner{})))
 	require.NoError(t, err)
@@ -304,7 +316,7 @@ func TestService_Delete_EmitterFailureRollsBack(t *testing.T) {
 	require.NoError(t, err)
 
 	failWriter := &recordingWriter{Err: errors.New("outbox down")}
-	failSvc, err := NewService(clock.Real(), repo, slog.Default(),
+	failSvc, err := NewService(clock.Real(), repo, testCursorCodec, slog.Default(), query.RunModeProd,
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, failWriter))),
 		WithTxManager(persistence.WrapForCell(&noopTxRunner{})))
 	require.NoError(t, err)
@@ -365,7 +377,7 @@ func TestService_Get_NotFound(t *testing.T) {
 func TestService_List_Empty(t *testing.T) {
 	svc, _ := newDurableTestService(t)
 
-	result, err := svc.List(testSvcAdminCtx(), "", 10)
+	result, err := svc.List(testSvcAdminCtx(), query.PageParams{Limit: 10})
 	require.NoError(t, err)
 	assert.Empty(t, result.Items)
 	assert.False(t, result.HasMore)
@@ -386,14 +398,14 @@ func TestService_List_Pagination(t *testing.T) {
 	}
 
 	// First page of 2.
-	page1, err := svc.List(ctx, "", 2)
+	page1, err := svc.List(ctx, query.PageParams{Limit: 2})
 	require.NoError(t, err)
 	assert.Len(t, page1.Items, 2)
 	assert.True(t, page1.HasMore)
 	assert.NotEmpty(t, page1.NextCursor)
 
 	// Second page.
-	page2, err := svc.List(ctx, page1.NextCursor, 2)
+	page2, err := svc.List(ctx, query.PageParams{Cursor: page1.NextCursor, Limit: 2})
 	require.NoError(t, err)
 	assert.Len(t, page2.Items, 1)
 	assert.False(t, page2.HasMore)
@@ -408,7 +420,7 @@ func TestService_List_SortedByID(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	result, err := svc.List(ctx, "", 10)
+	result, err := svc.List(ctx, query.PageParams{Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, result.Items, 5)
 
@@ -431,7 +443,7 @@ func TestService_List_LimitZeroDefaultsToPageSize(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	result, err := svc.List(ctx, "", 0)
+	result, err := svc.List(ctx, query.PageParams{Limit: 0})
 	require.NoError(t, err)
 	// All 3 items fit within DefaultPageSize — no truncation expected.
 	assert.Len(t, result.Items, 3)
@@ -451,7 +463,7 @@ func TestService_List_LimitAboveMaxClamped(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	result, err := svc.List(ctx, "", 600)
+	result, err := svc.List(ctx, query.PageParams{Limit: 600})
 	require.NoError(t, err)
 	// All 3 items fit within clamped limit.
 	assert.Len(t, result.Items, 3)
@@ -462,8 +474,69 @@ func TestService_List_LimitAboveMaxClamped(t *testing.T) {
 
 func TestNewService_MissingTxManager(t *testing.T) {
 	repo := mem.NewPolicyRepository()
-	_, err := NewService(clock.Real(), repo, slog.Default())
+	_, err := NewService(clock.Real(), repo, testCursorCodec, slog.Default(), query.RunModeProd)
 	require.Error(t, err)
+}
+
+func TestNewService_MissingCodec(t *testing.T) {
+	repo := mem.NewPolicyRepository()
+	_, err := NewService(clock.Real(), repo, nil, slog.Default(), query.RunModeProd,
+		WithTxManager(persistence.WrapForCell(&noopTxRunner{})))
+	require.Error(t, err)
+	var ce *errcode.Error
+	require.ErrorAs(t, err, &ce)
+	assert.Equal(t, errcode.ErrCellMissingCodec, ce.Code)
+}
+
+// --- F1: scoped-tx read coverage ---
+
+// recordingTxRunner records RunInTx invocations and the tenant scope carried on
+// the context, to prove the read paths run inside a tenant-scoped transaction.
+type recordingTxRunner struct {
+	calls  int
+	scopes []string
+}
+
+func (r *recordingTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	r.calls++
+	if tid, ok := tenant.ScopeFromContext(ctx); ok {
+		r.scopes = append(r.scopes, tid.String())
+	}
+	return fn(ctx)
+}
+
+var _ persistence.TxRunner = (*recordingTxRunner)(nil)
+
+// TestService_Reads_RunInScopedTx proves Get and List route their repo reads
+// through scopedtx.Do — RunInTx with the caller's tenant scope on the context
+// (F1). Under PG FORCE RLS a bare-pool read returns 0 rows for the restricted
+// app-serving role unless the tx sets app.tenant_id; wrapping every read in the
+// scoped tx is what installs that GUC. The write path (Create) already runs in a
+// tx via runInTx, but without the explicit tenant.WithScope the read path needs —
+// so only the two reads contribute scoped entries here.
+func TestService_Reads_RunInScopedTx(t *testing.T) {
+	repo := mem.NewPolicyRepository()
+	spy := &recordingTxRunner{}
+	svc, err := NewService(clock.Real(), repo, testCursorCodec, slog.Default(), query.RunModeProd,
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, &recordingWriter{}))),
+		WithTxManager(persistence.WrapForCell(spy)))
+	require.NoError(t, err)
+
+	ctx := testSvcAdminCtx()
+	p, err := svc.Create(ctx, CreateInput{Name: "P", Rules: minimalRules()})
+	require.NoError(t, err)
+	callsAfterCreate := spy.calls
+
+	_, err = svc.Get(ctx, p.ID)
+	require.NoError(t, err)
+	_, err = svc.List(ctx, query.PageParams{Limit: 10})
+	require.NoError(t, err)
+
+	assert.Equal(t, callsAfterCreate+2, spy.calls, "Get and List must each run inside a tx")
+	require.Len(t, spy.scopes, 2, "both reads must carry an explicit tenant scope")
+	for _, s := range spy.scopes {
+		assert.Equal(t, testSvcTenantStr, s, "read tx must be scoped to the caller's tenant")
+	}
 }
 
 // --- helper ---

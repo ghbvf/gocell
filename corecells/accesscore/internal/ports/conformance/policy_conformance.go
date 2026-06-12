@@ -101,6 +101,9 @@ func RunPolicyRepoConformance(t *testing.T, factory PolicyRepoFactory) {
 	t.Run("Concurrent_NoDataRace", func(t *testing.T) {
 		conformPolicyConcurrentNoDataRace(t, factory)
 	})
+	t.Run("Update_CAS_Concurrent", func(t *testing.T) {
+		conformPolicyUpdateCASConcurrent(t, factory)
+	})
 	t.Run("Create_NilPolicy_Error", func(t *testing.T) {
 		conformPolicyCreateNilPolicyError(t, factory)
 	})
@@ -624,6 +627,72 @@ func conformPolicyConcurrentNoDataRace(t *testing.T, factory PolicyRepoFactory) 
 
 	if len(unexpected) > 0 {
 		t.Errorf("concurrent ops produced %d unexpected error(s): first=%v", len(unexpected), unexpected[0])
+	}
+}
+
+// conformPolicyUpdateCASConcurrent asserts the optimistic-concurrency
+// winner-takes-all guarantee: when N goroutines concurrently Update the SAME
+// policy with the SAME expectedVersion, exactly one succeeds (version 1→2) and
+// every other call returns ErrVersionConflict — no Update silently clobbers
+// another (lost-update prevention). The mem store enforces this under its mutex;
+// the PG store enforces it via the CAS predicate WHERE version=$expected (a
+// losing UPDATE affects 0 rows → ErrVersionConflict). This is the concurrent
+// complement to Update_VersionConflict (which only proves the sequential guard).
+func conformPolicyUpdateCASConcurrent(t *testing.T, factory PolicyRepoFactory) {
+	t.Parallel()
+	repo := factory(t)
+	ctx := context.Background()
+
+	created := mustCreate(t, repo, testTenantID, conformTestPolicy("pol-cas", testTenantID))
+	if created.Version != 1 {
+		t.Fatalf("Create() Version = %d, want 1", created.Version)
+	}
+
+	const goroutines = 16
+	var (
+		wg         sync.WaitGroup
+		mu         sync.Mutex
+		successes  int
+		conflicts  int
+		unexpected []error
+	)
+	for range goroutines {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			patch := conformTestPolicy("pol-cas", testTenantID)
+			patch.Name = "racer"
+			_, uerr := repo.Update(ctx, testTenantID, "pol-cas", 1, patch)
+			mu.Lock()
+			defer mu.Unlock()
+			var ce *errcode.Error
+			switch {
+			case uerr == nil:
+				successes++
+			case errors.As(uerr, &ce) && ce.Code == errcode.ErrVersionConflict:
+				conflicts++
+			default:
+				unexpected = append(unexpected, uerr)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if len(unexpected) > 0 {
+		t.Fatalf("concurrent CAS produced %d unexpected error(s): first=%v", len(unexpected), unexpected[0])
+	}
+	if successes != 1 {
+		t.Errorf("concurrent CAS: expected exactly 1 winning Update, got %d", successes)
+	}
+	if conflicts != goroutines-1 {
+		t.Errorf("concurrent CAS: expected %d ErrVersionConflict, got %d", goroutines-1, conflicts)
+	}
+	stored, err := repo.GetByID(ctx, testTenantID, "pol-cas")
+	if err != nil {
+		t.Fatalf(msgPolicyGetByIDUnexpected, err)
+	}
+	if stored.Version != 2 {
+		t.Errorf("final Version = %d, want 2 (exactly one winning bump)", stored.Version)
 	}
 }
 

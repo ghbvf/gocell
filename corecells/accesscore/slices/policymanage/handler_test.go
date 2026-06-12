@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/corecells/accesscore/internal/abac"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/corecells/internal/testoutbox"
 	policyCreate "github.com/ghbvf/gocell/generated/contracts/http/policy/create/v1"
@@ -27,7 +26,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
-	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -60,32 +59,6 @@ func (s *stubPolicyTxRunner) RunInTx(ctx context.Context, fn func(context.Contex
 	return fn(ctx)
 }
 
-// conflictOnCreateRepo is a stub PolicyRepository that returns ErrAuthPolicyDuplicate
-// on every Create call, used to exercise the Create 409 handler mapping.
-type conflictOnCreateRepo struct{}
-
-func (r *conflictOnCreateRepo) Create(_ context.Context, _ tenant.TenantID, _ *abac.Policy) (*abac.Policy, error) {
-	return nil, errcode.New(errcode.KindConflict, errcode.ErrAuthPolicyDuplicate, "policy already exists")
-}
-
-func (r *conflictOnCreateRepo) Update(_ context.Context, _ tenant.TenantID, _ string, _ int, _ *abac.Policy) (*abac.Policy, error) {
-	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthPolicyNotFound, "not found")
-}
-
-func (r *conflictOnCreateRepo) Delete(_ context.Context, _ tenant.TenantID, _ string, _ int) (*abac.Policy, error) {
-	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthPolicyNotFound, "not found")
-}
-
-func (r *conflictOnCreateRepo) GetByID(_ context.Context, _ tenant.TenantID, _ string) (*abac.Policy, error) {
-	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthPolicyNotFound, "not found")
-}
-
-func (r *conflictOnCreateRepo) ListByTenant(_ context.Context, _ tenant.TenantID) ([]*abac.Policy, error) {
-	return nil, nil
-}
-
-func (r *conflictOnCreateRepo) RepoReady(_ context.Context) error { return nil }
-
 // setupPolicyHandler returns an http.Handler backed by in-memory repos and a
 // noop outbox writer, mounted at the cell-level prefix.
 func setupPolicyHandler(t testing.TB) http.Handler {
@@ -93,7 +66,7 @@ func setupPolicyHandler(t testing.TB) http.Handler {
 	repo := mem.NewPolicyRepository()
 	ow := &recordingWriter{}
 	svc, err := NewService(
-		clock.Real(), repo, slog.Default(),
+		clock.Real(), repo, testCursorCodec, slog.Default(), query.RunModeProd,
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, ow))),
 		WithTxManager(persistence.WrapForCell(&stubPolicyTxRunner{})),
 	)
@@ -536,7 +509,7 @@ func newServiceForAdapterTest(t testing.TB) *Service {
 	t.Helper()
 	repo := mem.NewPolicyRepository()
 	svc, err := NewService(
-		clock.Real(), repo, slog.Default(),
+		clock.Real(), repo, testCursorCodec, slog.Default(), query.RunModeProd,
 		WithTxManager(persistence.WrapForCell(&stubPolicyTxRunner{})),
 	)
 	require.NoError(t, err)
@@ -545,7 +518,7 @@ func newServiceForAdapterTest(t testing.TB) *Service {
 
 func TestCreateAdapter_HappyPath_Returns201(t *testing.T) {
 	repo := mem.NewPolicyRepository()
-	svc, err := NewService(clock.Real(), repo, slog.Default(),
+	svc, err := NewService(clock.Real(), repo, testCursorCodec, slog.Default(), query.RunModeProd,
 		WithTxManager(persistence.WrapForCell(&stubPolicyTxRunner{})))
 	require.NoError(t, err)
 	ad := CreateAdapter{s: svc}
@@ -559,24 +532,6 @@ func TestCreateAdapter_HappyPath_Returns201(t *testing.T) {
 	require.NoError(t, err)
 	_, ok := resp.(policyCreate.Create201JSONResponse)
 	assert.True(t, ok, "expected Create201JSONResponse, got %T", resp)
-}
-
-func TestCreateAdapter_Conflict_Returns409(t *testing.T) {
-	// Use a stub repo that always returns ErrAuthPolicyDuplicate on Create to
-	// exercise the KindConflict → Create409ErrorResponse mapping.
-	svc, err := NewService(clock.Real(), &conflictOnCreateRepo{}, slog.Default(),
-		WithTxManager(persistence.WrapForCell(&stubPolicyTxRunner{})))
-	require.NoError(t, err)
-	ad := CreateAdapter{s: svc}
-
-	ctx := ctxkeys.WithTenantID(auth.TestContext(testHandlerAdminSubject, []string{auth.RoleAdmin}), testHandlerTenantStr)
-	resp, err := ad.Create(ctx, &policyCreate.Request{
-		Name:  "P",
-		Rules: []*policyCreate.RequestRulesItem{{ID: "r1", Name: "N", Effect: "allow"}},
-	})
-	require.NoError(t, err)
-	_, ok := resp.(policyCreate.Create409ErrorResponse)
-	assert.True(t, ok, "expected Create409ErrorResponse on duplicate, got %T", resp)
 }
 
 func TestUpdateAdapter_NotFound_Returns404Typed(t *testing.T) {

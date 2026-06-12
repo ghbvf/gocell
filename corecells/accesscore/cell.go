@@ -423,7 +423,10 @@ type AccessCore struct {
 
 	// +slice:route:slice=rbaccheck,subPath=/roles
 	rbacHandler *rbaccheck.Handler
-	rbacRunMode query.RunMode
+	// listRunMode is the cell-wide cursor run mode (fail-closed prod vs stale-key
+	// demo fallback) shared by every list endpoint that uses the cursor codec
+	// (rbaccheck, policymanage). Derived from the durability mode in cell_init.
+	listRunMode query.RunMode
 
 	// +slice:route:slice=rbacassign,listener=cell.InternalListener,subPath=/roles
 	rbacAssignHandler *rbacassign.Handler

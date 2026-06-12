@@ -1,6 +1,5 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://gocell.dev/schemas/policy/rule-v1.schema.json",
   "title": "policy rule",
   "description": "A single ABAC rule within a Policy. Referenced by policy create/update request schemas and policy get/list/create/update response schemas.",
   "type": "object",
@@ -74,10 +73,10 @@
       "properties": {
         "rowScope": {
           "type": "string",
-          "$comment": "enum: self, device, tenant, all — minLength/maxLength guards are length-based equivalents",
+          "$comment": "enum: self, device, tenant (all is wire-valid vocabulary but rejected by policy authoring — see description); minLength/maxLength guards are length-based equivalents and intentionally still admit 'all' so the server rejects it semantically (422), not structurally (400)",
           "minLength": 3,
           "maxLength": 6,
-          "description": "Row-visibility obligation. Valid values: self, device, tenant, all. Absent means no row-scope constraint."
+          "description": "Row-visibility obligation. Grantable values: self, device, tenant. The value 'all' (cross-tenant) is reserved for the audited super-admin derivation and is rejected with 422 when supplied via policy authoring. Absent means no row-scope constraint."
         },
         "fieldMask": {
           "type": "array",

@@ -1,6 +1,5 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://gocell.dev/schemas/policy/policy-v1.schema.json",
   "title": "policy",
   "description": "ABAC Policy response object. Deliberately carries no createdAt/updatedAt — the Policy domain uses CAS version for conflict detection, not timestamps.",
   "type": "object",

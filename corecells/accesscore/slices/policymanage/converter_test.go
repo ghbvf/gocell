@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -32,7 +33,7 @@ func newConverterTestService(t testing.TB) *Service {
 	t.Helper()
 	repo := mem.NewPolicyRepository()
 	writer := &recordingWriter{}
-	svc, err := NewService(clock.Real(), repo, slog.Default(),
+	svc, err := NewService(clock.Real(), repo, testCursorCodec, slog.Default(), query.RunModeProd,
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))),
 		WithTxManager(persistence.WrapForCell(&noopTxRunner{})))
 	require.NoError(t, err)
@@ -244,7 +245,7 @@ func TestConverter_RichRule_ListRoundTrip(t *testing.T) {
 	_, err := svc.Create(ctx, CreateInput{Name: "ListRich", Rules: richRules})
 	require.NoError(t, err)
 
-	result, err := svc.List(ctx, "", 10)
+	result, err := svc.List(ctx, query.PageParams{Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, result.Items, 1)
 
@@ -292,16 +293,16 @@ func TestConverter_ParseObligationsFromWire_EmptyRowScope(t *testing.T) {
 	assert.Equal(t, []string{"email"}, obs.FieldMask.Fields)
 }
 
-// TestConverter_ParseObligationsFromWire_AllScopes verifies every valid rowScope
-// string is accepted by parseObligationsFromWire.
-func TestConverter_ParseObligationsFromWire_AllScopes(t *testing.T) {
+// TestConverter_ParseObligationsFromWire_GrantableScopes verifies every
+// policy-authoring-grantable rowScope string is accepted. "all" is excluded —
+// it is rejected (see TestConverter_ParseObligationsFromWire_RowScopeAllRejected).
+func TestConverter_ParseObligationsFromWire_GrantableScopes(t *testing.T) {
 	cases := []struct {
 		rowScope string
 	}{
 		{"self"},
 		{"device"},
 		{"tenant"},
-		{"all"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.rowScope, func(t *testing.T) {
@@ -310,6 +311,20 @@ func TestConverter_ParseObligationsFromWire_AllScopes(t *testing.T) {
 			assert.Equal(t, tc.rowScope, obs.RowScope.String())
 		})
 	}
+}
+
+// TestConverter_ParseObligationsFromWire_RowScopeAllRejected verifies that
+// rowScope=all — a valid wire vocabulary word but a cross-tenant obligation
+// reserved for the audited super-admin path — is rejected with KindInvalid (422)
+// when supplied via policy authoring. This closes the privilege-escalation gap
+// where a plain admin could persist a RowScopeAll obligation bypassing the
+// ROWSCOPEALL-AUDIT-FUNNEL-01 audit.
+func TestConverter_ParseObligationsFromWire_RowScopeAllRejected(t *testing.T) {
+	_, err := parseObligationsFromWire("all", nil)
+	require.Error(t, err)
+	var ce *errcode.Error
+	require.ErrorAs(t, err, &ce)
+	assert.Equal(t, errcode.KindInvalid, ce.Kind)
 }
 
 // TestConverter_ParseObligationsFromWire_InvalidRowScope verifies an invalid

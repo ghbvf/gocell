@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/abac"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/scopedtx"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -63,26 +64,39 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 // an outbox emit, providing L2 OutboxFact atomicity.
 type Service struct {
 	policyRepo ports.PolicyRepository    `gocell:"required"`
-	txRunner   persistence.CellTxManager `gocell:"required" gocellErr:"policymanage: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	txRunner   persistence.CellTxManager `gocell:"required" gocellErr:"policymanage: TxRunner required; use WithTxManager"`                                                //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	codec      *query.CursorCodec        `gocell:"required" gocellKind:"KindInternal" gocellCode:"ErrCellMissingCodec" gocellErr:"policymanage: cursor codec is required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	emitter    outbox.CellEmitter
 	clk        clock.Clock
 	logger     *slog.Logger
+	runMode    query.RunMode
 }
 
 // NewService creates a policymanage Service.
 // clk must be non-nil; pass clock.Real() in production and clockmock.New() in tests.
-// policyRepo must be non-nil; TxRunner must be provided via WithTxManager; nil
-// txRunner is rejected to prevent silent loss of L2 atomicity guarantees.
-func NewService(clk clock.Clock, policyRepo ports.PolicyRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
+// policyRepo and codec must be non-nil; TxRunner must be provided via WithTxManager;
+// nil txRunner is rejected to prevent silent loss of L2 atomicity guarantees.
+// codec signs the list cursor (opaque, tamper-evident); runMode selects fail-closed
+// (prod) vs stale-key fallback (demo) cursor handling, matching rbaccheck.
+func NewService(
+	clk clock.Clock,
+	policyRepo ports.PolicyRepository,
+	codec *query.CursorCodec,
+	logger *slog.Logger,
+	runMode query.RunMode,
+	opts ...Option,
+) (*Service, error) {
 	clock.MustHaveClock(clk, "policymanage.NewService")
 	if logger == nil {
 		logger = slog.Default()
 	}
 	s := &Service{
 		policyRepo: policyRepo,
+		codec:      codec,
 		emitter:    outbox.DemoCellEmitter(),
 		clk:        clk,
 		logger:     logger,
+		runMode:    runMode,
 	}
 	for _, o := range opts {
 		o(s)
@@ -137,7 +151,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*abac.Policy, 
 		return nil, err
 	}
 
-	s.logger.Info("policy created", slog.String("policyId", created.ID))
+	s.logger.Info("policy created", slog.String("policy_id", created.ID))
 	return created, nil
 }
 
@@ -173,7 +187,7 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*abac.Policy, 
 		return nil, err
 	}
 
-	s.logger.Info("policy updated", slog.String("policyId", updated.ID), slog.Int("version", updated.Version))
+	s.logger.Info("policy updated", slog.String("policy_id", updated.ID), slog.Int("version", updated.Version))
 	return updated, nil
 }
 
@@ -201,90 +215,63 @@ func (s *Service) Delete(ctx context.Context, id string, expectedVersion int) (*
 		return nil, err
 	}
 
-	s.logger.Info("policy deleted", slog.String("policyId", id))
+	s.logger.Info("policy deleted", slog.String("policy_id", id))
 	return deleted, nil
 }
 
-// Get returns a single policy by ID for the caller's tenant.
+// Get returns a single policy by ID for the caller's tenant. The read runs
+// inside scopedtx.Do so the PG RLS app.tenant_id GUC is set for the policies
+// table — a bare-pool read under the restricted app-serving role would
+// fail-closed to 0 rows (404).
 func (s *Service) Get(ctx context.Context, id string) (*abac.Policy, error) {
 	tid, err := tenant.FromContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("policymanage: get: tenant: %w", err)
 	}
-	return s.policyRepo.GetByID(ctx, tid, id)
-}
-
-// ListResult is the paginated result of List.
-type ListResult struct {
-	Items      []*abac.Policy
-	NextCursor string
-	HasMore    bool
+	return scopedtx.Do(ctx, s.txRunner, tid, func(txCtx context.Context) (*abac.Policy, error) {
+		return s.policyRepo.GetByID(txCtx, tid, id)
+	})
 }
 
 // List returns a paginated page of policies for the caller's tenant.
-// The underlying repo returns all policies (no pagination); this method
-// sorts and applies cursor in-memory via pkg/query, satisfying the
-// "列表强制分页" constraint (max 500 items, default 50).
 //
-// Pagination flow:
-//  1. query.PageParams normalises the raw limit (0 → default 50, >500 → 500).
-//  2. The normalised limit is copied into query.ListParams for query.ApplyCursor.
-//     PageParams handles normalisation; ListParams carries sort+cursor state.
-//  3. ApplyCursor fetches limit+1 items to detect hasMore, then trims.
+// The underlying repo returns all policies for the tenant (no DB-side
+// pagination); the Fetch closure sorts and applies the decoded keyset cursor
+// in-memory via pkg/query, satisfying the "列表强制分页" constraint (max 500,
+// default 50). query.ExecutePagedQuery owns cursor decode/encode and validation:
+// the cursor is an opaque, HMAC-signed token (query.CursorCodec) — a tampered or
+// stale token returns ErrCursorInvalid (→ 400 in prod / first-page fallback in
+// demo), the same idiom as rbaccheck and the other accesscore list endpoints.
 //
-// The cursor encodes the last-seen policy ID as a plain ASCII UUID substring.
-// Consumers must treat it as opaque; the encoding format may change.
-// Round-trip: the caller passes nextCursor from the previous response as the
-// cursor parameter of the next request; the service skips all items whose id
-// is ≤ cursor before returning the next page.
-func (s *Service) List(ctx context.Context, cursor string, limit int) (ListResult, error) {
+// The read runs inside scopedtx.Do so the PG RLS app.tenant_id GUC is set for
+// the policies table (fail-closed: a read without the scoped tx returns 0 rows
+// under the restricted app-serving role).
+func (s *Service) List(ctx context.Context, pageReq query.PageParams) (query.PageResult[*abac.Policy], error) {
 	tid, err := tenant.FromContext(ctx)
 	if err != nil {
-		return ListResult{}, fmt.Errorf("policymanage: list: tenant: %w", err)
+		return query.PageResult[*abac.Policy]{}, fmt.Errorf("policymanage: list: tenant: %w", err)
 	}
-
-	page := query.PageParams{Limit: limit}
-	page.Normalize()
-
-	all, err := s.policyRepo.ListByTenant(ctx, tid)
-	if err != nil {
-		return ListResult{}, fmt.Errorf("policymanage: list: %w", err)
-	}
-
-	query.Sort(all, policySort, comparePolicyField)
-
-	// Build ListParams. When cursor is present, decode it as a keyset value
-	// over the single "id" sort column so query.ApplyCursor can skip past the
-	// last-seen item.
-	params := query.ListParams{
-		Limit: page.Limit,
-		Sort:  policySort,
-	}
-	if cursor != "" {
-		params.CursorValues = []any{cursor}
-	}
-
-	paged, err := query.ApplyCursor(all, params, policyFieldValue)
-	if err != nil {
-		return ListResult{}, fmt.Errorf("policymanage: list: cursor: %w", err)
-	}
-
-	hasMore := len(paged) > page.Limit
-	if hasMore {
-		paged = paged[:page.Limit]
-	}
-
-	var nextCursor string
-	if hasMore && len(paged) > 0 {
-		last := paged[len(paged)-1]
-		nextCursor = last.ID
-	}
-
-	return ListResult{
-		Items:      paged,
-		NextCursor: nextCursor,
-		HasMore:    hasMore,
-	}, nil
+	txRunner := s.txRunner
+	qctx := query.QueryContext("endpoint", "policy-list")
+	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*abac.Policy]{
+		Codec:      s.codec,
+		PageParams: pageReq,
+		Sort:       policySort,
+		QueryCtx:   qctx,
+		Fetch: func(fetchCtx context.Context, params query.ListParams) ([]*abac.Policy, error) {
+			return scopedtx.Do(fetchCtx, txRunner, tid, func(txCtx context.Context) ([]*abac.Policy, error) {
+				all, listErr := s.policyRepo.ListByTenant(txCtx, tid)
+				if listErr != nil {
+					return nil, fmt.Errorf("policymanage: list: %w", listErr)
+				}
+				query.Sort(all, policySort, comparePolicyField)
+				return query.ApplyCursor(all, params, policyFieldValue)
+			})
+		},
+		Extract:     func(p *abac.Policy) []any { return []any{p.ID} },
+		OnCursorErr: query.LogCursorError(s.logger, "policymanage"),
+		RunMode:     s.runMode,
+	})
 }
 
 // runInTx wraps fn in a transaction. txRunner is guaranteed non-nil by the

@@ -100,7 +100,7 @@ func (c *AccessCore) initValidate(durabilityMode outbox.DurabilityMode) error {
 		c.cursorCodec = codec
 		c.logger.Warn("accesscore: using default cursor codec (demo mode)")
 	}
-	c.rbacRunMode = query.RunModeForDemo(durabilityMode == outbox.DurabilityDemo)
+	c.listRunMode = query.RunModeForDemo(durabilityMode == outbox.DurabilityDemo)
 	// resolveEmitter (called above) enforces the (OutboxWriter, TxRunner)
 	// pairing invariant using the original c.txRunner; only after it
 	// succeeds do we install the demoTxRunner fallback so slice constructors
@@ -329,7 +329,7 @@ func (c *AccessCore) initSlices() error {
 	}
 
 	// rbac-check
-	rbacSvc, err := rbaccheck.NewService(c.roleRepo, c.cursorCodec, c.logger, c.rbacRunMode,
+	rbacSvc, err := rbaccheck.NewService(c.roleRepo, c.cursorCodec, c.logger, c.listRunMode,
 		rbaccheck.WithTxManager(c.txRunner))
 	if err != nil {
 		return err
@@ -441,7 +441,7 @@ func (c *AccessCore) initAccountLockout() (*accountlockout.Service, error) {
 // depends on outbox.ResolveCellEmitter output — same as initRbacAssign.
 func (c *AccessCore) initPolicyManageSlice() error {
 	pmSvc, err := policymanage.NewService(
-		c.clk, c.policyRepo, c.logger,
+		c.clk, c.policyRepo, c.cursorCodec, c.logger, c.listRunMode,
 		policymanage.WithEmitter(c.emitter),
 		policymanage.WithTxManager(c.txRunner),
 	)

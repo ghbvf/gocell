@@ -19,5 +19,9 @@ func (s *Service) validateRequired() error {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"policymanage: TxRunner required; use WithTxManager")
 	}
+	if s.codec == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
+			"policymanage: cursor codec is required")
+	}
 	return nil
 }

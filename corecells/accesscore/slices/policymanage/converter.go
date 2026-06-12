@@ -201,6 +201,16 @@ func parseObligationsFromWire(rowScopeStr string, fieldMaskFields []string) (aut
 				"policymanage: invalid rowScope value",
 				errcode.WithDetails(errcode.PublicString("rowScope", rowScopeStr)))
 		}
+		// rowScope=all grants cross-tenant visibility and is reserved for the
+		// audited super-admin derivation ((*auth.Principal).RowVisibility, which
+		// slog.Error-audits first; ROWSCOPEALL-AUDIT-FUNNEL-01). Policy authoring
+		// is an admin-only, tenant-scoped write path with no such audit funnel, so
+		// it must not be able to mint a RowScopeAll obligation — reject as 422.
+		if rs == tenant.RowScopeAll {
+			return authz.Obligations{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"policymanage: rowScope=all is reserved for the audited super-admin path and cannot be granted via policy authoring",
+				errcode.WithDetails(errcode.PublicString("rowScope", rowScopeStr)))
+		}
 		obs.RowScope = rs
 	}
 	return obs, nil

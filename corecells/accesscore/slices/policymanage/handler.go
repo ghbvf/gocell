@@ -11,6 +11,7 @@ import (
 	policyUpdate "github.com/ghbvf/gocell/generated/contracts/http/policy/update/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -43,14 +44,18 @@ func (a CreateAdapter) Create(ctx context.Context, req *policyCreate.Request) (p
 	return policyCreate.Create201JSONResponse{Data: policyToCreateResponseData(p)}, nil
 }
 
+// mapCreateError maps domain errcodes to the create contract's typed error
+// responses. There is intentionally no conflict (409) mapping: the server
+// generates a fresh pol-<uuid> id and policies are identified by id, not name
+// (Cedar/XACML model — names are non-unique labels), so policy create has no
+// client-reachable conflict. KindInvalid → 422 (semantic, e.g. rowScope=all or
+// an unknown enum value); everything else → 400.
 func mapCreateError(ce *errcode.Error) policyCreate.CreateResponseObject {
 	switch ce.Kind {
 	case errcode.KindUnauthenticated:
 		return policyCreate.Create401ErrorResponse{Body: *ce}
 	case errcode.KindPermissionDenied:
 		return policyCreate.Create403ErrorResponse{Body: *ce}
-	case errcode.KindConflict:
-		return policyCreate.Create409ErrorResponse{Body: *ce}
 	case errcode.KindInvalid:
 		return policyCreate.Create422ErrorResponse{Body: *ce}
 	default:
@@ -171,7 +176,8 @@ type ListAdapter struct{ s *Service }
 
 // List implements policyList.Service.
 func (a ListAdapter) List(ctx context.Context, req *policyList.Request) (policyList.ListResponseObject, error) {
-	result, err := a.s.List(ctx, req.Cursor, int(req.Limit))
+	pageReq := query.PageParams{Cursor: req.Cursor, Limit: int(req.Limit)}
+	result, err := a.s.List(ctx, pageReq)
 	if err != nil {
 		var ce *errcode.Error
 		if errors.As(err, &ce) {

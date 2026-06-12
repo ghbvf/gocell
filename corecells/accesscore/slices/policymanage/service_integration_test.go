@@ -32,6 +32,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/migration"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 	globaltestutil "github.com/ghbvf/gocell/tests/testutil"
@@ -114,7 +115,7 @@ func TestL2Atomicity_policymanage_RollsBack(t *testing.T) {
 	failWriter := &recordingWriter{Err: sentinel}
 
 	svc, err := NewService(
-		clock.Real(), bundle.repo, slog.Default(),
+		clock.Real(), bundle.repo, testCursorCodec, slog.Default(), query.RunModeProd,
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, failWriter))),
 		WithTxManager(persistence.WrapForCell(bundle.txMgr)),
 	)
@@ -139,7 +140,7 @@ func TestL2Atomicity_policymanage_RollsBack(t *testing.T) {
 
 	// Negative control: pass-through Service on the same pool must succeed.
 	passSvc, err := NewService(
-		clock.Real(), bundle.repo, slog.Default(),
+		clock.Real(), bundle.repo, testCursorCodec, slog.Default(), query.RunModeProd,
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, adapterpg.NewOutboxWriter(clock.Real())))),
 		WithTxManager(persistence.WrapForCell(bundle.txMgr)),
 	)
@@ -166,4 +167,87 @@ func TestL2Atomicity_policymanage_RollsBack(t *testing.T) {
 	require.NoError(t, row.Scan(&outboxCount))
 	assert.Equal(t, 1, outboxCount,
 		"positive co-commit: one outbox_entries row must exist for the successful Create")
+}
+
+// TestL2Atomicity_policymanage_UpdateDelete_RollsBack proves the Update and
+// Delete write paths are L2-atomic the same way Create is: when the outbox
+// writer fails, neither the row mutation (version bump / deletion) nor the
+// outbox entry persists, and a pass-through writer co-commits exactly one outbox
+// row per successful mutation. (Create is covered by the sibling test above; the
+// review's F4 flagged that Update/Delete are independent write-then-emit paths
+// with no PG rollback proof.)
+func TestL2Atomicity_policymanage_UpdateDelete_RollsBack(t *testing.T) {
+	bundle := setupPolicyIntegPG(t)
+	ctx := integAdminCtx()
+	sentinel := errors.New("outbox broker down")
+
+	passSvc := func() *Service {
+		svc, err := NewService(
+			clock.Real(), bundle.repo, testCursorCodec, slog.Default(), query.RunModeProd,
+			WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, adapterpg.NewOutboxWriter(clock.Real())))),
+			WithTxManager(persistence.WrapForCell(bundle.txMgr)),
+		)
+		require.NoError(t, err)
+		return svc
+	}
+	failSvc := func() *Service {
+		svc, err := NewService(
+			clock.Real(), bundle.repo, testCursorCodec, slog.Default(), query.RunModeProd,
+			WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, &recordingWriter{Err: sentinel}))),
+			WithTxManager(persistence.WrapForCell(bundle.txMgr)),
+		)
+		require.NoError(t, err)
+		return svc
+	}
+	outboxCount := func() int {
+		var n int
+		row := bundle.pool.DB().QueryRow(context.Background(),
+			"SELECT COUNT(*) FROM outbox_entries WHERE event_type = $1", TopicPolicyUpdated)
+		require.NoError(t, row.Scan(&n))
+		return n
+	}
+
+	// Seed a policy at version 1 (co-commits one outbox row).
+	created, err := passSvc().Create(ctx, CreateInput{Name: "CAS", Rules: minimalRules()})
+	require.NoError(t, err)
+	require.Equal(t, 1, created.Version)
+	require.Equal(t, 1, outboxCount())
+
+	// --- Update rollback ---
+	_, updErr := failSvc().Update(ctx, UpdateInput{
+		ID: created.ID, Name: "CAS-v2", Rules: minimalRules(), ExpectedVersion: 1,
+	})
+	require.Error(t, updErr)
+	assert.ErrorIs(t, updErr, sentinel, "Update error must wrap the injected outbox sentinel")
+
+	stillV1, err := bundle.repo.GetByID(context.Background(), integTestTenant, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stillV1.Version, "failed Update must roll back the version bump")
+	assert.Equal(t, "CAS", stillV1.Name, "failed Update must roll back the name change")
+	assert.Equal(t, 1, outboxCount(), "failed Update must not co-commit an outbox row")
+
+	// Negative control: pass-through Update → version 2 + one new outbox row.
+	updated, err := passSvc().Update(ctx, UpdateInput{
+		ID: created.ID, Name: "CAS-v2", Rules: minimalRules(), ExpectedVersion: 1,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, updated.Version)
+	assert.Equal(t, 2, outboxCount())
+
+	// --- Delete rollback ---
+	_, delErr := failSvc().Delete(ctx, created.ID, 2)
+	require.Error(t, delErr)
+	assert.ErrorIs(t, delErr, sentinel, "Delete error must wrap the injected outbox sentinel")
+
+	stillThere, err := bundle.repo.GetByID(context.Background(), integTestTenant, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, stillThere.Version, "failed Delete must roll back — row still present at version 2")
+	assert.Equal(t, 2, outboxCount(), "failed Delete must not co-commit an outbox row")
+
+	// Negative control: pass-through Delete removes the row + one new outbox row.
+	_, err = passSvc().Delete(ctx, created.ID, 2)
+	require.NoError(t, err)
+	_, getErr := bundle.repo.GetByID(context.Background(), integTestTenant, created.ID)
+	require.Error(t, getErr, "policy must be gone after successful Delete")
+	assert.Equal(t, 3, outboxCount())
 }
