@@ -33,11 +33,13 @@ var testReadTenant = configcoretest.TestTenant
 
 const configBasePath = "/api/v1/config"
 
-// asAdmin attaches an admin Principal AND a valid TenantID to req so it
-// satisfies the auth.AnyRole(RoleAdmin) policy AND configread handler's
-// tenant.FromContext call.
+// asAdmin attaches an admin Principal, a valid TenantID, and an allow Authorizer
+// to req so it satisfies the auth.RequirePermission(authz.PermConfigRead()) PDP
+// gate AND the configread handler's tenant.FromContext call.
 func asAdmin(req *http.Request) *http.Request {
-	ctx := configcoretest.CtxWithTenant(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
+	ctx := configcoretest.WithAllowAuthorizer(
+		configcoretest.CtxWithTenant(auth.TestContext("admin-user", []string{auth.RoleAdmin})),
+	)
 	return req.WithContext(ctx)
 }
 
@@ -98,11 +100,12 @@ func TestHandler_HandleGet_NotFound(t *testing.T) {
 	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrConfigRepoNotFound)
 }
 
-// asAdminNoTenant attaches an admin Principal but NO TenantID, so the request
-// passes the admin-role policy yet fails tenant.FromContext. F6: this must map
-// to a typed 403, not a framework 500.
+// asAdminNoTenant attaches an admin Principal and an allow Authorizer but NO
+// TenantID, so the request passes the PDP gate yet fails tenant.FromContext.
+// F6: this must map to a typed 403, not a framework 500.
 func asAdminNoTenant(req *http.Request) *http.Request {
-	return req.WithContext(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
+	ctx := configcoretest.WithAllowAuthorizer(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
+	return req.WithContext(ctx)
 }
 
 func TestHandler_HandleGet_MissingTenant_403(t *testing.T) {
@@ -330,4 +333,94 @@ func TestHandler_HandleList_SensitiveRedacted(t *testing.T) {
 	assert.Contains(t, body, "gocell")
 	assert.NotContains(t, body, "sk-secret-key-123")
 	assert.Contains(t, body, dto.RedactedValue)
+}
+
+// TestHandler_PDPDeny_Get_403 verifies that a principal with an Authorizer
+// that denies the request receives 403 ERR_AUTH_FORBIDDEN — the PDP deny path.
+func TestHandler_PDPDeny_Get_403(t *testing.T) {
+	handler, _ := setupHandler()
+
+	ctx := configcoretest.WithDenyAuthorizer(
+		configcoretest.CtxWithTenant(auth.TestContext("admin-user", []string{auth.RoleAdmin})),
+		"policy: deny",
+	)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, configBasePath+"/app.name", nil)
+	handler.ServeHTTP(w, req.WithContext(ctx))
+
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+}
+
+// TestHandler_PDPDeny_List_403 verifies that a principal with an Authorizer
+// that denies the request receives 403 ERR_AUTH_FORBIDDEN on the list endpoint.
+func TestHandler_PDPDeny_List_403(t *testing.T) {
+	handler, _ := setupHandler()
+
+	ctx := configcoretest.WithDenyAuthorizer(
+		configcoretest.CtxWithTenant(auth.TestContext("admin-user", []string{auth.RoleAdmin})),
+		"policy: deny",
+	)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, configBasePath+"/", nil)
+	handler.ServeHTTP(w, req.WithContext(ctx))
+
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+}
+
+// TestHandler_NoAuthorizer_Get_FailClosed verifies that a principal present in
+// ctx but with no Authorizer wired results in fail-closed 403 ERR_AUTH_FORBIDDEN.
+func TestHandler_NoAuthorizer_Get_FailClosed(t *testing.T) {
+	handler, _ := setupHandler()
+
+	ctx := configcoretest.CtxWithTenant(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, configBasePath+"/app.name", nil)
+	handler.ServeHTTP(w, req.WithContext(ctx))
+
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+}
+
+// TestHandler_ActionPin_ConfigRead pins that every configread endpoint calls the
+// PDP with action "config:read" (not another permission). Because the baseline
+// grants admin permission for all config actions, a wrong binding
+// (e.g. authz.PermConfigWrite()) would still produce 200, so this test uses a
+// CapturingAuthorizer to assert the exact action sent to the PDP.
+// Failure message: configread gate must use authz.PermConfigRead() ("config:read"),
+// not another permission (baseline grants admin for all config perms, masking misbinding).
+func TestHandler_ActionPin_ConfigRead(t *testing.T) {
+	handler, repo := setupHandler()
+	now := time.Now()
+	require.NoError(t, repo.Create(context.Background(), testReadTenant, &domain.ConfigEntry{
+		ID: "cfg-pin", Key: "pin.key", Value: "v", Version: 1,
+		CreatedAt: now, UpdatedAt: now,
+	}))
+
+	endpoints := []struct {
+		method string
+		target string
+	}{
+		{http.MethodGet, configBasePath + "/pin.key"},
+		{http.MethodGet, configBasePath + "/"},
+	}
+
+	for _, ep := range endpoints {
+		t.Run(ep.method+" "+ep.target, func(t *testing.T) {
+			cap := configcoretest.AllowAuthorizer()
+			ctx := configcoretest.WithAuthorizer(
+				configcoretest.CtxWithTenant(auth.TestContext("admin-user", []string{auth.RoleAdmin})),
+				cap,
+			)
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(ep.method, ep.target, nil)
+			handler.ServeHTTP(w, req.WithContext(ctx))
+
+			// Gate must pass (2xx) and must have called PDP with "config:read".
+			require.Equal(t, http.StatusOK, w.Code,
+				"configread gate must pass for allow Authorizer (method=%s path=%s)", ep.method, ep.target)
+			assert.Equal(t, "config:read", cap.GotAction,
+				"configread gate must use authz.PermConfigRead() (\"config:read\"), not another permission "+
+					"(baseline grants admin for all config perms, masking misbinding); endpoint=%s %s",
+				ep.method, ep.target)
+		})
+	}
 }

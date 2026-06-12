@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/corecells/configcore/configcoretest"
 	"github.com/ghbvf/gocell/corecells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/corecells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/corecells/configcore/internal/testutil"
@@ -96,7 +97,9 @@ func TestHttpConfigPublishV1Serve(t *testing.T) {
 	rec := httptest.NewRecorder()
 	path := strings.Replace(c.HTTP.Path, "{key}", "app.name", 1)
 	req := httptest.NewRequest(c.HTTP.Method, path, nil).
-		WithContext(ctxkeys.WithTenantID(auth.TestContext("contract-admin", []string{"admin"}), testPublishTenantStr))
+		WithContext(configcoretest.WithAllowAuthorizer(
+			ctxkeys.WithTenantID(auth.TestContext("contract-admin", []string{"admin"}), testPublishTenantStr),
+		))
 	mux.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 
@@ -113,7 +116,10 @@ func TestHttpConfigRollbackV1Serve(t *testing.T) {
 	seedContractEntry(repo, "value")
 
 	// Publish first to create version 1 so rollback target exists.
-	_, err := svc.Publish(ctxkeys.WithTenantID(auth.TestContext("contract-admin", []string{"admin"}), testPublishTenantStr), "app.name")
+	publishCtx := configcoretest.WithAllowAuthorizer(
+		ctxkeys.WithTenantID(auth.TestContext("contract-admin", []string{"admin"}), testPublishTenantStr),
+	)
+	_, err := svc.Publish(publishCtx, "app.name")
 	require.NoError(t, err)
 
 	mux := newContractMux(svc)
@@ -131,7 +137,9 @@ func TestHttpConfigRollbackV1Serve(t *testing.T) {
 	rec := httptest.NewRecorder()
 	path := strings.Replace(c.HTTP.Path, "{key}", "app.name", 1)
 	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"version":1,"expectedVersion":1}`)).
-		WithContext(ctxkeys.WithTenantID(auth.TestContext("contract-admin", []string{"admin"}), testPublishTenantStr))
+		WithContext(configcoretest.WithAllowAuthorizer(
+			ctxkeys.WithTenantID(auth.TestContext("contract-admin", []string{"admin"}), testPublishTenantStr),
+		))
 	req.Header.Set("Content-Type", "application/json")
 	mux.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
@@ -158,7 +166,9 @@ func TestHttpConfigPublishV1_Serve_NotFound(t *testing.T) {
 	path := strings.Replace(c.HTTP.Path, "{key}", "no-such-key", 1)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, path, nil).
-		WithContext(ctxkeys.WithTenantID(auth.TestContext("contract-admin", []string{"admin"}), testPublishTenantStr))
+		WithContext(configcoretest.WithAllowAuthorizer(
+			ctxkeys.WithTenantID(auth.TestContext("contract-admin", []string{"admin"}), testPublishTenantStr),
+		))
 	mux.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusNotFound, rec.Code)
@@ -174,9 +184,9 @@ func TestHttpConfigPublishV1_Serve_NotFound(t *testing.T) {
 }
 
 // TestHttpConfigPublishV1_Serve_Unauthorized exercises the real handler for
-// 401 (no auth ctx) and 403 (authenticated but lacks admin role) paths, then
-// validates the response body shape against the contract's declared error schema
-// and asserts the exact error code emitted by the real auth chain.
+// 401 (no auth ctx) and 403 paths under the config:publish-gated (PDP) policy,
+// then validates the response body shape against the contract's declared error
+// schema and asserts the exact error code emitted by the real auth chain.
 func TestHttpConfigPublishV1_Serve_Unauthorized(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.publish.v1")
@@ -186,7 +196,7 @@ func TestHttpConfigPublishV1_Serve_Unauthorized(t *testing.T) {
 	path := strings.Replace(c.HTTP.Path, "{key}", "app.name", 1)
 
 	t.Run("401_no_subject", func(t *testing.T) {
-		// context.Background() carries no subject → RequireAnyRole → ErrAuthUnauthorized → 401
+		// context.Background() carries no subject → RequirePermission → ErrAuthUnauthorized → 401
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(c.HTTP.Method, path, nil).
 			WithContext(context.Background())
@@ -194,32 +204,50 @@ func TestHttpConfigPublishV1_Serve_Unauthorized(t *testing.T) {
 		require.Equal(t, http.StatusUnauthorized, rec.Code)
 		// Validate envelope shape against contract schema.
 		c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
-		// Assert the real error code emitted by RequireAnyRole (missing subject path).
+		// Assert the real error code emitted by RequirePermission (missing subject path).
 		var env errEnvelope
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &env))
 		require.Equal(t, "ERR_AUTH_UNAUTHORIZED", env.Error.Code,
 			"missing subject must produce ERR_AUTH_UNAUTHORIZED, not ERR_AUTH_INVALID_TOKEN")
 	})
 
-	t.Run("403_insufficient_role", func(t *testing.T) {
-		// auth.TestContext with a non-admin role → RequireAnyRole → ErrAuthForbidden → 403
+	t.Run("403_pdp_deny", func(t *testing.T) {
+		// Principal present, PDP denies → RequirePermission → ErrAuthForbidden → 403
+		rec := httptest.NewRecorder()
+		ctx := configcoretest.WithDenyAuthorizer(
+			auth.TestContext("user-readonly", []string{"viewer"}),
+			"policy deny",
+		)
+		req := httptest.NewRequest(c.HTTP.Method, path, nil).WithContext(ctx)
+		mux.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusForbidden, rec.Code)
+		// Validate envelope shape against contract schema.
+		c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
+		// Assert the real error code emitted by RequirePermission (PDP deny path).
+		var env errEnvelope
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &env))
+		require.Equal(t, "ERR_AUTH_FORBIDDEN", env.Error.Code,
+			"PDP deny must produce ERR_AUTH_FORBIDDEN")
+	})
+
+	t.Run("403_no_authorizer", func(t *testing.T) {
+		// Principal present but no Authorizer in ctx → fail-closed 403.
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(c.HTTP.Method, path, nil).
 			WithContext(auth.TestContext("user-readonly", []string{"viewer"}))
 		mux.ServeHTTP(rec, req)
 		require.Equal(t, http.StatusForbidden, rec.Code)
-		// Validate envelope shape against contract schema.
 		c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
-		// Assert the real error code emitted by RequireAnyRole (insufficient role path).
 		var env errEnvelope
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &env))
 		require.Equal(t, "ERR_AUTH_FORBIDDEN", env.Error.Code,
-			"insufficient role must produce ERR_AUTH_FORBIDDEN, not ERR_AUTH_INVALID_TOKEN")
+			"missing Authorizer must produce ERR_AUTH_FORBIDDEN (fail-closed)")
 	})
 }
 
 // TestHttpConfigRollbackV1_Serve_Unauthorized mirrors the publish unauthorized test
-// for the rollback endpoint, asserting real error codes from the RequireAnyRole chain.
+// for the rollback endpoint, asserting real error codes from the config:publish-gated
+// (PDP) RequirePermission chain.
 func TestHttpConfigRollbackV1_Serve_Unauthorized(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.rollback.v1")
@@ -242,7 +270,25 @@ func TestHttpConfigRollbackV1_Serve_Unauthorized(t *testing.T) {
 			"missing subject must produce ERR_AUTH_UNAUTHORIZED")
 	})
 
-	t.Run("403_insufficient_role", func(t *testing.T) {
+	t.Run("403_pdp_deny", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		ctx := configcoretest.WithDenyAuthorizer(
+			auth.TestContext("user-readonly", []string{"viewer"}),
+			"policy deny",
+		)
+		req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"version":1}`)).
+			WithContext(ctx)
+		req.Header.Set("Content-Type", "application/json")
+		mux.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusForbidden, rec.Code)
+		c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
+		var env errEnvelope
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &env))
+		require.Equal(t, "ERR_AUTH_FORBIDDEN", env.Error.Code,
+			"PDP deny must produce ERR_AUTH_FORBIDDEN")
+	})
+
+	t.Run("403_no_authorizer", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"version":1}`)).
 			WithContext(auth.TestContext("user-readonly", []string{"viewer"}))
@@ -253,7 +299,7 @@ func TestHttpConfigRollbackV1_Serve_Unauthorized(t *testing.T) {
 		var env errEnvelope
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &env))
 		require.Equal(t, "ERR_AUTH_FORBIDDEN", env.Error.Code,
-			"insufficient role must produce ERR_AUTH_FORBIDDEN")
+			"missing Authorizer must produce ERR_AUTH_FORBIDDEN (fail-closed)")
 	})
 }
 

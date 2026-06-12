@@ -34,11 +34,14 @@ var flagHandlerTestKey = bytes.Repeat([]byte("f"), 32)
 
 const flagsBasePath = "/api/v1/flags"
 
-// asAdminFlag attaches an admin Principal AND a valid TenantID to req so it
-// satisfies the auth.AnyRole(RoleAdmin) policy AND the featureflag handler's
-// tenant.FromContext call.
+// asAdminFlag attaches an admin Principal, a valid TenantID, and an allow
+// Authorizer to req so it satisfies the
+// auth.RequirePermission(authz.PermFlagRead()) PDP gate AND the featureflag
+// handler's tenant.FromContext call.
 func asAdminFlag(req *http.Request) *http.Request {
-	ctx := configcoretest.CtxWithTenant(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
+	ctx := configcoretest.WithAllowAuthorizer(
+		configcoretest.CtxWithTenant(auth.TestContext("admin-user", []string{auth.RoleAdmin})),
+	)
 	return req.WithContext(ctx)
 }
 
@@ -228,11 +231,12 @@ func TestHandler_HandleGet_NotFound(t *testing.T) {
 	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrFlagNotFound)
 }
 
-// asAdminFlagNoTenant attaches an admin Principal but NO TenantID, so the
-// request passes the admin-role policy yet fails tenant.FromContext. F6: this
-// must map to a typed 403, not a framework 500.
+// asAdminFlagNoTenant attaches an admin Principal and an allow Authorizer but
+// NO TenantID, so the request passes the PDP gate yet fails tenant.FromContext.
+// F6: this must map to a typed 403, not a framework 500.
 func asAdminFlagNoTenant(req *http.Request) *http.Request {
-	return req.WithContext(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
+	ctx := configcoretest.WithAllowAuthorizer(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
+	return req.WithContext(ctx)
 }
 
 func TestHandler_HandleGet_MissingTenant_403(t *testing.T) {
@@ -395,6 +399,124 @@ func TestHandler_HandleList_Pagination_FullTraversal(t *testing.T) {
 	for _, id := range allIDs {
 		assert.False(t, seen[id], "duplicate ID: %s", id)
 		seen[id] = true
+	}
+}
+
+// TestHandler_PDPDeny_Returns403 asserts that a PDP-deny (Authorizer returns
+// Deny) surfaces as 403 ERR_AUTH_FORBIDDEN — confirms flag:read-gated (PDP)
+// behaviour after the role-literal → permission-based migration (PR-10b #1348).
+func TestHandler_PDPDeny_Returns403(t *testing.T) {
+	handler, _ := setupHandler()
+
+	asDenyFlag := func(req *http.Request) *http.Request {
+		ctx := configcoretest.WithDenyAuthorizer(
+			configcoretest.CtxWithTenant(auth.TestContext("admin-user", []string{auth.RoleAdmin})),
+			"policy deny",
+		)
+		return req.WithContext(ctx)
+	}
+
+	tests := []struct {
+		name string
+		req  *http.Request
+	}{
+		{"get deny", httptest.NewRequest(http.MethodGet, flagsBasePath+"/some-key", nil)},
+		{"list deny", httptest.NewRequest(http.MethodGet, flagsBasePath+"/", nil)},
+		{"evaluate deny", func() *http.Request {
+			r := httptest.NewRequest(http.MethodPost, flagsBasePath+"/some-key/evaluate", strings.NewReader(`{"subject":"u"}`))
+			r.Header.Set("Content-Type", "application/json")
+			return r
+		}()},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, asDenyFlag(tc.req))
+			errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+		})
+	}
+}
+
+// TestHandler_NoAuthorizer_FailClosed_Returns403 asserts that a request with a
+// valid principal but no Authorizer in ctx is fail-closed to 403 — required by
+// the flag:read-gated (PDP) contract: no PDP wired = deny.
+func TestHandler_NoAuthorizer_FailClosed_Returns403(t *testing.T) {
+	handler, _ := setupHandler()
+
+	asAdminFlagNoPDP := func(req *http.Request) *http.Request {
+		// Principal + tenant present, but no Authorizer injected.
+		ctx := configcoretest.CtxWithTenant(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
+		return req.WithContext(ctx)
+	}
+
+	tests := []struct {
+		name string
+		req  *http.Request
+	}{
+		{"get no-pdp", httptest.NewRequest(http.MethodGet, flagsBasePath+"/some-key", nil)},
+		{"list no-pdp", httptest.NewRequest(http.MethodGet, flagsBasePath+"/", nil)},
+		{"evaluate no-pdp", func() *http.Request {
+			r := httptest.NewRequest(http.MethodPost, flagsBasePath+"/some-key/evaluate", strings.NewReader(`{"subject":"u"}`))
+			r.Header.Set("Content-Type", "application/json")
+			return r
+		}()},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, asAdminFlagNoPDP(tc.req))
+			errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+		})
+	}
+}
+
+// TestHandler_ActionPin_FlagRead pins that every featureflag endpoint sends
+// action "flag:read" to the PDP. This is the only guard that catches an
+// endpoint↔permission misbinding the role-agnostic baseline (admin allowed for
+// every flag perm) would mask (PR-10b #1348).
+func TestHandler_ActionPin_FlagRead(t *testing.T) {
+	handler, repo := setupHandler()
+	// Seed one flag so GET and evaluate don't short-circuit on 404.
+	require.NoError(t, repo.Create(context.Background(), testFlagHandlerTenant, &domain.FeatureFlag{
+		ID: "ap-1", Key: "pin-flag", Type: domain.FlagBoolean, Enabled: true,
+	}))
+
+	endpoints := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{"get", http.MethodGet, flagsBasePath + "/pin-flag", ""},
+		{"list", http.MethodGet, flagsBasePath + "/", ""},
+		{"evaluate", http.MethodPost, flagsBasePath + "/pin-flag/evaluate", `{"subject":"u"}`},
+	}
+
+	for _, ep := range endpoints {
+		t.Run(ep.name, func(t *testing.T) {
+			cap := configcoretest.AllowAuthorizer()
+			ctx := configcoretest.WithAuthorizer(
+				configcoretest.CtxWithTenant(auth.TestContext("admin-user", []string{auth.RoleAdmin})),
+				cap,
+			)
+			var reqBody *strings.Reader
+			if ep.body != "" {
+				reqBody = strings.NewReader(ep.body)
+			} else {
+				reqBody = strings.NewReader("")
+			}
+			req := httptest.NewRequest(ep.method, ep.path, reqBody)
+			if ep.body != "" {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			req = req.WithContext(ctx)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			assert.Equal(t, "flag:read", cap.GotAction,
+				"featureflag gate must request action flag:read to PDP; endpoint %s got %q — "+
+					"a misbinding to a different perm would be masked by baseline allow-all-admin",
+				ep.name, cap.GotAction)
+		})
 	}
 }
 

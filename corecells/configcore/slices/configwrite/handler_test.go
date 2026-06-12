@@ -25,6 +25,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
@@ -36,6 +37,41 @@ import (
 // configwrite.Service.Create/Update/Delete can call tenant.FromContext without
 // error. Mirrors the pattern established by accesscore PR-2a.
 const testHandlerTenantStr = "00000000-0000-0000-0000-000000000001"
+
+// --- local authz test helpers ---
+// configcoretest cannot be imported here (cycle: configcoretest imports configwrite).
+// These local stubs are semantically identical to configcoretest's equivalents.
+
+// capturingAuthorizer is a test-only auth.Authorizer that returns a fixed
+// Decision and records the action of the last Authorize call.
+type capturingAuthorizer struct {
+	decision  authz.Decision
+	GotAction string
+}
+
+func (c *capturingAuthorizer) Authorize(_ context.Context, _, _, action string) (authz.Decision, error) {
+	c.GotAction = action
+	return c.decision, nil
+}
+
+// newAllowAuthorizer returns a capturingAuthorizer that grants every request.
+func newAllowAuthorizer() *capturingAuthorizer {
+	dec, err := authz.Allow(authz.Obligations{})
+	if err != nil {
+		panic("newAllowAuthorizer: " + err.Error())
+	}
+	return &capturingAuthorizer{decision: dec}
+}
+
+// withAllowAuthorizer wraps ctx with an allow-all Authorizer.
+func withAllowAuthorizer(ctx context.Context) context.Context {
+	return auth.WithAuthorizer(ctx, newAllowAuthorizer())
+}
+
+// withDenyAuthorizer wraps ctx with a deny-all Authorizer (PDP-deny → 403 path).
+func withDenyAuthorizer(ctx context.Context, reason string) context.Context {
+	return auth.WithAuthorizer(ctx, &capturingAuthorizer{decision: authz.Deny(reason)})
+}
 
 // testHandlerTenant is the typed TenantID used for direct repo.Create seeding
 // in handler tests.
@@ -65,12 +101,13 @@ func (s *stubTxRunner) RunInTx(ctx context.Context, fn func(context.Context) err
 	return fn(ctx)
 }
 
-// withAdmin injects an admin context into a request for tests that exercise
-// non-auth logic (e.g. validation, business errors) and need to pass the
-// auth guard. Also injects a valid TenantID so configwrite.Service methods
-// can call tenant.FromContext without error.
+// withAdmin injects an admin context, a valid TenantID, and an allow Authorizer
+// into a request so it passes the auth.RequirePermission(authz.PermConfigWrite())
+// PDP gate and configwrite.Service methods can call tenant.FromContext without error.
 func withAdmin(req *http.Request) *http.Request {
-	ctx := ctxkeys.WithTenantID(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}), testHandlerTenantStr)
+	ctx := withAllowAuthorizer(
+		ctxkeys.WithTenantID(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}), testHandlerTenantStr),
+	)
 	return req.WithContext(ctx)
 }
 
@@ -85,7 +122,7 @@ func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	if err != nil {
 		panic("setupHandler: " + err.Error())
 	}
-	policy := auth.AnyRole(auth.RoleAdmin)
+	policy := auth.RequirePermission(authz.PermConfigWrite())
 	writeH := write.NewHandler(WriteAdapter{svc}, policy)
 	updateH := update.NewHandler(UpdateAdapter{svc}, policy)
 	deleteH := configdelete.NewHandler(DeleteAdapter{svc}, policy)
@@ -269,10 +306,11 @@ func TestHandler_HandleDelete_NotFound(t *testing.T) {
 
 // --- F6: missing-tenant → typed 403 (not 500) ---
 
-// withAdminNoTenant injects an admin principal but NO TenantID, so the request
-// passes the admin-role policy yet fails Service.tenant.FromContext.
+// withAdminNoTenant injects an admin principal and an allow Authorizer but NO
+// TenantID, so the request passes the PDP gate yet fails Service.tenant.FromContext.
 func withAdminNoTenant(req *http.Request) *http.Request {
-	return req.WithContext(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))
+	ctx := withAllowAuthorizer(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))
+	return req.WithContext(ctx)
 }
 
 func TestHandler_HandleCreate_MissingTenant_403(t *testing.T) {
@@ -434,18 +472,36 @@ func TestService_WithOutboxAndTx(t *testing.T) {
 
 // --- authz tests ---
 
+// authzCtx builds a context for handler authz table tests:
+//   - no principal (injectAuth=false): bare background ctx → 401.
+//   - no_authorizer (injectAuth=true, allowPDP=false): principal + tenant, no
+//     Authorizer → fail-closed 403 (tests the PDP-not-wired path).
+//   - allow (injectAuth=true, allowPDP=true): principal + tenant + allow
+//     Authorizer → gate passes, business logic runs.
+func authzCtx(subject string, roles []string, injectAuth, allowPDP bool) context.Context {
+	if !injectAuth {
+		return context.Background()
+	}
+	ctx := ctxkeys.WithTenantID(auth.TestContext(subject, roles), testHandlerTenantStr)
+	if allowPDP {
+		ctx = withAllowAuthorizer(ctx)
+	}
+	return ctx
+}
+
 func TestHandler_Authz_Create(t *testing.T) {
 	cases := []struct {
 		name        string
 		subject     string
 		roles       []string
 		injectAuth  bool
+		allowPDP    bool
 		wantStatus  int
 		wantErrCode string
 	}{
-		{"no_auth", "", nil, false, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
-		{"non_admin", "user-1", []string{"viewer"}, true, http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
-		{"admin", testAdminSubject, []string{auth.RoleAdmin}, true, http.StatusCreated, ""},
+		{"no_auth", "", nil, false, false, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
+		{"no_authorizer_fail_closed", "user-1", []string{"viewer"}, true, false, http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
+		{"admin_allow", testAdminSubject, []string{auth.RoleAdmin}, true, true, http.StatusCreated, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -453,9 +509,7 @@ func TestHandler_Authz_Create(t *testing.T) {
 			body := `{"key":"test.key","value":"v"}`
 			req := httptest.NewRequest(http.MethodPost, configPrefix, strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
-			if tc.injectAuth {
-				req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext(tc.subject, tc.roles), testHandlerTenantStr))
-			}
+			req = req.WithContext(authzCtx(tc.subject, tc.roles, tc.injectAuth, tc.allowPDP))
 			w := httptest.NewRecorder()
 			mux.ServeHTTP(w, req)
 			assert.Equal(t, tc.wantStatus, w.Code)
@@ -478,15 +532,16 @@ func TestHandler_Authz_Update(t *testing.T) {
 		subject     string
 		roles       []string
 		injectAuth  bool
+		allowPDP    bool
 		setup       func(*mem.ConfigRepository)
 		path        string
 		wantStatus  int
 		wantErrCode string
 	}{
-		{"no_auth", "", nil, false, nil, "/nonexistent", http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
-		{"non_admin", "user-1", []string{"viewer"}, true, nil, "/nonexistent", http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
-		{"admin", testAdminSubject, []string{auth.RoleAdmin}, true, nil, "/nonexistent", http.StatusNotFound, ""},
-		{"admin_success", testAdminSubject, []string{auth.RoleAdmin}, true, func(r *mem.ConfigRepository) {
+		{"no_auth", "", nil, false, false, nil, "/nonexistent", http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
+		{"no_authorizer_fail_closed", "user-1", []string{"viewer"}, true, false, nil, "/nonexistent", http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
+		{"admin_not_found", testAdminSubject, []string{auth.RoleAdmin}, true, true, nil, "/nonexistent", http.StatusNotFound, ""},
+		{"admin_success", testAdminSubject, []string{auth.RoleAdmin}, true, true, func(r *mem.ConfigRepository) {
 			now := time.Now()
 			_ = r.Create(context.Background(), testHandlerTenant, &domain.ConfigEntry{
 				ID: "au-1", Key: "test.update", Value: "v", Version: 1, CreatedAt: now, UpdatedAt: now,
@@ -502,9 +557,7 @@ func TestHandler_Authz_Update(t *testing.T) {
 			body := `{"value":"new","expectedVersion":1}`
 			req := httptest.NewRequest(http.MethodPut, configPrefix+tc.path, strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
-			if tc.injectAuth {
-				req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext(tc.subject, tc.roles), testHandlerTenantStr))
-			}
+			req = req.WithContext(authzCtx(tc.subject, tc.roles, tc.injectAuth, tc.allowPDP))
 			w := httptest.NewRecorder()
 			mux.ServeHTTP(w, req)
 			assert.Equal(t, tc.wantStatus, w.Code)
@@ -527,15 +580,16 @@ func TestHandler_Authz_Delete(t *testing.T) {
 		subject     string
 		roles       []string
 		injectAuth  bool
+		allowPDP    bool
 		setup       func(*mem.ConfigRepository)
 		path        string
 		wantStatus  int
 		wantErrCode string
 	}{
-		{"no_auth", "", nil, false, nil, "/nonexistent?expectedVersion=1", http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
-		{"non_admin", "user-1", []string{"viewer"}, true, nil, "/nonexistent?expectedVersion=1", http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
-		{"admin", testAdminSubject, []string{auth.RoleAdmin}, true, nil, "/nonexistent?expectedVersion=1", http.StatusNotFound, ""},
-		{"admin_success", testAdminSubject, []string{auth.RoleAdmin}, true, func(r *mem.ConfigRepository) {
+		{"no_auth", "", nil, false, false, nil, "/nonexistent?expectedVersion=1", http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
+		{"no_authorizer_fail_closed", "user-1", []string{"viewer"}, true, false, nil, "/nonexistent?expectedVersion=1", http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
+		{"admin_not_found", testAdminSubject, []string{auth.RoleAdmin}, true, true, nil, "/nonexistent?expectedVersion=1", http.StatusNotFound, ""},
+		{"admin_success", testAdminSubject, []string{auth.RoleAdmin}, true, true, func(r *mem.ConfigRepository) {
 			now := time.Now()
 			_ = r.Create(context.Background(), testHandlerTenant, &domain.ConfigEntry{
 				ID: "ad-1", Key: "test.delete", Value: "v", Version: 1, CreatedAt: now, UpdatedAt: now,
@@ -549,9 +603,7 @@ func TestHandler_Authz_Delete(t *testing.T) {
 				tc.setup(repo)
 			}
 			req := httptest.NewRequest(http.MethodDelete, configPrefix+tc.path, nil)
-			if tc.injectAuth {
-				req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext(tc.subject, tc.roles), testHandlerTenantStr))
-			}
+			req = req.WithContext(authzCtx(tc.subject, tc.roles, tc.injectAuth, tc.allowPDP))
 			w := httptest.NewRecorder()
 			mux.ServeHTTP(w, req)
 			assert.Equal(t, tc.wantStatus, w.Code)
@@ -646,4 +698,106 @@ func TestDeleteAdapter_VersionConflict_Returns409Typed(t *testing.T) {
 	typed, ok := resp.(configdelete.Delete409ErrorResponse)
 	require.True(t, ok, "expected Delete409ErrorResponse, got %T", resp)
 	assert.Equal(t, errcode.ErrVersionConflict, typed.Body.Code)
+}
+
+// --- PDP-deny and fail-closed tests ---
+
+// TestHandler_PDPDeny_Write_403 verifies that a principal with a deny Authorizer
+// receives 403 ERR_AUTH_FORBIDDEN on the write (POST) endpoint.
+func TestHandler_PDPDeny_Write_403(t *testing.T) {
+	handler, _ := setupHandler()
+
+	ctx := withDenyAuthorizer(
+		ctxkeys.WithTenantID(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}), testHandlerTenantStr),
+		"policy: deny",
+	)
+	w := httptest.NewRecorder()
+	body := `{"key":"app.name","value":"v"}`
+	req := httptest.NewRequest(http.MethodPost, configPrefix, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(w, req.WithContext(ctx))
+
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+}
+
+// TestHandler_NoAuthorizer_Write_FailClosed verifies that a principal present in
+// ctx but with no Authorizer wired results in fail-closed 403 ERR_AUTH_FORBIDDEN.
+func TestHandler_NoAuthorizer_Write_FailClosed(t *testing.T) {
+	handler, _ := setupHandler()
+
+	ctx := ctxkeys.WithTenantID(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}), testHandlerTenantStr)
+	w := httptest.NewRecorder()
+	body := `{"key":"app.name","value":"v"}`
+	req := httptest.NewRequest(http.MethodPost, configPrefix, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(w, req.WithContext(ctx))
+
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+}
+
+// TestHandler_ActionPin_ConfigWrite pins that every configwrite endpoint calls the
+// PDP with action "config:write" (not another permission). Because the baseline
+// grants admin permission for all config actions, a wrong binding
+// (e.g. authz.PermConfigRead()) would still produce 2xx, so this test uses a
+// CapturingAuthorizer to assert the exact action sent to the PDP.
+// Failure message: configwrite gate must use authz.PermConfigWrite() ("config:write"),
+// not another permission (baseline grants admin for all config perms, masking misbinding).
+func TestHandler_ActionPin_ConfigWrite(t *testing.T) {
+	handler, repo := setupHandler()
+	now := time.Now()
+	require.NoError(t, repo.Create(context.Background(), testHandlerTenant, &domain.ConfigEntry{
+		ID: "cfg-pin", Key: "pin.key", Value: "v", Version: 1,
+		CreatedAt: now, UpdatedAt: now,
+	}))
+
+	endpoints := []struct {
+		method string
+		target string
+		body   string
+	}{
+		{http.MethodPost, configPrefix, `{"key":"action.pin","value":"v"}`},
+		{http.MethodPut, configPrefix + "/pin.key", `{"value":"new","expectedVersion":1}`},
+		{http.MethodDelete, configPrefix + "/pin.key?expectedVersion=1", ""},
+	}
+
+	for _, ep := range endpoints {
+		t.Run(ep.method+" "+ep.target, func(t *testing.T) {
+			// Re-create repo state for each sub-test since DELETE removes the entry.
+			h, r := setupHandler()
+			require.NoError(t, r.Create(context.Background(), testHandlerTenant, &domain.ConfigEntry{
+				ID: "cfg-pin2", Key: "pin.key", Value: "v", Version: 1,
+				CreatedAt: now, UpdatedAt: now,
+			}))
+			_ = handler // silence unused warning; sub-test uses h
+			_ = repo
+
+			cap := newAllowAuthorizer()
+			ctx := auth.WithAuthorizer(
+				ctxkeys.WithTenantID(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}), testHandlerTenantStr),
+				cap,
+			)
+			var bodyReader *strings.Reader
+			if ep.body != "" {
+				bodyReader = strings.NewReader(ep.body)
+			} else {
+				bodyReader = strings.NewReader("")
+			}
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(ep.method, ep.target, bodyReader)
+			if ep.body != "" {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			h.ServeHTTP(w, req.WithContext(ctx))
+
+			// Gate must pass (not 401/403).
+			require.NotEqual(t, http.StatusUnauthorized, w.Code,
+				"configwrite gate must not block admin with allow Authorizer (method=%s path=%s)", ep.method, ep.target)
+			require.NotEqual(t, http.StatusForbidden, w.Code,
+				"configwrite gate must not deny admin with allow Authorizer (method=%s path=%s)", ep.method, ep.target)
+			assert.Equal(t, "config:write", cap.GotAction,
+				"configwrite gate must use authz.PermConfigWrite() (\"config:write\"), not another permission "+
+					"(baseline grants admin for all config perms, masking misbinding); endpoint=%s %s",
+				ep.method, ep.target)
+		})
+	}
 }

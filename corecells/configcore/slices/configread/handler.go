@@ -92,9 +92,10 @@ type Handler struct {
 }
 
 // NewHandler creates a public configread Handler with generated per-contract
-// handlers. Both endpoints are admin-only (auth.AnyRole(auth.RoleAdmin)).
+// handlers. Both endpoints are gated by auth.RequirePermission(authz.PermConfigRead());
+// the ABAC PDP decides — baseline grants admin/super-admin (PR-10b #1348).
 func NewHandler(svc *Service) *Handler {
-	policy := auth.AnyRole(auth.RoleAdmin)
+	policy := auth.RequirePermission(authz.PermConfigRead())
 	return &Handler{
 		getH:  configget.NewHandler(GetAdapter{svc}, policy),
 		listH: configlist.NewHandler(ListAdapter{svc}, policy),
