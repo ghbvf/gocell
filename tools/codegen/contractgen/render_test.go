@@ -829,16 +829,19 @@ func TestRender_Golden_Synth_Enum(t *testing.T) {
 	}
 	content := renderFile(t, spec, "types_gen.go")
 
+	// Collapse gofmt alignment whitespace so the substring checks are robust to
+	// const/field column padding (the exact bytes are locked by the golden below).
+	norm := strings.Join(strings.Fields(string(content)), " ")
 	for _, want := range []string{
-		"Outcome PayloadOutcome `json:\"outcome\"`",
+		`Outcome PayloadOutcome ` + "`json:\"outcome\"`", // top-level enum field references named type
 		"type PayloadOutcome string",
 		`PayloadOutcomeSucceeded PayloadOutcome = "succeeded"`,
 		`PayloadOutcomeRejected PayloadOutcome = "rejected"`,
-		"Status PayloadDataStatus `json:\"status\"`",
+		`Status PayloadDataStatus ` + "`json:\"status\"`", // nested enum field references named type
 		"type PayloadDataStatus string",
 		`PayloadDataStatusAccepted PayloadDataStatus = "accepted"`,
 	} {
-		if !strings.Contains(string(content), want) {
+		if !strings.Contains(norm, want) {
 			t.Errorf("types_gen.go missing %q", want)
 		}
 	}

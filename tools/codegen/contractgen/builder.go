@@ -1447,7 +1447,9 @@ func schemaToDTOs(rootName string, s *Schema) ([]DTOSpec, error) {
 		return nil, fmt.Errorf("contractgen: schema for %q must be type=object, got %q", rootName, s.Type)
 	}
 	var out []DTOSpec
-	collectDTOs(rootName, s, &out)
+	if err := collectDTOs(rootName, s, &out); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -1460,7 +1462,7 @@ func schemaToDTOs(rootName string, s *Schema) ([]DTOSpec, error) {
 // push the same shape × pointer-policy matrix into helpers.
 //
 //nolint:gocognit // structural schema-shape × pointer-policy matrix; see godoc above.
-func collectDTOs(name string, s *Schema, out *[]DTOSpec) {
+func collectDTOs(name string, s *Schema, out *[]DTOSpec) error {
 	dto := DTOSpec{Name: name, Doc: s.Title}
 
 	// Track which nested names need recursive collection.
@@ -1508,6 +1510,12 @@ func collectDTOs(name string, s *Schema, out *[]DTOSpec) {
 		field.IsList = prop.Type == "array"
 		dto.Fields = append(dto.Fields, field)
 
+		// A string field with a closed value-set contributes a typed enum + const
+		// block to this DTO (#1935); GoType already references the named type.
+		if err := collectStringEnum(&dto, name, key, prop); err != nil {
+			return err
+		}
+
 		// Track nested objects for recursive collection after the parent is appended.
 		if nestedName != "" {
 			if prop.Type == "object" {
@@ -1524,8 +1532,11 @@ func collectDTOs(name string, s *Schema, out *[]DTOSpec) {
 
 	// Then recurse into nested types.
 	for _, n := range nested {
-		collectDTOs(n.nestedName, n.schema, out)
+		if err := collectDTOs(n.nestedName, n.schema, out); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // schemaGoType returns the Go type expression for a schema property.
@@ -1533,6 +1544,12 @@ func collectDTOs(name string, s *Schema, out *[]DTOSpec) {
 func schemaGoType(fieldKey, parentName string, s *Schema) (goType string, nestedName string) {
 	switch s.Type {
 	case "string":
+		// A string field with a closed value-set (#1935) becomes the generated
+		// named enum type; nestedName stays empty so collectDTOs does NOT recurse
+		// into it as an object (the const block is collected separately).
+		if len(s.Enum) > 0 {
+			return enumTypeName(parentName, fieldKey), ""
+		}
 		return "string", ""
 	case "integer":
 		return "int64", ""
@@ -1557,6 +1574,47 @@ func schemaGoType(fieldKey, parentName string, s *Schema) (goType string, nested
 	default:
 		return "any", ""
 	}
+}
+
+// enumTypeName is the single source for an enum field's generated Go type name:
+// <Parent>+goPascalCase(field) (e.g. parent "Payload", field "outcome" →
+// "PayloadOutcome"). Shared by schemaGoType (field type) and collectDTOs (const
+// block) so the two never drift. Mirrors the nested-object naming convention.
+func enumTypeName(parentName, fieldKey string) string {
+	return parentName + goPascalCase(fieldKey)
+}
+
+// collectStringEnum appends an EnumSpec to dto when prop is a string field with a
+// closed value-set (#1935). Kept separate from collectDTOs so the schema-shape
+// branch and its error handling do not push that function's cyclomatic budget.
+func collectStringEnum(dto *DTOSpec, parentName, fieldKey string, prop *Schema) error {
+	if prop.Type != "string" || len(prop.Enum) == 0 {
+		return nil
+	}
+	es, err := buildEnumSpec(enumTypeName(parentName, fieldKey), fieldKey, prop.Enum)
+	if err != nil {
+		return err
+	}
+	dto.Enums = append(dto.Enums, es)
+	return nil
+}
+
+// buildEnumSpec assembles the EnumSpec for a string enum field. Const names are
+// <TypeName>+goPascalCase(value); a collision (two values that PascalCase to the
+// same identifier, e.g. "in-progress" and "in_progress") is a fail-fast error
+// rather than a silently shadowed const.
+func buildEnumSpec(typeName, fieldKey string, values []string) (EnumSpec, error) {
+	es := EnumSpec{TypeName: typeName, FieldName: fieldKey, Values: make([]EnumValue, 0, len(values))}
+	seen := make(map[string]string, len(values))
+	for _, v := range values {
+		constName := typeName + goPascalCase(v)
+		if prev, dup := seen[constName]; dup {
+			return EnumSpec{}, fmt.Errorf("contractgen: enum values %q and %q both map to Go const %q (type %s)", prev, v, constName, typeName)
+		}
+		seen[constName] = v
+		es.Values = append(es.Values, EnumValue{ConstName: constName, Value: v})
+	}
+	return es, nil
 }
 
 // isRequired reports whether name appears in the required slice.

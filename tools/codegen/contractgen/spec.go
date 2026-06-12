@@ -135,6 +135,31 @@ type DTOSpec struct {
 	// The DTO name follows the convention: ResponseDataItem for data[] array
 	// endpoints (list reads), ResponseData for single-object data endpoints.
 	EmitToMap bool
+	// Enums holds the typed string-enum declarations for this DTO's fields that
+	// carry a JSON-schema `enum` (#1935). Each EnumSpec renders to a named type +
+	// const block (`type <Parent><Field> string` + `const (...)`) right after the
+	// struct; the owning field's GoType references the named type. Empty for DTOs
+	// with no enum fields.
+	Enums []EnumSpec
+}
+
+// EnumSpec is one generated string-enum: a named Go type over string plus its
+// const value-set, derived from a schema `enum` on a string field (#1935). The
+// schema is the single source — removing a value drops the const, breaking any
+// producer/consumer that referenced it (compile-time Hard funnel).
+type EnumSpec struct {
+	// TypeName is the named Go type, <Parent>+goPascalCase(field) (e.g. PayloadOutcome).
+	TypeName string
+	// FieldName is the source wire field key, used only for the type's doc comment.
+	FieldName string
+	// Values are the const declarations in schema source order (stable codegen).
+	Values []EnumValue
+}
+
+// EnumValue is one const in an EnumSpec: ConstName = <TypeName>+goPascalCase(Value).
+type EnumValue struct {
+	ConstName string
+	Value     string
 }
 
 // DTOField describes a single struct field.
