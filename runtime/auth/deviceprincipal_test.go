@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -206,6 +207,35 @@ func TestDeviceToken_UnknownPrincipalKind_FailClosed(t *testing.T) {
 
 	_, _, err = AuthenticateBearer(context.Background(), verifier, tok)
 	require.Error(t, err, "unknown principal_kind must be rejected at verify")
+}
+
+// TestPrincipalKind_NonStringClaim_FailClosed proves a present-but-non-string
+// principal_kind claim is rejected fail-closed at verify, NOT silently treated
+// as absent (which would downgrade a malformed signed marker to the user
+// default and bypass the device boundary). Regression for pr-review F2.
+func TestPrincipalKind_NonStringClaim_FailClosed(t *testing.T) {
+	ks := mustTestKeySet(t)
+	verifier, err := NewJWTVerifier(ks, clock.Real(), WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	// A signed token whose principal_kind claim is a number, not a string.
+	raw := jwt.MapClaims{
+		"sub":            "u1",
+		"iss":            "gocell",
+		"aud":            "gocell",
+		"exp":            time.Now().Add(time.Hour).Unix(),
+		"iat":            time.Now().Unix(),
+		"token_use":      string(TokenIntentAccess),
+		"principal_kind": 123, // present but NOT a string
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, raw)
+	tok.Header["kid"] = ks.SigningKeyID()
+	tok.Header["typ"] = TypHeaderForIntent(TokenIntentAccess)
+	tokenStr, err := tok.SignedString(ks.SigningKey())
+	require.NoError(t, err)
+
+	_, err = verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
+	require.Error(t, err, "present-but-non-string principal_kind must fail closed, not become user default")
 }
 
 // --- super-admin: production chain mints RowScopeAll + mandatory audit ---

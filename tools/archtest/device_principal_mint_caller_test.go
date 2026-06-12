@@ -17,6 +17,16 @@
 // HARD gate (out-of-package forgery of a working device principal is not
 // expressible).
 //
+// The one EXPORTED escape hatch that produces a real seal — the test helper
+// auth.MustNewTestDevicePrincipal (it delegates to mintDevicePrincipal, so it is
+// not caught by the composite-literal scan below) — is pinned to non-production
+// code by the sibling rule NO-TEST-DEVICE-PRINCIPAL-IN-PRODUCTION-01, so the only
+// PRODUCTION path to a sealed device principal remains mintDevicePrincipal via
+// the verified bearer path. The two rules together close the funnel: the seal
+// field is unforgeable (Hard), the literal mint site is allowlisted to
+// deviceprincipal.go (this rule), and the exported seal-producing helper is
+// banned from production (sibling rule).
+//
 // This archtest is the BACKSTOP: it pins every production construction of an
 // auth.Principal composite literal with Kind == PrincipalDevice to a bounded
 // allowlist (today: only deviceprincipal.go). It (a) documents intent

@@ -20,6 +20,14 @@ import (
 // boundary" purpose) and produces a properly sealed device principal by delegating
 // to the sole sanctioned device-principal issuer, mintDevicePrincipal.
 //
+// TEST-ONLY: this is an EXPORTED helper that forges a sealed device principal
+// WITHOUT JWT verification (it is exported only because external test packages
+// cannot reach the unexported mintDevicePrincipal and an external _test.go-only
+// helper is not visible across packages). Production callers are banned by
+// archtest NO-TEST-DEVICE-PRINCIPAL-IN-PRODUCTION-01 — same guarded posture as
+// TestServiceContext. The only production path to a sealed device principal is
+// mintDevicePrincipal via the verified bearer path.
+//
 // The seal is required: Principal.RowVisibility fail-closes (ERR_AUTH_FORBIDDEN)
 // for any PrincipalDevice that lacks the unexported device seal
 // (DEVICE-PRINCIPAL-MINT-CALLER-01). Calling this helper instead of constructing
