@@ -252,3 +252,24 @@ ADR-1044 §4 评级矩阵的四行 invariant **不受本 ADR 影响**：本 ADR 
 | EmitAsync coupling guard（WithActiveUniqueness 唯一入口） | `WithActiveUniqueness(deadline time.Time) EmitOption`；zero-deadline fail-fast | `runtime/command/command_idempotency.go` |
 | schema guard（无 renewal 侧表列） | `devices` 列集 golden（`renewal_requested_at` / `renewal_requested_epoch` 不存在） | `adapters/postgres/schema_guard.go`（expectedColumns for devices） |
 | E2E acceptance | `TestCertRenewalActiveUniquenessE2E`（单条活跃、离线积压不增长） | `examples/iotdevice/cert_renewal_e2e_test.go` |
+
+---
+
+## Amendment 2026-06-12(#1870) — 完成回执驱动续期状态收敛（completion consumer 闭合 L4 环）
+
+**触发**：本 ADR（#1820）以 active-uniqueness 结构性消除了「离线设备积压」急性威胁，但**遗留一个 L4 收敛盲区**：设备成功轮换并 ack success 后，命令到 terminal（active-uniqueness key 释放 ✅），但**没有任何代码推进 `devices.cert_epoch` / `cert_expires_at`**。该威胁矩阵（§7）此前未列出它。按 ai-robust.md「ADR amendment 必查威胁矩阵」补列并标注新处置。
+
+### 7.4 遗留盲区（本 amendment 补列）及 #1870 处置
+
+| 盲区 | 描述 | #1870 处置 | 评级 |
+|------|------|-----------|------|
+| **perpetual-candidate（收敛环不闭合）** | 成功轮换 ack 后 cert 状态不变 → 设备永久满足 near-expiry 谓词 → producer 每 Sweeper 周期（~`AttemptTTL`）无限重发 rotate-cert。active-uniqueness 保证「至多一条活跃」，但**不保证「最终离开候选集」**——前者防积压，后者防永久 busy-loop，两者正交。 | 新增 `devicecertcompletion` 事件消费者：成功回执 → `event.devicecert-rotation-resolved.v1` → `repo.AdvanceCertAfterRotation` CAS 推进 cert 状态 → 设备离开候选集（cert-manager loop-closing：写新 expiry 即闭环，无需显式「移出候选集」逻辑）。 | E2E **Medium**（`TestCertRenewal_CompletionClosesLoop`）+ conformance **Medium+**（CAS 幂等） |
+| **completion 写路径重放 / 并发** | at-least-once 投递 + 重复设备 ack 可能多次推进 | `AdvanceCertAfterRotation` 以 `WHERE cert_epoch = rotatedEpoch` CAS：stale epoch / 未知设备匹配 0 行 → no-op（advanced=false, nil err），消费者 Ack。 | **Medium+**（mem+PG conformance 跨存储一致） |
+
+### 概念一致性（L3，与本 ADR 决策不冲突）
+
+- **completion consumer ⊥ active-uniqueness（D1）**：completion 是 producer **下游**的独立 observed-state 写者，**不**复活备选 B（producer 内 observe-then-decide 查队列做抑制——cert-manager #4642 的 TOCTOU）。ack→terminal 释放 key 是 D1 既有行为；推进 cert 状态是另一条正交写路径。producer 仍**无状态**（D4 不变）。
+- **server-as-issuer（示例边界）**：新 expiry 由服务端计算 `resolvedAt + domain.CertValidity`，因 iotdevice 示例**无外部 CA**——注册时服务端即签发者（`deviceregister` own validity）。真实 fleet 演进应改为设备 ack 携带 CA 签发的真实 `notAfter`，由消费者解析记录（对标 cert-manager readiness controller 从 Secret 解析 x509 `NotAfter`）——诚实边界，非缺陷。
+- **收敛前置不变式（机器守卫）**：`domain.CertValidity > certRenewalThreshold` 是 completion 闭环的正确性前置（否则刚轮换 cert 仍 near-expiry，写 expiry 也不移出候选集）。由 `buildCertRenewalSweeper` 启动期 fail-fast 守卫（Medium），从 #1820 时代的 Soft 注释升级为机器可判定。
+
+dispatch-funnel 侧的 §4 矩阵再验证见 ADR-1044 §Amendment 2026-06-12(#1870)（无降格；rotation-resolved 是 event 非 command，零新增 dispatch-funnel invariant）。完整 enforcement 评级在该 amendment + 各 archtest/conformance godoc。

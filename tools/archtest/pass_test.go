@@ -1375,12 +1375,16 @@ func TestRun_Fixture_delegatesToRunTypedWithRoot(t *testing.T) {
 // generated/ file. This is the "violation not expressible" property — a rule
 // author using this entry cannot observe codegen output even by forgetting a
 // per-file skip, because the driver never constructs a Pass for a generated
-// package. Reaching generated/ requires deliberately switching to
-// Run(t, Typed(...)).
+// package. Since #1564 made generated/ its own module, reaching it needs the
+// workspace production resolver (or StandaloneModule), not a root-relative
+// Run(t, Typed(./...)) (single-module, GOWORK=off) which no longer crosses the
+// module boundary.
 //
-// Contra-positive assertion: we also run Run(t, Typed(...), ./...) and assert
-// it finds ≥1 generated/ file. If it finds zero, the exclusion test is vacuous
-// (there is nothing to exclude, so Production's filter has no teeth).
+// Contra-positive assertion: we also load the workspace production resolver
+// (typeseval.LoadProductionPackages — the loader behind Production) and assert
+// its full set contains ≥1 generated/ package that Production() drops. If zero,
+// the exclusion test is vacuous (nothing to exclude, so Production's filter has
+// no teeth).
 func TestRun_Production_excludesGeneratedPackages(t *testing.T) {
 	if testing.Short() {
 		t.Skip("full-module packages.Load; skipped in -short")
@@ -1409,23 +1413,34 @@ func TestRun_Production_excludesGeneratedPackages(t *testing.T) {
 		t.Errorf("Run(t, Production(...)) invoked rule %d times over %d files; expected ≥ 1 of each", calls, files)
 	}
 
-	// Contra-positive: Run(t, Typed(...), ./...) must see ≥1 generated/ file
-	// so the exclusion above is non-vacuous (there is actually something to
-	// filter).
-	var generatedCount int
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./..."}), func(p *Pass) []Diagnostic {
-		for _, f := range p.Files {
-			if strings.HasPrefix(p.Rel(f), "generated/") {
-				generatedCount++
-			}
+	// Contra-positive: the workspace production resolver (the loader behind
+	// Run(t, Production(...))) must surface ≥1 generated/ package in its full
+	// set that the production partition drops — else the exclusion above is
+	// vacuous. Since #1564 made generated/ its own module, a root-relative
+	// Run(t, Typed(./...)) (single-module, GOWORK=off) no longer reaches it, so
+	// non-vacuity is proven through the same workspace resolver Production uses.
+	root := findModuleRoot(t)
+	modules := findWorkspaceModules(t, root)
+	resolver, err := typeseval.LoadProductionPackages(root, modules, false, nil)
+	if err != nil {
+		t.Fatalf("LoadProductionPackages: %v", err)
+	}
+	prod := make(map[string]bool)
+	for _, p := range resolver.Production() {
+		if p != nil {
+			prod[p.PkgPath] = true
 		}
-		return nil
-	})
-
+	}
+	var generatedCount int
+	for _, p := range resolver.All() {
+		if p != nil && strings.Contains(p.PkgPath, "/generated/") && !prod[p.PkgPath] {
+			generatedCount++
+		}
+	}
 	if generatedCount == 0 {
-		t.Errorf("contra-positive failed: Run(t, Typed(...), ./...) found 0 generated/ files — " +
-			"the module has no generated/ packages, so Run(t, Production(...))'s exclusion " +
-			"filter is vacuous and the above assertions prove nothing")
+		t.Errorf("contra-positive failed: the workspace production resolver found 0 generated/ " +
+			"packages absent from Production() — the generated/ exclusion is vacuous and the " +
+			"assertions above prove nothing")
 	}
 }
 

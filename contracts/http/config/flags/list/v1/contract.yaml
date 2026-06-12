@@ -35,7 +35,7 @@ endpoints:
         description: "Unauthorized — missing or invalid bearer token"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       403:
-        description: "Forbidden — authenticated principal lacks the admin role required to enumerate flag keys"
+        description: "Forbidden — caller lacks the flag:read permission required to enumerate flag keys; the built-in baseline grants the admin and super-admin roles."
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       413:
         description: "Payload Too Large — request body exceeds the size limit"

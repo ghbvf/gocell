@@ -72,12 +72,6 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req.Limit = int64(page.Limit)
 
 	req.ActorID = r.URL.Query().Get("actorId")
-	if req.ActorID != "" && len(req.ActorID) < 0 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"validation: invalid request parameter",
-			errcode.WithDetails(errcode.PublicString("field", "actorId"), errcode.PublicString("reason", "invalid"))))
-		return
-	}
 	if len(req.ActorID) > 256 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
@@ -86,12 +80,6 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req.EventType = r.URL.Query().Get("eventType")
-	if req.EventType != "" && len(req.EventType) < 0 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"validation: invalid request parameter",
-			errcode.WithDetails(errcode.PublicString("field", "eventType"), errcode.PublicString("reason", "invalid"))))
-		return
-	}
 	if len(req.EventType) > 256 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
@@ -100,12 +88,6 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req.From = r.URL.Query().Get("from")
-	if req.From != "" && len(req.From) < 0 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"validation: invalid request parameter",
-			errcode.WithDetails(errcode.PublicString("field", "from"), errcode.PublicString("reason", "invalid"))))
-		return
-	}
 	if len(req.From) > 64 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
@@ -114,12 +96,6 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req.SubjectID = r.URL.Query().Get("subjectId")
-	if req.SubjectID != "" && len(req.SubjectID) < 0 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"validation: invalid request parameter",
-			errcode.WithDetails(errcode.PublicString("field", "subjectId"), errcode.PublicString("reason", "invalid"))))
-		return
-	}
 	if len(req.SubjectID) > 256 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
@@ -128,12 +104,6 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req.To = r.URL.Query().Get("to")
-	if req.To != "" && len(req.To) < 0 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"validation: invalid request parameter",
-			errcode.WithDetails(errcode.PublicString("field", "to"), errcode.PublicString("reason", "invalid"))))
-		return
-	}
 	if len(req.To) > 64 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
@@ -142,12 +112,6 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req.TraceID = r.URL.Query().Get("traceId")
-	if req.TraceID != "" && len(req.TraceID) < 0 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"validation: invalid request parameter",
-			errcode.WithDetails(errcode.PublicString("field", "traceId"), errcode.PublicString("reason", "invalid"))))
-		return
-	}
 	if len(req.TraceID) > 256 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",

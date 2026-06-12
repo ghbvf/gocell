@@ -8,6 +8,8 @@ require (
 	github.com/stretchr/testify v1.11.1
 )
 
+require github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
+
 require (
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
@@ -29,6 +31,7 @@ require (
 	github.com/ghbvf/gocell/adapters/adapterutil v0.0.0 // indirect
 	github.com/ghbvf/gocell/adapters/postgres v0.0.0
 	github.com/ghbvf/gocell/adapters/ratelimit v0.0.0
+	github.com/ghbvf/gocell/generated v0.0.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
@@ -56,7 +59,6 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/pressly/goose/v3 v3.27.1 // indirect
-	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.3 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
@@ -94,3 +96,5 @@ replace github.com/ghbvf/gocell/adapters/adapterutil => ../../adapters/adapterut
 replace github.com/ghbvf/gocell/adapters/postgres => ../../adapters/postgres
 
 replace github.com/ghbvf/gocell/adapters/ratelimit => ../../adapters/ratelimit
+
+replace github.com/ghbvf/gocell/generated => ../../generated

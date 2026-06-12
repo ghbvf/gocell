@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	dto "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
 	devicebootstrap "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicebootstrap"
+	devicecertcompletion "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecertcompletion"
 	devicecertrenewal "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecertrenewal"
 	devicecommand "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommand"
 	devicecommandinternal "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommandinternal"
@@ -186,6 +187,15 @@ type DeviceCell struct {
 	// "pointer-type package == sliceID" (devicebootstrap) and emits the
 	// NewSubscription(...).Mount(reg) call into cell_gen.go.
 	bootstrapSvc *devicebootstrap.Service
+
+	// certCompletionSvc backs the devicecertcompletion slice: it both publishes
+	// event.devicecert-rotation-resolved.v1 (via the OnCommandResolved hook wired
+	// into the public devicecmd Service's ack path) and subscribes to it (the
+	// cert-state writer, #1870). Like bootstrapSvc it carries no route marker; the
+	// subscription is derived by cellgen from slice.yaml contractUsages[role=
+	// subscribe], resolved by "pointer-type package == sliceID"
+	// (devicecertcompletion) into a cell_gen.go NewSubscription(...).Mount(reg) call.
+	certCompletionSvc *devicecertcompletion.Service
 
 	// +slice:route:slice=devicecommand,subPath=/api/v1/devices
 	commandHandler *devicecommand.Handler
@@ -406,11 +416,36 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	}
 	cmdQueue := c.commandQueue
 	runMode := query.RunModeForDemo(durabilityMode == outbox.DurabilityDemo)
+
+	// device-cert-completion slice (#1870): closes the L4 cert-renewal loop. It
+	// emits event.devicecert-rotation-resolved.v1 from the public ack path (via
+	// the OnCommandResolved hook wired into pubSvc below) and consumes it to
+	// advance the device cert state. Constructed BEFORE pubSvc because pubSvc must
+	// receive its hook. It is a STRONG dependency of devicecell — without it a
+	// successfully-rotated device would never leave the near-expiry candidate set
+	// (the loop never closes) — so a construction failure fails Init fast (no
+	// silent no-op). It publishes via c.emitter (the direct event emitter the
+	// relay fans to the bus), the same sink deviceregister uses for events.
+	certCompletionSvc, err := devicecertcompletion.NewService(
+		c.clk, c.deviceRepo,
+		devicecertcompletion.WithEmitter(c.emitter),
+		devicecertcompletion.WithLogger(c.logger),
+		devicecertcompletion.WithMetricsProvider(c.metricsProvider),
+	)
+	if err != nil {
+		return fmt.Errorf("device-cert-completion: %w", err)
+	}
+	c.certCompletionSvc = certCompletionSvc
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicecertcompletion.SliceMetadata()))
+
 	// Public slice service: sliceName "devicecommand" for observability labels.
+	// It serves the device ack (回执) endpoint, so it carries the cert-completion
+	// resolution hook: a terminal rotate-cert ack emits a rotation-resolved event.
 	pubSvc, err := devicecmd.NewService(
 		c.clk, cmdQueue, c.deviceRepo, c.cursorCodec, c.logger,
 		runMode,
 		devicecmd.WithSliceName("devicecommand"),
+		devicecmd.WithOnCommandResolved(c.certCompletionSvc.OnCommandResolved),
 	)
 	if err != nil {
 		return fmt.Errorf("device-command: %w", err)
@@ -568,9 +603,13 @@ const (
 	// certRenewalThreshold is the near-expiry window: a device whose certificate
 	// expires within now+threshold is swept into a rotate-cert command.
 	//
-	// Co-tuning: the issued cert validity MUST exceed this threshold so a freshly
-	// registered device is not swept for renewal immediately.
-	// See deviceregister.certValidity (must exceed certRenewalThreshold).
+	// Co-tuning (correctness, not just policy): domain.CertValidity MUST exceed
+	// this threshold. A freshly issued OR freshly rotated (#1870) cert lands at
+	// now+CertValidity; if that were <= now+threshold it would be near-expiry
+	// immediately and the completion write would never remove the device from the
+	// candidate set — the convergence loop would not close. buildCertRenewalSweeper
+	// asserts this at startup (fail-fast); the two values live in separate packages
+	// (cell vs domain) to avoid a slice→cell import cycle.
 	certRenewalThreshold = 30 * 24 * time.Hour
 	// certRenewalAttemptTTL is the retry-granularity timer: how long one
 	// rotate-cert command attempt stays active (non-terminal) before the Sweeper
@@ -582,6 +621,15 @@ const (
 	// co-tuning needed (#1820 ADR-1822); no RetryInterval/Claimer-TTL relationship.
 	certRenewalAttemptTTL = 36 * time.Hour
 )
+
+// certValidityExceedsThreshold reports whether the issued-cert validity exceeds
+// the near-expiry renewal threshold — the convergence-loop correctness
+// precondition (#1870). Extracted as a pure function so the invariant is
+// unit-testable independently of the live consts (which must satisfy it); a
+// const change that violates it turns the unit regression red.
+func certValidityExceedsThreshold(validity, threshold time.Duration) bool {
+	return validity > threshold
+}
 
 // buildCertRenewalSweeper constructs the certificate-renewal reconcile.Loop —
 // the iotdevice archetype-② reference (reconcile → async command, #1757). It
@@ -595,6 +643,18 @@ const (
 // bootstrapTxManager), all guaranteed non-nil by the initDeps / initSlices
 // fail-fast guards reached before here.
 func (c *DeviceCell) buildCertRenewalSweeper() error {
+	// Convergence-loop correctness guard (#1870): a freshly rotated cert is
+	// re-issued at resolvedAt+domain.CertValidity. If CertValidity did not exceed
+	// the near-expiry threshold, that cert would still be a renewal candidate and
+	// the completion write could never close the loop. Fail fast at startup rather
+	// than silently busy-looping rotate-cert commands forever. This is the
+	// machine-checked form of the cross-package co-tuning the const comments note.
+	if !certValidityExceedsThreshold(domain.CertValidity, certRenewalThreshold) {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"devicecell: domain.CertValidity must exceed certRenewalThreshold; "+
+				"otherwise a freshly rotated cert stays near-expiry and the cert-renewal "+
+				"convergence loop never closes (#1870)")
+	}
 	reconciler, err := devicecertrenewal.NewReconciler(
 		c.clk, c.deviceRepo, c.bootstrapEmitter,
 		devicecertrenewal.Policy{

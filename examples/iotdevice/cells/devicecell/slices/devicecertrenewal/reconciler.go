@@ -19,8 +19,10 @@ import (
 
 // rotateCertCommandType is the CommandType stamped on the enqueued device command
 // that instructs the device to rotate (renew) its certificate. It rides inside the
-// existing command.devicecommand.enqueue.v1 payload — no new contract.
-const rotateCertCommandType = "rotate-cert"
+// existing command.devicecommand.enqueue.v1 payload — no new contract. The literal
+// lives in domain so the completion consumer (devicecertcompletion, #1870) filters
+// terminal acks by the SAME value — the emit/filter pair cannot drift.
+const rotateCertCommandType = domain.RotateCertCommandType
 
 // Policy holds tuning parameters for the cert-renewal Reconciler. All fields
 // must be positive; NewReconciler validates them via Policy.validate().

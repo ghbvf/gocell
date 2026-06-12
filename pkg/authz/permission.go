@@ -65,11 +65,52 @@ func PermAuditRead() Permission {
 	return permAuditRead
 }
 
+// configcore permissions (PR-10b #1348). Each mirrors the role-literal
+// auth.AnyRole(RoleAdmin) gate it replaces, one resource:action per slice's
+// shared route policy. Naming follows the resource:action convention of the
+// audit:read seed (ref: AWS-IAM service:Action, Spring-Security
+// hasAuthority("resource:action")). Same accessor-func-over-private-singleton
+// shape as PermAuditRead — reassignment is a compile error (Hard immutability).
+var (
+	permConfigRead    = newPermission("config:read")
+	permConfigWrite   = newPermission("config:write")
+	permConfigPublish = newPermission("config:publish")
+	permFlagRead      = newPermission("flag:read")
+	permFlagWrite     = newPermission("flag:write")
+)
+
+// PermConfigRead authorizes reading configuration entries (configread slice:
+// GET config/{key}, GET config). Migrated from auth.AnyRole(RoleAdmin) in PR-10b.
+func PermConfigRead() Permission { return permConfigRead }
+
+// PermConfigWrite authorizes mutating configuration entries (configwrite slice:
+// create/update/delete). "write" folds create+update+delete per the AWS-IAM
+// Write access-level grouping the prior uniform admin gate already implied.
+func PermConfigWrite() Permission { return permConfigWrite }
+
+// PermConfigPublish authorizes the config publish/rollback lifecycle
+// (configpublish slice). A domain verb distinct from CRUD write, mirroring the
+// dedicated publish endpoints' own admin gate.
+func PermConfigPublish() Permission { return permConfigPublish }
+
+// PermFlagRead authorizes reading/evaluating feature flags (featureflag slice:
+// GET flag/{key}, GET flags, POST evaluate). Evaluate is a read-only computation.
+func PermFlagRead() Permission { return permFlagRead }
+
+// PermFlagWrite authorizes mutating feature flags (flagwrite slice:
+// create/update/toggle/delete).
+func PermFlagWrite() Permission { return permFlagWrite }
+
 // allPermissions is the closed registry of every Permission that exists. It
 // backs Permissions() and lets tests pin the closed set (anti-vacuity: a new
 // perm* var that is not added here is caught by the registry test).
 var allPermissions = []Permission{
 	permAuditRead,
+	permConfigRead,
+	permConfigWrite,
+	permConfigPublish,
+	permFlagRead,
+	permFlagWrite,
 }
 
 // String returns the action spelling carried into a PDP and stored in policy

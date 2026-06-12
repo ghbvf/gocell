@@ -30,7 +30,7 @@ endpoints:
         description: "Unauthorized — missing or invalid bearer token"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       403:
-        description: "Forbidden — authenticated principal lacks the admin role required to evaluate flags (admin-only because evaluation results may include sensitive subject mapping)"
+        description: "Forbidden — caller lacks the flag:read permission required to evaluate flags; the built-in baseline grants the admin and super-admin roles."
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       404:
         description: "Feature flag key not found"

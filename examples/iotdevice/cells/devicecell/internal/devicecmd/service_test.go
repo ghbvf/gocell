@@ -279,6 +279,103 @@ func TestService_Ack(t *testing.T) {
 	}
 }
 
+// TestService_Ack_FiresOnResolvedHook proves the generic command-resolution hook
+// (#1870) fires exactly once after a terminal ack, carrying the resolved entry
+// (CommandType/DeviceID/ID) and the SAME ack reason — the seam the
+// devicecertcompletion slice rides to emit a rotation-resolved event. Covers
+// every device-driven terminal reason (success/failed/rejected); the hook is
+// reason-agnostic, so the slice — not devicecmd — decides what each outcome means.
+func TestService_Ack_FiresOnResolvedHook(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		reason command.AckReason
+	}{
+		{"success", command.AckSuccess},
+		{"failed", command.AckFailed},
+		{"rejected", command.AckRejected},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, devRepo, q := newTestService()
+			seedDevice(devRepo, "dev-1", "sensor-a")
+			ctx := context.Background()
+			require.NoError(t, enqueueTestCmd(ctx, q))
+			_, _ = q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration) // Pending → Sent (ackable)
+
+			var gotEntry command.Entry
+			var gotReason command.AckReason
+			called := 0
+			svc.onResolved = func(_ context.Context, e command.Entry, r command.AckReason) {
+				called++
+				gotEntry, gotReason = e, r
+			}
+
+			require.NoError(t, svc.Ack(ctx, "dev-1", "cmd-1", tc.reason))
+			require.Equal(t, 1, called, "Ack must fire onResolved exactly once on terminal ack")
+			assert.Equal(t, "cmd-1", gotEntry.ID)
+			assert.Equal(t, "dev-1", gotEntry.DeviceID)
+			assert.Equal(t, "reboot", gotEntry.CommandType)
+			assert.Equal(t, tc.reason, gotReason, "hook must receive the same ack reason")
+		})
+	}
+}
+
+// TestWithOnCommandResolved_WiresAndNilGuard proves that:
+//  1. Constructing a Service via WithOnCommandResolved wires the hook and it fires on Ack.
+//  2. Calling WithOnCommandResolved(nil) leaves a previously-wired hook in place
+//     (accumulative nil-guard semantics — nil is not "clear the hook").
+func TestWithOnCommandResolved_WiresAndNilGuard(t *testing.T) {
+	devRepo := mem.NewDeviceRepository()
+	q := commandtest.NewInMemQueue()
+	seedDevice(devRepo, "dev-1", "sensor-a")
+	ctx := context.Background()
+
+	called := 0
+	hook := func(_ context.Context, _ command.Entry, _ command.AckReason) { called++ }
+
+	// 1. Wire the hook via the public Option path and verify it fires.
+	svc, err := NewService(clock.Real(), q, devRepo, testCodec(), slog.Default(), query.RunModeProd,
+		WithOnCommandResolved(hook))
+	require.NoError(t, err)
+
+	require.NoError(t, enqueueTestCmd(ctx, q))
+	_, _ = q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
+	require.NoError(t, svc.Ack(ctx, "dev-1", "cmd-1", command.AckSuccess))
+	assert.Equal(t, 1, called, "hook must fire once on Ack when wired via WithOnCommandResolved")
+
+	// 2. Apply a nil option — the previously-wired hook must remain in place.
+	WithOnCommandResolved(nil)(svc) // apply nil option directly
+
+	// Re-enqueue a new command and ack it; the original hook must still fire.
+	require.NoError(t, q.Enqueue(ctx, command.NewEntry("cmd-2", "dev-1", "reboot", []byte("x"),
+		command.Timeouts{}, clock.Real().Now()), command.EnqueueOptions{}))
+	_, _ = q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
+	require.NoError(t, svc.Ack(ctx, "dev-1", "cmd-2", command.AckSuccess))
+	assert.Equal(t, 2, called, "nil WithOnCommandResolved must not clear a previously-wired hook")
+}
+
+// TestService_Ack_NilHook_NoPanic proves the common case (no hook wired) is safe.
+func TestService_Ack_NilHook_NoPanic(t *testing.T) {
+	svc, devRepo, q := newTestService() // onResolved nil by default
+	ctx := context.Background()
+	seedDevice(devRepo, "dev-1", "sensor-a")
+	require.NoError(t, enqueueTestCmd(ctx, q))
+	_, _ = q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
+	require.NoError(t, svc.Ack(ctx, "dev-1", "cmd-1", command.AckSuccess))
+}
+
+// TestService_Ack_HookNotFiredOnError proves the hook only fires after a
+// successful terminal transition — an ack that fails before queue.Ack (e.g.
+// unknown command) must not fire it.
+func TestService_Ack_HookNotFiredOnError(t *testing.T) {
+	svc, devRepo, _ := newTestService()
+	seedDevice(devRepo, "dev-1", "sensor-a")
+	called := 0
+	svc.onResolved = func(context.Context, command.Entry, command.AckReason) { called++ }
+	err := svc.Ack(context.Background(), "dev-1", "cmd-missing", command.AckSuccess)
+	require.Error(t, err)
+	require.Equal(t, 0, called, "hook must not fire when ack fails")
+}
+
 func TestService_Ack_Idempotent(t *testing.T) {
 	svc, devRepo, q := newTestService()
 	ctx := context.Background()
