@@ -12,6 +12,7 @@ import (
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/projection"
 )
 
 // Request — http.config.flags.get.v1.request
@@ -21,7 +22,7 @@ type Request struct {
 
 // Response — http.config.flags.get.v1.response
 type Response struct {
-	Data *ResponseData `json:"data"`
+	Data projection.ResourceProjection `json:"data"`
 }
 
 // ResponseData is a generated DTO for contract http.config.flags.get.v1.
@@ -37,6 +38,28 @@ type ResponseData struct {
 	CreatedAt string `json:"createdAt"`
 	// format: date-time
 	UpdatedAt string `json:"updatedAt"`
+}
+
+// ToMap projects ResponseData into the column map the masking funnel
+// (projection.NewProjection / NewProjectionList) consumes. It is exported because
+// the read handler lives in the cell package, not this generated package, and must
+// feed the map to the funnel — the only way to populate the projection-typed
+// Response.Data. ToMap itself returns a plain map and grants no bypass: a
+// []projection.ResourceProjection is obtainable solely via the sealed constructors.
+// Keys mirror the wire JSON field names so the masked view's field set equals this
+// DTO's field set.
+func (i ResponseData) ToMap() map[string]any {
+	return map[string]any{
+		"id":                i.ID,
+		"key":               i.Key,
+		"type":              i.Type,
+		"enabled":           i.Enabled,
+		"rolloutPercentage": i.RolloutPercentage,
+		"description":       i.Description,
+		"version":           i.Version,
+		"createdAt":         i.CreatedAt,
+		"updatedAt":         i.UpdatedAt,
+	}
 }
 
 // GetResponseObject is the typed response envelope for

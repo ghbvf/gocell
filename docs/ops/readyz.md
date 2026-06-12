@@ -475,6 +475,28 @@ saga-as-cell migration tracked in #978. Until that migration ships, this probe d
 appear in `/readyz?verbose` output. After migration it will report journal backend availability
 for the saga coordinator (same semantics as the `*_repo_ready` cell probes).
 
+### `<cellID>_saga_tailer_<projectionID>_ready` (saga-journal projection, #1609 PR-05)
+
+Each **saga-journal projection** (a `role: subscribe` CU with `projectionSource: saga-journal`)
+registers one dependency-availability probe named `<cellID>_saga_tailer_<projectionID>_ready`
+(`healthz.SagaTailerReadyProbeName`). Bootstrap's phase6 saga drain
+(`drainCellSagaProjections`) wires it onto the health aggregator when it constructs the
+projection's `runtime/saga/tailer.Tailer`. Unlike `saga_coordinator_ready`, this probe **is**
+registered today (a deployment that declares a saga-journal projection surfaces it in
+`/readyz?verbose`).
+
+The name carries **both** `cellID` and `projectionID` because the projection identity — and its
+distlock leader key (`saga-journal-tailer:<len>:<cell>:<len>:<proj>`) and checkpoint key — is the
+`(cellID, projectionID)` pair (two cells may legitimately declare the same `projectionID`).
+
+It is a **dependency-availability** probe (not a lag probe): once the Tailer is running it reports
+not-ready only if EITHER the leader-gate distlock backend was unreachable on the most recent
+acquire OR journal/checkpoint storage is unreachable (it exercises `replay.Head` + `store.LoadOffset`).
+A contended acquire (another replica is the leader) and a non-zero replay lag are **normal** and
+keep the probe healthy — lag is exposed separately as the `ObserveLag` metric gauge, not a second
+probe. It is an ops contract: renaming it requires synchronizing this doc, dashboards and alerts
+(`docs/ops/saga-runbook.md` 场景 5).
+
 #### Saga instance lifecycle and readyz semantics
 
 A saga instance progresses through the following status values (iota+1 constants in

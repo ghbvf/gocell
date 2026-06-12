@@ -139,6 +139,23 @@ func TestSchemaConstantsMatchSchemaLiterals(t *testing.T) {
 			got, want)
 	})
 
+	// slice.schema.json contractUsages projectionSource enum is byte-locked to
+	// cellvocab.AllProjectionSources(). The schema enum, the parser validator
+	// (isValidProjectionSource) and the cellgen builder all derive from the same
+	// ordered slice, so drift in either direction is caught here at test time.
+	t.Run("slice.schema.json#projectionSourceEnum", func(t *testing.T) {
+		t.Parallel()
+		got := readSchemaStringSlice(t, "slice.schema.json",
+			[]string{"properties", "contractUsages", "items", "properties", "projectionSource", "enum"})
+		want := make([]string, 0, len(cellvocab.AllProjectionSources()))
+		for _, s := range cellvocab.AllProjectionSources() {
+			want = append(want, string(s))
+		}
+		require.True(t, reflect.DeepEqual(want, got),
+			"schemas/slice.schema.json contractUsages projectionSource enum drifted from cellvocab.AllProjectionSources: schema=%v want=%v",
+			got, want)
+	})
+
 	// contract.schema.json saga step-name pattern is byte-locked to
 	// metadata.SagaStepNamePattern. The pattern lives at the top-level saga
 	// properties block (properties.saga.properties.steps.items.properties.name.pattern).

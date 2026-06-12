@@ -370,6 +370,46 @@ func TestNilConsumerBase_IsConstructed_False(t *testing.T) {
 
 // --- Wrap: happy paths -----------------------------------------------------
 
+// TestConsumerBase_Wrap_ThreadsInjectedLoggerOntoOutcome pins #1871 F2: every
+// outcome ConsumerBase.Wrap produces must carry the consumer's configured
+// logger (ConsumerBaseConfig.Logger) so the subscriber settle loop's
+// NotifySettlement routes its observer-panic line to the SAME sink as the rest
+// of the consumer pipeline — not the global slog.Default(). Before the Wrap
+// funnel set out.Logger, deliveryFrom returned a nil-Logger outcome and the
+// settle-panic line escaped to slog.Default(), defeating the injection.
+func TestConsumerBase_Wrap_ThreadsInjectedLoggerOntoOutcome(t *testing.T) {
+	t.Parallel()
+
+	logger, logBuf := newCapturingLogger()
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: &fakeReceipt{}}
+	cb, err := NewConsumerBase(
+		claimer,
+		ConsumerBaseConfig{Logger: logger, LeaseRenewalInterval: disableLeaseRenewal},
+		clock.Real(),
+	)
+	require.NoError(t, err)
+
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"},
+		func(_ context.Context, _ Entry) HandleResult { return Ack() })
+	out, _ := handler(context.Background(), Entry{id: "evt-logger"})
+
+	// Root cause: the produced outcome must carry the injected logger.
+	require.Same(t, logger, out.Logger,
+		"Wrap must thread cb.logger onto every produced DeliveryOutcome (#1871 F2)")
+
+	// End-to-end: a panicking SettlementObserver (appended by subscriber-layer
+	// middleware) must log to the injected buffer, not slog.Default().
+	out.SettlementObservers = []SettlementObserver{
+		SettlementObserverFunc(func(_ context.Context, _ SettlementObservation) {
+			panic("settlement observer panicked intentionally")
+		}),
+	}
+	NotifySettlement(context.Background(), out, Entry{id: "evt-logger", topic: "topic"},
+		DispositionAck, SettlementResultSuccess, nil)
+	assert.Contains(t, logBuf.String(), "settlement observer panicked",
+		"injected logger must capture the settlement observer-panic line")
+}
+
 func TestConsumerBase_Wrap_ClaimAcquired_Ack_ThreadsReceipt(t *testing.T) {
 	receipt := &fakeReceipt{}
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
@@ -1293,16 +1333,15 @@ func TestConsumerBase_CtxCancelDuringBackoff_ReturnsRequeueWithCtxErr(t *testing
 // ConsumerObserver wiring tests (W2: wire ConsumerObserver into ConsumerBase)
 // =============================================================================
 
-// captureDefaultSlogForConsumerBase replaces the global slog default with a
-// JSON handler writing to a buffer; the original logger is restored via
-// t.Cleanup. Callers must NOT call t.Parallel() when using this helper.
-func captureDefaultSlogForConsumerBase(t *testing.T) *bytes.Buffer {
-	t.Helper()
+// newCapturingLogger returns a slog.Logger writing JSON to the returned buffer
+// for per-test log capture. Injected via ConsumerBaseConfig.Logger (and
+// DeliveryOutcome.Logger for settlement) so tests never mutate the global slog
+// default — that mutation races with t.Parallel() siblings in this package.
+// Tests using it ARE parallel-safe.
+func newCapturingLogger() (*slog.Logger, *bytes.Buffer) {
 	var buf bytes.Buffer
-	orig := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(orig) })
-	return &buf
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	return logger, &buf
 }
 
 // logLevelFromBuf scans JSON log lines in buf for the first entry whose "msg"
@@ -1476,8 +1515,8 @@ func TestConsumerBase_AttachObserver_NilObserver_ReturnsError(t *testing.T) {
 // retry-budget-exhausted log entry is emitted at ERROR level (upgraded from
 // WARN per observability.md: DLX-routed reject is correctness-affecting).
 func TestConsumerBase_RetryExhausted_LogLevelError(t *testing.T) {
-	// Do NOT call t.Parallel(): this test mutates the global slog default logger.
-	buf := captureDefaultSlogForConsumerBase(t)
+	t.Parallel()
+	logger, buf := newCapturingLogger()
 
 	receipt := &fakeReceipt{}
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
@@ -1486,6 +1525,7 @@ func TestConsumerBase_RetryExhausted_LogLevelError(t *testing.T) {
 		RetryCount:           1,
 		RetryBaseDelay:       time.Millisecond,
 		LeaseRenewalInterval: disableLeaseRenewal,
+		Logger:               logger,
 	}, clock.Real())
 	require.NoError(t, err)
 
@@ -1579,13 +1619,15 @@ func TestConsumerBase_RetryExhausted_NoObserveReject_OnCtxCancel(t *testing.T) {
 // RED: consumer_base.go calls cb.observer.ObserveReject(...) without a
 // panic-recovery wrapper, so the panic currently escapes.
 func TestConsumerBase_ObserveReject_PanicingObserver_DoesNotEscape(t *testing.T) {
-	buf := captureDefaultSlogForConsumerBase(t)
+	t.Parallel()
+	logger, buf := newCapturingLogger()
 
 	receipt := &fakeReceipt{}
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
 		LeaseRenewalInterval: disableLeaseRenewal,
+		Logger:               logger,
 	}, clock.Real())
 	require.NoError(t, err)
 	require.NoError(t, cb.AttachObserver(&panicingObserver{}))
@@ -1601,7 +1643,6 @@ func TestConsumerBase_ObserveReject_PanicingObserver_DoesNotEscape(t *testing.T)
 	}, "panic from ConsumerObserver.ObserveReject must NOT escape the Wrap handler")
 
 	// A WARN or ERROR log line must be emitted to record the recovered panic.
-	_ = buf // accessed by logLevelFromBuf when the log sentinel is checked
 	found := false
 	for _, line := range bytes.Split(buf.Bytes(), []byte("\n")) {
 		if bytes.Contains(line, []byte("observer")) || bytes.Contains(line, []byte("panic")) {
@@ -1611,6 +1652,46 @@ func TestConsumerBase_ObserveReject_PanicingObserver_DoesNotEscape(t *testing.T)
 	}
 	assert.True(t, found,
 		"expected a log line mentioning observer panic, but found none in captured slog output")
+}
+
+// TestConsumerBase_RetryExhausted_PanicingObserver_LogsViaInjectedLogger guards
+// the SECOND SafeObserve site — the retry-exhausted reject path. The
+// handler-reject panic test above only exercises the first site; this one pins
+// that the retry-exhausted SafeObserve logger also derives from the injected
+// cb.logger (it previously used slog.Default(), so its recovered-panic log
+// escaped buffer capture under injection). Fails RED if that site regresses
+// back to slog.Default().
+func TestConsumerBase_RetryExhausted_PanicingObserver_LogsViaInjectedLogger(t *testing.T) {
+	t.Parallel()
+	logger, buf := newCapturingLogger()
+
+	receipt := &fakeReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		RetryCount:           1,
+		RetryBaseDelay:       time.Millisecond,
+		LeaseRenewalInterval: disableLeaseRenewal,
+		Logger:               logger,
+	}, clock.Real())
+	require.NoError(t, err)
+	require.NoError(t, cb.AttachObserver(&panicingObserver{}))
+
+	sub := Subscription{Topic: "event.test.v1", ConsumerGroup: "cg-test", CellID: "testcell"}
+	handler := cb.Wrap(sub, func(_ context.Context, _ Entry) HandleResult {
+		return Requeue(errors.New("always fail")) // exhausts RetryCount → retry-exhausted reject
+	})
+
+	require.NotPanics(t, func() {
+		_, _ = handler(context.Background(), Entry{id: "evt-retry-exhausted-panic"})
+	}, "panic from ObserveReject on the retry-exhausted path must NOT escape the Wrap handler")
+
+	// SafeObserve logs the recovered panic via the logger it is given. Asserting
+	// the exact "observability hook panic" message proves it reached the INJECTED
+	// buffer (cb.logger), not slog.Default(); a loose substring match would not
+	// discriminate the two SafeObserve loggers.
+	assert.Contains(t, buf.String(), "observability hook panic",
+		"retry-exhausted observer-panic log must be captured via the injected logger (cb.logger), not slog.Default()")
 }
 
 // panicingObserver is a ConsumerObserver that always panics in ObserveReject,

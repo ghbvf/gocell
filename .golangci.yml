@@ -837,6 +837,17 @@ linters:
         linters:
           - gosec
         text: "G70(2|3)"
+      # tools/modrelease rewrites the repo's own go.mod files during release and
+      # tools/releasesmoke stages go.mods + builds a module proxy under
+      # t.TempDir(); both write to developer-owned / test-temp trees, so gosec
+      # G703 (path-traversal taint that survives filepath.Clean) is a false
+      # positive — the same trusted-tooling context as tools/metricschema above.
+      # G304 (variable ReadFile) and G306 (WriteFile mode) are fixed at the call
+      # site (filepath.Clean / 0o600); only the un-clearable G703 is waived here.
+      - path: ^tools/(modrelease|releasesmoke)/
+        linters:
+          - gosec
+        text: "G703"
       # rbacassign/service.go: Assign/Revoke are intentionally mirror-image
       # public APIs (per-action audit trail). Source comment documents the
       # decision; dupl flags the duplication structurally.

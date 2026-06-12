@@ -133,6 +133,17 @@ type ConsumerBaseConfig struct {
 	// LeaseTTL/3 so the lease is renewed well before it expires.
 	// Set to a negative value to disable lease renewal entirely.
 	LeaseRenewalInterval time.Duration
+
+	// Logger is the structured logger for all ConsumerBase log output (claim,
+	// retry, DLX-reject and observer-panic lines). Nil defaults to slog.Default()
+	// in SetDefaults, so production callers need not set it. Tests inject a
+	// buffer-backed logger here to capture output without mutating the global
+	// slog default (slog.SetDefault races with t.Parallel() siblings).
+	//
+	// ConsumerBase takes the logger as a config field (not a WithLogger option
+	// like DirectEmitter) because SetDefaults resolves the nil fallback once at
+	// construction.
+	Logger *slog.Logger
 }
 
 // SetDefaults populates zero-valued fields with safe defaults. Called
@@ -163,6 +174,9 @@ func (c *ConsumerBaseConfig) SetDefaults() {
 	}
 	if c.LeaseRenewalInterval == 0 {
 		c.LeaseRenewalInterval = c.LeaseTTL / leaseRenewalDivisor
+	}
+	if c.Logger == nil {
+		c.Logger = slog.Default()
 	}
 }
 
@@ -234,6 +248,11 @@ type ConsumerBase struct {
 	config  ConsumerBaseConfig
 	clk     clock.Clock
 
+	// logger is the resolved structured logger (config.Logger after SetDefaults,
+	// never nil). Every ConsumerBase log line and the observer-panic SafeObserve
+	// logger derive from it, so a test-injected logger captures all output.
+	logger *slog.Logger
+
 	// observer receives notifications on terminal Reject paths. Initialized to
 	// NopConsumerObserver{} by NewConsumerBase so it is never nil. Replaced at
 	// most once via AttachObserver; observerAttached tracks whether a non-Nop
@@ -259,12 +278,13 @@ func (cb *ConsumerBase) IsConstructed() bool {
 	return cb != nil && cb.built
 }
 
-// logWithContext delegates to slog.LogAttrs with the given context, ensuring
-// any ContextHandler extracts observability fields (request_id, correlation_id,
-// trace_id) restored by SubscriberWithMiddleware.SubscribeEntry on the consumer
-// path (built-in outermost wrapper, no separate middleware to install).
-func logWithContext(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr) {
-	slog.LogAttrs(ctx, level, msg, attrs...)
+// logWithContext delegates to the injected logger's LogAttrs with the given
+// context, ensuring any ContextHandler extracts observability fields
+// (request_id, correlation_id, trace_id) restored by
+// SubscriberWithMiddleware.SubscribeEntry on the consumer path (built-in
+// outermost wrapper, no separate middleware to install).
+func (cb *ConsumerBase) logWithContext(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr) {
+	cb.logger.LogAttrs(ctx, level, msg, attrs...)
 }
 
 // NewConsumerBase creates a ConsumerBase using the two-phase Claimer interface.
@@ -288,6 +308,7 @@ func NewConsumerBase(claimer idempotency.Claimer, config ConsumerBaseConfig, clk
 		claimer:  claimer,
 		config:   config,
 		clk:      clk,
+		logger:   config.Logger, // non-nil: SetDefaults fell back to slog.Default()
 		observer: NopConsumerObserver{},
 		built:    true,
 	}, nil
@@ -373,14 +394,20 @@ func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) SubscriberH
 	cellID := sub.CellID
 	passthrough := cb.brokerDelayPassthrough(sub)
 	dims := deliveryDims{cellID: cellID, consumerGroup: consumerGroup, topic: topic}
-	return func(ctx context.Context, entry Entry) (DeliveryOutcome, Settlement) {
+	return func(ctx context.Context, entry Entry) (out DeliveryOutcome, _ Settlement) {
+		// Single funnel: stamp the consumer's configured logger onto whatever
+		// outcome the dispatch below produces, so the subscriber settle loop's
+		// NotifySettlement routes its observer-panic line to the same sink as the
+		// rest of this consumer's pipeline. cb.logger is always non-nil
+		// (SetDefaults pins slog.Default()); see DeliveryOutcome.Logger (#716/#1871 F2).
+		defer func() { out.Logger = cb.logger }()
 		idempotencyKey := fmt.Sprintf("%s:%s", consumerGroup, entry.id)
 
 		// Fail-open: single Claim attempt, proceed without idempotency on error.
 		if cb.config.ClaimPolicy == ClaimPolicyFailOpen {
 			state, receipt, err := cb.claimer.Claim(ctx, idempotencyKey, cb.config.LeaseTTL, cb.config.IdempotencyTTL)
 			if err != nil {
-				logWithContext(ctx, slog.LevelWarn, "outbox: idempotency claim failed, proceeding without receipt (fail-open)",
+				cb.logWithContext(ctx, slog.LevelWarn, "outbox: idempotency claim failed, proceeding without receipt (fail-open)",
 					slog.String(logKeyEventID, entry.id),
 					slog.String(logKeyTopic, topic),
 					slog.String(logKeyConsumerGroup, consumerGroup),
@@ -393,7 +420,7 @@ func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) SubscriberH
 		// Fail-closed: claimWithRetry handles all attempts with backoff + jitter.
 		state, receipt, err := cb.claimWithRetry(ctx, topic, entry, idempotencyKey, consumerGroup)
 		if err != nil {
-			logWithContext(ctx, slog.LevelError, "outbox: idempotency claim exhausted, requeuing (fail-closed)",
+			cb.logWithContext(ctx, slog.LevelError, "outbox: idempotency claim exhausted, requeuing (fail-closed)",
 				slog.String(logKeyEventID, entry.id),
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyConsumerGroup, consumerGroup),
@@ -460,7 +487,7 @@ func (cb *ConsumerBase) claimWithRetry(
 				jitter = time.Duration(cryptoRandInt64N(int64(base/backoffJitterDivisor) + 1))
 			}
 			delay := min(base+jitter, cb.config.MaxRetryDelay)
-			logWithContext(ctx, slog.LevelWarn, "outbox: idempotency claim failed, retrying locally",
+			cb.logWithContext(ctx, slog.LevelWarn, "outbox: idempotency claim failed, retrying locally",
 				slog.String(logKeyEventID, entry.id),
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyConsumerGroup, consumerGroup),
@@ -509,13 +536,13 @@ func (cb *ConsumerBase) handleClaimState(
 	topic := dims.topic
 	switch state {
 	case idempotency.ClaimDone:
-		logWithContext(ctx, slog.LevelDebug, "outbox: event already processed, skipping",
+		cb.logWithContext(ctx, slog.LevelDebug, "outbox: event already processed, skipping",
 			slog.String(logKeyEventID, entry.id),
 			slog.String(logKeyTopic, topic))
 		return deliveryFrom(Ack()), nil
 	case idempotency.ClaimBusy:
 		delay := cb.config.RetryBaseDelay
-		logWithContext(ctx, slog.LevelDebug, "outbox: event being processed by another consumer, requeuing after backoff",
+		cb.logWithContext(ctx, slog.LevelDebug, "outbox: event being processed by another consumer, requeuing after backoff",
 			slog.String(logKeyEventID, entry.id),
 			slog.String(logKeyTopic, topic),
 			slog.Duration("backoff", delay))
@@ -560,7 +587,7 @@ func (cb *ConsumerBase) waitBackoff(ctx context.Context, topic string, entry Ent
 		return true
 	}
 	delay := ExponentialDelay(cb.config.RetryBaseDelay, cb.config.MaxRetryDelay, attempt)
-	logWithContext(ctx, slog.LevelWarn, "outbox: transient error, retrying",
+	cb.logWithContext(ctx, slog.LevelWarn, "outbox: transient error, retrying",
 		slog.String(logKeyEventID, entry.id),
 		slog.String(logKeyTopic, topic),
 		slog.Int("attempt", attempt+1),
@@ -611,12 +638,12 @@ func (cb *ConsumerBase) retryLoop(
 		}
 
 		if isPermanentRejection(lastResult) {
-			logWithContext(ctx, slog.LevelError, "outbox: handler rejected entry, routing to DLX",
+			cb.logWithContext(ctx, slog.LevelError, "outbox: handler rejected entry, routing to DLX",
 				slog.String(logKeyEventID, entry.id),
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyConsumerGroup, consumerGroup),
 				slog.Any("error", lastResult.Err))
-			observability.SafeObserve(slog.Default().With(
+			observability.SafeObserve(cb.logger.With(
 				slog.String("cell", cellID),
 				slog.String("topic", topic),
 				slog.String("consumer_group", consumerGroup),
@@ -645,14 +672,14 @@ func (cb *ConsumerBase) retryLoop(
 	// Exhausted all retries -- reject so broker routes to DLX.
 	// Upgraded from LevelWarn to LevelError: retry-exhausted routes to DLX
 	// (correctness-affecting) per observability.md §slog 日志级别.
-	logWithContext(ctx, slog.LevelError, "outbox: retry budget exhausted, rejecting to DLX",
+	cb.logWithContext(ctx, slog.LevelError, "outbox: retry budget exhausted, rejecting to DLX",
 		slog.String(logKeyEventID, entry.id),
 		slog.String(logKeyTopic, topic),
 		slog.String(logKeyConsumerGroup, consumerGroup),
 		slog.Int("retry_count", cb.config.RetryCount),
 		slog.String("process_reason", ProcessReasonRetryExhausted),
 		slog.Any("error", lastResult.Err))
-	observability.SafeObserve(slog.Default().With(
+	observability.SafeObserve(cb.logger.With(
 		slog.String("cell", cellID),
 		slog.String("topic", topic),
 		slog.String("consumer_group", consumerGroup),
@@ -721,7 +748,7 @@ func (cb *ConsumerBase) runWithRenewal(
 	// Settlement (receipt) is returned by handleClaimState alongside this result;
 	// Subscriber will call Settlement.Release on Requeue disposition.
 	if leaseLost.Load() && result.Disposition == DispositionAck {
-		logWithContext(ctx, slog.LevelWarn, "outbox: lease lost during processing, downgrading Ack to Requeue (hard fence)",
+		cb.logWithContext(ctx, slog.LevelWarn, "outbox: lease lost during processing, downgrading Ack to Requeue (hard fence)",
 			slog.String(logKeyEventID, entry.id),
 			slog.String(logKeyTopic, dims.topic))
 		return DeliveryOutcome{
@@ -757,13 +784,13 @@ func (cb *ConsumerBase) leaseRenewalLoop(
 			extendCtx := context.WithoutCancel(ctx)
 			if err := receipt.Extend(extendCtx, cb.config.LeaseTTL); err != nil {
 				if errors.Is(err, idempotency.ErrLeaseExpired) {
-					logWithContext(ctx, slog.LevelError, "outbox: lease lost during processing, canceling handler",
+					cb.logWithContext(ctx, slog.LevelError, "outbox: lease lost during processing, canceling handler",
 						slog.String(logKeyEventID, entry.id),
 						slog.String(logKeyTopic, topic))
 					onLeaseLost()
 					return
 				}
-				logWithContext(ctx, slog.LevelWarn, "outbox: lease extend failed (transient), will retry",
+				cb.logWithContext(ctx, slog.LevelWarn, "outbox: lease extend failed (transient), will retry",
 					slog.String(logKeyEventID, entry.id),
 					slog.String(logKeyTopic, topic),
 					slog.Any("error", err))

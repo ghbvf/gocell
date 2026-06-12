@@ -230,8 +230,12 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	opts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
+		// PrimaryListener stays all-interfaces (:8083) so remote IoT devices can
+		// reach it over the network. InternalListener is the cell→cell control
+		// plane (/internal/v1/*) and binds loopback per docs/ops/listener-topology.md;
+		// a real deployment sets a VPC-only addr + NetworkPolicy instead.
 		bootstrap.WithListener(cell.PrimaryListener, ":8083", []auth.ListenerAuth{jwtPlan}),
-		bootstrap.WithListener(cell.InternalListener, ":9083", internalAuthChain),
+		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9083", internalAuthChain),
 		// #673: a dedicated HealthListener is mandatory — /healthz, /readyz,
 		// /metrics no longer fall back onto the primary listener.
 		bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9093", []auth.ListenerAuth{auth.AuthNone{}}),

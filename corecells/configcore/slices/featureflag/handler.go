@@ -10,52 +10,13 @@ import (
 	flagsget "github.com/ghbvf/gocell/generated/contracts/http/config/flags/get/v1"
 	flagslist "github.com/ghbvf/gocell/generated/contracts/http/config/flags/list/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/projection"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
-
-// FeatureFlagResponse is the public DTO for FeatureFlag, retained for unit
-// tests that verify the conversion function directly (TestToFeatureFlagResponse_NilInput,
-// TestFeatureFlagResponse_Fields).
-type FeatureFlagResponse struct {
-	ID                string    `json:"id"`
-	Key               string    `json:"key"`
-	Type              string    `json:"type"`
-	Enabled           bool      `json:"enabled"`
-	RolloutPercentage int       `json:"rolloutPercentage"`
-	Description       string    `json:"description"`
-	Version           int       `json:"version"`
-	CreatedAt         time.Time `json:"createdAt"`
-	UpdatedAt         time.Time `json:"updatedAt"`
-}
-
-func toFeatureFlagResponse(f *domain.FeatureFlag) FeatureFlagResponse {
-	if f == nil {
-		return FeatureFlagResponse{}
-	}
-	return FeatureFlagResponse{
-		ID: f.ID, Key: f.Key, Type: string(f.Type),
-		Enabled: f.Enabled, RolloutPercentage: f.RolloutPercentage,
-		Description: f.Description, Version: f.Version,
-		CreatedAt: f.CreatedAt, UpdatedAt: f.UpdatedAt,
-	}
-}
-
-// EvaluateResultResponse is the public DTO for EvaluateResult, retained for
-// unit tests.
-type EvaluateResultResponse struct {
-	Key     string `json:"key"`
-	Enabled bool   `json:"enabled"`
-}
-
-func toEvaluateResultResponse(r *EvaluateResult) EvaluateResultResponse {
-	if r == nil {
-		return EvaluateResultResponse{}
-	}
-	return EvaluateResultResponse{Key: r.Key, Enabled: r.Enabled}
-}
 
 // GetAdapter wraps Service to implement flagsget.Service for http.config.flags.get.v1.
 type GetAdapter struct{ S *Service }
@@ -78,7 +39,13 @@ func (a GetAdapter) Get(ctx context.Context, req *flagsget.Request) (flagsget.Ge
 		}
 		return nil, err
 	}
-	return flagsget.Get200JSONResponse{Data: toGetResponseData(flag)}, nil
+	// identity projection (epic #1337 PR-12); masking obligation source becomes
+	// the ABAC Decision in PR-10.
+	data, err := projection.NewProjection(authz.IdentityFieldMask(), toGetResponseData(flag).ToMap())
+	if err != nil {
+		return nil, err
+	}
+	return flagsget.Get200JSONResponse{Data: data}, nil
 }
 
 // ListAdapter wraps Service to implement flagslist.Service for http.config.flags.list.v1.
@@ -102,12 +69,18 @@ func (a ListAdapter) List(ctx context.Context, req *flagslist.Request) (flagslis
 	if err != nil {
 		return nil, err
 	}
-	items := make([]*flagslist.ResponseDataItem, 0, len(result.Items))
+	rows := make([]map[string]any, 0, len(result.Items))
 	for _, f := range result.Items {
-		items = append(items, toListResponseDataItem(f))
+		rows = append(rows, toListResponseDataItem(f).ToMap())
+	}
+	// identity projection (epic #1337 PR-12); masking obligation source becomes
+	// the ABAC Decision in PR-10.
+	data, err := projection.NewProjectionList(authz.IdentityFieldMask(), rows)
+	if err != nil {
+		return nil, err
 	}
 	return flagslist.List200JSONResponse{
-		Data:       items,
+		Data:       data,
 		NextCursor: result.NextCursor,
 		HasMore:    result.HasMore,
 	}, nil
@@ -170,8 +143,8 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
 }
 
 // toGetResponseData converts a domain.FeatureFlag to flagsget.ResponseData.
-func toGetResponseData(f *domain.FeatureFlag) *flagsget.ResponseData {
-	return &flagsget.ResponseData{
+func toGetResponseData(f *domain.FeatureFlag) flagsget.ResponseData {
+	return flagsget.ResponseData{
 		ID:                f.ID,
 		Key:               f.Key,
 		Type:              string(f.Type),
@@ -185,8 +158,8 @@ func toGetResponseData(f *domain.FeatureFlag) *flagsget.ResponseData {
 }
 
 // toListResponseDataItem converts a domain.FeatureFlag to flagslist.ResponseDataItem.
-func toListResponseDataItem(f *domain.FeatureFlag) *flagslist.ResponseDataItem {
-	return &flagslist.ResponseDataItem{
+func toListResponseDataItem(f *domain.FeatureFlag) flagslist.ResponseDataItem {
+	return flagslist.ResponseDataItem{
 		ID:                f.ID,
 		Key:               f.Key,
 		Type:              string(f.Type),

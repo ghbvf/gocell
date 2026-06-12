@@ -513,15 +513,24 @@ type ProjectionResetHook = cellvocab.ProjectionResetHook
 
 // ProjectionRequest holds everything needed to register one L3 CQRS projection.
 // RegistryRecorder accumulates these via Registrar.RegisterProjection; the
-// bootstrap projection drain reads RegistrySnapshot.Projections, constructs a
-// projection.Coordinator per request from framework-owned dependencies, and
-// calls Coordinator.Subscribe. Mirrors SubscriptionRequest's exported-field
-// shape; the framework deps (checkpoint store / tx runner / cursor / replay)
-// are deliberately NOT fields here — they live in bootstrap and never reach
-// cell code.
+// bootstrap projection drain reads RegistrySnapshot.Projections and, BRANCHING ON
+// Source, either constructs a push-based projection.Coordinator (outbox) or a
+// pull-based runtime/saga/tailer.Tailer (saga-journal) from framework-owned
+// dependencies. Mirrors SubscriptionRequest's exported-field shape; the framework
+// deps (checkpoint store / tx runner / cursor / replay / journal reader / locker)
+// are deliberately NOT fields here — they live in bootstrap and never reach cell
+// code.
 type ProjectionRequest struct {
-	// Spec is the event-kind contract the projection consumes (its input
-	// stream). Spec.Kind must be "event".
+	// Source selects the input transport (EPIC #1609 PR-05). The zero value ("")
+	// and ProjectionSourceOutbox are equivalent: the outbox path, where Spec is
+	// the event-kind contract the projection consumes. ProjectionSourceSagaJournal
+	// is the global saga journal: Spec MUST be the zero value (no event topic).
+	// Set only by the sanctioned constructors — the generated NewProjectionRequest
+	// (outbox) and NewSagaJournalProjectionRequest (saga-journal).
+	Source cellvocab.ProjectionSource
+	// Spec is the event-kind contract the projection consumes (its input stream).
+	// Required when Source is outbox (Spec.Kind must be "event"); MUST be the zero
+	// value when Source is saga-journal.
 	Spec contractspec.ContractSpec
 	// ProjectionID names the projection within its cell. It is half of the
 	// checkpoint key (cellID, projectionID); the consumer group is derived as
@@ -545,8 +554,67 @@ type ProjectionRequest struct {
 	SliceID string
 	// Apply is the business event→state hook. Required (non-nil).
 	Apply ProjectionApply
-	// OnReset is the optional rebuild Reset-phase hook. May be nil.
+	// OnReset is the optional rebuild Reset-phase hook. May be nil. Ignored on the
+	// saga-journal path (rebuild is not supported there — NewSagaJournalProjectionRequest
+	// never sets it, and governance forbids onReset on a saga-journal subscribe CU).
 	OnReset ProjectionResetHook
+}
+
+// NewSagaJournalProjectionRequest builds a ProjectionRequest whose input stream
+// is the GLOBAL saga journal (stream saga.journal.v1, every saga instance/type).
+// It carries no event Spec and no OnReset — the bootstrap projection drain wires
+// it to a runtime/saga/tailer.Tailer (pull) rather than a Coordinator (push), and
+// saga-journal rebuild is out of scope (EPIC #1609 PR-05).
+//
+// cellgen is the only production caller: it emits this from a slice.yaml subscribe
+// CU carrying projectionSource=saga-journal, and reg.RegisterProjection is
+// funnel-locked to cell_gen.go by PROJECTION-REGISTER-FUNNEL-01. There is no
+// per-event-contract generated package for the saga journal (it is not an event
+// contract), so — unlike the outbox NewProjectionRequest, which is generated per
+// event contract into generated/contracts/event/<path>/<version>/projection_gen.go
+// and embeds that package's private event spec — this saga constructor lives in
+// kernel/cell (do NOT mirror it into generated/; the saga journal has no contract
+// package to host it).
+func NewSagaJournalProjectionRequest(apply ProjectionApply, projectionID, cellID, sliceID string) ProjectionRequest {
+	return ProjectionRequest{
+		Source:       cellvocab.ProjectionSourceSagaJournal,
+		ProjectionID: projectionID,
+		CellID:       cellID,
+		SliceID:      sliceID,
+		Apply:        apply,
+	}
+}
+
+// validateProjectionSource enforces the Source↔Spec contract for a
+// ProjectionRequest: outbox requires an event-kind Spec with a non-empty Topic;
+// saga-journal forbids any Spec (the saga journal has no event topic). Split out
+// of RegisterProjection to keep its cognitive complexity within budget.
+func validateProjectionSource(req ProjectionRequest) error {
+	switch req.Source {
+	case "", cellvocab.ProjectionSourceOutbox:
+		if req.Spec.Kind != cellvocab.ContractEvent {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"registry RegisterProjection: Spec.Kind must be \"event\"; an outbox projection consumes an event-kind input stream",
+				errcode.WithInternal(errcode.InternalAttr("specKind", req.Spec.Kind)))
+		}
+		if req.Spec.Topic == "" {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"registry RegisterProjection: Spec.Topic must not be empty")
+		}
+		return req.Spec.Validate()
+	case cellvocab.ProjectionSourceSagaJournal:
+		if req.Spec.Kind != "" || req.Spec.Topic != "" || req.Spec.ID != "" {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"registry RegisterProjection: saga-journal projection must not carry an event Spec; "+
+					"the saga journal is a global stream with no event contract/topic",
+				errcode.WithInternal(errcode.InternalAttr("specKind", req.Spec.Kind)))
+		}
+		return nil
+	default:
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"registry RegisterProjection: unknown projection source",
+			errcode.WithInternal(errcode.InternalAttr("source", string(req.Source))))
+	}
 }
 
 // SubscriptionValidator validates a Subscription at registration time.
@@ -844,10 +912,12 @@ func (r *RegistryRecorder) RegisterWebhookDispatch(
 }
 
 // RegisterProjection validates and appends a ProjectionRequest (record-only —
-// see Registrar.RegisterProjection godoc). Validation mirrors Subscribe (the
-// projection becomes an event subscription once drained): non-nil Apply,
-// non-empty ProjectionID / CellID, and an event-kind Spec with a non-empty
-// Topic. OnReset is optional and not validated.
+// see Registrar.RegisterProjection godoc). The common checks mirror Subscribe:
+// non-nil Apply, non-empty ProjectionID / CellID. The Spec check branches on
+// Source: an outbox projection requires an event-kind Spec with a non-empty Topic
+// (it becomes an event subscription once drained); a saga-journal projection has
+// NO event topic, so it MUST carry the zero-value Spec (EPIC #1609 PR-05).
+// OnReset is optional and not validated.
 func (r *RegistryRecorder) RegisterProjection(req ProjectionRequest) error {
 	r.mustNotBeFinalized("RegisterProjection")
 
@@ -863,16 +933,7 @@ func (r *RegistryRecorder) RegisterProjection(req ProjectionRequest) error {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"registry RegisterProjection: CellID must not be empty")
 	}
-	if req.Spec.Kind != cellvocab.ContractEvent {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"registry RegisterProjection: Spec.Kind must be \"event\"; a projection consumes an event-kind input stream",
-			errcode.WithInternal(errcode.InternalAttr("specKind", req.Spec.Kind)))
-	}
-	if req.Spec.Topic == "" {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"registry RegisterProjection: Spec.Topic must not be empty")
-	}
-	if err := req.Spec.Validate(); err != nil {
+	if err := validateProjectionSource(req); err != nil {
 		return err
 	}
 	// Single-projection-single-subscriber premise (#1369): the consumer group is

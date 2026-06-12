@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fixture.red.data.ref.response",
+  "description": "RED fixture (F2): a GET read whose top-level `data` is expressed as a $ref to a sibling object schema instead of an inline object. The coverage predicate MUST resolve the $ref and flag this as resource-bearing — a $ref `data` must not be a silent bypass of the masking funnel.",
+  "type": "object",
+  "required": ["data"],
+  "properties": {
+    "data": { "$ref": "item.schema.json" }
+  }
+}

@@ -20,6 +20,7 @@ endpoints:
       responses:
         - 503
     noContent: false
+    responseProjection: true
     responses:
       400:
         description: "Bad request — invalid pagination parameter or oversized payload"

@@ -23,6 +23,7 @@ endpoints:
         required: true
     successStatus: 200
     noContent: false
+    responseProjection: true
     auth:
       public: true
     responses:

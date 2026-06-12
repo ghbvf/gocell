@@ -226,3 +226,26 @@ func TestObligations_Validate(t *testing.T) {
 		})
 	}
 }
+
+// TestFieldMask_Masks covers the obligation-query a PEP uses to decide whether a
+// column is governed by the mask (e.g. to reject a masked-column query predicate).
+func TestFieldMask_Masks(t *testing.T) {
+	t.Parallel()
+	fm := FieldMask{Fields: []string{"traceId", "correlationId"}}
+	assert.True(t, fm.Masks("traceId"), "listed column is masked")
+	assert.True(t, fm.Masks("correlationId"))
+	assert.False(t, fm.Masks("subjectId"), "unlisted column is not masked")
+	assert.False(t, fm.Masks(""), "empty column is never masked")
+	// A zero / identity mask masks nothing.
+	assert.False(t, FieldMask{}.Masks("traceId"))
+	assert.False(t, IdentityFieldMask().Masks("traceId"))
+}
+
+// TestIdentityFieldMask asserts the named identity marker is the empty mask
+// (masks nothing) and is interchangeable with a bare FieldMask{}.
+func TestIdentityFieldMask(t *testing.T) {
+	t.Parallel()
+	fm := IdentityFieldMask()
+	assert.True(t, fm.IsZero(), "identity mask masks nothing")
+	assert.NoError(t, fm.Validate(), "identity mask is a valid obligation")
+}

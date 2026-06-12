@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fixture.green.scalar.no.data.response",
+  "description": "GREEN control: a GET read response with NO top-level `data` resource wrapper (a bare scalar status object). It does not carry a maskable resource, so the coverage predicate MUST NOT require the responseProjection marker.",
+  "type": "object",
+  "required": ["ready"],
+  "properties": {
+    "ready": { "type": "boolean" }
+  }
+}

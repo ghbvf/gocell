@@ -137,6 +137,9 @@ func goldenRuleIDs() []string {
 		// (rules_projection_consistency.go)
 		"PROJECTION-CONSISTENCY-01",
 		"PROJECTION-PROVIDE-NEEDS-WRITE-CU-01",
+		// PROJECTION-SAGA-SOURCE-NEEDS-PROJECTION-01 — saga-journal source ↔ saga
+		// contract bidirectional coupling (rules_projection_source.go)
+		"PROJECTION-SAGA-SOURCE-NEEDS-PROJECTION-01",
 
 		// SAGA — saga contract format (rules_saga.go)
 		"SAGA-CONTRACT-BLOCK-PRESENT-01",
