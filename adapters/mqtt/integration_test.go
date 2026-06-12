@@ -472,7 +472,32 @@ func itestPollDispositionSettlement(
 		s, f, _ := coll.snapshot()
 		_, rel := settlement.counts()
 		return s >= wantSuccess && rel >= wantRelease && (wantReason == "" || f >= 1)
-	}, testtime.D10s, testtime.D10ms)
+	}, testtime.D10s, testtime.D10ms,
+		dispositionDiag{coll, settlement, wantSuccess, wantReason, wantRelease})
+}
+
+// dispositionDiag renders the live disposition counters at format time (not at
+// call time, which would capture the pre-poll zero state). It is passed as the
+// testwait.External msgAndArg so a poll timeout's Fatalf carries the
+// actual-vs-wanted counters. Without it the diagnostics are lost: External
+// Fatals on timeout, aborting the test before itestAssertDispositionCounts
+// (which prints the per-counter diffs) can run.
+type dispositionDiag struct {
+	coll        *recordingSubCollector
+	settlement  *recordingSettlement
+	wantSuccess int
+	wantReason  ConsumeFailureReason
+	wantRelease int
+}
+
+func (d dispositionDiag) String() string {
+	success, failure, reason := d.coll.snapshot()
+	commit, release := d.settlement.counts()
+	return fmt.Sprintf(
+		"actual success=%d failure=%d reason=%q commit=%d release=%d; "+
+			"want success=%d release=%d reason=%q",
+		success, failure, reason, commit, release,
+		d.wantSuccess, d.wantRelease, d.wantReason)
 }
 
 // itestAssertDispositionCounts reads the final snapshot from coll and settlement

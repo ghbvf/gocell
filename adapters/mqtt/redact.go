@@ -14,13 +14,15 @@ import (
 // topic; capping bounds log-line size independent of the redaction pass.
 const maxTopicLogLen = 256
 
-// safeTopicForLog sanitizes a broker-delivered (untrusted) MQTT topic before it
-// is logged. pb.Topic is wire bytes the broker forwards verbatim; unlike
-// entry.Topic (which UnmarshalEnvelope validates via idutil.SafeID), the raw
-// topic on the intake-stop drop / unmarshal-poison / ackPoison paths is never
-// validated. Logging it directly is a CWE-117 log-injection sink: a CR/LF or
-// ANSI escape embedded in the topic could forge log lines or corrupt terminal
-// output.
+// safeTopicForLog sanitizes an untrusted MQTT topic before it is logged. Two
+// source categories are untrusted: (1) broker-delivered topics — pb.Topic is
+// wire bytes the broker forwards verbatim; unlike entry.Topic (which
+// UnmarshalEnvelope validates via idutil.SafeID), the raw topic on the
+// intake-stop drop / unmarshal-poison / ackPoison paths is never validated — and
+// (2) caller-supplied publish targets, which Mint/PublishOK check only for
+// namespace prefix and wildcards, not for control characters or secrets. Logging
+// either directly is a CWE-117 log-injection sink: a CR/LF or ANSI escape
+// embedded in the topic could forge log lines or corrupt terminal output.
 //
 // Two-layer fail-closed (mirrors the redact.go redactConnectURL compose):
 //  1. strip control characters (CR, LF, tab, ANSI ESC, other non-printables) so
