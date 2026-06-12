@@ -4,18 +4,23 @@
 MQTT v5 broker（`adapters/mqtt`），用于端到端演示该 adapter。设备 HTTP/WS 主路径
 （注册 API、命令轮询）不受影响。
 
-## 设计：单通道 DI swap
+## 设计：tee fan-out（进程内 eventbus + 外部 MQTT mirror）
 
 iotdevice 是 L4 DeviceLatent，默认用进程内 `eventbus` 发布 `device-registered`
-事件——该事件在进程内**没有订阅者**（contract 的 `actorSubscribers: [example-iot-platform]`
-是外部 actor 占位），所以默认通道对它是一个演示用空 sink。
+事件。该事件在进程内由 `devicebootstrap` 订阅者**反应式消费**、入队 bootstrap 命令
+（#1698 reactive loop）——所以默认通道有一个**真·进程内 sink**（contract 的
+`actorSubscribers: [example-iot-platform]` 另是外部 actor 占位，与该进程内 sink 无关）。
 
 当设置环境变量 `GOCELL_IOTDEVICE_MQTT_BROKERS` 时，组合根（`run.go`）把 cell 的
-direct publisher **切换**为 MQTT publisher——事件改发往 broker，可用 `mosquitto_sub`
-观测。这是**单通道切换**，不是并行镜像：没有第二个进程内 sink 需要镜像。
+direct publisher 包成 `teePublisher`——事件**同时**投递到进程内 `eventbus`（继续喂
+#1698 订阅者）**和**外部 MQTT broker（可用 `mosquitto_sub` 观测）。这是**并行 tee
+双投递**（local eventbus + external MQTT mirror），不是单通道切换：进程内订阅者必须
+继续收到事件，故 MQTT 是**叠加的外部观测 mirror**、不能替换默认通道。MQTT leg
+fail-open（见下「broker 不可用时」），是 at-most-once 镜像。
 
-> 对标：Watermill / go-micro / Kratos 演示某 transport 的惯用法是切换/配置 Publisher
-> 实现（DI），而非 fan-out。fan-out/tee 是真·多 sink 或迁移双写专用。
+> 对标：Watermill / go-micro / Kratos 用切换/配置 Publisher（DI）演示**单 sink** transport，
+> 用 fan-out/tee 处理**真·多 sink**。本例因 #1698 引入进程内订阅者而存在真·多 sink
+> （devicebootstrap + 外部 MQTT），故用 tee 而非 swap。
 > ref: `ThreeDotsLabs/watermill` `message/decorator.go`（transform decorator）。
 
 事件类型是点号形式 `event.device-registered.v1`；MQTT topic 是斜杠分层 + namespace
