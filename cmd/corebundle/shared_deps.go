@@ -2,12 +2,10 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"strings"
 
-	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
@@ -89,12 +87,12 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 		}
 	}
 
-	// Build cmdLocals for cmd-private wiring (prometheus adapter types,
-	// vault-metrics factory, pool MR, metrics handler). locals must be built
-	// before the configcore key-provider so that locals.vaultTransitMetrics
-	// (the once-guarded factory) is available. The internal-listener guard
-	// components (HMAC ring + NonceStore) now live on composition.SharedDeps,
-	// not here — control-plane validation introspects them from SharedDeps (#1410).
+	// Build cmdLocals for cmd-private wiring (prometheus adapter types, pool MR,
+	// metrics handler). The internal-listener guard components (HMAC ring +
+	// NonceStore) now live on composition.SharedDeps, not here — control-plane
+	// validation introspects them from SharedDeps (#1410). The configcore key
+	// provider is now self-built inside cellmodules/configcore.Module.Provide
+	// (#1413/#885): cmd no longer needs vaultTransitMetrics or the vault adapter.
 	locals := &cmdLocals{
 		registry:       metricsDeps.PromStack.registry,
 		hookObserver:   metricsDeps.PromStack.hookObserver,
@@ -102,23 +100,6 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 		metricsHandler: metricsHandler,
 	}
 	locals.redisClient = replay.RedisClient
-	locals.initVaultMetricsFactory()
-
-	// Build configcore key provider. It lives in cmd because the vault-transit
-	// path builds adapters/vault.TransitMetrics from a raw prometheus registry
-	// (migrating it into configcore is gated on #885). The stale-cipher counter
-	// moved to cellmodules/configcore in #1413 — it routes through the kernel
-	// MetricsProvider, so configcore self-builds it.
-	cfgProviderName, cfgMasterKey, cfgPrevMasterKey := cellsecrets.LoadConfigCoreKeyProvider()
-	cfgKeyProvider, err := buildKeyProviderFromName(
-		topo.StorageBackend(), adapterMode,
-		cfgProviderName, cfgMasterKey, cfgPrevMasterKey,
-		clk,
-		locals.vaultTransitMetrics,
-	)
-	if err != nil {
-		return nil, nil, fmt.Errorf("configcore key provider: %w", err)
-	}
 
 	// Build composition.SharedDeps (public, interface-only fields consumed by
 	// platform cell modules). The control-plane production checks (verbose /
@@ -145,7 +126,6 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 		VerboseToken:         verboseToken,
 		VerboseDisabled:      verboseDisabled,
 		ProjectRoot:          os.Getenv("GOCELL_PROJECT_ROOT"),
-		ConfigKeyProvider:    cfgKeyProvider,
 	})
 	if err != nil {
 		slog.Warn("corebundle: SharedDeps validation failed",

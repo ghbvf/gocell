@@ -4,7 +4,7 @@ go 1.25.11
 
 require (
 	github.com/ghbvf/gocell v0.0.0
-	github.com/ghbvf/gocell/adapters/prometheus v0.0.0
+	github.com/ghbvf/gocell/adapters/prometheus v0.0.0-00010101000000-000000000000
 	github.com/hashicorp/vault/api v1.23.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
@@ -48,7 +48,6 @@ require (
 	github.com/hashicorp/go-sockaddr v1.0.7 // indirect
 	github.com/hashicorp/hcl v1.0.1-vault-7 // indirect
 	github.com/klauspost/compress v1.18.5 // indirect
-	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/magiconair/properties v1.8.10 // indirect
 	github.com/mattn/go-isatty v0.0.21 // indirect

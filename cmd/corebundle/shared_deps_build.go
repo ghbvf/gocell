@@ -30,11 +30,11 @@ type sharedMetricsDeps struct {
 // buildSharedMetricsDeps assembles framework-level always-on metric collectors
 // (config events). The eventbus-cache and stale-cipher collectors moved to
 // cellmodules/configcore (#1413) — they are configcore-specific and route
-// through the kernel MetricsProvider, so configcore self-builds them.
-// Provider-conditional metrics (vault) live in dedicated lazy methods on
-// cmdLocals (initVaultMetricsFactory) so deployments that don't use the
-// corresponding backend don't pollute their scrape footprint with always-zero
-// series.
+// through the kernel MetricsProvider, so configcore self-builds them. The
+// vault-transit metrics also moved to cellmodules/configcore (#1413/#885):
+// adapters/vault.NewTransitMetrics now accepts a kernel MetricsProvider
+// (client_golang-free in non-test code), so cmd no longer needs a lazy
+// factory for them.
 //
 // Failure here is composition-root fatal (LoadSharedDepsFromEnv returns the
 // error and the process exits); no LIFO rollback needed because every

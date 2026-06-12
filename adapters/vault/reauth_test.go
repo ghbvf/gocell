@@ -16,8 +16,6 @@ import (
 	"time"
 
 	vaultapi "github.com/hashicorp/vault/api"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -174,11 +172,7 @@ func TestDoReauth_SucceedsAfterNFailures(t *testing.T) {
 		failErr:      watcherErr,
 	}
 
-	reg := prometheus.NewRegistry()
-	metrics, mErr := NewTransitMetrics(reg)
-	if mErr != nil {
-		t.Fatalf("NewTransitMetrics: %v", mErr)
-	}
+	reg, metrics := buildTestMetrics(t)
 	// authHealthy starts at 0 by default; the test verifies doReauth restores it to 1.
 
 	w := &tokenRenewalWorker{
@@ -200,7 +194,7 @@ func TestDoReauth_SucceedsAfterNFailures(t *testing.T) {
 		t.Fatal("doReauth must return non-nil watcher on success")
 	}
 	// authHealthy must be restored to 1 after success.
-	if got := testutil.ToFloat64(metrics.authHealthy); got != 1 {
+	if got := scrapeGauge(t, reg, "gocell_vault_token_auth_healthy"); got != 1 {
 		t.Errorf("authHealthy after doReauth success = %v, want 1", got)
 	}
 	callMu.Lock()

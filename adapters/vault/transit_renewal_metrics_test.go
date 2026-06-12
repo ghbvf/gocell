@@ -18,9 +18,6 @@ import (
 	"time"
 
 	vaultapi "github.com/hashicorp/vault/api"
-	prom "github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
-	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -31,9 +28,7 @@ import (
 const transitRenewalBackoffBudget = 3*time.Second + reauthBackoffInitial
 
 func TestTransitKeyProvider_CacheVersionMetrics_ReportsCachedLatestVersion(t *testing.T) {
-	reg := prom.NewRegistry()
-	metrics, err := NewTransitMetrics(reg)
-	require.NoError(t, err)
+	reg, metrics := buildTestMetrics(t)
 
 	metrics.StoreCachedVersion(7)
 	if got := scrapeGauge(t, reg, "gocell_vault_cached_key_version"); got != 7 {
@@ -53,11 +48,7 @@ func TestTransitKeyProvider_CacheVersionMetrics_ReportsCachedLatestVersion(t *te
 // at zero.
 func TestTokenRenewalWorker_HandleRenewal_IncrementsSuccessCounter(t *testing.T) {
 	fw := newFakeTokenWatcher()
-	reg := prom.NewRegistry()
-	metrics, mErr := NewTransitMetrics(reg)
-	if mErr != nil {
-		t.Fatalf("NewTransitMetrics: %v", mErr)
-	}
+	reg, metrics := buildTestMetrics(t)
 
 	w := &tokenRenewalWorker{
 		currentWatcher: fw,
@@ -90,7 +81,7 @@ func TestTokenRenewalWorker_HandleRenewal_IncrementsSuccessCounter(t *testing.T)
 
 	// Wait for the loop to consume the renewal before canceling.
 	testwait.External(t, "vault-auth-renewed", func() bool {
-		return testutil.ToFloat64(metrics.renewSuccess) >= 1
+		return tryGatherCounter(reg, "gocell_vault_token_renew_success_total") >= 1
 	}, testtime.D2s, testtime.D1ms, "successCtr must reach 1 after renewal event")
 	cancel()
 
@@ -103,10 +94,10 @@ func TestTokenRenewalWorker_HandleRenewal_IncrementsSuccessCounter(t *testing.T)
 		t.Fatal("Start() did not return after context cancel")
 	}
 
-	if got := testutil.ToFloat64(metrics.renewSuccess); got != 1 {
+	if got := scrapeCounter(t, reg, "gocell_vault_token_renew_success_total"); got != 1 {
 		t.Errorf("renewSuccess counter = %v, want 1", got)
 	}
-	if got := testutil.ToFloat64(metrics.renewFailure); got != 0 {
+	if got := scrapeCounter(t, reg, "gocell_vault_token_renew_failure_total"); got != 0 {
 		t.Errorf("renewFailure counter = %v, want 0", got)
 	}
 }
@@ -115,11 +106,7 @@ func TestTokenRenewalWorker_HandleRenewal_IncrementsSuccessCounter(t *testing.T)
 // verifies that multiple renewal events accumulate on the success counter.
 func TestTokenRenewalWorker_HandleRenewal_MultipleRenewals_AccumulatesSuccessCounter(t *testing.T) {
 	fw := newFakeTokenWatcher()
-	reg2 := prom.NewRegistry()
-	metrics2, mErr2 := NewTransitMetrics(reg2)
-	if mErr2 != nil {
-		t.Fatalf("NewTransitMetrics: %v", mErr2)
-	}
+	reg2, metrics2 := buildTestMetrics(t)
 
 	w := &tokenRenewalWorker{
 		currentWatcher: fw,
@@ -153,7 +140,7 @@ func TestTokenRenewalWorker_HandleRenewal_MultipleRenewals_AccumulatesSuccessCou
 
 	// Wait for all three to be consumed.
 	testwait.External(t, "vault-auth-renewed", func() bool {
-		return testutil.ToFloat64(metrics2.renewSuccess) >= 3
+		return tryGatherCounter(reg2, "gocell_vault_token_renew_success_total") >= 3
 	}, testtime.D2s, testtime.D1ms, "successCtr must reach 3 after three renewal events")
 	cancel()
 
@@ -163,10 +150,10 @@ func TestTokenRenewalWorker_HandleRenewal_MultipleRenewals_AccumulatesSuccessCou
 		t.Fatal("Start() did not return after context cancel")
 	}
 
-	if got := testutil.ToFloat64(metrics2.renewSuccess); got != 3 {
+	if got := scrapeCounter(t, reg2, "gocell_vault_token_renew_success_total"); got != 3 {
 		t.Errorf("renewSuccess counter = %v, want 3", got)
 	}
-	if got := testutil.ToFloat64(metrics2.renewFailure); got != 0 {
+	if got := scrapeCounter(t, reg2, "gocell_vault_token_renew_failure_total"); got != 0 {
 		t.Errorf("renewFailure counter = %v, want 0", got)
 	}
 }
@@ -179,11 +166,7 @@ func TestTokenRenewalWorker_HandleRenewal_MultipleRenewals_AccumulatesSuccessCou
 // reauthenticate(). ctx cancellation causes Start to return nil.
 func TestTokenRenewalWorker_HandleDone_NilError_IncrementsFailureCounter(t *testing.T) {
 	fw := newFakeTokenWatcher()
-	reg3 := prom.NewRegistry()
-	metrics3, mErr3 := NewTransitMetrics(reg3)
-	if mErr3 != nil {
-		t.Fatalf("NewTransitMetrics: %v", mErr3)
-	}
+	reg3, metrics3 := buildTestMetrics(t)
 	permErr := errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed, "test re-auth failure")
 	fakeAuth := &fakeAuthMethod{
 		method:       MethodAppRole,
@@ -209,7 +192,7 @@ func TestTokenRenewalWorker_HandleDone_NilError_IncrementsFailureCounter(t *test
 
 	// Wait for renewFailure to be incremented, then cancel.
 	testwait.External(t, "vault-transit-key-rotated", func() bool {
-		return testutil.ToFloat64(metrics3.renewFailure) >= 1
+		return tryGatherCounter(reg3, "gocell_vault_token_renew_failure_total") >= 1
 	}, testtime.D2s, testtime.D1ms)
 	cancel()
 
@@ -222,10 +205,10 @@ func TestTokenRenewalWorker_HandleDone_NilError_IncrementsFailureCounter(t *test
 		t.Fatal("Start() did not return after DoneCh fired")
 	}
 
-	if got := testutil.ToFloat64(metrics3.renewFailure); got != 1 {
+	if got := scrapeCounter(t, reg3, "gocell_vault_token_renew_failure_total"); got != 1 {
 		t.Errorf("renewFailure counter = %v, want 1", got)
 	}
-	if got := testutil.ToFloat64(metrics3.renewSuccess); got != 0 {
+	if got := scrapeCounter(t, reg3, "gocell_vault_token_renew_success_total"); got != 0 {
 		t.Errorf("renewSuccess counter = %v, want 0", got)
 	}
 }
@@ -235,11 +218,7 @@ func TestTokenRenewalWorker_HandleDone_NilError_IncrementsFailureCounter(t *test
 // increments renewFailure.
 func TestTokenRenewalWorker_HandleDone_NonNilError_IncrementsFailureCounter(t *testing.T) {
 	fw := newFakeTokenWatcher()
-	reg4 := prom.NewRegistry()
-	metrics4, mErr4 := NewTransitMetrics(reg4)
-	if mErr4 != nil {
-		t.Fatalf("NewTransitMetrics: %v", mErr4)
-	}
+	reg4, metrics4 := buildTestMetrics(t)
 	permErr := errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed, "test re-auth failure")
 	fakeAuth := &fakeAuthMethod{
 		method:       MethodAppRole,
@@ -265,7 +244,7 @@ func TestTokenRenewalWorker_HandleDone_NonNilError_IncrementsFailureCounter(t *t
 
 	// Wait for renewFailure to be incremented, then cancel.
 	testwait.External(t, "vault-transit-key-rotated", func() bool {
-		return testutil.ToFloat64(metrics4.renewFailure) >= 1
+		return tryGatherCounter(reg4, "gocell_vault_token_renew_failure_total") >= 1
 	}, testtime.D2s, testtime.D1ms)
 	cancel()
 
@@ -278,10 +257,10 @@ func TestTokenRenewalWorker_HandleDone_NonNilError_IncrementsFailureCounter(t *t
 		t.Fatal("Start() did not return after DoneCh fired with error")
 	}
 
-	if got := testutil.ToFloat64(metrics4.renewFailure); got != 1 {
+	if got := scrapeCounter(t, reg4, "gocell_vault_token_renew_failure_total"); got != 1 {
 		t.Errorf("renewFailure counter = %v, want 1", got)
 	}
-	if got := testutil.ToFloat64(metrics4.renewSuccess); got != 0 {
+	if got := scrapeCounter(t, reg4, "gocell_vault_token_renew_success_total"); got != 0 {
 		t.Errorf("renewSuccess counter = %v, want 0", got)
 	}
 }
@@ -391,11 +370,7 @@ func TestTokenRenewalWorker_NilCounters_NoopOnDone(t *testing.T) {
 // error is ErrVaultAuthFailed, not a network timeout).
 func TestRenewalWorker_DoneChError_TriggersReauth(t *testing.T) {
 	fw := newFakeTokenWatcher()
-	reg5 := prom.NewRegistry()
-	metrics5, mErr5 := NewTransitMetrics(reg5)
-	if mErr5 != nil {
-		t.Fatalf("NewTransitMetrics: %v", mErr5)
-	}
+	reg5, metrics5 := buildTestMetrics(t)
 
 	permErr := errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed, "always fails")
 	fakeAuth := &fakeAuthMethod{
@@ -435,7 +410,8 @@ func TestRenewalWorker_DoneChError_TriggersReauth(t *testing.T) {
 	}
 
 	// ErrVaultAuthFailed errors classify as "other" (not a network/timeout error).
-	failureCount := testutil.ToFloat64(metrics5.loginOutcome.WithLabelValues(string(MethodAppRole), "failure", reasonOther))
+	failureCount := scrapeCounterVec(t, reg5, "gocell_vault_auth_login_total",
+		map[string]string{"method": string(MethodAppRole), "result": "failure", "reason": reasonOther})
 	if failureCount < 1 {
 		t.Errorf("expected at least 1 login failure counter increment (reason=other), got %v", failureCount)
 	}
@@ -446,11 +422,7 @@ func TestRenewalWorker_DoneChError_TriggersReauth(t *testing.T) {
 // re-auth starts. ctx cancellation is the exit condition.
 func TestRenewalWorker_ReauthBackoff_RetriesUntilCancelled(t *testing.T) {
 	fw := newFakeTokenWatcher()
-	reg6 := prom.NewRegistry()
-	metrics6, mErr6 := NewTransitMetrics(reg6)
-	if mErr6 != nil {
-		t.Fatalf("NewTransitMetrics: %v", mErr6)
-	}
+	reg6, metrics6 := buildTestMetrics(t)
 
 	// authHealthy starts at 0 by default from NewTransitMetrics.
 
@@ -484,7 +456,7 @@ func TestRenewalWorker_ReauthBackoff_RetriesUntilCancelled(t *testing.T) {
 	// authHealthy starts at 0 in NewTransitMetrics; doReauth sets it 0 on entry and
 	// 1 only after a successful buildWatcher — but fakeAuth always fails so it stays 0.
 	testwait.External(t, "vault-readiness-flipped", func() bool {
-		return testutil.ToFloat64(metrics6.authHealthy) == 0
+		return tryGatherGauge(reg6, "gocell_vault_token_auth_healthy") == 0
 	}, testtime.D2s, time.Millisecond, "authHealthy should remain 0 on DoneCh (re-authing)")
 
 	// Wait for 2 failure logins to be recorded.
@@ -504,7 +476,8 @@ func TestRenewalWorker_ReauthBackoff_RetriesUntilCancelled(t *testing.T) {
 	}
 
 	// Verify failure counter.
-	failureCount := testutil.ToFloat64(metrics6.loginOutcome.WithLabelValues(string(MethodAppRole), "failure", reasonOther))
+	failureCount := scrapeCounterVec(t, reg6, "gocell_vault_auth_login_total",
+		map[string]string{"method": string(MethodAppRole), "result": "failure", "reason": reasonOther})
 	if failureCount < 2 {
 		t.Errorf("expected >= 2 login failure counter increments, got %v", failureCount)
 	}
@@ -564,11 +537,7 @@ func TestRenewalWorker_CtxCancelDuringReauth_ReturnsCleanly(t *testing.T) {
 // to 0, and it stays 0 because ctx is canceled during re-auth before success.
 func TestRenewalWorker_AuthHealthyGauge_TransitionsOnStates(t *testing.T) {
 	fw := newFakeTokenWatcher()
-	reg7 := prom.NewRegistry()
-	metrics7, mErr7 := NewTransitMetrics(reg7)
-	if mErr7 != nil {
-		t.Fatalf("NewTransitMetrics: %v", mErr7)
-	}
+	reg7, metrics7 := buildTestMetrics(t)
 	// Note: NewTransitMetrics leaves authHealthy at 0; Start (below) is the
 	// path that flips it to 1 after the nil-watcher guard.
 
@@ -596,7 +565,7 @@ func TestRenewalWorker_AuthHealthyGauge_TransitionsOnStates(t *testing.T) {
 	// Set(1) now lives inside Start after the nil-watcher guard, not in
 	// initTokenRenewal). Without this wait we'd race against goroutine scheduling.
 	testwait.External(t, "vault-readiness-set", func() bool {
-		return testutil.ToFloat64(metrics7.authHealthy) == 1
+		return tryGatherGauge(reg7, "gocell_vault_token_auth_healthy") == 1
 	}, testtime.D2s, time.Millisecond, "Start must flip authHealthy 0→1 after nil-watcher guard")
 
 	// Trigger re-auth.
@@ -604,7 +573,7 @@ func TestRenewalWorker_AuthHealthyGauge_TransitionsOnStates(t *testing.T) {
 
 	// Wait for gauge to drop to 0.
 	testwait.External(t, "vault-readiness-flipped", func() bool {
-		return testutil.ToFloat64(metrics7.authHealthy) == 0
+		return tryGatherGauge(reg7, "gocell_vault_token_auth_healthy") == 0
 	}, testtime.D2s, time.Millisecond, "authHealthy should drop to 0 after DoneCh")
 
 	cancel()
@@ -622,11 +591,7 @@ func TestRenewalWorker_AuthHealthyGauge_TransitionsOnStates(t *testing.T) {
 // failure — ctx cancel exits the loop.
 func TestRenewalWorker_LoginOutcomeCounter_LabelsSet(t *testing.T) {
 	fw := newFakeTokenWatcher()
-	reg8 := prom.NewRegistry()
-	metrics8, mErr8 := NewTransitMetrics(reg8)
-	if mErr8 != nil {
-		t.Fatalf("NewTransitMetrics: %v", mErr8)
-	}
+	reg8, metrics8 := buildTestMetrics(t)
 
 	// Two timeout failures, then permanently fail to prevent buildWatcher on nil client.
 	permErr := errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed, "permanent other")
@@ -659,8 +624,8 @@ func TestRenewalWorker_LoginOutcomeCounter_LabelsSet(t *testing.T) {
 
 	// Wait for at least 2 timeout failures to be recorded.
 	testwait.External(t, "vault-auth-renewed", func() bool {
-		return testutil.ToFloat64(metrics8.loginOutcome.WithLabelValues(
-			string(MethodAppRole), "failure", reasonTimeout)) >= 2
+		return tryGatherCounterVec(reg8, "gocell_vault_auth_login_total",
+			map[string]string{"method": string(MethodAppRole), "result": "failure", "reason": reasonTimeout}) >= 2
 	}, testtime.EventuallyLong, testtime.D10ms, "expected 2 timeout failures")
 
 	cancel()
@@ -671,8 +636,8 @@ func TestRenewalWorker_LoginOutcomeCounter_LabelsSet(t *testing.T) {
 	}
 
 	// Two timeout failures.
-	timeoutFailures := testutil.ToFloat64(
-		metrics8.loginOutcome.WithLabelValues(string(MethodAppRole), "failure", reasonTimeout))
+	timeoutFailures := scrapeCounterVec(t, reg8, "gocell_vault_auth_login_total",
+		map[string]string{"method": string(MethodAppRole), "result": "failure", "reason": reasonTimeout})
 	if timeoutFailures < 2 {
 		t.Errorf("timeout failure counter = %v, want >= 2", timeoutFailures)
 	}

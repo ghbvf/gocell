@@ -39,7 +39,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	kauth "github.com/ghbvf/gocell/kernel/auth"
 
 	"github.com/stretchr/testify/assert"
@@ -90,26 +89,22 @@ type configEntryUpsertedBusinessPayload struct {
 // driving the E2E configcore postgres path via buildConfigCoreCellFromShared.
 // It uses the test-default shared (from buildTestSharedDepsAndLocals) and
 // overrides Topology, PG, and EventBus.
+//
+// The key provider is no longer built here: cellmodules/configcore.Module.Provide
+// self-builds it from GOCELL_CONFIGCORE_KEY_PROVIDER and related env vars
+// (#1413/#885). Callers must set those env vars before calling this helper.
 func buildE2EConfigCoreShared(
 	t *testing.T, eb *eventbus.InMemoryEventBus, pgProvider capability.PGProvider,
 ) *composition.SharedDeps {
 	t.Helper()
 	shared, _ := buildTestSharedDepsAndLocals(t)
-	// The sealed Topology forbids postgres with a non-real adapter mode, and F3
-	// requires a real ConfigKeyProvider for real postgres persistence (no
-	// NoopTransformer fallback). Run the e2e PG path under real mode and wire the
-	// real-mode cursor key + key provider from the env the caller set.
+	// The sealed Topology forbids postgres with a non-real adapter mode. Run the
+	// e2e PG path under real mode and wire the real-mode cursor key from the env
+	// the caller set. The key provider is self-built by configcore.Module.Provide.
 	t.Setenv("GOCELL_CONFIGCORE_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
 	shared.Topology = mkTopo("real", "postgres", true)
 	shared.PG = pgProvider
 	shared.EventBus = eb
-
-	providerName, masterKey, prevMasterKey := cellsecrets.LoadConfigCoreKeyProvider()
-	kp, err := buildKeyProviderFromName(
-		"postgres", "real", providerName, masterKey, prevMasterKey, clock.Real(), nil,
-	)
-	require.NoError(t, err, "build configcore key provider for e2e")
-	shared.ConfigKeyProvider = kp
 	return shared
 }
 

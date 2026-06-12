@@ -35,13 +35,11 @@ import (
 // that call buildAssembly / runtimeBaseOptions / defaultRuntimeOptions
 // directly without going through the full runCorebundle path.
 func promStackToLocals(ps promStack) *cmdLocals {
-	l := &cmdLocals{
+	return &cmdLocals{
 		registry:       ps.registry,
 		hookObserver:   ps.hookObserver,
 		metricProvider: ps.metricProvider,
 	}
-	l.initVaultMetricsFactory()
-	return l
 }
 
 // buildTestSharedDepsAndLocals returns a minimal composition.SharedDeps and
@@ -99,7 +97,6 @@ func buildTestSharedDepsAndLocals(t *testing.T) (*composition.SharedDeps, *cmdLo
 		hookObserver:   ps.hookObserver,
 		metricProvider: ps.metricProvider,
 	}
-	locals.initVaultMetricsFactory()
 
 	return shared, locals
 }
@@ -158,7 +155,6 @@ func newValidatedSharedDepsAndLocals(t *testing.T, topo bootstrap.Topology) (*co
 		hookObserver:   ps.hookObserver,
 		metricProvider: ps.metricProvider,
 	}
-	locals.initVaultMetricsFactory()
 
 	return shared, locals
 }

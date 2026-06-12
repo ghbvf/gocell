@@ -8,17 +8,18 @@
 //
 // Exposed surface:
 //
-//   - NewMetricProvider      — registers instruments on a *prom.Registry
-//   - NewHookObserver        — direct cell lifecycle observer (sync per-event)
-//   - RegisterOrReuseCounter — idempotent register-or-reuse helper for bare counters
-//   - NewCounter             — public passthrough wrapper for adapters outside the
-//     prometheus subtree (e.g. adapters/vault) blocked by Go internal/ closure
-//   - NewGauge               — public passthrough wrapper (same rationale as NewCounter)
-//   - NewGaugeFunc           — public passthrough wrapper (same rationale as NewCounter)
-//   - NewCounterVec          — vault-only LABELED carve-out, NOT a sanctioned path:
-//     bypasses metrics.Provider label/cardinality governance; debt pending
-//     removal (vault loginOutcome → metrics.Provider.CounterVec, issue #885).
-//     New labeled metrics MUST use metrics.Provider — do not add callers.
+//   - NewMetricProvider — registers instruments on a *prom.Registry and
+//     returns a kernel/observability/metrics.Provider implementation. All
+//     metric construction for callers outside this package must route through
+//     this factory (or HookObserver for lifecycle events).
+//   - NewHookObserver — direct cell lifecycle observer (sync per-event).
+//
+// The five public passthrough wrappers (RegisterOrReuseCounter, NewCounter,
+// NewCounterVec, NewGauge, NewGaugeFunc) were removed in issue #885 when
+// adapters/vault migrated to kernel/observability/metrics.Provider. The funnel
+// is now inner-ring only: adapters/prometheus/internal/promwrap is the sole
+// Prometheus construction site, protected by Go internal/ visibility (Hard
+// constraint — no outer-ring escape hatch remains).
 //
 // ref: github.com/prometheus/client_golang — Registry, CounterVec, HistogramVec.
 // Adopted: isolated Registry per provider, promhttp exposition owned by caller.
