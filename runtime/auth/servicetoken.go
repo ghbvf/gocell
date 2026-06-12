@@ -211,12 +211,18 @@ func LoadHMACKeyRingFromEnv() (*HMACKeyRing, error) {
 }
 
 // ServiceTokenMiddleware validates requests using HMAC-SHA256 service tokens.
-// The token is expected in the Authorization header as:
+// The token is expected in the Authorization header as the 4-part payload:
 //
-//	ServiceToken {unix_timestamp}:{nonce}:{hex_hmac}
+//	ServiceToken {unix_timestamp}:{nonce}:{callerCell}:{hex_hmac}
 //
 // The HMAC is computed over
-// "{method} {path}[?{canonicalQuery}] {timestamp} {nonce}".
+// "{method} {path}[?{canonicalQuery}] {timestamp} {nonce} {callerCell} x-tenant-id=<value>"
+// — i.e. the caller cell is a MAC segment, and the X-Tenant-ID signed header is
+// folded unconditionally as the trailing "x-tenant-id=<value>" segment (empty for
+// no-tenant requests). buildServiceTokenMessage is the single source for this
+// material; sign (GenerateServiceToken) and verify (verifyServiceTokenPayload)
+// both call it, so tampering with the caller identity or the tenant header
+// invalidates the MAC (see HeaderTenantID).
 //
 // Verification tries each secret in the key ring in order (current, then
 // previous). Tokens older than 5 minutes (exclusive boundary) are rejected.

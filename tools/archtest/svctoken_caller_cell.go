@@ -139,9 +139,26 @@ func collectGenerateServiceTokenDiagsFromFile(
 // / non-literal / empty / pattern-malformed / unknown; otherwise (zero, false)
 // for unrelated or valid calls. callerCell remains argument index 1; the
 // signature is GenerateServiceToken(ring, callerCell, method, path, query, tenantID, ts).
-// Only callerCell (index 1) is guarded here; tenantID (index 5) needs no archtest
-// because it is a typed tenant.TenantID (the type system constrains it to canonical
-// tenant values), not a raw string.
+//
+// Scope: only callerCell (index 1) is statically guarded here. tenantID (index 5)
+// is deliberately NOT archtest-guarded — and the typed tenant.TenantID parameter
+// must not be mistaken for a Hard guard of its value. tenant.TenantID is
+// `type TenantID string` (pkg/tenant/tenant_id.go) with String() returning the raw
+// value, so tenant.TenantID("") and conversions of arbitrary strings remain
+// expressible; the type buys call-site ergonomics (no accidental bare-string
+// arg), not canonicality. Two reasons no static rule is added:
+//   - There is no static path→tenant-requirement mapping, so a scanner cannot
+//     decide which GenerateServiceToken call sites must sign a NON-EMPTY tenant.
+//   - The tenant value is already closed at runtime, not statically:
+//     (a) integrity is Hard — X-Tenant-ID is folded into the MAC unconditionally
+//     (buildServiceTokenMessage), so tamper/inject/strip → MAC mismatch → 401,
+//     structurally unforgeable; (b) non-emptiness for tenant-scoped internal paths
+//     is Medium runtime fail-closed — configcore's handler ParseTenantID rejects
+//     absent/malformed/nil-UUID X-Tenant-ID with 400.
+//
+// Adding a Soft archtest here (or a Medium one guarding the single existing
+// tenant-scoped caller) would duplicate that runtime closure without raising the
+// bar, so the runtime fail-closed is the deliberate carrier.
 func generateServiceTokenCallDiag(p *Pass, call *ast.CallExpr, rel string, knownCells map[string]bool) (Diagnostic, bool) {
 	path, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
 	if !ok || path != authRuntimeImportPath || name != "GenerateServiceToken" {

@@ -95,7 +95,7 @@ func jwtClaimsToPrincipal(c Claims) *Principal {
 }
 
 // NewServiceTokenAuthenticator returns an Authenticator that validates HMAC
-// service tokens (Authorization: ServiceToken <ts>:<nonce>:<mac>).
+// service tokens (Authorization: ServiceToken <ts>:<nonce>:<callerCell>:<mac>).
 //
 // Returns an error when:
 //   - ring is nil or a typed-nil interface;
