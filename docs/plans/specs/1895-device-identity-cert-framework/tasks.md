@@ -123,7 +123,7 @@ graph TD
 - [ ] T3.1 [TDD] 契约级测试：正常 schema / 参数错误 / 鉴权边界 / path 校验。
 - [ ] T3.2 `contracts/http/deviceidentity/{enroll,renew,revoke,status}/v1/contract.yaml` + schema（PKCS#10/PKCS#7 wire 形状、证书状态）。
 - [ ] T3.3 `contracts/event/deviceidentity/{cert-issued,cert-revoked}/v1/`（L2 outbox 事实 schema）。
-- [ ] T3.4 `contracts/devicestate/v1/`（online/offline/last-seen 查询）。
+- [ ] T3.4 `contracts/http/devicestate/v1/`（online/offline/last-seen 查询）。
 - [ ] T3.5 codegen（`gocell generate`）→ generated handler/client/types；slice.yaml `contractUsages` 派生 registration。
 - [ ] T3.6 contract-fanout implementation matrix（contract/generated/cell-slice/tests/docs）。
 
@@ -132,7 +132,7 @@ graph TD
 **Goal**：定义合规 `devicecompliance/v1`（喂 Authorize 决策的设备态势）+ 远程命令 `remotecommand/v1`（承接既有 enqueue 形状）。依赖 PR-3 的 codegen 范式 + archtest。
 
 - [ ] T4.1 [TDD] 契约级测试（同 PR-3 范式）。
-- [ ] T4.2 `contracts/devicecompliance/v1/`（BitLocker/AV/补丁/防火墙等态势属性查询）。
+- [ ] T4.2 `contracts/http/devicecompliance/v1/`（BitLocker/AV/补丁/防火墙等态势属性查询）。
 - [ ] T4.3 `contracts/command/remotecommand/v1/`：字段形状对齐既有 `command.devicecommand.enqueue.v1`（PR-9 迁移目标）。
 - [ ] T4.4 codegen + slice 派生 + fanout matrix。
 - [ ] T4.5 enforcement：契约 schema reflect-freeze（DTO 字段集冻结）+ active-subscriber 警告（死契约）。

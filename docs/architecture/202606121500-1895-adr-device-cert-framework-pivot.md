@@ -95,7 +95,7 @@ lifecycle、EST 前端、生产 device 主体。
 | 吊销与续期竞态（吊销正在续期的证书） | epoch 单调 CAS（fencing）保证终态一致；`certlifecycle` 状态机 revoke 转换串行化 | Hard（复用 fencing）/ Medium（状态机测试） |
 | 多租户证书 reconcile 串租户 | reconcile system identity 清空 tenant（#1821）；scan + 命令 key + 签发请求自带 tenant 维度 | Medium |
 | 跨租户吊销（凭裸 serial 吊销他租户证书） | `Revoke`/`RevocationList`/`Tidy` 带 `CertScope`（tenant+issuer+device）typed 位置参，与签发同源；漏传编译错（`CERT-REVOKE-SCOPED-01`）；跨租户/issuer fail-closed | 上游 Hard（typed scope 漏传编译错）/ 下游 Medium（fail-closed 测试） |
-| EST 注册鉴权绕过 | `EST-ENROLL-AUTH-BOUNDARY-01`（enroll=bootstrap/设备凭证；reenroll=现证书 mTLS；缺则 fail-closed） | Medium |
+| EST 注册鉴权绕过 | `EST-ENROLL-AUTH-BOUNDARY-01`（enroll=专用 enrollment-credential/device-token，**不复用** setup `auth.bootstrap:true`；reenroll=现证书 mTLS；EST 挂版本化 cell 路径，缺则 fail-closed） | Medium |
 | 续期惊群 | jitter 续期窗口（k8s 70-90% 寿命模型） | —（工程） |
 | device PII（serial/subject/device_id 入日志/wire） | 复用 `pkg/redaction`（#1695）；审计前 hash/redact | Medium |
 
