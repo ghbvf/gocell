@@ -174,12 +174,12 @@
     },
     "oos": {
       "type": ["object", "null"],
-      "description": "Out-of-scope findings data, present only for pm:oos comments, null otherwise. Each item is a lossless per-finding record staged for future `gh issue create`.",
+      "description": "Out-of-scope findings data, present only for pm:oos comments, null otherwise. Each item is a lossless per-finding record that has been auto-filed as a backlog issue (carries `issue`) or explicitly deferred for human action (carries `deferred`).",
       "additionalProperties": false,
       "properties": {
         "items": {
           "type": "array",
-          "description": "Per-finding OOS records. Each item carries the full finding detail needed for gh issue creation.",
+          "description": "Per-finding OOS records. Each item carries the full finding detail plus its disposition: exactly one of a filed `issue` ref or a closed-enum `deferred` reason (the XOR is enforced by pr-meta.sh validate_kind_facts, since this walker does not express oneOf).",
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -209,6 +209,15 @@
                   "thorough": { "type": "string", "minLength": 1 },
                   "refactor": { "type": "string", "minLength": 1 }
                 }
+              },
+              "issue": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Filed backlog issue ref (e.g. '#1234' or full URL). Present when ship/fix auto-filed this finding via the issues B1 gh issue create. Exactly one of `issue` or `deferred` must be set per item (XOR enforced in pr-meta.sh validate_kind_facts)."
+              },
+              "deferred": {
+                "enum": ["pri-p0-incident", "labels-underivable"],
+                "description": "Closed-enum reason this finding was NOT auto-filed and is staged for human action instead: pri-p0-incident (a P0 incident needs human triage before filing) or labels-underivable (area/type could not be derived to pass the issue-labels.sh four-axis gate). Exactly one of `issue` or `deferred` per item."
               }
             }
           }

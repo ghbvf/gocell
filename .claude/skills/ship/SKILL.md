@@ -157,8 +157,11 @@ GoCell 六维度 = 架构合规 / 安全 / 测试 / 运维可观测 / DX / 产�
 5. **CI 异步收敛（非阻塞收尾，步骤 4 完成后执行）**：按 `issues` B5 ② 等 CI 收敛 + 失败回 `fix` 修复循环再推再等（时限 / 3 轮熔断单源在 B5 ②）；CI 收敛后**贴独立 pm:ci 评论**（用 `.github/project-template/pr-comment.md` 的 `<!-- pm:ci -->` 模板）：
    - 全绿 → `verdict=ci-green`；B5 ② 熔断仍红 → `verdict=ci-failed`（含失败 check 摘要 + run 链接）。
    - **追加机器块**（贴评论前）：`bash hack/automation/pr-meta.sh emit-block --kind=ci --pr=<PR#> --ci='{"failedChecks":[{"name":"…","url":"…"},…],"passedChecks":<n>,"totalChecks":<m>}'`（verdict 由 failedChecks 派生、round carry），输出追加到 pm:ci body 末尾，再走 `issues` B4 贴评论。
-6. **OOS findings → 独立 pm:oos 评论**（仅当有 OUT_OF_SCOPE findings 时）：用 `.github/project-template/pr-comment.md` 的 `<!-- pm:oos -->` 模板，每条 OOS finding 完整无损记录（字段映射见 `pr-comment.md` / `backlog.md`）。**追加机器块**（贴评论前）：`bash hack/automation/pr-meta.sh emit-block --kind=oos --pr=<PR#> --oos='{"items":[{"fileLine":"…","rootCause":{"code":"…","arch":"…","history":"…"},"solutionSeeds":{"minimal":"…","thorough":"…","refactor":"…"}},…]}'`，输出追加到 pm:oos body 末尾，再走 `issues` B4 贴评论。
-7. **ScheduleWakeup hook**（所有评论 + label 操作全部完成后）：宿主 LLM 启动 `ScheduleWakeup`（delay ≈ 1800s），调用 `/pr-monitor <PR#>`（report-mode，监控 review-side 进展，等待审查结论）。`pr-monitor` 是 Batch 3 同 PR 落地的新技能。
+6. **OOS findings → 自动建 issue + 独立 pm:oos 评论**（仅当有 OUT_OF_SCOPE findings 时）：
+   - **逐条自动建 backlog issue**（建单单源命令见 `issues` B1）：从 finding 字段无损填 `.github/project-template/backlog.md` body（现状←证据+三维根因+影响 / 修复方向←三级方案种子 / Files←file:line 全集 / Source←PR #<PR#> F<k> + `Discovered via /ship`）；四轴标签派生：`cx`←finding `[Cx…]` tag、`area`←finding 文件路径（PROJECT.md §2.1 path-glob）、`type`←finding 性质、`pri`←finding `[P…]`（无则默认 `pri-p2`）；先 `bash hack/automation/issue-labels.sh validate --labels "backlog,pri-pX,area-XX,type-XX,cx-X"` 过四轴门，再 `gh issue create …`，回显 issue #N/URL。
+   - **安全闸门（不自动建 → 标 deferred）**：`pri-p0`（incident：线上故障/数据完整性/CVE）→ 停下 AskUserQuestion 确认后再决定；`issue-labels.sh validate` 失败（area/type 判不定）→ 该条标 `deferred=labels-underivable`，pm:oos 正文回退打印草稿命令待人工。
+   - **追加机器块**（贴评论前，用 `<!-- pm:oos -->` 模板）：`bash hack/automation/pr-meta.sh emit-block --kind=oos --pr=<PR#> --oos='{"items":[{"fileLine":"…","rootCause":{"code":"…","arch":"…","history":"…"},"solutionSeeds":{"minimal":"…","thorough":"…","refactor":"…"},"issue":"#<N>"},…]}'`——**每个 item 必须带 `issue`（已建号/URL）或 `deferred`（`pri-p0-incident`｜`labels-underivable`）之一**，否则 emit-block 拒绝（Hard 闸门：没建 issue 也没显式 defer 就发不出 pm:oos 评论）。输出追加到 pm:oos body 末尾，再走 `issues` B4 贴评论；评论正文每条回填 `✅ 已建 #N <url>` 或 `🟡 deferred:<原因>`。
+7. **监控建议（用户驱动，可选）**：所有评论 + label 操作完成后，窗口打印一行建议供用户启动 review-side 监控——`运行 /loop 30m /pr-monitor <PR#>`（report 模式；`/loop` 简单 loop 每 30min 调一次**无状态**的 `/pr-monitor` 检查 review 进展，human-in-loop 可随时停）。**ship 不自己启动 loop**（一次性会话结束后 in-session loop 即消亡）——循环交给内建 `/loop` 原语。
 
 > ship 到此结束（内置审 + 修；评论 + 状态已先行；CI 异步收敛 + OOS 独立贴）。再审（codex / `/pr-review`）后，续修走 `/fix <PR#>`。
 
@@ -171,8 +174,8 @@ PR: #<编号> <URL>
 评论: <pm:ship 评论 URL，含 #issuecomment-<id>（来自 issues B4 回显）>
 已完成：TDD / 实施 / PR / review（实跑 reviewer 数：按 diff 1/2/3/6 自动） / Cx1-Cx2 fix / CI 绿
 
-未处理问题（需人工确认）——本表仅摘要 + 指针；完整无损详表（证据/三维根因/三级方案种子）+
-OUT_OF_SCOPE 的建 issue 命令草稿，见上面 pm:ship 评论的 `<details>`：
+未处理问题（需人工确认）——本表仅摘要 + 指针；完整无损详表（证据/三维根因/三级方案种子）见 pm:ship
+评论的 `<details>`；OUT_OF_SCOPE findings **已自动建 issue**（#N / deferred 原因见本 PR 的 pm:oos 评论）：
 | # | Finding (file:line) | Cx | 归属 | 建议方案 | 原因 |
 |---|---------------------|----|------|---------|----|
 ```

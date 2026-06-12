@@ -261,7 +261,10 @@ push 后按 `issues` B5 ① 验无文件冲突；通过后**立即**进步骤 3�
 **步骤 3: 立即收尾（评论 + 状态，不等 CI；命令形态见 `issues` Part B）**
 
 - **修完** → 贴 fix 评论（命令 + **回显 comment URL/id** 见 `issues` B4；用 `<!-- pm:fix -->` 模板：findings triage + 修复结果 + 遗留 IN_SCOPE，无损写入（约定见 `pr-comment.md`：每条带 `file:line` + 详表入 `<details>`），OUT_OF_SCOPE 仅一行指针（`🚦 OUT_OF_SCOPE（详见本 PR 的 pm:oos 评论）`），含 footer）。**追加机器块**（贴评论前，接口见 `pr-comment.md` §机器块）：`bash hack/automation/pr-meta.sh emit-block --kind=fix --pr=<PR#> --findings='<计数 json>'`（phase/verdict/round 全派生），输出单行追加到 `pm:fix` body 末尾，再走 `issues` B4 贴。再 `gh pr edit` 切 `pr-status/needs-check-fix`（移除 `pr-status/needs-fix`；待 `/pr-review --check` 验证；**fix 不再直接到 ready**）——check-side 执行器从此刻可立即开始，无需等待 CI。
-- **OOS findings → 独立 pm:oos 评论**（仅当有 OUT_OF_SCOPE findings 时，紧接在 pm:fix 之后贴）：用 `<!-- pm:oos -->` 模板，每条 OOS finding 完整无损记录（字段映射见 `pr-comment.md` / `backlog.md`，不得一句话带过）。**追加机器块**（贴评论前）：`bash hack/automation/pr-meta.sh emit-block --kind=oos --pr=<PR#> --oos='{"items":[…]}'`，输出追加到 pm:oos body 末尾，再走 `issues` B4 贴。
+- **OOS findings → 自动建 issue + 独立 pm:oos 评论**（仅当有 OUT_OF_SCOPE findings 时，紧接在 pm:fix 之后贴）：
+  - **逐条自动建 backlog issue**（建单单源命令见 `issues` B1）：finding 字段无损填 `backlog.md` body（现状←证据+三维根因+影响 / 修复方向←三级方案种子 / Files←file:line 全集 / Source←PR #<PR#> F<k> + `Discovered via /fix #<original>`）；四轴标签派生 `cx`←`[Cx…]` tag、`area`←finding 文件路径（PROJECT.md §2.1）、`type`←性质、`pri`←`[P…]`（默认 `pri-p2`）；先 `bash hack/automation/issue-labels.sh validate --labels "…"` 过门，再 `gh issue create …`，回显 #N/URL。
+  - **安全闸门**：`pri-p0`（incident）→ 停下 AskUserQuestion；`validate` 失败（area/type 判不定）→ 标 `deferred=labels-underivable`，回退草稿待人工。
+  - **追加机器块**（贴评论前，`<!-- pm:oos -->` 模板）：`bash hack/automation/pr-meta.sh emit-block --kind=oos --pr=<PR#> --oos='{"items":[{…,"issue":"#<N>"},…]}'`——**每个 item 必须带 `issue` 或 `deferred`（`pri-p0-incident`｜`labels-underivable`）之一**，否则 emit-block 拒绝（Hard 闸门）。输出追加到 pm:oos body 末尾，再走 `issues` B4 贴；正文每条回填 `✅ 已建 #N` 或 `🟡 deferred:<原因>`。
 - **未修 / 待办 finding**（非 OOS 的 Cx3+/RELATED deferred）→ §沟通规则闸门输出 `gh issue create` 建议命令（确认后跑，留 open；label = `backlog` + `pri-pX` + `area-XX` + `type-XX` + `cx-X`（必填，从 finding `[…Cx…]` tag 提取——四轴齐全，建单单源命令见 `issues` B1）；body 按 `backlog.md` 顶部字段映射**无损**填充，不得一句话带过；条件延后型加 `flag-cond` + Trigger，派生注明 `Discovered via /fix #<original>`）。
 
 Priority：review finding 用原 `[P0-P3]`；`/fix` 派生默认 `pri-p2`；`pri-p0` 仅 incident（线上故障/数据完整性/CVE），停下 AskUserQuestion 确认。建 issue 必须显式 `--label pri-pX`。
@@ -270,7 +273,7 @@ Priority：review finding 用原 `[P0-P3]`；`/fix` 派生默认 `pri-p2`；`pri
 
 按 `issues` B5 ② 等 CI 收敛 + 失败回阶段 1-4 修复循环再推再等（时限 / 3 轮熔断单源在 B5 ②）；CI 收敛后**贴独立 pm:ci 评论**（用 `<!-- pm:ci -->` 模板）：全绿 → `verdict=ci-green`；B5 ② 熔断仍红 → `verdict=ci-failed`（含失败 check 摘要 + run 链接）。**追加机器块**（贴评论前）：`bash hack/automation/pr-meta.sh emit-block --kind=ci --pr=<PR#> --ci='{"failedChecks":[…],"passedChecks":<n>,"totalChecks":<m>}'`，输出追加到 pm:ci body 末尾，再走 `issues` B4 贴。
 
-**步骤 5: ScheduleWakeup hook**（所有评论 + label 操作全部完成后）：宿主 LLM 启动 `ScheduleWakeup`（delay ≈ 1800s），调用 `/pr-monitor <PR#>`（report-mode，监控 check-side 进展，等待 `--check` 验证结论）。`pr-monitor` 是 Batch 3 同 PR 落地的新技能。
+**步骤 5: 监控建议（用户驱动，可选）**：所有评论 + label 操作完成后，窗口打印一行建议供用户启动 check-side 监控——`运行 /loop 30m /pr-monitor <PR#>`（report 模式；`/loop` 简单 loop 每 30min 调一次**无状态**的 `/pr-monitor` 检查 `--check` 进展，human-in-loop 可随时停）。**fix 不自己启动 loop**——循环交给内建 `/loop` 原语。
 
 完成后 **TaskUpdate → completed**。
 
@@ -284,7 +287,7 @@ Priority：review finding 用原 `[P0-P3]`；`/fix` 派生默认 `pri-p2`；`pri
 - 修复报告（已修）
 - 批量验证（审查报告）
 
-**验证**（4.6 已执行，此处复核，不再查找）：核对 fix 评论 + `pr-status` 已切；未修/派生 → create 建议命令已输出待确认。
+**验证**（4.6 已执行，此处复核，不再查找）：核对 fix 评论 + `pr-status` 已切；OOS → issue 已自动建 + pm:oos 回填 #N（pri-p0/判不定除外）；非 OOS Cx3+ deferred → create 建议命令已输出待确认。
 
 ---
 
@@ -294,5 +297,5 @@ Priority：review finding 用原 `[P0-P3]`；`/fix` 派生默认 `pri-p2`；`pri
 - 无法定位问题代码
 - 测试失败且 4 轮回退后仍无法修正
 - 修复过程中发现新问题超出原始 scope
-- **任何 `gh issue create` 调用前**（OUT_OF_SCOPE finding / /fix 派生新问题）：先反思确认问题是否PR相关，Cx1问题搭车修，如真实OUT_OF_SCOPE先输出建议命令 + **无损 body 草稿**（按 backlog.md 字段映射），再create issues。
+- **OUT_OF_SCOPE finding / /fix 派生新问题 → 默认自动 `gh issue create` + 回填 #N**（流程见 4.6 step 3：先反思确认确实 OUT_OF_SCOPE 且非 Cx1 搭车修，再无损填 backlog.md body + 派生四轴标签 → `issue-labels.sh validate` → 建单）。**不逐条问**；仅 `pri-p0`（incident）→ 停下 AskUserQuestion，或 area/type 判不定（`validate` 失败）→ 标 `deferred=labels-underivable` 回退草稿。
 - pri-p0 红线升级（incident-driven 或安全 CVE）

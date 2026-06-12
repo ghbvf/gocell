@@ -6,7 +6,7 @@ labels（`backlog` + `area-XX` + `type-XX` + `pri-pX` + `cx-X`）与 title `[<ID
   现状     ← 证据代码片段 + 三维根因（代码/架构/历史）+ 影响范围（直接/间接/同类 Grep N 处）
   修复方向 ← 三级方案种子（最小 / 彻底 / 重构）
   Files    ← finding 的 file:line 全集（不止主命中行）
-  Source   ← `PR #<N> finding <Fk>`（派生再加 `Discovered via /fix #<N>`）
+  Source   ← `PR #<N> finding <Fk>`（OOS 自动建单再加 `Discovered via /ship|/fix #<N>`）
 -->
 
 ## 现状
@@ -28,4 +28,4 @@ labels（`backlog` + `area-XX` + `type-XX` + `pri-pX` + `cx-X`）与 title `[<ID
 
 ## Source
 
-<来源：PR #<N> finding <Fk> / review path / issue#；派生加 `Discovered via /fix #<N>`>
+<来源：PR #<N> finding <Fk> / review path / issue#；OOS 自动建单加 `Discovered via /ship|/fix #<N>`>
