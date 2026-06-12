@@ -125,7 +125,8 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	defer cancel()
 
 	// --- Step 1: Start PG testcontainer (RMQ is NOT used by corebundle today) ---
-	pgContainer, err := tcpostgres.Run(ctx, testutil.PostgresImage,
+	pgContainer, err := tcpostgres.Run(
+		ctx, testutil.PostgresImage,
 		tcpostgres.WithDatabase("test"),
 		tcpostgres.WithUsername("test"),
 		tcpostgres.WithPassword("test"),
@@ -241,7 +242,8 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	accessCell := accesscore.NewAccessCore(clock.Real(), append(buildAccessCoreMemOptions(t, clock.Real()),
+	accessCell := accesscore.NewAccessCore(clock.Real(), append(
+		buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -260,6 +262,12 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	require.NoError(t, asm.Register(cfgResult.Cell))
 	require.NoError(t, asm.Register(accessCell))
 	require.NoError(t, asm.Register(auditCell))
+
+	// configcore route gates use auth.RequirePermission (PR-10b #1348); the primary
+	// listener must carry the ABAC PDP or config writes fail closed (403). accesscore
+	// provides the Authorizer — wire it exactly as production (cmd/corebundle/run.go).
+	authzOpt, authzErr := bootstrap.PrimaryAuthorizerOption([]cell.Cell{cfgResult.Cell, accessCell, auditCell})
+	require.NoError(t, authzErr, "PrimaryAuthorizerOption must succeed with accesscore present")
 
 	// --- Step 6: Boot the assembly with the relay worker ---
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -282,7 +290,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	// A11 regression guard: relay is registered via relayBootstrapOpts from
 	// buildConfigCoreCellFromShared so its Worker/Close/Checkers lifecycle is independently
 	// managed by bootstrap — not carried inside PoolResource.Worker().
-	app := newBootstrapFromOptions(asm.Clock(), append(baseOpts, relayBootstrapOpts...))
+	app := newBootstrapFromOptions(asm.Clock(), append(append(baseOpts, authzOpt), relayBootstrapOpts...))
 
 	appErrCh := make(chan error, 1)
 	appCtx, appCancel := context.WithCancel(ctx)
@@ -448,7 +456,8 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	defer cancel()
 
 	// --- Step 1: Start PG testcontainer ---
-	pgContainer, err := tcpostgres.Run(ctx, testutil.PostgresImage,
+	pgContainer, err := tcpostgres.Run(
+		ctx, testutil.PostgresImage,
 		tcpostgres.WithDatabase("test"),
 		tcpostgres.WithUsername("test"),
 		tcpostgres.WithPassword("test"),
@@ -564,7 +573,8 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	accessCell := accesscore.NewAccessCore(clock.Real(), append(buildAccessCoreMemOptions(t, clock.Real()),
+	accessCell := accesscore.NewAccessCore(clock.Real(), append(
+		buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -585,6 +595,12 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	require.NoError(t, asm.Register(accessCell))
 	require.NoError(t, asm.Register(auditCell))
 
+	// configcore route gates use auth.RequirePermission (PR-10b #1348); the primary
+	// listener must carry the ABAC PDP or config writes fail closed (403). accesscore
+	// provides the Authorizer — wire it exactly as production (cmd/corebundle/run.go).
+	authzOpt, authzErr := bootstrap.PrimaryAuthorizerOption([]cell.Cell{cfgResult.Cell, accessCell, auditCell})
+	require.NoError(t, authzErr, "PrimaryAuthorizerOption must succeed with accesscore present")
+
 	// --- Step 6: Boot the assembly ---
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -600,7 +616,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, asm.Clock())),
 		bootstrap.WithShutdownTimeout(testtime.EventuallyDefault),
 	}
-	app := newBootstrapFromOptions(asm.Clock(), append(baseOpts, relayBootstrapOpts...))
+	app := newBootstrapFromOptions(asm.Clock(), append(append(baseOpts, authzOpt), relayBootstrapOpts...))
 
 	appErrCh := make(chan error, 1)
 	appCtx, appCancel := context.WithCancel(ctx)
