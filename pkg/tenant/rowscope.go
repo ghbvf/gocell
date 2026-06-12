@@ -65,6 +65,32 @@ func (rs RowScope) Validate() error {
 	return nil
 }
 
+// ParseRowScope converts a wire/log spelling back to its RowScope value
+// (inverse of String). Recognized codes: "self", "device", "tenant", "all".
+//
+// Empty-string semantics: "" maps to the zero value (RowScope(0)) with no
+// error — this is the "no row-scope obligation" sentinel used by the ABAC
+// obligations model and the PG codec. Callers that require a non-zero scope
+// must check rs.Valid() after parsing.
+//
+// Any non-empty, unrecognized code returns an error (fail-closed).
+func ParseRowScope(s string) (RowScope, error) {
+	switch s {
+	case "":
+		return 0, nil
+	case "self":
+		return RowScopeSelf, nil
+	case "device":
+		return RowScopeDevice, nil
+	case "tenant":
+		return RowScopeTenant, nil
+	case "all":
+		return RowScopeAll, nil
+	default:
+		return 0, fmt.Errorf("tenant: unknown RowScope wire code %q", s)
+	}
+}
+
 // Narrower returns the stricter (narrower-visibility) of rs and other, treating
 // the zero value as "no row-scope constraint" (the other operand wins; when both
 // are zero, returns zero). It is the single source of the strictness ordering

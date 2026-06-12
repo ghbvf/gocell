@@ -15,7 +15,7 @@ import (
 // trusted source, and the evaluator treats a not-found attribute as an
 // unsatisfied condition (see evaluator.go matchCondition).
 //
-// PR-7 wires two real attribute sources:
+// Three real attribute sources are wired (PR-7 + PR-9 #1347):
 //
 //   - Subject: the authenticated principal (trusted JWT claims, FR-012). Device
 //     posture attributes for a device principal (Kind==PrincipalDevice) live in
@@ -23,14 +23,15 @@ import (
 //     the principal kind itself is exposed via the "kind" key.
 //   - Environment: clock-derived time attributes (the injected clock, never
 //     time.Now()).
-//
-// Resource attributes have NO data source in PR-7: PolicyRepository.GetAttributes
-// is owned by PR-9 (#1347). Resource conditions therefore resolve found=false and
-// fail closed until PR-9 wires the source — recorded as a deliberate carve-out
-// in research.md §1.1 and on issue #1347.
+//   - Resource: attributes fetched from the injected ResourceAttributeProvider
+//     (PIP, PR-9 #1347), scoped to the request tenant. The fetch happens inside
+//     the same scopedtx.Do block as policy loading so both reads share a single
+//     tenant binding (RESOURCE-ATTR-TENANT-SHARING-01). An absent key resolves
+//     found=false — still fail-closed.
 type attributeResolver struct {
-	principal *auth.Principal // may be nil → subject attributes fail-closed
-	now       time.Time       // injected clock reading for environment attributes
+	principal     *auth.Principal     // may be nil → subject attributes fail-closed
+	now           time.Time           // injected clock reading for environment attributes
+	resourceAttrs map[string][]string // pre-fetched resource attrs for this request
 }
 
 // resolve returns the value(s) for the attribute identified by (source, key) and
@@ -45,9 +46,7 @@ func (r attributeResolver) resolve(source abac.AttributeSource, key string) (val
 	case abac.SourceEnvironment:
 		return r.resolveEnvironment(key)
 	case abac.SourceResource:
-		// Resource attribute sourcing is deferred to PR-9 (#1347 GetAttributes);
-		// no source exists yet → fail-closed.
-		return nil, false
+		return r.resolveResource(key)
 	default:
 		return nil, false
 	}
@@ -99,4 +98,13 @@ func (r attributeResolver) resolveEnvironment(key string) (vals []string, found 
 	default:
 		return nil, false
 	}
+}
+
+// resolveResource reads resource attributes from the pre-fetched resourceAttrs
+// map (populated by ResourceAttributeProvider.GetAttributes inside the same
+// tenant-scoped tx block as policy loading — RESOURCE-ATTR-TENANT-SHARING-01).
+// An absent key resolves found=false → fail-closed (condition unsatisfied).
+func (r attributeResolver) resolveResource(key string) (vals []string, found bool) {
+	vals, ok := r.resourceAttrs[key]
+	return vals, ok
 }

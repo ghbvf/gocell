@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	accessrepo "github.com/ghbvf/gocell/corecells/accesscore/internal/adapters/postgres"
+	internalmem "github.com/ghbvf/gocell/corecells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -22,14 +23,16 @@ import (
 )
 
 // Bundle is the PG-backed (UserRepository, RoleRepository, PolicyRepository,
-// SetupLock, TxRunner) quintuple. Fields are unexported; corecells/accesscore.
-// WithPGBundle consumes the values via the exported accessor methods.
+// ResourceAttributeProvider, SetupLock, TxRunner) sextuple. Fields are
+// unexported; corecells/accesscore.WithPGBundle consumes the values via the
+// exported accessor methods.
 type Bundle struct {
-	userRepo   ports.UserRepository
-	roleRepo   ports.RoleRepository
-	policyRepo ports.PolicyRepository
-	setupLock  ports.SetupLockAcquirer
-	txRunner   persistence.CellTxManager
+	userRepo      ports.UserRepository
+	roleRepo      ports.RoleRepository
+	policyRepo    ports.PolicyRepository
+	resourceAttrs ports.ResourceAttributeProvider
+	setupLock     ports.SetupLockAcquirer
+	txRunner      persistence.CellTxManager
 }
 
 // NewBundle constructs a PG-backed accesscore bundle. All four wired
@@ -71,8 +74,13 @@ func NewBundle(pool *pgxpool.Pool, txMgr persistence.TxRunner, clk clock.Clock) 
 		userRepo:   userRepo,
 		roleRepo:   roleRepo,
 		policyRepo: policyRepo,
-		setupLock:  setupLock,
-		txRunner:   persistence.WrapForCell(txMgr),
+		// INTERIM: resource attributes use an empty mem provider (fail-closed).
+		// Resource conditions deny until the PG-backed resource_attributes store
+		// lands (#1347 follow-up). This is NOT an unsafe noop — denying by absence
+		// is the correct ABAC fail-closed default.
+		resourceAttrs: internalmem.NewResourceAttributeProvider(),
+		setupLock:     setupLock,
+		txRunner:      persistence.WrapForCell(txMgr),
 	}, nil
 }
 
@@ -84,6 +92,11 @@ func (b Bundle) RoleRepository() ports.RoleRepository { return b.roleRepo }
 
 // PolicyRepository returns the bundle-paired PG PolicyRepository (#1346 PR-8).
 func (b Bundle) PolicyRepository() ports.PolicyRepository { return b.policyRepo }
+
+// ResourceAttributeProvider returns the ABAC PIP for resource attributes.
+// Currently backed by an empty mem provider (fail-closed): resource conditions
+// deny until the PG-backed resource_attributes store lands (#1347 follow-up).
+func (b Bundle) ResourceAttributeProvider() ports.ResourceAttributeProvider { return b.resourceAttrs }
 
 // SetupLock returns the bundle-paired PG advisory lock.
 func (b Bundle) SetupLock() ports.SetupLockAcquirer { return b.setupLock }

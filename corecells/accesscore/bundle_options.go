@@ -17,6 +17,7 @@ func WithMemBundle(b accessmem.Bundle) Option {
 		withUserRepository(b.UserRepository())(c)
 		withRoleRepository(b.RoleRepository())(c)
 		withPolicyRepository(b.PolicyRepository())(c)
+		withResourceAttributeProvider(b.ResourceAttributeProvider())(c)
 		withSetupLock(b.SetupLock())(c)
 		withTxManager(b.TxRunner())(c)
 	}
@@ -32,6 +33,7 @@ func WithPGBundle(b accesspg.Bundle) Option {
 		withUserRepository(b.UserRepository())(c)
 		withRoleRepository(b.RoleRepository())(c)
 		withPolicyRepository(b.PolicyRepository())(c)
+		withResourceAttributeProvider(b.ResourceAttributeProvider())(c)
 		withSetupLock(b.SetupLock())(c)
 		withTxManager(b.TxRunner())(c)
 	}

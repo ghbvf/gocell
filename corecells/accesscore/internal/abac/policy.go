@@ -11,9 +11,13 @@ import (
 // semantics (any EffectDeny wins over any number of EffectAllow results),
 // mirroring XACML §7.16 and AWS Cedar's forbid-overrides-permit behavior.
 //
-// No Version or timestamp fields: history is deferred to PR-9. The Policy
-// struct deliberately carries no clock dependency; created/updated times are
-// an infrastructure concern (DB columns, not domain fields).
+// Version is a repo-owned optimistic-concurrency counter: the repository sets
+// Version=1 on Create and increments it on every Update. Callers supply the
+// last-read Version as expectedVersion to Update/Delete (CAS guard). The
+// policy.updated event carries Version so consumers can detect gaps.
+// Validate() does not check Version (it is repo-owned and zero for new
+// aggregates before persistence). Timestamp fields (created_at / updated_at)
+// remain infrastructure-only DB columns, not domain fields.
 //
 // ref: XACML 3.0 §5.8 — Policy element.
 // ref: AWS Cedar policy model — policy set / policy / rule decomposition.
@@ -24,7 +28,8 @@ type Policy struct {
 	ID string
 	// TenantID is the isolation domain that owns this policy. Must be a valid
 	// canonical lowercase UUID (tenant.TenantID.Validate()). Enforced fail-fast
-	// in Save() — a mismatched TenantID is a programmer error, not a user error.
+	// in Create/Update/Delete — a mismatched TenantID is a programmer error, not
+	// a user error.
 	TenantID tenant.TenantID
 	// Name is a human-readable label. Must be non-empty.
 	Name string
@@ -33,6 +38,48 @@ type Policy struct {
 	// Rules is the ordered list of authorization rules. Must contain at least
 	// one rule. Rule IDs must be unique within the policy.
 	Rules []Rule
+	// Version is the optimistic-concurrency counter owned by the repository.
+	// Set to 1 on Create; incremented by 1 on every successful Update.
+	// Callers pass the last-read Version as expectedVersion to Update/Delete.
+	// Zero before first persistence; Validate() does not enforce a minimum.
+	Version int
+}
+
+// Clone returns a deep copy of p so that mutations to the returned pointer do not
+// affect the original and vice versa. The copy covers:
+//   - top-level scalar fields (ID, TenantID, Name, Description, Version)
+//   - Rules slice (new backing array)
+//   - each Rule's Conditions slice (new backing array per rule)
+//   - each Condition's Values slice (new backing array)
+//   - each Rule's Obligations.FieldMask.Fields slice (new backing array)
+//
+// This is the single-source deep-clone used by all PolicyRepository
+// implementations (B2 — eliminates the duplicated clonePolicy helpers in mem and
+// postgres adapters).
+func (p *Policy) Clone() *Policy {
+	c := *p
+	c.Rules = make([]Rule, len(p.Rules))
+	for i, r := range p.Rules {
+		rc := r
+		if r.Conditions != nil {
+			rc.Conditions = make([]Condition, len(r.Conditions))
+			for j, cond := range r.Conditions {
+				cc := cond
+				if cond.Values != nil {
+					cc.Values = make([]string, len(cond.Values))
+					copy(cc.Values, cond.Values)
+				}
+				rc.Conditions[j] = cc
+			}
+		}
+		if r.Obligations.FieldMask.Fields != nil {
+			fields := make([]string, len(r.Obligations.FieldMask.Fields))
+			copy(fields, r.Obligations.FieldMask.Fields)
+			rc.Obligations.FieldMask.Fields = fields
+		}
+		c.Rules[i] = rc
+	}
+	return &c
 }
 
 // Validate returns an error if the Policy is structurally invalid:

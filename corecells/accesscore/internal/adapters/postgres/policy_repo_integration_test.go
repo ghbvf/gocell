@@ -21,7 +21,7 @@ import (
 )
 
 // policyCreatedAt reads the policies.created_at column directly (bypassing the
-// repo) so tests can assert the upsert preserves it.
+// repo) so tests can assert the create preserves it.
 func policyCreatedAt(t *testing.T, pool *adapterpg.Pool, tid tenant.TenantID, id string) time.Time {
 	t.Helper()
 	var createdAt time.Time
@@ -111,51 +111,149 @@ func richPolicy(id string, tid tenant.TenantID) *abac.Policy {
 
 // TestPGPolicyRepo_NestedPolicyRoundTrip proves a richly-nested policy survives a
 // real PG JSONB encode→store→fetch→decode cycle unchanged — the fidelity the mem
-// store cannot exercise (no serialization boundary).
+// store cannot exercise (no serialization boundary). Version must be 1 after Create.
 func TestPGPolicyRepo_NestedPolicyRoundTrip(t *testing.T) {
 	repo, _ := setupPolicyRepoPG(t)
 	ctx := context.Background()
 	tid := newIntegrationTenant(t)
 	p := richPolicy("pol-rich", tid)
 
-	require.NoError(t, repo.Save(ctx, tid, p))
+	_, err := repo.Create(ctx, tid, p)
+	require.NoError(t, err)
 	got, err := repo.GetByID(ctx, tid, "pol-rich")
 	require.NoError(t, err)
-	assert.Equal(t, p, got, "a richly-nested policy must survive a real PG JSONB round-trip unchanged")
+	assert.Equal(t, 1, got.Version, "version must be 1 after Create")
+	// Compare without version (p has version=0 before persistence).
+	gotNoVer := *got
+	gotNoVer.Version = 0
+	assert.Equal(t, p, &gotNoVer, "a richly-nested policy must survive a real PG JSONB round-trip unchanged")
 }
 
-// TestPGPolicyRepo_UpsertReplace proves Save over an existing (tenant_id, id)
-// replaces the row atomically (ON CONFLICT DO UPDATE) rather than failing on a
-// duplicate key or creating a second row.
-func TestPGPolicyRepo_UpsertReplace(t *testing.T) {
+// TestPGPolicyRepo_CreateConflict proves Create on an existing (tenant_id, id)
+// returns ErrAuthPolicyDuplicate rather than an opaque internal error.
+func TestPGPolicyRepo_CreateConflict(t *testing.T) {
+	repo, _ := setupPolicyRepoPG(t)
+	ctx := context.Background()
+	tid := newIntegrationTenant(t)
+
+	_, createErr := repo.Create(ctx, tid, richPolicy("pol-x", tid))
+	require.NoError(t, createErr)
+
+	_, dupErr := repo.Create(ctx, tid, richPolicy("pol-x", tid))
+	require.Error(t, dupErr)
+	var ec *errcode.Error
+	require.ErrorAs(t, dupErr, &ec)
+	assert.Equal(t, errcode.ErrAuthPolicyDuplicate, ec.Code, "second Create must return ErrAuthPolicyDuplicate")
+}
+
+// TestPGPolicyRepo_UpdateCASSuccess proves Update with the correct version
+// increments the version column and returns the updated aggregate.
+func TestPGPolicyRepo_UpdateCASSuccess(t *testing.T) {
 	repo, pool := setupPolicyRepoPG(t)
 	ctx := context.Background()
 	tid := newIntegrationTenant(t)
 
-	require.NoError(t, repo.Save(ctx, tid, richPolicy("pol-x", tid)))
+	_, createErr := repo.Create(ctx, tid, richPolicy("pol-x", tid))
+	require.NoError(t, createErr)
 	createdAt1 := policyCreatedAt(t, pool, tid, "pol-x")
 
 	v2 := &abac.Policy{
 		ID:       "pol-x",
 		TenantID: tid,
-		Name:     "Replaced",
+		Name:     "Updated",
 		Rules:    []abac.Rule{{ID: "only", Name: "Allow all", Effect: authz.EffectAllow}},
 	}
-	require.NoError(t, repo.Save(ctx, tid, v2), "Save over an existing id must replace, not conflict")
-
-	got, err := repo.GetByID(ctx, tid, "pol-x")
+	got, err := repo.Update(ctx, tid, "pol-x", 1, v2)
 	require.NoError(t, err)
-	assert.Equal(t, "Replaced", got.Name)
-	assert.Len(t, got.Rules, 1, "replaced policy must reflect the new rule set")
+	assert.Equal(t, 2, got.Version, "version must be 2 after Update")
+	assert.Equal(t, "Updated", got.Name)
 
-	// The ON CONFLICT clause advances updated_at but must NOT touch created_at —
-	// guards against a future SQL edit that adds created_at = EXCLUDED.created_at.
+	// created_at must not be touched by Update.
 	assert.Equal(t, createdAt1, policyCreatedAt(t, pool, tid, "pol-x"),
-		"upsert must preserve the original created_at")
+		"Update must not touch created_at")
+}
 
-	list, err := repo.ListByTenant(ctx, tid)
+// TestPGPolicyRepo_UpdateVersionConflict proves Update with a wrong expected
+// version returns ErrVersionConflict (KindConflict).
+func TestPGPolicyRepo_UpdateVersionConflict(t *testing.T) {
+	repo, _ := setupPolicyRepoPG(t)
+	ctx := context.Background()
+	tid := newIntegrationTenant(t)
+
+	_, createErr := repo.Create(ctx, tid, richPolicy("pol-x", tid))
+	require.NoError(t, createErr)
+
+	v2 := &abac.Policy{
+		ID:       "pol-x",
+		TenantID: tid,
+		Name:     "Should not stick",
+		Rules:    []abac.Rule{{ID: "r1", Name: "r", Effect: authz.EffectAllow}},
+	}
+	_, err := repo.Update(ctx, tid, "pol-x", 99 /* wrong */, v2)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrVersionConflict, ec.Code)
+}
+
+// TestPGPolicyRepo_UpdateNotFound proves Update on a non-existent id returns
+// ErrAuthPolicyNotFound.
+func TestPGPolicyRepo_UpdateNotFound(t *testing.T) {
+	repo, _ := setupPolicyRepoPG(t)
+	ctx := context.Background()
+	tid := newIntegrationTenant(t)
+
+	v2 := &abac.Policy{
+		ID:       "nonexistent",
+		TenantID: tid,
+		Name:     "ghost",
+		Rules:    []abac.Rule{{ID: "r1", Name: "r", Effect: authz.EffectAllow}},
+	}
+	_, err := repo.Update(ctx, tid, "nonexistent", 1, v2)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthPolicyNotFound, ec.Code)
+}
+
+// TestPGPolicyRepo_DeleteCASSuccess proves Delete with the correct version removes
+// the row and returns the deleted aggregate carrying the version.
+func TestPGPolicyRepo_DeleteCASSuccess(t *testing.T) {
+	repo, _ := setupPolicyRepoPG(t)
+	ctx := context.Background()
+	tid := newIntegrationTenant(t)
+
+	_, createDelErr := repo.Create(ctx, tid, richPolicy("pol-del", tid))
+	require.NoError(t, createDelErr)
+
+	deleted, err := repo.Delete(ctx, tid, "pol-del", 1)
 	require.NoError(t, err)
-	assert.Len(t, list, 1, "upsert must not create a duplicate row")
+	require.NotNil(t, deleted)
+	assert.Equal(t, "pol-del", deleted.ID)
+	assert.Equal(t, 1, deleted.Version)
+
+	_, err = repo.GetByID(ctx, tid, "pol-del")
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthPolicyNotFound, ec.Code)
+}
+
+// TestPGPolicyRepo_DeleteVersionConflict proves Delete with a wrong expected
+// version returns ErrVersionConflict.
+func TestPGPolicyRepo_DeleteVersionConflict(t *testing.T) {
+	repo, _ := setupPolicyRepoPG(t)
+	ctx := context.Background()
+	tid := newIntegrationTenant(t)
+
+	_, createDelErr := repo.Create(ctx, tid, richPolicy("pol-del", tid))
+	require.NoError(t, createDelErr)
+
+	_, err := repo.Delete(ctx, tid, "pol-del", 99 /* wrong */)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrVersionConflict, ec.Code)
 }
 
 // TestPGPolicyRepo_CorruptRulesRow_FailsClosed inserts a row carrying an unknown

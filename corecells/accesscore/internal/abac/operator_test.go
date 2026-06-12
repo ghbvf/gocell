@@ -3,6 +3,9 @@ package abac_test
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/abac"
 )
 
@@ -74,6 +77,40 @@ func TestOperator_Validate(t *testing.T) {
 			t.Parallel()
 			if err := op.Validate(); err == nil {
 				t.Errorf("Operator(%d).Validate() = nil, want error", op)
+			}
+		})
+	}
+}
+
+func TestParseOperator(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		input   string
+		want    abac.Operator
+		wantErr bool
+	}{
+		// valid codes round-trip with String()
+		{"eq round-trips", "eq", abac.OpEquals, false},
+		{"neq round-trips", "neq", abac.OpNotEquals, false},
+		{"in round-trips", "in", abac.OpIn, false},
+		{"not_in round-trips", "not_in", abac.OpNotIn, false},
+		// unknown codes → error (fail-closed)
+		{"empty string unknown", "", 0, true},
+		{"contains unknown", "contains", 0, true},
+		{"EQ uppercase unknown", "EQ", 0, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := abac.ParseOperator(tc.input)
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Zero(t, got)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tc.want, got)
+				assert.Equal(t, tc.input, got.String(), "ParseOperator → String() must be identity")
 			}
 		})
 	}

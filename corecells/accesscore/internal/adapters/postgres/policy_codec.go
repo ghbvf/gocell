@@ -16,9 +16,11 @@ package postgres
 // load (and the PR-7 evaluator then denies) instead of silently mis-deciding.
 //
 // The enum→code mapping is frozen by policy_codec_test.go (golden + exhaustive
-// round-trip + anti-vacuity). This codec is deliberately independent of the
-// enums' String() methods so the persisted format cannot drift when a log/wire
-// spelling is tweaked.
+// round-trip + anti-vacuity). The encode direction delegates to each enum's
+// String() method; the decode direction delegates to the domain Parse* helpers
+// (authz.ParseEffect, abac.ParseOperator, abac.ParseAttributeSource,
+// tenant.ParseRowScope) — single-sourced so the PG codec and the policy HTTP
+// handler share the same wire↔enum conversion logic.
 
 import (
 	"bytes"
@@ -46,6 +48,11 @@ func invertCodeMap[E comparable](forward map[E]string) map[string]E {
 	return rev
 }
 
+// effectToCode / operatorToCode / sourceToCode / rowScopeToCode are retained as
+// golden anchors for the codec test (TestPolicyCodec_GoldenCodeMaps). The
+// encode functions delegate to the domain String() methods; the decode functions
+// delegate to the domain Parse* helpers. The maps exist only so the test can
+// assert that the domain code set matches the frozen persistence format.
 var (
 	effectToCode = map[authz.Effect]string{
 		authz.EffectAllow: "allow",
@@ -104,71 +111,77 @@ type obligationsJSON struct {
 }
 
 // ─── enum codecs (fail-closed) ─────────────────────────────────────────────
+//
+// Encode delegates to each enum's String() method; decode delegates to the
+// corresponding domain Parse* helper. The maps above (effectToCode etc.) serve
+// as golden anchors for the codec test only — they are NOT the encode path.
 
 func encodeEffect(e authz.Effect) (string, error) {
-	if c, ok := effectToCode[e]; ok {
-		return c, nil
+	if _, ok := effectToCode[e]; !ok {
+		return "", fmt.Errorf("policy_codec: cannot encode unknown effect %d", uint8(e))
 	}
-	return "", fmt.Errorf("policy_codec: cannot encode unknown effect %d", uint8(e))
+	return e.String(), nil
 }
 
 func decodeEffect(c string) (authz.Effect, error) {
-	if e, ok := effectFromCode[c]; ok {
-		return e, nil
+	e, err := authz.ParseEffect(c)
+	if err != nil {
+		return 0, fmt.Errorf("policy_codec: unknown effect code %q", c)
 	}
-	return 0, fmt.Errorf("policy_codec: unknown effect code %q", c)
+	return e, nil
 }
 
 func encodeOperator(op abac.Operator) (string, error) {
-	if c, ok := operatorToCode[op]; ok {
-		return c, nil
+	if _, ok := operatorToCode[op]; !ok {
+		return "", fmt.Errorf("policy_codec: cannot encode unknown operator %d", uint8(op))
 	}
-	return "", fmt.Errorf("policy_codec: cannot encode unknown operator %d", uint8(op))
+	return op.String(), nil
 }
 
 func decodeOperator(c string) (abac.Operator, error) {
-	if op, ok := operatorFromCode[c]; ok {
-		return op, nil
+	op, err := abac.ParseOperator(c)
+	if err != nil {
+		return 0, fmt.Errorf("policy_codec: unknown operator code %q", c)
 	}
-	return 0, fmt.Errorf("policy_codec: unknown operator code %q", c)
+	return op, nil
 }
 
 func encodeSource(s abac.AttributeSource) (string, error) {
-	if c, ok := sourceToCode[s]; ok {
-		return c, nil
+	if _, ok := sourceToCode[s]; !ok {
+		return "", fmt.Errorf("policy_codec: cannot encode unknown attribute source %d", uint8(s))
 	}
-	return "", fmt.Errorf("policy_codec: cannot encode unknown attribute source %d", uint8(s))
+	return s.String(), nil
 }
 
 func decodeSource(c string) (abac.AttributeSource, error) {
-	if s, ok := sourceFromCode[c]; ok {
-		return s, nil
+	s, err := abac.ParseAttributeSource(c)
+	if err != nil {
+		return 0, fmt.Errorf("policy_codec: unknown attribute source code %q", c)
 	}
-	return 0, fmt.Errorf("policy_codec: unknown attribute source code %q", c)
+	return s, nil
 }
 
 // encodeRowScope maps the zero value (no obligation) to "" and every other valid
-// scope to its frozen code; an out-of-range value is an error (fail-closed).
+// scope to its frozen code via String(); an out-of-range value is an error (fail-closed).
 func encodeRowScope(rs tenant.RowScope) (string, error) {
 	if rs == 0 {
 		return "", nil
 	}
-	if c, ok := rowScopeToCode[rs]; ok {
-		return c, nil
+	if _, ok := rowScopeToCode[rs]; !ok {
+		return "", fmt.Errorf("policy_codec: cannot encode unknown rowScope %d", uint8(rs))
 	}
-	return "", fmt.Errorf("policy_codec: cannot encode unknown rowScope %d", uint8(rs))
+	return rs.String(), nil
 }
 
-// decodeRowScope maps "" back to the zero value (no obligation) and every known
-// code to its scope; an unknown non-empty code is an error (fail-closed).
+// decodeRowScope delegates to tenant.ParseRowScope which already implements the
+// empty-string → zero value (no obligation) semantics. An unknown non-empty code
+// is an error (fail-closed).
 func decodeRowScope(c string) (tenant.RowScope, error) {
-	if c == "" {
-		return 0, nil
+	rs, err := tenant.ParseRowScope(c)
+	if err != nil {
+		return 0, fmt.Errorf("policy_codec: unknown rowScope code %q", c)
 	}
-	if rs, ok := rowScopeFromCode[c]; ok {
-		return rs, nil
-	}
-	return 0, fmt.Errorf("policy_codec: unknown rowScope code %q", c)
+	return rs, nil
 }
 
 // ─── rule list ⇄ JSONB ─────────────────────────────────────────────────────

@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "policy rule",
+  "description": "A single ABAC rule within a Policy. Referenced by policy create/update request schemas and policy get/list/create/update response schemas.",
+  "type": "object",
+  "required": ["id", "name", "effect"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Stable client-assigned rule identifier (scoped to the policy)."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "Human-readable rule label."
+    },
+    "effect": {
+      "type": "string",
+      "$comment": "enum: allow, deny — minLength/maxLength guards are length-based equivalents; add enum: [allow, deny] here if a future schema upgrade can break existing clients",
+      "minLength": 4,
+      "maxLength": 5,
+      "description": "Authorization verdict. Valid values: allow, deny. Deny-overrides: any deny wins over all allows."
+    },
+    "conditions": {
+      "type": "array",
+      "description": "All conditions are AND-combined. Empty or absent means unconditional (rule always applies).",
+      "items": {
+        "type": "object",
+        "required": ["source", "key", "operator", "values"],
+        "additionalProperties": false,
+        "properties": {
+          "source": {
+            "type": "string",
+            "$comment": "enum: subject, resource, environment — minLength/maxLength guards are length-based equivalents",
+            "minLength": 7,
+            "maxLength": 11,
+            "description": "Attribute namespace. Valid values: subject (principal claims), resource (protected object attrs), environment (context)."
+          },
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Attribute name within the source namespace (e.g. department, classification, time_of_day)."
+          },
+          "operator": {
+            "type": "string",
+            "$comment": "enum: eq, neq, in, not_in — minLength/maxLength guards are length-based equivalents",
+            "minLength": 2,
+            "maxLength": 6,
+            "description": "Comparison applied between the resolved attribute and values. Valid values: eq, neq, in, not_in."
+          },
+          "values": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "description": "Right-hand side of the comparison. Must be non-empty."
+          }
+        }
+      }
+    },
+    "obligations": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Obligations imposed on the PEP when this rule matches. All fields are optional.",
+      "properties": {
+        "rowScope": {
+          "type": "string",
+          "$comment": "enum: self, device, tenant (all is wire-valid vocabulary but rejected by policy authoring — see description); minLength/maxLength guards are length-based equivalents and intentionally still admit 'all' so the server rejects it semantically (422), not structurally (400)",
+          "minLength": 3,
+          "maxLength": 6,
+          "description": "Row-visibility obligation. Grantable values: self, device, tenant. The value 'all' (cross-tenant) is reserved for the audited super-admin derivation and is rejected with 422 when supplied via policy authoring. Absent means no row-scope constraint."
+        },
+        "fieldMask": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "description": "Fields the PEP must redact from the response. Absent or empty means no field-mask obligation."
+        }
+      }
+    }
+  }
+}
