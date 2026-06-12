@@ -1796,6 +1796,128 @@ func TestNeedsStrconv(t *testing.T) {
 	}
 }
 
+// TestNeedsMinLengthCheck covers the package-level helper gating the UNGUARDED
+// minLength lower-bound branch (path params: `len(v) < N`). minLength:0 would
+// render `len(v) < 0` — always false (length is never negative) — so only a
+// positive minLength yields a real check. See issue #1914.
+func TestNeedsMinLengthCheck(t *testing.T) {
+	t.Parallel()
+	zero, one, two := 0, 1, 2
+	cases := []struct {
+		name string
+		p    *int
+		want bool
+	}{
+		{"nil (no constraint)", nil, false},
+		{"zero is dead code (len<0)", &zero, false},
+		{"one rejects empty", &one, true},
+		{"two", &two, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := needsMinLengthCheck(tc.p); got != tc.want {
+				t.Errorf("needsMinLengthCheck(%v) = %v, want %v", tc.p, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNeedsGuardedMinLengthCheck covers the package-level helper gating the
+// GUARDED minLength lower-bound branch (query params: `req.X != "" && len(req.X)
+// < N`). The `!= ""` guard already enforces len>=1 for any value that reaches
+// the comparison, so N<=1 (including 0) is always false — dead code — and only
+// N>=2 can ever reject a non-empty value. See issue #1914.
+func TestNeedsGuardedMinLengthCheck(t *testing.T) {
+	t.Parallel()
+	zero, one, two, three := 0, 1, 2, 3
+	cases := []struct {
+		name string
+		p    *int
+		want bool
+	}{
+		{"nil (no constraint)", nil, false},
+		{"zero is dead code (len<0)", &zero, false},
+		{"one is dead code under != \"\" guard (len<1)", &one, false},
+		{"two rejects 1-char value", &two, true},
+		{"three", &three, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := needsGuardedMinLengthCheck(tc.p); got != tc.want {
+				t.Errorf("needsGuardedMinLengthCheck(%v) = %v, want %v", tc.p, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRender_Golden_Synth_HTTPMinLength byte-locks the minLength lower-bound
+// codegen funnel (issue #1914). The fixture declares query params with
+// minLength 0/1/2 and a path param with minLength 1; the content assertions
+// pin that no always-false comparison is emitted (`len(x) < 0`, or `!= "" &&
+// len(x) < 1`) while the meaningful checks (`len(x) < 2`, `len(v) < 1`) survive.
+// A regression that re-widens needsMinLengthCheck/needsGuardedMinLengthCheck
+// trips both the content assertions and the golden byte diff.
+func TestRender_Golden_Synth_HTTPMinLength(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_http_minlength")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	contract := p.Contracts["http.sample.minlength.v1"]
+	if contract == nil {
+		t.Fatal("http.sample.minlength.v1 not found in synth fixture")
+	}
+
+	spec, err := buildContractSpec(absTestDir, p, "http.sample.minlength.v1")
+	if err != nil {
+		t.Fatalf("buildContractSpec: %v", err)
+	}
+	handler := string(renderFile(t, spec, "handler_gen.go"))
+
+	// Always-false branches must NOT appear (the two dead-code classes #1914 kills),
+	// across both query params (guarded by != "") and path params (unguarded).
+	for _, dead := range []string{
+		"len(req.ZeroMin) < 0", // query minLength:0 (class 1)
+		"len(req.OneMin) < 1",  // query minLength:1 under != "" guard (class 2)
+		"len(req.ZeroMin) < 1", // guarded zero never widens to 1 either
+		"len(v) < 0",           // path param minLength:0 (id2) — unguarded class 1
+	} {
+		if strings.Contains(handler, dead) {
+			t.Errorf("handler emits always-false dead code %q (issue #1914 regression)", dead)
+		}
+	}
+	// Meaningful checks MUST still appear.
+	for _, live := range []string{
+		`if req.TwoMin != "" && len(req.TwoMin) < 2 {`,           // optional guarded query, N>=2
+		`if req.RequiredTwo != "" && len(req.RequiredTwo) < 2 {`, // required query: guarded minLength coexists with...
+		`if req.RequiredTwo == "" {`,                             // ...the required-field "" check (both emitted)
+		"if len(v) < 1 {",                                        // unguarded path param (id), rejects empty
+	} {
+		if !strings.Contains(handler, live) {
+			t.Errorf("handler missing expected check %q", live)
+		}
+	}
+	// maxLength upper bounds are unaffected by the minLength fix.
+	if !strings.Contains(handler, "len(req.ZeroMin) > 128") {
+		t.Error("handler dropped the maxLength upper-bound check for ZeroMin")
+	}
+
+	goldenFile := goldenFilePath("synth_http_minlength", "handler_gen.go")
+	if *updateGolden {
+		writeGolden(t, goldenFile, []byte(handler))
+		return
+	}
+	assertGolden(t, goldenFile, []byte(handler))
+}
+
 // TestResponseGoTypeName covers the {HandlerMethod}{Status}{Suffix} naming
 // convention emitted into types_gen.go. Three suffixes — JSONResponse for
 // body-bearing success, NoContentResponse for 204 success markers,

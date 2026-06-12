@@ -17,7 +17,7 @@ envelope shape stays consistent across the entire HTTP surface
 		return
 	}
 {{- end}}
-{{- if hasMinLength .MinLength}}
+{{- if needsGuardedMinLengthCheck .MinLength}}
 	if req.{{.GoName}} != "" && len(req.{{.GoName}}) < {{derefInt .MinLength}} {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
@@ -332,7 +332,7 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 {{- else}}
 	{
 		v := r.PathValue("{{.Name}}")
-{{- if hasMinLength .MinLength}}
+{{- if needsMinLengthCheck .MinLength}}
 		if len(v) < {{derefInt .MinLength}} {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
