@@ -848,29 +848,38 @@ func TestArchtest_GRPCStreamDrain01(t *testing.T) {
 //     SECOND registrar/drain to mismatch. (The recombination path — assembling a
 //     fresh bundle from a registrar accessor-lifted off another bundle, which mints
 //     nothing — is NOT caught here; it is caught by GRPC-WIRING-BUNDLE-CALLER-01.)
-//     Downstream: MEDIUM by go/types caller-allowlist (ResolvePackageRef resolves
-//     import aliases and function-value references to the same symbol — no "looks
-//     like but isn't" gap). Upstream: HARD is UNREACHABLE — NewServiceRegistrar/
-//     NewDrainSignal are EXPORTED (the interceptor package, a different package,
-//     must call them), and Go visibility cannot express "only NewServerInterceptors
-//     may call this exported func". Same permanent ceiling as CALLER-01 (#1394/#851/#1282).
+//     Downstream: MEDIUM by go/types caller-allowlist, resolved by SYMBOL via
+//     collectGRPCWiringRefs — it covers BOTH the cross-package selector form
+//     (ResolvePackageRef, with import aliases and function-value references
+//     resolving to the same symbol) AND the bare-identifier form (TypesInfo.Uses):
+//     a same-package call inside runtime/grpc itself, a dot-import, or a stored
+//     function value all resolve to the target *types.Func and are flagged. Upstream:
+//     HARD is UNREACHABLE — NewServiceRegistrar/NewDrainSignal are EXPORTED (the
+//     interceptor package, a different package, must call them), and Go visibility
+//     cannot express "only NewServerInterceptors may call this exported func". Same
+//     permanent ceiling as CALLER-01 (#1394/#851/#1282).
 //
 // ## Tool blind spots (charter §"强制盲区自检")
 //
-//   - A same-package bare-identifier call inside runtime/grpc itself (mint()
-//     instead of runtimegrpc.mint()) references the symbol as a bare *ast.Ident,
-//     which the SelectorExpr scan does not walk — identical to CALLER-01's
-//     documented dot-import blind spot. runtime/grpc is a foundational package with
-//     no composition-root role; no such call exists. Documented, not enforced.
+//   - Same-package bare-identifier calls inside runtime/grpc itself (mint() instead
+//     of runtimegrpc.mint()) ARE enforced: collectGRPCWiringRefs resolves bare
+//     *ast.Ident references via TypesInfo.Uses, not just SelectorExpr. This closes
+//     what would otherwise be the most reachable bypass — the guarded constructors
+//     are DEFINED in runtime/grpc, so a same-package helper is exactly where a bare
+//     call could appear (unlike CALLER-01, whose target is a third-party func that
+//     can never be bare-called from this module). The bare-ident branch is exercised
+//     by fixture_dotimport.go (a dot-import yields the same AST/types shape).
 //   - Production scope only: _test.go callers are not scanned (Tests:false), so the
 //     adapter-layer test seam (adapters/grpc/{server,readyz}_test.go, which mint +
 //     NewServerInterceptorsBundle directly to avoid importing the interceptor
 //     package per GRPC-ADAPTER-LAYER-01) is intentionally exempt — the same standard
 //     Production-scope convention the CALLER-01 family relies on.
 //   - The anti-vacuity reverse check (the sole allowlisted file must host a live
-//     mint reference) proves the scanner resolves the real references; the RED
-//     fixture (TestArchtest_GRPCWiringRegistrarMintFunnel01_RedFixture) proves the
-//     violation branch fires on an out-of-allowlist mint.
+//     reference) proves the scanner resolves real references; the RED fixture
+//     (TestArchtest_GRPCWiringRegistrarMintFunnel01_RedFixture) runs the SAME guard
+//     and asserts it emits a violation Diagnostic per out-of-funnel mint (selector +
+//     bare-ident) — proving the allowlist→Diagnostic branch fires, not merely that
+//     the resolver sees the symbol.
 //
 // # GRPC-WIRING-BUNDLE-CALLER-01
 //
@@ -890,258 +899,256 @@ func TestArchtest_GRPCStreamDrain01(t *testing.T) {
 //
 // ## AI-robust rating
 //
-//   - Downstream: MEDIUM by go/types caller-allowlist (same form as CALLER-01).
+//   - Downstream: MEDIUM by go/types caller-allowlist resolved by SYMBOL
+//     (collectGRPCWiringRefs — selector + bare-ident, shared with the mint funnel).
 //     Together with the mint funnel this is the closed funnel the charter requires
 //     ("只锁 callsite 不是闭环 funnel"): the registrar/drain SOURCE is locked (mint
 //     funnel) AND the bundle ASSEMBLY is locked (here), so neither a fresh mint nor
-//     a recombination can produce a mismatched bundle in production.
+//     a recombination can produce a mismatched bundle in production — via selector
+//     OR same-package bare call.
 //   - Upstream: HARD is UNREACHABLE — NewServerInterceptorsBundle is EXPORTED
 //     because interceptor (a different package) must call it; Go cannot seal its
 //     callers. Same permanent ceiling as the rest of the CALLER family.
 //
 // ## Tool blind spots
 //
+//   - Same-package bare-identifier assembly inside runtime/grpc IS enforced (shared
+//     collectGRPCWiringRefs bare-ident branch); exercised by fixture_dotimport.go.
 //   - Production scope only (same _test.go exemption as the mint funnel: the
 //     adapter test seam calls NewServerInterceptorsBundle directly by design).
-//   - Anti-vacuity + the RED fixture (TestArchtest_GRPCWiringBundleCaller01_RedFixture)
-//     prove the scanner resolves the real reference and the violation branch fires.
+//   - The RED fixture (TestArchtest_GRPCWiringBundleCaller01_RedFixture) runs the
+//     SAME guard and asserts one violation Diagnostic per out-of-funnel assembly
+//     (selector + bare-ident) — proving the allowlist→Diagnostic branch fires.
 
-// grpcWiringMintFns are the runtime/grpc constructors of the shared gRPC wiring
-// singletons. In production only NewServerInterceptors may call them.
-var grpcWiringMintFns = map[string]struct{}{
-	"NewServiceRegistrar": {},
-	"NewDrainSignal":      {},
+// grpcWiringFixturePkg is the RED fixture package exercising both reference forms
+// (cross-package selector in fixture.go, bare-ident via dot-import in
+// fixture_dotimport.go) from outside any allowlist.
+const grpcWiringFixturePkg = "./tools/archtest/internal/grpcwiringmintfixture"
+
+// grpcWiringRef is a resolved reference (selector OR bare ident) to a guarded
+// runtime/grpc wiring constructor.
+type grpcWiringRef struct {
+	name string
+	pos  token.Pos
 }
 
-// grpcWiringRegistrarMintCallerAllowlist is the set of production files allowed to
-// mint the shared registrar/drain. The sole sanctioned funnel is
-// NewServerInterceptors in chain.go.
-var grpcWiringRegistrarMintCallerAllowlist = map[string]struct{}{
-	"runtime/grpc/interceptor/chain.go": {}, // NewServerInterceptors — sole mint funnel
+// collectGRPCWiringRefs returns every reference in file to a runtime/grpc function
+// whose name is in targets, resolved by SYMBOL via go/types. It covers BOTH forms:
+//
+//   - cross-package selector (runtimegrpc.NewServiceRegistrar) — ResolvePackageRef;
+//   - bare identifier — a same-package call inside runtime/grpc itself, a dot-import,
+//     or a function-value reference — resolved via TypesInfo.Uses.
+//
+// Resolving the function symbol (not just the selector form) closes the gap where a
+// helper defined in runtime/grpc — the very package that owns these constructors —
+// could bypass the caller-allowlist with a bare NewServiceRegistrar() call (#1752
+// F1). The selector's .Sel ident is deduped so a cross-package call counts once.
+func collectGRPCWiringRefs(info *types.Info, file *ast.File, targets map[string]struct{}) []grpcWiringRef {
+	var refs []grpcWiringRef
+	selSel := map[*ast.Ident]struct{}{}
+	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+		selSel[sel.Sel] = struct{}{}
+		pkgPath, name, ok := ResolvePackageRef(info, sel)
+		if ok && pkgPath == grpcRuntimePkgPath {
+			if _, t := targets[name]; t {
+				refs = append(refs, grpcWiringRef{name: name, pos: sel.Pos()})
+			}
+		}
+	})
+	EachInSubtree[ast.Ident](file, func(id *ast.Ident) {
+		if _, isSel := selSel[id]; isSel {
+			return // already counted as a selector's .Sel above
+		}
+		f, ok := info.Uses[id].(*types.Func)
+		if !ok || f.Pkg() == nil || f.Pkg().Path() != grpcRuntimePkgPath {
+			return
+		}
+		if _, t := targets[f.Name()]; !t {
+			return
+		}
+		refs = append(refs, grpcWiringRef{name: f.Name(), pos: id.Pos()})
+	})
+	return refs
 }
 
-// isGRPCWiringMintSelector resolves sel via go/types and reports the mint
-// constructor name it references (NewServiceRegistrar / NewDrainSignal), if any.
-func isGRPCWiringMintSelector(info *types.Info, sel *ast.SelectorExpr) (string, bool) {
-	pkgPath, name, ok := ResolvePackageRef(info, sel)
-	if !ok || pkgPath != grpcRuntimePkgPath {
-		return "", false
+// grpcWiringGuard is a closed caller-allowlist over a set of runtime/grpc wiring
+// constructors, resolved by symbol (selector + bare ident) via collectGRPCWiringRefs.
+// The SAME guard runs in production (runProduction) and against the RED fixture
+// (runRedFixture), so the fixture exercises the real allowlist→Diagnostic branch —
+// not merely symbol resolution (#1752 F2). A fixture that only counted AST hits
+// would stay green if the allowlist were widened or the diagnostic append deleted.
+type grpcWiringGuard struct {
+	ruleID    string
+	targets   map[string]struct{}
+	allowlist map[string]struct{}
+	message   func(name, rel string) string // violation diagnostic for ref `name` in file `rel`
+}
+
+// scanFile returns (refCount, diagnostics) for one file: refCount counts guarded
+// references (for the anti-vacuity check), diagnostics flags those outside the
+// allowlist.
+func (g grpcWiringGuard) scanFile(p *Pass, file *ast.File, rel string) (int, []Diagnostic) {
+	refs := collectGRPCWiringRefs(p.TypesInfo, file, g.targets)
+	if len(refs) == 0 {
+		return 0, nil
 	}
-	if _, isMint := grpcWiringMintFns[name]; !isMint {
-		return "", false
+	if _, allowed := g.allowlist[rel]; allowed {
+		return len(refs), nil
 	}
-	return name, true
+	d := make([]Diagnostic, 0, len(refs))
+	for _, ref := range refs {
+		d = append(d, Diagnostic{
+			Rel:     rel,
+			Line:    p.Fset.Position(ref.pos).Line,
+			Message: g.message(ref.name, rel),
+		})
+	}
+	return len(refs), d
 }
 
-// TestArchtest_GRPCWiringRegistrarMintFunnel01 asserts that every production
-// reference to runtimegrpc.NewServiceRegistrar / NewDrainSignal sits in the caller
-// allowlist (sole funnel = NewServerInterceptors), and that the allowlisted file
-// is actually observed (anti-vacuity reverse check).
+// runProduction scans all production files, flags out-of-allowlist references, and
+// appends an anti-vacuity diagnostic if an allowlisted file hosts no live reference
+// (a stale entry is a latent bypass slot).
+func (g grpcWiringGuard) runProduction(t *testing.T) {
+	observed := map[string]struct{}{}
+	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
+		if !p.Typed() {
+			return nil
+		}
+		var d []Diagnostic
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			n, fd := g.scanFile(p, file, rel)
+			if n > 0 {
+				observed[rel] = struct{}{}
+			}
+			d = append(d, fd...)
+		}
+		return d
+	})
+	for f := range g.allowlist {
+		if _, seen := observed[f]; !seen {
+			diags = append(diags, Diagnostic{
+				Message: fmt.Sprintf(
+					"%s: allowlist entry %q is STALE — no live reference observed. Either the funnel moved "+
+						"or the scanner regressed; drop or update the dead allowlist entry so it cannot become a "+
+						"silent bypass slot.",
+					g.ruleID, f),
+			})
+		}
+	}
+	Report(t, g.ruleID, diags)
+}
+
+// runRedFixture runs the SAME guard against the fixture package (whose path is not
+// in the allowlist) and asserts it emits exactly wantDiags violation diagnostics,
+// each located in the fixture and carrying the rule ID. This proves the
+// allowlist→Diagnostic branch actually fires — for BOTH the selector and the
+// bare-ident form (the fixture has both) — rather than only that the resolver sees
+// the symbol.
+func (g grpcWiringGuard) runRedFixture(t *testing.T, wantDiags int) {
+	diags := Run(t, Fixture(FixtureOpts{Tests: false}, []string{grpcWiringFixturePkg}),
+		func(p *Pass) []Diagnostic {
+			if !p.Typed() {
+				return nil
+			}
+			var d []Diagnostic
+			for _, file := range p.Files {
+				_, fd := g.scanFile(p, file, p.Rel(file))
+				d = append(d, fd...)
+			}
+			return d
+		})
+
+	assert.Len(t, diags, wantDiags,
+		"%s RED fixture self-check FAILED: expected exactly %d violation diagnostics from %s "+
+			"(selector form in fixture.go + bare-ident form in fixture_dotimport.go); got %d. A miss "+
+			"means the resolver or the allowlist→Diagnostic branch regressed — the fixture runs the SAME "+
+			"guard the production rule runs.",
+		g.ruleID, wantDiags, grpcWiringFixturePkg, len(diags))
+	for _, d := range diags {
+		assert.Contains(t, d.Rel, "grpcwiringmintfixture",
+			"%s RED fixture diagnostic must point at the fixture, got %q", g.ruleID, d.Rel)
+		assert.Contains(t, d.Message, g.ruleID,
+			"%s RED fixture diagnostic must carry the rule ID", g.ruleID)
+	}
+}
+
+// grpcWiringMintGuard pins production callers of the registrar/drain constructors
+// (the sealed-singleton SOURCE) to the sole funnel NewServerInterceptors in chain.go.
+var grpcWiringMintGuard = grpcWiringGuard{
+	ruleID:    "GRPC-WIRING-REGISTRAR-MINT-FUNNEL-01",
+	targets:   map[string]struct{}{"NewServiceRegistrar": {}, "NewDrainSignal": {}},
+	allowlist: map[string]struct{}{"runtime/grpc/interceptor/chain.go": {}}, // NewServerInterceptors — sole mint funnel
+	message: func(name, rel string) string {
+		return fmt.Sprintf(
+			"GRPC-WIRING-REGISTRAR-MINT-FUNNEL-01: runtimegrpc.%s is referenced from %s, which is not the "+
+				"sanctioned gRPC wiring funnel. Minting a registrar/drain anywhere but "+
+				"runtime/grpc/interceptor.NewServerInterceptors lets a composition root hold two instances and "+
+				"wire a chain that reads one while the adapter binds the other (#1752: every RPC silently "+
+				"attributed to the runtime sentinel). Obtain the wiring bundle from NewServerInterceptors(deps) "+
+				"instead. If this IS a new sanctioned funnel, add it to grpcWiringMintGuard.allowlist with rationale.",
+			name, rel)
+	},
+}
+
+// grpcWiringBundleGuard pins production callers of NewServerInterceptorsBundle (the
+// bundle ASSEMBLY point) to chain.go, closing the recombination path the mint guard
+// cannot see (a bundle assembled from a registrar lifted off another bundle).
+var grpcWiringBundleGuard = grpcWiringGuard{
+	ruleID:    "GRPC-WIRING-BUNDLE-CALLER-01",
+	targets:   map[string]struct{}{"NewServerInterceptorsBundle": {}},
+	allowlist: map[string]struct{}{"runtime/grpc/interceptor/chain.go": {}}, // NewServerInterceptors — sole bundle assembler
+	message: func(_, rel string) string {
+		return fmt.Sprintf(
+			"GRPC-WIRING-BUNDLE-CALLER-01: runtimegrpc.NewServerInterceptorsBundle is referenced from %s, "+
+				"which is not the sanctioned bundle assembler. Assembling a ServerInterceptors bundle anywhere "+
+				"but runtime/grpc/interceptor.NewServerInterceptors lets a caller recombine a registrar/drain "+
+				"(e.g. lifted off another bundle via b.Registrar()) with options built from a DIFFERENT registrar "+
+				"— a mismatch the mint funnel cannot see (#1752). Obtain the bundle from NewServerInterceptors(deps) "+
+				"instead. If this IS a new sanctioned assembler, add it to grpcWiringBundleGuard.allowlist with rationale.",
+			rel)
+	},
+}
+
+// TestArchtest_GRPCWiringRegistrarMintFunnel01 pins production callers of
+// NewServiceRegistrar / NewDrainSignal (selector + bare-ident) to the funnel.
 func TestArchtest_GRPCWiringRegistrarMintFunnel01(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-
-	observed := map[string]struct{}{}
-
-	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
-		if !p.Typed() {
-			return nil
-		}
-		var d []Diagnostic
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-				name, ok := isGRPCWiringMintSelector(p.TypesInfo, sel)
-				if !ok {
-					return
-				}
-				observed[rel] = struct{}{}
-				if _, allowed := grpcWiringRegistrarMintCallerAllowlist[rel]; !allowed {
-					d = append(d, Diagnostic{
-						Rel:  rel,
-						Line: p.Fset.Position(sel.Pos()).Line,
-						Message: fmt.Sprintf(
-							"GRPC-WIRING-REGISTRAR-MINT-FUNNEL-01: runtimegrpc.%s is called from %s, which is "+
-								"not the sanctioned gRPC wiring funnel. Minting a registrar/drain anywhere but "+
-								"runtime/grpc/interceptor.NewServerInterceptors lets a composition root hold two "+
-								"instances and wire a chain that reads one while the adapter binds the other "+
-								"(#1752: every RPC silently attributed to the runtime sentinel). Obtain the wiring "+
-								"bundle from NewServerInterceptors(deps) instead. If this IS a new sanctioned funnel, "+
-								"add it to grpcWiringRegistrarMintCallerAllowlist with rationale.",
-							name, rel,
-						),
-					})
-				}
-			})
-		}
-		return d
-	})
-
-	// Anti-vacuity / no-stale reverse self-check: the sole allowlisted file must
-	// host a live mint reference. A stale entry is a latent bypass slot.
-	for f := range grpcWiringRegistrarMintCallerAllowlist {
-		if _, seen := observed[f]; !seen {
-			diags = append(diags, Diagnostic{
-				Message: fmt.Sprintf(
-					"GRPC-WIRING-REGISTRAR-MINT-FUNNEL-01: allowlist entry %q is STALE — no live "+
-						"runtimegrpc.NewServiceRegistrar / NewDrainSignal reference observed. Either the funnel "+
-						"moved or the scanner regressed; drop or update the dead allowlist entry so it cannot "+
-						"become a silent bypass slot.",
-					f,
-				),
-			})
-		}
-	}
-
-	Report(t, "GRPC-WIRING-REGISTRAR-MINT-FUNNEL-01", diags)
+	grpcWiringMintGuard.runProduction(t)
 }
 
-// TestArchtest_GRPCWiringRegistrarMintFunnel01_RedFixture verifies the scanner
-// fires against the deliberate out-of-funnel mints in grpcwiringmintfixture:
-// badMint calls NewServiceRegistrar AND NewDrainSignal from a non-allowlisted
-// file. The scanner must observe exactly two mint references — proving the
-// allowlist check above cannot vacuously pass.
+// TestArchtest_GRPCWiringRegistrarMintFunnel01_RedFixture asserts the guard emits a
+// violation diagnostic for each out-of-funnel mint in the fixture: 2 selector
+// (badMint) + 2 bare-ident (badMintBareIdent) = 4.
 func TestArchtest_GRPCWiringRegistrarMintFunnel01_RedFixture(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-
-	var found int
-	_ = Run(t, Fixture(FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/grpcwiringmintfixture"}),
-		func(p *Pass) []Diagnostic {
-			if !p.Typed() {
-				return nil
-			}
-			for _, file := range p.Files {
-				EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-					if _, ok := isGRPCWiringMintSelector(p.TypesInfo, sel); ok {
-						found++
-					}
-				})
-			}
-			return nil
-		})
-
-	assert.Equal(t, 2, found,
-		"GRPC-WIRING-REGISTRAR-MINT-FUNNEL-01 RED fixture self-check FAILED: expected exactly 2 "+
-			"mint call sites in grpcwiringmintfixture (NewServiceRegistrar + NewDrainSignal); got %d. "+
-			"If <2 the scanner missed a mint shape (isGRPCWiringMintSelector / ResolvePackageRef "+
-			"regression); if >2 it over-matched. The fixture proves the allowlist violation branch fires.",
-		found)
+	grpcWiringMintGuard.runRedFixture(t, 4)
 }
 
-// grpcWiringBundleCallerAllowlist is the set of production files allowed to call
-// runtime/grpc.NewServerInterceptorsBundle. The sole sanctioned assembler is
-// NewServerInterceptors in chain.go.
-var grpcWiringBundleCallerAllowlist = map[string]struct{}{
-	"runtime/grpc/interceptor/chain.go": {}, // NewServerInterceptors — sole bundle assembler
-}
-
-// isServerInterceptorsBundleSelector resolves sel via go/types and reports whether
-// it references runtime/grpc.NewServerInterceptorsBundle (alias/value-ref proof).
-func isServerInterceptorsBundleSelector(info *types.Info, sel *ast.SelectorExpr) bool {
-	pkgPath, name, ok := ResolvePackageRef(info, sel)
-	return ok && pkgPath == grpcRuntimePkgPath && name == "NewServerInterceptorsBundle"
-}
-
-// TestArchtest_GRPCWiringBundleCaller01 asserts that every production reference to
-// runtimegrpc.NewServerInterceptorsBundle sits in the caller allowlist (sole
-// assembler = NewServerInterceptors), and that the allowlisted file is actually
-// observed (anti-vacuity reverse check). Together with the mint funnel this closes
-// the recombination escape hatch.
+// TestArchtest_GRPCWiringBundleCaller01 pins production callers of
+// NewServerInterceptorsBundle (selector + bare-ident) to the funnel.
 func TestArchtest_GRPCWiringBundleCaller01(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-
-	observed := map[string]struct{}{}
-
-	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
-		if !p.Typed() {
-			return nil
-		}
-		var d []Diagnostic
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-				if !isServerInterceptorsBundleSelector(p.TypesInfo, sel) {
-					return
-				}
-				observed[rel] = struct{}{}
-				if _, allowed := grpcWiringBundleCallerAllowlist[rel]; !allowed {
-					d = append(d, Diagnostic{
-						Rel:  rel,
-						Line: p.Fset.Position(sel.Pos()).Line,
-						Message: fmt.Sprintf(
-							"GRPC-WIRING-BUNDLE-CALLER-01: runtimegrpc.NewServerInterceptorsBundle is called from "+
-								"%s, which is not the sanctioned bundle assembler. Assembling a ServerInterceptors "+
-								"bundle anywhere but runtime/grpc/interceptor.NewServerInterceptors lets a caller "+
-								"recombine a registrar/drain (e.g. lifted off another bundle via b.Registrar()) with "+
-								"options built from a DIFFERENT registrar — a mismatch the mint funnel cannot see "+
-								"(#1752). Obtain the bundle from NewServerInterceptors(deps) instead. If this IS a new "+
-								"sanctioned assembler, add it to grpcWiringBundleCallerAllowlist with rationale.",
-							rel,
-						),
-					})
-				}
-			})
-		}
-		return d
-	})
-
-	for f := range grpcWiringBundleCallerAllowlist {
-		if _, seen := observed[f]; !seen {
-			diags = append(diags, Diagnostic{
-				Message: fmt.Sprintf(
-					"GRPC-WIRING-BUNDLE-CALLER-01: allowlist entry %q is STALE — no live "+
-						"runtimegrpc.NewServerInterceptorsBundle reference observed. Either the assembler moved or "+
-						"the scanner regressed; drop or update the dead allowlist entry so it cannot become a silent "+
-						"bypass slot.",
-					f,
-				),
-			})
-		}
-	}
-
-	Report(t, "GRPC-WIRING-BUNDLE-CALLER-01", diags)
+	grpcWiringBundleGuard.runProduction(t)
 }
 
-// TestArchtest_GRPCWiringBundleCaller01_RedFixture verifies the scanner fires
-// against the deliberate out-of-funnel bundle assembly in grpcwiringmintfixture:
-// badBundle calls NewServerInterceptorsBundle from a non-allowlisted file. The
-// scanner must observe exactly one bundle reference.
+// TestArchtest_GRPCWiringBundleCaller01_RedFixture asserts the guard emits a
+// violation diagnostic for each out-of-funnel bundle assembly in the fixture: 1
+// selector (badBundle) + 1 bare-ident (badBundleBareIdent) = 2.
 func TestArchtest_GRPCWiringBundleCaller01_RedFixture(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-
-	var found int
-	_ = Run(t, Fixture(FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/grpcwiringmintfixture"}),
-		func(p *Pass) []Diagnostic {
-			if !p.Typed() {
-				return nil
-			}
-			for _, file := range p.Files {
-				EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-					if isServerInterceptorsBundleSelector(p.TypesInfo, sel) {
-						found++
-					}
-				})
-			}
-			return nil
-		})
-
-	assert.Equal(t, 1, found,
-		"GRPC-WIRING-BUNDLE-CALLER-01 RED fixture self-check FAILED: expected exactly 1 "+
-			"NewServerInterceptorsBundle call site in grpcwiringmintfixture (badBundle); got %d. "+
-			"If 0 the scanner missed it (isServerInterceptorsBundleSelector / ResolvePackageRef "+
-			"regression). The fixture proves the allowlist violation branch fires.",
-		found)
+	grpcWiringBundleGuard.runRedFixture(t, 2)
 }

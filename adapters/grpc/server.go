@@ -97,10 +97,10 @@ func New(cfg Config) (*Server, error) {
 		opts = append(opts, grpc.Creds(creds))
 	}
 
-	// Bind the composition-root-supplied registrar (Option 3 #1152) to the
-	// constructed server. It is also the instance read by the cell-attribution
-	// interceptor, so attribution resolves through one shared map. validate()
-	// guarantees cfg.Interceptors.Registrar() != nil.
+	// Bind the bundle's registrar (minted by interceptor.NewServerInterceptors,
+	// #1752) to the constructed server. It is also the instance read by the
+	// cell-attribution interceptor in that same bundle, so attribution resolves
+	// through one shared map. validate() guarantees cfg.Interceptors.Registrar() != nil.
 	inner := grpc.NewServer(opts...)
 	cfg.Interceptors.Registrar().BindServer(inner)
 	return &Server{
