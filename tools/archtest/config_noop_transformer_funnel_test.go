@@ -42,8 +42,18 @@ const (
 // zero-value struct elsewhere" inexpressible; this archtest is the backstop).
 // Same shape as the reconstruction / ctx-write caller-allowlist funnels.
 //
-// Hard-上游升级路径（接 gocell:"required" tag-funnel，泛化 requireddepsgen）追踪于
-// gh #1411；届时本 archtest 可退役。
+// 上游 Medium = 接受的终态，不被 nil-guard 退役：本 funnel 与 Service.validateRequired
+// 风格的 gocell:"required" nil-guard 守正交威胁，不可互替——
+//   - required nil-guard 走 validation.IsNilInterface 只抓 typed-nil；NoopTransformer{}
+//     是非 nil 具体值（IsNilInterface(NoopTransformer{}) == false），会被放行。
+//   - 本 funnel 抓「非 nil 的无加密 transformer 被 mint 到别处并接入 postgres」（明文落盘），
+//     configpg.WithValueTransformer 即此类入口；其 crypto.NoopTransformer{} 字面量被本扫描捕获。
+//
+// 故给 ConfigRepository.transformer 打 required tag 不能退役本 archtest（原 gh #1411 前提有误：
+// transformer 实为可选依赖，required-guard 与本 funnel 正交，#1411 已 close）。唯一退役路径 =
+// sealed「持久化 transformer」能力类型（结构性排除 NoopTransformer 接入 postgres，使坏状态不可
+// 构造而非仅被扫描）；该路径成本 > 收益（hole 已被本 Medium 扫描封闭），不立项，作为独立 ADR 级
+// 决策保留。本注释修正不降级任何 enforcement，威胁矩阵不变（仍 Hard 下游 / Medium 上游）。
 //
 // Blind spots (AST-only Run; documented per ai-robust §载体决策原则):
 //   - Aliased construction via a function value (e.g. `f := crypto.NoopTransformer{};`
