@@ -606,7 +606,10 @@ func TestDispatchCommand_UnparseableDeadline_DeadLetters(t *testing.T) {
 // (TEST-TIME-LITERAL-01: named, not inline literals).
 var activeUniquenessTruncBase = time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 
-const activeUniquenessTruncWindow = 36 * time.Hour
+const (
+	activeUniquenessTruncWindow = 36 * time.Hour // active deadline offset (AttemptTTL)
+	activeUniquenessTruncTick   = 12 * time.Hour // reconcile sweep-interval tick
+)
 
 // TestDispatchCommand_ActiveUniqueness_DoneTTLTruncatedToDeadline asserts the
 // relay bounds an active-uniqueness command's Claimer done-key TTL to its terminal
@@ -719,15 +722,15 @@ func TestDispatchCommand_ActiveUniqueness_RealClaimer_TerminalReleaseRetry(t *te
 	require.Equal(t, 1, dispatched, "T0 emit must dispatch")
 
 	// T+12h and T+24h: still before the deadline → ClaimDone → coalesced, NO dispatch.
-	fc.Advance(12 * time.Hour)
+	fc.Advance(activeUniquenessTruncTick)
 	tick()
-	fc.Advance(12 * time.Hour)
+	fc.Advance(activeUniquenessTruncTick)
 	tick()
 	require.Equal(t, 1, dispatched, "emits before the deadline must coalesce (no duplicate dispatch)")
 
 	// Advance PAST the deadline: the queue would release the active-uniqueness key,
 	// and the relay done-key (truncated to the deadline) has also expired.
-	fc.Advance(activeUniquenessTruncWindow) // now = T0 + 48h > deadline (T0 + 36h)
+	fc.Advance(activeUniquenessTruncWindow) // now = T0 + 24h + 36h = T0 + 60h > deadline (T0 + 36h)
 	tick()
 	assert.Equal(t, 2, dispatched,
 		"after the deadline the truncated done-key has expired → next tick re-dispatches (terminal-release retry)")
