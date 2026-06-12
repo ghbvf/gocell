@@ -255,7 +255,7 @@ func bootL2Assembly(t *testing.T, pgOutboxOverride outbox.Writer) *l2Harness {
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
 
-	runBootstrap(t, asm, listenerSet{primary: primaryLn, internal: internalLn, health: healthLn}, eb, authDeps, relayWorker)
+	runBootstrap(t, asm, listenerSet{primary: primaryLn, internal: internalLn, health: healthLn}, eb, authDeps, relayWorker, []cell.Cell{ac, cc, auc})
 	base := "http://" + primaryLn.Addr().String()
 	healthBase := "http://" + healthLn.Addr().String()
 	waitForHealthz(t, healthBase, base)
@@ -447,8 +447,13 @@ func runBootstrap(
 	eb *eventbus.InMemoryEventBus,
 	a *authLayer,
 	relayWorker *outboxruntime.Relay,
+	authorizerCells []cell.Cell,
 ) {
 	t.Helper()
+	// Wire the ABAC PDP (PR-10c #1348): this harness creates/locks/reads users as
+	// admin via the migrated accesscore gates, which fail closed without the PDP.
+	authzOpt, authzErr := bootstrap.PrimaryAuthorizerOption(authorizerCells)
+	require.NoError(t, authzErr, "primary authorizer wiring must succeed with accesscore present")
 	app := bootstrap.New(clock.Real(),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, lns.primary.Addr().String(),
@@ -470,6 +475,7 @@ func runBootstrap(
 		// the race-detector lane; we match it (no headroom is harmless — the
 		// graceful drain returns immediately once all sockets are quiet).
 		bootstrap.WithShutdownTimeout(testtime.D60s),
+		authzOpt,
 	)
 
 	runCtx, cancel := context.WithCancel(context.Background())

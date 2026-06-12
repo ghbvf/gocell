@@ -347,6 +347,11 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	// #673: a dedicated HealthListener is mandatory; /healthz moves there.
 	healthLn := newCorebundleLocalListener(t)
 	internalAuthChain := []kauth.ListenerAuth{authtest.MustAuthServiceToken(nonceStore, ring)}
+	// Wire the ABAC PDP (PR-10c #1348): this test creates a user as admin via
+	// POST /api/v1/access/users, whose gate is now auth.RequirePermission(user:write)
+	// and fails closed without a wired Authorizer — mirror production run.go.
+	authzOpt, authzErr := bootstrap.PrimaryAuthorizerOption([]cell.Cell{ac, cc, auc})
+	require.NoError(t, authzErr, "primary authorizer wiring must succeed with accesscore present")
 	app := bootstrap.New(clock.Real(),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
@@ -357,6 +362,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, clock.Real())),
 		bootstrap.WithShutdownTimeout(testtime.D2s),
+		authzOpt,
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())

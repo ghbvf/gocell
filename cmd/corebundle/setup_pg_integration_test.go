@@ -155,6 +155,11 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 	require.NoError(t, asm.Register(auc))
 
 	healthLn := newCorebundleLocalListener(t)
+	// Wire the ABAC PDP (PR-10c #1348): this harness creates/locks users as admin
+	// via the migrated accesscore gates (auth.RequirePermission), which fail closed
+	// without a wired Authorizer — mirror production run.go.
+	setupAuthzOpt, setupAuthzErr := bootstrap.PrimaryAuthorizerOption([]cell.Cell{ac, cc, auc})
+	require.NoError(t, setupAuthzErr, "primary authorizer wiring must succeed with accesscore present")
 	app := bootstrap.New(clock.Real(),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(),
@@ -166,6 +171,7 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, clock.Real())),
 		bootstrap.WithShutdownTimeout(testtime.D2s),
+		setupAuthzOpt,
 	)
 
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -464,6 +470,10 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 	require.NoError(t, asm.Register(auc))
 
 	sessionHealthLn := newCorebundleLocalListener(t)
+	// Wire the ABAC PDP (PR-10c #1348): this harness creates/locks/reads users as
+	// admin via the migrated accesscore gates (fail closed without the PDP).
+	sessionAuthzOpt, sessionAuthzErr := bootstrap.PrimaryAuthorizerOption([]cell.Cell{ac, cc, auc})
+	require.NoError(t, sessionAuthzErr, "primary authorizer wiring must succeed with accesscore present")
 	app := bootstrap.New(clock.Real(),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(),
@@ -481,6 +491,7 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, clock.Real())),
 		bootstrap.WithShutdownTimeout(testtime.D2s),
+		sessionAuthzOpt,
 	)
 
 	runCtx, cancel := context.WithCancel(context.Background())
