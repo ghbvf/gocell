@@ -30,12 +30,14 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecmd"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	devicecertcompletion "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecertcompletion"
 	devicecertrenewal "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecertrenewal"
 	slicecmd "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommand"
 	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/kernel/reconcile"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -174,4 +176,97 @@ func TestCertRenewal_F1_OfflineDeviceNoDuplicates(t *testing.T) {
 	assert.Len(t, afterRetry, 1, "a fresh rotate-cert must be queued after the expired slot is released")
 	assert.NotEqual(t, firstCmdID, afterRetry[0].ID,
 		"the retry command is a different entry (fresh enqueue, not the expired one)")
+}
+
+// TestCertRenewal_CompletionClosesLoop is the #1870 HEADLINE acceptance test: a
+// device that ACKS a rotate-cert as succeeded must have its cert state advanced
+// so it LEAVES the near-expiry candidate set — the L4 convergence loop closes,
+// and the producer stops re-emitting.
+//
+// It wires the full回执 path component-by-component (no real relay/bus, same
+// relay-sim style as TestCertRenewal_F1): producer → queue → device dequeue →
+// device ack (fires the completion hook) → rotation-resolved event → completion
+// consumer advances cert state → next tick emits nothing.
+func TestCertRenewal_CompletionClosesLoop(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const attemptTTL = 36 * time.Hour
+	// Threshold 30d, CertValidity 90d (> threshold): a renewed cert is far from
+	// expiry, so the device drops out of the candidate set. This mirrors the
+	// cell's live co-tuning that buildCertRenewalSweeper asserts at startup.
+	const threshold = 30 * 24 * time.Hour
+
+	base := time.Date(2026, 6, 12, 0, 0, 0, 0, time.UTC)
+	fc := clockmock.New(base)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Device with a near-expiry cert (epoch 1, expires in 24h < 30d threshold).
+	repo := mem.NewDeviceRepository()
+	require.NoError(t, repo.Create(ctx, &domain.Device{
+		ID: "dev-online", Name: "online-sensor", Status: "online", LastSeen: base,
+		CertEpoch: 1, CertExpiresAt: base.Add(24 * time.Hour),
+	}))
+
+	// Producer: cert-renewal reconciler emitting into rec.
+	rec := outboxtest.NewRecorder()
+	reconciler, err := devicecertrenewal.NewReconciler(fc, repo, rec.CellEmitter(),
+		devicecertrenewal.Policy{Threshold: threshold, AttemptTTL: attemptTTL}, logger)
+	require.NoError(t, err)
+
+	// Completion consumer: publishes rotation-resolved into rec2 and advances cert
+	// state on the subscribe side. Same repo as the producer (intra-cell).
+	rec2 := outboxtest.NewRecorder()
+	completionSvc, err := devicecertcompletion.NewService(fc, repo,
+		devicecertcompletion.WithEmitter(rec2.CellEmitter()))
+	require.NoError(t, err)
+
+	// Consumer queue + devicecmd.Service WITH the completion hook wired (as the
+	// cell composition root wires it into the public ack-serving Service).
+	queue := commandtest.NewInMemQueue()
+	queue.Now = fc.Now
+	codec := newTestCursorCodec(t)
+	svc, err := devicecmd.NewService(fc, queue, repo, codec, logger, query.RunModeForDemo(true),
+		devicecmd.WithSliceName("devicecommand"),
+		devicecmd.WithOnCommandResolved(completionSvc.OnCommandResolved))
+	require.NoError(t, err)
+	handler := slicecmd.EnqueueCommandAdapter{S: svc}
+
+	// --- Tick 1: produce + dispatch the rotate-cert command. ---
+	_, err = reconciler.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+	require.Len(t, rec.Entries(), 1, "tick 1 must emit exactly 1 rotate-cert")
+	dispatchNew(t, ctx, handler, rec)
+
+	active, err := queue.ScanActive(ctx, kcommand.ScanFilter{DeviceID: "dev-online"})
+	require.NoError(t, err)
+	require.Len(t, active, 1)
+	cmdID := active[0].ID
+
+	// --- Device executes: dequeue (→ Sent) then ack success 1h later. ---
+	_, err = queue.Dequeue(ctx, "dev-online", 1, kcommand.DefaultLeaseDuration)
+	require.NoError(t, err)
+	fc.Advance(time.Hour)
+	ackAt := fc.Now()
+	require.NoError(t, svc.Ack(ctx, "dev-online", cmdID, kcommand.AckSuccess))
+
+	// --- The ack hook emitted a rotation-resolved event; relay-sim it to the consumer. ---
+	resolved := rec2.Entries()
+	require.Len(t, resolved, 1, "ack of a rotate-cert must emit exactly 1 rotation-resolved event")
+	res := completionSvc.HandleRotationResolved(ctx, resolved[0])
+	require.Equal(t, outbox.DispositionAck, res.Disposition, "consumer must Ack the resolved event")
+
+	// --- Loop-closing assertions: cert state advanced. ---
+	got, err := repo.GetByID(ctx, "dev-online")
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), got.CertEpoch, "epoch advanced 1→2 on rotation completion")
+	assert.True(t, got.CertExpiresAt.Equal(ackAt.Add(domain.CertValidity)),
+		"cert expiry advanced to ackAt + CertValidity (got %v)", got.CertExpiresAt)
+
+	// --- The headline: next tick must NOT re-emit (device left the candidate set). ---
+	rec.Reset()
+	_, err = reconciler.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+	assert.Empty(t, rec.Entries(),
+		"a renewed device must NOT be re-emitted — the L4 convergence loop has closed (#1870)")
 }
