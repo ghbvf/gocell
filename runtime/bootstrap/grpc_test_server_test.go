@@ -38,24 +38,23 @@ func newTestGRPCServer(authPublic func(fullMethod string) bool) *testGRPCServer 
 	if authPublic != nil {
 		authOpts = append(authOpts, interceptor.WithPublicMethod(authPublic))
 	}
-	reg := runtimegrpc.NewServiceRegistrar()
-	drain := runtimegrpc.NewDrainSignal()
 	deps := interceptor.Deps{
 		Collector:   metrics.NewInMemoryGRPCCollector(),
 		Clock:       clock.Real(),
 		Verifier:    &bootstrapTestVerifier{},
 		AuthOptions: authOpts,
-		Registrar:   reg,
 		CellIDClosedSet: []string{
 			"bootstrap-test-cell",
 			"_listener-test",
 		},
-		Drain: drain,
 	}
+	// NewServerInterceptors mints the shared registrar/drain (#1752); take them
+	// from the bundle so this server binds exactly the instances the chains read.
 	bundle := interceptor.NewServerInterceptors(deps)
 	srv := grpc.NewServer(bundle.ServerOptions()...)
+	reg := bundle.Registrar()
 	reg.BindServer(srv)
-	return &testGRPCServer{inner: srv, registrar: reg, drain: drain}
+	return &testGRPCServer{inner: srv, registrar: reg, drain: bundle.Drain()}
 }
 
 func (s *testGRPCServer) Serve(ctx context.Context, lis net.Listener) error {

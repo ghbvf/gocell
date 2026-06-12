@@ -3,10 +3,15 @@
 // (runtime/http/middleware): RequestID, CellAttribution, Tracing, AccessLog,
 // Metrics, Auth, and Recovery.
 //
-// The unary interceptors are composed by NewUnaryChain and the streaming
-// interceptors by NewStreamChain, each into a single grpc.ServerOption.
-// bootstrap installs both options on the adapters/grpc server; this package owns
-// no server lifecycle. The cross-cutting cores (request-id derivation, cell
+// NewServerInterceptors(deps) is the sole public entrypoint: it mints the one
+// shared ServiceRegistrar + DrainSignal (#1752), composes the unary interceptors
+// (newUnaryChain) and the streaming interceptors (newStreamChain) — each into a
+// single grpc.ServerOption — from those instances, and returns the adapter-
+// consumable bundle. The chain builders are package-private so no external code
+// can compose a chain reading a registrar other than the one the adapter binds
+// (the compile-proof same-instance guarantee). bootstrap installs the bundle's
+// options on the adapters/grpc server; this package owns no server lifecycle. The
+// cross-cutting cores (request-id derivation, cell
 // attribution, span open/close, access logging, the bearer-auth decision, and
 // panic collapse) are shared between the unary and streaming variants — one
 // source per concern across both transports. The metrics cell-label funnel is
@@ -15,13 +20,13 @@
 //
 // # Chain order
 //
-// NewUnaryChain composes the interceptors in this fixed order (outermost →
+// newUnaryChain composes the interceptors in this fixed order (outermost →
 // innermost), where the first argument to grpc.ChainUnaryInterceptor is the
 // outermost wrapper closest to the transport:
 //
 //	RequestID → CellAttribution → Tracing → AccessLog → Metrics → Auth → Recovery → handler
 //
-// NewStreamChain composes the streaming analogs in the same order plus a
+// newStreamChain composes the streaming analogs in the same order plus a
 // stream-only StreamDrain just inside Auth (so the handler's context is bound to
 // the framework drain signal, PR-10 #1153):
 //

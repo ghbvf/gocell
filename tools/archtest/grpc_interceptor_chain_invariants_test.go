@@ -7,40 +7,43 @@
 //   - INVARIANT: GRPC-STREAM-CHAIN-ORDER-01
 //   - INVARIANT: GRPC-CHAIN-STREAM-INTERCEPTOR-CALLER-01
 //   - INVARIANT: GRPC-STREAM-DRAIN-01
+//   - INVARIANT: GRPC-WIRING-REGISTRAR-MINT-FUNNEL-01
 //
 // The STREAM-* invariants (PR-10 #1153) are the streaming counterparts of the
 // unary chain guards, with the same AI-robust ratings and Go-ceiling caveats:
 // GRPC-STREAM-CHAIN-ORDER-01 pins the 8-arg order of the single
-// grpc.ChainStreamInterceptor call in NewStreamChain (RequestID outermost, Drain
+// grpc.ChainStreamInterceptor call in newStreamChain (RequestID outermost, Drain
 // just inside Auth, Recovery innermost); GRPC-CHAIN-STREAM-INTERCEPTOR-CALLER-01
-// pins WHO may call grpc.ChainStreamInterceptor (sole site = NewStreamChain in
+// pins WHO may call grpc.ChainStreamInterceptor (sole site = newStreamChain in
 // stream.go) — Hard-upstream is the same Go-language ceiling as the unary
-// CALLER-01 (third-party exported func, won't-do gh #1394; the single-builder
-// funnel that would also force both chains to be wired is gh #1752).
+// CALLER-01 (third-party exported func, won't-do gh #1394). The single-wiring-object
+// upgrade that also forces both chains to be wired is DONE (gh #1752): the chain
+// builders are package-private and NewServerInterceptors is the sole funnel that
+// mints the registrar/drain (GRPC-WIRING-REGISTRAR-MINT-FUNNEL-01 below).
 // GRPC-STREAM-DRAIN-01 is the two-sided framework-drain guard: (A) StreamDrain is
-// a pinned arg of NewStreamChain (every in-flight stream's ctx is bound to the
+// a pinned arg of newStreamChain (every in-flight stream's ctx is bound to the
 // drain signal), and (B) runtimegrpc.DrainSignal.Trigger is caller-allowlisted to
 // adapters/grpc/server.go (only — and exactly — the adapter's gracefulStop fires
 // it). Together: drain is wired on both producer (adapter Trigger) and consumer
 // (chain StreamDrain) ends. Upstream Hard is unreachable (Trigger is an exported
 // method; Go cannot seal its callers) — same #1394/#851/#1282 family; the
-// single-builder Hard upgrade is gh #1752.
+// single-wiring-object same-instance upgrade landed in gh #1752.
 //
 // Two related invariants guard the single unary interceptor chain that
-// runtime/grpc/interceptor.NewUnaryChain composes:
+// runtime/grpc/interceptor.newUnaryChain composes:
 //
 //   - ORDER-01 pins the argument ORDER of the grpc.ChainUnaryInterceptor call
-//     inside NewUnaryChain (RequestID outermost … Recovery innermost), with each
+//     inside newUnaryChain (RequestID outermost … Recovery innermost), with each
 //     argument's callee resolved to the real runtime/grpc/interceptor
 //     constructor via go/types (not a bare name match).
 //   - CALLER-01 pins WHO may call grpc.ChainUnaryInterceptor at all: the sole
-//     sanctioned composition site is NewUnaryChain. Any other caller (bootstrap,
+//     sanctioned composition site is newUnaryChain. Any other caller (bootstrap,
 //     cmd, a cell) that composes its own chain would bypass ORDER-01 entirely.
 //
 // # GRPC-INTERCEPTOR-CHAIN-ORDER-01
 //
 // runtime/grpc/interceptor/chain.go composes the unary interceptor chain via a
-// single grpc.ChainUnaryInterceptor(...) call inside NewUnaryChain. That call's
+// single grpc.ChainUnaryInterceptor(...) call inside newUnaryChain. That call's
 // arguments MUST be, in order:
 //
 //	UnaryRequestID, UnaryCellAttribution, UnaryTracing, UnaryAccessLog,
@@ -75,7 +78,7 @@
 //   - Ordering: MEDIUM, PERMANENT CEILING. Interceptor order is statement /
 //     argument order in a function body; the Go type system cannot make "wrong
 //     order = uncompilable" (the HTTP middleware order in runtime/http/router is
-//     likewise archtest-free). NewUnaryChain is the single sanctioned
+//     likewise archtest-free). newUnaryChain is the single sanctioned
 //     composition point (enforced by CALLER-01 below + the blind-spot check),
 //     and chain_test.go behaviorally verifies the recovery-innermost
 //     consequence; this archtest is the static backstop against future
@@ -101,7 +104,7 @@
 // grpc.ChainUnaryInterceptor (google.golang.org/grpc) is the third-party
 // primitive that assembles a unary interceptor slice into a single
 // grpc.ServerOption. GoCell composes its chain in exactly one place —
-// runtime/grpc/interceptor/chain.go::NewUnaryChain — so that ORDER-01 has a
+// runtime/grpc/interceptor/chain.go::newUnaryChain — so that ORDER-01 has a
 // single authoritative site to guard. Without this caller-allowlist, a future
 // bootstrap / cmd / cell could call grpc.ChainUnaryInterceptor directly with an
 // arbitrary order, installing an unguarded chain that ORDER-01's single-site
@@ -110,7 +113,7 @@
 // This archtest pins the production callsite identity of grpc.ChainUnaryInterceptor
 // to:
 //
-//	{ runtime/grpc/interceptor/chain.go::NewUnaryChain }
+//	{ runtime/grpc/interceptor/chain.go::newUnaryChain }
 //
 // ## AI-robust rating (charter §"Funnel 双向锁评级")
 //
@@ -167,7 +170,7 @@ import (
 )
 
 // grpcInterceptorPkgPath is the import path of the package that owns the unary
-// interceptor constructors and the NewUnaryChain composition site. Anchored to
+// interceptor constructors and the newUnaryChain composition site. Anchored to
 // [PlatformModulePath] so a module rename updates exactly one place.
 const grpcInterceptorPkgPath = PlatformModulePath + "/runtime/grpc/interceptor"
 
@@ -175,7 +178,7 @@ const grpcInterceptorPkgPath = PlatformModulePath + "/runtime/grpc/interceptor"
 const grpcPkgPath = "google.golang.org/grpc"
 
 // grpcChainExpectedOrder is the required argument order of the
-// grpc.ChainUnaryInterceptor call in NewUnaryChain, by constructor name. Each
+// grpc.ChainUnaryInterceptor call in newUnaryChain, by constructor name. Each
 // name is resolved to a runtime/grpc/interceptor function via go/types before
 // the order is compared, so a same-named decoy from another package will not
 // match.
@@ -397,9 +400,9 @@ func TestArchtest_GRPCInterceptorChainOrder_BlindSpot_ArgsResolveToConstructors(
 
 // chainUnaryInterceptorCallerAllowlist is the set of production files allowed to
 // reference grpc.ChainUnaryInterceptor. The single sanctioned composition site
-// is NewUnaryChain in chain.go.
+// is newUnaryChain in chain.go.
 var chainUnaryInterceptorCallerAllowlist = map[string]struct{}{
-	"runtime/grpc/interceptor/chain.go": {}, // NewUnaryChain — sole composition site
+	"runtime/grpc/interceptor/chain.go": {}, // newUnaryChain — sole composition site
 }
 
 // TestArchtest_GRPCChainUnaryInterceptorCaller01 asserts that every production
@@ -432,11 +435,11 @@ func TestArchtest_GRPCChainUnaryInterceptorCaller01(t *testing.T) {
 						Message: fmt.Sprintf(
 							"GRPC-CHAIN-UNARY-INTERCEPTOR-CALLER-01: grpc.ChainUnaryInterceptor is referenced "+
 								"from %s, which is not the sanctioned chain-composition site. Composing a unary "+
-								"interceptor chain anywhere but runtime/grpc/interceptor.NewUnaryChain bypasses the "+
-								"chain-order invariant (GRPC-INTERCEPTOR-CHAIN-ORDER-01). Route all gRPC unary "+
-								"interceptor assembly through NewUnaryChain. If this IS a new sanctioned composition "+
-								"site, add it to chainUnaryInterceptorCallerAllowlist with rationale and extend "+
-								"ORDER-01 to cover it.",
+								"interceptor chain anywhere but runtime/grpc/interceptor.newUnaryChain bypasses the "+
+								"chain-order invariant (GRPC-INTERCEPTOR-CHAIN-ORDER-01). Obtain the wiring bundle "+
+								"from interceptor.NewServerInterceptors(deps) (the public funnel; newUnaryChain is "+
+								"package-private). If this IS a new sanctioned composition site, add it to "+
+								"chainUnaryInterceptorCallerAllowlist with rationale and extend ORDER-01 to cover it.",
 							rel,
 						),
 					})
@@ -472,7 +475,7 @@ func TestArchtest_GRPCChainUnaryInterceptorCaller01(t *testing.T) {
 const grpcRuntimePkgPath = PlatformModulePath + "/runtime/grpc"
 
 // grpcStreamChainExpectedOrder is the required argument order of the
-// grpc.ChainStreamInterceptor call in NewStreamChain. The streaming chain mirrors
+// grpc.ChainStreamInterceptor call in newStreamChain. The streaming chain mirrors
 // the unary order plus a stream-only StreamDrain just inside StreamAuth (so the
 // handler's context is drain-bound while the outer observability interceptors
 // still see the final status). Each name is resolved to a runtime/grpc/interceptor
@@ -622,9 +625,9 @@ func TestArchtest_GRPCStreamChainOrder_BlindSpot_ArgsResolveToConstructors(t *te
 
 // chainStreamInterceptorCallerAllowlist is the set of production files allowed to
 // reference grpc.ChainStreamInterceptor. The single sanctioned composition site
-// is NewStreamChain in stream.go.
+// is newStreamChain in stream.go.
 var chainStreamInterceptorCallerAllowlist = map[string]struct{}{
-	"runtime/grpc/interceptor/stream.go": {}, // NewStreamChain — sole stream composition site
+	"runtime/grpc/interceptor/stream.go": {}, // newStreamChain — sole stream composition site
 }
 
 // TestArchtest_GRPCChainStreamInterceptorCaller01 asserts that every production
@@ -657,11 +660,11 @@ func TestArchtest_GRPCChainStreamInterceptorCaller01(t *testing.T) {
 						Message: fmt.Sprintf(
 							"GRPC-CHAIN-STREAM-INTERCEPTOR-CALLER-01: grpc.ChainStreamInterceptor is referenced "+
 								"from %s, which is not the sanctioned stream-composition site. Composing a stream "+
-								"interceptor chain anywhere but runtime/grpc/interceptor.NewStreamChain bypasses the "+
-								"chain-order invariant (GRPC-STREAM-CHAIN-ORDER-01). Route all gRPC stream "+
-								"interceptor assembly through NewStreamChain. If this IS a new sanctioned composition "+
-								"site, add it to chainStreamInterceptorCallerAllowlist with rationale and extend "+
-								"STREAM-CHAIN-ORDER-01 to cover it.",
+								"interceptor chain anywhere but runtime/grpc/interceptor.newStreamChain bypasses the "+
+								"chain-order invariant (GRPC-STREAM-CHAIN-ORDER-01). Obtain the wiring bundle from "+
+								"interceptor.NewServerInterceptors(deps) (the public funnel; newStreamChain is "+
+								"package-private). If this IS a new sanctioned composition site, add it to "+
+								"chainStreamInterceptorCallerAllowlist with rationale and extend STREAM-CHAIN-ORDER-01 to cover it.",
 							rel,
 						),
 					})
@@ -719,7 +722,7 @@ var drainSignalTriggerCallerAllowlist = map[string]struct{}{
 // TestArchtest_GRPCStreamDrain01 is the two-sided framework-drain guard:
 //
 //	(A) StreamDrain is a pinned argument of the grpc.ChainStreamInterceptor call
-//	    in NewStreamChain (consumer side — every in-flight stream's context is
+//	    in newStreamChain (consumer side — every in-flight stream's context is
 //	    bound to the drain signal).
 //	(B) runtimegrpc.DrainSignal.Trigger is called only — and is actually called —
 //	    from adapters/grpc/server.go (producer side — the adapter's gracefulStop
@@ -785,7 +788,7 @@ func TestArchtest_GRPCStreamDrain01(t *testing.T) {
 	if !streamDrainInChain {
 		diags = append(diags, Diagnostic{
 			Message: "GRPC-STREAM-DRAIN-01 (A): StreamDrain is not a pinned argument of the " +
-				"grpc.ChainStreamInterceptor call in NewStreamChain — in-flight streams would not be " +
+				"grpc.ChainStreamInterceptor call in newStreamChain — in-flight streams would not be " +
 				"bound to the drain signal, so a drain could not cancel them.",
 		})
 	}
@@ -805,4 +808,187 @@ func TestArchtest_GRPCStreamDrain01(t *testing.T) {
 	}
 
 	Report(t, "GRPC-STREAM-DRAIN-01", diags)
+}
+
+// ─── Single wiring funnel (#1752) ───────────────────────────────────────────────
+
+// # GRPC-WIRING-REGISTRAR-MINT-FUNNEL-01
+//
+// runtime/grpc.NewServiceRegistrar and runtime/grpc.NewDrainSignal are the SOLE
+// constructors of the two shared gRPC wiring singletons (their fields are
+// unexported, so a non-zero value is unconstructable outside runtime/grpc). The
+// cell-attribution chain reads the registrar's CellIDForMethod; the adapter binds
+// the registrar to the *grpc.Server and triggers the drain at GracefulStop. For
+// "the chain reads registrar A while the adapter binds registrar B → every RPC
+// silently attributed to the runtime sentinel" to be unrepresentable, exactly one
+// site may mint these in production: interceptor.NewServerInterceptors, which mints
+// one of each and wires the SAME instances into both chains and the adapter bundle
+// (#1752). A second production mint site is the only way to obtain a second
+// registrar/drain and thereby reintroduce the mismatch.
+//
+// This archtest pins the production caller identity of NewServiceRegistrar AND
+// NewDrainSignal to:
+//
+//	{ runtime/grpc/interceptor/chain.go::NewServerInterceptors }
+//
+// ## AI-robust rating (charter §"Funnel 双向锁评级")
+//
+//   - The same-instance guarantee itself is HARD-by-type-system, not enforced
+//     here: interceptor.Deps carries no registrar/drain field and the chain
+//     builders (newUnaryChain/newStreamChain) are package-private, so no external
+//     code can compose a registrar-reading chain. Within NewServerInterceptors the
+//     minted reg/drain feed both chains and the bundle, so the instances are
+//     provably identical by construction. There is no AST shape to forbid for the
+//     documented path — the type system forbids it before analysis.
+//   - This archtest is the MEDIUM backstop for the residual low-level path the
+//     type system cannot seal: a future production caller could splice
+//     interceptor.UnaryCellAttribution(reg.CellIDForMethod) into grpc.UnaryInterceptor
+//     and a raw runtimegrpc.NewServerInterceptorsBundle with a *different* registrar.
+//     That path necessarily mints a second registrar/drain via these two
+//     constructors, which this caller-allowlist rejects. Downstream: MEDIUM by
+//     go/types caller-allowlist (ResolvePackageRef resolves import aliases and
+//     function-value references to the same symbol — no "looks like but isn't" gap).
+//     Upstream: HARD is UNREACHABLE — NewServiceRegistrar/NewDrainSignal are
+//     EXPORTED (the interceptor package, a different package, must call them), and
+//     Go visibility cannot express "only NewServerInterceptors may call this
+//     exported func". Same permanent ceiling as the CALLER-01 family (#1394/#851/#1282).
+//
+// ## Tool blind spots (charter §"强制盲区自检")
+//
+//   - A same-package bare-identifier call inside runtime/grpc itself (mint()
+//     instead of runtimegrpc.mint()) references the symbol as a bare *ast.Ident,
+//     which the SelectorExpr scan does not walk — identical to CALLER-01's
+//     documented dot-import blind spot. runtime/grpc is a foundational package with
+//     no composition-root role; no such call exists. Documented, not enforced.
+//   - The anti-vacuity reverse check (the sole allowlisted file must host a live
+//     mint reference) proves the scanner resolves the real references; the RED
+//     fixture (TestArchtest_GRPCWiringRegistrarMintFunnel01_RedFixture) proves the
+//     violation branch fires on an out-of-allowlist mint.
+
+// grpcWiringMintFns are the runtime/grpc constructors of the shared gRPC wiring
+// singletons. In production only NewServerInterceptors may call them.
+var grpcWiringMintFns = map[string]struct{}{
+	"NewServiceRegistrar": {},
+	"NewDrainSignal":      {},
+}
+
+// grpcWiringRegistrarMintCallerAllowlist is the set of production files allowed to
+// mint the shared registrar/drain. The sole sanctioned funnel is
+// NewServerInterceptors in chain.go.
+var grpcWiringRegistrarMintCallerAllowlist = map[string]struct{}{
+	"runtime/grpc/interceptor/chain.go": {}, // NewServerInterceptors — sole mint funnel
+}
+
+// isGRPCWiringMintSelector resolves sel via go/types and reports the mint
+// constructor name it references (NewServiceRegistrar / NewDrainSignal), if any.
+func isGRPCWiringMintSelector(info *types.Info, sel *ast.SelectorExpr) (string, bool) {
+	pkgPath, name, ok := ResolvePackageRef(info, sel)
+	if !ok || pkgPath != grpcRuntimePkgPath {
+		return "", false
+	}
+	if _, isMint := grpcWiringMintFns[name]; !isMint {
+		return "", false
+	}
+	return name, true
+}
+
+// TestArchtest_GRPCWiringRegistrarMintFunnel01 asserts that every production
+// reference to runtimegrpc.NewServiceRegistrar / NewDrainSignal sits in the caller
+// allowlist (sole funnel = NewServerInterceptors), and that the allowlisted file
+// is actually observed (anti-vacuity reverse check).
+func TestArchtest_GRPCWiringRegistrarMintFunnel01(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	observed := map[string]struct{}{}
+
+	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
+		if !p.Typed() {
+			return nil
+		}
+		var d []Diagnostic
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+				name, ok := isGRPCWiringMintSelector(p.TypesInfo, sel)
+				if !ok {
+					return
+				}
+				observed[rel] = struct{}{}
+				if _, allowed := grpcWiringRegistrarMintCallerAllowlist[rel]; !allowed {
+					d = append(d, Diagnostic{
+						Rel:  rel,
+						Line: p.Fset.Position(sel.Pos()).Line,
+						Message: fmt.Sprintf(
+							"GRPC-WIRING-REGISTRAR-MINT-FUNNEL-01: runtimegrpc.%s is called from %s, which is "+
+								"not the sanctioned gRPC wiring funnel. Minting a registrar/drain anywhere but "+
+								"runtime/grpc/interceptor.NewServerInterceptors lets a composition root hold two "+
+								"instances and wire a chain that reads one while the adapter binds the other "+
+								"(#1752: every RPC silently attributed to the runtime sentinel). Obtain the wiring "+
+								"bundle from NewServerInterceptors(deps) instead. If this IS a new sanctioned funnel, "+
+								"add it to grpcWiringRegistrarMintCallerAllowlist with rationale.",
+							name, rel,
+						),
+					})
+				}
+			})
+		}
+		return d
+	})
+
+	// Anti-vacuity / no-stale reverse self-check: the sole allowlisted file must
+	// host a live mint reference. A stale entry is a latent bypass slot.
+	for f := range grpcWiringRegistrarMintCallerAllowlist {
+		if _, seen := observed[f]; !seen {
+			diags = append(diags, Diagnostic{
+				Message: fmt.Sprintf(
+					"GRPC-WIRING-REGISTRAR-MINT-FUNNEL-01: allowlist entry %q is STALE — no live "+
+						"runtimegrpc.NewServiceRegistrar / NewDrainSignal reference observed. Either the funnel "+
+						"moved or the scanner regressed; drop or update the dead allowlist entry so it cannot "+
+						"become a silent bypass slot.",
+					f,
+				),
+			})
+		}
+	}
+
+	Report(t, "GRPC-WIRING-REGISTRAR-MINT-FUNNEL-01", diags)
+}
+
+// TestArchtest_GRPCWiringRegistrarMintFunnel01_RedFixture verifies the scanner
+// fires against the deliberate out-of-funnel mints in grpcwiringmintfixture:
+// badMint calls NewServiceRegistrar AND NewDrainSignal from a non-allowlisted
+// file. The scanner must observe exactly two mint references — proving the
+// allowlist check above cannot vacuously pass.
+func TestArchtest_GRPCWiringRegistrarMintFunnel01_RedFixture(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	var found int
+	_ = Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/grpcwiringmintfixture"}),
+		func(p *Pass) []Diagnostic {
+			if !p.Typed() {
+				return nil
+			}
+			for _, file := range p.Files {
+				EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+					if _, ok := isGRPCWiringMintSelector(p.TypesInfo, sel); ok {
+						found++
+					}
+				})
+			}
+			return nil
+		})
+
+	assert.Equal(t, 2, found,
+		"GRPC-WIRING-REGISTRAR-MINT-FUNNEL-01 RED fixture self-check FAILED: expected exactly 2 "+
+			"mint call sites in grpcwiringmintfixture (NewServiceRegistrar + NewDrainSignal); got %d. "+
+			"If <2 the scanner missed a mint shape (isGRPCWiringMintSelector / ResolvePackageRef "+
+			"regression); if >2 it over-matched. The fixture proves the allowlist violation branch fires.",
+		found)
 }

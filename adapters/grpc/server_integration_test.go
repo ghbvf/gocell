@@ -664,30 +664,27 @@ func (integVerifier) VerifyIntent(context.Context, string, auth.TokenIntent) (au
 }
 
 // newStreamingServer builds a plaintext bufconn-ready server whose adapter Config
-// carries one interceptor deps object. grpcadapter.New must derive both unary and
-// stream chains from it, sharing one Registrar and one DrainSignal between the
-// chains and the adapter config (Option 3, #1152/#1153).
+// carries one interceptor bundle. interceptor.NewServerInterceptors mints the ONE
+// shared Registrar + DrainSignal (#1752) and grpcadapter.New binds them, so the
+// chains and the adapter provably share one instance of each (Option 3,
+// #1152/#1153). The drain is returned so the test can trigger it.
 func newStreamingServer(t *testing.T, authOpts ...interceptor.AuthOption) (*grpcadapter.Server, *runtimegrpc.DrainSignal) {
 	t.Helper()
-	reg := runtimegrpc.NewServiceRegistrar()
-	drain := runtimegrpc.NewDrainSignal()
-	deps := interceptor.Deps{
+	bundle := interceptor.NewServerInterceptors(interceptor.Deps{
 		Collector:       metrics.NewInMemoryGRPCCollector(),
 		Clock:           clock.Real(),
 		Verifier:        integVerifier{},
 		AuthOptions:     authOpts,
-		Registrar:       reg,
 		CellIDClosedSet: []string{"_integration-test"},
-		Drain:           drain,
-	}
+	})
 	srv, err := grpcadapter.New(grpcadapter.Config{
 		Addr:            ":0",
 		ShutdownTimeout: integServeTimeout,
 		TLS:             grpcadapter.TLSConfig{AllowInsecure: true},
-		Interceptors:    interceptor.NewServerInterceptors(deps),
+		Interceptors:    bundle,
 	})
 	require.NoError(t, err)
-	return srv, drain
+	return srv, bundle.Drain()
 }
 
 // allMethodsPublic marks every method public so the streaming round-trip tests

@@ -180,48 +180,51 @@ func StreamRecovery() grpc.StreamServerInterceptor {
 	}
 }
 
-// NewStreamChain composes the streaming interceptors into a single
-// grpc.ServerOption — the streaming analog of NewUnaryChain, at full parity
-// (including auth) plus the stream-only StreamDrain. This is the single
-// authoritative stream composition point; the order
+// newStreamChain composes the streaming interceptors into a single
+// grpc.ServerOption — the streaming analog of newUnaryChain, at full parity
+// (including auth) plus the stream-only StreamDrain. It is package-private:
+// NewServerInterceptors is the sole caller and supplies the shared registrar +
+// drain it mints (#1752). The order
 //
 //	RequestID → CellAttribution → Tracing → AccessLog → Metrics → Auth → Drain → Recovery
 //
 // (RequestID outermost, Recovery innermost, Drain just inside Auth so the handler
 // context is drain-bound) is fixed here and guarded by GRPC-STREAM-CHAIN-ORDER-01.
 // The grpc.ChainStreamInterceptor caller is locked to this file by
-// GRPC-CHAIN-STREAM-INTERCEPTOR-CALLER-01 (Medium downstream + Go-ceiling upstream;
-// the single-builder Hard upgrade that also forces both chains to be wired is
-// tracked at #1752, same family as #1394/#851/#1282).
+// GRPC-CHAIN-STREAM-INTERCEPTOR-CALLER-01 (Medium downstream + Go-ceiling upstream).
+// The single-wiring-object upgrade that forces BOTH chains and the adapter to
+// observe one registrar/drain (#1752) is realized here + in NewServerInterceptors:
+// the registrar/drain are no longer caller-supplied Deps fields but minted by the
+// funnel, so a mismatch is unrepresentable (GRPC-WIRING-REGISTRAR-MINT-FUNNEL-01).
 //
-// Registrar, CellIDClosedSet, and Drain are required (fail-closed): a chain
-// composed without them would silently relabel every RPC to the runtime sentinel
-// or leave streams un-drainable.
-func NewStreamChain(deps Deps) grpc.ServerOption {
-	if deps.Registrar == nil {
+// reg, CellIDClosedSet, and drain are required (fail-closed): a chain composed
+// without them would silently relabel every RPC to the runtime sentinel or leave
+// streams un-drainable.
+func newStreamChain(deps Deps, reg *runtimegrpc.ServiceRegistrar, drain *runtimegrpc.DrainSignal) grpc.ServerOption {
+	if reg == nil {
 		panic(panicregister.Approved("interceptor-chain-registrar-required",
-			errcode.Assertion("interceptor.NewStreamChain: Deps.Registrar is required")))
+			errcode.Assertion("interceptor.newStreamChain: registrar is required")))
 	}
 	if len(deps.CellIDClosedSet) == 0 {
 		panic(panicregister.Approved("interceptor-chain-cell-closed-set-required",
 			errcode.Assertion(
-				"interceptor.NewStreamChain: Deps.CellIDClosedSet is required (the assembly cell-id set)")))
+				"interceptor.newStreamChain: Deps.CellIDClosedSet is required (the assembly cell-id set)")))
 	}
-	if deps.Drain.Validate() != nil {
+	if drain.Validate() != nil {
 		panic(panicregister.Approved("interceptor-chain-drain-required",
-			errcode.Assertion("interceptor.NewStreamChain: Deps.Drain is required and must be "+
+			errcode.Assertion("interceptor.newStreamChain: drain is required and must be "+
 				"built with runtimegrpc.NewDrainSignal() (a nil or zero-value DrainSignal would "+
 				"panic at GracefulStop)")))
 	}
 	validCellIDs := buildValidCellIDs(deps.CellIDClosedSet)
 	return grpc.ChainStreamInterceptor(
 		StreamRequestID(),
-		StreamCellAttribution(deps.Registrar.CellIDForMethod),
+		StreamCellAttribution(reg.CellIDForMethod),
 		StreamTracing(deps.Tracer),
 		StreamAccessLog(deps.Clock),
 		StreamMetrics(deps.Collector, deps.Clock, validCellIDs),
 		StreamAuth(deps.Verifier, deps.AuthOptions...),
-		StreamDrain(deps.Drain),
+		StreamDrain(drain),
 		StreamRecovery(),
 	)
 }

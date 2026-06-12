@@ -146,16 +146,15 @@ func WithGRPCListenerShutdownGrace(d time.Duration) GRPCListenerOption {
 // are alive).
 //
 // Composition-root wiring (cmd/ or examples/, which may import adapters/grpc and
-// runtime/grpc/interceptor — cells/ may not). The registrar AND the drain signal
-// are created FIRST and placed into one interceptor deps object (Option 3,
-// #1152/#1153): reg.CellIDForMethod feeds cell attribution; the drain is bound by
-// StreamDrain (consumer) and triggered by the adapter's gracefulStop (producer):
+// runtime/grpc/interceptor — cells/ may not). interceptor.NewServerInterceptors
+// mints the ONE shared registrar + drain internally (#1752) and the adapter binds
+// them, so the composition root never holds (or mismatches) two: reg.CellIDForMethod
+// feeds cell attribution; the drain is bound by StreamDrain (consumer) and triggered
+// by the adapter's gracefulStop (producer):
 //
-//	reg := runtimegrpc.NewServiceRegistrar()
-//	drain := runtimegrpc.NewDrainSignal()
 //	deps := interceptor.Deps{
 //	    Verifier: verifier, Clock: clk, Collector: collector, Tracer: tracer,
-//	    Registrar: reg, CellIDClosedSet: asm.CellIDs(), Drain: drain,
+//	    CellIDClosedSet: asm.CellIDs(),
 //	}
 //	srv, err := adaptersgrpc.New(adaptersgrpc.Config{
 //	    Addr: ":9000", TLS: tlsCfg, Interceptors: interceptor.NewServerInterceptors(deps),
