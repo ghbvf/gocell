@@ -76,8 +76,17 @@ func (p *recordingProvider) ensure(full string, l metrics.Labels) string {
 	return key
 }
 
-func (p *recordingProvider) add(key string, d float64) { p.mu.Lock(); p.samples[key] += d; p.mu.Unlock() }
-func (p *recordingProvider) set(key string, v float64) { p.mu.Lock(); p.samples[key] = v; p.mu.Unlock() }
+func (p *recordingProvider) add(key string, d float64) {
+	p.mu.Lock()
+	p.samples[key] += d
+	p.mu.Unlock()
+}
+
+func (p *recordingProvider) set(key string, v float64) {
+	p.mu.Lock()
+	p.samples[key] = v
+	p.mu.Unlock()
+}
 
 // value reports the recorded sample for the fully-qualified name + labels.
 func (p *recordingProvider) value(full string, l map[string]string) (float64, bool) {
