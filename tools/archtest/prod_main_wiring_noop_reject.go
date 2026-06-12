@@ -24,13 +24,15 @@
 // runs, where no pool/cell probe can see it.
 //
 // Sanctioned — deliberately NOT forbidden (the rule pushes raw noop THROUGH
-// these; banning them would break legitimate wiring):
+// these; banning them would break legitimate wiring). Split by altitude so a
+// composition-root author and a cell author each see their own sanctioned set:
 //
-//	outbox.DemoCellEmitter()    — sealed demo emitter funnel (the sanctioned way to
+// Composition-root (what a main package SHOULD call instead of a raw sink):
+//
+//	outbox.DemoCellEmitter()    — sealed demo emitter funnel (sanctioned way to
 //	                              inject a noop emitter into a cell Option)
 //	outbox.DemoCellTxManager()  — sealed demo tx-manager funnel
-//	outbox.NewDirectCellEmitter — intended L4 direct-publish-by-design production
-//	outbox.ResolveEmitter / ResolveCellEmitter — durable-vs-direct resolver funnel
+//	outbox.ResolveEmitter       — durable-vs-direct emitter resolver
 //	runtime/eventbus.New / InMemoryEventBus — the sole sanctioned in-process
 //	                              publisher (no real-broker alternative is wired
 //	                              anywhere); excluding it is option A of issue #1303.
@@ -38,6 +40,12 @@
 //	                              real but out of scope — recorded in ADR
 //	                              202605281200 (#1303 row) and tracked as backlog
 //	                              issue #1940, not silently accepted.
+//
+// Cell-level (used inside a cell's Init, not a composition root — listed so the
+// rule's relationship to them is unambiguous, NOT as main-package guidance):
+//
+//	outbox.ResolveCellEmitter   — cell-level durable-vs-direct resolver
+//	outbox.NewDirectCellEmitter — intended L4 direct-publish-by-design production
 //
 // Rule semantic: raw noop sinks must route through the sealed demo funnels or
 // wire real infra.
@@ -117,6 +125,11 @@ const ruleProdMainWiringNoopReject01 = "PROD-MAIN-WIRING-NOOP-REJECT-01"
 // PlatformModulePath so a module rename / /v2 bump updates one place.
 const prodMainOutboxPkg = PlatformModulePath + "/kernel/outbox"
 
+// prodMainOutboxRel is kernel/outbox's module-relative path ("kernel/outbox"),
+// derived from prodMainOutboxPkg so the diagnostic display symbol tracks a module
+// rename instead of a hardcoded literal prefix.
+var prodMainOutboxRel = strings.TrimPrefix(prodMainOutboxPkg, PlatformModulePath+"/")
+
 // prodMainForbiddenSinks maps each forbidden kernel/outbox symbol (exported name)
 // to the sanctioned replacement named in its diagnostic. This is the complete
 // raw-noop sink surface of kernel/outbox (#1303 completeness audit). Sealed demo
@@ -148,7 +161,13 @@ func CheckProdMainWiringNoopReject(t *testing.T, cfg ConfigForExternalCell) []Di
 		// Opt-in by declaration (mirrors BuildTags): a consumer that does not list
 		// its composition roots gets no main-pkg scan. GoCell's own dogfood passes
 		// ./cmd/corebundle and the anti-vacuity self-test proves it is in scope, so
-		// this early return is not a silent vacuous green for GoCell.
+		// this early return is not a silent vacuous green for GoCell. Emit a visible
+		// advisory (NOT an error) so a consumer's CI log distinguishes "deliberately
+		// opted out" from "wired RunStandardCellRules but forgot to declare composition
+		// roots" — the latter would otherwise be an invisible no-coverage green.
+		t.Logf("%s: ProductionMainPkgs is empty — composition-root noop scan SKIPPED. "+
+			"Declare your main packages (e.g. []string{\"./cmd/yourbinary\"}) to enable this rule.",
+			ruleProdMainWiringNoopReject01)
 		return nil
 	}
 	mainPkgs := cfg.ProductionMainPkgs
@@ -189,10 +208,13 @@ func collectProdMainWiringViolations(p *Pass) []Diagnostic {
 	var d []Diagnostic
 	for _, file := range p.Files {
 		rel := p.Rel(file)
-		// Qualified / aliased / method / function-value forms (SelectorExpr).
+		// Qualified / aliased / method / function-value / embedded-field forms
+		// (SelectorExpr). EachInSubtree walks the whole file AST including type
+		// declarations, so an embedded field `struct{ outbox.NoopWriter }` is caught
+		// the same as a composite literal — both reference the type via SelectorExpr.
 		EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-			if symbol, ok := prodMainForbiddenSymbol(p.TypesInfo, sel); ok {
-				d = append(d, prodMainDiag(p, rel, sel.Pos(), symbol))
+			if name, ok := prodMainForbiddenSymbol(p.TypesInfo, sel); ok {
+				d = append(d, prodMainDiag(p, rel, sel.Pos(), name))
 			}
 		})
 		// Dot-import bare-identifier form. Idents that are the .Sel of a
@@ -201,8 +223,8 @@ func collectProdMainWiringViolations(p *Pass) []Diagnostic {
 			if isInsideSelectorExpr(file, ident) {
 				return
 			}
-			if symbol, ok := prodMainForbiddenSymbol(p.TypesInfo, ident); ok {
-				d = append(d, prodMainDiag(p, rel, ident.Pos(), symbol))
+			if name, ok := prodMainForbiddenSymbol(p.TypesInfo, ident); ok {
+				d = append(d, prodMainDiag(p, rel, ident.Pos(), name))
 			}
 		})
 	}
@@ -211,8 +233,10 @@ func collectProdMainWiringViolations(p *Pass) []Diagnostic {
 
 // prodMainForbiddenSymbol resolves a SelectorExpr or bare Ident reference to a
 // forbidden kernel/outbox sink symbol, alias/dot-import-proof via go/types.
-// Returns ("", false) for any other reference. The returned key is
-// "kernel/outbox.<Name>".
+// Returns the BARE symbol name (a prodMainForbiddenSinks key, e.g. "NoopWriter")
+// and ok; ("", false) for any other reference. Returning the bare name keeps the
+// diagnostic-display prefix single-sourced from prodMainOutboxRel rather than a
+// hardcoded literal.
 func prodMainForbiddenSymbol(info *types.Info, expr ast.Expr) (string, bool) {
 	pkgPath, name, ok := ResolvePackageRef(info, expr)
 	if !ok || pkgPath != prodMainOutboxPkg {
@@ -221,28 +245,32 @@ func prodMainForbiddenSymbol(info *types.Info, expr ast.Expr) (string, bool) {
 	if _, forbidden := prodMainForbiddenSinks[name]; !forbidden {
 		return "", false
 	}
-	return "kernel/outbox." + name, true
+	return name, true
 }
 
-// prodMainDiag builds the diagnostic for a forbidden reference at pos.
-func prodMainDiag(p *Pass, rel string, pos token.Pos, symbol string) Diagnostic {
+// prodMainDiag builds the diagnostic for a forbidden reference at pos. name is the
+// bare symbol name (a prodMainForbiddenSinks key).
+func prodMainDiag(p *Pass, rel string, pos token.Pos, name string) Diagnostic {
 	return Diagnostic{
 		Rel:     rel,
 		Line:    p.Fset.Position(pos).Line,
-		Message: prodMainViolationMessage(symbol),
+		Message: prodMainViolationMessage(name),
 	}
 }
 
 // prodMainViolationMessage is the diagnostic body shared by the SelectorExpr and
-// bare-Ident reference walkers.
-func prodMainViolationMessage(symbol string) string {
-	name := strings.TrimPrefix(symbol, "kernel/outbox.")
+// bare-Ident reference walkers. name is the bare symbol name; the display prefix
+// (kernel/outbox) is derived from prodMainOutboxRel so it tracks a module rename.
+// "constructed or referenced" covers all caught forms — composite literal, call,
+// function value, and embedded field (a function value / embed is referenced, not
+// constructed).
+func prodMainViolationMessage(name string) string {
 	return fmt.Sprintf(
-		"PROD-MAIN-WIRING-NOOP-REJECT-01: %s is constructed in a production composition-root "+
-			"(main) package; production wiring must not directly mint a raw noop/degraded event "+
-			"sink (a pool/cell probe cannot see a main-package noop minted before cell Init). Route "+
-			"demo wiring through the sealed funnel or wire real infra: %s.",
-		symbol, prodMainForbiddenSinks[name],
+		"PROD-MAIN-WIRING-NOOP-REJECT-01: %s.%s is constructed or referenced in a production "+
+			"composition-root (main) package; production wiring must not directly mint a raw "+
+			"noop/degraded event sink (a pool/cell probe cannot see a main-package noop minted "+
+			"before cell Init). Route demo wiring through the sealed funnel or wire real infra: %s.",
+		prodMainOutboxRel, name, prodMainForbiddenSinks[name],
 	)
 }
 
@@ -251,6 +279,15 @@ func prodMainViolationMessage(symbol string) string {
 // matched module-path-agnostically against the dir: "./cmd/x" or "cmd/x" (exact
 // package) and "./cmd/x/..." (recursive prefix). A leading "./" is optional.
 // Extracted as a pure function so the matcher is unit-testable.
+//
+// Deliberately UNSUPPORTED (each silently matches nothing — by design, asserted in
+// TestMatchesMainPkg):
+//   - whole-module "./..." / "." — a composition root is a SPECIFIC package, never
+//     the whole module; banning raw noop everywhere would false-positive on the
+//     test/demo helpers that legitimately construct it (the very reason the sinks
+//     stay public). Use an explicit "./cmd/x" or a bounded "./cmd/..." instead.
+//   - absolute paths — relDir is always module-relative, so an absolute pattern
+//     never equals it. Pass module-relative patterns.
 func matchesMainPkg(relDir string, patterns []string) bool {
 	relDir = path.Clean(relDir)
 	for _, pat := range patterns {

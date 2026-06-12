@@ -47,20 +47,32 @@ func TestProdMainWiringNoopReject_Dogfood(t *testing.T) {
 		}))
 }
 
+// prodMainWiringCorebundleFloor is the minimum number of cmd/corebundle production
+// files the dogfood scan must observe. cmd/corebundle has ~19 production .go files
+// at time of writing; a floor of 5 catches a near-empty regression (e.g. wiring
+// silently moved to sub-packages that the exact "./cmd/corebundle" pattern no
+// longer matches) without being brittle to ordinary file churn. If a legitimate
+// refactor drops below this, update the floor AND reconsider whether the dogfood
+// should use the recursive "./cmd/corebundle/..." pattern instead.
+const prodMainWiringCorebundleFloor = 5
+
 // TestProdMainWiringNoopReject_AntiVacuity_CorebundleInScope proves the workspace
 // Production scan reaches the SEPARATE cmd/corebundle go.work module. Without this
-// the dogfood above could be a silent vacuous-green (0 diagnostics because 0 files
-// were scanned, not because the wiring is clean). It asserts ≥1 production file
-// under cmd/corebundle/ was matched by the main-pkg filter.
+// the dogfood above could be a silent vacuous-green (0 diagnostics because ~0 files
+// were scanned, not because the wiring is clean). It asserts a FLOOR of production
+// files under cmd/corebundle/ was matched by the main-pkg filter — not merely ≥1,
+// so a refactor that shrinks the matched set to a single non-violating file cannot
+// quietly hollow out the dogfood's coverage.
 func TestProdMainWiringNoopReject_AntiVacuity_CorebundleInScope(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping workspace scan in -short mode")
 	}
 	n := prodMainWiringFilesInScope(t, []string{"./cmd/corebundle"})
-	if n == 0 {
-		t.Fatalf("PROD-MAIN-WIRING-NOOP-REJECT-01 anti-vacuity: workspace Production scan observed 0 " +
-			"cmd/corebundle production files — the dogfood would be vacuous-green. The go.work Production " +
-			"loader is not reaching the cmd/corebundle module; fix the scan before trusting the green.")
+	if n < prodMainWiringCorebundleFloor {
+		t.Fatalf("PROD-MAIN-WIRING-NOOP-REJECT-01 anti-vacuity: workspace Production scan observed %d "+
+			"cmd/corebundle production files (floor %d) — the dogfood is hollow / vacuous-green. Either the "+
+			"go.work Production loader is not reaching the cmd/corebundle module, or the package shrank; fix "+
+			"the scan (or update the floor + pattern) before trusting the green.", n, prodMainWiringCorebundleFloor)
 	}
 }
 
@@ -123,6 +135,21 @@ func TestProdMainWiringNoopReject_Green_Sanctioned(t *testing.T) {
 	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
 
+// TestProdMainWiringNoopReject_BlindSpot_FactoryWrapping is the reverse self-test
+// for the cross-package call-graph transitivity blind spot (charter §强制盲区自检):
+// a composition root that obtains a raw noop sink by calling a factory in ANOTHER
+// package (blindspot_factory_helper) — never referencing a forbidden symbol
+// directly — is NOT caught by the callsite scan. Scanning only the caller yields
+// ZERO diagnostics (empty golden), making the documented permanent Go ceiling
+// visible and regression-pinned. The runtime CheckNotNoop guard (durable mode) is
+// the complementary defense for this gap.
+func TestProdMainWiringNoopReject_BlindSpot_FactoryWrapping(t *testing.T) {
+	root := findModuleRoot(t)
+	relDir, pattern := prodMainWiringFixturePattern("blindspot_factory_caller")
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), collectProdMainWiringViolations)
+	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
+}
+
 // TestProdMainWiringNoopReject_EmptyPkgs_NoScan asserts the opt-in contract: an
 // empty ProductionMainPkgs means "do not scan composition roots" (mirrors
 // BuildTags), so the Check returns no diagnostics without a workspace scan.
@@ -152,6 +179,10 @@ func TestMatchesMainPkg(t *testing.T) {
 		{"exact-prefix-boundary", "cmd/corebundlex", []string{"./cmd/corebundle"}, false},
 		{"empty-patterns", "cmd/corebundle", nil, false},
 		{"second-pattern-matches", "cmd/corebundle", []string{"./cmd/gocell", "./cmd/corebundle"}, true},
+		// Deliberately unsupported (each matches nothing — by design; see matchesMainPkg godoc):
+		{"whole-module-dotdotdot-unsupported", "cmd/corebundle", []string{"./..."}, false},
+		{"whole-module-dot-unsupported", "cmd/corebundle", []string{"."}, false},
+		{"absolute-path-no-match", "cmd/corebundle", []string{"/abs/cmd/corebundle"}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
