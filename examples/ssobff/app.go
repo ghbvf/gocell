@@ -308,6 +308,9 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		// LIFO close: relay registered last → stopped first; relay must stop before pool closes.
 		bootstrap.WithRelay(relayWorker),
 		listenerOption(cell.PrimaryListener, cfg.primary, []kauth.ListenerAuth{primaryAuth}),
+		// internal defaults to loopback (see defaultSSOBFFAppConfig); the cell→cell
+		// control plane is never all-interfaces. Override GOCELL_SSOBFF_INTERNAL_ADDR
+		// + add a NetworkPolicy for a VPC deployment (docs/ops/listener-topology.md).
 		listenerOption(cell.InternalListener, cfg.internal, internalAuthChain),
 		listenerOption(cell.HealthListener, cfg.health, []kauth.ListenerAuth{kauth.AuthNone{}}),
 		bootstrap.WithHealthRoutes(healthRouteOptions()...),
@@ -348,7 +351,6 @@ func newSSOBFFAuthFailObserver(logger *slog.Logger, acPtr **accesscore.AccessCor
 		ip, _ := ctxkeys.RealIPFrom(ctx)
 		ipHash := redaction.HashIP(salt, ip)
 		logger.ErrorContext(ctx, "bootstrap_auth_failed",
-			slog.String("event", "bootstrap_auth_failed"),
 			slog.String("namespace", "bootstrap"),
 			slog.String("reason", reason),
 			slog.String("client_ip_hash", ipHash.String()))
@@ -356,7 +358,6 @@ func newSSOBFFAuthFailObserver(logger *slog.Logger, acPtr **accesscore.AccessCor
 			// Symmetric with cellmodules/accesscore: surface the cell-not-ready
 			// path so it is not a silent observability hole during debugging.
 			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
-				slog.String("event", "bootstrap_audit_append_failed"),
 				slog.String("namespace", "bootstrap"),
 				slog.String("auth_reason", reason),
 				slog.String("failure", "cell not yet initialized"),
@@ -367,7 +368,6 @@ func newSSOBFFAuthFailObserver(logger *slog.Logger, acPtr **accesscore.AccessCor
 		defer cancel()
 		if err := (*acPtr).RecordBootstrapAuthFail(appendCtx, reason, ipHash); err != nil {
 			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
-				slog.String("event", "bootstrap_audit_append_failed"),
 				slog.String("namespace", "bootstrap"),
 				slog.String("auth_reason", reason),
 				slog.String("client_ip_hash", ipHash.String()),

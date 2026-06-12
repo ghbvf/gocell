@@ -436,14 +436,12 @@ func newBootstrapAuthObserver(
 		// payload — no plaintext IP leaves this closure (#1488).
 		ipHash := redaction.HashIP(salt, ip)
 		logger.ErrorContext(ctx, "bootstrap_auth_failed",
-			slog.String("event", "bootstrap_auth_failed"),
 			slog.String("namespace", "bootstrap"),
 			slog.String("reason", reason),
 			slog.String("client_ip_hash", ipHash.String()))
 		c := cellPtr.Load()
 		if c == nil {
 			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
-				slog.String("event", "bootstrap_audit_append_failed"),
 				slog.String("namespace", "bootstrap"),
 				slog.String("auth_reason", reason),
 				slog.String("failure", "cell not yet initialized"),
@@ -454,7 +452,6 @@ func newBootstrapAuthObserver(
 		defer cancel()
 		if err := c.RecordBootstrapAuthFail(appendCtx, reason, ipHash); err != nil {
 			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
-				slog.String("event", "bootstrap_audit_append_failed"),
 				slog.String("namespace", "bootstrap"),
 				slog.String("auth_reason", reason),
 				slog.String("client_ip_hash", ipHash.String()),

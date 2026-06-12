@@ -186,8 +186,14 @@ no-loss（leave-unacked 会复活 Option C 的 HoL stall，ADR-050 §1），因�
 消息**确实丢失**——`mqtt_dlx_failed_total > 0` 是运维必须介入的信号，**不是**可容忍的
 降级。RTO 内未恢复死信管道（broker / ACL / topic 配置）即意味着永久消息丢失。
 
-> 该信号"每个 drop 路径必记"由 archtest `MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01` 机器守卫，
-> 不会被代码改动静默移除。真正的 no-loss 保证应由消费 cell 在本地事务捕获 poison 消息
+> 该信号"每个 drop 路径必记"的 no-silent-exit 轴由 **sealed-construction archtest funnel**
+> `MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01` 守（H1 签名 floor + H2 禁 mqtt 伪造[字面量/零值/new] +
+> H4 dlxoutcome 唯一生产者 + H3a 构造器必记），配类型系统 **floor**——`routeDeadLetter` 必返回封印
+> `dlxoutcome.Outcome`，但 Outcome 是无 state 的纯 token，零值可伪造（`Outcome{}`/`*new(...)`），
+> **漏记 metric 的退出仍能编译**，由 H2/H4 archtest 拦截而非编译器。**评级 Medium（archtest），非类型系统 Hard**
+> ——stateless token 的字面 Hard 在 Go 不可达（见 ADR-048 §Amendment 2026-06-11 / #1440 / #1873 F1）。
+> drop→failure 语义匹配（review F1）由 H3b 聚合计数 + 行为测试守。funnel + floor 均不会被代码改动静默移除。
+> 真正的 no-loss 保证应由消费 cell 在本地事务捕获 poison 消息
 > 实现（重定位，deferred — 见 ADR-048 §Amendment 2026-06-02）。
 >
 > ⚠ **前提:信号仅在 wire 了 provider-backed `SubscriberCollector` 后才发射。**

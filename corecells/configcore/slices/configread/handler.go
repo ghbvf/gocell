@@ -10,7 +10,9 @@ import (
 	configget "github.com/ghbvf/gocell/generated/contracts/http/config/get/v1"
 	configlist "github.com/ghbvf/gocell/generated/contracts/http/config/list/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/projection"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -33,7 +35,13 @@ func (a GetAdapter) Get(ctx context.Context, req *configget.Request) (configget.
 	if err != nil {
 		return nil, err
 	}
-	return configget.Get200JSONResponse{Data: toGetResponseData(entry)}, nil
+	// identity projection (epic #1337 PR-12); masking obligation source becomes
+	// the ABAC Decision in PR-10.
+	data, err := projection.NewProjection(authz.IdentityFieldMask(), toGetResponseData(entry).ToMap())
+	if err != nil {
+		return nil, err
+	}
+	return configget.Get200JSONResponse{Data: data}, nil
 }
 
 // ListAdapter wraps Service to implement configlist.Service for http.config.list.v1.
@@ -57,12 +65,18 @@ func (a ListAdapter) List(ctx context.Context, req *configlist.Request) (configl
 	if err != nil {
 		return nil, err
 	}
-	items := make([]*configlist.ResponseDataItem, 0, len(result.Items))
+	rows := make([]map[string]any, 0, len(result.Items))
 	for _, e := range result.Items {
-		items = append(items, toListResponseDataItem(e))
+		rows = append(rows, toListResponseDataItem(e).ToMap())
+	}
+	// identity projection (epic #1337 PR-12); masking obligation source becomes
+	// the ABAC Decision in PR-10.
+	data, err := projection.NewProjectionList(authz.IdentityFieldMask(), rows)
+	if err != nil {
+		return nil, err
 	}
 	return configlist.List200JSONResponse{
-		Data:       items,
+		Data:       data,
 		NextCursor: result.NextCursor,
 		HasMore:    result.HasMore,
 	}, nil
@@ -96,12 +110,14 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
 }
 
 // toGetResponseData converts a domain.ConfigEntry to configget.ResponseData.
-func toGetResponseData(e *domain.ConfigEntry) *configget.ResponseData {
+// Sensitive entries have their value redacted before the DTO is handed to the
+// projection funnel; the redacted value flows through unchanged.
+func toGetResponseData(e *domain.ConfigEntry) configget.ResponseData {
 	value := e.Value
 	if e.Sensitive {
 		value = dto.RedactedValue
 	}
-	return &configget.ResponseData{
+	return configget.ResponseData{
 		ID:        e.ID,
 		Key:       e.Key,
 		Value:     value,
@@ -113,12 +129,14 @@ func toGetResponseData(e *domain.ConfigEntry) *configget.ResponseData {
 }
 
 // toListResponseDataItem converts a domain.ConfigEntry to configlist.ResponseDataItem.
-func toListResponseDataItem(e *domain.ConfigEntry) *configlist.ResponseDataItem {
+// Sensitive entries have their value redacted before the DTO is handed to the
+// projection funnel; the redacted value flows through unchanged.
+func toListResponseDataItem(e *domain.ConfigEntry) configlist.ResponseDataItem {
 	value := e.Value
 	if e.Sensitive {
 		value = dto.RedactedValue
 	}
-	return &configlist.ResponseDataItem{
+	return configlist.ResponseDataItem{
 		ID:        e.ID,
 		Key:       e.Key,
 		Value:     value,

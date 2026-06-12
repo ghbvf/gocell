@@ -193,6 +193,15 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 	}
 	spec.Endpoint = endpointSpec
 
+	// Projection post-pass (epic #1337 PR-12): when responseProjection is set,
+	// rewrite the Response `data` field type to the sealed projection carrier so
+	// the handler cannot return an un-masked full view. Runs after both DTOs and
+	// Endpoint are built (it needs both); a no-op when the marker is unset, so
+	// non-projection contracts are byte-identical.
+	if err := applyResponseProjection(spec); err != nil {
+		return err
+	}
+
 	// Embed the request schema JSON for runtime validation by schemavalidate.Validator.
 	// Only populated when the endpoint actually has a body (POST/PUT/PATCH with a
 	// declared request schema). GET/DELETE may declare schemaRefs.request as
@@ -358,6 +367,72 @@ func hasDTONamed(dtos []DTOSpec, name string) bool {
 	return false
 }
 
+// applyResponseProjection rewrites the Response `data` resource field to the
+// sealed projection.ResourceProjection carrier when the endpoint declares
+// responseProjection: true (epic #1337 PR-12, FR-016 /
+// RESOURCE-PROJECTION-CALLSITE-LOCK-01). The generated handler is then forced to
+// build the wire data through the column-masking funnel (projection.NewProjection
+// / NewProjectionList): a full, un-masked []*ResponseDataItem / *ResponseData is
+// not assignable to a projection-typed field, so masking cannot be bypassed at
+// the callsite. The resource item DTO (ResponseDataItem / ResponseData) is kept
+// and flagged EmitToMap so the handler converts a schema-typed row into the
+// column map the funnel consumes.
+//
+// Fail-closed: setting the marker on a response that has no projectable `data`
+// resource (a `data` field of array-of-object or single-object shape) is a
+// codegen error, not a silent no-op — a misplaced marker can never produce an
+// un-guarded full view.
+func applyResponseProjection(spec *ContractGenSpec) error {
+	if spec.Endpoint == nil || !spec.Endpoint.ResponseProjection {
+		return nil
+	}
+	respIdx := indexOfDTO(spec.DTOs, "Response")
+	if respIdx < 0 {
+		return fmt.Errorf("contractgen build: %q responseProjection set but contract has no Response DTO", spec.ContractID)
+	}
+	fieldIdx := -1
+	for i := range spec.DTOs[respIdx].Fields {
+		if spec.DTOs[respIdx].Fields[i].Name == "Data" {
+			fieldIdx = i
+			break
+		}
+	}
+	if fieldIdx < 0 {
+		return fmt.Errorf("contractgen build: %q responseProjection set but Response has no `data` resource field", spec.ContractID)
+	}
+	dataField := &spec.DTOs[respIdx].Fields[fieldIdx]
+	// Structured (not string-parsed) projectability: ItemDTO is non-empty only
+	// when `data` is an object / array-of-object whose item is a generated DTO
+	// (set in collectDTOs). A scalar / array-of-scalar `data` has no ItemDTO and
+	// is not projectable — fail closed so a misplaced marker never yields an
+	// un-guarded full view.
+	if dataField.ItemDTO == "" {
+		return fmt.Errorf("contractgen build: %q responseProjection requires `data` to be an object or array-of-object, got %q",
+			spec.ContractID, dataField.GoType)
+	}
+	itemIdx := indexOfDTO(spec.DTOs, dataField.ItemDTO)
+	if itemIdx < 0 {
+		return fmt.Errorf("contractgen build: %q responseProjection item DTO %q not found", spec.ContractID, dataField.ItemDTO)
+	}
+	if dataField.IsList {
+		dataField.GoType = "[]projection.ResourceProjection"
+	} else {
+		dataField.GoType = "projection.ResourceProjection"
+	}
+	spec.DTOs[itemIdx].EmitToMap = true
+	return nil
+}
+
+// indexOfDTO returns the index of the DTO named name, or -1.
+func indexOfDTO(dtos []DTOSpec, name string) int {
+	for i := range dtos {
+		if dtos[i].Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
 // buildHTTPEndpointSpec is the SOLE constructor of the sealed httpEndpointSpec
 // and the FMT-34 funnel entry (it calls validateAuthOnInternalPath). It is
 // called only from buildHTTPSpec, which assigns the result to
@@ -415,6 +490,7 @@ func buildHTTPEndpointSpec(
 		AuthClientsOnly:         http.Auth.ClientsOnly,
 		AuthServiceOwned:        http.Auth.ServiceOwned,
 		IdempotencyExempt:       http.Idempotency.Exempt,
+		ResponseProjection:      http.ResponseProjection,
 	}
 	spec.PathParams = pathParams
 	spec.QueryParams = queryParams
@@ -1419,7 +1495,18 @@ func collectDTOs(name string, s *Schema, out *[]DTOSpec) {
 			doc = "format: " + prop.Format
 		}
 
-		dto.Fields = append(dto.Fields, bodyFieldFromSchema(fieldName, jsonTag, goType, required, doc, prop))
+		field := bodyFieldFromSchema(fieldName, jsonTag, goType, required, doc, prop)
+		// BareJSONTag is the wire key without ",omitempty"; the generated toMap()
+		// (responseProjection item DTOs) uses it so the projected column map keys
+		// equal the wire field names.
+		field.BareJSONTag = key
+		// Structured projection-item metadata (F5): nestedName is the generated
+		// item DTO name when the property is an object or array-of-object (empty
+		// for scalars / arrays-of-scalar). Captured here so applyResponseProjection
+		// reads typed fields instead of re-parsing the rendered GoType string.
+		field.ItemDTO = nestedName
+		field.IsList = prop.Type == "array"
+		dto.Fields = append(dto.Fields, field)
 
 		// Track nested objects for recursive collection after the parent is appended.
 		if nestedName != "" {

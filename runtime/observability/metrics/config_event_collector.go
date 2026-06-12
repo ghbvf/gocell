@@ -19,8 +19,10 @@ const (
 	ConfigEventProcessReasonStale          ConfigEventProcessReason = "stale"
 	ConfigEventProcessReasonPermanentError ConfigEventProcessReason = "permanent_error"
 	// ConfigEventProcessReasonNoTenant is recorded when tenant.FromContext returns
-	// an error (no tenant in consumer context). The event is Ack-ed as
-	// retrying cannot supply a tenant that was absent at delivery time.
+	// an error (no tenant in consumer context). The event is Rejected to the DLQ
+	// (fail-closed): an event reaching the consumer without a tenant envelope is a
+	// pipeline-integrity violation, not a retriable condition — retrying cannot
+	// supply a tenant that was absent at delivery time.
 	ConfigEventProcessReasonNoTenant ConfigEventProcessReason = "no_tenant"
 	// ConfigEventProcessReasonTransient is recorded when the config getter
 	// returns a transient (non-permanent, non-404) error so the entry is

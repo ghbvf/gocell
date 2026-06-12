@@ -88,9 +88,9 @@ func newContractRBACHandler() http.Handler {
 }
 
 type roleListPage struct {
-	Data       []RoleResponse `json:"data"`
-	NextCursor string         `json:"nextCursor"`
-	HasMore    bool           `json:"hasMore"`
+	Data       []map[string]any `json:"data"`
+	NextCursor string           `json:"nextCursor"`
+	HasMore    bool             `json:"hasMore"`
 }
 
 func decodeRoleListPage(t *testing.T, rec *httptest.ResponseRecorder) roleListPage {

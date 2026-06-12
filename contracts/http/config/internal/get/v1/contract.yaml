@@ -37,6 +37,7 @@ endpoints:
       responses:
         - 503
     noContent: false
+    responseProjection: true
     responses:
       400:
         description: "Bad request — (1) path parameter key too short/long; (2) X-Tenant-ID header absent, malformed (non-UUID), or nil-UUID"

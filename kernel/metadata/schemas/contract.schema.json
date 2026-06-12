@@ -324,6 +324,11 @@
                     "type": "boolean",
                     "description": "Whether the success response must be bodyless."
                   },
+                  "responseProjection": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "If true, the success response `data` resource is served through the sealed pkg/projection.ResourceProjection carrier (epic #1337 PR-12, FR-016): contractgen rewrites the generated Response.Data field type to projection.ResourceProjection (single object) or []projection.ResourceProjection (array), so the handler must build the wire data through the column-masking funnel and a full un-masked view is not assignable (RESOURCE-PROJECTION-CALLSITE-LOCK-01). Every GET read endpoint carrying a `data` resource MUST set this (RESOURCE-PROJECTION-COVERAGE-01)."
+                  },
                   "responses": {
                     "type": "object",
                     "description": "Optional map of HTTP error responses, keyed by status code. Value references a JSON Schema describing the error body.",

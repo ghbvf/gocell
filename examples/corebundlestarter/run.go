@@ -56,6 +56,8 @@ const devAccessTokenTTL = 15 * time.Minute
 
 // starterPrimaryAddr / InternalAddr / HealthAddr are the default listener
 // bind addresses.  Pick non-default ports to avoid conflicts with corebundle.
+// Only the primary listener is all-interfaces; the internal cell→cell control
+// plane binds loopback per docs/ops/listener-topology.md.
 const (
 	starterPrimaryAddr  = ":8088"
 	starterInternalAddr = "127.0.0.1:9088"

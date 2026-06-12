@@ -55,11 +55,22 @@
 //     only exported producers to {NewProjection, NewProjectionList}, so no second
 //     forge path can be added inside this package without tripping the archtest.
 //
-// SCOPE — what this package does NOT yet enforce. PR-11 ships the unforgeable
-// carrier only. Forcing production read handlers to actually return a
-// ResourceProjection built from the request's Decision.Obligations().FieldMask —
-// the downstream callsite lock — lands in PR-12 (#1350), when real handlers
-// adopt it. Until then this package is a safe building block, not active column
-// protection: do not read RESOURCE-PROJECTION-SEALED-01 as "column leakage is
-// already closed".
+// SCOPE — the carrier seal is the UPSTREAM half of a now-CLOSED funnel. PR-11
+// shipped the unforgeable carrier (this package). PR-12 (#1350) landed the
+// downstream callsite lock: archtest RESOURCE-PROJECTION-CALLSITE-LOCK-01 pins
+// every responseProjection-marked contract's generated Response.Data to
+// projection.ResourceProjection / []projection.ResourceProjection, so a raw,
+// un-masked view is non-assignable at the handler callsite; archtest
+// RESOURCE-PROJECTION-COVERAGE-01 closes it globally by requiring every
+// resource-bearing GET read to carry the marker. The seal makes the carrier
+// unforgeable; those two invariants make the unforgeability load-bearing at the
+// read endpoint, so column leakage is now closed end to end. This package still
+// owns only the carrier + masking funnel; the field-type pin and coverage live
+// in the archtest layer.
+//
+// Note: the 9 non-audit GET reads added in PR-12 all pass
+// authz.IdentityFieldMask() (identity projection — all columns visible). That
+// NAMED helper, rather than an anonymous authz.FieldMask{}, makes every
+// not-yet-constrained read greppable, so when the ABAC decision engine is wired
+// in PR-10 (#1348) each site is a one-line swap to Decision.Obligations().FieldMask.
 package projection

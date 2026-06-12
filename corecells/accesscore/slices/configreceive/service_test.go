@@ -379,6 +379,72 @@ func TestHandleEntryUpserted_WithConfigGetter_ForwardsRealTenant(t *testing.T) {
 	assert.Equal(t, wantTenant, stub.calledWithTenant, "GetEntry must receive the real tenant from context")
 }
 
+// TestHandleEntryUpserted_NoTenant_FailClosed_RegressionGuard is a table-driven
+// regression guard for the fail-closed no-tenant behavior described by the
+// ConfigEventProcessReasonNoTenant const comment. It fires immediately (behavior
+// is already correct) and must stay green to prevent comment/behavior drift.
+//
+// Invariant: when tenant.FromContext fails on a context reaching HandleEntryUpserted
+// while a ConfigGetter is wired, the service MUST:
+//  1. Return DispositionReject (routes to DLQ, NOT Ack or Requeue).
+//  2. Wrap the error as PermanentError (retrying cannot supply a missing tenant).
+//  3. Record ConfigEventProcessReasonNoTenant on the collector.
+//
+// This test exercises multiple "no tenant" entry points to guard all paths through
+// the condition (bare context, principal-only context without tenant claim).
+func TestHandleEntryUpserted_NoTenant_FailClosed_RegressionGuard(t *testing.T) {
+	validPayload := []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`)
+
+	tests := []struct {
+		name string
+		ctx  context.Context
+	}{
+		{
+			name: "bare background context — no tenant installed",
+			ctx:  context.Background(),
+		},
+		{
+			name: "auth context without tenant claim",
+			// auth.TestContext provides a principal but no tenant ID in ctxkeys.
+			ctx: auth.TestContext("acc", []string{"user"}),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			collector := &recordingConfigEventCollector{}
+			stub := &stubConfigGetter{
+				entry: ports.ConfigEntry{Key: "jwt.ttl", Value: "30m", Version: 1},
+			}
+			svc := NewService(slog.Default(),
+				WithConfigGetter(stub),
+				WithConfigEventCollector(collector),
+			)
+
+			entry := outboxtest.NewEntry(TopicConfigEntryUpserted, validPayload)
+			// Run through ConfigEventMiddleware so the metric owner context is installed,
+			// matching the real deployment path.
+			disposition, err := callWithConfigEventOwner(tt.ctx, entry, svc.HandleEntryUpserted)
+
+			// 1. Must route to DLQ, never Ack or Requeue.
+			assert.Equal(t, outbox.DispositionReject, disposition,
+				"no-tenant event must be Rejected to DLQ (fail-closed)")
+			// 2. Error must be permanent — retrying cannot supply a missing tenant.
+			require.Error(t, err)
+			var permErr *outbox.PermanentError
+			assert.True(t, errors.As(err, &permErr),
+				"no-tenant Reject must wrap PermanentError (DLQ, not retry-eligible)")
+			// 3. Metric reason must be NoTenant — keeps const comment honest.
+			require.Len(t, collector.records, 1)
+			assert.Equal(t, obmetrics.ConfigEventProcessReasonNoTenant, collector.records[0].reason,
+				"metric reason must be ConfigEventProcessReasonNoTenant, not Ack or any other reason")
+			// 4. GetEntry must NOT be called — fail-closed before reaching the getter.
+			assert.Empty(t, stub.calledWith,
+				"ConfigGetter.GetEntry must not be called when no tenant in context")
+		})
+	}
+}
+
 // TestHandleEntryUpserted_WithConfigGetter_NoTenant_RejectsToDLQ asserts that
 // when no tenant is present in the context (bare context.Background()), the
 // service fail-closes: it does NOT call the ConfigGetter and Rejects the event

@@ -724,6 +724,14 @@ func TestRender_Golden_Synth_HTTPAuthModes(t *testing.T) {
 		// The generated RegisterRoutes must emit BOTH PasswordResetExempt:true and
 		// IdempotencyExempt:true (additive, not alternative) — golden byte-locks this.
 		{"http.sample.idempotencyexempt.v1", "synth_http_auth_modes_idempotencyexempt"},
+		// responseProjection (epic #1337 PR-12): byte-locks the codegen funnel that
+		// rewrites Response.Data to the sealed projection.ResourceProjection carrier
+		// and emits the resource item DTO's toMap(). Two shapes pin both branches of
+		// applyResponseProjection: single object (data:object → projection.ResourceProjection)
+		// and array (data[]:object → []projection.ResourceProjection). A regression that
+		// drops the rewrite (re-exposing a full *ResponseData view) trips the golden.
+		{"http.sample.responseprojection.v1", "synth_http_auth_modes_responseprojection"},
+		{"http.sample.responseprojectionlist.v1", "synth_http_auth_modes_responseprojectionlist"},
 	}
 
 	outputs := []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}

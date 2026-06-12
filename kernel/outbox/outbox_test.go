@@ -1240,18 +1240,12 @@ func TestSubscriberWithMiddleware_StopIntake_InnerNotStopper(t *testing.T) {
 //
 // ref: Finding 3 — observer panic isolation (PR #334 L4 review)
 func TestNotifySettlement_ObserverPanic_DoesNotKillCaller(t *testing.T) {
-	// Do NOT call t.Parallel(): this test mutates the global slog default logger
-	// and must not race with other tests that also call slog.SetDefault.
+	t.Parallel()
 
-	// Save the original default logger and restore it after the test so that
-	// parallel or sequential sibling tests see the expected global state.
-	originalLogger := slog.Default()
-	t.Cleanup(func() { slog.SetDefault(originalLogger) })
-
-	// Capture slog output to verify the panic is logged.
-	var logBuf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	slog.SetDefault(logger)
+	// Capture slog output via per-call injection (DeliveryOutcome.Logger) so the
+	// test never mutates the global slog default — that mutation races with
+	// t.Parallel() siblings in this package.
+	logger, logBuf := newCapturingLogger()
 
 	var spy1Called, spy3Called bool
 
@@ -1267,6 +1261,7 @@ func TestNotifySettlement_ObserverPanic_DoesNotKillCaller(t *testing.T) {
 
 	result := DeliveryOutcome{
 		Disposition:         DispositionAck,
+		Logger:              logger,
 		SettlementObservers: []SettlementObserver{spy1, panicObserver, spy3},
 	}
 	entry := Entry{id: "test-panic-entry", topic: "event.test.v1"}

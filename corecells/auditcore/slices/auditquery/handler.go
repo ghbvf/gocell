@@ -9,7 +9,9 @@ import (
 
 	auditlist "github.com/ghbvf/gocell/generated/contracts/http/audit/list/v1"
 	cell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/projection"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/tenant"
@@ -133,6 +135,16 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 
 	logAdminAuditQuery(ctx, p, subject, req.ActorID)
 
+	// Column masking (epic #1337 PR-12, FR-016/FR-017): derive the mask obligation
+	// from the row-visibility scope ONCE here — it gates both the query predicates
+	// (rejectMaskedFilters, below) and the response projection (NewProjectionList,
+	// below). A masked column must not be usable as a filter, else the predicate
+	// leaks a match/no-match oracle on a value the response redacts (F1).
+	mask := auditFieldMask(vis.Scope())
+	if err := rejectMaskedFilters(mask, req); err != nil {
+		return nil, err
+	}
+
 	// Tenant axis (#1618): the typed tenant scope, re-parsed from the
 	// authenticated principal at this repo boundary (auth.Principal.TenantID is a
 	// canonicalized string; the JWT authenticator already validated it). It is
@@ -195,15 +207,111 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 		return nil, err
 	}
 
-	items := make([]*auditlist.ResponseDataItem, 0, len(result.Items))
+	// Discharge the column mask derived above onto every row (the same obligation
+	// that gated the query predicates), via the sealed projection funnel.
+	rows := make([]map[string]any, 0, len(result.Items))
 	for _, e := range result.Items {
-		items = append(items, toListResponseDataItem(e))
+		rows = append(rows, toListResponseDataItem(e).ToMap())
+	}
+	data, err := projection.NewProjectionList(mask, rows)
+	if err != nil {
+		// A mask this PEP cannot discharge (e.g. a nested-path obligation) is a
+		// server-side misconfiguration, not a client error — fail closed (the
+		// errcode kind maps to 500) rather than serve an un-masked column.
+		return nil, err
 	}
 	return auditlist.List200JSONResponse{
-		Data:       items,
+		Data:       data,
 		NextCursor: result.NextCursor,
 		HasMore:    result.HasMore,
 	}, nil
+}
+
+// auditFieldMask derives the column-mask obligation for an audit read from the
+// caller's row-visibility scope (epic #1337 PR-12, FR-017). It is the PR-12-era
+// source of the FieldMask obligation: an admin/super-admin (RowScopeTenant /
+// RowScopeAll) sees every column (empty mask = identity projection), while a
+// non-admin user (RowScopeSelf) and a device (RowScopeDevice) have the
+// operator-diagnostic / cross-subject columns masked. A device additionally
+// cannot see the human subject-of-record. This deterministic identity→mask
+// derivation is replaced by the ABAC Decision.Obligations().FieldMask once the
+// policy engine is wired into the request path (PR-10 #1348); the projection PEP
+// that discharges the mask is unchanged by that swap.
+//
+// Fail-closed default (defense-in-depth): any future or unknown RowScope value
+// that is not explicitly enumerated here falls through to the MOST RESTRICTIVE
+// mask (same as RowScopeDevice). RowVisibility already validates scopes upstream,
+// so this branch is never reached on the normal path — it is a compile-time safety
+// net that prevents an unenumerated scope from silently widening column visibility.
+//
+// sessionId is never on the wire (it is not a projected column — the
+// AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01 codegen guard keeps it out of the response
+// schema), and payload is already scrubbed by RedactPayload, so neither needs a
+// per-scope mask entry here.
+func auditFieldMask(scope tenant.RowScope) authz.FieldMask {
+	switch scope {
+	case tenant.RowScopeSelf:
+		return authz.FieldMask{Fields: append([]string(nil), auditMaskDiagnostics...)}
+	case tenant.RowScopeDevice:
+		return authz.FieldMask{Fields: append([]string(nil), auditMaskDevice...)}
+	case tenant.RowScopeTenant, tenant.RowScopeAll:
+		// admin / super-admin: full column view (identity projection).
+		return authz.IdentityFieldMask()
+	default:
+		// Unknown/unenumerated scope: fail-closed with the most restrictive mask
+		// (same as a device). An unenumerated scope must never silently widen
+		// column visibility.
+		return authz.FieldMask{Fields: append([]string(nil), auditMaskDevice...)}
+	}
+}
+
+// Audit column names that the per-scope FieldMask obligation governs. These are
+// the wire JSON keys (camelCase) the ResourceProjection funnel masks; they are
+// also the columns a caller may NOT use as a query predicate when masked (a
+// masked-column filter would leak a match/no-match oracle — see
+// rejectMaskedFilters). Defined once as consts so the mask derivation and the
+// filter gate cannot drift to differently-spelled literals.
+const (
+	auditColSubjectID     = "subjectId"
+	auditColCorrelationID = "correlationId"
+	auditColTraceID       = "traceId"
+)
+
+// Pre-built per-scope mask column sets. auditMaskDiagnostics masks the
+// operator-diagnostic columns (non-admin self); auditMaskDevice additionally
+// masks the human subject-of-record (device, and the fail-closed default). The
+// FieldMask constructor copies these so the package-level slices stay immutable.
+var (
+	auditMaskDiagnostics = []string{auditColCorrelationID, auditColTraceID}
+	auditMaskDevice      = []string{auditColSubjectID, auditColCorrelationID, auditColTraceID}
+)
+
+// rejectMaskedFilters fails closed when a caller supplies a query predicate on a
+// column its row-visibility scope masks (epic #1337 PR-12, F1). Column masking is
+// an obligation the PEP must discharge on the WHOLE read, not just response
+// serialization: leaving a masked column usable as a filter would leak a
+// match/no-match oracle — a non-admin could binary-search the very traceId the
+// response redacts, a device could enumerate the subject it cannot see. Only
+// columns that are BOTH filterable and maskable need gating; for the audit read
+// that is subjectId and traceId (correlationId is masked but has no filter param).
+// Returns KindPermissionDenied (403, already a declared response): the caller is
+// not malformed, it is asking to filter by a column outside its visibility.
+func rejectMaskedFilters(mask authz.FieldMask, req *auditlist.Request) error {
+	maskedFilters := []struct {
+		column string
+		value  string
+	}{
+		{auditColSubjectID, req.SubjectID},
+		{auditColTraceID, req.TraceID},
+	}
+	for _, mf := range maskedFilters {
+		if mf.value != "" && mask.Masks(mf.column) {
+			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
+				"audit query cannot filter by a column masked for your access scope",
+				errcode.WithDetails(errcode.PublicString("column", mf.column)))
+		}
+	}
+	return nil
 }
 
 // Handler is the composite route handler for the auditquery slice.
@@ -241,19 +349,19 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 // backstop: it rejects any sensitive-key field in an audit wire-out schema at
 // generation time, so SessionID cannot re-enter ResponseDataItem via schema.
 //
-// TenantID is deliberately NOT exposed per-row. This is no longer a fail-open
-// gap: as of epic #1337 PR-2a the read path IS tenant-scoped — the List adapter
-// always passes the typed tenant.TenantID (from the authenticated principal) to
-// Store.Query, so every returned row already belongs to the caller's own tenant
-// (plus tenant-less system rows). A per-row tenantId field would therefore be
-// redundant (effectively a constant equal to the caller's own tenant), so it is
-// omitted. This replaced the PR-1 (#1339 F2) blanket 403 gate and retired the
-// appender's INV-SINGLE-TENANT-ONLY tripwire (#1289). A principal with an empty
-// tenant is rejected at the List boundary (F1), so the read path is never
-// tenant-unscoped; DB-layer FORCE RLS (#1618) is defense-in-depth. Super-admin
-// RowScopeAll cross-tenant audit read is fail-closed under FORCE RLS (deferred
-// to backlog), so there is no cross-tenant regime that would make per-row
-// tenantId non-redundant.
+// TenantID IS now projected per-row (epic #1337 PR-12, FR-016) — reversing the
+// earlier "deliberately omitted as redundant" stance. It is surfaced behind the
+// ResourceProjection column-masking funnel (the List adapter feeds this DTO's
+// ToMap() to projection.NewProjectionList), so a per-row tenantId is no longer an
+// unconditional leak: it is a maskable column the FieldMask obligation governs.
+// tenantId is NOT in pkg/redaction's sensitive-key set (it is an opaque tenant
+// UUID, not a credential), so the AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01 codegen
+// guard admits it; the per-scope auditFieldMask currently leaves it visible (an
+// own-tenant row's id is the caller's own tenant), but the column is now
+// addressable so a future cross-tenant super-admin read (or an ABAC policy) can
+// mask or surface it without a wire-shape change. Empty for tenant-less system
+// rows (scope="system"). The mapping into the DTO is unconditional; visibility is
+// the funnel's job, not the converter's.
 func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 	// Both audit-evidence timestamps use RFC3339Nano: sub-second precision is
 	// part of the evidence (the HMAC chain pins occurred_at/timestamp at nanosecond
@@ -269,6 +377,7 @@ func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 		EventType:     e.EventType,
 		ActorID:       e.ActorID,
 		SubjectID:     e.SubjectID,
+		TenantID:      e.TenantID,
 		CorrelationID: e.CorrelationID,
 		TraceID:       e.TraceID,
 		OccurredAt:    occurredAt,
@@ -283,8 +392,10 @@ func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 // rows PLUS tenant-less system/framework rows (tenant_id == "" — e.g.
 // bootstrap.auth.fail), which the per-tenant RLS `OR tenant_id=”` read clause
 // surfaces to every tenant. Marking each row "system" vs "tenant" lets a tenant
-// admin distinguish global system events from their own audit trail WITHOUT
-// exposing any other tenant's id (per-row tenantId is still deliberately omitted).
+// admin distinguish global system events from their own audit trail. (Per-row
+// tenantId IS now projected since PR-12 — see toListResponseDataItem — but it is
+// always the caller's OWN tenant id, so `scope` remains the system-vs-tenant
+// signal; it never carries another tenant's id.)
 func rowScope(tenantID string) string {
 	if tenantID == "" {
 		return scopeSystem

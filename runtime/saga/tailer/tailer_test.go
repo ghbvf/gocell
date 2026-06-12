@@ -341,7 +341,7 @@ func TestTailer_LockContentionSkips(t *testing.T) {
 	tl := newTestTailer(t, src, store, apply, obs, locker, clk)
 
 	// A competitor holds the tailer's per-projection lock.
-	held, err := locker.Acquire(context.Background(), tailerLockKey(testProj), testLockTTL)
+	held, err := locker.Acquire(context.Background(), tailerLockKey(testCell, testProj), testLockTTL)
 	if err != nil {
 		t.Fatalf("competitor acquire: %v", err)
 	}
@@ -609,11 +609,21 @@ func TestClassifyLockSkip(t *testing.T) {
 }
 
 func TestTailerLockKeyInjective(t *testing.T) {
-	// Length-prefix keeps the key injective over SafeID charset (':' allowed).
-	if tailerLockKey("a:b") == tailerLockKey("a") {
-		t.Error("tailerLockKey not injective for ':'-containing ids")
+	// Length-prefix keeps the key injective over SafeID charset (':' allowed) on
+	// BOTH the cellID and projectionID segments.
+	if tailerLockKey("c", "a:b") == tailerLockKey("c", "a") {
+		t.Error("tailerLockKey not injective for ':'-containing projectionIDs")
 	}
-	if tailerLockKey(testProj) == "" {
+	if tailerLockKey("a:b", "c") == tailerLockKey("a", "b:c") {
+		t.Error("tailerLockKey not injective across the cellID/projectionID boundary")
+	}
+	// F3 regression: two different cells declaring the SAME projectionID (which
+	// metadata explicitly permits) MUST get distinct lock keys, otherwise they
+	// would contend for one leader lock across cells.
+	if tailerLockKey("cellA", testProj) == tailerLockKey("cellB", testProj) {
+		t.Error("tailerLockKey collides for same projectionID in different cells")
+	}
+	if tailerLockKey(testCell, testProj) == "" {
 		t.Error("empty key")
 	}
 }

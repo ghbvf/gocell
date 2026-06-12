@@ -56,7 +56,7 @@ export TODOORDER_TOKEN="$(go run ./examples/todoorder/localtoken)"
 go run ./examples/todoorder
 ```
 
-The server starts with primary listener on `:8082` (API), internal listener on `:9082` (control-plane), and health listener on `127.0.0.1:9092` (`/healthz` `/readyz` `/metrics`).
+The server starts with primary listener on `:8082` (API), internal listener on `127.0.0.1:9082` (loopback control-plane), and health listener on `127.0.0.1:9092` (`/healthz` `/readyz` `/metrics`).
 `TODOORDER_TOKEN` is a real RS256 access token signed by the local key above.
 
 ## Docker Mode

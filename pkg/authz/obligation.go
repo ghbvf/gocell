@@ -66,6 +66,31 @@ func (fm FieldMask) IsZero() bool {
 	return len(fm.Fields) == 0
 }
 
+// Masks reports whether column is in the mask's field set. A zero FieldMask
+// masks nothing (always false). This is the obligation-query a PEP uses to
+// decide whether a given column is governed by the mask — e.g. to reject a query
+// predicate on a column the caller cannot see (a masked-column filter would leak
+// a match/no-match oracle on a value the response redacts).
+func (fm FieldMask) Masks(column string) bool {
+	for _, f := range fm.Fields {
+		if f == column {
+			return true
+		}
+	}
+	return false
+}
+
+// IdentityFieldMask returns the empty (identity-projection) FieldMask: it masks
+// nothing, so a PEP serializes the full column set. It is the NAMED intent marker
+// for a read whose column visibility is not (yet) constrained — every such
+// callsite is greppable as `authz.IdentityFieldMask()` rather than an anonymous
+// `authz.FieldMask{}` that reads ambiguously as "identity" vs "TODO: real mask".
+// When the ABAC policy engine is wired (PR-10 #1348), the swap is a one-line
+// replacement of this call with Decision.Obligations().FieldMask at each site.
+func IdentityFieldMask() FieldMask {
+	return FieldMask{}
+}
+
 // Validate returns an error if any entry in Fields is not a canonical
 // attribute key (see ValidAttributeKey), or if Fields contains duplicate
 // column names.
