@@ -102,19 +102,37 @@ func TestBuildKeyProviderFromName_LocalAES_EmptyMasterKey(t *testing.T) {
 }
 
 // TestBuildKeyProviderFromName_VaultTransit_NoEnv verifies that the vault-transit
-// branch fails cleanly when VAULT_ADDR / related env vars are absent.
-// This confirms the vault branch is reachable without triggering any test
-// infrastructure — the expected failure is a vault connection error, not a
-// metrics registration error.
+// branch fails cleanly when VAULT_ADDR is absent, AND that the failure is the
+// adapter's own VAULT_ADDR-required guard (ErrVaultAuthFailed). That error code
+// is minted ONLY inside adaptervault.NewTransitKeyProviderFromEnv, so observing
+// it back here positively proves the configcore vault-transit branch delegates
+// all the way THROUGH NewTransitMetrics and INTO the real adapter env
+// constructor — it does not stop at metrics registration. This is the
+// delegation-locality half of the vault-transit success-path wiring (F6); the
+// success half past this eager-I/O boundary (a usable provider) is owned by the
+// adapters/vault suite (white-box fakeVaultClient unit + //go:build integration
+// httptest), and the configcore routing of a successful provider into
+// res.Resources is pinned by
+// TestModule_Provide_KeyProviderImplementingManagedResource_SurfacedInResources.
 func TestBuildKeyProviderFromName_VaultTransit_NoEnv(t *testing.T) {
+	// Hermetic: force VAULT_ADDR empty regardless of the developer's shell so the
+	// branch deterministically reaches the adapter's VAULT_ADDR-required guard
+	// (rather than a TLS / client-creation / Login failure with a stray addr).
+	t.Setenv("VAULT_ADDR", "")
+
 	// NopProvider is sufficient: NewTransitMetrics succeeds on NopProvider.
-	// NewTransitKeyProviderFromEnv will fail because VAULT_ADDR is absent.
+	// NewTransitKeyProviderFromEnv then fails at the VAULT_ADDR-required guard.
 	kp, err := buildKeyProviderFromName(
-		"postgres", "", "vault-transit", "", "", clock.Real(), nopMetricsProvider)
+		"postgres", "", providerVaultTransit, "", "", clock.Real(), nopMetricsProvider)
 
 	// Must fail (no vault configured) but must not panic.
 	require.Error(t, err, "vault-transit without VAULT_ADDR must fail")
 	assert.Nil(t, kp)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrVaultAuthFailed, ecErr.Code,
+		"failure must be the adapter's VAULT_ADDR-required guard, proving the "+
+			"vault-transit branch delegates into NewTransitKeyProviderFromEnv")
 }
 
 // TestBuildKeyProviderFromName_VaultTransit_NilMetricsProvider verifies that
