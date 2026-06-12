@@ -21,15 +21,6 @@ import (
 // TopicDeviceRegistered is the canonical event topic for device registration events.
 const TopicDeviceRegistered = "event.device-registered.v1"
 
-// certValidity is the lifetime of a freshly-issued device certificate. A device
-// registers healthy (far from expiry); the cell's cert-renewal reconcile loop
-// only acts once "now" enters its near-expiry threshold of NotAfter. This value
-// MUST exceed that threshold (90d validity vs the cell's 30d threshold) or a
-// freshly-issued cert would be swept for renewal immediately — a representative
-// L4 policy. (The threshold lives in cells/devicecell/cell.go; the two are
-// co-tuned but in separate packages to avoid a slice→cell import cycle.)
-const certValidity = 90 * 24 * time.Hour
-
 // deviceRegisteredEvent is the event payload DTO for device registration events,
 // decoupled from the domain model.
 type deviceRegisteredEvent struct {
@@ -107,10 +98,12 @@ func (s *Service) registerInternal(ctx context.Context, name string) (*domain.De
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "device name must not be empty")
 	}
 
-	// The device's initial certificate (epoch 1, NotAfter = now+validity) is
-	// persisted on the device row itself (#1819), so the cert-renewal reconcile
-	// loop has durable, restart-surviving near-expiry state to observe as the
-	// cert ages toward expiry.
+	// The device's initial certificate (epoch 1, NotAfter = now+domain.CertValidity)
+	// is persisted on the device row itself (#1819), so the cert-renewal reconcile
+	// loop has durable, restart-surviving near-expiry state to observe as the cert
+	// ages toward expiry. domain.CertValidity is the single source shared with the
+	// post-rotation re-issue (devicecertcompletion, #1870); the cell Init asserts
+	// it exceeds the near-expiry Threshold so a fresh cert is never swept immediately.
 	now := s.clock.Now()
 	device := &domain.Device{
 		ID:            "dev" + "-" + uuid.NewString(),
@@ -118,7 +111,7 @@ func (s *Service) registerInternal(ctx context.Context, name string) (*domain.De
 		Status:        "online",
 		LastSeen:      now,
 		CertEpoch:     domain.DefaultCertEpoch,
-		CertExpiresAt: now.Add(certValidity),
+		CertExpiresAt: now.Add(domain.CertValidity),
 	}
 
 	if err := s.repo.Create(ctx, device); err != nil {

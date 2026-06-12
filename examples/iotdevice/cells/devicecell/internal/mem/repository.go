@@ -113,6 +113,27 @@ func (r *DeviceRepository) ListCertificateRenewalCandidates(
 	return out, nil
 }
 
+// AdvanceCertAfterRotation CAS-advances a device's cert state on a successful
+// rotate-cert ack (#1870): if the device exists AND is still at rotatedEpoch, it
+// moves to rotatedEpoch+1 with cert_expires_at=newExpiry and returns advanced=true.
+// A stale epoch (already advanced) or an unknown device matches nothing and
+// returns advanced=false with a nil error — the idempotent no-op that makes
+// replayed / duplicate acks safe. Mirrors the PG partial-CAS UPDATE.
+func (r *DeviceRepository) AdvanceCertAfterRotation(
+	_ context.Context, deviceID string, rotatedEpoch int64, newExpiry time.Time,
+) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	d, ok := r.devices[deviceID]
+	if !ok || d.CertEpoch != rotatedEpoch {
+		return false, nil // unknown device or already-advanced epoch: idempotent no-op
+	}
+	d.CertEpoch = rotatedEpoch + 1
+	d.CertExpiresAt = newExpiry
+	return true, nil
+}
+
 func compareDeviceField(a, b *domain.Device, field string) int {
 	switch field {
 	case "name":
