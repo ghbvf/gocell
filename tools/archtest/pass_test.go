@@ -1375,12 +1375,16 @@ func TestRun_Fixture_delegatesToRunTypedWithRoot(t *testing.T) {
 // generated/ file. This is the "violation not expressible" property — a rule
 // author using this entry cannot observe codegen output even by forgetting a
 // per-file skip, because the driver never constructs a Pass for a generated
-// package. Reaching generated/ requires deliberately switching to
-// Run(t, Typed(...)).
+// package. Since #1564 made generated/ its own module, reaching it needs the
+// workspace production resolver (or StandaloneModule), not a root-relative
+// Run(t, Typed(./...)) (single-module, GOWORK=off) which no longer crosses the
+// module boundary.
 //
-// Contra-positive assertion: we also run Run(t, Typed(...), ./...) and assert
-// it finds ≥1 generated/ file. If it finds zero, the exclusion test is vacuous
-// (there is nothing to exclude, so Production's filter has no teeth).
+// Contra-positive assertion: we also load the workspace production resolver
+// (typeseval.LoadProductionPackages — the loader behind Production) and assert
+// its full set contains ≥1 generated/ package that Production() drops. If zero,
+// the exclusion test is vacuous (nothing to exclude, so Production's filter has
+// no teeth).
 func TestRun_Production_excludesGeneratedPackages(t *testing.T) {
 	if testing.Short() {
 		t.Skip("full-module packages.Load; skipped in -short")
