@@ -118,12 +118,21 @@ func (v *view) Report(ctx context.Context) Report {
 		}
 		for _, p := range snaps[id].Probes {
 			n := p.Name()
+			// Mark the probe cell-owned BEFORE the status lookup: ownership is
+			// structural (the cell registered it), independent of whether the
+			// aggregator has a result for it. This keeps it out of the adapter
+			// bucket below even on the rare path where it has no result yet.
 			owned[n] = struct{}{}
 			if pr, ok := byName[n]; ok {
 				dep := toProbeHealth(pr)
 				ch.Deps = append(ch.Deps, dep)
 				worst = maxRank(worst, dep.Status)
 			}
+			// else: a snapshot probe with no aggregator result (transient —
+			// e.g. registered but not yet drained) is safely omitted from deps
+			// rather than surfaced with an unknown status. In production every
+			// snapshot probe is drained into the aggregator at bootstrap, so this
+			// branch is defensive only.
 		}
 		worst = maxRank(worst, ch.Status)
 		cells = append(cells, ch)

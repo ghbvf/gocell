@@ -2,6 +2,7 @@ package syshealth
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -165,6 +166,79 @@ func TestView_Report_FailClosedEdges(t *testing.T) {
 	// single cell normalized to unhealthy, so overall is unhealthy.
 	if rep.Overall != "unhealthy" {
 		t.Fatalf("Overall = %q, want unhealthy (the ghost cell)", rep.Overall)
+	}
+}
+
+// TestProbeStatus pins every probeStatus branch (the StatusDown non-deadline →
+// "unhealthy" and nil-err paths were previously only exercised indirectly).
+func TestProbeStatus(t *testing.T) {
+	connErr := errors.New("connection refused")
+	cases := []struct {
+		name string
+		s    healthz.Status
+		err  error
+		want string
+	}{
+		{"up", healthz.StatusUp, nil, "healthy"},
+		{"degraded", healthz.StatusDegraded, nil, "degraded"},
+		{"down_deadline", healthz.StatusDown, context.DeadlineExceeded, "timeout"},
+		{"down_other_err", healthz.StatusDown, connErr, "unhealthy"},
+		{"down_nil_err", healthz.StatusDown, nil, "unhealthy"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := probeStatus(c.s, c.err); got != c.want {
+				t.Fatalf("probeStatus(%v, %v) = %q, want %q", c.s, c.err, got, c.want)
+			}
+		})
+	}
+}
+
+// TestView_Report_OverallRanks pins statusFromRank's healthy(0) and degraded(1)
+// paths (the bucketing test only reached unhealthy(2)). all-healthy ⇒ overall
+// healthy; a single degraded cell with all-healthy probes ⇒ overall degraded.
+func TestView_Report_OverallRanks(t *testing.T) {
+	mk := func(cellStatus string) HealthView {
+		return New(fakeAsm{
+			ids:    []string{"only"},
+			snaps:  map[string]cell.RegistrySnapshot{"only": {Probes: []healthz.Probe{mustProbe(t, "only_repo_ready")}}},
+			health: map[string]cell.HealthStatus{"only": {Status: cellStatus}},
+			cells:  map[string]cell.Cell{"only": newStubCell(t, "only", true)},
+		}, fakeAgg{snap: healthz.Snapshot{Probes: []healthz.ProbeResult{
+			{Name: mustName(t, "only_repo_ready"), Status: healthz.StatusUp, Latency: time.Millisecond},
+		}}})
+	}
+	if got := mk("healthy").Report(context.Background()).Overall; got != "healthy" {
+		t.Fatalf("all-healthy Overall = %q, want healthy", got)
+	}
+	if got := mk("degraded").Report(context.Background()).Overall; got != "degraded" {
+		t.Fatalf("one-degraded-cell Overall = %q, want degraded", got)
+	}
+}
+
+// TestView_Report_SnapshotProbeMissingFromEvaluate pins the defensive path: a
+// cell snapshot probe with NO aggregator result is omitted from deps (not shown
+// with an unknown status) AND does not leak into the adapter bucket (it stays
+// cell-owned via the set-difference).
+func TestView_Report_SnapshotProbeMissingFromEvaluate(t *testing.T) {
+	v := New(fakeAsm{
+		ids:    []string{"only"},
+		snaps:  map[string]cell.RegistrySnapshot{"only": {Probes: []healthz.Probe{mustProbe(t, "only_repo_ready")}}},
+		health: map[string]cell.HealthStatus{"only": {Status: "healthy"}},
+		cells:  map[string]cell.Cell{"only": newStubCell(t, "only", true)},
+	}, fakeAgg{snap: healthz.Snapshot{Probes: []healthz.ProbeResult{
+		// aggregator returns ONLY an unrelated adapter probe, NOT only_repo_ready.
+		{Name: mustName(t, "postgres_ready"), Status: healthz.StatusUp, Latency: time.Millisecond},
+	}}})
+
+	rep := v.Report(context.Background())
+	if len(rep.Cells[0].Deps) != 0 {
+		t.Fatalf("snapshot probe without aggregator result must be omitted from deps, got %+v", rep.Cells[0].Deps)
+	}
+	for _, a := range rep.Adapters {
+		if a.Name == "only_repo_ready" {
+			t.Fatal("cell-owned probe leaked into adapter bucket despite missing aggregator result")
+		}
 	}
 }
 

@@ -51,7 +51,10 @@ func (s *Service) Cells(ctx context.Context, _ *cells.Request) (cells.CellsRespo
 	return cells.Cells200JSONResponse{Data: toResponseData(view.Report(ctx))}, nil
 }
 
-// toResponseData projects a syshealth.Report onto the generated wire DTO.
+// toResponseData projects a syshealth.Report onto the generated wire DTO. Slices
+// are always non-nil (make(..., 0, ...)) so an empty report serializes cells /
+// adapters / deps as `[]` rather than `null` — the wire arrays are required and a
+// consumer can iterate them unconditionally.
 func toResponseData(rep syshealth.Report) *cells.ResponseData {
 	out := &cells.ResponseData{
 		Overall:  rep.Overall,
@@ -77,6 +80,8 @@ func toResponseData(rep syshealth.Report) *cells.ResponseData {
 	return out
 }
 
+// toDepItems projects a cell's probe slice onto the generated dep DTO. Returns a
+// non-nil empty slice for a cell with no deps (serializes as `[]`, not `null`).
 func toDepItems(deps []syshealth.ProbeHealth) []*cells.ResponseDataCellsItemDepsItem {
 	out := make([]*cells.ResponseDataCellsItemDepsItem, 0, len(deps))
 	for _, d := range deps {

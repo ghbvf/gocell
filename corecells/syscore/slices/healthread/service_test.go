@@ -2,6 +2,8 @@ package healthread
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	cells "github.com/ghbvf/gocell/generated/contracts/http/admin/health/cells/v1"
@@ -70,6 +72,42 @@ func TestService_Cells_OK(t *testing.T) {
 	}
 	if len(d.Adapters) != 1 || d.Adapters[0].Name != "postgres_ready" || d.Adapters[0].Status != "healthy" {
 		t.Errorf("adapters projection wrong: %+v", d.Adapters)
+	}
+}
+
+// TestService_Cells_NilSlicesSerializeEmptyArray pins that a cell with nil Deps
+// and a report with nil Adapters serialize as `[]` (not `null`), so the frontend
+// can iterate the required wire arrays unconditionally.
+func TestService_Cells_NilSlicesSerializeEmptyArray(t *testing.T) {
+	svc, err := NewService()
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	rep := syshealth.Report{
+		Overall:  "healthy",
+		Cells:    []syshealth.CellHealth{{ID: "a", Live: true, Ready: true, Status: "healthy", Deps: nil}},
+		Adapters: nil,
+	}
+	resp, err := svc.Cells(syshealth.WithHealthView(context.Background(), fakeView{rep}), &cells.Request{})
+	if err != nil {
+		t.Fatalf("Cells: %v", err)
+	}
+	ok, isOK := resp.(cells.Cells200JSONResponse)
+	if !isOK {
+		t.Fatalf("response type = %T, want Cells200JSONResponse", resp)
+	}
+	if ok.Data.Cells[0].Deps == nil || ok.Data.Adapters == nil {
+		t.Fatal("Deps/Adapters must be non-nil empty slices (serialize [], not null)")
+	}
+	b, err := json.Marshal(ok.Data)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"deps":[]`) {
+		t.Fatalf("deps must serialize as []; got %s", b)
+	}
+	if !strings.Contains(string(b), `"adapters":[]`) {
+		t.Fatalf("adapters must serialize as []; got %s", b)
 	}
 }
 
