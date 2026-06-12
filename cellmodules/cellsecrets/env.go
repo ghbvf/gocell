@@ -30,3 +30,15 @@ func LoadConfigCoreKeyProvider() (providerName, masterKey, prevMasterKey string)
 		os.Getenv("GOCELL_CONFIGCORE_MASTER_KEY"),
 		os.Getenv("GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS")
 }
+
+// LoadWebhookSourceKeyProvider reads the KeyProvider configuration for the
+// persistent, encrypted webhook source secret store (#1540):
+//
+//	GOCELL_WEBHOOK_KEY_PROVIDER
+//	GOCELL_WEBHOOK_MASTER_KEY
+//	GOCELL_WEBHOOK_MASTER_KEY_PREVIOUS
+func LoadWebhookSourceKeyProvider() (providerName, masterKey, prevMasterKey string) {
+	return os.Getenv("GOCELL_WEBHOOK_KEY_PROVIDER"),
+		os.Getenv("GOCELL_WEBHOOK_MASTER_KEY"),
+		os.Getenv("GOCELL_WEBHOOK_MASTER_KEY_PREVIOUS")
+}

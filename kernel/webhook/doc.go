@@ -36,8 +36,11 @@
 //     in-package implementations are the HMAC-SHA256 signer/verifier built by
 //     [NewHMACSigner] / [NewHMACVerifier]; [Signer.Sign] returns a [SignedHeaders].
 //   - [SourceStore] / [SourceRegistry] — secret lookup interface + in-memory
-//     implementation (externally replaceable; persistent stores are a
-//     follow-up).
+//     implementation (externally replaceable). A persistent encrypted backing
+//     store (adapters/postgres webhook_sources, wired by cellmodules/webhooksource)
+//     loads its secrets through the sealed crypto funnel [Source.Encrypt] /
+//     [NewSourceFromCiphertext] at boot and serves them from a SourceRegistry
+//     snapshot — the plaintext secret never leaves this package.
 //
 // # Signing scheme (Svix-aligned)
 //

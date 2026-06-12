@@ -680,6 +680,20 @@ var expectedColumns = []expectedColumn{
 	{Table: "reconcile_leases", Column: "epoch", Type: "bigint", NotNull: true},
 	{Table: "reconcile_leases", Column: "acquired_at", Type: pgTypeTSTZ, NotNull: true},
 	{Table: "reconcile_leases", Column: "expires_at", Type: pgTypeTSTZ, NotNull: true},
+	// webhook_sources (063_create_webhook_sources.sql) — global, encrypted store
+	// for webhook source HMAC secrets (#1540). NO tenant_id / NO RLS (the kernel
+	// SourceStore.Lookup carries no tenant). NO plaintext column: value_cipher is
+	// NOT NULL, so a webhook secret is structurally unrepresentable at rest in
+	// plaintext (the schema-shape half of the encryption-at-rest guarantee). The
+	// envelope columns mirror config_entries (010); value_edk / value_nonce are
+	// nullable (provider-specific — a backend may embed the nonce in the ciphertext).
+	{Table: "webhook_sources", Column: "source_id", Type: "text", NotNull: true},
+	{Table: "webhook_sources", Column: "value_cipher", Type: "bytea", NotNull: true},
+	{Table: "webhook_sources", Column: "value_key_id", Type: "character varying(128)", NotNull: true},
+	{Table: "webhook_sources", Column: "value_edk", Type: "bytea", NotNull: false},
+	{Table: "webhook_sources", Column: "value_nonce", Type: "bytea", NotNull: false},
+	{Table: "webhook_sources", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
+	{Table: "webhook_sources", Column: "updated_at", Type: pgTypeTSTZ, NotNull: true},
 }
 
 // forbiddenColumns are legacy columns that must NOT exist after migration.

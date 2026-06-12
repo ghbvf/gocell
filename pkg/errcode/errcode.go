@@ -834,6 +834,14 @@ const (
 	// ErrWebhookConfigInvalid signals invalid webhook configuration (bad source
 	// ID / delivery ID / empty secret). Constructed with KindInvalid → HTTP 400.
 	ErrWebhookConfigInvalid Code = "ERR_WEBHOOK_CONFIG_INVALID"
+	// ErrWebhookSecretCryptoFailed signals that a persisted webhook source secret
+	// could not be sealed (encrypt, e.g. KMS unavailable) or unsealed (decrypt:
+	// wrong key version, AAD mismatch / ciphertext transplanted across source
+	// IDs, or a corrupt cipher tuple). Constructed with KindInternal → HTTP 500.
+	// Fail-closed: the persistent SourceStore loader refuses to start rather than
+	// serve a source whose secret cannot be recovered. First constructed in #1540
+	// (webhook source secret persistence).
+	ErrWebhookSecretCryptoFailed Code = "ERR_WEBHOOK_SECRET_CRYPTO_FAILED"
 
 	// Reconcile leader-election / epoch-fencing codes (KERNEL-RECONCILE-01 PR-A6).
 	//
