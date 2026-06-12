@@ -280,7 +280,7 @@ func TestServiceTokenAuthenticator_InvalidMAC_Error(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	// Construct a token with wrong HMAC. Do not replace with a fixed suffix:
 	// the generated MAC is random and may already end with that value.
-	goodToken := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", now)
+	goodToken := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", "", now)
 	parts := strings.Split(goodToken, ":")
 	if len(parts) != 4 {
 		t.Fatalf("expected generated service token to have 4 parts, got %d: %q", len(parts), goodToken)
@@ -313,7 +313,7 @@ func TestServiceTokenAuthenticator_Expired_Error(t *testing.T) {
 	now := time.Now()
 	oldTime := now.Add(authnDNeg6min)
 	// Token is signed for 6 minutes ago — exceeds ServiceTokenMaxAge.
-	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", oldTime)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", "", oldTime)
 	a := mustNewServiceTokenAuthenticator(t, ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
@@ -341,7 +341,7 @@ func TestServiceTokenAuthenticator_NonceReplay_Error(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewServiceTokenAuthenticator: %v", err)
 	}
-	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", "", now)
 
 	// First use — must succeed.
 	req1 := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
@@ -378,7 +378,7 @@ func TestServiceTokenAuthenticator_Success_PrincipalShape(t *testing.T) {
 	a := mustNewServiceTokenAuthenticator(t, ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 
-	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", "", now)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 
@@ -448,7 +448,7 @@ func TestServiceTokenAuthenticator_FutureTimestamp_Error(t *testing.T) {
 	now := time.Now()
 	// Token is signed just beyond the explicit future-skew window.
 	futureTime := now.Add(ServiceTokenClockSkew + time.Second)
-	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", futureTime)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", "", futureTime)
 
 	a := mustNewServiceTokenAuthenticator(t, ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
@@ -471,7 +471,7 @@ func TestServiceTokenAuthenticator_FarFutureTimestampOverflow_Error(t *testing.T
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Unix(1_700_000_000, 0)
 	farFuture := time.Unix(math.MaxInt64/2, 0)
-	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", farFuture)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", "", farFuture)
 
 	a := mustNewServiceTokenAuthenticator(t, ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
@@ -494,7 +494,7 @@ func TestServiceTokenAuthenticator_FutureTimestampWithinSkew_Accepted(t *testing
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
 	futureTime := now.Add(ServiceTokenClockSkew)
-	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", futureTime)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", "", futureTime)
 
 	a := mustNewServiceTokenAuthenticator(t, ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
@@ -523,7 +523,7 @@ func TestNewServiceTokenAuthenticator_PrincipalCallerCell(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
 	// Spec: 4-part signature: GenerateServiceToken(ring, callerCell, method, path, query, ts)
-	token := GenerateServiceToken(ring, "accesscore", http.MethodGet, "/internal/v1/resource", "", now)
+	token := GenerateServiceToken(ring, "accesscore", http.MethodGet, "/internal/v1/resource", "", "", now)
 
 	a := mustNewServiceTokenAuthenticator(t, ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
@@ -559,7 +559,7 @@ func TestServiceTokenAuthenticator_PastTimestampAtMaxAge_Error(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
 	oldTime := now.Add(-ServiceTokenMaxAge)
-	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", oldTime)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", "", oldTime)
 
 	a := mustNewServiceTokenAuthenticator(t, ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))

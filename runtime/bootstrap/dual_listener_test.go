@@ -141,7 +141,7 @@ func getWithServiceToken(t *testing.T, rawURL string, ring *auth.HMACKeyRing) *h
 	require.NoError(t, err)
 	// Spec: 4-part token — callerCell="accesscore" (bootstrap integration tests use accesscore as caller).
 	req.Header.Set("Authorization", "ServiceToken "+
-		auth.GenerateServiceToken(ring, "accesscore", http.MethodGet, parsed.Path, parsed.RawQuery, time.Now()))
+		auth.GenerateServiceToken(ring, "accesscore", http.MethodGet, parsed.Path, parsed.RawQuery, "", time.Now()))
 	resp, err := testHTTPClient.Do(req)
 	require.NoError(t, err)
 	return resp

@@ -248,3 +248,91 @@ func TestHTTPConfigGetter_GetEntry_TenantIDForwarded(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, tid2.String(), receivedTenant, "X-Tenant-ID must update with each call")
 }
+
+// configEntryHandler returns an http.Handler that answers the internal config
+// GET with a fixed 200 {data:...} envelope. It is the downstream handler the
+// service-token middleware guards in the passthrough tests below.
+func configEntryHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"key": "app.name", "value": "gocell", "sensitive": false, "version": 3,
+			},
+		})
+	})
+}
+
+// TestHTTPConfigGetter_GetEntry_MiddlewareVerified drives the production
+// GetEntry call site through the real auth.ServiceTokenMiddleware (same ring +
+// replay-safe nonce store), proving the signed service token and the X-Tenant-ID
+// wire header this PR binds into the MAC actually pass verification end to end —
+// not just that the headers are non-empty. The middleware reconstructs the MAC
+// from the live X-Tenant-ID header (#1717 SignedHeaders binding); a 200 here
+// means signed tenant == wire tenant survives the full verify path.
+func TestHTTPConfigGetter_GetEntry_MiddlewareVerified(t *testing.T) {
+	ring := newTestRing(t)
+	ns, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
+	require.NoError(t, err)
+
+	guarded := auth.ServiceTokenMiddleware(ring, clock.Real(),
+		auth.WithServiceTokenNonceStore(ns))(configEntryHandler())
+	srv := httptest.NewServer(guarded)
+	defer srv.Close()
+
+	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
+	entry, err := client.GetEntry(context.Background(), testTenant, "app.name")
+	require.NoError(t, err, "signed token + matching X-Tenant-ID must pass middleware verification")
+	assert.Equal(t, "app.name", entry.Key)
+	assert.Equal(t, "gocell", entry.Value)
+	assert.Equal(t, 3, entry.Version)
+}
+
+// tamperTenantTransport rewrites the X-Tenant-ID header after GetEntry has signed
+// the request, simulating a wire-level man-in-the-middle altering the tenant
+// assertion while leaving the (already computed) Authorization MAC untouched.
+type tamperTenantTransport struct {
+	inner  http.RoundTripper
+	tenant string
+}
+
+func (tt tamperTenantTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req.Header.Set(auth.HeaderTenantID, tt.tenant)
+	return tt.inner.RoundTrip(req)
+}
+
+// TestHTTPConfigGetter_GetEntry_TamperedTenantHeaderRejected is the negative leg
+// of the binding proof at the production call site: when the on-the-wire
+// X-Tenant-ID diverges from the value GetEntry signed (testTenant), the MAC the
+// middleware reconstructs no longer matches, so verification fails with 401 —
+// which GetEntry maps to the permanent errcode.ErrAuthUnauthorized (consumers
+// Reject, never Requeue). The guarded handler must never be reached.
+func TestHTTPConfigGetter_GetEntry_TamperedTenantHeaderRejected(t *testing.T) {
+	ring := newTestRing(t)
+	ns, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
+	require.NoError(t, err)
+
+	var handlerReached bool
+	guarded := auth.ServiceTokenMiddleware(ring, clock.Real(),
+		auth.WithServiceTokenNonceStore(ns))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		handlerReached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	srv := httptest.NewServer(guarded)
+	defer srv.Close()
+
+	// Tamper the wire tenant to a different canonical UUID than the signed one.
+	tamper := mustParseTenant("99999999-9999-4999-8999-999999999999")
+	tampered := &http.Client{Transport: tamperTenantTransport{inner: http.DefaultTransport, tenant: tamper.String()}}
+
+	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, tampered, clock.Real())
+	_, err = client.GetEntry(context.Background(), testTenant, "app.name")
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec, "wire-tampered tenant must surface a typed errcode")
+	assert.Equal(t, errcode.ErrAuthUnauthorized, ec.Code,
+		"tampered X-Tenant-ID must break the MAC binding → 401 → permanent auth error")
+	assert.False(t, handlerReached, "middleware must reject before the guarded handler runs")
+}

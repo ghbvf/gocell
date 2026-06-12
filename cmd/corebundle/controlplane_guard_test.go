@@ -130,6 +130,6 @@ func TestBuildInternalHMACRing_ValidSecret_RingUsable(t *testing.T) {
 	require.NotNil(t, ring, "ring must be installed when secret is present")
 
 	// Verify ring works by generating a service token (non-empty result = usable ring).
-	token := auth.GenerateServiceToken(ring, "accesscore", "GET", "/internal/v1/access/roles", "", time.Now())
+	token := auth.GenerateServiceToken(ring, "accesscore", "GET", "/internal/v1/access/roles", "", "", time.Now())
 	assert.NotEmpty(t, token, "ring must produce valid service tokens")
 }

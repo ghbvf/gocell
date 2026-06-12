@@ -112,7 +112,7 @@ func postRoleEndpoint(t *testing.T, h *l2Harness, action, userID, roleID string)
 	default:
 		t.Fatalf("postRoleEndpoint: unknown action %q (expected \"assign\" or \"revoke\")", action)
 	}
-	token := auth.GenerateServiceToken(h.ring, "accesscore", http.MethodPost, path, "", time.Now())
+	token := auth.GenerateServiceToken(h.ring, "accesscore", http.MethodPost, path, "", "", time.Now())
 	req, _ := http.NewRequest(http.MethodPost, h.internalBase+path, bytes.NewReader(body))
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	req.Header.Set("Content-Type", "application/json")

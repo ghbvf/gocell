@@ -282,17 +282,21 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 func TestInternalRPC_AccessCoreCallsConfigRead_GuardPassed_404KeyNotFound(t *testing.T) {
 	app := startCallerCellApp(t)
 
+	// Real (non-reserved) tenant UUID, bound into the token MAC (#1717) AND sent
+	// on the wire as X-Tenant-ID. The MAC binding requires the signed tenant and
+	// the header to agree; a valid matching tenant lets the request pass the guard
+	// and reach the key lookup (which 404s — the key is not seeded). Untyped const
+	// so it is assignable to both the tenant.TenantID sign param and the string header.
+	const tenantID = "00000000-0000-0000-0000-000000000001"
 	token := auth.GenerateServiceToken(app.ring, "accesscore",
-		http.MethodGet, "/internal/v1/config/no-such-key", "", time.Now())
+		http.MethodGet, "/internal/v1/config/no-such-key", "", tenantID, time.Now())
 	require.NotEmpty(t, token, "token generation must succeed for a valid callerCell")
 
 	req, err := http.NewRequest(http.MethodGet,
 		fmt.Sprintf("http://%s/internal/v1/config/no-such-key", app.internalAddr), nil)
 	require.NoError(t, err)
 	req.Header.Set("Authorization", "ServiceToken "+token)
-	// Real (non-reserved) tenant UUID so the X-Tenant-ID parse passes and the
-	// request reaches the key lookup (which 404s — the key is not seeded).
-	req.Header.Set("X-Tenant-ID", "00000000-0000-0000-0000-000000000001")
+	req.Header.Set("X-Tenant-ID", tenantID)
 
 	resp, err := callerCellHTTPClient.Do(req)
 	require.NoError(t, err)
@@ -311,7 +315,7 @@ func TestInternalRPC_ConfigCoreCallsConfigRead_Denied_403(t *testing.T) {
 	app := startCallerCellApp(t)
 
 	token := auth.GenerateServiceToken(app.ring, "configcore",
-		http.MethodGet, "/internal/v1/config/any-key", "", time.Now())
+		http.MethodGet, "/internal/v1/config/any-key", "", "", time.Now())
 	require.NotEmpty(t, token)
 
 	req, err := http.NewRequest(http.MethodGet,
@@ -339,7 +343,7 @@ func TestInternalRPC_WrongEndpointForCaller_403(t *testing.T) {
 	// auditcore is a valid cell ID and passes HMAC + format checks,
 	// but it is not in the configread contract.clients allowlist.
 	token := auth.GenerateServiceToken(app.ring, "auditcore",
-		http.MethodGet, "/internal/v1/config/any-key", "", time.Now())
+		http.MethodGet, "/internal/v1/config/any-key", "", "", time.Now())
 	require.NotEmpty(t, token)
 
 	req, err := http.NewRequest(http.MethodGet,
@@ -402,7 +406,7 @@ func TestInternalRPC_TamperedCallerCellRejected(t *testing.T) {
 
 	// Generate a legitimate token for "accesscore".
 	original := auth.GenerateServiceToken(app.ring, "accesscore",
-		http.MethodGet, "/internal/v1/config/any-key", "", time.Now())
+		http.MethodGet, "/internal/v1/config/any-key", "", "", time.Now())
 	require.NotEmpty(t, original)
 
 	// Token format: ts:nonce:callerCell:mac — 4 colon-separated segments.
@@ -427,6 +431,38 @@ func TestInternalRPC_TamperedCallerCellRejected(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
 		"tampered callerCell segment invalidates the HMAC; ServiceTokenMiddleware must return 401")
+}
+
+// TestInternalRPC_TamperedTenantHeaderRejected verifies that X-Tenant-ID is bound
+// into the service-token MAC (#1717): a token signed binding tenant A whose wire
+// X-Tenant-ID header is swapped to tenant B fails MAC verification → 401, before
+// the handler or RequireCallerCell run. This closes the gap where a holder of a
+// valid service token could tamper the tenant assertion to read another tenant's
+// config tier. End-to-end analog of the unit coverage in
+// runtime/auth/servicetoken_tenant_sign_test.go.
+func TestInternalRPC_TamperedTenantHeaderRejected(t *testing.T) {
+	app := startCallerCellApp(t)
+
+	// Sign the token binding tenant A.
+	const signedTenant = "00000000-0000-0000-0000-000000000001"
+	token := auth.GenerateServiceToken(app.ring, "accesscore",
+		http.MethodGet, "/internal/v1/config/any-key", "", signedTenant, time.Now())
+	require.NotEmpty(t, token)
+
+	req, err := http.NewRequest(http.MethodGet,
+		fmt.Sprintf("http://%s/internal/v1/config/any-key", app.internalAddr), nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "ServiceToken "+token)
+	// Tamper: present a DIFFERENT tenant on the wire than the one bound in the MAC.
+	req.Header.Set("X-Tenant-ID", "00000000-0000-0000-0000-000000000002")
+
+	resp, err := callerCellHTTPClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
+		"tampered X-Tenant-ID is covered by the token MAC; ServiceTokenMiddleware must return 401")
+	assertErrCode(t, resp, "ERR_AUTH_UNAUTHORIZED")
 }
 
 // assertErrCode reads the response body and asserts that the JSON error
