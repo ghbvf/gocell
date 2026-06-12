@@ -253,6 +253,17 @@ func buildStarterBootstrapOpts(
 			[]kauth.ListenerAuth{kauth.AuthNone{}}),
 		bootstrap.WithHealthRoutes(bootstrap.WithReadyzVerboseDisabled()),
 	}
+
+	// Wire the ABAC PDP into the primary listener (accesscore provides it). Any
+	// assembly serving the auditquery endpoint must wire it: post #1348 PR-10a the
+	// route gate is permission-based, so an empty-actorId/cross-actor audit read
+	// fails closed without a PDP in context. Shared discovery+lazy logic lives in
+	// bootstrap.PrimaryAuthorizerOption (also used by cmd/corebundle, ssobff).
+	authzOpt, err := bootstrap.PrimaryAuthorizerOption(cells)
+	if err != nil {
+		return nil, fmt.Errorf("primary authorizer wiring: %w", err)
+	}
+	opts = append(opts, authzOpt)
 	return opts, nil
 }
 

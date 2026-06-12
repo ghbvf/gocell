@@ -10,7 +10,7 @@ package main
 //   - non-admin + actorId != subject       → 403 (PDP default-deny)
 //   - non-admin + actorId == subject (self) → 200 (self branch, no PDP role needed)
 //
-// Wiring: the composition root's primaryAuthorizerOption is exercised via the
+// Wiring: the composition root's bootstrap.PrimaryAuthorizerOption is exercised via the
 // same call-site as production run.go. Access tokens carry live session IDs so
 // they pass the session-validate verifier wired by MustAuthJWTFromAssembly.
 //
@@ -126,12 +126,13 @@ func TestABACPDPGatesAuditQuery(t *testing.T) {
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
 
-	// Wire the ABAC PDP via primaryAuthorizerOption — mirrors production run.go.
-	// This is the core subject under test: every request to the primary listener
-	// carries the PDP in context, so RequirePermission drives the authz decision.
+	// Wire the ABAC PDP via bootstrap.PrimaryAuthorizerOption — mirrors production
+	// run.go. This is the core subject under test: every request to the primary
+	// listener carries the PDP in context, so RequirePermission drives the authz
+	// decision.
 	cells := []cell.Cell{ac, cc, auc}
-	authzOpt, err := primaryAuthorizerOption(cells)
-	require.NoError(t, err, "primaryAuthorizerOption must succeed with accesscore present")
+	authzOpt, err := bootstrap.PrimaryAuthorizerOption(cells)
+	require.NoError(t, err, "bootstrap.PrimaryAuthorizerOption must succeed with accesscore present")
 
 	app := bootstrap.New(
 		clock.Real(),

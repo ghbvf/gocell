@@ -1,4 +1,4 @@
-package main
+package bootstrap
 
 import (
 	"context"
@@ -15,11 +15,10 @@ import (
 	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
 // ---------------------------------------------------------------------------
-// Fakes
+// Fakes (relocated from cmd/corebundle with the PrimaryAuthorizerOption logic)
 // ---------------------------------------------------------------------------
 
 // fakeAuthorizer is a minimal auth.Authorizer for wiring-path tests.
@@ -68,7 +67,7 @@ func (c *countingAuthorizerCell) Authorizer() auth.Authorizer {
 }
 
 // fakeAuthorizerCell is a cell.Cell that also satisfies authorizerProvider.
-// Used to verify the happy-path wiring in primaryAuthorizerOption.
+// Used to verify the happy-path wiring in PrimaryAuthorizerOption.
 type fakeAuthorizerCell struct {
 	cell.Cell
 	authorizer auth.Authorizer
@@ -93,7 +92,7 @@ func newFakeNonAuthorizerCell(id string) *fakeNonAuthorizerCell {
 }
 
 // ---------------------------------------------------------------------------
-// primaryAuthorizerOption tests
+// PrimaryAuthorizerOption tests
 // ---------------------------------------------------------------------------
 
 // TestPrimaryAuthorizerOption_HappyPath verifies that exactly one
@@ -108,14 +107,14 @@ func TestPrimaryAuthorizerOption_HappyPath(t *testing.T) {
 		newFakeNonAuthorizerCell("auditcore"),
 	}
 
-	opt, err := primaryAuthorizerOption(cells)
+	opt, err := PrimaryAuthorizerOption(cells)
 
 	require.NoError(t, err)
 	require.NotNil(t, opt, "a non-nil bootstrap.Option must be returned for the happy path")
 
 	// Behavioral assertion: the option must be accepted by Bootstrap without error.
 	// Use clock.Real() directly — we only need a valid clock, not a full SharedDeps.
-	b := bootstrap.New(clock.Real(), opt)
+	b := New(clock.Real(), opt)
 	require.NotNil(t, b, "Bootstrap constructed with the authorizer option must not be nil")
 }
 
@@ -190,7 +189,7 @@ func TestLazyAuthorizer_ResolveAuthorizer_NilFailsFast(t *testing.T) {
 }
 
 // TestPrimaryAuthorizerOption_NoProvider verifies that an assembly with no
-// authorizerProvider cell causes primaryAuthorizerOption to fail-fast with an
+// authorizerProvider cell causes PrimaryAuthorizerOption to fail-fast with an
 // error containing "no cell implements authorizerProvider".
 func TestPrimaryAuthorizerOption_NoProvider(t *testing.T) {
 	t.Parallel()
@@ -199,7 +198,7 @@ func TestPrimaryAuthorizerOption_NoProvider(t *testing.T) {
 		newFakeNonAuthorizerCell("auditcore"),
 	}
 
-	opt, err := primaryAuthorizerOption(cells)
+	opt, err := PrimaryAuthorizerOption(cells)
 
 	require.Error(t, err, "zero authorizerProvider cells must fail-fast")
 	assert.Nil(t, opt)
@@ -211,7 +210,7 @@ func TestPrimaryAuthorizerOption_NoProvider(t *testing.T) {
 // fails-fast (covers the nil/empty slice edge case).
 func TestPrimaryAuthorizerOption_EmptyCells(t *testing.T) {
 	t.Parallel()
-	opt, err := primaryAuthorizerOption(nil)
+	opt, err := PrimaryAuthorizerOption(nil)
 
 	require.Error(t, err)
 	assert.Nil(t, opt)
@@ -219,7 +218,7 @@ func TestPrimaryAuthorizerOption_EmptyCells(t *testing.T) {
 }
 
 // TestPrimaryAuthorizerOption_MultipleProviders verifies that two cells both
-// implementing authorizerProvider cause primaryAuthorizerOption to fail-fast
+// implementing authorizerProvider cause PrimaryAuthorizerOption to fail-fast
 // with an error containing "multiple cells implement authorizerProvider".
 func TestPrimaryAuthorizerOption_MultipleProviders(t *testing.T) {
 	t.Parallel()
@@ -228,7 +227,7 @@ func TestPrimaryAuthorizerOption_MultipleProviders(t *testing.T) {
 		newFakeAuthorizerCell("accesscore2", fakeAuthorizer{}),
 	}
 
-	opt, err := primaryAuthorizerOption(cells)
+	opt, err := PrimaryAuthorizerOption(cells)
 
 	require.Error(t, err, "two authorizerProvider cells must fail-fast")
 	assert.Nil(t, opt)
@@ -250,7 +249,7 @@ func TestPrimaryAuthorizerOption_NilAuthorizerFromProvider(t *testing.T) {
 	}
 
 	// Option construction must succeed — nil check is deferred to request time.
-	opt, err := primaryAuthorizerOption(cells)
+	opt, err := PrimaryAuthorizerOption(cells)
 	require.NoError(t, err, "option construction must not fail when provider returns nil (Init may not have run yet)")
 	require.NotNil(t, opt)
 
@@ -258,9 +257,9 @@ func TestPrimaryAuthorizerOption_NilAuthorizerFromProvider(t *testing.T) {
 	lazy := &lazyAuthorizer{provider: newFakeAuthorizerCell("accesscore", nil)}
 	_, authErr := lazy.Authorize(context.Background(), "user", "resource", "read")
 	require.Error(t, authErr, "lazyAuthorizer must fail closed when provider returns nil Authorizer")
-	// The error is now an errcode.Error with KindUnavailable so RequirePermission
-	// maps it to 503. The internal detail carries the provider type for diagnostics;
-	// the message is surfaced via the errcode Message field.
+	// The error is an errcode.Error with KindUnavailable so RequirePermission maps
+	// it to 503. The internal detail carries the provider type for diagnostics; the
+	// message is surfaced via the errcode Message field.
 	var ec *errcode.Error
 	require.True(t, errors.As(authErr, &ec), "lazyAuthorizer nil-provider error must be an errcode.Error")
 	assert.Equal(t, errcode.KindUnavailable, ec.Kind,

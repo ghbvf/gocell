@@ -19,12 +19,23 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/audit/ledger/storetest"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
+
+// allowAllAuthorizer grants every audit:read request, mirroring production where
+// the primary listener injects a PDP. Post #1348 PR-10a the auditquery route gate
+// is permission-based, so the empty-actorId reads this masking e2e drives need a
+// PDP in context to reach the data-layer masking it actually tests.
+type allowAllAuthorizer struct{}
+
+func (allowAllAuthorizer) Authorize(_ context.Context, _, _, _ string) (authz.Decision, error) {
+	return authz.Allow(authz.Obligations{})
+}
 
 // auditProjTenant is a canonical tenant UUID; the audit read path fail-closes on
 // an empty principal tenant (epic #1337 PR-2a), so every caller carries it.
@@ -103,8 +114,8 @@ func TestAuditQueryColumnMaskE2E(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil).
-				WithContext(auth.WithPrincipal(context.Background(), tc.principal))
+			ctx := auth.WithAuthorizer(auth.WithPrincipal(context.Background(), tc.principal), allowAllAuthorizer{})
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil).WithContext(ctx)
 			mux.ServeHTTP(w, req)
 			require.Equalf(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 
