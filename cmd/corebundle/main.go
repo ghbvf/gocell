@@ -32,5 +32,6 @@ func run(ctx context.Context) error {
 		"configcore",
 		"auditcore",
 		"accesscore",
+		"syscore",
 	})
 }

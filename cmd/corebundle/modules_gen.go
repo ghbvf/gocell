@@ -6,6 +6,7 @@ import (
 	cellmodulesaccesscore "github.com/ghbvf/gocell/cellmodules/accesscore"
 	cellmodulesauditcore "github.com/ghbvf/gocell/cellmodules/auditcore"
 	cellmodulesconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"
+	cellmodulessyscore "github.com/ghbvf/gocell/cellmodules/syscore"
 	"github.com/ghbvf/gocell/runtime/capability"
 	"github.com/ghbvf/gocell/runtime/composition"
 )
@@ -15,6 +16,7 @@ func generatedCellModules() []composition.CellModule {
 		cellmodulesconfigcore.Module(),
 		cellmodulesauditcore.Module(),
 		cellmodulesaccesscore.Module(),
+		cellmodulessyscore.Module(),
 	}
 }
 

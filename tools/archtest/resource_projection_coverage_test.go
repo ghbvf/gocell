@@ -90,7 +90,16 @@ import (
 // reads with a `data` resource response that are legitimately exempt from the
 // masking funnel. EMPTY today (zero masking debt). See file godoc §Carve-out
 // before changing this; every change syncs the carve-out ADR registry.
-var resourceReadProjectionCarveOut = map[string]struct{}{}
+var resourceReadProjectionCarveOut = map[string]struct{}{
+	// http.admin.health.cells.v1 (#1860): the syscore aggregated cell-health read
+	// is runtime/global observability state — NOT tenant-scoped, NO PII, NO
+	// per-tenant rows. There is no maskable column axis, so routing it through the
+	// tenant column-masking funnel (responseProjection) would be dishonest (an
+	// identity mask over a composite, non-tabular {overall,cells,adapters} body).
+	// Legitimately exempt per the rule's "genuinely non-maskable resource" branch.
+	// Carve-out rationale + threat model: docs/architecture/202606130640-1860-adr-syscore-health-aggregation.md.
+	"http.admin.health.cells.v1": {},
+}
 
 // minExpectedResourceReadGETs is the anti-vacuity floor for the resource-read GET
 // scan. Update when platform GET resource-reads are added or removed; the floor

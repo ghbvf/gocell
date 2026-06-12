@@ -1,0 +1,20 @@
+id: syscore
+type: support
+# L1 (not L0): a contract provider with an HTTP serving boundary cannot be L0
+# (TOPO-05 — only inbound webhook-receive is the L0-provider exception). syscore
+# is read-only and persists nothing today; schema.primary reserves its namespace
+# as the framework's marker of a real boundary cell (FMT-06 requires non-L0 cells
+# to own a primary schema). No postgres requires — the cell holds no tables; it
+# projects the injected runtime HealthView.
+consistencyLevel: L1
+lifecycle: asset
+owner:
+  team: platform
+  role: cell-owner
+schema:
+  primary: cell_syscore
+verify:
+  smoke:
+    - smoke.syscore.startup
+goStructName: SysCore
+l0Dependencies: []

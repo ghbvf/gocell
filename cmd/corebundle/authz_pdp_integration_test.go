@@ -38,6 +38,7 @@ import (
 	accesscore "github.com/ghbvf/gocell/corecells/accesscore"
 	auditcore "github.com/ghbvf/gocell/corecells/auditcore"
 	configcore "github.com/ghbvf/gocell/corecells/configcore"
+	syscore "github.com/ghbvf/gocell/corecells/syscore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/auth/authtest"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -118,6 +119,11 @@ func TestABACPDPGatesAuditQuery(t *testing.T) {
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	}, auditcoreLedgerOpts(t, []byte("pdp-test-hmac-key-32-bytes-long!"))...)...)
 
+	// syscore (#1860): stateless cell serving the aggregated cell-health endpoint.
+	// Registering it makes the assembly realistic — the HealthView reports every
+	// registered cell — and lets the system:read PDP gate be exercised end-to-end.
+	sysc := syscore.New()
+
 	asm := assembly.New(clock.Real(), assembly.Config{
 		ID:             "pdp-test",
 		DurabilityMode: outbox.DurabilityDemo,
@@ -125,12 +131,13 @@ func TestABACPDPGatesAuditQuery(t *testing.T) {
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
+	require.NoError(t, asm.Register(sysc))
 
 	// Wire the ABAC PDP via bootstrap.PrimaryAuthorizerOption — mirrors production
 	// run.go. This is the core subject under test: every request to the primary
 	// listener carries the PDP in context, so RequirePermission drives the authz
 	// decision.
-	cells := []cell.Cell{ac, cc, auc}
+	cells := []cell.Cell{ac, cc, auc, sysc}
 	authzOpt, err := bootstrap.PrimaryAuthorizerOption(cells)
 	require.NoError(t, err, "bootstrap.PrimaryAuthorizerOption must succeed with accesscore present")
 
@@ -230,6 +237,64 @@ func TestABACPDPGatesAuditQuery(t *testing.T) {
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
 			"non-admin querying their own audit (actorId==subject) must get 200 (self branch); body=%s", body)
 	})
+
+	// Case 4 (#1860): the system:read PDP gate on GET /api/v1/admin/health/cells.
+	// Proves the full wiring end-to-end: bootstrap injects the runtime HealthView
+	// into the primary-listener request ctx, the syscore handler projects it, and
+	// the same ABAC baseline that grants audit:read grants system:read to admin.
+	t.Run("admin_system_health_200", func(t *testing.T) {
+		status, body := pdpHealthReq(t, base, adminToken)
+		require.Equal(t, http.StatusOK, status,
+			"admin must read aggregated cell health (baseline grants system:read); body=%s", body)
+		var out struct {
+			Data struct {
+				Overall string `json:"overall"`
+				Cells   []struct {
+					ID string `json:"id"`
+				} `json:"cells"`
+			} `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(body), &out), "body=%s", body)
+		assert.NotEmpty(t, out.Data.Overall, "overall status must be set; body=%s", body)
+		ids := make(map[string]bool, len(out.Data.Cells))
+		for _, c := range out.Data.Cells {
+			ids[c.ID] = true
+		}
+		// Real HealthView (not a stub): the report enumerates the registered cells.
+		assert.True(t, ids["syscore"], "report must include syscore cell; body=%s", body)
+		assert.True(t, ids["accesscore"], "report must include accesscore cell; body=%s", body)
+	})
+
+	t.Run("non_admin_system_health_403", func(t *testing.T) {
+		status, body := pdpHealthReq(t, base, userToken)
+		assert.Equal(t, http.StatusForbidden, status,
+			"non-admin lacks system:read → PDP default-deny 403; body=%s", body)
+	})
+
+	t.Run("no_token_system_health_401", func(t *testing.T) {
+		status, body := pdpHealthReq(t, base, "")
+		assert.Equal(t, http.StatusUnauthorized, status,
+			"missing bearer token → 401; body=%s", body)
+	})
+}
+
+// pdpHealthReq issues GET /api/v1/admin/health/cells with an optional bearer
+// token (empty token → no Authorization header, exercising the 401 path) and
+// returns the status code + body. It closes the response body internally so
+// callers hold no open *http.Response (bodyclose-clean).
+func pdpHealthReq(t *testing.T, base, token string) (int, string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, base+"/api/v1/admin/health/cells", nil)
+	require.NoError(t, err)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := pdpAuditClient.Do(req)
+	require.NoError(t, err)
+	b, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	require.NoError(t, err)
+	return resp.StatusCode, string(b)
 }
 
 // pdpSetupAdmin provisions the bootstrap admin via POST /api/v1/access/setup/admin.

@@ -26,6 +26,20 @@ var builtinBaseline = []abac.Rule{
 			},
 		},
 	},
+	{
+		ID:     "baseline-system-read-admin",
+		Name:   "Baseline: allow admin/super-admin to read runtime/system health (#1860)",
+		Effect: authz.EffectAllow,
+		Action: []string{authz.PermSystemRead().String()},
+		Conditions: []abac.Condition{
+			{
+				Source:   abac.SourceSubject,
+				Key:      "roles",
+				Operator: abac.OpIn,
+				Values:   []string{runtimeauth.RoleAdmin, runtimeauth.RoleSuperAdmin},
+			},
+		},
+	},
 }
 
 // builtinBaselineRules returns the tenant-agnostic built-in baseline rule set.

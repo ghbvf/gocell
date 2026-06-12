@@ -33,6 +33,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	metricsmiddleware "github.com/ghbvf/gocell/runtime/observability/metrics"
+	"github.com/ghbvf/gocell/runtime/syshealth"
 	runtimewebhook "github.com/ghbvf/gocell/runtime/webhook"
 )
 
@@ -366,6 +367,16 @@ func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef,
 		if aerr != nil {
 			return nil, aerr
 		}
+		// #1860: inject the runtime HealthView (assembly + healthz aggregator) into
+		// every primary-listener request so the syscore aggregated cell-health
+		// handler (http.admin.health.cells.v1) can project it. Built from deps
+		// bootstrap already owns — b.assemblyCore is validated non-nil in phase0 and
+		// b.healthAggregator is materialized before phase5 — so the view is always
+		// constructible here. Symmetric to the Authorizer injector; absence of the
+		// view in ctx (which never happens on the primary listener) is the handler's
+		// fail-closed 503 signal.
+		opts = append(opts, router.WithDefaultMiddleware(
+			healthViewInjector(syshealth.New(b.assemblyCore, b.healthAggregator))))
 	}
 
 	// Apply the listener's AuthPlan chain: extract non-JWT middleware and
@@ -428,6 +439,23 @@ func authorizerInjector(a auth.Authorizer) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			r = r.WithContext(auth.WithAuthorizer(r.Context(), a))
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// healthViewInjector returns a middleware that injects the runtime
+// syshealth.HealthView into every request's context via syshealth.WithHealthView.
+// Installed on the primary listener only (see buildListenerRouterOpts), the
+// symmetric counterpart to authorizerInjector: the syscore aggregated cell-health
+// handler reads it via syshealth.HealthViewFromContext without any cell code
+// calling WithHealthView directly. Per-request state injection, not a route policy.
+//
+// Cognitive complexity: 1 (single path, no branches).
+func healthViewInjector(view syshealth.HealthView) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r = r.WithContext(syshealth.WithHealthView(r.Context(), view))
 			next.ServeHTTP(w, r)
 		})
 	}
