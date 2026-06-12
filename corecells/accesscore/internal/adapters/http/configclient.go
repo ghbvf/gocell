@@ -24,10 +24,6 @@ const (
 	defaultConfigClientHTTPTimeout = 5 * time.Second
 
 	internalKeyQuotedFmt = "key=%q"
-
-	// headerTenantID is the request header that carries the caller's tenant for
-	// configcore's RLS-scoped GET /internal/v1/config/{key}.
-	headerTenantID = "X-Tenant-ID"
 )
 
 // configEntryDataResponse mirrors the {data: {...}} envelope returned by
@@ -94,13 +90,16 @@ func (c *HTTPConfigGetter) GetEntry(ctx context.Context, t tenant.TenantID, key 
 	}
 
 	// Sign the request with a service token so the InternalListener middleware accepts it.
-	// callerCell="accesscore" mirrors contract.yaml endpoints.clients[0].
-	token := auth.GenerateServiceToken(c.ring, "accesscore", http.MethodGet, path, "", c.clock.Now())
+	// callerCell="accesscore" mirrors contract.yaml endpoints.clients[0]. The tenant
+	// assertion is bound into the token MAC (signed X-Tenant-ID header) and set on the
+	// wire from the SAME string, so a tampered/injected/stripped header fails verify.
+	tid := t.String()
+	token := auth.GenerateServiceToken(c.ring, "accesscore", http.MethodGet, path, "", tid, c.clock.Now())
 	if token == "" {
 		return ports.ConfigEntry{}, errcode.New(errcode.KindInternal, errcode.ErrInternal, "configclient: service token generation failed")
 	}
 	req.Header.Set("Authorization", "ServiceToken "+token)
-	req.Header.Set(headerTenantID, t.String())
+	req.Header.Set(auth.HeaderTenantID, tid)
 
 	resp, err := c.client.Do(req)
 	if err != nil {

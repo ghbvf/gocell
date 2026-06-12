@@ -137,8 +137,8 @@ func collectGenerateServiceTokenDiagsFromFile(
 // SVCTOKEN-CALLER-CELL-REQUIRED-01. It returns (diag, true) when call resolves
 // to auth.GenerateServiceToken AND its callerCell argument (index 1) is missing
 // / non-literal / empty / pattern-malformed / unknown; otherwise (zero, false)
-// for unrelated or valid calls. The 4-part signature is
-// GenerateServiceToken(ring, callerCell, method, path, query, ts).
+// for unrelated or valid calls. callerCell remains argument index 1; the
+// signature is GenerateServiceToken(ring, callerCell, method, path, query, tenantID, ts).
 func generateServiceTokenCallDiag(p *Pass, call *ast.CallExpr, rel string, knownCells map[string]bool) (Diagnostic, bool) {
 	path, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
 	if !ok || path != authRuntimeImportPath || name != "GenerateServiceToken" {

@@ -80,6 +80,20 @@ const ServiceTokenNonceTTL = ServiceTokenMaxAge + ServiceTokenClockSkew
 // runtime/auth namespace; the source of truth lives in kernel/cell.
 const MinHMACKeyBytes = kauth.MinHMACKeyBytes
 
+// HeaderTenantID is the canonical HTTP header carrying the caller's tenant
+// assertion on internal service-token requests, and the single signed header in
+// the service-token MAC material. buildServiceTokenMessage folds its value into
+// the HMAC unconditionally and verifyServiceTokenPayload reconstructs the same
+// value from r.Header.Get(HeaderTenantID), so tampering with, injecting, or
+// stripping the header changes the MAC input and fails verification
+// (defense-in-depth, AWS SigV4 SignedHeaders style).
+//
+// INVARIANT: X-Tenant-ID is unconditionally part of the service-token MAC
+// material; sign and verify share buildServiceTokenMessage. Dropping or altering
+// the tenant segment breaks the golden + tamper/inject/strip negative tests in
+// servicetoken_tenant_sign_test.go.
+const HeaderTenantID = "X-Tenant-ID"
+
 // serviceTokenConfig holds per-middleware options.
 type serviceTokenConfig struct {
 	clk        clock.Clock
@@ -478,14 +492,20 @@ func verifyServiceTokenMAC(ring kauth.HMACKeyring, message string, providedMAC [
 
 // buildServiceTokenMessage constructs the canonical HMAC message for the
 // 4-part token format. The query string is canonicalized (keys sorted) and
-// appended to the path when non-empty. callerCell is included as the final
-// segment so tampering with the caller identity invalidates the MAC.
-func buildServiceTokenMessage(method, path, rawQuery, tsStr, nonce, callerCell string) string {
+// appended to the path when non-empty. callerCell is included as a segment so
+// tampering with the caller identity invalidates the MAC. tenantID (the
+// X-Tenant-ID signed header) is unconditionally folded as the final
+// "x-tenant-id=<value>" segment — empty for requests that assert no tenant — so
+// tampering with, injecting, or stripping the header invalidates the MAC. The
+// label is lowercased canonical form (SigV4-style signed header). This function
+// is the single source for the MAC message; sign and verify must both call it.
+func buildServiceTokenMessage(method, path, rawQuery, tsStr, nonce, callerCell, tenantID string) string {
 	cq := canonicalQuery(rawQuery)
+	tenantSeg := " x-tenant-id=" + tenantID
 	if cq != "" {
-		return fmt.Sprintf("%s %s?%s %s %s %s", method, path, cq, tsStr, nonce, callerCell)
+		return fmt.Sprintf("%s %s?%s %s %s %s", method, path, cq, tsStr, nonce, callerCell) + tenantSeg
 	}
-	return fmt.Sprintf("%s %s %s %s %s", method, path, tsStr, nonce, callerCell)
+	return fmt.Sprintf("%s %s %s %s %s", method, path, tsStr, nonce, callerCell) + tenantSeg
 }
 
 // canonicalQuery returns a deterministic encoding of rawQuery with keys sorted.
@@ -503,16 +523,22 @@ func canonicalQuery(rawQuery string) string {
 }
 
 // GenerateServiceToken creates a service token for the given callerCell, method,
-// path, optional rawQuery, and timestamp using the current secret from the key ring.
-// The token format is "{timestamp}:{nonce}:{callerCell}:{hex_hmac}" where nonce is
-// 16 cryptographically random bytes, hex-encoded. It returns an empty string if:
+// path, optional rawQuery, tenantID, and timestamp using the current secret from
+// the key ring. The token format is "{timestamp}:{nonce}:{callerCell}:{hex_hmac}"
+// where nonce is 16 cryptographically random bytes, hex-encoded. It returns an
+// empty string if:
 //   - ring is nil
 //   - callerCell is empty (mandatory — identifies the originating cell)
 //   - callerCell contains ':' (would corrupt the 4-part token structure)
 //
 // rawQuery is canonicalized separately from path so the HMAC message remains stable
 // across query parameter ordering. Pass "" when the request has no query parameters.
-func GenerateServiceToken(ring *HMACKeyRing, callerCell, method, path, rawQuery string, ts time.Time) string {
+//
+// tenantID is the X-Tenant-ID signed-header value folded into the MAC so the
+// tenant assertion is integrity-bound to the caller credential. Pass "" when the
+// request asserts no tenant; callers that forward X-Tenant-ID MUST pass the same
+// string they set on the header (see HeaderTenantID).
+func GenerateServiceToken(ring *HMACKeyRing, callerCell, method, path, rawQuery, tenantID string, ts time.Time) string {
 	if ring == nil {
 		return ""
 	}
@@ -532,7 +558,7 @@ func GenerateServiceToken(ring *HMACKeyRing, callerCell, method, path, rawQuery 
 	}
 	nonce := hex.EncodeToString(nonceBytes)
 
-	message := buildServiceTokenMessage(method, path, rawQuery, tsStr, nonce, callerCell)
+	message := buildServiceTokenMessage(method, path, rawQuery, tsStr, nonce, callerCell, tenantID)
 	mac := hmac.New(sha256.New, ring.Current())
 	_, _ = mac.Write([]byte(message))
 	return tsStr + ":" + nonce + ":" + callerCell + ":" + hex.EncodeToString(mac.Sum(nil))
