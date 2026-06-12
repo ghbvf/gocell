@@ -28,7 +28,7 @@ var contractSpec = contractspec.ContractSpec{
 
 // requestSchemaJSON is the embedded request schema for runtime validation.
 // Compiled once at handler construction time by schemavalidate.NewValidator.
-var requestSchemaJSON = []byte("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"http.config.write.v1.request\",\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":128},\"value\":{\"type\":\"string\",\"minLength\":0,\"maxLength\":4096},\"sensitive\":{\"type\":\"boolean\"}},\"required\":[\"key\",\"value\"],\"additionalProperties\":false}")
+var requestSchemaJSON = []byte("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"http.config.write.v1.request\",\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":128},\"value\":{\"type\":\"string\",\"maxLength\":4096},\"sensitive\":{\"type\":\"boolean\"}},\"required\":[\"key\",\"value\"],\"additionalProperties\":false}")
 
 // Handler wires HTTP decode/encode + auth.Mount for http.config.write.v1.
 type Handler struct {

@@ -6,7 +6,7 @@
   "properties": {
     "enabled": { "type": "boolean" },
     "rolloutPercentage": { "type": "integer", "minimum": 0, "maximum": 100 },
-    "description": { "type": "string", "minLength": 0, "maxLength": 1024 },
+    "description": { "type": "string", "maxLength": 1024 },
     "expectedVersion": { "$ref": "../../../../../shared/cas/v1/expected_version.schema.json" }
   },
   "required": ["enabled", "rolloutPercentage", "description", "expectedVersion"],
