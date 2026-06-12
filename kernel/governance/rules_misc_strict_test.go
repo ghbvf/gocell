@@ -1464,7 +1464,8 @@ func TestScanSchemaForStrictMissing_Basic(t *testing.T) {
 	assert.Equal(t, []string{"$"}, paths)
 }
 
-// --- FMT-25 (HTTP input constraint: minLength/maxLength on strings, minimum/maximum on numeric values) ---
+// --- FMT-25 (HTTP input constraint: maxLength required on strings + optional
+// minLength that must be >= 1 when declared; minimum/maximum required on numeric values) ---
 
 // fmt25WriteSchema is a test helper that writes a JSON schema string to the
 // standard "contracts/http/test/v1" contract directory. Encapsulates the
@@ -1553,8 +1554,9 @@ func TestFMT25_RequestSchemaMissingFailsClosed(t *testing.T) {
 	assert.Contains(t, matches[0].Message, "missing file")
 }
 
-// TestFMT25_RequestStringMissingMinLength verifies a violation fires when a
-// string field in request.schema.json lacks minLength.
+// TestFMT25_RequestStringMissingMinLength verifies a string field declaring only
+// maxLength (no minLength) is accepted: after FMT-25 was narrowed, minLength is
+// optional because the OWASP DoS threat model only justifies the upper bound.
 func TestFMT25_RequestStringMissingMinLength(t *testing.T) {
 	dir := t.TempDir()
 	body := `{
@@ -1571,10 +1573,7 @@ func TestFMT25_RequestStringMissingMinLength(t *testing.T) {
 	results, err := v.ValidateStrict(t.Context(), false, false)
 	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
-	require.Len(t, matches, 1, "expected 1 violation for username missing minLength, got %d: %v", len(matches), matches)
-	assert.Equal(t, "$.username", matches[0].Field)
-	assert.Equal(t, SeverityError, matches[0].Severity)
-	assert.Contains(t, matches[0].Message, "minLength")
+	assert.Empty(t, matches, "string with only maxLength (no minLength) must be accepted, got: %v", matches)
 }
 
 // TestFMT25_RequestStringMissingMaxLength verifies a violation fires when a
@@ -1668,10 +1667,9 @@ func TestFMT25_RequestUnionTypeStringMissingConstraints(t *testing.T) {
 	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
 	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
-	require.Len(t, matches, 2, "union string|null must still require length facets, got: %v", matches)
-	for _, m := range matches {
-		assert.Equal(t, "$.displayName", m.Field)
-	}
+	require.Len(t, matches, 1, "union string|null requires only maxLength (minLength optional), got: %v", matches)
+	assert.Equal(t, "$.displayName", matches[0].Field)
+	assert.Contains(t, matches[0].Message, "maxLength")
 }
 
 func TestFMT25_RequestExternalRefFailsClosed(t *testing.T) {
@@ -1796,11 +1794,10 @@ func TestFMT25_RequestNestedObjectStringConstraints(t *testing.T) {
 	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
 	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
-	// user.name missing both → 2 violations (one per missing facet)
-	require.Len(t, matches, 2)
-	for _, m := range matches {
-		assert.Equal(t, "$.user.name", m.Field)
-	}
+	// user.name missing maxLength → 1 violation (minLength optional)
+	require.Len(t, matches, 1)
+	assert.Equal(t, "$.user.name", matches[0].Field)
+	assert.Contains(t, matches[0].Message, "maxLength")
 }
 
 // TestFMT25_RequestArrayItemsStringConstraints verifies the walker recurses
@@ -1823,11 +1820,10 @@ func TestFMT25_RequestArrayItemsStringConstraints(t *testing.T) {
 	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
 	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
-	// tags.items missing minLength + maxLength → 2 violations at $.tags.items
-	require.Len(t, matches, 2)
-	for _, m := range matches {
-		assert.Equal(t, "$.tags.items", m.Field)
-	}
+	// tags.items missing maxLength → 1 violation at $.tags.items (minLength optional)
+	require.Len(t, matches, 1)
+	assert.Equal(t, "$.tags.items", matches[0].Field)
+	assert.Contains(t, matches[0].Message, "maxLength")
 }
 
 // TestFMT25_RequestLocalRefStringConstraints verifies local $ref targets are
@@ -1850,10 +1846,9 @@ func TestFMT25_RequestLocalRefStringConstraints(t *testing.T) {
 	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
 	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
-	require.Len(t, matches, 2)
-	for _, m := range matches {
-		assert.Equal(t, "$.name", m.Field)
-	}
+	require.Len(t, matches, 1)
+	assert.Equal(t, "$.name", matches[0].Field)
+	assert.Contains(t, matches[0].Message, "maxLength")
 }
 
 // TestFMT25_RequestCombinatorStringConstraints verifies common composition
@@ -1909,16 +1904,15 @@ func TestFMT25_QueryParamsStringMissingConstraints(t *testing.T) {
 		`{"type": "object", "additionalProperties": false}`)
 	pm := fmt25Project(
 		map[string]metadata.ParamSchema{
-			"cursor": {Type: "string"}, // missing minLength + maxLength
+			"cursor": {Type: "string"}, // missing maxLength (minLength optional)
 		}, nil,
 	)
 
 	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
 	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
-	require.Len(t, matches, 2, "expected 2 violations for cursor missing both, got %d: %v", len(matches), matches)
-	assert.Equal(t, "endpoints.http.queryParams.cursor.minLength", matches[0].Field)
-	assert.Equal(t, "endpoints.http.queryParams.cursor.maxLength", matches[1].Field)
+	require.Len(t, matches, 1, "expected 1 violation for cursor missing maxLength (minLength optional), got %d: %v", len(matches), matches)
+	assert.Equal(t, "endpoints.http.queryParams.cursor.maxLength", matches[0].Field)
 }
 
 // TestFMT25_QueryParamsIntegerMissingConstraints verifies that integer
@@ -1990,15 +1984,14 @@ func TestFMT25_PathParamsStringMissingConstraints(t *testing.T) {
 		`{"type": "object", "additionalProperties": false}`)
 	pm := fmt25Project(nil,
 		map[string]metadata.ParamSchema{
-			"key": {Type: "string"}, // plain string, no format → must be checked
+			"key": {Type: "string"}, // plain string, no format → must declare maxLength
 		})
 
 	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
 	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
-	require.Len(t, matches, 2)
-	assert.Equal(t, "endpoints.http.pathParams.key.minLength", matches[0].Field)
-	assert.Equal(t, "endpoints.http.pathParams.key.maxLength", matches[1].Field)
+	require.Len(t, matches, 1)
+	assert.Equal(t, "endpoints.http.pathParams.key.maxLength", matches[0].Field)
 }
 
 // TestFMT25_ParamFindingsUseLocatableMetadataPaths verifies param-side
@@ -2036,15 +2029,13 @@ schemaRefs:
 	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
 	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
-	require.Len(t, matches, 4)
+	require.Len(t, matches, 2)
 	for _, m := range matches {
 		assert.NotZero(t, m.Line, "field %s should locate a YAML line", m.Field)
 		assert.NotZero(t, m.Column, "field %s should locate a YAML column", m.Field)
 	}
-	assert.Equal(t, "endpoints.http.queryParams.cursor.minLength", matches[0].Field)
-	assert.Equal(t, "endpoints.http.queryParams.cursor.maxLength", matches[1].Field)
-	assert.Equal(t, "endpoints.http.pathParams.key.minLength", matches[2].Field)
-	assert.Equal(t, "endpoints.http.pathParams.key.maxLength", matches[3].Field)
+	assert.Equal(t, "endpoints.http.queryParams.cursor.maxLength", matches[0].Field)
+	assert.Equal(t, "endpoints.http.pathParams.key.maxLength", matches[1].Field)
 }
 
 // TestFMT25_SkipsInvalidPathParams verifies FMT-25 does not add follow-on
@@ -2136,6 +2127,95 @@ func TestFMT25_CleanSchemaProducesNoViolations(t *testing.T) {
 	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	assert.Empty(t, matches, "fully-constrained schema/params must produce no FMT-25, got: %v", matches)
+}
+
+// TestFMT25_RequestStringNoopMinLengthZeroInvalid verifies the Hard no-op gate:
+// an explicit minLength: 0 in request.schema.json is rejected (string length is
+// always >= 0, so a zero lower bound constrains nothing). This keeps the deleted
+// minLength: 0 boilerplate unexpressible after the lower bound became optional.
+func TestFMT25_RequestStringNoopMinLengthZeroInvalid(t *testing.T) {
+	dir := t.TempDir()
+	body := `{
+		"type": "object",
+		"additionalProperties": false,
+		"properties": {
+			"cursor": {"type": "string", "minLength": 0, "maxLength": 256}
+		}
+	}`
+	fmt25WriteSchema(t, dir, body)
+	pm := fmt25Project(nil, nil)
+
+	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
+	require.NoError(t, err)
+	matches := findByCode(results, "FMT-25")
+	require.Len(t, matches, 1, "explicit minLength: 0 must be rejected as a no-op, got: %v", matches)
+	assert.Equal(t, IssueInvalid, matches[0].IssueType)
+	assert.Equal(t, "$.cursor", matches[0].Field)
+	assert.Contains(t, matches[0].Message, "minLength")
+}
+
+// TestFMT25_ParamNoopMinLengthZeroInvalid verifies the same no-op gate fires on a
+// contract.yaml param that declares minLength: 0.
+func TestFMT25_ParamNoopMinLengthZeroInvalid(t *testing.T) {
+	dir := t.TempDir()
+	fmt25WriteSchema(t, dir, `{"type": "object", "additionalProperties": false}`)
+	zero := 0
+	twoFiftySix := 256
+	pm := fmt25Project(
+		map[string]metadata.ParamSchema{
+			"cursor": {Type: "string", MinLength: &zero, MaxLength: &twoFiftySix},
+		}, nil,
+	)
+
+	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
+	require.NoError(t, err)
+	matches := findByCode(results, "FMT-25")
+	require.Len(t, matches, 1, "explicit minLength: 0 param must be rejected as a no-op, got: %v", matches)
+	assert.Equal(t, IssueInvalid, matches[0].IssueType)
+	assert.Equal(t, "endpoints.http.queryParams.cursor", matches[0].Field)
+	assert.Contains(t, matches[0].Message, "minLength")
+}
+
+// TestFMT25_StringMinLengthOneAccepted is the no-op gate's anti-vacuity guard:
+// the gate is value-sensitive, so a meaningful minLength >= 1 (with maxLength) is
+// accepted — only the zero/negative bound is rejected.
+func TestFMT25_StringMinLengthOneAccepted(t *testing.T) {
+	dir := t.TempDir()
+	body := `{
+		"type": "object",
+		"additionalProperties": false,
+		"properties": {
+			"name": {"type": "string", "minLength": 1, "maxLength": 128}
+		}
+	}`
+	fmt25WriteSchema(t, dir, body)
+	pm := fmt25Project(nil, nil)
+
+	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
+	require.NoError(t, err)
+	matches := findByCode(results, "FMT-25")
+	assert.Empty(t, matches, "minLength: 1 with maxLength must be accepted, got: %v", matches)
+}
+
+// TestFMT25_NumericMinimumZeroAccepted locks the string/numeric asymmetry: an
+// integer minimum: 0 is meaningful (it rejects negatives) and must NOT be flagged
+// as a no-op, unlike string minLength: 0. minimum also stays required.
+func TestFMT25_NumericMinimumZeroAccepted(t *testing.T) {
+	dir := t.TempDir()
+	body := `{
+		"type": "object",
+		"additionalProperties": false,
+		"properties": {
+			"page": {"type": "integer", "minimum": 0, "maximum": 500}
+		}
+	}`
+	fmt25WriteSchema(t, dir, body)
+	pm := fmt25Project(nil, nil)
+
+	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
+	require.NoError(t, err)
+	matches := findByCode(results, "FMT-25")
+	assert.Empty(t, matches, "integer minimum: 0 is meaningful (rejects negatives) and must not be a no-op, got: %v", matches)
 }
 
 // TestFMT25_NonHTTPContractIgnored verifies that non-HTTP contracts (event,
