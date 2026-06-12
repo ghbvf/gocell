@@ -20,10 +20,12 @@ endpoints:
       cursor:
         type: string
         required: false
+        minLength: 0
         maxLength: 4096
       deviceId:
         type: string
         required: false
+        minLength: 0
         maxLength: 256
       limit:
         type: integer
@@ -33,6 +35,7 @@ endpoints:
       statuses:
         type: string
         required: false
+        minLength: 0
         maxLength: 256
     successStatus: 200
     noContent: false
