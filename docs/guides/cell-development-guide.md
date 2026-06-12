@@ -386,8 +386,9 @@ An L3 projection (CQRS read model) is a derived path from `role: subscribe` cont
 contractUsages:
   - contract: event.order-created.v1
     role: subscribe
-    handler: HandleOrderCreated   # implements cell.ProjectionApply: func(ctx, outbox.Entry) error
+    handler: HandleOrderCreated   # implements cell.ProjectionApply: func(ctx, projection.ProjectionEvent) error
     projection: order_status      # snake_case ProjectionID → cellgen generates reg.RegisterProjection
+    projectionSource: outbox      # REQUIRED when projection is set: 'outbox' (this event topic) | 'saga-journal'
     onReset: ResetOrderStatus     # optional: Reset-phase hook during rebuild (cell.ProjectionResetHook)
   - contract: projection.order.status-summary.v1
     role: provide                 # orthogonal role: declares the read/query side; no coupling to projection: field
@@ -395,8 +396,9 @@ contractUsages:
 
 **Key constraints:**
 
-- **Handler signature differs from regular subscriptions**: the handler method must implement `cell.ProjectionApply` = `func(ctx context.Context, event outbox.Entry) error`, returning `error`, **not** `outbox.HandleResult`.
-- **`onReset` is optional**: omit it if the read model table does not need to be cleared (e.g., for incremental-append semantics); otherwise specify the method name, implementing `cell.ProjectionResetHook` = `func(ctx context.Context) error`.
+- **Handler signature differs from regular subscriptions**: the handler method must implement `cell.ProjectionApply` = `func(ctx context.Context, event projection.ProjectionEvent) error`, returning `error`, **not** `outbox.HandleResult`. The carrier is the polymorphic `projection.ProjectionEvent` (not the concrete `outbox.Entry`), so the same handler shape works for both `projectionSource: outbox` and `projectionSource: saga-journal`.
+- **`projectionSource` is REQUIRED when `projection:` is set**: it selects the input stream. `outbox` consumes the named **event** contract's topic; `saga-journal` consumes the GLOBAL saga journal (the contract must be `kind: saga`; that anchor is a lineage/governance reference, **not** a runtime filter — your Apply handler folds every saga and must filter itself). Omitting it fails `gocell validate`.
+- **`onReset` is optional**: omit it if the read model table does not need to be cleared (e.g., for incremental-append semantics); otherwise specify the method name, implementing `cell.ProjectionResetHook` = `func(ctx context.Context) error`. Forbidden with `projectionSource: saga-journal` (that path has no rebuild).
 - **`role: provide` is orthogonal**: a `kind: projection` contract's `role: provide` CU declares the read/query side; it has no binding relationship to the `projection:` field; both can exist independently in different slices.
 - **A single slice can declare multiple projections**: each CU with a `projection:` field derives an independent `reg.RegisterProjection` (one projectionID + one checkpoint); projectionIDs must be unique within a cell (parser `validateProjectionUniqueness` fail-closed guard).
 - **`cell.yaml` must declare `consistencyLevel: L3`** (unidirectional implication: using projection ⟹ L3; see `.claude/rules/gocell/saga.md` §"Key Clarification: L3 and Saga"). The cell-level declaration is still a convention enforced by `validateProjectionUniqueness`. Note: a `kind: projection` **contract's** own `consistencyLevel ≥ L3` is enforced at compile time by contractgen's codegen funnel (the generated `types_gen.go` carries `const _ = uint(cellvocab.<level> - cellvocab.L3)`; a level below L3 causes a compile-time overflow); this is a contract-level Hard constraint, orthogonal to the cell-level convention here.
@@ -423,9 +425,11 @@ Handler implementation example (note the `error` return, not `outbox.HandleResul
 
 ```go
 // <slice>/service.go — ProjectionApply signature
-func (s *Service) HandleOrderCreated(ctx context.Context, event outbox.Entry) error {
+func (s *Service) HandleOrderCreated(ctx context.Context, event projection.ProjectionEvent) error {
     // tx is passed through ctx (ambient-tx, see ADR Q1/Q2); apply and checkpoint SaveOffset
-    // commit in the same CellTx
+    // commit in the same CellTx. event.Payload() / event.EventID() / event.Stream()
+    // expose the polymorphic carrier (outbox.Entry and the saga-journal carrier both
+    // implement projection.ProjectionEvent).
     return s.store.Apply(ctx, event)
 }
 ```

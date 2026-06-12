@@ -778,12 +778,21 @@ func validateProjectionUniqueness(pm *ProjectMeta) error {
 const (
 	msgDuplicateProjection = "duplicate projection id within cell"
 	msgOnResetWithoutProj  = "onReset requires projection on the same subscribe contractUsage"
-	// F1: projection/onReset are subscribe-only placement columns.
-	msgProjectionNonSubscribe = "projection and onReset are only valid on a role=subscribe contractUsage"
+	// F1: projection/onReset/projectionSource are subscribe-only placement columns.
+	msgProjectionNonSubscribe = "projection, onReset and projectionSource are only valid on a role=subscribe contractUsage"
 	// F2: group: is dead config on a projection CU; cellgen derives the
 	// consumer group from cellID+projectionID, not from group:.
 	msgGroupOnProjectionCU = "group is not allowed on a projection contractUsage" +
 		" (the projection consumer group is derived from cellID and projectionID)"
+	// F-source rules (EPIC #1609 PR-05): projectionSource is required-when-projection
+	// (no implicit default), enum-checked, and saga-journal forbids onReset. The
+	// authoritative enum is cellvocab.AllProjectionSources() (enforced by
+	// isValidProjectionSource); the value list embedded in the two messages below is
+	// a human hint — keep it in sync when AllProjectionSources gains a member.
+	msgProjectionSourceRequired    = "projectionSource is required when projection is set (one of: outbox, saga-journal)"
+	msgProjectionSourceWithoutProj = "projectionSource is only valid when projection is set on the same subscribe contractUsage"
+	msgProjectionSourceInvalid     = "projectionSource must be one of: outbox, saga-journal"
+	msgOnResetSagaJournal          = "onReset is not allowed when projectionSource is saga-journal (no rebuild on that path)"
 )
 
 // checkSliceProjections validates all CUs in a single slice for projection
@@ -805,12 +814,13 @@ func checkSliceProjections(sl *SliceMeta, seen map[string]map[string]string) err
 }
 
 // checkProjectionCUPlacement checks placement rules for a single CU:
-// F1 (non-subscribe carrying projection/onReset), onReset-without-projection,
-// and F2 (group forbidden on projection CU).
+// F1 (non-subscribe carrying projection/onReset/projectionSource),
+// onReset-without-projection, F2 (group forbidden on projection CU), and the
+// F-source rules (delegated to checkProjectionSourcePlacement).
 func checkProjectionCUPlacement(sl *SliceMeta, cu ContractUsage) error {
 	// F1: fail-closed before the role-guard so non-subscribe CUs carrying
-	// projection/onReset are rejected rather than silently skipped.
-	if cu.Role != "subscribe" && (cu.Projection != "" || cu.OnReset != "") {
+	// projection/onReset/projectionSource are rejected rather than silently skipped.
+	if cu.Role != "subscribe" && (cu.Projection != "" || cu.OnReset != "" || cu.ProjectionSource != "") {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			msgProjectionNonSubscribe,
 			errcode.WithDetails(
@@ -842,7 +852,56 @@ func checkProjectionCUPlacement(sl *SliceMeta, cu ContractUsage) error {
 				errcode.PublicString("group", cu.Group),
 			))
 	}
+	return checkProjectionSourcePlacement(sl, cu)
+}
+
+// checkProjectionSourcePlacement enforces the projectionSource selector rules on
+// a role=subscribe CU (EPIC #1609 PR-05): required-when-projection (no implicit
+// default), enum-checked, source-without-projection rejected, and saga-journal
+// forbids onReset (no rebuild on that path). Split out to bound the cognitive
+// complexity of checkProjectionCUPlacement.
+func checkProjectionSourcePlacement(sl *SliceMeta, cu ContractUsage) error {
+	details := func(extra ...errcode.PublicDetail) []errcode.PublicDetail {
+		return append([]errcode.PublicDetail{
+			errcode.PublicString("slice", sl.ID),
+			errcode.PublicString("contract", cu.Contract),
+		}, extra...)
+	}
+	if cu.ProjectionSource != "" && cu.Projection == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			msgProjectionSourceWithoutProj,
+			errcode.WithDetails(details(errcode.PublicString("projectionSource", cu.ProjectionSource))...))
+	}
+	if cu.Projection == "" {
+		return nil
+	}
+	if cu.ProjectionSource == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			msgProjectionSourceRequired,
+			errcode.WithDetails(details(errcode.PublicString("projection", cu.Projection))...))
+	}
+	if !isValidProjectionSource(cu.ProjectionSource) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			msgProjectionSourceInvalid,
+			errcode.WithDetails(details(errcode.PublicString("projectionSource", cu.ProjectionSource))...))
+	}
+	if cu.ProjectionSource == string(cellvocab.ProjectionSourceSagaJournal) && cu.OnReset != "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			msgOnResetSagaJournal,
+			errcode.WithDetails(details(errcode.PublicString("onReset", cu.OnReset))...))
+	}
 	return nil
+}
+
+// isValidProjectionSource reports whether s is a member of the canonical
+// cellvocab.AllProjectionSources set (single source for the enum).
+func isValidProjectionSource(s string) bool {
+	for _, v := range cellvocab.AllProjectionSources() {
+		if string(v) == s {
+			return true
+		}
+	}
+	return false
 }
 
 // recordProjectionSeen registers a projection CU in the seen map and returns

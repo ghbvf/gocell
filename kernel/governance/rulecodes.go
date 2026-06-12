@@ -178,6 +178,14 @@ const (
 	// degrades to a plain subscription with no checkpoint or rebuild support.
 	codePROJECTIONPROVIDENEEDSWRITECU01 RuleCode = "PROJECTION-PROVIDE-NEEDS-WRITE-CU-01"
 
+	// PROJECTION-SAGA-SOURCE-NEEDS-PROJECTION-01 — bidirectional coupling between
+	// the saga-journal projection source and a saga contract. A role=subscribe CU
+	// whose contract resolves to kind=saga MUST carry a non-empty projection and
+	// projectionSource=saga-journal (a saga has no outbox topic — its only legal
+	// subscribe target is its journal-as-projection-source); and a CU declaring
+	// projectionSource=saga-journal MUST reference a kind=saga contract.
+	codePROJECTIONSAGASOURCENEEDSPROJECTION01 RuleCode = "PROJECTION-SAGA-SOURCE-NEEDS-PROJECTION-01"
+
 	// SAGA — saga contract format (rules_saga.go).
 	codeSAGACONTRACTBLOCKPRESENT01      RuleCode = "SAGA-CONTRACT-BLOCK-PRESENT-01"
 	codeSAGACONTRACTSTEPSNONEMPTY01     RuleCode = "SAGA-CONTRACT-STEPS-NONEMPTY-01"

@@ -13,8 +13,10 @@
 // the saga Coordinator's tick/leader-gate: the Coordinator's distlock is
 // per-saga-instance and offers no reusable global/per-projection leader. The
 // Tailer shares the same distlock.Locker INSTANCE but acquires a distinct
-// per-projection key (tailerLockKey, namespace "saga-journal-tailer:"), honoring
-// the issue's "fewest new machines" intent at per-projection granularity.
+// per-(cellID, projectionID) key (tailerLockKey, namespace "saga-journal-tailer:"),
+// honoring the issue's "fewest new machines" intent at projection granularity. The
+// key carries BOTH the cellID and projectionID because the projection identity is
+// that pair (two cells may legitimately share a projectionID).
 //
 // Checkpoint advance is funneled through exactly one function, Tailer.commitEvent
 // (the sole sanctioned caller of projection.OwnerCheckpointStore.AdvanceIfOwner,

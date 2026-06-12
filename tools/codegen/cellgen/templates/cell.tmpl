@@ -14,9 +14,9 @@ import (
 {{- range .Subscriptions }}
 	{{.SubscriptionAlias}} "{{.SubscriptionPackage}}"
 {{- end }}
-{{- range .Projections }}
+{{- range .Projections }}{{- if not .IsSagaJournal }}
 	{{.SpecAlias}} "{{.SpecPackage}}"
-{{- end }}
+{{- end }}{{- end }}
 {{- if .GrpcServices }}
 	"google.golang.org/grpc"
 {{- end }}
@@ -107,11 +107,19 @@ func (c *{{.StructName}}) Init(ctx context.Context, reg cell.Registrar) error {
 	}
 {{ end }}
 {{- range .Projections }}
+{{- if .IsSagaJournal }}
+	if err := reg.RegisterProjection(cell.NewSagaJournalProjectionRequest(
+		{{.ApplyExpr}}, {{ printf "%q" .ProjectionID }}, {{ printf "%q" $.CellID }}, {{ printf "%q" .SliceID }},
+	)); err != nil {
+		return fmt.Errorf({{ printf "%q" (printf "%s: projection %s: %%w" $.CellID .ProjectionID) }}, err)
+	}
+{{- else }}
 	if err := reg.RegisterProjection({{.SpecAlias}}.NewProjectionRequest(
 		{{.ApplyExpr}}, {{ printf "%q" .ProjectionID }}, {{ printf "%q" $.CellID }}, {{ printf "%q" .SliceID }}, {{ if .OnResetExpr }}{{ .OnResetExpr }}{{ else }}nil{{ end }},
 	)); err != nil {
 		return fmt.Errorf({{ printf "%q" (printf "%s: projection %s: %%w" $.CellID .ProjectionID) }}, err)
 	}
+{{- end }}
 {{ end }}
 {{- range .GrpcServices }}
 	if err := reg.GRPCService(cell.GRPCServiceSpec{

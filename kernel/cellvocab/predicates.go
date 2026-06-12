@@ -8,7 +8,14 @@ package cellvocab
 //	projection: provide, read
 //	webhook:    webhook-receive, webhook-dispatch
 //	grpc:       serve, call
-//	saga:       orchestrate
+//	saga:       orchestrate, subscribe
+//
+// subscribe is legal on a saga contract ONLY as a saga-journal projection source
+// (EPIC #1609 PR-05): the projecting cell consumes the saga's terminal journal as
+// a read-model input stream. A bare subscribe-on-saga without a projection +
+// projectionSource=saga-journal is rejected by governance rule
+// PROJECTION-SAGA-SOURCE-NEEDS-PROJECTION-01 (the saga journal is the only legal
+// subscribe target — there is no saga outbox topic).
 //
 // An unknown or future kind returns nil (fail-open); callers must check for nil
 // before ranging and must not treat nil as "kind is valid with no roles".
@@ -27,7 +34,7 @@ func ValidRolesForKind(kind ContractKind) []ContractRole {
 	case ContractGRPC:
 		return []ContractRole{RoleServe, RoleCall}
 	case ContractSaga:
-		return []ContractRole{RoleOrchestrate}
+		return []ContractRole{RoleOrchestrate, RoleSubscribe}
 	default:
 		return nil
 	}

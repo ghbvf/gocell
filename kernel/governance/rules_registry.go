@@ -129,6 +129,7 @@ var allRules = []Rule{
 	// PROJECTION-CONSISTENCY
 	{Code: codePROJECTIONCONSISTENCY01, Phase: PhaseBase, Detect: (*Validator).validateProjectionConsistency},
 	{Code: codePROJECTIONPROVIDENEEDSWRITECU01, Phase: PhaseBase, Detect: (*Validator).validatePROJECTIONPROVIDENEEDSWRITECU01},
+	{Code: codePROJECTIONSAGASOURCENEEDSPROJECTION01, Phase: PhaseBase, Detect: (*Validator).validatePROJECTIONSAGASOURCENEEDSPROJECTION01},
 
 	// SAGA — saga contract format (rules_saga.go)
 	{Code: codeSAGACONTRACTBLOCKPRESENT01, Phase: PhaseBase, Detect: (*Validator).validateSAGACONTRACTBLOCKPRESENT01},

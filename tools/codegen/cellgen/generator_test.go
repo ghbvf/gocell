@@ -358,6 +358,47 @@ func TestRenderCell_GoldenSynth(t *testing.T) {
 	}
 }
 
+// TestRenderCell_GoldenSynthSagaProjection renders a synthetic project whose
+// single projection has source=saga-journal and byte-compares the result
+// against a committed golden. It locks the saga-journal wiring path: the
+// generated file must call cell.NewSagaJournalProjectionRequest (no per-event
+// onReset arg) and must NOT emit a per-contract proj0 import or
+// .NewProjectionRequest. Run with -update to regenerate the golden.
+func TestRenderCell_GoldenSynthSagaProjection(t *testing.T) {
+	t.Parallel()
+	spec, err := BuildCellSpec(
+		buildSyntheticSagaProjectionProject(), "demo", syntheticSagaBundle(), syntheticSagaFieldIndex())
+	if err != nil {
+		t.Fatalf("BuildCellSpec: %v", err)
+	}
+	// Mirror Generate's enrichment: saga-journal specs are skipped so they get
+	// no import path/alias, but the call keeps outbox specs (none here) stable.
+	EnrichProjectionsWithModulePath(spec, "github.com/ghbvf/gocell")
+	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
+		TemplateName: "cell.tmpl",
+		Templates:    templates,
+		Data:         spec,
+		Filename:     "demo/cell_gen.go",
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	goldenPath := filepath.Join("testdata", "golden", "synth_saga_projection_cell_gen.go.golden")
+	if *updateGolden {
+		if err := os.WriteFile(goldenPath, out, 0o644); err != nil {
+			t.Fatalf("write golden: %v", err)
+		}
+		t.Logf("golden file updated: %s", goldenPath)
+		return
+	}
+
+	golden := fileutil.MustReadFile(t, goldenPath)
+	if !bytes.Equal(out, golden) {
+		t.Errorf("rendered output diverges from golden:\n--- got ---\n%s\n--- want ---\n%s", out, golden)
+	}
+}
+
 // TestGenerate_VerifyDriftAfterManualEdit writes cell_gen.go, tampers with
 // it by substituting one symbol, then runs Generate in Verify mode. It must
 // detect exactly one drifted file. Exercises the write→tamper→verify path
@@ -504,6 +545,47 @@ func syntheticBundle() markergen.WireBundle {
 // field holding it. Used by TestRenderCell_GoldenSynth to supply fieldIndex
 // to BuildCellSpec (single-source flip: subscriptions derived from slice CUs).
 func syntheticFieldIndex() *CellFieldIndex {
+	return idxOf(map[string]string{"alpha": "alphaHandler"})
+}
+
+// buildSyntheticSagaProjectionProject mirrors buildSyntheticProject but declares
+// one saga-journal projection: a subscribe CU with projectionSource=saga-journal
+// consuming a kind=saga contract. Exercises the saga wiring path end-to-end.
+func buildSyntheticSagaProjectionProject() *metadata.ProjectMeta {
+	cell := &metadata.CellMeta{
+		ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
+	slc := &metadata.SliceMeta{
+		ID: "alpha", BelongsToCell: "demo", ConsistencyLevel: "L3", Dir: "alpha",
+		File: "cells/demo/slices/alpha/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{
+			{
+				Contract:         "saga.orderfulfillment.v1",
+				Role:             "subscribe",
+				Handler:          "ApplySagaTerminal",
+				Projection:       "order_status",
+				ProjectionSource: "saga-journal",
+			},
+		},
+	}
+	contract := &metadata.ContractMeta{
+		ID:   "saga.orderfulfillment.v1",
+		Kind: "saga",
+	}
+	return fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{contract})
+}
+
+// syntheticSagaBundle carries listeners/routes for the saga synthetic cell.
+// The saga-journal projection is sourced from the slice CU, not the bundle.
+func syntheticSagaBundle() markergen.WireBundle {
+	return markergen.WireBundle{
+		Listeners: []markergen.ListenerSpec{{Ref: "cell.PrimaryListener", Prefix: "/api/v1"}},
+	}
+}
+
+// syntheticSagaFieldIndex maps the alpha slice package to the cell struct field
+// holding its saga-terminal apply service.
+func syntheticSagaFieldIndex() *CellFieldIndex {
 	return idxOf(map[string]string{"alpha": "alphaHandler"})
 }
 
