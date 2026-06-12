@@ -798,6 +798,59 @@ func TestRender_Golden_Synth_Event(t *testing.T) {
 	}
 }
 
+// TestRender_Golden_Synth_Enum covers the JSON-schema enum → typed Go enum +
+// const-block codegen (#1935). The fixture carries a top-level string enum
+// (Payload.outcome, mirrors event.devicecert-rotation-resolved.v1) and a nested
+// string enum (PayloadData.status, mirrors http.orderfulfillment.orderstatus.v1
+// data.status), exercising the <Parent><Field> naming on both shapes plus the
+// template's per-DTO const-block emission. The inline assertions guard the named
+// type + const lines directly so a template regression fails loudly even before
+// the byte-level golden diff.
+func TestRender_Golden_Synth_Enum(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_enum")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	contract := p.Contracts["event.widget-resolved.v1"]
+	if contract == nil {
+		t.Fatal("event.widget-resolved.v1 not found in synth fixture")
+	}
+
+	spec, err := buildContractSpec(absTestDir, p, "event.widget-resolved.v1")
+	if err != nil {
+		t.Fatalf("buildContractSpec: %v", err)
+	}
+	content := renderFile(t, spec, "types_gen.go")
+
+	for _, want := range []string{
+		"Outcome PayloadOutcome `json:\"outcome\"`",
+		"type PayloadOutcome string",
+		`PayloadOutcomeSucceeded PayloadOutcome = "succeeded"`,
+		`PayloadOutcomeRejected PayloadOutcome = "rejected"`,
+		"Status PayloadDataStatus `json:\"status\"`",
+		"type PayloadDataStatus string",
+		`PayloadDataStatusAccepted PayloadDataStatus = "accepted"`,
+	} {
+		if !strings.Contains(string(content), want) {
+			t.Errorf("types_gen.go missing %q", want)
+		}
+	}
+
+	goldenFile := goldenFilePath("synth_enum", "types_gen.go")
+	if *updateGolden {
+		writeGolden(t, goldenFile, content)
+		return
+	}
+	assertGolden(t, goldenFile, content)
+}
+
 func TestRender_Golden_Synth_Saga(t *testing.T) {
 	testDir := filepath.Join("testdata", "synth", "synth_saga")
 	absTestDir, err := filepath.Abs(testDir)

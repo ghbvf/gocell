@@ -499,14 +499,38 @@ func TestParse_FailAllOf(t *testing.T) {
 	}
 }
 
-func TestParse_FailEnum(t *testing.T) {
+// TestParse_Enum_String asserts a string-typed enum is parsed into Schema.Enum
+// (the supported case driving typed Go enum + const generation, #1935). Order is
+// preserved from the source array so generated const blocks are stable.
+func TestParse_Enum_String(t *testing.T) {
 	dir := t.TempDir()
-	writeSchema(t, dir, "s.json", `{"type": "string", "enum": ["a", "b"]}`)
+	writeSchema(t, dir, "s.json", `{"type": "string", "enum": ["succeeded", "failed", "rejected"]}`)
+	s, err := parseFromDir(t, dir, "s.json")
+	if err != nil {
+		t.Fatalf("string enum should parse, got error: %v", err)
+	}
+	want := []string{"succeeded", "failed", "rejected"}
+	if len(s.Enum) != len(want) {
+		t.Fatalf("Enum = %v, want %v", s.Enum, want)
+	}
+	for i, v := range want {
+		if s.Enum[i] != v {
+			t.Errorf("Enum[%d] = %q, want %q", i, s.Enum[i], v)
+		}
+	}
+}
+
+// TestParse_FailEnum_NonString asserts enum on a non-string type fails fast:
+// codegen only generates typed Go enums for string fields (#1935 scope), so an
+// integer/other enum is an explicit error rather than a silently dropped constraint.
+func TestParse_FailEnum_NonString(t *testing.T) {
+	dir := t.TempDir()
+	writeSchema(t, dir, "s.json", `{"type": "integer", "enum": [1, 2, 3]}`)
 	_, err := parseFromDir(t, dir, "s.json")
 	if err == nil {
-		t.Fatal("expected error for enum")
+		t.Fatal("expected error for non-string enum")
 	}
-	if !strings.Contains(err.Error(), `"enum"`) {
+	if !strings.Contains(err.Error(), "enum") {
 		t.Errorf("error should mention 'enum', got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "s.json") {

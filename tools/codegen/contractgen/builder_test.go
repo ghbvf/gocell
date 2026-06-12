@@ -286,6 +286,98 @@ func TestSchemaToDTOs_EmptyObject(t *testing.T) {
 	}
 }
 
+// TestSchemaToDTOs_StringEnum_TopLevel covers a top-level string field carrying a
+// closed value-set (#1935, mirrors event.devicecert-rotation-resolved.v1 outcome).
+// The field type becomes the generated named type <Parent><Field> and the DTO
+// carries an EnumSpec whose const names follow <TypeName><PascalCaseValue>.
+func TestSchemaToDTOs_StringEnum_TopLevel(t *testing.T) {
+	s := &Schema{
+		Type:          "object",
+		PropertyOrder: []string{"outcome"},
+		Properties: map[string]*Schema{
+			"outcome": {Type: "string", Enum: []string{"succeeded", "failed", "rejected"}},
+		},
+		Required: []string{"outcome"},
+	}
+	dtos, err := schemaToDTOs("Payload", s)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(dtos) != 1 {
+		t.Fatalf("expected 1 DTO, got %d: %v", len(dtos), dtoNames(dtos))
+	}
+	dto := dtos[0]
+	if got := dto.Fields[0].GoType; got != "PayloadOutcome" {
+		t.Errorf("outcome GoType = %q, want PayloadOutcome", got)
+	}
+	if len(dto.Enums) != 1 {
+		t.Fatalf("expected 1 enum on Payload, got %d", len(dto.Enums))
+	}
+	en := dto.Enums[0]
+	if en.TypeName != "PayloadOutcome" {
+		t.Errorf("enum TypeName = %q, want PayloadOutcome", en.TypeName)
+	}
+	wantConsts := []EnumValue{
+		{ConstName: "PayloadOutcomeSucceeded", Value: "succeeded"},
+		{ConstName: "PayloadOutcomeFailed", Value: "failed"},
+		{ConstName: "PayloadOutcomeRejected", Value: "rejected"},
+	}
+	if len(en.Values) != len(wantConsts) {
+		t.Fatalf("enum Values = %v, want %v", en.Values, wantConsts)
+	}
+	for i, w := range wantConsts {
+		if en.Values[i] != w {
+			t.Errorf("Values[%d] = %+v, want %+v", i, en.Values[i], w)
+		}
+	}
+}
+
+// TestSchemaToDTOs_StringEnum_Nested covers a string enum on a nested object field
+// (#1935, mirrors http.orderfulfillment.orderstatus.v1 data.status). The enum
+// belongs to the nested DTO (ResponseData), proving the <Parent><Field> naming
+// composes with the nested-object flattening (parent = ResponseData).
+func TestSchemaToDTOs_StringEnum_Nested(t *testing.T) {
+	s := &Schema{
+		Type:          "object",
+		PropertyOrder: []string{"data"},
+		Properties: map[string]*Schema{
+			"data": {
+				Type:          "object",
+				PropertyOrder: []string{"status"},
+				Properties: map[string]*Schema{
+					"status": {Type: "string", Enum: []string{"accepted", "running"}},
+				},
+				Required: []string{"status"},
+			},
+		},
+		Required: []string{"data"},
+	}
+	dtos, err := schemaToDTOs("Response", s)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Response (no enum) + ResponseData (carries the status enum).
+	if len(dtos) != 2 {
+		t.Fatalf("expected 2 DTOs, got %d: %v", len(dtos), dtoNames(dtos))
+	}
+	if len(dtos[0].Enums) != 0 {
+		t.Errorf("Response should carry no enums, got %d", len(dtos[0].Enums))
+	}
+	rd := dtos[1]
+	if rd.Name != "ResponseData" {
+		t.Fatalf("dtos[1].Name = %q, want ResponseData", rd.Name)
+	}
+	if got := rd.Fields[0].GoType; got != "ResponseDataStatus" {
+		t.Errorf("status GoType = %q, want ResponseDataStatus", got)
+	}
+	if len(rd.Enums) != 1 || rd.Enums[0].TypeName != "ResponseDataStatus" {
+		t.Fatalf("expected ResponseDataStatus enum on ResponseData, got %+v", rd.Enums)
+	}
+	if rd.Enums[0].Values[0].ConstName != "ResponseDataStatusAccepted" {
+		t.Errorf("first const = %q, want ResponseDataStatusAccepted", rd.Enums[0].Values[0].ConstName)
+	}
+}
+
 // dtoNames returns names for display in test output.
 func dtoNames(dtos []DTOSpec) []string {
 	names := make([]string, len(dtos))
