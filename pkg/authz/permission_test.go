@@ -187,9 +187,9 @@ func TestPermissions_AccessorsEnrolled(t *testing.T) {
 	accessorActions := parsePermissionAccessorActions(t) // action -> accessor name
 
 	// Anti-vacuity: a parser regression that finds nothing must fail, not pass.
-	if len(accessorActions) < 11 {
-		t.Fatalf("self-discovery found %d Perm*() accessors in permission.go, want ≥11 "+
-			"(PermAuditRead + 5 configcore + 5 accesscore) — the parser likely regressed", len(accessorActions))
+	if len(accessorActions) < len(Permissions()) {
+		t.Fatalf("self-discovery found %d Perm*() accessors in permission.go, want ≥ len(Permissions()) (%d) "+
+			"— the parser likely regressed", len(accessorActions), len(Permissions()))
 	}
 
 	registry := map[string]struct{}{}

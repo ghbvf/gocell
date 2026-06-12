@@ -196,10 +196,9 @@ func RequirePermission(p authz.Permission) Policy {
 // subject (isSelfAccess returns false on empty target), so it falls through to the
 // PDP — a subject can only self-exempt by explicitly naming itself.
 //
-// INVARIANT: pathParam MUST name the subject-identity path parameter of the route
-// (the target user/owner id). Pointing it at an unrelated param would exempt
-// non-owners; the per-route action-pin in TestAccessCore_ProductionAuthGateLock
-// and the self-exemption unit tests guard against misuse.
+// Caller contract (review-enforced, not type-expressible): pathParam MUST name
+// the subject-identity path parameter of the route (the target user/owner id) —
+// pointing it at an unrelated param would exempt non-owners.
 //
 // AI-robust Grade: Medium — the self-check is a runtime param==subject judgement
 // (not type-expressible); it fails closed (non-user principal, empty subject, or

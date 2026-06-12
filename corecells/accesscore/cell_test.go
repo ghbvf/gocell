@@ -923,9 +923,11 @@ func TestAccessCore_RouteSessionLogout(t *testing.T) {
 
 	// Path params under /api/v1/access/sessions/{id} are declared
 	// `format: uuid` in the contract; non-existent but well-formed UUIDs reach
-	// the handler and return 404. SelfOr("id", RoleAdmin) policy: subject
-	// must match the path {id} or carry the admin role. Use the same session
-	// UUID as subject so the policy admits the request.
+	// the handler and return 404. There is no route-level SelfOr gate: {id}
+	// is a session id (not a user id), so ownership is enforced inside the
+	// Service by comparing the JWT subject against the session's user_id.
+	// Use the same UUID as subject to satisfy the baseline JWT auth (valid
+	// principal) without triggering a 401 from missing-subject check.
 	const nonexistentSessionID = "00000000-0000-4000-8000-000000000099"
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/access/sessions/"+nonexistentSessionID, nil)

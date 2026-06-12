@@ -351,3 +351,30 @@ func TestRequirePermissionOrSelf_ServicePrincipal_NotExempt(t *testing.T) {
 	err := RequirePermissionOrSelf("id", authz.PermUserRead())(req)
 	require.Error(t, err, "service principal must not self-exempt; PDP deny → 403")
 }
+
+// TestRequirePermissionOrSelf_NonSelf_AllowWithObligations_FailClosed asserts F5
+// for the non-self delegation path: when RequirePermissionOrSelf falls through to
+// the PDP (subject != path id) and the PDP returns Allow with a non-zero obligation,
+// the gate must deny (403) rather than silently drop the obligation. This mirrors
+// TestRequirePermission_AllowWithObligations_FailClosed for the RequirePermission
+// gate — the obligation-fail-closed invariant must hold on both paths.
+func TestRequirePermissionOrSelf_NonSelf_AllowWithObligations_FailClosed(t *testing.T) {
+	p := &Principal{Kind: PrincipalUser, Subject: roselfSubjectA, Roles: []string{"admin"}}
+	// Allow, but with a RowScope obligation the route gate cannot enforce.
+	mock := &mockAuthorizer{allowed: true, obligations: authz.Obligations{RowScope: tenant.RowScopeSelf}}
+
+	// Non-self path: subject (A) != path param (B), so the self-exemption branch
+	// is skipped and the request is delegated to the PDP (mock).
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/"+roselfOtherB, nil)
+	req.SetPathValue("id", roselfOtherB)
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), mock))
+
+	err := RequirePermissionOrSelf("id", authz.PermUserRead())(req)
+	require.Error(t, err, "Allow with unenforceable obligations must fail-closed, not silently drop")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind,
+		"Allow with non-zero obligations must return PermissionDenied (403)")
+	assert.Equal(t, errcode.ErrAuthForbidden, ec.Code)
+}
