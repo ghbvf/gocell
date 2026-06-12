@@ -285,8 +285,9 @@ func TestInternalRPC_AccessCoreCallsConfigRead_GuardPassed_404KeyNotFound(t *tes
 	// Real (non-reserved) tenant UUID, bound into the token MAC (#1717) AND sent
 	// on the wire as X-Tenant-ID. The MAC binding requires the signed tenant and
 	// the header to agree; a valid matching tenant lets the request pass the guard
-	// and reach the key lookup (which 404s — the key is not seeded).
-	tenantID := "00000000-0000-0000-0000-000000000001"
+	// and reach the key lookup (which 404s — the key is not seeded). Untyped const
+	// so it is assignable to both the tenant.TenantID sign param and the string header.
+	const tenantID = "00000000-0000-0000-0000-000000000001"
 	token := auth.GenerateServiceToken(app.ring, "accesscore",
 		http.MethodGet, "/internal/v1/config/no-such-key", "", tenantID, time.Now())
 	require.NotEmpty(t, token, "token generation must succeed for a valid callerCell")

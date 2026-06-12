@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
 // Canonical tenant UUIDs (lowercase, dashed) mirroring what tenant.TenantID.String()
@@ -33,9 +34,9 @@ func TestServiceTokenMiddleware_TenantHeaderBinding(t *testing.T) {
 
 	cases := []struct {
 		name       string
-		signTenant string // value passed to GenerateServiceToken (folded into MAC)
-		setHeader  bool   // whether the request carries an X-Tenant-ID header
-		wireHeader string // header value when setHeader is true
+		signTenant tenant.TenantID // value bound into the MAC by GenerateServiceToken
+		setHeader  bool            // whether the request carries an X-Tenant-ID header
+		wireHeader string          // header value when setHeader is true
 		wantStatus int
 		wantCalled bool
 	}{
@@ -168,6 +169,15 @@ func TestBuildServiceTokenMessage_TenantSegment_Golden(t *testing.T) {
 			callerCell: "accesscore",
 			tenantID:   tenantSignA,
 			want:       "GET /api?a=1&b=2 1700000000 abcdef0123456789abcdef0123456789 accesscore x-tenant-id=11111111-1111-4111-8111-111111111111",
+		},
+		{
+			name:       "no tenant, with query",
+			method:     http.MethodGet,
+			path:       "/api",
+			rawQuery:   "b=2&a=1",
+			callerCell: "accesscore",
+			tenantID:   "",
+			want:       "GET /api?a=1&b=2 1700000000 abcdef0123456789abcdef0123456789 accesscore x-tenant-id=",
 		},
 	}
 
