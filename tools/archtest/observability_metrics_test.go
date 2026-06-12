@@ -241,8 +241,12 @@ func TestMetricsFunnel_SymbolSentinel(t *testing.T) {
 	}
 
 	// Collect the exported function names from each wrap package by scanning
-	// the module for imports of those packages and inspecting their scope.
-	// We use Run(t, Typed(...)) to reuse the SharedResolver cache; the scan func
+	// the workspace for imports of those packages and inspecting their scope.
+	// We use Run(t, Production(...)) so the scan spans every go.work member
+	// module: post-#1558 the promwrap/otelwrap importers (adapters/prometheus,
+	// adapters/otel) live in their OWN satellite modules, so a module-local
+	// Typed(..., []string{"./..."}) load never reaches them and the observed
+	// sets stay empty (false-red). Production is workspace-aware; the scan func
 	// accumulates exported function names from p.Pkg.Imports().
 	observed := make(map[string]map[string]struct{}) // importPath → set of func names
 	for _, c := range cases {
@@ -273,7 +277,7 @@ func TestMetricsFunnel_SymbolSentinel(t *testing.T) {
 		return nil
 	}
 
-	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./..."}), scan)
+	_ = Run(t, Production(TypedOpts{}), scan)
 
 	for _, c := range cases {
 		set := observed[c.importPath]
@@ -335,7 +339,10 @@ func TestMetricsFunnel_SymbolSentinel(t *testing.T) {
 		}
 		return nil
 	}
-	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./..."}), outerScan)
+	// Production (workspace-aware): the adapters/prometheus importers
+	// (cmd/corebundle, tools/metricschema) live in satellite modules that a
+	// module-local "./..." load would miss post-#1558.
+	_ = Run(t, Production(TypedOpts{}), outerScan)
 
 	for name := range outerRingObserved {
 		if _, ok := adapterPromAllowedNewRegisterExports[name]; !ok {

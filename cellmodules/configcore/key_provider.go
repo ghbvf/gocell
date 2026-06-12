@@ -14,6 +14,17 @@ import (
 	"github.com/ghbvf/gocell/runtime/crypto"
 )
 
+// Key-provider enum values for GOCELL_CONFIGCORE_KEY_PROVIDER. These are the
+// single source of truth for the switch dispatch and the slog provider label;
+// the errcode messages below repeat them inline because MESSAGE-CONST-LITERAL-01
+// requires errcode.New messages to be const string literals (a const reference
+// is permitted, but the human-facing "known values: ..." enumeration reads best
+// spelled out — keep it in sync with these constants).
+const (
+	providerLocalAES     = "local-aes"
+	providerVaultTransit = "vault-transit"
+)
+
 // buildKeyProviderFromName is the adapter-aware key-provider factory. It is
 // self-contained within cellmodules/configcore (the Composition Root layer) so
 // cmd/corebundle no longer needs to import adapters/vault.
@@ -43,9 +54,9 @@ func buildKeyProviderFromName(
 		return nil, nil //nolint:nilnil // memory mode: nil KeyProvider is the documented no-key sentinel
 	}
 	switch providerName {
-	case "local-aes":
+	case providerLocalAES:
 		return buildLocalAESKeyProvider(adapterMode, masterKey, prevMasterKey)
-	case "vault-transit":
+	case providerVaultTransit:
 		return buildVaultTransitKeyProvider(adapterMode, clk, metricsProvider)
 	default:
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -70,7 +81,7 @@ func buildLocalAESKeyProvider(adapterMode, masterKey, prevMasterKey string) (kcr
 	if err != nil {
 		return nil, fmt.Errorf("local-aes key provider: %w", err)
 	}
-	slog.Info("configcore: key provider initialized", slog.String("provider", "local-aes"))
+	slog.Info("configcore: key provider initialized", slog.String("provider", providerLocalAES))
 	return kp, nil
 }
 
@@ -89,6 +100,6 @@ func buildVaultTransitKeyProvider(
 	if err != nil {
 		return nil, fmt.Errorf("vault-transit key provider: %w", err)
 	}
-	slog.Info("configcore: key provider initialized", slog.String("provider", "vault-transit"))
+	slog.Info("configcore: key provider initialized", slog.String("provider", providerVaultTransit))
 	return kp, nil
 }

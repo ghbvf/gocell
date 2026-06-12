@@ -19,6 +19,28 @@ const validLocalAESMasterKey = "0102030405060708090a0b0c0d0e0f101112131415161718
 // paths (any call would still succeed, but we verify via assertions).
 var nopMetricsProvider = kernelmetrics.NopProvider{}
 
+// recordingMetricsProvider wraps NopProvider and records the Name of every
+// CounterVec/GaugeVec registration. It is the seam that proves metric
+// registration LOCALITY without a real registry or network: only the
+// vault-transit branch constructs adapters/vault.TransitMetrics, so only that
+// branch may touch the provider. The embedded NopProvider supplies the rest of
+// the metrics.Provider surface (HistogramVec / Unregister) and returns working
+// nop instruments, so NewTransitMetrics' .With(Labels{}) calls still succeed.
+type recordingMetricsProvider struct {
+	kernelmetrics.NopProvider
+	names []string
+}
+
+func (p *recordingMetricsProvider) CounterVec(opts kernelmetrics.CounterOpts) (kernelmetrics.CounterVec, error) {
+	p.names = append(p.names, opts.Name)
+	return p.NopProvider.CounterVec(opts)
+}
+
+func (p *recordingMetricsProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
+	p.names = append(p.names, opts.Name)
+	return p.NopProvider.GaugeVec(opts)
+}
+
 // TestBuildKeyProviderFromName_PostgresEmptyProviderFailsClosed is the
 // fail-closed regression (F3): an empty GOCELL_CONFIGCORE_KEY_PROVIDER with
 // StorageBackend=postgres must be rejected with ErrConfigKeyMissing — silent
@@ -112,4 +134,46 @@ func TestBuildKeyProviderFromName_VaultTransit_NilMetricsProvider(t *testing.T) 
 		assert.Equal(t, errcode.ErrInternal, ecErr.Code,
 			"nil-provider error must carry ErrInternal")
 	}
+}
+
+// TestBuildKeyProviderFromName_VaultTransit_RegistersVaultMetrics is the
+// metric-registration-locality success half (F6): the vault-transit branch
+// self-builds adapters/vault.TransitMetrics, registering the five vault transit
+// instruments on the shared provider, BEFORE it attempts the (here failing)
+// Vault connection. The connection failure is expected and irrelevant — the
+// assertion is that the vault branch IS the branch that registers gocell_vault_*
+// series. The full real-Vault success path (usable KeyProvider) is covered by
+// the adapters/vault integration suite; this unit test pins the wiring locality
+// without network or a fake-Vault seam.
+func TestBuildKeyProviderFromName_VaultTransit_RegistersVaultMetrics(t *testing.T) {
+	rp := &recordingMetricsProvider{}
+
+	_, err := buildKeyProviderFromName(
+		"postgres", "", providerVaultTransit, "", "", clock.Real(), rp)
+	require.Error(t, err, "vault-transit without VAULT_ADDR must fail after metric registration")
+
+	assert.ElementsMatch(t, []string{
+		"vault_token_renew_success_total",
+		"vault_token_renew_failure_total",
+		"vault_token_auth_healthy",
+		"vault_auth_login_total",
+		"vault_cached_key_version",
+	}, rp.names,
+		"vault-transit branch must register exactly the five vault transit instruments")
+}
+
+// TestBuildKeyProviderFromName_LocalAES_RegistersNoMetrics is the
+// metric-registration-locality complement (F6): the local-aes branch must NOT
+// touch the metrics provider at all — registering gocell_vault_* series on a
+// non-vault deployment would be a false signal. Together with the vault-transit
+// test above this proves the self-build is branch-local.
+func TestBuildKeyProviderFromName_LocalAES_RegistersNoMetrics(t *testing.T) {
+	rp := &recordingMetricsProvider{}
+
+	kp, err := buildKeyProviderFromName(
+		"postgres", "", providerLocalAES, validLocalAESMasterKey, "", clock.Real(), rp)
+	require.NoError(t, err)
+	assert.NotNil(t, kp)
+	assert.Empty(t, rp.names,
+		"local-aes branch must never register vault_* metrics (registration locality)")
 }

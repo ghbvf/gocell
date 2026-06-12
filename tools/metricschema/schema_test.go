@@ -73,9 +73,22 @@ func TestBuild_CorebundleCapturesReachableTypedMetrics(t *testing.T) {
 	// #885: vault metrics build through the kernel metrics.Provider (no Subsystem
 	// field), so the schema name folds the former "vault" subsystem into the Name
 	// (auth_login_total → vault_auth_login_total). The FQName is unchanged.
+	//
+	// This is NOT a wire-identity break: FQName is the Prometheus series identity
+	// (the only thing scrapers, dashboards, and alerts key on) and it is stable.
+	// The schema's name/subsystem decomposition is an internal derivation with no
+	// downstream consumer beyond this golden — nothing generates dashboards/alerts
+	// from the subsystem field. Re-introducing Subsystem on the kernel
+	// CounterOpts/GaugeOpts to "preserve" the decomposition is deliberately
+	// rejected: subsystem is a Prometheus naming convention, not a metrics-model
+	// concept, and leaking it into the vendor-neutral kernel Provider (which also
+	// backs the OTel adapter) would be an architectural regression. FQName carries
+	// the identity; the namespace+name composition is the adapter's concern.
 	vaultLogin := requireMetric(t, schema, "vault_auth_login_total")
 	assert.Equal(t, "gocell_vault_auth_login_total", vaultLogin.FQName)
 	assert.Equal(t, []string{"method", "result", "reason"}, vaultLogin.Labels)
+	assert.Empty(t, vaultLogin.Subsystem,
+		"#885: kernel-Provider metrics carry no subsystem; identity lives in the stable FQName")
 
 	for _, m := range schema.Metrics {
 		for _, label := range m.Labels {

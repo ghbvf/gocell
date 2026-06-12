@@ -181,9 +181,17 @@ func TestTransitMetrics_CountersAccumulateAcrossProviderReplacement(t *testing.T
 	}
 }
 
-// TestNewTransitMetrics_ReuseOnDuplicateProvider verifies that calling
-// NewTransitMetrics twice on the SAME MetricProvider succeeds without error
-// (the kernel Provider reuses existing registrations on duplicate names).
+// TestNewTransitMetrics_ReuseOnDuplicateProvider is the regression lock for the
+// reconstruction-safety fix: calling NewTransitMetrics twice on the SAME
+// MetricProvider must (a) succeed without error and (b) NOT clobber the
+// registry-observable state a running worker already wrote through the first
+// instance. Construction performs no explicit Set(0); GaugeVec/CounterVec reuse
+// the registered collectors, so counters accumulate and gauges retain their
+// last-written value across a composition rebuild (Module().Provide re-run).
+//
+// If construction were to force point-in-time gauges back to 0, the asserts
+// below would catch it — proving the funnel preserves worker state across
+// reconstruction.
 func TestNewTransitMetrics_ReuseOnDuplicateProvider(t *testing.T) {
 	reg := prom.NewRegistry()
 	provider, err := promadapter.NewMetricProvider(promadapter.MetricProviderConfig{
@@ -193,18 +201,43 @@ func TestNewTransitMetrics_ReuseOnDuplicateProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMetricProvider: %v", err)
 	}
+	ctx := context.Background()
 
 	m1, err := NewTransitMetrics(provider)
 	if err != nil {
 		t.Fatalf("first NewTransitMetrics: %v", err)
 	}
+	// Drive worker-like writes through the first instance: a healthy renewal
+	// worker (authHealthy=1), a cached key version, accumulated renew successes,
+	// and a login outcome.
+	m1.authHealthy.Set(ctx, 1)
+	m1.StoreCachedVersion(7)
+	m1.renewSuccess.Inc(ctx)
+	m1.renewSuccess.Inc(ctx)
+	m1.recordLoginOutcome(ctx, "approle", "success", "none")
+
+	// Reconstruct on the SAME provider (models a composition rebuild re-running
+	// Module().Provide). This must be non-destructive to the state above.
 	m2, err := NewTransitMetrics(provider)
 	if err != nil {
 		t.Fatalf("second NewTransitMetrics on same provider: %v", err)
 	}
-	// Both handles are valid instruments on the same underlying registry.
 	if m1 == nil || m2 == nil {
 		t.Fatal("expected non-nil *TransitMetrics from both calls")
+	}
+
+	if got := scrapeGauge(t, reg, "gocell_vault_token_auth_healthy"); got != 1 {
+		t.Errorf("authHealthy after reconstruction = %v, want 1 (reconstruction must not clobber a healthy worker's gauge back to 0)", got)
+	}
+	if got := scrapeGauge(t, reg, "gocell_vault_cached_key_version"); got != 7 {
+		t.Errorf("cached_key_version after reconstruction = %v, want 7 (gauge is the durable point-in-time value)", got)
+	}
+	if got := scrapeCounter(t, reg, "gocell_vault_token_renew_success_total"); got != 2 {
+		t.Errorf("token_renew_success_total after reconstruction = %v, want 2 (counters accumulate, never reset)", got)
+	}
+	if got := scrapeCounterVec(t, reg, "gocell_vault_auth_login_total",
+		map[string]string{"method": "approle", "result": "success", "reason": "none"}); got != 1 {
+		t.Errorf("auth_login_total{approle,success} after reconstruction = %v, want 1", got)
 	}
 }
 

@@ -23,6 +23,16 @@ package vault
 // physical atomic shared between the metric and whichever provider currently
 // writes it.
 //
+// Reconstruction (a second NewTransitMetrics on the SAME provider, e.g. a
+// composition rebuild that re-runs Module().Provide) is non-destructive to
+// registry-observable state: GaugeVec/CounterVec reuse the already-registered
+// collector, construction performs NO explicit Set(0) (see NewTransitMetrics),
+// so counters keep accumulating and gauges retain their last-written value. The
+// per-call cachedVersion atomic is an instance-local read cache, not the source
+// of truth — the new instance re-seeds it from the worker's first key read; the
+// gauge is the durable point-in-time value. In production Provide runs exactly
+// once, so a single instance owns the lifecycle.
+//
 // ref: opentelemetry-specification metrics/api.md — subscribe-to-change value
 // → synchronous (push) gauge (cachedVersion).
 
@@ -79,11 +89,13 @@ type TransitMetrics struct {
 // worker, so the gauge correctly remains 0 (a true "no healthy renewer" signal,
 // replacing the prior false-green where construction set 1 unconditionally).
 //
-// cachedVersionGauge is initialized to 0 at construction (cache miss) and then
-// push-updated by StoreCachedVersion. This replaces the former scrape-time
-// GaugeFunc callback: vault owns the write funnel (StoreCachedVersion), so per
-// the OTel metrics API guidance a subscribe-to-change value is a synchronous
-// (push) gauge, not an accessor-read async/callback gauge.
+// cachedVersionGauge starts at 0 on first construction (cache miss; the
+// .With(empty Labels) call materializes the zero-label child at 0 — no explicit
+// Set is performed) and is then push-updated by StoreCachedVersion. This
+// replaces the former scrape-time GaugeFunc callback: vault owns the write
+// funnel (StoreCachedVersion), so per the OTel metrics API guidance a
+// subscribe-to-change value is a synchronous (push) gauge, not an accessor-read
+// async/callback gauge.
 //
 // Returns an error if provider is nil or any instrument fails to register.
 func NewTransitMetrics(provider metrics.Provider) (*TransitMetrics, error) {
@@ -135,6 +147,14 @@ func NewTransitMetrics(provider metrics.Provider) (*TransitMetrics, error) {
 			errMsgRegisterTransitMetric, err)
 	}
 
+	// .With(empty Labels) materializes the single zero-label child of each
+	// vec at its default value (0), so a scrape before the first worker
+	// transition / cache fill sees an explicit 0 rather than an absent series —
+	// no explicit Set(0) is needed. Crucially, NOT re-setting 0 here keeps a
+	// second NewTransitMetrics on the SAME provider non-destructive: GaugeVec
+	// reuses the already-registered collector and .With returns the existing
+	// child, so a running worker's authHealthy=1 / cached version are preserved
+	// across reconstruction instead of being clobbered back to 0.
 	m := &TransitMetrics{
 		renewSuccess:       renewSuccessVec.With(metrics.Labels{}),
 		renewFailure:       renewFailureVec.With(metrics.Labels{}),
@@ -142,11 +162,6 @@ func NewTransitMetrics(provider metrics.Provider) (*TransitMetrics, error) {
 		loginOutcome:       loginOutcome,
 		cachedVersionGauge: cachedVersionVec.With(metrics.Labels{}),
 	}
-	// Emit the initial point-in-time values so a scrape before the first worker
-	// transition / cache fill sees an explicit 0 rather than an absent series.
-	// Background ctx: composition-root construction, no request correlation.
-	m.authHealthy.Set(context.Background(), 0)
-	m.cachedVersionGauge.Set(context.Background(), 0)
 	return m, nil
 }
 

@@ -77,7 +77,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/tools/internal/prodscan"
 	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
@@ -98,15 +97,20 @@ func TestMetricsCancelCtxConformance(t *testing.T) {
 
 	root := findModuleRoot(t)
 	modPath := readModulePath(t, root)
-	prodPatterns := prodscan.Patterns(root)
 
 	// ─── Step 1: resolve metrics.Provider + collect adapters/ impl pkgs ───────
 	// The iface and the impl types MUST come from the same packages.Load so
 	// types.Implements uses pointer-identical *types.Named descriptors.
+	// Production is workspace-aware: post-#1558 the Provider impls live in their
+	// own satellite modules (adapters/otel, adapters/prometheus); a module-local
+	// Typed(..., prodscan.Patterns) load never reaches them, collapsing implPkgs
+	// to empty (false-red). Production loads the kernel iface AND every satellite
+	// impl through ONE LoadProductionPackages resolver, preserving the
+	// pointer-identical *types.Named universe types.Implements requires.
 	var providerIface *types.Interface
 	var implPkgs []*types.Package
 
-	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns),
+	_ = Run(t, Production(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -145,7 +149,7 @@ func TestMetricsCancelCtxConformance(t *testing.T) {
 
 	// ─── Step 3: scan test corpus for RunCanceledCtxConformance call sites ───
 	enrolledImpls := make(map[string]bool) // "pkg/path.TypeName" → true
-	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, prodPatterns),
+	_ = Run(t, Production(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
