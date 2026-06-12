@@ -441,32 +441,56 @@ func validateConnackReasonTable(rows []connackReason) {
 		if seen[r.code] {
 			panic(panicregister.Approved(
 				"mqtt-reason-table-duplicate-connack-code",
-				errcode.Assertion("mqtt-reason-table-duplicate-connack-code: 0x%02x", r.code)))
+				errcode.Assertion("mqtt-reason-table-duplicate-connack-code: 0x%02x", r.code),
+			))
 		}
 		seen[r.code] = true
 		if r.class == classInvalid {
 			panic(panicregister.Approved(
 				"mqtt-reason-table-class-invalid-on-connack-code",
-				errcode.Assertion("mqtt-reason-table-class-invalid-on-connack-code: 0x%02x", r.code)))
+				errcode.Assertion("mqtt-reason-table-class-invalid-on-connack-code: 0x%02x", r.code),
+			))
 		}
 	}
 }
 
 // validateAckReasonTable panics (via panicregister.Approved wrapping
-// errcode.Assertion) if rows contains duplicate codes. PUBACK/SUBACK rows have
-// no class field to validate against a zero sentinel.
+// errcode.Assertion) if rows contains duplicate codes, or if any error reason
+// row (code >= 0x80) carries an empty errCode.
+//
+// The empty-errCode check is the ACK-table counterpart of validateConnackReasonTable's
+// classInvalid zero-value sentinel: positional literals guarantee field COUNT but
+// not field SEMANTICS, so a future error row could silently leave errCode == ""
+// (the errcode.Code zero value). The classifiers (classifyPubackReason /
+// classifySubackReason) run only on the error path — publisher.go and connection.go
+// both gate reason >= 0x80 before calling — so an error row with errCode == ""
+// would let that path construct an empty errcode.Code. This init-time guard makes
+// that table state a fail-fast instead of a silent runtime defect. Success rows
+// (code < 0x80, e.g. 0x00/0x01/0x02) legitimately carry "".
+//
+// kind is intentionally NOT validated: errcode.KindInternal is the zero value (a
+// legitimate fail-closed classification, see pkg/errcode/status.go), so an unset
+// kind is indistinguishable from a deliberate KindInternal and carries no gap.
 //
 // ref: error-handling.md §Panic — A-class programmer error uses errcode.Assertion
 // wrapped in panicregister.Approved (PANIC-REGISTERED-01).
+// ref: validateConnackReasonTable (same file) — classInvalid sentinel precedent.
 func validateAckReasonTable(label string, rows []ackReason) {
 	seen := make(map[byte]bool, len(rows))
 	for _, r := range rows {
 		if seen[r.code] {
 			panic(panicregister.Approved(
 				"mqtt-reason-table-duplicate-ack-code",
-				errcode.Assertion("mqtt-reason-table-duplicate-%s-code: 0x%02x", label, r.code)))
+				errcode.Assertion("mqtt-reason-table-duplicate-%s-code: 0x%02x", label, r.code),
+			))
 		}
 		seen[r.code] = true
+		if r.code >= 0x80 && r.errCode == "" {
+			panic(panicregister.Approved(
+				"mqtt-reason-table-empty-errcode-on-ack-error-code",
+				errcode.Assertion("mqtt-reason-table-empty-errcode-on-%s-error-code: 0x%02x", label, r.code),
+			))
+		}
 	}
 }
 

@@ -119,6 +119,7 @@ func TestMQTTConnackReasonTableComplete01_ReverseFixture(t *testing.T) {
 	joined := diagMessages(diags)
 	assert.Contains(t, joined, "0x81",
 		"MQTT-CONNACK-REASON-TABLE-COMPLETE-01 reverse fixture: diagnostic must name missing code 0x81")
+	assertDiagsLocated(t, diags, "MQTT-CONNACK-REASON-TABLE-COMPLETE-01 reverse fixture")
 }
 
 // ─── MQTT-PUBACK-REASON-TABLE-COMPLETE-01 ────────────────────────────────────
@@ -148,6 +149,7 @@ func TestMQTTPubackReasonTableComplete01_ReverseFixture(t *testing.T) {
 	joined := diagMessages(diags)
 	assert.Contains(t, joined, "0x91",
 		"MQTT-PUBACK-REASON-TABLE-COMPLETE-01 reverse fixture: diagnostic must name missing code 0x91")
+	assertDiagsLocated(t, diags, "MQTT-PUBACK-REASON-TABLE-COMPLETE-01 reverse fixture")
 }
 
 // TestMQTTPubackReasonTableComplete01_NonVacuous proves that the code-extraction
@@ -163,7 +165,7 @@ func TestMQTTPubackReasonTableComplete01_NonVacuous(t *testing.T) {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil
 			}
-			_, codes = mqttExtractReasonTableCodes(p, "pubackReasonTable")
+			_, codes, _, _ = mqttExtractReasonTableCodes(p, "pubackReasonTable")
 			return nil
 		})
 	assert.GreaterOrEqual(t, len(codes), 1,
@@ -198,6 +200,7 @@ func TestMQTTSubackReasonTableComplete01_ReverseFixture(t *testing.T) {
 	joined := diagMessages(diags)
 	assert.Contains(t, joined, "0x83",
 		"MQTT-SUBACK-REASON-TABLE-COMPLETE-01 reverse fixture: diagnostic must name missing code 0x83")
+	assertDiagsLocated(t, diags, "MQTT-SUBACK-REASON-TABLE-COMPLETE-01 reverse fixture")
 }
 
 // TestMQTTSubackReasonTableComplete01_NonVacuous proves that the code-extraction
@@ -213,7 +216,7 @@ func TestMQTTSubackReasonTableComplete01_NonVacuous(t *testing.T) {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil
 			}
-			_, codes = mqttExtractReasonTableCodes(p, "subackReasonTable")
+			_, codes, _, _ = mqttExtractReasonTableCodes(p, "subackReasonTable")
 			return nil
 		})
 	assert.GreaterOrEqual(t, len(codes), 1,
@@ -323,29 +326,38 @@ func scanMQTTReasonTablePositionalInFixture(t *testing.T, varName string) []Diag
 
 // mqttCheckReasonTableInPass locates varName in the pass's files, extracts the
 // byte code from each row's first positional element, and compares against golden.
-// Returns diagnostics for missing or extra codes.
+// Returns diagnostics for missing or extra codes, each anchored at the table
+// declaration (rel:line) rather than a hardcoded errors.go:0.
 func mqttCheckReasonTableInPass(p *Pass, varName string, golden map[byte]bool) []Diagnostic {
-	found, codes := mqttExtractReasonTableCodes(p, varName)
+	found, codes, rel, line := mqttExtractReasonTableCodes(p, varName)
 	if !found {
 		return []Diagnostic{{
-			Rel:  "errors.go",
-			Line: 0,
+			Rel:  rel,
+			Line: line,
 			Message: fmt.Sprintf(
 				"MQTT-REASON-TABLE-COMPLETE: var %q not found in package %s "+
-					"(expected in adapters/mqtt/errors.go)", varName, p.Pkg.Path()),
+					"(expected in adapters/mqtt/errors.go)", varName, p.Pkg.Path(),
+			),
 		}}
 	}
-	return mqttCompareCodeSets(varName, codes, golden)
+	return mqttCompareCodeSets(varName, codes, golden, rel, line)
 }
 
 // mqttExtractReasonTableCodes locates varName in the pass's production files and
-// returns the set of byte codes found in each row's first positional element.
-// ok=false if the var was not found.
-func mqttExtractReasonTableCodes(p *Pass, varName string) (ok bool, codes map[byte]bool) {
+// returns the set of byte codes found in each row's first positional element,
+// plus the module-relative path and 1-based line of the var declaration so
+// downstream diagnostics point at the table rather than an un-navigable
+// errors.go:0. found=false if the var was not found; in that case rel/line fall
+// back to the first scanned production file at line 1 (never :0).
+func mqttExtractReasonTableCodes(p *Pass, varName string) (found bool, codes map[byte]bool, rel string, line int) {
 	codes = make(map[byte]bool)
 	for _, f := range p.Files {
-		if strings.HasSuffix(p.Rel(f), "_test.go") {
+		fileRel := p.Rel(f)
+		if strings.HasSuffix(fileRel, "_test.go") {
 			continue
+		}
+		if rel == "" {
+			rel = fileRel // not-found fallback: first production file scanned
 		}
 		EachInSubtree[ast.GenDecl](f, func(gen *ast.GenDecl) {
 			EachInChildren[ast.ValueSpec](gen, func(vs *ast.ValueSpec) {
@@ -353,7 +365,9 @@ func mqttExtractReasonTableCodes(p *Pass, varName string) (ok bool, codes map[by
 					if name.Name != varName {
 						continue
 					}
-					ok = true
+					found = true
+					rel = fileRel
+					line = p.Fset.Position(name.Pos()).Line
 					// vs.Values[0] is the slice composite literal []T{row0, row1, ...}
 					if len(vs.Values) == 0 {
 						return
@@ -389,30 +403,36 @@ func mqttExtractReasonTableCodes(p *Pass, varName string) (ok bool, codes map[by
 			})
 		})
 	}
-	return ok, codes
+	if line == 0 {
+		line = 1 // var not found (or no position): point at file head, never :0
+	}
+	return found, codes, rel, line
 }
 
 // mqttCompareCodeSets returns diagnostics for codes present in golden but missing
-// from actual, and codes in actual but absent from golden.
-func mqttCompareCodeSets(varName string, actual, golden map[byte]bool) []Diagnostic {
+// from actual, and codes in actual but absent from golden. Each diagnostic is
+// anchored at the table declaration (rel:line) supplied by the caller.
+func mqttCompareCodeSets(varName string, actual, golden map[byte]bool, rel string, line int) []Diagnostic {
 	var diags []Diagnostic
 	for code := range golden {
 		if !actual[code] {
 			diags = append(diags, Diagnostic{
-				Rel:  "errors.go",
-				Line: 0,
+				Rel:  rel,
+				Line: line,
 				Message: fmt.Sprintf(
-					"MQTT-REASON-TABLE-COMPLETE: %s missing spec code 0x%02x", varName, code),
+					"MQTT-REASON-TABLE-COMPLETE: %s missing spec code 0x%02x", varName, code,
+				),
 			})
 		}
 	}
 	for code := range actual {
 		if !golden[code] {
 			diags = append(diags, Diagnostic{
-				Rel:  "errors.go",
-				Line: 0,
+				Rel:  rel,
+				Line: line,
 				Message: fmt.Sprintf(
-					"MQTT-REASON-TABLE-COMPLETE: %s has extra non-spec code 0x%02x", varName, code),
+					"MQTT-REASON-TABLE-COMPLETE: %s has extra non-spec code 0x%02x", varName, code,
+				),
 			})
 		}
 	}
@@ -457,7 +477,8 @@ func mqttCheckReasonTablePositionalInPass(p *Pass, varName string) []Diagnostic 
 									"MQTT-REASON-TABLE-POSITIONAL-01: %s row %d uses named-field (key:value) "+
 										"literal syntax at %s:%d — positional literals required so that "+
 										"adding a field is a compile error at every existing row",
-									varName, rowIdx, p.Rel(f), pos.Line),
+									varName, rowIdx, p.Rel(f), pos.Line,
+								),
 							})
 						})
 					})
@@ -478,6 +499,23 @@ func diagMessages(diags []Diagnostic) string {
 	return sb.String()
 }
 
+// assertDiagsLocated asserts every completeness diagnostic points at a real source
+// location — a 1-based line (not the old hardcoded 0) and a module-relative Rel
+// (not the bare "errors.go" placeholder). Locks MQTT-REASON-TABLE-COMPLETE-01
+// diagnostics against regressing to an un-navigable errors.go:0.
+func assertDiagsLocated(t *testing.T, diags []Diagnostic, context string) {
+	t.Helper()
+	for _, d := range diags {
+		assert.Positive(t, d.Line,
+			"%s: diagnostic must carry a 1-based source line, not 0 (%s)", context, d.Message)
+		assert.NotEmpty(t, d.Rel,
+			"%s: diagnostic Rel must not be empty (%s)", context, d.Message)
+		assert.NotEqual(t, "errors.go", d.Rel,
+			"%s: diagnostic Rel must be a module-relative path, not the bare placeholder (%s)",
+			context, d.Message)
+	}
+}
+
 // ─── Anti-vacuity probes ──────────────────────────────────────────────────────
 
 // TestMQTTConnackReasonTableComplete01_NonVacuous proves that the code-extraction
@@ -495,7 +533,7 @@ func TestMQTTConnackReasonTableComplete01_NonVacuous(t *testing.T) {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil
 			}
-			_, codes = mqttExtractReasonTableCodes(p, "connackReasonTable")
+			_, codes, _, _ = mqttExtractReasonTableCodes(p, "connackReasonTable")
 			return nil
 		})
 	_ = diags

@@ -223,6 +223,42 @@ func TestValidateAckReasonTable_PanicOnDuplicateCode(t *testing.T) {
 	validateAckReasonTable("TEST", bad)
 }
 
+// TestValidateAckReasonTable_PanicOnMissingErrCodeForErrorReason ensures
+// validateAckReasonTable panics when an error reason row (code >= 0x80) carries
+// an empty errCode. The classifiers run only on the error path (publisher.go and
+// connection.go both gate reason >= 0x80), so an error row with errCode == ""
+// would let that path construct an empty errcode.Code; the init-time guard makes
+// that table state a fail-fast instead.
+func TestValidateAckReasonTable_PanicOnMissingErrCodeForErrorReason(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Errorf("validateAckReasonTable did not panic on error row with empty errCode")
+		}
+	}()
+	bad := []ackReason{
+		{0x80, "UnspecifiedError", "", errcode.KindInternal}, // error code, empty errCode
+	}
+	validateAckReasonTable("TEST", bad)
+}
+
+// TestValidateAckReasonTable_AllowsEmptyErrCodeForSuccessReason ensures the guard
+// is asymmetric: a success reason row (code < 0x80) is allowed an empty errCode
+// (the production tables use this for 0x00/0x01/0x02), so the validator must not
+// panic on it.
+func TestValidateAckReasonTable_AllowsEmptyErrCodeForSuccessReason(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("validateAckReasonTable panicked on success row with empty errCode: %v", r)
+		}
+	}()
+	ok := []ackReason{
+		{0x00, "Success", "", errcode.KindInternal}, // success code, empty errCode is legal
+		{0x10, "NoMatchingSubscribers", ErrAdapterMQTTPublishNoSubscribers, errcode.KindUnavailable},
+	}
+	validateAckReasonTable("TEST", ok)
+}
+
 func TestIsTLSHandshakeError(t *testing.T) {
 	tests := []struct {
 		name string
