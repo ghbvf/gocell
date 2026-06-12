@@ -5,26 +5,22 @@ package vault_test
 import (
 	"testing"
 
-	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 
-	promadapter "github.com/ghbvf/gocell/adapters/prometheus"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	vaultadapter "github.com/ghbvf/gocell/adapters/vault"
 )
 
-// mustTransitMetrics constructs a *TransitMetrics against a fresh Prometheus-backed
-// metrics.Provider. Integration tests cannot share registries (duplicate collector
-// registration), so each constructor needs its own registry/provider. The "gocell"
-// namespace matches production so the gocell_vault_* metric names are unchanged.
+// mustTransitMetrics constructs a *TransitMetrics backed by the kernel NopProvider.
+// Integration tests only need a valid *TransitMetrics to exercise vault behaviour
+// against a live Vault server; they do not scrape metric values. Using NopProvider
+// removes the adapters/prometheus (and prometheus/client_golang) dependency from
+// the vault module graph (#1909). The "gocell" namespace mismatch is intentional:
+// integration tests do not assert metric values, so the namespace does not matter.
 // Shared across integration_test.go and readiness_test.go.
 func mustTransitMetrics(t *testing.T) *vaultadapter.TransitMetrics {
 	t.Helper()
-	provider, err := promadapter.NewMetricProvider(promadapter.MetricProviderConfig{
-		Registry:  prom.NewRegistry(),
-		Namespace: "gocell",
-	})
-	require.NoError(t, err, "NewMetricProvider on fresh registry must succeed")
-	m, err := vaultadapter.NewTransitMetrics(provider)
-	require.NoError(t, err, "NewTransitMetrics on fresh provider must succeed")
+	m, err := vaultadapter.NewTransitMetrics(metrics.NopProvider{})
+	require.NoError(t, err, "NewTransitMetrics on NopProvider must succeed")
 	return m
 }
