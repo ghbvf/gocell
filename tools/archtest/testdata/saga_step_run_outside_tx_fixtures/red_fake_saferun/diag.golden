@@ -1,0 +1,1 @@
+tools/archtest/testdata/saga_step_run_outside_tx_fixtures/red_fake_saferun/violator.go:16: SAGA-STEP-RUN-OUTSIDE-TX-01-A1: saga.StepFunc CallExpr outside safeRun body — StepFunc must only be invoked from safeRun (user step code outside DB tx invariant)

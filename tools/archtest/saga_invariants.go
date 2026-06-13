@@ -1733,8 +1733,11 @@ func checkA1StepFuncCallsites(p *Pass, file *ast.File) []Diagnostic {
 		return nil
 	}
 
-	// Collect safeRun body ranges.
-	safeRunRanges := collectFuncBodyRanges(file, safeRunFuncName)
+	// Sanctioned range = the body of executor.safeRun ONLY — bound by package
+	// path + *types.Func identity, NOT just the name "safeRun". A same-named
+	// helper in any other runtime/saga subpackage is therefore NOT a sanctioned
+	// range, so its StepFunc calls are still flagged (gh #1998 review F1).
+	safeRunRanges := collectExecutorSafeRunRanges(p.TypesInfo, file)
 
 	var out []Diagnostic
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
@@ -1752,6 +1755,29 @@ func checkA1StepFuncCallsites(p *Pass, file *ast.File) []Diagnostic {
 		})
 	})
 	return out
+}
+
+// collectExecutorSafeRunRanges returns the (Lbrace, Rbrace) body ranges of
+// safeRun FuncDecls in file that resolve (via go/types) to a *types.Func in
+// the runtime/saga/executor package. Binding to the package — not just the name
+// — means a same-named safeRun in any other runtime/saga subpackage does NOT
+// open a sanctioned range, so A1 still flags StepFunc calls inside it.
+func collectExecutorSafeRunRanges(info *types.Info, file *ast.File) []token.Pos {
+	if info == nil {
+		return nil
+	}
+	var ranges []token.Pos
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		if fd.Body == nil || fd.Name == nil || fd.Name.Name != safeRunFuncName {
+			return
+		}
+		fn, ok := info.Defs[fd.Name].(*types.Func)
+		if !ok || fn.Pkg() == nil || fn.Pkg().Path() != sagaRuntimeExecutorPkg {
+			return
+		}
+		ranges = append(ranges, fd.Body.Lbrace, fd.Body.Rbrace)
+	})
+	return ranges
 }
 
 // resolveSagaStepFuncType resolves the kernel/saga.StepFunc named type from
@@ -1894,7 +1920,7 @@ func checkA2Transitive(units []sagaA2Unit) []Diagnostic {
 	funcLitVars := collectFuncLitVars(units)
 	varSet := funcLitVarSet(funcLitVars)
 	taint := buildSafeRunTaint(units, funcLitVars, varSet)
-	return scanRunInTxClosures(units, taint, varSet)
+	return scanRunInTxClosures(units, taint, varSet, funcLitVars)
 }
 
 // collectFuncLitVars discovers every var bound to a single func-literal value.
@@ -2107,35 +2133,52 @@ func resolveCallable(info *types.Info, call *ast.CallExpr, varSet map[*types.Var
 // deliberately conservative — interface-method calls there (c.dispatcher.Kick)
 // resolve to bodiless methods that are never tainted, so the common after-commit
 // hook does not false-positive.
-func scanRunInTxClosures(units []sagaA2Unit, taint map[types.Object]bool, varSet map[*types.Var]bool) []Diagnostic {
+func scanRunInTxClosures(
+	units []sagaA2Unit,
+	taint map[types.Object]bool,
+	varSet map[*types.Var]bool,
+	funcLitVars []funcLitVar,
+) []Diagnostic {
 	var out []Diagnostic
 	for _, u := range units {
-		rel := filepath.ToSlash(u.rel(u.file))
-		info := u.info
-		fset := u.fset
-		EachInSubtree[ast.CallExpr](u.file, func(outer *ast.CallExpr) {
-			if !callIsRunInTx(outer) {
-				return
-			}
-			closure := lastFuncLitArg(outer)
-			if closure == nil {
-				return
-			}
-			EachInSubtree[ast.CallExpr](closure.Body, func(inner *ast.CallExpr) {
-				obj := resolveCallable(info, inner, varSet)
-				if obj == nil || !taint[obj] {
-					return
-				}
-				out = append(out, Diagnostic{
-					Rel:  rel,
-					Line: fset.Position(inner.Pos()).Line,
-					Message: sagaStepRunOutsideTxRule + "-A2: call inside RunInTx closure reaches safeRun — " +
-						"user step code would run with a DB transaction held open; " +
-						"move the step dispatch outside the RunInTx closure",
-				})
-			})
-		})
+		out = append(out, scanUnitRunInTx(u, taint, varSet, funcLitVars)...)
 	}
+	return out
+}
+
+// scanUnitRunInTx flags tainted calls inside every RunInTx callback body in one
+// unit. The callback is resolved whether it is an inline func literal OR a
+// func-literal-valued var passed by name (gh #1998 review F2).
+func scanUnitRunInTx(u sagaA2Unit, taint map[types.Object]bool, varSet map[*types.Var]bool, funcLitVars []funcLitVar) []Diagnostic {
+	var out []Diagnostic
+	rel := filepath.ToSlash(u.rel(u.file))
+	EachInSubtree[ast.CallExpr](u.file, func(outer *ast.CallExpr) {
+		if !callIsRunInTx(outer) {
+			return
+		}
+		for _, body := range runInTxCallbackBodies(outer, u.info, funcLitVars) {
+			out = append(out, scanClosureBody(u, rel, body, taint, varSet)...)
+		}
+	})
+	return out
+}
+
+// scanClosureBody reports tainted calls found in body's subtree.
+func scanClosureBody(u sagaA2Unit, rel string, body *ast.BlockStmt, taint map[types.Object]bool, varSet map[*types.Var]bool) []Diagnostic {
+	var out []Diagnostic
+	EachInSubtree[ast.CallExpr](body, func(inner *ast.CallExpr) {
+		obj := resolveCallable(u.info, inner, varSet)
+		if obj == nil || !taint[obj] {
+			return
+		}
+		out = append(out, Diagnostic{
+			Rel:  rel,
+			Line: u.fset.Position(inner.Pos()).Line,
+			Message: sagaStepRunOutsideTxRule + "-A2: call inside RunInTx closure reaches safeRun — " +
+				"user step code would run with a DB transaction held open; " +
+				"move the step dispatch outside the RunInTx closure",
+		})
+	})
 	return out
 }
 
@@ -2153,13 +2196,31 @@ func callIsRunInTx(call *ast.CallExpr) bool {
 	return false
 }
 
-// lastFuncLitArg returns the last func-literal argument of call (the TxRunner
-// RunInTx tx-callback), or nil if call has none.
-func lastFuncLitArg(call *ast.CallExpr) *ast.FuncLit {
-	for i := len(call.Args) - 1; i >= 0; i-- {
-		if fl, ok := call.Args[i].(*ast.FuncLit); ok {
-			return fl
+// runInTxCallbackBodies returns the body block(s) of call's last argument (the
+// TxRunner RunInTx tx-callback), resolving BOTH an inline func literal AND a
+// func-literal-valued var referenced by name (`cb := func(){…}; RunInTx(ctx,
+// cb)`). A var with several func-literal bindings yields every body. Returns
+// nil when the callback is unresolvable (e.g. a method value or a parameter —
+// the documented no-go/ssa residual).
+func runInTxCallbackBodies(call *ast.CallExpr, info *types.Info, funcLitVars []funcLitVar) []*ast.BlockStmt {
+	if len(call.Args) == 0 {
+		return nil
+	}
+	switch last := call.Args[len(call.Args)-1].(type) {
+	case *ast.FuncLit:
+		return []*ast.BlockStmt{last.Body}
+	case *ast.Ident:
+		v, ok := varObject(info, last)
+		if !ok {
+			return nil
 		}
+		var bodies []*ast.BlockStmt
+		for _, flv := range funcLitVars {
+			if flv.obj == v {
+				bodies = append(bodies, flv.body)
+			}
+		}
+		return bodies
 	}
 	return nil
 }

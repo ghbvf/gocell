@@ -2767,7 +2767,10 @@ func TestSagaCoverageDiagnosticLocations(t *testing.T) {
 //	   alias / redefinition can give a StepFunc call a signature-distinct callee
 //	   that escapes the gate. This FOLDS the former B1 alias self-test into A1
 //	   (gh #979): the escape class is now closed inside A1 itself, not patched
-//	   by a separate reverse self-test.
+//	   by a separate reverse self-test. The SANCTIONED body is bound to the
+//	   executor package by *types.Func identity (collectExecutorSafeRunRanges),
+//	   NOT the name "safeRun" — a same-named impostor in any other runtime/saga
+//	   subpackage opens no sanctioned range (gh #1998 review F1).
 //	   AI-robust: Medium (typed signature-identity scan; the alias / defined-
 //	   type / funclit escape class is structurally immune within this carrier).
 //
@@ -2778,11 +2781,13 @@ func TestSagaCoverageDiagnosticLocations(t *testing.T) {
 //	   (where RunInTx lives) AND the executor package (where safeRun is
 //	   defined) — keyed by *types.Func / func-literal-valued *types.Var object
 //	   identity (stable across Passes within one packages.Load, so a
-//	   coordinator→executor call edge resolves to the same object). Covers the
-//	   direct callsite, named helper wrappers, and FuncLit-var indirection
-//	   (gh #980, incl. the cx-1 var-indirection case). Interface-method calls
-//	   resolve to bodiless interface methods (never tainted), so dynamic
-//	   dispatch deliberately breaks the static chain.
+//	   coordinator→executor call edge resolves to the same object). The RunInTx
+//	   callback sink is resolved whether it is an inline func literal OR a
+//	   func-literal-valued var passed by name (runInTxCallbackBodies). Covers the
+//	   direct callsite, named helper wrappers, FuncLit-var indirection (gh #980,
+//	   incl. the cx-1 var-indirection case), and callback-var sinks (gh #1998
+//	   review F2). Interface-method calls resolve to bodiless interface methods
+//	   (never tainted), so dynamic dispatch deliberately breaks the static chain.
 //	   AI-robust: Medium (typed transitive taint) with compile-level depth —
 //	   safeRun is UNEXPORTED in runtime/saga/executor, so a coordinator closure
 //	   cannot name safeRun directly; it can only reach it via an exported
@@ -2937,11 +2942,12 @@ func TestSagaStepRunOutsideTx_Detector_RedSafeRunInRunInTxFixture(t *testing.T) 
 
 // TestSagaStepRunOutsideTx_Detector_RedAliasedStepFuncCallFixture proves that
 // signature-identity A1 fires on StepFunc-shaped calls outside safeRun made
-// through three escape shapes: a type alias, a DEFINED type, and a raw
-// structurally-identical func value. The old exact-Named A1 missed the
-// defined-type and raw-signature calls (distinct / absent *types.Named); the
-// golden expects all three flagged (gh #979). Loaded typed (Fixture provides
-// TypesInfo) so calleeIsSagaStepFunc can resolve the canonical signature.
+// through four callsites / three escape shapes: a type alias, an alias-of-alias,
+// a DEFINED type, and a raw structurally-identical func value. The old
+// exact-Named A1 missed the alias-of-alias, defined-type and raw-signature
+// calls (distinct / absent *types.Named); the golden expects all four flagged
+// (gh #979). Loaded typed (Fixture provides TypesInfo) so calleeIsSagaStepFunc
+// can resolve the canonical signature.
 func TestSagaStepRunOutsideTx_Detector_RedAliasedStepFuncCallFixture(t *testing.T) {
 	root := findModuleRoot(t)
 	relDir, pattern := sagaStepRunFixturePattern("red_aliased_stepfunc_call")
@@ -2972,6 +2978,43 @@ func TestSagaStepRunOutsideTx_Detector_RedSafeRunWrapperInRunInTxFixture(t *test
 	diags := checkA2Transitive(units)
 
 	AssertGolden(t, filepath.Join(findModuleRoot(t), relDir, "diag.golden"), diags)
+}
+
+// TestSagaStepRunOutsideTx_Detector_RedFakeSafeRunFixture proves A1 binds its
+// sanctioned range to the executor package by *types.Func identity, not the
+// name: a same-named safeRun impostor outside runtime/saga/executor opens no
+// sanctioned range, so the StepFunc call inside it is still flagged (gh #1998
+// review F1).
+func TestSagaStepRunOutsideTx_Detector_RedFakeSafeRunFixture(t *testing.T) {
+	root := findModuleRoot(t)
+	relDir, pattern := sagaStepRunFixturePattern("red_fake_saferun")
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+
+		var ds []Diagnostic
+		for _, file := range p.Files {
+			ds = append(ds, checkA1StepFuncCallsites(p, file)...)
+		}
+		return ds
+	})
+
+	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
+}
+
+// TestSagaStepRunOutsideTx_Detector_RedCrossPkgWrapperFixture proves A2's taint
+// set spans packages: a coordinator-like package calling an executor-like
+// package's exported Wrapper (which reaches the OTHER package's unexported
+// safeRun) inside a RunInTx closure is flagged by cross-package *types.Func
+// object identity within one packages.Load (gh #1998 review F3).
+func TestSagaStepRunOutsideTx_Detector_RedCrossPkgWrapperFixture(t *testing.T) {
+	root := findModuleRoot(t)
+	relDir, pattern := sagaStepRunFixturePattern("red_cross_pkg_wrapper")
+	units := collectSagaUnits(t, Fixture(FixtureOpts{}, []string{pattern + "/..."}), false)
+	diags := checkA2Transitive(units)
+
+	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
 
 // posInRanges and collectFuncBodyRanges are defined in shared_helpers.go and

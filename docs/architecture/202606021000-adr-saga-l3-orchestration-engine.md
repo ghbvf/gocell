@@ -106,7 +106,7 @@ D7 是**单向**：用 saga 编排 ⟹ L3；但 L3 不等价于 saga。`accessco
 | 旧 leader 复活继续驱动 | lease fencing（旧 lease 的 `Append`/`MarkTerminal` 必 `ErrSagaStaleLease`）+ `SAGA-DRIVE-BEHIND-LEADER-GATE-01` | ✅ | gate token 仍 AST 门控（Hard 路径 gh #1110） |
 | Compensate 读外部 state / 持事务 | `SAGA-STEP-COMPENSATE-PURE-01` Hard | ✅ | — |
 | 补偿本身失败 | `StatusCompensationFailed` 终态 + `KindStepCompensationFailed`/`KindSagaCompensationFailed`；运维经 `saga_events` 人工介入（runbook `docs/ops/saga-runbook.md`） | ⚠️ | 无自动二级补偿（刻意）——人工 runbook 兜底；自动重试入口未做 |
-| step 在持锁事务内长执行 | `SAGA-STEP-RUN-OUTSIDE-TX-01` A1 Medium（typed 签名身份）+ A2 Medium（跨包传递 taint） | ✅ | A2 helper/FuncLit-var 传递链已覆盖（gh #980）；残留 = func-literal 经函数参数间接（SSA 范畴，未追）；真·Hard（能力类型分裂）成本否决 gh #1997 |
+| step 在持锁事务内长执行 | `SAGA-STEP-RUN-OUTSIDE-TX-01` A1 Medium（typed 签名身份 + executor-pkg sanction 绑定）+ A2 Medium（跨包传递 taint，含 callback-var sink） | ✅ | A2 helper/FuncLit-var/callback-var 传递链已覆盖（gh #980/#1998）；残留三类（func-literal 经函数参数间接 / method-value var / RunInTx 名字匹配）**完整清单以 archtest INVARIANT godoc 为单源**，均 SSA 范畴或保守可接受；真·Hard（能力类型分裂）成本否决 gh #1997 |
 | journal 无界增长 | `Event.MaxPayloadBytes` 64KiB cap；append-only 增长需归档 | ⚠️ | **replay 设计已立项（accepted）**——ADR `202606051200-1609-adr-saga-journal-projection-source.md`（EPIC #1609，model-a）锁定 `saga_events` 投影源设计，**能力本身待 PR-02..06 落地**（#1609 PR-00 仅 ADR，尚未实现/可运维）；**归档/截断** 仍未做，且 #1609 D7 增约束「归档须 ≥ 最慢投影 checkpoint」 |
 | Coordinator 无 leader 误并发 | `WithLeaderElect` option 注入 distlock；缺省 unsafe 模式 `Start()` 打 `UnsafeModeLabel` 警告 | ⚠️ | 刻意设计取舍（非待修缺陷，故无 issue）：unsafe 模式供单进程/开发；生产装配契约 = 必须经 `WithLeaderElect` 注入 leader |
 | coordinator readiness 不可观测 | `ProbeCoordinatorReady` (`saga_coordinator_ready`) 已声明 | ❌ | **未 wired**——coordinator 尚非一等 Cell，cell-side `RegisterReadiness` 待 saga-as-cell 迁移（gh **#978**） |
@@ -118,10 +118,12 @@ D7 是**单向**：用 saga 编排 ⟹ L3；但 L3 不等价于 saga。`accessco
 别名 / defined-type / 裸结构同签名的 StepFunc 调用全部结构性免疫，**旧 B1 反向自检折入 A1 后删除**；A1 评级由原 ADR 记的
 「Hard」**校正为 Medium**（typed CI 扫描的本档；原「Hard」系对 typed scan 的过誉）。A2 由「闭包体直接 `safeRun()` 的 AST 扫描」
 升为 **跨包 reverse-reachability taint**（coordinator + executor 双包，按 `types.Object` 身份），覆盖命名 wrapper 与
-func-literal-var 间接（含 cx-1）。残留 = func-literal 经**函数参数**传入并在另一函数内调用（跨函数数据流 / SSA，框架约定不引）。
-真·Hard 唯一载体（`StepContext`/`TxContext` 能力类型分裂，令在 `RunInTx` 闭包跑 step = 编译错）须重做 kernel 级
-`persistence.TxRunner` 闭包签名、影响全仓 consumer，**成本不成比例已否决**，仅 gh **#1997** 跟踪远期可能性。安全模型不变：
-step 仍永不在持锁事务内执行，纵深 = A1 签名身份 + A2 跨包 taint + `safeRun` 在 executor 包未导出（coordinator 编译层写不出）。
+func-literal-var 间接（含 cx-1）。#1998 内审再补两处 typed 收口：A1 的 sanctioned range 由名字版改为**绑定 executor 包**
+（`*types.Func` 身份，impostor 同名 safeRun 不再放行）；A2 的 RunInTx callback sink 解析**扩到 callback-var**（`cb := func(){…}; RunInTx(ctx, cb)`）。
+**残留完整清单（三类：func-literal 经函数参数间接 / method-value var / RunInTx 名字匹配）以 archtest INVARIANT godoc 为单源**，
+本 ADR 不再另抄以免漂移——均属 SSA 范畴或保守可接受。真·Hard 唯一载体（`StepContext`/`TxContext` 能力类型分裂，令在 `RunInTx`
+闭包跑 step = 编译错）须重做 kernel 级 `persistence.TxRunner` 闭包签名、影响全仓 consumer，**成本不成比例已否决**，仅 gh **#1997** 跟踪。
+安全模型不变：step 仍永不在持锁事务内执行，纵深 = A1 签名身份 + executor-pkg sanction + A2 跨包 taint + `safeRun` 在 executor 包未导出。
 
 ---
 

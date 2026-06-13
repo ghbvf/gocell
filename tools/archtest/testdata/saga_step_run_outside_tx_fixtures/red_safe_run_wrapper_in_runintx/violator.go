@@ -43,3 +43,13 @@ func violatesViaFuncLitVar(ctx context.Context, tx fakeTxRunner) error {
 		return vwrap(txCtx)
 	})
 }
+
+// violatesViaCallbackVar passes a func-literal-valued var (NOT an inline
+// literal) as the RunInTx callback; its body reaches safeRun via wrap. The old
+// inline-only callback scan missed this; the callback is now resolved by name.
+func violatesViaCallbackVar(ctx context.Context, tx fakeTxRunner) error {
+	cb := func(txCtx context.Context) error {
+		return wrap(txCtx)
+	}
+	return tx.RunInTx(ctx, cb)
+}
