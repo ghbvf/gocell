@@ -785,3 +785,76 @@ func TestConverter_StaticCondition_NoRHSInResponse(t *testing.T) {
 	assert.Empty(t, cond.RHSSource, "static condition must emit no rhsSource")
 	assert.Empty(t, cond.RHSKey, "static condition must emit no rhsKey")
 }
+
+// TestConverter_RHSKeyOnly_Rejected is the F2 (#1977) regression: a static "eq"
+// condition that carries a stray rhsKey but no rhsSource must NOT be silently
+// dropped at the converter — rhsKey must be preserved losslessly so domain
+// Condition.Validate rejects the half-formed RHS (static op carrying a
+// cross-attribute reference) → 422. Before the lossless fix the converter
+// dropped rhsKey (rhsSource=="" skipped the copy), downgrading the condition to
+// a valid static eq and silently accepting it (201). Goes through CreateAdapter
+// (bypasses the generated schema validator) to isolate the converter behavior.
+func TestConverter_RHSKeyOnly_Rejected(t *testing.T) {
+	svc := newConverterTestService(t)
+	ctx := testConvAdminCtx()
+	ad := CreateAdapter{s: svc}
+
+	resp, err := ad.Create(ctx, &policyCreate.Request{
+		Name: "RHSKeyOnly",
+		Rules: []*policyCreate.RequestRulesItem{
+			{
+				ID:     "r1",
+				Name:   "Static carrying stray rhsKey",
+				Effect: "allow",
+				Conditions: []*policyCreate.RequestRulesItemConditionsItem{
+					{
+						Source:   "subject",
+						Key:      "dept",
+						Operator: "eq",
+						Values:   []string{"eng"},
+						RHSKey:   "id", // stray rhsKey, no rhsSource — must not be dropped
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	_, ok := resp.(policyCreate.Create422ErrorResponse)
+	assert.True(t, ok, "static condition carrying a stray rhsKey must yield 422 (rhsKey not silently dropped), got %T", resp)
+}
+
+// TestConverter_Update_RHSKeyOnly_Rejected mirrors TestConverter_RHSKeyOnly_Rejected
+// for the UPDATE path.
+func TestConverter_Update_RHSKeyOnly_Rejected(t *testing.T) {
+	svc := newConverterTestService(t)
+	ctx := testConvAdminCtx()
+
+	p, err := svc.Create(ctx, CreateInput{Name: "P", Rules: minimalRules()})
+	require.NoError(t, err)
+
+	ad := UpdateAdapter{s: svc}
+	resp, err := ad.Update(ctx, &policyUpdate.Request{
+		ID:   p.ID,
+		Name: "X",
+		Rules: []*policyUpdate.RequestRulesItem{
+			{
+				ID:     "r1",
+				Name:   "Static carrying stray rhsKey update",
+				Effect: "allow",
+				Conditions: []*policyUpdate.RequestRulesItemConditionsItem{
+					{
+						Source:   "subject",
+						Key:      "dept",
+						Operator: "eq",
+						Values:   []string{"eng"},
+						RHSKey:   "id", // stray rhsKey, no rhsSource
+					},
+				},
+			},
+		},
+		ExpectedVersion: int64(p.Version),
+	})
+	require.NoError(t, err)
+	_, ok := resp.(policyUpdate.Update422ErrorResponse)
+	assert.True(t, ok, "update static condition carrying a stray rhsKey must yield 422, got %T", resp)
+}

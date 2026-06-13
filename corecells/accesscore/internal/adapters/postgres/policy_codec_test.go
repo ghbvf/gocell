@@ -356,6 +356,30 @@ func TestPolicyCodec_OldRowWithoutRHSFields(t *testing.T) {
 	assert.Equal(t, "", cond.RHSKey, "RHSKey must be empty for legacy row")
 }
 
+// TestPolicyCodec_RHSKeyOnlyRow_PreservedAndFailsClosed is the F2 (#1977)
+// regression on the PG decode path: a (tampered/forward-incompatible) persisted
+// row carrying a static "eq" op plus a stray rhsKey but no rhsSource must NOT have
+// rhsKey silently dropped on decode. decodeConditions must preserve rhsKey
+// losslessly so the row's reconstructed condition fails Condition.Validate — which
+// scanPolicy enforces, routing the corrupt row to ErrPGSchemaShape (the evaluator
+// then denies, fail-closed). Before the lossless fix decode dropped rhsKey
+// (rhsSource=="" skipped the copy), downgrading the row to a valid static eq that
+// loaded silently.
+func TestPolicyCodec_RHSKeyOnlyRow_PreservedAndFailsClosed(t *testing.T) {
+	const rhsKeyOnlyRow = `[{"id":"r1","name":"Tampered rule","effect":"allow",` +
+		`"conditions":[{"source":"subject","key":"dept","op":"eq","values":["eng"],"rhsKey":"id"}],` +
+		`"obligations":{}}]`
+
+	got, err := unmarshalRules([]byte(rhsKeyOnlyRow))
+	require.NoError(t, err, "decode itself does not error; the row is rejected by Validate downstream")
+
+	require.Len(t, got, 1)
+	require.Len(t, got[0].Conditions, 1)
+	cond := got[0].Conditions[0]
+	assert.Equal(t, "id", cond.RHSKey, "rhsKey must be preserved losslessly, not silently dropped")
+	assert.Error(t, cond.Validate(), "a static condition carrying a stray RHS reference must fail validation (fail-closed)")
+}
+
 // TestPolicyCodec_UnknownFieldRejected_ConditionLevel reconfirms that an
 // unknown JSON field AT THE CONDITION LEVEL is still rejected after adding
 // rhsSource/rhsKey. Prevents the new fields from accidentally opening the
