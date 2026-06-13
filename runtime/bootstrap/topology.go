@@ -48,8 +48,15 @@ type Topology struct {
 // AdapterMode returns the resolved GOCELL_ADAPTER_MODE: "" (dev) or "real".
 func (t Topology) AdapterMode() string { return t.adapterMode }
 
+// StorageBackendPostgres is the canonical StorageBackend() value that selects the
+// durable (multi-process) storage + event-transport path. It is the single source
+// for the literal that cross-cutting topology gates compare against
+// (cmd/corebundle.durabilityModeForTopology, cap_wiring, cellmodules/eventtransport).
+const StorageBackendPostgres = "postgres"
+
 // StorageBackend returns the resolved GOCELL_CELL_ADAPTER_MODE: "memory" or
-// "postgres". A zero-value Topology returns "" (treated as memory by consumers).
+// "postgres" (StorageBackendPostgres). A zero-value Topology returns "" (treated
+// as memory by consumers).
 func (t Topology) StorageBackend() string { return t.storageBackend }
 
 // SinglePodReplayProtection reports whether the deployment opted into single-pod
@@ -142,7 +149,7 @@ func (t Topology) validate() error {
 	case "memory":
 		// memory allows any adapter mode
 		return nil
-	case "postgres":
+	case StorageBackendPostgres:
 		if t.adapterMode != "real" {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"GOCELL_CELL_ADAPTER_MODE=postgres requires GOCELL_ADAPTER_MODE=real "+
@@ -182,9 +189,9 @@ func (t Topology) RequireProductionControlPlane() bool {
 func (t Topology) AdapterInfo() map[string]string {
 	storageMode := adapterInfoInMemory
 	outboxStorage := adapterInfoInMemory
-	if t.storageBackend == "postgres" {
-		storageMode = "postgres"
-		outboxStorage = "postgres"
+	if t.storageBackend == StorageBackendPostgres {
+		storageMode = StorageBackendPostgres
+		outboxStorage = StorageBackendPostgres
 	}
 
 	effectiveMode := adapterInfoInMemory
@@ -193,9 +200,13 @@ func (t Topology) AdapterInfo() map[string]string {
 	}
 
 	return map[string]string{
-		"mode":           effectiveMode,
-		"storage":        storageMode,
-		"event_bus":      adapterInfoInMemory, // in-process eventbus; relay forwards PG outbox entries into it
+		"mode":    effectiveMode,
+		"storage": storageMode,
+		// Demo default. The composition root overrides this to the real broker
+		// (e.g. "rabbitmq") in postgres topology — Topology is adapter-agnostic and
+		// cannot name a broker, so cmd/corebundle.adapterInfoForSharedDeps does it
+		// from the resolved eventtransport broker resources (#1940).
+		"event_bus":      adapterInfoInMemory,
 		"outbox_storage": outboxStorage,
 	}
 }

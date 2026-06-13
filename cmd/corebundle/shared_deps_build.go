@@ -175,5 +175,13 @@ func adapterInfoForSharedDeps(shared *composition.SharedDeps, locals *cmdLocals)
 	info["service_token_nonce_store"] = nonceStoreKind
 	info["outbox_consumer_claimer"] = claimerKind
 	info["http_idempotency_store"] = httpIdempotencyStore
+	// Event transport: Topology.AdapterInfo() defaults event_bus to "in-memory"
+	// (the demo transport). postgres topology resolves a real broker via
+	// eventtransport.Resolve, surfaced here as a non-empty brokerResources slice;
+	// override so the startup log + /readyz?verbose report the ACTUAL transport
+	// rather than a stale "in-memory" label (#1940).
+	if len(locals.brokerResources) > 0 {
+		info["event_bus"] = "rabbitmq"
+	}
 	return info
 }

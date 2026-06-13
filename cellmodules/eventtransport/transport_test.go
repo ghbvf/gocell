@@ -141,6 +141,26 @@ func TestResolve_Postgres_RabbitMQ_BundlesConnAsResource(t *testing.T) {
 	require.NoError(t, tr.Resources[0].Close(context.Background()))
 }
 
+func TestDLXExchange_StableName(t *testing.T) {
+	t.Parallel()
+	// The DLX exchange name is an operations contract (broker topology); pin it so
+	// a drift is a deliberate, reviewed change (renaming requires migrating in-flight
+	// dead letters). The rabbitmq adapter fail-fasts at Setup if it is empty.
+	assert.Equal(t, "gocell.events.dlx", dlxExchange)
+	assert.NotEmpty(t, dlxExchange, "DLXExchange must be non-empty or rabbitmq Setup fail-fasts")
+}
+
+func TestDispatchTransport_UnhandledBrokerKind_FailClosed(t *testing.T) {
+	t.Parallel()
+	// White-box: resolveBrokerSpec can only emit the two valid kinds, so the
+	// fail-closed default is unreachable via Resolve. Exercise it directly to prove
+	// a future brokerKind added without a dispatch arm refuses to start (rather than
+	// silently falling back to a wrong transport).
+	_, err := dispatchTransport(clock.Real(), brokerSpec{kind: brokerKind(99)}, Config{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unhandled broker kind")
+}
+
 func TestResolve_Postgres_RabbitMQ_DialFailureFailsFast(t *testing.T) {
 	t.Parallel()
 

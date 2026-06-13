@@ -71,8 +71,11 @@ func runtimeBaseOptions(
 		opts = append(opts, bootstrap.WithManagedResource(locals.poolMR))
 	}
 	// Event-transport broker resources (the RabbitMQ connection in postgres mode;
-	// empty in demo mode) join poolMR as FIRST ManagedResources so LIFO teardown
-	// closes the broker LAST — after the relay and every consumer drains (#1940).
+	// empty in demo mode) register among the FIRST ManagedResources (right after
+	// poolMR), so LIFO teardown closes the broker LATE — after the relay and every
+	// consumer that publishes/subscribes through it drain (those register later via
+	// cell opts → close first), and before the PG pool (registered first → closes
+	// truly last) (#1940).
 	for _, mr := range locals.brokerResources {
 		opts = append(opts, bootstrap.WithManagedResource(mr))
 	}

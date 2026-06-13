@@ -12,12 +12,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
-// storageBackendPostgres is the bootstrap.Topology.StorageBackend() value that
-// selects the durable (multi-process) transport. Mirrors the same literal used
-// by cmd/corebundle.durabilityModeForTopology — both gate on the postgres
-// backend.
-const storageBackendPostgres = "postgres"
-
 // dlxExchange is the dead-letter exchange the RabbitMQ subscriber declares for
 // every subscription. The adapter REQUIRES a non-empty DLXExchange at Setup time
 // (rejected/poison messages — outbox.Reject after the retry budget — are routed
@@ -84,7 +78,7 @@ type brokerSpec struct {
 // broker URL — a missing URL is a fail-closed startup error, never a silent
 // in-memory fallback (#1940's core invariant).
 func resolveBrokerSpec(topo bootstrap.Topology, cfg Config) (brokerSpec, error) {
-	if topo.StorageBackend() != storageBackendPostgres {
+	if topo.StorageBackend() != bootstrap.StorageBackendPostgres {
 		return brokerSpec{kind: brokerInMemory}, nil
 	}
 	if cfg.AMQPURL == "" {
@@ -111,7 +105,14 @@ func Resolve(clk clock.Clock, topo bootstrap.Topology, cfg Config) (Transport, e
 	if err != nil {
 		return Transport{}, err
 	}
+	return dispatchTransport(clk, spec, cfg)
+}
 
+// dispatchTransport constructs the Transport for an already-resolved brokerSpec.
+// Split out of Resolve so the fail-closed default arm is reachable by a white-box
+// test (resolveBrokerSpec only ever emits the two valid kinds, so the default is
+// otherwise unreachable through the public API).
+func dispatchTransport(clk clock.Clock, spec brokerSpec, cfg Config) (Transport, error) {
 	switch spec.kind {
 	case brokerInMemory:
 		eb := eventbus.New(clk)
@@ -124,7 +125,7 @@ func Resolve(clk clock.Clock, topo bootstrap.Topology, cfg Config) (Transport, e
 		// future broker kind is added to resolveBrokerSpec but its dispatch arm is
 		// forgotten here, refuse to start rather than silently fall back to a wrong
 		// transport.
-		return Transport{}, errcode.New(errcode.KindInternal, errcode.ErrValidationFailed,
+		return Transport{}, errcode.New(errcode.KindInternal, errcode.ErrInternal,
 			"eventtransport: unhandled broker kind (programmer error: a new brokerKind "+
 				"was added to resolveBrokerSpec without a Resolve dispatch arm)")
 	}
