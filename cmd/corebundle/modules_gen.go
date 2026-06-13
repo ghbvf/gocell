@@ -8,6 +8,7 @@ import (
 	cellmodulesconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"
 	cellmodulessyscore "github.com/ghbvf/gocell/cellmodules/syscore"
 	"github.com/ghbvf/gocell/runtime/capability"
+	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
 )
 
@@ -35,14 +36,25 @@ func generatedCapabilities() []capability.Kind {
 
 // generatedProjectionSourceTopics is the sorted set of outbox-projection contract
 // ids (== routing topics) declared across the assembly cells' slice.yaml
-// contractUsages (role: subscribe, projection set, projectionSource outbox/empty;
-// saga-journal excluded). The composition root injects it into the journaling
-// outbox writer decorator so only events a projection will replay are double-written
-// to the durable projection_events journal (EPIC #1504 D4). Derived, never
-// hand-maintained (PROJECTION-EVENT-JOURNAL-TOPIC-ALLOWLIST-DERIVED-01); adding a
-// projection auto-enrolls its topic on the next `gocell generate assembly`, and
-// `--verify` red-flags stale output. ALWAYS emitted (nil when empty) so the
-// decorator wiring can call it unconditionally.
+// contractUsages (role: subscribe, projection set, projectionSource: outbox (empty
+// fails generation closed; saga-journal excluded)). The composition root injects
+// it into the journaling outbox writer decorator so only events a projection will
+// replay are double-written to the durable projection_events journal (EPIC #1504
+// D4). Derived, never hand-maintained
+// (PROJECTION-EVENT-JOURNAL-TOPIC-ALLOWLIST-DERIVED-01); adding a projection
+// auto-enrolls its topic on the next `gocell generate assembly`, and `--verify`
+// red-flags stale output. ALWAYS emitted (nil when empty) so the decorator wiring
+// can call it unconditionally.
 func generatedProjectionSourceTopics() []string {
 	return nil
+}
+
+// generatedDeploymentTopology returns the assembly's codegen-derived deployment
+// placement spec (single-sourced from assembly.yaml topology, derived by
+// `gocell generate assembly`). Empty topology => all cells co-located (zero-
+// migration default). Composition root injects it via
+// bootstrap.WithDeploymentTopology; phase0 seals and validates it. ALWAYS
+// emitted so the composition root can call it unconditionally.
+func generatedDeploymentTopology() bootstrap.DeploymentTopologySpec {
+	return bootstrap.DeploymentTopologySpec{}
 }

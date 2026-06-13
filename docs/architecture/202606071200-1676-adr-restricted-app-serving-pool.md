@@ -193,7 +193,7 @@ across tenants").
 **Why this is NOT a no-BYPASSRLS-invariant violation.** The role is itself
 `NOBYPASSRLS`. Its cross-tenant visibility comes from a **role-scoped permissive
 RLS policy** `audit_admin_read_all ON audit_entries FOR SELECT TO gocell_audit_admin
-USING (true)` (migration 064), not from the `BYPASSRLS` attribute the §Context
+USING (true)` (migration 065), not from the `BYPASSRLS` attribute the §Context
 threat model bans. The distinction is load-bearing:
 
 - `BYPASSRLS` disables RLS for **every table and every query** the role makes —
@@ -207,11 +207,11 @@ threat model bans. The distinction is load-bearing:
 `gocell_app`'s effective predicate and `FORCE ROW LEVEL SECURITY` are **byte-for-byte
 unchanged** — a role-listed permissive policy is invisible to other roles. An
 integration test asserts `gocell_app` still cannot read another tenant's audit rows
-after migration 064.
+after migration 065.
 
 **Provisioning.** `deploy/postgres/init/10-restricted-role.sh` also creates
 `gocell_audit_admin` (password via `GOCELL_AUDIT_ADMIN_PASSWORD`, no fallback). The
-role is **optional**: where it is not provisioned, migration 064 is a no-op
+role is **optional**: where it is not provisioned, migration 065 is a no-op
 (role-guarded) and super-admin cross-tenant reads stay fail-closed at HTTP 501. The
 admin pool is `NOBYPASSRLS`, so the existing `postgres_app_role_restricted_ready`
 probe's intent (no BYPASSRLS in the deployment) is upheld for it too; the admin

@@ -106,13 +106,15 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// 062 drops devices.renewal_requested_epoch (stateless cert-renewal producer, #1820).
 	// 063 creates the global webhook_sources table (encrypted webhook source secret store,
 	// NO tenant/RLS, NO plaintext column) for the persistent SourceStore backing (#1540).
-	// 064 adds the role-scoped permissive SELECT policy audit_admin_read_all on
+	// 064 adds saga_events.global_seq BIGINT GENERATED ALWAYS AS IDENTITY + idx_saga_events_global_seq
+	// for the ordered GlobalReader scan (EPIC #1609 PR-PG Batch 1, #1630).
+	// 065 adds the role-scoped permissive SELECT policy audit_admin_read_all on
 	// audit_entries and GRANTs SELECT to gocell_audit_admin for cross-tenant audit
 	// reads (#1810). Both steps are wrapped in IF EXISTS guards — inert where the role
 	// is absent. schema_guard.go verifyRLS expects this second policy ONLY when
 	// gocell_audit_admin is provisioned, preserving the #1622 F1 invariant.
-	assert.Equal(t, int64(64), v,
-		"expected version should be exactly 64 (current migration max — 064_audit_admin_read_role)")
+	assert.Equal(t, int64(65), v,
+		"expected version should be exactly 65 (current migration max — 065_audit_admin_read_role)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {
@@ -591,7 +593,7 @@ func rlsPolicySystemWith(mut func(*rlsPolicyRow)) []rlsPolicyRow {
 }
 
 // auditAdminPolicyOK returns the well-formed audit_admin_read_all policy shape
-// (migration 064, #1810) — the positive control for checkRLSPolicyShape when
+// (migration 065, #1810) — the positive control for checkRLSPolicyShape when
 // the gocell_audit_admin role is provisioned.
 func auditAdminPolicyOK() rlsPolicyRow {
 	return rlsPolicyRow{
@@ -721,7 +723,7 @@ func TestCheckRLSPolicyShape(t *testing.T) {
 		},
 
 		// ---------------------------------------------------------------------------
-		// audit_admin_read_all policy variant (#1810, migration 064):
+		// audit_admin_read_all policy variant (#1810, migration 065):
 		// Two-policy branch — role present means the second policy is expected.
 		// ---------------------------------------------------------------------------
 

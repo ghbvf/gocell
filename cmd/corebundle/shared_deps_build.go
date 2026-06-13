@@ -9,19 +9,10 @@ import (
 	kauth "github.com/ghbvf/gocell/kernel/auth"
 
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/idempotency"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
-
-type sharedReplayDeps struct {
-	RedisClient     *adapterredis.Client
-	NonceStore      kauth.NonceStore
-	ConsumerClaimer idempotency.Claimer
-}
 
 type sharedMetricsDeps struct {
 	PromStack            promStack
@@ -55,36 +46,6 @@ func buildSharedMetricsDeps() (sharedMetricsDeps, error) {
 	}, nil
 }
 
-func buildSharedReplayDeps(ctx context.Context, topo bootstrap.Topology, clk clock.Clock) (sharedReplayDeps, error) {
-	redisResult, err := buildRedisClient(ctx, topo)
-	if err != nil {
-		return sharedReplayDeps{}, err
-	}
-	redisClient := redisResult.Client
-	loaded := false
-	defer func() {
-		if !loaded {
-			closeRedisClientAfterFailedLoad(ctx, redisClient)
-		}
-	}()
-
-	nonceStore, err := buildServiceNonceStore(topo, redisClient, clk)
-	if err != nil {
-		return sharedReplayDeps{}, err
-	}
-	claimer, err := buildConsumerClaimer(topo, redisClient, clk)
-	if err != nil {
-		return sharedReplayDeps{}, err
-	}
-
-	loaded = true
-	return sharedReplayDeps{
-		RedisClient:     redisClient,
-		NonceStore:      nonceStore,
-		ConsumerClaimer: claimer,
-	}, nil
-}
-
 // resolveListenerAddrs returns primary / internal / health bind addresses,
 // applying default ports when the matching env var is unset:
 //
@@ -115,13 +76,13 @@ func resolveListenerAddrs() (primary, internal, health string) {
 }
 
 // closeRedisClientAfterFailedLoad is the single source of truth for "close
-// Redis with nil-safe + slog warn". Three callers, all following the same
-// `if !ok { close }` defer pattern: one inside buildSharedReplayDeps for
-// inner-construction failure, one in LoadSharedDepsFromEnv for outer-composition
-// failure after replay deps are already attached, and one in runCorebundle's
-// startup-abort defer (covering the window from a successful Load to bootstrap.Run
-// taking ownership — provisionCapabilities / composition.Build / option wiring).
-// The structure is mirrored at every site so the scopes can be visually compared.
+// Redis with nil-safe + slog warn". Two callers, both following the same
+// `if !loaded { close }` defer pattern: one in LoadSharedDepsFromEnv for
+// outer-composition failure after replaydeps.Resolve succeeds, and one in
+// runCorebundle's startup-abort defer (covering the window from a successful Load
+// to bootstrap.Run taking ownership — provisionCapabilities / composition.Build /
+// option wiring). The structure is mirrored at every site so the scopes can be
+// visually compared.
 func closeRedisClientAfterFailedLoad(ctx context.Context, client *adapterredis.Client) {
 	if client == nil {
 		return

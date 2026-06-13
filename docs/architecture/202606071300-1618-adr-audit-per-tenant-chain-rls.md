@@ -313,7 +313,7 @@ role cannot enumerate tenants" — is resolved WITHOUT relaxing that role:
 
 - A dedicated PG role `gocell_audit_admin` (still **NOSUPERUSER NOBYPASSRLS**) gets
   a **role-scoped permissive** RLS SELECT policy `audit_admin_read_all ON
-  audit_entries FOR SELECT TO gocell_audit_admin USING (true)` (migration 064,
+  audit_entries FOR SELECT TO gocell_audit_admin USING (true)` (migration 065,
   role-guarded no-op idiom). PostgreSQL permissive policies are OR-ed and a
   role-listed policy applies ONLY to that role, so this role reads every tenant
   while `gocell_app`'s effective predicate + FORCE RLS are **byte-for-byte
@@ -355,7 +355,7 @@ tests, and `auditquery` super-admin 200/501 + single-FR-007-audit handler tests.
 ## References
 
 - Migration: `adapters/postgres/migrations/055_audit_entries_per_tenant_rls.sql`,
-  `064_audit_admin_read_role.sql` (#1810 role-scoped admin read policy)
+  `065_audit_admin_read_role.sql` (#1810 role-scoped admin read policy)
 - RLS templates: 052 (config) / 053 (accesscore); restricted role: ADR `202606071200-1676`
 - Cross-tenant read (#1810): ADR `202606131900-1810-adr-super-admin-cross-tenant-audit-read`
 - Sealed cross-tenant obligation (#1760): `pkg/tenant/rowvisibility.go`,

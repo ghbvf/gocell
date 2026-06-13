@@ -18,9 +18,9 @@ import (
 // A missing secret returns ErrControlplaneServiceSecretMissing regardless of
 // the adapterMode parameter — there is no dev-mode silent bypass.
 //
-// The ring + the NonceStore (built separately in buildServiceNonceStore) are the
-// two components of the internal-listener service-token guard. Both are placed
-// on composition.SharedDeps (InternalHMACRing + NonceStore) so that the
+// The ring + the NonceStore (built by replaydeps.Resolve) are the two components
+// of the internal-listener service-token guard. Both are placed on
+// composition.SharedDeps (InternalHMACRing + NonceStore) so that the
 // composition-contract control-plane validation can introspect NonceStore.Kind()
 // at startup and reject a NoopNonceStore / single-process store in a multi-pod
 // real deployment — see runtime/composition.SharedDeps.validateProductionControlPlane.

@@ -1,4 +1,4 @@
--- Migration 064: role-scoped audit admin read policy for cross-tenant audit reads
+-- Migration 065: role-scoped audit admin read policy for cross-tenant audit reads
 -- (#1810 super-admin cross-tenant audit read, DB layer).
 --
 -- WHY a separate permissive SELECT policy (not BYPASSRLS):

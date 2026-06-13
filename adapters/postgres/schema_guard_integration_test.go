@@ -1408,7 +1408,7 @@ func TestMigration055_DestructiveDownPermitRejection(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Migration 064 schema_guard audit_admin_read_all policy verification (#1810)
+// Migration 065 schema_guard audit_admin_read_all policy verification (#1810)
 // ---------------------------------------------------------------------------
 
 // pgRoleExists reports whether the named role exists in pg_roles.
@@ -1426,7 +1426,7 @@ func pgRoleExists(t *testing.T, pool *Pool, rolname string) bool {
 // clause) and may hold table/schema grants; a bare DROP ROLE therefore fails with
 // a dependency error and LEAKS the global role into sibling tests — which then see
 // the role present and make verifyRLS expect the 2-policy shape on a role-less DB
-// (breaking TestRLSForce / TestMigration064_SchemaGuard_RoleAbsent), and makes the
+// (breaking TestRLSForce / TestMigration065_SchemaGuard_RoleAbsent), and makes the
 // next CREATE ROLE fail with "already exists". Dropping the policy and revoking the
 // role's privileges (DROP OWNED BY, current DB) FIRST lets DROP ROLE succeed.
 // Best-effort: errors are ignored (e.g. when the role was never created).
@@ -1437,7 +1437,7 @@ func dropAuditAdminRole(pool *Pool) {
 	_, _ = pool.DB().Exec(ctx, `DROP ROLE IF EXISTS `+auditAdminRole)
 }
 
-// TestMigration064_SchemaGuard_RoleAbsent verifies that after migration 064 is
+// TestMigration065_SchemaGuard_RoleAbsent verifies that after migration 065 is
 // applied in an environment where gocell_audit_admin is NOT provisioned:
 //   - The migration is a no-op (no audit_admin_read_all policy is created).
 //   - VerifyExpectedShape passes (the guard treats the absent-role case as
@@ -1445,16 +1445,16 @@ func dropAuditAdminRole(pool *Pool) {
 //
 // This is the primary regression guard for environments without the admin role
 // (dev/CI without the deploy init script, testcontainer migrations).
-func TestMigration064_SchemaGuard_RoleAbsent(t *testing.T) {
+func TestMigration065_SchemaGuard_RoleAbsent(t *testing.T) {
 	pool := emptyPool(t)
 	ctx := context.Background()
 
-	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_064_role_absent")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_065_role_absent")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "all migrations must apply cleanly through 064")
 
 	// The testcontainer superuser does NOT create gocell_audit_admin, so the
-	// role must be absent and the migration 064 is a no-op.
+	// role must be absent and the migration 065 is a no-op.
 	require.False(t, pgRoleExists(t, pool, "gocell_audit_admin"),
 		"gocell_audit_admin must not exist in the testcontainer (no init script)")
 
@@ -1467,18 +1467,18 @@ func TestMigration064_SchemaGuard_RoleAbsent(t *testing.T) {
 	assert.NoError(t, err, "VerifyExpectedShape must pass with gocell_audit_admin absent (migration no-op)")
 }
 
-// TestMigration064_SchemaGuard_ExtraUnexpectedPolicy_StillFails verifies that
+// TestMigration065_SchemaGuard_ExtraUnexpectedPolicy_StillFails verifies that
 // the #1622 F1 invariant is NOT weakened by the audit admin policy feature:
 // an unexpected extra permissive policy on audit_entries (one that is NOT the
 // well-formed audit_admin_read_all) causes VerifyExpectedShape to fail — even
 // when gocell_audit_admin is absent.
 //
 // This is the synthetic RED case: it proves the security guard is not weakened.
-func TestMigration064_SchemaGuard_ExtraUnexpectedPolicy_StillFails(t *testing.T) {
+func TestMigration065_SchemaGuard_ExtraUnexpectedPolicy_StillFails(t *testing.T) {
 	pool := emptyPool(t)
 	ctx := context.Background()
 
-	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_064_extra_policy")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_065_extra_policy")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "all migrations must apply cleanly through 064")
 
@@ -1504,37 +1504,37 @@ func TestMigration064_SchemaGuard_ExtraUnexpectedPolicy_StillFails(t *testing.T)
 		"error code must be ErrAdapterPGSchemaShape for the unexpected extra policy")
 }
 
-// TestMigration064_SchemaGuard_RolePresent verifies that when gocell_audit_admin
-// IS provisioned (manually created in the test) AND migration 064 has been applied:
+// TestMigration065_SchemaGuard_RolePresent verifies that when gocell_audit_admin
+// IS provisioned (manually created in the test) AND migration 065 has been applied:
 //   - Both the tenant_isolation and audit_admin_read_all policies are present.
 //   - VerifyExpectedShape passes with the two-policy shape.
 //
 // This test creates and drops the gocell_audit_admin role within the test, then
-// re-applies migration 064 (which is idempotent in the role-present case via
+// re-applies migration 065 (which is idempotent in the role-present case via
 // DO $$ IF EXISTS $$ END $$). Requires superuser (testcontainer default postgres).
-func TestMigration064_SchemaGuard_RolePresent(t *testing.T) {
+func TestMigration065_SchemaGuard_RolePresent(t *testing.T) {
 	pool := emptyPool(t)
 	ctx := context.Background()
 
 	// Apply all migrations up to but NOT including 064 so we can control when
 	// the role exists vs when 064 runs.
 	fsys063 := migrationsUpToFS(t, 63)
-	migrator063, err := newMigratorForTable(pool, fsys063, "schema_migrations_064_role_present")
+	migrator063, err := newMigratorForTable(pool, fsys063, "schema_migrations_065_role_present")
 	require.NoError(t, err)
 	require.NoError(t, migrator063.Up(ctx), "migrations through 063 must apply cleanly")
 
-	// Create the gocell_audit_admin role as the superuser so migration 064's
+	// Create the gocell_audit_admin role as the superuser so migration 065's
 	// IF EXISTS guard fires. NOSUPERUSER + NOBYPASSRLS mirrors 10-restricted-role.sh.
 	_, execErr := pool.DB().Exec(ctx,
 		`CREATE ROLE gocell_audit_admin LOGIN PASSWORD 'test-audit-admin-pw' NOSUPERUSER NOBYPASSRLS`)
 	require.NoError(t, execErr, "creating gocell_audit_admin must succeed as superuser")
 	t.Cleanup(func() { dropAuditAdminRole(pool) })
 
-	// Now apply migration 064. The IF EXISTS guard fires and creates the policy + GRANT.
+	// Now apply migration 065. The IF EXISTS guard fires and creates the policy + GRANT.
 	fsys064 := testMigrationsFS(t)
-	migrator064, err := newMigratorForTable(pool, fsys064, "schema_migrations_064_role_present")
+	migrator064, err := newMigratorForTable(pool, fsys064, "schema_migrations_065_role_present")
 	require.NoError(t, err)
-	require.NoError(t, migrator064.Up(ctx), "migration 064 must apply cleanly with role present")
+	require.NoError(t, migrator064.Up(ctx), "migration 065 must apply cleanly with role present")
 
 	// Both policies must now be present.
 	assert.True(t, pgPolicyExists(t, pool, "audit_entries", "tenant_isolation"),

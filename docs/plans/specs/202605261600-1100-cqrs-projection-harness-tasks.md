@@ -90,9 +90,8 @@
   - [ ] migration 编号 = 当前 max + 1（查 `adapters/postgres/migrations/`）
   - [ ] schema 含 `owner TEXT NOT NULL DEFAULT ''` 列（v1 预留，参照 ADR §Q5）
   - [ ] `SaveOffset` 强制使用 `persistence.TxFromContext(ctx)` 获取 tx，不自建连接
-  - [ ] **v1 PG 写路径 INSERT/UPDATE 不含 owner 列**（PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01 archtest 守卫）
+  - [ ] **SaveOffset INSERT/UPDATE 不含 owner 列**（`OwnerCheckpointStore.AdvanceIfOwner` 是唯一 owner 写路径；`PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01` archtest 已在 #1630 Batch 2 退役，替换为 `SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01`）
   - [ ] PROJECTION-CHECKPOINT-TX-BOUND-01 archtest 转 green
-  - [ ] PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01 archtest 新增 + 反向自检
 - **行数**：~820
 
 ### T-02-2 testcontainers integration test

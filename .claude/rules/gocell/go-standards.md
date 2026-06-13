@@ -60,7 +60,9 @@ L2 覆盖由 `L2-OUTBOX-ATOMICITY-COVERAGE-01` 守卫。
 
 - 已提交 migration 只增不改；例外必须有 ADR 说明。
 - 新字段必须有默认值或允许 NULL。
-- 大表索引用 `CREATE INDEX CONCURRENTLY`。
+- 索引形态按阶段：pre-GA / 有序 migration 集 / 新建或空表用普通 `CREATE INDEX`（留在事务型
+  migration）；CONCURRENTLY 仅用于 post-GA 给已填充、有在线流量的生产表加索引。详见
+  `adapters/postgres/migrations/README.md` §规则 0。
 - 文件命名：`{序号}_{动词}_{对象}.sql`。
 
 ## 安全检查点

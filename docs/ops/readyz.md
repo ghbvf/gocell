@@ -399,9 +399,9 @@ role ignores all policies at runtime even if the schema is correct.
 
 ref: `docs/architecture/202606071200-1676-adr-restricted-app-serving-pool.md` §Decision.
 
-#### Migration 064 and the optional `gocell_audit_admin` role (#1810)
+#### Migration 065 and the optional `gocell_audit_admin` role (#1810)
 
-Migration 064 adds the `audit_admin_read_all` RLS policy on `audit_entries`. Its
+Migration 065 adds the `audit_admin_read_all` RLS policy on `audit_entries`. Its
 schema-guard validation via `schema_guard.VerifyExpectedShape` applies only when
 the `gocell_audit_admin` role exists in the database:
 
@@ -411,8 +411,8 @@ the `gocell_audit_admin` role exists in the database:
   `tenant_isolation` policy from migration 055). No `/readyz` impact.
 - **Role present, policy installed**: `schema_guard.VerifyExpectedShape` expects 2 RLS
   policies on `audit_entries` (`tenant_isolation` + `audit_admin_read_all`). If the role
-  was provisioned after migration 064 ran (i.e. the role did not exist when goose applied
-  migration 064, so the policy body was skipped), the expected policy count mismatches and
+  was provisioned after migration 065 ran (i.e. the role did not exist when goose applied
+  migration 065, so the policy body was skipped), the expected policy count mismatches and
   `/readyz` returns **503** via `postgres_app_role_restricted_ready` (schema drift).
   Remediation: apply the policy and grant directly — goose will not re-run an
   already-recorded migration version, so run the following SQL as the database owner
@@ -442,7 +442,7 @@ When provisioned (`GOCELL_AUDIT_ADMIN_DSN` set), the `gocell_audit_admin` admin 
 contributes one `/readyz` probe: **`postgres_audit_admin_restricted_ready`**. It reuses the
 serving pool's restricted-role check (`Pool.AppRoleRestrictedCheck`) to assert the admin
 pool's `current_user` is neither a superuser nor `BYPASSRLS` — the role must read
-cross-tenant via the role-scoped permissive RLS policy (migration 064), never via
+cross-tenant via the role-scoped permissive RLS policy (migration 065), never via
 `BYPASSRLS` (ADR #1676). The probe doubles as the admin pool's liveness signal (it issues
 a `pg_roles` query), so a pool connectivity failure or a mis-provisioned (superuser /
 BYPASSRLS) admin role turns `/readyz` red rather than only surfacing as a 5xx on a

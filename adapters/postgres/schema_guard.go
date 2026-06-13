@@ -81,9 +81,11 @@ const gotWantQuotedFmt = "got %q want %q"
 //   - saga_events        (040)  append-only saga event log
 //                                 + PK(instance_id, version) + FK→saga_instances(id) ON DELETE CASCADE
 //                                 + saga_events_kind_range, saga_events_version_positive CHECK
+//                                 + global_seq BIGINT GENERATED ALWAYS AS IDENTITY + idx_saga_events_global_seq
+//                                   (064_add_saga_events_global_seq.sql, EPIC #1609 PR-PG)
 //   - projection_checkpoints (045)  CQRS projection harness consumed-offset store
 //                                 + PK(cell_id, projection_id)
-//                                 + owner column reserved, write-guarded (v1 never writes it; reads harmless; ADR §Q5)
+//                                 + owner column activated by OwnerCheckpointStore.AdvanceIfOwner (PR-PG #1630)
 //   - projection_events  (058)  durable append-only projection event journal (#1504)
 //                                 + global_seq BIGINT GENERATED ALWAYS AS IDENTITY PK
 //                                 + idx_projection_events_id UNIQUE(id) (idempotency / cursor key)
@@ -442,7 +444,7 @@ type expectedRLS struct {
 	SystemRowsReadable bool
 	// AuditAdminPolicy, when non-empty, names a second role-scoped PERMISSIVE
 	// SELECT policy that is expected on this table ONLY when the
-	// gocell_audit_admin PG role is provisioned (#1810, migration 064).
+	// gocell_audit_admin PG role is provisioned (#1810, migration 065).
 	//
 	// Security invariant: the guard enforces BOTH directions —
 	//   - role present  → policy MUST be present with the exact expected shape
@@ -667,9 +669,14 @@ var expectedColumns = []expectedColumn{
 	{Table: "saga_events", Column: "step_name", Type: "text", NotNull: false},
 	{Table: "saga_events", Column: "payload", Type: "bytea", NotNull: false},
 	{Table: "saga_events", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
+	// global_seq is GENERATED ALWAYS AS IDENTITY (064_add_saga_events_global_seq.sql,
+	// EPIC #1630 PR-PG). Identity:true guards the GENERATED ALWAYS write contract —
+	// the insertEvent query omits global_seq and relies on auto-assign, mirroring
+	// outbox_entries.seq and projection_events.global_seq (F5 / review finding F1).
+	{Table: "saga_events", Column: "global_seq", Type: "bigint", NotNull: true, Identity: true}, // 064 NEW
 	// projection_checkpoints (045_create_projection_checkpoints.sql) — CQRS projection
-	// harness consumed-offset store. owner is reserved for v1.1 multi-pod claim and is
-	// NOT written by the v1 adapter (PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01).
+	// harness consumed-offset store. owner is now written by
+	// OwnerCheckpointStore.AdvanceIfOwner (activated in PR-PG, #1630 Batch 2).
 	{Table: "projection_checkpoints", Column: "cell_id", Type: "text", NotNull: true},
 	{Table: "projection_checkpoints", Column: "projection_id", Type: "text", NotNull: true},
 	{Table: "projection_checkpoints", Column: "offset_seq", Type: "bigint", NotNull: true},
@@ -779,11 +786,14 @@ var expectedPKs = []expectedPK{
 // expectedDefaults is the load-bearing column-default registry. Only defaults a
 // write path relies upon by omitting the column are registered here.
 var expectedDefaults = []expectedDefault{
-	// projection_checkpoints.owner (045) — the v1 upsert OMITS owner (forbidden by
-	// PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01), so the column's NOT NULL
-	// constraint is only satisfiable via this DEFAULT ''. A dropped/changed default
-	// would make the first SaveOffset fail at write time; asserting it here surfaces
-	// the drift at startup (readyz) instead.
+	// projection_checkpoints.owner (045) — SaveOffset (upsertCheckpointSQL) OMITS
+	// the owner column so its NOT NULL constraint is satisfied solely by this
+	// DEFAULT ''. AdvanceIfOwner always supplies owner explicitly and is never
+	// affected by the default. A dropped/changed default would make every
+	// SaveOffset call fail at write time; asserting it here surfaces the drift at
+	// startup (readyz) instead. (PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01
+	// was the v1-scoped archtest guard for this omission; it was retired in #1630
+	// Batch 2 when AdvanceIfOwner activated the write path.)
 	{Table: "projection_checkpoints", Column: "owner", Default: "''::text"},
 	// users.password_version (022 → 050 rebuild) — insertUserSQL omits this column
 	// and relies on DEFAULT 0 to satisfy the NOT NULL constraint (migration 033
@@ -871,6 +881,9 @@ var expectedIndexes = []expectedIndex{
 	{Table: "commands", Name: "idx_commands_idempotency_key", Unique: true, Columns: []string{"(expr)"}},
 	// saga_instances (040_create_saga_tables.sql) — partial index over claimable rows.
 	{Table: "saga_instances", Name: "idx_saga_instances_claimable", Unique: false, Columns: []string{"started_at", "id"}},
+	// saga_events (064_add_saga_events_global_seq.sql) — GlobalReader ordered range scan
+	// and uniqueness enforcement (EPIC #1630 PR-PG, review finding F1).
+	{Table: "saga_events", Name: "idx_saga_events_global_seq", Unique: true, Columns: []string{"global_seq"}},
 	// config_entries (051_configcore_tenant_id.sql — DROP+CREATE rebuild).
 	// config_entries_tenant_id_uq is an inline CONSTRAINT UNIQUE (tenant_id, id);
 	// PG creates a backing index with the same name.
@@ -1019,7 +1032,7 @@ var expectedRLSTables = []expectedRLS{
 	// audit_entries (migration 055, #1618): SystemRowsReadable variant — the
 	// `OR tenant_id = ''` clause keeps tenant-less system/framework rows readable
 	// by every tenant AND insertable by the GUC-unset pre-auth appender.
-	// AuditAdminPolicy (migration 064, #1810): role-scoped PERMISSIVE SELECT
+	// AuditAdminPolicy (migration 065, #1810): role-scoped PERMISSIVE SELECT
 	// policy that allows gocell_audit_admin to read all tenants' rows. The
 	// guard expects this second policy ONLY when gocell_audit_admin is
 	// provisioned; it is absent (migration no-op) in environments without the role.
@@ -1074,7 +1087,7 @@ func verifyRLS(ctx context.Context, pool *Pool) error {
 }
 
 // auditAdminRole is the PostgreSQL role name for the dedicated cross-tenant
-// audit read pool (#1810, migration 064). It is referenced by the role-existence
+// audit read pool (#1810, migration 065). It is referenced by the role-existence
 // guard in verifyRLSPolicy and by the expected shape of the audit_admin_read_all
 // policy in checkRLSPolicyShape.
 const auditAdminRole = "gocell_audit_admin"
@@ -1093,7 +1106,7 @@ const auditAdminRole = "gocell_audit_admin"
 //     SELECT, applied to gocell_audit_admin, USING(true), no WITH CHECK. The guard
 //     queries pg_roles to determine role presence (same approach as migration 058's
 //     DO-block role guard). When the role is absent the policy must also be absent
-//     (migration 064 is a no-op there); an unexpected extra permissive policy still
+//     (migration 065 is a no-op there); an unexpected extra permissive policy still
 //     fails the guard (#1622 F1 invariant maintained for every table).
 //
 // Presence-by-name only (the pre-#1622 form) passed all of the above defects.
@@ -1173,7 +1186,7 @@ func verifyRLSPolicy(ctx context.Context, pool *Pool, r expectedRLS) error {
 //     (PERMISSIVE, SELECT, gocell_audit_admin, USING(true), no WITH CHECK).
 //
 //   - When r.AuditAdminPolicy != "" AND !auditAdminRolePresent:
-//     exactly one policy is expected (role absent → migration 064 is a no-op;
+//     exactly one policy is expected (role absent → migration 065 is a no-op;
 //     the admin policy must be absent). An unexpected extra permissive policy
 //     still fails, preserving the #1622 F1 invariant.
 //
@@ -1277,7 +1290,7 @@ func checkNamedAuditAdminPolicy(r expectedRLS, policies []rlsPolicyRow) error {
 }
 
 // checkAuditAdminPolicyShape validates the role-scoped audit admin read-all
-// policy (migration 064, #1810). Expected shape:
+// policy (migration 065, #1810). Expected shape:
 //
 //   - PERMISSIVE (OR-ed with other policies — does not affect gocell_app)
 //   - FOR SELECT only (the admin pool must never INSERT/UPDATE/DELETE)

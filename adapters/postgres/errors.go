@@ -59,7 +59,7 @@ const (
 	// current_user lacks SELECT privilege on audit_entries, or that the privilege
 	// check itself failed. Surfaced by Pool.AuditAdminReadyCheck (#1810 F4): the
 	// gocell_audit_admin role must be able to SELECT on audit_entries (via its
-	// role-scoped permissive RLS policy, migration 064) — a missing GRANT would
+	// role-scoped permissive RLS policy, migration 065) — a missing GRANT would
 	// cause the admin pool to pass the role-attribute probe yet fail every
 	// cross-tenant read request at runtime.
 	ErrAdapterPGAuditAdminSelectCheck errcode.Code = "ERR_ADAPTER_PG_AUDIT_ADMIN_SELECT_CHECK"

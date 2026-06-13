@@ -5,10 +5,10 @@ package postgres
 // #1810 AuditCrossTenantStore live-PG integration tests.
 //
 // These tests exercise the real gocell_audit_admin role + the permissive
-// audit_admin_read_all RLS SELECT policy (USING(true)) added by migration 064
+// audit_admin_read_all RLS SELECT policy (USING(true)) added by migration 065
 // against a running PostgreSQL instance provisioned by the shared test container.
 //
-// Each test provisions the role via the superuser pool and applies migration 064;
+// Each test provisions the role via the superuser pool and applies migration 065;
 // clean-up drops the role at the end so sibling tests do not see it.
 //
 // Three tests:
@@ -19,7 +19,7 @@ package postgres
 //
 //  2. TestAuditCrossTenant_ServingRole_CannotReadCrossTenant — the KEY security
 //     assertion: proves the restricted gocell_app role (NOBYPASSRLS) still sees
-//     only the GUC-scoped tenant's rows after migration 064; the new permissive
+//     only the GUC-scoped tenant's rows after migration 065; the new permissive
 //     policy is scoped TO gocell_audit_admin and does NOT widen gocell_app.
 //
 //  3. TestAuditCrossTenantStore_PG_Conformance — wires the PG backend into the
@@ -51,7 +51,7 @@ import (
 
 // auditAdminPass is the password used when creating gocell_audit_admin in
 // these tests. Must match the value used in schema_guard_integration_test.go
-// (TestMigration064_SchemaGuard_RolePresent) and deploy/postgres/init/10-restricted-role.sh.
+// (TestMigration065_SchemaGuard_RolePresent) and deploy/postgres/init/10-restricted-role.sh.
 // auditAdminRole is already declared as a package-level const in schema_guard.go.
 const auditAdminPass = "test-audit-admin-pw"
 
@@ -66,11 +66,11 @@ const (
 )
 
 // provisionAuditAdminPool creates the gocell_audit_admin role (NOSUPERUSER,
-// NOBYPASSRLS, LOGIN) via the superuser admin pool, re-applies migration 064
+// NOBYPASSRLS, LOGIN) via the superuser admin pool, re-applies migration 065
 // so the IF EXISTS guard fires, GRANTs SELECT on audit_entries, and returns a
 // Pool connected AS gocell_audit_admin. Cleanup drops the role after the test.
 //
-// The re-migration step is idempotent (migration 064 uses IF EXISTS) and
+// The re-migration step is idempotent (migration 065 uses IF EXISTS) and
 // ensures the policy exists whether or not the shared template was built with
 // the role present.
 func provisionAuditAdminPool(t *testing.T, dsn string, admin *Pool) *Pool {
@@ -94,9 +94,9 @@ func provisionAuditAdminPool(t *testing.T, dsn string, admin *Pool) *Pool {
 	// dropAuditAdminRole godoc in schema_guard_integration_test.go).
 	t.Cleanup(func() { dropAuditAdminRole(admin) })
 
-	// 2. Create the audit_admin_read_all policy directly (mirrors migration 064's
-	// Up body). We must NOT re-run migration 064 via goose here: the shared
-	// template clone already has all migrations applied, and 064 was a no-op at
+	// 2. Create the audit_admin_read_all policy directly (mirrors migration 065's
+	// Up body). We must NOT re-run migration 065 via goose here: the shared
+	// template clone already has all migrations applied, and 065 was a no-op at
 	// template-build time (the gocell_audit_admin role did not yet exist, so its
 	// `IF EXISTS (pg_roles)` guard skipped). goose will not re-run an already-
 	// applied migration, and replaying from a fresh tracking table would instead
@@ -181,7 +181,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '', '', $9, $10, $10, '{}', $11, $12)`
 
 // TestAuditCrossTenantStore_PG_ReadsAcrossTenants proves that a pool connected
 // as gocell_audit_admin — backed by the permissive audit_admin_read_all RLS
-// SELECT policy (USING(true)) created by migration 064 — can read rows across:
+// SELECT policy (USING(true)) created by migration 065 — can read rows across:
 //
 //   - two distinct canonical tenants (ctTenantA, ctTenantB)
 //   - both the auditcore and bootstrap namespace chains
@@ -311,16 +311,16 @@ func TestAuditCrossTenantStore_PG_ReadsAcrossTenants(t *testing.T) {
 }
 
 // TestAuditCrossTenant_ServingRole_CannotReadCrossTenant is the KEY security
-// assertion for migration 064. It proves that the restricted serving role
+// assertion for migration 065. It proves that the restricted serving role
 // gocell_rls_app (NOSUPERUSER NOBYPASSRLS — see restrictedAppPool) cannot
-// read another tenant's audit rows even after migration 064 adds the permissive
+// read another tenant's audit rows even after migration 065 adds the permissive
 // audit_admin_read_all policy for gocell_audit_admin.
 //
 // The permissive policy is scoped TO gocell_audit_admin. PG evaluates
 // per-role policies: gocell_rls_app only sees the tenant_isolation policy
 // (USING(tenant_id = NULLIF(current_setting('app.tenant_id',true), ”))),
 // which restricts reads to the GUC-scoped tenant. Cross-tenant rows are never
-// visible to the serving role — migration 064 must NOT widen gocell_app.
+// visible to the serving role — migration 065 must NOT widen gocell_app.
 //
 // Mirrors rls_force_integration_test.go's approach: SET LOCAL via
 // TxManager.RunInTx + tenant.WithScope (GUC injection), then count rows
@@ -329,7 +329,7 @@ func TestAuditCrossTenant_ServingRole_CannotReadCrossTenant(t *testing.T) {
 	dsn := sharedPG.CloneDSN(t)
 	ownerPool := openPerTestPool(t, dsn)
 
-	// Provision gocell_audit_admin + apply migration 064 so the permissive
+	// Provision gocell_audit_admin + apply migration 065 so the permissive
 	// policy exists — this is the scenario we want to test.
 	_ = provisionAuditAdminPool(t, dsn, ownerPool)
 
@@ -356,7 +356,7 @@ func TestAuditCrossTenant_ServingRole_CannotReadCrossTenant(t *testing.T) {
 		"[SEC] gocell_rls_app must be able to read its own-tenant rows (ownCount must be > 0): "+
 			"the RLS policy must NOT block the serving role from reading its own tenant's audit rows")
 
-	// The serving role must NOT see other tenants' rows even with migration 064
+	// The serving role must NOT see other tenants' rows even with migration 065
 	// in place. We simulate the gocell_app serving role by reading inside a
 	// scoped transaction where GUC = ctTenantA and counting how many rows have
 	// tenant_id = ctTenantB (i.e. a different tenant's rows that leaked).
@@ -365,7 +365,7 @@ func TestAuditCrossTenant_ServingRole_CannotReadCrossTenant(t *testing.T) {
 		tx, ok := persistence.TxFromContext[pgx.Tx](ctx)
 		require.True(t, ok, "ambient tx must be present")
 		// The query deliberately omits a tenant_id predicate — RLS is the only
-		// filter. If migration 064 leaked the permissive policy to gocell_app,
+		// filter. If migration 065 leaked the permissive policy to gocell_app,
 		// this query would return ctTenantB rows.
 		return tx.QueryRow(ctx,
 			`SELECT count(*) FROM audit_entries WHERE tenant_id = $1`, ctTenantB,
@@ -373,7 +373,7 @@ func TestAuditCrossTenant_ServingRole_CannotReadCrossTenant(t *testing.T) {
 	})
 	require.NoError(t, err, "scoped SELECT must succeed for serving role")
 	assert.Equal(t, 0, crossTenantCount,
-		"[SEC] gocell_rls_app must NOT see other tenant's audit rows after migration 064: "+
+		"[SEC] gocell_rls_app must NOT see other tenant's audit rows after migration 065: "+
 			"the audit_admin_read_all policy is scoped TO gocell_audit_admin only and must not widen the serving role")
 
 	// Double-check: a predicate-free SELECT must also be tenant-scoped.
@@ -395,7 +395,7 @@ func TestAuditCrossTenant_ServingRole_CannotReadCrossTenant(t *testing.T) {
 // AuditCrossTenantStore into storetest.RunCrossTenantQueryConformance. The
 // factory:
 //  1. Opens a per-test DB clone (sharedPG.CloneDSN).
-//  2. Provisions gocell_audit_admin and applies migration 064.
+//  2. Provisions gocell_audit_admin and applies migration 065.
 //  3. Seeds the supplied []*ledger.Entry via direct INSERT as owner (no protocol
 //     HMAC — conformance asserts query-plane behavior, not chain correctness).
 //  4. Returns an *AuditCrossTenantStore backed by the admin-role pool.
@@ -408,7 +408,7 @@ func TestAuditCrossTenantStore_PG_Conformance(t *testing.T) {
 
 // buildCrossTenantPGFactory returns a storetest.CrossTenantFactory that:
 //   - clones a fresh per-test DB
-//   - provisions gocell_audit_admin + migration 064
+//   - provisions gocell_audit_admin + migration 065
 //   - seeds the supplied entries via direct INSERT as superuser owner
 //   - returns an *AuditCrossTenantStore + cleanup
 //
@@ -423,7 +423,7 @@ func buildCrossTenantPGFactory(t *testing.T) storetest.CrossTenantFactory {
 		dsn := sharedPG.CloneDSN(subT)
 		ownerPool := openPerTestPool(subT, dsn)
 
-		// Provision gocell_audit_admin + apply migration 064 (idempotent).
+		// Provision gocell_audit_admin + apply migration 065 (idempotent).
 		adminPool := provisionAuditAdminPool(subT, dsn, ownerPool)
 
 		// Seed entries via direct INSERT as superuser — one chain per (namespace, tenantID)

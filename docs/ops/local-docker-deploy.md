@@ -224,7 +224,7 @@ To enforce RLS end-to-end, the stack uses **two required PostgreSQL roles** plus
 |------|---------|-----------|-----------|
 | `gocell` | `migrate` service (pg-migrate tool) | Superuser / table owner; runs DDL | Yes |
 | `gocell_app` | `corebundle` serving pool (`GOCELL_CONFIGCORE_DATABASE_URL`) | NOSUPERUSER, NOBYPASSRLS, non-owner; DML only via default privileges | Yes |
-| `gocell_audit_admin` | `corebundle` admin read pool (`GOCELL_AUDIT_ADMIN_DSN`) — for super-admin cross-tenant audit reads (#1810) | NOSUPERUSER, NOBYPASSRLS; SELECT-only on `audit_entries` via role-scoped RLS policy `audit_admin_read_all` (migration 064) | **Optional** — skipped when `GOCELL_AUDIT_ADMIN_PASSWORD` is unset |
+| `gocell_audit_admin` | `corebundle` admin read pool (`GOCELL_AUDIT_ADMIN_DSN`) — for super-admin cross-tenant audit reads (#1810) | NOSUPERUSER, NOBYPASSRLS; SELECT-only on `audit_entries` via role-scoped RLS policy `audit_admin_read_all` (migration 065) | **Optional** — skipped when `GOCELL_AUDIT_ADMIN_PASSWORD` is unset |
 
 `gocell_app` is created by `deploy/postgres/init/10-restricted-role.sh`, which
 the PostgreSQL container runs once on first data-directory init (before migrations).
@@ -233,7 +233,7 @@ to `gocell_app` via `ALTER DEFAULT PRIVILEGES`.
 
 `gocell_audit_admin` is also created by `10-restricted-role.sh`, but only when
 `GOCELL_AUDIT_ADMIN_PASSWORD` is set at initdb time. When the variable is unset,
-the script prints an informational message and skips the role entirely — migration 064
+the script prints an informational message and skips the role entirely — migration 065
 is a no-op where the role is absent, and the `GOCELL_AUDIT_ADMIN_DSN` runtime variable
 is left unconfigured, causing super-admin cross-tenant audit read to return HTTP 501
 (fail-closed). `make local-up` succeeds without this variable.
@@ -287,7 +287,7 @@ The super-admin cross-tenant audit read capability (`gocell_audit_admin` pool) i
    ```
 
 3. Start the stack on a fresh data directory (initdb runs `10-restricted-role.sh`,
-   which reads `GOCELL_AUDIT_ADMIN_PASSWORD` and creates the role; migration 064 then
+   which reads `GOCELL_AUDIT_ADMIN_PASSWORD` and creates the role; migration 065 then
    installs the `audit_admin_read_all` RLS policy):
 
    ```bash

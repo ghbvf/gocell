@@ -139,6 +139,29 @@ type modulesCompositionContext struct {
 	// emits generatedProjectionSourceTopics() (even when empty) so the decorator
 	// wiring can call it unconditionally.
 	ProjectionSourceTopics []string
+	// DeploymentTopology is the assembly's deployment placement spec, single-sourced
+	// from assembly.yaml topology. The template ALWAYS emits
+	// generatedDeploymentTopology() (empty spec when no topology declared) so the
+	// composition root can call it unconditionally. Validated by
+	// metadata.ValidateTopologyStructure before codegen proceeds — illegal topology
+	// (mutual exclusion, non-exhaustive, bad endpoint) fails generation closed.
+	DeploymentTopology deploymentTopologyTemplateData
+}
+
+// deploymentTopologyTemplateData is the flattened template-serialisable form of
+// an assembly's topology.Colocated/Remote. It is distinct from
+// metadata.TopologyMeta because template rendering requires plain exported-field
+// types (no methods); the translation is done once in
+// buildDeploymentTopologyData.
+type deploymentTopologyTemplateData struct {
+	Colocated []string
+	Remote    []remoteEntryTemplateData
+}
+
+// remoteEntryTemplateData is the per-remote-cell entry used in the template.
+type remoteEntryTemplateData struct {
+	CellID   string
+	Endpoint string
 }
 
 // capabilityConstNames maps cell.yaml `requires` enum values to their
@@ -509,6 +532,23 @@ func (g *Generator) generateModulesGenComposition(
 	if err != nil {
 		return nil, err
 	}
+	// Validate topology structure before emitting — illegal topology (mutual
+	// exclusion, non-exhaustive, invalid endpoint) fails generation closed rather
+	// than propagating bad data into the generated funnel.
+	if err := metadata.ValidateTopologyStructure(asm); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
+			"assembly topology validation failed before codegen", err,
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID))))
+	}
+	// INTERIM gate (US4 #1963 removes this block): topology.remote cannot be honored
+	// yet — cross-process transport is not wired. Fail codegen closed to prevent silent
+	// degrade. CheckRemotePlacementSupported returns nil when topology.remote is empty.
+	if err := metadata.CheckRemotePlacementSupported(asm); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
+			"assembly topology.remote is not yet supported (US4 #1963)", err,
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID))))
+	}
+	topoData := buildDeploymentTopologyData(asm.Topology)
 	ctx := modulesCompositionContext{
 		AssemblyID:             assemblyID,
 		SourcePath:             asm.File,
@@ -516,8 +556,26 @@ func (g *Generator) generateModulesGenComposition(
 		ModuleImports:          importLines,
 		Capabilities:           capConsts,
 		ProjectionSourceTopics: projTopics,
+		DeploymentTopology:     topoData,
 	}
 	return g.executeTemplate("modules_gen_composition.go.tpl", ctx)
+}
+
+// buildDeploymentTopologyData translates the metadata.TopologyMeta into the
+// flattened template-serialisable form. Empty topology (no colocated, no remote)
+// returns a zero-value deploymentTopologyTemplateData so the template emits
+// bootstrap.DeploymentTopologySpec{} — the all-colocated default.
+func buildDeploymentTopologyData(topo metadata.TopologyMeta) deploymentTopologyTemplateData {
+	var d deploymentTopologyTemplateData
+	if len(topo.Colocated) == 0 && len(topo.Remote) == 0 {
+		return d
+	}
+	d.Colocated = append([]string(nil), topo.Colocated...)
+	d.Remote = make([]remoteEntryTemplateData, 0, len(topo.Remote))
+	for _, r := range topo.Remote {
+		d.Remote = append(d.Remote, remoteEntryTemplateData{CellID: r.CellID, Endpoint: r.Endpoint})
+	}
+	return d
 }
 
 // PlanAssemblyScaffold builds the complete []pathsafe.PlannedFile for a new

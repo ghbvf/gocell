@@ -30,13 +30,13 @@ privileged-read path**, leaving the serving role untouched.
 
 1. **Role-scoped permissive RLS policy (no BYPASSRLS).** A new role
    `gocell_audit_admin` (NOSUPERUSER, **NOBYPASSRLS**, non-owner, SELECT-only) plus
-   migration 064:
+   migration 065:
    `CREATE POLICY audit_admin_read_all ON audit_entries FOR SELECT TO
    gocell_audit_admin USING (true)` + `GRANT SELECT`. PostgreSQL permissive policies
    are OR-ed and a role-listed policy applies only to that role, so this role reads
    every tenant while `gocell_app`'s effective predicate and FORCE RLS are unchanged.
    Cross-tenant visibility is an explicit, `schema_guard`-pinned `pg_policy` row, not
-   a blanket BYPASSRLS bypass (see ADR #1676 amendment). Migration 064 is a
+   a blanket BYPASSRLS bypass (see ADR #1676 amendment). Migration 065 is a
    role-guarded **no-op** where the role is not provisioned.
 
 2. **Sealed Hard typed funnel (#1760).** The read API
@@ -98,7 +98,7 @@ No cell flips to ⚠️/❌.
 
 ## References
 
-- Migration: `adapters/postgres/migrations/064_audit_admin_read_role.sql`
+- Migration: `adapters/postgres/migrations/065_audit_admin_read_role.sql`
 - Code: `runtime/audit/ledger/cross_tenant_store.go`,
   `adapters/postgres/audit_cross_tenant_store.go`,
   `runtime/audit/ledger/mem_cross_tenant_store.go`,

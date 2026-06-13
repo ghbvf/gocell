@@ -184,7 +184,7 @@ func (m module) Provide(
 // Closed in LIFO order on graceful shutdown (registered via ModuleResult.Resources).
 //
 // The admin pool connects with the gocell_audit_admin role which has a
-// role-scoped permissive RLS SELECT policy (migration 064 — USING(true)), so it
+// role-scoped permissive RLS SELECT policy (migration 065 — USING(true)), so it
 // can read every tenant's rows without BYPASSRLS, preserving ADR #1676.
 // No localhost fallback; no default credentials.
 func buildCrossTenantStore(
@@ -203,7 +203,7 @@ func buildCrossTenantStore(
 	}
 	// Build a dedicated admin pool. RequireRestrictedRole is false: the
 	// gocell_audit_admin role is non-owner and non-BYPASSRLS — it reads cross-tenant
-	// via a role-scoped permissive RLS SELECT policy (migration 064), NOT via
+	// via a role-scoped permissive RLS SELECT policy (migration 065), NOT via
 	// BYPASSRLS. The serving pool's ProbeAppRoleRestrictedReady probe only covers the
 	// FORCE RLS enforcement check for the serving pool; the admin pool uses its own
 	// AuditAdminReadyCheck (which covers both role-attributes AND SELECT on

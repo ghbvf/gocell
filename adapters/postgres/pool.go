@@ -39,7 +39,7 @@ const (
 	// ProbeAuditAdminRestrictedReady probes that the OPTIONAL cross-tenant audit
 	// admin pool's current_user is neither a superuser nor BYPASSRLS (#1810). The
 	// gocell_audit_admin role reads every tenant via a role-scoped permissive RLS
-	// SELECT policy (migration 064), NOT via BYPASSRLS — so it must stay NOBYPASSRLS
+	// SELECT policy (migration 065), NOT via BYPASSRLS — so it must stay NOBYPASSRLS
 	// and minimally privileged. This distinctly-named probe (vs the serving pool's
 	// postgres_app_role_restricted_ready) asserts that at runtime AND makes the
 	// optional admin pool's liveness visible on /readyz; it reuses
@@ -283,7 +283,7 @@ func auditAdminRoleResult(rolsuper, rolbypassrls, canSelect bool) error {
 	if !canSelect {
 		return errcode.New(errcode.KindInternal, ErrAdapterPGAuditAdminSelectCheck,
 			"postgres: audit admin role lacks SELECT privilege on audit_entries; "+
-				"grant SELECT on audit_entries to gocell_audit_admin (migration 064 must "+
+				"grant SELECT on audit_entries to gocell_audit_admin (migration 065 must "+
 				"have run and the GRANT applied before the admin pool is provisioned)")
 	}
 	return nil
@@ -294,7 +294,7 @@ func auditAdminRoleResult(rolsuper, rolbypassrls, canSelect bool) error {
 //
 //  1. The pool's current_user is neither a superuser nor BYPASSRLS (role-attribute
 //     check, reusing appRoleRestrictedResult). The gocell_audit_admin role reads
-//     cross-tenant via a role-scoped permissive RLS SELECT policy (migration 064),
+//     cross-tenant via a role-scoped permissive RLS SELECT policy (migration 065),
 //     NOT via BYPASSRLS, so it must stay NOSUPERUSER NOBYPASSRLS (ADR #1676).
 //
 //  2. The pool's current_user has SELECT privilege on audit_entries
