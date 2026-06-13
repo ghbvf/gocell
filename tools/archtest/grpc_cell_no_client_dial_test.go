@@ -86,9 +86,11 @@
 //   - Function-value indirection (`f := grpc.NewClient; f(...)`): the bare-ident
 //     `grpc.NewClient` selector is still walked and resolved, so assigning the
 //     method value is itself flagged.
-//   - Dot-import (`import . "google.golang.org/grpc"`): bare `NewClient(...)`
-//     resolves via ResolvePackageRef's *types.Func path; additionally cells
-//     cannot dot-import per the revive dot-imports linter.
+//   - Dot-import (`import . "google.golang.org/grpc"`): bare `NewClient(...)` is
+//     NOT walked by scanGRPCClientConstruction (it walks qualified selectors
+//     only). Cells cannot dot-import (the revive dot-imports linter is the gate),
+//     so this form cannot arise in a cell — mirrors GRPC-SERVICE-IN-CONTRACT-01
+//     blind spot B3 (the linter, not the scanner, is the defense).
 //
 // ## Symbol inventory (forbidden client-construction symbol set)
 //
@@ -123,11 +125,14 @@ const ruleGRPCCellNoClientDial = "GRPC-CELL-NO-CLIENT-DIAL-01"
 // grpcRuntimeLibPath is the canonical import path of the gRPC transport library.
 const grpcRuntimeLibPath = "google.golang.org/grpc"
 
-// generatedGRPCContractsMarker is the path segment shared by every buf/protoc
-// generated gRPC contract package (where the typed New<Svc>Client stub
-// constructors live). It is a substring (not a prefix) so it matches regardless
-// of how the separate `generated` module's path is anchored.
-const generatedGRPCContractsMarker = "/generated/contracts/grpc/"
+// generatedGRPCContractsMarker anchors the buf/protoc generated gRPC contract
+// packages (where the typed New<Svc>Client stub constructors live) to the
+// platform module path, so a stray non-generated package whose import path
+// merely contains "/generated/contracts/grpc/" (e.g. a testdata tree) cannot
+// false-match. The generated tree is the separate module
+// github.com/ghbvf/gocell/generated, whose import paths are
+// <PlatformModulePath>/generated/contracts/grpc/...
+const generatedGRPCContractsMarker = PlatformModulePath + "/generated/contracts/grpc/"
 
 // grpcClientCtorRe matches a generated gRPC client constructor name
 // (New<Svc>Client). Anchored so it never matches Register<Svc>Server or the
@@ -161,10 +166,13 @@ func forbiddenGRPCClientRef(pkgPath, name string) (kind string, forbidden bool) 
 	return "", false
 }
 
-// scanGRPCClientConstruction walks one file's AST for package-symbol references
-// (selector `pkg.Name` and dot-imported bare `Name`) and emits a Diagnostic for
-// every forbidden gRPC client-construction symbol. The caller decides whether
-// the file belongs to a cell (production scan) or not (fixture scan).
+// scanGRPCClientConstruction walks one file's AST for qualified selector
+// references (`pkg.Name`) and emits a Diagnostic for every forbidden gRPC
+// client-construction symbol. The caller decides whether the file belongs to a
+// cell (production scan) or not (fixture scan). Dot-imported bare `Name` is NOT
+// walked here (selector-only) — cells cannot dot-import (revive dot-imports
+// linter is the gate), so that form is an independent linter concern, not a
+// scanner one (see the godoc blind-spots section).
 func scanGRPCClientConstruction(p *Pass, file *ast.File, rel string) []Diagnostic {
 	var diags []Diagnostic
 	emit := func(node ast.Expr) {
@@ -311,4 +319,10 @@ func TestGRPCCellNoClientDial01_FixtureScanRED(t *testing.T) {
 	}
 	assert.Positive(t, kinds["dial"], "dial primitive (grpc.NewClient) must fire")
 	assert.Positive(t, kinds["conn-type"], "client-conn type (*grpc.ClientConn / ClientConnInterface) must fire")
+	// The stub branch (generated New*Client) cannot fire from this fixture: it
+	// imports only google.golang.org/grpc, NOT the separate generated module. The
+	// stub detector branch is pinned by TestGRPCCellNoClientDial01_SyntheticDetector.
+	// Asserting zero here guards against a future fixture edit silently relying on
+	// (and masking a regression in) the unexercised stub path.
+	assert.Zero(t, kinds["stub"], "stub branch must NOT fire from this grpc-only fixture")
 }
