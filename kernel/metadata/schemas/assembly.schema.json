@@ -85,6 +85,44 @@
           "description": "When true, GenerateModulesGen emits the runtime/composition.CellModule form (cellmodules/{cell}.Module() constructors) instead of the legacy local-CellModule-type form. Set true for cellmodules-based assemblies; REQUIRED when any cell declares a non-empty `module` (cross-module cell from an independent Go module, #1086) — the legacy form has no import path and cannot reference a foreign module."
         }
       }
+    },
+    "topology": {
+      "type": "object",
+      "description": "OPTIONAL deployment topology for this assembly. Absent or empty means all cells are co-located in the same process (zero-migration default). When non-empty, every cell in the assembly must appear in exactly one of colocated or remote (exhaustive partition). Validated at governance time by ValidateTopologyStructure.",
+      "additionalProperties": false,
+      "properties": {
+        "colocated": {
+          "type": "array",
+          "description": "Cell IDs that are deployed in the same process as this assembly. Must be a subset of the assembly's cells[] IDs and must not overlap with remote[].cellID.",
+          "items": {
+            "type": "string",
+            "description": "Cell ID of a co-located cell. Must match the canonical CellIDPattern (lowercase letters and digits, starts with letter, 2-32 chars).",
+            "pattern": "^[a-z][a-z0-9]{1,31}$"
+          }
+        },
+        "remote": {
+          "type": "array",
+          "description": "Cells deployed as separate remote services reachable via a network endpoint. Must not overlap with colocated[].",
+          "items": {
+            "type": "object",
+            "description": "A remote cell deployment entry.",
+            "additionalProperties": false,
+            "required": ["cellID", "endpoint"],
+            "properties": {
+              "cellID": {
+                "type": "string",
+                "description": "Cell ID of the remote cell. Must match the canonical CellIDPattern and must be declared in the assembly's cells[].",
+                "pattern": "^[a-z][a-z0-9]{1,31}$"
+              },
+              "endpoint": {
+                "type": "string",
+                "description": "Network address of the remote cell service (e.g. host:port or https://host/). Must be a syntactically valid host:port or URL with a non-empty host. Validated by ValidateTopologyStructure at governance time.",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
     }
   }
 }
