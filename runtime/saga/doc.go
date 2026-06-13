@@ -147,7 +147,10 @@
 // StepFunc calls to safeRun by *signature identity* (an alias or redefinition
 // under any import name cannot escape), and A2 forbids any call transitively
 // reaching safeRun inside a RunInTx closure via a cross-package taint set
-// (named-wrapper and func-literal-var indirection included).
+// (named-wrapper and func-literal-var indirection included). The manual taint's
+// residuals (param-passed func literals, method-value vars, name-matched
+// RunInTx) and the rejected true-Hard capability-type split are documented in
+// the archtest INVARIANT godoc and tracked in gh #1997.
 //
 // # Coordinator is the single sanctioned JournalCore holder
 //

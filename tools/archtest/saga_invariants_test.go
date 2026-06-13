@@ -2790,11 +2790,21 @@ func TestSagaCoverageDiagnosticLocations(t *testing.T) {
 //
 // # Residual blind spot + rejected Hard (threat matrix — gh #1997)
 //
-//	Residual — a func-literal passed as a function PARAMETER and invoked via
-//	   that parameter in a DIFFERENT function (`func apply(f func()){ f() }`) is
-//	   interprocedural data-flow the manual taint deliberately does not chase
-//	   (framework convention: no go/ssa). The Coordinator single-authority
-//	   pattern means saga has no such shape today.
+//	Residuals (manual typed taint, framework convention: no go/ssa) — all
+//	   benign under the Coordinator single-authority pattern (saga has no such
+//	   shape today), kept here as honest blind-spot accounting:
+//	     1. A func literal passed as a function PARAMETER and invoked via that
+//	        parameter in a DIFFERENT function (`func apply(f func()){ f() }`) —
+//	        interprocedural data-flow the taint does not chase.
+//	     2. A method-value-valued var (`f := executor.Execute; …; f(…)` inside
+//	        a RunInTx closure) — funcLitVars tracks func-literal bindings only,
+//	        not method values, so f is not in the taint set.
+//	     3. RunInTx is matched by method NAME (callIsRunInTx), not by type:
+//	        renaming persistence.TxRunner.RunInTx would silently disable A2.
+//	   Conversely A1 is over-strict on the safe side: a non-StepFunc value whose
+//	   signature is identical to StepFunc, called outside safeRun, would also be
+//	   flagged (a false-positive, not a miss) — runtime/saga defines no such
+//	   same-signature type, so this never fires in practice.
 //
 //	Rejected Hard — the only carrier that makes the violation UNREPRESENTABLE
 //	   is reifying "inside a tx" into the type system: a sealed StepContext /
@@ -2913,8 +2923,10 @@ func TestSagaStepRunOutsideTx_Detector_RedExtraFileFixture(t *testing.T) {
 // transitive A2 still fires on the DIRECT case: safeRun() called inside a
 // RunInTx closure body. The fixture declares a fake TxRunner-shaped struct
 // (RunInTx method) + a local safeRun seed, then calls safeRun directly inside
-// the closure. The direct call is the trivial taint-set member, so the
-// transitive entry subsumes the old direct scan.
+// the closure. The direct call is the trivial taint-set member (0-hop), so the
+// transitive entry subsumes the old direct scan — this fixture validates the
+// seed-direct-hit degenerate case; multi-hop transitivity (named wrapper +
+// FuncLit-var) is validated by RedSafeRunWrapperInRunInTxFixture.
 func TestSagaStepRunOutsideTx_Detector_RedSafeRunInRunInTxFixture(t *testing.T) {
 	relDir, pattern := sagaStepRunFixturePattern("red_safe_run_in_runintx")
 	units := collectSagaUnits(t, Fixture(FixtureOpts{}, []string{pattern}), false)

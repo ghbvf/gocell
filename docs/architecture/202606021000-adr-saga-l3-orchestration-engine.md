@@ -133,7 +133,8 @@ step 仍永不在持锁事务内执行，纵深 = A1 签名身份 + A2 跨包 ta
 | 业务 cell 持 `JournalCore` 机器拒绝 | gh **#1415** |
 | `JournalCore` sealed construction（D2 上游 Hard 化） | gh **#982** |
 | `driveOne` typed gate token（D3 下游 Hard 化） | gh **#1110** |
-| `safeRun` helper 传递链覆盖（D4 A2 Hard 化） | gh **#980** |
+| `safeRun` helper/FuncLit-var 传递链覆盖（D4 A2） | **已落 → §Amendment 2026-06-13（#980）** |
+| D4 真·Hard 化（StepContext/TxContext 能力类型分裂，令 step-in-tx 编译错） | gh **#1997**（成本否决，远期跟踪） |
 | saga 构造器接入 `gocell:"required"` funnel（D10 Hard 化） | gh **#1317** |
 | journal conformance codegen golden 枚举（实现自动入列 Hard 化） | gh **#1003** |
 | 声明式 Saga DSL（D1 v2） | 业务场景 ≥ 3 个相似 saga 后立项 |

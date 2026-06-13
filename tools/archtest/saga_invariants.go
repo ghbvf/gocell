@@ -2041,9 +2041,24 @@ func callableCalleeMap(units []sagaA2Unit, funcLitVars []funcLitVar, varSet map[
 		})
 	}
 	for _, flv := range funcLitVars {
-		m[flv.obj] = collectCallees(flv.info, flv.body, varSet)
+		// Union (not overwrite): a var bound to a func literal more than once
+		// (`:=` then `=`) yields one *types.Var with several bodies — keep every
+		// callee edge so no reachable call is dropped.
+		mergeCallees(m, flv.obj, collectCallees(flv.info, flv.body, varSet))
 	}
 	return m
+}
+
+// mergeCallees unions add into m[key], creating the entry if absent.
+func mergeCallees(m map[types.Object]map[types.Object]bool, key types.Object, add map[types.Object]bool) {
+	dst := m[key]
+	if dst == nil {
+		dst = make(map[types.Object]bool, len(add))
+		m[key] = dst
+	}
+	for callee := range add {
+		dst[callee] = true
+	}
 }
 
 // collectCallees resolves every CallExpr in body's subtree to its callable
@@ -2087,7 +2102,11 @@ func resolveCallable(info *types.Info, call *ast.CallExpr, varSet map[*types.Var
 }
 
 // scanRunInTxClosures flags every call inside a RunInTx closure body whose
-// resolved target is in the safeRun taint set.
+// resolved target is in the safeRun taint set. EachInSubtree descends into
+// nested func literals (e.g. a RegisterAfterCommit hook) too; that is
+// deliberately conservative — interface-method calls there (c.dispatcher.Kick)
+// resolve to bodiless methods that are never tainted, so the common after-commit
+// hook does not false-positive.
 func scanRunInTxClosures(units []sagaA2Unit, taint map[types.Object]bool, varSet map[*types.Var]bool) []Diagnostic {
 	var out []Diagnostic
 	for _, u := range units {
@@ -2111,7 +2130,8 @@ func scanRunInTxClosures(units []sagaA2Unit, taint map[types.Object]bool, varSet
 					Rel:  rel,
 					Line: fset.Position(inner.Pos()).Line,
 					Message: sagaStepRunOutsideTxRule + "-A2: call inside RunInTx closure reaches safeRun — " +
-						"user step code would run with a DB transaction held open",
+						"user step code would run with a DB transaction held open; " +
+						"move the step dispatch outside the RunInTx closure",
 				})
 			})
 		})
@@ -2119,7 +2139,10 @@ func scanRunInTxClosures(units []sagaA2Unit, taint map[types.Object]bool, varSet
 	return out
 }
 
-// callIsRunInTx reports whether call is a RunInTx call.
+// callIsRunInTx reports whether call is a RunInTx call. Matched by method name
+// only (no type resolution) — false-positive-safe and resilient to wrapping
+// receiver types; the residual is that renaming persistence.TxRunner.RunInTx
+// would silently disable A2 (runtime/saga uses the single stable name today).
 func callIsRunInTx(call *ast.CallExpr) bool {
 	switch f := call.Fun.(type) {
 	case *ast.SelectorExpr:
@@ -2148,6 +2171,12 @@ func lastFuncLitArg(call *ast.CallExpr) *ast.FuncLit {
 // transitively reaching safeRun inside a RunInTx closure) is built over all
 // loaded units together, so the typed taint set spans the coordinator and
 // executor packages in a single load.
+//
+// Residuals (manual taint, no go/ssa): a func literal passed as a function
+// PARAMETER and called via that parameter, a method-value-valued var, and
+// RunInTx detection by method name. All documented in the SAGA-STEP-RUN-OUTSIDE
+// -TX-01 INVARIANT godoc; the true-Hard alternative (StepContext/TxContext
+// capability split) is tracked + rejected in gh #1997.
 func CheckSagaStepRunOutsideTx(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	_ = cfg
