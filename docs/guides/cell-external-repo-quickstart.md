@@ -7,7 +7,7 @@
 ## Prerequisites
 
 - Go 1.25.11+
-- `gocell` CLI — 三种获取方式（按推荐顺序）：
+- `gocell` CLI — 四种获取方式（按推荐顺序）：预编译二进制 / Docker / 源码安装 / `go install @version`：
 
   **预编译二进制（推荐）**
 

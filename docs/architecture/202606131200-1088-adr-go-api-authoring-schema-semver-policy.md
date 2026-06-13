@@ -48,7 +48,7 @@ pre-GA 窗口正面冲突。因此必须新建独立 ADR，而非 amend wire ADR
 
 release 流水线在发布时使用 `modrelease.StripReplaceAndPin`（`InstallableBinaries`，#2045）剥离
 `cmd/gocell` 的本地 `replace` 指令并将内部 require 固定到已发布版本，再在独立子 module commit 上打
-`cmd/gocell/vX.Y.Z` tag。自 v0.1.x 起，`go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` 已可用。
+`cmd/gocell/vX.Y.Z` tag。自首个搭载 #2045 发布流水线的 stable release 起，`go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` 已可用。
 完整机制见 §Dx（installable CLI 发布形状）。
 
 ## Decision
@@ -173,7 +173,7 @@ OTel、grpc-go 等公共库教义：库 go.mod **不应**含 replace（会干扰
 
 ### 版本承诺
 
-- 自 v0.1.x 起，`go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` 可用。
+- 自首个搭载 #2045 发布流水线的 stable release 起，`go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` 可用。
 - CLI 与 framework 仍原子同 tag 发布（#1088 M7），子 module tag `cmd/gocell/vX.Y.Z` 与根 tag
   `vX.Y.Z` 版本号一一对应。
 - installable 机制本身是 release pipeline 的 Hard 步骤（pipeline 失败 = release 中止），

@@ -428,45 +428,16 @@ jobs:
 
       # ── end goreleaser block ────────────────────────────────────────────────
 
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }} # write-scope token scoped to the gh API step only (F5)
-        run: |
-          set -euo pipefail
-          args=(--title "$TAG" --verify-tag --generate-notes)
-          if [ "$PRERELEASE" = "true" ]; then
-            args+=(--prerelease)
-          else
-            # F2/C1: the cross-arch tarballs + checksums ARE the stable release
-            # (#1088 DoD), not optional attachments. Fail loudly if goreleaser
-            # did not produce exactly the 4 platform archives (.goreleaser.yaml
-            # builds linux/darwin × amd64/arm64) + checksums.txt, rather than
-            # publishing a release missing its core deliverables.
-            mapfile -t artifacts < <(compgen -G "dist/gocell_*.tar.gz" || true)
-            if [ "${#artifacts[@]}" -ne 4 ]; then
-              echo "::error::expected 4 platform tarballs in dist/, found ${#artifacts[@]} — aborting release (core deliverable missing)."
-              exit 1
-            fi
-            if [ ! -f "dist/checksums.txt" ]; then
-              echo "::error::dist/checksums.txt missing — aborting release (core deliverable missing)."
-              exit 1
-            fi
-            args+=("${artifacts[@]}" "dist/checksums.txt")
-          fi
-          # Retry: the freshly pushed tag may not be API-visible immediately,
-          # which makes --verify-tag fail transiently and leaves an orphan tag.
-          for attempt in 1 2 3; do
-            if gh release create "$TAG" "${args[@]}"; then
-              exit 0
-            fi
-            echo "::warning::gh release create attempt $attempt failed; retrying in 10s."
-            sleep 10
-          done
-          echo "::error::gh release create failed for $TAG after 3 attempts (tag is pushed; re-run this workflow to resume, or create the release manually)."
-          exit 1
-
       - name: Release installable CLI module (cmd/gocell, stable only)
         # #2045: make `go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` work.
+        # Ordered BEFORE "Create GitHub Release" (Codex F1): the public GitHub
+        # Release is the FINAL user-visible signal, emitted only after EVERY stable
+        # deliverable — including this installable CLI tag + go-install smoke —
+        # verifies. If this step fails, no GitHub Release exists yet, so a same-
+        # version re-dispatch resumes cleanly; were the Release already published,
+        # the verify job's "release already exists" guard (Resolve version) would
+        # block recovery, stranding a fail-open release whose advertised
+        # `go install @version` deliverable never landed.
         # The CLI sub-module carries local `replace` directives for monorepo dev,
         # and `go install pkg@version` is rejected OUTRIGHT when the target go.mod
         # has ANY replace. So — AFTER the library tags (root + satellites) are
@@ -516,11 +487,23 @@ jobs:
           # (fetch-tags: true), so if it already exists, prove its tree is the
           # stripped shape (no replace) and skip re-tagging — never re-mint.
           if existing="$(git rev-parse -q --verify "refs/tags/${installable_tag}^{commit}" 2>/dev/null)"; then
-            if git show "${installable_tag}:${mod_dir}/go.mod" | grep -q '^replace '; then
+            # Validate the existing tag's tree is a COMPLETE installable shape, not
+            # just replace-free (F2): every internal require must already be pinned to
+            # THIS $TAG. The go-install smoke below only checks the main module's
+            # cliVersion, which would still pass even if a framework dep pointed at a
+            # stale tag — so verify the require versions here too, fail-closed.
+            existing_mod="$(mktemp)"
+            git show "${installable_tag}:${mod_dir}/go.mod" >"${existing_mod}"
+            if grep -q '^replace ' "${existing_mod}"; then
               echo "::error::existing ${installable_tag} tree still contains replace — corrupt installable release; delete the tag and re-dispatch."
               exit 1
             fi
-            echo "${installable_tag} already exists at ${existing} (stripped) — skipping re-tag." | tee -a "$GITHUB_STEP_SUMMARY"
+            if go mod edit -json "${existing_mod}" \
+              | jq -e --arg t "$TAG" '(.Require // []) | any((.Path | startswith("github.com/ghbvf/gocell")) and (.Version != $t))' >/dev/null; then
+              echo "::error::existing ${installable_tag} has internal require(s) not pinned to $TAG — corrupt (stale framework deps); delete the tag and re-dispatch."
+              exit 1
+            fi
+            echo "${installable_tag} already exists at ${existing} (stripped + internal requires pinned to $TAG) — skipping re-tag." | tee -a "$GITHUB_STEP_SUMMARY"
           else
             # Strip replace + pin internal requires to $TAG (modrelease single source).
             go run ./tools/modrelease/cmd --version "$TAG" --installable
@@ -560,6 +543,50 @@ jobs:
             exit 1
           fi
           echo "✅ go install ${mod_path}@$TAG verified (cliVersion=${actual})" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # ── Final user-visible signal ───────────────────────────────────────────
+      # Create the GitHub Release LAST (Codex F1): only after every stable
+      # deliverable — library/satellite tags, goreleaser binaries+docker, AND the
+      # installable cmd/gocell tag + go-install smoke above — has verified. A
+      # failure in any prior step leaves recoverable half-state (pushed tags /
+      # docker, no Release), so a same-version re-dispatch resumes; the Release
+      # itself is never published ahead of an unverified deliverable.
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }} # write-scope token scoped to the gh API step only (F5)
+        run: |
+          set -euo pipefail
+          args=(--title "$TAG" --verify-tag --generate-notes)
+          if [ "$PRERELEASE" = "true" ]; then
+            args+=(--prerelease)
+          else
+            # F2/C1: the cross-arch tarballs + checksums ARE the stable release
+            # (#1088 DoD), not optional attachments. Fail loudly if goreleaser
+            # did not produce exactly the 4 platform archives (.goreleaser.yaml
+            # builds linux/darwin × amd64/arm64) + checksums.txt, rather than
+            # publishing a release missing its core deliverables.
+            mapfile -t artifacts < <(compgen -G "dist/gocell_*.tar.gz" || true)
+            if [ "${#artifacts[@]}" -ne 4 ]; then
+              echo "::error::expected 4 platform tarballs in dist/, found ${#artifacts[@]} — aborting release (core deliverable missing)."
+              exit 1
+            fi
+            if [ ! -f "dist/checksums.txt" ]; then
+              echo "::error::dist/checksums.txt missing — aborting release (core deliverable missing)."
+              exit 1
+            fi
+            args+=("${artifacts[@]}" "dist/checksums.txt")
+          fi
+          # Retry: the freshly pushed tag may not be API-visible immediately,
+          # which makes --verify-tag fail transiently and leaves an orphan tag.
+          for attempt in 1 2 3; do
+            if gh release create "$TAG" "${args[@]}"; then
+              exit 0
+            fi
+            echo "::warning::gh release create attempt $attempt failed; retrying in 10s."
+            sleep 10
+          done
+          echo "::error::gh release create failed for $TAG after 3 attempts (tag is pushed; re-run this workflow to resume, or create the release manually)."
+          exit 1
 
       - name: Prune old daily snapshots
         if: needs.verify.outputs.prerelease == 'true'
