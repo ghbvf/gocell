@@ -11,6 +11,7 @@ import (
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
+	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
@@ -131,6 +132,24 @@ func closeRedisClientAfterFailedLoad(ctx context.Context, client *adapterredis.C
 	}
 }
 
+// closeBrokerResourcesAfterFailedLoad best-effort closes any event-transport
+// broker resources (e.g. the RabbitMQ connection, which dials eagerly in its
+// constructor) opened by eventtransport.Resolve, when LoadSharedDepsFromEnv fails
+// after the transport was resolved. Mirrors closeRedisClientAfterFailedLoad — the
+// broker connection holds an open socket that must not leak on a failed startup.
+// Errors are logged, not propagated (the load already failed).
+func closeBrokerResourcesAfterFailedLoad(ctx context.Context, resources []kernellifecycle.ManagedResource) {
+	for _, r := range resources {
+		if r == nil {
+			continue
+		}
+		if closeErr := r.Close(ctx); closeErr != nil {
+			slog.Warn("corebundle: failed to close event-transport broker resource after startup validation failure",
+				slog.Any("error", closeErr))
+		}
+	}
+}
+
 func adapterInfoForSharedDeps(shared *composition.SharedDeps, locals *cmdLocals) map[string]string {
 	info := shared.Topology.AdapterInfo()
 	redisState := "not-configured"
@@ -156,5 +175,13 @@ func adapterInfoForSharedDeps(shared *composition.SharedDeps, locals *cmdLocals)
 	info["service_token_nonce_store"] = nonceStoreKind
 	info["outbox_consumer_claimer"] = claimerKind
 	info["http_idempotency_store"] = httpIdempotencyStore
+	// Event transport: Topology.AdapterInfo() defaults event_bus to "in-memory"
+	// (the demo transport). postgres topology resolves a real broker via
+	// eventtransport.Resolve, surfaced here as a non-empty brokerResources slice;
+	// override so the startup log + /readyz?verbose report the ACTUAL transport
+	// rather than a stale "in-memory" label (#1940).
+	if len(locals.brokerResources) > 0 {
+		info["event_bus"] = "rabbitmq"
+	}
 	return info
 }

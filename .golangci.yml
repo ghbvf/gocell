@@ -283,6 +283,35 @@ linters:
                 adapters/). The explicit deny here remains so that any future
                 relaxation of adapters-isolation scope does not silently re-open
                 this specific boundary.
+        corebundle-no-direct-eventbus:
+          # COREBUNDLE-EVENTBUS-FUNNEL-01 (#1940): cmd/corebundle (the production
+          # composition root) must not import runtime/eventbus directly. The
+          # in-memory bus is demo-only and is wired EXCLUSIVELY through
+          # cellmodules/eventtransport.Resolve, which gates the choice on Topology
+          # and fail-closes postgres mode onto a real broker (RabbitMQ). A direct
+          # eventbus.New here re-opens the gap where postgres (durable) topology
+          # publishes already-persisted outbox entries to an in-process bus — lost
+          # across processes / restarts. Tests still use the in-memory bus
+          # (excluded via !**/*_test.go). This is the depguard enforcement of the
+          # // INVARIANT: branded in cellmodules/eventtransport/doc.go.
+          # Ref: ai-robust.md §"路径级 import ban → depguard".
+          files:
+            - "**/cmd/corebundle/**"
+            # Two exclusions: `*_test.go` matches test files DIRECTLY under
+            # cmd/corebundle (e.g. bundle_test.go); `**/*_test.go` matches any in a
+            # subdir. The `/**/ ` form alone misses flat-level test files because
+            # gobwas/glob's `**` segment requires an intermediate path component.
+            - "!**/cmd/corebundle/*_test.go"
+            - "!**/cmd/corebundle/**/*_test.go"
+          deny:
+            - pkg: github.com/ghbvf/gocell/runtime/eventbus
+              desc: |
+                cmd/corebundle must never import runtime/eventbus directly; the
+                in-memory bus is reachable only through
+                cellmodules/eventtransport.Resolve, which selects a real broker in
+                postgres topology and fail-fasts on a missing broker URL. A direct
+                eventbus.New re-opens the #1940 postgres-mode in-memory-publisher
+                gap. COREBUNDLE-EVENTBUS-FUNNEL-01.
         adapters-isolation:
           # LAYER-04: adapters/ depend on kernel/ + runtime/ + pkg/ + SDKs.
           # Cell-internal `cells/*/internal/adapters/**` (and the corecells

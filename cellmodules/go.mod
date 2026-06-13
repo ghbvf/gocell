@@ -4,9 +4,11 @@ go 1.25.11
 
 require (
 	github.com/ghbvf/gocell v0.0.0
+	github.com/ghbvf/gocell/adapters/rabbitmq v0.0.0
 	github.com/ghbvf/gocell/adapters/vault v0.0.0
 	github.com/ghbvf/gocell/corecells v0.0.0-00010101000000-000000000000
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/rabbitmq/amqp091-go v1.11.0
 	github.com/redis/go-redis/v9 v9.20.0
 	github.com/stretchr/testify v1.11.1
 )
@@ -74,6 +76,8 @@ replace github.com/ghbvf/gocell/corecells => ../corecells
 replace github.com/ghbvf/gocell/adapters/adapterutil => ../adapters/adapterutil
 
 replace github.com/ghbvf/gocell/adapters/postgres => ../adapters/postgres
+
+replace github.com/ghbvf/gocell/adapters/rabbitmq => ../adapters/rabbitmq
 
 replace github.com/ghbvf/gocell/adapters/ratelimit => ../adapters/ratelimit
 

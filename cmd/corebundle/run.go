@@ -50,14 +50,15 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		return err
 	}
 
-	// Close shared infrastructure (postgres pool + redis client) if startup aborts
-	// before bootstrap.Run takes ownership of the ManagedResources (provisionCapabilities /
-	// composition.Builder.Build / buildAssembly / option wiring failures). The redis
-	// client is created inside LoadSharedDepsFromEnv (which already closes it on its own
-	// internal failure); registering this defer immediately after Load covers the whole
-	// window from here to handedToBootstrap — including provisionCapabilities. The closure
-	// reads handedToBootstrap lazily at exit.
-	// Once bootstrap.Run is reached both resources are managed by bootstrap's LIFO teardown.
+	// Close shared infrastructure (postgres pool + redis client + event-transport
+	// broker connection) if startup aborts before bootstrap.Run takes ownership of
+	// the ManagedResources (provisionCapabilities / composition.Builder.Build /
+	// buildAssembly / option wiring failures). The redis client and the broker
+	// connection are created inside LoadSharedDepsFromEnv (which already closes them
+	// on its OWN internal failure); registering this defer immediately after Load
+	// covers the whole window from here to handedToBootstrap — including
+	// provisionCapabilities. The closure reads handedToBootstrap lazily at exit.
+	// Once bootstrap.Run is reached all three are managed by bootstrap's LIFO teardown.
 	handedToBootstrap := false
 	defer func() { releaseUnhandedResources(ctx, locals, handedToBootstrap) }()
 
@@ -137,6 +138,7 @@ func releaseUnhandedResources(ctx context.Context, locals *cmdLocals, handedToBo
 		_ = locals.poolMR.Close(ctx)
 	}
 	closeRedisClientAfterFailedLoad(ctx, locals.redisClient)
+	closeBrokerResourcesAfterFailedLoad(ctx, locals.brokerResources)
 }
 
 // logAssemblyMaturity emits a startup Info log of the running assembly's

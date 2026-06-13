@@ -6,10 +6,11 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ghbvf/gocell/cellmodules/eventtransport"
 	"github.com/ghbvf/gocell/kernel/clock"
+	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
-	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
 // SampleVerbosePlaceholder is the literal placeholder shipped in .env.example so
@@ -52,13 +53,27 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 		return nil, nil, err
 	}
 	loaded := false
+	var brokerResources []kernellifecycle.ManagedResource
 	defer func() {
 		if !loaded {
 			closeRedisClientAfterFailedLoad(ctx, replay.RedisClient)
+			closeBrokerResourcesAfterFailedLoad(ctx, brokerResources)
 		}
 	}()
 
-	eb := eventbus.New(clk)
+	// Topology-gated event transport (#1940): demo topology → in-process bus;
+	// postgres topology → real broker (RabbitMQ from GOCELL_AMQP_URL), fail-closed
+	// when the broker URL is missing. The in-memory bus is reachable ONLY through
+	// eventtransport.Resolve's demo branch — cmd/corebundle must not import
+	// runtime/eventbus directly (depguard corebundle-no-direct-eventbus,
+	// COREBUNDLE-EVENTBUS-FUNNEL-01).
+	transport, err := eventtransport.Resolve(clk, topo, eventtransport.Config{
+		AMQPURL: os.Getenv("GOCELL_AMQP_URL"),
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	brokerResources = transport.Resources
 
 	primaryAddr, internalAddr, healthAddr := resolveListenerAddrs()
 
@@ -100,6 +115,10 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 		metricsHandler: metricsHandler,
 	}
 	locals.redisClient = replay.RedisClient
+	// Hand the resolved broker resources (the RabbitMQ connection in postgres
+	// mode; empty in demo mode) to cmd wiring so runtimeBaseOptions registers them
+	// as ManagedResources for LIFO shutdown.
+	locals.brokerResources = transport.Resources
 
 	// Build composition.SharedDeps (public, interface-only fields consumed by
 	// platform cell modules). The control-plane production checks (verbose /
@@ -113,7 +132,8 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 		JWTIssuer:            jwt.issuer,
 		JWTVerifier:          jwt.verifier,
 		MetricsProvider:      metricsDeps.PromStack.metricProvider,
-		EventBus:             eb,
+		Publisher:            transport.Publisher,
+		Subscriber:           transport.Subscriber,
 		ConfigEventCollector: metricsDeps.ConfigEventCollector,
 		ConsumerClaimer:      replay.ConsumerClaimer,
 		InternalHMACRing:     internalRing,

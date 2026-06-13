@@ -33,13 +33,18 @@
 //	                              inject a noop emitter into a cell Option)
 //	outbox.DemoCellTxManager()  — sealed demo tx-manager funnel
 //	outbox.ResolveEmitter       — durable-vs-direct emitter resolver
-//	runtime/eventbus.New / InMemoryEventBus — the sole sanctioned in-process
-//	                              publisher (no real-broker alternative is wired
-//	                              anywhere); excluding it is option A of issue #1303.
-//	                              The "in-memory publisher in postgres mode" gap is
-//	                              real but out of scope — recorded in ADR
-//	                              202605281200 (#1303 row) and tracked as backlog
-//	                              issue #1940, not silently accepted.
+//	runtime/eventbus.New / InMemoryEventBus — the in-process DEMO publisher. It is
+//	                              not a raw noop sink, so this rule does not forbid
+//	                              it. The "in-memory publisher in postgres mode" gap
+//	                              that option A of #1303 deliberately left open is
+//	                              now CLOSED by #1940: postgres topology wires a real
+//	                              broker via cellmodules/eventtransport.Resolve, and
+//	                              cmd/corebundle is additionally barred from
+//	                              direct-importing runtime/eventbus by depguard
+//	                              COREBUNDLE-EVENTBUS-FUNNEL-01 (a transport-funnel
+//	                              guard, orthogonal to this noop-sink ban; eventbus
+//	                              stays legal in demo mains / examples). See ADR
+//	                              202606131500 (#1940).
 //
 // Cell-level (used inside a cell's Init, not a composition root — listed so the
 // rule's relationship to them is unambiguous, NOT as main-package guidance):

@@ -49,6 +49,16 @@ Sentinel mode is supported by the adapter but not yet wired into corebundle env 
 | `GOCELL_REDIS_PASSWORD` | Redis password (applies to all modes) | — | **Real mode** (yes); **dev mode** (no) | Passed directly to the Redis client. Fail-closed behavior: in **real** mode (`GOCELL_ADAPTER_MODE=real` requiring production control plane) the password is **mandatory** — startup fails fast with `ERR_ADAPTER_REDIS_CONNECT` ("`connection credential required`") when both `GOCELL_REDIS_PASSWORD` is unset and the deployment is not single-pod. In **dev** mode (`GOCELL_ADAPTER_MODE=dev` or single-pod) the corebundle automatically enables the `Config.AllowUnsafeNoPassword` opt-in so unauthenticated local Redis instances (testcontainers, `127.0.0.1` dev) work without a password. URL-embedded credentials in cluster URLs (`rediss://user:pass@host`) must equal `GOCELL_REDIS_PASSWORD` if both are set; conflicting values fail fast at startup with `ERR_ADAPTER_REDIS_CONNECT`. |
 | `GOCELL_REDIS_DB` | Redis database number | `0` | No | Must be a non-negative integer. Invalid values fail fast at startup. **Cluster mode forbids non-zero values** (Redis Cluster has no `SELECT` command). |
 
+## Event Transport (RabbitMQ — required for postgres topology)
+
+In postgres (durable) topology the outbox event transport is a **real message broker** (RabbitMQ), not the in-process bus: the relay publishes already-persisted outbox entries to the broker and consumers subscribe from it, so events survive process restarts and cross pod boundaries (#1940). In demo / memory topology the in-process eventbus is used and this variable is ignored. The transport is selected by `cellmodules/eventtransport.Resolve` from `Topology`.
+
+| Variable | Purpose | Default | Required? | Notes |
+|----------|---------|---------|-----------|-------|
+| `GOCELL_AMQP_URL` | RabbitMQ (AMQP 0-9-1) connection URL the relay publishes to and consumers subscribe from | — | **postgres topology** (`GOCELL_CELL_ADAPTER_MODE=postgres`) | Startup **fails fast** when unset in postgres topology — there is **no silent in-memory fallback** (a process-local bus would lose durable outbox entries across processes / restarts). The connection dials eagerly, so an unreachable broker also fails fast at startup. Use a TLS URL (`amqps://…`) for remote brokers; `amqp://guest:guest@localhost:5672/` is dev/CI only. **Ignored** in demo / memory topology. |
+
+**Dead-letter exchange (broker topology contract):** the RabbitMQ subscriber declares a single dead-letter exchange **`gocell.events.dlx`** at subscription setup. Messages rejected past the retry budget (`outbox.Reject`) are routed there instead of being silently dropped, retaining their original routing key (topic) so a DLX consumer can route by source topic. This name is a stable operations contract — renaming it requires migrating in-flight dead letters. Operators configuring vhost ACLs or dead-letter monitoring should account for `gocell.events.dlx`.
+
 ## Per-Cell Session and Cursor Keys
 
 Each Cell reads its own env variables. The naming pattern is `GOCELL_<CELLID>_<RESOURCE>`.

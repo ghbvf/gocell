@@ -86,7 +86,7 @@ func (m module) Provide(
 		auditcell.WithLedgerProtocol(auditProtocol),
 		auditcell.WithLedgerStore(auditcoreStore),
 		auditcell.WithQueryStore(multiStore),
-		auditcell.WithOutboxDeps(outbox.WrapPublisherForCell(shared.EventBus), nil),
+		auditcell.WithOutboxDeps(outbox.WrapPublisherForCell(shared.Publisher), nil),
 		auditcell.WithCursorCodec(cursorCodec),
 		auditcell.WithMetricsProvider(shared.MetricsProvider),
 		// Wire the bootstrap ledger store into the cell so the auditappendbootstrap
