@@ -85,19 +85,36 @@ type publishResult struct {
 	// command branch. writeBack Commits it on success and Releases it on failure;
 	// nil receipts are skipped (NonAcquiredReceipt is deliberately not stored here).
 	receipt idempotency.Receipt
+	// isCommand marks that publishBatch routed this entry to the in-process
+	// command-dispatch branch (commandDispatchFor hit) rather than broker event
+	// publish. It is the SINGLE discriminator the writeBack phase reads to (a)
+	// attribute the settled outcome to the command vs event bucket of pollStats — and
+	// thence the `kind` label on outbox_relayed_total — and (b) tag failure logs with
+	// is_command. receipt!=nil is insufficient: a deduped command (ClaimDone) settles
+	// successfully with a nil receipt yet is still a command (#1674).
+	isCommand bool
 }
 
-// pollStats records per-poll-cycle counters for observability.
+// pollStats records per-poll-cycle settled-entry counts for observability, split by
+// entry KIND (event vs command) so command in-process dispatch is reconcilable
+// separately from event broker publish in outbox_relayed_total{kind,outcome} (#1674).
+// Each settled entry increments the bucket selected by publishResult.isCommand (see
+// bucket). The per-disposition shape (published/retried/dead/skipped/lost, including
+// the lost-lease semantics) is documented on kout.OutcomeCounts and shared verbatim
+// with PollCycleResult — no hand mapping on the way out.
 type pollStats struct {
-	published int
-	retried   int
-	dead      int
-	skipped   int
-	// lost counts failure writebacks that lost their lease mid-flight
-	// (Mark{Retry,Dead} returned updated=false). The new lease owner — the
-	// reclaimer or a peer — reports the canonical outcome, so this writeback
-	// must NOT be counted as retried/dead. ref: B2-A-05.
-	lost int
+	event   kout.OutcomeCounts
+	command kout.OutcomeCounts
+}
+
+// bucket returns the per-kind OutcomeCounts to increment for a settled entry.
+// isCommand comes from publishResult (publishBatch's single command/event
+// discriminator), so attribution cannot drift from the dispatch decision.
+func (s *pollStats) bucket(isCommand bool) *kout.OutcomeCounts {
+	if isCommand {
+		return &s.command
+	}
+	return &s.event
 }
 
 // ---------------------------------------------------------------------------
@@ -585,20 +602,23 @@ func (r *Relay) pollOnce(ctx context.Context) error {
 	if wbErr == nil {
 		slog.Info(
 			"outbox relay: poll complete",
-			slog.Int("published", stats.published),
-			slog.Int("retried", stats.retried),
-			slog.Int("dead_lettered", stats.dead),
-			slog.Int("skipped", stats.skipped),
-			slog.Int("lost", stats.lost),
+			slog.Int("event_published", stats.event.Published),
+			slog.Int("event_retried", stats.event.Retried),
+			slog.Int("event_dead_lettered", stats.event.Dead),
+			slog.Int("event_skipped", stats.event.Skipped),
+			slog.Int("event_lost", stats.event.Lost),
+			slog.Int("command_published", stats.command.Published),
+			slog.Int("command_retried", stats.command.Retried),
+			slog.Int("command_dead_lettered", stats.command.Dead),
+			slog.Int("command_skipped", stats.command.Skipped),
+			slog.Int("command_lost", stats.command.Lost),
 			slog.Duration("claim_dur", claimDur),
 			slog.Duration("publish_dur", pubDur),
+			slog.Duration("write_back_dur", wbDur),
 		)
 		r.metrics.RecordPollCycle(ctx, kout.PollCycleResult{
-			Published:    stats.published,
-			Retried:      stats.retried,
-			Dead:         stats.dead,
-			Skipped:      stats.skipped,
-			Lost:         stats.lost,
+			Event:        stats.event,
+			Command:      stats.command,
 			ClaimDur:     claimDur,
 			PublishDur:   pubDur,
 			WriteBackDur: wbDur,
@@ -623,8 +643,13 @@ func (r *Relay) publishBatch(ctx context.Context, entries []ClaimedEntry) []publ
 	for i, e := range entries {
 		if fn, ok := r.commandDispatchFor(e.RoutingTopic()); ok {
 			// Command entry: dispatch to its in-process handler (wrapped in the
-			// two-phase Claimer protocol) instead of publishing to the broker.
-			results[i] = r.dispatchCommand(ctx, e, fn)
+			// two-phase Claimer protocol) instead of publishing to the broker. This
+			// is the single command/event discriminator: mark the result so writeBack
+			// attributes the settled outcome to the command kind bucket — and thence
+			// outbox_relayed_total{kind="command"} + is_command logs (#1674).
+			res := r.dispatchCommand(ctx, e, fn)
+			res.isCommand = true
+			results[i] = res
 			continue
 		}
 		payload, marshalErr := kout.MarshalEnvelope(e.Entry)
@@ -692,14 +717,15 @@ const (
 // default done-TTL (zero-overhead for commands that did not opt in).
 //
 // Dedup observability is a deliberate design decision, not a metric gap: the
-// ClaimDone (deduped) branch settles the row as published — the outbox row WAS
-// consumed, so "published" is the correct row outcome — and the command-level
-// dedup signal is carried by the "command deduped" Info log below (operators
-// reconcile dedup rate from that log line's count, NOT from the outbox published
-// counter, which deliberately does not distinguish first-dispatch from dedup).
-// Each branch emits a structured slog line (entry_id / routing_topic /
-// command_id / state / error — never the command payload body) so operators can
-// distinguish dedup vs first-dispatch vs fail-closed dead-letter vs busy retry.
+// ClaimDone (deduped) branch settles the row to DB state StatePublished (the outbox
+// row WAS consumed) and lands on outbox_relayed_total{kind="command",
+// outcome="published"} like a first dispatch — and the command-level dedup signal is
+// carried by the "command deduped" Info log below (operators reconcile dedup rate
+// from that log line's count, NOT from the relayed counter, which deliberately does
+// not distinguish first-dispatch from dedup WITHIN the command kind). Each branch
+// emits a structured slog line (entry_id / routing_topic / command_id / state /
+// error — never the command payload body) so operators can distinguish dedup vs
+// first-dispatch vs fail-closed dead-letter vs busy retry.
 func (r *Relay) dispatchCommand(ctx context.Context, e ClaimedEntry, fn command.AsyncDispatchFunc) publishResult {
 	key, ok := command.ClaimKeyFromEntry(e.Entry)
 	if !ok {
@@ -858,6 +884,7 @@ func (r *Relay) writeBackResults(ctx context.Context, results []publishResult) (
 				slog.Int("remaining", remaining),
 				slog.String("entry_id", res.entry.ID()),
 				slog.String("event_type", res.entry.EventType()),
+				slog.Bool("is_command", res.isCommand),
 				slog.Any("error", err))
 			return stats, err
 		}
@@ -901,15 +928,16 @@ func (r *Relay) writeBackOne(ctx context.Context, res publishResult, stats *poll
 		// skip the write-back and let the new lease owner re-issue if needed.
 		// Logged at Warn (mirrors the fail-write sibling) so duplicate-publish
 		// / lease-race investigations have entry-level evidence, not just a count.
-		stats.skipped++
+		stats.bucket(res.isCommand).Skipped++
 		slog.Warn(
 			"outbox relay: stale lease lost write-back",
 			slog.String("entry_id", res.entry.ID()),
 			slog.String("lease_id", res.entry.LeaseID),
+			slog.Bool("is_command", res.isCommand),
 			slog.String("outcome", "published"),
 		)
 	} else {
-		stats.published++
+		stats.bucket(res.isCommand).Published++
 	}
 	return nil
 }
@@ -958,17 +986,18 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 			return err
 		}
 		if !updated {
-			stats.lost++
+			stats.bucket(res.isCommand).Lost++
 			slog.Warn(
 				"outbox relay: stale lease lost fail-write",
 				slog.String("entry_id", res.entry.ID()),
 				slog.String("lease_id", res.entry.LeaseID),
+				slog.Bool("is_command", res.isCommand),
 				slog.String("outcome", "dead"),
 			)
 			return nil
 		}
-		stats.dead++
-		logEntryDeadLettered(ctx, res.entry, newAttempts, permanent, errMsg)
+		stats.bucket(res.isCommand).Dead++
+		logEntryDeadLettered(ctx, res.entry, res.isCommand, newAttempts, permanent, errMsg)
 		return nil
 	}
 
@@ -984,28 +1013,45 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 		return err
 	}
 	if !updated {
-		stats.lost++
+		stats.bucket(res.isCommand).Lost++
 		slog.Warn(
 			"outbox relay: stale lease lost fail-write",
 			slog.String("entry_id", res.entry.ID()),
 			slog.String("lease_id", res.entry.LeaseID),
+			slog.Bool("is_command", res.isCommand),
 			slog.String("outcome", "retry"),
 		)
 		return nil
 	}
-	stats.retried++
+	stats.bucket(res.isCommand).Retried++
 	return nil
 }
 
 // logEntryDeadLettered emits the dead-letter Error log. Extracted from
-// handleFailedEntry to keep it below the cognitive-complexity ceiling. Command
-// entries carry their per-instance dedup identity in metadata; surface it so
-// command dead-lettering is reconcilable. Non-command (event) entries have no
-// command_id — it is omitted then.
-func logEntryDeadLettered(ctx context.Context, entry ClaimedEntry, attempts int, permanent bool, errMsg string) {
+// handleFailedEntry to keep it below the cognitive-complexity ceiling. isCommand
+// (the publishBatch dispatch discriminator) is surfaced as an explicit is_command
+// field so command dead-lettering is filterable without parsing for command_id
+// presence; event_type is imprecise for commands (it carries the command id), so
+// is_command is the queryable kind dimension (#1674 F5). Command entries also carry
+// their per-instance dedup identity in metadata; surface it so command
+// dead-lettering is reconcilable. Non-command (event) entries have no command_id —
+// it is omitted then.
+//
+// PII boundary: entry_id is a framework-minted identifier (UUID-shaped); command_id
+// is the per-instance command idempotency identity — caller-supplied on the direct
+// EmitAsync path (runtime/command) and framework-derived from the sealed identity on
+// the HTTP-bridge path, so a direct producer is responsible for keeping it
+// diagnosable / non-sensitive. aggregate_id is the producing cell's domain
+// aggregate-root key, and last_error is already run through SanitizeError.
+// aggregate_id is an identifier, not PII content
+// (consistent with the pre-existing log shape); a cell that puts replayable PII in its
+// aggregate key is a cell-side redaction concern, not the relay's — the relay never
+// logs the entry payload body.
+func logEntryDeadLettered(ctx context.Context, entry ClaimedEntry, isCommand bool, attempts int, permanent bool, errMsg string) {
 	attrs := []slog.Attr{
 		slog.String("entry_id", entry.ID()),
 		slog.String("event_type", entry.EventType()),
+		slog.Bool("is_command", isCommand),
 		slog.String("aggregate_id", entry.AggregateID()),
 		slog.Int("attempts", attempts),
 		slog.Bool("permanent", permanent),
