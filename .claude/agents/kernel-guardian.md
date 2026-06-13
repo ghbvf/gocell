@@ -39,7 +39,7 @@ examples/   — 可以依赖所有层
 - [ ] Verify 闭环: 每个 contractUsage 有 verify.contract 或 waiver（waiver 未过期）; L0 依赖在 l0Dependencies 中声明
 - [ ] 格式合规: lifecycle in {draft, active, deprecated}; cell.type in {core, edge, support}; 无动态状态字段越界
 - [ ] 契约完整性: 跨 Cell 通信走 contract，无直接 import
-- [ ] Actor 注册: contract.ownerCell 必须是 Cell 非外部 actor; L0 Cell 不得出现在契约端点
+- [ ] Actor 注册: contract.ownerCell 必须是 Cell 非外部 actor，或保留 sentinel `_framework`（框架归属：仅 http/event + lifecycle draft|deprecated，provider 端点亦须为 `_framework`）; L0 Cell 不得出现在契约端点
 - [ ] 一致性级别: 新增 CUD 操作标注 L0-L4
 - [ ] 适配器接口: adapters/ 实现 kernel/ 或 runtime/ 定义的接口
 - [ ] Assembly: assembly.yaml 列出所有 Cell; 多 Cell 时产出 boundary.yaml

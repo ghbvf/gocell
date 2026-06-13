@@ -208,6 +208,13 @@ func (v *Validator) runPerContractPhase(
 		if isExamplePath(c.File) || isExamplePath(c.Dir) {
 			continue
 		}
+		// Framework-owned HTTP contracts have no serving cell slice, so the
+		// triggers↔outbox.Emit coupling this rule enforces does not apply: the
+		// emit happens in the framework serving layer (runtime), not a cell
+		// slice. They are governed by FRAMEWORK-OWNED-CONTRACT-SCOPED-01.
+		if c.Owner().IsFramework() {
+			continue
+		}
 		r, skip := v.checkConsistencyConstraints12(c)
 		results = append(results, r...)
 		if skip || len(c.Triggers) == 0 || !isL2OrHigher(c.ConsistencyLevel) {

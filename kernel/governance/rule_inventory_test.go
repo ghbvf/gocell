@@ -76,6 +76,10 @@ func goldenRuleIDs() []string {
 		// (rules_misc_consistency.go)
 		"CONTRACT-CONSISTENCY-EMIT-01",
 
+		// FRAMEWORK-OWNED-CONTRACT-SCOPED — framework owner eligibility +
+		// fail-closed lifecycle (rules_framework_owned.go)
+		"FRAMEWORK-OWNED-CONTRACT-SCOPED-01",
+
 		// DEP — dependency graph (depcheck.go)
 		"DEP-01", "DEP-02", "DEP-03",
 
