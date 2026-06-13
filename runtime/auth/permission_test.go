@@ -266,6 +266,28 @@ func TestRequirePermissionOrSelf_Self_ExemptWithoutPDP(t *testing.T) {
 	assert.NoError(t, err, "self-access (param==subject) must be exempt without consulting the PDP")
 }
 
+// TestRequirePermissionOrSelf_SelfZeroPermission_FailClosed is the F2 (PR #1974)
+// red-fail guard: a self-naming caller (param==subject) must NOT be permitted when
+// the wrapped permission is a zero authz.Permission{} (a mis-wired gate). The zero
+// guard is hoisted ABOVE the self-exemption, so even the self path fails closed —
+// mirroring RequirePermission's own first guard. Before the fix the self branch
+// returned nil first, silently permitting a mis-wired gate. A permissive Authorizer
+// is wired to prove the deny comes from the zero-permission guard, not the PDP.
+func TestRequirePermissionOrSelf_SelfZeroPermission_FailClosed(t *testing.T) {
+	p := &Principal{Kind: PrincipalUser, Subject: roselfSubjectA, Roles: []string{"user"}}
+	allow := &mockAuthorizer{allowed: true}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/"+roselfSubjectA, nil)
+	req.SetPathValue("id", roselfSubjectA)
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), allow))
+
+	err := RequirePermissionOrSelf("id", authz.Permission{})(req)
+	require.Error(t, err, "self-access with a zero permission must fail closed, not self-exempt (F2)")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind, "zero permission → 403 even on the self path")
+}
+
 func TestRequirePermissionOrSelf_NonSelfAdmin_PDPAllow(t *testing.T) {
 	p := &Principal{Kind: PrincipalUser, Subject: "admin-1", Roles: []string{"admin"}}
 	allow := &mockAuthorizer{allowed: true}

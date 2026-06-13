@@ -87,9 +87,10 @@ var permissionBasedAuthzRoleGateSelectors = map[string]struct{}{
 // (PR-10b) and now the 3 accesscore slices (PR-10c) are all migrated to
 // auth.RequirePermission / auth.RequirePermissionOrSelf. With an empty allowlist
 // the rule is a ZERO-EXCEPTION scan: ANY auth.AnyRole/SelfOr/RequireAnyRole gate
-// in a corecells business handler is a violation. The exact-set freeze + ceiling
-// test were deleted with the last entry (an empty map cannot grow/swap silently —
-// any re-addition is itself the diff a reviewer sees). Hard-ification
+// in a corecells business handler is a violation. The exact-set freeze survives the
+// drain as TestPermissionBasedAuthzAllowlist_FrozenEmpty — now frozen at ∅ and run at
+// PR-time (in-memory, NO packages.Load) — so a re-grow is rejected at PR-merge rather
+// than left to reviewer vigilance (PR #1974 review F3). Hard-ification
 // (contract.yaml → cellgen gate + golden) is tracked for PR-13.
 var permissionBasedAuthzAllowlist = map[string]struct{}{}
 
@@ -221,4 +222,24 @@ func TestPermissionBasedAuthz_ReverseFixture(t *testing.T) {
 		"reverse fixture: expected ≥1 diagnostic for the role-literal auth.AnyRole callsite "+
 			"in testdata/permission_based_authz_red — "+
 			rulePermissionBasedAuthz01+" must fire, else the rule is vacuous")
+}
+
+// TestPermissionBasedAuthzAllowlist_FrozenEmpty is the PR-time exact-set freeze on
+// the (drained) migration allowlist. It is a pure in-memory assertion (NO
+// packages.Load), so it is cheap enough for hack/verify-archtest-invariants.sh, and
+// it restores the PR-time protection the deleted TestPermissionBasedAuthzAllowlist_Ceiling
+// gave: with the allowlist at ∅ the freeze is "must stay empty", so a re-grow — a
+// handler re-added to silently exempt a re-introduced auth.AnyRole/SelfOr/RequireAnyRole
+// gate — fails at PR-merge, not only in the nightly whole-corecells scan
+// (TestPermissionBasedAuthz_01). Without this guard the rule's only PR-time presence
+// would be the non-vacuity reverse fixture, leaving allowlist re-growth to reviewer
+// vigilance alone (a Soft regression). PR #1974 review F3.
+func TestPermissionBasedAuthzAllowlist_FrozenEmpty(t *testing.T) {
+	t.Parallel()
+	assert.Empty(t, permissionBasedAuthzAllowlist,
+		"permissionBasedAuthzAllowlist must stay EMPTY (PR-10c drained it). Re-adding an entry "+
+			"silently re-opens a role-literal-gate exemption — migrate the handler to "+
+			"auth.RequirePermission(authz.Perm*) instead. If a future migration genuinely needs a "+
+			"temporary ledger, restore the exact-set freeze (frozen expected-set compare) alongside it "+
+			"so the allowlist still cannot grow/swap silently at PR-time")
 }

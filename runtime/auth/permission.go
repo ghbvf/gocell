@@ -196,6 +196,11 @@ func RequirePermission(p authz.Permission) Policy {
 // subject (isSelfAccess returns false on empty target), so it falls through to the
 // PDP — a subject can only self-exempt by explicitly naming itself.
 //
+// Zero permission fails closed FIRST: a zero authz.Permission{} (a mis-wired gate)
+// is rejected before the self-exemption check, so the self branch inherits the same
+// fail-closed precondition as RequirePermission rather than silently permitting a
+// self-naming caller (F2).
+//
 // Caller contract (review-enforced, not type-expressible): pathParam MUST name
 // the subject-identity path parameter of the route (the target user/owner id) —
 // pointing it at an unrelated param would exempt non-owners.
@@ -207,6 +212,15 @@ func RequirePermission(p authz.Permission) Policy {
 func RequirePermissionOrSelf(pathParam string, p authz.Permission) Policy {
 	requirePermission := RequirePermission(p)
 	return func(r *http.Request) error {
+		// Fail-closed BEFORE the self-exemption shortcut (PR #1974 review F2): a
+		// zero authz.Permission{} is a programmer error and must never be permitted,
+		// not even for a self-naming caller. The self branch otherwise returns nil
+		// without ever reaching RequirePermission's own zero guard, so the wrapper
+		// would silently permit a mis-wired gate. Hoisting the guard makes the self
+		// branch inherit the same fail-closed precondition as the PDP path.
+		if p.IsZero() {
+			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgPermissionNotSpecified)
+		}
 		if principal, ok := FromContext(r.Context()); ok &&
 			principal.Kind == PrincipalUser && principal.Subject != "" &&
 			isSelfAccess(principal.Subject, r.PathValue(pathParam)) {

@@ -64,13 +64,19 @@ source hack/lib/archtest.sh
 # nightly. Cheap here: a header-only //go:build parse per file, NO packages.Load.
 #
 # PERMISSION-BASED-AUTHZ-01 — its migration allowlist was DRAINED to empty by
-# PR-10c (#1348), so the cheap exact-set freeze (the former
-# TestPermissionBasedAuthzAllowlist_Ceiling) was deleted with the last entry: an
-# empty map cannot grow/swap silently, and any re-addition is itself a reviewable
-# diff. The rule's only remaining enforcement is the whole-corecells packages.Load
-# typed scan (TestPermissionBasedAuthz_01) which, like CLOCK-POSITIONAL-INJECTION-01
-# above, stays nightly (archtest-nightly.yml) to respect the 2-CPU/7GB runner budget;
-# its non-vacuity is the reverse-fixture self-check. #1925 PR-10b pr-review F2/F3.
+# PR-10c (#1348). Two CHEAP guards keep the rule at PR-time so it does not silently
+# regress to nightly-only — the failure PR #1974 review F3 caught when the former
+# TestPermissionBasedAuthzAllowlist_Ceiling was deleted with no PR-time replacement:
+#   TestPermissionBasedAuthzAllowlist_FrozenEmpty — in-memory exact-set freeze at ∅
+#     (NO packages.Load): a re-grow that re-opens a role-literal-gate exemption fails
+#     at PR-merge, not just nightly. Replaces the deleted Ceiling, frozen at empty.
+#   TestPermissionBasedAuthz_ReverseFixture — loads the standalone RED fixture
+#     (~1.7s, ONE tiny module, NOT the corecells tree) and asserts the scan fires,
+#     proving the typed scanner is non-vacuous at PR-merge.
+# The heavy whole-corecells packages.Load scan (TestPermissionBasedAuthz_01), like
+# CLOCK-POSITIONAL-INJECTION-01 above, stays nightly (archtest-nightly.yml) to respect
+# the 2-CPU/7GB runner budget — a real new gate in a live corecells handler is caught
+# there. #1925 PR-10b pr-review F2/F3; #1974 PR-10c pr-review F3.
 #
 # -tags=archtest: the archtest leaf is gated behind `//go:build archtest` so a
 # bare `go test ./...` keeps it off the make verify / PR critical path (build-tag
@@ -79,7 +85,7 @@ source hack/lib/archtest.sh
 # renamed tag (which yields "[no test files]" → 0 tests → false green) into a
 # hard failure — `-run` over an empty test set exits 0 otherwise.
 if ! output="$(go test -tags="$ARCHTEST_BUILD_TAGS" ./tools/archtest \
-  -run '^(TestProdClockInjection|TestKernelClockLeafFallback|TestKernelClockLeafFallbackFixtures|TestProdClockInjectionFixtures|TestProdDurationConst|TestProdDurationConstFixtures|TestTestTimeLiteralConst|TestTestSleepDiscipline|TestTestTimeLiteralFixtures|TestPanicRegistered|TestPanicRegisteredScannerFixtures|TestArchtestModulePathFunnel|TestModulePathFunnel_TypedReconstruction|TestFenceTokenMintFunnel_AllowlistEnforced|TestMetadatatestImportScope|TestFixtureCellIDTypedBuilder_NewCellIDBodyShape|TestFixtureCellIDTypedBuilder_VarInitializerShape|TestRootModuleNoReplace01|TestRootModuleNoReplace01_NegativeControl|TestPlatformCellScanCoverage01|TestPlatformCellScanCoverage01_AntiVacuity|TestArchtest_AllLeafTestFiles_HaveArchtestBuildTag|TestArchtest_InvariantsScriptContainsFunnelGuard)$' \
+  -run '^(TestProdClockInjection|TestKernelClockLeafFallback|TestKernelClockLeafFallbackFixtures|TestProdClockInjectionFixtures|TestProdDurationConst|TestProdDurationConstFixtures|TestTestTimeLiteralConst|TestTestSleepDiscipline|TestTestTimeLiteralFixtures|TestPanicRegistered|TestPanicRegisteredScannerFixtures|TestArchtestModulePathFunnel|TestModulePathFunnel_TypedReconstruction|TestFenceTokenMintFunnel_AllowlistEnforced|TestMetadatatestImportScope|TestFixtureCellIDTypedBuilder_NewCellIDBodyShape|TestFixtureCellIDTypedBuilder_VarInitializerShape|TestRootModuleNoReplace01|TestRootModuleNoReplace01_NegativeControl|TestPlatformCellScanCoverage01|TestPlatformCellScanCoverage01_AntiVacuity|TestArchtest_AllLeafTestFiles_HaveArchtestBuildTag|TestArchtest_InvariantsScriptContainsFunnelGuard|TestPermissionBasedAuthzAllowlist_FrozenEmpty|TestPermissionBasedAuthz_ReverseFixture)$' \
   -count=1 -timeout 5m 2>&1)"; then
   printf '%s\n' "$output"
   exit 1
