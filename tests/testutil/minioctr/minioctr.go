@@ -1,6 +1,6 @@
 //go:build integration
 
-package testutil
+package minioctr
 
 import (
 	"context"
@@ -11,6 +11,8 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcminio "github.com/testcontainers/testcontainers-go/modules/minio"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	"github.com/ghbvf/gocell/tests/testutil"
 )
 
 const (
@@ -87,10 +89,10 @@ func resolveContainerOpts(cfg *minioRunConfig) []testcontainers.ContainerCustomi
 // "/minio/health/live" HTTP readiness on port 9000.
 func StartMinIOContainer(t *testing.T, ctx context.Context, opts ...MinIORunOption) *tcminio.MinioContainer {
 	t.Helper()
-	RequireDocker(t)
+	testutil.RequireDocker(t)
 
 	cfg := newMinioRunConfig(opts)
-	container, err := tcminio.Run(ctx, MinIOImage, resolveContainerOpts(cfg)...)
+	container, err := tcminio.Run(ctx, testutil.MinIOImage, resolveContainerOpts(cfg)...)
 
 	// Register cleanup before checking err: tcminio.Run can return a non-nil
 	// container alongside a non-nil error (Inspect failure after a successful

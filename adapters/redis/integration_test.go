@@ -30,6 +30,11 @@ func startRedis(t *testing.T) (*Client, func()) {
 	ctx := context.Background()
 
 	container, err := tcredis.Run(ctx, testutil.RedisImage)
+	// Partial start: Run can return a non-nil container alongside an error;
+	// terminate the orphan before require.NoError aborts the test.
+	if err != nil && container != nil {
+		_ = container.Terminate(ctx)
+	}
 	require.NoError(t, err, "start redis container")
 
 	connStr, err := container.ConnectionString(ctx)

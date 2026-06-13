@@ -41,7 +41,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
-	"github.com/ghbvf/gocell/tests/testutil"
+	"github.com/ghbvf/gocell/tests/testutil/rabbitmqctr"
 )
 
 const (
@@ -70,7 +70,7 @@ func startShutdownTestBroker(t *testing.T) (amqpURL, mgmtURL string, container *
 	t.Helper()
 
 	ctx := context.Background()
-	c := testutil.StartRabbitMQContainer(t, ctx)
+	c := rabbitmqctr.StartRabbitMQContainer(t, ctx)
 
 	amqp, err := c.AmqpURL(ctx)
 	require.NoError(t, err, "get amqp url")
