@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -147,6 +148,48 @@ func EmitAsync[T any](
 		return fmt.Errorf("command.EmitAsync(%s): %w", dispatchID, err)
 	}
 	return nil
+}
+
+// EmitAsyncFromIdempotencyKey is the sanctioned HTTP→command idempotency bridge
+// (#1610 "Idempotency-Key ↔ command_id"). It sources the per-instance commandID
+// from the request's validated Idempotency-Key in ctx (injected by the HTTP
+// idempotency middleware via idemkey.WithKey) and emits the async command through
+// EmitAsync — so the SAME idempotency-key, sent for the same subject across
+// different cells / listeners / pods, derives the SAME DeriveCommandKey dedup slot
+// and the relay's Claimer wrap dispatches the command exactly once.
+//
+// Unlike EmitAsync, commandID is NOT a caller parameter: it is read from ctx, so
+// the "subject/commandID adjacent same-typed string transpose" footgun documented
+// on EmitAsync is structurally inexpressible on this HTTP-sourced path. The brace/
+// empty validation (DeriveCommandKey's caller obligation) is performed here, once,
+// fail-closed:
+//
+//   - ctx carries no Idempotency-Key (ok=false) or an empty key → KindInvalid
+//     (the route should send the header; rendered as 400 by httputil.WriteError).
+//   - key contains Redis-Cluster hash-tag braces "{"/"}" → KindInvalid, rather
+//     than deferring to a store-side KindInternal → MarkDead dead-letter.
+//
+// The funnel is preserved: the kout.NewEntry callsite stays inside EmitAsync
+// (runtime/command), satisfying COMMAND-ASYNC-EMIT-FUNNEL-01.
+func EmitAsyncFromIdempotencyKey[T any](
+	ctx context.Context,
+	clk clock.Clock,
+	emitter kout.Emitter,
+	dispatchID CommandID,
+	subject string,
+	payload T,
+	opts ...EmitOption,
+) error {
+	commandID, ok := idemkey.KeyFromContext(ctx)
+	if !ok || commandID == "" {
+		return errcode.New(errcode.KindInvalid, errCommandEmitOp,
+			"command.EmitAsyncFromIdempotencyKey: missing Idempotency-Key header (required for idempotent async command)")
+	}
+	if strings.ContainsAny(commandID, "{}") {
+		return errcode.New(errcode.KindInvalid, errCommandEmitOp,
+			"command.EmitAsyncFromIdempotencyKey: Idempotency-Key contains invalid characters")
+	}
+	return EmitAsync(ctx, clk, emitter, dispatchID, subject, commandID, payload, opts...)
 }
 
 // dispatchedUniquenessKey is the unexported context key type for the dispatched

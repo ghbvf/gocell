@@ -375,6 +375,11 @@ func (h idempotencyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !validateIdempotencyKey(r.Context(), w, idemKey) {
 		return
 	}
+	// Expose the validated key to the downstream handler (the HTTP-side half of
+	// the #1610 Idempotency-Key ↔ command_id bridge): a producer handler reads it
+	// via KeyFromContext to source a per-instance command_id. Injected only on
+	// intercepted+validated requests, so KeyFromContext is ok=false elsewhere.
+	r = r.WithContext(WithKey(r.Context(), idemKey))
 	fp, ok := readBodyFingerprint(r.Context(), w, r)
 	if !ok {
 		return
