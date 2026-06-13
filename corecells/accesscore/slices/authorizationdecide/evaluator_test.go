@@ -248,6 +248,17 @@ func TestEvaluate_MatchedRuleID(t *testing.T) {
 			wantAllow:  false,
 			wantRuleID: "_default-deny",
 		},
+		{
+			// A matching permit whose merged obligation is invalid (FieldMask key with
+			// whitespace → authz.Allow returns err) → fail-closed Deny + sentinel.
+			name: "invalid combined obligations → sentinel",
+			policies: []*abac.Policy{policyWith("p1",
+				permitRule("bad-obl", authz.Obligations{FieldMask: authz.FieldMask{Fields: []string{"bad key"}}}))},
+			resolver:   plainResolver,
+			action:     synthetic,
+			wantAllow:  false,
+			wantRuleID: "_invalid-obligations",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

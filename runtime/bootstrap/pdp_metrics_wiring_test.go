@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 
@@ -19,6 +20,23 @@ type pdpWireFakeAuthorizer struct{}
 
 func (pdpWireFakeAuthorizer) Authorize(context.Context, string, string, string) (authz.Decision, error) {
 	return authz.Deny("test"), nil
+}
+
+// pdpWireResolvingAuthorizer implements both Authorize and ResolveAuthorizer so
+// the test can assert resolve runs (and on the bare authorizer, before the
+// observableAuthorizer wrap which does NOT implement ResolveAuthorizer).
+type pdpWireResolvingAuthorizer struct {
+	resolveErr error
+	resolved   bool
+}
+
+func (a *pdpWireResolvingAuthorizer) Authorize(context.Context, string, string, string) (authz.Decision, error) {
+	return authz.Deny("test"), nil
+}
+
+func (a *pdpWireResolvingAuthorizer) ResolveAuthorizer() error {
+	a.resolved = true
+	return a.resolveErr
 }
 
 // TestAppendPrimaryAuthorizerInjector_RegistersPDPMetrics is the #2027 wiring
@@ -52,4 +70,26 @@ func TestAppendPrimaryAuthorizerInjector_NoProvider_NoPDPMetrics(t *testing.T) {
 	opts, err := b.appendPrimaryAuthorizerInjector(nil)
 	require.NoError(t, err)
 	require.Len(t, opts, 1, "injector still installed without a metrics provider (fail-open)")
+}
+
+// TestAppendPrimaryAuthorizerInjector_ResolvesBeforeWrapping locks the ordering
+// invariant: ResolveAuthorizer must run on the bare primary Authorizer BEFORE it
+// is wrapped in observableAuthorizer (which does not implement ResolveAuthorizer).
+// A resolve error must bubble (proving resolve ran), and PDP metrics must NOT
+// register because we bail before the wrap. If a future refactor wrapped first,
+// the resolve would be silently skipped and this test would fail.
+func TestAppendPrimaryAuthorizerInjector_ResolvesBeforeWrapping(t *testing.T) {
+	sentinel := errors.New("resolve boom")
+	fake := &pdpWireResolvingAuthorizer{resolveErr: sentinel}
+	spy := &registrationSpy{}
+	b := New(clock.Real(), WithMetricsProvider(spy))
+	b.primaryAuthorizer = fake
+
+	_, err := b.appendPrimaryAuthorizerInjector(nil)
+	require.Error(t, err)
+	require.ErrorIs(t, err, sentinel,
+		"ResolveAuthorizer error must bubble — resolve runs on the bare authorizer before wrapping")
+	require.True(t, fake.resolved, "ResolveAuthorizer must have been invoked")
+	assert.NotContains(t, spy.counters(), "auth_pdp_decision_total",
+		"PDP metrics must NOT register when resolve fails before the wrap")
 }

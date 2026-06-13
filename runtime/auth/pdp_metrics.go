@@ -9,6 +9,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // ref: go-kratos/kratos middleware/metrics/metrics.go — counter+histogram by-label
@@ -57,11 +59,17 @@ func NewPDPMetrics(p metrics.Provider) (*PDPMetrics, error) {
 	if err != nil {
 		return nil, fmt.Errorf("auth: register auth_pdp_decision_total: %w", err)
 	}
+	// Histogram is labeled by `decision` only (not `action`): latency is dominated
+	// by the policy-store load + evaluate, which is per-tenant not per-action, and
+	// keeping it off the histogram bounds bucket cardinality (the counter already
+	// carries `action` for per-action deny-rate analysis). Buckets reach 2.5s so a
+	// slow PG policy load / cold start does not collapse every sample into +Inf and
+	// break p95 (mirrors runtime/auth/refresh bucket ceiling).
 	dur, err := p.HistogramVec(metrics.HistogramOpts{
 		Name:       "auth_pdp_decision_duration_seconds",
 		Help:       "Duration of a PDP authorization decision (policy-store load + evaluate) in seconds, by decision.",
 		LabelNames: []string{"decision"},
-		Buckets:    []float64{.0001, .0005, .001, .005, .01, .025, .05, .1, .25, .5},
+		Buckets:    []float64{.0001, .0005, .001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("auth: register auth_pdp_decision_duration_seconds: %w", err)
@@ -104,6 +112,13 @@ type observableAuthorizer struct {
 // matching the bootstrap fail-open path when no metrics provider is configured.
 func NewObservableAuthorizer(clk clock.Clock, inner Authorizer, m *PDPMetrics) Authorizer {
 	clock.MustHaveClock(clk, "auth.NewObservableAuthorizer")
+	// inner is a mandatory dependency — fail-fast at composition (like the clock
+	// above) rather than nil-deref on the first request (go-standards / runtime-api.md
+	// 强依赖 fail-fast). m is intentionally optional (nil → no-op recorder).
+	if validation.IsNilInterface(inner) {
+		panic(panicregister.Approved("auth-observable-authorizer-nil-inner",
+			errcode.Assertion("auth.NewObservableAuthorizer: inner Authorizer must not be nil")))
+	}
 	return &observableAuthorizer{inner: inner, m: m, clk: clk}
 }
 

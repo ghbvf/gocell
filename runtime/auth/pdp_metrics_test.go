@@ -210,3 +210,21 @@ func TestNewObservableAuthorizer_NilClock_Panics(t *testing.T) {
 		_ = NewObservableAuthorizer(clk, pdpFakeAuthorizer{}, nil)
 	})
 }
+
+// TestNewObservableAuthorizer_NilInner_Panics pins the inner fail-fast guard:
+// a nil Authorizer must panic at construction rather than nil-deref on the first
+// request (强依赖 fail-fast, mirroring the clock guard). Covers both bare and
+// typed-nil interface forms.
+func TestNewObservableAuthorizer_NilInner_Panics(t *testing.T) {
+	t.Run("bare nil", func(t *testing.T) {
+		require.Panics(t, func() {
+			_ = NewObservableAuthorizer(clock.Real(), nil, nil)
+		})
+	})
+	t.Run("typed nil", func(t *testing.T) {
+		var inner *observableAuthorizer // typed-nil Authorizer
+		require.Panics(t, func() {
+			_ = NewObservableAuthorizer(clock.Real(), inner, nil)
+		})
+	})
+}

@@ -602,10 +602,14 @@ registry 封闭。`decision` 值集冻结为 3 个（archtest `AUTHZ-PDP-DECISIO
 > Provider 时装饰器不接线（fail-open，metric 不发射，授权判定不受影响）。
 
 **rule_id 归因**：每次决策另由 `authorizationdecide` slice 落一条结构化日志
-`"authorization decision"`，带 `matched_rule_id` 字段——deny 走 **Info**（始终在线，供 on-call
-排查 ownership deny），allow 走 **Debug**（高频、按需）。`matched_rule_id` 区分授权来源，例如
-`baseline-user-read-self`（self via ownership）vs `baseline-user-read-admin`（admin via
-baseline）；default-deny 记 `_default-deny` 哨兵。指标给聚合 deny rate / latency，日志给单次归因。
+`"authorization decision"`，带 `matched_rule_id` 字段（allow 与 deny 均为 **Debug** 级——该日志
+含 `subject`/`resource`（UUID），是按需的单次归因细节，不常驻）。`matched_rule_id` 区分授权来源，
+例如 `baseline-user-read-self`（self via ownership）vs `baseline-user-read-admin`（admin via
+baseline）；default-deny 记 `_default-deny` 哨兵。**始终在线**的粗粒度 deny 可见性由两处提供：
+`RequirePermission` 的 Info 日志 `"authz: permission denied by PDP"`（含 subject/path/permission/
+reason）+ 上面的 `auth_pdp_decision_total{decision="deny"}` deny-rate 指标。需要按单次决策定位具体
+命中规则时，临时把 `authorizationdecide` 的 log level 调到 Debug（注意 Debug 日志含 subject/resource，
+遵循 PII 访问审计规范）。
 
 ### GoCellAuthPDPDenyRateHigh
 
@@ -616,7 +620,7 @@ PDP deny 速率短时偏高：可能是租户 policy 误配、客户端越权扫
 - alert: GoCellAuthPDPDenyRateHigh
   expr: |
     sum(rate(gocell_auth_pdp_decision_total{decision="deny"}[5m])) by (action) > 1
-  for: 10m
+  for: 5m
   labels:
     severity: warning
   annotations:
@@ -632,21 +636,27 @@ PDP deny 速率短时偏高：可能是租户 policy 误配、客户端越权扫
 
 ### GoCellAuthPDPStoreError
 
-`decision="error"` 表示 PDP `Authorize` 返错（policy store 不可达 / 缺租户）→ fail-closed。
-与 policy `deny`（403）区分，便于把 infra 故障从授权失败里拆出来。
+`decision="error"` 表示 PDP `Authorize` 返错 → fail-closed，与 policy `deny` 区分，便于把 infra
+故障从授权失败里拆出来。**`error` 实含两类来源**（HTTP 状态不同，用服务端日志的 errcode kind 进一步
+区分）：(1) policy store 不可达（`KindUnavailable` → 503）—— infra 故障，需立即排查；(2) 缺租户
+scope（`KindPermissionDenied` → 403）—— 通常是客户端未带 `X-Tenant-ID` 或 JWT 缺 tenant claim。
+`for: 2m` 与其他 critical 基础设施告警（如 MQTT DLX）对齐。
 
 ```yaml
 - alert: GoCellAuthPDPStoreError
   expr: sum(rate(gocell_auth_pdp_decision_total{decision="error"}[5m])) > 0
-  for: 5m
+  for: 2m
   labels:
     severity: critical
   annotations:
     summary: "PDP authorization errors (fail-closed)"
     description: |
-      The PDP returned errors (policy store unavailable / tenant scope missing) — every
-      such request is denied fail-closed (503/500). Check policy-store (PG) readiness and
-      the tenant-scope plumbing; cross-reference gocell_auth_pdp_decision_duration_seconds.
+      The PDP returned errors — every such request is denied fail-closed. Two sources,
+      distinguished by the server-side errcode kind: (1) policy store unavailable
+      (KindUnavailable → 503), an infra fault needing immediate triage; (2) tenant scope
+      missing (KindPermissionDenied → 403), usually a client missing X-Tenant-ID / a JWT
+      without a tenant claim. Check policy-store (PG) readiness and the tenant-scope
+      plumbing; cross-reference gocell_auth_pdp_decision_duration_seconds.
 ```
 
 ### 调试 PromQL

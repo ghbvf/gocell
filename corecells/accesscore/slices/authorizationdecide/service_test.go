@@ -768,10 +768,10 @@ func recordAttr(r slog.Record, key string) (string, bool) {
 	return val, ok
 }
 
-// TestAuthorize_LogsMatchedRuleID is the F12 observability guard (#2027): the
-// PDP decision log carries matched_rule_id, and is emitted at Info for a deny
-// (always-on for on-call deny investigation) and Debug for an allow (high-volume,
-// on-demand).
+// TestAuthorize_LogsMatchedRuleID is the F12 observability guard (#2027): the PDP
+// decision log carries matched_rule_id for both allow and deny, at Debug (it is
+// per-decision detail carrying subject/resource UUIDs — always-on coarse deny
+// visibility lives in RequirePermission's Info log + the deny-rate metric).
 func TestAuthorize_LogsMatchedRuleID(t *testing.T) {
 	const ownerID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 
@@ -794,12 +794,12 @@ func TestAuthorize_LogsMatchedRuleID(t *testing.T) {
 			wantRuleID: "baseline-user-read-self",
 		},
 		{
-			name:       "default-deny → Info + sentinel rule id",
+			name:       "default-deny → Debug + sentinel rule id",
 			principal:  userPrincipal(nil),
 			subject:    "usr-1",
 			resource:   "/x",
 			action:     "read",
-			wantLevel:  slog.LevelInfo,
+			wantLevel:  slog.LevelDebug,
 			wantRuleID: "_default-deny",
 		},
 	}
