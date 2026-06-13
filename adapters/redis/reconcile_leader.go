@@ -2,7 +2,6 @@ package redis
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -191,7 +190,7 @@ func (e *RedisReconcileElector) AcquireLease(ctx context.Context, reconcilerID s
 		[]string{e.holderKey(reconcilerID), e.epochKey(reconcilerID)},
 		e.holderID, e.lease.Milliseconds(), int64(reconcileEpochKeyTTL.Seconds())).Slice()
 	if err != nil {
-		return reconcile.LeaseToken{}, fmt.Errorf("redis reconcile elector: acquire: %w", err)
+		return reconcile.LeaseToken{}, classifyRedisError(err, ErrAdapterRedisSet, "redis reconcile elector acquire")
 	}
 	acquired, epoch, err := parseAcquireResult(res)
 	if err != nil {
@@ -218,7 +217,7 @@ func (e *RedisReconcileElector) RenewLease(ctx context.Context, token reconcile.
 		[]string{e.holderKey(token.ReconcilerID), e.epochKey(token.ReconcilerID)},
 		e.holderID, e.lease.Milliseconds(), int64(reconcileEpochKeyTTL.Seconds())).Int64()
 	if err != nil {
-		return fmt.Errorf("redis reconcile elector: renew: %w", err)
+		return classifyRedisError(err, ErrAdapterRedisSet, "redis reconcile elector renew")
 	}
 	if held != 1 {
 		return reconcile.ErrReconcileLeaseLost
@@ -232,7 +231,7 @@ func (e *RedisReconcileElector) RenewLease(ctx context.Context, token reconcile.
 func (e *RedisReconcileElector) ReleaseLease(ctx context.Context, token reconcile.LeaseToken) error {
 	if _, err := e.rdb.Eval(ctx, releaseLockScript,
 		[]string{e.holderKey(token.ReconcilerID)}, e.holderID).Int64(); err != nil {
-		return fmt.Errorf("redis reconcile elector: release: %w", err)
+		return classifyRedisError(err, ErrAdapterRedisDelete, "redis reconcile elector release")
 	}
 	return nil
 }

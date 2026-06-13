@@ -195,18 +195,28 @@ func TestReconcileElector_ConstructorValidation(t *testing.T) {
 }
 
 // TestReconcileElector_EvalErrorPaths covers the I/O-error branches of
-// AcquireLease / RenewLease / ReleaseLease: a backend Eval failure surfaces as a
-// wrapped (non-sentinel) error from each method.
+// AcquireLease / RenewLease / ReleaseLease: a backend Eval failure is routed through
+// classifyRedisError, so it surfaces as a classified *errcode.Error carrying the op
+// code (never a lease sentinel), and a transient backend fault is marked transient so
+// the Loop requeues rather than DLX-ing.
 func TestReconcileElector_EvalErrorPaths(t *testing.T) {
 	ctx := context.Background()
-	boom := errors.New("redis down")
+	boom := errors.New("redis down") // not a net error / reply code → permanent
+
+	assertCode := func(t *testing.T, err error, want errcode.Code) {
+		t.Helper()
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec, "a backend Eval fault must surface as a classified *errcode.Error")
+		require.Equal(t, want, ec.Code, "the op code must come from the classifyRedisError funnel")
+	}
 
 	t.Run("acquire", func(t *testing.T) {
 		mock := newReconcileMock()
 		mock.evalErr = boom
 		e := mustElector(t, mock)
 		_, err := e.AcquireLease(ctx, "rid")
-		require.Error(t, err)
+		assertCode(t, err, ErrAdapterRedisSet)
 		require.NotErrorIs(t, err, reconcile.ErrLeaseHeld, "I/O fault is not contention")
 	})
 	t.Run("renew", func(t *testing.T) {
@@ -214,7 +224,7 @@ func TestReconcileElector_EvalErrorPaths(t *testing.T) {
 		mock.evalErr = boom
 		e := mustElector(t, mock)
 		err := e.RenewLease(ctx, reconcile.LeaseToken{ReconcilerID: "rid", HolderID: e.holderID})
-		require.Error(t, err)
+		assertCode(t, err, ErrAdapterRedisSet)
 		require.NotErrorIs(t, err, reconcile.ErrReconcileLeaseLost, "I/O fault is not a clean lease-lost")
 	})
 	t.Run("release", func(t *testing.T) {
@@ -222,7 +232,16 @@ func TestReconcileElector_EvalErrorPaths(t *testing.T) {
 		mock.evalErr = boom
 		e := mustElector(t, mock)
 		err := e.ReleaseLease(ctx, reconcile.LeaseToken{ReconcilerID: "rid", HolderID: e.holderID})
+		assertCode(t, err, ErrAdapterRedisDelete)
+	})
+	t.Run("transient_backend_error_marked_transient", func(t *testing.T) {
+		mock := newReconcileMock()
+		mock.evalErr = context.DeadlineExceeded // transient → requeue, not DLX
+		e := mustElector(t, mock)
+		_, err := e.AcquireLease(ctx, "rid")
 		require.Error(t, err)
+		require.True(t, errcode.IsTransient(err),
+			"a transient backend fault must be classified transient so the Loop requeues rather than DLX-ing")
 	})
 }
 

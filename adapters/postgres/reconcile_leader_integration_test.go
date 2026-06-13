@@ -17,10 +17,11 @@ import (
 
 // TestIntegration_ReconcileElectorConformance runs the cross-implementation
 // LeaderElector + fencing conformance suites against a real PostgreSQL
-// (testcontainers via migratedPool), validating the session-scoped
-// pg_try_advisory_lock gate + the ON CONFLICT epoch-bump UPSERT. Each factory
-// call builds a distinct-holder elector sharing one pool, so the suites' two
-// holders contend for the same reconcile_leases row / advisory lock.
+// (testcontainers via migratedPool), validating the reconcile_leases row-TTL UPSERT
+// CAS (the ROW's expires_at TTL is the lease authority — NOT a session advisory
+// lock; ADR §4.1) + the ON CONFLICT epoch-bump. Each factory call builds a
+// distinct-holder elector sharing one pool, so the suites' two holders contend for
+// the same reconcile_leases row.
 func TestIntegration_ReconcileElectorConformance(t *testing.T) {
 	pool := migratedPool(t)
 
