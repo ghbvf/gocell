@@ -379,12 +379,20 @@ func TestMQTTFunnel_BlindSpot_NoReflectNew(t *testing.T) {
 
 	root := findModuleRoot(t)
 	var diags []Diagnostic
+	var sawSatellite bool
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		prodscan.PatternsExtended(root)),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
+			}
+			// Anti-vacuity (#1911): this blind-spot guard only means something if the
+			// scan actually reaches the satellite packages owning the sealed types.
+			// #1558 split adapters/mqtt into its own go.work module, so a module-local
+			// scope silently stops visiting it (false-green); assert we saw it below.
+			if p.Pkg.Path() == mqttPkgPath || p.Pkg.Path() == topicnsPkgPath {
+				sawSatellite = true
 			}
 			for _, f := range p.Files {
 				rel := p.Rel(f)
@@ -437,6 +445,9 @@ func TestMQTTFunnel_BlindSpot_NoReflectNew(t *testing.T) {
 
 	assert.Empty(t, diags,
 		"MQTT funnel blind-spot B1: production code calls reflect.New on mqtt sealed types")
+	assert.True(t, sawSatellite,
+		"MQTT funnel blind-spot B1 anti-vacuity: scan never visited adapters/mqtt or internal/topicns — "+
+			"the guard is vacuous for the satellite module (module-local scope after #1558)")
 }
 
 // TestMQTTFunnel_BlindSpot_NoUnsafePtr (blind-spot B2) asserts that NO
@@ -451,12 +462,19 @@ func TestMQTTFunnel_BlindSpot_NoUnsafePtr(t *testing.T) {
 
 	root := findModuleRoot(t)
 	var diags []Diagnostic
+	var sawSatellite bool
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		prodscan.PatternsExtended(root)),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
+			}
+			// Anti-vacuity (#1911): the unsafe-import guard for the mqtt package itself
+			// is vacuous unless the scan reaches adapters/mqtt — #1558 made it a
+			// satellite module that a module-local scope silently skips. Assert below.
+			if p.Pkg.Path() == mqttPkgPath {
+				sawSatellite = true
 			}
 
 			importsMQTT := false
@@ -504,6 +522,9 @@ func TestMQTTFunnel_BlindSpot_NoUnsafePtr(t *testing.T) {
 	_ = root // used via prodscan patterns above; kept to avoid unused var error
 	assert.Empty(t, diags,
 		"MQTT funnel blind-spot B2: production code imports \"unsafe\" while referencing adapters/mqtt")
+	assert.True(t, sawSatellite,
+		"MQTT funnel blind-spot B2 anti-vacuity: scan never visited adapters/mqtt — "+
+			"the guard is vacuous for the satellite module (module-local scope after #1558)")
 }
 
 // TestMQTTFunnel_A2ScannerFires proves that scanMQTTCompositeLitConstruction
