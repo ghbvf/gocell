@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
 )
@@ -75,5 +76,32 @@ func TestErrFoldEventMismatch(t *testing.T) {
 	}
 	if !gotInstanceID {
 		t.Error("expected Details to contain instanceId attr")
+	}
+}
+
+func TestErrFoldUnknownKind(t *testing.T) {
+	err := errFoldUnknownKind(journal.KindStepStarted)
+
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("expected *errcode.Error, got %T", err)
+	}
+
+	// Dedicated code + KindInternal so foldErrLevel routes it to Error severity
+	// (code↔schema drift) — distinct from the generic ErrInternal that
+	// errFoldEventMismatch carries.
+	if ec.Kind != errcode.KindInternal {
+		t.Errorf("Kind = %v, want KindInternal", ec.Kind)
+	}
+	if ec.Code != errcode.ErrSagaFoldUnknownKind {
+		t.Errorf("Code = %v, want ErrSagaFoldUnknownKind", ec.Code)
+	}
+
+	// The kind label is server-side only (WithInternal), per the KindInternal
+	// three-layer rule — it must NOT leak into wire-visible Details.
+	for _, attr := range ec.Details {
+		if v, _ := attr.Value().(string); v == journal.KindStepStarted.String() {
+			t.Errorf("kind label must not be in Details (must be in WithInternal); got attr %v", attr)
+		}
 	}
 }

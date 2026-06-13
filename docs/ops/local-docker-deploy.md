@@ -174,6 +174,13 @@ Primary port `:8080` is the only listener published to the host; business `/api/
 | `OPS_USER` | Fixed value: `ops` |
 | `OPS_PASS` | `openssl rand -hex 12` |
 
+`GOCELL_AUDIT_ADMIN_PASSWORD` and `GOCELL_AUDIT_ADMIN_DSN` are **not** auto-generated
+by the script. The super-admin cross-tenant audit read capability is **optional and
+off by default**: when these variables are absent, super-admin cross-tenant audit reads
+return HTTP 501 (fail-closed) and `make local-up` succeeds without them.
+See [§Enabling the optional audit admin pool](#enabling-the-optional-audit-admin-pool)
+for the complete opt-in recipe.
+
 ### File protection
 
 `.env.local` is listed in `.gitignore`. The script sets `chmod 600` on the
@@ -211,17 +218,25 @@ carries a system-rows variant, migration 055). RLS is enforced at runtime only w
 **serving pool role** is a non-owner that lacks superuser and `BYPASSRLS`. A
 superuser ignores all policies regardless of schema correctness.
 
-To enforce RLS end-to-end, the stack uses **two separate PostgreSQL roles**:
+To enforce RLS end-to-end, the stack uses **two required PostgreSQL roles** plus one optional role:
 
-| Role | Used by | Privileges |
-|------|---------|-----------|
-| `gocell` | `migrate` service (pg-migrate tool) | Superuser / table owner; runs DDL |
-| `gocell_app` | `corebundle` serving pool (`GOCELL_CONFIGCORE_DATABASE_URL`) | NOSUPERUSER, NOBYPASSRLS, non-owner; DML only via default privileges |
+| Role | Used by | Privileges | Required? |
+|------|---------|-----------|-----------|
+| `gocell` | `migrate` service (pg-migrate tool) | Superuser / table owner; runs DDL | Yes |
+| `gocell_app` | `corebundle` serving pool (`GOCELL_CONFIGCORE_DATABASE_URL`) | NOSUPERUSER, NOBYPASSRLS, non-owner; DML only via default privileges | Yes |
+| `gocell_audit_admin` | `corebundle` admin read pool (`GOCELL_AUDIT_ADMIN_DSN`) — for super-admin cross-tenant audit reads (#1810) | NOSUPERUSER, NOBYPASSRLS; SELECT-only on `audit_entries` via role-scoped RLS policy `audit_admin_read_all` (migration 065) | **Optional** — skipped when `GOCELL_AUDIT_ADMIN_PASSWORD` is unset |
 
 `gocell_app` is created by `deploy/postgres/init/10-restricted-role.sh`, which
 the PostgreSQL container runs once on first data-directory init (before migrations).
 Migrations are run by the admin role `gocell`, so every table created is auto-granted
 to `gocell_app` via `ALTER DEFAULT PRIVILEGES`.
+
+`gocell_audit_admin` is also created by `10-restricted-role.sh`, but only when
+`GOCELL_AUDIT_ADMIN_PASSWORD` is set at initdb time. When the variable is unset,
+the script prints an informational message and skips the role entirely — migration 065
+is a no-op where the role is absent, and the `GOCELL_AUDIT_ADMIN_DSN` runtime variable
+is left unconfigured, causing super-admin cross-tenant audit read to return HTTP 501
+(fail-closed). `make local-up` succeeds without this variable.
 
 ### New env var: `GOCELL_APP_PASSWORD`
 
@@ -243,6 +258,63 @@ The `make local-down` target runs `docker compose ... down -v`, which removes
 the `pgdata` named volume so the next `make local-up` triggers a full initdb.
 This is a one-time step; subsequent `make local-down && make local-up` cycles
 reuse the initdb mechanism automatically.
+
+### Enabling the optional audit admin pool
+
+The super-admin cross-tenant audit read capability (`gocell_audit_admin` pool) is
+**optional and off by default**. Enabling it locally requires **two variables** set in
+`.env.local` — both must be present for the capability to function:
+
+| Variable | Purpose | When set |
+|----------|---------|----------|
+| `GOCELL_AUDIT_ADMIN_PASSWORD` | Password for the `gocell_audit_admin` PG role | Must be present at **initdb time** (before the first `make local-up` on a fresh data directory). The init script `10-restricted-role.sh` reads it to create the role. |
+| `GOCELL_AUDIT_ADMIN_DSN` | DSN corebundle uses to connect the admin read pool | Read at **runtime** by corebundle. Absent → 501; present → admin pool connected and `/readyz` gains `postgres_audit_admin_restricted_ready`. |
+
+**Step-by-step opt-in (fresh data directory)**:
+
+1. Generate core secrets if you have not already:
+
+   ```bash
+   bash scripts/gen-deploy-secrets.sh
+   ```
+
+2. Append the two optional variables to `.env.local` (the password must be hex/URL-safe):
+
+   ```bash
+   AUDIT_ADMIN_PW=$(openssl rand -hex 16)
+   echo "GOCELL_AUDIT_ADMIN_PASSWORD=${AUDIT_ADMIN_PW}" >> .env.local
+   echo "GOCELL_AUDIT_ADMIN_DSN=postgres://gocell_audit_admin:${AUDIT_ADMIN_PW}@postgres:5432/gocell?sslmode=disable" >> .env.local
+   ```
+
+3. Start the stack on a fresh data directory (initdb runs `10-restricted-role.sh`,
+   which reads `GOCELL_AUDIT_ADMIN_PASSWORD` and creates the role; migration 065 then
+   installs the `audit_admin_read_all` RLS policy):
+
+   ```bash
+   make local-up
+   ```
+
+   If you already have an existing `pgdata` volume (the role was not provisioned at
+   initdb), you must destroy it first:
+
+   ```bash
+   make local-down    # removes pgdata volume
+   make local-up
+   ```
+
+4. Verify the admin pool probe is green:
+
+   ```bash
+   docker compose -f docker-compose.local.yml --env-file .env.local exec corebundle \
+     curl -fsS "http://127.0.0.1:9091/readyz?verbose" | grep audit_admin
+   ```
+
+   A healthy output contains `"postgres_audit_admin_restricted_ready": "ok"`.
+
+**What "off" means**: when either variable is absent, `make local-up` succeeds
+unchanged — corebundle does not connect an admin pool, and super-admin cross-tenant
+audit read requests return HTTP 501. No manual step is needed to keep the default
+behaviour.
 
 ### Probe: `postgres_app_role_restricted_ready`
 

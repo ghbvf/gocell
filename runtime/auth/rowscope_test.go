@@ -5,9 +5,11 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 )
@@ -281,6 +283,80 @@ func assertSuperAdminAudit(t *testing.T, ctx context.Context, capture *captureHa
 	if !tc.wantError && errorCount > 0 {
 		t.Errorf("%s: expected no slog.Error audit records, got %d", tc.name, errorCount)
 	}
+}
+
+// TestPrincipalCrossTenantVisibility_NonSuperAdmin directly calls
+// p.CrossTenantVisibility(ctx) for three principal shapes and asserts:
+//
+//	(a) non-super-admin user → KindPermissionDenied error (not RowScopeAll)
+//	(b) nil *Principal receiver → KindInternal error (programmer-error path)
+//	(c) super-admin → success; exactly one FR-007 slog.Error fires
+//
+// These paths are distinct from TestPrincipalRowVisibility_SuperAdminMandatoryAudit
+// (which calls RowVisibility and only observes the log side-effect). This test
+// directly exercises CrossTenantVisibility's own fail-closed branches.
+func TestPrincipalCrossTenantVisibility_NonSuperAdmin(t *testing.T) {
+	ctx := rowVisibilityTestCtx()
+
+	t.Run("non_super_admin_permission_denied", func(t *testing.T) {
+		p := &Principal{
+			Kind:    PrincipalUser,
+			Subject: "plain-usr",
+			Roles:   nil,
+		}
+		_, err := p.CrossTenantVisibility(ctx)
+		if err == nil {
+			t.Fatal("CrossTenantVisibility: expected error for non-super-admin, got nil")
+		}
+		var ecErr *errcode.Error
+		if !errors.As(err, &ecErr) {
+			t.Fatalf("CrossTenantVisibility: expected *errcode.Error, got %T: %v", err, err)
+		}
+		if ecErr.Kind != errcode.KindPermissionDenied {
+			t.Errorf("CrossTenantVisibility(non-super-admin): kind=%v, want KindPermissionDenied", ecErr.Kind)
+		}
+	})
+
+	t.Run("nil_principal_internal_error", func(t *testing.T) {
+		var p *Principal
+		_, err := p.CrossTenantVisibility(ctx)
+		if err == nil {
+			t.Fatal("CrossTenantVisibility: expected error for nil principal, got nil")
+		}
+		var ecErr *errcode.Error
+		if !errors.As(err, &ecErr) {
+			t.Fatalf("CrossTenantVisibility: expected *errcode.Error, got %T: %v", err, err)
+		}
+		if ecErr.Kind != errcode.KindInternal {
+			t.Errorf("CrossTenantVisibility(nil): kind=%v, want KindInternal", ecErr.Kind)
+		}
+	})
+
+	t.Run("super_admin_success_fr007_fires_once", func(t *testing.T) {
+		capture := &captureHandler{}
+		slogcapture.InstallDefault(t, slog.New(capture))
+
+		p := &Principal{
+			Kind:     PrincipalUser,
+			Subject:  "super-usr",
+			Roles:    []string{RoleSuperAdmin},
+			TenantID: "acme-corp",
+		}
+		ctv, err := p.CrossTenantVisibility(ctx)
+		if err != nil {
+			t.Fatalf("CrossTenantVisibility(super-admin): unexpected error: %v", err)
+		}
+		// The sealed value must carry RowScopeAll.
+		if ctv.Visibility().Scope() != tenant.RowScopeAll {
+			t.Errorf("CrossTenantVisibility: scope=%v, want RowScopeAll", ctv.Visibility().Scope())
+		}
+		// FR-007: exactly one mandatory audit record must have been emitted.
+		n := countMandatoryAuditRecords(capture.records)
+		if n != 1 {
+			t.Errorf("CrossTenantVisibility: FR-007 audit count=%d, want exactly 1 (total records=%d)",
+				n, len(capture.records))
+		}
+	})
 }
 
 func countMandatoryAuditRecords(records []slog.Record) int {

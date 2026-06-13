@@ -24,6 +24,12 @@ func TestSagaSentinels(t *testing.T) {
 		{errcode.ErrSagaNotFound, "ERR_SAGA_NOT_FOUND", errcode.KindNotFound, http.StatusNotFound},
 		{errcode.ErrSagaStaleLease, "ERR_SAGA_STALE_LEASE", errcode.KindConflict, http.StatusConflict},
 		{errcode.ErrSagaDuplicateInstance, "ERR_SAGA_DUPLICATE_INSTANCE", errcode.KindConflict, http.StatusConflict},
+		// ErrSagaStopTimeout pairs with KindDeadlineExceeded (504) at the
+		// Coordinator/Tailer Stop sites — see runtime/saga{,/tailer}.
+		{errcode.ErrSagaStopTimeout, "ERR_SAGA_STOP_TIMEOUT", errcode.KindDeadlineExceeded, http.StatusGatewayTimeout},
+		// ErrSagaFoldUnknownKind pairs with KindInternal (500) — foldEvents
+		// fail-closed default (#1950).
+		{errcode.ErrSagaFoldUnknownKind, "ERR_SAGA_FOLD_UNKNOWN_KIND", errcode.KindInternal, http.StatusInternalServerError},
 	}
 	for _, tc := range cases {
 		if got := string(tc.code); got != tc.wantString {

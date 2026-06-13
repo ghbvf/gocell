@@ -68,6 +68,11 @@ const (
 )
 
 // Valid reports whether k is a recognized EventKind.
+//
+// The upper bound MUST track the last declared kind: a kind outside this range
+// is rejected by ValidateForAppend (never persisted) AND is skipped by
+// runtime/saga.TestFoldEvents_AllKindsHandled (which enumerates via Valid()).
+// When adding a kind, extend the bound so both stay in sync.
 func (k EventKind) Valid() bool {
 	return k >= KindStepStarted && k <= KindSagaCompensationFailed
 }

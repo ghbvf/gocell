@@ -17,7 +17,17 @@ UUID。repo 和 service API 使用 typed tenant 参数，不传裸 string。
 - tenant / all 不带 subject。
 - SQLPredicate / Allows 是纯翻译器，不决定 all 是否可用。
 
-RowScopeAll 的生产者必须经审计 funnel。audit read 在不支持跨租户时 fail-closed。
+`RowScopeAll`（跨租户）不经 `NewRowVisibility`——它**拒绝** all（#1760）；唯一生产者是
+sealed `tenant.NewCrossTenantVisibility()`，sole production caller = `runtime/auth` 的
+super-admin 派生（与强制 FR-007 审计同址，`ROWSCOPEALL-AUDIT-FUNNEL-01`）。跨租户读取
+API 取 sealed `tenant.CrossTenantVisibility` 位置参（Hard typed funnel，漏传/伪造皆编译错）；
+minter 单调用方限制是文档化 Medium Go 天花板（#1282/#851/#893 同族）。
+
+audit read 的 **serving 池**（NOBYPASSRLS）对 `RowScopeAll` 始终 fail-closed
+（`RowScopeAllUnsupportedError` → 501，纵深防御）。super-admin 跨租户读取由**专用
+`gocell_audit_admin` admin 读取池**（角色限定 permissive RLS policy，非 BYPASSRLS）服务，
+未 provision 时优雅 fail-closed（501，不 fail-open）。机制/威胁矩阵见 ADR
+`202606131900-1810` + `202606071300-1618`/`202606071200-1676` 的 2026-06-13 amendment。
 
 ## Principal claim source
 
@@ -55,7 +65,14 @@ app-serving role 必须非 owner 且无 bypass RLS 权限。
   delegated ownership（owner ≠ id，如设备）用 `subject.sub == resource.owner`（owner 由 PIP lookup 供）。
   owner-scoped 端点的 gate 形状由 `OWNER-SCOPED-GATE-EXACT-SET-01`（Medium）冻结守卫——把
   owner gate 回退成裸 `auth.RequirePermission`（转发 `r.URL.Path` 而非 canonical resource id）即 CI 红；
-  精确集（identitymanage / rbaccheck）与盲区见该 archtest godoc。
+  精确集（identitymanage / rbaccheck）与盲区见该 archtest godoc。baseline owner-scoped action
+  （user:read/write、role:read）的授予面由 `BASELINE-OWNER-RULE-TENANT-FREEZE-01`（Medium，value-golden）
+  冻结：① 每条 owner self 规则须 = EffectAllow + 精确单 action + frozen owner condition
+  （`subject.sub == resource.id`）；② 每个 owner action 的 allow 规则闭集恰为 `{1 owner, 1 admin}`。真正的
+  owner→tenant widen 向量（PDP 跨规则 OR）——**新增一条 tenant 匹配 allow 规则**、替换 owner 条件、或扩
+  action——即 build-test lane 红（给现有规则加 AND 条件是收紧非 widen，仍按 forbidden drift 拒）。跨租户拒绝
+  是 tenant-agnostic ownership 规则（`subject.sub != resource.id`）的天然结果，由 e2e `cross_tenant_*` 用例
+  覆盖（#2026）。评级/盲区见对应测试 godoc。
 - self ownership **不扩大数据访问**：路由门禁放行只让 owner 过 coarse gate；行可见性仍由 principal 派生的
   `RowScope`（身份决定，policy 改不动）独立治理（D3）。query-param self scoping 仍留 handler/service：如
   audit 的空 `actorId` 对 admin 是全 actor permissioned 读，非隐式 self（只有显式 `param == subject` 经

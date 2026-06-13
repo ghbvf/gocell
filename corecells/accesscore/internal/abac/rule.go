@@ -1,9 +1,20 @@
 package abac
 
 import (
+	"strings"
+
 	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// reservedRuleIDPrefix is reserved for framework decision-attribution sentinels
+// (authorizationdecide's `_default-deny` / `_invalid-obligations`, #2027 F12). A
+// tenant- or policy-authored rule ID must never start with it, otherwise a tenant
+// could mint a rule whose ID collides with a framework sentinel and make the PDP's
+// matched_rule_id attribution ambiguous/spoofable (PR #2077 F1). No builtin
+// baseline rule uses this prefix (they are all `baseline-*`), so the reservation
+// is invisible to the platform's own rules and only constrains tenant input.
+const reservedRuleIDPrefix = "_"
 
 // Rule is the fundamental evaluation unit within a Policy. A Rule contains:
 //   - An Effect (allow or deny) that determines the authorization outcome.
@@ -44,6 +55,10 @@ type Rule struct {
 func (r Rule) Validate() error {
 	if r.ID == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "abac: rule ID must not be empty")
+	}
+	if strings.HasPrefix(r.ID, reservedRuleIDPrefix) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"abac: rule ID must not start with '_' (reserved for framework decision-attribution sentinels)")
 	}
 	if r.Name == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "abac: rule Name must not be empty")

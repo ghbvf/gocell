@@ -71,6 +71,8 @@ Each Cell reads its own env variables. The naming pattern is `GOCELL_<CELLID>_<R
 | `GOCELL_AUDIT_BOOTSTRAP_HMAC_KEY` | HMAC key for the bootstrap audit hash chain | — | **Real mode** |
 | `GOCELL_AUDITCORE_CURSOR_KEY` | HMAC key for audit cursor codec | `corebundle-audit-cursor-key-32b!` | **Real mode** |
 | `GOCELL_AUDITCORE_CURSOR_PREVIOUS_KEY` | Previous audit cursor key (rotation) | — | No |
+| `GOCELL_AUDIT_ADMIN_DSN` | PostgreSQL DSN for the dedicated `gocell_audit_admin` read pool used for super-admin cross-tenant audit reads (#1810). Format: `postgres://gocell_audit_admin:<pw>@host:5432/<db>?sslmode=require`. **Optional** (postgres mode only). When absent, super-admin cross-tenant audit read returns HTTP 501 (fail-closed). The role must be provisioned first via `deploy/postgres/init/10-restricted-role.sh` (requires `GOCELL_AUDIT_ADMIN_PASSWORD` at initdb time). | — | No |
+| `GOCELL_AUDIT_ADMIN_PASSWORD` | Password for the optional `gocell_audit_admin` PostgreSQL role, used only by `deploy/postgres/init/10-restricted-role.sh` at initdb time to provision the role. **Optional** (deploy/init layer only; not read by `cmd/corebundle` at runtime). When unset, the role is not created and the cross-tenant audit read capability is disabled. Must be URL-safe (RFC 3986 unreserved: `A-Za-z0-9._~-`). Recommended: `openssl rand -hex 16`. | — | No |
 
 ### configcore cell
 

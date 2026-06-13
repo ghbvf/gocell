@@ -399,6 +399,57 @@ role ignores all policies at runtime even if the schema is correct.
 
 ref: `docs/architecture/202606071200-1676-adr-restricted-app-serving-pool.md` §Decision.
 
+#### Migration 065 and the optional `gocell_audit_admin` role (#1810)
+
+Migration 065 adds the `audit_admin_read_all` RLS policy on `audit_entries`. Its
+schema-guard validation via `schema_guard.VerifyExpectedShape` applies only when
+the `gocell_audit_admin` role exists in the database:
+
+- **Role absent** (default — `GOCELL_AUDIT_ADMIN_PASSWORD` unset at initdb): migration
+  064 runs as a no-op (the role does not exist, so the policy body referencing it is not
+  installed). `schema_guard` expects 1 RLS policy on `audit_entries` (the existing
+  `tenant_isolation` policy from migration 055). No `/readyz` impact.
+- **Role present, policy installed**: `schema_guard.VerifyExpectedShape` expects 2 RLS
+  policies on `audit_entries` (`tenant_isolation` + `audit_admin_read_all`). If the role
+  was provisioned after migration 065 ran (i.e. the role did not exist when goose applied
+  migration 065, so the policy body was skipped), the expected policy count mismatches and
+  `/readyz` returns **503** via `postgres_app_role_restricted_ready` (schema drift).
+  Remediation: apply the policy and grant directly — goose will not re-run an
+  already-recorded migration version, so run the following SQL as the database owner
+  (`gocell` role):
+
+  ```sql
+  -- Idempotent repair: (re)create the policy and grant if missing.
+  -- Run as the database owner (gocell) against the target database.
+  DO $$
+  BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gocell_audit_admin') THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE tablename = 'audit_entries' AND policyname = 'audit_admin_read_all'
+      ) THEN
+        EXECUTE 'CREATE POLICY audit_admin_read_all ON audit_entries
+                 FOR SELECT TO gocell_audit_admin USING (true)';
+        EXECUTE 'GRANT SELECT ON audit_entries TO gocell_audit_admin';
+      END IF;
+    END IF;
+  END $$;
+  ```
+
+  After executing this SQL, restart corebundle; `/readyz` turns green on the next cycle.
+
+When provisioned (`GOCELL_AUDIT_ADMIN_DSN` set), the `gocell_audit_admin` admin read pool
+contributes one `/readyz` probe: **`postgres_audit_admin_restricted_ready`**. It reuses the
+serving pool's restricted-role check (`Pool.AppRoleRestrictedCheck`) to assert the admin
+pool's `current_user` is neither a superuser nor `BYPASSRLS` — the role must read
+cross-tenant via the role-scoped permissive RLS policy (migration 065), never via
+`BYPASSRLS` (ADR #1676). The probe doubles as the admin pool's liveness signal (it issues
+a `pg_roles` query), so a pool connectivity failure or a mis-provisioned (superuser /
+BYPASSRLS) admin role turns `/readyz` red rather than only surfacing as a 5xx on a
+super-admin cross-tenant request. The probe name is distinct from the serving pool's
+`postgres_app_role_restricted_ready` (no collision). When the admin pool is not
+provisioned, no probe is registered (the capability is absent; super-admin reads stay 501).
+
 These probes are **not synonymous** with `postgres_ready`. A green `postgres_ready`
 and a failing `accesscore_repo_ready` means the PG connection is alive but the
 `sessions` **or** `policies` table is inaccessible (the probe aggregates both and
