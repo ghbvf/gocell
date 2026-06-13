@@ -24,7 +24,11 @@ func TestTSGoType(t *testing.T) {
 		// object (pointer, non-list)
 		{name: "object ptr", f: DTOField{GoType: "*ResponseData", ItemDTO: "ResponseData", IsList: false}, want: "ResponseData"},
 		// object array
-		{name: "object array", f: DTOField{GoType: "[]*ResponseDataCellsItem", ItemDTO: "ResponseDataCellsItem", IsList: true}, want: "ResponseDataCellsItem[]"},
+		{
+			name: "object array",
+			f:    DTOField{GoType: "[]*ResponseDataCellsItem", ItemDTO: "ResponseDataCellsItem", IsList: true},
+			want: "ResponseDataCellsItem[]",
+		},
 		// scalar arrays
 		{name: "string array", f: DTOField{GoType: "[]string", BareJSONTag: "tags"}, want: "string[]"},
 		{name: "int64 array", f: DTOField{GoType: "[]int64", BareJSONTag: "ids"}, want: "number[]"},
@@ -92,7 +96,7 @@ func TestRenderTS_BasicInterface(t *testing.T) {
 }
 
 // TestRenderTS_EnumUnion verifies that renderTS emits a TS union type for each
-// EnumSpec: `export type PayloadOutcome = 'succeeded' | 'rejected';`
+// EnumSpec, e.g. `export type PayloadOutcome = 'succeeded' | 'rejected';`.
 func TestRenderTS_EnumUnion(t *testing.T) {
 	t.Parallel()
 	spec := &ContractGenSpec{
@@ -248,12 +252,4 @@ func TestRenderBarrel(t *testing.T) {
 	if !strings.Contains(out, "export * as eventOrderCreatedV1 from") {
 		t.Errorf("missing eventOrderCreatedV1 export; got:\n%s", out)
 	}
-}
-
-// min returns the smaller of two ints.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

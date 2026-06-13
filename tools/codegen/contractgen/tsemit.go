@@ -246,7 +246,7 @@ func kindHasTypesArtifact(kind string) bool {
 //
 //	or  "generated-ts/contracts/http/order/create/v1"
 //
-// Output: e.g. "httpOrderCreateV1"
+// Output: e.g. "httpOrderCreateV1".
 func tsPkgAlias(pkgPath string) string {
 	// Strip "generated/contracts/" or "generated-ts/contracts/" prefix if present.
 	rel := filepath.ToSlash(pkgPath)

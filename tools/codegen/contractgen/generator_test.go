@@ -571,7 +571,9 @@ func TestGenerate_NoCodegenContracts(t *testing.T) {
 // --- RenderContractArtifacts tests --------------------------------------------
 
 // TestRenderContractArtifacts_HTTP verifies that RenderContractArtifacts
-// returns 3 artifacts for an HTTP contract.
+// returns 4 artifacts for an HTTP contract: the 3 Go files + the per-contract
+// types.ts (included in the manifest so generatedverify reverse-enumeration of
+// *.ts finds it in the expected set).
 func TestRenderContractArtifacts_HTTP(t *testing.T) {
 	t.Parallel()
 	root, p := setupHTTPMinimalRoot(t)
@@ -580,8 +582,8 @@ func TestRenderContractArtifacts_HTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderContractArtifacts: %v", err)
 	}
-	if len(artifacts) != 3 {
-		t.Errorf("expected 3 artifacts for HTTP contract, got %d", len(artifacts))
+	if len(artifacts) != 4 {
+		t.Errorf("expected 4 artifacts for HTTP contract, got %d", len(artifacts))
 	}
 	fileNames := make(map[string]bool)
 	for _, a := range artifacts {
@@ -590,7 +592,7 @@ func TestRenderContractArtifacts_HTTP(t *testing.T) {
 			t.Errorf("artifact %s has empty content", a.Path)
 		}
 	}
-	for _, want := range []string{"types_gen.go", "iface_gen.go", "handler_gen.go"} {
+	for _, want := range []string{"types_gen.go", "iface_gen.go", "handler_gen.go", "types.ts"} {
 		if !fileNames[want] {
 			t.Errorf("missing artifact: %s", want)
 		}
@@ -598,7 +600,8 @@ func TestRenderContractArtifacts_HTTP(t *testing.T) {
 }
 
 // TestRenderContractArtifacts_Event verifies that RenderContractArtifacts
-// returns 5 artifacts for an event contract (types, iface, spec, subscription, projection).
+// returns 6 artifacts for an event contract: the 5 Go files (types, iface, spec,
+// subscription, projection) + the per-contract types.ts.
 func TestRenderContractArtifacts_Event(t *testing.T) {
 	t.Parallel()
 	root, p := setupEventRoot(t)
@@ -607,8 +610,8 @@ func TestRenderContractArtifacts_Event(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderContractArtifacts: %v", err)
 	}
-	if len(artifacts) != 5 {
-		t.Errorf("expected 5 artifacts for event contract, got %d", len(artifacts))
+	if len(artifacts) != 6 {
+		t.Errorf("expected 6 artifacts for event contract, got %d", len(artifacts))
 	}
 	fileNames := make(map[string]bool)
 	for _, a := range artifacts {
@@ -617,7 +620,7 @@ func TestRenderContractArtifacts_Event(t *testing.T) {
 			t.Error("event contract should not produce handler_gen.go")
 		}
 	}
-	for _, want := range []string{"types_gen.go", "iface_gen.go", "spec_gen.go", "subscription_gen.go", "projection_gen.go"} {
+	for _, want := range []string{"types_gen.go", "iface_gen.go", "spec_gen.go", "subscription_gen.go", "projection_gen.go", "types.ts"} {
 		if !fileNames[want] {
 			t.Errorf("missing artifact: %s", want)
 		}
