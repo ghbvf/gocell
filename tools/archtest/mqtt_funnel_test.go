@@ -30,7 +30,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/adapters/mqtt"
-	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
 
 // wantMQTTConfigFields is the frozen field set of adapters/mqtt.Config pinned by
@@ -377,12 +376,10 @@ func TestMQTTFunnel_BlindSpot_NoReflectNew(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
-	root := findModuleRoot(t)
 	var diags []Diagnostic
 	var sawSatellite bool
 
-	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		prodscan.PatternsExtended(root)),
+	_ = Run(t, Production(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -460,12 +457,10 @@ func TestMQTTFunnel_BlindSpot_NoUnsafePtr(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
-	root := findModuleRoot(t)
 	var diags []Diagnostic
 	var sawSatellite bool
 
-	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		prodscan.PatternsExtended(root)),
+	_ = Run(t, Production(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -519,7 +514,6 @@ func TestMQTTFunnel_BlindSpot_NoUnsafePtr(t *testing.T) {
 			return nil
 		})
 
-	_ = root // used via prodscan patterns above; kept to avoid unused var error
 	assert.Empty(t, diags,
 		"MQTT funnel blind-spot B2: production code imports \"unsafe\" while referencing adapters/mqtt")
 	assert.True(t, sawSatellite,
@@ -550,8 +544,6 @@ func TestMQTTFunnel_A2ScannerFires(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
-	root := findModuleRoot(t)
-
 	// assembleClientIDFullName is the typed FullName() of the sole allowed
 	// ClientID constructor: a package-level func in adapters/mqtt.
 	const assembleClientIDFullName = mqttPkgPath + ".assembleClientID"
@@ -564,7 +556,7 @@ func TestMQTTFunnel_A2ScannerFires(t *testing.T) {
 	var outsideCount, insideCount int
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		prodscan.PatternsExtended(root)),
+		[]string{mqttPkgPath}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil
@@ -711,14 +703,12 @@ func TestMQTTConfigSeal_A2ScannerFires(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
-	root := findModuleRoot(t)
-
 	const newConfigFullName = mqttPkgPath + ".NewConfig"
 
 	var outsideCount, insideCount int
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		prodscan.PatternsExtended(root)),
+		[]string{mqttPkgPath}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil
@@ -841,14 +831,12 @@ func TestMQTTConfigFieldWriteSeal_ScannerFires(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
-	root := findModuleRoot(t)
-
 	const newConfigFullName = mqttPkgPath + ".NewConfig"
 	const ruleID = "MQTT-CONFIG-SEALED-FIELD-FROZEN-01"
 	var outsideCount, seenCount int
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		prodscan.PatternsExtended(root)),
+		[]string{mqttPkgPath}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil
