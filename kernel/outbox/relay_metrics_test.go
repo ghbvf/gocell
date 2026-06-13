@@ -14,7 +14,8 @@ func TestNoopRelayCollector_DoesNotPanic(t *testing.T) {
 	ctx := context.Background()
 	// All methods must be safe to call with any arguments.
 	c.RecordPollCycle(ctx, PollCycleResult{
-		Published: 1, Retried: 2, Dead: 3, Skipped: 4,
+		Event:    OutcomeCounts{Published: 1, Retried: 2, Dead: 3, Skipped: 4},
+		Command:  OutcomeCounts{Published: 5, Lost: 1},
 		ClaimDur: time.Millisecond, PublishDur: time.Second, WriteBackDur: time.Microsecond,
 	})
 	c.RecordBatchSize(ctx, 0)

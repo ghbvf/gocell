@@ -50,6 +50,10 @@ var allRules = []Rule{
 	{Code: codeTOPO07, Phase: PhaseBase, Detect: (*Validator).validateTOPO07},
 	{Code: codeTOPO08, Phase: PhaseBase, Detect: (*Validator).validateTOPO08},
 	{Code: codeTOPO09, Phase: PhaseBase, Detect: (*Validator).validateTOPO09},
+	{Code: codeTOPO10, Phase: PhaseBase, Detect: (*Validator).validateTOPO10},
+	{Code: codeTOPO11, Phase: PhaseBase, Detect: (*Validator).validateTOPO11},
+	// TOPO-12: INTERIM remote placement fail-close gate. Remove when US4 #1963 lands.
+	{Code: codeTOPO12, Phase: PhaseBase, Detect: (*Validator).validateTOPO12},
 
 	// VERIFY — verify closure (VERIFY-06 is PhaseStrict below)
 	{Code: codeVERIFY01, Phase: PhaseBase, Detect: (*Validator).validateVERIFY01},

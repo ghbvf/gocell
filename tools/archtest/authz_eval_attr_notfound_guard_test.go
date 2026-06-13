@@ -17,6 +17,12 @@
 // attribute. This archtest forbids discarding the found result at any resolve
 // callsite in the engine package.
 //
+// The cross-attribute operator OpEqualsAttr (#1977) adds a SECOND resolve callsite
+// in matchCondition (the RHS attribute, e.g. resource.id/resource.owner). The scan
+// is generic — it covers every resolve callsite — so the RHS resolve is guarded the
+// same way: discarding its found bool (e.g. a missing resource.owner) would fail
+// OPEN and grant ownership on a missing attribute. No rule change was needed.
+//
 // # AI-robust rating (Medium, single axis)
 //
 // Detector is type-aware (go/types info.Uses resolves the selector to the

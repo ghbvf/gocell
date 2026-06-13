@@ -22,7 +22,7 @@ import (
 //     not match any registered RouteGroup. The resolution is identical to the
 //     one used by the HTTP metrics middleware for http_requests_total{cell}.
 //
-//   - {state}: terminal idempotency decision, one of the six
+//   - {state}: terminal idempotency decision, one of the seven
 //     idempotency.RequestState constants. The value set is frozen by archtest
 //     IDEMPOTENCY-REQUESTS-STATE-LABEL-VALUES-FROZEN-01 (A1 freezes the
 //     constant set; A2 forbids inline literals or RequestState("x") conversions
@@ -35,7 +35,7 @@ import (
 // response body exceeds the buffer limit emits both StateAcquired and
 // StateOversize; the ratio oversize/acquired is the uncacheable-response rate.
 //
-// Cardinality: 6 state values × bounded cell set = tiny worst-case series
+// Cardinality: 7 state values × bounded cell set = tiny worst-case series
 // count, well within the metrics provider cap of 2000. No per-request or
 // per-key dimension is exposed (keys are SHA-256 hashed for logs only).
 //
@@ -79,7 +79,9 @@ func NewIdempotencyCollector(p kernelmetrics.Provider) (*IdempotencyCollector, e
 			"store_error = Claim-path store failure " +
 			"(Record/Release failures are logged only, not counted here); " +
 			"oversize = response too large to record; " +
-			"key_reused = same key presented with a different request body (fingerprint mismatch)). " +
+			"key_reused = same key presented with a different request body (fingerprint mismatch); " +
+			"body_read_failed = request body read failed before the claim, a transient/connection " +
+			"fault — e.g. the client aborted the upload — that maps to 503). " +
 			"acquired counts every fresh claim; oversize is a sub-event of acquired. " +
 			"cell is the owning RouteGroup cell or _runtime for framework paths.",
 		LabelNames: []string{"cell", "state"},

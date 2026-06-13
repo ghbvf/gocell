@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/reconcile"
 	"github.com/ghbvf/gocell/kernel/reconcile/reconciletest"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // Compile-time assertion: *RedisReconcileElector satisfies reconcile.LeaderElector.
@@ -129,12 +130,22 @@ func (m *reconcileMockCmdable) readEpoch(epochKey string) int64 {
 // integration-tagged file can share it without a duplicate declaration.
 const reconcileTestLeaseTTL = 30 * time.Second
 
+// mustLease builds the shared test LeaseTTL from the package-level literal const
+// (electors now take a validated reconcile.LeaseTTL, not a raw time.Duration —
+// sub-ms truncation is foreclosed at NewLeaseTTL, see kernel/reconcile/leasettl.go).
+func mustLease(t *testing.T) reconcile.LeaseTTL {
+	t.Helper()
+	l, err := reconcile.NewLeaseTTL(reconcileTestLeaseTTL)
+	require.NoError(t, err)
+	return l
+}
+
 // mustElector builds a mock-backed elector. holderID is minted internally (each
 // call → a distinct UUID), so two electors over the same mock contend as distinct
 // holders without a caller-supplied label.
 func mustElector(t *testing.T, rdb cmdable) *RedisReconcileElector {
 	t.Helper()
-	e, err := newReconcileElectorFromCmdable(rdb, "reconcile", reconcileTestLeaseTTL, clock.Real())
+	e, err := newReconcileElectorFromCmdable(rdb, "reconcile", mustLease(t), clock.Real())
 	require.NoError(t, err)
 	return e
 }
@@ -153,41 +164,59 @@ func TestReconcileElector_Conformance(t *testing.T) {
 }
 
 // TestReconcileElector_ConstructorValidation covers the constructor guard
-// branches: nil client, nil cmdable, invalid namespace, and non-positive lease
-// duration each fail-fast before an elector is built.
+// branches: nil client, nil cmdable, invalid namespace, and the unconstructed
+// zero-value lease each fail-fast before an elector is built. (Sub-ms lease
+// rejection lives upstream in NewLeaseTTL — TestNewLeaseTTL — because the elector
+// no longer accepts a raw time.Duration; the residual zero-value LeaseTTL{} is the
+// only invalid lease a caller can still pass here.)
 func TestReconcileElector_ConstructorValidation(t *testing.T) {
 	t.Run("nil_client", func(t *testing.T) {
-		_, err := NewRedisReconcileElector(nil, "reconcile", reconcileTestLeaseTTL, clock.Real())
+		_, err := NewRedisReconcileElector(nil, "reconcile", mustLease(t), clock.Real())
 		require.Error(t, err)
 	})
 	t.Run("nil_cmdable", func(t *testing.T) {
-		_, err := newReconcileElectorFromCmdable(nil, "reconcile", reconcileTestLeaseTTL, clock.Real())
+		_, err := newReconcileElectorFromCmdable(nil, "reconcile", mustLease(t), clock.Real())
 		require.Error(t, err)
 	})
 	t.Run("invalid_namespace", func(t *testing.T) {
 		// uppercase is rejected by KeyNamespace.Validate
-		_, err := newReconcileElectorFromCmdable(newReconcileMock(), "BadNS", reconcileTestLeaseTTL, clock.Real())
+		_, err := newReconcileElectorFromCmdable(newReconcileMock(), "BadNS", mustLease(t), clock.Real())
 		require.Error(t, err)
 	})
-	t.Run("nonpositive_lease", func(t *testing.T) {
-		_, err := newReconcileElectorFromCmdable(newReconcileMock(), "reconcile", 0, clock.Real())
+	t.Run("zero_value_lease", func(t *testing.T) {
+		// the unconstructed LeaseTTL{} (ms==0) must fail-fast, not yield a 0ms lease
+		_, err := newReconcileElectorFromCmdable(newReconcileMock(), "reconcile", reconcile.LeaseTTL{}, clock.Real())
 		require.Error(t, err)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		require.Equal(t, errcode.ErrCellInvalidConfig, ec.Code,
+			"a zero-value lease is a config mistake, routable separately from a redis connect failure")
 	})
 }
 
 // TestReconcileElector_EvalErrorPaths covers the I/O-error branches of
-// AcquireLease / RenewLease / ReleaseLease: a backend Eval failure surfaces as a
-// wrapped (non-sentinel) error from each method.
+// AcquireLease / RenewLease / ReleaseLease: a backend Eval failure is routed through
+// classifyRedisError, so it surfaces as a classified *errcode.Error carrying the op
+// code (never a lease sentinel), and a transient backend fault is marked transient so
+// the Loop requeues rather than DLX-ing.
 func TestReconcileElector_EvalErrorPaths(t *testing.T) {
 	ctx := context.Background()
-	boom := errors.New("redis down")
+	boom := errors.New("redis down") // not a net error / reply code → permanent
+
+	assertCode := func(t *testing.T, err error, want errcode.Code) {
+		t.Helper()
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec, "a backend Eval fault must surface as a classified *errcode.Error")
+		require.Equal(t, want, ec.Code, "the op code must come from the classifyRedisError funnel")
+	}
 
 	t.Run("acquire", func(t *testing.T) {
 		mock := newReconcileMock()
 		mock.evalErr = boom
 		e := mustElector(t, mock)
 		_, err := e.AcquireLease(ctx, "rid")
-		require.Error(t, err)
+		assertCode(t, err, ErrAdapterRedisSet)
 		require.NotErrorIs(t, err, reconcile.ErrLeaseHeld, "I/O fault is not contention")
 	})
 	t.Run("renew", func(t *testing.T) {
@@ -195,7 +224,7 @@ func TestReconcileElector_EvalErrorPaths(t *testing.T) {
 		mock.evalErr = boom
 		e := mustElector(t, mock)
 		err := e.RenewLease(ctx, reconcile.LeaseToken{ReconcilerID: "rid", HolderID: e.holderID})
-		require.Error(t, err)
+		assertCode(t, err, ErrAdapterRedisSet)
 		require.NotErrorIs(t, err, reconcile.ErrReconcileLeaseLost, "I/O fault is not a clean lease-lost")
 	})
 	t.Run("release", func(t *testing.T) {
@@ -203,7 +232,16 @@ func TestReconcileElector_EvalErrorPaths(t *testing.T) {
 		mock.evalErr = boom
 		e := mustElector(t, mock)
 		err := e.ReleaseLease(ctx, reconcile.LeaseToken{ReconcilerID: "rid", HolderID: e.holderID})
+		assertCode(t, err, ErrAdapterRedisDelete)
+	})
+	t.Run("transient_backend_error_marked_transient", func(t *testing.T) {
+		mock := newReconcileMock()
+		mock.evalErr = context.DeadlineExceeded // transient → requeue, not DLX
+		e := mustElector(t, mock)
+		_, err := e.AcquireLease(ctx, "rid")
 		require.Error(t, err)
+		require.True(t, errcode.IsTransient(err),
+			"a transient backend fault must be classified transient so the Loop requeues rather than DLX-ing")
 	})
 }
 

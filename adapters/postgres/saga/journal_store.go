@@ -175,6 +175,37 @@ const heartbeatQuery = `UPDATE saga_instances
 	SET lease_expires_at = $4::timestamptz + $1
 	WHERE id = $2 AND lease_id = $3 AND lease_expires_at >= $4::timestamptz`
 
+// sagaEventsGlobalAppendLockKey is the pg_advisory_xact_lock key that
+// serializes saga_events INSERTs across all saga instances so that the
+// BIGINT IDENTITY global_seq value order equals commit order.
+//
+// Why this is necessary: PostgreSQL IDENTITY sequences allocate the next
+// value at INSERT time, not at COMMIT time. Without serialization, two
+// concurrent transactions can be assigned seq=5 and seq=6 respectively,
+// but commit in the opposite order. A tailer that delivered seq=6 and
+// checkpointed to 6 will skip seq=5 permanently (WHERE global_seq > 6
+// excludes it), silently losing the earlier event (F1 in PR #1630).
+//
+// Lock-ordering invariant: every Append / MarkTerminal first acquires the
+// per-instance FOR UPDATE lock (selectInstanceForUpdate) and THEN acquires
+// this single global advisory key. Because each transaction touches exactly
+// one saga instance, no transaction can already hold another instance's row
+// lock when it requests the advisory key, so the single shared key cannot
+// produce a deadlock cycle. The advisory key is xact-scoped
+// (pg_advisory_xact_lock), so it is released automatically at the end of
+// the transaction without an explicit unlock call.
+//
+// Throughput note: serialized appends across all instances is the minimal
+// correct fix for commit-ordered global_seq. A safe-lag committed-prefix
+// reader that relaxes this serialization without losing events is tracked
+// in issue #2070.
+const sagaEventsGlobalAppendLockKey int64 = 0x5341474145565400
+
+// advisoryLockSQL acquires a transaction-scoped advisory lock on the given
+// int64 key. The lock is held until the surrounding transaction commits or
+// rolls back; no explicit unlock is needed or possible.
+const advisoryLockSQL = "SELECT pg_advisory_xact_lock($1)"
+
 // repoReadyQuery probes BOTH saga relations so schema/migration drift on
 // either table surfaces independently of pool-level health. UNION ALL with
 // WHERE false plans both relations without reading any row.
@@ -219,6 +250,18 @@ func (s *PGJournal) Enqueue(ctx context.Context, instance saga.Instance) error {
 // checked BEFORE Event.ValidateForAppend so a bad payload on an unknown
 // instance returns ErrSagaNotFound (not ErrValidationFailed). Conformance
 // suite locks this with Append_UnknownInstanceWithBadPayload_PrefersNotFound.
+//
+// Commit-order correctness (F1, #1630): immediately before the insertEvent
+// INSERT this method acquires sagaEventsGlobalAppendLockKey via
+// pg_advisory_xact_lock. The xact-scoped lock serializes all saga_events
+// INSERTs so that the IDENTITY-assigned global_seq order equals commit order
+// (a tailer advancing its cursor by delivered global_seq will never
+// permanently skip a lower seq that committed later). Lock-ordering: per-
+// instance FOR UPDATE is acquired first, then the single global advisory key
+// in that consistent order across every transaction; no deadlock is possible
+// because each transaction holds at most one instance row lock before
+// requesting the shared advisory key. The throughput tradeoff (serialized
+// appends) is replaced by a safe-lag committed-prefix reader in #2070.
 func (s *PGJournal) Append(ctx context.Context, instanceID, leaseID idutil.SafeID, event journal.Event) (int64, error) {
 	tx, owned, err := s.db.AcquireTx(ctx)
 	if err != nil {
@@ -269,6 +312,13 @@ func (s *PGJournal) Append(ctx context.Context, instanceID, leaseID idutil.SafeI
 	); err != nil {
 		return 0, errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGQuery,
 			"saga journal: Append update projection failed", err)
+	}
+
+	// Serialize saga_events INSERTs so global_seq order == commit order (F1).
+	// See sagaEventsGlobalAppendLockKey for the full rationale.
+	if _, err := tx.Exec(ctx, advisoryLockSQL, sagaEventsGlobalAppendLockKey); err != nil {
+		return 0, errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGQuery,
+			"saga journal: Append advisory lock", err)
 	}
 
 	version := row.currentVersion + 1
@@ -459,6 +509,11 @@ func (s *PGJournal) Heartbeat(ctx context.Context, instanceID, leaseID idutil.Sa
 // present (Coordinator wraps commitStep in RunInTx). (false, nil) on stale
 // lease / missing instance; KindInvalid on a non-terminal finalStatus or
 // illegal transition.
+//
+// Commit-order correctness (F1, #1630): same advisory-lock protocol as
+// Append — acquires sagaEventsGlobalAppendLockKey immediately before the
+// insertEvent INSERT so global_seq order equals commit order. See Append
+// godoc and sagaEventsGlobalAppendLockKey for the full rationale.
 func (s *PGJournal) MarkTerminal(ctx context.Context, instanceID, leaseID idutil.SafeID, finalStatus saga.Status) (bool, error) {
 	tx, owned, err := s.db.AcquireTx(ctx)
 	if err != nil {
@@ -508,6 +563,13 @@ func (s *PGJournal) MarkTerminal(ctx context.Context, instanceID, leaseID idutil
 	); err != nil {
 		return false, errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGQuery,
 			"saga journal: MarkTerminal update failed", err)
+	}
+
+	// Serialize saga_events INSERTs so global_seq order == commit order (F1).
+	// See sagaEventsGlobalAppendLockKey for the full rationale.
+	if _, err := tx.Exec(ctx, advisoryLockSQL, sagaEventsGlobalAppendLockKey); err != nil {
+		return false, errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGQuery,
+			"saga journal: MarkTerminal advisory lock", err)
 	}
 
 	version := row.currentVersion + 1

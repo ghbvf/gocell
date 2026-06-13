@@ -156,14 +156,35 @@ jobs:
         if: steps.resolve.outputs.skip != 'true'
         run: go test ./kernel/... -count=1
 
+      # F1/C1: validate the goreleaser config BEFORE the release job pushes any
+      # tag. A broken .goreleaser.yaml caught here fails the run with zero side
+      # effects (no tag, no GHCR image); without this the tag would be pushed
+      # first and goreleaser would only fail afterwards, leaving an orphan tag.
+      - name: Install goreleaser
+        if: steps.resolve.outputs.skip != 'true'
+        uses: goreleaser/goreleaser-action@9c156ee8a17a598b3a9b32eca9d83de83de9050d # v6.3.0
+        with:
+          version: 'v2.16.0' # pinned (F6); bump via dependabot
+          install-only: true
+
+      - name: goreleaser config check (pre-tag, no side effects)
+        if: steps.resolve.outputs.skip != 'true'
+        run: goreleaser check
+
   release:
     name: Tag & GitHub Release
     needs: verify
     if: needs.verify.outputs.skip != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # F9: raised from 30 to 45 — cross-arch QEMU docker build + multi-arch push
+    # 基准；首次 stable release 后按实测回调。
+    timeout-minutes: 45
     permissions:
-      contents: write # push annotated tag + create/delete GitHub Release
+      contents: write  # push annotated tag + create/delete GitHub Release
+      # F11: packages:write は job 级（GitHub Actions 不支持 step-level permissions），
+      # snapshot 路径同样持有但不使用（snapshot 不触发 goreleaser）；
+      # token 仓库内 scope，无额外可利用面。
+      packages: write  # push container images to ghcr.io (stable only, #1088)
     env:
       # GH_TOKEN (write-scope) is deliberately NOT set at job level — it is scoped
       # per-step to only the `gh release` API steps, so the repo-code steps
@@ -303,6 +324,110 @@ jobs:
           done
           [ "$missing" -eq 0 ] || { echo "::error::resume aborted: satellite tag set incomplete/inconsistent — delete the partial tags and re-dispatch." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }
 
+      # ── goreleaser: CLI binary + docker (stable only) ──────────────────────
+      # Runs after tags are pushed so goreleaser can resolve {{.Tag}} from the
+      # annotated tag. All four steps below are gated on prerelease != 'true';
+      # the snapshot / daily path is completely untouched.
+      #
+      # F10: 半发布态说明 — goreleaser 先 push docker 再由后续 step 建 GH release。
+      # 若 smoke/release 步骤失败，进入「docker-pushed-but-no-release」态。
+      # re-dispatch 时 docker push 幂等（同 tag 覆盖），只需让 gh release create 完成。
+      # resume 校验当前不查 ghcr 镜像存在性（镜像幂等，无需重查）。
+
+      - name: Set up Go for CLI sub-module (stable only)
+        # Separate setup-go call targeting cmd/gocell/go.mod so goreleaser
+        # can cache the CLI module's dependencies independently from the root.
+        if: needs.verify.outputs.prerelease != 'true'
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: cmd/gocell/go.mod
+          cache-dependency-path: cmd/gocell/go.sum
+
+      - name: Set up QEMU (stable only)
+        # linux/arm64 docker layers are built on an amd64 runner via QEMU
+        # emulation; required for the multi-arch manifest in .goreleaser.yaml.
+        if: needs.verify.outputs.prerelease != 'true'
+        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
+
+      - name: Set up Docker Buildx (stable only)
+        # The default docker driver cannot emit multi-platform images; buildx
+        # (docker-container driver) is required for goreleaser dockers_v2 to
+        # build + push the linux/amd64 + linux/arm64 manifest.
+        if: needs.verify.outputs.prerelease != 'true'
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Log in to ghcr.io (stable only)
+        # F5: 统一使用 github.token（与本 workflow 其他 gh API 步骤一致，消除 PAT fallback 歧义）。
+        # job 已声明 packages:write，权限等价。
+        if: needs.verify.outputs.prerelease != 'true'
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Install goreleaser (stable only)
+        if: needs.verify.outputs.prerelease != 'true'
+        uses: goreleaser/goreleaser-action@9c156ee8a17a598b3a9b32eca9d83de83de9050d # v6.3.0
+        with:
+          version: 'v2.16.0' # pinned (F6); bump via dependabot
+          install-only: true
+
+      - name: Pre-publish version smoke (no side effects, stable only)
+        # F1/C1: validate the ldflags-injected version BEFORE any publish side
+        # effect (GHCR push). A single-target build (runner arch only — no
+        # archives, no docker, no publish) yields a binary we smoke-test for
+        # cliVersion == tag. If this fails, NOTHING has been pushed to GHCR yet
+        # — fail-closed BEFORE the side effect, not after (the previous
+        # post-publish smoke could only block the GitHub Release, never the
+        # already-pushed image). Config validity was checked pre-tag in verify.
+        if: needs.verify.outputs.prerelease != 'true'
+        env:
+          GOWORK: "off"
+        run: |
+          set -euo pipefail
+          goreleaser build --single-target --clean
+          # goreleaser v2 single-target layout: dist/gocell_linux_amd64_v1/gocell
+          bin="dist/gocell_linux_amd64_v1/gocell"
+          if [ ! -f "$bin" ]; then
+            n=$(find dist -name 'gocell' -path '*linux_amd64*' | wc -l)
+            if [ "$n" -eq 1 ]; then
+              bin="$(find dist -name 'gocell' -path '*linux_amd64*')"
+            else
+              echo "::error::expected exactly 1 linux-amd64 binary in dist/, found $n (goreleaser build failed or layout changed)."
+              exit 1
+            fi
+          fi
+          chmod +x "$bin"
+          actual="$("$bin" version --format json | jq -r '.cliVersion')"
+          echo "pre-publish version smoke: cliVersion=$actual, expected=$TAG"
+          if [ "$actual" = "dev" ]; then
+            echo "::error::cliVersion is 'dev' — ldflags injection did not apply."
+            exit 1
+          fi
+          if [ "$actual" != "$TAG" ]; then
+            echo "::error::cliVersion '$actual' != expected tag '$TAG' — ldflags symbol drift."
+            exit 1
+          fi
+          echo "pre-publish gate passed: cliVersion=$actual" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish CLI artifacts with goreleaser (stable only)
+        # Version + config already vetted (pre-publish smoke above; pre-tag
+        # `goreleaser check` in the verify job), so this performs the now-vetted
+        # publish: cross-arch binaries + archives + checksums into dist/ AND the
+        # multi-arch docker manifest pushed to ghcr. --skip=publish is NOT passed
+        # (it would skip the docker push too); the GitHub Release is suppressed
+        # via .goreleaser.yaml (release.disable: true) so the `gh release create`
+        # step below stays the sole owner of the release + snapshot logic. Tags
+        # are already pushed, so goreleaser resolves {{.Tag}}.
+        if: needs.verify.outputs.prerelease != 'true'
+        env:
+          GOWORK: "off"
+          GITHUB_TOKEN: ${{ github.token }}
+        run: goreleaser release --clean
+
+      # ── end goreleaser block ────────────────────────────────────────────────
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }} # write-scope token scoped to the gh API step only (F5)
@@ -311,6 +436,22 @@ jobs:
           args=(--title "$TAG" --verify-tag --generate-notes)
           if [ "$PRERELEASE" = "true" ]; then
             args+=(--prerelease)
+          else
+            # F2/C1: the cross-arch tarballs + checksums ARE the stable release
+            # (#1088 DoD), not optional attachments. Fail loudly if goreleaser
+            # did not produce exactly the 4 platform archives (.goreleaser.yaml
+            # builds linux/darwin × amd64/arm64) + checksums.txt, rather than
+            # publishing a release missing its core deliverables.
+            mapfile -t artifacts < <(compgen -G "dist/gocell_*.tar.gz" || true)
+            if [ "${#artifacts[@]}" -ne 4 ]; then
+              echo "::error::expected 4 platform tarballs in dist/, found ${#artifacts[@]} — aborting release (core deliverable missing)."
+              exit 1
+            fi
+            if [ ! -f "dist/checksums.txt" ]; then
+              echo "::error::dist/checksums.txt missing — aborting release (core deliverable missing)."
+              exit 1
+            fi
+            args+=("${artifacts[@]}" "dist/checksums.txt")
           fi
           # Retry: the freshly pushed tag may not be API-visible immediately,
           # which makes --verify-tag fail transiently and leaves an orphan tag.

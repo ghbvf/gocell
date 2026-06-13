@@ -66,7 +66,7 @@ func TestSafeRelayCollector_PanickingCollector_DoesNotCrash(t *testing.T) {
 
 	assert.NotPanics(t, func() {
 		s.RecordPollCycle(ctx, kout.PollCycleResult{
-			Published: 1, ClaimDur: time.Millisecond,
+			Event: kout.OutcomeCounts{Published: 1}, ClaimDur: time.Millisecond,
 			PublishDur: time.Millisecond, WriteBackDur: time.Millisecond,
 		})
 	}, "RecordPollCycle panic must be recovered")
@@ -90,7 +90,7 @@ func TestSafeRelayCollector_TypedNil_DoesNotCrash(t *testing.T) {
 	s := &safeRelayCollector{inner: nilCollector}
 
 	assert.NotPanics(t, func() {
-		s.RecordPollCycle(ctx, kout.PollCycleResult{Published: 1})
+		s.RecordPollCycle(ctx, kout.PollCycleResult{Event: kout.OutcomeCounts{Published: 1}})
 	}, "typed-nil collector must not crash")
 
 	assert.NotPanics(t, func() {
@@ -111,13 +111,13 @@ func TestSafeRelayCollector_DelegatesCorrectly(t *testing.T) {
 	mc := &mockCollector{}
 	s := &safeRelayCollector{inner: mc}
 
-	s.RecordPollCycle(ctx, kout.PollCycleResult{Published: 3})
+	s.RecordPollCycle(ctx, kout.PollCycleResult{Event: kout.OutcomeCounts{Published: 3}})
 	s.RecordBatchSize(ctx, 42)
 	s.RecordReclaim(ctx, 7)
 	s.RecordCleanup(ctx, 10, 2)
 
 	assert.Len(t, mc.pollCycles, 1)
-	assert.Equal(t, 3, mc.pollCycles[0].Published)
+	assert.Equal(t, 3, mc.pollCycles[0].Event.Published)
 
 	assert.Len(t, mc.batchSizes, 1)
 	assert.Equal(t, 42, mc.batchSizes[0])

@@ -83,31 +83,37 @@ func epochToUint64(e int64) uint64 {
 // Failover triggers on TTL expiry (a hung-but-alive leader's lease lapses and a
 // follower takes over), matching the Redis and fake electors.
 type ReconcileElector struct {
-	pool          *Pool
-	holderID      string
-	leaseDuration time.Duration
+	pool     *Pool
+	holderID string
+	lease    reconcile.LeaseTTL
 }
 
 // NewReconcileElector builds a PG leader elector. The holderID (this replica's
 // identity) is minted INTERNALLY as a fresh UUID — making accidental cross-process
 // holderID reuse (which would be treated as the same holder, defeating mutual
 // exclusion — PR-A6 review C4) impossible by construction rather than relying on a
-// caller contract. leaseDuration is the lease TTL window. Unlike the Redis elector,
-// no clock.Clock is needed — lease timestamps are computed by the DB (now()), the
-// single wall-clock authority across replicas.
-func NewReconcileElector(pool *Pool, leaseDuration time.Duration) (*ReconcileElector, error) {
+// caller contract. lease is the validated lease TTL window (a sealed
+// reconcile.LeaseTTL, so a sub-millisecond window — which would truncate to a 0ms
+// interval and break mutual exclusion — is unrepresentable). Unlike the Redis
+// elector, no clock.Clock is needed — lease timestamps are computed by the DB
+// (now()), the single wall-clock authority across replicas.
+func NewReconcileElector(pool *Pool, lease reconcile.LeaseTTL) (*ReconcileElector, error) {
 	if pool == nil {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterPGConnect, "postgres reconcile elector: pool is nil")
 	}
-	if leaseDuration <= 0 {
-		return nil, errcode.New(errcode.KindInternal, ErrAdapterPGConnect, "postgres reconcile elector: leaseDuration must be positive")
+	if lease.IsZero() {
+		// ErrCellInvalidConfig (not the connect code): a zero-value lease is a
+		// wiring mistake (forgot reconcile.NewLeaseTTL), routable separately from
+		// genuine Postgres connection failures.
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"postgres reconcile elector: lease must be a constructed LeaseTTL")
 	}
 	holderID, err := idutil.NewUUID()
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "postgres reconcile elector: mint holderID", err)
 	}
 	slog.Info("postgres reconcile elector: created", slog.String("holder_id", holderID))
-	return &ReconcileElector{pool: pool, holderID: holderID, leaseDuration: leaseDuration}, nil
+	return &ReconcileElector{pool: pool, holderID: holderID, lease: lease}, nil
 }
 
 // AcquireLease implements reconcile.LeaderElector via the row-TTL UPSERT CAS.
@@ -115,7 +121,7 @@ func (e *ReconcileElector) AcquireLease(ctx context.Context, reconcilerID string
 	var epoch int64
 	var acquiredAt, expiresAt time.Time
 	err := e.pool.DB().
-		QueryRow(ctx, pgReconcileAcquireSQL, reconcilerID, e.holderID, e.leaseDuration.Milliseconds()).
+		QueryRow(ctx, pgReconcileAcquireSQL, reconcilerID, e.holderID, e.lease.Milliseconds()).
 		Scan(&epoch, &acquiredAt, &expiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// ON CONFLICT WHERE matched no row: a live lease is held by another holder.
@@ -130,7 +136,7 @@ func (e *ReconcileElector) AcquireLease(ctx context.Context, reconcilerID string
 // RenewLease implements reconcile.LeaderElector (holder + still-live guarded). 0
 // rows ⟹ lease lapsed or taken over ⟹ ErrReconcileLeaseLost.
 func (e *ReconcileElector) RenewLease(ctx context.Context, token reconcile.LeaseToken) error {
-	tag, err := e.pool.DB().Exec(ctx, pgReconcileRenewSQL, token.ReconcilerID, e.holderID, e.leaseDuration.Milliseconds())
+	tag, err := e.pool.DB().Exec(ctx, pgReconcileRenewSQL, token.ReconcilerID, e.holderID, e.lease.Milliseconds())
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "postgres reconcile elector: renew", err)
 	}

@@ -29,10 +29,8 @@ func TestProviderRelayCollector_NopProviderNoPanic(t *testing.T) {
 
 	ctx := context.Background()
 	c.RecordPollCycle(ctx, outbox.PollCycleResult{
-		Published:    3,
-		Retried:      1,
-		Dead:         0,
-		Skipped:      2,
+		Event:        outbox.OutcomeCounts{Published: 3, Retried: 1, Dead: 0, Skipped: 2},
+		Command:      outbox.OutcomeCounts{Published: 1},
 		ClaimDur:     testtime.D10ms,
 		PublishDur:   testtime.MediumPoll,
 		WriteBackDur: testtime.FastPoll,
@@ -132,12 +130,12 @@ func TestProviderRelayCollector_PollCycleEmitsPerOutcome(t *testing.T) {
 	}
 
 	c.RecordPollCycle(context.Background(), outbox.PollCycleResult{
-		Published: 4, Retried: 1, Dead: 0, Skipped: 2,
+		Event:    outbox.OutcomeCounts{Published: 4, Retried: 1, Dead: 0, Skipped: 2},
 		ClaimDur: time.Millisecond, PublishDur: testtime.D2ms, WriteBackDur: testWriteBackDur500us,
 	})
 
 	relayed := p.counterOps["outbox_relayed_total"]
-	// 3 non-zero outcomes: published=4, retried=1, skipped=2
+	// 3 non-zero event outcomes: published=4, retried=1, skipped=2 (dead=0 zero-skipped).
 	if len(relayed) != 3 {
 		t.Fatalf("want 3 relayed entries (zero-skip dead), got %d: %+v", len(relayed), relayed)
 	}
@@ -145,6 +143,48 @@ func TestProviderRelayCollector_PollCycleEmitsPerOutcome(t *testing.T) {
 	hist := p.counterOps["hist:outbox_poll_duration_seconds"]
 	if len(hist) != 4 { // claim + publish + write_back + total
 		t.Fatalf("want 4 poll_duration observations, got %d", len(hist))
+	}
+}
+
+// TestProviderRelayCollector_PollCycleEmitsKindLabels is the F4 collector-level
+// proof: command and event settlements land on outbox_relayed_total under DISTINCT
+// kind labels with the disposition in the orthogonal outcome label, and zero counts
+// are skipped per (kind, outcome) (#1674).
+func TestProviderRelayCollector_PollCycleEmitsKindLabels(t *testing.T) {
+	p := newSpyProvider()
+	c, err := outbox.NewProviderRelayCollector(p, "devicecell")
+	if err != nil {
+		t.Fatalf("NewProviderRelayCollector: %v", err)
+	}
+
+	c.RecordPollCycle(context.Background(), outbox.PollCycleResult{
+		Event:    outbox.OutcomeCounts{Published: 4, Dead: 1},
+		Command:  outbox.OutcomeCounts{Published: 2, Retried: 3},
+		ClaimDur: time.Millisecond, PublishDur: testtime.D2ms, WriteBackDur: testWriteBackDur500us,
+	})
+
+	// Build a {kind/outcome -> value} view of every emitted relayed op.
+	got := map[string]float64{}
+	for _, op := range p.counterOps["outbox_relayed_total"] {
+		if op.labels["cell"] != "devicecell" {
+			t.Fatalf("relayed op missing/!=devicecell cell label: %+v", op.labels)
+		}
+		got[op.labels["kind"]+"/"+op.labels["outcome"]] = op.value
+	}
+
+	want := map[string]float64{
+		"event/published":   4,
+		"event/dead":        1,
+		"command/published": 2,
+		"command/retried":   3,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("want exactly %d {kind,outcome} series (zero-skipped), got %d: %+v", len(want), len(got), got)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("outbox_relayed_total{%s} = %v, want %v (full: %+v)", k, got[k], v, got)
+		}
 	}
 }
 
@@ -238,7 +278,7 @@ func TestNewProviderRelayCollector_SuccessPath_AllFiveMetricsRegistered(t *testi
 		_ = totalVecs
 	}
 	// Exercise all recording paths to confirm all 5 vecs are live (no nil panic).
-	c.RecordPollCycle(context.Background(), outbox.PollCycleResult{Published: 1})
+	c.RecordPollCycle(context.Background(), outbox.PollCycleResult{Event: outbox.OutcomeCounts{Published: 1}})
 	c.RecordBatchSize(context.Background(), 1)
 	c.RecordReclaim(context.Background(), 1)
 	c.RecordCleanup(context.Background(), 1, 1)

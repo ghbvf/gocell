@@ -38,7 +38,7 @@ endpoints:
         description: "Unauthorized — missing or invalid bearer token"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       403:
-        description: "Forbidden — caller lacks the role:read permission and is not the target user (self-access exempt); the built-in baseline grants role:read to the admin and super-admin roles."
+        description: "Forbidden — caller lacks the role:read permission and is not the target user — self-access (subject == resource.id) is granted by the built-in baseline ownership rule via the ABAC PDP (#1977), NOT a request-shape exemption; the baseline also grants role:read to the admin and super-admin roles."
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   response: response.schema.json
