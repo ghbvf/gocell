@@ -5,16 +5,21 @@ package auth
 // RowVisibility is the PR-5 identity→RowScope derivation referenced by
 // pkg/authz/obligation.go (the future PR-11/12 obligation combiner).
 //
-// ROWSCOPEALL-AUDIT-FUNNEL-01: tenant.NewRowVisibility(RowScopeAll, ...) is the
-// sole sanctioned producer of the RowScopeAll obligation; it must be co-located
-// with the mandatory slog.Error audit event in this function body. Any other
+// ROWSCOPEALL-AUDIT-FUNNEL-01: tenant.NewCrossTenantVisibility() is the sole
+// sanctioned producer of the RowScopeAll obligation (#1760: tenant.NewRowVisibility
+// now REJECTS RowScopeAll, so the general path is provably incapable of minting
+// it). The single mint lives in (*Principal).CrossTenantVisibility below, co-located
+// with the mandatory slog.Error audit event in the same function body. Any other
 // call-site constructing RowScopeAll in the production tree is a violation.
 //
 // FR-007 mandatory audit: every super-admin cross-tenant access (RowScopeAll)
 // MUST emit a slog.Error security event carrying actor, scope, and tenant fields
-// BEFORE the obligation is constructed. This ensures RowScopeAll access is
-// observable without querying the audit ledger, which the super-admin could read
-// themselves.
+// BEFORE the obligation is constructed. Because the audit is co-located with the
+// SOLE mint (CrossTenantVisibility), every cross-tenant obligation is audited
+// regardless of which caller triggers it — RowVisibility's super-admin branch
+// DELEGATES to CrossTenantVisibility rather than minting independently. This
+// ensures RowScopeAll access is observable without querying the audit ledger,
+// which the super-admin could read themselves.
 //
 // Production issuers (#1898): a device principal is minted by mintDevicePrincipal
 // (deviceprincipal.go) from a verified device bearer token and carries a sealed
@@ -47,9 +52,12 @@ import (
 // Super-admin is checked before admin: a principal holding both roles derives
 // RowScopeAll (super-admin wins).
 //
-// This is the ONLY sanctioned constructor of RowScopeAll obligations
-// (ROWSCOPEALL-AUDIT-FUNNEL-01). The super-admin path emits a mandatory
-// slog.Error audit event (FR-007) before constructing the obligation.
+// The super-admin branch DELEGATES to CrossTenantVisibility (the sole sanctioned
+// RowScopeAll mint, ROWSCOPEALL-AUDIT-FUNNEL-01), which emits the mandatory
+// FR-007 slog.Error audit before constructing the obligation and returns the
+// sealed value unwrapped via Visibility(). A consumer that needs the sealed
+// tenant.CrossTenantVisibility itself (the #1810 cross-tenant audit read) calls
+// CrossTenantVisibility directly.
 func (p *Principal) RowVisibility(ctx context.Context) (tenant.RowVisibility, error) {
 	if p == nil {
 		return tenant.RowVisibility{}, errcode.New(
@@ -102,18 +110,56 @@ func (p *Principal) RowVisibility(ctx context.Context) (tenant.RowVisibility, er
 // complexity within the ≤15 ceiling (CLAUDE.md).
 func deriveUserRowVisibility(ctx context.Context, p *Principal) (tenant.RowVisibility, error) {
 	if p.HasRole(RoleSuperAdmin) {
-		// FR-007: mandatory cross-tenant audit — must emit BEFORE constructing
-		// the RowScopeAll obligation. See ROWSCOPEALL-AUDIT-FUNNEL-01.
-		slog.ErrorContext(ctx, "super-admin cross-tenant row visibility granted",
-			slog.String("actor", p.Subject),
-			slog.String("scope", "all"),
-			slog.String("tenant", p.TenantID),
-			slog.String("reason", "cross_tenant_read"),
-		)
-		return tenant.NewRowVisibility(tenant.RowScopeAll, "")
+		// Delegate to the sole sanctioned RowScopeAll mint (which emits the
+		// mandatory FR-007 audit co-located with the construction); unwrap the
+		// sealed value for the plain-RowVisibility return contract.
+		ctv, err := p.CrossTenantVisibility(ctx)
+		if err != nil {
+			return tenant.RowVisibility{}, err
+		}
+		return ctv.Visibility(), nil
 	}
 	if p.HasRole(RoleAdmin) {
 		return tenant.NewRowVisibility(tenant.RowScopeTenant, "")
 	}
 	return tenant.NewRowVisibility(tenant.RowScopeSelf, p.Subject)
+}
+
+// CrossTenantVisibility derives the sealed cross-tenant (RowScopeAll) obligation
+// for a super-admin user principal. It is the SOLE production mint of
+// tenant.NewCrossTenantVisibility (ROWSCOPEALL-AUDIT-FUNNEL-01): the mandatory
+// FR-007 slog.Error audit is co-located, unconditional, and emitted BEFORE the
+// mint, so every cross-tenant obligation — whether reached via this accessor or
+// via RowVisibility's delegating super-admin branch — is audited.
+//
+// It fail-closes (KindPermissionDenied) for any principal that is not a
+// super-admin user: the sealed grant is never produced for an admin, normal
+// user, device, service, anonymous, or unknown principal. The #1810 cross-tenant
+// audit read consumes the returned tenant.CrossTenantVisibility as a Hard typed
+// funnel param, so that read is uncallable without routing through this audited
+// accessor.
+func (p *Principal) CrossTenantVisibility(ctx context.Context) (tenant.CrossTenantVisibility, error) {
+	if p == nil {
+		return tenant.CrossTenantVisibility{}, errcode.New(
+			errcode.KindInternal,
+			errcode.ErrInternal,
+			"CrossTenantVisibility called on nil principal",
+		)
+	}
+	if p.Kind != PrincipalUser || !p.HasRole(RoleSuperAdmin) {
+		return tenant.CrossTenantVisibility{}, errcode.New(
+			errcode.KindPermissionDenied,
+			errcode.ErrAuthForbidden,
+			"cross-tenant visibility requires a super-admin user principal",
+		)
+	}
+	// FR-007: mandatory cross-tenant audit — must emit BEFORE constructing the
+	// RowScopeAll obligation. See ROWSCOPEALL-AUDIT-FUNNEL-01.
+	slog.ErrorContext(ctx, "super-admin cross-tenant row visibility granted",
+		slog.String("actor", p.Subject),
+		slog.String("scope", "all"),
+		slog.String("tenant", p.TenantID),
+		slog.String("reason", "cross_tenant_read"),
+	)
+	return tenant.NewCrossTenantVisibility(), nil
 }

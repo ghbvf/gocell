@@ -38,7 +38,7 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
-	github.com/ghbvf/gocell/adapters/adapterutil v0.0.0 // indirect
+	github.com/ghbvf/gocell/adapters/adapterutil v0.0.0
 	github.com/ghbvf/gocell/adapters/postgres v0.0.0
 	github.com/ghbvf/gocell/adapters/ratelimit v0.0.0
 	github.com/ghbvf/gocell/adapters/redis v0.0.0
