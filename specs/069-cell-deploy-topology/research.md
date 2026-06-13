@@ -70,7 +70,7 @@ Remote 实现：`Resolver` + `http.Client` + service token 签名 + principal �
 
 - **broker-mandatory 双闸**：静态（gocell validate 遍历 contractUsages 判 pub/sub 跨进程）+ 运行时（bootstrap phase0：split 拓扑 ∧ in-memory bus → 拒绝）。topology.validate() 既有「postgres requires real adapter」耦合规则是同形模板。
 - **缺失依赖 fail-fast**：consumer 声明的 contract 提供方 ∉ 本进程 ∪ remote 映射 → phase 校验拒绝。
-- **错误语义**：新增 upstream-cell-unavailable（KindUnavailable），区分「本地依赖缺失」vs「远端暂不可达」；超时/拒绝/5xx 经 details 区分。
+- **错误语义**：新增 `errcode.Code` `ERR_UPSTREAM_CELL_UNAVAILABLE`（用既有 `KindUnavailable` 构造，非新 Kind；`pkg/errcode/status.go` 已有该 Kind），区分「本地依赖缺失」vs「远端暂不可达」；超时/拒绝/5xx 的具体原因进**服务端通道（log/trace/internal details/metrics）**，不进 5xx wire details（5xx 强制 strip + `KindUnavailable.PublicCode()` 折叠为 `ERR_SERVICE_UNAVAILABLE`，客户端 wire 区分需 US5 有意重评投影）。
 - **测试基建**：journeys 现仅单进程。双拓扑验收 = 同一 journey 参数化跑 (a) 单进程 assembly (b) compose 拆分 + broker。CI 锚点 `.github/workflows/_build-lint.yml` integration-test job（testcontainers）。
 - **archtest red case 范式**：synthetic 违例文件 + anti-vacuity（删除用例须转绿）；最近模板 `MODULE-PROVIDE-NO-VALUE-HANDOFF-01`、`CTXKEYS-PRINCIPAL-WRITE-CALLER-01`。
 - **覆盖率**：新增 runtime 包 ≥80%；若进 kernel ≥90%。

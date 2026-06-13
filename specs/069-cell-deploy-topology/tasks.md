@@ -51,7 +51,7 @@
 - [ ] T040 [US5] `Resolver` 接口 + 静态配置实现（assembly topology.remote 驱动）
 - [ ] T041 [US5] `RemoteHTTPTransport`：service token 出站签名（callerCell 身份，复用 HMAC keyring）、超时/重试预算、`RequiresDistributedReplay` 约束接入
 - [ ] T042 [US5] principal/tenant 跨进程传播：HTTP 头规范 + 被调端 ctx 重建（对称 `kernel/outbox/principal.go` PrincipalMetadata；`CTXKEYS-PRINCIPAL-WRITE-CALLER-01` 扩展到新写入点）
-- [ ] T043 [P] [US5] errcode：新增 upstream-cell-unavailable（KindUnavailable）+ 前缀注册 + golden（`ERRCODE-PREFIX-OWNERSHIP-01`）
+- [ ] T043 [P] [US5] errcode：新增 `errcode.Code` `ERR_UPSTREAM_CELL_UNAVAILABLE`（用既有 `KindUnavailable` 构造，非新 Kind）+ 前缀注册 + golden（`ERRCODE-PREFIX-OWNERSHIP-01`）；wire 可见区分需重评 5xx public-code 投影（默认折叠 503 + details strip）
 - [ ] T044 [US5] 远端不可达/超时/5xx 错误映射 + 集成测试（testcontainers 双进程）
 
 ### US6 — Per-cell 基建分区（P2）→ #1964（blocked-by #1960，与 Phase 2 同 wave 并行）

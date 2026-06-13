@@ -84,10 +84,11 @@ prior decisions」）。
 
 **本 ADR = 该 reconcile 的当前真相单源（canonical anchor）。** 「cell = 可重定位单元」这条原本
 只活在宪法层的**隐含**承诺，自此显式钉死在一处；并由闭环交叉引用（`202605041430` ↔ 本 ADR ↔
-`030-review-0504` ↔ epic #1423）保证任一载体都指回此处 → 概念矛盾**机器可发现**，不在各处再生。
+`030-review-0504` ↔ epic #1423）保证任一载体都指回此处 → 概念矛盾**review 可追溯**（人/再审循引用即达，
+非机器强制——本 ADR 不自带 guard），不在各处再生。
 
-seam 不破坏 contract-only（Article III）：sync 调用仍走 contract（`http`/`grpc` kind），只是
-transport **可注入**（co-located 注入进程内短路 ↔ split 注入远程客户端）；不破坏数据主权
+seam 不破坏 contract-only（Article III）：sync 调用仍走 contract（本 seam 覆盖 `http` kind；`grpc`
+独立 seam 见 D2），只是 transport **可注入**（co-located 注入进程内短路 ↔ split 注入远程客户端）；不破坏数据主权
 （Article V）：seam 只搬运 contract 请求，不开跨 cell JOIN/FK 后门。
 
 ## Decision snapshot
@@ -123,8 +124,8 @@ closed-set 校验模板 `runtime/composition/builder.go` validateClosedSet。
 远程客户端。**「零改动」的精确边界**：指 cell **业务代码**（handler / service / domain）零改动；
 generated contract client 的注入方式会经 codegen 更新（走 `CellTransport` 而非裸 client），但该变更
 由工具自动完成、不需 cell 作者手写——**cell 代码界面零变动，generated 产物由 codegen 驱动变动**
-（codegen funnel + golden）。**裁定接口在 contract 层、载体为 HTTP**（与现有 `http`/`grpc` contract
-kind 同构）：
+（codegen funnel + golden）。**裁定接口在 contract 层、载体为 HTTP**——故本 seam **仅覆盖 `http`
+kind 的 sync contract**：
 
 ```go
 // runtime 层（最小形态；确切包名/命名在 US4 实现时定，shape 在此锁定）
@@ -132,6 +133,11 @@ type CellTransport interface {
     DoContract(ctx context.Context, contractID string, req *http.Request) (*http.Response, error)
 }
 ```
+
+**`grpc` cross-cell relocatability 是独立 transport seam，本 ADR/epic 暂不覆盖**（`*http.Request`/
+`*http.Response` 签名只表达 HTTP）——显式留为后续 scope boundary，与 #1752（gRPC 引入）对齐，届时另出
+gRPC seam 接口/验收，不在本 seam 上硬塞。这是拒绝 Service Weaver method-level stub 后的有意收口：
+contract-level HTTP 先落地，gRPC 走独立路径而非伪装成同一 `DoContract`。
 
 - in-process 实现：bootstrap router build 后持有 `http.Handler`，内存 dispatch（celltest mux
   机制先例）。
@@ -176,10 +182,12 @@ type Resolver interface {
   `RequireCallerCell`）——故 **in-proc 路径也必须合成 callerCell 身份并经 `RequireCallerCell`**，
   与 remote 路径对称；不因 co-located 就降级为无鉴权直拨。
 - **trace/metrics 必须区分 in-process vs remote 调用**（Service Weaver 2024-12 第三条教训：
-  「透明」不得变成「不可诊断」）。裁定区分维度用 **span attribute（如 `transport.mode=in_proc|remote`）
-  而非 metric label**——避免 metric label 基数膨胀（observability 规范要求 label 值集冻结 / 经 typed
-  enum）；metrics `cell` label 仍来自 closed set。确切 attribute 常量名在 US4 #1963 锁定并更新
-  observability 规范。
+  「透明」不得变成「不可诊断」）。裁定区分维度 = **二值 `transport_mode ∈ {in_proc, remote}`**，
+  trace 侧作 span attribute、metrics 侧作 **frozen typed-enum label**——二值天然低基数，**不违反**
+  observability 规范「label 值集必须冻结 / 经 typed enum 入口」（对标 OTel RPC metrics 用受控基数
+  attribute 过滤）。故 metrics **可**按 transport_mode 过滤（非 trace-only），既满足「trace/metrics
+  区分」又不引入高基数；`cell` label 仍来自 closed set。确切常量名与 enum 入口在 US4 #1963 锁定并
+  更新 observability 规范。
 - **L0 cell 显式豁免 transport 判定。** L0（纯计算分区）按宪法 Article I「可被同 Assembly 内兄弟 Cell
   直接导入，但 **MUST 在 `cell.l0Dependencies` 显式声明**」——故 transport 规则（含下游 funnel archtest）
   的 L0 carve-out **仅豁免已在 `cell.l0Dependencies` 声明的合法 L0 import**；未声明的 L0 direct import
@@ -189,9 +197,10 @@ type Resolver interface {
 
 **本 ADR 是决策记录（非 enforcement 机制），按 AI-robust 章程不自带 archtest/guard**——澄清：章程
 禁的是把 Soft 当**新增 enforcement 载体**，ADR 作决策记录本就不是 enforcement 载体，故不冲突。它对
-「未来 AI 重新 conflate」的抗性来自两件事：(a) 上文闭环交叉引用使矛盾**机器可发现**；(b) 下游 seam
-落地时的 enforcement。按 AI-robust 章程「新机制最低 Medium；Hard 可达则定 Hard，不以 Medium 为
-天花板」，本 ADR **设下游档位目标**（实现属对应 issue，本 PR 不写 archtest/guard）：
+「未来 AI 重新 conflate」的抗性来自两件事：(a) 上文闭环交叉引用使矛盾**review 可追溯**（人/再审循
+引用即达，非机器强制；若要机器发现需补一个下游 cross-ref guard governance 任务，本 ADR 不立此 task）；
+(b) 下游 seam 落地时的 enforcement。按 AI-robust 章程「新机制最低 Medium；Hard 可达则定 Hard，不以
+Medium 为天花板」，本 ADR **设下游档位目标**（实现属对应 issue，本 PR 不写 archtest/guard）：
 
 - **sync 直拨 funnel → 目标 Hard（上下游双侧）。** 按 AI-robust「funnel 须分别说明上游和下游强度，
   只锁 callsite 不是闭环」：
@@ -225,15 +234,17 @@ amendment 落地时必须同步重评安全模型」，此处显式列出威胁�
 
 | 缺口 / 威胁 | split 下风险 | 当前补偿 / 约束 | 归属 |
 |---|---|---|---|
-| **principal/tenant 跨进程传播伪造** | caller 伪造他人 principal/tenant → 越权 | 传播头**由 `CellTransport` 实现层注入，cell 业务代码不手填**；被调端经现有 auth middleware 重建，service principal 按 `tenancy.md`「service/anonymous/unknown → fail-closed」；与 outbox `PrincipalMetadata` 异步通道对称（禁伪造 reserved key）| US5 #1966（spec FR-006）|
+| **业务 principal 跨进程传播伪造** | caller 伪造他人 actor/subject/session → 越权 | **现有栈不足，是真缺口**：service token MAC（`runtime/auth/servicetoken.go`）只覆盖 method/path/query/timestamp/nonce/`callerCell`/`X-Tenant-ID`，且 `authenticator.go` 只构造 `PrincipalService{CallerCellID}`——**只认证调用方 cell 身份，不传播也不还原原始业务 principal（actor/subject/session）**。故 split 下传播业务 principal **MUST 用 tamper-evident 的 signed/sealed envelope**（或把 actor/subject/session/tenant 全纳入 MAC material）+ 专用 callee middleware 重建——不能靠「现有 auth middleware 已足够」。| US5 #1966（spec FR-006，安全 obligation）|
 | **共享 HMAC keyring（无 per-cell 身份颁发）** | 单 cell 进程泄露 keyring → 可签发任意 `callerCell` | 当前全 cell 共享 keyring + `RequireCallerCell` allowlist——可信网络/monolith 足够，**跨信任边界拆分不足** | US6 #1964 |
 | **无 mTLS 对等认证** | 中间人 / 端点伪造 | service token MAC 提供消息完整性，但无传输层对等认证 | US6 #1964 |
 | **token replay（多实例）** | 重放已签 token | `RequiresDistributedReplay()` 多实例强制分布式 NonceStore（**已有，US5 复用**）| 已覆盖 |
-| **`upstream-cell-unavailable` 错误语义** | 远端不可达与本地依赖缺失混淆 → 误诊 | 新增 `KindUnavailable` 专属码，经 `ERRCODE-PREFIX-OWNERSHIP-01` 注册 + golden（前缀所有权属 transport 层）| US5 #1966（spec T043）|
+| **`upstream-cell-unavailable` 错误语义** | 远端不可达与本地依赖缺失混淆 → 误诊 | 新增的是 **`errcode.Code`（`ERR_UPSTREAM_CELL_UNAVAILABLE`），用既有 `KindUnavailable` 构造**（`pkg/errcode/status.go` 已有该 Kind，**非新增 Kind**），Code 经 `ERRCODE-PREFIX-OWNERSHIP-01` 注册 + golden。**wire 可见性警示**：`KindUnavailable.PublicCode()` 现折叠为 `ERR_SERVICE_UNAVAILABLE` 且 5xx details 强制 strip——故该专属码默认只作**服务端**诊断（log/trace/internal）；若要客户端 wire 可区分，须 US5 **有意重评 5xx public-code 投影策略** + redaction（非默认）。| US5 #1966（spec T043）|
 
-**安全约束裁定（方向，下游遵循）**：(1) principal/tenant 传播只走 `CellTransport` 注入头 + 被调端
-重建，业务 handler 不得自构 principal header；(2) in-proc 与 remote 同样经 `RequireCallerCell`
-（D4）；(3) 缺口非本 ADR 解，但 MUST 在下游 issue 落地前不被静默放过——上表即其 backlog 账。
+**安全约束裁定（方向，下游遵循）**：(1) 业务 principal/tenant 跨进程传播 **MUST 经 tamper-evident
+signed/sealed envelope**（经单一 sealed propagation funnel 注入 + 专用 callee middleware 重建），业务
+handler 不得自构 principal header——**不得假定现有 service-token 栈已覆盖业务 principal**（它只认证
+callerCell）；(2) in-proc 与 remote 同样经 `RequireCallerCell`（D4）；(3) 缺口非本 ADR 解，但 MUST
+在下游 issue 落地前不被静默放过——上表即其 backlog 账。
 
 ## Rejected alternatives
 

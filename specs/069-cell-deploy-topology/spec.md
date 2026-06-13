@@ -72,7 +72,8 @@ Topology 查询任意 cellID 的 co-located / remote(endpoint) 归属。
 ### User Story 4 - Sync transport seam + 进程内短路（Priority: P1）
 
 cell 调用另一 cell 的 sync contract 时统一经 `CellTransport` 接口；co-located 时注入
-进程内短路实现（内存 dispatch，bypass TCP），cell 代码与 contract client 零改动。
+进程内短路实现（内存 dispatch，bypass TCP），cell **业务代码**零改动（generated contract
+client 的注入方式由 codegen/golden 驱动改造，非 cell 作者手写）。
 
 **Why this priority**: epic 标记的核心缺口（同步维度从未支持）；接口形态是 US5 远程实现的前提。
 
@@ -153,7 +154,7 @@ sync 直拨的 archtest 盲区，含 synthetic red case。
 
 - 空拓扑声明（无 colocated / remote 字段）→ 等价现状（全部 co-located），零迁移成本。
 - cell 在 colocated 与 remote 中同时声明 → validate 拒绝（互斥）。
-- 远程调用超时 vs 连接拒绝 vs 5xx → 统一映射 upstream-cell-unavailable，details 区分原因。
+- 远程调用超时 vs 连接拒绝 vs 5xx → 统一映射 upstream-cell-unavailable（稳定 wire code）；**区分原因进服务端通道（log/trace/internal details/metrics），不进 5xx wire details**（5xx details 强制 strip，见 `error-handling.md`）。
 - in-process 短路路径上的 auth chain：不得因 bypass TCP 而 bypass listener auth plan。
 - L0 cell（纯计算库，允许兄弟直接 import）不参与 transport 判定，规则需显式豁免。
 - 拆分拓扑下 trace/metrics 必须区分 in-process 与 remote 调用（Service Weaver「不可诊断」教训）。
@@ -163,12 +164,12 @@ sync 直拨的 archtest 盲区，含 synthetic red case。
 ### Functional Requirements
 
 - **FR-001**: 框架 MUST 提供拓扑声明：本进程 cell 集合 + 远程 cell→endpoint 映射（载体由 US1 ADR 裁决，默认方向 assembly.yaml 扩展）。
-- **FR-002**: sync contract 调用 MUST 经统一 CellTransport seam；co-located 注入进程内短路、split 注入远程客户端，cell 代码与 generated client 接口零改动。
+- **FR-002**: sync contract 调用 MUST 经统一 CellTransport seam（覆盖 `http` kind；`grpc` cross-cell 是独立 seam，见 ADR D2，本 epic 暂不覆盖）；co-located 注入进程内短路、split 注入远程客户端，cell **业务代码**零改动（generated client 注入方式由 codegen/golden 驱动改造）。
 - **FR-003**: 拓扑判定有 cell 拆出时，in-memory EventBus MUST 被静态 + 运行时双闸拒绝（fail-fast，不静默降级）。
 - **FR-004**: contractUsages 声明的消费若提供方既不在本进程也不在远程映射，bootstrap MUST fail-fast。
 - **FR-005**: 远程 sync 调用 MUST 携带 service token（callerCell 身份）并通过被调端 RequireCallerCell + 分布式 nonce replay 防护。
-- **FR-006**: principal/tenant 上下文 MUST 经显式 HTTP 头规范跨进程传播并在被调端重建（对称 outbox PrincipalMetadata 通道，禁伪造）。
-- **FR-007**: 远端 cell 不可达 MUST 映射为专属 errcode（KindUnavailable），区别于通用 ERR_SERVICE_UNAVAILABLE。
+- **FR-006**: 业务 principal/tenant 上下文 MUST 经 **tamper-evident signed/sealed envelope** 跨进程传播并在被调端重建（现有 service token 只认证 callerCell、不覆盖业务 principal；envelope 经单一 sealed propagation funnel，对称 outbox PrincipalMetadata 通道，禁伪造）。
+- **FR-007**: 远端 cell 不可达 MUST 映射为专属 **errcode.Code**（`ERR_UPSTREAM_CELL_UNAVAILABLE`，用既有 `KindUnavailable` 构造，非新 Kind），区别于通用 `ERR_SERVICE_UNAVAILABLE`；wire 可见区分受 5xx public-code 投影约束（默认折叠为 503 + details strip，客户端可区分需 US5 有意重评投影）。
 - **FR-008**: per-cell 进程 MUST 可注入独立 DB/broker 凭据；缺失时 fail-fast。
 - **FR-009**: 跨 cell 进程内 Go 直传 / 直拨 MUST 为 0，由 archtest（含 gRPC 盲区）以 Medium+ 等级守卫。
 - **FR-010**: 内部平台 cell（accesscore/auditcore/configcore）与外部 cell MUST 同等享有上述弹性。
