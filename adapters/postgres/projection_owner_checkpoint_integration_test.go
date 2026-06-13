@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -24,6 +25,58 @@ import (
 func TestPGOwnerCheckpointStore_Conformance(t *testing.T) {
 	store, _ := newCheckpointStore(t)
 	projectiontest.RunOwnerCheckpointConformance(t, store)
+}
+
+// TestPGOwnerCheckpointStore_ColdConcurrent_SameKey verifies that two goroutines
+// racing AdvanceIfOwner on the same (cell, projection) key on a fresh store
+// (cold-start race) result in exactly one claim (nil return) and one rejection
+// (ErrStaleOwner). This proves the ON CONFLICT DO NOTHING + RowsAffected==0
+// path in the cold INSERT does NOT return a KindInternal error under concurrency.
+//
+// ref: review finding F2.
+func TestPGOwnerCheckpointStore_ColdConcurrent_SameKey(t *testing.T) {
+	store, _ := newCheckpointStore(t)
+	ctx := context.Background()
+
+	const cellID = "cell-cold-concurrent"
+	const projID = "proj-cold-concurrent"
+	const offset = int64(1) // must be > 0 to satisfy cold-claim predicate
+
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		results []error
+	)
+
+	const goroutines = 4
+	for i := range goroutines {
+		token := fmt.Sprintf("token-%d", i)
+		wg.Add(1)
+		go func(tok string) {
+			defer wg.Done()
+			err := store.AdvanceIfOwner(ctx, cellID, projID, tok, offset)
+			mu.Lock()
+			results = append(results, err)
+			mu.Unlock()
+		}(token)
+	}
+	wg.Wait()
+
+	var nilCount, staleCount, otherCount int
+	for _, err := range results {
+		switch {
+		case err == nil:
+			nilCount++
+		case errors.Is(err, projection.ErrStaleOwner):
+			staleCount++
+		default:
+			otherCount++
+			t.Errorf("unexpected error (must be nil or ErrStaleOwner): %v", err)
+		}
+	}
+	require.Equal(t, 1, nilCount, "exactly one goroutine must claim (nil return)")
+	require.Equal(t, goroutines-1, staleCount, "all losers must get ErrStaleOwner, not KindInternal")
+	require.Equal(t, 0, otherCount, "no unexpected errors")
 }
 
 // TestPGOwnerCheckpointStore_Concurrent_LeaderHandoff exercises the

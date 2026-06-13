@@ -10,6 +10,14 @@ package saga
 // Neither LoadSince nor HeadSeq starts a transaction; both are read-only and
 // safe to execute on any pgExecutor connection (pooled or ambient-tx).
 //
+// Snapshot independence: HeadSeq and LoadSince are INDEPENDENT queries with
+// no shared transaction snapshot. A Tailer that calls HeadSeq to estimate lag
+// and then LoadSince to fetch events may observe a read window between them:
+// new rows committed between HeadSeq and LoadSince are safe because LoadSince
+// will pick them up on the next tick. A Tailer must therefore tolerate this
+// window — gap-tolerant / level-triggered consumption covers it (the Tailer
+// polls until LoadSince returns an empty page, meaning it has caught up).
+//
 // ref: kernel/saga/journal.GlobalReader
 // ref: kernel/saga/journal/memjournal.go LoadSince / HeadSeq (reference semantics)
 // ref: adapters/postgres/migrations/064_add_saga_events_global_seq.sql
@@ -87,7 +95,7 @@ func (s *PGJournal) LoadSince(ctx context.Context, afterGlobalSeq int64, limit i
 		}
 		kind, kindErr := kindFromInt16(rawKind)
 		if kindErr != nil {
-			slog.Error("saga journal: LoadSince encountered invalid event kind",
+			slog.ErrorContext(ctx, "saga journal: LoadSince encountered invalid event kind",
 				slog.String("instance_id", instanceID),
 				slog.Int64("global_seq", globalSeq),
 				slog.Int64("version", version),

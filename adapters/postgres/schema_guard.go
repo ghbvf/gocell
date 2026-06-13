@@ -655,6 +655,11 @@ var expectedColumns = []expectedColumn{
 	{Table: "saga_events", Column: "step_name", Type: "text", NotNull: false},
 	{Table: "saga_events", Column: "payload", Type: "bytea", NotNull: false},
 	{Table: "saga_events", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
+	// global_seq is GENERATED ALWAYS AS IDENTITY (064_add_saga_events_global_seq.sql,
+	// EPIC #1630 PR-PG). Identity:true guards the GENERATED ALWAYS write contract —
+	// the insertEvent query omits global_seq and relies on auto-assign, mirroring
+	// outbox_entries.seq and projection_events.global_seq (F5 / review finding F1).
+	{Table: "saga_events", Column: "global_seq", Type: "bigint", NotNull: true, Identity: true}, // 064 NEW
 	// projection_checkpoints (045_create_projection_checkpoints.sql) — CQRS projection
 	// harness consumed-offset store. owner is now written by
 	// OwnerCheckpointStore.AdvanceIfOwner (activated in PR-PG, #1630 Batch 2).
@@ -862,6 +867,9 @@ var expectedIndexes = []expectedIndex{
 	{Table: "commands", Name: "idx_commands_idempotency_key", Unique: true, Columns: []string{"(expr)"}},
 	// saga_instances (040_create_saga_tables.sql) — partial index over claimable rows.
 	{Table: "saga_instances", Name: "idx_saga_instances_claimable", Unique: false, Columns: []string{"started_at", "id"}},
+	// saga_events (064_add_saga_events_global_seq.sql) — GlobalReader ordered range scan
+	// and uniqueness enforcement (EPIC #1630 PR-PG, review finding F1).
+	{Table: "saga_events", Name: "idx_saga_events_global_seq", Unique: true, Columns: []string{"global_seq"}},
 	// config_entries (051_configcore_tenant_id.sql — DROP+CREATE rebuild).
 	// config_entries_tenant_id_uq is an inline CONSTRAINT UNIQUE (tenant_id, id);
 	// PG creates a backing index with the same name.

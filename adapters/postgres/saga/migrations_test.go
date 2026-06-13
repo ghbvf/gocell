@@ -164,4 +164,16 @@ func TestMigration064_AddsSagaEventsGlobalSeq(t *testing.T) {
 	require.NoError(t, err, "pg_get_constraintdef for saga_events PK after migration 064")
 	require.Contains(t, pkDef, "instance_id", "saga_events PK must still include instance_id after migration 064")
 	require.Contains(t, pkDef, "version", "saga_events PK must still include version after migration 064")
+
+	// global_seq must be GENERATED ALWAYS AS IDENTITY (attidentity = 'a').
+	// This guards the write contract: insertEvent omits global_seq and relies on
+	// auto-assign; ALWAYS (not BY DEFAULT) prevents a producer supplying its own
+	// position (review finding F7, mirrors outbox_entries.seq guard).
+	var attidentity string
+	err = pool.DB().QueryRow(ctx,
+		`SELECT attidentity FROM pg_attribute
+			WHERE attrelid = 'saga_events'::regclass
+			  AND attname = 'global_seq'`).Scan(&attidentity)
+	require.NoError(t, err, "pg_attribute probe for saga_events.global_seq attidentity")
+	require.Equal(t, "a", attidentity, "saga_events.global_seq must be GENERATED ALWAYS (attidentity='a')")
 }

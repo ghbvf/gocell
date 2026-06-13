@@ -144,7 +144,7 @@ type GlobalEvent struct {
 }
 ```
 
-PG：`saga_events` 加 `global_seq BIGINT GENERATED ALWAYS AS IDENTITY`（migration 只增不改 + `CREATE INDEX CONCURRENTLY`）。mem：append 时分配全局计数器。两实现入 `sagajournaltest` conformance（全局序单调性）。
+PG：`saga_events` 加 `global_seq BIGINT GENERATED ALWAYS AS IDENTITY`（migration 只增不改 + 普通 `CREATE INDEX`，pre-GA 阶段有序 migration 集 + 新建表，按 `adapters/postgres/migrations/README.md §规则 0` 不使用 CONCURRENTLY）。mem：append 时分配全局计数器。两实现入 `sagajournaltest` conformance（全局序单调性）。
 
 ### 4.3 Tailer（D4）+ SagaJournalSource（接 harness）
 

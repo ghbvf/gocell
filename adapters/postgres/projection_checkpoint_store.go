@@ -20,22 +20,41 @@ const selectCheckpointSQL = `SELECT offset_seq FROM projection_checkpoints WHERE
 // owner for an AdvanceIfOwner CAS, locking the row for the duration of the
 // ambient transaction (prevents concurrent AdvanceIfOwner from reading stale
 // state between the read and the write).
-const selectCheckpointForUpdateSQL = `SELECT offset_seq, owner FROM projection_checkpoints WHERE cell_id = $1 AND projection_id = $2 FOR UPDATE` //nolint:lll // SQL literal must stay a single static string (B1 blind-spot constraint — dynamic construction escapes the owner-write scan)
+const selectCheckpointForUpdateSQL = `SELECT offset_seq, owner FROM projection_checkpoints WHERE cell_id = $1 AND projection_id = $2 FOR UPDATE` //nolint:lll // SQL must stay a single static string literal; dynamic construction would defeat static owner-write analysis
 
 // insertCheckpointWithOwnerSQL performs the cold-claim insert: used only when
 // no checkpoint row exists yet AND the requested offset is strictly ahead of
 // the virtual cold row {owner:"", offset:0}. SaveOffset (upsertCheckpointSQL)
 // never writes the owner column, so the OwnerCheckpointStore contract
 // (AdvanceIfOwner) is the sole write path for owner.
+//
+// ON CONFLICT (cell_id, projection_id) DO NOTHING handles the cold-start race:
+// when two concurrent leaders both see ErrNoRows and both attempt the INSERT,
+// the loser gets RowsAffected==0, which the caller maps to ErrStaleOwner.
+// This makes the contract hold without relying on distlock for correctness.
 const insertCheckpointWithOwnerSQL = `INSERT INTO projection_checkpoints (cell_id, projection_id, offset_seq, owner, updated_at)
-VALUES ($1, $2, $3, $4, NOW())`
+VALUES ($1, $2, $3, $4, NOW())
+ON CONFLICT (cell_id, projection_id) DO NOTHING`
 
 // updateCheckpointWithOwnerSQL applies a conditional CAS advance for an
-// existing checkpoint row: sets offset_seq and owner unconditionally because
-// the read-then-write logic in AdvanceIfOwner already validated the fencing
-// predicate (same-owner OR strictly-ahead) before calling this statement.
+// existing checkpoint row. The WHERE clause is a defense-in-depth SQL-layer
+// CAS that mirrors the Go-side fencing predicate (same-owner OR offset
+// strictly ahead), so the fence is single-source at the DB layer even if a
+// future refactor removes the Go pre-read (mirrors updateInstanceAfterAppend's
+// rationale, OUTBOX-LEASE-ID-CAS-01).
+//
+// $1 cell_id, $2 projection_id, $3 new offset_seq, $4 new owner.
+// $5 is the ownerToken (= $4) for the owner equality check.
+// $6 is the new offset_seq (= $3) for the strictly-ahead check.
+//
+// The same-owner disjunct (owner = $5) must allow same-owner backward writes:
+// the conformance case "same-owner-backward" sets offset < committed with a
+// matching token, which is accepted by semantics B (same-leader re-advance
+// is always accepted regardless of offset). The SQL WHERE allows this because
+// owner = $5 is true for same-owner, independent of the offset comparison.
 const updateCheckpointWithOwnerSQL = `UPDATE projection_checkpoints SET offset_seq = $3, owner = $4, updated_at = NOW()
-WHERE cell_id = $1 AND projection_id = $2`
+WHERE cell_id = $1 AND projection_id = $2
+  AND (owner = $5 OR $6 > offset_seq)` //nolint:lll // SQL must stay a single static string literal; dynamic construction would defeat static owner-write analysis
 
 // upsertCheckpointSQL advances the committed offset. The owner column is
 // DELIBERATELY ABSENT from both the column list and the SET clause: SaveOffset
@@ -163,6 +182,25 @@ func (s *ProjectionCheckpointStore) SaveOffset(ctx context.Context, cellID, proj
 // is re-evaluated against the fresh state. This makes the CAS race-free
 // without requiring an optimistic retry loop in the application layer.
 //
+// Cold-start INSERT race: if two concurrent leaders both reach the cold-INSERT
+// path (both saw ErrNoRows before the lock was contended), the INSERT uses
+// ON CONFLICT (cell_id, projection_id) DO NOTHING. The loser gets
+// RowsAffected==0 and is mapped to ErrStaleOwner — equivalent to a deposed
+// claimant losing the race.
+//
+// Warm UPDATE defense-in-depth: updateCheckpointWithOwnerSQL carries a SQL
+// WHERE CAS predicate (owner=$token OR offset>committed) that mirrors the Go
+// predicate. RowsAffected==0 from the UPDATE is also mapped to ErrStaleOwner.
+// Both the Go predicate and the SQL CAS must agree (they're the same predicate
+// expressed in two layers); the SQL CAS is the belt-and-suspenders layer that
+// remains correct even if a future refactor removes the Go short-circuit.
+//
+// SaveOffset interaction: SaveOffset (base CheckpointStore) never writes the
+// owner column. A cold row created by SaveOffset has owner='' and offset=0,
+// so a later AdvanceIfOwner with a real token needs offset>0 to claim (the
+// strictly-ahead predicate treats owner='' as "no owner yet"). This is correct
+// fencing, not a bug: offset>0 is the first real advance past the base row.
+//
 // AdvanceIfOwner participates in the ambient transaction via s.db
 // (pgexec.PGExecutor, PROJECTION-CHECKPOINT-TX-BOUND-01): both the SELECT FOR
 // UPDATE and the INSERT/UPDATE see and join the caller's transaction, so the
@@ -183,13 +221,19 @@ func (s *ProjectionCheckpointStore) AdvanceIfOwner(ctx context.Context, cellID, 
 		if offset <= 0 {
 			return projection.ErrStaleOwner
 		}
-		if _, insertErr := s.db.Exec(ctx, insertCheckpointWithOwnerSQL, cellID, projectionID, offset, ownerToken); insertErr != nil {
+		ct, insertErr := s.db.Exec(ctx, insertCheckpointWithOwnerSQL, cellID, projectionID, offset, ownerToken)
+		if insertErr != nil {
 			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
 				"projection checkpoint store: advance if owner (cold insert)", insertErr,
 				errcode.WithInternal(
 					errcode.InternalAttr("cell_id", cellID),
 					errcode.InternalAttr("projection_id", projectionID),
 				))
+		}
+		// RowsAffected==0 means ON CONFLICT DO NOTHING fired: a racing concurrent
+		// leader won the INSERT. Map to ErrStaleOwner (deposed-equivalent claimant).
+		if ct.RowsAffected() == 0 {
+			return projection.ErrStaleOwner
 		}
 		return nil
 	}
@@ -202,18 +246,28 @@ func (s *ProjectionCheckpointStore) AdvanceIfOwner(ctx context.Context, cellID, 
 			))
 	}
 
-	// Row exists: apply fencing predicate (semantics B).
+	// Row exists: apply fencing predicate (semantics B) in Go as the fast path.
+	// The SQL WHERE in updateCheckpointWithOwnerSQL is the belt-and-suspenders layer.
 	if ownerToken != recordedOwner && offset <= recordedOffset {
 		return projection.ErrStaleOwner
 	}
 
-	if _, updateErr := s.db.Exec(ctx, updateCheckpointWithOwnerSQL, cellID, projectionID, offset, ownerToken); updateErr != nil {
+	// $1=cell_id, $2=projection_id, $3=new offset, $4=new owner,
+	// $5=ownerToken (for the SQL WHERE owner=$5 check),
+	// $6=offset (for the SQL WHERE $6>offset_seq check).
+	ct, updateErr := s.db.Exec(ctx, updateCheckpointWithOwnerSQL, cellID, projectionID, offset, ownerToken, ownerToken, offset)
+	if updateErr != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
 			"projection checkpoint store: advance if owner (update)", updateErr,
 			errcode.WithInternal(
 				errcode.InternalAttr("cell_id", cellID),
 				errcode.InternalAttr("projection_id", projectionID),
 			))
+	}
+	// RowsAffected==0: SQL WHERE CAS rejected the write despite the Go predicate
+	// passing. This can happen in a narrow race; treat as stale.
+	if ct.RowsAffected() == 0 {
+		return projection.ErrStaleOwner
 	}
 	return nil
 }
