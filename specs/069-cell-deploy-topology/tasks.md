@@ -14,9 +14,9 @@
 
 ### US1 — L3 方向 ADR「Cell 部署拓扑 / location-transparent transport seam」（P1）→ #1960
 
-- [ ] T001 [US1] 写 ADR `docs/architecture/202606DDHHMM-1423-adr-cell-deployment-topology.md`：reconcile 宪法 V/Cell 数据主权 vs ADR `202605041430` §3.1「嵌入式框架」；裁决 ①topology 声明载体（默认方向：assembly.yaml 扩展）②sync transport 接口形态（contract-level HTTP，明确偏离 Service Weaver method-level RPC，引用其停更教训）③discovery 接口与 #303 共享 ④in-process 调用的 auth/可观测语义（不 bypass auth chain；trace 区分 in-proc/remote）
-- [ ] T002 [P] [US1] 重开/改写 `030-review-0504` won't-do line 37（微服务化拆分）+ K-04（corecells 不迁移），留痕指向新 ADR；同步重评 `202605041430` 威胁矩阵冲突段落（AI-robust 章程：amendment 必须同改）
-- [ ] T003 [P] [US1] epic #1423 body 回填：Wave-1 完成状态（PR #1467/#1572 证据）+ 子 issue DAG
+- [x] T001 [US1] 写 ADR `docs/architecture/202606131142-1423-adr-cell-deployment-topology.md`（PR #2001）：reconcile 宪法 V/Cell 数据主权 vs ADR `202605041430` §3.1「嵌入式框架」；裁决 ①topology 声明载体（默认方向：assembly.yaml 扩展）②sync transport 接口形态（contract-level HTTP，明确偏离 Service Weaver method-level RPC，引用其停更教训）③discovery 接口与 #303 共享 ④in-process 调用的 auth/可观测语义（不 bypass auth chain；trace 区分 in-proc/remote）+ 安全 gap matrix
+- [x] T002 [P] [US1] 重开/改写 `030-review-0504` won't-do line 37（微服务化拆分）+ K-04（corecells 不迁移），可见推翻指向新 ADR；同步重评 `202605041430` 形态约束矩阵冲突段落（AI-robust 章程：amendment 必须同改）
+- [ ] T003 [P] [US1] epic #1423 body 回填：Wave-1 完成状态（PR #1467/#1572/#2001 证据）+ 子 issue DAG（ship 收尾步执行）
 
 **Checkpoint**: ADR 合入后 US2-US7 形态锁定
 
@@ -24,7 +24,7 @@
 
 ### US2 — 拓扑声明作为一等 wiring（P1）→ #1962（blocked-by #1960）
 
-- [ ] T010 [US2] assembly schema 扩展（`tools/codegen/assemblyschema/`）：`topology.colocated` 组 + `topology.remote[{cellID,endpoint}]`；colocated/remote 互斥校验；空拓扑 = 现状全 co-located
+- [ ] T010 [US2] assembly schema 扩展（`kernel/assembly/assembly.go` 模型 + `tools/codegen/` 派生）：`topology.colocated` 组 + `topology.remote[{cellID,endpoint}]`；colocated/remote 互斥校验；空拓扑 = 现状全 co-located
 - [ ] T011 [US2] `gocell validate` 拓扑校验：cell 归属判定（本地/远程/缺失）静态导出；contractUsages 消费方的提供方 ∉ 本地∪远程 → 报错
 - [ ] T012 [US2] `runtime/bootstrap/topology.go` 扩展：启动期 WriteOnce 拓扑判定 API（`IsColocated(cellID)` / `RemoteEndpoint(cellID)`），phase0 注入（`WithControlPlaneTopology` 先例）
 - [ ] T013 [US2] codegen golden + synthetic red case（非法拓扑 fixture）

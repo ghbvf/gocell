@@ -73,12 +73,20 @@ composition/topology 接线即可单进程 / 组合 / 拆分）而非改 cell �
 的当前真相单源 = ADR `202606131142-1423-adr-cell-deployment-topology.md`。
 
 **形态约束矩阵重评（per `.claude/rules/gocell/ai-robust.md` §"ADR amendment 落地必查"）**：本
-amendment **不**使 §3.1 任何维度退化，也**不**改 §3.2/§3.3/§3.4。seam 经 §3.2「运行时只读 + 经
-接口注入」通道交付（`CellTransport` 由 composition root 启动期注入，框架只提供接口、不夺取宿主
-运行时权限、无 sidecar/控制面），故与 §3.3「GoCell 运行时无权改宿主」**一致非违反**——§3.2 的
-「经接口注入」模型本来就 license 注入式 transport seam。conflation 是下游从 §3.1 的误推，不是
-本 ADR 形态模型的缺陷；§3.2-§3.4（时间维度 / 自收敛权限 / 双层 harvest）与 cell↔cell transport
-正交，文本原样保留。
+amendment **不**使 §3.1 任何维度退化，也**不**改 §3.2/§3.3/§3.4 文本。逐项核对正交/一致：
+
+- **§3.2（时间维度）一致**：seam 注入发生在「**启动期**」（§3.2 启动期 = `fail-fast 权限` 窗口，
+  `CellTransport` 由 composition root 按拓扑声明注入），注入后框架在「**运行时**」只读使用（§3.2
+  运行时 = 「只读 + 经接口注入」）；不夺取宿主运行时权限、无 sidecar/控制面。注意是「启动期注入 +
+  运行时只读」两行各司其职，非单一行。
+- **§3.3（权限模型）一致非违反**：seam 不在运行时改宿主，与「GoCell 运行时没有权限改宿主应用」相容
+  ——§3.2「启动期经接口注入」本来就 license 注入式 transport seam。
+- **§3.4（双层 harvest 域）正交且边界清晰**：`CellTransport` 接口/funnel 属「框架自演进域」
+  （kernel/runtime 提供 + archtest），拓扑 wiring 选择属「客户应用演进域」（composition root 决定）
+  ——两域职责分明，恰是 §3.4 要求的「显式区分」，不混淆。
+
+conflation 是下游从 §3.1 的误推，不是本 ADR 形态模型的缺陷。该 reconcile 的当前真相单源 = ADR
+`202606131142-1423-adr-cell-deployment-topology.md`。
 
 ### 3.2 时间维度模型
 

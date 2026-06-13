@@ -50,7 +50,10 @@ cell）根都在此。Wave-1 防债已完成（金丝雀 `ModuleExports.Bootstra
 PR #1572 / `pkg/migration/namespace.go`），但方向裁决缺位使下游 seam 任务形态未锁定。本 ADR
 补这一裁决。证据底座：`specs/069-cell-deploy-topology/{research,spec,tasks}.md`。
 
-## Reconcile thesis（核心裁决）
+## 核心裁决：拆开两件被 conflate 的事（canonical anchor）
+
+> 注：本节的「reconcile」指消解宪法 vs ADR 的概念矛盾，与 `kernel/reconcile`（L4 desired-state
+> 收敛控制环）无关，勿混。
 
 **裁定：框架 MUST 提供 location-transparent contract transport seam。** 拆开两件被
 conflate 的事，前者保留、后者纠正纳入框架职责：
@@ -63,15 +66,21 @@ conflate 的事，前者保留、后者纠正纳入框架职责：
    (c) 多进程拆分（cell 间 event 经 broker / sync 经发现+客户端）三种形态间切换。seam 是
    能力，拓扑是客户的 wiring 选择——这正是 N 异所**要求**的，而非排除的。
 
-**【关键自洽点】seam 经 ADR `202605041430` §3.2 自己的通道交付，不违反其权限模型。**
-`202605041430` §3.2 把框架运行时权限定义为「**只读 + 经接口注入**」，§3.3 强调「GoCell 运行时
-没有权限改宿主应用（它是被嵌入的库）」。location-transparent seam 完全落在这条通道内：
-`CellTransport` 由 **composition root 在启动期注入**（宿主的 wiring 选择），框架只**提供接口**、
-**不在运行时夺取宿主权限**、不引入 sidecar 或控制面。故 §3.3 的权限模型与 seam **不仅正交、
-而是一致**——`202605041430` 自己的「经接口注入」模型本来就 license 了「框架提供 transport 接口、
-宿主注入拓扑」。**conflation 不是 `202605041430` 模型的缺陷，而是下游（review line 37 / K-04）
-从 §3.1 真命题误推的结论。** 因此 reconcile 不需推翻 `202605041430` 的形态约束，只需补全其
-§3.1 被省略的正确推论（见「Amendments to prior decisions」）。
+**【关键自洽点】seam 经 ADR `202605041430` §3.2 时间维度模型自己的通道交付，不违反其权限模型。**
+分两步精确对齐（注意区分 §3.2 的「启动期」行与「运行时」行）：
+
+1. **注入发生在启动期。** §3.2 把「启动期」（corebundle 二进制启动）定义为框架的 `fail-fast 权限`
+   时间窗——`CellTransport` 正是由 composition root 在**启动期**按拓扑声明注入（宿主的 wiring 选择，
+   与既有 DI / `bootstrap.With*` option 注入同构）。
+2. **注入后框架不在运行时夺取宿主权限。** §3.2「运行时」行限定框架为「**只读 + 经接口注入**」，
+   §3.3 强调「GoCell 运行时没有权限改宿主应用（它是被嵌入的库）」——seam 注入完成后仅以只读接口
+   形态被调用，不引入 sidecar、不引入控制面、不在运行时改宿主。
+
+两步合起来证明 seam 与 §3.2/§3.3 权限模型 **不仅正交、而是一致**——`202605041430` 自己的「启动期经
+接口注入」模型本来就 license 了「框架提供 transport 接口、宿主在启动期注入拓扑」。**conflation 不是
+`202605041430` 模型的缺陷，而是下游（review line 37 / K-04）从 §3.1 真命题误推的结论。** 因此
+reconcile 不需推翻 `202605041430` 的形态约束，只需补全其 §3.1 被省略的正确推论（见「Amendments to
+prior decisions」）。
 
 **本 ADR = 该 reconcile 的当前真相单源（canonical anchor）。** 「cell = 可重定位单元」这条原本
 只活在宪法层的**隐含**承诺，自此显式钉死在一处；并由闭环交叉引用（`202605041430` ↔ 本 ADR ↔
@@ -84,11 +93,11 @@ transport **可注入**（co-located 注入进程内短路 ↔ split 注入远�
 ## Decision snapshot
 
 | # | 决策 | 裁定 | 落地（下游） |
-|---|------|------|------|
+|---|------|------|--------------|
 | **D1** | topology 声明载体 | **assembly.yaml 扩展**（非独立 topology 文件） | US2 #1962 |
 | **D2** | sync transport 接口形态 | **contract-level HTTP** `CellTransport.DoContract`（in-proc/remote 二态注入，**明确偏离** Service Weaver method-level RPC stub）| US4 #1963 / US5 #1966 |
 | **D3** | discovery 接口 | **`Resolver`**（cellID→endpoint），静态配置起步，**接口形态与 #303 共享** | US5 #1966 / #303 |
-| **D4** | in-process 调用语义 | 进程内短路**不 bypass** listener auth chain / contract 校验；trace/metrics **必须区分 in-proc vs remote**；L0 cell 显式豁免 | US4 #1963 |
+| **D4** | in-process 调用语义 | 进程内短路**不 bypass** listener auth chain / contract 校验；trace/metrics **必须区分 in-proc vs remote**；L0 cell 显式豁免 | US4 #1963 / US8 #1961 |
 
 ## Decisions
 
@@ -111,8 +120,11 @@ closed-set 校验模板 `runtime/composition/builder.go` validateClosedSet。
 ### D2 — sync transport 接口形态 = contract-level HTTP（`CellTransport.DoContract`）
 
 所有 sync contract 调用 MUST 经统一 `CellTransport` seam；co-located 注入进程内短路、split 注入
-远程客户端，**cell 代码与 generated contract client 接口零改动**。**裁定接口在 contract 层、
-载体为 HTTP**（与现有 `http`/`grpc` contract kind 同构）：
+远程客户端。**「零改动」的精确边界**：指 cell **业务代码**（handler / service / domain）零改动；
+generated contract client 的注入方式会经 codegen 更新（走 `CellTransport` 而非裸 client），但该变更
+由工具自动完成、不需 cell 作者手写——**cell 代码界面零变动，generated 产物由 codegen 驱动变动**
+（codegen funnel + golden）。**裁定接口在 contract 层、载体为 HTTP**（与现有 `http`/`grpc` contract
+kind 同构）：
 
 ```go
 // runtime 层（最小形态；确切包名/命名在 US4 实现时定，shape 在此锁定）
@@ -151,45 +163,77 @@ type Resolver interface {
 - 调用方经 cellID 逻辑寻址，**永不接触 IP**（对标 Dapr appId=cellID 逻辑寻址）。
 - #303 本体（进程外控制面/数据面、动态注册）gated 在后（epic 跨 wave 顺序不变）；本 ADR 只锁
   **接口形态**，使 #1423 拆分需要的 sync 发现与 #303 是同一套机器，避免日后双造。
+- **接口 owner = 本 epic 实施方（US5 #1966，预期落 `runtime/transport` 包）**；#303 若需改 `Resolver`
+  形态须经 ADR amendment 重评（与 contract-fanout 规则一致），不在 #303 单方静默改。
 
 ### D4 — in-process 调用语义：不 bypass auth、可观测区分 in-proc/remote、L0 豁免
 
 进程内短路是**性能优化**，不是**安全/治理豁免**：
 
-- **不得因 bypass TCP 而 bypass listener auth chain / contract 校验。** co-located 调用经短路
-  送达 served handler 时，listener auth plan 与 contract 参数校验**照常生效**（短路替换的是
-  网络栈，不是治理栈）。
+- **不得因 bypass TCP 而 bypass listener auth chain / contract 校验。** in-proc 短路分发目标 = 该
+  contract **被服务的 handler 及其声明 listener 的 auth plan**（短路替换网络栈，不替换治理栈）。
+  cell↔cell sync 走的是 internal contract（`/internal/v1/*`，挂 `InternalListener`，service token +
+  `RequireCallerCell`）——故 **in-proc 路径也必须合成 callerCell 身份并经 `RequireCallerCell`**，
+  与 remote 路径对称；不因 co-located 就降级为无鉴权直拨。
 - **trace/metrics 必须区分 in-process vs remote 调用**（Service Weaver 2024-12 第三条教训：
-  「透明」不得变成「不可诊断」）。metrics `cell` label 仍来自 closed set（observability 规范）；
-  in-proc 与 remote 是不同的 span/属性，运维可分辨调用穿没穿进程边界。
-- **L0 cell 显式豁免 transport 判定。** L0（纯计算分区，Article I 允许同 Assembly 兄弟直接
-  import、不参与契约）不经 contract、不经 transport seam——transport 规则（含下游 funnel
-  archtest）MUST 显式 carve-out L0，避免把合法的 L0 import 误判为「绕过 seam 直拨」。
+  「透明」不得变成「不可诊断」）。裁定区分维度用 **span attribute（如 `transport.mode=in_proc|remote`）
+  而非 metric label**——避免 metric label 基数膨胀（observability 规范要求 label 值集冻结 / 经 typed
+  enum）；metrics `cell` label 仍来自 closed set。确切 attribute 常量名在 US4 #1963 锁定并更新
+  observability 规范。
+- **L0 cell 显式豁免 transport 判定。** L0（纯计算分区）按宪法 Article I「可被同 Assembly 内兄弟 Cell
+  直接导入，但 **MUST 在 `cell.l0Dependencies` 显式声明**」——故 transport 规则（含下游 funnel archtest）
+  的 L0 carve-out **仅豁免已在 `cell.l0Dependencies` 声明的合法 L0 import**；未声明的 L0 direct import
+  不在豁免内，仍被拦截（不放宽宪法 Article I 现有约束）。
 
 ## Governance / enforcement 档位规划（deferred — 设目标，不在本 PR 落地）
 
-**本 ADR 是 Soft 载体（决策记录），不自带 enforcement。** 它对「未来 AI 重新 conflate」的抗性
-来自两件事：(a) 上文闭环交叉引用使矛盾**机器可发现**；(b) 下游 seam 落地时的 enforcement。
-按 AI-robust 章程「新机制最低 Medium；Hard 可达则定 Hard，不以 Medium 为天花板」，本 ADR
-**设下游档位目标**（实现属对应 issue，本 PR 不写 archtest/guard）：
+**本 ADR 是决策记录（非 enforcement 机制），按 AI-robust 章程不自带 archtest/guard**——澄清：章程
+禁的是把 Soft 当**新增 enforcement 载体**，ADR 作决策记录本就不是 enforcement 载体，故不冲突。它对
+「未来 AI 重新 conflate」的抗性来自两件事：(a) 上文闭环交叉引用使矛盾**机器可发现**；(b) 下游 seam
+落地时的 enforcement。按 AI-robust 章程「新机制最低 Medium；Hard 可达则定 Hard，不以 Medium 为
+天花板」，本 ADR **设下游档位目标**（实现属对应 issue，本 PR 不写 archtest/guard）：
 
-- **sync 直拨 funnel → 目标 Hard。** generated contract client **只接收 sealed `CellTransport`**
-  作为唯一可表达的兄弟-cell 调用路径——裸 `http.Client` 直拨兄弟 cell / 直接 import 兄弟 cell
-  在类型层不可表达（typed marker funnel + sealed construction 范本）；Medium archtest typed scan
-  作 backstop，捕获绕过 generated client 的裸调用。→ US4 #1963 / US8 #1961。
-- **broker-mandatory 双闸 fail-fast → Medium（启动期 guard）。** type system 不可表达「拓扑 ×
-  bus 类型」组合，故落 runtime guard：split 拓扑 ∧ in-memory bus → 静态（`gocell validate` 遍历
+- **sync 直拨 funnel → 目标 Hard（上下游双侧）。** 按 AI-robust「funnel 须分别说明上游和下游强度，
+  只锁 callsite 不是闭环」：
+  - **上游（Hard）**：`CellTransport` 实现为 sealed type（unexported 字段 + 单一 sanctioned
+    constructor，预期 `runtime/transport` 包），包外不可结构字面量构造或伪造，AI 无法旁路造一个
+    transport 绕过 funnel。
+  - **下游（Hard + Medium backstop）**：generated contract client **只接收 sealed `CellTransport`**
+    作为唯一可表达的兄弟-cell 调用路径（裸 `http.Client` 直拨 / 直接 import 兄弟 cell 在类型层不可
+    表达）；Medium archtest typed scan 作 backstop，捕获绕过 generated client 的裸调用。
+  - → US4 #1963 / US8 #1961。
+- **broker-mandatory 双闸 fail-fast → Medium（启动期 guard，永久档位）。** 「拓扑 × bus 类型」组合
+  type system **不可表达**（拓扑是启动期数据、bus 是注入实例），故 Hard 不可达、Medium 是合理永久
+  天花板（非待升级 Medium）。**split 定义**：只要存在至少一条**跨进程** pub/sub contractUsage（生产
+  cell 在本进程、消费 cell 在 remote，或反之）即为 split。双闸 = 静态（`gocell validate` 遍历
   contractUsages 判跨进程 pub/sub）+ 启动期（bootstrap phase0，同形于 `runtime/bootstrap/topology.go`
-  既有「postgres requires real adapter」耦合规则）双闸拒绝。→ US3 #1965（blocked-by #1940）。
+  既有「postgres requires real adapter」耦合规则）拒绝。→ US3 #1965（blocked-by #1940）。
 - **进程内跨 cell Go 直传 = 0 + gRPC 盲区收口 → Medium archtest。** 金丝雀
   `ModuleExports.BootstrapLedgerStore` 已删（PR #1467），archtest 收口直传=0 + 覆盖 #1752 引入的
-  gRPC cross-cell 盲区。→ US8 #1961。
+  gRPC cross-cell 盲区。typed AST scan 即足，无低成本 Hard 化路径。→ US8 #1961。
 
 remote 出站安全直接复用既有栈，无需新造：service token 4 段 `ts:nonce:callerCell:mac`
 （`runtime/auth/authenticator.go`）+ HMAC keyring + `RequiresDistributedReplay()`
 （`runtime/bootstrap/topology.go`，多实例强制分布式 NonceStore）+ 服务端
-`RequireCallerCell`（`runtime/auth/authz.go`）。已知缺口（per-cell 身份颁发 / mTLS 对等认证 /
-`upstream-cell-unavailable` 专属错误码 KindUnavailable）记入 US5 #1966 / US6 #1964，不在本 ADR 解。
+`RequireCallerCell`（`runtime/auth/authz.go`）。
+
+## 安全模型与已知缺口（security gap matrix）
+
+split 拓扑把若干 cell↔cell 调用从进程内移到网络上，安全边界随之变化。按 AI-robust 章程「ADR
+amendment 落地时必须同步重评安全模型」，此处显式列出威胁、当前补偿与归属（实现/收口属下游 issue，
+本 ADR 只锁安全约束方向）：
+
+| 缺口 / 威胁 | split 下风险 | 当前补偿 / 约束 | 归属 |
+|---|---|---|---|
+| **principal/tenant 跨进程传播伪造** | caller 伪造他人 principal/tenant → 越权 | 传播头**由 `CellTransport` 实现层注入，cell 业务代码不手填**；被调端经现有 auth middleware 重建，service principal 按 `tenancy.md`「service/anonymous/unknown → fail-closed」；与 outbox `PrincipalMetadata` 异步通道对称（禁伪造 reserved key）| US5 #1966（spec FR-006）|
+| **共享 HMAC keyring（无 per-cell 身份颁发）** | 单 cell 进程泄露 keyring → 可签发任意 `callerCell` | 当前全 cell 共享 keyring + `RequireCallerCell` allowlist——可信网络/monolith 足够，**跨信任边界拆分不足** | US6 #1964 |
+| **无 mTLS 对等认证** | 中间人 / 端点伪造 | service token MAC 提供消息完整性，但无传输层对等认证 | US6 #1964 |
+| **token replay（多实例）** | 重放已签 token | `RequiresDistributedReplay()` 多实例强制分布式 NonceStore（**已有，US5 复用**）| 已覆盖 |
+| **`upstream-cell-unavailable` 错误语义** | 远端不可达与本地依赖缺失混淆 → 误诊 | 新增 `KindUnavailable` 专属码，经 `ERRCODE-PREFIX-OWNERSHIP-01` 注册 + golden（前缀所有权属 transport 层）| US5 #1966（spec T043）|
+
+**安全约束裁定（方向，下游遵循）**：(1) principal/tenant 传播只走 `CellTransport` 注入头 + 被调端
+重建，业务 handler 不得自构 principal header；(2) in-proc 与 remote 同样经 `RequireCallerCell`
+（D4）；(3) 缺口非本 ADR 解，但 MUST 在下游 issue 落地前不被静默放过——上表即其 backlog 账。
 
 ## Rejected alternatives
 
@@ -211,8 +255,13 @@ remote 出站安全直接复用既有栈，无需新造：service token 4 段 `t
 - **#1940（event broker publisher funnel）**：composition root 的 real-broker publisher 路径——
   即「event 维度 broker funnel」，作为 US3 #1965 的 blocked-by，不重复建单。
 
-下游 wave 顺序（epic #1423 DAG）：本 ADR（Wave-1 US1）合入后 US2-US7 形态锁定；W2 先 US2 #1962
+下游 wave 顺序（epic #1423 DAG）：本 ADR（Wave-1 US1）合入后 US2-US7 形态锁定。**US8 #1961
+（直传=0 + gRPC 盲区 archtest，no-regret）无前置依赖，与 US1 并行开工（Wave-1）**；W2 先 US2 #1962
 （拓扑判定是 #1963/#1964 的消费源），#1963/#1964 随后并行；W3 #1965/#1966；W4 #1967。
+
+**分段可执行验收 checkpoint**（避免端到端正确性拖到 W4 才可验）：W2 = US4 单进程 transport 闭环 +
+contract 测试全过；W3 = US5 远程调用 + principal/tenant 传播集成测试；W4 = US7 #1967 双拓扑同一
+journey（单进程 ∧ 拆分+broker）全绿（epic 验收信号，spec SC-001）。
 
 ## Amendments to prior decisions（本 ADR 同 PR 驱动）
 
@@ -220,9 +269,10 @@ remote 出站安全直接复用既有栈，无需新造：service token 4 段 `t
 改动中重写」，本 PR 同步：
 
 1. **ADR `202605041430` §3.1**：就地**补全被省略的推论**（「部署多样性 N=每个客户不同」⟹ 框架
-   MUST 提供 location-transparent seam，部署形态成为 wiring 选择，经 §3.2 启动期注入交付）+ 末尾
-   Amendment 段记录 conflation 纠正链 + 声明 seam 与 §3.2/§3.3 权限模型**一致非违反**。§3.1 原行
-   是真命题（保留），仅锁定其唯一被许可的下游推论。
+   MUST 提供 location-transparent seam，部署形态成为 wiring 选择，经 §3.2 启动期注入交付）+ 紧邻
+   Amendment 段记录 conflation 纠正链 + **逐项重评 §3.2（启动期注入 + 运行时只读）/ §3.3（运行时无权
+   改宿主）/ §3.4（双层 harvest 域正交、边界清晰）与 seam 一致**。§3.1 原行是真命题（保留），仅锁定
+   其唯一被许可的下游推论。
 2. **`docs/plans/archive/202605051600-030-review-0504-implementation.md`**：won't-do line 37
    （微服务化拆分 / 服务网格集成）+ K-04（corecells 不迁移）标 **❌ 已推翻**，指向本 ADR——拆开
    「不 prescribe 拓扑」（保留）与「提供 seam」（纳入框架职责），corecells 与外部 cell 同等享部署
@@ -235,8 +285,8 @@ remote 出站安全直接复用既有栈，无需新造：service token 4 段 `t
 - 被 reconcile 的 ADR：`docs/architecture/202605041430-adr-architecture-optimization-via-engineering-thinking.md`
   §3.1/§3.2/§3.3（本 PR amendment）。
 - 被推翻的 won't-do：`docs/plans/archive/202605051600-030-review-0504-implementation.md` line 37 / K-04。
-- Epic：#1423；子任务 US2-US8 = #1962 / #1965 / #1963 / #1966 / #1964 / #1967 / #1961；兄弟 epic
-  #1081 / #303 / #1337 / #1940 / #1752。
+- Epic：#1423；子任务 US2=#1962 / US3=#1965 / US4=#1963 / US5=#1966 / US6=#1964 / US7=#1967 /
+  US8=#1961；兄弟 epic #1081 / #303 / #1337 / #1940 / #1752。
 - 证据底座：`specs/069-cell-deploy-topology/{research,spec,tasks}.md`。
 - 仓内锚点：`runtime/composition/cell_module.go`（`CellModule` / `ModuleResult{Cell,Opts,Resources}` /
   `MODULE-PROVIDE-NO-VALUE-HANDOFF-01`）、`runtime/composition/shared_deps.go`（硬编码

@@ -17,7 +17,7 @@
 
 | 缺口 | 现有最近锚点 | 量级 |
 |---|---|---|
-| topology 声明（remote endpoint 映射） | `assemblies/corebundle/assembly.yaml`（现仅 `id/cells/owner/build`）+ `tools/codegen/assemblyschema/` | L |
+| topology 声明（remote endpoint 映射） | `assemblies/corebundle/assembly.yaml`（现仅 `id/cells/owner/build`）+ `kernel/assembly/assembly.go`（模型/解析）| L |
 | 拓扑校验 | `runtime/composition/builder.go` validateClosedSet 模板；`runtime/bootstrap/topology.go`（现仅 adapterMode/storageBackend） | M |
 | EventBus broker 注入 seam | `runtime/composition/shared_deps.go:92` **硬编码 `*eventbus.InMemoryEventBus`（非接口）**；`adapters/rabbitmq` Publisher 已存在但无 composition 接线 → **由 #1940 承载** | M |
 | sync 调用端 | **完全空白**：只有服务端（internal listener + `RequireCallerCell` + service token + NonceStore）；无 cellID→endpoint 发现、无内部 HTTP client 抽象 | L |
