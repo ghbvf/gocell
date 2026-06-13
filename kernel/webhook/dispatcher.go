@@ -42,6 +42,10 @@ type Dispatcher struct {
 	selector WebhookDispatchSelector
 	client   *http.Client
 	timeout  time.Duration
+	// circuit is the per-endpoint circuit breaker, always enabled (no production
+	// opt-out per the resilience posture): once a target's breaker trips it is
+	// fast-failed (Requeue) instead of POSTed. See circuit.go.
+	circuit *circuitGate
 	// recorder + source are the optional observability dependency (PR-6). The
 	// zero Metrics value disables every record (no-op); source is the {source}
 	// label, set together via WithMetrics. Each Dispatcher is bound to one source
@@ -105,6 +109,7 @@ func NewDispatcher(
 		policy:   policy,
 		selector: selector,
 		timeout:  defaultDeliveryTimeout,
+		circuit:  newCircuitGate(clk),
 	}
 	for _, o := range opts {
 		o(d)
@@ -128,6 +133,7 @@ func NewDispatcher(
 // Disposition: Ack on 2xx / Requeue on every non-2xx + transient transport / Reject on SSRF-blocked + permanent prepare failure
 // DLX: broker-native via DispositionReject -> Nack(requeue=false)
 //
+//	endpoint circuit open                   → Requeue (fast-fail, no HTTP attempt)
 //	2xx                                    → Ack
 //	non-2xx (3xx/4xx/5xx) / timeout / conn  → Requeue (transient; standard-webhooks aligned)
 //	SSRF-blocked transport / bad config     → Reject  (permanent → DLX)
@@ -140,6 +146,17 @@ func (d *Dispatcher) Handle(ctx context.Context, entry outbox.Entry) outbox.Hand
 		d.recorder.recordDelivery(ctx, d.source, dispositionResult(fail.Disposition))
 		return fail
 	}
+	// Gate the HTTP attempt on the per-endpoint circuit breaker. An open circuit
+	// fast-fails without a POST: Requeue (not Reject) so the outbox redelivers
+	// per the Svix schedule once the breaker may probe again — composing with,
+	// not replacing, the terminal MaxRetries→DLX path.
+	endpoint := req.URL.String()
+	allow, done := d.circuit.Allow(endpoint)
+	if !allow {
+		d.recorder.recordDelivery(ctx, d.source, deliveryCircuitOpen)
+		return outbox.Requeue(errcode.New(errcode.KindUnavailable, errcode.ErrCircuitOpen,
+			"webhook dispatcher: endpoint circuit open"))
+	}
 	deliveryID := entry.ID()
 	start := d.clk.Now()
 	resp, err := d.client.Do(req)
@@ -147,6 +164,7 @@ func (d *Dispatcher) Handle(ctx context.Context, entry outbox.Entry) outbox.Hand
 	if err != nil {
 		disp := Classify(0, err)
 		reason := transportReason(err)
+		done(circuitProbeOutcome(0, err))
 		d.recorder.recordDelivery(ctx, d.source, dispositionResult(disp))
 		logDelivery(ctx, deliveryID, disp, reason)
 		return mapDisposition(disp, reason)
@@ -154,6 +172,7 @@ func (d *Dispatcher) Handle(ctx context.Context, entry outbox.Entry) outbox.Hand
 	defer func() { _ = resp.Body.Close() }()
 	summary := drainBodySummary(resp.Body)
 	disp := Classify(resp.StatusCode, nil)
+	done(circuitProbeOutcome(resp.StatusCode, nil))
 	d.recorder.recordDelivery(ctx, d.source, statusResult(resp.StatusCode))
 	if disp == outbox.DispositionAck {
 		return outbox.Ack()

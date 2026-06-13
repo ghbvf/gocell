@@ -99,7 +99,7 @@ import (
 // and (4) the PR-6 observability documentation.
 var webhookLabelEnumWant = map[string][]string{
 	"webhookDeliveryResult": {
-		"success", "client_error", "server_error", "transport_error", "blocked",
+		"success", "client_error", "server_error", "transport_error", "blocked", "circuit_open",
 	},
 	"SignatureFailureReason": {
 		"missing_header", "invalid_header", "unknown_source", "bad_signature", "timestamp_expired",

@@ -24,11 +24,11 @@ import (
 // status code read from a swappable atomic, so a test can flip an endpoint
 // healthy↔unhealthy mid-run while observing whether the dispatcher actually
 // reached it (fast-fail vs real POST).
-func countingServer(t *testing.T, initialStatus int) (srv *httptest.Server, hits *atomic.Int32, status *atomic.Int32) {
+func countingServer(t *testing.T, initialStatus int32) (srv *httptest.Server, hits *atomic.Int32, status *atomic.Int32) {
 	t.Helper()
 	hits = &atomic.Int32{}
 	status = &atomic.Int32{}
-	status.Store(int32(initialStatus))
+	status.Store(initialStatus)
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
 		w.WriteHeader(int(status.Load()))
@@ -37,15 +37,12 @@ func countingServer(t *testing.T, initialStatus int) (srv *httptest.Server, hits
 	return srv, hits, status
 }
 
-// deliverN runs Handle n times against the same payload and returns the last
-// result.
-func deliverN(t *testing.T, d *Dispatcher, n int) outbox.HandleResult {
+// deliverN runs Handle n times against the same payload.
+func deliverN(t *testing.T, d *Dispatcher, n int) {
 	t.Helper()
-	var last outbox.HandleResult
 	for range n {
-		last = d.Handle(context.Background(), newTestEntry(t, []byte(`{"k":"v"}`)))
+		d.Handle(context.Background(), newTestEntry(t, []byte(`{"k":"v"}`)))
 	}
-	return last
 }
 
 // requireCircuitOpen asserts a HandleResult is the fast-fail Requeue carrying
@@ -77,12 +74,12 @@ func TestDispatcher_Handle_CircuitOpensAndFastFails(t *testing.T) {
 	// circuitTripThreshold+1 consecutive failures the breaker opens.
 	tripCount := circuitTripThreshold + 1
 	deliverN(t, d, tripCount)
-	require.Equal(t, int32(tripCount), hits.Load(), "all trip deliveries reach the endpoint while closed")
+	require.Equal(t, tripCount, int(hits.Load()), "all trip deliveries reach the endpoint while closed")
 
 	// Next delivery: circuit is open → fast-fail, no HTTP attempt.
 	res := d.Handle(context.Background(), newTestEntry(t, []byte(`{"k":"v"}`)))
 	requireCircuitOpen(t, res)
-	assert.Equal(t, int32(tripCount), hits.Load(), "open circuit must NOT POST to the endpoint")
+	assert.Equal(t, tripCount, int(hits.Load()), "open circuit must NOT POST to the endpoint")
 
 	got := p.counterValue("webhook_deliveries_total",
 		kernelmetrics.Labels{"result": string(deliveryCircuitOpen), "source": "stripe"})
@@ -159,7 +156,7 @@ func TestDispatcher_Handle_Circuit4xxDoesNotTrip(t *testing.T) {
 		res := d.Handle(context.Background(), newTestEntry(t, []byte(`{"k":"v"}`)))
 		require.Equal(t, outbox.DispositionRequeue, res.Disposition, "4xx is Requeue (standard-webhooks)")
 	}
-	assert.Equal(t, int32(n), hits.Load(), "every 4xx delivery must reach the endpoint — circuit stays closed")
+	assert.Equal(t, n, int(hits.Load()), "every 4xx delivery must reach the endpoint — circuit stays closed")
 }
 
 // TestDispatcher_Handle_CircuitSSRFNotCounted verifies a dial-time SSRF block
@@ -215,7 +212,7 @@ func TestDispatcher_Handle_CircuitPerEndpointIsolation(t *testing.T) {
 	// Endpoint B is independent and healthy.
 	resB := d.Handle(context.Background(), newTestEntry(t, []byte("b")))
 	assert.Equal(t, outbox.DispositionAck, resB.Disposition, "endpoint B circuit unaffected by A")
-	assert.Equal(t, int32(1), hitsB.Load(), "endpoint B was reached")
+	assert.Equal(t, 1, int(hitsB.Load()), "endpoint B was reached")
 	_ = hitsA
 }
 
