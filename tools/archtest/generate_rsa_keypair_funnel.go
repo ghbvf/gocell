@@ -87,7 +87,8 @@ import (
 var generateRSAKeypairHardenedRoots = []string{"cmd/corebundle", "examples/ssobff"}
 
 // generateRSAKeypairBanMessage is the Diagnostic message for an offending callsite.
-const generateRSAKeypairBanMessage = "auth.GenerateRSAKeyPair in a hardened composition root; route JWT keys through cellsecrets.LoadKeySet (GENERATE-RSA-KEYPAIR-FUNNEL-01)"
+const generateRSAKeypairBanMessage = "auth.GenerateRSAKeyPair in a hardened composition root; " +
+	"route JWT keys through cellsecrets.LoadKeySet (GENERATE-RSA-KEYPAIR-FUNNEL-01)"
 
 // CheckGenerateRSAKeypairFunnel01 scans the hardened composition roots for direct
 // calls to auth.GenerateRSAKeyPair and returns one Diagnostic per offending
