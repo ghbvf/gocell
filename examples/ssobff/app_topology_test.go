@@ -9,7 +9,17 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
+
+// mkTopoT builds a validated multi-pod bootstrap.Topology for tests (single-pod
+// is not exercised here), failing the test on an invalid combination.
+func mkTopoT(t *testing.T, adapterMode, storageBackend string) bootstrap.Topology {
+	t.Helper()
+	topo, err := bootstrap.NewTopology(adapterMode, storageBackend, false)
+	require.NoError(t, err)
+	return topo
+}
 
 // app_topology_test.go covers ssobff's topology-gated multi-pod posture
 // (#825 + #2017): in real/postgres (multi-pod) topology the in-memory
@@ -106,4 +116,51 @@ func TestSSOBFFApp_DemoTopologyDoesNotRequireInfra(t *testing.T) {
 	// Prove the gate fires at pool creation (bogus DSN), not before it.
 	assert.Contains(t, msg, "create PG pool",
 		"demo topology must reach the PG pool (bogus DSN should fail there, not at a Redis gate)")
+}
+
+// TestResolveSSOBFFBootstrapCreds pins the F1 bootstrap-credential funnel: demo
+// topology uses the package-local demo constants; real topology must supply
+// production credentials via GOCELL_BOOTSTRAP_ADMIN_* and fails fast on
+// missing / demo-default / weak values — the public demo credentials must never
+// protect a real setup/admin endpoint.
+func TestResolveSSOBFFBootstrapCreds(t *testing.T) {
+	t.Run("demo topology uses demo constants", func(t *testing.T) {
+		creds, err := resolveSSOBFFBootstrapCreds(mkTopoT(t, "", "memory"))
+		require.NoError(t, err)
+		assert.Equal(t, ssobffBootstrapUsername, string(creds.Username))
+		assert.Equal(t, ssobffBootstrapPassword, string(creds.Password))
+	})
+
+	t.Run("real topology missing env fails closed", func(t *testing.T) {
+		t.Setenv(ssobffBootstrapAdminUserEnv, "")
+		t.Setenv(ssobffBootstrapAdminPassEnv, "")
+		_, err := resolveSSOBFFBootstrapCreds(mkTopoT(t, "real", "postgres"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), ssobffBootstrapAdminUserEnv)
+	})
+
+	t.Run("real topology rejects reused demo credentials", func(t *testing.T) {
+		t.Setenv(ssobffBootstrapAdminUserEnv, ssobffBootstrapUsername)
+		t.Setenv(ssobffBootstrapAdminPassEnv, ssobffBootstrapPassword)
+		_, err := resolveSSOBFFBootstrapCreds(mkTopoT(t, "real", "postgres"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "demo")
+	})
+
+	t.Run("real topology rejects short password", func(t *testing.T) {
+		t.Setenv(ssobffBootstrapAdminUserEnv, "ops-admin")
+		t.Setenv(ssobffBootstrapAdminPassEnv, "short")
+		_, err := resolveSSOBFFBootstrapCreds(mkTopoT(t, "real", "postgres"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "8 bytes")
+	})
+
+	t.Run("real topology accepts valid env credentials", func(t *testing.T) {
+		t.Setenv(ssobffBootstrapAdminUserEnv, "ops-admin")
+		t.Setenv(ssobffBootstrapAdminPassEnv, "a-strong-prod-secret")
+		creds, err := resolveSSOBFFBootstrapCreds(mkTopoT(t, "real", "postgres"))
+		require.NoError(t, err)
+		assert.Equal(t, "ops-admin", string(creds.Username))
+		assert.Equal(t, "a-strong-prod-secret", string(creds.Password))
+	})
 }

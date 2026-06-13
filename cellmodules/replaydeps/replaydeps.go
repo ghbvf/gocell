@@ -33,11 +33,14 @@ const (
 //     internal listener's service-token replay protection — the namespace names
 //     the role directly so wire keys read as "servicetoken-nonce:<nonce>".
 //   - _runtime (consumer claimer): the IdempotencyClaimer is shared across all
-//     consumers; the "_runtime" sentinel mirrors the HTTP metrics convention for
-//     shared framework infrastructure where no cell context applies
-//     (cf. .claude/rules/gocell/observability.md §Redis namespace). Its key
-//     format ("_runtime:{eventID}:lease|done") is structurally distinct from the
-//     HTTP idempotency store's, so the shared sentinel cannot collide.
+//     consumers; the "_runtime" sentinel names framework-level shared infra with
+//     no cell context. Its key format ("_runtime:{eventID}:lease|done") is
+//     structurally distinct from the HTTP idempotency store's
+//     ("_runtime:<tenant>:{key}:resp|lease|fp"), so the shared sentinel cannot
+//     collide. This is a REGISTERED carve-out of the observability rule that
+//     otherwise bans cross-domain keys in "_runtime" — see
+//     .claude/rules/gocell/observability.md §Redis namespace ("_runtime 哨兵
+//     carve-out") and adapters/redis/keyns.go. Changing it changes the wire key.
 const (
 	nonceStoreNamespace      adapterredis.KeyNamespace = "servicetoken-nonce"
 	consumerClaimerNamespace adapterredis.KeyNamespace = "_runtime"

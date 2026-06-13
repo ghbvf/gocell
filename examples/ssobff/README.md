@@ -41,6 +41,7 @@ topology (see §"Multi-pod deployment"); the default Quick Start needs only Post
 cd examples/ssobff
 export GOCELL_EXAMPLE_POSTGRES_PASSWORD="$(openssl rand -base64 24)"
 export GOCELL_EXAMPLE_RABBITMQ_PASSWORD="$(openssl rand -base64 24)"
+export GOCELL_EXAMPLE_REDIS_PASSWORD="$(openssl rand -base64 24)"  # compose enables redis --requirepass with this; multi-pod binds GOCELL_REDIS_PASSWORD to it
 docker compose up -d
 # wait for postgres to become healthy, then set DATABASE_URL
 export DATABASE_URL="postgres://gocell:${GOCELL_EXAMPLE_POSTGRES_PASSWORD}@localhost:5432/sso_bff?sslmode=disable"
@@ -352,7 +353,7 @@ export GOCELL_ADAPTER_MODE=real
 export GOCELL_CELL_ADAPTER_MODE=postgres
 export GOCELL_AMQP_URL="amqp://gocell:${GOCELL_EXAMPLE_RABBITMQ_PASSWORD}@localhost:5672/"
 export GOCELL_REDIS_ADDR="localhost:6379"
-export GOCELL_REDIS_PASSWORD="…"
+export GOCELL_REDIS_PASSWORD="${GOCELL_EXAMPLE_REDIS_PASSWORD}"  # same value the bundled compose set as redis --requirepass
 ```
 
 The bundled `docker-compose.yml` already provisions `redis` and `rabbitmq` for

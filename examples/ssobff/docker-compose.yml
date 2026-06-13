@@ -22,6 +22,19 @@ services:
   # and needs neither — see README §"Multi-pod deployment".
   redis:
     image: redis:7-alpine
+    # Server-side auth (requirepass) MUST match the app's GOCELL_REDIS_PASSWORD
+    # in multi-pod topology — replaydeps/adapters/redis fail-fast without a
+    # credential in real multi-pod, so a no-password Redis would make the README
+    # multi-pod path unreproducible (F2). README binds GOCELL_REDIS_PASSWORD to
+    # this same GOCELL_EXAMPLE_REDIS_PASSWORD value.
+    command:
+      - "redis-server"
+      - "--requirepass"
+      - "${GOCELL_EXAMPLE_REDIS_PASSWORD:?set GOCELL_EXAMPLE_REDIS_PASSWORD for local demo infrastructure}"
+    environment:
+      # redis-cli reads REDISCLI_AUTH, so the healthcheck authenticates without
+      # putting the password on the command line.
+      REDISCLI_AUTH: ${GOCELL_EXAMPLE_REDIS_PASSWORD:?set GOCELL_EXAMPLE_REDIS_PASSWORD for local demo infrastructure}
     ports:
       - "6379:6379"
     healthcheck:

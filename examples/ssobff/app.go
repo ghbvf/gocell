@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	kauth "github.com/ghbvf/gocell/kernel/auth"
@@ -64,6 +65,16 @@ const (
 	ssobffBootstrapUsername = "ssobff-ops"
 	// #nosec G101 -- demo fixture in examples/ssobff binary; production is env-driven (cmd/corebundle).
 	ssobffBootstrapPassword = "ssobff-bootstrap-pass-1!"
+)
+
+// ssobffBootstrapAdminUserEnv / ssobffBootstrapAdminPassEnv name the env vars
+// that supply the setup/admin Basic Auth credentials in real topology. Reuses
+// the cmd/corebundle + cellmodules/accesscore convention
+// (GOCELL_BOOTSTRAP_ADMIN_*) rather than an ssobff-specific name, so a real
+// ssobff deployment configures the same way as the production binary.
+const (
+	ssobffBootstrapAdminUserEnv = "GOCELL_BOOTSTRAP_ADMIN_USERNAME"
+	ssobffBootstrapAdminPassEnv = "GOCELL_BOOTSTRAP_ADMIN_PASSWORD"
 )
 
 // ssobffDatabaseURLEnv is the environment variable holding the PostgreSQL DSN.
@@ -321,6 +332,15 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		return nil, fmt.Errorf("ssobff: configure internal listener auth: %w", err)
 	}
 
+	// Resolve setup/admin bootstrap credentials BEFORE the DB pool (same
+	// fail-fast posture as the internal auth chain): real topology must supply
+	// production credentials via env — the public demo credentials never protect
+	// a real setup endpoint (F1).
+	bootstrapCreds, err := resolveSSOBFFBootstrapCreds(infra.topo)
+	if err != nil {
+		return nil, err
+	}
+
 	if cfg.databaseURL == "" {
 		return nil, fmt.Errorf("ssobff: %s must be set", ssobffDatabaseURLEnv)
 	}
@@ -358,7 +378,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	asm, cb, primaryAuth, authzOpt, err := buildSSOBFFCore(ssobffCoreParams{
 		clk: clk, cfg: cfg, infra: infra, pool: pool, txMgr: txMgr,
 		pgOutboxWriter: pgOutboxWriter, jwtIssuer: jwtIssuer, jwtVerifier: jwtVerifier,
-		auc: auc,
+		auc: auc, bootstrapCreds: bootstrapCreds,
 	})
 	if err != nil {
 		return nil, err
@@ -393,6 +413,7 @@ type ssobffCoreParams struct {
 	jwtIssuer      *auth.JWTIssuer
 	jwtVerifier    *auth.JWTVerifier
 	auc            *auditcore.AuditCore
+	bootstrapCreds auth.BootstrapCredentials
 }
 
 // buildSSOBFFCore wires the session protocol, bootstrap middleware, and assembly.
@@ -404,10 +425,7 @@ func buildSSOBFFCore(p ssobffCoreParams) (*assembly.CoreAssembly, *outbox.Consum
 	authFailObserver := newSSOBFFAuthFailObserver(p.cfg.logger, &acPtr, ipHashSalt)
 
 	bootstrapMW := auth.NewBootstrapMiddleware(
-		auth.BootstrapCredentials{
-			Username: []byte(ssobffBootstrapUsername),
-			Password: []byte(ssobffBootstrapPassword),
-		},
+		p.bootstrapCreds,
 		ratelimit.New(ratelimit.Config{
 			Rate:  ssobffBootstrapRateLimitPerSec,
 			Burst: ssobffBootstrapRateLimitBurst,
@@ -433,6 +451,41 @@ func buildSSOBFFCore(p ssobffCoreParams) (*assembly.CoreAssembly, *outbox.Consum
 		return nil, nil, nil, nil, err
 	}
 	return asm, cb, primaryAuth, authzOpt, nil
+}
+
+// resolveSSOBFFBootstrapCreds selects the setup/admin Basic Auth credentials by
+// topology (F1). Demo topology uses the package-local demo constants so
+// `go run ./examples/ssobff` stays self-contained. Real topology
+// (RequireProductionControlPlane) must supply credentials via
+// GOCELL_BOOTSTRAP_ADMIN_USERNAME / GOCELL_BOOTSTRAP_ADMIN_PASSWORD and fails
+// fast on missing / weak / demo-default values — the public demo credentials
+// (documented in README + source) must never protect a real setup/admin
+// endpoint. Mirrors cellmodules/accesscore.loadBootstrapCredentials validation.
+func resolveSSOBFFBootstrapCreds(topo bootstrap.Topology) (auth.BootstrapCredentials, error) {
+	if !topo.RequireProductionControlPlane() {
+		return auth.BootstrapCredentials{
+			Username: []byte(ssobffBootstrapUsername),
+			Password: []byte(ssobffBootstrapPassword),
+		}, nil
+	}
+	username := strings.TrimSpace(os.Getenv(ssobffBootstrapAdminUserEnv))
+	password := strings.TrimSpace(os.Getenv(ssobffBootstrapAdminPassEnv))
+	if username == "" || password == "" {
+		return auth.BootstrapCredentials{}, fmt.Errorf(
+			"ssobff: real topology requires %s and %s for the setup/admin endpoint "+
+				"(the demo credentials must not protect a production bootstrap path)",
+			ssobffBootstrapAdminUserEnv, ssobffBootstrapAdminPassEnv)
+	}
+	if username == ssobffBootstrapUsername || password == ssobffBootstrapPassword {
+		return auth.BootstrapCredentials{}, fmt.Errorf(
+			"ssobff: %s / %s must not reuse the public demo bootstrap credentials in real topology",
+			ssobffBootstrapAdminUserEnv, ssobffBootstrapAdminPassEnv)
+	}
+	if len(password) < 8 {
+		return auth.BootstrapCredentials{}, fmt.Errorf(
+			"ssobff: %s must be at least 8 bytes", ssobffBootstrapAdminPassEnv)
+	}
+	return auth.BootstrapCredentials{Username: []byte(username), Password: []byte(password)}, nil
 }
 
 // closeManagedResources is a best-effort cleanup helper: it closes each
