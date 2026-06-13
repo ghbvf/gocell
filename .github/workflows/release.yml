@@ -161,9 +161,10 @@ jobs:
     needs: verify
     if: needs.verify.outputs.skip != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     permissions:
-      contents: write # push annotated tag + create/delete GitHub Release
+      contents: write  # push annotated tag + create/delete GitHub Release
+      packages: write  # push container images to ghcr.io (stable only, #1088)
     env:
       # GH_TOKEN (write-scope) is deliberately NOT set at job level — it is scoped
       # per-step to only the `gh release` API steps, so the repo-code steps
@@ -303,6 +304,72 @@ jobs:
           done
           [ "$missing" -eq 0 ] || { echo "::error::resume aborted: satellite tag set incomplete/inconsistent — delete the partial tags and re-dispatch." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }
 
+      # ── goreleaser: CLI binary + docker (stable only) ──────────────────────
+      # Runs after tags are pushed so goreleaser can resolve {{.Tag}} from the
+      # annotated tag. All four steps below are gated on prerelease != 'true';
+      # the snapshot / daily path is completely untouched.
+
+      - name: Set up Go for CLI sub-module (stable only)
+        # Separate setup-go call targeting cmd/gocell/go.mod so goreleaser
+        # can cache the CLI module's dependencies independently from the root.
+        if: needs.verify.outputs.prerelease != 'true'
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: cmd/gocell/go.mod
+          cache-dependency-path: cmd/gocell/go.sum
+
+      - name: Log in to ghcr.io (stable only)
+        if: needs.verify.outputs.prerelease != 'true'
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build CLI artifacts with goreleaser (stable only)
+        # goreleaser builds cross-arch binaries + docker images and writes
+        # dist/ artifacts. --skip=publish ensures goreleaser does NOT push the
+        # release itself (release.yml's `gh release create` owns that). Tags
+        # are already pushed at this point, so goreleaser resolves {{.Tag}}.
+        # GOWORK=off is redundant with .goreleaser.yaml top-level env but set
+        # here explicitly for clarity and defence-in-depth.
+        if: needs.verify.outputs.prerelease != 'true'
+        uses: goreleaser/goreleaser-action@9c156ee8a17a598b3a9b32eca9d83de83de9050d # v6.3.0
+        with:
+          version: '~> v2'
+          args: release --clean --skip=publish
+        env:
+          GOWORK: "off"
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Version smoke — assert cliVersion == tag (stable only)
+        # Medium guard (#1088): fail-closed check that the ldflags symbol was
+        # injected correctly. Runs the linux-amd64 binary (always present in
+        # dist/) and asserts .cliVersion matches the release tag. A "dev" value
+        # or a mismatch means the goreleaser ldflags are silently broken.
+        if: needs.verify.outputs.prerelease != 'true'
+        run: |
+          set -euo pipefail
+          bin="$(find dist -name 'gocell' -path '*linux_amd64*' | head -n1)"
+          if [ -z "$bin" ]; then
+            echo "::error::linux-amd64 gocell binary not found in dist/ — goreleaser build may have failed."
+            exit 1
+          fi
+          chmod +x "$bin"
+          actual="$("$bin" version --format json | jq -r '.cliVersion')"
+          echo "version smoke: cliVersion=$actual, expected=$TAG"
+          if [ "$actual" = "dev" ]; then
+            echo "::error::cliVersion is 'dev' — ldflags injection did not apply."
+            exit 1
+          fi
+          if [ "$actual" != "$TAG" ]; then
+            echo "::error::cliVersion '$actual' != expected tag '$TAG' — ldflags symbol drift."
+            exit 1
+          fi
+          echo "version smoke passed: cliVersion=$actual"
+
+      # ── end goreleaser block ────────────────────────────────────────────────
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }} # write-scope token scoped to the gh API step only (F5)
@@ -311,6 +378,16 @@ jobs:
           args=(--title "$TAG" --verify-tag --generate-notes)
           if [ "$PRERELEASE" = "true" ]; then
             args+=(--prerelease)
+          else
+            # Attach goreleaser-produced artifacts to the stable release.
+            # Glob is safe: goreleaser always names archives gocell_*.tar.gz.
+            if compgen -G "dist/gocell_*.tar.gz" >/dev/null 2>&1; then
+              mapfile -t artifacts < <(compgen -G "dist/gocell_*.tar.gz")
+              args+=("${artifacts[@]}")
+            fi
+            if [ -f "dist/checksums.txt" ]; then
+              args+=("dist/checksums.txt")
+            fi
           fi
           # Retry: the freshly pushed tag may not be API-visible immediately,
           # which makes --verify-tag fail transiently and leaves an orphan tag.
