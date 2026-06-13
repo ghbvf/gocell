@@ -1,0 +1,33 @@
+id: http.device.command.enqueue-async.v1
+kind: http
+ownerCell: devicecell
+consistencyLevel: L4
+lifecycle: active
+endpoints:
+  server: devicecell
+  clients:
+    - edge-bff
+  http:
+    method: POST
+    path: /api/v1/devices/{id}/async-commands
+    pathParams:
+      id:
+        type: string
+        minLength: 1
+        maxLength: 256
+    successStatus: 202
+    auth:
+      responses:
+        - 409
+        - 422
+    noContent: false
+    responses:
+      400:
+        description: "Bad request — malformed JSON body, oversized payload, or missing Idempotency-Key header"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Payload Too Large — request body exceeds the size limit"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

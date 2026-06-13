@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.device.command.enqueue-async.v1.request",
+  "type": "object",
+  "properties": {
+    "commandType": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "payload": { "type": "string", "minLength": 1, "maxLength": 4096 }
+  },
+  "required": ["payload"],
+  "additionalProperties": false
+}
