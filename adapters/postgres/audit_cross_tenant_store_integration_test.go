@@ -36,6 +36,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -148,10 +149,21 @@ func insertAuditRowAsOwner(
 	if seqNo > 1 {
 		prevHash = auditHash64
 	}
+	// audit_entries.id is a uuid column; the logical `id` (e.g. "ct-a1-ac") is a
+	// readable test handle, so map it to a deterministic valid UUID. event_id is a
+	// text column and keeps its logical value.
 	_, err := ownerPool.DB().Exec(ctx, insertAuditRowSQL,
-		id, namespace, seqNo, eventID, "ct.integration", actorID,
+		auditRowUUID(id), namespace, seqNo, eventID, "ct.integration", actorID,
 		tenantID, ts, prevHash, auditHash64)
 	require.NoError(t, err, "insertAuditRowAsOwner id=%s ns=%s tenant=%s", id, namespace, tenantID)
+}
+
+// auditRowUUID maps a human-readable test handle (e.g. "ct-a1-ac") to a stable,
+// valid UUID for the audit_entries.id column. Deterministic (same handle → same
+// UUID) and collision-free across distinct handles, so UNIQUE(id) + the uuid
+// column type are both satisfied while the test tables keep readable ids.
+func auditRowUUID(logical string) string {
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(logical)).String()
 }
 
 // TestAuditCrossTenantStore_PG_ReadsAcrossTenants proves that a pool connected
@@ -464,9 +476,10 @@ func seedCrossTenantEntries(t *testing.T, ownerPool *Pool, entries []*ledger.Ent
 			ts = clock.Real().Now()
 		}
 
-		// Generate a deterministic row ID (event_id is a UNIQUE key per chain).
+		// Generate a deterministic row ID (event_id is a UNIQUE key per chain). The
+		// id column is uuid, so derive a stable valid UUID from eventID+suffix.
 		_, err := ownerPool.DB().Exec(ctx, insertAuditRowSQL,
-			e.EventID+"-pg", // id column — must be unique; use eventID+suffix
+			auditRowUUID(e.EventID+"-pg"), // id column (uuid) — unique per chain entry
 			ns,
 			seqNo,
 			e.EventID, // event_id (the conformance unique key)
