@@ -18,23 +18,28 @@ description: "PR decomposition & dependency graph for 1895-device-identity-cert-
 
 ---
 
-## PR 总览（11 个）
+## 前置机制（Wave 1 期间衍生，已闭）
+
+- **#1939 framework-owned contract**（ADR `202606130635-1939`，PR #1945）：中立 provider-agnostic 契约由**框架**归属（sealed `ContractOwner = Cell|Framework`，`ownerCell: _framework`），不绑单一 Cell。PR-3（#1899）落地时衍生，1895-ADR D5 预埋前向引用。**后果**：7 个设备契约均 `ownerCell: _framework` + `lifecycle: draft`，有 generated handler 但无挂载点；framework HTTP serving（`contract.yaml→RouteGroup` 派生 + serving-scan 治理 + Journey）由 #1939 ADR 显式延后到 active 化 PR → **新增 PR-8a 承载**（原 PR 分解未含）。
+
+## PR 总览（12 个）
 
 | PR | 标题 | 架构层 | US | 行数估算 | 依赖 | 关闭/关联 issue |
 |----|------|--------|----|---------|------|----------------|
 | PR-1 | 路线图修订 ADR（设备证书框架化决议） | 治理/docs | US6 | ~500 | — | 关联 #995 #1051 #1052 |
 | PR-2 | 生产级设备/super-admin 主体签发器 | runtime/auth | US1 | ~1500 | — | **关闭 #1811** |
-| PR-3 | 中立契约 (a)：deviceidentity + devicestate | contracts | US4 | ~1400 | — | 关联 #1052 |
+| PR-3 | 中立契约 (a)：deviceidentity + devicestate | contracts | US4 | ~1400 | — | 关联 #1052 #1939 |
 | PR-4 | 中立契约 (b)：devicecompliance + remotecommand | contracts | US4 | ~1400 | PR-3 | 关联 #1052 |
 | PR-5 | `runtime/certsigning` 接口 + sealed 类型 + funnel | runtime | US2 | ~1500 | PR-3 | 关联 #995 |
 | PR-6 | `adapters/softca` 内置软 CA（Signer + CRL） | adapters | US2 | ~1700 | PR-5 | 关联 #995 |
 | PR-7 | `runtime/certlifecycle` 生命周期 reconciler | runtime | US2 | ~1900 ⚠ | PR-5, PR-2 | 关联 #995 #1870 |
-| PR-8 | EST(RFC 7030) 框架注册前端 | runtime/http | US3 | ~1600 | PR-5, PR-6, PR-2 | 关联 #995 |
-| PR-9 | iotdevice 迁移 + `rotate-cert` 真契约 + 设备 enqueue RBAC | examples | US5 | ~1800 | PR-4, PR-6, PR-7 | **关闭 #654**，关联 #1870 |
-| PR-10 | composition wiring + bootstrap option + readyz + docs/ops | cellmodules | US2/3 | ~1100 | PR-6,7,8,9 | 关联 #1085 |
+| PR-8a | framework HTTP serving harness + 契约 draft→active | runtime/http | US3 | ~1500 | PR-3 | 关联 #1939 #1052 |
+| PR-8b | EST(RFC 7030) 框架注册前端 | runtime/http | US3 | ~1500 | PR-5, PR-6, PR-2, PR-8a | 关联 #995 |
+| PR-9 | iotdevice 迁移 + `rotate-cert` 真契约 + 设备 enqueue RBAC | examples | US5 | ~1800 | PR-4, PR-6, PR-7, PR-8a | **关闭 #654**，关联 #1870 |
+| PR-10 | composition wiring + bootstrap option + readyz + docs/ops | cellmodules | US2/3 | ~1100 | PR-6,7,8a,8b,9 | 关联 #1085 |
 | PR-11 | 跨层 ADR 收口 + 扇出闭环 + 治理 invariant 汇总 | 治理 | US6 | ~700 | all | 关联 #995 |
 
-**总估算 ~15,100 行 / 11 PR**，平均 ~1370 行/PR。PR-7(~1900) 接受少量超限；实测 >2200 才切（`PR-7a` lifecycle 状态机 / `PR-7b` fencing+多租户 sweep）。
+**总估算 ~16,600 行 / 12 PR**，平均 ~1380 行/PR。PR-7(~1900) 接受少量超限；实测 >2200 才切（`PR-7a` lifecycle 状态机 / `PR-7b` fencing+多租户 sweep）。PR-8 拆为 PR-8a（serving harness）/ PR-8b（EST 协议前端），不重排 9-11 编号。
 
 ---
 
@@ -49,25 +54,30 @@ graph TD
     PR5[PR-5 certsigning 接口+sealed]
     PR6[PR-6 softca 软CA]
     PR7[PR-7 certlifecycle reconciler]
-    PR8[PR-8 EST 前端]
+    PR8a[PR-8a framework serving harness]
+    PR8b[PR-8b EST 前端]
     PR9[PR-9 iotdevice 迁移]
     PR10[PR-10 wiring+bootstrap+readyz]
     PR11[PR-11 ADR收口+治理汇总]
 
     PR3 --> PR4
     PR3 --> PR5
+    PR3 --> PR8a
     PR5 --> PR6
     PR5 --> PR7
     PR2 --> PR7
-    PR5 --> PR8
-    PR6 --> PR8
-    PR2 --> PR8
+    PR5 --> PR8b
+    PR6 --> PR8b
+    PR2 --> PR8b
+    PR8a --> PR8b
     PR4 --> PR9
     PR6 --> PR9
     PR7 --> PR9
+    PR8a --> PR9
     PR6 --> PR10
     PR7 --> PR10
-    PR8 --> PR10
+    PR8a --> PR10
+    PR8b --> PR10
     PR9 --> PR10
     PR10 --> PR11
 ```
@@ -75,10 +85,12 @@ graph TD
 | Wave | 可并行 PR | 说明 |
 |------|----------|------|
 | 1 | PR-1, PR-2, PR-3 | ADR / 设备主体 / 契约 a 互不依赖 |
-| 2 | PR-4, PR-5 | 均依赖 PR-3（契约范式/deviceidentity 形状） |
+| 2 | PR-4, PR-5, PR-8a | 均依赖 PR-3（契约范式/deviceidentity 形状）；PR-8a = framework serving harness（#1939 延后项） |
 | 3 | PR-6, PR-7 | 依赖 PR-5（接口）；PR-7 另依赖 PR-2（PrincipalDevice） |
-| 4 | PR-8, PR-9 | PR-8 依赖 5/6/2；PR-9 依赖 4/6/7 |
+| 4 | PR-8b, PR-9 | PR-8b 依赖 5/6/2/8a；PR-9 依赖 4/6/7/8a |
 | 5 | PR-10, PR-11 | wiring 后收口 |
+
+> 注：上表为**设计时 DAG**。Wave 1（PR-1/2/3）已全部 CLOSED，实时滚动 Wave（机器单源 = GitHub Project #3 Wave 字段）：W1 PR-5/PR-4/PR-8a · W2 PR-6/PR-7 · W3 PR-8b/PR-9 · W4 PR-10 · 超窗 PR-11。
 
 ---
 
@@ -110,7 +122,7 @@ graph TD
 - [ ] T2.4 enforcement：`DEVICE-PRINCIPAL-MINT-CALLER-01`（Medium，签发器为唯一 device 主体来源）+ 反向自检；godoc §invariants。
 - [ ] T2.5 概念隔离测试：service ≠ device、callerCellID ≠ device subject。
 
-> **关闭 #1811**。证书 mTLS 派生 PrincipalDevice 为统一终态（PR-8 `/simplereenroll` client-cert 已用）；本 PR 提供 device-token 路径，二者并存。
+> **关闭 #1811**。证书 mTLS 派生 PrincipalDevice 为统一终态（PR-8b `/simplereenroll` client-cert 已用）；本 PR 提供 device-token 路径，二者并存。实际交付额外做了 **sealed PrincipalDevice 构造 + seal-aware test helper + `principal_kind` fail-closed**——下游（PR-7/PR-8b/PR-9）铸造/测试 PrincipalDevice 必须走 sealed funnel，不裸构造。
 
 ---
 
@@ -126,6 +138,8 @@ graph TD
 - [ ] T3.4 `contracts/http/devicestate/v1/`（online/offline/last-seen 查询）。
 - [ ] T3.5 codegen（`gocell generate`）→ generated handler/client/types；slice.yaml `contractUsages` 派生 registration。
 - [ ] T3.6 contract-fanout implementation matrix（contract/generated/cell-slice/tests/docs）。
+
+> **实际交付（#1899 CLOSED，PR #2010）**：(1) 全部契约经 **#1939 framework-owned**（`ownerCell: _framework` + `lifecycle: draft`，无 cell 挂载点；serving 留 PR-8a）；(2) **status 契约收窄为 deviceId-only**——禁裸 serial / 半指定 issuer 查询，specific-cert lookup 必须经 serving 层 typed `CertScope`（isolation invariant，对齐 PR-5 CertScope）。
 
 ### PR-4 中立契约 (b)：devicecompliance + remotecommand ~1400 行
 
@@ -171,36 +185,53 @@ graph TD
 - [ ] T7.1 [TDD] `reconciler_test.go`：requested→issued→active→near-expiry→renewing→{rotated|revoked|expired} 转换；签名失败不损坏既有证书；fail-closed deny 不签发。
 - [ ] T7.2 [TDD] `reconciler_loop_test.go`：resync-all sweep 有界扫描；多副本 `LeaseToken.Epoch` fencing；队列 active-uniqueness 至多一次有效签发。
 - [ ] T7.3 `reconciler.go`：`reconcile.Reconciler` 实现；`clock.Clock` 位置参 + `MustHaveClock`；jitter 续期（k8s 70-90% 模型）；Authorize→Sign→persist→emit `cert-issued` L2。
-- [ ] T7.4 `repository.go`：`DeviceCertRepository`（scan near-expiry by cutoff / persist epoch+cert / mark）接口。
+- [ ] T7.4 `repository.go`：`DeviceCertRepository`（scan near-expiry by cutoff / persist epoch+cert / mark）接口；specific-cert 查询经 typed `CertScope`（PR-5），**非裸 serial**（status 契约已收窄 deviceId-only，#1899）。
 - [ ] T7.5 **多租户维度**：scan + 命令 key + 签发请求自带 tenant（system identity 清空 tenant，#1821 caveat）。
 - [ ] T7.6 enforcement：复用 `RECONCILE-FENCED-WRITE-FUNNEL-01`（Hard）；新增 `CERTLIFECYCLE-SIGN-VIA-FUNNEL-01`（Medium，生命周期只经 certsigning.Signer 签发）+ 反向自检；`doc.go`。
+
+> 注记：铸造/测试 PrincipalDevice 走 PR-2 的 **sealed funnel + seal-aware test helper**（#1898 实际交付），不裸构造。
 
 ---
 
 ## Phase 4：协议前端 + 消费方迁移（US3/US5）
 
-### PR-8 EST(RFC 7030) 框架注册前端 ~1600 行
+### PR-8a framework HTTP serving harness + 契约 draft→active ~1500 行
 
-**Goal**：框架级 EST 端点，挂**版本化 cell 路径** `/api/v{N}/deviceidentity/est/*`，wiring Authorizer→Signer。依赖 PR-5/6/2。
+**Goal**：落地 #1939 ADR 延后的 framework HTTP serving 基建——从 framework-owned `contract.yaml` 派生 RouteGroup + bootstrap 挂载，把悬空的 deviceidentity/devicestate draft 契约转为可 serve 的 active 框架契约。PR-8b/9/10 硬前置。依赖 PR-3。
 
-- [ ] T8.1 [TDD] handler 测试：`/simpleenroll` 200 PKCS#7、畸形/越权 CSR 4xx、缺鉴权 / setup-bootstrap 冒充 401/403、`/cacerts` 返回信任根。
-- [ ] T8.2 `runtime/http/est/handler.go`：`cacerts`·`simpleenroll`·`simplereenroll`（PKCS#10 in / PKCS#7 out），挂 `/api/v{N}/deviceidentity/est/*`（**非顶级裸路径**，对齐 api-versioning「端点挂所属 cell 版本前缀」）。
-- [ ] T8.3 鉴权两路径：首次=**专用 enrollment-credential / device-token**（PR-2 设备主体，**非** setup `auth.bootstrap:true`），续期=现证书 mTLS client-auth（`runtime/http/middleware/mtls` + PeerIdentity）。
-- [ ] T8.4 EST `auth.Route` 声明：显式 enrollment-credential / mTLS scheme；**不**声明 `auth.bootstrap:true`（FMT-28 限其只在 `^/api/v\d+/[^/]+/setup/admin$`，EST 非该路径，复用 fail-closed）。
-- [ ] T8.5 enforcement：`EST-ENROLL-AUTH-BOUNDARY-01`（Medium，enroll/reenroll 鉴权路径显式声明 + 禁 setup-bootstrap 凭据复用，缺则 fail-closed）+ 反向自检。
+- [ ] T8a.1 [TDD] `contract.yaml → RouteGroup` 派生测试；未 serve 的 active 框架契约 fail-closed（red case，anti-vacuity）；缺 Journey 引用 red case。
+- [ ] T8a.2 `runtime/internal/contractbuild`：新增「从 framework-owned `contract.yaml` 派生 `ContractSpec`」入口（区别于现字面量 `NewFrameworkHTTP`；id/method/path/schema 取自解析的 contract，与 codegen 单源）。
+- [ ] T8a.3 `runtime/bootstrap`：framework RouteGroup 挂载 framework-owned http 契约（listener + auth plan **显式声明**，in-process 不 bypass listener auth）。
+- [ ] T8a.4 扩展 `FRAMEWORK-OWNED-CONTRACT-SCOPED-01`（#1939 D3）为 **serving-scan**：放行已 serve 的 active 框架契约（DEAD-CONTRACT-01 的框架版）+ synthetic red case。
+- [ ] T8a.5 首批只读契约 `http.devicestate.v1`（+ `http.deviceidentity.status.v1`，视 cert 持久化就绪）`draft→active` + framework handler；写路径（enroll/renew/revoke/rotate）的 active 化留 PR-8b/PR-9 经本 harness 落地。
+- [ ] T8a.6 Journey coverage：转 active 的框架契约补 `JOURNEY-CONTRACT-EXISTENCE-01` 引用（如 `J-deviceidentity`）。
+
+> **enforcement**：`FRAMEWORK-OWNED-CONTRACT-SCOPED-01` serving-scan 扩展（Medium）+ 反向 red case；RouteGroup 派生口与 `contract.yaml` 单源（复用 codegen funnel）。同 PR 闭环。
+
+### PR-8b EST(RFC 7030) 框架注册前端 ~1500 行
+
+**Goal**：框架级 EST 端点，经 PR-8a framework serving harness 挂 `/api/v{N}/deviceidentity/est/*`，wiring Authorizer→Signer。依赖 PR-5/6/2/8a。
+
+- [ ] T8b.1 [TDD] handler 测试：`/simpleenroll` 200 PKCS#7、畸形/越权 CSR 4xx、缺鉴权 / setup-bootstrap 冒充 401/403、`/cacerts` 返回信任根。
+- [ ] T8b.2 `runtime/http/est/handler.go`：`cacerts`·`simpleenroll`·`simplereenroll`（PKCS#10 in / PKCS#7 out），经 PR-8a framework RouteGroup 挂 `/api/v{N}/deviceidentity/est/*`（**framework serving，非「所属 cell 前缀」**——deviceidentity 框架归属无 owner cell；path 段 deviceidentity 是 domain 非 cell）。
+- [ ] T8b.3 鉴权两路径：首次=**专用 enrollment-credential / device-token**（PR-2 设备主体；**PrincipalDevice 现为 sealed，经签发器铸造**，**非** setup `auth.bootstrap:true`），续期=现证书 mTLS client-auth（`runtime/http/middleware/mtls` + PeerIdentity）。
+- [ ] T8b.4 EST `auth.Route` 声明：显式 enrollment-credential / mTLS scheme；**不**声明 `auth.bootstrap:true`（FMT-28 限其只在 `^/api/v\d+/[^/]+/setup/admin$`，EST 非该路径，复用 fail-closed）。
+- [ ] T8b.5 写路径 deviceidentity 契约（enroll/renew）经 PR-8a harness `draft→active`（serving-scan 放行）。
+- [ ] T8b.6 enforcement：`EST-ENROLL-AUTH-BOUNDARY-01`（Medium，enroll/reenroll 鉴权路径显式声明 + 禁 setup-bootstrap 凭据复用，缺则 fail-closed）+ 反向自检。
 
 ### PR-9 iotdevice 迁移 + `rotate-cert` 真契约 + 设备 enqueue RBAC ~1800 行
 
-**Goal**：示例端到端切到框架证书底座，证明接缝。依赖 PR-4/6/7。
+**Goal**：示例端到端切到框架证书底座，证明接缝。依赖 PR-4/6/7/8a。
 
 - [ ] T9.1 [TDD] iotdevice 集成：注册→softca 签真实初始证书→近期过期→certlifecycle 续期→新证书生效。
 - [ ] T9.2 `deviceregister` 经 `certsigning.Signer` 签真实初始证书（替代仅 stamp `cert_expires_at`）。
 - [ ] T9.3 `devicecertrenewal` slice 退役 / 重接 `certlifecycle`（删字符串 `rotate-cert`，无 shim）。
-- [ ] T9.4 `command.deviceidentity.rotate.v1` 真契约取代 bare-string `CommandType="rotate-cert"`；fanout matrix。
+- [ ] T9.4 `command.deviceidentity.rotate.v1` 真契约取代 bare-string `CommandType="rotate-cert"`；fanout matrix。（command kind 带 cell 内部语义，仍 **cell-owned** 正常 serve；非 framework-owned。）
 - [ ] T9.5 设备粒度 enqueue 授权（#654）：设备不可操作他设备命令（`auth.RequirePermission` + RowScope=device，无 role-literal）。
 - [ ] T9.6 迁移：devices 行证书列 + migration（cert material 持久化）；删除退役列（只增不改例外须 ADR 注记）。
+- [ ] T9.7 cert 状态/查询走 typed `CertScope`（PR-5），不依赖裸 serial（status 契约已收窄 deviceId-only，#1899）；消费 PR-2 sealed PrincipalDevice（device-token 路径走 sealed funnel）。
 
-> **关闭 #654**；**关联 #1870**（cert terminal-feedback——续期释放主路径基础留 PR-7 时间窗 + 本 PR 真契约 terminal 态）。
+> **关闭 #654**；**关联 #1870**（cert terminal-feedback——续期释放主路径基础留 PR-7 时间窗 + 本 PR 真契约 terminal 态）。另：#1943（device 幂等 middleware bypass）forward-looking 至本 PR（device 写端点落地时一并处理）。
 
 ---
 
@@ -232,7 +263,7 @@ graph TD
 
 ### 关键路径
 
-`PR-3 → PR-5 → PR-6/7 → PR-8/9 → PR-10 → PR-11`（约 5 wave）。PR-1（ADR）+ PR-2（设备主体）可与 PR-3 并行起跑。
+`PR-3 → PR-5 → PR-6/7 → PR-8b/9 → PR-10 → PR-11`（约 5 wave）；PR-8a（serving harness）依赖 PR-3、阻塞 PR-8b/9/10，可在 Wave 2 与 PR-5 并行起跑。PR-1（ADR）+ PR-2（设备主体）可与 PR-3 并行起跑。
 
 ### Within Each PR
 
@@ -249,5 +280,5 @@ graph TD
 ## Notes
 
 - 行数估算含测试；超限以实测 `git diff --shortstat origin/develop` 为准。
-- [Story] 映射：PR-1/11→US6，PR-2→US1，PR-3/4→US4，PR-5/6/7→US2，PR-8→US3，PR-9→US5，PR-10→US2/3。
+- [Story] 映射：PR-1/11→US6，PR-2→US1，PR-3/4→US4，PR-5/6/7→US2，PR-8a/8b→US3，PR-9→US5，PR-10→US2/3。
 - 每 PR 经 ship→review→fix→check 流程；契约 PR 出 implementation matrix。
