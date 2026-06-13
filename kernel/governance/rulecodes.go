@@ -160,6 +160,16 @@ const (
 	codeDOCNAME01                 RuleCode = "DOC-NAME-01"
 	codeCONTRACTCONSISTENCYEMIT01 RuleCode = "CONTRACT-CONSISTENCY-EMIT-01"
 
+	// FRAMEWORK-OWNED-CONTRACT-SCOPED-01 — governs framework-owned contracts
+	// (ownerCell == metadata.FrameworkOwnerSentinel): eligible kinds (http/event)
+	// + fail-closed lifecycle (draft/deprecated until framework serving is wired).
+	// Opting into framework ownership structurally excludes a contract from the
+	// cell-owner reference rules (REF-03/REF-13) and the cell-slice emit-coupling
+	// rule (CONTRACT-CONSISTENCY-EMIT-01) via ContractOwner.Cell() returning
+	// ok=false; this rule is the equivalent framework-side governance so the
+	// exclusion is not a hole. See rules_framework_owned.go.
+	codeFRAMEWORKOWNEDCONTRACTSCOPED01 RuleCode = "FRAMEWORK-OWNED-CONTRACT-SCOPED-01"
+
 	// CONTRACT-ENDPOINT-TEST-MAPPING — active HTTP contract → slice.verify.contract.serve
 	// reverse coverage check. Inverse direction of the ADV-06 subscribe-role check:
 	// ADV-06 checks event contracts; this rule checks HTTP contracts.

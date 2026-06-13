@@ -14,7 +14,8 @@
     },
     "outcome": {
       "type": "string",
-      "description": "Terminal ack outcome mapped from command.AckReason. One of: succeeded | failed | rejected. The consumer validates the value (a value outside this set is a permanent producer-side violation)."
+      "enum": ["succeeded", "failed", "rejected"],
+      "description": "Terminal ack outcome mapped from command.AckReason. The consumer still validates the wire value (an out-of-set value is a permanent producer-side violation routed to DLX): json decoding does not enforce enum membership."
     },
     "resolvedAt": {
       "type": "string",

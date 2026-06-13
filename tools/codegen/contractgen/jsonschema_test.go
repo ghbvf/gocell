@@ -499,18 +499,84 @@ func TestParse_FailAllOf(t *testing.T) {
 	}
 }
 
-func TestParse_FailEnum(t *testing.T) {
+// TestParse_Enum_String asserts a string-typed enum is parsed into Schema.Enum
+// (the supported case driving typed Go enum + const generation, #1935). Order is
+// preserved from the source array so generated const blocks are stable.
+func TestParse_Enum_String(t *testing.T) {
 	dir := t.TempDir()
-	writeSchema(t, dir, "s.json", `{"type": "string", "enum": ["a", "b"]}`)
+	writeSchema(t, dir, "s.json", `{"type": "string", "enum": ["succeeded", "failed", "rejected"]}`)
+	s, err := parseFromDir(t, dir, "s.json")
+	if err != nil {
+		t.Fatalf("string enum should parse, got error: %v", err)
+	}
+	want := []string{"succeeded", "failed", "rejected"}
+	if len(s.Enum) != len(want) {
+		t.Fatalf("Enum = %v, want %v", s.Enum, want)
+	}
+	for i, v := range want {
+		if s.Enum[i] != v {
+			t.Errorf("Enum[%d] = %q, want %q", i, s.Enum[i], v)
+		}
+	}
+}
+
+// TestParse_FailEnum_NonString asserts enum on a non-string type fails fast:
+// codegen only generates typed Go enums for string fields (#1935 scope), so an
+// integer/other enum is an explicit error rather than a silently dropped constraint.
+func TestParse_FailEnum_NonString(t *testing.T) {
+	dir := t.TempDir()
+	writeSchema(t, dir, "s.json", `{"type": "integer", "enum": [1, 2, 3]}`)
 	_, err := parseFromDir(t, dir, "s.json")
 	if err == nil {
-		t.Fatal("expected error for enum")
+		t.Fatal("expected error for non-string enum")
 	}
-	if !strings.Contains(err.Error(), `"enum"`) {
+	if !strings.Contains(err.Error(), "enum") {
 		t.Errorf("error should mention 'enum', got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "s.json") {
 		t.Errorf("error should contain file path, got: %v", err)
+	}
+}
+
+// TestParse_FailEnum_NoType asserts an enum without an explicit "type": "string"
+// fails fast with an actionable message (the field must declare type:string).
+func TestParse_FailEnum_NoType(t *testing.T) {
+	dir := t.TempDir()
+	writeSchema(t, dir, "s.json", `{"enum": ["a", "b"]}`)
+	_, err := parseFromDir(t, dir, "s.json")
+	if err == nil {
+		t.Fatal("expected error for enum without type")
+	}
+	if !strings.Contains(err.Error(), `"type": "string"`) {
+		t.Errorf("error should guide adding type:string, got: %v", err)
+	}
+}
+
+// TestParse_FailEnum_EmptyArray asserts an empty enum array is rejected (a closed
+// value-set with no values is meaningless and would generate an empty const block).
+func TestParse_FailEnum_EmptyArray(t *testing.T) {
+	dir := t.TempDir()
+	writeSchema(t, dir, "s.json", `{"type": "string", "enum": []}`)
+	_, err := parseFromDir(t, dir, "s.json")
+	if err == nil {
+		t.Fatal("expected error for empty enum array")
+	}
+	if !strings.Contains(err.Error(), "non-empty") {
+		t.Errorf("error should mention non-empty, got: %v", err)
+	}
+}
+
+// TestParse_FailEnum_NonStringItem asserts a string enum whose array contains a
+// non-string item is rejected (the generated const values must be string literals).
+func TestParse_FailEnum_NonStringItem(t *testing.T) {
+	dir := t.TempDir()
+	writeSchema(t, dir, "s.json", `{"type": "string", "enum": ["ok", 42]}`)
+	_, err := parseFromDir(t, dir, "s.json")
+	if err == nil {
+		t.Fatal("expected error for non-string enum item")
+	}
+	if !strings.Contains(err.Error(), "must be strings") {
+		t.Errorf("error should mention values must be strings, got: %v", err)
 	}
 }
 

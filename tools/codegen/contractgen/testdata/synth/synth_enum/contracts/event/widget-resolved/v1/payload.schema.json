@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "event.widget-resolved.v1.payload",
+  "type": "object",
+  "properties": {
+    "outcome": {
+      "type": "string",
+      "enum": ["succeeded", "failed", "rejected"],
+      "description": "Terminal outcome of the widget resolution."
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["accepted", "running", "done"]
+        }
+      },
+      "required": ["status"]
+    }
+  },
+  "required": ["outcome", "data"]
+}

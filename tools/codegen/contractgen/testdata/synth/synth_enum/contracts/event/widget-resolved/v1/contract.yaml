@@ -1,0 +1,12 @@
+id: event.widget-resolved.v1
+kind: event
+ownerCell: widgetcell
+consistencyLevel: L2
+lifecycle: active
+endpoints:
+  publisher: widgetcell
+schemaRefs:
+  payload: payload.schema.json
+replayable: false
+deliverySemantics: at-least-once
+codegen: true

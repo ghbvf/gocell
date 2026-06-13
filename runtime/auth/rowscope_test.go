@@ -116,11 +116,11 @@ func TestPrincipalRowVisibility_DerivationTable(t *testing.T) {
 			wantSubject: "viewer-usr",
 		},
 		{
-			name: "device_principal",
-			principal: &Principal{
-				Kind:    PrincipalDevice,
-				Subject: "device-xyz",
-			},
+			// A device principal must be minted through the sealed issuer; a bare
+			// Principal{Kind: PrincipalDevice} literal lacks the device seal and is
+			// rejected by RowVisibility (see TestDevicePrincipal_Forged...).
+			name:        "device_principal",
+			principal:   mustMintDevice(t, "device-xyz"),
 			wantScope:   tenant.RowScopeDevice,
 			wantSubject: "device-xyz",
 		},
@@ -254,11 +254,8 @@ func TestPrincipalRowVisibility_SuperAdminMandatoryAudit(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name: "device_no_audit_log",
-			principal: &Principal{
-				Kind:    PrincipalDevice,
-				Subject: "device-d1",
-			},
+			name:      "device_no_audit_log",
+			principal: mustMintDevice(t, "device-d1"),
 			wantError: false,
 		},
 	}

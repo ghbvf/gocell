@@ -62,6 +62,20 @@ type {{.Name}} struct {
 	{{.Name}} {{.GoType}} `json:"{{.JSONTag}}"`
 {{- end}}
 }
+{{- range .Enums}}
+{{- $e := .}}
+
+// {{$e.TypeName}} enumerates the closed value-set of the {{$e.FieldName}} field.
+// The schema enum is the single source; a value removed there drops the const,
+// breaking any reference at compile time (#1935).
+type {{$e.TypeName}} string
+
+const (
+{{- range $e.Values}}
+	{{.ConstName}} {{$e.TypeName}} = {{quoteGoString .Value}}
+{{- end}}
+)
+{{- end}}
 {{- if .EmitToMap}}
 
 // ToMap projects {{.Name}} into the column map the masking funnel

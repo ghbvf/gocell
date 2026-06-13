@@ -601,22 +601,36 @@ func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
 // (path = "endpoints.http.queryParams.<name>.<facet>" /
 // "endpoints.http.pathParams.<name>.<facet>").
 //
-// Two violation shapes share this type:
+// Three violation shapes share this type:
 //
-//   - Missing-facet: `missing` is the facet name; `relMin` and `relMax`
+//   - Missing-facet: `missing` is the facet name; `relMin`/`relMax`/`noop`
 //     are empty.
 //   - Min > Max relation fault: `relMin` and `relMax` carry the facet
 //     names (e.g. minLength / maxLength); `missing` is empty. The
 //     producer (appendSchemaBoundRelationViolation) sets issueType to
-//     IssueInvalid; the FMT-25 emission site calls newError with an explicit
-//     fix argument (INV-3 GOVERNANCE-RULE-ERROR-FIX-FIELD-01 checks the fix
-//     arg, not a Message substring).
+//     IssueInvalid.
+//   - No-op lower bound: `noop` is the facet name (only "minLength" today) for
+//     an explicitly-declared zero/negative string lower bound, which constrains
+//     nothing since string length is always >= 0. `noopVal` carries the offending
+//     value so the message prints it accurately (e.g. -1, not a hard-coded 0).
+//     The producer (appendNoopLowerBoundViolation) sets issueType to IssueInvalid.
+//
+// Every emission site calls newError with an explicit fix argument (INV-3
+// GOVERNANCE-RULE-ERROR-FIX-FIELD-01 checks the fix arg, not a Message substring).
 type inputConstraintViolation struct {
-	location  string // JSON pointer or full metadata field path.
-	missing   string // "minLength" | "maxLength" | "minimum" | "maximum" — empty for relation faults.
-	relMin    string // non-empty when this is a relation fault; pairs with relMax.
-	relMax    string // non-empty when this is a relation fault; pairs with relMin.
+	location  string  // JSON pointer or full metadata field path.
+	missing   string  // "minLength" | "maxLength" | "minimum" | "maximum" — empty for relation/no-op faults.
+	relMin    string  // non-empty when this is a relation fault; pairs with relMax.
+	relMax    string  // non-empty when this is a relation fault; pairs with relMin.
+	noop      string  // non-empty (facet name) when this is a no-op lower-bound fault.
+	noopVal   float64 // the offending lower-bound value when noop != "" (e.g. 0 or -1).
 	issueType IssueType
+}
+
+// sortKey returns a stable discriminator for ordering violations at the same
+// location across the missing-facet, relation, and no-op shapes.
+func (v inputConstraintViolation) sortKey() string {
+	return v.missing + "|" + v.relMin + "|" + v.noop
 }
 
 type schemaWalkError struct {
@@ -630,24 +644,41 @@ func (e *schemaWalkError) Error() string {
 
 // validateFMTInputConstraint01 enforces input-side schema constraints on
 // HTTP-kind contracts:
-//   - request.schema.json: every "type":"string" leaf must declare both
-//     minLength and maxLength; every "type":"integer" or "type":"number" leaf
-//     must declare both minimum and maximum. JSON Schema type arrays are
-//     interpreted semantically, so ["string","null"] is still governed as a
-//     string input.
+//   - request.schema.json: every "type":"string" leaf must declare maxLength
+//     (the upper bound; the OWASP DoS defense cited below). minLength is
+//     OPTIONAL — the string lower bound carries no DoS weight — but when
+//     declared it must be >= 1 and <= maxLength: an explicit minLength: 0 is
+//     rejected as a no-op (string length is always >= 0, so a zero lower bound
+//     constrains nothing). Every "type":"integer" or "type":"number" leaf must
+//     declare both minimum and maximum; unlike string minLength, numeric
+//     minimum: 0 is meaningful (it rejects negatives) and stays required. JSON
+//     Schema type arrays are interpreted semantically, so ["string","null"] is
+//     still governed as a string input.
 //   - contract.yaml.queryParams / pathParams: same rules apply to each
-//     ParamSchema, with one exemption: Format == "uuid" skips minLength /
-//     maxLength enforcement (RFC 4122 fixes UUIDs at 36 chars).
+//     ParamSchema, with one exemption: Format == "uuid" skips length
+//     enforcement (RFC 4122 fixes UUIDs at 36 chars).
 //
-// Severity: Error, IssueRequired (missing facets fail the build; existing
-// declarations of explicit zero are accepted). Non-local or unresolved $ref
-// targets and depth-limit truncation are IssueInvalid fail-closed diagnostics:
-// FMT-25 must not silently pass schemas it could not fully inspect.
+// Severity: Error. Missing maxLength / numeric minimum / numeric maximum fail
+// the build as IssueRequired. An explicit no-op minLength: 0 and a min > max
+// relation both fail as IssueInvalid. Non-local or unresolved $ref targets and
+// depth-limit truncation are IssueInvalid fail-closed diagnostics: FMT-25 must
+// not silently pass schemas it could not fully inspect.
+//
+// The asymmetry (string minLength optional + no-op-guarded vs numeric minimum
+// required) is deliberate: only the upper bound has a DoS threat model, and a
+// zero string lower bound is dead boilerplate, whereas minimum: 0 rejects
+// negative limit/page values. See issue #1934 / #1932.
+//
+// AI-robust tier: Medium (governance rule — a no-op minLength: 0 is expressible
+// in the YAML/JSON but is rejected at `gocell validate` time, backed by a
+// synthetic red case). For a metadata value this is the Hard-equivalent ceiling:
+// a YAML/JSON value cannot be compile-frozen the way a Go type can.
 //
 // Rule ID: FMT-25.
 //
 // ref: OWASP API Security Top 10 — API4:2019 Lack of Resources & Rate Limiting
-// (input size bounds defend against DoS and overlong-payload attacks).
+// (input size UPPER bounds defend against DoS and overlong-payload attacks;
+// this justifies maxLength only — the string lower bound has no DoS weight).
 // ref: JSON Schema Draft 2020-12 string/numeric validation vocabulary.
 func (v *Validator) validateFMTInputConstraint01() []ValidationResult {
 	var results []ValidationResult
@@ -723,6 +754,16 @@ func (v *Validator) validateRequestSchemaInputConstraints(c *metadata.ContractMe
 			))
 			continue
 		}
+		if viol.noop != "" {
+			results = append(results, v.newError(
+				codeFMT25, issueType,
+				resolved.ProjectRel, viol.location,
+				fmt.Sprintf("contract %q request schema field %s declares a no-op %s: %g (string length is always >= 0)",
+					c.ID, viol.location, viol.noop, viol.noopVal),
+				fmt.Sprintf("omit %s or declare a meaningful lower bound >= 1 on the schema node at %s", viol.noop, viol.location),
+			))
+			continue
+		}
 		results = append(results, v.newError(
 			codeFMT25, issueType,
 			resolved.ProjectRel, viol.location,
@@ -773,8 +814,9 @@ func pathParamsReadyForInputConstraints(h *metadata.HTTPTransportMeta) bool {
 }
 
 // scanSchemaForInputConstraints reads a JSON schema file and walks every node,
-// emitting a violation for each missing minLength/maxLength on strings and
-// minimum/maximum on integer/number nodes. Paths use the same JSON-pointer style as
+// emitting a violation for each missing maxLength on strings (plus a no-op
+// minLength: 0 or min > max relation fault) and missing minimum/maximum on
+// integer/number nodes. Paths use the same JSON-pointer style as
 // scanSchemaForStrictMissing (e.g. "$", "$.user.name", "$.tags.items").
 //
 // Cross-file $ref nodes (e.g. a shared CAS expectedVersion mixin under
@@ -803,11 +845,13 @@ func scanSchemaForInputConstraints(absPath, projectRoot string) ([]inputConstrai
 		return nil, err
 	}
 	// Sort for deterministic output across runs (map iteration is unordered).
+	// Tiebreak on the full (missing|relMin|noop) shape so missing-facet,
+	// relation, and no-op violations at the same location order deterministically.
 	sort.Slice(missing, func(i, j int) bool {
 		if missing[i].location != missing[j].location {
 			return missing[i].location < missing[j].location
 		}
-		return missing[i].missing < missing[j].missing
+		return missing[i].sortKey() < missing[j].sortKey()
 	})
 	return missing, nil
 }
@@ -920,20 +964,19 @@ func resolveCrossFileSchemaRef(ref, dir, projectRoot string, seen map[string]boo
 	return resolved, err
 }
 
-// checkInputConstraints branches on node["type"] and records missing facets.
-// Strings missing minLength or maxLength → violations.
+// checkInputConstraints branches on node["type"] and records facet violations.
+// Strings missing maxLength → violation; an explicit no-op minLength: 0 or a
+// minLength > maxLength relation → IssueInvalid. minLength is otherwise optional.
 // Integers/numbers missing minimum or maximum → violations.
 // Other types (boolean, object, array) are unaffected.
 func checkInputConstraints(node map[string]any, path string, missing *[]inputConstraintViolation) {
 	types := schemaTypeSet(node["type"])
 	if types["string"] {
-		if _, ok := node["minLength"]; !ok {
-			*missing = append(*missing, inputConstraintViolation{location: path, missing: "minLength"})
-		}
 		if _, ok := node["maxLength"]; !ok {
 			*missing = append(*missing, inputConstraintViolation{location: path, missing: "maxLength"})
 		}
 		appendSchemaBoundRelationViolation(node, path, "minLength", "maxLength", missing)
+		appendNoopLowerBoundViolation(node, path, "minLength", missing)
 	}
 	if types["integer"] || types["number"] {
 		if _, ok := node["minimum"]; !ok {
@@ -971,6 +1014,25 @@ func appendSchemaBoundRelationViolation(node map[string]any, path, minKey, maxKe
 		location:  path,
 		relMin:    minKey,
 		relMax:    maxKey,
+		issueType: IssueInvalid,
+	})
+}
+
+// appendNoopLowerBoundViolation flags an explicitly-declared string lower bound
+// of zero or below (minKey, i.e. minLength) as a no-op: string length is always
+// >= 0, so the declaration constrains nothing and is dead boilerplate. Omitting
+// it is identical and accepted; a meaningful bound (>= 1) is accepted and still
+// relation-checked. Numeric minimum is intentionally NOT routed here — minimum: 0
+// rejects negatives and carries real semantics (issue #1934 / #1932).
+func appendNoopLowerBoundViolation(node map[string]any, path, minKey string, out *[]inputConstraintViolation) {
+	val, has := schemaNumericFacet(node, minKey)
+	if !has || val >= 1 {
+		return
+	}
+	*out = append(*out, inputConstraintViolation{
+		location:  path,
+		noop:      minKey,
+		noopVal:   val,
 		issueType: IssueInvalid,
 	})
 }
@@ -1141,7 +1203,9 @@ func (v *Validator) checkParamSchemaConstraints(
 
 // checkSingleParamConstraints checks one ParamSchema for missing min/max
 // declarations. Branches on Type (string vs integer/number); other types are
-// untouched. Format == "uuid" exempts string params from length checks.
+// untouched. Format == "uuid" exempts string params from length checks. String
+// maxLength is required; minLength is optional but an explicit no-op 0 is
+// rejected. Numeric minimum/maximum both stay required (minimum: 0 is meaningful).
 func (v *Validator) checkSingleParamConstraints(c *metadata.ContractMeta, p metadata.ParamSchema, field string) []ValidationResult {
 	switch p.Type {
 	case "string":
@@ -1149,10 +1213,10 @@ func (v *Validator) checkSingleParamConstraints(c *metadata.ContractMeta, p meta
 			return nil // RFC 4122 fixes length; schema-level constraint is redundant.
 		}
 		results := v.emitMissingFacets(c, field, []missingFacet{
-			{p.MinLength == nil, "minLength"},
 			{p.MaxLength == nil, "maxLength"},
 		})
-		return append(results, v.emitInvalidParamRelation(c, field, "minLength", p.MinLength, "maxLength", p.MaxLength)...)
+		results = append(results, v.emitInvalidParamRelation(c, field, "minLength", p.MinLength, "maxLength", p.MaxLength)...)
+		return append(results, v.emitNoopLowerBound(c, field, "minLength", p.MinLength)...)
 	case "integer", "number":
 		results := v.emitMissingFacets(c, field, []missingFacet{
 			{p.Minimum == nil, "minimum"},
@@ -1201,5 +1265,24 @@ func (v *Validator) emitInvalidParamRelation(
 		contractFile(c), fieldBase,
 		fmt.Sprintf("contract %q %s has %s > %s", c.ID, fieldBase, minName, maxName),
 		fmt.Sprintf("ensure %s <= %s on %s in contract.yaml", minName, maxName, fieldBase),
+	)}
+}
+
+// emitNoopLowerBound flags an explicit string lower bound of zero or below
+// (minName, i.e. minLength) as a no-op: string length is always >= 0, so the
+// declaration constrains nothing. A meaningful bound (>= 1) and an omitted bound
+// are both accepted. Numeric minimum is intentionally NOT routed here — minimum: 0
+// rejects negatives and carries real semantics (issue #1934 / #1932).
+func (v *Validator) emitNoopLowerBound(
+	c *metadata.ContractMeta, fieldBase, minName string, min *int,
+) []ValidationResult {
+	if min == nil || *min >= 1 {
+		return nil
+	}
+	return []ValidationResult{v.newError(
+		codeFMT25, IssueInvalid,
+		contractFile(c), fieldBase,
+		fmt.Sprintf("contract %q %s declares a no-op %s: %d (string length is always >= 0)", c.ID, fieldBase, minName, *min),
+		fmt.Sprintf("omit %s or declare a meaningful lower bound >= 1 on %s in contract.yaml", minName, fieldBase),
 	)}
 }

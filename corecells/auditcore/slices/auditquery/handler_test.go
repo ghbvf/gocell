@@ -1102,9 +1102,7 @@ func TestHandleQuery_MaskedFilterOracle_Rejected(t *testing.T) {
 	const deviceID = "dev-oracle"
 	// Allow-all Authorizer so the empty-actorId read passes the PDP gate (F1) and
 	// the test reaches the data-layer masked-filter gate it exercises.
-	deviceCtx := withAllowAuthorizer(auth.WithPrincipal(context.Background(), &auth.Principal{
-		Kind: auth.PrincipalDevice, Subject: deviceID, TenantID: auditQueryTestTenant, AuthMethod: "test",
-	}))
+	deviceCtx := withAllowAuthorizer(auth.WithPrincipal(context.Background(), auth.MustNewTestDevicePrincipal(deviceID, auditQueryTestTenant)))
 
 	cases := []struct {
 		name       string
@@ -1206,9 +1204,7 @@ func TestHandleQuery_ColumnMaskMatrix(t *testing.T) {
 		require.NoError(t, store.Append(context.Background(), e))
 	}
 
-	deviceCtx := withAllowAuthorizer(auth.WithPrincipal(context.Background(), &auth.Principal{
-		Kind: auth.PrincipalDevice, Subject: deviceID, TenantID: auditQueryTestTenant, AuthMethod: "test",
-	}))
+	deviceCtx := withAllowAuthorizer(auth.WithPrincipal(context.Background(), auth.MustNewTestDevicePrincipal(deviceID, auditQueryTestTenant)))
 
 	cases := []struct {
 		name                             string
