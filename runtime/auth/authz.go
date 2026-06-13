@@ -67,8 +67,10 @@ func RequireSelfOrRole(ctx context.Context, targetID string, bypassRoles ...stri
 // responsible for producing canonical subjects on intake. An empty targetID never
 // matches (empty param ≠ self).
 //
-// Sole self-comparison site, shared by RequireSelfOrRole (role-bypass) and
-// RequirePermissionOrSelf (PDP-bypass) so the two ownership gates cannot drift.
+// Used solely by RequireSelfOrRole (role-bypass gate). The former
+// RequirePermissionOrSelf (PDP-bypass, #1977 Batch B removed) no longer uses
+// this function; ownership is now expressed as a PDP baseline ABAC rule
+// (subject.sub == resource.id via RequirePermissionForResource).
 func isSelfAccess(subject, targetID string) bool {
 	if canonical, ok := httputil.ParseCanonicalUUID(subject); ok {
 		subject = canonical

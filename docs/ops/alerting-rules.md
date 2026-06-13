@@ -648,12 +648,43 @@ consumer 消费速率落后，或 broker 连接断开。
 注意：`outbox_pending_depth` Gauge 仅统计 `status=pending` 且
 `next_retry_at IS NULL OR <= now()` 的可领取行——重试 backoff 中的 entry 不计入。
 持续的重试堆积需通过 relay 侧 outcome 指标
-`outbox_relayed_total{outcome="dead"|"lost"}` 或 reclaim-budget readyz 探针
+`outbox_relayed_total{outcome=~"dead|lost"}` 或 reclaim-budget readyz 探针
 诊断（`outbox_consumer_rejected_total` 是 subscriber 侧 DLX 计数，与 relay
 retry-backoff 不同失败域），本 Gauge 不会随之增长。每次 Relay reclaim tick
 更新一次（默认间隔为 `runtime/outbox.DefaultRelayReclaimInterval = 30s`，
 而非 Prometheus scrape 间隔），应使用较长的 `for:` 窗口避免 scrape 窗口内的
 假阳性。
+
+注：`outbox_relayed_total` 自 #1674 起带 `kind` label（`event` = broker publish /
+`command` = 进程内 async command dispatch），与 `outcome`（`published|retried|dead|
+skipped|lost`）正交。上面不带 `kind` filter 的查询按两类求和，语义不变；按类对账用
+`outbox_relayed_total{kind="command",outcome="published"}`（命令分发吞吐）/
+`{kind="command",outcome=~"dead|lost"}`（命令失败）等。两个 label 的值集都由
+`kernel/outbox` 的 typed enum 单源派生、冻结进 `metrics-schema.yaml` golden
+（OUTBOX-RELAY-LABEL-VALUES-FROZEN-01）。两点 dashboard 注意：
+
+- **稀疏 series**：`{kind="command"}` series 仅在 cell 接线了 `WithCommandDispatch`
+  且有命令流量后才出现（零计数按 `(kind,outcome)` 跳过）；event-only relay 不产生
+  该 series，PromQL 用 `... or vector(0)` 兜底，告警避免裸 `absent()` 误报。
+- **dedup 计入 published**：`{kind="command",outcome="published"}` 同时包含首次
+  dispatch 与幂等去重命中（两者都消费 outbox 行），不区分；精确去重率从 relay 的
+  `"command deduped (already processed)"` Info 日志计数获得，非此 counter。
+
+命令失败告警示例（覆盖 event/command 两类死信，按 `kind` 拆分）：
+
+```yaml
+- alert: GoCellOutboxRelayDeadLettered
+  expr: sum(increase(gocell_outbox_relayed_total{outcome=~"dead|lost"}[10m])) by (cell, kind) > 0
+  for: 0m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Outbox relay dead-lettered/lost entries ({{ $labels.cell }} kind={{ $labels.kind }})"
+    description: |
+      Relay for cell {{ $labels.cell }} dead-lettered or lost {{ $labels.kind }}
+      entries in the last 10m. kind=command 死信对账配合 dead-letter 日志的
+      is_command=true / command_id 字段（#1674 F5）。
+```
 
 注: 此告警仅在 storage_backend=postgres 部署生效；memory 模式无 Relay，指标不产生 sample。
 
@@ -673,9 +704,10 @@ retry-backoff 不同失败域），本 Gauge 不会随之增长。每次 Relay r
       (defaults to runtime/outbox.DefaultRelayReclaimInterval = 30s),
       not per scrape — treat the value as "eligible depth at last reclaim tick".
       For tighter sampling, decrease ReclaimInterval. Retry backlog is not
-      reflected here; diagnose via outbox_relayed_total{outcome="dead"|"lost"}
-      (relay-side outcome counter) — outbox_consumer_rejected_total is the
-      subscriber-side DLX counter, a different failure domain.
+      reflected here; diagnose via outbox_relayed_total{outcome=~"dead|lost"}
+      (relay-side outcome counter; split by kind=event|command since #1674) —
+      outbox_consumer_rejected_total is the subscriber-side DLX counter, a
+      different failure domain.
 ```
 
 ### 调试指标（无告警，仅 dashboard）
@@ -981,7 +1013,7 @@ sum(rate(gocell_config_event_settlement_total[5m])) by (cell, slice, disposition
 
 ## HTTP 幂等 (#1460)
 
-`idempotency_requests_total{cell,state}` 由 HTTP idempotency 中间件（`runtime/http/idempotency`）经 `obmetrics.IdempotencyCollector` 发射，bootstrap 在配置了真实 metrics `Provider` 时自动接线。`cell` 是归属 RouteGroup 的 cell（框架路径为 `_runtime`）。`state` 取值冻结为 6 个终态（archtest `IDEMPOTENCY-REQUESTS-STATE-LABEL-VALUES-FROZEN-01` 守）：
+`idempotency_requests_total{cell,state}` 由 HTTP idempotency 中间件（`runtime/http/idempotency`）经 `obmetrics.IdempotencyCollector` 发射，bootstrap 在配置了真实 metrics `Provider` 时自动接线。`cell` 是归属 RouteGroup 的 cell（框架路径为 `_runtime`）。`state` 取值冻结为 7 个终态（archtest `IDEMPOTENCY-REQUESTS-STATE-LABEL-VALUES-FROZEN-01` 守）：
 
 - `acquired`：新 claim（已处理请求分母，claim 时计，不是其余 state 之和）
 - `replayed`：缓存响应回放
@@ -989,6 +1021,7 @@ sum(rate(gocell_config_event_settlement_total[5m])) by (cell, slice, disposition
 - `store_error`：Claim 路径失败 → 500
 - `oversize`：响应超限不录（`acquired` 的子事件）
 - `key_reused`：同 key 不同 body → 422（附 per-field diff 字段名；安全相关）
+- `body_read_failed`：请求 body 读取失败 → 503（claim 前的入站传输/连接故障，如客户端中止上传；区别于 `store_error` 的服务端 store 故障，持续偏高指向客户端/网络问题）
 
 > 仅当配置真实 `Provider` 且某 listener 接线了 idempotency store 时才会有时间序列；无 store 时该 metric 仅出现在 `/metrics` HELP，无序列。
 

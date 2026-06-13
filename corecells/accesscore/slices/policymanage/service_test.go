@@ -243,6 +243,45 @@ func TestService_Update_EmitterFailureRollsBack(t *testing.T) {
 	assert.ErrorIs(t, updateErr, failWriter.Err)
 }
 
+// TestService_Update_InvalidInput_EqAttrStrayValues asserts that Update validates
+// the patch before entering the transaction: an eq_attr condition with stray
+// Values is rejected with KindInvalid (422) without hitting the repo.
+// Symmetry with TestService_Create_InvalidInput_NoRules which validates on the
+// Create path.
+func TestService_Update_InvalidInput_EqAttrStrayValues(t *testing.T) {
+	svc, _ := newDurableTestService(t)
+
+	// Create a valid policy first.
+	p, err := svc.Create(testSvcAdminCtx(), CreateInput{Name: "P", Rules: minimalRules()})
+	require.NoError(t, err)
+
+	invalidRules := []abac.Rule{
+		{
+			ID:     "r1",
+			Name:   "Bad cross-attr",
+			Effect: authz.EffectAllow,
+			Conditions: []abac.Condition{
+				{
+					Source:    abac.SourceSubject,
+					Key:       "sub",
+					Operator:  abac.OpEqualsAttr,
+					RHSSource: abac.SourceResource,
+					RHSKey:    "id",
+					Values:    []string{"stray-value"}, // stray Values on eq_attr: invalid
+				},
+			},
+		},
+	}
+
+	_, err = svc.Update(testSvcAdminCtx(), UpdateInput{
+		ID: p.ID, Name: "BadUpdate", Rules: invalidRules, ExpectedVersion: p.Version,
+	})
+	require.Error(t, err)
+	var ce *errcode.Error
+	require.ErrorAs(t, err, &ce)
+	assert.Equal(t, errcode.KindInvalid, ce.Kind, "Update must reject invalid policy before hitting repo")
+}
+
 func TestService_Update_VersionConflict(t *testing.T) {
 	svc, _ := newDurableTestService(t)
 

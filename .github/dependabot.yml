@@ -12,6 +12,14 @@ updates:
         patterns:
           - "*"
 
+  # CLI release image base (cmd/gocell/Dockerfile). Keeps the pinned distroless
+  # digest current so a digest pin never silently goes stale and misses upstream
+  # security patches (#1088 review F4).
+  - package-ecosystem: "docker"
+    directory: "/cmd/gocell"
+    schedule:
+      interval: "weekly"
+
   - package-ecosystem: "gomod"
     directories:
       - "/"

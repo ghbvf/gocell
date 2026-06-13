@@ -88,9 +88,9 @@ func (c *OutboxRejectCollector) ObserveReject(ctx context.Context, cellID, topic
 // interval. SREs should treat this Gauge as "eligible depth at last reclaim
 // tick", not real-time. A growing retry backlog will not inflate this value —
 // sustained retry backlog must be diagnosed via the relay-side outcome
-// counter outbox_relayed_total{outcome="dead"|"lost"} or the reclaim-budget
-// readyz probe (outbox_consumer_rejected_total is a subscriber-side DLX
-// counter, not a relay-side retry indicator).
+// counter outbox_relayed_total{outcome=~"dead|lost"} (split by kind=event|command
+// since #1674) or the reclaim-budget readyz probe (outbox_consumer_rejected_total is
+// a subscriber-side DLX counter, not a relay-side retry indicator).
 //
 // PR #593 review fix-up (P2#5) aligned the help text and dashboards with
 // the eligibility semantics introduced when Store.CountPending narrowed

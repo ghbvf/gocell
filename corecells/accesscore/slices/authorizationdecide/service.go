@@ -162,10 +162,14 @@ func (s *Service) Authorize(ctx context.Context, subject, resource, action strin
 	// Subject attributes come from the authenticated principal (trusted JWT
 	// claims, FR-012); environment attributes from the injected clock;
 	// resource attributes from the injected ResourceAttributeProvider (PR-9).
+	// resourceID is the resource identity forwarded by RequirePermissionForResource
+	// (#1977 Batch B): it is exposed as resource.id enabling identity-ownership
+	// baseline rules (subject.sub == resource.id). Distinct from PIP resourceAttrs.
 	resolver := attributeResolver{
 		principal:     principal,
 		now:           s.clk.Now(),
 		resourceAttrs: inputs.resourceAttrs,
+		resourceID:    resource,
 	}
 
 	dec := s.evaluate(inputs.policies, resolver, action)

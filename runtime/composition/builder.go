@@ -243,14 +243,19 @@ func (b *Builder) Build(
 		provisional = append(provisional, res.Resources...)
 	}
 
-	// Inject the trusted deployment Topology so bootstrap phase0 validates the
-	// ACTUAL internal-listener service-token store (built by runtimeOptsFn) against
-	// it — closing the gap where a RuntimeOptionsFunc could guard /internal/v1/*
-	// with a store other than the validated SharedDeps.NonceStore (#1410 review
-	// F1). shared.Topology is sealed (caller cannot forge it), and this is appended
-	// to cellOpts — which is applied AFTER runtimeOpts in allOpts below — so a
-	// caller's runtimeOptsFn cannot override the composition-derived topology.
-	cellOpts = append(cellOpts, bootstrap.WithControlPlaneTopology(shared.Topology))
+	// Inject the framework-controlled options that callers cannot override:
+	//   1. WithControlPlaneTopology: lets bootstrap phase0 validate the internal-
+	//      listener service-token store against the sealed adapter Topology (#1410
+	//      review F1). shared.Topology is sealed (caller cannot forge it).
+	//   2. WithDeploymentTopology: lets phase0 seal+validate the codegen-derived
+	//      deployment placement spec into a runtime DeploymentTopology (#1962).
+	//      shared.DeploymentTopology is produced by generatedDeploymentTopology().
+	// Both are appended to cellOpts — applied AFTER runtimeOpts in allOpts below —
+	// so a caller's runtimeOptsFn cannot override them.
+	cellOpts = append(cellOpts,
+		bootstrap.WithControlPlaneTopology(shared.Topology),
+		bootstrap.WithDeploymentTopology(shared.DeploymentTopology),
+	)
 
 	runtimeOpts, err := runtimeOptsFn(cells)
 	if err != nil {

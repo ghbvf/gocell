@@ -40,12 +40,12 @@ import (
 // (no raw db handle — PROJECTION-CHECKPOINT-TX-BOUND-01), so the offset advance
 // commits atomically with the Apply mutation (D5(a)).
 //
-// Implementations: mem (this PR) verified by
-// projectiontest.RunOwnerCheckpointConformance; PG owner-column CAS is deferred
-// to PR-PG (gated on a real production consumer; until then the
-// projection_checkpoints.owner column stays reserved-but-unwritten). Every
-// implementation is forced into conformance by
-// SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01.
+// Implementations: mem verified by projectiontest.RunOwnerCheckpointConformance;
+// PG implemented by adapters/postgres.ProjectionCheckpointStore.AdvanceIfOwner
+// (#1630 PR-PG) using SELECT FOR UPDATE + conditional INSERT ON CONFLICT DO NOTHING
+// / UPDATE with SQL-layer CAS WHERE, verified by RunOwnerCheckpointConformance
+// and the cold-start concurrent integration test. Every implementation is forced
+// into conformance by SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01.
 type OwnerCheckpointStore interface {
 	// LoadOffset returns the last committed offset for the projection, or 0 if
 	// none has been recorded yet (cold start).

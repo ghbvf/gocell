@@ -74,15 +74,42 @@ PR 范围。
 - `SharedDeps.EventBus`（具体 `*InMemoryEventBus`）→ `Publisher outbox.Publisher` +
   `Subscriber outbox.Subscriber`（破坏式 retype，无兼容别名；`SHAREDDEPS-FIELDSET-FROZEN-01`
   golden 同步更新）。3 个 cell 模块 + corebundlestarter 改读新字段。
-- examples `ssobff` / `iotdevice` 不在本 PR 范围（用户决策）：`ssobff` 是与 corebundle 同形的
+- examples `ssobff` / `iotdevice` 当时不在本 PR 范围（用户决策）：`ssobff` 是与 corebundle 同形的
   真 bug（postgres outbox + in-memory publisher），登记 follow-up backlog；`iotdevice` 的 MQTT
-  tee 是有意的设备侧 demo 接线，不动。
+  tee 是有意的设备侧 demo 接线，不动。**`ssobff` gap 已由 #825/#2017 关闭**——见下 §Amendment
+  2026-06-13。`iotdevice` 仍未核（待定其是否用 durable outbox）。
 - MQTT broker 接线延后：`Resolve` switch 留 fail-closed default 扩展点，补 = 加
   `GOCELL_EVENT_BROKER` env + 分支 + 测试（follow-up）。
 
+## Amendment 2026-06-13（#825/#2017）：funnel 扩到第二个 composition root + 两个新原语
+
+本 amendment 关闭上文 §后果记录的 `ssobff` follow-up，并按 ai-robust.md §「ADR amendment 落地
+必查」重评本 ADR 的威胁模型——**#1940 的 funnel 只 path-scope 了 `cmd/corebundle`，这正是 `ssobff`
+（自带 composition root）能重现 #2017 同形 bug 的根因**。修正后威胁面扩展如下：
+
+- **第二个 composition root**：`examples/ssobff` 现经 `eventtransport.Resolve` 接线传输，新增 depguard
+  `ssobff-no-direct-eventbus`（与 `corebundle-no-direct-eventbus` 同 `COREBUNDLE-EVENTBUS-FUNNEL-01`
+  族，路径级 import ban，Medium）。bus funnel 现覆盖两个生产 composition root。
+- **两个新原语（claimer / nonce）**：`ssobff` 同形还有两处单 pod in-memory 原语——idempotency claimer
+  （#825）与 service-token nonce store（同族）。二者现经新共享包 `cellmodules/replaydeps.Resolve`
+  拓扑门控（demo→in-mem，real multi-pod→Redis，缺 Redis fail-closed），`cmd/corebundle` 的同形
+  glue 一并上移到该包（两 root 复用代码+测试，对称本 ADR 抽 `eventtransport` 的范式）。
+- **载体差异（depguard 不可表达 → archtest）**：claimer/nonce 的构造点禁令**不能**用 depguard——
+  `kernel/idempotency`、`runtime/auth` 在两个 root 仍为类型合法 import（`idempotency.Claimer`、
+  `kauth.NonceStore`），whole-package import ban 会误红。故改用调用级 AST 扫描 archtest
+  `REPLAYDEPS-INMEM-FUNNEL-01`（路径限定两 root，含 RED fixture + dot-import 盲区自检，Medium）。
+  bus（depguard import-ban）+ claimer + nonce（archtest call-ban）三 funnel 合起来确保**两个生产
+  composition root 内每个 in-memory 单 pod 原语只经 sealed resolver 可达**。
+- **评级**：三 funnel 均 Medium（CI 静态 + 运行时 fail-fast）。Hard 化（封死 in-mem 构造器）成本高
+  （这些构造器在其它 example / runtime 包有合法 caller，越出本 PR 范围）→ 按 ai-robust.md §审查要求
+  无低成本 Hard 路径，不登记 Hard 化 issue。`PROD-MAIN-WIRING-NOOP-REJECT-01` 对 `InMemoryEventBus`
+  的排除仍正交、不变。
+- **权威语义**：`cellmodules/replaydeps/doc.go`（§INVARIANT REPLAYDEPS-INMEM-FUNNEL-01）+
+  `tools/archtest/replaydeps_inmem_funnel.go`。
+
 ## 参考
 
-- 对称 funnel：`kernel/outbox/mode_resolver.go`（`ResolveEmitter`）
+- 对称 funnel：`kernel/outbox/mode_resolver.go`（`ResolveEmitter`）、`cellmodules/replaydeps`（#825/#2017）
 - 拓扑门先例：`cmd/corebundle/bundle_assembly.go`（`durabilityModeForTopology`）
 - depguard import-ban 范式：`.golangci.yml`（`saga-executor-no-journal-import` /
   `corebundle-no-direct-eventbus`）、ai-robust.md §「路径级 import ban → depguard」

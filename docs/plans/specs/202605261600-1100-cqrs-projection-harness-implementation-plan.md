@@ -214,7 +214,7 @@ CREATE TABLE projection_checkpoints (
 
 - v1 PG adapter 的 `INSERT/UPDATE` 语句**不得包含 owner 列**（避免静默写脏数据）
 - v1.1 启用 pessimistic claim 时 schema 不变，只改 query——`owner` 列已存在，零 migration cost
-- archtest `PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01` Medium：扫 SQL 字符串字面量 reject 含 `owner =` / `owner,` 的 INSERT/UPDATE 写入路径（仅在 v1 范围；v1.1 启用时 archtest 同 PR 删除）
+- archtest `PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01` Medium：扫 SQL 字符串字面量 reject 含 `owner =` / `owner,` 的 INSERT/UPDATE 写入路径（仅在 v1 范围；v1.1 启用时 archtest 同 PR 删除）**— 已在 #1630 Batch 2 (PR-PG) 退役，替换为 OwnerCheckpointStore.AdvanceIfOwner CAS 写路径**
 
 ### Constraint fanout matrix（PR 描述必填）
 
@@ -505,7 +505,7 @@ Dependent contracts (governance scan): 全部 kind:projection contract.yaml (ord
 | PROJECTION-CHECKPOINT-TX-BOUND-01 | PR-01 stub / PR-02 green | Medium | ambient-tx 形态（SaveOffset 经 TxFromContext，禁裸 db.Exec） |
 | PROJECTION-STATE-PHASE-FROZEN-01 | **PR-00 green** | **Medium** | AST const-set + String-arm 锁（5 成员 enum；Go enum 不可 reflect 成集，AST/golden 锁是天花板） |
 | ~~PROJECTION-CONSISTENCY-PARSE-TIME-01~~（否决，gh #960） | ~~PR-05~~ | — | parser-jsonschema 方案被否决；实际交付为 contractgen codegen funnel（生成 `types_gen.go` 编译期 uint overflow，**非 archtest**），见 ADR §Amendment 2026-06-02 |
-| **PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01** | **PR-02** | **Medium** | **SQL 字面量扫 reject owner 写入**（v1 范围；v1.1 启用 claim 时同 PR 删除） |
+| ~~PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01~~ | PR-02 → **retired #1630 Batch 2** | ~~Medium~~ | SQL 字面量扫 reject owner 写入（v1 范围）— **退役于 #1630 PR-PG；替换为 `OwnerCheckpointStore` 接口窄化（type-system Hard：SaveOffset 不暴露 owner 写路径）+ `SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01`（Medium）** |
 
 每个 archtest 必须**同 PR 内**完成「godoc 范围说明 + 反向自检」两件套（AI-robust 章程要求）。
 

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/abac"
+	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -28,10 +29,22 @@ import (
 //     the same scopedtx.Do block as policy loading so both reads share a single
 //     tenant binding (RESOURCE-ATTR-TENANT-SHARING-01). An absent key resolves
 //     found=false — still fail-closed.
+//
+// resourceID is the identity key for the resource being accessed (#1977 Batch B):
+// it is the canonicalized value of the resource-id path parameter forwarded by
+// RequirePermissionForResource, distinct from PIP-provided attributes. Exposed
+// as resource.id (via resolveResource "id" fast-path), it enables the identity-
+// ownership baseline rule (subject.sub == resource.id). An empty resourceID means
+// found=false (resource.id not-found → ownership rule can't fire, fail-closed).
+// All other resource keys continue to resolve from the resourceAttrs PIP map.
 type attributeResolver struct {
 	principal     *auth.Principal     // may be nil → subject attributes fail-closed
 	now           time.Time           // injected clock reading for environment attributes
 	resourceAttrs map[string][]string // pre-fetched resource attrs for this request
+	// resourceID is the resource identity passed to Authorize (the canonicalized
+	// path param from RequirePermissionForResource). Exposed as resource.id.
+	// Distinct from PIP-provided resourceAttrs — no DB lookup required.
+	resourceID string
 }
 
 // resolve returns the value(s) for the attribute identified by (source, key) and
@@ -55,6 +68,13 @@ func (r attributeResolver) resolve(source abac.AttributeSource, key string) (val
 // resolveSubject reads subject attributes from the authenticated principal.
 // Well-known keys are derived from typed principal fields; any other key falls
 // through to the JWT claims snapshot. A nil principal supplies no attributes.
+//
+// The "sub"/"subject" case canonicalizes the principal's Subject via
+// httputil.ParseCanonicalUUID before returning, mirroring the resource.id gate
+// canonicalization in RequirePermissionForResource (so `subject.sub ==
+// resource.id` is robust to UUID case/format differences, matching the
+// pre-#1977 isSelfAccess behavior). Non-UUID subjects (e.g. service accounts
+// with a plain-string Subject) pass through unchanged.
 func (r attributeResolver) resolveSubject(key string) (vals []string, found bool) {
 	if r.principal == nil {
 		return nil, false
@@ -63,6 +83,9 @@ func (r attributeResolver) resolveSubject(key string) (vals []string, found bool
 	case "sub", "subject":
 		if r.principal.Subject == "" {
 			return nil, false
+		}
+		if c, ok := httputil.ParseCanonicalUUID(r.principal.Subject); ok {
+			return []string{c}, true
 		}
 		return []string{r.principal.Subject}, true
 	case "kind":
@@ -100,11 +123,19 @@ func (r attributeResolver) resolveEnvironment(key string) (vals []string, found 
 	}
 }
 
-// resolveResource reads resource attributes from the pre-fetched resourceAttrs
-// map (populated by ResourceAttributeProvider.GetAttributes inside the same
-// tenant-scoped tx block as policy loading — RESOURCE-ATTR-TENANT-SHARING-01).
-// An absent key resolves found=false → fail-closed (condition unsatisfied).
+// resolveResource reads resource attributes. The "id" key is a fast-path that
+// returns the resourceID identity field (set from RequirePermissionForResource's
+// canonicalized path param, #1977 Batch B) — no DB lookup. An empty resourceID
+// means found=false so the ownership condition is unsatisfied (fail-closed).
+// All other keys resolve from the pre-fetched resourceAttrs PIP map
+// (RESOURCE-ATTR-TENANT-SHARING-01). An absent key → found=false (fail-closed).
 func (r attributeResolver) resolveResource(key string) (vals []string, found bool) {
+	if key == "id" {
+		if r.resourceID == "" {
+			return nil, false
+		}
+		return []string{r.resourceID}, true
+	}
 	vals, ok := r.resourceAttrs[key]
 	return vals, ok
 }
