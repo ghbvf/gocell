@@ -3,6 +3,7 @@ package sagaprojection_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -46,8 +47,9 @@ func TestNewSagaJournalSource_NilReader(t *testing.T) {
 	}
 }
 
-// TestSagaProjectionEvent_Payload asserts Payload() round-trips the journal event's
-// raw bytes through the carrier (delivered via Replay).
+// TestSagaProjectionEvent_Payload asserts Payload() wraps the journal event in a
+// SagaEventEnvelope (kind + stepName + original payload) and that the original
+// step bytes are preserved verbatim inside the envelope's payload field.
 func TestSagaProjectionEvent_Payload(t *testing.T) {
 	t.Parallel()
 	factory := newMemJournalFactory()
@@ -87,8 +89,18 @@ func TestSagaProjectionEvent_Payload(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
-	if !bytes.Equal(got, want) {
-		t.Errorf("Payload() = %q, want %q", got, want)
+	var env sagaprojection.SagaEventEnvelope
+	if err := json.Unmarshal(got, &env); err != nil {
+		t.Fatalf("decode envelope: %v (payload=%s)", err, got)
+	}
+	if env.Kind != journal.KindStepStarted.String() {
+		t.Errorf("envelope Kind = %q, want %q", env.Kind, journal.KindStepStarted.String())
+	}
+	if env.StepName != "charge" {
+		t.Errorf("envelope StepName = %q, want %q", env.StepName, "charge")
+	}
+	if !bytes.Equal(env.Payload, want) {
+		t.Errorf("envelope Payload = %s, want %s (original step bytes preserved)", env.Payload, want)
 	}
 }
 

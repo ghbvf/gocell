@@ -57,10 +57,10 @@ func TestParseEventKind_Unknown(t *testing.T) {
 	for _, label := range []string{
 		"",
 		"not_a_kind",
-		"SAGA_SUCCEEDED",      // case-sensitive: labels are lower snake_case
-		"eventkind(0)",        // String() fallback for the zero value
-		"eventkind(99)",       // String() fallback for an out-of-range kind
-		"saga_succeeded ",     // trailing space must not match
+		"SAGA_SUCCEEDED",  // case-sensitive: labels are lower snake_case
+		"eventkind(0)",    // String() fallback for the zero value
+		"eventkind(99)",   // String() fallback for an out-of-range kind
+		"saga_succeeded ", // trailing space must not match
 	} {
 		if got, ok := journal.ParseEventKind(label); ok {
 			t.Errorf("ParseEventKind(%q) = (%d, true), want (_, false) — unknown label must fail-closed", label, got)
