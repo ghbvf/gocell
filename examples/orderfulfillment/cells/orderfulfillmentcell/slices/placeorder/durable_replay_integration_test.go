@@ -367,6 +367,16 @@ func TestDurableReplay_PGProjectionSurvivesRestart(t *testing.T) {
 		t.Errorf("durable_replay: PG read model status = %q, want %q", pgStatus, orderstatusgen.ResponseDataStatusSucceeded)
 	}
 
+	// Capture the durable checkpoint offset that Tailer A persisted — must be > 0
+	// to prove Tailer B can resume from a real position, not a cold-start 0.
+	savedOffset, err := deps1.OwnerStore.LoadOffset(ctx, "orderfulfillmentcell", "order_saga_status")
+	if err != nil {
+		t.Fatalf("durable_replay: LoadOffset (phase 1 checkpoint capture): %v", err)
+	}
+	if savedOffset <= 0 {
+		t.Errorf("durable_replay: checkpoint offset after Tailer A = %d, want > 0", savedOffset)
+	}
+
 	// ── Simulated restart: stop Tailer A + Coordinator ────────────────────────
 	stopTailer1()
 	cancelTailer1()
@@ -418,7 +428,7 @@ func TestDurableReplay_PGProjectionSurvivesRestart(t *testing.T) {
 	//     anything else).
 	// We give Tailer B 3 × FastPoll ticks to re-process any journal events it
 	// might replay, then verify the status is still terminal.
-	time.Sleep(3 * testtime.FastPoll)
+	time.Sleep(3 * testtime.FastPoll) //archtest:allow:test-sleep stability window: lets Tailer B tick a few times before asserting no-regression; no completion channel to wait on
 	pgStatus3, found3, err := pgRM2.Get(ctx, orderID)
 	if err != nil {
 		t.Fatalf("durable_replay: pgRM2.Get (stability check): %v", err)
@@ -429,5 +439,17 @@ func TestDurableReplay_PGProjectionSurvivesRestart(t *testing.T) {
 	if pgStatus3 != orderstatusgen.ResponseDataStatusSucceeded {
 		t.Errorf("durable_replay: status regressed after Tailer B: got %q, want %q",
 			pgStatus3, orderstatusgen.ResponseDataStatusSucceeded)
+	}
+
+	// (d) Verify checkpoint is preserved: Tailer B must resume from the same
+	//     offset Tailer A left, proving it reads the durable PG checkpoint and
+	//     does NOT reset to 0 (which would let fold idempotency hide a full rescan).
+	offset2, err := deps2.OwnerStore.LoadOffset(ctx, "orderfulfillmentcell", "order_saga_status")
+	if err != nil {
+		t.Fatalf("durable_replay: LoadOffset (phase 2 checkpoint verify): %v", err)
+	}
+	if offset2 != savedOffset {
+		t.Errorf("durable_replay: checkpoint offset after Tailer B = %d, want %d (same as Tailer A — checkpoint preserved, not reset to 0)",
+			offset2, savedOffset)
 	}
 }

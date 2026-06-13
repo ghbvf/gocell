@@ -123,7 +123,7 @@ func (s *Service) GetOrderStatus(ctx context.Context, orderID string) (orderstat
 		return orderstatusgen.ResponseDataStatusAccepted, nil
 	}
 
-	s.logger.Info(
+	s.logger.Debug(
 		"orderstatus: status derived",
 		slog.String("order_id", orderID),
 		slog.String("status", string(status)),
@@ -156,7 +156,7 @@ func (s *Service) HandleOrderEvent(ctx context.Context, event cellvocab.Projecti
 	}
 
 	// Extract orderID from EventID: "saga-journal:<globalSeq>@<instanceID>".
-	orderID, err := parseInstanceID(event.EventID())
+	orderID, err := parseSagaInstanceID(event.EventID())
 	if err != nil {
 		return outbox.NewPermanentError(fmt.Errorf(
 			"orderstatus: malformed EventID %q: %w", event.EventID(), err,
@@ -170,11 +170,9 @@ func (s *Service) HandleOrderEvent(ctx context.Context, event cellvocab.Projecti
 	}
 	next, foldErr := projection.FoldStatus(cur, kind)
 	if foldErr != nil {
-		// FoldStatus only fails on unknown kind — already validated above;
-		// treat as permanent to be safe.
-		return outbox.NewPermanentError(fmt.Errorf(
-			"orderstatus: fold status for %s kind=%s: %w", orderID, env.Kind, foldErr,
-		))
+		// FoldStatus only fails on unknown kind — already validated above.
+		// foldErr is already an *outbox.PermanentError; %w preserves the permanent marker.
+		return fmt.Errorf("orderstatus: fold status for %s kind=%s: %w", orderID, env.Kind, foldErr)
 	}
 	if upsertErr := s.readModel.Upsert(ctx, orderID, next); upsertErr != nil {
 		return fmt.Errorf("orderstatus: read model upsert for %s: %w", orderID, upsertErr)
@@ -189,10 +187,13 @@ func (s *Service) HandleOrderEvent(ctx context.Context, event cellvocab.Projecti
 	return nil
 }
 
-// parseInstanceID extracts the instanceID from an EventID formatted as
-// "saga-journal:<globalSeq>@<instanceID>". Returns an error if the format is
-// unexpected.
-func parseInstanceID(eventID string) (string, error) {
+// parseSagaInstanceID extracts the saga instanceID from an EventID formatted as
+// "saga-journal:<globalSeq>@<instanceID>" (see sagaprojection.SagaJournalEventIDPrefix).
+// In orderfulfillment the instanceID equals the orderID (single saga definition).
+// Uses strings.LastIndex defensively: a UUID instanceID contains no "@", but
+// LastIndex tolerates future opaque instanceIDs that might embed "@" internally.
+// Returns an error if the format is unexpected (missing "@" or empty instanceID suffix).
+func parseSagaInstanceID(eventID string) (string, error) {
 	atIdx := strings.LastIndex(eventID, "@")
 	if atIdx < 0 || atIdx == len(eventID)-1 {
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,

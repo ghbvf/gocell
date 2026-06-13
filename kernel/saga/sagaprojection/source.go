@@ -87,6 +87,14 @@ const batchSize = 256
 // convention, not a wire-contract lock. Post-GA evolution requires a version bump.
 const SagaJournalStream = "saga.journal.v1"
 
+// SagaJournalEventIDPrefix is the prefix of every EventID produced by
+// sagaProjectionEvent.EventID(). Consumers that parse the instanceID suffix
+// (after the "@" separator) may match against this prefix to detect saga-journal
+// events without hard-coding the full format string.
+//
+// Full format: "saga-journal:<globalSeq>@<instanceID>" — STABLE pre-v1.0.
+const SagaJournalEventIDPrefix = "saga-journal:"
+
 // sagaProjectionEvent is the unexported carrier that adapts one journal.GlobalEvent
 // to the cellvocab.ProjectionEvent interface.
 //
@@ -104,9 +112,13 @@ type sagaProjectionEvent struct {
 // events with the same GlobalSeq on different journals (impossible in practice but
 // asserted by the conformance suite) are distinct.
 //
-// Format: "saga-journal:<globalSeq>@<instanceID>".
+// Format: SagaJournalEventIDPrefix + "<globalSeq>@<instanceID>", i.e.
+// "saga-journal:<globalSeq>@<instanceID>" — STABLE pre-v1.0. Consumers that
+// parse the "@<instanceID>" suffix (e.g. to recover the saga instanceID) must
+// use strings.LastIndex(eventID, "@") so that a future opaque instanceID
+// containing "@" is still handled correctly.
 func (e *sagaProjectionEvent) EventID() string {
-	return fmt.Sprintf("saga-journal:%d@%s", e.globalSeq, e.instanceID)
+	return fmt.Sprintf(SagaJournalEventIDPrefix+"%d@%s", e.globalSeq, e.instanceID)
 }
 
 // Payload returns the marshaled [SagaEventEnvelope] for this event: a JSON object

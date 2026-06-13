@@ -80,7 +80,7 @@ type fakeEvent struct {
 func (f fakeEvent) EventID() string                                    { return f.eventID }
 func (f fakeEvent) Payload() []byte                                    { return f.payload }
 func (f fakeEvent) OccurredAt() time.Time                              { return time.Now() }
-func (f fakeEvent) Stream() string                                     { return "saga.journal.v1" }
+func (f fakeEvent) Stream() string                                     { return sagaprojection.SagaJournalStream }
 func (f fakeEvent) RestoreContext(ctx context.Context) context.Context { return ctx }
 
 // TestGetOrderStatus_NotFound verifies 404 when the order does not exist.

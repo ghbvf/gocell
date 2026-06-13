@@ -34,19 +34,22 @@ func TestFoldStatus_AllKinds(t *testing.T) {
 		{journal.KindSagaCompensationFailed, orderstatusgen.ResponseDataStatusFailed},
 	}
 
-	// Anti-vacuity: all valid kinds span from KindStepStarted (1) to
-	// KindSagaCompensationFailed (11). Scan only that range to avoid the
-	// O(255) loop. If a new kind is added beyond 11 the table will still fail
-	// because len(tests) won't match.
-	const maxKind = journal.EventKind(11) // KindSagaCompensationFailed
+	// Anti-vacuity: enumerate all valid kinds from KindStepStarted through
+	// KindSagaCompensationFailed using the named sentinel. If a new kind is
+	// added after KindSagaCompensationFailed the loop auto-expands (k.Valid()
+	// gates the count) and len(tests) diverges — the fatal below fires.
 	validCount := 0
-	for k := journal.EventKind(1); k <= maxKind; k++ {
+	for k := journal.KindStepStarted; k <= journal.KindSagaCompensationFailed; k++ {
 		if k.Valid() {
 			validCount++
 		}
 	}
+	if validCount < 11 {
+		t.Fatalf("anti-vacuity: expected at least 11 valid EventKinds, got %d; was the journal enum truncated?", validCount)
+	}
 	if len(tests) != validCount {
-		t.Fatalf("fold test table has %d entries but journal has %d valid kinds (1..%d); update the test table", len(tests), validCount, maxKind)
+		t.Fatalf("fold test table has %d entries but journal has %d valid kinds (%s..%s); update the test table",
+			len(tests), validCount, journal.KindStepStarted, journal.KindSagaCompensationFailed)
 	}
 
 	for _, tc := range tests {

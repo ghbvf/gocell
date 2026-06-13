@@ -51,4 +51,25 @@
 // a depguard import-ban cannot express it because runtime/distlock is legitimately
 // imported for its Locker type). See .claude/rules/gocell/eventbus.md §"复用层选型"
 // — this is the 4th sealed single-pod primitive alongside bus / claimer / nonce.
+//
+// # Blind spots (upstream/downstream strength split)
+//
+// Per ai-robust.md "Funnel 类约束必须分别说明上游和下游强度":
+//
+// Downstream (AST scan, what is actually enforced): the archtest scans only for
+// direct calls to distlock.NewInProcessDriver in wiring-layer packages
+// (cmd/*, cellmodules/*, examples/*). This is the genuinely new single-pod
+// primitive introduced by sagaprojectiondeps and is the correct enforcement target.
+//
+// Upstream (empirical absence, not scanned): journal.NewMemJournal and
+// projection.NewMemOwnerCheckpointStore are also single-pod primitives that this
+// package's demo branch constructs, but they are NOT covered by the AST scan.
+// The reason: both are test-ubiquitous across the entire repo — banning their
+// direct construction globally is infeasible and would break hundreds of unit
+// tests. The resolver is their sole sanctioned WIRING site in production roots;
+// their misuse in a composition root is the pre-existing general "don't bypass
+// the resolver" concern, not a new risk introduced here. The downstream AST scan
+// (NewInProcessDriver) covers the genuinely novel, production-only primitive; the
+// upstream absence of a scan for MemJournal/MemOwnerCheckpointStore is a known
+// accepted blind spot documented here rather than silently tolerated.
 package sagaprojectiondeps
