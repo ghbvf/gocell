@@ -129,12 +129,22 @@ func (m *reconcileMockCmdable) readEpoch(epochKey string) int64 {
 // integration-tagged file can share it without a duplicate declaration.
 const reconcileTestLeaseTTL = 30 * time.Second
 
+// mustLease builds the shared test LeaseTTL from the package-level literal const
+// (electors now take a validated reconcile.LeaseTTL, not a raw time.Duration —
+// sub-ms truncation is foreclosed at NewLeaseTTL, see kernel/reconcile/leasettl.go).
+func mustLease(t *testing.T) reconcile.LeaseTTL {
+	t.Helper()
+	l, err := reconcile.NewLeaseTTL(reconcileTestLeaseTTL)
+	require.NoError(t, err)
+	return l
+}
+
 // mustElector builds a mock-backed elector. holderID is minted internally (each
 // call → a distinct UUID), so two electors over the same mock contend as distinct
 // holders without a caller-supplied label.
 func mustElector(t *testing.T, rdb cmdable) *RedisReconcileElector {
 	t.Helper()
-	e, err := newReconcileElectorFromCmdable(rdb, "reconcile", reconcileTestLeaseTTL, clock.Real())
+	e, err := newReconcileElectorFromCmdable(rdb, "reconcile", mustLease(t), clock.Real())
 	require.NoError(t, err)
 	return e
 }
@@ -153,24 +163,28 @@ func TestReconcileElector_Conformance(t *testing.T) {
 }
 
 // TestReconcileElector_ConstructorValidation covers the constructor guard
-// branches: nil client, nil cmdable, invalid namespace, and non-positive lease
-// duration each fail-fast before an elector is built.
+// branches: nil client, nil cmdable, invalid namespace, and the unconstructed
+// zero-value lease each fail-fast before an elector is built. (Sub-ms lease
+// rejection lives upstream in NewLeaseTTL — TestNewLeaseTTL — because the elector
+// no longer accepts a raw time.Duration; the residual zero-value LeaseTTL{} is the
+// only invalid lease a caller can still pass here.)
 func TestReconcileElector_ConstructorValidation(t *testing.T) {
 	t.Run("nil_client", func(t *testing.T) {
-		_, err := NewRedisReconcileElector(nil, "reconcile", reconcileTestLeaseTTL, clock.Real())
+		_, err := NewRedisReconcileElector(nil, "reconcile", mustLease(t), clock.Real())
 		require.Error(t, err)
 	})
 	t.Run("nil_cmdable", func(t *testing.T) {
-		_, err := newReconcileElectorFromCmdable(nil, "reconcile", reconcileTestLeaseTTL, clock.Real())
+		_, err := newReconcileElectorFromCmdable(nil, "reconcile", mustLease(t), clock.Real())
 		require.Error(t, err)
 	})
 	t.Run("invalid_namespace", func(t *testing.T) {
 		// uppercase is rejected by KeyNamespace.Validate
-		_, err := newReconcileElectorFromCmdable(newReconcileMock(), "BadNS", reconcileTestLeaseTTL, clock.Real())
+		_, err := newReconcileElectorFromCmdable(newReconcileMock(), "BadNS", mustLease(t), clock.Real())
 		require.Error(t, err)
 	})
-	t.Run("nonpositive_lease", func(t *testing.T) {
-		_, err := newReconcileElectorFromCmdable(newReconcileMock(), "reconcile", 0, clock.Real())
+	t.Run("zero_value_lease", func(t *testing.T) {
+		// the unconstructed LeaseTTL{} (ms==0) must fail-fast, not yield a 0ms lease
+		_, err := newReconcileElectorFromCmdable(newReconcileMock(), "reconcile", reconcile.LeaseTTL{}, clock.Real())
 		require.Error(t, err)
 	})
 }

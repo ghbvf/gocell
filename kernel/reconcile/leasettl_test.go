@@ -7,6 +7,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Boundary lease windows for the NewLeaseTTL table. TEST-TIME-LITERAL-01: test-time
+// time.Duration literals live in a package-level const, not inline at the call site.
+const (
+	leasettlOneNano  = time.Nanosecond                     // < 1ms → rejected
+	leasettlSub1ms   = time.Millisecond - time.Microsecond // 999µs, < 1ms → rejected
+	leasettlNeg      = -time.Second                        // negative → rejected
+	leasettlExact1ms = time.Millisecond                    // == 1ms → ms=1
+	leasettlOver1ms  = 1500 * time.Microsecond             // 1.5ms → floors to ms=1
+	leasettl30s      = 30 * time.Second                    // ms=30000
+	leasettl1h       = time.Hour                           // ms=3_600_000
+)
+
 // TestNewLeaseTTL covers the lease-window constructor's fail-closed boundary: any
 // sub-millisecond duration — which Milliseconds() would truncate to 0, yielding an
 // instantly-expiring lease and multiple live leaders — is rejected, and a valid
@@ -20,14 +32,14 @@ func TestNewLeaseTTL(t *testing.T) {
 		wantErr bool
 		wantMS  int64 // only checked when !wantErr
 	}{
-		{"one_nanosecond_rejected", time.Nanosecond, true, 0},
-		{"sub_millisecond_999us_rejected", 999 * time.Microsecond, true, 0},
+		{"one_nanosecond_rejected", leasettlOneNano, true, 0},
+		{"sub_millisecond_999us_rejected", leasettlSub1ms, true, 0},
 		{"zero_rejected", 0, true, 0},
-		{"negative_rejected", -time.Second, true, 0},
-		{"exactly_1ms_ok", time.Millisecond, false, 1},
-		{"1500us_floors_to_1ms", 1500 * time.Microsecond, false, 1},
-		{"30s_ok", 30 * time.Second, false, 30_000},
-		{"one_hour_ok", time.Hour, false, 3_600_000},
+		{"negative_rejected", leasettlNeg, true, 0},
+		{"exactly_1ms_ok", leasettlExact1ms, false, 1},
+		{"1500us_floors_to_1ms", leasettlOver1ms, false, 1},
+		{"30s_ok", leasettl30s, false, 30_000},
+		{"one_hour_ok", leasettl1h, false, 3_600_000},
 	}
 	for _, tt := range tests {
 		tt := tt

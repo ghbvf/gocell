@@ -4,7 +4,6 @@ package postgres
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -12,9 +11,9 @@ import (
 	"github.com/ghbvf/gocell/kernel/reconcile/reconciletest"
 )
 
-// reconcilePGTestLeaseTTL is the lease duration for the PG reconcile elector
-// integration tests (TEST-TIME-LITERAL-01: literal lives in a package-level const).
-const reconcilePGTestLeaseTTL = 30 * time.Second
+// reconcilePGTestLeaseTTL + mustPGLease are declared in the untagged
+// reconcile_leader_test.go so this integration-tagged file shares them without a
+// duplicate declaration (mirrors the redis adapter's reconcileTestLeaseTTL).
 
 // TestIntegration_ReconcileElectorConformance runs the cross-implementation
 // LeaderElector + fencing conformance suites against a real PostgreSQL
@@ -26,7 +25,7 @@ func TestIntegration_ReconcileElectorConformance(t *testing.T) {
 	pool := migratedPool(t)
 
 	factory := func(string) reconcile.LeaderElector {
-		e, err := NewReconcileElector(pool, reconcilePGTestLeaseTTL)
+		e, err := NewReconcileElector(pool, mustPGLease(t))
 		require.NoError(t, err)
 		return e
 	}
