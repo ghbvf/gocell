@@ -70,12 +70,12 @@ errcode.RegisteredPrefixes() []PrefixOwner
 |---------|------|------|
 | code-bearing helper（New/Wrap/WrapInfra/WritePublic/WrapOrInfra）的 code 参数 — 字符串字面量 (`BasicLit`) | **下游 Hard** | EvaluateConstString 类型感知，别名无效；codeArgIndex 按 helper 取（0/1/3） |
 | 同上 code 参数 — const selector（`errcode.ErrAuthForbidden` 等）| **下游 Hard** | EvaluateConstString 跨包 const 求值 |
-| 导出 package-scope `Code` sentinel 声明（Target B，含 `pkg/errcode` 自身） | **下游 Hard** | reflect + string BasicLit 识别；`pkg/errcode` 只跑 Target B |
-| 同上 code 参数 — 直接 runtime 组装（`errcode.Code(non-const)` / `"ERR_"+x`）| **下游 Hard（hard fail）** | 直接拒绝，要求使用命名 sentinel |
-| 通过 forwarding helper 传递的非 const `Code` 参数/变量 | **Medium residual（已知盲区）** | 变量/参数引用在 mint site 被跳过；蓄意构造一个转发 helper 可绕过，但不是意外漂移路径；data-flow tracing 可关闭但会对 parse/compare-side 产生 false positive；已在 PR-body backlog 中追踪 |
+| 导出 package-scope `Code` sentinel 声明（Target B，含 `pkg/errcode` 自身） | **下游 Hard** | `classifyCodeExpr` + EvaluateConstString typed const eval（含 const SelectorExpr/Ident，**非仅 BasicLit**，#1508）；`isErrcodeCodeSentinel` 类型门排除同名非-Code sentinel（`var ErrX = errcode.New(...)` 是 `*errcode.Error`、`errors.New(...)` 是 `error`）；`pkg/errcode` 只跑 Target B |
+| 同上 code 参数 / sentinel 值 — 直接 runtime 组装（`errcode.Code(non-const)` / `"ERR_"+x`）| **下游 Hard（hard fail）** | 直接拒绝，要求使用命名 sentinel；callsite 与 sentinel 经同一 `classifyCodeExpr` 统一判定 |
+| bare 非 const `Code` 变量/参数引用（forwarding-launder，#1508） | **Medium residual（唯一永久天花板）** | `classifyCodeExpr → codeArgSkip`：bare 引用在 mint site / sentinel 值位被跳过；封死需 data-flow / taint 追踪（archtest 不做），且会对合法 parse/compare-side `errcode.Code(resp.Code)` 转换产生 false positive。仅蓄意构造可触发，非意外漂移 |
 | 上游 golden byte-lock | **Hard（review-gated `-update` 天花板）** | 与仓库所有 golden 一致；adversarial 绕过需要同 PR 改 golden 并通过 code review |
 
-**Medium residual 意义**：`ERRCODE-PREFIX-OWNERSHIP-01` 是 archtest-bound，不是 type-system seal，所以上游 Hard 形态不可达（无法在 Go 类型系统层面强制所有 `errcode.Code` 字面量必须来自注册集）。该设计与 `SPAN-SETATTR-HOLDER-SEAL`(#851) / `HEALTHZ-HOLDER-SEAL`(#893) 的 Go 永久天花板形态同类。forwarding-helper 绕过路径是故意构造才能触发的（不是 AI co-author 意外产生的 drift），为可接受的 residual gap。
+**Medium residual 意义（#1508 评估落地）**：`ERRCODE-PREFIX-OWNERSHIP-01` 是 archtest-bound，不是 type-system seal，所以全规则档位为 **Medium**、上游 Hard 形态不可达——唯一的 Hard 路径是把 `errcode.Code` 密封成闭构造类型，但 `Code` 是 wire string（JSON 序列化 / 响应解析 / 测试比对），密封会从根本破坏 parse 侧（见 §备选二/三），故否决。该设计与 `SPAN-SETATTR-HOLDER-SEAL`(#851) / `HEALTHZ-HOLDER-SEAL`(#893) / outbox principal-write(#1282) 的 Go 永久天花板形态同类。#1508 评估结论：原列的两个残差中，**non-literal sentinel 已收口**（Target B 经 EvaluateConstString 解析 const SelectorExpr/Ident，见 `TestErrcodePrefixOwnership01_SentinelConstEval`）；**唯一残余**是 forwarding-launder 的 bare 非 const 引用——故意构造才能触发（不是 AI co-author 意外 drift），为可接受的永久 residual gap。
 
 ## 威胁矩阵
 
@@ -83,8 +83,9 @@ errcode.RegisteredPrefixes() []PrefixOwner
 |------|------|---------|
 | 平台 cell 使用未注册前缀 | 字面量 / const selector mint（New/Wrap/WrapInfra/WritePublic/WrapOrInfra 全部 code-bearing 入口） | ✅ Hard（A 路径：literal + const-eval；codeGatedCallees 覆盖每个收 `errcode.Code` 的 helper） |
 | 平台 cell 使用未注册前缀 | 导出 Code sentinel（含 `pkg/errcode` 自身声明的 175 个 sentinel） | ✅ Hard（B 路径：sentinel scan；`pkg/errcode` 自身只跑 Target B，不再整包 skip） |
+| 未注册 code 经 const 引用洗入 sentinel | `var ErrX errcode.Code = somepkg.UnregisteredConst`（const SelectorExpr/Ident，非 BasicLit） | ✅ Hard（B 路径：`classifyCodeExpr` + EvaluateConstString 解析 const 值；**#1508 收口原 non-literal sentinel 残差**） |
 | 外部 cell 与平台前缀碰撞 | `RegisterPrefix` 同前缀异 owner，或不同前缀但跨 owner 重叠（claimed code-set 相交） | ✅ 运行时 panic fail-fast（init 期） |
-| 蓄意通过 forwarding helper 绕过 | non-const Code var 传入 mint | ⚠️ Medium residual（已知；需 data-flow tracing 关闭） |
+| 蓄意经 forwarding helper / bare 非 const 引用绕过 | bare non-const Code var/param 传入 mint 或作 sentinel 值 | ⚠️ Medium residual（唯一永久天花板，#1508；需 data-flow tracing 关闭，会误伤 parse/compare-side，故 won't-do） |
 | 恶意修改 golden | golden byte-lock + review | ✅ review-gated；PR 内单侧漂移 CI 红 |
 | 平台 golden 漂移（增删 prefix） | golden diff 输出 CI 红 | ✅ Hard（`ERRCODE_PREFIX_GOLDEN_UPDATE=1` review gate） |
 | AllCallExpr code arg（safe mapper function 返回值）| 当前无此 callsite；future 需 sentinel 或显式 allowlist | ⚠️ 已记录盲区 #3，0 callsite 今日无 false-positive |
@@ -112,7 +113,9 @@ errcode.RegisteredPrefixes() []PrefixOwner
 ## 后续演进
 
 1. **外部 Cell 接入**（未来 epic #1081 bundle 触发）：外部 cell module 在 `init()` 调用 `errcode.RegisterPrefix`；scaffold / starter 模板（`examples/corebundlestarter`）已包含 `RegisterPrefix` 示例作为参考模式。仓库今日无外部消费方（CLAUDE.md），注册表 API 是地基，不是已有外部用户的 production path。
-2. **forwarding-helper Medium residual 关闭**：若未来出现通过 forwarding helper 传递未注册 code 的需求，考虑在 archtest 引入 data-flow 追踪（go/ssa）将 forwarding path 也纳入扫描；或要求所有 non-const `errcode.Code(x)` 转换只在 parse/compare site 发生，ban 掉 mint site 上的全部 non-literal 形态（需评估 false-positive 影响）。
+2. **残差评估落地（#1508）**：原列两个 Medium 残差经 #1508 评估，结论分流——
+   - **non-literal sentinel 已收口**：Target B 原仅匹配 `*ast.BasicLit`，静默跳过 `var ErrX errcode.Code = somepkg.Const`（const SelectorExpr/Ident）。框架早具备 `EvaluateConstString`（跨包 const 求值，Target A 已用），Target B 只是从未接入——属扫描器完整性缺口、非 Go 语言天花板。现经 `classifyCodeExpr` 统一接入 typed const eval 收口（红测 `TestErrcodePrefixOwnership01_SentinelConstEval`），并加 `isErrcodeCodeSentinel` 类型门排除同名非-Code sentinel。
+   - **forwarding-launder 维持 won't-do（永久天花板）**：bare 非 const `Code` 变量/参数引用封死需前向 data-flow / taint（archtest 不做），且会误伤合法 parse/compare-side `errcode.Code(resp.Code)` 转换。另一 Hard 路径——把 `errcode.Code` 密封成闭构造类型——架构上错误：`Code` 是 wire string，密封破坏 parse 侧（见 §备选二/三）。故确认为可接受的永久 residual，#1508 即其追踪载体（评估结论落地后可 close）。
 
 ## 后果
 

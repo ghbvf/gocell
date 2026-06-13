@@ -820,24 +820,47 @@ func TestDetailsSealedFieldFrozen01_ScannerFires(t *testing.T) {
 // exported package-scope Code sentinel must have a registered prefix entry
 // in pkg/errcode.RegisteredPrefixes().
 //
-// Two scan targets:
+// Two scan targets share one classifier, classifyCodeExpr (const /
+// runtime-assembled / skip):
 //
 //	A. Mint callsites: every code-bearing helper in codeGatedCallees
 //	   (errcode.New/Wrap/WrapInfra, httputil.WritePublic, ctxcancel.WrapOrInfra)
-//	   — extract the code arg at the helper's codeArgIndex. EvaluateConstString
-//	   is used for typed resolution.
-//	   Non-const code args (e.g. errcode.Code("ERR_"+x)) are a HARD FAIL: this
-//	   closes the closed-set escape hatch. Parse/compare-side errcode.Code(x)
-//	   conversions are NOT mint sites and are untouched.
-//	B. Sentinel decls: var ErrFoo errcode.Code = "ERR_..." string BasicLit
-//	   at package scope.
+//	   — extract the code arg at the helper's codeArgIndex.
+//	B. Sentinel decls: every exported errcode.Code-typed Err* sentinel at
+//	   package scope. In typed mode the declared type is confirmed via go/types
+//	   (isErrcodeCodeSentinel), which excludes Err*-named non-Code sentinels
+//	   (var ErrX = errcode.New(...) is *errcode.Error; errors.New(...) is error).
+//
+// Both targets resolve the value with EvaluateConstString — including const
+// SelectorExpr / Ident forms (e.g. var ErrX errcode.Code = somepkg.Const), not
+// just string BasicLits. A const value whose prefix is unregistered is reported;
+// a runtime-assembled value (errcode.Code("ERR_"+x) or other type-conversion /
+// concatenation) is a HARD FAIL closing the closed-set escape hatch.
+// Parse/compare-side errcode.Code(x) conversions are NOT mint sites or sentinels
+// and are untouched.
+//
+// §Residual (rating: Medium — gh #1508). This rule is archtest-bound, not a
+// type-system seal: errcode.Code is a wire string (JSON-serialized, parsed from
+// responses, compared in tests), so sealing it into a closed-constructor type
+// would break the parse side and is rejected (see ADR §备选). Hard is therefore
+// unreachable; the whole rule is Medium. After the gh #1508 fix the SOLE residual
+// is the forwarding-launder gap: a bare non-const Code variable/parameter
+// reference (classifyCodeExpr → codeArgSkip) at a mint site or sentinel value is
+// skipped, because resolving it needs data-flow / taint tracing that archtest
+// does not do and that would false-positive on legitimate parse/compare-side
+// conversions. Only deliberate construction triggers it, not accidental drift.
+// This is the same permanent Go-language ceiling family as
+// SPAN-SETATTR-HOLDER-SEAL (#851) / HEALTHZ-HOLDER-SEAL (#893) / outbox
+// principal-write (#1282). The earlier "non-literal sentinel" residual is CLOSED:
+// Target B now resolves const SelectorExpr/Ident values via type info (see
+// TestErrcodePrefixOwnership01_SentinelConstEval).
 //
 // After scanning, a canary coverage anchor asserts that ERR_AUTH_FORBIDDEN and
 // ERR_INTERNAL were actually observed; if absent the scan loaded nothing and
 // a false-green from an empty scope is rejected.
 //
 // ref: docs/architecture/202606031200-1091-adr-errcode-prefix-ownership-registry.md
-// Issue #1091.
+// Issue #1091, #1508.
 func TestErrcodePrefixOwnership01(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
