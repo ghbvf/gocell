@@ -2,9 +2,12 @@
 
 package main
 
-// TestABACPDPGatesAccesscore is the PR-10c (#1348) acceptance test: the wired ABAC
-// PDP must gate real HTTP traffic on accesscore policy / user / role endpoints, and
-// the SelfOr-migrated endpoints must self-exempt a caller reading its OWN resource.
+// TestABACPDPGatesAccesscore is the accesscore ABAC PDP acceptance test: the wired
+// PDP must gate real HTTP traffic on accesscore policy / user / role endpoints.
+// Self-access is a PDP OWNERSHIP DECISION (#1977): the baseline ownership rule
+// subject.sub == resource.id grants a non-admin reading its OWN user/roles — there
+// is NO Go self-exemption short-circuit (PR-10c's RequirePermissionOrSelf was
+// replaced by RequirePermissionForResource, which forwards the resource id to the PDP).
 //
 // Cases (admin/non-admin tokens + the regular user's own id come from the shared
 // provisionPDPAdminAndUser sequence):
@@ -12,12 +15,12 @@ package main
 //   - admin  POST /api/v1/access/policies        → NOT 401/403 (baseline allow, policy:write)
 //   - non-admin GET /api/v1/access/policies      → 403 + ERR_AUTH_FORBIDDEN + "insufficient
 //     permissions" (proves the deny is a PDP decision, not a fail-closed no-Authorizer gap)
-//   - non-admin GET /api/v1/access/users/{self}  → 200 (request-shape self-exemption; the
-//     PDP is never consulted — the headline PR-10c behavior)
-//   - non-admin GET /api/v1/access/users/{other} → 403 PDP-deny (no user:read)
+//   - non-admin GET /api/v1/access/users/{self}  → 200 (PDP ownership rule subject.sub ==
+//     resource.id; the only way a non-admin reaches 200 here, so it proves the rule fired)
+//   - non-admin GET /api/v1/access/users/{other} → 403 PDP-deny (not owner, no user:read)
 //   - admin     GET /api/v1/access/users/{user}  → 200 (baseline allow, user:read)
-//   - non-admin GET /api/v1/access/roles/{self}  → 200 (self-exemption)
-//   - non-admin GET /api/v1/access/roles/{other} → 403 PDP-deny (no role:read)
+//   - non-admin GET /api/v1/access/roles/{self}  → 200 (PDP ownership rule)
+//   - non-admin GET /api/v1/access/roles/{other} → 403 PDP-deny (not owner, no role:read)
 
 import (
 	"bytes"
@@ -60,12 +63,13 @@ func TestABACPDPGatesAccesscore(t *testing.T) {
 			"insufficient permissions", "authorization policy engine not wired", body)
 	})
 
-	// --- identitymanage: self-exemption is the headline PR-10c behavior ---
+	// --- identitymanage: self-access via the PDP ownership rule (#1977) ---
 
-	t.Run("non_admin_get_own_user_200_self_exempt", func(t *testing.T) {
+	t.Run("non_admin_get_own_user_200_pdp_ownership", func(t *testing.T) {
 		resp, body := pdpAccessReq(t, base, http.MethodGet, "/api/v1/access/users/"+userID, userToken, nil)
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
-			"non-admin GET own user (id==subject) must be 200 (self-exemption, PDP not consulted); body=%s", body)
+			"non-admin GET own user (subject==resource.id) must be 200 via the PDP ownership rule "+
+				"(a non-admin has no baseline admin grant, so 200 here proves the ownership rule fired); body=%s", body)
 	})
 
 	t.Run("non_admin_get_other_user_403_pdp_deny", func(t *testing.T) {
@@ -83,12 +87,12 @@ func TestABACPDPGatesAccesscore(t *testing.T) {
 			"admin GET a user must be 200 (baseline allow, user:read); body=%s", body)
 	})
 
-	// --- rbaccheck: self-exemption + PDP deny for another user's roles ---
+	// --- rbaccheck: self-access via PDP ownership + PDP deny for another user's roles ---
 
-	t.Run("non_admin_get_own_roles_200_self_exempt", func(t *testing.T) {
+	t.Run("non_admin_get_own_roles_200_pdp_ownership", func(t *testing.T) {
 		resp, body := pdpAccessReq(t, base, http.MethodGet, "/api/v1/access/roles/"+userID, userToken, nil)
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
-			"non-admin GET own roles (userID==subject) must be 200 (self-exemption); body=%s", body)
+			"non-admin GET own roles (subject==resource.id) must be 200 via the PDP ownership rule; body=%s", body)
 	})
 
 	t.Run("non_admin_get_other_roles_403_pdp_deny", func(t *testing.T) {

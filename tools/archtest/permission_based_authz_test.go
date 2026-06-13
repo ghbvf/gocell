@@ -32,7 +32,8 @@
 //	  alias-safe (ResolvePackageRef resolves the import path, not the local name).
 //	上游 — allowlist convergence COMPLETE: PR-10a auditquery, PR-10b configcore,
 //	  PR-10c accesscore all migrated to auth.RequirePermission /
-//	  auth.RequirePermissionOrSelf; the allowlist is empty.
+//	  auth.RequirePermissionForResource (#1977 replaced RequirePermissionOrSelf
+//	  when self/ownership moved into the PDP); the allowlist is empty.
 //	Hard-ification tracker: permission-gate codegen funnel → gh #PR-13.
 //
 // # Allowlist (empty)
@@ -85,7 +86,8 @@ var permissionBasedAuthzRoleGateSelectors = map[string]struct{}{
 //
 // EMPTY as of PR-10c (#1348): auditquery (PR-10a), the 5 configcore slices
 // (PR-10b) and now the 3 accesscore slices (PR-10c) are all migrated to
-// auth.RequirePermission / auth.RequirePermissionOrSelf. With an empty allowlist
+// auth.RequirePermission / auth.RequirePermissionForResource (#1977 replaced
+// RequirePermissionOrSelf with the PDP ownership gate). With an empty allowlist
 // the rule is a ZERO-EXCEPTION scan: ANY auth.AnyRole/SelfOr/RequireAnyRole gate
 // in a corecells business handler is a violation. The exact-set freeze survives the
 // drain as TestPermissionBasedAuthzAllowlist_FrozenEmpty — now frozen at ∅ and run at
