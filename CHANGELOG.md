@@ -121,6 +121,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`gocell version` 命令**（#1088 M7）：新增 `gocell version` 子命令，输出三个字段：
+  `cli_version`（当前 CLI 版本）、`framework_version`（构建时链接的 framework 版本，与
+  `cli_version` 同 tag）、`compatible_framework_range`（运行时兼容的 framework 版本范围，
+  从单一注入 version 常量派生，非手工维护）。CLI 与 framework 由 release 流水线原子同 tag
+  发布。v0.x 阶段 `compatible_framework_range` 为 best-effort intent；v1.0 GA 后升级为
+  SemVer hard guarantee。详见 `docs/guides/cli-version-compatibility.md`。
+- **Go SDK 公开符号 + Authoring Schema SemVer 政策 ADR**（#1088）：新增 ADR
+  `docs/architecture/202606131200-1088-adr-go-api-authoring-schema-semver-policy.md`，
+  定义「轴 A」（Go exported 符号 + 4 个 authoring schema：`cell.yaml` / `contract.yaml` /
+  `slice.yaml` / `assembly.yaml`）的版本政策：v0.x = intent-level SemVer（breaking 须
+  PR 说明 + `[breaking-api]` CHANGELOG 标注）；v1.0 GA 后 = hard guarantee（配合 CI 门禁）。
+  本 ADR 独立于 wire ADR（轴 B 保持 Pre-GA 窗口不变）。
 - `pkg/httputil.WriteErrorWithStatus(ctx, w, status, ecErr)` — pin wire status to typed envelope identity, share 4xx/5xx redaction policy with `WriteError`.
 - `pkg/httputil.AppendCorrelationAttrs(ctx, attrs) []any` — exported correlation key set for generated handlers (request_id / trace_id / span_id).
 - kernel/governance CH-06 — typed-response-set bijection between contract.yaml `responses[]` and generated `XxxResponseObject` struct set.

@@ -17,6 +17,23 @@
 
   The framework itself is a public module; `go get github.com/ghbvf/gocell@v0.1.0` works without GOPRIVATE. #1843 adds per-module release tags for every **library** satellite (`adapters/*`, `corecells`, `cellmodules`; `tools` is published for toolchain consumers such as external `archtest` users, not business Cells), synchronized to the same `vX.Y.Z` as the root — so `go get github.com/ghbvf/gocell/adapters/postgres@vX.Y.Z` resolves (see §6). These satellite tags exist **from the first stable release that ships #1843 onward** (the root-only `v0.1.0` predates it and has no satellite tags). `go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` is still **not** available — `cmd/gocell` is a `go install` binary, and `go install pkg@version` is rejected outright when the target module's `go.mod` carries the local `replace` directive it needs for monorepo development. #1843 deliberately excludes the `cmd/*` modules for exactly this reason; making the CLI installable at a version needs release-time replace-strip, tracked as **#1088**. Install from source (above) for now.
 
+- **Verify CLI ↔ framework version compatibility**: before running `gocell validate`, confirm the
+  installed CLI is compatible with the framework version your project depends on:
+
+  ```bash
+  gocell version
+  # Example output:
+  #   cli_version:                v0.1.0
+  #   framework_version:          v0.1.0
+  #   compatible_framework_range: >=v0.1.0 <v0.2.0
+
+  go list -m github.com/ghbvf/gocell
+  # Confirm the framework version falls within compatible_framework_range above
+  ```
+
+  See `docs/guides/cli-version-compatibility.md` for the full compatibility matrix and version
+  policy (v0.x = best-effort intent; v1.0 GA = SemVer hard guarantee).
+
 ## Steps
 
 ### 1. Initialise the Module
