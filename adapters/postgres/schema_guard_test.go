@@ -106,8 +106,10 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// 062 drops devices.renewal_requested_epoch (stateless cert-renewal producer, #1820).
 	// 063 creates the global webhook_sources table (encrypted webhook source secret store,
 	// NO tenant/RLS, NO plaintext column) for the persistent SourceStore backing (#1540).
-	assert.Equal(t, int64(63), v,
-		"expected version should be exactly 63 (current migration max — 063_create_webhook_sources)")
+	// 064 adds saga_events.global_seq BIGINT GENERATED ALWAYS AS IDENTITY + idx_saga_events_global_seq
+	// for the ordered GlobalReader scan (EPIC #1609 PR-PG Batch 1, #1630).
+	assert.Equal(t, int64(64), v,
+		"expected version should be exactly 64 (current migration max — 064_add_saga_events_global_seq)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {
