@@ -37,6 +37,39 @@
 //	            pkg/query remains limited to generic pagination, cursor,
 //	            runmode, and in-memory pagination helpers
 //
+// # In-process cross-cell Go handoff = 0 — guard inventory (epic #1423 / US8)
+//
+// US8's acceptance signal (SC-003 / FR-009) requires "进程内跨 cell Go 直传 = 0"
+// (zero in-process cross-cell Go handoff) be permanently archtest-guarded at
+// Medium+. The guards that together enforce it, organized by handoff FORM (the
+// inventory deliverable of #1961 / T071 — this is the口径 single source; per-rule
+// symbols/blind spots live in each rule's own godoc):
+//
+//	MODULE-PROVIDE-NO-VALUE-HANDOFF-01   Hard    re-opening the ModuleResult
+//	  (module_provide_signature_frozen_test.go)  value-handoff channel — a cell
+//	                                             handing sibling values back through
+//	                                             Provide (reflect field freeze)
+//	LAYER-05 / LAYER-05T                  Medium  cell A importing cell B/internal/
+//	  (archtest_test.go)                          (direct / transitive)
+//	LAYER-06 / LAYER-06T                  Medium  cell A importing a cell-owned
+//	  (archtest_test.go)                          public subpackage of cell B
+//	LAYER-09 / LAYER-09T                  Medium  cell A importing cell B/events
+//	  (archtest_test.go)                          (direct / transitive)
+//	GRPC-CELL-NO-CLIENT-DIAL-01           Medium  a cell constructing OR holding a
+//	  (grpc_cell_no_client_dial_test.go)          gRPC client (dial / *grpc.ClientConn /
+//	                                             generated <Svc>Client surface) to reach
+//	                                             a sibling cell in-process — incl. the
+//	                                             inject-a-built-client escape (#1961;
+//	                                             closes the #1752 runtime/grpc gap)
+//
+// Open blind spots (NOT yet guarded — tracked, not silently dropped):
+//
+//	interface{} / any pointer smuggling — a cell holding a sibling cell's concrete
+//	  value behind an `any` field/param; type erasure defeats the LAYER-05/06 import
+//	  edges and the MODULE-PROVIDE field freeze. Backlog: gh #2002 (Medium+ target).
+//	sync HTTP direct dial — a cell calling a sibling contract via a raw http.Client.
+//	  OUT OF SCOPE here: owned by US4's CellTransport funnel task, not #1961.
+//
 // # Themed invariant files & reverse-index anchors
 //
 // Beyond the LAYER-* / PGQUERY-01 rules above, this package hosts the rest of
