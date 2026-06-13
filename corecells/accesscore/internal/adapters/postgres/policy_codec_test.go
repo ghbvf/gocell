@@ -34,10 +34,11 @@ func TestPolicyCodec_GoldenCodeMaps(t *testing.T) {
 	}, effectToCode, "effect codes are a durable format — a change breaks every stored policy")
 
 	assert.Equal(t, map[abac.Operator]string{
-		abac.OpEquals:    "eq",
-		abac.OpNotEquals: "neq",
-		abac.OpIn:        "in",
-		abac.OpNotIn:     "not_in",
+		abac.OpEquals:     "eq",
+		abac.OpNotEquals:  "neq",
+		abac.OpIn:         "in",
+		abac.OpNotIn:      "not_in",
+		abac.OpEqualsAttr: "eq_attr",
 	}, operatorToCode, "operator codes are frozen")
 
 	assert.Equal(t, map[abac.AttributeSource]string{
@@ -92,7 +93,7 @@ func TestPolicyCodec_OperatorExhaustiveRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 		require.Equalf(t, op, got, "operator %d must round-trip", op)
 	}
-	require.GreaterOrEqual(t, n, 4, "anti-vacuity: every valid Operator must be exercised")
+	require.GreaterOrEqual(t, n, 5, "anti-vacuity: every valid Operator must be exercised (5 after eq_attr)")
 }
 
 func TestPolicyCodec_SourceExhaustiveRoundTrip(t *testing.T) {
@@ -262,4 +263,115 @@ func TestPolicyCodec_GoldenJSON_ActionScoped(t *testing.T) {
 	const want = `[{"id":"r1","name":"Allow audit read","action":["audit:read"],` +
 		`"effect":"allow","obligations":{}}]`
 	assert.JSONEq(t, want, string(data), "action-scoped rule durable JSON shape is frozen")
+}
+
+// ─── cross-attribute operator codec (Batch C, #1977) ──────────────────────
+
+// TestPolicyCodec_CrossAttrCondition_RoundTrip asserts that a rule carrying a
+// cross-attribute condition (OpEqualsAttr, RHSSource=resource, RHSKey="id")
+// survives encode→decode with RHSSource/RHSKey preserved and Values empty.
+func TestPolicyCodec_CrossAttrCondition_RoundTrip(t *testing.T) {
+	rules := []abac.Rule{
+		{
+			ID:     "r-cross",
+			Name:   "Subject is resource",
+			Effect: authz.EffectAllow,
+			Conditions: []abac.Condition{
+				{
+					Source:    abac.SourceSubject,
+					Key:       "sub",
+					Operator:  abac.OpEqualsAttr,
+					RHSSource: abac.SourceResource,
+					RHSKey:    "id",
+				},
+			},
+		},
+	}
+
+	data, err := marshalRules(rules)
+	require.NoError(t, err, "encode of cross-attr condition must succeed")
+
+	got, err := unmarshalRules(data)
+	require.NoError(t, err, "decode of cross-attr condition must succeed")
+
+	require.Len(t, got, 1)
+	require.Len(t, got[0].Conditions, 1)
+	cond := got[0].Conditions[0]
+	assert.Equal(t, abac.SourceSubject, cond.Source)
+	assert.Equal(t, "sub", cond.Key)
+	assert.Equal(t, abac.OpEqualsAttr, cond.Operator)
+	assert.Equal(t, abac.SourceResource, cond.RHSSource, "RHSSource must survive round-trip")
+	assert.Equal(t, "id", cond.RHSKey, "RHSKey must survive round-trip")
+	assert.Empty(t, cond.Values, "Values must remain empty for cross-attr condition")
+}
+
+// TestPolicyCodec_StaticCondition_NoRHSFields asserts that a static condition
+// (OpEquals + Values) does NOT emit rhsSource/rhsKey keys in the persisted JSON
+// — static conditions must stay byte-identical with rows stored before #1977.
+func TestPolicyCodec_StaticCondition_NoRHSFields(t *testing.T) {
+	rules := []abac.Rule{
+		{
+			ID:     "r-static",
+			Name:   "Static allow",
+			Effect: authz.EffectAllow,
+			Conditions: []abac.Condition{
+				{
+					Source:   abac.SourceSubject,
+					Key:      "department",
+					Operator: abac.OpEquals,
+					Values:   []string{"eng"},
+				},
+			},
+			Obligations: authz.Obligations{},
+		},
+	}
+
+	data, err := marshalRules(rules)
+	require.NoError(t, err)
+
+	// The JSON for a static condition must not contain rhsSource or rhsKey keys.
+	jsonStr := string(data)
+	assert.NotContains(t, jsonStr, "rhsSource",
+		"static condition must not emit rhsSource key (omitempty)")
+	assert.NotContains(t, jsonStr, "rhsKey",
+		"static condition must not emit rhsKey key (omitempty)")
+}
+
+// TestPolicyCodec_OldRowWithoutRHSFields asserts back-compat: a JSONB row
+// serialised BEFORE #1977 (no rhsSource/rhsKey keys) still decodes cleanly for
+// static operators, with RHSSource==0 and RHSKey=="".
+func TestPolicyCodec_OldRowWithoutRHSFields(t *testing.T) {
+	const oldRow = `[{"id":"r1","name":"Legacy rule","effect":"allow",` +
+		`"conditions":[{"source":"subject","key":"department","op":"eq","values":["eng"]}],` +
+		`"obligations":{}}]`
+
+	got, err := unmarshalRules([]byte(oldRow))
+	require.NoError(t, err, "legacy row without rhs fields must decode without error")
+
+	require.Len(t, got, 1)
+	require.Len(t, got[0].Conditions, 1)
+	cond := got[0].Conditions[0]
+	assert.Equal(t, abac.OpEquals, cond.Operator)
+	assert.Equal(t, abac.AttributeSource(0), cond.RHSSource, "RHSSource must be zero for legacy row")
+	assert.Equal(t, "", cond.RHSKey, "RHSKey must be empty for legacy row")
+}
+
+// TestPolicyCodec_UnknownFieldRejected_ConditionLevel reconfirms that an
+// unknown JSON field AT THE CONDITION LEVEL is still rejected after adding
+// rhsSource/rhsKey. Prevents the new fields from accidentally opening the
+// schema for arbitrary extra keys.
+func TestPolicyCodec_UnknownFieldRejected_ConditionLevelAfterRHS(t *testing.T) {
+	// rhsSource and rhsKey are now known — this must decode cleanly.
+	const validWithRHS = `[{"id":"r1","name":"x","effect":"allow","conditions":` +
+		`[{"source":"subject","key":"sub","op":"eq_attr","rhsSource":"resource","rhsKey":"id"}],` +
+		`"obligations":{}}]`
+	_, err := unmarshalRules([]byte(validWithRHS))
+	require.NoError(t, err, "condition with known rhsSource/rhsKey must decode cleanly")
+
+	// A genuinely unknown field must still be rejected.
+	const unknownField = `[{"id":"r1","name":"x","effect":"allow","conditions":` +
+		`[{"source":"subject","key":"sub","op":"eq_attr","rhsSource":"resource","rhsKey":"id","bogus":1}],` +
+		`"obligations":{}}]`
+	_, err = unmarshalRules([]byte(unknownField))
+	assert.Error(t, err, "unknown field in condition must still be rejected (fail-closed)")
 }

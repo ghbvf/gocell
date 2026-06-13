@@ -513,3 +513,200 @@ func TestConverter_ListWire_ZeroConditionsNil(t *testing.T) {
 	result2 := polCondsToListWire([]abac.Condition{})
 	assert.Nil(t, result2, "empty conditions must produce nil list wire")
 }
+
+// ─── cross-attribute eq_attr converter tests (Batch C, #1977) ────────────────
+
+// TestConverter_CrossAttr_Create_RoundTrip asserts that a create request
+// carrying operator "eq_attr" + rhsSource "resource" + rhsKey "id" (and no
+// values) parses to the correct domain abac.Condition and the response
+// re-emits rhsSource/rhsKey.
+func TestConverter_CrossAttr_Create_RoundTrip(t *testing.T) {
+	svc := newConverterTestService(t)
+	ctx := testConvAdminCtx()
+	ad := CreateAdapter{s: svc}
+
+	resp, err := ad.Create(ctx, &policyCreate.Request{
+		Name: "CrossAttrPolicy",
+		Rules: []*policyCreate.RequestRulesItem{
+			{
+				ID:     "r1",
+				Name:   "Self ownership",
+				Effect: "allow",
+				Conditions: []*policyCreate.RequestRulesItemConditionsItem{
+					{
+						Source:    "subject",
+						Key:       "sub",
+						Operator:  "eq_attr",
+						RhsSource: "resource",
+						RhsKey:    "id",
+						// Values intentionally absent/nil for cross-attr
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	created, ok := resp.(policyCreate.Create201JSONResponse)
+	require.True(t, ok, "expected Create201JSONResponse, got %T", resp)
+
+	data := created.Data
+	require.Len(t, data.Rules, 1)
+	require.Len(t, data.Rules[0].Conditions, 1)
+	cond := data.Rules[0].Conditions[0]
+
+	assert.Equal(t, "subject", cond.Source)
+	assert.Equal(t, "sub", cond.Key)
+	assert.Equal(t, "eq_attr", cond.Operator)
+	assert.Equal(t, "resource", cond.RhsSource, "response must re-emit rhsSource")
+	assert.Equal(t, "id", cond.RhsKey, "response must re-emit rhsKey")
+	assert.Empty(t, cond.Values, "cross-attr condition must have no values in response")
+}
+
+// TestConverter_CrossAttr_Update_RoundTrip verifies the update path with eq_attr.
+func TestConverter_CrossAttr_Update_RoundTrip(t *testing.T) {
+	svc := newConverterTestService(t)
+	ctx := testConvAdminCtx()
+
+	// Create a minimal policy first.
+	p, err := svc.Create(ctx, CreateInput{Name: "ToUpdateCrossAttr", Rules: minimalRules()})
+	require.NoError(t, err)
+
+	ad := UpdateAdapter{s: svc}
+	resp, err := ad.Update(ctx, &policyUpdate.Request{
+		ID:   p.ID,
+		Name: "Updated CrossAttr",
+		Rules: []*policyUpdate.RequestRulesItem{
+			{
+				ID:     "r1",
+				Name:   "Self ownership update",
+				Effect: "allow",
+				Conditions: []*policyUpdate.RequestRulesItemConditionsItem{
+					{
+						Source:    "subject",
+						Key:       "sub",
+						Operator:  "eq_attr",
+						RhsSource: "resource",
+						RhsKey:    "id",
+					},
+				},
+			},
+		},
+		ExpectedVersion: int64(p.Version),
+	})
+	require.NoError(t, err)
+	updated, ok := resp.(policyUpdate.Update200JSONResponse)
+	require.True(t, ok, "expected Update200JSONResponse, got %T", resp)
+
+	data := updated.Data
+	require.Len(t, data.Rules, 1)
+	require.Len(t, data.Rules[0].Conditions, 1)
+	cond := data.Rules[0].Conditions[0]
+
+	assert.Equal(t, "eq_attr", cond.Operator)
+	assert.Equal(t, "resource", cond.RhsSource, "response must re-emit rhsSource")
+	assert.Equal(t, "id", cond.RhsKey, "response must re-emit rhsKey")
+	assert.Empty(t, cond.Values)
+}
+
+// TestConverter_CrossAttr_StrayValues_Rejected asserts that a request with
+// operator "eq_attr" but non-empty Values is rejected with 422 (domain
+// Condition.Validate fires — stray Values on a cross-attr condition).
+func TestConverter_CrossAttr_StrayValues_Rejected(t *testing.T) {
+	svc := newConverterTestService(t)
+	ctx := testConvAdminCtx()
+	ad := CreateAdapter{s: svc}
+
+	resp, err := ad.Create(ctx, &policyCreate.Request{
+		Name: "CrossAttrStrayValues",
+		Rules: []*policyCreate.RequestRulesItem{
+			{
+				ID:     "r1",
+				Name:   "Bad cross-attr",
+				Effect: "allow",
+				Conditions: []*policyCreate.RequestRulesItemConditionsItem{
+					{
+						Source:    "subject",
+						Key:       "sub",
+						Operator:  "eq_attr",
+						RhsSource: "resource",
+						RhsKey:    "id",
+						Values:    []string{"stray-value"},
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	_, ok := resp.(policyCreate.Create422ErrorResponse)
+	assert.True(t, ok, "eq_attr with stray values must yield 422, got %T", resp)
+}
+
+// TestConverter_CrossAttr_InvalidRHSSource_Rejected asserts that an unrecognised
+// rhsSource string is rejected with 422 (KindInvalid).
+func TestConverter_CrossAttr_InvalidRHSSource_Rejected(t *testing.T) {
+	svc := newConverterTestService(t)
+	ctx := testConvAdminCtx()
+	ad := CreateAdapter{s: svc}
+
+	resp, err := ad.Create(ctx, &policyCreate.Request{
+		Name: "BadRHSSource",
+		Rules: []*policyCreate.RequestRulesItem{
+			{
+				ID:     "r1",
+				Name:   "Bad rhs source",
+				Effect: "allow",
+				Conditions: []*policyCreate.RequestRulesItemConditionsItem{
+					{
+						Source:    "subject",
+						Key:       "sub",
+						Operator:  "eq_attr",
+						RhsSource: "not-a-source",
+						RhsKey:    "id",
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	_, ok := resp.(policyCreate.Create422ErrorResponse)
+	assert.True(t, ok, "invalid rhsSource must yield 422, got %T", resp)
+}
+
+// TestConverter_StaticCondition_NoRHSInResponse asserts that a static "eq"
+// condition still round-trips with values and emits no rhsSource/rhsKey in the
+// response (zero values → omitempty).
+func TestConverter_StaticCondition_NoRHSInResponse(t *testing.T) {
+	svc := newConverterTestService(t)
+	ctx := testConvAdminCtx()
+	ad := CreateAdapter{s: svc}
+
+	resp, err := ad.Create(ctx, &policyCreate.Request{
+		Name: "StaticOnly",
+		Rules: []*policyCreate.RequestRulesItem{
+			{
+				ID:     "r1",
+				Name:   "Static eq",
+				Effect: "allow",
+				Conditions: []*policyCreate.RequestRulesItemConditionsItem{
+					{
+						Source:   "subject",
+						Key:      "department",
+						Operator: "eq",
+						Values:   []string{"eng"},
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	created, ok := resp.(policyCreate.Create201JSONResponse)
+	require.True(t, ok, "expected Create201JSONResponse, got %T", resp)
+
+	data := created.Data
+	require.Len(t, data.Rules[0].Conditions, 1)
+	cond := data.Rules[0].Conditions[0]
+	assert.Equal(t, "eq", cond.Operator)
+	assert.Equal(t, []string{"eng"}, cond.Values)
+	assert.Empty(t, cond.RhsSource, "static condition must emit no rhsSource")
+	assert.Empty(t, cond.RhsKey, "static condition must emit no rhsKey")
+}
