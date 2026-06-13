@@ -24,7 +24,7 @@
 | D1 | **编程式优先**：Step 是 Go func（`Run`/`Compensate`），声明式 YAML DSL 留 v1.2+。业务编排不可避免读外部 state、调多 ports，声明式覆盖率低且 YAML 反成新约束源 | 无机器守卫（设计取向）；contract `kind: saga` 只声明步骤元数据，行为在 Go | **Soft / 文档约定**（刻意——这是取向不是不变式） |
 | D2 | **state journal = append-only**：每个状态变化一条 `journal.Event`，instance/step 状态是事件折叠的投影，非独立可变行。replay / forensic / time-travel 自然得到。journal 接口按消费者能力**窄接口拆分**（见 §3） | `journal.Journal`/`JournalCore`/`Enqueuer`/`Reader`/`ProducerReader`/`Heartbeater` 接口分层 + `SAGA-JOURNAL-HOLDER-SEAL-01`（仅 `runtime/saga.Coordinator` 可持有 `JournalCore`） | **Medium**（archtest 字段类型解析；Hard 路径 = sealed construction，gh **#982**；业务 cell 持 `JournalCore` 未机器拦截 = gh **#1415**） |
 | D3 | **每 saga instance 单 leader**：distlock key 颗粒到 instance；无 leader 不驱动。leader 经 `runtime/distlock` 复用，含 per-lock `Orphan()` 优雅交接（graceful shutdown/handoff，bounded-TTL takeover） | `SAGA-DRIVE-BEHIND-LEADER-GATE-01`（`driveOne` 仅在 `tickOnce`/`acquireLead` 门控下调用）；`distlock.Lock.Orphan()` | **Medium**（AST selector + 控制依赖门控；Hard 路径 = typed gate token 穿入 `driveOne` 签名，gh **#1110**） |
-| D4 | **Step dispatch 与 journal append 共享事务边界**，步骤**不在持有 DB 事务时执行**（避免长事务持锁）。与 L2 outbox-fact 模型同源 | `SAGA-STEP-RUN-OUTSIDE-TX-01`（`StepFunc` 调用只在 `safeRun`；`safeRun` 禁出现在 `RunInTx` closure 内） | A1 **Hard**（typed callsite 唯一性 + body gate）/ A2 **Medium**（closure AST scan；helper 传递链 gh **#980**） |
+| D4 | **Step dispatch 与 journal append 共享事务边界**，步骤**不在持有 DB 事务时执行**（避免长事务持锁）。与 L2 outbox-fact 模型同源 | `SAGA-STEP-RUN-OUTSIDE-TX-01`（`StepFunc` 调用只在 `safeRun`；任何传递可达 `safeRun` 的调用禁出现在 `RunInTx` closure 内） | A1 **Medium**（typed 签名身份扫描；别名/defined-type/裸签名逃逸结构免疫，gh **#979** 将旧 B1 折入 A1）/ A2 **Medium**（跨包传递 taint，含 helper/FuncLit-var 间接，gh **#980**）；真·Hard（StepContext/TxContext 能力类型分裂）成本不成比例**已否决**，gh **#1997** |
 | D5 | **Compensate 必须幂等 + 纯反向**：不读外部 state、不持事务层。dtm/Temporal 实战经验：Compensate 带分支 = bug 温床 | `SAGA-STEP-COMPENSATE-PURE-01`（`CompensateFunc` 赋值槽函数体禁调 `outbox.Writer/Emitter`、`persistence.TxRunner`、`*sql.Tx`、`pgx.Tx`） | **Hard**（类型识别赋值槽 + `types.Implements` 识别禁用 receiver；import alias 无效） |
 | D6 | **三层 timeout**：`Step.Timeout`（单步执行）/ `SagaDefinition.Timeout`（总）/ `Heartbeat`（长步续租）。复用 `kernel/command` 三层 timeout 模板。心跳由 `runtime/saga/executor` 的 per-step goroutine 独立维护，Coordinator **不持集中式心跳循环** | `SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01`（`Coordinator.journal` 收窄为无 `Heartbeat` 方法的 `JournalCore`）+ `SAGA-EXECUTOR-RAND-INJECTED-01`（jitter 源可注入） | **Hard 上游**（`JournalCore` 无 Heartbeat，集中循环 compile 不可表达）+ **Medium 下游**（callsite 残留扫描） |
 | D7 | **L3 cell 必须声明 saga contractUsage**：`role: orchestrate` ⟹ `cell.yaml consistencyLevel: L3`（**单向**蕴含，L3 ≠ saga，详见 §5） | governance rule `SAGA-CELL-LEVEL-L3-DECLARE-01`（`gocell validate` PhaseBase CI gate） | **Medium**（governance rule） |
@@ -106,12 +106,22 @@ D7 是**单向**：用 saga 编排 ⟹ L3；但 L3 不等价于 saga。`accessco
 | 旧 leader 复活继续驱动 | lease fencing（旧 lease 的 `Append`/`MarkTerminal` 必 `ErrSagaStaleLease`）+ `SAGA-DRIVE-BEHIND-LEADER-GATE-01` | ✅ | gate token 仍 AST 门控（Hard 路径 gh #1110） |
 | Compensate 读外部 state / 持事务 | `SAGA-STEP-COMPENSATE-PURE-01` Hard | ✅ | — |
 | 补偿本身失败 | `StatusCompensationFailed` 终态 + `KindStepCompensationFailed`/`KindSagaCompensationFailed`；运维经 `saga_events` 人工介入（runbook `docs/ops/saga-runbook.md`） | ⚠️ | 无自动二级补偿（刻意）——人工 runbook 兜底；自动重试入口未做 |
-| step 在持锁事务内长执行 | `SAGA-STEP-RUN-OUTSIDE-TX-01` A1 Hard | ✅ | A2 closure 传递链 Medium（gh #980） |
+| step 在持锁事务内长执行 | `SAGA-STEP-RUN-OUTSIDE-TX-01` A1 Medium（typed 签名身份）+ A2 Medium（跨包传递 taint） | ✅ | A2 helper/FuncLit-var 传递链已覆盖（gh #980）；残留 = func-literal 经函数参数间接（SSA 范畴，未追）；真·Hard（能力类型分裂）成本否决 gh #1997 |
 | journal 无界增长 | `Event.MaxPayloadBytes` 64KiB cap；append-only 增长需归档 | ⚠️ | **replay 设计已立项（accepted）**——ADR `202606051200-1609-adr-saga-journal-projection-source.md`（EPIC #1609，model-a）锁定 `saga_events` 投影源设计，**能力本身待 PR-02..06 落地**（#1609 PR-00 仅 ADR，尚未实现/可运维）；**归档/截断** 仍未做，且 #1609 D7 增约束「归档须 ≥ 最慢投影 checkpoint」 |
 | Coordinator 无 leader 误并发 | `WithLeaderElect` option 注入 distlock；缺省 unsafe 模式 `Start()` 打 `UnsafeModeLabel` 警告 | ⚠️ | 刻意设计取舍（非待修缺陷，故无 issue）：unsafe 模式供单进程/开发；生产装配契约 = 必须经 `WithLeaderElect` 注入 leader |
 | coordinator readiness 不可观测 | `ProbeCoordinatorReady` (`saga_coordinator_ready`) 已声明 | ❌ | **未 wired**——coordinator 尚非一等 Cell，cell-side `RegisterReadiness` 待 saga-as-cell 迁移（gh **#978**） |
 
 > ⚠️/❌ 行的遗留项均有 gh issue 跟踪、属显式 out-of-scope（#1609 replay 设计已立项/能力待落地 + 归档未做 / 人工 runbook），或为刻意设计取舍（unsafe-mode leader）；无 silent 缺口。
+
+**Amendment 2026-06-13（gh #979 + #980，威胁矩阵重评 D4 / §7「step 在持锁事务内长执行」行）：**
+`SAGA-STEP-RUN-OUTSIDE-TX-01` 硬化后，A1 由「精确 `*types.Named` 匹配」改为 **typed 签名身份**（`types.Identical`）——
+别名 / defined-type / 裸结构同签名的 StepFunc 调用全部结构性免疫，**旧 B1 反向自检折入 A1 后删除**；A1 评级由原 ADR 记的
+「Hard」**校正为 Medium**（typed CI 扫描的本档；原「Hard」系对 typed scan 的过誉）。A2 由「闭包体直接 `safeRun()` 的 AST 扫描」
+升为 **跨包 reverse-reachability taint**（coordinator + executor 双包，按 `types.Object` 身份），覆盖命名 wrapper 与
+func-literal-var 间接（含 cx-1）。残留 = func-literal 经**函数参数**传入并在另一函数内调用（跨函数数据流 / SSA，框架约定不引）。
+真·Hard 唯一载体（`StepContext`/`TxContext` 能力类型分裂，令在 `RunInTx` 闭包跑 step = 编译错）须重做 kernel 级
+`persistence.TxRunner` 闭包签名、影响全仓 consumer，**成本不成比例已否决**，仅 gh **#1997** 跟踪远期可能性。安全模型不变：
+step 仍永不在持锁事务内执行，纵深 = A1 签名身份 + A2 跨包 taint + `safeRun` 在 executor 包未导出（coordinator 编译层写不出）。
 
 ---
 

@@ -140,10 +140,14 @@
 //
 // # Step.Run is the only StepFunc callsite
 //
-// Inside this package, saga.StepFunc is invoked exclusively from safeRun (a
-// recover-guarded helper). safeRun is called BEFORE txRunner.RunInTx, so user
-// code never executes with a database transaction held open. This invariant is
-// locked by the SAGA-STEP-RUN-OUTSIDE-TX-01 archtest.
+// Inside the saga runtime, saga.StepFunc is invoked exclusively from safeRun (a
+// recover-guarded helper in the executor subpackage), which runs BEFORE any
+// txRunner.RunInTx, so user code never executes with a database transaction
+// held open. SAGA-STEP-RUN-OUTSIDE-TX-01 locks this two ways: A1 confines
+// StepFunc calls to safeRun by *signature identity* (an alias or redefinition
+// under any import name cannot escape), and A2 forbids any call transitively
+// reaching safeRun inside a RunInTx closure via a cross-package taint set
+// (named-wrapper and func-literal-var indirection included).
 //
 // # Coordinator is the single sanctioned JournalCore holder
 //
