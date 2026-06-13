@@ -56,6 +56,15 @@ func TestRunVersion_JSONFormat(t *testing.T) {
 	if got.CLIVersion == "" || got.FrameworkVersion == "" || got.CompatibleFrameworkRange == "" {
 		t.Fatalf("version json fields must all be non-empty: %+v", got)
 	}
+	// Lock the field SET (count), not just presence: a stray new field must
+	// fail this test so the wire shape cannot silently grow unnoticed.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(out), &raw); err != nil {
+		t.Fatalf("version --format=json not a JSON object: %v", err)
+	}
+	if len(raw) != 3 {
+		t.Fatalf("version json must have exactly 3 fields, got %d: %v", len(raw), raw)
+	}
 }
 
 func TestRunVersion_UnknownFormat(t *testing.T) {
@@ -114,6 +123,9 @@ func TestCompatibleFrameworkRange(t *testing.T) {
 		{"v1.2.3", ">=v1.2.0 <v1.3.0"},
 		{"v0.1.0-develop.20260613T060848Z", ">=v0.1.0 <v0.2.0"},
 		{"v0.9.0", ">=v0.9.0 <v0.10.0"},
+		{"v0.10.0", ">=v0.10.0 <v0.11.0"}, // two-digit minor as input
+		{"abc123def456", "abc123def456"},  // bare VCS revision (dev fallback) passes through
+		{"", ""},                          // empty passes through
 		{"dev", "dev"},
 	}
 	for _, tc := range cases {

@@ -77,6 +77,9 @@ func resolveVersion() string {
 	if version != "dev" {
 		return version
 	}
+	// dev / go.work build: no ldflags were injected, so fall back to the VCS
+	// revision from debug.ReadBuildInfo (toolVersion, validate.go) rather than
+	// reporting a bare "dev" — gives developers a traceable commit.
 	return toolVersion()
 }
 
