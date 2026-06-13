@@ -215,10 +215,12 @@ func fileDotImportsModule(path, modulePath string) (bool, error) {
 	return false, nil
 }
 
-// bcryptRelSlash returns the module-relative slash path for the given absolute
-// path. Named with a bcrypt-scoped prefix to avoid collision with
-// identically-named helpers in _test.go files (e.g. pgquery_boundary_test.go).
-func bcryptRelSlash(root, path string) string {
+// funnelRelSlash returns the module-relative slash path for the given absolute
+// path. Shared by all funnel rule bodies (bcrypt, replaydeps) that need a
+// root-relative path for diagnostics. Named with a generic prefix (not
+// bcrypt-scoped) so sibling funnel files can call it; the _test.go-only relSlash
+// in pgquery_boundary_test.go is a separate, unrelated helper.
+func funnelRelSlash(root, path string) string {
 	rel, err := filepath.Rel(root, path)
 	if err != nil {
 		return filepath.ToSlash(path)
@@ -249,7 +251,7 @@ func CheckBcryptCostFunnel01(t *testing.T, _ ConfigForExternalCell) []Diagnostic
 	}
 	var diags []Diagnostic
 	for _, path := range filesA1 {
-		rel := bcryptRelSlash(root, path)
+		rel := funnelRelSlash(root, path)
 		if rel == bcryptHasherRel {
 			continue // the sanctioned holder
 		}
@@ -272,7 +274,7 @@ func CheckBcryptCostFunnel01(t *testing.T, _ ConfigForExternalCell) []Diagnostic
 		t.Fatalf("BCRYPT-COST-FUNNEL-01 A2: scanner.ModuleScope: %v", err)
 	}
 	for _, path := range filesA2 {
-		rel := bcryptRelSlash(root, path)
+		rel := funnelRelSlash(root, path)
 		if newTestHasherCallerAllowed(rel) {
 			continue
 		}

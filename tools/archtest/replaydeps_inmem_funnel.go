@@ -61,7 +61,6 @@ package archtest
 // consumer — kept importable but gocell-only, mirroring BCRYPT-COST-FUNNEL-01.
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
@@ -107,17 +106,6 @@ func replaydepsInmemBannedCalls() []replaydepsInmemBannedCall {
 	}
 }
 
-// replaydepsRelSlash returns the module-relative slash path for path. Local
-// (not the _test.go-only relSlash) so the importable rule body compiles for an
-// external runner, mirroring bcryptRelSlash.
-func replaydepsRelSlash(root, path string) string {
-	rel, err := filepath.Rel(root, path)
-	if err != nil {
-		return filepath.ToSlash(path)
-	}
-	return filepath.ToSlash(rel)
-}
-
 // CheckReplaydepsInmemFunnel01 scans the hardened composition roots for direct
 // calls to the in-memory replay constructors and returns one Diagnostic per
 // offending callsite. It is the single rule body — the Test* dogfoods it via
@@ -133,7 +121,7 @@ func CheckReplaydepsInmemFunnel01(t *testing.T, _ ConfigForExternalCell) []Diagn
 
 	var diags []Diagnostic
 	for _, path := range files {
-		rel := replaydepsRelSlash(root, path)
+		rel := funnelRelSlash(root, path)
 		for _, banned := range replaydepsInmemBannedCalls() {
 			line, ok, perr := firstQualifiedSelectorLine(path, banned.module, banned.defName, banned.selName)
 			if perr != nil {

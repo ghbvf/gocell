@@ -80,7 +80,7 @@ func TestREPLAYDEPS_INMEM_FUNNEL_01_NoDotImportBlindSpot(t *testing.T) {
 
 	var findings []string
 	for _, path := range files {
-		rel := replaydepsRelSlash(root, path)
+		rel := funnelRelSlash(root, path)
 		for _, mod := range []string{idempotencyInMemModule, runtimeAuthModule} {
 			dot, perr := fileDotImportsModule(path, mod)
 			require.NoError(t, perr)

@@ -8,6 +8,7 @@ import (
 
 	kauth "github.com/ghbvf/gocell/kernel/auth"
 
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -225,10 +226,10 @@ func TestLoadRedisConfigFromEnv_ClusterAddrsSatisfyMultiPodRequirement(t *testin
 func TestBuildRedisClient_NotConfiguredReturnsNil(t *testing.T) {
 	t.Setenv(envRedisAddr, "")
 
-	result, err := buildRedisClient(context.Background(), mkTopo("", "memory", false))
+	client, err := buildRedisClient(context.Background(), mkTopo("", "memory", false))
 
 	require.NoError(t, err)
-	assert.Nil(t, result.Client)
+	assert.Nil(t, client)
 }
 
 func TestBuildRedisClient_UsesConfiguredFactory(t *testing.T) {
@@ -241,10 +242,9 @@ func TestBuildRedisClient_UsesConfiguredFactory(t *testing.T) {
 		return new(adapterredis.Client), nil
 	})
 
-	result, err := buildRedisClient(context.Background(), mkTopo("", "memory", false))
+	client, err := buildRedisClient(context.Background(), mkTopo("", "memory", false))
 
 	require.NoError(t, err)
-	client := result.Client
 	require.NotNil(t, client)
 	assert.Equal(t, "redis:6379", gotCfg.Addr)
 	assert.Equal(t, "secret", gotCfg.Password)
@@ -257,10 +257,10 @@ func TestBuildRedisClient_FactoryErrorWrapped(t *testing.T) {
 		return nil, errRedisTestFactory
 	})
 
-	result, err := buildRedisClient(context.Background(), mkTopo("", "memory", false))
+	client, err := buildRedisClient(context.Background(), mkTopo("", "memory", false))
 
 	require.Error(t, err)
-	assert.Nil(t, result.Client)
+	assert.Nil(t, client)
 	assert.ErrorIs(t, err, errRedisTestFactory)
 	assert.Contains(t, err.Error(), "build Redis client")
 }
@@ -390,6 +390,7 @@ func TestResolve_RealMultiPodMissingRedisFailsClosed(t *testing.T) {
 	rd, err := Resolve(context.Background(), clock.Real(), topo)
 
 	require.Error(t, err)
+	assert.Nil(t, rd.RedisClient)
 	assert.Nil(t, rd.ConsumerClaimer)
 	assert.Nil(t, rd.NonceStore)
 	assert.Empty(t, rd.Resources)
@@ -400,6 +401,78 @@ func TestResolve_RealMultiPodMissingRedisFailsClosed(t *testing.T) {
 // it LIFO) and both primitives report distributed.
 func TestResolve_RealMultiPodConfiguredReturnsClientResource(t *testing.T) {
 	t.Setenv(envRedisAddr, "127.0.0.1:6379")
+	t.Setenv(envRedisPassword, "secret")
+	client := new(adapterredis.Client)
+	restoreRedisClientFactory(t, func(context.Context, adapterredis.Config) (*adapterredis.Client, error) {
+		return client, nil
+	})
+	restoreRedisNonceStoreFactory(t, func(*adapterredis.Client, time.Duration) (kauth.NonceStore, error) {
+		return fakeDistributedNonceStore{}, nil
+	})
+	restoreRedisClaimerFactory(t, func(*adapterredis.Client) (idempotency.Claimer, error) {
+		return fakeDistributedClaimer{}, nil
+	})
+	topo := mkTopo("real", "postgres", false)
+
+	rd, err := Resolve(context.Background(), clock.Real(), topo)
+
+	require.NoError(t, err)
+	assert.Same(t, client, rd.RedisClient)
+	assert.Equal(t, idempotency.ClaimerKindDistributed, rd.ConsumerClaimer.Kind())
+	assert.Equal(t, kauth.NonceStoreKindDistributed, rd.NonceStore.Kind())
+	require.Len(t, rd.Resources, 1, "the Redis client must be returned as a managed resource")
+	assert.Same(t, client, rd.Resources[0])
+}
+
+// TestResolve_PartialFailureClosesRedisClient tests that when Resolve succeeds
+// in building the Redis client but fails at a later step (nonce store), the
+// client is closed before returning — preventing an open-connection leak on
+// failed startup.
+//
+// *adapterredis.Client is a concrete struct with an unexported rdb field; there
+// is no interface seam to inject a recording fake that tracks Close calls through
+// the newRedisClient factory (which returns *adapterredis.Client, not an
+// interface). The strongest achievable assertion is therefore:
+//
+//   - Resolve returns the wrapped nonce-store error (cleanup ran without panic,
+//     i.e. Close on the real-but-unconnected client is nil-safe).
+//   - The returned ReplayDeps is zero-valued.
+//
+// We provide a real *adapterredis.Client via adapterredis.NewClientForTest +
+// goredis.NewClient (no live Redis required; NewClientForTest skips the Ping).
+// goredis.NewClient.Close() is safe on an unconnected pool.
+func TestResolve_PartialFailureClosesRedisClient(t *testing.T) {
+	t.Setenv(envRedisAddr, "127.0.0.1:6379")
+	// Provide a real *adapterredis.Client whose Close() is safe on an
+	// unconnected pool — goredis.NewClient does not dial until a command is issued.
+	safeClient := adapterredis.NewClientForTest(goredis.NewClient(&goredis.Options{Addr: "127.0.0.1:0"}))
+	restoreRedisClientFactory(t, func(context.Context, adapterredis.Config) (*adapterredis.Client, error) {
+		return safeClient, nil
+	})
+	restoreRedisNonceStoreFactory(t, func(*adapterredis.Client, time.Duration) (kauth.NonceStore, error) {
+		return nil, errRedisTestFactory
+	})
+	topo := mkTopo("real", "postgres", false)
+
+	rd, err := Resolve(context.Background(), clock.Real(), topo)
+
+	require.Error(t, err, "Resolve must error when nonce store build fails")
+	assert.ErrorIs(t, err, errRedisTestFactory, "error must wrap the nonce-store factory error")
+	assert.Contains(t, err.Error(), "build Redis nonce store")
+	// ReplayDeps must be zero — no partial result on failure.
+	assert.Nil(t, rd.RedisClient)
+	assert.Nil(t, rd.ConsumerClaimer)
+	assert.Nil(t, rd.NonceStore)
+	assert.Empty(t, rd.Resources)
+}
+
+// TestResolve_RealMultiPodClusterConfiguredReturnsClientResource is the cluster
+// analog of TestResolve_RealMultiPodConfiguredReturnsClientResource: it pins that
+// configuring GOCELL_REDIS_CLUSTER_ADDRS (instead of GOCELL_REDIS_ADDR) also
+// produces a managed Redis client resource with distributed primitives.
+func TestResolve_RealMultiPodClusterConfiguredReturnsClientResource(t *testing.T) {
+	t.Setenv(envRedisAddr, "")
+	t.Setenv(envRedisClusterAddrs, "node-a:7000,node-b:7000")
 	t.Setenv(envRedisPassword, "secret")
 	client := new(adapterredis.Client)
 	restoreRedisClientFactory(t, func(context.Context, adapterredis.Config) (*adapterredis.Client, error) {

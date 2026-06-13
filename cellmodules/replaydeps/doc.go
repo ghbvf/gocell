@@ -39,20 +39,6 @@
 // over the two hardened roots with a synthetic RED fixture and dot-import
 // blind-spot guard.
 //
-// AI-robust grade: Medium. Upstream (the construction-bypass ban) is a CI-time
-// AST scan; downstream (the fail-close decision) is a runtime guard in Resolve.
-// A Hard form (sealing the in-mem constructors behind this resolver) is high
-// cost — those constructors have legitimate callers across other examples and
-// runtime packages that are out of this PR's scope — so it is deliberately not
-// pursued (no low-cost Hard path to register per .claude/rules/gocell/ai-robust.md).
-//
-// The sibling bus funnel (in-memory eventbus reachable only via
-// eventtransport.Resolve) is a golangci depguard (COREBUNDLE-EVENTBUS-FUNNEL-01),
-// because runtime/eventbus has no other symbol the roots need — a whole-package
-// import ban suffices there. The three funnels (bus / claimer / nonce) together
-// make every in-memory single-pod primitive in a hardened composition root
-// reachable only through a sealed resolver.
-//
-// Authoritative semantics: this doc + tools/archtest REPLAYDEPS-INMEM-FUNNEL-01;
-// threat model amended into ADR 202606131500-1940 (the #1940 transport funnel).
+// AI-robust grade + Hard-path rationale: see tools/archtest/replaydeps_inmem_funnel.go
+// §AI-robust grade and the #1940 ADR amendment (202606131500-1940).
 package replaydeps

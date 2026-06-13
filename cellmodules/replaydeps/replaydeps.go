@@ -49,13 +49,6 @@ type (
 	redisClientFactory          func(context.Context, adapterredis.Config) (*adapterredis.Client, error)
 )
 
-// redisClientResult wraps the (possibly nil) Redis client buildRedisClient
-// returns. A nil Client means "Redis is not configured" (demo / single-pod) — a
-// legal state, distinct from a build error.
-type redisClientResult struct {
-	Client *adapterredis.Client
-}
-
 // Package-level factory seams so white-box tests can inject fakes without a live
 // Redis (mirrors cmd/corebundle's original pattern, migrated here intact).
 var (
@@ -100,11 +93,10 @@ type ReplayDeps struct {
 func Resolve(ctx context.Context, clk clock.Clock, topo bootstrap.Topology) (ReplayDeps, error) {
 	clock.MustHaveClock(clk, "replaydeps.Resolve")
 
-	redisResult, err := buildRedisClient(ctx, topo)
+	redisClient, err := buildRedisClient(ctx, topo)
 	if err != nil {
 		return ReplayDeps{}, err
 	}
-	redisClient := redisResult.Client
 	resolved := false
 	defer func() {
 		if !resolved {
@@ -214,19 +206,25 @@ func parseClusterAddrs(raw string) ([]string, error) {
 	return addrs, nil
 }
 
-func buildRedisClient(ctx context.Context, topo bootstrap.Topology) (redisClientResult, error) {
+// buildRedisClient reads the GOCELL_REDIS_* environment and creates a Redis
+// client when configured. A nil client with a nil error means Redis is not
+// configured (demo / single-pod) — a legal state, distinct from a build error.
+func buildRedisClient(ctx context.Context, topo bootstrap.Topology) (*adapterredis.Client, error) {
 	cfg, configured, err := loadRedisConfigFromEnv(topo)
 	if err != nil {
-		return redisClientResult{}, err
+		return nil, err
 	}
 	if !configured {
-		return redisClientResult{}, nil
+		// nil client + nil error is intentional: means "Redis not configured"
+		// (demo / single-pod). Callers distinguish this from a build error by
+		// checking whether the returned pointer is nil, not the error.
+		return nil, nil //nolint:nilnil // nil client + nil error = "not configured"; see comment above
 	}
 	client, err := newRedisClient(ctx, cfg)
 	if err != nil {
-		return redisClientResult{}, fmt.Errorf("build Redis client: %w", err)
+		return nil, fmt.Errorf("build Redis client: %w", err)
 	}
-	return redisClientResult{Client: client}, nil
+	return client, nil
 }
 
 func buildServiceNonceStore(topo bootstrap.Topology, client *adapterredis.Client, clk clock.Clock) (kauth.NonceStore, error) {
@@ -273,6 +271,6 @@ func closeClientAfterFailedResolve(ctx context.Context, client *adapterredis.Cli
 		return
 	}
 	// Close error is intentionally dropped: the resolve already failed and the
-	// caller propagates that error; the client's own Close logs internally.
+	// caller propagates that error; this is best-effort cleanup on the failure path.
 	_ = client.Close(ctx)
 }
