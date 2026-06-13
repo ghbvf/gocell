@@ -40,14 +40,15 @@
 // this is a sanctioned Medium guard sitting below an in-place Hard primary — not a
 // Soft mechanism standing in for a reachable Hard one.
 //
-// # Tool blind spots (charter §"强制盲区自检")
+// # What is / isn't caught (charter §"强制盲区自检")
 //
-//   - SQL assembled by runtime concatenation / fmt.Sprintf (not a single literal) is
-//     invisible — same blind spot as every literal-scanning funnel in this suite.
-//   - A delete routed through a differently-named exec wrapper still appears as a SQL
-//     string literal here (the scan is literal-shaped, not call-shaped), so it IS
-//     caught — but a delete with no projection_events literal at all (fully dynamic
-//     table name) is not.
+//   - Caught wherever the table name is a literal: the statement may run through any
+//     exec wrapper (the scan is literal-shaped, not call-shaped), and a double-quoted
+//     identifier (DELETE FROM "projection_events") still matches — the trailing \b
+//     fires before "p" because the leading double-quote is a non-word char.
+//   - Blind to a statement with no projection_events literal: SQL built by runtime
+//     concatenation / fmt.Sprintf, or a fully dynamic table name, is invisible — the
+//     same blind spot as every literal-scanning funnel in this suite.
 //   - .sql migration files are not Go source and are out of this scan's reach; the
 //     migration down-script's DROP TABLE is gated separately (Migrator.Down +
 //     DestructiveDownPermit, #1248).
@@ -82,7 +83,8 @@ import (
 const projectionEventsTable = "projection_events"
 
 // projectionEventsDeletePattern matches a DELETE/TRUNCATE statement targeting
-// projection_events. The leading \b avoids matching keywords like UNDELETE; the
+// projection_events. The leading \b keeps the verb from matching when DELETE/TRUNCATE
+// is embedded as the suffix of a larger word (e.g. a hypothetical UNDELETE …); the
 // (?:\w+\.)? branch admits a schema qualifier (public.projection_events); the trailing
 // \b keeps a prefix collision (projection_events_archive) from matching — _ is a word
 // char, so there is no boundary between "events" and "_archive".
@@ -120,8 +122,9 @@ func scanProjectionEventDelete(p *Pass, tableRefs *int) []Diagnostic {
 					"PROJECTION-EVENT-JOURNAL-NO-DELETE-01: DELETE/TRUNCATE of projection_events in %s:%d — "+
 						"the durable projection journal is append-only (it is the rebuild-from-0 source). "+
 						"Removing a row reintroduces the #1504 rebuild bug. Never DELETE/TRUNCATE this table; "+
-						"if archive/retention lands, route it through a sanctioned path and allowlist the "+
-						"callsite with the archive ADR section (per contract-fanout.md).",
+						"if archive/retention lands, this guard (a pure literal scan with no allowlist) must be "+
+						"updated here to exempt the sanctioned archive callsite, citing the archive ADR section "+
+						"(per contract-fanout.md).",
 					rel, pos.Line,
 				),
 			})
@@ -149,8 +152,9 @@ func TestProjectionEventJournalNoDelete01(t *testing.T) {
 	if tableRefs == 0 {
 		diags = append(diags, Diagnostic{
 			Message: "PROJECTION-EVENT-JOURNAL-NO-DELETE-01 anti-vacuity: no projection_events literal " +
-				"observed in production — the scan reached no journal SQL (table renamed, source moved, or " +
-				"the walk regressed), so the no-DELETE tripwire would be silently vacuous.",
+				"observed in production — the scan reached no journal SQL (table renamed, source moved into " +
+				"*_test.go which the Production scope excludes, or the walk regressed), so the no-DELETE " +
+				"tripwire would be silently vacuous.",
 		})
 	}
 	Report(t, "PROJECTION-EVENT-JOURNAL-NO-DELETE-01", diags)
