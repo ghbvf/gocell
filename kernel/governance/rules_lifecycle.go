@@ -7,6 +7,11 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
+// lifecycleActive is the shared contract lifecycle "active" literal used by the
+// lifecycle-gated governance rules (ADV-05, VERIFY-04, JOURNEY-CONTRACT-EXISTENCE-01,
+// CONTRACT-ENDPOINT-TEST-MAPPING-01, FRAMEWORK-OWNED-CONTRACT-SCOPED-01).
+const lifecycleActive = "active"
+
 // cellLifecycleFix is the remediation guidance for invalid cell/slice lifecycle
 // findings (membership check). Used in both the cell and slice error messages
 // to keep them in sync.

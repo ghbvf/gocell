@@ -20,20 +20,16 @@ import (
 	"log/slog"
 
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/ports"
+	orderstatusgen "github.com/ghbvf/gocell/generated/contracts/http/orderfulfillment/orderstatus/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
-// Status string values returned over the wire.
-const (
-	StatusAccepted    = "accepted"    // enrolled but no terminal event yet
-	StatusRunning     = "running"     // forward steps started
-	StatusSucceeded   = "succeeded"   // KindSagaSucceeded
-	StatusCompensated = "compensated" // KindSagaCompensated
-	StatusFailed      = "failed"      // KindSagaFailed / Expired / CompensationFailed
-)
+// Status values are the generated closed value-set from the orderstatus response
+// schema (orderstatusgen.ResponseDataStatus*, #1935) — the schema enum is the single
+// source, so the wire status vocabulary cannot drift from this derivation.
 
 // Option configures the orderstatus Service.
 type Option func(*Service)
@@ -110,7 +106,7 @@ func NewService(clk clock.Clock, opts ...Option) (*Service, error) {
 // silently treated as "accepted", because masking it would hide enrollment
 // bugs (e.g. a network partition between the order write and the journal
 // Enqueue call).
-func (s *Service) GetOrderStatus(ctx context.Context, orderID string) (string, error) {
+func (s *Service) GetOrderStatus(ctx context.Context, orderID string) (orderstatusgen.ResponseDataStatus, error) {
 	// Confirm the order exists — returns ErrOrderNotFound if absent.
 	if _, err := s.orders.GetByID(ctx, orderID); err != nil {
 		return "", fmt.Errorf("orderstatus: get order: %w", err)
@@ -129,7 +125,7 @@ func (s *Service) GetOrderStatus(ctx context.Context, orderID string) (string, e
 	s.logger.Info(
 		"orderstatus: status derived",
 		slog.String("order_id", orderID),
-		slog.String("status", status),
+		slog.String("status", string(status)),
 	)
 	return status, nil
 }
@@ -151,16 +147,16 @@ func (s *Service) GetOrderStatus(ctx context.Context, orderID string) (string, e
 // unreachable with the current EventKind set. SAGA-STATUS-FANOUT-COVERAGE-01
 // does not guard this consumer-side switch, so a runtime Warn is the required
 // fallback for any future EventKind added without updating this switch.
-func (s *Service) deriveStatus(events []journal.Event) string {
+func (s *Service) deriveStatus(events []journal.Event) orderstatusgen.ResponseDataStatus {
 	var sawStep bool
 	for _, ev := range events {
 		switch ev.Kind {
 		case journal.KindSagaSucceeded:
-			return StatusSucceeded
+			return orderstatusgen.ResponseDataStatusSucceeded
 		case journal.KindSagaCompensated:
-			return StatusCompensated
+			return orderstatusgen.ResponseDataStatusCompensated
 		case journal.KindSagaFailed, journal.KindSagaExpired, journal.KindSagaCompensationFailed:
-			return StatusFailed
+			return orderstatusgen.ResponseDataStatusFailed
 		case journal.KindStepStarted, journal.KindStepCompleted,
 			journal.KindStepFailed, journal.KindStepCompensated,
 			journal.KindCompensationStarted, journal.KindStepCompensationFailed:
@@ -173,7 +169,7 @@ func (s *Service) deriveStatus(events []journal.Event) string {
 		}
 	}
 	if sawStep {
-		return StatusRunning
+		return orderstatusgen.ResponseDataStatusRunning
 	}
-	return StatusAccepted
+	return orderstatusgen.ResponseDataStatusAccepted
 }
