@@ -435,6 +435,10 @@ func (h idempotencyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sc := logScope{keyHash: keyShortHash(idemKey), subject: p.Subject, tenantID: k.Namespace()}
 	fp, ok := readBodyFingerprint(r.Context(), w, r, sc)
 	if !ok {
+		// readBodyFingerprint already wrote the 503 + slog; record the metric
+		// state here (it has no cfg access) so body-read failures are observable
+		// like every other failure path.
+		cfg.observeState(r.Context(), StateBodyReadFailed)
 		return
 	}
 	// Mint the sealed RequestIdentity (caller + body fingerprint + validated key) and

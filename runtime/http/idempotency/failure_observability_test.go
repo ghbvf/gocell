@@ -1,7 +1,6 @@
 package idempotency
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 )
 
@@ -32,15 +32,16 @@ type failingBodyWriter struct {
 
 func (f *failingBodyWriter) Write(_ []byte) (int, error) { return 0, f.writeErr }
 
-// captureSlog swaps the package-level default logger for a JSON handler over buf
-// (the middleware logs via package-level slog.ErrorContext) and restores it on
-// cleanup.
-func captureSlog(t *testing.T) *bytes.Buffer {
+// captureSlog redirects the process-global default logger (the middleware logs
+// via package-level slog.ErrorContext) to a JSON buffer for the duration of t.
+// It goes through slogcapture.InstallDefault — the sole sanctioned global-default
+// redirect site (SLOG-CAPTURE-GLOBAL-FUNNEL-01) — and uses a SyncBuffer so reads stay
+// race-safe. Tests using it MUST stay serial (no t.Parallel) per InstallDefault's
+// contract: a global redirect would race parallel siblings (#1490).
+func captureSlog(t *testing.T) *sloghelper.SyncBuffer {
 	t.Helper()
-	buf := &bytes.Buffer{}
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	buf := sloghelper.NewSyncBuffer()
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	return buf
 }
 
@@ -53,7 +54,8 @@ func captureSlog(t *testing.T) *bytes.Buffer {
 func TestServeHTTP_BodyReadError_Returns503AndLogs(t *testing.T) {
 	clk := clockmock.New(time.Now())
 	ms := NewMemStore(clk)
-	mw := Middleware(clk, ms)
+	obs := &recordingObserver{}
+	mw := Middleware(clk, ms, WithMetrics(obs))
 	buf := captureSlog(t)
 
 	handler := mw(testHandler(200, "should-not-run"))
@@ -65,6 +67,10 @@ func TestServeHTTP_BodyReadError_Returns503AndLogs(t *testing.T) {
 
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503; body: %s", rr.Code, rr.Body.String())
+	}
+
+	if len(obs.states) != 1 || obs.states[0] != StateBodyReadFailed {
+		t.Errorf("metric states: got %v, want [StateBodyReadFailed]", obs.states)
 	}
 
 	var envelope struct {
