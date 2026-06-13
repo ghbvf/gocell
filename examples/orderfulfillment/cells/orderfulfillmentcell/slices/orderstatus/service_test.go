@@ -8,6 +8,7 @@ import (
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/domain"
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/mem"
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/slices/orderstatus"
+	orderstatusgen "github.com/ghbvf/gocell/generated/contracts/http/orderfulfillment/orderstatus/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/kernel/saga/journal"
@@ -124,8 +125,8 @@ func TestGetOrderStatus_Accepted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetOrderStatus: %v", err)
 	}
-	if status != orderstatus.StatusAccepted {
-		t.Errorf("status = %q, want %q", status, orderstatus.StatusAccepted)
+	if status != orderstatusgen.ResponseDataStatusAccepted {
+		t.Errorf("status = %q, want %q", status, orderstatusgen.ResponseDataStatusAccepted)
 	}
 }
 
@@ -182,7 +183,7 @@ func TestGetOrderStatus_StatusTable(t *testing.T) {
 	tests := []struct {
 		name       string
 		setup      setup
-		wantStatus string
+		wantStatus orderstatusgen.ResponseDataStatus
 	}{
 		{
 			name: "running_after_step_completed",
@@ -191,7 +192,7 @@ func TestGetOrderStatus_StatusTable(t *testing.T) {
 				leaseID := claimLease(t, b.jrnl)
 				mustAppend(t, b.jrnl, orderID, leaseID, journal.Event{Kind: journal.KindStepCompleted, StepName: "reserve"})
 			},
-			wantStatus: orderstatus.StatusRunning,
+			wantStatus: orderstatusgen.ResponseDataStatusRunning,
 		},
 		{
 			name: "succeeded",
@@ -202,7 +203,7 @@ func TestGetOrderStatus_StatusTable(t *testing.T) {
 				mustAppend(t, b.jrnl, orderID, leaseID, journal.Event{Kind: journal.KindStepStarted, StepName: "reserve"})
 				mustMarkTerminal(t, b.jrnl, orderID, leaseID, saga.StatusSucceeded)
 			},
-			wantStatus: orderstatus.StatusSucceeded,
+			wantStatus: orderstatusgen.ResponseDataStatusSucceeded,
 		},
 		{
 			name: "compensated",
@@ -214,7 +215,7 @@ func TestGetOrderStatus_StatusTable(t *testing.T) {
 				mustAppend(t, b.jrnl, orderID, leaseID, journal.Event{Kind: journal.KindCompensationStarted})
 				mustMarkTerminal(t, b.jrnl, orderID, leaseID, saga.StatusCompensated)
 			},
-			wantStatus: orderstatus.StatusCompensated,
+			wantStatus: orderstatusgen.ResponseDataStatusCompensated,
 		},
 		{
 			name: "failed_via_saga_failed",
@@ -224,7 +225,7 @@ func TestGetOrderStatus_StatusTable(t *testing.T) {
 				// Pending → Failed directly (no steps committed, no compensation).
 				mustMarkTerminal(t, b.jrnl, orderID, leaseID, saga.StatusFailed)
 			},
-			wantStatus: orderstatus.StatusFailed,
+			wantStatus: orderstatusgen.ResponseDataStatusFailed,
 		},
 		{
 			name: "failed_via_saga_expired",
@@ -233,7 +234,7 @@ func TestGetOrderStatus_StatusTable(t *testing.T) {
 				leaseID := claimLease(t, b.jrnl)
 				mustMarkTerminal(t, b.jrnl, orderID, leaseID, saga.StatusExpired)
 			},
-			wantStatus: orderstatus.StatusFailed,
+			wantStatus: orderstatusgen.ResponseDataStatusFailed,
 		},
 		{
 			name: "failed_via_saga_compensation_failed",
@@ -245,7 +246,7 @@ func TestGetOrderStatus_StatusTable(t *testing.T) {
 				mustAppend(t, b.jrnl, orderID, leaseID, journal.Event{Kind: journal.KindCompensationStarted})
 				mustMarkTerminal(t, b.jrnl, orderID, leaseID, saga.StatusCompensationFailed)
 			},
-			wantStatus: orderstatus.StatusFailed,
+			wantStatus: orderstatusgen.ResponseDataStatusFailed,
 		},
 	}
 

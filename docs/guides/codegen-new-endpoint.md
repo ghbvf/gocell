@@ -99,6 +99,43 @@ This writes three files under `generated/contracts/http/myapp/widgets/create/v1/
 
 Do **not** edit these files — they are regenerated on every `gocell generate contract`.
 
+### Closed value sets (enum)
+
+A `string` field whose values are a closed set declares them with JSON-schema
+`enum` instead of prose — codegen then emits a typed Go enum + const block, so the
+value set has a single machine source (#1935):
+
+```json
+"status": { "type": "string", "enum": ["accepted", "running", "succeeded"] }
+```
+
+generates (named `<Parent><Field>`):
+
+```go
+type ResponseDataStatus string
+
+const (
+	ResponseDataStatusAccepted  ResponseDataStatus = "accepted"
+	ResponseDataStatusRunning   ResponseDataStatus = "running"
+	ResponseDataStatusSucceeded ResponseDataStatus = "succeeded"
+)
+```
+
+Use the generated constants in your Service/handler — do **not** re-declare local
+`const` strings (that reintroduces the drift the enum eliminates). Rules:
+
+- Only `string` fields are supported; `enum` on any other type (or with no explicit
+  `"type": "string"`) is a generate-time error.
+- **The typed enum is a produce-side + single-source guarantee, not a wire
+  validator.** `encoding/json` does not enforce enum membership, so a value decoded
+  from an untrusted boundary (event payload, request body) can be any string. A
+  consumer that switches on a decoded enum must keep a `default` arm that rejects
+  out-of-set values (e.g. route to DLX) — see the
+  `devicecert-rotation-resolved` consumer. Server-produced responses need no such
+  guard (the handler only ever sets generated constants).
+
+See ADR `docs/architecture/202606130640-1935-adr-contractgen-enum-typed-go.md`.
+
 ## Step 3: Implement the Service interface
 
 In your slice package implement the generated `Service` interface:

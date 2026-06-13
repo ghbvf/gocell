@@ -67,7 +67,9 @@ func rotateCmdEntry(t *testing.T) kcommand.Entry {
 }
 
 // resolvedEntry builds an event.devicecert-rotation-resolved.v1 outbox entry.
-func resolvedEntry(t *testing.T, deviceID string, epoch int64, outcome string, resolvedAt time.Time) outbox.Entry {
+// outcome is the typed enum; bad-wire tests pass rotationresolved.PayloadOutcome("…")
+// explicitly to inject an out-of-set value (json decoding does not enforce enum).
+func resolvedEntry(t *testing.T, deviceID string, epoch int64, outcome rotationresolved.PayloadOutcome, resolvedAt time.Time) outbox.Entry {
 	t.Helper()
 	payload, err := json.Marshal(rotationresolved.Payload{
 		DeviceID:   deviceID,
@@ -99,7 +101,7 @@ func rawEntry(t *testing.T, raw []byte) outbox.Entry {
 func resolvedEntryRawTime(t *testing.T, resolvedAt string) outbox.Entry {
 	t.Helper()
 	return rawEntry(t, mustJSON(t, rotationresolved.Payload{
-		DeviceID: testDeviceID, Epoch: 2, Outcome: outcomeSucceeded, ResolvedAt: resolvedAt,
+		DeviceID: testDeviceID, Epoch: 2, Outcome: rotationresolved.PayloadOutcomeSucceeded, ResolvedAt: resolvedAt,
 	}))
 }
 
@@ -128,7 +130,7 @@ func TestOnCommandResolved_RotateCertSuccess_EmitsResolvedEvent(t *testing.T) {
 	if err := json.Unmarshal(entries[0].Payload(), &got); err != nil {
 		t.Fatalf("decode emitted payload: %v", err)
 	}
-	if got.DeviceID != "dev-1" || got.Epoch != 2 || got.Outcome != outcomeSucceeded {
+	if got.DeviceID != "dev-1" || got.Epoch != 2 || got.Outcome != rotationresolved.PayloadOutcomeSucceeded {
 		t.Fatalf("payload = %+v, want {dev-1, 2, succeeded}", got)
 	}
 	if got.ResolvedAt != testBase.Format(time.RFC3339Nano) {
@@ -151,14 +153,14 @@ func TestOnCommandResolved_NonRotateCert_NoEmit(t *testing.T) {
 func TestOnCommandResolved_OutcomeMapping(t *testing.T) {
 	cases := []struct {
 		reason kcommand.AckReason
-		want   string
+		want   rotationresolved.PayloadOutcome
 	}{
-		{kcommand.AckSuccess, outcomeSucceeded},
-		{kcommand.AckFailed, outcomeFailed},
-		{kcommand.AckRejected, outcomeRejected},
+		{kcommand.AckSuccess, rotationresolved.PayloadOutcomeSucceeded},
+		{kcommand.AckFailed, rotationresolved.PayloadOutcomeFailed},
+		{kcommand.AckRejected, rotationresolved.PayloadOutcomeRejected},
 	}
 	for _, tc := range cases {
-		t.Run(tc.want, func(t *testing.T) {
+		t.Run(string(tc.want), func(t *testing.T) {
 			svc, rec := newTestService(t, mem.NewDeviceRepository())
 			svc.OnCommandResolved(selfCtx(testDeviceID), rotateCmdEntry(t), tc.reason)
 			entries := rec.Entries()
@@ -241,7 +243,7 @@ func TestHandleRotationResolved_Succeeded_AdvancesCert(t *testing.T) {
 	seedDevice(t, repo, "dev-1", 2, testBase.Add(time.Hour)) // near-expiry candidate
 	svc, _ := newTestService(t, repo)
 
-	res := svc.HandleRotationResolved(context.Background(), resolvedEntry(t, "dev-1", 2, outcomeSucceeded, testBase))
+	res := svc.HandleRotationResolved(context.Background(), resolvedEntry(t, "dev-1", 2, rotationresolved.PayloadOutcomeSucceeded, testBase))
 	if res.Disposition != outbox.DispositionAck {
 		t.Fatalf("Disposition = %v, want Ack; err=%v", res.Disposition, res.Err)
 	}
@@ -265,7 +267,7 @@ func TestHandleRotationResolved_StaleEpoch_AckNoOp(t *testing.T) {
 	svc, _ := newTestService(t, repo)
 
 	// Replay a resolve for the now-stale epoch 2.
-	res := svc.HandleRotationResolved(context.Background(), resolvedEntry(t, "dev-1", 2, outcomeSucceeded, testBase))
+	res := svc.HandleRotationResolved(context.Background(), resolvedEntry(t, "dev-1", 2, rotationresolved.PayloadOutcomeSucceeded, testBase))
 	if res.Disposition != outbox.DispositionAck {
 		t.Fatalf("Disposition = %v, want Ack (idempotent no-op)", res.Disposition)
 	}
@@ -276,8 +278,8 @@ func TestHandleRotationResolved_StaleEpoch_AckNoOp(t *testing.T) {
 }
 
 func TestHandleRotationResolved_Failure_AckNoCertChange(t *testing.T) {
-	for _, outcome := range []string{outcomeFailed, outcomeRejected} {
-		t.Run(outcome, func(t *testing.T) {
+	for _, outcome := range []rotationresolved.PayloadOutcome{rotationresolved.PayloadOutcomeFailed, rotationresolved.PayloadOutcomeRejected} {
+		t.Run(string(outcome), func(t *testing.T) {
 			repo := mem.NewDeviceRepository()
 			seedDevice(t, repo, "dev-1", 2, testBase.Add(time.Hour))
 			svc, _ := newTestService(t, repo)
@@ -300,17 +302,25 @@ func TestHandleRotationResolved_RejectsBadOrMissingPayload(t *testing.T) {
 		entry func(t *testing.T) outbox.Entry
 	}{
 		{"undecodable", func(t *testing.T) outbox.Entry { return rawEntry(t, []byte("not json")) }},
-		{"empty deviceId", func(t *testing.T) outbox.Entry { return resolvedEntry(t, "", 2, outcomeSucceeded, testBase) }},
-		{"epoch below DefaultCertEpoch", func(t *testing.T) outbox.Entry { return resolvedEntry(t, "dev-1", 0, outcomeSucceeded, testBase) }},
-		{"unknown outcome", func(t *testing.T) outbox.Entry { return resolvedEntry(t, "dev-1", 2, "weird", testBase) }},
+		{"empty deviceId", func(t *testing.T) outbox.Entry {
+			return resolvedEntry(t, "", 2, rotationresolved.PayloadOutcomeSucceeded, testBase)
+		}},
+		{"epoch below DefaultCertEpoch", func(t *testing.T) outbox.Entry {
+			return resolvedEntry(t, "dev-1", 0, rotationresolved.PayloadOutcomeSucceeded, testBase)
+		}},
+		{"unknown outcome", func(t *testing.T) outbox.Entry {
+			// Out-of-set wire value: typed field, but json decode does not enforce
+			// enum membership, so the consumer's default arm must DLX it.
+			return resolvedEntry(t, "dev-1", 2, rotationresolved.PayloadOutcome("weird"), testBase)
+		}},
 		{"empty resolvedAt", func(t *testing.T) outbox.Entry { return resolvedEntryRawTime(t, "") }},
 		{"unparseable resolvedAt", func(t *testing.T) outbox.Entry { return resolvedEntryRawTime(t, "not-a-time") }},
 		// FIX 2: over-long field length bounds (defense against log-injection / parse-DoS).
 		{"deviceId too long", func(t *testing.T) outbox.Entry {
-			return resolvedEntry(t, strings.Repeat("x", maxDeviceIDLen+1), 2, outcomeSucceeded, testBase)
+			return resolvedEntry(t, strings.Repeat("x", maxDeviceIDLen+1), 2, rotationresolved.PayloadOutcomeSucceeded, testBase)
 		}},
 		{"outcome too long", func(t *testing.T) outbox.Entry {
-			return resolvedEntry(t, "dev-1", 2, strings.Repeat("o", maxOutcomeLen+1), testBase)
+			return resolvedEntry(t, "dev-1", 2, rotationresolved.PayloadOutcome(strings.Repeat("o", maxOutcomeLen+1)), testBase)
 		}},
 		{"resolvedAt too long", func(t *testing.T) outbox.Entry {
 			return resolvedEntryRawTime(t, strings.Repeat("t", maxResolvedAtLen+1))
@@ -345,7 +355,7 @@ func TestHandleRotationResolved_RepoError_Requeue(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 
-	res := svc.HandleRotationResolved(context.Background(), resolvedEntry(t, "dev-1", 2, outcomeSucceeded, testBase))
+	res := svc.HandleRotationResolved(context.Background(), resolvedEntry(t, "dev-1", 2, rotationresolved.PayloadOutcomeSucceeded, testBase))
 	if res.Disposition != outbox.DispositionRequeue {
 		t.Fatalf("Disposition = %v, want Requeue (transient repo error)", res.Disposition)
 	}
@@ -374,7 +384,7 @@ func TestHandleRotationResolved_UnknownDevice_AckNoOp(t *testing.T) {
 	svc, _ := newTestService(t, mem.NewDeviceRepository())
 
 	res := svc.HandleRotationResolved(context.Background(),
-		resolvedEntry(t, "dev-ghost", 1, outcomeSucceeded, testBase))
+		resolvedEntry(t, "dev-ghost", 1, rotationresolved.PayloadOutcomeSucceeded, testBase))
 	if res.Disposition != outbox.DispositionAck {
 		t.Fatalf("Disposition = %v, want Ack (unknown device is an idempotent no-op); err=%v",
 			res.Disposition, res.Err)
@@ -385,15 +395,15 @@ func TestHandleRotationResolved_UnknownDevice_AckNoOp(t *testing.T) {
 // is incremented for each valid outcome.
 func TestHandleRotationResolved_OutcomeCounter_Increments(t *testing.T) {
 	cases := []struct {
-		outcome string
+		outcome rotationresolved.PayloadOutcome
 		seedID  string // device to seed; empty = no seed
 	}{
-		{outcomeSucceeded, "dev-1"},
-		{outcomeFailed, "dev-metric"},
-		{outcomeRejected, "dev-1"},
+		{rotationresolved.PayloadOutcomeSucceeded, "dev-1"},
+		{rotationresolved.PayloadOutcomeFailed, "dev-metric"},
+		{rotationresolved.PayloadOutcomeRejected, "dev-1"},
 	}
 	for _, tc := range cases {
-		t.Run(tc.outcome, func(t *testing.T) {
+		t.Run(string(tc.outcome), func(t *testing.T) {
 			spy := newCounterSpyProvider()
 			repo := mem.NewDeviceRepository()
 			if tc.seedID != "" {
@@ -412,7 +422,7 @@ func TestHandleRotationResolved_OutcomeCounter_Increments(t *testing.T) {
 			if len(ops) != 1 {
 				t.Fatalf("outcome=%q: want 1 counter inc, got %d", tc.outcome, len(ops))
 			}
-			if ops[0].labels["outcome"] != tc.outcome {
+			if ops[0].labels["outcome"] != string(tc.outcome) {
 				t.Fatalf("outcome=%q: counter label outcome=%q, want %q",
 					tc.outcome, ops[0].labels["outcome"], tc.outcome)
 			}
