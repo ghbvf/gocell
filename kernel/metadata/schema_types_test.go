@@ -305,6 +305,8 @@ func TestIdempotencyFrameworkStatuses(t *testing.T) {
 		{"PATCH jwt → 409,422", "PATCH", "/api/v1/x", false, HTTPAuthMeta{}, []int{409, 422}},
 		{"DELETE jwt → 409,422", "DELETE", "/api/v1/x", false, HTTPAuthMeta{}, []int{409, 422}},
 		{"POST serviceOwned (still PrincipalUser) → 409,422", "POST", "/api/v1/x", false, HTTPAuthMeta{ServiceOwned: true}, []int{409, 422}},
+		{"POST pwResetExempt → 409,422", "POST", "/api/v1/x", false, HTTPAuthMeta{PasswordResetExempt: true}, []int{409, 422}},
+		{"POST admin path (operator JWT) → 409,422", "POST", "/admin/v1/x", false, HTTPAuthMeta{}, []int{409, 422}},
 		// Non-PrincipalUser auth shapes → middleware bypass → nil (#1591).
 		{"POST public (anonymous) → none", "POST", "/api/v1/x", false, HTTPAuthMeta{Public: true}, nil},
 		{"PUT public → none", "PUT", "/api/v1/x", false, HTTPAuthMeta{Public: true}, nil},

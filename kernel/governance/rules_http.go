@@ -339,7 +339,8 @@ func (v *Validator) checkCH07() []ValidationResult {
 					"auth.responses — it is computed from the route's method and auth shape by "+
 					"IdempotencyFrameworkStatuses() and folded into the contract surface automatically",
 					c.ID, status),
-				fmt.Sprintf("remove %d from endpoints.http.auth.responses", status),
+				fmt.Sprintf("remove %d from endpoints.http.auth.responses (if this is a genuine "+
+					"handler-emitted business status, declare it in the responses map instead)", status),
 			))
 		}
 	}

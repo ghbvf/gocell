@@ -1613,6 +1613,17 @@ func TestCheckCH07_EmptyAuthResponses_Pass(t *testing.T) {
 		"a route with no hand-authored framework status satisfies CH-07 (statuses are computed)")
 }
 
+func TestCheckCH07_BusinessStatusInResponsesMap_NotFlagged(t *testing.T) {
+	// CH-07 scans only auth.responses. A genuine handler-emitted business 409/422 in
+	// the responses map (a typed business response) is a different concern (CH-04) and
+	// must NOT be flagged — only hand-authored framework statuses in auth.responses are.
+	c := ch07Contract("POST", false, nil) // auth.responses empty
+	c.Endpoints.HTTP.Responses[409] = metadata.HTTPResponseMeta{Description: "business conflict", SchemaRef: "x"}
+	c.Endpoints.HTTP.Responses[422] = metadata.HTTPResponseMeta{Description: "semantic validation", SchemaRef: "x"}
+	assert.Empty(t, runCH07(t, c),
+		"409/422 in the responses map (business, handler-emitted) must not be flagged by CH-07")
+}
+
 func TestCheckCH07_ForbidsUniversally(t *testing.T) {
 	// The forbid is method/exempt/auth-shape-agnostic: 409/422 are computed, never
 	// hand-authored, so even a GET or exempt route may not carry them in auth.responses.
@@ -1633,10 +1644,23 @@ func TestDeclaredErrorStatuses_FoldsAuthShapeAwareOracle(t *testing.T) {
 	assert.Contains(t, reachable, 409, "reachable mutating route folds the computed 409")
 	assert.Contains(t, reachable, 422, "reachable mutating route folds the computed 422")
 
-	// Public (non-PrincipalUser) mutating route → oracle nil → no fold.
+	// Non-PrincipalUser mutating routes → oracle nil → no fold. All three bypass
+	// shapes (public/bootstrap/internal-path) must be covered.
 	public := ch07Contract("POST", false, nil)
 	public.Endpoints.HTTP.Auth.Public = true
 	pub := declaredErrorStatuses(public)
 	assert.NotContains(t, pub, 409, "public route must not fold 409 (middleware bypassed)")
 	assert.NotContains(t, pub, 422, "public route must not fold 422 (middleware bypassed)")
+
+	bootstrap := ch07Contract("POST", false, nil)
+	bootstrap.Endpoints.HTTP.Auth.Bootstrap = true
+	bs := declaredErrorStatuses(bootstrap)
+	assert.NotContains(t, bs, 409, "bootstrap route must not fold 409 (basic-auth, not PrincipalUser)")
+	assert.NotContains(t, bs, 422, "bootstrap route must not fold 422 (basic-auth, not PrincipalUser)")
+
+	internal := ch07Contract("POST", false, nil)
+	internal.Endpoints.HTTP.Path = "/internal/v1/x"
+	intl := declaredErrorStatuses(internal)
+	assert.NotContains(t, intl, 409, "internal route must not fold 409 (service-token, not PrincipalUser)")
+	assert.NotContains(t, intl, 422, "internal route must not fold 422 (service-token, not PrincipalUser)")
 }

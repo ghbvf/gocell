@@ -225,10 +225,15 @@ type HTTPAuthMeta struct {
 	// Responses lists HTTP status codes injected by listener-mounted middleware,
 	// NOT emitted by the handler/adapter — so they are declared here (no typed
 	// response struct) rather than in the responses map. Despite the "auth" name,
-	// this list already spans non-auth middleware: bootstrap auth 401, rate limiter
-	// 429, and HTTP-idempotency 409 (ClaimBusy) / 422 (key-reused) — both required
-	// on non-exempt mutating routes by governance rule CH-07. CH-04 treats these as
-	// declared without requiring handler AST emission.
+	// this list spans non-auth middleware the oracle does NOT compute: bootstrap
+	// auth 401, rate limiter 429. CH-04 treats these as declared without requiring
+	// handler AST emission.
+	//
+	// The HTTP-idempotency framework statuses 409 (ClaimBusy) / 422 (key-reused)
+	// MUST NOT appear here (compute-only, #1591): they are computed from method +
+	// auth shape by IdempotencyFrameworkStatuses() and folded into the declared
+	// surface by governance.declaredErrorStatuses. CH-07 forbids hand-authoring them
+	// in this list.
 	Responses []int `yaml:"responses,omitempty" json:"responses,omitempty"`
 }
 
