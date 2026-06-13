@@ -42,6 +42,16 @@ func WithAssemblyID(id string) Option {
 	}
 }
 
+// WithDeploymentTopology supplies the codegen-derived deployment placement spec
+// so phase0 seals+validates it into the runtime DeploymentTopology queried by
+// transport routing. composition.Builder.Build injects this from the assembly's
+// generatedDeploymentTopology(). Omitting it leaves the zero DeploymentTopology
+// (all cells co-located) — identical to single-process behavior. This is
+// DEPLOYMENT topology; distinct from WithControlPlaneTopology (adapter topology).
+func WithDeploymentTopology(spec DeploymentTopologySpec) Option {
+	return func(b *Bootstrap) { b.deploymentTopologySpec = spec }
+}
+
 // WithControlPlaneTopology supplies the resolved deployment Topology so phase0
 // can validate that the listener service-token guard's actual NonceStore is
 // replay-safe for the topology (#1410 review F1): an in-memory store is rejected
