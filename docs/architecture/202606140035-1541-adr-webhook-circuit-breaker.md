@@ -94,8 +94,8 @@ stated explicitly in `kernel/webhook/circuit.go`:
 
 There is no production opt-out (a disabled breaker would be the banned
 noop-publisher posture). Per-deployment / per-contract threshold tuning is a
-genuine future need, not built speculatively — backlogged (cf. #1542
-per-contract Claim TTL).
+genuine future need, not built speculatively — backlogged at #2106
+(per-endpoint threshold configuration and tenant-scoped keying).
 
 ### D5 — Composition with the outbox DLX (terminal behavior unchanged)
 
@@ -105,7 +105,21 @@ endpoint still exhausts `MaxRetries` and is Rejected to the DLX. Because the Svi
 attempt does a POST or fast-fails, **time-to-DLX does not regress** — the breaker
 only removes the wasted HTTP round-trips + 30s timeouts within the retry window.
 
-### D6 — In-memory, per-process scope (no distributed breaker)
+### D6 — Multi-tenant noisy-neighbor analysis
+
+`circuitGate` keys breakers on the bare target URL without a tenant dimension.
+In the common case each tenant configures a distinct target URL (their own
+webhook receiver), so the URL itself provides natural isolation: one tenant's
+5xx burst does not affect another tenant's breaker state.
+
+The shared-endpoint edge case: if multiple tenants configure the **same** target
+URL (e.g. a public Slack webhook endpoint), one tenant's failure burst will trip
+the breaker and fast-fail deliveries for all tenants sharing that URL. This is
+accepted for v1 — the probability is low and the effect is self-correcting (the
+breaker recovers after `circuitOpenTimeout`). Tenant-scoped keying
+(`tenantID:targetURL`) would close this gap and is backlogged at #2106.
+
+### D7 — In-memory, per-process scope (no distributed breaker)
 
 Breaker state is per-process in-memory, like every classic circuit breaker
 (sony/gobreaker, resilience4j). In a multi-pod deployment each pod trips
@@ -118,7 +132,7 @@ justified, and the outbox DLX remains the cross-pod correctness backstop.
 
 | Mechanism | Grade |
 |-----------|-------|
-| `circuitbreaker.State` sealed enum (closed value set, exhaustive `String`) | Hard (type system) |
+| `State` 值集 + 穷举 `String()` default — `type State int` is not a type-level closed set (`State(99)` is expressible), but `State` values are only produced inside `breaker`; external literal construction is inert | Medium (type `State int` provides no Hard closure; values only emitted by internal state machine) |
 | Gate sits in the sole `Handle` → sole `client.Do` egress, already funneled by `WEBHOOK-SSRF-GUARD-01` → bypass is structurally inexpressible | Hard (no new guard needed) |
 | `webhook_deliveries_total{result}` value set incl. `circuit_open` frozen by `WEBHOOK-METRIC-LABEL-VALUES-FROZEN-01` (+ negative control) | Medium |
 | `ErrCircuitBreakerConfig` / `ErrCircuitOpen` under owned `ERR_CIRCUIT_` prefix, `ERRCODE-PREFIX-OWNERSHIP-01` golden | Hard (golden) |

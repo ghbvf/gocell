@@ -44,7 +44,7 @@ func TestWebhookMetrics_RecordDelivery(t *testing.T) {
 	}
 	results := []webhookDeliveryResult{
 		deliverySuccess, deliveryClientError, deliveryServerError,
-		deliveryTransportError, deliveryBlocked,
+		deliveryTransportError, deliveryBlocked, deliveryCircuitOpen,
 	}
 	ctx := context.Background()
 	for _, r := range results {

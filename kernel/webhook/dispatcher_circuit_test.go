@@ -84,6 +84,19 @@ func TestDispatcher_Handle_CircuitOpensAndFastFails(t *testing.T) {
 	got := p.counterValue("webhook_deliveries_total",
 		kernelmetrics.Labels{"result": string(deliveryCircuitOpen), "source": "stripe"})
 	assert.Equal(t, int64(1), got, "circuit-open fast-fail must record result=circuit_open")
+
+	// Fast-fail must NOT record a duration sample: no HTTP attempt was made.
+	// Only the tripCount real POSTs should have contributed duration samples.
+	// Access the histogram directly (labelKey is package-internal) to avoid
+	// adding a second call to histogramCount with the same name — which would
+	// trigger the unparam linter since there is only one histogram metric.
+	durKey := labelKey([]string{labelSource}, kernelmetrics.Labels{labelSource: "stripe"})
+	var durationCount int64
+	if h, ok := p.histograms[metricWebhookDeliveryDuration]; ok {
+		durationCount = h.obs[durKey]
+	}
+	assert.Equal(t, int64(tripCount), durationCount,
+		"only real HTTP deliveries must record a duration sample; fast-fail must not")
 }
 
 // TestDispatcher_Handle_CircuitHalfOpenRecoversOnSuccess verifies that after the
@@ -214,6 +227,72 @@ func TestDispatcher_Handle_CircuitPerEndpointIsolation(t *testing.T) {
 	assert.Equal(t, outbox.DispositionAck, resB.Disposition, "endpoint B circuit unaffected by A")
 	assert.Equal(t, 1, int(hitsB.Load()), "endpoint B was reached")
 	_ = hitsA
+}
+
+// TestDispatcher_Handle_Circuit429Trips verifies that 429 responses count as
+// endpoint-health failures and trip the circuit after circuitTripThreshold+1
+// consecutive responses.
+func TestDispatcher_Handle_Circuit429Trips(t *testing.T) {
+	srv, hits, _ := countingServer(t, http.StatusTooManyRequests)
+
+	d, err := NewDispatcher(clockmock.New(time.Unix(dispatchTestTS, 0)),
+		dispatchTestSigner(t), NewSafePolicy(WithAllowLoopback()), staticSelector(srv.URL))
+	require.NoError(t, err)
+
+	// Trip: 429 counts as an endpoint-health failure. Use a named const rather
+	// than deliverN to avoid an unparam lint hit on deliverN's n parameter.
+	const tripCount = circuitTripThreshold + 1
+	for range tripCount {
+		d.Handle(context.Background(), newTestEntry(t, []byte(`{"k":"v"}`)))
+	}
+	require.Equal(t, tripCount, int(hits.Load()), "all trip deliveries reach the endpoint while closed")
+
+	// Next delivery: circuit is open → fast-fail.
+	res := d.Handle(context.Background(), newTestEntry(t, []byte(`{"k":"v"}`)))
+	requireCircuitOpen(t, res)
+	assert.Equal(t, tripCount, int(hits.Load()), "open circuit must NOT POST to the endpoint")
+}
+
+// TestCircuitGate_FailOpenOnEmptyEndpoint verifies that Allow("") — which
+// yields an empty host → breaker construction fails → nil breaker — fails open:
+// allowed=true and the done callback does not panic.
+func TestCircuitGate_FailOpenOnEmptyEndpoint(t *testing.T) {
+	g := newCircuitGate(clockmock.New(time.Unix(0, 0)))
+	// An empty endpoint: url.Parse("") gives host=""; breakerFor returns nil.
+	allow, done := g.Allow("")
+	assert.True(t, allow, "nil breaker must fail open (allow=true)")
+	require.NotNil(t, done, "fail-open must return a non-nil done callback")
+	// done must not panic regardless of the error passed.
+	assert.NotPanics(t, func() { done(nil) })
+}
+
+// TestDispatcher_Handle_CircuitTransportFaultTrips verifies that repeated
+// transport faults (connection refused after server close) count as endpoint-
+// health failures and trip the circuit after circuitTripThreshold+1 attempts.
+func TestDispatcher_Handle_CircuitTransportFaultTrips(t *testing.T) {
+	// Start a server, capture its URL, then close it so every dial attempt
+	// after closure is refused — a genuine transport fault (not SSRF).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	target := srv.URL
+	srv.Close() // close immediately; subsequent dials will be refused
+
+	d, err := NewDispatcher(clockmock.New(time.Unix(dispatchTestTS, 0)),
+		dispatchTestSigner(t), NewSafePolicy(WithAllowLoopback()), staticSelector(target))
+	require.NoError(t, err)
+
+	// Each delivery fails with a transport fault (connection refused) → Requeue.
+	tripCount := circuitTripThreshold + 1
+	for range tripCount {
+		res := d.Handle(context.Background(), newTestEntry(t, []byte(`{"k":"v"}`)))
+		assert.Equal(t, outbox.DispositionRequeue, res.Disposition,
+			"transport fault before trip must Requeue")
+	}
+
+	// Circuit is now open → next delivery fast-fails.
+	res := d.Handle(context.Background(), newTestEntry(t, []byte(`{"k":"v"}`)))
+	requireCircuitOpen(t, res)
 }
 
 // TestCircuitGate_BoundedEviction verifies the per-endpoint breaker registry is

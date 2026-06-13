@@ -2,7 +2,9 @@ package webhook
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -53,6 +55,7 @@ var errCircuitProbeFailure = errors.New("webhook: endpoint health failure")
 // the endpoint is reachable and responding, so they are breaker successes even
 // when the outbox still Requeues the delivery (Classify is independent — the
 // breaker tracks endpoint reachability, not payload validity).
+// ref: ADR 202606140035-1541 §D3
 func circuitProbeOutcome(statusCode int, transportErr error) error {
 	if transportErr != nil {
 		var ee *errcode.Error
@@ -92,11 +95,12 @@ func newCircuitGate(clk clock.Clock) *circuitGate {
 func (g *circuitGate) Allow(endpoint string) (allowed bool, done func(err error)) {
 	b := g.breakerFor(endpoint)
 	if b == nil {
-		// Unreachable in practice: breakerFor only returns nil if breaker
-		// construction failed, which happens solely on an empty Name — and
-		// endpoint is a validated non-empty target URL. Fail open (allow, no-op
-		// done) so a hypothetical construction bug degrades to "no breaker
-		// protection", never to "delivery blocked".
+		// breakerFor returns nil only when breaker construction failed (empty
+		// Name). This can happen if endpoint is empty or url.Parse yields no host.
+		// Fail open so a configuration bug degrades to "no breaker protection"
+		// rather than blocking all delivery. Log at Error (correctness failure).
+		slog.Error("webhook: circuit breaker construction failed, failing open",
+			slog.String("warning", "endpoint circuit breaker unavailable"))
 		return true, func(error) {}
 	}
 	return b.Allow()
@@ -127,11 +131,17 @@ func (g *circuitGate) breakerFor(endpoint string) *circuitbreaker.Breaker {
 			break
 		}
 	}
-	// New only errors on an empty Name; endpoint is a validated non-empty target
-	// URL, so this construction cannot fail here. A nil return drives Allow's
-	// documented fail-open path rather than a silent swallow.
+	// Use host-only as the breaker Name so state-transition logs (slog
+	// "name" attr in fireTransitions) never emit the target path or query,
+	// which may carry tenant identifiers or secret hints. The map key remains
+	// the full endpoint URL so per-endpoint isolation is preserved — two paths
+	// on the same host get independent breakers and independent log labels.
+	breakerName := endpoint
+	if u, err := url.Parse(endpoint); err == nil && u.Host != "" {
+		breakerName = u.Host
+	}
 	b, err := circuitbreaker.New(circuitbreaker.Config{
-		Name:        endpoint,
+		Name:        breakerName,
 		MaxRequests: circuitHalfOpenProbes,
 		Timeout:     circuitOpenTimeout,
 		ReadyToTrip: circuitReadyToTrip,

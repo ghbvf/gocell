@@ -98,6 +98,11 @@ clustered** deployments.
   breaker only suppresses the wasted POST + 30s timeout while the endpoint is open.
   A spike here pinpoints a down target without the connection churn. See ADR
   `202606140035-1541-adr-webhook-circuit-breaker.md`.
+  **Runbook**: operators should configure an alert on sustained non-zero
+  `webhook_deliveries_total{result="circuit_open"}` to detect endpoints that remain
+  in the open state for more than one breaker timeout cycle (>60 s by default);
+  sustained circuit-open indicates a persistently-down receiver that is consuming
+  the retry budget without recovery — inspect the target endpoint and DLX depth.
 - The delay queues are bounded per subscription (one queue per schedule tier).
 
 ## One-time classic → quorum migration (#1835)

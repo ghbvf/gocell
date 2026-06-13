@@ -83,8 +83,9 @@ const ruleKernelInternalDAG = "KERNEL-INTERNAL-DAG-01"
 // registration edge. #1541 added webhook→circuitbreaker (the dispatcher gates
 // per-endpoint delivery on kernel/circuitbreaker, promoted from the deleted
 // adapters/circuitbreaker module — a clock-only resilience primitive) and
-// webhook→crypto (#1540 source-secret transform); circuitbreaker is a leaf
-// (→clock only), so both are acyclic.
+// webhook→crypto (#1540 source-secret transform); circuitbreaker is a kernel
+// leaf (→kernel/clock only; also imports pkg/errcode, which is not
+// kernel-internal), so both are acyclic.
 // kernel/projection and kernel/reconcile (W10 / #661) are registered as
 // consumer-layer kernels: they depend on cell/outbox/wrapper/observability etc.
 // but nothing imports them back, so no cycle is introduced. governance→saga

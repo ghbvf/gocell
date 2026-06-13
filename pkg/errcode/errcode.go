@@ -253,6 +253,8 @@ const (
 	ErrValidationInvalidUUID Code = "ERR_VALIDATION_INVALID_UUID"
 
 	// Resilience middleware error codes.
+	// ErrCircuitOpen signals a per-endpoint circuit is open (fast-fail); issued
+	// by the HTTP CircuitBreaker middleware and kernel/webhook.Dispatcher.Handle.
 	ErrCircuitOpen Code = "ERR_CIRCUIT_OPEN"
 	// ErrCircuitBreakerConfig signals an invalid circuit-breaker Config at
 	// construction time (e.g. Name empty). Distinct from ErrValidationFailed

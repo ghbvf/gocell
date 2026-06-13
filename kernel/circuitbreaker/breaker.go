@@ -269,10 +269,21 @@ func (b *breaker) setState(target State, now time.Time, ts *[]stateTransition) {
 // to the caller of Allow / done; the state machine remains consistent.
 func (b *breaker) fireTransitions(ts []stateTransition) {
 	for _, t := range ts {
-		slog.Info("circuitbreaker: state transition",
-			"name", t.name,
-			"from", t.prev.String(),
-			"to", t.next.String())
+		// closed→open and half-open→open are degradation events (endpoint
+		// fast-failing); log at Warn per the observability convention
+		// "degraded operation = Warn". Recovery transitions (open→half-open,
+		// half-open→closed) are lifecycle events; log at Info.
+		if t.next == StateOpen {
+			slog.Warn("circuitbreaker: state transition",
+				"name", t.name,
+				"from", t.prev.String(),
+				"to", t.next.String())
+		} else {
+			slog.Info("circuitbreaker: state transition",
+				"name", t.name,
+				"from", t.prev.String(),
+				"to", t.next.String())
+		}
 		if b.onStateChange != nil {
 			b.onStateChange(t.name, t.prev, t.next)
 		}
