@@ -73,12 +73,51 @@ func TestBuilder_RequiresTrigger(t *testing.T) {
 	assert.Contains(t, err.Error(), "Trigger")
 }
 
+// TestBuilder_RequiresTenancy: the unset zero-value Tenancy{} (the only value an
+// external caller can pass without a minter — the mode field is unexported) is
+// rejected at Build, mirroring the Trigger-required fail-fast (#1954). This is
+// the runtime backstop for axis 3; axis 2 (omitting the param entirely) is a
+// compile error, not testable here.
+func TestBuilder_RequiresTenancy(t *testing.T) {
+	t.Parallel()
+	rec := funcReconciler(func(_ context.Context, _ Request) (Result, error) {
+		return Result{}, nil
+	})
+	_, err := New(rec, Tenancy{}).WithTrigger(realTrigger{}).Build()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Tenancy")
+}
+
+// TestBuilder_SingleTenantBuildSucceeds / TestBuilder_TenantScopedBuildSucceeds:
+// BOTH declared stances Build successfully (accept-as-acknowledgement) — the
+// forcing function is that you must consciously pick one, not that one is
+// rejected (#1954).
+func TestBuilder_SingleTenantBuildSucceeds(t *testing.T) {
+	t.Parallel()
+	rec := funcReconciler(func(_ context.Context, _ Request) (Result, error) {
+		return Result{}, nil
+	})
+	loop, err := New(rec, SingleTenant()).WithTrigger(realTrigger{}).Build()
+	require.NoError(t, err)
+	require.NotNil(t, loop)
+}
+
+func TestBuilder_TenantScopedBuildSucceeds(t *testing.T) {
+	t.Parallel()
+	rec := funcReconciler(func(_ context.Context, _ Request) (Result, error) {
+		return Result{}, nil
+	})
+	loop, err := New(rec, TenantScoped()).WithTrigger(realTrigger{}).Build()
+	require.NoError(t, err)
+	require.NotNil(t, loop)
+}
+
 func TestBuilder_ValidBuildSucceeds(t *testing.T) {
 	t.Parallel()
 	rec := funcReconciler(func(_ context.Context, _ Request) (Result, error) {
 		return Result{}, nil
 	})
-	loop, err := New(rec).WithTrigger(realTrigger{}).Build()
+	loop, err := New(rec, SingleTenant()).WithTrigger(realTrigger{}).Build()
 	require.NoError(t, err)
 	require.NotNil(t, loop)
 }
