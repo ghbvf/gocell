@@ -212,8 +212,37 @@ func checkGRPCProtoCollisions(root string, p *metadata.ProjectMeta) error {
 		if err != nil {
 			return fmt.Errorf("contract %q: %w", id, err)
 		}
+		// Per-method public overlay referential integrity (#1675): each
+		// endpoints.grpc.methods[] name must be a member of the proto's method set.
+		// kernel/governance cannot read the .proto (kernel⊥tools), so this codegen
+		// pre-pass is the Hard funnel gate; FMT-41 owns the metadata-pure guards.
+		if err := validateGRPCMethodOverlay(id, g.Methods, info); err != nil {
+			return err
+		}
 		if err := reg.register(id, g.Service, info); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// validateGRPCMethodOverlay enforces that every endpoints.grpc.methods[] overlay
+// entry (#1675) names an RPC that actually exists in the proto service. The
+// overlay only annotates proto methods (it never declares the method set, which
+// stays single-sourced from the .proto, #1655); a stale or typo'd name is a wiring
+// bug that must fail generation rather than emit an inert PublicMethods entry.
+func validateGRPCMethodOverlay(contractID string, methods []metadata.GRPCMethodMeta, info ProtoServiceInfo) error {
+	if len(methods) == 0 {
+		return nil
+	}
+	protoMethods := make(map[string]struct{}, len(info.Methods))
+	for _, pm := range info.Methods {
+		protoMethods[pm.Name] = struct{}{}
+	}
+	for _, m := range methods {
+		if _, ok := protoMethods[m.Name]; !ok {
+			return fmt.Errorf("contract %q: endpoints.grpc.methods entry %q is not a method of proto service %q",
+				contractID, m.Name, info.ProtoPackage)
 		}
 	}
 	return nil

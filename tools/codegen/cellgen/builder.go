@@ -968,7 +968,25 @@ func buildGrpcServiceSpecFromCU(
 		ListenerConst: "cell.PrimaryListener",
 		ProtoRel:      metadata.GRPCProtoRepoRelPath(contract.File, g.Proto),
 		Service:       g.Service,
+		PublicMethods: grpcPublicMethods(g),
 	}, nil
+}
+
+// grpcPublicMethods composes the per-method public overlay (#1675) into FULL
+// method names (/{Service}/{Method}) for the public:true entries, keyed
+// identically to the runtime registrar's attribution map so a declared-public
+// method matches the served RPC exactly. Referential integrity (each name ∈ the
+// proto method set) is the contractgen pre-pass's job; here we only compose.
+// Returns nil when no method is public (the fail-closed default), so the template
+// omits the PublicMethods field.
+func grpcPublicMethods(g *metadata.GRPCTransportMeta) []string {
+	var out []string
+	for _, m := range g.Methods {
+		if m.Public {
+			out = append(out, "/"+g.Service+"/"+m.Name)
+		}
+	}
+	return out
 }
 
 // validateGrpcContractEndpoint checks that cu.Contract exists, has kind=grpc,
