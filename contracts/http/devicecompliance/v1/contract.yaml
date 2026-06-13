@@ -1,0 +1,41 @@
+id: http.devicecompliance.v1
+kind: http
+ownerCell: _framework
+consistencyLevel: L0
+lifecycle: draft
+description: |
+  Device compliance posture query — neutral provider-agnostic query for device security posture
+  (disk encryption / antivirus / patch / firewall) plus an overall verdict, feeding Authorize
+  (Zero-Trust) decisions. Provider-agnostic so MDM/ZT can consume any device provider
+  (winmdm/Intune/Jamf/自建) — diskEncryption, not BitLocker.
+  ref: docs/plans/specs/1895-device-identity-cert-framework/spec.md FR-013
+  ref: docs/architecture/202606130635-1939-adr-framework-owned-contract.md
+endpoints:
+  server: _framework
+  clients: []
+  http:
+    method: GET
+    path: /api/v1/devicecompliance
+    successStatus: 200
+    noContent: false
+    responseProjection: true
+    queryParams:
+      deviceId:
+        type: string
+        required: true
+        maxLength: 256
+    responses:
+      400:
+        description: "Bad request — missing required query parameter or invalid format"
+        schemaRef: "../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — authenticated but lacks required permission"
+        schemaRef: "../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: "Not Found — device not found"
+        schemaRef: "../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  response: response.schema.json
