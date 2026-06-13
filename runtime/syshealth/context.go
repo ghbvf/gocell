@@ -3,15 +3,25 @@ package syshealth
 import "context"
 
 // healthViewKey is an unexported context key so no external package can inject a
-// HealthView through any path other than WithHealthView. Mirrors the
+// HealthView under it through any path other than WithHealthView. Mirrors the
 // auth.authorizerKey sealed-construction funnel (AUTHORIZER-CTX-FUNNEL-01).
-//
-// AI-robust Grade: Hard — "sealed construction" + "single sanctioned holder".
 //
 // INVARIANT: SYSHEALTH-VIEW-CTX-FUNNEL-01
 // Upstream: WithHealthView is the SOLE injector. Downstream: HealthViewFromContext
-// is the SOLE reader. The unexported key type makes any out-of-package write a
-// compile error.
+// is the SOLE reader.
+//
+// AI-robust Grade (funnel — upstream + downstream stated separately):
+//   - WRITE seal = Hard: the unexported key type makes any out-of-package write
+//     under healthViewKey a compile error (sealed construction + single holder).
+//   - CALLSITE breadth = Medium: which production files may CALL the exported
+//     WithHealthView / HealthViewFromContext is not expressible in the type
+//     system (both must stay exported so bootstrap and healthread can call them
+//     across packages); it is enforced by the SYSHEALTH-VIEW-CTX-FUNNEL-01
+//     archtest (tools/archtest/syshealth_view_funnel_test.go) — writer
+//     allowlisted to runtime/bootstrap, reader to corecells/syscore healthread.
+//     The reader side has NO Hard backstop; that scan is its only guard. The
+//     Hard-ization path (route-group-scoped injection / sealed injector token) is
+//     backlog-tracked.
 type healthViewKey struct{}
 
 // WithHealthView injects the runtime HealthView into the context. It is the sole

@@ -111,11 +111,11 @@ func (v *view) Report(ctx context.Context) Report {
 	cells := make([]CellHealth, 0, len(v.asm.CellIDs()))
 	for _, id := range v.asm.CellIDs() {
 		ch := CellHealth{
-			ID:     id,
-			Live:   true, // in-process: registered in a started assembly ⇒ live
-			Ready:  cellReady(v.asm.Cell(id)),
-			Status: normalizeCellStatus(cellStatus[id].Status),
+			ID:   id,
+			Live: true, // in-process: registered in a started assembly ⇒ live
 		}
+		lifecycleReady := cellReady(v.asm.Cell(id))
+		ownStatus := normalizeCellStatus(cellStatus[id].Status)
 		for _, p := range snaps[id].Probes {
 			n := p.Name()
 			// Mark the probe cell-owned BEFORE the status lookup: ownership is
@@ -124,9 +124,7 @@ func (v *view) Report(ctx context.Context) Report {
 			// bucket below even on the rare path where it has no result yet.
 			owned[n] = struct{}{}
 			if pr, ok := byName[n]; ok {
-				dep := toProbeHealth(pr)
-				ch.Deps = append(ch.Deps, dep)
-				worst = maxRank(worst, dep.Status)
+				ch.Deps = append(ch.Deps, toProbeHealth(pr))
 			}
 			// else: a snapshot probe with no aggregator result (transient —
 			// e.g. registered but not yet drained) is safely omitted from deps
@@ -134,6 +132,10 @@ func (v *view) Report(ctx context.Context) Report {
 			// snapshot probe is drained into the aggregator at bootstrap, so this
 			// branch is defensive only.
 		}
+		// Fold the cell's OWN dep health back into its ready/status: a down dep is
+		// not a mere annotation in Deps — it changes the cell's verdict (K8s
+		// readiness parity). overall then folds the now-dep-aware cell status.
+		ch.Ready, ch.Status = foldCellDeps(lifecycleReady, ownStatus, ch.Deps)
 		worst = maxRank(worst, ch.Status)
 		cells = append(cells, ch)
 	}
@@ -201,6 +203,23 @@ func normalizeCellStatus(s string) string {
 	default:
 		return statusUnhealthy
 	}
+}
+
+// foldCellDeps folds a cell's own lifecycle status + readiness with the worst of
+// its dependency probes, mirroring Kubernetes readiness semantics: a hard-down
+// dependency (unhealthy/timeout — rank 2) takes the cell OUT of ready and marks
+// its status unhealthy; a degraded dependency degrades the status but leaves
+// lifecycle readiness intact. The cell's own Health() status flows into status
+// only — the ready axis stays lifecycle+deps (own-status→ready coupling is
+// intentionally out of scope; folding dep health into the verdict is the fix).
+func foldCellDeps(lifecycleReady bool, ownStatus string, deps []ProbeHealth) (ready bool, status string) {
+	depWorst := 0
+	for _, d := range deps {
+		depWorst = maxRank(depWorst, d.Status)
+	}
+	status = statusFromRank(maxRank(depWorst, ownStatus))
+	ready = lifecycleReady && depWorst < rank(statusUnhealthy)
+	return ready, status
 }
 
 // maxRank folds a status string into the running worst-rank.

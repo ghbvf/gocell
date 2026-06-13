@@ -22,9 +22,11 @@
 //
 // resourceReadProjectionCarveOut lists contract IDs that are GET reads with a
 // `data` resource response but are LEGITIMATELY exempt from the masking funnel
-// (e.g. a future bare-scalar GET whose `data` is a non-maskable primitive). It
-// is CURRENTLY EMPTY — all GET reads are projection-marked, so there is zero
-// masking debt. Per error-handling.md §Carve-out the carve-out is function-level
+// (e.g. a GET whose composite `data` is genuinely non-maskable). It currently
+// holds ONE entry — http.admin.health.cells.v1 (#1860): a runtime/global
+// cell-health read with no tenant-scoped rows and no maskable column axis (a
+// {overall,cells,adapters} composite). Per error-handling.md §Carve-out the
+// carve-out is function-level
 // (a Go map, not a file/package exemption); ANY addition or removal MUST be
 // synced with the carve-out ADR registry in the same PR. Adding an entry without
 // an ADR, or leaving an entry whose contract is in fact already marked (a stale
@@ -70,8 +72,8 @@
 //     resolved to its target schema and detected as resource-bearing — it cannot
 //     skip enforcement. The red fixtures red_data_ref / red_data_items_ref pin
 //     this (previously a documented blind spot; closed in PR-12 F2).
-//   - Anti-vacuity is the non-empty resource-read-GET set assertion (≥1; ≥10
-//     after PR-12). If the enumeration collapses to zero (e.g. the parser stops
+//   - Anti-vacuity is the non-empty resource-read-GET set assertion (≥1; ≥11
+//     after #1860). If the enumeration collapses to zero (e.g. the parser stops
 //     surfacing GET endpoints), the production test FAILS rather than passing
 //     vacuously.
 package archtest
@@ -88,8 +90,8 @@ import (
 
 // resourceReadProjectionCarveOut is the function-level carve-out registry for GET
 // reads with a `data` resource response that are legitimately exempt from the
-// masking funnel. EMPTY today (zero masking debt). See file godoc §Carve-out
-// before changing this; every change syncs the carve-out ADR registry.
+// masking funnel. Holds http.admin.health.cells.v1 (#1860); see file godoc
+// §Carve-out for the rationale. Every change syncs the carve-out ADR registry.
 var resourceReadProjectionCarveOut = map[string]struct{}{
 	// http.admin.health.cells.v1 (#1860): the syscore aggregated cell-health read
 	// is runtime/global observability state — NOT tenant-scoped, NO PII, NO
@@ -106,8 +108,11 @@ var resourceReadProjectionCarveOut = map[string]struct{}{
 // catches a schema-predicate regression that silently drops contracts from the
 // scan (e.g. if responseHasTopLevelDataResource stops detecting the data envelope
 // shape, the count would collapse to zero and the test would pass vacuously).
-// After PR-12 there are 10 platform GET reads (all marked).
-const minExpectedResourceReadGETs = 10
+// The scan counts every resource-bearing GET before the carve-out gate; this
+// floor is the STABLE minimum (projection-marked platform reads + the #1860
+// carve-out = 11). The live count can sit above it while a newly-merged unmarked
+// read still awaits its marker, so the floor is a lower bound, not the exact total.
+const minExpectedResourceReadGETs = 11
 
 // TestResourceProjectionCoverage01 asserts every resource-bearing GET read
 // contract is responseProjection-marked (or carved out), and that no carve-out
@@ -197,8 +202,8 @@ func assertAntiVacuityFloor(t *testing.T, resourceReadCount int) {
 	if resourceReadCount < minExpectedResourceReadGETs {
 		t.Fatalf("RESOURCE-PROJECTION-COVERAGE-01: only %d resource-bearing GET reads enumerated (floor: %d) — "+
 			"the coverage check may be vacuous or contracts were removed without updating the floor. "+
-			"After PR-12 there are 10 platform GET reads (all marked); if the enumeration collapsed, "+
-			"fix the parse or the response-schema convention, or update minExpectedResourceReadGETs.",
+			"The stable minimum is 11 (projection-marked platform reads + the #1860 carve-out); if the "+
+			"enumeration collapsed, fix the parse or the response-schema convention, or update minExpectedResourceReadGETs.",
 			resourceReadCount, minExpectedResourceReadGETs)
 	}
 }

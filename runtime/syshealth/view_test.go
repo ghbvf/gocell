@@ -250,6 +250,73 @@ func TestView_Report_SnapshotProbeMissingFromEvaluate(t *testing.T) {
 	}
 }
 
+// TestFoldCellDeps pins the dep→cell verdict folding (the F1 fix): a hard-down dep
+// (unhealthy/timeout) flips the cell out of ready AND to unhealthy; a degraded dep
+// degrades status but leaves lifecycle readiness; the cell's own status floors the
+// status verdict but does NOT flip ready (own-status→ready coupling is out of
+// scope); lifecycle-not-ready stays not-ready regardless of healthy deps.
+func TestFoldCellDeps(t *testing.T) {
+	cases := []struct {
+		name       string
+		ready      bool
+		ownStatus  string
+		deps       []string
+		wantReady  bool
+		wantStatus string
+	}{
+		{"ready_no_deps", true, "healthy", nil, true, "healthy"},
+		{"ready_dep_healthy", true, "healthy", []string{"healthy"}, true, "healthy"},
+		{"ready_dep_degraded", true, "healthy", []string{"degraded"}, true, "degraded"},
+		{"ready_dep_unhealthy", true, "healthy", []string{"unhealthy"}, false, "unhealthy"},
+		{"ready_dep_timeout", true, "healthy", []string{"timeout"}, false, "unhealthy"},
+		{"ready_own_degraded_dep_healthy", true, "degraded", []string{"healthy"}, true, "degraded"},
+		{"ready_own_unhealthy_no_dep", true, "unhealthy", nil, true, "unhealthy"},
+		{"ready_deps_degraded_then_unhealthy", true, "healthy", []string{"degraded", "unhealthy"}, false, "unhealthy"},
+		{"notready_dep_healthy", false, "healthy", []string{"healthy"}, false, "healthy"},
+		{"notready_dep_unhealthy", false, "healthy", []string{"unhealthy"}, false, "unhealthy"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			deps := make([]ProbeHealth, len(c.deps))
+			for i, s := range c.deps {
+				deps[i] = ProbeHealth{Name: "d", Status: s}
+			}
+			gotReady, gotStatus := foldCellDeps(c.ready, c.ownStatus, deps)
+			if gotReady != c.wantReady || gotStatus != c.wantStatus {
+				t.Fatalf("foldCellDeps(%v, %q, %v) = (%v, %q), want (%v, %q)",
+					c.ready, c.ownStatus, c.deps, gotReady, gotStatus, c.wantReady, c.wantStatus)
+			}
+		})
+	}
+}
+
+// TestView_Report_CellDepDownFlipsReady is the F1 regression (fails on the
+// pre-fix code): a cell that is lifecycle-ready with a healthy own status but
+// whose OWN dependency probe is down must project ready=false / status=unhealthy
+// — not a healthy/ready cell with the failure buried in Deps — and overall must
+// reflect it. The dep stays listed.
+func TestView_Report_CellDepDownFlipsReady(t *testing.T) {
+	v := New(fakeAsm{
+		ids:    []string{"only"},
+		snaps:  map[string]cell.RegistrySnapshot{"only": {Probes: []healthz.Probe{mustProbe(t, "only_repo_ready")}}},
+		health: map[string]cell.HealthStatus{"only": {Status: "healthy"}},
+		cells:  map[string]cell.Cell{"only": newStubCell(t, "only", true)},
+	}, fakeAgg{snap: healthz.Snapshot{Probes: []healthz.ProbeResult{
+		{Name: mustName(t, "only_repo_ready"), Status: healthz.StatusDown, Err: errors.New("repo down"), Latency: latency1ms},
+	}}})
+
+	c0 := v.Report(context.Background()).Cells[0]
+	if c0.Ready {
+		t.Fatal("cell with a down dependency must project ready=false, not ready=true with the failure buried in Deps")
+	}
+	if c0.Status != "unhealthy" {
+		t.Fatalf("cell status = %q, want unhealthy (down dep folds into the cell verdict)", c0.Status)
+	}
+	if len(c0.Deps) != 1 || c0.Deps[0].Status != "unhealthy" {
+		t.Fatalf("dep must still be listed: %+v", c0.Deps)
+	}
+}
+
 // TestHealthViewContextFunnel pins the sealed ctx funnel: round-trip + absence.
 func TestHealthViewContextFunnel(t *testing.T) {
 	if _, ok := HealthViewFromContext(context.Background()); ok {

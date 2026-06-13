@@ -75,6 +75,13 @@ metadata. Synthesising per-cell adapters would require either a `"postgres"→"p
 string mapping (a Soft carrier `ai-robust.md` forbids) or new typed registration machinery
 modelling a fiction. The set-difference uses probe identity only — zero string mapping.
 
+A cell's dep health **folds back into its own verdict** (review round 1, #1975 F1): a hard-down
+dep (unhealthy/timeout) marks the cell `ready:false`/`status:unhealthy`; a degraded dep degrades
+`status` but leaves lifecycle readiness intact — mirroring Kubernetes readiness, where a failed
+dependency probe takes the workload out of ready rather than being a side annotation. `deps`
+still lists every probe. `foldCellDeps` reuses the same severity rank as `overall`; the cell's
+own `Health()` status floors `status` but does NOT flip `ready` (the ready axis is lifecycle+deps).
+
 ### 4. Response shape: a single composite resource, not a list
 
 `{data: {overall, cells:[{id,live,ready,status,deps:[…]}], adapters:[…]}}`. `data` is an
@@ -112,13 +119,15 @@ enumerable action distinct from audit-ledger access — observability access is 
 | contract wire/types frozen | `gocell generate contract --verify` golden byte-diff | Hard |
 | syscore in assembly cell closed set / metrics label | assembly.yaml → generated boundary + sealed metrics cell-label resolver | Hard |
 | deps/adapters bucketing | structural probe-identity set-difference (no string mapping) — wrong bucketing fails the view unit test | Hard |
-| HealthView ctx funnel | unexported `healthViewKey` (sole `WithHealthView` writer / `HealthViewFromContext` reader) | Hard |
+| HealthView ctx funnel — write seal | unexported `healthViewKey` (out-of-pkg write under the key is a compile error) | Hard |
+| HealthView ctx funnel — callsite breadth | `SYSHEALTH-VIEW-CTX-FUNNEL-01` archtest: writer→`runtime/bootstrap`, reader→`corecells/syscore` healthread (funcs stay exported; reader has no Hard backstop) | Medium |
 | HealthView fail-closed | handler returns typed 503 on ctx absence + regression test | Medium |
 
 ### Archtest registrations (new platform thing → existing allowlist/golden)
 
 A new cell + contract + holder must enroll in the existing machine-checked registries
-(extending sanctioned sets, not adding Soft mechanisms):
+(extending sanctioned sets, not adding Soft mechanisms); review round 1 (#1975 F3) additionally
+adds one new Medium callsite-breadth guard for the funnel:
 
 - `goldenProbeNames()` += `corecells/syscore.ProbeRepoReady=syscore_repo_ready`
   (PROBENAME-SEALED-FUNNEL-01 inventory; the cellgen-emitted repo probe const is dead
@@ -131,6 +140,15 @@ A new cell + contract + holder must enroll in the existing machine-checked regis
   body — so there is no maskable column axis. Routing it through the tenant column-masking
   funnel (`responseProjection`) would be an identity-mask fiction. The carve-out is the
   rule's sanctioned "genuinely non-maskable resource" branch; this ADR is its registry.
+- `tools/archtest/syshealth_view_funnel_test.go` (**new**, review round 1 #1975 F3) owns
+  `SYSHEALTH-VIEW-CTX-FUNNEL-01` — the production-callsite breadth guard for the HealthView
+  funnel: writer `syshealth.WithHealthView` allowlisted to `runtime/bootstrap/phases_http.go`,
+  reader `syshealth.HealthViewFromContext` to `corecells/syscore/slices/healthread/service.go`
+  (`_test.go` exempt; anti-vacuity + empty-allowlist red self-check). It enforces the
+  "sole injector / sole reader" claim the unexported key alone does not: the key seals the
+  WRITE under it, not which production files may CALL the exported funcs. The reader side has
+  no Hard backstop; the Hard-ization path (route-group-scoped injection or a sealed injector
+  token that makes a production view unconstructible outside bootstrap) is backlog-tracked.
 
 ## Alternatives rejected
 
