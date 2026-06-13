@@ -59,6 +59,7 @@ func TestDeviceCompliance_V1(t *testing.T) {
 	c.MustRejectResponse(t, []byte(`{"data":{"compliant":true,"observedAt":"2026-06-13T00:00:00Z"}}`))   // missing deviceId
 	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","observedAt":"2026-06-13T00:00:00Z"}}`)) // missing compliant
 	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","compliant":true}}`))                    // missing observedAt
+	c.MustRejectResponse(t, []byte(`{}`))                                                                // missing data (top-level required)
 
 	// query param validation (FMT-25 maxLength)
 	c.ValidateQueryParam(t, "deviceId", "dev-1")

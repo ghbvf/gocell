@@ -16,7 +16,8 @@
       "properties": {
         "deviceId": {
           "type": "string",
-          "maxLength": 256
+          "maxLength": 256,
+          "description": "Provider-neutral device identifier, echoed from the query parameter."
         },
         "compliant": {
           "type": "boolean",
@@ -66,7 +67,8 @@
         },
         "tenantId": {
           "type": "string",
-          "maxLength": 256
+          "maxLength": 256,
+          "description": "Tenant this posture reading belongs to; framework-derived from the authenticated principal, never accepted as a client query parameter."
         }
       }
     }
