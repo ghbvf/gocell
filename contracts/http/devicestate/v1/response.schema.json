@@ -2,13 +2,16 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "http.devicestate.v1.response",
   "type": "object",
-  "required": ["data"],
-  "additionalProperties": false,
+  "required": [
+    "data"
+  ],
   "properties": {
     "data": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["deviceId", "state"],
+      "required": [
+        "deviceId",
+        "state"
+      ],
       "properties": {
         "deviceId": {
           "type": "string",
@@ -16,7 +19,11 @@
         },
         "state": {
           "type": "string",
-          "enum": ["online", "offline", "unknown"]
+          "enum": [
+            "online",
+            "offline",
+            "unknown"
+          ]
         },
         "lastSeenAt": {
           "type": "string",

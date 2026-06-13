@@ -2,13 +2,21 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "http.deviceidentity.enroll.v1.response",
   "type": "object",
-  "required": ["data"],
-  "additionalProperties": false,
+  "required": [
+    "data"
+  ],
   "properties": {
     "data": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["certificate", "chain", "serial", "notBefore", "notAfter", "epoch", "status"],
+      "required": [
+        "certificate",
+        "chain",
+        "serial",
+        "notBefore",
+        "notAfter",
+        "epoch",
+        "status"
+      ],
       "properties": {
         "certificate": {
           "type": "string",

@@ -2,13 +2,20 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "http.deviceidentity.status.v1.response",
   "type": "object",
-  "required": ["data"],
-  "additionalProperties": false,
+  "required": [
+    "data"
+  ],
   "properties": {
     "data": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["deviceId", "serial", "status", "notBefore", "notAfter", "epoch"],
+      "required": [
+        "deviceId",
+        "serial",
+        "status",
+        "notBefore",
+        "notAfter",
+        "epoch"
+      ],
       "properties": {
         "deviceId": {
           "type": "string",
