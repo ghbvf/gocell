@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	kerrors "github.com/ghbvf/gocell/adapters/postgres"
@@ -124,7 +125,7 @@ const instanceExistsQuery = `SELECT 1 FROM saga_instances WHERE id = $1`
 // lease arithmetic deterministically. In production the injected clock is
 // the real one, so there is no behavioral divergence vs PG now().
 //
-// $1 leaseID (text), $2 lease window microseconds (text), $3 batchSize,
+// $1 leaseID (text), $2 lease window (interval), $3 batchSize,
 // $4 now (timestamptz).
 //
 // current_version is intentionally NOT in the RETURNING list:
@@ -149,7 +150,7 @@ const claimPendingQuery = `WITH picked AS MATERIALIZED (
 	updated AS (
 		UPDATE saga_instances AS si
 		SET lease_id = $1,
-			lease_expires_at = $4::timestamptz + ($2 || ' microseconds')::interval
+			lease_expires_at = $4::timestamptz + $2
 		FROM picked
 		WHERE si.id = picked.id
 		RETURNING si.id, si.definition_id, si.status,
@@ -168,10 +169,10 @@ const claimPendingQuery = `WITH picked AS MATERIALIZED (
 // fenced ("lease valid at exact equality"). Strict `> $now` would race the
 // claim predicate `< $now` and leave an instant where both reject.
 //
-// $1 lease window microseconds (text), $2 instance id, $3 lease id,
+// $1 lease window (interval), $2 instance id, $3 lease id,
 // $4 now (timestamptz).
 const heartbeatQuery = `UPDATE saga_instances
-	SET lease_expires_at = $4::timestamptz + ($1 || ' microseconds')::interval
+	SET lease_expires_at = $4::timestamptz + $1
 	WHERE id = $2 AND lease_id = $3 AND lease_expires_at >= $4::timestamptz`
 
 // repoReadyQuery probes BOTH saga relations so schema/migration drift on
@@ -376,10 +377,14 @@ func (s *PGJournal) ClaimPending(
 	}
 
 	leaseStr := uuid.NewString()
-	leaseMicros := fmt.Sprintf("%d", leaseDuration.Microseconds())
+	// Typed interval (pgx encodes the OID) rather than string-concatenated
+	// `($n || ' microseconds')::interval` — keeps the lease window inside pgx's
+	// type system. (make_interval has no microsecs arg, so pgtype.Interval is the
+	// exact-microsecond route.)
+	leaseWindow := pgtype.Interval{Microseconds: leaseDuration.Microseconds(), Valid: true}
 	now := s.clock.Now()
 
-	rows, err := s.db.Query(ctx, claimPendingQuery, leaseStr, leaseMicros, batchSize, now)
+	rows, err := s.db.Query(ctx, claimPendingQuery, leaseStr, leaseWindow, batchSize, now)
 	if err != nil {
 		return nil, "", errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGQuery,
 			"saga journal: ClaimPending query failed", err)
@@ -439,9 +444,9 @@ func (s *PGJournal) Heartbeat(ctx context.Context, instanceID, leaseID idutil.Sa
 	if leaseDuration <= 0 {
 		return false, journal.NewNonPositiveLeaseDurationError(leaseDuration)
 	}
-	micros := fmt.Sprintf("%d", leaseDuration.Microseconds())
+	leaseWindow := pgtype.Interval{Microseconds: leaseDuration.Microseconds(), Valid: true}
 	now := s.clock.Now()
-	ct, err := s.db.Exec(ctx, heartbeatQuery, micros, string(instanceID), string(leaseID), now)
+	ct, err := s.db.Exec(ctx, heartbeatQuery, leaseWindow, string(instanceID), string(leaseID), now)
 	if err != nil {
 		return false, errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGQuery,
 			"saga journal: Heartbeat failed", err)

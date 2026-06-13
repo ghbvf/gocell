@@ -767,6 +767,15 @@ const (
 	// ErrConflict so operator dashboards can route saga producer-side races
 	// separately from cell-wide conflict signals.
 	ErrSagaDuplicateInstance Code = "ERR_SAGA_DUPLICATE_INSTANCE"
+	// ErrSagaStopTimeout signals that a saga runtime component (Coordinator /
+	// Tailer) exhausted its Stop deadline while shutting down — either waiting
+	// for Start to finish or for the drive/poll loop to drain. Paired with
+	// KindDeadlineExceeded → HTTP 504. Distinct from generic ErrConflict (which
+	// the lifecycle paths previously mis-used: a deadline is not a state
+	// conflict) so bootstrap LIFO Close and operator dashboards can classify a
+	// shutdown-budget timeout at the correct alert severity rather than as a
+	// resource-conflict signal.
+	ErrSagaStopTimeout Code = "ERR_SAGA_STOP_TIMEOUT"
 	// ErrProjectionNotFound signals that the projection rebuild control-plane
 	// endpoint (POST /admin/v1/projection/<cell>/<name>/rebuild) was given a
 	// <cell>/<name> path that resolves to no registered projection Coordinator.
