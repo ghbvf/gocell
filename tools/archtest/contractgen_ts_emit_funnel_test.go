@@ -40,22 +40,16 @@ import (
 )
 
 const (
-	// tsTemplatesDir is the contractgen templates subdirectory that holds
-	// the TS template files.
-	tsTemplatesDir = "tools/codegen/contractgen/templates/"
 	// tsTypesTemplate is the allowed TS types template file.
 	tsTypesTemplate = "tools/codegen/contractgen/templates/types.ts.tmpl"
 	// tsBarrelTemplate is the allowed TS barrel template file.
 	tsBarrelTemplate = "tools/codegen/contractgen/templates/barrel.ts.tmpl"
-	// tsContractgenPkg is the contractgen package path prefix.
-	tsContractgenPkg = "tools/codegen/contractgen/"
-	// tsGeneratedPrefix is the required generated-ts/ path prefix for TS writes.
-	tsGeneratedPrefix = "generated-ts/"
 )
 
 // ---------------------------------------------------------------------------
 // B1 — TS template uniqueness: only types.ts.tmpl and barrel.ts.tmpl may
-//      render .ts content, and they must live in contractgen/templates/.
+//
+//	render .ts content, and they must live in contractgen/templates/.
 //
 // Anti-vacuity: both allowed templates must be found (the found-set must be
 // exactly {types.ts.tmpl, barrel.ts.tmpl}).
@@ -216,8 +210,7 @@ func TestContractgenTSFunnel_B2_RedFixtureDetectsRenderCall(t *testing.T) {
 	src := `package contractgen
 func renderTS() { _ = codegen.Render("mod", renderOpts) }
 `
-	fset, f := parseTSFixture(t, src)
-	_ = fset
+	f := parseTSFixture(t, src)
 	violations := scanTSEmitForbiddenCalls(f, "tsemit.go")
 	if len(violations) == 0 {
 		t.Error("B2 detector missed codegen.Render call in tsemit.go fixture")
@@ -234,8 +227,7 @@ func renderTS() ([]byte, error) {
 	return buf, nil
 }
 `
-	fset, f := parseTSFixture(t, src)
-	_ = fset
+	f := parseTSFixture(t, src)
 	violations := scanTSEmitForbiddenCalls(f, "tsemit.go")
 	if len(violations) != 0 {
 		t.Errorf("B2 scanner over-flagged clean tsemit.go: %v", violations)
@@ -277,7 +269,7 @@ func scanTSEmitForbiddenCalls(f *ast.File, rel string) []string {
 func scanTSPathViolations(f *ast.File, rel string) []string {
 	var out []string
 	EachInSubtree[ast.BasicLit](f, func(lit *ast.BasicLit) {
-		s := strings.Trim(lit.Value, `"` + "`")
+		s := strings.Trim(lit.Value, `"`+"`")
 		// Look for literals that contain "generated/" but NOT "generated-ts/"
 		// and end with .ts, which would be a misrouted TS path.
 		if strings.Contains(s, "generated/") && strings.HasSuffix(s, ".ts") {
@@ -289,12 +281,12 @@ func scanTSPathViolations(f *ast.File, rel string) []string {
 }
 
 // parseTSFixture parses an inline Go source fixture for the B2 self-checks.
-func parseTSFixture(t *testing.T, src string) (*token.FileSet, *ast.File) {
+func parseTSFixture(t *testing.T, src string) *ast.File {
 	t.Helper()
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "fixture.go", src, parser.ParseComments)
 	if err != nil {
 		t.Fatalf("parseTSFixture: parse error: %v", err)
 	}
-	return fset, f
+	return f
 }
