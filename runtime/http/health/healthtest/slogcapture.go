@@ -79,6 +79,12 @@ func (h *CaptureHandler) Snapshot() []slog.Record {
 // This is the de-globalized default; reach for NewCapture only when the test
 // genuinely exercises the global default-logger wiring (see its godoc). Misuse
 // is funnel-guarded by SLOG-CAPTURE-GLOBAL-FUNNEL-01.
+//
+// Limitation: the backing CaptureHandler is simplified — its WithAttrs/WithGroup
+// return self (see the CaptureHandler godoc). Do NOT chain .With(...) / .WithGroup(...)
+// on the returned logger in tests: pre-filled attrs/groups are silently dropped,
+// so component code that captures via a derived sub-logger would assert on
+// records missing those attrs. Inject the returned logger directly.
 func NewLoggerCapture() (*slog.Logger, *CaptureHandler) {
 	h := &CaptureHandler{}
 	return slog.New(h), h

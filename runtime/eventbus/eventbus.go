@@ -73,6 +73,12 @@ type InMemoryEventBus struct {
 	// keeps async-goroutine emission isolated from the process-global
 	// slog.Default(), which tests can clobber under parallel + async writes
 	// (#1490). Tests inject a capture logger via healthtest.NewLoggerCapture().
+	//
+	// Production redaction safety: the default snapshot is taken at New() time,
+	// AFTER the entry point installs the redacting handler via slog.SetDefault
+	// (SLOG-HANDLER-SEALED-FUNNEL-01 A3 — assembly run() SetDefaults before
+	// constructing cells/bus), so the captured default is the redacting handler,
+	// not the bare stdlib logger.
 	logger *slog.Logger
 
 	// readyMu guards readyChans. Separate from mu to avoid lock ordering issues.

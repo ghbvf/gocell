@@ -55,6 +55,9 @@ func TestCaptureHandler_WithAttrsAndGroupReturnSelf(t *testing.T) {
 // installs the capture handler as slog default and t.Cleanup restores it.
 func TestNewCapture_RedirectsSlogDefaultAndRestoresOnCleanup(t *testing.T) {
 	prev := slog.Default()
+	// Defensive belt-and-suspenders: NewCapture's own t.Cleanup (run in the
+	// sub-test) already restores the default; this outer Cleanup guards the
+	// parent scope in case the sub-test or NewCapture stops restoring.
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	var capture *CaptureHandler

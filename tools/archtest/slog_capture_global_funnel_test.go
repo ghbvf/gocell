@@ -91,6 +91,11 @@ var healthtestPkgPath = PlatformModulePath + "/runtime/http/health/healthtest"
 // slogCaptureAllowlist is the closed, shrink-only set of rel-path dir prefixes
 // whose tests may call the global-mutating healthtest.NewCapture. See the file
 // godoc for why each is sanctioned.
+//
+// Note on the healthtest/ entry: it is a no-op for the direct-call scanner
+// (same-package callers use the unqualified ident NewCapture, an *ast.Ident
+// the SelectorExpr scan never matches) but DOES guard the indirect-reference
+// scanner (info.Uses resolves unqualified idents). Keep it for the latter.
 var slogCaptureAllowlist = []string{
 	"runtime/bootstrap/",
 	"cmd/corebundle/",
@@ -397,7 +402,7 @@ func TestSlogCaptureGlobalFunnel_NoIndirectReferences_Fixtures(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
-	dirs := []string{"indirect_ref_red"}
+	dirs := []string{"indirect_ref_red", "struct_field_ref_red"}
 	for _, dir := range dirs {
 		dir := dir
 		t.Run(dir, func(t *testing.T) {
