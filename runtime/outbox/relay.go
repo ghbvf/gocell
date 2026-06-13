@@ -642,8 +642,13 @@ func (r *Relay) publishBatch(ctx context.Context, entries []ClaimedEntry) []publ
 	for i, e := range entries {
 		if fn, ok := r.commandDispatchFor(e.RoutingTopic()); ok {
 			// Command entry: dispatch to its in-process handler (wrapped in the
-			// two-phase Claimer protocol) instead of publishing to the broker.
-			results[i] = r.dispatchCommand(ctx, e, fn)
+			// two-phase Claimer protocol) instead of publishing to the broker. This
+			// is the single command/event discriminator: mark the result so writeBack
+			// attributes the settled outcome to the command kind bucket — and thence
+			// outbox_relayed_total{kind="command"} + is_command logs (#1674).
+			res := r.dispatchCommand(ctx, e, fn)
+			res.isCommand = true
+			results[i] = res
 			continue
 		}
 		payload, marshalErr := kout.MarshalEnvelope(e.Entry)

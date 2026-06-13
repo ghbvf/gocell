@@ -655,6 +655,14 @@ retry-backoff 不同失败域），本 Gauge 不会随之增长。每次 Relay r
 而非 Prometheus scrape 间隔），应使用较长的 `for:` 窗口避免 scrape 窗口内的
 假阳性。
 
+注：`outbox_relayed_total` 自 #1674 起带 `kind` label（`event` = broker publish /
+`command` = 进程内 async command dispatch），与 `outcome`（`published|retried|dead|
+skipped|lost`）正交。上面不带 `kind` filter 的查询按两类求和，语义不变；按类对账用
+`outbox_relayed_total{kind="command",outcome="published"}`（命令分发吞吐）/
+`{kind="command",outcome="dead"}`（命令死信）等。两个 label 的值集都由
+`kernel/outbox` 的 typed enum 单源派生、冻结进 `metrics-schema.yaml` golden
+（OUTBOX-RELAY-LABEL-VALUES-FROZEN-01）。
+
 注: 此告警仅在 storage_backend=postgres 部署生效；memory 模式无 Relay，指标不产生 sample。
 
 ```yaml
