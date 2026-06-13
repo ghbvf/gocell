@@ -3,9 +3,11 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/transport"
 )
 
 // newTestRing creates a test HMAC key ring with a 32-byte key.
@@ -219,19 +222,43 @@ func TestNewHTTPConfigGetter_Constructor(t *testing.T) {
 	var _ ports.ConfigGetter = g
 }
 
-// TestHTTPConfigGetter_GetEntry_EmptyToken covers the token=="" branch in
-// GetEntry: when the ring is nil, GenerateServiceToken returns "" and GetEntry
-// returns ErrInternal without making an HTTP call.
-func TestHTTPConfigGetter_GetEntry_EmptyToken(t *testing.T) {
-	// nil ring causes GenerateServiceToken to return "" — GetEntry fails before
-	// ever calling the transport, so a nil transport here proves it is not reached.
-	client := NewHTTPConfigGetter(nil, nil, clock.Real())
-	_, err := client.GetEntry(context.Background(), testTenant, "any.key")
-	require.Error(t, err)
+// TestNewHTTPConfigGetter_NilDeps_FailFast asserts the constructor rejects a
+// nil/typed-nil transport and a nil keyring at construction (programmer/wiring
+// error), rather than deferring the failure to the first request.
+func TestNewHTTPConfigGetter_NilDeps_FailFast(t *testing.T) {
+	ring := newTestRing(t)
+	assert.Panics(t, func() { NewHTTPConfigGetter(nil, ring, clock.Real()) },
+		"nil CellTransport must fail-fast at construction")
+	assert.Panics(t, func() { NewHTTPConfigGetter((*transport.InProcessTransport)(nil), ring, clock.Real()) },
+		"typed-nil CellTransport must fail-fast at construction")
+	assert.Panics(t, func() { NewHTTPConfigGetter(httpTestTransport{}, nil, clock.Real()) },
+		"nil HMACKeyRing must fail-fast at construction")
+}
 
-	var ec *errcode.Error
-	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrInternal, ec.Code)
+// TestHTTPConfigGetter_GetEntry_BoundsContext asserts GetEntry bounds the
+// dispatch with a deadline before calling the transport, so a long-lived caller
+// ctx cannot let a configcore call hang (F3 — restored 5s bound).
+func TestHTTPConfigGetter_GetEntry_BoundsContext(t *testing.T) {
+	cap := &ctxCapturingTransport{}
+	client := NewHTTPConfigGetter(cap, newTestRing(t), clock.Real())
+	_, err := client.GetEntry(context.Background(), testTenant, "any.key")
+	require.NoError(t, err)
+	require.NotNil(t, cap.ctx, "transport must have been called")
+	_, ok := cap.ctx.Deadline()
+	assert.True(t, ok, "GetEntry must bound the dispatch ctx with a deadline (no unbounded hang)")
+}
+
+// ctxCapturingTransport is a CellTransport double recording the ctx it received,
+// answering 200 with an empty data envelope.
+type ctxCapturingTransport struct{ ctx context.Context }
+
+func (c *ctxCapturingTransport) DoContract(ctx context.Context, _ string, _ *http.Request) (*http.Response, error) {
+	c.ctx = ctx
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"data":{"key":"k","value":"v","sensitive":false,"version":1}}`)),
+	}, nil
 }
 
 // TestHTTPConfigGetter_GetEntry_BadResponseBody covers the json decode error path.

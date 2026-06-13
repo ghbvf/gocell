@@ -30,14 +30,32 @@ type CellTransport interface {
 // string where a TransportMode is required. The two-value set is intentionally
 // low-cardinality, so it is a legitimate frozen metric label (not a trace-only
 // attribute).
+//
+// Zero value is fail-closed: a [TransportMode] zero value is unavoidably
+// constructible by any package (Go zero values need no field access), so its
+// String() renders as [TransportModeUnknown] — never the empty string — so a
+// forged zero value can never write an empty/unattributed metric label
+// (mirrors metrics.CellLabel's zero-value-is-sentinel rule).
 type TransportMode struct {
 	// v is the wire/label value ("in_proc" | "remote"). Unexported: a non-zero
 	// TransportMode cannot be constructed outside this package.
 	v string
 }
 
-// String returns the metric-label / span-attribute value.
-func (m TransportMode) String() string { return m.v }
+// TransportModeUnknown is the fail-closed render of a zero-value (forged)
+// TransportMode. It is NOT a producible mode (not in allTransportModes) — only
+// the zero value renders as it, signaling a forged/uninitialised mode rather
+// than polluting the series with an empty label.
+const TransportModeUnknown = "unknown"
+
+// String returns the metric-label / span-attribute value. The zero value renders
+// as [TransportModeUnknown] (fail-closed), never the empty string.
+func (m TransportMode) String() string {
+	if m.v == "" {
+		return TransportModeUnknown
+	}
+	return m.v
+}
 
 // Package-private singletons — the sole TransportMode values. Exposed via
 // accessor functions (not exported vars) so the registered values are immutable:

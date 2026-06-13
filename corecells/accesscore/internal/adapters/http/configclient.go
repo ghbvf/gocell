@@ -9,11 +9,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/transport"
 )
@@ -25,6 +28,17 @@ const (
 	// CellTransport seam — in-process it routes by request path, remotely (US5
 	// #1966) it resolves configcore's endpoint.
 	configInternalGetContractID = "http.config.internal.get.v1"
+
+	// configClientTimeout bounds a single config refetch so a long-lived caller
+	// ctx (e.g. an event-consumer ctx) cannot let an in-process/remote configcore
+	// call hang indefinitely. Restores the 5s bound the pre-transport *http.Client
+	// carried. MESSAGE-CONST-LITERAL-01 messages below are required-dep fail-fasts.
+	configClientTimeout = 5 * time.Second
+
+	msgTransportNil = "accesscore/http.NewHTTPConfigGetter: CellTransport is required (nil rejected); " +
+		"the composition root must inject the in-process or remote transport"
+	msgRingNil = "accesscore/http.NewHTTPConfigGetter: HMACKeyRing is required (nil rejected); " +
+		"the composition root must supply InternalHMACRing"
 )
 
 // configEntryDataResponse mirrors the {data: {...}} envelope returned by
@@ -59,6 +73,14 @@ type HTTPConfigGetter struct {
 // header.
 func NewHTTPConfigGetter(t transport.CellTransport, ring *auth.HMACKeyRing, clk clock.Clock) *HTTPConfigGetter {
 	clock.MustHaveClock(clk, "accesscore/http.NewHTTPConfigGetter")
+	// Strong deps fail-fast at construction (programmer/wiring error), not at the
+	// first request: a nil/typed-nil transport or a nil keyring is unrecoverable.
+	if validation.IsNilInterface(t) {
+		panic(panicregister.Approved("configgetter-transport-nil", errcode.Assertion(msgTransportNil)))
+	}
+	if ring == nil {
+		panic(panicregister.Approved("configgetter-ring-nil", errcode.Assertion(msgRingNil)))
+	}
 	return &HTTPConfigGetter{
 		transport: t,
 		ring:      ring,
@@ -72,6 +94,12 @@ func NewHTTPConfigGetter(t transport.CellTransport, ring *auth.HMACKeyRing, clk 
 // errcode.ErrConfigRepoNotFound when the key does not exist in that tier
 // (HTTP 404).
 func (c *HTTPConfigGetter) GetEntry(ctx context.Context, t tenant.TenantID, key string) (ports.ConfigEntry, error) {
+	// Bound the single dispatch: a long-lived caller ctx (event-consumer ctx) must
+	// not let a configcore call hang indefinitely (restores the pre-transport 5s
+	// *http.Client timeout, now transport-agnostic).
+	ctx, cancel := context.WithTimeout(ctx, configClientTimeout)
+	defer cancel()
+
 	path := "/internal/v1/config/" + url.PathEscape(key)
 
 	// The request carries only the contract path; the transport places it

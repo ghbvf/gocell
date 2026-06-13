@@ -261,23 +261,11 @@ func accessPostgresOptions(shared *composition.SharedDeps, sessionProto *session
 	// internalGuard.ring onto composition.SharedDeps); the transport carries the
 	// signed request to configcore's internal handler.
 	if shared.InternalHMACRing != nil {
-		if remoteCellDeclared(shared.DeploymentTopology, configProviderCell) {
-			// US4 ships only the in-process transport. A remote-declared configcore
-			// needs the remote CellTransport (US5 #1966); never silently fall back to
-			// in-process (that would dispatch to the wrong, local handler).
-			return nil, nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-				"accesscore: configcore is declared remote in the deployment topology, but the remote "+
-					"CellTransport is not wired yet (US5 #1966); in-process transport cannot reach a remote cell")
+		opts, err := wireConfigGetter(shared, accessOpts)
+		if err != nil {
+			return nil, nil, err
 		}
-		if shared.InProcessTransport == nil {
-			return nil, nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-				"accesscore: SharedDeps.InProcessTransport must be set to wire the config getter "+
-					"(composition.Builder.Build mints it)")
-		}
-		accessOpts = append(
-			accessOpts,
-			configgetter.WithTransport(shared.InProcessTransport, shared.InternalHMACRing, shared.Clock),
-		)
+		accessOpts = opts
 	}
 	return accessOpts, pgSessionStore, nil
 }
@@ -286,17 +274,39 @@ func accessPostgresOptions(shared *composition.SharedDeps, sessionProto *session
 // (http.config.internal.get.v1) accesscore consumes.
 const configProviderCell = "configcore"
 
-// remoteCellDeclared reports whether cellID is declared as a remote
-// (non-colocated) cell in the deployment topology spec. US4 wires only the
-// in-process transport, so a remote-declared sync provider must fail-fast rather
-// than silently dispatch in-process (the remote CellTransport is US5 #1966).
-func remoteCellDeclared(spec bootstrap.DeploymentTopologySpec, cellID string) bool {
-	for _, r := range spec.Remote {
-		if r.CellID == cellID {
-			return true
-		}
+// wireConfigGetter selects the config getter transport by configcore's placement
+// in the deployment topology, reusing the SEALED topology semantics
+// (bootstrap.NewDeploymentTopology → IsColocated/RemoteEndpoint) — not a parallel
+// hand-rolled classification. US4 wires only the in-process transport:
+//   - colocated → inject the in-process transport;
+//   - remote → fail-fast (remote CellTransport is US5 #1966; never silently
+//     dispatch in-process to a cell that is not co-located);
+//   - neither (explicit topology, configcore unclassified) → fail-fast (gocell
+//     validate TOPO-11 normally prevents this; defense-in-depth).
+func wireConfigGetter(shared *composition.SharedDeps, accessOpts []accesscell.Option) ([]accesscell.Option, error) {
+	topo, err := bootstrap.NewDeploymentTopology(shared.DeploymentTopology)
+	if err != nil {
+		return nil, fmt.Errorf("accesscore: deployment topology: %w", err)
 	}
-	return false
+	switch {
+	case topo.IsColocated(configProviderCell):
+		if shared.InProcessTransport == nil {
+			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+				"accesscore: SharedDeps.InProcessTransport must be set to wire the config getter "+
+					"(composition.Builder.Build mints it)")
+		}
+		return append(accessOpts,
+			configgetter.WithTransport(shared.InProcessTransport, shared.InternalHMACRing, shared.Clock)), nil
+	default:
+		if _, remote := topo.RemoteEndpoint(configProviderCell); remote {
+			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+				"accesscore: configcore is declared remote in the deployment topology, but the remote "+
+					"CellTransport is not wired yet (US5 #1966); in-process transport cannot reach a remote cell")
+		}
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"accesscore: configcore is not classified in the deployment topology (neither colocated nor "+
+				"remote); the config getter provider must be reachable (gocell validate TOPO-11)")
+	}
 }
 
 // resolveAccessStorageOpts selects postgres or memory storage options.

@@ -56,5 +56,17 @@ func goodDispatch(ct transport.CellTransport) (*http.Response, error) {
 	return ct.DoContract(context.Background(), "http.config.internal.get.v1", req)                           // GREEN (sanctioned path)
 }
 
-// keep the held type referenced so the fixture is a single connected unit.
-var _ = heldClient{}
+// forgeTransport mints an InProcessTransport outside the composition root — the
+// forbidden form for INPROCESS-TRANSPORT-BIND-AUTHORITY-01 (only
+// runtime/composition may call transport.NewInProcess; an external minter could
+// then Bind a rogue handler). Not flagged by the http client funnel (it is not a
+// net/http client reference), so the two rules' fixtures coexist in this package.
+func forgeTransport() *transport.InProcessTransport {
+	return transport.NewInProcess(nil) // VIOLATION [bind-authority]
+}
+
+// keep the held type + forge func referenced so the fixture is a single unit.
+var (
+	_ = heldClient{}
+	_ = forgeTransport
+)

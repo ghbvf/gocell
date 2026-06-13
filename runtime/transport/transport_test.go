@@ -41,3 +41,24 @@ func TestTransportMode_Accessors(t *testing.T) {
 		t.Error("ModeInProc() and ModeRemote() must be distinct values")
 	}
 }
+
+// TestTransportMode_ZeroValueFailClosed asserts a zero-value (forged)
+// TransportMode renders as the fail-closed sentinel, never the empty string, so
+// it cannot write an empty/unattributed metric label — and the sentinel is NOT a
+// producible mode in the frozen registry.
+func TestTransportMode_ZeroValueFailClosed(t *testing.T) {
+	t.Parallel()
+
+	var zero TransportMode
+	if got := zero.String(); got != TransportModeUnknown {
+		t.Errorf("zero TransportMode.String() = %q, want %q (fail-closed sentinel)", got, TransportModeUnknown)
+	}
+	if zero.String() == "" {
+		t.Error("zero TransportMode must never render as the empty label")
+	}
+	for _, m := range allTransportModes {
+		if m.String() == TransportModeUnknown {
+			t.Errorf("the fail-closed sentinel %q must not be a producible registered mode", TransportModeUnknown)
+		}
+	}
+}
