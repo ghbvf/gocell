@@ -61,9 +61,12 @@
 //     The guard converts an unconscious omission into a conscious (possibly wrong)
 //     assertion — strictly better, not a correctness proof.
 //   - This test runs on the kernel/reconcile package Pass only (filtered by
-//     p.Pkg.Path()); a nullary func returning Tenancy outside that package is not a
-//     minter (the mode field is unexported, so no other package can return a
-//     non-zero Tenancy) and is not scanned.
+//     p.Pkg.Path()). That out-of-package scope is NOT a gap but the funnel's
+//     DOWNSTREAM lock: a nullary func in another package CANNOT return a non-zero
+//     Tenancy because the mode field is unexported (Axis 1, type-system Hard), so no
+//     out-of-package minter can exist to scan. Funnel strength is two-sided —
+//     upstream/downstream = Axis 1 sealed construction (Hard), this archtest = the
+//     in-package value-set freeze (Axis 4, Medium).
 //
 // # Reverse self-check (non-vacuous proof)
 //

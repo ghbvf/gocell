@@ -27,10 +27,11 @@ package reconcile
 // zero value reconcile.Tenancy{} IS constructible (mode == tenancyUnset) but is
 // invalid — IsUnset() reports it and Build() rejects it fail-fast (the same accepted
 // residual as authz.Permission{} / reconcile.LeaseTTL{}). The two stances are
-// exposed as ACCESSOR FUNCTIONS (not exported vars): a func declaration cannot be
-// reassigned, so the registry values are immutable to every external package
-// (reassigning authz.SingleTenant = Tenancy{} would be the F6 gap an exported var
-// leaves open). The frozen membership of the minter set is the external witness
+// exposed as ACCESSOR FUNCTIONS (not exported vars) that construct the value INLINE:
+// no package-level Tenancy var exists to reassign (in OR out of package), and a func
+// declaration cannot be reassigned, so the value is immutable everywhere (an exported
+// var would leave the F6 gap that authz.SingleTenant = Tenancy{} could zero). The
+// frozen membership of the minter set is the external witness
 // RECONCILE-TENANCY-DECLARED-01 (tools/archtest).
 //
 // # AI-robust rating (four axes; full statement in the archtest godoc)
@@ -60,21 +61,14 @@ const (
 	tenancyScoped
 )
 
-// singleTenant / tenantScoped are the package-private singletons backing the
-// accessor funcs. Unexported so no external package can reassign them.
-var (
-	singleTenant = Tenancy{mode: tenancySingle}
-	tenantScoped = Tenancy{mode: tenancyScoped}
-)
-
 // SingleTenant declares that the reconciler emits under the tenantless system
 // principal and that "_notenant" Claimer keys are correct for it — its entity ids
 // are globally unique (e.g. device UUIDs) and its tables are not tenant-partitioned.
 // This is the device / cert-renewal archetype.
 //
-// It is an accessor function (not an exported var) so the registry value is
-// immutable to external packages — reassigning a func is a compile error.
-func SingleTenant() Tenancy { return singleTenant }
+// It is an accessor function (not an exported var) so the value is immutable to
+// external packages — reassigning a func is a compile error.
+func SingleTenant() Tenancy { return Tenancy{mode: tenancySingle} }
 
 // TenantScoped declares that the reconciler reconciles entities across multiple
 // tenants. The framework installs a TENANTLESS system identity and strips any
@@ -88,9 +82,9 @@ func SingleTenant() Tenancy { return singleTenant }
 // tenant dimension end to end. The framework cannot verify the body actually does
 // so (the documented residual blind spot of RECONCILE-TENANCY-DECLARED-01).
 //
-// It is an accessor function (not an exported var) so the registry value is
-// immutable to external packages — reassigning a func is a compile error.
-func TenantScoped() Tenancy { return tenantScoped }
+// It is an accessor function (not an exported var) so the value is immutable to
+// external packages — reassigning a func is a compile error.
+func TenantScoped() Tenancy { return Tenancy{mode: tenancyScoped} }
 
 // IsUnset reports whether t is the invalid zero value (no minter ran). Build()
 // rejects an unset Tenancy fail-fast so a reconciler cannot be constructed without a

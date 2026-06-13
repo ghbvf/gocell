@@ -10,7 +10,7 @@
 // delaying queue (F6, one waitingLoop goroutine) + dirty/processing dedup (F5,
 // coalescing in-flight triggers into a single re-run) + per-entity exponential
 // backoff (5ms..1000s, no jitter). PR-A7 (#1168) privatized the Loop constructor
-// behind a Builder DSL: reconcile.New(r).With*().Build() is the sole public
+// behind a Builder DSL: reconcile.New(r, tenancy).With*().Build() is the sole public
 // construction entry; all Loop config fields are unexported (Hard upstream funnel);
 // a Trigger is required by Build; defaulting runs through a single applyDefaults()
 // funnel at Start with no lazy getter methods. The Builder is a pure wiring layer:
@@ -34,8 +34,8 @@
 //
 // # Three-piece minimal core
 //
-// A consumer implements Reconciler and wires a Loop via reconcile.New(r).With*().Build(). The
-// whole public surface a consumer must learn at PR-A2 is:
+// A consumer implements Reconciler and wires a Loop via reconcile.New(r, tenancy).With*().Build().
+// The whole public surface a consumer must learn at PR-A2 is:
 //
 //	Reconciler  — Reconcile(ctx, Request) (Result, error)
 //	Request     — { EntityID string }

@@ -199,7 +199,7 @@ func (b *Builder) WithRenewInterval(d time.Duration) *Builder {
 // triggerCh. No goroutines are started; Start() begins execution.
 func (b *Builder) Build() (*Loop, error) {
 	if validation.IsNilInterface(b.reconciler) {
-		return nil, fmt.Errorf("reconcile: Builder requires a non-nil Reconciler; pass it to reconcile.New(reconciler)")
+		return nil, fmt.Errorf("reconcile: Builder requires a non-nil Reconciler; pass it to reconcile.New(reconciler, tenancy)")
 	}
 	if b.tenancy.IsUnset() {
 		return nil, fmt.Errorf(

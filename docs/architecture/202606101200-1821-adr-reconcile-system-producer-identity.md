@@ -93,6 +93,33 @@ previously emitted under an empty/ambient identity (a latent inheritance risk); 
 emits under a fixed, recognizable, auditable `"system"` identity. The change reduces
 attack surface (no ambient inheritance) rather than expanding it.
 
+### #1954 amendment (required Tenancy declaration)
+
+#1954 amends this ADR by upgrading the "a multi-tenant reconciler must add its own
+tenant dimension" guard from a documentation-level (Soft) godoc MUST to a
+construction-time machine guard: `reconcile.New` takes a required sealed `Tenancy`
+stance (`SingleTenant()` / `TenantScoped()`). **Threat matrix delta: still none added,
+and the pre-existing cross-tenant key-collision threat is downgraded, not widened.**
+
+- The amendment does **not** touch the system-identity install — the framework
+  principal stays tenantless `"system"` by positive assertion (§Decision unchanged).
+  Tenant-awareness is the consumer's command-id responsibility; `TenantScoped()` is an
+  acknowledgement of that responsibility, orthogonal to the framework identity. So
+  "install tenantless yet allow `TenantScoped()`" is not a contradiction.
+- The latent threat this ADR's §Consequences already named — a multi-tenant copy of
+  the single-tenant archetype emitting under `_notenant` and colliding cross-tenant on
+  a shared entity id — was previously guarded only by Soft prose (an AI co-author could
+  miss it silently). It is now a **conscious, compile-checked, auditable declaration**:
+  omitting the stance is a compile error, the zero value is a Build fail-fast. The
+  collision risk does not disappear (see residual blind spots) but its failure mode
+  moves from *silent omission* to *explicit assertion* — a strict reduction.
+- **Residual blind spots (permanent ceilings, not deferred work):** the guard cannot
+  verify a `TenantScoped()` body actually encodes the tenant (consumer correctness,
+  out of framework reach — same class as the `RECONCILE-FENCED-WRITE-FUNNEL-01`
+  ApplyFenced-ignores-epoch admission), nor cross-check a `SingleTenant()` declaration
+  against an actual multi-tenant cell (no cell-level tenancy signal exists — multi-
+  tenancy is a runtime `ctxkeys.TenantID` property, not a static cell attribute).
+
 ## AI-robust rating (charter §"Funnel 双向锁评级")
 
 - **Upstream Hard**: `installSystemProducerIdentity` is unexported; Go visibility makes

@@ -88,6 +88,18 @@ func TestBuilder_RequiresTenancy(t *testing.T) {
 	assert.Contains(t, err.Error(), "Tenancy")
 }
 
+// TestBuilder_NilReconcilerCheckedBeforeTenancy pins the Build() precedence: when
+// BOTH the reconciler is nil AND the tenancy is unset, the error reports the
+// Reconciler (the first check), not the Tenancy. This makes the check order a test
+// contract so a later reorder of Build()'s fail-fasts is caught.
+func TestBuilder_NilReconcilerCheckedBeforeTenancy(t *testing.T) {
+	t.Parallel()
+	_, err := New(nil, Tenancy{}).WithTrigger(realTrigger{}).Build()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Reconciler")
+	assert.NotContains(t, err.Error(), "Tenancy")
+}
+
 // TestBuilder_SingleTenantBuildSucceeds / TestBuilder_TenantScopedBuildSucceeds:
 // BOTH declared stances Build successfully (accept-as-acknowledgement) — the
 // forcing function is that you must consciously pick one, not that one is
