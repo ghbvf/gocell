@@ -978,6 +978,76 @@ func TestErrcodePrefixOwnership01_ScannerFires(t *testing.T) {
 	}
 }
 
+// TestErrcodePrefixOwnership01_SentinelConstEval proves Target B resolves
+// non-literal (const SelectorExpr / Ident) sentinel values via typed const
+// evaluation, closing residual #2 (gh #1508). Before the typed-const-eval fix,
+// scanSentinelValueSpec matched only *ast.BasicLit string values and silently
+// skipped const SelectorExpr / Ident forms, letting an unregistered prefix be
+// laundered into an exported errcode.Code sentinel.
+//
+// The fixture is a standalone typed module (its own go.mod) — const
+// SelectorExpr / Ident resolution needs go/types (EvaluateConstString), which
+// is only available under StandaloneModule loading, never AST-only mode.
+//
+// Fixture module:
+//
+//	tools/archtest/testdata/errcode_prefix_ownership_selector_fixtures/
+//
+// Expected: the SelectorExpr sentinel (codes.Unregistered →
+// ERR_SELECTORBOGUS_NOPE) and the same-package const-Ident sentinel
+// (localUnregistered → ERR_IDENTBOGUS_NOPE) are both flagged; the registered
+// control (codes.RegisteredOK → ERR_INTERNAL) is NOT — anti-vacuity proving
+// the scan is selective, not a blanket flag on every non-literal sentinel.
+func TestErrcodePrefixOwnership01_SentinelConstEval(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based fixture test in -short mode")
+	}
+
+	root := findModuleRoot(t)
+	fixtureDir := filepath.Join(root, "tools", "archtest", "testdata", "errcode_prefix_ownership_selector_fixtures")
+
+	var allDiags []Diagnostic
+	Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false}, []string{"./..."}),
+		func(p *Pass) []Diagnostic {
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				diags, _ := scanErrcodePrefixOwnershipDiags(p.Fset, file, rel, p.TypesInfo, true)
+				allDiags = append(allDiags, diags...)
+			}
+			return nil
+		})
+
+	// The two non-literal-value sentinels must be flagged (residual #2 closed).
+	for _, want := range []string{"ERR_SELECTORBOGUS_NOPE", "ERR_IDENTBOGUS_NOPE"} {
+		found := false
+		for _, d := range allDiags {
+			if strings.Contains(d.Message, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("ERRCODE-PREFIX-OWNERSHIP-01_SentinelConstEval: non-literal sentinel %q "+
+				"not flagged (residual #2 / gh #1508 escape); got %d diag(s): %v", want, len(allDiags), allDiags)
+		}
+	}
+
+	// Anti-vacuity: the registered-prefix control must NOT be flagged, and the
+	// scan must produce exactly the two expected diagnostics — proving the
+	// typed scan is selective rather than flagging every non-literal sentinel.
+	for _, d := range allDiags {
+		if strings.Contains(d.Message, "ERR_INTERNAL") {
+			t.Errorf("ERRCODE-PREFIX-OWNERSHIP-01_SentinelConstEval: registered control "+
+				"ERR_INTERNAL wrongly flagged (false positive): %v", d)
+		}
+	}
+	if len(allDiags) != 2 {
+		t.Errorf("ERRCODE-PREFIX-OWNERSHIP-01_SentinelConstEval: expected exactly 2 diagnostics "+
+			"(the two unregistered non-literal sentinels), got %d: %v", len(allDiags), allDiags)
+	}
+}
+
 // ─── import anchors ───────────────────────────────────────────────────────────
 
 // These blank-identifier references keep frequently-used imports live so that
