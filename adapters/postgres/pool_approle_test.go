@@ -48,64 +48,89 @@ func TestAppRoleRestrictedResult(t *testing.T) {
 // (#1810 F3/F4).
 func TestAuditAdminRoleResult(t *testing.T) {
 	tests := []struct {
-		name      string
-		super     bool
-		bypass    bool
-		canSelect bool
-		wantErr   bool
-		wantCode  errcode.Code
+		name       string
+		isExpected bool
+		super      bool
+		bypass     bool
+		canSelect  bool
+		wantErr    bool
+		wantCode   errcode.Code
 	}{
 		{
-			name:      "restricted role with SELECT ok",
-			super:     false,
-			bypass:    false,
-			canSelect: true,
-			wantErr:   false,
+			name:       "expected role, restricted, with SELECT ok",
+			isExpected: true,
+			super:      false,
+			bypass:     false,
+			canSelect:  true,
+			wantErr:    false,
 		},
 		{
-			name:      "superuser rejected (role-attribute check)",
-			super:     true,
-			bypass:    false,
-			canSelect: true,
-			wantErr:   true,
-			wantCode:  ErrAdapterPGRoleBypassRLS,
+			name:       "wrong role rejected (identity check)",
+			isExpected: false,
+			super:      false,
+			bypass:     false,
+			canSelect:  true,
+			wantErr:    true,
+			wantCode:   ErrAdapterPGAuditAdminSelectCheck,
 		},
 		{
-			name:      "bypassrls rejected (role-attribute check)",
-			super:     false,
-			bypass:    true,
-			canSelect: true,
-			wantErr:   true,
-			wantCode:  ErrAdapterPGRoleBypassRLS,
+			name:       "wrong role wins over attribute/SELECT checks (identity checked first)",
+			isExpected: false,
+			super:      true,
+			bypass:     true,
+			canSelect:  false,
+			wantErr:    true,
+			wantCode:   ErrAdapterPGAuditAdminSelectCheck,
 		},
 		{
-			name:      "superuser+bypassrls rejected (role-attribute check)",
-			super:     true,
-			bypass:    true,
-			canSelect: true,
-			wantErr:   true,
-			wantCode:  ErrAdapterPGRoleBypassRLS,
+			name:       "superuser rejected (role-attribute check)",
+			isExpected: true,
+			super:      true,
+			bypass:     false,
+			canSelect:  true,
+			wantErr:    true,
+			wantCode:   ErrAdapterPGRoleBypassRLS,
 		},
 		{
-			name:      "restricted role without SELECT rejected",
-			super:     false,
-			bypass:    false,
-			canSelect: false,
-			wantErr:   true,
-			wantCode:  ErrAdapterPGAuditAdminSelectCheck,
+			name:       "bypassrls rejected (role-attribute check)",
+			isExpected: true,
+			super:      false,
+			bypass:     true,
+			canSelect:  true,
+			wantErr:    true,
+			wantCode:   ErrAdapterPGRoleBypassRLS,
 		},
 		{
-			name:      "superuser without SELECT: role-attribute check wins",
-			super:     true,
-			bypass:    false,
-			canSelect: false,
-			wantErr:   true,
-			wantCode:  ErrAdapterPGRoleBypassRLS,
+			name:       "superuser+bypassrls rejected (role-attribute check)",
+			isExpected: true,
+			super:      true,
+			bypass:     true,
+			canSelect:  true,
+			wantErr:    true,
+			wantCode:   ErrAdapterPGRoleBypassRLS,
+		},
+		{
+			name:       "expected role without SELECT rejected",
+			isExpected: true,
+			super:      false,
+			bypass:     false,
+			canSelect:  false,
+			wantErr:    true,
+			wantCode:   ErrAdapterPGAuditAdminSelectCheck,
+		},
+		{
+			name:       "superuser without SELECT: role-attribute check wins",
+			isExpected: true,
+			super:      true,
+			bypass:     false,
+			canSelect:  false,
+			wantErr:    true,
+			wantCode:   ErrAdapterPGRoleBypassRLS,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := auditAdminRoleResult(tt.super, tt.bypass, tt.canSelect)
+			err := auditAdminRoleResult(tt.isExpected, tt.super, tt.bypass, tt.canSelect)
 			if !tt.wantErr {
 				require.NoError(t, err)
 				return

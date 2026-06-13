@@ -33,6 +33,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -43,6 +44,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
@@ -389,6 +391,39 @@ func TestAuditCrossTenant_ServingRole_CannotReadCrossTenant(t *testing.T) {
 	// ctTenantA has 1 row in ctNSAuditcore; ctTenantB's row must not be visible.
 	assert.Equal(t, 1, totalCount,
 		"serving role scoped to ctTenantA must see exactly 1 row in auditcore (its own), not ctTenantB's row")
+}
+
+// TestAuditAdminReadyCheck_PG exercises the enhanced composition-time / readyz
+// preflight (#1810 F3) against a live admin pool. The positive path proves the
+// strengthened SQL actually runs end-to-end — including that the restricted
+// gocell_audit_admin role can itself read pg_policies to verify the policy shape —
+// and the negative path proves the new policy-shape assertion fails-closed when the
+// audit_admin_read_all policy is absent (the residual the prior SELECT-only check
+// missed). The wrong-role identity dimension is covered by the pure-verdict unit
+// test TestAuditAdminRoleResult.
+//
+// Run: go test -tags=integration ./adapters/postgres/ -run 'AuditAdminReadyCheck'
+func TestAuditAdminReadyCheck_PG(t *testing.T) {
+	dsn := sharedPG.CloneDSN(t)
+	ownerPool := openPerTestPool(t, dsn)
+	adminPool := provisionAuditAdminPool(t, dsn, ownerPool)
+	ctx := context.Background()
+
+	// Positive: a correctly-provisioned gocell_audit_admin pool passes the full
+	// preflight (role identity + attributes + SELECT + policy shape).
+	require.NoError(t, adminPool.AuditAdminReadyCheck(ctx),
+		"AuditAdminReadyCheck must pass for a correctly-provisioned gocell_audit_admin pool")
+
+	// Negative: drop the role-scoped policy (via the owner) → the policy-shape
+	// check must fail-closed, even though role identity + SELECT still hold.
+	_, dropErr := ownerPool.DB().Exec(ctx, `DROP POLICY IF EXISTS audit_admin_read_all ON audit_entries`)
+	require.NoError(t, dropErr, "drop audit_admin_read_all policy")
+
+	err := adminPool.AuditAdminReadyCheck(ctx)
+	require.Error(t, err, "AuditAdminReadyCheck must fail when audit_admin_read_all policy is absent")
+	var coded *errcode.Error
+	require.True(t, errors.As(err, &coded), "expected *errcode.Error, got %T: %v", err, err)
+	assert.Equal(t, ErrAdapterPGSchemaShape, coded.Code)
 }
 
 // TestAuditCrossTenantStore_PG_Conformance wires the PG-backed

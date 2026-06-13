@@ -80,3 +80,20 @@ func TestCrossTenantVisibility_ZeroValueNotAll(t *testing.T) {
 		t.Fatal("zero CrossTenantVisibility.Visibility().Validate() = nil, want err (zero scope invalid)")
 	}
 }
+
+// TestCrossTenantVisibility_Validate pins the single-source PEP predicate (F2):
+// the sealed minter's value passes, but the constructable zero value fails-closed.
+// Every cross-tenant read PEP (service + each store impl) routes through this, so
+// a zero/invalid obligation can never produce a cross-tenant read.
+func TestCrossTenantVisibility_Validate(t *testing.T) {
+	t.Parallel()
+
+	if err := NewCrossTenantVisibility().Validate(); err != nil {
+		t.Errorf("NewCrossTenantVisibility().Validate() = %v, want nil (canonical All grant)", err)
+	}
+
+	var zero CrossTenantVisibility
+	if err := zero.Validate(); err == nil {
+		t.Fatal("zero CrossTenantVisibility.Validate() = nil, want err (zero/invalid obligation)")
+	}
+}

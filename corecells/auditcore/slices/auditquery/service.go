@@ -218,15 +218,12 @@ func (s *Service) QueryCrossTenant(
 	if s.crossTenantStore == nil {
 		return query.PageResult[*ledger.Entry]{}, ledger.RowScopeAllUnsupportedError()
 	}
-	// PEP: validate the obligation before reading. A zero CrossTenantVisibility
-	// (constructable as tenant.CrossTenantVisibility{}) carries an invalid
-	// RowVisibility (scope=0); passing it to the store would silently bypass the
-	// RowScopeAll check. The typed funnel is Hard (forget/forge = compile error),
-	// but the zero value is constructable — this runtime guard closes the residual
-	// gap (Medium PEP-validated value, F2). We also check Scope() == RowScopeAll:
-	// the only valid source is NewCrossTenantVisibility(), so any other scope is
-	// an invariant break.
-	if err := ctv.Visibility().Validate(); err != nil || ctv.Visibility().Scope() != tenant.RowScopeAll {
+	// PEP: validate the obligation before reading. The typed funnel is Hard
+	// (forget/forge = compile error), but Go's zero value (tenant.CrossTenantVisibility{})
+	// is constructable, so this guard fail-closes a zero/invalid obligation (F2).
+	// ctv.Validate is the single-source predicate every store PEP also calls
+	// (defense in depth at the data layer).
+	if err := ctv.Validate(); err != nil {
 		return query.PageResult[*ledger.Entry]{}, errcode.New(errcode.KindInternal, errcode.ErrInternal,
 			errMsgInvalidCrossTenantObligation)
 	}

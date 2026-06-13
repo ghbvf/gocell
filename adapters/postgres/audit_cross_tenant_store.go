@@ -71,24 +71,37 @@ const crossTenantBaseSQL = `SELECT id, seq_no, event_id, event_type, actor_id,
 FROM audit_entries
 WHERE true`
 
+// errMsgCrossTenantObligation is the const-literal fail-close message
+// (MESSAGE-CONST-LITERAL-01) when the data-layer PEP rejects a zero/invalid
+// CrossTenantVisibility (F2). KindInternal: a bad obligation reaching the store
+// is a server-side invariant break, not client input — mirrors the service PEP.
+const errMsgCrossTenantObligation = "audit ledger: cross-tenant read requires a valid RowScopeAll obligation"
+
 // QueryCrossTenant lists audit entries across ALL tenants and BOTH namespace
 // chains matching AuditFilters, using keyset cursor pagination. params.Sort must
 // be non-empty (callers pass ledger.QuerySort). Returns up to params.FetchLimit()
 // rows for N+1 hasMore detection. Returns an empty (non-nil) slice when no
 // entries match.
 //
-// The ctv parameter carries the sealed RowScopeAll obligation; it is accepted to
-// enforce the typed-funnel invariant (#1760) — only callers routed through the
-// sealed CrossTenantVisibility minter can call this method. The owner dimension
-// is unrestricted (RowScopeAll), so AuditFilters is the only narrowing applied.
+// ctv carries the sealed RowScopeAll obligation. This method re-validates it
+// fail-closed (ctv.Validate) before reading — the data-layer PEP (F2): the typed
+// param makes "forge/forget the grant" a compile error, and this runtime check
+// rejects Go's constructable zero value, so a zero/invalid obligation can never
+// produce a cross-tenant read (mirrors LedgerStore.Query's defensive Validate).
+// The owner dimension is unrestricted (RowScopeAll), so AuditFilters is the only
+// narrowing applied.
 //
 // NO SET LOCAL, NO RunInTx, NO Protocol — this is a pure read-only path.
 func (s *AuditCrossTenantStore) QueryCrossTenant(
 	ctx context.Context,
-	_ tenant.CrossTenantVisibility,
+	ctv tenant.CrossTenantVisibility,
 	filters ledger.AuditFilters,
 	params query.ListParams,
 ) ([]*ledger.Entry, error) {
+	if err := ctv.Validate(); err != nil {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			errMsgCrossTenantObligation)
+	}
 	if len(params.Sort) == 0 {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit ledger: cross-tenant query requires a non-empty sort")

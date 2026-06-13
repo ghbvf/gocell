@@ -1036,7 +1036,7 @@ var expectedRLSTables = []expectedRLS{
 	// policy that allows gocell_audit_admin to read all tenants' rows. The
 	// guard expects this second policy ONLY when gocell_audit_admin is
 	// provisioned; it is absent (migration no-op) in environments without the role.
-	{Table: "audit_entries", Policy: "tenant_isolation", SystemRowsReadable: true, AuditAdminPolicy: "audit_admin_read_all"},
+	{Table: "audit_entries", Policy: "tenant_isolation", SystemRowsReadable: true, AuditAdminPolicy: auditAdminPolicy},
 }
 
 // rlsPolicyRow is a single pg_policies row (the security-load-bearing attributes
@@ -1088,9 +1088,30 @@ func verifyRLS(ctx context.Context, pool *Pool) error {
 
 // auditAdminRole is the PostgreSQL role name for the dedicated cross-tenant
 // audit read pool (#1810, migration 065). It is referenced by the role-existence
-// guard in verifyRLSPolicy and by the expected shape of the audit_admin_read_all
-// policy in checkRLSPolicyShape.
+// guard in verifyRLSPolicy, by the expected shape of the audit_admin_read_all
+// policy in checkRLSPolicyShape, and by the admin-pool preflight
+// (Pool.checkAuditAdminRole — asserts the pool connects AS this exact role).
 const auditAdminRole = "gocell_audit_admin"
+
+// auditAdminPolicy is the name of the role-scoped permissive SELECT policy that
+// grants gocell_audit_admin cross-tenant read on audit_entries (#1810, migration
+// 065). Single source for the expectedRLSTables registry and the admin-pool
+// preflight (Pool.checkAuditAdminPolicy), which both assert this exact policy.
+const auditAdminPolicy = "audit_admin_read_all"
+
+// auditEntriesRLS returns the audit_entries entry from expectedRLSTables — the
+// single source of the table + policy names the admin-pool preflight
+// (Pool.checkAuditAdminPolicy) reuses for error-detail context. The registry is a
+// compile-time constant set that always contains this entry, so the loop never
+// falls through; the trailing return is an unreachable safety net.
+func auditEntriesRLS() expectedRLS {
+	for _, r := range expectedRLSTables {
+		if r.AuditAdminPolicy == auditAdminPolicy {
+			return r
+		}
+	}
+	return expectedRLS{Table: "audit_entries", Policy: "tenant_isolation", AuditAdminPolicy: auditAdminPolicy}
+}
 
 // verifyRLSPolicy loads EVERY policy on r.Table and asserts the expected set
 // of security-load-bearing policies with their full shapes:

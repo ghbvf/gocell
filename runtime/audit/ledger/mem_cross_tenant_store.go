@@ -58,6 +58,12 @@ func NewMemCrossTenantStore(stores ...*MemStore) (*MemCrossTenantStore, error) {
 	return &MemCrossTenantStore{stores: cp}, nil
 }
 
+// errMsgCrossTenantObligation is the const-literal fail-close message
+// (MESSAGE-CONST-LITERAL-01) when the data-layer PEP rejects a zero/invalid
+// CrossTenantVisibility (F2). KindInternal: a bad obligation reaching the store
+// is a server-side invariant break, not client input — mirrors the service PEP.
+const errMsgCrossTenantObligation = "audit ledger: cross-tenant read requires a valid RowScopeAll obligation"
+
 // QueryCrossTenant enumerates ALL tenants across ALL backing MemStores, applies
 // AuditFilters, merge-sorts by params.Sort (callers pass QuerySort —
 // timestamp DESC, id ASC), and keyset-paginates via query.ApplyCursor.
@@ -68,14 +74,22 @@ func NewMemCrossTenantStore(stores ...*MemStore) (*MemCrossTenantStore, error) {
 // params.Sort must be non-empty (callers pass QuerySort); an empty Sort returns
 // ErrValidationFailed, exactly as MemStore.Query and MultiStore.Query do.
 //
-// The ctv parameter enforces the typed-funnel (#1760); the RowScopeAll owner
-// dimension is unrestricted, so no actor_id filtering is applied.
+// ctv carries the sealed RowScopeAll obligation. This method re-validates it
+// fail-closed (ctv.Validate) before reading — the data-layer PEP (F2): the typed
+// param makes "forge/forget the grant" a compile error, and this runtime check
+// rejects Go's constructable zero value, so a zero/invalid obligation can never
+// produce a cross-tenant read. The RowScopeAll owner dimension is unrestricted,
+// so no actor_id filtering is applied.
 func (m *MemCrossTenantStore) QueryCrossTenant(
 	_ context.Context,
-	_ tenant.CrossTenantVisibility,
+	ctv tenant.CrossTenantVisibility,
 	filters AuditFilters,
 	params query.ListParams,
 ) ([]*Entry, error) {
+	if err := ctv.Validate(); err != nil {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			errMsgCrossTenantObligation)
+	}
 	if len(params.Sort) == 0 {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit ledger: cross-tenant query requires a non-empty sort")

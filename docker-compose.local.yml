@@ -8,6 +8,12 @@ services:
       POSTGRES_PASSWORD: ${PG_PASSWORD:?PG_PASSWORD required}
       POSTGRES_DB: gocell
       GOCELL_APP_PASSWORD: ${GOCELL_APP_PASSWORD:?GOCELL_APP_PASSWORD required}
+      # Optional opt-in (#1810): when set on the host, initdb's 10-restricted-role.sh
+      # provisions the gocell_audit_admin role for super-admin cross-tenant audit
+      # read; unset → empty → role not created → reads fail-closed at HTTP 501.
+      # Empty-default passthrough (not a fail-fast :?) keeps `make local-up` working
+      # without the feature, matching GOCELL_AUDIT_ADMIN_DSN in the corebundle service.
+      GOCELL_AUDIT_ADMIN_PASSWORD: ${GOCELL_AUDIT_ADMIN_PASSWORD:-}
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro

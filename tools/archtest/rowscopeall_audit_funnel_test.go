@@ -47,18 +47,21 @@
 //     producer is the sealed NewCrossTenantVisibility; struct-literal forgery of
 //     either RowVisibility{scope:All} or CrossTenantVisibility{} is a compile error
 //     (unexported fields).
-//   - Downstream: Hard typed-param + PEP-validated value. The #1810 cross-tenant
-//     audit read takes a tenant.CrossTenantVisibility positional parameter (not a
-//     bare RowVisibility), so the read is uncallable without routing through the
-//     sealed minter — forget = compile error, forge = compile error (Hard). However,
-//     the zero value (tenant.CrossTenantVisibility{}) is constructable as a Go
-//     struct literal (unexported field — only within pkg/tenant, but the zero value
-//     is expressible without a literal in any package). Service.QueryCrossTenant
-//     closes this gap with a runtime PEP check: it validates ctv.Visibility() is
-//     a well-formed RowScopeAll obligation and fails-closed (KindInternal) on any
-//     invalid/zero value (Medium runtime guard, F2 Codex review). The combined
-//     guarantee is "Hard typed-param + PEP-validated value", not "any passed value
-//     is unconditionally valid" — the downstream seal has a Medium residual.
+//   - Downstream: Hard typed-param + fail-closed Validate at every PEP. The #1810
+//     cross-tenant audit read takes a tenant.CrossTenantVisibility positional
+//     parameter (not a bare RowVisibility), so forge = compile error and forget =
+//     compile error (Hard). The one residual Go cannot close is the constructable
+//     zero value (tenant.CrossTenantVisibility{} — an invalid obligation
+//     expressible without a literal in any package). Every cross-tenant read PEP
+//     closes it with CrossTenantVisibility.Validate: the auditquery Service AND
+//     every CrossTenantQueryStore implementation (the data-layer PEP) fail-closed
+//     (KindInternal) on a zero/invalid obligation (F2 Codex review). The store-side
+//     fail-close is a machine-checked conformance contract
+//     (RunCrossTenantQueryConformance / CrossTenant_ZeroObligation_Rejected covers
+//     mem + PG + any future backend), not a per-impl convention. The combined
+//     guarantee is "Hard typed-param + fail-closed Validate at every PEP", not
+//     "any passed value is unconditionally valid" — the residual is a Medium
+//     runtime guard layered at both the service and the data boundary.
 //   - Minter caller-restriction: MEDIUM, a GO-LANGUAGE CEILING (not a deferred
 //     TODO). "Only (*Principal).CrossTenantVisibility may call
 //     NewCrossTenantVisibility" is not compile-time expressible: pkg/tenant cannot

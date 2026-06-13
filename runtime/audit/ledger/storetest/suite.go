@@ -1759,6 +1759,9 @@ func RunCrossTenantQueryConformance(t *testing.T, factory CrossTenantFactory) {
 	t.Run("CrossTenant_EmptySort_Rejected", func(t *testing.T) {
 		runCTEmptySortRejected(t, factory)
 	})
+	t.Run("CrossTenant_ZeroObligation_Rejected", func(t *testing.T) {
+		runCTZeroObligationRejected(t, factory)
+	})
 	t.Run("CrossTenant_Filter_SubjectID", func(t *testing.T) {
 		runCTFilterSubjectID(t, factory)
 	})
@@ -1985,6 +1988,30 @@ func runCTEmptySortRejected(t *testing.T, factory CrossTenantFactory) {
 	_, err := store.QueryCrossTenant(context.Background(), ctv, ledger.AuditFilters{},
 		query.ListParams{Limit: 10})
 	errcodetest.AssertCode(t, err, errcode.ErrValidationFailed)
+}
+
+// runCTZeroObligationRejected pins the F2 data-layer PEP: every
+// CrossTenantQueryStore implementation MUST fail-closed when handed a zero/invalid
+// CrossTenantVisibility. Go's zero value (tenant.CrossTenantVisibility{}) is
+// constructable despite the sealed minter, so a store that skipped obligation
+// validation would happily return the seeded rows — seeding real entries makes the
+// rejection non-vacuous (anti-vacuity). A valid Sort is passed so the rejection is
+// the obligation check (KindInternal/ErrInternal), not the empty-sort guard. This
+// is the single-source machine-checked contract that holds for mem, PG, and any
+// future backend wired into RunCrossTenantQueryConformance.
+func runCTZeroObligationRejected(t *testing.T, factory CrossTenantFactory) {
+	t.Helper()
+	seed := ctSeed(epochAnchor)
+	store, cleanup := factory(t, seed)
+	defer cleanup()
+
+	var zero tenant.CrossTenantVisibility // invalid obligation (scope=0)
+	rows, err := store.QueryCrossTenant(context.Background(), zero, ledger.AuditFilters{},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	errcodetest.AssertCode(t, err, errcode.ErrInternal)
+	if len(rows) != 0 {
+		t.Errorf("zero-obligation cross-tenant read returned %d rows; must fail-closed with none", len(rows))
+	}
 }
 
 // ctFilterSeed returns a seed with ≥2 distinct SubjectIDs and ≥2 distinct

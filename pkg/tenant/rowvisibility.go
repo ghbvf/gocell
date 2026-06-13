@@ -124,27 +124,27 @@ func NewRowVisibility(scope RowScope, subject string) (RowVisibility, error) {
 
 // CrossTenantVisibility is the sealed carrier of the cross-tenant (RowScopeAll)
 // row-visibility obligation. Its single field is unexported and its sole
-// constructor is NewCrossTenantVisibility, so a populated value is not
+// constructor is NewCrossTenantVisibility, so a POPULATED value is not
 // expressible outside this package (sealed construction — mirrors RowVisibility
 // / errcode.PublicDetail / outbox.Entry).
 //
-// A function that takes a CrossTenantVisibility positional parameter is
-// therefore UNCALLABLE without routing through the sealed minter — which makes
-// the cross-tenant audit read (#1810) a Hard typed funnel: "forget the
-// cross-tenant grant" and "forge it" are both compile-time impossible.
+// A function that takes a CrossTenantVisibility positional parameter cannot be
+// called with a forged or forgotten grant: "forge it" (a struct literal with a
+// non-zero obligation) and "forget it" (omit the parameter) are both
+// compile-time impossible. This makes the cross-tenant audit read (#1810) a Hard
+// typed funnel on the parameter axis.
 //
-// # Zero-value residual (F2, Codex review)
+// # Zero-value residual → validated at every PEP (F2, Codex review)
 //
-// The zero value (CrossTenantVisibility{}) carries the zero (invalid)
-// RowVisibility. It is NOT expressible as a struct literal outside this
-// package (unexported field), but it IS expressible as the zero value of
-// the type (var x CrossTenantVisibility; f(x)). This means a consumer
-// COULD pass a zero-value obligation. Service.QueryCrossTenant closes this
-// gap with a runtime PEP check: it validates ctv.Visibility() against
-// Validate() and Scope() == RowScopeAll and fails-closed (KindInternal)
-// on any invalid/zero value (Medium runtime guard). The downstream seal is
-// therefore "Hard typed-param + PEP-validated value", not "any passed value
-// is unconditionally valid".
+// Go cannot make a struct's zero value unconstructable: var x CrossTenantVisibility
+// yields a value whose obligation is the zero (invalid) RowVisibility. The typed
+// funnel therefore guarantees "a CrossTenantVisibility is passed", not "a valid
+// one is passed". Validate closes that residual: every cross-tenant read PEP —
+// the auditquery Service AND every CrossTenantQueryStore implementation (the
+// data-layer PEP) — calls it fail-closed before reading, so a zero/invalid
+// obligation can never produce a cross-tenant read. The funnel is thus "Hard
+// typed-param + fail-closed Validate at every PEP", not "any passed value is
+// unconditionally valid".
 type CrossTenantVisibility struct {
 	vis RowVisibility
 }
@@ -164,6 +164,24 @@ func NewCrossTenantVisibility() CrossTenantVisibility {
 // (its owner dimension is unrestricted; the tenant boundary is enforced by the
 // admin read pool, see #1810).
 func (c CrossTenantVisibility) Visibility() RowVisibility { return c.vis }
+
+// Validate fail-closes unless this carries a well-formed RowScopeAll grant — the
+// only value NewCrossTenantVisibility produces. The zero value
+// (CrossTenantVisibility{}, constructable despite the sealed minter — see type
+// doc § Zero-value residual) carries an invalid RowVisibility and is rejected;
+// any non-All scope is an invariant break. It is the single-source PEP predicate
+// every cross-tenant read path (the auditquery Service AND every
+// CrossTenantQueryStore implementation) calls fail-closed before reading.
+// Returns a plain error; consumers wrap it in errcode (mirrors RowVisibility.Validate).
+func (c CrossTenantVisibility) Validate() error {
+	if err := c.vis.Validate(); err != nil {
+		return err
+	}
+	if c.vis.Scope() != RowScopeAll {
+		return fmt.Errorf("tenant: CrossTenantVisibility must carry RowScopeAll, got %s", c.vis.Scope())
+	}
+	return nil
+}
 
 // Scope returns the RowScope obligation.
 func (v RowVisibility) Scope() RowScope { return v.scope }

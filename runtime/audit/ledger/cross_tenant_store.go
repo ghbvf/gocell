@@ -18,13 +18,20 @@ import (
 // #1676's no-BYPASSRLS invariant (cross-tenant visibility comes from an explicit,
 // auditable pg_policy row, not from bypassing RLS).
 //
-// # Sealed typed funnel (Hard, #1760)
+// # Typed funnel + data-layer PEP (#1760, F2)
 //
 // QueryCrossTenant takes a tenant.CrossTenantVisibility positional parameter, not
 // a bare tenant.RowVisibility. CrossTenantVisibility is sealed (its sole producer
-// is the audited (*auth.Principal).CrossTenantVisibility derivation), so this read
-// is UNCALLABLE without routing through that mandatory-FR-007-audit funnel —
-// "forget the cross-tenant grant" and "forge it" are both compile-time impossible.
+// is the audited (*auth.Principal).CrossTenantVisibility derivation), so "forge
+// the grant" (a non-zero struct literal) and "forget it" (omit the param) are both
+// compile-time impossible — the mandatory FR-007 audit cannot be bypassed.
+//
+// The one residual Go cannot close is the constructable zero value
+// (tenant.CrossTenantVisibility{}, an invalid obligation). Every implementation
+// therefore re-validates ctv fail-closed (ctv.Validate) before reading — the
+// data-layer PEP: a zero/invalid obligation yields an error, never a cross-tenant
+// read. The RunCrossTenantQueryConformance suite pins this for every backend, so
+// the fail-close is a machine-checked contract, not a per-impl convention.
 //
 // The cross-tenant store is an OPTIONAL dependency of the auditquery Service: when
 // it is absent (the admin read pool is not provisioned), a super-admin's

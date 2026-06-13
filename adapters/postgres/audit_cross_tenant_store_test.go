@@ -1,12 +1,16 @@
 package postgres
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
@@ -174,5 +178,28 @@ func TestCrossTenantSQL_EmptySortRejected(t *testing.T) {
 	_, err := crossTenantSQLForTest(ledger.AuditFilters{}, query.ListParams{Limit: 10})
 	if err == nil {
 		t.Fatal("empty Sort must return an error")
+	}
+}
+
+// TestAuditCrossTenantStore_ZeroObligation_FailsClosed pins the data-layer PEP
+// (F2): a zero/invalid CrossTenantVisibility is rejected fail-closed (KindInternal)
+// BEFORE any DB access, so no live pool is needed. db is left nil — the obligation
+// check returns first, proving validation precedes (and is independent of) the
+// query path. The conformance suite covers the same invariant against a live PG
+// backend; this is the fast no-DB unit guard.
+func TestAuditCrossTenantStore_ZeroObligation_FailsClosed(t *testing.T) {
+	s := &AuditCrossTenantStore{} // nil db: validation must return before it is touched
+	var zero tenant.CrossTenantVisibility
+	rows, err := s.QueryCrossTenant(context.Background(), zero, ledger.AuditFilters{},
+		query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
+	if rows != nil {
+		t.Errorf("rows = %v, want nil (fail-closed)", rows)
+	}
+	var coded *errcode.Error
+	if !errors.As(err, &coded) {
+		t.Fatalf("err = %T %v, want *errcode.Error", err, err)
+	}
+	if coded.Code != errcode.ErrInternal {
+		t.Errorf("Code = %v, want ErrInternal", coded.Code)
 	}
 }
