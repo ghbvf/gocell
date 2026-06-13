@@ -20,10 +20,6 @@ endpoints:
         minLength: 1
         maxLength: 256
     successStatus: 201
-    auth:
-      responses:
-        - 409
-        - 422
     noContent: false
     responses:
       400:

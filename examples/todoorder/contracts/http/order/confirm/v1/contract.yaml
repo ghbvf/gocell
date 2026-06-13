@@ -18,9 +18,6 @@ endpoints:
         minLength: 1
         maxLength: 256
     successStatus: 200
-    auth:
-      responses:
-        - 422  # idempotency key reused with a different body (middleware-injected)
     noContent: false
     responses:
       400:

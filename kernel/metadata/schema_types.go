@@ -80,40 +80,63 @@ type HTTPIdempotencyMeta struct {
 	Exempt bool `yaml:"exempt,omitempty" json:"exempt,omitempty"`
 }
 
-// IdempotencyFrameworkStatuses returns the HTTP status codes the idempotency
-// middleware can emit for this route as a framework-injected set, analogous to
-// HTTPAuthMeta.Responses (401/429). When idempotency is default-on, a mutating
-// route (POST/PUT/PATCH/DELETE) that is not Idempotency.Exempt can return 409 on
-// an in-flight key (ClaimBusy) or 422 on a reused key with a mismatched body
-// fingerprint (ErrIdempotencyKeyReused, per IETF idempotency-key draft §2.7).
-// Returns nil for GET/HEAD and exempt routes.
+// FrameworkIdempotencyStatuses is the single literal source of the HTTP status
+// codes the idempotency middleware injects: 409 (ClaimBusy, in-flight key) and 422
+// (key reused with a different body, per IETF idempotency-key draft §2.7). The
+// auth-shape-aware oracle IdempotencyFrameworkStatuses() and the CH-07 governance
+// guard both reference this one function, so the set is declared exactly once in
+// kernel/ (no second hardcode to drift). It is re-declared here as a literal — not
+// imported — because kernel/ must not import runtime/ (layering); archtest
+// IDEMPOTENCY-FRAMEWORK-STATUS-ORACLE-ALIGN-01 binds it to the runtime source
+// runtime/http/idempotency.FrameworkStatuses() and fails if the two diverge.
+func FrameworkIdempotencyStatuses() []int {
+	return []int{409, 422}
+}
+
+// IdempotencyFrameworkStatuses returns the framework-injected idempotency status
+// codes the middleware can emit for THIS route — the SOLE computed source of those
+// statuses, which are never hand-authored per contract (compute-only, #1591).
 //
-// This is the single-source oracle for the CH-07 governance rule (#1537 review
-// F4): CH-07 requires every contract this returns a non-empty set for to declare
-// those statuses in auth.responses, so the declaration surface cannot drift from
-// the middleware and a future mutating route is forced to declare 409/422 or set
-// idempotency.exempt. These are NOT folded into declaredErrorStatuses (that would
-// make CH-07 vacuous and has no effect on CH-04, which checks handler-emitted
-// statuses — the middleware injects 409/422, not the handler).
+// The middleware (runtime/http/idempotency.extractIdentity) only claims for a
+// PrincipalUser with a non-empty Subject; non-PrincipalUser principals are bypassed
+// (no claim, so no 409/422). A route's auth shape determines its principal kind:
 //
-// The {409, 422} set is re-declared here as an integer literal because kernel/
-// must not import runtime/ (layering); it is bound to the single runtime source
-// runtime/http/idempotency.FrameworkStatuses() by archtest
-// IDEMPOTENCY-FRAMEWORK-STATUS-ORACLE-ALIGN-01, which fails if the two diverge.
+//   - Auth.Public         → anonymous principal           → bypass
+//   - Auth.Bootstrap      → HTTP Basic (bootstrap)         → bypass
+//   - internal HTTP path  → service token (PrincipalService) → bypass
+//   - otherwise (JWT, incl. ServiceOwned / PasswordResetExempt) → PrincipalUser → reachable
 //
-// Known reachability gap: this oracle keys only on method + Idempotency.Exempt, so
-// it also requires 409/422 on mutating routes the middleware never claims for —
-// public / bootstrap / service-token routes, whose non-PrincipalUser principals are
-// bypassed by middleware.extractIdentity. Those routes therefore declare statuses
-// they cannot emit (a pre-existing property of the 409 leg, not introduced by 422).
-// Making the oracle auth-shape-aware is tracked at gh #1591.
+// ClientsOnly is subsumed by the internal-path check (FMT-28 confines clientsOnly to
+// internal paths). So a mutating (POST/PUT/PATCH/DELETE), non-exempt,
+// PrincipalUser-reachable route returns FrameworkIdempotencyStatuses(); GET/HEAD,
+// idempotency.exempt, and non-PrincipalUser auth shapes return nil.
+//
+// Compute-only (#1591): this is THE source — the statuses are NOT declared per
+// contract. CH-07 forbids them from appearing in auth.responses, and
+// declaredErrorStatuses folds this (auth-shape-aware) set in so CH-04 sees the same
+// declared surface for a reachable route without a hand-authored copy. The drift the
+// pre-#1591 design risked (a route declaring statuses it cannot emit) is eliminated
+// by construction: there is no second copy to drift.
+//
+// INVARIANT: the auth-shape→principal-kind mapping above mirrors
+// middleware.extractIdentity. AI-robust rating: Medium — the cross-layer binding to
+// the runtime middleware is an archtest + INVARIANT-godoc contract, not a
+// type-system Hard (kernel/ must not import runtime/; the value binding shares the
+// permanent ceiling family of IDEMPOTENCY-FRAMEWORK-STATUS-ORACLE-ALIGN-01). Blind
+// spot: PrincipalDevice-resolved mutating HTTP routes (none today) are not modeled
+// here — out of #1591 scope, which covers public / bootstrap / service-token.
 func (h *HTTPTransportMeta) IdempotencyFrameworkStatuses() []int {
 	if h == nil || h.Idempotency.Exempt {
 		return nil
 	}
+	// Non-PrincipalUser auth shapes are bypassed by middleware.extractIdentity, so
+	// it never injects 409/422 on them.
+	if h.Auth.Public || h.Auth.Bootstrap || IsInternalHTTPPath(h.Path) {
+		return nil
+	}
 	switch h.Method {
 	case "POST", "PUT", "PATCH", "DELETE":
-		return []int{409, 422}
+		return FrameworkIdempotencyStatuses()
 	default:
 		return nil
 	}

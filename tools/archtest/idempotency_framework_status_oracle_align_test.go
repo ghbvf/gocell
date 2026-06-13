@@ -2,19 +2,22 @@
 
 // INVARIANT: IDEMPOTENCY-FRAMEWORK-STATUS-ORACLE-ALIGN-01
 //
-// The kernel-side oracle metadata.HTTPTransportMeta.IdempotencyFrameworkStatuses()
-// (a hand-written []int literal, because kernel/ must not import runtime/) MUST
-// equal the single runtime source runtime/http/idempotency.FrameworkStatuses(),
-// which derives its set from the actual sentinels the idempotency middleware
-// emits (errInProgress → 409 ClaimBusy; ErrFingerprintMismatch → 422 key-reused).
+// The kernel-side literal metadata.FrameworkIdempotencyStatuses() (hand-written,
+// because kernel/ must not import runtime/) MUST equal the single runtime source
+// runtime/http/idempotency.FrameworkStatuses(), which derives its set from the
+// actual sentinels the idempotency middleware emits (errInProgress → 409 ClaimBusy;
+// ErrFingerprintMismatch → 422 key-reused). The auth-shape-aware oracle
+// metadata.HTTPTransportMeta.IdempotencyFrameworkStatuses() returns that literal for
+// a PrincipalUser-reachable mutating route, so it is checked too.
 //
-// Why this exists: CH-07 (kernel/governance) forces every non-exempt mutating
-// HTTP contract to declare the idempotency framework statuses returned by the
-// oracle. The oracle is a literal that the middleware's runtime behavior can
-// silently outgrow (e.g. a new injected status, or the 422 upgrade reverted).
-// Binding the literal to the runtime source closes that drift: change the
-// middleware-emitted set without updating the kernel literal (or vice versa) and
-// this test fails.
+// Why this exists: the kernel literal is the SOLE source of the idempotency
+// framework statuses (compute-only, #1591) — the statuses are never hand-authored
+// per contract; CH-07 (kernel/governance) forbids them in auth.responses, and
+// declaredErrorStatuses folds the oracle into the contract surface. The literal can
+// silently outgrow the middleware's runtime behavior (e.g. a new injected status, or
+// the 422 upgrade reverted). Binding the literal to the runtime source closes that
+// drift: change the middleware-emitted set without updating the kernel literal (or
+// vice versa) and this test fails.
 //
 // AI-robust rating: Medium. A type-system Hard binding (the kernel literal
 // derived from the runtime source at compile time) is unreachable — the layering
@@ -49,8 +52,17 @@ func TestIdempotencyFrameworkStatusOracleAlign01(t *testing.T) {
 			"alongside a deliberate framework-status change)", runtimeSet, wantGolden)
 	}
 
-	// Every mutating method shares the same framework-injected set; POST is
-	// representative. The oracle is the kernel literal CH-07 enforces against.
+	// The kernel single literal source (referenced by the oracle and CH-07) must
+	// mirror the runtime set.
+	canonical := append([]int(nil), metadata.FrameworkIdempotencyStatuses()...)
+	sort.Ints(canonical)
+	if !reflect.DeepEqual(canonical, runtimeSet) {
+		t.Fatalf("metadata.FrameworkIdempotencyStatuses()=%v but idemhttp.FrameworkStatuses()=%v — "+
+			"the kernel literal must mirror the runtime source", canonical, runtimeSet)
+	}
+
+	// A PrincipalUser-reachable mutating route (no auth flags, non-internal path)
+	// computes the same set; every mutating method shares it, POST is representative.
 	for _, method := range []string{"POST", "PUT", "PATCH", "DELETE"} {
 		oracle := append([]int(nil), (&metadata.HTTPTransportMeta{Method: method}).IdempotencyFrameworkStatuses()...)
 		sort.Ints(oracle)

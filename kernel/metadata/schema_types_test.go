@@ -281,32 +281,49 @@ func TestSchemaRefsEmpty(t *testing.T) {
 }
 
 // TestIdempotencyFrameworkStatuses verifies the single-source derivation of the
-// framework-injected {409, 422} set (#1469/#1450 review F4): mutating non-exempt
-// routes declare 409 (ClaimBusy) + 422 (key-reused); exempt routes and
-// non-mutating methods declare nothing. The set is never hand-written per
-// contract, so the declaration surface cannot drift from the idempotency
-// middleware behavior (bound to idemhttp.FrameworkStatuses() by archtest).
+// framework-injected {409, 422} set (#1469/#1450 review F4 + #1591): the
+// idempotency middleware (extractIdentity) only claims for a PrincipalUser with a
+// non-empty Subject. A mutating non-exempt route reachable by a PrincipalUser
+// returns 409 (ClaimBusy) + 422 (key-reused); a route whose auth shape resolves to
+// a non-PrincipalUser principal — public (anonymous), bootstrap (basic-auth), or
+// internal (service-token) — is bypassed by the middleware and returns nil, as do
+// exempt routes and non-mutating methods. The set is the SOLE computed source (never
+// hand-authored per contract), so the declaration surface cannot drift from the
+// middleware (bound to idemhttp.FrameworkStatuses() by archtest).
 func TestIdempotencyFrameworkStatuses(t *testing.T) {
 	cases := []struct {
 		name   string
 		method string
+		path   string
 		exempt bool
+		auth   HTTPAuthMeta
 		want   []int
 	}{
-		{"POST non-exempt → 409,422", "POST", false, []int{409, 422}},
-		{"PUT non-exempt → 409,422", "PUT", false, []int{409, 422}},
-		{"PATCH non-exempt → 409,422", "PATCH", false, []int{409, 422}},
-		{"DELETE non-exempt → 409,422", "DELETE", false, []int{409, 422}},
-		{"GET non-exempt → none", "GET", false, nil},
-		{"HEAD non-exempt → none", "HEAD", false, nil},
-		{"POST exempt → none", "POST", true, nil},
-		{"DELETE exempt → none", "DELETE", true, nil},
+		// PrincipalUser-reachable (JWT, primary listener, non-internal path) → {409,422}.
+		{"POST jwt → 409,422", "POST", "/api/v1/x", false, HTTPAuthMeta{}, []int{409, 422}},
+		{"PUT jwt → 409,422", "PUT", "/api/v1/x", false, HTTPAuthMeta{}, []int{409, 422}},
+		{"PATCH jwt → 409,422", "PATCH", "/api/v1/x", false, HTTPAuthMeta{}, []int{409, 422}},
+		{"DELETE jwt → 409,422", "DELETE", "/api/v1/x", false, HTTPAuthMeta{}, []int{409, 422}},
+		{"POST serviceOwned (still PrincipalUser) → 409,422", "POST", "/api/v1/x", false, HTTPAuthMeta{ServiceOwned: true}, []int{409, 422}},
+		// Non-PrincipalUser auth shapes → middleware bypass → nil (#1591).
+		{"POST public (anonymous) → none", "POST", "/api/v1/x", false, HTTPAuthMeta{Public: true}, nil},
+		{"PUT public → none", "PUT", "/api/v1/x", false, HTTPAuthMeta{Public: true}, nil},
+		{"POST bootstrap (basic-auth) → none", "POST", "/api/v1/x/setup/admin", false, HTTPAuthMeta{Bootstrap: true}, nil},
+		{"POST internal path (service-token) → none", "POST", "/internal/v1/x", false, HTTPAuthMeta{}, nil},
+		{"POST internal clientsOnly → none", "POST", "/internal/v1/x", false, HTTPAuthMeta{ClientsOnly: true}, nil},
+		// Method / exempt gating (unchanged).
+		{"GET jwt → none", "GET", "/api/v1/x", false, HTTPAuthMeta{}, nil},
+		{"HEAD jwt → none", "HEAD", "/api/v1/x", false, HTTPAuthMeta{}, nil},
+		{"POST exempt → none", "POST", "/api/v1/x", true, HTTPAuthMeta{}, nil},
+		{"DELETE exempt → none", "DELETE", "/api/v1/x", true, HTTPAuthMeta{}, nil},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			h := &HTTPTransportMeta{
 				Method:      tc.method,
+				Path:        tc.path,
+				Auth:        tc.auth,
 				Idempotency: HTTPIdempotencyMeta{Exempt: tc.exempt},
 			}
 			assert.Equal(t, tc.want, h.IdempotencyFrameworkStatuses())
@@ -316,6 +333,12 @@ func TestIdempotencyFrameworkStatuses(t *testing.T) {
 	// nil receiver is safe (governance may call on an absent HTTP block).
 	var nilHTTP *HTTPTransportMeta
 	assert.Nil(t, nilHTTP.IdempotencyFrameworkStatuses())
+}
+
+// TestFrameworkIdempotencyStatuses pins the package-level canonical set — the
+// single literal source the oracle and CH-07 both reference (no third hardcode).
+func TestFrameworkIdempotencyStatuses(t *testing.T) {
+	assert.Equal(t, []int{409, 422}, FrameworkIdempotencyStatuses())
 }
 
 // TestHTTPIdempotencyMeta_RoundTrip verifies the idempotency block is a sibling

@@ -246,6 +246,11 @@ exempt 路由的 passthrough 在 method-gate 之前、body read 之前执行（`
 > 注：曾尝试把 409 折入 governance `declaredErrorStatuses` 并集，但那使 CH-07 自身 vacuous（且对
 > CH-04 无效——handler 不发 409），已回退；声明面由 CH-07 + 显式 `auth.responses` 承载。
 > 下方三件套的字段路径已按 F7 迁移更新。
+>
+> **Amendment 2026-06-14（#1591）— 本 F4 已被取代**：CH-07 已**反转**为 compute-only——409/422 由
+> auth-shape-aware oracle 计算、`auth.responses` **禁止**手写。上文「CH-07 强制声明」「折入 declaredErrorStatuses
+> 使 CH-07 vacuous 故回退」均为反转前形态：反转后 CH-07 不再读 declaredErrorStatuses，**折入反而正确**
+> （CH-04 看到同一计算面）。详见文末 §"Amendment 2026-06-14：CH-07 compute-only 反转"。
 
 PR #1448 落地的是 **运行时机制**（`auth.Route.IdempotencyExempt` → `AuthRouteMeta` →
 `mergeIdempotencyExemptMatcher` → `WithExemptMatcher`）。gh #1469 在接通生产 store 的同一 PR
@@ -449,7 +454,55 @@ map、`pkg/errcode` `TestKindStatusAndPublicCode` 表。`IsClient()`（status-ra
 `endpoints.http.auth.responses` 补 422（含平台 + examples）。422 是 middleware-injected，声明在
 `auth.responses`（无 typed response struct），无 codegen。
 
+> **Amendment 2026-06-14（#1591）— 本 §3 已被取代**：上文「CH-07 强制声明 422 / 给 28 个契约补 422」
+> 是反转前形态。CH-07 已反转为 compute-only：409/422 不再手写于任一契约的 `auth.responses`，由 oracle 计算。
+> 本 PR **删除**了 31 个契约（即上文补过的那批）`auth.responses` 里的 409/422。oracle alignment archtest
+> `IDEMPOTENCY-FRAMEWORK-STATUS-ORACLE-ALIGN-01` 仍在、断言不变。详见文末 §"Amendment 2026-06-14"。
+
 ### 4. 威胁矩阵逐行重评
 
 §威胁矩阵「同一 key + 不同 body mis-replay」行：409 → 422，✅ 不变。新增「per-field diff 字段名泄漏」
 行：✅ (by-design，结构性无值)。无 ✅ → ⚠️/❌ 退化格子。
+
+## Amendment 2026-06-14：CH-07 compute-only 反转（gh #1591）
+
+### 背景：reachability 漂移
+
+幂等 middleware（`extractIdentity`）**只对 `PrincipalUser` + 非空 `Subject` 生效**——public(匿名) /
+bootstrap(basic-auth) / service-token(internal) 主体一律 passthrough，永不 claim、永不发 409/422（本 ADR
+§"Service / 匿名主体不追踪幂等" + 威胁矩阵「Principal 缺席」行的长期既定行为）。但 F4（上）与 §3（上）的
+CH-07 **只看 method + idempotency.exempt**，强制**所有**非豁免 mutating 契约在 `auth.responses` 声明 409/422——
+包括这些 non-PrincipalUser 路由。⟹ 它们声明了 runtime **结构上永不发出**的状态，契约面与真实 wire 漂移
+（预存性质：旧 oracle 已 `{409}`，#1450 把同漂移从 409 延伸到 422）。
+
+### 决策：compute-only（删手写冗余，非补声明）
+
+`409/422` 是**完全可由 `(method, exempt, authShape)` 派生**的 framework 注入状态，且 `auth.responses` 的
+**唯一消费者**是检查它的那条 governance 规则（无机器发布面）。故按"前提消失→删除 / 优雅简洁 / DRY"：
+
+1. **oracle 纳入 auth shape**：`IdempotencyFrameworkStatuses()` 对 `Auth.Public || Auth.Bootstrap ||
+   IsInternalHTTPPath(Path)` 返回 `nil`（镜像 `extractIdentity` 的 non-PrincipalUser bypass）。`{409,422}`
+   字面量抽为包级单源 `metadata.FrameworkIdempotencyStatuses()`。
+2. **CH-07 反转**：从「必须声明」改为「**禁止**在 `auth.responses` 手写 409/422」（method/exempt/auth-shape
+   无关，普适禁止——它们是计算值，声明在任何地方都错）。`auth.responses` 仅保留 oracle **不**计算的
+   middleware 码（bootstrap 401、rate-limit 429、503）。
+3. **折入 declaredErrorStatuses**：`declaredErrorStatuses` 折入 auth-shape-aware `IdempotencyFrameworkStatuses()`，
+   CH-04 对 reachable 路由看到的 declared 面**不变**（来源从手写 `auth.responses` 改为计算）；non-PrincipalUser
+   路由 oracle 返回 `{}` → **正确地**不含 409/422。注：F4 当年"折入使 CH-07 vacuous 故回退"的前提已消失——
+   反转后 CH-07 不读 declaredErrorStatuses。
+4. **删 31 个契约**的 `auth.responses` 409/422（即 §3 当年补过的那批）。
+
+### 威胁矩阵重评（无安全退化）
+
+compute-only 只改**声明机制**（治理规则），**不改 middleware 安全行为**——`extractIdentity` 对 non-PrincipalUser
+的 bypass 一如既往。威胁矩阵全部行 ✅ 不变：
+
+- 「Principal 缺席时 handler 被幂等化」「Service/匿名主体不追踪」：行为不变；本 amendment 使**契约声明面与该
+  既定 bypass 行为对齐**（此前契约谎称 non-PrincipalUser 路由可发 409/422），是契约诚实度的**改进**而非退化。
+- 「同一 key + 不同 body mis-replay」(422)、「thundering herd」(409)、「per-field diff 字段名泄漏」：middleware
+  发射路径与 sentinel 不变，✅ 不变。
+
+漂移**类**由构造消除（无手写副本可与计算值失同步）。`IDEMPOTENCY-FRAMEWORK-STATUS-ORACLE-ALIGN-01`（Medium，
+分层天花板）保留：现绑定包级 `FrameworkIdempotencyStatuses()` ↔ runtime `FrameworkStatuses()`。CH-07 反转后
+评级 **Medium**（governance type-aware scan over `auth.responses`；YAML `[]int` 不可类型封印——真 Hard 不可达，
+同 ORACLE-ALIGN 家族）。盲区：`PrincipalDevice`-resolved mutating HTTP 路由（今无）未建模，非本 issue 范畴。
