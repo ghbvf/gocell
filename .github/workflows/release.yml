@@ -318,6 +318,19 @@ jobs:
           go-version-file: cmd/gocell/go.mod
           cache-dependency-path: cmd/gocell/go.sum
 
+      - name: Set up QEMU (stable only)
+        # linux/arm64 docker layers are built on an amd64 runner via QEMU
+        # emulation; required for the multi-arch manifest in .goreleaser.yaml.
+        if: needs.verify.outputs.prerelease != 'true'
+        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
+
+      - name: Set up Docker Buildx (stable only)
+        # The default docker driver cannot emit multi-platform images; buildx
+        # (docker-container driver) is required for goreleaser dockers_v2 to
+        # build + push the linux/amd64 + linux/arm64 manifest.
+        if: needs.verify.outputs.prerelease != 'true'
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
       - name: Log in to ghcr.io (stable only)
         if: needs.verify.outputs.prerelease != 'true'
         uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
@@ -327,17 +340,20 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build CLI artifacts with goreleaser (stable only)
-        # goreleaser builds cross-arch binaries + docker images and writes
-        # dist/ artifacts. --skip=publish ensures goreleaser does NOT push the
-        # release itself (release.yml's `gh release create` owns that). Tags
-        # are already pushed at this point, so goreleaser resolves {{.Tag}}.
-        # GOWORK=off is redundant with .goreleaser.yaml top-level env but set
-        # here explicitly for clarity and defence-in-depth.
+        # goreleaser builds cross-arch binaries + archives + checksums into
+        # dist/ AND builds + pushes the multi-arch docker manifest to ghcr.
+        # We do NOT pass --skip=publish: that would skip the publish pipe and
+        # the docker push with it (the docker deliverable, #1088). The GitHub
+        # Release is instead suppressed in .goreleaser.yaml (release.disable:
+        # true) so the existing `gh release create` step below remains the sole
+        # owner of the release + snapshot logic. Tags are already pushed at this
+        # point, so goreleaser resolves {{.Tag}}. GOWORK=off is redundant with
+        # .goreleaser.yaml top-level env but set here for defence-in-depth.
         if: needs.verify.outputs.prerelease != 'true'
         uses: goreleaser/goreleaser-action@9c156ee8a17a598b3a9b32eca9d83de83de9050d # v6.3.0
         with:
           version: '~> v2'
-          args: release --clean --skip=publish
+          args: release --clean
         env:
           GOWORK: "off"
           GITHUB_TOKEN: ${{ github.token }}
