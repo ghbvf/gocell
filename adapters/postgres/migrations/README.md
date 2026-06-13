@@ -2,6 +2,25 @@
 
 本文件固化 GoCell PG 适配层的迁移编写约定，所有新 migration 必须遵守。
 
+## 规则 0：何时用 `CONCURRENTLY` vs 普通索引（决策在先，机制在后）
+
+规则 1–6 讲的是「用了 CONCURRENTLY 之后」的机制约束；本规则讲「该不该用」。
+
+`CREATE INDEX CONCURRENTLY` 的唯一收益是**避免 `ACCESS EXCLUSIVE` 锁阻塞在线读写**。
+它有真实代价：必须脱离事务（`-- +goose no transaction`，破坏 migration 的原子回滚）、
+耗时约 2×、失败留 INVALID 索引需人工清理（规则 5）。因此：
+
+- **pre-GA（当前阶段）→ 普通索引**：有序 migration 集运行在全新模板库（CI/e2e）或极小 dev
+  库上，**没有在线生产表需要避锁**；普通 `CREATE INDEX` 留在事务型 migration，失败可原子回滚。
+  给**已存在的表**加 `GENERATED ALWAYS AS IDENTITY` seq 列 + 唯一索引同样走普通索引——
+  先例 `049_outbox_entries_seq.sql`、`058_create_projection_events.sql`、`064_add_saga_events_global_seq.sql`。
+- **post-GA / 对已填充且有在线流量的生产表加索引 → CONCURRENTLY**：此时普通索引的排他锁会阻塞
+  业务，必须用 CONCURRENTLY 并遵守规则 1–6。
+
+> 这是一条**尺寸/阶段相关**的判断（表大小、是否在线），静态守卫无法廉价判定（archtest 看不出表多大），
+> 故落在文档而非机器规则——这是该约束的正确载体高度，不是 enforcement 缺位。仓库历史上 CONCURRENTLY
+> 使用不一致，以本规则为准；既有文件不强制回改。
+
 ## 规则 1：CONCURRENTLY 的 migration 必须加 `-- +goose no transaction`
 
 `CREATE INDEX CONCURRENTLY` 和 `DROP INDEX CONCURRENTLY` 不允许在事务内执行。
