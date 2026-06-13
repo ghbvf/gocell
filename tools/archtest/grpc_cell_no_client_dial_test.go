@@ -261,9 +261,9 @@ func TestGRPCCellNoClientDial01_SyntheticDetector(t *testing.T) {
 		{grpcRuntimeLibPath, "NewServer"},        // server construction, not client
 		{grpcRuntimeLibPath, "ServiceDesc"},
 		{grpcRuntimeLibPath, "ServerStream"},
-		{genPkg, "RegisterDeviceCommandServiceServer"}, // generated server registrar
-		{genPkg, "DeviceCommandServiceClient"},         // the client interface TYPE (not its New ctor)
-		{genPkg, "FooServerClient"},                    // ends in Client but no New prefix
+		{genPkg, "RegisterDeviceCommandServiceServer"},                // generated server registrar
+		{genPkg, "DeviceCommandServiceClient"},                        // the client interface TYPE (not its New ctor)
+		{genPkg, "FooServerClient"},                                   // ends in Client but no New prefix
 		{PlatformModulePath + "/runtime/grpc", "NewServiceRegistrar"}, // runtime/grpc, not the lib
 		{PlatformModulePath + "/corecells/accesscore", "NewClient"},   // a cell's own NewClient, not grpc
 	}
