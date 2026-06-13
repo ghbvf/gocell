@@ -50,6 +50,20 @@ Kubelet / Prometheus    │              health  :9091                │
 
 For full variable reference see `docs/ops/env-vars.md`.
 
+### `/api/v1/admin/*` (business admin) vs `/admin/v1/*` (operator)
+
+These are different namespaces on different listeners — do not conflate them:
+
+- **`/admin/v1/*`** → **AdminListener** (loopback, `AuthOperator` Basic Auth). Operator→system
+  control-plane (e.g. `POST /admin/v1/projection/{cell}/{name}/rebuild`). Unreachable from the
+  edge; a `/admin/v1/*` probe to the primary listener `404`s (port isolation).
+- **`/api/v1/admin/*`** → **PrimaryListener** (JWT). An ordinary `/api/v1/*` business path whose
+  domain segment is `admin`; reachable by the frontend via edge-bff, gated per-route by an ABAC
+  permission, NOT operator credentials. Example: `GET /api/v1/admin/health/cells` — the syscore
+  aggregated cell-health endpoint (#1860), gated by `system:read` (admin / super-admin via the
+  PDP baseline). The route mounts on the primary listener because the browser/BFF cannot reach
+  the loopback admin port.
+
 ## Health-listener required (no fallback)
 
 A dedicated `cell.HealthListener` **must** be declared via `WithListener`.

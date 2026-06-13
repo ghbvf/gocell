@@ -3,6 +3,7 @@ cells:
   - configcore
   - auditcore
   - accesscore
+  - syscore
 owner:
   team: platform-core
   role: maintainer

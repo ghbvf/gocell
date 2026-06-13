@@ -65,6 +65,23 @@ func PermAuditRead() Permission {
 	return permAuditRead
 }
 
+// permSystemRead is the package-private singleton backing the PermSystemRead()
+// accessor. Unexported so no external package can reassign it.
+var permSystemRead = newPermission("system:read")
+
+// PermSystemRead returns the permission authorizing reads of runtime/system
+// observability state — the gate for the aggregated cell-health endpoint
+// http.admin.health.cells.v1 (#1860). It is a first-class, enumerable action
+// distinct from audit:read: observability access is not audit-ledger access.
+// The PDP baseline grants it to admin / super-admin (see authorizationdecide
+// baseline.go), mirroring the prior role gate without a role-literal in code.
+//
+// It is an accessor function (not an exported var) so the registry value is
+// immutable to external packages — reassigning a func is a compile error.
+func PermSystemRead() Permission {
+	return permSystemRead
+}
+
 // configcore permissions (PR-10b #1348). Each mirrors the role-literal
 // auth.AnyRole(RoleAdmin) gate it replaces, one resource:action per slice's
 // shared route policy. Naming follows the resource:action convention of the
@@ -148,6 +165,7 @@ func PermRoleRead() Permission { return permRoleRead }
 // perm* var that is not added here is caught by the registry test).
 var allPermissions = []Permission{
 	permAuditRead,
+	permSystemRead,
 	permConfigRead,
 	permConfigWrite,
 	permConfigPublish,

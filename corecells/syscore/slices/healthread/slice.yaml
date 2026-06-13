@@ -1,0 +1,16 @@
+id: healthread
+belongsToCell: syscore
+consistencyLevel: L0
+lifecycle: asset
+contractUsages:
+  - contract: http.admin.health.cells.v1
+    role: serve
+verify:
+  unit:
+    - unit.healthread.service
+  contract:
+    - contract.http.admin.health.cells.v1.serve
+  waivers: []
+
+allowedFiles:
+  - corecells/syscore/slices/healthread/**

@@ -13,6 +13,20 @@ func TestPermission_String(t *testing.T) {
 	if got := PermAuditRead().String(); got != "audit:read" {
 		t.Fatalf("PermAuditRead().String() = %q, want %q", got, "audit:read")
 	}
+	if got := PermSystemRead().String(); got != "system:read" {
+		t.Fatalf("PermSystemRead().String() = %q, want %q", got, "system:read")
+	}
+}
+
+// TestPermSystemRead_StableIdentity pins that the accessor returns the closed
+// registry's private singleton (same F6 immutability contract as PermAuditRead).
+func TestPermSystemRead_StableIdentity(t *testing.T) {
+	if PermSystemRead() != permSystemRead {
+		t.Fatal("PermSystemRead() must return the package-private singleton (stable on every call)")
+	}
+	if PermSystemRead().IsZero() {
+		t.Fatal("minted PermSystemRead() must report IsZero()==false")
+	}
 }
 
 // TestConfigcorePermissions_String pins the exact action spelling of every
@@ -134,14 +148,28 @@ func TestPermission_ZeroValueIsInvalid(t *testing.T) {
 
 func TestPermissions_ClosedRegistry(t *testing.T) {
 	perms := Permissions()
-	// Pin the closed set: PR-10a seeds exactly one permission. A new Perm* var
-	// that forgets to enroll in allPermissions (or an accidental extra) trips
-	// this — the anti-vacuity guard for the closed registry.
-	if len(perms) != 11 {
-		t.Fatalf("Permissions() len = %d, want 11 (PR-10a PermAuditRead + PR-10b configcore 5 + PR-10c accesscore 5)", len(perms))
+	// Pin the closed set. A new Perm* var that forgets to enroll in allPermissions
+	// (or an accidental extra) trips this — the anti-vacuity guard for the closed
+	// registry. Current set: audit:read (PR-10a) + system:read (#1860) + 5 configcore
+	// (PR-10b) + 5 accesscore (PR-10c).
+	if len(perms) != 12 {
+		t.Fatalf("Permissions() len = %d, want 12 (audit:read + system:read + 5 configcore + 5 accesscore)", len(perms))
 	}
-	if perms[0].String() != "audit:read" {
-		t.Fatalf("Permissions()[0] = %q, want audit:read", perms[0].String())
+	want := map[string]bool{
+		"audit:read": true, "system:read": true,
+		"config:read": true, "config:write": true, "config:publish": true,
+		"flag:read": true, "flag:write": true,
+		"policy:read": true, "policy:write": true,
+		"user:read": true, "user:write": true, "role:read": true,
+	}
+	for _, p := range perms {
+		if !want[p.String()] {
+			t.Fatalf("unexpected permission in registry: %q", p.String())
+		}
+		delete(want, p.String())
+	}
+	if len(want) != 0 {
+		t.Fatalf("registry missing expected permissions: %v", want)
 	}
 
 	// Returned slice must be independent of the registry (mutation isolation).

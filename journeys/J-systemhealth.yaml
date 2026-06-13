@@ -1,0 +1,17 @@
+id: J-systemhealth
+goal: 运维/管理台通过单个聚合端点查看每个 cell 的 live/ready/status 与就绪探针（deps），以及 assembly 级 adapter/基础设施探针健康，替代逐服务探活
+lifecycle: experimental
+owner:
+  team: platform
+  role: journey-owner
+cells:
+  - syscore
+contracts:
+  - http.admin.health.cells.v1
+passCriteria:
+  - text: 持 system:read 的管理员 GET /api/v1/admin/health/cells 返回 200 + {data:{overall, cells[], adapters[]}}，每个 cell 含 id/live/ready/status/deps[]
+    mode: manual
+  - text: 缺 bearer token 返回 401；已认证但缺 system:read 返回 403
+    mode: manual
+  - text: 运行时 HealthView 未注入（fail-closed）或 PDP store 不可用时返回 503，不静默空响应
+    mode: manual
