@@ -88,10 +88,12 @@ func deepCopyContract(c *metadata.ContractMeta) *metadata.ContractMeta {
 	cp.Endpoints.Receivers = append([]string(nil), c.Endpoints.Receivers...)
 	cp.Endpoints.Dispatchers = append([]string(nil), c.Endpoints.Dispatchers...)
 	// Deep copy the transport-subtree pointers so a returned ContractMeta cannot
-	// alias-mutate the registry's backing entry. GRPCTransportMeta is all scalar
-	// (struct copy suffices); HTTPTransportMeta carries maps that need their own copy.
+	// alias-mutate the registry's backing entry. GRPCTransportMeta carries the
+	// per-method auth overlay slice (Methods, #1675) which the shallow struct
+	// copy would alias; HTTPTransportMeta carries maps that need their own copy.
 	if c.Endpoints.GRPC != nil {
 		g := *c.Endpoints.GRPC
+		g.Methods = append([]metadata.GRPCMethodMeta(nil), c.Endpoints.GRPC.Methods...)
 		cp.Endpoints.GRPC = &g
 	}
 	if c.Endpoints.HTTP != nil {
