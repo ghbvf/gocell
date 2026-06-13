@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"sync"
 	"testing"
 	"time"
 
@@ -54,6 +55,11 @@ import (
 // via context.Background()), so command dedup keys are tenant-scoped and the
 // test additionally witnesses tenant propagation through the durable PG path.
 const durableTestTenant = "11111111-1111-1111-1111-111111111111"
+
+// durableRelayStopTimeout bounds how long a sub-test waits for the relay's run
+// loop to exit after cancel — guards against a hung Start() turning teardown
+// into a permanent test hang instead of a bounded failure.
+const durableRelayStopTimeout = 10 * time.Second
 
 // TestCommandRelay_Durable_PG verifies the durable command-relay subsystem
 // against real Postgres. One PG testcontainer is shared across the three
@@ -95,21 +101,33 @@ func TestCommandRelay_Durable_PG(t *testing.T) {
 		n, err := outboxCount(context.Background(), pool, "")
 		require.NoError(t, err)
 		require.Equal(t, 2, n, "two command entries must be written to PG outbox")
-		require.Equal(t, []string{durableTestTenant, durableTestTenant}, outboxTenants(t, pool),
-			"tenant must propagate through the durable PG path into the entry principal")
+		tenants := outboxTenants(t, pool)
+		require.Len(t, tenants, 2, "two command entries must be written to PG outbox")
+		for _, tn := range tenants {
+			require.Equal(t, durableTestTenant, tn,
+				"tenant must propagate through the durable PG path into the entry principal")
+		}
 
-		startDurableRelay(t, crs.relay)
+		stop := startDurableRelay(t, crs.relay)
 		require.Eventually(t, func() bool {
 			pub, perr := outboxCount(context.Background(), pool, "published")
 			return perr == nil && pub == 2
 		}, 60*time.Second, 200*time.Millisecond,
 			"both command entries must settle to published (one dispatched, one deduped)")
 
+		// Stop the relay (wait for its goroutine to exit) before reading h.calls:
+		// the channel-close in stop() establishes happens-before for the handler's
+		// in-memory counter, so the read needs no atomic and sees the final value.
+		stop()
 		require.Equal(t, 1, h.calls,
 			"enqueue handler must run exactly once across the redelivered command (PG Claimer dedup)")
 	})
 
 	// ② Transaction atomicity — the property the demo FakeStore cannot witness.
+	// This sub-test isolates the tx-atomicity invariant: it deliberately uses a
+	// tenantless context.Background() (tenant propagation is covered by ①) and
+	// never starts the relay — it asserts row presence/absence directly, not
+	// dispatch, so no command handler is registered either.
 	t.Run("TxAtomicity_RollbackLeavesNoRow", func(t *testing.T) {
 		truncateOutbox(t, pool)
 		reg := command.NewRegistry()
@@ -167,12 +185,14 @@ func TestCommandRelay_Durable_PG(t *testing.T) {
 			return writer.Write(txCtx, bad)
 		}))
 
-		startDurableRelay(t, crs.relay)
+		stop := startDurableRelay(t, crs.relay)
 		require.Eventually(t, func() bool {
 			dead, derr := outboxCount(context.Background(), pool, "dead")
 			return derr == nil && dead == 1
 		}, 30*time.Second, 200*time.Millisecond,
 			"identity-less command entry must be fail-closed dead-lettered on PG")
+		// Stop the relay before reading h.calls (happens-before; see ①).
+		stop()
 		require.Equal(t, 0, h.calls, "handler must not run on an identity-less entry")
 	})
 }
@@ -228,11 +248,17 @@ func durableMigrationsFS(t testing.TB) fs.FS {
 	return fsys
 }
 
-// startDurableRelay starts the relay and, at sub-test end, cancels it and waits
-// for its run loop to exit. Waiting is correctness (not just cleanliness): the
-// pool is shared across sub-tests, so a lingering poller would consume the next
-// sub-test's outbox rows.
-func startDurableRelay(t *testing.T, relay *outboxruntime.Relay) {
+// startDurableRelay starts the relay and returns an idempotent stop() that
+// cancels it and waits (bounded by durableRelayStopTimeout) for its run loop to
+// exit. stop() is also registered as a t.Cleanup, so callers that don't invoke
+// it explicitly still get teardown.
+//
+// Waiting is correctness on two fronts: (1) the pool is shared across sub-tests,
+// so a lingering poller would consume the next sub-test's outbox rows; (2)
+// calling stop() before reading the handler's in-memory counter establishes a
+// happens-before edge (channel close), so the read sees the final value without
+// an atomic.
+func startDurableRelay(t *testing.T, relay *outboxruntime.Relay) func() {
 	t.Helper()
 	relayCtx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -240,10 +266,19 @@ func startDurableRelay(t *testing.T, relay *outboxruntime.Relay) {
 		defer close(done)
 		_ = relay.Start(relayCtx)
 	}()
-	t.Cleanup(func() {
-		cancel()
-		<-done
-	})
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(durableRelayStopTimeout):
+				t.Errorf("relay goroutine did not exit within %s after cancel", durableRelayStopTimeout)
+			}
+		})
+	}
+	t.Cleanup(stop)
+	return stop
 }
 
 // truncateOutbox clears outbox_entries so each sub-test starts from empty.
