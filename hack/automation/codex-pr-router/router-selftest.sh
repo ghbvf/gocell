@@ -345,7 +345,8 @@ OID_S7="1111aaaa2222bbbb3333cccc4444dddd5555eeee"      # S7 label-gone OID
 # ---------------------------------------------------------------------------
 # Pre-generate machine block bodies for S5 (handle_fix needs pr-meta extract)
 # The block must have headSha matching the live OID the stub returns.
-# We emit two blocks: S5a (cx2=1, router must skip) and S5b (cx2=0, proceed).
+# We emit two blocks: S5a (cx3=1, router must skip — above the window) and
+# S5b (cx2=1, proceed — Cx2 is inside the auto-fix window since #1763/#2069).
 #
 # fetch_trusted_bodies calls: gh api ... --jq '.[] | select(...) | .body'
 # Our stub returns the pre-filtered result — just the raw body text.
@@ -354,7 +355,8 @@ OID_S7="1111aaaa2222bbbb3333cccc4444dddd5555eeee"      # S7 label-gone OID
 #   2. <!-- gocell-pr-meta:v1 <base64> --> line (for extract to find)
 # ---------------------------------------------------------------------------
 
-# S5a block: cx2=1, cx1=1, total=2 (round-base=1 -> pr-review carry round=1).
+# S5a block: cx3=1, total=1 (round-base=1 -> pr-review carry round=1). Cx3 is above
+# the auto-fix window → handle_fix must skip.
 # Built via the emit-block funnel with full overrides (offline: refs + round-base
 # supplied, so no gh/git/env access).
 S5A_BLOCK="$(bash "${PR_META}" emit-block \
@@ -362,7 +364,7 @@ S5A_BLOCK="$(bash "${PR_META}" emit-block \
     --pr=43 --tool=codex \
     --head-sha="${OID_S5}" --base-ref=develop --head-ref=feat/fix \
     --round-base=1 --session= --worktree= \
-    --findings='{"total":2,"fixed":0,"unresolved":2,"blocking":0,"byP":{"p0":0,"p1":0,"p2":2,"p3":0},"byCx":{"cx1":1,"cx2":1,"cx3":0,"cx4":0}}' \
+    --findings='{"total":1,"fixed":0,"unresolved":1,"blocking":0,"byP":{"p0":0,"p1":0,"p2":1,"p3":0},"byCx":{"cx1":0,"cx2":0,"cx3":1,"cx4":0}}' \
     2>/dev/null)" || {
     echo "FATAL: pr-meta emit-block failed for S5a — cannot continue selftest" >&2
     exit 1
@@ -373,13 +375,14 @@ S5A_BODY="<!-- pm:pr-review -->
 ## pr-review stub comment
 ${S5A_BLOCK}"
 
-# S5b block: cx2=0, cx1=1, total=1 (round-base=1 -> pr-review carry round=1)
+# S5b block: cx2=1, total=1 (round-base=1 -> pr-review carry round=1). Cx2 is inside
+# the widened window → handle_fix must proceed.
 S5B_BLOCK="$(bash "${PR_META}" emit-block \
     --kind=pr-review --phase=review --verdict=changes-requested \
     --pr=43 --tool=codex \
     --head-sha="${OID_S5}" --base-ref=develop --head-ref=feat/fix \
     --round-base=1 --session= --worktree= \
-    --findings='{"total":1,"fixed":0,"unresolved":1,"blocking":0,"byP":{"p0":0,"p1":0,"p2":1,"p3":0},"byCx":{"cx1":1,"cx2":0,"cx3":0,"cx4":0}}' \
+    --findings='{"total":1,"fixed":0,"unresolved":1,"blocking":0,"byP":{"p0":0,"p1":0,"p2":1,"p3":0},"byCx":{"cx1":0,"cx2":1,"cx3":0,"cx4":0}}' \
     2>/dev/null)" || {
     echo "FATAL: pr-meta emit-block failed for S5b — cannot continue selftest" >&2
     exit 1
@@ -581,9 +584,9 @@ fi
 assert_contains "S4-dry-run-log" "${out_4}" "DRY-RUN"
 
 # ---------------------------------------------------------------------------
-# Scenario 5: fix Cx1-only gate (F7)
-# Case 5a: cx2 > 0 → handle_fix SKIPS (no codex exec workspace-write)
-# Case 5b: cx1-only → handle_fix proceeds (codex workspace-write called)
+# Scenario 5: fix Cx1/Cx2 gate (F7) — auto-fix window widened to Cx2 (#1763/#2069)
+# Case 5a: cx3 > 0 → handle_fix SKIPS (above the window; no codex workspace-write)
+# Case 5b: cx2 (cx3=cx4=0) → handle_fix proceeds (codex workspace-write called)
 #
 # handle_fix calls: bash "${PR_META}" extract "${pr}"
 # pr-meta extract calls:
@@ -598,9 +601,9 @@ assert_contains "S4-dry-run-log" "${out_4}" "DRY-RUN"
 # handle_fix will be the path that actually proceeds.
 # ---------------------------------------------------------------------------
 echo ""
-echo "=== Scenario 5: fix Cx1-only gate (F7) ==="
+echo "=== Scenario 5: fix Cx1/Cx2 gate (F7) ==="
 
-# 5a: cx2 > 0 → must skip
+# 5a: cx3 > 0 → must skip (above the Cx1/Cx2 window)
 reset_scenario
 echo '[{"number":43,"headRefName":"feat/fix","headRefOid":"'"${OID_S5}"'","author":{"login":"alice"},"isCrossRepository":false,"isDraft":false}]' \
     > "${GH_LIST_FILE}"
@@ -610,37 +613,37 @@ echo '{"headRefOid":"'"${OID_S5}"'"}' > "${GH_OID_FILE}"
 # handle_review/check will get past gates but fail the trigger-label re-confirm.
 echo '{"labels":[{"name":"pr-status/needs-fix"},{"name":"ai/local-fix"}]}' > "${GH_LABELS_FILE}"
 echo '{"mergeable":"MERGEABLE"}' > "${GH_MERGE_FILE}"
-# Set up the pre-filtered body for pr-meta extract (cx2=1 block)
+# Set up the pre-filtered body for pr-meta extract (cx3=1 block)
 printf '%s\n' "${S5A_BODY}" > "${GH_API_BODIES_FILE}"
 cp "${VERDICT_CHANGES_REQUESTED}" "${CODEX_VERDICT_FILE}"
 
 out_5a="$(run_router)"
 
 if ! grep -qF "workspace-write" "${CALLS_LOG}"; then
-    pass "S5a: cx2>0 → skip codex workspace-write"
+    pass "S5a: cx3>0 → skip codex workspace-write"
 else
-    fail "S5a: cx2>0 gate" "codex workspace-write called despite cx2>0"
+    fail "S5a: cx3>0 gate" "codex workspace-write called despite cx3>0"
 fi
-# Router logs "Cx2/Cx3/Cx4" when skipping due to cx2>0
-assert_contains "S5a-skip-cx2-log" "${out_5a}" "Cx2"
+# Router logs "Cx3/Cx4" when skipping due to cx3>0
+assert_contains "S5a-skip-cx3-log" "${out_5a}" "Cx3"
 
-# 5b: cx1-only → must proceed to codex workspace-write
+# 5b: cx2 (within window) → must proceed to codex workspace-write
 reset_scenario
 echo '[{"number":43,"headRefName":"feat/fix","headRefOid":"'"${OID_S5}"'","author":{"login":"alice"},"isCrossRepository":false,"isDraft":false}]' \
     > "${GH_LIST_FILE}"
 echo '{"headRefOid":"'"${OID_S5}"'"}' > "${GH_OID_FILE}"
 echo '{"labels":[{"name":"pr-status/needs-fix"},{"name":"ai/local-fix"}]}' > "${GH_LABELS_FILE}"
 echo '{"mergeable":"MERGEABLE"}' > "${GH_MERGE_FILE}"
-# Set up the pre-filtered body for pr-meta extract (cx2=0 block)
+# Set up the pre-filtered body for pr-meta extract (cx2=1 block)
 printf '%s\n' "${S5B_BODY}" > "${GH_API_BODIES_FILE}"
 cp "${VERDICT_CHANGES_REQUESTED}" "${CODEX_VERDICT_FILE}"
 
 out_5b="$(run_router)"
 
 if grep -qF "workspace-write" "${CALLS_LOG}"; then
-    pass "S5b: cx1-only → codex workspace-write called"
+    pass "S5b: cx2 within window → codex workspace-write called"
 else
-    fail "S5b: cx1-only proceed" "codex workspace-write NOT called; calls=$(cat "${CALLS_LOG}") out=${out_5b}"
+    fail "S5b: cx2 within window proceed" "codex workspace-write NOT called; calls=$(cat "${CALLS_LOG}") out=${out_5b}"
 fi
 
 # ---------------------------------------------------------------------------

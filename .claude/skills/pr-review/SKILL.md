@@ -148,6 +148,8 @@ echo "✅ 已贴评论：$URL"                                           # 回�
 
 贴完按结论切 label（命令见 `issues` B3）：有 finding → `pr-review/changes-requested` + `pr-status/needs-fix`（5-state：review 出 changes-requested 始终切 needs-fix，清对侧 `pr-review/approved` + `pr-status/needs-review-again`）；无 finding → `pr-review/approved` + `pr-status/ready`（清 `pr-review/changes-requested` + `pr-status/needs-review-again`）。
 
+**自动启动监控**：结论=需修复（切 `needs-fix`）时，切完 label **自动启动** `/loop 20m /pr-monitor <PR#>`（fix-side，驱动后续 `/fix`，约 2 次无进展即转人工）；结论=ready 是终态，不启动。**若本次 review 已在某个 `/loop` / codex-pr-router 监听内运行，则跳过**（不重复嵌套）。
+
 ---
 
 ## 模式 B：--check 验证（确认上一轮 findings 是否修复 + 抓回归）
@@ -186,6 +188,8 @@ echo "✅ 已贴评论：$URL"                                           # 回�
 ### B5 贴 pm:pr-review（--check 留痕）+ 切 label
 
 窗口打印 B4 后，贴 `pm:pr-review` 评论（--check 变体：每条 finding 带 ✅/❌/⚠️/🔧 状态替代簇归属，summary 用 已修复N/未修复M/回归K）——窗口=主输出、评论=留痕，两者都做（见 `PROJECT.md` §5）。**追加机器块**（贴评论前，接口见 `pr-comment.md` §机器块）：verdict 取 `ready`（全 ✅）/ `changes-requested`（有 ❌/⚠️/🔧）；`bash hack/automation/pr-meta.sh emit-block --kind=pr-review --pr=<N> --phase=check --verdict=<上> --findings='<计数 json>'`（round carry / refs 全派生）追加到 body 末尾。命令 + 回显见 `issues` B4；再按 B4 结论切 label（命令见 `issues` B3）：全 ✅ → `pr-status/ready` + `pr-review/approved`；有遗留 → `pr-review/changes-requested` + `pr-status/needs-fix`（5-state；清 `pr-review/approved` + `pr-status/needs-check-fix`）。
+
+有遗留（切 `needs-fix`）时，切完 label **自动启动** `/loop 20m /pr-monitor <PR#>`（fix-side，驱动后续 `/fix`，约 2 次无进展即转人工）；全 ✅ 是终态，不启动。**若本次 --check 已在某个 `/loop` / codex-pr-router 监听内运行，则跳过**。
 
 ---
 

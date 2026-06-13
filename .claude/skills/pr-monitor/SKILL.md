@@ -1,6 +1,6 @@
 ---
 name: pr-monitor
-description: "PR 状态单 tick 检查器：观察一个 PR 的 review/check 进展并按 label 路由。默认 report 模式（#1657，仅观察+窗口提示）；auto 模式（#1663）在机器可判定的 Cx1-only + needs-fix + 未熔断 时 dispatch /fix，文件级/禁止域安全裁决交由 /fix 自己的 [AUTO-FIX] 门把关。由 `/loop <interval> /pr-monitor <PR#>` 简单 loop 驱动（每 tick 无状态，只读 label + 机器块）；human-in-loop 可随时中断。pr-status/ready 或 PR 关闭时报告终止。"
+description: "PR 状态单 tick 检查器：观察一个 PR 的 review/check 进展并按 label 路由。默认 report 模式（#1657，仅观察+窗口提示）；auto 模式（#1663）在机器可判定的 Cx1/Cx2 + needs-fix + 未熔断 时 dispatch /fix，文件级/禁止域安全裁决交由 /fix 自己的 [AUTO-FIX] 门把关。由 `/loop <interval> /pr-monitor <PR#>` 简单 loop 驱动（ship/fix/pr-review 收尾自动启动；每 tick 无状态，只读 label + 机器块）；human-in-loop 可随时中断。pr-status/ready 或 PR 关闭时报告终止。"
 argument-hint: "<PR#> [--mode report|auto] [--fix-engine claude|codex] [--role fix|review]"
 allowed-tools: [Bash, Read, Skill, Agent]
 disable-model-invocation: true
@@ -11,11 +11,11 @@ disable-model-invocation: true
 > **适用场景**：ship/fix 推完 PR 后，持续观察 review/check 侧进展，在满足条件时自动（或提示人工）调用 `/fix`。
 >
 > **loop 模型（简单）**：本技能是**无状态单 tick**——每次调用只做一次检查就返回。循环交给内建 `/loop` 原语：
-> `/loop 30m /pr-monitor <PR#>` 每 30min 重放同一行命令再调用一次（flag 随命令行原样保留，无需跨 tick 携带状态）。
+> `/loop 20m /pr-monitor <PR#>` 每 20min 重放同一行命令再调用一次（flag 随命令行原样保留，无需跨 tick 携带状态）。
 > **不自己调 ScheduleWakeup、不携带 tick payload、不写文件**——每 tick 的状态全部从 PR 实时读取（label + 最新机器块）。
-> human-in-loop 全程在场，可随时 Ctrl-C 停 `/loop`。
+> human-in-loop 全程在场，可随时 Ctrl-C 停 `/loop`；约 2 次无进展即转人工（轻提示，不加跨 tick 计数）。
 >
-> **如何启动**：用户运行 `/loop 30m /pr-monitor <PR#>`（ship/fix 收尾时会打印这行建议）。单次 `/pr-monitor <PR#>` 也合法——只做一次检查就返回。
+> **如何启动**：ship/fix/pr-review 收尾**自动启动** `/loop 20m /pr-monitor <PR#>`（交互会话内常驻；headless 一次性会话由 codex-pr-router daemon 接管）。手动单次 `/pr-monitor <PR#>` 也合法——只做一次检查就返回。
 
 ---
 
@@ -78,7 +78,7 @@ esac; shift; done
 | PR state != OPEN | `state != "OPEN"` | "PR #N 已关闭（state=$STATE），请停止 /loop" |
 | §3.3 熔断触发 | block `cycle.exhausted` / round≥3 | 见 §3.3 |
 
-> 无 tickCount / 48-tick 超时——human 全程在场，ready/closed 是唯一正常出口；嫌久直接停 `/loop`。
+> 无 tickCount 跨 tick 状态——ready/closed 是唯一正常出口；约 2 次无进展即转人工（轻提示，不加计数），嫌久直接停 `/loop`。
 
 ### §3.2 report 模式（默认）
 
@@ -119,9 +119,9 @@ pr-monitor 只凭**机器可判定**的事实（label + 最新机器块）决定
 |------|---------|
 | `pr-status/needs-fix` ∈ labels | label check |
 | 未熔断 | §3.3 通过 |
-| **Cx1-only** | block `findings.byCx`：cx2 == 0 ∧ cx3 == 0 ∧ cx4 == 0 ∧ cx1 > 0 |
+| **Cx1/Cx2 window** | block `findings.byCx`：cx3 == 0 ∧ cx4 == 0 ∧ (cx1 + cx2) > 0 |
 
-> **为什么 dispatch 门不查 IN_SCOPE / ≤2 文件 / 禁止域**：这些是**文件级**事实，机器块只有 `findings.byCx` 聚合计数（无文件清单），pr-monitor 读不到——而本技能全程不 text-scrape 评论体（§3.2/§3.5）。把读不到的事实写进门只会是**不可执行的门禁**。它们改由 `/fix` 在 dispatch 后强制：fix §3.4 [AUTO-FIX] 只对 `IN_SCOPE + ≤2 文件 + 不改 kernel 接口/migration/bootstrap` 直接改，fix §不可自动执行清单挡下并发语义 / 接口签名 / 新依赖 / 数据流 / Cx2+；越界者 fix 自己降级为 surface + 建议人工，不会自动改。**端到端「能否自动改」= 此处 Cx1-only 机器门 ∧ fix 侧文件级门**，缺一不放行。
+> **为什么 dispatch 门不查 IN_SCOPE / ≤2 文件 / 禁止域**：这些是**文件级**事实，机器块只有 `findings.byCx` 聚合计数（无文件清单），pr-monitor 读不到——把读不到的事实写进门只会是**不可执行的门禁**。它们改由 `/fix` 在 dispatch 后强制：fix §3.4 [AUTO-FIX] 只对 `IN_SCOPE + ≤2 文件 + 不改 kernel 接口/migration/bootstrap/并发语义` 直接改，越界者 fix 自己降级为 surface + 建议人工。**端到端「能否自动改」= 此处 Cx1/Cx2 机器门 ∧ fix 侧文件级门**，缺一不放行。
 
 **`--fix-engine=claude`（默认）且 dispatch 门全部成立** → host LLM in-session 调用：
 
@@ -129,15 +129,14 @@ pr-monitor 只凭**机器可判定**的事实（label + 最新机器块）决定
 Skill("fix", args="<N>")
 ```
 
-> auto 模式的 `Skill("fix")` 是 **human-approved loop 内**的自动操作——用户已显式 `--mode=auto` 启动 `/loop`，非无监督自主执行；且经 dispatch 门（needs-fix / 未熔断 / Cx1-only）+ fix 侧文件级门双重收窄。
+> auto 模式的 `Skill("fix")` 是 **loop 内**的自动操作（`--mode=auto`）；经 dispatch 门（needs-fix / 未熔断 / Cx1/Cx2 window）+ fix 侧文件级门双重收窄 + 3 轮熔断 + 约 2 次无进展转人工。
 
 fix 会贴 pm:fix + 切 `pr-status/needs-check-fix`；下个 `/loop` tick 继续等 `/pr-review --check` 结论（非终止）。
 
 ### §3.5 不自动修的情况（报告 + 建议人工，不 AskUserQuestion）
 
-- **Cx2+**：窗口打印 "PR #N 含 Cx2+ findings，不自动修（决策 3：Cx1 proven 后再开放 Cx2 auto-fix）。建议人工 /fix <N>"。
-  **不再打印 backlog 草稿**——OOS finding 的建 issue 已由 `/fix` 自动完成（pm:oos 自动建 issue + 回填 #N，见 fix 4.6 step 3）。
-- **Cx3+/kernel/migration/并发语义**：同样报告 + "建议人工 /fix"（Cx3+ 需人工决策，fix §3.1）。
+- **Cx3+/kernel/migration/并发语义**：窗口打印 "PR #N 含 Cx3+ findings，不自动修（需人工决策，fix §3.1）。建议人工 /fix <N>"。
+  **不打印 backlog 草稿**——OOS finding 的建 issue 已由 `/fix` 自动完成（pm:oos 自动建 issue + 回填 #N，见 fix 4.6 step 3）。
 
 ### §3.6 冲突解（auto 模式；复用 issues B5）
 

@@ -175,9 +175,11 @@ Beyond the 7 standard gates, the fix path requires:
 - `pr-meta.sh extract` succeeds (fresh machine block with matching `headSha`)
 - `cycle.exhausted == false` (3-round circuit breaker not tripped)
 - `next.agent != "human"` (not already escalated)
-- **Cx1-only**: `byCx.cx2 == 0 && byCx.cx3 == 0 && byCx.cx4 == 0` — only
-  Cx1 (single-file) findings are auto-fixed; anything more complex goes to
-  human
+- **Cx1/Cx2 window**: `byCx.cx3 == 0 && byCx.cx4 == 0` — Cx1/Cx2 findings are
+  auto-fixed (window widened from Cx1-only per #1763/#2069); Cx3+ goes to human.
+  The ≤2-file + forbidden-domain (kernel iface / migration / bootstrap /
+  concurrency) limits are enforced by the codex fix prompt + the build guard
+  below, not by this machine gate
 
 After codex runs, a **build guard** validates:
 
