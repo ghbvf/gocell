@@ -8,7 +8,7 @@ import (
 )
 
 // Builder is the sole public construction entry point for a Loop.
-// Use New(reconciler).With*(...).Build() to create a Loop.
+// Use New(reconciler, tenancy).With*(...).Build() to create a Loop.
 //
 // Design: Builder fields are all unexported; Build() constructs a *Loop with
 // private fields set from the Builder's configuration and returns it.
@@ -17,6 +17,9 @@ import (
 //
 // Missing-required validation in Build:
 //   - reconciler must be non-nil (validation.IsNilInterface guard).
+//   - tenancy must be a declared stance (Tenancy.IsUnset rejected): a reconciler
+//     emits under a tenantless system principal, so it must consciously declare
+//     whether "_notenant" Claimer keys are correct for it (#1954).
 //   - trigger must be provided (missing trigger → Loop never gets work).
 //   - a FencedRepo requires a Leader: fencing is only meaningful with a
 //     leadership epoch source; WithFencedRepo without WithLeader would silently
@@ -43,6 +46,7 @@ import (
 // terminal Build validates and constructs the controller).
 type Builder struct {
 	reconciler              Reconciler
+	tenancy                 Tenancy
 	trigger                 Trigger
 	leader                  LeaderElector
 	fencedRepo              FencedRepository
@@ -57,13 +61,20 @@ type Builder struct {
 	noDefaultRequeue        bool
 }
 
-// New creates a new Builder with the required Reconciler. The Reconciler is
-// validated for typed-nil in Build().
+// New creates a new Builder with the required Reconciler and tenancy stance. Both
+// are required positional arguments (mirroring the clock.Clock-is-positional
+// convention for mandatory deps): tenancy is NOT a With* option precisely so it
+// cannot be forgotten — reconcile.New(r) does not compile. The Reconciler is
+// validated for typed-nil and the tenancy for the unset zero value in Build().
+//
+// Pass reconcile.SingleTenant() (the tenantless device/cert archetype, "_notenant"
+// Claimer keys are correct) or reconcile.TenantScoped() (the reconciler encodes the
+// tenant in its own command-id derivation). See the Tenancy godoc and #1954.
 //
 // ref: controller-runtime ControllerManagedBy — GoCell uses reconciler-first
 // entry (no manager concept) per ADR §3.5.
-func New(reconciler Reconciler) *Builder {
-	return &Builder{reconciler: reconciler}
+func New(reconciler Reconciler, tenancy Tenancy) *Builder {
+	return &Builder{reconciler: reconciler, tenancy: tenancy}
 }
 
 // WithTrigger sets the Trigger that feeds Requests into the Loop's queue.
@@ -172,6 +183,8 @@ func (b *Builder) WithRenewInterval(d time.Duration) *Builder {
 //
 // Required fields:
 //   - Reconciler (set via New): must be non-nil (validation.IsNilInterface guard).
+//   - Tenancy (set via New): must be a declared stance, not the unset zero value
+//     (Tenancy.IsUnset rejected) — see #1954 / the Tenancy godoc.
 //   - Trigger (set via WithTrigger): must be provided; a Loop with no Trigger
 //     never receives external work and cannot converge toward desired state.
 //   - FencedRepo requires a Leader: fencing needs a leadership epoch source, so
@@ -186,7 +199,13 @@ func (b *Builder) WithRenewInterval(d time.Duration) *Builder {
 // triggerCh. No goroutines are started; Start() begins execution.
 func (b *Builder) Build() (*Loop, error) {
 	if validation.IsNilInterface(b.reconciler) {
-		return nil, fmt.Errorf("reconcile: Builder requires a non-nil Reconciler; pass it to reconcile.New(reconciler)")
+		return nil, fmt.Errorf("reconcile: Builder requires a non-nil Reconciler; pass it to reconcile.New(reconciler, tenancy)")
+	}
+	if b.tenancy.IsUnset() {
+		return nil, fmt.Errorf(
+			"reconcile: Builder requires a declared Tenancy stance; pass reconcile.SingleTenant() or " +
+				"reconcile.TenantScoped() to reconcile.New (a reconciler emits under a tenantless system " +
+				"principal, so it must consciously declare whether \"_notenant\" Claimer keys are correct)")
 	}
 	if validation.IsNilInterface(b.trigger) {
 		return nil, fmt.Errorf(

@@ -52,7 +52,7 @@ func TestLoop_LeaderElectInjectsFencedWriterWithLeaseEpoch(t *testing.T) {
 		return reconcile.Result{RequeueAfter: time.Hour}, nil // avoid rapid requeue churn
 	}}
 
-	l, err := reconcile.New(rec).
+	l, err := reconcile.New(rec, reconcile.SingleTenant()).
 		WithTrigger(reconciletest.FakeTrigger{In: src}).
 		WithReconcilerID("leadertest").
 		WithLeader(backend.Elector("A")).
@@ -95,7 +95,7 @@ func TestLoop_LeaderElectLostLeaseCancelsInflight(t *testing.T) {
 		return reconcile.Result{}, ctx.Err()
 	}}
 
-	l, err := reconcile.New(rec).
+	l, err := reconcile.New(rec, reconcile.SingleTenant()).
 		WithTrigger(reconciletest.FakeTrigger{In: src}).
 		WithReconcilerID("leaderlost").
 		WithLeader(backend.Elector("A")).
@@ -151,14 +151,14 @@ func TestLoop_LeaderElectFollowerDoesNotDispatch(t *testing.T) {
 	srcA := make(chan reconcile.Request, 1)
 	srcB := make(chan reconcile.Request, 1)
 
-	la, err := reconcile.New(leaderRec).
+	la, err := reconcile.New(leaderRec, reconcile.SingleTenant()).
 		WithTrigger(reconciletest.FakeTrigger{In: srcA}).
 		WithReconcilerID("foll").
 		WithLeader(backend.Elector("A")).
 		Build()
 	require.NoError(t, err)
 
-	lb, err := reconcile.New(followerRec).
+	lb, err := reconcile.New(followerRec, reconcile.SingleTenant()).
 		WithTrigger(reconciletest.FakeTrigger{In: srcB}).
 		WithReconcilerID("foll").
 		WithLeader(backend.Elector("B")).
@@ -211,14 +211,14 @@ func TestLoop_LeaderElectFollowerTakesOverAfterLeaseExpiry(t *testing.T) {
 	srcB := make(chan reconcile.Request, 2)
 
 	// Use a short TTL so B can take over quickly after expiry.
-	la, err := reconcile.New(mkRec(aDispatched)).
+	la, err := reconcile.New(mkRec(aDispatched), reconcile.SingleTenant()).
 		WithTrigger(reconciletest.FakeTrigger{In: srcA}).
 		WithReconcilerID("takeover").
 		WithLeader(backend.ElectorWithTTL("A", leaderTestShortTTL)).
 		Build()
 	require.NoError(t, err)
 
-	lb, err := reconcile.New(mkRec(bDispatched)).
+	lb, err := reconcile.New(mkRec(bDispatched), reconcile.SingleTenant()).
 		WithTrigger(reconciletest.FakeTrigger{In: srcB}).
 		WithReconcilerID("takeover").
 		WithLeader(backend.ElectorWithTTL("B", leaderTestShortTTL)).
@@ -315,7 +315,7 @@ func TestLoop_LeaderManageIOErrorRetry(t *testing.T) {
 	// Fail the first 2 AcquireLease calls with an I/O error, then succeed on the 3rd.
 	elector := &errAfterN{failFor: 2, inner: backend.Elector("A")}
 
-	l, err := reconcile.New(rec).
+	l, err := reconcile.New(rec, reconcile.SingleTenant()).
 		WithTrigger(reconciletest.FakeTrigger{In: src}).
 		WithReconcilerID("ioretry").
 		WithLeader(elector).
@@ -362,7 +362,7 @@ func TestLoop_FollowerDoesNotConsumeTrigger(t *testing.T) {
 		dispatched.Add(1)
 		return reconcile.Result{RequeueAfter: time.Hour}, nil
 	}}
-	lb, err := reconcile.New(recB).
+	lb, err := reconcile.New(recB, reconcile.SingleTenant()).
 		WithReconcilerID(rid).
 		WithTrigger(reconciletest.FakeTrigger{In: srcB}).
 		WithLeader(backend.Elector("holder-B")).

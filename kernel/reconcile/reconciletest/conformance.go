@@ -383,7 +383,7 @@ func confBasicReconcile(t *testing.T, newHarness HarnessFactory) {
 		return reconcile.Result{RequeueAfter: time.Hour}, nil // suppress fast requeue
 	}}
 
-	l, err := reconcile.New(rec).
+	l, err := reconcile.New(rec, reconcile.SingleTenant()).
 		WithTrigger(trigger).
 		WithInterval(confShortInterval).
 		Build()
@@ -424,7 +424,7 @@ func confRequeueAfter(t *testing.T, newHarness HarnessFactory) {
 		return reconcile.Result{RequeueAfter: time.Hour}, nil // stop after 2nd
 	}}
 
-	l, err := reconcile.New(rec).
+	l, err := reconcile.New(rec, reconcile.SingleTenant()).
 		WithTrigger(trigger).
 		WithInterval(confShortInterval).
 		Build()
@@ -458,7 +458,7 @@ func confPermanentError(t *testing.T, newHarness HarnessFactory) {
 		return reconcile.Result{}, reconcile.PermanentError(errors.New("unrecoverable"))
 	}}
 
-	l, err := reconcile.New(rec).
+	l, err := reconcile.New(rec, reconcile.SingleTenant()).
 		WithTrigger(trigger).
 		WithInterval(confShortInterval).
 		Build()
@@ -510,7 +510,7 @@ func confPanicRecovery(t *testing.T, newHarness HarnessFactory) {
 		return reconcile.Result{RequeueAfter: time.Hour}, nil
 	}}
 
-	l, err := reconcile.New(rec).
+	l, err := reconcile.New(rec, reconcile.SingleTenant()).
 		WithTrigger(trigger).
 		WithInterval(confShortInterval).
 		WithBackoff(confShortInterval, confBackoffMax).
@@ -581,7 +581,7 @@ func confMaxConcurrentCrossEntity(t *testing.T, w Wiring) {
 		return reconcile.Result{RequeueAfter: time.Hour}, nil
 	}}
 
-	l, err := reconcile.New(rec).
+	l, err := reconcile.New(rec, reconcile.SingleTenant()).
 		WithTrigger(trigger).
 		WithConcurrency(workers).
 		WithInterval(confShortInterval).
@@ -648,7 +648,7 @@ func confMaxConcurrentSameEntity(t *testing.T, w Wiring) {
 		return reconcile.Result{RequeueAfter: time.Hour}, nil
 	}}
 
-	l, err := reconcile.New(rec).
+	l, err := reconcile.New(rec, reconcile.SingleTenant()).
 		WithTrigger(trigger).
 		WithConcurrency(2).
 		WithInterval(confShortInterval).
@@ -706,7 +706,7 @@ func confLeaderFlow(t *testing.T, newHarness HarnessFactory) {
 		return reconcile.Result{RequeueAfter: time.Hour}, nil
 	}}
 
-	l, err := reconcile.New(rec).
+	l, err := reconcile.New(rec, reconcile.SingleTenant()).
 		WithTrigger(trigger).
 		WithLeader(w.Leader).
 		WithRenewInterval(confLeaderRenew).
@@ -765,7 +765,7 @@ func confFencing(t *testing.T, newHarness HarnessFactory) {
 		return reconcile.Result{RequeueAfter: time.Hour}, nil
 	}}
 
-	l, err := reconcile.New(rec).
+	l, err := reconcile.New(rec, reconcile.SingleTenant()).
 		WithTrigger(trigger).
 		WithLeader(w.Leader).
 		WithFencedRepo(w.Fenced).
