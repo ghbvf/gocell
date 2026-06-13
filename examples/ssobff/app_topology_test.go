@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -157,15 +158,30 @@ func TestNewSSOBFFJWT(t *testing.T) {
 			"real-mode missing JWT key must surface auth.ErrKeyMissing")
 	})
 
-	t.Run("real topology with shared key env succeeds", func(t *testing.T) {
-		// Distinct success path from the demo branch: real mode loads the SHARED
-		// env key pair (not an ephemeral one). Guards against a regression where
-		// real-mode newSSOBFFJWT always failed even with valid keys configured.
+	t.Run("real shared key: replica A issues, replica B verifies (#2052)", func(t *testing.T) {
+		// The #2052 user-visible failure: replica A signs a token, replica B
+		// verifies it. With per-pod ephemeral keys, B 401s A's token; with the
+		// shared env key pair both pods derive the same KeySet, so cross-pod
+		// verify succeeds. Asserts the real cross-replica behavior, not just that
+		// construction returned non-nil — guards issuer/audience/key wiring.
 		setSSOBFFTestJWTKeyEnv(t)
-		issuer, verifier, err := newSSOBFFJWT(mkTopoT(t, "real", "postgres"), clk)
-		require.NoError(t, err, "real topology with shared JWT keys must build issuer/verifier")
-		assert.NotNil(t, issuer)
-		assert.NotNil(t, verifier)
+		realTopo := mkTopoT(t, "real", "postgres")
+
+		issuerA, _, err := newSSOBFFJWT(realTopo, clk)
+		require.NoError(t, err, "replica A: build JWT issuer/verifier")
+		_, verifierB, err := newSSOBFFJWT(realTopo, clk)
+		require.NoError(t, err, "replica B: build JWT issuer/verifier")
+
+		const subject = "user-2052"
+		token, err := issuerA.Issue(auth.TokenIntentAccess, subject, auth.IssueOptions{
+			Audience: []string{ssobffJWTAudience},
+		})
+		require.NoError(t, err, "replica A: issue access token")
+
+		claims, err := verifierB.VerifyIntent(context.Background(), token, auth.TokenIntentAccess)
+		require.NoError(t, err, "replica B must verify replica A's token (cross-pod, shared key)")
+		assert.Equal(t, subject, claims.Subject, "subject must round-trip across replicas")
+		assert.Equal(t, auth.TokenIntentAccess, claims.TokenUse, "token intent preserved")
 	})
 }
 
