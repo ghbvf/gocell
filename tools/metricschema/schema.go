@@ -64,8 +64,16 @@ type Entry struct {
 	ConstLabels  []string `yaml:"constLabels,omitempty"`
 	Buckets      []string `yaml:"buckets,omitempty"`
 	BucketSource string   `yaml:"bucketSource,omitempty"`
-	File         string   `yaml:"file"`
-	Line         int      `yaml:"-"`
+	// LabelValues byte-locks the frozen value set of one or more labels into the
+	// golden, single-sourced from the metric's typed-enum consts (resolved
+	// statically by the scanner). Adding/removing/renaming an enum value without
+	// regenerating the golden surfaces as a codegen diff = Hard freeze. Keyed by
+	// label name; values sorted. Omitted (nil) for metrics whose labels are
+	// free-form or not yet enrolled. See OUTBOX-RELAY-LABEL-VALUES-FROZEN-01 (#1674)
+	// and gh #1416 for generalizing to saga/reconcile.
+	LabelValues map[string][]string `yaml:"labelValues,omitempty"`
+	File        string              `yaml:"file"`
+	Line        int                 `yaml:"-"`
 }
 
 // Diagnostic describes a typed OBS-01 violation.
@@ -112,6 +120,7 @@ type opts struct {
 	constLabels  []string
 	buckets      []string
 	bucketSource string
+	labelValues  map[string][]string
 }
 
 type prometheusOptSink struct {
@@ -779,6 +788,56 @@ func (sp *scanPackage) providerConfigEventCollectorEntries(call *ast.CallExpr, r
 	}, nil
 }
 
+// resolveEnumStringConsts returns the sorted string-const VALUES of the named type
+// typeName declared in package pkgPath — the metric label's typed-enum value set,
+// resolved from the scanned package's type graph so the golden can byte-lock it
+// (#1674). It enumerates package-scope consts whose type is identical to the named
+// type and whose value kind is String: rename-proof (a const renamed off its mnemonic
+// but still typed the enum is still counted) and covers unexported consts
+// (type-checked package scopes expose them). Returns nil when the package is not in
+// the type graph or the type is absent — the caller fails loud on empty.
+func (sp *scanPackage) resolveEnumStringConsts(pkgPath, typeName string) []string {
+	if sp.pkg == nil || sp.pkg.Types == nil {
+		return nil
+	}
+	tpkg := importedTypesPackage(sp.pkg.Types, pkgPath)
+	if tpkg == nil {
+		return nil
+	}
+	tn, ok := tpkg.Scope().Lookup(typeName).(*types.TypeName)
+	if !ok {
+		return nil
+	}
+	named := tn.Type()
+	var vals []string
+	for _, name := range tpkg.Scope().Names() {
+		c, ok := tpkg.Scope().Lookup(name).(*types.Const)
+		if !ok || !types.Identical(c.Type(), named) || c.Val().Kind() != constant.String {
+			continue
+		}
+		vals = append(vals, constant.StringVal(c.Val()))
+	}
+	sort.Strings(vals)
+	return vals
+}
+
+// importedTypesPackage returns the *types.Package for pkgPath reachable from root
+// (root itself or one of its direct imports), or nil. The enum type's package is a
+// direct import of the metric ctor's caller (e.g. cellmodules/configcore imports
+// kernel/outbox), so a one-hop Imports() walk suffices; root==pkgPath covers an
+// in-package metric.
+func importedTypesPackage(root *types.Package, pkgPath string) *types.Package {
+	if root.Path() == pkgPath {
+		return root
+	}
+	for _, imp := range root.Imports() {
+		if imp.Path() == pkgPath {
+			return imp
+		}
+	}
+	return nil
+}
+
 func (sp *scanPackage) providerRelayCollectorEntries(call *ast.CallExpr, rel string) ([]Entry, error) {
 	var lit *ast.CompositeLit
 	if len(call.Args) > 2 {
@@ -795,16 +854,33 @@ func (sp *scanPackage) providerRelayCollectorEntries(call *ast.CallExpr, rel str
 	if err != nil {
 		return nil, err
 	}
+	// Single-source the outbox_relayed_total {kind,outcome} label value sets from
+	// the sealed entryKind / relayOutcome enum consts in kernel/outbox, statically
+	// resolved here so the golden byte-locks them (Hard freeze, #1674). Fail loud if
+	// either resolves empty: an empty value set in the golden would be a silent
+	// freeze hole, so a missing/renamed enum type must break generation, not pass.
+	kindValues := sp.resolveEnumStringConsts(kernelOutboxPkg, "entryKind")
+	outcomeValues := sp.resolveEnumStringConsts(kernelOutboxPkg, "relayOutcome")
+	if len(kindValues) == 0 || len(outcomeValues) == 0 {
+		return nil, sp.unresolved(call, rel,
+			"outbox_relayed_total label value sets unresolved: kernel/outbox entryKind/relayOutcome "+
+				"enum consts not found (renamed/removed?) — cannot byte-lock the frozen value set")
+	}
 	return []Entry{
 		sp.entryFromOpts("counter", opts{
 			name:      "outbox_relayed_total",
 			namespace: sp.namespace,
-			help: "Total number of outbox entries processed by the relay, by outcome. " +
+			help: "Total number of outbox entries processed by the relay, by entry kind and outcome. " +
+				"kind=event is broker publish; kind=command is in-process async command dispatch. " +
 				"outcome=published|retried|dead are canonical writebacks; " +
 				"outcome=skipped covers MarkPublished updated=false (success path lost lease) " +
 				"and outcome=lost covers Mark{Retry,Dead} updated=false (failure path lost lease) — " +
 				"the canonical outcome for both is owned by the reclaimer (see outbox_reclaimed_total).",
-			labels: []string{"cell", "outcome"},
+			labels: []string{"cell", "kind", "outcome"},
+			labelValues: map[string][]string{
+				"kind":    kindValues,
+				"outcome": outcomeValues,
+			},
 		}, rel, call.Pos()),
 		sp.entryFromOpts("histogram", opts{
 			name:      "outbox_poll_duration_seconds",
@@ -1144,6 +1220,7 @@ func (sp *scanPackage) entryFromOpts(metricType string, parsed opts, rel string,
 		ConstLabels:  sortedUnique(parsed.constLabels),
 		Buckets:      parsed.buckets,
 		BucketSource: parsed.bucketSource,
+		LabelValues:  parsed.labelValues,
 		File:         rel,
 		Line:         sp.fset.Position(pos).Line,
 	}

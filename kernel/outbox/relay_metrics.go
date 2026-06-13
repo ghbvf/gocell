@@ -5,19 +5,34 @@ import (
 	"time"
 )
 
-// PollCycleResult captures the outcome of a single relay poll cycle.
-// Used by RelayCollector.RecordPollCycle to avoid a long parameter list
-// and to support future extensions without breaking the interface.
-type PollCycleResult struct {
-	// Published / Retried / Dead are the canonical outcomes from the publish
-	// and writeback phases. Skipped covers `MarkPublished updated=false`
-	// (the entry was reclaimed mid-flight before MarkPublished could win).
-	// Lost covers the same condition for failure writebacks (Mark{Retry,Dead}
-	// updated=false): the lease lost mid-flight while the publisher was
-	// reporting an error, so the failure must NOT be counted as retried/dead
-	// — the new lease owner will report the canonical outcome.
+// OutcomeCounts holds the per-disposition settled-entry counts for ONE entry kind
+// (event or command) within a single poll cycle. It is the shared shape used by both
+// PollCycleResult (this package) and the relay's internal pollStats (runtime/outbox)
+// so the kind→outcome attribution is single-sourced and copies one-to-one with no
+// hand mapping (#1674).
+//
+// Published / Retried / Dead are the canonical outcomes from the publish and
+// writeback phases. Skipped covers `MarkPublished updated=false` (the entry was
+// reclaimed mid-flight before MarkPublished could win). Lost covers the same
+// condition for failure writebacks (Mark{Retry,Dead} updated=false): the lease lost
+// mid-flight while the publisher was reporting an error, so the failure must NOT be
+// counted as retried/dead — the new lease owner will report the canonical outcome.
+type OutcomeCounts struct {
 	Published, Retried, Dead, Skipped, Lost int
-	ClaimDur, PublishDur, WriteBackDur      time.Duration
+}
+
+// PollCycleResult captures the outcome of a single relay poll cycle, split by entry
+// KIND so command in-process dispatch and event broker publish are distinguishable
+// in outbox_relayed_total{kind,outcome} (#1674). Event and Command carry the same
+// per-disposition shape (OutcomeCounts); the relay attributes each settled entry to
+// exactly one bucket via its command-dispatch discriminator (publishResult.isCommand).
+// Used by RelayCollector.RecordPollCycle to avoid a long parameter list and to support
+// future extensions without breaking the interface.
+type PollCycleResult struct {
+	Event   OutcomeCounts
+	Command OutcomeCounts
+
+	ClaimDur, PublishDur, WriteBackDur time.Duration
 }
 
 // RelayCollector records outbox relay operational metrics.

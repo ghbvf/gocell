@@ -46,9 +46,19 @@ func TestBuild_CorebundleCapturesReachableTypedMetrics(t *testing.T) {
 	assert.Equal(t, "runtime/auth/metrics.go", authVerify.File)
 
 	outboxRelayed := requireMetric(t, schema, "outbox_relayed_total")
-	assert.Equal(t, []string{"cell", "outcome"}, outboxRelayed.Labels)
+	assert.Equal(t, []string{"cell", "kind", "outcome"}, outboxRelayed.Labels)
 	assert.Equal(t, "gocell_outbox_relayed_total", outboxRelayed.FQName)
 	assert.Equal(t, "cellmodules/configcore/storage.go", outboxRelayed.File)
+	// #1674 Hard freeze: the {kind,outcome} value sets are single-sourced from the
+	// kernel/outbox entryKind/relayOutcome enum consts (statically resolved by the
+	// scanner) and byte-locked into the golden. This independent, hardcoded want-set
+	// is the anti-tautology witness — adding/renaming an enum value forces a
+	// reviewer-visible edit HERE plus a golden regen (verify generated catches the
+	// stale golden). Values are sorted by the resolver.
+	assert.Equal(t, map[string][]string{
+		"kind":    {"command", "event"},
+		"outcome": {"dead", "lost", "published", "retried", "skipped"},
+	}, outboxRelayed.LabelValues)
 
 	configEventProcess := requireMetric(t, schema, "config_event_process_total")
 	assert.Equal(t, []string{"cell", "slice", "reason"}, configEventProcess.Labels)

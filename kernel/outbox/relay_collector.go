@@ -18,6 +18,47 @@ var DefaultRelayPollBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5
 // DefaultRelayBatchBuckets are histogram buckets for batch size (1–500).
 var DefaultRelayBatchBuckets = []float64{1, 5, 10, 25, 50, 100, 200, 500}
 
+// entryKind is the sealed value set for the `kind` label on outbox_relayed_total:
+// the NATURE of a settled outbox row — "event" (marshaled + published to the broker)
+// vs "command" (decoded + dispatched to an in-process handler under the two-phase
+// Claimer). Orthogonal to relayOutcome (the disposition). The value set is single-
+// sourced by these consts: metricschema statically resolves them into the
+// metrics-schema golden (Hard byte-lock) and OUTBOX-RELAY-LABEL-VALUES-FROZEN-01's
+// callsite guard bans inline-constant args to recordOutcome (so only these consts can
+// reach the label). #1674.
+type entryKind string
+
+const (
+	kindEvent   entryKind = "event"
+	kindCommand entryKind = "command"
+)
+
+// relayOutcome is the sealed value set for the `outcome` label on
+// outbox_relayed_total: the DISPOSITION a settled row reached. Orthogonal to
+// entryKind. Single-sourced + frozen by the same mechanism as entryKind (golden Hard
+// byte-lock + recordOutcome callsite guard). There is deliberately NO "dispatched"
+// value: command-vs-event is the orthogonal `kind` label, not an outcome (#1674).
+type relayOutcome string
+
+const (
+	outcomePublished relayOutcome = "published"
+	outcomeRetried   relayOutcome = "retried"
+	outcomeDead      relayOutcome = "dead"
+	outcomeSkipped   relayOutcome = "skipped"
+	outcomeLost      relayOutcome = "lost"
+)
+
+// relayedHelp is the help text for outbox_relayed_total. It is duplicated verbatim
+// as a string literal in tools/metricschema/schema.go (providerRelayCollectorEntries)
+// — the static schema scanner cannot import this package, so the golden's help is a
+// separate literal that MUST match byte-for-byte or `gocell verify generated` fails.
+const relayedHelp = "Total number of outbox entries processed by the relay, by entry kind and outcome. " +
+	"kind=event is broker publish; kind=command is in-process async command dispatch. " +
+	"outcome=published|retried|dead are canonical writebacks; " +
+	"outcome=skipped covers MarkPublished updated=false (success path lost lease) " +
+	"and outcome=lost covers Mark{Retry,Dead} updated=false (failure path lost lease) — " +
+	"the canonical outcome for both is owned by the reclaimer (see outbox_reclaimed_total)."
+
 // providerRelayCollector implements RelayCollector via a provider-neutral
 // metrics.Provider. Callers supply the Provider at wire time (prom in prod,
 // OTel in future deployments, Nop in tests); the collector itself has no
@@ -25,7 +66,7 @@ var DefaultRelayBatchBuckets = []float64{1, 5, 10, 25, 50, 100, 200, 500}
 //
 // Metrics (subsystem=outbox):
 //
-//	outbox_relayed_total         (counter, labels: cell, outcome)
+//	outbox_relayed_total         (counter, labels: cell, kind, outcome)
 //	outbox_poll_duration_seconds (histogram, labels: cell, phase)
 //	outbox_batch_size            (histogram, labels: cell)
 //	outbox_reclaimed_total       (counter, labels: cell)
@@ -118,13 +159,9 @@ func registerRelayMetrics(p metrics.Provider, cellID string, cfg ProviderRelayCo
 	}
 
 	relayed, err := p.CounterVec(metrics.CounterOpts{
-		Name: "outbox_relayed_total",
-		Help: "Total number of outbox entries processed by the relay, by outcome. " +
-			"outcome=published|retried|dead are canonical writebacks; " +
-			"outcome=skipped covers MarkPublished updated=false (success path lost lease) " +
-			"and outcome=lost covers Mark{Retry,Dead} updated=false (failure path lost lease) — " +
-			"the canonical outcome for both is owned by the reclaimer (see outbox_reclaimed_total).",
-		LabelNames: []string{"cell", "outcome"},
+		Name:       "outbox_relayed_total",
+		Help:       relayedHelp,
+		LabelNames: []string{"cell", "kind", "outcome"},
 	})
 	if err := register(relayed, err, "outbox_relayed_total"); err != nil {
 		return nil, err
@@ -178,26 +215,43 @@ func registerRelayMetrics(p metrics.Provider, cellID string, cfg ProviderRelayCo
 	}, nil
 }
 
-// RecordPollCycle emits one relayed_total increment per non-zero outcome
-// and four poll_duration observations (claim, publish, write_back, total).
-// Zero-count outcomes are skipped to keep time-series cardinality clean:
-// a persistent zero counter fragment would otherwise appear in Grafana
-// topology for dead-lettered cells that never actually dead-letter anything.
+// recordOutcome emits one outbox_relayed_total increment for a non-zero count of
+// entries that settled to (kind, outcome). It is the SOLE emission point for the
+// kind/outcome labels: the kind and outcome params are the sealed entryKind /
+// relayOutcome types, and OUTBOX-RELAY-LABEL-VALUES-FROZEN-01's callsite guard bans
+// inline-constant args, so only the declared consts can reach the label. Zero (and
+// negative) counts are skipped to keep time-series cardinality clean — a persistent
+// zero fragment would otherwise appear in Grafana for a {kind,outcome} a cell never
+// produces (e.g. a command outcome on an event-only cell).
+func (c *providerRelayCollector) recordOutcome(ctx context.Context, kind entryKind, outcome relayOutcome, n int) {
+	if n <= 0 {
+		return
+	}
+	c.relayed.With(metrics.Labels{
+		"cell":    c.cellID,
+		"kind":    string(kind),
+		"outcome": string(outcome),
+	}).Add(ctx, float64(n))
+}
+
+// RecordPollCycle emits one relayed_total increment per non-zero (kind, outcome)
+// and four poll_duration observations (claim, publish, write_back, total). Event and
+// command settlements land on the same five outcomes under distinct kind labels, so
+// command in-process dispatch throughput/failures are reconcilable separately from
+// event broker publish (#1674).
 func (c *providerRelayCollector) RecordPollCycle(ctx context.Context, r PollCycleResult) {
-	if r.Published > 0 {
-		c.relayed.With(metrics.Labels{"cell": c.cellID, "outcome": "published"}).Add(ctx, float64(r.Published))
-	}
-	if r.Retried > 0 {
-		c.relayed.With(metrics.Labels{"cell": c.cellID, "outcome": "retried"}).Add(ctx, float64(r.Retried))
-	}
-	if r.Dead > 0 {
-		c.relayed.With(metrics.Labels{"cell": c.cellID, "outcome": "dead"}).Add(ctx, float64(r.Dead))
-	}
-	if r.Skipped > 0 {
-		c.relayed.With(metrics.Labels{"cell": c.cellID, "outcome": "skipped"}).Add(ctx, float64(r.Skipped))
-	}
-	if r.Lost > 0 {
-		c.relayed.With(metrics.Labels{"cell": c.cellID, "outcome": "lost"}).Add(ctx, float64(r.Lost))
+	for _, kc := range []struct {
+		kind   entryKind
+		counts OutcomeCounts
+	}{
+		{kindEvent, r.Event},
+		{kindCommand, r.Command},
+	} {
+		c.recordOutcome(ctx, kc.kind, outcomePublished, kc.counts.Published)
+		c.recordOutcome(ctx, kc.kind, outcomeRetried, kc.counts.Retried)
+		c.recordOutcome(ctx, kc.kind, outcomeDead, kc.counts.Dead)
+		c.recordOutcome(ctx, kc.kind, outcomeSkipped, kc.counts.Skipped)
+		c.recordOutcome(ctx, kc.kind, outcomeLost, kc.counts.Lost)
 	}
 
 	c.pollDuration.With(metrics.Labels{"cell": c.cellID, "phase": "claim"}).Observe(ctx, r.ClaimDur.Seconds())

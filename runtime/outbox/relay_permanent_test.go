@@ -61,6 +61,10 @@ func permanentTestResult(id string, attempts int, err error) publishResult {
 	return publishResult{
 		entry: ClaimedEntry{Entry: entry, Attempts: attempts, LeaseID: uuid.NewString()},
 		err:   err,
+		// command.* topic → command-dispatch branch; mirror publishBatch's
+		// isCommand marker so handleFailedEntry attributes the failure to the
+		// command bucket (outbox_relayed_total{kind="command"}, #1674).
+		isCommand: true,
 	}
 }
 
@@ -83,8 +87,9 @@ func TestRelay_HandleFailedEntry_PermanentError_MarkDeadWithoutRetry(t *testing.
 	assert.Equal(t, 1, store.markDeadCalls,
 		"permanent error must MarkDead on first failure (no retry budget burn)")
 	assert.Zero(t, store.markRetryCalls, "permanent error must NOT MarkRetry")
-	assert.Equal(t, 1, stats.dead)
-	assert.Zero(t, stats.retried)
+	assert.Equal(t, 1, stats.command.Dead)
+	assert.Zero(t, stats.command.Retried)
+	assert.Zero(t, stats.event, "command failure must not touch the event bucket")
 }
 
 // TestRelay_HandleFailedEntry_PermanentError_WrappedDeep verifies the
@@ -119,6 +124,6 @@ func TestRelay_HandleFailedEntry_TransientError_MarkRetry(t *testing.T) {
 	assert.Equal(t, 1, store.markRetryCalls,
 		"transient error below MaxAttempts must MarkRetry")
 	assert.Zero(t, store.markDeadCalls, "transient error must NOT MarkDead")
-	assert.Equal(t, 1, stats.retried)
-	assert.Zero(t, stats.dead)
+	assert.Equal(t, 1, stats.command.Retried)
+	assert.Zero(t, stats.command.Dead)
 }
