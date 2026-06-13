@@ -295,11 +295,32 @@ func (s *Service) EnqueueAsync(ctx context.Context, deviceID, commandType, paylo
 		return errcode.New(errcode.KindInternal, errcode.ErrInternal,
 			"device-command: async enqueue requires a command emitter")
 	}
+	// Mirror Enqueue's preamble: authz before any data access (403 precedes 404 so
+	// callers cannot probe device existence), then device existence — a bad deviceID
+	// is rejected at the HTTP edge (404) instead of polluting the outbox and
+	// dead-lettering at the relay.
+	if s.authz != nil {
+		if err := s.authz(ctx); err != nil {
+			return errcode.Wrap(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
+				"device-command: enqueue authorization failed", err)
+		}
+	}
+	if _, err := s.deviceRepo.GetByID(ctx, deviceID); err != nil {
+		return fmt.Errorf(errLookupDeviceFmt, err)
+	}
 	req := cmdenqueue.Request{DeviceID: deviceID, CommandType: commandType, Payload: payload}
-	return s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		return commandruntime.EmitAsyncFromIdempotencyKey(
 			txCtx, s.clock, s.emitter, cmdenqueue.DispatchID, deviceID, req)
-	})
+	}); err != nil {
+		return err
+	}
+	s.logger.Info(
+		"device-command: async command emitted",
+		slog.String("device_id", deviceID),
+		slog.String("command_type", commandType),
+	)
+	return nil
 }
 
 // Dequeue claims pending commands for the given device and advances them to Sent.

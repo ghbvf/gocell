@@ -2,6 +2,7 @@ package devicecommand
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -12,38 +13,52 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecmd"
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	idemkey "github.com/ghbvf/gocell/runtime/http/idempotency"
 )
 
-// setupAsyncMux builds the composite Handler over a Service wired with a recorder
-// CellEmitter so the async-enqueue route can be exercised end-to-end (route →
-// adapter → Service.EnqueueAsync → emitter).
-func setupAsyncMux(t *testing.T) (http.Handler, *outboxtest.Recorder) {
+// newSeededAsyncHandler builds the composite Handler over a devicecmd.Service
+// wired with the given command emitter, with deviceID pre-seeded so the
+// async-enqueue device-existence check passes. Shared by the async handler tests,
+// the contract test, and the cross-cell e2e (each supplies its own emitter:
+// a recorder for assertion, or a writer-emitter over a relay-pollable store).
+func newSeededAsyncHandler(t *testing.T, emitter outbox.CellEmitter, deviceID string) http.Handler {
 	t.Helper()
+	devRepo := mem.NewDeviceRepository()
+	require.NoError(t, devRepo.Create(context.Background(),
+		&domain.Device{ID: deviceID, Name: "sensor-a", Status: "online"}))
 	codec, err := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
 	require.NoError(t, err)
-	rec := outboxtest.NewRecorder()
 	svc, err := devicecmd.NewService(
-		clock.Real(), commandtest.NewInMemQueue(), mem.NewDeviceRepository(),
+		clock.Real(), commandtest.NewInMemQueue(), devRepo,
 		codec, slog.Default(), query.RunModeProd,
 		devicecmd.WithSliceName("devicecommand"),
-		devicecmd.WithCommandEmitter(rec.CellEmitter()),
+		devicecmd.WithCommandEmitter(emitter),
 	)
 	require.NoError(t, err)
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/devices", func(sub cell.RouteMux) {
 		require.NoError(t, NewHandler(svc).RegisterRoutes(sub))
 	})
-	return mux, rec
+	return mux
+}
+
+// setupAsyncMux builds an async handler over a recorder emitter (device "dev-1"
+// seeded), returning the recorder so tests can assert the emitted command.
+func setupAsyncMux(t *testing.T) (http.Handler, *outboxtest.Recorder) {
+	t.Helper()
+	rec := outboxtest.NewRecorder()
+	return newSeededAsyncHandler(t, rec.CellEmitter(), "dev-1"), rec
 }
 
 // TestHandleEnqueueAsync_Accepted: a POST with an Idempotency-Key (injected into
@@ -61,8 +76,8 @@ func TestHandleEnqueueAsync_Accepted(t *testing.T) {
 	require.Len(t, rec.Entries(), 1)
 }
 
-// TestHandleEnqueueAsync_MissingKey: without an Idempotency-Key the bridge
-// fail-closes → 400 and nothing is emitted.
+// TestHandleEnqueueAsync_MissingKey: with a valid device but no Idempotency-Key the
+// bridge fail-closes → 400 and nothing is emitted.
 func TestHandleEnqueueAsync_MissingKey(t *testing.T) {
 	mux, rec := setupAsyncMux(t)
 	w := httptest.NewRecorder()

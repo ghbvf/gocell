@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -22,8 +23,13 @@ func newAsyncTestSvc(t *testing.T, opts ...Option) *Service {
 	if err != nil {
 		t.Fatalf("NewCursorCodec: %v", err)
 	}
+	devRepo := mem.NewDeviceRepository()
+	if err := devRepo.Create(context.Background(),
+		&domain.Device{ID: "dev-1", Name: "sensor-a", Status: "online"}); err != nil {
+		t.Fatalf("seed device: %v", err)
+	}
 	all := append([]Option{WithSliceName("devicecommand")}, opts...)
-	svc, err := NewService(clock.Real(), commandtest.NewInMemQueue(), mem.NewDeviceRepository(),
+	svc, err := NewService(clock.Real(), commandtest.NewInMemQueue(), devRepo,
 		codec, slog.Default(), query.RunModeProd, all...)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)

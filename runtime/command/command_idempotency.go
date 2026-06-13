@@ -80,9 +80,14 @@ func WithActiveUniqueness(deadline time.Time) EmitOption {
 	}
 }
 
-// errCommandEmitOp is the errcode.Code used for EmitAsync validation errors
-// (e.g. zero deadline coupling guard).
+// errCommandEmitOp is the errcode.Code used for EmitAsync emit-option validation
+// errors (e.g. the zero-deadline coupling guard of WithActiveUniqueness).
 const errCommandEmitOp errcode.Code = "ERR_COMMAND_EMIT_OP"
+
+// errCommandIdemKey is the errcode.Code used by EmitAsyncFromIdempotencyKey for a
+// missing or invalid HTTP Idempotency-Key (distinct from errCommandEmitOp so the
+// HTTP-bridge fail-closed path is independently attributable). KindInvalid → 400.
+const errCommandIdemKey errcode.Code = "ERR_COMMAND_IDEM_KEY"
 
 // EmitAsync is the sole sanctioned emit exit for an async command entry. subject
 // and commandID are required positional params — it is compile-time inexpressible
@@ -103,7 +108,9 @@ const errCommandEmitOp errcode.Code = "ERR_COMMAND_EMIT_OP"
 // WARNING: subject and commandID are adjacent same-typed (string) positional
 // params — transposing them is NOT a compile error and silently mis-partitions
 // the dedup slot across subjects. subject = the dedup aggregate (e.g. deviceID);
-// commandID = the per-instance identity (e.g. the source event id).
+// commandID = the per-instance identity (e.g. the source event id). For HTTP
+// handlers carrying an Idempotency-Key header, prefer EmitAsyncFromIdempotencyKey,
+// which sources commandID from ctx and removes this transpose footgun.
 //
 // Error contract mirrors kout.Emit: every failure is wrapped with context and
 // returned (never swallowed). Callers MUST return or log the error.
@@ -182,11 +189,11 @@ func EmitAsyncFromIdempotencyKey[T any](
 ) error {
 	commandID, ok := idemkey.KeyFromContext(ctx)
 	if !ok || commandID == "" {
-		return errcode.New(errcode.KindInvalid, errCommandEmitOp,
+		return errcode.New(errcode.KindInvalid, errCommandIdemKey,
 			"command.EmitAsyncFromIdempotencyKey: missing Idempotency-Key header (required for idempotent async command)")
 	}
 	if strings.ContainsAny(commandID, "{}") {
-		return errcode.New(errcode.KindInvalid, errCommandEmitOp,
+		return errcode.New(errcode.KindInvalid, errCommandIdemKey,
 			"command.EmitAsyncFromIdempotencyKey: Idempotency-Key contains invalid characters")
 	}
 	return EmitAsync(ctx, clk, emitter, dispatchID, subject, commandID, payload, opts...)

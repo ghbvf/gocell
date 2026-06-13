@@ -2,9 +2,11 @@ package command
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	idemkey "github.com/ghbvf/gocell/runtime/http/idempotency"
 )
 
@@ -55,6 +57,11 @@ func TestEmitAsyncFromIdempotencyKey_FailClosed(t *testing.T) {
 				CommandID("command.x.v1"), "sub", struct{}{})
 			if err == nil {
 				t.Fatal("expected fail-closed error, got nil")
+			}
+			// Must be KindInvalid so the handler renders it as a 400 (not 5xx).
+			var ec *errcode.Error
+			if !errors.As(err, &ec) || ec.Kind != errcode.KindInvalid {
+				t.Fatalf("fail-closed error must be *errcode.Error KindInvalid (400), got %#v", err)
 			}
 			if em.calls != 0 {
 				t.Fatalf("emitter must not be called on fail-closed; calls=%d", em.calls)

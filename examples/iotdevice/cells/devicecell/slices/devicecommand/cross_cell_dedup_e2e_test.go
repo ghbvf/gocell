@@ -9,37 +9,31 @@ package devicecommand
 // is dispatched EXACTLY ONCE.
 //
 // Each pod is a distinct devicecmd.Service + this slice's HTTP mux wrapped with
-// the real HTTP idempotency middleware, writing into ONE shared command outbox
-// store (= shared Redis). Each pod has its OWN HTTP idempotency store, so the
-// path-scoped HTTP layer does NOT dedup across pods (both handlers run, both
-// emit) — any dedup MUST therefore come from the COMMAND layer: both emits carry
-// command_id == the client Idempotency-Key, so DeriveCommandKey(tenant, deviceID,
-// key) collides and the relay's Claimer wrap runs the enqueue handler once.
+// the real HTTP idempotency middleware (built via newSeededAsyncHandler), writing
+// into ONE shared command outbox store (= shared Redis). Each pod has its OWN HTTP
+// idempotency store, so the path-scoped HTTP layer does NOT dedup across pods (both
+// handlers run, both emit) — any dedup MUST therefore come from the COMMAND layer:
+// both emits carry command_id == the client Idempotency-Key, so DeriveCommandKey(
+// tenant, deviceID, key) collides and the relay's Claimer wrap runs the enqueue
+// handler once.
 
 import (
-	"bytes"
 	"context"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecmd"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	enqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	runtimecommand "github.com/ghbvf/gocell/runtime/command"
 	idemhttp "github.com/ghbvf/gocell/runtime/http/idempotency"
@@ -48,35 +42,24 @@ import (
 )
 
 // countingEnqueueHandler counts enqueue-command dispatches so the test can assert
-// relay-level cross-cell deduplication (handler must fire exactly once).
-type countingEnqueueHandler struct{ calls int }
+// relay-level cross-cell deduplication (handler must fire exactly once). calls is
+// atomic because the relay may dispatch entries from a batch concurrently.
+type countingEnqueueHandler struct{ calls atomic.Int64 }
 
 func (h *countingEnqueueHandler) HandleEnqueue(_ context.Context, _ *enqueue.Request) (*enqueue.Response, error) {
-	h.calls++
+	h.calls.Add(1)
 	return &enqueue.Response{Data: &enqueue.ResponseData{ID: "cmd-1", Status: "Pending"}}, nil
 }
 
-// newAsyncPod builds one "pod/cell": a devicecmd.Service whose EnqueueAsync emits
-// into the shared command store, fronted by this slice's HTTP mux wrapped in the
-// real HTTP idempotency middleware. Each pod gets its OWN HTTP idempotency store
-// so cross-pod dedup can only come from the command layer.
+// newAsyncPod builds one "pod/cell": this slice's async-enqueue mux (device "d1"
+// seeded) whose EnqueueAsync emits into the shared command store, wrapped in the
+// real HTTP idempotency middleware with its OWN idempotency store so cross-pod
+// dedup can only come from the command layer.
 func newAsyncPod(t *testing.T, store *outboxtest.FakeStore) http.Handler {
 	t.Helper()
 	we, err := kout.NewWriterEmitter(store)
 	require.NoError(t, err)
-	codec, err := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
-	require.NoError(t, err)
-	svc, err := devicecmd.NewService(
-		clock.Real(), commandtest.NewInMemQueue(), mem.NewDeviceRepository(),
-		codec, slog.Default(), query.RunModeProd,
-		devicecmd.WithSliceName("devicecommand"),
-		devicecmd.WithCommandEmitter(kout.WrapEmitterForCell(we)),
-	)
-	require.NoError(t, err)
-	mux := celltest.NewTestMux()
-	mux.Route("/api/v1/devices", func(sub cell.RouteMux) {
-		require.NoError(t, NewHandler(svc).RegisterRoutes(sub))
-	})
+	mux := newSeededAsyncHandler(t, kout.WrapEmitterForCell(we), "d1")
 	return idemhttp.Middleware(clock.Real(), idemhttp.NewMemStore(clock.Real()))(mux)
 }
 
@@ -150,6 +133,6 @@ func TestCrossCell_HTTPAsyncEnqueue_SameSlotDedup(t *testing.T) {
 			rows[1].Status == kout.StatePublished
 	}), "both command entries must settle to published (one dispatched, one deduped)")
 
-	assert.Equal(t, 1, h.calls,
+	assert.Equal(t, int64(1), h.calls.Load(),
 		"cross-cell: the enqueue handler must run exactly once for the same logical command")
 }

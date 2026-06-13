@@ -19,8 +19,10 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
+	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
+	idemkey "github.com/ghbvf/gocell/runtime/http/idempotency"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
@@ -77,6 +79,36 @@ func TestHttpDeviceCommandEnqueueV1Serve(t *testing.T) {
 	req = req.WithContext(auth.TestContext("operator-1", []string{dto.RoleOperator}))
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
+}
+
+func TestHttpDeviceCommandEnqueueAsyncV1Serve(t *testing.T) {
+	root := contracttest.ExampleContractsRoot(t, "iotdevice")
+	c := contracttest.LoadByID(t, root, "http.device.command.enqueue-async.v1")
+
+	// request schema mirrors enqueue: payload required + non-empty, commandType optional.
+	c.ValidateRequest(t, []byte(`{"payload":"reboot"}`))
+	c.ValidateRequest(t, []byte(`{"payload":"reboot","commandType":"firmware-update"}`))
+	c.MustRejectRequest(t, []byte(`{"payload":""}`))                // payload minLength 1
+	c.MustRejectRequest(t, []byte(`{"payload":"x","extra":"bad"}`)) // additionalProperties false
+	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
+
+	// 202 happy path: emitter-wired handler with device seeded; Idempotency-Key
+	// injected into ctx as the HTTP idempotency middleware would (the TestMux omits
+	// the middleware, so the bridge reads the key via KeyFromContext from here).
+	rec := outboxtest.NewRecorder()
+	handler := newSeededAsyncHandler(t, rec.CellEmitter(), "dev-1")
+
+	w := httptest.NewRecorder()
+	path := strings.Replace(c.HTTP.Path, "{id}", "dev-1", 1)
+	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"payload":"reboot"}`))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := idemkey.WithKey(auth.TestContext("operator-1", []string{dto.RoleOperator}), "idem-contract-1")
+	req = req.WithContext(ctx)
+	handler.ServeHTTP(w, req)
+	c.ValidateHTTPResponseRecorder(t, w) // 202 + response schema
+	if n := len(rec.Entries()); n != 1 {
+		t.Fatalf("async enqueue must emit exactly one command, got %d", n)
+	}
 }
 
 func TestHttpDeviceCommandDequeueV1Serve(t *testing.T) {
