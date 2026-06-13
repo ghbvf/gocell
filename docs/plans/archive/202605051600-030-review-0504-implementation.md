@@ -1,6 +1,8 @@
 # 030 · GoCell 0504 Review 实施计划（独立于 027/028/029）
 
 > **🗄️ 已归档（2026-05-19）**：任务台账（原 §0/§1.A/§2/§3 Track A·C·G·J·F/§5/§6.1）已完全迁出到 active backlog 单源——已完成项进 `docs/backlog/archive/`，live 项进 `docs/backlog.md` + `docs/backlog/cap-*`。本文件仅留 §1 路径概述 / §4 Won't-do 边界 / §6 与 029 关系 / §7 验收存档，作历史脉络保存，不再更新。后续 0504-derived 工作追踪以 active backlog 为准。
+>
+> **⚠️ 受控例外更新（2026-06-13，#1423 US1 / #1960）**：§4 won't-do **line 37（微服务化拆分 / 服务网格集成）** 与 **K-04（corecells 不迁移）** 经 epic #1423 方向裁决 **推翻**——拆开「不 prescribe 部署拓扑」（保留）与「提供 location-transparent transport seam」（纠正：纳入框架职责）。历史行原样保留（脉络不丢），但当前真相单源 = ADR `docs/architecture/202606131142-1423-adr-cell-deployment-topology.md`。下文相应行已标 ❌ 已推翻。
 
 > 日期：2026-05-05
 > 来源：`docs/reviews/20260504-*.md`（16 份，约 120 条 finding 去重后 ≈ 80）+ `docs/reviews/202605041800-systems-engineering-gap-assessment.md`
@@ -22,6 +24,7 @@
 
 **为什么不再需要"Phase 0 ADR 仲裁"前置**（2026-05-05）：
 - K-04 决「不迁移」— accesscore/auditcore/configcore 留 framework，产品定位 = 框架自带认证/配置/审计能力（与 v1.1 product roadmap 对齐），落 ADR 锁定决策（1-2h）
+  - ❌ **K-04「固化为永久 co-located、剥夺分开部署」部分已推翻 2026-06-13（#1423 US1）**：corecells 仍是平台 cell，但与外部 cell 同等享 location-transparent 部署弹性（可组合 / 可拆分），当前裁决见 ADR `202606131142-1423`。（仓库归属另由 #1081 处置，与本推翻无关）
 - K-05 决「不做」— (a) 保留 4-kind 含 projection（v1.1 CQRS 后端会用，删了重做）；(b) `EndpointsMeta` 10 字段森林 cost > benefit（K#06 contractgen 已让消费侧类型隔离）；(c) ContractSpec 双定义由 029 06.PR4 完成时自动闭环
 - K-04/K-05 决议落 ADR/备忘是文档动作（半天）而非实施 PR，与 Phase 1 任何实施项并发
 - 029 06.PR4 与 N1-N5 文件域 0 重叠（cells/`slice_gen.go` + contract.yaml + generated/contracts vs kernel/{assembly,governance,observability}/* + runtime/bootstrap/options.go），可立即并发，无前置等待
@@ -34,7 +37,7 @@
 |---|---|---|
 | summary §5 | CD 链路 / 镜像 / SBOM / staging / canary | GoCell 是嵌入式框架，不拥有运行时与持久层；CD 是客户应用职责（CLAUDE.md + ADR `202605041430` §3.1）|
 | summary §5 | 性能 / SLO / 容量基准（如 p99 < 100ms） | 框架不知客户负载特征；SLO 在客户应用层定义，框架只提供接入点（F-09 引入 schema 字段，不预设具体值）|
-| summary §5 | 微服务化拆分 / 服务网格集成 | 形态层冲突，N=每个客户不同部署形态 |
+| summary §5 | 微服务化拆分 / 服务网格集成 | ❌ **已推翻 2026-06-13（#1423 US1）** — N 异是*做* location-transparent seam 的论据而非不做的理由；当前裁决见 ADR `202606131142-1423`（~~形态层冲突，N=每个客户不同部署形态~~）|
 | summary §5 | journey 改 Gherkin | passCriteria + checkRef 比 Gherkin 更工程化（直接驱动 go test，不需 step definition 翻译层）|
 | summary §5 | K8s CRD / etcd / informer / controller-runtime | K8s 是同范式参照而非同形态搬运 |
 | summary §5 | 业务正确性审查 | accesscore/auditcore/configcore 是框架自带能力（K-04 决「不迁移」，归 framework 仓）|

@@ -63,6 +63,23 @@
 | **时间维度** | 持续（运行时为主）| 多重（编译期 / CI 期 / 启动期 / 运行时）|
 | **错误传播** | 整个集群 | 单个宿主应用 |
 
+**Amendment（2026-06-13，#1423 US1 / #1960）— 「部署多样性」行补全被省略的推论**：上表
+「部署多样性 N=每个客户不同」是**真命题**，但其下游被误推成「框架不提供 relocatability 的
+seam」（落点 = `030-review-0504` won't-do line 37 微服务化拆分 + K-04 corecells 不迁移）。
+**正确推论恰好相反**：正因部署形态因客户而异（N 异），框架 MUST 提供 location-transparent
+contract transport seam，让部署形态成为 **wiring 选择**（同一份 cell 代码零改动，仅改
+composition/topology 接线即可单进程 / 组合 / 拆分）而非改 cell 代码——N 异是**做** seam 的论据，
+不是不做的理由。「框架不 *prescribe* 拓扑」（保留）≠「框架不 *提供* seam」（纠正）。该 reconcile
+的当前真相单源 = ADR `202606131142-1423-adr-cell-deployment-topology.md`。
+
+**形态约束矩阵重评（per `.claude/rules/gocell/ai-robust.md` §"ADR amendment 落地必查"）**：本
+amendment **不**使 §3.1 任何维度退化，也**不**改 §3.2/§3.3/§3.4。seam 经 §3.2「运行时只读 + 经
+接口注入」通道交付（`CellTransport` 由 composition root 启动期注入，框架只提供接口、不夺取宿主
+运行时权限、无 sidecar/控制面），故与 §3.3「GoCell 运行时无权改宿主」**一致非违反**——§3.2 的
+「经接口注入」模型本来就 license 注入式 transport seam。conflation 是下游从 §3.1 的误推，不是
+本 ADR 形态模型的缺陷；§3.2-§3.4（时间维度 / 自收敛权限 / 双层 harvest）与 cell↔cell transport
+正交，文本原样保留。
+
 ### 3.2 时间维度模型
 
 GoCell 的所有事件落在四个时间维度之一：
