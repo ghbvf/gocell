@@ -22,9 +22,12 @@
 //
 // Satellite modules (cmd/gocell, examples/*) legitimately keep a local
 // `replace github.com/ghbvf/gocell => ../../` for monorepo dev — those are OUT OF
-// SCOPE here; this invariant constrains ONLY the root module. Their inability to
-// be `go install`ed at a version tag is a separate, deliberately-deferred concern
-// tracked in #1088 (gocell CLI versioned release).
+// SCOPE here; this invariant constrains ONLY the root module. For cmd/gocell
+// specifically, release-time replace-strip (modrelease.StripReplaceAndPin /
+// InstallableBinaries, #2045) removes the local replace and pins internal require
+// to the published version, producing an independent sub-module commit tagged
+// cmd/gocell/vX.Y.Z — so `go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z`
+// works post-release without violating this root-module invariant.
 //
 // # Grading: Medium, single axis (NOT a funnel)
 //

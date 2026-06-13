@@ -83,6 +83,22 @@ type GRPCServiceSpec struct {
 	// A nil value fails Validate; a non-func value panics in runtime/grpc at
 	// registration time (panicregister.Approved("grpc-registrar-bad-register-fn",…)).
 	Register any
+
+	// PublicMethods lists the FULL method names (/{proto.Service}/{Method}) this
+	// service exposes that are JWT-exempt (#1675). Derived by cellgen from the
+	// contract's endpoints.grpc.methods[] overlay (the public:true entries),
+	// composed identically to the registrar's own attribution key so the runtime
+	// registrar can aggregate them into the auth interceptor's bypass set. Empty
+	// → every RPC of this service is authed (the fail-closed default). It is a
+	// data field (not a callback), so kernel can hold it without a grpc import.
+	//
+	// This field is cellgen-OWNED: declare public RPCs in the contract's
+	// endpoints.grpc.methods[] (public:true), not here. Hand-writing PublicMethods
+	// in a cell's Init bypasses the contractgen pre-pass that validates each name
+	// against the .proto method set — a typo would silently mark a non-existent
+	// method public (inert) or, worse, drift from the contract. Generated
+	// cell_gen.go is the only sanctioned writer.
+	PublicMethods []string
 }
 
 // Validate returns a non-nil error when any required field is missing.

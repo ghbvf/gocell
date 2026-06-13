@@ -82,6 +82,43 @@ func TestUnaryAuth(t *testing.T) {
 	})
 }
 
+// TestUnaryAuth_WithPublicMethodComposes verifies the OR-compose semantics of
+// WithPublicMethod (#1675): multiple installed predicates union — a method is
+// public if ANY returns true — rather than last-wins. This is what lets the
+// registrar predicate (chain.go) coexist with a test harness's synthetic
+// exemption without either clobbering the other.
+func TestUnaryAuth_WithPublicMethodComposes(t *testing.T) {
+	v := stubVerifier{claims: kauth.Claims{Subject: "u"}}
+	predA := WithPublicMethod(func(m string) bool { return m == "/pkg.Svc/A" })
+	predB := WithPublicMethod(func(m string) bool { return m == "/pkg.Svc/B" })
+
+	cases := []struct {
+		method     string
+		wantBypass bool // true → handler reached without a token
+	}{
+		{"/pkg.Svc/A", true},  // matched by predA
+		{"/pkg.Svc/B", true},  // matched by predB — proves predA did not clobber predB
+		{"/pkg.Svc/C", false}, // matched by neither → authed (no token → Unauthenticated)
+	}
+	for _, tc := range cases {
+		t.Run(tc.method, func(t *testing.T) {
+			info := &grpc.UnaryServerInfo{FullMethod: tc.method}
+			called := false
+			// No auth metadata: a public method bypasses before token extraction.
+			_, err := UnaryAuth(v, predA, predB)(context.Background(), nil, info, okHandler(&called))
+			if tc.wantBypass {
+				if err != nil || !called {
+					t.Fatalf("%s: want public bypass (err=nil, handler reached); got err=%v called=%v", tc.method, err, called)
+				}
+				return
+			}
+			if status.Code(err) != codes.Unauthenticated || called {
+				t.Fatalf("%s: want Unauthenticated and handler not reached; got err=%v called=%v", tc.method, err, called)
+			}
+		})
+	}
+}
+
 func assertUnaryAuthForwardsPrincipal(t *testing.T, info *grpc.UnaryServerInfo) {
 	t.Helper()
 

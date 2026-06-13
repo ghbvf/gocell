@@ -162,8 +162,109 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dec := svc.evaluate(tt.policies, resolver, tt.action)
+			dec, _ := svc.evaluate(tt.policies, resolver, tt.action)
 			assert.Equal(t, tt.wantAllow, dec.IsAllow())
+		})
+	}
+}
+
+// TestEvaluate_MatchedRuleID asserts evaluate surfaces the matched rule id so the
+// PDP can log which rule decided (F12 #2027: distinguish "self via ownership rule"
+// from "admin via baseline"). The first matching permit wins on Allow; the firing
+// deny rule's id wins on forbid-wins; default-deny returns the "_default-deny"
+// sentinel (the "_" prefix never collides with a real rule id).
+func TestEvaluate_MatchedRuleID(t *testing.T) {
+	svc := &Service{logger: slog.Default()}
+
+	const (
+		ownerID   = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+		synthetic = "thing:read"
+	)
+	ownerResolver := attributeResolver{
+		principal:  &auth.Principal{Kind: auth.PrincipalUser, Subject: ownerID, TenantID: testTenantIDStr},
+		resourceID: ownerID,
+	}
+	adminResolver := actionResolver(&auth.Principal{
+		Kind: auth.PrincipalUser, Subject: "u", TenantID: testTenantIDStr, Roles: []string{auth.RoleAdmin},
+	})
+	adminOwnerResolver := attributeResolver{
+		principal:  &auth.Principal{Kind: auth.PrincipalUser, Subject: ownerID, TenantID: testTenantIDStr, Roles: []string{auth.RoleAdmin}},
+		resourceID: ownerID,
+	}
+	plainResolver := actionResolver(&auth.Principal{Kind: auth.PrincipalUser, Subject: "u", TenantID: testTenantIDStr})
+
+	tests := []struct {
+		name       string
+		policies   []*abac.Policy
+		resolver   attributeResolver
+		action     string
+		wantAllow  bool
+		wantRuleID string
+	}{
+		{
+			name:       "baseline ownership allow → self rule id",
+			resolver:   ownerResolver,
+			action:     authz.PermUserRead().String(),
+			wantAllow:  true,
+			wantRuleID: "baseline-user-read-self",
+		},
+		{
+			name:       "baseline admin allow → admin rule id",
+			resolver:   adminResolver,
+			action:     testAuditRead,
+			wantAllow:  true,
+			wantRuleID: "baseline-audit-read-admin",
+		},
+		{
+			name:       "multiple matching permits → first (admin, ordered before self) wins",
+			resolver:   adminOwnerResolver,
+			action:     authz.PermUserRead().String(),
+			wantAllow:  true,
+			wantRuleID: "baseline-user-read-admin",
+		},
+		{
+			name: "tenant permit rule → tenant rule id",
+			policies: []*abac.Policy{policyWith("p1",
+				permitRuleWithAction("tenant-allow", []string{synthetic}))},
+			resolver:   plainResolver,
+			action:     synthetic,
+			wantAllow:  true,
+			wantRuleID: "tenant-allow",
+		},
+		{
+			name: "forbid-wins → firing deny rule id",
+			policies: []*abac.Policy{policyWith("p1",
+				permitRuleWithAction("tenant-allow", []string{synthetic}),
+				forbidRuleWithAction("tenant-deny", []string{synthetic}))},
+			resolver:   plainResolver,
+			action:     synthetic,
+			wantAllow:  false,
+			wantRuleID: "tenant-deny",
+		},
+		{
+			name:       "default-deny → sentinel",
+			resolver:   plainResolver,
+			action:     synthetic,
+			wantAllow:  false,
+			wantRuleID: "_default-deny",
+		},
+		{
+			// A matching permit whose merged obligation is invalid (FieldMask key with
+			// whitespace → authz.Allow returns err) → fail-closed Deny + sentinel.
+			name: "invalid combined obligations → sentinel",
+			policies: []*abac.Policy{policyWith("p1",
+				permitRule("bad-obl", authz.Obligations{FieldMask: authz.FieldMask{Fields: []string{"bad key"}}}))},
+			resolver:   plainResolver,
+			action:     synthetic,
+			wantAllow:  false,
+			wantRuleID: "_invalid-obligations",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dec, gotID := svc.evaluate(tt.policies, tt.resolver, tt.action)
+			assert.Equal(t, tt.wantAllow, dec.IsAllow(), "allow mismatch")
+			assert.Equal(t, tt.wantRuleID, gotID, "matched rule id mismatch")
 		})
 	}
 }
@@ -182,7 +283,7 @@ func TestEvaluate_BaselineDenyOverridesPermit(t *testing.T) {
 		forbidRuleWithAction("explicit-deny", []string{testAuditRead}),
 	)
 
-	dec := svc.evaluate([]*abac.Policy{tenantForbid}, resolver, testAuditRead)
+	dec, _ := svc.evaluate([]*abac.Policy{tenantForbid}, resolver, testAuditRead)
 	assert.False(t, dec.IsAllow(), "tenant deny must override baseline allow (forbid-wins)")
 }
 
@@ -225,7 +326,7 @@ func TestEvaluate_CrossAttrOwnership(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dec := svc.evaluate([]*abac.Policy{policy}, tt.resolver, action)
+			dec, _ := svc.evaluate([]*abac.Policy{policy}, tt.resolver, action)
 			assert.Equal(t, tt.wantAllow, dec.IsAllow())
 		})
 	}

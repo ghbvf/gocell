@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -226,12 +227,14 @@ func assertAuditVisibilityCase(t *testing.T, mux http.Handler, tc auditVisibilit
 	mux.ServeHTTP(w, req)
 
 	if isSuperAdmin(tc.roles) {
-		// #1618 merge: RowScopeAll fail-closes under FORCE RLS (deferred);
-		// the handler surfaces RowScopeAllUnsupportedError (KindNotImplemented)
-		// as a 501 — policy-authorized but capability-deferred (review F5).
-		// The FR-007 audit is still emitted (asserted by caller).
+		// Super-admin with no CrossTenantQueryStore wired: graceful-absent path per
+		// ADR #1810 returns 501 (RowScopeAllUnsupportedError). The handler routes to
+		// CrossTenantQueryStore when wired (200 + cross-tenant rows, see
+		// TestHandleQuery_SuperAdmin_CrossTenantStore_200); this matrix uses the
+		// base service (no WithCrossTenantStore) to exercise the graceful-absent
+		// branch specifically. FR-007 audit is still emitted (asserted by caller).
 		require.Equal(t, http.StatusNotImplemented, w.Code,
-			"tc=%s: super-admin RowScopeAll must fail-closed (501) under FORCE RLS, body=%s", tc.name, w.Body.String())
+			"tc=%s: super-admin without CrossTenantQueryStore must return 501 (graceful-absent), body=%s", tc.name, w.Body.String())
 		return
 	}
 
@@ -1479,16 +1482,19 @@ func TestAuditQueryPolicy(t *testing.T) {
 //
 //	non-admin usrA in tenantA → count 1  (RowScopeSelf, own row only)
 //	admin in tenantA           → count 2  (RowScopeTenant: tenantA + tenant-less; NOT tenantB)
-//	super-admin (any tenant)   → fail-closed 501 (RowScopeAll deferred under #1618 FORCE RLS)
+//	super-admin (any tenant)   → 501 when no CrossTenantQueryStore wired (graceful-absent
+//	                             path, per ADR #1810); the 200 path is covered by
+//	                             TestHandleQuery_SuperAdmin_CrossTenantStore_200.
 //
-// #1618 merge note: PR-5 (#1343) shipped super-admin RowScopeAll as a working
-// cross-tenant audit read (count 3). Under #1618's per-tenant FORCE RLS the audit
-// store fail-closes RowScopeAll (RowScopeAllUnsupportedError → 501 Not Implemented)
-// — the NOBYPASSRLS serving role cannot enumerate tenants, so the cross-tenant
-// audit CAPABILITY is deferred to backlog. 501 (not 500) because the super-admin
-// request is policy-authorized but the capability is not yet implemented (review
-// F5; RFC 9110 §15.6.2). The mandatory FR-007 slog.Error audit is still emitted
-// inside p.RowVisibility before the store rejects, so the FR-007 assertion holds.
+// The 501 in the super-admin case is the graceful-absent path (no admin pool provisioned),
+// not a capability deferral: when CrossTenantQueryStore is nil, the handler returns
+// RowScopeAllUnsupportedError (501 Not Implemented, per ADR #1810 §graceful-absent).
+// When a CrossTenantQueryStore IS wired, the handler routes to the dedicated admin pool
+// and returns 200 with cross-tenant rows (see TestHandleQuery_SuperAdmin_CrossTenantStore_200).
+// 501 (not 500): the super-admin request is policy-authorized but the capability is
+// unavailable due to absent wiring (RFC 9110 §15.6.2). The mandatory FR-007 slog.Error
+// audit is still emitted inside p.CrossTenantVisibility before the store rejects, so the
+// FR-007 assertion holds regardless of the store outcome.
 func TestHandleQuery_RowScopeVisibilityMatrix(t *testing.T) {
 	// Install slog capture to assert FR-007: super-admin cross-tenant access must
 	// emit a slog.Error record; admin and non-admin paths must not.
@@ -1578,4 +1584,320 @@ func TestHandleQuery_RowScopeVisibilityMatrix(t *testing.T) {
 			}
 		})
 	}
+}
+
+// newSuperAdminCtx builds a tenant-bearing super-admin principal context with
+// auditQueryTestTenant as the token tenant (super-admins still carry their own
+// tenant_id in the JWT — it feeds FR-007 audit fields, not the query scope).
+func newSuperAdminCtx(subject string) context.Context {
+	return withAllowAuthorizer(auth.WithPrincipal(context.Background(), &auth.Principal{
+		Kind:       auth.PrincipalUser,
+		Subject:    subject,
+		Roles:      []string{auth.RoleSuperAdmin},
+		TenantID:   auditQueryTestTenant,
+		AuthMethod: "test",
+	}))
+}
+
+// TestHandleQuery_SuperAdmin_NoCrossTenantStore_501 locks the pre-#1810
+// fail-closed contract: a super-admin request with no CrossTenantQueryStore
+// wired returns 501 (RowScopeAllUnsupportedError), never 200 or 500.
+func TestHandleQuery_SuperAdmin_NoCrossTenantStore_501(t *testing.T) {
+	store := newHandlerStore(t)
+	// NewService without WithCrossTenantStore → crossTenantStore is nil
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
+	req = req.WithContext(newSuperAdminCtx("sa-user"))
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotImplemented, w.Code,
+		"super-admin with no CrossTenantQueryStore must return 501; body=%s", w.Body.String())
+}
+
+// TestHandleQuery_SuperAdmin_CrossTenantStore_200 verifies that when a
+// CrossTenantQueryStore is wired, a super-admin request returns 200 with rows
+// spanning more than one tenant (#1810). The fake store returns entries from
+// two distinct tenants so the test proves cross-tenant data is surfaced.
+func TestHandleQuery_SuperAdmin_CrossTenantStore_200(t *testing.T) {
+	base := time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC)
+	ctEntries := []*ledger.Entry{
+		{
+			ID: "ct-a1", EventID: "evt-ct-a1", EventType: "cross.tenant.v1",
+			ActorID: "usrA", TenantID: auditQueryTestTenant,
+			Timestamp: base, Payload: []byte("{}"),
+		},
+		{
+			ID: "ct-b1", EventID: "evt-ct-b1", EventType: "cross.tenant.v1",
+			ActorID: "usrB", TenantID: auditQueryTestTenantB,
+			Timestamp: base.Add(time.Hour), Payload: []byte("{}"),
+		},
+	}
+
+	store := newHandlerStore(t)
+	// Build a MemCrossTenantStore backed by the same store — for the handler test
+	// we use the fake store interface that directly returns ctEntries.
+	relay := newHandlerStore(t)
+	for _, e := range ctEntries {
+		require.NoError(t, relay.Append(context.Background(), e))
+	}
+	ctStore, err := ledger.NewMemCrossTenantStore(relay)
+	require.NoError(t, err)
+
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(),
+		query.RunModeProd, WithCrossTenantStore(ctStore))
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
+	req = req.WithContext(newSuperAdminCtx("sa-user"))
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code,
+		"super-admin with CrossTenantQueryStore must return 200; body=%s", w.Body.String())
+
+	var resp struct {
+		Data []struct {
+			TenantID string `json:"tenantId"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data, 2, "expected entries from both tenants")
+	tenants := map[string]bool{}
+	for _, d := range resp.Data {
+		tenants[d.TenantID] = true
+	}
+	assert.True(t, tenants[auditQueryTestTenant], "tenantA rows must be present")
+	assert.True(t, tenants[auditQueryTestTenantB], "tenantB rows must be present")
+}
+
+// TestHandleQuery_SuperAdmin_SingleAuditRecord is the MANDATORY single-audit
+// invariant test (#1810): exactly ONE FR-007 slog.Error record must be emitted
+// per super-admin cross-tenant request, whether or not the CrossTenantQueryStore
+// is present. Double-audit (calling both p.CrossTenantVisibility and p.RowVisibility
+// for the same request) would emit two records — this test guards against that.
+//
+// The test captures slog records via the testCaptureHandler and asserts the count
+// is exactly 1 after each super-admin request.
+func TestHandleQuery_SuperAdmin_SingleAuditRecord(t *testing.T) {
+	capture := &testCaptureHandler{}
+	slogcapture.InstallDefault(t, slog.New(capture))
+
+	store := newHandlerStore(t)
+	relay := newHandlerStore(t)
+	ctStore, err := ledger.NewMemCrossTenantStore(relay)
+	require.NoError(t, err)
+
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(),
+		query.RunModeProd, WithCrossTenantStore(ctStore))
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	cases := []struct {
+		name     string
+		ctStore  bool // whether ctStore is wired
+		wantCode int
+	}{
+		{"with_ct_store_200", true, http.StatusOK},
+	}
+	// Also test without store (501 path still audits once)
+	{
+		svcNoStore, err2 := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
+		require.NoError(t, err2)
+		muxNoStore := newHandlerMux(svcNoStore)
+
+		capture.records = capture.records[:0]
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
+		req = req.WithContext(newSuperAdminCtx("sa-no-store"))
+		muxNoStore.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusNotImplemented, w.Code)
+
+		errorCount := countAuditMandatoryRecords(capture.records)
+		assert.Equal(t, 1, errorCount,
+			"super-admin cross-tenant request (no store, 501) must emit EXACTLY ONE FR-007 Error record; got %d (records: %v)",
+			errorCount, capture.records)
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			capture.records = capture.records[:0]
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
+			req = req.WithContext(newSuperAdminCtx("sa-user"))
+			mux.ServeHTTP(w, req)
+			assert.Equal(t, tc.wantCode, w.Code,
+				"unexpected status; body=%s", w.Body.String())
+
+			errorCount := countAuditMandatoryRecords(capture.records)
+			assert.Equal(t, 1, errorCount,
+				"super-admin cross-tenant request must emit EXACTLY ONE FR-007 slog.Error record; got %d", errorCount)
+		})
+	}
+}
+
+// --- F1: Cross-tenant path always requires audit:read (Codex review #2051) ---
+
+// TestHandleQuery_SuperAdmin_SelfActorId_DenyPDP_Returns403 is the F1 regression
+// test: a super-admin with ?actorId=<self> + a deny Authorizer (no audit:read)
+// must receive 403, not a cross-tenant 200. Without the fix, auditQueryPolicy's
+// self-read exemption (actorId==subject → return nil) bypasses the PDP entirely,
+// and the cross-tenant read proceeds even though the PDP would deny it.
+func TestHandleQuery_SuperAdmin_SelfActorId_DenyPDP_Returns403(t *testing.T) {
+	base := time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC)
+	ctEntries := []*ledger.Entry{
+		{
+			ID: "f1-a1", EventID: "evt-f1-a1", EventType: "f1.test.v1",
+			ActorID: "sa-user", TenantID: auditQueryTestTenant,
+			Timestamp: base, Payload: []byte("{}"),
+		},
+	}
+	relay := newHandlerStore(t)
+	for _, e := range ctEntries {
+		require.NoError(t, relay.Append(context.Background(), e))
+	}
+	ctStore, err := ledger.NewMemCrossTenantStore(relay)
+	require.NoError(t, err)
+
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(),
+		query.RunModeProd, WithCrossTenantStore(ctStore))
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	// Super-admin with a deny Authorizer: the PDP explicitly rejects audit:read.
+	// Use ?actorId=sa-user (== subject) to trigger the route-level self-read exemption,
+	// which without the F1 fix would let the cross-tenant read bypass the PDP entirely.
+	subject := "sa-user"
+	ctx := auth.WithPrincipal(context.Background(), &auth.Principal{
+		Kind:       auth.PrincipalUser,
+		Subject:    subject,
+		Roles:      []string{auth.RoleSuperAdmin},
+		TenantID:   auditQueryTestTenant,
+		AuthMethod: "test",
+	})
+	ctx = withDenyAuthorizer(ctx, "policy: audit:read denied by tenant policy")
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?actorId="+subject, nil)
+	req = req.WithContext(ctx)
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code,
+		"super-admin with ?actorId=<self> + deny PDP must return 403 (F1); body=%s", w.Body.String())
+	var resp struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "ERR_AUTH_FORBIDDEN", resp.Error.Code)
+}
+
+// TestHandleQuery_SuperAdmin_SelfActorId_AllowPDP_Returns200 verifies the positive
+// case: a super-admin with ?actorId=<self> + an allow Authorizer (audit:read granted)
+// succeeds with 200 and returns cross-tenant rows.
+func TestHandleQuery_SuperAdmin_SelfActorId_AllowPDP_Returns200(t *testing.T) {
+	base := time.Date(2026, 6, 20, 1, 0, 0, 0, time.UTC)
+	subject := "sa-user-allow"
+	ctEntries := []*ledger.Entry{
+		{
+			ID: "f1-allow-a1", EventID: "evt-f1-allow-a1", EventType: "f1.allow.v1",
+			ActorID: subject, TenantID: auditQueryTestTenant,
+			Timestamp: base, Payload: []byte("{}"),
+		},
+	}
+	relay := newHandlerStore(t)
+	for _, e := range ctEntries {
+		require.NoError(t, relay.Append(context.Background(), e))
+	}
+	ctStore, err := ledger.NewMemCrossTenantStore(relay)
+	require.NoError(t, err)
+
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(),
+		query.RunModeProd, WithCrossTenantStore(ctStore))
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	ctx := auth.WithPrincipal(context.Background(), &auth.Principal{
+		Kind:       auth.PrincipalUser,
+		Subject:    subject,
+		Roles:      []string{auth.RoleSuperAdmin},
+		TenantID:   auditQueryTestTenant,
+		AuthMethod: "test",
+	})
+	ctx = withAllowAuthorizer(ctx)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?actorId="+subject, nil)
+	req = req.WithContext(ctx)
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code,
+		"super-admin with ?actorId=<self> + allow PDP must return 200 (F1 positive); body=%s", w.Body.String())
+}
+
+// --- F10: Cross-tenant 200 path must pass filters to the store (Codex review #2051) ---
+
+// filterCaptureCTStore is a CrossTenantQueryStore that records the AuditFilters it
+// receives, enabling F10 assertions.
+type filterCaptureCTStore struct {
+	capturedFilters ledger.AuditFilters
+}
+
+func (f *filterCaptureCTStore) QueryCrossTenant(
+	_ context.Context, _ tenant.CrossTenantVisibility,
+	filters ledger.AuditFilters, params query.ListParams,
+) ([]*ledger.Entry, error) {
+	f.capturedFilters = filters
+	return []*ledger.Entry{}, nil
+}
+
+// TestHandleQuery_SuperAdmin_CrossTenant_FiltersPassthrough asserts that every
+// query filter (actorId, subjectId, traceId, eventType, from, to) reaches the
+// CrossTenantQueryStore unchanged on the 200 path (F10, Codex review).
+// Previously the test only asserted the 200 status; the filter passthrough was not
+// verified, so a mistaken filter drop would be invisible.
+func TestHandleQuery_SuperAdmin_CrossTenant_FiltersPassthrough(t *testing.T) {
+	capStore := &filterCaptureCTStore{}
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(),
+		query.RunModeProd, WithCrossTenantStore(capStore))
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	fromStr := "2026-06-01T00:00:00Z"
+	toStr := "2026-06-30T23:59:59Z"
+	url := "/api/v1/audit/entries" +
+		"?actorId=actor-1" +
+		"&subjectId=subject-2" +
+		"&traceId=trace-abc" +
+		"&eventType=some.event.v1" +
+		"&from=" + fromStr +
+		"&to=" + toStr
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, url, nil)
+	req = req.WithContext(newSuperAdminCtx("sa-filter-test"))
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code,
+		"filter-passthrough test must return 200; body=%s", w.Body.String())
+
+	filters := capStore.capturedFilters
+	assert.Equal(t, "actor-1", filters.ActorID, "actorId must reach the cross-tenant store")
+	assert.Equal(t, "subject-2", filters.SubjectID, "subjectId must reach the cross-tenant store")
+	assert.Equal(t, "trace-abc", filters.TraceID, "traceId must reach the cross-tenant store")
+	assert.Equal(t, "some.event.v1", filters.EventType, "eventType must reach the cross-tenant store")
+
+	wantFrom := "2026-06-01T00:00:00Z"
+	assert.Equal(t, wantFrom, filters.From.UTC().Format(time.RFC3339), "from must reach the cross-tenant store")
+	wantTo := "2026-06-30T23:59:59Z"
+	assert.Equal(t, wantTo, filters.To.UTC().Format(time.RFC3339), "to must reach the cross-tenant store")
 }

@@ -50,7 +50,7 @@ func TestReconciler_EmitsSystemTenantlessPrincipalViaLoop(t *testing.T) {
 	r := newTestReconciler(t, clockmock.New(certTestBase), repo, rec)
 
 	reqCh := make(chan reconcile.Request)
-	loop, err := reconcile.New(r).
+	loop, err := reconcile.New(r, reconcile.SingleTenant()).
 		WithReconcilerID("certrenewal_systemid_test").
 		WithTrigger(reconcile.ChannelTrigger(reqCh)).
 		Build()
@@ -121,7 +121,7 @@ func TestReconciler_OneTickEmitsAllNearExpiry(t *testing.T) {
 	reqCh := make(chan reconcile.Request, 1)
 	r, err := NewReconciler(fc, repo, rec.CellEmitter(), certRenewalTestPolicy, nil)
 	require.NoError(t, err)
-	loop, err := reconcile.New(r).
+	loop, err := reconcile.New(r, reconcile.SingleTenant()).
 		WithReconcilerID("certrenewal_fullsweep_test").
 		WithTrigger(reconcile.ChannelTrigger(reqCh)).
 		WithoutDefaultRequeue(). // ticker is the sole periodic source

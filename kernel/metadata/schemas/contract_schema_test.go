@@ -742,6 +742,55 @@ func TestContractSchemaGRPCKind(t *testing.T) {
 			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto", "streamingType": "duplex"}`,
 			expectValid: false,
 		},
+		{
+			name: "methods overlay with public accepted (#1675)",
+			// Per-method public auth overlay: sparse, only methods needing the
+			// non-default (public:true) appear; the .proto remains the method-set
+			// single source.
+			grpcBlock: `{
+				"service": "device.command.v1.DeviceCommandService",
+				"proto": "contracts/grpc/device/command/v1/device_command.proto",
+				"methods": [{"name": "Check", "public": true}]
+			}`,
+			expectValid: true,
+		},
+		{
+			name: "method entry missing name rejected (#1675)",
+			// name is required on every overlay entry (item required:["name"]).
+			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto", "methods": [{"public": true}]}`,
+			expectValid: false,
+		},
+		{
+			name:        "method entry empty name rejected (#1675, minLength)",
+			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto", "methods": [{"name": "", "public": true}]}`,
+			expectValid: false,
+		},
+		{
+			name: "method entry unknown property rejected (#1675, item additionalProperties — forward-protects #2008 ABAC fields)",
+			// The item-level additionalProperties:false seals the overlay shape so a
+			// typo'd or premature ABAC field (#2008) cannot slip in silently. public:true
+			// is present so the rejection is specifically the unknown authz property.
+			grpcBlock: `{
+				"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto",
+				"methods": [{"name": "Check", "public": true, "authz": {"permission": "x:read"}}]
+			}`,
+			expectValid: false,
+		},
+		{
+			name: "method entry missing public rejected (#1675, required public — vacuous-entry guard)",
+			// public is required: an entry exists iff it asserts public:true. A
+			// name-only entry is vacuous (omission ≡ authed), rejected at the schema
+			// surface in lockstep with governance FMT-41.
+			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto", "methods": [{"name": "Check"}]}`,
+			expectValid: false,
+		},
+		{
+			name: "method entry public:false rejected (#1675, const:true — vacuous-entry guard)",
+			// public:false ≡ omission (authed). const:true rejects it so the overlay
+			// carries only meaningful entries; #2008 relaxes when ABAC fields land.
+			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto", "methods": [{"name": "Check", "public": false}]}`,
+			expectValid: false,
+		},
 	}
 
 	for _, tc := range tests {

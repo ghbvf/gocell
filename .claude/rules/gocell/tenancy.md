@@ -17,7 +17,17 @@ UUID。repo 和 service API 使用 typed tenant 参数，不传裸 string。
 - tenant / all 不带 subject。
 - SQLPredicate / Allows 是纯翻译器，不决定 all 是否可用。
 
-RowScopeAll 的生产者必须经审计 funnel。audit read 在不支持跨租户时 fail-closed。
+`RowScopeAll`（跨租户）不经 `NewRowVisibility`——它**拒绝** all（#1760）；唯一生产者是
+sealed `tenant.NewCrossTenantVisibility()`，sole production caller = `runtime/auth` 的
+super-admin 派生（与强制 FR-007 审计同址，`ROWSCOPEALL-AUDIT-FUNNEL-01`）。跨租户读取
+API 取 sealed `tenant.CrossTenantVisibility` 位置参（Hard typed funnel，漏传/伪造皆编译错）；
+minter 单调用方限制是文档化 Medium Go 天花板（#1282/#851/#893 同族）。
+
+audit read 的 **serving 池**（NOBYPASSRLS）对 `RowScopeAll` 始终 fail-closed
+（`RowScopeAllUnsupportedError` → 501，纵深防御）。super-admin 跨租户读取由**专用
+`gocell_audit_admin` admin 读取池**（角色限定 permissive RLS policy，非 BYPASSRLS）服务，
+未 provision 时优雅 fail-closed（501，不 fail-open）。机制/威胁矩阵见 ADR
+`202606131900-1810` + `202606071300-1618`/`202606071200-1676` 的 2026-06-13 amendment。
 
 ## Principal claim source
 

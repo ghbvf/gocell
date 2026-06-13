@@ -52,4 +52,11 @@
 // external (non-gocell) dependency closure — the tag-name shape is covered
 // separately by PUBLISHABLE-MODULE-SET-01's tag-path assertion; the rest stay the
 // "run once by hand on the real tag" residual.
+//
+// # Sibling invariant: INSTALLABLE-GO-INSTALL-SMOKE-01 (install_smoke_test.go)
+//
+// The same hermetic file-GOPROXY mechanism additionally proves the RELEASE-STRIPPED
+// cmd/gocell is `go install …@vX.Y.Z`-able (green) and that the replace-bearing
+// pre-strip shape is REJECTED (load-bearing red case) — the PR-time half of #2045's
+// installable-CLI promise. Full statement and grading live in that file's header.
 package releasesmoke

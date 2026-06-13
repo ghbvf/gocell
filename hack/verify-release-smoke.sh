@@ -4,7 +4,12 @@
 # multi-module release (#1843, RELEASE-EXTERNAL-GET-01): it publishes the
 # release-bumped library modules to a hermetic local file GOPROXY and proves an
 # external consumer can `go get` + `go build` against them, with the full internal
-# graph resolving to the published version.
+# graph resolving to the published version. It also executes
+# INSTALLABLE-GO-INSTALL-SMOKE-01 (#2045): the releasesmoke package (go test
+# -tags=releasesmoke, auto-discovered via Test* functions) verifies that the
+# release-stripped cmd/gocell go.mod is accepted by `go install @version` (green
+# case) and that the same go.mod with replace directives kept is rejected (red
+# case), proving the strip-and-pin transform is load-bearing.
 #
 # Bucketed `workspace` (a PR bucket, alongside verify-workspace.sh's module-graph
 # checks): the test is fast and self-contained — it spawns nested `go get`/`go

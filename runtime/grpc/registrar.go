@@ -54,6 +54,12 @@ type ServiceRegistrar struct {
 	mu    sync.RWMutex
 	// methods maps /{ServiceName}/{methodName} → cellID.
 	methods map[string]string
+	// publicMethods is the set of FULL method names (/{ServiceName}/{method})
+	// declared JWT-exempt by a spec's GRPCServiceSpec.PublicMethods (#1675). It is
+	// the single runtime source the auth interceptor consults via IsPublicMethod;
+	// an absent method is authed (fail-closed). Populated during Register, like
+	// the methods attribution map.
+	publicMethods map[string]struct{}
 	// names maps a registered gRPC ServiceName → its owning spec, used both for
 	// cross-spec dedup and to report first/current owner on a collision (shared
 	// with cellScopedRegistrar).
@@ -78,8 +84,9 @@ type serviceOwner struct {
 // has populated it during the bootstrap drain.
 func NewServiceRegistrar() *ServiceRegistrar {
 	return &ServiceRegistrar{
-		methods: make(map[string]string),
-		names:   make(map[string]serviceOwner),
+		methods:       make(map[string]string),
+		publicMethods: make(map[string]struct{}),
+		names:         make(map[string]serviceOwner),
 	}
 }
 
@@ -193,6 +200,18 @@ func (r *ServiceRegistrar) Register(spec cell.GRPCServiceSpec) error {
 					"(contractID=%q, cellID=%q); got %d RegisterService call(s)",
 				spec.ContractID, spec.CellID, scoped.count)))
 	}
+
+	// Record the per-method public-auth overlay (#1675): spec.PublicMethods
+	// (cellgen-derived from endpoints.grpc.methods[] public:true entries, keyed
+	// identically to the attribution map's /{ServiceName}/{method}) become the
+	// auth interceptor's bypass set via IsPublicMethod. Referential integrity —
+	// each entry ∈ the proto method set — is enforced at build time (contractgen
+	// pre-pass + cellgen golden + governance FMT-41); a stale entry would be inert
+	// at runtime (no RPC matches it), never fail-open. Recorded under the same
+	// write lock as the attribution map.
+	for _, m := range spec.PublicMethods {
+		r.publicMethods[m] = struct{}{}
+	}
 	return nil
 }
 
@@ -204,6 +223,20 @@ func (r *ServiceRegistrar) CellIDForMethod(fullMethod string) (string, bool) {
 	defer r.mu.RUnlock()
 	id, ok := r.methods[fullMethod]
 	return id, ok
+}
+
+// IsPublicMethod reports whether fullMethod (e.g. "/grpc.health.v1.Health/Check")
+// was declared JWT-exempt via a spec's GRPCServiceSpec.PublicMethods (#1675). The
+// fail-closed default is false: an unknown or undeclared method is authed. Safe
+// for concurrent use. The auth interceptor installs this as its WithPublicMethod
+// predicate (chain.go / stream.go), making the registrar the single runtime
+// source of the public-method set — mirroring how CellIDForMethod sources cell
+// attribution.
+func (r *ServiceRegistrar) IsPublicMethod(fullMethod string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.publicMethods[fullMethod]
+	return ok
 }
 
 // ---------------------------------------------------------------------------

@@ -111,7 +111,7 @@ func TestLoop_InstallsSystemProducerIdentity(t *testing.T) {
 	})
 	src := make(chan Request)
 	// Bare &Loop{} is the package-internal test idiom (matches loop_test.go); the
-	// public construction API is reconcile.New(r).With*().Build() — a populated
+	// public construction API is reconcile.New(r, tenancy).With*().Build() — a populated
 	// &reconcile.Loop{} literal does not compile outside this package.
 	l := &Loop{reconcilerID: "rc", reconciler: rec, source: src, interval: testtime.D1h}
 
