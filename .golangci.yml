@@ -757,6 +757,55 @@ linters:
               desc: |
                 cmd/corebundle must not import corecells/ directly; cell wiring lives
                 in cellmodules/<cell> behind runtime/composition (#1085 COMPOSITION-MODULE-API-01).
+        core-no-satellite-import:
+          # CROSS-MODULE-IMPORT-DIRECTION-01 Hard complement (#1590 / ADR 202606041600-1555).
+          # The core (root) module github.com/ghbvf/gocell must never import a
+          # satellite go.work member — satellites depend on core, never the reverse
+          # (Plan D: 顶层 = core). Importing a satellite from core would drag the whole
+          # base into that satellite's closure on extraction.
+          #
+          # The generic CROSS-MODULE-IMPORT-DIRECTION-01 archtest is the Medium
+          # catch-all: it auto-covers EVERY satellite (incl. ones not listed below)
+          # because Go's type system cannot express "module A ⊄ module B" (the
+          # permanent ceiling shared with #851/#893/#1282). This path-level depguard
+          # ban is the compile-fast Hard complement for the enumerated production
+          # core layers + the root-level gocell.go (which no per-layer rule covers;
+          # kernel/pkg/runtime already strict-deny satellites via their allow-lists,
+          # restated here so the cross-module intent lives in one self-documenting
+          # place). files: targets production core ONLY — tests/** is excluded
+          # (root-module fixture helpers like tests/contracttest legitimately cross
+          # module boundaries; production layering is the invariant that matters for
+          # clean extraction, and the archtest covers the rest).
+          #
+          # At each new TOP-LEVEL satellite extraction (Plan D P1+: mdm, zerotrust),
+          # append its import-path prefix to deny below. Prefix bans auto-cover new
+          # members under an existing group (a new adapters/* needs no edit).
+          # ref: kubernetes/kubernetes hack/verify-import-boss.sh ; OpenPeeDeeP/depguard v2.
+          list-mode: lax
+          files:
+            - "**/gocell.go"      # root-level core package — no per-layer rule covers it
+            - "**/kernel/**"
+            - "**/pkg/**"
+            - "**/runtime/**"
+            - "!**/*_test.go"
+            - "!**/examples/**"   # examples are satellites + unrestricted (CLAUDE.md); never core
+          deny:
+            - pkg: github.com/ghbvf/gocell/adapters
+              desc: "core must not import satellite adapters/* (CROSS-MODULE-IMPORT-DIRECTION-01 / #1590)"
+            - pkg: github.com/ghbvf/gocell/cellmodules
+              desc: "core must not import satellite cellmodules (CROSS-MODULE-IMPORT-DIRECTION-01 / #1590)"
+            - pkg: github.com/ghbvf/gocell/cmd
+              desc: "core must not import satellite cmd/* (CROSS-MODULE-IMPORT-DIRECTION-01 / #1590)"
+            - pkg: github.com/ghbvf/gocell/corecells
+              desc: "core must not import satellite corecells (CROSS-MODULE-IMPORT-DIRECTION-01 / #1590)"
+            - pkg: github.com/ghbvf/gocell/examples
+              desc: "core must not import satellite examples/* (CROSS-MODULE-IMPORT-DIRECTION-01 / #1590)"
+            - pkg: github.com/ghbvf/gocell/generated
+              desc: "core must not import satellite generated (CROSS-MODULE-IMPORT-DIRECTION-01 / #1590)"
+            - pkg: github.com/ghbvf/gocell/tests
+              desc: "core must not import satellite tests/* (CROSS-MODULE-IMPORT-DIRECTION-01 / #1590)"
+            - pkg: github.com/ghbvf/gocell/tools
+              desc: "core must not import satellite tools (CROSS-MODULE-IMPORT-DIRECTION-01 / #1590)"
 
     forbidigo:
       forbid:

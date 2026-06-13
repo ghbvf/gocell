@@ -48,11 +48,13 @@ type CrossModuleViolation struct {
 // A Hard form for the GENERIC "core ⊀ any satellite" shape is unreachable — Go's
 // type system / package visibility cannot express "a package in module A must not
 // import any package in module B" (same permanent ceiling as #851 / #893 /
-// #1282). The Hard COMPLEMENT lands per concrete satellite at extraction time: a
-// `.golangci.yml` depguard rule banning the satellite's import path from core
-// packages is a path-level compile-fast gate. This generic archtest auto-covers
-// every future satellite (including ones not yet enumerated in depguard);
-// per-satellite depguard Hard-ization is tracked as the close-out task (gh #1590).
+// #1282). The Hard COMPLEMENT is realized in `.golangci.yml` as the
+// `core-no-satellite-import` depguard rule (#1590): a path-level compile-fast ban
+// of each top-level satellite import-path prefix from the production core
+// (gocell.go + kernel/pkg/runtime). This generic archtest stays the catch-all —
+// it auto-covers every future satellite, INCLUDING ones not yet enumerated in
+// depguard (the depguard list is intentionally partial: appended per Plan D P1+
+// extraction, never a completeness gate).
 //
 // Blind spots (see cross_module_import_direction_test.go for the reverse
 // self-checks): a base package reaching a satellite via a string-built import

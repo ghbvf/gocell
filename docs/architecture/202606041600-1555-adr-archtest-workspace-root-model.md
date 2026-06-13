@@ -62,8 +62,12 @@ The scan set is DERIVED from `go.work`, not hand-maintained.
 
 4. **cross-module import-direction ban** (`CROSS-MODULE-IMPORT-DIRECTION-01`): the
    base (core) module's packages must not import any other workspace member
-   (Plan D: 顶层 = core; satellites depend on core, never the reverse). Vacuous
-   today (single module); the reverse fixture exercises the live path.
+   (Plan D: 顶层 = core; satellites depend on core, never the reverse). Now an
+   **active multi-satellite gate** — the live workspace already holds satellite
+   modules (adapters/*, corecells, examples/*, cellmodules, cmd/*, tools,
+   generated, tests/*); it reports no violation only because the layering holds,
+   not because the workspace is single-module (see Amendment 2026-06-13). The
+   reverse fixture exercises the firing path.
 
 5. **`gocell graph` CLI** spans the workspace (LoadWorkspace over per-module
    patterns) when `--root` has a `go.work`, falling back to single-module `Load`
@@ -87,7 +91,8 @@ satellite→core edge is observed.
 | `manifest ⊆ go.work` cross-check | Medium (fail-closed guard) | runtime consistency check; drift fails closed |
 | `Classifier` (deleted single-module free funcs) | Medium | single classification entry; all callers migrated |
 | `CROSS-MODULE-IMPORT-DIRECTION-01` (generic) | Medium | archtest type-aware via `Classifier.OwningModule` on real import edges; Hard unreachable (Go cannot express "module A ⊀ module B" — #851/#893/#1282 permanent ceiling) |
-| per-satellite depguard path-ban (complement) | **Hard** (per satellite) | `.golangci.yml` path-level ban added at each extraction; tracked close-out (gh #1590) |
+| per-satellite depguard path-ban (complement) | **Hard** (per satellite) | `.golangci.yml core-no-satellite-import` rule — path-level ban of each top-level satellite prefix from production core; appended per extraction (**realized gh #1590**) |
+| CI never runs the production scan with `GOWORK=off` | Medium content-scan (Hard unreachable) | `ARCHTEST-CI-GOWORK-ACTIVE-01` scans `.github/workflows/*` + runtime `checkGOWORK()` fail-fast (**realized gh #1590**) |
 
 The two Medium mechanisms each have a Hard complement: the cross-module ban is
 backstopped per-satellite by depguard (gh #1590); the coverage guarantee is itself Hard by
@@ -119,17 +124,49 @@ construction.
   extracted (#1561), its own production scan of the workspace still works via
   `WorkspaceRoot()` (it walks up to the repo `go.work`, not the nearest go.mod).
 
-## Operational notes (P1+ when satellites land)
+## Operational notes (satellites have landed)
 
-- The production scan requires `GOWORK` **active** (ModeWorkspace). Do NOT run
-  archtest with `GOWORK=off` once satellites exist, or satellite modules silently
-  drop from the scan. Today (single module) `GOWORK=off` is harmless; the
-  `hack/verify-archtest*.sh` scripts do not set it. Enforcing `GOWORK!=off` in CI
-  once satellites land is tracked at gh #1590. (`verify-workspace.sh` sets
-  `GOWORK=off` for per-module isolation builds — that is a different gate, not
-  archtest.)
+- The production scan requires `GOWORK` **active** (ModeWorkspace). Running
+  archtest with `GOWORK=off` now silently drops satellite modules from the scan
+  (the workspace is multi-module). This is guarded on two layers (gh #1590):
+  the runtime `checkGOWORK()` fail-fast in `cmd/gocell/internal/archtestrunner`
+  rejects `GOWORK=off` on the `gocell verify archtest` path (the sole
+  whole-workspace scan entrypoint), and the `ARCHTEST-CI-GOWORK-ACTIVE-01`
+  meta-archtest fails closed if any `.github/workflows/*` step running an archtest
+  scan declares `GOWORK=off`. (`verify-workspace.sh` sets `GOWORK=off` for
+  per-module isolation builds — a different gate, not the archtest scan.)
 - At each satellite extraction: add the module to `go.work` (required to compile)
   AND to `.gocell/manifest.yaml` if it carries metadata (the cross-check enforces
-  the subset), and add a `.golangci.yml` depguard ban of the satellite's import
-  path from core packages (the Hard complement to CROSS-MODULE-IMPORT-DIRECTION-01,
-  tracked gh #1590).
+  the subset), and — for a new TOP-LEVEL group (Plan D P1+: mdm, zerotrust) —
+  append its import-path prefix to the `.golangci.yml core-no-satellite-import`
+  deny list (the Hard complement to CROSS-MODULE-IMPORT-DIRECTION-01; new members
+  under an existing group are auto-covered by the prefix ban, gh #1590).
+
+## Amendment 2026-06-13 (#1590 close-out — satellites landed, complements realized)
+
+Trigger: the workspace went multi-module via #1556 (examples/* split), #1559
+(cellmodules + cmd split), #1560 (corecells), #1644 (examples/demo) — the
+"satellites land" precondition of the two Medium mechanisms is now met (the
+`CROSS-MODULE-IMPORT-DIRECTION-01` godoc was corrected to "active gate" in #1564).
+The original "Vacuous today (single module)" framing above is superseded.
+
+Threat-model re-evaluation (per the AI-robust charter: an amendment re-rates the
+original safety model). Both Medium mechanisms now carry their landed complements;
+neither relies on human memory for correctness:
+
+- **`CROSS-MODULE-IMPORT-DIRECTION-01` (Medium) → Hard complement realized.** The
+  `.golangci.yml core-no-satellite-import` depguard rule path-bans every current
+  top-level satellite prefix from the production core (`gocell.go` + kernel / pkg /
+  runtime; `tests/**` deliberately excluded — root-module fixture helpers
+  legitimately cross modules). Compile-fast, `//nolint` gated by `nolintlint:
+  require-explanation`. The depguard list is **intentionally partial** — the
+  generic archtest stays the correctness catch-all that auto-covers satellites not
+  yet enumerated, so a forgotten deny line loses fast feedback, never correctness.
+  No completeness sync-guard is added (it would contradict that design).
+- **`GOWORK!=off` in CI (Medium, Hard unreachable) → realized.** An env-var
+  runtime precondition cannot be a compile error, so this is terminal-Medium:
+  runtime `checkGOWORK()` (CLI path) + `ARCHTEST-CI-GOWORK-ACTIVE-01` (CI-YAML
+  scan, defense-in-depth). Disclosed blind spot: a future entrypoint that runs a
+  whole-workspace scan, bypasses the CLI, AND sets `GOWORK=off` internally evades
+  both — but the established routing (all whole-workspace scans go through the CLI;
+  the PR-time invariant subset excludes them) makes that an active violation.
