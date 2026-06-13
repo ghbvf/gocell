@@ -25,6 +25,15 @@ package main
 //   - admin     GET /api/v1/access/users/{user}  → 200 (baseline allow, user:read)
 //   - non-admin GET /api/v1/access/roles/{self}  → 200 (PDP ownership rule)
 //   - non-admin GET /api/v1/access/roles/{other} → 403 PDP-deny (not owner, no role:read)
+//
+// Cross-tenant ownership deny (#2026): a NON-admin subject provisioned in a SECOND
+// tenant (testTenantID2) is denied on testTenantID resources by the SAME owner-gate
+// ownership rule — tenant is NOT an owner-grant factor (the rule compares request-local
+// subject.sub vs resource.id, so a different-tenant subject is denied exactly like a
+// same-tenant non-owner). Covers both owner-gates (identitymanage read+write, rbaccheck):
+//   - tenant-B non-admin GET   /api/v1/access/users/{tenantA-user}  → 403 PDP ownership deny
+//   - tenant-B non-admin GET   /api/v1/access/roles/{tenantA-user}  → 403 PDP ownership deny
+//   - tenant-B non-admin PATCH /api/v1/access/users/{tenantA-user}  → 403 PDP ownership deny
 
 import (
 	"bytes"
@@ -38,7 +47,16 @@ import (
 
 func TestABACPDPGatesAccesscore(t *testing.T) {
 	base := startCorebundlePDPApp(t)
-	adminToken, userToken, userID, adminID := provisionPDPAdminAndUser(t, base)
+	adminToken, userToken, userID, adminID := provisionPDPAdminAndUser(t, base, testTenantID)
+
+	// crossTenantUserToken + crossTenantUserID belong to a NON-admin user fully provisioned
+	// in a SECOND tenant (testTenantID2): the JWT carries sub=crossTenantUserID and
+	// tenant_id=tenantB, backed by a live session so it passes JWT+session auth and reaches
+	// the PDP. Reading a testTenantID resource with it must 403 — the owner-gate ownership
+	// rule (subject.sub == resource.id) compares request-local UUIDs and is tenant-agnostic,
+	// so a different-tenant subject is denied exactly like a same-tenant non-owner. The admin
+	// token is discarded; only the non-admin user token exercises the ownership rule.
+	_, crossTenantUserToken, crossTenantUserID, _ := provisionPDPAdminAndUser(t, base, testTenantID2)
 
 	// --- policymanage: admin allowed (baseline), non-admin denied by PDP ---
 
@@ -124,6 +142,51 @@ func TestABACPDPGatesAccesscore(t *testing.T) {
 		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
 			"non-admin GET another user's roles must be 403 (PDP deny, no role:read); body=%s", body)
 		assert.Contains(t, body, "ERR_AUTH_FORBIDDEN", "PDP deny must produce ERR_AUTH_FORBIDDEN; body=%s", body)
+	})
+
+	// --- cross-tenant ownership deny (#2026): the tenant-B non-admin token is denied on
+	// tenant-A resources by the SAME owner-gate ownership rule (subject.sub != resource.id).
+	// The deny is identical to the same-tenant non-owner cases above; only the subject's
+	// tenant_id claim differs — proving tenant is never an owner-grant factor. Covers the
+	// identitymanage read+write gates and the rbaccheck read gate. ---
+
+	// Positive control: the cross-tenant token is LIVE and ownership works in its OWN tenant —
+	// a tenant-B non-admin reading its OWN tenant-B user is 200 (subject.sub == resource.id in
+	// tenant-B). This proves the 403s below are targeted ownership denials, not a dead/invalid
+	// token surfacing as a blanket auth failure.
+	t.Run("cross_tenant_self_access_own_tenant_200", func(t *testing.T) {
+		resp, body := pdpAccessReq(t, base, http.MethodGet, "/api/v1/access/users/"+crossTenantUserID, crossTenantUserToken, nil)
+		assert.Equal(t, http.StatusOK, resp.StatusCode,
+			"tenant-B non-admin GET its OWN tenant-B user must be 200 (PDP ownership rule fires in its own "+
+				"tenant; proves the cross-tenant token is live, so the 403s below are ownership-specific); body=%s", body)
+	})
+
+	t.Run("cross_tenant_get_other_user_403_pdp_deny", func(t *testing.T) {
+		resp, body := pdpAccessReq(t, base, http.MethodGet, "/api/v1/access/users/"+userID, crossTenantUserToken, nil)
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+			"a tenant-B non-admin GET a tenant-A user must be 403 (PDP ownership rule subject.sub != "+
+				"resource.id; the JWT's tenant_id differs but the rule is tenant-agnostic); body=%s", body)
+		assert.Contains(t, body, "ERR_AUTH_FORBIDDEN", "cross-tenant deny must produce ERR_AUTH_FORBIDDEN; body=%s", body)
+		assert.Contains(t, body, "insufficient permissions",
+			"cross-tenant deny must be a PDP ownership decision (%q), not a no-Authorizer gap; body=%s",
+			"insufficient permissions", body)
+	})
+
+	t.Run("cross_tenant_get_other_roles_403_pdp_deny", func(t *testing.T) {
+		resp, body := pdpAccessReq(t, base, http.MethodGet, "/api/v1/access/roles/"+userID, crossTenantUserToken, nil)
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+			"a tenant-B non-admin GET a tenant-A user's roles must be 403 (PDP ownership rule, not owner + no role:read); body=%s", body)
+		assert.Contains(t, body, "ERR_AUTH_FORBIDDEN", "cross-tenant deny must produce ERR_AUTH_FORBIDDEN; body=%s", body)
+	})
+
+	t.Run("cross_tenant_patch_other_user_403_pdp_deny", func(t *testing.T) {
+		resp, body := pdpAccessReq(t, base, http.MethodPatch, "/api/v1/access/users/"+userID, crossTenantUserToken, []byte(`{"name":"X-Tenant Hijack"}`))
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+			"a tenant-B non-admin PATCH a tenant-A user must be 403 (PDP ownership rule on user:write, not owner); body=%s", body)
+		assert.Contains(t, body, "ERR_AUTH_FORBIDDEN", "cross-tenant write deny must produce ERR_AUTH_FORBIDDEN; body=%s", body)
+		assert.Contains(t, body, "insufficient permissions",
+			"cross-tenant write deny must be a PDP ownership decision (%q), not a no-Authorizer gap; body=%s",
+			"insufficient permissions", body)
 	})
 }
 

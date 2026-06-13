@@ -89,7 +89,7 @@
           "type": "object",
           "required": ["cx1", "cx2", "cx3", "cx4"],
           "additionalProperties": false,
-          "description": "Finding counts broken down by Cx complexity level. Router uses cx2/cx3/cx4 to gate the alternate fix path (Cx1-only check).",
+          "description": "Finding counts broken down by Cx complexity level. Router uses cx3/cx4 to gate the alternate fix path (Cx1/Cx2 auto-fix window).",
           "properties": {
             "cx1": { "type": "integer", "minimum": 0 },
             "cx2": { "type": "integer", "minimum": 0 },

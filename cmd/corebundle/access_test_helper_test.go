@@ -18,6 +18,13 @@ import (
 // tests/integration/l2atomicity canonical tenant.
 const testTenantID = "00000000-0000-0000-0000-000000000001"
 
+// testTenantID2 is a SECOND canonical tenant UUID, used by cross-tenant isolation
+// tests (e.g. TestABACPDPGatesAccesscore's cross_tenant_* cases): a subject
+// provisioned + logged in under testTenantID2 carries tenant_id=testTenantID2 in
+// its JWT, so accessing a testTenantID resource exercises the owner-gate's
+// tenant-agnostic deny (subject.sub != resource.id).
+const testTenantID2 = "00000000-0000-0000-0000-000000000002"
+
 // buildAccessCoreMemOptions returns the explicit option set that replaces the
 // removed accesscore.WithInMemoryDefaults(). WithMemBundle wires the
 // (UserRepository, RoleRepository, SetupLock, store-paired TxRunner)
