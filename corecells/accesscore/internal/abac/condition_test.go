@@ -215,6 +215,73 @@ func TestCondition_Validate(t *testing.T) {
 			cond:    abac.Condition{Source: abac.SourceEnvironment, Key: "time_of_day", Operator: abac.OpNotEquals, Values: []string{"night"}},
 			wantErr: false,
 		},
+		// Cross-attribute operator (OpEqualsAttr): RHS is an attribute reference
+		// (RHSSource, RHSKey), NOT static Values. validateRHS makes mixing the two
+		// shapes unexpressible (#1977).
+		{
+			name: "valid eq_attr (subject.sub == resource.id)",
+			cond: abac.Condition{
+				Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr,
+				RHSSource: abac.SourceResource, RHSKey: "id",
+			},
+			wantErr: false,
+		},
+		{
+			name: "eq_attr carrying stray static Values rejected",
+			cond: abac.Condition{
+				Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr,
+				RHSSource: abac.SourceResource, RHSKey: "id", Values: []string{"x"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "eq_attr with zero RHSSource rejected",
+			cond: abac.Condition{
+				Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr,
+				RHSSource: 0, RHSKey: "id",
+			},
+			wantErr: true,
+		},
+		{
+			name: "eq_attr with empty RHSKey rejected",
+			cond: abac.Condition{
+				Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr,
+				RHSSource: abac.SourceResource, RHSKey: "",
+			},
+			wantErr: true,
+		},
+		{
+			name: "eq_attr with invalid RHSKey rejected (leading space)",
+			cond: abac.Condition{
+				Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr,
+				RHSSource: abac.SourceResource, RHSKey: " id",
+			},
+			wantErr: true,
+		},
+		{
+			name: "eq_attr with RHSKey containing control character rejected",
+			cond: abac.Condition{
+				Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr,
+				RHSSource: abac.SourceResource, RHSKey: "id\x00x",
+			},
+			wantErr: true,
+		},
+		{
+			name: "eq_attr with RHSKey starting with digit rejected",
+			cond: abac.Condition{
+				Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr,
+				RHSSource: abac.SourceResource, RHSKey: "1id",
+			},
+			wantErr: true,
+		},
+		{
+			name: "static operator carrying stray RHS reference rejected",
+			cond: abac.Condition{
+				Source: abac.SourceSubject, Key: "dept", Operator: abac.OpEquals,
+				Values: []string{"eng"}, RHSSource: abac.SourceResource, RHSKey: "id",
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tc := range tests {
@@ -224,6 +291,121 @@ func TestCondition_Validate(t *testing.T) {
 			if (err != nil) != tc.wantErr {
 				t.Errorf("Condition.Validate() error = %v, wantErr %v", err, tc.wantErr)
 			}
+		})
+	}
+}
+
+func TestCondition_HasRHS(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		cond abac.Condition
+		want bool
+	}{
+		{
+			name: "static: neither field set",
+			cond: abac.Condition{Source: abac.SourceSubject, Key: "dept", Operator: abac.OpEquals, Values: []string{"eng"}},
+			want: false,
+		},
+		{
+			name: "cross-attr: both fields set",
+			cond: abac.Condition{Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr, RHSSource: abac.SourceResource, RHSKey: "id"},
+			want: true,
+		},
+		{
+			name: "half-formed: only RHSKey set",
+			cond: abac.Condition{Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEquals, Values: []string{"x"}, RHSKey: "id"},
+			want: true,
+		},
+		{
+			name: "half-formed: only RHSSource set",
+			cond: abac.Condition{
+				Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEquals,
+				Values: []string{"x"}, RHSSource: abac.SourceResource,
+			},
+			want: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, tc.cond.HasRHS())
+		})
+	}
+}
+
+// TestParseRHS_LosslessPreservesRHSKey is the F2 regression: rhsKey must be
+// preserved even when rhsSource is empty, so a half-formed RHS reaches
+// Condition.Validate (which rejects it) instead of being silently dropped.
+func TestParseRHS_LosslessPreservesRHSKey(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		rhsSource  string
+		rhsKey     string
+		wantSource abac.AttributeSource
+		wantKey    string
+		wantErr    bool
+	}{
+		{"both empty → static (no RHS)", "", "", 0, "", false},
+		{"cross-attr: both present", "resource", "id", abac.SourceResource, "id", false},
+		{"rhsKey-only preserved (no source) → reaches Validate", "", "id", 0, "id", false},
+		{"rhsSource-only preserved (no key)", "subject", "", abac.SourceSubject, "", false},
+		{"invalid rhsSource code → fail-closed error", "ACTION", "id", 0, "", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			src, key, err := abac.ParseRHS(tc.rhsSource, tc.rhsKey)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantSource, src)
+			assert.Equal(t, tc.wantKey, key)
+		})
+	}
+}
+
+// TestCondition_RHSWire_RoundTrip asserts the outbound emit is lossless and that
+// static conditions emit the empty pair (so omitempty keeps rows byte-identical).
+func TestCondition_RHSWire_RoundTrip(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		cond       abac.Condition
+		wantSource string
+		wantKey    string
+	}{
+		{
+			name:       "static emits empty pair",
+			cond:       abac.Condition{Source: abac.SourceSubject, Key: "dept", Operator: abac.OpEquals, Values: []string{"eng"}},
+			wantSource: "",
+			wantKey:    "",
+		},
+		{
+			name: "cross-attr emits both",
+			cond: abac.Condition{
+				Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr,
+				RHSSource: abac.SourceResource, RHSKey: "id",
+			},
+			wantSource: "resource",
+			wantKey:    "id",
+		},
+		{
+			name:       "half-formed RHSKey-only round-trips losslessly",
+			cond:       abac.Condition{Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEquals, Values: []string{"x"}, RHSKey: "id"},
+			wantSource: "invalid",
+			wantKey:    "id",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			src, key := tc.cond.RHSWire()
+			assert.Equal(t, tc.wantSource, src)
+			assert.Equal(t, tc.wantKey, key)
 		})
 	}
 }

@@ -47,10 +47,19 @@ app-serving role 必须非 owner 且无 bypass RLS 权限。
   permission 单例经 accessor 函数（`authz.PermAuditRead()`）暴露而非可重赋值的导出 var——
   函数不可重赋值 = 注册值类型级不可变（重赋值即编译错）。role 字符串不可传入 Permission 位
   （概念隔离）。
-- self / ownership 检查（path/query 参数 == subject）是请求形状判定，留 handler 代码；
-  行可见性由数据层 `RowScope` 治理，不进路由 PDP。注意「空参数」不等于 self：如 audit 的
-  空 `actorId` 对 admin 是全 actor 读，按 permissioned 读处理而非隐式 self（只有显式
-  `param == subject` 才豁免 PDP）。
+- **resource ownership 进 PDP**（#1977）：path-param 标识的 resource ownership 是 PDP ABAC 决策，
+  不是 handler 短路。owner-scoped 端点用 `auth.RequirePermissionForResource(pathParam, perm)`——它把
+  canonical 化的 path-param 转发给 PDP 作 `resource`，由 baseline ownership 规则
+  `subject.sub == resource.id`（`abac.OpEqualsAttr` 跨属性算子）判定，引擎决策、无 Go `isSelfAccess`
+  短路。「空参数 ≠ self」保留：空/非 canonical param → `resource.id` not-found → 规则不命中（fail-closed）。
+  delegated ownership（owner ≠ id，如设备）用 `subject.sub == resource.owner`（owner 由 PIP lookup 供）。
+  owner-scoped 端点的 gate 形状由 `OWNER-SCOPED-GATE-EXACT-SET-01`（Medium）冻结守卫——把
+  owner gate 回退成裸 `auth.RequirePermission`（转发 `r.URL.Path` 而非 canonical resource id）即 CI 红；
+  精确集（identitymanage / rbaccheck）与盲区见该 archtest godoc。
+- self ownership **不扩大数据访问**：路由门禁放行只让 owner 过 coarse gate；行可见性仍由 principal 派生的
+  `RowScope`（身份决定，policy 改不动）独立治理（D3）。query-param self scoping 仍留 handler/service：如
+  audit 的空 `actorId` 对 admin 是全 actor permissioned 读，非隐式 self（只有显式 `param == subject` 经
+  PDP ownership 规则豁免门禁）。
 - Authorizer 经 composition root `bootstrap.WithPrimaryAuthorizer` 注入 primary listener
   request ctx（唯一 `auth.WithAuthorizer` 上游 + `AuthorizerFromContext`/`RequirePermission`
   下游）。Cell 不 import 兄弟 cell 的 Authorizer；强依赖缺失 fail-fast；可解析的 Authorizer
