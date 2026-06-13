@@ -120,11 +120,13 @@ fmt:
 update-archtest-golden:
 	go test -tags=archtest ./tools/archtest -update -count=1
 
-# update-modrelease-golden regenerates testdata/publishable.golden, the
-# byte-frozen derived publishable module set (PUBLISHABLE-MODULE-SET-01). Run
-# after intentionally adding/removing a go.work member or changing IsPublishable.
+# update-modrelease-golden regenerates testdata/publishable.golden
+# (PUBLISHABLE-MODULE-SET-01) and testdata/installable.golden
+# (INSTALLABLE-BINARY-SET-01), the byte-frozen derived module sets. Run after
+# intentionally adding/removing a go.work member, changing IsPublishable, or
+# changing installableBinaries.
 update-modrelease-golden:
-	go test ./tools/modrelease -run TestPublishableModuleSet01 -update -count=1
+	go test ./tools/modrelease -run 'TestPublishableModuleSet01|TestInstallableBinarySet01' -update -count=1
 
 # release-smoke runs the external-consumer go-get/build smoke for the
 # synchronized multi-module release (RELEASE-EXTERNAL-GET-01). Network-free at

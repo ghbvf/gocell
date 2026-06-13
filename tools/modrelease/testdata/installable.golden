@@ -1,0 +1,4 @@
+# Installable binary set — DERIVED from go.work filtered by installableBinaries.
+# Regenerate intentionally: make update-modrelease-golden
+# <reldir>\t<import-path>
+cmd/gocell	github.com/ghbvf/gocell/cmd/gocell

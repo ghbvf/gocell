@@ -46,6 +46,11 @@ pre-GA 窗口正面冲突。因此必须新建独立 ADR，而非 amend wire ADR
 `compatible_framework_range` 字段表达运行时兼容范围（该字段从单一注入的 version 常量派生，非手维护，见
 `docs/guides/cli-version-compatibility.md`）。
 
+release 流水线在发布时使用 `modrelease.StripReplaceAndPin`（`InstallableBinaries`，#2045）剥离
+`cmd/gocell` 的本地 `replace` 指令并将内部 require 固定到已发布版本，再在独立子 module commit 上打
+`cmd/gocell/vX.Y.Z` tag。自 v0.1.x 起，`go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` 已可用。
+完整机制见 §Dx（installable CLI 发布形状）。
+
 ## Decision
 
 ### D1 — 分级承诺：v0.x intent，v1.0 GA 起 guarantee
@@ -110,6 +115,7 @@ CLI 校验，不直接 Go 依赖）。现有 archtest 已禁止此 import 路径
 | v1.0 GA 后忘记切换 intent → guarantee，enforcement 未接入 | 本 ADR §D4 列出 v1.0 GA checklist；GA ADR 的 PR body 必须逐条核销（见下 §v1.0 GA self-closure checklist） | Medium（self-closure checklist 是人工检查，GA PR review 强制对照） |
 | contractspec 被外部误 import，绕过 CLI 校验路径 | 现有 archtest 已禁止（引用，不重复建） | Medium（现有 archtest 守卫） |
 | CLI 与 framework 版本对应关系手动维护漂移 | `compatible_framework_range` 从单一注入 version 常量派生，非手维护；`cli-version-compatibility.md` 表由 release checklist 驱动追加 | Medium（派生逻辑的正确性由 release 流程保证，非编译期 Hard） |
+| `cmd/gocell` go.mod 的 replace 指令在发布后残留，导致 `go install @version` 被工具链拒绝 | release-time `modrelease.StripReplaceAndPin` 剥离 replace + pin internal require，独立子 module commit 打 `cmd/gocell/vX.Y.Z` tag（#2045 resolved）；post-release smoke `go install @version` 验证（与 #1767 external-consumer-smoke 互补，不替代全量矩阵） | Medium（release pipeline 流程守卫，非编译期 Hard；smoke 验证在 release checklist 强制） |
 
 **注**：v0.x 阶段威胁 T1/T2 评级为 Soft，因为 SemVer §4 明确允许 v0.x breaking；此时接 CI 门禁
 反而违背「intent」语义。v1.0 GA 后提升为 Medium（CI 门禁）是预期的升级路径，登记 backlog 而非
@@ -135,6 +141,51 @@ v1.0 GA ADR 的 PR body 必须逐条核销下列项，reviewer 必须逐行对�
   「因懒惰而用 Soft」——后者禁止的是本可以做成 Medium/Hard 却选 Soft 的情形。
 - **v1.0 GA 后**：升级为 Medium（CI 门禁），见 §D4 与 §v1.0 GA self-closure checklist。
 
+## Dx — installable CLI 发布形状（#2045）
+
+### 问题背景
+
+`cmd/gocell` 在 monorepo 开发期间的 `go.mod` 携带 `replace github.com/ghbvf/gocell => ../../`
+（本地路径替换），Go 工具链在此场景下会**拒绝** `go install pkg@version`——replace 指令在目标模块
+go.mod 中存在时，版本化安装被明确拒绝。库模块（`adapters/*`、`corecells`、`cellmodules`）无此问题，
+因为它们的 replace 指令在 go.work workspace 管理下存在，发布时 go.mod 不含 replace。
+
+### 决策
+
+release 流水线在发布每个 stable tag 时对 `cmd/gocell` 执行以下步骤（实现在 `tools/modrelease`，
+`InstallableBinaries` / `StripReplaceAndPin` 函数）：
+
+1. **剥离 replace 指令**：移除所有本地 `replace … => ../..` 行。
+2. **pin internal require**：将对 `github.com/ghbvf/gocell` 的 `require` 从伪版本/local 固定到
+   本次发布的 `vX.Y.Z`（已在 registry 上可解析）。
+3. **独立子 module commit**：将处理后的 `go.mod` 提交到独立 tree（不污染 monorepo 开发历史）。
+4. **打子 module tag**：在独立 commit 上打 `cmd/gocell/vX.Y.Z` tag（在库 tag `vX.Y.Z` 发布之后）。
+5. **post-release smoke**：release checklist 强制跑 `go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z`
+   验证工具链可解析（与 #1767 external-consumer-smoke 意图互补，不替代其全量矩阵）。
+
+### 为何 installable 正交于「库保留 replace」
+
+OTel、grpc-go 等公共库教义：库 go.mod **不应**含 replace（会干扰消费方的模块图解析）。
+框架库（根 module 及 `adapters/*`）严格遵守此原则，由 `ROOT-MODULE-NO-REPLACE-01` archtest 守卫。
+
+二进制的语义恰好相反：monorepo 开发期需要 replace 来引用本地改动。二者语义对立，
+不能混合处理——这正是 release-time strip 作为正交步骤存在的原因，而非简单地在 go.mod 源头删除。
+
+### 版本承诺
+
+- 自 v0.1.x 起，`go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` 可用。
+- CLI 与 framework 仍原子同 tag 发布（#1088 M7），子 module tag `cmd/gocell/vX.Y.Z` 与根 tag
+  `vX.Y.Z` 版本号一一对应。
+- installable 机制本身是 release pipeline 的 Hard 步骤（pipeline 失败 = release 中止），
+  故 post-release smoke 失败立即阻断发版，不需要额外 CI 门禁。
+
+### 交叉链接
+
+- #2045：installable CLI（本决策的实现 issue）
+- #1557：CLI 拆独立子 module（`github.com/ghbvf/gocell/cmd/gocell`，本机制的前提）
+- #1767：external-consumer-smoke CI（go install @version smoke 与其意图重叠；#1767 关注全量
+  外部消费路径矩阵，#2045 的 smoke 仅覆盖 CLI install 单点——两者互补，不互相替代）
+
 ## Out of scope
 
 - Wire 契约（HTTP / event / command）：见 wire ADR `202605211200-adr-pre-v1.0-direct-v1-evolution.md`
@@ -150,5 +201,8 @@ v1.0 GA ADR 的 PR body 必须逐条核销下列项，reviewer 必须逐行对�
 - Issue #1724（v0.x 自用不做承诺，本 ADR 与其措辞调和）
 - Issue #1081（Operator-SDK R9 外部消费方，v1.0 GA 承诺对象）
 - Issue #1088（CLI versioned release + SemVer 承诺，本 ADR 归属 milestone）
+- Issue #2045（installable CLI 发布形状，本 ADR §Dx 归属）
+- Issue #1557（CLI 拆独立子 module，§Dx 机制前提）
+- Issue #1767（external-consumer-smoke，与 §Dx post-release smoke 互补）
 - `docs/guides/cli-version-compatibility.md`（CLI ↔ framework 兼容矩阵）
 - `docs/guides/cell-external-repo-quickstart.md`（外部仓库使用指南）

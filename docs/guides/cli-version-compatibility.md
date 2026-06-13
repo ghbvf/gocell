@@ -49,9 +49,16 @@ cd gocell
 go install ./cmd/gocell
 ```
 
-> `go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` 目前**不可用**（`cmd/gocell` 模块
-> 的 `go.mod` 含本地 `replace` 指令，`go install pkg@version` 在此场景被拒绝），跟踪于
-> #2045。源码安装（本地 clone）是当前可用的版本化获取方式。
+> 自 v0.1.x 起，`go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` **已可用**。
+> release 流水线在发布时经 `modrelease.StripReplaceAndPin`（`InstallableBinaries`，#2045）
+> 剥离本地 `replace` 指令并将内部 require 固定到已发布版本，再在独立子 module commit 上打
+> `cmd/gocell/vX.Y.Z` tag，使 Go 工具链可直接解析该版本。用法：
+>
+> ```bash
+> go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z
+> ```
+>
+> 源码安装（本地 clone）仍作为开发 / 预发布版本的 fallback 可用。
 
 ## `gocell version` 输出说明
 
