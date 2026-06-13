@@ -8,6 +8,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
+const fieldContractUsagesContractFmt = "contractUsages[%d].contract"
+
 const fieldContractUsagesRoleFmt = "contractUsages[%d].role"
 
 // validateTOPO01 checks that contractUsages[].role is valid for the contract's kind.
@@ -440,6 +442,120 @@ func (v *Validator) validateTOPO09() []ValidationResult {
 					asm.ID, asm.MaxConsistencyLevel, expected.String(),
 				),
 				"run 'gocell generate' to recompute maxConsistencyLevel",
+			))
+		}
+	}
+	return results
+}
+
+// validateTOPO10 checks that each assembly's topology section is structurally
+// valid, delegating all set-logic to metadata.ValidateTopologyStructure (single
+// source of truth). An empty topology is always valid (all-colocated default).
+func (v *Validator) validateTOPO10() []ValidationResult {
+	var results []ValidationResult
+
+	keys := make([]string, 0, len(v.project.Assemblies))
+	for k := range v.project.Assemblies {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, asmID := range keys {
+		asm := v.project.Assemblies[asmID]
+		if asm == nil {
+			continue
+		}
+		if err := metadata.ValidateTopologyStructure(asm); err != nil {
+			results = append(results, v.newError(
+				codeTOPO10, IssueInvalid,
+				assemblyFile(asm),
+				"topology",
+				err.Error(),
+				"topology.colocated ∪ remote must mutually-exclusively and exhaustively partition cells; remote endpoints must be host:port or URL",
+			))
+		}
+	}
+	return results
+}
+
+// validateTOPO11 checks that for every contract consumed by a cell in an
+// assembly, the contract's provider cell is reachable (Local or Remote) within
+// that assembly's topology. A provider that is Missing (∉ colocated ∪ remote)
+// is a deployment-time error — the consumer will never be able to reach it.
+//
+// Skip conditions (delegated to other rules):
+//   - non-consumer roles (provider roles are not the consumer side)
+//   - contract not found in project (REF-02 owns missing-contract errors)
+//   - framework-owned provider (provider-agnostic; c.Owner().Cell() returns ok=false)
+//   - external actor provider (actors are out-of-process; topology only governs cells)
+func (v *Validator) validateTOPO11() []ValidationResult {
+	var results []ValidationResult
+
+	keys := make([]string, 0, len(v.project.Assemblies))
+	for k := range v.project.Assemblies {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, asmID := range keys {
+		asm := v.project.Assemblies[asmID]
+		if asm == nil {
+			continue
+		}
+		results = append(results, v.checkTOPO11Assembly(asm)...)
+	}
+	return results
+}
+
+// checkTOPO11Assembly checks provider reachability for all consumer slices in one assembly.
+func (v *Validator) checkTOPO11Assembly(asm *metadata.AssemblyMeta) []ValidationResult {
+	// Build the set of cells that belong to this assembly.
+	asmCellSet := make(map[string]struct{}, len(asm.Cells))
+	for _, ref := range asm.Cells {
+		asmCellSet[ref.ID] = struct{}{}
+	}
+
+	var results []ValidationResult
+	for _, s := range v.project.Slices {
+		if _, inAsm := asmCellSet[s.BelongsToCell]; !inAsm {
+			continue // slice's cell is not in this assembly
+		}
+		results = append(results, v.checkTOPO11Slice(asm, s)...)
+	}
+	return results
+}
+
+// checkTOPO11Slice checks provider reachability for each consumer contract usage in one slice.
+func (v *Validator) checkTOPO11Slice(asm *metadata.AssemblyMeta, s *metadata.SliceMeta) []ValidationResult {
+	var results []ValidationResult
+	for i, cu := range s.ContractUsages {
+		if !cellvocab.IsConsumerRole(cellvocab.ContractRole(cu.Role)) {
+			continue // only consumer roles trigger reachability checks
+		}
+		c, ok := v.project.Contracts[cu.Contract]
+		if !ok {
+			continue // REF-02 owns missing-contract errors
+		}
+		provider, isCell := c.Owner().Cell()
+		if !isCell {
+			continue // framework-owned — provider-agnostic, skip
+		}
+		if _, knownCell := v.project.Cells[provider]; !knownCell {
+			continue // external actor provider — not subject to assembly topology
+		}
+		loc := metadata.ClassifyCell(asm, provider)
+		if loc.IsMissing() {
+			msg := fmt.Sprintf(
+				"slice %q (cell %q) consumes contract %q whose provider cell %q"+
+					" is neither co-located nor a declared remote endpoint in assembly %q topology",
+				s.ID, s.BelongsToCell, cu.Contract, provider, asm.ID,
+			)
+			results = append(results, v.newError(
+				codeTOPO11, IssueRefNotFound,
+				sliceFile(s),
+				fmt.Sprintf(fieldContractUsagesContractFmt, i),
+				msg,
+				"add the provider cell to assembly.cells (co-located) or declare it in topology.remote with an endpoint",
 			))
 		}
 	}

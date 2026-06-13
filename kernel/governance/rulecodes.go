@@ -64,6 +64,13 @@ const (
 	codeTOPO07 RuleCode = "TOPO-07"
 	codeTOPO08 RuleCode = "TOPO-08"
 	codeTOPO09 RuleCode = "TOPO-09"
+	// TOPO-10: per-assembly topology structural validation (mutual exclusion,
+	// exhaustiveness, endpoint syntax). Delegates to metadata.ValidateTopologyStructure.
+	codeTOPO10 RuleCode = "TOPO-10"
+	// TOPO-11: per-assembly contract-provider reachability — every contract consumed
+	// by a cell in an assembly must have its provider cell reachable (Local or Remote).
+	// A provider that is Missing (∉ colocated ∪ remote) is a deployment-time error.
+	codeTOPO11 RuleCode = "TOPO-11"
 
 	// VERIFY — verify closure (rules_verify.go; VERIFY-06 strict-only).
 	codeVERIFY01 RuleCode = "VERIFY-01"

@@ -176,6 +176,10 @@ func goldenRuleIDs() []string {
 		// TOPO — topology (rules_topo.go)
 		"TOPO-01", "TOPO-02", "TOPO-03", "TOPO-04", "TOPO-05",
 		"TOPO-06", "TOPO-07", "TOPO-08", "TOPO-09",
+		// TOPO-10: assembly topology structural validation (mutual exclusion,
+		// exhaustiveness, endpoint syntax).
+		// TOPO-11: per-assembly contract-provider reachability gate.
+		"TOPO-10", "TOPO-11",
 
 		// VERIFY — verification closure (rules_verify.go)
 		"VERIFY-01", "VERIFY-02", "VERIFY-03",
