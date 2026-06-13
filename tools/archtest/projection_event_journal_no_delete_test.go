@@ -42,13 +42,16 @@
 //
 // # What is / isn't caught (charter §"强制盲区自检")
 //
-//   - Caught wherever the table name is a literal: the statement may run through any
-//     exec wrapper (the scan is literal-shaped, not call-shaped), and a double-quoted
-//     identifier (DELETE FROM "projection_events") still matches — the trailing \b
-//     fires before "p" because the leading double-quote is a non-word char.
-//   - Blind to a statement with no projection_events literal: SQL built by runtime
-//     concatenation / fmt.Sprintf, or a fully dynamic table name, is invisible — the
-//     same blind spot as every literal-scanning funnel in this suite.
+//   - Caught wherever the table name is a compile-time constant: the statement may run
+//     through any exec wrapper (the scan is value-shaped, not call-shaped); a
+//     double-quoted identifier (DELETE FROM "projection_events", "public"."projection_events")
+//     matches; and a value assembled by compile-time concatenation of string constants
+//     ("DELETE FROM " + "projection_events", or "DELETE FROM " + projectionEventsTable) is
+//     folded by go/types (EvaluateConstString) and matched as a whole.
+//   - Blind to a table name that arrives as a runtime (non-const) value: runtime string
+//     concatenation, fmt.Sprintf("…%s…", table), or a fully dynamic name produces no
+//     constant projection_events string to fold — the permanent literal/const-scan
+//     ceiling, same family as every literal-scanning funnel in this suite.
 //   - .sql migration files are not Go source and are out of this scan's reach; the
 //     migration down-script's DROP TABLE is gated separately (Migrator.Down +
 //     DestructiveDownPermit, #1248).
@@ -62,16 +65,15 @@
 // regex stops matching. Two guards close that: (1) the production run requires ≥1
 // projection_events literal to be observed (tableRefs — proves the scan reached the
 // real journal SQL); (2) the RED fixture (projectionnodeletefixture) must yield exactly
-// three diagnostics (proves the DELETE/TRUNCATE pattern actually fires and that the
-// word boundary does not over-match projection_events_archive).
+// eight diagnostics (proves the pattern fires on bare / quoted / schema-qualified and
+// compile-time-concatenated forms, and that neither the word boundary over-matches
+// projection_events_archive nor the const fold flags a runtime-assembled name).
 package archtest
 
 import (
 	"fmt"
 	"go/ast"
-	"go/token"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -82,52 +84,64 @@ import (
 // (case-insensitive) marks a line the scan reached, feeding the anti-vacuity counter.
 const projectionEventsTable = "projection_events"
 
-// projectionEventsDeletePattern matches a DELETE/TRUNCATE statement targeting
-// projection_events. The leading \b keeps the verb from matching when DELETE/TRUNCATE
-// is embedded as the suffix of a larger word (e.g. a hypothetical UNDELETE …); the
-// (?:\w+\.)? branch admits a schema qualifier (public.projection_events); the trailing
-// \b keeps a prefix collision (projection_events_archive) from matching — _ is a word
-// char, so there is no boundary between "events" and "_archive".
+// projectionEventsDeletePattern matches a DELETE/TRUNCATE statement targeting the
+// projection_events table. The leading \b keeps the verb from matching when
+// DELETE/TRUNCATE is embedded as the suffix of a larger word (e.g. a hypothetical
+// UNDELETE …). The table token accepts an optional schema qualifier and a bare OR
+// double-quoted identifier for either part — projection_events, "projection_events",
+// public.projection_events, "public"."projection_events" — all legal PostgreSQL
+// references to the same table (delimited identifiers per the SQL lexical spec). The
+// bare table alternative ends in \b so a prefix collision (projection_events_archive)
+// does not match (_ is a word char, so there is no boundary between "events" and
+// "_archive"); the quoted alternative is self-delimiting by its closing quote.
 var projectionEventsDeletePattern = regexp.MustCompile(
-	`(?i)\b(?:DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?)\s+(?:\w+\.)?projection_events\b`,
+	`(?i)\b(?:DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?)\s+(?:(?:"\w+"|\w+)\.)?(?:"projection_events"|projection_events\b)`,
 )
 
-// scanProjectionEventDelete reports every string literal that is a DELETE/TRUNCATE of
-// projection_events, and counts literals that merely reference the table into tableRefs
-// (anti-vacuity). Reused over both production (expect zero diagnostics, tableRefs ≥ 1)
-// and the RED fixture (expect exactly three diagnostics).
+// scanProjectionEventDelete reports every compile-time-constant SQL string that is a
+// DELETE/TRUNCATE of projection_events, and counts constant strings that merely
+// reference the table into tableRefs (anti-vacuity). It walks MAXIMAL constant string
+// expressions via EvaluateConstString (go/types constant folding), so a value spread
+// across a compile-time concatenation ("DELETE FROM " + "projection_events", or
+// "DELETE FROM " + projectionEventsTable) is folded and matched as a whole; only a
+// table name arriving as a runtime (non-const) value stays invisible. Reused over both
+// production (expect zero diagnostics, tableRefs ≥ 1) and the RED fixture.
 func scanProjectionEventDelete(p *Pass, tableRefs *int) []Diagnostic {
 	var diags []Diagnostic
 	for _, file := range p.Files {
 		rel := p.Rel(file)
-		EachInSubtree[ast.BasicLit](file, func(lit *ast.BasicLit) {
-			if lit.Kind != token.STRING {
-				return
+		ast.Inspect(file, func(n ast.Node) bool {
+			expr, ok := n.(ast.Expr)
+			if !ok {
+				return true
 			}
-			val, err := strconv.Unquote(lit.Value)
-			if err != nil {
-				return
+			s, ok := EvaluateConstString(p.TypesInfo, expr)
+			if !ok {
+				return true // not a constant string — recurse to reach inner literals
 			}
-			if strings.Contains(strings.ToLower(val), projectionEventsTable) {
+			// expr is the MAXIMAL constant string expression: a constant-string parent
+			// would have been visited first (pre-order) and stopped recursion, so each
+			// folded value is evaluated exactly once — no double counting of operands.
+			if strings.Contains(strings.ToLower(s), projectionEventsTable) {
 				*tableRefs++
 			}
-			if !projectionEventsDeletePattern.MatchString(val) {
-				return
+			if projectionEventsDeletePattern.MatchString(s) {
+				pos := p.Fset.Position(expr.Pos())
+				diags = append(diags, Diagnostic{
+					Rel:  rel,
+					Line: pos.Line,
+					Message: fmt.Sprintf(
+						"PROJECTION-EVENT-JOURNAL-NO-DELETE-01: DELETE/TRUNCATE of projection_events in %s:%d — "+
+							"the durable projection journal is append-only (it is the rebuild-from-0 source). "+
+							"Removing a row reintroduces the #1504 rebuild bug. Never DELETE/TRUNCATE this table; "+
+							"if archive/retention lands, this guard (a pure literal scan with no allowlist) must be "+
+							"updated here to exempt the sanctioned archive callsite, citing the archive ADR section "+
+							"(per contract-fanout.md).",
+						rel, pos.Line,
+					),
+				})
 			}
-			pos := p.Fset.Position(lit.Pos())
-			diags = append(diags, Diagnostic{
-				Rel:  rel,
-				Line: pos.Line,
-				Message: fmt.Sprintf(
-					"PROJECTION-EVENT-JOURNAL-NO-DELETE-01: DELETE/TRUNCATE of projection_events in %s:%d — "+
-						"the durable projection journal is append-only (it is the rebuild-from-0 source). "+
-						"Removing a row reintroduces the #1504 rebuild bug. Never DELETE/TRUNCATE this table; "+
-						"if archive/retention lands, this guard (a pure literal scan with no allowlist) must be "+
-						"updated here to exempt the sanctioned archive callsite, citing the archive ADR section "+
-						"(per contract-fanout.md).",
-					rel, pos.Line,
-				),
-			})
+			return false // maximal constant string handled; do not re-scan its operands
 		})
 	}
 	return diags
@@ -161,9 +175,10 @@ func TestProjectionEventJournalNoDelete01(t *testing.T) {
 }
 
 // TestProjectionEventJournalNoDelete01_RedFixture is the negative control: the scanner
-// run against projectionnodeletefixture must fire on exactly the three RED cases
-// (badDelete / badTruncate / badTruncateSchemaQualified) and leave the GREEN controls
-// (INSERT / SELECT / sibling-table DELETE) untouched.
+// run against projectionnodeletefixture must fire on exactly the eight RED cases (bare /
+// quoted / schema-qualified DELETE+TRUNCATE + two compile-time-concatenated forms) and
+// leave the GREEN controls (INSERT / SELECT / sibling-table DELETE / runtime-concat)
+// untouched.
 func TestProjectionEventJournalNoDelete01_RedFixture(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -181,9 +196,10 @@ func TestProjectionEventJournalNoDelete01_RedFixture(t *testing.T) {
 			found += len(scanProjectionEventDelete(p, &throwaway))
 			return nil
 		})
-	assert.Equal(t, 3, found,
-		"PROJECTION-EVENT-JOURNAL-NO-DELETE-01 RED fixture self-check FAILED: expected exactly 3 "+
-			"violations (badDelete + badTruncate + badTruncateSchemaQualified). Got %d — found<3 means the "+
-			"DELETE/TRUNCATE pattern missed a form (scanner regression); found>3 means it over-matched "+
-			"(e.g. flagged the GREEN INSERT/SELECT or the projection_events_archive sibling table).", found)
+	assert.Equal(t, 8, found,
+		"PROJECTION-EVENT-JOURNAL-NO-DELETE-01 RED fixture self-check FAILED: expected exactly 8 "+
+			"violations (bare/quoted/schema-qualified DELETE+TRUNCATE + 2 compile-time-concat forms). Got "+
+			"%d — found<8 means the pattern missed a form (quoted identifier or const-fold regression); "+
+			"found>8 means it over-matched (e.g. flagged a GREEN INSERT/SELECT, the projection_events_archive "+
+			"sibling, or a runtime-assembled name).", found)
 }
