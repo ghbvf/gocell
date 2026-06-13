@@ -254,9 +254,9 @@ func TestGenerate_WriteMode_HTTP(t *testing.T) {
 
 	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 
-	// HTTP contract → 3 files: types_gen.go, iface_gen.go, handler_gen.go.
-	if len(res.Generated) != 3 {
-		t.Errorf("expected 3 generated files, got %d: %v", len(res.Generated), res.Generated)
+	// HTTP contract → 5 files: types_gen.go, iface_gen.go, handler_gen.go + types.ts + index.ts (barrel).
+	if len(res.Generated) != 5 {
+		t.Errorf("expected 5 generated files, got %d: %v", len(res.Generated), res.Generated)
 	}
 	for _, path := range res.Generated {
 		content, err := os.ReadFile(path) //nolint:gosec // test reads its own written tmp file
@@ -285,9 +285,9 @@ func TestGenerate_WriteMode_Event(t *testing.T) {
 
 	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 
-	// Event contract → 5 files: types, iface, spec, subscription, projection.
-	if len(res.Generated) != 5 {
-		t.Errorf("expected 5 generated files for event, got %d: %v", len(res.Generated), res.Generated)
+	// Event contract → 7 files: types_gen, iface_gen, spec_gen, subscription_gen, projection_gen + types.ts + index.ts (barrel).
+	if len(res.Generated) != 7 {
+		t.Errorf("expected 7 generated files for event, got %d: %v", len(res.Generated), res.Generated)
 	}
 	for _, path := range res.Generated {
 		if strings.HasSuffix(path, "handler_gen.go") {
@@ -404,9 +404,9 @@ func TestGenerate_OnlyContract_HTTP(t *testing.T) {
 
 	res := mustGenerate(t, root, p, Options{Scope: ScopeContracts([]string{"http.order.ping.v1"}), ModulePath: "github.com/ghbvf/gocell"})
 
-	// Should still get 3 files for the HTTP contract.
-	if len(res.Generated) != 3 {
-		t.Errorf("expected 3 files for ScopeContracts([http.order.ping.v1]), got %d: %v", len(res.Generated), res.Generated)
+	// Should get 5 files: 3 Go + 1 TS + 1 barrel.
+	if len(res.Generated) != 5 {
+		t.Errorf("expected 5 files for ScopeContracts([http.order.ping.v1]), got %d: %v", len(res.Generated), res.Generated)
 	}
 }
 
@@ -457,14 +457,14 @@ func TestGenerate_AllCodegenTrue_MultipleContracts(t *testing.T) {
 		t.Fatalf("Generate: %v", err)
 	}
 
-	// http.order.ping.v1 → types_gen + iface_gen + handler_gen = 3 files.
-	// event.item-created.v1 → types_gen + iface_gen + spec_gen + subscription_gen + projection_gen = 5 files.
-	httpFiles := 3  // types_gen, iface_gen, handler_gen
-	eventFiles := 5 // types_gen, iface_gen, spec_gen, subscription_gen, projection_gen
-	wantTotal := httpFiles + eventFiles
+	// http.order.ping.v1 → 3 Go + 1 TS = 4 contract files.
+	// event.item-created.v1 → 5 Go + 1 TS = 6 contract files.
+	// Shared barrel index.ts = 1.
+	// Total = 4 + 6 + 1 = 11.
+	wantTotal := 11
 	if len(res.Generated) != wantTotal {
-		t.Errorf("expected %d total generated files (http=%d + event=%d), got %d: %v",
-			wantTotal, httpFiles, eventFiles, len(res.Generated), res.Generated)
+		t.Errorf("expected %d total generated files (http: 3 Go+1 TS, event: 5 Go+1 TS, +1 barrel), got %d: %v",
+			wantTotal, len(res.Generated), res.Generated)
 	}
 }
 
@@ -776,9 +776,9 @@ func TestGenerate_WriteMode_HTTPFull(t *testing.T) {
 
 	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 
-	// HTTP contract → 3 files: types_gen.go, iface_gen.go, handler_gen.go.
-	if len(res.Generated) != 3 {
-		t.Errorf("expected 3 generated files for HTTPFull, got %d: %v", len(res.Generated), res.Generated)
+	// HTTP contract → 5 files: types_gen.go, iface_gen.go, handler_gen.go + types.ts + index.ts (barrel).
+	if len(res.Generated) != 5 {
+		t.Errorf("expected 5 generated files for HTTPFull, got %d: %v", len(res.Generated), res.Generated)
 	}
 	for _, path := range res.Generated {
 		content, err := os.ReadFile(path) //nolint:gosec // test reads its own tmp file
@@ -842,9 +842,9 @@ func TestGenerate_PackageNameKeywordSanitize(t *testing.T) {
 	}
 
 	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
-	// DELETE contract → 3 files (types, iface, handler).
-	if len(res.Generated) != 3 {
-		t.Errorf("expected 3 generated files for keyword-conflict contract, got %d: %v", len(res.Generated), res.Generated)
+	// DELETE contract → 5 files: 3 Go (types, iface, handler) + 1 TS + 1 barrel.
+	if len(res.Generated) != 5 {
+		t.Errorf("expected 5 generated files for keyword-conflict contract, got %d: %v", len(res.Generated), res.Generated)
 	}
 	// Verify no generated file contains `package delete` (the colliding keyword).
 	for _, path := range res.Generated {
@@ -968,13 +968,13 @@ func TestGenerate_Options_ScopeNilFailFast(t *testing.T) {
 func TestGenerate_Options_ScopeContractsLimitsToList(t *testing.T) {
 	t.Parallel()
 	root, p := setupHTTPMinimalRoot(t)
-	// http.order.ping.v1 → 3 files.
+	// http.order.ping.v1 → 3 Go + 1 TS + 1 barrel = 5 files.
 	res, err := Generate(root, p, Options{Scope: ScopeContracts([]string{"http.order.ping.v1"}), ModulePath: "github.com/ghbvf/gocell"})
 	if err != nil {
 		t.Fatalf("Generate with ScopeContracts: %v", err)
 	}
-	if len(res.Generated) != 3 {
-		t.Errorf("ScopeContracts([http.order.ping.v1]): expected 3 files, got %d: %v", len(res.Generated), res.Generated)
+	if len(res.Generated) != 5 {
+		t.Errorf("ScopeContracts([http.order.ping.v1]): expected 5 files, got %d: %v", len(res.Generated), res.Generated)
 	}
 }
 
@@ -990,9 +990,9 @@ func TestGenerate_Options_ScopeAllProcessesAll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate with ScopeAll: %v", err)
 	}
-	// synth_http_minimal has one HTTP contract → 3 files.
-	if len(res.Generated) != 3 {
-		t.Errorf("ScopeAll: expected 3 files for synth_http_minimal, got %d: %v", len(res.Generated), res.Generated)
+	// synth_http_minimal has one HTTP contract → 3 Go + 1 TS + 1 barrel = 5 files.
+	if len(res.Generated) != 5 {
+		t.Errorf("ScopeAll: expected 5 files for synth_http_minimal, got %d: %v", len(res.Generated), res.Generated)
 	}
 }
 
