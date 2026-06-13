@@ -218,7 +218,8 @@ func TestCommandBus_Enqueue_DispatchAsyncHandlerError(t *testing.T) {
 	sentinel := errors.New("downstream failure")
 	require.NoError(t, enqueue.Register(reg, &fakeEnqueueHandler{retErr: sentinel}))
 
-	err := enqueue.DispatchAsync(context.Background(), reg, newCommandEntry(t, enqueue.Request{DeviceID: "d1", Payload: "x"}))
+	entry := newCommandEntry(t, enqueue.Request{DeviceID: "d1", CommandType: "reboot", Payload: "x"})
+	err := enqueue.DispatchAsync(context.Background(), reg, entry)
 	assert.ErrorIs(t, err, sentinel)
 }
 
@@ -249,11 +250,13 @@ func TestCommandBus_Enqueue_DispatchAsyncValueValidation(t *testing.T) {
 		name    string
 		rawJSON string
 	}{
-		{"missing required payload", `{"deviceId":"d1"}`},
-		{"missing required deviceId", `{"payload":"x"}`},
-		{"empty deviceId violates minLength", `{"deviceId":"","payload":"x"}`},
-		{"empty payload violates minLength", `{"deviceId":"d1","payload":""}`},
-		{"additionalProperties rejected", `{"deviceId":"d1","payload":"x","bogus":"y"}`},
+		{"missing required payload", `{"deviceId":"d1","commandType":"reboot"}`},
+		{"missing required deviceId", `{"payload":"x","commandType":"reboot"}`},
+		{"missing required commandType", `{"deviceId":"d1","payload":"x"}`},                          // #1694 F9
+		{"empty commandType violates minLength", `{"deviceId":"d1","payload":"x","commandType":""}`}, // #1694 F9
+		{"empty deviceId violates minLength", `{"deviceId":"","payload":"x","commandType":"reboot"}`},
+		{"empty payload violates minLength", `{"deviceId":"d1","payload":"","commandType":"reboot"}`},
+		{"additionalProperties rejected", `{"deviceId":"d1","payload":"x","commandType":"reboot","bogus":"y"}`},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -280,7 +283,8 @@ func TestCommandBus_Enqueue_DispatchAsyncValueValidation(t *testing.T) {
 func TestCommandBus_Enqueue_DispatchAsyncNoHandler(t *testing.T) {
 	t.Parallel()
 	reg := command.NewRegistry()
-	err := enqueue.DispatchAsync(context.Background(), reg, newCommandEntry(t, enqueue.Request{DeviceID: "d1", Payload: "x"}))
+	entry := newCommandEntry(t, enqueue.Request{DeviceID: "d1", CommandType: "reboot", Payload: "x"})
+	err := enqueue.DispatchAsync(context.Background(), reg, entry)
 	errcodetest.AssertCode(t, err, errcode.ErrCommandNotFound)
 	var ec *errcode.Error
 	if errors.As(err, &ec) {
@@ -293,7 +297,8 @@ func TestCommandBus_Enqueue_DispatchAsyncNoHandler(t *testing.T) {
 // is unambiguously the nil-registry one, not a schema violation.
 func TestCommandBus_Enqueue_DispatchAsyncNilRegistry(t *testing.T) {
 	t.Parallel()
-	err := enqueue.DispatchAsync(context.Background(), nil, newCommandEntry(t, enqueue.Request{DeviceID: "d1", Payload: "x"}))
+	entry := newCommandEntry(t, enqueue.Request{DeviceID: "d1", CommandType: "reboot", Payload: "x"})
+	err := enqueue.DispatchAsync(context.Background(), nil, entry)
 	errcodetest.AssertCode(t, err, errcode.ErrValidationFailed)
 }
 
@@ -315,7 +320,7 @@ func TestCommandBus_Enqueue_AsyncRelayEndToEnd(t *testing.T) {
 	// slot (AggregateID = subject, Metadata[CommandIDMetadataKey] = commandID) — the
 	// exact shape command.EmitAsync produces. An identity-less entry is fail-closed
 	// (dead-lettered), so seed an identity-bearing entry here.
-	store.Seed(outbox.ClaimedEntry{Entry: newAsyncCommandEntry(t, enqueue.Request{DeviceID: "d1", Payload: "now"})})
+	store.Seed(outbox.ClaimedEntry{Entry: newAsyncCommandEntry(t, enqueue.Request{DeviceID: "d1", CommandType: "reboot", Payload: "now"})})
 
 	relay := outbox.NewRelay(clock.Real(), store, &kout.DiscardPublisher{},
 		outbox.RelayConfig{PollInterval: 5 * time.Millisecond}.WithDefaults())

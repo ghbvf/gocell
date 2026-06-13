@@ -173,12 +173,13 @@ const (
 	tickOnceFuncName          = "tickOnce"
 
 	// SAGA-STEP-RUN-OUTSIDE-TX-01.
-	sagaStepRunOutsideTxRule = "SAGA-STEP-RUN-OUTSIDE-TX-01"
-	sagaStepRunFixturesDir   = "saga_step_run_outside_tx_fixtures"
-	safeRunFuncName          = "safeRun"
-	runInTxMethodName        = "RunInTx"
-	sagaRuntimePkgPrefix     = "runtime/saga/"
-	stepFuncTypeName         = "StepFunc"
+	sagaStepRunOutsideTxRule  = "SAGA-STEP-RUN-OUTSIDE-TX-01"
+	sagaStepRunFixturesDir    = "saga_step_run_outside_tx_fixtures"
+	safeRunFuncName           = "safeRun"
+	safeRunCompensateFuncName = "safeRunCompensate"
+	runInTxMethodName         = "RunInTx"
+	sagaRuntimePkgPrefix      = "runtime/saga/"
+	stepFuncTypeName          = "StepFunc"
 
 	// SAGA-SLOG-INSTANCE-FIELDS-CALLER-01.
 	sagaSlogInstanceFieldsRule               = "SAGA-SLOG-INSTANCE-FIELDS-CALLER-01"
@@ -1711,28 +1712,12 @@ func CheckSagaDriveBehindLeaderGate(t *testing.T, cfg ConfigForExternalCell) []D
 
 // ─── SAGA-STEP-RUN-OUTSIDE-TX-01 helpers ─────────────────────────────────────
 
-// sagaLocalName returns the local identifier used to import kernel/saga in
-// file, or "saga" if the package is imported without an alias. Uses
-// strconv.Unquote to compare against the derived path constant (no quoted
-// literal in non-test code).
-func sagaLocalName(file *ast.File) string {
-	for _, imp := range file.Imports {
-		p, err := strconv.Unquote(imp.Path.Value)
-		if err != nil || p != sagaPkgPath {
-			continue
-		}
-		if imp.Name != nil {
-			return imp.Name.Name
-		}
-		return "saga"
-	}
-	return ""
-}
-
 // isRuntimeSagaProductionFile reports whether rel is a production .go file
-// under runtime/saga/ (not _test.go, not runtime/saga/executor/).
+// under runtime/saga/ — INCLUDING the runtime/saga/executor subpackage (where
+// safeRun lives), excluding only _test.go. A1's StepFunc-call scan and A2's
+// cross-package transitive taint both need executor files in scope.
 func isRuntimeSagaProductionFile(rel string) bool {
-	return strings.HasPrefix(rel, "runtime/saga/") &&
+	return strings.HasPrefix(rel, sagaRuntimePkgPrefix) &&
 		!strings.HasSuffix(rel, "_test.go")
 }
 
@@ -1743,17 +1728,20 @@ func checkA1StepFuncCallsites(p *Pass, file *ast.File) []Diagnostic {
 		return nil
 	}
 	rel := filepath.ToSlash(p.Rel(file))
-	sagaStepFuncType := resolveSagaStepFuncType(p.Pkg)
-	if sagaStepFuncType == nil {
+	stepSig := resolveSagaStepFuncSig(p.Pkg)
+	if stepSig == nil {
 		return nil
 	}
 
-	// Collect safeRun body ranges.
-	safeRunRanges := collectFuncBodyRanges(file, safeRunFuncName)
+	// Sanctioned range = the body of executor.safeRun ONLY — bound by package
+	// path + *types.Func identity, NOT just the name "safeRun". A same-named
+	// helper in any other runtime/saga subpackage is therefore NOT a sanctioned
+	// range, so its StepFunc calls are still flagged (gh #1998 review F1).
+	safeRunRanges := collectExecutorSafeRunRanges(p.TypesInfo, file)
 
 	var out []Diagnostic
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		if !calleeIsSagaStepFunc(p.TypesInfo, call, sagaStepFuncType) {
+		if !calleeIsSagaStepFunc(p.TypesInfo, call, stepSig) {
 			return
 		}
 		if posInRanges(call.Pos(), safeRunRanges) {
@@ -1767,6 +1755,29 @@ func checkA1StepFuncCallsites(p *Pass, file *ast.File) []Diagnostic {
 		})
 	})
 	return out
+}
+
+// collectExecutorSafeRunRanges returns the (Lbrace, Rbrace) body ranges of
+// safeRun FuncDecls in file that resolve (via go/types) to a *types.Func in
+// the runtime/saga/executor package. Binding to the package — not just the name
+// — means a same-named safeRun in any other runtime/saga subpackage does NOT
+// open a sanctioned range, so A1 still flags StepFunc calls inside it.
+func collectExecutorSafeRunRanges(info *types.Info, file *ast.File) []token.Pos {
+	if info == nil {
+		return nil
+	}
+	var ranges []token.Pos
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		if fd.Body == nil || fd.Name == nil || fd.Name.Name != safeRunFuncName {
+			return
+		}
+		fn, ok := info.Defs[fd.Name].(*types.Func)
+		if !ok || fn.Pkg() == nil || fn.Pkg().Path() != sagaRuntimeExecutorPkg {
+			return
+		}
+		ranges = append(ranges, fd.Body.Lbrace, fd.Body.Rbrace)
+	})
+	return ranges
 }
 
 // resolveSagaStepFuncType resolves the kernel/saga.StepFunc named type from
@@ -1815,58 +1826,366 @@ func findImportedPkg(root *types.Package, path string) *types.Package {
 	return dfs(root)
 }
 
-// calleeIsSagaStepFunc reports whether call's callee resolves to a value of
-// type kernel/saga.StepFunc (i.e. a call expression like step.Run(ctx, state)).
-func calleeIsSagaStepFunc(info *types.Info, call *ast.CallExpr, sagaStepFuncType *types.Named) bool {
-	if sagaStepFuncType == nil {
+// resolveSagaStepFuncSig resolves the canonical kernel/saga.StepFunc function
+// signature from pkg's imports. A1 matches callees by signature identity
+// (types.Identical) rather than *types.Named, so a StepFunc alias, a defined
+// type (`type S ksaga.StepFunc`), or a raw structurally-identical func value
+// all match regardless of local import name — this folds the former B1 reverse
+// self-test into A1 (gh #979).
+func resolveSagaStepFuncSig(pkg *types.Package) *types.Signature {
+	named := resolveSagaStepFuncType(pkg)
+	if named == nil {
+		return nil
+	}
+	sig, _ := named.Underlying().(*types.Signature)
+	return sig
+}
+
+// calleeIsSagaStepFunc reports whether call's callee is a value whose type has
+// the same signature as kernel/saga.StepFunc. tv.Type.Underlying() sees
+// through aliases, defined types and unnamed func types, so no alias or
+// redefinition can give the callee a signature-distinct identity that escapes
+// the check — A1 therefore needs no separate StepFunc-alias self-test.
+func calleeIsSagaStepFunc(info *types.Info, call *ast.CallExpr, stepSig *types.Signature) bool {
+	if stepSig == nil {
 		return false
 	}
 	tv, ok := info.Types[call.Fun]
+	if !ok || tv.Type == nil {
+		return false
+	}
+	sig, ok := tv.Type.Underlying().(*types.Signature)
 	if !ok {
 		return false
 	}
-	named, ok := tv.Type.(*types.Named)
-	if !ok {
-		return false
-	}
-	return named == sagaStepFuncType
+	return types.Identical(sig, stepSig)
 }
 
-// checkA2SafeRunNotInRunInTx implements A2: safeRun must not be called inside
-// a TxRunner.RunInTx closure body.
-func checkA2SafeRunNotInRunInTx(p *Pass, file *ast.File) []Diagnostic {
-	rel := filepath.ToSlash(p.Rel(file))
+// ─── SAGA-STEP-RUN-OUTSIDE-TX-01 A2 transitive taint ─────────────────────────
+//
+// A2 forbids any callable that transitively reaches safeRun from being invoked
+// inside a TxRunner.RunInTx closure body. safeRun is unexported in package
+// runtime/saga/executor; RunInTx lives in package runtime/saga. A coordinator
+// closure can therefore reach safeRun only through an EXPORTED executor func
+// (Execute / RunWithHeartbeat / Compensate) or a coordinator-local helper —
+// both caught by a typed reverse-reachability taint set spanning every loaded
+// runtime/saga/ unit. Object identity is stable across Passes within one
+// packages.Load, so the cross-package call edge resolves to the same
+// *types.Func in both the coordinator and executor Passes.
+
+// sagaA2Unit is one loaded file plus the typed info needed to resolve call
+// targets to *types.Func / *types.Var objects. A2's taint set is built over
+// all units before any RunInTx closure is scanned.
+type sagaA2Unit struct {
+	file *ast.File
+	info *types.Info
+	fset *token.FileSet
+	rel  func(*ast.File) string
+}
+
+// funcLitVar binds a var to its func-literal value's body (the unit's info
+// resolves calls inside that body). A call to such a var reaches whatever the
+// literal reaches — the cx-1 var-indirection case (`var f = func(){…}` /
+// `f := func(){…}`) that pure func-call taint would otherwise miss.
+type funcLitVar struct {
+	obj  *types.Var
+	body *ast.BlockStmt
+	info *types.Info
+}
+
+// collectSagaUnits runs scope and accumulates one sagaA2Unit per loaded file.
+// prodOnly keeps only runtime/saga/ production files (the real scan); fixtures
+// pass prodOnly=false to scan every loaded file regardless of path.
+func collectSagaUnits(t testing.TB, scope RunScope, prodOnly bool) []sagaA2Unit {
+	var units []sagaA2Unit
+	Run(t, scope, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		for _, file := range p.Files {
+			if prodOnly && !isRuntimeSagaProductionFile(filepath.ToSlash(p.Rel(file))) {
+				continue
+			}
+			units = append(units, sagaA2Unit{file: file, info: p.TypesInfo, fset: p.Fset, rel: p.Rel})
+		}
+		return nil
+	})
+	return units
+}
+
+// checkA2Transitive implements SAGA-STEP-RUN-OUTSIDE-TX-01 A2: build the
+// safeRun taint set over all units, then flag every tainted call inside a
+// RunInTx closure body.
+func checkA2Transitive(units []sagaA2Unit) []Diagnostic {
+	funcLitVars := collectFuncLitVars(units)
+	varSet := funcLitVarSet(funcLitVars)
+	taint := buildSafeRunTaint(units, funcLitVars, varSet)
+	return scanRunInTxClosures(units, taint, varSet, funcLitVars)
+}
+
+// collectFuncLitVars discovers every var bound to a single func-literal value.
+func collectFuncLitVars(units []sagaA2Unit) []funcLitVar {
+	var out []funcLitVar
+	for _, u := range units {
+		out = append(out, unitFuncLitVars(u)...)
+	}
+	return out
+}
+
+// unitFuncLitVars returns the func-literal-valued vars declared in one unit,
+// from both `:=` / `=` assignments and `var x = func(){…}` value specs.
+func unitFuncLitVars(u sagaA2Unit) []funcLitVar {
+	var out []funcLitVar
+	EachInSubtree[ast.AssignStmt](u.file, func(as *ast.AssignStmt) {
+		if len(as.Lhs) == len(as.Rhs) {
+			for i := range as.Lhs {
+				out = appendFuncLitVar(u.info, as.Lhs[i], as.Rhs[i], out)
+			}
+		}
+	})
+	EachInSubtree[ast.ValueSpec](u.file, func(vs *ast.ValueSpec) {
+		if len(vs.Names) == len(vs.Values) {
+			for i := range vs.Names {
+				out = appendFuncLitVar(u.info, vs.Names[i], vs.Values[i], out)
+			}
+		}
+	})
+	return out
+}
+
+// appendFuncLitVar appends the func-literal binding for (name, val) if there is
+// one, else returns out unchanged.
+func appendFuncLitVar(info *types.Info, name, val ast.Expr, out []funcLitVar) []funcLitVar {
+	if flv, ok := funcLitVarBinding(info, name, val); ok {
+		return append(out, flv)
+	}
+	return out
+}
+
+// funcLitVarBinding returns a funcLitVar when val is a *ast.FuncLit and name
+// resolves to a *types.Var.
+func funcLitVarBinding(info *types.Info, name, val ast.Expr) (funcLitVar, bool) {
+	fl, ok := val.(*ast.FuncLit)
+	if !ok {
+		return funcLitVar{}, false
+	}
+	ident, ok := name.(*ast.Ident)
+	if !ok {
+		return funcLitVar{}, false
+	}
+	v, ok := varObject(info, ident)
+	if !ok {
+		return funcLitVar{}, false
+	}
+	return funcLitVar{obj: v, body: fl.Body, info: info}, true
+}
+
+// varObject resolves ident to its *types.Var via Defs (`:=` / var decl) or
+// Uses (reassignment).
+func varObject(info *types.Info, ident *ast.Ident) (*types.Var, bool) {
+	if obj := info.Defs[ident]; obj != nil {
+		v, ok := obj.(*types.Var)
+		return v, ok
+	}
+	if obj := info.Uses[ident]; obj != nil {
+		v, ok := obj.(*types.Var)
+		return v, ok
+	}
+	return nil, false
+}
+
+// funcLitVarSet returns the membership set of func-literal-valued vars (used by
+// resolveCallable to treat a call to such a var as a callable edge).
+func funcLitVarSet(funcLitVars []funcLitVar) map[*types.Var]bool {
+	set := make(map[*types.Var]bool, len(funcLitVars))
+	for _, flv := range funcLitVars {
+		set[flv.obj] = true
+	}
+	return set
+}
+
+// buildSafeRunTaint returns the reverse-reachability closure: every callable
+// (func/method or func-literal-valued var) that transitively reaches safeRun.
+func buildSafeRunTaint(units []sagaA2Unit, funcLitVars []funcLitVar, varSet map[*types.Var]bool) map[types.Object]bool {
+	callees := callableCalleeMap(units, funcLitVars, varSet)
+	tainted := safeRunSeedObjs(units)
+	for changed := true; changed; {
+		changed = false
+		for caller, set := range callees {
+			if !tainted[caller] && callsTainted(set, tainted) {
+				tainted[caller] = true
+				changed = true
+			}
+		}
+	}
+	return tainted
+}
+
+// callsTainted reports whether set contains any already-tainted callee.
+func callsTainted(set, tainted map[types.Object]bool) bool {
+	for callee := range set {
+		if tainted[callee] {
+			return true
+		}
+	}
+	return false
+}
+
+// safeRunSeedObjs seeds the taint set with every func named safeRun /
+// safeRunCompensate. Seeded by name (not package) so the same logic serves
+// production (the only such names under runtime/saga/ are executor's) and the
+// fixtures (which name their seed safeRun).
+func safeRunSeedObjs(units []sagaA2Unit) map[types.Object]bool {
+	seed := map[types.Object]bool{}
+	for _, u := range units {
+		EachInChildren[ast.FuncDecl](u.file, func(fd *ast.FuncDecl) {
+			if fd.Body == nil || fd.Name == nil {
+				return
+			}
+			if fd.Name.Name != safeRunFuncName && fd.Name.Name != safeRunCompensateFuncName {
+				return
+			}
+			if obj := u.info.Defs[fd.Name]; obj != nil {
+				seed[obj] = true
+			}
+		})
+	}
+	return seed
+}
+
+// callableCalleeMap maps each callable to the callables its body invokes.
+func callableCalleeMap(units []sagaA2Unit, funcLitVars []funcLitVar, varSet map[*types.Var]bool) map[types.Object]map[types.Object]bool {
+	m := map[types.Object]map[types.Object]bool{}
+	for _, u := range units {
+		EachInChildren[ast.FuncDecl](u.file, func(fd *ast.FuncDecl) {
+			if fd.Body == nil || fd.Name == nil {
+				return
+			}
+			if self := u.info.Defs[fd.Name]; self != nil {
+				m[self] = collectCallees(u.info, fd.Body, varSet)
+			}
+		})
+	}
+	for _, flv := range funcLitVars {
+		// Union (not overwrite): a var bound to a func literal more than once
+		// (`:=` then `=`) yields one *types.Var with several bodies — keep every
+		// callee edge so no reachable call is dropped.
+		mergeCallees(m, flv.obj, collectCallees(flv.info, flv.body, varSet))
+	}
+	return m
+}
+
+// mergeCallees unions add into m[key], creating the entry if absent.
+func mergeCallees(m map[types.Object]map[types.Object]bool, key types.Object, add map[types.Object]bool) {
+	dst := m[key]
+	if dst == nil {
+		dst = make(map[types.Object]bool, len(add))
+		m[key] = dst
+	}
+	for callee := range add {
+		dst[callee] = true
+	}
+}
+
+// collectCallees resolves every CallExpr in body's subtree to its callable
+// target object (func/method or func-literal-valued var).
+func collectCallees(info *types.Info, body ast.Node, varSet map[*types.Var]bool) map[types.Object]bool {
+	out := map[types.Object]bool{}
+	EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
+		if obj := resolveCallable(info, call, varSet); obj != nil {
+			out[obj] = true
+		}
+	})
+	return out
+}
+
+// resolveCallable resolves call's target to a *types.Func (named func/method,
+// incl. cross-package exported funcs and methods on concrete receivers) or,
+// when the call is to a func-literal-valued var in varSet, to that *types.Var.
+// Interface-method calls resolve to the bodiless interface method (never in the
+// taint set), so dynamic dispatch deliberately breaks the static taint chain.
+func resolveCallable(info *types.Info, call *ast.CallExpr, varSet map[*types.Var]bool) types.Object {
+	switch fun := call.Fun.(type) {
+	case *ast.Ident:
+		obj := info.Uses[fun]
+		if fn, ok := obj.(*types.Func); ok {
+			return fn
+		}
+		if v, ok := obj.(*types.Var); ok && varSet[v] {
+			return v
+		}
+	case *ast.SelectorExpr:
+		if sel, ok := info.Selections[fun]; ok {
+			if fn, ok := sel.Obj().(*types.Func); ok {
+				return fn
+			}
+		}
+		if fn, ok := info.Uses[fun.Sel].(*types.Func); ok {
+			return fn
+		}
+	}
+	return nil
+}
+
+// scanRunInTxClosures flags every call inside a RunInTx closure body whose
+// resolved target is in the safeRun taint set. EachInSubtree descends into
+// nested func literals (e.g. a RegisterAfterCommit hook) too; that is
+// deliberately conservative — interface-method calls there (c.dispatcher.Kick)
+// resolve to bodiless methods that are never tainted, so the common after-commit
+// hook does not false-positive.
+func scanRunInTxClosures(
+	units []sagaA2Unit,
+	taint map[types.Object]bool,
+	varSet map[*types.Var]bool,
+	funcLitVars []funcLitVar,
+) []Diagnostic {
 	var out []Diagnostic
-	EachInSubtree[ast.CallExpr](file, func(outerCall *ast.CallExpr) {
-		if !callIsRunInTx(outerCall) {
+	for _, u := range units {
+		out = append(out, scanUnitRunInTx(u, taint, varSet, funcLitVars)...)
+	}
+	return out
+}
+
+// scanUnitRunInTx flags tainted calls inside every RunInTx callback body in one
+// unit. The callback is resolved whether it is an inline func literal OR a
+// func-literal-valued var passed by name (gh #1998 review F2).
+func scanUnitRunInTx(u sagaA2Unit, taint map[types.Object]bool, varSet map[*types.Var]bool, funcLitVars []funcLitVar) []Diagnostic {
+	var out []Diagnostic
+	rel := filepath.ToSlash(u.rel(u.file))
+	EachInSubtree[ast.CallExpr](u.file, func(outer *ast.CallExpr) {
+		if !callIsRunInTx(outer) {
 			return
 		}
-		// Find the closure argument (last arg that is a FuncLit).
-		var closure *ast.FuncLit
-		for i := len(outerCall.Args) - 1; i >= 0; i-- {
-			if fl, ok := outerCall.Args[i].(*ast.FuncLit); ok {
-				closure = fl
-				break
-			}
+		for _, body := range runInTxCallbackBodies(outer, u.info, funcLitVars) {
+			out = append(out, scanClosureBody(u, rel, body, taint, varSet)...)
 		}
-		if closure == nil {
+	})
+	return out
+}
+
+// scanClosureBody reports tainted calls found in body's subtree.
+func scanClosureBody(u sagaA2Unit, rel string, body *ast.BlockStmt, taint map[types.Object]bool, varSet map[*types.Var]bool) []Diagnostic {
+	var out []Diagnostic
+	EachInSubtree[ast.CallExpr](body, func(inner *ast.CallExpr) {
+		obj := resolveCallable(u.info, inner, varSet)
+		if obj == nil || !taint[obj] {
 			return
 		}
-		EachInSubtree[ast.CallExpr](closure.Body, func(inner *ast.CallExpr) {
-			if callIsSafeRun(inner) {
-				out = append(out, Diagnostic{
-					Rel:  rel,
-					Line: p.Fset.Position(inner.Pos()).Line,
-					Message: sagaStepRunOutsideTxRule + "-A2: safeRun() called inside RunInTx closure body — " +
-						"user step code would run with a DB transaction held open",
-				})
-			}
+		out = append(out, Diagnostic{
+			Rel:  rel,
+			Line: u.fset.Position(inner.Pos()).Line,
+			Message: sagaStepRunOutsideTxRule + "-A2: call inside RunInTx closure reaches safeRun — " +
+				"user step code would run with a DB transaction held open; " +
+				"move the step dispatch outside the RunInTx closure",
 		})
 	})
 	return out
 }
 
-// callIsRunInTx reports whether call is a RunInTx call.
+// callIsRunInTx reports whether call is a RunInTx call. Matched by method name
+// only (no type resolution) — false-positive-safe and resilient to wrapping
+// receiver types; the residual is that renaming persistence.TxRunner.RunInTx
+// would silently disable A2 (runtime/saga uses the single stable name today).
 func callIsRunInTx(call *ast.CallExpr) bool {
 	switch f := call.Fun.(type) {
 	case *ast.SelectorExpr:
@@ -1877,70 +2196,67 @@ func callIsRunInTx(call *ast.CallExpr) bool {
 	return false
 }
 
-// callIsSafeRun reports whether call is a safeRun call.
-func callIsSafeRun(call *ast.CallExpr) bool {
-	switch f := call.Fun.(type) {
-	case *ast.SelectorExpr:
-		return f.Sel != nil && f.Sel.Name == safeRunFuncName
-	case *ast.Ident:
-		return f.Name == safeRunFuncName
-	}
-	return false
-}
-
-// checkB1NoStepFuncAlias implements B1: no production file in runtime/saga/
-// may declare a type alias for kernel/saga.StepFunc.
-func checkB1NoStepFuncAlias(p *Pass, file *ast.File) []Diagnostic {
-	local := sagaLocalName(file)
-	if local == "" {
+// runInTxCallbackBodies returns the body block(s) of call's last argument (the
+// TxRunner RunInTx tx-callback), resolving BOTH an inline func literal AND a
+// func-literal-valued var referenced by name (`cb := func(){…}; RunInTx(ctx,
+// cb)`). A var with several func-literal bindings yields every body. Returns
+// nil when the callback is unresolvable (e.g. a method value or a parameter —
+// the documented no-go/ssa residual).
+func runInTxCallbackBodies(call *ast.CallExpr, info *types.Info, funcLitVars []funcLitVar) []*ast.BlockStmt {
+	if len(call.Args) == 0 {
 		return nil
 	}
-	rel := filepath.ToSlash(p.Rel(file))
-	var out []Diagnostic
-	EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
-		if !ts.Assign.IsValid() {
-			return // not an alias
-		}
-		sel, ok := ts.Type.(*ast.SelectorExpr)
+	switch last := call.Args[len(call.Args)-1].(type) {
+	case *ast.FuncLit:
+		return []*ast.BlockStmt{last.Body}
+	case *ast.Ident:
+		v, ok := varObject(info, last)
 		if !ok {
-			return
+			return nil
 		}
-		xIdent, ok := sel.X.(*ast.Ident)
-		if !ok || xIdent.Name != local || sel.Sel.Name != stepFuncTypeName {
-			return
+		var bodies []*ast.BlockStmt
+		for _, flv := range funcLitVars {
+			if flv.obj == v {
+				bodies = append(bodies, flv.body)
+			}
 		}
-		out = append(out, Diagnostic{
-			Rel:  rel,
-			Line: p.Fset.Position(ts.Pos()).Line,
-			Message: sagaStepRunOutsideTxRule + "-B1: type alias for kernel/saga.StepFunc in runtime/saga; " +
-				"aliasing StepFunc could allow calls to escape the safeRun gate (B1 blind spot)",
-		})
-	})
-	return out
+		return bodies
+	}
+	return nil
 }
 
 // CheckSagaStepRunOutsideTx is the importable form of
-// SAGA-STEP-RUN-OUTSIDE-TX-01.
-// Not registered in StandardCellRules.
+// SAGA-STEP-RUN-OUTSIDE-TX-01. Not registered in StandardCellRules.
+//
+// A1 (StepFunc-call confinement to safeRun) runs per file; A2 (no call
+// transitively reaching safeRun inside a RunInTx closure) is built over all
+// loaded units together, so the typed taint set spans the coordinator and
+// executor packages in a single load.
+//
+// Residuals (manual taint, no go/ssa): a func literal passed as a function
+// PARAMETER and called via that parameter, a method-value-valued var, and
+// RunInTx detection by method name. All documented in the SAGA-STEP-RUN-OUTSIDE
+// -TX-01 INVARIANT godoc; the true-Hard alternative (StepContext/TxContext
+// capability split) is tracked + rejected in gh #1997.
 func CheckSagaStepRunOutsideTx(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	_ = cfg
 	var out []Diagnostic
+	var units []sagaA2Unit
 	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
 		for _, file := range p.Files {
-			rel := filepath.ToSlash(p.Rel(file))
-			if !isRuntimeSagaProductionFile(rel) {
+			if !isRuntimeSagaProductionFile(filepath.ToSlash(p.Rel(file))) {
 				continue
 			}
 			out = append(out, checkA1StepFuncCallsites(p, file)...)
-			out = append(out, checkA2SafeRunNotInRunInTx(p, file)...)
-			out = append(out, checkB1NoStepFuncAlias(p, file)...)
+			units = append(units, sagaA2Unit{file: file, info: p.TypesInfo, fset: p.Fset, rel: p.Rel})
 		}
 		return nil
 	})
+	out = append(out, checkA2Transitive(units)...)
 	return out
 }
 

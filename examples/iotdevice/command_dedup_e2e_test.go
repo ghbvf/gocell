@@ -161,9 +161,11 @@ func TestCommandRelay_FailClosedOnMissingIdentity(t *testing.T) {
 	require.NoError(t, enqueue.Register(reg, h))
 
 	store := outboxtest.NewFakeStore()
-	// Identity-less command entry: correct topic but no AggregateID + no
+	// Identity-less command entry: schema-valid payload but no AggregateID + no
 	// CommandIDMetadataKey → ClaimKeyFromEntry returns ok=false → MarkDead.
-	payload, err := json.Marshal(enqueue.Request{DeviceID: "d1", Payload: "now"})
+	// commandType is required (#1694 F9), so it is set here to keep the payload
+	// schema-valid and isolate the missing-identity path from a schema failure.
+	payload, err := json.Marshal(enqueue.Request{DeviceID: "d1", CommandType: "reboot", Payload: "now"})
 	require.NoError(t, err)
 	bad, err := kout.NewEntry(clock.Real(), context.Background(), string(enqueue.DispatchID), payload)
 	require.NoError(t, err)

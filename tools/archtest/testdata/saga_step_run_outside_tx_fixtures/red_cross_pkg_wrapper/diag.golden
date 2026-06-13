@@ -1,0 +1,1 @@
+tools/archtest/testdata/saga_step_run_outside_tx_fixtures/red_cross_pkg_wrapper/coordinatorlike/coordinatorlike.go:26: SAGA-STEP-RUN-OUTSIDE-TX-01-A2: call inside RunInTx closure reaches safeRun — user step code would run with a DB transaction held open; move the step dispatch outside the RunInTx closure

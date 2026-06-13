@@ -17,7 +17,7 @@ import (
 // Request — http.device.command.enqueue.v1.request
 type Request struct {
 	ID          string `json:"id"`
-	CommandType string `json:"commandType,omitempty"`
+	CommandType string `json:"commandType"`
 	Payload     string `json:"payload"`
 }
 

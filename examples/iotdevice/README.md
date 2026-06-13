@@ -136,16 +136,16 @@ Response (200):
 curl -X POST http://localhost:8083/api/v1/devices/{id}/commands \
   -H "Authorization: Bearer ${IOT_ADMIN_TOKEN}" \
   -H 'Content-Type: application/json' \
-  -d '{"commandType":"default","payload":"reboot"}'
+  -d '{"commandType":"reboot","payload":"reboot"}'
 ```
 
-`commandType` is optional in the enqueue request (only `payload` is required).
-Omitting it defaults the field to `"default"`; the device sees that value in the dequeue response.
+`commandType` is required in the enqueue request (along with `payload`); omitting it
+returns `400`. It is the command verb the device dispatches on, echoed back in the dequeue response.
 
 Response (201):
 
 ```json
-{"data":{"id":"cmd-...","deviceId":"dev-...","commandType":"default","payload":"reboot","status":"pending","createdAt":"..."}}
+{"data":{"id":"cmd-...","deviceId":"dev-...","commandType":"reboot","payload":"reboot","status":"pending","createdAt":"..."}}
 ```
 
 ### Device dequeues commands
@@ -158,7 +158,7 @@ curl http://localhost:8083/api/v1/devices/{id}/commands \
 Response (200):
 
 ```json
-{"data":[{"id":"cmd-...","deviceId":"dev-...","commandType":"default","payload":"reboot","status":"sent","attempt":1,"createdAt":"...","sentAt":"..."}],"nextCursor":"","hasMore":false}
+{"data":[{"id":"cmd-...","deviceId":"dev-...","commandType":"reboot","payload":"reboot","status":"sent","attempt":1,"createdAt":"...","sentAt":"..."}],"nextCursor":"","hasMore":false}
 ```
 
 ### Device reports command receipt
@@ -171,7 +171,7 @@ curl -X POST http://localhost:8083/api/v1/devices/{id}/commands/{cmdId}/report \
 Response (200):
 
 ```json
-{"data":{"id":"cmd-...","deviceId":"dev-...","commandType":"default","payload":"reboot","status":"delivered","attempt":1,"createdAt":"...","sentAt":"...","deliveredAt":"..."}}
+{"data":{"id":"cmd-...","deviceId":"dev-...","commandType":"reboot","payload":"reboot","status":"delivered","attempt":1,"createdAt":"...","sentAt":"...","deliveredAt":"..."}}
 ```
 
 ### Device acknowledges command execution
@@ -186,7 +186,7 @@ curl -X POST http://localhost:8083/api/v1/devices/{id}/commands/{cmdId}/ack \
 Response (200):
 
 ```json
-{"data":{"id":"cmd-...","deviceId":"dev-...","commandType":"default","payload":"reboot","status":"succeeded","attempt":1,"createdAt":"...","sentAt":"...","deliveredAt":"...","completedAt":"..."}}
+{"data":{"id":"cmd-...","deviceId":"dev-...","commandType":"reboot","payload":"reboot","status":"succeeded","attempt":1,"createdAt":"...","sentAt":"...","deliveredAt":"...","completedAt":"..."}}
 ```
 
 ### Query device status
@@ -317,7 +317,7 @@ DEV_ID=$(echo "$DEV" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
 CMD=$(curl -s -X POST "http://localhost:8083/api/v1/devices/${DEV_ID}/commands" \
   -H "Authorization: Bearer ${IOT_ADMIN_TOKEN}" \
   -H 'Content-Type: application/json' \
-  -d '{"commandType":"default","payload":"reboot"}')
+  -d '{"commandType":"reboot","payload":"reboot"}')
 echo "$CMD"
 CMD_ID=$(echo "$CMD" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
 

@@ -6,6 +6,6 @@
     "commandType": { "type": "string", "minLength": 1, "maxLength": 64 },
     "payload": { "type": "string", "minLength": 1, "maxLength": 4096 }
   },
-  "required": ["payload"],
+  "required": ["commandType", "payload"],
   "additionalProperties": false
 }
