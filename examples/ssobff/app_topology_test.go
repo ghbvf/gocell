@@ -23,7 +23,7 @@ import (
 const (
 	// 32-byte HMAC secret so newInternalAuthChain's key ring accepts it; the
 	// test never reaches the internal listener, the secret only has to be valid.
-	topoTestServiceSecret = "ssobff-topology-test-secret-32by"
+	topoTestServiceSecret = "ssobff-topology-test-secret-32by" // #nosec G101 -- test fixture; never used outside unit tests
 	// A syntactically invalid DSN: if any test path were to reach newSSOBFFPool
 	// it fails fast at parse time (never attempts a network dial / hang). The
 	// fail-closed assertions below prove the gate fires before this is used.
