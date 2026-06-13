@@ -87,13 +87,11 @@ func provisionAuditAdminPool(t *testing.T, dsn string, admin *Pool) *Pool {
 		$$`)
 	require.NoError(t, err, "create gocell_audit_admin role")
 
-	t.Cleanup(func() {
-		// Drop the role after the test. Revoke grants first to avoid dependency errors.
-		_, _ = admin.DB().Exec(context.Background(),
-			`REVOKE ALL ON ALL TABLES IN SCHEMA public FROM `+auditAdminRole)
-		_, _ = admin.DB().Exec(context.Background(),
-			`DROP ROLE IF EXISTS `+auditAdminRole)
-	})
+	// Drop the role after the test via the shared helper, which drops the dependent
+	// audit_admin_read_all policy + revokes grants (DROP OWNED BY) BEFORE DROP ROLE
+	// so the cluster-global role does not leak into sibling tests (see
+	// dropAuditAdminRole godoc in schema_guard_integration_test.go).
+	t.Cleanup(func() { dropAuditAdminRole(admin) })
 
 	// 2. Create the audit_admin_read_all policy directly (mirrors migration 064's
 	// Up body). We must NOT re-run migration 064 via goose here: the shared
