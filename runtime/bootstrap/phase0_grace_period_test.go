@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -117,10 +118,7 @@ func TestPhase0_TerminationGracePeriodWarn(t *testing.T) {
 func captureGraceWarn(t *testing.T, terminationGrace time.Duration) string {
 	t.Helper()
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	oldDefault := slog.Default()
-	slog.SetDefault(logger)
-	t.Cleanup(func() { slog.SetDefault(oldDefault) })
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 
 	b := &Bootstrap{
 		shutdownTimeout:        graceShutdownTimeout,
@@ -166,10 +164,7 @@ func assertGraceWarnAbsent(t *testing.T, out, forbidden string) {
 // helper itself never returns/panics.)
 func TestPhase0_TerminationGracePeriodWarn_DoesNotBlockStartup(t *testing.T) {
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	oldDefault := slog.Default()
-	slog.SetDefault(logger)
-	t.Cleanup(func() { slog.SetDefault(oldDefault) })
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 
 	b := &Bootstrap{
 		shutdownTimeout:        graceLifecycleShutdown,

@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -1492,9 +1493,7 @@ func TestHandleQuery_RowScopeVisibilityMatrix(t *testing.T) {
 	// Install slog capture to assert FR-007: super-admin cross-tenant access must
 	// emit a slog.Error record; admin and non-admin paths must not.
 	capture := &testCaptureHandler{}
-	prev := slog.Default()
-	slog.SetDefault(slog.New(capture))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	slogcapture.InstallDefault(t, slog.New(capture))
 
 	store := newHandlerStore(t)
 	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)

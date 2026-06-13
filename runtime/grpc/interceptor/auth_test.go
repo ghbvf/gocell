@@ -14,6 +14,7 @@ import (
 
 	kauth "github.com/ghbvf/gocell/kernel/auth"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -228,9 +229,7 @@ func assertUnaryAuthVerifierPanic(t *testing.T, info *grpc.UnaryServerInfo) {
 	t.Helper()
 
 	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
-	defer slog.SetDefault(prev)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 	called := false
 	_, err := UnaryAuth(panicVerifier{val: "verifier exploded"})(bearerCtx(), nil, info, okHandler(&called))

@@ -5,6 +5,8 @@ lifecycle: experimental
 contractUsages:
   - contract: http.device.command.enqueue.v1
     role: serve
+  - contract: http.device.command.enqueue-async.v1
+    role: serve
   - contract: http.device.command.dequeue.v1
     role: serve
   - contract: http.device.command.report.v1
@@ -15,6 +17,10 @@ contractUsages:
     role: serve
   - contract: command.devicecommand.enqueue.v1
     role: handle
+  # The async-commands HTTP endpoint also PRODUCES this command (EmitAsync); the
+  # relay routes it back to the handle role above for cross-cell same-slot dedup.
+  - contract: command.devicecommand.enqueue.v1
+    role: invoke
   - contract: command.devicecommand.dequeue.v1
     role: handle
   - contract: command.devicecommand.report.v1
@@ -28,6 +34,7 @@ verify:
     - unit.devicecommand.service
   contract:
     - contract.http.device.command.enqueue.v1.serve
+    - contract.http.device.command.enqueue-async.v1.serve
     - contract.http.device.command.dequeue.v1.serve
     - contract.http.device.command.report.v1.serve
     - contract.http.device.command.ack.v1.serve
@@ -37,6 +44,15 @@ verify:
     - contract.command.devicecommand.report.v1.handle
     - contract.command.devicecommand.ack.v1.handle
     - contract.command.devicecommand.extend-lease.v1.handle
+  waivers:
+    - contract: command.devicecommand.enqueue.v1
+      owner: examples
+      reason: >-
+        invoke is a declaration-only role (no cellgen derivation, no executable
+        broker contract test); the async-commands emit is covered by the
+        devicecmd EnqueueAsync unit test + the devicecommand handler_async test
+        asserting the emitted entry's routing topic + idempotency metadata.
+      expiresAt: "2026-12-31"
 
 allowedFiles:
   - examples/iotdevice/cells/devicecell/slices/devicecommand/**

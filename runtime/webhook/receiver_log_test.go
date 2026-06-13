@@ -14,6 +14,8 @@ import (
 	"testing"
 
 	kwh "github.com/ghbvf/gocell/kernel/webhook"
+
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 )
 
 // capturingHandler is a minimal slog.Handler that records every Record it
@@ -57,9 +59,7 @@ func attr(r slog.Record, key string) (string, bool) {
 // parallel: it swaps the process-global slog default.
 func TestReceiver_LogsSignatureFailureReason(t *testing.T) {
 	h := &capturingHandler{}
-	prev := slog.Default()
-	slog.SetDefault(slog.New(h))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	slogcapture.InstallDefault(t, slog.New(h))
 
 	// Bad signature → ReasonBadSignature classification.
 	req := signedRequest(t, []byte(`{"k":"v"}`), "d1")

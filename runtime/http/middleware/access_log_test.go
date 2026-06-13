@@ -14,15 +14,13 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	kctxkeys "github.com/ghbvf/gocell/kernel/ctxkeys"
 	pkgctxkeys "github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 func TestAccessLog_LogsFields(t *testing.T) {
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-	original := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(original)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -57,10 +55,7 @@ func TestAccessLog_LogsFields(t *testing.T) {
 // creating its own RecorderState.
 func TestAccessLog_Standalone(t *testing.T) {
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-	original := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(original)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -80,10 +75,7 @@ func TestAccessLog_Standalone(t *testing.T) {
 
 func TestAccessLog_DefaultStatus200(t *testing.T) {
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-	original := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(original)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// No explicit WriteHeader → default 200
@@ -104,10 +96,7 @@ func TestAccessLog_DefaultStatus200(t *testing.T) {
 
 func TestAccessLog_TraceID_WhenSet(t *testing.T) {
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-	original := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(original)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -128,10 +117,7 @@ func TestAccessLog_TraceID_WhenSet(t *testing.T) {
 
 func TestAccessLog_CellID_WhenSet(t *testing.T) {
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-	original := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(original)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -150,10 +136,7 @@ func TestAccessLog_CellID_WhenSet(t *testing.T) {
 
 func TestAccessLog_Listener_WhenSet(t *testing.T) {
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-	original := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(original)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
@@ -171,10 +154,7 @@ func TestAccessLog_Listener_WhenSet(t *testing.T) {
 
 func TestAccessLog_NoListener_WhenNotSet(t *testing.T) {
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-	original := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(original)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -192,10 +172,7 @@ func TestAccessLog_NoListener_WhenNotSet(t *testing.T) {
 
 func TestAccessLog_NoTraceID_WhenNotSet(t *testing.T) {
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-	original := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(original)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -213,10 +190,7 @@ func TestAccessLog_NoTraceID_WhenNotSet(t *testing.T) {
 
 func TestAccessLog_CallerCell_ServicePrincipal(t *testing.T) {
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-	original := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(original)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -236,10 +210,7 @@ func TestAccessLog_CallerCell_ServicePrincipal(t *testing.T) {
 
 func TestAccessLog_Subject_UserPrincipal(t *testing.T) {
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-	original := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(original)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -263,10 +234,7 @@ func TestAccessLog_Subject_UserPrincipal(t *testing.T) {
 
 func TestAccessLog_NoPrincipalAttrs_WhenNoPrincipal(t *testing.T) {
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-	original := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(original)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -285,10 +253,7 @@ func TestAccessLog_NoPrincipalAttrs_WhenNoPrincipal(t *testing.T) {
 
 func TestAccessLog_NoCallerCell_ServicePrincipalEmptyCallerCellID(t *testing.T) {
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-	original := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(original)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

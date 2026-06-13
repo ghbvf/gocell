@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "unevaluatedProperties:false is a producer-side guard enforced at contract-test time (forbids accidental leakage of certificate body into the event bus). Consumers MUST refetch via the status endpoint. ref: RFC 5280 §5.3.1 CRLReason",
+  "title": "event.deviceidentity.cert-revoked.v1.payload",
+  "type": "object",
+  "description": "Metadata-only notification: a device certificate was revoked. Consumers MUST refetch via the status endpoint to obtain current certificate state. No certificate body is carried on the bus.",
+  "properties": {
+    "deviceId": {
+      "type": "string",
+      "pattern": "\\S",
+      "maxLength": 256,
+      "description": "Non-blank device identifier"
+    },
+    "tenantId": {
+      "type": "string",
+      "maxLength": 256,
+      "description": "Tenant identifier; omitted for single-tenant deployments"
+    },
+    "certRef": {
+      "$ref": "../../../../shared/deviceidentity/v1/certificate-identity.schema.json"
+    },
+    "reason": {
+      "type": "string",
+      "enum": [
+        "unspecified",
+        "keyCompromise",
+        "caCompromise",
+        "affiliationChanged",
+        "superseded",
+        "cessationOfOperation",
+        "certificateHold",
+        "privilegeWithdrawn",
+        "aaCompromise"
+      ],
+      "description": "RFC 5280 §5.3.1 CRLReason for permanent revocation. removeFromCRL (un-revoke) and the reinstatement path are intentionally excluded — this is a revoke action, not a hold/unhold lifecycle event."
+    },
+    "revokedAt": {
+      "type": "string",
+      "format": "date-time",
+      "maxLength": 64,
+      "description": "Timestamp when the certificate was revoked (RFC 3339)"
+    },
+    "actorId": {
+      "type": "string",
+      "maxLength": 256,
+      "description": "Principal ID of the actor who triggered revocation"
+    }
+  },
+  "required": [
+    "deviceId",
+    "certRef",
+    "reason",
+    "revokedAt",
+    "actorId"
+  ],
+  "unevaluatedProperties": false
+}

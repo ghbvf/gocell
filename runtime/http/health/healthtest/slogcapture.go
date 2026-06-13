@@ -6,6 +6,18 @@
 // by runtime/bootstrap and cmd/corebundle tests; extracting them here
 // avoids copy-paste drift across packages.
 //
+// Two capture entry points, by isolation level:
+//   - NewLoggerCapture (default): a capture *slog.Logger injected into the
+//     component under test (e.g. WithLogger); never touches slog.Default(), so
+//     it is safe under parallel + async log emission. Use this for component
+//     tests.
+//   - NewCapture: rewrites the process-global slog.Default() via the single
+//     sanctioned holder slogcapture.InstallDefault. For tests of components that
+//     read slog.Default() (e.g. default-logger wiring); it races parallel siblings
+//     under async writes (#1490), so a NewCapture test MUST stay serial (no
+//     t.Parallel). SLOG-CAPTURE-GLOBAL-FUNNEL-01 bans the raw slog.SetDefault
+//     primitive; NewCapture is compliant because it routes through InstallDefault.
+//
 // Note: runtime/http/health tests themselves (package health, white-box)
 // cannot import this package — that would create an import cycle. Those tests
 // keep local unexported equivalents.
@@ -17,6 +29,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 	"github.com/ghbvf/gocell/runtime/http/health"
 )
 
@@ -58,14 +71,42 @@ func (h *CaptureHandler) Snapshot() []slog.Record {
 	return out
 }
 
-// NewCapture redirects slog.Default for the duration of the test and
-// returns a *CaptureHandler the test can query to assert on captured events.
+// NewLoggerCapture returns a *slog.Logger backed by a fresh CaptureHandler,
+// WITHOUT touching the process-global slog.Default(). Use this for component
+// tests that accept an injected logger (e.g. eventbus.New(..., WithLogger(l)))
+// so async log emission stays isolated from parallel sibling tests — unlike
+// NewCapture, which mutates slog.Default() and races under parallel + async
+// log writes (#1490).
+//
+// This is the de-globalized default; reach for NewCapture only when the test
+// genuinely exercises the global default-logger wiring (see its godoc). Misuse
+// is funnel-guarded by SLOG-CAPTURE-GLOBAL-FUNNEL-01.
+//
+// Limitation: the backing CaptureHandler is simplified — its WithAttrs/WithGroup
+// return self (see the CaptureHandler godoc). Do NOT chain .With(...) / .WithGroup(...)
+// on the returned logger in tests: pre-filled attrs/groups are silently dropped,
+// so component code that captures via a derived sub-logger would assert on
+// records missing those attrs. Inject the returned logger directly.
+func NewLoggerCapture() (*slog.Logger, *CaptureHandler) {
+	h := &CaptureHandler{}
+	return slog.New(h), h
+}
+
+// NewCapture redirects slog.Default for the duration of the test and returns a
+// *CaptureHandler the test can query to assert on captured events.
+//
+// Construction is single-sourced from [NewLoggerCapture] (they cannot drift on
+// the handler/logger build); the ONLY thing NewCapture adds is the deliberate
+// process-global default redirect, which it performs through the single
+// sanctioned holder [slogcapture.InstallDefault] (NOT a raw slog.SetDefault, per
+// SLOG-CAPTURE-GLOBAL-FUNNEL-01). That global mutation races parallel siblings
+// under async log writes (#1490), so a NewCapture test MUST stay serial (no
+// t.Parallel) — it is for components that read slog.Default(). Components that
+// accept an injected logger MUST use NewLoggerCapture + injection instead.
 func NewCapture(t *testing.T) *CaptureHandler {
 	t.Helper()
-	h := &CaptureHandler{}
-	prev := slog.Default()
-	slog.SetDefault(slog.New(h))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	logger, h := NewLoggerCapture()
+	slogcapture.InstallDefault(t, logger)
 	return h
 }
 

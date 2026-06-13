@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 )
 
 func TestBuildInternalHMACRing_WarnLogging_TableDriven(t *testing.T) {
@@ -69,8 +70,7 @@ func TestBuildInternalHMACRing_WarnLogging_TableDriven(t *testing.T) {
 			}
 			t.Setenv("GOCELL_SERVICE_SECRET", secret)
 
-			buf, restore := captureSlogWarnLines(t)
-			t.Cleanup(restore)
+			buf := captureSlogWarnLines(t)
 
 			ring, err := buildInternalHMACRing(tc.adapterMode)
 
@@ -116,18 +116,16 @@ func TestBuildInternalHMACRing_WarnLogging_TableDriven(t *testing.T) {
 }
 
 // captureSlogWarnLines installs a JSON slog handler capturing Warn-and-above
-// records into a buffer. Returns the buffer and a restore function.
-// The restore must be called via t.Cleanup to avoid polluting other tests.
+// records into a buffer. Returns the buffer; cleanup is registered via t.Cleanup.
 //
 // NOT concurrency-safe: callers must not run parallel sub-tests while this
 // capture is active, because slog.SetDefault replaces the global logger for
 // the entire process.
-func captureSlogWarnLines(t *testing.T) (*bytes.Buffer, func()) {
+func captureSlogWarnLines(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	return &buf, func() { slog.SetDefault(prev) }
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	return &buf
 }
 
 // countWarnLines counts JSON log lines whose "level" == "WARN" in buf.

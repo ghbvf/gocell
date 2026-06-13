@@ -25,6 +25,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
@@ -4273,9 +4274,7 @@ func TestConnection_ConnectionStatus_StructuredDiagnosticSanitizesError(t *testi
 
 func TestConnection_Close_LogsStructuredDiagnostic(t *testing.T) {
 	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
 	rawURL := testAMQPUserSecretVhostURL
 	mockConn := newMockConnection()

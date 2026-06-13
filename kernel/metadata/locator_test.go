@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 )
 
 // TestLocator_AutoDetect verifies that a fresh root without .gocell/manifest.yaml
@@ -702,9 +704,7 @@ modules:
 	// Capture the default slog so we can assert NO zero-match warn fires for the
 	// omitted kinds. Sequential test (no t.Parallel in this file), restored after.
 	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	defer slog.SetDefault(prev)
+	slogcapture.InstallDefault(t, slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 
 	l := requireLocatorFS(t, fsys)
 	sources, err := l.Discover()

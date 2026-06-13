@@ -26,6 +26,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/composition"
 )
@@ -600,14 +601,13 @@ func TestRun_RealMode_DemoKey_FailsFast(t *testing.T) {
 }
 
 // captureSlogInfoLines installs a JSON slog handler capturing Info-and-above
-// records into a buffer for log assertion. The restore must be called via
-// t.Cleanup; not concurrency-safe across goroutines.
-func captureSlogInfoLines(t *testing.T) (*bytes.Buffer, func()) {
+// records into a buffer for log assertion. Cleanup is registered via t.Cleanup;
+// not concurrency-safe across goroutines.
+func captureSlogInfoLines(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
-	return &buf, func() { slog.SetDefault(prev) }
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	return &buf
 }
 
 // TestLogSinglePodNonceStoreAcknowledgement_RealSinglePodInMemory_LogsInfo
@@ -622,8 +622,7 @@ func TestLogSinglePodNonceStoreAcknowledgement_RealSinglePodInMemory_LogsInfo(t 
 		NonceStore: store,
 	}
 
-	buf, restore := captureSlogInfoLines(t)
-	t.Cleanup(restore)
+	buf := captureSlogInfoLines(t)
 
 	logSinglePodNonceStoreAcknowledgement(shared)
 
@@ -678,8 +677,7 @@ func TestLogSinglePodNonceStoreAcknowledgement_NegativePaths_NoInfoLog(t *testin
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			buf, restore := captureSlogInfoLines(t)
-			t.Cleanup(restore)
+			buf := captureSlogInfoLines(t)
 
 			logSinglePodNonceStoreAcknowledgement(tc.shared)
 

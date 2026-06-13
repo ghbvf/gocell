@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
+	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/tests/contracttest"
@@ -79,6 +80,81 @@ func TestHttpDeviceCommandEnqueueV1Serve(t *testing.T) {
 	req = req.WithContext(auth.TestContext("operator-1", []string{dto.RoleOperator}))
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
+}
+
+func TestHttpDeviceCommandEnqueueAsyncV1Serve(t *testing.T) {
+	root := contracttest.ExampleContractsRoot(t, "iotdevice")
+	c := contracttest.LoadByID(t, root, "http.device.command.enqueue-async.v1")
+
+	// request schema mirrors enqueue: payload required + non-empty, commandType optional.
+	c.ValidateRequest(t, []byte(`{"payload":"reboot"}`))
+	c.ValidateRequest(t, []byte(`{"payload":"reboot","commandType":"firmware-update"}`))
+	c.MustRejectRequest(t, []byte(`{"payload":""}`))                // payload minLength 1
+	c.MustRejectRequest(t, []byte(`{"payload":"x","extra":"bad"}`)) // additionalProperties false
+	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
+
+	// emitter-wired handler with device "dev-1" seeded; the RequestIdentity is
+	// injected into ctx as the HTTP idempotency middleware would (the TestMux omits
+	// the middleware, so the bridge reads it from here).
+	rec := outboxtest.NewRecorder()
+	handler := newSeededAsyncHandler(t, rec.CellEmitter(), "dev-1")
+	path := strings.Replace(c.HTTP.Path, "{id}", "dev-1", 1)
+
+	// 202 happy path (operator) + emit assertion.
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"payload":"reboot"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(reqIDCtx(t, auth.TestContext("operator-1", []string{dto.RoleOperator}), "operator-1", "idem-contract-1"))
+	handler.ServeHTTP(w, req)
+	c.ValidateHTTPResponseRecorder(t, w) // 202 + response schema
+	if n := len(rec.Entries()); n != 1 {
+		t.Fatalf("async enqueue must emit exactly one command, got %d", n)
+	}
+
+	// auth boundary: policy is AnyRole(admin,operator) → device/no-role denied (403).
+	for _, tc := range []struct {
+		name  string
+		roles []string
+	}{
+		{"device role denied", []string{"device"}},
+		{"no role denied", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ww := httptest.NewRecorder()
+			rr := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"payload":"reboot"}`))
+			rr.Header.Set("Content-Type", "application/json")
+			rr = rr.WithContext(reqIDCtx(t, auth.TestContext("sub", tc.roles), "sub", "idem-deny"))
+			handler.ServeHTTP(ww, rr)
+			if ww.Code != http.StatusForbidden {
+				t.Errorf("want 403, got %d", ww.Code)
+			}
+		})
+	}
+
+	// path param: overlong {id} (>256) → 400 (generated handler validates 1..256).
+	t.Run("overlong id 400", func(t *testing.T) {
+		ww := httptest.NewRecorder()
+		longPath := strings.Replace(c.HTTP.Path, "{id}", strings.Repeat("d", 257), 1)
+		rr := httptest.NewRequest(c.HTTP.Method, longPath, strings.NewReader(`{"payload":"reboot"}`))
+		rr.Header.Set("Content-Type", "application/json")
+		rr = rr.WithContext(reqIDCtx(t, auth.TestContext("admin-user", []string{dto.RoleAdmin}), "admin-user", "idem-long"))
+		handler.ServeHTTP(ww, rr)
+		if ww.Code != http.StatusBadRequest {
+			t.Errorf("want 400 for overlong id, got %d", ww.Code)
+		}
+	})
+
+	// missing Idempotency-Key (no RequestIdentity) → 400 at the bridge.
+	t.Run("missing idempotency key 400", func(t *testing.T) {
+		ww := httptest.NewRecorder()
+		rr := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"payload":"reboot"}`))
+		rr.Header.Set("Content-Type", "application/json")
+		rr = rr.WithContext(auth.TestContext("admin-user", []string{dto.RoleAdmin}))
+		handler.ServeHTTP(ww, rr)
+		if ww.Code != http.StatusBadRequest {
+			t.Errorf("want 400 for missing Idempotency-Key, got %d", ww.Code)
+		}
+	})
 }
 
 func TestHttpDeviceCommandDequeueV1Serve(t *testing.T) {

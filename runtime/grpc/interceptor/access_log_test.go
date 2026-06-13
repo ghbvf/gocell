@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	kernelctxkeys "github.com/ghbvf/gocell/kernel/ctxkeys"
 	pkgctxkeys "github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 )
 
 // TestUnaryAccessLog asserts the per-RPC structured slog line carries the
@@ -26,9 +27,7 @@ func TestUnaryAccessLog(t *testing.T) {
 	info := &grpc.UnaryServerInfo{FullMethod: method}
 
 	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 	ctx := context.Background()
 	ctx = kernelctxkeys.WithCellID(ctx, "mycell")

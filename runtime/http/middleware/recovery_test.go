@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 )
 
 func TestRecovery_NoPanic(t *testing.T) {
@@ -69,9 +71,7 @@ func TestRecovery_PanicBodyDoesNotLeakPanicValue(t *testing.T) {
 
 func TestRecovery_PanicLogRedactsPanicValue(t *testing.T) {
 	var logs bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&logs, nil)))
 
 	const leakSentinel = "recovery-log-leak-sentinel-2b8"
 	handler := Recorder(Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

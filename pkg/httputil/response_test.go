@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 )
 
 func TestWriteJSON(t *testing.T) {
@@ -29,8 +30,7 @@ func TestWriteJSON(t *testing.T) {
 }
 
 func TestWritePublic_5xxMasksCodeKeepsFrameworkMessageAndLogsOriginal(t *testing.T) {
-	handler, restore := installCaptureHandler()
-	defer restore()
+	handler := installCaptureHandler(t)
 
 	rec := httptest.NewRecorder()
 	ctx := ctxkeys.WithRequestID(context.Background(), "req-public")
@@ -53,8 +53,7 @@ func TestWritePublic_5xxMasksCodeKeepsFrameworkMessageAndLogsOriginal(t *testing
 }
 
 func TestWriteError_ClientErrorShowsMessageDetailsAndSamplesWarn(t *testing.T) {
-	handler, restore := installCaptureHandler()
-	defer restore()
+	handler := installCaptureHandler(t)
 
 	ctx := withClientErrorLogSamplingEvery(context.Background(), t.Name(), 1)
 	ctx = ctxkeys.WithRequestID(ctx, "req-4xx")
@@ -90,8 +89,7 @@ func TestWriteError_ClientErrorShowsMessageDetailsAndSamplesWarn(t *testing.T) {
 }
 
 func TestWriteError_ClientErrorMissingContextUsesFallbackSampler(t *testing.T) {
-	handler, restore := installCaptureHandler()
-	defer restore()
+	handler := installCaptureHandler(t)
 
 	for range 200 {
 		rec := httptest.NewRecorder()
@@ -137,8 +135,7 @@ func TestWithClientErrorLogSampling_EveryOneLogsAll(t *testing.T) {
 }
 
 func TestWriteError_5xxMasksMessageCodeDetailsAndLogsDiagnostics(t *testing.T) {
-	handler, restore := installCaptureHandler()
-	defer restore()
+	handler := installCaptureHandler(t)
 
 	cause := errors.New("postgres pool exhausted")
 	err := errcode.Wrap(
@@ -183,8 +180,7 @@ func TestWriteError_5xxMasksMessageCodeDetailsAndLogsDiagnostics(t *testing.T) {
 // the typed envelope honest about its declared response set.
 
 func TestWriteErrorWithStatus_4xxKeepsBodyAndLogsAtWarn(t *testing.T) {
-	handler, restore := installCaptureHandler()
-	defer restore()
+	handler := installCaptureHandler(t)
 
 	ecErr := errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound,
 		"session not found",
@@ -209,8 +205,7 @@ func TestWriteErrorWithStatus_4xxKeepsBodyAndLogsAtWarn(t *testing.T) {
 }
 
 func TestWriteErrorWithStatus_500MasksBodyWithStatusDerivedPublicCode(t *testing.T) {
-	handler, restore := installCaptureHandler()
-	defer restore()
+	handler := installCaptureHandler(t)
 
 	// Service constructs Xxx500ErrorResponse{Body: *errcode.New(KindInternal, ...)}
 	// — Kind matches status here; wire code must be ErrInternal.
@@ -244,8 +239,7 @@ func TestWriteErrorWithStatus_500MasksBodyWithStatusDerivedPublicCode(t *testing
 }
 
 func TestWriteErrorWithStatus_503DerivesPublicCodeFromStatusNotFromKind(t *testing.T) {
-	handler, restore := installCaptureHandler()
-	defer restore()
+	handler := installCaptureHandler(t)
 
 	// Service constructs Xxx503ErrorResponse{Body: *errcode.New(KindInternal, ...)}.
 	// The typed-envelope status (503) is the source of truth — wire code must be
@@ -319,8 +313,7 @@ func TestWriteError_WrappedMaxBytesError_Returns413(t *testing.T) {
 }
 
 func TestWriteError_PlainErrorMasksResponseAndLogsUnhandled(t *testing.T) {
-	handler, restore := installCaptureHandler()
-	defer restore()
+	handler := installCaptureHandler(t)
 
 	rec := httptest.NewRecorder()
 	WriteError(context.Background(), rec, errors.New("nil pointer at auth handler"))
@@ -335,8 +328,7 @@ func TestWriteError_PlainErrorMasksResponseAndLogsUnhandled(t *testing.T) {
 }
 
 func TestWriteError_ClientClosedSetsCancelReasonAndWarns(t *testing.T) {
-	handler, restore := installCaptureHandler()
-	defer restore()
+	handler := installCaptureHandler(t)
 
 	ctx := WithCancelReasonSlot(context.Background())
 	ctx = withClientErrorLogSamplingEvery(ctx, t.Name(), 1)
@@ -363,8 +355,7 @@ func TestWriteError_ClientClosedSetsCancelReasonAndWarns(t *testing.T) {
 }
 
 func TestWriteError_DeadlineExceededMasksAsGatewayTimeoutAndLogsReason(t *testing.T) {
-	handler, restore := installCaptureHandler()
-	defer restore()
+	handler := installCaptureHandler(t)
 
 	ctx := ctxkeys.WithRequestID(context.Background(), "req-504")
 	err := ctxcancel.Wrap(context.DeadlineExceeded, "Query", "id=x")
@@ -393,8 +384,7 @@ func TestWriteError_DeadlineExceededMasksAsGatewayTimeoutAndLogsReason(t *testin
 }
 
 func TestWriteJSON_EncodeFail(t *testing.T) {
-	handler, restore := installCaptureHandler()
-	defer restore()
+	handler := installCaptureHandler(t)
 
 	WriteJSON(erroringResponseWriter{}, http.StatusOK, map[string]any{"ch": make(chan int)})
 
@@ -402,8 +392,7 @@ func TestWriteJSON_EncodeFail(t *testing.T) {
 }
 
 func TestWriteError_EncodeFail(t *testing.T) {
-	handler, restore := installCaptureHandler()
-	defer restore()
+	handler := installCaptureHandler(t)
 
 	WriteError(context.Background(), erroringResponseWriter{}, errcode.New(
 		errcode.KindNotFound,
@@ -435,11 +424,11 @@ func (h *captureHandler) WithGroup(string) slog.Handler {
 	return h
 }
 
-func installCaptureHandler() (*captureHandler, func()) {
+func installCaptureHandler(t *testing.T) *captureHandler {
+	t.Helper()
 	handler := &captureHandler{}
-	orig := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	return handler, func() { slog.SetDefault(orig) }
+	slogcapture.InstallDefault(t, slog.New(handler))
+	return handler
 }
 
 func decodeErrorBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
@@ -649,8 +638,7 @@ func TestWriteErrorWithStatus_5xxKindNormalize(t *testing.T) {
 // redaction.RedactSlogAttr on each Details attr — transparent pass-through
 // would leak runtime fields (e.g. DSN passwords) to log backends.
 func TestLog5xx_DetailsRedacted(t *testing.T) {
-	handler, restore := installCaptureHandler()
-	defer restore()
+	handler := installCaptureHandler(t)
 
 	ecErr := errcode.New(
 		errcode.KindInternal,

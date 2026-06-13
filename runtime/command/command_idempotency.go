@@ -79,9 +79,14 @@ func WithActiveUniqueness(deadline time.Time) EmitOption {
 	}
 }
 
-// errCommandEmitOp is the errcode.Code used for EmitAsync validation errors
-// (e.g. zero deadline coupling guard).
+// errCommandEmitOp is the errcode.Code used for EmitAsync emit-option validation
+// errors (e.g. the zero-deadline coupling guard of WithActiveUniqueness).
 const errCommandEmitOp errcode.Code = "ERR_COMMAND_EMIT_OP"
+
+// errCommandIdemKey is the errcode.Code used by EmitAsyncFromIdempotencyKey for a
+// missing or invalid HTTP Idempotency-Key (distinct from errCommandEmitOp so the
+// HTTP-bridge fail-closed path is independently attributable). KindInvalid → 400.
+const errCommandIdemKey errcode.Code = "ERR_COMMAND_IDEM_KEY"
 
 // EmitAsync is the sole sanctioned emit exit for an async command entry. subject
 // and commandID are required positional params — it is compile-time inexpressible
@@ -102,7 +107,9 @@ const errCommandEmitOp errcode.Code = "ERR_COMMAND_EMIT_OP"
 // WARNING: subject and commandID are adjacent same-typed (string) positional
 // params — transposing them is NOT a compile error and silently mis-partitions
 // the dedup slot across subjects. subject = the dedup aggregate (e.g. deviceID);
-// commandID = the per-instance identity (e.g. the source event id).
+// commandID = the per-instance identity (e.g. the source event id). For HTTP
+// handlers carrying an Idempotency-Key header, prefer EmitAsyncFromIdempotencyKey,
+// which sources commandID from ctx and removes this transpose footgun.
 //
 // Error contract mirrors kout.Emit: every failure is wrapped with context and
 // returned (never swallowed). Callers MUST return or log the error.
@@ -147,6 +154,47 @@ func EmitAsync[T any](
 		return fmt.Errorf("command.EmitAsync(%s): %w", dispatchID, err)
 	}
 	return nil
+}
+
+// EmitAsyncFromIdempotencyKey is the sanctioned HTTP→command idempotency bridge
+// (#1610 "Idempotency-Key ↔ command_id"). It reads the sealed RequestIdentity the
+// HTTP idempotency middleware minted into ctx (caller + payload fingerprint +
+// validated Idempotency-Key) and derives the async command's per-instance commandID
+// from its composite CommandDedupToken — then emits through EmitAsync. So the SAME
+// logical request, sent for the same subject across different cells / listeners /
+// pods, derives the SAME DeriveCommandKey dedup slot and the relay's Claimer wrap
+// dispatches the command exactly once; but a DIFFERENT caller or DIFFERENT payload
+// (even with the same Idempotency-Key) yields a different token and is NOT folded
+// (#1610 F1, Stripe/IETF composite-key posture).
+//
+// Unlike EmitAsync, commandID is NOT a caller parameter: it is derived from the
+// sealed ctx identity, so the "subject/commandID adjacent same-typed string
+// transpose" footgun documented on EmitAsync is structurally inexpressible on this
+// HTTP-sourced path. Key validation (non-empty / ≤256B / printable / brace-free)
+// lives in the sealed idemkey.NewRequestIdentity sole constructor (the middleware
+// mints; no unvalidated key can reach here), so this bridge only fail-closes when
+// the identity is absent:
+//
+//   - ctx carries no RequestIdentity (no Idempotency-Key, exempt route, or
+//     non-idempotent method) → KindInvalid (rendered 400 by httputil.WriteError).
+//
+// The funnel is preserved: the kout.NewEntry callsite stays inside EmitAsync
+// (runtime/command), satisfying COMMAND-ASYNC-EMIT-FUNNEL-01.
+func EmitAsyncFromIdempotencyKey[T any](
+	ctx context.Context,
+	clk clock.Clock,
+	emitter kout.Emitter,
+	dispatchID CommandID,
+	subject string,
+	payload T,
+	opts ...EmitOption,
+) error {
+	id, ok := idemkey.RequestIdentityFromContext(ctx)
+	if !ok {
+		return errcode.New(errcode.KindInvalid, errCommandIdemKey,
+			"command.EmitAsyncFromIdempotencyKey: missing Idempotency-Key request identity (required for idempotent async command)")
+	}
+	return EmitAsync(ctx, clk, emitter, dispatchID, subject, id.CommandDedupToken(), payload, opts...)
 }
 
 // dispatchedUniquenessKey is the unexported context key type for the dispatched

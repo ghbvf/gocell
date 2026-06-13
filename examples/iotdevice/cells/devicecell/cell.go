@@ -482,6 +482,12 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 		runMode,
 		devicecmd.WithSliceName("devicecommand"),
 		devicecmd.WithOnCommandResolved(c.certCompletionSvc.OnCommandResolved),
+		// #1610 cross-cell idempotency consumer: the async-commands HTTP endpoint
+		// emits cmdenqueue through the same writer-backed emitter + tx manager the
+		// reactive bootstrap slice uses, so the relay's Claimer wrap dedups the
+		// dispatch by DeriveCommandKey across cells/pods.
+		devicecmd.WithCommandEmitter(c.bootstrapEmitter),
+		devicecmd.WithCommandTxManager(c.bootstrapTxManager),
 	)
 	if err != nil {
 		return fmt.Errorf("device-command: %w", err)

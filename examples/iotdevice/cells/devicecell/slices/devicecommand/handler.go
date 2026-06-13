@@ -8,6 +8,7 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
 	ackcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/ack/v1"
 	dequeuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/dequeue/v1"
+	enqueueasynccontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/enqueue-async/v1"
 	enqueuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/enqueue/v1"
 	extendleasecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/extend-lease/v1"
 	reportcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/report/v1"
@@ -28,6 +29,28 @@ func (a EnqueueAdapter) Enqueue(ctx context.Context, req *enqueuecontract.Reques
 		return nil, err
 	}
 	return enqueuecontract.Enqueue201JSONResponse{Data: toEnqueueResponseData(entry)}, nil
+}
+
+// EnqueueAsyncAdapter wraps Service to implement enqueueasynccontract.Service.
+// Unlike EnqueueAdapter (synchronous Pending write, 201), it emits the command
+// through the outbox so the relay's Claimer wrap deduplicates the dispatch by
+// DeriveCommandKey across cells/listeners/pods (the #1610 cross-cell consumer),
+// returning 202 Accepted. The command_id is sourced from the request's
+// Idempotency-Key in ctx by the bridge; a missing key fail-closes as a 400.
+type EnqueueAsyncAdapter struct{ S *Service }
+
+// EnqueueAsync implements enqueueasynccontract.Service.
+func (a EnqueueAsyncAdapter) EnqueueAsync(
+	ctx context.Context, req *enqueueasynccontract.Request,
+) (enqueueasynccontract.EnqueueAsyncResponseObject, error) {
+	if err := a.S.EnqueueAsync(ctx, req.ID, req.CommandType, req.Payload); err != nil {
+		return nil, err
+	}
+	return enqueueasynccontract.EnqueueAsync202JSONResponse{Data: &enqueueasynccontract.ResponseData{
+		DeviceID:    req.ID,
+		CommandType: req.CommandType,
+		Status:      "accepted",
+	}}, nil
 }
 
 // DequeueAdapter wraps Service to implement dequeuecontract.Service.
@@ -98,36 +121,42 @@ func (a ExtendLeaseAdapter) ExtendLease(
 }
 
 // Handler is the composite route handler for the public devicecommand slice.
-// It holds the five generated per-contract handlers and exposes RegisterRoutes
-// (primary listener: enqueue + dequeue + report + ack + extend-lease).
-// The internal control-plane list is owned by the sibling devicecommandinternal
-// slice.
+// It holds the six generated per-contract handlers and exposes RegisterRoutes
+// (primary listener: enqueue + enqueue-async + dequeue + report + ack +
+// extend-lease). The internal control-plane list is owned by the sibling
+// devicecommandinternal slice.
 type Handler struct {
-	enqueueH     *enqueuecontract.Handler
-	dequeueH     *dequeuecontract.Handler
-	reportH      *reportcontract.Handler
-	ackH         *ackcontract.Handler
-	extendLeaseH *extendleasecontract.Handler
+	enqueueH      *enqueuecontract.Handler
+	enqueueAsyncH *enqueueasynccontract.Handler
+	dequeueH      *dequeuecontract.Handler
+	reportH       *reportcontract.Handler
+	ackH          *ackcontract.Handler
+	extendLeaseH  *extendleasecontract.Handler
 }
 
 // NewHandler creates a public devicecommand Handler with generated per-contract
 // handlers. Policies mirror those previously set in cell.go:
-//   - enqueue: admin or operator only
+//   - enqueue / enqueue-async: admin or operator only
 //   - dequeue/report/ack/extend-lease: self-or admin/operator (device polls its own commands)
 func NewHandler(svc *Service) *Handler {
 	selfOrAdminOp := auth.SelfOr("id", dto.RoleAdmin, dto.RoleOperator)
+	adminOrOp := auth.AnyRole(dto.RoleAdmin, dto.RoleOperator)
 	return &Handler{
-		enqueueH:     enqueuecontract.NewHandler(EnqueueAdapter{svc}, auth.AnyRole(dto.RoleAdmin, dto.RoleOperator)),
-		dequeueH:     dequeuecontract.NewHandler(DequeueAdapter{svc}, selfOrAdminOp),
-		reportH:      reportcontract.NewHandler(ReportAdapter{svc}, selfOrAdminOp),
-		ackH:         ackcontract.NewHandler(AckAdapter{svc}, selfOrAdminOp),
-		extendLeaseH: extendleasecontract.NewHandler(ExtendLeaseAdapter{svc}, selfOrAdminOp),
+		enqueueH:      enqueuecontract.NewHandler(EnqueueAdapter{svc}, adminOrOp),
+		enqueueAsyncH: enqueueasynccontract.NewHandler(EnqueueAsyncAdapter{svc}, adminOrOp),
+		dequeueH:      dequeuecontract.NewHandler(DequeueAdapter{svc}, selfOrAdminOp),
+		reportH:       reportcontract.NewHandler(ReportAdapter{svc}, selfOrAdminOp),
+		ackH:          ackcontract.NewHandler(AckAdapter{svc}, selfOrAdminOp),
+		extendLeaseH:  extendleasecontract.NewHandler(ExtendLeaseAdapter{svc}, selfOrAdminOp),
 	}
 }
 
-// RegisterRoutes mounts the five public device-command routes on mux.
+// RegisterRoutes mounts the six public device-command routes on mux.
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
 	if err := h.enqueueH.RegisterRoutes(mux); err != nil {
+		return err
+	}
+	if err := h.enqueueAsyncH.RegisterRoutes(mux); err != nil {
 		return err
 	}
 	if err := h.dequeueH.RegisterRoutes(mux); err != nil {

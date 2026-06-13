@@ -20,6 +20,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/healthz"
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 )
 
@@ -37,9 +38,7 @@ func (closeErrGRPCServer) Probes() []healthz.Probe                   { return ni
 func installCaptureLogger(t *testing.T) *sloghelper.SyncBuffer {
 	t.Helper()
 	buf := sloghelper.NewSyncBuffer()
-	original := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(original) })
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(buf, nil)))
 	return buf
 }
 
