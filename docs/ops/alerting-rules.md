@@ -595,8 +595,8 @@ registry 封闭。`decision` 值集冻结为 3 个（archtest `AUTHZ-PDP-DECISIO
 | decision | 语义 | 典型 HTTP |
 |---|---|---|
 | `allow` | PDP 放行（permit） | 2xx |
-| `deny` | policy 拒绝（无适用 permit / forbid-wins / default-deny） | 403 |
-| `error` | `Authorize` 返错（policy store 不可达 / 缺租户），fail-closed | 503/500 |
+| `deny` | 拒绝：policy 拒绝（无适用 permit / forbid-wins / default-deny），**或** auth-context 拒绝（缺租户 / 无 principal，`KindPermissionDenied`/`KindUnauthenticated`） | 403/401 |
+| `error` | `Authorize` 返**基础设施/意外**错误（policy store 不可达 `KindUnavailable`，或未分类），fail-closed —— **不含**缺租户等 403/401（那归 `deny`，#2077 F2） | 503/500 |
 
 > 仅当 composition root 配置真实 `Provider` 且装配了 primary Authorizer 时才有时间序列；无
 > Provider 时装饰器不接线（fail-open，metric 不发射，授权判定不受影响）。

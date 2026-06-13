@@ -27,11 +27,14 @@ type pdpDecisionLabel string
 const (
 	// pdpDecisionAllow — the PDP returned a permit.
 	pdpDecisionAllow pdpDecisionLabel = "allow"
-	// pdpDecisionDeny — the PDP returned a (policy) deny.
+	// pdpDecisionDeny — the PDP denied: a policy deny, OR an auth-context denial
+	// returned as an error (tenant scope missing / no principal → KindPermissionDenied
+	// / KindUnauthenticated, 403/401). See classifyDecision (#2077 F2).
 	pdpDecisionDeny pdpDecisionLabel = "deny"
-	// pdpDecisionError — Authorize returned an error (policy store unavailable /
-	// tenant missing → 503). Kept distinct from a policy "deny" (403) so on-call
-	// can separate infra failure from authorization failure (#2027 F12).
+	// pdpDecisionError — Authorize returned an INFRA/unexpected error: policy store
+	// unavailable (KindUnavailable → 503) or an unclassified error. Kept distinct from
+	// a deny so on-call can page on real infra failure only — auth-context 403/401
+	// denials are pdpDecisionDeny, NOT error (#2077 F2 / #2027 F12).
 	pdpDecisionError pdpDecisionLabel = "error"
 )
 
