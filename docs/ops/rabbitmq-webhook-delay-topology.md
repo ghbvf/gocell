@@ -91,6 +91,13 @@ clustered** deployments.
 - Sustained growth of `*.delay.6` (the 10h tail) or messages landing in the real DLX
   indicates an endpoint that is persistently failing — inspect the DLX and the
   `webhook_deliveries_total{result="..."}` metric.
+- `webhook_deliveries_total{result="circuit_open"}` counts redeliveries the
+  per-endpoint circuit breaker **fast-failed without an HTTP attempt** (the target
+  tripped its breaker: >5 consecutive transport/5xx/429 failures). These still flow
+  through the delay tiers and reach the DLX on the same `MaxRetries` timeline — the
+  breaker only suppresses the wasted POST + 30s timeout while the endpoint is open.
+  A spike here pinpoints a down target without the connection churn. See ADR
+  `202606140035-1541-adr-webhook-circuit-breaker.md`.
 - The delay queues are bounded per subscription (one queue per schedule tier).
 
 ## One-time classic → quorum migration (#1835)

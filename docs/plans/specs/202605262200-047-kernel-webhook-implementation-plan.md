@@ -505,8 +505,9 @@ make verify
 ### Follow-up issues（已开）
 
 1. #1539 Ed25519 / Vault Transit KMS 签名（pri-p3）
-2. #1540 Source secret 持久化 configcore/vault（pri-p2）
-3. #1541 Circuit-breaker 全状态机（pri-p3）
+2. #1540 Source secret 持久化 configcore/vault（pri-p2）✅ 已交付（ADR 202606122050）
+3. #1541 Circuit-breaker 全状态机（pri-p3）✅ 已交付（ADR 202606140035；per-endpoint
+   Closed/Open/HalfOpen 接入 dispatcher，复用 kernel/circuitbreaker）
 4. #1542 Per-contract Claim TTL 配置（pri-p2，`receiver.go` 固定 24h doneTTL < provider 重试窗口）
 5. #1543 `webhook_source_store_ready` probe（pri-p3，store 变运行时可变时开）
 6. **#1544 webhook receiver 在 JWT-gated PrimaryListener 上不可运行（功能阻断，非仅 demo）+ examples demo**（pri-p2）
