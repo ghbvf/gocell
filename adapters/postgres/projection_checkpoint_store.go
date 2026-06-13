@@ -196,9 +196,9 @@ func (s *ProjectionCheckpointStore) SaveOffset(ctx context.Context, cellID, proj
 // remains correct even if a future refactor removes the Go short-circuit.
 //
 // SaveOffset interaction: SaveOffset (base CheckpointStore) never writes the
-// owner column. A cold row created by SaveOffset has owner='' and offset=0,
+// owner column. A cold row created by SaveOffset has an empty owner and offset=0,
 // so a later AdvanceIfOwner with a real token needs offset>0 to claim (the
-// strictly-ahead predicate treats owner='' as "no owner yet"). This is correct
+// strictly-ahead predicate treats an empty owner as "no owner yet"). This is correct
 // fencing, not a bug: offset>0 is the first real advance past the base row.
 //
 // AdvanceIfOwner participates in the ambient transaction via s.db
