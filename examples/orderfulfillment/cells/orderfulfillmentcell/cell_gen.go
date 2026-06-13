@@ -5,6 +5,7 @@ package orderfulfillmentcell
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -59,6 +60,12 @@ func (c *OrderCell) Init(ctx context.Context, reg cell.Registrar) error {
 			return firstErr
 		},
 	})
+
+	if err := reg.RegisterProjection(cell.NewSagaJournalProjectionRequest(
+		c.orderstatusSvc.HandleOrderEvent, "order_saga_status", "orderfulfillmentcell", "orderstatus",
+	)); err != nil {
+		return fmt.Errorf("orderfulfillmentcell: projection order_saga_status: %w", err)
+	}
 
 	return nil
 }

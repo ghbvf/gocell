@@ -1,10 +1,13 @@
 // Package orderfulfillmentcell implements the orderfulfillmentcell Cell for the
 // orderfulfillment example. It demonstrates an L3 WorkflowEventual cell that
-// uses the saga engine for fulfillment orchestration.
+// uses the saga engine for fulfillment orchestration and a saga-journal CQRS
+// projection for order-status queries.
 //
 // The cell has no outbox publisher or transactional writer — saga coordination
 // is handled by the Coordinator wired in the composition root (run.go).
-// The placeorder slice enrolls saga instances via the shared MemJournal.
+// The placeorder slice enrolls saga instances via the shared Journal.
+// The orderstatus slice builds an incremental read model via HandleOrderEvent,
+// populated by the bootstrap Tailer (saga-journal projection source).
 package orderfulfillmentcell
 
 import (
@@ -14,7 +17,8 @@ import (
 
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/mem"
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/ports"
-	orderstatusslice "github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/slices/orderstatus"
+	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/projection"
+	orderstatus "github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/slices/orderstatus"
 	placeorderslice "github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/slices/placeorder"
 	orderstatusgen "github.com/ghbvf/gocell/generated/contracts/http/orderfulfillment/orderstatus/v1"
 	placeordergen "github.com/ghbvf/gocell/generated/contracts/http/orderfulfillment/placeorder/v1"
@@ -29,15 +33,14 @@ import (
 // Option configures an OrderCell.
 type Option func(*OrderCell)
 
-// WithJournal injects the saga journal used for instance enrollment and status
-// queries. Typed-nil inputs are not stored; the cell initInternal will
-// fail-fast if journal remains unset.
+// WithJournal injects the saga journal used for instance enrollment (placeorder
+// slice). Typed-nil inputs are not stored; the cell initInternal will fail-fast
+// if journal remains unset.
 //
 // The cell holds the narrow ProducerReader interface rather than JournalCore,
 // so business code cannot access coordinator-only methods (ClaimPending,
-// Append, MarkTerminal). The placeorder slice receives the Enqueuer subset and
-// the orderstatus slice receives the Reader subset — both satisfied by any
-// ProducerReader value.
+// Append, MarkTerminal). The placeorder slice receives the Enqueuer subset —
+// satisfied by any ProducerReader value.
 func WithJournal(j journal.ProducerReader) Option {
 	return func(c *OrderCell) {
 		if !validation.IsNilInterface(j) {
@@ -77,15 +80,27 @@ func WithCoordinator(p healthz.RepoProber) Option {
 	}
 }
 
+// WithOrderStatusReadModel injects the CQRS read model used by the orderstatus
+// projection Apply handler and GetOrderStatus query. Typed-nil inputs are not
+// stored; initInternal defaults to an in-memory read model (demo mode).
+func WithOrderStatusReadModel(rm projection.OrderStatusReadModel) Option {
+	return func(c *OrderCell) {
+		if !validation.IsNilInterface(rm) {
+			c.orderStatusRM = rm
+		}
+	}
+}
+
 // OrderCell is the orderfulfillmentcell Cell implementation.
 // +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1
 type OrderCell struct {
 	*cell.BaseCell
 
-	clock   clock.Clock
-	journal journal.ProducerReader
-	repo    ports.OrderRepository
-	logger  *slog.Logger
+	clock         clock.Clock
+	journal       journal.ProducerReader
+	repo          ports.OrderRepository
+	logger        *slog.Logger
+	orderStatusRM projection.OrderStatusReadModel
 
 	// coord is the optional saga Coordinator injected via WithCoordinator.
 	// When non-nil it is registered with /readyz via RegisterReadiness so
@@ -107,8 +122,10 @@ type OrderCell struct {
 	// +slice:route:slice=orderstatus,subPath=/orders
 	orderstatusHandler *orderstatusgen.Handler
 
-	// orderstatusSvc holds the orderstatus slice service for slice metadata wiring.
-	orderstatusSvc *orderstatusslice.Service
+	// orderstatusSvc holds the orderstatus slice service for slice metadata
+	// wiring and as the saga-journal projection Apply handler target
+	// (c.orderstatusSvc.HandleOrderEvent — referenced by cell_gen.go).
+	orderstatusSvc *orderstatus.Service
 }
 
 // NewOrderCell creates a new OrderCell with the given clock and options.
@@ -155,6 +172,12 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 		c.logger.Info("orderfulfillmentcell: using in-memory order repository (demo mode)")
 	}
 
+	// Default to in-memory read model if none injected (demo mode).
+	if validation.IsNilInterface(c.orderStatusRM) {
+		c.orderStatusRM = projection.NewMemReadModel()
+		c.logger.Info("orderfulfillmentcell: using in-memory order-status read model (demo mode)")
+	}
+
 	// Build the placeorder service.
 	// The journal must be injected via WithJournal by the composition root.
 	svc, err := placeorderslice.NewService(
@@ -170,19 +193,20 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 	c.placeorderHandler = placeordergen.NewHandler(placeorderslice.NewHandler(svc))
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(placeorderslice.SliceMetadata()))
 
-	// Build the orderstatus service using the shared repo and journal.
-	statusSvc, err := orderstatusslice.NewService(
+	// Build the orderstatus service using the shared repo and CQRS read model.
+	// No journal dep — status is now read from the projection read model.
+	statusSvc, err := orderstatus.NewService(
 		c.clock,
-		orderstatusslice.WithOrderRepository(c.repo),
-		orderstatusslice.WithJournal(c.journal),
-		orderstatusslice.WithLogger(c.logger),
+		orderstatus.WithOrderRepository(c.repo),
+		orderstatus.WithOrderStatusReadModel(c.orderStatusRM),
+		orderstatus.WithLogger(c.logger),
 	)
 	if err != nil {
 		return fmt.Errorf("orderfulfillmentcell: orderstatus service: %w", err)
 	}
 	c.orderstatusSvc = statusSvc
-	c.orderstatusHandler = orderstatusgen.NewHandler(orderstatusslice.NewHandler(statusSvc))
-	c.AddSlice(cell.MustNewBaseSliceFromMeta(orderstatusslice.SliceMetadata()))
+	c.orderstatusHandler = orderstatusgen.NewHandler(orderstatus.NewHandler(statusSvc))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(orderstatus.SliceMetadata()))
 
 	return nil
 }

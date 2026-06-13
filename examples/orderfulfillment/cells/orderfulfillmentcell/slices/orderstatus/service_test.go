@@ -2,55 +2,52 @@ package orderstatus_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/domain"
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/mem"
+	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/projection"
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/slices/orderstatus"
 	orderstatusgen "github.com/ghbvf/gocell/generated/contracts/http/orderfulfillment/orderstatus/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/saga"
-	"github.com/ghbvf/gocell/kernel/saga/journal"
+	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/saga/sagaprojection"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
-	"github.com/ghbvf/gocell/pkg/idutil"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // testBundle holds a Service together with its backing repository and
-// MemJournal so tests can inject saga events without running a coordinator.
+// in-memory read model so tests can inject projection state without running
+// a coordinator or Tailer.
 type testBundle struct {
 	svc  *orderstatus.Service
 	repo *mem.OrderRepository
-	jrnl *journal.MemJournal
+	rm   *projection.MemReadModel
 }
 
 func newBundle(t *testing.T) testBundle {
 	t.Helper()
 	clk := clock.Real()
 	repo := mem.NewOrderRepository()
-	jrnl, err := journal.NewMemJournal(clk)
-	if err != nil {
-		t.Fatalf("NewMemJournal: %v", err)
-	}
+	rm := projection.NewMemReadModel()
 	svc, err := orderstatus.NewService(
 		clk,
 		orderstatus.WithOrderRepository(repo),
-		orderstatus.WithJournal(jrnl),
+		orderstatus.WithOrderStatusReadModel(rm),
 	)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	return testBundle{svc: svc, repo: repo, jrnl: jrnl}
+	return testBundle{svc: svc, repo: repo, rm: rm}
 }
 
-// createOrder inserts an order into the repository and enrolls a saga instance
-// in the journal for it. Returns the order ID (= saga instance ID).
-func createOrder(t *testing.T, b testBundle) string {
+// createOrder inserts an order into the repository.
+func createOrder(t *testing.T, b testBundle, orderID string) {
 	t.Helper()
 	ctx := context.Background()
-	orderID := "ord-" + time.Now().Format("20060102150405.999999999")
 	order := &domain.Order{
 		ID:          orderID,
 		Item:        "widget",
@@ -60,53 +57,33 @@ func createOrder(t *testing.T, b testBundle) string {
 	if err := b.repo.Create(ctx, order); err != nil {
 		t.Fatalf("repo.Create: %v", err)
 	}
-
-	defID, err := idutil.NewUUID()
-	if err != nil {
-		t.Fatalf("NewUUID for definitionID: %v", err)
-	}
-	inst := saga.NewInstance(idutil.SafeID(orderID), idutil.SafeID(defID), time.Now())
-	if err := b.jrnl.Enqueue(ctx, inst); err != nil {
-		t.Fatalf("jrnl.Enqueue: %v", err)
-	}
-	return orderID
 }
 
-// claimLease claims the instance lease from the journal and returns the leaseID.
-func claimLease(t *testing.T, jrnl *journal.MemJournal) idutil.SafeID {
-	t.Helper()
-	ctx := context.Background()
-	claimed, leaseID, err := jrnl.ClaimPending(ctx, 10, testtime.D30s)
-	if err != nil {
-		t.Fatalf("ClaimPending: %v", err)
-	}
-	if len(claimed) == 0 {
-		t.Fatal("ClaimPending: no instances claimed")
-	}
-	return leaseID
-}
-
-// mustAppend appends ev to the instance log under leaseID, failing on error.
-func mustAppend(t *testing.T, jrnl *journal.MemJournal, orderID string, leaseID idutil.SafeID, ev journal.Event) {
-	t.Helper()
-	if _, err := jrnl.Append(context.Background(), idutil.SafeID(orderID), leaseID, ev); err != nil {
-		t.Fatalf("Append %s: %v", ev.Kind, err)
+// makeProjectionEvent creates a synthetic saga-journal projection event for testing.
+// The EventID is formatted as "saga-journal:1@<orderID>" which matches the
+// sagaProjectionEvent.EventID() format.
+func makeProjectionEvent(orderID string, kind string) fakeEvent {
+	env := sagaprojection.SagaEventEnvelope{Kind: kind}
+	raw, _ := json.Marshal(env)
+	return fakeEvent{
+		eventID: "saga-journal:1@" + orderID,
+		payload: raw,
 	}
 }
 
-// mustMarkTerminal marks the instance terminal with status, failing on error or
-// ok=false.
-func mustMarkTerminal(t *testing.T, jrnl *journal.MemJournal, orderID string, leaseID idutil.SafeID, status saga.Status) {
-	t.Helper()
-	ok, err := jrnl.MarkTerminal(context.Background(), idutil.SafeID(orderID), leaseID, status)
-	if err != nil {
-		t.Fatalf("MarkTerminal %s: %v", status, err)
-	}
-	if !ok {
-		t.Fatalf("MarkTerminal %s: returned ok=false", status)
-	}
+// fakeEvent is a test-only implementation of cellvocab.ProjectionEvent.
+type fakeEvent struct {
+	eventID string
+	payload []byte
 }
 
+func (f fakeEvent) EventID() string                                    { return f.eventID }
+func (f fakeEvent) Payload() []byte                                    { return f.payload }
+func (f fakeEvent) OccurredAt() time.Time                              { return time.Now() }
+func (f fakeEvent) Stream() string                                     { return "saga.journal.v1" }
+func (f fakeEvent) RestoreContext(ctx context.Context) context.Context { return ctx }
+
+// TestGetOrderStatus_NotFound verifies 404 when the order does not exist.
 func TestGetOrderStatus_NotFound(t *testing.T) {
 	t.Parallel()
 	b := newBundle(t)
@@ -114,138 +91,51 @@ func TestGetOrderStatus_NotFound(t *testing.T) {
 	errcodetest.AssertCode(t, err, errcode.ErrOrderNotFound)
 }
 
+// TestGetOrderStatus_Accepted verifies "accepted" when order exists but the
+// projection has no row yet (the saga Tailer hasn't applied any event).
 func TestGetOrderStatus_Accepted(t *testing.T) {
 	t.Parallel()
 	b := newBundle(t)
-	// createOrder both persists the order and enrolls a saga instance via
-	// Enqueue. Load then returns an empty (non-nil) slice, so deriveStatus
-	// returns StatusAccepted — the expected post-enrollment, pre-step state.
-	orderID := createOrder(t, b)
+	orderID := "ord-accepted-1"
+	createOrder(t, b, orderID)
+	// No read-model row → accepted.
 	status, err := b.svc.GetOrderStatus(context.Background(), orderID)
 	if err != nil {
 		t.Fatalf("GetOrderStatus: %v", err)
 	}
 	if status != orderstatusgen.ResponseDataStatusAccepted {
-		t.Errorf("status = %q, want %q", status, orderstatusgen.ResponseDataStatusAccepted)
+		t.Errorf("status = %q, want accepted", status)
 	}
 }
 
-func TestGetOrderStatus_OrphanOrder(t *testing.T) {
-	t.Parallel()
-	b := newBundle(t)
-	// Persist the order without enrolling a saga instance. This simulates an
-	// orphan order where Enqueue failed after the order write. After F1, the
-	// service must return an error (journal.Load → KindNotFound) instead of
-	// silently returning StatusAccepted, which would mask the enrollment bug.
-	ctx := context.Background()
-	order := &domain.Order{ID: "ord-orphan", Item: "widget", AmountCents: 1000, CreatedAt: time.Now()}
-	if err := b.repo.Create(ctx, order); err != nil {
-		t.Fatalf("repo.Create: %v", err)
-	}
-	_, err := b.svc.GetOrderStatus(ctx, "ord-orphan")
-	if err == nil {
-		t.Fatal("GetOrderStatus: expected error for orphan order (never enrolled), got nil")
-	}
-}
-
-func TestNewService_MissingDeps(t *testing.T) {
-	t.Parallel()
-	clk := clock.Real()
-
-	t.Run("missing_repo", func(t *testing.T) {
-		t.Parallel()
-		jrnl, err := journal.NewMemJournal(clk)
-		if err != nil {
-			t.Fatalf("NewMemJournal: %v", err)
-		}
-		_, err = orderstatus.NewService(clk, orderstatus.WithJournal(jrnl))
-		if err == nil {
-			t.Fatal("expected error for missing repo, got nil")
-		}
-	})
-
-	t.Run("missing_journal", func(t *testing.T) {
-		t.Parallel()
-		_, err := orderstatus.NewService(clk, orderstatus.WithOrderRepository(mem.NewOrderRepository()))
-		if err == nil {
-			t.Fatal("expected error for missing journal, got nil")
-		}
-	})
-}
-
-// TestGetOrderStatus_StatusTable covers all five status outcomes of deriveStatus
-// by injecting journal events via the real MemJournal API.
+// TestGetOrderStatus_StatusTable covers all stored statuses by pre-seeding the
+// read model directly (simulating what the Tailer would apply).
 func TestGetOrderStatus_StatusTable(t *testing.T) {
 	t.Parallel()
 
-	type setup func(t *testing.T, b testBundle, orderID string)
-
 	tests := []struct {
 		name       string
-		setup      setup
+		seedStatus orderstatusgen.ResponseDataStatus
 		wantStatus orderstatusgen.ResponseDataStatus
 	}{
 		{
-			name: "running_after_step_completed",
-			setup: func(t *testing.T, b testBundle, orderID string) {
-				t.Helper()
-				leaseID := claimLease(t, b.jrnl)
-				mustAppend(t, b.jrnl, orderID, leaseID, journal.Event{Kind: journal.KindStepCompleted, StepName: "reserve"})
-			},
+			name:       "running",
+			seedStatus: orderstatusgen.ResponseDataStatusRunning,
 			wantStatus: orderstatusgen.ResponseDataStatusRunning,
 		},
 		{
-			name: "succeeded",
-			setup: func(t *testing.T, b testBundle, orderID string) {
-				t.Helper()
-				leaseID := claimLease(t, b.jrnl)
-				// Pending → Running (step event), then mark terminal Succeeded.
-				mustAppend(t, b.jrnl, orderID, leaseID, journal.Event{Kind: journal.KindStepStarted, StepName: "reserve"})
-				mustMarkTerminal(t, b.jrnl, orderID, leaseID, saga.StatusSucceeded)
-			},
+			name:       "succeeded",
+			seedStatus: orderstatusgen.ResponseDataStatusSucceeded,
 			wantStatus: orderstatusgen.ResponseDataStatusSucceeded,
 		},
 		{
-			name: "compensated",
-			setup: func(t *testing.T, b testBundle, orderID string) {
-				t.Helper()
-				leaseID := claimLease(t, b.jrnl)
-				// Pending → Running → Compensating → Compensated (terminal).
-				mustAppend(t, b.jrnl, orderID, leaseID, journal.Event{Kind: journal.KindStepStarted, StepName: "reserve"})
-				mustAppend(t, b.jrnl, orderID, leaseID, journal.Event{Kind: journal.KindCompensationStarted})
-				mustMarkTerminal(t, b.jrnl, orderID, leaseID, saga.StatusCompensated)
-			},
+			name:       "compensated",
+			seedStatus: orderstatusgen.ResponseDataStatusCompensated,
 			wantStatus: orderstatusgen.ResponseDataStatusCompensated,
 		},
 		{
-			name: "failed_via_saga_failed",
-			setup: func(t *testing.T, b testBundle, orderID string) {
-				t.Helper()
-				leaseID := claimLease(t, b.jrnl)
-				// Pending → Failed directly (no steps committed, no compensation).
-				mustMarkTerminal(t, b.jrnl, orderID, leaseID, saga.StatusFailed)
-			},
-			wantStatus: orderstatusgen.ResponseDataStatusFailed,
-		},
-		{
-			name: "failed_via_saga_expired",
-			setup: func(t *testing.T, b testBundle, orderID string) {
-				t.Helper()
-				leaseID := claimLease(t, b.jrnl)
-				mustMarkTerminal(t, b.jrnl, orderID, leaseID, saga.StatusExpired)
-			},
-			wantStatus: orderstatusgen.ResponseDataStatusFailed,
-		},
-		{
-			name: "failed_via_saga_compensation_failed",
-			setup: func(t *testing.T, b testBundle, orderID string) {
-				t.Helper()
-				leaseID := claimLease(t, b.jrnl)
-				// Pending → Running → Compensating → CompensationFailed.
-				mustAppend(t, b.jrnl, orderID, leaseID, journal.Event{Kind: journal.KindStepStarted, StepName: "reserve"})
-				mustAppend(t, b.jrnl, orderID, leaseID, journal.Event{Kind: journal.KindCompensationStarted})
-				mustMarkTerminal(t, b.jrnl, orderID, leaseID, saga.StatusCompensationFailed)
-			},
+			name:       "failed",
+			seedStatus: orderstatusgen.ResponseDataStatusFailed,
 			wantStatus: orderstatusgen.ResponseDataStatusFailed,
 		},
 	}
@@ -255,9 +145,12 @@ func TestGetOrderStatus_StatusTable(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			b := newBundle(t)
-			orderID := createOrder(t, b)
-			tc.setup(t, b, orderID)
-
+			orderID := "ord-" + tc.name
+			createOrder(t, b, orderID)
+			// Pre-seed the read model (simulating a Tailer applying events).
+			if err := b.rm.Upsert(context.Background(), orderID, tc.seedStatus); err != nil {
+				t.Fatalf("Upsert: %v", err)
+			}
 			status, err := b.svc.GetOrderStatus(context.Background(), orderID)
 			if err != nil {
 				t.Fatalf("GetOrderStatus: %v", err)
@@ -266,5 +159,131 @@ func TestGetOrderStatus_StatusTable(t *testing.T) {
 				t.Errorf("status = %q, want %q", status, tc.wantStatus)
 			}
 		})
+	}
+}
+
+// TestNewService_MissingDeps verifies fail-fast on missing required dependencies.
+func TestNewService_MissingDeps(t *testing.T) {
+	t.Parallel()
+	clk := clock.Real()
+	rm := projection.NewMemReadModel()
+
+	t.Run("missing_repo", func(t *testing.T) {
+		t.Parallel()
+		_, err := orderstatus.NewService(clk, orderstatus.WithOrderStatusReadModel(rm))
+		if err == nil {
+			t.Fatal("expected error for missing repo, got nil")
+		}
+	})
+
+	t.Run("missing_read_model", func(t *testing.T) {
+		t.Parallel()
+		_, err := orderstatus.NewService(clk, orderstatus.WithOrderRepository(mem.NewOrderRepository()))
+		if err == nil {
+			t.Fatal("expected error for missing read model, got nil")
+		}
+	})
+}
+
+// TestHandleOrderEvent_SeedReadModel verifies that HandleOrderEvent applies a saga
+// event to the read model.
+func TestHandleOrderEvent_SeedReadModel(t *testing.T) {
+	t.Parallel()
+	b := newBundle(t)
+	orderID := "ord-handle-1"
+	ctx := context.Background()
+
+	// Feed a step-started event → should write "running" to the read model.
+	ev := makeProjectionEvent(orderID, "step_started")
+	if err := b.svc.HandleOrderEvent(ctx, ev); err != nil {
+		t.Fatalf("HandleOrderEvent: %v", err)
+	}
+	status, found, err := b.rm.Get(ctx, orderID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !found {
+		t.Fatal("read model has no row after HandleOrderEvent")
+	}
+	if status != orderstatusgen.ResponseDataStatusRunning {
+		t.Errorf("status = %q, want running", status)
+	}
+}
+
+// TestHandleOrderEvent_Terminal verifies that a terminal kind writes the terminal
+// status to the read model.
+func TestHandleOrderEvent_Terminal(t *testing.T) {
+	t.Parallel()
+	b := newBundle(t)
+	orderID := "ord-terminal-1"
+	ctx := context.Background()
+
+	ev := makeProjectionEvent(orderID, "saga_succeeded")
+	if err := b.svc.HandleOrderEvent(ctx, ev); err != nil {
+		t.Fatalf("HandleOrderEvent: %v", err)
+	}
+	status, found, err := b.rm.Get(ctx, orderID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !found {
+		t.Fatal("read model has no row after HandleOrderEvent")
+	}
+	if status != orderstatusgen.ResponseDataStatusSucceeded {
+		t.Errorf("status = %q, want succeeded", status)
+	}
+}
+
+// TestHandleOrderEvent_BadJSON verifies that a bad payload returns a permanent error.
+func TestHandleOrderEvent_BadJSON(t *testing.T) {
+	t.Parallel()
+	b := newBundle(t)
+	ev := fakeEvent{
+		eventID: "saga-journal:1@ord-bad-json",
+		payload: []byte("{not valid json"),
+	}
+	err := b.svc.HandleOrderEvent(context.Background(), ev)
+	if err == nil {
+		t.Fatal("expected error for bad JSON payload, got nil")
+	}
+	var pe *outbox.PermanentError
+	if !errors.As(err, &pe) {
+		t.Errorf("expected PermanentError, got %T: %v", err, err)
+	}
+}
+
+// TestHandleOrderEvent_UnknownKind verifies that an unknown kind returns a permanent error.
+func TestHandleOrderEvent_UnknownKind(t *testing.T) {
+	t.Parallel()
+	b := newBundle(t)
+	ev := makeProjectionEvent("ord-unknown-kind", "not_a_real_kind")
+	err := b.svc.HandleOrderEvent(context.Background(), ev)
+	if err == nil {
+		t.Fatal("expected error for unknown kind, got nil")
+	}
+	var pe *outbox.PermanentError
+	if !errors.As(err, &pe) {
+		t.Errorf("expected PermanentError, got %T: %v", err, err)
+	}
+}
+
+// TestHandleOrderEvent_MalformedEventID verifies that a malformed EventID (no @)
+// returns a permanent error.
+func TestHandleOrderEvent_MalformedEventID(t *testing.T) {
+	t.Parallel()
+	b := newBundle(t)
+	env := sagaprojection.SagaEventEnvelope{Kind: "step_started"}
+	raw, _ := json.Marshal(env)
+	ev := fakeEvent{
+		eventID: "saga-journal:1-no-at-sign",
+		payload: raw,
+	}
+	err := b.svc.HandleOrderEvent(context.Background(), ev)
+	if err == nil {
+		t.Fatal("expected error for malformed EventID, got nil")
+	}
+	var pe *outbox.PermanentError
+	if !errors.As(err, &pe) {
+		t.Errorf("expected PermanentError, got %T: %v", err, err)
 	}
 }

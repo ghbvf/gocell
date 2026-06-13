@@ -2,8 +2,9 @@
 // entrypoint for orderfulfillment. The generated main.go owns the assembly ID
 // and cell order; this file owns environment loading and runtime option wiring.
 //
-// Demo mode uses in-memory stores and a MemJournal. The saga Coordinator is
-// wired directly and started via bootstrap.WithLifecycle.
+// Demo mode uses in-memory stores and a MemJournal via sagaprojectiondeps.Resolve.
+// The saga Coordinator is wired directly and started via bootstrap.WithLifecycle.
+// The bootstrap auto-builds a Tailer for the orderstatus saga-journal projection.
 //
 // Usage:
 //
@@ -16,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/ghbvf/gocell/cellmodules/sagaprojectiondeps"
 	ordercell "github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell"
 	of "github.com/ghbvf/gocell/generated/contracts/saga/orderfulfillment/v1"
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -24,7 +26,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	rtsaga "github.com/ghbvf/gocell/runtime/saga"
@@ -47,7 +48,7 @@ func runOrderfulfillment(ctx context.Context, assemblyID string, assemblyCellIDs
 
 	clk := clock.Real()
 
-	coord, oc, err := buildSagaComponents(clk, assemblyID, logger)
+	coord, oc, deps, err := buildSagaComponents(ctx, clk, assemblyID, logger)
 	if err != nil {
 		return err
 	}
@@ -77,6 +78,12 @@ func runOrderfulfillment(ctx context.Context, assemblyID string, assemblyCellIDs
 			[]kauth.ListenerAuth{kauth.AuthNone{}}),
 		bootstrap.WithHealthRoutes(demoHealthOpts()...),
 		bootstrap.WithLifecycle(buildSagaLifecycle(coord, assemblyID, logger, &lifecycleAppendErr)),
+		// Saga-journal projection bootstrap options: the bootstrap auto-builds a
+		// Tailer for the orderstatus saga-journal projection (registered in cell_gen.go).
+		bootstrap.WithSagaJournalReader(deps.Reader),
+		bootstrap.WithSagaProjectionOwnerCheckpointStore(deps.OwnerStore),
+		bootstrap.WithSagaProjectionLocker(deps.Locker),
+		bootstrap.WithProjectionTxRunner(deps.TxRunner),
 	)
 	if lifecycleAppendErr != nil {
 		return fmt.Errorf("orderfulfillment: register saga-coordinator lifecycle hook: %w", lifecycleAppendErr)
@@ -87,9 +94,14 @@ func runOrderfulfillment(ctx context.Context, assemblyID string, assemblyCellIDs
 	return app.Run(ctx)
 }
 
-// buildSagaComponents constructs the in-memory stores, MemJournal, saga
+// buildSagaComponents constructs the in-memory stores, sagaprojectiondeps, saga
 // coordinator, and orderfulfillment cell for demo mode.
-func buildSagaComponents(clk clock.Clock, assemblyID string, logger *slog.Logger) (*rtsaga.Coordinator, *ordercell.OrderCell, error) {
+func buildSagaComponents(
+	ctx context.Context,
+	clk clock.Clock,
+	assemblyID string,
+	logger *slog.Logger,
+) (*rtsaga.Coordinator, *ordercell.OrderCell, sagaprojectiondeps.Deps, error) {
 	// Build in-memory stores. Single DemoStores instance is shared across the
 	// cell (placeorder service) and the saga coordinator (Impl), so orders
 	// created via HTTP are visible to saga steps.
@@ -98,21 +110,26 @@ func buildSagaComponents(clk clock.Clock, assemblyID string, logger *slog.Logger
 		"gadget": 100,
 	})
 
-	// Shared MemJournal — injected into both the placeorder service (for
-	// enrollment) and the Coordinator (for execution).
-	jrnl, err := journal.NewMemJournal(clk)
+	// Resolve saga-projection deps (journal, reader, owner store, locker, tx runner)
+	// from the demo/memory topology. This returns a MemJournal shared between the
+	// Coordinator and the projection Tailer.
+	topo, err := bootstrap.NewTopology("", "memory", false)
 	if err != nil {
-		return nil, nil, fmt.Errorf("create journal: %w", err)
+		return nil, nil, sagaprojectiondeps.Deps{}, fmt.Errorf("create topology: %w", err)
+	}
+	deps, err := sagaprojectiondeps.Resolve(ctx, clk, topo, sagaprojectiondeps.Config{})
+	if err != nil {
+		return nil, nil, sagaprojectiondeps.Deps{}, fmt.Errorf("resolve saga projection deps: %w", err)
 	}
 
 	// Build and register the saga definition.
 	sagaImpl, err := ordercell.NewSagaImpl(stores)
 	if err != nil {
-		return nil, nil, fmt.Errorf("build saga impl: %w", err)
+		return nil, nil, sagaprojectiondeps.Deps{}, fmt.Errorf("build saga impl: %w", err)
 	}
 	reg, err := of.Register(sagaImpl)
 	if err != nil {
-		return nil, nil, fmt.Errorf("register saga: %w", err)
+		return nil, nil, sagaprojectiondeps.Deps{}, fmt.Errorf("register saga: %w", err)
 	}
 
 	// Build the saga metrics observer.
@@ -120,16 +137,16 @@ func buildSagaComponents(clk clock.Clock, assemblyID string, logger *slog.Logger
 	// pass a real Prometheus provider from bootstrap.MetricsProvider().
 	sagaObs, err := obmetrics.NewSagaCollector(kernelmetrics.NopProvider{}, "orderfulfillmentcell")
 	if err != nil {
-		return nil, nil, fmt.Errorf("create saga collector: %w", err)
+		return nil, nil, sagaprojectiondeps.Deps{}, fmt.Errorf("create saga collector: %w", err)
 	}
 
 	// Build the saga Coordinator.
-	// Production: replace DemoTxRunner with a real persistence.TxRunner and NewNoopEmitter with a real outbox.Emitter (wired via bootstrap).
-	// outbox.DemoTxRunner{} is a pass-through TxRunner (no real DB).
-	// outbox.NewNoopEmitter() discards outbox events (demo mode).
+	// Uses deps.Journal (shared MemJournal) and deps.TxRunner (DemoTxRunner).
+	// Production: replace deps.TxRunner with a real persistence.TxRunner and
+	// NewNoopEmitter with a real outbox.Emitter (wired via bootstrap).
 	coord, err := rtsaga.NewCoordinator(
-		jrnl,
-		outbox.DemoTxRunner{},
+		deps.Journal,
+		deps.TxRunner,
 		outbox.NewNoopEmitter(),
 		reg,
 		clk,
@@ -137,20 +154,21 @@ func buildSagaComponents(clk clock.Clock, assemblyID string, logger *slog.Logger
 		rtsaga.WithObserver(sagaObs),
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("create saga coordinator: %w", err)
+		return nil, nil, sagaprojectiondeps.Deps{}, fmt.Errorf("create saga coordinator: %w", err)
 	}
 
-	// Build the cell, injecting the shared journal, order repository, and coordinator
-	// for /readyz health reporting.
+	// Build the cell, injecting the shared journal, order repository, and coordinator.
+	// The CQRS read model defaults to an in-memory MemReadModel inside initInternal
+	// (demo mode); for production, pass ordercell.WithOrderStatusReadModel(...).
 	oc := ordercell.NewOrderCell(
 		clk,
-		ordercell.WithJournal(jrnl),
+		ordercell.WithJournal(deps.Journal),
 		ordercell.WithOrderRepo(stores.OrderRepository()),
 		ordercell.WithLogger(logger),
 		ordercell.WithCoordinator(coord),
 	)
 	_ = assemblyID // reserved for future per-assembly labeling
-	return coord, oc, nil
+	return coord, oc, deps, nil
 }
 
 // demoHealthOpts returns health route options for demo mode: verbose readyz

@@ -15,9 +15,9 @@ func (s *Service) validateRequired() error {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"orderstatus.NewService: orders required")
 	}
-	if validation.IsNilInterface(s.journal) {
+	if validation.IsNilInterface(s.readModel) {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"orderstatus.NewService: journal required")
+			"orderstatus.NewService: readModel required")
 	}
 	return nil
 }
