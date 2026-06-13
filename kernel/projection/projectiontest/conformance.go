@@ -352,6 +352,49 @@ func RunCursorConformance(
 	t.Run("PermanentErrorOnUnknownEntry", func(t *testing.T) {
 		checkCursorPermanentOnUnknown(t, cursor, newUnseeded)
 	})
+	// A cursor that is also a LiveCarrierResolver (every projection.LiveCursor —
+	// the contract the Coordinator requires) must resolve a known carrier
+	// consistently with Position. This is opportunistic coverage: a plain Cursor
+	// (e.g. the saga read model's SagaJournalSource) is skipped, since it has no
+	// live push path and implements no resolver.
+	if resolver, ok := cursor.(projection.LiveCarrierResolver); ok {
+		t.Run("ResolveCarrierConsistentWithPosition", func(t *testing.T) {
+			checkResolveCarrierConsistent(t, cursor, resolver, seed)
+		})
+	}
+}
+
+// checkResolveCarrierConsistent asserts that, for each seeded carrier, ResolveCarrier
+// succeeds and the resolved carrier resolves to the SAME Position as the original —
+// i.e. resolution never changes a known event's stream position (it is idempotent on
+// already-positioned carriers and faithful for bare ones). The bare-entry journal
+// lookup and absent-entry permanent-error paths are impl-specific and covered by each
+// resolver's own per-impl tests + the Coordinator live-path regression.
+func checkResolveCarrierConsistent(
+	t *testing.T,
+	cursor projection.Cursor,
+	resolver projection.LiveCarrierResolver,
+	seed func(n int) []projection.ProjectionEvent,
+) {
+	t.Helper()
+	for i, e := range seed(3) {
+		want, err := cursor.Position(e)
+		if err != nil {
+			t.Fatalf("Position(seeded[%d]): unexpected error: %v", i, err)
+		}
+		resolved, err := resolver.ResolveCarrier(context.Background(), e)
+		if err != nil {
+			t.Fatalf("ResolveCarrier(seeded[%d]): unexpected error: %v", i, err)
+		}
+		got, err := cursor.Position(resolved)
+		if err != nil {
+			t.Fatalf("Position(ResolveCarrier(seeded[%d])): unexpected error: %v", i, err)
+		}
+		if got != want {
+			t.Errorf("ResolveCarrier changed position of seeded[%d]: Position(resolved)=%d, Position(original)=%d "+
+				"(resolution must preserve a known event's stream position)", i, got, want)
+		}
+	}
 }
 
 // checkCursorOneBasedMonotonic seeds distinct entries in order and asserts their

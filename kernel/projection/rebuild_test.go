@@ -36,7 +36,7 @@ type coordinatorFullParams struct {
 	reg          *fakeRegistrar
 	txr          *fakeTxRunner
 	store        CheckpointStore
-	cursor       Cursor
+	cursor       LiveCursor
 	replay       ReplaySource
 	metrics      *Metrics // optional; nil leaves instruments disabled
 }
@@ -340,7 +340,7 @@ func TestAdvanceOffsetPastForeign_ErrorBranches(t *testing.T) {
 type advanceOffsetPastForeignCase struct {
 	name      string
 	store     CheckpointStore
-	cursor    Cursor
+	cursor    LiveCursor
 	wantErr   bool
 	wantPerm  bool
 	errSubstr string

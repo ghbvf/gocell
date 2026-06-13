@@ -1,6 +1,8 @@
 package projection
 
 import (
+	"context"
+
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -42,5 +44,14 @@ func (c *MemCursor) Position(entry ProjectionEvent) (int64, error) {
 	return pos, nil
 }
 
-// compile-time interface check.
-var _ Cursor = (*MemCursor)(nil)
+// ResolveCarrier returns entry unchanged: MemCursor resolves position by EventID
+// scan against the paired MemReplaySource, so a bare live entry is already
+// resolvable by Position — no carrier wrapping is needed. This identity makes
+// MemCursor a LiveCursor (usable as a projection.Coordinator cursor). ctx is
+// unused: no I/O.
+func (c *MemCursor) ResolveCarrier(_ context.Context, entry ProjectionEvent) (ProjectionEvent, error) {
+	return entry, nil
+}
+
+// compile-time interface check: MemCursor is a full LiveCursor (Position + ResolveCarrier).
+var _ LiveCursor = (*MemCursor)(nil)

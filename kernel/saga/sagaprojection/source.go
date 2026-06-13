@@ -222,10 +222,29 @@ func (s *SagaJournalSource) Position(entry projection.ProjectionEvent) (int64, e
 	return e.globalSeq, nil
 }
 
-// compile-time interface checks.
+// ResolveCarrier satisfies projection.LiveCarrierResolver so SagaJournalSource is a
+// projection.LiveCursor (the cursor contract projection.Coordinator requires). The saga
+// read model is driven by the pull-only runtime/saga/tailer (which pages carriers via
+// LoadSince) and, when exercised through a Coordinator, only ever replays journal-produced
+// *sagaProjectionEvent carriers — there is NO live broker push of a bare entry. So
+// resolution is the identity on an intrinsic carrier; any other ProjectionEvent is
+// unresolvable and permanent (the saga journal exposes no id→GlobalSeq live lookup, and a
+// bare entry on this source would be a wiring error, not a recoverable transient).
+func (s *SagaJournalSource) ResolveCarrier(_ context.Context, entry projection.ProjectionEvent) (projection.ProjectionEvent, error) {
+	if _, ok := entry.(*sagaProjectionEvent); ok {
+		return entry, nil
+	}
+	return nil, outbox.NewPermanentError(fmt.Errorf(
+		"sagaprojection: ResolveCarrier resolves only *sagaProjectionEvent carriers produced by Replay/LoadSince; "+
+			"the saga journal has no live bare-entry push path (the read model is driven by the pull-only tailer), "+
+			"so a %T is unresolvable (permanent)", entry))
+}
+
+// compile-time interface checks: SagaJournalSource is a ReplaySource and a full
+// LiveCursor (Position + ResolveCarrier — the projection.Coordinator cursor contract).
 var (
 	_ projection.ReplaySource = (*SagaJournalSource)(nil)
-	_ projection.Cursor       = (*SagaJournalSource)(nil)
+	_ projection.LiveCursor   = (*SagaJournalSource)(nil)
 )
 
 // toCarrier converts a journal.GlobalEvent to the *sagaProjectionEvent carrier.

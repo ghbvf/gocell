@@ -67,7 +67,7 @@ type Coordinator struct {
 	reg          SubscribeRegistrar
 	txRunner     persistence.TxRunner
 	store        CheckpointStore
-	cursor       Cursor
+	cursor       LiveCursor
 	replay       ReplaySource
 	tracer       wrapper.Tracer
 	metrics      *Metrics // optional; nil = instruments disabled
@@ -108,7 +108,7 @@ type CoordinatorConfig struct {
 	ProjectionID string
 	TxRunner     persistence.TxRunner
 	Store        CheckpointStore
-	Cursor       Cursor
+	Cursor       LiveCursor
 	Replay       ReplaySource
 	Tracer       wrapper.Tracer
 	Metrics      *Metrics // optional; nil = instruments disabled
@@ -290,7 +290,15 @@ func (c *Coordinator) buildHandler(apply Apply) outbox.EntryHandler {
 		defer span.End()
 
 		err := c.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-			return c.applyOne(txCtx, entry, apply)
+			// Live delivery pushes a bare outbox.Entry with no intrinsic position;
+			// resolve it to a position-bearing carrier at the delivery boundary so
+			// the carrier-intrinsic Cursor.Position succeeds (rebuild's Replay
+			// already produces positioned carriers, so drainGap skips this step).
+			ev, rerr := c.cursor.ResolveCarrier(txCtx, entry)
+			if rerr != nil {
+				return rerr
+			}
+			return c.applyOne(txCtx, ev, apply)
 		})
 		result := classify(err)
 		switch result.Disposition {

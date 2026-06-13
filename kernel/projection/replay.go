@@ -34,8 +34,8 @@ import (
 // version when large-history projections require it.
 //
 // The carrier is the typed [ProjectionEvent] interface (EPIC #1609 PR-01): the
-// outbox-backed source (adapters/postgres.PGProjectionReplaySource) and a future
-// saga-journal source both satisfy it; neither leaks the concrete outbox.Entry.
+// durable journal source (adapters/postgres.PGProjectionEventSource, EPIC #1504)
+// and the saga-journal source both satisfy it; neither leaks the concrete outbox.Entry.
 //
 // ref: AxonFramework EventStore — ordered event stream replay by position/token.
 // ref: JasperFx/marten IDocumentSession.Events.QueryAllRawEvents — append-only
