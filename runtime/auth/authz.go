@@ -46,24 +46,7 @@ func RequireSelfOrRole(ctx context.Context, targetID string, bypassRoles ...stri
 			"subject", p.Subject)
 	}
 
-	// B4: Normalize both sides so canonical UUID case variants match. The
-	// handler edge already produces canonical lowercase via ParseUUIDPathParam;
-	// p.Subject may originate from an external IdP or pre-normalization data.
-	// httputil.ParseCanonicalUUID is intentionally stricter than google/uuid.Parse:
-	// brace-wrapped, urn:uuid:, and whitespace-padded forms are NOT recognized
-	// here, so a subject in a non-canonical wire shape will not authorize a
-	// canonical-shaped target via silent normalization. IdP adapters are
-	// responsible for producing canonical subjects on intake.
-	subject := p.Subject
-	if canonical, ok := httputil.ParseCanonicalUUID(subject); ok {
-		subject = canonical
-	}
-	target := targetID
-	if canonical, ok := httputil.ParseCanonicalUUID(target); ok {
-		target = canonical
-	}
-
-	if target != "" && subject == target {
+	if isSelfAccess(p.Subject, targetID) {
 		return nil
 	}
 
@@ -72,6 +55,29 @@ func RequireSelfOrRole(ctx context.Context, targetID string, bypassRoles ...stri
 	}
 
 	return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, "access denied")
+}
+
+// isSelfAccess reports whether subject names targetID — i.e. the authenticated
+// caller is accessing its OWN resource. Both sides are normalized to canonical
+// UUID form before comparison so canonical/uppercase/compact representations
+// match. httputil.ParseCanonicalUUID is intentionally stricter than
+// google/uuid.Parse: brace-wrapped, urn:uuid:, and whitespace-padded forms are
+// NOT recognized here, so a subject in a non-canonical wire shape will not
+// authorize a canonical-shaped target via silent normalization; IdP adapters are
+// responsible for producing canonical subjects on intake. An empty targetID never
+// matches (empty param ≠ self).
+//
+// Sole self-comparison site, shared by RequireSelfOrRole (role-bypass) and
+// RequirePermissionOrSelf (PDP-bypass) so the two ownership gates cannot drift.
+func isSelfAccess(subject, targetID string) bool {
+	if canonical, ok := httputil.ParseCanonicalUUID(subject); ok {
+		subject = canonical
+	}
+	target := targetID
+	if canonical, ok := httputil.ParseCanonicalUUID(target); ok {
+		target = canonical
+	}
+	return target != "" && subject == target
 }
 
 // principalHasAnyRole checks whether p holds at least one of the given roles.

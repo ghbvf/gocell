@@ -122,6 +122,48 @@ func TestBuiltinBaseline_ConfigcorePerms(t *testing.T) {
 	}
 }
 
+// TestBuiltinBaseline_AccesscorePerms proves the PR-10c accesscore baseline rules
+// reproduce the existing admin gate: admin/super-admin → Allow, ordinary user /
+// no-roles → Deny, for each of the 5 migrated accesscore permissions. The self
+// branch of the SelfOr-migrated permissions (user:read/write, role:read) is NOT a
+// baseline rule — it is a request-shape exemption in auth.RequirePermissionOrSelf,
+// so the baseline only needs to reproduce the admin (now admin/super-admin) path.
+func TestBuiltinBaseline_AccesscorePerms(t *testing.T) {
+	svc := &Service{logger: slog.Default()}
+
+	perms := []string{
+		authz.PermPolicyRead().String(),
+		authz.PermPolicyWrite().String(),
+		authz.PermUserRead().String(),
+		authz.PermUserWrite().String(),
+		authz.PermRoleRead().String(),
+	}
+
+	roleCases := []struct {
+		name      string
+		roles     []string
+		wantAllow bool
+	}{
+		{"admin → Allow", []string{auth.RoleAdmin}, true},
+		{"super-admin → Allow", []string{auth.RoleSuperAdmin}, true},
+		{"ordinary user → Deny", []string{"viewer"}, false},
+		{"no roles → Deny", nil, false},
+	}
+
+	for _, action := range perms {
+		for _, rc := range roleCases {
+			t.Run(action+" / "+rc.name, func(t *testing.T) {
+				resolver := attributeResolver{principal: &auth.Principal{
+					Kind: auth.PrincipalUser, Subject: "subj-1", TenantID: testTenantIDStr,
+					Roles: rc.roles,
+				}}
+				dec := svc.evaluate(nil, resolver, action)
+				assert.Equal(t, rc.wantAllow, dec.IsAllow())
+			})
+		}
+	}
+}
+
 // TestBuiltinBaseline_RulesAreNonEmpty guards anti-vacuity: the baseline must
 // contain at least one rule so an empty return from builtinBaselineRules()
 // cannot silently skip all enforcement.

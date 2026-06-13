@@ -256,19 +256,21 @@ type Handler struct {
 }
 
 // NewHandler creates an identity-manage Handler wiring all 8 contract handlers.
-// Policy is declared at registration time; handler bodies contain only DTO conversion.
+// Route gates use ABAC PDP via auth.RequirePermission / auth.RequirePermissionOrSelf;
+// the baseline PDP grants admin the required permission (PR-10c #1348).
 func NewHandler(svc *Service) *Handler {
-	adminPolicy := auth.AnyRole(auth.RoleAdmin)
-	selfOrAdminPolicy := auth.SelfOr("id", auth.RoleAdmin)
+	userWrite := auth.RequirePermission(authz.PermUserWrite())
+	selfOrUserRead := auth.RequirePermissionOrSelf("id", authz.PermUserRead())
+	selfOrUserWrite := auth.RequirePermissionOrSelf("id", authz.PermUserWrite())
 	return &Handler{
-		createH:         creategen.NewHandler(CreateAdapter{svc}, adminPolicy),
-		getH:            getgen.NewHandler(GetAdapter{svc}, selfOrAdminPolicy),
-		updateH:         updategen.NewHandler(UpdateAdapter{svc}, selfOrAdminPolicy),
-		patchH:          patchgen.NewHandler(PatchAdapter{svc}, selfOrAdminPolicy),
-		deleteH:         deletegen.NewHandler(DeleteAdapter{svc}, adminPolicy),
-		lockH:           lockgen.NewHandler(LockAdapter{svc}, adminPolicy),
-		unlockH:         unlockgen.NewHandler(UnlockAdapter{svc}, adminPolicy),
-		changePasswordH: changepassgen.NewHandler(ChangePasswordAdapter{svc}, selfOrAdminPolicy),
+		createH:         creategen.NewHandler(CreateAdapter{svc}, userWrite),
+		getH:            getgen.NewHandler(GetAdapter{svc}, selfOrUserRead),
+		updateH:         updategen.NewHandler(UpdateAdapter{svc}, selfOrUserWrite),
+		patchH:          patchgen.NewHandler(PatchAdapter{svc}, selfOrUserWrite),
+		deleteH:         deletegen.NewHandler(DeleteAdapter{svc}, userWrite),
+		lockH:           lockgen.NewHandler(LockAdapter{svc}, userWrite),
+		unlockH:         unlockgen.NewHandler(UnlockAdapter{svc}, userWrite),
+		changePasswordH: changepassgen.NewHandler(ChangePasswordAdapter{svc}, selfOrUserWrite),
 	}
 }
 
