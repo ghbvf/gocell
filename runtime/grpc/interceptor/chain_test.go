@@ -8,9 +8,11 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
@@ -126,21 +128,24 @@ var testSvcDesc = grpc.ServiceDesc{
 	Streams: []grpc.StreamDesc{},
 }
 
-// TestNewUnaryChain_AuthOptionsPassthrough asserts that AuthOptions from Deps
-// are actually forwarded to UnaryAuth by newUnaryChain. The test drives a real
-// gRPC server built from newUnaryChain's ServerOption. If deps.AuthOptions...
-// is removed from the UnaryAuth call in chain.go, the WithPublicMethod
-// predicate will not take effect and the unauthenticated request will be
-// rejected as codes.Unauthenticated instead of reaching the handler.
+// TestNewUnaryChain_AuthOptionsPassthrough asserts that AuthOptions from Deps are
+// forwarded to UnaryAuth by newUnaryChain (via authOptionsWithPublicMethods). It
+// drives WithPasswordResetExempt — NOT WithPublicMethod — because #1675 made the
+// registrar the single source of the public-method set: a deps.AuthOptions
+// WithPublicMethod is deliberately overridden by reg.IsPublicMethod (appended
+// last), so password-reset-exempt is the option that still flows from the
+// composition root. If deps.AuthOptions is dropped from the UnaryAuth call, the
+// exempt predicate stops taking effect and the reset-required token is rejected as
+// PermissionDenied instead of reaching the handler.
 func TestNewUnaryChain_AuthOptionsPassthrough(t *testing.T) {
 	handlerReached := false
 	deps := Deps{
 		Collector: metrics.NewInMemoryGRPCCollector(),
 		Clock:     clock.Real(),
-		Verifier:  stubVerifier{},
+		Verifier:  stubVerifier{claims: kauth.Claims{Subject: "u", PasswordResetRequired: true}},
 		AuthOptions: []AuthOption{
-			// Mark /svc/Public as public so no token is required.
-			WithPublicMethod(func(m string) bool { return m == "/svc/Public" }),
+			// Exempt /svc/Public from the password-reset gate.
+			WithPasswordResetExempt(func(m string) bool { return m == "/svc/Public" }),
 		},
 		CellIDClosedSet: []string{"svc-cell"},
 	}
@@ -162,14 +167,17 @@ func TestNewUnaryChain_AuthOptionsPassthrough(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 
-	// Invoke /svc/Public without any authorization metadata.
-	callErr := conn.Invoke(context.Background(), "/svc/Public", &emptypb.Empty{}, &emptypb.Empty{})
+	// Invoke /svc/Public WITH a bearer token whose principal requires a password
+	// reset; the exempt option (forwarded via deps.AuthOptions) must let it reach
+	// the handler instead of being blocked with PermissionDenied.
+	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer t")
+	callErr := conn.Invoke(ctx, "/svc/Public", &emptypb.Empty{}, &emptypb.Empty{})
 	if callErr != nil {
-		t.Fatalf("expected no error for public method without token, got %v (code=%v) — AuthOptions not forwarded",
+		t.Fatalf("expected no error for reset-exempt method, got %v (code=%v) — AuthOptions not forwarded",
 			callErr, status.Code(callErr))
 	}
 	if !handlerReached {
-		t.Fatalf("handler was not reached — WithPublicMethod option did not propagate through newUnaryChain")
+		t.Fatalf("handler was not reached — WithPasswordResetExempt option did not propagate through newUnaryChain")
 	}
 }
 
