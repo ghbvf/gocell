@@ -42,7 +42,9 @@ contract 的破坏式变更——含在 **active 版本上**新增 / 收紧 requ
 ## Setup / bootstrap 路径
 
 没有顶级 `/api/v1/setup/` 命名空间。首启动引导端点和所有业务端点一样挂在所属 Cell 的版本化
-前缀下，遵循同一 `/api/v{N}/{cell}/...` 约定：
+前缀下，遵循同一 `/api/v{N}/{cell}/...` 约定（框架归属契约 `ownerCell: _framework` 无绑定 Cell，
+使用 contract domain 作为路径段，如 `/api/v1/deviceidentity/...`、`/api/v1/devicestate`，
+per ADR 202606130635-1939）：
 
 - bootstrap admin：`/api/v{N}/{cell}/setup/admin`（如 `/api/v1/access/setup/admin`）
 - setup status：`/api/v{N}/{cell}/setup/status`

@@ -1,0 +1,41 @@
+id: http.deviceidentity.status.v1
+kind: http
+ownerCell: _framework
+consistencyLevel: L0
+lifecycle: draft
+description: |
+  GET certificate status by deviceId; returns the device's current active certificate (highest
+  epoch). The certificate identity (issuer + serial, RFC 5280) is surfaced in the response `certRef`.
+  Lookup is keyed solely by deviceId: a bare serial is never a query key — specific-certificate
+  lookup must carry a typed CertScope (tenant+issuer+device) and belongs to the serving layer, not a
+  raw query param (epic #1895 FR-007; isolation invariant forbids naked-serial cross-scope queries).
+  ref: docs/architecture/202606130635-1939-adr-framework-owned-contract.md
+endpoints:
+  server: _framework
+  clients: []
+  http:
+    method: GET
+    path: /api/v1/deviceidentity/status
+    successStatus: 200
+    noContent: false
+    responseProjection: true
+    queryParams:
+      deviceId:
+        type: string
+        required: true
+        maxLength: 256
+    responses:
+      400:
+        description: "Bad request — missing required query parameter or invalid format"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — authenticated but lacks required permission"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: "Not Found — device or certificate not found"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  response: response.schema.json

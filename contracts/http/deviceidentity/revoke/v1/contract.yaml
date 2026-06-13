@@ -1,0 +1,45 @@
+id: http.deviceidentity.revoke.v1
+kind: http
+ownerCell: _framework
+consistencyLevel: L2
+lifecycle: draft
+description: |
+  Device identity certificate revocation — marks a certificate as revoked.
+  ref: RFC 5280 §5.3.1 CRLReason
+  ref: docs/architecture/202606130635-1939-adr-framework-owned-contract.md
+endpoints:
+  server: _framework
+  clients: []
+  http:
+    method: POST
+    path: /api/v1/deviceidentity/revoke
+    successStatus: 200
+    noContent: false
+    responses:
+      400:
+        description: "Bad request — malformed JSON body, missing required fields, or field validation error"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — authenticated but lacks required permission or cross-scope fail-closed"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: "Not Found — certificate not found"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      409:
+        description: "Conflict — idempotency-key replay with a different request payload (idempotency framework)"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Payload Too Large — request body exceeds the size limit"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      422:
+        description: "Unprocessable Entity — request body is structurally valid JSON but contains semantic validation errors"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      503:
+        description: "Service Unavailable — CA backend is not reachable"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json
