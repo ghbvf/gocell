@@ -3,6 +3,8 @@ package tenant
 import (
 	"fmt"
 	"regexp"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // RowVisibility is the self-contained row-level authorization obligation that a
@@ -26,6 +28,20 @@ import (
 // RowVisibility being a mandatory typed positional parameter on the repo
 // interfaces (ROWSCOPE-REPO-PARAM-FUNNEL-01), "forget the obligation" and "forge
 // the obligation" are both compile-time impossible.
+//
+// # RowScopeAll is sealed behind CrossTenantVisibility (#1760)
+//
+// NewRowVisibility REJECTS RowScopeAll: the general constructor is provably
+// incapable of minting a cross-tenant obligation. RowScopeAll is produced ONLY
+// via NewCrossTenantVisibility (the sealed cross-tenant funnel), whose sole
+// production caller is the super-admin derivation in runtime/auth — co-located
+// with the mandatory FR-007 audit (ROWSCOPEALL-AUDIT-FUNNEL-01). The
+// cross-tenant audit read takes a CrossTenantVisibility positional parameter
+// (not a bare RowVisibility), so that read is uncallable without routing through
+// the sealed minter (forget = compile error, forge = compile error). The
+// minter's single-caller restriction is a documented Medium Go-language ceiling
+// (pkg/tenant cannot import runtime/auth to express "only that func may mint";
+// same family as #1282/#851/#893).
 //
 // # Canonical form
 //
@@ -53,11 +69,15 @@ import (
 //
 // SQLPredicate and Allows below are PURE OWNER-DIMENSION TRANSLATORS: for the
 // owner dimension RowScopeAll genuinely means "no owner predicate" (== tenant),
-// so they translate it as such. As of PR-5 (epic #1337), audit ledger stores are
-// pure PEPs that APPLY the obligation without fail-closing RowScopeAll; whether
-// the caller is PERMITTED to use RowScopeAll is an authentication/authorization
-// concern wired at the super-admin path in PR-5 (身份→RowScope 收窄 +
-// RowScope=all 强制審計). The TENANT boundary remains orthogonal (see above).
+// so they translate it as such. The TENANT boundary is enforced separately and
+// is NOT bypassed by RowScopeAll on the ordinary serving path: under per-tenant
+// FORCE RLS the audit serving store still fail-closes RowScopeAll
+// (RowScopeAllUnsupportedError), and a super-admin's cross-tenant read is served
+// by a dedicated role-scoped admin read pool (#1810) that consumes a sealed
+// CrossTenantVisibility. Whether the caller is PERMITTED to use RowScopeAll is
+// an authentication/authorization concern wired at the super-admin path
+// (身份→RowScope 收窄 + RowScope=all 强制审计). The TENANT boundary remains
+// orthogonal (see above).
 type RowVisibility struct {
 	scope   RowScope
 	subject string
@@ -71,21 +91,68 @@ type RowVisibility struct {
 // bound parameter, never interpolated).
 var ownerColumnPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
-// NewRowVisibility constructs a validated RowVisibility obligation. It is the
-// sole constructor (the fields are unexported). scope must be a defined RowScope;
+// errMsgRowScopeAllSealed is the const-literal message for the sealed-funnel
+// rejection (MESSAGE-CONST-LITERAL-01). Reaching NewRowVisibility with
+// RowScopeAll means a caller tried to bypass the cross-tenant seal — a
+// server-side invariant break, never user input.
+const errMsgRowScopeAllSealed = "tenant: RowScopeAll must be minted via NewCrossTenantVisibility, not NewRowVisibility"
+
+// NewRowVisibility constructs a validated RowVisibility obligation for the
+// self / device / tenant scopes. It is the sole constructor for those scopes
+// (the fields are unexported). scope must be a defined RowScope;
 // RowScopeSelf and RowScopeDevice require a non-empty subject (the owner the row
 // must belong to) — an empty subject under a self/device scope would silently
-// widen visibility to every row. RowScopeTenant and RowScopeAll require an EMPTY
-// subject (they carry no owner identity); a non-empty subject is a malformed
-// obligation and is rejected. Both rules are the canonical-form invariant checked
-// by Validate (see type doc).
+// widen visibility to every row. RowScopeTenant requires an EMPTY subject (it
+// carries no owner identity); a non-empty subject is a malformed obligation and
+// is rejected. These rules are the canonical-form invariant checked by Validate
+// (see type doc).
+//
+// RowScopeAll is REJECTED (#1760): the cross-tenant obligation is sealed behind
+// NewCrossTenantVisibility so the general path is provably incapable of minting
+// it. The rejection is a fail-closed KindInternal error (a bypass of the seal is
+// a server-side invariant break, not a client-input error).
 func NewRowVisibility(scope RowScope, subject string) (RowVisibility, error) {
+	if scope == RowScopeAll {
+		return RowVisibility{}, errcode.New(errcode.KindInternal, errcode.ErrInternal, errMsgRowScopeAllSealed)
+	}
 	v := RowVisibility{scope: scope, subject: subject}
 	if err := v.Validate(); err != nil {
 		return RowVisibility{}, err
 	}
 	return v, nil
 }
+
+// CrossTenantVisibility is the sealed carrier of the cross-tenant (RowScopeAll)
+// row-visibility obligation. Its single field is unexported and its sole
+// constructor is NewCrossTenantVisibility, so a populated value is not
+// expressible outside this package (sealed construction — mirrors RowVisibility
+// / errcode.PublicDetail / outbox.Entry).
+//
+// A function that takes a CrossTenantVisibility positional parameter is
+// therefore UNCALLABLE without routing through the sealed minter — which makes
+// the cross-tenant audit read (#1810) a Hard typed funnel: "forget the
+// cross-tenant grant" and "forge it" are both compile-time impossible. The zero
+// value carries the zero (invalid) RowVisibility, so it cannot launder an All
+// obligation: Visibility().Validate() fails on a zero CrossTenantVisibility.
+type CrossTenantVisibility struct {
+	vis RowVisibility
+}
+
+// NewCrossTenantVisibility is the SOLE producer of a RowScopeAll obligation. Its
+// only sanctioned production caller is the super-admin derivation in
+// runtime/auth, co-located with the mandatory FR-007 audit
+// (ROWSCOPEALL-AUDIT-FUNNEL-01); the audit-store conformance suite is the only
+// other allowlisted caller. It builds the {RowScopeAll, ""} obligation directly
+// (NewRowVisibility rejects All), and that obligation is canonical-valid
+// (Validate passes), so a PEP can apply it unchanged.
+func NewCrossTenantVisibility() CrossTenantVisibility {
+	return CrossTenantVisibility{vis: RowVisibility{scope: RowScopeAll, subject: ""}}
+}
+
+// Visibility returns the underlying RowScopeAll obligation for a PEP to apply
+// (its owner dimension is unrestricted; the tenant boundary is enforced by the
+// admin read pool, see #1810).
+func (c CrossTenantVisibility) Visibility() RowVisibility { return c.vis }
 
 // Scope returns the RowScope obligation.
 func (v RowVisibility) Scope() RowScope { return v.scope }

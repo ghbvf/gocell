@@ -124,8 +124,18 @@ func scopedVerify(t *testing.T, tr persistence.TxRunner, store ledger.Store, tid
 // tenant.RowScopeTenant with an empty subject (unrestricted visibility) so that
 // existing tests observe the same behavior as before PR-4. New visibility-
 // obligation tests pass explicit scope/subject values.
+//
+// RowScopeAll is minted via the sealed tenant.NewCrossTenantVisibility funnel
+// (#1760: tenant.NewRowVisibility rejects All); the conformance suite still needs
+// an All obligation to assert every serving store fail-closes it
+// (RowScopeAllUnsupportedError). This is the only other allowlisted caller of
+// NewCrossTenantVisibility besides the runtime/auth super-admin derivation
+// (ROWSCOPEALL-AUDIT-FUNNEL-01) — sanctioned because it is a testing-helper pkg.
 func mustRowVisibility(t testing.TB, scope tenant.RowScope, subject string) tenant.RowVisibility {
 	t.Helper()
+	if scope == tenant.RowScopeAll {
+		return tenant.NewCrossTenantVisibility().Visibility()
+	}
 	v, err := tenant.NewRowVisibility(scope, subject)
 	if err != nil {
 		t.Fatalf("mustRowVisibility(%v, %q): %v", scope, subject, err)
