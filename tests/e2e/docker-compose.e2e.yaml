@@ -63,10 +63,15 @@ services:
     image: rabbitmq:3-alpine
     network_mode: host
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      # check_port_connectivity (not -q ping): ping only confirms the Erlang node
+      # is up, which happens BEFORE the AMQP 5672 listener binds — corebundle's
+      # eager dial then gets "connection refused" and fail-closes (#1940). This
+      # check verifies the listener ports actually accept connections, mirroring
+      # the testcontainers wait.ForListeningPort(5672) the integration tests use.
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
       interval: 3s
       timeout: 5s
-      retries: 30
+      retries: 40
 
   migrate:
     build:
