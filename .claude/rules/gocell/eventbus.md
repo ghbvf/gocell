@@ -27,6 +27,26 @@ composition root（corebundle + ssobff）复用同一包，不各自接线 in-me
 路径限定两 root）守卫。bus / claimer / nonce 三 funnel 合起来确保 composition root 内每个 in-memory
 单 pod 原语只经 sealed resolver 可达。权威语义见 `cellmodules/replaydeps/doc.go`。
 
+## saga 投影资源选型（journal / checkpoint / locker，topology-gated）
+
+saga-journal CQRS 投影消费者的运行依赖经 `cellmodules/sagaprojectiondeps.Resolve(ctx, clk, topo, cfg)`
+按 `Topology` 单源选型（eventtransport / replaydeps 的第 3 个 sibling resolver）：saga journal（与
+Coordinator 共用，再以 `journal.GlobalReader` 喂投影）+ `projection.OwnerCheckpointStore` + 投影
+`TxRunner` + 每投影 leader `distlock.Locker`：
+
+- demo/memory → `MemJournal` + `MemOwnerCheckpointStore` + in-process locker + `DemoTxRunner`。
+- postgres → PG `PGJournal` + PG `ProjectionCheckpointStore` + PG `TxManager`；单 pod in-process
+  locker，real multi-pod → Redis-backed locker。PG pool / Redis client 由 composition root 注入
+  （root 已持 pool 跑 migration，避免开第二个 pool）。
+- fail-closed：postgres 缺 pool / multi-pod 缺 Redis → 启动期报错，**不静默降级**回 in-memory
+  journal（丢重启事件）或 in-process locker（多副本各自当 leader 双投影）。
+
+in-process 单 pod 锁原语 `distlock.NewInProcessDriver` 在 wiring 层（`cmd/*` / `cellmodules/*` /
+`examples/*`）**仅** `sagaprojectiondeps.Resolve` 的 demo 分支可达——因 `runtime/distlock` 为类型合法
+import，depguard 无法表达，故由 archtest `SAGA-PROJECTION-DEPS-INMEM-FUNNEL-01`（调用级 AST 扫描，
+allowlist 该 resolver 目录）守卫。这是 bus / claimer / nonce 之外**第 4 个** sealed 单 pod 原语
+funnel。权威语义见 `cellmodules/sagaprojectiondeps/doc.go`。
+
 ## ConsumerBase
 
 所有 consumer 使用 `ConsumerBase`。它负责 Claim / Commit / Release、幂等、
