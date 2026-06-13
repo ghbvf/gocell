@@ -294,3 +294,118 @@ func TestCondition_Validate(t *testing.T) {
 		})
 	}
 }
+
+func TestCondition_HasRHS(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		cond abac.Condition
+		want bool
+	}{
+		{
+			name: "static: neither field set",
+			cond: abac.Condition{Source: abac.SourceSubject, Key: "dept", Operator: abac.OpEquals, Values: []string{"eng"}},
+			want: false,
+		},
+		{
+			name: "cross-attr: both fields set",
+			cond: abac.Condition{Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr, RHSSource: abac.SourceResource, RHSKey: "id"},
+			want: true,
+		},
+		{
+			name: "half-formed: only RHSKey set",
+			cond: abac.Condition{Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEquals, Values: []string{"x"}, RHSKey: "id"},
+			want: true,
+		},
+		{
+			name: "half-formed: only RHSSource set",
+			cond: abac.Condition{
+				Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEquals,
+				Values: []string{"x"}, RHSSource: abac.SourceResource,
+			},
+			want: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, tc.cond.HasRHS())
+		})
+	}
+}
+
+// TestParseRHS_LosslessPreservesRHSKey is the F2 regression: rhsKey must be
+// preserved even when rhsSource is empty, so a half-formed RHS reaches
+// Condition.Validate (which rejects it) instead of being silently dropped.
+func TestParseRHS_LosslessPreservesRHSKey(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		rhsSource  string
+		rhsKey     string
+		wantSource abac.AttributeSource
+		wantKey    string
+		wantErr    bool
+	}{
+		{"both empty → static (no RHS)", "", "", 0, "", false},
+		{"cross-attr: both present", "resource", "id", abac.SourceResource, "id", false},
+		{"rhsKey-only preserved (no source) → reaches Validate", "", "id", 0, "id", false},
+		{"rhsSource-only preserved (no key)", "subject", "", abac.SourceSubject, "", false},
+		{"invalid rhsSource code → fail-closed error", "ACTION", "id", 0, "", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			src, key, err := abac.ParseRHS(tc.rhsSource, tc.rhsKey)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantSource, src)
+			assert.Equal(t, tc.wantKey, key)
+		})
+	}
+}
+
+// TestCondition_RHSWire_RoundTrip asserts the outbound emit is lossless and that
+// static conditions emit the empty pair (so omitempty keeps rows byte-identical).
+func TestCondition_RHSWire_RoundTrip(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		cond       abac.Condition
+		wantSource string
+		wantKey    string
+	}{
+		{
+			name:       "static emits empty pair",
+			cond:       abac.Condition{Source: abac.SourceSubject, Key: "dept", Operator: abac.OpEquals, Values: []string{"eng"}},
+			wantSource: "",
+			wantKey:    "",
+		},
+		{
+			name: "cross-attr emits both",
+			cond: abac.Condition{
+				Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr,
+				RHSSource: abac.SourceResource, RHSKey: "id",
+			},
+			wantSource: "resource",
+			wantKey:    "id",
+		},
+		{
+			name:       "half-formed RHSKey-only round-trips losslessly",
+			cond:       abac.Condition{Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEquals, Values: []string{"x"}, RHSKey: "id"},
+			wantSource: "invalid",
+			wantKey:    "id",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			src, key := tc.cond.RHSWire()
+			assert.Equal(t, tc.wantSource, src)
+			assert.Equal(t, tc.wantKey, key)
+		})
+	}
+}

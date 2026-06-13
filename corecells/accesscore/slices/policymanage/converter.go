@@ -94,10 +94,11 @@ func (w *createCondWire) getRHSKey() string    { return w.RHSKey }
 
 // parseConditionWires converts a slice of conditionWire to domain Conditions.
 // Factored out to avoid code duplication between create and update converters.
-// For cross-attribute conditions (op=="eq_attr"), rhsSource is parsed into
-// Condition.RHSSource and rhsKey into Condition.RHSKey; Values is left nil.
-// Domain Condition.Validate (called downstream in service.go) enforces the
-// operator-discriminated shape → malformed = 422 (#1977).
+// The right-hand side is parsed losslessly via abac.ParseRHS (the single inbound
+// funnel shared with the PG codec): rhsKey is preserved even without rhsSource, so
+// a half-formed RHS reaches domain Condition.Validate (called downstream in
+// service.go) and is rejected there → malformed = 422 (#1977). Conversion stays a
+// lossless translator; the domain validator is the single source of structural truth.
 func parseConditionWires(items []conditionWire) ([]abac.Condition, error) {
 	if len(items) == 0 {
 		return nil, nil
@@ -116,24 +117,16 @@ func parseConditionWires(items []conditionWire) ([]abac.Condition, error) {
 				"policymanage: invalid condition operator",
 				errcode.WithDetails(errcode.PublicString("operator", c.getOperator())))
 		}
-		cond := abac.Condition{Source: src, Key: c.getKey(), Operator: op, Values: c.getValues()}
-		// Cross-attribute operator: parse rhsSource if present.
-		// NOTE: a non-empty rhsKey paired with an empty rhsSource is dropped here
-		// (rhsSource == "" skips this block, leaving RHSSource zero) and then
-		// rejected downstream by Condition.Validate (zero RHSSource on OpEqualsAttr
-		// → 422). This ensures the two shapes (cross-attr: RHS set; static: Values
-		// set) are mutually exclusive at the service-validation boundary.
-		if c.getRHSSource() != "" {
-			rhsSrc, err := abac.ParseAttributeSource(c.getRHSSource())
-			if err != nil {
-				return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-					"policymanage: invalid condition rhsSource",
-					errcode.WithDetails(errcode.PublicString("rhsSource", c.getRHSSource())))
-			}
-			cond.RHSSource = rhsSrc
-			cond.RHSKey = c.getRHSKey()
+		rhsSrc, rhsKey, err := abac.ParseRHS(c.getRHSSource(), c.getRHSKey())
+		if err != nil {
+			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"policymanage: invalid condition rhsSource",
+				errcode.WithDetails(errcode.PublicString("rhsSource", c.getRHSSource())))
 		}
-		conds = append(conds, cond)
+		conds = append(conds, abac.Condition{
+			Source: src, Key: c.getKey(), Operator: op, Values: c.getValues(),
+			RHSSource: rhsSrc, RHSKey: rhsKey,
+		})
 	}
 	return conds, nil
 }
@@ -272,7 +265,9 @@ func polRulesToCreateWire(rules []abac.Rule) []*policyCreate.ResponseDataRulesIt
 	return items
 }
 
-// NOTE: mirror of polCondsTo{Create,Get,Update,List}Wire — keep RHS handling in sync.
+// polCondsToCreateWire mirrors the domain→wire condition shape; RHS emit is
+// single-sourced through Condition.RHSWire (lossless; static conditions emit the
+// empty pair so omitempty keeps the field absent). #1977.
 func polCondsToCreateWire(conds []abac.Condition) []*policyCreate.ResponseDataRulesItemConditionsItem {
 	if len(conds) == 0 {
 		return nil
@@ -282,10 +277,7 @@ func polCondsToCreateWire(conds []abac.Condition) []*policyCreate.ResponseDataRu
 		item := &policyCreate.ResponseDataRulesItemConditionsItem{
 			Source: c.Source.String(), Key: c.Key, Operator: c.Operator.String(), Values: c.Values,
 		}
-		if c.RHSSource != 0 {
-			item.RHSSource = c.RHSSource.String()
-			item.RHSKey = c.RHSKey
-		}
+		item.RHSSource, item.RHSKey = c.RHSWire()
 		out = append(out, item)
 	}
 	return out
@@ -325,7 +317,8 @@ func polRulesToGetWire(rules []abac.Rule) []*policyGet.ResponseDataRulesItem {
 	return items
 }
 
-// NOTE: mirror of polCondsTo{Create,Get,Update,List}Wire — keep RHS handling in sync.
+// polCondsToGetWire mirrors the domain→wire condition shape; RHS emit is
+// single-sourced through Condition.RHSWire (see polCondsToCreateWire). #1977.
 func polCondsToGetWire(conds []abac.Condition) []*policyGet.ResponseDataRulesItemConditionsItem {
 	if len(conds) == 0 {
 		return nil
@@ -335,10 +328,7 @@ func polCondsToGetWire(conds []abac.Condition) []*policyGet.ResponseDataRulesIte
 		item := &policyGet.ResponseDataRulesItemConditionsItem{
 			Source: c.Source.String(), Key: c.Key, Operator: c.Operator.String(), Values: c.Values,
 		}
-		if c.RHSSource != 0 {
-			item.RHSSource = c.RHSSource.String()
-			item.RHSKey = c.RHSKey
-		}
+		item.RHSSource, item.RHSKey = c.RHSWire()
 		out = append(out, item)
 	}
 	return out
@@ -378,7 +368,8 @@ func polRulesToUpdateWire(rules []abac.Rule) []*policyUpdate.ResponseDataRulesIt
 	return items
 }
 
-// NOTE: mirror of polCondsTo{Create,Get,Update,List}Wire — keep RHS handling in sync.
+// polCondsToUpdateWire mirrors the domain→wire condition shape; RHS emit is
+// single-sourced through Condition.RHSWire (see polCondsToCreateWire). #1977.
 func polCondsToUpdateWire(conds []abac.Condition) []*policyUpdate.ResponseDataRulesItemConditionsItem {
 	if len(conds) == 0 {
 		return nil
@@ -388,10 +379,7 @@ func polCondsToUpdateWire(conds []abac.Condition) []*policyUpdate.ResponseDataRu
 		item := &policyUpdate.ResponseDataRulesItemConditionsItem{
 			Source: c.Source.String(), Key: c.Key, Operator: c.Operator.String(), Values: c.Values,
 		}
-		if c.RHSSource != 0 {
-			item.RHSSource = c.RHSSource.String()
-			item.RHSKey = c.RHSKey
-		}
+		item.RHSSource, item.RHSKey = c.RHSWire()
 		out = append(out, item)
 	}
 	return out
@@ -431,7 +419,8 @@ func polRulesToListWire(rules []abac.Rule) []*policyList.ResponseDataItemRulesIt
 	return items
 }
 
-// NOTE: mirror of polCondsTo{Create,Get,Update,List}Wire — keep RHS handling in sync.
+// polCondsToListWire mirrors the domain→wire condition shape; RHS emit is
+// single-sourced through Condition.RHSWire (see polCondsToCreateWire). #1977.
 func polCondsToListWire(conds []abac.Condition) []*policyList.ResponseDataItemRulesItemConditionsItem {
 	if len(conds) == 0 {
 		return nil
@@ -441,10 +430,7 @@ func polCondsToListWire(conds []abac.Condition) []*policyList.ResponseDataItemRu
 		item := &policyList.ResponseDataItemRulesItemConditionsItem{
 			Source: c.Source.String(), Key: c.Key, Operator: c.Operator.String(), Values: c.Values,
 		}
-		if c.RHSSource != 0 {
-			item.RHSSource = c.RHSSource.String()
-			item.RHSKey = c.RHSKey
-		}
+		item.RHSSource, item.RHSKey = c.RHSWire()
 		out = append(out, item)
 	}
 	return out

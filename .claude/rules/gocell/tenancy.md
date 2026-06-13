@@ -53,6 +53,9 @@ app-serving role 必须非 owner 且无 bypass RLS 权限。
   `subject.sub == resource.id`（`abac.OpEqualsAttr` 跨属性算子）判定，引擎决策、无 Go `isSelfAccess`
   短路。「空参数 ≠ self」保留：空/非 canonical param → `resource.id` not-found → 规则不命中（fail-closed）。
   delegated ownership（owner ≠ id，如设备）用 `subject.sub == resource.owner`（owner 由 PIP lookup 供）。
+  owner-scoped 端点的 gate 形状由 `OWNER-SCOPED-GATE-EXACT-SET-01`（Medium）冻结守卫——把
+  owner gate 回退成裸 `auth.RequirePermission`（转发 `r.URL.Path` 而非 canonical resource id）即 CI 红；
+  精确集（identitymanage / rbaccheck）与盲区见该 archtest godoc。
 - self ownership **不扩大数据访问**：路由门禁放行只让 owner 过 coarse gate；行可见性仍由 principal 派生的
   `RowScope`（身份决定，policy 改不动）独立治理（D3）。query-param self scoping 仍留 handler/service：如
   audit 的空 `actorId` 对 admin 是全 actor permissioned 读，非隐式 self（只有显式 `param == subject` 经

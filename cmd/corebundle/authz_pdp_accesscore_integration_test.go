@@ -18,6 +18,10 @@ package main
 //   - non-admin GET /api/v1/access/users/{self}  → 200 (PDP ownership rule subject.sub ==
 //     resource.id; the only way a non-admin reaches 200 here, so it proves the rule fired)
 //   - non-admin GET /api/v1/access/users/{other} → 403 PDP-deny (not owner, no user:read)
+//   - non-admin PATCH /api/v1/access/users/{self}  → 200 (PDP ownership rule on user:write —
+//     the userWriteOwnerGate path: update/patch/change-password; proves write ownership, not
+//     just read, is PDP-decided — F5/#2025)
+//   - non-admin PATCH /api/v1/access/users/{other} → 403 PDP-deny (not owner, no user:write)
 //   - admin     GET /api/v1/access/users/{user}  → 200 (baseline allow, user:read)
 //   - non-admin GET /api/v1/access/roles/{self}  → 200 (PDP ownership rule)
 //   - non-admin GET /api/v1/access/roles/{other} → 403 PDP-deny (not owner, no role:read)
@@ -85,6 +89,26 @@ func TestABACPDPGatesAccesscore(t *testing.T) {
 		resp, body := pdpAccessReq(t, base, http.MethodGet, "/api/v1/access/users/"+userID, adminToken, nil)
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
 			"admin GET a user must be 200 (baseline allow, user:read); body=%s", body)
+	})
+
+	// --- identitymanage write ownership: PATCH self via the userWriteOwnerGate PDP
+	// ownership rule (user:write); non-self write is PDP-denied (#1977, F5/#2025). ---
+
+	t.Run("non_admin_self_patch_user_200_pdp_ownership", func(t *testing.T) {
+		resp, body := pdpAccessReq(t, base, http.MethodPatch, "/api/v1/access/users/"+userID, userToken, []byte(`{"name":"Self Updated"}`))
+		assert.Equal(t, http.StatusOK, resp.StatusCode,
+			"non-admin PATCH own user (subject==resource.id) must be 200 via the PDP ownership rule on "+
+				"user:write (a non-admin has no baseline user:write grant, so 200 proves the ownership rule "+
+				"fired on the write path, not just read); body=%s", body)
+	})
+
+	t.Run("non_admin_patch_other_user_403_pdp_deny", func(t *testing.T) {
+		resp, body := pdpAccessReq(t, base, http.MethodPatch, "/api/v1/access/users/"+adminID, userToken, []byte(`{"name":"Hijack"}`))
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+			"non-admin PATCH another user must be 403 (PDP deny, not owner + no user:write); body=%s", body)
+		assert.Contains(t, body, "ERR_AUTH_FORBIDDEN", "PDP deny must produce ERR_AUTH_FORBIDDEN; body=%s", body)
+		assert.Contains(t, body, "insufficient permissions",
+			"non-self write deny must be a PDP decision (%q), not a no-Authorizer gap; body=%s", "insufficient permissions", body)
 	})
 
 	// --- rbaccheck: self-access via PDP ownership + PDP deny for another user's roles ---

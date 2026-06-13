@@ -124,6 +124,50 @@ type Condition struct {
 	RHSKey string
 }
 
+// HasRHS reports whether the Condition carries a cross-attribute right-hand-side
+// reference, i.e. either RHSSource or RHSKey is set. It is the single source of
+// the "does this condition have an RHS?" decision shared by every wire/persistence
+// emit site (PG codec encode + the four HTTP response converters), so the predicate
+// can never drift between them (#1977). A well-formed condition has both fields set
+// (cross-attribute) or neither (static); a half-formed condition (one field set) is
+// still reported as HasRHS so it round-trips losslessly to Validate, which rejects it.
+func (c Condition) HasRHS() bool {
+	return c.RHSSource != 0 || c.RHSKey != ""
+}
+
+// ParseRHS losslessly converts a wire/persisted right-hand-side pair into the
+// domain (RHSSource, RHSKey) fields. It is the single inbound funnel shared by the
+// HTTP request converter and the PG codec decoder: rhsSource is parsed via
+// ParseAttributeSource only when non-empty (an unknown code is a fail-closed error),
+// but rhsKey is ALWAYS preserved — even when rhsSource is empty. A half-formed RHS
+// (rhsKey without rhsSource) therefore reaches Condition.Validate and is rejected
+// there, instead of being silently dropped at the conversion boundary and downgraded
+// to a static condition (#1977). Conversion stays a lossless translator; validateRHS
+// remains the single source of structural truth.
+func ParseRHS(rhsSource, rhsKey string) (AttributeSource, string, error) {
+	if rhsSource == "" {
+		return 0, rhsKey, nil
+	}
+	src, err := ParseAttributeSource(rhsSource)
+	if err != nil {
+		return 0, "", err
+	}
+	return src, rhsKey, nil
+}
+
+// RHSWire losslessly emits the right-hand-side pair for the wire/persisted
+// representation, the single outbound counterpart to ParseRHS used by the HTTP
+// response converters. A condition carrying an RHS (HasRHS) emits both fields so it
+// round-trips faithfully; a static condition (neither field set) emits the empty
+// pair, which downstream omitempty drops — keeping persisted static rows
+// byte-identical and static responses field-free (#1977).
+func (c Condition) RHSWire() (rhsSource, rhsKey string) {
+	if c.HasRHS() {
+		return c.RHSSource.String(), c.RHSKey
+	}
+	return "", ""
+}
+
 // Validate returns an error if the Condition is structurally invalid. Source,
 // Key and Operator are always required; the right-hand side is checked by
 // validateRHS according to the operator's shape.

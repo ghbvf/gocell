@@ -285,10 +285,13 @@ func encodeConditions(conds []abac.Condition) ([]conditionJSON, error) {
 			return nil, err
 		}
 		dto := conditionJSON{Source: srcCode, Key: c.Key, Operator: opCode, Values: c.Values}
-		// For cross-attribute conditions (OpEqualsAttr) write the RHS attribute
-		// reference; static operators leave RHSSource/RHSKey zero/empty and they
-		// are omitted via omitempty — static rows stay byte-identical (#1977).
-		if c.Operator == abac.OpEqualsAttr {
+		// Emit the RHS reference for any condition that carries one (Condition.HasRHS
+		// — the single emit predicate shared with the HTTP response converters).
+		// Static operators carry no RHS, leaving the fields zero/empty and omitted via
+		// omitempty — static rows stay byte-identical (#1977). encodeSource stays
+		// fail-closed: a zero/out-of-range RHSSource (e.g. a half-formed RHS) errors
+		// rather than persisting a silently-wrong code.
+		if c.HasRHS() {
 			rhsSrcCode, err := encodeSource(c.RHSSource)
 			if err != nil {
 				return nil, err
@@ -345,17 +348,17 @@ func decodeConditions(conds []conditionJSON) ([]abac.Condition, error) {
 		if err != nil {
 			return nil, err
 		}
-		cond := abac.Condition{Source: src, Key: c.Key, Operator: op, Values: c.Values}
-		// Decode cross-attribute RHS when present. Legacy rows (no rhsSource/rhsKey
-		// keys) leave these empty strings which are the zero values — safe (#1977).
-		if c.RHSSource != "" {
-			rhsSrc, err := decodeSource(c.RHSSource)
-			if err != nil {
-				return nil, err
-			}
-			cond.RHSSource = rhsSrc
-			cond.RHSKey = c.RHSKey
+		// Decode the RHS losslessly via abac.ParseRHS (the single inbound funnel
+		// shared with the HTTP converter): rhsKey is preserved even without rhsSource,
+		// so a tampered/forward-incompatible row carrying a half-formed RHS reaches
+		// Policy.Validate in scanPolicy and is rejected (ErrPGSchemaShape → deny),
+		// instead of being silently downgraded to a static condition. Legacy rows
+		// (no rhsSource/rhsKey keys) decode to the zero values — safe (#1977).
+		rhsSrc, rhsKey, err := abac.ParseRHS(c.RHSSource, c.RHSKey)
+		if err != nil {
+			return nil, fmt.Errorf("policy_codec: unknown attribute source code %q", c.RHSSource)
 		}
+		cond := abac.Condition{Source: src, Key: c.Key, Operator: op, Values: c.Values, RHSSource: rhsSrc, RHSKey: rhsKey}
 		out[i] = cond
 	}
 	return out, nil

@@ -76,6 +76,19 @@
             "maxLength": 128,
             "description": "Cross-attribute right-hand-side attribute name. Set only for operator eq_attr."
           }
+        },
+        "$comment": "Operator-discriminated RHS shape (#1977): static operators (eq/neq/in/not_in) carry a non-empty `values` and no RHS reference; the cross-attribute operator eq_attr carries `rhsSource`+`rhsKey` and no `values`. Enforced structurally so a malformed mix is rejected at the schema layer (400), preserving the pre-eq_attr 400 status for static conditions missing `values` (which would otherwise fall through to the domain validator's 422).",
+        "if": {
+          "required": ["operator"],
+          "properties": { "operator": { "const": "eq_attr" } }
+        },
+        "then": {
+          "required": ["rhsSource", "rhsKey"],
+          "properties": { "values": false }
+        },
+        "else": {
+          "required": ["values"],
+          "properties": { "rhsSource": false, "rhsKey": false }
         }
       }
     },
