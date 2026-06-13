@@ -2,22 +2,20 @@ package main
 
 import (
 	"fmt"
-	"os"
 
 	kauth "github.com/ghbvf/gocell/kernel/auth"
 
-	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 const ssobffServiceKeyEnv = "GOCELL_SSOBFF_SERVICE_SECRET"
 
-func newInternalAuthChainFromEnv() ([]kauth.ListenerAuth, error) {
-	secret := os.Getenv(ssobffServiceKeyEnv)
-	return newInternalAuthChain(secret)
-}
-
-func newInternalAuthChain(secret string) ([]kauth.ListenerAuth, error) {
+// newInternalAuthChain builds the service-token auth chain for the internal
+// listener. secret must be non-empty (fail-fast). nonceStore is the topology-
+// gated nonce store resolved by replaydeps.Resolve: in-memory for demo, Redis-
+// backed for real multi-pod (so replay protection is cross-replica in real
+// deployments).
+func newInternalAuthChain(secret string, nonceStore kauth.NonceStore) ([]kauth.ListenerAuth, error) {
 	if secret == "" {
 		return nil, fmt.Errorf("%s must be set for the internal listener", ssobffServiceKeyEnv)
 	}
@@ -26,11 +24,7 @@ func newInternalAuthChain(secret string) ([]kauth.ListenerAuth, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load %s: %w", ssobffServiceKeyEnv, err)
 	}
-	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
-	if err != nil {
-		return nil, fmt.Errorf("create internal listener nonce store: %w", err)
-	}
-	plan, err := kauth.NewAuthServiceToken(store, ring)
+	plan, err := kauth.NewAuthServiceToken(nonceStore, ring)
 	if err != nil {
 		return nil, fmt.Errorf("build internal auth chain: %w", err)
 	}

@@ -145,8 +145,7 @@ func defaultRuntimeOptions(
 	// no env toggle). When Redis is absent (memory/single-pod mode) the store
 	// is nil and WithIdempotencyStore is intentionally not called — single-pod
 	// deployments have no cross-pod replay need and the middleware is safely
-	// inactive. Mirrors the buildConsumerClaimer / buildServiceNonceStore
-	// topology pattern.
+	// inactive. Mirrors the replaydeps.Resolve topology-gated pattern.
 	if locals.redisClient != nil {
 		idemStore, err := buildHTTPIdempotencyStore(locals.redisClient)
 		if err != nil {

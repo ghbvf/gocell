@@ -113,7 +113,8 @@ func TestPrometheusExposition_RelayCollector_FamiliesAndBuckets(t *testing.T) {
 	}
 
 	c.RecordPollCycle(context.Background(), outbox.PollCycleResult{
-		Published: 2, Retried: 0, Dead: 1, Skipped: 3,
+		Event:    outbox.OutcomeCounts{Published: 2, Retried: 0, Dead: 1, Skipped: 3},
+		Command:  outbox.OutcomeCounts{Published: 5, Retried: 2},
 		ClaimDur: testtime.D10ms, PublishDur: testtime.MediumPoll, WriteBackDur: testtime.FastPoll,
 	})
 	c.RecordBatchSize(context.Background(), 6)
@@ -133,21 +134,24 @@ func TestPrometheusExposition_RelayCollector_FamiliesAndBuckets(t *testing.T) {
 			t.Errorf("exposition missing %q; got:\n%s", want, body)
 		}
 	}
-	// Non-zero outcomes labeled correctly (skipped zero suppression is a
-	// collector rule inherited from the old adapter).
+	// Non-zero (kind, outcome) series labeled correctly — command dispatch is
+	// separable from event publish on the same outcomes (#1674). Prometheus sorts
+	// labels alphabetically: cell < kind < outcome.
 	for _, want := range []string{
-		`gocell_outbox_relayed_total{cell="testcell",outcome="published"} 2`,
-		`gocell_outbox_relayed_total{cell="testcell",outcome="dead"} 1`,
-		`gocell_outbox_relayed_total{cell="testcell",outcome="skipped"} 3`,
+		`gocell_outbox_relayed_total{cell="testcell",kind="event",outcome="published"} 2`,
+		`gocell_outbox_relayed_total{cell="testcell",kind="event",outcome="dead"} 1`,
+		`gocell_outbox_relayed_total{cell="testcell",kind="event",outcome="skipped"} 3`,
+		`gocell_outbox_relayed_total{cell="testcell",kind="command",outcome="published"} 5`,
+		`gocell_outbox_relayed_total{cell="testcell",kind="command",outcome="retried"} 2`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("exposition missing sample %q; got:\n%s", want, body)
 		}
 	}
-	// Retried was zero on the RecordPollCycle call; the collector skips
-	// zero-valued outcomes to keep cardinality clean — pin this rule.
-	if strings.Contains(body, `outcome="retried"`) {
-		t.Errorf("exposition must not carry retried outcome when count was zero; got:\n%s", body)
+	// Zero counts are skipped PER (kind, outcome): event retried was zero, so the
+	// event-retried series must be absent even though command-retried fired.
+	if strings.Contains(body, `kind="event",outcome="retried"`) {
+		t.Errorf("exposition must not carry event-retried when its count was zero; got:\n%s", body)
 	}
 	// DefaultRelayPollBuckets start at 0.005 and include 2.5.
 	if !strings.Contains(body, `le="0.005"`) || !strings.Contains(body, `le="2.5"`) {

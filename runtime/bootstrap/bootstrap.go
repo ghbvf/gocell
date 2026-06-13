@@ -98,6 +98,18 @@ type Bootstrap struct {
 	// topology-dependent replay check is a no-op — identical to prior behavior.
 	controlPlaneTopology Topology
 
+	// deploymentTopologySpec is the plain codegen-produced input describing
+	// which cells are co-located vs remote. Set by WithDeploymentTopology;
+	// zero value = empty spec (all-colocated default).
+	deploymentTopologySpec DeploymentTopologySpec
+
+	// deploymentTopology is the sealed, validated runtime-read-only view of
+	// deployment placement, resolved from deploymentTopologySpec at phase0.
+	// WriteOnce: assigned exactly once in validateDeploymentTopology (phase0),
+	// read-only during serving. No atomic/mutex needed; phase0 runs synchronously
+	// before any serving goroutine is launched.
+	deploymentTopology DeploymentTopology
+
 	// --- grpc: listener declarations (server lifecycle owned by adapters/grpc,
 	// injected via the GRPCServer interface; see grpc_listener.go) ---
 	grpcListenerConfigs []grpcListenerConfig
@@ -513,6 +525,13 @@ func (b *Bootstrap) MetricsProvider() kernelmetrics.Provider {
 		return kernelmetrics.NopProvider{}
 	}
 	return b.metricsProvider
+}
+
+// DeploymentTopology returns the sealed deployment topology resolved at phase0
+// (WriteOnce). Before phase0 runs it returns the zero value (all-colocated).
+// US4 transport wiring reads it to choose in-proc vs remote dispatch.
+func (b *Bootstrap) DeploymentTopology() DeploymentTopology {
+	return b.deploymentTopology
 }
 
 // Run executes the full startup sequence. It blocks until ctx is canceled

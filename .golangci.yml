@@ -312,6 +312,34 @@ linters:
                 postgres topology and fail-fasts on a missing broker URL. A direct
                 eventbus.New re-opens the #1940 postgres-mode in-memory-publisher
                 gap. COREBUNDLE-EVENTBUS-FUNNEL-01.
+        ssobff-no-direct-eventbus:
+          # COREBUNDLE-EVENTBUS-FUNNEL-01 extended to the ssobff demo composition
+          # root (#825/#2017). examples/ssobff has its OWN composition root and
+          # historically wired the in-memory bus directly as publisher while using
+          # a durable PG outbox — the exact #2017 bug (already-persisted outbox
+          # entries published to an in-process bus → lost across processes /
+          # restarts in multi-pod). #1940's funnel only path-scoped cmd/corebundle,
+          # which is WHY ssobff regressed; this sibling rule closes that hole.
+          # ssobff now wires the bus EXCLUSIVELY through
+          # cellmodules/eventtransport.Resolve (demo → in-memory, postgres →
+          # RabbitMQ, fail-closed). Tests still use the in-memory bus (excluded
+          # via the *_test.go negations). The call-granularity siblings (the
+          # in-mem claimer / nonce constructors, which depguard cannot express
+          # because the packages are legitimately imported for their types) are
+          # guarded by archtest REPLAYDEPS-INMEM-FUNNEL-01.
+          files:
+            - "**/examples/ssobff/**"
+            - "!**/examples/ssobff/*_test.go"
+            - "!**/examples/ssobff/**/*_test.go"
+          deny:
+            - pkg: github.com/ghbvf/gocell/runtime/eventbus
+              desc: |
+                examples/ssobff must not import runtime/eventbus directly; the
+                in-memory bus is reachable only through
+                cellmodules/eventtransport.Resolve, which selects a real broker in
+                postgres topology and fail-fasts on a missing broker URL. A direct
+                eventbus.New re-opens the #2017 postgres-mode in-memory-publisher
+                gap. COREBUNDLE-EVENTBUS-FUNNEL-01 (ssobff scope).
         adapters-isolation:
           # LAYER-04: adapters/ depend on kernel/ + runtime/ + pkg/ + SDKs.
           # Cell-internal `cells/*/internal/adapters/**` (and the corecells
