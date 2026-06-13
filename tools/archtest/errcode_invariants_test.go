@@ -820,24 +820,47 @@ func TestDetailsSealedFieldFrozen01_ScannerFires(t *testing.T) {
 // exported package-scope Code sentinel must have a registered prefix entry
 // in pkg/errcode.RegisteredPrefixes().
 //
-// Two scan targets:
+// Two scan targets share one classifier, classifyCodeExpr (const /
+// runtime-assembled / skip):
 //
 //	A. Mint callsites: every code-bearing helper in codeGatedCallees
 //	   (errcode.New/Wrap/WrapInfra, httputil.WritePublic, ctxcancel.WrapOrInfra)
-//	   — extract the code arg at the helper's codeArgIndex. EvaluateConstString
-//	   is used for typed resolution.
-//	   Non-const code args (e.g. errcode.Code("ERR_"+x)) are a HARD FAIL: this
-//	   closes the closed-set escape hatch. Parse/compare-side errcode.Code(x)
-//	   conversions are NOT mint sites and are untouched.
-//	B. Sentinel decls: var ErrFoo errcode.Code = "ERR_..." string BasicLit
-//	   at package scope.
+//	   — extract the code arg at the helper's codeArgIndex.
+//	B. Sentinel decls: every exported errcode.Code-typed Err* sentinel at
+//	   package scope. In typed mode the declared type is confirmed via go/types
+//	   (isErrcodeCodeSentinel), which excludes Err*-named non-Code sentinels
+//	   (var ErrX = errcode.New(...) is *errcode.Error; errors.New(...) is error).
+//
+// Both targets resolve the value with EvaluateConstString — including const
+// SelectorExpr / Ident forms (e.g. var ErrX errcode.Code = somepkg.Const), not
+// just string BasicLits. A const value whose prefix is unregistered is reported;
+// a runtime-assembled value (errcode.Code("ERR_"+x) or other type-conversion /
+// concatenation) is a HARD FAIL closing the closed-set escape hatch.
+// Parse/compare-side errcode.Code(x) conversions are NOT mint sites or sentinels
+// and are untouched.
+//
+// §Residual (rating: Medium — gh #1508). This rule is archtest-bound, not a
+// type-system seal: errcode.Code is a wire string (JSON-serialized, parsed from
+// responses, compared in tests), so sealing it into a closed-constructor type
+// would break the parse side and is rejected (see ADR §备选). Hard is therefore
+// unreachable; the whole rule is Medium. After the gh #1508 fix the SOLE residual
+// is the forwarding-launder gap: a bare non-const Code variable/parameter
+// reference (classifyCodeExpr → codeArgSkip) at a mint site or sentinel value is
+// skipped, because resolving it needs data-flow / taint tracing that archtest
+// does not do and that would false-positive on legitimate parse/compare-side
+// conversions. Only deliberate construction triggers it, not accidental drift.
+// This is the same permanent Go-language ceiling family as
+// SPAN-SETATTR-HOLDER-SEAL (#851) / HEALTHZ-HOLDER-SEAL (#893) / outbox
+// principal-write (#1282). The earlier "non-literal sentinel" residual is CLOSED:
+// Target B now resolves const SelectorExpr/Ident values via type info (see
+// TestErrcodePrefixOwnership01_SentinelConstEval).
 //
 // After scanning, a canary coverage anchor asserts that ERR_AUTH_FORBIDDEN and
 // ERR_INTERNAL were actually observed; if absent the scan loaded nothing and
 // a false-green from an empty scope is rejected.
 //
 // ref: docs/architecture/202606031200-1091-adr-errcode-prefix-ownership-registry.md
-// Issue #1091.
+// Issue #1091, #1508.
 func TestErrcodePrefixOwnership01(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -975,6 +998,84 @@ func TestErrcodePrefixOwnership01_ScannerFires(t *testing.T) {
 		if !hit {
 			t.Errorf("ERRCODE-PREFIX-OWNERSHIP-01_ScannerFires: helper %q not exercised by code gate; got: %v", want, allDiags)
 		}
+	}
+}
+
+// TestErrcodePrefixOwnership01_SentinelConstEval proves Target B resolves
+// non-literal (const SelectorExpr / Ident) sentinel values via typed const
+// evaluation, closing residual #2 (gh #1508). Before the typed-const-eval fix,
+// scanSentinelValueSpec matched only *ast.BasicLit string values and silently
+// skipped const SelectorExpr / Ident forms, letting an unregistered prefix be
+// laundered into an exported errcode.Code sentinel.
+//
+// The fixture is a standalone typed module (its own go.mod) — const
+// SelectorExpr / Ident resolution needs go/types (EvaluateConstString), which
+// is only available under StandaloneModule loading, never AST-only mode.
+//
+// Fixture module:
+//
+//	tools/archtest/testdata/errcode_prefix_ownership_selector_fixtures/
+//
+// Expected: the three errcode.Code-typed non-literal sentinels are flagged —
+// untyped const SelectorExpr (codes.Unregistered → ERR_SELECTORBOGUS_NOPE),
+// typed errcode.Code const SelectorExpr (codes.UnregisteredTyped →
+// ERR_TYPEDSELECTOR_NOPE), and same-package const Ident (localUnregistered →
+// ERR_IDENTBOGUS_NOPE). NOT flagged: the registered control (ERR_INTERNAL), and
+// the two Err*-named NON-Code sentinels (ErrIgnoredStdlib is error;
+// ErrIgnoredErrcodeNew is *errcode.Error) that the isErrcodeCodeSentinel type
+// gate must exclude. Together these prove the scan is type-selective and
+// value-resolving, not a name-only blanket flag (anti-vacuity).
+func TestErrcodePrefixOwnership01_SentinelConstEval(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based fixture test in -short mode")
+	}
+
+	root := findModuleRoot(t)
+	fixtureDir := filepath.Join(root, "tools", "archtest", "testdata", "errcode_prefix_ownership_selector_fixtures")
+
+	var allDiags []Diagnostic
+	Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false}, []string{"./..."}),
+		func(p *Pass) []Diagnostic {
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				diags, _ := scanErrcodePrefixOwnershipDiags(p.Fset, file, rel, p.TypesInfo, true)
+				allDiags = append(allDiags, diags...)
+			}
+			return nil
+		})
+
+	// The three non-literal-value errcode.Code sentinels must be flagged
+	// (residual #2 closed): untyped const SelectorExpr, typed Code const
+	// SelectorExpr, and same-package const Ident.
+	for _, want := range []string{"ERR_SELECTORBOGUS_NOPE", "ERR_TYPEDSELECTOR_NOPE", "ERR_IDENTBOGUS_NOPE"} {
+		found := false
+		for _, d := range allDiags {
+			if strings.Contains(d.Message, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("ERRCODE-PREFIX-OWNERSHIP-01_SentinelConstEval: non-literal sentinel %q "+
+				"not flagged (residual #2 / gh #1508 escape); got %d diag(s): %v", want, len(allDiags), allDiags)
+		}
+	}
+
+	// Anti-vacuity: neither the registered control nor the two Err*-named
+	// non-Code sentinels may be flagged — proving the typed scan is
+	// type-selective rather than name-only.
+	for _, unwanted := range []string{"ERR_INTERNAL", "ERR_STDLIBIGNORED_NOPE"} {
+		for _, d := range allDiags {
+			if strings.Contains(d.Message, unwanted) {
+				t.Errorf("ERRCODE-PREFIX-OWNERSHIP-01_SentinelConstEval: control %q wrongly "+
+					"flagged (false positive — type gate or ownership leak): %v", unwanted, d)
+			}
+		}
+	}
+	if len(allDiags) != 3 {
+		t.Errorf("ERRCODE-PREFIX-OWNERSHIP-01_SentinelConstEval: expected exactly 3 diagnostics "+
+			"(the three unregistered non-literal errcode.Code sentinels), got %d: %v", len(allDiags), allDiags)
 	}
 }
 
