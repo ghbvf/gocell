@@ -50,6 +50,7 @@ var commands = []subcommand[func(ctx context.Context, args []string) error]{
 		help: []string{"Run the GoCell archtest suite (alias: verify archtest) [see: gocell verify archtest -h]"},
 		run:  runArchtestAlias,
 	},
+	{name: "version", help: []string{"Print gocell CLI / framework version + compatibility  [--format]"}, run: runVersion},
 }
 
 // Exit codes. Follows the common POSIX convention used by tools like go

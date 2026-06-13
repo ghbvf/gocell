@@ -10,11 +10,22 @@ composition root 的 `outbox.Publisher`/`outbox.Subscriber` 经
   fail-closed，**不静默降级回 in-memory**（relay 必须把已持久化的 outbox entry 发到 broker，
   而非进程内 bus，否则跨进程/重启丢事件）。
 
-in-memory bus **仅** demo 拓扑可达：`cmd/corebundle` 生产代码禁止直接 import
-`runtime/eventbus`，由 depguard `corebundle-no-direct-eventbus` 守卫
-（`COREBUNDLE-EVENTBUS-FUNNEL-01`，路径级 import ban）。扩展新 broker（mqtt）在
-`eventtransport` 的 `brokerKind` switch 加分支 + 暴露选择 env，不在本约束外另开旁路。
+in-memory bus **仅** demo 拓扑可达：**composition root**（`cmd/corebundle` + `examples/ssobff`）
+生产代码禁止直接 import `runtime/eventbus`，由 depguard `corebundle-no-direct-eventbus` /
+`ssobff-no-direct-eventbus` 守卫（`COREBUNDLE-EVENTBUS-FUNNEL-01`，路径级 import ban）。扩展新
+broker（mqtt）在 `eventtransport` 的 `brokerKind` switch 加分支 + 暴露选择 env，不在本约束外另开旁路。
 权威语义见 `cellmodules/eventtransport/doc.go` 与 ADR `202606131500-1940`。
+
+## 复用层选型（claimer / nonce，topology-gated）
+
+composition root 的 outbox 消费幂等 claimer + 内部 listener service-token nonce store 同样经
+`cellmodules/replaydeps.Resolve(ctx, clk, topo)` 按 `Topology` 单源选型：demo/single-pod → in-memory；
+real multi-pod → Redis-backed（client 作 ManagedResource），缺 Redis 配置启动期 fail-closed。两个
+composition root（corebundle + ssobff）复用同一包，不各自接线 in-memory 原语。`idempotency.NewInMemClaimer`
+/ `auth.NewInMemoryNonceStore` 在这两个 root 内**仅** `replaydeps.Resolve` 的 demo 分支可达——因两包仍
+为类型合法 import，depguard 无法表达，故由 archtest `REPLAYDEPS-INMEM-FUNNEL-01`（调用级 AST 扫描，
+路径限定两 root）守卫。bus / claimer / nonce 三 funnel 合起来确保 composition root 内每个 in-memory
+单 pod 原语只经 sealed resolver 可达。权威语义见 `cellmodules/replaydeps/doc.go`。
 
 ## ConsumerBase
 

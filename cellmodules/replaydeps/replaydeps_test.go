@@ -1,4 +1,4 @@
-package main
+package replaydeps
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 
 	kauth "github.com/ghbvf/gocell/kernel/auth"
 
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -20,6 +21,18 @@ import (
 )
 
 var errRedisTestFactory = errors.New("redis factory failed")
+
+// mkTopo builds a validated bootstrap.Topology for tests, panicking on an
+// invalid combination (mirrors cmd/corebundle/topology_testhelper_test.go).
+func mkTopo(adapterMode, storageBackend string, singlePod bool) bootstrap.Topology {
+	topo, err := bootstrap.NewTopology(adapterMode, storageBackend, singlePod)
+	if err != nil {
+		panic(err)
+	}
+	return topo
+}
+
+// --- loadRedisConfigFromEnv (migrated verbatim from cmd/corebundle/redis_test.go) ---
 
 func TestLoadRedisConfigFromEnv_RealMultiPodMissingAddrFailFast(t *testing.T) {
 	t.Setenv(envRedisAddr, "")
@@ -59,12 +72,6 @@ func TestLoadRedisConfigFromEnv_ConfiguredParsesPasswordAndDB(t *testing.T) {
 	assert.Equal(t, 3, cfg.DB)
 }
 
-// TestLoadRedisConfigFromEnv_AllowUnsafeNoPasswordMatrix pins the
-// AllowUnsafeNoPassword derivation. The flag mirrors requiresDistributedReplay
-// inverted: production multi-pod (real + !single-pod) demands an explicit
-// password; everything else (dev, real + single-pod) auto-opts-in to
-// unauthenticated local Redis (testcontainers, e2e compose, single-pod
-// production with a localhost Redis).
 func TestLoadRedisConfigFromEnv_AllowUnsafeNoPasswordMatrix(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -179,8 +186,6 @@ func TestLoadRedisConfigFromEnv_ClusterRejectsNonZeroDB(t *testing.T) {
 	assert.Contains(t, err.Error(), "must be 0")
 }
 
-// Empty entries (trailing or double commas) are typos that change cluster
-// topology silently if dropped — we reject them explicitly.
 func TestLoadRedisConfigFromEnv_ClusterRejectsEmptyEntries(t *testing.T) {
 	t.Setenv(envRedisAddr, "")
 	t.Setenv(envRedisClusterAddrs, "node-a:7000,,node-c:7000")
@@ -193,9 +198,6 @@ func TestLoadRedisConfigFromEnv_ClusterRejectsEmptyEntries(t *testing.T) {
 	assert.Contains(t, err.Error(), "empty entries")
 }
 
-// Whitespace gets trimmed and exact duplicates de-duplicated; semantically
-// equivalent (host:port is a Redis identity), redundant entries are silently
-// folded so config stays declarative even when sourced from line-broken env.
 func TestLoadRedisConfigFromEnv_ClusterTrimAndDedupe(t *testing.T) {
 	t.Setenv(envRedisAddr, "")
 	t.Setenv(envRedisClusterAddrs, " node-a:7000 , node-b:7000 ,node-a:7000")
@@ -207,8 +209,6 @@ func TestLoadRedisConfigFromEnv_ClusterTrimAndDedupe(t *testing.T) {
 	assert.Equal(t, []string{"node-a:7000", "node-b:7000"}, cfg.ClusterAddrs)
 }
 
-// In real multi-pod mode either addr OR cluster_addrs satisfies the
-// distributed-replay requirement.
 func TestLoadRedisConfigFromEnv_ClusterAddrsSatisfyMultiPodRequirement(t *testing.T) {
 	t.Setenv(envRedisAddr, "")
 	t.Setenv(envRedisClusterAddrs, "node-a:7000,node-b:7000")
@@ -221,13 +221,15 @@ func TestLoadRedisConfigFromEnv_ClusterAddrsSatisfyMultiPodRequirement(t *testin
 	assert.Equal(t, adapterredis.ModeCluster, cfg.Mode)
 }
 
+// --- buildRedisClient (migrated) ---
+
 func TestBuildRedisClient_NotConfiguredReturnsNil(t *testing.T) {
 	t.Setenv(envRedisAddr, "")
 
-	result, err := buildRedisClient(context.Background(), mkTopo("", "memory", false))
+	client, err := buildRedisClient(context.Background(), mkTopo("", "memory", false))
 
 	require.NoError(t, err)
-	assert.Nil(t, result.Client)
+	assert.Nil(t, client)
 }
 
 func TestBuildRedisClient_UsesConfiguredFactory(t *testing.T) {
@@ -240,10 +242,9 @@ func TestBuildRedisClient_UsesConfiguredFactory(t *testing.T) {
 		return new(adapterredis.Client), nil
 	})
 
-	result, err := buildRedisClient(context.Background(), mkTopo("", "memory", false))
+	client, err := buildRedisClient(context.Background(), mkTopo("", "memory", false))
 
 	require.NoError(t, err)
-	client := result.Client
 	require.NotNil(t, client)
 	assert.Equal(t, "redis:6379", gotCfg.Addr)
 	assert.Equal(t, "secret", gotCfg.Password)
@@ -256,13 +257,15 @@ func TestBuildRedisClient_FactoryErrorWrapped(t *testing.T) {
 		return nil, errRedisTestFactory
 	})
 
-	result, err := buildRedisClient(context.Background(), mkTopo("", "memory", false))
+	client, err := buildRedisClient(context.Background(), mkTopo("", "memory", false))
 
 	require.Error(t, err)
-	assert.Nil(t, result.Client)
+	assert.Nil(t, client)
 	assert.ErrorIs(t, err, errRedisTestFactory)
 	assert.Contains(t, err.Error(), "build Redis client")
 }
+
+// --- buildServiceNonceStore / buildConsumerClaimer (migrated) ---
 
 func TestBuildReplayDependencies_RealSinglePodUsesInMemory(t *testing.T) {
 	topo := mkTopo("real", "postgres", true)
@@ -314,12 +317,6 @@ func TestBuildConsumerClaimer_RealMultiPodRequiresRedisClient(t *testing.T) {
 	assertErrCode(t, err, errcode.ErrControlplaneClaimerNotDistributed)
 }
 
-// TestBuildConsumerClaimer_DistributedFactoryErrorWrapped pins the
-// error-first path through buildConsumerClaimer: when the Redis claimer
-// factory returns an error (e.g., NewIdempotencyClaimer rejecting an
-// invalid namespace or nil client), the wrapper produces nil claimer +
-// nil claimer + a wrap message containing the original
-// error. Mirrors TestBuildServiceNonceStore_DistributedFactoryErrorWrapped.
 func TestBuildConsumerClaimer_DistributedFactoryErrorWrapped(t *testing.T) {
 	topo := mkTopo("real", "postgres", false)
 	restoreRedisClaimerFactory(t, func(*adapterredis.Client) (idempotency.Claimer, error) {
@@ -363,6 +360,143 @@ func TestBuildReplayDependencies_RealMultiPodConfiguredRedisUsesDistributedStore
 	assert.Equal(t, idempotency.ClaimerKindDistributed, claimer.Kind())
 	assert.IsType(t, fakeDistributedClaimer{}, claimer)
 }
+
+// --- Resolve façade (NEW: the public entry both composition roots call) ---
+
+// TestResolve_DemoUsesInMemoryNoResources pins the demo/memory topology:
+// in-memory claimer + in-memory nonce store, no Redis client, empty Resources.
+func TestResolve_DemoUsesInMemoryNoResources(t *testing.T) {
+	t.Setenv(envRedisAddr, "")
+	topo := mkTopo("", "memory", false)
+
+	rd, err := Resolve(context.Background(), clock.Real(), topo)
+
+	require.NoError(t, err)
+	assert.Equal(t, idempotency.ClaimerKindInMemory, rd.ConsumerClaimer.Kind())
+	assert.Equal(t, kauth.NonceStoreKindInMemory, rd.NonceStore.Kind())
+	assert.Nil(t, rd.RedisClient)
+	assert.Empty(t, rd.Resources, "demo topology owns no managed resources")
+}
+
+// TestResolve_RealMultiPodMissingRedisFailsClosed pins the fail-closed gate:
+// real multi-pod topology with no Redis env must error at startup, never
+// silently degrade to in-memory. This is the funnel that protects ssobff (it
+// does not go through composition.SharedDeps' ConsumerClaimer.Kind() check).
+func TestResolve_RealMultiPodMissingRedisFailsClosed(t *testing.T) {
+	t.Setenv(envRedisAddr, "")
+	t.Setenv(envRedisClusterAddrs, "")
+	topo := mkTopo("real", "postgres", false)
+
+	rd, err := Resolve(context.Background(), clock.Real(), topo)
+
+	require.Error(t, err)
+	assert.Nil(t, rd.RedisClient)
+	assert.Nil(t, rd.ConsumerClaimer)
+	assert.Nil(t, rd.NonceStore)
+	assert.Empty(t, rd.Resources)
+}
+
+// TestResolve_RealMultiPodConfiguredReturnsClientResource pins that a configured
+// Redis client is returned as a managed resource (so the composition root closes
+// it LIFO) and both primitives report distributed.
+func TestResolve_RealMultiPodConfiguredReturnsClientResource(t *testing.T) {
+	t.Setenv(envRedisAddr, "127.0.0.1:6379")
+	t.Setenv(envRedisPassword, "secret")
+	client := new(adapterredis.Client)
+	restoreRedisClientFactory(t, func(context.Context, adapterredis.Config) (*adapterredis.Client, error) {
+		return client, nil
+	})
+	restoreRedisNonceStoreFactory(t, func(*adapterredis.Client, time.Duration) (kauth.NonceStore, error) {
+		return fakeDistributedNonceStore{}, nil
+	})
+	restoreRedisClaimerFactory(t, func(*adapterredis.Client) (idempotency.Claimer, error) {
+		return fakeDistributedClaimer{}, nil
+	})
+	topo := mkTopo("real", "postgres", false)
+
+	rd, err := Resolve(context.Background(), clock.Real(), topo)
+
+	require.NoError(t, err)
+	assert.Same(t, client, rd.RedisClient)
+	assert.Equal(t, idempotency.ClaimerKindDistributed, rd.ConsumerClaimer.Kind())
+	assert.Equal(t, kauth.NonceStoreKindDistributed, rd.NonceStore.Kind())
+	require.Len(t, rd.Resources, 1, "the Redis client must be returned as a managed resource")
+	assert.Same(t, client, rd.Resources[0])
+}
+
+// TestResolve_PartialFailureClosesRedisClient tests that when Resolve succeeds
+// in building the Redis client but fails at a later step (nonce store), the
+// client is closed before returning — preventing an open-connection leak on
+// failed startup.
+//
+// *adapterredis.Client is a concrete struct with an unexported rdb field; there
+// is no interface seam to inject a recording fake that tracks Close calls through
+// the newRedisClient factory (which returns *adapterredis.Client, not an
+// interface). The strongest achievable assertion is therefore:
+//
+//   - Resolve returns the wrapped nonce-store error (cleanup ran without panic,
+//     i.e. Close on the real-but-unconnected client is nil-safe).
+//   - The returned ReplayDeps is zero-valued.
+//
+// We provide a real *adapterredis.Client via adapterredis.NewClientForTest +
+// goredis.NewClient (no live Redis required; NewClientForTest skips the Ping).
+// goredis.NewClient.Close() is safe on an unconnected pool.
+func TestResolve_PartialFailureClosesRedisClient(t *testing.T) {
+	t.Setenv(envRedisAddr, "127.0.0.1:6379")
+	// Provide a real *adapterredis.Client whose Close() is safe on an
+	// unconnected pool — goredis.NewClient does not dial until a command is issued.
+	safeClient := adapterredis.NewClientForTest(goredis.NewClient(&goredis.Options{Addr: "127.0.0.1:0"}))
+	restoreRedisClientFactory(t, func(context.Context, adapterredis.Config) (*adapterredis.Client, error) {
+		return safeClient, nil
+	})
+	restoreRedisNonceStoreFactory(t, func(*adapterredis.Client, time.Duration) (kauth.NonceStore, error) {
+		return nil, errRedisTestFactory
+	})
+	topo := mkTopo("real", "postgres", false)
+
+	rd, err := Resolve(context.Background(), clock.Real(), topo)
+
+	require.Error(t, err, "Resolve must error when nonce store build fails")
+	assert.ErrorIs(t, err, errRedisTestFactory, "error must wrap the nonce-store factory error")
+	assert.Contains(t, err.Error(), "build Redis nonce store")
+	// ReplayDeps must be zero — no partial result on failure.
+	assert.Nil(t, rd.RedisClient)
+	assert.Nil(t, rd.ConsumerClaimer)
+	assert.Nil(t, rd.NonceStore)
+	assert.Empty(t, rd.Resources)
+}
+
+// TestResolve_RealMultiPodClusterConfiguredReturnsClientResource is the cluster
+// analog of TestResolve_RealMultiPodConfiguredReturnsClientResource: it pins that
+// configuring GOCELL_REDIS_CLUSTER_ADDRS (instead of GOCELL_REDIS_ADDR) also
+// produces a managed Redis client resource with distributed primitives.
+func TestResolve_RealMultiPodClusterConfiguredReturnsClientResource(t *testing.T) {
+	t.Setenv(envRedisAddr, "")
+	t.Setenv(envRedisClusterAddrs, "node-a:7000,node-b:7000")
+	t.Setenv(envRedisPassword, "secret")
+	client := new(adapterredis.Client)
+	restoreRedisClientFactory(t, func(context.Context, adapterredis.Config) (*adapterredis.Client, error) {
+		return client, nil
+	})
+	restoreRedisNonceStoreFactory(t, func(*adapterredis.Client, time.Duration) (kauth.NonceStore, error) {
+		return fakeDistributedNonceStore{}, nil
+	})
+	restoreRedisClaimerFactory(t, func(*adapterredis.Client) (idempotency.Claimer, error) {
+		return fakeDistributedClaimer{}, nil
+	})
+	topo := mkTopo("real", "postgres", false)
+
+	rd, err := Resolve(context.Background(), clock.Real(), topo)
+
+	require.NoError(t, err)
+	assert.Same(t, client, rd.RedisClient)
+	assert.Equal(t, idempotency.ClaimerKindDistributed, rd.ConsumerClaimer.Kind())
+	assert.Equal(t, kauth.NonceStoreKindDistributed, rd.NonceStore.Kind())
+	require.Len(t, rd.Resources, 1, "the Redis client must be returned as a managed resource")
+	assert.Same(t, client, rd.Resources[0])
+}
+
+// --- shared test helpers (migrated from cmd/corebundle test files) ---
 
 func restoreRedisClientFactory(t *testing.T, fn redisClientFactory) {
 	t.Helper()

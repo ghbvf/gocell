@@ -1,0 +1,98 @@
+# GoCell CLI release configuration — goreleaser v2 schema.
+# ref: goreleaser/goreleaser .goreleaser.yaml
+# ref: cli/cli .goreleaser.yml
+# ref: google/go-containerregistry .goreleaser.yml
+#
+# goreleaser DOES NOT create the GitHub Release itself — that is handled by the
+# existing `gh release create` step in .github/workflows/release.yml (issue #1724).
+# goreleaser only produces dist/ artifacts (binaries, archives, checksums, docker
+# images) which the workflow then uploads to the release.
+#
+# Sub-module isolation: cmd/gocell is a standalone go.mod module with local
+# `replace` directives that make `go install @version` impossible. We run
+# goreleaser with GOWORK=off so the sub-module resolves its replaces from
+# the repo tree rather than going to the proxy. The `dir` key below tells
+# goreleaser to switch cwd to cmd/gocell/ for the build step.
+#
+# F14: Local dry-run: goreleaser check && GOWORK=off goreleaser build --snapshot --clean
+
+version: 2
+
+env:
+  # Disable Go workspace so the cmd/gocell sub-module uses its own go.mod
+  # replace directives. Must be set here (top-level env) so goreleaser
+  # inherits it for all build / docker phases.
+  - GOWORK=off
+
+builds:
+  - id: gocell
+    dir: cmd/gocell   # goreleaser cwd-switches to this dir (contains go.mod)
+    main: .
+    binary: gocell
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      # Inject the release tag (e.g. "v0.1.0") into app.version.
+      # F12: {{.Version}} strips the leading v (archive 惯例无 v，见 archives.name_template)；
+      # {{.Tag}} preserves the leading v (gocell version command expects "vX.Y.Z" so that
+      # compatibleFrameworkRange can parse it correctly — use {{.Tag}} here).
+      - -X github.com/ghbvf/gocell/cmd/gocell/app.version={{.Tag}}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: gocell-archive
+    ids:
+      - gocell
+    # F12: {{.Version}} 去掉 v 前缀（如 0.1.0），archive 命名惯例不带 v。
+    # ldflags 处用 {{.Tag}}（带 v，如 v0.1.0）供 version 命令 semver 解析。
+    name_template: "gocell_{{.Version}}_{{.Os}}_{{.Arch}}"
+    formats:
+      - tar.gz
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# Docker images — multi-arch via dockers_v2 (goreleaser v2 API).
+# goreleaser places the platform-matched binary into the build-context root as
+# "gocell", so Dockerfile can simply `COPY gocell /gocell`.
+dockers_v2:
+  - id: gocell-docker
+    ids:
+      - gocell
+    dockerfile: cmd/gocell/Dockerfile
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    images:
+      - ghcr.io/ghbvf/gocell
+    tags:
+      - "{{.Tag}}"
+      # F13: latest 跟随每次 stable release。
+      # snapshot/prerelease 不进 goreleaser（release.yml 全 gated prerelease!='true'），
+      # 故 latest 永不指向 snapshot 或 prerelease 构建。
+      - latest
+    labels:
+      org.opencontainers.image.source: "https://github.com/ghbvf/gocell"
+      org.opencontainers.image.version: "{{.Tag}}"
+      org.opencontainers.image.revision: "{{.FullCommit}}"
+
+# goreleaser MUST NOT create or publish a GitHub Release — release.yml owns that.
+release:
+  disable: true
+
+# snapshot.version_template is required when goreleaser runs in snapshot mode
+# (e.g. --snapshot during local dry-runs) so it does not fail on missing tags.
+snapshot:
+  version_template: "{{.Tag}}-SNAPSHOT-{{.ShortCommit}}"

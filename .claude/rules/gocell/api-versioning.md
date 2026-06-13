@@ -31,6 +31,11 @@ contract 的破坏式变更——含在 **active 版本上**新增 / 收紧 requ
 不在旧版本上偷改语义；下文 §何时升级版本 与 §内部 API 的升版要求严格生效。窗口到期前须复核
 本条：gocell 进入 GA 或出现外部 wire 消费方时即提前收紧，否则显式续期（"暂定" 上限 2026-12-31）。
 
+**本 wire 破坏窗口仅限 HTTP / event / command wire contract（轴 B）**；Go SDK 公开符号
+（`kernel/`、`runtime/composition`、`contractspec` exported 符号）+ authoring schema
+（`cell.yaml` / `contract.yaml` / `slice.yaml` / `assembly.yaml`）走 SemVer，见
+ADR `docs/architecture/202606131200-1088-adr-go-api-authoring-schema-semver-policy.md`（轴 A）。
+
 ## 内部 API
 
 `/internal/v1/` 是服务间控制面，不是绕过版本策略的后门。internal contract 同样需要：

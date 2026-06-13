@@ -463,9 +463,10 @@ func TestOutboxHandleResultNoReceiptField(t *testing.T) {
 //	read Mark{Retry,Dead}'s first return into a
 //	named bool (no `_` discard).
 //
-// OUTBOX-RELAY-LOST-METRIC-01-B  PollCycleResult must declare a Lost field, so
+// OUTBOX-RELAY-LOST-METRIC-01-B  OutcomeCounts must declare a Lost field (carried by
 //
-//	a "lost" outcome is reportable end-to-end.
+//	PollCycleResult.Event/.Command since #1674), so a "lost" outcome is reportable
+//	end-to-end for both event publish and command dispatch.
 //
 // ref: docs/plans/202605011500-029-master-roadmap.md B6 PR-V1-PG-OUTBOX-RELAY-HARDEN
 // ref: B2-A-05 PG-RELAY-FAIL-WRITE-UNHANDLED-ROWS
@@ -525,7 +526,8 @@ func TestOutboxRelayLostMetric01_HandleFailedEntryReadsUpdated(t *testing.T) {
 		t.Errorf(
 			"OUTBOX-RELAY-LOST-METRIC-01-A: %s discards Mark{Retry,Dead}'s `updated bool` "+
 				"(LHS is `_`); read it as `updated, err := r.store.Mark...(...)` and "+
-				"route updated=false to stats.lost so stale leases stay observable.",
+				"route updated=false to the kind bucket's Lost stat "+
+				"(stats.bucket(res.isCommand).Lost) so stale leases stay observable.",
 			fset.Position(p),
 		)
 	}
@@ -533,9 +535,12 @@ func TestOutboxRelayLostMetric01_HandleFailedEntryReadsUpdated(t *testing.T) {
 
 // INVARIANT: OUTBOX-RELAY-LOST-METRIC-01-B
 //
-// PollCycleResult must declare a Lost field so handleFailedEntry can
-// route stale-lease writebacks into the lost stat / metric (separately
-// from real retries).
+// The relay's per-poll outcome shape must declare a Lost field so handleFailedEntry
+// can route stale-lease writebacks into the lost stat / metric (separately from real
+// retries). Since #1674 the per-disposition counts live on OutcomeCounts, carried by
+// PollCycleResult.Event and .Command (splitting command dispatch from event publish),
+// so Lost is asserted on OutcomeCounts and PollCycleResult must carry both kind
+// buckets of that type.
 func TestOutboxRelayLostMetric01_PollCycleResultHasLostField(t *testing.T) {
 	t.Parallel()
 
@@ -548,29 +553,47 @@ func TestOutboxRelayLostMetric01_PollCycleResultHasLostField(t *testing.T) {
 		t.Fatalf("parse %s: %v", src, err)
 	}
 
-	var hasLost bool
+	var outcomeHasLost bool
+	pollCycleKinds := map[string]bool{} // OutcomeCounts-typed field name -> present
 	EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
-		if ts.Name.Name != "PollCycleResult" {
-			return
-		}
 		st, ok := ts.Type.(*ast.StructType)
 		if !ok {
 			return
 		}
-		for _, field := range st.Fields.List {
-			for _, name := range field.Names {
-				if name.Name == "Lost" {
-					hasLost = true
+		switch ts.Name.Name {
+		case "OutcomeCounts":
+			for _, field := range st.Fields.List {
+				for _, name := range field.Names {
+					if name.Name == "Lost" {
+						outcomeHasLost = true
+					}
+				}
+			}
+		case "PollCycleResult":
+			for _, field := range st.Fields.List {
+				ident, ok := field.Type.(*ast.Ident)
+				if !ok || ident.Name != "OutcomeCounts" {
+					continue
+				}
+				for _, name := range field.Names {
+					pollCycleKinds[name.Name] = true
 				}
 			}
 		}
 	})
-	if !hasLost {
+	if !outcomeHasLost {
 		t.Errorf(
-			"OUTBOX-RELAY-LOST-METRIC-01-B: PollCycleResult must declare a Lost int field " +
-				"(roadmap B6, B2-A-05). It travels alongside Published/Retried/" +
-				"Dead/Skipped so providerRelayCollector.RecordPollCycle can fire " +
+			"OUTBOX-RELAY-LOST-METRIC-01-B: OutcomeCounts must declare a Lost int field " +
+				"(roadmap B6, B2-A-05). It travels alongside Published/Retried/Dead/Skipped " +
+				"so providerRelayCollector.RecordPollCycle can fire " +
 				"`outbox_relayed_total{outcome=\"lost\"}`.",
+		)
+	}
+	if !pollCycleKinds["Event"] || !pollCycleKinds["Command"] {
+		t.Errorf(
+			"OUTBOX-RELAY-LOST-METRIC-01-B: PollCycleResult must carry Event and Command " +
+				"OutcomeCounts buckets (#1674) so the lost (and every) outcome is reportable " +
+				"per kind via `outbox_relayed_total{kind=...,outcome=\"lost\"}`.",
 		)
 	}
 }
