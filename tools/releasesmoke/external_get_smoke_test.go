@@ -169,7 +169,7 @@ func buildProxy(t *testing.T, root, version string, omit ...string) string {
 		}
 		goMod := stageGoMod(t, filepath.Join(root, m.Dir), prefix, version)
 		projected, internalImports := internalProjection(t, goMod, prefix)
-		writeProxyModule(t, proxy, m.ImportPath, version, projected, internalImports)
+		writeProxyModule(t, proxy, m.ImportPath, version, projected, stubPackage(m.ImportPath, internalImports))
 	}
 	return proxy
 }
@@ -228,9 +228,11 @@ func stageGoMod(t *testing.T, modDir, prefix, version string) []byte {
 
 // writeProxyModule writes the GOPROXY file layout (.info/.mod/.zip/list) for one
 // module at version. The .mod is the projected go.mod; the .zip carries that
-// go.mod plus a stub package that blank-imports internalImports (the module's
-// internal siblings) so building it forces their resolution.
-func writeProxyModule(t *testing.T, proxyRoot, importPath, version string, goMod []byte, internalImports []string) {
+// go.mod plus pkgSource — the package source for the module-root package (a
+// library stub from [stubPackage] for go-get probes, or a main stub from
+// [stubMainPackage] for the go-install smoke), which blank-imports the module's
+// internal siblings so building it forces their resolution.
+func writeProxyModule(t *testing.T, proxyRoot, importPath, version string, goMod []byte, pkgSource string) {
 	t.Helper()
 	esc, err := module.EscapePath(importPath)
 	if err != nil {
@@ -248,10 +250,10 @@ func writeProxyModule(t *testing.T, proxyRoot, importPath, version string, goMod
 	write(version+".info", []byte(fmt.Sprintf(`{"Version":%q,"Time":"2000-01-01T00:00:00Z"}`, version)))
 	write(version+".mod", goMod)
 	write("list", []byte(version+"\n"))
-	writeModuleZip(t, filepath.Join(dir, version+".zip"), importPath, version, goMod, internalImports)
+	writeModuleZip(t, filepath.Join(dir, version+".zip"), importPath, version, goMod, pkgSource)
 }
 
-func writeModuleZip(t *testing.T, zipPath, importPath, version string, goMod []byte, internalImports []string) {
+func writeModuleZip(t *testing.T, zipPath, importPath, version string, goMod []byte, pkgSource string) {
 	t.Helper()
 	f, err := os.Create(zipPath) //nolint:gosec // G304: zipPath is under t.TempDir()
 	if err != nil {
@@ -270,7 +272,7 @@ func writeModuleZip(t *testing.T, zipPath, importPath, version string, goMod []b
 		}
 	}
 	add("go.mod", goMod)
-	add("doc.go", []byte(stubPackage(importPath, internalImports)))
+	add("doc.go", []byte(pkgSource))
 	if err := zw.Close(); err != nil {
 		t.Fatalf("close zip: %v", err)
 	}

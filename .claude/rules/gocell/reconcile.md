@@ -24,8 +24,14 @@ harness）。三者正交，边界见下。
 
 ## Builder 强制
 
-`reconcile.New(r).With*().Build()` 是**唯一**公开构造入口；Loop config 字段全部 unexported，
+`reconcile.New(r, tenancy).With*().Build()` 是**唯一**公开构造入口；Loop config 字段全部 unexported，
 `Build()` 强制要求一个 Trigger。消费方禁止裸构造 Loop，禁止旁路 Builder 注入调度逻辑。
+
+`New` 第二参 `tenancy` 是必填 sealed `Tenancy`（`SingleTenant()` / `TenantScoped()`，仿 `clock.Clock`
+位置参约定，非可漏链的 `With*`）：reconciler 在 tenantless system 身份下发射命令（Claimer key 落
+`_notenant`），故必须显式声明该命名空间是否正确。漏声明=编译错，零值=`Build()` fail-fast；TenantScoped
+reconciler 须自行在 command-id 编码 tenant 维度（框架不验证 body，残留盲区）。评级与盲区见
+`RECONCILE-TENANCY-DECLARED-01` archtest godoc 与 ADR `202606101200-1821`。
 
 ## Leader-elect
 

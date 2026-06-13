@@ -49,7 +49,7 @@ const builderExplicitInterval = 7 * time.Second
 func TestBuilder_RequiresNonNilReconciler(t *testing.T) {
 	t.Parallel()
 	// untyped nil Reconciler → Build must return error
-	_, err := New(nil).WithTrigger(realTrigger{}).Build()
+	_, err := New(nil, SingleTenant()).WithTrigger(realTrigger{}).Build()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Reconciler")
 }
@@ -57,7 +57,7 @@ func TestBuilder_RequiresNonNilReconciler(t *testing.T) {
 func TestBuilder_TypedNilReconcilerFails(t *testing.T) {
 	t.Parallel()
 	var rec funcReconciler // zero-value (typed nil func)
-	_, err := New(rec).WithTrigger(realTrigger{}).Build()
+	_, err := New(rec, SingleTenant()).WithTrigger(realTrigger{}).Build()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Reconciler")
 }
@@ -68,9 +68,60 @@ func TestBuilder_RequiresTrigger(t *testing.T) {
 	rec := funcReconciler(func(_ context.Context, _ Request) (Result, error) {
 		return Result{}, nil
 	})
-	_, err := New(rec).Build()
+	_, err := New(rec, SingleTenant()).Build()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Trigger")
+}
+
+// TestBuilder_RequiresTenancy: the unset zero-value Tenancy{} (the only value an
+// external caller can pass without a minter — the mode field is unexported) is
+// rejected at Build, mirroring the Trigger-required fail-fast (#1954). This is
+// the runtime backstop for axis 3; axis 2 (omitting the param entirely) is a
+// compile error, not testable here.
+func TestBuilder_RequiresTenancy(t *testing.T) {
+	t.Parallel()
+	rec := funcReconciler(func(_ context.Context, _ Request) (Result, error) {
+		return Result{}, nil
+	})
+	_, err := New(rec, Tenancy{}).WithTrigger(realTrigger{}).Build()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Tenancy")
+}
+
+// TestBuilder_NilReconcilerCheckedBeforeTenancy pins the Build() precedence: when
+// BOTH the reconciler is nil AND the tenancy is unset, the error reports the
+// Reconciler (the first check), not the Tenancy. This makes the check order a test
+// contract so a later reorder of Build()'s fail-fasts is caught.
+func TestBuilder_NilReconcilerCheckedBeforeTenancy(t *testing.T) {
+	t.Parallel()
+	_, err := New(nil, Tenancy{}).WithTrigger(realTrigger{}).Build()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Reconciler")
+	assert.NotContains(t, err.Error(), "Tenancy")
+}
+
+// TestBuilder_SingleTenantBuildSucceeds / TestBuilder_TenantScopedBuildSucceeds:
+// BOTH declared stances Build successfully (accept-as-acknowledgement) — the
+// forcing function is that you must consciously pick one, not that one is
+// rejected (#1954).
+func TestBuilder_SingleTenantBuildSucceeds(t *testing.T) {
+	t.Parallel()
+	rec := funcReconciler(func(_ context.Context, _ Request) (Result, error) {
+		return Result{}, nil
+	})
+	loop, err := New(rec, SingleTenant()).WithTrigger(realTrigger{}).Build()
+	require.NoError(t, err)
+	require.NotNil(t, loop)
+}
+
+func TestBuilder_TenantScopedBuildSucceeds(t *testing.T) {
+	t.Parallel()
+	rec := funcReconciler(func(_ context.Context, _ Request) (Result, error) {
+		return Result{}, nil
+	})
+	loop, err := New(rec, TenantScoped()).WithTrigger(realTrigger{}).Build()
+	require.NoError(t, err)
+	require.NotNil(t, loop)
 }
 
 func TestBuilder_ValidBuildSucceeds(t *testing.T) {
@@ -78,7 +129,7 @@ func TestBuilder_ValidBuildSucceeds(t *testing.T) {
 	rec := funcReconciler(func(_ context.Context, _ Request) (Result, error) {
 		return Result{}, nil
 	})
-	loop, err := New(rec).WithTrigger(realTrigger{}).Build()
+	loop, err := New(rec, SingleTenant()).WithTrigger(realTrigger{}).Build()
 	require.NoError(t, err)
 	require.NotNil(t, loop)
 }
@@ -92,7 +143,7 @@ func TestBuilder_DefaultsLeaderAsNoop(t *testing.T) {
 	rec := funcReconciler(func(_ context.Context, _ Request) (Result, error) {
 		return Result{}, nil
 	})
-	loop, err := New(rec).WithTrigger(realTrigger{}).Build()
+	loop, err := New(rec, SingleTenant()).WithTrigger(realTrigger{}).Build()
 	require.NoError(t, err)
 	assert.Nil(t, loop.leader, "no WithLeader → loop.leader must be nil (single-process mode)")
 }
@@ -106,7 +157,7 @@ func TestBuilder_DefaultsConcurrencyTo1(t *testing.T) {
 	rec := funcReconciler(func(_ context.Context, _ Request) (Result, error) {
 		return Result{}, nil
 	})
-	loop, err := New(rec).WithTrigger(realTrigger{}).Build()
+	loop, err := New(rec, SingleTenant()).WithTrigger(realTrigger{}).Build()
 	require.NoError(t, err)
 	// Before Start, maxConcurrentReconciles may still be 0 (Build transfers explicit
 	// value, applyDefaults fires at Start). Test the defaulting funnel directly.
@@ -202,7 +253,7 @@ func TestBuilder_WithOptionsThreadThrough(t *testing.T) {
 		return Result{}, nil
 	})
 
-	loop, err := New(rec).
+	loop, err := New(rec, SingleTenant()).
 		WithTrigger(realTrigger{}).
 		WithConcurrency(3).
 		WithInterval(builderTestInterval).
@@ -234,21 +285,21 @@ func TestBuilder_TypedNilDependencyBoundaries(t *testing.T) {
 
 	t.Run("typed-nil Trigger → Build error", func(t *testing.T) {
 		t.Parallel()
-		_, err := New(rec).WithTrigger((*ptrTrigger)(nil)).Build()
+		_, err := New(rec, SingleTenant()).WithTrigger((*ptrTrigger)(nil)).Build()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "Trigger")
 	})
 
 	t.Run("FencedRepo without Leader → Build error", func(t *testing.T) {
 		t.Parallel()
-		_, err := New(rec).WithTrigger(realTrigger{}).WithFencedRepo(&stubFencedRepo{}).Build()
+		_, err := New(rec, SingleTenant()).WithTrigger(realTrigger{}).WithFencedRepo(&stubFencedRepo{}).Build()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "WithLeader")
 	})
 
 	t.Run("typed-nil Leader → Start error", func(t *testing.T) {
 		t.Parallel()
-		loop, err := New(rec).WithTrigger(realTrigger{}).WithLeader((*stubLeader)(nil)).Build()
+		loop, err := New(rec, SingleTenant()).WithTrigger(realTrigger{}).WithLeader((*stubLeader)(nil)).Build()
 		require.NoError(t, err) // typed-nil leader is a non-nil interface; Build passes
 		err = loop.Start(context.Background())
 		require.Error(t, err)
@@ -257,7 +308,7 @@ func TestBuilder_TypedNilDependencyBoundaries(t *testing.T) {
 
 	t.Run("typed-nil FencedRepo → Start error", func(t *testing.T) {
 		t.Parallel()
-		loop, err := New(rec).
+		loop, err := New(rec, SingleTenant()).
 			WithTrigger(realTrigger{}).
 			WithLeader(&stubLeader{}).
 			WithFencedRepo((*stubFencedRepo)(nil)).
@@ -278,7 +329,7 @@ func TestBuilder_WithMetricsThreadsThrough(t *testing.T) {
 	m, err := RegisterMetrics(p)
 	require.NoError(t, err)
 
-	loop, buildErr := New(rec).WithTrigger(realTrigger{}).WithMetrics(m).Build()
+	loop, buildErr := New(rec, SingleTenant()).WithTrigger(realTrigger{}).WithMetrics(m).Build()
 	require.NoError(t, buildErr)
 	assert.NotNil(t, loop.metrics.Total)
 }
@@ -292,7 +343,7 @@ func TestBuilder_TriggerWiredIntoSource(t *testing.T) {
 	rec := funcReconciler(func(_ context.Context, _ Request) (Result, error) {
 		return Result{}, nil
 	})
-	loop, err := New(rec).WithTrigger(realTrigger{}).Build()
+	loop, err := New(rec, SingleTenant()).WithTrigger(realTrigger{}).Build()
 	require.NoError(t, err)
 	assert.NotNil(t, loop.source, "loop.source must be wired to the trigger channel")
 	assert.NotNil(t, loop.trigger, "loop.trigger must hold the Trigger")

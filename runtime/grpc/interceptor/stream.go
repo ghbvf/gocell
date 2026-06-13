@@ -223,7 +223,9 @@ func newStreamChain(deps Deps, reg *runtimegrpc.ServiceRegistrar, drain *runtime
 		StreamTracing(deps.Tracer),
 		StreamAccessLog(deps.Clock),
 		StreamMetrics(deps.Collector, deps.Clock, validCellIDs),
-		StreamAuth(deps.Verifier, deps.AuthOptions...),
+		// Registrar-sourced public-method bypass (#1675), same single-source wiring
+		// as the unary chain — see authOptionsWithPublicMethods in chain.go.
+		StreamAuth(deps.Verifier, authOptionsWithPublicMethods(deps.AuthOptions, reg)...),
 		StreamDrain(drain),
 		StreamRecovery(),
 	)

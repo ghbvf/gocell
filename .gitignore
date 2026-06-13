@@ -13,11 +13,15 @@ dist/
 /pg-migrate
 
 # Example module binaries produced by running `go build` inside examples/<name>/.
+# One entry per examples/<name>/ main package (dir-named binary); keep complete so a
+# stray `go build` in any example is never committed (#2053).
 /examples/corebundlestarter/corebundlestarter
+/examples/demo/demo
 /examples/iotdevice/iotdevice
 /examples/orderfulfillment/orderfulfillment
 /examples/ssobff/ssobff
 /examples/todoorder/todoorder
+/examples/webhookdemo/webhookdemo
 
 # cmd/<name> go.work satellite modules (cmd/gocell #1557, cmd/corebundle #1559):
 # a bare `go build ./...` inside one leaves an in-dir binary (the canonical build

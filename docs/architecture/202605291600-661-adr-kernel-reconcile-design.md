@@ -212,8 +212,11 @@ func (b *TypedBuilder[request]) Complete(r reconcile.TypedReconciler[request]) e
 ```
 
 `For`/`Owns`/`Watches` 绑定 K8s informer 源——**全删**（GoCell 无 informer）。GoCell Builder
-（PR-A7）= `New(reconciler).WithTrigger(...).WithLeader(...).WithConcurrency(...).Build()`，
+（PR-A7 + #1954 amendment）=
+`New(reconciler, tenancy).WithTrigger(...).WithLeader(...).WithConcurrency(...).Build()`，
 唯一公开构造入口（`Loop` 构造私有化，funnel 上游 Hard），不绑定任何 K8s 资源。
+`tenancy` 是必填 sealed stance，迫使 reconciler 显式声明 tenantless `_notenant`
+命名空间是否正确。
 
 ### 2.4 `client-go util/workqueue/default_rate_limiters.go` — 退避默认值
 
@@ -360,7 +363,7 @@ adapter 不改 kernel。
 ### 3.5 Builder（PR-A7 **已交付**）
 
 ```go
-func New(reconciler Reconciler) *Builder
+func New(reconciler Reconciler, tenancy Tenancy) *Builder
 func (*Builder) WithTrigger(Trigger) *Builder
 func (*Builder) WithLeader(LeaderElector) *Builder
 func (*Builder) WithFencedRepo(FencedRepository) *Builder
@@ -579,7 +582,10 @@ controller-runtime 对标快照（§2 的 5 个 ref）仍有效，否则先修�
 | **T-FENCE** | 旧 leader 迟到设备写绕过 fencing → 落地为重复命令（leader election 残余窗口的兜底失效） | §4.3 `FencedRepository`：`Loop` 只给 Reconciler epoch-bound `FencedWriter`，写路径 CAS 拒 `incoming_epoch < 已见最高`（**单调 epoch**，非 outbox 的 UUID identity-fencing）；绕过在 type system 不可表达（消费方无裸写面）。**⚠️ Redis-eviction residual（C6）**：Redis adapter 的 epoch **值** provenance 依赖 epoch key 持久性——live-holder 路径（acquire same-holder + renew）缺失即 fail-closed，但 free-holder 分支 eviction 后从 1 重建无法 fail-closed（first-acquire 与 post-eviction 不可区分）；缓解 = 30d TTL 刷新 + 非 `allkeys-*` eviction policy + 监控；**严格跨副本 fencing 选 PG adapter（持久 epoch SoR）**。写面 Hard 不退化（与 epoch 值 provenance 正交）。 | **设计**（A6：上游 Hard = `FencedWriter` 唯一写面 + sealed 构造；下游 Hard = `RECONCILE-FENCED-WRITE-FUNNEL-01` callsite + conformance 入列；leader election ≠ fencing 由本行结构兜底）；Redis epoch provenance **⚠️ residual（accepted，见 round-3 C6）** |
 | **T-BUILDER** | 消费方裸构造 Loop 绕过 metric/leader/backoff wiring | **已交付**（PR-A7）：上游 Hard 含两个子声明——(i) 带字段赋值的复合字面量（`reconcile.Loop{field: v}`）在包外是编译错误（type system 封闭）；(ii) 零值字面量 `reconcile.Loop{}` 仍可编译但被 `RECONCILE-BUILDER-FUNNEL-01` archtest（AST+Unalias ban）在下游 Hard 拦截，禁止其出现在 `kernel/reconcile` 包外——两者共同封闭全部裸构造路径。临时 `RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01` 退役 | **已闭环 Hard**（上游 Hard 字段私有化封闭含字段赋值的字面量 + 下游 Hard callsite ban 封闭零值字面量；双侧均 Hard，无过渡 Medium） |
 
-> PR-A7 已交付：`Loop` 所有配置字段私有化，Builder 是唯一公开构造入口（`reconcile.New(r).With*().Build()`）。
+> PR-A7 已交付：`Loop` 所有配置字段私有化，Builder 是唯一公开构造入口
+> （`reconcile.New(r, tenancy).With*().Build()`）。#1954 amendment 将 `Tenancy`
+> 接入该入口：省略 stance 是编译错误，零值 `Tenancy{}` 由 `Build()` fail-fast，
+> 取值集由 `RECONCILE-TENANCY-DECLARED-01` 冻结。
 > 上游 Hard 封闭含字段赋值的复合字面量（`reconcile.Loop{field: v}` 包外编译错误）；零值字面量
 > `reconcile.Loop{}` 仍可编译但由下游 Hard `RECONCILE-BUILDER-FUNNEL-01` AST+Unalias ban 拦截——
 > 两者合力封闭全部裸构造路径。A3–A6 窗口期使用的临时 Medium archtest
