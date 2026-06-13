@@ -66,6 +66,8 @@ errcode.RegisteredPrefixes() []PrefixOwner
 
 以下评级从 archtest `ERRCODE-PREFIX-OWNERSHIP-01` 的 godoc 如实引用，不单方面升级为 unqualified Hard。
 
+> **「下游 Hard」≠「全规则 Hard」**：表中各行的「下游 Hard」是**该检测子路径在其覆盖范围内**的强度（typed const 求值确定、无误报）；它**不**把整条规则升为 Hard。整条规则因唯一的 forwarding-launder 残差（末行）封顶为 **Medium**（见下「Medium residual 意义」）——archtest-bound、非 type-system seal。AI co-author 勿据某行「下游 Hard」推断整规则可 Hard 化。
+
 | 检查形态 | 评级 | 说明 |
 |---------|------|------|
 | code-bearing helper（New/Wrap/WrapInfra/WritePublic/WrapOrInfra）的 code 参数 — 字符串字面量 (`BasicLit`) | **下游 Hard** | EvaluateConstString 类型感知，别名无效；codeArgIndex 按 helper 取（0/1/3） |

@@ -1408,13 +1408,20 @@ const (
 // A value that is neither a resolvable const nor a BasicLit is codeArgRuntimeAssembled
 // when it contains a CallExpr/BinaryExpr (Code conversion or concatenation),
 // otherwise codeArgSkip (a bare var/param reference — the data-flow residual #1).
+//
+// Note: in AST-only mode a const SelectorExpr/Ident (e.g. somepkg.Const) is NOT
+// a *ast.BasicLit and falls through to codeArgSkip — only the typed path
+// (StandaloneModule / Production scope) resolves it. A fixture asserting a
+// non-literal sentinel/code is detected must therefore run in a typed scope.
 func classifyCodeExpr(info *types.Info, expr ast.Expr) (codeStr string, kind codeArgKind) {
 	if info != nil {
 		if s, ok := EvaluateConstString(info, expr); ok {
 			return s, codeArgConst
 		}
 	} else if lit, ok := expr.(*ast.BasicLit); ok && lit.Kind == token.STRING {
-		return strings.Trim(lit.Value, `"`), codeArgConst
+		if s, err := strconv.Unquote(lit.Value); err == nil {
+			return s, codeArgConst
+		}
 	}
 	if isRuntimeAssembledCodeArg(expr) {
 		return "", codeArgRuntimeAssembled
@@ -1600,6 +1607,10 @@ func errcodeSentinelDiag(fset *token.FileSet, name *ast.Ident, rel, message stri
 // var ErrX = errcode.New(...) is *errcode.Error; var ErrX = errors.New(...) is
 // error). In AST-only fixture mode (info == nil) the type is unconfirmable, so
 // it falls back to the original BasicLit-string proxy.
+//
+// Type aliases (type MyCode = errcode.Code) resolve to the same *types.Named
+// (Obj() == errcode.Code), so aliased sentinels stay in scope — do not add a
+// !named.IsAlias() guard, which would re-open an alias-laundering escape.
 func isErrcodeCodeSentinel(info *types.Info, name *ast.Ident, value ast.Expr) bool {
 	if info == nil {
 		_, ok := value.(*ast.BasicLit)

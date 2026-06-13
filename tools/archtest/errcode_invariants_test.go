@@ -1016,11 +1016,15 @@ func TestErrcodePrefixOwnership01_ScannerFires(t *testing.T) {
 //
 //	tools/archtest/testdata/errcode_prefix_ownership_selector_fixtures/
 //
-// Expected: the SelectorExpr sentinel (codes.Unregistered →
-// ERR_SELECTORBOGUS_NOPE) and the same-package const-Ident sentinel
-// (localUnregistered → ERR_IDENTBOGUS_NOPE) are both flagged; the registered
-// control (codes.RegisteredOK → ERR_INTERNAL) is NOT — anti-vacuity proving
-// the scan is selective, not a blanket flag on every non-literal sentinel.
+// Expected: the three errcode.Code-typed non-literal sentinels are flagged —
+// untyped const SelectorExpr (codes.Unregistered → ERR_SELECTORBOGUS_NOPE),
+// typed errcode.Code const SelectorExpr (codes.UnregisteredTyped →
+// ERR_TYPEDSELECTOR_NOPE), and same-package const Ident (localUnregistered →
+// ERR_IDENTBOGUS_NOPE). NOT flagged: the registered control (ERR_INTERNAL), and
+// the two Err*-named NON-Code sentinels (ErrIgnoredStdlib is error;
+// ErrIgnoredErrcodeNew is *errcode.Error) that the isErrcodeCodeSentinel type
+// gate must exclude. Together these prove the scan is type-selective and
+// value-resolving, not a name-only blanket flag (anti-vacuity).
 func TestErrcodePrefixOwnership01_SentinelConstEval(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -1041,8 +1045,10 @@ func TestErrcodePrefixOwnership01_SentinelConstEval(t *testing.T) {
 			return nil
 		})
 
-	// The two non-literal-value sentinels must be flagged (residual #2 closed).
-	for _, want := range []string{"ERR_SELECTORBOGUS_NOPE", "ERR_IDENTBOGUS_NOPE"} {
+	// The three non-literal-value errcode.Code sentinels must be flagged
+	// (residual #2 closed): untyped const SelectorExpr, typed Code const
+	// SelectorExpr, and same-package const Ident.
+	for _, want := range []string{"ERR_SELECTORBOGUS_NOPE", "ERR_TYPEDSELECTOR_NOPE", "ERR_IDENTBOGUS_NOPE"} {
 		found := false
 		for _, d := range allDiags {
 			if strings.Contains(d.Message, want) {
@@ -1056,18 +1062,20 @@ func TestErrcodePrefixOwnership01_SentinelConstEval(t *testing.T) {
 		}
 	}
 
-	// Anti-vacuity: the registered-prefix control must NOT be flagged, and the
-	// scan must produce exactly the two expected diagnostics — proving the
-	// typed scan is selective rather than flagging every non-literal sentinel.
-	for _, d := range allDiags {
-		if strings.Contains(d.Message, "ERR_INTERNAL") {
-			t.Errorf("ERRCODE-PREFIX-OWNERSHIP-01_SentinelConstEval: registered control "+
-				"ERR_INTERNAL wrongly flagged (false positive): %v", d)
+	// Anti-vacuity: neither the registered control nor the two Err*-named
+	// non-Code sentinels may be flagged — proving the typed scan is
+	// type-selective rather than name-only.
+	for _, unwanted := range []string{"ERR_INTERNAL", "ERR_STDLIBIGNORED_NOPE"} {
+		for _, d := range allDiags {
+			if strings.Contains(d.Message, unwanted) {
+				t.Errorf("ERRCODE-PREFIX-OWNERSHIP-01_SentinelConstEval: control %q wrongly "+
+					"flagged (false positive — type gate or ownership leak): %v", unwanted, d)
+			}
 		}
 	}
-	if len(allDiags) != 2 {
-		t.Errorf("ERRCODE-PREFIX-OWNERSHIP-01_SentinelConstEval: expected exactly 2 diagnostics "+
-			"(the two unregistered non-literal sentinels), got %d: %v", len(allDiags), allDiags)
+	if len(allDiags) != 3 {
+		t.Errorf("ERRCODE-PREFIX-OWNERSHIP-01_SentinelConstEval: expected exactly 3 diagnostics "+
+			"(the three unregistered non-literal errcode.Code sentinels), got %d: %v", len(allDiags), allDiags)
 	}
 }
 
