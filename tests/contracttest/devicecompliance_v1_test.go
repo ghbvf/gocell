@@ -44,16 +44,21 @@ func TestDeviceCompliance_V1(t *testing.T) {
 		"diskEncryption":"unknown","antivirus":"disabled","patch":"outOfDate","firewall":"unknown"
 	}}`))
 
-	// parameter errors — bad enum on each posture attribute
-	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","compliant":true,"observedAt":"2026-06-13T00:00:00Z","diskEncryption":"bogus"}}`)) // bad diskEncryption enum
-	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","compliant":true,"observedAt":"2026-06-13T00:00:00Z","antivirus":"bogus"}}`))      // bad antivirus enum
-	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","compliant":true,"observedAt":"2026-06-13T00:00:00Z","patch":"bogus"}}`))          // bad patch enum
-	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","compliant":true,"observedAt":"2026-06-13T00:00:00Z","firewall":"bogus"}}`))       // bad firewall enum
-	// parameter errors — type + missing required
-	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","compliant":"yes","observedAt":"2026-06-13T00:00:00Z"}}`)) // compliant must be boolean
-	c.MustRejectResponse(t, []byte(`{"data":{"compliant":true,"observedAt":"2026-06-13T00:00:00Z"}}`))                     // missing deviceId
-	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","observedAt":"2026-06-13T00:00:00Z"}}`))                   // missing compliant
-	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","compliant":true}}`))                                      // missing observedAt
+	// parameter errors — bad value on each posture attribute (closed enum value-set)
+	for _, badAttr := range []string{
+		`"diskEncryption":"bogus"`,
+		`"antivirus":"bogus"`,
+		`"patch":"bogus"`,
+		`"firewall":"bogus"`,
+	} {
+		c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","compliant":true,"observedAt":"2026-06-13T00:00:00Z",`+badAttr+`}}`))
+	}
+	// parameter errors — wrong type + missing required field
+	// compliant must be boolean, not string:
+	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","compliant":"yes","observedAt":"2026-06-13T00:00:00Z"}}`))
+	c.MustRejectResponse(t, []byte(`{"data":{"compliant":true,"observedAt":"2026-06-13T00:00:00Z"}}`))   // missing deviceId
+	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","observedAt":"2026-06-13T00:00:00Z"}}`)) // missing compliant
+	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","compliant":true}}`))                    // missing observedAt
 
 	// query param validation (FMT-25 maxLength)
 	c.ValidateQueryParam(t, "deviceId", "dev-1")
