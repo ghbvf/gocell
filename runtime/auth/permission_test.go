@@ -239,3 +239,164 @@ func TestRequirePermission_HTTPIntegration_AllowDeny(t *testing.T) {
 		})
 	}
 }
+
+// --- RequirePermissionOrSelf: request-shape self-exemption + PDP delegation ---
+//
+// The self-exemption and the PDP delegation form a non-vacuous pair: inverting
+// the self-check would flip both TestRequirePermissionOrSelf_Self_ExemptWithoutPDP
+// (self would hit the deny PDP → 403) and _NonSelfNonAdmin_PDPDeny (non-self would
+// exempt → nil), so neither can pass while the other is broken.
+
+const (
+	roselfSubjectA = "11111111-1111-1111-1111-111111111111"
+	roselfOtherB   = "22222222-2222-2222-2222-222222222222"
+)
+
+func TestRequirePermissionOrSelf_Self_ExemptWithoutPDP(t *testing.T) {
+	// A subject naming itself in the path is exempt: even a DENY Authorizer must
+	// not be consulted — the gate returns nil before delegating to the PDP.
+	p := &Principal{Kind: PrincipalUser, Subject: roselfSubjectA, Roles: []string{"user"}}
+	deny := &mockAuthorizer{allowed: false}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/"+roselfSubjectA, nil)
+	req.SetPathValue("id", roselfSubjectA)
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), deny))
+
+	err := RequirePermissionOrSelf("id", authz.PermUserRead())(req)
+	assert.NoError(t, err, "self-access (param==subject) must be exempt without consulting the PDP")
+}
+
+// TestRequirePermissionOrSelf_SelfZeroPermission_FailClosed is the F2 (PR #1974)
+// red-fail guard: a self-naming caller (param==subject) must NOT be permitted when
+// the wrapped permission is a zero authz.Permission{} (a mis-wired gate). The zero
+// guard is hoisted ABOVE the self-exemption, so even the self path fails closed —
+// mirroring RequirePermission's own first guard. Before the fix the self branch
+// returned nil first, silently permitting a mis-wired gate. A permissive Authorizer
+// is wired to prove the deny comes from the zero-permission guard, not the PDP.
+func TestRequirePermissionOrSelf_SelfZeroPermission_FailClosed(t *testing.T) {
+	p := &Principal{Kind: PrincipalUser, Subject: roselfSubjectA, Roles: []string{"user"}}
+	allow := &mockAuthorizer{allowed: true}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/"+roselfSubjectA, nil)
+	req.SetPathValue("id", roselfSubjectA)
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), allow))
+
+	err := RequirePermissionOrSelf("id", authz.Permission{})(req)
+	require.Error(t, err, "self-access with a zero permission must fail closed, not self-exempt (F2)")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind, "zero permission → 403 even on the self path")
+}
+
+func TestRequirePermissionOrSelf_NonSelfAdmin_PDPAllow(t *testing.T) {
+	p := &Principal{Kind: PrincipalUser, Subject: "admin-1", Roles: []string{"admin"}}
+	allow := &mockAuthorizer{allowed: true}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/"+roselfOtherB, nil)
+	req.SetPathValue("id", roselfOtherB)
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), allow))
+
+	err := RequirePermissionOrSelf("id", authz.PermUserRead())(req)
+	assert.NoError(t, err, "non-self admin must pass via PDP allow")
+}
+
+func TestRequirePermissionOrSelf_NonSelfNonAdmin_PDPDeny(t *testing.T) {
+	p := &Principal{Kind: PrincipalUser, Subject: roselfSubjectA, Roles: []string{"user"}}
+	deny := &mockAuthorizer{allowed: false}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/"+roselfOtherB, nil)
+	req.SetPathValue("id", roselfOtherB)
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), deny))
+
+	err := RequirePermissionOrSelf("id", authz.PermUserRead())(req)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "deny must return an errcode.Error")
+	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind, "non-self non-admin must be denied by the PDP (403)")
+}
+
+func TestRequirePermissionOrSelf_NonSelfNoAuthorizer_FailClosed(t *testing.T) {
+	p := &Principal{Kind: PrincipalUser, Subject: roselfSubjectA, Roles: []string{"user"}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/"+roselfOtherB, nil)
+	req.SetPathValue("id", roselfOtherB)
+	req = req.WithContext(WithPrincipal(req.Context(), p)) // no Authorizer wired
+
+	err := RequirePermissionOrSelf("id", authz.PermUserRead())(req)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind, "non-self with no Authorizer must fail closed (403)")
+}
+
+func TestRequirePermissionOrSelf_EmptyParam_NotExempt(t *testing.T) {
+	// Empty path value ≠ self (tenancy.md): must fall through to the PDP. A deny
+	// Authorizer (403) proves the PDP was consulted rather than self-exempted.
+	p := &Principal{Kind: PrincipalUser, Subject: roselfSubjectA, Roles: []string{"user"}}
+	deny := &mockAuthorizer{allowed: false}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/", nil)
+	// no SetPathValue("id", ...) → empty path value
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), deny))
+
+	err := RequirePermissionOrSelf("id", authz.PermUserRead())(req)
+	require.Error(t, err, "empty param must not self-exempt; PDP deny → 403")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind)
+}
+
+func TestRequirePermissionOrSelf_NonUUIDParamMismatch_NotExempt(t *testing.T) {
+	// A non-UUID path value that does not equal the subject must not self-exempt;
+	// it falls through to the PDP (deny → 403).
+	p := &Principal{Kind: PrincipalUser, Subject: roselfSubjectA, Roles: []string{"user"}}
+	deny := &mockAuthorizer{allowed: false}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/not-a-uuid", nil)
+	req.SetPathValue("id", "not-a-uuid")
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), deny))
+
+	err := RequirePermissionOrSelf("id", authz.PermUserRead())(req)
+	require.Error(t, err, "non-self non-UUID param must not self-exempt; PDP deny → 403")
+}
+
+func TestRequirePermissionOrSelf_ServicePrincipal_NotExempt(t *testing.T) {
+	// A non-user principal never self-exempts even if its Subject coincides with
+	// the path value — service/anonymous fall through to the PDP (fail-closed).
+	p := &Principal{Kind: PrincipalService, Subject: roselfSubjectA}
+	deny := &mockAuthorizer{allowed: false}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/"+roselfSubjectA, nil)
+	req.SetPathValue("id", roselfSubjectA)
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), deny))
+
+	err := RequirePermissionOrSelf("id", authz.PermUserRead())(req)
+	require.Error(t, err, "service principal must not self-exempt; PDP deny → 403")
+}
+
+// TestRequirePermissionOrSelf_NonSelf_AllowWithObligations_FailClosed asserts F5
+// for the non-self delegation path: when RequirePermissionOrSelf falls through to
+// the PDP (subject != path id) and the PDP returns Allow with a non-zero obligation,
+// the gate must deny (403) rather than silently drop the obligation. This mirrors
+// TestRequirePermission_AllowWithObligations_FailClosed for the RequirePermission
+// gate — the obligation-fail-closed invariant must hold on both paths.
+func TestRequirePermissionOrSelf_NonSelf_AllowWithObligations_FailClosed(t *testing.T) {
+	p := &Principal{Kind: PrincipalUser, Subject: roselfSubjectA, Roles: []string{"admin"}}
+	// Allow, but with a RowScope obligation the route gate cannot enforce.
+	mock := &mockAuthorizer{allowed: true, obligations: authz.Obligations{RowScope: tenant.RowScopeSelf}}
+
+	// Non-self path: subject (A) != path param (B), so the self-exemption branch
+	// is skipped and the request is delegated to the PDP (mock).
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/"+roselfOtherB, nil)
+	req.SetPathValue("id", roselfOtherB)
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), mock))
+
+	err := RequirePermissionOrSelf("id", authz.PermUserRead())(req)
+	require.Error(t, err, "Allow with unenforceable obligations must fail-closed, not silently drop")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind,
+		"Allow with non-zero obligations must return PermissionDenied (403)")
+	assert.Equal(t, errcode.ErrAuthForbidden, ec.Code)
+}

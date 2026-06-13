@@ -90,7 +90,8 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	ac := accesscore.NewAccessCore(clock.Real(), append(buildAccessCoreMemOptions(t, clock.Real()),
+	ac := accesscore.NewAccessCore(clock.Real(), append(
+		buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -99,7 +100,8 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 	)...)
-	cc := configcore.NewConfigCore(clock.Real(),
+	cc := configcore.NewConfigCore(
+		clock.Real(),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
@@ -124,7 +126,8 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	// inside accesscore's RegisterRoutes. PolicyJWTFromAssembly is now a
 	// cell.Policy (round-3 collapse): its Validate hook resolves the verifier
 	// from accesscore's authProvider during phase4.
-	app := bootstrap.New(clock.Real(),
+	app := bootstrap.New(
+		clock.Real(),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
@@ -306,7 +309,8 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	ac := accesscore.NewAccessCore(clock.Real(), append(buildAccessCoreMemOptions(t, clock.Real()),
+	ac := accesscore.NewAccessCore(clock.Real(), append(
+		buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -315,7 +319,8 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 	)...)
-	cc := configcore.NewConfigCore(clock.Real(),
+	cc := configcore.NewConfigCore(
+		clock.Real(),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
@@ -347,7 +352,13 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	// #673: a dedicated HealthListener is mandatory; /healthz moves there.
 	healthLn := newCorebundleLocalListener(t)
 	internalAuthChain := []kauth.ListenerAuth{authtest.MustAuthServiceToken(nonceStore, ring)}
-	app := bootstrap.New(clock.Real(),
+	// Wire the ABAC PDP (PR-10c #1348): this test creates a user as admin via
+	// POST /api/v1/access/users, whose gate is now auth.RequirePermission(user:write)
+	// and fails closed without a wired Authorizer — mirror production run.go.
+	authzOpt, authzErr := bootstrap.PrimaryAuthorizerOption([]cell.Cell{ac, cc, auc})
+	require.NoError(t, authzErr, "primary authorizer wiring must succeed with accesscore present")
+	app := bootstrap.New(
+		clock.Real(),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain,
@@ -357,6 +368,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, clock.Real())),
 		bootstrap.WithShutdownTimeout(testtime.D2s),
+		authzOpt,
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -608,7 +620,8 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	ac := accesscore.NewAccessCore(clock.Real(), append(buildAccessCoreMemOptions(t, clock.Real()),
+	ac := accesscore.NewAccessCore(clock.Real(), append(
+		buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -617,7 +630,8 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 	)...)
-	cc := configcore.NewConfigCore(clock.Real(),
+	cc := configcore.NewConfigCore(
+		clock.Real(),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
@@ -638,7 +652,8 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
 
-	app := bootstrap.New(clock.Real(),
+	app := bootstrap.New(
+		clock.Real(),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},
 			bootstrap.WithListenerNet(primaryLn)),

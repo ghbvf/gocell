@@ -49,6 +49,11 @@ func startVaultContainer(t *testing.T, opts ...testcontainers.ContainerCustomize
 	}, opts...)
 
 	container, err := vaultcontainer.Run(ctx, testutil.VaultImage, runOpts...)
+	// Partial start: Run can return a non-nil container alongside an error;
+	// terminate the orphan before require.NoError aborts the test.
+	if err != nil && container != nil {
+		_ = container.Terminate(ctx)
+	}
 	require.NoError(t, err, "start vault container")
 
 	vaultAddr, err := container.HttpHostAddress(ctx)

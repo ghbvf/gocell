@@ -221,7 +221,16 @@ func (s *Shared) boot(tb testing.TB) {
 		tcpostgres.BasicWaitStrategies(),
 	)
 	if err != nil {
-		s.initErr = fmt.Errorf("start shared postgres: %w", err)
+		cause := fmt.Errorf("start shared postgres: %w", err)
+		// Partial start: tcpostgres.Run can return a non-nil container alongside a
+		// non-nil error (e.g. a readiness-wait timeout after a successful docker
+		// create). Reuse the same terminate-and-record path the later boot steps
+		// use so the failure path leaves no orphaned container.
+		if container != nil {
+			s.terminateAfterInitFailure(ctx, container, cause)
+			return
+		}
+		s.initErr = cause
 		return
 	}
 

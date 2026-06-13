@@ -123,7 +123,8 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 	// (pool, txMgr, clk) triple. Session/refresh stores remain in-memory for
 	// this harness (S3+S5 scope; PG session/refresh wiring is exercised
 	// separately in the S4a PG sub-tests below).
-	ac := accesscore.NewAccessCore(clock.Real(), append(buildAccessCoreMemOptions(t, clock.Real()),
+	ac := accesscore.NewAccessCore(clock.Real(), append(
+		buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithPGBundle(pgBundle),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(pgOutboxWriter)),
 		accesscore.WithJWTIssuer(jwtIssuer),
@@ -133,7 +134,8 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 	)...)
-	cc := configcore.NewConfigCore(clock.Real(),
+	cc := configcore.NewConfigCore(
+		clock.Real(),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
@@ -155,7 +157,13 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 	require.NoError(t, asm.Register(auc))
 
 	healthLn := newCorebundleLocalListener(t)
-	app := bootstrap.New(clock.Real(),
+	// Wire the ABAC PDP (PR-10c #1348): this harness creates/locks users as admin
+	// via the migrated accesscore gates (auth.RequirePermission), which fail closed
+	// without a wired Authorizer — mirror production run.go.
+	setupAuthzOpt, setupAuthzErr := bootstrap.PrimaryAuthorizerOption([]cell.Cell{ac, cc, auc})
+	require.NoError(t, setupAuthzErr, "primary authorizer wiring must succeed with accesscore present")
+	app := bootstrap.New(
+		clock.Real(),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(),
 			[]kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},
@@ -166,6 +174,7 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, clock.Real())),
 		bootstrap.WithShutdownTimeout(testtime.D2s),
+		setupAuthzOpt,
 	)
 
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -230,7 +239,8 @@ func TestSetupEndpoints_FirstRunFlow_PG(t *testing.T) {
 
 		var eventType, status string
 		var payload []byte
-		err = h.pool.DB().QueryRow(ctx, `
+		err = h.pool.DB().QueryRow(
+			ctx, `
 SELECT event_type, payload, status
 FROM outbox_entries
 WHERE event_type = $1`,
@@ -316,7 +326,8 @@ func TestSetupEndpoints_FirstRunFlow_PG_OutboxFailureRollsBack(t *testing.T) {
 	assert.Equal(t, 0, roleAssignmentCount, "failed outbox write must roll back admin role assignment")
 
 	var outboxCount int
-	err = h.pool.DB().QueryRow(ctx,
+	err = h.pool.DB().QueryRow(
+		ctx,
 		`SELECT count(*) FROM outbox_entries WHERE event_type = $1`,
 		"event.user.created.v1",
 	).Scan(&outboxCount)
@@ -432,7 +443,8 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	ac := accesscore.NewAccessCore(clock.Real(),
+	ac := accesscore.NewAccessCore(
+		clock.Real(),
 		accesscore.WithPGBundle(pgBundle),
 		accesscore.WithSessionStore(pgSessionStore),
 		accesscore.WithRefreshStore(pgRefreshStore),
@@ -443,7 +455,8 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 		accesscore.WithBootstrapAuth(bootstrapMW),
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 	)
-	cc := configcore.NewConfigCore(clock.Real(),
+	cc := configcore.NewConfigCore(
+		clock.Real(),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
@@ -464,7 +477,12 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 	require.NoError(t, asm.Register(auc))
 
 	sessionHealthLn := newCorebundleLocalListener(t)
-	app := bootstrap.New(clock.Real(),
+	// Wire the ABAC PDP (PR-10c #1348): this harness creates/locks/reads users as
+	// admin via the migrated accesscore gates (fail closed without the PDP).
+	sessionAuthzOpt, sessionAuthzErr := bootstrap.PrimaryAuthorizerOption([]cell.Cell{ac, cc, auc})
+	require.NoError(t, sessionAuthzErr, "primary authorizer wiring must succeed with accesscore present")
+	app := bootstrap.New(
+		clock.Real(),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(),
 			[]kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},
@@ -481,6 +499,7 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, clock.Real())),
 		bootstrap.WithShutdownTimeout(testtime.D2s),
+		sessionAuthzOpt,
 	)
 
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -619,7 +638,8 @@ func TestSessionLogin_PGGoldenPath(t *testing.T) {
 	// Verify sessions row persisted correctly.
 	var jti string
 	var revokedAt *time.Time
-	err := h.pool.DB().QueryRow(ctx,
+	err := h.pool.DB().QueryRow(
+		ctx,
 		`SELECT jti, revoked_at FROM sessions WHERE id = $1`,
 		sessionID,
 	).Scan(&jti, &revokedAt)
@@ -629,7 +649,8 @@ func TestSessionLogin_PGGoldenPath(t *testing.T) {
 
 	// Verify refresh_token row exists for this session.
 	var rtCount int
-	err = h.pool.DB().QueryRow(ctx,
+	err = h.pool.DB().QueryRow(
+		ctx,
 		`SELECT count(*) FROM refresh_tokens WHERE session_id = $1 AND rotated_at IS NULL AND revoked_at IS NULL`,
 		sessionID,
 	).Scan(&rtCount)

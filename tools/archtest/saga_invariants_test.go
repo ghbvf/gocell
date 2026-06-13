@@ -1924,8 +1924,8 @@ func TestSagaJournalHolderSeal_A1_HeartbeatFuncFieldFlagged(t *testing.T) {
 //	   the tickOnce function. A new driveOne caller anywhere else bypasses the
 //	   gate → split-brain → A1 fires.
 //	   AI-robust: Medium (pure-AST selector-name + enclosing-func-body gate;
-//	   same shape as SAGA-STEP-RUN-OUTSIDE-TX-01 A2's callIsSafeRun/callIsRunInTx
-//	   syntactic match).
+//	   same shape as SAGA-STEP-RUN-OUTSIDE-TX-01 A2's callIsRunInTx selector-name
+//	   match).
 //
 //	A2 [TestSagaLeaderGate_A2_TickOnceCallsAcquireLead]
 //	   The tickOnce function body MUST contain a call to acquireLead. The sole
@@ -2750,79 +2750,102 @@ func TestSagaCoverageDiagnosticLocations(t *testing.T) {
 // SAGA-STEP-RUN-OUTSIDE-TX-01 — call-discipline lock for the Coordinator
 // step executor.
 //
-// Inside all production .go files in runtime/saga/ (excluding _test.go),
-// kernel/saga.StepFunc invocations are confined to the safeRun helper, AND
-// safeRun MUST NOT be called from inside any TxRunner.RunInTx closure body.
-// Together these ensure user step code never runs with a DB transaction held
-// open.
-//
-// # Why ship in PR-03
-//
-// As soon as Coordinator + StepFunc exist, the call discipline is statically
-// lockable. Earlier locking catches PR-06 retry-executor regressions
-// immediately, before they reach main.
+// Inside all production .go files in runtime/saga/ (the executor subpackage
+// included, excluding _test.go), kernel/saga.StepFunc invocations are confined
+// to the safeRun helper, AND no call transitively reaching safeRun may appear
+// inside a TxRunner.RunInTx closure body. Together these ensure user step code
+// never runs with a DB transaction held open.
 //
 // # Two-layer lock
 //
 //	A1 [TestSagaStepRunOutsideTx_A1_StepFuncCallsiteUniqueness]
-//	   Every CallExpr in any production .go file under runtime/saga/ (excluding
-//	   _test.go) whose callee resolves to kernel/saga.StepFunc type MUST be
-//	   inside the body of safeRun.
-//	   AI-robust: Hard (typed callsite-uniqueness + posInRanges body gate;
-//	   the (callee type, enclosing function) pair is unique — any other shape
-//	   fails immediately).
+//	   Every CallExpr whose callee has the kernel/saga.StepFunc *signature*
+//	   (types.Identical against the canonical signature — NOT *types.Named
+//	   identity) MUST be inside safeRun's body. Signature identity sees through
+//	   aliases, defined types (`type S ksaga.StepFunc`) and raw structurally-
+//	   identical func values regardless of local import name, so no rename /
+//	   alias / redefinition can give a StepFunc call a signature-distinct callee
+//	   that escapes the gate. This FOLDS the former B1 alias self-test into A1
+//	   (gh #979): the escape class is now closed inside A1 itself, not patched
+//	   by a separate reverse self-test. The SANCTIONED body is bound to the
+//	   executor package by *types.Func identity (collectExecutorSafeRunRanges),
+//	   NOT the name "safeRun" — a same-named impostor in any other runtime/saga
+//	   subpackage opens no sanctioned range (gh #1998 review F1).
+//	   AI-robust: Medium (typed signature-identity scan; the alias / defined-
+//	   type / funclit escape class is structurally immune within this carrier).
 //
-//	A2 [TestSagaStepRunOutsideTx_A2_SafeRunNotInsideRunInTxClosure]
-//	   For every CallExpr to RunInTx in any production .go file under
-//	   runtime/saga/ (excluding _test.go), the closure literal passed as the
-//	   second argument (the tx callback body) MUST NOT contain a call to
-//	   safeRun. Checked via EachInSubtree over the closure body.
-//	   AI-robust: Medium (AST structural check; covers direct safeRun(...) in
-//	   the closure body; a helper-wrapper two levels deep is a B2 residual —
-//	   documented below).
+//	A2 [TestSagaStepRunOutsideTx_A2_SafeRunNotReachedInsideRunInTxClosure]
+//	   No call inside a RunInTx closure body may resolve to a callable that
+//	   transitively reaches safeRun. Built as a reverse-reachability taint set
+//	   over every loaded runtime/saga/ unit — spanning the coordinator package
+//	   (where RunInTx lives) AND the executor package (where safeRun is
+//	   defined) — keyed by *types.Func / func-literal-valued *types.Var object
+//	   identity (stable across Passes within one packages.Load, so a
+//	   coordinator→executor call edge resolves to the same object). The RunInTx
+//	   callback sink is resolved whether it is an inline func literal OR a
+//	   func-literal-valued var passed by name (runInTxCallbackBodies). Covers the
+//	   direct callsite, named helper wrappers, FuncLit-var indirection (gh #980,
+//	   incl. the cx-1 var-indirection case), and callback-var sinks (gh #1998
+//	   review F2). Interface-method calls resolve to bodiless interface methods
+//	   (never tainted), so dynamic dispatch deliberately breaks the static chain.
+//	   AI-robust: Medium (typed transitive taint) with compile-level depth —
+//	   safeRun is UNEXPORTED in runtime/saga/executor, so a coordinator closure
+//	   cannot name safeRun directly; it can only reach it via an exported
+//	   executor func, which the cross-package taint set catches.
 //
-// # Blind spots (ai-robust 强制反向自检; reverse self-test below)
+// # Residual blind spot + rejected Hard (threat matrix — gh #1997)
 //
-//	B1 [TestSagaStepRunOutsideTx_BlindSpot_B1_NoStepFuncAlias]
-//	   A type alias `type S = ksaga.StepFunc` in runtime/saga/ would assign a
-//	   different Go type to the callee, making A1's TypeOf check miss the call.
-//	   Mitigated by: B1 reverse self-test scans all non-test .go files in
-//	   runtime/saga/ for any TypeSpec whose underlying is a reference to saga.StepFunc.
-//	   Rated Soft (string-anchor scan); tracked for Hard upgrade via typed
-//	   StepFunc alias detection in gh issue #979.
+//	Residuals (manual typed taint, framework convention: no go/ssa) — all
+//	   benign under the Coordinator single-authority pattern (saga has no such
+//	   shape today), kept here as honest blind-spot accounting:
+//	     1. A func literal passed as a function PARAMETER and invoked via that
+//	        parameter in a DIFFERENT function (`func apply(f func()){ f() }`) —
+//	        interprocedural data-flow the taint does not chase.
+//	     2. A method-value-valued var (`f := executor.Execute; …; f(…)` inside
+//	        a RunInTx closure) — funcLitVars tracks func-literal bindings only,
+//	        not method values, so f is not in the taint set.
+//	     3. RunInTx is matched by method NAME (callIsRunInTx), not by type:
+//	        renaming persistence.TxRunner.RunInTx would silently disable A2.
+//	   Conversely A1 is over-strict on the safe side: a non-StepFunc value whose
+//	   signature is identical to StepFunc, called outside safeRun, would also be
+//	   flagged (a false-positive, not a miss) — runtime/saga defines no such
+//	   same-signature type, so this never fires in practice.
 //
-//	B2 (undocumented runtime blind spot) — A2's EachInSubtree walks the closure
-//	   literal syntactically passed to RunInTx. A pattern
-//	     wrapper := func() { safeRun(...) }
-//	     txRunner.RunInTx(ctx, func(txCtx context.Context) error { wrapper(); return nil })
-//	   would have safeRun inside wrapper, not directly in the RunInTx closure —
-//	   A2 would miss it. Mitigated by: scope (all runtime/saga/ production .go) +
-//	   Coordinator single-authority pattern means no wrapper helpers exist today.
-//	   A2 helper-function transitivity (safeRun callsite chase) tracked in
-//	   gh issue #980.
+//	Rejected Hard — the only carrier that makes the violation UNREPRESENTABLE
+//	   is reifying "inside a tx" into the type system: a sealed StepContext /
+//	   TxContext capability split so that calling a step-runner inside a RunInTx
+//	   closure is a COMPILE error. That requires reworking the kernel-level
+//	   kernel/persistence.TxRunner closure signature (func(context.Context)
+//	   error), shared by every cell (audit / access / config / outbox / saga) —
+//	   disproportionate for a saga-local invariant, so it is explicitly REJECTED
+//	   here and tracked as a long-term possibility in gh #1997. A1/A2 stay
+//	   Medium; "as Hard as proportionate" is achieved via A1 signature-identity
+//	   (alias/defined-type structurally immune) + A2 package-boundary gating
+//	   (unexported safeRun). The former Soft B1 no longer exists.
 //
-// ref: tools/archtest/span_setattr_redact_test.go (callsite-uniqueness pattern)
-// ref: tools/archtest/aftercommit_pure_transient_test.go (parent-node negative)
-// ref: .claude/rules/gocell/ai-robust.md §"Hard 范本目录" "typed marker funnel"
+// ref: tools/archtest/baseslice_ctor_funnel_01_test.go (typed identity pattern)
+// ref: tools/archtest/callresolver.go (typed call resolution / WalkFuncDecls)
+// ref: .claude/rules/gocell/ai-robust.md §"分级" (Medium) + §"审查要求"
 
 // --- A1: StepFunc callsite uniqueness (typed) ---
 
 // TestSagaStepRunOutsideTx_A1_StepFuncCallsiteUniqueness asserts that every
-// CallExpr in any production .go file under runtime/saga/ (excluding _test.go)
-// whose callee resolves to type kernel/saga.StepFunc is inside the body of
-// safeRun.
+// CallExpr in any production .go file under runtime/saga/ (executor included,
+// excluding _test.go) whose callee has the kernel/saga.StepFunc signature is
+// inside the body of safeRun.
 //
-// Detection uses go/types TypesInfo to resolve the callee type: any CallExpr
-// whose Fun has an underlying type matching the function signature of
-// kernel/saga.StepFunc (resolved by walking p.Pkg's imports to the ksagaPkgPath
-// package and looking up the StepFunc named type) must be in safeRun's body.
+// Detection uses go/types TypesInfo: the canonical StepFunc *types.Signature is
+// resolved by walking p.Pkg's imports to kernel/saga, and a callee matches when
+// tv.Type.Underlying() is a *types.Signature identical (types.Identical) to it.
+// Because Underlying() + types.Identical compare structure (not *types.Named
+// identity), a StepFunc alias, a defined type (`type S ksaga.StepFunc`), or a
+// raw structurally-identical func value all match under any import name — there
+// is no alias escape, so no separate B1 self-test is needed.
 //
-// Blind spots:
-//   - A type alias in the same package would assign a different *types.Named,
-//     so TypeOf would not match the ksagaPkgPath.StepFunc lookup. B1 reverse
-//     self-test closes this gap syntactically.
-//   - An indirect call through an interface method that has the same signature
-//     is not caught — but runtime/saga/ does not define such interfaces.
+// Residual: an indirect call through an interface method with an identical
+// signature would also match, but runtime/saga/ defines no such interface; and
+// the broader function-parameter-passed-funclit residual is documented in the
+// file-level INVARIANT threat matrix (gh #1997).
 func TestSagaStepRunOutsideTx_A1_StepFuncCallsiteUniqueness(t *testing.T) {
 	t.Parallel()
 	diags := Run(t, Typed(TypedOpts{}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
@@ -2844,37 +2867,25 @@ func TestSagaStepRunOutsideTx_A1_StepFuncCallsiteUniqueness(t *testing.T) {
 	Report(t, sagaStepRunOutsideTxRule+"-A1", diags)
 }
 
-// --- A2: safeRun not inside RunInTx closure (pure AST) ---
+// --- A2: no call transitively reaching safeRun inside a RunInTx closure ---
 
-// TestSagaStepRunOutsideTx_A2_SafeRunNotInsideRunInTxClosure asserts that no
-// RunInTx call in any production .go file under runtime/saga/ (excluding
-// _test.go) has a safeRun call directly inside its closure argument body.
+// TestSagaStepRunOutsideTx_A2_SafeRunNotReachedInsideRunInTxClosure asserts
+// that no call inside a TxRunner.RunInTx closure body (in any production .go
+// file under runtime/saga/, executor included) transitively reaches safeRun.
 //
-// Detection: walk all CallExprs whose callee selector ends in "RunInTx". For
-// each, inspect Args[1] (the closure literal). EachInSubtree inside the
-// closure body for any CallExpr whose callee is the Ident "safeRun".
-//
-// Pure AST: no types needed — "RunInTx" selector match is syntactic.
-//
-// Residual blind spot B2: a wrapper helper defined outside the RunInTx
-// closure that itself calls safeRun — A2's sub-tree scan does not chase
-// helper bodies. Documented in package godoc; mitigated by Coordinator
-// single-authority pattern (no wrapper helpers exist today).
-func TestSagaStepRunOutsideTx_A2_SafeRunNotInsideRunInTxClosure(t *testing.T) {
+// Detection (typed, transitive): build a reverse-reachability taint set of
+// every callable (func/method or func-literal-valued var) that reaches the
+// safeRun / safeRunCompensate seed, spanning the coordinator + executor
+// packages in one load; then flag any RunInTx-closure call resolving into that
+// set. This covers the direct callsite AND helper-wrapper / FuncLit-var
+// indirection (gh #980, incl. cx-1). Residual: a func-literal passed as a
+// function PARAMETER and invoked via that parameter in another function —
+// interprocedural data-flow the manual taint deliberately does not chase (no
+// go/ssa). Documented in the file-level INVARIANT godoc.
+func TestSagaStepRunOutsideTx_A2_SafeRunNotReachedInsideRunInTxClosure(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{"runtime/saga"})
-	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
-		var ds []Diagnostic
-		for _, file := range p.Files {
-			rel := filepath.ToSlash(p.Rel(file))
-			if !isRuntimeSagaProductionFile(rel) {
-				continue
-			}
-			ds = append(ds, checkA2SafeRunNotInRunInTx(p, file)...)
-		}
-		return ds
-	})
+	units := collectSagaUnits(t, Typed(TypedOpts{}, []string{"./runtime/saga/..."}), true)
+	diags := checkA2Transitive(units)
 
 	Report(t, sagaStepRunOutsideTxRule+"-A2", diags)
 }
@@ -2884,54 +2895,6 @@ func TestSagaStepRunOutsideTx_A2_SafeRunNotInsideRunInTxClosure(t *testing.T) {
 func TestSagaStepRunOutsideTx_CheckDogfood(t *testing.T) {
 	t.Parallel()
 	Report(t, sagaStepRunOutsideTxRule, CheckSagaStepRunOutsideTx(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
-}
-
-// --- B1: No StepFunc alias in runtime/saga (pure AST, reverse self-test) ---
-
-// TestSagaStepRunOutsideTx_BlindSpot_B1_NoStepFuncAlias asserts that no
-// non-test .go file in runtime/saga/ declares a type alias of
-// kernel/saga.StepFunc. A type alias `type S = ksaga.StepFunc` would give the
-// callee a different *types.Named, bypassing A1's TypeOf match.
-//
-// Detection (pure AST): scan all TypeSpec nodes whose Type is an
-// *ast.SelectorExpr matching `<pkg>.StepFunc` where `<pkg>` is the local
-// import name of "github.com/ghbvf/gocell/kernel/saga". Both type alias
-// (`type S = ...`) and type definition (`type S ksaga.StepFunc`) are reported
-// — both create an escape path for A1.
-//
-// AST-only (no types): the file's import list is used to resolve the local
-// name of the kernel/saga package. Tests files are excluded (they may
-// legitimately re-type StepFunc for mocking).
-//
-// AI-robust rating: see file-level CommentGroup ("Rated Soft; Hard upgrade
-// via typed StepFunc alias detection — gh issue #979"). This blind-spot
-// reverse self-test is an existing Soft carve-out for A1's Hard primary
-// path; new Soft enforcement is rejected (see .claude/rules/gocell/ai-robust.md).
-// Upgrading B1 to Medium requires switching from pure-AST `Run` to a typed
-// `Run(t, Typed(...))` + resolving the kernel/saga package via TypesInfo.PkgNameOf
-// (no longer string-anchored on import path literal) — tracked in #979.
-func TestSagaStepRunOutsideTx_BlindSpot_B1_NoStepFuncAlias(t *testing.T) {
-	t.Parallel()
-	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{"runtime/saga"})
-	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
-		var ds []Diagnostic
-		for _, file := range p.Files {
-			rel := filepath.ToSlash(p.Rel(file))
-
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-
-			if !strings.HasPrefix(rel, sagaRuntimePkgPrefix) {
-				continue
-			}
-			ds = append(ds, checkB1NoStepFuncAlias(p, file)...)
-		}
-		return ds
-	})
-
-	Report(t, sagaStepRunOutsideTxRule+"-B1", diags)
 }
 
 // TestSagaStepRunOutsideTx_Detector_RedExtraFileFixture proves that A1 fires
@@ -2961,23 +2924,95 @@ func TestSagaStepRunOutsideTx_Detector_RedExtraFileFixture(t *testing.T) {
 	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
 
-// TestSagaStepRunOutsideTx_Detector_RedSafeRunInRunInTxFixture proves that A2
-// fires when safeRun() is called directly inside a RunInTx closure body.
-// The fixture declares a fake TxRunner-shaped struct (RunInTx method) + a
-// local safeRun identifier, then calls safeRun inside the RunInTx closure.
-// A2 is a structural (pure-AST) check on method/identifier names, so the
-// fixture does not need to import persistence.TxRunner — the syntactic
-// match is by method name only.
+// TestSagaStepRunOutsideTx_Detector_RedSafeRunInRunInTxFixture proves that the
+// transitive A2 still fires on the DIRECT case: safeRun() called inside a
+// RunInTx closure body. The fixture declares a fake TxRunner-shaped struct
+// (RunInTx method) + a local safeRun seed, then calls safeRun directly inside
+// the closure. The direct call is the trivial taint-set member (0-hop), so the
+// transitive entry subsumes the old direct scan — this fixture validates the
+// seed-direct-hit degenerate case; multi-hop transitivity (named wrapper +
+// FuncLit-var) is validated by RedSafeRunWrapperInRunInTxFixture.
 func TestSagaStepRunOutsideTx_Detector_RedSafeRunInRunInTxFixture(t *testing.T) {
-	root := findModuleRoot(t)
 	relDir, pattern := sagaStepRunFixturePattern("red_safe_run_in_runintx")
+	units := collectSagaUnits(t, Fixture(FixtureOpts{}, []string{pattern}), false)
+	diags := checkA2Transitive(units)
+
+	AssertGolden(t, filepath.Join(findModuleRoot(t), relDir, "diag.golden"), diags)
+}
+
+// TestSagaStepRunOutsideTx_Detector_RedAliasedStepFuncCallFixture proves that
+// signature-identity A1 fires on StepFunc-shaped calls outside safeRun made
+// through four callsites / three escape shapes: a type alias, an alias-of-alias,
+// a DEFINED type, and a raw structurally-identical func value. The old
+// exact-Named A1 missed the alias-of-alias, defined-type and raw-signature
+// calls (distinct / absent *types.Named); the golden expects all four flagged
+// (gh #979). Loaded typed (Fixture provides TypesInfo) so calleeIsSagaStepFunc
+// can resolve the canonical signature.
+func TestSagaStepRunOutsideTx_Detector_RedAliasedStepFuncCallFixture(t *testing.T) {
+	root := findModuleRoot(t)
+	relDir, pattern := sagaStepRunFixturePattern("red_aliased_stepfunc_call")
 	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+
 		var ds []Diagnostic
 		for _, file := range p.Files {
-			ds = append(ds, checkA2SafeRunNotInRunInTx(p, file)...)
+			ds = append(ds, checkA1StepFuncCallsites(p, file)...)
 		}
 		return ds
 	})
+
+	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
+}
+
+// TestSagaStepRunOutsideTx_Detector_RedSafeRunWrapperInRunInTxFixture proves
+// that the transitive A2 taint graph fires when a RunInTx closure reaches
+// safeRun INDIRECTLY — via a named helper func and via a package-level
+// FuncLit-valued var. The old direct-identifier A2 scan missed both (neither
+// closure body holds a literal safeRun() callsite); the golden expects both
+// wrapper callsites flagged (gh #980, incl. the cx-1 var-indirection case).
+func TestSagaStepRunOutsideTx_Detector_RedSafeRunWrapperInRunInTxFixture(t *testing.T) {
+	relDir, pattern := sagaStepRunFixturePattern("red_safe_run_wrapper_in_runintx")
+	units := collectSagaUnits(t, Fixture(FixtureOpts{}, []string{pattern}), false)
+	diags := checkA2Transitive(units)
+
+	AssertGolden(t, filepath.Join(findModuleRoot(t), relDir, "diag.golden"), diags)
+}
+
+// TestSagaStepRunOutsideTx_Detector_RedFakeSafeRunFixture proves A1 binds its
+// sanctioned range to the executor package by *types.Func identity, not the
+// name: a same-named safeRun impostor outside runtime/saga/executor opens no
+// sanctioned range, so the StepFunc call inside it is still flagged (gh #1998
+// review F1).
+func TestSagaStepRunOutsideTx_Detector_RedFakeSafeRunFixture(t *testing.T) {
+	root := findModuleRoot(t)
+	relDir, pattern := sagaStepRunFixturePattern("red_fake_saferun")
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+
+		var ds []Diagnostic
+		for _, file := range p.Files {
+			ds = append(ds, checkA1StepFuncCallsites(p, file)...)
+		}
+		return ds
+	})
+
+	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
+}
+
+// TestSagaStepRunOutsideTx_Detector_RedCrossPkgWrapperFixture proves A2's taint
+// set spans packages: a coordinator-like package calling an executor-like
+// package's exported Wrapper (which reaches the OTHER package's unexported
+// safeRun) inside a RunInTx closure is flagged by cross-package *types.Func
+// object identity within one packages.Load (gh #1998 review F3).
+func TestSagaStepRunOutsideTx_Detector_RedCrossPkgWrapperFixture(t *testing.T) {
+	root := findModuleRoot(t)
+	relDir, pattern := sagaStepRunFixturePattern("red_cross_pkg_wrapper")
+	units := collectSagaUnits(t, Fixture(FixtureOpts{}, []string{pattern + "/..."}), false)
+	diags := checkA2Transitive(units)
 
 	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }

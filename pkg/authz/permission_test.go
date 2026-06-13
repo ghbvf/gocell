@@ -52,6 +52,29 @@ func TestConfigcorePermissions_String(t *testing.T) {
 	}
 }
 
+// TestAccesscorePermissions_String pins the exact action spelling of every
+// accesscore permission minted in PR-10c. The action string IS the wire value
+// carried into the PDP and matched against baseline rule Action targets, so a typo
+// here silently breaks the gate↔baseline binding.
+func TestAccesscorePermissions_String(t *testing.T) {
+	cases := []struct {
+		name string
+		perm Permission
+		want string
+	}{
+		{"PermPolicyRead", PermPolicyRead(), "policy:read"},
+		{"PermPolicyWrite", PermPolicyWrite(), "policy:write"},
+		{"PermUserRead", PermUserRead(), "user:read"},
+		{"PermUserWrite", PermUserWrite(), "user:write"},
+		{"PermRoleRead", PermRoleRead(), "role:read"},
+	}
+	for _, tc := range cases {
+		if got := tc.perm.String(); got != tc.want {
+			t.Errorf("%s.String() = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 // TestPermAuditRead_StableIdentity pins that the accessor returns the closed
 // registry's private singleton (the F6 immutability contract: an external package
 // cannot reassign or fork the registry value because PermAuditRead is a function,
@@ -87,6 +110,29 @@ func TestConfigcorePermissions_StableIdentity(t *testing.T) {
 	}
 }
 
+// TestAccesscorePermissions_StableIdentity pins that each accesscore accessor
+// returns the same package-private singleton on every call (the F6 immutability
+// contract: function accessors are not reassignable, so the registry value is
+// immutable to external packages).
+func TestAccesscorePermissions_StableIdentity(t *testing.T) {
+	cases := []struct {
+		name      string
+		got       Permission
+		singleton Permission
+	}{
+		{"PermPolicyRead", PermPolicyRead(), permPolicyRead},
+		{"PermPolicyWrite", PermPolicyWrite(), permPolicyWrite},
+		{"PermUserRead", PermUserRead(), permUserRead},
+		{"PermUserWrite", PermUserWrite(), permUserWrite},
+		{"PermRoleRead", PermRoleRead(), permRoleRead},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.singleton {
+			t.Errorf("%s() must return the package-private singleton (stable on every call)", tc.name)
+		}
+	}
+}
+
 func TestPermission_ZeroValueIsInvalid(t *testing.T) {
 	var zero Permission
 	if !zero.IsZero() {
@@ -104,14 +150,17 @@ func TestPermissions_ClosedRegistry(t *testing.T) {
 	perms := Permissions()
 	// Pin the closed set. A new Perm* var that forgets to enroll in allPermissions
 	// (or an accidental extra) trips this — the anti-vacuity guard for the closed
-	// registry. Current set: audit:read (PR-10a) + system:read (#1860) + 5 configcore (PR-10b).
-	if len(perms) != 7 {
-		t.Fatalf("Permissions() len = %d, want 7 (audit:read, system:read, config:read/write/publish, flag:read/write)", len(perms))
+	// registry. Current set: audit:read (PR-10a) + system:read (#1860) + 5 configcore
+	// (PR-10b) + 5 accesscore (PR-10c).
+	if len(perms) != 12 {
+		t.Fatalf("Permissions() len = %d, want 12 (audit:read + system:read + 5 configcore + 5 accesscore)", len(perms))
 	}
 	want := map[string]bool{
 		"audit:read": true, "system:read": true,
 		"config:read": true, "config:write": true, "config:publish": true,
 		"flag:read": true, "flag:write": true,
+		"policy:read": true, "policy:write": true,
+		"user:read": true, "user:write": true, "role:read": true,
 	}
 	for _, p := range perms {
 		if !want[p.String()] {
@@ -166,9 +215,9 @@ func TestPermissions_AccessorsEnrolled(t *testing.T) {
 	accessorActions := parsePermissionAccessorActions(t) // action -> accessor name
 
 	// Anti-vacuity: a parser regression that finds nothing must fail, not pass.
-	if len(accessorActions) < 6 {
-		t.Fatalf("self-discovery found %d Perm*() accessors in permission.go, want ≥6 "+
-			"(PermAuditRead + 5 configcore) — the parser likely regressed", len(accessorActions))
+	if len(accessorActions) < len(Permissions()) {
+		t.Fatalf("self-discovery found %d Perm*() accessors in permission.go, want ≥ len(Permissions()) (%d) "+
+			"— the parser likely regressed", len(accessorActions), len(Permissions()))
 	}
 
 	registry := map[string]struct{}{}
