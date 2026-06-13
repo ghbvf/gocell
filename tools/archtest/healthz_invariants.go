@@ -29,6 +29,10 @@ var healthzHolderAllowlist = map[string]bool{
 	PlatformModulePath + "/runtime/observability/healthz.aggregator": true, // unexported impl
 	PlatformModulePath + "/runtime/http/health.Handler":              true, // HTTP transport
 	PlatformModulePath + "/runtime/bootstrap.Bootstrap":              true, // composition root
+	// #1860: read-only HealthView façade for the syscore aggregated cell-health
+	// endpoint. Holds the aggregator to call Evaluate at request time (injected by
+	// bootstrap into the primary-listener ctx); it never calls Register — read-only.
+	PlatformModulePath + "/runtime/syshealth.view": true, // aggregated cell-health read façade
 }
 
 // healthzAllLayerPrefixes is the set of platform layer prefixes scanned by

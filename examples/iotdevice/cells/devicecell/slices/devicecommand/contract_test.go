@@ -63,17 +63,19 @@ func TestHttpDeviceCommandEnqueueV1Serve(t *testing.T) {
 		ID: "dev-1", Name: "sensor-a", Status: "online",
 	})
 
-	// request schema: payload required + non-empty (matches Service.Enqueue, which
-	// rejects empty payload — schema must not declare what the handler rejects),
-	// commandType optional
-	c.ValidateRequest(t, []byte(`{"payload":"reboot"}`))
-	c.ValidateRequest(t, []byte(`{"payload":"reboot","commandType":"firmware-update"}`))
-	c.MustRejectRequest(t, []byte(`{"payload":""}`)) // payload minLength 1
-	c.MustRejectRequest(t, []byte(`{"payload":"x","extra":"bad"}`))
+	// request schema: payload + commandType both required + non-empty (#1694 F9:
+	// commandType made required — the silent "default" fallback was removed).
+	c.ValidateRequest(t, []byte(`{"payload":"reboot","commandType":"reboot"}`))
+	c.MustRejectRequest(t, []byte(`{"payload":"reboot"}`))                                        // missing required commandType
+	c.MustRejectRequest(t, []byte(`{"payload":"x","commandType":""}`))                            // commandType minLength 1
+	c.MustRejectRequest(t, []byte(`{"payload":"x","commandType":"`+strings.Repeat("a", 65)+`"}`)) // commandType maxLength 64
+	c.MustRejectRequest(t, []byte(`{"commandType":"x"}`))                                         // missing required payload
+	c.MustRejectRequest(t, []byte(`{"payload":"","commandType":"x"}`))                            // payload minLength 1
+	c.MustRejectRequest(t, []byte(`{"payload":"x","commandType":"y","extra":"bad"}`))
 
 	rec := httptest.NewRecorder()
 	path := strings.Replace(c.HTTP.Path, "{id}", "dev-1", 1)
-	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"payload":"reboot"}`))
+	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"payload":"reboot","commandType":"reboot"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("operator-1", []string{dto.RoleOperator}))
 	handler.ServeHTTP(rec, req)
@@ -260,13 +262,14 @@ func TestCommandDeviceCommandEnqueueV1Handle(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "iotdevice")
 	c := contracttest.LoadByID(t, root, "command.devicecommand.enqueue.v1")
 
-	// deviceId + payload required; commandType optional (#1580: deviceId added so
-	// the sync command-bus handler can target a device — see EnqueueCommandAdapter).
-	c.ValidateRequest(t, []byte(`{"deviceId":"d-1","payload":"reboot"}`))
+	// deviceId + payload + commandType all required (#1580: deviceId added so the
+	// sync command-bus handler can target a device — see EnqueueCommandAdapter;
+	// #1694 F9: commandType made required, silent "default" fallback removed).
 	c.ValidateRequest(t, []byte(`{"deviceId":"d-1","payload":"reboot","commandType":"firmware-update"}`))
-	c.MustRejectRequest(t, []byte(`{"payload":"reboot"}`))            // missing required deviceId
-	c.MustRejectRequest(t, []byte(`{"deviceId":"","payload":"x"}`))   // deviceId minLength 1
-	c.MustRejectRequest(t, []byte(`{"deviceId":"d-1","payload":""}`)) // payload minLength 1 (Service.Enqueue rejects empty)
+	c.MustRejectRequest(t, []byte(`{"deviceId":"d-1","payload":"reboot"}`))             // missing required commandType
+	c.MustRejectRequest(t, []byte(`{"payload":"reboot","commandType":"x"}`))            // missing required deviceId
+	c.MustRejectRequest(t, []byte(`{"deviceId":"","payload":"x","commandType":"y"}`))   // deviceId minLength 1
+	c.MustRejectRequest(t, []byte(`{"deviceId":"d-1","payload":"","commandType":"y"}`)) // payload minLength 1 (Service.Enqueue rejects empty)
 	enqueueResp := `{"data":{"id":"cmd-1","deviceId":"d-1","commandType":"reboot",` +
 		`"payload":"reboot","status":"pending","attempt":0,"createdAt":"2026-01-01T00:00:00Z"}}`
 	c.ValidateResponse(t, []byte(enqueueResp))

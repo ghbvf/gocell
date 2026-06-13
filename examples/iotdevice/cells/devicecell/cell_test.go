@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
+	kcommand "github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -160,6 +161,50 @@ func TestDeviceCell_InitNoCommandQueue_FailsFast(t *testing.T) {
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
 	assert.Contains(t, err.Error(), "command queue")
+}
+
+// queueWithoutActiveScanner implements kcommand.Queue but deliberately NOT
+// kcommand.ActiveScanner, to exercise the #1694 F11 fail-fast path in
+// RegisterCommandQueue / Init.
+type queueWithoutActiveScanner struct{}
+
+func (queueWithoutActiveScanner) Enqueue(context.Context, kcommand.Entry, kcommand.EnqueueOptions) error {
+	return nil
+}
+
+func (queueWithoutActiveScanner) Dequeue(context.Context, string, int, time.Duration) ([]kcommand.Entry, error) {
+	return nil, nil
+}
+func (queueWithoutActiveScanner) Report(context.Context, string, time.Time) error { return nil }
+func (queueWithoutActiveScanner) Ack(context.Context, string, kcommand.AckReason, time.Time) error {
+	return nil
+}
+
+func (queueWithoutActiveScanner) ExtendLease(context.Context, string, time.Duration, time.Time) error {
+	return nil
+}
+func (queueWithoutActiveScanner) Cancel(context.Context, string, time.Time) error { return nil }
+
+func TestDeviceCell_InitCommandQueueNotActiveScanner_FailsFast(t *testing.T) {
+	// #1694 F11: a queue implementing kcommand.Queue but NOT ActiveScanner is a
+	// wiring mistake — the device dequeue path, sweeper, and internal ops view all
+	// need ScanActive. It must fail Init fast with a precise ActiveScanner message,
+	// not Warn + silently ignore (which previously surfaced later as a confusing
+	// "requires a command queue" nil error even though a queue WAS registered).
+	c := NewDeviceCell(
+		clock.Real(),
+		WithDeviceRepository(mem.NewDeviceRepository()),
+		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clock.Real()))),
+		WithBootstrapEmitter(testBootstrapEmitter()),
+		WithCommandRegistry(commandruntime.NewRegistry()),
+	)
+	c.RegisterCommandQueue(queueWithoutActiveScanner{})
+	err := c.Init(context.Background(), newTestRec())
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
+	assert.Contains(t, err.Error(), "ActiveScanner")
 }
 
 func TestDeviceCell_InitNoCommandRegistry_FailsFast(t *testing.T) {
@@ -351,7 +396,8 @@ func TestDeviceCell_RouteEnqueueCommand(t *testing.T) {
 
 	// Enqueue command (operator role required).
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/commands", strings.NewReader(`{"payload":"reboot"}`))
+	cmdBody := `{"payload":"reboot","commandType":"reboot"}`
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/commands", strings.NewReader(cmdBody))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("operator-1", []string{dto.RoleOperator}))
 	r.ServeHTTP(rec, req)
@@ -398,7 +444,8 @@ func TestDeviceCell_RouteAckCommand(t *testing.T) {
 
 	// Enqueue command (operator role required).
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/commands", strings.NewReader(`{"payload":"reboot"}`))
+	cmdBody := `{"payload":"reboot","commandType":"reboot"}`
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/commands", strings.NewReader(cmdBody))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("operator-1", []string{dto.RoleOperator}))
 	r.ServeHTTP(rec, req)

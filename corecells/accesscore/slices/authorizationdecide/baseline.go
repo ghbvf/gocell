@@ -19,6 +19,13 @@ var builtinBaseline = []abac.Rule{
 		Action:     []string{authz.PermAuditRead().String()},
 		Conditions: []abac.Condition{adminOrSuperAdmin()},
 	},
+	{
+		ID:         "baseline-system-read-admin",
+		Name:       "Baseline: allow admin/super-admin to read runtime/system health (#1860)",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermSystemRead().String()},
+		Conditions: []abac.Condition{adminOrSuperAdmin()},
+	},
 	// configcore baseline (PR-10b #1348): one allow rule per migrated slice via
 	// the shared adminOrSuperAdmin() condition. NOTE: the old configcore gates were
 	// auth.AnyRole(RoleAdmin) — admin-only — so this WIDENS them to admit super-admin

@@ -21,7 +21,7 @@ const _ = uint(cellvocab.L4 - cellvocab.L1)
 // Request — command.devicecommand.enqueue.v1.request
 type Request struct {
 	DeviceID    string `json:"deviceId"`
-	CommandType string `json:"commandType,omitempty"`
+	CommandType string `json:"commandType"`
 	Payload     string `json:"payload"`
 }
 
