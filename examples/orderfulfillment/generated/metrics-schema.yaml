@@ -9,6 +9,36 @@ metrics:
       labels:
         - reason
       file: runtime/auth/metrics.go
+    - name: auth_refresh_gc_duration_seconds
+      type: histogram
+      help: Duration of refresh-token GC runs in seconds.
+      labels:
+        - result
+      buckets:
+        - ".001"
+        - ".005"
+        - ".01"
+        - ".025"
+        - ".05"
+        - ".1"
+        - ".25"
+        - ".5"
+        - "1"
+        - "2.5"
+        - "5"
+      file: runtime/auth/refresh/metrics.go
+    - name: auth_refresh_gc_removed_total
+      type: counter
+      help: Total number of refresh-token rows removed by GC.
+      labels:
+        - result
+      file: runtime/auth/refresh/metrics.go
+    - name: auth_refresh_gc_runs_total
+      type: counter
+      help: Total number of refresh-token GC runs by result.
+      labels:
+        - result
+      file: runtime/auth/refresh/metrics.go
     - name: auth_service_token_verify_total
       type: counter
       help: Total number of service token verifications.

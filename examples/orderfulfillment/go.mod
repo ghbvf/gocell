@@ -97,3 +97,21 @@ replace github.com/ghbvf/gocell/adapters/adapterutil => ../../adapters/adapterut
 replace github.com/ghbvf/gocell/adapters/redis => ../../adapters/redis
 
 replace github.com/ghbvf/gocell/cellmodules => ../../cellmodules
+
+// cellmodules transitively requires the full platform (corecells + every
+// adapter + tools). Go replace is non-transitive, so each transitive workspace
+// module must be declared here too, or the GOWORK=off standalone build
+// (hack/verify-workspace.sh) cannot resolve them. Mirrors cmd/corebundle/go.mod.
+replace github.com/ghbvf/gocell/tools => ../../tools
+
+replace github.com/ghbvf/gocell/corecells => ../../corecells
+
+replace github.com/ghbvf/gocell/adapters/mqtt => ../../adapters/mqtt
+
+replace github.com/ghbvf/gocell/adapters/prometheus => ../../adapters/prometheus
+
+replace github.com/ghbvf/gocell/adapters/rabbitmq => ../../adapters/rabbitmq
+
+replace github.com/ghbvf/gocell/adapters/ratelimit => ../../adapters/ratelimit
+
+replace github.com/ghbvf/gocell/adapters/vault => ../../adapters/vault
