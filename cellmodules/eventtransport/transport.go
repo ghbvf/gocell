@@ -18,6 +18,16 @@ import (
 // backend.
 const storageBackendPostgres = "postgres"
 
+// dlxExchange is the dead-letter exchange the RabbitMQ subscriber declares for
+// every subscription. The adapter REQUIRES a non-empty DLXExchange at Setup time
+// (rejected/poison messages — outbox.Reject after the retry budget — are routed
+// here instead of being silently dropped by the broker; see eventbus.md §"DLX 与
+// 幂等"). A single bundle-wide DLX keeps the broker topology simple; dead-lettered
+// messages retain their original routing key (topic), so a DLX consumer can route
+// by source topic. Stable name = an operations contract (renaming requires broker
+// migration of in-flight dead letters), so it is a const, not env-tunable.
+const dlxExchange = "gocell.events.dlx"
+
 // Transport bundles the resolved publish/subscribe sinks and any infrastructure
 // resources whose lifecycle the composition root must manage.
 //
@@ -130,8 +140,12 @@ func resolveRabbitMQ(clk clock.Clock, spec brokerSpec, cfg Config) (Transport, e
 		return Transport{}, fmt.Errorf("eventtransport: rabbitmq connection: %w", err)
 	}
 	return Transport{
-		Publisher:  rabbitmq.NewPublisher(clk, conn),
-		Subscriber: rabbitmq.NewSubscriber(clk, conn, rabbitmq.SubscriberConfig{}),
+		Publisher: rabbitmq.NewPublisher(clk, conn),
+		// DLXExchange is mandatory: the adapter's Setup fail-fasts without it, and
+		// outbox.Reject (poison messages past the retry budget) must dead-letter
+		// rather than vanish. Other SubscriberConfig fields (PrefetchCount, drain
+		// timeouts) keep their adapter defaults.
+		Subscriber: rabbitmq.NewSubscriber(clk, conn, rabbitmq.SubscriberConfig{DLXExchange: dlxExchange}),
 		Resources:  []lifecycle.ManagedResource{conn},
 	}, nil
 }
