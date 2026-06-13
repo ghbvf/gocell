@@ -1,3 +1,6 @@
+# commandType was made required in-place on v1 (#1694 F9): pre-GA, no external
+# consumers (CLAUDE.md waives backward-compat). Breaking wire changes otherwise
+# rev the version dir per .claude/rules/gocell/api-versioning.md.
 id: http.device.command.enqueue.v1
 kind: http
 ownerCell: devicecell

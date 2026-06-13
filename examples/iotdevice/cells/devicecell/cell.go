@@ -232,6 +232,11 @@ type DeviceCell struct {
 // this cannot be a compile-time constraint — Init fail-fast is the boundary's
 // limit. Earlier this only Warn-and-ignored, which then surfaced as a confusing
 // "requires a command queue" nil error even though a queue WAS registered.
+//
+// Last registration wins (not accumulative): a later call overwrites the queue
+// and clears any prior type-mismatch flag. The composition root calls this once;
+// the last-wins semantics just keep a corrected re-wire from being trumped by an
+// earlier bad one.
 func (c *DeviceCell) RegisterCommandQueue(q kcommand.Queue) {
 	store, ok := q.(commandQueueStore)
 	if !ok {

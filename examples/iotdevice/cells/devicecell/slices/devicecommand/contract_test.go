@@ -65,10 +65,11 @@ func TestHttpDeviceCommandEnqueueV1Serve(t *testing.T) {
 	// request schema: payload + commandType both required + non-empty (#1694 F9:
 	// commandType made required — the silent "default" fallback was removed).
 	c.ValidateRequest(t, []byte(`{"payload":"reboot","commandType":"reboot"}`))
-	c.MustRejectRequest(t, []byte(`{"payload":"reboot"}`))             // missing required commandType
-	c.MustRejectRequest(t, []byte(`{"payload":"x","commandType":""}`)) // commandType minLength 1
-	c.MustRejectRequest(t, []byte(`{"commandType":"x"}`))              // missing required payload
-	c.MustRejectRequest(t, []byte(`{"payload":"","commandType":"x"}`)) // payload minLength 1
+	c.MustRejectRequest(t, []byte(`{"payload":"reboot"}`))                                        // missing required commandType
+	c.MustRejectRequest(t, []byte(`{"payload":"x","commandType":""}`))                            // commandType minLength 1
+	c.MustRejectRequest(t, []byte(`{"payload":"x","commandType":"`+strings.Repeat("a", 65)+`"}`)) // commandType maxLength 64
+	c.MustRejectRequest(t, []byte(`{"commandType":"x"}`))                                         // missing required payload
+	c.MustRejectRequest(t, []byte(`{"payload":"","commandType":"x"}`))                            // payload minLength 1
 	c.MustRejectRequest(t, []byte(`{"payload":"x","commandType":"y","extra":"bad"}`))
 
 	rec := httptest.NewRecorder()

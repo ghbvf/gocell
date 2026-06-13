@@ -189,17 +189,21 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 		}
 	}
 
-	// Verify device exists.
-	if _, err := s.deviceRepo.GetByID(ctx, deviceID); err != nil {
-		return command.Entry{}, fmt.Errorf(errLookupDeviceFmt, err)
-	}
-
+	// Input validation runs before the device lookup: these are cheap, I/O-free
+	// shape checks, and a malformed request must not depend on the store being
+	// reachable. It stays after authz so a 403 still precedes any request-shape
+	// signal (no 400-before-403 probing).
 	if payload == "" {
 		return command.Entry{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "command payload must not be empty")
 	}
 
 	if commandType == "" {
 		return command.Entry{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "command type must not be empty")
+	}
+
+	// Verify device exists.
+	if _, err := s.deviceRepo.GetByID(ctx, deviceID); err != nil {
+		return command.Entry{}, fmt.Errorf(errLookupDeviceFmt, err)
 	}
 
 	id, err := generateID()
