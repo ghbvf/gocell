@@ -3,7 +3,6 @@
 # <reldir>\t<import-path>
 .	github.com/ghbvf/gocell
 adapters/adapterutil	github.com/ghbvf/gocell/adapters/adapterutil
-adapters/circuitbreaker	github.com/ghbvf/gocell/adapters/circuitbreaker
 adapters/grpc	github.com/ghbvf/gocell/adapters/grpc
 adapters/mqtt	github.com/ghbvf/gocell/adapters/mqtt
 adapters/oidc	github.com/ghbvf/gocell/adapters/oidc
