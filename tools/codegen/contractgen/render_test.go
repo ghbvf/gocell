@@ -1420,6 +1420,8 @@ func renderFile(t *testing.T, spec *ContractGenSpec, outFile string) []byte {
 		content, err = renderProjection(spec)
 	case "saga_gen.go":
 		content, err = renderSaga(spec)
+	case "types.ts":
+		content, err = renderTS(spec)
 	default:
 		t.Fatalf("unknown output file: %s", outFile)
 	}
@@ -2242,4 +2244,155 @@ func TestBuildHTTPEndpointSpec_ClientsOnlyRequiresInternalPathAndClients(t *test
 			})
 		}
 	})
+}
+
+// --- TS emitter golden tests (#2004) ---
+
+// TestRender_Golden_TS_SynthEnum is the primary enum golden: proves that the TS
+// emitter outputs union types (not string) for enum fields.
+// RED: golden file absent → assertGolden fails; GREEN: -update creates it.
+func TestRender_Golden_TS_SynthEnum(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_enum")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	contract := p.Contracts["event.widget-resolved.v1"]
+	if contract == nil {
+		t.Fatal("event.widget-resolved.v1 not found in synth fixture")
+	}
+
+	spec, err := buildContractSpec(absTestDir, p, "event.widget-resolved.v1")
+	if err != nil {
+		t.Fatalf("buildContractSpec: %v", err)
+	}
+	content := renderFile(t, spec, "types.ts")
+	goldenFile := goldenFilePath("synth_enum", "types.ts")
+
+	// Inline assertions: enum → union (not Go type or plain string).
+	out := string(content)
+	if !strings.Contains(out, "export type PayloadOutcome =") {
+		t.Errorf("missing union type 'export type PayloadOutcome ='; got:\n%s", out)
+	}
+	if !strings.Contains(out, "'succeeded'") || !strings.Contains(out, "'rejected'") {
+		t.Errorf("union type missing enum values; got:\n%s", out)
+	}
+
+	if *updateGolden {
+		writeGolden(t, goldenFile, content)
+		return
+	}
+	assertGolden(t, goldenFile, content)
+}
+
+// TestRender_Golden_TS_SynthHTTPFull byte-locks the full HTTP contract TS output.
+// RED: golden absent; GREEN: -update creates it.
+func TestRender_Golden_TS_SynthHTTPFull(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_http_full")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	contract := p.Contracts["http.item.details.v1"]
+	if contract == nil {
+		t.Fatal("http.item.details.v1 not found in synth fixture")
+	}
+
+	spec, err := buildContractSpec(absTestDir, p, "http.item.details.v1")
+	if err != nil {
+		t.Fatalf("buildContractSpec: %v", err)
+	}
+	content := renderFile(t, spec, "types.ts")
+	goldenFile := goldenFilePath("synth_http_full", "types.ts")
+
+	// Inline: must export interfaces.
+	out := string(content)
+	if !strings.Contains(out, "export interface") {
+		t.Errorf("missing 'export interface' in TS output; got:\n%s", out)
+	}
+
+	if *updateGolden {
+		writeGolden(t, goldenFile, content)
+		return
+	}
+	assertGolden(t, goldenFile, content)
+}
+
+// TestRender_Golden_TS_Barrel byte-locks the generated barrel index.ts.
+// The barrel references all contracts that emit TS (non-responseProjection kinds).
+// RED: golden absent; GREEN: -update creates it.
+func TestRender_Golden_TS_Barrel(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_http_minimal")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	_ = p
+
+	// Build a minimal barrel with one entry.
+	entries := []tsBarrelEntry{
+		{Alias: "httpOrderPingV1", ImportPath: "./contracts/http/order/ping/v1/types"},
+	}
+	content, err := renderBarrel(entries)
+	if err != nil {
+		t.Fatalf("renderBarrel: %v", err)
+	}
+	goldenFile := goldenFilePath("barrel", "index.ts")
+
+	out := string(content)
+	if !strings.Contains(out, "export * as httpOrderPingV1 from") {
+		t.Errorf("barrel missing expected export; got:\n%s", out)
+	}
+
+	if *updateGolden {
+		writeGolden(t, goldenFile, content)
+		return
+	}
+	assertGolden(t, goldenFile, content)
+}
+
+// TestRender_TS_ResponseProjection_Skipped asserts that a responseProjection
+// endpoint does NOT produce a types.ts via renderTS (returns empty/skipped),
+// mirroring the generator.go skip logic.
+func TestRender_TS_ResponseProjection_Skipped(t *testing.T) {
+	t.Parallel()
+	testDir := filepath.Join("testdata", "synth", "synth_http_auth_modes")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	spec, err := buildContractSpec(absTestDir, p, "http.sample.responseprojection.v1")
+	if err != nil {
+		t.Fatalf("buildContractSpec: %v", err)
+	}
+
+	// A responseProjection contract must be skippable: kindEmitsTS must return false.
+	if kindEmitsTS(spec) {
+		t.Error("kindEmitsTS returned true for responseProjection contract; want false (TS v1 skips responseProjection)")
+	}
 }
