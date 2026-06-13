@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.devicecompliance.v1.response",
+  "type": "object",
+  "required": [
+    "data"
+  ],
+  "properties": {
+    "data": {
+      "type": "object",
+      "required": [
+        "deviceId",
+        "compliant",
+        "diskEncryption",
+        "antivirus",
+        "patch",
+        "firewall",
+        "observedAt"
+      ],
+      "properties": {
+        "deviceId": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Provider-neutral device identifier, echoed from the query parameter."
+        },
+        "compliant": {
+          "type": "boolean",
+          "description": "Overall posture verdict: true when the device satisfies the policy baseline. Provider-agnostic roll-up of the individual posture attributes (and any provider-specific signals not surfaced as discrete fields)."
+        },
+        "diskEncryption": {
+          "type": "string",
+          "enum": [
+            "enabled",
+            "disabled",
+            "unknown"
+          ],
+          "description": "Disk encryption posture, provider-neutral (BitLocker / FileVault / LUKS). unknown when the provider did not report it."
+        },
+        "antivirus": {
+          "type": "string",
+          "enum": [
+            "enabled",
+            "disabled",
+            "unknown"
+          ],
+          "description": "Antivirus / endpoint-protection posture. unknown when the provider did not report it."
+        },
+        "patch": {
+          "type": "string",
+          "enum": [
+            "upToDate",
+            "outOfDate",
+            "unknown"
+          ],
+          "description": "OS / security patch posture. unknown when the provider did not report it."
+        },
+        "firewall": {
+          "type": "string",
+          "enum": [
+            "enabled",
+            "disabled",
+            "unknown"
+          ],
+          "description": "Host firewall posture. unknown when the provider did not report it."
+        },
+        "observedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "Time this posture reading was determined (freshness anchor); always present — a posture verdict without a timestamp is unsafe to trust for Authorize decisions."
+        },
+        "tenantId": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Tenant this posture reading belongs to; framework-derived from the authenticated principal, never accepted as a client query parameter."
+        }
+      }
+    }
+  }
+}

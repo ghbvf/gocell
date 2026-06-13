@@ -434,7 +434,7 @@ func (c *Coordinator) Stop(ctx context.Context) error {
 	select {
 	case <-ready:
 	case <-ctx.Done():
-		return errcode.Wrap(errcode.KindDeadlineExceeded, errcode.ErrConflict,
+		return errcode.Wrap(errcode.KindDeadlineExceeded, errcode.ErrSagaStopTimeout,
 			"saga coordinator stop: timed out waiting for start", ctx.Err())
 	}
 
@@ -489,7 +489,7 @@ drain:
 		c.logger.InfoContext(ctx, "saga coordinator: stopped")
 		return nil
 	case <-ctx.Done():
-		return errcode.Wrap(errcode.KindDeadlineExceeded, errcode.ErrConflict,
+		return errcode.Wrap(errcode.KindDeadlineExceeded, errcode.ErrSagaStopTimeout,
 			"saga coordinator stop: timed out", ctx.Err())
 	}
 }
@@ -799,12 +799,12 @@ func (c *Coordinator) driveOne(ctx context.Context, ci journal.ClaimedInstance) 
 	// events (committed - already-compensated) and short-circuits when the
 	// reverse walk is complete.
 	if ci.Instance.Status == ksaga.StatusCompensating {
-		return c.runCompensation(ctx, ci, def, events, nil /* trigger reason recovered from events */)
+		return c.runCompensation(ctx, ci, def, events, recoveryTrigger())
 	}
 
 	cursor, prevState, foldErr := foldEvents(events, def)
 	if foldErr != nil {
-		c.logger.LogAttrs(ctx, slog.LevelWarn, "saga: fold failed, marking terminal",
+		c.logger.LogAttrs(ctx, foldErrLevel(foldErr), "saga: fold failed, marking terminal",
 			sagalog.InstanceFields(ci.Instance.ID, ci.LeaseID,
 				slog.String("definition_id", string(ci.Instance.DefinitionID)),
 				slog.Any("error", foldErr))...)
@@ -854,7 +854,7 @@ func (c *Coordinator) routeOutcome(
 		})
 	case executor.OutcomeFailed:
 		if shouldCompensate(events, def) {
-			return c.runCompensation(ctx, ci, def, events, res.Err)
+			return c.runCompensation(ctx, ci, def, events, failureTrigger(res.Err))
 		}
 		return c.commitStepInTx(ctx, commitStepArgs{
 			instanceID: ci.Instance.ID,
@@ -931,29 +931,51 @@ func shouldCompensate(events []journal.Event, def *ksaga.Definition) bool {
 //
 // ref: itimofeev/go-saga coordinator.go abort() — best-effort reverse
 // compensation with error aggregation.
-// runErr is the trigger error from the forward-step failure that originally
-// invoked compensation. It is nil when this is a RECOVERY invocation
-// (#1181 F1): driveOne re-entered runCompensation because the projection
-// is already Compensating (a prior coordinator crashed mid-rollback or a
-// leader handoff occurred between KindCompensationStarted and StatusCompensated).
-// In recovery mode appendCompensationStarted is skipped (event already on
-// log) and the reverse walk derives remaining work from events. Prior
-// KindStepCompensationFailed events in the log are treated as known failures
-// (not retried) and seed compensateErrors so recovery still terminates with
-// StatusCompensationFailed rather than StatusCompensated.
+
+// compensationTrigger tells runCompensation WHY it is compensating, with the
+// recovery-vs-fresh distinction made type-enforced rather than implicit (#1951).
+// The fields are unexported and the ONLY constructors are recoveryTrigger /
+// failureTrigger, so a caller cannot express the illegal "recovery WITH a fresh
+// cause" combination — the recovery-XOR-cause invariant holds by construction
+// (previously inferred from runErr==nil correlated with ci.Instance.Status ==
+// Compensating, an untyped convention spanning two call sites).
+//
+//   - failure: a forward Step.Run failed and opens a NEW rollback. cause is the
+//     failing error, journaled with KindCompensationStarted.
+//   - recovery (#1181 F1): driveOne re-entered runCompensation because the
+//     projection is already Compensating (a prior coordinator crashed mid-rollback
+//     or a leader handoff occurred between KindCompensationStarted and the terminal
+//     flip). The event is already on the log, so appendCompensationStarted is
+//     skipped and the reverse walk derives remaining work from events; prior
+//     KindStepCompensationFailed events seed compensateErrors so recovery still
+//     terminates StatusCompensationFailed rather than StatusCompensated.
+type compensationTrigger struct {
+	cause    error // forward-step failure that opened the rollback; nil on recovery
+	recovery bool  // true = resuming an already-logged, interrupted rollback
+}
+
+// recoveryTrigger builds the trigger for resuming an interrupted rollback whose
+// KindCompensationStarted is already on the log (no fresh cause).
+func recoveryTrigger() compensationTrigger { return compensationTrigger{recovery: true} }
+
+// failureTrigger builds the trigger for a forward-step failure opening a new
+// rollback; cause is the failing step's error, journaled with KindCompensationStarted.
+func failureTrigger(cause error) compensationTrigger { return compensationTrigger{cause: cause} }
+
 func (c *Coordinator) runCompensation(
 	ctx context.Context,
 	ci journal.ClaimedInstance,
 	def *ksaga.Definition,
 	events []journal.Event,
-	runErr error,
+	trig compensationTrigger,
 ) error {
 	// Step a: append KindCompensationStarted unless we are recovering — in
-	// recovery the event is already on the log (otherwise the projected
-	// Status would not be Compensating).
-	recovering := ci.Instance.Status == ksaga.StatusCompensating
-	if !recovering {
-		if err := c.appendCompensationStarted(ctx, ci, runErr); err != nil {
+	// recovery the event is already on the log (otherwise the projected Status
+	// would not be Compensating). The recovery-vs-fresh decision is the caller's,
+	// carried by the sealed trigger (#1951) rather than re-derived from
+	// ci.Instance.Status here.
+	if !trig.recovery {
+		if err := c.appendCompensationStarted(ctx, ci, trig.cause); err != nil {
 			return err
 		}
 	}
@@ -1076,21 +1098,30 @@ type committedStepEntry struct {
 // reverse. The name→Step index is built from def.Steps for compensate
 // dispatch.
 func collectCommittedSteps(events []journal.Event, def *ksaga.Definition) ([]committedStepEntry, map[idutil.SafeID]ksaga.Step, int) {
-	// Mark every step name that already has a compensate outcome (success or
-	// failure). Both kinds remove the step from the reverse-walk frontier:
-	// once the executor's CompensateFunc has run we MUST NOT run it a second
-	// time on the same persisted state, even if the first attempt failed —
-	// the operator can rerun the saga or surface the failure via the
-	// terminal StatusCompensationFailed projection.
+	// Pass 1: mark every step name that already has a compensate outcome
+	// (success OR failure) and count the failures. Both kinds remove the step
+	// from the reverse-walk frontier — once the executor's CompensateFunc has
+	// run we MUST NOT run it a second time on the same persisted state, even if
+	// the first attempt failed (the operator reruns the saga or surfaces the
+	// failure via the terminal StatusCompensationFailed projection). The
+	// KindStepCompensationFailed branch both records the name and bumps the count
+	// in one switch (no redundant re-check of the same kind).
+	//
+	// Two passes are REQUIRED, not a missed fusion: a KindStepCompensated/Failed
+	// event for a step always appears AFTER that step's KindStepCompleted in
+	// version order, so pass 2's "is this completed step already compensated?"
+	// check needs the FULL compensated set up front — a single forward pass
+	// cannot decide it. TestCollectCommittedSteps' out-of-order case locks this
+	// against a future fusion that would wrongly re-include compensated steps.
 	compensated := make(map[idutil.SafeID]struct{})
 	var priorFailureCount int
 	for i := range events {
 		switch events[i].Kind {
-		case journal.KindStepCompensated, journal.KindStepCompensationFailed:
+		case journal.KindStepCompensationFailed:
 			compensated[events[i].StepName] = struct{}{}
-		}
-		if events[i].Kind == journal.KindStepCompensationFailed {
 			priorFailureCount++
+		case journal.KindStepCompensated:
+			compensated[events[i].StepName] = struct{}{}
 		}
 	}
 
@@ -1268,11 +1299,26 @@ func (c *Coordinator) markTerminal(ctx context.Context, id, leaseID idutil.SafeI
 // Returns errFoldEventMismatch (using instanceID from the first StepFailed event
 // found) if a KindStepFailed appears in the history — defensive, since the
 // Journal should have MarkTerminal'd already.
+//
+// The switch is EXHAUSTIVE over journal.EventKind and the default is fail-closed
+// (#1950): every kind is classified into advance-cursor / defensive-error /
+// skip, and an unrecognized kind returns errFoldUnknownKind rather than being
+// silently dropped. A new EventKind added without a case here therefore trips
+// loudly (and TestFoldEvents_AllKindsHandled goes red) instead of risking a
+// silent forward-replay re-entry. Adding a kind = add a case here.
+//
+// NOTE: TestFoldEvents_AllKindsHandled enumerates via journal.EventKind.Valid(),
+// so a new kind is only auto-covered once it is also inside Valid()'s range
+// (event.go). A kind outside Valid() cannot be persisted (ValidateForAppend
+// rejects it) so it never reaches fold — but keep Valid() in sync when adding
+// kinds. See journal/event.go Valid().
 func foldEvents(events []journal.Event, def *ksaga.Definition) (cursor int, prevState []byte, err error) {
 	for i := range events {
 		ev := &events[i]
 		switch ev.Kind {
 		case journal.KindStepCompleted:
+			// Forward progress: a committed step advances the cursor and carries
+			// the state threaded into the next step.
 			cursor++
 			prevState = ev.Payload
 		case journal.KindStepFailed:
@@ -1280,8 +1326,29 @@ func foldEvents(events []journal.Event, def *ksaga.Definition) (cursor int, prev
 			// this is a defensive guard.
 			return 0, nil, errFoldEventMismatch(ev.StepName,
 				fmt.Sprintf("KindStepFailed in history at version %d", ev.Version))
+		case journal.KindStepStarted:
+			// A step began but did not commit (no matching KindStepCompleted).
+			// Forward replay must re-run it from scratch, so the cursor does NOT
+			// advance. The Coordinator does not currently emit KindStepStarted;
+			// this case keeps the boundary explicit and correct if it ever does.
+		case journal.KindCompensationStarted,
+			journal.KindStepCompensated,
+			journal.KindStepCompensationFailed:
+			// Rollback-phase events. A healthy forward path never reaches fold with
+			// these (a Compensating projection routes to runCompensation first),
+			// but a defensively-replayed history may carry them — they do not move
+			// the forward cursor.
+		case journal.KindSagaSucceeded,
+			journal.KindSagaFailed,
+			journal.KindSagaCompensated,
+			journal.KindSagaExpired,
+			journal.KindSagaCompensationFailed:
+			// Terminal markers. The instance is already done; fold tolerates them
+			// defensively (cursor stays at the last KindStepCompleted seen).
 		default:
-			// KindStepStarted, compensation events, etc. — not used for cursor.
+			// Fail-closed: an unhandled kind = a new journal.EventKind added without
+			// a forward-replay decision. Surface it rather than silently skip (#1950).
+			return 0, nil, errFoldUnknownKind(ev.Kind)
 		}
 	}
 	_ = def // def not used in fold itself; passed for future per-step validation
@@ -1299,12 +1366,20 @@ type StepCompletedEvent struct {
 	Step       idutil.SafeID `json:"step"`
 }
 
+// stepCompletedTopicFormat is the wire-contract topic-name template for
+// step-completed outbox events: a `saga.<definitionID>.step_completed` dotted
+// name. Named (not inlined) so the format is a single greppable symbol and any
+// change to the topic shape is made in one place — a step-completed consumer
+// (codegen-derived or hand-written) must reconstruct the same dotted name from
+// the definition ID constant.
+const stepCompletedTopicFormat = "saga.%s.step_completed"
+
 // stepCompletedTopic returns the outbox topic for a step-completed event.
 // Topic names are per-definition; Definition.ID is static Go code, not a
 // runtime UUID, so codegen consumers (PR-07 contractgen) can compute the
 // topic at compile time from the same definition ID constant.
 func stepCompletedTopic(defID idutil.SafeID) string {
-	return fmt.Sprintf("saga.%s.step_completed", defID)
+	return fmt.Sprintf(stepCompletedTopicFormat, defID)
 }
 
 // failurePayload returns a minimal JSON []byte capturing the error reason for

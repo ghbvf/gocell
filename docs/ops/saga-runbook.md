@@ -204,6 +204,29 @@ WHERE cell_id = '<cell>' AND projection_id = '<projection>';
 
 ---
 
+## 场景 6：Coordinator / Tailer 优雅关闭超时（`ErrSagaStopTimeout`，#1950）
+
+`Coordinator.Stop` / `Tailer.Stop` 在 bootstrap LIFO Close 期间耗尽传入的 teardown 预算，返回
+`errcode` Code = `ERR_SAGA_STOP_TIMEOUT`（Kind `KindDeadlineExceeded`）。两条触发路径：
+① 等待 `Start` 进入 running 超时；② drain/loop-exit 超时（多为非协作 `Step.Run` / apply
+goroutine 忽略 ctx、超出 drain 预算未退出）。与 lifo_teardown 时长告警关联（`docs/ops/graceful-shutdown-k8s.md`）。
+
+> **不是冲突**：该码刻意区别于 `ERR_CONFLICT` —— 这是 deadline 而非状态冲突，日志/告警按超时分级，
+> 不要按资源冲突处置。这些是内部 lifecycle 错误（返回给 bootstrap Close 并被日志记录），不产生 HTTP 响应。
+
+**诊断**：
+
+- 看关闭日志：`saga coordinator stop: timed out [waiting for start]` / `tailer stop: timed out ...` + bootstrap LIFO teardown 日志。
+- drain 超时通常是某个 `Step.Run` 长时间不返回（外部 IO 阻塞、未传播 ctx）。在途 step 数量**不暴露为指标**（`inflightLocks` 是 Coordinator 内部状态）；用 `saga_drive_total{cell,definition_id,result}` 定位——卡住的 `Step.Run` 使其 `driveOne` 长时间不计入完成，drive 计数相对 `saga_tick_total{cell,result}`（ClaimPending 周期）停滞即指向被 wedge 的 step。
+
+**处置**：
+
+- 偶发、随后副本正常退出：teardown 预算偏紧，调大 bootstrap tearCtx budget。
+- 反复出现：排查阻塞的 `Step.Run`（让其响应 ctx 取消 / 加超时）；关闭超时不会损坏 journal——
+  在途 step 的 lease 经 `Orphan()` 释放、`FencedWriter` CAS 兜底，新 leader 按 lease TTL 接管收敛。
+
+---
+
 ## 审计要求
 
 场景 2 / 场景 3 的所有人工决策与处置动作必须在 audit log 中留存，最低字段集：

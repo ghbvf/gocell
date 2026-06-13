@@ -65,7 +65,14 @@ app-serving role 必须非 owner 且无 bypass RLS 权限。
   delegated ownership（owner ≠ id，如设备）用 `subject.sub == resource.owner`（owner 由 PIP lookup 供）。
   owner-scoped 端点的 gate 形状由 `OWNER-SCOPED-GATE-EXACT-SET-01`（Medium）冻结守卫——把
   owner gate 回退成裸 `auth.RequirePermission`（转发 `r.URL.Path` 而非 canonical resource id）即 CI 红；
-  精确集（identitymanage / rbaccheck）与盲区见该 archtest godoc。
+  精确集（identitymanage / rbaccheck）与盲区见该 archtest godoc。baseline owner-scoped action
+  （user:read/write、role:read）的授予面由 `BASELINE-OWNER-RULE-TENANT-FREEZE-01`（Medium，value-golden）
+  冻结：① 每条 owner self 规则须 = EffectAllow + 精确单 action + frozen owner condition
+  （`subject.sub == resource.id`）；② 每个 owner action 的 allow 规则闭集恰为 `{1 owner, 1 admin}`。真正的
+  owner→tenant widen 向量（PDP 跨规则 OR）——**新增一条 tenant 匹配 allow 规则**、替换 owner 条件、或扩
+  action——即 build-test lane 红（给现有规则加 AND 条件是收紧非 widen，仍按 forbidden drift 拒）。跨租户拒绝
+  是 tenant-agnostic ownership 规则（`subject.sub != resource.id`）的天然结果，由 e2e `cross_tenant_*` 用例
+  覆盖（#2026）。评级/盲区见对应测试 godoc。
 - self ownership **不扩大数据访问**：路由门禁放行只让 owner 过 coarse gate；行可见性仍由 principal 派生的
   `RowScope`（身份决定，policy 改不动）独立治理（D3）。query-param self scoping 仍留 handler/service：如
   audit 的空 `actorId` 对 admin 是全 actor permissioned 读，非隐式 self（只有显式 `param == subject` 经

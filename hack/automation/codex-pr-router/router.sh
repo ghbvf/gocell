@@ -881,9 +881,40 @@ flip_labels_review() {
 }
 
 # ---------------------------------------------------------------------------
+# fix_ineligible_reason <wt> — F1 #2076: post-exec auto-fix eligibility check.
+# Echoes a non-empty reason iff codex's actual diff breaks the unattended
+# auto-fix budget (≤2 files AND no kernel / migration / bootstrap path); echoes
+# nothing when eligible OR when there are no changes. The byCx gate only proves
+# Cx≤2, but Cx2 spans up to 5 files per rubric — so file count + forbidden paths
+# need a machine gate here, not just the codex prompt (which the build guard
+# below cannot enforce). Concurrency-semantics is NOT path-detectable; it stays
+# the prompt's job + the cx3/cx4 gate (concurrency changes are typically Cx3+).
+# ---------------------------------------------------------------------------
+fix_ineligible_reason() {
+    local wt="$1"
+    local changed n f
+    changed="$(git -C "${wt}" diff --name-only HEAD 2>/dev/null || true)"
+    [[ -z "${changed}" ]] && return 0
+    n="$(printf '%s\n' "${changed}" | grep -c .)"
+    if (( n > 2 )); then
+        echo "touched ${n} files exceeds 2-file auto-fix budget"
+        return 0
+    fi
+    while IFS= read -r f; do
+        [[ -z "${f}" ]] && continue
+        case "${f}" in
+            */migrations/*|*.sql) echo "forbidden path (migration): ${f}"; return 0 ;;
+            runtime/bootstrap/*)  echo "forbidden path (bootstrap): ${f}"; return 0 ;;
+            kernel/*)             echo "forbidden path (kernel): ${f}"; return 0 ;;
+        esac
+    done <<< "${changed}"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # handle_fix <pr_json_object>
 # Gated alternate fix path (#1662). DORMANT by default — requires ai/local-fix
-# label to be explicitly applied. Cx1-only guard.
+# label to be explicitly applied. Cx1/Cx2 guard (window widened #1763/#2069).
 # ---------------------------------------------------------------------------
 handle_fix() {
     local pr_json="$1"
@@ -977,14 +1008,15 @@ handle_fix() {
         return 0
     fi
 
-    # Cx1-only gate: cx2/cx3/cx4 must all be 0
-    local cx2 cx3 cx4
-    cx2="$(echo "${meta_json}" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('findings',{}).get('byCx',{}).get('cx2',0))")"
+    # Cx1/Cx2 gate: cx3/cx4 must be 0 (auto-fix window widened to Cx2, #1763/#2069).
+    # File-count (≤2) + forbidden-domain limits are enforced by the codex fix prompt
+    # + the build/test/lint guard below, not by this machine gate.
+    local cx3 cx4
     cx3="$(echo "${meta_json}" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('findings',{}).get('byCx',{}).get('cx3',0))")"
     cx4="$(echo "${meta_json}" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('findings',{}).get('byCx',{}).get('cx4',0))")"
 
-    if [[ "${cx2}" != "0" || "${cx3}" != "0" || "${cx4}" != "0" ]]; then
-        log "PR #${pr}: skip fix — findings include Cx2/Cx3/Cx4 (cx2=${cx2} cx3=${cx3} cx4=${cx4}); human required"
+    if [[ "${cx3}" != "0" || "${cx4}" != "0" ]]; then
+        log "PR #${pr}: skip fix — findings include Cx3/Cx4 (cx3=${cx3} cx4=${cx4}); human required"
         return 0
     fi
 
@@ -1001,7 +1033,7 @@ handle_fix() {
     # Gate 7: explicit -s workspace-write (never inherit global danger-full-access)
     log "PR #${pr}: running codex fix (sandbox=workspace-write worktree=${wt})"
     local fix_prompt
-    fix_prompt="Fix the Cx1 findings listed in the most recent pm:pr-review comment on PR #${pr}. Abide by the fix protocol (§3.4 [AUTO-FIX]). Do NOT touch kernel interfaces, migrations, or concurrency primitives. If you encounter any of those, self-abort and leave a note in a comment instead of modifying the code."
+    fix_prompt="Fix the Cx1/Cx2 findings listed in the most recent pm:pr-review comment on PR #${pr}. Abide by the fix protocol (§3.4 [AUTO-FIX]): only IN_SCOPE findings touching ≤2 files. Do NOT touch kernel interfaces, migrations, bootstrap, or concurrency primitives. If you encounter any of those, self-abort and leave a note in a comment instead of modifying the code."
 
     if ! codex exec \
             -s workspace-write \
@@ -1010,6 +1042,20 @@ handle_fix() {
             "${fix_prompt}"; then
         log "PR #${pr}: codex fix exec failed; posting human-escalation comment"
         post_fix_escalation "${pr}" "${branch}" "${wt}" "codex exec failed"
+        return 0
+    fi
+
+    # F1 #2076: post-exec eligibility hard gate. The byCx gate (cx3==0 && cx4==0)
+    # only proves Cx≤2, but Cx2 spans up to 5 files per rubric — exceeding the
+    # ≤2-file + no-kernel/migration/bootstrap promise that the build guard below
+    # cannot express. Reject (revert + escalate, NO push) when codex's actual
+    # diff breaks that budget, so the daemon path machine-enforces the boundary.
+    local elig_reason
+    elig_reason="$(fix_ineligible_reason "${wt}")"
+    if [[ -n "${elig_reason}" ]]; then
+        log "PR #${pr}: post-exec eligibility gate tripped (${elig_reason}); reverting + escalating"
+        git -C "${wt}" reset --hard HEAD --quiet 2>/dev/null || true
+        post_fix_escalation "${pr}" "${branch}" "${wt}" "auto-fix eligibility: ${elig_reason}"
         return 0
     fi
 
@@ -1109,8 +1155,10 @@ Co-Authored-By: codex <noreply@codex.ai>"
     local body_file
     body_file="$(mktemp "${GOCELL_ROUTER_HOME}/state/fixbody-${pr}-XXXXXX.md")"
 
-    local cx1
+    local cx1 cx2 fixed_count
     cx1="$(echo "${meta_json}" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('findings',{}).get('byCx',{}).get('cx1',0))")"
+    cx2="$(echo "${meta_json}" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('findings',{}).get('byCx',{}).get('cx2',0))")"
+    fixed_count=$(( cx1 + cx2 ))
     local total
     total="$(echo "${meta_json}" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('findings',{}).get('total',0))")"
 
@@ -1118,9 +1166,9 @@ Co-Authored-By: codex <noreply@codex.ai>"
 <!-- pm:fix -->
 ## 🔁 fix（findings triage + fix）
 
-**Findings** ${total}（已修 Cx1 ${cx1} · 遗留 Cx3/Cx4 0 · OUT_OF_SCOPE 0）
+**Findings** ${total}（已修 Cx1/Cx2 ${fixed_count} · 遗留 Cx3/Cx4 0 · OUT_OF_SCOPE 0）
 
-codex 自动修复了 ${cx1} 个 Cx1 finding。
+codex 自动修复了 ${fixed_count} 个 Cx1/Cx2 finding。
 
 **下一步**：切 \`pr-status/needs-check-fix\`（待 \`/pr-review --check\` 验证）。
 
@@ -1133,10 +1181,10 @@ FIXBODY
     # (pushed_oid head-sha, base round) + findings; the mapping is no longer
     # hand-encoded here.
     local fix_findings
-    fix_findings="$(jq -nc --argjson total "${total}" --argjson cx1 "${cx1}" \
-        '{total:$total,fixed:$cx1,unresolved:0,blocking:0,
+    fix_findings="$(jq -nc --argjson total "${total}" --argjson cx1 "${cx1}" --argjson cx2 "${cx2}" \
+        '{total:$total,fixed:($cx1+$cx2),unresolved:0,blocking:0,
           byP:{p0:0,p1:0,p2:0,p3:0},
-          byCx:{cx1:$cx1,cx2:0,cx3:0,cx4:0}}')"
+          byCx:{cx1:$cx1,cx2:$cx2,cx3:0,cx4:0}}')"
     local meta_block
     meta_block="$(bash "${PR_META}" emit-block \
         --kind=fix --pr="${pr}" --tool=codex \
