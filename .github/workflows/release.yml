@@ -360,7 +360,7 @@ jobs:
         # F5: 统一使用 github.token（与本 workflow 其他 gh API 步骤一致，消除 PAT fallback 歧义）。
         # job 已声明 packages:write，权限等价。
         if: needs.verify.outputs.prerelease != 'true'
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

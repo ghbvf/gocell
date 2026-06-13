@@ -380,7 +380,7 @@ func (t *Tailer) Stop(ctx context.Context) error {
 	select {
 	case <-ready:
 	case <-ctx.Done():
-		return errcode.Wrap(errcode.KindDeadlineExceeded, errcode.ErrConflict,
+		return errcode.Wrap(errcode.KindDeadlineExceeded, errcode.ErrSagaStopTimeout,
 			"tailer stop: timed out waiting for start", ctx.Err())
 	}
 
@@ -422,7 +422,7 @@ func (t *Tailer) awaitLoopExit(ctx context.Context, done <-chan struct{}) error 
 	case <-done:
 		return nil
 	case <-ctx.Done():
-		return errcode.Wrap(errcode.KindDeadlineExceeded, errcode.ErrConflict,
+		return errcode.Wrap(errcode.KindDeadlineExceeded, errcode.ErrSagaStopTimeout,
 			"tailer stop: timed out waiting for loop exit", ctx.Err())
 	}
 }

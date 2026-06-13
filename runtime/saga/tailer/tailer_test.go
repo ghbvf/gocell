@@ -854,8 +854,18 @@ func TestTailer_StopTimeoutRetryable(t *testing.T) {
 	// within the budget and done is not closed.
 	sctx1, scancel1 := context.WithTimeout(context.Background(), testStopBudget)
 	defer scancel1()
-	if err := tl.Stop(sctx1); err == nil {
+	stopErr := tl.Stop(sctx1)
+	if stopErr == nil {
 		t.Fatal("first Stop must time out while the loop is wedged, got nil")
+	}
+	// The Stop-budget timeout carries the saga-specific timeout code (#1950),
+	// not generic ErrConflict.
+	var ecErr *errcode.Error
+	if !errors.As(stopErr, &ecErr) {
+		t.Fatalf("Stop timeout: expected *errcode.Error, got %T: %v", stopErr, stopErr)
+	}
+	if ecErr.Kind != errcode.KindDeadlineExceeded || ecErr.Code != errcode.ErrSagaStopTimeout {
+		t.Errorf("Stop timeout: kind=%v code=%v, want KindDeadlineExceeded / ErrSagaStopTimeout", ecErr.Kind, ecErr.Code)
 	}
 
 	// Retry Stop: state is tailerStopping. It must keep waiting on the same done

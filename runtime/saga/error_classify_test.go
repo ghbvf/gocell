@@ -59,3 +59,39 @@ func TestJournalErrLevel(t *testing.T) {
 		}
 	}
 }
+
+func TestFoldErrLevel(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		err  error
+		want slog.Level
+	}{
+		{
+			name: "ErrSagaFoldUnknownKind → Error (code↔schema drift, real anomaly)",
+			err:  errFoldUnknownKind(0), // any kind value; classification is by code
+			want: slog.LevelError,
+		},
+		{
+			name: "wrapped ErrSagaFoldUnknownKind → Error (unwraps via errors.As)",
+			err:  fmt.Errorf("drive: %w", errFoldUnknownKind(0)),
+			want: slog.LevelError,
+		},
+		{
+			name: "errFoldEventMismatch → Warn (defensive guard, expected)",
+			err:  errFoldEventMismatch("inst-1", "KindStepFailed in history"),
+			want: slog.LevelWarn,
+		},
+		{
+			name: "plain error → Warn",
+			err:  errors.New("boom"),
+			want: slog.LevelWarn,
+		},
+	}
+	for _, tc := range cases {
+		got := foldErrLevel(tc.err)
+		if got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

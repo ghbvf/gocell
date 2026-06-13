@@ -6,7 +6,7 @@ require (
 	github.com/ghbvf/gocell v0.0.0
 	github.com/ghbvf/gocell/tools v0.0.0
 	github.com/stretchr/testify v1.11.1
-	golang.org/x/tools v0.45.0
+	golang.org/x/tools v0.46.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
