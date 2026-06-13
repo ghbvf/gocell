@@ -18,11 +18,13 @@ var sliceMeta = &metadata.SliceMeta{
 	Lifecycle:        "experimental",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "http.device.command.enqueue.v1", Role: "serve"},
+		{Contract: "http.device.command.enqueue-async.v1", Role: "serve"},
 		{Contract: "http.device.command.dequeue.v1", Role: "serve"},
 		{Contract: "http.device.command.report.v1", Role: "serve"},
 		{Contract: "http.device.command.ack.v1", Role: "serve"},
 		{Contract: "http.device.command.extend-lease.v1", Role: "serve"},
 		{Contract: "command.devicecommand.enqueue.v1", Role: "handle"},
+		{Contract: "command.devicecommand.enqueue.v1", Role: "invoke"},
 		{Contract: "command.devicecommand.dequeue.v1", Role: "handle"},
 		{Contract: "command.devicecommand.report.v1", Role: "handle"},
 		{Contract: "command.devicecommand.ack.v1", Role: "handle"},
@@ -34,6 +36,7 @@ var sliceMeta = &metadata.SliceMeta{
 		},
 		Contract: []string{
 			"contract.http.device.command.enqueue.v1.serve",
+			"contract.http.device.command.enqueue-async.v1.serve",
 			"contract.http.device.command.dequeue.v1.serve",
 			"contract.http.device.command.report.v1.serve",
 			"contract.http.device.command.ack.v1.serve",
@@ -43,6 +46,9 @@ var sliceMeta = &metadata.SliceMeta{
 			"contract.command.devicecommand.report.v1.handle",
 			"contract.command.devicecommand.ack.v1.handle",
 			"contract.command.devicecommand.extend-lease.v1.handle",
+		},
+		Waivers: []metadata.WaiverMeta{
+			{Contract: "command.devicecommand.enqueue.v1", Owner: "examples", Reason: "invoke is a declaration-only role (no cellgen derivation, no executable broker contract test); the async-commands emit is covered by the devicecmd EnqueueAsync unit test + the devicecommand handler_async test asserting the emitted entry's routing topic + idempotency metadata.", ExpiresAt: "2026-12-31"},
 		},
 	},
 	AllowedFiles: []string{
