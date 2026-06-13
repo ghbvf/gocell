@@ -107,6 +107,29 @@ func TestBuildGrpcServiceSpecFromCU_PublicMethods(t *testing.T) {
 	}
 }
 
+// TestEnrichGrpcServices_BogusOverlayMethodRejected proves the cellgen path
+// (gocell generate cell) fail-closes a public-method overlay entry that names an
+// RPC absent from the proto service — the sibling of contractgen's
+// validateGRPCMethodOverlay, so generate-cell alone can't render an inert public
+// entry (#1675 review F3). The synth proto exposes only IssueCommand.
+func TestEnrichGrpcServices_BogusOverlayMethodRejected(t *testing.T) {
+	t.Parallel()
+	root := synthGRPCRoot(t)
+
+	pm := buildGRPCProject()
+	pm.Contracts["grpc.device.command.v1"].Endpoints.GRPC.Methods = []metadata.GRPCMethodMeta{
+		{Name: "BogusRPC", Public: true},
+	}
+	spec, err := BuildCellSpec(pm, "demo", markergen.WireBundle{}, idxOf(map[string]string{"command": "commandServer"}))
+	if err != nil {
+		t.Fatalf("BuildCellSpec: %v", err)
+	}
+	err = EnrichGrpcServicesWithProtoInfo(spec, root)
+	if err == nil || !strings.Contains(err.Error(), "not an RPC of the proto service") {
+		t.Fatalf("expected referential rejection of bogus overlay method, got %v", err)
+	}
+}
+
 // TestRenderCell_GRPC_NoOverlay_OmitsPublicMethods covers the template's
 // {{- if .PublicMethods }} FALSE arm: a grpc contract with no methods overlay must
 // render a GRPCServiceSpec WITHOUT a PublicMethods field (fail-closed default).

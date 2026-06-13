@@ -266,11 +266,12 @@ non-default" when the new fields land.
 
 | 载体 | 强度 | 守卫 |
 |---|---|---|
-| schema item shape (`additionalProperties:false`, `required:[name]`, `name minLength:1`) | **Hard** | `contract_schema_test.go` negative cases (incl. unknown-property, forward-protecting #2008) |
-| referential integrity (each overlay name ∈ proto method set) | **Hard** (codegen funnel) | `checkGRPCProtoCollisions` pre-pass `validateGRPCMethodOverlay` (kernel⊥tools → governance cannot read the proto) |
+| schema item shape (`additionalProperties:false`, `required:[name,public]`, `name minLength:1`, `public const:true`) | **Hard** | `contract_schema_test.go` negative cases (unknown-property; missing/false `public` — the const:true vacuous-entry lock, #2078 F2; forward-protects #2008) |
+| referential integrity (each overlay name ∈ proto method set) | **Hard** (codegen funnel, BOTH entry points) | contractgen `checkGRPCProtoCollisions` → `validateGRPCMethodOverlay` (gocell generate contract) **+** cellgen `EnrichGrpcServicesWithProtoInfo` → `validateGrpcPublicMethodsAgainstProto` (gocell generate cell, #2078 F3 — closes the generate-cell-only hole; kernel⊥tools keeps it in the tools layer) |
 | cellgen `PublicMethods` emission | **Hard** (byte golden) | `synth_grpc_cell_gen.go.golden` |
-| metadata-pure guards (non-empty name, no dups, **methods⇒codegen:true**, **public:true required**) | **Medium** | governance **FMT-41** (`gocell validate`) |
-| runtime single-source (registrar = sole production public-method source) | **Medium** | archtest **GRPC-PUBLIC-METHOD-WIRING-FUNNEL-01** (caller-allowlist: production `WithPublicMethod` refs ⊆ {chain.go}) |
+| vacuous-entry guard (public:true required) | **Hard + Medium** | schema `public const:true` (Hard, #2078 F2) **+** governance **FMT-41** (Medium) — defense-in-depth, mirrors HTTP schema-if/then + FMT-27 |
+| other metadata-pure guards (non-empty name, no dups, **methods⇒codegen:true**) | **Medium** | governance **FMT-41** (`gocell validate`) |
+| runtime single-source (registrar = sole production public-method source) | **Medium** | archtest **GRPC-PUBLIC-METHOD-WIRING-FUNNEL-01**, two dimensions: (1) production `WithPublicMethod` refs ⊆ {chain.go}; (2) `authConfig.publicMethod` field writes ⊆ {auth.go} (#2078 F1 — locks the state slot, not just the API ref) |
 | fail-closed default | structural | nil overlay → empty `PublicMethods` → empty registrar set → `callPredicate` nil→false → authed |
 
 The **methods⇒codegen:true** guard (FMT-41) closes the one gap the kernel⊥tools

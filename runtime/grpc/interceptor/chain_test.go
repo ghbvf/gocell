@@ -128,6 +128,95 @@ var testSvcDesc = grpc.ServiceDesc{
 	Streams: []grpc.StreamDesc{},
 }
 
+// streamTestSvcDesc is a hand-crafted ServiceDesc with two server-stream methods
+// (one declared public, one not) for the stream live-path test. grpc-go applies the
+// chained StreamServerInterceptor (from newStreamChain) around StreamDesc.Handler,
+// so the handler is the raw body — auth runs before it.
+var streamTestSvcDesc = grpc.ServiceDesc{
+	ServiceName: "svc",
+	HandlerType: (*interface{})(nil),
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "PublicStream",
+			ServerStreams: true,
+			Handler:       func(srv any, _ grpc.ServerStream) error { *srv.(*testSvc).handlerReached = true; return nil },
+		},
+		{
+			StreamName:    "PrivateStream",
+			ServerStreams: true,
+			Handler:       func(srv any, _ grpc.ServerStream) error { *srv.(*testSvc).handlerReached = true; return nil },
+		},
+	},
+}
+
+// TestNewStreamChain_RegistrarPublicMethodExempts is the stream sibling of
+// TestNewUnaryChain_RegistrarPublicMethodExempts (#1675 review F4): it proves the
+// stream chain installs WithPublicMethod(reg.IsPublicMethod) so a registrar-declared
+// public STREAM method bypasses auth, while an undeclared stream method is authed
+// (fail-closed). Without the registrar wiring in stream.go this test fails.
+func TestNewStreamChain_RegistrarPublicMethodExempts(t *testing.T) {
+	handlerReached := false
+	reg := runtimegrpc.NewServiceRegistrar()
+	drain := runtimegrpc.NewDrainSignal()
+	deps := Deps{
+		Collector:       metrics.NewInMemoryGRPCCollector(),
+		Clock:           clock.Real(),
+		Verifier:        stubVerifier{},
+		CellIDClosedSet: []string{"svc-cell"},
+	}
+	srv := grpc.NewServer(newStreamChain(deps, reg, drain))
+	reg.BindServer(srv)
+	spec := cell.GRPCServiceSpec{
+		ContractID:    "grpc.svc.v1",
+		CellID:        "svc-cell",
+		PublicMethods: []string{"/svc/PublicStream"}, // PrivateStream intentionally omitted
+		Listener:      cell.PrimaryListener,
+		Register: func(r grpc.ServiceRegistrar) {
+			r.RegisterService(&streamTestSvcDesc, &testSvc{handlerReached: &handlerReached})
+		},
+	}
+	if err := reg.Register(spec); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.GracefulStop)
+
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	openStream := func(method string) error {
+		st, serr := conn.NewStream(context.Background(), &grpc.StreamDesc{ServerStreams: true}, method)
+		if serr != nil {
+			return serr
+		}
+		return st.RecvMsg(&emptypb.Empty{}) // EOF on normal close; status error on auth failure
+	}
+
+	// Undeclared stream method, no token → fail-closed (Unauthenticated), handler not reached.
+	if err := openStream("/svc/PrivateStream"); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("undeclared stream method must be authed (Unauthenticated), got code=%v err=%v", status.Code(err), err)
+	}
+	if handlerReached {
+		t.Fatalf("private stream handler must not run when auth blocks")
+	}
+
+	// Registrar-declared public stream method, no token → bypass, handler reached.
+	if err := openStream("/svc/PublicStream"); status.Code(err) == codes.Unauthenticated {
+		t.Fatalf("registrar-declared public stream must bypass auth without a token, got Unauthenticated: %v", err)
+	}
+	if !handlerReached {
+		t.Fatalf("public stream handler was not reached — registrar public-method wiring did not exempt /svc/PublicStream")
+	}
+}
+
 // TestNewUnaryChain_AuthOptionsPassthrough asserts that AuthOptions from Deps are
 // forwarded to UnaryAuth by newUnaryChain (via authOptionsWithPublicMethods). It
 // drives WithPasswordResetExempt — NOT WithPublicMethod — because #1675 made the

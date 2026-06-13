@@ -686,7 +686,7 @@
                     "items": {
                       "type": "object",
                       "additionalProperties": false,
-                      "required": ["name"],
+                      "required": ["name", "public"],
                       "properties": {
                         "name": {
                           "type": "string",
@@ -695,7 +695,8 @@
                         },
                         "public": {
                           "type": "boolean",
-                          "description": "Marks this RPC JWT-exempt. Default false (authed)."
+                          "const": true,
+                          "description": "Marks this RPC JWT-exempt. In #1675 public is the ONLY flag, so an entry exists iff public:true — const:true rejects public:false / omitted-public at the author surface, mirroring governance FMT-41's vacuous-entry guard (schema Hard + FMT-41 Medium, defense-in-depth). #2008 adds ABAC fields and relaxes BOTH this const and FMT-41 to 'asserts ≥1 non-default flag'."
                         }
                       }
                     }

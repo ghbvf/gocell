@@ -13,15 +13,25 @@
 // endpoints.grpc.methods[] (public:true), derived by cellgen into
 // GRPCServiceSpec.PublicMethods, and aggregated by the registrar.
 //
-// This archtest forbids any OTHER production reference to interceptor.WithPublicMethod.
-// WithPublicMethod predicates compose (OR): a method is public if ANY installed
-// predicate returns true. A composition root passing its own WithPublicMethod via
-// Deps.AuthOptions would therefore WIDEN the public set beyond the contract-derived
-// overlay — a latent auth bypass. Forbidding all production references but chain.go's
-// makes the composed union a single member (the registrar) in production, i.e. the
-// registrar the provably-sole production source. It is the runtime-side sibling of
-// the codegen-side locks (cellgen golden + contractgen overlay referential pre-pass
-// + governance FMT-41) and mirrors GRPC-CHAIN-UNARY-INTERCEPTOR-CALLER-01.
+// This archtest locks the runtime single-source in TWO dimensions:
+//
+//   - Dimension 1 (API ref): forbids any production reference to
+//     interceptor.WithPublicMethod outside chain.go. WithPublicMethod predicates
+//     compose (OR): a method is public if ANY installed predicate returns true, so
+//     a composition root passing its own WithPublicMethod via Deps.AuthOptions would
+//     WIDEN the public set beyond the contract-derived overlay — a latent auth
+//     bypass. Allowlisting only chain.go makes the composed union a single member
+//     (the registrar) in production.
+//   - Dimension 2 (field write): forbids any production WRITE of the unexported
+//     authConfig.publicMethod field outside auth.go (#1675 review F1). Dimension 1
+//     alone misses a same-package AuthOption that sets c.publicMethod directly
+//     without referencing WithPublicMethod; locking the actual state slot closes
+//     that bypass. Only WithPublicMethod (auth.go) may write it.
+//
+// Together they make the registrar the provably-sole production source. This is the
+// runtime-side sibling of the codegen-side locks (cellgen golden + contractgen
+// overlay referential pre-pass + governance FMT-41) and mirrors
+// GRPC-CHAIN-UNARY-INTERCEPTOR-CALLER-01.
 //
 // # AI-robust rating (per .claude/rules/gocell/ai-robust.md)
 //
@@ -50,12 +60,96 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
+	"go/token"
 	"go/types"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// publicMethodFieldWriteAllowlist is the set of production files permitted to
+// WRITE the unexported authConfig.publicMethod field — the gRPC public-method
+// bypass state slot. The sole sanctioned writer is WithPublicMethod in auth.go.
+// Locking the FIELD (not just the WithPublicMethod API reference) closes the
+// same-package bypass where a new in-package AuthOption assigns c.publicMethod
+// directly, widening the public set without going through WithPublicMethod /
+// the registrar single source (#1675 review F1).
+var publicMethodFieldWriteAllowlist = map[string]struct{}{
+	"runtime/grpc/interceptor/auth.go": {},
+}
+
+// isAuthConfigPublicMethodField reports whether obj is the unexported
+// authConfig.publicMethod field. The field name is unique within the interceptor
+// package, so name + IsField + package is precise.
+func isAuthConfigPublicMethodField(obj types.Object) bool {
+	v, ok := obj.(*types.Var)
+	return ok && v.IsField() && v.Name() == "publicMethod" &&
+		v.Pkg() != nil && v.Pkg().Path() == grpcInterceptorPkgPath
+}
+
+// scanPublicMethodFieldWrites scans production code for WRITES to
+// authConfig.publicMethod — assignment LHS (c.publicMethod = ...) and composite
+// literal keys (authConfig{publicMethod: ...}) — returning a diagnostic for every
+// write whose file is not in allowlist, plus the observed write files.
+func scanPublicMethodFieldWrites(t *testing.T, allowlist map[string]struct{}) ([]Diagnostic, map[string]struct{}) {
+	observed := map[string]struct{}{}
+	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
+		if !p.Typed() {
+			return nil
+		}
+		var d []Diagnostic
+		flag := func(rel string, pos token.Pos) {
+			observed[rel] = struct{}{}
+			if _, ok := allowlist[rel]; ok {
+				return
+			}
+			d = append(d, Diagnostic{
+				Rel:  rel,
+				Line: p.Fset.Position(pos).Line,
+				Message: fmt.Sprintf(
+					"GRPC-PUBLIC-METHOD-WIRING-FUNNEL-01: authConfig.publicMethod (the gRPC public-method "+
+						"bypass state slot) is written from %s, which is not the sanctioned writer. Only "+
+						"WithPublicMethod in runtime/grpc/interceptor/auth.go may set this field; writing it elsewhere "+
+						"widens the public-method set without the registrar single source (#1675) — a latent auth "+
+						"bypass the WithPublicMethod-reference scan alone would miss. Route public methods through the "+
+						"contract overlay (endpoints.grpc.methods[].public:true). If this IS a new sanctioned writer, "+
+						"add it to publicMethodFieldWriteAllowlist with rationale.",
+					rel),
+			})
+		}
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			// Form A: assignment LHS — c.publicMethod = ...
+			EachInSubtree[ast.AssignStmt](file, func(as *ast.AssignStmt) {
+				for _, lhs := range as.Lhs {
+					sel, ok := lhs.(*ast.SelectorExpr)
+					if !ok || sel.Sel.Name != "publicMethod" {
+						continue
+					}
+					if s := p.TypesInfo.Selections[sel]; s != nil && isAuthConfigPublicMethodField(s.Obj()) {
+						flag(rel, sel.Pos())
+					}
+				}
+			})
+			// Form B: composite literal key — authConfig{publicMethod: ...}
+			EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
+				for _, elt := range cl.Elts {
+					kv, ok := elt.(*ast.KeyValueExpr)
+					if !ok {
+						continue
+					}
+					if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "publicMethod" &&
+						isAuthConfigPublicMethodField(p.TypesInfo.Uses[key]) {
+						flag(rel, key.Pos())
+					}
+				}
+			})
+		}
+		return d
+	})
+	return diags, observed
+}
 
 // withPublicMethodCallerAllowlist is the set of production files permitted to
 // reference interceptor.WithPublicMethod. The sole sanctioned site is
@@ -147,6 +241,24 @@ func TestArchtest_GRPCPublicMethodWiringFunnel01(t *testing.T) {
 		}
 	}
 
+	// Dimension 2 (review F1): lock WRITES to the authConfig.publicMethod field, not
+	// just WithPublicMethod references — a same-package AuthOption could set the slot
+	// directly and bypass dimension 1.
+	fieldDiags, fieldObserved := scanPublicMethodFieldWrites(t, publicMethodFieldWriteAllowlist)
+	diags = append(diags, fieldDiags...)
+	for f := range publicMethodFieldWriteAllowlist {
+		if _, seen := fieldObserved[f]; !seen {
+			diags = append(diags, Diagnostic{
+				Message: fmt.Sprintf(
+					"GRPC-PUBLIC-METHOD-WIRING-FUNNEL-01: field-write allowlist entry %q is STALE — no live "+
+						"authConfig.publicMethod write observed. WithPublicMethod moved or the scanner regressed; "+
+						"update the allowlist so a dead entry cannot become a silent bypass slot.",
+					f,
+				),
+			})
+		}
+	}
+
 	Report(t, "GRPC-PUBLIC-METHOD-WIRING-FUNNEL-01", diags)
 }
 
@@ -174,4 +286,12 @@ func TestArchtest_GRPCPublicMethodWiringFunnel01_NegativeControl(t *testing.T) {
 	}
 	assert.True(t, found,
 		"negative control: the chain.go reference must be the flagged out-of-allowlist diagnostic")
+
+	// Dimension 2: empty allowlist must flag the live authConfig.publicMethod field
+	// write in auth.go, proving the field-write scan is not vacuously green.
+	fieldDiags, fieldObserved := scanPublicMethodFieldWrites(t, map[string]struct{}{})
+	require.NotEmpty(t, fieldDiags,
+		"negative control: an empty allowlist must flag the live authConfig.publicMethod field write")
+	require.Contains(t, fieldObserved, "runtime/grpc/interceptor/auth.go",
+		"negative control: auth.go must host the sanctioned authConfig.publicMethod write (WithPublicMethod)")
 }
