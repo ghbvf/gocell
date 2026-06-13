@@ -174,6 +174,9 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*abac.Policy, 
 		Description: input.Description,
 		Rules:       input.Rules,
 	}
+	if err := patch.Validate(); err != nil {
+		return nil, err
+	}
 
 	var updated *abac.Policy
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {

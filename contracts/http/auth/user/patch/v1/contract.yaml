@@ -31,7 +31,7 @@ endpoints:
         description: "Unauthorized — missing or invalid bearer token"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       403:
-        description: "Forbidden — caller lacks the user:write permission and is not the target user (self-access exempt); OR ERR_AUTH_LAST_ADMIN_PROTECTED when patching this user's status away from 'active' would leave the system with no effective admin (status='active' AND admin role) [S4.0]. The built-in baseline grants user:write to the admin and super-admin roles.; OR ERR_AUTH_IDENTITY_INVALID_INPUT when the PATCH body sets 'status' and the caller lacks the admin role (a field-level service guard, distinct from the route PDP gate)."
+        description: "Forbidden — caller lacks the user:write permission and is not the target user — self-access (subject == resource.id) is granted by the built-in baseline ownership rule via the ABAC PDP (#1977), NOT a request-shape exemption; the baseline also grants user:write to the admin and super-admin roles. OR ERR_AUTH_LAST_ADMIN_PROTECTED when patching this user's status away from 'active' would leave the system with no effective admin (status='active' AND admin role) [S4.0]; OR ERR_AUTH_IDENTITY_INVALID_INPUT when the PATCH body sets 'status' and the caller lacks the admin role (a field-level service guard, distinct from the route PDP gate)."
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       404:
         description: "Not found — user with given id does not exist"

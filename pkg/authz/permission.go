@@ -142,22 +142,30 @@ func PermPolicyRead() Permission { return permPolicyRead }
 func PermPolicyWrite() Permission { return permPolicyWrite }
 
 // PermUserRead authorizes reading a user account (identitymanage slice: GET
-// users/{id}). The gate self-exempts a subject reading its OWN user via
-// auth.RequirePermissionOrSelf; non-self reads require this permission. Migrated
-// from auth.SelfOr("id", RoleAdmin) in PR-10c.
+// users/{id}). The gate uses auth.RequirePermissionForResource("id", PermUserRead())
+// which forwards the id path param to the PDP as resource; the PDP baseline
+// ownership rule (subject.sub == resource.id, #1977 Batch B) grants self-access
+// without a Go short-circuit. Non-self reads require admin/super-admin baseline.
+// Migrated from auth.SelfOr("id", RoleAdmin) → RequirePermissionOrSelf (PR-10c) →
+// RequirePermissionForResource (#1977).
 func PermUserRead() Permission { return permUserRead }
 
 // PermUserWrite authorizes mutating a user account (identitymanage slice:
 // create/update/patch/delete/lock/unlock/change-password). "write" folds the
 // account-management verbs the prior admin/self gates already grouped; the
-// self-exempt verbs (update/patch/change-password) self-exempt at the gate.
+// owner-scoped verbs (update/patch/change-password) use
+// auth.RequirePermissionForResource — self-access decided by PDP baseline
+// ownership rule (#1977 Batch B).
 // Migrated from auth.AnyRole(RoleAdmin) / auth.SelfOr("id", RoleAdmin) in PR-10c.
 func PermUserWrite() Permission { return permUserWrite }
 
 // PermRoleRead authorizes reading a user's role assignments (rbaccheck slice:
-// GET roles/{userID}, GET roles/{userID}/{roleName}). The gate self-exempts a
-// subject reading its OWN roles via auth.RequirePermissionOrSelf. Migrated from
-// auth.SelfOr("userID", RoleAdmin) in PR-10c.
+// GET roles/{userID}, GET roles/{userID}/{roleName}). The gate uses
+// auth.RequirePermissionForResource("userID", PermRoleRead()) which forwards the
+// userID path param to the PDP as resource; the PDP baseline ownership rule
+// (subject.sub == resource.id, #1977 Batch B) grants self-access via PDP.
+// Migrated from auth.SelfOr("userID", RoleAdmin) → RequirePermissionOrSelf
+// (PR-10c) → RequirePermissionForResource (#1977).
 func PermRoleRead() Permission { return permRoleRead }
 
 // allPermissions is the closed registry of every Permission that exists. It

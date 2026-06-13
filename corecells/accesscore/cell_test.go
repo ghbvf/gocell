@@ -605,8 +605,9 @@ func TestAccessCore_Init_DurableMode_UsesProdRBACRunMode(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/roles/usr-1?cursor=not-a-valid-cursor", nil)
 	// Wire the PDP (admin → baseline allow) as the composition root does; the
-	// migrated rbaccheck gate (auth.RequirePermissionOrSelf) fails closed otherwise.
-	// admin-user != "usr-1" → non-self → PDP path → handler runs → 400 (bad cursor/id).
+	// migrated rbaccheck gate (auth.RequirePermissionForResource, #1977 Batch B)
+	// fails closed without a wired Authorizer.
+	// admin-user != "usr-1" → admin baseline fires → handler runs → 400 (bad cursor/id).
 	req = req.WithContext(withAllowAuthorizer(withTenant(auth.TestContext("admin-user", []string{"admin"}))))
 	r.ServeHTTP(rec, req)
 
@@ -784,16 +785,17 @@ func TestAccessCore_RouteUserCreate_NonAdmin_Returns403(t *testing.T) {
 // TestAccessCore_ProductionAuthGateLock exercises the REAL production routing path
 // (cell.go -> slice.RegisterRoutes -> auth.Mount) and locks the
 // 401 / 403(fail-closed) / 403(PDP-deny) / 2xx spectrum for every permission-gated
-// accesscore endpoint after the PR-10c migration (auth.RequirePermission /
-// auth.RequirePermissionOrSelf). It is the single authoritative home for the
+// accesscore endpoint after the #1977 Batch B migration (auth.RequirePermission /
+// auth.RequirePermissionForResource). It is the single authoritative home for the
 // endpoint↔permission action-pin: the role-agnostic baseline allows admin for every
 // accesscore perm, so a wrong-permission misbinding (e.g. a write endpoint demanding
 // user:read) would pass the slice tests AND the archtest silently — only the
 // per-endpoint wantAction assertion here catches it.
 //
-// For the SelfOr-migrated endpoints (selfExempt) it additionally pins that a caller
-// naming ITSELF in the path is admitted without any Authorizer (the request-shape
-// self-exemption), while a non-self caller still flows through the PDP.
+// For the ownership-gated endpoints (selfExempt) it pins that a caller naming
+// ITSELF in the path is admitted WITH a wired allow-Authorizer (self is now a PDP
+// baseline ownership rule — subject.sub == resource.id — not a Go short-circuit).
+// Without an Authorizer even self-naming requests are denied (fail-closed).
 func TestAccessCore_ProductionAuthGateLock(t *testing.T) {
 	r := initCellWithRouter(t)
 
@@ -906,14 +908,30 @@ func TestAccessCore_ProductionAuthGateLock(t *testing.T) {
 					"the role-agnostic baseline that allows admin for every accesscore perm",
 				g.method, g.path, g.wantAction, cap.gotAction)
 
-			// Self-exemption: a non-admin caller naming ITSELF in the path is admitted
-			// with NO Authorizer (request-shape exemption); the PDP is never consulted.
+			// Ownership gate: a caller naming ITSELF in the path is admitted WITH a
+			// wired allow-Authorizer (self is now a PDP baseline ownership rule,
+			// subject.sub == resource.id, via RequirePermissionForResource — #1977 Batch B).
+			// Without an Authorizer even self-naming callers are denied (fail-closed).
 			if g.selfExempt {
-				rec = exec(t, g, g.selfPath, withTenant(auth.TestContext(selfID, []string{"viewer"})))
+				// With allow-Authorizer: self-naming caller reaches the handler (no 401/403).
+				rec = exec(t, g, g.selfPath,
+					auth.WithAuthorizer(
+						withTenant(auth.TestContext(selfID, []string{"viewer"})),
+						allowCapturingAuthorizer(),
+					),
+				)
 				assert.NotEqual(t, http.StatusUnauthorized, rec.Code,
-					"self %s %s must not be 401 (self-exempt, no Authorizer); body %s", g.method, g.selfPath, rec.Body)
+					"self %s %s with Authorizer must not be 401 (ownership rule grants); body %s",
+					g.method, g.selfPath, rec.Body)
 				assert.NotEqual(t, http.StatusForbidden, rec.Code,
-					"self %s %s must not be 403 (self-exempt, no Authorizer); body %s", g.method, g.selfPath, rec.Body)
+					"self %s %s with Authorizer must not be 403 (ownership rule grants); body %s",
+					g.method, g.selfPath, rec.Body)
+
+				// Without Authorizer: fail-closed (403), even for self-naming caller.
+				rec = exec(t, g, g.selfPath, withTenant(auth.TestContext(selfID, []string{"viewer"})))
+				assert.Equal(t, http.StatusForbidden, rec.Code,
+					"self %s %s without Authorizer must be 403 (fail-closed, #1977 Batch B); body %s",
+					g.method, g.selfPath, rec.Body)
 			}
 		})
 	}
@@ -949,7 +967,8 @@ func TestAccessCore_RouteUserGet(t *testing.T) {
 	const nonexistentUserID = "00000000-0000-4000-8000-000000000098"
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/"+nonexistentUserID, nil)
-	req = req.WithContext(withTenant(auth.TestContext(nonexistentUserID, nil))) // self-access
+	// Self-access now requires a wired Authorizer (RequirePermissionForResource, #1977 Batch B).
+	req = req.WithContext(withAllowAuthorizer(withTenant(auth.TestContext(nonexistentUserID, nil))))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusNotFound, rec.Code,

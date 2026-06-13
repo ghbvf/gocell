@@ -223,11 +223,15 @@ func TestHandler(t *testing.T) {
 			wantStatus:    http.StatusBadRequest,
 		},
 		{
-			name:       "GET /{id} nonexistent returns 404",
-			method:     http.MethodGet,
-			path:       "/" + testutil.TestID("no-such-id"),
-			subject:    testutil.TestID("no-such-id"), // self-access, no Authorizer needed
-			wantStatus: http.StatusNotFound,
+			// Self-access now requires a wired Authorizer (PDP-decided, #1977 Batch B).
+			// Without useAuthorizer=true the gate fails closed (403); with it the baseline
+			// ownership rule fires and service returns 404 (user not found).
+			name:          "GET /{id} nonexistent returns 404",
+			method:        http.MethodGet,
+			path:          "/" + testutil.TestID("no-such-id"),
+			subject:       testutil.TestID("no-such-id"),
+			useAuthorizer: true,
+			wantStatus:    http.StatusNotFound,
 		},
 		{
 			// PDP gate runs before schema validation — admin needs allow Authorizer
@@ -261,13 +265,15 @@ func TestHandler(t *testing.T) {
 			wantStatus: http.StatusForbidden,
 		},
 		{
-			// Self-access: RequirePermissionOrSelf short-circuits PDP when
-			// path param id == subject. No Authorizer needed.
-			name:       "GET /{id} self-access authz passes (user not found)",
-			method:     http.MethodGet,
-			path:       "/" + testutil.TestID("self-access-test"),
-			subject:    testutil.TestID("self-access-test"),
-			wantStatus: http.StatusNotFound, // authz passes (self), service returns 404
+			// Self-access is now PDP-decided (RequirePermissionForResource, #1977 Batch B):
+			// path param id is forwarded to the PDP as resource; the baseline ownership
+			// rule (subject.sub == resource.id) grants. A wired Authorizer is required.
+			name:          "GET /{id} self-access authz passes (user not found)",
+			method:        http.MethodGet,
+			path:          "/" + testutil.TestID("self-access-test"),
+			subject:       testutil.TestID("self-access-test"),
+			useAuthorizer: true,                // PDP must be wired; self is now a baseline rule, not Go short-circuit
+			wantStatus:    http.StatusNotFound, // authz passes (self via PDP), service returns 404
 		},
 		{
 			// Non-self, non-admin, no Authorizer → PDP fail-closed (403).
@@ -401,12 +407,13 @@ func TestHandler_UpdateUnknownField(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
 
-	// PUT with unknown field should return 400 (self-access).
+	// PUT with unknown field should return 400 (self-access, PDP-wired, #1977 Batch B).
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPut, identityPrefix+"/"+created.Data.ID,
 		strings.NewReader(`{"email":"new@b.com","extra":"y"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(withTenant(auth.TestContext(created.Data.ID, nil))) // self-access
+	// Self-access now requires a wired Authorizer (RequirePermissionForResource, #1977 Batch B).
+	req = req.WithContext(withAllowAuthorizer(withTenant(auth.TestContext(created.Data.ID, nil))))
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
@@ -431,12 +438,12 @@ func TestHandler_PatchRejectsUnknownFields(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
 
 	// PATCH request schema is strict; unknown fields should fail fast instead
-	// of being silently ignored.
+	// of being silently ignored. Self-access requires wired Authorizer (#1977 Batch B).
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPatch, identityPrefix+"/"+created.Data.ID,
 		strings.NewReader(`{"email":"new@f.com","extra":"ignored"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(withTenant(auth.TestContext(created.Data.ID, nil))) // self-access
+	req = req.WithContext(withAllowAuthorizer(withTenant(auth.TestContext(created.Data.ID, nil))))
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusBadRequest, w.Code, "PATCH must reject unknown fields to match additionalProperties:false")
 }
@@ -462,10 +469,10 @@ func TestHandler_CreateThenGetThenDelete(t *testing.T) {
 	id := created.Data.ID
 	require.NotEmpty(t, id)
 
-	// Get (self-access).
+	// Get (self-access, PDP-wired, #1977 Batch B: self now requires Authorizer).
 	w = httptest.NewRecorder()
 	getReq := httptest.NewRequest(http.MethodGet, identityPrefix+"/"+id, nil)
-	getReq = getReq.WithContext(withTenant(auth.TestContext(id, nil)))
+	getReq = getReq.WithContext(withAllowAuthorizer(withTenant(auth.TestContext(id, nil))))
 	r.ServeHTTP(w, getReq)
 	assert.Equal(t, http.StatusOK, w.Code)
 
@@ -532,7 +539,8 @@ func TestHandlePatch_TypeValidation(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPatch, identityPrefix+"/"+id, strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
-			req = req.WithContext(withTenant(auth.TestContext(id, nil))) // self-access
+			// Self-access now requires a wired Authorizer (#1977 Batch B).
+			req = req.WithContext(withAllowAuthorizer(withTenant(auth.TestContext(id, nil))))
 			r.ServeHTTP(w, req)
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.wantCode != "" {
@@ -568,10 +576,11 @@ func TestHandler_ChangePassword_SelfAllowed(t *testing.T) {
 	seedUserInRepo(t, repo, testutil.TestID("usr-self"), "self-user")
 
 	// Passwords must be ≥ 8 chars to pass the generated handler's minLength check.
+	// Self-access now requires a wired Authorizer (RequirePermissionForResource, #1977 Batch B).
 	body := `{"oldPassword":"oldpass12","newPassword":"newpass12"}`
 	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("usr-self")+"/password", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(withTenant(auth.TestContext(testutil.TestID("usr-self"), nil))) // self-access
+	req = req.WithContext(withAllowAuthorizer(withTenant(auth.TestContext(testutil.TestID("usr-self"), nil))))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -594,8 +603,8 @@ func TestHandler_ChangePassword_AdminOnAnotherUser_Allowed(t *testing.T) {
 	body := `{"oldPassword":"oldpass12","newPassword":"newpass12"}`
 	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("usr-target")+"/password", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	// Admin acting on another user (subject != id): RequirePermissionOrSelf falls
-	// through to RequirePermission — Authorizer is required (PR-10c #1348).
+	// Admin acting on another user (subject != id): RequirePermissionForResource
+	// delegates to PDP — Authorizer is required (#1977 Batch B).
 	req = req.WithContext(withAllowAuthorizer(withTenant(auth.TestContext("admin-user", []string{"admin"}))))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -672,7 +681,8 @@ func TestHandler_ChangePassword_BadJSON(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("usr-badjson")+"/password", strings.NewReader(`{bad json`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(withTenant(auth.TestContext(testutil.TestID("usr-badjson"), nil))) // self
+	// Self-access now requires a wired Authorizer (#1977 Batch B).
+	req = req.WithContext(withAllowAuthorizer(withTenant(auth.TestContext(testutil.TestID("usr-badjson"), nil))))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 

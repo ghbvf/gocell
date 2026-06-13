@@ -47,10 +47,12 @@ type ResponseDataItemRulesItem struct {
 
 // ResponseDataItemRulesItemConditionsItem is a generated DTO for contract http.policy.list.v1.
 type ResponseDataItemRulesItemConditionsItem struct {
-	Source   string   `json:"source"`
-	Key      string   `json:"key"`
-	Operator string   `json:"operator"`
-	Values   []string `json:"values"`
+	Source    string   `json:"source"`
+	Key       string   `json:"key"`
+	Operator  string   `json:"operator"`
+	Values    []string `json:"values,omitempty"`
+	RHSSource string   `json:"rhsSource,omitempty"`
+	RHSKey    string   `json:"rhsKey,omitempty"`
 }
 
 // ResponseDataItemRulesItemObligations is a generated DTO for contract http.policy.list.v1.

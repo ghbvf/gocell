@@ -1013,7 +1013,7 @@ sum(rate(gocell_config_event_settlement_total[5m])) by (cell, slice, disposition
 
 ## HTTP 幂等 (#1460)
 
-`idempotency_requests_total{cell,state}` 由 HTTP idempotency 中间件（`runtime/http/idempotency`）经 `obmetrics.IdempotencyCollector` 发射，bootstrap 在配置了真实 metrics `Provider` 时自动接线。`cell` 是归属 RouteGroup 的 cell（框架路径为 `_runtime`）。`state` 取值冻结为 6 个终态（archtest `IDEMPOTENCY-REQUESTS-STATE-LABEL-VALUES-FROZEN-01` 守）：
+`idempotency_requests_total{cell,state}` 由 HTTP idempotency 中间件（`runtime/http/idempotency`）经 `obmetrics.IdempotencyCollector` 发射，bootstrap 在配置了真实 metrics `Provider` 时自动接线。`cell` 是归属 RouteGroup 的 cell（框架路径为 `_runtime`）。`state` 取值冻结为 7 个终态（archtest `IDEMPOTENCY-REQUESTS-STATE-LABEL-VALUES-FROZEN-01` 守）：
 
 - `acquired`：新 claim（已处理请求分母，claim 时计，不是其余 state 之和）
 - `replayed`：缓存响应回放
@@ -1021,6 +1021,7 @@ sum(rate(gocell_config_event_settlement_total[5m])) by (cell, slice, disposition
 - `store_error`：Claim 路径失败 → 500
 - `oversize`：响应超限不录（`acquired` 的子事件）
 - `key_reused`：同 key 不同 body → 422（附 per-field diff 字段名；安全相关）
+- `body_read_failed`：请求 body 读取失败 → 503（claim 前的入站传输/连接故障，如客户端中止上传；区别于 `store_error` 的服务端 store 故障，持续偏高指向客户端/网络问题）
 
 > 仅当配置真实 `Provider` 且某 listener 接线了 idempotency store 时才会有时间序列；无 store 时该 metric 仅出现在 `/metrics` HELP，无序列。
 

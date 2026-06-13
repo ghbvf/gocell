@@ -7,10 +7,10 @@
 // the `state` label on idempotency_requests_total{cell,state} — is frozen to
 // exactly:
 //
-//	{"acquired", "replayed", "busy", "store_error", "oversize", "key_reused"}
+//	{"acquired", "replayed", "busy", "store_error", "oversize", "key_reused", "body_read_failed"}
 //
-// These are the six terminal outcomes of one HTTP idempotency decision. The set
-// is design-time bounded: runtime drift (a 7th const, a renamed value) breaks
+// These are the seven terminal outcomes of one HTTP idempotency decision. The set
+// is design-time bounded: runtime drift (an 8th const, a renamed value) breaks
 // dashboards / alerts (replay-storm, busy-rate, key-reused) without a compile
 // error. #1460 added the counter; the `cell` label inherits the assembly
 // closed-set discipline (#1093 / observability.md §HTTP Metrics cell Label) and
@@ -22,7 +22,7 @@
 //     and compare to an independent hardcoded want-set (anti-tautology,
 //     order-insensitive). Enumeration is BY TYPE identity (not name prefix), so a
 //     const renamed off the "State" mnemonic but still typed RequestState is
-//     still counted and a 7th const still fails the count assertion.
+//     still counted and an 8th const still fails the count assertion.
 //   - A2 callsite + assignment guard (DOWNSTREAM): a `type RequestState string`
 //     does NOT stop an inline literal — observeState(ctx, "typo"),
 //     RequestState("typo"), and `var s RequestState = "typo"` all compile. The
@@ -46,8 +46,8 @@
 //     for this rule shape — there is no "looks like but isn't" gap.
 //   - UPSTREAM: MEDIUM, a GO-LANGUAGE CEILING (not a deferred TODO). Go assigns
 //     an untyped literal to a defined string type, so the type system cannot
-//     seal "only these 6 RequestState values exist" from inside the package — an
-//     in-package author can add a 7th const and the compiler does not object.
+//     seal "only these 7 RequestState values exist" from inside the package — an
+//     in-package author can add an 8th const and the compiler does not object.
 //     The A1 archtest is the external frozen-witness. Hard upstream path: enroll
 //     the RequestState value set into the metricschema golden so the freeze is
 //     byte-locked at codegen time, retiring A1 here — SHARED with saga/reconcile
@@ -66,7 +66,7 @@
 //     is the reviewed convention. The funnel guarantees: IF a value flows through
 //     RequestState it is a frozen const — it does not prevent a parallel raw-map
 //     bypass.
-//   - A1 does NOT verify the middleware actually emits one of the 6 in every code
+//   - A1 does NOT verify the middleware actually emits one of the 7 in every code
 //     path (that behavioral coverage is the middleware_test recording-observer
 //     assertions), only that the const VALUE set is frozen.
 //   - Scope is the two named packages. A RequestState const declared elsewhere is
@@ -75,7 +75,7 @@
 //
 // # Reverse self-check (non-vacuous proof)
 //
-// TestIdempotencyStateLabelValuesFrozen01_NegativeControl proves a synthetic 7th
+// TestIdempotencyStateLabelValuesFrozen01_NegativeControl proves a synthetic 8th
 // value / renamed value is detected; the *_CallsiteGuard_Fixtures RED fixtures
 // (inline literal, conversion, foreign const, var relay) prove A2 fires and the
 // GREEN fixture proves it does not over-fire.
@@ -117,6 +117,7 @@ var wantIdempotencyStateValues = []string{
 	"store_error",
 	"oversize",
 	"key_reused",
+	"body_read_failed",
 }
 
 // idempotencyRequestStateType returns the runtime/http/idempotency RequestState
@@ -187,18 +188,18 @@ func TestIdempotencyStateLabelValuesFrozen01(t *testing.T) {
 		t.Fatalf("IDEMPOTENCY-REQUESTS-STATE-LABEL-VALUES-FROZEN-01: RequestState const value set in "+
 			"runtime/http/idempotency drifted from the frozen want-set.\n%s\n"+
 			"The state label value set for idempotency_requests_total is frozen to "+
-			"{acquired,replayed,busy,store_error,oversize,key_reused}. If this change is intentional, "+
+			"{acquired,replayed,busy,store_error,oversize,key_reused,body_read_failed}. If this change is intentional, "+
 			"update ALL sync points in the same PR: (1) wantIdempotencyStateValues here, "+
 			"(2) runtime/http/idempotency/metrics.go RequestState consts + middleware.go emit sites, "+
 			"(3) dashboards/alerts, (4) .claude/rules/gocell/observability.md §HTTP Idempotency state Label.", diff)
 	}
 
-	// Reverse self-check: assert exactly 6 RequestState consts exist (same count
-	// as the want-set). A 7th const would produce an extra entry AND increment
+	// Reverse self-check: assert exactly 7 RequestState consts exist (same count
+	// as the want-set). An 8th const would produce an extra entry AND increment
 	// this count.
 	if len(gotValues) != len(wantIdempotencyStateValues) {
 		t.Errorf("IDEMPOTENCY-REQUESTS-STATE-LABEL-VALUES-FROZEN-01: found %d RequestState string consts, "+
-			"want exactly %d — a 7th const was added without updating the golden; see wantIdempotencyStateValues",
+			"want exactly %d — an 8th const was added without updating the golden; see wantIdempotencyStateValues",
 			len(gotValues), len(wantIdempotencyStateValues))
 	}
 }
@@ -431,20 +432,20 @@ func TestIdempotencyStateLabelValuesFrozen01_CallsiteGuard(t *testing.T) {
 }
 
 // TestIdempotencyStateLabelValuesFrozen01_NegativeControl proves the A1
-// comparison is non-vacuous: a synthetically drifted set (a 7th value, or a
+// comparison is non-vacuous: a synthetically drifted set (an 8th value, or a
 // renamed value) MUST produce a non-empty diff.
 func TestIdempotencyStateLabelValuesFrozen01_NegativeControl(t *testing.T) {
 	t.Parallel()
 
-	// Extra value "fingerprint_pass" — a forbidden 7th label.
+	// Extra value "fingerprint_pass" — a forbidden 8th label.
 	withExtra := append(append([]string(nil), wantIdempotencyStateValues...), "fingerprint_pass")
 	if diff := resultValuesDiff(withExtra, wantIdempotencyStateValues); diff == "" {
-		t.Fatal("IDEMPOTENCY-REQUESTS-STATE-LABEL-VALUES-FROZEN-01 negative control: a set with an extra 7th " +
+		t.Fatal("IDEMPOTENCY-REQUESTS-STATE-LABEL-VALUES-FROZEN-01 negative control: a set with an extra 8th " +
 			"value produced an empty diff — the comparison is vacuous and would not catch a real drift")
 	}
 
 	// Missing value — "key_reused" renamed to "reused".
-	withMissing := []string{"acquired", "replayed", "busy", "store_error", "oversize", "reused"}
+	withMissing := []string{"acquired", "replayed", "busy", "store_error", "oversize", "reused", "body_read_failed"}
 	if diff := resultValuesDiff(withMissing, wantIdempotencyStateValues); diff == "" {
 		t.Fatal("IDEMPOTENCY-REQUESTS-STATE-LABEL-VALUES-FROZEN-01 negative control: a set with 'key_reused' " +
 			"renamed to 'reused' produced an empty diff — the comparison is vacuous")

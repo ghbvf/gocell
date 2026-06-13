@@ -34,10 +34,12 @@ type RequestRulesItem struct {
 
 // RequestRulesItemConditionsItem is a generated DTO for contract http.policy.update.v1.
 type RequestRulesItemConditionsItem struct {
-	Source   string   `json:"source"`
-	Key      string   `json:"key"`
-	Operator string   `json:"operator"`
-	Values   []string `json:"values"`
+	Source    string   `json:"source"`
+	Key       string   `json:"key"`
+	Operator  string   `json:"operator"`
+	Values    []string `json:"values,omitempty"`
+	RHSSource string   `json:"rhsSource,omitempty"`
+	RHSKey    string   `json:"rhsKey,omitempty"`
 }
 
 // RequestRulesItemObligations is a generated DTO for contract http.policy.update.v1.
@@ -71,10 +73,12 @@ type ResponseDataRulesItem struct {
 
 // ResponseDataRulesItemConditionsItem is a generated DTO for contract http.policy.update.v1.
 type ResponseDataRulesItemConditionsItem struct {
-	Source   string   `json:"source"`
-	Key      string   `json:"key"`
-	Operator string   `json:"operator"`
-	Values   []string `json:"values"`
+	Source    string   `json:"source"`
+	Key       string   `json:"key"`
+	Operator  string   `json:"operator"`
+	Values    []string `json:"values,omitempty"`
+	RHSSource string   `json:"rhsSource,omitempty"`
+	RHSKey    string   `json:"rhsKey,omitempty"`
 }
 
 // ResponseDataRulesItemObligations is a generated DTO for contract http.policy.update.v1.

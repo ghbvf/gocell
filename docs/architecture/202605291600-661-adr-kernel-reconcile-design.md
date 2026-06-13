@@ -717,6 +717,34 @@ controller-runtime 对标快照（§2 的 5 个 ref）仍有效，否则先修�
 >   residual 只削弱 **Redis 来源** epoch 的单调 provenance（标 ⚠️ residual，缓解如上 + 迁
 >   PG），不影响 PG 来源 + 写面封闭结论。
 
+> **§Amendment 2026-06-13 (#1953) — lease-TTL 亚毫秒截断威胁登记 + 类型层闭合**：
+> 原 §7 威胁矩阵 **未覆盖** 一条破坏跨副本互斥的新向量：两个 adapter 构造器原以
+> `leaseDuration <= 0` 守卫（放行任意正值），但下游 lease window 以
+> `leaseDuration.Milliseconds()`（整数截断）传给 Redis `PX`/`PEXPIRE` 与 PG
+> `$3 * interval '1 millisecond'`。调用方传 `0 < d < 1ms`（如 500µs）时守卫通过、`Milliseconds()`
+> 返回 `0` → `PX 0` / `expires_at = now()` → **租约写后即失效**，任意跟随者即时 `acquire` →
+> **多 leader 共存**。这**不是** T-DUAL/T-FENCE 覆盖的「leader-election 残余窗口」（那假设 lease
+> 至少持有其 TTL，正确性靠 `FencedWriter`+幂等兜底）；此处 lease **根本不持有**，best-effort
+> 收窄的前提被打掉，是 elector 在**源头**失效。根因：构造器守卫单位（`time.Duration` 全精度）
+> ≠ 下游 wire 单位（毫秒整数），亚毫秒落入缝隙。
+> - **闭合**：引入 sealed 值类型 `reconcile.LeaseTTL`（`kernel/reconcile/leasettl.go`），唯一构造器
+>   `NewLeaseTTL(d)` 在 `d < 1ms` 时 fail-closed；非零 `LeaseTTL` 恒 `ms>=1` → `Milliseconds()`
+>   永不截断为 0。两 adapter 构造器入参 `time.Duration` → `reconcile.LeaseTTL`，旧 `<= 0` 守卫删除。
+> - **评级（funnel 上游/下游分轴，诚实）**：**上游 Hard** —— 未导出 `ms` 字段使包外不可字面构造
+>   非零 `LeaseTTL`（sealed construction 范本），亚毫秒在 `NewLeaseTTL` 不可表达。**下游对现有两个
+>   生产 adapter = Hard** —— 其 lease 字段类型即 `LeaseTTL`，`.Milliseconds()` 编译层绑定到非零恒
+>   ≥1，无 raw `time.Duration` 截断面可达；**对假想未来第三个 adapter 重新引入 raw
+>   `time.Duration`+`.Milliseconds()` = Soft** —— 无 archtest 拦截，仅靠类型惯例 + `LeaseTTL`
+>   godoc `INVARIANT:`。（原稿笼统标「下游 Medium」不精确：现状是类型 Hard、未来缺口是 Soft，无
+>   Medium 这一档。reconciletest fake 是全精度 oracle——以 `now.Add(ttl)` 直存 raw `time.Duration`、
+>   无 ms 截断面、构造器刻意不返错以保测试人体工学，故**不在本 funnel 内**，保留 raw duration 入参。）
+> - **不立 archtest（明确决策）**：`LeaderElector` 生产实现集**闭合**（仅 `adapters/{redis,postgres}`，
+>   规则锁定），守假想「第三个 adapter 重引入截断」边际价值低；ai-robust「不把 bug 修复包装成新治理
+>   机制」。Go 值类型零值 `LeaseTTL{}`（ms=0）是不可消除残留，由两 adapter 构造器 `IsZero()`
+>   fail-fast 兜底（「忘构造」obvious 错误，非原 bug 的 subtle 静默）。
+> - **T-DUAL / T-FENCE 评级不变**：本条恢复「lease 在其 TTL 内真实持有」这一前提，是它们 best-effort
+>   收窄 + `FencedWriter` 兜底所**依赖**的基础，不改其上游/下游 Hard 结论。
+
 A8 删除 `runtime/command.SweeperLifecycle` + `SweepTicker` 命名，`kernel/command.Sweeper` 改为
 实现 `reconcile.Reconciler`：
 

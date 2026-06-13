@@ -22,6 +22,7 @@ func TestOperator_Valid(t *testing.T) {
 		{"OpNotEquals valid", abac.OpNotEquals, true},
 		{"OpIn valid", abac.OpIn, true},
 		{"OpNotIn valid", abac.OpNotIn, true},
+		{"OpEqualsAttr valid", abac.OpEqualsAttr, true},
 		{"out of range invalid", abac.Operator(99), false},
 	}
 	for _, tc := range tests {
@@ -46,6 +47,7 @@ func TestOperator_String(t *testing.T) {
 		{abac.OpNotEquals, "neq"},
 		{abac.OpIn, "in"},
 		{abac.OpNotIn, "not_in"},
+		{abac.OpEqualsAttr, "eq_attr"},
 		{abac.Operator(99), "invalid"},
 	}
 	for _, tc := range tests {
@@ -61,7 +63,7 @@ func TestOperator_String(t *testing.T) {
 func TestOperator_Validate(t *testing.T) {
 	t.Parallel()
 
-	validOps := []abac.Operator{abac.OpEquals, abac.OpNotEquals, abac.OpIn, abac.OpNotIn}
+	validOps := []abac.Operator{abac.OpEquals, abac.OpNotEquals, abac.OpIn, abac.OpNotIn, abac.OpEqualsAttr}
 	for _, op := range validOps {
 		t.Run(op.String(), func(t *testing.T) {
 			t.Parallel()
@@ -95,6 +97,7 @@ func TestParseOperator(t *testing.T) {
 		{"neq round-trips", "neq", abac.OpNotEquals, false},
 		{"in round-trips", "in", abac.OpIn, false},
 		{"not_in round-trips", "not_in", abac.OpNotIn, false},
+		{"eq_attr round-trips", "eq_attr", abac.OpEqualsAttr, false},
 		// unknown codes → error (fail-closed)
 		{"empty string unknown", "", 0, true},
 		{"contains unknown", "contains", 0, true},

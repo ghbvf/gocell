@@ -113,6 +113,9 @@ func RunPolicyRepoConformance(t *testing.T, factory PolicyRepoFactory) {
 	t.Run("RepoReady_OK", func(t *testing.T) {
 		conformPolicyRepoReady(t, factory)
 	})
+	t.Run("CrossAttrCondition_RoundTrip", func(t *testing.T) {
+		conformPolicyCrossAttrConditionRoundTrip(t, factory)
+	})
 }
 
 // conformPolicyRepoReady asserts that a freshly-constructed repository reports
@@ -159,6 +162,74 @@ func conformTestPolicyWithFieldMask(id string, tid tenant.TenantID) *abac.Policy
 	p := conformTestPolicy(id, tid)
 	p.Rules[0].Obligations.FieldMask.Fields = []string{"email", "phone"}
 	return p
+}
+
+// conformTestPolicyWithCrossAttrCondition builds a Policy that contains a
+// cross-attribute condition (OpEqualsAttr, subject.sub == resource.id) so that
+// both mem and PG PolicyRepository implementations must correctly round-trip the
+// RHSSource and RHSKey fields (#1977 Batch C).
+func conformTestPolicyWithCrossAttrCondition(id string, tid tenant.TenantID) *abac.Policy {
+	return &abac.Policy{
+		ID:       id,
+		TenantID: tid,
+		Name:     "CrossAttr Conformance Policy " + id,
+		Rules: []abac.Rule{
+			{
+				ID:     "rule-cross-attr",
+				Name:   "Subject is resource",
+				Effect: authz.EffectAllow,
+				Conditions: []abac.Condition{
+					{
+						Source:    abac.SourceSubject,
+						Key:       "sub",
+						Operator:  abac.OpEqualsAttr,
+						RHSSource: abac.SourceResource,
+						RHSKey:    "id",
+					},
+				},
+			},
+		},
+	}
+}
+
+// conformPolicyCrossAttrConditionRoundTrip asserts that a policy carrying a
+// cross-attribute condition (OpEqualsAttr, RHSSource=resource, RHSKey="id")
+// survives Create→GetByID with RHSSource and RHSKey preserved and Values empty.
+// This is the mem+PG round-trip guard for #1977 Batch C.
+func conformPolicyCrossAttrConditionRoundTrip(t *testing.T, factory PolicyRepoFactory) {
+	t.Parallel()
+	repo := factory(t)
+	ctx := context.Background()
+	p := conformTestPolicyWithCrossAttrCondition("pol-cross-attr", testTenantID)
+
+	created := mustCreate(t, repo, testTenantID, p)
+	if created.Version != 1 {
+		t.Errorf("Create() returned Version = %d, want 1", created.Version)
+	}
+
+	got, err := repo.GetByID(ctx, testTenantID, "pol-cross-attr")
+	if err != nil {
+		t.Fatalf(msgPolicyGetByIDUnexpected, err)
+	}
+	if len(got.Rules) != 1 {
+		t.Fatalf("GetByID(): got %d rules, want 1", len(got.Rules))
+	}
+	if len(got.Rules[0].Conditions) != 1 {
+		t.Fatalf("GetByID(): got %d conditions, want 1", len(got.Rules[0].Conditions))
+	}
+	cond := got.Rules[0].Conditions[0]
+	if cond.Operator != abac.OpEqualsAttr {
+		t.Errorf("GetByID(): Operator = %v, want OpEqualsAttr", cond.Operator)
+	}
+	if cond.RHSSource != abac.SourceResource {
+		t.Errorf("GetByID(): RHSSource = %v, want SourceResource", cond.RHSSource)
+	}
+	if cond.RHSKey != "id" {
+		t.Errorf("GetByID(): RHSKey = %q, want %q", cond.RHSKey, "id")
+	}
+	if len(cond.Values) != 0 {
+		t.Errorf("GetByID(): Values = %v, want empty", cond.Values)
+	}
 }
 
 // mustCreate is a test helper that calls Create and fails the test on error.
