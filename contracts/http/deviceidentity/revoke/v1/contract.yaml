@@ -37,6 +37,9 @@ endpoints:
       422:
         description: "Unprocessable Entity — request body is structurally valid JSON but contains semantic validation errors"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      503:
+        description: "Service Unavailable — CA backend is not reachable"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json
   response: response.schema.json

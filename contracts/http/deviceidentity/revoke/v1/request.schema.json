@@ -2,31 +2,21 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "http.deviceidentity.revoke.v1.request",
   "type": "object",
-  "required": ["serial", "deviceId", "reason"],
+  "required": ["certRef", "deviceId", "reason"],
   "additionalProperties": false,
   "properties": {
-    "serial": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 128
+    "certRef": {
+      "$ref": "../../../../shared/deviceidentity/v1/certificate-identity.schema.json"
     },
     "deviceId": {
       "type": "string",
       "minLength": 1,
       "maxLength": 256
     },
-    "tenantId": {
-      "type": "string",
-      "maxLength": 256
-    },
-    "issuer": {
-      "type": "string",
-      "maxLength": 256
-    },
     "reason": {
       "type": "string",
       "maxLength": 32,
-      "description": "RFC 5280 §5.3.1 CRLReason code. Full standard set retained for provider-neutral alignment; consumers should treat certificateHold/removeFromCRL per RFC 5280 semantics (hold / un-hold), not as permanent revocation.",
+      "description": "RFC 5280 §5.3.1 CRLReason for permanent revocation. removeFromCRL (un-revoke) and the reinstatement path are intentionally excluded — this is a revoke action, not a hold/unhold lifecycle event.",
       "enum": [
         "unspecified",
         "keyCompromise",
@@ -35,7 +25,6 @@
         "superseded",
         "cessationOfOperation",
         "certificateHold",
-        "removeFromCRL",
         "privilegeWithdrawn",
         "aaCompromise"
       ]

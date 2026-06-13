@@ -11,7 +11,7 @@
       "required": [
         "certificate",
         "chain",
-        "serial",
+        "certRef",
         "notBefore",
         "notAfter",
         "epoch",
@@ -21,17 +21,17 @@
         "certificate": {
           "type": "string",
           "maxLength": 16384,
+          "pattern": "^[A-Za-z0-9+/]+={0,2}$",
           "description": "Issued leaf certificate, base64-encoded DER (X.509)."
         },
         "chain": {
           "type": "string",
           "maxLength": 65536,
+          "pattern": "^[A-Za-z0-9+/]+={0,2}$",
           "description": "PKCS#7 certs-only chain (leaf→root), base64-encoded DER."
         },
-        "serial": {
-          "type": "string",
-          "maxLength": 128,
-          "description": "Certificate serial number (hex, RFC 5280 §4.1.2.2)."
+        "certRef": {
+          "$ref": "../../../../shared/deviceidentity/v1/certificate-identity.schema.json"
         },
         "notBefore": {
           "type": "string",
@@ -68,12 +68,9 @@
         },
         "priorSerial": {
           "type": "string",
-          "maxLength": 128
-        },
-        "issuer": {
-          "type": "string",
-          "maxLength": 256,
-          "description": "Issuing CA identifier (provider-neutral; lets a multi-CA consumer correlate this cert to its issuer)."
+          "maxLength": 128,
+          "pattern": "^[0-9A-Fa-f]+$",
+          "description": "Serial of the rotated-out prior certificate (hex, same issuer as certRef; RFC 5280 §4.1.2.2)."
         }
       }
     }

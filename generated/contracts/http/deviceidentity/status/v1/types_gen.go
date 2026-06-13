@@ -18,8 +18,8 @@ import (
 // Request — http.deviceidentity.status.v1.request
 type Request struct {
 	DeviceID string `json:"deviceId"`
+	Issuer   string `json:"issuer,omitempty"`
 	Serial   string `json:"serial,omitempty"`
-	TenantID string `json:"tenantId,omitempty"`
 }
 
 // Response — http.deviceidentity.status.v1.response
@@ -29,9 +29,9 @@ type Response struct {
 
 // ResponseData is a generated DTO for contract http.deviceidentity.status.v1.
 type ResponseData struct {
-	DeviceID string             `json:"deviceId"`
-	Serial   string             `json:"serial"`
-	Status   ResponseDataStatus `json:"status"`
+	DeviceID string               `json:"deviceId"`
+	CertRef  *ResponseDataCertRef `json:"certRef"`
+	Status   ResponseDataStatus   `json:"status"`
 	// format: date-time
 	NotBefore string `json:"notBefore"`
 	// format: date-time
@@ -39,7 +39,6 @@ type ResponseData struct {
 	Epoch    int64  `json:"epoch"`
 	// format: date-time
 	RenewalTime string `json:"renewalTime,omitempty"`
-	Issuer      string `json:"issuer,omitempty"`
 }
 
 // ResponseDataStatus enumerates the closed value-set of the status field.
@@ -69,14 +68,19 @@ const (
 func (i ResponseData) ToMap() map[string]any {
 	return map[string]any{
 		"deviceId":    i.DeviceID,
-		"serial":      i.Serial,
+		"certRef":     i.CertRef,
 		"status":      i.Status,
 		"notBefore":   i.NotBefore,
 		"notAfter":    i.NotAfter,
 		"epoch":       i.Epoch,
 		"renewalTime": i.RenewalTime,
-		"issuer":      i.Issuer,
 	}
+}
+
+// ResponseDataCertRef — deviceidentity.certificateIdentity
+type ResponseDataCertRef struct {
+	Issuer string `json:"issuer"`
+	Serial string `json:"serial"`
 }
 
 // StatusResponseObject is the typed response envelope for

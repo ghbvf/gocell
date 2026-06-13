@@ -18,7 +18,6 @@ import (
 // Request — http.devicestate.v1.request
 type Request struct {
 	DeviceID string `json:"deviceId"`
-	TenantID string `json:"tenantId,omitempty"`
 }
 
 // Response — http.devicestate.v1.response
@@ -30,6 +29,8 @@ type Response struct {
 type ResponseData struct {
 	DeviceID string            `json:"deviceId"`
 	State    ResponseDataState `json:"state"`
+	// format: date-time
+	ObservedAt string `json:"observedAt"`
 	// format: date-time
 	LastSeenAt string `json:"lastSeenAt,omitempty"`
 	TenantID   string `json:"tenantId,omitempty"`
@@ -58,6 +59,7 @@ func (i ResponseData) ToMap() map[string]any {
 	return map[string]any{
 		"deviceId":   i.DeviceID,
 		"state":      i.State,
+		"observedAt": i.ObservedAt,
 		"lastSeenAt": i.LastSeenAt,
 		"tenantId":   i.TenantID,
 	}

@@ -16,16 +16,8 @@
       "maxLength": 256,
       "description": "Tenant identifier; omitted for single-tenant deployments"
     },
-    "issuer": {
-      "type": "string",
-      "maxLength": 256,
-      "description": "Issuing CA identifier"
-    },
-    "serial": {
-      "type": "string",
-      "pattern": "\\S",
-      "maxLength": 128,
-      "description": "Non-blank certificate serial number"
+    "certRef": {
+      "$ref": "../../../../shared/deviceidentity/v1/certificate-identity.schema.json"
     },
     "reason": {
       "type": "string",
@@ -37,11 +29,10 @@
         "superseded",
         "cessationOfOperation",
         "certificateHold",
-        "removeFromCRL",
         "privilegeWithdrawn",
         "aaCompromise"
       ],
-      "description": "RFC 5280 §5.3.1 CRLReason code. Full standard set retained for provider-neutral alignment; consumers should treat certificateHold/removeFromCRL per RFC 5280 semantics (hold / un-hold), not as permanent revocation."
+      "description": "RFC 5280 §5.3.1 CRLReason for permanent revocation. removeFromCRL (un-revoke) and the reinstatement path are intentionally excluded — this is a revoke action, not a hold/unhold lifecycle event."
     },
     "revokedAt": {
       "type": "string",
@@ -57,7 +48,7 @@
   },
   "required": [
     "deviceId",
-    "serial",
+    "certRef",
     "reason",
     "revokedAt",
     "actorId"

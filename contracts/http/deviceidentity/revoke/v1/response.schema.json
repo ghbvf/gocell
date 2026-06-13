@@ -9,14 +9,13 @@
     "data": {
       "type": "object",
       "required": [
-        "serial",
+        "certRef",
         "status",
         "revokedAt"
       ],
       "properties": {
-        "serial": {
-          "type": "string",
-          "maxLength": 128
+        "certRef": {
+          "$ref": "../../../../shared/deviceidentity/v1/certificate-identity.schema.json"
         },
         "status": {
           "type": "string",
@@ -33,6 +32,7 @@
         },
         "reason": {
           "type": "string",
+          "description": "RFC 5280 §5.3.1 CRLReason for permanent revocation. removeFromCRL (un-revoke) and the reinstatement path are intentionally excluded — this is a revoke action, not a hold/unhold lifecycle event.",
           "enum": [
             "unspecified",
             "keyCompromise",
@@ -41,7 +41,6 @@
             "superseded",
             "cessationOfOperation",
             "certificateHold",
-            "removeFromCRL",
             "privilegeWithdrawn",
             "aaCompromise"
           ]

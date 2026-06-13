@@ -5,7 +5,9 @@ consistencyLevel: L0
 lifecycle: draft
 description: |
   GET status by deviceId; when the optional `serial` query param is omitted, returns the device's
-  current active certificate (highest epoch). ref: docs/architecture/202606130635-1939-adr-framework-owned-contract.md
+  current active certificate (highest epoch). A certificate identity is issuer + serial (RFC 5280):
+  pass both `serial` and `issuer` to disambiguate a specific cert in a multi-CA deployment.
+  ref: docs/architecture/202606130635-1939-adr-framework-owned-contract.md
 endpoints:
   server: _framework
   clients: []
@@ -24,7 +26,7 @@ endpoints:
         type: string
         required: false
         maxLength: 128
-      tenantId:
+      issuer:
         type: string
         required: false
         maxLength: 256

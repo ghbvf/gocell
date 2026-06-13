@@ -19,7 +19,6 @@ type Request struct {
 	Csr               string                  `json:"csr"`
 	DeviceID          string                  `json:"deviceId"`
 	PriorSerial       string                  `json:"priorSerial"`
-	TenantID          string                  `json:"tenantId,omitempty"`
 	RequestedDuration string                  `json:"requestedDuration,omitempty"`
 	Usages            []string                `json:"usages,omitempty"`
 	SubjectAltNames   *RequestSubjectAltNames `json:"subjectAltNames,omitempty"`
@@ -40,9 +39,9 @@ type Response struct {
 
 // ResponseData is a generated DTO for contract http.deviceidentity.renew.v1.
 type ResponseData struct {
-	Certificate string `json:"certificate"`
-	Chain       string `json:"chain"`
-	Serial      string `json:"serial"`
+	Certificate string               `json:"certificate"`
+	Chain       string               `json:"chain"`
+	CertRef     *ResponseDataCertRef `json:"certRef"`
 	// format: date-time
 	NotBefore string `json:"notBefore"`
 	// format: date-time
@@ -51,7 +50,6 @@ type ResponseData struct {
 	Status      ResponseDataStatus `json:"status"`
 	DeviceID    string             `json:"deviceId,omitempty"`
 	PriorSerial string             `json:"priorSerial,omitempty"`
-	Issuer      string             `json:"issuer,omitempty"`
 }
 
 // ResponseDataStatus enumerates the closed value-set of the status field.
@@ -69,6 +67,12 @@ const (
 	ResponseDataStatusRevoked    ResponseDataStatus = "revoked"
 	ResponseDataStatusExpired    ResponseDataStatus = "expired"
 )
+
+// ResponseDataCertRef — deviceidentity.certificateIdentity
+type ResponseDataCertRef struct {
+	Issuer string `json:"issuer"`
+	Serial string `json:"serial"`
+}
 
 // RenewResponseObject is the typed response envelope for
 // http.deviceidentity.renew.v1. Service.Renew must return one of the

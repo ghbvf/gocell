@@ -78,19 +78,19 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	req.Issuer = r.URL.Query().Get("issuer")
+	if len(req.Issuer) > 256 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(errcode.PublicString("field", "issuer"), errcode.PublicString("reason", "invalid"))))
+		return
+	}
+
 	req.Serial = r.URL.Query().Get("serial")
 	if len(req.Serial) > 128 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
 			errcode.WithDetails(errcode.PublicString("field", "serial"), errcode.PublicString("reason", "invalid"))))
-		return
-	}
-
-	req.TenantID = r.URL.Query().Get("tenantId")
-	if len(req.TenantID) > 256 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"validation: invalid request parameter",
-			errcode.WithDetails(errcode.PublicString("field", "tenantId"), errcode.PublicString("reason", "invalid"))))
 		return
 	}
 	resp, err := h.svc.Status(r.Context(), req)

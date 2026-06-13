@@ -77,14 +77,6 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 			errcode.WithDetails(errcode.PublicString("field", "deviceId"), errcode.PublicString("reason", "invalid"))))
 		return
 	}
-
-	req.TenantID = r.URL.Query().Get("tenantId")
-	if len(req.TenantID) > 256 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"validation: invalid request parameter",
-			errcode.WithDetails(errcode.PublicString("field", "tenantId"), errcode.PublicString("reason", "invalid"))))
-		return
-	}
 	resp, err := h.svc.Devicestate(r.Context(), req)
 	if err != nil {
 		httputil.WriteError(r.Context(), w, err)

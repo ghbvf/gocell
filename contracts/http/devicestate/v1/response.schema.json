@@ -10,7 +10,8 @@
       "type": "object",
       "required": [
         "deviceId",
-        "state"
+        "state",
+        "observedAt"
       ],
       "properties": {
         "deviceId": {
@@ -24,6 +25,12 @@
             "offline",
             "unknown"
           ]
+        },
+        "observedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "Time this presence reading was determined (freshness anchor); always present even when state is unknown."
         },
         "lastSeenAt": {
           "type": "string",

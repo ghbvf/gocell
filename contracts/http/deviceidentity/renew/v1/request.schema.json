@@ -9,6 +9,7 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 16384,
+      "pattern": "^[A-Za-z0-9+/]+={0,2}$",
       "description": "Base64-encoded PKCS#10 DER certificate signing request."
     },
     "deviceId": {
@@ -19,11 +20,8 @@
     "priorSerial": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 128
-    },
-    "tenantId": {
-      "type": "string",
-      "maxLength": 256
+      "maxLength": 128,
+      "pattern": "^[0-9A-Fa-f]+$"
     },
     "requestedDuration": {
       "type": "string",

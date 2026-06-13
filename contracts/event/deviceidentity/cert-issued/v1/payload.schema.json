@@ -16,16 +16,8 @@
       "maxLength": 256,
       "description": "Tenant identifier; omitted for single-tenant deployments"
     },
-    "issuer": {
-      "type": "string",
-      "maxLength": 256,
-      "description": "Issuing CA identifier"
-    },
-    "serial": {
-      "type": "string",
-      "pattern": "\\S",
-      "maxLength": 128,
-      "description": "Non-blank certificate serial number"
+    "certRef": {
+      "$ref": "../../../../shared/deviceidentity/v1/certificate-identity.schema.json"
     },
     "epoch": {
       "type": "integer",
@@ -57,7 +49,7 @@
   },
   "required": [
     "deviceId",
-    "serial",
+    "certRef",
     "epoch",
     "notBefore",
     "notAfter",

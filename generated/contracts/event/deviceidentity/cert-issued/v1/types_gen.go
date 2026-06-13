@@ -5,11 +5,10 @@ package certissued
 
 // Payload — event.deviceidentity.cert-issued.v1.payload
 type Payload struct {
-	DeviceID string `json:"deviceId"`
-	TenantID string `json:"tenantId,omitempty"`
-	Issuer   string `json:"issuer,omitempty"`
-	Serial   string `json:"serial"`
-	Epoch    int64  `json:"epoch"`
+	DeviceID string          `json:"deviceId"`
+	TenantID string          `json:"tenantId,omitempty"`
+	CertRef  *PayloadCertRef `json:"certRef"`
+	Epoch    int64           `json:"epoch"`
 	// format: date-time
 	NotBefore string `json:"notBefore"`
 	// format: date-time
@@ -27,6 +26,12 @@ const (
 	PayloadActionEnrolled PayloadAction = "enrolled"
 	PayloadActionRenewed  PayloadAction = "renewed"
 )
+
+// PayloadCertRef — deviceidentity.certificateIdentity
+type PayloadCertRef struct {
+	Issuer string `json:"issuer"`
+	Serial string `json:"serial"`
+}
 
 // Headers — event.deviceidentity.cert-issued.v1.headers
 type Headers struct {

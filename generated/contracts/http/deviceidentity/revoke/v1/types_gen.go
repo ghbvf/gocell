@@ -16,11 +16,9 @@ import (
 
 // Request — http.deviceidentity.revoke.v1.request
 type Request struct {
-	Serial   string        `json:"serial"`
-	DeviceID string        `json:"deviceId"`
-	TenantID string        `json:"tenantId,omitempty"`
-	Issuer   string        `json:"issuer,omitempty"`
-	Reason   RequestReason `json:"reason"`
+	CertRef  *RequestCertRef `json:"certRef"`
+	DeviceID string          `json:"deviceId"`
+	Reason   RequestReason   `json:"reason"`
 }
 
 // RequestReason enumerates the closed value-set of the reason field.
@@ -36,10 +34,15 @@ const (
 	RequestReasonSuperseded           RequestReason = "superseded"
 	RequestReasonCessationOfOperation RequestReason = "cessationOfOperation"
 	RequestReasonCertificateHold      RequestReason = "certificateHold"
-	RequestReasonRemoveFromCRL        RequestReason = "removeFromCRL"
 	RequestReasonPrivilegeWithdrawn   RequestReason = "privilegeWithdrawn"
 	RequestReasonAaCompromise         RequestReason = "aaCompromise"
 )
+
+// RequestCertRef — deviceidentity.certificateIdentity
+type RequestCertRef struct {
+	Issuer string `json:"issuer"`
+	Serial string `json:"serial"`
+}
 
 // Response — http.deviceidentity.revoke.v1.response
 type Response struct {
@@ -48,9 +51,9 @@ type Response struct {
 
 // ResponseData is a generated DTO for contract http.deviceidentity.revoke.v1.
 type ResponseData struct {
-	Serial string             `json:"serial"`
-	Status ResponseDataStatus `json:"status"`
-	Reason ResponseDataReason `json:"reason,omitempty"`
+	CertRef *ResponseDataCertRef `json:"certRef"`
+	Status  ResponseDataStatus   `json:"status"`
+	Reason  ResponseDataReason   `json:"reason,omitempty"`
 	// format: date-time
 	RevokedAt string `json:"revokedAt"`
 }
@@ -84,10 +87,15 @@ const (
 	ResponseDataReasonSuperseded           ResponseDataReason = "superseded"
 	ResponseDataReasonCessationOfOperation ResponseDataReason = "cessationOfOperation"
 	ResponseDataReasonCertificateHold      ResponseDataReason = "certificateHold"
-	ResponseDataReasonRemoveFromCRL        ResponseDataReason = "removeFromCRL"
 	ResponseDataReasonPrivilegeWithdrawn   ResponseDataReason = "privilegeWithdrawn"
 	ResponseDataReasonAaCompromise         ResponseDataReason = "aaCompromise"
 )
+
+// ResponseDataCertRef — deviceidentity.certificateIdentity
+type ResponseDataCertRef struct {
+	Issuer string `json:"issuer"`
+	Serial string `json:"serial"`
+}
 
 // RevokeResponseObject is the typed response envelope for
 // http.deviceidentity.revoke.v1. Service.Revoke must return one of the
@@ -209,5 +217,18 @@ type Revoke422ErrorResponse struct {
 
 func (r Revoke422ErrorResponse) visitRevokeResponse(ctx context.Context, w http.ResponseWriter) error {
 	httputil.WriteErrorWithStatus(ctx, w, 422, &r.Body)
+	return nil
+}
+
+// Revoke503ErrorResponse renders an HTTP 503 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Revoke503ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Revoke503ErrorResponse) visitRevokeResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 503, &r.Body)
 	return nil
 }

@@ -5,11 +5,10 @@ package certrevoked
 
 // Payload — event.deviceidentity.cert-revoked.v1.payload
 type Payload struct {
-	DeviceID string        `json:"deviceId"`
-	TenantID string        `json:"tenantId,omitempty"`
-	Issuer   string        `json:"issuer,omitempty"`
-	Serial   string        `json:"serial"`
-	Reason   PayloadReason `json:"reason"`
+	DeviceID string          `json:"deviceId"`
+	TenantID string          `json:"tenantId,omitempty"`
+	CertRef  *PayloadCertRef `json:"certRef"`
+	Reason   PayloadReason   `json:"reason"`
 	// format: date-time
 	RevokedAt string `json:"revokedAt"`
 	ActorID   string `json:"actorId"`
@@ -28,10 +27,15 @@ const (
 	PayloadReasonSuperseded           PayloadReason = "superseded"
 	PayloadReasonCessationOfOperation PayloadReason = "cessationOfOperation"
 	PayloadReasonCertificateHold      PayloadReason = "certificateHold"
-	PayloadReasonRemoveFromCRL        PayloadReason = "removeFromCRL"
 	PayloadReasonPrivilegeWithdrawn   PayloadReason = "privilegeWithdrawn"
 	PayloadReasonAaCompromise         PayloadReason = "aaCompromise"
 )
+
+// PayloadCertRef — deviceidentity.certificateIdentity
+type PayloadCertRef struct {
+	Issuer string `json:"issuer"`
+	Serial string `json:"serial"`
+}
 
 // Headers — event.deviceidentity.cert-revoked.v1.headers
 type Headers struct {

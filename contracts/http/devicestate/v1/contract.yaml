@@ -21,10 +21,6 @@ endpoints:
         type: string
         required: true
         maxLength: 256
-      tenantId:
-        type: string
-        required: false
-        maxLength: 256
     responses:
       400:
         description: "Bad request — missing required query parameter or invalid format"

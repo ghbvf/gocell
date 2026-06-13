@@ -10,7 +10,7 @@
       "type": "object",
       "required": [
         "deviceId",
-        "serial",
+        "certRef",
         "status",
         "notBefore",
         "notAfter",
@@ -21,9 +21,8 @@
           "type": "string",
           "maxLength": 256
         },
-        "serial": {
-          "type": "string",
-          "maxLength": 128
+        "certRef": {
+          "$ref": "../../../../shared/deviceidentity/v1/certificate-identity.schema.json"
         },
         "status": {
           "type": "string",
@@ -56,11 +55,6 @@
           "type": "string",
           "format": "date-time",
           "maxLength": 64
-        },
-        "issuer": {
-          "type": "string",
-          "maxLength": 256,
-          "description": "Issuing CA identifier (provider-neutral; lets a multi-CA consumer correlate this cert to its issuer)."
         }
       }
     }
