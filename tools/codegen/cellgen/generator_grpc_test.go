@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -52,10 +53,114 @@ func buildGRPCProject() *metadata.ProjectMeta {
 			GRPC: &metadata.GRPCTransportMeta{
 				Service: "device.command.v1.DeviceCommandService",
 				Proto:   "contracts/grpc/device/command/v1/device_command.proto",
+				// Per-method public overlay (#1675): IssueCommand is JWT-exempt, so
+				// the golden must carry PublicMethods for the full method name.
+				Methods: []metadata.GRPCMethodMeta{{Name: "IssueCommand", Public: true}},
 			},
 		},
 	}
 	return fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{contract})
+}
+
+// TestBuildGrpcServiceSpecFromCU_PublicMethods verifies the per-method public
+// overlay (#1675) is composed into GrpcServiceGenSpec.PublicMethods as full
+// method names (/{service}/{name}), only for public:true entries. A public:false
+// (or absent) entry contributes nothing — keeping the fail-closed default.
+func TestBuildGrpcServiceSpecFromCU_PublicMethods(t *testing.T) {
+	t.Parallel()
+
+	cell := &metadata.CellMeta{
+		ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
+	contract := &metadata.ContractMeta{
+		ID: "grpc.device.command.v1", Kind: "grpc",
+		Endpoints: metadata.EndpointsMeta{
+			Server: "demo",
+			GRPC: &metadata.GRPCTransportMeta{
+				Service: "device.command.v1.DeviceCommandService",
+				Proto:   "contracts/grpc/device/command/v1/device_command.proto",
+				// Mixed overlay: only the public:true entry contributes; the
+				// public:false entry is excluded (fail-closed default).
+				Methods: []metadata.GRPCMethodMeta{
+					{Name: "IssueCommand", Public: true},
+					{Name: "WatchCommands", Public: false},
+				},
+			},
+		},
+	}
+	cu := metadata.ContractUsage{Contract: "grpc.device.command.v1", Role: "serve"}
+	slc := &metadata.SliceMeta{
+		ID: "command", BelongsToCell: "demo", Dir: "command",
+		File:           "cells/demo/slices/command/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{cu},
+	}
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{contract})
+
+	got, err := buildGrpcServiceSpecFromCU(p, "demo", "command", cu, idxOf(map[string]string{"command": "commandServer"}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"/device.command.v1.DeviceCommandService/IssueCommand"}
+	if !slices.Equal(got.PublicMethods, want) {
+		t.Errorf("PublicMethods = %v, want %v (public:false entry must be excluded)", got.PublicMethods, want)
+	}
+}
+
+// TestEnrichGrpcServices_BogusOverlayMethodRejected proves the cellgen path
+// (gocell generate cell) fail-closes a public-method overlay entry that names an
+// RPC absent from the proto service — the sibling of contractgen's
+// validateGRPCMethodOverlay, so generate-cell alone can't render an inert public
+// entry (#1675 review F3). The synth proto exposes only IssueCommand.
+func TestEnrichGrpcServices_BogusOverlayMethodRejected(t *testing.T) {
+	t.Parallel()
+	root := synthGRPCRoot(t)
+
+	pm := buildGRPCProject()
+	pm.Contracts["grpc.device.command.v1"].Endpoints.GRPC.Methods = []metadata.GRPCMethodMeta{
+		{Name: "BogusRPC", Public: true},
+	}
+	spec, err := BuildCellSpec(pm, "demo", markergen.WireBundle{}, idxOf(map[string]string{"command": "commandServer"}))
+	if err != nil {
+		t.Fatalf("BuildCellSpec: %v", err)
+	}
+	err = EnrichGrpcServicesWithProtoInfo(spec, root)
+	if err == nil || !strings.Contains(err.Error(), "not an RPC of the proto service") {
+		t.Fatalf("expected referential rejection of bogus overlay method, got %v", err)
+	}
+}
+
+// TestRenderCell_GRPC_NoOverlay_OmitsPublicMethods covers the template's
+// {{- if .PublicMethods }} FALSE arm: a grpc contract with no methods overlay must
+// render a GRPCServiceSpec WITHOUT a PublicMethods field (fail-closed default).
+// Guards against a regression where the template emits an empty PublicMethods slice.
+func TestRenderCell_GRPC_NoOverlay_OmitsPublicMethods(t *testing.T) {
+	t.Parallel()
+	root := synthGRPCRoot(t)
+
+	// buildGRPCProject() declares an overlay; strip it for the no-overlay arm.
+	pm := buildGRPCProject()
+	pm.Contracts["grpc.device.command.v1"].Endpoints.GRPC.Methods = nil
+
+	spec, err := BuildCellSpec(pm, "demo", markergen.WireBundle{}, idxOf(map[string]string{"command": "commandServer"}))
+	if err != nil {
+		t.Fatalf("BuildCellSpec: %v", err)
+	}
+	if err := EnrichGrpcServicesWithProtoInfo(spec, root); err != nil {
+		t.Fatalf("EnrichGrpcServicesWithProtoInfo: %v", err)
+	}
+	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
+		TemplateName: "cell.tmpl",
+		Templates:    templates,
+		Data:         spec,
+		Filename:     "demo/cell_gen.go",
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if bytes.Contains(out, []byte("PublicMethods")) {
+		t.Errorf("no-overlay grpc cell must omit the PublicMethods field, got:\n%s", out)
+	}
 }
 
 // TestBuildGrpcServiceSpecFromCU exercises buildGrpcServiceSpecFromCU in

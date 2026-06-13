@@ -577,6 +577,102 @@ missing_caller_cell / invalid_caller_cell）短时高峰。零星失败正常（
 
 ---
 
+## Auth PDP 决策可观测性（#2027）
+
+业务端点的 ABAC PDP（policy decision point）决策由 `observableAuthorizer` 装饰器（composition
+root 在配置了真实 metrics `Provider` 时包裹 primary Authorizer）发射两个指标，覆盖
+`enforcePermission` 经 `auth.RequirePermission` / `RequirePermissionForResource` 触发的每次
+`Authorize` 调用：
+
+| Metric (registered name) | 类型 | 含义 |
+|---|---|---|
+| `auth_pdp_decision_total{action, decision}` | Counter | 每次 PDP 决策计数 |
+| `auth_pdp_decision_duration_seconds{decision}` | Histogram | 单次 PDP 决策（policy-store load + evaluate）墙钟耗时 |
+
+`action` = sealed `authz.Permission` 拼写（如 `audit:read`、`user:read`），值集由 Permission
+registry 封闭。`decision` 值集冻结为 3 个（archtest `AUTHZ-PDP-DECISION-LABEL-VALUES-FROZEN-01` 守）：
+
+| decision | 语义 | 典型 HTTP |
+|---|---|---|
+| `allow` | PDP 放行（permit） | 2xx |
+| `deny` | 拒绝：policy 拒绝（无适用 permit / forbid-wins / default-deny），**或** auth-context 拒绝（缺租户 / 无 principal，`KindPermissionDenied`/`KindUnauthenticated`） | 403/401 |
+| `error` | `Authorize` 返**基础设施/意外**错误（policy store 不可达 `KindUnavailable`，或未分类），fail-closed —— **不含**缺租户等 403/401（那归 `deny`，#2077 F2） | 503/500 |
+
+> 仅当 composition root 配置真实 `Provider` 且装配了 primary Authorizer 时才有时间序列；无
+> Provider 时装饰器不接线（fail-open，metric 不发射，授权判定不受影响）。
+
+**rule_id 归因**：每次决策另由 `authorizationdecide` slice 落一条结构化日志
+`"authorization decision"`，带 `matched_rule_id` 字段（allow 与 deny 均为 **Debug** 级——该日志
+含 `subject`/`resource`（UUID），是按需的单次归因细节，不常驻）。`matched_rule_id` 区分授权来源，
+例如 `baseline-user-read-self`（self via ownership）vs `baseline-user-read-admin`（admin via
+baseline）；default-deny 记 `_default-deny` 哨兵。**始终在线**的粗粒度 deny 可见性由两处提供：
+`RequirePermission` 的 Info 日志 `"authz: permission denied by PDP"`（含 subject/path/permission/
+reason）+ 上面的 `auth_pdp_decision_total{decision="deny"}` deny-rate 指标。需要按单次决策定位具体
+命中规则时，临时把 `authorizationdecide` 的 log level 调到 Debug（注意 Debug 日志含 subject/resource，
+遵循 PII 访问审计规范）。
+
+### GoCellAuthPDPDenyRateHigh
+
+PDP deny 速率短时偏高：可能是租户 policy 误配、客户端越权扫描，或某 action 的 baseline 门禁
+回归。按 action 分组定位。
+
+```yaml
+- alert: GoCellAuthPDPDenyRateHigh
+  expr: |
+    sum(rate(gocell_auth_pdp_decision_total{decision="deny"}[5m])) by (action) > 1
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "PDP authorization deny rate high (action={{ $labels.action }})"
+    description: |
+      PDP deny rate for action {{ $labels.action }} exceeds 1/sec for 5m.
+      Likely causes: tenant policy misconfiguration, unauthorized scan, or a baseline
+      gate regression. For per-decision rule attribution, temporarily raise the
+      authorizationdecide log level to Debug and inspect "authorization decision"
+      (matched_rule_id distinguishes default-deny vs an explicit forbid rule); the
+      always-on coarse deny signal is RequirePermission's Info "authz: permission denied
+      by PDP". Inspect the tenant's ABAC policy set. Compare with the decision="error"
+      rate (infra-only) to rule out store failure.
+```
+
+### GoCellAuthPDPStoreError
+
+`decision="error"` = PDP `Authorize` 的**基础设施/意外错误**（policy store 不可达 `KindUnavailable`
+→ 503，或未分类异常）。**策略/鉴权上下文拒绝**（缺租户 scope / 无 principal，PDP 返
+`KindPermissionDenied` / `KindUnauthenticated` → 403/401）归类为 `decision="deny"`、**不计入
+`error`**（#2077 F2）——故本 critical 告警只 page 真实 store 故障，不会被普通客户端鉴权失败（缺
+`X-Tenant-ID` / JWT 无 tenant claim）误触。`for: 2m` 与其他 critical 基础设施告警（如 MQTT DLX）对齐。
+
+```yaml
+- alert: GoCellAuthPDPStoreError
+  expr: sum(rate(gocell_auth_pdp_decision_total{decision="error"}[5m])) > 0
+  for: 2m
+  labels:
+    severity: critical
+  annotations:
+    summary: "PDP authorization errors (fail-closed)"
+    description: |
+      The PDP hit an infra/unexpected error (policy store unavailable, KindUnavailable
+      → 503, or an unclassified error) — each such request is denied fail-closed.
+      Policy / auth-context denials (tenant scope missing, no principal → 403/401) are
+      classified decision="deny", NOT "error", so this critical alert pages only on real
+      store outages. Check policy-store (PG) readiness; cross-reference
+      gocell_auth_pdp_decision_duration_seconds.
+```
+
+### 调试 PromQL
+
+```promql
+# PDP 决策分布（按 action / decision）
+sum(rate(gocell_auth_pdp_decision_total[5m])) by (action, decision)
+
+# PDP 决策 p95 延迟（policy-store load + evaluate）
+histogram_quantile(0.95, sum(rate(gocell_auth_pdp_decision_duration_seconds_bucket[5m])) by (le, decision))
+```
+
+---
+
 ## Event Router / Outbox Consumer 可观测性（D3a-1 新增）
 
 以下规则覆盖 D3a-1 PR #589 引入的 6 个新 metric family。
@@ -1516,6 +1612,25 @@ probe 没有形如 `gocell_..._total` 的专属告警序列；它复用既有的
         2. Ensure deploy/postgres/init/10-restricted-role.sh ran on the target DB
            (role must exist before corebundle connects).
         3. Restart corebundle; the probe turns green within the first readyz cycle.
+      Sub-scenario — audit_admin_read_all policy missing while gocell_audit_admin role
+      is present: schema_guard.VerifyExpectedShape fails (503) because migration 065's
+      RLS policy is absent despite the role existing (the role was provisioned after
+      goose applied migration 065). Remediation: goose will NOT re-run an already-recorded
+      migration. Run the following SQL as the database owner (gocell role) instead:
+        DO $$
+        BEGIN
+          IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gocell_audit_admin') THEN
+            IF NOT EXISTS (
+              SELECT 1 FROM pg_policies
+              WHERE tablename = 'audit_entries' AND policyname = 'audit_admin_read_all'
+            ) THEN
+              EXECUTE 'CREATE POLICY audit_admin_read_all ON audit_entries
+                       FOR SELECT TO gocell_audit_admin USING (true)';
+              EXECUTE 'GRANT SELECT ON audit_entries TO gocell_audit_admin';
+            END IF;
+          END IF;
+        END $$;
+      Then restart corebundle; the probe turns green on the next readyz cycle.
       See: docs/architecture/202606071200-1676-adr-restricted-app-serving-pool.md
            docs/ops/local-docker-deploy.md §Dual-role PostgreSQL
 ```

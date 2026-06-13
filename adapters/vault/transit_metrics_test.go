@@ -237,8 +237,6 @@ func scrapeGauge(t *testing.T, rec *recordingProvider, name string) float64 {
 
 // scrapeCounterVec returns the recorded value of a CounterVec sample matching the
 // given label set exactly. Fatals if the label set is not found.
-//
-//nolint:unparam // metric name parameterised for parity with scrapeCounter/scrapeGauge
 func scrapeCounterVec(t *testing.T, rec *recordingProvider, name string, labels map[string]string) float64 {
 	t.Helper()
 	v, ok := rec.value(name, labels)

@@ -102,6 +102,14 @@ type GrpcServiceGenSpec struct {
 	// PbAlias is the import alias for PbImportPath in cell_gen.go,
 	// e.g. "grpc0", "grpc1". Set by EnrichGrpcServicesWithProtoInfo.
 	PbAlias string
+	// PublicMethods lists the FULL method names (/{Service}/{Method}) marked
+	// JWT-exempt by the contract's endpoints.grpc.methods[] overlay (the
+	// public:true entries, #1675). Composed in buildGrpcServiceSpecFromCU from the
+	// overlay + Service FQN; rendered into the generated GRPCServiceSpec literal so
+	// the runtime registrar aggregates them into the auth interceptor's bypass set.
+	// Empty → no public methods (the fail-closed default). Referential integrity
+	// (each name ∈ proto method set) is enforced by the contractgen pre-pass.
+	PublicMethods []string
 }
 
 // RouteGroupGenSpec describes one reg.RouteGroup() call.

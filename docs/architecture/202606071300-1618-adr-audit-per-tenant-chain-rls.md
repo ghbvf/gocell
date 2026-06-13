@@ -303,8 +303,61 @@ is real via `AUDIT-QUERY-TENANT-PARAM-01`); rating is restated as Hard-caller /
 Medium-signature, accurately. F5 (status) and F7 (additive marker) do not touch any
 isolation boundary — they are presentation-layer (HTTP status / wire field) changes.
 
+## Amendment 2026-06-13 — super-admin cross-tenant audit read shipped (#1810)
+
+The "cross-tenant audit read is **deferred to backlog**" decision in the
+*Amendment 2026-06-08 — merge with PR-5* section above (and the parallel deferral
+in *Deliberate scoping* §"startup tail-verify") is **superseded for the read
+path** by #1810. The deferral's root cause — "the NOBYPASSRLS `gocell_app` serving
+role cannot enumerate tenants" — is resolved WITHOUT relaxing that role:
+
+- A dedicated PG role `gocell_audit_admin` (still **NOSUPERUSER NOBYPASSRLS**) gets
+  a **role-scoped permissive** RLS SELECT policy `audit_admin_read_all ON
+  audit_entries FOR SELECT TO gocell_audit_admin USING (true)` (migration 065,
+  role-guarded no-op idiom). PostgreSQL permissive policies are OR-ed and a
+  role-listed policy applies ONLY to that role, so this role reads every tenant
+  while `gocell_app`'s effective predicate + FORCE RLS are **byte-for-byte
+  unchanged**. Cross-tenant visibility comes from an explicit, auditable
+  `pg_policy` row — NOT from `BYPASSRLS` — so ADR `202606071200-1676`'s
+  no-BYPASSRLS invariant is preserved (see its 2026-06-13 amendment).
+- The auditquery super-admin path now routes to `Service.QueryCrossTenant` backed
+  by `adapters/postgres.AuditCrossTenantStore` on a dedicated admin pool (single
+  predicate-free query over both namespace chains + keyset pagination), instead of
+  fail-closing to 501. The serving-pool `Store.Query`/`GetBySeq` **keep**
+  fail-closing `RowScopeAll` (`RowScopeAllUnsupportedError`) as defense in depth.
+- The admin read path is **optional**: when `GOCELL_AUDIT_ADMIN_DSN` /
+  `gocell_audit_admin` is not provisioned, super-admin reads stay fail-closed at
+  HTTP 501 (graceful, never fail-open).
+- `schema_guard.verifyRLSPolicy` is re-scoped to expect `audit_admin_read_all`
+  **only when** the role is provisioned; the #1622-F1 "no unexpected permissive
+  policy" guard is otherwise intact (synthetic-red test proves it).
+
+**Still deferred (NOT in #1810):** the *startup full per-tenant chain verify*
+(admin full-chain verify tool) remains backlog — #1810 unblocks its enumeration
+prerequisite (the admin pool can now `SELECT DISTINCT tenant_id`) but does not
+build the verify tool. `GetBySeq`/`Tail`/`Verify` cross-tenant stay out of scope
+(no HTTP surface exposes them).
+
+**Threat-matrix re-evaluation (per ai-robust "ADR amendment 落地必查"):** no cell
+flips to ⚠️/❌. The **TENANT** boundary is *unchanged for the serving role* (the
+role-scoped policy does not widen `gocell_app`; an integration test asserts
+`gocell_app` still cannot read another tenant's rows). The cross-tenant read is a
+NEW, narrowly-scoped capability on a SEPARATE privileged-read role, gated by a
+**Hard typed funnel**: `QueryCrossTenant` takes the sealed
+`tenant.CrossTenantVisibility` (#1760), so it is uncallable without the audited
+`(*auth.Principal).CrossTenantVisibility` derivation (mandatory FR-007 audit, emitted
+exactly once per request). The **Write surface** is unaffected (the admin role has
+SELECT only). Regression guards: `runtime/audit/ledger/storetest`
+`RunCrossTenantQueryConformance` (mem + PG), the `gocell_app`-cannot-read-cross-tenant
+RLS role-boundary integration test, `schema_guard` role-present/absent + unexpected-policy
+tests, and `auditquery` super-admin 200/501 + single-FR-007-audit handler tests.
+
 ## References
 
-- Migration: `adapters/postgres/migrations/055_audit_entries_per_tenant_rls.sql`
+- Migration: `adapters/postgres/migrations/055_audit_entries_per_tenant_rls.sql`,
+  `065_audit_admin_read_role.sql` (#1810 role-scoped admin read policy)
 - RLS templates: 052 (config) / 053 (accesscore); restricted role: ADR `202606071200-1676`
+- Cross-tenant read (#1810): ADR `202606131900-1810-adr-super-admin-cross-tenant-audit-read`
+- Sealed cross-tenant obligation (#1760): `pkg/tenant/rowvisibility.go`,
+  `tools/archtest/rowscopeall_audit_funnel_test.go` (`ROWSCOPEALL-AUDIT-FUNNEL-01`)
 - Rule index: `.claude/rules/gocell/tenancy.md`

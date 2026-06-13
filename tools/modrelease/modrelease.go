@@ -16,8 +16,8 @@
 //
 // # Keep replace (NOT stripped)
 //
-// The local `replace` directives are LEFT UNTOUCHED, matching the
-// OpenTelemetry-Go published shape (ref: open-telemetry/opentelemetry-go
+// The local `replace` directives are LEFT UNTOUCHED for LIBRARY modules, matching
+// the OpenTelemetry-Go published shape (ref: open-telemetry/opentelemetry-go
 // exporters/otlp/otlptrace/go.mod@exporters/otlp/otlptrace/v1.24.0 — replace kept
 // at the release tag). Go IGNORES a dependency module's replace directives, so a
 // published library carrying `replace … => ../local` is harmless to consumers
@@ -28,15 +28,29 @@
 // touches require versions only; replace lines carry no version and are never
 // matched.
 //
-// # Scope: library modules only
+// # Scope: library modules only (publishable set) + installable binaries
 //
-// The publishable set is every go.work member EXCEPT examples/*, tests/*, and
-// cmd/* (see [IsPublishable]). cmd/* are `go install` binaries / deployment
-// artifacts: `go install pkg@version` is rejected outright when the installed
-// module's go.mod contains a replace directive, so making them go-install-able
-// would require release-time replace-strip + a separate tagged-tree shape that
-// conflicts with the develop GOWORK=off verify — a distinct, harder problem
-// tracked in #1088 (see tools/archtest/root_module_no_replace_test.go godoc).
+// The publishable library set is every go.work member EXCEPT examples/*, tests/*,
+// and cmd/* (see [IsPublishable]). The publishable set is handled by [BumpTree] and
+// [TagPaths] which preserve replace directives (OTel-canonical shape).
+//
+// # Installable binaries
+//
+// cmd/* binaries in [installableBinaries] (currently "cmd/gocell") need a
+// different release-time treatment: `go install pkg@version` is rejected outright
+// when the installed module's go.mod contains a replace directive. The solution
+// is a release-time strip+pin+separate-tag pipeline:
+//   - [stripAndPinBytes] strips ALL replace directives and pins every internal
+//     require to the release version (pure function, no disk I/O).
+//   - [StripReplaceAndPin] wraps stripAndPinBytes with disk read+write for use in
+//     the release workflow.
+//   - [InstallableTagPaths] derives the per-binary git tag set (separate from the
+//     library tag set from [TagPaths]).
+//
+// The develop branch cmd/gocell/go.mod keeps its replace directives untouched
+// (multiple GOWORK=off scripts depend on them). Only the release workflow calls
+// StripReplaceAndPin to produce the tagged installable tree. This mechanism
+// resolves #2045.
 package modrelease
 
 import (
@@ -47,6 +61,7 @@ import (
 	"regexp"
 	"strings"
 
+	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/semver"
 
 	"github.com/ghbvf/gocell/tools/gomodutil"
@@ -283,6 +298,169 @@ func TagPaths(root, version string) ([]string, error) {
 		return nil, err
 	}
 	mods, err := PublishableModules(root)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(mods))
+	for _, m := range mods {
+		out = append(out, tagPathFor(m.Dir, version))
+	}
+	return out, nil
+}
+
+// installableBinaries is the frozen closed set of workspace use-dirs that are
+// go-install-able binaries. It is the single source for [InstallableBinaries]
+// and [InstallableTagPaths]. To add a new installable binary, append its
+// workspace use-dir here (e.g. "cmd/corebundle") and run `make
+// update-modrelease-golden`. Guarded by INSTALLABLE-BINARY-SET-01 (Hard).
+//
+// cmd/gocell is currently the only go-install-able binary (#2045).
+// cmd/corebundle is a runtime composition root not meant for go install.
+//
+// NOTE: when adding a second installable binary, also update the
+// "Release installable CLI module" step in .github/workflows/release.yml —
+// that step currently asserts exactly one installable binary and would need
+// to be refactored into a loop to handle multiple entries.
+var installableBinaries = []string{"cmd/gocell"}
+
+// InstallableBinaries returns the installable-binary subset of the workspace
+// rooted at root, in go.work `use` order. It filters workspace.Modules(root) to
+// only the use-dirs listed in [installableBinaries]. The result is the single
+// source of truth shared by the release tagger and the golden drift guard
+// (INSTALLABLE-BINARY-SET-01, Hard).
+//
+// This set is orthogonal to the publishable library set ([PublishableModules] /
+// [IsPublishable]): installable binaries need replace-strip+pin at release time,
+// while publishable libraries keep their replace directives (OTel-canonical).
+func InstallableBinaries(root string) ([]workspace.Module, error) {
+	mods, err := workspace.Modules(root)
+	if err != nil {
+		return nil, fmt.Errorf("modrelease: enumerate workspace: %w", err)
+	}
+	// Build allow-set for O(1) lookup.
+	allow := make(map[string]bool, len(installableBinaries))
+	for _, b := range installableBinaries {
+		allow[filepath.ToSlash(filepath.Clean(b))] = true
+	}
+	out := make([]workspace.Module, 0, len(installableBinaries))
+	for _, m := range mods {
+		if allow[filepath.ToSlash(filepath.Clean(m.Dir))] {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+// stripAndPinBytes strips ALL replace directives from data (a go.mod file) and
+// pins every require whose module path equals prefix or has prefix+"/" as a
+// prefix to version. External requires and // indirect markers are preserved.
+// The result is formatted by modfile.Format (canonical go.mod format).
+//
+// version must be a valid canonical semver tag (e.g. "v1.2.3"), validated by
+// [validReleaseVersion] before any transformation.
+//
+// This is a pure function: it performs no disk I/O. Callers that need disk
+// read+write should use [StripReplaceAndPin].
+func stripAndPinBytes(data []byte, prefix, version string) ([]byte, error) {
+	if err := validReleaseVersion(version); err != nil {
+		return nil, err
+	}
+
+	f, err := modfile.Parse("go.mod", data, nil)
+	if err != nil {
+		return nil, fmt.Errorf("modrelease: parse go.mod: %w", err)
+	}
+
+	// Drop ALL replace directives.
+	for _, r := range f.Replace {
+		if err := f.DropReplace(r.Old.Path, r.Old.Version); err != nil {
+			return nil, fmt.Errorf("modrelease: drop replace %q: %w", r.Old.Path, err)
+		}
+	}
+
+	// Pin every internal require to version.
+	for _, req := range f.Require {
+		path := req.Mod.Path
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			if err := f.AddRequire(path, version); err != nil {
+				return nil, fmt.Errorf("modrelease: pin require %q: %w", path, err)
+			}
+		}
+	}
+
+	f.Cleanup()
+	return modfile.Format(f.Syntax), nil
+}
+
+// StripResult reports the result of a [StripReplaceAndPin] call.
+type StripResult struct {
+	// Dir is the module directory as passed to StripReplaceAndPin.
+	Dir string
+	// Requires lists the internal module paths whose require version was
+	// pinned to the release version, in file order.
+	Requires []string
+}
+
+// StripReplaceAndPin reads dir/go.mod, calls [stripAndPinBytes] to strip all
+// replace directives and pin internal requires to version, then writes the
+// result back to dir/go.mod (mode 0o600, matching [BumpModule]). Returns a
+// [StripResult] with the list of pinned internal require paths.
+//
+// prefix is the root module import path (e.g. "github.com/ghbvf/gocell");
+// version must be a valid canonical semver tag. This function is the disk
+// wrapper for the pure [stripAndPinBytes] transform. It does NOT bump library
+// modules (use [BumpModule] / [BumpTree] for that); it is ONLY for installable
+// binaries that need replace-strip at release time.
+func StripReplaceAndPin(dir, prefix, version string) (StripResult, error) {
+	p := filepath.Clean(filepath.Join(dir, "go.mod"))
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return StripResult{}, fmt.Errorf("modrelease: read go.mod: %w", err)
+	}
+
+	out, err := stripAndPinBytes(data, prefix, version)
+	if err != nil {
+		return StripResult{}, err
+	}
+
+	// Collect pinned internal require paths from the output.
+	requires := collectPinnedRequires(out, prefix, version)
+
+	// 0o600: matching BumpModule (existing file, mode inert but gosec-clean).
+	if err := os.WriteFile(p, out, 0o600); err != nil {
+		return StripResult{}, fmt.Errorf("modrelease: write go.mod: %w", err)
+	}
+	return StripResult{Dir: dir, Requires: requires}, nil
+}
+
+// collectPinnedRequires returns the list of internal module paths (under prefix)
+// that appear in data at the given version, in file order. This provides the
+// Requires field for [StripResult] analogous to [Result.Requires] in [BumpModule].
+func collectPinnedRequires(data []byte, prefix, version string) []string {
+	re := internalRequireRE(prefix)
+	var out []string
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		m := re.FindSubmatch(line)
+		if m == nil {
+			continue
+		}
+		if string(m[4]) == version {
+			out = append(out, string(m[2]))
+		}
+	}
+	return out
+}
+
+// InstallableTagPaths returns the git tag for every installable binary at
+// version, using the same "<reldir>/vX.Y.Z" convention as [tagPathFor]. The
+// result is the set of tags the release workflow must create for the
+// stripped+pinned installable tree (separate from the library tags from
+// [TagPaths]).
+func InstallableTagPaths(root, version string) ([]string, error) {
+	if err := validReleaseVersion(version); err != nil {
+		return nil, err
+	}
+	mods, err := InstallableBinaries(root)
 	if err != nil {
 		return nil, err
 	}

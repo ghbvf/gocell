@@ -172,13 +172,21 @@ func (s *Service) Authorize(ctx context.Context, subject, resource, action strin
 		resourceID:    resource,
 	}
 
-	dec := s.evaluate(inputs.policies, resolver, action)
-	s.logger.Debug(
-		"authorization decision",
+	dec, ruleID := s.evaluate(inputs.policies, resolver, action)
+	// Decision log carries matched_rule_id so on-call can attribute the verdict to a
+	// concrete rule — e.g. "self via ownership" (baseline-user-read-self) vs "admin
+	// via baseline" (baseline-user-read-admin) (#2027 F12). Logged at Debug for BOTH
+	// allow and deny: it is per-decision detail (high-volume, on-demand), and carries
+	// subject/resource (UUIDs) so it must not be always-on. Always-on coarse deny
+	// visibility is provided by RequirePermission's Info "authz: permission denied by
+	// PDP" log (permission.go) plus the auth_pdp_decision_total deny-rate metric; for
+	// per-rule attribution, enable Debug on this slice.
+	s.logger.DebugContext(ctx, "authorization decision",
 		slog.String("subject", subject),
 		slog.String("resource", resource),
 		slog.String("action", action),
 		slog.Bool("allowed", dec.IsAllow()),
+		slog.String("matched_rule_id", ruleID),
 		slog.Int("policy_count", len(inputs.policies)),
 		// baseline_count reads len of the package-level slice — no extra allocation
 		// (builtinBaselineRules returns builtinBaseline directly, F4 fix).

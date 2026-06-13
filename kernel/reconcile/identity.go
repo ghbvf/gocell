@@ -52,9 +52,15 @@ const systemProducerActor = "system"
 // (idemkey.DeriveCommandKey) lands under the "_notenant" sentinel namespace. That
 // is correct for the single-tenant reconcile archetype; a MULTI-TENANT reconciler
 // MUST add a tenant dimension to its own command-id / store derivation (it cannot
-// rely on an ambient ctx tenant, which this install strips). NOTE: that MUST is a
-// documentation-level guard — there is no machine enforcement of it, and no
-// multi-tenant reconciler exists today.
+// rely on an ambient ctx tenant, which this install strips). This MUST is now
+// MACHINE-ENFORCED at construction (#1954): reconcile.New takes a REQUIRED sealed
+// Tenancy stance (reconcile.SingleTenant / reconcile.TenantScoped), so a reconciler
+// cannot be built without consciously declaring whether "_notenant" Claimer keys
+// are correct for it — omitting the stance is a compile error, the zero value is a
+// Build fail-fast, and the stance set is frozen by RECONCILE-TENANCY-DECLARED-01.
+// Residual blind spot: the guard forces the declaration but cannot verify a
+// TenantScoped reconciler's body actually encodes the tenant (consumer correctness,
+// out of framework reach — see the reconcile.Tenancy godoc blind spots).
 //
 // # Scope-fallback boundary (#1824 F1)
 //

@@ -207,6 +207,42 @@ func TestContractRegistry_ByKind_DeepCopiesGRPC(t *testing.T) {
 		"ByKind must deep-copy GRPCTransportMeta; backing entry was alias-mutated")
 }
 
+// TestContractRegistry_ByKind_DeepCopiesGRPCMethods asserts that the per-method
+// auth overlay slice (#1675) is deep-copied, not aliased: mutating a returned
+// copy's Methods entry must not corrupt the registry's backing entry. Without
+// the explicit slice copy in deepCopyContract, the shallow struct copy aliases
+// the backing array.
+func TestContractRegistry_ByKind_DeepCopiesGRPCMethods(t *testing.T) {
+	proj := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"grpc-x-y-v1": {
+				ID:   "grpc-x-y-v1",
+				Kind: "grpc",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  metadatatest.CellIDAccessCore,
+					Clients: []string{metadatatest.CellIDAuditCore},
+					GRPC: &metadata.GRPCTransportMeta{
+						Service: "x.v1.S",
+						Proto:   "contracts/grpc/x/v1/x.proto",
+						Methods: []metadata.GRPCMethodMeta{{Name: "Check", Public: true}},
+					},
+				},
+			},
+		},
+	}
+	reg := registry.NewContractRegistry(proj)
+	first := reg.ByKind("grpc")
+	require.Len(t, first, 1)
+	require.Len(t, first[0].Endpoints.GRPC.Methods, 1)
+	first[0].Endpoints.GRPC.Methods[0].Name = "MUTATED"
+
+	second := reg.ByKind("grpc")
+	require.Len(t, second, 1)
+	require.Len(t, second[0].Endpoints.GRPC.Methods, 1)
+	assert.Equal(t, "Check", second[0].Endpoints.GRPC.Methods[0].Name,
+		"ByKind must deep-copy GRPCTransportMeta.Methods; backing entry was alias-mutated")
+}
+
 // TestContractRegistry_ByKind_DeepCopiesHTTP asserts that a returned http
 // ContractMeta carries independent HTTPTransportMeta + its maps — mutating the
 // returned copy's transport fields/maps must not alias the backing entry.

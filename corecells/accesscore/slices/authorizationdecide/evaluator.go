@@ -8,9 +8,23 @@ import (
 	"github.com/ghbvf/gocell/pkg/authz"
 )
 
+// Sentinel matched-rule ids for the two evaluate outcomes that are not the id of
+// any single rule. The "_" prefix never collides with a real abac.Rule.ID (rule
+// ids are non-empty, dotted/dashed names like "baseline-user-read-self" and never
+// begin with "_"), so the PDP decision log can carry an unambiguous rule attribution
+// even when no concrete rule fired (#2027 F12).
+const (
+	ruleIDDefaultDeny        = "_default-deny"
+	ruleIDInvalidObligations = "_invalid-obligations"
+)
+
 // evaluate applies the default-deny + forbid-wins combining algorithm over every
 // rule of every tenant policy (plus the built-in baseline rules) and returns the
-// sealed authz.Decision.
+// sealed authz.Decision plus the id of the rule that decided it (#2027 F12): the
+// firing deny rule's id on forbid-wins, the FIRST matching permit rule's id on
+// Allow (baseline rules are evaluated first, so the order is deterministic), or a
+// sentinel for default-deny / invalid-obligations. The id is for observability
+// only — it does NOT affect the verdict.
 //
 // A rule is considered only when its action gate passes: len(rule.Action)==0 (the
 // rule is untargeted and applies to every action, preserving pre-PR-10 semantics)
@@ -23,43 +37,47 @@ import (
 // Allow/Deny here is a genuine policy verdict; infrastructure failures are
 // handled in Authorize, which returns a zero Decision (fail-closed) without
 // touching Allow/Deny.
-func (s *Service) evaluate(policies []*abac.Policy, r attributeResolver, action string) authz.Decision {
+func (s *Service) evaluate(policies []*abac.Policy, r attributeResolver, action string) (authz.Decision, string) {
 	var permitObligations []authz.Obligations
+	var firstPermitID string
 
 	// Baseline rules are evaluated first; tenant policies follow.
 	// Forbid-wins is global: a deny anywhere is final.
 	for _, rule := range builtinBaselineRules() {
-		if done, dec := applyRule(rule, r, action, &permitObligations); done {
-			return dec
+		if done, dec := applyRule(rule, r, action, &permitObligations, &firstPermitID); done {
+			return dec, rule.ID
 		}
 	}
 	for _, p := range policies {
 		for i := range p.Rules {
-			if done, dec := applyRule(p.Rules[i], r, action, &permitObligations); done {
-				return dec
+			if done, dec := applyRule(p.Rules[i], r, action, &permitObligations, &firstPermitID); done {
+				return dec, p.Rules[i].ID
 			}
 		}
 	}
 
 	if len(permitObligations) == 0 {
 		// default-deny: no rule granted access.
-		return authz.Deny("authorization-decide: no applicable permit (default-deny)")
+		return authz.Deny("authorization-decide: no applicable permit (default-deny)"), ruleIDDefaultDeny
 	}
 	dec, err := authz.Allow(mergeObligations(permitObligations))
 	if err != nil {
 		// An invalid combined obligation is a programmer/config error; deny
 		// rather than emit an Allow that the PEP cannot enforce (fail-closed).
 		s.logger.Error("authorization-decide: invalid combined obligations, denying", slog.Any("error", err))
-		return authz.Deny("authorization-decide: invalid obligations")
+		return authz.Deny("authorization-decide: invalid obligations"), ruleIDInvalidObligations
 	}
-	return dec
+	return dec, firstPermitID
 }
 
 // applyRule tests the action gate and condition gate for a single rule, then
-// handles the effect. It appends to *permits on Allow, and returns (true, Deny)
-// on the first matching Deny (forbid-wins early exit). It returns (false, {}) when
-// the rule does not fire (gate miss or unknown effect).
-func applyRule(rule abac.Rule, r attributeResolver, action string, permits *[]authz.Obligations) (done bool, dec authz.Decision) {
+// handles the effect. It appends to *permits on Allow (recording the first
+// matching permit's id into *firstPermitID for decision attribution), and returns
+// (true, Deny) on the first matching Deny (forbid-wins early exit). It returns
+// (false, {}) when the rule does not fire (gate miss or unknown effect).
+func applyRule(
+	rule abac.Rule, r attributeResolver, action string, permits *[]authz.Obligations, firstPermitID *string,
+) (done bool, dec authz.Decision) {
 	if len(rule.Action) > 0 && !slices.Contains(rule.Action, action) {
 		return false, authz.Decision{}
 	}
@@ -72,6 +90,9 @@ func applyRule(rule abac.Rule, r attributeResolver, action string, permits *[]au
 		return true, authz.Deny("authorization-decide: denied by policy (forbid-wins)")
 	case authz.EffectAllow:
 		*permits = append(*permits, rule.Obligations)
+		if *firstPermitID == "" {
+			*firstPermitID = rule.ID
+		}
 	}
 	return false, authz.Decision{}
 }
