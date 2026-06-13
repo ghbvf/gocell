@@ -24,6 +24,7 @@
     },
     "reason": {
       "type": "string",
+      "maxLength": 32,
       "enum": [
         "unspecified",
         "keyCompromise",

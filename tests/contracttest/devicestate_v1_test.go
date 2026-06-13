@@ -23,7 +23,7 @@ func TestDeviceState_V1(t *testing.T) {
 
 	// parameter errors
 	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","state":"bogus"}}`)) // bad deviceState enum
-	c.MustRejectResponse(t, []byte(`{"data":{"state":"online"}}`))                    // missing deviceId
+	c.MustRejectResponse(t, []byte(`{"data":{"state":"online"}}`))                   // missing deviceId
 
 	// query param validation (FMT-25 maxLength)
 	c.ValidateQueryParam(t, "deviceId", "dev-1")
