@@ -2,7 +2,6 @@ package redis
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -123,34 +122,36 @@ end
 // colocate on one Redis Cluster slot: the holder key is "<ns>:{<rid>}:lease" and
 // the epoch key is "<ns>:{<rid>}:epoch".
 type RedisReconcileElector struct {
-	rdb           cmdable
-	ns            KeyNamespace
-	holderID      string
-	leaseDuration time.Duration
-	clk           clock.Clock
+	rdb      cmdable
+	ns       KeyNamespace
+	holderID string
+	lease    reconcile.LeaseTTL
+	clk      clock.Clock
 }
 
 // NewRedisReconcileElector builds a leader elector. The holderID (this replica's
 // identity) is minted INTERNALLY as a fresh UUID, so accidental cross-process
 // holderID reuse (treated as the same holder, defeating mutual exclusion — PR-A6
-// review C4) is impossible by construction. leaseDuration is the lease TTL; the
-// reconcile Loop derives its renew cadence as TTL/3 unless overridden. clk is the
-// injected clock stamping the token window (Redis has no server-side wall clock to
-// return). ns / client / leaseDuration / clk are validated up front.
+// review C4) is impossible by construction. lease is the validated lease TTL (a
+// sealed reconcile.LeaseTTL, so a sub-millisecond window — which would truncate to a
+// 0ms PX TTL and break mutual exclusion — is unrepresentable); the reconcile Loop
+// derives its renew cadence as TTL/3 unless overridden. clk is the injected clock
+// stamping the token window (Redis has no server-side wall clock to return).
+// ns / client / lease / clk are validated up front.
 func NewRedisReconcileElector(
-	client *Client, ns KeyNamespace, leaseDuration time.Duration, clk clock.Clock,
+	client *Client, ns KeyNamespace, lease reconcile.LeaseTTL, clk clock.Clock,
 ) (*RedisReconcileElector, error) {
 	if client == nil {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis reconcile elector: client is nil")
 	}
-	return newReconcileElectorFromCmdable(client.cmdable(), ns, leaseDuration, clk)
+	return newReconcileElectorFromCmdable(client.cmdable(), ns, lease, clk)
 }
 
 // newReconcileElectorFromCmdable is the cmdable-level constructor used by unit
 // tests that inject a mock cmdable. Same validation contract as the public
 // constructor (mirrors newRedisDriverFromCmdable). holderID is minted internally.
 func newReconcileElectorFromCmdable(
-	rdb cmdable, ns KeyNamespace, leaseDuration time.Duration, clk clock.Clock,
+	rdb cmdable, ns KeyNamespace, lease reconcile.LeaseTTL, clk clock.Clock,
 ) (*RedisReconcileElector, error) {
 	if err := ns.Validate(); err != nil {
 		return nil, err
@@ -158,8 +159,12 @@ func newReconcileElectorFromCmdable(
 	if rdb == nil {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis reconcile elector: cmdable is nil")
 	}
-	if leaseDuration <= 0 {
-		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis reconcile elector: leaseDuration must be positive")
+	if lease.IsZero() {
+		// ErrCellInvalidConfig (not the connect code): a zero-value lease is a
+		// wiring mistake (forgot reconcile.NewLeaseTTL), routable separately from
+		// genuine Redis connection failures.
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"redis reconcile elector: lease must be a constructed LeaseTTL")
 	}
 	clock.MustHaveClock(clk, "redis reconcile elector")
 	holderID, err := idutil.NewUUID()
@@ -167,7 +172,7 @@ func newReconcileElectorFromCmdable(
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterRedisConnect, "redis reconcile elector: mint holderID", err)
 	}
 	slog.Info("redis reconcile elector: created", slog.String("holder_id", holderID))
-	return &RedisReconcileElector{rdb: rdb, ns: ns, holderID: holderID, leaseDuration: leaseDuration, clk: clk}, nil
+	return &RedisReconcileElector{rdb: rdb, ns: ns, holderID: holderID, lease: lease, clk: clk}, nil
 }
 
 func (e *RedisReconcileElector) holderKey(reconcilerID string) string {
@@ -183,9 +188,9 @@ func (e *RedisReconcileElector) AcquireLease(ctx context.Context, reconcilerID s
 	now := e.clk.Now()
 	res, err := e.rdb.Eval(ctx, reconcileAcquireScript,
 		[]string{e.holderKey(reconcilerID), e.epochKey(reconcilerID)},
-		e.holderID, e.leaseDuration.Milliseconds(), int64(reconcileEpochKeyTTL.Seconds())).Slice()
+		e.holderID, e.lease.Milliseconds(), int64(reconcileEpochKeyTTL.Seconds())).Slice()
 	if err != nil {
-		return reconcile.LeaseToken{}, fmt.Errorf("redis reconcile elector: acquire: %w", err)
+		return reconcile.LeaseToken{}, classifyRedisError(err, ErrAdapterRedisSet, "redis reconcile elector acquire")
 	}
 	acquired, epoch, err := parseAcquireResult(res)
 	if err != nil {
@@ -199,7 +204,7 @@ func (e *RedisReconcileElector) AcquireLease(ctx context.Context, reconcilerID s
 		HolderID:     e.holderID,
 		Epoch:        epoch,
 		AcquiredAt:   now,
-		ExpiresAt:    now.Add(e.leaseDuration),
+		ExpiresAt:    now.Add(e.lease.Duration()),
 	}, nil
 }
 
@@ -210,9 +215,9 @@ func (e *RedisReconcileElector) AcquireLease(ctx context.Context, reconcilerID s
 func (e *RedisReconcileElector) RenewLease(ctx context.Context, token reconcile.LeaseToken) error {
 	held, err := e.rdb.Eval(ctx, reconcileRenewScript,
 		[]string{e.holderKey(token.ReconcilerID), e.epochKey(token.ReconcilerID)},
-		e.holderID, e.leaseDuration.Milliseconds(), int64(reconcileEpochKeyTTL.Seconds())).Int64()
+		e.holderID, e.lease.Milliseconds(), int64(reconcileEpochKeyTTL.Seconds())).Int64()
 	if err != nil {
-		return fmt.Errorf("redis reconcile elector: renew: %w", err)
+		return classifyRedisError(err, ErrAdapterRedisSet, "redis reconcile elector renew")
 	}
 	if held != 1 {
 		return reconcile.ErrReconcileLeaseLost
@@ -226,7 +231,7 @@ func (e *RedisReconcileElector) RenewLease(ctx context.Context, token reconcile.
 func (e *RedisReconcileElector) ReleaseLease(ctx context.Context, token reconcile.LeaseToken) error {
 	if _, err := e.rdb.Eval(ctx, releaseLockScript,
 		[]string{e.holderKey(token.ReconcilerID)}, e.holderID).Int64(); err != nil {
-		return fmt.Errorf("redis reconcile elector: release: %w", err)
+		return classifyRedisError(err, ErrAdapterRedisDelete, "redis reconcile elector release")
 	}
 	return nil
 }
