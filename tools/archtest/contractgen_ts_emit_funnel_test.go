@@ -14,20 +14,24 @@ package archtest
 //	B2 — no Render/FormatGoSource call: renderTS and renderBarrel must NOT
 //	     call codegen.Render or codegen.FormatGoSource (which would reject
 //	     a .ts file — TS files must bypass goimports/gofumpt).
-//	B3 — path prefix: all codegen.Write calls for .ts output must target a
-//	     path under generated-ts/ (not generated/ or any other subtree).
+//	B3 — path prefix: every TS output-path-candidate string literal must target
+//	     a path under generated-ts/ (not generated/, pkg/, tmp/ or any other
+//	     subtree). Enforced as a POSITIVE allowlist, not a "contains generated/"
+//	     denylist, so bypass paths that never mention generated/ are still caught.
 //
 // AI-robust ceiling:
 //
 //	B1: Medium — content scan over .tmpl/.go files for the TS file-emit marker.
 //	B2: Medium — AST scan: renderTS / renderBarrel function bodies must not
 //	    contain identifiers "Render" or "FormatGoSource" from the codegen pkg.
-//	B3: Medium — content scan over the generator source for Write calls carrying
-//	    hardcoded path prefixes outside generated-ts/.
+//	B3: Medium — AST literal scan over the generator source: every output-path
+//	    candidate (ends .ts, contains /, not a "/"- or "."-prefixed trim arg)
+//	    must start with generated-ts/.
 //
-// Blind spots (documented): a template that assembles the .ts extension at
-// runtime via string ops rather than a literal `.ts` suffix; or a codegen.Write
-// call path built entirely from runtime data. Neither occurs in the current
+// Blind spots (documented): a TS output path assembled entirely from runtime
+// data with no ".ts"-suffixed literal segment would evade the literal scan
+// (the candidate predicate keys on a literal `.ts` suffix). Neither that nor a
+// codegen.Write whose path is fully runtime-built occurs in the current
 // implementation; asserted clean by the production walk.
 
 import (
@@ -271,17 +275,36 @@ func scanTSEmitForbiddenCalls(f *ast.File, rel string) []string {
 	return out
 }
 
-// scanTSPathViolations scans for string literals that look like generated .ts
-// paths under a prefix OTHER than generated-ts/.
+// isTSOutputPathCandidate reports whether a string literal looks like a TS
+// output path (as opposed to a suffix/extension pattern used for string
+// trimming). A candidate ends in ".ts", contains a path separator, and does NOT
+// start with "/" or ".". This deliberately excludes the trimming/join args that
+// appear in the real emitter — "/types.ts" and ".ts" (TrimSuffix args) and bare
+// "types.ts"/"index.ts" (filepath.Join components) — none of which are output
+// paths, so the allowlist below stays free of false positives.
+func isTSOutputPathCandidate(s string) bool {
+	return strings.HasSuffix(s, ".ts") &&
+		strings.Contains(s, "/") &&
+		!strings.HasPrefix(s, "/") &&
+		!strings.HasPrefix(s, ".")
+}
+
+// scanTSPathViolations enforces a POSITIVE allowlist: every TS output-path
+// candidate literal (see isTSOutputPathCandidate) must start with
+// "generated-ts/". Any other prefix is a misrouted TS write — this catches not
+// only the old "generated/contracts/.../types.ts" mistake but also bypass paths
+// that never mention "generated/" at all (e.g. "pkg/foo.ts", "tmp/foo.ts"),
+// which a "contains generated/" check would silently miss.
 func scanTSPathViolations(f *ast.File, rel string) []string {
 	var out []string
 	EachInSubtree[ast.BasicLit](f, func(lit *ast.BasicLit) {
 		s := strings.Trim(lit.Value, `"`+"`")
-		// Look for literals that contain "generated/" but NOT "generated-ts/"
-		// and end with .ts, which would be a misrouted TS path.
-		if strings.Contains(s, "generated/") && strings.HasSuffix(s, ".ts") {
+		if !isTSOutputPathCandidate(s) {
+			return
+		}
+		if !strings.HasPrefix(s, "generated-ts/") {
 			out = append(out, rel+": TS path literal "+lit.Value+
-				" uses generated/ prefix instead of generated-ts/ — TS output must go to generated-ts/")
+				" targets a directory other than generated-ts/ — TS output must go to generated-ts/")
 		}
 	})
 	return out
@@ -327,5 +350,37 @@ func emitGood() { _ = "generated-ts/index.ts" }
 	violations := scanTSPathViolations(f, "tsemit.go")
 	if len(violations) != 0 {
 		t.Errorf("B3 scanner over-flagged valid generated-ts/ path: %v", violations)
+	}
+}
+
+// TestContractgenTSFunnel_B3_RedFixtureDetectsBypassPaths proves the positive
+// allowlist catches misrouted TS writes that never mention "generated/" — the
+// exact gap a "contains generated/" denylist would miss (pkg/foo.ts, tmp/foo.ts).
+func TestContractgenTSFunnel_B3_RedFixtureDetectsBypassPaths(t *testing.T) {
+	t.Parallel()
+	for _, bypass := range []string{"pkg/foo.ts", "tmp/foo.ts", "internal/bar/baz.ts"} {
+		src := "package contractgen\nfunc emitBad() { _ = \"" + bypass + "\" }\n"
+		f := parseTSFixture(t, src)
+		violations := scanTSPathViolations(f, "tsemit.go")
+		if len(violations) == 0 {
+			t.Errorf("B3 detector missed bypass TS path %q (does not start with generated-ts/)", bypass)
+		}
+	}
+}
+
+// TestContractgenTSFunnel_B3_GreenFixtureAllowsTrimPatterns proves the candidate
+// predicate excludes the suffix/extension and bare-filename literals the real
+// emitter uses for string trimming and filepath.Join (anti-false-positive lock):
+// "/types.ts" and ".ts" (TrimSuffix args) and "types.ts"/"index.ts" (join
+// components) must NOT be flagged.
+func TestContractgenTSFunnel_B3_GreenFixtureAllowsTrimPatterns(t *testing.T) {
+	t.Parallel()
+	for _, ok := range []string{"/types.ts", ".ts", "types.ts", "index.ts"} {
+		src := "package contractgen\nfunc trim() { _ = \"" + ok + "\" }\n"
+		f := parseTSFixture(t, src)
+		violations := scanTSPathViolations(f, "tsemit.go")
+		if len(violations) != 0 {
+			t.Errorf("B3 scanner over-flagged trim/join literal %q: %v", ok, violations)
+		}
 	}
 }

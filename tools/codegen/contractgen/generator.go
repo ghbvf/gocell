@@ -276,9 +276,10 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 	}
 
 	// TS emit: per-contract types.ts in generated-ts/ (separate from Go
-	// generated/). responseProjection and non-types kinds are skipped by
-	// kindEmitsTS; the cross-contract barrel is written separately by Generate.
-	if !kindEmitsTS(spec) {
+	// generated/). responseProjection, non-types kinds and empty-DTO specs are
+	// skipped by specEmitsTS; the cross-contract barrel is written separately by
+	// Generate.
+	if !specEmitsTS(spec) {
 		return nil
 	}
 	if err := emitTSTypes(root, spec, opts, res); err != nil {

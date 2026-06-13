@@ -507,6 +507,182 @@ func TestRenderTSBarrel_MultiContract(t *testing.T) {
 	}
 }
 
+// TestTSPropertyKey verifies that wire keys which are not safe TS identifiers
+// are emitted as quoted string-literal property names, while safe identifiers
+// stay bare (F2: a legal JSON key like "foo-bar" must not render as illegal
+// bare TS `foo-bar?:`).
+func TestTSPropertyKey(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "camelCase identifier", input: "accessToken", want: "accessToken"},
+		{name: "underscore", input: "_internal", want: "_internal"},
+		{name: "dollar", input: "$ref", want: "$ref"},
+		{name: "digits after letter", input: "field2", want: "field2"},
+		{name: "hyphen", input: "foo-bar", want: "'foo-bar'"},
+		{name: "space", input: "foo bar", want: "'foo bar'"},
+		{name: "leading digit", input: "1st", want: "'1st'"},
+		{name: "single quote", input: "it's", want: `'it\'s'`},
+		{name: "backslash", input: `a\b`, want: `'a\\b'`},
+		{name: "dot", input: "a.b", want: "'a.b'"},
+		{name: "non-ascii", input: "naïve", want: "'naïve'"},
+		{name: "empty", input: "", want: "''"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := tsPropertyKey(tc.input)
+			if got != tc.want {
+				t.Errorf("tsPropertyKey(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTSDocComment verifies that the JSDoc block-comment terminator is
+// neutralized in doc text so a schema title cannot close /** */ and inject TS
+// source (F3).
+func TestTSDocComment(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "plain", input: "the user response", want: "the user response"},
+		{name: "comment terminator", input: "x */ injected", want: "x *\\/ injected"},
+		{name: "multiple terminators", input: "*/*/", want: "*\\/*\\/"},
+		{name: "newline preserved", input: "line1\nline2", want: "line1\nline2"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := tsDocComment(tc.input)
+			if got != tc.want {
+				t.Errorf("tsDocComment(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRenderTS_PropertyKeyQuotingAndDocEscape proves the F2/F3 escaping is wired
+// into renderTS end-to-end: a hyphenated wire key renders as a quoted property
+// name and a doc containing the comment terminator is neutralized.
+func TestRenderTS_PropertyKeyQuotingAndDocEscape(t *testing.T) {
+	t.Parallel()
+	spec := &ContractGenSpec{
+		PackageName: "edge",
+		ContractID:  "http.edge.case.v1",
+		Kind:        "http",
+		SourceFile:  "contracts/http/edge/case/v1/contract.yaml",
+		DTOs: []DTOSpec{
+			{
+				Name: "Response",
+				Doc:  "danger */ export const injected = 1; /*",
+				Fields: []DTOField{
+					{Name: "FooBar", BareJSONTag: "foo-bar", GoType: "string", Required: true},
+				},
+			},
+		},
+	}
+
+	got, err := renderTS(spec)
+	if err != nil {
+		t.Fatalf("renderTS: %v", err)
+	}
+	out := string(got)
+
+	if !strings.Contains(out, "'foo-bar': string;") {
+		t.Errorf("hyphenated key must render quoted as 'foo-bar': string;; got:\n%s", out)
+	}
+	if strings.Contains(out, "foo-bar: string;") && !strings.Contains(out, "'foo-bar': string;") {
+		t.Errorf("unquoted hyphenated key leaked into output; got:\n%s", out)
+	}
+	// The doc must not contain a live comment terminator that closes the JSDoc.
+	if strings.Contains(out, "*/ export const injected") {
+		t.Errorf("JSDoc terminator was not neutralized — TS injection possible; got:\n%s", out)
+	}
+	if !strings.Contains(out, "*\\/ export const injected") {
+		t.Errorf("expected neutralized terminator '*\\/' in doc; got:\n%s", out)
+	}
+}
+
+// TestSpecEmitsTS verifies the single TS-emit predicate (F1): only specs with at
+// least one DTO and an emitting kind (not webhook/grpc/responseProjection) emit
+// TS. An empty-DTO contract would render a header-only types.ts (not a module),
+// so it must be skipped by the disk write, the barrel and the verify manifest.
+func TestSpecEmitsTS(t *testing.T) {
+	t.Parallel()
+	dto := []DTOSpec{{Name: "Response", Fields: []DTOField{{Name: "X", BareJSONTag: "x", GoType: "string"}}}}
+	cases := []struct {
+		name string
+		spec *ContractGenSpec
+		want bool
+	}{
+		{name: "nil spec", spec: nil, want: false},
+		{name: "webhook", spec: &ContractGenSpec{Kind: "webhook", DTOs: dto}, want: false},
+		{name: "grpc", spec: &ContractGenSpec{Kind: "grpc", DTOs: dto}, want: false},
+		{name: "http empty DTOs", spec: &ContractGenSpec{Kind: "http"}, want: false},
+		{name: "projection empty DTOs (F1 bug)", spec: &ContractGenSpec{Kind: "projection"}, want: false},
+		{name: "http with DTOs", spec: &ContractGenSpec{Kind: "http", DTOs: dto}, want: true},
+		{name: "projection with DTOs", spec: &ContractGenSpec{Kind: "projection", DTOs: dto}, want: true},
+		{name: "event with DTOs", spec: &ContractGenSpec{Kind: "event", DTOs: dto}, want: true},
+		{
+			name: "http responseProjection",
+			spec: &ContractGenSpec{Kind: "http", DTOs: dto, Endpoint: &httpEndpointSpec{ResponseProjection: true}},
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := specEmitsTS(tc.spec); got != tc.want {
+				t.Errorf("specEmitsTS(%s) = %v, want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDetectBarrelAliasCollision verifies the fail-fast guard (F4): two contracts
+// that derive the same lossy alias from distinct paths must be rejected, while a
+// set of distinct aliases passes.
+func TestDetectBarrelAliasCollision(t *testing.T) {
+	t.Parallel()
+
+	t.Run("distinct aliases pass", func(t *testing.T) {
+		t.Parallel()
+		entries := []tsBarrelEntry{
+			{Alias: "eventFooV1", ImportPath: "./contracts/event/foo/v1/types"},
+			{Alias: "eventBarV1", ImportPath: "./contracts/event/bar/v1/types"},
+		}
+		if err := detectBarrelAliasCollision(entries); err != nil {
+			t.Errorf("distinct aliases must not collide; got %v", err)
+		}
+	})
+
+	t.Run("collision fails fast", func(t *testing.T) {
+		t.Parallel()
+		// "event/foo-bar/v1" and "event/foo/bar/v1" both collapse to eventFooBarV1.
+		entries := []tsBarrelEntry{
+			{Alias: "eventFooBarV1", ImportPath: "./contracts/event/foo-bar/v1/types"},
+			{Alias: "eventFooBarV1", ImportPath: "./contracts/event/foo/bar/v1/types"},
+		}
+		err := detectBarrelAliasCollision(entries)
+		if err == nil {
+			t.Fatal("expected collision error, got nil")
+		}
+		// Error must name the alias and both import paths for diagnosability.
+		for _, want := range []string{"eventFooBarV1", "event/foo-bar/v1", "event/foo/bar/v1"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("collision error missing %q; got %q", want, err.Error())
+			}
+		}
+	})
+}
+
 // TestRenderBarrel verifies the barrel index.ts output.
 func TestRenderBarrel(t *testing.T) {
 	t.Parallel()

@@ -523,6 +523,196 @@ func TestVerifyDetectsMissingModulesGen(t *testing.T) {
 	assert.True(t, found, "expected assembly-modules-gen file-is-missing drift; got %+v", result.Drifts)
 }
 
+// TestExpectedArtifactsIncludesTSContractArtifacts proves ExpectedArtifacts
+// derives the TS manifest entries (CONTRACTGEN-TS-EMIT-FUNNEL-01): every codegen
+// contract that emits TS gets a per-contract generated-ts/.../types.ts (kind
+// contract-gen) and the cross-contract generated-ts/index.ts barrel (kind
+// contract-gen-ts-barrel). Without a contract in the fixture (the base
+// TestExpectedArtifactsDerivesManifestFromMetadata) the TS branch is never
+// exercised — this is the gap F7 closes.
+func TestExpectedArtifactsIncludesTSContractArtifacts(t *testing.T) {
+	root, project := newGeneratedFixtureWithContract(t)
+
+	artifacts, err := ExpectedArtifacts(t.Context(), root, fixtureModule, project)
+	require.NoError(t, err)
+
+	const (
+		typesPath  = "generated-ts/contracts/http/fixture/ping/v1/types.ts"
+		barrelPath = "generated-ts/index.ts"
+	)
+	typesKind, hasTypes := artifactKindForPath(artifacts, typesPath)
+	require.True(t, hasTypes, "expected per-contract TS artifact %q in manifest; got %v", typesPath, artifactPaths(artifacts))
+	assert.Equal(t, "contract-gen", typesKind)
+
+	barrelKind, hasBarrel := artifactKindForPath(artifacts, barrelPath)
+	require.True(t, hasBarrel, "expected TS barrel artifact %q in manifest; got %v", barrelPath, artifactPaths(artifacts))
+	assert.Equal(t, "contract-gen-ts-barrel", barrelKind)
+
+	// The barrel must re-export the contract's namespace alias.
+	for _, a := range artifacts {
+		if a.Path == barrelPath {
+			assert.Contains(t, string(a.Content), "export * as httpFixturePingV1 from")
+		}
+	}
+}
+
+// TestVerifyDetectsMissingTSBarrel proves a missing committed generated-ts/index.ts
+// is reported as file-is-missing drift.
+func TestVerifyDetectsMissingTSBarrel(t *testing.T) {
+	root, project := newGeneratedFixtureWithContract(t)
+	writeExpectedArtifacts(t, root, project)
+
+	require.NoError(t, os.Remove(filepath.Join(root, "generated-ts", "index.ts")))
+
+	result, err := Verify(t.Context(), root, fixtureModule, project)
+	require.NoError(t, err)
+
+	assert.False(t, result.Passed())
+	var found bool
+	for _, d := range result.Drifts {
+		if d.Kind == "contract-gen-ts-barrel" && d.Message == "file is missing" {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected contract-gen-ts-barrel file-is-missing drift; got %+v", result.Drifts)
+}
+
+// TestVerifyDetectsTamperedTSBarrel proves a hand-edited generated-ts/index.ts is
+// reported as content-differs drift.
+func TestVerifyDetectsTamperedTSBarrel(t *testing.T) {
+	root, project := newGeneratedFixtureWithContract(t)
+	artifacts := writeExpectedArtifacts(t, root, project)
+
+	for _, a := range artifacts {
+		if a.Kind == "contract-gen-ts-barrel" {
+			tampered := append([]byte(nil), a.Content...)
+			tampered = append(tampered, []byte("\nexport * as injected from './evil';\n")...)
+			writeFile(t, root, a.Path, tampered)
+		}
+	}
+
+	result, err := Verify(t.Context(), root, fixtureModule, project)
+	require.NoError(t, err)
+
+	assert.False(t, result.Passed())
+	var found bool
+	for _, d := range result.Drifts {
+		if d.Kind == "contract-gen-ts-barrel" && d.Message == "content differs" {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected contract-gen-ts-barrel content-differs drift; got %+v", result.Drifts)
+}
+
+// artifactKindForPath returns the Kind of the artifact at the given slash path.
+func artifactKindForPath(artifacts []Artifact, path string) (string, bool) {
+	for _, a := range artifacts {
+		if a.Path == path {
+			return a.Kind, true
+		}
+	}
+	return "", false
+}
+
+// newGeneratedFixtureWithContract extends newGeneratedFixture with a minimal
+// codegen HTTP contract (contract.yaml + request/response/error schemas) on disk
+// and merges its parsed ContractMeta into the project, so ExpectedArtifacts
+// exercises the contractgen + TS-emit branches. The contract files are parsed
+// (not hand-built) so the ContractMeta stays faithful to what `gocell` produces.
+func newGeneratedFixtureWithContract(t *testing.T) (string, *metadata.ProjectMeta) {
+	t.Helper()
+
+	root, project := newGeneratedFixture(t)
+
+	writeFile(t, root, "contracts/http/fixture/ping/v1/contract.yaml", []byte(`id: http.fixture.ping.v1
+kind: http
+ownerCell: fixturecell
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: fixturecell
+  http:
+    method: POST
+    path: /api/v1/fixture/ping/
+    successStatus: 201
+    noContent: false
+    responses:
+      400:
+        description: Bad Request
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      500:
+        description: Internal Server Error
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json
+codegen: true
+`))
+	writeFile(t, root, "contracts/http/fixture/ping/v1/request.schema.json", []byte(`{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.fixture.ping.v1.request",
+  "type": "object",
+  "properties": {
+    "message": { "type": "string" }
+  },
+  "required": ["message"],
+  "additionalProperties": false
+}
+`))
+	writeFile(t, root, "contracts/http/fixture/ping/v1/response.schema.json", []byte(`{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.fixture.ping.v1.response",
+  "type": "object",
+  "properties": {
+    "ok": { "type": "boolean" }
+  },
+  "required": ["ok"]
+}
+`))
+	writeFile(t, root, "contracts/shared/errors/error-response-v1.schema.json", []byte(`{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gocell.dev/schemas/errors/error-response-v1.schema.json",
+  "title": "GoCell HTTP error response",
+  "type": "object",
+  "required": ["error"],
+  "additionalProperties": false,
+  "properties": {
+    "error": {
+      "type": "object",
+      "required": ["code", "message", "details"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {"type": "string", "pattern": "^ERR_[A-Z0-9_]+$"},
+        "message": {"type": "string"},
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key", "value"],
+            "additionalProperties": false,
+            "properties": {
+              "key": {"type": "string"},
+              "value": {"type": ["string", "number", "boolean"]}
+            }
+          }
+        },
+        "request_id": {"type": "string"}
+      }
+    }
+  }
+}
+`))
+
+	parsed, err := metadata.NewParser(root).Parse()
+	require.NoError(t, err)
+	for id, c := range parsed.Contracts {
+		project.Contracts[id] = c
+	}
+	require.Contains(t, project.Contracts, "http.fixture.ping.v1", "parser must discover the fixture contract")
+
+	return root, project
+}
+
 func newGeneratedFixture(t *testing.T) (string, *metadata.ProjectMeta) {
 	t.Helper()
 

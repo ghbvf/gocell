@@ -2330,11 +2330,15 @@ func TestRender_Golden_TS_SynthHTTPFull(t *testing.T) {
 	assertGolden(t, goldenFile, content)
 }
 
-// TestRender_Golden_TS_Barrel byte-locks the generated barrel index.ts.
-// The barrel references all contracts that emit TS (non-responseProjection kinds).
-// RED: golden absent; GREEN: -update creates it.
+// TestRender_Golden_TS_Barrel byte-locks the generated barrel index.ts produced
+// by the PRODUCTION path RenderTSBarrel — full-project scan, specEmitsTS skip,
+// tsPkgAlias/import derivation, collision check and sort — rather than a
+// hand-built entry list. The synth_http_auth_modes fixture has 6 TS-emitting
+// HTTP contracts + 2 responseProjection contracts that must be skipped, so this
+// exercises multi-entry sort and the skip path. RED: golden absent; GREEN:
+// -update creates it.
 func TestRender_Golden_TS_Barrel(t *testing.T) {
-	testDir := filepath.Join("testdata", "synth", "synth_http_minimal")
+	testDir := filepath.Join("testdata", "synth", "synth_http_auth_modes")
 	absTestDir, err := filepath.Abs(testDir)
 	if err != nil {
 		t.Fatalf("abs path: %v", err)
@@ -2345,28 +2349,53 @@ func TestRender_Golden_TS_Barrel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	_ = p
 
-	// Build a minimal barrel with one entry.
-	entries := []tsBarrelEntry{
-		{Alias: "httpOrderPingV1", ImportPath: "./contracts/http/order/ping/v1/types"},
-	}
-	content, err := renderBarrel(entries)
+	artifact, ok, err := RenderTSBarrel(absTestDir, p)
 	if err != nil {
-		t.Fatalf("renderBarrel: %v", err)
+		t.Fatalf("RenderTSBarrel: %v", err)
 	}
+	if !ok {
+		t.Fatal("expected ok=true: synth_http_auth_modes has TS-emitting contracts")
+	}
+	if artifact.Path != "generated-ts/index.ts" {
+		t.Errorf("artifact.Path = %q, want generated-ts/index.ts", artifact.Path)
+	}
+
+	out := string(artifact.Content)
+
+	// A TS-emitting contract is present; both responseProjection contracts are skipped.
+	if !strings.Contains(out, "export * as httpSampleServiceownedV1 from") {
+		t.Errorf("barrel missing expected emitting contract export; got:\n%s", out)
+	}
+	for _, skipped := range []string{"Responseprojection", "responseprojection"} {
+		if strings.Contains(out, skipped) {
+			t.Errorf("barrel must not reference skipped responseProjection contract (%q); got:\n%s", skipped, out)
+		}
+	}
+
+	// Aliases must be emitted in ascending order (RenderTSBarrel sorts by alias).
+	var aliases []string
+	for _, l := range strings.Split(out, "\n") {
+		if rest, ok := strings.CutPrefix(l, "export * as "); ok {
+			aliases = append(aliases, strings.SplitN(rest, " ", 2)[0])
+		}
+	}
+	if len(aliases) < 2 {
+		t.Fatalf("expected ≥2 barrel entries (multi-entry sort coverage); got %d: %v", len(aliases), aliases)
+	}
+	for i := 1; i < len(aliases); i++ {
+		if aliases[i-1] >= aliases[i] {
+			t.Errorf("barrel aliases not strictly ascending at %d: %q !< %q (all: %v)",
+				i, aliases[i-1], aliases[i], aliases)
+		}
+	}
+
 	goldenFile := goldenFilePath("barrel", "index.ts")
-
-	out := string(content)
-	if !strings.Contains(out, "export * as httpOrderPingV1 from") {
-		t.Errorf("barrel missing expected export; got:\n%s", out)
-	}
-
 	if *updateGolden {
-		writeGolden(t, goldenFile, content)
+		writeGolden(t, goldenFile, artifact.Content)
 		return
 	}
-	assertGolden(t, goldenFile, content)
+	assertGolden(t, goldenFile, artifact.Content)
 }
 
 // TestRender_TS_ResponseProjection_Skipped asserts that a responseProjection
@@ -2391,8 +2420,8 @@ func TestRender_TS_ResponseProjection_Skipped(t *testing.T) {
 		t.Fatalf("buildContractSpec: %v", err)
 	}
 
-	// A responseProjection contract must be skippable: kindEmitsTS must return false.
-	if kindEmitsTS(spec) {
-		t.Error("kindEmitsTS returned true for responseProjection contract; want false (TS v1 skips responseProjection)")
+	// A responseProjection contract must be skippable: specEmitsTS must return false.
+	if specEmitsTS(spec) {
+		t.Error("specEmitsTS returned true for responseProjection contract; want false (TS v1 skips responseProjection)")
 	}
 }

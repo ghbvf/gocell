@@ -74,6 +74,49 @@ func tsQuote(s string) string {
 	return "'" + s + "'"
 }
 
+// isTSSafeIdent reports whether s can appear bare as a TS interface property
+// name: first char [A-Za-z_$], remaining chars [A-Za-z0-9_$]. Non-ASCII or
+// otherwise-unsafe keys (hyphen, space, quote, control char, leading digit)
+// return false and must be quoted instead.
+func isTSSafeIdent(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r == '_', r == '$':
+			// always allowed
+		case r >= '0' && r <= '9':
+			if i == 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// tsPropertyKey renders a wire key as a TS interface property name. Safe
+// identifiers are emitted bare; any other legal JSON key (hyphen, space, quote,
+// control char, leading digit) is emitted as a single-quoted string-literal
+// property name via tsQuote, so the generated interface is always valid TS.
+// Escaping happens here (not in the template) so types.ts.tmpl stays pure-render.
+func tsPropertyKey(key string) string {
+	if isTSSafeIdent(key) {
+		return key
+	}
+	return tsQuote(key)
+}
+
+// tsDocComment neutralizes the JSDoc block-comment terminator in free-form doc
+// text (e.g. a schema title) so it cannot close the /** */ comment and inject
+// TS source. Newlines are valid inside a block comment, so only "*/" needs
+// escaping. Like tsPropertyKey, this runs in buildTSView, not the template.
+func tsDocComment(doc string) string {
+	return strings.ReplaceAll(doc, "*/", "*\\/")
+}
+
 // tsGoType converts a DTOField to its TypeScript type string.
 // It uses the structured fields (ItemDTO, IsList, GoType) to avoid re-parsing
 // GoType string for structural decisions.
@@ -149,7 +192,7 @@ func buildTSView(spec *ContractGenSpec) []tsInterface {
 			// tsGoType handles enum type names via the default case (preserves the
 			// named type as-is so the TS union type reference is intact).
 			fields = append(fields, tsField{
-				Key:      key,
+				Key:      tsPropertyKey(key),
 				Required: f.Required,
 				Type:     tsGoType(f),
 			})
@@ -170,7 +213,7 @@ func buildTSView(spec *ContractGenSpec) []tsInterface {
 
 		views = append(views, tsInterface{
 			Name:   dto.Name,
-			Doc:    dto.Doc,
+			Doc:    tsDocComment(dto.Doc),
 			Fields: fields,
 			Enums:  enums,
 		})
@@ -209,11 +252,19 @@ func renderBarrel(entries []tsBarrelEntry) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// kindEmitsTS reports whether the given spec should produce a types.ts file.
+// specEmitsTS reports whether the given spec should produce a types.ts file.
 // It returns false for:
+//   - webhook/grpc kinds (zero contractgen artifacts by design)
+//   - kinds that don't emit types_gen.go
 //   - responseProjection endpoints (data field rewritten to projection.ResourceProjection)
-//   - kinds that don't emit types_gen.go (webhook, grpc)
-func kindEmitsTS(spec *ContractGenSpec) bool {
+//   - specs with no DTOs: an empty types.ts has no `export` and is NOT a TS
+//     module, so importing or re-exporting it (`tsc` TS2306) fails. Such a spec
+//     must neither write a types.ts nor get a barrel entry.
+//
+// It is the single predicate consulted by the disk write (generateOneContract),
+// the barrel (RenderTSBarrel) and the verify manifest (appendTSArtifact), so all
+// three stay consistent: a contract emits TS in all paths or none.
+func specEmitsTS(spec *ContractGenSpec) bool {
 	if spec == nil {
 		return false
 	}
@@ -230,7 +281,9 @@ func kindEmitsTS(spec *ContractGenSpec) bool {
 	if spec.Endpoint != nil && spec.Endpoint.ResponseProjection {
 		return false
 	}
-	return true
+	// No DTOs ⇒ types.ts would be header-only (no `export`), which is not a TS
+	// module — emitting it breaks the barrel and any importer.
+	return len(spec.DTOs) > 0
 }
 
 // kindHasTypesArtifact reports whether the kind emits types_gen.go by checking
@@ -338,6 +391,25 @@ func tsBarrelEntryFor(root string, spec *ContractGenSpec) (tsBarrelEntry, error)
 	}, nil
 }
 
+// detectBarrelAliasCollision fails fast when two contracts derive the same
+// namespace alias. tsPkgAlias is a lossy camelCase derivation (path separators
+// and hyphens both become word boundaries), so distinct contract paths such as
+// "event/foo-bar/v1" and "event/foo/bar/v1" can collapse to one alias and emit
+// duplicate `export * as` lines (TS2390). A silent collision would ship an
+// uncompilable barrel; surfacing it at generation time keeps the alias→contract
+// mapping injective.
+func detectBarrelAliasCollision(entries []tsBarrelEntry) error {
+	seen := make(map[string]string, len(entries))
+	for _, e := range entries {
+		if prev, dup := seen[e.Alias]; dup {
+			return fmt.Errorf(errPrefixRender+"barrel alias collision: %q derived from both %q and %q "+
+				"— rename a contract path segment so aliases stay unique", e.Alias, prev, e.ImportPath)
+		}
+		seen[e.Alias] = e.ImportPath
+	}
+	return nil
+}
+
 // RenderTSBarrel renders the generated-ts/index.ts barrel from EVERY codegen
 // contract that emits a types.ts. It scans the full project (NOT a generate
 // scope) so the barrel is identical whether one contract or all are generated,
@@ -363,7 +435,7 @@ func RenderTSBarrel(root string, p *metadata.ProjectMeta) (CodegenArtifact, bool
 		if err != nil {
 			return CodegenArtifact{}, false, fmt.Errorf(errPrefixRender+"barrel %q: %w", id, err)
 		}
-		if !kindEmitsTS(spec) {
+		if !specEmitsTS(spec) {
 			continue
 		}
 		entry, err := tsBarrelEntryFor(root, spec)
@@ -374,6 +446,9 @@ func RenderTSBarrel(root string, p *metadata.ProjectMeta) (CodegenArtifact, bool
 	}
 	if len(entries) == 0 {
 		return CodegenArtifact{}, false, nil
+	}
+	if err := detectBarrelAliasCollision(entries); err != nil {
+		return CodegenArtifact{}, false, err
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Alias < entries[j].Alias })
 
@@ -413,11 +488,11 @@ func generateTSBarrel(root string, p *metadata.ProjectMeta, opts Options, res *R
 }
 
 // appendTSArtifact appends the per-contract types.ts CodegenArtifact to out when
-// the spec emits TS (skipped for webhook/grpc/responseProjection via
-// kindEmitsTS), returning out unchanged otherwise. Byte-identical to the disk
+// the spec emits TS (skipped for webhook/grpc/responseProjection/empty-DTO via
+// specEmitsTS), returning out unchanged otherwise. Byte-identical to the disk
 // write — both derive from renderTS(spec) + tsTypesPath.
 func appendTSArtifact(out []CodegenArtifact, root string, spec *ContractGenSpec) ([]CodegenArtifact, error) {
-	if !kindEmitsTS(spec) {
+	if !specEmitsTS(spec) {
 		return out, nil
 	}
 	content, err := renderTS(spec)
