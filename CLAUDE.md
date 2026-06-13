@@ -11,6 +11,7 @@ Cell-native Go 工程底座。只保留稳定的开发规则和架构约束。
 - 涉及功能或行为变更时，同步更新对应文档
 - 被 `.gitignore` 忽略的文件禁止 `git add -f`
 - Review 和重构时不考虑向后兼容——当前只有 gocell 自身，没有外部调用方
+- 需求判断 / 方案设计 / review 默认考虑 MDM / 零信任治理与安全边界，不按隐含单租户 / 无设备场景推进
 - AI instruction surfaces 的职责边界见 `docs/guides/agent-instruction-surfaces.md`。
 
 ## 核心架构约束

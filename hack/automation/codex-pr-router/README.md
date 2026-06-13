@@ -175,18 +175,29 @@ Beyond the 7 standard gates, the fix path requires:
 - `pr-meta.sh extract` succeeds (fresh machine block with matching `headSha`)
 - `cycle.exhausted == false` (3-round circuit breaker not tripped)
 - `next.agent != "human"` (not already escalated)
-- **Cx1-only**: `byCx.cx2 == 0 && byCx.cx3 == 0 && byCx.cx4 == 0` — only
-  Cx1 (single-file) findings are auto-fixed; anything more complex goes to
-  human
+- **Cx1/Cx2 window**: `byCx.cx3 == 0 && byCx.cx4 == 0` — Cx1/Cx2 findings are
+  auto-fixed (window widened from Cx1-only per #1763/#2069); Cx3+ goes to human.
 
-After codex runs, a **build guard** validates:
+After codex runs, a **post-exec eligibility gate** (`fix_ineligible_reason`, F1
+#2076) inspects the actual diff (`git diff --name-only HEAD`) and **reverts +
+escalates without pushing** when the change breaks the unattended budget:
+
+- **> 2 files** — the byCx gate only proves Cx≤2, but a Cx2 finding spans up to
+  5 files per rubric, so file count needs its own machine gate;
+- touches a **forbidden path**: `kernel/`, `*/migrations/* | *.sql`,
+  `runtime/bootstrap/`.
+
+Concurrency-semantics is not path-detectable, so it stays the codex prompt's
+responsibility plus the cx3/cx4 gate (concurrency changes are typically Cx3+).
+
+Then a **build guard** validates:
 
 1. `go build ./...` passes
 2. `go test ./<changed-pkgs>/...` passes for all modified packages
 3. `golangci-lint` passes (if installed)
 
-If any guard fails, an escalation comment is posted and `ai/local-fix` is
-removed to prevent re-triggering.
+If the eligibility gate trips or any build guard fails, an escalation comment is
+posted and `ai/local-fix` is removed to prevent re-triggering.
 
 ### Activation
 

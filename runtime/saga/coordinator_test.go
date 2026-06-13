@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -403,6 +404,18 @@ func TestFoldEvents(t *testing.T) {
 			wantPrevState: []byte(`{"a":1}`),
 			wantErr:       false,
 		},
+		{
+			// #1950: a started-but-uncommitted step does NOT advance the cursor —
+			// forward replay re-runs it. Explicit case (no longer a silent default).
+			name: "KindStepStarted in history → skipped, cursor stays at prior StepCompleted",
+			events: []journal.Event{
+				{Kind: journal.KindStepCompleted, StepName: "step1", Payload: []byte(`{"a":1}`)},
+				{Kind: journal.KindStepStarted, StepName: "step2"},
+			},
+			wantCursor:    1,
+			wantPrevState: []byte(`{"a":1}`),
+			wantErr:       false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -421,6 +434,161 @@ func TestFoldEvents(t *testing.T) {
 				t.Errorf("prevState = %q, want %q", prevState, tt.wantPrevState)
 			}
 		})
+	}
+}
+
+// TestFoldEvents_AllKindsHandled is the AI-HARD machine guard for foldEvents'
+// exhaustive, fail-closed switch (#1950). It iterates EVERY journal.EventKind in
+// the vocabulary — auto-extending via Valid(), so a newly-added kind enters the
+// loop automatically — and asserts each classifies deterministically WITHOUT
+// falling through to the fail-closed default (errFoldUnknownKind). Only
+// KindStepFailed is expected to error (the defensive errFoldEventMismatch); every
+// other kind must fold without error. A new EventKind added without an explicit
+// foldEvents case lands on errFoldUnknownKind → this test goes red, forcing the
+// author to decide how forward replay treats it. The n≥11 anti-vacuity check
+// guards against Valid() bounds collapsing the loop to nothing.
+func TestFoldEvents_AllKindsHandled(t *testing.T) {
+	t.Parallel()
+	def := &ksaga.Definition{
+		ID:    "test-def",
+		Steps: []ksaga.Step{{Name: "step1", Run: noopStep}},
+	}
+
+	var n int
+	for k := journal.KindStepStarted; k.Valid(); k++ {
+		n++
+		cursor, prevState, err := foldEvents([]journal.Event{{Kind: k, StepName: "step1", Payload: []byte(`{"x":1}`)}}, def)
+		wantErr := k == journal.KindStepFailed // only the defensive guard errors
+		if (err != nil) != wantErr {
+			t.Errorf("kind %s (%d): foldEvents err=%v, wantErr=%v — a new EventKind needs an explicit foldEvents case (#1950 fail-closed default)",
+				k, k, err, wantErr)
+		}
+		if wantErr {
+			continue
+		}
+		// Classification check (not just "no error"): only KindStepCompleted
+		// advances the cursor / seeds prevState; every other kind is a skip.
+		if k == journal.KindStepCompleted {
+			if cursor != 1 || !bytes.Equal(prevState, []byte(`{"x":1}`)) {
+				t.Errorf("kind %s: cursor=%d prevState=%q, want 1 / payload", k, cursor, prevState)
+			}
+		} else if cursor != 0 || prevState != nil {
+			t.Errorf("kind %s: cursor=%d prevState=%q, want 0 / nil (skip kind must not advance)", k, cursor, prevState)
+		}
+	}
+	if n < 11 {
+		t.Fatalf("enumerated %d kinds; expected ≥11 (journal vocabulary) — Valid() bounds may be wrong, test is vacuous", n)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestCollectCommittedSteps
+// ---------------------------------------------------------------------------
+
+// TestCollectCommittedSteps locks the committed-step frontier computation that
+// runCompensation walks in reverse. The out-of-order case is the anti-fusion
+// guard (#1951): collectCommittedSteps deliberately uses TWO passes because a
+// step's compensate outcome can appear in the log AFTER a later step's
+// completion, so the full compensated set must be known before filtering. A
+// future "optimization" that fuses the passes into one forward walk would
+// re-include the early compensated step and turn this case red.
+func TestCollectCommittedSteps(t *testing.T) {
+	t.Parallel()
+	def := &ksaga.Definition{
+		ID: "test-def",
+		Steps: []ksaga.Step{
+			{Name: "step1", Run: noopStep},
+			{Name: "step2", Run: noopStep},
+			{Name: "step3", Run: noopStep},
+		},
+	}
+	tests := []struct {
+		name             string
+		events           []journal.Event
+		wantCommitted    []string // step names, forward order
+		wantPriorFailure int
+	}{
+		{
+			name: "no compensation → all completed steps committed in forward order",
+			events: []journal.Event{
+				{Kind: journal.KindStepCompleted, StepName: "step1", Payload: []byte(`{"a":1}`)},
+				{Kind: journal.KindStepCompleted, StepName: "step2", Payload: []byte(`{"b":2}`)},
+				{Kind: journal.KindStepCompleted, StepName: "step3", Payload: []byte(`{"c":3}`)},
+			},
+			wantCommitted:    []string{"step1", "step2", "step3"},
+			wantPriorFailure: 0,
+		},
+		{
+			name: "step compensated → filtered from committed",
+			events: []journal.Event{
+				{Kind: journal.KindStepCompleted, StepName: "step1"},
+				{Kind: journal.KindStepCompleted, StepName: "step2"},
+				{Kind: journal.KindStepCompensated, StepName: "step2"},
+			},
+			wantCommitted:    []string{"step1"},
+			wantPriorFailure: 0,
+		},
+		{
+			name: "compensation failed → filtered AND counted",
+			events: []journal.Event{
+				{Kind: journal.KindStepCompleted, StepName: "step1"},
+				{Kind: journal.KindStepCompensationFailed, StepName: "step1"},
+			},
+			wantCommitted:    []string{},
+			wantPriorFailure: 1,
+		},
+		{
+			// Anti-fusion lock: step1's compensate outcome appears AFTER step2/step3
+			// completions. A single forward pass deciding membership at the
+			// KindStepCompleted moment would wrongly re-include step1.
+			name: "out-of-order compensation → early step still filtered",
+			events: []journal.Event{
+				{Kind: journal.KindStepCompleted, StepName: "step1"},
+				{Kind: journal.KindStepCompleted, StepName: "step2"},
+				{Kind: journal.KindStepCompleted, StepName: "step3"},
+				{Kind: journal.KindStepCompensated, StepName: "step1"},
+			},
+			wantCommitted:    []string{"step2", "step3"},
+			wantPriorFailure: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			committed, stepByName, priorFailure := collectCommittedSteps(tt.events, def)
+			gotNames := make([]string, len(committed))
+			for i, c := range committed {
+				gotNames[i] = string(c.name)
+			}
+			if !slices.Equal(gotNames, tt.wantCommitted) {
+				t.Errorf("committed = %v, want %v", gotNames, tt.wantCommitted)
+			}
+			if priorFailure != tt.wantPriorFailure {
+				t.Errorf("priorFailureCount = %d, want %d", priorFailure, tt.wantPriorFailure)
+			}
+			if len(stepByName) != len(def.Steps) {
+				t.Errorf("stepByName has %d entries, want %d", len(stepByName), len(def.Steps))
+			}
+		})
+	}
+}
+
+// TestCompensationTrigger_Constructors locks the two sealed constructors (#1951):
+// the recovery-XOR-cause invariant is enforced by construction (unexported
+// fields + these are the only minters), and the illegal "recovery WITH cause"
+// combo is unrepresentable outside the package. This proves each constructor
+// sets exactly the right shape the runCompensation call sites rely on.
+func TestCompensationTrigger_Constructors(t *testing.T) {
+	t.Parallel()
+
+	rt := recoveryTrigger()
+	if !rt.recovery || rt.cause != nil {
+		t.Errorf("recoveryTrigger() = {recovery:%v, cause:%v}, want {true, nil}", rt.recovery, rt.cause)
+	}
+
+	cause := errors.New("forward step failed")
+	ft := failureTrigger(cause)
+	if ft.recovery || !errors.Is(ft.cause, cause) {
+		t.Errorf("failureTrigger(err) = {recovery:%v, cause:%v}, want {false, err}", ft.recovery, ft.cause)
 	}
 }
 
@@ -898,6 +1066,12 @@ func TestStop_DrainTimeout(t *testing.T) {
 	}
 	if ecErr.Kind != errcode.KindDeadlineExceeded {
 		t.Errorf("error kind = %v, want KindDeadlineExceeded", ecErr.Kind)
+	}
+	// Stop-budget timeout carries the saga-specific timeout code, NOT generic
+	// ErrConflict — bootstrap LIFO Close classifies shutdown timeouts distinctly
+	// from state conflicts (#1950).
+	if ecErr.Code != errcode.ErrSagaStopTimeout {
+		t.Errorf("error code = %v, want ErrSagaStopTimeout", ecErr.Code)
 	}
 
 	// The coordinator goroutine should still exit (cancel the outer ctx).
