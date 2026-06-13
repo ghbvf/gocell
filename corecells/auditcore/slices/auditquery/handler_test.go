@@ -226,12 +226,14 @@ func assertAuditVisibilityCase(t *testing.T, mux http.Handler, tc auditVisibilit
 	mux.ServeHTTP(w, req)
 
 	if isSuperAdmin(tc.roles) {
-		// #1618 merge: RowScopeAll fail-closes under FORCE RLS (deferred);
-		// the handler surfaces RowScopeAllUnsupportedError (KindNotImplemented)
-		// as a 501 — policy-authorized but capability-deferred (review F5).
-		// The FR-007 audit is still emitted (asserted by caller).
+		// Super-admin with no CrossTenantQueryStore wired: graceful-absent path per
+		// ADR #1810 returns 501 (RowScopeAllUnsupportedError). The handler routes to
+		// CrossTenantQueryStore when wired (200 + cross-tenant rows, see
+		// TestHandleQuery_SuperAdmin_CrossTenantStore_200); this matrix uses the
+		// base service (no WithCrossTenantStore) to exercise the graceful-absent
+		// branch specifically. FR-007 audit is still emitted (asserted by caller).
 		require.Equal(t, http.StatusNotImplemented, w.Code,
-			"tc=%s: super-admin RowScopeAll must fail-closed (501) under FORCE RLS, body=%s", tc.name, w.Body.String())
+			"tc=%s: super-admin without CrossTenantQueryStore must return 501 (graceful-absent), body=%s", tc.name, w.Body.String())
 		return
 	}
 
@@ -1479,16 +1481,19 @@ func TestAuditQueryPolicy(t *testing.T) {
 //
 //	non-admin usrA in tenantA → count 1  (RowScopeSelf, own row only)
 //	admin in tenantA           → count 2  (RowScopeTenant: tenantA + tenant-less; NOT tenantB)
-//	super-admin (any tenant)   → fail-closed 501 (RowScopeAll deferred under #1618 FORCE RLS)
+//	super-admin (any tenant)   → 501 when no CrossTenantQueryStore wired (graceful-absent
+//	                             path, per ADR #1810); the 200 path is covered by
+//	                             TestHandleQuery_SuperAdmin_CrossTenantStore_200.
 //
-// #1618 merge note: PR-5 (#1343) shipped super-admin RowScopeAll as a working
-// cross-tenant audit read (count 3). Under #1618's per-tenant FORCE RLS the audit
-// store fail-closes RowScopeAll (RowScopeAllUnsupportedError → 501 Not Implemented)
-// — the NOBYPASSRLS serving role cannot enumerate tenants, so the cross-tenant
-// audit CAPABILITY is deferred to backlog. 501 (not 500) because the super-admin
-// request is policy-authorized but the capability is not yet implemented (review
-// F5; RFC 9110 §15.6.2). The mandatory FR-007 slog.Error audit is still emitted
-// inside p.RowVisibility before the store rejects, so the FR-007 assertion holds.
+// The 501 in the super-admin case is the graceful-absent path (no admin pool provisioned),
+// not a capability deferral: when CrossTenantQueryStore is nil, the handler returns
+// RowScopeAllUnsupportedError (501 Not Implemented, per ADR #1810 §graceful-absent).
+// When a CrossTenantQueryStore IS wired, the handler routes to the dedicated admin pool
+// and returns 200 with cross-tenant rows (see TestHandleQuery_SuperAdmin_CrossTenantStore_200).
+// 501 (not 500): the super-admin request is policy-authorized but the capability is
+// unavailable due to absent wiring (RFC 9110 §15.6.2). The mandatory FR-007 slog.Error
+// audit is still emitted inside p.CrossTenantVisibility before the store rejects, so the
+// FR-007 assertion holds regardless of the store outcome.
 func TestHandleQuery_RowScopeVisibilityMatrix(t *testing.T) {
 	// Install slog capture to assert FR-007: super-admin cross-tenant access must
 	// emit a slog.Error record; admin and non-admin paths must not.

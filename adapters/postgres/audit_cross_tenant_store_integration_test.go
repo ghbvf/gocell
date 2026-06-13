@@ -205,19 +205,17 @@ func TestAuditCrossTenantStore_PG_ReadsAcrossTenants(t *testing.T) {
 
 	// Both tenants and both namespaces must appear.
 	tenantsSeen := make(map[string]bool)
-	namespacesSeen := make(map[string]bool)
 	for _, e := range all {
 		tenantsSeen[e.TenantID] = true
-		// namespace is not a direct field on ledger.Entry — verify via event IDs
-		// that cover both namespace chains instead.
-		_ = e
 	}
 	// The system row has TenantID="" (empty); both canonical tenants must appear.
 	assert.True(t, tenantsSeen[ctTenantA], "tenant A rows must be visible to admin role")
 	assert.True(t, tenantsSeen[ctTenantB], "tenant B rows must be visible to admin role")
 	assert.True(t, tenantsSeen[""], "system (tenant_id='') rows must be visible to admin role")
 
-	// Verify event IDs from both namespaces are present.
+	// Verify event IDs from both namespaces are present. Namespace is not a
+	// direct ledger.Entry field; we assert coverage via the event IDs that were
+	// seeded in specific namespace chains (auditcore and bootstrap respectively).
 	eventIDs := make(map[string]bool)
 	for _, e := range all {
 		eventIDs[e.EventID] = true
@@ -225,6 +223,14 @@ func TestAuditCrossTenantStore_PG_ReadsAcrossTenants(t *testing.T) {
 	assert.True(t, eventIDs["ev-a1-ac"], "auditcore-namespace tenant-A row must be present")
 	assert.True(t, eventIDs["ev-b1-bs"], "bootstrap-namespace tenant-B row must be present")
 	assert.True(t, eventIDs["ev-sys-bs"], "system row must be present")
+
+	// Both namespace chains (auditcore + bootstrap) must be represented.
+	// ev-a1-ac / ev-b1-ac come from the auditcore namespace;
+	// ev-a1-bs / ev-b1-bs / ev-sys-bs come from the bootstrap namespace.
+	hasAuditcore := eventIDs["ev-a1-ac"] || eventIDs["ev-b1-ac"]
+	hasBootstrap := eventIDs["ev-a1-bs"] || eventIDs["ev-b1-bs"] || eventIDs["ev-sys-bs"]
+	assert.True(t, hasAuditcore, "admin role must see rows from the auditcore namespace")
+	assert.True(t, hasBootstrap, "admin role must see rows from the bootstrap namespace")
 
 	// Results must be ordered timestamp DESC, id ASC.
 	for i := 1; i < len(all); i++ {
@@ -272,7 +278,6 @@ func TestAuditCrossTenantStore_PG_ReadsAcrossTenants(t *testing.T) {
 		}
 		seen[id] = true
 	}
-	_ = namespacesSeen
 }
 
 // TestAuditCrossTenant_ServingRole_CannotReadCrossTenant is the KEY security
@@ -302,18 +307,24 @@ func TestAuditCrossTenant_ServingRole_CannotReadCrossTenant(t *testing.T) {
 	appPool := restrictedAppPool(t, dsn, ownerPool)
 	tm := NewTxManager(appPool)
 
-	// Seed two tenant rows via the owner pool (bypasses RLS, full INSERT rights).
+	// Seed rows via the owner pool (bypasses RLS, full INSERT rights).
+	// rlsTenantA row: proves the serving role CAN read its own-tenant rows.
+	// ctTenantA / ctTenantB rows: used for the cross-tenant leak assertion.
 	base := time.Date(2025, 6, 2, 0, 0, 0, 0, time.UTC)
+	insertAuditRowAsOwner(t, ownerPool,
+		"ct-sec-own1", ctNSAuditcore, "ev-sec-own1", "actor-own",
+		string(rlsTenantA), 1, base.Add(-time.Second))
 	insertAuditRowAsOwner(t, ownerPool,
 		"ct-sec-a1", ctNSAuditcore, "ev-sec-a1", "actor-a", ctTenantA, 1, base)
 	insertAuditRowAsOwner(t, ownerPool,
 		"ct-sec-b1", ctNSAuditcore, "ev-sec-b1", "actor-b", ctTenantB, 1, base.Add(time.Second))
 
-	// Confirm the serving role can see its OWN tenant's rows via GUC scope.
+	// The serving role must be able to read its OWN tenant's rows via GUC scope.
+	// rlsTenantA now has 1 seeded row — ownCount must be > 0.
 	ownCount := scopedCountAudit(t, tm, rlsTenantA, ctNSAuditcore)
-	// We seeded ctTenantA (not rlsTenantA) above, so rlsTenantA's chain is empty.
-	// The important assertion is that the cross-tenant count is 0.
-	_ = ownCount
+	assert.Greater(t, ownCount, 0,
+		"[SEC] gocell_rls_app must be able to read its own-tenant rows (ownCount must be > 0): "+
+			"the RLS policy must NOT block the serving role from reading its own tenant's audit rows")
 
 	// The serving role must NOT see other tenants' rows even with migration 064
 	// in place. We simulate the gocell_app serving role by reading inside a

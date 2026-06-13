@@ -1483,6 +1483,11 @@ probe 没有形如 `gocell_..._total` 的专属告警序列；它复用既有的
         2. Ensure deploy/postgres/init/10-restricted-role.sh ran on the target DB
            (role must exist before corebundle connects).
         3. Restart corebundle; the probe turns green within the first readyz cycle.
+      Sub-scenario — audit_admin_read_all policy missing while gocell_audit_admin role
+      is present: schema_guard.VerifyExpectedShape fails (503) because migration 064's
+      RLS policy is absent despite the role existing. Remediation: re-run migration 064
+      (schema drift; the role was provisioned after the migration ran or the migration
+      was not applied to this database instance).
       See: docs/architecture/202606071200-1676-adr-restricted-app-serving-pool.md
            docs/ops/local-docker-deploy.md §Dual-role PostgreSQL
 ```

@@ -753,17 +753,34 @@ func TestService_QueryCrossTenant_NilStore_Returns501(t *testing.T) {
 
 // TestService_QueryCrossTenant_WithStore_ReturnsPaged verifies that when a
 // CrossTenantQueryStore is wired, QueryCrossTenant returns its results via the
-// standard ExecutePagedQuery machinery (#1810).
+// standard ExecutePagedQuery machinery (#1810), including hasMore detection and
+// cursor generation when more entries exist than the requested page limit.
+//
+// The fake seeds 4 entries; limit=2 means FetchLimit()=3, so the fake returns 3
+// rows. ExecutePagedQuery detects len(rows)>limit → HasMore=true, NextCursor non-empty.
+// Without this test, the N+1 hasMore path for cross-tenant reads was never asserted.
 func TestService_QueryCrossTenant_WithStore_ReturnsPaged(t *testing.T) {
-	now := time.Now()
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	entries := []*ledger.Entry{
 		{
 			ID: "ct-1", EventID: "evt-ct-1", EventType: "vis.v1",
-			ActorID: "sa", TenantID: auditQueryTestTenant, Timestamp: now, Payload: []byte("{}"),
+			ActorID: "sa", TenantID: auditQueryTestTenant,
+			Timestamp: base, Payload: []byte("{}"),
 		},
 		{
 			ID: "ct-2", EventID: "evt-ct-2", EventType: "vis.v1",
-			ActorID: "sa", TenantID: auditQueryTestTenantB, Timestamp: now.Add(time.Second), Payload: []byte("{}"),
+			ActorID: "sa", TenantID: auditQueryTestTenantB,
+			Timestamp: base.Add(time.Second), Payload: []byte("{}"),
+		},
+		{
+			ID: "ct-3", EventID: "evt-ct-3", EventType: "vis.v1",
+			ActorID: "sa", TenantID: auditQueryTestTenant,
+			Timestamp: base.Add(2 * time.Second), Payload: []byte("{}"),
+		},
+		{
+			ID: "ct-4", EventID: "evt-ct-4", EventType: "vis.v1",
+			ActorID: "sa", TenantID: auditQueryTestTenantB,
+			Timestamp: base.Add(3 * time.Second), Payload: []byte("{}"),
 		},
 	}
 	fake := &fakeCtStore{entries: entries}
@@ -774,9 +791,14 @@ func TestService_QueryCrossTenant_WithStore_ReturnsPaged(t *testing.T) {
 	require.NoError(t, err)
 
 	ctv := tenant.NewCrossTenantVisibility()
-	result, err := svc.QueryCrossTenant(context.Background(), ctv, ledger.AuditFilters{}, query.PageParams{})
+
+	// First page: limit=2, fake has 4 entries → FetchLimit()=3, fake returns 3 rows
+	// → hasMore detection fires (len(3) > limit(2)).
+	result, err := svc.QueryCrossTenant(context.Background(), ctv, ledger.AuditFilters{}, query.PageParams{Limit: 2})
 	require.NoError(t, err)
-	assert.Len(t, result.Items, 2, "cross-tenant store returned both entries")
+	assert.Len(t, result.Items, 2, "page-1 must contain exactly 2 items (page limit)")
+	assert.True(t, result.HasMore, "HasMore must be true when store has more entries than limit")
+	assert.NotEmpty(t, result.NextCursor, "NextCursor must be non-empty when HasMore is true")
 }
 
 // TestQuery_ZeroTime_SkipsFromToFormat asserts that when filters.From and filters.To

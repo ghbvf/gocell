@@ -399,6 +399,28 @@ role ignores all policies at runtime even if the schema is correct.
 
 ref: `docs/architecture/202606071200-1676-adr-restricted-app-serving-pool.md` §Decision.
 
+#### Migration 064 and the optional `gocell_audit_admin` role (#1810)
+
+Migration 064 adds the `audit_admin_read_all` RLS policy on `audit_entries`. Its
+schema-guard validation via `schema_guard.VerifyExpectedShape` applies only when
+the `gocell_audit_admin` role exists in the database:
+
+- **Role absent** (default — `GOCELL_AUDIT_ADMIN_PASSWORD` unset at initdb): migration
+  064 runs as a no-op (the role does not exist, so the policy body referencing it is not
+  installed). `schema_guard` expects 1 RLS policy on `audit_entries` (the existing
+  `tenant_isolation` policy from migration 055). No `/readyz` impact.
+- **Role present, policy installed**: `schema_guard.VerifyExpectedShape` expects 2 RLS
+  policies on `audit_entries` (`tenant_isolation` + `audit_admin_read_all`). If the role
+  was provisioned after migration 064 ran (or migration 064 was not re-applied), the
+  expected policy count mismatches and `/readyz` returns **503** via
+  `postgres_app_role_restricted_ready` (schema drift). Remediation: re-run migration 064
+  against the live database.
+
+The `gocell_audit_admin` admin read pool itself contributes **no `/readyz` probe**. This
+is deliberate: the pool is a close-only resource consumed only on super-admin cross-tenant
+audit requests. A pool connectivity failure surfaces as a 5xx on those requests rather
+than a readiness gate — tracking as a hardening follow-up.
+
 These probes are **not synonymous** with `postgres_ready`. A green `postgres_ready`
 and a failing `accesscore_repo_ready` means the PG connection is alive but the
 `sessions` **or** `policies` table is inaccessible (the probe aggregates both and

@@ -5,9 +5,39 @@ import (
 	"testing"
 	"time"
 
+	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
+
+// crossTenantSQLForTest rebuilds the SQL for a given filter set + params without
+// executing. Used by unit tests to verify that the generated SQL contains no
+// namespace or tenant_id predicates, confirming the predicate-free design.
+// Moving this to _test.go ensures a production import referencing it is a
+// compile error (Hard enforcement, review Fix 1).
+func crossTenantSQLForTest(filters ledger.AuditFilters, params query.ListParams) (string, error) {
+	b := pgquery.NewBuilder()
+	b.Append(crossTenantBaseSQL)
+	b.AppendIf(filters.EventType != "", `AND event_type = `, filters.EventType)
+	b.AppendIf(filters.ActorID != "", `AND actor_id = `, filters.ActorID)
+	b.AppendIf(filters.SubjectID != "", `AND subject_id = `, filters.SubjectID)
+	b.AppendIf(filters.TraceID != "", `AND trace_id = `, filters.TraceID)
+	b.AppendIf(!filters.From.IsZero(), `AND timestamp >= `, filters.From)
+	b.AppendIf(!filters.To.IsZero(), `AND timestamp <= `, filters.To)
+	if err := pgquery.AppendKeyset(b, params); err != nil {
+		return "", err
+	}
+	sql, _ := b.Build()
+	return sql, nil
+}
+
+// crossTenantSQLHasNoTenantPredicate reports whether the SQL produced by the
+// cross-tenant builder contains no namespace or tenant_id predicates.
+func crossTenantSQLHasNoTenantPredicate(sql string) bool {
+	lower := strings.ToLower(sql)
+	return !strings.Contains(lower, "namespace =") &&
+		!strings.Contains(lower, "tenant_id =")
+}
 
 // TestAuditCrossTenantStore_Constructor verifies nil-pool rejection at construction.
 func TestAuditCrossTenantStore_Constructor(t *testing.T) {

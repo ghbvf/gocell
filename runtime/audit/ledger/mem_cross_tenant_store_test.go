@@ -48,10 +48,35 @@ func appendEntry(t *testing.T, store *ledger.MemStore, eventID, tenantID, actorI
 	}
 }
 
-// TestNewMemCrossTenantStore_NilPool verifies nil/empty constructor rejections.
+// TestNewMemCrossTenantStore_NilPool verifies nil/empty constructor rejections,
+// including the typed-nil *MemStore case that is only caught at runtime
+// (a (*MemStore)(nil) passes static type checking but must be rejected by the
+// nil-guard in NewMemCrossTenantStore, which checks both validation.IsNilInterface
+// and the concrete-pointer nil branch).
 func TestNewMemCrossTenantStore_NilPool(t *testing.T) {
-	_, err := ledger.NewMemCrossTenantStore()
-	errcodetest.AssertCode(t, err, errcode.ErrValidationFailed)
+	cases := []struct {
+		name   string
+		stores []*ledger.MemStore
+	}{
+		{
+			name:   "no stores (empty variadic)",
+			stores: nil,
+		},
+		{
+			// Typed-nil: (*MemStore)(nil) has a concrete type at compile time but
+			// carries a nil pointer at runtime. The constructor must reject this
+			// via the nil guard (validation.IsNilInterface branch + concrete == nil
+			// branch) and return ErrValidationFailed, not panic or succeed.
+			name:   "typed_nil_store",
+			stores: []*ledger.MemStore{(*ledger.MemStore)(nil)},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ledger.NewMemCrossTenantStore(tc.stores...)
+			errcodetest.AssertCode(t, err, errcode.ErrValidationFailed)
+		})
+	}
 }
 
 // TestMemCrossTenantStore_CrossTenantRead verifies that QueryCrossTenant returns

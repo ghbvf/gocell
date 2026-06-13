@@ -20,7 +20,6 @@
 set -e
 
 : "${GOCELL_APP_PASSWORD:?GOCELL_APP_PASSWORD required for restricted serving role}"
-: "${GOCELL_AUDIT_ADMIN_PASSWORD:?GOCELL_AUDIT_ADMIN_PASSWORD required for audit admin read role}"
 
 # Defense-in-depth: passwords are interpolated into CREATE ROLE SQL literals
 # AND into DSN userinfo. Restrict to the RFC 3986 "unreserved" set
@@ -31,13 +30,6 @@ set -e
 case "${GOCELL_APP_PASSWORD}" in
   *[!A-Za-z0-9._~-]*|"")
     echo "10-restricted-role: GOCELL_APP_PASSWORD must be non-empty URL-safe (RFC 3986 unreserved: A-Za-z0-9._~-)" >&2
-    exit 1
-    ;;
-esac
-
-case "${GOCELL_AUDIT_ADMIN_PASSWORD}" in
-  *[!A-Za-z0-9._~-]*|"")
-    echo "10-restricted-role: GOCELL_AUDIT_ADMIN_PASSWORD must be non-empty URL-safe (RFC 3986 unreserved: A-Za-z0-9._~-)" >&2
     exit 1
     ;;
 esac
@@ -62,13 +54,34 @@ ALTER DEFAULT PRIVILEGES FOR ROLE ${POSTGRES_USER}
 ALTER DEFAULT PRIVILEGES FOR ROLE ${POSTGRES_USER}
   IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO gocell_app;
+SQL
 
--- gocell_audit_admin: dedicated read-only pool for cross-tenant audit access
--- (#1810). NOSUPERUSER + NOBYPASSRLS — cross-tenant visibility is granted
--- exclusively via the role-scoped permissive policy audit_admin_read_all
--- (migration 064), NOT by bypassing RLS. The serving role gocell_app is
--- unaffected: PERMISSIVE policies are OR-ed per role, and the policy names
--- gocell_audit_admin explicitly.
+# gocell_audit_admin: optional dedicated read-only pool for cross-tenant audit
+# access (#1810). NOSUPERUSER + NOBYPASSRLS — cross-tenant visibility is granted
+# exclusively via the role-scoped permissive policy audit_admin_read_all
+# (migration 064), NOT by bypassing RLS. The serving role gocell_app is
+# unaffected: PERMISSIVE policies are OR-ed per role, and the policy names
+# gocell_audit_admin explicitly.
+#
+# When GOCELL_AUDIT_ADMIN_PASSWORD is unset/empty this block is skipped
+# entirely; migration 064 is a no-op where the role is absent. Absent role →
+# GOCELL_AUDIT_ADMIN_DSN is not configured → super-admin cross-tenant audit
+# read returns HTTP 501 (fail-closed).
+if [ -z "${GOCELL_AUDIT_ADMIN_PASSWORD:-}" ]; then
+  echo "10-restricted-role: GOCELL_AUDIT_ADMIN_PASSWORD unset — audit admin role not provisioned; super-admin cross-tenant audit read disabled"
+else
+  case "${GOCELL_AUDIT_ADMIN_PASSWORD}" in
+    *[!A-Za-z0-9._~-]*|"")
+      echo "10-restricted-role: GOCELL_AUDIT_ADMIN_PASSWORD must be URL-safe (RFC 3986 unreserved: A-Za-z0-9._~-)" >&2
+      exit 1
+      ;;
+  esac
+
+  psql \
+    --username "$POSTGRES_USER" \
+    --dbname   "$POSTGRES_DB"   \
+    --set ON_ERROR_STOP=1       \
+    <<SQL
 CREATE ROLE gocell_audit_admin
   LOGIN
   PASSWORD '${GOCELL_AUDIT_ADMIN_PASSWORD}'
@@ -77,3 +90,4 @@ CREATE ROLE gocell_audit_admin
 
 GRANT USAGE ON SCHEMA public TO gocell_audit_admin;
 SQL
+fi
