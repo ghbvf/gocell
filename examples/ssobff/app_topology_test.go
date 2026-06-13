@@ -8,7 +8,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
@@ -116,6 +118,36 @@ func TestSSOBFFApp_DemoTopologyDoesNotRequireInfra(t *testing.T) {
 	// Prove the gate fires at pool creation (bogus DSN), not before it.
 	assert.Contains(t, msg, "create PG pool",
 		"demo topology must reach the PG pool (bogus DSN should fail there, not at a Redis gate)")
+}
+
+// TestNewSSOBFFJWT pins the #2052 multi-pod JWT key gate: ssobff's JWT signing
+// keys are topology-gated via cellsecrets.LoadKeySet (mirroring cmd/corebundle's
+// buildJWTDeps), not a per-process ephemeral key pair. In real adapter mode the
+// shared key env vars (GOCELL_JWT_PRIVATE_KEY / GOCELL_JWT_PUBLIC_KEY) are
+// required and a missing pair fails closed — a per-pod ephemeral key would make
+// replica A's tokens 401 against replica B (the #2052 bug, 4th sibling of the
+// #825/#2017 single-pod-primitive family). Demo topology keeps ephemeral keys so
+// the walkthrough path stays infra-free.
+func TestNewSSOBFFJWT(t *testing.T) {
+	clk := clock.Real()
+
+	t.Run("demo topology generates ephemeral keys", func(t *testing.T) {
+		t.Setenv(auth.EnvJWTPrivateKey, "")
+		t.Setenv(auth.EnvJWTPublicKey, "")
+		issuer, verifier, err := newSSOBFFJWT(mkTopoT(t, "", "memory"), clk)
+		require.NoError(t, err)
+		assert.NotNil(t, issuer)
+		assert.NotNil(t, verifier)
+	})
+
+	t.Run("real topology missing JWT key env fails closed", func(t *testing.T) {
+		t.Setenv(auth.EnvJWTPrivateKey, "")
+		t.Setenv(auth.EnvJWTPublicKey, "")
+		_, _, err := newSSOBFFJWT(mkTopoT(t, "real", "postgres"), clk)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "JWT key",
+			"real topology must fail closed on missing shared JWT key env (no per-pod ephemeral)")
+	})
 }
 
 // TestResolveSSOBFFBootstrapCreds pins the F1 bootstrap-credential funnel: demo
