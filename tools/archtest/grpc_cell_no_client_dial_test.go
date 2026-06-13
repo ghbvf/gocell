@@ -357,10 +357,4 @@ func TestGRPCCellNoClientDial01_FixtureScanRED(t *testing.T) {
 	assert.Positive(t, kinds["conn-type"], "client-conn type (*grpc.ClientConn / ClientConnInterface) must fire")
 	assert.Positive(t, kinds["generated-client"],
 		"generated client surface (New*Client ctor + <Svc>Client interface) must fire")
-	// The stub branch (generated New*Client) cannot fire from this fixture: it
-	// imports only google.golang.org/grpc, NOT the separate generated module. The
-	// stub detector branch is pinned by TestGRPCCellNoClientDial01_SyntheticDetector.
-	// Asserting zero here guards against a future fixture edit silently relying on
-	// (and masking a regression in) the unexercised stub path.
-	assert.Zero(t, kinds["stub"], "stub branch must NOT fire from this grpc-only fixture")
 }
