@@ -72,9 +72,33 @@ func (b *Bootstrap) phase5BuildRouters(ctx context.Context, s *phaseState) error
 	if err := b.phase5FinalizeAllRouters(routers); err != nil {
 		return err
 	}
+	if err := b.phase5BindInProcessTransport(routers); err != nil {
+		return err
+	}
 	s.routers = routers
 	if primaryRtr, ok := routers[cell.PrimaryListener]; ok {
 		s.rtr = primaryRtr
+	}
+	return nil
+}
+
+// phase5BindInProcessTransport binds the FINALIZED internal-listener handler into
+// the shared in-process transport (WriteOnce). It runs after
+// phase5FinalizeAllRouters so a DoContract dispatch sees the same compiled auth
+// chain (ServiceTokenMiddleware + RequireCallerCell) as a network request — the
+// in-process path short-circuits the network, not the governance stack (ADR D4).
+// No InternalListener declared → leave the holder unbound; its DoContract then
+// fail-fasts rather than silently dispatching to nil.
+func (b *Bootstrap) phase5BindInProcessTransport(routers map[cell.ListenerRef]*router.Router) error {
+	if b.inProcessTransport == nil {
+		return nil
+	}
+	rtr, ok := routers[cell.InternalListener]
+	if !ok {
+		return nil
+	}
+	if err := b.inProcessTransport.Bind(rtr.Handler(), b.wrapperTracer); err != nil {
+		return fmt.Errorf("bootstrap: bind in-process transport: %w", err)
 	}
 	return nil
 }

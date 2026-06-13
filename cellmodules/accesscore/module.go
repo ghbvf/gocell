@@ -40,6 +40,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/session"
+	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/state/cas"
@@ -255,16 +256,47 @@ func accessPostgresOptions(shared *composition.SharedDeps, sessionProto *session
 		accesscell.WithPGBundle(pgBundle),
 		accesscell.WithRefreshStore(pgRefreshStore),
 	}
-	// Wire the ConfigGetter using shared.InternalHMACRing (promoted from
-	// cmd-private internalGuard.ring onto composition.SharedDeps).
+	// Wire the ConfigGetter through the in-process CellTransport seam (US4 #1963).
+	// signing uses shared.InternalHMACRing (promoted from cmd-private
+	// internalGuard.ring onto composition.SharedDeps); the transport carries the
+	// signed request to configcore's internal handler.
 	if shared.InternalHMACRing != nil {
-		internalBaseURL := cellsecrets.InternalAddrToBaseURL(shared.InternalHTTPAddr)
+		if remoteCellDeclared(shared.DeploymentTopology, configProviderCell) {
+			// US4 ships only the in-process transport. A remote-declared configcore
+			// needs the remote CellTransport (US5 #1966); never silently fall back to
+			// in-process (that would dispatch to the wrong, local handler).
+			return nil, nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+				"accesscore: configcore is declared remote in the deployment topology, but the remote "+
+					"CellTransport is not wired yet (US5 #1966); in-process transport cannot reach a remote cell")
+		}
+		if shared.InProcessTransport == nil {
+			return nil, nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+				"accesscore: SharedDeps.InProcessTransport must be set to wire the config getter "+
+					"(composition.Builder.Build mints it)")
+		}
 		accessOpts = append(
 			accessOpts,
-			configgetter.WithHTTP(internalBaseURL, shared.InternalHMACRing, shared.Clock),
+			configgetter.WithTransport(shared.InProcessTransport, shared.InternalHMACRing, shared.Clock),
 		)
 	}
 	return accessOpts, pgSessionStore, nil
+}
+
+// configProviderCell is the cell that provides the internal config-get contract
+// (http.config.internal.get.v1) accesscore consumes.
+const configProviderCell = "configcore"
+
+// remoteCellDeclared reports whether cellID is declared as a remote
+// (non-colocated) cell in the deployment topology spec. US4 wires only the
+// in-process transport, so a remote-declared sync provider must fail-fast rather
+// than silently dispatch in-process (the remote CellTransport is US5 #1966).
+func remoteCellDeclared(spec bootstrap.DeploymentTopologySpec, cellID string) bool {
+	for _, r := range spec.Remote {
+		if r.CellID == cellID {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveAccessStorageOpts selects postgres or memory storage options.

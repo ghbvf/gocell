@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/corecells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
@@ -23,6 +25,31 @@ func newTestRing(t *testing.T) *auth.HMACKeyRing {
 	ring, err := auth.NewHMACKeyRing([]byte("test-hmac-key-32-bytes-long-xxxxx"), nil)
 	require.NoError(t, err)
 	return ring
+}
+
+// httpTestTransport is a test transport.CellTransport that dials a real
+// httptest.Server, standing in for the (US5 #1966) remote transport so the
+// configclient's request shaping, service-token signing, and status→errcode
+// mapping can be exercised end-to-end against a live handler. The client builds
+// a path-only request; this double places it onto the test server's base URL.
+type httpTestTransport struct {
+	baseURL string
+	client  *http.Client
+}
+
+func (h httpTestTransport) DoContract(ctx context.Context, _ string, req *http.Request) (*http.Response, error) {
+	u, err := url.Parse(h.baseURL + req.URL.String())
+	if err != nil {
+		return nil, err
+	}
+	req.URL = u
+	//nolint:gosec // G704: test transport dials the in-test httptest.Server; the URL is the test's own base address, not attacker-controlled.
+	return h.client.Do(req.WithContext(ctx))
+}
+
+// transportTo builds an httpTestTransport for srv with the given client.
+func transportTo(baseURL string, client *http.Client) httpTestTransport {
+	return httpTestTransport{baseURL: baseURL, client: client}
 }
 
 // testTenant is a canonical UUID used across configclient tests.
@@ -63,7 +90,7 @@ func TestHTTPConfigGetter_GetEntry_OK(t *testing.T) {
 	defer srv.Close()
 
 	ring := newTestRing(t)
-	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
+	client := NewHTTPConfigGetter(transportTo(srv.URL, srv.Client()), ring, clock.Real())
 	entry, err := client.GetEntry(context.Background(), testTenant, "app.name")
 	require.NoError(t, err)
 	assert.Equal(t, "app.name", entry.Key)
@@ -84,7 +111,7 @@ func TestHTTPConfigGetter_GetEntry_NotFound(t *testing.T) {
 	defer srv.Close()
 
 	ring := newTestRing(t)
-	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
+	client := NewHTTPConfigGetter(transportTo(srv.URL, srv.Client()), ring, clock.Real())
 	_, err := client.GetEntry(context.Background(), testTenant, "missing.key")
 	errcodetest.AssertCode(t, err, errcode.ErrConfigRepoNotFound)
 }
@@ -109,7 +136,7 @@ func TestHTTPConfigGetter_GetEntry_SensitiveEntry(t *testing.T) {
 	defer srv.Close()
 
 	ring := newTestRing(t)
-	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
+	client := NewHTTPConfigGetter(transportTo(srv.URL, srv.Client()), ring, clock.Real())
 	entry, err := client.GetEntry(context.Background(), testTenant, "db.password")
 	require.NoError(t, err)
 	assert.Equal(t, "db.password", entry.Key)
@@ -123,7 +150,7 @@ func TestHTTPConfigGetter_GetEntry_UnexpectedStatus(t *testing.T) {
 	defer srv.Close()
 
 	ring := newTestRing(t)
-	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
+	client := NewHTTPConfigGetter(transportTo(srv.URL, srv.Client()), ring, clock.Real())
 	_, err := client.GetEntry(context.Background(), testTenant, "any.key")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unexpected status 500")
@@ -136,7 +163,7 @@ func TestHTTPConfigGetter_GetEntry_Unauthorized(t *testing.T) {
 	defer srv.Close()
 
 	ring := newTestRing(t)
-	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
+	client := NewHTTPConfigGetter(transportTo(srv.URL, srv.Client()), ring, clock.Real())
 	_, err := client.GetEntry(context.Background(), testTenant, "some.key")
 	require.Error(t, err)
 
@@ -152,7 +179,7 @@ func TestHTTPConfigGetter_GetEntry_Forbidden(t *testing.T) {
 	defer srv.Close()
 
 	ring := newTestRing(t)
-	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
+	client := NewHTTPConfigGetter(transportTo(srv.URL, srv.Client()), ring, clock.Real())
 	_, err := client.GetEntry(context.Background(), testTenant, "some.key")
 	require.Error(t, err)
 
@@ -171,7 +198,7 @@ func TestHTTPConfigGetter_GetEntry_BadRequest_400(t *testing.T) {
 	defer srv.Close()
 
 	ring := newTestRing(t)
-	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
+	client := NewHTTPConfigGetter(transportTo(srv.URL, srv.Client()), ring, clock.Real())
 	_, err := client.GetEntry(context.Background(), testTenant, "some.key")
 	require.Error(t, err)
 
@@ -183,17 +210,18 @@ func TestHTTPConfigGetter_GetEntry_BadRequest_400(t *testing.T) {
 
 func TestNewHTTPConfigGetter_Constructor(t *testing.T) {
 	ring := newTestRing(t)
-	g := NewHTTPConfigGetter("http://localhost:9090", ring, clock.Real())
+	g := NewHTTPConfigGetter(transportTo("http://localhost:9090", http.DefaultClient), ring, clock.Real())
 	require.NotNil(t, g)
-	assert.Equal(t, "http://localhost:9090", g.baseURL)
+	var _ ports.ConfigGetter = g
 }
 
 // TestHTTPConfigGetter_GetEntry_EmptyToken covers the token=="" branch in
 // GetEntry: when the ring is nil, GenerateServiceToken returns "" and GetEntry
 // returns ErrInternal without making an HTTP call.
 func TestHTTPConfigGetter_GetEntry_EmptyToken(t *testing.T) {
-	// nil ring causes GenerateServiceToken to return "".
-	client := NewHTTPConfigGetterWithHTTPClient("http://localhost:19090", nil, http.DefaultClient, clock.Real())
+	// nil ring causes GenerateServiceToken to return "" — GetEntry fails before
+	// ever calling the transport, so a nil transport here proves it is not reached.
+	client := NewHTTPConfigGetter(nil, nil, clock.Real())
 	_, err := client.GetEntry(context.Background(), testTenant, "any.key")
 	require.Error(t, err)
 
@@ -212,7 +240,7 @@ func TestHTTPConfigGetter_GetEntry_BadResponseBody(t *testing.T) {
 	defer srv.Close()
 
 	ring := newTestRing(t)
-	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
+	client := NewHTTPConfigGetter(transportTo(srv.URL, srv.Client()), ring, clock.Real())
 	_, err := client.GetEntry(context.Background(), testTenant, "any.key")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decode response")
@@ -236,7 +264,7 @@ func TestHTTPConfigGetter_GetEntry_TenantIDForwarded(t *testing.T) {
 	defer srv.Close()
 
 	ring := newTestRing(t)
-	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
+	client := NewHTTPConfigGetter(transportTo(srv.URL, srv.Client()), ring, clock.Real())
 
 	tid1 := mustParseTenant("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 	_, err := client.GetEntry(context.Background(), tid1, "k")
@@ -281,7 +309,7 @@ func TestHTTPConfigGetter_GetEntry_MiddlewareVerified(t *testing.T) {
 	srv := httptest.NewServer(guarded)
 	defer srv.Close()
 
-	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
+	client := NewHTTPConfigGetter(transportTo(srv.URL, srv.Client()), ring, clock.Real())
 	entry, err := client.GetEntry(context.Background(), testTenant, "app.name")
 	require.NoError(t, err, "signed token + matching X-Tenant-ID must pass middleware verification")
 	assert.Equal(t, "app.name", entry.Key)
@@ -326,7 +354,7 @@ func TestHTTPConfigGetter_GetEntry_TamperedTenantHeaderRejected(t *testing.T) {
 	tamper := mustParseTenant("99999999-9999-4999-8999-999999999999")
 	tampered := &http.Client{Transport: tamperTenantTransport{inner: http.DefaultTransport, tenant: tamper.String()}}
 
-	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, tampered, clock.Real())
+	client := NewHTTPConfigGetter(transportTo(srv.URL, tampered), ring, clock.Real())
 	_, err = client.GetEntry(context.Background(), testTenant, "app.name")
 	require.Error(t, err)
 
