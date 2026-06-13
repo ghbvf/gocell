@@ -371,6 +371,68 @@ func TestVerifyExpectedShape_MissingRequiredColumn(t *testing.T) {
 		"details must contain column=authz_epoch; got %v", ec.Details)
 }
 
+// TestMigration064_SchemaGuard_RoleConditionalRLS exercises the #1810 role-
+// conditional RLS expectation in verifyRLS against live PG: schema_guard expects
+// the audit_admin_read_all permissive policy on audit_entries ONLY when the
+// gocell_audit_admin role is provisioned, while the #1622-F1 "no unexpected
+// permissive policy" guard stays intact. Sequential (no t.Parallel) because
+// gocell_audit_admin is a cluster-global role; t.Cleanup drops it.
+func TestMigration064_SchemaGuard_RoleConditionalRLS(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_064_rls")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	const auditAdminPwd = "test-064-admin-pw" //nolint:gosec // test-only fixed credential
+
+	t.Cleanup(func() {
+		c := context.Background()
+		_, _ = pool.DB().Exec(c, `DROP POLICY IF EXISTS audit_admin_read_all ON audit_entries`)
+		_, _ = pool.DB().Exec(c, `DROP ROLE IF EXISTS `+auditAdminRole)
+	})
+
+	// (1) Role absent: migration 064's IF EXISTS(pg_roles) guard skipped during Up,
+	// so audit_entries carries only tenant_isolation. schema_guard expects exactly
+	// that single policy → shape valid.
+	require.NoError(t, VerifyExpectedShape(ctx, pool),
+		"role absent → 1 expected policy on audit_entries → shape valid")
+
+	// (2) #1622-F1 red: an UNEXPECTED extra permissive policy re-opens cross-tenant
+	// access. The guard must reject it even with the audit admin role absent (it is
+	// NOT the sanctioned audit_admin_read_all policy).
+	_, err = pool.DB().Exec(ctx, `CREATE POLICY rogue_read_all ON audit_entries FOR SELECT USING (true)`)
+	require.NoError(t, err)
+	err = VerifyExpectedShape(ctx, pool)
+	require.Error(t, err, "unexpected extra permissive policy must fail (#1622-F1 guard not weakened)")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code, "must be a schema-shape fault")
+	_, err = pool.DB().Exec(ctx, `DROP POLICY rogue_read_all ON audit_entries`)
+	require.NoError(t, err)
+
+	// (3) Role present + audit_admin_read_all policy: schema_guard now expects the
+	// 2-policy set (tenant_isolation + audit_admin_read_all) → shape valid.
+	_, err = pool.DB().Exec(ctx,
+		`CREATE ROLE `+auditAdminRole+` LOGIN PASSWORD '`+auditAdminPwd+`' NOSUPERUSER NOBYPASSRLS`)
+	require.NoError(t, err)
+	_, err = pool.DB().Exec(ctx,
+		`CREATE POLICY audit_admin_read_all ON audit_entries FOR SELECT TO `+auditAdminRole+` USING (true)`)
+	require.NoError(t, err)
+	require.NoError(t, VerifyExpectedShape(ctx, pool),
+		"role present + audit_admin_read_all → 2 expected policies → shape valid")
+
+	// (4) Role present but the policy missing (e.g. migration 064 not (re-)applied
+	// after the role was created): schema_guard expects 2, finds 1 → fail.
+	_, err = pool.DB().Exec(ctx, `DROP POLICY audit_admin_read_all ON audit_entries`)
+	require.NoError(t, err)
+	err = VerifyExpectedShape(ctx, pool)
+	require.Error(t, err, "role present but audit_admin_read_all missing must fail")
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code, "must be a schema-shape fault")
+}
+
 // TestVerifyExpectedShape_SeqIdentityDropped verifies the F5 (#1368) guard:
 // weakening outbox_entries.seq from GENERATED ALWAYS AS IDENTITY to a plain
 // bigint causes VerifyExpectedShape to return ErrAdapterPGSchemaShape. SET NOT

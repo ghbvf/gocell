@@ -95,13 +95,20 @@ func provisionAuditAdminPool(t *testing.T, dsn string, admin *Pool) *Pool {
 			`DROP ROLE IF EXISTS `+auditAdminRole)
 	})
 
-	// 2. Re-run migration 064 so the audit_admin_read_all policy is created.
-	// The migration is idempotent (IF EXISTS on the role check).
-	fsys, fsErr := MigrationsFS()
-	require.NoError(t, fsErr, "load migrations FS")
-	mgr, mgrErr := newMigratorForTable(admin, fsys, "schema_migrations_ct_admin")
-	require.NoError(t, mgrErr, "new migrator for cross-tenant admin provisioning")
-	require.NoError(t, mgr.Up(ctx), "apply migrations including 064")
+	// 2. Create the audit_admin_read_all policy directly (mirrors migration 064's
+	// Up body). We must NOT re-run migration 064 via goose here: the shared
+	// template clone already has all migrations applied, and 064 was a no-op at
+	// template-build time (the gocell_audit_admin role did not yet exist, so its
+	// `IF EXISTS (pg_roles)` guard skipped). goose will not re-run an already-
+	// applied migration, and replaying from a fresh tracking table would instead
+	// re-apply migrations 1..63 onto the already-migrated schema and fail
+	// ("column ... does not exist"). So we execute the policy DDL directly now
+	// that the role exists — idempotent via DROP POLICY IF EXISTS.
+	_, polErr := admin.DB().Exec(ctx, `DROP POLICY IF EXISTS audit_admin_read_all ON audit_entries`)
+	require.NoError(t, polErr, "drop stale audit_admin_read_all policy")
+	_, polErr = admin.DB().Exec(ctx,
+		`CREATE POLICY audit_admin_read_all ON audit_entries FOR SELECT TO `+auditAdminRole+` USING (true)`)
+	require.NoError(t, polErr, "create audit_admin_read_all policy")
 
 	// 3. Grant schema usage + SELECT so the admin role can read audit_entries.
 	grants := []string{
