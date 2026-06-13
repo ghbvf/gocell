@@ -10,7 +10,18 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/circuitbreaker"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+)
+
+// Compile-time assertion: the kernel circuit breaker satisfies the Allower and
+// CircuitBreakerRetryAfter contracts this middleware consumes. The breaker is a
+// kernel primitive (kernel cannot import runtime), so this runtime-side test is
+// where the structural match is pinned — wiring
+// WithCircuitBreaker(circuitbreaker.New(...)) stays compilable.
+var (
+	_ Allower                  = (*circuitbreaker.Breaker)(nil)
+	_ CircuitBreakerRetryAfter = (*circuitbreaker.Breaker)(nil)
 )
 
 // cbRetryAfter is the retryAfter value used in TestCircuitBreaker_Open_RetryAfterHeader.

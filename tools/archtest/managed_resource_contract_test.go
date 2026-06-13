@@ -27,10 +27,6 @@ type adapterExportedType struct {
 }
 
 var adapterManagedResourceOptOut = map[string]string{
-	"adapters/circuitbreaker.Adapter":             "stateless-adapter: no owned external connection or background worker",
-	"adapters/circuitbreaker.Config":              "config: construction input value",
-	"adapters/circuitbreaker.Counts":              "value-object: breaker statistics snapshot",
-	"adapters/circuitbreaker.State":               "value-object: breaker enum",
 	"adapters/grpc.Config":                        "config: construction input value",
 	"adapters/grpc.TLSConfig":                     "config: construction input value",
 	"adapters/mqtt.AuthConfig":                    "config: construction input value",
@@ -73,6 +69,7 @@ var adapterManagedResourceOptOut = map[string]string{
 	"adapters/postgres.PGCommandQueue":            "subresource-not-owner: storage facade over caller-owned pool",
 	"adapters/postgres.PGOutboxStore":             "subresource-not-owner: storage facade over caller-owned pool",
 	"adapters/postgres.PGProjectionCursor":        "subresource-not-owner: cursor over caller-owned replay source",
+	"adapters/postgres.PGProjectionEventSource":   "subresource-not-owner: storage facade over caller-owned pool",
 	"adapters/postgres.PGProjectionReplaySource":  "subresource-not-owner: storage facade over caller-owned pool",
 	"adapters/postgres.PGRefreshStore":            "subresource-not-owner: storage facade over caller-owned pool",
 	"adapters/postgres.PoolStats":                 "value-object: pool diagnostic snapshot",
@@ -80,6 +77,7 @@ var adapterManagedResourceOptOut = map[string]string{
 	"adapters/postgres.ReconcileElector":          "subresource-not-owner: stateless facade over caller-owned pool",
 	"adapters/postgres.RowScanner":                "interface: query row abstraction, not a resource",
 	"adapters/postgres.TxManager":                 "subresource-not-owner: transaction facade over caller-owned pool",
+	"adapters/postgres.WebhookSourceRepository":   "subresource-not-owner: storage facade over caller-owned pool",
 	"adapters/prometheus.HookObserver":            "stateless-adapter: observes lifecycle events through caller-owned registry",
 	"adapters/prometheus.HookObserverConfig":      "config: construction input value",
 	"adapters/prometheus.MetricProvider":          "stateless-adapter: metrics facade over caller-owned registry",

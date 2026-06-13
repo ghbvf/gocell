@@ -1,8 +1,7 @@
 package circuitbreaker
 
 // ref: sony/gobreaker v2 generation+expiry state machine — adopted as the
-// model after we removed the third-party dependency. See ADR
-// docs/architecture/202605021500-adr-kernel-clock-injection.md
+// model. See ADR docs/architecture/202605021500-adr-kernel-clock-injection.md
 // (D6 PROD-CLOCK-INJECTION-01) for the clock-injection invariant.
 
 import (
@@ -15,18 +14,9 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-const (
-	// ErrAdapterCircuitBreakerConfig signals invalid circuitbreaker.Config
-	// at construction time (e.g. Name empty). Distinct from
-	// ErrValidationFailed (HTTP request-parameter validation) so operators
-	// can route adapter-construction failures separately from request
-	// validation failures.
-	ErrAdapterCircuitBreakerConfig errcode.Code = "ERR_ADAPTER_CIRCUIT_BREAKER_CONFIG"
-
-	// defaultCircuitBreakerTimeout is the default open-state timeout when none
-	// is provided in Config. Matches sony/gobreaker's internal default.
-	defaultCircuitBreakerTimeout = 60 * time.Second
-)
+// defaultCircuitBreakerTimeout is the default open-state timeout when none is
+// provided in Config. Matches sony/gobreaker's internal default.
+const defaultCircuitBreakerTimeout = 60 * time.Second
 
 // State represents the state of the circuit breaker.
 type State int
@@ -54,8 +44,7 @@ func (s State) String() string {
 	}
 }
 
-// Counts holds the counts of requests and their outcomes. It is a local type
-// so callers do not need to import any third-party breaker package.
+// Counts holds the counts of requests and their outcomes.
 type Counts struct {
 	Requests             uint32
 	TotalSuccesses       uint32
@@ -64,12 +53,12 @@ type Counts struct {
 	ConsecutiveFailures  uint32
 }
 
-// Config holds settings for the circuitbreaker adapter.
+// Config holds settings for a circuit breaker.
 //
 // Name is the only required field; all other fields use built-in defaults
-// when zero (see each field's doc). New() returns ErrAdapterCircuitBreakerConfig
-// when Name is empty; other invalid values are silently coerced to defaults
-// to keep ad-hoc constructions ergonomic.
+// when zero (see each field's doc). New() returns ErrCircuitBreakerConfig when
+// Name is empty; other invalid values are silently coerced to defaults to keep
+// ad-hoc constructions ergonomic.
 type Config struct {
 	// Name identifies the circuit breaker instance (required, used in logs/metrics).
 	Name string
@@ -94,7 +83,7 @@ type Config struct {
 	// OnStateChange is called whenever the circuit state changes.
 	//
 	// The callback is invoked OUTSIDE the breaker mutex, so it may safely
-	// call any Adapter method (Allow, State) without risk of reentrant
+	// call any Breaker method (Allow, State) without risk of reentrant
 	// deadlock. A panic in the callback propagates to the caller of Allow
 	// or the done callback; the state machine remains consistent because
 	// callbacks fired during beforeRequest run before slot accounting (no
@@ -310,20 +299,23 @@ func (b *breaker) toNewGeneration(now time.Time) {
 	}
 }
 
-// Adapter implements middleware.Allower and middleware.CircuitBreakerRetryAfter
-// using an in-house three-state circuit breaker.
-type Adapter struct {
+// Breaker is an in-process three-state circuit breaker (closed/half-open/open).
+// Its Allow/done(err) two-step protocol and RetryAfter method structurally
+// satisfy the runtime/http/middleware.Allower and CircuitBreakerRetryAfter
+// contracts (kernel does not import runtime; the match is verified by a
+// compile-time assertion in the middleware test).
+type Breaker struct {
 	cb      *breaker
 	timeout time.Duration
 }
 
-// New creates a circuit breaker adapter. It panics if clk is nil (PROD-CLOCK-INJECTION-01).
+// New creates a circuit breaker. It panics if clk is nil (PROD-CLOCK-INJECTION-01).
 // Returns an error if cfg.Name is empty, as Name is required for logs and
 // metrics identification. Production configurations must never silently degrade.
-func New(cfg Config, clk clock.Clock) (*Adapter, error) {
+func New(cfg Config, clk clock.Clock) (*Breaker, error) {
 	clock.MustHaveClock(clk, "circuitbreaker.New")
 	if cfg.Name == "" {
-		return nil, errcode.New(errcode.KindInvalid, ErrAdapterCircuitBreakerConfig,
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrCircuitBreakerConfig,
 			"circuitbreaker: Name required")
 	}
 	maxReq := cfg.MaxRequests
@@ -354,7 +346,7 @@ func New(cfg Config, clk clock.Clock) (*Adapter, error) {
 		onStateChange: cfg.OnStateChange,
 	}
 	b.toNewGeneration(clk.Now())
-	return &Adapter{cb: b, timeout: timeout}, nil
+	return &Breaker{cb: b, timeout: timeout}, nil
 }
 
 // Allow checks if the request should proceed. Returns allowed=true and a done
@@ -364,29 +356,29 @@ func New(cfg Config, clk clock.Clock) (*Adapter, error) {
 // open OR when half-open has reached MaxRequests in-flight probes — both
 // rejection causes are indistinguishable to the caller; use State() to
 // observe the current circuit state for diagnostics.
-func (a *Adapter) Allow() (allowed bool, done func(err error)) {
-	gen, err := a.cb.beforeRequest()
+func (b *Breaker) Allow() (allowed bool, done func(err error)) {
+	gen, err := b.cb.beforeRequest()
 	if err != nil {
 		return false, nil
 	}
 	return true, func(err error) {
-		a.cb.afterRequest(gen, a.cb.isSuccessful(err))
+		b.cb.afterRequest(gen, b.cb.isSuccessful(err))
 	}
 }
 
 // RetryAfter returns the open-state timeout — the duration until the circuit
-// may transition to half-open and accept probe requests. The middleware uses
+// may transition to half-open and accept probe requests. HTTP middleware uses
 // this to set the Retry-After header on 503 responses (RFC 7231 Section 7.1.3).
-func (a *Adapter) RetryAfter() time.Duration {
-	return a.timeout
+func (b *Breaker) RetryAfter() time.Duration {
+	return b.timeout
 }
 
 // State returns the current state of the circuit breaker.
-func (a *Adapter) State() State {
+func (b *Breaker) State() State {
 	var ts []stateTransition
-	a.cb.mu.Lock()
-	state, _ := a.cb.currentState(a.cb.clk.Now(), &ts)
-	a.cb.mu.Unlock()
-	a.cb.fireTransitions(ts)
+	b.cb.mu.Lock()
+	state, _ := b.cb.currentState(b.cb.clk.Now(), &ts)
+	b.cb.mu.Unlock()
+	b.cb.fireTransitions(ts)
 	return state
 }

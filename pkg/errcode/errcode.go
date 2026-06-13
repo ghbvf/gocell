@@ -254,6 +254,11 @@ const (
 
 	// Resilience middleware error codes.
 	ErrCircuitOpen Code = "ERR_CIRCUIT_OPEN"
+	// ErrCircuitBreakerConfig signals an invalid circuit-breaker Config at
+	// construction time (e.g. Name empty). Distinct from ErrValidationFailed
+	// (request-parameter validation) so operators can route breaker-construction
+	// failures separately. Issued by kernel/circuitbreaker.New.
+	ErrCircuitBreakerConfig Code = "ERR_CIRCUIT_BREAKER_CONFIG"
 
 	// Outbox relay health error codes.
 	// ErrRelayBudgetExhausted signals that an outbox relay operation (poll /

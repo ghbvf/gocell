@@ -13,13 +13,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	"github.com/ghbvf/gocell/runtime/http/middleware"
-)
-
-// Compile-time checks: Adapter implements Allower and CircuitBreakerRetryAfter.
-var (
-	_ middleware.Allower                  = (*Adapter)(nil)
-	_ middleware.CircuitBreakerRetryAfter = (*Adapter)(nil)
 )
 
 // smallDelta is a sub-nanosecond nudge used to push the fake clock just past
@@ -27,8 +20,8 @@ var (
 // the off-by-one in expiry.Before(now) comparisons.
 const smallDelta = 2 * time.Nanosecond
 
-// mustNew creates an Adapter with a fake clock, failing the test on error.
-func mustNew(t *testing.T, cfg Config) *Adapter {
+// mustNew creates a Breaker with a fake clock, failing the test on error.
+func mustNew(t *testing.T, cfg Config) *Breaker {
 	t.Helper()
 	fc := clockmock.New(time.Unix(0, 0))
 	a, err := New(cfg, fc)
@@ -36,9 +29,9 @@ func mustNew(t *testing.T, cfg Config) *Adapter {
 	return a
 }
 
-// mustNewWithClock creates an Adapter with a fake clock, returning both,
+// mustNewWithClock creates a Breaker with a fake clock, returning both,
 // failing the test on error.
-func mustNewWithClock(t *testing.T, cfg Config) (*Adapter, *clockmock.FakeClock) {
+func mustNewWithClock(t *testing.T, cfg Config) (*Breaker, *clockmock.FakeClock) {
 	t.Helper()
 	fc := clockmock.New(time.Unix(0, 0))
 	a, err := New(cfg, fc)
@@ -46,7 +39,7 @@ func mustNewWithClock(t *testing.T, cfg Config) (*Adapter, *clockmock.FakeClock)
 	return a, fc
 }
 
-func TestAdapter_DefaultConfig_Closed(t *testing.T) {
+func TestBreaker_DefaultConfig_Closed(t *testing.T) {
 	t.Parallel()
 	a := mustNew(t, Config{Name: "test-default"})
 	allowed, done := a.Allow()
@@ -55,7 +48,7 @@ func TestAdapter_DefaultConfig_Closed(t *testing.T) {
 	done(nil) // report success
 }
 
-func TestAdapter_OpensAfterFailures(t *testing.T) {
+func TestBreaker_OpensAfterFailures(t *testing.T) {
 	t.Parallel()
 	a := mustNew(t, Config{
 		Name: "test-open",
@@ -75,7 +68,7 @@ func TestAdapter_OpensAfterFailures(t *testing.T) {
 	assert.Nil(t, done)
 }
 
-func TestAdapter_HalfOpenAfterTimeout(t *testing.T) {
+func TestBreaker_HalfOpenAfterTimeout(t *testing.T) {
 	t.Parallel()
 	a, fc := mustNewWithClock(t, Config{
 		Name:    "test-halfopen",
@@ -98,7 +91,7 @@ func TestAdapter_HalfOpenAfterTimeout(t *testing.T) {
 	done(nil) // successful probe
 }
 
-func TestAdapter_ClosesAfterHalfOpenSuccess(t *testing.T) {
+func TestBreaker_ClosesAfterHalfOpenSuccess(t *testing.T) {
 	t.Parallel()
 	a, fc := mustNewWithClock(t, Config{
 		Name:    "test-close",
@@ -128,7 +121,7 @@ func TestAdapter_ClosesAfterHalfOpenSuccess(t *testing.T) {
 	}
 }
 
-func TestAdapter_OnStateChangeCallback(t *testing.T) {
+func TestBreaker_OnStateChangeCallback(t *testing.T) {
 	t.Parallel()
 	var transitions []string
 	a, fc := mustNewWithClock(t, Config{
@@ -157,19 +150,19 @@ func TestAdapter_OnStateChangeCallback(t *testing.T) {
 	assert.Contains(t, transitions, "half-open→closed")
 }
 
-func TestAdapter_RetryAfter_CustomTimeout(t *testing.T) {
+func TestBreaker_RetryAfter_CustomTimeout(t *testing.T) {
 	t.Parallel()
 	a := mustNew(t, Config{Name: "test-retry", Timeout: testtime.D30s})
 	assert.Equal(t, testtime.D30s, a.RetryAfter())
 }
 
-func TestAdapter_RetryAfter_DefaultTimeout(t *testing.T) {
+func TestBreaker_RetryAfter_DefaultTimeout(t *testing.T) {
 	t.Parallel()
 	a := mustNew(t, Config{Name: "test-retry-default"})
 	assert.Equal(t, testtime.D60s, a.RetryAfter(), "default timeout is 60s")
 }
 
-func TestAdapter_CustomReadyToTrip(t *testing.T) {
+func TestBreaker_CustomReadyToTrip(t *testing.T) {
 	t.Parallel()
 	a := mustNew(t, Config{
 		Name: "test-custom-trip",
@@ -189,13 +182,13 @@ func TestAdapter_CustomReadyToTrip(t *testing.T) {
 	assert.False(t, allowed, "custom ReadyToTrip(>2) must trip after 3 failures")
 }
 
-func TestAdapter_State(t *testing.T) {
+func TestBreaker_State(t *testing.T) {
 	t.Parallel()
 	a := mustNew(t, Config{Name: "test-state"})
 	assert.Equal(t, StateClosed, a.State(), "new breaker starts in closed state")
 }
 
-func TestAdapter_Allow_SuccessNilError(t *testing.T) {
+func TestBreaker_Allow_SuccessNilError(t *testing.T) {
 	t.Parallel()
 	a := mustNew(t, Config{Name: "test-success-nil"})
 	allowed, done := a.Allow()
@@ -210,7 +203,7 @@ func TestAdapter_Allow_SuccessNilError(t *testing.T) {
 	assert.True(t, allowed2, "breaker must stay closed after successful request")
 }
 
-func TestAdapter_Allow_FailureNonNilError(t *testing.T) {
+func TestBreaker_Allow_FailureNonNilError(t *testing.T) {
 	t.Parallel()
 	a := mustNew(t, Config{Name: "test-failure-err"})
 	allowed, done := a.Allow()
@@ -235,12 +228,12 @@ func TestNew_EmptyName_Errors(t *testing.T) {
 	assert.Nil(t, a)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, ErrAdapterCircuitBreakerConfig, ec.Code)
+	assert.Equal(t, errcode.ErrCircuitBreakerConfig, ec.Code)
 	assert.Contains(t, err.Error(), "Name required")
 }
 
 // TestNew_NilClock_Panics verifies that New panics on nil clock,
-// consistent with PROD-CLOCK-INJECTION-01 and the ratelimit adapter pattern.
+// consistent with PROD-CLOCK-INJECTION-01.
 func TestNew_NilClock_Panics(t *testing.T) {
 	t.Parallel()
 	assert.Panics(t, func() {
@@ -248,11 +241,11 @@ func TestNew_NilClock_Panics(t *testing.T) {
 	})
 }
 
-// TestAdapter_HalfOpen_MaxRequestsConcurrent verifies that MaxRequests=1 in
+// TestBreaker_HalfOpen_MaxRequestsConcurrent verifies that MaxRequests=1 in
 // half-open state allows exactly one concurrent request and rejects all others.
 //
 // ref: sony/gobreaker v2 twostep_breaker.go — half-open MaxRequests
-func TestAdapter_HalfOpen_MaxRequestsConcurrent(t *testing.T) {
+func TestBreaker_HalfOpen_MaxRequestsConcurrent(t *testing.T) {
 	t.Parallel()
 	const concurrency = 8
 
@@ -328,10 +321,10 @@ func TestAdapter_HalfOpen_MaxRequestsConcurrent(t *testing.T) {
 		"MaxRequests=1 must allow exactly 1 concurrent request in half-open state")
 }
 
-// TestAdapter_Interval_ResetsCountsInClosedState verifies that when Interval>0,
+// TestBreaker_Interval_ResetsCountsInClosedState verifies that when Interval>0,
 // the closed-state counts are cleared after each interval period, resetting the
 // consecutive failure counter so the breaker does not trip.
-func TestAdapter_Interval_ResetsCountsInClosedState(t *testing.T) {
+func TestBreaker_Interval_ResetsCountsInClosedState(t *testing.T) {
 	t.Parallel()
 	a, fc := mustNewWithClock(t, Config{
 		Name:     "test-interval",
@@ -364,9 +357,9 @@ func TestAdapter_Interval_ResetsCountsInClosedState(t *testing.T) {
 	assert.Equal(t, StateClosed, a.State(), "breaker must remain closed: counts reset by interval")
 }
 
-// TestAdapter_CrossGeneration_DoneIgnored verifies that a done callback from a
+// TestBreaker_CrossGeneration_DoneIgnored verifies that a done callback from a
 // prior generation does not corrupt the counts of the current generation.
-func TestAdapter_CrossGeneration_DoneIgnored(t *testing.T) {
+func TestBreaker_CrossGeneration_DoneIgnored(t *testing.T) {
 	t.Parallel()
 	a, fc := mustNewWithClock(t, Config{
 		Name:    "test-cross-gen",
@@ -394,10 +387,10 @@ func TestAdapter_CrossGeneration_DoneIgnored(t *testing.T) {
 	assert.Equal(t, StateHalfOpen, a.State(), "old done must not affect current generation state")
 }
 
-// TestAdapter_HalfOpen_PartialSuccessThenFailure verifies that if half-open
+// TestBreaker_HalfOpen_PartialSuccessThenFailure verifies that if half-open
 // probes partially succeed but then fail before MaxRequests successes, the
 // breaker returns to open state.
-func TestAdapter_HalfOpen_PartialSuccessThenFailure(t *testing.T) {
+func TestBreaker_HalfOpen_PartialSuccessThenFailure(t *testing.T) {
 	t.Parallel()
 	a, fc := mustNewWithClock(t, Config{
 		Name:        "test-halfopen-partial",
@@ -426,9 +419,9 @@ func TestAdapter_HalfOpen_PartialSuccessThenFailure(t *testing.T) {
 	assert.Equal(t, StateOpen, a.State(), "partial success then failure must reopen the circuit")
 }
 
-// TestAdapter_IsSuccessful_CustomClassifier verifies that a custom IsSuccessful
+// TestBreaker_IsSuccessful_CustomClassifier verifies that a custom IsSuccessful
 // function can classify a specific sentinel error as success.
-func TestAdapter_IsSuccessful_CustomClassifier(t *testing.T) {
+func TestBreaker_IsSuccessful_CustomClassifier(t *testing.T) {
 	t.Parallel()
 	sentinel := errors.New("expected-not-fatal")
 	a := mustNew(t, Config{
@@ -449,16 +442,13 @@ func TestAdapter_IsSuccessful_CustomClassifier(t *testing.T) {
 		"custom IsSuccessful must classify sentinel error as success, not failure")
 }
 
-// TestAdapter_OnStateChange_PanicDoesNotStrandHalfOpenSlot verifies that a
+// TestBreaker_OnStateChange_PanicDoesNotStrandHalfOpenSlot verifies that a
 // panicking OnStateChange callback fired during the open→half-open transition
 // does not strand the probe slot. The panic propagates out of Allow() (we do
 // NOT recover — that would mask the user bug); but because the two-pass
 // beforeRequest fires the callback BEFORE counts.Requests++, a follow-up
 // Allow() call succeeds cleanly because the slot was never consumed.
-//
-// Regression: PR#385 review FIND (post-FIND-001 reordering placed the
-// callback after counts.Requests++, permanently stranding the slot).
-func TestAdapter_OnStateChange_PanicDoesNotStrandHalfOpenSlot(t *testing.T) {
+func TestBreaker_OnStateChange_PanicDoesNotStrandHalfOpenSlot(t *testing.T) {
 	t.Parallel()
 
 	var fireCount atomic.Int32
@@ -499,19 +489,16 @@ func TestAdapter_OnStateChange_PanicDoesNotStrandHalfOpenSlot(t *testing.T) {
 	require.Equal(t, StateClosed, a.State(), "successful probe must close the breaker")
 }
 
-// TestAdapter_OnStateChange_CanCallAllowReentrant verifies that the
-// OnStateChange callback may safely call Adapter methods (Allow, State)
+// TestBreaker_OnStateChange_CanCallAllowReentrant verifies that the
+// OnStateChange callback may safely call Breaker methods (Allow, State)
 // from within itself — the two-pass beforeRequest fires callbacks outside
 // the breaker mutex, so reentrant calls do not deadlock.
-//
-// Without the lock-out invariant this test would deadlock and the test
-// runner would terminate it via timeout (visible in CI as a failure).
-func TestAdapter_OnStateChange_CanCallAllowReentrant(t *testing.T) {
+func TestBreaker_OnStateChange_CanCallAllowReentrant(t *testing.T) {
 	t.Parallel()
 
 	var observedFromCallback State
 	var observed atomic.Bool
-	var a *Adapter
+	var a *Breaker
 	cfg := Config{
 		Name:        "reentrant",
 		MaxRequests: 1,
@@ -556,9 +543,9 @@ func TestAdapter_OnStateChange_CanCallAllowReentrant(t *testing.T) {
 		"reentrant State() inside the open→half-open callback should observe StateHalfOpen")
 }
 
-// TestAdapter_OnStateChange_NotCalledConcurrently verifies that the
+// TestBreaker_OnStateChange_NotCalledConcurrently verifies that the
 // closed→open transition is recorded exactly once even under concurrent load.
-func TestAdapter_OnStateChange_NotCalledConcurrently(t *testing.T) {
+func TestBreaker_OnStateChange_NotCalledConcurrently(t *testing.T) {
 	t.Parallel()
 	var transitionCount atomic.Int32
 	a := mustNew(t, Config{
@@ -596,9 +583,9 @@ func TestAdapter_OnStateChange_NotCalledConcurrently(t *testing.T) {
 		"closed→open transition must fire exactly once despite concurrent failures")
 }
 
-// TestAdapter_HalfOpen_MaxRequestsZeroDefaultsToOne verifies that MaxRequests=0
+// TestBreaker_HalfOpen_MaxRequestsZeroDefaultsToOne verifies that MaxRequests=0
 // is treated as 1, preventing the uint32 underflow/zero comparison edge case.
-func TestAdapter_HalfOpen_MaxRequestsZeroDefaultsToOne(t *testing.T) {
+func TestBreaker_HalfOpen_MaxRequestsZeroDefaultsToOne(t *testing.T) {
 	t.Parallel()
 	a, fc := mustNewWithClock(t, Config{
 		Name:        "test-maxreq-zero",
@@ -626,10 +613,10 @@ func TestAdapter_HalfOpen_MaxRequestsZeroDefaultsToOne(t *testing.T) {
 	done1(nil) // complete the first request
 }
 
-// TestAdapter_OpenState_RejectsAllUntilTimeout verifies that all requests are
+// TestBreaker_OpenState_RejectsAllUntilTimeout verifies that all requests are
 // rejected while the breaker is open, and only the first request after the
 // timeout triggers the half-open probe.
-func TestAdapter_OpenState_RejectsAllUntilTimeout(t *testing.T) {
+func TestBreaker_OpenState_RejectsAllUntilTimeout(t *testing.T) {
 	t.Parallel()
 	a, fc := mustNewWithClock(t, Config{
 		Name:    "test-open-rejects",
