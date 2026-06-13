@@ -80,7 +80,11 @@ const ruleKernelInternalDAG = "KERNEL-INTERNAL-DAG-01"
 // returning outbox.HandleResult Ack/Requeue/Reject; webhook dispatch IS an outbox
 // consumer, so the dependency is intrinsic). clock is a leaf and outbox does not
 // import webhook, so neither edge introduces a cycle. cell→webhook is the
-// registration edge.
+// registration edge. #1541 added webhook→circuitbreaker (the dispatcher gates
+// per-endpoint delivery on kernel/circuitbreaker, promoted from the deleted
+// adapters/circuitbreaker module — a clock-only resilience primitive) and
+// webhook→crypto (#1540 source-secret transform); circuitbreaker is a leaf
+// (→clock only), so both are acyclic.
 // kernel/projection and kernel/reconcile (W10 / #661) are registered as
 // consumer-layer kernels: they depend on cell/outbox/wrapper/observability etc.
 // but nothing imports them back, so no cycle is introduced. governance→saga
@@ -92,35 +96,36 @@ const ruleKernelInternalDAG = "KERNEL-INTERNAL-DAG-01"
 // Reconcile's "now". reconcile does not import command, so command→reconcile is
 // acyclic; clock is a leaf.
 var allowedKernelEdges = map[string][]string{
-	"assembly":      {"cell", "clock", "metadata", "observability", "outbox", "registry"},
-	"auth":          {"cell"},
-	"cell":          {"cellvocab", "contractspec", "healthz", "metadata", "outbox", "webhook"},
-	"cellvocab":     nil,
-	"clock":         nil,
-	"command":       {"clock", "metautil", "reconcile"},
-	"contractspec":  {"cellvocab", "metadata"},
-	"crypto":        nil,
-	"ctxkeys":       nil,
-	"depgraph":      nil,
-	"fsm":           nil,
-	"governance":    {"cellvocab", "clock", "metadata", "registry", "saga", "verify"},
-	"healthz":       {"clock"},
-	"idempotency":   {"clock"},
-	"journey":       {"metadata"},
-	"lifecycle":     {"healthz", "worker"},
-	"metadata":      {"cellvocab"},
-	"metautil":      nil,
-	"observability": nil,
-	"outbox":        {"cellvocab", "clock", "fsm", "healthz", "idempotency", "metautil", "observability", "persistence"},
-	"persistence":   nil,
-	"projection":    {"cell", "cellvocab", "clock", "contractspec", "healthz", "observability", "outbox", "persistence", "wrapper"},
-	"reconcile":     {"clock", "observability"},
-	"registry":      {"metadata"},
-	"saga":          {"cellvocab", "clock", "fsm", "healthz", "outbox", "projection"},
-	"verify":        {"metadata"},
-	"webhook":       {"clock", "observability", "outbox"},
-	"worker":        nil,
-	"wrapper":       {"contractspec", "ctxkeys", "outbox"},
+	"assembly":       {"cell", "clock", "metadata", "observability", "outbox", "registry"},
+	"auth":           {"cell"},
+	"cell":           {"cellvocab", "contractspec", "healthz", "metadata", "outbox", "webhook"},
+	"cellvocab":      nil,
+	"circuitbreaker": {"clock"},
+	"clock":          nil,
+	"command":        {"clock", "metautil", "reconcile"},
+	"contractspec":   {"cellvocab", "metadata"},
+	"crypto":         nil,
+	"ctxkeys":        nil,
+	"depgraph":       nil,
+	"fsm":            nil,
+	"governance":     {"cellvocab", "clock", "metadata", "registry", "saga", "verify"},
+	"healthz":        {"clock"},
+	"idempotency":    {"clock"},
+	"journey":        {"metadata"},
+	"lifecycle":      {"healthz", "worker"},
+	"metadata":       {"cellvocab"},
+	"metautil":       nil,
+	"observability":  nil,
+	"outbox":         {"cellvocab", "clock", "fsm", "healthz", "idempotency", "metautil", "observability", "persistence"},
+	"persistence":    nil,
+	"projection":     {"cell", "cellvocab", "clock", "contractspec", "healthz", "observability", "outbox", "persistence", "wrapper"},
+	"reconcile":      {"clock", "observability"},
+	"registry":       {"metadata"},
+	"saga":           {"cellvocab", "clock", "fsm", "healthz", "outbox", "projection"},
+	"verify":         {"metadata"},
+	"webhook":        {"circuitbreaker", "clock", "crypto", "observability", "outbox"},
+	"worker":         nil,
+	"wrapper":        {"contractspec", "ctxkeys", "outbox"},
 }
 
 // kernelEdgeViolation describes a single DAG breach.
