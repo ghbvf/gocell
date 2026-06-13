@@ -125,6 +125,28 @@ type ProjectionEvent interface {
 - **身份安全约束（saga）**：saga journal 事件**无 wire principal**，saga `RestoreContext` **绝不能原样返回 ctx**。否则身份穿透 Apply：① **rebuild 路径** `drainGap` 的 ctx 经 `context.WithoutCancel(triggerReq)` 继承**触发 rebuild 的 admin 身份**（且 outbox `Principal().RestoreToContext` 设计为不覆盖既有 principal，no-op restore 留住 admin）；② **live-tail 路径** Tailer 跑在后台 ctx、**无任何 principal**。两种情形下 Apply 若 emit/audit，前者归因到 admin（**审计 impersonation，P1**，见 `pkg/ctxkeys` principal 伪造风险），后者归因空。故 saga `RestoreContext` **主动清空 ctx 既有 principal 并安装显式 `projection.SystemPrincipal`**（system actor/subject、无 session、无 tenant），使 saga 投影 Apply 始终以稳定的 system/saga-projection 身份运行、与触发者彻底解耦。`projection.SystemPrincipal` helper + archtest（限定 saga carrier 为该身份唯一安装点）随 **PR-03** 落地。备选「身份作 Tailer/Processor 配置而非 carrier 方法」（更解耦）记录于拒绝表脚注，PR-03 实现时复核。
 - **同 PR 迁移 todoorder** `orderprojection`（`HandleOrderCreated(ctx, ProjectionEvent)`，`entry.Payload()` 不变）+ 重生成受影响 `generated/contracts/event/*/projection_gen.go`；删 `outbox.Entry` 专用签名。无双路径。
 
+> **§Amendment 2026-06-14（PR-06 / #1391 第一个真实消费者暴露的载体缺口）**：上方接口注释
+> `Payload() []byte // 事件体原始 JSON` 对 **outbox** 载体准确，但对 **saga-journal** 载体不足。
+> PR-03 的 `toCarrier` 只透传 `journal.Event.Payload`，**丢弃 `journal.Event.Kind`**；而终态事件经
+> `MarkTerminal` 写入时 `Payload: nil`——终态语义（succeeded / compensated / failed）**只在 Kind 里**。
+> 故投影消费者收到终态事件时拿到 `Payload()==null`、无从分辨终态，**D6「fold 每条 saga 事件、语义
+> 等价 deriveStatus」在 PR-03 实现下不可达**（deriveStatus 折叠的正是 `Event.Kind`）。
+>
+> **修复（保持泛型接口不变）**：`ProjectionEvent.Payload()` 签名仍是 `[]byte`；saga-journal 载体的
+> `Payload()` 改为序列化一个 kind 承载信封 `sagaprojection.SagaEventEnvelope{kind, stepName, payload}`
+> （`kind` = `journal.EventKind.String()` 标签，消费者用新增的 `journal.ParseEventKind` 还原 typed
+> kind；`payload` 为原 step 字节或 null）。outbox 载体的 `Payload()` 不变。信封是 saga-journal 投影
+> payload 的**单源结构**（producer `toCarrier` 与 consumer 反序列化同一导出 struct，字段漂移双侧
+> unmarshal 即破）。marshal 失败 → `outbox.NewPermanentError`（DLX）。
+>
+> **威胁矩阵复核**：本修复是**功能完整性**修补，不改身份/安全模型——信封字段全部源自 sealed append-only
+> `saga_events`（经 `GlobalReader`），消费者只读、业务包无法注入伪造事件（§5 行「越界/伪造 saga 事件进
+> 投影」保护在 wiring 层，不受影响）；`RestoreContext` 的 system-principal 安装（§5 impersonation 行）
+> 与信封正交、不变。§5 行「Running saga 的部分 step 事件先于终态到达 → 增量 per-event apply（D6）」此前
+> 标 ✅ 系**设计意图**，PR-06 才使其**可落地**（消费者现能 fold kind）。无新增威胁向量。第一个真实消费者
+> = `examples/orderfulfillment` orderstatus 投影；终态可恢复性由 `sagaprojection` 信封单测 +
+> orderfulfillment fold 全枚举表测试 + PG durable-replay e2e（重启后读模型/checkpoint 存活）守。
+
 ### 4.2 全局有序扫描（D3）
 
 ```go
