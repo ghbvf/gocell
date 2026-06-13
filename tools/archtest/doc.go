@@ -55,9 +55,12 @@
 //	  (archtest_test.go)                          public subpackage of cell B
 //	LAYER-09 / LAYER-09T                  Medium  cell A importing cell B/events
 //	  (archtest_test.go)                          (direct / transitive)
-//	GRPC-CELL-NO-CLIENT-DIAL-01           Medium  a cell constructing a gRPC client
-//	  (grpc_cell_no_client_dial_test.go)          to dial a sibling cell in-process
-//	                                             (#1961 — closes the #1752 runtime/grpc gap)
+//	GRPC-CELL-NO-CLIENT-DIAL-01           Medium  a cell constructing OR holding a
+//	  (grpc_cell_no_client_dial_test.go)          gRPC client (dial / *grpc.ClientConn /
+//	                                             generated <Svc>Client surface) to reach
+//	                                             a sibling cell in-process — incl. the
+//	                                             inject-a-built-client escape (#1961;
+//	                                             closes the #1752 runtime/grpc gap)
 //
 // Open blind spots (NOT yet guarded — tracked, not silently dropped):
 //
