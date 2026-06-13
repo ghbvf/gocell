@@ -43,6 +43,15 @@ import (
 //     active framework contracts (the DEAD-CONTRACT-01 analog for the framework
 //     side).
 //
+//  3. Provider is the framework: a framework-owned contract's provider endpoint
+//     (http server / event publisher) MUST be the FrameworkOwnerSentinel — the
+//     framework, not a cell or actor, provides it. This is the framework-side
+//     replacement for REF-13's provider-actor-exists check, which validateREF13
+//     skips for framework owners (rules_ref.go): without it, a framework-owned
+//     contract could name an arbitrary — even nonexistent — provider cell/actor
+//     and nothing would catch it. An empty provider is left to FMT-07 (not
+//     re-reported here).
+//
 // AI-robust: the FrameworkOwnerSentinel recognition + ContractOwner.Cell() type
 // boundary is Hard (a framework owner can never be mistaken for a cell); this
 // rule is the Medium governance companion (type-aware scan + synthetic red case
@@ -56,6 +65,7 @@ func (v *Validator) validateFRAMEWORKOWNEDCONTRACTSCOPED01() []ValidationResult 
 		}
 		results = append(results, v.checkFrameworkOwnedKind(c)...)
 		results = append(results, v.checkFrameworkOwnedLifecycle(c)...)
+		results = append(results, v.checkFrameworkOwnedProvider(c)...)
 	}
 	return results
 }
@@ -96,5 +106,39 @@ func (v *Validator) checkFrameworkOwnedLifecycle(c *metadata.ContractMeta) []Val
 			c.ID, c.Lifecycle,
 		),
 		"set lifecycle to draft or deprecated until a framework RouteGroup serves this contract",
+	)}
+}
+
+// checkFrameworkOwnedProvider enforces constraint 3 (provider is the framework).
+// A framework-owned contract's provider IS the framework: its provider endpoint
+// (http server / event publisher) must be the FrameworkOwnerSentinel, never a
+// cell or actor id. validateREF13 skips framework owners (the provider is the
+// framework, not an actors.yaml entry), so without this check a framework-owned
+// contract could name an arbitrary — even nonexistent — provider that nothing
+// validates. Only http/event are checked: constraint 1 already rejects every
+// other kind, and an empty provider is FMT-07's job (not re-reported here).
+func (v *Validator) checkFrameworkOwnedProvider(c *metadata.ContractMeta) []ValidationResult {
+	var field string
+	switch cellvocab.ContractKind(c.Kind) {
+	case cellvocab.ContractHTTP:
+		field = "endpoints.server"
+	case cellvocab.ContractEvent:
+		field = "endpoints.publisher"
+	default:
+		return nil // ineligible kind: checkFrameworkOwnedKind (constraint 1) reports it
+	}
+	provider := contractProvider(c)
+	if provider == "" || provider == metadata.FrameworkOwnerSentinel {
+		return nil // empty → FMT-07; sentinel → correct (the framework is the provider)
+	}
+	return []ValidationResult{v.newError(
+		codeFRAMEWORKOWNEDCONTRACTSCOPED01, IssueForbidden,
+		contractFile(c), field,
+		fmt.Sprintf(
+			"framework-owned contract %q declares provider %q in %s, but a framework-owned "+
+				"contract's provider must be the framework (%q)",
+			c.ID, provider, field, metadata.FrameworkOwnerSentinel,
+		),
+		"set the provider endpoint to _framework, or give the contract an existing cell owner via ownerCell",
 	)}
 }

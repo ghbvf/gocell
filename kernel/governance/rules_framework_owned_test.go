@@ -223,6 +223,66 @@ func TestFrameworkOwnedContractScoped_IneligibleKind(t *testing.T) {
 	}
 }
 
+// TestFrameworkOwnedContractScoped_ProviderMustBeFramework proves constraint 3:
+// a framework-owned http/event contract whose provider endpoint names a cell (or
+// any other non-framework actor) instead of the FrameworkOwnerSentinel is
+// rejected. Without this, REF-13's framework skip (rules_ref.go) leaves the
+// provider endpoint of a framework-owned contract entirely unvalidated — it could
+// point at an arbitrary, even nonexistent, cell/actor and nothing would catch it.
+func TestFrameworkOwnedContractScoped_ProviderMustBeFramework(t *testing.T) {
+	tests := []struct {
+		name     string
+		contract *metadata.ContractMeta
+		field    string
+	}{
+		{
+			name: "http provider names a cell",
+			contract: &metadata.ContractMeta{
+				ID:               "http.deviceidentity.enroll.v1",
+				Kind:             "http",
+				OwnerCell:        metadata.FrameworkOwnerSentinel,
+				ConsistencyLevel: "L2",
+				Lifecycle:        "draft",
+				Endpoints:        metadata.EndpointsMeta{Server: "accesscore"},
+				File:             "contracts/http/deviceidentity/enroll/v1/contract.yaml",
+				Dir:              "contracts/http/deviceidentity/enroll/v1",
+			},
+			field: "endpoints.server",
+		},
+		{
+			name: "event provider names an unknown actor",
+			contract: &metadata.ContractMeta{
+				ID:               "event.deviceidentity.cert-issued.v1",
+				Kind:             "event",
+				OwnerCell:        metadata.FrameworkOwnerSentinel,
+				ConsistencyLevel: "L2",
+				Lifecycle:        "draft",
+				Endpoints:        metadata.EndpointsMeta{Publisher: "ghostactor"},
+				File:             "contracts/event/deviceidentity/cert-issued/v1/contract.yaml",
+				Dir:              "contracts/event/deviceidentity/cert-issued/v1",
+			},
+			field: "endpoints.publisher",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pm := frameworkOwnedProject(tc.contract)
+			val := NewValidator(pm, ".", clock.Real())
+
+			got := findByCode(val.validateFRAMEWORKOWNEDCONTRACTSCOPED01(), "FRAMEWORK-OWNED-CONTRACT-SCOPED-01")
+			if len(got) != 1 {
+				t.Fatalf("framework-owned contract with non-framework provider must produce 1 finding, got %d: %v", len(got), got)
+			}
+			if got[0].Field != tc.field {
+				t.Errorf("finding must anchor at %q, got %q", tc.field, got[0].Field)
+			}
+			if got[0].Severity != SeverityError {
+				t.Errorf("expected error severity, got %v", got[0].Severity)
+			}
+		})
+	}
+}
+
 // TestREF03_CellOwnerAntiVacuity proves REF-03 still fires for a typo'd cell
 // owner — the typed-owner funnel did not blanket-suppress cell-owner checks.
 func TestREF03_CellOwnerAntiVacuity(t *testing.T) {
