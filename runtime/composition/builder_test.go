@@ -8,11 +8,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/healthz"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/worker"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
@@ -94,6 +97,47 @@ func TestBuilder_HappyPath(t *testing.T) {
 	assert.True(t, m2.called)
 }
 
+// TestBuilder_WithDeploymentTopology_NonEmptySpecInSharedDeps verifies that
+// Builder.Build correctly injects the non-empty DeploymentTopology from
+// SharedDeps via WithDeploymentTopology (F7). We confirm this by reading the
+// spec back from SharedDeps after Build (it must be unchanged) and by checking
+// the built App opts count reflects the always-injected framework opts.
+// The end-to-end sealed-and-queryable assertion is covered in
+// runtime/bootstrap TestBootstrap_DeploymentTopologyGetter_BeforePhase0 which
+// can call the package-internal phase0ValidateOptions.
+func TestBuilder_WithDeploymentTopology_NonEmptySpecInSharedDeps(t *testing.T) {
+	ctx := context.Background()
+
+	// SharedDeps with a NON-empty DeploymentTopology (one remote cell).
+	shared := minimalSharedDeps(t)
+	shared.DeploymentTopology = bootstrap.DeploymentTopologySpec{
+		Colocated: []string{"cellA"},
+		Remote:    []bootstrap.RemoteCellEndpoint{{CellID: "cellB", Endpoint: "cell-b:9090"}},
+	}
+
+	c1 := stubCell("mod1")
+	m1 := &fakeCellModule{id: "mod1", cell: c1}
+
+	app, err := New("mod1").With(m1).Build(ctx, shared,
+		func([]cell.Cell) ([]bootstrap.Option, error) { return nil, nil })
+	require.NoError(t, err)
+	require.NotNil(t, app)
+
+	// The spec on SharedDeps must be preserved (Build must not mutate it).
+	assert.Equal(t, "cellA", shared.DeploymentTopology.Colocated[0])
+	require.Len(t, shared.DeploymentTopology.Remote, 1)
+	assert.Equal(t, "cellB", shared.DeploymentTopology.Remote[0].CellID,
+		"SharedDeps.DeploymentTopology.Remote[0].CellID must flow through Builder.Build unchanged")
+	assert.Equal(t, "cell-b:9090", shared.DeploymentTopology.Remote[0].Endpoint,
+		"SharedDeps.DeploymentTopology.Remote[0].Endpoint must flow through Builder.Build unchanged")
+
+	// app.opts always contains WithControlPlaneTopology + WithDeploymentTopology
+	// (2 framework opts). With one resource (none in this test) + 0 cellOpts +
+	// 0 runtimeOpts, the total must be exactly 2.
+	assert.Len(t, app.opts, 2,
+		"Builder.Build always injects WithControlPlaneTopology + WithDeploymentTopology (2 framework opts)")
+}
+
 // TestBuilder_HappyPath_SingleSourceResourceContract verifies the single-source
 // resource ownership contract (PR #591 / #1420):
 //   - A module returns its ManagedResources ONLY in ModuleResult.Resources. It
@@ -129,13 +173,13 @@ func TestBuilder_HappyPath_SingleSourceResourceContract(t *testing.T) {
 	require.NotNil(t, app)
 
 	// Build derived exactly one WithManagedResource opt from the single Resources
-	// entry — the module supplied no opts of its own — plus the one framework
-	// opt Build always injects (WithControlPlaneTopology, #1410 review F1). Two
-	// total: 1 resource-derived + 1 framework. A double-write of the resource
-	// (the bug this test guards) would make it 3.
-	assert.Len(t, app.opts, 2,
+	// entry — the module supplied no opts of its own — plus the two framework
+	// opts Build always injects (WithControlPlaneTopology, #1410 review F1; and
+	// WithDeploymentTopology, #1962). Three total: 1 resource-derived + 2 framework.
+	// A double-write of the resource (the bug this test guards) would make it 4.
+	assert.Len(t, app.opts, 3,
 		"Builder derives one WithManagedResource opt from ModuleResult.Resources (single source) "+
-			"plus the always-injected WithControlPlaneTopology framework opt")
+			"plus the always-injected WithControlPlaneTopology and WithDeploymentTopology framework opts")
 	// Success path never rolls back.
 	assert.Empty(t, order.calls, "no resource may be Closed on the success path")
 }
@@ -367,4 +411,51 @@ func TestBuilder_With_Accumulates(t *testing.T) {
 
 	b := New().With(m1).With(m2)
 	assert.Len(t, b.modules, 2)
+}
+
+// TestBuilder_WithDeploymentTopology_IllegalSpec_Phase0Rejects proves that
+// Builder.Build's always-injected WithDeploymentTopology option is actually
+// CONSUMED by bootstrap phase0 — not a no-op (F7). The illegal spec
+// (mutual exclusion: same cell in both Colocated and Remote) must cause
+// phase0ValidateOptions to return an errcode.ErrValidationFailed error when
+// Run is called, before any side effects start.
+//
+// Strategy: Build succeeds (Builder only injects the option, does not validate
+// the spec itself); bootstrap.New(clk, app.opts ++ listener opts).Run(ctx)
+// must fail at phase0 with the mutual-exclusion error.
+func TestBuilder_WithDeploymentTopology_IllegalSpec_Phase0Rejects(t *testing.T) {
+	ctx := context.Background()
+
+	// Illegal spec: cellA in BOTH Colocated and Remote — mutual exclusion.
+	illegalSpec := bootstrap.DeploymentTopologySpec{
+		Colocated: []string{"cellA"},
+		Remote:    []bootstrap.RemoteCellEndpoint{{CellID: "cellA", Endpoint: "cell-a:8080"}},
+	}
+	shared := minimalSharedDeps(t)
+	shared.DeploymentTopology = illegalSpec
+
+	c1 := stubCell("mod1")
+	m1 := &fakeCellModule{id: "mod1", cell: c1}
+
+	app, err := New("mod1").With(m1).Build(ctx, shared,
+		func([]cell.Cell) ([]bootstrap.Option, error) { return nil, nil })
+	require.NoError(t, err, "Builder.Build must succeed — it only injects the option, not validate the spec")
+	require.NotNil(t, app)
+
+	// Drive the built opts through bootstrap phase0 by constructing a Bootstrap
+	// with the app opts plus minimum required listeners (phase0 checks listener
+	// configs before deployment topology, so we need at least primary+health).
+	runErr := bootstrap.New(
+		clock.Real(),
+		append(app.opts,
+			bootstrap.WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+			bootstrap.WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		)...,
+	).Run(ctx)
+
+	require.Error(t, runErr, "bootstrap.Run must fail at phase0 for illegal DeploymentTopologySpec")
+	var ec *errcode.Error
+	require.True(t, errors.As(runErr, &ec), "error must be an errcode.Error: %T %v", runErr, runErr)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code,
+		"phase0 must return ErrValidationFailed for mutual-exclusion violation")
 }

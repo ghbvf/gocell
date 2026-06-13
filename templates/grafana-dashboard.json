@@ -81,28 +81,28 @@
       },
       "targets": [
         {
-          "expr": "rate(gocell_outbox_relayed_total{cell=\"${cell_id}\", outcome=\"published\"}[5m])",
-          "legendFormat": "published (msg/s)",
+          "expr": "sum by (kind) (rate(gocell_outbox_relayed_total{cell=\"${cell_id}\", outcome=\"published\"}[5m]))",
+          "legendFormat": "{{kind}} published (msg/s)",
           "refId": "A"
         },
         {
-          "expr": "rate(gocell_outbox_relayed_total{cell=\"${cell_id}\", outcome=\"retried\"}[5m])",
-          "legendFormat": "retried (msg/s)",
+          "expr": "sum by (kind) (rate(gocell_outbox_relayed_total{cell=\"${cell_id}\", outcome=\"retried\"}[5m]))",
+          "legendFormat": "{{kind}} retried (msg/s)",
           "refId": "B"
         },
         {
-          "expr": "rate(gocell_outbox_relayed_total{cell=\"${cell_id}\", outcome=\"dead\"}[5m])",
-          "legendFormat": "dead (msg/s)",
+          "expr": "sum by (kind) (rate(gocell_outbox_relayed_total{cell=\"${cell_id}\", outcome=\"dead\"}[5m]))",
+          "legendFormat": "{{kind}} dead (msg/s)",
           "refId": "C"
         },
         {
-          "expr": "rate(gocell_outbox_relayed_total{cell=\"${cell_id}\", outcome=\"skipped\"}[5m])",
-          "legendFormat": "skipped — success path lost lease (msg/s)",
+          "expr": "sum by (kind) (rate(gocell_outbox_relayed_total{cell=\"${cell_id}\", outcome=\"skipped\"}[5m]))",
+          "legendFormat": "{{kind}} skipped — success path lost lease (msg/s)",
           "refId": "D"
         },
         {
-          "expr": "rate(gocell_outbox_relayed_total{cell=\"${cell_id}\", outcome=\"lost\"}[5m])",
-          "legendFormat": "lost — failure path lost lease (msg/s)",
+          "expr": "sum by (kind) (rate(gocell_outbox_relayed_total{cell=\"${cell_id}\", outcome=\"lost\"}[5m]))",
+          "legendFormat": "{{kind}} lost — failure path lost lease (msg/s)",
           "refId": "E"
         }
       ],
@@ -270,8 +270,8 @@
       },
       "targets": [
         {
-          "expr": "increase(gocell_outbox_relayed_total{cell=\"${cell_id}\", outcome=\"dead\"}[5m])",
-          "legendFormat": "dead events (5m)",
+          "expr": "sum by (kind) (increase(gocell_outbox_relayed_total{cell=\"${cell_id}\", outcome=\"dead\"}[5m]))",
+          "legendFormat": "{{kind}} dead events (5m)",
           "refId": "A"
         },
         {

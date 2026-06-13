@@ -3,7 +3,7 @@ package bootstrap
 // options_assembly.go — With* option functions covering config loading and
 // CoreAssembly construction.
 //
-// Covers: WithConfig, WithAssembly, WithAssemblyID, WithControlPlaneTopology.
+// Covers: WithConfig, WithAssembly, WithAssemblyID, WithControlPlaneTopology, WithDeploymentTopology.
 //
 // ref: uber-go/fx app.go — Option pattern; each Option targets a single concern.
 
@@ -40,6 +40,16 @@ func WithAssemblyID(id string) Option {
 	return func(b *Bootstrap) {
 		b.assemblyID = id
 	}
+}
+
+// WithDeploymentTopology supplies the codegen-derived deployment placement spec
+// so phase0 seals+validates it into the runtime DeploymentTopology queried by
+// transport routing. composition.Builder.Build injects this from the assembly's
+// generatedDeploymentTopology(). Omitting it leaves the zero DeploymentTopology
+// (all cells co-located) — identical to single-process behavior. This is
+// DEPLOYMENT topology; distinct from WithControlPlaneTopology (adapter topology).
+func WithDeploymentTopology(spec DeploymentTopologySpec) Option {
+	return func(b *Bootstrap) { b.deploymentTopologySpec = spec }
 }
 
 // WithControlPlaneTopology supplies the resolved deployment Topology so phase0
