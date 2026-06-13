@@ -70,13 +70,27 @@ func NewBearerHeaderAuthenticator(v IntentTokenVerifier) Authenticator {
 	})
 }
 
-// jwtClaimsToPrincipal converts verified JWT Claims to a Principal.
+// jwtClaimsToPrincipal converts verified JWT Claims to a Principal. It dispatches
+// on the verified, fail-closed-validated principal_kind claim: a device token
+// (PrincipalKindClaimDevice) is minted through the sole sanctioned device issuer
+// (mintDevicePrincipal, which fails closed on a missing subject/tenant or a
+// privileged role); every other token is an ordinary user principal. This is the
+// single bearer chokepoint shared by HTTP and gRPC, so device and user
+// principals can only originate here — there is no separate forgeable path.
+func jwtClaimsToPrincipal(c Claims) (*Principal, error) {
+	if c.PrincipalKind == PrincipalKindClaimDevice {
+		return mintDevicePrincipal(c)
+	}
+	return mintUserPrincipal(c), nil
+}
+
+// mintUserPrincipal builds an ordinary PrincipalUser from verified claims.
 // Roles is a defensive copy so callers cannot mutate the underlying slice.
 // The Claims map contains exactly three entries (sid, iss, token_use);
 // other JWT fields (aud, exp, iat, …) are intentionally excluded. TenantID is
 // carried in the dedicated Principal.TenantID field (already canonicalized by
 // the verifier), not in the Claims map.
-func jwtClaimsToPrincipal(c Claims) *Principal {
+func mintUserPrincipal(c Claims) *Principal {
 	roles := append([]string(nil), c.Roles...)
 	return &Principal{
 		Kind:                  PrincipalUser,

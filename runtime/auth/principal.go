@@ -18,12 +18,14 @@ const (
 	PrincipalAnonymous               // public endpoint
 	// PrincipalDevice is a first-class device subject (e.g. an MDM-enrolled
 	// device), distinct from a human user — it feeds device-posture attributes
-	// to downstream ABAC / zero-trust evaluation. No device-token issuer exists
-	// on develop yet (the JWT authenticator still classifies every verified
-	// token as PrincipalUser); the kind is the type-foundation half of the
-	// multi-tenancy/ABAC epic. Adding it forces every PrincipalKind switch to
-	// gain an explicit branch — guarded by archtest
-	// PRINCIPAL-KIND-EXHAUSTIVE-SWITCH-01.
+	// to downstream ABAC / zero-trust evaluation. The production issuer is
+	// mintDevicePrincipal (deviceprincipal.go), the SOLE sanctioned producer
+	// (DEVICE-PRINCIPAL-MINT-CALLER-01): a verified device bearer token
+	// (principal_kind=device) mints a PrincipalDevice carrying a sealed
+	// Principal.device proof. RowVisibility requires that seal before deriving
+	// RowScopeDevice, so a forged Principal{Kind: PrincipalDevice} is type-inert.
+	// Adding this kind forces every PrincipalKind switch to gain an explicit
+	// branch — guarded by archtest PRINCIPAL-KIND-EXHAUSTIVE-SWITCH-01.
 	PrincipalDevice
 )
 
@@ -104,6 +106,13 @@ type Principal struct {
 	// current clock to decide eviction; long-lived WebSocket connections
 	// are evicted on the next ping tick after token expiry.
 	ExpiresAt time.Time
+	// device is the sealed proof that a PrincipalDevice was minted by the
+	// sanctioned issuer (mintDevicePrincipal). It is unexported and of an
+	// unexported type (deviceSeal), so no out-of-package code can set it —
+	// making a forged Principal{Kind: PrincipalDevice} type-inert. RowVisibility
+	// requires a non-nil device before deriving RowScopeDevice. Nil for every
+	// non-device principal. See DEVICE-PRINCIPAL-MINT-CALLER-01.
+	device *deviceSeal
 }
 
 // HasRole is nil-safe: a nil receiver always returns false.

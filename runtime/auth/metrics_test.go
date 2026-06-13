@@ -199,6 +199,30 @@ func TestClassifyTokenError(t *testing.T) {
 				errcode.WithCategory(errcode.CategoryInfra)),
 			"service_unavailable",
 		},
+		// Device-mint rejects must surface as "device_invalid" so operators can
+		// distinguish device-credential problems from generic token errors (#1898 F8).
+		{
+			"device_subject_missing",
+			errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgDeviceSubjectMissing),
+			"device_invalid",
+		},
+		{
+			"device_tenant_missing",
+			errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgDeviceTenantMissing),
+			"device_invalid",
+		},
+		{
+			"device_role_forbidden",
+			errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgDeviceRoleForbidden),
+			"device_invalid",
+		},
+		// A generic ErrAuthUnauthorized with a non-device message must NOT be
+		// classified as device_invalid — it falls through to "invalid_token".
+		{
+			"generic_unauthorized_not_device",
+			errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "invalid token"),
+			"invalid_token",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
