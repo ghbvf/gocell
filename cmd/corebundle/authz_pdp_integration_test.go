@@ -208,6 +208,10 @@ func provisionPDPAdminAndUser(t *testing.T, base, tenantID string) (adminToken, 
 
 	const pdpBootstrapUser = "pdp-test-op"
 	const pdpBootstrapPass = "pdp-test-op-pass!"
+	// Usernames are per-tenant unique (the mem store keys by [tenantID][username], mirroring
+	// the PG composite unique index), so the SAME username constants are reused safely across
+	// tenants when this helper is called with distinct tenantIDs — no collision, and the user
+	// IDs returned differ per tenant (global UUID PK).
 	const pdpAdminUsername = "pdp-admin"
 	const pdpAdminPassword = "PdpAdminPass!1"
 	const pdpUserUsername = "pdp-regular-user"

@@ -4,8 +4,8 @@ package authorizationdecide
 //
 // BASELINE-OWNER-RULE-TENANT-FREEZE-01 freezes the condition shape of the three
 // owner-scoped ALLOW baseline rules (baseline-user-read-self, baseline-user-write-self,
-// baseline-role-read-self). Each MUST carry EXACTLY ONE condition, and that condition
-// MUST equal the ownership shape subject.sub == resource.id (Source=SourceSubject,
+// baseline-role-read-self). Each MUST be an EffectAllow rule carrying EXACTLY ONE condition,
+// and that condition MUST equal the ownership shape subject.sub == resource.id (Source=SourceSubject,
 // Key="sub", Operator=OpEqualsAttr, RHSSource=SourceResource, RHSKey="id", no static
 // Values).
 //
@@ -48,11 +48,11 @@ package authorizationdecide
 //
 // # Blind spots
 //
-//   - Freezes the CONDITION shape only (the tenant-grant vector). It does not freeze a
-//     rule's Effect or Action set — a rule broadening its Action while keeping the
-//     ownership condition is a different widening vector (owner→action, not owner→tenant),
-//     out of this invariant's scope. OWNER-SCOPED-GATE-EXACT-SET-01 freezes the route-gate
-//     (handler|param|perm) set; this freezes the baseline-rule condition.
+//   - Freezes the rule's Effect (must be EffectAllow) + the CONDITION shape (the tenant-grant
+//     vector). It does NOT freeze a rule's Action set — a rule broadening its Action while
+//     keeping the ownership condition is a different widening vector (owner→action, not
+//     owner→tenant), out of this invariant's scope. OWNER-SCOPED-GATE-EXACT-SET-01 freezes the
+//     route-gate (handler|param|perm) set; this freezes the baseline-rule grant shape.
 //   - The owner rule ID set (ownerScopedBaselineRuleIDs) is hand-maintained: a NEW
 //     owner-scoped ownership rule must be added there, or it is not frozen. The "not found"
 //     anti-vacuity check guards renames/removals of the three known IDs, not net-new rules.
@@ -62,6 +62,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/abac"
+	"github.com/ghbvf/gocell/pkg/authz"
 )
 
 // frozenOwnerCondition is the single authoritative ownership condition shape —
@@ -85,12 +86,16 @@ var ownerScopedBaselineRuleIDs = map[string]struct{}{
 	"baseline-role-read-self":  {},
 }
 
-// checkOwnerRuleFrozen returns nil iff r carries EXACTLY the frozen ownership condition
-// (one condition, equal to frozenOwnerCondition field-by-field). A non-nil error names
-// the deviation. abac.Condition is compared field-by-field because its Values []string
-// member makes it non-comparable with ==; len(Values) != 0 is the check that rejects a
-// static tenant match (Values: {tenant…}).
+// checkOwnerRuleFrozen returns nil iff r is an EffectAllow rule carrying EXACTLY the frozen
+// ownership condition (one condition, equal to frozenOwnerCondition field-by-field). A
+// non-nil error names the deviation. abac.Condition is compared field-by-field because its
+// Values []string member makes it non-comparable with ==; len(Values) != 0 is the check that
+// rejects a static tenant match (Values: {tenant…}).
 func checkOwnerRuleFrozen(r abac.Rule) error {
+	if r.Effect != authz.EffectAllow {
+		return fmt.Errorf("rule %q: Effect = %v, want EffectAllow — an owner-scoped rule that is not an "+
+			"ALLOW grant (e.g. flipped to Deny) is not the grant shape this invariant freezes", r.ID, r.Effect)
+	}
 	if len(r.Conditions) != 1 {
 		return fmt.Errorf("rule %q: got %d conditions, want exactly 1 (the ownership condition) — "+
 			"an extra condition (e.g. a tenant match) would widen owner-scoped access", r.ID, len(r.Conditions))
@@ -145,21 +150,31 @@ func TestBaselineOwnerRuleTenantFreeze_01_RejectsTenantWidening(t *testing.T) {
 	}
 	tests := []struct {
 		name       string
+		effect     authz.Effect
 		conditions []abac.Condition
 		wantErr    bool
 	}{
 		{
 			name:       "frozen_ownership_shape_accepted",
+			effect:     authz.EffectAllow,
 			conditions: []abac.Condition{frozenOwnerCondition},
 			wantErr:    false,
 		},
 		{
+			name:       "deny_effect_rejected",
+			effect:     authz.EffectDeny,
+			conditions: []abac.Condition{frozenOwnerCondition},
+			wantErr:    true,
+		},
+		{
 			name:       "extra_cross_attr_tenant_condition_rejected",
+			effect:     authz.EffectAllow,
 			conditions: []abac.Condition{frozenOwnerCondition, tenantCrossAttr},
 			wantErr:    true,
 		},
 		{
-			name: "static_tenant_match_rejected",
+			name:   "static_tenant_match_rejected",
+			effect: authz.EffectAllow,
 			conditions: []abac.Condition{{
 				Source: abac.SourceSubject, Key: "tenant_id", Operator: abac.OpEquals,
 				Values: []string{"00000000-0000-0000-0000-000000000001"},
@@ -168,11 +183,13 @@ func TestBaselineOwnerRuleTenantFreeze_01_RejectsTenantWidening(t *testing.T) {
 		},
 		{
 			name:       "cross_attr_tenant_match_rejected",
+			effect:     authz.EffectAllow,
 			conditions: []abac.Condition{tenantCrossAttr},
 			wantErr:    true,
 		},
 		{
-			name: "drifted_rhskey_to_tenant_rejected",
+			name:   "drifted_rhskey_to_tenant_rejected",
+			effect: authz.EffectAllow,
 			conditions: []abac.Condition{{
 				Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr,
 				RHSSource: abac.SourceResource, RHSKey: "tenant_id",
@@ -181,13 +198,14 @@ func TestBaselineOwnerRuleTenantFreeze_01_RejectsTenantWidening(t *testing.T) {
 		},
 		{
 			name:       "zero_conditions_rejected",
+			effect:     authz.EffectAllow,
 			conditions: []abac.Condition{},
 			wantErr:    true,
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := checkOwnerRuleFrozen(abac.Rule{ID: "synthetic-" + tc.name, Conditions: tc.conditions})
+			err := checkOwnerRuleFrozen(abac.Rule{ID: "synthetic-" + tc.name, Effect: tc.effect, Conditions: tc.conditions})
 			switch {
 			case tc.wantErr && err == nil:
 				t.Errorf("checkOwnerRuleFrozen must REJECT %s — the freeze would be vacuous otherwise", tc.name)
