@@ -7,15 +7,47 @@
 ## Prerequisites
 
 - Go 1.25.11+
-- `gocell` CLI: install from this repo's source (the only available entry point at present):
+- `gocell` CLI — 三种获取方式（按推荐顺序）：
+
+  **预编译二进制（推荐）**
+
+  预编译产物（linux/darwin × amd64/arm64 tarball + SHA256 checksums）自首个搭载本发布流水线
+  的 stable release 起随每个 GitHub Release 附带。从 GitHub Releases 页面下载对应平台的
+  tarball，解压并校验：
+
+  ```bash
+  # https://github.com/ghbvf/gocell/releases/tag/<tag>
+  # 下载对应平台的 tar.gz 及 checksums.txt，然后：
+  sha256sum -c checksums.txt
+  tar -xzf gocell_linux_amd64.tar.gz   # 按实际平台替换文件名
+  mv gocell /usr/local/bin/
+  gocell version  # 验证安装成功
+  ```
+
+  **Docker（无需本地 Go 环境）**
+
+  multi-arch docker 镜像（linux/amd64 + linux/arm64）同样自首个搭载本发布流水线的 stable
+  release 起提供：
+
+  ```bash
+  docker pull ghcr.io/ghbvf/gocell:<tag>
+  docker run --rm ghcr.io/ghbvf/gocell:<tag> version
+  ```
+
+  `latest` tag 始终指向最新 stable release；`develop` snapshot 无对应 docker 镜像。
+
+  **源码安装（fallback）**
+
+  当需要使用尚未发布预编译产物的代码，或所在环境无法访问 GitHub Releases 时，可从源码安装：
 
   ```bash
   git clone https://github.com/ghbvf/gocell.git
   cd gocell
   go install ./cmd/gocell
+  gocell version  # 验证安装成功
   ```
 
-  The framework itself is a public module; `go get github.com/ghbvf/gocell@v0.1.0` works without GOPRIVATE. #1843 adds per-module release tags for every **library** satellite (`adapters/*`, `corecells`, `cellmodules`; `tools` is published for toolchain consumers such as external `archtest` users, not business Cells), synchronized to the same `vX.Y.Z` as the root — so `go get github.com/ghbvf/gocell/adapters/postgres@vX.Y.Z` resolves (see §6). These satellite tags exist **from the first stable release that ships #1843 onward** (the root-only `v0.1.0` predates it and has no satellite tags). `go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` is still **not** available — `cmd/gocell` is a `go install` binary, and `go install pkg@version` is rejected outright when the target module's `go.mod` carries the local `replace` directive it needs for monorepo development. #1843 deliberately excludes the `cmd/*` modules for exactly this reason; making the CLI installable at a version needs release-time replace-strip, tracked as **#1088**. Install from source (above) for now.
+  The framework itself is a public module; `go get github.com/ghbvf/gocell@v0.1.0` works without GOPRIVATE. #1843 adds per-module release tags for every **library** satellite (`adapters/*`, `corecells`, `cellmodules`; `tools` is published for toolchain consumers such as external `archtest` users, not business Cells), synchronized to the same `vX.Y.Z` as the root — so `go get github.com/ghbvf/gocell/adapters/postgres@vX.Y.Z` resolves (see §6). These satellite tags exist **from the first stable release that ships #1843 onward** (the root-only `v0.1.0` predates it and has no satellite tags). `go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` is still **not** available — `cmd/gocell` is a `go install` binary, and `go install pkg@version` is rejected outright when the target module's `go.mod` carries the local `replace` directive it needs for monorepo development. #1843 deliberately excludes the `cmd/*` modules for exactly this reason; making the CLI installable at a version needs release-time replace-strip, tracked as **#1088**. Install from source (above) or use a pre-built binary for now.
 
 - **Verify CLI ↔ framework version compatibility**: before running `gocell validate`, confirm the
   installed CLI is compatible with the framework version your project depends on:
@@ -32,7 +64,7 @@
   ```
 
   See `docs/guides/cli-version-compatibility.md` for the full compatibility matrix and version
-  policy (v0.x = best-effort intent; v1.0 GA = SemVer hard guarantee).
+  policy (v0.x = best-effort intent, no fail-fast on range exceeded; v1.0 GA = SemVer hard guarantee).
 
 ## Steps
 
