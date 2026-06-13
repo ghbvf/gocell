@@ -23,11 +23,12 @@ type Schema struct {
 	Ref                  string             // "$ref" original value (preserved for traceability)
 	AdditionalProperties bool               // bool only; schema form is unsupported (true = JSON Schema default)
 	Title                string
-	MinLength            *int   // type=string; pointer distinguishes 0 from unset
-	MaxLength            *int   // type=string
-	Minimum              *int64 // numeric types
-	Maximum              *int64
-	SourcePath           string // file path + JSON pointer for error messages
+	MinLength            *int     // type=string; pointer distinguishes 0 from unset
+	MaxLength            *int     // type=string
+	Minimum              *int64   // numeric types
+	Maximum              *int64   // numeric types
+	Enum                 []string // type=string closed value-set; source order preserved for stable codegen (#1935)
+	SourcePath           string   // file path + JSON pointer for error messages
 }
 
 // Parse loads and parses a single JSON Schema file, recursively resolving $ref.
@@ -178,7 +179,7 @@ func checkUnsupportedKeywords(rawNode map[string]any, loc string) error {
 	for _, kw := range []string{
 		"oneOf", "anyOf", "allOf", "not",
 		"patternProperties", "dependentSchemas", "dependentRequired",
-		"enum", "const",
+		"const",
 	} {
 		if _, exists := rawNode[kw]; exists {
 			return fmt.Errorf("contractgen/jsonschema: unsupported keyword %q at %s", kw, loc)
@@ -221,6 +222,10 @@ func fillScalars(s *Schema, rawNode map[string]any, loc string) error {
 		s.Format = v
 	}
 
+	if err := fillEnum(s, rawNode, loc); err != nil {
+		return err
+	}
+
 	if err := fillAdditionalProperties(s, rawNode, loc); err != nil {
 		return err
 	}
@@ -242,6 +247,38 @@ func fillType(s *Schema, rawNode map[string]any, loc string) error {
 	default:
 		return fmt.Errorf("contractgen/jsonschema: unexpected \"type\" value at %s", loc)
 	}
+	return nil
+}
+
+// fillEnum parses the "enum" keyword into s.Enum (#1935). Only string enums are
+// supported: contractgen generates a typed Go enum (`type <Parent><Field> string`
+// + const block) for string fields, so an enum on a non-string type is a fail-fast
+// error rather than a silently dropped constraint. Must run after fillType so
+// s.Type is set. Source order is preserved so generated const blocks are stable.
+func fillEnum(s *Schema, rawNode map[string]any, loc string) error {
+	raw, exists := rawNode["enum"]
+	if !exists {
+		return nil
+	}
+	arr, ok := raw.([]any)
+	if !ok || len(arr) == 0 {
+		return fmt.Errorf("contractgen/jsonschema: \"enum\" must be a non-empty array at %s", loc)
+	}
+	if s.Type != "string" {
+		// Covers both a non-string type and an omitted type (s.Type == ""): codegen
+		// only generates typed enums for string fields, so the field must declare
+		// "type": "string" explicitly.
+		return fmt.Errorf("contractgen/jsonschema: \"enum\" requires an explicit \"type\": \"string\" (got type %q) at %s", s.Type, loc)
+	}
+	values := make([]string, 0, len(arr))
+	for _, v := range arr {
+		sv, ok := v.(string)
+		if !ok {
+			return fmt.Errorf("contractgen/jsonschema: \"enum\" values must be strings at %s", loc)
+		}
+		values = append(values, sv)
+	}
+	s.Enum = values
 	return nil
 }
 

@@ -30,3 +30,16 @@ func LoadConfigCoreKeyProvider() (providerName, masterKey, prevMasterKey string)
 		os.Getenv("GOCELL_CONFIGCORE_MASTER_KEY"),
 		os.Getenv("GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS")
 }
+
+// LoadWebhookSourceKeyProvider reads the KeyProvider configuration for the
+// persistent, encrypted webhook source secret store (#1540). See
+// cellmodules/webhooksource.buildKeyProviderFromName for provider semantics:
+//
+//	GOCELL_WEBHOOK_KEY_PROVIDER        (required in postgres mode: "local-aes" | "vault-transit")
+//	GOCELL_WEBHOOK_MASTER_KEY          (required for local-aes; ignored for vault-transit)
+//	GOCELL_WEBHOOK_MASTER_KEY_PREVIOUS (optional rotation key; local-aes only)
+func LoadWebhookSourceKeyProvider() (providerName, masterKey, prevMasterKey string) {
+	return os.Getenv("GOCELL_WEBHOOK_KEY_PROVIDER"),
+		os.Getenv("GOCELL_WEBHOOK_MASTER_KEY"),
+		os.Getenv("GOCELL_WEBHOOK_MASTER_KEY_PREVIOUS")
+}

@@ -71,7 +71,7 @@ func (v *Validator) validateJOURNEYCONTRACTEXISTENCE01() []ValidationResult {
 	}
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
-		if c.Lifecycle != "active" {
+		if c.Lifecycle != lifecycleActive {
 			continue
 		}
 		if metadata.IsInExamplesSubtree(c.File) {

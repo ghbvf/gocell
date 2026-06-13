@@ -36,8 +36,17 @@
 //     in-package implementations are the HMAC-SHA256 signer/verifier built by
 //     [NewHMACSigner] / [NewHMACVerifier]; [Signer.Sign] returns a [SignedHeaders].
 //   - [SourceStore] / [SourceRegistry] — secret lookup interface + in-memory
-//     implementation (externally replaceable; persistent stores are a
-//     follow-up).
+//     implementation (externally replaceable). A persistent encrypted backing
+//     store (adapters/postgres webhook_sources, wired by cellmodules/webhooksource)
+//     loads its secrets through the sealed crypto funnel [Source.Encrypt] /
+//     [NewSourceFromCiphertext] at boot and serves them from a SourceRegistry
+//     snapshot. The repo only ever holds the sealed [Source] type and ciphertext
+//     columns — the plaintext is never a loose returnable value outside this
+//     package (Hard: sealed secret, no getter). It IS observed by the
+//     caller-supplied [kcrypto.ValueTransformer] that Encrypt/Decrypt run, so
+//     "no in-process code sees the plaintext" is a composition-root trust
+//     property (Medium), locked by WEBHOOK-SOURCE-CRYPTO-FUNNEL-01 to the sole
+//     sanctioned caller (the persistence repo) — see [Source.Encrypt].
 //
 // # Signing scheme (Svix-aligned)
 //

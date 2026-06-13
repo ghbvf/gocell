@@ -9,7 +9,8 @@
         "orderId": { "type": "string" },
         "status": {
           "type": "string",
-          "description": "Saga terminal state: accepted (enrolled, not yet terminal) | running (in-progress) | succeeded | compensated | failed"
+          "enum": ["accepted", "running", "succeeded", "compensated", "failed"],
+          "description": "Saga state derived from the journal: accepted (enrolled, not yet terminal), running (in-progress), succeeded, compensated, failed."
         }
       },
       "required": ["orderId", "status"]

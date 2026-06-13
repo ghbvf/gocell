@@ -259,8 +259,12 @@ func buildContractEntity(c *metadata.ContractMeta, inc IncludeOptions) Entity {
 	}
 
 	var rels []Relation
-	if inc.Relations && c.OwnerCell != "" {
-		rels = append(rels, Relation{Type: "ownedBy", TargetRef: "cell/" + c.OwnerCell})
+	// Owner→cell resolution funnels through ContractOwner.Cell(): a framework-owned
+	// contract (ownerCell = _framework) returns ok=false here, so it emits no
+	// dangling `ownedBy -> cell/_framework` edge (there is no such Cell entity).
+	// Framework ownership is still visible on the wire via ContractSpec.OwnerCell.
+	if owner, ok := c.Owner().Cell(); inc.Relations && ok && owner != "" {
+		rels = append(rels, Relation{Type: "ownedBy", TargetRef: "cell/" + owner})
 		sortRelations(rels)
 	}
 

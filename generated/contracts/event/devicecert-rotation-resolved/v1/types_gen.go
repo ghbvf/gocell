@@ -5,12 +5,23 @@ package devicecertrotationresolved
 
 // Payload — event.devicecert-rotation-resolved.v1.payload
 type Payload struct {
-	DeviceID string `json:"deviceId"`
-	Epoch    int64  `json:"epoch"`
-	Outcome  string `json:"outcome"`
+	DeviceID string         `json:"deviceId"`
+	Epoch    int64          `json:"epoch"`
+	Outcome  PayloadOutcome `json:"outcome"`
 	// format: date-time
 	ResolvedAt string `json:"resolvedAt"`
 }
+
+// PayloadOutcome enumerates the closed value-set of the outcome field.
+// The schema enum is the single source; a value removed there drops the const,
+// breaking any reference at compile time (#1935).
+type PayloadOutcome string
+
+const (
+	PayloadOutcomeSucceeded PayloadOutcome = "succeeded"
+	PayloadOutcomeFailed    PayloadOutcome = "failed"
+	PayloadOutcomeRejected  PayloadOutcome = "rejected"
+)
 
 // Headers — event.devicecert-rotation-resolved.v1.headers
 type Headers struct {

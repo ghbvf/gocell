@@ -21,15 +21,6 @@ import (
 // equal the contract id / spec topic of event.devicecert-rotation-resolved.v1.
 const topicRotationResolved = "event.devicecert-rotation-resolved.v1"
 
-// Outcome values mapped from command.AckReason and carried on the resolved
-// event payload. Kept as a closed set; HandleRotationResolved rejects any value
-// outside it as a permanent producer-side violation.
-const (
-	outcomeSucceeded = "succeeded"
-	outcomeFailed    = "failed"
-	outcomeRejected  = "rejected"
-)
-
 // metricRotationResolved is the counter name for rotation outcome observations.
 const metricRotationResolved = "devicecert_rotation_resolved_total"
 
@@ -205,12 +196,12 @@ func (s *Service) OnCommandResolved(ctx context.Context, entry command.Entry, re
 	if err := s.emitter.Emit(ctx, ev); err != nil {
 		s.logger.Error("devicecertcompletion: emit rotation-resolved failed (reconcile loop self-heals)",
 			slog.String("device_id", entry.DeviceID), slog.Int64("epoch", cmd.Epoch),
-			slog.String("outcome", outcome), slog.Any("error", err))
+			slog.String("outcome", string(outcome)), slog.Any("error", err))
 		return
 	}
 	s.logger.Debug("devicecertcompletion: emitted rotation-resolved",
 		slog.String("device_id", entry.DeviceID), slog.Int64("epoch", cmd.Epoch),
-		slog.String("outcome", outcome))
+		slog.String("outcome", string(outcome)))
 }
 
 // HandleRotationResolved consumes event.devicecert-rotation-resolved.v1. On a
@@ -243,11 +234,14 @@ func (s *Service) HandleRotationResolved(ctx context.Context, entry outbox.Entry
 			fmt.Errorf("devicecertcompletion: parse resolvedAt %q: %w", p.ResolvedAt, err)))
 	}
 
+	// The wire value is decoded into the typed PayloadOutcome but json does NOT
+	// enforce enum membership, so the default arm stays the wire-trust guard: an
+	// out-of-set producer value is a permanent violation routed to DLX.
 	switch p.Outcome {
-	case outcomeSucceeded:
+	case rotationresolved.PayloadOutcomeSucceeded:
 		s.incOutcomeCounter(ctx, p.Outcome)
 		return s.applySuccess(ctx, p, resolvedAt)
-	case outcomeFailed, outcomeRejected:
+	case rotationresolved.PayloadOutcomeFailed, rotationresolved.PayloadOutcomeRejected:
 		// Failure observability (回执-driven): a device explicitly reported the
 		// rotation did not succeed. WARN is chosen over Info to raise signal-to-noise
 		// for device-reported failures; device_id is a non-PII device identifier.
@@ -258,11 +252,11 @@ func (s *Service) HandleRotationResolved(ctx context.Context, entry outbox.Entry
 		s.incOutcomeCounter(ctx, p.Outcome)
 		s.logger.Warn("devicecertcompletion: device reported rotate-cert did not succeed",
 			slog.String("entry_id", entry.ID()), slog.String("device_id", p.DeviceID),
-			slog.Int64("epoch", p.Epoch), slog.String("outcome", p.Outcome))
+			slog.Int64("epoch", p.Epoch), slog.String("outcome", string(p.Outcome)))
 		return outbox.Ack()
 	default:
 		s.logger.Error("devicecertcompletion: unknown outcome, routing to dead letter",
-			slog.String("entry_id", entry.ID()), slog.String("outcome", p.Outcome))
+			slog.String("entry_id", entry.ID()), slog.String("outcome", string(p.Outcome)))
 		return outbox.Reject(outbox.NewPermanentError(
 			fmt.Errorf("devicecertcompletion: unknown outcome %q", p.Outcome)))
 	}
@@ -292,28 +286,30 @@ func (s *Service) applySuccess(ctx context.Context, p rotationresolved.Payload, 
 	return outbox.Ack()
 }
 
-// incOutcomeCounter increments the devicecert_rotation_resolved_total counter
-// for the given outcome value (one of outcomeSucceeded / outcomeFailed /
-// outcomeRejected — the closed set validated by HandleRotationResolved before
-// this is called). A nil counter (failed registration or NopProvider) is a
-// safe no-op.
-func (s *Service) incOutcomeCounter(ctx context.Context, outcome string) {
+// incOutcomeCounter increments the devicecert_rotation_resolved_total counter for
+// the given outcome (one of the generated rotationresolved.PayloadOutcome* values
+// — the closed set validated by HandleRotationResolved before this is called). The
+// typed parameter keeps the metric label sourced from the schema enum; the string
+// conversion to the label value is centralized here. A nil counter (failed
+// registration or NopProvider) is a safe no-op.
+func (s *Service) incOutcomeCounter(ctx context.Context, outcome rotationresolved.PayloadOutcome) {
 	if s.rotationCounter == nil {
 		return
 	}
-	s.rotationCounter.With(metrics.Labels{"outcome": outcome}).Inc(ctx)
+	s.rotationCounter.With(metrics.Labels{"outcome": string(outcome)}).Inc(ctx)
 }
 
 // outcomeFromReason maps a terminal command.AckReason to the resolved-event
 // outcome value. Returns "" for an invalid reason (unreachable: Ack validates).
-func outcomeFromReason(r command.AckReason) string {
+// The result is the generated typed enum, so a producer typo is a compile error.
+func outcomeFromReason(r command.AckReason) rotationresolved.PayloadOutcome {
 	switch r {
 	case command.AckSuccess:
-		return outcomeSucceeded
+		return rotationresolved.PayloadOutcomeSucceeded
 	case command.AckFailed:
-		return outcomeFailed
+		return rotationresolved.PayloadOutcomeFailed
 	case command.AckRejected:
-		return outcomeRejected
+		return rotationresolved.PayloadOutcomeRejected
 	default:
 		return ""
 	}
