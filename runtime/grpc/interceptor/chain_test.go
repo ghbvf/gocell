@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
@@ -169,5 +170,61 @@ func TestNewUnaryChain_AuthOptionsPassthrough(t *testing.T) {
 	}
 	if !handlerReached {
 		t.Fatalf("handler was not reached — WithPublicMethod option did not propagate through newUnaryChain")
+	}
+}
+
+// TestNewUnaryChain_RegistrarPublicMethodExempts is the live-path proof for #1675:
+// chain.go installs WithPublicMethod(reg.IsPublicMethod), so a method declared
+// public via GRPCServiceSpec.PublicMethods bypasses auth WITHOUT a token. No
+// WithPublicMethod is passed via Deps.AuthOptions — the registrar is the sole
+// public-method source. This proves the overlay → registrar → interceptor chain
+// is wired (not dead config).
+func TestNewUnaryChain_RegistrarPublicMethodExempts(t *testing.T) {
+	handlerReached := false
+	reg := runtimegrpc.NewServiceRegistrar()
+	deps := Deps{
+		Collector:       metrics.NewInMemoryGRPCCollector(),
+		Clock:           clock.Real(),
+		Verifier:        stubVerifier{},
+		CellIDClosedSet: []string{"svc-cell"},
+	}
+
+	srv := grpc.NewServer(newUnaryChain(deps, reg))
+	reg.BindServer(srv)
+	spec := cell.GRPCServiceSpec{
+		ContractID:    "grpc.svc.v1",
+		CellID:        "svc-cell",
+		Listener:      cell.PrimaryListener,
+		PublicMethods: []string{"/svc/Public"},
+		Register: func(r grpc.ServiceRegistrar) {
+			r.RegisterService(&testSvcDesc, &testSvc{handlerReached: &handlerReached})
+		},
+	}
+	if err := reg.Register(spec); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.GracefulStop)
+
+	conn, err := grpc.NewClient(lis.Addr().String(),
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	// /svc/Public is declared public via the registrar; invoke without any token.
+	callErr := conn.Invoke(context.Background(), "/svc/Public", &emptypb.Empty{}, &emptypb.Empty{})
+	if callErr != nil {
+		t.Fatalf("registrar-declared public method must bypass auth without a token, got %v (code=%v)",
+			callErr, status.Code(callErr))
+	}
+	if !handlerReached {
+		t.Fatalf("handler was not reached — registrar public-method wiring did not exempt /svc/Public")
 	}
 }

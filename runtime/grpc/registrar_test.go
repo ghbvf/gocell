@@ -152,6 +152,44 @@ func TestServiceRegistrar_CellIDForMethod_Unknown(t *testing.T) {
 	assert.False(t, ok)
 }
 
+// --- IsPublicMethod (#1675): per-method public auth overlay ------------------
+
+// TestServiceRegistrar_IsPublicMethod verifies that GRPCServiceSpec.PublicMethods
+// (#1675) are aggregated into the registrar's public-method set after Register,
+// and that undeclared / unknown methods are authed (fail-closed default false).
+func TestServiceRegistrar_IsPublicMethod(t *testing.T) {
+	t.Parallel()
+
+	reg, _ := newRegistrar()
+	spec := synthSpec("grpc.health.v1", "test-cell", func(r grpc.ServiceRegistrar) {
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+	})
+	spec.PublicMethods = []string{"/grpc.health.v1.Health/Check"}
+	require.NoError(t, reg.Register(spec))
+
+	assert.True(t, reg.IsPublicMethod("/grpc.health.v1.Health/Check"),
+		"a method declared in spec.PublicMethods must be public")
+	assert.False(t, reg.IsPublicMethod("/grpc.health.v1.Health/Watch"),
+		"a registered-but-undeclared method must be authed (fail-closed)")
+	assert.False(t, reg.IsPublicMethod("/nonexistent.Svc/Method"),
+		"an unknown method must be authed (fail-closed)")
+}
+
+// TestServiceRegistrar_IsPublicMethod_EmptyDefault verifies a registrar whose
+// specs declare no PublicMethods treats every method as authed (fail-closed).
+func TestServiceRegistrar_IsPublicMethod_EmptyDefault(t *testing.T) {
+	t.Parallel()
+
+	reg, _ := newRegistrar()
+	spec := synthSpec("grpc.health.v1", "test-cell", func(r grpc.ServiceRegistrar) {
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+	})
+	require.NoError(t, reg.Register(spec))
+
+	assert.False(t, reg.IsPublicMethod("/grpc.health.v1.Health/Check"),
+		"no PublicMethods declared → every method authed (fail-closed)")
+}
+
 // --- Case 5: bad Register fn type panics -------------------------------------
 
 // TestServiceRegistrar_Register_BadFnType_Panics verifies a non-func Register field
