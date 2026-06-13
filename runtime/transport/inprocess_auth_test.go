@@ -80,4 +80,42 @@ func TestInProcessTransport_DoesNotBypassAuthChain(t *testing.T) {
 			t.Error("handler was reached for an unsigned request — the in-process path bypassed the auth chain (D4 violation)")
 		}
 	})
+
+	// The authz half of D4: a validly-signed token whose callerCell is NOT in the
+	// internal route's allowlist must be rejected by RequireCallerCell (403)
+	// before the handler — the in-proc path must not skip the caller-cell gate.
+	t.Run("caller cell not in allowlist rejected (authz)", func(t *testing.T) {
+		var authzReached bool
+		guarded := auth.ServiceTokenMiddleware(ring, clock.Real(), auth.WithServiceTokenNonceStore(ns))(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := auth.RequireCallerCell("accesscore")(r); err != nil {
+					w.WriteHeader(http.StatusForbidden)
+					return
+				}
+				authzReached = true
+				w.WriteHeader(http.StatusOK)
+			}))
+		authzTr := NewInProcess(nil)
+		if err := authzTr.Bind(guarded, nil); err != nil {
+			t.Fatalf("bind: %v", err)
+		}
+
+		req := newReq(t, path)
+		// Signed by auditcore — authenticates fine, but not in the {accesscore} allowlist.
+		token := auth.GenerateServiceToken(ring, "auditcore", http.MethodGet, path, "", tid, clock.Real().Now())
+		req.Header.Set("Authorization", "ServiceToken "+token)
+		req.Header.Set(auth.HeaderTenantID, tid.String())
+
+		resp, err := authzTr.DoContract(context.Background(), "http.config.internal.get.v1", req)
+		if err != nil {
+			t.Fatalf("DoContract: %v", err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("status = %d, want 403 (non-allowlisted callerCell must be rejected by RequireCallerCell)", resp.StatusCode)
+		}
+		if authzReached {
+			t.Error("handler reached despite callerCell not in allowlist — in-proc bypassed the authz gate (D4 violation)")
+		}
+	})
 }

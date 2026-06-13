@@ -18,6 +18,14 @@ const (
 // the sealed binary [TransportMode] — so the label value set is closed by the
 // type system (ADR D4: trace/metrics MUST distinguish in_proc vs remote, at a
 // frozen low cardinality).
+//
+// transport_mode is the ONLY label, deliberately: the D4 requirement is the
+// in_proc-vs-remote distinction, and a caller-cell dimension is NOT reliably
+// available at the dispatch site — a CellTransport call often originates from an
+// event-consumer goroutine (e.g. accesscore's config refetch) that carries no
+// HTTP cell-attribution ctx, so a `cell` label would degrade to the sentinel and
+// add cardinality without attribution. Per-link attribution, if needed, is a
+// US5-era enhancement (richer ctx threading), not a D4 gap.
 type Metrics struct {
 	requests kernelmetrics.CounterVec
 }

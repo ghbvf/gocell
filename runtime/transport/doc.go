@@ -50,7 +50,7 @@
 //     cell from holding/constructing a raw net/http client to dial a sibling,
 //     so the injected CellTransport is the sanctioned path. (Hard downstream — a
 //     codegen-generated client as the sole sealed path — is deferred with the
-//     contract-client codegen, see the US4 #1963 backlog.)
+//     contract-client codegen, tracked in #2093.)
 //
 // ref: ServiceWeaver/weaver internal/weaver/remoteweavelet.go (local/remote
 // dispatch); go-micro selector/default.go (minimal Resolver+transport shape).

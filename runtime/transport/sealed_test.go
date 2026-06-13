@@ -7,14 +7,42 @@ import (
 
 // INVARIANT: INPROCESS-TRANSPORT-SEALED-01
 //
-// TestInProcessTransportZeroExportedFields enforces the sealed-construction
-// invariant (ADR D2 upstream Hard): an InProcessTransport must have zero exported
-// fields so the only way to populate one is via NewInProcess (the sole
-// constructor) + Bind. If any field were exported, package-external code could
-// forge a transport via a struct literal — setting the handler directly and
-// bypassing the WriteOnce bind, or fabricating a transport to escape the
-// downstream funnel (CELL-SYNC-TRANSPORT-FUNNEL-01). Adding an exported field
-// trips this reflect freeze.
+// # INPROCESS-TRANSPORT-SEALED-01 — InProcessTransport is a sealed type (Hard)
+//
+// ## Rule
+//
+// An InProcessTransport must have ZERO exported fields, so the only way to
+// populate one is via NewInProcess (the sole constructor) + Bind (the sole
+// atomic publish). If any field were exported, package-external code could forge
+// a transport via a struct literal — setting the handler directly and bypassing
+// the WriteOnce bind, or fabricating a transport to escape the downstream funnel.
+//
+// ## Why (the UPSTREAM Hard half of the sync-transport funnel)
+//
+// This is the upstream Hard counterpart to the downstream Medium
+// CELL-SYNC-TRANSPORT-FUNNEL-01: a transport cannot be FORGED (this rule), and a
+// cell cannot BYPASS it with a raw http client (the funnel) — together a closed
+// funnel. The seal is enforced by the type system (unexported fields are a
+// compile-time bar to external struct-literal construction); this reflect freeze
+// pins the field set so a future edit that exports a field trips the test.
+//
+// ## AI-robust rating: Hard (sealed construction + reflect field freeze)
+//
+// Unexported-only fields make external construction a compile error (Hard); the
+// reflect freeze backstops a regression that adds an exported field.
+//
+// ## Blind spots
+//
+//   - Package-internal struct-literal construction (an in-package bug that builds
+//     an InProcessTransport{} bypassing NewInProcess) is the Go visibility
+//     ceiling — not reachable by external code; this rule is scoped to the
+//     external-forgery threat the funnel cares about.
+//
+// ## Anti-vacuity
+//
+//   - The NumField()==0 guard fails the test if a future refactor makes the
+//     struct fieldless (which would make the exported-field loop vacuously pass
+//     while dropping the seal's subject).
 func TestInProcessTransportZeroExportedFields(t *testing.T) {
 	t.Parallel()
 

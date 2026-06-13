@@ -132,7 +132,13 @@ func (c *HTTPConfigGetter) GetEntry(ctx context.Context, t tenant.TenantID, key 
 			"configclient: 400 from configcore (invalid X-Tenant-ID)",
 			errcode.WithInternal(errcode.InternalAttr("key", key)))
 	default:
-		return ports.ConfigEntry{}, fmt.Errorf("configclient: unexpected status %d for key %q", resp.StatusCode, key)
+		// Unexpected status (e.g. 5xx). Keep the status + key on the server-only
+		// Internal channel; the message is a const literal (MESSAGE-CONST-LITERAL-01).
+		return ports.ConfigEntry{}, errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable,
+			"configclient: unexpected status from configcore",
+			errcode.WithInternal(
+				errcode.InternalAttr("status", resp.StatusCode),
+				errcode.InternalAttr("key", key)))
 	}
 
 	var env configEntryDataResponse

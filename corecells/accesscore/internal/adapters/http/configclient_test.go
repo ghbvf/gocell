@@ -153,7 +153,9 @@ func TestHTTPConfigGetter_GetEntry_UnexpectedStatus(t *testing.T) {
 	client := NewHTTPConfigGetter(transportTo(srv.URL, srv.Client()), ring, clock.Real())
 	_, err := client.GetEntry(context.Background(), testTenant, "any.key")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unexpected status 500")
+	// 5xx → transient ErrServiceUnavailable; the status + key live on the
+	// server-only Internal channel (not the wire/message).
+	errcodetest.AssertCode(t, err, errcode.ErrServiceUnavailable)
 }
 
 func TestHTTPConfigGetter_GetEntry_Unauthorized(t *testing.T) {
@@ -210,7 +212,9 @@ func TestHTTPConfigGetter_GetEntry_BadRequest_400(t *testing.T) {
 
 func TestNewHTTPConfigGetter_Constructor(t *testing.T) {
 	ring := newTestRing(t)
-	g := NewHTTPConfigGetter(transportTo("http://localhost:9090", http.DefaultClient), ring, clock.Real())
+	// A zero-value transport double suffices — this test only checks construction
+	// + interface satisfaction; GetEntry (which would dispatch) is not called.
+	g := NewHTTPConfigGetter(httpTestTransport{}, ring, clock.Real())
 	require.NotNil(t, g)
 	var _ ports.ConfigGetter = g
 }

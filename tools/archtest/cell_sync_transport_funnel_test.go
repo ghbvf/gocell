@@ -41,7 +41,7 @@
 // ResolvePackageRef is the reachable ceiling for the "who may reference a
 // third-party exported symbol" carrier class. The downstream HARD path — a
 // codegen-generated contract client as the SOLE sealed sibling-call type — is
-// deferred with the contract-client codegen (US4 #1963 backlog); when it lands
+// deferred with the contract-client codegen (tracked in #2093); when it lands
 // this Medium becomes its backstop.
 //
 // ## Blind spots and reverse self-checks

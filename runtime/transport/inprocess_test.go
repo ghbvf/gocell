@@ -84,6 +84,49 @@ func TestInProcessTransport_Bind_WriteOnce(t *testing.T) {
 	})
 }
 
+// TestInProcessTransport_Bind_NilHandler_FailsFast asserts Bind rejects a nil
+// handler (a programmer error) rather than publishing a transport that would
+// nil-panic on the first dispatch.
+func TestInProcessTransport_Bind_NilHandler_FailsFast(t *testing.T) {
+	t.Parallel()
+
+	tr := NewInProcess(nil)
+	if err := tr.Bind(nil, nil); err == nil {
+		t.Fatal("Bind(nil handler) must return an error")
+	}
+	errcodetest.AssertCode(t, tr.Bind(nil, nil), errcode.ErrInternal)
+}
+
+// TestInProcessTransport_DoContract_5xxMarksSpanError asserts a dispatched 5xx
+// marks the span StatusError + records the status attribute, so an in-process
+// call is never a silently-successful span (ADR D4: transparent ≠ undiagnosable).
+func TestInProcessTransport_DoContract_5xxMarksSpanError(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingTracer{}
+	tr := NewInProcess(nil)
+	h := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadGateway) })
+	if err := tr.Bind(h, rec); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+
+	resp, err := tr.DoContract(context.Background(), "c", newReq(t, "/internal/v1/config/k"))
+	if err != nil {
+		t.Fatalf("DoContract: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", resp.StatusCode)
+	}
+	status, set := rec.spanStatus()
+	if !set || status != wrapper.StatusError {
+		t.Errorf("span status set=%v code=%v, want StatusError on 5xx", set, status)
+	}
+	if !rec.hasAttr("http.status_code", int64(http.StatusBadGateway)) {
+		t.Error("span must carry http.status_code=502")
+	}
+}
+
 // TestInProcessTransport_DoContract_DispatchesToHandler proves the dispatched
 // request reaches the bound handler in-memory WITH its headers intact (the
 // transport replaces the network, not the request), and that the recorder's
@@ -245,10 +288,18 @@ func (c *countingCounter) Inc(context.Context) {
 }
 func (c *countingCounter) Add(context.Context, float64) {}
 
-// recordingTracer is a test wrapper.Tracer capturing span attributes.
+// recordingTracer is a test wrapper.Tracer capturing span attributes + status.
 type recordingTracer struct {
-	mu    sync.Mutex
-	attrs []wrapper.Attr
+	mu        sync.Mutex
+	attrs     []wrapper.Attr
+	statusSet bool
+	status    wrapper.StatusCode
+}
+
+func (rt *recordingTracer) spanStatus() (wrapper.StatusCode, bool) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return rt.status, rt.statusSet
 }
 
 func (rt *recordingTracer) Start(ctx context.Context, _ string, attrs ...wrapper.Attr) (context.Context, wrapper.Span) {
@@ -276,6 +327,11 @@ func (s *recordingSpan) SetAttributes(attrs ...wrapper.Attr) {
 	defer s.rt.mu.Unlock()
 	s.rt.attrs = append(s.rt.attrs, attrs...)
 }
-func (s *recordingSpan) RecordError(error)                    {}
-func (s *recordingSpan) SetStatus(wrapper.StatusCode, string) {}
-func (s *recordingSpan) End()                                 {}
+func (s *recordingSpan) RecordError(error) {}
+func (s *recordingSpan) SetStatus(code wrapper.StatusCode, _ string) {
+	s.rt.mu.Lock()
+	defer s.rt.mu.Unlock()
+	s.rt.statusSet = true
+	s.rt.status = code
+}
+func (s *recordingSpan) End() {}

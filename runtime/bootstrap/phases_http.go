@@ -19,6 +19,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -100,6 +101,8 @@ func (b *Bootstrap) phase5BindInProcessTransport(routers map[cell.ListenerRef]*r
 	if err := b.inProcessTransport.Bind(rtr.Handler(), b.wrapperTracer); err != nil {
 		return fmt.Errorf("bootstrap: bind in-process transport: %w", err)
 	}
+	slog.Info("bootstrap: in-process transport bound to internal-listener handler",
+		slog.String("listener", cell.InternalListener.String()))
 	return nil
 }
 
