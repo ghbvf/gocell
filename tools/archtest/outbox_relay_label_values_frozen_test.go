@@ -19,21 +19,28 @@
 //
 //   - DOWNSTREAM (Medium, THIS file): the sealed enum TYPE alone cannot stop an
 //     untyped string literal — Go assigns an untyped constant to a defined string
-//     type, so recordOutcome(ctx, "event", "published", n) would compile and reach
-//     the metric label bypassing the enum consts the golden froze. The callsite
-//     guard bans any compile-time-constant kind/outcome argument to recordOutcome
-//     that is not a bare reference to a declared const, so the ONLY values that can
-//     reach outbox_relayed_total are the declared entryKind/relayOutcome consts (or
-//     a non-constant typed expression). Upstream freezes the SET; downstream forces
-//     every emission THROUGH that set. ("只锁 callsite 不是闭环 funnel": the golden is
-//     the other half.)
+//     type, so recordOutcome(ctx, "event", "published", n) (or an untyped/local
+//     const) would compile and reach the metric label bypassing the enum consts the
+//     golden froze. The callsite guard (mirroring WEBHOOK-METRIC-LABEL-VALUES-
+//     FROZEN-01) allows a kind/outcome argument ONLY when it is a const whose type is
+//     types.Identical to the position's enum param type (entryKind / relayOutcome,
+//     resolved from the recordOutcome signature) AND declared at PACKAGE scope — i.e.
+//     exactly the consts metricschema's resolveEnumStringConsts enumerated into the
+//     golden (it scans package-scope typed consts only). String literals, untyped
+//     consts, wrong-typed consts, function-local typed consts, and T(...) conversions
+//     are all flagged; a non-constant typed value (a relayOutcome var) is allowed.
+//     guard-allowed ≡ golden-frozen BY CONSTRUCTION — upstream freezes the SET,
+//     downstream forces every emission THROUGH it. ("只锁 callsite 不是闭环 funnel":
+//     the golden is the other half.) NOTE this is one notch tighter than the webhook
+//     precedent (which omits the package-scope clause): outbox's golden freezes
+//     package-scope consts, so the guard's exact dual requires package scope.
 //
 // # AI-robust rating
 //
 // Medium for the callsite guard (go/types const-value classification + method-call
 // resolution; the "which argument shapes may reach a method param" axis is not
-// expressible in the Go type system, matching SAGA-/RECONCILE-RESULT-LABEL-VALUES-
-// FROZEN-01). The freeze axis itself is Hard via the metricschema golden (upstream).
+// expressible in the Go type system, matching SAGA-/RECONCILE-/WEBHOOK-RESULT-LABEL-
+// VALUES-FROZEN). The freeze axis itself is Hard via the metricschema golden (upstream).
 //
 // # Blind spots (per ai-robust.md §"工具选定后强制盲区自检")
 //
@@ -54,8 +61,10 @@
 // # Reverse self-check (non-vacuous proof)
 //
 // TestOutboxRelayLabelValuesFrozen01_CallsiteGuard_Fixtures: red_literal (inline
-// "command"/"published" literals) yields 2 diagnostics; green (declared consts +
-// typed vars) yields 0.
+// "command"/"published" literals) → 2 diagnostics; red_untyped_const (an untyped
+// const in the outcome position — proves the types.Identical clause) → 1; red_local_
+// const (a function-local typed relayOutcome const — proves the package-scope clause)
+// → 1; green (package-scope declared consts + typed vars) → 0.
 package archtest
 
 import (
@@ -69,10 +78,12 @@ const outboxRelayLabelValuesPkg = PlatformModulePath + "/kernel/outbox"
 
 // scanRecordOutcomeCallsites flags any (providerRelayCollector).recordOutcome call
 // whose kind argument (index 1) or outcome argument (index 2) is a compile-time
-// CONSTANT that is not a bare reference to a declared const. Allowed: a named const
-// Ident (the freeze test / golden bound those sets) or any non-constant typed
-// expression (a relayOutcome/entryKind var). Banned: a string literal or a
-// entryKind("x") / relayOutcome("x") conversion.
+// CONSTANT that is not a PACKAGE-SCOPE const whose type is types.Identical to the
+// position's enum param type (entryKind / relayOutcome). Allowed: such a frozen-enum
+// const, or any non-constant typed expression (a relayOutcome/entryKind var). Banned:
+// a string literal, an untyped const, a wrong-typed const, a function-local typed
+// const, or a entryKind("x")/relayOutcome("x") conversion — none of which the golden
+// froze. Mirrors webhook scanEnumLabelCallsite + a package-scope clause (see godoc).
 func scanRecordOutcomeCallsites(p *Pass) []Diagnostic {
 	info := p.TypesInfo
 	if info == nil {
@@ -93,25 +104,40 @@ func scanRecordOutcomeCallsites(p *Pass) []Diagnostic {
 			if !ok || fn.Name() != "recordOutcome" || len(call.Args) < 3 {
 				return
 			}
-			// Guard the kind (1) and outcome (2) label-value positions.
+			sig, sigOK := fn.Type().(*types.Signature)
+			if !sigOK || sig.Params().Len() < 3 {
+				return
+			}
+			// Guard the kind (1) and outcome (2) label-value positions. The enum type
+			// for each position is resolved from the recordOutcome signature
+			// (entryKind / relayOutcome) — robust for both the production package and
+			// the fixtures, which declare their own local enum types.
 			for _, idx := range []int{1, 2} {
 				arg := call.Args[idx]
 				tv, ok := info.Types[arg]
 				if !ok || tv.Value == nil {
-					continue // non-constant (typed var / call) — allowed
+					continue // non-constant typed value (a relayOutcome var) — allowed
 				}
-				if id, isIdent := arg.(*ast.Ident); isIdent {
-					if _, isConst := info.ObjectOf(id).(*types.Const); isConst {
+				enumType := sig.Params().At(idx).Type()
+				if obj := constObjectOf(info, arg); obj != nil {
+					if c, isConst := obj.(*types.Const); isConst &&
+						types.Identical(c.Type(), enumType) &&
+						c.Pkg() != nil && c.Parent() == c.Pkg().Scope() {
+						// A PACKAGE-SCOPE const of the sealed enum type — exactly the set
+						// metricschema's resolveEnumStringConsts froze into the golden
+						// (it enumerates package-scope typed consts only). This makes
+						// guard-allowed ≡ golden-frozen by construction.
 						continue
 					}
 				}
 				diags = append(diags, Diagnostic{
 					Rel:  rel,
 					Line: p.Fset.Position(arg.Pos()).Line,
-					Message: "recordOutcome kind/outcome argument is an inline constant — pass a declared " +
-						"entryKind/relayOutcome const (kindEvent/kindCommand, outcomePublished/…), not a string " +
-						"literal or entryKind(...)/relayOutcome(...) conversion " +
-						"(OUTBOX-RELAY-LABEL-VALUES-FROZEN-01 callsite guard)",
+					Message: "recordOutcome " + enumType.String() + " argument is a constant that is not a " +
+						"package-scope declared " + enumType.String() + " const — pass a frozen enum const " +
+						"(kindEvent/kindCommand, outcomePublished/…) or a typed non-constant value, never a " +
+						"string literal, an untyped const, a function-local const, or an " + enumType.String() +
+						"(...) conversion (OUTBOX-RELAY-LABEL-VALUES-FROZEN-01 callsite guard)",
 				})
 			}
 		})
@@ -146,8 +172,10 @@ func TestOutboxRelayLabelValuesFrozen01_CallsiteGuard_Fixtures(t *testing.T) {
 		dir  string
 		want int
 	}{
-		{"red_literal", 2},
-		{"green", 0},
+		{"red_literal", 2},       // two inline string literals (kind + outcome)
+		{"red_untyped_const", 1}, // untyped const in outcome position (types.Identical clause)
+		{"red_local_const", 1},   // function-local typed const (package-scope clause)
+		{"green", 0},             // package-scope frozen-enum consts + typed vars
 	}
 	for _, c := range cases {
 		c := c

@@ -1037,9 +1037,13 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 // dead-lettering is reconcilable. Non-command (event) entries have no command_id —
 // it is omitted then.
 //
-// PII boundary: entry_id / command_id are framework-minted identifiers (UUID-shaped),
-// aggregate_id is the producing cell's domain aggregate-root key, and last_error is
-// already run through SanitizeError. aggregate_id is an identifier, not PII content
+// PII boundary: entry_id is a framework-minted identifier (UUID-shaped); command_id
+// is the per-instance command idempotency identity — caller-supplied on the direct
+// EmitAsync path (runtime/command) and framework-derived from the sealed identity on
+// the HTTP-bridge path, so a direct producer is responsible for keeping it
+// diagnosable / non-sensitive. aggregate_id is the producing cell's domain
+// aggregate-root key, and last_error is already run through SanitizeError.
+// aggregate_id is an identifier, not PII content
 // (consistent with the pre-existing log shape); a cell that puts replayable PII in its
 // aggregate key is a cell-side redaction concern, not the relay's — the relay never
 // logs the entry payload body.
