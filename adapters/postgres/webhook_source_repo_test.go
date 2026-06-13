@@ -39,15 +39,24 @@ func TestNewWebhookSourceRepository_Guards(t *testing.T) {
 		assert.Contains(t, ec.Message, "plaintext")
 	})
 
-	t.Run("NoopTransformer rejected (plaintext passthrough not allowed)", func(t *testing.T) {
-		repo, err := NewWebhookSourceRepository(nil, runtimecrypto.NoopTransformer{})
-		assert.Nil(t, repo)
-		var ec *errcode.Error
-		require.ErrorAs(t, err, &ec)
-		assert.Equal(t, errcode.KindInvalid, ec.Kind)
-		assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
-		assert.Contains(t, ec.Message, "plaintext")
-	})
+	// NoopTransformer's methods have value receivers, so both the value form and
+	// the *NoopTransformer pointer form satisfy ValueTransformer — both must be
+	// rejected or a passthrough could persist secrets in plaintext.
+	noopForms := map[string]runtimecrypto.ValueTransformer{
+		"value":   runtimecrypto.NoopTransformer{},
+		"pointer": &runtimecrypto.NoopTransformer{},
+	}
+	for form, vt := range noopForms {
+		t.Run("NoopTransformer ("+form+") rejected (plaintext passthrough not allowed)", func(t *testing.T) {
+			repo, err := NewWebhookSourceRepository(nil, vt)
+			assert.Nil(t, repo)
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			assert.Equal(t, errcode.KindInvalid, ec.Kind)
+			assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+			assert.Contains(t, ec.Message, "plaintext")
+		})
+	}
 
 	t.Run("nil pool rejected", func(t *testing.T) {
 		repo, err := NewWebhookSourceRepository(nil, webhookStubTransformer{})

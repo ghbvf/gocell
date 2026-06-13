@@ -56,13 +56,18 @@ Three constraints framed the design:
    only on the next restart (matches the issue's "运行时不可变").
 
 3. **A bidirectional sealed crypto funnel in `kernel/webhook`.** `Source.Encrypt`
-   and `NewSourceFromCiphertext` seal/unseal the secret; the plaintext bytes
-   never leave the package. The persistence repo (`runtimewebhook.SourceRepo`,
-   implemented by `adapters/postgres.WebhookSourceRepository`) deals exclusively
-   in the sealed `kwh.Source` type and ciphertext columns — never a loose
-   `[]byte` secret. The AAD that binds each ciphertext to its `source_id`
-   (`cell:webhook/source:{id}`) is computed inside the funnel from the sealed id,
-   so the repo cannot pass a wrong AAD.
+   and `NewSourceFromCiphertext` seal/unseal the secret. The plaintext is never a
+   loose returnable value outside the package — `Source` keeps its secret
+   unexported with no getter (**Hard**). It *is* observed by the caller-supplied
+   `ValueTransformer` those methods run, so "no in-process code sees the plaintext"
+   is a composition-root **trust** property (**Medium**), not a package boundary —
+   locked by `WEBHOOK-SOURCE-CRYPTO-FUNNEL-01` to the sole sanctioned caller. The
+   persistence repo (`runtimewebhook.SourceRepo`, implemented by
+   `adapters/postgres.WebhookSourceRepository`) deals exclusively in the sealed
+   `kwh.Source` type and ciphertext columns — never a loose `[]byte` secret. The
+   AAD that binds each ciphertext to its `source_id` (`cell:webhook/source:{id}`)
+   is computed inside the funnel from the sealed id, so the repo cannot pass a
+   wrong AAD.
 
 4. **Write path this PR = repo CRUD (Upsert / LoadAll / Delete) + boot loader.**
    Secrets are provisioned out-of-band (e.g. a provisioning tool calling

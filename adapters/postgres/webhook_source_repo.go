@@ -62,17 +62,21 @@ var _ runtimewebhook.SourceRepo = (*WebhookSourceRepository)(nil)
 // transformer is validated first: nil is rejected (no plaintext fallback), and
 // [runtimecrypto.NoopTransformer] is rejected by a concrete-type guard — passing
 // the passthrough transformer would persist webhook source secrets in plaintext,
-// which the table schema structurally prevents (no plaintext column). This
-// rejection is now ENFORCED by a runtime guard, not merely narrated (contrast
-// configcore, which permits Noop for non-sensitive entries). pool must also be
-// non-nil.
+// which the table schema structurally prevents (no plaintext column). Both the
+// value form ([runtimecrypto.NoopTransformer]) and the pointer form
+// (*[runtimecrypto.NoopTransformer]) are rejected: NoopTransformer's methods have
+// value receivers, so *NoopTransformer also satisfies [kcrypto.ValueTransformer]
+// and a value-only guard would let the pointer slip through. This rejection is
+// ENFORCED by a runtime guard, not merely narrated (contrast configcore, which
+// permits Noop for non-sensitive entries). pool must also be non-nil.
 func NewWebhookSourceRepository(pool *pgxpool.Pool, transformer kcrypto.ValueTransformer) (*WebhookSourceRepository, error) {
 	if transformer == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"postgres.NewWebhookSourceRepository: value transformer must not be nil "+
 				"(webhook source secrets are never persisted in plaintext)")
 	}
-	if _, ok := transformer.(runtimecrypto.NoopTransformer); ok {
+	switch transformer.(type) {
+	case runtimecrypto.NoopTransformer, *runtimecrypto.NoopTransformer:
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"postgres.NewWebhookSourceRepository: NoopTransformer (passthrough) would persist "+
 				"webhook source secrets in plaintext")
