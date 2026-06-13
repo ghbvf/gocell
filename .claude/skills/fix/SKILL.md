@@ -172,6 +172,8 @@ Cx2 及以上问题，**先查参考实现再动手**。三层按权威性递减
 
 **不可自动执行**: 并发语义变更、接口签名修改、新依赖、数据流方向变更、Cx3+。
 
+> **auto context（无监督）vs manual context（交互 `/fix`）**：上表 **只有 [AUTO-FIX] 行**（≤2 文件 + 非禁域）能在**无监督自动路径**执行——pr-monitor `--mode=auto` 的 `Skill("fix")` 与 codex-pr-router daemon 只跑这一档。「Cx2 超 2 文件或触禁域 → 执行推荐方案」「记录报告，标注阻塞」是 **manual context**（human 在场的交互 `/fix`）专属；无监督路径遇到这些一律 **surface + 转人工，绝不自动改**。daemon 侧此边界由 router 的 **post-exec eligibility 机器闸**强制（codex 改 >2 文件 / `kernel`·migration·`runtime/bootstrap` 路径 → revert + escalate，不 push，见 `codex-pr-router/README.md`）；Claude `Skill("fix")` 侧靠本表 + §不可自动执行清单自限。并发语义不可路径检测，留 prompt + Cx3 门兜底。
+
 **何时用 AskUserQuestion**: 见文末 §沟通规则（默认自动决策，不逐条问）。
 
 ### 3.5 执行前任务清单（阶段 3 → 4 门禁）

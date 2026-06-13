@@ -881,6 +881,37 @@ flip_labels_review() {
 }
 
 # ---------------------------------------------------------------------------
+# fix_ineligible_reason <wt> — F1 #2076: post-exec auto-fix eligibility check.
+# Echoes a non-empty reason iff codex's actual diff breaks the unattended
+# auto-fix budget (≤2 files AND no kernel / migration / bootstrap path); echoes
+# nothing when eligible OR when there are no changes. The byCx gate only proves
+# Cx≤2, but Cx2 spans up to 5 files per rubric — so file count + forbidden paths
+# need a machine gate here, not just the codex prompt (which the build guard
+# below cannot enforce). Concurrency-semantics is NOT path-detectable; it stays
+# the prompt's job + the cx3/cx4 gate (concurrency changes are typically Cx3+).
+# ---------------------------------------------------------------------------
+fix_ineligible_reason() {
+    local wt="$1"
+    local changed n f
+    changed="$(git -C "${wt}" diff --name-only HEAD 2>/dev/null || true)"
+    [[ -z "${changed}" ]] && return 0
+    n="$(printf '%s\n' "${changed}" | grep -c .)"
+    if (( n > 2 )); then
+        echo "touched ${n} files exceeds 2-file auto-fix budget"
+        return 0
+    fi
+    while IFS= read -r f; do
+        [[ -z "${f}" ]] && continue
+        case "${f}" in
+            */migrations/*|*.sql) echo "forbidden path (migration): ${f}"; return 0 ;;
+            runtime/bootstrap/*)  echo "forbidden path (bootstrap): ${f}"; return 0 ;;
+            kernel/*)             echo "forbidden path (kernel): ${f}"; return 0 ;;
+        esac
+    done <<< "${changed}"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # handle_fix <pr_json_object>
 # Gated alternate fix path (#1662). DORMANT by default — requires ai/local-fix
 # label to be explicitly applied. Cx1/Cx2 guard (window widened #1763/#2069).
@@ -1011,6 +1042,20 @@ handle_fix() {
             "${fix_prompt}"; then
         log "PR #${pr}: codex fix exec failed; posting human-escalation comment"
         post_fix_escalation "${pr}" "${branch}" "${wt}" "codex exec failed"
+        return 0
+    fi
+
+    # F1 #2076: post-exec eligibility hard gate. The byCx gate (cx3==0 && cx4==0)
+    # only proves Cx≤2, but Cx2 spans up to 5 files per rubric — exceeding the
+    # ≤2-file + no-kernel/migration/bootstrap promise that the build guard below
+    # cannot express. Reject (revert + escalate, NO push) when codex's actual
+    # diff breaks that budget, so the daemon path machine-enforces the boundary.
+    local elig_reason
+    elig_reason="$(fix_ineligible_reason "${wt}")"
+    if [[ -n "${elig_reason}" ]]; then
+        log "PR #${pr}: post-exec eligibility gate tripped (${elig_reason}); reverting + escalating"
+        git -C "${wt}" reset --hard HEAD --quiet 2>/dev/null || true
+        post_fix_escalation "${pr}" "${branch}" "${wt}" "auto-fix eligibility: ${elig_reason}"
         return 0
     fi
 

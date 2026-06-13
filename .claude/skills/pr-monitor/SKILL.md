@@ -121,7 +121,7 @@ pr-monitor 只凭**机器可判定**的事实（label + 最新机器块）决定
 | 未熔断 | §3.3 通过 |
 | **Cx1/Cx2 window** | block `findings.byCx`：cx3 == 0 ∧ cx4 == 0 ∧ (cx1 + cx2) > 0 |
 
-> **为什么 dispatch 门不查 IN_SCOPE / ≤2 文件 / 禁止域**：这些是**文件级**事实，机器块只有 `findings.byCx` 聚合计数（无文件清单），pr-monitor 读不到——把读不到的事实写进门只会是**不可执行的门禁**。它们改由 `/fix` 在 dispatch 后强制：fix §3.4 [AUTO-FIX] 只对 `IN_SCOPE + ≤2 文件 + 不改 kernel 接口/migration/bootstrap/并发语义` 直接改，越界者 fix 自己降级为 surface + 建议人工。**端到端「能否自动改」= 此处 Cx1/Cx2 机器门 ∧ fix 侧文件级门**，缺一不放行。
+> **为什么 dispatch 门不查 IN_SCOPE / ≤2 文件 / 禁止域**：这些是**文件级**事实，机器块只有 `findings.byCx` 聚合计数（无文件清单），pr-monitor 读不到——把读不到的事实写进门只会是**不可执行的门禁**。它们改由 dispatch 后的执行体强制：Claude `Skill("fix")` 侧靠 fix §3.4 [AUTO-FIX]（`IN_SCOPE + ≤2 文件 + 不改 kernel 接口/migration/bootstrap/并发语义`，越界 surface + 转人工）；codex-pr-router daemon 侧靠 **router post-exec eligibility 机器闸**（codex 改 >2 文件 / 禁域路径 → revert + escalate，不 push）。**端到端「能否自动改」= 此处 Cx1/Cx2 机器门 ∧ 执行体侧文件级门**，缺一不放行。
 
 **`--fix-engine=claude`（默认）且 dispatch 门全部成立** → host LLM in-session 调用：
 

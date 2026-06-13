@@ -79,6 +79,9 @@ CODEX_VERDICT_FILE="${WORKDIR}/codex_verdict.json"
 CODEX_FAIL_FLAG="${WORKDIR}/codex_fail"
 GH_EDIT_FAIL_FLAG="${WORKDIR}/gh_edit_fail"
 GH_COMMENT_FAIL_FLAG="${WORKDIR}/gh_comment_fail"
+# GIT_DIFF_FILES_FILE: controllable `git diff --name-only HEAD` output (one path
+# per line) so S5c/S5d can simulate codex modifying >2 files / a forbidden path.
+GIT_DIFF_FILES_FILE="${WORKDIR}/git_diff_files.txt"
 
 # Initialise all data files to safe defaults
 echo '[]' > "${GH_LIST_FILE}"
@@ -87,6 +90,7 @@ echo '{"labels":[]}' > "${GH_LABELS_FILE}"
 echo '{"mergeable":"MERGEABLE"}' > "${GH_MERGE_FILE}"
 : > "${GH_API_BODIES_FILE}"
 : > "${GH_COMMENT_FAIL_FLAG}"
+: > "${GIT_DIFF_FILES_FILE}"
 
 # ---------------------------------------------------------------------------
 # Python3 helper for gh --jq filtering (separate file to avoid quoting hell)
@@ -130,10 +134,16 @@ PYEOF
 chmod +x "${GH_JQ_HELPER}"
 
 # ---------------------------------------------------------------------------
-# Stub: git — no-op for all calls
+# Stub: git — no-op for all calls EXCEPT `diff --name-only HEAD`, which returns
+# the controllable changed-file list (drives the post-exec eligibility gate +
+# the commit loop). All other git calls (add/commit/push/reset/worktree) no-op.
 # ---------------------------------------------------------------------------
-cat > "${STUB_BIN}/git" << 'GSTUB'
+cat > "${STUB_BIN}/git" << GSTUB
 #!/usr/bin/env bash
+GIT_DIFF_FILES_FILE="${GIT_DIFF_FILES_FILE}"
+if [[ "\$*" == *"diff --name-only HEAD"* ]]; then
+    [[ -f "\${GIT_DIFF_FILES_FILE}" ]] && cat "\${GIT_DIFF_FILES_FILE}"
+fi
 exit 0
 GSTUB
 chmod +x "${STUB_BIN}/git"
@@ -413,6 +423,7 @@ reset_scenario() {
     : > "${CALLS_LOG}"
     rm -f "${GH_EDIT_FAIL_FLAG}" "${CODEX_FAIL_FLAG}" "${GH_COMMENT_FAIL_FLAG}"
     : > "${GH_API_BODIES_FILE}"
+    : > "${GIT_DIFF_FILES_FILE}"
     # Clear seen file so idempotency gate doesn't fire
     : > "${ROUTER_HOME}/state/seen"
     # Remove any stale locks
@@ -646,6 +657,48 @@ else
     fail "S5b: cx2 within window proceed" "codex workspace-write NOT called; calls=$(cat "${CALLS_LOG}") out=${out_5b}"
 fi
 
+# 5c: cx2 within window BUT codex touched 3 files (> 2-file budget) →
+# post-exec eligibility gate must trip → escalate, NOT push (the byCx gate can't
+# see file count; Cx2 spans up to 5 files per rubric — F1 #2076).
+reset_scenario
+echo '[{"number":43,"headRefName":"feat/fix","headRefOid":"'"${OID_S5}"'","author":{"login":"alice"},"isCrossRepository":false,"isDraft":false}]' \
+    > "${GH_LIST_FILE}"
+echo '{"headRefOid":"'"${OID_S5}"'"}' > "${GH_OID_FILE}"
+echo '{"labels":[{"name":"pr-status/needs-fix"},{"name":"ai/local-fix"}]}' > "${GH_LABELS_FILE}"
+echo '{"mergeable":"MERGEABLE"}' > "${GH_MERGE_FILE}"
+printf '%s\n' "${S5B_BODY}" > "${GH_API_BODIES_FILE}"   # cx2=1 → passes byCx gate
+cp "${VERDICT_CHANGES_REQUESTED}" "${CODEX_VERDICT_FILE}"
+# codex modified 3 files → exceeds the ≤2-file auto-fix budget
+printf 'pkg/a/a.go\npkg/b/b.go\npkg/c/c.go\n' > "${GIT_DIFF_FILES_FILE}"
+
+out_5c="$(run_router)"
+
+# Guard is POST-exec: codex workspace-write ran, then the diff guard caught it.
+assert_contains "S5c-postexec" "$(cat "${CALLS_LOG}")" "workspace-write"
+# Eligibility gate tripped on file count, not the build guard.
+assert_contains "S5c-trip-log" "${out_5c}" "eligibility gate tripped"
+assert_contains "S5c-budget-reason" "${out_5c}" "budget"
+# Must NOT reach push.
+assert_not_contains "S5c-no-push" "${out_5c}" "pushed fix commit"
+
+# 5d: cx2 within window, 1 file BUT a forbidden path (kernel/) → gate trips.
+reset_scenario
+echo '[{"number":43,"headRefName":"feat/fix","headRefOid":"'"${OID_S5}"'","author":{"login":"alice"},"isCrossRepository":false,"isDraft":false}]' \
+    > "${GH_LIST_FILE}"
+echo '{"headRefOid":"'"${OID_S5}"'"}' > "${GH_OID_FILE}"
+echo '{"labels":[{"name":"pr-status/needs-fix"},{"name":"ai/local-fix"}]}' > "${GH_LABELS_FILE}"
+echo '{"mergeable":"MERGEABLE"}' > "${GH_MERGE_FILE}"
+printf '%s\n' "${S5B_BODY}" > "${GH_API_BODIES_FILE}"   # cx2=1 → passes byCx gate
+cp "${VERDICT_CHANGES_REQUESTED}" "${CODEX_VERDICT_FILE}"
+# codex modified a forbidden (kernel) path, even though only 1 file
+printf 'kernel/cell/registrar.go\n' > "${GIT_DIFF_FILES_FILE}"
+
+out_5d="$(run_router)"
+
+assert_contains "S5d-trip-log" "${out_5d}" "eligibility gate tripped"
+assert_contains "S5d-forbidden-reason" "${out_5d}" "forbidden path"
+assert_not_contains "S5d-no-push" "${out_5d}" "pushed fix commit"
+
 # ---------------------------------------------------------------------------
 # Scenario 6: schema malformed (F10)
 # Case 6a: bad verdict enum → no comment, no label flip
@@ -835,7 +888,7 @@ echo "=== Selftest summary ==="
 echo "PASS: ${PASS_COUNT}"
 echo "FAIL: ${FAIL_COUNT}"
 
-EXPECTED_CHECKS=29
+EXPECTED_CHECKS=36
 if [[ "${CHECK_COUNT}" -ne "${EXPECTED_CHECKS}" ]]; then
     echo "FAIL [check-count]: expected ${EXPECTED_CHECKS} checks, ran ${CHECK_COUNT}"
     FAIL_COUNT=$(( FAIL_COUNT + 1 ))
