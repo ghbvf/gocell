@@ -72,7 +72,7 @@ type {{$e.TypeName}} string
 
 const (
 {{- range $e.Values}}
-	{{.ConstName}} {{$e.TypeName}} = "{{.Value}}"
+	{{.ConstName}} {{$e.TypeName}} = {{quoteGoString .Value}}
 {{- end}}
 )
 {{- end}}

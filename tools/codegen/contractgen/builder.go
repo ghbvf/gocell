@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/token"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1610,14 +1611,40 @@ func collectFieldEnum(dto *DTOSpec, parentName, fieldKey string, prop *Schema) e
 }
 
 // buildEnumSpec assembles the EnumSpec for a string enum field. Const names are
-// <TypeName>+goPascalCase(value); a collision (two values that PascalCase to the
-// same identifier, e.g. "in-progress" and "in_progress") is a fail-fast error
-// rather than a silently shadowed const.
+// <TypeName>+goPascalCase(value). It enforces the "schema enum value → Go const
+// identifier" legality boundary fail-fast so a malformed schema never reaches the
+// generated file as un-buildable Go:
+//
+//   - empty suffix (value PascalCases to ""): the const would shadow the type name;
+//   - non-identifier const (value carries spaces/punctuation that goPascalCase
+//     passes through, e.g. "a b" → "...A b", "!" → "...!"): only surfaces as an
+//     opaque gofmt/compile error on the emitted file otherwise;
+//   - collision (two values PascalCase to the same identifier, e.g. "in-progress"
+//     and "in_progress"): a silently shadowed const otherwise.
+//
+// Every error names the offending wire value, field, and type so the schema
+// author can fix the source enum. The const value literal itself is escaped at
+// render time by quoteGoString (types.tmpl), a separate boundary that stands even
+// if this identifier derivation ever changes.
 func buildEnumSpec(typeName, fieldKey string, values []string) (EnumSpec, error) {
 	es := EnumSpec{TypeName: typeName, FieldName: fieldKey, Values: make([]EnumValue, 0, len(values))}
 	seen := make(map[string]string, len(values))
 	for _, v := range values {
 		constName := typeName + goPascalCase(v)
+		// constName == typeName ⇔ goPascalCase(v) == "" (empty suffix). Checked
+		// before token.IsIdentifier because the bare type name IS a valid
+		// identifier, so the IsIdentifier guard would let an empty-suffix const
+		// through.
+		if constName == typeName {
+			return EnumSpec{}, fmt.Errorf(
+				"contractgen: enum value %q (field %q) yields an empty Go const suffix for type %s",
+				v, fieldKey, typeName)
+		}
+		if !token.IsIdentifier(constName) {
+			return EnumSpec{}, fmt.Errorf(
+				"contractgen: enum value %q (field %q) yields invalid Go const %q (type %s)",
+				v, fieldKey, constName, typeName)
+		}
 		if prev, dup := seen[constName]; dup {
 			return EnumSpec{}, fmt.Errorf("contractgen: enum values %q and %q both map to Go const %q (type %s)", prev, v, constName, typeName)
 		}

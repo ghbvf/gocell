@@ -854,6 +854,43 @@ func TestRender_Golden_Synth_Enum(t *testing.T) {
 	assertGolden(t, goldenFile, content)
 }
 
+// TestRenderTypes_EnumValueQuoted locks the F1 fix: the const block renders each
+// enum value through quoteGoString (strconv.Quote), not raw `"{{.Value}}"`
+// concatenation. A value carrying a double-quote and a backslash must produce a
+// valid escaped Go string literal; the pre-fix template emitted `= "a"b\c"`,
+// which is not buildable Go (renderTypes' gofmt pass would reject it). The spec
+// is hand-built so this exercises the render layer in isolation — buildEnumSpec's
+// identifier guard (F2) rejects such values upstream, but the value-literal
+// boundary must stand on its own (e.g. if const-name derivation ever sanitized).
+func TestRenderTypes_EnumValueQuoted(t *testing.T) {
+	spec := &ContractGenSpec{
+		PackageName: "widgetresolved",
+		Kind:        "event",
+		SourceFile:  "synth/widget-resolved.yaml",
+		ContractID:  "event.widget-resolved.v1",
+		DTOs: []DTOSpec{{
+			Name:   "Payload",
+			Fields: []DTOField{{Name: "Outcome", JSONTag: "outcome", GoType: "PayloadOutcome"}},
+			Enums: []EnumSpec{{
+				TypeName:  "PayloadOutcome",
+				FieldName: "outcome",
+				// A value that needs Go-literal escaping: a double-quote and a backslash.
+				Values: []EnumValue{{ConstName: "PayloadOutcomeWeird", Value: `a"b\c`}},
+			}},
+		}},
+	}
+
+	content, err := renderTypes(spec)
+	if err != nil {
+		t.Fatalf("renderTypes (a raw `\"%s\"` would not gofmt): %v", `a"b\c`, err)
+	}
+	norm := strings.Join(strings.Fields(string(content)), " ")
+	const want = `PayloadOutcomeWeird PayloadOutcome = "a\"b\\c"`
+	if !strings.Contains(norm, want) {
+		t.Errorf("enum value not Go-literal quoted.\n got: %s\nwant substring: %s", norm, want)
+	}
+}
+
 func TestRender_Golden_Synth_Saga(t *testing.T) {
 	testDir := filepath.Join("testdata", "synth", "synth_saga")
 	absTestDir, err := filepath.Abs(testDir)

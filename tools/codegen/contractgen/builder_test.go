@@ -420,6 +420,46 @@ func TestSchemaToDTOs_ArrayOfEnum_Rejected(t *testing.T) {
 	}
 }
 
+// TestSchemaToDTOs_EnumInvalidConstName asserts enum values whose derived Go const
+// identifier is illegal are rejected fail-fast at codegen time rather than emitted
+// as un-buildable Go (#1935 F2). goPascalCase passes spaces/punctuation through and
+// maps "" to "", so the const name must be guarded explicitly. Each error must name
+// the offending wire value and field so the schema author can fix the source enum.
+func TestSchemaToDTOs_EnumInvalidConstName(t *testing.T) {
+	cases := []struct {
+		name      string
+		value     string
+		wantInErr string // a fragment proving the offending value is surfaced
+	}{
+		{"empty string → empty suffix shadows type", "", "empty Go const suffix"},
+		{"punctuation → invalid identifier", "!", `"PayloadFlag!"`},
+		{"embedded space → invalid identifier", "a b", `"PayloadFlagA b"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Schema{
+				Type:          "object",
+				PropertyOrder: []string{"flag"},
+				Properties: map[string]*Schema{
+					"flag": {Type: "string", Enum: []string{tc.value}},
+				},
+				Required: []string{"flag"},
+			}
+			_, err := schemaToDTOs("Payload", s)
+			if err == nil {
+				t.Fatalf("expected error for enum value %q", tc.value)
+			}
+			if !strings.Contains(err.Error(), tc.wantInErr) {
+				t.Errorf("error should contain %q, got: %v", tc.wantInErr, err)
+			}
+			// The field key must always be named so the author can locate the source.
+			if !strings.Contains(err.Error(), `"flag"`) {
+				t.Errorf("error should name the field %q, got: %v", "flag", err)
+			}
+		})
+	}
+}
+
 // dtoNames returns names for display in test output.
 func dtoNames(dtos []DTOSpec) []string {
 	names := make([]string, len(dtos))
