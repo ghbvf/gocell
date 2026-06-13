@@ -78,6 +78,16 @@ source hack/lib/archtest.sh
 # the 2-CPU/7GB runner budget — a real new gate in a live corecells handler is caught
 # there. #1925 PR-10b pr-review F2/F3; #1974 PR-10c pr-review F3.
 #
+# ARCHTEST-CI-GOWORK-ACTIVE-01 (TestArchtestCIGoworkActive + _RejectsGoworkOff /
+# _AcceptsGoworkActive / _IgnoresNonArchtestWorkflow) IS in this PR-time set: it
+# guards a CI-config invariant — no `.github/workflows/*` archtest-scan step may
+# set GOWORK=off (which silently drops satellite modules from the workspace scan).
+# A guard against a CI misconfiguration must fail at PR-merge (when the workflow
+# is edited), not only next-day nightly, or it under-serves its own purpose.
+# Cheap here: a few workflow-YAML reads + regex, NO packages.Load. #1590 (#1555
+# close-out). #2024 pr-review F4. The sub-cases are the synthetic red/green
+# fixtures that prove the validator is non-vacuous at PR-merge.
+#
 # -tags=archtest: the archtest leaf is gated behind `//go:build archtest` so a
 # bare `go test ./...` keeps it off the make verify / PR critical path (build-tag
 # funnel; same convention as integration / e2e). This gate is a sanctioned
@@ -85,7 +95,7 @@ source hack/lib/archtest.sh
 # renamed tag (which yields "[no test files]" → 0 tests → false green) into a
 # hard failure — `-run` over an empty test set exits 0 otherwise.
 if ! output="$(go test -tags="$ARCHTEST_BUILD_TAGS" ./tools/archtest \
-  -run '^(TestProdClockInjection|TestKernelClockLeafFallback|TestKernelClockLeafFallbackFixtures|TestProdClockInjectionFixtures|TestProdDurationConst|TestProdDurationConstFixtures|TestTestTimeLiteralConst|TestTestSleepDiscipline|TestTestTimeLiteralFixtures|TestPanicRegistered|TestPanicRegisteredScannerFixtures|TestArchtestModulePathFunnel|TestModulePathFunnel_TypedReconstruction|TestFenceTokenMintFunnel_AllowlistEnforced|TestMetadatatestImportScope|TestFixtureCellIDTypedBuilder_NewCellIDBodyShape|TestFixtureCellIDTypedBuilder_VarInitializerShape|TestRootModuleNoReplace01|TestRootModuleNoReplace01_NegativeControl|TestPlatformCellScanCoverage01|TestPlatformCellScanCoverage01_AntiVacuity|TestArchtest_AllLeafTestFiles_HaveArchtestBuildTag|TestArchtest_InvariantsScriptContainsFunnelGuard|TestPermissionBasedAuthzAllowlist_FrozenEmpty|TestPermissionBasedAuthz_ReverseFixture|TestContractOwnerCellFunnel_NoBypass|TestContractOwnerCellFunnel_DetectorIsNotVacuous)$' \
+  -run '^(TestProdClockInjection|TestKernelClockLeafFallback|TestKernelClockLeafFallbackFixtures|TestProdClockInjectionFixtures|TestProdDurationConst|TestProdDurationConstFixtures|TestTestTimeLiteralConst|TestTestSleepDiscipline|TestTestTimeLiteralFixtures|TestPanicRegistered|TestPanicRegisteredScannerFixtures|TestArchtestModulePathFunnel|TestModulePathFunnel_TypedReconstruction|TestFenceTokenMintFunnel_AllowlistEnforced|TestMetadatatestImportScope|TestFixtureCellIDTypedBuilder_NewCellIDBodyShape|TestFixtureCellIDTypedBuilder_VarInitializerShape|TestRootModuleNoReplace01|TestRootModuleNoReplace01_NegativeControl|TestPlatformCellScanCoverage01|TestPlatformCellScanCoverage01_AntiVacuity|TestArchtest_AllLeafTestFiles_HaveArchtestBuildTag|TestArchtest_InvariantsScriptContainsFunnelGuard|TestPermissionBasedAuthzAllowlist_FrozenEmpty|TestPermissionBasedAuthz_ReverseFixture|TestContractOwnerCellFunnel_NoBypass|TestContractOwnerCellFunnel_DetectorIsNotVacuous|TestArchtestCIGoworkActive|TestArchtestCIGoworkActive_RejectsGoworkOff|TestArchtestCIGoworkActive_AcceptsGoworkActive|TestArchtestCIGoworkActive_IgnoresNonArchtestWorkflow)$' \
   -count=1 -timeout 5m 2>&1)"; then
   printf '%s\n' "$output"
   exit 1
