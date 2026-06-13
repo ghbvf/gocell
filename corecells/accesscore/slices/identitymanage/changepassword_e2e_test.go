@@ -328,7 +328,10 @@ func TestChangePassword_FullFlow(t *testing.T) {
 	cpReq := httptest.NewRequest(http.MethodPost, "/api/v1/access/users/"+userID+"/password",
 		bytes.NewReader(cpBody))
 	cpReq.Header.Set("Content-Type", "application/json")
-	cpReq = cpReq.WithContext(withTenant(auth.TestContext(userID, []string{auth.RoleAdmin})))
+	// #1977: change-password is gated by RequirePermissionForResource (self/ownership
+	// now decided by the PDP, not a Go short-circuit) — wire an allow Authorizer so
+	// the gate delegates to the PDP and the request reaches the service logic.
+	cpReq = cpReq.WithContext(withAllowAuthorizer(withTenant(auth.TestContext(userID, []string{auth.RoleAdmin}))))
 	cpW := httptest.NewRecorder()
 	f.mux.ServeHTTP(cpW, cpReq)
 	require.Equal(t, http.StatusOK, cpW.Code, "ChangePassword must return 200; body=%s", cpW.Body.String())
@@ -353,7 +356,7 @@ func TestChangePassword_FullFlow(t *testing.T) {
 
 	// --- Step 6: GET succeeds with new token (unblocked) ---
 	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/"+userID, nil)
-	getReq = getReq.WithContext(withTenant(auth.TestContext(userID, []string{auth.RoleAdmin})))
+	getReq = getReq.WithContext(withAllowAuthorizer(withTenant(auth.TestContext(userID, []string{auth.RoleAdmin}))))
 	getW := httptest.NewRecorder()
 	f.mux.ServeHTTP(getW, getReq)
 	assert.Equal(t, http.StatusOK, getW.Code, "GET must succeed after password change")
@@ -383,7 +386,9 @@ func TestChangePassword_CrossTenant_NotFound(t *testing.T) {
 
 	// Caller is authenticated under tenant B (different from tenant A where
 	// the victim user was seeded). Admin role is present but wrong tenant.
-	crossTenantCtx := withTenantB(auth.TestContext(victimID, []string{auth.RoleAdmin}))
+	// #1977: PDP-gated — wire an allow Authorizer so the gate passes and the
+	// tenant-scoped repo (not the gate) produces the IDOR-safe 404.
+	crossTenantCtx := withAllowAuthorizer(withTenantB(auth.TestContext(victimID, []string{auth.RoleAdmin})))
 
 	body, _ := json.Marshal(map[string]string{
 		"oldPassword": "OriginalP@ss1",
@@ -418,7 +423,7 @@ func TestChangePassword_RejectsBadOldPassword(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/users/"+userID+"/password",
 		bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(withTenant(auth.TestContext(userID, []string{auth.RoleAdmin})))
+	req = req.WithContext(withAllowAuthorizer(withTenant(auth.TestContext(userID, []string{auth.RoleAdmin}))))
 	w := httptest.NewRecorder()
 	f.mux.ServeHTTP(w, req)
 

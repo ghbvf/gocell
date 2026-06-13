@@ -158,6 +158,17 @@
 // (write-path CAS) plus consumer idempotency, never the lease. A nil LeaderElector
 // is single-process mode (always leader, Epoch 0, no fencing).
 //
+// The lease window an elector enforces is a sealed reconcile.LeaseTTL (leasettl.go),
+// NOT a raw time.Duration: NewLeaseTTL rejects a sub-millisecond duration so the
+// ms-truncation defect (a sub-ms lease → a 0ms Redis PX / 0ms PG interval →
+// instantly-expiring lease → multiple live leaders) is unrepresentable for any
+// constructed value; the residual zero value LeaseTTL{} is rejected fail-fast by
+// each adapter constructor (IsZero). This is a TYPE-enforced invariant (unexported
+// ms field, compile-time sealing), NOT archtest-bound — its authoritative statement
+// lives in the LeaseTTL godoc (INVARIANT: any NewLeaseTTL result has ms >= 1) and
+// ADR 202605291600-661 §threat-matrix (#1953), so it is deliberately absent from the
+// "Enforced invariants (tools/archtest)" list above.
+//
 // # System producer identity (#1821)
 //
 // INVARIANT: every Reconcile runs under a positively installed SYSTEM PRODUCER

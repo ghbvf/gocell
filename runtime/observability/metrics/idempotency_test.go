@@ -60,9 +60,9 @@ func TestNewIdempotencyCollector_RegistersOneCounter(t *testing.T) {
 	}
 }
 
-// TestIdempotencyCollector_ObserveRequest_AllSixStates verifies all six
+// TestIdempotencyCollector_ObserveRequest_AllStates verifies all seven
 // RequestState constants emit the correct wire-stable state label value.
-func TestIdempotencyCollector_ObserveRequest_AllSixStates(t *testing.T) {
+func TestIdempotencyCollector_ObserveRequest_AllStates(t *testing.T) {
 	cases := []struct {
 		state idemhttp.RequestState
 		want  string
@@ -73,6 +73,7 @@ func TestIdempotencyCollector_ObserveRequest_AllSixStates(t *testing.T) {
 		{idemhttp.StateStoreError, "store_error"},
 		{idemhttp.StateOversize, "oversize"},
 		{idemhttp.StateKeyReused, "key_reused"},
+		{idemhttp.StateBodyReadFailed, "body_read_failed"},
 	}
 
 	p := newSagaSpyProvider()
