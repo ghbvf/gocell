@@ -316,6 +316,11 @@ func TagPaths(root, version string) ([]string, error) {
 //
 // cmd/gocell is currently the only go-install-able binary (#2045).
 // cmd/corebundle is a runtime composition root not meant for go install.
+//
+// NOTE: when adding a second installable binary, also update the
+// "Release installable CLI module" step in .github/workflows/release.yml —
+// that step currently asserts exactly one installable binary and would need
+// to be refactored into a loop to handle multiple entries.
 var installableBinaries = []string{"cmd/gocell"}
 
 // InstallableBinaries returns the installable-binary subset of the workspace

@@ -115,7 +115,7 @@ CLI 校验，不直接 Go 依赖）。现有 archtest 已禁止此 import 路径
 | v1.0 GA 后忘记切换 intent → guarantee，enforcement 未接入 | 本 ADR §D4 列出 v1.0 GA checklist；GA ADR 的 PR body 必须逐条核销（见下 §v1.0 GA self-closure checklist） | Medium（self-closure checklist 是人工检查，GA PR review 强制对照） |
 | contractspec 被外部误 import，绕过 CLI 校验路径 | 现有 archtest 已禁止（引用，不重复建） | Medium（现有 archtest 守卫） |
 | CLI 与 framework 版本对应关系手动维护漂移 | `compatible_framework_range` 从单一注入 version 常量派生，非手维护；`cli-version-compatibility.md` 表由 release checklist 驱动追加 | Medium（派生逻辑的正确性由 release 流程保证，非编译期 Hard） |
-| `cmd/gocell` go.mod 的 replace 指令在发布后残留，导致 `go install @version` 被工具链拒绝 | release-time `modrelease.StripReplaceAndPin` 剥离 replace + pin internal require，独立子 module commit 打 `cmd/gocell/vX.Y.Z` tag（#2045 resolved）；post-release smoke `go install @version` 验证（与 #1767 external-consumer-smoke 互补，不替代全量矩阵） | Medium（release pipeline 流程守卫，非编译期 Hard；smoke 验证在 release checklist 强制） |
+| `cmd/gocell` go.mod 的 replace 指令在发布后残留，导致 `go install @version` 被工具链拒绝 | release-time `modrelease.StripReplaceAndPin` 剥离 replace + pin internal require，独立子 module commit 打 `cmd/gocell/vX.Y.Z` tag（#2045 resolved）；post-release smoke `go install @version` 验证（与 #1767 external-consumer-smoke 互补，不替代全量矩阵）。Smoke 覆盖边界：在 `GOSUMDB=off` 下运行，仅验证 tag 可解析 + 二进制可运行 + 版本戳正确，**不验证 sum.golang.org 校验路径**；sumdb 传播延迟窗口是 known residual（与 RELEASE-EXTERNAL-GET-01 doc.go 的「run once by hand」残差一致） | Medium（release pipeline 流程守卫，非编译期 Hard；smoke 验证在 release checklist 强制） |
 
 **注**：v0.x 阶段威胁 T1/T2 评级为 Soft，因为 SemVer §4 明确允许 v0.x breaking；此时接 CI 门禁
 反而违背「intent」语义。v1.0 GA 后提升为 Medium（CI 门禁）是预期的升级路径，登记 backlog 而非

@@ -30,12 +30,16 @@
 // only checkable by running the real toolchain against the real strip transform
 // output — a go.mod is data, not a type, so it is not Hard-expressible. It is far
 // above Soft (it executes `go install`, asserting both the success AND the
-// load-bearing rejection). The strip transform's BYTE output is frozen separately
-// by INSTALLABLE-STRIP-TRANSFORM-01 (Hard); this smoke proves that frozen shape is
-// actually installable end-to-end. Faithfulness gaps (network-inherent, identical
-// to RELEASE-EXTERNAL-GET-01's residual): real VCS tag→version mapping, GOSUMDB
-// interop, and the external (non-gocell) dependency closure — the "run once by hand
-// on the real tag" remainder, exercised by the release.yml post-publish smoke.
+// load-bearing rejection). The strip transform's BYTE output is frozen separately by
+// INSTALLABLE-STRIP-TRANSFORM-01 (Hard) — that invariant freezes a representative
+// FIXTURE's output (testdata/installable_strip_expected.go.mod), not the real
+// cmd/gocell/go.mod. The real file's strip result is dynamically validated by
+// INSTALLABLE-REQUIRES-PUBLISHABLE-01 (Medium). This smoke proves that the strip
+// shape produced from the real go.mod is actually installable end-to-end.
+// Faithfulness gaps (network-inherent, identical to RELEASE-EXTERNAL-GET-01's
+// residual): real VCS tag→version mapping, GOSUMDB interop, and the external
+// (non-gocell) dependency closure — the "run once by hand on the real tag"
+// remainder, exercised by the release.yml post-publish smoke.
 
 // INVARIANT: INSTALLABLE-GO-INSTALL-SMOKE-01 (see file header for the full
 // statement, grading, and the load-bearing red case).

@@ -481,29 +481,42 @@ jobs:
         # (--installable / --print-installable-tags), guarded by
         # INSTALLABLE-STRIP-TRANSFORM-01 / INSTALLABLE-BINARY-SET-01.
         #
-        # GOWORK=off: cmd/gocell resolves against its OWN pinned go.mod, not the
-        # workspace. GOPROXY=direct + GOSUMDB=off: resolve the just-pushed tags
-        # straight from the repo, without waiting for proxy.golang.org /
-        # sum.golang.org propagation (the tags may not be index-visible yet).
+        # GOWORK scoping: `go run ./tools/modrelease/cmd` MUST run with the
+        # workspace active — `tools` is a satellite module unreachable from the
+        # ROOT module under GOWORK=off (go would error "main module does not
+        # contain package …/tools/modrelease/cmd"). Only the cmd/gocell module
+        # commands + the go-install smoke set GOWORK=off (per-command), so
+        # cmd/gocell resolves against its OWN pinned go.mod, not the workspace.
+        # GOPROXY=direct + GOSUMDB=off: resolve the just-pushed tags straight from
+        # the repo without waiting for proxy.golang.org / sum.golang.org
+        # propagation (the tags may not be index-visible yet).
         if: needs.verify.outputs.prerelease != 'true'
         env:
-          GOWORK: "off"
           GOPROXY: direct
           GOSUMDB: "off"
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          installable_tag="$(go run ./tools/modrelease/cmd --version "$TAG" --print-installable-tags)"
-          if [ -z "$installable_tag" ]; then
-            echo "::error::modrelease emitted no installable tag for $TAG."
+          # The installable tag set is the modrelease single source. This step
+          # handles a SINGLE installable binary — the frozen set is {cmd/gocell}
+          # (INSTALLABLE-BINARY-SET-01). Assert that, so a future addition fails
+          # LOUD here (a maintainer must generalize this step to loop tag/commit/
+          # push/smoke per binary) rather than silently tagging only the first.
+          # Runs with the workspace active (tools is a satellite module).
+          mapfile -t installable_tags < <(go run ./tools/modrelease/cmd --version "$TAG" --print-installable-tags)
+          if [ "${#installable_tags[@]}" -ne 1 ]; then
+            echo "::error::expected exactly 1 installable tag, got ${#installable_tags[@]} (${installable_tags[*]:-none}). installableBinaries grew — generalize this step to loop over every installable tag."
             exit 1
           fi
+          installable_tag="${installable_tags[0]}"
+          mod_dir="${installable_tag%/*}"                          # cmd/gocell/v0.1.0 -> cmd/gocell
+          mod_path="$(awk 'NR==1{print $2}' "${mod_dir}/go.mod")"  # module import path (line 1, replace-agnostic)
           # Resume / idempotency: a pushed tag is fetched by the checkout
           # (fetch-tags: true), so if it already exists, prove its tree is the
           # stripped shape (no replace) and skip re-tagging — never re-mint.
           if existing="$(git rev-parse -q --verify "refs/tags/${installable_tag}^{commit}" 2>/dev/null)"; then
-            if git show "${installable_tag}:cmd/gocell/go.mod" | grep -q '^replace '; then
+            if git show "${installable_tag}:${mod_dir}/go.mod" | grep -q '^replace '; then
               echo "::error::existing ${installable_tag} tree still contains replace — corrupt installable release; delete the tag and re-dispatch."
               exit 1
             fi
@@ -511,38 +524,42 @@ jobs:
           else
             # Strip replace + pin internal requires to $TAG (modrelease single source).
             go run ./tools/modrelease/cmd --version "$TAG" --installable
-            # Repopulate go.sum from the now-published library tags.
-            go -C cmd/gocell mod tidy
-            # Release-consistency: the stripped tree must BUILD and resolve its FULL
-            # module graph against the published versions (go-install-equivalent).
-            go -C cmd/gocell build ./...
-            go -C cmd/gocell list -m all >/dev/null
+            # The cmd/gocell module commands resolve against its OWN pinned go.mod
+            # (GOWORK=off, per-command), not the workspace.
+            GOWORK=off go -C "${mod_dir}" mod tidy            # repopulate go.sum from the published tags
+            GOWORK=off go -C "${mod_dir}" build ./...         # stripped tree must BUILD...
+            GOWORK=off go -C "${mod_dir}" list -m all >/dev/null  # ...and resolve its FULL graph (go-install-equivalent)
             # Defense-in-depth: the tree we are about to tag must carry no replace,
             # else `go install pkg@version` would still be rejected.
-            if grep -q '^replace ' cmd/gocell/go.mod; then
-              echo "::error::cmd/gocell/go.mod still has replace after --installable — refusing to tag."
+            if grep -q '^replace ' "${mod_dir}/go.mod"; then
+              echo "::error::${mod_dir}/go.mod still has replace after --installable — refusing to tag."
               exit 1
             fi
-            # Commit the separate installable tree (child of HEAD, ONLY the CLI
-            # module's go.mod/go.sum) and tag it. Only the tag is pushed.
-            git commit -m "release(${installable_tag}): strip replace + pin requires for go install" -- cmd/gocell/go.mod cmd/gocell/go.sum
+            # Commit the separate installable tree (child of HEAD, ONLY this module's
+            # go.mod/go.sum) and tag it. Only the tag is pushed; develop is NOT advanced.
+            git commit -m "release(${installable_tag}): strip replace + pin requires for go install" -- "${mod_dir}/go.mod" "${mod_dir}/go.sum"
             git tag -a "${installable_tag}" -m "Release ${installable_tag}"
             git push origin "${installable_tag}"
             echo "tagged ${installable_tag} at $(git rev-parse HEAD)" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
-          # Post-publish smoke: the real external-consumer path. Install at the tag
-          # into a throwaway GOBIN and assert the reported version == tag. `go
-          # install pkg@version` injects no ldflags, so resolveVersion falls back to
-          # build-info Main.Version, which Go stamps as the module version.
+          # Post-publish smoke: the real external-consumer path. `go install
+          # MODPATH@VERSION` takes the MODULE VERSION ($TAG, e.g. v0.1.0) — Go maps
+          # the submodule git tag (cmd/gocell/v0.1.0) to that version — NOT the git
+          # tag name. It injects no ldflags, so resolveVersion falls back to
+          # build-info Main.Version (the module version). Coverage boundary:
+          # GOSUMDB=off means this smoke does NOT exercise the sum.golang.org path a
+          # real consumer hits once propagated — it verifies tag-resolves +
+          # binary-runs + version-stamp only (the sumdb residual is the
+          # "run once by hand" gap, see tools/releasesmoke/doc.go).
           smoke="$(mktemp -d)"
-          GOBIN="${smoke}/bin" go install "github.com/ghbvf/gocell/cmd/gocell@$TAG"
-          actual="$("${smoke}/bin/gocell" version --format json | jq -r '.cliVersion')"
+          GOWORK=off GOBIN="${smoke}/bin" go install "${mod_path}@$TAG"
+          actual="$("${smoke}/bin/$(basename "${mod_path}")" version --format json | jq -r '.cliVersion')"
           echo "go-install smoke: cliVersion=${actual}, expected=$TAG"
           if [ "$actual" != "$TAG" ]; then
-            echo "::error::go install github.com/ghbvf/gocell/cmd/gocell@$TAG reports cliVersion '${actual}' != '$TAG' — installable release broken." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "::error::go install ${mod_path}@$TAG reports cliVersion '${actual}' != '$TAG' — installable release broken. ${installable_tag} is already pushed; if transient, re-dispatch (the tag is validated + reused, smoke re-runs). If cliVersion is structurally wrong, delete ${installable_tag} and re-dispatch." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          echo "✅ go install github.com/ghbvf/gocell/cmd/gocell@$TAG verified (cliVersion=${actual})" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "✅ go install ${mod_path}@$TAG verified (cliVersion=${actual})" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Prune old daily snapshots
         if: needs.verify.outputs.prerelease == 'true'

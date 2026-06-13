@@ -5,8 +5,7 @@ package modrelease
 // INVARIANT: INSTALLABLE-REQUIRES-PUBLISHABLE-01
 //
 // These three invariants guard the release-time strip+pin pipeline for
-// go-install-able binaries (cmd/gocell, #2045). Together they form a Hard
-// codegen-funnel+golden chain (ai-robust §载体 #1):
+// go-install-able binaries (cmd/gocell, #2045).
 //
 // # INSTALLABLE-BINARY-SET-01 (Hard — golden byte-freeze of a derived set)
 //
@@ -20,18 +19,30 @@ package modrelease
 // to testdata/installable_strip_expected.go.mod. Proves: every replace stripped,
 // internal requires pinned, external/indirect preserved.
 //
-// # INSTALLABLE-REQUIRES-PUBLISHABLE-01 (Hard — PR-time gate on real files)
+// # INSTALLABLE-REQUIRES-PUBLISHABLE-01 (Medium — dynamic scan of the real go.mod)
 //
 // Reads the real cmd/gocell/go.mod and asserts that after stripAndPinBytes:
 //   (a) output has 0 replace lines
 //   (b) every pinned internal require path is in PublishableModules(root)
 //
+// Grading: Medium (not Hard) because this is a dynamic runtime scan of the
+// real go.mod on disk, not a byte-frozen golden or type-system constraint —
+// the go.mod is data, so violations are detectable only by executing the
+// check at test time (archtest typed scan / runtime guard category).
+//
 // This prevents "add an un-publishable internal dep to cmd/gocell" or
 // "re-introduce a replace" from being silently merged.
 //
-// Upstream strength: stripAndPinBytes is the ONLY path through which
-// cmd/gocell's go.mod can be transformed for release; no other code path
-// touches installable go.mod files during release.
+// Anti-vacuity: the scan loop asserts it checked at least one internal require
+// (see TestInstallableRequiresPublishable01). If cmd/gocell were to lose all
+// internal deps the counter triggers, surfacing a possible transform bug.
+//
+// Upstream: [StripReplaceAndPin] is the single sanctioned caller of
+// stripAndPinBytes for release (invoked by release.yml --installable step).
+// This is a calling convention, not a machine-enforced sealed funnel —
+// Hard-ening (archtest restricting callers) is a future option but not yet
+// implemented. The export of [StripReplaceAndPin] means a second caller could
+// exist without triggering CI.
 //
 // Downstream strength: release.yml go install smoke (post-PR gate) verifies
 // the produced tree is go-install-able at the tagged version.
@@ -237,6 +248,7 @@ func TestInstallableRequiresPublishable01(t *testing.T) {
 	}
 
 	// Parse the output to find internal requires that were pinned to v1.2.3.
+	var checked int
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, rootPrefix) {
@@ -253,10 +265,19 @@ func TestInstallableRequiresPublishable01(t *testing.T) {
 		if modVer != "v1.2.3" {
 			continue // not a pinned internal require
 		}
+		checked++
 		if !pubPaths[modPath] {
 			t.Errorf("%s: (b) internal require %q pinned to v1.2.3 but not in PublishableModules — "+
 				"cmd/gocell depends on an un-publishable internal module", rule, modPath)
 		}
+	}
+	// Anti-vacuity: if stripAndPinBytes returned 0 internal requires (e.g. all
+	// internal deps were removed from cmd/gocell, or the transform has a bug
+	// returning empty output), the loop above trivially passes without checking
+	// anything. Fail loudly so the gap is detected rather than silently skipped.
+	if checked == 0 {
+		t.Errorf("%s: anti-vacuity failed: 0 internal requires checked — vacuous "+
+			"(cmd/gocell has no internal requires after strip, or stripAndPinBytes returned empty output)", rule)
 	}
 }
 
