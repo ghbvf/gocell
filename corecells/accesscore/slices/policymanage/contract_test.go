@@ -63,6 +63,77 @@ func TestContract_PolicyCreateV1_Serve(t *testing.T) {
 	c.ValidateErrorResponse(t, http.StatusUnprocessableEntity, wAll.Body.Bytes())
 }
 
+// TestContract_PolicyCreateV1_CrossAttrFanout exercises the eq_attr / rhsSource /
+// rhsKey HTTP fanout through the real generated handler + embedded request
+// validator (F4, #1977). The happy path asserts the cross-attribute condition
+// round-trips with its RHS preserved in the response; the malformed cases assert
+// the schema-layer if/then/else rejects them with 400 BEFORE the converter —
+// restoring the pre-eq_attr 400 status for static-condition shape errors (F3),
+// instead of the domain validator's 422.
+func TestContract_PolicyCreateV1_CrossAttrFanout(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.policy.create.v1")
+
+	serve := func(t *testing.T, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		h := setupPolicyHandler(t)
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		h.ServeHTTP(w, withHandlerAdmin(req))
+		return w
+	}
+
+	// Happy path: eq_attr + rhsSource/rhsKey + no values → 201, response validates
+	// against the contract schema AND preserves the RHS fields.
+	t.Run("eq_attr_happy_201_rhs_preserved", func(t *testing.T) {
+		body := `{"name":"CrossAttr","rules":[{"id":"r1","name":"Self ownership","effect":"allow",` +
+			`"conditions":[{"source":"subject","key":"sub","operator":"eq_attr","rhsSource":"resource","rhsKey":"id"}]}]}`
+		w := serve(t, body)
+		require.Equal(t, http.StatusCreated, w.Code, "eq_attr create must be 201: %s", w.Body.String())
+		c.ValidateHTTPResponseRecorder(t, w)
+		var resp struct {
+			Data struct {
+				Rules []struct {
+					Conditions []struct {
+						Operator  string   `json:"operator"`
+						RHSSource string   `json:"rhsSource"`
+						RHSKey    string   `json:"rhsKey"`
+						Values    []string `json:"values"`
+					} `json:"conditions"`
+				} `json:"rules"`
+			} `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		require.Len(t, resp.Data.Rules, 1)
+		require.Len(t, resp.Data.Rules[0].Conditions, 1)
+		cond := resp.Data.Rules[0].Conditions[0]
+		require.Equal(t, "eq_attr", cond.Operator)
+		require.Equal(t, "resource", cond.RHSSource, "response must preserve rhsSource")
+		require.Equal(t, "id", cond.RHSKey, "response must preserve rhsKey")
+		require.Empty(t, cond.Values, "cross-attr condition must carry no values")
+	})
+
+	// Malformed shapes — all rejected by the schema layer at 400 (F3).
+	cases := []struct {
+		name string
+		cond string
+	}{
+		{"static_missing_values_400", `{"source":"subject","key":"dept","operator":"eq"}`},
+		{"static_carrying_rhsKey_400", `{"source":"subject","key":"dept","operator":"eq","values":["eng"],"rhsKey":"id"}`},
+		{"eq_attr_with_values_400", `{"source":"subject","key":"sub","operator":"eq_attr","rhsSource":"resource","rhsKey":"id","values":["x"]}`},
+		{"eq_attr_missing_rhs_400", `{"source":"subject","key":"sub","operator":"eq_attr"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"name":"Bad","rules":[{"id":"r1","name":"Bad","effect":"allow","conditions":[` + tc.cond + `]}]}`
+			w := serve(t, body)
+			require.Equal(t, http.StatusBadRequest, w.Code, "malformed condition must be 400 (schema layer): %s", w.Body.String())
+			c.ValidateErrorResponse(t, http.StatusBadRequest, w.Body.Bytes())
+		})
+	}
+}
+
 func TestContract_PolicyGetV1_Serve(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.policy.get.v1")

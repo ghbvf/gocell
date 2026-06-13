@@ -61,10 +61,11 @@ var (
 	effectFromCode = invertCodeMap(effectToCode)
 
 	operatorToCode = map[abac.Operator]string{
-		abac.OpEquals:    "eq",
-		abac.OpNotEquals: "neq",
-		abac.OpIn:        "in",
-		abac.OpNotIn:     "not_in",
+		abac.OpEquals:     "eq",
+		abac.OpNotEquals:  "neq",
+		abac.OpIn:         "in",
+		abac.OpNotIn:      "not_in",
+		abac.OpEqualsAttr: "eq_attr",
 	}
 	operatorFromCode = invertCodeMap(operatorToCode)
 
@@ -108,7 +109,13 @@ type conditionJSON struct {
 	Source   string   `json:"source"`
 	Key      string   `json:"key"`
 	Operator string   `json:"op"`
-	Values   []string `json:"values"`
+	Values   []string `json:"values,omitempty"`
+	// RHSSource and RHSKey are only present for cross-attribute conditions
+	// (OpEqualsAttr). Static operators leave these fields zero/empty and they
+	// are omitted from the serialized JSON (omitempty), keeping existing rows
+	// byte-identical (#1977 Batch C).
+	RHSSource string `json:"rhsSource,omitempty"`
+	RHSKey    string `json:"rhsKey,omitempty"`
 }
 
 type obligationsJSON struct {
@@ -277,7 +284,22 @@ func encodeConditions(conds []abac.Condition) ([]conditionJSON, error) {
 		if err != nil {
 			return nil, err
 		}
-		out[i] = conditionJSON{Source: srcCode, Key: c.Key, Operator: opCode, Values: c.Values}
+		dto := conditionJSON{Source: srcCode, Key: c.Key, Operator: opCode, Values: c.Values}
+		// Emit the RHS reference for any condition that carries one (Condition.HasRHS
+		// — the single emit predicate shared with the HTTP response converters).
+		// Static operators carry no RHS, leaving the fields zero/empty and omitted via
+		// omitempty — static rows stay byte-identical (#1977). encodeSource stays
+		// fail-closed: a zero/out-of-range RHSSource (e.g. a half-formed RHS) errors
+		// rather than persisting a silently-wrong code.
+		if c.HasRHS() {
+			rhsSrcCode, err := encodeSource(c.RHSSource)
+			if err != nil {
+				return nil, err
+			}
+			dto.RHSSource = rhsSrcCode
+			dto.RHSKey = c.RHSKey
+		}
+		out[i] = dto
 	}
 	return out, nil
 }
@@ -326,7 +348,18 @@ func decodeConditions(conds []conditionJSON) ([]abac.Condition, error) {
 		if err != nil {
 			return nil, err
 		}
-		out[i] = abac.Condition{Source: src, Key: c.Key, Operator: op, Values: c.Values}
+		// Decode the RHS losslessly via abac.ParseRHS (the single inbound funnel
+		// shared with the HTTP converter): rhsKey is preserved even without rhsSource,
+		// so a tampered/forward-incompatible row carrying a half-formed RHS reaches
+		// Policy.Validate in scanPolicy and is rejected (ErrPGSchemaShape → deny),
+		// instead of being silently downgraded to a static condition. Legacy rows
+		// (no rhsSource/rhsKey keys) decode to the zero values — safe (#1977).
+		rhsSrc, rhsKey, err := abac.ParseRHS(c.RHSSource, c.RHSKey)
+		if err != nil {
+			return nil, fmt.Errorf("policy_codec: unknown attribute source code %q", c.RHSSource)
+		}
+		cond := abac.Condition{Source: src, Key: c.Key, Operator: op, Values: c.Values, RHSSource: rhsSrc, RHSKey: rhsKey}
+		out[i] = cond
 	}
 	return out, nil
 }

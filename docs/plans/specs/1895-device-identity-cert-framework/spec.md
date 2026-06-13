@@ -22,7 +22,7 @@
 | Revocation/CRL | `runtime/certsigning.RevocationStore`（方法带 `CertScope` typed 位置参），PG/softca 实现 | fail-closed（跨租户/issuer 吊销/查询拒绝） |
 | 设备身份绑定 | 生产 `PrincipalDevice` 签发器（#1811）；证书即设备凭证的统一路径 | service/anonymous fail-closed |
 | 中立设备信号 | 4 个 domain 契约（deviceidentity/devicestate/devicecompliance/remotecommand），kind-qualified 落 `contracts/{http,event,command}/<domain>/.../v1`（见 FR-013） | 契约边界 |
-| 协议前端 | 框架内 EST(RFC 7030)，挂版本化 cell 路径 `/api/v{N}/deviceidentity/est/*`；XCEP/WSTEP/SCEP 留 winmdm 消费方 | 鉴权边界 fail-closed（非 setup-bootstrap） |
+| 协议前端 | 框架内 EST(RFC 7030)，经 framework serving harness 挂 framework-owned domain 路径 `/api/v{N}/deviceidentity/est/*`（`deviceidentity` 是 contract domain 段，非 cell 段；deviceidentity 框架归属无 owner cell，#1939）；XCEP/WSTEP/SCEP 留 winmdm 消费方 | 鉴权边界 fail-closed（非 setup-bootstrap） |
 
 **核心安全不变式**：私钥永不进 kernel/runtime（只持 `crypto.Signer` 句柄，SPIRE KeyManager 范式）；`Sign` 是包外铸造设备证书的唯一入口（sealed funnel）；签发与吊销共用 `CertScope` 隔离（吊销不可凭裸 serial 跨租户）；`Authorize` 与 `Sign` 分离——证书签发授权漏洞不得放大为越权签发。
 
@@ -73,7 +73,7 @@
 
 **Independent Test**：设备 POST CSR 到版本化 `/api/v1/deviceidentity/est/simpleenroll`（enrollment-credential / device-token 鉴权）→ 得证书链；`/.../simplereenroll` 用现证书 TLS-client-auth 续期；未授权 / 畸形 CSR → 4xx fail-closed；`/.../cacerts` 返回 softca 信任根。
 
-**Acceptance Scenarios**（EST 操作挂版本化 cell 路径 `/api/v1/deviceidentity/est/*`）：
+**Acceptance Scenarios**（EST 操作经 framework serving harness 挂 framework-owned domain 路径 `/api/v1/deviceidentity/est/*`，`deviceidentity` 为 domain 段非 cell 段，#1939）：
 1. **Given** 合法 enrollment-credential / device-token + 合法 PKCS#10，**When** POST `/simpleenroll`，**Then** 返回 PKCS#7 证书链，状态 200。
 2. **Given** 已有证书设备，**When** `/simplereenroll`（mTLS client-auth），**Then** 续期新证书，旧证书可吊销。
 3. **Given** 缺/错鉴权 **或** 用 setup `auth.bootstrap:true` 冒充，**When** enroll，**Then** 401/403（fail-closed，经 `Authorizer`；EST 非 setup-admin 路径，FMT-28 拒绝 bootstrap 凭据）。
@@ -127,7 +127,7 @@
 - **私钥泄漏面**：私钥永不进 kernel/runtime；adapter 只暴露 `Sign` 操作（`crypto.Signer`）。任何让原始私钥跨 `runtime/certsigning` 边界的代码 = archtest 红。
 - **reconcile 单租户系统身份**：`kernel/reconcile` 在 system identity 下运行且**清空 tenant**（#1821）；多租户证书 reconcile 必须在 scan + 命令 key + 签发请求中**自带 tenant 维度**，不能依赖 ctx tenant。
 - **续期抖动**：续期窗口加 jitter（k8s 70–90% 寿命模型）避免整队同时续期惊群。
-- **EST 落点与鉴权**：EST 操作挂所属 cell 版本化路径（`/api/v{N}/deviceidentity/est/*`），非顶级裸路径；首次 `/simpleenroll` 用专用 enrollment-credential / device-token，`/simplereenroll` 用现证书 mTLS——两条路径显式声明，不混；**不复用** setup `auth.bootstrap:true`（FMT-28 限其只在 setup/admin，EST 复用会被 fail-closed 拒绝）。
+- **EST 落点与鉴权**：EST 操作经 framework serving harness（PR-8a）挂 framework-owned domain 版本化路径（`/api/v{N}/deviceidentity/est/*`，`deviceidentity` 是 domain 段非 cell 段，框架归属无 owner cell，#1939），非顶级裸路径；首次 `/simpleenroll` 用专用 enrollment-credential / device-token，`/simplereenroll` 用现证书 mTLS——两条路径显式声明，不混；**不复用** setup `auth.bootstrap:true`（FMT-28 限其只在 setup/admin，EST 复用会被 fail-closed 拒绝）。
 - **跨租户吊销**：`Revoke`/`RevocationList` 带 `CertScope`（tenant+issuer+device）；tenant-A 不可凭裸 serial 吊销/查询 tenant-B 证书（与签发同源隔离，fail-closed）。
 - **吊销与续期竞态**：吊销正在续期的证书 → epoch CAS（fencing）保证终态一致。
 - **决策不跨 async**：证书签发授权结论不随事件携带；跨边界只传设备 identity，消费侧重决策。
@@ -154,11 +154,12 @@
 - **FR-010**: 证书签发 MUST 发 L2 事实 `deviceidentity.cert-issued.v1` / `cert-revoked.v1`（outbox），供 ZT 信任根 / 审计消费侧消费。
 
 **EST 前端（US3）**
-- **FR-011**: 系统 MUST 提供 EST(RFC 7030) 操作 `cacerts` / `simpleenroll` / `simplereenroll`（PKCS#10 in / PKCS#7 out，wiring `Authorizer`→`Signer`），挂在所属 cell 的**版本化路径**下（`/api/v{N}/deviceidentity/est/{cacerts,simpleenroll,simplereenroll}`），**不**用顶级裸 EST 路径（对齐 api-versioning「无顶级命名空间，端点挂所属 cell 版本前缀」）。
+- **FR-011**: 系统 MUST 提供 EST(RFC 7030) 操作 `cacerts` / `simpleenroll` / `simplereenroll`（PKCS#10 in / PKCS#7 out，wiring `Authorizer`→`Signer`），经 framework serving harness（PR-8a）挂在 framework-owned **domain 版本化路径**下（`/api/v{N}/deviceidentity/est/{cacerts,simpleenroll,simplereenroll}`，`deviceidentity` 是 contract domain 段、非 cell 段——框架归属契约无 owner cell，#1939），**不**用顶级裸 EST 路径（对齐 api-versioning「无顶级命名空间，端点挂版本化 domain/cell 前缀」）。
 - **FR-012**: EST 鉴权 MUST 用**专用 enrollment-credential / device-bootstrap-token** scheme（首次 enroll）+ 现证书 mTLS client-auth（reenroll）两条显式声明路径，缺鉴权 fail-closed 4xx。**不复用** setup `auth.bootstrap:true`（FMT-28 限其只在 `^/api/v\d+/[^/]+/setup/admin$`，EST 非 setup-admin 路径，复用会被 fail-closed 拒绝）；若未来确需复用 bootstrap 凭据，MUST 先出 ADR 扩展 FMT-28（本 epic 不走此路）。
 
 **中立契约（US4）**
 - **FR-013**: 系统 MUST 定义 4 个中立设备契约（domain shorthand：`deviceidentity` / `devicestate` / `devicecompliance` / `remotecommand`），按仓库契约布局单源 `{kind}/{domain-path}/{version}/` 落 **kind-qualified** 路径——`contracts/http/deviceidentity/{enroll,renew,revoke,status}/v1`、`contracts/event/deviceidentity/{cert-issued,cert-revoked}/v1`、`contracts/command/deviceidentity/rotate/v1`、`contracts/http/devicestate/v1`、`contracts/http/devicecompliance/v1`、`contracts/command/remotecommand/v1`。各含 contract.yaml（鉴权/caller/schema）+ generated code + slice 派生 registration；走契约扇出闭环。「4 个中立契约」是 domain 简写，**不是**目录真源（目录必带 kind 维度）。
+- **FR-013a（归属，#1939）**: 中立 provider-agnostic 的 **http/event** 契约（`deviceidentity`、`devicestate`、`devicecompliance`）MUST 由**框架**归属（sealed `ContractOwner`，`ownerCell: _framework`，不绑单一 consumer cell——对齐 cert-manager/SPIFFE/k8s 范式）；其 active serving 经 framework serving harness（PR-8a）落地，serving wire 前 MUST `lifecycle: draft|deprecated`（fail-closed）。`remotecommand`（command kind，带 cell 内部 dispatch 语义）MUST **cell-owned**，不可框架归属。归属机制威胁矩阵见 ADR `202606130635-1939`。
 - **FR-014**: `deviceidentity/v1` MUST 承载证书 enroll/renew/revoke + 当前证书状态；`remotecommand/v1` MUST 承接既有 `command.devicecommand.enqueue.v1` 形状（PR-9 迁移）。
 
 **迁移（US5）**

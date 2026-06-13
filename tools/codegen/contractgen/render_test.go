@@ -1420,6 +1420,8 @@ func renderFile(t *testing.T, spec *ContractGenSpec, outFile string) []byte {
 		content, err = renderProjection(spec)
 	case "saga_gen.go":
 		content, err = renderSaga(spec)
+	case "types.ts":
+		content, err = renderTS(spec)
 	default:
 		t.Fatalf("unknown output file: %s", outFile)
 	}
@@ -2242,4 +2244,184 @@ func TestBuildHTTPEndpointSpec_ClientsOnlyRequiresInternalPathAndClients(t *test
 			})
 		}
 	})
+}
+
+// --- TS emitter golden tests (#2004) ---
+
+// TestRender_Golden_TS_SynthEnum is the primary enum golden: proves that the TS
+// emitter outputs union types (not string) for enum fields.
+// RED: golden file absent → assertGolden fails; GREEN: -update creates it.
+func TestRender_Golden_TS_SynthEnum(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_enum")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	contract := p.Contracts["event.widget-resolved.v1"]
+	if contract == nil {
+		t.Fatal("event.widget-resolved.v1 not found in synth fixture")
+	}
+
+	spec, err := buildContractSpec(absTestDir, p, "event.widget-resolved.v1")
+	if err != nil {
+		t.Fatalf("buildContractSpec: %v", err)
+	}
+	content := renderFile(t, spec, "types.ts")
+	goldenFile := goldenFilePath("synth_enum", "types.ts")
+
+	// Inline assertions: enum → union (not Go type or plain string).
+	out := string(content)
+	if !strings.Contains(out, "export type PayloadOutcome =") {
+		t.Errorf("missing union type 'export type PayloadOutcome ='; got:\n%s", out)
+	}
+	if !strings.Contains(out, "'succeeded'") || !strings.Contains(out, "'rejected'") {
+		t.Errorf("union type missing enum values; got:\n%s", out)
+	}
+
+	if *updateGolden {
+		writeGolden(t, goldenFile, content)
+		return
+	}
+	assertGolden(t, goldenFile, content)
+}
+
+// TestRender_Golden_TS_SynthHTTPFull byte-locks the full HTTP contract TS output.
+// RED: golden absent; GREEN: -update creates it.
+func TestRender_Golden_TS_SynthHTTPFull(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_http_full")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	contract := p.Contracts["http.item.details.v1"]
+	if contract == nil {
+		t.Fatal("http.item.details.v1 not found in synth fixture")
+	}
+
+	spec, err := buildContractSpec(absTestDir, p, "http.item.details.v1")
+	if err != nil {
+		t.Fatalf("buildContractSpec: %v", err)
+	}
+	content := renderFile(t, spec, "types.ts")
+	goldenFile := goldenFilePath("synth_http_full", "types.ts")
+
+	// Inline: must export interfaces.
+	out := string(content)
+	if !strings.Contains(out, "export interface") {
+		t.Errorf("missing 'export interface' in TS output; got:\n%s", out)
+	}
+
+	if *updateGolden {
+		writeGolden(t, goldenFile, content)
+		return
+	}
+	assertGolden(t, goldenFile, content)
+}
+
+// TestRender_Golden_TS_Barrel byte-locks the generated barrel index.ts produced
+// by the PRODUCTION path RenderTSBarrel — full-project scan, specEmitsTS skip,
+// tsPkgAlias/import derivation, collision check and sort — rather than a
+// hand-built entry list. The synth_http_auth_modes fixture has 6 TS-emitting
+// HTTP contracts + 2 responseProjection contracts that must be skipped, so this
+// exercises multi-entry sort and the skip path. RED: golden absent; GREEN:
+// -update creates it.
+func TestRender_Golden_TS_Barrel(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_http_auth_modes")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	artifact, ok, err := RenderTSBarrel(absTestDir, p)
+	if err != nil {
+		t.Fatalf("RenderTSBarrel: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true: synth_http_auth_modes has TS-emitting contracts")
+	}
+	if artifact.Path != "generated-ts/index.ts" {
+		t.Errorf("artifact.Path = %q, want generated-ts/index.ts", artifact.Path)
+	}
+
+	out := string(artifact.Content)
+
+	// A TS-emitting contract is present; both responseProjection contracts are skipped.
+	if !strings.Contains(out, "export * as httpSampleServiceownedV1 from") {
+		t.Errorf("barrel missing expected emitting contract export; got:\n%s", out)
+	}
+	for _, skipped := range []string{"Responseprojection", "responseprojection"} {
+		if strings.Contains(out, skipped) {
+			t.Errorf("barrel must not reference skipped responseProjection contract (%q); got:\n%s", skipped, out)
+		}
+	}
+
+	// Aliases must be emitted in ascending order (RenderTSBarrel sorts by alias).
+	var aliases []string
+	for _, l := range strings.Split(out, "\n") {
+		if rest, ok := strings.CutPrefix(l, "export * as "); ok {
+			aliases = append(aliases, strings.SplitN(rest, " ", 2)[0])
+		}
+	}
+	if len(aliases) < 2 {
+		t.Fatalf("expected ≥2 barrel entries (multi-entry sort coverage); got %d: %v", len(aliases), aliases)
+	}
+	for i := 1; i < len(aliases); i++ {
+		if aliases[i-1] >= aliases[i] {
+			t.Errorf("barrel aliases not strictly ascending at %d: %q !< %q (all: %v)",
+				i, aliases[i-1], aliases[i], aliases)
+		}
+	}
+
+	goldenFile := goldenFilePath("barrel", "index.ts")
+	if *updateGolden {
+		writeGolden(t, goldenFile, artifact.Content)
+		return
+	}
+	assertGolden(t, goldenFile, artifact.Content)
+}
+
+// TestRender_TS_ResponseProjection_Skipped asserts that a responseProjection
+// endpoint does NOT produce a types.ts via renderTS (returns empty/skipped),
+// mirroring the generator.go skip logic.
+func TestRender_TS_ResponseProjection_Skipped(t *testing.T) {
+	t.Parallel()
+	testDir := filepath.Join("testdata", "synth", "synth_http_auth_modes")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	spec, err := buildContractSpec(absTestDir, p, "http.sample.responseprojection.v1")
+	if err != nil {
+		t.Fatalf("buildContractSpec: %v", err)
+	}
+
+	// A responseProjection contract must be skippable: specEmitsTS must return false.
+	if specEmitsTS(spec) {
+		t.Error("specEmitsTS returned true for responseProjection contract; want false (TS v1 skips responseProjection)")
+	}
 }
