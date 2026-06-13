@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"strings"
 	"testing"
@@ -147,7 +149,44 @@ func TestNewSSOBFFJWT(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "JWT key",
 			"real topology must fail closed on missing shared JWT key env (no per-pod ephemeral)")
+		// Strengthen beyond the message substring: the wrapped errcode must be the
+		// key-missing code, so a future message reword cannot silently pass the gate.
+		var ecErr *errcode.Error
+		require.ErrorAs(t, err, &ecErr)
+		assert.Equal(t, auth.ErrKeyMissing, ecErr.Code,
+			"real-mode missing JWT key must surface auth.ErrKeyMissing")
 	})
+
+	t.Run("real topology with shared key env succeeds", func(t *testing.T) {
+		// Distinct success path from the demo branch: real mode loads the SHARED
+		// env key pair (not an ephemeral one). Guards against a regression where
+		// real-mode newSSOBFFJWT always failed even with valid keys configured.
+		setSSOBFFTestJWTKeyEnv(t)
+		issuer, verifier, err := newSSOBFFJWT(mkTopoT(t, "real", "postgres"), clk)
+		require.NoError(t, err, "real topology with shared JWT keys must build issuer/verifier")
+		assert.NotNil(t, issuer)
+		assert.NotNil(t, verifier)
+	})
+}
+
+// setSSOBFFTestJWTKeyEnv installs a PEM-encoded RSA key pair into the shared JWT
+// key env vars so a real-topology newSSOBFFJWT call loads them rather than failing
+// closed. Mirrors cmd/corebundle's setTestJWTKeyEnv. (auth.GenerateRSAKeyPair is
+// permitted here: GENERATE-RSA-KEYPAIR-FUNNEL-01 scans production files only,
+// _test.go is excluded.)
+func setSSOBFFTestJWTKeyEnv(t *testing.T) {
+	t.Helper()
+	priv, pub, err := auth.GenerateRSAKeyPair()
+	require.NoError(t, err, "generate test RSA key pair")
+	privPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(priv),
+	})
+	pubDER, err := x509.MarshalPKIXPublicKey(pub)
+	require.NoError(t, err, "marshal test public key")
+	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
+	t.Setenv(auth.EnvJWTPrivateKey, string(privPEM))
+	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
 }
 
 // TestResolveSSOBFFBootstrapCreds pins the F1 bootstrap-credential funnel: demo

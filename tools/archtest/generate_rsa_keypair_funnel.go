@@ -30,12 +30,25 @@ package archtest
 // scanned root, so its own GenerateRSAKeyPair call (the demo branch) is naturally
 // out of scope — no allowlist entry needed.
 //
+// # Scanned-root scope (why examples/corebundlestarter is excluded)
+//
+// examples/corebundlestarter calls auth.GenerateRSAKeyPair directly (run.go) but
+// is deliberately NOT scanned: its topology is hard-coded bootstrap.NewTopology("",
+// "memory", false) — always dev/memory, never real, so it cannot run multi-pod and
+// its ephemeral key is safe. Only cmd/corebundle and examples/ssobff are
+// topology-driven composition roots that can reach real multi-pod mode. This
+// mirrors REPLAYDEPS-INMEM-FUNNEL-01, which scans the same two roots and likewise
+// excludes the other examples (their correctness depends on their fixed topology).
+// If corebundlestarter ever gains a real/topology-driven path, add it here.
+//
 // # AI-robust grade
 //
 // Medium. The funnel (AST scan) is the CI-time code-regression guard; the actual
-// runtime correctness guarantee is the Hard-equivalent startup fail-fast in
-// cellsecrets.LoadKeySet — in real adapter mode a process with no shared JWT key
-// env vars cannot boot, so it can never silently run ephemeral per-pod keys. No
+// runtime correctness guarantee is the Hard-equivalent pairing of a sealed
+// bootstrap.Topology (AdapterMode() cannot be forged — it is derived from validated
+// env) plus the startup fail-fast in cellsecrets.LoadKeySet — in real adapter mode
+// a process with no shared JWT key env vars cannot boot, so it can never silently
+// run ephemeral per-pod keys. No
 // low-cost Hard form exists for the funnel itself: a depguard import-ban false-reds
 // (see above); unexporting / sealing GenerateRSAKeyPair breaks legitimate callers
 // (cellsecrets itself, other examples, tests building fixture keys); a sealed

@@ -68,6 +68,20 @@ const (
 	ssobffBootstrapPassword = "ssobff-bootstrap-pass-1!"
 )
 
+// ssobffJWTIssuer / ssobffJWTAudience are the fixed JWT issuer and audience for
+// the ssobff example. They are package consts (not inline literals) so the issuer
+// and verifier wiring in newSSOBFFJWT cannot drift between callsites — a mismatch
+// would 401 every token, with no compile error. They are identical across
+// replicas, so (unlike the signing key, #2052) they were never the multi-pod
+// hazard. ssobff is a self-contained JWT domain: unlike cmd/corebundle (which
+// reads GOCELL_JWT_ISSUER / GOCELL_JWT_AUDIENCE), the demo BFF is not federated
+// with the platform binary, so a fixed issuer is correct even in real multi-pod
+// mode.
+const (
+	ssobffJWTIssuer   = "ssobff-dev"
+	ssobffJWTAudience = "gocell"
+)
+
 // ssobffBootstrapAdminUserEnv / ssobffBootstrapAdminPassEnv name the env vars
 // that supply the setup/admin Basic Auth credentials in real topology. Reuses
 // the cmd/corebundle + cellmodules/accesscore convention
@@ -863,21 +877,21 @@ func defaultSSOBFFAppConfig() *ssobffAppConfig {
 // loads the shared pair from GOCELL_JWT_PRIVATE_KEY / GOCELL_JWT_PUBLIC_KEY and
 // fails closed when missing — a per-pod ephemeral key would make one replica's
 // tokens verify as 401 against another (#2052). The issuer / audience stay fixed
-// ("ssobff-dev" / "gocell"): they are identical across replicas, so only the
-// signing key was the multi-pod hazard.
+// (ssobffJWTIssuer / ssobffJWTAudience): they are identical across replicas, so
+// only the signing key was the multi-pod hazard.
 func newSSOBFFJWT(topo bootstrap.Topology, clk clock.Clock) (*auth.JWTIssuer, *auth.JWTVerifier, error) {
 	keySet, err := cellsecrets.LoadKeySet(topo.AdapterMode(), clk)
 	if err != nil {
 		return nil, nil, fmt.Errorf("ssobff: load JWT key set: %w", err)
 	}
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "ssobff-dev", 15*time.Minute, clk,
-		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, ssobffJWTIssuer, 15*time.Minute, clk,
+		auth.WithIssuerAudiencesFromSlice([]string{ssobffJWTAudience}))
 	if err != nil {
 		return nil, nil, fmt.Errorf("ssobff: create JWT issuer: %w", err)
 	}
 	jwtVerifier, err := auth.NewJWTVerifier(keySet, clk,
-		auth.WithExpectedAudiences("gocell"),
-		auth.WithExpectedIssuer("ssobff-dev"))
+		auth.WithExpectedAudiences(ssobffJWTAudience),
+		auth.WithExpectedIssuer(ssobffJWTIssuer))
 	if err != nil {
 		return nil, nil, fmt.Errorf("ssobff: create JWT verifier: %w", err)
 	}
