@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
@@ -38,19 +39,50 @@ const (
 // The cell-level RouteGroup mounts policy slice at /api/v1/access/policies.
 const policiesPrefix = "/api/v1/access/policies"
 
-// withHandlerAdmin injects an admin principal + tenant into the request context.
+// fixedAuthorizer is a local test-only auth.Authorizer that returns a fixed
+// Decision. It cannot import accesscoretest (cycle: accesscoretest imports
+// corecells/accesscore which imports this slice), so the minimal type is defined
+// here. Verdict construction (authz.Allow/Deny) lives in _test.go per
+// AUTHZ-DECISION-ALLOW-DENY-CALLER-01.
+type fixedAuthorizer struct {
+	decision authz.Decision
+}
+
+func (f *fixedAuthorizer) Authorize(_ context.Context, _, _, _ string) (authz.Decision, error) {
+	return f.decision, nil
+}
+
+func allowAuthorizer() *fixedAuthorizer {
+	dec, err := authz.Allow(authz.Obligations{})
+	if err != nil {
+		panic("test allowAuthorizer: authz.Allow: " + err.Error())
+	}
+	return &fixedAuthorizer{decision: dec}
+}
+
+func withAllowAuthorizer(ctx context.Context) context.Context {
+	return auth.WithAuthorizer(ctx, allowAuthorizer())
+}
+
+func withDenyAuthorizer(ctx context.Context) context.Context {
+	return auth.WithAuthorizer(ctx, &fixedAuthorizer{decision: authz.Deny("test: denied")})
+}
+
+// withHandlerAdmin injects an admin principal, tenant, and an allow Authorizer
+// into the request context so it satisfies auth.RequirePermission PDP gate.
 func withHandlerAdmin(req *http.Request) *http.Request {
-	ctx := ctxkeys.WithTenantID(
+	ctx := withAllowAuthorizer(ctxkeys.WithTenantID(
 		auth.TestContext(testHandlerAdminSubject, []string{auth.RoleAdmin}),
 		testHandlerTenantStr,
-	)
+	))
 	return req.WithContext(ctx)
 }
 
-// withHandlerAdminNoTenant injects admin principal but no TenantID — used to
-// test the missing-tenant → 403 path.
+// withHandlerAdminNoTenant injects admin principal and allow Authorizer but no
+// TenantID — used to test the missing-tenant → 403 path (PDP passes, tenant
+// check in service fails).
 func withHandlerAdminNoTenant(req *http.Request) *http.Request {
-	return req.WithContext(auth.TestContext(testHandlerAdminSubject, []string{auth.RoleAdmin}))
+	return req.WithContext(withAllowAuthorizer(auth.TestContext(testHandlerAdminSubject, []string{auth.RoleAdmin})))
 }
 
 type stubPolicyTxRunner struct{}
@@ -176,10 +208,11 @@ func TestHandler_Create_Authz(t *testing.T) {
 		{
 			name: "non_admin",
 			setupCtx: func(r *http.Request) *http.Request {
-				return r.WithContext(ctxkeys.WithTenantID(
+				// Viewer with a deny Authorizer → PDP denies → 403.
+				return r.WithContext(withDenyAuthorizer(ctxkeys.WithTenantID(
 					auth.TestContext("viewer-1", []string{"viewer"}),
 					testHandlerTenantStr,
-				))
+				)))
 			},
 			wantStatus: http.StatusForbidden,
 			wantCode:   errcode.ErrAuthForbidden,
@@ -305,7 +338,7 @@ func TestHandler_Get_EmptyID(t *testing.T) {
 	// {id} path parameter. Send a request with no path value to trigger the guard.
 	getH := policyGet.NewHandler(
 		GetAdapter{s: newServiceForAdapterTest(t)},
-		auth.AnyRole(auth.RoleAdmin),
+		auth.RequirePermission(authz.PermPolicyRead()),
 	)
 	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/access/policies/", nil)
 

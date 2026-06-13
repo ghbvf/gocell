@@ -28,7 +28,7 @@ endpoints:
         description: "Unauthorized — missing or invalid bearer token"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       403:
-        description: "Forbidden — authenticated but lacks admin role"
+        description: "Forbidden — caller lacks the policy:read permission; the built-in baseline grants the admin and super-admin roles."
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       404:
         description: "Not Found — policy with given id does not exist"

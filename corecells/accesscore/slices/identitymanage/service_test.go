@@ -419,6 +419,31 @@ func TestService_Update_StatusRequiresAdminRole(t *testing.T) {
 	assert.Equal(t, "user-self@e.f", updated.Email)
 }
 
+// TestService_Update_StatusAllowsSuperAdminAuthority covers PR #1974 review F1:
+// PR-10c widened the user:write baseline to admit super-admin (adminOrSuperAdmin),
+// so the S4.0 P1-A field-level status guard must accept admin authority — admin
+// OR super-admin — not admin alone. A pure super-admin caller (not the admin role,
+// not the target subject) mutating status must succeed; before the fix it cleared
+// the route gate but was then wrongly 403'd by the admin-only field check, leaving
+// the route PDP and the service-layer guard semantically split.
+func TestService_Update_StatusAllowsSuperAdminAuthority(t *testing.T) {
+	svc := newTestService(t)
+	user, err := svc.Create(adminCtxForService(), CreateInput{
+		Username: "target-user", Email: "target@e.f", Password: "hash",
+	})
+	require.NoError(t, err)
+
+	// Pure super-admin caller: holds RoleSuperAdmin only (no admin role) and is a
+	// DIFFERENT subject than the target, so neither the admin literal nor the
+	// self-exemption applies — only admin AUTHORITY (admin ∪ super-admin) lets it
+	// through the field guard.
+	superAdminCtx := withTenant(auth.TestContext("test-superadmin", []string{auth.RoleSuperAdmin}))
+	suspended := string(domain.StatusSuspended)
+	updated, err := svc.Update(superAdminCtx, UpdateInput{ID: user.ID, Status: &suspended})
+	require.NoError(t, err, "super-admin authority must satisfy the status field guard (PR #1974 F1)")
+	assert.Equal(t, domain.StatusSuspended, updated.Status())
+}
+
 // TestService_Update_SuspendCascadeRevokesSessionsAndRefresh covers the
 // S4.0 P1-A cascade-revoke path: when admin demotes an active user to
 // suspended via Update, the user's live sessions + refresh chains are

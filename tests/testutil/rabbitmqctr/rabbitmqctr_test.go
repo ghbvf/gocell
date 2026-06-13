@@ -1,6 +1,6 @@
 //go:build integration
 
-package testutil
+package rabbitmqctr
 
 import (
 	"context"
