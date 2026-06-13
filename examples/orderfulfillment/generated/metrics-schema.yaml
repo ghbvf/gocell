@@ -9,6 +9,32 @@ metrics:
       labels:
         - reason
       file: runtime/auth/metrics.go
+    - name: auth_pdp_decision_duration_seconds
+      type: histogram
+      help: Duration of a PDP authorization decision (policy-store load + evaluate) in seconds, by decision.
+      labels:
+        - decision
+      buckets:
+        - ".0001"
+        - ".0005"
+        - ".001"
+        - ".005"
+        - ".01"
+        - ".025"
+        - ".05"
+        - ".1"
+        - ".25"
+        - ".5"
+        - "1"
+        - "2.5"
+      file: runtime/auth/pdp_metrics.go
+    - name: auth_pdp_decision_total
+      type: counter
+      help: Total number of PDP (ABAC) authorization decisions, by action and decision (allow/deny/error).
+      labels:
+        - action
+        - decision
+      file: runtime/auth/pdp_metrics.go
     - name: auth_service_token_verify_total
       type: counter
       help: Total number of service token verifications.
