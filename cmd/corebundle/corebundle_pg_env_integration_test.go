@@ -15,7 +15,27 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
+	"github.com/ghbvf/gocell/tests/testutil/rabbitmqctr"
 )
+
+// startRabbitMQForRealMode starts a RabbitMQ testcontainer and returns its AMQP
+// URL, registering termination via t.Cleanup. #1940: postgres topology resolves a
+// REAL broker through eventtransport.Resolve (which dials eagerly), so any test
+// that drives LoadSharedDepsFromEnv in postgres mode needs a reachable broker —
+// otherwise the resolver fail-closes (missing URL) or the eager dial fails.
+func startRabbitMQForRealMode(t *testing.T) string {
+	t.Helper()
+	ctx := context.Background()
+	container := rabbitmqctr.StartRabbitMQContainer(t, ctx)
+	t.Cleanup(func() {
+		if terr := container.Terminate(ctx); terr != nil {
+			t.Logf("WARN: failed to terminate rabbitmq container: %v", terr)
+		}
+	})
+	amqpURL, err := container.AmqpURL(ctx)
+	require.NoError(t, err, "failed to get rabbitmq amqp url")
+	return amqpURL
+}
 
 // applyMigrationsForMain applies all schema migrations to the given DSN using
 // the canonical MigrationsFS embedded in the adapters/postgres package. This
@@ -46,6 +66,10 @@ func setRealModeEnv(t *testing.T, dsn string) {
 	t.Setenv("GOCELL_JWT_AUDIENCE", "smoke")
 	t.Setenv("GOCELL_ADAPTER_MODE", "real")
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
+	// #1940: postgres topology wires a real broker (RabbitMQ) as the outbox
+	// transport; LoadSharedDepsFromEnv → eventtransport.Resolve dials it eagerly,
+	// so a reachable broker is required (fail-closed otherwise).
+	t.Setenv("GOCELL_AMQP_URL", startRabbitMQForRealMode(t))
 	t.Setenv("GOCELL_HTTP_HEALTH_ADDR", ":9091")
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
 	// F1: in real mode, in-memory nonce store requires explicit single-pod opt-in.

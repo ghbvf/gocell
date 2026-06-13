@@ -430,6 +430,15 @@ metrics:
         - "900"
         - "1800"
       file: kernel/projection/metrics.go
+    - name: rabbitmq_publish_failed_total
+      fqName: gocell_rabbitmq_publish_failed_total
+      namespace: gocell
+      type: counter
+      help: 'Total number of RabbitMQ publish attempts that failed, by reason. reason=acquire_channel: could not obtain a channel (cap exceeded or connection lost); reason=declare_exchange: idempotent exchange declaration failed; reason=confirm_mode: enabling publisher-confirm mode failed; reason=publish_send: PublishWithContext wire call failed; reason=nack: broker explicitly NACKed the message; reason=timeout: confirm-timer fired before broker reply; reason=chan_closed: confirm channel closed mid-flight.'
+      labels:
+        - cell
+        - reason
+      file: adapters/rabbitmq/publisher_metrics.go
     - name: reconcile_duration_seconds
       fqName: gocell_reconcile_duration_seconds
       namespace: gocell

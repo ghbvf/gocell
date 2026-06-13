@@ -56,6 +56,18 @@ services:
       timeout: 3s
       retries: 30
 
+  # RabbitMQ: postgres (durable) topology wires a real broker as the outbox
+  # transport (#1940) — corebundle fail-closes at startup without GOCELL_AMQP_URL.
+  # Default guest:guest@127.0.0.1:5672 under host networking; e2e-only fixture.
+  rabbitmq:
+    image: rabbitmq:3-alpine
+    network_mode: host
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
   migrate:
     build:
       context: ../..
@@ -102,6 +114,12 @@ services:
       # host under host-network topology — ValidateTLSEndpoint loopback exception.
       GOCELL_REDIS_ADDR: 127.0.0.1:6379
 
+      # RabbitMQ outbox event transport (#1940): postgres topology publishes the
+      # outbox relay to a real broker (not the in-process bus). Required in
+      # postgres+real mode — corebundle fail-closes without it. Loopback host
+      # under host-network topology.
+      GOCELL_AMQP_URL: amqp://guest:guest@127.0.0.1:5672/
+
       # Production control-plane tokens (e2e-only values; not secret material).
       GOCELL_SERVICE_SECRET: e2e-service-secret-32-bytes-xxxxx!
       GOCELL_METRICS_TOKEN: e2e-metrics-token
@@ -132,6 +150,8 @@ services:
       migrate:
         condition: service_completed_successfully
       redis:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:9091/readyz"]

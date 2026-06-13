@@ -15,7 +15,10 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
 )
 
-require github.com/rabbitmq/amqp091-go v1.11.0 // indirect
+require (
+	github.com/rabbitmq/amqp091-go v1.11.0 // indirect
+	github.com/testcontainers/testcontainers-go/modules/rabbitmq v0.42.0 // indirect
+)
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
