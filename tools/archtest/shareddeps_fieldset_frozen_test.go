@@ -49,7 +49,7 @@
 // ## Symbol inventory (lives here, not in ai-robust.md per the charter)
 //
 //   - Frozen type: github.com/ghbvf/gocell/runtime/composition.SharedDeps
-//   - Frozen golden: sharedDepsFrozenExportedFields (21 exported fields)
+//   - Frozen golden: sharedDepsFrozenExportedFields (22 exported fields)
 //
 // Relationship: advances #1412 (SharedDeps Hard-ization) by covering the
 // field-set dimension. The unexported sealed-construction marker (valid) is
@@ -80,6 +80,7 @@ const ruleSharedDepsFieldSetFrozen01 = "SHAREDDEPS-FIELDSET-FROZEN-01"
 var sharedDepsFrozenExportedFields = map[string]string{
 	"Clock":                "clock.Clock",
 	"Topology":             "bootstrap.Topology",
+	"DeploymentTopology":   "bootstrap.DeploymentTopologySpec",
 	"JWTIssuer":            "*auth.JWTIssuer",
 	"JWTVerifier":          "*auth.JWTVerifier",
 	"MetricsProvider":      "metrics.Provider",
@@ -167,12 +168,13 @@ func TestSharedDepsFieldSetFrozen01_DetectorRejectsPerturbation(t *testing.T) {
 
 	// (c) Same field NAMES but one field RETYPED: proves that type-string drift is
 	// caught at constant field count, not just count drift. Clock is retyped from
-	// clock.Clock → string; all other 19 field names are preserved. This red case
+	// clock.Clock → string; all other 20 field names are preserved. This red case
 	// demonstrates that exportedFieldTypeStrings detects type-string divergence,
 	// not just field-set membership divergence.
 	type sharedDepsRetypedClock struct {
 		Clock                string // was clock.Clock — intentional type perturbation
 		Topology             string
+		DeploymentTopology   string
 		JWTIssuer            string
 		JWTVerifier          string
 		MetricsProvider      string
@@ -195,7 +197,7 @@ func TestSharedDepsFieldSetFrozen01_DetectorRejectsPerturbation(t *testing.T) {
 	}
 	retyped := exportedFieldTypeStrings(reflect.TypeOf(sharedDepsRetypedClock{}))
 	assert.NotEqual(t, sharedDepsFrozenExportedFields, retyped,
-		"%s anti-vacuity (type drift): a struct with the same 21 field names but Clock "+
+		"%s anti-vacuity (type drift): a struct with the same 22 field names but Clock "+
 			"retyped to string must NOT match the golden — proves type-string drift detection, "+
 			"not just field-set membership detection", ruleSharedDepsFieldSetFrozen01)
 
