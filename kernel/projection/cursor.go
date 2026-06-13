@@ -81,11 +81,16 @@ type LiveCarrierResolver interface {
 // COMPILE error, not a runtime dead-letter — every projection has a live push
 // path (buildHandler), so live resolution is mandatory, never optional.
 //
-// The saga read model is deliberately NOT a LiveCursor: runtime/saga/tailer is
-// replay/pull-only (it pages the journal via LoadSince and never receives a bare
-// live push), so SagaJournalSource implements only Cursor. Keeping resolution off
-// the base Cursor interface avoids burdening the saga source with an unreachable
-// method.
+// Keeping resolution off the base Cursor interface (a separate LiveCarrierResolver
+// composed into LiveCursor) is what bounds the blast radius to the Coordinator's
+// cursor slot: a plain Cursor consumer — runtime/saga/tailer (replay/pull-only, it
+// pages the journal via LoadSince and never receives a bare live push), the conformance
+// enroll fixtures, the tailer test fakes — needs no ResolveCarrier. Only a type wired
+// as a Coordinator cursor must be a LiveCursor. SagaJournalSource is one such type (a
+// kernel test drives it through projection.Coordinator), so it implements LiveCursor
+// with a protocol-declaring ResolveCarrier (identity on its intrinsic carrier; permanent
+// on a bare entry, since the saga journal has no live bare-entry push) — see
+// kernel/saga/sagaprojection.SagaJournalSource.ResolveCarrier.
 type LiveCursor interface {
 	Cursor
 	LiveCarrierResolver

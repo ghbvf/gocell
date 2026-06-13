@@ -352,11 +352,11 @@ func RunCursorConformance(
 	t.Run("PermanentErrorOnUnknownEntry", func(t *testing.T) {
 		checkCursorPermanentOnUnknown(t, cursor, newUnseeded)
 	})
-	// A cursor that is also a LiveCarrierResolver (every projection.LiveCursor —
-	// the contract the Coordinator requires) must resolve a known carrier
-	// consistently with Position. This is opportunistic coverage: a plain Cursor
-	// (e.g. the saga read model's SagaJournalSource) is skipped, since it has no
-	// live push path and implements no resolver.
+	// A cursor that is also a LiveCarrierResolver (every projection.LiveCursor — the
+	// contract the Coordinator requires) must resolve a known carrier consistently with
+	// Position. This is opportunistic capability detection in the TEST harness (not a
+	// production fallback): a Cursor that implements no resolver — e.g. a plain test
+	// fake enrolled only for the Position invariants — is skipped here.
 	if resolver, ok := cursor.(projection.LiveCarrierResolver); ok {
 		t.Run("ResolveCarrierConsistentWithPosition", func(t *testing.T) {
 			checkResolveCarrierConsistent(t, cursor, resolver, seed)

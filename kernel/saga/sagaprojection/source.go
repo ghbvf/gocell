@@ -223,21 +223,27 @@ func (s *SagaJournalSource) Position(entry projection.ProjectionEvent) (int64, e
 }
 
 // ResolveCarrier satisfies projection.LiveCarrierResolver so SagaJournalSource is a
-// projection.LiveCursor (the cursor contract projection.Coordinator requires). The saga
-// read model is driven by the pull-only runtime/saga/tailer (which pages carriers via
-// LoadSince) and, when exercised through a Coordinator, only ever replays journal-produced
-// *sagaProjectionEvent carriers — there is NO live broker push of a bare entry. So
-// resolution is the identity on an intrinsic carrier; any other ProjectionEvent is
-// unresolvable and permanent (the saga journal exposes no id→GlobalSeq live lookup, and a
-// bare entry on this source would be a wiring error, not a recoverable transient).
+// projection.LiveCursor (the cursor contract projection.Coordinator requires).
+//
+// Why this method exists on a pull-only source: the saga read model is driven by the
+// pull-only runtime/saga/tailer (which pages carriers via LoadSince and never receives a
+// bare live broker push), so this resolver is never reached on the production path. It is
+// required only because rebuild_wiring_test.go exercises SagaJournalSource through
+// projection.NewCoordinator (to test rebuild identity handling), and the Coordinator's
+// cursor slot is typed projection.LiveCursor. Resolution is therefore the identity on an
+// intrinsic *sagaProjectionEvent carrier (what Replay/LoadSince produces); any other
+// ProjectionEvent is a wiring error — the saga journal exposes no id→GlobalSeq live lookup —
+// so it is permanent, never a recoverable transient.
 func (s *SagaJournalSource) ResolveCarrier(_ context.Context, entry projection.ProjectionEvent) (projection.ProjectionEvent, error) {
 	if _, ok := entry.(*sagaProjectionEvent); ok {
 		return entry, nil
 	}
-	return nil, outbox.NewPermanentError(fmt.Errorf(
-		"sagaprojection: ResolveCarrier resolves only *sagaProjectionEvent carriers produced by Replay/LoadSince; "+
-			"the saga journal has no live bare-entry push path (the read model is driven by the pull-only tailer), "+
-			"so a %T is unresolvable (permanent)", entry))
+	// Const message (no %T): a PermanentError reaches the DLX payload, so avoid leaking the
+	// concrete carrier's internal package path.
+	return nil, outbox.NewPermanentError(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		"sagaprojection: ResolveCarrier resolves only intrinsic *sagaProjectionEvent carriers "+
+			"(produced by Replay/LoadSince); the saga journal has no live bare-entry push path, so a "+
+			"non-sagaProjectionEvent carrier is unresolvable (permanent)"))
 }
 
 // compile-time interface checks: SagaJournalSource is a ReplaySource and a full

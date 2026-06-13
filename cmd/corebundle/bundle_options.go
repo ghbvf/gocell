@@ -257,19 +257,26 @@ func projectionRuntimeOptions(shared *composition.SharedDeps) ([]bootstrap.Optio
 	if !projectionPGJournalPreviewEnabled() {
 		// Fail-closed gate: do NOT silently wire the projection source. A projection
 		// declared in PG mode without the opt-in fails fast at bootstrap (phase6
-		// checkProjectionDeps). The gated source IS production-safe (durable journal),
-		// but the production-default flip (gate removal) is gated on T-06-2 e2e + the
-		// PR-05 no-DELETE guardrail — #1771 PR-04, per ADR 202606071600-1504 §9 / D9.
-		slog.Warn("projection: durable PG journal source NOT wired — production posture is fail-closed; " +
-			"a projection declared in PG mode will fail fast at bootstrap. Set " + envProjectionPGJournalPreview +
-			"=true to wire the durable projection_events journal source (e.g. to run the T-06-2 e2e). The " +
-			"production-default flip that removes this gate is tracked in gh #1771 (PR-04).")
+		// checkProjectionDeps). The gated source IS production-safe (durable journal);
+		// the gate only defers the production-default flip (gate removal) until T-06-2
+		// e2e + the PR-05 no-DELETE guardrail — #1771 PR-04, per ADR 202606071600-1504 §9/D9.
+		// Warn (not Info): a projection declared in PG mode will NOT start until the gate
+		// is set, so an operator who expects projections needs to see this.
+		slog.Warn("projection: durable journal source not wired (fail-closed); a projection declared in PG mode will fail fast at bootstrap",
+			slog.String("gate_env", envProjectionPGJournalPreview),
+			slog.Bool("wired", false),
+			slog.String("gated_source", "projection_events (durable, production-safe)"),
+			slog.String("production_default_flip", "gh #1771 PR-04 (gated on T-06-2 e2e)"))
 		return nil, nil
 	}
-	slog.Warn("projection: durable PG journal source wired under the " + envProjectionPGJournalPreview +
-		"=true gate — positions come from the append-only projection_events journal (never cleaned), so it " +
-		"is production-safe; the gate remains until the production-default flip in gh #1771 (PR-04, gated on " +
-		"T-06-2 e2e).")
+	// Info (not Warn): wiring the durable, production-safe journal source under the gate is
+	// a deliberate lifecycle opt-in, not a degraded mode — positions come from the
+	// append-only projection_events journal (never cleaned). The gate remains until PR-04.
+	slog.Info("projection: durable journal source wired under gate (positions from append-only projection_events; production-safe)",
+		slog.String("gate_env", envProjectionPGJournalPreview),
+		slog.Bool("wired", true),
+		slog.String("source", "projection_events"),
+		slog.String("production_default_flip", "gh #1771 PR-04 (gated on T-06-2 e2e)"))
 	pool, err := cellsecrets.PgxPoolFromProvider(shared.PG)
 	if err != nil {
 		return nil, fmt.Errorf("projection pg pool: %w", err)

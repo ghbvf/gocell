@@ -169,12 +169,11 @@ func buildTodoorderBootstrap(assemblyID string, assemblyCellIDs []string, addrs 
 	// so live consumption is best-effort (same as every todoorder demo) — the
 	// harness still cold-starts and registers its readyz probe; faithful
 	// PG-backed replay is tracked in backlog.
+	// One MemProjectionEventSource is the canonical in-memory LiveCursor — wired as BOTH
+	// the ReplaySource and the Cursor (matching the production PGProjectionEventSource
+	// single-instance shape), so live carriers resolve and replay against the same store.
 	projCheckpoint := projection.NewMemCheckpointStore()
-	projReplay := projection.NewMemReplaySource()
-	projCursor, err := projection.NewMemCursor(projReplay)
-	if err != nil {
-		return nil, fmt.Errorf("projection cursor: %w", err)
-	}
+	projSource := projection.NewMemProjectionEventSource()
 
 	// Projections consume via the same ConsumerBase path as subscriptions, so
 	// the projection coordinator (phase6) requires a ConsumerBase to be wired —
@@ -201,8 +200,8 @@ func buildTodoorderBootstrap(assemblyID string, assemblyCellIDs []string, addrs 
 		bootstrap.WithConsumerBase(consumerBase),
 		bootstrap.WithProjectionCheckpointStore(projCheckpoint),
 		bootstrap.WithProjectionTxRunner(demoTxRunner{}),
-		bootstrap.WithProjectionReplaySource(projReplay),
-		bootstrap.WithProjectionCursor(projCursor),
+		bootstrap.WithProjectionReplaySource(projSource),
+		bootstrap.WithProjectionCursor(projSource),
 	}
 	if operatorEnabled {
 		// Operator control-plane on a network-isolated (loopback) admin port,

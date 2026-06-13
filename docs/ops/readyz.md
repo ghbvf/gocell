@@ -453,17 +453,26 @@ developer test, not production behaviour.
 
 ## Projection probes
 
-### projection_journal_ready (deferred to #1504 PR-03)
+### projection_journal_ready (gate-conditional, #1504 PR-03)
 
 The `projection_journal_ready` ProbeName is declared in `adapters/postgres`
 (`ProbeProjectionJournalReady`, EPIC #1504 PR-01) and implemented by
-`PGProjectionEventSource.RepoReady`, but is **not yet registered** with any composition
-root — wiring lands in #1504 PR-03 when the durable projection source replaces the
-outbox-backed reader. Until then this probe does **not** appear in `/readyz?verbose`
-output. After registration it reports `projection_events` table reachability + table-level
-permissions (a `SELECT 1 FROM projection_events WHERE false` representative query),
-surfacing schema/migration drift that the pool-level `postgres_ready` ping cannot detect —
-same semantics as the `*_repo_ready` cell probes.
+`PGProjectionEventSource.RepoReady`. As of #1504 PR-03 the composition root
+(`cmd/corebundle`) registers it via `bootstrap.WithHealthChecker` — but **only when the
+durable projection source is wired**, i.e. when `GOCELL_PROJECTION_PG_JOURNAL_PREVIEW=true`
+in PG mode (the fail-closed gate). When the gate is off, `projectionRuntimeOptions` returns
+no options at all, so the probe is **not** registered and does **not** appear in
+`/readyz?verbose`.
+
+**Operator caveat**: do NOT target this probe with a dependency-availability alert in
+environments where the gate is off — its absence there is expected, not a fault. The
+production-default flip that removes the gate (so the probe is always present in PG mode)
+lands in #1771 PR-04, gated on T-06-2 e2e.
+
+When registered it reports `projection_events` table reachability + table-level permissions
+(a `SELECT 1 FROM projection_events WHERE false` representative query), surfacing
+schema/migration drift that the pool-level `postgres_ready` ping cannot detect — same
+semantics as the `*_repo_ready` cell probes.
 
 ## Saga probes
 

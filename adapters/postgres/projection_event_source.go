@@ -156,8 +156,20 @@ func (s *PGProjectionEventSource) Position(entry projection.ProjectionEvent) (in
 // journal cannot be assigned a position and retry cannot fix it — the D4 emit-time double-write
 // guarantees a real projection-source event was committed before delivery, so a miss is a true
 // invariant violation, not the spurious cleaned-row case); any other query failure is transient
-// (wrapped, requeued). Runs on the caller's ambient tx ctx; the row was committed by its
-// producer in a prior transaction so it is visible.
+// (wrapped, requeued).
+//
+// Transaction visibility: the lookup runs on the caller's ambient tx ctx (pgexec routes Query to
+// the in-flight tx when one is present). The projection_events row was committed by the producer's
+// D4 same-transaction double-write in a PRIOR transaction, before this event was delivered, so it
+// is visible regardless of the txRunner's isolation level (it predates the consumer tx snapshot
+// under REPEATABLE READ/SERIALIZABLE just as it does under READ COMMITTED). The lookup is read-only;
+// it neither needs nor takes a separate connection.
+//
+// Bootstrap-gap caveat (ADR 202606071600-1504 §5/§8): events produced BEFORE the PR-02 journaling
+// decorator was deployed have no projection_events row, so a redelivery of such a historical event
+// resolves to ErrNoRows → PERMANENT → dead-letter. That is the documented v1 limitation, not a
+// system fault — the journal intentionally retains only events from the decorator's deployment
+// forward, so such a DLX entry is expected and benign, not a recoverable transient.
 func (s *PGProjectionEventSource) ResolveCarrier(
 	ctx context.Context, entry projection.ProjectionEvent,
 ) (projection.ProjectionEvent, error) {
