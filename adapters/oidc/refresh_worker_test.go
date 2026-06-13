@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
@@ -180,10 +181,7 @@ func TestRefreshWorker_FailOpen(t *testing.T) {
 
 	// Wire a slog JSON handler so we can assert log fields.
 	logBuf := sloghelper.NewSyncBuffer()
-	handler := slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})
-	oldDefault := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	defer slog.SetDefault(oldDefault)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -238,10 +236,7 @@ func TestRefreshWorker_FailureThenSuccess(t *testing.T) {
 
 	// Capture logs.
 	logBuf := sloghelper.NewSyncBuffer()
-	handler := slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})
-	oldDefault := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	defer slog.SetDefault(oldDefault)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -333,10 +328,7 @@ func TestRefreshWorker_WarnLogFields(t *testing.T) {
 	a := newTestAdapter(t, srv.URL, clk, col)
 
 	logBuf := sloghelper.NewSyncBuffer()
-	handler := slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})
-	oldDefault := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	defer slog.SetDefault(oldDefault)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

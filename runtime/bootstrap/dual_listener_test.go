@@ -28,6 +28,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -563,10 +564,7 @@ func TestTripleListener_ShutdownNoGoroutineLeak(t *testing.T) {
 // (TEST-11 three-listener variant).
 func TestTripleListener_MidBindFailure_RollsBackEarlierBindings(t *testing.T) {
 	var logBuf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
-	original := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(original)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&logBuf, nil)))
 
 	// Pre-bind a listener to get a known primary port for the collision target.
 	// phase7BindListeners sorts by ref.String(), so bind order is

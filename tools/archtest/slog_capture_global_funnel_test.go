@@ -4,68 +4,72 @@ package archtest
 
 // INVARIANT: SLOG-CAPTURE-GLOBAL-FUNNEL-01
 //
-// slog_capture_global_funnel_test.go — Medium caller-allowlist funnel for the
-// global-mutating test helper healthtest.NewCapture, paired with the
-// de-globalized alternative healthtest.NewLoggerCapture.
+// slog_capture_global_funnel_test.go — Medium caller-allowlist funnel that seals
+// the test-scope process-global slog mutation PRIMITIVE: raw slog.SetDefault.
 //
-// Why this rule exists (#1490): healthtest.NewCapture(t) rewrites the
-// process-global slog.Default() (and restores via t.Cleanup). When a
-// component under test emits a log from an ASYNC goroutine (e.g. eventbus's
-// subscription/retry goroutine) AND a parallel sibling test in the same test
-// binary calls NewCapture/Cleanup in between the wait and the snapshot, the
-// async record routes to the WRONG handler — the classic "global mutable
-// state + async write + parallel tests" race that made
+// Why this rule exists (#1490): a component that emits a log from an ASYNC
+// goroutine (e.g. eventbus's subscription/retry goroutine) while a parallel
+// sibling test rewrites the process-global slog.Default() between the wait and
+// the snapshot routes its async record to the WRONG handler — the classic
+// "global mutable state + async write + parallel tests" race that made
 // runtime/eventbus.TestNotifyRetryExhausted flaky in CI.
 //
-// The fix de-globalizes eventbus (inject *slog.Logger via WithLogger) and the
-// test captures via healthtest.NewLoggerCapture() — which builds a CaptureHandler
-// WITHOUT touching slog.Default(). To stop the flake CLASS from reappearing in
-// new component tests (a Soft naming/doc convention is forbidden by
-// .claude/rules/gocell/ai-robust.md "Soft 严禁立项"), this funnel makes the
-// misuse machine-detectable:
+// The first cut of this rule banned ONE wrapper of that primitive
+// (healthtest.NewCapture). Review (#2003 F1) showed the dangerous AXIS is the
+// raw primitive slog.SetDefault itself — banning the wrapper left the primitive
+// open, so the flake class could be re-expressed by any test calling
+// slog.SetDefault inline. This rule now seals the primitive:
 //
-//   - Banned surface: healthtest.NewCapture (the only function that calls
-//     slog.SetDefault in test scope).
-//   - Sanctioned callers (allowlist): runtime/bootstrap, cmd/corebundle, and
-//     healthtest's own package test. These are independent test binaries
-//     (process-level slog state — eventbus's parallel race cannot reach across
-//     processes), capture SYNCHRONOUS logs (readyz handler / run()), and
-//     legitimately verify that the bootstrapped system emits via slog.Default()
-//     (the SLOG-HANDLER-SEALED-FUNNEL-01 A3 SetDefault wiring). The allowlist
-//     is a shrink-only migration ledger.
-//   - Everyone else MUST use healthtest.NewLoggerCapture() + a WithLogger-style
-//     injection so async log capture stays isolated from parallel siblings.
+//   - Banned surface: a call to stdlib log/slog.SetDefault from any test-scope
+//     code outside the sanctioned holder.
+//   - Single sanctioned holder (allowlist): pkg/testutil/slogcapture — its
+//     InstallDefault(t, *slog.Logger) is the ONE place that calls slog.SetDefault
+//     (+ t.Cleanup restore). Lives in pkg/ so every layer can import it; stdlib
+//     only, so it trips neither SLOG-HANDLER-SEALED-FUNNEL-01 A1 nor that rule's
+//     Handler-impl blind spot.
+//   - Everyone else redirects the default via slogcapture.InstallDefault (or
+//     healthtest.NewCapture, which delegates to it). A test of a component that
+//     accepts an injected logger uses healthtest.NewLoggerCapture + injection
+//     instead — no global mutation, so it is safe under parallel + async writes.
+//
+// Coverage boundary (per ai-robust.md "工具选定后强制盲区自检"): this rule bans
+// slog.SetDefault — the handler swap that causes the #1490 class. It does NOT
+// cover slog.SetLogLoggerLevel (a level-only mutation of the default; no repo
+// usages; it does not swap the handler, so it cannot route an async record to a
+// foreign sink). That narrower primitive is intentionally out of scope.
 //
 // Funnel closure (per ai-robust.md "只锁 callsite 不是闭环 funnel"):
-//   - Direct qualified call (healthtest.NewCapture(...)) → TestSlogCaptureGlobalFunnel.
-//   - Indirect reference (var f = healthtest.NewCapture, pointer pass-through,
+//   - Direct call (slog.SetDefault(...), alias / dot-import proof via go/types)
+//     → TestSlogCaptureGlobalFunnel.
+//   - Indirect reference (var f = slog.SetDefault, pointer pass-through,
 //     struct-field binding) → TestSlogCaptureGlobalFunnel_NoIndirectReferences.
-//   Together they make the surface unreachable from disallowed packages by any
+//   Together they make the primitive unreachable from disallowed packages by any
 //   syntactic shape.
 //
 // AI-robust grading: Medium. The banned-symbol identity is resolved by go/types
-// (info.Uses, alias-proof) — Hard for "did code reach this symbol". But the axis
-// "WHICH packages may call a given function" is not expressible in the Go type
-// system; no type-level gate can forbid an arbitrary package from importing
-// healthtest and calling NewCapture. That permanent Go-language ceiling is the
-// same shape as #1352 / #851 / #893 (archtest-bound, not compile-bound).
+// (IsCallToPkgFunc / info.Uses, alias- and dot-import-proof) — Hard for "did code
+// reach this symbol". But the axis "WHICH packages may call a given function" is
+// not expressible in the Go type system; no type-level gate can forbid an
+// arbitrary package from calling stdlib slog.SetDefault. That permanent
+// Go-language ceiling is the same shape as #1352 / #851 / #893 (archtest-bound,
+// not compile-bound).
 //
 // Blind spots of the chosen tool (per ai-robust.md "工具选定后强制盲区自检"):
-//   - Same-package unqualified call: a bare NewCapture(...) inside package
-//     healthtest is an *ast.Ident (not *ast.SelectorExpr) and is NOT scanned.
-//     The only such caller is healthtest's own slogcapture_test.go — already in
-//     the allowlist dir, so this is closed by construction.
-//   - Reflect call: reflect.ValueOf(healthtest.NewCapture).Call(...). The
-//     reflect ValueOf argument is an indirect reference caught by the reverse
-//     self-test; the .Call dispatch itself is not modeled (accepted: a test
-//     reflecting over a capture helper to evade this rule is implausible and
-//     review-visible).
-//   - Rename: if NewCapture is renamed, the rule silently stops guarding it —
-//     closed by TestSlogCaptureGlobalFunnel_SymbolSentinel.
+//   - The sanctioned holder pkg/testutil/slogcapture itself calls slog.SetDefault
+//     inside InstallDefault — that is the single allowlisted site, closed by the
+//     allowlist (not a leak).
+//   - Reflect call: reflect.ValueOf(slog.SetDefault).Call(...). The reflect
+//     ValueOf argument is an indirect reference caught by the reverse self-test;
+//     the .Call dispatch itself is not modeled (accepted: a test reflecting over
+//     SetDefault to evade this rule is implausible and review-visible).
+//   - Stdlib drift: slog.SetDefault is a stdlib symbol (cannot be renamed by this
+//     repo). If a future Go release removed/renamed it the detector would silently
+//     no-op — closed by TestSlogCaptureGlobalFunnel_StdlibSymbolSentinel.
 //
-// See runtime/http/health/healthtest/slogcapture.go godoc and
-// tools/archtest/test_eventually_funnel_test.go (the sibling test-helper
-// funnel range this rule is modeled on).
+// See pkg/testutil/slogcapture/slogcapture.go godoc, runtime/http/health/
+// healthtest/slogcapture.go (NewCapture delegates here), and
+// tools/archtest/test_eventually_funnel_test.go (the sibling test-helper funnel
+// this rule is modeled on).
 
 import (
 	"fmt"
@@ -82,34 +86,21 @@ import (
 
 const ruleSlogCaptureGlobalFunnel01 = "SLOG-CAPTURE-GLOBAL-FUNNEL-01"
 
-const newCaptureFuncName = "NewCapture"
-
-// healthtestPkgPath is derived from PlatformModulePath (not a bare literal) so a
-// module rename / /v2 bump updates exactly one place (ARCHTEST-MODULE-PATH-FUNNEL-01).
-var healthtestPkgPath = PlatformModulePath + "/runtime/http/health/healthtest"
-
 // slogCaptureAllowlist is the closed, shrink-only set of rel-path dir prefixes
-// whose tests may call the global-mutating healthtest.NewCapture. See the file
-// godoc for why each is sanctioned.
-//
-// Note on the healthtest/ entry: it is a no-op for the direct-call scanner
-// (same-package callers use the unqualified ident NewCapture, an *ast.Ident
-// the SelectorExpr scan never matches) but DOES guard the indirect-reference
-// scanner (info.Uses resolves unqualified idents). Keep it for the latter.
+// whose code may call the global-mutating primitive slog.SetDefault. Exactly one
+// entry: the sanctioned holder. See the file godoc for why.
 var slogCaptureAllowlist = []string{
-	"runtime/bootstrap/",
-	"cmd/corebundle/",
-	"runtime/http/health/healthtest/",
+	"pkg/testutil/slogcapture/",
 }
 
-const slogCaptureFunnelReason = "healthtest.NewCapture mutates global slog.Default() " +
-	"(races parallel siblings under async log writes, #1490); only {runtime/bootstrap, " +
-	"cmd/corebundle, runtime/http/health/healthtest} may call it — component tests use " +
-	"healthtest.NewLoggerCapture() + WithLogger injection"
+const slogCaptureFunnelReason = "raw slog.SetDefault mutates the process-global slog.Default() " +
+	"(races parallel siblings under async log writes, #1490); only pkg/testutil/slogcapture may call it — " +
+	"redirect the default via slogcapture.InstallDefault (or healthtest.NewCapture, which delegates to it); " +
+	"components that accept an injected logger use healthtest.NewLoggerCapture + injection"
 
-const slogCaptureIndirectReason = "indirect reference to healthtest.NewCapture (function " +
-	"value / pointer pass-through / struct-field binding); it mutates global slog.Default() " +
-	"(#1490) — capture via healthtest.NewLoggerCapture() at the callsite instead"
+const slogCaptureIndirectReason = "indirect reference to slog.SetDefault (function value / pointer " +
+	"pass-through / struct-field binding); it mutates global slog.Default() (#1490) — redirect via " +
+	"slogcapture.InstallDefault at the callsite instead"
 
 type slogCaptureFunnelViolation struct {
 	File   string
@@ -117,8 +108,8 @@ type slogCaptureFunnelViolation struct {
 	Reason string
 }
 
-// isSlogCaptureAllowlistedCaller reports whether rel lives under a sanctioned
-// caller directory (allowlist membership is by file path, robust to test-package
+// isSlogCaptureAllowlistedCaller reports whether rel lives under the sanctioned
+// holder directory (allowlist membership is by file path, robust to test-package
 // path naming quirks like the xtest "_test" suffix).
 func isSlogCaptureAllowlistedCaller(rel string) bool {
 	for _, p := range slogCaptureAllowlist {
@@ -147,36 +138,36 @@ func shouldSkipForSlogCaptureFunnel(rel string) bool {
 	return false
 }
 
-// isHealthtestNewCaptureFunc reports whether obj is the healthtest.NewCapture
+// isRawSlogSetDefaultFunc reports whether obj is the stdlib log/slog.SetDefault
 // function. Single membership check shared by the direct-call and indirect-ref
-// scanners (keeps "what counts as banned" single-sourced).
-func isHealthtestNewCaptureFunc(obj types.Object) bool {
+// scanners (keeps "what counts as banned" single-sourced). Reuses the slogFunnel*
+// consts declared by slog_handler_sealed_funnel_test.go (same package).
+func isRawSlogSetDefaultFunc(obj types.Object) bool {
 	fn, ok := obj.(*types.Func)
 	if !ok || fn.Pkg() == nil {
 		return false
 	}
-	return fn.Pkg().Path() == healthtestPkgPath && fn.Name() == newCaptureFuncName
+	return fn.Pkg().Path() == slogFunnelStdlibPkgPath && fn.Name() == slogFunnelSetDefaultFunc
 }
 
-// isHealthtestNewCaptureCallee reports whether funExpr is a qualified call to
-// healthtest.NewCapture. Resolution is via info.Uses (alias-proof). When info is
-// nil (never in Typed/Fixture mode, but defensive) falls back to pure-AST
-// pkg-ident "healthtest".
-func isHealthtestNewCaptureCallee(funExpr ast.Expr, info *types.Info) bool {
-	sel, ok := funExpr.(*ast.SelectorExpr)
-	if !ok || sel.Sel == nil || sel.Sel.Name != newCaptureFuncName {
-		return false
+// directSetDefaultCalleeIdent returns the ident naming the callee of a
+// slog.SetDefault call: sel.Sel for the qualified form (slog.SetDefault) or the
+// bare ident for the dot-import form (SetDefault). Used to exclude direct calls
+// from the indirect-reference reverse self-test (so they are not double-reported).
+func directSetDefaultCalleeIdent(call *ast.CallExpr) *ast.Ident {
+	switch fun := call.Fun.(type) {
+	case *ast.SelectorExpr:
+		return fun.Sel
+	case *ast.Ident:
+		return fun
 	}
-	if info != nil {
-		return isHealthtestNewCaptureFunc(info.Uses[sel.Sel])
-	}
-	x, ok := sel.X.(*ast.Ident)
-	return ok && x.Name == "healthtest"
+	return nil
 }
 
 // scanFileForSlogCaptureFunnelViolations returns direct-call violations of
-// SLOG-CAPTURE-GLOBAL-FUNNEL-01 in one file. Allowlisted-caller files yield
-// none. Shared by the module-wide test and the fixture test.
+// SLOG-CAPTURE-GLOBAL-FUNNEL-01 in one file. Allowlisted-holder files yield none.
+// Resolution is via go/types (IsCallToPkgFunc, alias- and dot-import-proof).
+// Shared by the module-wide test and the fixture test.
 func scanFileForSlogCaptureFunnelViolations(
 	fset *token.FileSet, file *ast.File, info *types.Info, rel string,
 ) []slogCaptureFunnelViolation {
@@ -185,7 +176,7 @@ func scanFileForSlogCaptureFunnelViolations(
 	}
 	var violations []slogCaptureFunnelViolation
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		if !isHealthtestNewCaptureCallee(call.Fun, info) {
+		if !IsCallToPkgFunc(info, call, slogFunnelStdlibPkgPath, slogFunnelSetDefaultFunc) {
 			return
 		}
 		violations = append(violations, slogCaptureFunnelViolation{
@@ -198,10 +189,12 @@ func scanFileForSlogCaptureFunnelViolations(
 }
 
 // TestSlogCaptureGlobalFunnel enforces SLOG-CAPTURE-GLOBAL-FUNNEL-01 module-wide
-// over all test sources (Tests:true — NewCapture is a test-only API). Two loads
+// over all sources (Tests:true — slog.SetDefault is a test-scope concern here,
+// production seals are governed by SLOG-HANDLER-SEALED-FUNNEL-01). Two loads
 // (default + flat non-default tags) union build-tagged files. The current tree
-// is GREEN: eventbus migrated to NewLoggerCapture; remaining callers are all
-// allowlisted (bootstrap / corebundle / healthtest self-test).
+// is GREEN: every test that redirects slog.Default() routes through
+// slogcapture.InstallDefault; the only remaining raw slog.SetDefault is inside the
+// allowlisted holder pkg/testutil/slogcapture.
 func TestSlogCaptureGlobalFunnel(t *testing.T) {
 	t.Parallel()
 
@@ -240,18 +233,18 @@ func TestSlogCaptureGlobalFunnel(t *testing.T) {
 		}
 	}
 	assert.Empty(t, violations,
-		"%s: healthtest.NewCapture (global slog.SetDefault) may only be called from "+
-			"{runtime/bootstrap, cmd/corebundle, runtime/http/health/healthtest}; component "+
-			"tests must capture via healthtest.NewLoggerCapture() + WithLogger injection "+
+		"%s: raw slog.SetDefault may only be called from pkg/testutil/slogcapture; tests must "+
+			"redirect slog.Default() via slogcapture.InstallDefault (or healthtest.NewCapture, which "+
+			"delegates to it), and component tests with an injected logger use healthtest.NewLoggerCapture "+
 			"(avoids the async/parallel race #1490). "+
 			"Run: go test -tags=archtest -count=1 ./tools/archtest/... -run TestSlogCaptureGlobalFunnel$ for local repro.",
 		ruleSlogCaptureGlobalFunnel01)
 }
 
 // TestSlogCaptureGlobalFunnelFixtures verifies the direct-call rule against
-// static fixtures. positive_green captures via CaptureHandler directly (the
-// pattern NewLoggerCapture wraps) → empty golden; disallowed_caller_red calls
-// healthtest.NewCapture from a non-allowlisted package → one violation.
+// static fixtures. positive_green redirects via slogcapture.InstallDefault (the
+// sanctioned path) → empty golden; disallowed_caller_red calls raw slog.SetDefault
+// from a non-allowlisted package → one violation.
 //
 // Regenerate goldens: go test -tags=archtest ./tools/archtest -run TestSlogCaptureGlobalFunnelFixtures$ -update.
 func TestSlogCaptureGlobalFunnelFixtures(t *testing.T) {
@@ -287,34 +280,33 @@ func TestSlogCaptureGlobalFunnelFixtures(t *testing.T) {
 	}
 }
 
-// collectDirectNewCaptureCallIdents returns the SelectorExpr.Sel idents whose
-// callee is healthtest.NewCapture (direct calls). The reverse self-test excludes
-// these so direct calls (caught by the main rule) aren't double-reported.
-func collectDirectNewCaptureCallIdents(file *ast.File, info *types.Info) map[*ast.Ident]struct{} {
+// collectDirectSetDefaultCallIdents returns the idents naming the callee of a
+// direct slog.SetDefault call. The reverse self-test excludes these so direct
+// calls (caught by the main rule) aren't double-reported.
+func collectDirectSetDefaultCallIdents(file *ast.File, info *types.Info) map[*ast.Ident]struct{} {
 	out := make(map[*ast.Ident]struct{})
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel == nil {
+		if !IsCallToPkgFunc(info, call, slogFunnelStdlibPkgPath, slogFunnelSetDefaultFunc) {
 			return
 		}
-		if isHealthtestNewCaptureCallee(call.Fun, info) {
-			out[sel.Sel] = struct{}{}
+		if id := directSetDefaultCalleeIdent(call); id != nil {
+			out[id] = struct{}{}
 		}
 	})
 	return out
 }
 
-// scanFileForIndirectNewCaptureReferences returns references to
-// healthtest.NewCapture that are NOT direct calls (function value, pointer
-// pass-through, struct-field binding) — the indirect-shape bypass of the
-// CallExpr-driven main rule. Allowlisted-caller files yield none.
-func scanFileForIndirectNewCaptureReferences(
+// scanFileForIndirectSetDefaultReferences returns references to slog.SetDefault
+// that are NOT direct calls (function value, pointer pass-through, struct-field
+// binding) — the indirect-shape bypass of the CallExpr-driven main rule.
+// Allowlisted-holder files yield none.
+func scanFileForIndirectSetDefaultReferences(
 	p *Pass, file *ast.File, rel string,
 ) []slogCaptureFunnelViolation {
 	if isSlogCaptureAllowlistedCaller(rel) {
 		return nil
 	}
-	directCall := collectDirectNewCaptureCallIdents(file, p.TypesInfo)
+	directCall := collectDirectSetDefaultCallIdents(file, p.TypesInfo)
 	absFile := p.Abs(file)
 	seenIdent := make(map[*ast.Ident]struct{})
 	var out []slogCaptureFunnelViolation
@@ -323,7 +315,7 @@ func scanFileForIndirectNewCaptureReferences(
 		if ident == nil || obj == nil {
 			continue
 		}
-		if !isHealthtestNewCaptureFunc(obj) {
+		if !isRawSlogSetDefaultFunc(obj) {
 			continue
 		}
 		if p.Fset.Position(ident.Pos()).Filename != absFile {
@@ -346,9 +338,9 @@ func scanFileForIndirectNewCaptureReferences(
 }
 
 // TestSlogCaptureGlobalFunnel_NoIndirectReferences is the blind-spot reverse
-// self-test (ai-robust.md "工具选定后强制盲区自检"): healthtest.NewCapture must
-// not be reachable from disallowed packages via indirect references either.
-// Together with the main rule this closes the funnel ("只锁 callsite 不是闭环 funnel").
+// self-test (ai-robust.md "工具选定后强制盲区自检"): slog.SetDefault must not be
+// reachable from disallowed packages via indirect references either. Together
+// with the main rule this closes the funnel ("只锁 callsite 不是闭环 funnel").
 func TestSlogCaptureGlobalFunnel_NoIndirectReferences(t *testing.T) {
 	t.Parallel()
 
@@ -364,7 +356,7 @@ func TestSlogCaptureGlobalFunnel_NoIndirectReferences(t *testing.T) {
 			if shouldSkipForSlogCaptureFunnel(rel) {
 				continue
 			}
-			for _, v := range scanFileForIndirectNewCaptureReferences(p, file, rel) {
+			for _, v := range scanFileForIndirectSetDefaultReferences(p, file, rel) {
 				key := fmt.Sprintf("%s:%d", v.File, v.Line)
 				if _, dup := seen[key]; dup {
 					continue
@@ -387,17 +379,18 @@ func TestSlogCaptureGlobalFunnel_NoIndirectReferences(t *testing.T) {
 		}
 	}
 	assert.Empty(t, violations,
-		"%s blind-spot reverse self-test: healthtest.NewCapture must not be reachable via "+
-			"indirect references (function value, pointer pass-through, struct field) from "+
-			"disallowed packages; capture via healthtest.NewLoggerCapture(). "+
+		"%s blind-spot reverse self-test: slog.SetDefault must not be reachable via indirect "+
+			"references (function value, pointer pass-through, struct field) from disallowed packages; "+
+			"redirect via slogcapture.InstallDefault. "+
 			"Run: go test -tags=archtest -count=1 ./tools/archtest/... -run TestSlogCaptureGlobalFunnel_NoIndirectReferences$ for local repro.",
 		ruleSlogCaptureGlobalFunnel01)
 }
 
 // TestSlogCaptureGlobalFunnel_NoIndirectReferences_Fixtures proves the indirect
-// scanner is wired (anti-vacuity): indirect_ref_red binds healthtest.NewCapture
-// to a function-value var → one violation. Without this RED fixture the
-// module-wide reverse test is always green (current tree has no indirect refs).
+// scanner is wired (anti-vacuity): indirect_ref_red binds slog.SetDefault to a
+// function-value var, struct_field_ref_red binds it to a struct field → one
+// violation each. Without these RED fixtures the module-wide reverse test is
+// always green (current tree has no indirect refs).
 func TestSlogCaptureGlobalFunnel_NoIndirectReferences_Fixtures(t *testing.T) {
 	t.Parallel()
 
@@ -415,7 +408,7 @@ func TestSlogCaptureGlobalFunnel_NoIndirectReferences_Fixtures(t *testing.T) {
 				var out []Diagnostic
 				for _, file := range p.Files {
 					rel := p.Rel(file)
-					for _, v := range scanFileForIndirectNewCaptureReferences(p, file, rel) {
+					for _, v := range scanFileForIndirectSetDefaultReferences(p, file, rel) {
 						out = append(out, Diagnostic{Rel: v.File, Line: v.Line, Message: v.Reason})
 					}
 				}
@@ -428,13 +421,18 @@ func TestSlogCaptureGlobalFunnel_NoIndirectReferences_Fixtures(t *testing.T) {
 	}
 }
 
-// TestSlogCaptureGlobalFunnel_SymbolSentinel locks the banned-symbol identity
-// against rename/removal drift: if healthtest.NewCapture is renamed, the
-// SelectorExpr-name predicate silently stops firing and the funnel becomes a
-// no-op. This sentinel walks the loaded healthtest package scope and fails if
-// NewCapture is no longer a function there — pointing the reviewer here to update
-// newCaptureFuncName alongside any rename.
-func TestSlogCaptureGlobalFunnel_SymbolSentinel(t *testing.T) {
+// TestSlogCaptureGlobalFunnel_StdlibSymbolSentinel locks the banned-symbol
+// identity against stdlib drift. The banned surface is stdlib log/slog.SetDefault
+// (this repo cannot rename it); but if a future Go release renamed/removed it, the
+// IsCallToPkgFunc / info.Uses predicates would silently stop firing and the funnel
+// would become a no-op. This sentinel walks loaded package scopes and fails if
+// log/slog.SetDefault is no longer a function — pointing the reviewer here to
+// update slogFunnelSetDefaultFunc / the detector if the stdlib shape changed.
+//
+// (Threat-model note per ai-robust.md: the prior wrapper-based rule's sentinel
+// guarded a PROJECT-symbol rename; sealing the stdlib primitive shifts the
+// residual drift axis to stdlib API change.)
+func TestSlogCaptureGlobalFunnel_StdlibSymbolSentinel(t *testing.T) {
 	t.Parallel()
 
 	found := false
@@ -443,10 +441,10 @@ func TestSlogCaptureGlobalFunnel_SymbolSentinel(t *testing.T) {
 			return nil
 		}
 		for _, imp := range p.Pkg.Imports() {
-			if imp.Path() != healthtestPkgPath {
+			if imp.Path() != slogFunnelStdlibPkgPath {
 				continue
 			}
-			if obj := imp.Scope().Lookup(newCaptureFuncName); obj != nil {
+			if obj := imp.Scope().Lookup(slogFunnelSetDefaultFunc); obj != nil {
 				if _, ok := obj.(*types.Func); ok {
 					found = true
 				}
@@ -458,10 +456,10 @@ func TestSlogCaptureGlobalFunnel_SymbolSentinel(t *testing.T) {
 	_ = Run(t, Typed(TypedOpts{Tests: true}, []string{"./..."}), scan)
 
 	assert.True(t, found,
-		"%s sentinel: healthtest.%s not found in any loaded scope — renamed/removed? "+
-			"This funnel silently stops guarding the global-slog test helper. Update "+
-			"newCaptureFuncName AND verify the SelectorExpr predicate covers the new name.",
-		ruleSlogCaptureGlobalFunnel01, newCaptureFuncName)
+		"%s sentinel: stdlib %s.%s not found as a function in any loaded scope — renamed/removed "+
+			"by the toolchain? This funnel silently stops guarding the global-slog primitive. Update "+
+			"slogFunnelSetDefaultFunc AND verify the IsCallToPkgFunc predicate covers the new shape.",
+		ruleSlogCaptureGlobalFunnel01, slogFunnelStdlibPkgPath, slogFunnelSetDefaultFunc)
 }
 
 func sortSlogCaptureViolations(v []slogCaptureFunnelViolation) {

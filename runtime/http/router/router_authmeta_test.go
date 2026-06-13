@@ -16,6 +16,7 @@ import (
 
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/internal/authtest"
 )
@@ -131,12 +132,11 @@ func TestFinalizeAuth_EmptyDeclaration_NoOp(t *testing.T) {
 // HealthListener and InternalListener routers must use this opt-out.
 // ---------------------------------------------------------------------------
 
-func captureSlogWarn(t *testing.T) (*bytes.Buffer, func()) {
+func captureSlogWarn(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	return &buf, func() { slog.SetDefault(prev) }
+	slogcapture.InstallDefault(t, slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	return &buf
 }
 
 // ---------------------------------------------------------------------------
@@ -272,8 +272,7 @@ func TestFinalizeAuth_RejectsNonAdminPathOnAdminListener(t *testing.T) {
 }
 
 func TestFinalizeAuth_NoVerifier_EmitsWarn_ByDefault(t *testing.T) {
-	buf, restore := captureSlogWarn(t)
-	defer restore()
+	buf := captureSlogWarn(t)
 
 	r := mustNew(clock.Real()) // no AuthMiddleware, no suppression
 	mustMountRoute(r, auth.Route{Contract: testHTTPContract("GET", "/healthz"), Handler: okHandler, Public: true})
@@ -284,8 +283,7 @@ func TestFinalizeAuth_NoVerifier_EmitsWarn_ByDefault(t *testing.T) {
 }
 
 func TestFinalizeAuth_NoVerifier_SuppressedWarn_NoOutput(t *testing.T) {
-	buf, restore := captureSlogWarn(t)
-	defer restore()
+	buf := captureSlogWarn(t)
 
 	// Mirrors how bootstrap wires HealthListener routers post-R2-11.
 	r, err := New(clock.Real(), WithSuppressNoAuthVerifierWarn())
@@ -507,10 +505,7 @@ func TestServeHTTP_NoMetas_NoFinalize_OK(t *testing.T) {
 func TestFinalizeAuth_NoVerifier_LogsWarning(t *testing.T) {
 	// Capture slog output via a JSON handler.
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	prev := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(prev)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 
 	r := mustNew(clock.Real()) // no WithAuthMiddleware
 	require.NoError(t, r.DeclareAuthMeta(kcell.AuthRouteMeta{Method: "GET", Path: "/public-route", Public: true}))

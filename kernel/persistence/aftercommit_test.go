@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 )
 
 // sentinelTx is a stand-in tx carrier used to verify RunAfterCommitHooks strips
@@ -168,9 +170,7 @@ func TestRunAfterCommitHooks_PanicLoggedAtWarn(t *testing.T) {
 	var buf bytes.Buffer
 	// Capture at Warn so the test fails if the panic log is dropped to a lower
 	// level (or raised to Error, which would also be wrong per observability.md).
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	defer slog.SetDefault(prev)
+	slogcapture.InstallDefault(t, slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 
 	ctx, _ := WithAfterCommitRegistry(context.Background())
 	RegisterAfterCommit(ctx, func(context.Context) { panic("boom") })

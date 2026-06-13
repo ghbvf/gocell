@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 )
 
 // mustMintDevice mints a sealed device principal through the sanctioned issuer
@@ -248,9 +249,7 @@ func TestSuperAdmin_EndToEnd_RowScopeAll_Audit(t *testing.T) {
 	require.NoError(t, err)
 
 	capture := &captureHandler{}
-	prev := slog.Default()
-	slog.SetDefault(slog.New(capture))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	slogcapture.InstallDefault(t, slog.New(capture))
 
 	tok, err := issuer.Issue(TokenIntentAccess, "super-alice", IssueOptions{
 		Roles:    []string{RoleSuperAdmin},

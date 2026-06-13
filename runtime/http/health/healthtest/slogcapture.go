@@ -11,11 +11,12 @@
 //     component under test (e.g. WithLogger); never touches slog.Default(), so
 //     it is safe under parallel + async log emission. Use this for component
 //     tests.
-//   - NewCapture: rewrites the process-global slog.Default(). Reserved for
-//     system-level tests that verify the bootstrapped system's default-logger
-//     wiring (runtime/bootstrap, cmd/corebundle). It races parallel siblings
-//     under async writes (#1490); SLOG-CAPTURE-GLOBAL-FUNNEL-01 funnels its
-//     callers to the sanctioned allowlist.
+//   - NewCapture: rewrites the process-global slog.Default() via the single
+//     sanctioned holder slogcapture.InstallDefault. For tests of components that
+//     read slog.Default() (e.g. default-logger wiring); it races parallel siblings
+//     under async writes (#1490), so a NewCapture test MUST stay serial (no
+//     t.Parallel). SLOG-CAPTURE-GLOBAL-FUNNEL-01 bans the raw slog.SetDefault
+//     primitive; NewCapture is compliant because it routes through InstallDefault.
 //
 // Note: runtime/http/health tests themselves (package health, white-box)
 // cannot import this package — that would create an import cycle. Those tests
@@ -28,6 +29,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 	"github.com/ghbvf/gocell/runtime/http/health"
 )
 
@@ -95,17 +97,16 @@ func NewLoggerCapture() (*slog.Logger, *CaptureHandler) {
 //
 // Construction is single-sourced from [NewLoggerCapture] (they cannot drift on
 // the handler/logger build); the ONLY thing NewCapture adds is the deliberate
-// process-global slog.SetDefault + t.Cleanup restoration. That global mutation
-// races parallel siblings under async log writes (#1490), so NewCapture is
-// reserved for system-level tests that verify the bootstrapped system's
-// slog.Default() wiring (runtime/bootstrap, cmd/corebundle). Component tests
-// MUST use NewLoggerCapture + injection — enforced by SLOG-CAPTURE-GLOBAL-FUNNEL-01.
+// process-global default redirect, which it performs through the single
+// sanctioned holder [slogcapture.InstallDefault] (NOT a raw slog.SetDefault, per
+// SLOG-CAPTURE-GLOBAL-FUNNEL-01). That global mutation races parallel siblings
+// under async log writes (#1490), so a NewCapture test MUST stay serial (no
+// t.Parallel) — it is for components that read slog.Default(). Components that
+// accept an injected logger MUST use NewLoggerCapture + injection instead.
 func NewCapture(t *testing.T) *CaptureHandler {
 	t.Helper()
 	logger, h := NewLoggerCapture()
-	prev := slog.Default()
-	slog.SetDefault(logger)
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	slogcapture.InstallDefault(t, logger)
 	return h
 }
 

@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 )
 
 func TestUnaryRecovery(t *testing.T) {
@@ -48,9 +49,7 @@ func assertUnaryRecoveryRedactsPanic(t *testing.T, info *grpc.UnaryServerInfo) {
 	t.Helper()
 
 	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
-	defer slog.SetDefault(prev)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 	resp, err := UnaryRecovery()(context.Background(), nil, info,
 		func(context.Context, any) (any, error) {
@@ -82,9 +81,7 @@ func assertUnaryRecoveryLogsRequestID(t *testing.T, info *grpc.UnaryServerInfo) 
 	t.Helper()
 
 	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
-	defer slog.SetDefault(prev)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 	ctx := ctxkeys.WithRequestID(context.Background(), "req-xyz")
 	_, _ = UnaryRecovery()(ctx, nil, info,

@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	khealthz "github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 )
 
 // TestNewRedactedErrorMsg_NilReturnsEmpty verifies the nil-input sentinel path.
@@ -154,9 +155,7 @@ func TestSlogDependencyEntry_LogValue(t *testing.T) {
 // not merely that the right attrs were injected.
 func TestLogDiagnostics_EmitsGroupWithSnakeCaseViaJSONHandler(t *testing.T) {
 	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-json", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Start(context.Background()))
@@ -298,9 +297,7 @@ func TestLogDiagnostics_PropagatesRequestCtx(t *testing.T) {
 // empty error_msg is "" — operators' grep patterns must match both.
 func TestLogDiagnostics_TextHandlerRoundTrip(t *testing.T) {
 	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	slogcapture.InstallDefault(t, slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-text", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Start(context.Background()))

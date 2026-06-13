@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 )
 
 // rowVisibilityTestCtx is a minimal derivation-only context for RowVisibility
@@ -205,9 +206,7 @@ func assertPrincipalRowVisibility(t *testing.T, ctx context.Context, tc rowVisib
 //	"reason" = "cross_tenant_read"
 func TestPrincipalRowVisibility_SuperAdminMandatoryAudit(t *testing.T) {
 	capture := &captureHandler{}
-	prev := slog.Default()
-	slog.SetDefault(slog.New(capture))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	slogcapture.InstallDefault(t, slog.New(capture))
 
 	ctx := rowVisibilityTestCtx()
 

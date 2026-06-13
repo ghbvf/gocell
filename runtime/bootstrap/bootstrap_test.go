@@ -36,6 +36,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
+	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -1060,10 +1062,7 @@ func TestWithHealthChecker_ValidationBeforeSideEffects(t *testing.T) {
 	// component starts (no assembly start, no config watcher, no rollback).
 	// Evidence: error returned directly (not wrapped by rollback log).
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-	oldDefault := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(oldDefault)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 	b := New(
 		clock.Real(),
@@ -3045,11 +3044,8 @@ func TestBootstrap_TracingE2E_InfraEndpoints(t *testing.T) {
 	// (and therefore no trace_id in their access logs). This reverses the
 	// pre-round-4 behavior where probe routes were traced by accident.
 	// High-frequency infra traffic no longer consumes span / metric budget.
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-	oldDefault := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(oldDefault)
+	buf := sloghelper.NewSyncBuffer()
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(buf, nil)))
 
 	ln := newLocalListener(t)
 	tracer := tracingtest.NewSimpleTracer("bootstrap-infra-e2e")

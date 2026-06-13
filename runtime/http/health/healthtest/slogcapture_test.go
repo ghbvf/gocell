@@ -55,10 +55,11 @@ func TestCaptureHandler_WithAttrsAndGroupReturnSelf(t *testing.T) {
 // installs the capture handler as slog default and t.Cleanup restores it.
 func TestNewCapture_RedirectsSlogDefaultAndRestoresOnCleanup(t *testing.T) {
 	prev := slog.Default()
-	// Defensive belt-and-suspenders: NewCapture's own t.Cleanup (run in the
-	// sub-test) already restores the default; this outer Cleanup guards the
-	// parent scope in case the sub-test or NewCapture stops restoring.
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	// No defensive outer restore is needed: NewCapture delegates the global
+	// mutation to slogcapture.InstallDefault, which single-sources the
+	// slog.SetDefault + t.Cleanup restore (independently covered by that
+	// package's own test). A raw slog.SetDefault here would also violate
+	// SLOG-CAPTURE-GLOBAL-FUNNEL-01 (healthtest is no longer allowlisted).
 
 	var capture *CaptureHandler
 	t.Run("sub", func(t *testing.T) {
