@@ -5,41 +5,30 @@ import (
 	"errors"
 	"testing"
 
-	prom "github.com/prometheus/client_golang/prometheus"
-	dto "github.com/prometheus/client_model/go"
-
-	promadapter "github.com/ghbvf/gocell/adapters/prometheus"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// buildTestMetrics is a test helper that builds a TransitMetrics using a
-// fresh Prometheus registry via promadapter.NewMetricProvider. It returns
-// both the registry (for scraping) and the constructed *TransitMetrics.
-// Use this when the test needs to scrape metric values from the registry.
-func buildTestMetrics(t *testing.T) (*prom.Registry, *TransitMetrics) {
+// buildTestMetrics is a test helper that builds a TransitMetrics using an
+// adapter-local recordingProvider (no adapters/prometheus import; #1909).
+// It returns both the provider (for scraping) and the constructed *TransitMetrics.
+// Use this when the test needs to read back metric values.
+func buildTestMetrics(t *testing.T) (*recordingProvider, *TransitMetrics) {
 	t.Helper()
-	reg := prom.NewRegistry()
-	provider, err := promadapter.NewMetricProvider(promadapter.MetricProviderConfig{
-		Registry:  reg,
-		Namespace: "gocell",
-	})
-	if err != nil {
-		t.Fatalf("NewMetricProvider: %v", err)
-	}
-	m, err := NewTransitMetrics(provider)
+	rec := newRecordingProvider("gocell")
+	m, err := NewTransitMetrics(rec)
 	if err != nil {
 		t.Fatalf("NewTransitMetrics: %v", err)
 	}
 	if m == nil {
 		t.Fatal("NewTransitMetrics returned nil metrics on success")
 	}
-	return reg, m
+	return rec, m
 }
 
 // newTestTransitMetrics is a test helper that builds a TransitMetrics using a
-// fresh Prometheus registry. Use this when the test only needs a valid
-// *TransitMetrics and does not need to scrape metric values from the registry.
+// fresh recordingProvider. Use this when the test only needs a valid
+// *TransitMetrics and does not need to read back metric values.
 func newTestTransitMetrics(t *testing.T) *TransitMetrics {
 	t.Helper()
 	_, m := buildTestMetrics(t)
@@ -70,16 +59,12 @@ func TestNewTransitMetrics_NilProvider_ReturnsError(t *testing.T) {
 }
 
 func TestNewTransitMetrics_RegistersAllCollectors(t *testing.T) {
-	reg, m := buildTestMetrics(t)
+	rec, m := buildTestMetrics(t)
 
-	// Seed loginOutcome so its CounterVec family appears in Gather() (CounterVec
-	// families are absent until at least one labeled child is observed).
+	// All families are registered at NewTransitMetrics construction (the fake
+	// records the family name in CounterVec/GaugeVec); this call additionally
+	// exercises the labeled counter path.
 	m.recordLoginOutcome(context.Background(), "token", "success", "none")
-
-	families, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("registry Gather: %v", err)
-	}
 
 	want := []string{
 		"gocell_vault_token_renew_success_total",
@@ -88,26 +73,22 @@ func TestNewTransitMetrics_RegistersAllCollectors(t *testing.T) {
 		"gocell_vault_auth_login_total",
 		"gocell_vault_cached_key_version",
 	}
-	got := make(map[string]bool, len(families))
-	for _, f := range families {
-		got[f.GetName()] = true
-	}
 	for _, name := range want {
-		if !got[name] {
-			t.Errorf("expected metric %q to be registered; got families %v", name, got)
+		if !rec.registered(name) {
+			t.Errorf("expected metric %q to be registered", name)
 		}
 	}
 
 	// authHealthy must default to 0 (worker transitions 0→1 after start);
 	// constructing TransitMetrics without ever starting a renewal worker
 	// must not produce a false-green healthy signal.
-	if got := scrapeGauge(t, reg, "gocell_vault_token_auth_healthy"); got != 0 {
+	if got := scrapeGauge(t, rec, "gocell_vault_token_auth_healthy"); got != 0 {
 		t.Errorf("authHealthy at construction = %v, want 0 (worker starts at 0; transitions to 1 only after Start)", got)
 	}
 }
 
 func TestTransitMetrics_StoreCachedVersion_GaugeReflectsValue(t *testing.T) {
-	reg, m := buildTestMetrics(t)
+	rec, m := buildTestMetrics(t)
 
 	cases := []struct {
 		name string
@@ -125,7 +106,7 @@ func TestTransitMetrics_StoreCachedVersion_GaugeReflectsValue(t *testing.T) {
 			if got := m.LoadCachedVersion(); got != tc.set {
 				t.Errorf("LoadCachedVersion = %d, want %d", got, tc.set)
 			}
-			if got := scrapeGauge(t, reg, "gocell_vault_cached_key_version"); got != float64(tc.set) {
+			if got := scrapeGauge(t, rec, "gocell_vault_cached_key_version"); got != float64(tc.set) {
 				t.Errorf("cached_key_version scrape = %v, want %v", got, float64(tc.set))
 			}
 		})
@@ -137,9 +118,9 @@ func TestTransitMetrics_StoreCachedVersion_GaugeReflectsValue(t *testing.T) {
 // replacement" because the metric ownership lives at the registry scope, not
 // at provider scope. We do not need a real TransitKeyProvider — incrementing
 // the metric set directly models exactly the writes that the worker performs,
-// and the registry observation is the same shape as a Prometheus scrape.
+// and the recorded observation is the same shape as a Prometheus scrape.
 func TestTransitMetrics_CountersAccumulateAcrossProviderReplacement(t *testing.T) {
-	reg, m := buildTestMetrics(t)
+	rec, m := buildTestMetrics(t)
 	ctx := context.Background()
 
 	// Provider A activity.
@@ -159,20 +140,20 @@ func TestTransitMetrics_CountersAccumulateAcrossProviderReplacement(t *testing.T
 	m.recordLoginOutcome(ctx, "approle", "failure", "transient")
 	m.StoreCachedVersion(9)
 
-	if got := scrapeCounter(t, reg, "gocell_vault_token_renew_success_total"); got != 5 {
+	if got := scrapeCounter(t, rec, "gocell_vault_token_renew_success_total"); got != 5 {
 		t.Errorf("token_renew_success_total = %v, want 5 (cumulative across provider replacement)", got)
 	}
-	if got := scrapeCounter(t, reg, "gocell_vault_token_renew_failure_total"); got != 1 {
+	if got := scrapeCounter(t, rec, "gocell_vault_token_renew_failure_total"); got != 1 {
 		t.Errorf("token_renew_failure_total = %v, want 1", got)
 	}
-	if got := scrapeGauge(t, reg, "gocell_vault_cached_key_version"); got != 9 {
+	if got := scrapeGauge(t, rec, "gocell_vault_cached_key_version"); got != 9 {
 		t.Errorf("cached_key_version = %v, want 9 (latest set wins)", got)
 	}
 
 	// loginOutcome CounterVec by label set.
 	const metric = "gocell_vault_auth_login_total"
-	successVal := scrapeCounterVec(t, reg, metric, map[string]string{"method": "approle", "result": "success", "reason": "none"})
-	failureVal := scrapeCounterVec(t, reg, metric, map[string]string{"method": "approle", "result": "failure", "reason": "transient"})
+	successVal := scrapeCounterVec(t, rec, metric, map[string]string{"method": "approle", "result": "success", "reason": "none"})
+	failureVal := scrapeCounterVec(t, rec, metric, map[string]string{"method": "approle", "result": "failure", "reason": "transient"})
 	if successVal != 2 {
 		t.Errorf("auth_login_total{success} = %v, want 2", successVal)
 	}
@@ -183,27 +164,20 @@ func TestTransitMetrics_CountersAccumulateAcrossProviderReplacement(t *testing.T
 
 // TestNewTransitMetrics_ReuseOnDuplicateProvider is the regression lock for the
 // reconstruction-safety fix: calling NewTransitMetrics twice on the SAME
-// MetricProvider must (a) succeed without error and (b) NOT clobber the
-// registry-observable state a running worker already wrote through the first
-// instance. Construction performs no explicit Set(0); GaugeVec/CounterVec reuse
-// the registered collectors, so counters accumulate and gauges retain their
-// last-written value across a composition rebuild (Module().Provide re-run).
+// recordingProvider must (a) succeed without error and (b) NOT clobber the
+// observable state a running worker already wrote through the first instance.
+// Construction performs no explicit Set(0); GaugeVec/CounterVec reuse the same
+// sample entries, so counters accumulate and gauges retain their last-written
+// value across a composition rebuild (Module().Provide re-run).
 //
 // If construction were to force point-in-time gauges back to 0, the asserts
 // below would catch it — proving the funnel preserves worker state across
 // reconstruction.
 func TestNewTransitMetrics_ReuseOnDuplicateProvider(t *testing.T) {
-	reg := prom.NewRegistry()
-	provider, err := promadapter.NewMetricProvider(promadapter.MetricProviderConfig{
-		Registry:  reg,
-		Namespace: "gocell",
-	})
-	if err != nil {
-		t.Fatalf("NewMetricProvider: %v", err)
-	}
+	rec := newRecordingProvider("gocell")
 	ctx := context.Background()
 
-	m1, err := NewTransitMetrics(provider)
+	m1, err := NewTransitMetrics(rec)
 	if err != nil {
 		t.Fatalf("first NewTransitMetrics: %v", err)
 	}
@@ -218,7 +192,7 @@ func TestNewTransitMetrics_ReuseOnDuplicateProvider(t *testing.T) {
 
 	// Reconstruct on the SAME provider (models a composition rebuild re-running
 	// Module().Provide). This must be non-destructive to the state above.
-	m2, err := NewTransitMetrics(provider)
+	m2, err := NewTransitMetrics(rec)
 	if err != nil {
 		t.Fatalf("second NewTransitMetrics on same provider: %v", err)
 	}
@@ -226,169 +200,142 @@ func TestNewTransitMetrics_ReuseOnDuplicateProvider(t *testing.T) {
 		t.Fatal("expected non-nil *TransitMetrics from both calls")
 	}
 
-	if got := scrapeGauge(t, reg, "gocell_vault_token_auth_healthy"); got != 1 {
+	if got := scrapeGauge(t, rec, "gocell_vault_token_auth_healthy"); got != 1 {
 		t.Errorf("authHealthy after reconstruction = %v, want 1 (reconstruction must not clobber a healthy worker's gauge back to 0)", got)
 	}
-	if got := scrapeGauge(t, reg, "gocell_vault_cached_key_version"); got != 7 {
+	if got := scrapeGauge(t, rec, "gocell_vault_cached_key_version"); got != 7 {
 		t.Errorf("cached_key_version after reconstruction = %v, want 7 (gauge is the durable point-in-time value)", got)
 	}
-	if got := scrapeCounter(t, reg, "gocell_vault_token_renew_success_total"); got != 2 {
+	if got := scrapeCounter(t, rec, "gocell_vault_token_renew_success_total"); got != 2 {
 		t.Errorf("token_renew_success_total after reconstruction = %v, want 2 (counters accumulate, never reset)", got)
 	}
-	if got := scrapeCounterVec(t, reg, "gocell_vault_auth_login_total",
+	if got := scrapeCounterVec(t, rec, "gocell_vault_auth_login_total",
 		map[string]string{"method": "approle", "result": "success", "reason": "none"}); got != 1 {
 		t.Errorf("auth_login_total{approle,success} after reconstruction = %v, want 1", got)
 	}
 }
 
-// scrapeCounter returns the value of a Counter family by metric name.
-func scrapeCounter(t *testing.T, reg *prom.Registry, name string) float64 {
+// scrapeCounter returns the recorded value of a Counter family by metric name.
+func scrapeCounter(t *testing.T, rec *recordingProvider, name string) float64 {
 	t.Helper()
-	families, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("registry Gather: %v", err)
+	v, ok := rec.value(name, nil)
+	if !ok {
+		t.Fatalf("counter %q not found", name)
 	}
-	for _, f := range families {
-		if f.GetName() != name {
-			continue
-		}
-		metrics := f.GetMetric()
-		if len(metrics) == 0 {
-			t.Fatalf("counter %q registered but has no samples", name)
-		}
-		return metrics[0].GetCounter().GetValue()
-	}
-	t.Fatalf("counter %q not found; available: %v", name, familyNames(families))
-	return 0
+	return v
 }
 
-// scrapeGauge returns the value of a single-sample Gauge / GaugeFunc family
-// by metric name.
-func scrapeGauge(t *testing.T, reg *prom.Registry, name string) float64 {
+// scrapeGauge returns the recorded value of a Gauge family by metric name.
+func scrapeGauge(t *testing.T, rec *recordingProvider, name string) float64 {
 	t.Helper()
-	families, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("registry Gather: %v", err)
+	v, ok := rec.value(name, nil)
+	if !ok {
+		t.Fatalf("gauge %q not found", name)
 	}
-	for _, f := range families {
-		if f.GetName() != name {
-			continue
-		}
-		metrics := f.GetMetric()
-		if len(metrics) == 0 {
-			t.Fatalf("gauge %q registered but has no samples", name)
-		}
-		return metrics[0].GetGauge().GetValue()
-	}
-	t.Fatalf("gauge %q not found; available: %v", name, familyNames(families))
-	return 0
+	return v
 }
 
-// scrapeCounterVec returns the value of a CounterVec sample matching the given
-// label set exactly. Fatals if the family exists but the label set is not found.
-// Fatals if the family does not exist (use tryGatherCounterVec for polling loops).
-// name is kept explicit for parity with scrapeCounter/scrapeGauge and call-site
-// readability even though vault exposes a single CounterVec today.
+// scrapeCounterVec returns the recorded value of a CounterVec sample matching the
+// given label set exactly. Fatals if the label set is not found.
 //
 //nolint:unparam // metric name parameterised for parity with scrapeCounter/scrapeGauge
-func scrapeCounterVec(t *testing.T, reg *prom.Registry, name string, labels map[string]string) float64 {
+func scrapeCounterVec(t *testing.T, rec *recordingProvider, name string, labels map[string]string) float64 {
 	t.Helper()
-	families, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("registry Gather: %v", err)
-	}
-	for _, f := range families {
-		if f.GetName() != name {
-			continue
-		}
-		for _, m := range f.GetMetric() {
-			if matchLabels(m.GetLabel(), labels) {
-				return m.GetCounter().GetValue()
-			}
-		}
+	v, ok := rec.value(name, labels)
+	if !ok {
 		t.Fatalf("counter vec %q has no sample with labels %v", name, labels)
 	}
-	t.Fatalf("counter vec %q not found; available: %v", name, familyNames(families))
-	return 0
-}
-
-// tryGatherCounterVec is like scrapeCounterVec but returns 0 (no fatal) when
-// the metric family or label set is not yet present. Use this in polling
-// condition lambdas where the metric may not exist on the first few polls.
-func tryGatherCounterVec(reg *prom.Registry, name string, labels map[string]string) float64 {
-	families, err := reg.Gather()
-	if err != nil {
-		return 0
-	}
-	for _, f := range families {
-		if f.GetName() != name {
-			continue
-		}
-		for _, m := range f.GetMetric() {
-			if matchLabels(m.GetLabel(), labels) {
-				return m.GetCounter().GetValue()
-			}
-		}
-	}
-	return 0
-}
-
-// tryGatherGauge is like scrapeGauge but returns 0 (no fatal) when the metric
-// family is not yet present. Use this in polling condition lambdas.
-func tryGatherGauge(reg *prom.Registry, name string) float64 {
-	families, err := reg.Gather()
-	if err != nil {
-		return 0
-	}
-	for _, f := range families {
-		if f.GetName() != name {
-			continue
-		}
-		m := f.GetMetric()
-		if len(m) == 0 {
-			return 0
-		}
-		return m[0].GetGauge().GetValue()
-	}
-	return 0
+	return v
 }
 
 // tryGatherCounter is like scrapeCounter but returns 0 (no fatal) when the
 // metric family is not yet present. Use this in polling condition lambdas.
-func tryGatherCounter(reg *prom.Registry, name string) float64 {
-	families, err := reg.Gather()
+func tryGatherCounter(rec *recordingProvider, name string) float64 {
+	v, _ := rec.value(name, nil)
+	return v
+}
+
+// tryGatherGauge is like scrapeGauge but returns 0 (no fatal) when the metric
+// family is not yet present. Use this in polling condition lambdas.
+func tryGatherGauge(rec *recordingProvider, name string) float64 {
+	v, _ := rec.value(name, nil)
+	return v
+}
+
+// tryGatherCounterVec is like scrapeCounterVec but returns 0 (no fatal) when the
+// metric family or label set is not yet present. Use this in polling condition lambdas.
+func tryGatherCounterVec(rec *recordingProvider, name string, labels map[string]string) float64 {
+	v, _ := rec.value(name, labels)
+	return v
+}
+
+// TestRecordingProvider_With_RejectsMismatchedLabels asserts the adapter-local
+// recording fake enforces the same label-set contract as every real Provider:
+// Vec.With panics (wrapping metrics.ErrLabelMismatch) when the supplied labels do
+// not exactly cover the registered LabelNames. Without this, a test could pass
+// despite label drift the production Prometheus/OTel Provider would reject.
+func TestRecordingProvider_With_RejectsMismatchedLabels(t *testing.T) {
+	// A non-"gocell" namespace also exercises the fake's namespace-agnostic
+	// prefixing (the production callers above all use "gocell").
+	rec := newRecordingProvider("test")
+	cv, err := rec.CounterVec(metrics.CounterOpts{
+		Name:       "labeled_total",
+		LabelNames: []string{"method", "result"},
+	})
 	if err != nil {
-		return 0
+		t.Fatalf("CounterVec: %v", err)
 	}
-	for _, f := range families {
-		if f.GetName() != name {
-			continue
-		}
-		m := f.GetMetric()
-		if len(m) == 0 {
-			return 0
-		}
-		return m[0].GetCounter().GetValue()
+	gv, err := rec.GaugeVec(metrics.GaugeOpts{
+		Name:       "labeled_gauge",
+		LabelNames: []string{"zone"},
+	})
+	if err != nil {
+		t.Fatalf("GaugeVec: %v", err)
 	}
-	return 0
+
+	cases := []struct {
+		name string
+		call func()
+	}{
+		{"counter missing key", func() { cv.With(metrics.Labels{"method": "token"}) }},
+		{"counter extra key", func() { cv.With(metrics.Labels{"method": "t", "result": "ok", "x": "y"}) }},
+		{"counter wrong key", func() { cv.With(metrics.Labels{"method": "t", "reason": "x"}) }},
+		{"gauge missing labels", func() { gv.With(metrics.Labels{}) }},
+		{"gauge wrong key", func() { gv.With(metrics.Labels{"region": "us"}) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Fatal("expected With to panic on label mismatch, got none")
+				}
+				rerr, ok := r.(error)
+				if !ok || !errors.Is(rerr, metrics.ErrLabelMismatch) {
+					t.Fatalf("panic = %v, want a value wrapping metrics.ErrLabelMismatch", r)
+				}
+			}()
+			tc.call()
+		})
+	}
 }
 
-func matchLabels(pairs []*dto.LabelPair, want map[string]string) bool {
-	if len(pairs) != len(want) {
-		return false
+// TestRecordingProvider_With_AcceptsMatchingLabels is the anti-vacuity companion:
+// the exact registered label set must NOT panic and must record through, proving
+// the validation in TestRecordingProvider_With_RejectsMismatchedLabels rejects
+// only genuine mismatches.
+func TestRecordingProvider_With_AcceptsMatchingLabels(t *testing.T) {
+	rec := newRecordingProvider("test")
+	cv, err := rec.CounterVec(metrics.CounterOpts{
+		Name:       "labeled_total",
+		LabelNames: []string{"method", "result"},
+	})
+	if err != nil {
+		t.Fatalf("CounterVec: %v", err)
 	}
-	for _, p := range pairs {
-		if want[p.GetName()] != p.GetValue() {
-			return false
-		}
+	cv.With(metrics.Labels{"method": "token", "result": "ok"}).Inc(context.Background())
+	if got := scrapeCounterVec(t, rec, "test_labeled_total",
+		map[string]string{"method": "token", "result": "ok"}); got != 1 {
+		t.Fatalf("recorded = %v, want 1", got)
 	}
-	return true
-}
-
-func familyNames(families []*dto.MetricFamily) []string {
-	names := make([]string, 0, len(families))
-	for _, f := range families {
-		names = append(names, f.GetName())
-	}
-	return names
 }

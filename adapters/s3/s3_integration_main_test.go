@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/tests/testutil"
+	"github.com/ghbvf/gocell/tests/testutil/minioctr"
 )
 
 // Package-shared MinIO container for integration tests that do NOT need
@@ -40,7 +41,7 @@ func sharedMinIOContainer(t *testing.T) *tcminio.MinioContainer {
 	testutil.RequireDocker(t)
 	sharedCtrOnce.Do(func() {
 		ctx := context.Background()
-		ctr, runErr := tcminio.Run(ctx, testutil.MinIOImage, testutil.MinIORunOptions()...)
+		ctr, runErr := tcminio.Run(ctx, testutil.MinIOImage, minioctr.MinIORunOptions()...)
 		if ctr != nil {
 			sharedCtr = ctr // keep ref for TestMain Terminate even if subsequent steps fail
 		}

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ghbvf/gocell/tests/testutil"
+	"github.com/ghbvf/gocell/tests/testutil/rabbitmqctr"
 )
 
 // Shared broker lifecycle for the rabbitmq integration package.
@@ -41,7 +41,7 @@ func sharedBrokerURL(t *testing.T) string {
 
 	sharedBrokerOnce.Do(func() {
 		ctx := context.Background()
-		container, err := testutil.StartRabbitMQContainerE(t, ctx)
+		container, err := rabbitmqctr.StartRabbitMQContainerE(t, ctx)
 		if err != nil {
 			sharedBrokerInitErr = fmt.Errorf("start shared rabbitmq container: %w", err)
 			return

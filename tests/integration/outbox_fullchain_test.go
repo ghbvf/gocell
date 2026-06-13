@@ -31,6 +31,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/tests/testutil"
+	"github.com/ghbvf/gocell/tests/testutil/rabbitmqctr"
 )
 
 const (
@@ -66,6 +67,11 @@ func setupPostgresContainer(t *testing.T) (*postgres.Pool, func()) {
 				WithOccurrence(2).WithStartupTimeout(testtime.CtxLong),
 		),
 	)
+	// Partial start: Run can return a non-nil container alongside an error;
+	// terminate the orphan before require.NoError aborts the test.
+	if err != nil && container != nil {
+		_ = container.Terminate(ctx)
+	}
 	require.NoError(t, err, "start postgres container")
 
 	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
@@ -88,7 +94,7 @@ func setupRabbitMQContainer(t *testing.T) (*rabbitmq.Connection, func()) {
 
 	ctx := context.Background()
 
-	container := testutil.StartRabbitMQContainer(t, ctx)
+	container := rabbitmqctr.StartRabbitMQContainer(t, ctx)
 
 	amqpURL, err := container.AmqpURL(ctx)
 	require.NoError(t, err, "get rabbitmq amqp url")
@@ -118,6 +124,11 @@ func setupRedisContainer(t *testing.T) (*redis.Client, func()) {
 	ctx := context.Background()
 
 	container, err := tcredis.Run(ctx, testutil.RedisImage)
+	// Partial start: Run can return a non-nil container alongside an error;
+	// terminate the orphan before require.NoError aborts the test.
+	if err != nil && container != nil {
+		_ = container.Terminate(ctx)
+	}
 	require.NoError(t, err, "start redis container")
 
 	connStr, err := container.ConnectionString(ctx)

@@ -15,37 +15,32 @@
 // # AI-robust grade: Medium
 //
 // Downstream Medium: type-aware CallExpr scan via ResolvePackageRef detects
-// every call regardless of import alias; CI fails loud on any new role-literal
-// gate in a non-allowlisted file. The rule is NOT Hard because auth.AnyRole
-// must remain callable by the allowlisted cells until PR-10b: the constraint
-// cannot be expressed as a compile error while the migration is in progress.
+// every call regardless of import alias; CI fails loud on any role-literal gate
+// in any corecells business handler. The rule is NOT Hard because auth.AnyRole /
+// auth.SelfOr remain callable (examples still use them pending PR-10d) so the
+// constraint cannot be expressed as a compile error — a corecells handler can
+// still type-check while calling them; only the typed scan rejects it.
 //
-// Upstream funnel: the allowlist is a migration ledger (see below). PR-10b
-// shrinks it to empty, at which point the rule becomes a zero-allowlist Hard
-// target (codegen-derived gate + golden per Hard 范本 "codegen funnel +
-// golden"). Hard-ification end state: permission declared in contract.yaml →
-// cellgen-derived gate + golden (tracked for PR-10b / PR-13).
+// Upstream funnel: the allowlist is a migration ledger, now DRAINED to empty by
+// PR-10c — the rule is a zero-exception scan over all corecells handlers.
+// Hard-ification end state: permission declared in contract.yaml → cellgen-derived
+// gate + golden (Hard 范本 "codegen funnel + golden"), tracked for PR-13.
 //
 // Funnel 双向锁评级 (ai-robust.md §"Funnel 双向锁评级"):
 //
 //	下游 Medium — archtest typed callsite scan, fail-loud in CI;
 //	  alias-safe (ResolvePackageRef resolves the import path, not the local name).
-//	上游 Medium — allowlist convergence: each PR-10x migrates remaining cells to
-//	  auth.RequirePermission(pkg/authz.Permission) and deletes its entries here
-//	  (PR-10a auditquery, PR-10b configcore done; PR-10c accesscore pending).
+//	上游 — allowlist convergence COMPLETE: PR-10a auditquery, PR-10b configcore,
+//	  PR-10c accesscore all migrated to auth.RequirePermission /
+//	  auth.RequirePermissionOrSelf; the allowlist is empty.
 //	Hard-ification tracker: permission-gate codegen funnel → gh #PR-13.
 //
-// # Allowlist
+// # Allowlist (empty)
 //
-// The 3 files below legitimately still use role-literal gates pending PR-10c
-// (accesscore — they carry SelfOr ownership gates needing custom policy funcs).
-// auditquery (PR-10a) and the 5 configcore slices (PR-10b, #1348) are NOT
-// allowlisted — they were migrated to auth.RequirePermission(authz.Perm*) and
-// must not regress.
-//
-// To migrate a file: replace every auth.AnyRole/SelfOr/RequireAnyRole call
-// with auth.RequirePermission(authz.Perm*), declare the permission in
-// contract.yaml, remove the entry below, and confirm this test stays GREEN.
+// The migration ledger is EMPTY as of PR-10c (#1348): every corecells business
+// handler (auditquery, the 5 configcore slices, the 3 accesscore slices) uses a
+// permission gate and must not regress. Any auth.AnyRole/SelfOr/RequireAnyRole
+// call in a corecells handler is now an unconditional violation.
 //
 // # Blind spots
 //
@@ -58,11 +53,10 @@
 //     ResolvePackageRef normalises the import path — this IS covered.
 //
 // Reverse self-check: TestPermissionBasedAuthz_ReverseFixture asserts the scan
-// fires on testdata/permission_based_authz_red, proving the rule is not vacuous.
-// The allowlist itself is doubly guarded: TestPermissionBasedAuthzAllowlist_Ceiling
-// freezes it to an exact set (no silent grow/swap — cheap, runs PR-time), and
-// TestPermissionBasedAuthz_01 flags any allowlist entry with no live gate as STALE
-// (no dead bypass slot — typed scan, nightly).
+// fires on testdata/permission_based_authz_red, proving the rule is not vacuous —
+// the only anti-vacuity needed now that the allowlist is empty (with no
+// allowlisted files, the production scan over ./corecells/... is itself non-vacuous
+// only if it can detect a violation, which the reverse fixture confirms).
 package archtest
 
 import (
@@ -85,31 +79,20 @@ var permissionBasedAuthzRoleGateSelectors = map[string]struct{}{
 	"RequireAnyRole": {},
 }
 
-// permissionBasedAuthzAllowlist is the migration ledger: handler files that
-// still legitimately call role-literal gates pending their PR-10x migration.
-// Paths are module-relative slash paths (p.Rel values from the corecells module).
-// auditquery (PR-10a) and the 5 configcore slices (PR-10b) are deliberately
-// absent — they were migrated to auth.RequirePermission and must not regress.
-// Only the 3 accesscore slices remain, pending PR-10c (they carry SelfOr
-// ownership gates needing custom policy funcs).
-var permissionBasedAuthzAllowlist = map[string]struct{}{
-	"corecells/accesscore/slices/policymanage/handler.go":   {},
-	"corecells/accesscore/slices/identitymanage/handler.go": {},
-	"corecells/accesscore/slices/rbaccheck/handler.go":      {},
-}
-
-// expectedPermissionBasedAuthzAllowlist is the FROZEN exact-set expectation for
-// permissionBasedAuthzAllowlist. TestPermissionBasedAuthzAllowlist_Ceiling asserts
-// the live allowlist equals this set, so a silent SWAP (replace one accesscore path
-// with a new exception) or GROW fails CI even though len is unchanged — a bare len
-// ceiling cannot catch a swap. Each PR-10x drain (PR-10c removes the 3 accesscore
-// entries) MUST update BOTH maps in the same PR; that forced, explicit edit is the
-// guard (golden-like freeze), not redundancy.
-var expectedPermissionBasedAuthzAllowlist = map[string]struct{}{
-	"corecells/accesscore/slices/policymanage/handler.go":   {},
-	"corecells/accesscore/slices/identitymanage/handler.go": {},
-	"corecells/accesscore/slices/rbaccheck/handler.go":      {},
-}
+// permissionBasedAuthzAllowlist is the migration ledger: handler files that still
+// legitimately call role-literal gates pending their PR-10x migration. Paths are
+// module-relative slash paths (p.Rel values from the corecells module).
+//
+// EMPTY as of PR-10c (#1348): auditquery (PR-10a), the 5 configcore slices
+// (PR-10b) and now the 3 accesscore slices (PR-10c) are all migrated to
+// auth.RequirePermission / auth.RequirePermissionOrSelf. With an empty allowlist
+// the rule is a ZERO-EXCEPTION scan: ANY auth.AnyRole/SelfOr/RequireAnyRole gate
+// in a corecells business handler is a violation. The exact-set freeze survives the
+// drain as TestPermissionBasedAuthzAllowlist_FrozenEmpty — now frozen at ∅ and run at
+// PR-time (in-memory, NO packages.Load) — so a re-grow is rejected at PR-merge rather
+// than left to reviewer vigilance (PR #1974 review F3). Hard-ification
+// (contract.yaml → cellgen gate + golden) is tracked for PR-13.
+var permissionBasedAuthzAllowlist = map[string]struct{}{}
 
 // scanPermissionBasedAuthzViolations scans a single file for role-literal
 // authorization gate calls. A non-allowlisted file with a banned gate yields a
@@ -147,30 +130,6 @@ func scanPermissionBasedAuthzViolations(p *Pass, f *ast.File, rel string, allowl
 		})
 	})
 	return out
-}
-
-// TestPermissionBasedAuthzAllowlist_Ceiling is the EXACT-SET FREEZE on the
-// migration allowlist: it asserts permissionBasedAuthzAllowlist equals the frozen
-// expectedPermissionBasedAuthzAllowlist. A bare len ceiling could not catch a SWAP
-// (replacing one accesscore path with a new configcore exception keeps len=3 and
-// silently suppresses a real PERMISSION-BASED-AUTHZ-01 violation); the exact-set
-// assertion makes any add / remove / swap fail loudly.
-//
-// This test is CHEAP (in-memory map compare, no packages.Load) and therefore runs
-// at PR-time via hack/verify-archtest-invariants.sh — allowlist tampering fails at
-// PR-merge, not only nightly. The live no-stale anti-vacuity (each allowlisted file
-// still carries a real gate) rides the heavier typed scan in
-// TestPermissionBasedAuthz_01 (nightly bucket).
-//
-// Migration intent: each PR-10x drain (PR-10c removes the 3 accesscore slices)
-// updates BOTH maps in the same PR; that forced, explicit edit is the point. When
-// the allowlist is empty both maps go to {} and the rule becomes a zero-allowlist
-// Hard target.
-func TestPermissionBasedAuthzAllowlist_Ceiling(t *testing.T) {
-	assert.Equal(t, expectedPermissionBasedAuthzAllowlist, permissionBasedAuthzAllowlist,
-		"permissionBasedAuthzAllowlist drifted from its frozen exact set — a new/removed/swapped entry "+
-			"must update expectedPermissionBasedAuthzAllowlist in the SAME PR (migrate handlers to "+
-			"auth.RequirePermission instead of adding exceptions; PR-10c drains the remaining 3)")
 }
 
 // TestPermissionBasedAuthz_01 enforces PERMISSION-BASED-AUTHZ-01 over
@@ -263,4 +222,24 @@ func TestPermissionBasedAuthz_ReverseFixture(t *testing.T) {
 		"reverse fixture: expected ≥1 diagnostic for the role-literal auth.AnyRole callsite "+
 			"in testdata/permission_based_authz_red — "+
 			rulePermissionBasedAuthz01+" must fire, else the rule is vacuous")
+}
+
+// TestPermissionBasedAuthzAllowlist_FrozenEmpty is the PR-time exact-set freeze on
+// the (drained) migration allowlist. It is a pure in-memory assertion (NO
+// packages.Load), so it is cheap enough for hack/verify-archtest-invariants.sh, and
+// it restores the PR-time protection the deleted TestPermissionBasedAuthzAllowlist_Ceiling
+// gave: with the allowlist at ∅ the freeze is "must stay empty", so a re-grow — a
+// handler re-added to silently exempt a re-introduced auth.AnyRole/SelfOr/RequireAnyRole
+// gate — fails at PR-merge, not only in the nightly whole-corecells scan
+// (TestPermissionBasedAuthz_01). Without this guard the rule's only PR-time presence
+// would be the non-vacuity reverse fixture, leaving allowlist re-growth to reviewer
+// vigilance alone (a Soft regression). PR #1974 review F3.
+func TestPermissionBasedAuthzAllowlist_FrozenEmpty(t *testing.T) {
+	t.Parallel()
+	assert.Empty(t, permissionBasedAuthzAllowlist,
+		"permissionBasedAuthzAllowlist must stay EMPTY (PR-10c drained it). Re-adding an entry "+
+			"silently re-opens a role-literal-gate exemption — migrate the handler to "+
+			"auth.RequirePermission(authz.Perm*) instead. If a future migration genuinely needs a "+
+			"temporary ledger, restore the exact-set freeze (frozen expected-set compare) alongside it "+
+			"so the allowlist still cannot grow/swap silently at PR-time")
 }

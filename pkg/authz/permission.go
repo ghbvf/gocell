@@ -101,6 +101,48 @@ func PermFlagRead() Permission { return permFlagRead }
 // create/update/toggle/delete).
 func PermFlagWrite() Permission { return permFlagWrite }
 
+// accesscore permissions (PR-10c #1348). Each mirrors the role-literal
+// auth.AnyRole(RoleAdmin) / auth.SelfOr("id", RoleAdmin) gate it replaces in the
+// accesscore policymanage / identitymanage / rbaccheck slices. Same
+// resource:action convention + accessor-func-over-private-singleton shape as the
+// configcore perms (reassignment is a compile error → Hard immutability). "write"
+// folds create/update/delete (plus lock/unlock/change-password for user) per the
+// AWS-IAM Write access-level grouping the prior uniform admin gate already implied.
+var (
+	permPolicyRead  = newPermission("policy:read")
+	permPolicyWrite = newPermission("policy:write")
+	permUserRead    = newPermission("user:read")
+	permUserWrite   = newPermission("user:write")
+	permRoleRead    = newPermission("role:read")
+)
+
+// PermPolicyRead authorizes reading ABAC policies (policymanage slice: GET
+// policies/{id}, GET policies). Migrated from auth.AnyRole(RoleAdmin) in PR-10c.
+func PermPolicyRead() Permission { return permPolicyRead }
+
+// PermPolicyWrite authorizes mutating ABAC policies (policymanage slice:
+// create/update/delete). Migrated from auth.AnyRole(RoleAdmin) in PR-10c.
+func PermPolicyWrite() Permission { return permPolicyWrite }
+
+// PermUserRead authorizes reading a user account (identitymanage slice: GET
+// users/{id}). The gate self-exempts a subject reading its OWN user via
+// auth.RequirePermissionOrSelf; non-self reads require this permission. Migrated
+// from auth.SelfOr("id", RoleAdmin) in PR-10c.
+func PermUserRead() Permission { return permUserRead }
+
+// PermUserWrite authorizes mutating a user account (identitymanage slice:
+// create/update/patch/delete/lock/unlock/change-password). "write" folds the
+// account-management verbs the prior admin/self gates already grouped; the
+// self-exempt verbs (update/patch/change-password) self-exempt at the gate.
+// Migrated from auth.AnyRole(RoleAdmin) / auth.SelfOr("id", RoleAdmin) in PR-10c.
+func PermUserWrite() Permission { return permUserWrite }
+
+// PermRoleRead authorizes reading a user's role assignments (rbaccheck slice:
+// GET roles/{userID}, GET roles/{userID}/{roleName}). The gate self-exempts a
+// subject reading its OWN roles via auth.RequirePermissionOrSelf. Migrated from
+// auth.SelfOr("userID", RoleAdmin) in PR-10c.
+func PermRoleRead() Permission { return permRoleRead }
+
 // allPermissions is the closed registry of every Permission that exists. It
 // backs Permissions() and lets tests pin the closed set (anti-vacuity: a new
 // perm* var that is not added here is caught by the registry test).
@@ -111,6 +153,11 @@ var allPermissions = []Permission{
 	permConfigPublish,
 	permFlagRead,
 	permFlagWrite,
+	permPolicyRead,
+	permPolicyWrite,
+	permUserRead,
+	permUserWrite,
+	permRoleRead,
 }
 
 // String returns the action spelling carried into a PDP and stored in policy

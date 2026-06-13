@@ -119,10 +119,14 @@ func setupWithIssuer(t testing.TB, issuer TokenIssuer) (http.Handler, *mem.UserR
 // request paths continue to read clearly in test tables.
 const identityPrefix = "/api/v1/access/users"
 
-// adminCtx returns a context carrying admin credentials for test requests.
+// adminCtx returns a request mutator that injects admin credentials and an
+// allow Authorizer into the request context. The Authorizer is required by
+// auth.RequirePermission (PDP gate) after the PR-10c migration from role-literal
+// to permission-based gates.
 func adminCtx() func(*http.Request) *http.Request {
 	return func(req *http.Request) *http.Request {
-		return req.WithContext(withTenant(auth.TestContext("admin-user", []string{"admin"})))
+		ctx := withAllowAuthorizer(withTenant(auth.TestContext("admin-user", []string{"admin"})))
+		return req.WithContext(ctx)
 	}
 }
 
@@ -171,23 +175,25 @@ func TestToUserResponseData_Fields(t *testing.T) {
 
 func TestHandler(t *testing.T) {
 	tests := []struct {
-		name       string
-		method     string
-		path       string
-		body       string
-		subject    string
-		roles      []string
-		wantStatus int
-		checkBody  func(t *testing.T, body []byte)
+		name          string
+		method        string
+		path          string
+		body          string
+		subject       string
+		roles         []string
+		useAuthorizer bool // inject allow Authorizer for admin PDP gate (PR-10c)
+		wantStatus    int
+		checkBody     func(t *testing.T, body []byte)
 	}{
 		{
-			name:       "POST / valid user returns 201",
-			method:     http.MethodPost,
-			path:       "/",
-			body:       `{"username":"alice","email":"a@b.com","password":"secret123"}`,
-			subject:    "admin-user",
-			roles:      []string{"admin"},
-			wantStatus: http.StatusCreated,
+			name:          "POST / valid user returns 201",
+			method:        http.MethodPost,
+			path:          "/",
+			body:          `{"username":"alice","email":"a@b.com","password":"secret123"}`,
+			subject:       "admin-user",
+			roles:         []string{"admin"},
+			useAuthorizer: true,
+			wantStatus:    http.StatusCreated,
 			checkBody: func(t *testing.T, body []byte) {
 				var resp map[string]json.RawMessage
 				require.NoError(t, json.Unmarshal(body, &resp))
@@ -205,29 +211,35 @@ func TestHandler(t *testing.T) {
 			},
 		},
 		{
-			name:       "POST / invalid body returns 400",
-			method:     http.MethodPost,
-			path:       "/",
-			body:       `{bad json`,
-			subject:    "admin-user",
-			roles:      []string{"admin"},
-			wantStatus: http.StatusBadRequest,
+			// PDP gate runs before JSON decode — admin needs allow Authorizer
+			// even for requests that would fail body validation.
+			name:          "POST / invalid body returns 400",
+			method:        http.MethodPost,
+			path:          "/",
+			body:          `{bad json`,
+			subject:       "admin-user",
+			roles:         []string{"admin"},
+			useAuthorizer: true,
+			wantStatus:    http.StatusBadRequest,
 		},
 		{
 			name:       "GET /{id} nonexistent returns 404",
 			method:     http.MethodGet,
 			path:       "/" + testutil.TestID("no-such-id"),
-			subject:    testutil.TestID("no-such-id"), // self-access
+			subject:    testutil.TestID("no-such-id"), // self-access, no Authorizer needed
 			wantStatus: http.StatusNotFound,
 		},
 		{
-			name:       "POST / unknown field returns 400",
-			method:     http.MethodPost,
-			path:       "/",
-			body:       `{"username":"alice","email":"a@b.com","password":"secret123","extra":"y"}`,
-			subject:    "admin-user",
-			roles:      []string{"admin"},
-			wantStatus: http.StatusBadRequest,
+			// PDP gate runs before schema validation — admin needs allow Authorizer
+			// even for requests that would fail unknown-field validation.
+			name:          "POST / unknown field returns 400",
+			method:        http.MethodPost,
+			path:          "/",
+			body:          `{"username":"alice","email":"a@b.com","password":"secret123","extra":"y"}`,
+			subject:       "admin-user",
+			roles:         []string{"admin"},
+			useAuthorizer: true,
+			wantStatus:    http.StatusBadRequest,
 		},
 		// Authorization tests (H1-2).
 		{
@@ -239,6 +251,7 @@ func TestHandler(t *testing.T) {
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
+			// Non-admin with no Authorizer → PDP fail-closed (403).
 			name:       "POST / non-admin returns 403",
 			method:     http.MethodPost,
 			path:       "/",
@@ -248,6 +261,8 @@ func TestHandler(t *testing.T) {
 			wantStatus: http.StatusForbidden,
 		},
 		{
+			// Self-access: RequirePermissionOrSelf short-circuits PDP when
+			// path param id == subject. No Authorizer needed.
 			name:       "GET /{id} self-access authz passes (user not found)",
 			method:     http.MethodGet,
 			path:       "/" + testutil.TestID("self-access-test"),
@@ -255,6 +270,7 @@ func TestHandler(t *testing.T) {
 			wantStatus: http.StatusNotFound, // authz passes (self), service returns 404
 		},
 		{
+			// Non-self, non-admin, no Authorizer → PDP fail-closed (403).
 			name:       "GET /{id} different user non-admin returns 403",
 			method:     http.MethodGet,
 			path:       "/" + testutil.TestID("user-1"),
@@ -270,23 +286,27 @@ func TestHandler(t *testing.T) {
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
+			// DELETE uses RequirePermission (not OrSelf), so self-access does NOT
+			// short-circuit — no Authorizer → PDP fail-closed (403).
 			name:       "DELETE /{id} non-admin returns 403",
 			method:     http.MethodDelete,
 			path:       "/" + testutil.TestID("user-1"),
-			subject:    testutil.TestID("user-1"), // even self cannot delete (admin check fires first)
+			subject:    testutil.TestID("user-1"),
 			wantStatus: http.StatusForbidden,
 		},
 		{
-			name:       "DELETE /{id} admin self-delete returns 409",
-			method:     http.MethodDelete,
-			path:       "/" + testutil.TestID("admin-1"),
-			subject:    testutil.TestID("admin-1"),
-			roles:      []string{"admin"},
-			wantStatus: http.StatusConflict,
+			// Admin + allow Authorizer passes PDP → self-delete guard fires (409).
+			name:          "DELETE /{id} admin self-delete returns 409",
+			method:        http.MethodDelete,
+			path:          "/" + testutil.TestID("admin-1"),
+			subject:       testutil.TestID("admin-1"),
+			roles:         []string{"admin"},
+			useAuthorizer: true,
+			wantStatus:    http.StatusConflict,
 		},
 		{
-			// Documents the check order: admin role check (403) fires before
-			// self-delete check (409). Non-admins cannot reach the self-delete guard.
+			// Non-admin viewer, no Authorizer → PDP fail-closed (403) before
+			// self-delete check (409). Same behavior as before (role gate → PDP gate).
 			name:       "DELETE /{id} non-admin self-delete still returns 403",
 			method:     http.MethodDelete,
 			path:       "/" + testutil.TestID("user-1"),
@@ -295,6 +315,7 @@ func TestHandler(t *testing.T) {
 			wantStatus: http.StatusForbidden,
 		},
 		{
+			// No Authorizer → PDP fail-closed (403).
 			name:       "POST /{id}/lock non-admin returns 403",
 			method:     http.MethodPost,
 			path:       "/" + testutil.TestID("user-1") + "/lock",
@@ -302,6 +323,7 @@ func TestHandler(t *testing.T) {
 			wantStatus: http.StatusForbidden,
 		},
 		{
+			// No Authorizer → PDP fail-closed (403).
 			name:       "POST /{id}/unlock non-admin returns 403",
 			method:     http.MethodPost,
 			path:       "/" + testutil.TestID("user-1") + "/unlock",
@@ -309,12 +331,14 @@ func TestHandler(t *testing.T) {
 			wantStatus: http.StatusForbidden,
 		},
 		{
-			name:       "GET /{id} invalid UUID returns 400",
-			method:     http.MethodGet,
-			path:       "/" + invalidUUID,
-			subject:    "admin-user",
-			roles:      []string{"admin"},
-			wantStatus: http.StatusBadRequest,
+			// Admin needs allow Authorizer; UUID validation fires after PDP gate.
+			name:          "GET /{id} invalid UUID returns 400",
+			method:        http.MethodGet,
+			path:          "/" + invalidUUID,
+			subject:       "admin-user",
+			roles:         []string{"admin"},
+			useAuthorizer: true,
+			wantStatus:    http.StatusBadRequest,
 			checkBody: func(t *testing.T, body []byte) {
 				var b struct {
 					Error struct {
@@ -342,7 +366,11 @@ func TestHandler(t *testing.T) {
 			}
 			req.Header.Set("Content-Type", "application/json")
 			if tc.subject != "" {
-				req = req.WithContext(withTenant(auth.TestContext(tc.subject, tc.roles)))
+				ctx := withTenant(auth.TestContext(tc.subject, tc.roles))
+				if tc.useAuthorizer {
+					ctx = withAllowAuthorizer(ctx)
+				}
+				req = req.WithContext(ctx)
 			}
 			w := httptest.NewRecorder()
 			r.ServeHTTP(w, req)
@@ -566,7 +594,9 @@ func TestHandler_ChangePassword_AdminOnAnotherUser_Allowed(t *testing.T) {
 	body := `{"oldPassword":"oldpass12","newPassword":"newpass12"}`
 	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("usr-target")+"/password", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(withTenant(auth.TestContext("admin-user", []string{"admin"})))
+	// Admin acting on another user (subject != id): RequirePermissionOrSelf falls
+	// through to RequirePermission — Authorizer is required (PR-10c #1348).
+	req = req.WithContext(withAllowAuthorizer(withTenant(auth.TestContext("admin-user", []string{"admin"}))))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -658,7 +688,7 @@ func TestHandler_Create_RequirePasswordResetField(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, identityPrefix,
 		strings.NewReader(`{"username":"flagged","email":"f@g.com","password":"pass1234","requirePasswordReset":true}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(withTenant(auth.TestContext("admin-user", []string{"admin"})))
+	req = req.WithContext(withAllowAuthorizer(withTenant(auth.TestContext("admin-user", []string{"admin"}))))
 	r.ServeHTTP(w, req)
 	require.Equal(t, http.StatusCreated, w.Code)
 
@@ -802,7 +832,7 @@ func TestHandler_Patch_RequirePasswordResetField(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, identityPrefix,
 		strings.NewReader(`{"username":"patchy","email":"p@y.com","password":"pass1234"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(withTenant(auth.TestContext("admin-user", []string{"admin"})))
+	req = req.WithContext(withAllowAuthorizer(withTenant(auth.TestContext("admin-user", []string{"admin"}))))
 	r.ServeHTTP(w, req)
 	require.Equal(t, http.StatusCreated, w.Code)
 
@@ -818,7 +848,7 @@ func TestHandler_Patch_RequirePasswordResetField(t *testing.T) {
 	req = httptest.NewRequest(http.MethodPatch, identityPrefix+"/"+created.Data.ID,
 		strings.NewReader(`{"requirePasswordReset":true}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(withTenant(auth.TestContext("admin-user", []string{"admin"})))
+	req = req.WithContext(withAllowAuthorizer(withTenant(auth.TestContext("admin-user", []string{"admin"}))))
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 
@@ -827,7 +857,7 @@ func TestHandler_Patch_RequirePasswordResetField(t *testing.T) {
 	req = httptest.NewRequest(http.MethodPatch, identityPrefix+"/"+created.Data.ID,
 		strings.NewReader(`{"requirePasswordReset":"yes"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(withTenant(auth.TestContext("admin-user", []string{"admin"})))
+	req = req.WithContext(withAllowAuthorizer(withTenant(auth.TestContext("admin-user", []string{"admin"}))))
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "ERR_VALIDATION_FAILED")

@@ -4,6 +4,7 @@ go 1.25.11
 
 require (
 	github.com/ghbvf/gocell v0.0.0
+	github.com/ghbvf/gocell/cellmodules v0.0.0
 	github.com/ghbvf/gocell/corecells v0.0.0-00010101000000-000000000000
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
@@ -69,7 +70,6 @@ require (
 	github.com/sethvargo/go-retry v0.3.0 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.3 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
-	github.com/testcontainers/testcontainers-go/modules/minio v0.42.0 // indirect
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
 	github.com/tklauser/numcpus v0.11.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
@@ -90,9 +90,17 @@ require (
 
 replace github.com/ghbvf/gocell => ../..
 
+replace github.com/ghbvf/gocell/cellmodules => ../../cellmodules
+
 replace github.com/ghbvf/gocell/corecells => ../../corecells
 
 replace github.com/ghbvf/gocell/adapters/adapterutil => ../../adapters/adapterutil
+
+replace github.com/ghbvf/gocell/adapters/prometheus => ../../adapters/prometheus
+
+replace github.com/ghbvf/gocell/adapters/ratelimit => ../../adapters/ratelimit
+
+replace github.com/ghbvf/gocell/adapters/vault => ../../adapters/vault
 
 replace github.com/ghbvf/gocell/adapters/postgres => ../../adapters/postgres
 
