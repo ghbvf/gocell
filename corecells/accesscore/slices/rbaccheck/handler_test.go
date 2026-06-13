@@ -146,12 +146,14 @@ func TestHandler(t *testing.T) {
 		wantStatus int
 		checkBody  func(t *testing.T, body []byte)
 	}{
-		// Self-access: subject == userID path param → gate short-circuits, NO Authorizer needed.
+		// Self-access: subject == userID path param → PDP baseline ownership rule fires.
+		// A wired Authorizer is required (#1977 Batch B: self is now PDP-decided).
 		{
 			name:       "GET /{userID} self-access returns roles with permissions",
 			path:       "/api/v1/access/roles/" + testutil.TestID("user-1"),
 			subject:    testutil.TestID("user-1"),
 			roles:      nil,
+			ctxFn:      withAllowAuthorizer,
 			wantStatus: http.StatusOK,
 			checkBody: func(t *testing.T, body []byte) {
 				var resp struct {
@@ -175,9 +177,10 @@ func TestHandler(t *testing.T) {
 			},
 		},
 		{
-			name:       "GET /{userID} self-access no roles returns empty",
-			path:       "/api/v1/access/roles/" + testutil.TestID("unknown-user"),
-			subject:    testutil.TestID("unknown-user"),
+			name:    "GET /{userID} self-access no roles returns empty",
+			path:    "/api/v1/access/roles/" + testutil.TestID("unknown-user"),
+			subject: testutil.TestID("unknown-user"),
+			ctxFn:   withAllowAuthorizer,
 			wantStatus: http.StatusOK,
 			checkBody: func(t *testing.T, body []byte) {
 				var resp struct {
@@ -191,6 +194,7 @@ func TestHandler(t *testing.T) {
 			name:       "GET /{userID}/{roleName} self-access has role",
 			path:       "/api/v1/access/roles/" + testutil.TestID("user-1") + "/admin",
 			subject:    testutil.TestID("user-1"),
+			ctxFn:      withAllowAuthorizer,
 			wantStatus: http.StatusOK,
 			checkBody: func(t *testing.T, body []byte) {
 				var resp struct {
@@ -206,6 +210,7 @@ func TestHandler(t *testing.T) {
 			name:       "GET /{userID}/{roleName} self-access missing role",
 			path:       "/api/v1/access/roles/" + testutil.TestID("user-1") + "/viewer",
 			subject:    testutil.TestID("user-1"),
+			ctxFn:      withAllowAuthorizer,
 			wantStatus: http.StatusOK,
 			checkBody: func(t *testing.T, body []byte) {
 				var resp struct {
@@ -300,11 +305,11 @@ func TestHandler(t *testing.T) {
 	}
 }
 
-// TestHandler_SelfExemptNoAuthorizer proves that param==subject short-circuits
-// the PDP gate without any Authorizer in context (self-exemption via
-// auth.RequirePermissionOrSelf). If an Authorizer were required for self-access
-// the request would return 403 (fail-closed), not 200.
-func TestHandler_SelfExemptNoAuthorizer(t *testing.T) {
+// TestHandler_SelfRequiresAuthorizer proves that param==subject now requires a
+// wired Authorizer (#1977 Batch B: self is PDP-decided via baseline ownership
+// rule subject.sub == resource.id; RequirePermissionOrSelf removed). Without a
+// wired Authorizer the gate fails closed (403), not 200.
+func TestHandler_SelfRequiresAuthorizer(t *testing.T) {
 	r := setup(t, query.RunModeDemo)
 	// Build a context with a subject and tenant but deliberately NO Authorizer.
 	ctx := testAuthContext(testutil.TestID("user-1"), nil)
@@ -313,8 +318,10 @@ func TestHandler_SelfExemptNoAuthorizer(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/roles/"+testutil.TestID("user-1"), nil)
 	req = req.WithContext(ctx)
 	r.ServeHTTP(w, req)
-	// Self-access must pass through without PDP consultation.
-	assert.Equal(t, http.StatusOK, w.Code)
+	// Without Authorizer, RequirePermissionForResource fails closed (403).
+	assert.Equal(t, http.StatusForbidden, w.Code,
+		"self-access without Authorizer must fail-closed (403) after #1977 Batch B; "+
+			"self is now PDP-decided, not a Go short-circuit")
 }
 
 func TestHandleList_ExceedsMaxLimit(t *testing.T) {
@@ -323,8 +330,9 @@ func TestHandleList_ExceedsMaxLimit(t *testing.T) {
 	// limit=501 exceeds the 500-item ceiling enforced by httputil.ParsePageParams
 	// (F4 absorb: generated handler routes cursor/limit through ParsePageParams,
 	// which returns ERR_PAGE_SIZE_EXCEEDED for limit > 500).
+	// Self-access requires a wired Authorizer (#1977 Batch B).
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/roles/"+testutil.TestID("user-1")+"?limit=501", nil)
-	req = req.WithContext(testAuthContext(testutil.TestID("user-1"), nil))
+	req = req.WithContext(withAllowAuthorizer(testAuthContext(testutil.TestID("user-1"), nil)))
 
 	r.ServeHTTP(w, req)
 
@@ -335,8 +343,9 @@ func TestHandleList_ExceedsMaxLimit(t *testing.T) {
 func TestHandler_ListRoles_ProdMode_InvalidCursor_Returns400(t *testing.T) {
 	r := setup(t, query.RunModeProd)
 	w := httptest.NewRecorder()
+	// Self-access requires a wired Authorizer (#1977 Batch B).
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/roles/"+testutil.TestID("user-1")+"?cursor=not-a-valid-cursor", nil)
-	req = req.WithContext(testAuthContext(testutil.TestID("user-1"), nil))
+	req = req.WithContext(withAllowAuthorizer(testAuthContext(testutil.TestID("user-1"), nil)))
 
 	r.ServeHTTP(w, req)
 
