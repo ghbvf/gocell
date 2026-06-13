@@ -1634,8 +1634,9 @@ func findDropRecord(records []slog.Record, msgSubstr string) *slog.Record {
 // when the broadcast drop path fires, the log record must be at slog.LevelError
 // and carry entry_id, aggregate_id, and event_type attributes.
 //
-// Uses healthtest.NewCapture (pkg/testutil/sloghelper-safe layer; no import
-// cycle: runtime/http/health/healthtest does not import runtime/eventbus).
+// Uses healthtest.NewLoggerCapture (de-globalized: injects a capture
+// *slog.Logger via WithLogger; no slog.SetDefault, so the bus's async log
+// emission cannot race a parallel sibling test's global handler — #1490).
 //
 // Strategy: inject a subscription directly into groupSubs with a pre-filled
 // channel (no goroutine draining it) so the drop is deterministic.
@@ -1645,9 +1646,9 @@ func findDropRecord(records []slog.Record, msgSubstr string) *slog.Record {
 // embedded in the published entry's Payload. Any future change that accidentally
 // adds slog.Any("payload", ...) or slog.Any("entry", ...) will fail this test.
 func TestBroadcast_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
-	cap := healthtest.NewCapture(t)
+	logger, cap := healthtest.NewLoggerCapture()
 
-	bus := New(clock.Real(), WithBufferSize(1))
+	bus := New(clock.Real(), WithBufferSize(1), WithLogger(logger))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	// Inject a subscription with a pre-filled channel directly.
@@ -1726,9 +1727,9 @@ func TestBroadcast_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 // payload — assertNoPayloadLeak verifies this using a unique sentinel marker
 // embedded in the published entry's Payload.
 func TestRoundRobin_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
-	cap := healthtest.NewCapture(t)
+	logger, cap := healthtest.NewLoggerCapture()
 
-	bus := New(clock.Real(), WithBufferSize(1))
+	bus := New(clock.Real(), WithBufferSize(1), WithLogger(logger))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	_, cancelSub := context.WithCancel(context.Background())
@@ -1807,9 +1808,9 @@ func TestRoundRobin_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 // the business payload — assertNoPayloadLeak verifies this using a unique
 // sentinel marker embedded in the published entry's Payload.
 func TestNotifyRetryExhausted_LogsErrorWithContextualFields(t *testing.T) {
-	cap := healthtest.NewCapture(t)
+	logger, cap := healthtest.NewLoggerCapture()
 
-	bus := New(clock.Real(), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16), WithLogger(logger))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	const topic = "retry.exhaust.fields.v1"

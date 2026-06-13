@@ -70,6 +70,30 @@ func TestNewCapture_RedirectsSlogDefaultAndRestoresOnCleanup(t *testing.T) {
 	assert.Same(t, prev, slog.Default(), "NewCapture t.Cleanup must restore prior default")
 }
 
+// TestNewLoggerCapture_DoesNotTouchSlogDefault verifies the de-globalized
+// helper: NewLoggerCapture returns a (*slog.Logger, *CaptureHandler) pair
+// whose logger records into the handler, WITHOUT mutating the process-global
+// slog.Default(). This is the isolation property that lets component tests
+// (e.g. eventbus.New(..., WithLogger(l))) capture async log emission without
+// racing parallel sibling tests' global handler (#1490) — the failure mode
+// NewCapture exhibits and SLOG-CAPTURE-GLOBAL-FUNNEL-01 funnels away from.
+func TestNewLoggerCapture_DoesNotTouchSlogDefault(t *testing.T) {
+	before := slog.Default()
+
+	logger, cap := NewLoggerCapture()
+	logger.Info("isolated", slog.String("k", "v"))
+
+	// (a) the injected logger routes into the returned handler.
+	snap := cap.Snapshot()
+	require.Len(t, snap, 1)
+	assert.Equal(t, "isolated", snap[0].Message)
+
+	// (b) slog.Default() is untouched — same pointer before and after, no
+	// t.Cleanup restoration needed (nothing was swapped).
+	assert.Same(t, before, slog.Default(),
+		"NewLoggerCapture must NOT mutate slog.Default() (that is NewCapture's job)")
+}
+
 // TestReadyzUnhealthyDeps_FindsGroupRecord verifies the helper plumbing:
 // given a slog record with a "readyz unhealthy" msg + "dependencies" slog.Group
 // whose sub-attrs are SlogDependencyEntry-valued, the helper returns the
