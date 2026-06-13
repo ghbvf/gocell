@@ -105,12 +105,15 @@ func (p Policy) validate() error {
 // to be empty, and not changeable by an ambient principal leaking into that ctx
 // (the install overwrites). The devices table is likewise not tenant-partitioned in
 // this example. That is correct for this single-tenant iotdevice example (device
-// ids are UUIDs), but anyone copying this archetype into a MULTI-TENANT cell MUST
-// add a tenant dimension to both the devices scan and the commandID derivation —
-// the framework system identity is deliberately tenantless, so a multi-tenant
-// reconciler cannot rely on an ambient ctx tenant; otherwise two tenants sharing a
-// device id would collide on the same Claimer key and one tenant's renewal would
-// suppress the other's.
+// ids are UUIDs), which is why its Loop declares reconcile.SingleTenant() at the
+// construction site (cell.go). Anyone copying this archetype into a MULTI-TENANT
+// cell MUST instead declare reconcile.TenantScoped() and add a tenant dimension to
+// both the devices scan and the commandID derivation — the framework system
+// identity is deliberately tenantless, so a multi-tenant reconciler cannot rely on
+// an ambient ctx tenant; otherwise two tenants sharing a device id would collide on
+// the same Claimer key and one tenant's renewal would suppress the other's. The
+// stance is a REQUIRED declaration at reconcile.New (#1954,
+// RECONCILE-TENANCY-DECLARED-01) — it cannot be silently omitted.
 type Reconciler struct {
 	clk     clock.Clock
 	repo    domain.DeviceRepository

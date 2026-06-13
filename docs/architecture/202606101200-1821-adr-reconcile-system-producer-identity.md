@@ -123,9 +123,23 @@ attack surface (no ambient inheritance) rather than expanding it.
   no version bump. Only the emitted entry's audit identity changes from empty → `"system"`.
 - A **multi-tenant** reconciler must add its own tenant dimension to its command-id /
   store derivation — it cannot rely on an ambient ctx tenant, which the install strips.
-  This is documented at the install site and the cert-renewal reconciler godoc. NOTE
-  this is a **documentation-level (Soft) guard** — there is no machine enforcement and
-  no multi-tenant reconciler exists today; it is forward guidance, not a new mechanism.
+  As of #1954 this is **machine-enforced at construction**, no longer a Soft godoc
+  guard: `reconcile.New` takes a REQUIRED sealed `Tenancy` second parameter
+  (`SingleTenant()` / `TenantScoped()`). Enforcement axes — (1) forging a non-zero
+  `Tenancy` is type-system **Hard** (unexported field, accessor-func minters); (2)
+  omitting the stance is a **compile** error (positional param — `reconcile.New(r)`
+  does not compile); (3) the zero `Tenancy{}` is a **Build fail-fast**; (4) the minter
+  value set is archtest-frozen (`RECONCILE-TENANCY-DECLARED-01`, Medium). **Concept
+  coherence with this ADR (threat-model re-eval):** the framework principal stays
+  tenantless system by positive assertion (the install in this ADR is unchanged);
+  tenant-awareness is the consumer's command-id responsibility, declared via
+  `TenantScoped()` — the two are orthogonal, so "install tenantless yet allow
+  TenantScoped" is not a contradiction. **Residual blind spots** (permanent ceilings,
+  documented not deferred): the guard cannot verify a `TenantScoped` body actually
+  encodes the tenant (consumer correctness, out of framework reach), nor cross-check a
+  `SingleTenant()` declaration against an actual multi-tenant cell (no cell-level
+  tenancy signal exists — multi-tenancy is a runtime ctx property, not a static cell
+  attribute). It converts an unconscious omission into a conscious, auditable assertion.
 - **Operations / observability**: emitted reconcile commands carry `actor=subject="system"`
   in the outbox envelope (a recognizable, filterable audit sentinel, consistent with
   `projection.SystemPrincipalActor`), and their Claimer dedup key sits under the

@@ -22,24 +22,25 @@
 // a binary {single, scoped} and is not silently widened.
 //
 // # AI-robust rating (four axes — the mechanism is stronger than the Medium this
-//   invariant minimally provides; see kernel/reconcile/tenancy.go godoc)
 //
-//   - Axis 1 — forging a non-zero Tenancy: type-system HARD. The mode field is
-//     unexported and the minters are accessor funcs over package-private
-//     singletons (un-reassignable), so reconcile.Tenancy{mode: …} is a compile
-//     error outside kernel/reconcile (sealed construction 范本).
-//   - Axis 2 — omitting the stance entirely: compile HARD. Tenancy is a positional
-//     parameter of reconcile.New, so reconcile.New(r) does not compile — you must
-//     pass a Tenancy expression. Stronger than a forgettable WithTenancy() option.
-//   - Axis 3 — passing the zero Tenancy{}: runtime fail-fast (Build rejects it,
-//     TestBuilder_RequiresTenancy). The one non-compile-Hard escape hatch; a
-//     permanent Go ceiling (a zero-value struct is always constructible), the same
-//     accepted residual as authz.Permission{} / reconcile.LeaseTTL{}.
-//   - Axis 4 — the minter VALUE SET (THIS test): MEDIUM. go/types enumeration of
-//     exported nullary Tenancy-returning funcs vs an independent hardcoded
-//     want-set. Not Hard because an in-package author can add a 3rd minter and the
-//     compiler does not object; this archtest is the frozen-witness that keeps the
-//     stance vocabulary a deliberate binary.
+//	invariant minimally provides; see kernel/reconcile/tenancy.go godoc)
+//
+//	- Axis 1 — forging a non-zero Tenancy: type-system HARD. The mode field is
+//	  unexported and the minters are accessor funcs over package-private
+//	  singletons (un-reassignable), so reconcile.Tenancy{mode: …} is a compile
+//	  error outside kernel/reconcile (sealed construction 范本).
+//	- Axis 2 — omitting the stance entirely: compile HARD. Tenancy is a positional
+//	  parameter of reconcile.New, so reconcile.New(r) does not compile — you must
+//	  pass a Tenancy expression. Stronger than a forgettable WithTenancy() option.
+//	- Axis 3 — passing the zero Tenancy{}: runtime fail-fast (Build rejects it,
+//	  TestBuilder_RequiresTenancy). The one non-compile-Hard escape hatch; a
+//	  permanent Go ceiling (a zero-value struct is always constructible), the same
+//	  accepted residual as authz.Permission{} / reconcile.LeaseTTL{}.
+//	- Axis 4 — the minter VALUE SET (THIS test): MEDIUM. go/types enumeration of
+//	  exported nullary Tenancy-returning funcs vs an independent hardcoded
+//	  want-set. Not Hard because an in-package author can add a 3rd minter and the
+//	  compiler does not object; this archtest is the frozen-witness that keeps the
+//	  stance vocabulary a deliberate binary.
 //
 // No arity-freeze archtest is added for axis 2: requiring the parameter is already
 // compile-enforced (dropping it breaks every call site), and pinning New's arity

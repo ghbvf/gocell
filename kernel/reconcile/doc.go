@@ -150,6 +150,13 @@
 //     goleak.VerifyTestMain, banning the per-test VerifyNone(IgnoreCurrent())
 //     idiom that flakes under -race (the Trigger / watchDrain tails drain
 //     asynchronously on ctx cancel).
+//   - RECONCILE-TENANCY-DECLARED-01 (#1954): every Loop declares a sealed Tenancy
+//     stance (SingleTenant / TenantScoped) as the required second arg of
+//     reconcile.New — omitting it is a compile error, the zero value is a Build
+//     fail-fast, and the minter set is archtest-frozen. Forces the multi-tenant
+//     command-id obligation to be a conscious declaration (was a Soft godoc MUST
+//     before #1954). The archtest freezes only the stance VALUE SET (Medium); the
+//     sealing + required-param are type/compile Hard. See the Tenancy godoc.
 //
 // Leader election (PR-A6) is whole-loop: when a LeaderElector is wired only the
 // lease holder dispatches Reconcile; a lost lease cancels the lease-scoped ctx to
@@ -184,7 +191,9 @@
 // (Go visibility — only Loop.process reaches it) and its ctxkeys writes are
 // caller-allowlisted by CTXKEYS-PRINCIPAL-WRITE-CALLER-01. A multi-tenant
 // reconciler must add its own tenant dimension (the system identity is
-// deliberately tenantless) — see the ADR.
+// deliberately tenantless); this obligation is machine-enforced at construction by
+// the required sealed Tenancy stance on reconcile.New (RECONCILE-TENANCY-DECLARED-01,
+// #1954) — see the ADR.
 //
 // ref: kubernetes-sigs/controller-runtime pkg/reconcile/reconcile.go
 // ref: kubernetes/client-go tools/leaderelection/leaderelection.go
