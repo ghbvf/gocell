@@ -986,7 +986,8 @@ func (v *Validator) validateFMT41ForContract(c *metadata.ContractMeta) []Validat
 	if !c.Codegen {
 		results = append(results, v.newError(
 			codeFMT41, IssueForbidden, file, fieldEndpointsGRPCMethods,
-			fmt.Sprintf("grpc contract %q declares endpoints.grpc.methods but has codegen:false; the overlay would never reach codegen and is silently inert", c.ID),
+			fmt.Sprintf("grpc contract %q declares endpoints.grpc.methods but has codegen:false; "+
+				"the overlay would never reach codegen and is silently inert", c.ID),
 			"set codegen:true (the default) or remove the methods overlay",
 		))
 	}
@@ -1010,7 +1011,8 @@ func (v *Validator) validateFMT41ForContract(c *metadata.ContractMeta) []Validat
 		case !m.Public:
 			results = append(results, v.newError(
 				codeFMT41, IssueInvalid, file, fieldEndpointsGRPCMethods,
-				fmt.Sprintf("grpc contract %q endpoints.grpc.methods entry %q asserts no non-default flag (public:false is equivalent to omission)", c.ID, m.Name),
+				fmt.Sprintf("grpc contract %q endpoints.grpc.methods entry %q asserts no non-default flag "+
+					"(public:false is equivalent to omission)", c.ID, m.Name),
 				"set public:true, or remove the entry (#1675 carries only the public flag; ABAC fields arrive in #2008)",
 			))
 		}

@@ -761,7 +761,7 @@ func TestContractSchemaGRPCKind(t *testing.T) {
 			expectValid: false,
 		},
 		{
-			name: "method entry empty name rejected (#1675, minLength)",
+			name:        "method entry empty name rejected (#1675, minLength)",
 			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto", "methods": [{"name": "", "public": true}]}`,
 			expectValid: false,
 		},
@@ -769,7 +769,10 @@ func TestContractSchemaGRPCKind(t *testing.T) {
 			name: "method entry unknown property rejected (#1675, item additionalProperties — forward-protects #2008 ABAC fields)",
 			// The item-level additionalProperties:false seals the overlay shape so a
 			// typo'd or premature ABAC field (#2008) cannot slip in silently.
-			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto", "methods": [{"name": "Check", "authz": {"permission": "x:read"}}]}`,
+			grpcBlock: `{
+				"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto",
+				"methods": [{"name": "Check", "authz": {"permission": "x:read"}}]
+			}`,
 			expectValid: false,
 		},
 	}
