@@ -6,7 +6,6 @@ package archtest
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -25,13 +24,21 @@ import (
 // `-run` allowlist of non-workspace-loading tests (go.mod / go.work parse,
 // header scans, one tiny ModeModule fixture) and is therefore GOWORK-agnostic —
 // is not (over-)constrained by this guard.
+//
+// verifyArchtestCLIMarker ("verify archtest") is defined in
+// archtest_ci_shard_count_test.go (same package); both CI-config guards share it.
 const verifyArchtestScriptMarker = "verify-archtest.sh"
 
 // goworkOffInlineRe matches a shell GOWORK=off assignment on a command line —
 // either a command-prefix (`GOWORK=off gocell verify archtest`) or an
-// `export GOWORK=off`. Quotes optional; value compared case-sensitively to the
-// literal `off` (Go's os.Getenv("GOWORK")=="off" is exact, mirroring the runtime
-// checkGOWORK guard in cmd/gocell/internal/archtestrunner/runner.go).
+// `export GOWORK=off`. Quotes optional. The match is case-SENSITIVE to the exact
+// literal `off`, mirroring the go command's own semantics AND the runtime
+// checkGOWORK guard (cmd/gocell/internal/archtestrunner/runner.go does
+// `os.Getenv("GOWORK") == "off"`): only lowercase `off` disables the workspace.
+// A miscased `GOWORK=OFF`/`Off` is NOT the silent-drop vector this guard exists
+// for — the go command rejects it loudly ("invalid GOWORK: not an absolute
+// path"), so CI fails anyway. Matching it here would be a false-positive on a
+// value that already fails closed. (See the uppercase-off green fixture.)
 var goworkOffInlineRe = regexp.MustCompile(`GOWORK=["']?off["']?`)
 
 // goworkWorkflow parses only the env scopes + step run blocks needed for the
@@ -109,25 +116,16 @@ type goworkStep struct {
 // §Operational notes (#1590 close-out).
 func TestArchtestCIGoworkActive(t *testing.T) {
 	root := findModuleRoot(t)
-	dir := filepath.Join(root, ".github", "workflows")
-	entries, err := os.ReadDir(dir)
-	require.NoError(t, err, "ARCHTEST-CI-GOWORK-ACTIVE-01: read .github/workflows")
-
+	// Scan every workflow file via the sanctioned content-scan façade (ai-robust.md
+	// §载体选择 rule 4: YAML rules use EachContentFile), matching the sibling
+	// ci_pinning_test.go which audits the same .github/workflows/*.{yml,yaml} set.
+	scope := DirsScope(root, []string{filepath.Join(".github", "workflows")})
 	total := 0
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if !strings.HasSuffix(name, ".yml") && !strings.HasSuffix(name, ".yaml") {
-			continue
-		}
-		body, rerr := os.ReadFile(filepath.Clean(filepath.Join(dir, name)))
-		require.NoError(t, rerr)
-		matched, verr := validateArchtestGoworkActive(name, body)
+	EachContentFile(t, scope, []string{".yml", ".yaml"}, func(_ *testing.T, fc ContentContext) {
+		matched, verr := validateArchtestGoworkActive(fc.Rel, fc.Bytes)
 		require.NoError(t, verr)
 		total += matched
-	}
+	})
 
 	// Anti-vacuity: the marker MUST match at least one real archtest step across
 	// the workflow set, or the guard would silently pass on everything (marker
@@ -198,10 +196,13 @@ func stepInlineGoworkOff(cmds []string) bool {
 
 // goworkEnvOff reports whether an env map declares GOWORK=off. Reads the raw
 // yaml.Node.Value so the YAML-bool resolution of the bareword `off` does not hide
-// it (see goworkWorkflow godoc).
+// it (see goworkWorkflow godoc). Matched case-SENSITIVELY against the exact
+// literal `off` — same rationale as goworkOffInlineRe and the runtime
+// checkGOWORK: only lowercase `off` silently disables the workspace; `OFF`/`Off`
+// makes the go command fail loudly, so it is not the silent-drop vector.
 func goworkEnvOff(env map[string]yaml.Node) bool {
 	n, ok := env["GOWORK"]
-	return ok && strings.EqualFold(strings.TrimSpace(n.Value), "off")
+	return ok && strings.TrimSpace(n.Value) == "off"
 }
 
 // goworkOffScope reduces the four scopes to (label, isOff) for the error message,
@@ -294,6 +295,24 @@ jobs:
         run: |
           GOWORK="off" "$RUNNER_TEMP/gocell" verify archtest
 `,
+		"inline-single-quoted": `jobs:
+  verify-archtest:
+    steps:
+      - name: Verify archtest shard
+        run: |
+          GOWORK='off' "$RUNNER_TEMP/gocell" verify archtest
+`,
+		// GOWORK: "off" — YAML double-quoted string (not the bareword !!bool).
+		// yaml.Node.Value strips the quotes → "off", so the env check still fires.
+		"step-env-quoted": `jobs:
+  verify-archtest:
+    steps:
+      - name: Verify archtest shard
+        env:
+          GOWORK: "off"
+        run: |
+          "$RUNNER_TEMP/gocell" verify archtest --shard=${{ matrix.shard }}/24
+`,
 		"script-wrapper-off": `jobs:
   full-sweep:
     env:
@@ -348,6 +367,19 @@ jobs:
     steps:
       - name: Full archtest sweep
         run: bash hack/verify-archtest.sh
+`,
+		// GOWORK: Off (uppercase) is deliberately OUT of scope: the go command
+		// rejects a miscased value loudly ("invalid GOWORK: not an absolute
+		// path"), so CI already fails closed — it is not the silent-drop vector.
+		// The guard is case-sensitive to the exact `off`; this fixture locks that.
+		"uppercase-off-out-of-scope": `jobs:
+  verify-archtest:
+    env:
+      GOWORK: Off
+    steps:
+      - name: Verify archtest shard
+        run: |
+          "$RUNNER_TEMP/gocell" verify archtest --shard=${{ matrix.shard }}/24
 `,
 	}
 	for name, body := range cases {

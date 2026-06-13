@@ -148,7 +148,10 @@ Trigger: the workspace went multi-module via #1556 (examples/* split), #1559
 (cellmodules + cmd split), #1560 (corecells), #1644 (examples/demo) — the
 "satellites land" precondition of the two Medium mechanisms is now met (the
 `CROSS-MODULE-IMPORT-DIRECTION-01` godoc was corrected to "active gate" in #1564).
-The original "Vacuous today (single module)" framing above is superseded.
+The original "Vacuous today (single module)" framing above is superseded; §Decision
+item 4 and the §AI-robust ratings table were rewritten in-place in this change
+(per the charter: an amendment rewrites the conflicting sections, not just appends)
+— the table's depguard row is marked **realized** and a new `GOWORK≠off` row added.
 
 Threat-model re-evaluation (per the AI-robust charter: an amendment re-rates the
 original safety model). Both Medium mechanisms now carry their landed complements;
