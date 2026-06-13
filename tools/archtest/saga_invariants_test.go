@@ -2982,6 +2982,54 @@ func TestSagaStepRunOutsideTx_Detector_RedSafeRunInRunInTxFixture(t *testing.T) 
 	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
 
+// TestSagaStepRunOutsideTx_Detector_RedAliasedStepFuncCallFixture proves that
+// signature-identity A1 fires on StepFunc-shaped calls outside safeRun made
+// through three escape shapes: a type alias, a DEFINED type, and a raw
+// structurally-identical func value. The old exact-Named A1 missed the
+// defined-type and raw-signature calls (distinct / absent *types.Named); the
+// golden expects all three flagged (gh #979). Loaded typed (Fixture provides
+// TypesInfo) so calleeIsSagaStepFunc can resolve the canonical signature.
+func TestSagaStepRunOutsideTx_Detector_RedAliasedStepFuncCallFixture(t *testing.T) {
+	root := findModuleRoot(t)
+	relDir, pattern := sagaStepRunFixturePattern("red_aliased_stepfunc_call")
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+
+		var ds []Diagnostic
+		for _, file := range p.Files {
+			ds = append(ds, checkA1StepFuncCallsites(p, file)...)
+		}
+		return ds
+	})
+
+	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
+}
+
+// TestSagaStepRunOutsideTx_Detector_RedSafeRunWrapperInRunInTxFixture proves
+// that the transitive A2 taint graph fires when a RunInTx closure reaches
+// safeRun INDIRECTLY — via a named helper func and via a package-level
+// FuncLit-valued var. The old direct-identifier A2 scan missed both (neither
+// closure body holds a literal safeRun() callsite); the golden expects both
+// wrapper callsites flagged (gh #980, incl. the cx-1 var-indirection case).
+func TestSagaStepRunOutsideTx_Detector_RedSafeRunWrapperInRunInTxFixture(t *testing.T) {
+	root := findModuleRoot(t)
+	relDir, pattern := sagaStepRunFixturePattern("red_safe_run_wrapper_in_runintx")
+	// RED: the existing direct-identifier A2 scan misses the wrapper callsites
+	// (closure bodies hold no literal safeRun()), yielding 0 diags against a
+	// golden of 2. The GREEN commit repoints this to the transitive entry.
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
+		var ds []Diagnostic
+		for _, file := range p.Files {
+			ds = append(ds, checkA2SafeRunNotInRunInTx(p, file)...)
+		}
+		return ds
+	})
+
+	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
+}
+
 // posInRanges and collectFuncBodyRanges are defined in shared_helpers.go and
 // reused directly — both are visible within the archtest package.
 
