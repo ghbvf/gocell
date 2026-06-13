@@ -21,7 +21,9 @@ export interface RequestRulesItemConditionsItem {
   source: string;
   key: string;
   operator: string;
-  values: string[];
+  values?: string[];
+  rhsSource?: string;
+  rhsKey?: string;
 }
 
 export interface RequestRulesItemObligations {
@@ -56,7 +58,9 @@ export interface ResponseDataRulesItemConditionsItem {
   source: string;
   key: string;
   operator: string;
-  values: string[];
+  values?: string[];
+  rhsSource?: string;
+  rhsKey?: string;
 }
 
 export interface ResponseDataRulesItemObligations {

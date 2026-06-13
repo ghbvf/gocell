@@ -4,11 +4,19 @@ go 1.25.11
 
 require (
 	github.com/ghbvf/gocell v0.0.0
+	github.com/ghbvf/gocell/cellmodules v0.0.0
 	github.com/ghbvf/gocell/corecells v0.0.0-00010101000000-000000000000
 	github.com/stretchr/testify v1.11.1
 )
 
-require github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
+require (
+	github.com/ghbvf/gocell/adapters/rabbitmq v0.0.0 // indirect
+	github.com/ghbvf/gocell/adapters/redis v0.0.0 // indirect
+	github.com/rabbitmq/amqp091-go v1.11.0 // indirect
+	github.com/redis/go-redis/v9 v9.20.0 // indirect
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
+	go.uber.org/atomic v1.11.0 // indirect
+)
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
@@ -87,12 +95,20 @@ require (
 // unpublished core module resolve to the repo root instead of being fetched.
 replace github.com/ghbvf/gocell => ../../
 
+replace github.com/ghbvf/gocell/cellmodules => ../../cellmodules
+
 replace github.com/ghbvf/gocell/corecells => ../../corecells
 
 replace github.com/ghbvf/gocell/adapters/adapterutil => ../../adapters/adapterutil
 
 replace github.com/ghbvf/gocell/adapters/postgres => ../../adapters/postgres
 
+replace github.com/ghbvf/gocell/adapters/rabbitmq => ../../adapters/rabbitmq
+
 replace github.com/ghbvf/gocell/adapters/ratelimit => ../../adapters/ratelimit
+
+replace github.com/ghbvf/gocell/adapters/redis => ../../adapters/redis
+
+replace github.com/ghbvf/gocell/adapters/vault => ../../adapters/vault // indirect dep via cellmodules (ssobff does not directly import vault)
 
 replace github.com/ghbvf/gocell/generated => ../../generated

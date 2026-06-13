@@ -660,11 +660,11 @@ func TestRelay_Metrics_RecordedOnPollCycle(t *testing.T) {
 	// At least one PollCycle with Published >= 2.
 	hasCycle := false
 	for _, c := range mc.pollCycles {
-		if c.Published >= 2 {
+		if c.Event.Published >= 2 {
 			hasCycle = true
 		}
 	}
-	assert.True(t, hasCycle, "RecordPollCycle must have published >= 2")
+	assert.True(t, hasCycle, "RecordPollCycle must have event published >= 2")
 }
 
 func TestRelay_NilMetrics_DoesNotPanic(t *testing.T) {
@@ -819,9 +819,9 @@ func (s *leaseLostStore) MarkDead(
 // TestRelay_HandleFailedEntry_LostStat verifies PR-V1-PG-OUTBOX-RELAY-HARDEN
 // B2-A-05 follow-up: when MarkRetry / MarkDead report updated=false (lease was
 // reclaimed mid-flight), handleFailedEntry MUST count the result into a new
-// "lost" stat and surface it through PollCycleResult.Lost so the
-// `outbox_relayed_total{outcome="lost"}` time-series fires. Without this, a
-// stale-lease writeback is invisible to operators despite stats divergence.
+// "lost" stat and surface it through PollCycleResult.Event.Lost so the
+// `outbox_relayed_total{kind="event",outcome="lost"}` time-series fires. Without
+// this, a stale-lease writeback is invisible to operators despite stats divergence.
 func TestRelay_HandleFailedEntry_LostStat(t *testing.T) {
 	store := newLeaseLostStore()
 	pub := newFakePublisher().WithError(errors.New("transient publish failure"))
@@ -865,20 +865,20 @@ func TestRelay_HandleFailedEntry_LostStat(t *testing.T) {
 		mc.mu.Lock()
 		defer mc.mu.Unlock()
 		for _, c := range mc.pollCycles {
-			if c.Lost >= 1 {
+			if c.Event.Lost >= 1 {
 				return true
 			}
 		}
 		return false
-	}, testtime.D1s, testtime.D1ms, "PollCycleResult.Lost must record stale-lease writeback")
+	}, testtime.D1s, testtime.D1ms, "PollCycleResult.Event.Lost must record stale-lease writeback")
 
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
 	var lostTotal, retriedTotal, deadTotal int
 	for _, c := range mc.pollCycles {
-		lostTotal += c.Lost
-		retriedTotal += c.Retried
-		deadTotal += c.Dead
+		lostTotal += c.Event.Lost
+		retriedTotal += c.Event.Retried
+		deadTotal += c.Event.Dead
 	}
 	assert.GreaterOrEqual(t, lostTotal, 1, "Lost must record stale-lease writeback")
 	assert.Equal(t, 0, retriedTotal, "stale-lease writeback must NOT count as retried")

@@ -653,10 +653,11 @@ type AssemblyMeta struct {
 	// hand-authored assembly-level `capabilities` field; the single source is
 	// per-cell. kernel/assembly.GenerateModulesGen computes the union when
 	// rendering generatedCapabilities() in modules_gen.go.
-	Build               BuildMeta `yaml:"build,omitempty"`
-	MaxConsistencyLevel string    `yaml:"-"` // derived; yaml occurrence rejected by KnownFields
-	Dir                 string    `yaml:"-"` // assembly directory name (parts[1]); set by parser from path, not YAML
-	File                string    `yaml:"-"` // parsed assembly.yaml path relative to project root
+	Build               BuildMeta    `yaml:"build,omitempty"`
+	Topology            TopologyMeta `yaml:"topology,omitempty"`
+	MaxConsistencyLevel string       `yaml:"-"` // derived; yaml occurrence rejected by KnownFields
+	Dir                 string       `yaml:"-"` // assembly directory name (parts[1]); set by parser from path, not YAML
+	File                string       `yaml:"-"` // parsed assembly.yaml path relative to project root
 }
 
 // BuildMeta holds the build configuration for an Assembly.

@@ -409,10 +409,21 @@ metrics:
       fqName: gocell_outbox_relayed_total
       namespace: gocell
       type: counter
-      help: Total number of outbox entries processed by the relay, by outcome. outcome=published|retried|dead are canonical writebacks; outcome=skipped covers MarkPublished updated=false (success path lost lease) and outcome=lost covers Mark{Retry,Dead} updated=false (failure path lost lease) — the canonical outcome for both is owned by the reclaimer (see outbox_reclaimed_total).
+      help: Total number of outbox entries processed by the relay, by entry kind and outcome. kind=event is broker publish; kind=command is in-process async command dispatch. outcome=published|retried|dead are canonical writebacks; outcome=skipped covers MarkPublished updated=false (success path lost lease) and outcome=lost covers Mark{Retry,Dead} updated=false (failure path lost lease) — the canonical outcome for both is owned by the reclaimer (see outbox_reclaimed_total).
       labels:
         - cell
+        - kind
         - outcome
+      labelValues:
+        kind:
+            - command
+            - event
+        outcome:
+            - dead
+            - lost
+            - published
+            - retried
+            - skipped
       file: cellmodules/configcore/storage.go
     - name: projection_event_replay_lag_seconds
       fqName: gocell_projection_event_replay_lag_seconds

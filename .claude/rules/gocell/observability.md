@@ -46,6 +46,15 @@ gRPC unary 和 stream interceptor 顺序必须保证 cell attribution 在 metric
 Redis key namespace 使用 owner 维度表达：cell、role、resource。禁止把 service token、
 outbox、projection 等跨域 key 混入 `_runtime` 前缀而丢失所有权。
 
+**`_runtime` 哨兵 carve-out（sanctioned shared-infra）**：少数**框架级、无 cell 上下文**的
+shared-infra 原语显式使用 `_runtime` 哨兵——当前仅 outbox 消费幂等 claimer
+（`_runtime:{eventID}:lease|done`）与 HTTP 幂等 store（`_runtime:<tenant>:{key}:resp|lease|fp`）。
+二者 key 格式**结构性互斥**（不同段数/段义），故共用哨兵**不丢所有权**、不冲突——这正是上文禁令
+真正要防的（careless 混入致归属不可辨），而非禁止任何 `_runtime` 使用。单源在
+`adapters/redis/keyns.go`（命名空间值集 + 格式校验）与 `cellmodules/replaydeps`
+（claimer/nonce resolver，#825/#2017）。新增 shared-infra 原语欲用 `_runtime` 必须：key 格式与上述
+两者结构性互斥 + 在此登记。否则用显式 role/resource namespace。
+
 ## Readyz verbose
 
 verbose readyz 输出分四通道：wire 响应、server log、trace、metrics。wire 必须裁剪敏感

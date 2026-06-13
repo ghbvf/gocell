@@ -217,7 +217,10 @@ func TestPollOnce_ClaimDone_DedupSettlesPublished(t *testing.T) {
 	store.seedPendingCommand(cmdID, `{}`)
 
 	var dispatched int
-	r := NewRelay(clock.Real(), store, &recordingPublisher{}, RelayConfig{}.WithDefaults())
+	mc := &kindMetricsCollector{}
+	cfg := RelayConfig{}.WithDefaults()
+	cfg.Metrics = mc
+	r := NewRelay(clock.Real(), store, &recordingPublisher{}, cfg)
 	r.WithCommandDispatch(command.NewRegistry(),
 		map[command.CommandID]command.AsyncDispatchFunc{
 			cmdID: func(context.Context, *command.Registry, kout.Entry) error { dispatched++; return nil },
@@ -229,6 +232,13 @@ func TestPollOnce_ClaimDone_DedupSettlesPublished(t *testing.T) {
 	status := store.rows["c1"].status
 	store.mu.Unlock()
 	assert.Equal(t, "published", status, "deduped command row settles to published")
+
+	// A deduped command (no dispatch, nil receipt) is still a command: it must land
+	// in the command kind bucket like a first dispatch, never the event bucket — the
+	// kind attribution is the publishBatch discriminator, not the claim outcome (#1674).
+	event, cmd := mc.totals()
+	assert.Equal(t, 1, cmd.Published, "deduped command settles to the command kind bucket")
+	assert.Zero(t, event, "a deduped command must NOT be attributed to the event bucket")
 }
 
 // TestWriteBack_CommitsReceiptOnSuccess asserts the live receipt is Committed
