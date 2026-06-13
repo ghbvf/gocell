@@ -44,9 +44,6 @@ type AuditCrossTenantStore struct {
 // supplied admin pool. pool must not be nil. The pool must be configured with
 // the gocell_audit_admin role (or equivalent permissive RLS SELECT policy) so
 // QueryCrossTenant can read across all tenants without bypassing FORCE RLS.
-//
-// Package path: github.com/ghbvf/gocell/adapters/postgres.
-// Signature:    NewAuditCrossTenantStore(pool *pgxpool.Pool) (*AuditCrossTenantStore, error).
 func NewAuditCrossTenantStore(pool *pgxpool.Pool) (*AuditCrossTenantStore, error) {
 	if pool == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
