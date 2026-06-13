@@ -216,8 +216,8 @@ goroutine 忽略 ctx、超出 drain 预算未退出）。与 lifo_teardown 时�
 
 **诊断**：
 
-- 看关闭日志：`saga coordinator stop: timed out [waiting for start]` / `tailer stop: timed out ...`。
-- 交叉看 `saga_tick_total` / inflight lock 指标：drain 超时通常是某个 `Step.Run` 长时间不返回（外部 IO 阻塞、未传播 ctx）。
+- 看关闭日志：`saga coordinator stop: timed out [waiting for start]` / `tailer stop: timed out ...` + bootstrap LIFO teardown 日志。
+- drain 超时通常是某个 `Step.Run` 长时间不返回（外部 IO 阻塞、未传播 ctx）。在途 step 数量**不暴露为指标**（`inflightLocks` 是 Coordinator 内部状态）；用 `saga_drive_total{cell,definition_id,result}` 定位——卡住的 `Step.Run` 使其 `driveOne` 长时间不计入完成，drive 计数相对 `saga_tick_total{cell,result}`（ClaimPending 周期）停滞即指向被 wedge 的 step。
 
 **处置**：
 
