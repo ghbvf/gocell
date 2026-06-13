@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/abac"
+	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -67,6 +68,13 @@ func (r attributeResolver) resolve(source abac.AttributeSource, key string) (val
 // resolveSubject reads subject attributes from the authenticated principal.
 // Well-known keys are derived from typed principal fields; any other key falls
 // through to the JWT claims snapshot. A nil principal supplies no attributes.
+//
+// The "sub"/"subject" case canonicalizes the principal's Subject via
+// httputil.ParseCanonicalUUID before returning, mirroring the resource.id gate
+// canonicalization in RequirePermissionForResource (so `subject.sub ==
+// resource.id` is robust to UUID case/format differences, matching the
+// pre-#1977 isSelfAccess behavior). Non-UUID subjects (e.g. service accounts
+// with a plain-string Subject) pass through unchanged.
 func (r attributeResolver) resolveSubject(key string) (vals []string, found bool) {
 	if r.principal == nil {
 		return nil, false
@@ -75,6 +83,9 @@ func (r attributeResolver) resolveSubject(key string) (vals []string, found bool
 	case "sub", "subject":
 		if r.principal.Subject == "" {
 			return nil, false
+		}
+		if c, ok := httputil.ParseCanonicalUUID(r.principal.Subject); ok {
+			return []string{c}, true
 		}
 		return []string{r.principal.Subject}, true
 	case "kind":

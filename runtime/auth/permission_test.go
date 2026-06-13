@@ -372,21 +372,29 @@ func TestRequirePermissionForResource_NoPrincipal_Unauthenticated(t *testing.T) 
 }
 
 // TestRequirePermissionForResource_EmptyParam_PDPDeny verifies that an empty path
-// value is forwarded as resource="" to the PDP (not self-exempted). An empty
-// resource.id means the ownership rule can't fire → PDP deny → 403.
+// value is FORWARDED to the PDP as resource="" (not short-circuited) and that the
+// PDP deny results in 403. Using captureAuthorizer so we can assert both that the
+// resource forwarded is "" AND that the result is a 403 (deny via captureAuthorizer
+// returning deny). This proves non-short-circuit: the gate always reaches the PDP.
 func TestRequirePermissionForResource_EmptyParam_PDPDeny(t *testing.T) {
 	p := &Principal{Kind: PrincipalUser, Subject: roselfSubjectA, Roles: []string{"user"}}
-	deny := &mockAuthorizer{allowed: false}
+	// captureAuthorizer with allowed=false: records what resource was forwarded, then denies.
+	capAuth := &captureAuthorizer{allowed: false}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/", nil)
 	// no SetPathValue("id", ...) → empty path value
-	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), deny))
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), capAuth))
 
 	err := RequirePermissionForResource("id", authz.PermUserRead())(req)
 	require.Error(t, err, "empty param → resource not-found → ownership rule can't fire → PDP deny → 403")
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec))
 	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind)
+
+	// Core assertion: the empty param was FORWARDED to the PDP as resource=""
+	// (non-short-circuit), not blocked before reaching the authorizer.
+	assert.Equal(t, "", capAuth.gotResource,
+		"empty path param must be forwarded to PDP as resource=\"\", not short-circuited")
 }
 
 // TestRequirePermissionForResource_AllowWithObligations_FailClosed asserts F5

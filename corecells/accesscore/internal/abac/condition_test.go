@@ -251,10 +251,26 @@ func TestCondition_Validate(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "eq_attr with invalid RHSKey rejected",
+			name: "eq_attr with invalid RHSKey rejected (leading space)",
 			cond: abac.Condition{
 				Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr,
 				RHSSource: abac.SourceResource, RHSKey: " id",
+			},
+			wantErr: true,
+		},
+		{
+			name: "eq_attr with RHSKey containing control character rejected",
+			cond: abac.Condition{
+				Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr,
+				RHSSource: abac.SourceResource, RHSKey: "id\x00x",
+			},
+			wantErr: true,
+		},
+		{
+			name: "eq_attr with RHSKey starting with digit rejected",
+			cond: abac.Condition{
+				Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr,
+				RHSSource: abac.SourceResource, RHSKey: "1id",
 			},
 			wantErr: true,
 		},

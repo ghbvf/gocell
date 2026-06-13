@@ -672,6 +672,81 @@ func TestConverter_CrossAttr_InvalidRHSSource_Rejected(t *testing.T) {
 	assert.True(t, ok, "invalid rhsSource must yield 422, got %T", resp)
 }
 
+// TestConverter_Update_CrossAttr_StrayValues_Rejected mirrors the create-path
+// TestConverter_CrossAttr_StrayValues_Rejected for the UPDATE path: an eq_attr
+// condition with non-empty Values must be rejected with 422 (KindInvalid).
+func TestConverter_Update_CrossAttr_StrayValues_Rejected(t *testing.T) {
+	svc := newConverterTestService(t)
+	ctx := testConvAdminCtx()
+
+	p, err := svc.Create(ctx, CreateInput{Name: "P", Rules: minimalRules()})
+	require.NoError(t, err)
+
+	ad := UpdateAdapter{s: svc}
+	resp, err := ad.Update(ctx, &policyUpdate.Request{
+		ID:   p.ID,
+		Name: "X",
+		Rules: []*policyUpdate.RequestRulesItem{
+			{
+				ID:     "r1",
+				Name:   "Bad cross-attr update",
+				Effect: "allow",
+				Conditions: []*policyUpdate.RequestRulesItemConditionsItem{
+					{
+						Source:    "subject",
+						Key:       "sub",
+						Operator:  "eq_attr",
+						RHSSource: "resource",
+						RHSKey:    "id",
+						Values:    []string{"stray-value"}, // stray Values on eq_attr: invalid
+					},
+				},
+			},
+		},
+		ExpectedVersion: int64(p.Version),
+	})
+	require.NoError(t, err)
+	_, ok := resp.(policyUpdate.Update422ErrorResponse)
+	assert.True(t, ok, "update eq_attr with stray values must yield 422, got %T", resp)
+}
+
+// TestConverter_Update_CrossAttr_InvalidRHSSource_Rejected mirrors the create-path
+// TestConverter_CrossAttr_InvalidRHSSource_Rejected for the UPDATE path: an
+// unrecognized rhsSource string must be rejected with 422 (KindInvalid).
+func TestConverter_Update_CrossAttr_InvalidRHSSource_Rejected(t *testing.T) {
+	svc := newConverterTestService(t)
+	ctx := testConvAdminCtx()
+
+	p, err := svc.Create(ctx, CreateInput{Name: "P", Rules: minimalRules()})
+	require.NoError(t, err)
+
+	ad := UpdateAdapter{s: svc}
+	resp, err := ad.Update(ctx, &policyUpdate.Request{
+		ID:   p.ID,
+		Name: "X",
+		Rules: []*policyUpdate.RequestRulesItem{
+			{
+				ID:     "r1",
+				Name:   "Bad rhs source update",
+				Effect: "allow",
+				Conditions: []*policyUpdate.RequestRulesItemConditionsItem{
+					{
+						Source:    "subject",
+						Key:       "sub",
+						Operator:  "eq_attr",
+						RHSSource: "not-a-source", // unrecognized rhsSource
+						RHSKey:    "id",
+					},
+				},
+			},
+		},
+		ExpectedVersion: int64(p.Version),
+	})
+	require.NoError(t, err)
+	_, ok := resp.(policyUpdate.Update422ErrorResponse)
+	assert.True(t, ok, "update with invalid rhsSource must yield 422, got %T", resp)
+}
+
 // TestConverter_StaticCondition_NoRHSInResponse asserts that a static "eq"
 // condition still round-trips with values and emits no rhsSource/rhsKey in the
 // response (zero values → omitempty).

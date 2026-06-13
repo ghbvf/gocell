@@ -149,6 +149,14 @@ var builtinBaseline = []abac.Rule{
 // accessing (user owns their own account/roles). Uses abac.OpEqualsAttr to
 // compare the LHS (subject.sub) against the RHS (resource.id) at evaluation
 // time — both resolved via attributeResolver, both fail-closed on not-found.
+//
+// "sub" is the canonical JWT claim key; resolveSubject maps both "sub" and
+// "subject" to principal.Subject (and canonicalizes it via ParseCanonicalUUID
+// so UUID case/format differences do not thwart the comparison). The RHS
+// resource.id is set from the resourceID field in attributeResolver, which
+// RequirePermissionForResource populates with the canonicalized path param.
+// Fail-closed on absent resource.id is enforced in evaluator.go matchCondition
+// (RHS attribute not-found → condition unsatisfied → ownership rule cannot grant).
 func subjectIsResource() abac.Condition {
 	return abac.Condition{
 		Source:    abac.SourceSubject,

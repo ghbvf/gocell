@@ -118,6 +118,11 @@ func parseConditionWires(items []conditionWire) ([]abac.Condition, error) {
 		}
 		cond := abac.Condition{Source: src, Key: c.getKey(), Operator: op, Values: c.getValues()}
 		// Cross-attribute operator: parse rhsSource if present.
+		// NOTE: a non-empty rhsKey paired with an empty rhsSource is dropped here
+		// (rhsSource == "" skips this block, leaving RHSSource zero) and then
+		// rejected downstream by Condition.Validate (zero RHSSource on OpEqualsAttr
+		// → 422). This ensures the two shapes (cross-attr: RHS set; static: Values
+		// set) are mutually exclusive at the service-validation boundary.
 		if c.getRHSSource() != "" {
 			rhsSrc, err := abac.ParseAttributeSource(c.getRHSSource())
 			if err != nil {
@@ -267,6 +272,7 @@ func polRulesToCreateWire(rules []abac.Rule) []*policyCreate.ResponseDataRulesIt
 	return items
 }
 
+// NOTE: mirror of polCondsTo{Create,Get,Update,List}Wire — keep RHS handling in sync.
 func polCondsToCreateWire(conds []abac.Condition) []*policyCreate.ResponseDataRulesItemConditionsItem {
 	if len(conds) == 0 {
 		return nil
@@ -319,6 +325,7 @@ func polRulesToGetWire(rules []abac.Rule) []*policyGet.ResponseDataRulesItem {
 	return items
 }
 
+// NOTE: mirror of polCondsTo{Create,Get,Update,List}Wire — keep RHS handling in sync.
 func polCondsToGetWire(conds []abac.Condition) []*policyGet.ResponseDataRulesItemConditionsItem {
 	if len(conds) == 0 {
 		return nil
@@ -371,6 +378,7 @@ func polRulesToUpdateWire(rules []abac.Rule) []*policyUpdate.ResponseDataRulesIt
 	return items
 }
 
+// NOTE: mirror of polCondsTo{Create,Get,Update,List}Wire — keep RHS handling in sync.
 func polCondsToUpdateWire(conds []abac.Condition) []*policyUpdate.ResponseDataRulesItemConditionsItem {
 	if len(conds) == 0 {
 		return nil
@@ -423,6 +431,7 @@ func polRulesToListWire(rules []abac.Rule) []*policyList.ResponseDataItemRulesIt
 	return items
 }
 
+// NOTE: mirror of polCondsTo{Create,Get,Update,List}Wire — keep RHS handling in sync.
 func polCondsToListWire(conds []abac.Condition) []*policyList.ResponseDataItemRulesItemConditionsItem {
 	if len(conds) == 0 {
 		return nil
