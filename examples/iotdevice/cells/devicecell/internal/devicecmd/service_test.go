@@ -73,23 +73,24 @@ func TestService_Enqueue(t *testing.T) {
 		commandType string
 		payload     string
 		wantErr     bool
-		checkEntry  func(t *testing.T, e command.Entry)
+		// wantValidationErr asserts the error is an errcode.Error with code
+		// ErrValidationFailed (the request-shape rejections), so a regression that
+		// turned it into a panic or a different Kind would be caught — not just any
+		// non-nil error.
+		wantValidationErr bool
+		checkEntry        func(t *testing.T, e command.Entry)
 	}{
 		{
-			name:        "valid enqueue uses default commandType",
-			setup:       func(r *mem.DeviceRepository) { seedDevice(r, "dev-1", "sensor-a") },
-			deviceID:    "dev-1",
-			commandType: "",
-			payload:     "reboot",
-			wantErr:     false,
-			checkEntry: func(t *testing.T, e command.Entry) {
-				assert.NotEmpty(t, e.ID)
-				assert.Equal(t, "dev-1", e.DeviceID)
-				assert.Equal(t, "default", e.CommandType)
-				assert.Equal(t, []byte("reboot"), e.Payload)
-				assert.Equal(t, command.StatusPending, e.Status)
-				assert.False(t, e.CreatedAt.IsZero())
-			},
+			// #1694 F9: commandType is required — the silent "default" fallback
+			// was removed (no-soft-fallback). Empty commandType is rejected, same
+			// as empty payload, rather than papered over.
+			name:              "empty commandType returns validation error",
+			setup:             func(r *mem.DeviceRepository) { seedDevice(r, "dev-1", "sensor-a") },
+			deviceID:          "dev-1",
+			commandType:       "",
+			payload:           "reboot",
+			wantErr:           true,
+			wantValidationErr: true,
 		},
 		{
 			name:        "valid enqueue with explicit commandType",
@@ -99,25 +100,33 @@ func TestService_Enqueue(t *testing.T) {
 			payload:     "v2.0",
 			wantErr:     false,
 			checkEntry: func(t *testing.T, e command.Entry) {
+				assert.NotEmpty(t, e.ID)
+				assert.Equal(t, "dev-1", e.DeviceID)
 				assert.Equal(t, "firmware-update", e.CommandType)
+				assert.Equal(t, []byte("v2.0"), e.Payload)
 				assert.Equal(t, command.StatusPending, e.Status)
+				assert.False(t, e.CreatedAt.IsZero())
 			},
 		},
 		{
+			// commandType non-empty so the error is unambiguously device-not-found
+			// (otherwise the now-pre-lookup commandType guard would mask the intent).
 			name:        "non-existent device returns error",
 			setup:       func(_ *mem.DeviceRepository) {},
 			deviceID:    "dev-missing",
-			commandType: "",
+			commandType: "reboot",
 			payload:     "reboot",
 			wantErr:     true,
 		},
 		{
-			name:        "empty payload returns validation error",
-			setup:       func(r *mem.DeviceRepository) { seedDevice(r, "dev-2", "sensor-b") },
-			deviceID:    "dev-2",
-			commandType: "",
-			payload:     "",
-			wantErr:     true,
+			// commandType non-empty so this isolates the empty-payload rejection.
+			name:              "empty payload returns validation error",
+			setup:             func(r *mem.DeviceRepository) { seedDevice(r, "dev-2", "sensor-b") },
+			deviceID:          "dev-2",
+			commandType:       "reboot",
+			payload:           "",
+			wantErr:           true,
+			wantValidationErr: true,
 		},
 	}
 
@@ -128,8 +137,13 @@ func TestService_Enqueue(t *testing.T) {
 
 			entry, err := svc.Enqueue(context.Background(), tc.deviceID, tc.commandType, tc.payload)
 			if tc.wantErr {
-				assert.Error(t, err)
+				require.Error(t, err)
 				assert.Zero(t, entry)
+				if tc.wantValidationErr {
+					var ec *errcode.Error
+					require.ErrorAs(t, err, &ec)
+					assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+				}
 			} else {
 				require.NoError(t, err)
 				if tc.checkEntry != nil {
@@ -524,7 +538,7 @@ func TestService_Enqueue_ThenDequeue_Report_ThenAck(t *testing.T) {
 	seedDevice(devRepo, "dev-1", "sensor-a")
 
 	// Enqueue
-	entry, err := svc.Enqueue(ctx, "dev-1", "", "upgrade-fw")
+	entry, err := svc.Enqueue(ctx, "dev-1", "upgrade", "upgrade-fw")
 	require.NoError(t, err)
 
 	// Dequeue claims the command and marks it Sent.

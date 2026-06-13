@@ -48,6 +48,19 @@ const RotateCertCommandType = "rotate-cert"
 // owned by the command queue via active-uniqueness (#1820); un-executed commands
 // self-expire via OverallDeadline and are retried on the next reconcile tick.
 type Device struct {
+	// ID is the device's opaque, server-assigned handle (e.g. "dev-1"). In this
+	// example it is NOT PII and NOT credential-adjacent: knowing a device_id grants
+	// no access (device auth is separate), unlike session_id / client_ip / secrets
+	// which pkg/redaction.IsSensitiveKey masks. It is therefore logged in plaintext
+	// at Info across the cell (devicecmd enqueue/dequeue/report/ack, the gRPC handler,
+	// the postgres repo) by design — a useful, non-sensitive correlation key — and is
+	// deliberately absent from the redaction sensitive-key set (adding it there would
+	// mask device_id repo-wide, including the platform access log, hurting debugging).
+	//
+	// This holds because the demo device identifier is opaque. A real deployment
+	// whose device identifier is itself PII (e.g. a hardware serial) must route it
+	// through the generic schema-format-derived PII funnel tracked in #1605 rather
+	// than reverse this judgment ad hoc (#1695 F10).
 	ID       string
 	Name     string
 	Status   string // online, offline

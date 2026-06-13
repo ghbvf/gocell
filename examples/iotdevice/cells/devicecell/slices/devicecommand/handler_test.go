@@ -72,7 +72,7 @@ func TestHandleEnqueue(t *testing.T) {
 		{
 			name:       "valid enqueue returns 201",
 			deviceID:   "dev-1",
-			body:       `{"payload":"reboot"}`,
+			body:       `{"payload":"reboot","commandType":"reboot"}`,
 			wantStatus: http.StatusCreated,
 			checkBody: func(t *testing.T, body []byte) {
 				var envelope map[string]any
@@ -83,7 +83,7 @@ func TestHandleEnqueue(t *testing.T) {
 				assert.Equal(t, "dev-1", data["deviceId"])
 				assert.Equal(t, "reboot", data["payload"])
 				assert.Equal(t, "pending", data["status"])
-				assert.Equal(t, "default", data["commandType"])
+				assert.Equal(t, "reboot", data["commandType"])
 				assert.InDelta(t, float64(0), data["attempt"], 0)
 				assert.NotEmpty(t, data["createdAt"])
 				_, hasCompleted := data["completedAt"]
@@ -103,6 +103,14 @@ func TestHandleEnqueue(t *testing.T) {
 			},
 		},
 		{
+			// #1694 F9: commandType is required at the wire schema; omitting it
+			// is rejected at the HTTP boundary (no silent "default" fallback).
+			name:       "missing commandType returns 400",
+			deviceID:   "dev-1",
+			body:       `{"payload":"reboot"}`,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
 			name:       "invalid JSON returns 400",
 			deviceID:   "dev-1",
 			body:       `{bad`,
@@ -117,7 +125,7 @@ func TestHandleEnqueue(t *testing.T) {
 		{
 			name:       "non-existent device returns 404",
 			deviceID:   "dev-missing",
-			body:       `{"payload":"reboot"}`,
+			body:       `{"payload":"reboot","commandType":"reboot"}`,
 			wantStatus: http.StatusNotFound,
 		},
 		{
@@ -184,7 +192,8 @@ func TestHandleEnqueue_RoutePolicy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mux, _ := setupCommandMux()
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/dev-1/commands", strings.NewReader(`{"payload":"reboot"}`))
+			cmdBody := `{"payload":"reboot","commandType":"reboot"}`
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/dev-1/commands", strings.NewReader(cmdBody))
 			req.Header.Set("Content-Type", "application/json")
 			req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
 			mux.ServeHTTP(w, req)

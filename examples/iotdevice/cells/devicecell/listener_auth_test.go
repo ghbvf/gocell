@@ -68,7 +68,8 @@ func TestEnqueue_NonAdmin_ShouldBe403(t *testing.T) {
 
 	// Caller has only "viewer" role — must be rejected.
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/commands", strings.NewReader(`{"payload":"reboot"}`))
+	cmdBody := `{"payload":"reboot","commandType":"reboot"}`
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/commands", strings.NewReader(cmdBody))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("viewer-1", []string{"viewer"}))
 	r.ServeHTTP(rec, req)
@@ -95,7 +96,8 @@ func TestEnqueue_Admin_Returns201(t *testing.T) {
 
 	// Admin enqueues — must succeed.
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/commands", strings.NewReader(`{"payload":"reboot"}`))
+	cmdBody := `{"payload":"reboot","commandType":"reboot"}`
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/commands", strings.NewReader(cmdBody))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("admin-1", []string{dto.RoleAdmin}))
 	r.ServeHTTP(rec, req)
@@ -119,7 +121,8 @@ func TestEnqueue_Operator_Returns201(t *testing.T) {
 	deviceID := extractData(t, rec.Body.Bytes())["id"].(string)
 
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/commands", strings.NewReader(`{"payload":"ping"}`))
+	cmdBody := `{"payload":"ping","commandType":"ping"}`
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/commands", strings.NewReader(cmdBody))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("op-1", []string{dto.RoleOperator}))
 	r.ServeHTTP(rec, req)

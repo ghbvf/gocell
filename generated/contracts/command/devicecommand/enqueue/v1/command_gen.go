@@ -99,7 +99,7 @@ func Dispatch(ctx context.Context, reg *command.Registry, req *Request) (*Respon
 // embedded for the async command-entry value funnel (#1588). A command always
 // declares a request schemaRef (D6), so unlike HTTP this is emitted
 // unconditionally — there is no codegen path to a command without a validator.
-var requestSchemaJSON = []byte("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"command.devicecommand.enqueue.v1.request\",\"type\":\"object\",\"properties\":{\"deviceId\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":256},\"commandType\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":64},\"payload\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":4096}},\"required\":[\"deviceId\",\"payload\"],\"additionalProperties\":false}")
+var requestSchemaJSON = []byte("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"command.devicecommand.enqueue.v1.request\",\"type\":\"object\",\"properties\":{\"deviceId\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":256},\"commandType\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":64},\"payload\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":4096}},\"required\":[\"deviceId\",\"commandType\",\"payload\"],\"additionalProperties\":false}")
 
 // requestValidator validates the untrusted outbox entry payload in DispatchAsync
 // before decode+handle. Compiled once at init; the schema was already
