@@ -34,7 +34,8 @@ Each address is overridable via environment variable (see [Environment Variables
 ## Docker Infrastructure
 
 **Required before starting ssobff.** The stack provides the PostgreSQL instance
-that all three cells depend on.
+that all three cells depend on. Redis and RabbitMQ are only used by the multi-pod
+topology (see §"Multi-pod deployment"); the default Quick Start needs only PostgreSQL.
 
 ```bash
 cd examples/ssobff
@@ -95,11 +96,9 @@ After this the `ADMIN_TOKEN` works for all business endpoints.
 Every endpoint below except `POST /api/v1/access/sessions/login` and
 `POST /api/v1/access/sessions/refresh` requires a `Authorization: Bearer $TOKEN`
 header. Public routes are declared per-Cell via `auth.Mount(mux, auth.Route{Contract: ..., Public: true})`
-inside `corecells/accesscore/cell.go`; the composition root (`examples/ssobff/main.go`)
-构造 `auth.NewAuthJWTFromAssembly(asm)` 作为 error-first 工厂返回 `(AuthJWTFromAssembly, error)`，
-然后通过 `bootstrap.WithListener(..., []auth.ListenerAuth{jwtAuth})` 把 JWT 校验装配到 primary
-listener auth chain（典型形式：`jwtAuth, err := auth.NewAuthJWTFromAssembly(asm); if err != nil { ... }`）。
-Phase4 从 `authProvider` Cell 自动发现 verifier（不再使用顶层 Bootstrap 鉴权发现/中间件选项）。
+inside `corecells/accesscore/cell.go`; the composition root calls
+`kauth.NewAuthJWTFromAssembly(asm)` then passes the result to `bootstrap.WithListener`
+to wire JWT verification into the primary listener auth chain (see `app.go`).
 `walkthrough_test.go` exercises the same sequence and is the authoritative
 behaviour record if a curl here disagrees.
 
@@ -331,7 +330,7 @@ tracked in the backlog. The current PR provides the middleware primitives.
 | `GOCELL_READYZ_VERBOSE_TOKEN` | (unset) | When set, `/readyz?verbose=true` requires a matching `X-Readyz-Token` header. Unset leaves the verbose body disabled (recommended for demos). |
 | `GOCELL_ADAPTER_MODE` | (unset = dev) | Topology adapter mode. `real` opts into the production posture. Combined with `GOCELL_CELL_ADAPTER_MODE=postgres` (and without `GOCELL_SINGLE_POD=1`) it marks a **multi-pod** deployment, which requires distributed event transport + replay backends (see below). |
 | `GOCELL_CELL_ADAPTER_MODE` | (unset = memory) | Storage backend topology. `postgres` requires `GOCELL_ADAPTER_MODE=real`. |
-| `GOCELL_SINGLE_POD` | (unset) | `1`/`true` acknowledges a single-pod real deployment, permitting in-memory replay backends even in `real` mode. |
+| `GOCELL_SINGLE_POD` | (unset) | `1`/`true` acknowledges a single-pod real deployment, permitting in-memory replay backends even in `real` mode. Useful for CI E2E or single-machine testing where you want real PostgreSQL but no Redis dependency. |
 | `GOCELL_AMQP_URL` | (unset) | RabbitMQ broker URL for the outbox event transport. **Required** in multi-pod (real + postgres) topology — missing it is a fail-closed startup error. Ignored in demo topology (in-process bus). |
 | `GOCELL_REDIS_ADDR` / `GOCELL_REDIS_CLUSTER_ADDRS` | (unset) | Redis address(es) for the distributed idempotency claimer + service-token nonce store. **Required** (exactly one) in multi-pod topology — missing it is a fail-closed startup error. `GOCELL_REDIS_PASSWORD` / `GOCELL_REDIS_DB` tune the connection. |
 
@@ -362,6 +361,13 @@ this. Missing `GOCELL_AMQP_URL` or `GOCELL_REDIS_ADDR` in this topology is a
 backends (which would lose events / break at-most-once across replicas).
 A single-pod real deployment may set `GOCELL_SINGLE_POD=1` to keep in-memory
 backends.
+
+> **Warning:** ssobff generates an ephemeral per-pod JWT signing key (demo
+> simplification — see `newSSOBFFJWT` in `app.go`). In a true multi-pod
+> deployment, tokens signed by one pod are rejected by other pods (random 401
+> on cross-replica requests). A real multi-pod deployment needs a shared or
+> persisted JWT key, or sticky sessions — this is out of scope for the demo
+> and is tracked separately.
 
 ## Development
 

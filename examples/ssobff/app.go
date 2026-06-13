@@ -187,6 +187,7 @@ func WithSSOBFFListener(ref cell.ListenerRef, ln net.Listener) SSOBFFAppOption {
 type ssobffInfra struct {
 	rd        replaydeps.ReplayDeps
 	transport eventtransport.Transport
+	topo      bootstrap.Topology
 }
 
 // resolveSSOBFFInfra resolves topology-gated infrastructure (replay deps +
@@ -210,7 +211,7 @@ func resolveSSOBFFInfra(ctx context.Context, clk clock.Clock) (ssobffInfra, erro
 		closeManagedResources(ctx, rd.Resources)
 		return ssobffInfra{}, fmt.Errorf("ssobff: resolve event transport: %w", err)
 	}
-	return ssobffInfra{rd: rd, transport: transport}, nil
+	return ssobffInfra{rd: rd, transport: transport, topo: topo}, nil
 }
 
 // buildSSOBFFBootstrapOptions assembles the bootstrap option slice with LIFO-
@@ -228,12 +229,16 @@ func buildSSOBFFBootstrapOptions(
 ) []bootstrap.Option {
 	// Pool registered first → closes last; relay registered last → closes
 	// first (must stop before pool closes). Broker + Redis resources between.
+	// Full LIFO teardown: ownerCancel → lifecycle.Stop (consumers) → relay → redis → broker → pool.
 	opts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(infra.transport.Publisher),
 		bootstrap.WithSubscriber(infra.transport.Subscriber),
 		bootstrap.WithConsumerBase(cb),
 		bootstrap.WithManagedResource(pool),
+		// Defense-in-depth: validate NonceStore/ConsumerClaimer kind against topology
+		// (mirrors composition.Builder.Build; ssobff hand-assembles so must opt in explicitly).
+		bootstrap.WithControlPlaneTopology(infra.topo),
 	}
 	for _, mr := range infra.transport.Resources {
 		opts = append(opts, bootstrap.WithManagedResource(mr))
@@ -302,14 +307,18 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	loaded := false
 	defer func() {
 		if !loaded {
-			closeManagedResources(ctx, infra.rd.Resources)
-			closeManagedResources(ctx, infra.transport.Resources)
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			closeManagedResources(cleanupCtx, infra.rd.Resources)
+			closeManagedResources(cleanupCtx, infra.transport.Resources)
 		}
 	}()
 
-	// Validate service secret early (fail-fast before DB pool dial).
-	if cfg.internalServiceSecret == "" {
-		return nil, fmt.Errorf("ssobff: configure internal listener auth: %s must be set for the internal listener", ssobffServiceKeyEnv)
+	// Validate and build internal auth chain BEFORE opening the DB pool (F-S2):
+	// a 1–31 byte secret is rejected here rather than after migrations run.
+	internalAuthChain, err := newInternalAuthChain(cfg.internalServiceSecret, infra.rd.NonceStore)
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: configure internal listener auth: %w", err)
 	}
 
 	if cfg.databaseURL == "" {
@@ -322,7 +331,9 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	}
 	defer func() {
 		if !loaded {
-			_ = pool.Close(ctx)
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = pool.Close(cleanupCtx)
 		}
 	}()
 
@@ -344,9 +355,11 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		return nil, err
 	}
 
-	asm, cb, primaryAuth, authzOpt, internalAuthChain, err := buildSSOBFFCore(
-		clk, cfg, infra, pool, txMgr, pgOutboxWriter, jwtIssuer, jwtVerifier, auc,
-	)
+	asm, cb, primaryAuth, authzOpt, err := buildSSOBFFCore(ssobffCoreParams{
+		clk: clk, cfg: cfg, infra: infra, pool: pool, txMgr: txMgr,
+		pgOutboxWriter: pgOutboxWriter, jwtIssuer: jwtIssuer, jwtVerifier: jwtVerifier,
+		auc: auc,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -368,23 +381,27 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	}, nil
 }
 
+// ssobffCoreParams groups the dependencies passed to buildSSOBFFCore, keeping
+// the parameter count ≤ 7 (go:S107).
+type ssobffCoreParams struct {
+	clk            clock.Clock
+	cfg            *ssobffAppConfig
+	infra          ssobffInfra
+	pool           *adapterpg.Pool
+	txMgr          *adapterpg.TxManager
+	pgOutboxWriter *adapterpg.OutboxWriter
+	jwtIssuer      *auth.JWTIssuer
+	jwtVerifier    *auth.JWTVerifier
+	auc            *auditcore.AuditCore
+}
+
 // buildSSOBFFCore wires the session protocol, bootstrap middleware, and assembly.
 // Extracted to keep NewSSOBFFApp ≤ gocognit 15.
-func buildSSOBFFCore(
-	clk clock.Clock,
-	cfg *ssobffAppConfig,
-	infra ssobffInfra,
-	pool *adapterpg.Pool,
-	txMgr *adapterpg.TxManager,
-	pgOutboxWriter *adapterpg.OutboxWriter,
-	jwtIssuer *auth.JWTIssuer,
-	jwtVerifier *auth.JWTVerifier,
-	auc *auditcore.AuditCore,
-) (*assembly.CoreAssembly, *outbox.ConsumerBase, kauth.ListenerAuth, bootstrap.Option, []kauth.ListenerAuth, error) {
+func buildSSOBFFCore(p ssobffCoreParams) (*assembly.CoreAssembly, *outbox.ConsumerBase, kauth.ListenerAuth, bootstrap.Option, error) {
 	// Bootstrap auth-fail observer (Wave-1 #1423 event-based decoupling).
 	var acPtr *accesscore.AccessCore
 	ipHashSalt := []byte(envOr(ssobffIPHashSaltEnv, ssobffIPHashSaltDefault))
-	authFailObserver := newSSOBFFAuthFailObserver(cfg.logger, &acPtr, ipHashSalt)
+	authFailObserver := newSSOBFFAuthFailObserver(p.cfg.logger, &acPtr, ipHashSalt)
 
 	bootstrapMW := auth.NewBootstrapMiddleware(
 		auth.BootstrapCredentials{
@@ -394,7 +411,7 @@ func buildSSOBFFCore(
 		ratelimit.New(ratelimit.Config{
 			Rate:  ssobffBootstrapRateLimitPerSec,
 			Burst: ssobffBootstrapRateLimitBurst,
-		}, clk),
+		}, p.clk),
 		authFailObserver,
 	)
 	sessionProto, err := session.NewProtocol(
@@ -403,33 +420,34 @@ func buildSSOBFFCore(
 		session.WithRevokeOnAll(),
 	)
 	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("ssobff: session.NewProtocol: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("ssobff: session.NewProtocol: %w", err)
 	}
 
-	internalAuthChain, err := newInternalAuthChain(cfg.internalServiceSecret, infra.rd.NonceStore)
-	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("ssobff: configure internal listener auth: %w", err)
-	}
-
-	asm, cb, primaryAuth, authzOpt, err := buildSSOBFFAssembly(clk, ssobffBuildParams{
-		pool: pool, txMgr: txMgr, eb: infra.transport.Publisher, pgOutboxWriter: pgOutboxWriter,
-		jwtIssuer: jwtIssuer, jwtVerifier: jwtVerifier,
-		bootstrapMW: bootstrapMW, sessionProto: sessionProto, logger: cfg.logger,
-		auc: auc, acRef: &acPtr, claimer: infra.rd.ConsumerClaimer,
+	asm, cb, primaryAuth, authzOpt, err := buildSSOBFFAssembly(p.clk, ssobffBuildParams{
+		pool: p.pool, txMgr: p.txMgr, eb: p.infra.transport.Publisher, pgOutboxWriter: p.pgOutboxWriter,
+		jwtIssuer: p.jwtIssuer, jwtVerifier: p.jwtVerifier,
+		bootstrapMW: bootstrapMW, sessionProto: sessionProto, logger: p.cfg.logger,
+		auc: p.auc, acRef: &acPtr, claimer: p.infra.rd.ConsumerClaimer,
 	})
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	return asm, cb, primaryAuth, authzOpt, internalAuthChain, nil
+	return asm, cb, primaryAuth, authzOpt, nil
 }
 
 // closeManagedResources is a best-effort cleanup helper: it closes each
-// managed resource in order. Nil resources are skipped. Used by staged
-// deferred cleanups when NewSSOBFFApp fails after opening infrastructure.
+// managed resource in order. Nil resources are skipped. Non-nil close errors
+// are logged as warnings (mirrors runtime/bootstrap/managed_resource.go teardown).
+// Used by staged deferred cleanups when NewSSOBFFApp fails after opening infrastructure.
 func closeManagedResources(ctx context.Context, rs []lifecycle.ManagedResource) {
 	for _, r := range rs {
-		if r != nil {
-			_ = r.Close(ctx)
+		if r == nil {
+			continue
+		}
+		if err := r.Close(ctx); err != nil {
+			slog.WarnContext(ctx, "ssobff: startup cleanup: managed resource Close failed",
+				slog.String("resource", fmt.Sprintf("%T", r)),
+				slog.Any("error", err))
 		}
 	}
 }

@@ -1,11 +1,14 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // app_topology_test.go covers ssobff's topology-gated multi-pod posture
@@ -24,10 +27,12 @@ const (
 	// 32-byte HMAC secret so newInternalAuthChain's key ring accepts it; the
 	// test never reaches the internal listener, the secret only has to be valid.
 	topoTestServiceSecret = "ssobff-topology-test-secret-32by" // #nosec G101 -- test fixture; never used outside unit tests
-	// A syntactically invalid DSN: if any test path were to reach newSSOBFFPool
-	// it fails fast at parse time (never attempts a network dial / hang). The
-	// fail-closed assertions below prove the gate fires before this is used.
-	topoTestBogusDSN = "not-a-valid-dsn"
+	// topoTestBogusDSN is a DSN that fails at parse time (invalid scheme/host
+	// combination that pgx rejects before any network dial). Using a bare
+	// "not-a-valid-dsn" string risks pgx treating it as a keyword-value DSN
+	// and attempting a socket connect (~5s hang). The "://" prefix forces a URL
+	// parse failure, so the pool never dials.
+	topoTestBogusDSN = "://invalid-host-for-topology-test"
 )
 
 // TestSSOBFFApp_PostgresTopologyMissingRedisFailsClosed pins the #825 + nonce
@@ -59,6 +64,19 @@ func TestSSOBFFApp_PostgresTopologyMissingRedisFailsClosed(t *testing.T) {
 		"expected a Redis fail-closed startup error, got: %s", msg)
 	assert.NotContains(t, msg, "create PG pool",
 		"fail-closed gate must run before the PostgreSQL pool is opened")
+	// Strengthen: verify the wrapped errcode is a recognized control-plane/Redis
+	// code. replaydeps.Resolve checks Redis config before building stores; the
+	// earliest fail-closed path uses ErrValidationFailed (missing GOCELL_REDIS_ADDR
+	// in loadRedisConfigFromEnv), while later store/claimer build paths use
+	// ErrControlplaneNonceStoreMissing / ErrControlplaneClaimerNotDistributed.
+	var ecErr *errcode.Error
+	if errors.As(err, &ecErr) {
+		assert.True(t,
+			ecErr.Code == errcode.ErrValidationFailed ||
+				ecErr.Code == errcode.ErrControlplaneNonceStoreMissing ||
+				ecErr.Code == errcode.ErrControlplaneClaimerNotDistributed,
+			"expected a Redis/control-plane errcode, got: %s", ecErr.Code)
+	}
 }
 
 // TestSSOBFFApp_DemoTopologyDoesNotRequireInfra pins that the default demo
@@ -85,4 +103,7 @@ func TestSSOBFFApp_DemoTopologyDoesNotRequireInfra(t *testing.T) {
 		"demo topology must not require Redis")
 	assert.NotContains(t, msg, "multi-pod",
 		"demo topology must not gate on multi-pod replay backends")
+	// Prove the gate fires at pool creation (bogus DSN), not before it.
+	assert.Contains(t, msg, "create PG pool",
+		"demo topology must reach the PG pool (bogus DSN should fail there, not at a Redis gate)")
 }

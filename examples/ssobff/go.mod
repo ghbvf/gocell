@@ -109,6 +109,6 @@ replace github.com/ghbvf/gocell/adapters/ratelimit => ../../adapters/ratelimit
 
 replace github.com/ghbvf/gocell/adapters/redis => ../../adapters/redis
 
-replace github.com/ghbvf/gocell/adapters/vault => ../../adapters/vault
+replace github.com/ghbvf/gocell/adapters/vault => ../../adapters/vault // indirect dep via cellmodules (ssobff does not directly import vault)
 
 replace github.com/ghbvf/gocell/generated => ../../generated
