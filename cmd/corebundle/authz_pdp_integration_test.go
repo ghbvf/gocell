@@ -191,15 +191,19 @@ func startCorebundlePDPApp(t *testing.T) string {
 	return base
 }
 
-// provisionPDPAdminAndUser runs the four-step provisioning sequence used by
-// both PDP gate tests:
+// provisionPDPAdminAndUser runs the four-step provisioning sequence used by the
+// PDP gate tests, all scoped to tenantID:
 //  1. Bootstrap admin via Basic Auth → capture adminID
 //  2. Admin login → adminToken
 //  3. Admin creates a regular user → capture userID
 //  4. User login → userToken
 //
+// tenantID flows through every step (bootstrap is per-tenant, login/create are
+// tenant-scoped), so calling this twice with distinct tenant IDs provisions two
+// fully independent tenants in one app — the basis of the cross-tenant deny tests.
+//
 // Returns (adminToken, userToken, userID, adminID).
-func provisionPDPAdminAndUser(t *testing.T, base string) (adminToken, userToken, userID, adminID string) {
+func provisionPDPAdminAndUser(t *testing.T, base, tenantID string) (adminToken, userToken, userID, adminID string) {
 	t.Helper()
 
 	const pdpBootstrapUser = "pdp-test-op"
@@ -210,23 +214,23 @@ func provisionPDPAdminAndUser(t *testing.T, base string) (adminToken, userToken,
 	const pdpUserPassword = "PdpUserPass!99"
 
 	// Step 1: bootstrap admin.
-	adminID = pdpSetupAdmin(t, base, pdpBootstrapUser, pdpBootstrapPass, pdpAdminUsername, pdpAdminPassword)
+	adminID = pdpSetupAdmin(t, base, pdpBootstrapUser, pdpBootstrapPass, pdpAdminUsername, pdpAdminPassword, tenantID)
 
 	// Step 2: admin login → JWT with roles=[admin] + tenant claim.
-	adminToken = pdpLogin(t, base, pdpAdminUsername, pdpAdminPassword)
+	adminToken = pdpLogin(t, base, pdpAdminUsername, pdpAdminPassword, tenantID)
 
 	// Step 3: create a regular user as admin.
-	userID = pdpCreateUser(t, base, adminToken, pdpUserUsername, "pdp-user@test.local", pdpUserPassword)
+	userID = pdpCreateUser(t, base, adminToken, pdpUserUsername, "pdp-user@test.local", pdpUserPassword, tenantID)
 
 	// Step 4: regular user login → JWT with roles=[] (no admin).
-	userToken = pdpLogin(t, base, pdpUserUsername, pdpUserPassword)
+	userToken = pdpLogin(t, base, pdpUserUsername, pdpUserPassword, tenantID)
 
 	return adminToken, userToken, userID, adminID
 }
 
 func TestABACPDPGatesAuditQuery(t *testing.T) {
 	base := startCorebundlePDPApp(t)
-	adminToken, userToken, pdpUserID, adminUserID := provisionPDPAdminAndUser(t, base)
+	adminToken, userToken, pdpUserID, adminUserID := provisionPDPAdminAndUser(t, base, testTenantID)
 
 	// adminUserID is the "other actor" for the non-admin cross-actor assertion:
 	// it is a different subject from the regular user, so the non-admin is asking
@@ -327,9 +331,10 @@ func pdpHealthReq(t *testing.T, base, token string) (int, string) {
 	return resp.StatusCode, string(b)
 }
 
-// pdpSetupAdmin provisions the bootstrap admin via POST /api/v1/access/setup/admin.
+// pdpSetupAdmin provisions the bootstrap admin via POST /api/v1/access/setup/admin
+// in the tenant named by tenantID (the X-Tenant-ID header; bootstrap is per-tenant).
 // Returns the UUID assigned to the newly created admin.
-func pdpSetupAdmin(t *testing.T, base, opUser, opPass, adminUser, adminPass string) string {
+func pdpSetupAdmin(t *testing.T, base, opUser, opPass, adminUser, adminPass, tenantID string) string {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{
 		"username": adminUser,
@@ -341,7 +346,7 @@ func pdpSetupAdmin(t *testing.T, base, opUser, opPass, adminUser, adminPass stri
 	require.NoError(t, err)
 	req.SetBasicAuth(opUser, opPass)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Tenant-ID", testTenantID)
+	req.Header.Set("X-Tenant-ID", tenantID)
 	resp, err := pdpAuditClient.Do(req)
 	require.NoError(t, err)
 	var result struct {
@@ -356,15 +361,17 @@ func pdpSetupAdmin(t *testing.T, base, opUser, opPass, adminUser, adminPass stri
 	return result.Data.ID
 }
 
-// pdpLogin authenticates and returns the access token from the response.
-func pdpLogin(t *testing.T, base, username, password string) string {
+// pdpLogin authenticates against tenantID (the X-Tenant-ID header scopes the user
+// lookup) and returns the access token from the response. The minted JWT carries
+// tenant_id=tenantID.
+func pdpLogin(t *testing.T, base, username, password, tenantID string) string {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"username": username, "password": password})
 	req, err := http.NewRequest(http.MethodPost, base+"/api/v1/access/sessions/login",
 		bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Tenant-ID", testTenantID)
+	req.Header.Set("X-Tenant-ID", tenantID)
 	resp, err := pdpAuditClient.Do(req)
 	require.NoError(t, err)
 	var result struct {
@@ -379,8 +386,8 @@ func pdpLogin(t *testing.T, base, username, password string) string {
 	return result.Data.AccessToken
 }
 
-// pdpCreateUser creates a user as an admin and returns the new user's ID.
-func pdpCreateUser(t *testing.T, base, adminToken, username, email, password string) string {
+// pdpCreateUser creates a user as an admin in tenantID and returns the new user's ID.
+func pdpCreateUser(t *testing.T, base, adminToken, username, email, password, tenantID string) string {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{
 		"username": username,
@@ -392,7 +399,7 @@ func pdpCreateUser(t *testing.T, base, adminToken, username, email, password str
 	require.NoError(t, err)
 	req.Header.Set("Authorization", "Bearer "+adminToken)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Tenant-ID", testTenantID)
+	req.Header.Set("X-Tenant-ID", tenantID)
 	resp, err := pdpAuditClient.Do(req)
 	require.NoError(t, err)
 	var result struct {
