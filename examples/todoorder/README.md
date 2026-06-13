@@ -235,9 +235,11 @@ curl -X POST -u "$GOCELL_OPERATOR_ADMIN_USERNAME:$GOCELL_OPERATOR_ADMIN_PASSWORD
 > **Demo note**: the orderprojection slice is the canonical L3 CQRS harness reference:
 > it uses `reg.RegisterProjection` (cellgen-derived) and the framework
 > `projection.Coordinator` owns checkpoint + rebuild. Demo wires in-memory projection
-> infra (MemCheckpointStore + MemReplaySource + MemCursor); events are discarded by
-> NoopWriter so live consumption is best-effort. Faithful PG-backed replay is tracked
-> in backlog.
+> infra (`MemCheckpointStore` + a single `MemProjectionEventSource` as both replay source
+> and cursor — the canonical in-memory `LiveCursor` shape, mirroring the production
+> single-instance `PGProjectionEventSource`); events are discarded by NoopWriter so live
+> consumption is best-effort. Faithful PG-backed replay is tracked in backlog (corebundle
+> already ships the gated durable `PGProjectionEventSource`, EPIC #1504).
 
 ## Durable Wiring Checklist
 

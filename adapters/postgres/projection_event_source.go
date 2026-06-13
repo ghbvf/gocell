@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -47,6 +48,14 @@ const projectionJournalReadySQL = `SELECT 1 FROM projection_events WHERE false`
 // by the D4 emit-time double-write before delivery is always present (a missing row is a genuine
 // permanent error, never the spurious cleaned-row ErrNoRows that was the #1504 root bug).
 const projectionEventPositionByIDSQL = `SELECT global_seq FROM projection_events WHERE id = $1`
+
+// projectionEventLookupTimeout bounds the ResolveCarrier id→global_seq lookup. It mirrors the
+// retired PGProjectionCursor.cursorPositionTimeout (5s): a stalled DB must surface as a
+// (transient) timeout the Coordinator requeues, never hang the projection worker indefinitely.
+// The lookup is an indexed unique-key read, so this is a backstop, not a hot-path budget; a
+// PG-side statement_timeout remains a valid additional defense. context.WithTimeout honors a
+// shorter caller deadline, so a tighter delivery ctx still wins.
+const projectionEventLookupTimeout = 5 * time.Second
 
 // PGProjectionEventSource is the durable production projection.ReplaySource + projection.LiveCursor
 // backed by the append-only projection_events journal (EPIC #1504). Unlike the outbox-backed
@@ -163,7 +172,9 @@ func (s *PGProjectionEventSource) Position(entry projection.ProjectionEvent) (in
 // D4 same-transaction double-write in a PRIOR transaction, before this event was delivered, so it
 // is visible regardless of the txRunner's isolation level (it predates the consumer tx snapshot
 // under REPEATABLE READ/SERIALIZABLE just as it does under READ COMMITTED). The lookup is read-only;
-// it neither needs nor takes a separate connection.
+// it neither needs nor takes a separate connection. It is bounded by projectionEventLookupTimeout
+// (deriving a child ctx that preserves the ambient tx value, so a stall surfaces as a transient
+// timeout the Coordinator requeues rather than hanging the worker; a shorter caller deadline wins).
 //
 // Bootstrap-gap caveat (ADR 202606071600-1504 §5/§8): events produced BEFORE the PR-02 journaling
 // decorator was deployed have no projection_events row, so a redelivery of such a historical event
@@ -181,8 +192,10 @@ func (s *PGProjectionEventSource) ResolveCarrier(
 		return nil, kout.NewPermanentError(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"projection event source: ResolveCarrier requires a live outbox.Entry or a *JournalEvent carrier"))
 	}
+	lookupCtx, cancel := context.WithTimeout(ctx, projectionEventLookupTimeout)
+	defer cancel()
 	var globalSeq int64
-	err := s.db.QueryRow(ctx, projectionEventPositionByIDSQL, entry.EventID()).Scan(&globalSeq)
+	err := s.db.QueryRow(lookupCtx, projectionEventPositionByIDSQL, entry.EventID()).Scan(&globalSeq)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, kout.NewPermanentError(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"projection event source: live entry not present in the projection_events journal"))

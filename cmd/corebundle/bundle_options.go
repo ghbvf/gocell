@@ -260,13 +260,23 @@ func projectionRuntimeOptions(shared *composition.SharedDeps) ([]bootstrap.Optio
 		// checkProjectionDeps). The gated source IS production-safe (durable journal);
 		// the gate only defers the production-default flip (gate removal) until T-06-2
 		// e2e + the PR-05 no-DELETE guardrail — #1771 PR-04, per ADR 202606071600-1504 §9/D9.
-		// Warn (not Info): a projection declared in PG mode will NOT start until the gate
-		// is set, so an operator who expects projections needs to see this.
-		slog.Warn("projection: durable journal source not wired (fail-closed); a projection declared in PG mode will fail fast at bootstrap",
+		logArgs := []any{
 			slog.String("gate_env", envProjectionPGJournalPreview),
 			slog.Bool("wired", false),
 			slog.String("gated_source", "projection_events (durable, production-safe)"),
-			slog.String("production_default_flip", "gh #1771 PR-04 (gated on T-06-2 e2e)"))
+			slog.String("production_default_flip", "gh #1771 PR-04 (gated on T-06-2 e2e)"),
+		}
+		if len(generatedProjectionSourceTopics()) == 0 {
+			// No projection declared (corebundle's default today): gate-off is a benign
+			// empty-workload default, not actionable — log at Info to avoid startup noise
+			// on every deployment that ships no projection (controller-runtime posture:
+			// an empty workload does not warn).
+			slog.Info("projection: no durable journal source wired (no projection declared; gate off)", logArgs...)
+		} else {
+			// A projection IS declared but the gate is off → it will fail fast in the
+			// phase6 drain. Actionable: warn so the operator sets the gate to wire it.
+			slog.Warn("projection: durable journal source not wired but a projection is declared — bootstrap will fail fast; set the gate to wire it", logArgs...)
+		}
 		return nil, nil
 	}
 	// Info (not Warn): wiring the durable, production-safe journal source under the gate is

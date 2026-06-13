@@ -71,12 +71,14 @@ func (f *fakeReplayScanner) Scan(dest ...any) error {
 // are overridden (the methods the journal source calls).
 type mockProjTx struct {
 	pgx.Tx
-	row      *mockProjRow
-	rows     *mockProjRows
-	queryErr error
+	row        *mockProjRow
+	rows       *mockProjRows
+	queryErr   error
+	lastRowCtx context.Context // ctx of the most recent QueryRow (for deadline assertions)
 }
 
-func (m *mockProjTx) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
+func (m *mockProjTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	m.lastRowCtx = ctx
 	if m.row == nil {
 		return &mockProjRow{scanErr: pgx.ErrNoRows}
 	}
