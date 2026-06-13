@@ -457,11 +457,23 @@ func TestFoldEvents_AllKindsHandled(t *testing.T) {
 	var n int
 	for k := journal.KindStepStarted; k.Valid(); k++ {
 		n++
-		_, _, err := foldEvents([]journal.Event{{Kind: k, StepName: "step1"}}, def)
+		cursor, prevState, err := foldEvents([]journal.Event{{Kind: k, StepName: "step1", Payload: []byte(`{"x":1}`)}}, def)
 		wantErr := k == journal.KindStepFailed // only the defensive guard errors
 		if (err != nil) != wantErr {
 			t.Errorf("kind %s (%d): foldEvents err=%v, wantErr=%v — a new EventKind needs an explicit foldEvents case (#1950 fail-closed default)",
 				k, k, err, wantErr)
+		}
+		if wantErr {
+			continue
+		}
+		// Classification check (not just "no error"): only KindStepCompleted
+		// advances the cursor / seeds prevState; every other kind is a skip.
+		if k == journal.KindStepCompleted {
+			if cursor != 1 || !bytes.Equal(prevState, []byte(`{"x":1}`)) {
+				t.Errorf("kind %s: cursor=%d prevState=%q, want 1 / payload", k, cursor, prevState)
+			}
+		} else if cursor != 0 || prevState != nil {
+			t.Errorf("kind %s: cursor=%d prevState=%q, want 0 / nil (skip kind must not advance)", k, cursor, prevState)
 		}
 	}
 	if n < 11 {
@@ -557,6 +569,26 @@ func TestCollectCommittedSteps(t *testing.T) {
 				t.Errorf("stepByName has %d entries, want %d", len(stepByName), len(def.Steps))
 			}
 		})
+	}
+}
+
+// TestCompensationTrigger_Constructors locks the two sealed constructors (#1951):
+// the recovery-XOR-cause invariant is enforced by construction (unexported
+// fields + these are the only minters), and the illegal "recovery WITH cause"
+// combo is unrepresentable outside the package. This proves each constructor
+// sets exactly the right shape the runCompensation call sites rely on.
+func TestCompensationTrigger_Constructors(t *testing.T) {
+	t.Parallel()
+
+	rt := recoveryTrigger()
+	if !rt.recovery || rt.cause != nil {
+		t.Errorf("recoveryTrigger() = {recovery:%v, cause:%v}, want {true, nil}", rt.recovery, rt.cause)
+	}
+
+	cause := errors.New("forward step failed")
+	ft := failureTrigger(cause)
+	if ft.recovery || !errors.Is(ft.cause, cause) {
+		t.Errorf("failureTrigger(err) = {recovery:%v, cause:%v}, want {false, err}", ft.recovery, ft.cause)
 	}
 }
 

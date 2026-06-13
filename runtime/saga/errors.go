@@ -43,8 +43,13 @@ func errFoldEventMismatch(instanceID idutil.SafeID, reason string) error {
 // branch is unreachable for the current vocabulary and trips the moment one is
 // added. The kind label is server-side only (WithInternal), per the KindInternal
 // three-layer rule.
+//
+// Carries the dedicated ErrSagaFoldUnknownKind code (not generic ErrInternal) so
+// the drive loop logs it at Error severity via foldErrLevel (a code↔schema drift
+// is a real correctness anomaly), while the defensive errFoldEventMismatch stays
+// Warn. The kind String() is an enum name (e.g. "step_started"), not user data.
 func errFoldUnknownKind(kind journal.EventKind) error {
-	return errcode.New(errcode.KindInternal, errcode.ErrInternal,
+	return errcode.New(errcode.KindInternal, errcode.ErrSagaFoldUnknownKind,
 		"saga coordinator: foldEvents saw an unhandled journal event kind",
 		errcode.WithInternal(errcode.InternalAttr("_", kind.String())),
 	)

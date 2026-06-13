@@ -804,7 +804,7 @@ func (c *Coordinator) driveOne(ctx context.Context, ci journal.ClaimedInstance) 
 
 	cursor, prevState, foldErr := foldEvents(events, def)
 	if foldErr != nil {
-		c.logger.LogAttrs(ctx, slog.LevelWarn, "saga: fold failed, marking terminal",
+		c.logger.LogAttrs(ctx, foldErrLevel(foldErr), "saga: fold failed, marking terminal",
 			sagalog.InstanceFields(ci.Instance.ID, ci.LeaseID,
 				slog.String("definition_id", string(ci.Instance.DefinitionID)),
 				slog.Any("error", foldErr))...)
@@ -1306,6 +1306,12 @@ func (c *Coordinator) markTerminal(ctx context.Context, id, leaseID idutil.SafeI
 // silently dropped. A new EventKind added without a case here therefore trips
 // loudly (and TestFoldEvents_AllKindsHandled goes red) instead of risking a
 // silent forward-replay re-entry. Adding a kind = add a case here.
+//
+// NOTE: TestFoldEvents_AllKindsHandled enumerates via journal.EventKind.Valid(),
+// so a new kind is only auto-covered once it is also inside Valid()'s range
+// (event.go). A kind outside Valid() cannot be persisted (ValidateForAppend
+// rejects it) so it never reaches fold — but keep Valid() in sync when adding
+// kinds. See journal/event.go Valid().
 func foldEvents(events []journal.Event, def *ksaga.Definition) (cursor int, prevState []byte, err error) {
 	for i := range events {
 		ev := &events[i]
@@ -1362,10 +1368,10 @@ type StepCompletedEvent struct {
 
 // stepCompletedTopicFormat is the wire-contract topic-name template for
 // step-completed outbox events: a `saga.<definitionID>.step_completed` dotted
-// name. Named (not inlined) so the format is a single greppable symbol — the
-// codegen consumer (PR-07 contractgen) reconstructs the same topic at compile
-// time from the definition ID constant, and any change to the shape is made in
-// one place.
+// name. Named (not inlined) so the format is a single greppable symbol and any
+// change to the topic shape is made in one place — a step-completed consumer
+// (codegen-derived or hand-written) must reconstruct the same dotted name from
+// the definition ID constant.
 const stepCompletedTopicFormat = "saga.%s.step_completed"
 
 // stepCompletedTopic returns the outbox topic for a step-completed event.
