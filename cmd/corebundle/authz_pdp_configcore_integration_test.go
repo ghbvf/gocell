@@ -78,7 +78,7 @@ func pdpConfigReq(t *testing.T, base, method, path, token string, body []byte) (
 
 func TestABACPDPGatesConfigcore(t *testing.T) {
 	base := startCorebundlePDPApp(t)
-	adminToken, userToken, _, _ := provisionPDPAdminAndUser(t, base)
+	adminToken, userToken, _, _ := provisionPDPAdminAndUser(t, base, testTenantID)
 
 	writeBody := []byte(`{"key":"e2e.k","value":"v"}`)
 
