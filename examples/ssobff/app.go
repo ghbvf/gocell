@@ -8,12 +8,15 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	kauth "github.com/ghbvf/gocell/kernel/auth"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/adapters/ratelimit"
+	eventtransport "github.com/ghbvf/gocell/cellmodules/eventtransport"
+	replaydeps "github.com/ghbvf/gocell/cellmodules/replaydeps"
 	accesscore "github.com/ghbvf/gocell/corecells/accesscore"
 	accesspg "github.com/ghbvf/gocell/corecells/accesscore/postgres"
 	auditcore "github.com/ghbvf/gocell/corecells/auditcore"
@@ -23,6 +26,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
+	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -36,7 +40,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/eventbus"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
@@ -64,15 +67,28 @@ const (
 	ssobffBootstrapPassword = "ssobff-bootstrap-pass-1!"
 )
 
+// ssobffBootstrapAdminUserEnv / ssobffBootstrapAdminPassEnv name the env vars
+// that supply the setup/admin Basic Auth credentials in real topology. Reuses
+// the cmd/corebundle + cellmodules/accesscore convention
+// (GOCELL_BOOTSTRAP_ADMIN_*) rather than an ssobff-specific name, so a real
+// ssobff deployment configures the same way as the production binary.
+const (
+	ssobffBootstrapAdminUserEnv = "GOCELL_BOOTSTRAP_ADMIN_USERNAME"
+	ssobffBootstrapAdminPassEnv = "GOCELL_BOOTSTRAP_ADMIN_PASSWORD"
+)
+
 // ssobffDatabaseURLEnv is the environment variable holding the PostgreSQL DSN.
 // Required: NewSSOBFFApp fails fast when absent.
 const ssobffDatabaseURLEnv = "DATABASE_URL"
 
 // SSOBFFApp is the shared ssobff composition root used by main and tests.
 //
-// Single-pod demo only: the idempotency claimer is in-memory
-// (idempotency.NewInMemClaimer). Multi-pod deployments require a Redis-backed
-// claimer to guarantee at-most-once event processing across replicas.
+// Topology-gated: demo topology uses in-memory event bus + in-memory idempotency
+// claimer + in-memory nonce store (no infra required). Real multi-pod topology
+// (GOCELL_ADAPTER_MODE=real + GOCELL_CELL_ADAPTER_MODE=postgres) uses a
+// RabbitMQ-backed event transport and Redis-backed claimer + nonce store; missing
+// Redis or AMQP URL is a fail-closed startup error (never a silent in-memory
+// fallback). The fail-closed gate runs BEFORE the PostgreSQL pool is opened.
 type SSOBFFApp struct {
 	bootstrap          *bootstrap.Bootstrap
 	primaryListenAddr  string
@@ -178,133 +194,70 @@ func WithSSOBFFListener(ref cell.ListenerRef, ln net.Listener) SSOBFFAppOption {
 	}
 }
 
-// NewSSOBFFApp builds the ssobff bootstrap app backed by a real PostgreSQL
-// database. DATABASE_URL (or WithSSOBFFDatabaseURL option) must be set.
-//
-// On startup, all pending migrations are applied automatically so the schema
-// is always up to date before any cell initializes.
-//
-// ref: uber-go/fx app.go — single app factory shared by production and tests.
-// Deviates by keeping explicit typed construction instead of DI reflection.
-func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
-	cfg := defaultSSOBFFAppConfig()
-	for _, opt := range opts {
-		if opt == nil {
-			return nil, fmt.Errorf("ssobff: nil app option")
-		}
-		if err := opt(cfg); err != nil {
-			return nil, err
-		}
-	}
+// ssobffInfra bundles the topology-gated infrastructure resolved before the DB pool.
+type ssobffInfra struct {
+	rd        replaydeps.ReplayDeps
+	transport eventtransport.Transport
+	topo      bootstrap.Topology
+}
 
-	// Validate service secret before attempting DB connection so that
-	// configuration errors surface with a clear message at startup.
-	internalAuthChain, err := newInternalAuthChain(cfg.internalServiceSecret)
+// resolveSSOBFFInfra resolves topology-gated infrastructure (replay deps +
+// event transport) BEFORE the PG pool so fail-closed errors (missing Redis /
+// AMQP URL in real multi-pod mode) surface before any network dial.
+// On success, callers own rd.Resources and transport.Resources and must close
+// them on failure. Extracted to keep NewSSOBFFApp ≤ gocognit 15.
+func resolveSSOBFFInfra(ctx context.Context, clk clock.Clock) (ssobffInfra, error) {
+	topo, err := bootstrap.TopologyFromEnv()
 	if err != nil {
-		return nil, fmt.Errorf("ssobff: configure internal listener auth: %w", err)
+		return ssobffInfra{}, fmt.Errorf("ssobff: resolve topology: %w", err)
 	}
-
-	if cfg.databaseURL == "" {
-		return nil, fmt.Errorf("ssobff: %s must be set", ssobffDatabaseURLEnv)
-	}
-
-	// Single root clock for the entire composition root; all sub-functions
-	// receive clk as a parameter (ADR docs/architecture/202605270000 §Decision #4).
-	clk := clock.Real()
-
-	ctx := context.Background()
-	pool, err := newSSOBFFPool(ctx, cfg.databaseURL)
+	rd, err := replaydeps.Resolve(ctx, clk, topo)
 	if err != nil {
-		return nil, err
+		return ssobffInfra{}, fmt.Errorf("ssobff: resolve replay deps: %w", err)
 	}
-
-	txMgr := adapterpg.NewTxManager(pool)
-
-	eb := eventbus.New(clk)
-	// Demo only: test keys are generated in-process, so tokens do not survive
-	// restart and cannot be verified by another replica.
-	jwtIssuer, jwtVerifier, err := newSSOBFFJWT(clk)
-	if err != nil {
-		_ = pool.Close(ctx)
-		return nil, err
-	}
-
-	// Demo deployment runs in interactive mode: no initialadmin lifecycle is
-	// wired (the operator POSTs to /api/v1/access/setup/admin to create the
-	// first admin). Bootstrap credentials are still mandatory — they protect
-	// the setup endpoint via Basic Auth (ADR §D2 operator credential via env).
-	// The demo uses the package-local ssobffBootstrap* constants; production
-	// deployments inject from K8s Secret / Vault.
-	//
-	// Build pgOutboxWriter + auditcore. After Wave-1 #1423 the bootstrap
-	// chain is wired internally into auditcore (WithBootstrapStore); auditcore
-	// now subscribes to event.auth.bootstrap-failed.v1 and writes the chain.
-	pgOutboxWriter := adapterpg.NewOutboxWriter(clk)
-	auc, err := buildSSOBFFAuditCore(ctx, clk, cfg.logger, eb, pgOutboxWriter, pool, txMgr)
-	if err != nil {
-		_ = pool.Close(ctx)
-		return nil, err
-	}
-
-	// Bootstrap auth-fail observer (Wave-1 #1423 event-based decoupling).
-	// Uses the same lazy-pointer pattern as cellmodules/accesscore: the observer
-	// captures acPtr; acPtr is set after the accesscore cell is constructed.
-	// The observer fires only after Init (i.e. HTTP servers start), so *acPtr
-	// is always non-nil by then.
-	var acPtr *accesscore.AccessCore
-	ipHashSalt := []byte(envOr(ssobffIPHashSaltEnv, ssobffIPHashSaltDefault))
-	authFailObserver := newSSOBFFAuthFailObserver(cfg.logger, &acPtr, ipHashSalt)
-
-	ssobffBootstrapCreds := auth.BootstrapCredentials{
-		Username: []byte(ssobffBootstrapUsername),
-		Password: []byte(ssobffBootstrapPassword),
-	}
-	rlLimiter := ratelimit.New(ratelimit.Config{
-		Rate:  ssobffBootstrapRateLimitPerSec,
-		Burst: ssobffBootstrapRateLimitBurst,
-	}, clk)
-	bootstrapMW := auth.NewBootstrapMiddleware(
-		ssobffBootstrapCreds,
-		rlLimiter,
-		authFailObserver,
-	)
-	ssobffSessionProto, err := session.NewProtocol(
-		session.WithFingerprint(session.FingerprintJTIRef{}),
-		session.WithOrdering(session.OrderingAuthzEpoch{}),
-		session.WithRevokeOnAll(),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("ssobff: session.NewProtocol: %w", err)
-	}
-
-	// P1.5 fix (PR-CFG-L2-DIVERGENCE review): durable mode requires an outbox
-	// relay; without it events stay in outbox_entries pending and subscribers
-	// never receive them. Mirrors cellmodules/configcore/storage.go
-	// PG path (lines 109-118 + WithRelay).
-	// outbox_entries table health is covered by the pool-level postgres_ready probe —
-	// acceptable for this demo example; production bundles use per-cell repo probes.
-	pgOutboxStore := adapterpg.NewOutboxStore(pool.DB(), clk)
-	relayCfg := outboxruntime.DefaultRelayConfig()
-	relayWorker := outboxruntime.NewRelay(clk, pgOutboxStore, eb, relayCfg)
-
-	asm, cb, primaryAuth, authzOpt, err := buildSSOBFFAssembly(clk, ssobffBuildParams{
-		pool: pool, txMgr: txMgr, eb: eb, pgOutboxWriter: pgOutboxWriter,
-		jwtIssuer: jwtIssuer, jwtVerifier: jwtVerifier,
-		bootstrapMW: bootstrapMW, sessionProto: ssobffSessionProto, logger: cfg.logger,
-		auc: auc, acRef: &acPtr,
+	transport, err := eventtransport.Resolve(clk, topo, eventtransport.Config{
+		AMQPURL: os.Getenv("GOCELL_AMQP_URL"),
 	})
 	if err != nil {
-		_ = pool.Close(ctx)
-		return nil, err
+		closeManagedResources(ctx, rd.Resources)
+		return ssobffInfra{}, fmt.Errorf("ssobff: resolve event transport: %w", err)
 	}
+	return ssobffInfra{rd: rd, transport: transport, topo: topo}, nil
+}
 
-	b := bootstrap.New(
-		clk,
+// buildSSOBFFBootstrapOptions assembles the bootstrap option slice with LIFO-
+// correct resource registration. Extracted to keep NewSSOBFFApp ≤ gocognit 15.
+func buildSSOBFFBootstrapOptions(
+	infra ssobffInfra,
+	cfg *ssobffAppConfig,
+	asm *assembly.CoreAssembly,
+	cb *outbox.ConsumerBase,
+	primaryAuth kauth.ListenerAuth,
+	authzOpt bootstrap.Option,
+	internalAuthChain []kauth.ListenerAuth,
+	relayWorker *outboxruntime.Relay,
+	pool *adapterpg.Pool,
+) []bootstrap.Option {
+	// Pool registered first → closes last; relay registered last → closes
+	// first (must stop before pool closes). Broker + Redis resources between.
+	// Full LIFO teardown: ownerCancel → lifecycle.Stop (consumers) → relay → redis → broker → pool.
+	opts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithPublisher(eb),
-		bootstrap.WithSubscriber(eb),
+		bootstrap.WithPublisher(infra.transport.Publisher),
+		bootstrap.WithSubscriber(infra.transport.Subscriber),
 		bootstrap.WithConsumerBase(cb),
 		bootstrap.WithManagedResource(pool),
+		// Defense-in-depth: validate NonceStore/ConsumerClaimer kind against topology
+		// (mirrors composition.Builder.Build; ssobff hand-assembles so must opt in explicitly).
+		bootstrap.WithControlPlaneTopology(infra.topo),
+	}
+	for _, mr := range infra.transport.Resources {
+		opts = append(opts, bootstrap.WithManagedResource(mr))
+	}
+	for _, mr := range infra.rd.Resources {
+		opts = append(opts, bootstrap.WithManagedResource(mr))
+	}
+	return append(opts,
 		// LIFO close: relay registered last → stopped first; relay must stop before pool closes.
 		bootstrap.WithRelay(relayWorker),
 		authzOpt, // ABAC PDP injector for the primary listener (#1348 PR-10a).
@@ -316,13 +269,240 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		listenerOption(cell.HealthListener, cfg.health, []kauth.ListenerAuth{kauth.AuthNone{}}),
 		bootstrap.WithHealthRoutes(healthRouteOptions()...),
 	)
+}
 
+// applySSOBFFOptions applies each option in order; returns the first error.
+// Extracted to reduce NewSSOBFFApp cognitive complexity.
+func applySSOBFFOptions(cfg *ssobffAppConfig, opts []SSOBFFAppOption) error {
+	for _, opt := range opts {
+		if opt == nil {
+			return fmt.Errorf("ssobff: nil app option")
+		}
+		if err := opt(cfg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// NewSSOBFFApp builds the ssobff bootstrap app backed by a real PostgreSQL
+// database. DATABASE_URL (or WithSSOBFFDatabaseURL option) must be set.
+//
+// On startup, all pending migrations are applied automatically so the schema
+// is always up to date before any cell initializes.
+//
+// Topology-gated infra resolution runs BEFORE the PostgreSQL pool is opened:
+// real multi-pod topology with missing Redis or AMQP URL returns an error
+// before any network dial to the database, never silently degrading to
+// in-memory backends.
+//
+// ref: uber-go/fx app.go — single app factory shared by production and tests.
+// Deviates by keeping explicit typed construction instead of DI reflection.
+func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
+	cfg := defaultSSOBFFAppConfig()
+	if err := applySSOBFFOptions(cfg, opts); err != nil {
+		return nil, err
+	}
+
+	// Single root clock for the entire composition root; all sub-functions
+	// receive clk as a parameter (ADR docs/architecture/202605270000 §Decision #4).
+	clk := clock.Real()
+	ctx := context.Background()
+
+	// Resolve topology-gated infra BEFORE the DB pool so missing Redis / AMQP
+	// URL in real multi-pod mode fails closed before any network dial.
+	infra, err := resolveSSOBFFInfra(ctx, clk)
+	if err != nil {
+		return nil, err
+	}
+	loaded := false
+	defer func() {
+		if !loaded {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			closeManagedResources(cleanupCtx, infra.rd.Resources)
+			closeManagedResources(cleanupCtx, infra.transport.Resources)
+		}
+	}()
+
+	// Validate and build internal auth chain BEFORE opening the DB pool (F-S2):
+	// a 1–31 byte secret is rejected here rather than after migrations run.
+	internalAuthChain, err := newInternalAuthChain(cfg.internalServiceSecret, infra.rd.NonceStore)
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: configure internal listener auth: %w", err)
+	}
+
+	// Resolve setup/admin bootstrap credentials BEFORE the DB pool (same
+	// fail-fast posture as the internal auth chain): real topology must supply
+	// production credentials via env — the public demo credentials never protect
+	// a real setup endpoint (F1).
+	bootstrapCreds, err := resolveSSOBFFBootstrapCreds(infra.topo)
+	if err != nil {
+		return nil, err
+	}
+
+	if cfg.databaseURL == "" {
+		return nil, fmt.Errorf("ssobff: %s must be set", ssobffDatabaseURLEnv)
+	}
+
+	pool, err := newSSOBFFPool(ctx, cfg.databaseURL)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if !loaded {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = pool.Close(cleanupCtx)
+		}
+	}()
+
+	txMgr := adapterpg.NewTxManager(pool)
+
+	// Demo only: test keys are generated in-process, so tokens do not survive
+	// restart and cannot be verified by another replica.
+	jwtIssuer, jwtVerifier, err := newSSOBFFJWT(clk)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build pgOutboxWriter + auditcore. After Wave-1 #1423 the bootstrap
+	// chain is wired internally into auditcore (WithBootstrapStore); auditcore
+	// now subscribes to event.auth.bootstrap-failed.v1 and writes the chain.
+	pgOutboxWriter := adapterpg.NewOutboxWriter(clk)
+	auc, err := buildSSOBFFAuditCore(ctx, clk, cfg.logger, infra.transport.Publisher, pgOutboxWriter, pool, txMgr)
+	if err != nil {
+		return nil, err
+	}
+
+	asm, cb, primaryAuth, authzOpt, err := buildSSOBFFCore(ssobffCoreParams{
+		clk: clk, cfg: cfg, infra: infra, pool: pool, txMgr: txMgr,
+		pgOutboxWriter: pgOutboxWriter, jwtIssuer: jwtIssuer, jwtVerifier: jwtVerifier,
+		auc: auc, bootstrapCreds: bootstrapCreds,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// P1.5 fix (PR-CFG-L2-DIVERGENCE review): durable mode requires an outbox relay.
+	pgOutboxStore := adapterpg.NewOutboxStore(pool.DB(), clk)
+	relayWorker := outboxruntime.NewRelay(clk, pgOutboxStore, infra.transport.Publisher, outboxruntime.DefaultRelayConfig())
+
+	b := bootstrap.New(clk, buildSSOBFFBootstrapOptions(
+		infra, cfg, asm, cb, primaryAuth, authzOpt, internalAuthChain, relayWorker, pool,
+	)...)
+
+	loaded = true
 	return &SSOBFFApp{
 		bootstrap:          b,
 		primaryListenAddr:  cfg.primary.addr,
 		internalListenAddr: cfg.internal.addr,
 		healthListenAddr:   cfg.health.addr,
 	}, nil
+}
+
+// ssobffCoreParams groups the dependencies passed to buildSSOBFFCore, keeping
+// the parameter count ≤ 7 (go:S107).
+type ssobffCoreParams struct {
+	clk            clock.Clock
+	cfg            *ssobffAppConfig
+	infra          ssobffInfra
+	pool           *adapterpg.Pool
+	txMgr          *adapterpg.TxManager
+	pgOutboxWriter *adapterpg.OutboxWriter
+	jwtIssuer      *auth.JWTIssuer
+	jwtVerifier    *auth.JWTVerifier
+	auc            *auditcore.AuditCore
+	bootstrapCreds auth.BootstrapCredentials
+}
+
+// buildSSOBFFCore wires the session protocol, bootstrap middleware, and assembly.
+// Extracted to keep NewSSOBFFApp ≤ gocognit 15.
+func buildSSOBFFCore(p ssobffCoreParams) (*assembly.CoreAssembly, *outbox.ConsumerBase, kauth.ListenerAuth, bootstrap.Option, error) {
+	// Bootstrap auth-fail observer (Wave-1 #1423 event-based decoupling).
+	var acPtr *accesscore.AccessCore
+	ipHashSalt := []byte(envOr(ssobffIPHashSaltEnv, ssobffIPHashSaltDefault))
+	authFailObserver := newSSOBFFAuthFailObserver(p.cfg.logger, &acPtr, ipHashSalt)
+
+	bootstrapMW := auth.NewBootstrapMiddleware(
+		p.bootstrapCreds,
+		ratelimit.New(ratelimit.Config{
+			Rate:  ssobffBootstrapRateLimitPerSec,
+			Burst: ssobffBootstrapRateLimitBurst,
+		}, p.clk),
+		authFailObserver,
+	)
+	sessionProto, err := session.NewProtocol(
+		session.WithFingerprint(session.FingerprintJTIRef{}),
+		session.WithOrdering(session.OrderingAuthzEpoch{}),
+		session.WithRevokeOnAll(),
+	)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("ssobff: session.NewProtocol: %w", err)
+	}
+
+	asm, cb, primaryAuth, authzOpt, err := buildSSOBFFAssembly(p.clk, ssobffBuildParams{
+		pool: p.pool, txMgr: p.txMgr, eb: p.infra.transport.Publisher, pgOutboxWriter: p.pgOutboxWriter,
+		jwtIssuer: p.jwtIssuer, jwtVerifier: p.jwtVerifier,
+		bootstrapMW: bootstrapMW, sessionProto: sessionProto, logger: p.cfg.logger,
+		auc: p.auc, acRef: &acPtr, claimer: p.infra.rd.ConsumerClaimer,
+	})
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return asm, cb, primaryAuth, authzOpt, nil
+}
+
+// resolveSSOBFFBootstrapCreds selects the setup/admin Basic Auth credentials by
+// topology (F1). Demo topology uses the package-local demo constants so
+// `go run ./examples/ssobff` stays self-contained. Real topology
+// (RequireProductionControlPlane) must supply credentials via
+// GOCELL_BOOTSTRAP_ADMIN_USERNAME / GOCELL_BOOTSTRAP_ADMIN_PASSWORD and fails
+// fast on missing / weak / demo-default values — the public demo credentials
+// (documented in README + source) must never protect a real setup/admin
+// endpoint. Mirrors cellmodules/accesscore.loadBootstrapCredentials validation.
+func resolveSSOBFFBootstrapCreds(topo bootstrap.Topology) (auth.BootstrapCredentials, error) {
+	if !topo.RequireProductionControlPlane() {
+		return auth.BootstrapCredentials{
+			Username: []byte(ssobffBootstrapUsername),
+			Password: []byte(ssobffBootstrapPassword),
+		}, nil
+	}
+	username := strings.TrimSpace(os.Getenv(ssobffBootstrapAdminUserEnv))
+	password := strings.TrimSpace(os.Getenv(ssobffBootstrapAdminPassEnv))
+	if username == "" || password == "" {
+		return auth.BootstrapCredentials{}, fmt.Errorf(
+			"ssobff: real topology requires %s and %s for the setup/admin endpoint "+
+				"(the demo credentials must not protect a production bootstrap path)",
+			ssobffBootstrapAdminUserEnv, ssobffBootstrapAdminPassEnv)
+	}
+	if username == ssobffBootstrapUsername || password == ssobffBootstrapPassword {
+		return auth.BootstrapCredentials{}, fmt.Errorf(
+			"ssobff: %s / %s must not reuse the public demo bootstrap credentials in real topology",
+			ssobffBootstrapAdminUserEnv, ssobffBootstrapAdminPassEnv)
+	}
+	if len(password) < 8 {
+		return auth.BootstrapCredentials{}, fmt.Errorf(
+			"ssobff: %s must be at least 8 bytes", ssobffBootstrapAdminPassEnv)
+	}
+	return auth.BootstrapCredentials{Username: []byte(username), Password: []byte(password)}, nil
+}
+
+// closeManagedResources is a best-effort cleanup helper: it closes each
+// managed resource in order. Nil resources are skipped. Non-nil close errors
+// are logged as warnings (mirrors runtime/bootstrap/managed_resource.go teardown).
+// Used by staged deferred cleanups when NewSSOBFFApp fails after opening infrastructure.
+func closeManagedResources(ctx context.Context, rs []lifecycle.ManagedResource) {
+	for _, r := range rs {
+		if r == nil {
+			continue
+		}
+		if err := r.Close(ctx); err != nil {
+			slog.WarnContext(ctx, "ssobff: startup cleanup: managed resource Close failed",
+				slog.String("resource", fmt.Sprintf("%T", r)),
+				slog.Any("error", err))
+		}
+	}
 }
 
 // IP-hash salt for the demo (#1488). ssobff is a demo-only binary with NO
@@ -493,6 +673,9 @@ type ssobffBuildParams struct {
 	// accesscore cell after construction, allowing the bootstrap auth-fail
 	// observer closure (Wave-1 #1423) to call RecordBootstrapAuthFail.
 	acRef **accesscore.AccessCore
+	// claimer is the topology-gated idempotency claimer: in-memory for demo,
+	// Redis-backed for real multi-pod (resolved by replaydeps.Resolve).
+	claimer idempotency.Claimer
 }
 
 // buildSSOBFFAssembly wires all three platform cells, registers them in a new
@@ -569,8 +752,10 @@ func buildSSOBFFAssembly(clk clock.Clock, p ssobffBuildParams) (
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("ssobff: primary authorizer wiring: %w", err)
 	}
+	// Use the topology-gated claimer from replaydeps: in-memory for demo,
+	// Redis-backed for real multi-pod (guards #825 at-most-once across replicas).
 	cb, err := outbox.NewConsumerBase(
-		idempotency.NewInMemClaimer(clk),
+		p.claimer,
 		outbox.ConsumerBaseConfig{},
 		clk,
 	)

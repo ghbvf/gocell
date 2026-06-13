@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/cellmodules/eventtransport"
+	"github.com/ghbvf/gocell/cellmodules/replaydeps"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -48,7 +49,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 		return nil, nil, err
 	}
 
-	replay, err := buildSharedReplayDeps(ctx, topo, clk)
+	replay, err := replaydeps.Resolve(ctx, clk, topo)
 	if err != nil {
 		return nil, nil, err
 	}
