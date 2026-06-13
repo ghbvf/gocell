@@ -8,11 +8,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/healthz"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/worker"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
@@ -408,4 +411,51 @@ func TestBuilder_With_Accumulates(t *testing.T) {
 
 	b := New().With(m1).With(m2)
 	assert.Len(t, b.modules, 2)
+}
+
+// TestBuilder_WithDeploymentTopology_IllegalSpec_Phase0Rejects proves that
+// Builder.Build's always-injected WithDeploymentTopology option is actually
+// CONSUMED by bootstrap phase0 — not a no-op (F7). The illegal spec
+// (mutual exclusion: same cell in both Colocated and Remote) must cause
+// phase0ValidateOptions to return an errcode.ErrValidationFailed error when
+// Run is called, before any side effects start.
+//
+// Strategy: Build succeeds (Builder only injects the option, does not validate
+// the spec itself); bootstrap.New(clk, app.opts ++ listener opts).Run(ctx)
+// must fail at phase0 with the mutual-exclusion error.
+func TestBuilder_WithDeploymentTopology_IllegalSpec_Phase0Rejects(t *testing.T) {
+	ctx := context.Background()
+
+	// Illegal spec: cellA in BOTH Colocated and Remote — mutual exclusion.
+	illegalSpec := bootstrap.DeploymentTopologySpec{
+		Colocated: []string{"cellA"},
+		Remote:    []bootstrap.RemoteCellEndpoint{{CellID: "cellA", Endpoint: "cell-a:8080"}},
+	}
+	shared := minimalSharedDeps(t)
+	shared.DeploymentTopology = illegalSpec
+
+	c1 := stubCell("mod1")
+	m1 := &fakeCellModule{id: "mod1", cell: c1}
+
+	app, err := New("mod1").With(m1).Build(ctx, shared,
+		func([]cell.Cell) ([]bootstrap.Option, error) { return nil, nil })
+	require.NoError(t, err, "Builder.Build must succeed — it only injects the option, not validate the spec")
+	require.NotNil(t, app)
+
+	// Drive the built opts through bootstrap phase0 by constructing a Bootstrap
+	// with the app opts plus minimum required listeners (phase0 checks listener
+	// configs before deployment topology, so we need at least primary+health).
+	runErr := bootstrap.New(
+		clock.Real(),
+		append(app.opts,
+			bootstrap.WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+			bootstrap.WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		)...,
+	).Run(ctx)
+
+	require.Error(t, runErr, "bootstrap.Run must fail at phase0 for illegal DeploymentTopologySpec")
+	var ec *errcode.Error
+	require.True(t, errors.As(runErr, &ec), "error must be an errcode.Error: %T %v", runErr, runErr)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code,
+		"phase0 must return ErrValidationFailed for mutual-exclusion violation")
 }

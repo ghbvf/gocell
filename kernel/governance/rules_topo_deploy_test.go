@@ -41,9 +41,12 @@ func topoTestAssembly(cellIDs []string, topo metadata.TopologyMeta) *metadata.As
 	}
 }
 
-// topoTestContract builds a minimal ContractMeta with a cell as ownerCell.
+// topoTestContract builds a minimal ContractMeta with a cell as ownerCell and
+// sets the kind-appropriate Endpoints field so contractProvider(c) / ProviderEndpoint()
+// returns the ownerCell ID. Without this, TOPO-11 would skip the contract because
+// ProviderEndpoint() reads Endpoints.Publisher/Server/etc., not OwnerCell.
 func topoTestContract(id, kind, ownerCell string) *metadata.ContractMeta {
-	return &metadata.ContractMeta{
+	c := &metadata.ContractMeta{
 		ID:               id,
 		Kind:             kind,
 		Lifecycle:        "active",
@@ -51,6 +54,20 @@ func topoTestContract(id, kind, ownerCell string) *metadata.ContractMeta {
 		OwnerCell:        ownerCell,
 		File:             "contracts/" + kind + "/" + id + "/contract.yaml",
 	}
+	// Set the kind-appropriate provider endpoint so contractProvider(c) returns ownerCell.
+	switch kind {
+	case "http", "grpc", "saga":
+		c.Endpoints.Server = ownerCell
+	case "event":
+		c.Endpoints.Publisher = ownerCell
+	case "command":
+		c.Endpoints.Handler = ownerCell
+	case "projection":
+		c.Endpoints.Provider = ownerCell
+	case "webhook":
+		// webhook: ProviderEndpoint returns OwnerCell directly — already set above.
+	}
+	return c
 }
 
 // topoTestSlice builds a minimal SliceMeta for topology tests.
@@ -516,6 +533,186 @@ func TestTOPO11_HTTPKindCallConsumer(t *testing.T) {
 	require.Len(t, got, 1, "http-kind call consumer with missing provider must produce 1 TOPO-11 finding")
 	assert.Equal(t, SeverityError, got[0].Severity)
 	assert.Equal(t, IssueRefNotFound, got[0].IssueType)
+	assert.NotEmpty(t, got[0].Fix)
+}
+
+// =============================================================================
+// TOPO-12: topology.remote INTERIM fail-close gate (US4 #1963)
+// =============================================================================
+
+// TestTOPO12_RemotePresent_Fires: assembly with non-empty topology.remote →
+// TOPO-12 must fire (fail-closed until US4 #1963).
+func TestTOPO12_RemotePresent_Fires(t *testing.T) {
+	cellA := metadatatest.NewCellID("cella")
+	cellB := metadatatest.NewCellID("cellb")
+	pm := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			cellA: topoTestCell(cellA),
+			cellB: topoTestCell(cellB),
+		},
+		Slices:    map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{},
+		Journeys:  map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			"testasm": topoTestAssembly([]string{cellA, cellB}, metadata.TopologyMeta{
+				Colocated: []string{cellA},
+				Remote: []metadata.TopologyRemoteEntry{
+					{CellID: cellB, Endpoint: "remote.svc:9090"},
+				},
+			}),
+		},
+	}
+	val := NewValidator(pm, ".", clock.Real())
+	got := findByCode(val.validateTOPO12(), codeTOPO12)
+	require.Len(t, got, 1, "assembly with topology.remote should produce 1 TOPO-12 finding")
+	assert.Equal(t, SeverityError, got[0].Severity)
+	assert.Equal(t, IssueForbidden, got[0].IssueType)
+	assert.NotEmpty(t, got[0].Fix)
+	assert.Equal(t, "topology.remote", got[0].Field)
+}
+
+// TestTOPO12_ColocatedOnly_NoFire: colocated-only topology → TOPO-12 must NOT fire.
+func TestTOPO12_ColocatedOnly_NoFire(t *testing.T) {
+	cellA := metadatatest.NewCellID("cella")
+	pm := &metadata.ProjectMeta{
+		Cells:     map[string]*metadata.CellMeta{cellA: topoTestCell(cellA)},
+		Slices:    map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{},
+		Journeys:  map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			"testasm": topoTestAssembly([]string{cellA}, metadata.TopologyMeta{
+				Colocated: []string{cellA},
+			}),
+		},
+	}
+	val := NewValidator(pm, ".", clock.Real())
+	got := findByCode(val.validateTOPO12(), codeTOPO12)
+	assert.Empty(t, got, "colocated-only topology should produce 0 TOPO-12 findings")
+}
+
+// TestTOPO12_EmptyTopology_NoFire: empty topology → TOPO-12 must NOT fire.
+func TestTOPO12_EmptyTopology_NoFire(t *testing.T) {
+	cellA := metadatatest.NewCellID("cella")
+	pm := &metadata.ProjectMeta{
+		Cells:     map[string]*metadata.CellMeta{cellA: topoTestCell(cellA)},
+		Slices:    map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{},
+		Journeys:  map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			"testasm": topoTestAssembly([]string{cellA}, metadata.TopologyMeta{}),
+		},
+	}
+	val := NewValidator(pm, ".", clock.Real())
+	got := findByCode(val.validateTOPO12(), codeTOPO12)
+	assert.Empty(t, got, "empty topology should produce 0 TOPO-12 findings")
+}
+
+// TestTOPO12_AntiVacuity: the same assembly WITH remote → TOPO-12 fires;
+// WITHOUT remote → does not. Confirms the rule is not vacuously passing.
+func TestTOPO12_AntiVacuity(t *testing.T) {
+	cellA := metadatatest.NewCellID("cella")
+	cellB := metadatatest.NewCellID("cellb")
+
+	// Red: has topology.remote → must fire.
+	pmRed := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			cellA: topoTestCell(cellA),
+			cellB: topoTestCell(cellB),
+		},
+		Slices:    map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{},
+		Journeys:  map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			"testasm": topoTestAssembly([]string{cellA, cellB}, metadata.TopologyMeta{
+				Colocated: []string{cellA},
+				Remote:    []metadata.TopologyRemoteEntry{{CellID: cellB, Endpoint: "host:9090"}},
+			}),
+		},
+	}
+	valRed := NewValidator(pmRed, ".", clock.Real())
+	redGot := findByCode(valRed.validateTOPO12(), codeTOPO12)
+	require.NotEmpty(t, redGot, "anti-vacuity: assembly with topology.remote must produce ≥1 TOPO-12 finding")
+
+	// Green: colocated-only → must NOT fire.
+	pmGreen := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			cellA: topoTestCell(cellA),
+			cellB: topoTestCell(cellB),
+		},
+		Slices:    map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{},
+		Journeys:  map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			"testasm": topoTestAssembly([]string{cellA, cellB}, metadata.TopologyMeta{
+				Colocated: []string{cellA, cellB},
+			}),
+		},
+	}
+	valGreen := NewValidator(pmGreen, ".", clock.Real())
+	greenGot := findByCode(valGreen.validateTOPO12(), codeTOPO12)
+	assert.Empty(t, greenGot, "anti-vacuity: colocated-only assembly must produce 0 TOPO-12 findings")
+}
+
+// =============================================================================
+// TOPO-11 synthetic-red (F3): owner ≠ endpoint-provider
+// =============================================================================
+
+// TestTOPO11_OwnerDiffersFromProvider: provider via ProviderEndpoint differs
+// from ownerCell. TOPO-11 must fire on the PROVIDER (endpoint), not the owner,
+// proving it uses contractProvider(c) not c.Owner().Cell(). The provider cell
+// is NOT in the assembly (→ Missing); the owner cell IS in the assembly (→ Local).
+// If TOPO-11 used owner, it would skip this — only checking provider catches it.
+func TestTOPO11_OwnerDiffersFromProvider(t *testing.T) {
+	consumer := metadatatest.NewCellID("consumercell")
+	owner := metadatatest.NewCellID("ownercell")      // contract's ownerCell — in assembly
+	provider := metadatatest.NewCellID("svcprovider") // contract's endpoints.server — NOT in assembly
+
+	cells := map[string]*metadata.CellMeta{
+		consumer: topoTestCell(consumer),
+		owner:    topoTestCell(owner),
+		provider: topoTestCell(provider),
+	}
+	slices := map[string]*metadata.SliceMeta{
+		consumer + "/consumeslice": topoTestSlice("consumeslice", consumer, []metadata.ContractUsage{
+			{Contract: "http.svc.v1", Role: "call"},
+		}),
+	}
+	// The contract has ownerCell=owner but endpoints.server=provider (different).
+	// When TOPO-11 uses contractProvider (ProviderEndpoint = endpoints.server),
+	// it finds "provider" which is NOT in the assembly → Missing → error.
+	// If it used c.Owner().Cell(), it would find "owner" which IS in the assembly
+	// → Local → no error (the bug F3 fixes).
+	contracts := map[string]*metadata.ContractMeta{
+		"http.svc.v1": {
+			ID:               "http.svc.v1",
+			Kind:             "http",
+			Lifecycle:        "active",
+			ConsistencyLevel: "L1",
+			OwnerCell:        owner,
+			// endpoints.server is the provider endpoint — distinct from ownerCell.
+			Endpoints: metadata.EndpointsMeta{Server: provider},
+			File:      "contracts/http/svc/v1/contract.yaml",
+		},
+	}
+	// Assembly contains consumer and owner, but NOT provider.
+	pm := &metadata.ProjectMeta{
+		Cells:     cells,
+		Slices:    slices,
+		Contracts: contracts,
+		Journeys:  map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			"testasm": topoTestAssembly([]string{consumer, owner}, metadata.TopologyMeta{}),
+		},
+	}
+	val := NewValidator(pm, ".", clock.Real())
+	got := findByCode(val.validateTOPO11(), codeTOPO11)
+	require.Len(t, got, 1,
+		"TOPO-11 must fire on the PROVIDER cell (not the owner) when provider is not in assembly")
+	assert.Equal(t, SeverityError, got[0].Severity)
+	assert.Equal(t, IssueRefNotFound, got[0].IssueType)
+	// The finding message must name the provider cell (proving it's not using owner).
+	assert.Contains(t, got[0].Message, provider,
+		"TOPO-11 finding must name the provider cell (not the owner cell)")
 	assert.NotEmpty(t, got[0].Fix)
 }
 

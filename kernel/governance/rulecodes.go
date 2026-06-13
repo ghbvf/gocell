@@ -71,6 +71,12 @@ const (
 	// by a cell in an assembly must have its provider cell reachable (Local or Remote).
 	// A provider that is Missing (∉ colocated ∪ remote) is a deployment-time error.
 	codeTOPO11 RuleCode = "TOPO-11"
+	// TOPO-12: INTERIM gate — topology.remote is schema-valid but cannot be honored
+	// until US4 #1963 wires cross-process transport; declaring it fails gocell validate
+	// + codegen. US4 REMOVES this rule, its const, and the single codegen call site.
+	// The runtime DeploymentTopology API and ValidateTopologyStructure intentionally
+	// still accept remote (US4-ready shape preserved in schema).
+	codeTOPO12 RuleCode = "TOPO-12"
 
 	// VERIFY — verify closure (rules_verify.go; VERIFY-06 strict-only).
 	codeVERIFY01 RuleCode = "VERIFY-01"

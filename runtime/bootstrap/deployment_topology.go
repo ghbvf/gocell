@@ -57,7 +57,7 @@ const (
 	errMsgDeployTopoDuplicateCellID = "deployment topology: duplicate cellID"
 	errMsgDeployTopoEmptyCellID     = "deployment topology: cellID must not be empty or whitespace"
 	errMsgDeployTopoEmptyEndpoint   = "deployment topology: remote endpoint must not be empty"
-	errMsgDeployTopoInvalidEndpoint = "deployment topology: remote endpoint is not a valid network address (host:port or URL with host)"
+	errMsgDeployTopoInvalidEndpoint = "deployment topology: remote endpoint must be host:port or an http/https URL"
 )
 
 // newDeploymentTopology validates spec-internal consistency and seals it.
@@ -67,7 +67,7 @@ const (
 //   - duplicate cellID in colocated or remote
 //   - empty/whitespace cellID
 //   - empty endpoint
-//   - malformed endpoint (requires net.SplitHostPort OR url.Parse-with-Host)
+//   - malformed endpoint (not a bare host:port or http/https URL with non-empty host)
 //
 // It does NOT check membership in an assembly cell set (that is the static
 // gocell-validate gate TOPO-10; bootstrap has no cell set).

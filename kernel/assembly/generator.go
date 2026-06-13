@@ -540,6 +540,14 @@ func (g *Generator) generateModulesGenComposition(
 			"assembly topology validation failed before codegen", err,
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID))))
 	}
+	// INTERIM gate (US4 #1963 removes this block): topology.remote cannot be honored
+	// yet — cross-process transport is not wired. Fail codegen closed to prevent silent
+	// degrade. CheckRemotePlacementSupported returns nil when topology.remote is empty.
+	if err := metadata.CheckRemotePlacementSupported(asm); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
+			"assembly topology.remote is not yet supported (US4 #1963)", err,
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID))))
+	}
 	topoData := buildDeploymentTopologyData(asm.Topology)
 	ctx := modulesCompositionContext{
 		AssemblyID:             assemblyID,

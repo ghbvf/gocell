@@ -2,6 +2,7 @@ package assembly
 
 import (
 	"errors"
+	"go/format"
 	"strings"
 	"testing"
 
@@ -81,9 +82,11 @@ func TestGenerateModulesGen_DeploymentTopology_Colocated(t *testing.T) {
 	assert.NotContains(t, content, "RemoteCellEndpoint")
 }
 
-// TestGenerateModulesGen_DeploymentTopology_Remote verifies the composition
-// form emits Remote entries in generatedDeploymentTopology.
-func TestGenerateModulesGen_DeploymentTopology_Remote(t *testing.T) {
+// TestGenerateModulesGen_DeploymentTopology_Remote_FailClosed is a synthetic-red
+// test (F2/F1): topology.remote is schema-valid but fail-closed at codegen by the
+// INTERIM CheckRemotePlacementSupported gate (US4 #1963 removes it). GenerateModulesGen
+// must return an errcode.ErrMetadataInvalid error for any assembly with non-empty remote.
+func TestGenerateModulesGen_DeploymentTopology_Remote_FailClosed(t *testing.T) {
 	topo := metadata.TopologyMeta{
 		Colocated: []string{metadatatest.CellIDAccessCore},
 		Remote:    []metadata.TopologyRemoteEntry{{CellID: metadatatest.CellIDAuditCore, Endpoint: "audit.svc:9090"}},
@@ -91,16 +94,40 @@ func TestGenerateModulesGen_DeploymentTopology_Remote(t *testing.T) {
 	project := buildCompositionProjectForTopology(topo)
 	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
-	out, err := gen.GenerateModulesGen("topobundle")
-	require.NoError(t, err)
+	_, err := gen.GenerateModulesGen("topobundle")
+	require.Error(t, err, "topology.remote must fail codegen closed (US4 #1963 interim gate)")
 
-	content := string(out)
+	var ec *ecErr.Error
+	require.True(t, errors.As(err, &ec), "error must be an errcode.Error, got: %T", err)
+	assert.Equal(t, ecErr.ErrMetadataInvalid, ec.Code)
+}
+
+// TestGenerateModulesGen_DeploymentTopology_ColocaledOnly_ValidGo verifies that
+// a non-empty colocated-only topology (no remote) passes the codegen gate and
+// emits syntactically valid Go with the expected generatedDeploymentTopology()
+// function (F2). Uses format.Source to prove the output is gofmt-parseable.
+func TestGenerateModulesGen_DeploymentTopology_ColocaledOnly_ValidGo(t *testing.T) {
+	topo := metadata.TopologyMeta{
+		Colocated: []string{metadatatest.CellIDAccessCore, metadatatest.CellIDAuditCore},
+	}
+	project := buildCompositionProjectForTopology(topo)
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
+
+	out, err := gen.GenerateModulesGen("topobundle")
+	require.NoError(t, err, "colocated-only topology must not be rejected by codegen")
+
+	// Prove the emitted Go is syntactically valid.
+	formatted, fmtErr := format.Source(out)
+	require.NoError(t, fmtErr, "generated Go must be parseable by go/format.Source")
+
+	content := string(formatted)
 	assert.Contains(t, content, "func generatedDeploymentTopology() bootstrap.DeploymentTopologySpec")
 	assert.Contains(t, content, `"github.com/ghbvf/gocell/runtime/bootstrap"`)
+	// Both colocated IDs must appear in the emitted Colocated slice.
 	assert.Contains(t, content, `"accesscore"`)
-	assert.Contains(t, content, `bootstrap.RemoteCellEndpoint`)
 	assert.Contains(t, content, `"auditcore"`)
-	assert.Contains(t, content, `"audit.svc:9090"`)
+	// No Remote block should be emitted.
+	assert.NotContains(t, content, "RemoteCellEndpoint")
 }
 
 // TestGenerateModulesGen_DeploymentTopology_IllegalMutualExclusion is the

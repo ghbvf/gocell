@@ -9,10 +9,14 @@ import (
 
 // IsValidNetworkAddress reports whether ep is a syntactically valid cell
 // transport endpoint: a bare "host:port" (net.SplitHostPort) OR an http/https
-// URL with a non-empty host. Other schemes (file/gopher/…) are rejected. This
-// is a SYNTACTIC check only — connectivity/loopback policy is the transport
-// layer's concern (US5). Loopback (localhost) IS accepted: legitimate for
-// dev/compose/multi-process-test topologies.
+// URL with a non-empty host. Other schemes (file/gopher/…) are rejected.
+//
+// This is a SYNTACTIC check only. Production transport security (TLS/mTLS,
+// non-loopback enforcement) for remote endpoints is enforced separately by
+// US6 #1964 per the ADR security-gap matrix (docs/architecture/
+// 202606131142-1423-adr-cell-deployment-topology.md). Do NOT add TLS or
+// loopback rejection here — that belongs to US6. Loopback (localhost) IS
+// accepted: legitimate for dev/compose/multi-process-test topologies.
 func IsValidNetworkAddress(ep string) bool {
 	// Try http/https URL first (unambiguous because of the scheme prefix).
 	// Must be checked before SplitHostPort to avoid "http" being treated as host.

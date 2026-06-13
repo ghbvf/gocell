@@ -1,11 +1,13 @@
 package governance
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 const fieldContractUsagesContractFmt = "contractUsages[%d].contract"
@@ -451,6 +453,11 @@ func (v *Validator) validateTOPO09() []ValidationResult {
 // validateTOPO10 checks that each assembly's topology section is structurally
 // valid, delegating all set-logic to metadata.ValidateTopologyStructure (single
 // source of truth). An empty topology is always valid (all-colocated default).
+//
+// F8: ValidateTopologyStructure returns an errcode error with WithDetails
+// carrying "cellID" and "field" keys. TOPO-10 uses errors.As + FindAttr to
+// surface these in the ValidationResult.Message and field anchor — no logic
+// duplication with ValidateTopologyStructure.
 func (v *Validator) validateTOPO10() []ValidationResult {
 	var results []ValidationResult
 
@@ -466,16 +473,50 @@ func (v *Validator) validateTOPO10() []ValidationResult {
 			continue
 		}
 		if err := metadata.ValidateTopologyStructure(asm); err != nil {
+			fieldAnchor, msg := extractTOPO10Location(err)
 			results = append(results, v.newError(
 				codeTOPO10, IssueInvalid,
 				assemblyFile(asm),
-				"topology",
-				err.Error(),
-				"topology.colocated ∪ remote must mutually-exclusively and exhaustively partition cells; remote endpoints must be host:port or URL",
+				fieldAnchor,
+				msg,
+				"topology.colocated ∪ remote must mutually-exclusively and exhaustively partition cells;"+
+					" remote endpoints must be bare host:port or http/https URL with host",
 			))
 		}
 	}
 	return results
+}
+
+// extractTOPO10Location extracts the field anchor and message from a
+// ValidateTopologyStructure error. When the error is an *errcode.Error with
+// "field" and "cellID" public details, those values are used to produce a
+// precise anchor and message — no duplication with ValidateTopologyStructure.
+// Falls back to "topology" + err.Error() for non-errcode paths.
+func extractTOPO10Location(err error) (fieldAnchor, msg string) {
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		return "topology", err.Error()
+	}
+	field := stringAttr(ec, "field")
+	if field == "" {
+		return "topology", err.Error()
+	}
+	if cellID := stringAttr(ec, "cellID"); cellID != "" {
+		return field, fmt.Sprintf("%s (cellID: %q)", ec.Message, cellID)
+	}
+	return field, ec.Message
+}
+
+// stringAttr returns the string-valued public detail under key, or "" if absent
+// or non-string. Single helper so extractTOPO10Location stays within the
+// cognitive-complexity budget (the FindAttr→string-assert pattern repeats).
+func stringAttr(ec *errcode.Error, key string) string {
+	d, ok := ec.FindAttr(key)
+	if !ok {
+		return ""
+	}
+	s, _ := d.Value().(string)
+	return s
 }
 
 // validateTOPO11 checks that for every contract consumed by a cell in an
@@ -526,6 +567,14 @@ func (v *Validator) checkTOPO11Assembly(asm *metadata.AssemblyMeta) []Validation
 }
 
 // checkTOPO11Slice checks provider reachability for each consumer contract usage in one slice.
+// F3: uses contractProvider(c) (ProviderEndpoint, actual serving cell) — not c.Owner().Cell()
+// (definitional owner) — per CONTRACT-OWNER-CELL-FUNNEL-01.
+// Skip conditions:
+//   - non-consumer roles (provider roles are not the consumer side)
+//   - contract not found in project (REF-02 owns missing-contract errors)
+//   - framework-owned contract (provider-agnostic; c.Owner().IsFramework())
+//   - no provider endpoint declared (e.g. draft with no endpoints.server)
+//   - external actor provider (actors are out-of-process; topology only governs cells)
 func (v *Validator) checkTOPO11Slice(asm *metadata.AssemblyMeta, s *metadata.SliceMeta) []ValidationResult {
 	var results []ValidationResult
 	for i, cu := range s.ContractUsages {
@@ -536,9 +585,12 @@ func (v *Validator) checkTOPO11Slice(asm *metadata.AssemblyMeta, s *metadata.Sli
 		if !ok {
 			continue // REF-02 owns missing-contract errors
 		}
-		provider, isCell := c.Owner().Cell()
-		if !isCell {
+		if c.Owner().IsFramework() {
 			continue // framework-owned — provider-agnostic, skip
+		}
+		provider := contractProvider(c) // actual serving cell (ProviderEndpoint)
+		if provider == "" {
+			continue // no provider declared (e.g. draft with no endpoints)
 		}
 		if _, knownCell := v.project.Cells[provider]; !knownCell {
 			continue // external actor provider — not subject to assembly topology
@@ -555,7 +607,9 @@ func (v *Validator) checkTOPO11Slice(asm *metadata.AssemblyMeta, s *metadata.Sli
 				sliceFile(s),
 				fmt.Sprintf(fieldContractUsagesContractFmt, i),
 				msg,
-				"add the provider cell to assembly.cells (co-located) or declare it in topology.remote with an endpoint",
+				// F4: hint mentions assembly.cells requirement before topology placement
+				"add the provider cell to assembly.cells, then place it in topology.colocated"+
+					" or topology.remote (with an endpoint)",
 			))
 		}
 	}
@@ -613,6 +667,45 @@ func (v *Validator) validateTOPO06() []ValidationResult {
 				cellAssembly[ref.ID] = a.ID
 			}
 		}
+	}
+	return results
+}
+
+// validateTOPO12 is the INTERIM fail-close gate for topology.remote.
+// Until US4 #1963 wires cross-process transport, a non-empty topology.remote
+// declaration cannot be honored — the cell would still be composed locally
+// (silent degrade). This rule rejects any assembly that declares topology.remote
+// at gocell validate time. US4 REMOVES this rule (+ its const + the codegen
+// call site) when it makes composition honor the partition.
+// The runtime DeploymentTopology API and ValidateTopologyStructure intentionally
+// still accept remote (US4-ready schema shape preserved).
+func (v *Validator) validateTOPO12() []ValidationResult {
+	var results []ValidationResult
+
+	keys := make([]string, 0, len(v.project.Assemblies))
+	for k := range v.project.Assemblies {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, asmID := range keys {
+		asm := v.project.Assemblies[asmID]
+		if asm == nil || len(asm.Topology.Remote) == 0 {
+			continue
+		}
+		results = append(results, v.newError(
+			codeTOPO12, IssueForbidden,
+			assemblyFile(asm),
+			"topology.remote",
+			fmt.Sprintf(
+				"assembly %q declares topology.remote (%d cell(s))"+
+					" which is not yet supported — cross-process transport lands in US4 #1963;"+
+					" cells are still composed locally (silent degrade)",
+				asm.ID, len(asm.Topology.Remote),
+			),
+			"remove topology.remote (only colocated is supported until US4 #1963),"+
+				" or keep all cells in topology.colocated",
+		))
 	}
 	return results
 }
