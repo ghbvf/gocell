@@ -9,7 +9,7 @@ require (
 	github.com/ghbvf/gocell/corecells v0.0.0-00010101000000-000000000000
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/rabbitmq/amqp091-go v1.11.0
-	github.com/redis/go-redis/v9 v9.20.0
+	github.com/redis/go-redis/v9 v9.20.1
 	github.com/stretchr/testify v1.11.1
 )
 

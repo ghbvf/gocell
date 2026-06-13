@@ -45,7 +45,7 @@ require (
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/pressly/goose/v3 v3.27.1 // indirect
-	github.com/redis/go-redis/v9 v9.20.0 // indirect
+	github.com/redis/go-redis/v9 v9.20.1 // indirect
 	github.com/ryanuber/go-glob v1.0.0 // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
 	go.opentelemetry.io/contrib/propagators/b3 v1.44.0 // indirect
