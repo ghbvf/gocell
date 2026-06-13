@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "unevaluatedProperties:false is a producer-side guard enforced at contract-test time (forbids accidental leakage of certificate body, chain, or private-key fields into the event bus). Consumers MUST refetch current cert state via the status endpoint. ref: docs/architecture/202606130635-1939-adr-framework-owned-contract.md",
+  "title": "event.deviceidentity.cert-issued.v1.payload",
+  "type": "object",
+  "description": "Metadata-only notification: a device certificate was issued. Consumers MUST refetch via the status endpoint to obtain current certificate state. No certificate body or key material is carried on the bus.",
+  "properties": {
+    "deviceId": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "Non-blank device identifier"
+    },
+    "tenantId": {
+      "type": "string",
+      "description": "Tenant identifier; omitted for single-tenant deployments"
+    },
+    "issuer": {
+      "type": "string",
+      "description": "Issuing CA identifier"
+    },
+    "serial": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "Non-blank certificate serial number"
+    },
+    "epoch": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Monotonic renewal epoch; 0 for initial enrollment"
+    },
+    "notBefore": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Certificate validity start time (RFC 3339)"
+    },
+    "notAfter": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Certificate expiry time (RFC 3339)"
+    },
+    "action": {
+      "type": "string",
+      "enum": ["enrolled", "renewed"],
+      "description": "Issuance action: enrolled (first certificate) or renewed (rotation)"
+    },
+    "actorId": {
+      "type": "string",
+      "description": "Principal ID of the actor who triggered issuance"
+    }
+  },
+  "required": [
+    "deviceId",
+    "serial",
+    "epoch",
+    "notBefore",
+    "notAfter",
+    "action",
+    "actorId"
+  ],
+  "unevaluatedProperties": false
+}

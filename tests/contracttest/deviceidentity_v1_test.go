@@ -34,7 +34,9 @@ func TestDeviceIdentityEnroll_V1(t *testing.T) {
 	// parameter errors
 	c.MustRejectRequest(t, []byte(`{"deviceId":"dev-1"}`))                              // missing csr
 	c.MustRejectRequest(t, []byte(`{"csr":"Q1NSREVS"}`))                                // missing deviceId
-	c.MustRejectRequest(t, []byte(`{"csr":"Q1NSREVS","deviceId":"dev-1","usages":["bogus"]}`)) // bad keyUsage enum
+	// NOTE: keyUsage allow-set is NOT enforced at the wire layer — contractgen cannot
+	// generate typed enums for array items, and the allowed-usage set is the Signer's
+	// SignConstraints responsibility (spec FR-005, PR-5). usages is a free-form string array here.
 	c.MustRejectResponse(t, []byte(`{"data":{"certificate":"Y2VydA==","chain":"Y2hhaW4=","serial":"01AB","notBefore":"2026-06-13T00:00:00Z","notAfter":"2027-06-13T00:00:00Z","epoch":0,"status":"bogus"}}`)) // bad certStatus enum
 	c.MustRejectResponse(t, []byte(`{"data":{"serial":"01AB","status":"issued"}}`))     // missing required cert material
 

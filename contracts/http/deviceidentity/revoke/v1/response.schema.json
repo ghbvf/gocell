@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.deviceidentity.revoke.v1.response",
+  "type": "object",
+  "required": ["data"],
+  "additionalProperties": false,
+  "properties": {
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["serial", "status", "revokedAt"],
+      "properties": {
+        "serial": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "requested",
+            "issued",
+            "active",
+            "near-expiry",
+            "renewing",
+            "rotated",
+            "revoked",
+            "expired"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "unspecified",
+            "keyCompromise",
+            "caCompromise",
+            "affiliationChanged",
+            "superseded",
+            "cessationOfOperation",
+            "certificateHold",
+            "removeFromCRL",
+            "privilegeWithdrawn",
+            "aaCompromise"
+          ]
+        },
+        "revokedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64
+        }
+      }
+    }
+  }
+}

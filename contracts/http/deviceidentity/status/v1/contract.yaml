@@ -1,0 +1,45 @@
+id: http.deviceidentity.status.v1
+kind: http
+ownerCell: _framework
+consistencyLevel: L0
+lifecycle: draft
+description: |
+  Device identity certificate status query — returns the current certificate status for a device.
+  ref: docs/architecture/202606130635-1939-adr-framework-owned-contract.md
+endpoints:
+  server: _framework
+  clients: []
+  http:
+    method: GET
+    path: /api/v1/deviceidentity/status
+    successStatus: 200
+    noContent: false
+    responseProjection: true
+    queryParams:
+      deviceId:
+        type: string
+        required: true
+        maxLength: 256
+      serial:
+        type: string
+        required: false
+        maxLength: 128
+      tenantId:
+        type: string
+        required: false
+        maxLength: 256
+    responses:
+      400:
+        description: "Bad request — missing required query parameter or invalid format"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — authenticated but lacks required permission"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: "Not Found — device or certificate not found"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  response: response.schema.json

@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "unevaluatedProperties:false is a producer-side guard enforced at contract-test time (forbids accidental leakage of certificate body into the event bus). Consumers MUST refetch via the status endpoint. ref: RFC 5280 §5.3.1 CRLReason",
+  "title": "event.deviceidentity.cert-revoked.v1.payload",
+  "type": "object",
+  "description": "Metadata-only notification: a device certificate was revoked. Consumers MUST refetch via the status endpoint to obtain current certificate state. No certificate body is carried on the bus.",
+  "properties": {
+    "deviceId": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "Non-blank device identifier"
+    },
+    "tenantId": {
+      "type": "string",
+      "description": "Tenant identifier; omitted for single-tenant deployments"
+    },
+    "issuer": {
+      "type": "string",
+      "description": "Issuing CA identifier"
+    },
+    "serial": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "Non-blank certificate serial number"
+    },
+    "reason": {
+      "type": "string",
+      "enum": [
+        "unspecified",
+        "keyCompromise",
+        "caCompromise",
+        "affiliationChanged",
+        "superseded",
+        "cessationOfOperation",
+        "certificateHold",
+        "removeFromCRL",
+        "privilegeWithdrawn",
+        "aaCompromise"
+      ],
+      "description": "RFC 5280 §5.3.1 CRLReason code for revocation"
+    },
+    "revokedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp when the certificate was revoked (RFC 3339)"
+    },
+    "actorId": {
+      "type": "string",
+      "description": "Principal ID of the actor who triggered revocation"
+    }
+  },
+  "required": [
+    "deviceId",
+    "serial",
+    "reason",
+    "revokedAt",
+    "actorId"
+  ],
+  "unevaluatedProperties": false
+}

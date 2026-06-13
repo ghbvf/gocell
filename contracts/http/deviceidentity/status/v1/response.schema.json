@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.deviceidentity.status.v1.response",
+  "type": "object",
+  "required": ["data"],
+  "additionalProperties": false,
+  "properties": {
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deviceId", "serial", "status", "notBefore", "notAfter", "epoch"],
+      "properties": {
+        "deviceId": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "serial": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "requested",
+            "issued",
+            "active",
+            "near-expiry",
+            "renewing",
+            "rotated",
+            "revoked",
+            "expired"
+          ]
+        },
+        "notBefore": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64
+        },
+        "notAfter": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64
+        },
+        "epoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "renewalTime": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64
+        }
+      }
+    }
+  }
+}

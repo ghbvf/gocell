@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.devicestate.v1.response",
+  "type": "object",
+  "required": ["data"],
+  "additionalProperties": false,
+  "properties": {
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deviceId", "state"],
+      "properties": {
+        "deviceId": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "state": {
+          "type": "string",
+          "enum": ["online", "offline", "unknown"]
+        },
+        "lastSeenAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64
+        },
+        "tenantId": {
+          "type": "string",
+          "maxLength": 256
+        }
+      }
+    }
+  }
+}

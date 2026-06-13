@@ -1,0 +1,14 @@
+id: event.deviceidentity.cert-issued.v1
+description: "L2 outbox fact: a device certificate was issued (enrolled or renewed). Metadata-only — no certificate body or key material on the bus; consumers MUST refetch via the status endpoint. Producer-only and lifecycle: draft until a real subscriber lands. ref: docs/architecture/202606130635-1939-adr-framework-owned-contract.md. ref: RFC 7030 §4.2."
+kind: event
+ownerCell: _framework
+consistencyLevel: L2
+lifecycle: draft
+endpoints:
+  publisher: _framework
+schemaRefs:
+  headers: headers.schema.json
+  payload: payload.schema.json
+replayable: false
+idempotencyKey: eventId
+deliverySemantics: at-least-once

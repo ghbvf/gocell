@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.deviceidentity.renew.v1.request",
+  "type": "object",
+  "required": ["csr", "deviceId", "priorSerial"],
+  "additionalProperties": false,
+  "properties": {
+    "csr": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384,
+      "description": "Base64-encoded PKCS#10 DER certificate signing request."
+    },
+    "deviceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "priorSerial": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "tenantId": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "requestedDuration": {
+      "type": "string",
+      "maxLength": 32
+    },
+    "usages": {
+      "type": "array",
+      "uniqueItems": true,
+      "description": "Requested X.509 key/extended-key usages (cert-manager vocabulary: signing, digital signature, content commitment, key encipherment, key agreement, data encipherment, cert sign, crl sign, encipher only, decipher only, any, server auth, client auth, code signing, email protection, s/mime, ipsec end system, ipsec tunnel, ipsec user, timestamping, ocsp signing, microsoft sgc, netscape sgc). The allowed-usage set is enforced by the Signer SignConstraints at issuance (spec FR-005, PR-5), not at the wire layer. ref: cert-manager KeyUsage; RFC 5280 §4.2.1.3.",
+      "items": {
+        "type": "string",
+        "maxLength": 32
+      }
+    },
+    "subjectAltNames": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dnsNames": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 253
+          }
+        },
+        "ipAddresses": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 45
+          }
+        },
+        "uris": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 2048
+          }
+        },
+        "emailAddresses": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 320
+          }
+        }
+      }
+    }
+  }
+}
