@@ -82,7 +82,7 @@ graph TD
     PR10 --> PR11
 ```
 
-| Wave | 可并行 PR | 说明 |
+| Wave（设计时，从 PR-1 起算） | 可并行 PR | 说明 |
 |------|----------|------|
 | 1 | PR-1, PR-2, PR-3 | ADR / 设备主体 / 契约 a 互不依赖 |
 | 2 | PR-4, PR-5, PR-8a | 均依赖 PR-3（契约范式/deviceidentity 形状）；PR-8a = framework serving harness（#1939 延后项） |
@@ -90,7 +90,7 @@ graph TD
 | 4 | PR-8b, PR-9 | PR-8b 依赖 5/6/2/8a；PR-9 依赖 4/6/7/8a |
 | 5 | PR-10, PR-11 | wiring 后收口 |
 
-> 注：上表为**设计时 DAG**。Wave 1（PR-1/2/3）已全部 CLOSED，实时滚动 Wave（机器单源 = GitHub Project #3 Wave 字段）：W1 PR-5/PR-4/PR-8a · W2 PR-6/PR-7 · W3 PR-8b/PR-9 · W4 PR-10 · 超窗 PR-11。
+> 注：上表为**设计时 DAG 绝对 wave**（从 PR-1 起算）。Wave 1（PR-1/2/3）已全部 CLOSED；**实时滚动 Wave**（机器单源 = GitHub Project #3 Wave 字段，仅排 OPEN 子任务，设计 Wave 2-5 → 滚动 W1-W4）：W1 PR-5/PR-4/PR-8a · W2 PR-6/PR-7 · W3 PR-8b/PR-9 · W4 PR-10 · **超窗(>W4)** PR-11（依赖 all，滚动后落 W5 超 cap，不入 Project Wave 字段）。
 
 ---
 
@@ -239,7 +239,7 @@ graph TD
 
 ### PR-10 composition wiring + bootstrap option + readyz + docs/ops ~1100 行
 
-**Goal**：把证书底座装配进 composition root，对外暴露 option + readyz + 运维文档。依赖 PR-6/7/8/9。
+**Goal**：把证书底座装配进 composition root，对外暴露 option + readyz + 运维文档。依赖 PR-6/7/8a/8b/9。
 
 - [ ] T10.1 [TDD] bootstrap option fail-fast 测试（缺 Signer fail-fast，不静默 noop）。
 - [ ] T10.2 `bootstrap.WithCertSigner` / `WithCertLifecycle` option（强依赖 fail-fast）；cellmodules 绑定 softca↔certsigning。
@@ -263,7 +263,7 @@ graph TD
 
 ### 关键路径
 
-`PR-3 → PR-5 → PR-6/7 → PR-8b/9 → PR-10 → PR-11`（约 5 wave）；PR-8a（serving harness）依赖 PR-3、阻塞 PR-8b/9/10，可在 Wave 2 与 PR-5 并行起跑。PR-1（ADR）+ PR-2（设备主体）可与 PR-3 并行起跑。
+`PR-3 → {PR-5 · PR-8a 并行} → PR-6/7 · PR-8b/9 → PR-10 → PR-11`（约 5 wave）。PR-8a（serving harness）依赖 PR-3、阻塞 PR-8b/9/10——是关键路径节点（非旁路），可在 Wave 2 与 PR-5 并行起跑。PR-1（ADR）+ PR-2（设备主体）可与 PR-3 并行起跑。
 
 ### Within Each PR
 
