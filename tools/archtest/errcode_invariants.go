@@ -1377,6 +1377,51 @@ func isRuntimeAssembledCodeArg(expr ast.Expr) bool {
 	return ok
 }
 
+// codeArgKind classifies a Code-bearing expression (a mint callsite's code
+// argument or an exported sentinel's value) for ERRCODE-PREFIX-OWNERSHIP-01.
+type codeArgKind int
+
+const (
+	// codeArgSkip — the expression is a bare non-const variable/parameter
+	// reference whose value archtest cannot resolve without data-flow tracing.
+	// This is the rule's single permanent residual (forwarding-launder, gh #1508):
+	// closing it needs go/ssa taint and would false-positive on legitimate
+	// parse/compare-side errcode.Code(resp.Code) conversions. See the
+	// ERRCODE-PREFIX-OWNERSHIP-01 godoc §Residual.
+	codeArgSkip codeArgKind = iota
+	// codeArgConst — the value resolves to a compile-time string constant
+	// (string literal, or — with type info — a const Ident/SelectorExpr/BinaryExpr).
+	codeArgConst
+	// codeArgRuntimeAssembled — the value is built at runtime via a Code
+	// type-conversion or string concatenation (the closed-set escape hatch);
+	// a HARD FAIL.
+	codeArgRuntimeAssembled
+)
+
+// classifyCodeExpr is the single classifier shared by the mint-callsite scan
+// (target A) and the sentinel scan (target B). With type information it resolves
+// const string values — including SelectorExpr / Ident forms (e.g.
+// var ErrX errcode.Code = somepkg.Const) — via EvaluateConstString, closing the
+// target-B residual #2 (non-literal sentinel; gh #1508). Without type info
+// (AST-only fixture mode) it falls back to *ast.BasicLit string literals.
+//
+// A value that is neither a resolvable const nor a BasicLit is codeArgRuntimeAssembled
+// when it contains a CallExpr/BinaryExpr (Code conversion or concatenation),
+// otherwise codeArgSkip (a bare var/param reference — the data-flow residual #1).
+func classifyCodeExpr(info *types.Info, expr ast.Expr) (codeStr string, kind codeArgKind) {
+	if info != nil {
+		if s, ok := EvaluateConstString(info, expr); ok {
+			return s, codeArgConst
+		}
+	} else if lit, ok := expr.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+		return strings.Trim(lit.Value, `"`), codeArgConst
+	}
+	if isRuntimeAssembledCodeArg(expr) {
+		return "", codeArgRuntimeAssembled
+	}
+	return "", codeArgSkip
+}
+
 // scanErrcodePrefixOwnershipDiags is the unit-testable core of the
 // ERRCODE-PREFIX-OWNERSHIP-01 scanner.
 func scanErrcodePrefixOwnershipDiags(
@@ -1393,7 +1438,7 @@ func scanErrcodePrefixOwnershipDiags(
 		diags = append(diags, callDiags...)
 		seen = append(seen, callSeen...)
 	}
-	sentinelDiags, sentinelSeen := scanSentinelDeclCodeArgs(fset, file, rel)
+	sentinelDiags, sentinelSeen := scanSentinelDeclCodeArgs(fset, file, rel, info)
 	diags = append(diags, sentinelDiags...)
 	seen = append(seen, sentinelSeen...)
 	return diags, seen
@@ -1420,7 +1465,8 @@ func scanCallsiteCodeArgs(
 	return diags, seen
 }
 
-// scanOneCallsiteCodeArg checks a single call-expression code argument.
+// scanOneCallsiteCodeArg checks a single mint callsite's code argument
+// (target A). Classification is shared with the sentinel scan via classifyCodeExpr.
 func scanOneCallsiteCodeArg(
 	fset *token.FileSet,
 	call *ast.CallExpr,
@@ -1428,53 +1474,17 @@ func scanOneCallsiteCodeArg(
 	rel, displayName string,
 	info *types.Info,
 ) (diags []Diagnostic, seen []string) {
-	if info != nil {
-		return scanOneCallsiteTyped(fset, call, codeArg, rel, displayName, info)
-	}
-	return scanOneCallsiteAST(fset, call, codeArg, rel, displayName)
-}
-
-// scanOneCallsiteTyped handles a callsite with type information available.
-func scanOneCallsiteTyped(
-	fset *token.FileSet,
-	call *ast.CallExpr,
-	codeArg ast.Expr,
-	rel, displayName string,
-	info *types.Info,
-) (diags []Diagnostic, seen []string) {
-	codeStr, constOK := EvaluateConstString(info, codeArg)
-	if !constOK {
-		if isRuntimeAssembledCodeArg(codeArg) {
-			diags = append(diags, errcodeRuntimeAssembledDiag(fset, call.Pos(), rel, displayName))
-		}
-		return diags, seen
-	}
-	seen = append(seen, codeStr)
-	if d, bad := errcodeOwnershipDiag(fset, call.Pos(), rel, displayName, codeStr); bad {
-		diags = append(diags, d)
-	}
-	return diags, seen
-}
-
-// scanOneCallsiteAST handles a callsite without type information (AST-only mode).
-func scanOneCallsiteAST(
-	fset *token.FileSet,
-	call *ast.CallExpr,
-	codeArg ast.Expr,
-	rel, displayName string,
-) (diags []Diagnostic, seen []string) {
-	if isRuntimeAssembledCodeArg(codeArg) {
+	codeStr, kind := classifyCodeExpr(info, codeArg)
+	switch kind {
+	case codeArgRuntimeAssembled:
 		diags = append(diags, errcodeRuntimeAssembledDiag(fset, call.Pos(), rel, displayName))
-		return diags, seen
-	}
-	lit, ok := codeArg.(*ast.BasicLit)
-	if !ok || lit.Kind != token.STRING {
-		return diags, seen
-	}
-	codeStr := strings.Trim(lit.Value, `"`)
-	seen = append(seen, codeStr)
-	if d, bad := errcodeOwnershipDiag(fset, call.Pos(), rel, displayName, codeStr); bad {
-		diags = append(diags, d)
+	case codeArgConst:
+		seen = append(seen, codeStr)
+		if d, bad := errcodeOwnershipDiag(fset, call.Pos(), rel, displayName, codeStr); bad {
+			diags = append(diags, d)
+		}
+	case codeArgSkip:
+		// Bare non-const var/param reference — residual #1 (data-flow ceiling, gh #1508).
 	}
 	return diags, seen
 }
@@ -1510,18 +1520,21 @@ func errcodeOwnershipDiag(fset *token.FileSet, pos token.Pos, rel, displayName, 
 }
 
 // scanSentinelDeclCodeArgs scans package-scope sentinel declarations for
-// ERRCODE-PREFIX-OWNERSHIP-01 (target B: exported Err* sentinels).
+// ERRCODE-PREFIX-OWNERSHIP-01 (target B: exported Err* sentinels). info is
+// threaded so const SelectorExpr/Ident sentinel values resolve via
+// EvaluateConstString (closes residual #2; nil in AST-only fixture mode).
 func scanSentinelDeclCodeArgs(
 	fset *token.FileSet,
 	file *ast.File,
 	rel string,
+	info *types.Info,
 ) (diags []Diagnostic, seen []string) {
 	EachInSubtree[ast.GenDecl](file, func(gen *ast.GenDecl) {
 		if gen.Tok != token.CONST && gen.Tok != token.VAR {
 			return
 		}
 		EachInChildren[ast.ValueSpec](gen, func(vs *ast.ValueSpec) {
-			d, s := scanSentinelValueSpec(fset, vs, rel)
+			d, s := scanSentinelValueSpec(fset, vs, rel, info)
 			diags = append(diags, d...)
 			seen = append(seen, s...)
 		})
@@ -1529,32 +1542,78 @@ func scanSentinelDeclCodeArgs(
 	return diags, seen
 }
 
-// scanSentinelValueSpec checks one ValueSpec for exported Err* sentinels.
-func scanSentinelValueSpec(fset *token.FileSet, vs *ast.ValueSpec, rel string) (diags []Diagnostic, seen []string) {
+// scanSentinelValueSpec checks one ValueSpec for exported errcode.Code Err*
+// sentinels. Classification is shared with the mint-callsite scan via
+// classifyCodeExpr: a const value (literal, or const SelectorExpr/Ident under
+// type info) is prefix-checked; a runtime-assembled value is a HARD FAIL; a bare
+// non-const reference is residual #1 (data-flow ceiling, gh #1508).
+func scanSentinelValueSpec(fset *token.FileSet, vs *ast.ValueSpec, rel string, info *types.Info) (diags []Diagnostic, seen []string) {
 	for i, name := range vs.Names {
 		if !isExportedErrSentinelName(name.Name) || i >= len(vs.Values) {
 			continue
 		}
-		lit, ok := vs.Values[i].(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
+		if !isErrcodeCodeSentinel(info, name, vs.Values[i]) {
 			continue
 		}
-		codeStr := strings.Trim(lit.Value, `"`)
-		if !strings.HasPrefix(codeStr, "ERR_") {
-			continue
-		}
-		seen = append(seen, codeStr)
-		if _, owned := errcode.OwnerOfCode(errcode.Code(codeStr)); !owned {
-			pos := fset.Position(name.Pos())
-			diags = append(diags, Diagnostic{
-				Rel:  rel,
-				Line: pos.Line,
-				Message: fmt.Sprintf(
-					"%s = %q prefix not registered "+errcodeRegisterPrefixHint,
-					name.Name, codeStr,
-				),
-			})
+		codeStr, kind := classifyCodeExpr(info, vs.Values[i])
+		switch kind {
+		case codeArgRuntimeAssembled:
+			diags = append(diags, errcodeSentinelDiag(fset, name, rel,
+				fmt.Sprintf("%s is a runtime-assembled Code sentinel — "+
+					"constructing Code via type-conversion or string concatenation "+
+					"breaks the closed-set invariant (ERRCODE-PREFIX-OWNERSHIP-01); "+
+					"use a const string-literal sentinel", name.Name)))
+		case codeArgConst:
+			// ERR_ gate: an Err* sentinel may legitimately hold a non-code
+			// string; only validate values shaped like an error code.
+			if !strings.HasPrefix(codeStr, "ERR_") {
+				continue
+			}
+			seen = append(seen, codeStr)
+			if _, owned := errcode.OwnerOfCode(errcode.Code(codeStr)); !owned {
+				diags = append(diags, errcodeSentinelDiag(fset, name, rel,
+					fmt.Sprintf("%s = %q prefix not registered "+errcodeRegisterPrefixHint,
+						name.Name, codeStr)))
+			}
+		case codeArgSkip:
+			// Bare non-const var/param reference — residual #1 (data-flow ceiling, gh #1508).
 		}
 	}
 	return diags, seen
+}
+
+// errcodeSentinelDiag builds a Target-B sentinel Diagnostic anchored at the
+// sentinel name's position.
+func errcodeSentinelDiag(fset *token.FileSet, name *ast.Ident, rel, message string) Diagnostic {
+	return Diagnostic{
+		Rel:     rel,
+		Line:    fset.Position(name.Pos()).Line,
+		Message: message,
+	}
+}
+
+// isErrcodeCodeSentinel reports whether an exported Err*-named sentinel is in
+// scope for Target B — i.e. its declared type is errcode.Code.
+//
+// In typed mode this is confirmed via go/types, which excludes Err*-named but
+// non-Code sentinels that share the naming convention (e.g.
+// var ErrX = errcode.New(...) is *errcode.Error; var ErrX = errors.New(...) is
+// error). In AST-only fixture mode (info == nil) the type is unconfirmable, so
+// it falls back to the original BasicLit-string proxy.
+func isErrcodeCodeSentinel(info *types.Info, name *ast.Ident, value ast.Expr) bool {
+	if info == nil {
+		_, ok := value.(*ast.BasicLit)
+		return ok
+	}
+	obj := info.Defs[name]
+	if obj == nil {
+		return false
+	}
+	named, ok := obj.Type().(*types.Named)
+	if !ok {
+		return false
+	}
+	tn := named.Obj()
+	return tn != nil && tn.Name() == "Code" &&
+		tn.Pkg() != nil && tn.Pkg().Path() == errcodeImportPath
 }
