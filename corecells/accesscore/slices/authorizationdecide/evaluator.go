@@ -97,6 +97,13 @@ func matchAllConditions(conditions []abac.Condition, r attributeResolver) bool {
 // attribute does not satisfy the condition and therefore is not granted by that
 // rule. This is intentional: a missing attribute must never widen access. Policy
 // authors relying on negative conditions must ensure the attribute is supplied.
+//
+// OpEqualsAttr compares the LHS attribute against a SECOND resolved attribute
+// (RHSSource, RHSKey) instead of static Values (subject.sub == resource.id). The
+// RHS resolve is fail-closed on the same terms as the LHS: a not-found RHS makes
+// the condition unsatisfied (never vacuously true), so a missing owner/id
+// attribute cannot grant ownership. Both resolve `found` results must be honored
+// — statically guarded by AUTHZ-EVAL-ATTR-NOTFOUND-GUARD-01.
 func matchCondition(c abac.Condition, r attributeResolver) bool {
 	vals, found := r.resolve(c.Source, c.Key)
 	if !found {
@@ -107,6 +114,12 @@ func matchCondition(c abac.Condition, r attributeResolver) bool {
 		return anyIn(vals, c.Values)
 	case abac.OpNotEquals, abac.OpNotIn:
 		return !anyIn(vals, c.Values)
+	case abac.OpEqualsAttr:
+		rvals, rfound := r.resolve(c.RHSSource, c.RHSKey)
+		if !rfound {
+			return false
+		}
+		return anyIn(vals, rvals)
 	default:
 		return false
 	}
