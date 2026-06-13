@@ -61,6 +61,16 @@ func setupAsyncMux(t *testing.T) (http.Handler, *outboxtest.Recorder) {
 	return newSeededAsyncHandler(t, rec.CellEmitter(), "dev-1"), rec
 }
 
+// reqIDCtx injects a sealed RequestIdentity into ctx (caller + fixed fingerprint +
+// key), as the HTTP idempotency middleware would mint — for handler/contract tests
+// that drive the mux without the middleware in front.
+func reqIDCtx(t *testing.T, base context.Context, caller, key string) context.Context {
+	t.Helper()
+	id, err := idemkey.NewRequestIdentity(caller, "fp-test", key)
+	require.NoError(t, err)
+	return idemkey.WithRequestIdentity(base, id)
+}
+
 // TestHandleEnqueueAsync_Accepted: a POST with an Idempotency-Key (injected into
 // ctx as the middleware would) returns 202 and emits exactly one command.
 func TestHandleEnqueueAsync_Accepted(t *testing.T) {
@@ -69,7 +79,7 @@ func TestHandleEnqueueAsync_Accepted(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/dev-1/async-commands",
 		strings.NewReader(`{"commandType":"reboot","payload":"now"}`))
 	req.Header.Set("Content-Type", "application/json")
-	ctx := idemkey.WithKey(auth.TestContext("admin-user", []string{dto.RoleAdmin}), "idem-1")
+	ctx := reqIDCtx(t, auth.TestContext("admin-user", []string{dto.RoleAdmin}), "admin-user", "idem-1")
 	mux.ServeHTTP(w, req.WithContext(ctx))
 
 	assert.Equal(t, http.StatusAccepted, w.Code)

@@ -16,9 +16,11 @@ import (
 
 // Request — http.device.command.enqueue-async.v1.request
 type Request struct {
-	ID          string `json:"id"`
-	CommandType string `json:"commandType,omitempty"`
-	Payload     string `json:"payload"`
+	ID string `json:"id"`
+	// IdempotencyKey is populated from the "Idempotency-Key" request header by the generated handler; do not set it in the Service implementation (read-only).
+	IdempotencyKey string `json:"-"`
+	CommandType    string `json:"commandType,omitempty"`
+	Payload        string `json:"payload"`
 }
 
 // Response — http.device.command.enqueue-async.v1.response

@@ -64,12 +64,19 @@ func newAsyncPod(t *testing.T, store *outboxtest.FakeStore) http.Handler {
 }
 
 // postAsync sends an async-enqueue request to a pod with the given Idempotency-Key
-// and asserts 202 Accepted.
+// (fixed body) and asserts 202 Accepted.
 func postAsync(t *testing.T, pod http.Handler, deviceID, idemKey string) {
+	t.Helper()
+	postAsyncBody(t, pod, deviceID, idemKey, `{"commandType":"reboot","payload":"now"}`)
+}
+
+// postAsyncBody is postAsync with an explicit request body (to vary the payload
+// fingerprint across requests).
+func postAsyncBody(t *testing.T, pod http.Handler, deviceID, idemKey, body string) {
 	t.Helper()
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/async-commands",
-		strings.NewReader(`{"commandType":"reboot","payload":"now"}`))
+		strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", idemKey)
 	req = req.WithContext(auth.TestContext("admin-user", []string{dto.RoleAdmin}))
@@ -135,4 +142,47 @@ func TestCrossCell_HTTPAsyncEnqueue_SameSlotDedup(t *testing.T) {
 
 	assert.Equal(t, int64(1), h.calls.Load(),
 		"cross-cell: the enqueue handler must run exactly once for the same logical command")
+}
+
+// TestCrossCell_HTTPAsyncEnqueue_DifferentPayloadNotFolded is the #1610 F1 proof:
+// the SAME Idempotency-Key with DIFFERENT payloads, submitted to two pods (so the
+// per-pod HTTP idempotency layer never sees both and cannot 422 the fingerprint
+// mismatch), must NOT be folded by the command layer — the composite dedup token
+// includes the payload fingerprint, so each dispatches.
+func TestCrossCell_HTTPAsyncEnqueue_DifferentPayloadNotFolded(t *testing.T) {
+	t.Parallel()
+
+	store := outboxtest.NewFakeStore()
+	reg := runtimecommand.NewRegistry()
+	h := &countingEnqueueHandler{}
+	require.NoError(t, enqueue.Register(reg, h))
+
+	podA := newAsyncPod(t, store)
+	podB := newAsyncPod(t, store)
+
+	const idemKey = "same-key-diff-payload"
+	postAsyncBody(t, podA, "d1", idemKey, `{"commandType":"reboot","payload":"AAA"}`)
+	postAsyncBody(t, podB, "d1", idemKey, `{"commandType":"reboot","payload":"BBB"}`)
+
+	rows := store.Snapshot()
+	require.Len(t, rows, 2)
+	cmd0, ok0 := runtimecommand.ClaimKeyFromEntry(rows[0].Entry)
+	cmd1, ok1 := runtimecommand.ClaimKeyFromEntry(rows[1].Entry)
+	require.True(t, ok0 && ok1)
+	assert.NotEqual(t, cmd0, cmd1,
+		"#1610 F1: same key + DIFFERENT payload must NOT fold to the same dedup slot")
+
+	relay := newAsyncRelay(t, store, reg)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	go func() { _ = relay.Start(ctx) }()
+
+	require.NoError(t, store.WaitFor(ctx, func(rows []outboxtest.FakeRow) bool {
+		return len(rows) == 2 &&
+			rows[0].Status == kout.StatePublished &&
+			rows[1].Status == kout.StatePublished
+	}), "both distinct commands must settle to published")
+
+	assert.Equal(t, int64(2), h.calls.Load(),
+		"#1610 F1: different payloads (same key) must each dispatch — not deduped")
 }

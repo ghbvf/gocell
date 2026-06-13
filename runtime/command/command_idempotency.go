@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -158,23 +157,26 @@ func EmitAsync[T any](
 }
 
 // EmitAsyncFromIdempotencyKey is the sanctioned HTTP→command idempotency bridge
-// (#1610 "Idempotency-Key ↔ command_id"). It sources the per-instance commandID
-// from the request's validated Idempotency-Key in ctx (injected by the HTTP
-// idempotency middleware via idemkey.WithKey) and emits the async command through
-// EmitAsync — so the SAME idempotency-key, sent for the same subject across
-// different cells / listeners / pods, derives the SAME DeriveCommandKey dedup slot
-// and the relay's Claimer wrap dispatches the command exactly once.
+// (#1610 "Idempotency-Key ↔ command_id"). It reads the sealed RequestIdentity the
+// HTTP idempotency middleware minted into ctx (caller + payload fingerprint +
+// validated Idempotency-Key) and derives the async command's per-instance commandID
+// from its composite CommandDedupToken — then emits through EmitAsync. So the SAME
+// logical request, sent for the same subject across different cells / listeners /
+// pods, derives the SAME DeriveCommandKey dedup slot and the relay's Claimer wrap
+// dispatches the command exactly once; but a DIFFERENT caller or DIFFERENT payload
+// (even with the same Idempotency-Key) yields a different token and is NOT folded
+// (#1610 F1, Stripe/IETF composite-key posture).
 //
-// Unlike EmitAsync, commandID is NOT a caller parameter: it is read from ctx, so
-// the "subject/commandID adjacent same-typed string transpose" footgun documented
-// on EmitAsync is structurally inexpressible on this HTTP-sourced path. The brace/
-// empty validation (DeriveCommandKey's caller obligation) is performed here, once,
-// fail-closed:
+// Unlike EmitAsync, commandID is NOT a caller parameter: it is derived from the
+// sealed ctx identity, so the "subject/commandID adjacent same-typed string
+// transpose" footgun documented on EmitAsync is structurally inexpressible on this
+// HTTP-sourced path. Key validation (non-empty / ≤256B / printable / brace-free)
+// lives in the sealed idemkey.NewRequestIdentity sole constructor (the middleware
+// mints; no unvalidated key can reach here), so this bridge only fail-closes when
+// the identity is absent:
 //
-//   - ctx carries no Idempotency-Key (ok=false) or an empty key → KindInvalid
-//     (the route should send the header; rendered as 400 by httputil.WriteError).
-//   - key contains Redis-Cluster hash-tag braces "{"/"}" → KindInvalid, rather
-//     than deferring to a store-side KindInternal → MarkDead dead-letter.
+//   - ctx carries no RequestIdentity (no Idempotency-Key, exempt route, or
+//     non-idempotent method) → KindInvalid (rendered 400 by httputil.WriteError).
 //
 // The funnel is preserved: the kout.NewEntry callsite stays inside EmitAsync
 // (runtime/command), satisfying COMMAND-ASYNC-EMIT-FUNNEL-01.
@@ -187,16 +189,12 @@ func EmitAsyncFromIdempotencyKey[T any](
 	payload T,
 	opts ...EmitOption,
 ) error {
-	commandID, ok := idemkey.KeyFromContext(ctx)
-	if !ok || commandID == "" {
+	id, ok := idemkey.RequestIdentityFromContext(ctx)
+	if !ok {
 		return errcode.New(errcode.KindInvalid, errCommandIdemKey,
-			"command.EmitAsyncFromIdempotencyKey: missing Idempotency-Key header (required for idempotent async command)")
+			"command.EmitAsyncFromIdempotencyKey: missing Idempotency-Key request identity (required for idempotent async command)")
 	}
-	if strings.ContainsAny(commandID, "{}") {
-		return errcode.New(errcode.KindInvalid, errCommandIdemKey,
-			"command.EmitAsyncFromIdempotencyKey: Idempotency-Key contains invalid characters")
-	}
-	return EmitAsync(ctx, clk, emitter, dispatchID, subject, commandID, payload, opts...)
+	return EmitAsync(ctx, clk, emitter, dispatchID, subject, id.CommandDedupToken(), payload, opts...)
 }
 
 // dispatchedUniquenessKey is the unexported context key type for the dispatched

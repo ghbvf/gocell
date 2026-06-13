@@ -111,6 +111,7 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(r.Context(), w, err)
 		return
 	}
+	req.IdempotencyKey = r.Header.Get("Idempotency-Key")
 	resp, err := h.svc.EnqueueAsync(r.Context(), req)
 	if err != nil {
 		httputil.WriteError(r.Context(), w, err)

@@ -68,6 +68,12 @@ const (
 	// Must be a const literal (MESSAGE-CONST-LITERAL-01 archtest).
 	msgKeyReused = "idempotency key reused with a different request body"
 
+	// msgKeyEmpty is the client-visible message when the Idempotency-Key is empty.
+	// The middleware's shouldIntercept gate already requires a non-empty header, so
+	// this only surfaces via NewRequestIdentity (the shared validateKeyValue).
+	// Must be a const literal (MESSAGE-CONST-LITERAL-01 archtest).
+	msgKeyEmpty = "Idempotency-Key header value must not be empty"
+
 	// maxMismatchedFields caps the number of differing field names reported in
 	// the 422 key-reused response details, bounding response size when a request
 	// body has many top-level fields. When the diff exceeds this, the names are
@@ -314,24 +320,30 @@ type idempotencyHandler struct {
 // validateIdempotencyKey validates the key length and character set, writing
 // the appropriate error response and returning false if invalid.
 func validateIdempotencyKey(ctx context.Context, w http.ResponseWriter, idemKey string) bool {
-	if len(idemKey) > maxIdempotencyKeyLen {
-		httputil.WriteError(ctx, w, errcode.New(
-			errcode.KindInvalid,
-			errcode.ErrValidationFailed,
-			msgKeyTooLong,
-			errcode.WithDetails(errcode.PublicInt("maxLen", maxIdempotencyKeyLen)),
-		))
-		return false
-	}
-	if !isValidIdempotencyKey(idemKey) {
-		httputil.WriteError(ctx, w, errcode.New(
-			errcode.KindInvalid,
-			errcode.ErrValidationFailed,
-			msgKeyInvalidChars,
-		))
+	if err := validateKeyValue(idemKey); err != nil {
+		httputil.WriteError(ctx, w, err)
 		return false
 	}
 	return true
+}
+
+// validateKeyValue is the pure (no-HTTP) Idempotency-Key validator shared by the
+// request-edge gate (validateIdempotencyKey) and the sealed RequestIdentity sole
+// constructor (NewRequestIdentity), so the two never drift: non-empty, ≤256 bytes,
+// printable ASCII, brace-free. Returns a KindInvalid *errcode.Error (→ HTTP 400)
+// or nil.
+func validateKeyValue(idemKey string) error {
+	if idemKey == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgKeyEmpty)
+	}
+	if len(idemKey) > maxIdempotencyKeyLen {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgKeyTooLong,
+			errcode.WithDetails(errcode.PublicInt("maxLen", maxIdempotencyKeyLen)))
+	}
+	if !isValidIdempotencyKey(idemKey) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgKeyInvalidChars)
+	}
+	return nil
 }
 
 // readBodyFingerprint reads the request body, restores it for the handler,
@@ -375,15 +387,23 @@ func (h idempotencyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !validateIdempotencyKey(r.Context(), w, idemKey) {
 		return
 	}
-	// Expose the validated key to the downstream handler (the HTTP-side half of
-	// the #1610 Idempotency-Key ↔ command_id bridge): a producer handler reads it
-	// via KeyFromContext to source a per-instance command_id. Injected only on
-	// intercepted+validated requests, so KeyFromContext is ok=false elsewhere.
-	r = r.WithContext(WithKey(r.Context(), idemKey))
 	fp, ok := readBodyFingerprint(r.Context(), w, r)
 	if !ok {
 		return
 	}
+	// Mint the sealed RequestIdentity (caller + body fingerprint + validated key) and
+	// expose it to the downstream handler — the HTTP-side half of the #1610
+	// Idempotency-Key ↔ command_id bridge. A producer reads it via
+	// RequestIdentityFromContext to derive a command dedup token that folds only
+	// genuine duplicates (same caller + payload + key). key is already validated
+	// above, so NewRequestIdentity cannot error here; fail-closed defensively if it
+	// ever does. Injected only on intercepted+validated requests.
+	id, idErr := NewRequestIdentity(p.Subject, fp, idemKey)
+	if idErr != nil {
+		httputil.WriteError(r.Context(), w, idErr)
+		return
+	}
+	r = r.WithContext(WithRequestIdentity(r.Context(), id))
 	h.handle(w, r, p, idemKey, fp)
 }
 

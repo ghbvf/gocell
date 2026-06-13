@@ -15,6 +15,14 @@ endpoints:
         type: string
         minLength: 1
         maxLength: 256
+    headers:
+      # Idempotency-Key is REQUIRED: the HTTP idempotency middleware mints a sealed
+      # RequestIdentity from it and the command bridge derives the cross-cell dedup
+      # token. Populate-only at codegen (FMT-40 — no length gate here); server-side
+      # key validation + missing-key 400 are enforced by the middleware + bridge.
+      Idempotency-Key:
+        type: string
+        required: true
     successStatus: 202
     auth:
       responses:
