@@ -15,6 +15,7 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/adapters/ratelimit"
+	cellsecrets "github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	eventtransport "github.com/ghbvf/gocell/cellmodules/eventtransport"
 	replaydeps "github.com/ghbvf/gocell/cellmodules/replaydeps"
 	accesscore "github.com/ghbvf/gocell/corecells/accesscore"
@@ -341,6 +342,16 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		return nil, err
 	}
 
+	// JWT signing keys are topology-gated (mirrors resolveSSOBFFBootstrapCreds
+	// above): demo mints an ephemeral pair, real mode loads the shared key env
+	// pair and fails closed when missing. Resolved BEFORE the DB pool so a
+	// real-mode missing-key misconfig fails fast — never a per-pod ephemeral key
+	// that would 401 across replicas (#2052).
+	jwtIssuer, jwtVerifier, err := newSSOBFFJWT(infra.topo, clk)
+	if err != nil {
+		return nil, err
+	}
+
 	if cfg.databaseURL == "" {
 		return nil, fmt.Errorf("ssobff: %s must be set", ssobffDatabaseURLEnv)
 	}
@@ -358,13 +369,6 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	}()
 
 	txMgr := adapterpg.NewTxManager(pool)
-
-	// Demo only: test keys are generated in-process, so tokens do not survive
-	// restart and cannot be verified by another replica.
-	jwtIssuer, jwtVerifier, err := newSSOBFFJWT(clk)
-	if err != nil {
-		return nil, err
-	}
 
 	// Build pgOutboxWriter + auditcore. After Wave-1 #1423 the bootstrap
 	// chain is wired internally into auditcore (WithBootstrapStore); auditcore
@@ -851,19 +855,20 @@ func defaultSSOBFFAppConfig() *ssobffAppConfig {
 	}
 }
 
-// newSSOBFFJWT creates an ephemeral JWT issuer and verifier backed by a freshly
-// generated RSA key pair.
+// newSSOBFFJWT builds the JWT issuer and verifier from a topology-gated key set.
 //
-// Demo only: ephemeral in-process RSA keys; tokens invalidated on restart.
-func newSSOBFFJWT(clk clock.Clock) (*auth.JWTIssuer, *auth.JWTVerifier, error) {
-	slog.Warn("ssobff: generating in-process JWT key — tokens become invalid on restart; do not use for multi-pod deployment")
-	privKey, pubKey, err := auth.GenerateRSAKeyPair()
+// The key source is resolved by cellsecrets.LoadKeySet (the same shared resolver
+// cmd/corebundle's buildJWTDeps uses): demo topology mints an ephemeral in-process
+// RSA pair (tokens invalidated on restart, single-pod only); real adapter mode
+// loads the shared pair from GOCELL_JWT_PRIVATE_KEY / GOCELL_JWT_PUBLIC_KEY and
+// fails closed when missing — a per-pod ephemeral key would make one replica's
+// tokens verify as 401 against another (#2052). The issuer / audience stay fixed
+// ("ssobff-dev" / "gocell"): they are identical across replicas, so only the
+// signing key was the multi-pod hazard.
+func newSSOBFFJWT(topo bootstrap.Topology, clk clock.Clock) (*auth.JWTIssuer, *auth.JWTVerifier, error) {
+	keySet, err := cellsecrets.LoadKeySet(topo.AdapterMode(), clk)
 	if err != nil {
-		return nil, nil, fmt.Errorf("ssobff: generate RSA key pair: %w", err)
-	}
-	keySet, err := auth.NewKeySet(privKey, pubKey, clk)
-	if err != nil {
-		return nil, nil, fmt.Errorf("ssobff: create key set: %w", err)
+		return nil, nil, fmt.Errorf("ssobff: load JWT key set: %w", err)
 	}
 	jwtIssuer, err := auth.NewJWTIssuer(keySet, "ssobff-dev", 15*time.Minute, clk,
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
