@@ -113,7 +113,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   setup step was removed from the README and the external-cell quickstart (#1723).
   Known limitation: `go install github.com/ghbvf/gocell/cmd/gocell@<tag>` does not
   yet work (the satellite `cmd/gocell` module keeps a local `replace` and the
-  release pipeline cuts no submodule tag); install the CLI from source until #1088.
+  release pipeline cuts no submodule tag); install the CLI from source until #2045.
 - `gocell scaffold assembly` runnable stub now blocks on signal (SIGINT/SIGTERM)
   instead of returning a "not implemented" error immediately. `go run ./cmd/{id}`
   will wait for signal rather than exiting with code 1. (#867, sub-item
@@ -121,6 +121,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **CLI versioned distribution (#1088 M7)**：stable release 经 goreleaser 自动产出
+  linux/darwin × amd64/arm64 预编译二进制（tar.gz）+ SHA256 checksums.txt + multi-arch
+  docker 镜像 `ghcr.io/ghbvf/gocell:vX.Y.Z`，附在 GitHub Release。`latest` tag 始终
+  指向最新 stable release；`develop` snapshot 无对应 docker 镜像。预编译产物自首个搭载
+  本发布流水线的 stable release 起提供（`v0.1.0` 早于该流水线落地，不含预编译产物）。
+- **`gocell version` 命令**（#1088 M7）：新增 `gocell version` 子命令，输出三个字段：
+  `cli_version`（当前 CLI 版本）、`framework_version`（构建时链接的 framework 版本，与
+  `cli_version` 同 tag）、`compatible_framework_range`（运行时兼容的 framework 版本范围，
+  从单一注入 version 常量派生，非手工维护）。CLI 与 framework 由 release 流水线原子同 tag
+  发布。v0.x 阶段 `compatible_framework_range` 为 best-effort intent（超出范围不 fail-fast，
+  照常运行）；v1.0 GA 后升级为 SemVer hard guarantee（届时可能启动期主动 fail-fast）。
+  详见 `docs/guides/cli-version-compatibility.md`。
+- **Go SDK 公开符号 + Authoring Schema SemVer 政策 ADR**（#1088）：新增 ADR
+  `docs/architecture/202606131200-1088-adr-go-api-authoring-schema-semver-policy.md`，
+  定义「轴 A」（Go exported 符号 + 4 个 authoring schema：`cell.yaml` / `contract.yaml` /
+  `slice.yaml` / `assembly.yaml`）的版本政策：v0.x = intent-level SemVer（breaking 须
+  PR 说明 + `[breaking-api]` CHANGELOG 标注）；v1.0 GA 后 = hard guarantee（配合 CI 门禁）。
+  本 ADR 独立于 wire ADR（轴 B 保持 Pre-GA 窗口不变）。
 - `pkg/httputil.WriteErrorWithStatus(ctx, w, status, ecErr)` — pin wire status to typed envelope identity, share 4xx/5xx redaction policy with `WriteError`.
 - `pkg/httputil.AppendCorrelationAttrs(ctx, attrs) []any` — exported correlation key set for generated handlers (request_id / trace_id / span_id).
 - kernel/governance CH-06 — typed-response-set bijection between contract.yaml `responses[]` and generated `XxxResponseObject` struct set.

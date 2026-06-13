@@ -47,6 +47,13 @@ const (
 	// Must be a const literal (MESSAGE-CONST-LITERAL-01 archtest).
 	msgStoreUnavailable = "idempotency store unavailable"
 
+	// msgBodyReadFailed is the message for a request body I/O read failure (a
+	// transient/connection-level fault, not store unavailability). Mirrors the
+	// webhook receiver's body-read handling (runtime/webhook/receiver.go); paired
+	// with KindUnavailable → HTTP 503 so clients retry rather than treat it as a
+	// server fault. Must be a const literal (MESSAGE-CONST-LITERAL-01 archtest).
+	msgBodyReadFailed = "idempotency: failed to read request body"
+
 	// msgInProgress is the client-visible message for concurrent in-flight keys.
 	// Must be a const literal (MESSAGE-CONST-LITERAL-01 archtest).
 	msgInProgress = "a request with this Idempotency-Key is already in progress"
@@ -346,15 +353,48 @@ func validateKeyValue(idemKey string) error {
 	return nil
 }
 
+// logScope bundles the idempotency correlation fields emitted on every
+// structured log along this request's flow. Assembling the (key-hash, subject,
+// tenant) triple once with named fields — at the sole construction site in
+// ServeHTTP — makes mis-ordering the three same-typed strings unexpressible and
+// keeps the attribute keys defined in exactly one place (vs. repeating the
+// triple inline at every slog call).
+type logScope struct {
+	keyHash  string
+	subject  string
+	tenantID string
+}
+
+// attrs returns the correlation key/value pairs for slog's variadic args.
+func (s logScope) attrs() []any {
+	return []any{
+		"idempotency_key_hash", s.keyHash,
+		"subject", s.subject,
+		"tenant_id", s.tenantID,
+	}
+}
+
+// attrsWith prepends call-site-specific pairs (e.g. "err", err) to the
+// correlation attrs.
+func (s logScope) attrsWith(pairs ...any) []any {
+	return append(pairs, s.attrs()...)
+}
+
 // readBodyFingerprint reads the request body, restores it for the handler,
 // and returns the hex(sha256(body)) fingerprint. Returns ("", false) on error.
-func readBodyFingerprint(ctx context.Context, w http.ResponseWriter, r *http.Request) (string, bool) {
+//
+// On read failure it emits a correlated slog entry and returns 503
+// ERR_SERVICE_UNAVAILABLE: an io.ReadAll failure is a transient/connection-level
+// fault (e.g. client aborted the upload), not a server fault — mirroring the
+// webhook receiver's body-read handling (runtime/webhook/receiver.go).
+func readBodyFingerprint(ctx context.Context, w http.ResponseWriter, r *http.Request, sc logScope) (string, bool) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		slog.ErrorContext(ctx, "idempotency: read body failed", sc.attrsWith("err", err)...)
 		httputil.WriteError(ctx, w, errcode.New(
-			errcode.KindInternal,
-			errcode.ErrInternal,
-			msgStoreUnavailable,
+			errcode.KindUnavailable,
+			errcode.ErrServiceUnavailable,
+			msgBodyReadFailed,
 		))
 		return "", false
 	}
@@ -387,8 +427,18 @@ func (h idempotencyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !validateIdempotencyKey(r.Context(), w, idemKey) {
 		return
 	}
-	fp, ok := readBodyFingerprint(r.Context(), w, r)
+	// Derive the key + correlation scope once, before the body read, so every
+	// failure path (including the body-read failure below) carries the same
+	// correlation triple. DeriveKey is a pure function of the request/principal
+	// (body-independent), so computing it here changes no behavior.
+	k := DeriveKey(p.TenantID, p.Subject, r.Method, r.URL.Path, idemKey)
+	sc := logScope{keyHash: keyShortHash(idemKey), subject: p.Subject, tenantID: k.Namespace()}
+	fp, ok := readBodyFingerprint(r.Context(), w, r, sc)
 	if !ok {
+		// readBodyFingerprint already wrote the 503 + slog; record the metric
+		// state here (it has no cfg access) so body-read failures are observable
+		// like every other failure path.
+		cfg.observeState(r.Context(), StateBodyReadFailed)
 		return
 	}
 	// Mint the sealed RequestIdentity (caller + body fingerprint + validated key) and
@@ -404,7 +454,7 @@ func (h idempotencyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r = r.WithContext(WithRequestIdentity(r.Context(), id))
-	h.handle(w, r, p, idemKey, fp)
+	h.handle(w, r, k, sc, fp)
 }
 
 // shouldIntercept returns true when the request method and Idempotency-Key
@@ -413,34 +463,22 @@ func shouldIntercept(r *http.Request) bool {
 	return idempotentMethods[r.Method] && r.Header.Get(headerIdempotencyKey) != ""
 }
 
-// handleWithIdempotency executes the full idempotency flow for a qualifying request.
-func (h idempotencyHandler) handle(w http.ResponseWriter, r *http.Request, p *auth.Principal, idemKey string, fp string) {
+// handleWithIdempotency executes the full idempotency flow for a qualifying
+// request. The derived key k and correlation scope sc are minted once in
+// ServeHTTP (so the body-read failure path shares them) and threaded in here.
+func (h idempotencyHandler) handle(w http.ResponseWriter, r *http.Request, k IdempotencyKey, sc logScope, fp string) {
 	cfg := h.config
-	k := DeriveKey(p.TenantID, p.Subject, r.Method, r.URL.Path, idemKey)
-	ns := k.Namespace() // for slog correlation + recordOrRelease below
 	ctx := r.Context()
-	keyHash := keyShortHash(idemKey)
 
 	state, rec, receipt, err := h.store.Claim(ctx, k, fp, cfg.leaseTTL)
 	if err != nil {
 		if errors.Is(err, ErrFingerprintMismatch) {
-			slog.WarnContext(
-				ctx, "idempotency: fingerprint mismatch — key reused with different body",
-				"idempotency_key_hash", keyHash,
-				"subject", p.Subject,
-				"tenant_id", ns,
-			)
+			slog.WarnContext(ctx, "idempotency: fingerprint mismatch — key reused with different body", sc.attrs()...)
 			cfg.observeState(ctx, StateKeyReused)
 			httputil.WriteError(ctx, w, keyReusedError(err, fp))
 			return
 		}
-		slog.ErrorContext(
-			ctx, "idempotency: store claim failed",
-			"err", err,
-			"idempotency_key_hash", keyHash,
-			"subject", p.Subject,
-			"tenant_id", ns,
-		)
+		slog.ErrorContext(ctx, "idempotency: store claim failed", sc.attrsWith("err", err)...)
 		cfg.observeState(ctx, StateStoreError)
 		httputil.WriteError(ctx, w, errcode.New(
 			errcode.KindInternal,
@@ -460,22 +498,12 @@ func (h idempotencyHandler) handle(w http.ResponseWriter, r *http.Request, p *au
 		// authorized. Re-checking authz on replay would let a previously-succeeded
 		// key later return 403, violating Idempotency-Key semantics (same key →
 		// same response). See ADR 202606021000-1043 威胁矩阵 row "回放跳过当前授权再校验".
-		slog.DebugContext(
-			ctx, "idempotency: replay hit",
-			"idempotency_key_hash", keyHash,
-			"subject", p.Subject,
-			"tenant_id", ns,
-		)
+		slog.DebugContext(ctx, "idempotency: replay hit", sc.attrs()...)
 		cfg.observeState(ctx, StateReplayed)
-		replayResponse(w, rec)
+		replayResponse(ctx, w, rec, sc)
 
 	case idempotency.ClaimBusy:
-		slog.WarnContext(
-			ctx, "idempotency: key in progress",
-			"idempotency_key_hash", keyHash,
-			"subject", p.Subject,
-			"tenant_id", ns,
-		)
+		slog.WarnContext(ctx, "idempotency: key in progress", sc.attrs()...)
 		cfg.observeState(ctx, StateBusy)
 		// Use a small fixed hint (retryAfterHintSeconds) rather than the full
 		// leaseTTL (300 s default) so clients retry soon without a long wait.
@@ -484,7 +512,7 @@ func (h idempotencyHandler) handle(w http.ResponseWriter, r *http.Request, p *au
 
 	default: // ClaimAcquired
 		cfg.observeState(ctx, StateAcquired)
-		h.recordOrRelease(w, r, receipt, keyHash, ns, p.Subject)
+		h.recordOrRelease(w, r, receipt, sc)
 	}
 }
 
@@ -506,7 +534,7 @@ func extractIdentity(ctx context.Context) (*auth.Principal, bool) {
 
 // replayResponse writes the stored RecordedResponse to w with the
 // Idempotency-Replayed marker.
-func replayResponse(w http.ResponseWriter, rec *RecordedResponse) {
+func replayResponse(ctx context.Context, w http.ResponseWriter, rec *RecordedResponse, sc logScope) {
 	for k, vv := range rec.Header() {
 		for _, v := range vv {
 			w.Header().Add(k, v)
@@ -514,12 +542,12 @@ func replayResponse(w http.ResponseWriter, rec *RecordedResponse) {
 	}
 	w.Header().Set(headerIdempotencyReplayed, "true")
 	w.WriteHeader(rec.Status())
-	writeRecordedBody(w, rec.Body())
+	writeRecordedBody(ctx, w, rec.Body(), sc)
 }
 
-func writeRecordedBody(w http.ResponseWriter, body []byte) {
+func writeRecordedBody(ctx context.Context, w http.ResponseWriter, body []byte, sc logScope) {
 	if _, err := io.Copy(w, bytes.NewReader(body)); err != nil {
-		slog.Error("idempotency: replay response body write failed", slog.Any("error", err))
+		slog.ErrorContext(ctx, "idempotency: replay response body write failed", sc.attrsWith("err", err)...)
 	}
 }
 
@@ -535,9 +563,7 @@ func (h idempotencyHandler) recordOrRelease(
 	w http.ResponseWriter,
 	r *http.Request,
 	receipt Receipt,
-	keyHash string,
-	namespace string,
-	subject string,
+	sc logScope,
 ) {
 	ctx := r.Context()
 	cfg := h.config
@@ -550,13 +576,7 @@ func (h idempotencyHandler) recordOrRelease(
 			// if the request context was canceled during handler execution.
 			// The lease will expire via TTL regardless; log at Warn on error.
 			if err := receipt.Release(context.WithoutCancel(ctx)); err != nil {
-				slog.WarnContext(
-					ctx, "idempotency: lease release failed (will expire via TTL)",
-					"err", err,
-					"idempotency_key_hash", keyHash,
-					"subject", subject,
-					"tenant_id", namespace,
-				)
+				slog.WarnContext(ctx, "idempotency: lease release failed (will expire via TTL)", sc.attrsWith("err", err)...)
 			}
 		}
 	}()
@@ -569,25 +589,13 @@ func (h idempotencyHandler) recordOrRelease(
 		filteredHeader := filterSensitiveHeaders(bw.capturedHeader())
 		resp := newRecordedResponse(h.clk, bw.status(), bw.bufferedBody(), filteredHeader)
 		if err := receipt.Record(context.WithoutCancel(ctx), &resp, cfg.doneTTL); err != nil {
-			slog.ErrorContext(
-				ctx, "idempotency: receipt record failed",
-				"err", err,
-				"idempotency_key_hash", keyHash,
-				"subject", subject,
-				"tenant_id", namespace,
-			)
+			slog.ErrorContext(ctx, "idempotency: receipt record failed", sc.attrsWith("err", err)...)
 			// Fall through to Release via defer.
 		} else {
 			recorded = true
 		}
 	} else if bw.committed() && bw.isOversized() {
-		slog.WarnContext(
-			ctx, "idempotency: response body oversized, not recorded",
-			"max_body_bytes", cfg.maxBodyBytes,
-			"idempotency_key_hash", keyHash,
-			"subject", subject,
-			"tenant_id", namespace,
-		)
+		slog.WarnContext(ctx, "idempotency: response body oversized, not recorded", sc.attrsWith("max_body_bytes", cfg.maxBodyBytes)...)
 		cfg.observeState(ctx, StateOversize)
 	}
 }

@@ -261,6 +261,25 @@ func ExpectedArtifacts(ctx context.Context, root, module string, project *metada
 	}
 	artifacts = append(artifacts, contractgenArtifacts...)
 
+	// CONTRACTGEN-TS-EMIT-FUNNEL-01: generated-ts/index.ts barrel re-exports every
+	// TS-emitting contract. Unlike per-contract types.ts (emitted inside
+	// RenderContractArtifacts above), the barrel is a cross-contract aggregate, so
+	// it is derived once from the full project via the same RenderTSBarrel the disk
+	// generator uses — keeping the manifest byte-identical and letting the
+	// reverse-enumeration pass (which now lists *.ts) accept the committed barrel.
+	tsBarrel, ok, err := contractgen.RenderTSBarrel(root, project)
+	if err != nil {
+		return nil, fmt.Errorf("expected contractgen TS barrel: %w", err)
+	}
+	if ok {
+		artifacts = append(artifacts, Artifact{
+			AssemblyID: "",
+			Kind:       "contract-gen-ts-barrel",
+			Path:       filepath.ToSlash(tsBarrel.Path),
+			Content:    tsBarrel.Content,
+		})
+	}
+
 	// REQUIRED-DEP-NIL-GUARD-01: service_required_gen.go per slice — generator
 	// walks cells/**/slices/**/service.go + examples/**/service.go and emits
 	// a per-slice validateRequired() method. Skip semantics match

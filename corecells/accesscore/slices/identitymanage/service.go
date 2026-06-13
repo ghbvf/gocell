@@ -424,13 +424,13 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 			))
 	}
 	// S4.0 P1-A: status is an admin-authority field. The route gate is
-	// RequirePermissionOrSelf (PATCH lets users update their own name/email/
-	// requirePasswordReset), but allowing a self-PATCH of status would let a
-	// suspended user re-activate themselves and defeat the admin's suspend
-	// gesture. Field-level guard: any Status mutation requires admin authority —
-	// admin OR super-admin, the same role set the user:write baseline
-	// (adminOrSuperAdmin) grants at the route gate (PR #1974 review F1). Other
-	// fields stay self-editable.
+	// RequirePermissionForResource (PATCH lets owners update their own name/email/
+	// requirePasswordReset via the PDP baseline ownership rule, #1977 Batch B),
+	// but allowing a self-PATCH of status would let a suspended user re-activate
+	// themselves and defeat the admin's suspend gesture. Field-level guard: any
+	// Status mutation requires admin authority — admin OR super-admin, the same
+	// role set the user:write baseline (adminOrSuperAdmin) grants at the route
+	// gate (PR #1974 review F1). Other fields stay self-editable.
 	if input.Status != nil && !callerHasAdminAuthority(ctx) {
 		return nil, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthIdentityInvalidInput,
 			"updating status requires admin authority",

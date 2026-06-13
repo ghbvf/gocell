@@ -654,6 +654,70 @@ func TestAuthorize_ResourceAttr_DifferentTenantFailsClosed(t *testing.T) {
 	assert.False(t, dec.IsAllow(), "resource attrs seeded for a different tenant must not bleed across tenant boundary")
 }
 
+// --- baseline ownership full-stack (#1977 Batch B, F3 review fix) ---------------
+
+// TestAuthorize_BaselineOwnership_FullStack exercises the public Authorize API
+// end-to-end: a non-admin user accessing their OWN resource (subject == resource.id)
+// must be allowed by the baseline ownership rule, and accessing another user's
+// resource must be denied. This proves:
+//   - service.go assigns resolver.resourceID = resource (the Authorize argument).
+//   - resolveSubject canonicalizes the UUID subject.
+//   - resolveResource("id") returns resourceID.
+//   - the baseline subjectIsResource() rule fires correctly through the engine.
+func TestAuthorize_BaselineOwnership_FullStack(t *testing.T) {
+	const (
+		ownerID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+		otherID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	)
+
+	// Build a no-policy engine (baseline only).
+	eng := memEngineWithPolicies(t)
+
+	ownerPrincipal := &auth.Principal{
+		Kind:     auth.PrincipalUser,
+		Subject:  ownerID,
+		TenantID: testTenantIDStr,
+		Roles:    []string{},
+	}
+
+	t.Run("owner accessing own resource → Allow (baseline ownership rule fires)", func(t *testing.T) {
+		dec, err := eng.Authorize(reqCtx(ownerPrincipal), ownerID, ownerID, authz.PermUserRead().String())
+		require.NoError(t, err)
+		assert.True(t, dec.IsAllow(),
+			"subject == resource.id with user:read must be allowed by the baseline ownership rule")
+	})
+
+	t.Run("owner accessing OTHER user's resource → Deny (no matching rule)", func(t *testing.T) {
+		dec, err := eng.Authorize(reqCtx(ownerPrincipal), ownerID, otherID, authz.PermUserRead().String())
+		require.NoError(t, err)
+		assert.False(t, dec.IsAllow(),
+			"subject != resource.id must be denied when caller is not admin")
+	})
+
+	t.Run("owner accessing own resource with role:read → Allow", func(t *testing.T) {
+		dec, err := eng.Authorize(reqCtx(ownerPrincipal), ownerID, ownerID, authz.PermRoleRead().String())
+		require.NoError(t, err)
+		assert.True(t, dec.IsAllow(),
+			"subject == resource.id with role:read must be allowed by the baseline ownership rule")
+	})
+
+	t.Run("non-canonical-cased UUID subject → Allow (canonicalization in resolver)", func(t *testing.T) {
+		// Even when the principal's Subject is stored with uppercase hex digits
+		// (which JWT libraries may produce), the resolver canonicalizes it so the
+		// subject.sub == resource.id comparison is not thwarted by case drift.
+		upperSubjectPrincipal := &auth.Principal{
+			Kind:     auth.PrincipalUser,
+			Subject:  "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", // uppercase form of ownerID
+			TenantID: testTenantIDStr,
+			Roles:    []string{},
+		}
+		dec, err := eng.Authorize(reqCtx(upperSubjectPrincipal), ownerID, ownerID, authz.PermUserRead().String())
+		require.NoError(t, err)
+		assert.True(t, dec.IsAllow(),
+			"uppercase UUID subject must still match canonical resource.id after canonicalization")
+	})
+}
+
 // TestAuthorize_ResourceAttr_MultiValuedIn verifies that multi-valued resource
 // attributes work with the OpIn operator (a resource tagged with multiple
 // sensitivity levels satisfies an "in" condition against any of them).

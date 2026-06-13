@@ -140,6 +140,45 @@ func TestAssemblySchema_CellRefUnion(t *testing.T) {
 	}
 }
 
+// TestAssemblySchema_Topology verifies the topology section of assembly.yaml.
+func TestAssemblySchema_Topology(t *testing.T) {
+	schema := compileAssemblySchema(t)
+
+	const bp = `{"id":"corebundle","cells":["accesscore","auditcore"],"owner":{"team":"platform","role":"cell-owner"}}`
+	// topo wraps suffix into a full assembly doc with a topology block.
+	topo := func(suffix string) string {
+		return bp[:len(bp)-1] + `,"topology":{` + suffix + `}}`
+	}
+
+	accepted := map[string]string{
+		"no topology block":  bp,
+		"empty topology":     topo(``),
+		"colocated only":     topo(`"colocated":["accesscore","auditcore"]`),
+		"remote only":        topo(`"remote":[{"cellID":"accesscore","endpoint":"a:1"},{"cellID":"auditcore","endpoint":"b:2"}]`),
+		"mixed coloc+remote": topo(`"colocated":["accesscore"],"remote":[{"cellID":"auditcore","endpoint":"svc:9000"}]`),
+	}
+	for name, doc := range accepted {
+		t.Run("accept/"+name, func(t *testing.T) {
+			assert.NoError(t, schema.Validate(parseAssemblyDoc(t, doc)), "%s must pass", name)
+		})
+	}
+
+	rejected := map[string]string{
+		"topology extra property": topo(`"colocated":["accesscore"],"unknown":true`),
+		"bad cellID in colocated": topo(`"colocated":["BadCell"]`),
+		"bad cellID in remote":    topo(`"remote":[{"cellID":"Bad-Cell","endpoint":"svc:9000"}]`),
+		"remote missing endpoint": topo(`"remote":[{"cellID":"accesscore"}]`),
+		"remote missing cellID":   topo(`"remote":[{"endpoint":"svc:9000"}]`),
+		"remote extra property":   topo(`"remote":[{"cellID":"accesscore","endpoint":"x:1","extra":"x"}]`),
+		"empty endpoint string":   topo(`"remote":[{"cellID":"accesscore","endpoint":""}]`),
+	}
+	for name, doc := range rejected {
+		t.Run("reject/"+name, func(t *testing.T) {
+			assert.Error(t, schema.Validate(parseAssemblyDoc(t, doc)), "%s must fail", name)
+		})
+	}
+}
+
 // formatf is a helper that avoids importing fmt in a test-only file.
 func formatf(format, arg string) string {
 	out := make([]byte, 0, len(format)+len(arg))

@@ -48,6 +48,9 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if err := b.validateNilDependencySentinels(); err != nil {
 		return err
 	}
+	if err := b.validateDeploymentTopology(); err != nil {
+		return err
+	}
 	if err := b.validateGRPCListenerConfigs(); err != nil {
 		return err
 	}
@@ -102,6 +105,19 @@ func (b *Bootstrap) validateNilDependencySentinels() error {
 			"bootstrap: gRPC server must not be nil in WithGRPCListener; "+
 				"both bare-nil and typed-nil interface values are rejected at phase0")
 	}
+	return nil
+}
+
+// validateDeploymentTopology seals the DeploymentTopologySpec into the runtime
+// DeploymentTopology. Called once at phase0 (WriteOnce): on success
+// b.deploymentTopology is populated and read-only for the rest of the lifecycle.
+// An empty spec resolves to the zero DeploymentTopology (all-colocated default).
+func (b *Bootstrap) validateDeploymentTopology() error {
+	dt, err := newDeploymentTopology(b.deploymentTopologySpec)
+	if err != nil {
+		return err
+	}
+	b.deploymentTopology = dt
 	return nil
 }
 

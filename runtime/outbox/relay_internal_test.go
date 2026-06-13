@@ -382,11 +382,11 @@ func TestRelay_HandleFailedEntry_StaleLease_RetryNotCounted(t *testing.T) {
 	err := relay.handleFailedEntry(context.Background(), res, &stats)
 	require.NoError(t, err, "stale lease must not surface as error")
 	assert.Equal(t, 1, store.markRetryCalls, "MarkRetry must be invoked once")
-	assert.Zero(t, stats.retried, "stats.retried must NOT be incremented when lease was lost")
-	assert.Zero(t, stats.dead, "stats.dead must NOT be incremented")
-	assert.Equal(t, 1, stats.lost,
-		"stats.lost must record the lease-lost writeback so providerRelayCollector "+
-			"emits outbox_relayed_total{outcome=\"lost\"}")
+	assert.Zero(t, stats.event.Retried, "stats.event.Retried must NOT be incremented when lease was lost")
+	assert.Zero(t, stats.event.Dead, "stats.event.Dead must NOT be incremented")
+	assert.Equal(t, 1, stats.event.Lost,
+		"stats.event.Lost must record the lease-lost writeback so providerRelayCollector "+
+			"emits outbox_relayed_total{kind=\"event\",outcome=\"lost\"}")
 }
 
 // stalePublishStore returns (false, nil) from MarkPublished — the fencing
@@ -437,10 +437,10 @@ func TestRelay_WriteBack_PublishSuccess_StaleLease_NotCountedAsPublished(t *test
 	stats, err := relay.writeBackResults(context.Background(), results)
 	require.NoError(t, err, "stale lease on success path must not surface as error")
 	assert.Equal(t, 1, store.markPublishedCalls, "MarkPublished must be invoked once")
-	assert.Zero(t, stats.published, "stats.published must NOT increment when lease was lost")
-	assert.Equal(t, 1, stats.skipped, "stats.skipped must increment to record the silent drop")
-	assert.Zero(t, stats.retried)
-	assert.Zero(t, stats.dead)
+	assert.Zero(t, stats.event.Published, "stats.event.Published must NOT increment when lease was lost")
+	assert.Equal(t, 1, stats.event.Skipped, "stats.event.Skipped must increment to record the silent drop")
+	assert.Zero(t, stats.event.Retried)
+	assert.Zero(t, stats.event.Dead)
 }
 
 func TestRelay_HandleFailedEntry_StaleLease_DeadNotCounted(t *testing.T) {
@@ -469,11 +469,11 @@ func TestRelay_HandleFailedEntry_StaleLease_DeadNotCounted(t *testing.T) {
 	err := relay.handleFailedEntry(context.Background(), res, &stats)
 	require.NoError(t, err)
 	assert.Equal(t, 1, store.markDeadCalls, "MarkDead must be invoked once")
-	assert.Zero(t, stats.dead, "stats.dead must NOT be incremented when lease was lost")
-	assert.Zero(t, stats.retried)
-	assert.Equal(t, 1, stats.lost,
-		"stats.lost must record the lease-lost dead writeback so providerRelayCollector "+
-			"emits outbox_relayed_total{outcome=\"lost\"}")
+	assert.Zero(t, stats.event.Dead, "stats.event.Dead must NOT be incremented when lease was lost")
+	assert.Zero(t, stats.event.Retried)
+	assert.Equal(t, 1, stats.event.Lost,
+		"stats.event.Lost must record the lease-lost dead writeback so providerRelayCollector "+
+			"emits outbox_relayed_total{kind=\"event\",outcome=\"lost\"}")
 }
 
 // reclaimStep stages one ReclaimStale return value. Either count (success)

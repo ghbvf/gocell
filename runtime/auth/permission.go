@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/pkg/authz"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
@@ -135,99 +136,80 @@ func logAuthorizerError(l *slog.Logger, err error, path, subject, permission str
 // sole PDP route entry for permission-based authorization.
 func RequirePermission(p authz.Permission) Policy {
 	return func(r *http.Request) error {
-		// Zero Permission is a programmer error; fail-closed before any I/O.
-		if p.IsZero() {
-			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgPermissionNotSpecified)
-		}
-
-		principal, ok := FromContext(r.Context())
-		if !ok {
-			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgAuthRequired)
-		}
-		// G1.B: defense-in-depth; mirrors RequireAnyRole / RequireSelfOrRole.
-		// PrincipalUser must always carry a non-empty Subject.
-		if principal.Kind == PrincipalUser && principal.Subject == "" {
-			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgAuthRequired)
-		}
-
-		authorizer, ok := AuthorizerFromContext(r.Context())
-		if !ok {
-			// Fail-closed: an unwired PDP is a misconfiguration; deny all requests.
-			loggerFrom(r.Context()).Error(
-				"authz: RequirePermission called with no Authorizer in context — denying (fail-closed)",
-				slog.String("path", r.URL.Path),
-				slog.String("subject", principal.Subject),
-				slog.String("permission", p.String()),
-			)
-			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgAuthzPDPNotWired)
-		}
-
-		dec, err := authorizer.Authorize(r.Context(), principal.Subject, r.URL.Path, p.String())
-		if err != nil {
-			logAuthorizerError(loggerFrom(r.Context()), err, r.URL.Path, principal.Subject, p.String())
-			return err
-		}
-
-		return evaluatePermissionDecision(r.Context(), dec, r.URL.Path, principal.Subject, p.String())
+		return enforcePermission(r, p, r.URL.Path)
 	}
 }
 
-// RequirePermissionOrSelf returns a Policy that permits the request when the
-// authenticated subject is accessing its OWN resource — the path parameter named
-// by pathParam equals the subject — and otherwise delegates to RequirePermission(p)
-// so the PDP decides.
+// RequirePermissionForResource returns a Policy that forwards the canonicalized
+// resource-id path parameter to the PDP as the `resource` argument of
+// Authorizer.Authorize, enabling the PDP to evaluate ownership conditions
+// (e.g. subject.sub == resource.id for identity-ownership baseline rules, #1977).
 //
-// It is the migration target for the legacy auth.SelfOr(pathParam, RoleAdmin)
-// ownership gates (accesscore identitymanage/rbaccheck, PR-10c #1348): the
-// role-bypass branch becomes a permission gate; the self branch stays a
-// request-shape exemption.
+// This replaces auth.RequirePermissionOrSelf: self/ownership is now a PDP
+// baseline rule (subject.sub == resource.id via abac.OpEqualsAttr), not a Go
+// request-shape short-circuit. The gate is NOT a self-exemption — every request
+// flows through the PDP. Fail-closed: absent Authorizer, zero Permission, or no
+// Principal → deny (same as RequirePermission). Empty or absent path param →
+// resource="" forwarded to PDP → ownership rule can't fire (resource.id not-found
+// → fail-closed, preserving "empty param ≠ self" from tenancy.md).
 //
-// Self-exemption is a REQUEST-SHAPE determination (.claude/rules/gocell/tenancy.md
-// §ABAC authz): a caller naming itself in the path reads/writes its own resource
-// and is exempt from the route PDP; the data layer still governs row visibility
-// via RowScope. This is NOT a second PDP path — every non-self request flows
-// through the sole RequirePermission gate (the single PDP route entry, ADR §D5).
-// Self-exemption is gated on PrincipalUser with a non-empty Subject: service and
-// anonymous principals never self-exempt, they fall through to the PDP
-// (fail-closed). The self comparison (isSelfAccess) normalizes both the path value
-// and the subject to canonical UUID form, mirroring RequireSelfOrRole.
+// The path param value is canonicalized via httputil.ParseCanonicalUUID before
+// forwarding: an uppercase UUID path value becomes the canonical lowercase form
+// passed to Authorize, matching the canonical subject from the JWT. Non-UUID
+// values are forwarded as-is (ownership rule won't fire; PDP decides normally).
 //
-// Empty param ≠ self (tenancy.md): an empty path value never matches a non-empty
-// subject (isSelfAccess returns false on empty target), so it falls through to the
-// PDP — a subject can only self-exempt by explicitly naming itself.
-//
-// Zero permission fails closed FIRST: a zero authz.Permission{} (a mis-wired gate)
-// is rejected before the self-exemption check, so the self branch inherits the same
-// fail-closed precondition as RequirePermission rather than silently permitting a
-// self-naming caller (F2).
-//
-// Caller contract (review-enforced, not type-expressible): pathParam MUST name
-// the subject-identity path parameter of the route (the target user/owner id) —
-// pointing it at an unrelated param would exempt non-owners.
-//
-// AI-robust Grade: Medium — the self-check is a runtime param==subject judgement
-// (not type-expressible); it fails closed (non-user principal, empty subject, or
-// empty/mismatched param → delegates to RequirePermission → 401/403). Hard-ification
-// rides the PR-13 codegen funnel together with RequirePermission.
-func RequirePermissionOrSelf(pathParam string, p authz.Permission) Policy {
-	requirePermission := RequirePermission(p)
+// AI-robust Grade: Hard — downstream of the sealed authorizerKey funnel (same
+// as RequirePermission); sole ownership-gate entry point for accesscore endpoints.
+func RequirePermissionForResource(pathParam string, p authz.Permission) Policy {
 	return func(r *http.Request) error {
-		// Fail-closed BEFORE the self-exemption shortcut (PR #1974 review F2): a
-		// zero authz.Permission{} is a programmer error and must never be permitted,
-		// not even for a self-naming caller. The self branch otherwise returns nil
-		// without ever reaching RequirePermission's own zero guard, so the wrapper
-		// would silently permit a mis-wired gate. Hoisting the guard makes the self
-		// branch inherit the same fail-closed precondition as the PDP path.
-		if p.IsZero() {
-			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgPermissionNotSpecified)
+		resource := r.PathValue(pathParam)
+		if canonical, ok := httputil.ParseCanonicalUUID(resource); ok {
+			resource = canonical
 		}
-		if principal, ok := FromContext(r.Context()); ok &&
-			principal.Kind == PrincipalUser && principal.Subject != "" &&
-			isSelfAccess(principal.Subject, r.PathValue(pathParam)) {
-			return nil
-		}
-		return requirePermission(r)
+		return enforcePermission(r, p, resource)
 	}
+}
+
+// enforcePermission is the shared body of RequirePermission and
+// RequirePermissionForResource. resource is the value forwarded to
+// Authorizer.Authorize (r.URL.Path for RequirePermission; canonicalized path
+// param for RequirePermissionForResource). Logging uses r.URL.Path throughout
+// for observability regardless of the resource argument.
+func enforcePermission(r *http.Request, p authz.Permission, resource string) error {
+	// Zero Permission is a programmer error; fail-closed before any I/O.
+	if p.IsZero() {
+		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgPermissionNotSpecified)
+	}
+
+	principal, ok := FromContext(r.Context())
+	if !ok {
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgAuthRequired)
+	}
+	// G1.B: defense-in-depth; mirrors RequireAnyRole / RequireSelfOrRole.
+	// PrincipalUser must always carry a non-empty Subject.
+	if principal.Kind == PrincipalUser && principal.Subject == "" {
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgAuthRequired)
+	}
+
+	authorizer, ok := AuthorizerFromContext(r.Context())
+	if !ok {
+		// Fail-closed: an unwired PDP is a misconfiguration; deny all requests.
+		loggerFrom(r.Context()).Error(
+			"authz: RequirePermission called with no Authorizer in context — denying (fail-closed)",
+			slog.String("path", r.URL.Path),
+			slog.String("subject", principal.Subject),
+			slog.String("permission", p.String()),
+		)
+		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgAuthzPDPNotWired)
+	}
+
+	dec, err := authorizer.Authorize(r.Context(), principal.Subject, resource, p.String())
+	if err != nil {
+		logAuthorizerError(loggerFrom(r.Context()), err, r.URL.Path, principal.Subject, p.String())
+		return err
+	}
+
+	return evaluatePermissionDecision(r.Context(), dec, r.URL.Path, principal.Subject, p.String())
 }
 
 // evaluatePermissionDecision maps a PDP Decision to the route-gate outcome:
