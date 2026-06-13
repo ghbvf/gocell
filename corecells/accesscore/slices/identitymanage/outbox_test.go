@@ -52,8 +52,10 @@ var outboxStubIssuer TokenIssuer = &stubTokenIssuer{}
 
 // --- additional handler tests ---
 
+// withAdmin injects admin credentials and an allow Authorizer into the request
+// context so it passes the auth.RequirePermission PDP gate (PR-10c #1348).
 func withAdmin(req *http.Request) *http.Request {
-	return req.WithContext(withTenant(auth.TestContext("admin-user", []string{"admin"})))
+	return req.WithContext(withAllowAuthorizer(withTenant(auth.TestContext("admin-user", []string{"admin"}))))
 }
 
 func TestHandler_UpdatePUT(t *testing.T) {

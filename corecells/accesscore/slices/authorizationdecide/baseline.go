@@ -60,6 +60,51 @@ var builtinBaseline = []abac.Rule{
 		Action:     []string{authz.PermFlagWrite().String()},
 		Conditions: []abac.Condition{adminOrSuperAdmin()},
 	},
+	// accesscore baseline (PR-10c #1348): one allow rule per migrated permission via
+	// the shared adminOrSuperAdmin() condition. The old accesscore gates were
+	// auth.AnyRole(RoleAdmin) / auth.SelfOr("id", RoleAdmin) — admin-only (HasRole is
+	// a literal check, no hierarchy) — so routing them through adminOrSuperAdmin()
+	// WIDENS them to admit super-admin (super-admin ⊇ admin; a deliberate relaxation,
+	// zero prod impact as superadmin is not yet issued). Same as the PR-10b configcore
+	// widening; see ADR §"Amendment: PR-10c" threat-model re-eval + ruling. The self
+	// branch of the migrated SelfOr gates is NOT a baseline rule — it stays a
+	// request-shape exemption in auth.RequirePermissionOrSelf (tenancy.md).
+	// action-scoped + role-conditioned — same shape as the rules above.
+	{
+		ID:         "baseline-policy-read-admin",
+		Name:       "Baseline: allow admin/super-admin to read ABAC policies",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermPolicyRead().String()},
+		Conditions: []abac.Condition{adminOrSuperAdmin()},
+	},
+	{
+		ID:         "baseline-policy-write-admin",
+		Name:       "Baseline: allow admin/super-admin to write ABAC policies",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermPolicyWrite().String()},
+		Conditions: []abac.Condition{adminOrSuperAdmin()},
+	},
+	{
+		ID:         "baseline-user-read-admin",
+		Name:       "Baseline: allow admin/super-admin to read user accounts",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermUserRead().String()},
+		Conditions: []abac.Condition{adminOrSuperAdmin()},
+	},
+	{
+		ID:         "baseline-user-write-admin",
+		Name:       "Baseline: allow admin/super-admin to manage user accounts",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermUserWrite().String()},
+		Conditions: []abac.Condition{adminOrSuperAdmin()},
+	},
+	{
+		ID:         "baseline-role-read-admin",
+		Name:       "Baseline: allow admin/super-admin to read user role assignments",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermRoleRead().String()},
+		Conditions: []abac.Condition{adminOrSuperAdmin()},
+	},
 }
 
 // adminOrSuperAdmin is the shared baseline condition: subject.roles ∈
@@ -86,9 +131,11 @@ func adminOrSuperAdmin() abac.Condition {
 // not conflict). One rule per migrated endpoint; PR-10b/PR-10c extend it.
 //
 // Current baseline: PermAuditRead() (PR-10a) + the 5 configcore permissions
-// (PR-10b: config:read/write/publish, flag:read/write), each allowed for admin
-// and super-admin principals via adminOrSuperAdmin(). Each rule is action-scoped
-// (Action target) so a baseline allow for one permission never leaks to another.
+// (PR-10b: config:read/write/publish, flag:read/write) + the 5 accesscore
+// permissions (PR-10c: policy:read/write, user:read/write, role:read), each
+// allowed for admin and super-admin principals via adminOrSuperAdmin(). Each rule
+// is action-scoped (Action target) so a baseline allow for one permission never
+// leaks to another.
 //
 // Returns the package-level builtinBaseline slice directly (no allocation).
 func builtinBaselineRules() []abac.Rule {
