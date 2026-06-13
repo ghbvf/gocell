@@ -160,7 +160,7 @@ interface declares every RPC; the generated registrar wires the whole-service ma
 | PII / redaction | None. | **Unchanged.** Removing YAML fields introduces no new log or error surface. |
 | Layering (`kernel/` ↛ grpc) | Holds. | **Unchanged.** `GRPCTransportMeta` field reduction does not affect the `any`-typed `Register` field boundary. |
 | AI-robustness | Closed-set = Hard; field presence = Hard schema + Medium runtime. | **Improves.** `method`-level is now **unexpressible** — the YAML field is gone. The method set is exclusively derived from the `.proto` (Hard codegen funnel). Single-method `method:` declaration was an implicit Soft: an AI co-author could declare the wrong method name with no compile-time check. That footgun is eliminated. |
-| Auth granularity / security (#1672) | `auth.public` modeled service-level (PR 1). | **Improves (fail-closed).** The service-level `auth.public` field was **deleted**. It was dead (zero readers — the runtime `WithPublicMethod` predicate never reads the contract) and, under service-level granularity, a single bool could silently mark *every* RPC of a multi-method service JWT-exempt — a latent mixed-auth bypass if a future PR naively wired it. Removal makes the dangerous declaration **unexpressible** (schema `additionalProperties:false` rejects `endpoints.grpc.auth`, locked by `contract_schema_test.go`); per-method auth is deferred to #1675. Today's runtime default is nil predicate = fail-closed (all RPCs authed). |
+| Auth granularity / security (#1672) | `auth.public` modeled service-level (PR 1). | **Improves (fail-closed).** The service-level `auth.public` field was **deleted**. It was dead (zero readers — the runtime `WithPublicMethod` predicate never reads the contract) and, under service-level granularity, a single bool could silently mark *every* RPC of a multi-method service JWT-exempt — a latent mixed-auth bypass if a future PR naively wired it. Removal makes the dangerous declaration **unexpressible** (schema `additionalProperties:false` rejects `endpoints.grpc.auth`, locked by `contract_schema_test.go`); per-method auth is **delivered in the #1675 amendment below** as a per-method overlay (a structurally safer shape than the deleted service-level bool). Before #1675 the runtime default was nil predicate = fail-closed (all RPCs authed). |
 
 ## Amendment 2026-06-07 — contractgen emits zero artifacts for kind=grpc (#1688)
 
@@ -227,3 +227,65 @@ grpc contract (PR-8 #1151), which is exactly the trigger #1688 records.
 | PII / redaction | **Unchanged.** No new log/error surface; error redaction stays at the interceptor (Recovery → codes.Internal; errcode→codes table PR-12). |
 | Layering (`kernel/` ↛ grpc) | **Unchanged.** The `any`-typed `GRPCServiceSpec.Register` boundary is untouched; cellgen still emits the pb register call. |
 | AI-robustness | **Improves.** A register-incompatible, package-colliding duplicate interface is now **unexpressible** (contractgen emits nothing for grpc). The proto-derived Hard funnel (buf `pb.<Svc>Server`) and the collision-uniqueness guard (C4) remain. The `.pb.go` overlap exemption keeps generated/contracts/ hand-written-code-free for plain `.go` while admitting deterministic buf output. |
+
+## Amendment 2026-06-13 — #1675: per-method `public` auth overlay (delivers D5's deferral)
+
+### 决策
+
+D5 deferred per-method auth to #1675 from a clean slate. #1675 adds the optional,
+**sparse** `endpoints.grpc.methods[]` overlay (`GRPCMethodMeta{ Name; Public }`):
+only RPCs needing a non-default flag appear; an absent method is authed
+(fail-closed). The overlay carries **only `public`** in #1675 — the original gap
+(mixed public/authed RPC in one service) — fully live-wired end to end:
+
+- contract `endpoints.grpc.methods[].public:true`
+- → cellgen derives `GRPCServiceSpec.PublicMethods []string` (full method names
+  `/{Service}/{Method}`, byte-locked by the cellgen golden)
+- → the runtime `ServiceRegistrar` aggregates them (`IsPublicMethod`)
+- → the auth interceptor installs `WithPublicMethod(reg.IsPublicMethod)`
+  (`authOptionsWithPublicMethods` in chain.go, the sole sanctioned installer for
+  both the unary and stream chains).
+
+The `.proto` remains the **single source of the method set** (D5 unchanged): the
+overlay only **annotates** existing proto methods, it never declares them.
+
+### 范围边界 — ABAC fields deferred to #2008 (no dead config)
+
+ABAC `permission`/`resource`/`action` and `internalOnly` are **excluded** from
+#1675 and deferred to **#2008** (gRPC→ABAC PDP parity) / PR-11 (per-method internal
+boundary). Rationale — the same no-dead-config principle that justified #1672's
+deletion of the vestigial service-level `auth.public`: those fields have no live
+consumer until #2008 wires the gRPC PDP. Adding them now would recreate the exact
+dead-config anti-pattern. #2008 extends `GRPCMethodMeta` with those fields
+**additively** (reusing the `methods[]` array, the proto-referential pre-pass, the
+codegen merge, and the registry deep-copy this amendment establishes) and widens
+FMT-41's vacuous-entry guard from "must assert public:true" to "must assert ≥1
+non-default" when the new fields land.
+
+### Enforcement (overlay)
+
+| 载体 | 强度 | 守卫 |
+|---|---|---|
+| schema item shape (`additionalProperties:false`, `required:[name]`, `name minLength:1`) | **Hard** | `contract_schema_test.go` negative cases (incl. unknown-property, forward-protecting #2008) |
+| referential integrity (each overlay name ∈ proto method set) | **Hard** (codegen funnel) | `checkGRPCProtoCollisions` pre-pass `validateGRPCMethodOverlay` (kernel⊥tools → governance cannot read the proto) |
+| cellgen `PublicMethods` emission | **Hard** (byte golden) | `synth_grpc_cell_gen.go.golden` |
+| metadata-pure guards (non-empty name, no dups, **methods⇒codegen:true**, **public:true required**) | **Medium** | governance **FMT-41** (`gocell validate`) |
+| runtime single-source (registrar = sole production public-method source) | **Medium** | archtest **GRPC-PUBLIC-METHOD-WIRING-FUNNEL-01** (caller-allowlist: production `WithPublicMethod` refs ⊆ {chain.go}) |
+| fail-closed default | structural | nil overlay → empty `PublicMethods` → empty registrar set → `callPredicate` nil→false → authed |
+
+The **methods⇒codegen:true** guard (FMT-41) closes the one gap the kernel⊥tools
+split would otherwise leave: referential integrity lives only in the codegen
+pre-pass, which skips `codegen:false` contracts — so an overlay on a `codegen:false`
+contract would be unvalidated AND never emit a `PublicMethods` entry (silently
+inert dead config). Requiring `codegen:true` makes "any overlay ⟹ passes the
+referential pre-pass" provably hold.
+
+### 威胁矩阵 re-eval
+
+| Concern | Re-eval (#1675) |
+|---|---|
+| Wire / schema break | **Improves / safe.** Additive optional `methods[]`; absent ⇒ prior behavior (all RPC authed). Zero production grpc contracts adopt the overlay yet. |
+| PII / redaction | **Unchanged.** No new log/error surface; the overlay is build-time metadata. |
+| Layering (`kernel/` ↛ grpc) | **Unchanged.** `GRPCServiceSpec.PublicMethods` is a `[]string` data field (no grpc import); referential integrity stays in the tools layer (kernel⊥tools preserved). |
+| Auth granularity / security | **Improves (fail-closed), strictly safer than the deleted service-level bool.** Two load-bearing properties: (1) the overlay is a per-method **annotation**, NOT a method-set re-declaration — D5's "proto is the single source of the method set" is untouched; (2) the #1672-deleted threat ("a single service-level bool silently marks *every* RPC of a multi-method service public") is **structurally absent** in this shape — public is opt-in **per named method**, each name is proto-validated (Hard pre-pass) and golden-locked, the default is fail-closed (authed), and the runtime source is the registrar alone (funnel archtest). You cannot mark a whole service public with one flag; you must enumerate each method, and each must survive referential + golden + governance gates. |
+| AI-robustness | **Improves.** Every overlay field has a live reader (no dead config); errors are largely unexpressible (schema Hard) or CI-caught (codegen funnel Hard + FMT-41/funnel Medium). The ABAC deferral to #2008 avoids reintroducing dead config. |
