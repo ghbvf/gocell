@@ -161,7 +161,11 @@ func newReconcileElectorFromCmdable(
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis reconcile elector: cmdable is nil")
 	}
 	if lease.IsZero() {
-		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis reconcile elector: lease must be a constructed LeaseTTL")
+		// ErrCellInvalidConfig (not the connect code): a zero-value lease is a
+		// wiring mistake (forgot reconcile.NewLeaseTTL), routable separately from
+		// genuine Redis connection failures.
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"redis reconcile elector: lease must be a constructed LeaseTTL")
 	}
 	clock.MustHaveClock(clk, "redis reconcile elector")
 	holderID, err := idutil.NewUUID()

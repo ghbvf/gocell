@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/reconcile"
 	"github.com/ghbvf/gocell/kernel/reconcile/reconciletest"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // Compile-time assertion: *RedisReconcileElector satisfies reconcile.LeaderElector.
@@ -186,6 +187,10 @@ func TestReconcileElector_ConstructorValidation(t *testing.T) {
 		// the unconstructed LeaseTTL{} (ms==0) must fail-fast, not yield a 0ms lease
 		_, err := newReconcileElectorFromCmdable(newReconcileMock(), "reconcile", reconcile.LeaseTTL{}, clock.Real())
 		require.Error(t, err)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		require.Equal(t, errcode.ErrCellInvalidConfig, ec.Code,
+			"a zero-value lease is a config mistake, routable separately from a redis connect failure")
 	})
 }
 

@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/reconcile"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // reconcilePGTestLeaseTTL is the lease duration shared by the PG reconcile elector
@@ -67,6 +68,10 @@ func TestNewReconcileElector_ConstructorValidation(t *testing.T) {
 		// the unconstructed LeaseTTL{} (ms==0) must fail-fast, not yield a 0ms lease
 		_, err := NewReconcileElector(&Pool{}, reconcile.LeaseTTL{})
 		require.Error(t, err)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		require.Equal(t, errcode.ErrCellInvalidConfig, ec.Code,
+			"a zero-value lease is a config mistake, routable separately from a postgres connect failure")
 	})
 	t.Run("valid", func(t *testing.T) {
 		// &Pool{} (inner nil) suffices: the guards return before any DB access, so a

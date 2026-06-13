@@ -41,7 +41,10 @@ type LeaseTTL struct {
 // to millisecond granularity, the honest resolution of the wire commands.
 func NewLeaseTTL(d time.Duration) (LeaseTTL, error) {
 	if d < time.Millisecond {
-		return LeaseTTL{}, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+		// ErrCellInvalidConfig (not the generic ErrInternal): a sub-ms lease is a
+		// wiring/config mistake, routable as such by operators. Kind stays Internal
+		// — this fails at boot via composition-root fail-fast, never a user 4xx.
+		return LeaseTTL{}, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"reconcile: lease TTL must be at least 1ms")
 	}
 	return LeaseTTL{ms: d.Milliseconds()}, nil

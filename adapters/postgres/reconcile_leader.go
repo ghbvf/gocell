@@ -102,7 +102,11 @@ func NewReconcileElector(pool *Pool, lease reconcile.LeaseTTL) (*ReconcileElecto
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterPGConnect, "postgres reconcile elector: pool is nil")
 	}
 	if lease.IsZero() {
-		return nil, errcode.New(errcode.KindInternal, ErrAdapterPGConnect, "postgres reconcile elector: lease must be a constructed LeaseTTL")
+		// ErrCellInvalidConfig (not the connect code): a zero-value lease is a
+		// wiring mistake (forgot reconcile.NewLeaseTTL), routable separately from
+		// genuine Postgres connection failures.
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"postgres reconcile elector: lease must be a constructed LeaseTTL")
 	}
 	holderID, err := idutil.NewUUID()
 	if err != nil {

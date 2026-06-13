@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // Boundary lease windows for the NewLeaseTTL table. TEST-TIME-LITERAL-01: test-time
@@ -48,6 +50,10 @@ func TestNewLeaseTTL(t *testing.T) {
 			got, err := NewLeaseTTL(tt.in)
 			if tt.wantErr {
 				require.Error(t, err, "sub-ms / non-positive lease TTL must fail-closed")
+				var ec *errcode.Error
+				require.ErrorAs(t, err, &ec)
+				require.Equal(t, errcode.ErrCellInvalidConfig, ec.Code,
+					"a rejected lease must carry the routable config-error code, not a generic internal one")
 				require.True(t, got.IsZero(), "a rejected constructor returns the zero value")
 				return
 			}

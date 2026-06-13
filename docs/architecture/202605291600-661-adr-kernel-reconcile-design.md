@@ -730,14 +730,18 @@ controller-runtime 对标快照（§2 的 5 个 ref）仍有效，否则先修�
 > - **闭合**：引入 sealed 值类型 `reconcile.LeaseTTL`（`kernel/reconcile/leasettl.go`），唯一构造器
 >   `NewLeaseTTL(d)` 在 `d < 1ms` 时 fail-closed；非零 `LeaseTTL` 恒 `ms>=1` → `Milliseconds()`
 >   永不截断为 0。两 adapter 构造器入参 `time.Duration` → `reconcile.LeaseTTL`，旧 `<= 0` 守卫删除。
-> - **评级（funnel 上游/下游分轴）**：**上游 Hard** —— 未导出 `ms` 字段使包外不可字面构造非零
->   `LeaseTTL`（sealed construction 范本），亚毫秒在 `NewLeaseTTL` 不可表达。**下游 Medium** ——
->   「adapter 必须经 `LeaseTTL` 而非 raw `time.Duration`+`.Milliseconds()`」由代码 + 类型 +
->   `LeaseTTL` godoc `INVARIANT:` 保证，**无 archtest**。
-> - **不立 archtest（明确决策）**：`LeaderElector` 实现集**闭合**（仅 `adapters/{redis,postgres}` +
->   reconciletest fake），守假想「第三个 adapter 重引入截断」边际价值低；ai-robust「不把 bug 修复
->   包装成新治理机制」。Go 值类型零值 `LeaseTTL{}`（ms=0）是不可消除残留，由两 adapter 构造器
->   `IsZero()` fail-fast 兜底（「忘构造」的 obvious 错误，非原 bug 的 subtle 静默）。
+> - **评级（funnel 上游/下游分轴，诚实）**：**上游 Hard** —— 未导出 `ms` 字段使包外不可字面构造
+>   非零 `LeaseTTL`（sealed construction 范本），亚毫秒在 `NewLeaseTTL` 不可表达。**下游对现有两个
+>   生产 adapter = Hard** —— 其 lease 字段类型即 `LeaseTTL`，`.Milliseconds()` 编译层绑定到非零恒
+>   ≥1，无 raw `time.Duration` 截断面可达；**对假想未来第三个 adapter 重新引入 raw
+>   `time.Duration`+`.Milliseconds()` = Soft** —— 无 archtest 拦截，仅靠类型惯例 + `LeaseTTL`
+>   godoc `INVARIANT:`。（原稿笼统标「下游 Medium」不精确：现状是类型 Hard、未来缺口是 Soft，无
+>   Medium 这一档。reconciletest fake 是全精度 oracle——以 `now.Add(ttl)` 直存 raw `time.Duration`、
+>   无 ms 截断面、构造器刻意不返错以保测试人体工学，故**不在本 funnel 内**，保留 raw duration 入参。）
+> - **不立 archtest（明确决策）**：`LeaderElector` 生产实现集**闭合**（仅 `adapters/{redis,postgres}`，
+>   规则锁定），守假想「第三个 adapter 重引入截断」边际价值低；ai-robust「不把 bug 修复包装成新治理
+>   机制」。Go 值类型零值 `LeaseTTL{}`（ms=0）是不可消除残留，由两 adapter 构造器 `IsZero()`
+>   fail-fast 兜底（「忘构造」obvious 错误，非原 bug 的 subtle 静默）。
 > - **T-DUAL / T-FENCE 评级不变**：本条恢复「lease 在其 TTL 内真实持有」这一前提，是它们 best-effort
 >   收窄 + `FencedWriter` 兜底所**依赖**的基础，不改其上游/下游 Hard 结论。
 
