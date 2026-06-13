@@ -379,6 +379,9 @@ func TestMQTTFunnel_BlindSpot_NoReflectNew(t *testing.T) {
 	var diags []Diagnostic
 	var sawSatellite bool
 
+	// Production (whole-workspace): reflect.New(mqtt.ClientID) can appear in ANY
+	// package, so this guard needs workspace breadth — not a single-package Typed
+	// scope. Production also reaches the adapters/mqtt satellite (#1558/#1911).
 	_ = Run(t, Production(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
@@ -460,6 +463,9 @@ func TestMQTTFunnel_BlindSpot_NoUnsafePtr(t *testing.T) {
 	var diags []Diagnostic
 	var sawSatellite bool
 
+	// Production (whole-workspace): any package importing adapters/mqtt could add an
+	// unsafe.Pointer cast, so this guard needs workspace breadth — not a single-package
+	// Typed scope. Production also reaches the adapters/mqtt satellite (#1558/#1911).
 	_ = Run(t, Production(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {

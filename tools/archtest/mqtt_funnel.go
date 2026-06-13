@@ -33,8 +33,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-
-	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
 
 // mqttPkgPath is the canonical import path of the mqtt adapter package —
@@ -599,10 +597,13 @@ func collectTopicNSDiags(p *Pass, a2Diags, a3Diags *[]Diagnostic) {
 // fork-safety, dogfooded via the per-rule Tests).
 func CheckMQTTClientIDNamespace(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
-	root := findModuleRoot(t)
 	var a2Diags, a3Diags []Diagnostic
-	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: cfg.BuildTags},
-		prodscan.PatternsExtended(root)),
+	// A3 (type-alias) scans EVERY package for re-exports of the sealed type, so this
+	// needs whole-workspace breadth — Production reaches every go.work module incl.
+	// the adapters/mqtt satellite (#1558); a module-local relative scope silently
+	// misses both the satellite's own A2 construction scan and any satellite-declared
+	// alias (#1911). Mirrors PR #1879's observability/metrics Production migration.
+	_ = Run(t, Production(TypedOpts{Tests: false, Tags: cfg.BuildTags}),
 		func(p *Pass) []Diagnostic {
 			collectClientIDDiags(p, &a2Diags, &a3Diags)
 			return nil
@@ -622,10 +623,13 @@ func CheckMQTTClientIDNamespace(t *testing.T, cfg ConfigForExternalCell) []Diagn
 // fork-safety, dogfooded via the per-rule Tests).
 func CheckMQTTTopicNamespace(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
-	root := findModuleRoot(t)
 	var a2Diags, a3Diags []Diagnostic
-	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: cfg.BuildTags},
-		prodscan.PatternsExtended(root)),
+	// A3 (type-alias) scans EVERY package for re-exports of the sealed type, so this
+	// needs whole-workspace breadth — Production reaches every go.work module incl.
+	// the adapters/mqtt satellite (#1558); a module-local relative scope silently
+	// misses both the satellite's own A2 construction scan and any satellite-declared
+	// alias (#1911). Mirrors PR #1879's observability/metrics Production migration.
+	_ = Run(t, Production(TypedOpts{Tests: false, Tags: cfg.BuildTags}),
 		func(p *Pass) []Diagnostic {
 			collectTopicNSDiags(p, &a2Diags, &a3Diags)
 			return nil
@@ -687,10 +691,13 @@ func collectConfigDiags(p *Pass, a2Diags *[]Diagnostic) {
 // parameterization + fork-safety, dogfooded via the per-rule Tests).
 func CheckMQTTConfigSeal(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
-	root := findModuleRoot(t)
 	var a2Diags []Diagnostic
-	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: cfg.BuildTags},
-		prodscan.PatternsExtended(root)),
+	// collectConfigDiags only scans the Config-owning package (mqttPkgPath) — it has
+	// no cross-package A3 alias scan — so a single-package Typed scope suffices. The
+	// explicit absolute import path resolves the adapters/mqtt satellite across the
+	// go.work boundary (#1558/#1911), unlike a module-local relative ./... pattern
+	// that match-zeroes the satellite subtree.
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: cfg.BuildTags}, []string{mqttPkgPath}),
 		func(p *Pass) []Diagnostic {
 			collectConfigDiags(p, &a2Diags)
 			return nil
