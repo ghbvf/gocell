@@ -28,7 +28,7 @@ var contractSpec = contractspec.ContractSpec{
 
 // requestSchemaJSON is the embedded request schema for runtime validation.
 // Compiled once at handler construction time by schemavalidate.NewValidator.
-var requestSchemaJSON = []byte("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"http.config.flags.create.v1.request\",\"type\":\"object\",\"required\":[\"key\"],\"properties\":{\"key\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":128},\"enabled\":{\"type\":\"boolean\"},\"rolloutPercentage\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},\"description\":{\"type\":\"string\",\"minLength\":0,\"maxLength\":1024}},\"additionalProperties\":false}")
+var requestSchemaJSON = []byte("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"http.config.flags.create.v1.request\",\"type\":\"object\",\"required\":[\"key\"],\"properties\":{\"key\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":128},\"enabled\":{\"type\":\"boolean\"},\"rolloutPercentage\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},\"description\":{\"type\":\"string\",\"maxLength\":1024}},\"additionalProperties\":false}")
 
 // Handler wires HTTP decode/encode + auth.Mount for http.config.flags.create.v1.
 type Handler struct {

@@ -65,6 +65,59 @@ func TestContractSchemaAllowsParamConstraintFacets(t *testing.T) {
 	assert.NoError(t, schema.Validate(contractDoc))
 }
 
+// compileContractSchema compiles the embedded contract.schema.json for a test.
+func compileContractSchema(t *testing.T) *jsonschema.Schema {
+	t.Helper()
+	raw, err := FS.ReadFile("contract.schema.json")
+	require.NoError(t, err)
+	var schemaDoc any
+	require.NoError(t, json.Unmarshal(raw, &schemaDoc))
+	compiler := jsonschema.NewCompiler()
+	const schemaURL = "https://gocell.dev/schemas/contract.schema.json"
+	require.NoError(t, compiler.AddResource(schemaURL, schemaDoc))
+	schema, err := compiler.Compile(schemaURL)
+	require.NoError(t, err)
+	return schema
+}
+
+// contractWithCursorMinLength builds a minimal HTTP contract doc whose cursor
+// query param carries the given minLength snippet (e.g. `"minLength": 0,` or "").
+func contractWithCursorMinLength(t *testing.T, minLengthLine string) any {
+	t.Helper()
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(fmt.Sprintf(`{
+		"id": "http.test.v1", "kind": "http", "ownerCell": "testcell",
+		"consistencyLevel": "L1", "lifecycle": "active",
+		"endpoints": {"server": "testcell", "clients": [], "http": {
+			"method": "GET", "path": "/api/v1/test",
+			"queryParams": {"cursor": {"type": "string", %s "maxLength": 4096, "required": false}},
+			"successStatus": 200, "noContent": false
+		}},
+		"schemaRefs": {"request": "request.schema.json"}
+	}`, minLengthLine)), &doc))
+	return doc
+}
+
+// TestContractSchemaRejectsNoopMinLengthZero pins the meta-schema author surface
+// to the narrowed FMT-25: a declared minLength must be >= 1 (an explicit no-op 0
+// is rejected), while omitting minLength entirely is accepted (it is optional —
+// only maxLength is required). Defense-in-depth with the FMT-25 governance rule.
+func TestContractSchemaRejectsNoopMinLengthZero(t *testing.T) {
+	schema := compileContractSchema(t)
+
+	// minLength: 0 — rejected (no-op lower bound; string length is always >= 0).
+	assert.Error(t, schema.Validate(contractWithCursorMinLength(t, `"minLength": 0,`)),
+		"meta-schema must reject a no-op minLength: 0")
+
+	// minLength omitted — accepted (optional lower bound, maxLength present).
+	assert.NoError(t, schema.Validate(contractWithCursorMinLength(t, ``)),
+		"meta-schema must accept an omitted minLength (optional)")
+
+	// minLength: 1 — accepted (meaningful lower bound).
+	assert.NoError(t, schema.Validate(contractWithCursorMinLength(t, `"minLength": 1,`)),
+		"meta-schema must accept a meaningful minLength >= 1")
+}
+
 func TestContractSchemaAllowsHeaders(t *testing.T) {
 	raw, err := FS.ReadFile("contract.schema.json")
 	require.NoError(t, err)

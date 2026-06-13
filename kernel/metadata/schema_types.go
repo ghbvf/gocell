@@ -231,10 +231,16 @@ type HTTPAuthMeta struct {
 //
 // MinLength / MaxLength / Minimum / Maximum are *int (not int) for the same
 // three-state reason as Required: nil = "not declared", non-nil = "declared,
-// even if zero". Governance rule FMT-25 distinguishes the two: missing
-// declarations are violations; explicit zero is accepted. Minimum / Maximum
-// govern both integer and number parameters; use integer-valued bounds in
-// contract.yaml until ParamSchema grows decimal bound fields.
+// even if zero". Governance rule FMT-25 treats the facets asymmetrically:
+//   - maxLength and numeric minimum / maximum are REQUIRED for non-uuid string
+//     and integer/number params; a missing declaration is a violation. An
+//     explicit minimum: 0 is accepted (it rejects negatives — real semantics).
+//   - minLength is OPTIONAL (the lower string bound carries no DoS weight), but
+//     when declared it must be >= 1: an explicit no-op minLength: 0 is rejected
+//     (string length is always >= 0, so a zero lower bound constrains nothing).
+//
+// Minimum / Maximum govern both integer and number parameters; use integer-valued
+// bounds in contract.yaml until ParamSchema grows decimal bound fields.
 type ParamSchema struct {
 	// Ref is a relative path to a shared JSON Schema mixin that single-sources
 	// the value shape (type/minimum/maximum/minLength/maxLength) for this param.

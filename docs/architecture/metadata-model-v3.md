@@ -135,7 +135,6 @@ endpoints:
       cursor:
         type: string
         required: false
-        minLength: 0
         maxLength: 256
       limit:
         type: integer
@@ -159,8 +158,10 @@ FMT-13 治理规则（PR-A9）：
 - `pathParams.<name>.required: false` 非法（路径占位符天然必填）
 
 FMT-25 输入约束规则：
-- 非 UUID string 参数必须声明 `minLength` / `maxLength`；UUID 使用 `type: string` + `format: uuid`
-- integer / number 参数必须声明 `minimum` / `maximum`
+- 非 UUID string 参数必须声明 `maxLength`（上界，OWASP API4 DoS 防护）；`minLength` 可选——
+  声明则须 ≥ 1（`minLength: 0` 是 no-op，被拒为 IssueInvalid）且 ≤ `maxLength`。UUID 使用
+  `type: string` + `format: uuid`（豁免长度检查）
+- integer / number 参数必须声明 `minimum` / `maximum`（`minimum: 0` 合法——挡负数，有真实语义）
 
 目录约定：`contracts/{kind}/{domain...}/{version}/contract.yaml`。`schemaRefs` 相对 `contract.yaml` 所在目录解析。
 
