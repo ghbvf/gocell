@@ -1774,6 +1774,15 @@ const (
 	crossTenantConformanceTenantB = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 )
 
+// Per-entry timestamp offsets for the cross-tenant seeds + the From/To filter
+// bound (TEST-TIME-LITERAL-01: no inline N*time.Millisecond literals).
+const (
+	ctTs2 = 2 * time.Millisecond
+	ctTs3 = 3 * time.Millisecond
+	ctTs4 = 4 * time.Millisecond
+	ctTs5 = 5 * time.Millisecond
+)
+
 // ctSeed returns a canonical cross-tenant seed: 3 entries for tenant-A
 // (timestamps T1, T3, T5) and 2 for tenant-B (T2, T4), seeded across the two
 // "namespace chains" the factory represents. The ordering mixes tenants so
@@ -1791,10 +1800,10 @@ func ctSeed(base time.Time) []*ledger.Entry {
 	}
 	return []*ledger.Entry{
 		mk("ct-a1", crossTenantConformanceTenantA, "actor-alice", "ct.test", base.Add(time.Millisecond)),
-		mk("ct-b1", crossTenantConformanceTenantB, "actor-bob", "ct.test", base.Add(2*time.Millisecond)),
-		mk("ct-a2", crossTenantConformanceTenantA, "actor-alice", "ct.test", base.Add(3*time.Millisecond)),
-		mk("ct-b2", crossTenantConformanceTenantB, "actor-bob", "ct.other", base.Add(4*time.Millisecond)),
-		mk("ct-a3", crossTenantConformanceTenantA, "actor-charlie", "ct.other", base.Add(5*time.Millisecond)),
+		mk("ct-b1", crossTenantConformanceTenantB, "actor-bob", "ct.test", base.Add(ctTs2)),
+		mk("ct-a2", crossTenantConformanceTenantA, "actor-alice", "ct.test", base.Add(ctTs3)),
+		mk("ct-b2", crossTenantConformanceTenantB, "actor-bob", "ct.other", base.Add(ctTs4)),
+		mk("ct-a3", crossTenantConformanceTenantA, "actor-charlie", "ct.other", base.Add(ctTs5)),
 	}
 }
 
@@ -1953,8 +1962,8 @@ func runCTFilterTimeRange(t *testing.T, factory CrossTenantFactory) {
 	// From=T2, To=T4 → should include entries at T2, T3, T4 (3 entries).
 	rows, err := store.QueryCrossTenant(context.Background(), ctv,
 		ledger.AuditFilters{
-			From: base.Add(2 * time.Millisecond),
-			To:   base.Add(4 * time.Millisecond),
+			From: base.Add(ctTs2),
+			To:   base.Add(ctTs4),
 		},
 		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	if err != nil {
@@ -2004,9 +2013,9 @@ func ctFilterSeed(base time.Time) []*ledger.Entry {
 	}
 	return []*ledger.Entry{
 		mk("ct-f1", crossTenantConformanceTenantA, "subject-alice", "trace-X", "ct.filter", base.Add(time.Millisecond)),
-		mk("ct-f2", crossTenantConformanceTenantA, "subject-alice", "trace-Y", "ct.filter", base.Add(2*time.Millisecond)),
-		mk("ct-f3", crossTenantConformanceTenantB, "subject-bob", "trace-X", "ct.filter", base.Add(3*time.Millisecond)),
-		mk("ct-f4", crossTenantConformanceTenantB, "subject-bob", "trace-Z", "ct.other", base.Add(4*time.Millisecond)),
+		mk("ct-f2", crossTenantConformanceTenantA, "subject-alice", "trace-Y", "ct.filter", base.Add(ctTs2)),
+		mk("ct-f3", crossTenantConformanceTenantB, "subject-bob", "trace-X", "ct.filter", base.Add(ctTs3)),
+		mk("ct-f4", crossTenantConformanceTenantB, "subject-bob", "trace-Z", "ct.other", base.Add(ctTs4)),
 	}
 }
 

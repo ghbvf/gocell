@@ -20,6 +20,15 @@ const (
 	ctMemTenantB = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 )
 
+// Per-entry timestamp offsets for deterministic seed ordering (TEST-TIME-LITERAL-01:
+// no inline N*time.Millisecond literals at the seed call sites).
+const (
+	ctMs1 = 1 * time.Millisecond
+	ctMs2 = 2 * time.Millisecond
+	ctMs3 = 3 * time.Millisecond
+	ctMs4 = 4 * time.Millisecond
+)
+
 // newTestMemStore builds a fresh MemStore backed by the test protocol.
 func newTestMemStore(t *testing.T) (*ledger.MemStore, *clockmock.FakeClock) {
 	t.Helper()
@@ -87,10 +96,10 @@ func TestMemCrossTenantStore_CrossTenantRead(t *testing.T) {
 
 	base := fc.Now()
 	// Seed: 2 entries in tenant-A (storeA), 1 in tenant-B (storeB), 1 in tenant-B (storeA).
-	appendEntry(t, storeA, "evt-a1", ctMemTenantA, "alice", "ct.test", base.Add(1*time.Millisecond))
-	appendEntry(t, storeA, "evt-b1", ctMemTenantB, "bob", "ct.test", base.Add(2*time.Millisecond))
-	appendEntry(t, storeB, "evt-a2", ctMemTenantA, "alice", "ct.test", base.Add(3*time.Millisecond))
-	appendEntry(t, storeB, "evt-b2", ctMemTenantB, "charlie", "ct.other", base.Add(4*time.Millisecond))
+	appendEntry(t, storeA, "evt-a1", ctMemTenantA, "alice", "ct.test", base.Add(ctMs1))
+	appendEntry(t, storeA, "evt-b1", ctMemTenantB, "bob", "ct.test", base.Add(ctMs2))
+	appendEntry(t, storeB, "evt-a2", ctMemTenantA, "alice", "ct.test", base.Add(ctMs3))
+	appendEntry(t, storeB, "evt-b2", ctMemTenantB, "charlie", "ct.other", base.Add(ctMs4))
 
 	ct, err := ledger.NewMemCrossTenantStore(storeA, storeB)
 	if err != nil {
@@ -196,7 +205,7 @@ func TestMemCrossTenantStore_FilterEventType(t *testing.T) {
 	base := fc.Now()
 	appendEntry(t, storeA, "fe-1", ctMemTenantA, "actor", "type.X", base)
 	appendEntry(t, storeA, "fe-2", ctMemTenantA, "actor", "type.Y", base.Add(time.Millisecond))
-	appendEntry(t, storeA, "fe-3", ctMemTenantB, "actor", "type.X", base.Add(2*time.Millisecond))
+	appendEntry(t, storeA, "fe-3", ctMemTenantB, "actor", "type.X", base.Add(ctMs2))
 
 	ct, err := ledger.NewMemCrossTenantStore(storeA)
 	if err != nil {
@@ -242,7 +251,7 @@ func TestMemCrossTenantStore_ActorIDFilter(t *testing.T) {
 	base := fc.Now()
 	appendEntry(t, storeA, "af-1", ctMemTenantA, "alice", "af.test", base)
 	appendEntry(t, storeA, "af-2", ctMemTenantB, "bob", "af.test", base.Add(time.Millisecond))
-	appendEntry(t, storeB, "af-3", ctMemTenantA, "alice", "af.test", base.Add(2*time.Millisecond))
+	appendEntry(t, storeB, "af-3", ctMemTenantA, "alice", "af.test", base.Add(ctMs2))
 
 	ct, err := ledger.NewMemCrossTenantStore(storeA, storeB)
 	if err != nil {
