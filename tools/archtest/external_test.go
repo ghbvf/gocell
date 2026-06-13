@@ -62,6 +62,7 @@ func TestStandardCellRulesComposition(t *testing.T) {
 		ruleProjectionApplyHookFunnel01:          true,
 		ruleOutboxHandleResultFactoryPreferred01: true,
 		sagaCompensatePureRuleID:                 true,
+		ruleProdMainWiringNoopReject01:           true,
 	}
 	for id := range seen {
 		if !wantRuleIDs[id] {
@@ -96,10 +97,13 @@ func TestRunStandardCellRules(t *testing.T) {
 	}
 
 	// A passing standard set against GoCell itself is the in-repo proof that the
-	// external entry works end-to-end; BuildTags exercises the second scan pass.
+	// external entry works end-to-end; BuildTags exercises the second scan pass and
+	// ProductionMainPkgs exercises PROD-MAIN-WIRING-NOOP-REJECT-01 against GoCell's
+	// own composition root (cmd/corebundle) through the aggregate entry.
 	RunStandardCellRules(t, ConfigForExternalCell{
-		BuildTags:  FlatNonDefaultTags(),
-		ExtraRules: []*CellRule{probe},
+		BuildTags:          FlatNonDefaultTags(),
+		ProductionMainPkgs: []string{"./cmd/corebundle"},
+		ExtraRules:         []*CellRule{probe},
 	})
 
 	if !extraInvoked {
