@@ -2,6 +2,8 @@ package webhook
 
 import (
 	"errors"
+	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -12,6 +14,61 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// noTenantSentinel is the breaker-key tenant segment for a tenantless (system)
+// delivery — an outbox entry whose principal carries no TenantID. Mirrors the
+// idempotency/reconcile _notenant convention so a tenantless delivery can never
+// silently share a breaker with a real tenant.
+const noTenantSentinel = "_notenant"
+
+// circuitEndpointKey identifies one circuit breaker: the (tenant, endpoint)
+// pair. Distinct tenants delivering to the SAME target URL get INDEPENDENT
+// breakers, so one tenant's failures cannot fast-fail another tenant's
+// deliveries to a shared endpoint (#2102 F1). The MDM / zero-trust posture
+// treats a tenant-blind shared breaker as a cross-tenant denial-of-service
+// vector, so tenant is part of breaker identity, not just endpoint.
+type circuitEndpointKey struct {
+	tenant   string
+	endpoint string
+}
+
+// newCircuitEndpointKey builds the key, substituting the _notenant sentinel for
+// a tenantless delivery so it occupies its own isolated breaker namespace.
+func newCircuitEndpointKey(tenant, endpoint string) circuitEndpointKey {
+	if tenant == "" {
+		tenant = noTenantSentinel
+	}
+	return circuitEndpointKey{tenant: tenant, endpoint: endpoint}
+}
+
+// registryKey is the breaker-map key — the full (tenant, endpoint) identity, so
+// the registry isolates per tenant AND per endpoint. The NUL separator cannot
+// appear in a tenant SafeID or a URL, so the two segments are unambiguous.
+func (k circuitEndpointKey) registryKey() string {
+	return k.tenant + "\x00" + k.endpoint
+}
+
+// logName is the operator-facing breaker label emitted in state-transition logs
+// (kernel/circuitbreaker fireTransitions "name" attr). It is the endpoint host
+// plus a short fingerprint of the full key: no raw path/query (which may carry
+// tenant identifiers or secret hints), yet distinct per endpoint AND per tenant
+// so an operator can tell apart two breakers that share a host (#2102 F2).
+func (k circuitEndpointKey) logName() string {
+	host := k.endpoint
+	if u, err := url.Parse(k.endpoint); err == nil && u.Host != "" {
+		host = u.Host
+	}
+	return host + "#" + circuitFingerprint(k.registryKey())
+}
+
+// circuitFingerprint is a short non-cryptographic fingerprint (FNV-1a, 8 hex)
+// used only to disambiguate breaker log labels. A collision would only blur a
+// log label; it never affects isolation, which keys on the full registryKey.
+func circuitFingerprint(s string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(s))
+	return fmt.Sprintf("%08x", h.Sum32())
+}
 
 // Circuit-breaker defaults for outbound webhook delivery. These mirror the
 // sony/gobreaker standard defaults but are stated explicitly here so the
@@ -70,10 +127,11 @@ func circuitProbeOutcome(statusCode int, transportErr error) error {
 	return nil // 2xx and other 4xx: the endpoint is up.
 }
 
-// circuitGate is the per-endpoint circuit-breaker registry a Dispatcher gates
-// outbound delivery on. Each distinct target URL gets its own Breaker so one
-// unhealthy receiver does not fast-fail deliveries to healthy ones. The map is
-// bounded (circuitGateMaxEndpoints) as a DoS guard.
+// circuitGate is the per-(tenant, endpoint) circuit-breaker registry a
+// Dispatcher gates outbound delivery on. Each (tenant, target URL) gets its own
+// Breaker so one unhealthy receiver — or one tenant's failures against a shared
+// URL — does not fast-fail deliveries from other tenants or to healthy targets.
+// The map is bounded (circuitGateMaxEndpoints) as a DoS guard.
 type circuitGate struct {
 	clk      clock.Clock
 	mu       sync.Mutex
@@ -88,17 +146,19 @@ func newCircuitGate(clk clock.Clock) *circuitGate {
 	return &circuitGate{clk: clk, breakers: make(map[string]*circuitbreaker.Breaker)}
 }
 
-// Allow gates a delivery to endpoint. It returns allowed=true and a done
-// callback (call exactly once with the circuitProbeOutcome) when the endpoint's
+// Allow gates a delivery for key. It returns allowed=true and a done callback
+// (call exactly once with the circuitProbeOutcome) when the (tenant, endpoint)
 // circuit is closed or admits a half-open probe; allowed=false and a nil done
 // when the circuit is open.
-func (g *circuitGate) Allow(endpoint string) (allowed bool, done func(err error)) {
-	b := g.breakerFor(endpoint)
+func (g *circuitGate) Allow(key circuitEndpointKey) (allowed bool, done func(err error)) {
+	b := g.breakerFor(key)
 	if b == nil {
-		// breakerFor returns nil only when breaker construction failed (empty
-		// Name). This can happen if endpoint is empty or url.Parse yields no host.
-		// Fail open so a configuration bug degrades to "no breaker protection"
-		// rather than blocking all delivery. Log at Error (correctness failure).
+		// Unreachable: breakerFor returns nil only if breaker construction
+		// failed, which happens solely on an empty Name — and logName always
+		// yields a non-empty "<host>#<fingerprint>". Kept as a defensive,
+		// lint-required handling of New's error: fail open so a hypothetical
+		// construction bug degrades to "no breaker protection", never to
+		// "delivery blocked". Log at Error (correctness failure).
 		slog.Error("webhook: circuit breaker construction failed, failing open",
 			slog.String("warning", "endpoint circuit breaker unavailable"))
 		return true, func(error) {}
@@ -106,7 +166,7 @@ func (g *circuitGate) Allow(endpoint string) (allowed bool, done func(err error)
 	return b.Allow()
 }
 
-// size reports the number of tracked endpoints (test seam for the bounded-
+// size reports the number of tracked breakers (test seam for the bounded-
 // registry invariant).
 func (g *circuitGate) size() int {
 	g.mu.Lock()
@@ -114,15 +174,16 @@ func (g *circuitGate) size() int {
 	return len(g.breakers)
 }
 
-// breakerFor returns the breaker for endpoint, lazily constructing one. When the
+// breakerFor returns the breaker for key, lazily constructing one. When the
 // registry is at capacity it evicts an arbitrary entry first (DoS safety valve):
-// at circuitGateMaxEndpoints distinct endpoints the victim choice is not
-// correctness-critical — a re-observed endpoint simply rebuilds its breaker, the
-// worst case being one lost open-state that re-trips on the next failure burst.
-func (g *circuitGate) breakerFor(endpoint string) *circuitbreaker.Breaker {
+// at circuitGateMaxEndpoints distinct (tenant, endpoint) pairs the victim choice
+// is not correctness-critical — a re-observed pair simply rebuilds its breaker,
+// the worst case being one lost open-state that re-trips on the next failure burst.
+func (g *circuitGate) breakerFor(key circuitEndpointKey) *circuitbreaker.Breaker {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if b, ok := g.breakers[endpoint]; ok {
+	rk := key.registryKey()
+	if b, ok := g.breakers[rk]; ok {
 		return b
 	}
 	if len(g.breakers) >= circuitGateMaxEndpoints {
@@ -131,17 +192,8 @@ func (g *circuitGate) breakerFor(endpoint string) *circuitbreaker.Breaker {
 			break
 		}
 	}
-	// Use host-only as the breaker Name so state-transition logs (slog
-	// "name" attr in fireTransitions) never emit the target path or query,
-	// which may carry tenant identifiers or secret hints. The map key remains
-	// the full endpoint URL so per-endpoint isolation is preserved — two paths
-	// on the same host get independent breakers and independent log labels.
-	breakerName := endpoint
-	if u, err := url.Parse(endpoint); err == nil && u.Host != "" {
-		breakerName = u.Host
-	}
 	b, err := circuitbreaker.New(circuitbreaker.Config{
-		Name:        breakerName,
+		Name:        key.logName(), // safe log label: host#fingerprint, no path/query
 		MaxRequests: circuitHalfOpenProbes,
 		Timeout:     circuitOpenTimeout,
 		ReadyToTrip: circuitReadyToTrip,
@@ -149,6 +201,6 @@ func (g *circuitGate) breakerFor(endpoint string) *circuitbreaker.Breaker {
 	if err != nil {
 		return nil
 	}
-	g.breakers[endpoint] = b
+	g.breakers[rk] = b
 	return b
 }

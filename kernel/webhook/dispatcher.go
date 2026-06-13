@@ -146,12 +146,16 @@ func (d *Dispatcher) Handle(ctx context.Context, entry outbox.Entry) outbox.Hand
 		d.recorder.recordDelivery(ctx, d.source, dispositionResult(fail.Disposition))
 		return fail
 	}
-	// Gate the HTTP attempt on the per-endpoint circuit breaker. An open circuit
-	// fast-fails without a POST: Requeue (not Reject) so the outbox redelivers
-	// per the Svix schedule once the breaker may probe again — composing with,
-	// not replacing, the terminal MaxRetries→DLX path.
+	// Gate the HTTP attempt on the per-(tenant, endpoint) circuit breaker. An
+	// open circuit fast-fails without a POST: Requeue (not Reject) so the outbox
+	// redelivers per the Svix schedule once the breaker may probe again —
+	// composing with, not replacing, the terminal MaxRetries→DLX path. The key
+	// includes the entry's TenantID so a shared target URL cannot let one
+	// tenant's failures fast-fail another tenant's deliveries (cross-tenant
+	// isolation; empty tenant = tenantless system delivery → _notenant sentinel).
 	endpoint := req.URL.String()
-	allow, done := d.circuit.Allow(endpoint)
+	key := newCircuitEndpointKey(entry.Principal().TenantID.String(), endpoint)
+	allow, done := d.circuit.Allow(key)
 	if !allow {
 		d.recorder.recordDelivery(ctx, d.source, deliveryCircuitOpen)
 		return outbox.Requeue(errcode.New(errcode.KindUnavailable, errcode.ErrCircuitOpen,

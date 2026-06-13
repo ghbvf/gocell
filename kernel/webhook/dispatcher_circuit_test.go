@@ -17,8 +17,49 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// tenantEntry builds an outbox entry whose principal carries tenantID, so the
+// dispatcher's circuit key includes the tenant dimension.
+func tenantEntry(t *testing.T, tenantID string, payload []byte) outbox.Entry {
+	t.Helper()
+	ctx := ctxkeys.WithTenantID(context.Background(), tenantID)
+	e, err := outbox.NewEntry(clockmock.New(time.Unix(dispatchTestTS, 0)), ctx, "webhook.test.v1", payload)
+	require.NoError(t, err)
+	require.Equal(t, tenantID, e.Principal().TenantID.String(), "entry must carry the tenant")
+	return e
+}
+
+// TestDispatcher_Handle_CircuitPerTenantIsolation verifies the breaker key
+// includes the tenant: tripping tenant A's breaker for a SHARED target URL must
+// NOT fast-fail tenant B's deliveries to that same URL (cross-tenant isolation,
+// #2102 F1 — the MDM/zero-trust posture forbids a shared-URL cross-tenant DoS).
+func TestDispatcher_Handle_CircuitPerTenantIsolation(t *testing.T) {
+	srv, hits, _ := countingServer(t, http.StatusInternalServerError)
+	d, err := NewDispatcher(clockmock.New(time.Unix(dispatchTestTS, 0)),
+		dispatchTestSigner(t), NewSafePolicy(WithAllowLoopback()), staticSelector(srv.URL))
+	require.NoError(t, err)
+
+	// Trip tenant A's breaker for the shared URL.
+	for range circuitTripThreshold + 1 {
+		d.Handle(context.Background(), tenantEntry(t, "tenanta", []byte(`{}`)))
+	}
+	requireCircuitOpen(t, d.Handle(context.Background(), tenantEntry(t, "tenanta", []byte(`{}`))))
+	hitsAfterA := hits.Load()
+
+	// Tenant B delivers to the SAME URL — its breaker is independent, so the
+	// request must reach the endpoint (a normal 500 Requeue), NOT be fast-failed
+	// by tenant A's open circuit.
+	resB := d.Handle(context.Background(), tenantEntry(t, "tenantb", []byte(`{}`)))
+	require.Equal(t, outbox.DispositionRequeue, resB.Disposition)
+	var ee *errcode.Error
+	require.True(t, errors.As(resB.Err, &ee), "tenant B result must be *errcode.Error, got %T", resB.Err)
+	assert.Equal(t, errcode.ErrWebhookDeliveryFailed, ee.Code,
+		"tenant B must reach the endpoint (500 Requeue), not be fast-failed by tenant A's open circuit")
+	assert.Equal(t, hitsAfterA+1, hits.Load(), "tenant B's delivery must reach the endpoint")
+}
 
 // countingServer is an httptest server whose handler counts hits and returns a
 // status code read from a swappable atomic, so a test can flip an endpoint
@@ -253,17 +294,37 @@ func TestDispatcher_Handle_Circuit429Trips(t *testing.T) {
 	assert.Equal(t, tripCount, int(hits.Load()), "open circuit must NOT POST to the endpoint")
 }
 
-// TestCircuitGate_FailOpenOnEmptyEndpoint verifies that Allow("") — which
-// yields an empty host → breaker construction fails → nil breaker — fails open:
-// allowed=true and the done callback does not panic.
-func TestCircuitGate_FailOpenOnEmptyEndpoint(t *testing.T) {
+// TestCircuitGate_EmptyKeyStillBreaks verifies that an empty (tenant, endpoint)
+// key still yields a working breaker rather than a nil/fail-open path: logName
+// is always "<host>#<fingerprint>" (non-empty even when host is empty), so
+// breaker construction never fails on an empty Name. allowed=true and the done
+// callback does not panic.
+func TestCircuitGate_EmptyKeyStillBreaks(t *testing.T) {
 	g := newCircuitGate(clockmock.New(time.Unix(0, 0)))
-	// An empty endpoint: url.Parse("") gives host=""; breakerFor returns nil.
-	allow, done := g.Allow("")
-	assert.True(t, allow, "nil breaker must fail open (allow=true)")
-	require.NotNil(t, done, "fail-open must return a non-nil done callback")
-	// done must not panic regardless of the error passed.
+	allow, done := g.Allow(newCircuitEndpointKey("", ""))
+	assert.True(t, allow, "fresh breaker starts closed (allow=true)")
+	require.NotNil(t, done, "a working breaker returns a non-nil done callback")
 	assert.NotPanics(t, func() { done(nil) })
+	assert.Equal(t, 1, g.size(), "an empty key still registers a real breaker, not fail-open")
+}
+
+// TestCircuitEndpointKey_LogNameSafeAndDistinct verifies the breaker log label
+// (#2102 F2): it omits the raw path/query (no PII) yet distinguishes endpoints
+// that share a host, and distinguishes the same URL across tenants.
+func TestCircuitEndpointKey_LogNameSafeAndDistinct(t *testing.T) {
+	const host = "hooks.example.test"
+	a := newCircuitEndpointKey("", "https://"+host+"/tenant-a/secret-path?token=xyz")
+	b := newCircuitEndpointKey("", "https://"+host+"/tenant-b/other")
+	assert.Equal(t, host, a.logName()[:len(host)], "log name starts with the host")
+	assert.NotContains(t, a.logName(), "secret-path", "log name must not leak the path")
+	assert.NotContains(t, a.logName(), "token", "log name must not leak the query")
+	assert.NotEqual(t, a.logName(), b.logName(), "same-host distinct endpoints get distinct log names")
+
+	// Same URL, different tenant → distinct breaker identity AND distinct label.
+	t1 := newCircuitEndpointKey("tenant1", "https://"+host+"/shared")
+	t2 := newCircuitEndpointKey("tenant2", "https://"+host+"/shared")
+	assert.NotEqual(t, t1.registryKey(), t2.registryKey(), "tenant is part of breaker identity")
+	assert.NotEqual(t, t1.logName(), t2.logName(), "same URL across tenants gets distinct log names")
 }
 
 // TestDispatcher_Handle_CircuitTransportFaultTrips verifies that repeated
@@ -301,7 +362,7 @@ func TestDispatcher_Handle_CircuitTransportFaultTrips(t *testing.T) {
 func TestCircuitGate_BoundedEviction(t *testing.T) {
 	g := newCircuitGate(clockmock.New(time.Unix(0, 0)))
 	for i := range circuitGateMaxEndpoints + 100 {
-		allow, done := g.Allow(fmt.Sprintf("http://e%d.example.test/", i))
+		allow, done := g.Allow(newCircuitEndpointKey("", fmt.Sprintf("http://e%d.example.test/", i)))
 		require.True(t, allow, "fresh endpoint breaker starts closed")
 		done(nil)
 	}

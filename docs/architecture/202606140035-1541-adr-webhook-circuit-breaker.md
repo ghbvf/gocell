@@ -47,18 +47,25 @@ Two consumers now share the one machine:
   does not import runtime; the match is pinned by a compile-time assertion in
   the middleware test).
 
-### D2 — Per-endpoint breaker, gated before the HTTP attempt
+### D2 — Per-(tenant, endpoint) breaker, gated before the HTTP attempt
 
-`Dispatcher` holds a `circuitGate`: a bounded `map[targetURL]*Breaker`. `Handle`
-resolves + SSRF-vets + signs the request (unchanged), then calls
-`circuitGate.Allow(req.URL.String())` **before** `client.Do`:
+`Dispatcher` holds a `circuitGate`: a bounded `map[registryKey]*Breaker` keyed by
+a `circuitEndpointKey{tenant, endpoint}`. `Handle` resolves + SSRF-vets + signs
+the request (unchanged), then calls `circuitGate.Allow(key)` **before**
+`client.Do`, where `key = newCircuitEndpointKey(entry.Principal().TenantID, req.URL.String())`:
 
 - **Closed / HalfOpen-with-slot** → allowed: POST, then report the outcome.
 - **Open / HalfOpen-budget-exhausted** → fast-fail: **no HTTP attempt**, return
   `outbox.Requeue(ErrCircuitOpen)`, record `webhook_deliveries_total{result=circuit_open}`.
 
-Per-endpoint keying isolates failures: one unhealthy target does not fast-fail
-deliveries to healthy ones.
+Keying on **(tenant, endpoint)** isolates failures on two axes: one unhealthy
+target does not fast-fail deliveries to healthy ones, AND one tenant's failures
+against a shared URL do not fast-fail another tenant's deliveries (see D6). A
+tenantless system delivery uses the `_notenant` sentinel as its tenant segment.
+The breaker's log label (kernel/circuitbreaker `name`) is `host#fingerprint` —
+the endpoint host plus a short FNV fingerprint of the full key — so logs never
+emit the raw path/query (which may carry tenant identifiers or secret hints) yet
+remain distinct per endpoint and per tenant.
 
 ### D3 — Failure classification tracks endpoint HEALTH, not payload validity
 
@@ -93,9 +100,9 @@ stated explicitly in `kernel/webhook/circuit.go`:
 - half-open probe budget **1**.
 
 There is no production opt-out (a disabled breaker would be the banned
-noop-publisher posture). Per-deployment / per-contract threshold tuning is a
-genuine future need, not built speculatively — backlogged at #2106
-(per-endpoint threshold configuration and tenant-scoped keying).
+noop-publisher posture). Per-deployment / per-contract **threshold** tuning is a
+genuine future need, not built speculatively — backlogged at #2106. (Tenant
+isolation is NOT deferred: breaker keying already includes the tenant — see D6.)
 
 ### D5 — Composition with the outbox DLX (terminal behavior unchanged)
 
@@ -105,19 +112,26 @@ endpoint still exhausts `MaxRetries` and is Rejected to the DLX. Because the Svi
 attempt does a POST or fast-fails, **time-to-DLX does not regress** — the breaker
 only removes the wasted HTTP round-trips + 30s timeouts within the retry window.
 
-### D6 — Multi-tenant noisy-neighbor analysis
+### D6 — Tenant-scoped breaker identity (no cross-tenant fast-fail)
 
-`circuitGate` keys breakers on the bare target URL without a tenant dimension.
-In the common case each tenant configures a distinct target URL (their own
-webhook receiver), so the URL itself provides natural isolation: one tenant's
-5xx burst does not affect another tenant's breaker state.
+`circuitGate` keys breakers on **(tenant, endpoint)**, not the bare target URL.
+The tenant comes from the outbox entry's principal
+(`entry.Principal().TenantID`; a tenantless system delivery uses the `_notenant`
+sentinel). This is mandated by the MDM / zero-trust posture: a tenant-blind
+breaker keyed on URL alone is a **cross-tenant denial-of-service vector** — if
+multiple tenants configure the **same** target URL (e.g. a shared public
+endpoint), one tenant's 5xx/429/transport-fault burst would trip the breaker and
+fast-fail deliveries for *every* tenant sharing that URL.
 
-The shared-endpoint edge case: if multiple tenants configure the **same** target
-URL (e.g. a public Slack webhook endpoint), one tenant's failure burst will trip
-the breaker and fast-fail deliveries for all tenants sharing that URL. This is
-accepted for v1 — the probability is low and the effect is self-correcting (the
-breaker recovers after `circuitOpenTimeout`). Tenant-scoped keying
-(`tenantID:targetURL`) would close this gap and is backlogged at #2106.
+With tenant in the key, each tenant gets an independent breaker for the same
+URL: tenant A tripping does not fast-fail tenant B. This is verified by
+`TestDispatcher_Handle_CircuitPerTenantIsolation`. The breaker's log label
+(`host#fingerprint`, see D2) likewise distinguishes the same URL across tenants
+without emitting the tenant id or path in cleartext.
+
+(The framework does not validate that a `TenantScoped` producer actually encodes
+the right tenant — it trusts the entry principal the auth boundary set, the same
+trust model as the outbox idempotency claimer's `_notenant` key.)
 
 ### D7 — In-memory, per-process scope (no distributed breaker)
 

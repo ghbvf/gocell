@@ -1322,9 +1322,13 @@ specified series).
 `gocell_webhook_delivery_duration_seconds{source}`（发端时延）/
 `gocell_webhook_signature_failures_total{source,reason}`（收端验签失败）/
 `gocell_webhook_idempotency_hits_total{source}`（收端重复投递去重）。`result` 值集
-`{success, client_error, server_error, transport_error, blocked}`（冻结于
+`{success, client_error, server_error, transport_error, blocked, circuit_open}`（冻结于
 `WEBHOOK-METRIC-LABEL-VALUES-FROZEN-01`）；`reason` 值集
 `{missing_header, invalid_header, unknown_source, bad_signature, timestamp_expired}`。
+
+> `circuit_open`（#1541）= per-(tenant, endpoint) 熔断器打开后被 **fast-fail、未发 HTTP**
+> 的投递。breaker 打开后真实 POST 被抑制，**持续故障会从 `server_error` 转成 `circuit_open`**，
+> 所以下面的 5xx 告警必须与 `GoCellWebhookCircuitOpen` 一起看，否则故障会在 5xx 告警里"消失"。
 
 ### WebhookDeliveryServerErrorRate
 
@@ -1365,6 +1369,33 @@ specified series).
       >20% of webhook deliveries to source={{ $labels.source }} returned 4xx over
       10m — likely a target endpoint misconfiguration (auth, path, payload schema),
       NOT a transient outage. Unlike server_error these keep failing on retry.
+```
+
+### WebhookCircuitOpen
+
+熔断器打开 = 某 (tenant, endpoint) 连续 transport/5xx/429 失败已 trip，后续投递被
+fast-fail（不发 HTTP）。这是持续故障的 **主信号**——breaker 打开后 5xx 不再增长（POST
+被抑制），故障改以 `circuit_open` 体现，单看 `server_error` 会漏。任何非零持续 `circuit_open`
+都表示一个 endpoint 长期不可用、正在消耗重试预算而未恢复。
+
+```yaml
+- alert: GoCellWebhookCircuitOpen
+  expr: |
+    sum by (source) (rate(gocell_webhook_deliveries_total{result="circuit_open"}[5m])) > 0
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Webhook endpoint circuit open (source={{ $labels.source }})"
+    description: |
+      A per-(tenant, endpoint) circuit breaker for source={{ $labels.source }} has
+      been open for >5m (>1 breaker timeout cycle, default 60s), fast-failing
+      deliveries without an HTTP attempt. The endpoint is persistently unhealthy
+      (transport faults / 5xx / 429). Deliveries still flow through the delay tiers
+      and reach the DLX on the same MaxRetries timeline — inspect the target
+      endpoint and DLX depth. Note 5xx alerts go quiet once the breaker opens, so
+      treat this as the primary persistent-failure signal. See ADR
+      202606140035-1541-adr-webhook-circuit-breaker.md.
 ```
 
 ### WebhookSignatureFailureSpike

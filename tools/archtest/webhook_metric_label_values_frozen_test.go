@@ -7,7 +7,7 @@
 // and the `reason` label on webhook_signature_failures_total — are frozen to
 // exactly:
 //
-//	webhookDeliveryResult  → {success, client_error, server_error, transport_error, blocked}
+//	webhookDeliveryResult  → {success, client_error, server_error, transport_error, blocked, circuit_open}
 //	SignatureFailureReason → {missing_header, invalid_header, unknown_source, bad_signature, timestamp_expired}
 //
 // The delivery result is status-aware (NOT a 3-way disposition collapse): the
