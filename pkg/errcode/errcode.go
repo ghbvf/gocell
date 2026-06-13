@@ -767,6 +767,28 @@ const (
 	// ErrConflict so operator dashboards can route saga producer-side races
 	// separately from cell-wide conflict signals.
 	ErrSagaDuplicateInstance Code = "ERR_SAGA_DUPLICATE_INSTANCE"
+	// ErrSagaStopTimeout signals that a saga runtime component (Coordinator /
+	// Tailer) exhausted its Stop deadline while shutting down — either waiting
+	// for Start to finish or for the drive/poll loop to drain. Paired with
+	// KindDeadlineExceeded. These are internal lifecycle errors returned to the
+	// bootstrap LIFO Close loop (which logs them), NOT HTTP responses — the
+	// KindDeadlineExceeded → HTTP 504 mapping only applies on the off chance the
+	// error surfaces at an HTTP boundary. Distinct from generic ErrConflict
+	// (which the lifecycle paths previously mis-used: a deadline is not a state
+	// conflict) so bootstrap Close and operator dashboards classify a
+	// shutdown-budget timeout at the correct severity rather than as a
+	// resource-conflict signal.
+	ErrSagaStopTimeout Code = "ERR_SAGA_STOP_TIMEOUT"
+	// ErrSagaFoldUnknownKind signals that the Coordinator's forward-replay fold
+	// (runtime/saga.foldEvents) encountered a journal.EventKind it has no
+	// explicit case for — a code↔journal-schema drift caught by the fail-closed
+	// default (#1950). Internal (KindInternal → 500; on the 5xx wire it projects
+	// to ERR_INTERNAL, so the distinct code is for server-side classification,
+	// not wire). Distinct from generic ErrInternal so the drive loop logs it at
+	// Error severity (real correctness anomaly) while the defensive
+	// errFoldEventMismatch stays Warn, and operator dashboards can route
+	// "replay hit an unhandled event kind" separately.
+	ErrSagaFoldUnknownKind Code = "ERR_SAGA_FOLD_UNKNOWN_KIND"
 	// ErrProjectionNotFound signals that the projection rebuild control-plane
 	// endpoint (POST /admin/v1/projection/<cell>/<name>/rebuild) was given a
 	// <cell>/<name> path that resolves to no registered projection Coordinator.
