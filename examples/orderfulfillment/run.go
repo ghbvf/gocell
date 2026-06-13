@@ -111,7 +111,18 @@ func runOrderfulfillment(ctx context.Context, assemblyID string, assemblyCellIDs
 	}
 
 	if topo.StorageBackend() == bootstrap.StorageBackendPostgres {
-		logger.Info("orderfulfillment: starting on 127.0.0.1:8083 (postgres mode)")
+		// postgres mode is a single-pod-only test/demo durable-replay
+		// demonstration — NOT production. Multi-pod postgres is fail-closed by
+		// sagaprojectiondeps.Resolve (run.go injects no RedisClient, so a
+		// RequiresDistributedReplay topology errors at startup rather than
+		// silently granting every pod the projection leader lock).
+		logger.Warn("orderfulfillment: postgres mode — single-pod loopback test/demo durable-replay " +
+			"demonstration, NOT production: one unrestricted PG pool (migrations+serving), " +
+			"NoopEmitter (no outbox consumers — the saga journal is the durable read source), " +
+			"no leader-election (single-pod), unauthenticated loopback listener. " +
+			"Production would require: durable broker emitter, split admin/serving DSN + restricted RLS role, " +
+			"Redis distlock + leader-elect, JWT/PDP auth")
+		logger.Info("orderfulfillment: starting on 127.0.0.1:8083 (postgres mode, single-pod loopback)")
 	} else {
 		logger.Warn("orderfulfillment: demo mode — unauthenticated + in-memory journal + discarded outbox events + discarded saga metrics")
 		logger.Info("orderfulfillment: starting on 127.0.0.1:8083 (demo mode, loopback only)")
@@ -144,6 +155,9 @@ func buildPostgresInfra(ctx context.Context, clk clock.Clock, topo bootstrap.Top
 		_ = pool.Close(ctx)
 		return pgInfra{}, err
 	}
+	// postgres mode is single-pod-only: no RedisClient is passed, so a multi-pod
+	// (RequiresDistributedReplay) topology is fail-closed here by the resolver —
+	// it refuses to hand every pod an in-process projection leader lock.
 	deps, err := sagaprojectiondeps.Resolve(ctx, clk, topo, sagaprojectiondeps.Config{Pool: pool})
 	if err != nil {
 		_ = pool.Close(ctx)

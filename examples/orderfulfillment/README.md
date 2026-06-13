@@ -157,28 +157,46 @@ The `/readyz` probe includes `orderfulfillmentcell_repo_ready` (coordinator jour
 
 ## Running in Postgres Mode
 
+> **Scope: single-pod, loopback, single-tenant test/demo of durable replay — NOT production.**
+> Postgres mode exists to *demonstrate* that the saga-journal CQRS projection survives a
+> process restart (the `TestDurableReplay_PGProjectionSurvivesRestart` integration test
+> below drives exactly this). It is a single-pod demo wired for loopback only; it is not a
+> production deployment shape. **Multi-pod postgres is fail-closed**: `run.go` passes no
+> `RedisClient`, so a `RequiresDistributedReplay` topology errors at startup in
+> `sagaprojectiondeps.Resolve` rather than silently granting every pod the projection
+> leader lock (which would double-apply the projection). The startup log emits a `Warn`
+> stating this boundary explicitly.
+
 The PG path is fully wired via `run.go` (`buildPostgresInfra` + `sagaprojectiondeps.Resolve`).
-To start with a durable journal and projection checkpoint store:
+To start the single-pod durable-replay demo with a durable journal and projection checkpoint store:
 
 ```bash
 GOCELL_CELL_ADAPTER_MODE=postgres GOCELL_ADAPTER_MODE=real DATABASE_URL=<dsn> go run ./examples/orderfulfillment
 ```
 
-**What is auto-wired in postgres mode:**
+**What is auto-wired in postgres mode (single-pod demo):**
 
 - `PGJournal` — durable saga journal backed by the `saga_events` PG table; state survives restarts.
 - `PG ProjectionCheckpointStore` — fenced-CAS checkpoint store for the `order_saga_status` projection.
 - `PG TxManager` — transactional write path for projection upserts.
 - `PG OrderStatusReadModel` — order-status read model backed by the `order_saga_status` PG table.
+- In-process projection leader locker (single-pod) — multi-pod would require a Redis distlock (fail-closed here).
 - Platform migrations (saga_journal, projection_checkpoints, projection_events, …) applied automatically on startup.
 - Example migration (`order_saga_status` table) applied automatically on startup.
 
-**What still needs production wiring:**
+**Intentional demo simplifications (do not "fix" them in this example):**
 
-- Replace `outbox.NewNoopEmitter()` with a real `outbox.Emitter` (relay-backed broker publisher) — the NoopEmitter silently discards step events in both demo and postgres modes.
-- Replace `kernelmetrics.NopProvider{}` in `obmetrics.NewSagaCollector` with a real Prometheus provider (e.g. `bootstrap.MetricsProvider()`) — saga metrics are discarded in both modes until this is wired.
-- Replace `auth.AuthNone{}` + `auth.public: true` with a JWT plan (`auth.NewAuthJWTFromAssembly`) and set `auth.public: false` in both contract YAMLs — the primary listener is unauthenticated in all current modes.
-- Remove the `paymentShouldFail` field from the request schema before going to production: it is a demo-only failure-injection hook and must not be exposed on the business API wire.
+- `outbox.NewNoopEmitter()` is intentional — there are **no outbox consumers** in this example. The saga journal *is* the durable read source the projection Tailer scans, so step events do not need a broker. The NoopEmitter discards step events in both demo and postgres modes by design.
+- A single **unrestricted** PG pool serves both migrations and request serving, on one pod, over a loopback listener, single-tenant.
+
+**What production (a real multi-pod service) would require — NOT wired here:**
+
+- **Durable broker emitter**: replace `outbox.NewNoopEmitter()` with a real `outbox.Emitter` (relay-backed broker publisher) *only if* downstream cells consume the events — this example has none.
+- **Split admin/serving DSN + restricted RLS role**: a separate non-owner, no-bypass-RLS serving role for request handling, distinct from the migration/admin DSN (this demo uses one unrestricted pool).
+- **Redis distlock + leader-election**: required for multi-pod so exactly one replica drives the projection; without it multi-pod is fail-closed (see scope note above).
+- **JWT/PDP auth**: replace `auth.AuthNone{}` + `auth.public: true` with a JWT plan (`auth.NewAuthJWTFromAssembly`) and set `auth.public: false` in both contract YAMLs — the primary listener is unauthenticated in all current modes.
+- **Real metrics provider**: replace `kernelmetrics.NopProvider{}` in `obmetrics.NewSagaCollector` with a real Prometheus provider (e.g. `bootstrap.MetricsProvider()`) — saga metrics are discarded in both modes until this is wired.
+- Remove the `paymentShouldFail` field from the request schema: it is a demo-only failure-injection hook and must not be exposed on the business API wire.
 
 ## Security
 

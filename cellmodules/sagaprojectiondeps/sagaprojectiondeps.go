@@ -54,6 +54,18 @@ type Deps struct {
 func Resolve(ctx context.Context, clk clock.Clock, topo bootstrap.Topology, cfg Config) (Deps, error) {
 	clock.MustHaveClock(clk, "sagaprojectiondeps.Resolve")
 
+	// resolveLocker runs BEFORE resolveStore. Both are pure construction + gating
+	// with no I/O at construction (no pool/Redis dial — the PG pool is opened by
+	// the composition root, and adapterredis.NewRedisDriver only wraps the client),
+	// so ordering is behavior-neutral for the success path. Doing the locker gate
+	// first means the multi-pod-needs-Redis fail-close is reached even when the PG
+	// pool is also nil — otherwise the postgres-needs-pool gate would always mask
+	// the Redis gate when both are missing (the F9 false-green).
+	locker, err := resolveLocker(ctx, clk, topo, cfg)
+	if err != nil {
+		return Deps{}, err
+	}
+
 	j, ownerStore, txRunner, err := resolveStore(clk, topo, cfg)
 	if err != nil {
 		return Deps{}, err
@@ -65,11 +77,6 @@ func Resolve(ctx context.Context, clk clock.Clock, topo bootstrap.Topology, cfg 
 		// projection tailer, so fail-closed rather than wire a nil reader.
 		return Deps{}, errcode.New(errcode.KindInternal, errcode.ErrValidationFailed,
 			"sagaprojectiondeps: resolved journal does not implement journal.GlobalReader")
-	}
-
-	locker, err := resolveLocker(ctx, clk, topo, cfg)
-	if err != nil {
-		return Deps{}, err
 	}
 
 	return Deps{

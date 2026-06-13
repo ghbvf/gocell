@@ -24,8 +24,11 @@ var terminalStatuses = map[orderstatusgen.ResponseDataStatus]struct{}{
 // ANY subsequent kind. This makes Apply idempotent under re-delivery and
 // replay.
 //
-// Unknown/zero kind → fail-closed: returns ("", error). The Tailer treats a
-// returned error from the Apply handler as permanent (DLX route).
+// Unknown/zero kind → fail-closed: returns ("", error) wrapped permanent. A
+// permanent apply error HALTS the saga-journal Tailer's checkpoint advance
+// (fail-closed — the poison event blocks the projection until operator
+// intervention); it does NOT route to a DLX (the saga-journal Tailer has no
+// dead-letter path, unlike the outbox ConsumerBase).
 //
 // Note: "accepted" is NOT a valid stored status — it means the read model has
 // NO row yet (handled by the query layer). FoldStatus only stores Running or a
@@ -47,8 +50,10 @@ func FoldStatus(prev orderstatusgen.ResponseDataStatus, kind journal.EventKind) 
 		journal.KindStepCompensated, journal.KindCompensationStarted, journal.KindStepCompensationFailed:
 		return orderstatusgen.ResponseDataStatusRunning, nil
 	default:
-		// Unknown / zero kind — fail-closed. The caller must wrap this as a
-		// PermanentError (DLX) so the bad event is not silently retried.
+		// Unknown / zero kind — fail-closed as a PermanentError so the bad event
+		// is not silently retried. There is no DLX on the saga-journal Tailer
+		// path: a permanent apply error HALTS the Tailer's checkpoint advance
+		// (the poison event blocks the projection until operator intervention).
 		return "", outbox.NewPermanentError(
 			fmt.Errorf("projection.FoldStatus: unknown journal.EventKind %q; reject as permanent", kind.String()),
 		)

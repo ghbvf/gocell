@@ -35,6 +35,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cellvocab"
@@ -119,6 +121,47 @@ type sagaProjectionEvent struct {
 // containing "@" is still handled correctly.
 func (e *sagaProjectionEvent) EventID() string {
 	return fmt.Sprintf(SagaJournalEventIDPrefix+"%d@%s", e.globalSeq, e.instanceID)
+}
+
+// ParseSagaJournalEventID parses an EventID produced by sagaProjectionEvent.EventID()
+// ("saga-journal:<globalSeq>@<instanceID>") into its parts, validating the prefix,
+// a positive globalSeq, the '@' separator, and a non-empty instanceID. Returns a
+// non-nil error (NOT wrapped permanent — caller decides) on any malformation.
+//
+// It splits on the LAST '@' (after stripping the prefix), mirroring the
+// strings.LastIndex contract documented on EventID: the instanceID is the entire
+// suffix after the final separator, so a future opaque instanceID that itself
+// embeds '@' keeps its suffix intact. The portion before that last '@' is the
+// globalSeq and MUST be a clean base-10 int64; a string that pushes a '@' into
+// the seq portion is rejected as malformed (EventID never emits such a string,
+// since globalSeq is always numeric). It is the round-trip inverse of EventID():
+// EventID() output always parses back to the same (globalSeq, instanceID).
+func ParseSagaJournalEventID(eventID string) (globalSeq int64, instanceID string, err error) {
+	if !strings.HasPrefix(eventID, SagaJournalEventIDPrefix) {
+		return 0, "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"sagaprojection.ParseSagaJournalEventID: missing saga-journal EventID prefix")
+	}
+	rest := eventID[len(SagaJournalEventIDPrefix):]
+	atIdx := strings.LastIndex(rest, "@")
+	if atIdx < 0 {
+		return 0, "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"sagaprojection.ParseSagaJournalEventID: missing @ separator")
+	}
+	instanceID = rest[atIdx+1:]
+	if instanceID == "" {
+		return 0, "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"sagaprojection.ParseSagaJournalEventID: empty instanceID suffix")
+	}
+	globalSeq, perr := strconv.ParseInt(rest[:atIdx], 10, 64)
+	if perr != nil {
+		return 0, "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"sagaprojection.ParseSagaJournalEventID: globalSeq is not a base-10 int64")
+	}
+	if globalSeq <= 0 {
+		return 0, "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"sagaprojection.ParseSagaJournalEventID: globalSeq must be positive")
+	}
+	return globalSeq, instanceID, nil
 }
 
 // Payload returns the marshaled [SagaEventEnvelope] for this event: a JSON object

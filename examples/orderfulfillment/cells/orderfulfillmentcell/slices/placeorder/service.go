@@ -97,6 +97,15 @@ func NewService(clk clock.Clock, opts ...Option) (*Service, error) {
 //     errcode.KindConflict / errcode.ErrConflict (HTTP 409). The caller must
 //     use a distinct idempotency key for a new order with different parameters.
 //
+// Self-healing enrollment (F4): order creation and saga enrollment are two
+// non-atomic steps (Create then Enqueue). If Enqueue once failed AFTER a
+// successful Create, the order is an orphan — created but never enrolled. The
+// idempotent-hit branch therefore does NOT early-return on a Create conflict;
+// it falls through to the SAME Enqueue block as the fresh-create path. A retry
+// of an orphaned order re-runs Enqueue and enrolls it. Enqueue is itself
+// idempotent: a duplicate-instance error (the saga is already enrolled) is a
+// benign idempotent hit, so re-enrolling an already-enrolled order is a no-op.
+//
 // The saga runs asynchronously — the caller gets an immediate 202 Accepted on
 // the happy path.
 func (s *Service) PlaceOrder(
@@ -117,26 +126,28 @@ func (s *Service) PlaceOrder(
 		// Distinguish true idempotent hit (same parameters) from key reuse with
 		// different parameters (Stripe / Temporal idempotency key semantics).
 		var ec *errcode.Error
-		if errors.As(createErr, &ec) && ec.Kind == errcode.KindConflict {
-			existing, gErr := s.orders.GetByID(ctx, orderID)
-			if gErr != nil {
-				return "", fmt.Errorf("placeorder: fetch existing order for idempotency check: %w", gErr)
-			}
-			if existing.Item != item || existing.AmountCents != amountCents || existing.PaymentShouldFail != paymentShouldFail {
-				// Key reuse with different parameters — 409 KindConflict.
-				return "", errcode.New(errcode.KindConflict, errcode.ErrConflict,
-					"placeorder: idempotency key reused with different parameters",
-					errcode.WithDetails(errcode.PublicString("idempotencyKey", idempotencyKey)),
-				)
-			}
-			// True idempotent hit — same key, same parameters.
-			s.logger.Info(
-				"placeorder: idempotent hit, returning existing order",
-				slog.String("order_id", orderID),
-			)
-			return orderID, nil
+		if !errors.As(createErr, &ec) || ec.Kind != errcode.KindConflict {
+			return "", fmt.Errorf("placeorder: persist order: %w", createErr)
 		}
-		return "", fmt.Errorf("placeorder: persist order: %w", createErr)
+		existing, gErr := s.orders.GetByID(ctx, orderID)
+		if gErr != nil {
+			return "", fmt.Errorf("placeorder: fetch existing order for idempotency check: %w", gErr)
+		}
+		if existing.Item != item || existing.AmountCents != amountCents || existing.PaymentShouldFail != paymentShouldFail {
+			// Key reuse with different parameters — 409 KindConflict. This is the
+			// only early return on a Create conflict.
+			return "", errcode.New(errcode.KindConflict, errcode.ErrConflict,
+				"placeorder: idempotency key reused with different parameters",
+				errcode.WithDetails(errcode.PublicString("idempotencyKey", idempotencyKey)),
+			)
+		}
+		// True idempotent hit — same key, same parameters. Do NOT early-return:
+		// fall through to Enqueue so an orphaned order (created but never
+		// enrolled because a prior Enqueue failed) self-heals on retry.
+		s.logger.Info(
+			"placeorder: idempotent hit on existing order, (re)ensuring saga enrollment",
+			slog.String("order_id", orderID),
+		)
 	}
 
 	inst := ksaga.NewInstance(
@@ -145,11 +156,12 @@ func (s *Service) PlaceOrder(
 		s.clock.Now(),
 	)
 	if enqErr := s.journal.Enqueue(ctx, inst); enqErr != nil {
-		// Defense-in-depth: duplicate saga instance (journal already has this ID).
+		// Defense-in-depth / idempotency: duplicate saga instance (journal already
+		// has this ID) is a benign idempotent hit — the order is already enrolled.
 		var ec *errcode.Error
 		if errors.As(enqErr, &ec) && ec.Code == errcode.ErrSagaDuplicateInstance {
 			s.logger.Info(
-				"placeorder: saga already enrolled (defense-in-depth idempotent hit)",
+				"placeorder: saga already enrolled (idempotent hit)",
 				slog.String("order_id", orderID),
 			)
 			return orderID, nil

@@ -36,6 +36,12 @@ package archtest
 //
 // # Blind-spot inventory (per ai-robust.md §archtest)
 //
+//   - Anti-vacuity: TestSAGA_PROJECTION_DEPS_INMEM_FUNNEL_01_ScanCore_SyntheticTree
+//     drives the FULL scan core (scanSagaProjectionDepsInmemFunnel) over a
+//     t.TempDir tree, proving DirsScope finds an offending file under a scanned
+//     root, the sanctioned-dir allowlist suppresses an identical violation, and
+//     the Diagnostic (Rel + Message + Line) is assembled — not just the selector
+//     helper in isolation.
 //   - Function-value reference `f := distlock.NewInProcessDriver; f(clk)`:
 //     COVERED — firstQualifiedSelectorLine walks every <alias>.<sel> SelectorExpr.
 //   - Dot-import `import . ".../distlock"; NewInProcessDriver(...)`: the symbol
@@ -50,6 +56,7 @@ package archtest
 // consumer — kept importable but gocell-only, mirroring REPLAYDEPS-INMEM-FUNNEL-01.
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -69,17 +76,41 @@ var sagaProjectionDepsScannedRoots = []string{"cmd", "cellmodules", "examples"}
 // construct the in-process driver — the topology-gated resolver.
 const sagaProjectionDepsSanctionedDir = "cellmodules/sagaprojectiondeps"
 
-// CheckSagaProjectionDepsInmemFunnel01 scans the wiring roots for direct calls to
-// distlock.NewInProcessDriver outside the sanctioned resolver dir and returns one
-// Diagnostic per offending callsite. Single rule body, dogfooded by the Test* via
-// Report so the exact scan is the one enforced.
+// sagaProjectionDepsFunnelMessage is the Diagnostic.Message emitted for every
+// offending callsite. Shared between the real scan and the synthetic-tree test
+// so the fixture asserts the exact production message.
+const sagaProjectionDepsFunnelMessage = "distlock.NewInProcessDriver outside cellmodules/sagaprojectiondeps; route the " +
+	"saga-projection leader locker through sagaprojectiondeps.Resolve " +
+	"(SAGA-PROJECTION-DEPS-INMEM-FUNNEL-01)"
+
+// CheckSagaProjectionDepsInmemFunnel01 scans the running module's wiring roots
+// for direct calls to distlock.NewInProcessDriver outside the sanctioned resolver
+// dir and returns one Diagnostic per offending callsite. It is a thin wrapper
+// over scanSagaProjectionDepsInmemFunnel rooted at findModuleRoot(t); the same
+// scan core is exercised against a synthetic temp tree by the funnel tests so
+// scope + allowlist + diagnostic assembly are proven (not just the selector
+// helper). Dogfooded by the Test* via Report so the exact scan is the one enforced.
 func CheckSagaProjectionDepsInmemFunnel01(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 	t.Helper()
+	diags, err := scanSagaProjectionDepsInmemFunnel(findModuleRoot(t))
+	if err != nil {
+		t.Fatalf("SAGA-PROJECTION-DEPS-INMEM-FUNNEL-01: %v", err)
+	}
+	return diags
+}
 
-	root := findModuleRoot(t)
+// scanSagaProjectionDepsInmemFunnel is the testable scan core: given an explicit
+// module root, it walks the scoped wiring roots, skips the sanctioned resolver
+// dir, and returns one Diagnostic per direct distlock.NewInProcessDriver
+// callsite. Taking root as a parameter (rather than discovering it) lets the
+// funnel tests run the FULL rule — DirsScope + allowlist skip + Diagnostic
+// assembly — against a synthetic t.TempDir tree, making the anti-vacuity genuine.
+// It returns an error instead of calling t.Fatalf so it is reusable from any
+// caller (the rule wrapper converts to t.Fatalf).
+func scanSagaProjectionDepsInmemFunnel(root string) ([]Diagnostic, error) {
 	files, err := scanner.DirsScope(root, sagaProjectionDepsScannedRoots).Files()
 	if err != nil {
-		t.Fatalf("SAGA-PROJECTION-DEPS-INMEM-FUNNEL-01: scanner.DirsScope: %v", err)
+		return nil, fmt.Errorf("scanner.DirsScope: %w", err)
 	}
 
 	var diags []Diagnostic
@@ -90,17 +121,15 @@ func CheckSagaProjectionDepsInmemFunnel01(t *testing.T, _ ConfigForExternalCell)
 		}
 		line, ok, perr := firstQualifiedSelectorLine(path, distlockModule, "distlock", "NewInProcessDriver")
 		if perr != nil {
-			t.Fatalf("SAGA-PROJECTION-DEPS-INMEM-FUNNEL-01: parse %s: %v", rel, perr)
+			return nil, fmt.Errorf("parse %s: %w", rel, perr)
 		}
 		if ok {
 			diags = append(diags, Diagnostic{
-				Rel:  rel,
-				Line: line,
-				Message: "distlock.NewInProcessDriver outside cellmodules/sagaprojectiondeps; route the " +
-					"saga-projection leader locker through sagaprojectiondeps.Resolve " +
-					"(SAGA-PROJECTION-DEPS-INMEM-FUNNEL-01)",
+				Rel:     rel,
+				Line:    line,
+				Message: sagaProjectionDepsFunnelMessage,
 			})
 		}
 	}
-	return diags
+	return diags, nil
 }

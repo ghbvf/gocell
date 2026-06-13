@@ -2,6 +2,7 @@ package sagaprojectiondeps_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,31 +57,39 @@ func TestResolve_DemoMemory(t *testing.T) {
 	}
 }
 
-// TestResolve_PostgresNilPool fail-closes: postgres topology with no PG pool is a
-// startup error, never a silent degrade to an in-memory journal (which would lose
-// events across restart — the durability the postgres topology promises).
-func TestResolve_PostgresNilPool(t *testing.T) {
+// TestResolve_PostgresSinglePodNilPool fail-closes on the POOL gate: postgres,
+// single-pod topology resolves an in-process locker fine (single-pod → no Redis
+// needed), so the only remaining fail-close is the missing PG pool. Asserts the
+// pool-specific fail-closed error — never a silent degrade to an in-memory
+// journal (which would lose events across restart — the durability the postgres
+// topology promises).
+func TestResolve_PostgresSinglePodNilPool(t *testing.T) {
 	t.Parallel()
 	_, err := sagaprojectiondeps.Resolve(context.Background(), newClk(),
 		mkTopo(t, "real", "postgres", true), sagaprojectiondeps.Config{Pool: nil})
 	if err == nil {
-		t.Fatal("Resolve(postgres, nil pool) = nil error, want fail-closed startup error")
+		t.Fatal("Resolve(postgres, single-pod, nil pool) = nil error, want fail-closed startup error")
+	}
+	if !strings.Contains(err.Error(), "requires a PG pool") {
+		t.Errorf("error = %q, want the POOL fail-closed message (single-pod hits the pool gate, not the Redis gate)", err)
 	}
 }
 
-// TestResolve_MultiPodNilRedis fail-closes: real multi-pod topology requires a
-// Redis-backed leader locker; an in-process locker cannot coordinate leadership
-// across replicas, so a missing Redis client is a startup error, never a silent
-// in-process fallback.
+// TestResolve_MultiPodNilRedis fail-closes on the REDIS gate FIRST: real
+// multi-pod topology requires a Redis-backed leader locker; an in-process locker
+// cannot coordinate leadership across replicas. Because Resolve runs the locker
+// gate before the store gate, a config that is missing BOTH the pool and the
+// Redis client reports the Redis fail-closed error (the locker gate fires first),
+// proving the Redis gate is reached and is not masked by the pool gate (F9
+// false-green: a nil-pool-first ordering would never exercise the Redis gate).
 func TestResolve_MultiPodNilRedis(t *testing.T) {
 	t.Parallel()
-	// Multi-pod postgres needs a pool too; this asserts the locker gate fires.
-	// A nil pool would also fail, so the test's intent (locker fail-closed) is
-	// validated by the single-pod-pool-present variant below if a pool fake is
-	// available; here we assert the combined fail-closed contract holds.
 	_, err := sagaprojectiondeps.Resolve(context.Background(), newClk(),
 		mkTopo(t, "real", "postgres", false), sagaprojectiondeps.Config{Pool: nil, RedisClient: nil})
 	if err == nil {
 		t.Fatal("Resolve(multi-pod, nil redis) = nil error, want fail-closed startup error")
+	}
+	if !strings.Contains(err.Error(), "requires a Redis-backed projection") {
+		t.Errorf("error = %q, want the REDIS fail-closed message (locker gate must fire before the pool gate)", err)
 	}
 }

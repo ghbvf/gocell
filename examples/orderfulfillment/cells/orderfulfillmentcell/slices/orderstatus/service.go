@@ -4,9 +4,12 @@
 //
 // Status semantics:
 //
-//	accepted     — order enrolled but projection has not yet applied any saga
-//	               event for it (no read-model row); this is the eventual-
-//	               consistency gap between Enqueue and the first Tailer tick.
+//	accepted     — order exists AND saga enrollment is guaranteed (PlaceOrder
+//	               only returns 202 after a successful/idempotent Enqueue, and
+//	               idempotent retries self-heal enrollment) but the projection
+//	               Tailer has not yet applied any saga event for it (no read-model
+//	               row); this is the eventual-consistency gap between Enqueue and
+//	               the first Tailer tick.
 //	running      — at least one forward or compensation step event seen.
 //	succeeded    — saga reached KindSagaSucceeded (terminal, absorbing).
 //	compensated  — saga reached KindSagaCompensated (terminal, absorbing).
@@ -22,7 +25,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/ports"
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/projection"
@@ -32,7 +34,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/kernel/saga/sagaprojection"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -102,9 +103,14 @@ func NewService(clk clock.Clock, opts ...Option) (*Service, error) {
 // Returns ErrOrderNotFound (KindNotFound) when the order does not exist.
 //
 // Status semantics:
-//   - accepted: the order exists but the projection has not yet applied any
-//     saga event for it (no read-model row). This is the eventual-consistency
-//     gap between Enqueue and the first Tailer tick.
+//   - accepted: the order exists AND saga enrollment is guaranteed (PlaceOrder
+//     only returns 202 after a successful or idempotent Enqueue, and idempotent
+//     retries self-heal enrollment — see placeorder.Service.PlaceOrder F4) AND
+//     the projection Tailer has not yet applied any saga event for it (no
+//     read-model row). This is the eventual-consistency gap between Enqueue and
+//     the first Tailer tick. An order created but whose PlaceOrder returned an
+//     error (no 202) was never enrolled; the client received an error, not this
+//     status, so a no-row order reaching this point is always enrolled.
 //   - running / succeeded / compensated / failed: from the read model.
 func (s *Service) GetOrderStatus(ctx context.Context, orderID string) (orderstatusgen.ResponseDataStatus, error) {
 	// Confirm the order exists — returns ErrOrderNotFound if absent.
@@ -135,9 +141,14 @@ func (s *Service) GetOrderStatus(ctx context.Context, orderID string) (orderstat
 // It decodes the SagaEventEnvelope from the event payload, folds the kind into
 // the current read-model status, and upserts the result.
 //
-// Bad payload or unknown kind → outbox.PermanentError (routes to DLX; the
-// producer is at fault, not the consumer).
-// Read-model write errors → transient error (retried by the Tailer).
+// Bad payload / unknown kind / malformed EventID → outbox.PermanentError. A
+// permanent apply error HALTS the Tailer's checkpoint advance (fail-closed — the
+// poison event blocks the projection until operator intervention); it does NOT
+// route to a DLX (the saga-journal Tailer has no dead-letter path, unlike the
+// outbox ConsumerBase). See runtime/saga/tailer.commitEvent: a non-nil apply
+// error aborts the apply+advance transaction so the checkpoint never moves past
+// the poison event.
+// Read-model write errors → transient error (retried by the Tailer next tick).
 func (s *Service) HandleOrderEvent(ctx context.Context, event cellvocab.ProjectionEvent) error {
 	// Decode the SagaEventEnvelope from the event payload.
 	var env sagaprojection.SagaEventEnvelope
@@ -156,7 +167,11 @@ func (s *Service) HandleOrderEvent(ctx context.Context, event cellvocab.Projecti
 	}
 
 	// Extract orderID from EventID: "saga-journal:<globalSeq>@<instanceID>".
-	orderID, err := parseSagaInstanceID(event.EventID())
+	// In orderfulfillment the instanceID equals the orderID (single saga
+	// definition). A malformed EventID is a producer-side defect: return a
+	// permanent error so the Tailer HALTS its checkpoint advance at this poison
+	// event (fail-closed — see HandleOrderEvent godoc).
+	_, orderID, err := sagaprojection.ParseSagaJournalEventID(event.EventID())
 	if err != nil {
 		return outbox.NewPermanentError(fmt.Errorf(
 			"orderstatus: malformed EventID %q: %w", event.EventID(), err,
@@ -185,19 +200,4 @@ func (s *Service) HandleOrderEvent(ctx context.Context, event cellvocab.Projecti
 		slog.String("status", string(next)),
 	)
 	return nil
-}
-
-// parseSagaInstanceID extracts the saga instanceID from an EventID formatted as
-// "saga-journal:<globalSeq>@<instanceID>" (see sagaprojection.SagaJournalEventIDPrefix).
-// In orderfulfillment the instanceID equals the orderID (single saga definition).
-// Uses strings.LastIndex defensively: a UUID instanceID contains no "@", but
-// LastIndex tolerates future opaque instanceIDs that might embed "@" internally.
-// Returns an error if the format is unexpected (missing "@" or empty instanceID suffix).
-func parseSagaInstanceID(eventID string) (string, error) {
-	atIdx := strings.LastIndex(eventID, "@")
-	if atIdx < 0 || atIdx == len(eventID)-1 {
-		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"orderstatus: EventID missing @ separator or empty instanceID")
-	}
-	return eventID[atIdx+1:], nil
 }

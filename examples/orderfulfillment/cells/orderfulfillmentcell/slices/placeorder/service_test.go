@@ -10,6 +10,7 @@ import (
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/mem"
 	placeorder "github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/slices/placeorder"
 	"github.com/ghbvf/gocell/kernel/clock"
+	ksaga "github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
@@ -195,6 +196,83 @@ func TestService_PlaceOrder_IdempotencyKeyConflict(t *testing.T) {
 			require.Equal(t, errcode.KindConflict, ec.Kind, "error kind must be KindConflict (HTTP 409)")
 		})
 	}
+}
+
+// failOnceJournal wraps a real MemJournal and injects a single non-duplicate
+// Enqueue failure on the first call, then delegates to the wrapped journal on
+// every subsequent call. It lets the regression test simulate an orphaned order
+// (Create succeeded, the FIRST Enqueue failed) and then assert that a retry
+// re-enrolls via the wrapped journal.
+type failOnceJournal struct {
+	inner       *journal.MemJournal
+	failNext    bool
+	enqueueErr  error
+	enqueueHits int
+}
+
+func (j *failOnceJournal) Enqueue(ctx context.Context, inst ksaga.Instance) error {
+	j.enqueueHits++
+	if j.failNext {
+		j.failNext = false
+		return j.enqueueErr
+	}
+	return j.inner.Enqueue(ctx, inst)
+}
+
+// TestService_PlaceOrder_OrphanSelfHeals is the F4 regression: a PlaceOrder whose
+// FIRST Enqueue fails (after a successful Create) leaves an orphaned order — the
+// row exists but the saga was never enrolled, and the caller got an error (no
+// 202). A SECOND PlaceOrder with the same key/params must NOT short-circuit on
+// the Create conflict: it falls through to Enqueue, which now succeeds, so the
+// orphan self-heals (the saga is finally enrolled) and the orderID is returned.
+func TestService_PlaceOrder_OrphanSelfHeals(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	clk := clock.Real()
+
+	inner, err := journal.NewMemJournal(clk)
+	require.NoError(t, err)
+	fj := &failOnceJournal{
+		inner:      inner,
+		failNext:   true,
+		enqueueErr: errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable, "journal temporarily unavailable"),
+	}
+	repo := mem.NewOrderRepository()
+	svc, err := placeorder.NewService(
+		clk,
+		placeorder.WithOrderRepository(repo),
+		placeorder.WithJournal(fj),
+	)
+	require.NoError(t, err)
+
+	const key = "key-orphan-1"
+
+	// First call: Create succeeds, Enqueue fails → PlaceOrder errors (no 202).
+	_, err = svc.PlaceOrder(ctx, key, "widget", 1299, false)
+	require.Error(t, err, "first PlaceOrder must surface the Enqueue failure")
+
+	// The order exists in the repo despite the enrollment failure — it is an orphan.
+	orphanID := "ord-" + key
+	_, err = repo.GetByID(ctx, orphanID)
+	require.NoError(t, err, "order row must exist after a failed enrollment (orphan)")
+
+	// The saga was NOT enrolled in the wrapped journal yet.
+	_, err = inner.Load(ctx, idutil.SafeID(orphanID))
+	require.Error(t, err, "saga must NOT be enrolled after the failed first Enqueue")
+
+	// Second call (same key/params, Enqueue now succeeds): the idempotent-hit
+	// branch falls through to Enqueue and self-heals the orphan.
+	id, err := svc.PlaceOrder(ctx, key, "widget", 1299, false)
+	require.NoError(t, err, "retry must succeed and re-enroll the orphaned order")
+	require.Equal(t, orphanID, id)
+
+	// Enrollment now happened: Load must succeed (instance enrolled).
+	events, err := inner.Load(ctx, idutil.SafeID(orphanID))
+	require.NoError(t, err, "saga must be enrolled after the self-healing retry")
+	require.Empty(t, events, "freshly enrolled saga has no events before the coordinator runs")
+
+	// Two Enqueue attempts total: the failed first + the successful retry.
+	require.Equal(t, 2, fj.enqueueHits, "Enqueue must be retried on the idempotent-hit path (no early return)")
 }
 
 func TestNewService_MissingOrders(t *testing.T) {
