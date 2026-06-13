@@ -527,6 +527,13 @@ func (b *Bootstrap) MetricsProvider() kernelmetrics.Provider {
 	return b.metricsProvider
 }
 
+// DeploymentTopology returns the sealed deployment topology resolved at phase0
+// (WriteOnce). Before phase0 runs it returns the zero value (all-colocated).
+// US4 transport wiring reads it to choose in-proc vs remote dispatch.
+func (b *Bootstrap) DeploymentTopology() DeploymentTopology {
+	return b.deploymentTopology
+}
+
 // Run executes the full startup sequence. It blocks until ctx is canceled
 // (or a signal is received), then performs orderly shutdown.
 //

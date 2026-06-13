@@ -277,6 +277,15 @@ func TestNewDeploymentTopology_ValidationErrors(t *testing.T) {
 			wantErrCode: errcode.ErrValidationFailed,
 			wantMsgPart: "endpoint",
 		},
+		// F8: whitespace-only endpoint
+		{
+			name: "whitespace-only endpoint",
+			spec: DeploymentTopologySpec{
+				Remote: []RemoteCellEndpoint{{CellID: "cellA", Endpoint: "   "}},
+			},
+			wantErrCode: errcode.ErrValidationFailed,
+			wantMsgPart: "endpoint",
+		},
 	}
 
 	for _, tc := range cases {
@@ -421,6 +430,47 @@ func TestPhase0_AcceptsValidDeploymentTopology(t *testing.T) {
 	}
 	if ep != "cell-b:9090" {
 		t.Errorf("after phase0: RemoteEndpoint(cellB) = %q, want %q", ep, "cell-b:9090")
+	}
+}
+
+// TestBootstrap_DeploymentTopologyGetter_BeforePhase0 verifies that the
+// Bootstrap.DeploymentTopology() getter returns the zero value (all-colocated)
+// before phase0 runs, and the sealed value after (F4).
+func TestBootstrap_DeploymentTopologyGetter_BeforePhase0(t *testing.T) {
+	b := New(
+		clock.Real(),
+		WithDeploymentTopology(DeploymentTopologySpec{
+			Colocated: []string{"cellA"},
+			Remote:    []RemoteCellEndpoint{{CellID: "cellB", Endpoint: "cell-b:9090"}},
+		}),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
+	)
+
+	// Before phase0: getter returns zero value (all-colocated).
+	preDT := b.DeploymentTopology()
+	if !preDT.IsColocated("anyCellID") {
+		t.Error("before phase0: DeploymentTopology().IsColocated(any) should be true (zero = all-colocated)")
+	}
+	_, ok := preDT.RemoteEndpoint("cellB")
+	if ok {
+		t.Error("before phase0: DeploymentTopology().RemoteEndpoint(cellB) should miss (zero = no remotes)")
+	}
+
+	// After phase0: getter returns the sealed value.
+	if err := b.phase0ValidateOptions(); err != nil {
+		t.Fatalf("phase0ValidateOptions: unexpected error: %v", err)
+	}
+	dt := b.DeploymentTopology()
+	if !dt.IsColocated("cellA") {
+		t.Error("after phase0: DeploymentTopology().IsColocated(cellA) = false, want true")
+	}
+	ep, ok := dt.RemoteEndpoint("cellB")
+	if !ok {
+		t.Error("after phase0: DeploymentTopology().RemoteEndpoint(cellB) = miss, want hit")
+	}
+	if ep != "cell-b:9090" {
+		t.Errorf("after phase0: DeploymentTopology().RemoteEndpoint(cellB) = %q, want %q", ep, "cell-b:9090")
 	}
 }
 

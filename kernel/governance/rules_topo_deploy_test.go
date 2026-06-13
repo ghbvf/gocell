@@ -444,6 +444,81 @@ func TestTOPO11_ProviderRole_NotConsumer(t *testing.T) {
 	assert.Empty(t, got, "provider-role usage should not trigger TOPO-11")
 }
 
+// TestTOPO10_AntiVacuity verifies that TOPO-10 is not vacuously passing (F6).
+// A project with a mutual-exclusion violation (red) must produce ≥1 TOPO-10
+// findings; the same project with the violation removed (valid exhaustive)
+// must produce 0 TOPO-10 findings.
+func TestTOPO10_AntiVacuity(t *testing.T) {
+	cellA := metadatatest.NewCellID("cella")
+
+	// Red: mutual-exclusion violation → TOPO-10 must fire.
+	pmRed := &metadata.ProjectMeta{
+		Cells:     map[string]*metadata.CellMeta{cellA: topoTestCell(cellA)},
+		Slices:    map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{},
+		Journeys:  map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			"testasm": topoTestAssembly([]string{cellA}, metadata.TopologyMeta{
+				Colocated: []string{cellA},
+				Remote:    []metadata.TopologyRemoteEntry{{CellID: cellA, Endpoint: "host:9090"}},
+			}),
+		},
+	}
+	valRed := NewValidator(pmRed, ".", clock.Real())
+	redGot := findByCode(valRed.validateTOPO10(), codeTOPO10)
+	require.NotEmpty(t, redGot, "anti-vacuity: red fixture (mutual exclusion) must produce ≥1 TOPO-10 finding")
+
+	// Green: valid exhaustive topology → TOPO-10 must NOT fire.
+	pmGreen := &metadata.ProjectMeta{
+		Cells:     map[string]*metadata.CellMeta{cellA: topoTestCell(cellA)},
+		Slices:    map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{},
+		Journeys:  map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			"testasm": topoTestAssembly([]string{cellA}, metadata.TopologyMeta{
+				Colocated: []string{cellA},
+			}),
+		},
+	}
+	valGreen := NewValidator(pmGreen, ".", clock.Real())
+	greenGot := findByCode(valGreen.validateTOPO10(), codeTOPO10)
+	assert.Empty(t, greenGot, "anti-vacuity: green fixture (valid exhaustive) must produce 0 TOPO-10 findings")
+}
+
+// TestTOPO11_HTTPKindCallConsumer confirms that TOPO-11 also fires for http-kind
+// contracts consumed via role "call" (not just event/subscribe), verifying
+// consumer-role detection is not event-only (F11).
+func TestTOPO11_HTTPKindCallConsumer(t *testing.T) {
+	consumer := metadatatest.NewCellID("consumercell")
+	provider := metadatatest.NewCellID("providercell")
+
+	pm := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			consumer: topoTestCell(consumer),
+			provider: topoTestCell(provider),
+		},
+		Slices: map[string]*metadata.SliceMeta{
+			consumer + "/callslice": topoTestSlice("callslice", consumer, []metadata.ContractUsage{
+				{Contract: "http.data.v1", Role: "call"},
+			}),
+		},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.data.v1": topoTestContract("http.data.v1", "http", provider),
+		},
+		Journeys: map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			// Assembly only has the consumer cell; provider is absent → TOPO-11 must fire.
+			"testasm": topoTestAssembly([]string{consumer}, metadata.TopologyMeta{}),
+		},
+	}
+	val := NewValidator(pm, ".", clock.Real())
+	got := findByCode(val.validateTOPO11(), codeTOPO11)
+	require.Len(t, got, 1, "http-kind call consumer with missing provider must produce 1 TOPO-11 finding")
+	assert.Equal(t, SeverityError, got[0].Severity)
+	assert.Equal(t, IssueRefNotFound, got[0].IssueType)
+	assert.NotEmpty(t, got[0].Fix)
+}
+
 // TestTOPO11_AntiVacuity: verify the rule is not vacuously passing — the same
 // project WITH the provider in the assembly produces 0 TOPO-11 errors, but
 // WITHOUT it produces ≥ 1. This fixture confirms the happy path is

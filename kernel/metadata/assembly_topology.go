@@ -1,12 +1,10 @@
 package metadata
 
 import (
-	"fmt"
-	"net"
-	"net/url"
 	"strings"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/netutil"
 )
 
 // TopologyMeta is the OPTIONAL assembly.yaml `topology` section: the deployment
@@ -55,6 +53,9 @@ func (l CellLocation) IsLocal() bool { return l.Kind == CellLocationLocal }
 // IsMissing reports whether the cell was not found in the assembly or topology.
 func (l CellLocation) IsMissing() bool { return l.Kind == CellLocationMissing }
 
+// IsRemote reports whether the cell is deployed as a separate remote service.
+func (l CellLocation) IsRemote() bool { return l.Kind == CellLocationRemote }
+
 // RemoteEndpoint returns the remote endpoint and true iff Kind == CellLocationRemote.
 func (l CellLocation) RemoteEndpoint() (string, bool) {
 	if l.Kind != CellLocationRemote {
@@ -100,14 +101,14 @@ func classifyNonEmptyTopology(topo TopologyMeta, cellID string) CellLocation {
 
 // Error message constants — MESSAGE-CONST-LITERAL-01 compliance.
 const (
-	errMsgTopoMutualExclusion = "topology mutual exclusion violation: cell appears in both colocated and remote"
-	errMsgTopoDuplicateColoc  = "topology duplicate cellID in colocated"
-	errMsgTopoDuplicateRemote = "topology duplicate cellID in remote"
-	errMsgTopoUnknownColoc    = "topology colocated references unknown cellID"
-	errMsgTopoUnknownRemote   = "topology remote references unknown cellID"
-	errMsgTopoNonExhaustive   = "topology is non-exhaustive: cell in assembly is not classified"
-	errMsgTopoEmptyEndpoint   = "topology remote endpoint is empty or whitespace"
-	errMsgTopoInvalidEndpoint = "topology remote endpoint is not a valid network address"
+	errMsgTopoMutualExclusion = "topology: mutual exclusion violation — cell appears in both colocated and remote"
+	errMsgTopoDuplicateColoc  = "topology: duplicate colocated cellID"
+	errMsgTopoDuplicateRemote = "topology: duplicate remote cellID"
+	errMsgTopoUnknownColoc    = "topology: unknown colocated cellID not declared in assembly cells"
+	errMsgTopoUnknownRemote   = "topology: unknown remote cellID not declared in assembly cells"
+	errMsgTopoNonExhaustive   = "non-exhaustive topology: cell in assembly cells is not classified"
+	errMsgTopoEmptyEndpoint   = "topology: empty endpoint — remote endpoint must be non-blank"
+	errMsgTopoInvalidEndpoint = "topology: invalid endpoint — must be host:port or http/https URL with non-empty host"
 )
 
 // ValidateTopologyStructure validates asm.Topology's internal consistency,
@@ -162,13 +163,13 @@ func buildColocatedSet(colocated []string, known map[string]struct{}) (map[strin
 		if _, dup := seen[id]; dup {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 				errMsgTopoDuplicateColoc,
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("duplicate colocated cellID=%q", id))))
+				errcode.WithDetails(errcode.PublicString("cellID", id)))
 		}
 		seen[id] = struct{}{}
 		if _, ok := known[id]; !ok {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 				errMsgTopoUnknownColoc,
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("unknown colocated cellID=%q", id))))
+				errcode.WithDetails(errcode.PublicString("cellID", id)))
 		}
 	}
 	return seen, nil
@@ -183,18 +184,18 @@ func buildRemoteSet(remote []TopologyRemoteEntry, known, colocSet map[string]str
 		if _, dup := seen[id]; dup {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 				errMsgTopoDuplicateRemote,
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("duplicate remote cellID=%q", id))))
+				errcode.WithDetails(errcode.PublicString("cellID", id)))
 		}
 		seen[id] = struct{}{}
 		if _, ok := known[id]; !ok {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 				errMsgTopoUnknownRemote,
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("unknown remote cellID=%q", id))))
+				errcode.WithDetails(errcode.PublicString("cellID", id)))
 		}
 		if _, inColoc := colocSet[id]; inColoc {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 				errMsgTopoMutualExclusion,
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("mutual exclusion cellID=%q appears in both colocated and remote", id))))
+				errcode.WithDetails(errcode.PublicString("cellID", id)))
 		}
 		if err := validateEndpoint(entry.Endpoint, id); err != nil {
 			return nil, err
@@ -204,33 +205,19 @@ func buildRemoteSet(remote []TopologyRemoteEntry, known, colocSet map[string]str
 }
 
 // validateEndpoint checks that ep is non-empty, non-whitespace, and is either
-// a valid host:port (net.SplitHostPort) or a URL with a non-empty Host.
+// a valid http/https URL or a bare host:port (netutil.IsValidNetworkAddress).
 func validateEndpoint(ep, cellID string) error {
 	if strings.TrimSpace(ep) == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			errMsgTopoEmptyEndpoint,
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("empty endpoint cellID=%q", cellID))))
+			errcode.WithDetails(errcode.PublicString("cellID", cellID)))
 	}
-	if isValidNetworkAddress(ep) {
+	if netutil.IsValidNetworkAddress(ep) {
 		return nil
 	}
 	return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 		errMsgTopoInvalidEndpoint,
-		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("invalid endpoint cellID=%q endpoint=%q", cellID, ep))))
-}
-
-// isValidNetworkAddress returns true if ep is a valid host:port pair or a URL
-// with a non-empty Host component.
-func isValidNetworkAddress(ep string) bool {
-	// Try host:port first (covers "host:8080", "[::1]:9000", etc.)
-	if host, _, err := net.SplitHostPort(ep); err == nil && host != "" {
-		return true
-	}
-	// Try as a URL (covers "https://remote.svc/", "grpc://host:9000", etc.)
-	if u, err := url.Parse(ep); err == nil && u.Host != "" {
-		return true
-	}
-	return false
+		errcode.WithDetails(errcode.PublicString("cellID", cellID), errcode.PublicString("endpoint", ep)))
 }
 
 // checkExhaustive verifies that every cell in known appears in either colocSet
@@ -242,7 +229,7 @@ func checkExhaustive(known, colocSet, remoteSet map[string]struct{}) error {
 		if !inColoc && !inRemote {
 			return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 				errMsgTopoNonExhaustive,
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("non-exhaustive topology cellID=%q not classified", id))))
+				errcode.WithDetails(errcode.PublicString("cellID", id)))
 		}
 	}
 	return nil

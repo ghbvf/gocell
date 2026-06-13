@@ -94,6 +94,47 @@ func TestBuilder_HappyPath(t *testing.T) {
 	assert.True(t, m2.called)
 }
 
+// TestBuilder_WithDeploymentTopology_NonEmptySpecInSharedDeps verifies that
+// Builder.Build correctly injects the non-empty DeploymentTopology from
+// SharedDeps via WithDeploymentTopology (F7). We confirm this by reading the
+// spec back from SharedDeps after Build (it must be unchanged) and by checking
+// the built App opts count reflects the always-injected framework opts.
+// The end-to-end sealed-and-queryable assertion is covered in
+// runtime/bootstrap TestBootstrap_DeploymentTopologyGetter_BeforePhase0 which
+// can call the package-internal phase0ValidateOptions.
+func TestBuilder_WithDeploymentTopology_NonEmptySpecInSharedDeps(t *testing.T) {
+	ctx := context.Background()
+
+	// SharedDeps with a NON-empty DeploymentTopology (one remote cell).
+	shared := minimalSharedDeps(t)
+	shared.DeploymentTopology = bootstrap.DeploymentTopologySpec{
+		Colocated: []string{"cellA"},
+		Remote:    []bootstrap.RemoteCellEndpoint{{CellID: "cellB", Endpoint: "cell-b:9090"}},
+	}
+
+	c1 := stubCell("mod1")
+	m1 := &fakeCellModule{id: "mod1", cell: c1}
+
+	app, err := New("mod1").With(m1).Build(ctx, shared,
+		func([]cell.Cell) ([]bootstrap.Option, error) { return nil, nil })
+	require.NoError(t, err)
+	require.NotNil(t, app)
+
+	// The spec on SharedDeps must be preserved (Build must not mutate it).
+	assert.Equal(t, "cellA", shared.DeploymentTopology.Colocated[0])
+	require.Len(t, shared.DeploymentTopology.Remote, 1)
+	assert.Equal(t, "cellB", shared.DeploymentTopology.Remote[0].CellID,
+		"SharedDeps.DeploymentTopology.Remote[0].CellID must flow through Builder.Build unchanged")
+	assert.Equal(t, "cell-b:9090", shared.DeploymentTopology.Remote[0].Endpoint,
+		"SharedDeps.DeploymentTopology.Remote[0].Endpoint must flow through Builder.Build unchanged")
+
+	// app.opts always contains WithControlPlaneTopology + WithDeploymentTopology
+	// (2 framework opts). With one resource (none in this test) + 0 cellOpts +
+	// 0 runtimeOpts, the total must be exactly 2.
+	assert.Len(t, app.opts, 2,
+		"Builder.Build always injects WithControlPlaneTopology + WithDeploymentTopology (2 framework opts)")
+}
+
 // TestBuilder_HappyPath_SingleSourceResourceContract verifies the single-source
 // resource ownership contract (PR #591 / #1420):
 //   - A module returns its ManagedResources ONLY in ModuleResult.Resources. It

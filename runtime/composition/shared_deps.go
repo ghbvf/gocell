@@ -74,12 +74,15 @@ type SharedDeps struct {
 
 	// DeploymentTopology is the codegen-derived deployment placement spec for
 	// this assembly (single-sourced from assembly.yaml topology, produced by
-	// generatedDeploymentTopology()). Empty spec means all cells are co-located
-	// in the same process (zero-migration default). Build injects it via
-	// bootstrap.WithDeploymentTopology so phase0 can seal+validate the spec
-	// into a runtime DeploymentTopology and enforce cell-placement routing.
-	// Genuinely cross-cutting: consumed by the composition root (Builder.Build)
-	// and bootstrap phase0 across all cell modules.
+	// generatedDeploymentTopology()). It is a bootstrap.DeploymentTopologySpec
+	// (plain codegen input, no methods); phase0 seals it into a
+	// bootstrap.DeploymentTopology (with IsColocated/RemoteEndpoint); US4
+	// consumers query the SEALED value (via Bootstrap.DeploymentTopology()), not
+	// this spec. Empty spec means all cells are co-located in the same process
+	// (zero-migration default). Build injects it via bootstrap.WithDeploymentTopology
+	// so phase0 can seal+validate the spec into a runtime DeploymentTopology and
+	// enforce cell-placement routing. Genuinely cross-cutting: consumed by the
+	// composition root (Builder.Build) and bootstrap phase0 across all cell modules.
 	DeploymentTopology bootstrap.DeploymentTopologySpec
 
 	// JWTIssuer signs access tokens for the accesscore cell.

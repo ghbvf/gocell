@@ -104,7 +104,7 @@ func TestGenerateModulesGen_DeploymentTopology_Remote(t *testing.T) {
 }
 
 // TestGenerateModulesGen_DeploymentTopology_IllegalMutualExclusion is the
-// synthetic-red test: a cell appearing in both colocated AND remote is an
+// synthetic-red test (F10): a cell appearing in both colocated AND remote is an
 // illegal topology that GenerateModulesGen must reject before emitting any
 // output, returning an errcode.ErrMetadataInvalid error.
 func TestGenerateModulesGen_DeploymentTopology_IllegalMutualExclusion(t *testing.T) {
@@ -122,10 +122,12 @@ func TestGenerateModulesGen_DeploymentTopology_IllegalMutualExclusion(t *testing
 	var ec *ecErr.Error
 	require.True(t, errors.As(err, &ec), "error must be an errcode.Error, got: %T", err)
 	assert.Equal(t, ecErr.ErrMetadataInvalid, ec.Code)
+	assert.Contains(t, strings.ToLower(err.Error()), "mutual exclusion",
+		"error message must mention 'mutual exclusion' so a generic error cannot pass vacuously")
 }
 
 // TestGenerateModulesGen_DeploymentTopology_IllegalNonExhaustive is a
-// synthetic-red test: a non-exhaustive topology (a cell appears in neither
+// synthetic-red test (F10): a non-exhaustive topology (a cell appears in neither
 // colocated nor remote) must fail generation closed.
 func TestGenerateModulesGen_DeploymentTopology_IllegalNonExhaustive(t *testing.T) {
 	topo := metadata.TopologyMeta{
@@ -141,6 +143,8 @@ func TestGenerateModulesGen_DeploymentTopology_IllegalNonExhaustive(t *testing.T
 	var ec *ecErr.Error
 	require.True(t, errors.As(err, &ec), "error must be an errcode.Error, got: %T", err)
 	assert.Equal(t, ecErr.ErrMetadataInvalid, ec.Code)
+	assert.Contains(t, strings.ToLower(err.Error()), "non-exhaustive",
+		"error message must mention 'non-exhaustive' so a generic error cannot pass vacuously")
 }
 
 // TestBuildDeploymentTopologyData_Empty verifies the helper returns a zero value

@@ -3,7 +3,7 @@ package bootstrap
 // options_assembly.go — With* option functions covering config loading and
 // CoreAssembly construction.
 //
-// Covers: WithConfig, WithAssembly, WithAssemblyID, WithControlPlaneTopology.
+// Covers: WithConfig, WithAssembly, WithAssemblyID, WithControlPlaneTopology, WithDeploymentTopology.
 //
 // ref: uber-go/fx app.go — Option pattern; each Option targets a single concern.
 

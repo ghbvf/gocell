@@ -25,6 +25,7 @@ func TestCellLocation_Methods(t *testing.T) {
 		loc := metadata.CellLocation{Kind: metadata.CellLocationMissing}
 		assert.True(t, loc.IsMissing())
 		assert.False(t, loc.IsLocal())
+		assert.False(t, loc.IsRemote())
 		ep, ok := loc.RemoteEndpoint()
 		assert.False(t, ok)
 		assert.Empty(t, ep)
@@ -33,6 +34,7 @@ func TestCellLocation_Methods(t *testing.T) {
 		loc := metadata.CellLocation{Kind: metadata.CellLocationLocal}
 		assert.False(t, loc.IsMissing())
 		assert.True(t, loc.IsLocal())
+		assert.False(t, loc.IsRemote())
 		ep, ok := loc.RemoteEndpoint()
 		assert.False(t, ok)
 		assert.Empty(t, ep)
@@ -41,6 +43,7 @@ func TestCellLocation_Methods(t *testing.T) {
 		loc := metadata.CellLocation{Kind: metadata.CellLocationRemote, Endpoint: "host:8080"}
 		assert.False(t, loc.IsMissing())
 		assert.False(t, loc.IsLocal())
+		assert.True(t, loc.IsRemote())
 		ep, ok := loc.RemoteEndpoint()
 		assert.True(t, ok)
 		assert.Equal(t, "host:8080", ep)
@@ -158,15 +161,26 @@ func TestValidateTopologyStructure(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "exhaustive topology with URL-scheme endpoint (multi-colon) => nil",
+			name: "exhaustive topology with https URL endpoint => nil",
 			asm: assemblyWith(cells, metadata.TopologyMeta{
 				Colocated: []string{"alpha"},
 				Remote: []metadata.TopologyRemoteEntry{
-					{CellID: "beta", Endpoint: "grpc://svc.internal:9000"},
+					{CellID: "beta", Endpoint: "https://svc.internal:9000/api"},
 					{CellID: "gamma", Endpoint: "host:8080"},
 				},
 			}),
 			wantErr: false,
+		},
+		{
+			name: "remote entry with grpc:// scheme (non-http/https) => error",
+			asm: assemblyWith(cells, metadata.TopologyMeta{
+				Colocated: []string{"alpha", "beta"},
+				Remote: []metadata.TopologyRemoteEntry{
+					{CellID: "gamma", Endpoint: "grpc://h:1"},
+				},
+			}),
+			wantErr: true,
+			errSub:  "invalid endpoint",
 		},
 		{
 			name: "all colocated exhaustive => nil",
@@ -321,6 +335,27 @@ func TestValidateTopologyStructure(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestClassifyCell_RemoteWithEmptyEndpoint documents that ClassifyCell does no
+// endpoint validation (F9): a remote entry with empty endpoint returns
+// CellLocationRemote with an empty endpoint string, and RemoteEndpoint()
+// returns ("", true). ValidateTopologyStructure owns endpoint validation.
+func TestClassifyCell_RemoteWithEmptyEndpoint(t *testing.T) {
+	cells := []string{"alpha", "beta"}
+	asm := assemblyWith(cells, metadata.TopologyMeta{
+		Colocated: []string{"alpha"},
+		Remote: []metadata.TopologyRemoteEntry{
+			{CellID: "beta", Endpoint: ""},
+		},
+	})
+	loc := metadata.ClassifyCell(asm, "beta")
+	assert.Equal(t, metadata.CellLocationRemote, loc.Kind,
+		"ClassifyCell must return CellLocationRemote even when endpoint is empty")
+	assert.True(t, loc.IsRemote())
+	ep, ok := loc.RemoteEndpoint()
+	assert.True(t, ok, "RemoteEndpoint must return (_, true) for CellLocationRemote")
+	assert.Equal(t, "", ep, "empty endpoint is preserved as-is; validation is ValidateTopologyStructure's concern")
 }
 
 // TestTopologyMeta_ZeroValue confirms the zero value means "empty" / all-colocated.

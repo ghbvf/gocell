@@ -12,11 +12,10 @@ package bootstrap
 // read-only during serving.
 
 import (
-	"net"
-	"net/url"
 	"strings"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/netutil"
 )
 
 // RemoteCellEndpoint names a cell hosted in another process and its endpoint.
@@ -103,12 +102,13 @@ func buildDeployColocatedSet(colocated []string) (map[string]struct{}, error) {
 		if strings.TrimSpace(id) == "" {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				errMsgDeployTopoEmptyCellID,
-				errcode.WithInternal(errcode.InternalAttr("_", "cellID is empty or whitespace")))
+				errcode.WithInternal(errcode.InternalAttr("cellID", id)))
 		}
 		if _, dup := seen[id]; dup {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				errMsgDeployTopoDuplicateCellID,
-				errcode.WithInternal(errcode.InternalAttr("_", "cellID="+id+" in colocated")))
+				errcode.WithInternal(errcode.InternalAttr("cellID", id)),
+				errcode.WithDetails(errcode.PublicString("cellID", id)))
 		}
 		seen[id] = struct{}{}
 	}
@@ -125,17 +125,19 @@ func buildDeployRemoteMap(remote []RemoteCellEndpoint, colocated map[string]stru
 		if strings.TrimSpace(id) == "" {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				errMsgDeployTopoEmptyCellID,
-				errcode.WithInternal(errcode.InternalAttr("_", "remote cellID is empty or whitespace")))
+				errcode.WithInternal(errcode.InternalAttr("cellID", id)))
 		}
 		if _, dup := seen[id]; dup {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				errMsgDeployTopoDuplicateCellID,
-				errcode.WithInternal(errcode.InternalAttr("_", "cellID="+id+" in remote")))
+				errcode.WithInternal(errcode.InternalAttr("cellID", id)),
+				errcode.WithDetails(errcode.PublicString("cellID", id)))
 		}
 		if _, inColoc := colocated[id]; inColoc {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				errMsgDeployTopoMutualExclusion,
-				errcode.WithInternal(errcode.InternalAttr("_", "cellID="+id)))
+				errcode.WithInternal(errcode.InternalAttr("cellID", id)),
+				errcode.WithDetails(errcode.PublicString("cellID", id)))
 		}
 		if err := validateDeployEndpoint(entry.Endpoint, id); err != nil {
 			return nil, err
@@ -147,38 +149,32 @@ func buildDeployRemoteMap(remote []RemoteCellEndpoint, colocated map[string]stru
 }
 
 // validateDeployEndpoint checks that ep is non-empty and a valid network
-// address (net.SplitHostPort with non-empty host, OR url.Parse with non-empty Host).
+// address (netutil.IsValidNetworkAddress: bare host:port OR http/https URL with host).
 func validateDeployEndpoint(ep, cellID string) error {
 	if strings.TrimSpace(ep) == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			errMsgDeployTopoEmptyEndpoint,
-			errcode.WithInternal(errcode.InternalAttr("_", "cellID="+cellID)))
+			errcode.WithInternal(errcode.InternalAttr("cellID", cellID)),
+			errcode.WithDetails(errcode.PublicString("cellID", cellID)))
 	}
-	if isValidDeployNetworkAddress(ep) {
+	if netutil.IsValidNetworkAddress(ep) {
 		return nil
 	}
 	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 		errMsgDeployTopoInvalidEndpoint,
-		errcode.WithInternal(errcode.InternalAttr("_", "cellID="+cellID+" endpoint="+ep)))
-}
-
-// isValidDeployNetworkAddress returns true if ep is a valid host:port pair or
-// a URL with a non-empty Host component.
-func isValidDeployNetworkAddress(ep string) bool {
-	// Try host:port first (covers "host:8080", "[::1]:9000", etc.)
-	if host, _, err := net.SplitHostPort(ep); err == nil && host != "" {
-		return true
-	}
-	// Try as a URL (covers "https://remote.svc/", "grpc://host:9000", etc.)
-	if u, err := url.Parse(ep); err == nil && u.Host != "" {
-		return true
-	}
-	return false
+		errcode.WithInternal(errcode.InternalAttr("cellID", cellID), errcode.InternalAttr("endpoint", ep)),
+		errcode.WithDetails(errcode.PublicString("cellID", cellID)))
 }
 
 // IsColocated reports whether cellID is co-located in the same process.
 // For a zero-value (no explicit topology), always returns true — all cells
 // are treated as colocated (single-process default).
+//
+// In explicit mode, a cellID that is neither colocated nor a remote entry
+// yields IsColocated()==false AND RemoteEndpoint()==("",false) — i.e. "not in
+// this topology". For CONSUMED contracts this cannot occur at runtime because
+// `gocell validate` TOPO-11 statically rejects unreachable providers; callers
+// treating both-false as a misconfiguration is correct.
 func (t DeploymentTopology) IsColocated(cellID string) bool {
 	if !t.explicit {
 		return true
@@ -190,6 +186,12 @@ func (t DeploymentTopology) IsColocated(cellID string) bool {
 // RemoteEndpoint returns the remote network endpoint for cellID and true iff
 // cellID is declared as a remote cell. For a zero-value (no explicit topology),
 // always returns ("", false).
+//
+// In explicit mode, a cellID that is neither colocated nor a remote entry
+// yields IsColocated()==false AND RemoteEndpoint()==("",false) — i.e. "not in
+// this topology". For CONSUMED contracts this cannot occur at runtime because
+// `gocell validate` TOPO-11 statically rejects unreachable providers; callers
+// treating both-false as a misconfiguration is correct.
 func (t DeploymentTopology) RemoteEndpoint(cellID string) (string, bool) {
 	if !t.explicit {
 		return "", false

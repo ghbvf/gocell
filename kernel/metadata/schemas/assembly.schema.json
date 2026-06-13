@@ -88,7 +88,7 @@
     },
     "topology": {
       "type": "object",
-      "description": "OPTIONAL deployment topology for this assembly. Absent or empty means all cells are co-located in the same process (zero-migration default). When non-empty, every cell in the assembly must appear in exactly one of colocated or remote (exhaustive partition). Validated at governance time by ValidateTopologyStructure.",
+      "description": "OPTIONAL deployment topology for this assembly. Omit entirely for single-process (all-colocated default — zero-migration path). Declare when cells split across multiple processes; add every cell to exactly one of colocated[] or remote[] (exhaustive partition — mutual exclusion enforced). `gocell validate` enforces TOPO-10 (structural) and TOPO-11 (provider reachability). Endpoint format: bare host:port or http/https URL. Validated at governance time by ValidateTopologyStructure.",
       "additionalProperties": false,
       "properties": {
         "colocated": {
