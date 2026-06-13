@@ -171,12 +171,18 @@ type DeviceCell struct {
 	logger             *slog.Logger
 	metricsProvider    metrics.Provider
 	commandQueue       commandQueueStore
-	commandRegistry    *commandruntime.Registry // required; sync command-bus handler registry (#1580)
-	commandSweeper     *reconcile.Loop          // device-command expiry sweep, driven on a TickerTrigger cadence
-	certRenewalSweeper *reconcile.Loop          // cert-renewal producer (archetype ② reconcile→command, #1757); scans the device repo
-	reconcileMetrics   reconcile.Metrics        // shared by both reconcile.Loops; registered once via reconcileLoopMetrics
-	reconcileMetricsOK bool                     // true once reconcileMetrics is registered (provider was wired)
-	clk                clock.Clock              // injected from reg.Config during initInternal
+	// commandQueueTypeMismatch records that RegisterCommandQueue was called with a
+	// queue that implements kcommand.Queue but NOT ActiveScanner. The QueueRegistrar
+	// interface fixes the wide kcommand.Queue parameter, so the ActiveScanner
+	// requirement cannot be a compile-time constraint here; this flag lets Init
+	// fail fast with a precise message instead of a misleading nil-queue error (#1694 F11).
+	commandQueueTypeMismatch bool
+	commandRegistry          *commandruntime.Registry // required; sync command-bus handler registry (#1580)
+	commandSweeper           *reconcile.Loop          // device-command expiry sweep, driven on a TickerTrigger cadence
+	certRenewalSweeper       *reconcile.Loop          // cert-renewal producer (archetype ② reconcile→command, #1757); scans the device repo
+	reconcileMetrics         reconcile.Metrics        // shared by both reconcile.Loops; registered once via reconcileLoopMetrics
+	reconcileMetricsOK       bool                     // true once reconcileMetrics is registered (provider was wired)
+	clk                      clock.Clock              // injected from reg.Config during initInternal
 
 	// +slice:route:slice=deviceregister,subPath=/api/v1/devices
 	registerHandler *registercontract.Handler
@@ -219,13 +225,42 @@ type DeviceCell struct {
 // RegisterCommandQueue implements kernel/command.QueueRegistrar. The supplied
 // queue must also implement ActiveScanner so the same runtime component can
 // serve the device dequeue path, sweeper, and internal ops view.
+//
+// A queue that is not an ActiveScanner is a wiring mistake, not a degraded
+// runtime mode: it is recorded here and rejected at Init with a precise message
+// (#1694 F11). The interface signature is fixed to the wide kcommand.Queue, so
+// this cannot be a compile-time constraint — Init fail-fast is the boundary's
+// limit. Earlier this only Warn-and-ignored, which then surfaced as a confusing
+// "requires a command queue" nil error even though a queue WAS registered.
 func (c *DeviceCell) RegisterCommandQueue(q kcommand.Queue) {
 	store, ok := q.(commandQueueStore)
 	if !ok {
-		c.logger.Warn("devicecell: command queue does not implement ActiveScanner; ignoring registrar injection")
+		c.commandQueueTypeMismatch = true
 		return
 	}
+	c.commandQueueTypeMismatch = false
 	c.commandQueue = store
+}
+
+// requireCommandQueue validates the registered command queue. A queue that is
+// not an ActiveScanner is a precise wiring error (#1694 F11) — the device
+// dequeue path, sweeper, and internal ops view all need ScanActive — and a nil
+// queue (none registered) is the "no soft fallback" error. Extracted from
+// initSlices so that function stays within its cyclomatic-complexity budget.
+func (c *DeviceCell) requireCommandQueue() error {
+	if c.commandQueueTypeMismatch {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"devicecell: the registered command queue does not implement ActiveScanner "+
+				"(required for the device dequeue path, sweeper, and internal ops view); "+
+				"use commandtest.NewInMemQueue() for demo mode or postgres.NewCommandQueue(...) for durable mode")
+	}
+	if c.commandQueue == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"devicecell requires a command queue; from the composition root, "+
+				"call RegisterCommandQueue(commandtest.NewInMemQueue()) for demo mode or "+
+				"RegisterCommandQueue(postgres.NewCommandQueue(...)) for durable mode")
+	}
+	return nil
 }
 
 // NewDeviceCell creates a new DeviceCell with the given options.
@@ -395,14 +430,10 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicebootstrap.SliceMetadata()))
 
 	// device-command slice: a Queue + ActiveScanner is required in every mode.
-	// Demo callers MUST wire commandtest.NewInMemQueue() explicitly via
-	// RegisterCommandQueue — the cell never falls back silently. Same
-	// "no soft fallback" rationale as the deviceRepo path above.
-	if c.commandQueue == nil {
-		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"devicecell requires a command queue; from the composition root, "+
-				"call RegisterCommandQueue(commandtest.NewInMemQueue()) for demo mode or "+
-				"RegisterCommandQueue(postgres.NewCommandQueue(...)) for durable mode")
+	// Validation (nil queue + non-ActiveScanner queue) lives in requireCommandQueue
+	// so this function stays within its cyclomatic budget.
+	if err := c.requireCommandQueue(); err != nil {
+		return err
 	}
 	// The sync command-bus registry is required: devicecell declares command
 	// handle contracts (command.devicecommand.enqueue.v1), so the generated

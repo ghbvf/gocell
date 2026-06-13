@@ -65,6 +65,11 @@ type commandQueueStore interface {
 // Adapter type that bridges the generated interface to these domain methods,
 // enforcing type-level trust-boundary segregation. See
 // HTTP-CONTRACT-VISIBILITY-TYPE-SEGREGATION-01 archtest.
+//
+// device_id is logged in plaintext at Info (enqueue / dequeue / report / ack) by
+// design — it is an opaque server-assigned handle, not credential-adjacent PII.
+// The authoritative rationale (and the boundary for when it WOULD need redaction)
+// lives on domain.Device.ID; see that field's doc (#1695 F10).
 type Service struct {
 	queue      commandQueueStore       `gocell:"required"`
 	deviceRepo domain.DeviceRepository `gocell:"required"`
@@ -164,8 +169,13 @@ func generateID() (string, error) {
 
 // Enqueue creates a new pending command for the given device.
 //
-// commandType defaults to "default" when empty — callers that don't specify
-// a type (e.g. early demo scripts) get a sensible fallback without error.
+// commandType is required: an empty value is rejected with a validation error
+// (#1694 F9). The earlier silent "default" fallback was removed — a missing
+// command verb is a caller error the dispatcher cannot route, not something to
+// paper over (no-soft-fallback). The wire contracts (http + command-bus enqueue
+// request schemas) mark commandType required too, so both untrusted boundaries
+// reject it before reaching here; this guard also covers the gRPC and direct
+// in-process call paths as the domain invariant.
 // T3 DEVICE-ENQUEUE-RBAC: s.authz is called when non-nil to enforce RBAC.
 // Authz is checked before device lookup to prevent timing-based information
 // leakage (403 must precede 404 so callers cannot probe device existence).
@@ -188,9 +198,8 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 		return command.Entry{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "command payload must not be empty")
 	}
 
-	// Default commandType to "default" for backward-compat demo callers.
 	if commandType == "" {
-		commandType = "default"
+		return command.Entry{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "command type must not be empty")
 	}
 
 	id, err := generateID()

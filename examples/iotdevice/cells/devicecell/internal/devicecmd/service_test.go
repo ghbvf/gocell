@@ -76,20 +76,15 @@ func TestService_Enqueue(t *testing.T) {
 		checkEntry  func(t *testing.T, e command.Entry)
 	}{
 		{
-			name:        "valid enqueue uses default commandType",
+			// #1694 F9: commandType is required — the silent "default" fallback
+			// was removed (no-soft-fallback). Empty commandType is rejected, same
+			// as empty payload, rather than papered over.
+			name:        "empty commandType returns validation error",
 			setup:       func(r *mem.DeviceRepository) { seedDevice(r, "dev-1", "sensor-a") },
 			deviceID:    "dev-1",
 			commandType: "",
 			payload:     "reboot",
-			wantErr:     false,
-			checkEntry: func(t *testing.T, e command.Entry) {
-				assert.NotEmpty(t, e.ID)
-				assert.Equal(t, "dev-1", e.DeviceID)
-				assert.Equal(t, "default", e.CommandType)
-				assert.Equal(t, []byte("reboot"), e.Payload)
-				assert.Equal(t, command.StatusPending, e.Status)
-				assert.False(t, e.CreatedAt.IsZero())
-			},
+			wantErr:     true,
 		},
 		{
 			name:        "valid enqueue with explicit commandType",
@@ -99,8 +94,12 @@ func TestService_Enqueue(t *testing.T) {
 			payload:     "v2.0",
 			wantErr:     false,
 			checkEntry: func(t *testing.T, e command.Entry) {
+				assert.NotEmpty(t, e.ID)
+				assert.Equal(t, "dev-1", e.DeviceID)
 				assert.Equal(t, "firmware-update", e.CommandType)
+				assert.Equal(t, []byte("v2.0"), e.Payload)
 				assert.Equal(t, command.StatusPending, e.Status)
+				assert.False(t, e.CreatedAt.IsZero())
 			},
 		},
 		{
@@ -524,7 +523,7 @@ func TestService_Enqueue_ThenDequeue_Report_ThenAck(t *testing.T) {
 	seedDevice(devRepo, "dev-1", "sensor-a")
 
 	// Enqueue
-	entry, err := svc.Enqueue(ctx, "dev-1", "", "upgrade-fw")
+	entry, err := svc.Enqueue(ctx, "dev-1", "upgrade", "upgrade-fw")
 	require.NoError(t, err)
 
 	// Dequeue claims the command and marks it Sent.
