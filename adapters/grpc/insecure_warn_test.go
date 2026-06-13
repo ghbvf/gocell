@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 )
 
@@ -32,9 +33,7 @@ func (fakeNonTCPAddr) String() string  { return "bufnet" }
 func installCaptureLogger(t *testing.T) *sloghelper.SyncBuffer {
 	t.Helper()
 	buf := sloghelper.NewSyncBuffer()
-	original := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(original) })
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(buf, nil)))
 	return buf
 }
 

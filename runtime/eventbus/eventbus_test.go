@@ -1221,13 +1221,17 @@ func TestInMemoryEventBus_StopIntake_NoOp(t *testing.T) {
 	}
 }
 
-// TestReleaseReceipt_FailedRelease_LogsError covers the slog.Any("error", err)
-// branch inside releaseReceipt (eventbus.go:556-560). The branch fires when
-// receipt.Release returns a non-nil error. We trigger it via DispositionReject
-// with a receipt whose Release always fails. The message must still reach dead
-// letter — the Release error must not swallow the Reject outcome.
+// TestReleaseReceipt_FailedRelease_LogsError covers releaseSettlement's
+// b.logger.Error("eventbus: settlement release failed", ...) branch, which fires
+// when Settlement.Release returns a non-nil error. We trigger it via
+// DispositionReject with a receipt whose Release always fails, then assert both
+// (a) the message still reaches dead letter — the Release error must not swallow
+// the Reject outcome — and (b) the Error log is emitted (fulfilling the
+// "LogsError" contract). Logs are captured via an injected NewLoggerCapture
+// logger, never the global slog.Default() (#1490).
 func TestReleaseReceipt_FailedRelease_LogsError(t *testing.T) {
-	bus := New(clock.Real(), WithBufferSize(16))
+	logger, cap := healthtest.NewLoggerCapture()
+	bus := New(clock.Real(), WithBufferSize(16), WithLogger(logger))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	releaseErr := errors.New("release: backend unavailable")
@@ -1258,6 +1262,15 @@ func TestReleaseReceipt_FailedRelease_LogsError(t *testing.T) {
 	dl := bus.DrainDeadLetters()
 	require.Len(t, dl, 1)
 	assert.Equal(t, "release.fail", dl[0].Topic)
+
+	// (b) the failing Release must emit the Error log (fulfilling the "LogsError"
+	// contract). The release log fires before appendDeadLetter in the Reject
+	// path, so it is already captured by the time DeadLetterLen()==1.
+	releaseLog := findDropRecord(cap.Snapshot(), "settlement release failed")
+	require.NotNil(t, releaseLog, "failed Release must emit an Error log")
+	errAttr, ok := findLogAttr(*releaseLog, "error")
+	require.True(t, ok, "release-failed log must carry 'error'")
+	assert.Contains(t, errAttr.Value.String(), "release: backend unavailable")
 
 	cancel()
 	<-done
@@ -1575,6 +1588,10 @@ func (r *failingReleaseReceipt) Extend(_ context.Context, _ time.Duration) error
 // or slog.Any("payload", entry.Payload) to the drop log. This helper catches
 // that regression by asserting on a recognizable sentinel string embedded in
 // the payload at publish time.
+// Boundary: this helper scans the record Message and each top-level attr's
+// rendered value; it does NOT recurse into slog.Group sub-attrs. Adequate
+// today — every eventbus log site emits flat attrs (no Group). If a future log
+// site wraps fields in slog.Group, extend this helper to walk Group values.
 func assertNoPayloadLeak(t *testing.T, r slog.Record, payloadMarker string) {
 	t.Helper()
 
@@ -1630,12 +1647,30 @@ func findDropRecord(records []slog.Record, msgSubstr string) *slog.Record {
 	return nil
 }
 
+// TestWithLogger_NilIgnored verifies the WithLogger(nil) guard: nil must be a
+// no-op so the slog.Default() snapshot from New is retained, never overwritten
+// with a nil *slog.Logger (which would nil-deref on the first log call).
+func TestWithLogger_NilIgnored(t *testing.T) {
+	t.Parallel()
+
+	bus := New(clock.Real(), WithLogger(nil))
+	defer func() { _ = bus.Close(context.Background()) }()
+	require.NotNil(t, bus.logger, "WithLogger(nil) must retain the default logger, not nil it")
+
+	// Exercise a log path (invalid envelope → b.logger.Warn) to confirm no
+	// nil-deref panic when the retained default is used.
+	assert.NotPanics(t, func() {
+		_ = bus.Publish(context.Background(), "nil.logger.topic", []byte("not-a-valid-envelope"))
+	}, "logging via the retained default logger must not panic")
+}
+
 // TestBroadcast_BufferFull_LogsErrorWithContextualFields verifies R-02:
 // when the broadcast drop path fires, the log record must be at slog.LevelError
 // and carry entry_id, aggregate_id, and event_type attributes.
 //
-// Uses healthtest.NewCapture (pkg/testutil/sloghelper-safe layer; no import
-// cycle: runtime/http/health/healthtest does not import runtime/eventbus).
+// Uses healthtest.NewLoggerCapture (de-globalized: injects a capture
+// *slog.Logger via WithLogger; no slog.SetDefault, so the bus's async log
+// emission cannot race a parallel sibling test's global handler — #1490).
 //
 // Strategy: inject a subscription directly into groupSubs with a pre-filled
 // channel (no goroutine draining it) so the drop is deterministic.
@@ -1645,9 +1680,10 @@ func findDropRecord(records []slog.Record, msgSubstr string) *slog.Record {
 // embedded in the published entry's Payload. Any future change that accidentally
 // adds slog.Any("payload", ...) or slog.Any("entry", ...) will fail this test.
 func TestBroadcast_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
-	cap := healthtest.NewCapture(t)
+	t.Parallel() // isolated via injected logger; parallel run proves #1490 fix under -race
+	logger, cap := healthtest.NewLoggerCapture()
 
-	bus := New(clock.Real(), WithBufferSize(1))
+	bus := New(clock.Real(), WithBufferSize(1), WithLogger(logger))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	// Inject a subscription with a pre-filled channel directly.
@@ -1726,9 +1762,10 @@ func TestBroadcast_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 // payload — assertNoPayloadLeak verifies this using a unique sentinel marker
 // embedded in the published entry's Payload.
 func TestRoundRobin_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
-	cap := healthtest.NewCapture(t)
+	t.Parallel() // isolated via injected logger; parallel run proves #1490 fix under -race
+	logger, cap := healthtest.NewLoggerCapture()
 
-	bus := New(clock.Real(), WithBufferSize(1))
+	bus := New(clock.Real(), WithBufferSize(1), WithLogger(logger))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	_, cancelSub := context.WithCancel(context.Background())
@@ -1807,9 +1844,10 @@ func TestRoundRobin_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 // the business payload — assertNoPayloadLeak verifies this using a unique
 // sentinel marker embedded in the published entry's Payload.
 func TestNotifyRetryExhausted_LogsErrorWithContextualFields(t *testing.T) {
-	cap := healthtest.NewCapture(t)
+	t.Parallel() // isolated via injected logger; parallel run proves #1490 fix under -race
+	logger, cap := healthtest.NewLoggerCapture()
 
-	bus := New(clock.Real(), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16), WithLogger(logger))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	const topic = "retry.exhaust.fields.v1"

@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	rout "github.com/ghbvf/gocell/runtime/outbox"
 )
@@ -84,9 +85,7 @@ const (
 func installWarnCapture(t *testing.T) *sloghelper.SyncBuffer {
 	t.Helper()
 	buf := sloghelper.NewSyncBuffer()
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	return buf
 }
 

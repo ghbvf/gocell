@@ -19,6 +19,8 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 )
 
 // ── T1: discoverConventional symlink skip ──────────────────────────────────
@@ -183,17 +185,15 @@ func TestValidateManifestModulePath_ConsistentWithRelativePath(t *testing.T) {
 // ── T3: parseWith warns on zero sources ───────────────────────────────────
 
 // captureSlogWarn installs a temporary slog handler that collects Warn-level
-// messages. Returns a cleanup function and a pointer to the collected slice.
-// The cleanup restores the default handler.
-func captureSlogWarn(t *testing.T) (cleanup func(), msgs *[]string) {
+// messages. Returns a pointer to the collected slice. The cleanup is registered
+// via t.Cleanup (through slogcapture.InstallDefault).
+func captureSlogWarn(t *testing.T) (msgs *[]string) {
 	t.Helper()
 	var captured []string
 	msgs = &captured
-	old := slog.Default()
 	h := &warnCapture{msgs: &captured}
-	slog.SetDefault(slog.New(h))
-	cleanup = func() { slog.SetDefault(old) }
-	return cleanup, msgs
+	slogcapture.InstallDefault(t, slog.New(h))
+	return msgs
 }
 
 // warnCapture is a minimal slog.Handler that captures Warn messages.
@@ -223,8 +223,7 @@ func TestParseWith_ZeroSourcesWarn(t *testing.T) {
 		t.Fatalf("NewLocatorFS: %v", err)
 	}
 
-	cleanup, msgs := captureSlogWarn(t)
-	defer cleanup()
+	msgs := captureSlogWarn(t)
 
 	pm, err := p.parseWith(loc)
 	if err != nil {

@@ -67,6 +67,20 @@ type InMemoryEventBus struct {
 	deadLetters   []DeadLetter
 	clk           clock.Clock
 
+	// logger is the structured sink for all bus diagnostics (drops, retries,
+	// settlement failures). Injected via WithLogger; defaults to slog.Default()
+	// at construction. Routing every log through this field (never bare slog.*)
+	// keeps async-goroutine emission isolated from the process-global
+	// slog.Default(), which tests can clobber under parallel + async writes
+	// (#1490). Tests inject a capture logger via healthtest.NewLoggerCapture().
+	//
+	// Production redaction safety: the default snapshot is taken at New() time,
+	// AFTER the entry point installs the redacting handler via slog.SetDefault
+	// (SLOG-HANDLER-SEALED-FUNNEL-01 A3 — assembly run() SetDefaults before
+	// constructing cells/bus), so the captured default is the redacting handler,
+	// not the bare stdlib logger.
+	logger *slog.Logger
+
 	// readyMu guards readyChans. Separate from mu to avoid lock ordering issues.
 	readyMu    sync.Mutex
 	readyChans map[string]chan struct{} // key: consumerGroup + "|" + topic
@@ -90,6 +104,19 @@ func WithBufferSize(size int) Option {
 	}
 }
 
+// WithLogger injects the structured logger the bus emits diagnostics to.
+// Defaults to slog.Default() (set in New). Nil is ignored — the default is
+// retained. Component tests inject a capture logger (healthtest.NewLoggerCapture)
+// so async log emission stays isolated from the process-global slog.Default()
+// race (#1490). Mirrors runtime/saga.WithLogger / runtime/auth.WithLogger.
+func WithLogger(l *slog.Logger) Option {
+	return func(b *InMemoryEventBus) {
+		if l != nil {
+			b.logger = l
+		}
+	}
+}
+
 // New creates an InMemoryEventBus with the given clock and options.
 func New(clk clock.Clock, opts ...Option) *InMemoryEventBus {
 	b := &InMemoryEventBus{
@@ -97,6 +124,7 @@ func New(clk clock.Clock, opts ...Option) *InMemoryEventBus {
 		readyChans: make(map[string]chan struct{}),
 		bufSize:    256,
 		clk:        clk,
+		logger:     slog.Default(),
 	}
 	for _, o := range opts {
 		o(b)
@@ -142,7 +170,7 @@ func (b *InMemoryEventBus) Publish(_ context.Context, topic string, payload []by
 
 	entry, unmarshalErr := unmarshalInboundEntry(topic, payload)
 	if unmarshalErr != nil {
-		slog.Warn("eventbus: rejecting invalid envelope, routing to dead letter",
+		b.logger.Warn("eventbus: rejecting invalid envelope, routing to dead letter",
 			slog.String("topic", topic),
 			slog.Any("error", unmarshalErr))
 		// Entry construction failed: record a dead letter keyed by topic only.
@@ -177,7 +205,7 @@ func (b *InMemoryEventBus) broadcast(topic string, gs *groupState, entry outbox.
 		select {
 		case sub.ch <- entry:
 		default:
-			slog.Error("eventbus: subscriber buffer full, message dropped",
+			b.logger.Error("eventbus: subscriber buffer full, message dropped",
 				slog.String("topic", topic),
 				slog.String("entry_id", entry.ID()),
 				slog.String("aggregate_id", entry.AggregateID()),
@@ -195,7 +223,7 @@ func (b *InMemoryEventBus) roundRobin(topic, group string, gs *groupState, entry
 	select {
 	case sub.ch <- entry:
 	default:
-		slog.Error("eventbus: subscriber buffer full, message dropped",
+		b.logger.Error("eventbus: subscriber buffer full, message dropped",
 			slog.String("topic", topic),
 			slog.String("consumer_group", group),
 			slog.String("entry_id", entry.ID()),
@@ -478,7 +506,7 @@ func (b *InMemoryEventBus) handleWithRetry(
 		if res.Err != nil {
 			retryAttrs = append(retryAttrs, slog.Any("error", res.Err))
 		}
-		slog.LogAttrs(ctx, slog.LevelWarn, "eventbus: delivery failed, retrying after delay", retryAttrs...)
+		b.logger.LogAttrs(ctx, slog.LevelWarn, "eventbus: delivery failed, retrying after delay", retryAttrs...)
 		if !awaitDelay(ctx, b.clk, delay) {
 			return
 		}
@@ -501,7 +529,7 @@ func (b *InMemoryEventBus) notifyRetryExhausted(
 ) {
 	b.appendDeadLetter(topic, entry, err)
 	outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.SettlementResultRetryExhausted, err)
-	slog.Error("eventbus: retries exhausted, routing to dead letter",
+	b.logger.Error("eventbus: retries exhausted, routing to dead letter",
 		slog.String("topic", topic),
 		slog.String("entry_id", entry.ID()),
 		slog.String("aggregate_id", entry.AggregateID()),
@@ -525,15 +553,15 @@ func (b *InMemoryEventBus) processResult(
 	switch res.Disposition {
 	case outbox.DispositionAck:
 		if settlement != nil {
-			if commitErr := commitSettlement(ctx, settlement, topic, entry.ID()); commitErr != nil {
+			if commitErr := b.commitSettlement(ctx, settlement, topic, entry.ID()); commitErr != nil {
 				// Mirror rabbitmq.dispatchAck: Commit failure (lease lost,
 				// token mismatch, backend error) MUST NOT be silently
 				// promoted to success. Treat as transient → retry path.
-				slog.Warn("eventbus: settlement commit failed, downgrading Ack to Requeue",
+				b.logger.Warn("eventbus: settlement commit failed, downgrading Ack to Requeue",
 					slog.String("topic", topic),
 					slog.String("entry_id", entry.ID()),
 					slog.Any("error", commitErr))
-				releaseSettlement(ctx, settlement, topic, entry.ID())
+				b.releaseSettlement(ctx, settlement, topic, entry.ID())
 				if finalAttempt {
 					return false, commitErr
 				}
@@ -545,9 +573,9 @@ func (b *InMemoryEventBus) processResult(
 		return true, nil
 	case outbox.DispositionReject:
 		if settlement != nil {
-			releaseSettlement(ctx, settlement, topic, entry.ID())
+			b.releaseSettlement(ctx, settlement, topic, entry.ID())
 		}
-		slog.Warn("eventbus: handler rejected message, routing to dead letter",
+		b.logger.Warn("eventbus: handler rejected message, routing to dead letter",
 			slog.String("topic", topic),
 			slog.String("entry_id", entry.ID()),
 			slog.Any("error", res.Err),
@@ -578,7 +606,7 @@ func (b *InMemoryEventBus) handleRequeue(
 	finalAttempt bool,
 ) (done bool, lastErr error) {
 	if settlement != nil {
-		releaseSettlement(ctx, settlement, topic, entry.ID())
+		b.releaseSettlement(ctx, settlement, topic, entry.ID())
 	}
 	if finalAttempt {
 		return false, res.Err
@@ -599,10 +627,10 @@ func (b *InMemoryEventBus) handleInvalidDisposition(
 	finalAttempt bool,
 ) (done bool, lastErr error) {
 	if settlement != nil {
-		releaseSettlement(ctx, settlement, topic, entry.ID())
+		b.releaseSettlement(ctx, settlement, topic, entry.ID())
 	}
 	if finalAttempt {
-		slog.Error("eventbus: invalid disposition, retry budget exhausted",
+		b.logger.Error("eventbus: invalid disposition, retry budget exhausted",
 			slog.String("topic", topic),
 			slog.String("entry_id", entry.ID()),
 			slog.String("aggregate_id", entry.AggregateID()),
@@ -612,7 +640,7 @@ func (b *InMemoryEventBus) handleInvalidDisposition(
 		)
 		return false, res.Err
 	}
-	slog.Error("eventbus: invalid disposition, treating as requeue",
+	b.logger.Error("eventbus: invalid disposition, treating as requeue",
 		slog.String("topic", topic),
 		slog.String("entry_id", entry.ID()),
 		slog.String("aggregate_id", entry.AggregateID()),
@@ -676,11 +704,11 @@ func (b *InMemoryEventBus) appendRawDeadLetter(topic string, err error) {
 // backend failure (matches rabbitmq.dispatchAck Commit→Ack ordering — Commit
 // failure must NOT be silently swallowed, otherwise stale holders could
 // "succeed" after losing the lease).
-func commitSettlement(ctx context.Context, s outbox.Settlement, topic, entryID string) error {
+func (b *InMemoryEventBus) commitSettlement(ctx context.Context, s outbox.Settlement, topic, entryID string) error {
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultEventbusReceiptOpTimeout)
 	defer cancel()
 	if err := s.Commit(rctx); err != nil {
-		slog.Error("eventbus: settlement commit failed",
+		b.logger.Error("eventbus: settlement commit failed",
 			slog.String("topic", topic),
 			slog.String("entry_id", entryID),
 			slog.Any("error", err))
@@ -690,11 +718,11 @@ func commitSettlement(ctx context.Context, s outbox.Settlement, topic, entryID s
 }
 
 // releaseSettlement calls Settlement.Release with a detached 5s-timeout context.
-func releaseSettlement(ctx context.Context, s outbox.Settlement, topic, entryID string) {
+func (b *InMemoryEventBus) releaseSettlement(ctx context.Context, s outbox.Settlement, topic, entryID string) {
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultEventbusReceiptOpTimeout)
 	defer cancel()
 	if err := s.Release(rctx); err != nil {
-		slog.Error("eventbus: settlement release failed",
+		b.logger.Error("eventbus: settlement release failed",
 			slog.String("topic", topic),
 			slog.String("entry_id", entryID),
 			slog.Any("error", err))

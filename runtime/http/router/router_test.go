@@ -27,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/health"
@@ -98,10 +99,7 @@ func TestRouterImplementsRouteMux(t *testing.T) {
 
 func TestRouterClientErrorLogSamplingOption(t *testing.T) {
 	var logs bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	original := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(original)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
 
 	r, err := NewForListener(
 		clock.Real(),
@@ -651,10 +649,7 @@ func TestRouterChain_WebSocketUpgrade(t *testing.T) {
 
 func TestPanicRequestRecordedInAccessLog(t *testing.T) {
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-	original := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(original)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 	r := mustNew(clock.Real())
 	r.Handle("/boom", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -694,10 +689,7 @@ func TestPanicRequestRecordedInMetrics(t *testing.T) {
 func TestNormalRequestUnchanged(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-	original := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(original)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 	r := mustNew(clock.Real(), WithMetricsCollector(mc))
 	r.Handle("/ok", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -737,10 +729,7 @@ func TestNewForListener_AccessLogIncludesListener(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			logger := slog.New(slog.NewJSONHandler(&buf, nil))
-			original := slog.Default()
-			slog.SetDefault(logger)
-			defer slog.SetDefault(original)
+			slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 			r, err := NewForListener(clock.Real(), tt.ref)
 			require.NoError(t, err)
@@ -930,10 +919,7 @@ func TestNoTracer_NoTraceID(t *testing.T) {
 
 func TestWithTracer_TraceIDInAccessLog(t *testing.T) {
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-	original := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(original)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 	tracer := tracingtest.NewSimpleTracer("log-test")
 	r := mustNew(clock.Real(), WithTracer(tracer))
@@ -953,10 +939,7 @@ func TestWithTracer_TraceIDInAccessLog(t *testing.T) {
 
 func TestAccessLog_IncludesRealIP(t *testing.T) {
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-	original := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(original)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 	r := mustNew(clock.Real(), WithTrustedProxies([]string{"127.0.0.1"}))
 	r.Handle("/real-ip-test", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -1962,10 +1945,7 @@ func TestRouter_RejectPath_RouteLabelConsistent(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
 	spy := &routerSpyTracer{}
 	var logBuf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
-	original := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(original)
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&logBuf, nil)))
 
 	verifier := &routerTestVerifier{
 		claims: kauth.Claims{Subject: "user-1"},

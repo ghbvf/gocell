@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	obshealthz "github.com/ghbvf/gocell/runtime/observability/healthz"
 )
@@ -84,9 +85,7 @@ func (h *captureHandler) recordCtx(msg string) (context.Context, bool) {
 func withSlogCapture(t *testing.T) *captureHandler {
 	t.Helper()
 	h := &captureHandler{}
-	prev := slog.Default()
-	slog.SetDefault(slog.New(h))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	slogcapture.InstallDefault(t, slog.New(h))
 	return h
 }
 

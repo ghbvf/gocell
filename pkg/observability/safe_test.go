@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/observability"
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 )
 
 // --- test helpers ---
@@ -155,9 +156,7 @@ func TestSafeObserve_PanicLogged(t *testing.T) {
 func TestSafeObserve_NilLogger_FallsBackToDefault(t *testing.T) {
 	// Swap default logger with a capturing logger.
 	h, buf := newBufHandler()
-	prev := slog.Default()
-	slog.SetDefault(slog.New(h))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	slogcapture.InstallDefault(t, slog.New(h))
 
 	observability.SafeObserve(nil, func() {
 		panic("nil-logger-fallback-sentinel")

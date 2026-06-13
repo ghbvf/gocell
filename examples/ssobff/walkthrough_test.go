@@ -40,6 +40,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -157,9 +158,7 @@ func buildWalkthroughServer(t *testing.T, capHandler *capturingHandler) *walkthr
 	t.Setenv(ssobffDatabaseURLEnv, dsn)
 
 	logger := slog.New(capHandler)
-	previousDefaultLogger := slog.Default()
-	slog.SetDefault(logger)
-	t.Cleanup(func() { slog.SetDefault(previousDefaultLogger) })
+	slogcapture.InstallDefault(t, logger)
 
 	primary := newWalkthroughListener(t)
 	internal := newWalkthroughListener(t)
