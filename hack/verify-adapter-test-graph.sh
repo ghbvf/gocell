@@ -2,13 +2,17 @@
 # verify-bucket: workspace
 #
 # INVARIANT: ADAPTER-MODULE-GRAPH-TEST-EDGE-01 (Medium): a test-only dependency
-# must not leak into the published module graph of an adapter that never uses it.
+# must not appear as a require/replace declaration in the OWN go.mod of an adapter
+# that never uses that backend. Scope is precise: this gate asserts the adapter's
+# own go.mod declarations, NOT the full `go list -m all` build list (see the
+# root-module blind spot below) — the two diverge and conflating them gives a
+# false "build list is clean" guarantee.
 #
 # Background: per-adapter `go mod tidy` resolves the FULL (all-build-tags) import
 # closure of every package an adapter imports, so a test-only backend reachable
 # through a shared fixture package silently becomes an `// indirect` require in
-# every consuming adapter's go.mod — visible to external consumers of that module
-# even though no production (or even test) code in the adapter uses it. #1908 split
+# every consuming adapter's go.mod — directly declared in that module even though
+# no production (or even test) code in the adapter uses it. #1908 split
 # the minio/rabbitmq testcontainer helpers out of `tests/testutil` so postgres/
 # redis/otel/vault/mqtt stop inheriting them; #1909 gave vault an adapter-local
 # recording metrics.Provider so it stops requiring `adapters/prometheus`. This gate
@@ -29,11 +33,24 @@
 # Blind spots (documented, not silently absent): all adapter modules declared in
 # go.work are now auto-enumerated via gocell::modules::dirs, so adding a new adapter
 # to go.work automatically brings it under the minio/rabbitmq forbid checks with zero
-# hardcoded-list maintenance. Remaining blind spots: non-adapter modules (root,
-# corecells, cellmodules, examples) are not covered; and a NEW heavy backend beyond
-# minio/rabbitmq/prometheus would need a new forbid table entry. The detector is
-# path-exact (quoted full module path), so a vanity-renamed fork of the same
-# dependency would not be caught.
+# hardcoded-list maintenance. Remaining blind spots:
+#  - Transitive presence via the ROOT module is OUT OF SCOPE and accepted. Every
+#    adapter requires the bare `github.com/ghbvf/gocell` root module (kernel lives
+#    there), and root's go.mod rightfully carries the minio/rabbitmq testcontainer
+#    fixtures (tests/testutil/{minioctr,rabbitmqctr} are root subpackages), so
+#    `GOWORK=off go -C <adapter> list -m all` DOES still list minio/rabbitmq. That
+#    is by design: root is the framework's main module and carries test fixtures;
+#    promoting the fixtures to standalone publishable modules was disproven by
+#    verify-release-smoke.sh (RELEASE-EXTERNAL-GET-01 — a publishable adapter would
+#    then require an unpublishable test-helper module) and reverted. This gate
+#    therefore scopes to the adapter's own go.mod declaration, which is the layer
+#    #1908 set out to clean. Whether to ever assert the full build list (which would
+#    require moving root fixtures off the published boundary) is tracked as a
+#    follow-up in #1999.
+#  - Non-adapter modules (root, corecells, cellmodules, examples) are not covered;
+#    and a NEW heavy backend beyond minio/rabbitmq/prometheus would need a new forbid
+#    table entry. The detector is path-exact (quoted full module path), so a
+#    vanity-renamed fork of the same dependency would not be caught.
 
 set -euo pipefail
 
@@ -62,7 +79,7 @@ mod_declares() {
 forbid() {
     local dir="$1" path="$2"
     if mod_declares "${dir}" "${path}"; then
-        gocell::log::error "${dir}/go.mod must NOT declare '${path}' — test-only edge leaked into the module graph (ADAPTER-MODULE-GRAPH-TEST-EDGE-01)"
+        gocell::log::error "${dir}/go.mod must NOT declare '${path}' — test-only edge leaked into the adapter's own go.mod (ADAPTER-MODULE-GRAPH-TEST-EDGE-01)"
         fail=1
     fi
 }

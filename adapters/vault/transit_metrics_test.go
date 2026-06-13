@@ -268,3 +268,74 @@ func tryGatherCounterVec(rec *recordingProvider, name string, labels map[string]
 	v, _ := rec.value(name, labels)
 	return v
 }
+
+// TestRecordingProvider_With_RejectsMismatchedLabels asserts the adapter-local
+// recording fake enforces the same label-set contract as every real Provider:
+// Vec.With panics (wrapping metrics.ErrLabelMismatch) when the supplied labels do
+// not exactly cover the registered LabelNames. Without this, a test could pass
+// despite label drift the production Prometheus/OTel Provider would reject.
+func TestRecordingProvider_With_RejectsMismatchedLabels(t *testing.T) {
+	// A non-"gocell" namespace also exercises the fake's namespace-agnostic
+	// prefixing (the production callers above all use "gocell").
+	rec := newRecordingProvider("test")
+	cv, err := rec.CounterVec(metrics.CounterOpts{
+		Name:       "labeled_total",
+		LabelNames: []string{"method", "result"},
+	})
+	if err != nil {
+		t.Fatalf("CounterVec: %v", err)
+	}
+	gv, err := rec.GaugeVec(metrics.GaugeOpts{
+		Name:       "labeled_gauge",
+		LabelNames: []string{"zone"},
+	})
+	if err != nil {
+		t.Fatalf("GaugeVec: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		call func()
+	}{
+		{"counter missing key", func() { cv.With(metrics.Labels{"method": "token"}) }},
+		{"counter extra key", func() { cv.With(metrics.Labels{"method": "t", "result": "ok", "x": "y"}) }},
+		{"counter wrong key", func() { cv.With(metrics.Labels{"method": "t", "reason": "x"}) }},
+		{"gauge missing labels", func() { gv.With(metrics.Labels{}) }},
+		{"gauge wrong key", func() { gv.With(metrics.Labels{"region": "us"}) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Fatal("expected With to panic on label mismatch, got none")
+				}
+				rerr, ok := r.(error)
+				if !ok || !errors.Is(rerr, metrics.ErrLabelMismatch) {
+					t.Fatalf("panic = %v, want a value wrapping metrics.ErrLabelMismatch", r)
+				}
+			}()
+			tc.call()
+		})
+	}
+}
+
+// TestRecordingProvider_With_AcceptsMatchingLabels is the anti-vacuity companion:
+// the exact registered label set must NOT panic and must record through, proving
+// the validation in TestRecordingProvider_With_RejectsMismatchedLabels rejects
+// only genuine mismatches.
+func TestRecordingProvider_With_AcceptsMatchingLabels(t *testing.T) {
+	rec := newRecordingProvider("test")
+	cv, err := rec.CounterVec(metrics.CounterOpts{
+		Name:       "labeled_total",
+		LabelNames: []string{"method", "result"},
+	})
+	if err != nil {
+		t.Fatalf("CounterVec: %v", err)
+	}
+	cv.With(metrics.Labels{"method": "token", "result": "ok"}).Inc(context.Background())
+	if got := scrapeCounterVec(t, rec, "test_labeled_total",
+		map[string]string{"method": "token", "result": "ok"}); got != 1 {
+		t.Fatalf("recorded = %v, want 1", got)
+	}
+}

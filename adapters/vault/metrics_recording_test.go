@@ -52,7 +52,7 @@ func (p *recordingProvider) CounterVec(opts metrics.CounterOpts) (metrics.Counte
 	p.mu.Lock()
 	p.families[full] = true
 	p.mu.Unlock()
-	return recCounterVec{p: p, full: full}, nil
+	return recCounterVec{p: p, full: full, labels: append([]string(nil), opts.LabelNames...)}, nil
 }
 
 func (p *recordingProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, error) {
@@ -60,7 +60,7 @@ func (p *recordingProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, 
 	p.mu.Lock()
 	p.families[full] = true
 	p.mu.Unlock()
-	return recGaugeVec{p: p, full: full}, nil
+	return recGaugeVec{p: p, full: full, labels: append([]string(nil), opts.LabelNames...)}, nil
 }
 
 // ensure materializes the sample for (full,labels) at 0 if absent — mirrors a
@@ -124,22 +124,29 @@ func sampleKey(full string, l metrics.Labels) string {
 }
 
 type recCounterVec struct {
-	p    *recordingProvider
-	full string
+	p      *recordingProvider
+	full   string
+	labels []string
 }
 
 func (recCounterVec) Registered() bool { return true }
 func (v recCounterVec) With(l metrics.Labels) metrics.Counter {
+	// Enforce the same label-set contract as every real Provider (Nop/Prometheus/
+	// OTel all call MustValidateLabels in With), so the fake cannot silently pass a
+	// test whose labels drifted from the registered LabelNames.
+	metrics.MustValidateLabels(v.labels, l)
 	return recPoint{p: v.p, key: v.p.ensure(v.full, l)}
 }
 
 type recGaugeVec struct {
-	p    *recordingProvider
-	full string
+	p      *recordingProvider
+	full   string
+	labels []string
 }
 
 func (recGaugeVec) Registered() bool { return true }
 func (v recGaugeVec) With(l metrics.Labels) metrics.Gauge {
+	metrics.MustValidateLabels(v.labels, l)
 	return recPoint{p: v.p, key: v.p.ensure(v.full, l)}
 }
 
