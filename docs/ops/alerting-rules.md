@@ -577,6 +577,90 @@ missing_caller_cell / invalid_caller_cell）短时高峰。零星失败正常（
 
 ---
 
+## Auth PDP 决策可观测性（#2027）
+
+业务端点的 ABAC PDP（policy decision point）决策由 `observableAuthorizer` 装饰器（composition
+root 在配置了真实 metrics `Provider` 时包裹 primary Authorizer）发射两个指标，覆盖
+`enforcePermission` 经 `auth.RequirePermission` / `RequirePermissionForResource` 触发的每次
+`Authorize` 调用：
+
+| Metric (registered name) | 类型 | 含义 |
+|---|---|---|
+| `auth_pdp_decision_total{action, decision}` | Counter | 每次 PDP 决策计数 |
+| `auth_pdp_decision_duration_seconds{decision}` | Histogram | 单次 PDP 决策（policy-store load + evaluate）墙钟耗时 |
+
+`action` = sealed `authz.Permission` 拼写（如 `audit:read`、`user:read`），值集由 Permission
+registry 封闭。`decision` 值集冻结为 3 个（archtest `AUTHZ-PDP-DECISION-LABEL-VALUES-FROZEN-01` 守）：
+
+| decision | 语义 | 典型 HTTP |
+|---|---|---|
+| `allow` | PDP 放行（permit） | 2xx |
+| `deny` | policy 拒绝（无适用 permit / forbid-wins / default-deny） | 403 |
+| `error` | `Authorize` 返错（policy store 不可达 / 缺租户），fail-closed | 503/500 |
+
+> 仅当 composition root 配置真实 `Provider` 且装配了 primary Authorizer 时才有时间序列；无
+> Provider 时装饰器不接线（fail-open，metric 不发射，授权判定不受影响）。
+
+**rule_id 归因**：每次决策另由 `authorizationdecide` slice 落一条结构化日志
+`"authorization decision"`，带 `matched_rule_id` 字段——deny 走 **Info**（始终在线，供 on-call
+排查 ownership deny），allow 走 **Debug**（高频、按需）。`matched_rule_id` 区分授权来源，例如
+`baseline-user-read-self`（self via ownership）vs `baseline-user-read-admin`（admin via
+baseline）；default-deny 记 `_default-deny` 哨兵。指标给聚合 deny rate / latency，日志给单次归因。
+
+### GoCellAuthPDPDenyRateHigh
+
+PDP deny 速率短时偏高：可能是租户 policy 误配、客户端越权扫描，或某 action 的 baseline 门禁
+回归。按 action 分组定位。
+
+```yaml
+- alert: GoCellAuthPDPDenyRateHigh
+  expr: |
+    sum(rate(gocell_auth_pdp_decision_total{decision="deny"}[5m])) by (action) > 1
+  for: 10m
+  labels:
+    severity: warning
+  annotations:
+    summary: "PDP authorization deny rate high (action={{ $labels.action }})"
+    description: |
+      PDP deny rate for action {{ $labels.action }} exceeds 1/sec for 10m.
+      Likely causes: tenant policy misconfiguration, unauthorized scan, or a baseline
+      gate regression. Inspect the authorizationdecide Info logs "authorization decision"
+      (matched_rule_id distinguishes default-deny vs an explicit forbid rule) and the
+      tenant's ABAC policy set. Compare with the decision="error" rate to rule out an
+      infra failure masquerading as deny.
+```
+
+### GoCellAuthPDPStoreError
+
+`decision="error"` 表示 PDP `Authorize` 返错（policy store 不可达 / 缺租户）→ fail-closed。
+与 policy `deny`（403）区分，便于把 infra 故障从授权失败里拆出来。
+
+```yaml
+- alert: GoCellAuthPDPStoreError
+  expr: sum(rate(gocell_auth_pdp_decision_total{decision="error"}[5m])) > 0
+  for: 5m
+  labels:
+    severity: critical
+  annotations:
+    summary: "PDP authorization errors (fail-closed)"
+    description: |
+      The PDP returned errors (policy store unavailable / tenant scope missing) — every
+      such request is denied fail-closed (503/500). Check policy-store (PG) readiness and
+      the tenant-scope plumbing; cross-reference gocell_auth_pdp_decision_duration_seconds.
+```
+
+### 调试 PromQL
+
+```promql
+# PDP 决策分布（按 action / decision）
+sum(rate(gocell_auth_pdp_decision_total[5m])) by (action, decision)
+
+# PDP 决策 p95 延迟（policy-store load + evaluate）
+histogram_quantile(0.95, sum(rate(gocell_auth_pdp_decision_duration_seconds_bucket[5m])) by (le, decision))
+```
+
+---
+
 ## Event Router / Outbox Consumer 可观测性（D3a-1 新增）
 
 以下规则覆盖 D3a-1 PR #589 引入的 6 个新 metric family。
