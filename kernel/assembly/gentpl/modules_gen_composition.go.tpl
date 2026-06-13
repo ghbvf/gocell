@@ -9,6 +9,7 @@ import (
 {{- if .Capabilities}}
 	"github.com/ghbvf/gocell/runtime/capability"
 {{- end}}
+	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
 )
 
@@ -55,5 +56,34 @@ func generatedProjectionSourceTopics() []string {
 	}
 {{- else}}
 	return nil
+{{- end}}
+}
+
+// generatedDeploymentTopology returns the assembly's codegen-derived deployment
+// placement spec (single-sourced from assembly.yaml topology, derived by
+// `gocell generate assembly`). Empty topology => all cells co-located (zero-
+// migration default). Composition root injects it via
+// bootstrap.WithDeploymentTopology; phase0 seals and validates it. ALWAYS
+// emitted so the composition root can call it unconditionally.
+func generatedDeploymentTopology() bootstrap.DeploymentTopologySpec {
+{{- if or .DeploymentTopology.Colocated .DeploymentTopology.Remote}}
+	return bootstrap.DeploymentTopologySpec{
+{{- if .DeploymentTopology.Colocated}}
+		Colocated: []string{
+{{- range .DeploymentTopology.Colocated}}
+			{{printf "%q" .}},
+{{- end}}
+		},
+{{- end}}
+{{- if .DeploymentTopology.Remote}}
+		Remote: []bootstrap.RemoteCellEndpoint{
+{{- range .DeploymentTopology.Remote}}
+			{CellID: {{printf "%q" .CellID}}, Endpoint: {{printf "%q" .Endpoint}}},
+{{- end}}
+		},
+{{- end}}
+	}
+{{- else}}
+	return bootstrap.DeploymentTopologySpec{}
 {{- end}}
 }

@@ -8,6 +8,7 @@ import (
 	cellmodulesconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"
 	cellmodulessyscore "github.com/ghbvf/gocell/cellmodules/syscore"
 	"github.com/ghbvf/gocell/runtime/capability"
+	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
 )
 
@@ -45,4 +46,14 @@ func generatedCapabilities() []capability.Kind {
 // decorator wiring can call it unconditionally.
 func generatedProjectionSourceTopics() []string {
 	return nil
+}
+
+// generatedDeploymentTopology returns the assembly's codegen-derived deployment
+// placement spec (single-sourced from assembly.yaml topology, derived by
+// `gocell generate assembly`). Empty topology => all cells co-located (zero-
+// migration default). Composition root injects it via
+// bootstrap.WithDeploymentTopology; phase0 seals and validates it. ALWAYS
+// emitted so the composition root can call it unconditionally.
+func generatedDeploymentTopology() bootstrap.DeploymentTopologySpec {
+	return bootstrap.DeploymentTopologySpec{}
 }

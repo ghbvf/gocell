@@ -129,6 +129,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 	compShared, err := composition.NewSharedDeps(composition.SharedDeps{
 		Clock:                clk,
 		Topology:             topo,
+		DeploymentTopology:   generatedDeploymentTopology(),
 		JWTIssuer:            jwt.issuer,
 		JWTVerifier:          jwt.verifier,
 		MetricsProvider:      metricsDeps.PromStack.metricProvider,
