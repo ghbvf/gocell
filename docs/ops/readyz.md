@@ -416,10 +416,17 @@ the `gocell_audit_admin` role exists in the database:
   `postgres_app_role_restricted_ready` (schema drift). Remediation: re-run migration 064
   against the live database.
 
-The `gocell_audit_admin` admin read pool itself contributes **no `/readyz` probe**. This
-is deliberate: the pool is a close-only resource consumed only on super-admin cross-tenant
-audit requests. A pool connectivity failure surfaces as a 5xx on those requests rather
-than a readiness gate — tracking as a hardening follow-up.
+When provisioned (`GOCELL_AUDIT_ADMIN_DSN` set), the `gocell_audit_admin` admin read pool
+contributes one `/readyz` probe: **`postgres_audit_admin_restricted_ready`**. It reuses the
+serving pool's restricted-role check (`Pool.AppRoleRestrictedCheck`) to assert the admin
+pool's `current_user` is neither a superuser nor `BYPASSRLS` — the role must read
+cross-tenant via the role-scoped permissive RLS policy (migration 064), never via
+`BYPASSRLS` (ADR #1676). The probe doubles as the admin pool's liveness signal (it issues
+a `pg_roles` query), so a pool connectivity failure or a mis-provisioned (superuser /
+BYPASSRLS) admin role turns `/readyz` red rather than only surfacing as a 5xx on a
+super-admin cross-tenant request. The probe name is distinct from the serving pool's
+`postgres_app_role_restricted_ready` (no collision). When the admin pool is not
+provisioned, no probe is registered (the capability is absent; super-admin reads stay 501).
 
 These probes are **not synonymous** with `postgres_ready`. A green `postgres_ready`
 and a failing `accesscore_repo_ready` means the PG connection is alive but the

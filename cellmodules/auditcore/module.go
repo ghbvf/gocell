@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/ghbvf/gocell/adapters/adapterutil"
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	auditcell "github.com/ghbvf/gocell/corecells/auditcore"
@@ -31,22 +32,31 @@ import (
 	"github.com/ghbvf/gocell/runtime/composition"
 )
 
-// poolCloseResource is a close-only kernellifecycle.ManagedResource wrapping the
-// admin cross-tenant pool. It contributes NO readiness probe (the admin pool
-// reuses adapterpg.Pool, whose Probes() emit the fixed "postgres_ready" name —
-// registering it as a full resource would collide with the serving pool's probe
-// of the same name). The admin pool's reachability is validated fail-fast at
-// construction (NewPool pings); a runtime failure surfaces as a 5xx on the rare
-// super-admin cross-tenant request rather than on /readyz. This wrapper exists
-// solely so the pool is Closed in LIFO order on graceful shutdown instead of
-// being abandoned to GC.
-type poolCloseResource struct {
+// auditAdminPoolResource is the kernellifecycle.ManagedResource wrapping the
+// OPTIONAL cross-tenant audit admin pool (#1810). It is Closed in LIFO order on
+// graceful shutdown AND contributes ONE readiness probe:
+// ProbeAuditAdminRestrictedReady (reusing Pool.AppRoleRestrictedCheck). That
+// probe asserts the admin pool's current_user is NOBYPASSRLS / non-superuser
+// (the gocell_audit_admin role reads cross-tenant via a role-scoped permissive
+// RLS policy, NOT BYPASSRLS — ADR #1676) and surfaces the optional pool's
+// liveness on /readyz. A distinct probe name (vs the serving pool's
+// postgres_app_role_restricted_ready) avoids a probe-name collision while still
+// making admin-pool failure observable.
+type auditAdminPoolResource struct {
 	pool *adapterpg.Pool
 }
 
-func (poolCloseResource) Probes() []healthz.Probe { return nil }
-func (poolCloseResource) Worker() worker.Worker   { return nil }
-func (r poolCloseResource) Close(ctx context.Context) error {
+func (r auditAdminPoolResource) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		adapterutil.HealthToProbe(
+			adapterpg.ProbeAuditAdminRestrictedReady,
+			r.pool.AppRoleRestrictedCheck,
+			adapterutil.DefaultProbeTimeout,
+		),
+	}
+}
+func (auditAdminPoolResource) Worker() worker.Worker { return nil }
+func (r auditAdminPoolResource) Close(ctx context.Context) error {
 	return r.pool.Close(ctx)
 }
 
@@ -203,7 +213,7 @@ func buildCrossTenantStore(
 		_ = adminPool.Close(ctx)
 		return nil, nil, fmt.Errorf("auditcore: NewAuditCrossTenantStore: %w", err)
 	}
-	return store, poolCloseResource{pool: adminPool}, nil
+	return store, auditAdminPoolResource{pool: adminPool}, nil
 }
 
 // buildAuditProtocols builds the cursor codec and both ledger protocols

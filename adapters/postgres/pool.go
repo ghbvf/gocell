@@ -36,6 +36,16 @@ const (
 	// runtime (#1676 [F-B11]). Registered only when Config.RequireRestrictedRole is
 	// set — a serving pool; admin/utility pools (e.g. tools/pg-migrate) leave it off.
 	ProbeAppRoleRestrictedReady healthz.ProbeName = "postgres_app_role_restricted_ready"
+	// ProbeAuditAdminRestrictedReady probes that the OPTIONAL cross-tenant audit
+	// admin pool's current_user is neither a superuser nor BYPASSRLS (#1810). The
+	// gocell_audit_admin role reads every tenant via a role-scoped permissive RLS
+	// SELECT policy (migration 064), NOT via BYPASSRLS — so it must stay NOBYPASSRLS
+	// and minimally privileged. This distinctly-named probe (vs the serving pool's
+	// postgres_app_role_restricted_ready) asserts that at runtime AND makes the
+	// optional admin pool's liveness visible on /readyz; it reuses
+	// Pool.AppRoleRestrictedCheck. Registered by the auditcore module's admin-pool
+	// ManagedResource only when GOCELL_AUDIT_ADMIN_DSN is provisioned.
+	ProbeAuditAdminRestrictedReady healthz.ProbeName = "postgres_audit_admin_restricted_ready"
 )
 
 // Default pool configuration values.
