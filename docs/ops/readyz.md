@@ -411,10 +411,32 @@ the `gocell_audit_admin` role exists in the database:
   `tenant_isolation` policy from migration 055). No `/readyz` impact.
 - **Role present, policy installed**: `schema_guard.VerifyExpectedShape` expects 2 RLS
   policies on `audit_entries` (`tenant_isolation` + `audit_admin_read_all`). If the role
-  was provisioned after migration 064 ran (or migration 064 was not re-applied), the
-  expected policy count mismatches and `/readyz` returns **503** via
-  `postgres_app_role_restricted_ready` (schema drift). Remediation: re-run migration 064
-  against the live database.
+  was provisioned after migration 064 ran (i.e. the role did not exist when goose applied
+  migration 064, so the policy body was skipped), the expected policy count mismatches and
+  `/readyz` returns **503** via `postgres_app_role_restricted_ready` (schema drift).
+  Remediation: apply the policy and grant directly — goose will not re-run an
+  already-recorded migration version, so run the following SQL as the database owner
+  (`gocell` role):
+
+  ```sql
+  -- Idempotent repair: (re)create the policy and grant if missing.
+  -- Run as the database owner (gocell) against the target database.
+  DO $$
+  BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gocell_audit_admin') THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE tablename = 'audit_entries' AND policyname = 'audit_admin_read_all'
+      ) THEN
+        EXECUTE 'CREATE POLICY audit_admin_read_all ON audit_entries
+                 FOR SELECT TO gocell_audit_admin USING (true)';
+        EXECUTE 'GRANT SELECT ON audit_entries TO gocell_audit_admin';
+      END IF;
+    END IF;
+  END $$;
+  ```
+
+  After executing this SQL, restart corebundle; `/readyz` turns green on the next cycle.
 
 When provisioned (`GOCELL_AUDIT_ADMIN_DSN` set), the `gocell_audit_admin` admin read pool
 contributes one `/readyz` probe: **`postgres_audit_admin_restricted_ready`**. It reuses the

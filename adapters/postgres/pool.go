@@ -268,6 +268,63 @@ func appRoleRestrictedResult(rolsuper, rolbypassrls bool) error {
 	return nil
 }
 
+// auditAdminRoleResult is the pure (DB-free) verdict combining role-attribute
+// and SELECT-capability checks for the audit admin pool. It is split out so
+// the combined decision is table-testable without a real database.
+//
+// The audit admin role must be: (1) non-superuser and non-BYPASSRLS (it reads
+// via its role-scoped permissive RLS policy, NOT via privilege bypass — ADR
+// #1676), AND (2) capable of SELECT on audit_entries (a missing GRANT renders
+// the admin pool useless and must be caught at composition time — #1810 F3/F4).
+func auditAdminRoleResult(rolsuper, rolbypassrls, canSelect bool) error {
+	if err := appRoleRestrictedResult(rolsuper, rolbypassrls); err != nil {
+		return err
+	}
+	if !canSelect {
+		return errcode.New(errcode.KindInternal, ErrAdapterPGAuditAdminSelectCheck,
+			"postgres: audit admin role lacks SELECT privilege on audit_entries; "+
+				"grant SELECT on audit_entries to gocell_audit_admin (migration 064 must "+
+				"have run and the GRANT applied before the admin pool is provisioned)")
+	}
+	return nil
+}
+
+// AuditAdminReadyCheck is a combined readiness check for the optional
+// cross-tenant audit admin pool (#1810). It asserts both:
+//
+//  1. The pool's current_user is neither a superuser nor BYPASSRLS (role-attribute
+//     check, reusing appRoleRestrictedResult). The gocell_audit_admin role reads
+//     cross-tenant via a role-scoped permissive RLS SELECT policy (migration 064),
+//     NOT via BYPASSRLS, so it must stay NOSUPERUSER NOBYPASSRLS (ADR #1676).
+//
+//  2. The pool's current_user has SELECT privilege on audit_entries
+//     (SELECT has_table_privilege(current_user, 'audit_entries', 'SELECT')).
+//     A missing GRANT means the admin pool passes the role-attribute probe but
+//     fails every cross-tenant query at runtime — readyz must catch this.
+//
+// This single method is reused at both composition-time fail-fast
+// (buildCrossTenantStore calls it once on startup) and in the
+// ProbeAuditAdminRestrictedReady /readyz probe (auditAdminPoolResource.Probes).
+func (p *Pool) AuditAdminReadyCheck(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, defaultHealthTimeout)
+	defer cancel()
+
+	var rolsuper, rolbypassrls, canSelect bool
+	row := p.inner.QueryRow(ctx, `
+		SELECT
+			r.rolsuper,
+			r.rolbypassrls,
+			has_table_privilege(current_user, 'audit_entries', 'SELECT')
+		FROM pg_roles r
+		WHERE r.rolname = current_user
+	`)
+	if err := row.Scan(&rolsuper, &rolbypassrls, &canSelect); err != nil {
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGAuditAdminSelectCheck,
+			"postgres: audit admin role readiness probe failed", err)
+	}
+	return auditAdminRoleResult(rolsuper, rolbypassrls, canSelect)
+}
+
 // Close gracefully shuts down the connection pool, bounded by ctx.
 //
 // pgxpool.Pool.Close() performs a synchronous drain with no context parameter.

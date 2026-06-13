@@ -1486,9 +1486,23 @@ probe 没有形如 `gocell_..._total` 的专属告警序列；它复用既有的
         3. Restart corebundle; the probe turns green within the first readyz cycle.
       Sub-scenario — audit_admin_read_all policy missing while gocell_audit_admin role
       is present: schema_guard.VerifyExpectedShape fails (503) because migration 064's
-      RLS policy is absent despite the role existing. Remediation: re-run migration 064
-      (schema drift; the role was provisioned after the migration ran or the migration
-      was not applied to this database instance).
+      RLS policy is absent despite the role existing (the role was provisioned after
+      goose applied migration 064). Remediation: goose will NOT re-run an already-recorded
+      migration. Run the following SQL as the database owner (gocell role) instead:
+        DO $$
+        BEGIN
+          IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gocell_audit_admin') THEN
+            IF NOT EXISTS (
+              SELECT 1 FROM pg_policies
+              WHERE tablename = 'audit_entries' AND policyname = 'audit_admin_read_all'
+            ) THEN
+              EXECUTE 'CREATE POLICY audit_admin_read_all ON audit_entries
+                       FOR SELECT TO gocell_audit_admin USING (true)';
+              EXECUTE 'GRANT SELECT ON audit_entries TO gocell_audit_admin';
+            END IF;
+          END IF;
+        END $$;
+      Then restart corebundle; the probe turns green on the next readyz cycle.
       See: docs/architecture/202606071200-1676-adr-restricted-app-serving-pool.md
            docs/ops/local-docker-deploy.md §Dual-role PostgreSQL
 ```

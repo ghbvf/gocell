@@ -898,3 +898,64 @@ func TestQuery_ZeroTime_SkipsFromToFormat(t *testing.T) {
 		}
 	}
 }
+
+// --- F2: QueryCrossTenant PEP obligation validation (Codex review #2051) ---
+
+// TestService_QueryCrossTenant_ZeroValue_FailsClosed locks F2 (Codex review):
+// a zero-value tenant.CrossTenantVisibility{} carries an invalid/zero RowVisibility;
+// QueryCrossTenant must fail-closed (KindInternal) rather than forwarding an invalid
+// obligation to the cross-tenant store. The typed funnel is Hard (forget/forge = compile
+// error), but the zero value is constructable — this PEP guard closes the residual gap.
+//
+// Without the fix this test would panic (nil-pointer) or return empty results from the
+// store rather than an error.
+func TestService_QueryCrossTenant_ZeroValue_FailsClosed(t *testing.T) {
+	store := newTestStore(t)
+	fake := &fakeCtStore{} // would return entries if reached
+
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(),
+		query.RunModeProd, WithCrossTenantStore(fake))
+	require.NoError(t, err)
+
+	// Zero-value CrossTenantVisibility: no NewCrossTenantVisibility() call.
+	var zeroCTV tenant.CrossTenantVisibility
+
+	_, err = svc.QueryCrossTenant(context.Background(), zeroCTV, ledger.AuditFilters{}, query.PageParams{})
+	require.Error(t, err, "zero CrossTenantVisibility must fail-closed")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.KindInternal, ecErr.Kind,
+		"zero CrossTenantVisibility must yield KindInternal (PEP fail-closed), got kind=%v", ecErr.Kind)
+}
+
+// --- F5: WithCrossTenantStore typed-nil bypass (Codex review #2051) ---
+
+// TestWithCrossTenantStore_TypedNil_KeepsStoreNil locks F5 (Codex review):
+// a typed-nil (*MemCrossTenantStore)(nil) is != nil at the interface level, so a plain
+// `s == nil` check would store it and bypass the 501 fail-closed path (the subsequent
+// nil-pointer call to QueryCrossTenant would panic). WithCrossTenantStore must use
+// validation.IsNilInterface to detect typed-nil values.
+//
+// Without the fix, QueryCrossTenant would panic (nil method call on typed-nil interface)
+// instead of returning RowScopeAllUnsupportedError (501).
+func TestWithCrossTenantStore_TypedNil_KeepsStoreNil(t *testing.T) {
+	store := newTestStore(t)
+
+	// Inject a typed-nil: interface value is non-nil (has a concrete type), but
+	// the underlying pointer is nil — triggers nil-panic without IsNilInterface.
+	var typedNilStore *ledger.MemCrossTenantStore
+
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(),
+		query.RunModeProd, WithCrossTenantStore(typedNilStore))
+	require.NoError(t, err, "NewService must succeed even with typed-nil CrossTenantStore")
+
+	// The typed-nil must NOT have been stored: QueryCrossTenant must return 501
+	// (RowScopeAllUnsupportedError), not panic.
+	ctv := tenant.NewCrossTenantVisibility()
+	_, err = svc.QueryCrossTenant(context.Background(), ctv, ledger.AuditFilters{}, query.PageParams{})
+	require.Error(t, err, "QueryCrossTenant must fail-closed when typed-nil store was injected")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.KindNotImplemented, ecErr.Kind,
+		"typed-nil store must yield RowScopeAllUnsupportedError (501), not a nil-pointer panic")
+}

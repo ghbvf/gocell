@@ -35,13 +35,14 @@ import (
 // auditAdminPoolResource is the kernellifecycle.ManagedResource wrapping the
 // OPTIONAL cross-tenant audit admin pool (#1810). It is Closed in LIFO order on
 // graceful shutdown AND contributes ONE readiness probe:
-// ProbeAuditAdminRestrictedReady (reusing Pool.AppRoleRestrictedCheck). That
-// probe asserts the admin pool's current_user is NOBYPASSRLS / non-superuser
+// ProbeAuditAdminRestrictedReady (backed by Pool.AuditAdminReadyCheck). That
+// probe asserts (1) the admin pool's current_user is NOBYPASSRLS / non-superuser
 // (the gocell_audit_admin role reads cross-tenant via a role-scoped permissive
-// RLS policy, NOT BYPASSRLS — ADR #1676) and surfaces the optional pool's
-// liveness on /readyz. A distinct probe name (vs the serving pool's
-// postgres_app_role_restricted_ready) avoids a probe-name collision while still
-// making admin-pool failure observable.
+// RLS policy, NOT BYPASSRLS — ADR #1676) AND (2) the role has SELECT privilege
+// on audit_entries (a missing GRANT would yield a pool that passes the role probe
+// but fails every cross-tenant query at runtime — #1810 F4). A distinct probe
+// name (vs the serving pool's postgres_app_role_restricted_ready) avoids a
+// probe-name collision while still making admin-pool failure observable.
 type auditAdminPoolResource struct {
 	pool *adapterpg.Pool
 }
@@ -50,7 +51,7 @@ func (r auditAdminPoolResource) Probes() []healthz.Probe {
 	return []healthz.Probe{
 		adapterutil.HealthToProbe(
 			adapterpg.ProbeAuditAdminRestrictedReady,
-			r.pool.AppRoleRestrictedCheck,
+			r.pool.AuditAdminReadyCheck,
 			adapterutil.DefaultProbeTimeout,
 		),
 	}
@@ -200,13 +201,29 @@ func buildCrossTenantStore(
 		return nil, nil, fmt.Errorf("auditcore: GOCELL_AUDIT_ADMIN_DSN is set but postgres capability is nil " +
 			"(composition root must provision the postgres capability on SharedDeps)")
 	}
-	// Build a dedicated admin pool. RequireRestrictedRole is false: gocell_audit_admin
-	// is a non-owner, non-BYPASSRLS role with a permissive RLS policy, so the
-	// restriction probe does not apply here (it guards the serving role, not admin).
+	// Build a dedicated admin pool. RequireRestrictedRole is false: the
+	// gocell_audit_admin role is non-owner and non-BYPASSRLS — it reads cross-tenant
+	// via a role-scoped permissive RLS SELECT policy (migration 064), NOT via
+	// BYPASSRLS. The serving pool's ProbeAppRoleRestrictedReady probe only covers the
+	// FORCE RLS enforcement check for the serving pool; the admin pool uses its own
+	// AuditAdminReadyCheck (which covers both role-attributes AND SELECT on
+	// audit_entries) registered via ProbeAuditAdminRestrictedReady (#1810 F3/F4).
 	adminPool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: adminDSN})
 	if err != nil {
 		// DSN set but pool construction/ping failed → FAIL-FAST (no silent fallback).
 		return nil, nil, fmt.Errorf("auditcore: admin cross-tenant pool: %w", err)
+	}
+	// Composition-time preflight (#1810 F3): assert the admin pool's role is
+	// correctly provisioned — non-superuser, NOBYPASSRLS, and has SELECT on
+	// audit_entries. A misconfigured role or missing GRANT must abort composition
+	// (fail-fast), not surface at first request. Close the pool on failure to
+	// avoid a leaked connection.
+	if prefErr := adminPool.AuditAdminReadyCheck(ctx); prefErr != nil {
+		_ = adminPool.Close(ctx)
+		return nil, nil, fmt.Errorf("auditcore: admin pool role preflight failed "+
+			"(GOCELL_AUDIT_ADMIN_DSN is set but the role is misconfigured — "+
+			"ensure gocell_audit_admin is NOSUPERUSER NOBYPASSRLS with SELECT on audit_entries): %w",
+			prefErr)
 	}
 	store, err := adapterpg.NewAuditCrossTenantStore(adminPool.DB())
 	if err != nil {

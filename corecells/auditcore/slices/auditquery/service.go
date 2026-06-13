@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
@@ -47,13 +48,18 @@ type Service struct {
 type ServiceOption func(*Service)
 
 // WithCrossTenantStore injects the optional CrossTenantQueryStore. When not
-// supplied (or when a nil interface is passed), QueryCrossTenant returns
-// RowScopeAllUnsupportedError (HTTP 501) — graceful fail-closed, never
+// supplied (or when a nil or typed-nil interface is passed), QueryCrossTenant
+// returns RowScopeAllUnsupportedError (HTTP 501) — graceful fail-closed, never
 // fail-open. Do NOT carry gocell:"required" here: the admin read pool
 // creds are an optional operational capability.
+//
+// Uses validation.IsNilInterface (F5, Codex review): a plain `s == nil` check
+// misses typed-nil values (e.g. (*MemCrossTenantStore)(nil)), which would be
+// stored and then nil-panic on the first QueryCrossTenant call, bypassing the
+// 501 fail-closed contract.
 func WithCrossTenantStore(s ledger.CrossTenantQueryStore) ServiceOption {
 	return func(svc *Service) {
-		if s == nil {
+		if validation.IsNilInterface(s) {
 			return
 		}
 		svc.crossTenantStore = s
@@ -199,11 +205,30 @@ func (s *Service) Query(
 // ctv carries the sealed CrossTenantVisibility obligation; it is the sole
 // permitted mint of RowScopeAll and proves the mandatory FR-007 audit has
 // already been emitted by (*auth.Principal).CrossTenantVisibility.
+// errMsgInvalidCrossTenantObligation is the const-literal PEP fail-close message
+// (MESSAGE-CONST-LITERAL-01): a zero-value or non-All CrossTenantVisibility must
+// never reach the store (F2, Codex review). The typed funnel guarantees a
+// CrossTenantVisibility is passed (forget = compile error), but the zero value is
+// constructable, so the PEP validates the obligation at runtime.
+const errMsgInvalidCrossTenantObligation = "cross-tenant audit read: invalid or zero CrossTenantVisibility obligation"
+
 func (s *Service) QueryCrossTenant(
 	ctx context.Context, ctv tenant.CrossTenantVisibility, filters ledger.AuditFilters, pageReq query.PageParams,
 ) (query.PageResult[*ledger.Entry], error) {
 	if s.crossTenantStore == nil {
 		return query.PageResult[*ledger.Entry]{}, ledger.RowScopeAllUnsupportedError()
+	}
+	// PEP: validate the obligation before reading. A zero CrossTenantVisibility
+	// (constructable as tenant.CrossTenantVisibility{}) carries an invalid
+	// RowVisibility (scope=0); passing it to the store would silently bypass the
+	// RowScopeAll check. The typed funnel is Hard (forget/forge = compile error),
+	// but the zero value is constructable — this runtime guard closes the residual
+	// gap (Medium PEP-validated value, F2). We also check Scope() == RowScopeAll:
+	// the only valid source is NewCrossTenantVisibility(), so any other scope is
+	// an invariant break.
+	if err := ctv.Visibility().Validate(); err != nil || ctv.Visibility().Scope() != tenant.RowScopeAll {
+		return query.PageResult[*ledger.Entry]{}, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			errMsgInvalidCrossTenantObligation)
 	}
 	// Cursor-scope fingerprint for cross-tenant reads: same filter axes as Query
 	// (eventType/actorId/subjectId/traceId) but WITHOUT tenantId (the read spans

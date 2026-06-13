@@ -42,6 +42,82 @@ func TestAppRoleRestrictedResult(t *testing.T) {
 	}
 }
 
+// TestAuditAdminRoleResult covers the pure (DB-free) combined verdict for the
+// audit admin pool: the role must be neither superuser nor BYPASSRLS (reuses
+// appRoleRestrictedResult) AND must have SELECT privilege on audit_entries
+// (#1810 F3/F4).
+func TestAuditAdminRoleResult(t *testing.T) {
+	tests := []struct {
+		name      string
+		super     bool
+		bypass    bool
+		canSelect bool
+		wantErr   bool
+		wantCode  errcode.Code
+	}{
+		{
+			name:      "restricted role with SELECT ok",
+			super:     false,
+			bypass:    false,
+			canSelect: true,
+			wantErr:   false,
+		},
+		{
+			name:      "superuser rejected (role-attribute check)",
+			super:     true,
+			bypass:    false,
+			canSelect: true,
+			wantErr:   true,
+			wantCode:  ErrAdapterPGRoleBypassRLS,
+		},
+		{
+			name:      "bypassrls rejected (role-attribute check)",
+			super:     false,
+			bypass:    true,
+			canSelect: true,
+			wantErr:   true,
+			wantCode:  ErrAdapterPGRoleBypassRLS,
+		},
+		{
+			name:      "superuser+bypassrls rejected (role-attribute check)",
+			super:     true,
+			bypass:    true,
+			canSelect: true,
+			wantErr:   true,
+			wantCode:  ErrAdapterPGRoleBypassRLS,
+		},
+		{
+			name:      "restricted role without SELECT rejected",
+			super:     false,
+			bypass:    false,
+			canSelect: false,
+			wantErr:   true,
+			wantCode:  ErrAdapterPGAuditAdminSelectCheck,
+		},
+		{
+			name:      "superuser without SELECT: role-attribute check wins",
+			super:     true,
+			bypass:    false,
+			canSelect: false,
+			wantErr:   true,
+			wantCode:  ErrAdapterPGRoleBypassRLS,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := auditAdminRoleResult(tt.super, tt.bypass, tt.canSelect)
+			if !tt.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			var coded *errcode.Error
+			require.True(t, errors.As(err, &coded), "expected *errcode.Error, got %T: %v", err, err)
+			assert.Equal(t, tt.wantCode, coded.Code)
+		})
+	}
+}
+
 // TestPool_RestrictedRoleProbeGating verifies that the restricted-role precondition
 // probe is appended to Probes() ONLY when Config.RequireRestrictedRole is set. The
 // generic pool (flag off — e.g. tools/pg-migrate admin pool) keeps exactly the two

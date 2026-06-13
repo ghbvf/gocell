@@ -54,4 +54,13 @@ const (
 	// (#1676 [F-B11]); a serving pool that trips this must NOT be considered ready.
 	//nolint:gosec // G101 false positive: errcode sentinel naming the PG BYPASSRLS role attribute, not a credential
 	ErrAdapterPGRoleBypassRLS errcode.Code = "ERR_ADAPTER_PG_ROLE_BYPASS_RLS"
+
+	// ErrAdapterPGAuditAdminSelectCheck signals that the audit admin pool's
+	// current_user lacks SELECT privilege on audit_entries, or that the privilege
+	// check itself failed. Surfaced by Pool.AuditAdminReadyCheck (#1810 F4): the
+	// gocell_audit_admin role must be able to SELECT on audit_entries (via its
+	// role-scoped permissive RLS policy, migration 064) — a missing GRANT would
+	// cause the admin pool to pass the role-attribute probe yet fail every
+	// cross-tenant read request at runtime.
+	ErrAdapterPGAuditAdminSelectCheck errcode.Code = "ERR_ADAPTER_PG_AUDIT_ADMIN_SELECT_CHECK"
 )

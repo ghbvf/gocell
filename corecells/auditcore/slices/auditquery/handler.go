@@ -355,6 +355,42 @@ func buildAuditFilters(req *auditlist.Request) (ledger.AuditFilters, error) {
 	return filters, nil
 }
 
+// requireAuditReadForCrossTenant enforces the audit:read PDP check unconditionally
+// on the cross-tenant (super-admin) path. The route-level auditQueryPolicy exempts
+// an explicit self-read (actorId == subject) from the PDP — that exemption is sound
+// for tenant-scoped reads but UNSOUND for cross-tenant reads: a super-admin with
+// ?actorId=<self> would otherwise bypass any tenant deny policy for a cross-tenant
+// operation (F1, Codex review). This helper is the defense: regardless of the
+// actorId parameter, every cross-tenant read MUST pass audit:read at the PDP.
+//
+// Mechanism: uses AuthorizerFromContext (the sole sealed reader of the authorizer
+// funnel) and evaluatePermissionDecision (the shared Decision→error mapper), both
+// from runtime/auth/permission.go, mirroring RequirePermission's decision logic but
+// callable from a handler with a plain ctx rather than *http.Request.
+const msgCrossTenantPermDenied = "cross-tenant audit read requires audit:read permission"
+
+func requireAuditReadForCrossTenant(ctx context.Context, subject string) error {
+	p := authz.PermAuditRead()
+	authorizer, ok := auth.AuthorizerFromContext(ctx)
+	if !ok {
+		// Fail-closed: an unwired PDP must never permit a cross-tenant read.
+		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgCrossTenantPermDenied)
+	}
+	dec, err := authorizer.Authorize(ctx, subject, "", p.String())
+	if err != nil {
+		return err
+	}
+	if !dec.IsAllow() {
+		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgCrossTenantPermDenied)
+	}
+	// Obligations on the cross-tenant path are not dischargeable at this gate;
+	// fail-closed if the PDP attaches any (mirrors RequirePermission's F5 rule).
+	if obl := dec.Obligations(); !obl.IsZero() {
+		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgCrossTenantPermDenied)
+	}
+	return nil
+}
+
 // executeQuery dispatches the paged audit query to the correct service method:
 // cross-tenant (super-admin + admin pool) or tenant-scoped (all others).
 // Extracted from List to keep cognitive complexity ≤ 15.
@@ -363,6 +399,13 @@ func (a ListAdapter) executeQuery(
 	vis tenant.RowVisibility, filters ledger.AuditFilters, pageReq query.PageParams,
 ) (query.PageResult[*ledger.Entry], error) {
 	if vr.isCrossTenant {
+		// F1: the cross-tenant path ALWAYS requires audit:read from the PDP,
+		// regardless of actorId==subject (the route-level self-read exemption is
+		// unsound here — a super-admin self-read is still cross-tenant). This check
+		// is independent of and additive to the route-level auditQueryPolicy gate.
+		if err := requireAuditReadForCrossTenant(ctx, p.Subject); err != nil {
+			return query.PageResult[*ledger.Entry]{}, err
+		}
 		return a.S.QueryCrossTenant(ctx, vr.ctv, filters, pageReq)
 	}
 	// Tenant axis (#1618): typed tenant scope re-parsed from the authenticated

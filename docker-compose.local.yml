@@ -114,6 +114,9 @@ services:
       GOCELL_READYZ_VERBOSE_TOKEN: ${READYZ_VERBOSE_TOKEN:?}
       GOCELL_BOOTSTRAP_ADMIN_USERNAME: ${OPS_USER:?}
       GOCELL_BOOTSTRAP_ADMIN_PASSWORD: ${OPS_PASS:?}
+      # Optional: super-admin cross-tenant audit read pool (#1810).
+      # Set GOCELL_AUDIT_ADMIN_DSN in .env.local to enable; absent → 501.
+      GOCELL_AUDIT_ADMIN_DSN: ${GOCELL_AUDIT_ADMIN_DSN:-}
     depends_on:
       migrate:
         condition: service_completed_successfully

@@ -47,10 +47,18 @@
 //     producer is the sealed NewCrossTenantVisibility; struct-literal forgery of
 //     either RowVisibility{scope:All} or CrossTenantVisibility{} is a compile error
 //     (unexported fields).
-//   - Downstream: HARD. The #1810 cross-tenant audit read takes a
-//     tenant.CrossTenantVisibility positional parameter (not a bare RowVisibility),
-//     so the read is uncallable without routing through the sealed minter — forget
-//     = compile error, forge = compile error.
+//   - Downstream: Hard typed-param + PEP-validated value. The #1810 cross-tenant
+//     audit read takes a tenant.CrossTenantVisibility positional parameter (not a
+//     bare RowVisibility), so the read is uncallable without routing through the
+//     sealed minter — forget = compile error, forge = compile error (Hard). However,
+//     the zero value (tenant.CrossTenantVisibility{}) is constructable as a Go
+//     struct literal (unexported field — only within pkg/tenant, but the zero value
+//     is expressible without a literal in any package). Service.QueryCrossTenant
+//     closes this gap with a runtime PEP check: it validates ctv.Visibility() is
+//     a well-formed RowScopeAll obligation and fails-closed (KindInternal) on any
+//     invalid/zero value (Medium runtime guard, F2 Codex review). The combined
+//     guarantee is "Hard typed-param + PEP-validated value", not "any passed value
+//     is unconditionally valid" — the downstream seal has a Medium residual.
 //   - Minter caller-restriction: MEDIUM, a GO-LANGUAGE CEILING (not a deferred
 //     TODO). "Only (*Principal).CrossTenantVisibility may call
 //     NewCrossTenantVisibility" is not compile-time expressible: pkg/tenant cannot
