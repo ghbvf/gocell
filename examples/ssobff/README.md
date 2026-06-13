@@ -329,10 +329,39 @@ tracked in the backlog. The current PR provides the middleware primitives.
 | `GOCELL_SSOBFF_INTERNAL_ADDR` | `127.0.0.1:9081` | Internal listener bind (control-plane / service-token). Loopback default keeps it off the public network until the operator opts in. |
 | `GOCELL_SSOBFF_HEALTH_ADDR` | `127.0.0.1:9091` | Health listener bind (`/healthz`, `/readyz`, `/metrics`). Loopback default. |
 | `GOCELL_READYZ_VERBOSE_TOKEN` | (unset) | When set, `/readyz?verbose=true` requires a matching `X-Readyz-Token` header. Unset leaves the verbose body disabled (recommended for demos). |
+| `GOCELL_ADAPTER_MODE` | (unset = dev) | Topology adapter mode. `real` opts into the production posture. Combined with `GOCELL_CELL_ADAPTER_MODE=postgres` (and without `GOCELL_SINGLE_POD=1`) it marks a **multi-pod** deployment, which requires distributed event transport + replay backends (see below). |
+| `GOCELL_CELL_ADAPTER_MODE` | (unset = memory) | Storage backend topology. `postgres` requires `GOCELL_ADAPTER_MODE=real`. |
+| `GOCELL_SINGLE_POD` | (unset) | `1`/`true` acknowledges a single-pod real deployment, permitting in-memory replay backends even in `real` mode. |
+| `GOCELL_AMQP_URL` | (unset) | RabbitMQ broker URL for the outbox event transport. **Required** in multi-pod (real + postgres) topology — missing it is a fail-closed startup error. Ignored in demo topology (in-process bus). |
+| `GOCELL_REDIS_ADDR` / `GOCELL_REDIS_CLUSTER_ADDRS` | (unset) | Redis address(es) for the distributed idempotency claimer + service-token nonce store. **Required** (exactly one) in multi-pod topology — missing it is a fail-closed startup error. `GOCELL_REDIS_PASSWORD` / `GOCELL_REDIS_DB` tune the connection. |
 
 The smoke test (`make test-examples-smoke`) injects high ports
 (`28081/29081/29091`) via these variables to avoid colliding with
 developer dev servers.
+
+### Multi-pod deployment (real topology)
+
+The demo path (no `GOCELL_ADAPTER_MODE`) runs single-pod with in-process event
+bus + in-memory idempotency claimer + in-memory nonce store — no broker or Redis
+required. To run ssobff across **multiple replicas**, declare the real/postgres
+topology so the in-memory single-pod primitives are replaced by distributed
+backends (mirrors `cmd/corebundle`; resolved via `cellmodules/eventtransport`
++ `cellmodules/replaydeps`):
+
+```bash
+export GOCELL_ADAPTER_MODE=real
+export GOCELL_CELL_ADAPTER_MODE=postgres
+export GOCELL_AMQP_URL="amqp://gocell:${GOCELL_EXAMPLE_RABBITMQ_PASSWORD}@localhost:5672/"
+export GOCELL_REDIS_ADDR="localhost:6379"
+export GOCELL_REDIS_PASSWORD="…"
+```
+
+The bundled `docker-compose.yml` already provisions `redis` and `rabbitmq` for
+this. Missing `GOCELL_AMQP_URL` or `GOCELL_REDIS_ADDR` in this topology is a
+**fail-closed startup error** — ssobff never silently degrades to in-memory
+backends (which would lose events / break at-most-once across replicas).
+A single-pod real deployment may set `GOCELL_SINGLE_POD=1` to keep in-memory
+backends.
 
 ## Development
 

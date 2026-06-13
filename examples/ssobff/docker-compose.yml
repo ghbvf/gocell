@@ -15,6 +15,11 @@ services:
       timeout: 3s
       retries: 5
 
+  # redis + rabbitmq back the MULTI-POD topology only (GOCELL_ADAPTER_MODE=real
+  # + GOCELL_CELL_ADAPTER_MODE=postgres): the distributed idempotency claimer +
+  # service-token nonce store (GOCELL_REDIS_ADDR) and the durable event transport
+  # (GOCELL_AMQP_URL). The default single-pod demo path uses in-process backends
+  # and needs neither — see README §"Multi-pod deployment".
   redis:
     image: redis:7-alpine
     ports:
