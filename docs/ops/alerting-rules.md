@@ -626,21 +626,23 @@ PDP deny 速率短时偏高：可能是租户 policy 误配、客户端越权扫
   annotations:
     summary: "PDP authorization deny rate high (action={{ $labels.action }})"
     description: |
-      PDP deny rate for action {{ $labels.action }} exceeds 1/sec for 10m.
+      PDP deny rate for action {{ $labels.action }} exceeds 1/sec for 5m.
       Likely causes: tenant policy misconfiguration, unauthorized scan, or a baseline
-      gate regression. Inspect the authorizationdecide Info logs "authorization decision"
-      (matched_rule_id distinguishes default-deny vs an explicit forbid rule) and the
-      tenant's ABAC policy set. Compare with the decision="error" rate to rule out an
-      infra failure masquerading as deny.
+      gate regression. For per-decision rule attribution, temporarily raise the
+      authorizationdecide log level to Debug and inspect "authorization decision"
+      (matched_rule_id distinguishes default-deny vs an explicit forbid rule); the
+      always-on coarse deny signal is RequirePermission's Info "authz: permission denied
+      by PDP". Inspect the tenant's ABAC policy set. Compare with the decision="error"
+      rate (infra-only) to rule out store failure.
 ```
 
 ### GoCellAuthPDPStoreError
 
-`decision="error"` 表示 PDP `Authorize` 返错 → fail-closed，与 policy `deny` 区分，便于把 infra
-故障从授权失败里拆出来。**`error` 实含两类来源**（HTTP 状态不同，用服务端日志的 errcode kind 进一步
-区分）：(1) policy store 不可达（`KindUnavailable` → 503）—— infra 故障，需立即排查；(2) 缺租户
-scope（`KindPermissionDenied` → 403）—— 通常是客户端未带 `X-Tenant-ID` 或 JWT 缺 tenant claim。
-`for: 2m` 与其他 critical 基础设施告警（如 MQTT DLX）对齐。
+`decision="error"` = PDP `Authorize` 的**基础设施/意外错误**（policy store 不可达 `KindUnavailable`
+→ 503，或未分类异常）。**策略/鉴权上下文拒绝**（缺租户 scope / 无 principal，PDP 返
+`KindPermissionDenied` / `KindUnauthenticated` → 403/401）归类为 `decision="deny"`、**不计入
+`error`**（#2077 F2）——故本 critical 告警只 page 真实 store 故障，不会被普通客户端鉴权失败（缺
+`X-Tenant-ID` / JWT 无 tenant claim）误触。`for: 2m` 与其他 critical 基础设施告警（如 MQTT DLX）对齐。
 
 ```yaml
 - alert: GoCellAuthPDPStoreError
@@ -651,12 +653,12 @@ scope（`KindPermissionDenied` → 403）—— 通常是客户端未带 `X-Tena
   annotations:
     summary: "PDP authorization errors (fail-closed)"
     description: |
-      The PDP returned errors — every such request is denied fail-closed. Two sources,
-      distinguished by the server-side errcode kind: (1) policy store unavailable
-      (KindUnavailable → 503), an infra fault needing immediate triage; (2) tenant scope
-      missing (KindPermissionDenied → 403), usually a client missing X-Tenant-ID / a JWT
-      without a tenant claim. Check policy-store (PG) readiness and the tenant-scope
-      plumbing; cross-reference gocell_auth_pdp_decision_duration_seconds.
+      The PDP hit an infra/unexpected error (policy store unavailable, KindUnavailable
+      → 503, or an unclassified error) — each such request is denied fail-closed.
+      Policy / auth-context denials (tenant scope missing, no principal → 403/401) are
+      classified decision="deny", NOT "error", so this critical alert pages only on real
+      store outages. Check policy-store (PG) readiness; cross-reference
+      gocell_auth_pdp_decision_duration_seconds.
 ```
 
 ### 调试 PromQL

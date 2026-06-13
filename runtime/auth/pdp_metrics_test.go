@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/authz"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // ─── PDP decision spy provider ──────────────────────────────────────────────
@@ -156,6 +157,14 @@ func TestPDPMetrics_NilSafe(t *testing.T) {
 
 func TestObservableAuthorizer_RecordsDecision(t *testing.T) {
 	const action = "audit:read"
+	// F2 (#2077): `error` is infra-only. A store-unavailable (KindUnavailable → 503)
+	// error and an unexpected/unclassified plain error are `error`; a policy /
+	// auth-context denial returned as KindPermissionDenied (403) / KindUnauthenticated
+	// (401) is `deny`, NOT `error` — so the critical store-error alert never
+	// false-pages on ordinary client auth failures.
+	errStore := errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable, "store down")
+	errTenantMissing := errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, "tenant scope missing")
+	errNoPrincipal := errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "no principal")
 	tests := []struct {
 		name         string
 		inner        pdpFakeAuthorizer
@@ -163,7 +172,10 @@ func TestObservableAuthorizer_RecordsDecision(t *testing.T) {
 	}{
 		{"allow", pdpFakeAuthorizer{dec: mustAllow(t)}, "allow"},
 		{"deny", pdpFakeAuthorizer{dec: authz.Deny("nope")}, "deny"},
-		{"error", pdpFakeAuthorizer{dec: authz.Decision{}, err: errors.New("store down")}, "error"},
+		{"store-unavailable → error", pdpFakeAuthorizer{err: errStore}, "error"},
+		{"unexpected plain error → error", pdpFakeAuthorizer{err: errors.New("boom")}, "error"},
+		{"tenant-missing 403 → deny", pdpFakeAuthorizer{err: errTenantMissing}, "deny"},
+		{"no-principal 401 → deny", pdpFakeAuthorizer{err: errNoPrincipal}, "deny"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

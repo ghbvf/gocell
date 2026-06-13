@@ -59,11 +59,41 @@ func TestAppendPrimaryAuthorizerInjector_RegistersPDPMetrics(t *testing.T) {
 		"PDP decision duration histogram must register, got %v", spy.histograms())
 }
 
-// TestAppendPrimaryAuthorizerInjector_NoProvider_NoPDPMetrics pins the fail-open
-// inverse: without a metrics Provider the injector is still installed (the bare
-// Authorizer), and no PDP metrics are registered — metrics absence never blocks
-// authorization wiring.
-func TestAppendPrimaryAuthorizerInjector_NoProvider_NoPDPMetrics(t *testing.T) {
+// TestPDPAuthorizerForInjection_RealProvider_Wraps: a real metrics provider →
+// the authorizer is wrapped in observableAuthorizer and PDP metrics register.
+func TestPDPAuthorizerForInjection_RealProvider_Wraps(t *testing.T) {
+	spy := &registrationSpy{}
+	b := New(clock.Real(), WithMetricsProvider(spy))
+	fake := pdpWireFakeAuthorizer{}
+
+	got, err := b.pdpAuthorizerForInjection(fake)
+	require.NoError(t, err)
+	assert.NotEqual(t, fake, got, "a real metrics provider must wrap the authorizer in observableAuthorizer")
+	assert.True(t, slices.Contains(spy.counters(), "auth_pdp_decision_total"),
+		"real provider must register the PDP counter, got %v", spy.counters())
+	assert.True(t, slices.Contains(spy.histograms(), "auth_pdp_decision_duration_seconds"),
+		"real provider must register the PDP histogram, got %v", spy.histograms())
+}
+
+// TestPDPAuthorizerForInjection_NopProvider_NoWrap is the #2077 F3 guard:
+// b.metricsProvider defaults to a NopProvider (non-nil), so PDP wiring must gate on
+// hasRealMetricsProvider — NOT a `!= nil` check — and return the BARE authorizer
+// unwrapped (no no-op PDPMetrics, no observableAuthorizer) when no real backend is
+// wired, staying on the same metric-autowire funnel as every other collector.
+func TestPDPAuthorizerForInjection_NopProvider_NoWrap(t *testing.T) {
+	b := New(clock.Real()) // metricsProvider defaults to NopProvider{}
+	fake := pdpWireFakeAuthorizer{}
+
+	got, err := b.pdpAuthorizerForInjection(fake)
+	require.NoError(t, err)
+	assert.Equal(t, fake, got,
+		"default NopProvider must NOT wrap — the bare authorizer is injected (PR #2077 F3)")
+}
+
+// TestAppendPrimaryAuthorizerInjector_NoProvider_StillInstallsInjector: without a
+// real provider the injector middleware is still appended (the bare authorizer) —
+// metrics absence never blocks authorization wiring.
+func TestAppendPrimaryAuthorizerInjector_NoProvider_StillInstallsInjector(t *testing.T) {
 	b := New(clock.Real()) // no metrics provider
 	b.primaryAuthorizer = pdpWireFakeAuthorizer{}
 

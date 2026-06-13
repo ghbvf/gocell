@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -132,15 +133,26 @@ func (o *observableAuthorizer) Authorize(ctx context.Context, subject, resource,
 	return dec, err
 }
 
-// classifyDecision maps an Authorize outcome to the frozen pdpDecisionLabel: an
-// error (store down / tenant missing) → error; an allow → allow; else deny.
+// classifyDecision maps an Authorize outcome to the frozen pdpDecisionLabel.
+//
+// `error` is the page-worthy INFRA signal only: policy store unavailable
+// (KindUnavailable) or an unexpected/unclassified error. An error that is a
+// policy / auth-context DENIAL — tenant scope missing or no authenticated
+// principal, which the PDP returns as KindPermissionDenied / KindUnauthenticated
+// (403/401) — is classified `deny`, NOT `error` (PR #2077 F2). Folding those 403s
+// into `error` made the critical GoCellAuthPDPStoreError alert false-page on
+// ordinary client-side auth failures; keeping `error` infra-only lets that alert
+// page solely on real store outages. allow → allow; non-error non-allow → deny.
 func classifyDecision(dec authz.Decision, err error) pdpDecisionLabel {
-	switch {
-	case err != nil:
+	if err != nil {
+		var ec *errcode.Error
+		if errors.As(err, &ec) && (ec.Kind == errcode.KindPermissionDenied || ec.Kind == errcode.KindUnauthenticated) {
+			return pdpDecisionDeny
+		}
 		return pdpDecisionError
-	case dec.IsAllow():
-		return pdpDecisionAllow
-	default:
-		return pdpDecisionDeny
 	}
+	if dec.IsAllow() {
+		return pdpDecisionAllow
+	}
+	return pdpDecisionDeny
 }

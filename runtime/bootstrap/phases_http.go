@@ -414,12 +414,12 @@ func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef,
 // here rather than 503-ing on the first request. Authorizers with nothing to
 // resolve simply don't implement the interface and are skipped.
 //
-// PDP decision metrics (#2027): when a metrics Provider is configured, the
+// PDP decision metrics (#2027): when a REAL metrics Provider is configured, the
 // resolved Authorizer is wrapped in auth.observableAuthorizer (via
 // NewObservableAuthorizer) so every PDP decision is counted + timed at the gate.
 // Wrapping happens AFTER ResolveAuthorizer (the decorator only fronts request-time
-// Authorize, so it need not forward ResolveAuthorizer). Without a Provider the bare
-// Authorizer is injected — metrics are fail-open and never gate authorization.
+// Authorize, so it need not forward ResolveAuthorizer). Without a real Provider the
+// bare Authorizer is injected — metrics are fail-open and never gate authorization.
 func (b *Bootstrap) appendPrimaryAuthorizerInjector(opts []router.Option) ([]router.Option, error) {
 	if b.primaryAuthorizer == nil {
 		return opts, nil
@@ -429,15 +429,29 @@ func (b *Bootstrap) appendPrimaryAuthorizerInjector(opts []router.Option) ([]rou
 			return nil, fmt.Errorf("bootstrap: primary Authorizer failed to resolve at startup: %w", err)
 		}
 	}
-	authorizer := b.primaryAuthorizer
-	if b.metricsProvider != nil {
-		pdpMetrics, err := auth.NewPDPMetrics(b.metricsProvider)
-		if err != nil {
-			return nil, fmt.Errorf("bootstrap: register PDP decision metrics: %w", err)
-		}
-		authorizer = auth.NewObservableAuthorizer(b.clock, authorizer, pdpMetrics)
+	authorizer, err := b.pdpAuthorizerForInjection(b.primaryAuthorizer)
+	if err != nil {
+		return nil, err
 	}
 	return append(opts, router.WithDefaultMiddleware(authorizerInjector(authorizer))), nil
+}
+
+// pdpAuthorizerForInjection wraps a with PDP decision metrics ONLY when a real
+// metrics provider is configured. b.metricsProvider defaults to a NopProvider
+// (bootstrap.New), so a plain `!= nil` check would build a no-op PDPMetrics and an
+// observableAuthorizer wrapper even when no metrics backend is wired — bypassing the
+// bootstrap metric-autowire funnel (hasRealMetricsProvider, used by every other
+// collector). Gating on hasRealMetricsProvider keeps PDP metrics on the same funnel:
+// no real provider → return the bare Authorizer unwrapped (PR #2077 F3).
+func (b *Bootstrap) pdpAuthorizerForInjection(a auth.Authorizer) (auth.Authorizer, error) {
+	if !b.hasRealMetricsProvider() {
+		return a, nil
+	}
+	pdpMetrics, err := auth.NewPDPMetrics(b.metricsProvider)
+	if err != nil {
+		return nil, fmt.Errorf("bootstrap: register PDP decision metrics: %w", err)
+	}
+	return auth.NewObservableAuthorizer(b.clock, a, pdpMetrics), nil
 }
 
 // authorizerInjector returns a middleware that injects the given auth.Authorizer
