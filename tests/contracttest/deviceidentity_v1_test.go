@@ -173,13 +173,11 @@ func TestDeviceIdentityStatus_V1(t *testing.T) {
 		}
 	}`))
 
-	// query param validation (FMT-25 maxLength); issuer is the optional multi-CA disambiguator
+	// query param validation (FMT-25 maxLength). Status is keyed solely by deviceId:
+	// serial/issuer are not query params (a bare serial is never a lookup key — epic #1895
+	// FR-007), so a half-specified cert lookup is structurally unrepresentable, not asserted.
 	c.ValidateQueryParam(t, "deviceId", "dev-1")
-	c.ValidateQueryParam(t, "serial", "01ab")
-	c.ValidateQueryParam(t, "issuer", "softca")
 	c.MustRejectQueryParam(t, "deviceId", strings.Repeat("x", 257))
-	c.MustRejectQueryParam(t, "serial", strings.Repeat("x", 129))
-	c.MustRejectQueryParam(t, "issuer", strings.Repeat("x", 257))
 
 	c.ValidateErrorResponse(t, 400, validErrorBody)
 	c.ValidateErrorResponse(t, 401, validErrorBody)

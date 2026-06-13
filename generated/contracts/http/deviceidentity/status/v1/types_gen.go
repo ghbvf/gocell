@@ -18,8 +18,6 @@ import (
 // Request — http.deviceidentity.status.v1.request
 type Request struct {
 	DeviceID string `json:"deviceId"`
-	Issuer   string `json:"issuer,omitempty"`
-	Serial   string `json:"serial,omitempty"`
 }
 
 // Response — http.deviceidentity.status.v1.response

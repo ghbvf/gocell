@@ -4,9 +4,11 @@ ownerCell: _framework
 consistencyLevel: L0
 lifecycle: draft
 description: |
-  GET status by deviceId; when the optional `serial` query param is omitted, returns the device's
-  current active certificate (highest epoch). A certificate identity is issuer + serial (RFC 5280):
-  pass both `serial` and `issuer` to disambiguate a specific cert in a multi-CA deployment.
+  GET certificate status by deviceId; returns the device's current active certificate (highest
+  epoch). The certificate identity (issuer + serial, RFC 5280) is surfaced in the response `certRef`.
+  Lookup is keyed solely by deviceId: a bare serial is never a query key — specific-certificate
+  lookup must carry a typed CertScope (tenant+issuer+device) and belongs to the serving layer, not a
+  raw query param (epic #1895 FR-007; isolation invariant forbids naked-serial cross-scope queries).
   ref: docs/architecture/202606130635-1939-adr-framework-owned-contract.md
 endpoints:
   server: _framework
@@ -21,14 +23,6 @@ endpoints:
       deviceId:
         type: string
         required: true
-        maxLength: 256
-      serial:
-        type: string
-        required: false
-        maxLength: 128
-      issuer:
-        type: string
-        required: false
         maxLength: 256
     responses:
       400:
