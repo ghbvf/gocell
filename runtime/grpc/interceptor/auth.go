@@ -29,16 +29,31 @@ type authConfig struct {
 	passwordResetExempt func(fullMethod string) bool
 }
 
-// WithPublicMethod installs a predicate marking RPC methods that bypass
-// authentication (e.g. health checks). The wiring of concrete public-method
-// sets is a later-PR concern (tracked in backlog); the default (nil predicate)
-// is fail-closed — every method requires authentication. Passing a nil
-// predicate is a no-op; any previously installed predicate is retained.
+// WithPublicMethod adds pred to the predicates marking RPC methods that bypass
+// authentication. Multiple WithPublicMethod options COMPOSE: a method is public
+// if ANY installed predicate returns true — marking methods public is additive,
+// not last-wins. The default (no predicate) is fail-closed: every method requires
+// authentication. A nil predicate is a no-op.
+//
+// In production the registrar is the SINGLE source of the public-method set (#1675):
+// runtime/grpc/interceptor/chain.go installs WithPublicMethod(reg.IsPublicMethod)
+// (derived from each cell's endpoints.grpc.methods[] overlay), and
+// GRPC-PUBLIC-METHOD-WIRING-FUNNEL-01 forbids any other production reference to
+// WithPublicMethod — so the composed union has exactly one member. Test harnesses
+// may OR-in additional public methods for synthetic services not backed by a
+// contract (e.g. a probe health service); the union semantics make that safe
+// without weakening the production single-source.
 func WithPublicMethod(pred func(fullMethod string) bool) AuthOption {
 	return func(c *authConfig) {
-		if pred != nil {
-			c.publicMethod = pred
+		if pred == nil {
+			return
 		}
+		if c.publicMethod == nil {
+			c.publicMethod = pred
+			return
+		}
+		prev := c.publicMethod
+		c.publicMethod = func(m string) bool { return prev(m) || pred(m) }
 	}
 }
 

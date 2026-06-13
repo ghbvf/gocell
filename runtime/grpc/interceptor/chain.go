@@ -77,15 +77,16 @@ func newUnaryChain(deps Deps, reg *runtimegrpc.ServiceRegistrar) grpc.ServerOpti
 }
 
 // authOptionsWithPublicMethods returns the composition-root AuthOptions with the
-// registrar-sourced public-method predicate appended. The registrar is the SINGLE
-// runtime source of the public-method bypass set (#1675): appending last makes
-// reg.IsPublicMethod authoritative over any WithPublicMethod a composition root
-// might pass via deps.AuthOptions (WithPublicMethod overwrites when non-nil), so
-// the contract-derived overlay cannot be widened from the composition root.
-// GRPC-PUBLIC-METHOD-WIRING-FUNNEL-01 forbids production code from passing
-// WithPublicMethod through deps.AuthOptions, so in production this append is the
-// sole installer. A fresh slice is returned so the unary and stream chains
-// (sharing one Deps) never alias-append into the same backing array.
+// registrar-sourced public-method predicate added. The registrar is the SINGLE
+// runtime source of the public-method bypass set (#1675): chain.go installs
+// WithPublicMethod(reg.IsPublicMethod) — derived from each cell's
+// endpoints.grpc.methods[] overlay — and GRPC-PUBLIC-METHOD-WIRING-FUNNEL-01
+// forbids any OTHER production reference to WithPublicMethod, so the composed
+// (OR) union has exactly one member in production: the registrar. WithPublicMethod
+// composes additively (see its doc), so this is the sole production installer; test
+// harnesses may OR-in synthetic exemptions via deps.AuthOptions (allowed only in
+// _test.go). A fresh slice is returned so the unary and stream chains (sharing one
+// Deps) never alias-append into the same backing array.
 func authOptionsWithPublicMethods(opts []AuthOption, reg *runtimegrpc.ServiceRegistrar) []AuthOption {
 	out := make([]AuthOption, 0, len(opts)+1)
 	out = append(out, opts...)

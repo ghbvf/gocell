@@ -14,14 +14,14 @@
 // GRPCServiceSpec.PublicMethods, and aggregated by the registrar.
 //
 // This archtest forbids any OTHER production reference to interceptor.WithPublicMethod.
-// A composition root passing its own WithPublicMethod predicate (e.g. via
-// Deps.AuthOptions) would be a misleading-dead option — the chain appends
-// reg.IsPublicMethod LAST, so the registrar deterministically overrides it
-// (WithPublicMethod overwrites when non-nil) — and, if that append order ever
-// regressed, a latent bypass of the contract-derived overlay. Forbidding it makes
-// the registrar the provably-sole production source. It is the runtime-side sibling
-// of the codegen-side locks (cellgen golden + contractgen overlay referential
-// pre-pass + governance FMT-41) and mirrors GRPC-CHAIN-UNARY-INTERCEPTOR-CALLER-01.
+// WithPublicMethod predicates compose (OR): a method is public if ANY installed
+// predicate returns true. A composition root passing its own WithPublicMethod via
+// Deps.AuthOptions would therefore WIDEN the public set beyond the contract-derived
+// overlay — a latent auth bypass. Forbidding all production references but chain.go's
+// makes the composed union a single member (the registrar) in production, i.e. the
+// registrar the provably-sole production source. It is the runtime-side sibling of
+// the codegen-side locks (cellgen golden + contractgen overlay referential pre-pass
+// + governance FMT-41) and mirrors GRPC-CHAIN-UNARY-INTERCEPTOR-CALLER-01.
 //
 // # AI-robust rating (per .claude/rules/gocell/ai-robust.md)
 //
@@ -106,11 +106,11 @@ func scanWithPublicMethodRefs(t *testing.T, allowlist map[string]struct{}) ([]Di
 							"%s, which is not the sanctioned wiring site. The registrar is the single runtime source "+
 							"of the gRPC public-method bypass set (#1675): the only sanctioned installer is "+
 							"authOptionsWithPublicMethods in runtime/grpc/interceptor/chain.go, which wires "+
-							"WithPublicMethod(reg.IsPublicMethod). Passing a WithPublicMethod predicate from a "+
-							"composition root (e.g. via Deps.AuthOptions) is a dead option (the registrar is appended "+
-							"last and overrides it) and a latent bypass of the contract-derived overlay. Declare public "+
-							"methods via endpoints.grpc.methods[] (public:true). If this IS a new sanctioned wiring "+
-							"site, add it to withPublicMethodCallerAllowlist with rationale.",
+							"WithPublicMethod(reg.IsPublicMethod). WithPublicMethod predicates compose (OR), so a "+
+							"composition root passing one via Deps.AuthOptions would WIDEN the public set beyond the "+
+							"contract-derived overlay — a latent auth bypass. Declare public methods via "+
+							"endpoints.grpc.methods[] (public:true). If this IS a new sanctioned wiring site, add it to "+
+							"withPublicMethodCallerAllowlist with rationale.",
 						rel,
 					),
 				})
