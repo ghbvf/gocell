@@ -104,8 +104,10 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// 061 replaces the permanent idempotency key index with a state-aware active-uniqueness
 	// partial index on commands (status IN 1,2,3) for retry-release semantics (#1820).
 	// 062 drops devices.renewal_requested_epoch (stateless cert-renewal producer, #1820).
-	assert.Equal(t, int64(62), v,
-		"expected version should be exactly 62 (current migration max — 062_drop_devices_renewal_requested_epoch)")
+	// 063 creates the global webhook_sources table (encrypted webhook source secret store,
+	// NO tenant/RLS, NO plaintext column) for the persistent SourceStore backing (#1540).
+	assert.Equal(t, int64(63), v,
+		"expected version should be exactly 63 (current migration max — 063_create_webhook_sources)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {

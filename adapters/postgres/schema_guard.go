@@ -88,6 +88,9 @@ const gotWantQuotedFmt = "got %q want %q"
 //                                 + global_seq BIGINT GENERATED ALWAYS AS IDENTITY PK
 //                                 + idx_projection_events_id UNIQUE(id) (idempotency / cursor key)
 //                                 + JSONB payload/metadata/observability/principal
+//   - webhook_sources    (063)  global encrypted webhook HMAC secret store (#1540);
+//                                 PK(source_id); NO tenant_id / NO RLS (SourceStore.Lookup
+//                                 carries no tenant); NO plaintext column (value_cipher NOT NULL).
 //
 // Drift between this comment and verifyChecks/verifyIndexes/... registries is
 // caught by archtest SCHEMA-GUARD-COVERS-EVERY-OWNED-TABLE-01.
@@ -288,6 +291,9 @@ func VerifyExpectedShape(ctx context.Context, pool *Pool) error {
 		return err
 	}
 	if err := verifyForbiddenColumns(ctx, pool); err != nil {
+		return err
+	}
+	if err := verifyFrozenColumnSets(ctx, pool); err != nil {
 		return err
 	}
 	if err := verifyPrimaryKeys(ctx, pool); err != nil {
@@ -680,7 +686,28 @@ var expectedColumns = []expectedColumn{
 	{Table: "reconcile_leases", Column: "epoch", Type: "bigint", NotNull: true},
 	{Table: "reconcile_leases", Column: "acquired_at", Type: pgTypeTSTZ, NotNull: true},
 	{Table: "reconcile_leases", Column: "expires_at", Type: pgTypeTSTZ, NotNull: true},
+	// webhook_sources (063_create_webhook_sources.sql) — global, encrypted store
+	// for webhook source HMAC secrets (#1540). NO tenant_id / NO RLS (the kernel
+	// SourceStore.Lookup carries no tenant). NO plaintext column: value_cipher is
+	// NOT NULL, so a webhook secret is structurally unrepresentable at rest in
+	// plaintext (the schema-shape half of the encryption-at-rest guarantee). The
+	// envelope columns mirror config_entries (010); value_edk / value_nonce are
+	// nullable (provider-specific — a backend may embed the nonce in the ciphertext).
+	{Table: "webhook_sources", Column: "source_id", Type: "text", NotNull: true},
+	{Table: "webhook_sources", Column: "value_cipher", Type: "bytea", NotNull: true},
+	{Table: "webhook_sources", Column: "value_key_id", Type: "character varying(128)", NotNull: true},
+	{Table: "webhook_sources", Column: "value_edk", Type: "bytea", NotNull: false},
+	{Table: "webhook_sources", Column: "value_nonce", Type: "bytea", NotNull: false},
+	{Table: "webhook_sources", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
+	{Table: "webhook_sources", Column: "updated_at", Type: pgTypeTSTZ, NotNull: true},
 }
+
+// frozenColumnTables lists tables for which the schema guard enforces an
+// exact-column-set check: any column NOT in expectedColumns for that table is
+// rejected. This catches out-of-band additions (e.g. a plaintext `value`
+// column on webhook_sources) that the positive-existence check in verifyColumns
+// cannot detect.
+var frozenColumnTables = []string{"webhook_sources"}
 
 // forbiddenColumns are legacy columns that must NOT exist after migration.
 var forbiddenColumns = []requiredColumn{
@@ -730,6 +757,9 @@ var expectedPKs = []expectedPK{
 	{Table: "config_versions", Columns: []string{"id"}},
 	// feature_flags (051_configcore_tenant_id.sql): PK on id.
 	{Table: "feature_flags", Columns: []string{"id"}},
+	// webhook_sources (063_create_webhook_sources.sql): PK on source_id (global,
+	// no tenant — one source identity per deployment).
+	{Table: "webhook_sources", Columns: []string{"source_id"}},
 }
 
 // expectedDefaults is the load-bearing column-default registry. Only defaults a
@@ -1381,6 +1411,89 @@ func verifyForbiddenColumns(ctx context.Context, pool *Pool) error {
 					errcode.PublicString("column", r.column),
 				),
 			)
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Dimension helper: frozen column sets
+// ---------------------------------------------------------------------------
+
+// frozenExpectedColumns returns the set of column names registered in
+// expectedColumns for the given table. It is the single source of truth —
+// callers must not re-list columns.
+func frozenExpectedColumns(table string) map[string]bool {
+	set := make(map[string]bool)
+	for _, ec := range expectedColumns {
+		if ec.Table == table {
+			set[ec.Column] = true
+		}
+	}
+	return set
+}
+
+// queryLiveColumns returns all non-system, non-dropped column names for the
+// given table in the current schema. Mirrors the WHERE predicate used by
+// verifyColumns so test-schema parallelism is scoped correctly.
+func queryLiveColumns(ctx context.Context, pool *Pool, table string) ([]string, error) {
+	const q = `
+	SELECT a.attname
+	  FROM pg_attribute a
+	  JOIN pg_class c ON c.oid = a.attrelid
+	  JOIN pg_namespace n ON n.oid = c.relnamespace
+	 WHERE n.nspname = current_schema()
+	   AND c.relname = $1
+	   AND a.attnum > 0
+	   AND NOT a.attisdropped`
+
+	rows, err := pool.inner.Query(ctx, q, table)
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+			"schema_guard: query live columns for frozen-set check", err)
+	}
+	defer rows.Close()
+
+	var cols []string
+	for rows.Next() {
+		var col string
+		if scanErr := rows.Scan(&col); scanErr != nil {
+			return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+				"schema_guard: scan column name for frozen-set check", scanErr)
+		}
+		cols = append(cols, col)
+	}
+	if rows.Err() != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+			"schema_guard: iterate columns for frozen-set check", rows.Err())
+	}
+	return cols, nil
+}
+
+// verifyFrozenColumnSets enforces an exact-column-set constraint on tables
+// listed in frozenColumnTables. Any column present in the live schema but
+// absent from expectedColumns is rejected with ErrAdapterPGSchemaShape.
+// This catches out-of-band column additions that verifyColumns (positive-only)
+// cannot detect — e.g., a plaintext `value` column added to webhook_sources.
+func verifyFrozenColumnSets(ctx context.Context, pool *Pool) error {
+	for _, table := range frozenColumnTables {
+		expected := frozenExpectedColumns(table)
+		live, err := queryLiveColumns(ctx, pool, table)
+		if err != nil {
+			return err
+		}
+		for _, col := range live {
+			if !expected[col] {
+				return errcode.New(
+					errcode.KindInternal, ErrAdapterPGSchemaShape,
+					"schema_guard: unexpected column on frozen table",
+					errcode.WithDetails(
+						errcode.PublicString("dimension", "frozen_column_set"),
+						errcode.PublicString("table", table),
+						errcode.PublicString("column", col),
+					),
+				)
+			}
 		}
 	}
 	return nil
