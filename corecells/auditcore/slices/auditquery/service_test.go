@@ -712,6 +712,73 @@ func TestService_Query_SubsecondFilterContext(t *testing.T) {
 	require.NoError(t, err, "changing From between pages must not invalidate the cursor")
 }
 
+// --- QueryCrossTenant tests (#1810) ---
+
+// fakeCtStore is a minimal in-process CrossTenantQueryStore for unit tests.
+// It returns a fixed slice of entries without needing a real admin pool.
+type fakeCtStore struct {
+	entries []*ledger.Entry
+	err     error
+}
+
+func (f *fakeCtStore) QueryCrossTenant(
+	_ context.Context, _ tenant.CrossTenantVisibility,
+	_ ledger.AuditFilters, params query.ListParams,
+) ([]*ledger.Entry, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	limit := params.FetchLimit()
+	if limit > len(f.entries) {
+		limit = len(f.entries)
+	}
+	return f.entries[:limit], nil
+}
+
+// TestService_QueryCrossTenant_NilStore_Returns501 locks the fail-closed
+// optionality contract (#1810): when crossTenantStore is nil (admin pool not
+// provisioned), QueryCrossTenant must return RowScopeAllUnsupportedError (501),
+// never nil/empty — the pre-#1810 behavior is preserved.
+func TestService_QueryCrossTenant_NilStore_Returns501(t *testing.T) {
+	svc, _ := newTestService() // no WithCrossTenantStore → crossTenantStore is nil
+
+	ctv := tenant.NewCrossTenantVisibility()
+	_, err := svc.QueryCrossTenant(context.Background(), ctv, ledger.AuditFilters{}, query.PageParams{})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.KindNotImplemented, ecErr.Kind,
+		"nil crossTenantStore must return RowScopeAllUnsupportedError (501)")
+}
+
+// TestService_QueryCrossTenant_WithStore_ReturnsPaged verifies that when a
+// CrossTenantQueryStore is wired, QueryCrossTenant returns its results via the
+// standard ExecutePagedQuery machinery (#1810).
+func TestService_QueryCrossTenant_WithStore_ReturnsPaged(t *testing.T) {
+	now := time.Now()
+	entries := []*ledger.Entry{
+		{
+			ID: "ct-1", EventID: "evt-ct-1", EventType: "vis.v1",
+			ActorID: "sa", TenantID: auditQueryTestTenant, Timestamp: now, Payload: []byte("{}"),
+		},
+		{
+			ID: "ct-2", EventID: "evt-ct-2", EventType: "vis.v1",
+			ActorID: "sa", TenantID: auditQueryTestTenantB, Timestamp: now.Add(time.Second), Payload: []byte("{}"),
+		},
+	}
+	fake := &fakeCtStore{entries: entries}
+
+	store := newTestStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(),
+		query.RunModeProd, WithCrossTenantStore(fake))
+	require.NoError(t, err)
+
+	ctv := tenant.NewCrossTenantVisibility()
+	result, err := svc.QueryCrossTenant(context.Background(), ctv, ledger.AuditFilters{}, query.PageParams{})
+	require.NoError(t, err)
+	assert.Len(t, result.Items, 2, "cross-tenant store returned both entries")
+}
+
 // TestQuery_ZeroTime_SkipsFromToFormat asserts that when filters.From and filters.To
 // are zero, the QueryContext attrs slice does NOT contain "from" or "to" keys.
 //

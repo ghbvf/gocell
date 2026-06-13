@@ -1579,3 +1579,158 @@ func TestHandleQuery_RowScopeVisibilityMatrix(t *testing.T) {
 		})
 	}
 }
+
+// newSuperAdminCtx builds a tenant-bearing super-admin principal context with
+// auditQueryTestTenant as the token tenant (super-admins still carry their own
+// tenant_id in the JWT — it feeds FR-007 audit fields, not the query scope).
+func newSuperAdminCtx(subject string) context.Context {
+	return withAllowAuthorizer(auth.WithPrincipal(context.Background(), &auth.Principal{
+		Kind:       auth.PrincipalUser,
+		Subject:    subject,
+		Roles:      []string{auth.RoleSuperAdmin},
+		TenantID:   auditQueryTestTenant,
+		AuthMethod: "test",
+	}))
+}
+
+// TestHandleQuery_SuperAdmin_NoCrossTenantStore_501 locks the pre-#1810
+// fail-closed contract: a super-admin request with no CrossTenantQueryStore
+// wired returns 501 (RowScopeAllUnsupportedError), never 200 or 500.
+func TestHandleQuery_SuperAdmin_NoCrossTenantStore_501(t *testing.T) {
+	store := newHandlerStore(t)
+	// NewService without WithCrossTenantStore → crossTenantStore is nil
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
+	req = req.WithContext(newSuperAdminCtx("sa-user"))
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotImplemented, w.Code,
+		"super-admin with no CrossTenantQueryStore must return 501; body=%s", w.Body.String())
+}
+
+// TestHandleQuery_SuperAdmin_CrossTenantStore_200 verifies that when a
+// CrossTenantQueryStore is wired, a super-admin request returns 200 with rows
+// spanning more than one tenant (#1810). The fake store returns entries from
+// two distinct tenants so the test proves cross-tenant data is surfaced.
+func TestHandleQuery_SuperAdmin_CrossTenantStore_200(t *testing.T) {
+	base := time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC)
+	ctEntries := []*ledger.Entry{
+		{
+			ID: "ct-a1", EventID: "evt-ct-a1", EventType: "cross.tenant.v1",
+			ActorID: "usrA", TenantID: auditQueryTestTenant,
+			Timestamp: base, Payload: []byte("{}"),
+		},
+		{
+			ID: "ct-b1", EventID: "evt-ct-b1", EventType: "cross.tenant.v1",
+			ActorID: "usrB", TenantID: auditQueryTestTenantB,
+			Timestamp: base.Add(time.Hour), Payload: []byte("{}"),
+		},
+	}
+
+	store := newHandlerStore(t)
+	// Build a MemCrossTenantStore backed by the same store — for the handler test
+	// we use the fake store interface that directly returns ctEntries.
+	relay := newHandlerStore(t)
+	for _, e := range ctEntries {
+		require.NoError(t, relay.Append(context.Background(), e))
+	}
+	ctStore, err := ledger.NewMemCrossTenantStore(relay)
+	require.NoError(t, err)
+
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(),
+		query.RunModeProd, WithCrossTenantStore(ctStore))
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
+	req = req.WithContext(newSuperAdminCtx("sa-user"))
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code,
+		"super-admin with CrossTenantQueryStore must return 200; body=%s", w.Body.String())
+
+	var resp struct {
+		Data []struct {
+			TenantID string `json:"tenantId"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data, 2, "expected entries from both tenants")
+	tenants := map[string]bool{}
+	for _, d := range resp.Data {
+		tenants[d.TenantID] = true
+	}
+	assert.True(t, tenants[auditQueryTestTenant], "tenantA rows must be present")
+	assert.True(t, tenants[auditQueryTestTenantB], "tenantB rows must be present")
+}
+
+// TestHandleQuery_SuperAdmin_SingleAuditRecord is the MANDATORY single-audit
+// invariant test (#1810): exactly ONE FR-007 slog.Error record must be emitted
+// per super-admin cross-tenant request, whether or not the CrossTenantQueryStore
+// is present. Double-audit (calling both p.CrossTenantVisibility and p.RowVisibility
+// for the same request) would emit two records — this test guards against that.
+//
+// The test captures slog records via the testCaptureHandler and asserts the count
+// is exactly 1 after each super-admin request.
+func TestHandleQuery_SuperAdmin_SingleAuditRecord(t *testing.T) {
+	capture := &testCaptureHandler{}
+	slogcapture.InstallDefault(t, slog.New(capture))
+
+	store := newHandlerStore(t)
+	relay := newHandlerStore(t)
+	ctStore, err := ledger.NewMemCrossTenantStore(relay)
+	require.NoError(t, err)
+
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(),
+		query.RunModeProd, WithCrossTenantStore(ctStore))
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	cases := []struct {
+		name     string
+		ctStore  bool // whether ctStore is wired
+		wantCode int
+	}{
+		{"with_ct_store_200", true, http.StatusOK},
+	}
+	// Also test without store (501 path still audits once)
+	{
+		svcNoStore, err2 := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
+		require.NoError(t, err2)
+		muxNoStore := newHandlerMux(svcNoStore)
+
+		capture.records = capture.records[:0]
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
+		req = req.WithContext(newSuperAdminCtx("sa-no-store"))
+		muxNoStore.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusNotImplemented, w.Code)
+
+		errorCount := countAuditMandatoryRecords(capture.records)
+		assert.Equal(t, 1, errorCount,
+			"super-admin cross-tenant request (no store, 501) must emit EXACTLY ONE FR-007 Error record; got %d (records: %v)",
+			errorCount, capture.records)
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			capture.records = capture.records[:0]
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
+			req = req.WithContext(newSuperAdminCtx("sa-user"))
+			mux.ServeHTTP(w, req)
+			assert.Equal(t, tc.wantCode, w.Code,
+				"unexpected status; body=%s", w.Body.String())
+
+			errorCount := countAuditMandatoryRecords(capture.records)
+			assert.Equal(t, 1, errorCount,
+				"super-admin cross-tenant request must emit EXACTLY ONE FR-007 slog.Error record; got %d", errorCount)
+		})
+	}
+}

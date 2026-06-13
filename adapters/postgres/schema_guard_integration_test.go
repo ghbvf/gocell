@@ -1406,3 +1406,129 @@ func TestMigration055_DestructiveDownPermitRejection(t *testing.T) {
 	assert.Equal(t, errcode.ErrValidationFailed, ec.Code,
 		"error code must be ErrValidationFailed for a missing permit")
 }
+
+// ---------------------------------------------------------------------------
+// Migration 064 schema_guard audit_admin_read_all policy verification (#1810)
+// ---------------------------------------------------------------------------
+
+// pgRoleExists reports whether the named role exists in pg_roles.
+func pgRoleExists(t *testing.T, pool *Pool, rolname string) bool {
+	t.Helper()
+	var exists bool
+	require.NoError(t, pool.DB().QueryRow(context.Background(),
+		`SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)`, rolname,
+	).Scan(&exists))
+	return exists
+}
+
+// TestMigration064_SchemaGuard_RoleAbsent verifies that after migration 064 is
+// applied in an environment where gocell_audit_admin is NOT provisioned:
+//   - The migration is a no-op (no audit_admin_read_all policy is created).
+//   - VerifyExpectedShape passes (the guard treats the absent-role case as
+//     "one policy expected" and the single tenant_isolation policy is present).
+//
+// This is the primary regression guard for environments without the admin role
+// (dev/CI without the deploy init script, testcontainer migrations).
+func TestMigration064_SchemaGuard_RoleAbsent(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_064_role_absent")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "all migrations must apply cleanly through 064")
+
+	// The testcontainer superuser does NOT create gocell_audit_admin, so the
+	// role must be absent and the migration 064 is a no-op.
+	require.False(t, pgRoleExists(t, pool, "gocell_audit_admin"),
+		"gocell_audit_admin must not exist in the testcontainer (no init script)")
+
+	// The audit_admin_read_all policy must NOT exist (migration was a no-op).
+	assert.False(t, pgPolicyExists(t, pool, "audit_entries", "audit_admin_read_all"),
+		"audit_admin_read_all policy must be absent when gocell_audit_admin is not provisioned")
+
+	// VerifyExpectedShape must pass: one policy (tenant_isolation) is expected and present.
+	err = VerifyExpectedShape(ctx, pool)
+	assert.NoError(t, err, "VerifyExpectedShape must pass with gocell_audit_admin absent (migration no-op)")
+}
+
+// TestMigration064_SchemaGuard_ExtraUnexpectedPolicy_StillFails verifies that
+// the #1622 F1 invariant is NOT weakened by the audit admin policy feature:
+// an unexpected extra permissive policy on audit_entries (one that is NOT the
+// well-formed audit_admin_read_all) causes VerifyExpectedShape to fail — even
+// when gocell_audit_admin is absent.
+//
+// This is the synthetic RED case: it proves the security guard is not weakened.
+func TestMigration064_SchemaGuard_ExtraUnexpectedPolicy_StillFails(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_064_extra_policy")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "all migrations must apply cleanly through 064")
+
+	// Inject an unexpected extra permissive SELECT policy on audit_entries as a
+	// superuser (testcontainer default). This simulates a misconfiguration or
+	// attack that tries to widen visibility outside the expected policy set.
+	_, execErr := pool.DB().Exec(ctx,
+		`CREATE POLICY sneaky_extra ON audit_entries FOR SELECT TO PUBLIC USING (true)`)
+	require.NoError(t, execErr, "injecting extra policy must succeed as superuser")
+
+	defer func() {
+		_, _ = pool.DB().Exec(ctx, `DROP POLICY IF EXISTS sneaky_extra ON audit_entries`)
+	}()
+
+	// VerifyExpectedShape must FAIL: an unexpected extra permissive policy is
+	// present. The guard is not weakened to "allow any extra policy".
+	err = VerifyExpectedShape(ctx, pool)
+	require.Error(t, err, "VerifyExpectedShape must fail when an unexpected extra permissive policy is present")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code,
+		"error code must be ErrAdapterPGSchemaShape for the unexpected extra policy")
+}
+
+// TestMigration064_SchemaGuard_RolePresent verifies that when gocell_audit_admin
+// IS provisioned (manually created in the test) AND migration 064 has been applied:
+//   - Both the tenant_isolation and audit_admin_read_all policies are present.
+//   - VerifyExpectedShape passes with the two-policy shape.
+//
+// This test creates and drops the gocell_audit_admin role within the test, then
+// re-applies migration 064 (which is idempotent in the role-present case via
+// DO $$ IF EXISTS $$ END $$). Requires superuser (testcontainer default postgres).
+func TestMigration064_SchemaGuard_RolePresent(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	// Apply all migrations up to but NOT including 064 so we can control when
+	// the role exists vs when 064 runs.
+	fsys063 := migrationsUpToFS(t, 63)
+	migrator063, err := newMigratorForTable(pool, fsys063, "schema_migrations_064_role_present")
+	require.NoError(t, err)
+	require.NoError(t, migrator063.Up(ctx), "migrations through 063 must apply cleanly")
+
+	// Create the gocell_audit_admin role as the superuser so migration 064's
+	// IF EXISTS guard fires. NOSUPERUSER + NOBYPASSRLS mirrors 10-restricted-role.sh.
+	_, execErr := pool.DB().Exec(ctx,
+		`CREATE ROLE gocell_audit_admin LOGIN PASSWORD 'test-audit-admin-pw' NOSUPERUSER NOBYPASSRLS`)
+	require.NoError(t, execErr, "creating gocell_audit_admin must succeed as superuser")
+	defer func() {
+		_, _ = pool.DB().Exec(ctx, `DROP ROLE IF EXISTS gocell_audit_admin`)
+	}()
+
+	// Now apply migration 064. The IF EXISTS guard fires and creates the policy + GRANT.
+	fsys064 := testMigrationsFS(t)
+	migrator064, err := newMigratorForTable(pool, fsys064, "schema_migrations_064_role_present")
+	require.NoError(t, err)
+	require.NoError(t, migrator064.Up(ctx), "migration 064 must apply cleanly with role present")
+
+	// Both policies must now be present.
+	assert.True(t, pgPolicyExists(t, pool, "audit_entries", "tenant_isolation"),
+		"tenant_isolation policy must still be present")
+	assert.True(t, pgPolicyExists(t, pool, "audit_entries", "audit_admin_read_all"),
+		"audit_admin_read_all policy must be created when gocell_audit_admin is provisioned")
+
+	// VerifyExpectedShape must pass with the two-policy shape.
+	err = VerifyExpectedShape(ctx, pool)
+	assert.NoError(t, err, "VerifyExpectedShape must pass with gocell_audit_admin present and both policies correct")
+}

@@ -106,8 +106,13 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// 062 drops devices.renewal_requested_epoch (stateless cert-renewal producer, #1820).
 	// 063 creates the global webhook_sources table (encrypted webhook source secret store,
 	// NO tenant/RLS, NO plaintext column) for the persistent SourceStore backing (#1540).
-	assert.Equal(t, int64(63), v,
-		"expected version should be exactly 63 (current migration max — 063_create_webhook_sources)")
+	// 064 adds the role-scoped permissive SELECT policy audit_admin_read_all on
+	// audit_entries and GRANTs SELECT to gocell_audit_admin for cross-tenant audit
+	// reads (#1810). Both steps are wrapped in IF EXISTS guards — inert where the role
+	// is absent. schema_guard.go verifyRLS expects this second policy ONLY when
+	// gocell_audit_admin is provisioned, preserving the #1622 F1 invariant.
+	assert.Equal(t, int64(64), v,
+		"expected version should be exactly 64 (current migration max — 064_audit_admin_read_role)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {
@@ -585,6 +590,20 @@ func rlsPolicySystemWith(mut func(*rlsPolicyRow)) []rlsPolicyRow {
 	return []rlsPolicyRow{p}
 }
 
+// auditAdminPolicyOK returns the well-formed audit_admin_read_all policy shape
+// (migration 064, #1810) — the positive control for checkRLSPolicyShape when
+// the gocell_audit_admin role is provisioned.
+func auditAdminPolicyOK() rlsPolicyRow {
+	return rlsPolicyRow{
+		name:       "audit_admin_read_all",
+		permissive: "PERMISSIVE",
+		cmd:        "SELECT",
+		roles:      "gocell_audit_admin",
+		qual:       "true",
+		withCheck:  "", // SELECT-only policy has no WITH CHECK
+	}
+}
+
 // TestCheckRLSPolicyShape is the DB-free unit cover of verifyRLSPolicy's
 // validation core (#1622 F1): every semantic weakening of the tenant_isolation
 // policy that a name-presence-only check would have passed must be rejected, and
@@ -596,8 +615,13 @@ func TestCheckRLSPolicyShape(t *testing.T) {
 		// SystemRowsReadable expectedRLS that accepts the `OR tenant_id = ''`
 		// predicate. Default false = the strict config/accesscore shape.
 		systemReadable bool
-		policies       []rlsPolicyRow
-		wantErr        bool
+		// auditAdminPolicy, when non-empty, sets r.AuditAdminPolicy and enables
+		// the two-policy branch of checkRLSPolicyShape.
+		auditAdminPolicy string
+		// auditAdminRolePresent passes the role-presence flag to checkRLSPolicyShape.
+		auditAdminRolePresent bool
+		policies              []rlsPolicyRow
+		wantErr               bool
 	}{
 		{name: "well_formed", policies: []rlsPolicyRow{rlsPolicyOK()}, wantErr: false},
 		{name: "no_policy", policies: nil, wantErr: true},
@@ -695,11 +719,136 @@ func TestCheckRLSPolicyShape(t *testing.T) {
 			}),
 			wantErr: false,
 		},
+
+		// ---------------------------------------------------------------------------
+		// audit_admin_read_all policy variant (#1810, migration 064):
+		// Two-policy branch — role present means the second policy is expected.
+		// ---------------------------------------------------------------------------
+
+		// (a) Role present + both policies well-formed → PASS.
+		{
+			name:                  "audit_admin_role_present_well_formed",
+			systemReadable:        true,
+			auditAdminPolicy:      "audit_admin_read_all",
+			auditAdminRolePresent: true,
+			policies:              []rlsPolicyRow{rlsPolicyWithSystemOK(), auditAdminPolicyOK()},
+			wantErr:               false,
+		},
+		// (b) SYNTHETIC RED: role present but an UNEXPECTED extra permissive policy
+		// is present (instead of the well-formed audit_admin_read_all) — MUST FAIL.
+		// This is the security guard: adding any extra permissive policy to audit_entries
+		// when gocell_audit_admin is provisioned is still rejected if it is not the
+		// exact expected audit_admin_read_all policy.
+		{
+			name:                  "audit_admin_role_present_unexpected_extra_policy",
+			systemReadable:        true,
+			auditAdminPolicy:      "audit_admin_read_all",
+			auditAdminRolePresent: true,
+			policies: []rlsPolicyRow{
+				rlsPolicyWithSystemOK(),
+				{name: "sneaky_extra", permissive: "PERMISSIVE", cmd: "SELECT", roles: "public", qual: "true"},
+			},
+			wantErr: true, // unexpected policy name — security guard not weakened
+		},
+		// (c) Role absent → single policy expected; absent-role + absent-policy passes.
+		{
+			name:                  "audit_admin_role_absent_single_policy",
+			systemReadable:        true,
+			auditAdminPolicy:      "audit_admin_read_all",
+			auditAdminRolePresent: false,
+			policies:              []rlsPolicyRow{rlsPolicyWithSystemOK()},
+			wantErr:               false,
+		},
+		// (d) SYNTHETIC RED: role absent but the admin policy is somehow present
+		// (e.g., manual policy injection without the role) — still TWO policies with
+		// role absent → count mismatch → FAIL. The guard rejects any extra permissive
+		// policy on audit_entries when only one is expected.
+		{
+			name:                  "audit_admin_role_absent_extra_policy_present",
+			systemReadable:        true,
+			auditAdminPolicy:      "audit_admin_read_all",
+			auditAdminRolePresent: false,
+			policies:              []rlsPolicyRow{rlsPolicyWithSystemOK(), auditAdminPolicyOK()},
+			wantErr:               true, // extra policy when role absent is rejected (#1622 F1)
+		},
+		// (e) Role present but audit admin policy has wrong cmd (INSERT instead of SELECT).
+		{
+			name:                  "audit_admin_wrong_cmd",
+			systemReadable:        true,
+			auditAdminPolicy:      "audit_admin_read_all",
+			auditAdminRolePresent: true,
+			policies: []rlsPolicyRow{rlsPolicyWithSystemOK(), func() rlsPolicyRow {
+				p := auditAdminPolicyOK()
+				p.cmd = "INSERT"
+				return p
+			}()},
+			wantErr: true,
+		},
+		// (f) Role present but audit admin policy applies to PUBLIC (should be role-scoped).
+		{
+			name:                  "audit_admin_wrong_roles_public",
+			systemReadable:        true,
+			auditAdminPolicy:      "audit_admin_read_all",
+			auditAdminRolePresent: true,
+			policies: []rlsPolicyRow{rlsPolicyWithSystemOK(), func() rlsPolicyRow {
+				p := auditAdminPolicyOK()
+				p.roles = "public" // must be gocell_audit_admin, not public
+				return p
+			}()},
+			wantErr: true,
+		},
+		// (g) Role present but audit admin policy has USING(false) — not true.
+		{
+			name:                  "audit_admin_using_not_true",
+			systemReadable:        true,
+			auditAdminPolicy:      "audit_admin_read_all",
+			auditAdminRolePresent: true,
+			policies: []rlsPolicyRow{rlsPolicyWithSystemOK(), func() rlsPolicyRow {
+				p := auditAdminPolicyOK()
+				p.qual = "false"
+				return p
+			}()},
+			wantErr: true,
+		},
+		// (h) Role present but audit admin policy has a WITH CHECK clause (SELECT
+		// policy must not have WITH CHECK — a WITH CHECK would restrict writes and
+		// is architecturally unsound for a read-only policy).
+		{
+			name:                  "audit_admin_has_with_check",
+			systemReadable:        true,
+			auditAdminPolicy:      "audit_admin_read_all",
+			auditAdminRolePresent: true,
+			policies: []rlsPolicyRow{rlsPolicyWithSystemOK(), func() rlsPolicyRow {
+				p := auditAdminPolicyOK()
+				p.withCheck = "true"
+				return p
+			}()},
+			wantErr: true,
+		},
+		// (i) Role present but audit admin policy is RESTRICTIVE (must be PERMISSIVE
+		// so it OR-es with tenant_isolation rather than AND-ing).
+		{
+			name:                  "audit_admin_restrictive",
+			systemReadable:        true,
+			auditAdminPolicy:      "audit_admin_read_all",
+			auditAdminRolePresent: true,
+			policies: []rlsPolicyRow{rlsPolicyWithSystemOK(), func() rlsPolicyRow {
+				p := auditAdminPolicyOK()
+				p.permissive = "RESTRICTIVE"
+				return p
+			}()},
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := expectedRLS{Table: "feature_flags", Policy: "tenant_isolation", SystemRowsReadable: tt.systemReadable}
-			err := checkRLSPolicyShape(r, tt.policies)
+			r := expectedRLS{
+				Table:              "feature_flags",
+				Policy:             "tenant_isolation",
+				SystemRowsReadable: tt.systemReadable,
+				AuditAdminPolicy:   tt.auditAdminPolicy,
+			}
+			err := checkRLSPolicyShape(r, tt.policies, tt.auditAdminRolePresent)
 			if !tt.wantErr {
 				require.NoError(t, err)
 				return
