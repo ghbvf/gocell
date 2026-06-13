@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -52,10 +53,53 @@ func buildGRPCProject() *metadata.ProjectMeta {
 			GRPC: &metadata.GRPCTransportMeta{
 				Service: "device.command.v1.DeviceCommandService",
 				Proto:   "contracts/grpc/device/command/v1/device_command.proto",
+				// Per-method public overlay (#1675): IssueCommand is JWT-exempt, so
+				// the golden must carry PublicMethods for the full method name.
+				Methods: []metadata.GRPCMethodMeta{{Name: "IssueCommand", Public: true}},
 			},
 		},
 	}
 	return fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{contract})
+}
+
+// TestBuildGrpcServiceSpecFromCU_PublicMethods verifies the per-method public
+// overlay (#1675) is composed into GrpcServiceGenSpec.PublicMethods as full
+// method names (/{service}/{name}), only for public:true entries. A public:false
+// (or absent) entry contributes nothing — keeping the fail-closed default.
+func TestBuildGrpcServiceSpecFromCU_PublicMethods(t *testing.T) {
+	t.Parallel()
+
+	cell := &metadata.CellMeta{
+		ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
+	contract := &metadata.ContractMeta{
+		ID: "grpc.device.command.v1", Kind: "grpc",
+		Endpoints: metadata.EndpointsMeta{
+			Server: "demo",
+			GRPC: &metadata.GRPCTransportMeta{
+				Service: "device.command.v1.DeviceCommandService",
+				Proto:   "contracts/grpc/device/command/v1/device_command.proto",
+				Methods: []metadata.GRPCMethodMeta{{Name: "IssueCommand", Public: true}},
+			},
+		},
+	}
+	cu := metadata.ContractUsage{Contract: "grpc.device.command.v1", Role: "serve"}
+	slc := &metadata.SliceMeta{
+		ID: "command", BelongsToCell: "demo", Dir: "command",
+		File:           "cells/demo/slices/command/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{cu},
+	}
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{contract})
+
+	got, err := buildGrpcServiceSpecFromCU(p, "demo", "command", cu, idxOf(map[string]string{"command": "commandServer"}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"/device.command.v1.DeviceCommandService/IssueCommand"}
+	if !slices.Equal(got.PublicMethods, want) {
+		t.Errorf("PublicMethods = %v, want %v", got.PublicMethods, want)
+	}
 }
 
 // TestBuildGrpcServiceSpecFromCU exercises buildGrpcServiceSpecFromCU in

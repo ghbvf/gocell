@@ -43,6 +43,8 @@ package contractgen
 import (
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // --- C4: registry collision uniqueness ----------------------------------------
@@ -104,5 +106,34 @@ func TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_CollisionDivergentImport(t *testin
 	err := r.register("grpc.b", "device.command.v1.DeviceCommandService", other)
 	if err == nil || !strings.Contains(err.Error(), "divergent import") {
 		t.Fatalf("expected divergent-import collision, got %v", err)
+	}
+}
+
+// TestGRPCMethodOverlay_ReferentialIntegrity exercises the contractgen pre-pass
+// guard for the per-method public overlay (#1675): each endpoints.grpc.methods[]
+// name must be a member of the proto's method set. This is the Hard codegen-funnel
+// gate for referential integrity (kernel/governance cannot read the proto, so
+// FMT-41 only does the metadata-pure guards — this is the parallel gate).
+func TestGRPCMethodOverlay_ReferentialIntegrity(t *testing.T) {
+	t.Parallel()
+	info := sampleProtoServiceInfo() // proto methods: [IssueCommand]
+
+	// Valid: overlay name ∈ proto method set.
+	if err := validateGRPCMethodOverlay("grpc.a",
+		[]metadata.GRPCMethodMeta{{Name: "IssueCommand", Public: true}}, info); err != nil {
+		t.Fatalf("valid overlay rejected: %v", err)
+	}
+
+	// Invalid: overlay name ∉ proto method set — must name the contract + the
+	// unknown method.
+	err := validateGRPCMethodOverlay("grpc.a",
+		[]metadata.GRPCMethodMeta{{Name: "Bogus", Public: true}}, info)
+	if err == nil || !strings.Contains(err.Error(), "Bogus") || !strings.Contains(err.Error(), "grpc.a") {
+		t.Fatalf("expected unknown-method rejection naming contract+method, got %v", err)
+	}
+
+	// Empty overlay is a no-op (no methods to validate).
+	if err := validateGRPCMethodOverlay("grpc.a", nil, info); err != nil {
+		t.Fatalf("nil overlay rejected: %v", err)
 	}
 }
