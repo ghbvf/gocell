@@ -181,25 +181,32 @@ func TestContractgenTSEmitFunnel_B3_TSPathPrefixIsGeneratedTS(t *testing.T) {
 // Reverse self-checks (anti-vacuity + RED fixture proofs)
 // ---------------------------------------------------------------------------
 
+// isAllowedTSTemplate reports whether rel is in the contractgen/templates allowlist
+// of permitted .ts.tmpl files. Used by both the live B1 scan and the RED/GREEN
+// self-check fixtures so both paths exercise the exact same logic.
+func isAllowedTSTemplate(rel string) bool {
+	return rel == tsTypesTemplate || rel == tsBarrelTemplate
+}
+
 // TestContractgenTSFunnel_B1_RedFixture proves the B1 detector fires on a
 // template with .ts.tmpl outside the contractgen/templates directory.
 func TestContractgenTSFunnel_B1_RedFixture(t *testing.T) {
 	t.Parallel()
-	// Simulate a rogue .ts.tmpl in a non-contractgen location
 	rogue := "tools/cellgen/templates/types.ts.tmpl"
-	want := []string{tsBarrelTemplate, tsTypesTemplate}
-	sort.Strings(want)
-
-	found := false
-	for _, w := range want {
-		if rogue == w {
-			found = true
-		}
-	}
-	if found {
+	if isAllowedTSTemplate(rogue) {
 		t.Fatal("RED fixture: rogue path unexpectedly matches the allowlist (test is broken)")
 	}
-	// The rogue file would surface as a violation in B1 (not in the want set).
+	// The rogue path is NOT in the allowlist — a real B1 scan would report it as a violation.
+}
+
+// TestContractgenTSFunnel_B1_GreenFixture proves the allowed templates pass B1.
+func TestContractgenTSFunnel_B1_GreenFixture(t *testing.T) {
+	t.Parallel()
+	for _, allowed := range []string{tsTypesTemplate, tsBarrelTemplate} {
+		if !isAllowedTSTemplate(allowed) {
+			t.Errorf("GREEN fixture: allowed template %q rejected by isAllowedTSTemplate", allowed)
+		}
+	}
 }
 
 // TestContractgenTSFunnel_B2_RedFixtureDetectsRenderCall proves that the B2
@@ -289,4 +296,36 @@ func parseTSFixture(t *testing.T, src string) *ast.File {
 		t.Fatalf("parseTSFixture: parse error: %v", err)
 	}
 	return f
+}
+
+// ---------------------------------------------------------------------------
+// B3 RED + GREEN fixture self-checks
+// ---------------------------------------------------------------------------
+
+// TestContractgenTSFunnel_B3_RedFixtureDetectsGeneratedPrefix proves the B3
+// scanner fires on a string literal "generated/x.ts" (wrong prefix).
+func TestContractgenTSFunnel_B3_RedFixtureDetectsGeneratedPrefix(t *testing.T) {
+	t.Parallel()
+	src := `package contractgen
+func emitBad() { _ = "generated/contracts/http/order/create/v1/types.ts" }
+`
+	f := parseTSFixture(t, src)
+	violations := scanTSPathViolations(f, "generator.go")
+	if len(violations) == 0 {
+		t.Error("B3 detector missed generated/ prefix in TS path literal")
+	}
+}
+
+// TestContractgenTSFunnel_B3_GreenFixtureAllowsGeneratedTS proves the B3
+// scanner does NOT flag a string literal with the correct "generated-ts/" prefix.
+func TestContractgenTSFunnel_B3_GreenFixtureAllowsGeneratedTS(t *testing.T) {
+	t.Parallel()
+	src := `package contractgen
+func emitGood() { _ = "generated-ts/index.ts" }
+`
+	f := parseTSFixture(t, src)
+	violations := scanTSPathViolations(f, "tsemit.go")
+	if len(violations) != 0 {
+		t.Errorf("B3 scanner over-flagged valid generated-ts/ path: %v", violations)
+	}
 }

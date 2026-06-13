@@ -172,30 +172,6 @@ func Generate(root string, p *metadata.ProjectMeta, opts Options) (Result, error
 	return res, nil
 }
 
-// generateTSBarrel renders the full-project barrel and writes (or dry-runs /
-// verifies) generated-ts/index.ts. No-op when no contract emits TS.
-func generateTSBarrel(root string, p *metadata.ProjectMeta, opts Options, res *Result) error {
-	barrel, ok, err := RenderTSBarrel(root, p)
-	if err != nil {
-		return fmt.Errorf(errPrefixGenerate+"barrel index.ts: %w", err)
-	}
-	if !ok {
-		return nil
-	}
-	writeRes, err := codegen.Write(codegen.WriteOptions{
-		Path:     filepath.Join(root, filepath.FromSlash(barrel.Path)),
-		Content:  barrel.Content,
-		RepoRoot: root,
-		DryRun:   opts.DryRun,
-		Verify:   opts.Verify,
-	})
-	if err != nil {
-		return err
-	}
-	recordContractResult(res, writeRes)
-	return nil
-}
-
 // checkGRPCProtoCollisions builds a protoRegistry from every grpc contract in p
 // (reading each .proto for package/import identity) and fails fast on a
 // duplicate (proto package, service) or a divergent import path for the
@@ -338,103 +314,6 @@ func renderWriteContract(root, tmplName string, spec *ContractGenSpec, path stri
 	return nil
 }
 
-// tsTypesPath returns the absolute path for a contract's types.ts file under
-// generated-ts/. The PackagePath "generated/contracts/{kind}/{path}/{version}"
-// maps to "generated-ts/contracts/{kind}/{path}/{version}/types.ts".
-func tsTypesPath(root string, spec *ContractGenSpec) string {
-	rel := filepath.ToSlash(spec.PackagePath)
-	tsRel := strings.TrimPrefix(rel, "generated/")
-	return filepath.Join(root, "generated-ts", filepath.FromSlash(tsRel), "types.ts")
-}
-
-// emitTSTypes renders and writes (or dry-runs / verifies) the per-contract
-// types.ts file for the given spec. It uses renderTS (text/template, no
-// goimports/gofumpt) and codegen.Write directly — TS must NOT go through
-// codegen.Render.
-func emitTSTypes(root string, spec *ContractGenSpec, opts Options, res *Result) error {
-	content, err := renderTS(spec)
-	if err != nil {
-		return err
-	}
-	writeRes, err := codegen.Write(codegen.WriteOptions{
-		Path:     tsTypesPath(root, spec),
-		Content:  content,
-		RepoRoot: root,
-		DryRun:   opts.DryRun,
-		Verify:   opts.Verify,
-	})
-	if err != nil {
-		return err
-	}
-	recordContractResult(res, writeRes)
-	return nil
-}
-
-// tsBarrelEntryFor derives the barrel entry (namespace alias + relative import
-// path) for a TS-emitting contract spec. Shared by RenderTSBarrel so the disk
-// and generatedverify manifest barrels are byte-identical.
-func tsBarrelEntryFor(root string, spec *ContractGenSpec) (tsBarrelEntry, error) {
-	tsRel, err := relFromRoot(root, tsTypesPath(root, spec))
-	if err != nil {
-		return tsBarrelEntry{}, err
-	}
-	importRel := strings.TrimPrefix(tsRel, "generated-ts/")
-	return tsBarrelEntry{
-		Alias:      tsPkgAlias(strings.TrimSuffix(tsRel, "/types.ts")),
-		ImportPath: "./" + strings.TrimSuffix(importRel, ".ts"),
-	}, nil
-}
-
-// RenderTSBarrel renders the generated-ts/index.ts barrel from EVERY codegen
-// contract that emits a types.ts. It scans the full project (NOT a generate
-// scope) so the barrel is identical whether one contract or all are generated,
-// and both the disk generator (Generate) and the generatedverify manifest
-// derive it from this single source. The bool result is false when no contract
-// emits TS (e.g. a project of only webhook/grpc/responseProjection contracts,
-// or the synthetic generatedverify fixtures) — in that case no barrel is written.
-func RenderTSBarrel(root string, p *metadata.ProjectMeta) (CodegenArtifact, bool, error) {
-	if p == nil {
-		return CodegenArtifact{}, false, fmt.Errorf(errPrefixRender + "project is nil")
-	}
-	ids := make([]string, 0, len(p.Contracts))
-	for id, c := range p.Contracts {
-		if c.Codegen {
-			ids = append(ids, id)
-		}
-	}
-	sort.Strings(ids)
-
-	var entries []tsBarrelEntry
-	for _, id := range ids {
-		spec, err := buildContractSpec(root, p, id)
-		if err != nil {
-			return CodegenArtifact{}, false, fmt.Errorf(errPrefixRender+"barrel %q: %w", id, err)
-		}
-		if !kindEmitsTS(spec) {
-			continue
-		}
-		entry, err := tsBarrelEntryFor(root, spec)
-		if err != nil {
-			return CodegenArtifact{}, false, err
-		}
-		entries = append(entries, entry)
-	}
-	if len(entries) == 0 {
-		return CodegenArtifact{}, false, nil
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Alias < entries[j].Alias })
-
-	content, err := renderBarrel(entries)
-	if err != nil {
-		return CodegenArtifact{}, false, err
-	}
-	rel, err := relFromRoot(root, filepath.Join(root, "generated-ts", "index.ts"))
-	if err != nil {
-		return CodegenArtifact{}, false, err
-	}
-	return CodegenArtifact{Path: rel, Content: content}, true, nil
-}
-
 // RenderContractArtifacts renders a single contract to in-memory artifacts.
 // Used by manifest projection / verify pipelines (mirrors cellgen.RenderCellArtifacts).
 // Returns (nil, nil) when the contract is not opted in (Codegen=false).
@@ -509,25 +388,6 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID, m
 	}
 
 	return out, nil
-}
-
-// appendTSArtifact appends the per-contract types.ts CodegenArtifact to out when
-// the spec emits TS (skipped for webhook/grpc/responseProjection via
-// kindEmitsTS), returning out unchanged otherwise. Byte-identical to the disk
-// write — both derive from renderTS(spec) + tsTypesPath.
-func appendTSArtifact(out []CodegenArtifact, root string, spec *ContractGenSpec) ([]CodegenArtifact, error) {
-	if !kindEmitsTS(spec) {
-		return out, nil
-	}
-	content, err := renderTS(spec)
-	if err != nil {
-		return nil, fmt.Errorf(errPrefixRender+"%q types.ts: %w", spec.ContractID, err)
-	}
-	rel, err := relFromRoot(root, tsTypesPath(root, spec))
-	if err != nil {
-		return nil, err
-	}
-	return append(out, CodegenArtifact{Path: rel, Content: content}), nil
 }
 
 // selectContractIDsByScope returns the ordered list of contract IDs to process
@@ -611,6 +471,9 @@ func relFromRoot(root, abs string) (string, error) {
 	rel, err := filepath.Rel(root, abs)
 	if err != nil {
 		return "", fmt.Errorf("relpath %s vs %s: %w", abs, root, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %s escapes root %s", abs, root)
 	}
 	return filepath.ToSlash(rel), nil
 }

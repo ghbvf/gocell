@@ -5,8 +5,12 @@ import (
 	"embed"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/template"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/tools/codegen"
 )
 
 //go:embed templates/types.ts.tmpl templates/barrel.ts.tmpl
@@ -60,6 +64,16 @@ var tsTemplates = template.Must(
 	),
 )
 
+// tsQuote wraps a string value in TypeScript single-quoted literal syntax,
+// escaping backslashes and single-quotes so the result is valid TS source.
+// Minimal escaping: only '\' → '\\' and '\” → '\” are needed for a
+// single-quoted string literal (double-quotes are harmless inside single quotes).
+func tsQuote(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "'", "\\'")
+	return "'" + s + "'"
+}
+
 // tsGoType converts a DTOField to its TypeScript type string.
 // It uses the structured fields (ItemDTO, IsList, GoType) to avoid re-parsing
 // GoType string for structural decisions.
@@ -112,24 +126,12 @@ func tsScalarType(goType string) string {
 	}
 }
 
-// tsEnumSet builds a set of enum TypeNames for a given DTOSpec, used to look
-// up whether a field's GoType is an enum reference.
-func tsEnumSet(dto DTOSpec) map[string]bool {
-	m := make(map[string]bool, len(dto.Enums))
-	for _, e := range dto.Enums {
-		m[e.TypeName] = true
-	}
-	return m
-}
-
 // buildTSView converts a ContractGenSpec into the TS rendering view.
 // It computes tsInterface entries for each DTO and tsEnumView entries for
 // each EnumSpec, so the template only does pure rendering.
 func buildTSView(spec *ContractGenSpec) []tsInterface {
 	views := make([]tsInterface, 0, len(spec.DTOs))
 	for _, dto := range spec.DTOs {
-		enumSet := tsEnumSet(dto)
-
 		fields := make([]tsField, 0, len(dto.Fields))
 		for _, f := range dto.Fields {
 			// Derive wire key: BareJSONTag is set for body fields from schema traversal.
@@ -144,7 +146,8 @@ func buildTSView(spec *ContractGenSpec) []tsInterface {
 			if key == "-" || key == "" {
 				continue
 			}
-			_ = enumSet // enumSet is used implicitly: tsGoType handles enum types via the default case
+			// tsGoType handles enum type names via the default case (preserves the
+			// named type as-is so the TS union type reference is intact).
 			fields = append(fields, tsField{
 				Key:      key,
 				Required: f.Required,
@@ -156,7 +159,7 @@ func buildTSView(spec *ContractGenSpec) []tsInterface {
 		for _, e := range dto.Enums {
 			parts := make([]string, 0, len(e.Values))
 			for _, v := range e.Values {
-				parts = append(parts, "'"+v.Value+"'")
+				parts = append(parts, tsQuote(v.Value))
 			}
 			enums = append(enums, tsEnumView{
 				TypeName:    e.TypeName,
@@ -247,6 +250,18 @@ func kindHasTypesArtifact(kind string) bool {
 //	or  "generated-ts/contracts/http/order/create/v1"
 //
 // Output: e.g. "httpOrderCreateV1".
+//
+// Hyphens within a path segment are treated as word boundaries: each sub-word
+// after a hyphen gets its first letter capitalised before joining. The first
+// path segment (e.g. "event", "http") keeps its natural lower-case start so the
+// alias begins with a lower-case letter (namespace convention). Subsequent
+// segments — including any sub-words created by hyphens — are title-cased.
+//
+// Examples:
+//
+//	"generated/contracts/http/order/create/v1"              → "httpOrderCreateV1"
+//	"generated-ts/contracts/event/auth/bootstrap-failed/v1" → "eventAuthBootstrapFailedV1"
+//	"generated/contracts/event/devicecert-rotation-resolved/v1" → "eventDevicecertRotationResolvedV1"
 func tsPkgAlias(pkgPath string) string {
 	// Strip "generated/contracts/" or "generated-ts/contracts/" prefix if present.
 	rel := filepath.ToSlash(pkgPath)
@@ -258,16 +273,160 @@ func tsPkgAlias(pkgPath string) string {
 	}
 	var sb strings.Builder
 	for i, p := range parts {
-		if i == 0 {
-			sb.WriteString(p)
-			continue
+		// Split on hyphens to handle multi-word segments like "bootstrap-failed".
+		subWords := strings.Split(p, "-")
+		for j, w := range subWords {
+			if len(w) == 0 {
+				continue
+			}
+			// First sub-word of the first segment: keep original case (lower-case start).
+			if i == 0 && j == 0 {
+				sb.WriteString(w)
+				continue
+			}
+			// All other sub-words: title-case the first letter.
+			sb.WriteString(strings.ToUpper(w[:1]) + w[1:])
 		}
-		// Capitalize first letter and handle hyphens
-		clean := strings.ReplaceAll(p, "-", "")
-		if len(clean) == 0 {
-			continue
-		}
-		sb.WriteString(strings.ToUpper(clean[:1]) + clean[1:])
 	}
 	return sb.String()
+}
+
+// tsTypesPath returns the absolute path for a contract's types.ts file under
+// generated-ts/. The PackagePath "generated/contracts/{kind}/{path}/{version}"
+// maps to "generated-ts/contracts/{kind}/{path}/{version}/types.ts".
+func tsTypesPath(root string, spec *ContractGenSpec) string {
+	rel := filepath.ToSlash(spec.PackagePath)
+	tsRel := strings.TrimPrefix(rel, "generated/")
+	return filepath.Join(root, "generated-ts", filepath.FromSlash(tsRel), "types.ts")
+}
+
+// emitTSTypes renders and writes (or dry-runs / verifies) the per-contract
+// types.ts file for the given spec. It uses renderTS (text/template, no
+// goimports/gofumpt) and codegen.Write directly — TS must NOT go through
+// codegen.Render.
+func emitTSTypes(root string, spec *ContractGenSpec, opts Options, res *Result) error {
+	content, err := renderTS(spec)
+	if err != nil {
+		return err
+	}
+	writeRes, err := codegen.Write(codegen.WriteOptions{
+		Path:     tsTypesPath(root, spec),
+		Content:  content,
+		RepoRoot: root,
+		DryRun:   opts.DryRun,
+		Verify:   opts.Verify,
+	})
+	if err != nil {
+		return err
+	}
+	recordContractResult(res, writeRes)
+	return nil
+}
+
+// tsBarrelEntryFor derives the barrel entry (namespace alias + relative import
+// path) for a TS-emitting contract spec. Shared by RenderTSBarrel so the disk
+// and generatedverify manifest barrels are byte-identical.
+func tsBarrelEntryFor(root string, spec *ContractGenSpec) (tsBarrelEntry, error) {
+	tsRel, err := relFromRoot(root, tsTypesPath(root, spec))
+	if err != nil {
+		return tsBarrelEntry{}, err
+	}
+	importRel := strings.TrimPrefix(tsRel, "generated-ts/")
+	return tsBarrelEntry{
+		Alias:      tsPkgAlias(strings.TrimSuffix(tsRel, "/types.ts")),
+		ImportPath: "./" + strings.TrimSuffix(importRel, ".ts"),
+	}, nil
+}
+
+// RenderTSBarrel renders the generated-ts/index.ts barrel from EVERY codegen
+// contract that emits a types.ts. It scans the full project (NOT a generate
+// scope) so the barrel is identical whether one contract or all are generated,
+// and both the disk generator (Generate) and the generatedverify manifest
+// derive it from this single source. The bool result is false when no contract
+// emits TS (e.g. a project of only webhook/grpc/responseProjection contracts,
+// or the synthetic generatedverify fixtures) — in that case no barrel is written.
+func RenderTSBarrel(root string, p *metadata.ProjectMeta) (CodegenArtifact, bool, error) {
+	if p == nil {
+		return CodegenArtifact{}, false, fmt.Errorf(errPrefixRender + "project is nil")
+	}
+	ids := make([]string, 0, len(p.Contracts))
+	for id, c := range p.Contracts {
+		if c.Codegen {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+
+	var entries []tsBarrelEntry
+	for _, id := range ids {
+		spec, err := buildContractSpec(root, p, id)
+		if err != nil {
+			return CodegenArtifact{}, false, fmt.Errorf(errPrefixRender+"barrel %q: %w", id, err)
+		}
+		if !kindEmitsTS(spec) {
+			continue
+		}
+		entry, err := tsBarrelEntryFor(root, spec)
+		if err != nil {
+			return CodegenArtifact{}, false, err
+		}
+		entries = append(entries, entry)
+	}
+	if len(entries) == 0 {
+		return CodegenArtifact{}, false, nil
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Alias < entries[j].Alias })
+
+	content, err := renderBarrel(entries)
+	if err != nil {
+		return CodegenArtifact{}, false, err
+	}
+	rel, err := relFromRoot(root, filepath.Join(root, "generated-ts", "index.ts"))
+	if err != nil {
+		return CodegenArtifact{}, false, err
+	}
+	return CodegenArtifact{Path: rel, Content: content}, true, nil
+}
+
+// generateTSBarrel renders the full-project barrel and writes (or dry-runs /
+// verifies) generated-ts/index.ts. No-op when no contract emits TS.
+func generateTSBarrel(root string, p *metadata.ProjectMeta, opts Options, res *Result) error {
+	barrel, ok, err := RenderTSBarrel(root, p)
+	if err != nil {
+		return fmt.Errorf(errPrefixGenerate+"barrel index.ts: %w", err)
+	}
+	if !ok {
+		return nil
+	}
+	writeRes, err := codegen.Write(codegen.WriteOptions{
+		Path:     filepath.Join(root, filepath.FromSlash(barrel.Path)),
+		Content:  barrel.Content,
+		RepoRoot: root,
+		DryRun:   opts.DryRun,
+		Verify:   opts.Verify,
+	})
+	if err != nil {
+		return err
+	}
+	recordContractResult(res, writeRes)
+	return nil
+}
+
+// appendTSArtifact appends the per-contract types.ts CodegenArtifact to out when
+// the spec emits TS (skipped for webhook/grpc/responseProjection via
+// kindEmitsTS), returning out unchanged otherwise. Byte-identical to the disk
+// write — both derive from renderTS(spec) + tsTypesPath.
+func appendTSArtifact(out []CodegenArtifact, root string, spec *ContractGenSpec) ([]CodegenArtifact, error) {
+	if !kindEmitsTS(spec) {
+		return out, nil
+	}
+	content, err := renderTS(spec)
+	if err != nil {
+		return nil, fmt.Errorf(errPrefixRender+"%q types.ts: %w", spec.ContractID, err)
+	}
+	rel, err := relFromRoot(root, tsTypesPath(root, spec))
+	if err != nil {
+		return nil, err
+	}
+	return append(out, CodegenArtifact{Path: rel, Content: content}), nil
 }

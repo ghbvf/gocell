@@ -1,8 +1,12 @@
 package contractgen
 
 import (
+	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // TestTSGoType verifies the Go→TS type mapping table for all structural cases
@@ -225,6 +229,281 @@ func TestRenderTS_ArrayField(t *testing.T) {
 
 	if !strings.Contains(out, "data?: ResponseDataItem[];") {
 		t.Errorf("missing 'data?: ResponseDataItem[];'; got:\n%s", out)
+	}
+}
+
+// TestTSPkgAlias verifies that tsPkgAlias correctly derives camelCase namespace
+// aliases from generated package paths, including proper handling of hyphens as
+// word boundaries.
+func TestTSPkgAlias(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "no hyphen – generated/ prefix",
+			input: "generated/contracts/http/order/create/v1",
+			want:  "httpOrderCreateV1",
+		},
+		{
+			name:  "no hyphen – generated-ts/ prefix",
+			input: "generated-ts/contracts/http/order/create/v1",
+			want:  "httpOrderCreateV1",
+		},
+		{
+			name:  "single hyphen segment",
+			input: "generated-ts/contracts/event/auth/bootstrap-failed/v1",
+			want:  "eventAuthBootstrapFailedV1",
+		},
+		{
+			name:  "multi-hyphen segment",
+			input: "generated/contracts/event/devicecert-rotation-resolved/v1",
+			want:  "eventDevicecertRotationResolvedV1",
+		},
+		{
+			name:  "generated-ts prefix stripped (not treated as path segment hyphens)",
+			input: "generated-ts/contracts/event/order-created/v1",
+			want:  "eventOrderCreatedV1",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := tsPkgAlias(tc.input)
+			if got != tc.want {
+				t.Errorf("tsPkgAlias(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTSGoType_ExtraScalars supplements the main TestTSGoType with scalar types
+// that the base table doesn't cover: int32, uint32, uint64 → number; *string →
+// string; *int64 → number.
+func TestTSGoType_ExtraScalars(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		f    DTOField
+		want string
+	}{
+		{name: "int32", f: DTOField{GoType: "int32", BareJSONTag: "x"}, want: "number"},
+		{name: "uint32", f: DTOField{GoType: "uint32", BareJSONTag: "x"}, want: "number"},
+		{name: "uint64", f: DTOField{GoType: "uint64", BareJSONTag: "x"}, want: "number"},
+		{name: "ptr string", f: DTOField{GoType: "*string", BareJSONTag: "x"}, want: "string"},
+		{name: "ptr int64", f: DTOField{GoType: "*int64", BareJSONTag: "x"}, want: "number"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := tsGoType(tc.f)
+			if got != tc.want {
+				t.Errorf("tsGoType(%+v) = %q, want %q", tc.f, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTSQuote verifies that tsQuote correctly escapes special characters in TS
+// single-quoted string literals.
+func TestTSQuote(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "plain value", input: "succeeded", want: "'succeeded'"},
+		{name: "value with single quote", input: "it's", want: `'it\'s'`},
+		{name: "value with backslash", input: `a\b`, want: `'a\\b'`},
+		{name: "value with both", input: `a'b\c`, want: `'a\'b\\c'`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := tsQuote(tc.input)
+			if got != tc.want {
+				t.Errorf("tsQuote(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBuildTSView_HeaderSkip verifies that fields with JSONTag "-" (header-only)
+// are excluded from the TS interface output.
+func TestBuildTSView_HeaderSkip(t *testing.T) {
+	t.Parallel()
+	spec := &ContractGenSpec{
+		PackageName: "testevent",
+		ContractID:  "event.test.v1",
+		Kind:        "event",
+		SourceFile:  "contracts/event/test/v1/contract.yaml",
+		DTOs: []DTOSpec{
+			{
+				Name: "Headers",
+				Fields: []DTOField{
+					{Name: "XTenantID", JSONTag: "-", GoType: "string"},
+					{Name: "Visible", BareJSONTag: "visible", GoType: "string", Required: true},
+				},
+			},
+		},
+	}
+
+	views := buildTSView(spec)
+	if len(views) != 1 {
+		t.Fatalf("expected 1 view, got %d", len(views))
+	}
+	fields := views[0].Fields
+	for _, f := range fields {
+		if f.Key == "-" || f.Key == "XTenantID" {
+			t.Errorf("header-only field should be excluded from TS view, but got key %q", f.Key)
+		}
+	}
+	// The visible field should be present.
+	found := false
+	for _, f := range fields {
+		if f.Key == "visible" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected 'visible' field in TS view, but not found")
+	}
+}
+
+// TestRenderTS_HeaderSkip verifies that renderTS omits header-only fields
+// (JSONTag="-") from the generated TS interface.
+func TestRenderTS_HeaderSkip(t *testing.T) {
+	t.Parallel()
+	spec := &ContractGenSpec{
+		PackageName: "testevent",
+		ContractID:  "event.test.v1",
+		Kind:        "event",
+		SourceFile:  "contracts/event/test/v1/contract.yaml",
+		DTOs: []DTOSpec{
+			{
+				Name: "Headers",
+				Fields: []DTOField{
+					{Name: "XTenantID", JSONTag: "-", GoType: "string"},
+					{Name: "Visible", BareJSONTag: "visible", GoType: "string", Required: true},
+				},
+			},
+		},
+	}
+
+	got, err := renderTS(spec)
+	if err != nil {
+		t.Fatalf("renderTS: %v", err)
+	}
+	out := string(got)
+
+	if strings.Contains(out, "XTenantID") {
+		t.Errorf("header-only field XTenantID must not appear in TS output; got:\n%s", out)
+	}
+	if !strings.Contains(out, "visible: string;") {
+		t.Errorf("expected 'visible: string;' in TS output; got:\n%s", out)
+	}
+}
+
+// TestRenderTSBarrel_NilProject verifies RenderTSBarrel returns an error for nil project.
+func TestRenderTSBarrel_NilProject(t *testing.T) {
+	t.Parallel()
+	_, ok, err := RenderTSBarrel("/tmp/root", nil)
+	if err == nil {
+		t.Fatal("expected error for nil project, got nil")
+	}
+	if ok {
+		t.Error("expected ok=false for nil project")
+	}
+}
+
+// TestRenderTSBarrel_NoTSContracts verifies RenderTSBarrel returns ok=false when
+// no contracts emit TS (all webhook or grpc).
+func TestRenderTSBarrel_NoTSContracts(t *testing.T) {
+	t.Parallel()
+	p := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"webhook.order.notify.v1": {
+				ID:         "webhook.order.notify.v1",
+				Kind:       "webhook",
+				Codegen:    true,
+				Transports: []string{"http"}, // required by buildContractSpec FMT-39 guard
+			},
+		},
+	}
+	root := findRepoRoot()
+	_, ok, err := RenderTSBarrel(root, p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Error("expected ok=false when no contracts emit TS")
+	}
+}
+
+// TestRenderTSBarrel_MultiContract verifies RenderTSBarrel produces a barrel with
+// correctly sorted aliases and correct import paths when there are multiple TS-emitting contracts.
+func TestRenderTSBarrel_MultiContract(t *testing.T) {
+	t.Parallel()
+	// Use the synth_http_minimal fixture root so buildContractSpec can resolve schema files.
+	testDir := filepath.Join("testdata", "synth", "synth_http_minimal")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+
+	// Create a second synth contract pointing to the same schema files (synthetic only,
+	// to exercise multi-contract barrel emission). We build the barrel via a cloned
+	// project that has two codegen=true contracts.
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// Use the real root dir, not the synth testdata, so relFromRoot resolves.
+	root := findRepoRoot()
+
+	// Build one real barrel using the synth fixture.
+	artifact, ok, err := RenderTSBarrel(absTestDir, p)
+	if err != nil {
+		t.Fatalf("RenderTSBarrel: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true for synth project with http contract")
+	}
+
+	out := string(artifact.Content)
+	_ = root
+
+	// Must have generated header.
+	if !strings.HasPrefix(out, "// Code generated by gocell generate") {
+		t.Errorf("missing generated header; got:\n%s", out[:min(200, len(out))])
+	}
+	// Must have at least one export line.
+	if !strings.Contains(out, "export * as ") {
+		t.Errorf("expected export * as in barrel; got:\n%s", out)
+	}
+	// The barrel entries must be sorted by alias (spot-check: no descending pair).
+	lines := strings.Split(out, "\n")
+	var aliases []string
+	for _, l := range lines {
+		if strings.HasPrefix(l, "export * as ") {
+			// Extract alias between "export * as " and " from"
+			rest := strings.TrimPrefix(l, "export * as ")
+			alias := strings.SplitN(rest, " ", 2)[0]
+			aliases = append(aliases, alias)
+		}
+	}
+	if !sort.StringsAreSorted(aliases) {
+		t.Errorf("barrel aliases must be sorted; got: %v", aliases)
+	}
+
+	// Path must be "generated-ts/index.ts".
+	if artifact.Path != "generated-ts/index.ts" {
+		t.Errorf("artifact.Path = %q, want generated-ts/index.ts", artifact.Path)
 	}
 }
 

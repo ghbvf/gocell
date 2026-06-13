@@ -83,9 +83,12 @@ caveat）：
 
 - gocell-web 用生成 interface 做静态类型检查（删 `assertHealthShape` 手写守卫），编译期捕获
   字段错配；
-- 但 TS interface 在运行时被擦除，**不**校验真实响应 body。**服务端**仍用契约嵌入的 JSON-schema
-  在 HTTP ingress 校验（handler 既有机制，不变）。TS emitter 不生成运行时 validator，也不改任何
-  wire 语义——它只为现有契约**派生类型视图**，是纯加性框架能力。
+- 但 TS interface 在运行时被擦除，**不**校验真实响应 body。**服务端**用契约嵌入的 JSON-schema
+  在 HTTP ingress 校验**入站请求** body（handler 既有机制，不变）。注意：JSON-schema ingress
+  校验面向**入站请求** body——对于 GET /health 这类无请求 body 的端点不适用，亦不校验出站响应。
+  前端删除 `assertHealthShape` 后，**出站响应**的形状保障依赖 golden + `generate --verify` 防
+  后端 schema 漂移；TS 类型仅是消费端编译期提示，运行时不提供校验。TS emitter 不生成运行时
+  validator，也不改任何 wire 语义——它只为现有契约**派生类型视图**，是纯加性框架能力。
 
 ## Consequences / AI-robust 评级
 
