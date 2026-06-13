@@ -11,6 +11,7 @@ import (
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
+	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
@@ -128,6 +129,24 @@ func closeRedisClientAfterFailedLoad(ctx context.Context, client *adapterredis.C
 	if closeErr := client.Close(ctx); closeErr != nil {
 		slog.Warn("corebundle: failed to close Redis client after startup validation failure",
 			slog.Any("error", closeErr))
+	}
+}
+
+// closeBrokerResourcesAfterFailedLoad best-effort closes any event-transport
+// broker resources (e.g. the RabbitMQ connection, which dials eagerly in its
+// constructor) opened by eventtransport.Resolve, when LoadSharedDepsFromEnv fails
+// after the transport was resolved. Mirrors closeRedisClientAfterFailedLoad — the
+// broker connection holds an open socket that must not leak on a failed startup.
+// Errors are logged, not propagated (the load already failed).
+func closeBrokerResourcesAfterFailedLoad(ctx context.Context, resources []kernellifecycle.ManagedResource) {
+	for _, r := range resources {
+		if r == nil {
+			continue
+		}
+		if closeErr := r.Close(ctx); closeErr != nil {
+			slog.Warn("corebundle: failed to close event-transport broker resource after startup validation failure",
+				slog.Any("error", closeErr))
+		}
 	}
 }
 

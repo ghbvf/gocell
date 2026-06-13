@@ -49,8 +49,8 @@ func runtimeBaseOptions(
 
 	opts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithPublisher(shared.EventBus),
-		bootstrap.WithSubscriber(shared.EventBus),
+		bootstrap.WithPublisher(shared.Publisher),
+		bootstrap.WithSubscriber(shared.Subscriber),
 		// ConsumerBase is field-injected into SubscriberWithMiddleware (not a
 		// middleware list entry). It is the explicit EntryHandler→SubscriberHandler
 		// conversion boundary: idempotency Claim/Commit/Release + retry live here,
@@ -69,6 +69,12 @@ func runtimeBaseOptions(
 	// workers, cell tx). Provisioned in provisionCapabilities (cap_wiring.go).
 	if locals.poolMR != nil {
 		opts = append(opts, bootstrap.WithManagedResource(locals.poolMR))
+	}
+	// Event-transport broker resources (the RabbitMQ connection in postgres mode;
+	// empty in demo mode) join poolMR as FIRST ManagedResources so LIFO teardown
+	// closes the broker LAST — after the relay and every consumer drains (#1940).
+	for _, mr := range locals.brokerResources {
+		opts = append(opts, bootstrap.WithManagedResource(mr))
 	}
 	if shared.Redis != nil {
 		if mr, ok := shared.Redis.Client().(kernellifecycle.ManagedResource); ok {

@@ -37,6 +37,13 @@ type cmdLocals struct {
 	// runtimeBaseOptions for LIFO last-close.
 	poolMR kernellifecycle.ManagedResource
 
+	// brokerResources are the event-transport broker resources (the RabbitMQ
+	// connection in postgres mode; empty in demo mode) resolved by
+	// eventtransport.Resolve. Registered alongside poolMR as the FIRST
+	// ManagedResources so LIFO teardown closes them LAST — after the relay and
+	// every consumer that publishes/subscribes through the broker (#1940).
+	brokerResources []kernellifecycle.ManagedResource
+
 	// metricsHandler is the Prometheus HTTP handler.
 	metricsHandler http.Handler
 

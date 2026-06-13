@@ -80,7 +80,8 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 		JWTIssuer:            issuer,
 		JWTVerifier:          verifier,
 		MetricsProvider:      mp,
-		EventBus:             eb,
+		Publisher:            eb,
+		Subscriber:           eb,
 		ConfigEventCollector: cec,
 		ConsumerClaimer:      claimer,
 		InternalHMACRing:     testHMACRing(t),
@@ -288,8 +289,12 @@ func TestSharedDeps_Validate_MissingFields(t *testing.T) {
 			mutFn: func(s *SharedDeps) { s.MetricsProvider = nil },
 		},
 		{
-			name:  "EventBus nil",
-			mutFn: func(s *SharedDeps) { s.EventBus = nil },
+			name:  "Publisher nil",
+			mutFn: func(s *SharedDeps) { s.Publisher = nil },
+		},
+		{
+			name:  "Subscriber nil",
+			mutFn: func(s *SharedDeps) { s.Subscriber = nil },
 		},
 		{
 			name:  "ConfigEventCollector nil",

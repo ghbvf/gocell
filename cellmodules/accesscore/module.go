@@ -211,7 +211,7 @@ func buildAccessBaseOpts(shared *composition.SharedDeps) ([]accesscell.Option, *
 	}
 
 	opts := []accesscell.Option{
-		accesscell.WithOutboxDeps(outbox.WrapPublisherForCell(shared.EventBus), nil),
+		accesscell.WithOutboxDeps(outbox.WrapPublisherForCell(shared.Publisher), nil),
 		accesscell.WithJWTIssuer(shared.JWTIssuer),
 		accesscell.WithJWTVerifier(shared.JWTVerifier),
 		accesscell.WithCursorCodec(cursorCodec),

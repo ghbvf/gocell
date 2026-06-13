@@ -15,6 +15,8 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
 )
 
+require github.com/rabbitmq/amqp091-go v1.11.0 // indirect
+
 require (
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
@@ -37,6 +39,7 @@ require (
 	github.com/ghbvf/gocell/adapters/adapterutil v0.0.0 // indirect
 	github.com/ghbvf/gocell/adapters/postgres v0.0.0
 	github.com/ghbvf/gocell/adapters/prometheus v0.0.0
+	github.com/ghbvf/gocell/adapters/rabbitmq v0.0.0 // indirect
 	github.com/ghbvf/gocell/adapters/ratelimit v0.0.0 // indirect
 	github.com/ghbvf/gocell/adapters/redis v0.0.0
 	github.com/ghbvf/gocell/adapters/vault v0.0.0 // indirect
@@ -134,6 +137,8 @@ replace github.com/ghbvf/gocell/adapters/mqtt => ../../adapters/mqtt
 replace github.com/ghbvf/gocell/adapters/postgres => ../../adapters/postgres
 
 replace github.com/ghbvf/gocell/adapters/prometheus => ../../adapters/prometheus
+
+replace github.com/ghbvf/gocell/adapters/rabbitmq => ../../adapters/rabbitmq
 
 replace github.com/ghbvf/gocell/adapters/ratelimit => ../../adapters/ratelimit
 

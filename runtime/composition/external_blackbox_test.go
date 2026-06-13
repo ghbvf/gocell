@@ -61,13 +61,16 @@ func externalRealModeDeps(t *testing.T, mutate func(*composition.SharedDeps)) co
 	nonce, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clk)
 	require.NoError(t, err)
 
+	eb := eventbus.New(clk)
+
 	d := composition.SharedDeps{
 		Clock:                clk,
 		Topology:             topo,
 		JWTIssuer:            issuer,
 		JWTVerifier:          verifier,
 		MetricsProvider:      mp,
-		EventBus:             eventbus.New(clk),
+		Publisher:            eb,
+		Subscriber:           eb,
 		ConfigEventCollector: cec,
 		ConsumerClaimer:      idempotency.NewInMemClaimer(clk),
 		InternalHMACRing:     ring,

@@ -153,7 +153,8 @@ func buildStarterMemSharedDeps(_ context.Context) (*composition.SharedDeps, erro
 		JWTIssuer:            jwtIssuer,
 		JWTVerifier:          jwtVerifier,
 		MetricsProvider:      mp,
-		EventBus:             eb,
+		Publisher:            eb,
+		Subscriber:           eb,
 		ConfigEventCollector: cfgEventCollector,
 		ConsumerClaimer:      claimer,
 		InternalHMACRing:     ring,
@@ -242,8 +243,8 @@ func buildStarterBootstrapOpts(
 
 	opts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithPublisher(shared.EventBus),
-		bootstrap.WithSubscriber(shared.EventBus),
+		bootstrap.WithPublisher(shared.Publisher),
+		bootstrap.WithSubscriber(shared.Subscriber),
 		bootstrap.WithConsumerBase(cb),
 		bootstrap.WithListener(cell.PrimaryListener, shared.PrimaryHTTPAddr,
 			[]kauth.ListenerAuth{primaryAuth}),
