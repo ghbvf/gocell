@@ -219,33 +219,51 @@ func TestCondition_Validate(t *testing.T) {
 		// (RHSSource, RHSKey), NOT static Values. validateRHS makes mixing the two
 		// shapes unexpressible (#1977).
 		{
-			name:    "valid eq_attr (subject.sub == resource.id)",
-			cond:    abac.Condition{Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr, RHSSource: abac.SourceResource, RHSKey: "id"},
+			name: "valid eq_attr (subject.sub == resource.id)",
+			cond: abac.Condition{
+				Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr,
+				RHSSource: abac.SourceResource, RHSKey: "id",
+			},
 			wantErr: false,
 		},
 		{
-			name:    "eq_attr carrying stray static Values rejected",
-			cond:    abac.Condition{Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr, RHSSource: abac.SourceResource, RHSKey: "id", Values: []string{"x"}},
+			name: "eq_attr carrying stray static Values rejected",
+			cond: abac.Condition{
+				Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr,
+				RHSSource: abac.SourceResource, RHSKey: "id", Values: []string{"x"},
+			},
 			wantErr: true,
 		},
 		{
-			name:    "eq_attr with zero RHSSource rejected",
-			cond:    abac.Condition{Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr, RHSSource: 0, RHSKey: "id"},
+			name: "eq_attr with zero RHSSource rejected",
+			cond: abac.Condition{
+				Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr,
+				RHSSource: 0, RHSKey: "id",
+			},
 			wantErr: true,
 		},
 		{
-			name:    "eq_attr with empty RHSKey rejected",
-			cond:    abac.Condition{Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr, RHSSource: abac.SourceResource, RHSKey: ""},
+			name: "eq_attr with empty RHSKey rejected",
+			cond: abac.Condition{
+				Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr,
+				RHSSource: abac.SourceResource, RHSKey: "",
+			},
 			wantErr: true,
 		},
 		{
-			name:    "eq_attr with invalid RHSKey rejected",
-			cond:    abac.Condition{Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr, RHSSource: abac.SourceResource, RHSKey: " id"},
+			name: "eq_attr with invalid RHSKey rejected",
+			cond: abac.Condition{
+				Source: abac.SourceSubject, Key: "sub", Operator: abac.OpEqualsAttr,
+				RHSSource: abac.SourceResource, RHSKey: " id",
+			},
 			wantErr: true,
 		},
 		{
-			name:    "static operator carrying stray RHS reference rejected",
-			cond:    abac.Condition{Source: abac.SourceSubject, Key: "dept", Operator: abac.OpEquals, Values: []string{"eng"}, RHSSource: abac.SourceResource, RHSKey: "id"},
+			name: "static operator carrying stray RHS reference rejected",
+			cond: abac.Condition{
+				Source: abac.SourceSubject, Key: "dept", Operator: abac.OpEquals,
+				Values: []string{"eng"}, RHSSource: abac.SourceResource, RHSKey: "id",
+			},
 			wantErr: true,
 		},
 	}

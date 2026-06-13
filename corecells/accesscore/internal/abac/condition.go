@@ -90,7 +90,15 @@ func ParseAttributeSource(s string) (AttributeSource, error) {
 }
 
 // Condition is a single predicate in a Rule. It evaluates to true when the
-// attribute identified by (Source, Key) satisfies Operator relative to Values.
+// attribute identified by (Source, Key) satisfies Operator relative to its
+// right-hand side.
+//
+// The right-hand side is operator-discriminated and the two shapes are mutually
+// exclusive (enforced by Validate, so an ill-formed mix is unexpressible):
+//   - Static operators (OpEquals/OpNotEquals/OpIn/OpNotIn) compare against the
+//     literal Values set; RHSSource/RHSKey MUST be zero.
+//   - The cross-attribute operator (OpEqualsAttr) compares against ANOTHER
+//     resolved attribute (RHSSource, RHSKey); Values MUST be empty.
 //
 // Typed by design: no any/interface{} — Casbin's reflective ...interface{}
 // evaluation is explicitly rejected; all value comparison is over []string,
@@ -102,15 +110,23 @@ type Condition struct {
 	Source AttributeSource
 	// Key is the attribute name within Source. Must be non-empty.
 	Key string
-	// Operator is the comparison applied between Key's resolved value and Values.
+	// Operator is the comparison applied between Key's resolved value and the
+	// operator-discriminated right-hand side.
 	Operator Operator
-	// Values is the right-hand side of the comparison. Must be non-empty and
-	// contain no empty-string entries.
+	// Values is the static right-hand side. Required (non-empty, no empty-string
+	// entries) for static operators; MUST be empty for OpEqualsAttr.
 	Values []string
+	// RHSSource is the attribute namespace of the cross-attribute right-hand side.
+	// Set only for OpEqualsAttr; MUST be zero for static operators.
+	RHSSource AttributeSource
+	// RHSKey is the attribute name of the cross-attribute right-hand side.
+	// Set only for OpEqualsAttr; MUST be empty for static operators.
+	RHSKey string
 }
 
-// Validate returns an error if the Condition is structurally invalid.
-// All fields are required; Values must be non-empty with no empty-string entries.
+// Validate returns an error if the Condition is structurally invalid. Source,
+// Key and Operator are always required; the right-hand side is checked by
+// validateRHS according to the operator's shape.
 func (c Condition) Validate() error {
 	if err := c.Source.Validate(); err != nil {
 		return err
@@ -120,6 +136,31 @@ func (c Condition) Validate() error {
 	}
 	if err := c.Operator.Validate(); err != nil {
 		return err
+	}
+	return c.validateRHS()
+}
+
+// validateRHS enforces the operator-discriminated right-hand side: OpEqualsAttr
+// carries a (RHSSource, RHSKey) attribute reference and no static Values; every
+// static operator carries non-empty Values and no RHS reference. Mixing the two
+// shapes is a structural error — the sole funnel that makes an ill-formed
+// cross-attribute condition unexpressible (#1977).
+func (c Condition) validateRHS() error {
+	if c.Operator == OpEqualsAttr {
+		if err := c.RHSSource.Validate(); err != nil {
+			return err
+		}
+		if err := authz.ValidAttributeKey(c.RHSKey); err != nil {
+			return err
+		}
+		if len(c.Values) != 0 {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "abac: cross-attribute condition must not carry static Values")
+		}
+		return nil
+	}
+	if c.RHSSource != 0 || c.RHSKey != "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"abac: static condition must not carry a cross-attribute RHS reference")
 	}
 	if len(c.Values) == 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "abac: condition Values must not be empty")
