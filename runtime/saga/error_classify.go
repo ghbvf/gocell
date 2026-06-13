@@ -39,3 +39,18 @@ func journalErrLevel(err error) slog.Level {
 		return slog.LevelWarn
 	}
 }
+
+// foldErrLevel classifies a foldEvents error for the drive loop's "fold failed,
+// marking terminal" log. ErrSagaFoldUnknownKind (a code↔journal-schema drift —
+// a new EventKind reached replay without a foldEvents case) is a real
+// correctness anomaly → Error so it surfaces on Error dashboards. The defensive
+// errFoldEventMismatch (KindStepFailed mid-history, which the Journal should have
+// MarkTerminal'd) is an expected guard → Warn. Both still MarkTerminal Failed;
+// only the log severity differs.
+func foldErrLevel(err error) slog.Level {
+	var ec *errcode.Error
+	if errors.As(err, &ec) && ec.Code == errcode.ErrSagaFoldUnknownKind {
+		return slog.LevelError
+	}
+	return slog.LevelWarn
+}
