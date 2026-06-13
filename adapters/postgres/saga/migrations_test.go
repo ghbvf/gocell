@@ -114,3 +114,54 @@ func TestMigration040_CreatesSagaTables(t *testing.T) {
 	require.NoError(t, err, "pg_indexes lookup for idx_saga_instances_claimable")
 	require.True(t, idxExists, "saga_instances must have idx_saga_instances_claimable partial index")
 }
+
+// TestMigration064_AddsSagaEventsGlobalSeq verifies migration 064 adds the
+// global_seq IDENTITY column and its unique index to saga_events. The PK on
+// (instance_id, version) must still exist after the additive migration.
+//
+// ref: adapters/postgres/migrations/064_add_saga_events_global_seq.sql
+func TestMigration064_AddsSagaEventsGlobalSeq(t *testing.T) {
+	pool := sharedPG.NewPerTestPool(t)
+	ctx := context.Background()
+
+	// global_seq column must exist on saga_events.
+	var colExists bool
+	err := pool.DB().QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = 'saga_events'
+			  AND column_name = 'global_seq')`).Scan(&colExists)
+	require.NoError(t, err, "information_schema probe for saga_events.global_seq")
+	require.True(t, colExists, "migration 064 must add global_seq column to saga_events")
+
+	// global_seq must be a BIGINT (identity columns are bigint in PG).
+	var dataType string
+	err = pool.DB().QueryRow(ctx,
+		`SELECT data_type FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = 'saga_events'
+			  AND column_name = 'global_seq'`).Scan(&dataType)
+	require.NoError(t, err, "data_type probe for saga_events.global_seq")
+	require.Equal(t, "bigint", dataType, "saga_events.global_seq must be BIGINT")
+
+	// Unique index idx_saga_events_global_seq must exist.
+	var idxExists bool
+	err = pool.DB().QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM pg_indexes
+			WHERE schemaname = 'public'
+			  AND tablename = 'saga_events'
+			  AND indexname = 'idx_saga_events_global_seq')`).Scan(&idxExists)
+	require.NoError(t, err, "pg_indexes lookup for idx_saga_events_global_seq")
+	require.True(t, idxExists, "migration 064 must create idx_saga_events_global_seq unique index")
+
+	// PK on saga_events must still be (instance_id, version) — additive migration
+	// must not disturb the existing primary key constraint.
+	var pkDef string
+	err = pool.DB().QueryRow(ctx,
+		`SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c
+			JOIN pg_class rel ON c.conrelid = rel.oid
+			WHERE rel.relname = 'saga_events' AND c.contype = 'p'`).Scan(&pkDef)
+	require.NoError(t, err, "pg_get_constraintdef for saga_events PK after migration 064")
+	require.Contains(t, pkDef, "instance_id", "saga_events PK must still include instance_id after migration 064")
+	require.Contains(t, pkDef, "version", "saga_events PK must still include version after migration 064")
+}
