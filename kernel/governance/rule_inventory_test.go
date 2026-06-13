@@ -125,6 +125,11 @@ func goldenRuleIDs() []string {
 		// so a length/numeric constraint would silently no-op). Owns header
 		// validation (FMT-25 scans only path/query params). Issue #1494.
 		"FMT-40",
+		// FMT-41: grpc per-method auth overlay (endpoints.grpc.methods, #1675)
+		// metadata-pure guards — non-empty name, no duplicates, methods⇒codegen:true
+		// (dead-overlay gate), and vacuous-entry (public:false) rejection. Referential
+		// integrity (name ∈ proto method set) is the contractgen pre-pass (kernel⊥tools).
+		"FMT-41",
 		"FMT-A1", "FMT-C1",
 
 		// JOURNEY — journey lifecycle & cross-file consistency

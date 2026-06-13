@@ -95,6 +95,7 @@ var allRules = []Rule{
 	{Code: codeFMT38, Phase: PhaseBase, Detect: (*Validator).validateFMT38},
 	{Code: codeFMT39, Phase: PhaseBase, Detect: (*Validator).validateFMT39},
 	{Code: codeFMT40, Phase: PhaseBase, Detect: (*Validator).validateFMT40},
+	{Code: codeFMT41, Phase: PhaseBase, Detect: (*Validator).validateFMT41},
 	{Code: codeFMTA1, Phase: PhaseBase, Detect: (*Validator).validateFMTA1},
 	{Code: codeFMTC1, Phase: PhaseBase, Detect: (*Validator).validateFMTC1},
 
