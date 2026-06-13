@@ -75,3 +75,15 @@ func ModeRemote() TransportMode { return modeRemote }
 // backs the anti-vacuity freeze (TestTransportMode_FrozenRegistry): a new mode
 // added without registering it here — or a renamed wire value — is caught.
 var allTransportModes = []TransportMode{modeInProc, modeRemote}
+
+// isRegistered reports whether m is one of the producible modes
+// (allTransportModes: in_proc | remote). A zero value (forged) is NOT registered,
+// so [Metrics.Record] fail-closes on it (never emits transport_mode="unknown").
+func (m TransportMode) isRegistered() bool {
+	for _, x := range allTransportModes {
+		if x == m {
+			return true
+		}
+	}
+	return false
+}

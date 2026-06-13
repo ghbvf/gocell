@@ -13,28 +13,36 @@
 //
 // ## Why (the bind-authority closure)
 //
-// A Codex review (PR #2092 F1) flagged that `NewInProcess` + `Bind` are exported,
-// so any package could construct an InProcessTransport and Bind an arbitrary
-// handler — escaping the "composition-root-only" bind authority. This rule closes
-// the CONSTRUCTION chokepoint: restricting `NewInProcess` to runtime/composition
-// transitively gates `Bind`, because the bindable concrete `*InProcessTransport`
-// can only be obtained from `NewInProcess`. Consumer cells receive the
-// `transport.CellTransport` INTERFACE (only `DoContract`, no `Bind`) via
-// configgetter, so they cannot bind; bootstrap receives the already-minted holder
-// via the typed `WithInProcessTransport` option and is the sole legitimate
-// `Bind` caller. Thus minting authority == bind authority, and locking the minter
-// to composition closes both.
+// A Codex review (PR #2092 F1) flagged that an exported concrete with a usable
+// zero value could be Bound outside the composition root. The bind authority is
+// now closed at TWO layers:
 //
-// ## AI-robust rating: Medium — and why Hard is not pursued here
+//  1. Type layer (Hard, in runtime/transport): the BINDABLE concrete is the
+//     UNEXPORTED inProcessDispatcher (unexpressible outside the package). The
+//     exported InProcessTransport is a thin handle whose only field is that
+//     unexported dispatcher, so a forged zero-value InProcessTransport{} has a
+//     nil dispatcher and its Bind / DoContract fail-fast (inert). Thus the ONLY
+//     way to obtain a usable, bindable handle is NewInProcess.
+//  2. Caller layer (this rule, Medium): NewInProcess — the sole producer of a
+//     usable handle — may only be called from the composition root. Consumer
+//     cells receive the CellTransport INTERFACE (DoContract only, no Bind) via
+//     configgetter; bootstrap receives the already-minted handle via the typed
+//     WithInProcessTransport option and is the sole legitimate Bind caller.
 //
-// This is a caller-allowlist constraint ("only composition may call
-// NewInProcess"), the same carrier class as REPLAYDEPS-INMEM-FUNNEL-01 and
+// So minting authority == bind authority, and locking the minter to composition
+// (this rule) on top of the unforgeable bindable concrete (the type layer) closes
+// both — a zero-value forge is inert AND an out-of-composition NewInProcess is red.
+//
+// ## AI-robust rating: Medium (this rule) — backed by a Hard type layer
+//
+// This rule is a caller-allowlist constraint ("only composition may call
+// NewInProcess"), same carrier class as REPLAYDEPS-INMEM-FUNNEL-01 /
 // SVCTOKEN-CALLER-CELL-REQUIRED-01: a typed callsite scan via ResolvePackageRef is
-// the reachable ceiling. A Hard form (e.g. a sealed bind-capability token only
-// the composition root mints) is high-cost for a single minter already gated by
-// the interface boundary — no low-cost Hard path (ai-robust.md §审查要求).
-// The upstream sealed type (INPROCESS-TRANSPORT-SEALED-01, Hard) plus this Medium
-// caller funnel together form the closed bind-authority funnel.
+// the reachable ceiling. The HARD half lives in the type system: the bindable
+// dispatcher is unexported (cannot be constructed externally) and the zero-value
+// handle fail-fasts (TestInProcessTransport_ZeroValue_FailsFast). Together with
+// INPROCESS-TRANSPORT-SEALED-01 (Hard field freeze) they form the closed
+// bind-authority funnel.
 //
 // ## Blind spots / anti-vacuity
 //
@@ -140,9 +148,9 @@ func TestINPROCESS_TRANSPORT_BIND_AUTHORITY_01_SyntheticDetector(t *testing.T) {
 	assert.True(t, isNewInProcessRef(transportPkgPath, "NewInProcess"), "the minter must be detected")
 
 	green := []struct{ pkg, name string }{
-		{transportPkgPath, "ModeInProc"},      // not the minter
-		{transportPkgPath, "CellTransport"},   // the interface
-		{transportPkgPath, "NewMetrics"},      // a sibling constructor
+		{transportPkgPath, "ModeInProc"},                              // not the minter
+		{transportPkgPath, "CellTransport"},                           // the interface
+		{transportPkgPath, "NewMetrics"},                              // a sibling constructor
 		{PlatformModulePath + "/runtime/composition", "NewInProcess"}, // wrong pkg (a cell's own NewInProcess)
 	}
 	for _, tc := range green {

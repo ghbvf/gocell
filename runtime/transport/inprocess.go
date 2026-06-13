@@ -22,45 +22,62 @@ const attrHTTPStatusCode = "http.status_code"
 // call that arrives before the built handler is bound (MESSAGE-CONST-LITERAL-01).
 const msgTransportNotBound = "in-process transport: DoContract called before the internal-listener handler was bound (bootstrap phase5)"
 
-// boundState is the immutable handler+tracer pair published atomically by Bind.
+// msgTransportNotMinted is the fail-fast message for a DoContract/Bind on a
+// zero-value InProcessTransport that was NOT minted via NewInProcess (its inner
+// bindable dispatcher is nil and unexpressible outside this package).
+const msgTransportNotMinted = "in-process transport: used a zero-value InProcessTransport — " +
+	"only NewInProcess (composition root) produces a usable transport"
+
+// boundState is the immutable handler+tracer pair published atomically by bind.
 // Holding both in one pointer lets a single CompareAndSwap publish the whole
-// state — no plain field writes race with a concurrent DoContract reader.
+// state — no plain field writes race with a concurrent dispatch reader.
 type boundState struct {
 	handler http.Handler
 	tracer  wrapper.Tracer
 }
 
-// InProcessTransport is the co-located implementation of [CellTransport]: it
-// dispatches a contract request in memory against the BUILT internal-listener
-// http.Handler, replacing the loopback TCP hop with a direct ServeHTTP. It does
-// NOT bypass the listener auth chain — the dispatched request runs the same
-// ServiceTokenMiddleware + RequireCallerCell as a remote call (ADR D4).
-//
-// Sealed (Hard): all fields are unexported and the sole constructor is
-// [NewInProcess], so an external package cannot forge a transport or set the
-// handler by struct literal. The field set is frozen by INPROCESS-TRANSPORT-SEALED-01.
-//
-// Lifecycle (WriteOnce late-bind): the composition root constructs the holder
-// EMPTY (the handler does not exist until bootstrap phase5) and shares it by
-// reference with both the consumer cell (via composition.SharedDeps) and
-// bootstrap. [InProcessTransport.Bind] publishes the finalized handler exactly
-// once at phase5 (single atomic CompareAndSwap — race-free), before serving. A
-// DoContract before Bind fails fast.
-type InProcessTransport struct {
-	// state is nil until Bind publishes the handler+tracer with one atomic CAS;
-	// DoContract reads it with an acquire Load, seeing either nil (fail-fast) or
-	// the fully-published state — never a torn write.
+// inProcessDispatcher is the UNEXPORTED bindable concrete: it holds the
+// late-bound handler+tracer and implements the actual in-memory dispatch. It is
+// unexpressible outside this package — an external package cannot construct one
+// (the type is unexported) nor obtain one except via [NewInProcess] → so it can
+// never be bound by a forged value. This is the bind-authority closure
+// (INPROCESS-TRANSPORT-BIND-AUTHORITY-01 upstream): the bindable thing has no
+// public zero value.
+type inProcessDispatcher struct {
+	// state is nil until bind publishes the handler+tracer with one atomic CAS;
+	// dispatch reads it with an acquire Load, seeing either nil (fail-fast) or the
+	// fully-published state — never a torn write.
 	state atomic.Pointer[boundState]
 	// metrics records transport_mode; may be nil (records nothing).
 	metrics *Metrics
 }
 
-// NewInProcess constructs an EMPTY in-process transport holder. The built
+// InProcessTransport is the sealed composition-root handle for the co-located
+// transport. It is the one object the composition root mints and shares by
+// reference: the consumer cell receives its [CellTransport] (DoContract), and
+// bootstrap binds the finalized internal-listener handler into it at phase5.
+//
+// Sealed + bind authority (Hard): the only field is the UNEXPORTED bindable
+// dispatcher, so an external package cannot forge a usable transport — a
+// zero-value InProcessTransport{} has a nil dispatcher and its DoContract / Bind
+// fail-fast (never a silent rogue bind). The sole way to obtain a usable handle
+// is [NewInProcess], which INPROCESS-TRANSPORT-BIND-AUTHORITY-01 restricts to the
+// composition root. The field set is frozen by INPROCESS-TRANSPORT-SEALED-01.
+//
+// Lifecycle (WriteOnce late-bind): the composition root constructs the holder
+// EMPTY (the handler does not exist until bootstrap phase5). [Bind] publishes the
+// finalized handler exactly once (single atomic CompareAndSwap — race-free),
+// before serving. A DoContract before Bind fails fast.
+type InProcessTransport struct {
+	d *inProcessDispatcher
+}
+
+// NewInProcess constructs an EMPTY in-process transport handle. The built
 // internal-listener handler is bound later via [InProcessTransport.Bind] at
 // bootstrap phase5. metrics may be nil (no metric recording); production wires a
 // real *Metrics from the composition root's metrics provider.
 func NewInProcess(metrics *Metrics) *InProcessTransport {
-	return &InProcessTransport{metrics: metrics}
+	return &InProcessTransport{d: &inProcessDispatcher{metrics: metrics}}
 }
 
 // Bind atomically publishes the built internal-listener handler (and tracer) to
@@ -68,8 +85,12 @@ func NewInProcess(metrics *Metrics) *InProcessTransport {
 // the internal router is built and auth-finalized, so DoContract dispatches see
 // the same compiled auth chain as a network request. A nil tracer degrades to
 // [wrapper.NoopTracer]. A nil handler is a programmer error (fail-fast). A second
-// Bind returns an error (the CompareAndSwap loses).
+// Bind returns an error (the CompareAndSwap loses). A zero-value (un-minted)
+// transport fails fast.
 func (t *InProcessTransport) Bind(handler http.Handler, tracer wrapper.Tracer) error {
+	if t.d == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrInternal, msgTransportNotMinted)
+	}
 	if handler == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrInternal,
 			"in-process transport: Bind called with a nil handler")
@@ -77,7 +98,7 @@ func (t *InProcessTransport) Bind(handler http.Handler, tracer wrapper.Tracer) e
 	if tracer == nil {
 		tracer = wrapper.NoopTracer{}
 	}
-	if !t.state.CompareAndSwap(nil, &boundState{handler: handler, tracer: tracer}) {
+	if !t.d.state.CompareAndSwap(nil, &boundState{handler: handler, tracer: tracer}) {
 		return errcode.New(errcode.KindInternal, errcode.ErrInternal,
 			"in-process transport: Bind called more than once (WriteOnce)")
 	}
@@ -90,12 +111,16 @@ func (t *InProcessTransport) Bind(handler http.Handler, tracer wrapper.Tracer) e
 // middleware chain (incl. ServiceTokenMiddleware + RequireCallerCell) runs — the
 // in-process path replaces the network, not the governance stack (ADR D4).
 //
-// Before Bind it fails fast with KindInternal (a misordered-wiring programmer
-// error), never a nil-handler panic. The dispatch span carries transport_mode +
+// Fail-fast (never a nil panic): a zero-value (un-minted) transport, or a call
+// before Bind, returns KindInternal. The dispatch span carries transport_mode +
 // the response status, and is marked StatusError on a 5xx so an in-proc call is
 // never silently "successful" in traces (ADR D4: transparent ≠ undiagnosable).
 func (t *InProcessTransport) DoContract(ctx context.Context, contractID string, req *http.Request) (*http.Response, error) {
-	bs := t.state.Load()
+	if t.d == nil {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal, msgTransportNotMinted,
+			errcode.WithInternal(errcode.InternalAttr("contractID", contractID)))
+	}
+	bs := t.d.state.Load()
 	if bs == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal, msgTransportNotBound,
 			errcode.WithInternal(errcode.InternalAttr("contractID", contractID)))
@@ -108,7 +133,7 @@ func (t *InProcessTransport) DoContract(ctx context.Context, contractID string, 
 
 	rec := httptest.NewRecorder()
 	bs.handler.ServeHTTP(rec, req.WithContext(ctx))
-	t.metrics.Record(ctx, modeInProc)
+	t.d.metrics.Record(ctx, modeInProc)
 
 	span.SetAttributes(wrapper.Attr{Key: attrHTTPStatusCode, Value: int64(rec.Code)})
 	if rec.Code >= http.StatusInternalServerError {

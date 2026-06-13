@@ -47,10 +47,18 @@ func NewMetrics(p kernelmetrics.Provider) (*Metrics, error) {
 
 // Record increments the transport request counter for mode. It is nil-safe: a
 // nil *Metrics records nothing, so tests (and any composition path that omits a
-// metrics provider) can run the transport without a registered collector. The
-// mode argument is the sealed [TransportMode], so the label value is unforgeable.
+// metrics provider) can run the transport without a registered collector.
+//
+// Fail-closed on the label set: an UNregistered mode (a forged/zero-value
+// TransportMode, whose String() renders as the [TransportModeUnknown] sentinel)
+// is NEVER recorded — so the binary closed set {in_proc, remote} cannot be
+// polluted. The sealed type (no external 3rd value) + this record-point guard +
+// the allTransportModes registry triple-close the label value set.
 func (m *Metrics) Record(ctx context.Context, mode TransportMode) {
 	if m == nil {
+		return
+	}
+	if !mode.isRegistered() {
 		return
 	}
 	m.requests.With(kernelmetrics.Labels{labelTransportMode: mode.String()}).Inc(ctx)

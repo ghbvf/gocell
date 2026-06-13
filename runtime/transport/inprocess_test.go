@@ -40,6 +40,44 @@ func TestInProcessTransport_DoContractBeforeBind_FailsFast(t *testing.T) {
 	errcodetest.AssertCode(t, err, errcode.ErrInternal)
 }
 
+// TestInProcessTransport_ZeroValue_FailsFast asserts that a forged zero-value
+// InProcessTransport{} (NOT minted via NewInProcess — its inner bindable
+// dispatcher is nil) cannot bind a rogue handler and cannot dispatch: both Bind
+// and DoContract fail-fast. This closes the bind-authority gap that an exported
+// concrete with a usable zero value would open.
+func TestInProcessTransport_ZeroValue_FailsFast(t *testing.T) {
+	t.Parallel()
+
+	var zero InProcessTransport // not minted; d == nil
+	err := zero.Bind(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), nil)
+	errcodetest.AssertCode(t, err, errcode.ErrInternal)
+
+	//nolint:bodyclose // the un-minted fail-fast path returns a nil response (asserted below); no body to close.
+	resp, derr := zero.DoContract(context.Background(), "c", newReq(t, "/internal/v1/config/x"))
+	if resp != nil {
+		t.Fatalf("expected nil response from un-minted transport, got %v", resp)
+	}
+	errcodetest.AssertCode(t, derr, errcode.ErrInternal)
+}
+
+// TestMetrics_Record_FailsClosedOnUnregisteredMode asserts Record never emits an
+// unregistered (forged/zero) mode, so the binary closed set {in_proc, remote}
+// cannot be polluted with transport_mode="unknown".
+func TestMetrics_Record_FailsClosedOnUnregisteredMode(t *testing.T) {
+	t.Parallel()
+
+	m, cp := newTestMetrics(t)
+	m.Record(context.Background(), TransportMode{}) // forged zero — must NOT record
+	m.Record(context.Background(), ModeInProc())    // registered — records
+
+	if got := cp.count(TransportModeUnknown); got != 0 {
+		t.Errorf("unregistered mode recorded %d times, want 0 (fail-closed)", got)
+	}
+	if got := cp.count("in_proc"); got != 1 {
+		t.Errorf("in_proc recorded %d times, want 1", got)
+	}
+}
+
 // TestInProcessTransport_Bind_WriteOnce verifies first Bind succeeds and a second
 // Bind is rejected (WriteOnce), and that concurrent Bind has exactly one winner.
 func TestInProcessTransport_Bind_WriteOnce(t *testing.T) {
