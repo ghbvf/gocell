@@ -742,6 +742,36 @@ func TestContractSchemaGRPCKind(t *testing.T) {
 			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto", "streamingType": "duplex"}`,
 			expectValid: false,
 		},
+		{
+			name: "methods overlay with public accepted (#1675)",
+			// Per-method public auth overlay: sparse, only methods needing the
+			// non-default (public:true) appear; the .proto remains the method-set
+			// single source.
+			grpcBlock: `{
+				"service": "device.command.v1.DeviceCommandService",
+				"proto": "contracts/grpc/device/command/v1/device_command.proto",
+				"methods": [{"name": "Check", "public": true}]
+			}`,
+			expectValid: true,
+		},
+		{
+			name: "method entry missing name rejected (#1675)",
+			// name is required on every overlay entry (item required:["name"]).
+			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto", "methods": [{"public": true}]}`,
+			expectValid: false,
+		},
+		{
+			name: "method entry empty name rejected (#1675, minLength)",
+			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto", "methods": [{"name": "", "public": true}]}`,
+			expectValid: false,
+		},
+		{
+			name: "method entry unknown property rejected (#1675, item additionalProperties — forward-protects #2008 ABAC fields)",
+			// The item-level additionalProperties:false seals the overlay shape so a
+			// typo'd or premature ABAC field (#2008) cannot slip in silently.
+			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto", "methods": [{"name": "Check", "authz": {"permission": "x:read"}}]}`,
+			expectValid: false,
+		},
 	}
 
 	for _, tc := range tests {
