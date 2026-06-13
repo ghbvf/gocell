@@ -4,6 +4,10 @@ This document lists all environment variables consumed by `cmd/corebundle` at st
 Variables without a default value are **required** in the indicated adapter mode.
 Missing required variables cause fail-fast before any assembly initialization.
 
+> **Exception:** the [webhook source secret encryption](#webhook-source-secret-encryption)
+> section is consumed by **assemblies that call `cellmodules/webhooksource.LoadSourceStore`**,
+> not by `cmd/corebundle` (which declares no webhook receivers today). It is flagged inline.
+
 ## JWT Configuration (required in all modes)
 
 | Variable | Purpose | Default | Required | Notes |
@@ -135,6 +139,26 @@ Probe `postgres_app_role_restricted_ready` verifies at runtime that the serving 
 | `GOCELL_VAULT_TRANSIT_MOUNT` | Vault Transit secrets engine mount path | `transit` | No | |
 | `GOCELL_VAULT_TRANSIT_KEY` | Vault Transit key name | `gocell-config` | No | |
 | `GOCELL_VAULT_STARTUP_TIMEOUT` | Total startup I/O deadline (auth Login + optional unwrap + initial key metadata read) | `30s` | No | `time.ParseDuration` format (e.g. `45s`, `2m`). Must be positive; malformed or non-positive values fail fast. Increase for high-latency networks or wrapped-token paths that require multiple TLS round-trips. |
+
+### webhook source secret encryption
+
+Persistent, encrypted webhook source HMAC secrets (#1540). Same envelope-encryption
+backends as configcore; vault-transit reuses the shared `VAULT_*` / `GOCELL_VAULT_*`
+settings above.
+
+> **Not consumed by `cmd/corebundle` today** (unlike the rest of this document).
+> These variables are read by `cellmodules/webhooksource.LoadSourceStore`, which a
+> webhook-serving **assembly** calls at boot to load the persistent encrypted
+> `SourceStore`. `cmd/corebundle` declares no webhook receivers and does not invoke
+> the loader, so setting `GOCELL_WEBHOOK_*` has no effect on the current corebundle.
+> Required only for assemblies that persist webhook sources (postgres storage) —
+> memory/demo deployments seed the in-memory `kwh.SourceRegistry` directly.
+
+| Variable | Purpose | Default | Required | Notes |
+|---|---|---|---|---|
+| `GOCELL_WEBHOOK_KEY_PROVIDER` | Selects the encryption backend for persisted webhook source secrets | — | **postgres mode (when persisting webhook sources)** | `"local-aes"` (dev/CI) or `"vault-transit"` (production). The persistent SourceStore loader fails fast if unset; there is no plaintext fallback (the `webhook_sources` table has no plaintext column). |
+| `GOCELL_WEBHOOK_MASTER_KEY` | 32-byte hex-encoded AES key for `local-aes` provider | — | When `GOCELL_WEBHOOK_KEY_PROVIDER=local-aes` | Generate: `openssl rand -hex 32`. Real mode rejects well-known demo keys. |
+| `GOCELL_WEBHOOK_MASTER_KEY_PREVIOUS` | Previous master key for key rotation | — | No | Optional; enables decryption of secrets encrypted with the prior key during the rotation window (`local-aes` only). |
 
 ### Required Vault transit policy
 

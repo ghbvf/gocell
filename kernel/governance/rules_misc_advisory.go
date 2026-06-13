@@ -130,7 +130,7 @@ func (v *Validator) validateADV05() []ValidationResult {
 		if c.Kind != "event" {
 			continue
 		}
-		if c.Lifecycle != "active" {
+		if c.Lifecycle != lifecycleActive {
 			continue
 		}
 		if len(c.Endpoints.Subscribers) == 0 {

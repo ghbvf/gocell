@@ -31,8 +31,8 @@ func TestCapabilityProviderFunnel_CompositionRootOnly(t *testing.T) {
 // It runs the same scanCapabilityProviderViolations the production Check uses
 // (single source) against the synthetic fixture packages.
 //
-// Coverage: 3 PG qualified (NewPool/NewTxManager/NewOutboxWriter) + 1 redis
-// qualified (NewClient) + 1 aliased (NewPool) + 1 dot-import (NewTxManager) = 6.
+// Coverage: 4 PG qualified (NewPool/NewTxManager/NewOutboxWriter/NewJournalingOutboxWriter)
+// + 1 redis qualified (NewClient) + 1 aliased (NewPool) + 1 dot-import (NewTxManager) = 7.
 func TestCapabilityProviderFunnel_RedFixtureDetected(t *testing.T) {
 	diags := Run(t, Fixture(
 		FixtureOpts{Tests: false},
@@ -46,9 +46,9 @@ func TestCapabilityProviderFunnel_RedFixtureDetected(t *testing.T) {
 	}
 	// Equality (not ≥) so the fixture cannot drift silently — any change to the
 	// fixture files must update this count.
-	assert.Len(t, diags, 6,
-		"fixture must yield exactly 6 CAPABILITY-PROVIDER-FUNNEL-01 hits "+
-			"(3 PG qualified + 1 redis qualified + 1 aliased + 1 dot-import); "+
+	assert.Len(t, diags, 7,
+		"fixture must yield exactly 7 CAPABILITY-PROVIDER-FUNNEL-01 hits "+
+			"(4 PG qualified + 1 redis qualified + 1 aliased + 1 dot-import); "+
 			"if the fixture changes intentionally, update the expected count")
 }
 

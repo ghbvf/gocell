@@ -33,6 +33,9 @@ const (
 	// Named after AWS Cognito's convention, which is the most widely-adopted
 	// community precedent.
 	tokenUseClaim = "token_use"
+	// principalKindClaim is the JWT payload key carrying the PrincipalKindClaim
+	// value (the signed device-vs-user marker; absent = user).
+	principalKindClaim = "principal_kind"
 )
 
 // jwtTypForIntent returns the JOSE typ header value corresponding to intent.
@@ -192,6 +195,9 @@ func (v *JWTVerifier) VerifyIntent(ctx context.Context, tokenStr string, expecte
 				string(claims.TokenUse), string(expected)))),
 			errcode.WithCategory(errcode.CategoryAuth))
 	}
+	// principal_kind is validated fail-closed in parseAndVerify
+	// (validatePrincipalKind) on the raw claims map — absent / present-non-string
+	// / present-unknown are all decided there, so no re-check is needed here.
 	// Audience validation (RFC 8725 §3.3): when expectedAudiences is configured,
 	// at least one must appear in the token's aud claim. The check is intentionally
 	// placed after intent validation so intent-mismatch errors remain distinguishable
@@ -326,11 +332,27 @@ func (v *JWTVerifier) parseAndVerify(_ context.Context, tokenStr string) (Claims
 		return Claims{}, nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "invalid token claims")
 	}
 
-	claims := mapClaimsToClaims(mapClaims)
-	if err := validateAndCanonicalizeTenant(mapClaims, &claims); err != nil {
+	claims, err := decodeAndValidateClaims(mapClaims)
+	if err != nil {
 		return Claims{}, nil, err
 	}
 	return claims, token.Header, nil
+}
+
+// decodeAndValidateClaims maps the raw claims to Claims and runs the fail-closed
+// raw-map validators (tenant_id canonicalization, principal_kind closed-value
+// set). Both validators read the RAW map to distinguish absent from
+// present-but-malformed; collecting them here keeps parseAndVerify's cognitive
+// complexity within the ≤15 ceiling.
+func decodeAndValidateClaims(mc jwt.MapClaims) (Claims, error) {
+	claims := mapClaimsToClaims(mc)
+	if err := validateAndCanonicalizeTenant(mc, &claims); err != nil {
+		return Claims{}, err
+	}
+	if err := validatePrincipalKind(mc, &claims); err != nil {
+		return Claims{}, err
+	}
+	return claims, nil
 }
 
 // validateAndCanonicalizeTenant fails closed on the tenant_id claim and, on
@@ -365,6 +387,44 @@ func validateAndCanonicalizeTenant(mc jwt.MapClaims, claims *Claims) error {
 			errcode.WithCategory(errcode.CategoryAuth))
 	}
 	claims.TenantID = tid.String()
+	return nil
+}
+
+// validatePrincipalKind fails closed on the principal_kind claim. Like
+// validateAndCanonicalizeTenant it reads the RAW claims map (not a lossy mapped
+// value) so the three cases are distinguishable — the closed-value-set marker
+// must be fully fail-closed (a malformed signed marker must NOT downgrade to the
+// user default and bypass the device boundary):
+//
+//   - absent             → user default, claims.PrincipalKind stays empty.
+//   - present non-string → 401 (broken/forged token).
+//   - present string     → must be a known PrincipalKindClaim value; an unknown
+//     value is 401 (so a typo can never silently fall through to a user mint).
+//
+// On success a known value is written to claims.PrincipalKind; the device issuer
+// (mintDevicePrincipal) only acts on PrincipalKindClaimDevice. All rejections use
+// the generic unauthorized envelope (enumeration defense); the specific reason
+// lives only in the server-side internal detail.
+func validatePrincipalKind(mc jwt.MapClaims, claims *Claims) error {
+	raw, present := mc[principalKindClaim]
+	if !present {
+		return nil
+	}
+	s, ok := raw.(string)
+	if !ok {
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
+			msgInvalidToken,
+			errcode.WithInternal(errcode.InternalAttr("_", "principal_kind claim is not a string")),
+			errcode.WithCategory(errcode.CategoryAuth))
+	}
+	pk := PrincipalKindClaim(s)
+	if !pk.IsValid() {
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
+			msgInvalidToken,
+			errcode.WithInternal(errcode.InternalAttr("_", "principal_kind claim is not a known value")),
+			errcode.WithCategory(errcode.CategoryAuth))
+	}
+	claims.PrincipalKind = pk
 	return nil
 }
 
@@ -444,6 +504,18 @@ type IssueOptions struct {
 	// The caller is responsible for passing a canonical UUID string; the issuer
 	// trusts its caller and does not re-validate.
 	TenantID string
+	// PrincipalKind marks the token's principal kind ("principal_kind" claim).
+	// The type is the wire enum PrincipalKindClaim (string), distinct from the
+	// runtime PrincipalKind (int) enum — pass PrincipalKindClaimDevice, not
+	// PrincipalDevice (which is the int constant for the runtime principal kind).
+	// Empty (PrincipalKindClaimUser) omits the claim — an ordinary user token.
+	// PrincipalKindClaimDevice mints a device bearer token; this REQUIRES a
+	// non-empty TenantID in the same IssueOptions — a device principal is always
+	// tenant-scoped, and the verifier rejects a device token without a tenant
+	// claim fail-closed at runtime via mintDevicePrincipal. The issuer trusts its
+	// caller (like TenantID) and does not re-validate; the verifier rejects an
+	// unknown value fail-closed.
+	PrincipalKind PrincipalKindClaim
 }
 
 // Issue creates a signed JWT token for the given subject and options.
@@ -501,6 +573,9 @@ func (i *JWTIssuer) Issue(intent TokenIntent, subject string, opts IssueOptions)
 	if opts.TenantID != "" {
 		claims["tenant_id"] = opts.TenantID
 	}
+	if opts.PrincipalKind != PrincipalKindClaimUser {
+		claims[principalKindClaim] = string(opts.PrincipalKind)
+	}
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = i.keys.SigningKeyID()
 	token.Header["typ"] = jwtTypForIntent(intent)
@@ -526,6 +601,11 @@ func mapClaimsToClaims(mc jwt.MapClaims) Claims {
 	if tu, ok := mc[tokenUseClaim].(string); ok {
 		c.TokenUse = TokenIntent(tu)
 	}
+	// principal_kind is NOT decoded here: a present-but-non-string claim must be
+	// distinguishable from absent so it can fail closed (a malformed signed
+	// marker must not silently downgrade to the user default). That requires the
+	// RAW claims map, so validatePrincipalKind owns the full absent/malformed/
+	// known-value decision (same boundary + reason as validateAndCanonicalizeTenant).
 	if sid, ok := mc["sid"].(string); ok {
 		c.SessionID = sid
 	}
@@ -589,6 +669,7 @@ var standardClaims = map[string]struct{}{
 	"sub": {}, "iss": {}, "aud": {},
 	"exp": {}, "iat": {}, "nbf": {}, "roles": {},
 	tokenUseClaim:             {},
+	principalKindClaim:        {},
 	"sid":                     {},
 	"tenant_id":               {},
 	"password_reset_required": {},

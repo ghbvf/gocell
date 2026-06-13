@@ -286,6 +286,180 @@ func TestSchemaToDTOs_EmptyObject(t *testing.T) {
 	}
 }
 
+// TestSchemaToDTOs_StringEnum_TopLevel covers a top-level string field carrying a
+// closed value-set (#1935, mirrors event.devicecert-rotation-resolved.v1 outcome).
+// The field type becomes the generated named type <Parent><Field> and the DTO
+// carries an EnumSpec whose const names follow <TypeName><PascalCaseValue>.
+func TestSchemaToDTOs_StringEnum_TopLevel(t *testing.T) {
+	s := &Schema{
+		Type:          "object",
+		PropertyOrder: []string{"outcome"},
+		Properties: map[string]*Schema{
+			"outcome": {Type: "string", Enum: []string{"succeeded", "failed", "rejected"}},
+		},
+		Required: []string{"outcome"},
+	}
+	dtos, err := schemaToDTOs("Payload", s)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(dtos) != 1 {
+		t.Fatalf("expected 1 DTO, got %d: %v", len(dtos), dtoNames(dtos))
+	}
+	dto := dtos[0]
+	if got := dto.Fields[0].GoType; got != "PayloadOutcome" {
+		t.Errorf("outcome GoType = %q, want PayloadOutcome", got)
+	}
+	if len(dto.Enums) != 1 {
+		t.Fatalf("expected 1 enum on Payload, got %d", len(dto.Enums))
+	}
+	en := dto.Enums[0]
+	if en.TypeName != "PayloadOutcome" {
+		t.Errorf("enum TypeName = %q, want PayloadOutcome", en.TypeName)
+	}
+	wantConsts := []EnumValue{
+		{ConstName: "PayloadOutcomeSucceeded", Value: "succeeded"},
+		{ConstName: "PayloadOutcomeFailed", Value: "failed"},
+		{ConstName: "PayloadOutcomeRejected", Value: "rejected"},
+	}
+	if len(en.Values) != len(wantConsts) {
+		t.Fatalf("enum Values = %v, want %v", en.Values, wantConsts)
+	}
+	for i, w := range wantConsts {
+		if en.Values[i] != w {
+			t.Errorf("Values[%d] = %+v, want %+v", i, en.Values[i], w)
+		}
+	}
+}
+
+// TestSchemaToDTOs_StringEnum_Nested covers a string enum on a nested object field
+// (#1935, mirrors http.orderfulfillment.orderstatus.v1 data.status). The enum
+// belongs to the nested DTO (ResponseData), proving the <Parent><Field> naming
+// composes with the nested-object flattening (parent = ResponseData).
+func TestSchemaToDTOs_StringEnum_Nested(t *testing.T) {
+	s := &Schema{
+		Type:          "object",
+		PropertyOrder: []string{"data"},
+		Properties: map[string]*Schema{
+			"data": {
+				Type:          "object",
+				PropertyOrder: []string{"status"},
+				Properties: map[string]*Schema{
+					"status": {Type: "string", Enum: []string{"accepted", "running"}},
+				},
+				Required: []string{"status"},
+			},
+		},
+		Required: []string{"data"},
+	}
+	dtos, err := schemaToDTOs("Response", s)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Response (no enum) + ResponseData (carries the status enum).
+	if len(dtos) != 2 {
+		t.Fatalf("expected 2 DTOs, got %d: %v", len(dtos), dtoNames(dtos))
+	}
+	if len(dtos[0].Enums) != 0 {
+		t.Errorf("Response should carry no enums, got %d", len(dtos[0].Enums))
+	}
+	rd := dtos[1]
+	if rd.Name != "ResponseData" {
+		t.Fatalf("dtos[1].Name = %q, want ResponseData", rd.Name)
+	}
+	if got := rd.Fields[0].GoType; got != "ResponseDataStatus" {
+		t.Errorf("status GoType = %q, want ResponseDataStatus", got)
+	}
+	if len(rd.Enums) != 1 || rd.Enums[0].TypeName != "ResponseDataStatus" {
+		t.Fatalf("expected ResponseDataStatus enum on ResponseData, got %+v", rd.Enums)
+	}
+	if rd.Enums[0].Values[0].ConstName != "ResponseDataStatusAccepted" {
+		t.Errorf("first const = %q, want ResponseDataStatusAccepted", rd.Enums[0].Values[0].ConstName)
+	}
+}
+
+// TestSchemaToDTOs_EnumConstNameCollision asserts two enum values that PascalCase
+// to the same Go identifier (e.g. "in-progress" and "in_progress" → "InProgress")
+// are a fail-fast error rather than a silently shadowed const (#1935).
+func TestSchemaToDTOs_EnumConstNameCollision(t *testing.T) {
+	s := &Schema{
+		Type:          "object",
+		PropertyOrder: []string{"phase"},
+		Properties: map[string]*Schema{
+			"phase": {Type: "string", Enum: []string{"in-progress", "in_progress"}},
+		},
+		Required: []string{"phase"},
+	}
+	_, err := schemaToDTOs("Payload", s)
+	if err == nil {
+		t.Fatal("expected error for colliding enum const names")
+	}
+	if !strings.Contains(err.Error(), "in-progress") || !strings.Contains(err.Error(), "PayloadPhaseInProgress") {
+		t.Errorf("error should name the colliding values + const, got: %v", err)
+	}
+}
+
+// TestSchemaToDTOs_ArrayOfEnum_Rejected asserts enum on array items is rejected
+// fail-fast: schemaGoType would emit "[]<Parent><Field>" while no const block is
+// collected, producing a reference to an undefined type (#1935 array-of-enum guard).
+func TestSchemaToDTOs_ArrayOfEnum_Rejected(t *testing.T) {
+	s := &Schema{
+		Type:          "object",
+		PropertyOrder: []string{"tags"},
+		Properties: map[string]*Schema{
+			"tags": {Type: "array", Items: &Schema{Type: "string", Enum: []string{"a", "b"}}},
+		},
+		Required: []string{"tags"},
+	}
+	_, err := schemaToDTOs("Payload", s)
+	if err == nil {
+		t.Fatal("expected error for enum on array items")
+	}
+	if !strings.Contains(err.Error(), "array items") || !strings.Contains(err.Error(), "tags") {
+		t.Errorf("error should explain array-of-enum is unsupported, got: %v", err)
+	}
+}
+
+// TestSchemaToDTOs_EnumInvalidConstName asserts enum values whose derived Go const
+// identifier is illegal are rejected fail-fast at codegen time rather than emitted
+// as un-buildable Go (#1935 F2). goPascalCase passes spaces/punctuation through and
+// maps "" to "", so the const name must be guarded explicitly. Each error must name
+// the offending wire value and field so the schema author can fix the source enum.
+func TestSchemaToDTOs_EnumInvalidConstName(t *testing.T) {
+	cases := []struct {
+		name      string
+		value     string
+		wantInErr string // a fragment proving the offending value is surfaced
+	}{
+		{"empty string → empty suffix shadows type", "", "empty Go const suffix"},
+		{"punctuation → invalid identifier", "!", `"PayloadFlag!"`},
+		{"embedded space → invalid identifier", "a b", `"PayloadFlagA b"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Schema{
+				Type:          "object",
+				PropertyOrder: []string{"flag"},
+				Properties: map[string]*Schema{
+					"flag": {Type: "string", Enum: []string{tc.value}},
+				},
+				Required: []string{"flag"},
+			}
+			_, err := schemaToDTOs("Payload", s)
+			if err == nil {
+				t.Fatalf("expected error for enum value %q", tc.value)
+			}
+			if !strings.Contains(err.Error(), tc.wantInErr) {
+				t.Errorf("error should contain %q, got: %v", tc.wantInErr, err)
+			}
+			// The field key must always be named so the author can locate the source.
+			if !strings.Contains(err.Error(), `"flag"`) {
+				t.Errorf("error should name the field %q, got: %v", "flag", err)
+			}
+		})
+	}
+}
+
 // dtoNames returns names for display in test output.
 func dtoNames(dtos []DTOSpec) []string {
 	names := make([]string, len(dtos))

@@ -46,16 +46,27 @@ func (v *Validator) validateREF02() []ValidationResult {
 	return results
 }
 
-// validateREF03 checks that contract.ownerCell is a cell (not an external actor).
+// validateREF03 checks that a cell-owned contract's ownerCell is a known cell.
+//
+// Owner kind is read through the sealed ContractOwner funnel (c.Owner()), not by
+// indexing project.Cells with the raw OwnerCell string: a FRAMEWORK-owned
+// contract resolves Owner().Cell() to ok=false and is structurally skipped here
+// (it is governed by FRAMEWORK-OWNED-CONTRACT-SCOPED-01 instead). A cell owner
+// with a typo'd id still resolves to a cell and fires this rule, so REF-03 keeps
+// its value.
 func (v *Validator) validateREF03() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
-		if _, ok := v.project.Cells[c.OwnerCell]; !ok {
+		cellID, isCell := c.Owner().Cell()
+		if !isCell {
+			continue // framework-owned: see FRAMEWORK-OWNED-CONTRACT-SCOPED-01
+		}
+		if _, ok := v.project.Cells[cellID]; !ok {
 			results = append(results, v.newError(
 				codeREF03, IssueRefNotFound,
 				contractFile(c),
 				"ownerCell",
-				fmt.Sprintf("contract %q ownerCell %q is not a known cell", c.ID, c.OwnerCell),
+				fmt.Sprintf("contract %q ownerCell %q is not a known cell", c.ID, cellID),
 				"set ownerCell to an existing cell id",
 			))
 		}
@@ -242,9 +253,17 @@ func (v *Validator) validateREF11() []ValidationResult {
 }
 
 // validateREF13 checks that the contract provider actor exists as a cell or actor.
+//
+// Framework-owned contracts are skipped: their provider IS the framework (the
+// provider endpoint resolves to the FrameworkOwnerSentinel, which is neither a
+// cell nor an actors.yaml entry by design). They are governed by
+// FRAMEWORK-OWNED-CONTRACT-SCOPED-01 instead.
 func (v *Validator) validateREF13() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
+		if c.Owner().IsFramework() {
+			continue // framework-owned: provider is the framework, not a cell/actor
+		}
 		provider := contractProvider(c)
 		if provider == "" {
 			continue // FMT-07 covers missing provider

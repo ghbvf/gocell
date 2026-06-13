@@ -221,7 +221,7 @@ func (v *Validator) ctmCheckLifecycleActive(
 	s *metadata.SliceMeta, c *metadata.ContractMeta,
 	fieldPath, entry, contractID string,
 ) *ValidationResult {
-	if c.Lifecycle == "active" {
+	if c.Lifecycle == lifecycleActive {
 		return nil
 	}
 	r := v.newError(
@@ -333,7 +333,7 @@ func isServeRoleKind(kind string) bool {
 func isActiveServeStylePlatformContract(c *metadata.ContractMeta) bool {
 	return c != nil &&
 		isServeRoleKind(c.Kind) &&
-		c.Lifecycle == "active" &&
+		c.Lifecycle == lifecycleActive &&
 		!strings.HasPrefix(c.File, examplesPathPrefix)
 }
 

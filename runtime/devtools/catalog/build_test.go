@@ -1105,3 +1105,52 @@ func TestBuildDocument_PackageDeps_NoStatusField(t *testing.T) {
 	assert.NotContains(t, bodyStr, `"status"`,
 		"PackageDepsView wire output must not contain 'status' key (A4 compliance)")
 }
+
+// TestBuildDocument_FrameworkOwnedContract_NoDanglingOwnedBy proves a
+// framework-owned contract (ownerCell = _framework) does NOT emit a dangling
+// `ownedBy -> cell/_framework` relation: _framework is not a Cell, so no such
+// entity exists and the edge would point at nothing. Owner→cell resolution goes
+// through ContractOwner.Cell(), which returns ok=false for a framework owner. The
+// cell-owned contract in the same project still emits its ownedBy edge
+// (anti-vacuity: the suppression is owner-kind-specific, not blanket).
+func TestBuildDocument_FrameworkOwnedContract_NoDanglingOwnedBy(t *testing.T) {
+	pm := minimalPM()
+	pm.Contracts["http.deviceidentity.enroll.v1"] = &metadata.ContractMeta{
+		ID:        "http.deviceidentity.enroll.v1",
+		Kind:      "http",
+		OwnerCell: metadata.FrameworkOwnerSentinel,
+		Lifecycle: "draft",
+		Endpoints: metadata.EndpointsMeta{Server: metadata.FrameworkOwnerSentinel},
+		File:      "contracts/http/deviceidentity/enroll/v1/contract.yaml",
+	}
+	doc, err := catalog.BuildDocument(fixedClock(), pm, baseOpts())
+	require.NoError(t, err)
+
+	var frameworkSeen, cellOwnedSeen bool
+	for _, e := range doc.Entities {
+		if e.Kind != "Contract" {
+			continue
+		}
+		switch e.Metadata.Name {
+		case "http.deviceidentity.enroll.v1":
+			frameworkSeen = true
+			for _, r := range e.Relations {
+				assert.NotEqual(t, "cell/"+metadata.FrameworkOwnerSentinel, r.TargetRef,
+					"framework-owned contract must not emit a dangling cell/_framework relation")
+				assert.NotEqual(t, "ownedBy", r.Type,
+					"framework-owned contract has no cell owner, so no ownedBy relation")
+			}
+		case "http.access.login.v1":
+			cellOwnedSeen = true
+			var hasOwnedBy bool
+			for _, r := range e.Relations {
+				if r.Type == "ownedBy" && r.TargetRef == "cell/accesscore" {
+					hasOwnedBy = true
+				}
+			}
+			assert.True(t, hasOwnedBy, "cell-owned contract must still emit ownedBy -> cell/accesscore")
+		}
+	}
+	require.True(t, frameworkSeen, "framework-owned contract entity must be present")
+	require.True(t, cellOwnedSeen, "cell-owned contract entity must be present (anti-vacuity)")
+}

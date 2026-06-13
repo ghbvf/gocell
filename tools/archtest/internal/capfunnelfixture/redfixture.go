@@ -27,13 +27,17 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 )
 
-// qualifiedPGCalls exercises the three banned postgres constructors in
-// qualified-import form (3 hits).
+// qualifiedPGCalls exercises the four banned postgres constructors in
+// qualified-import form (4 hits). NewJournalingOutboxWriter takes a pre-built
+// *OutboxWriter (var, not a nested constructor) so the only hit on that line is
+// the decorator constructor itself.
 func qualifiedPGCalls(ctx context.Context, clk clock.Clock) {
 	_, _ = adapterpg.NewPool(ctx, adapterpg.Config{})
 	var p *adapterpg.Pool
 	_ = adapterpg.NewTxManager(p)
 	_ = adapterpg.NewOutboxWriter(clk)
+	var w *adapterpg.OutboxWriter
+	_ = adapterpg.NewJournalingOutboxWriter(w, nil)
 }
 
 // qualifiedRedisCall exercises the banned redis client constructor in

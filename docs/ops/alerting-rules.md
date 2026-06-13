@@ -769,6 +769,42 @@ rebuild 卡在 Replay 相。下游查询读到陈旧 read-model。
 确保 p95 ≥ 30min 的触发条件可测量而不塌缩入 +Inf。p95 PromQL：
 `histogram_quantile(0.95, sum(rate(gocell_projection_rebuild_duration_seconds_bucket[1h])) by (le, cell, projection))`
 
+### `projection_events` journal 增长监控（#1504 PR-02）
+
+durable 投影 journal `projection_events` 是 **append-only、归档能力尚 out-of-scope（ADR §D8）**，
+故从 PR-02 装饰器部署起持续增长。topic-filter（D4）已把写入面限到真会被 replay 的 projection-source
+事件，但仍须监控**总**磁盘占用（heap + 索引 + TOAST，JSONB payload 大可触发 TOAST offload，总占用可达
+heap 的数倍）并接入容量告警。表大小无内置应用 metric，由 PG 侧采集。
+
+> postgres_exporter 默认不暴露按表的 `pg_total_relation_size`——需配 custom query collector
+> （`queries.yaml`：`SELECT relname, pg_total_relation_size(relid) AS bytes FROM pg_stat_user_tables`），
+> 或用默认已暴露的行数 `pg_stat_user_tables_n_live_tup{relname="projection_events"}` 做近似告警（行数阈值
+> 按平均行宽换算）。下例假设已暴露 `pg_total_relation_size_bytes{relname=...}`。
+
+```yaml
+- alert: GoCellProjectionEventsJournalGrowthHigh
+  # pg_total_relation_size（含索引 idx_projection_events_id + PK btree + TOAST），非裸 heap。
+  expr: pg_total_relation_size_bytes{relname="projection_events"} > 5e10  # 50 GiB，按部署容量调
+  for: 30m
+  labels:
+    severity: warning
+  annotations:
+    summary: "projection_events journal large (append-only, no archival yet)"
+    description: |
+      The durable projection_events journal exceeds the capacity threshold (total
+      relation size incl. indexes + TOAST). It is append-only (ADR 202606071600-1504
+      §D7) with archival still out-of-scope (§D8): truncation MUST stay ≥
+      MIN(projection_checkpoints.offset_seq) or rebuildable history is lost. Treat as a
+      capacity-planning signal — provision storage, or prioritise the archival epic
+      (D8). Do NOT manually DELETE/TRUNCATE the table (serving role is REVOKEd
+      UPDATE/DELETE; only a table-owner migration could, and must honour the checkpoint
+      floor).
+```
+
+运维注意（ADR §8）：首次 full rebuild 后 `projection_event_replay_lag_seconds` 快速降至 ~0 仅表示
+读完 journal，**不**代表历史完整（bootstrap gap：journal 仅从 PR-02 部署起 append）；数据完整性须
+经 `projection_checkpoints.offset_seq` + 业务校验确认，不能仅看 lag。
+
 ---
 
 ## Saga-Journal Tailer 可观测性（#1609 PR-04）

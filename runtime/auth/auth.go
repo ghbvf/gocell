@@ -10,7 +10,44 @@ import (
 
 	kauth "github.com/ghbvf/gocell/kernel/auth"
 	"github.com/ghbvf/gocell/pkg/authz"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 )
+
+// MustNewTestDevicePrincipal returns a sealed *Principal of kind PrincipalDevice
+// for use in cross-cell handler and integration tests. It mirrors TestContext /
+// TestServiceContext (same naming convention, same "test helper for the auth
+// boundary" purpose) and produces a properly sealed device principal by delegating
+// to the sole sanctioned device-principal issuer, mintDevicePrincipal.
+//
+// TEST-ONLY: this is an EXPORTED helper that forges a sealed device principal
+// WITHOUT JWT verification (it is exported only because external test packages
+// cannot reach the unexported mintDevicePrincipal and an external _test.go-only
+// helper is not visible across packages). Production callers are banned by
+// archtest NO-TEST-DEVICE-PRINCIPAL-IN-PRODUCTION-01 — same guarded posture as
+// TestServiceContext. The only production path to a sealed device principal is
+// mintDevicePrincipal via the verified bearer path.
+//
+// The seal is required: Principal.RowVisibility fail-closes (ERR_AUTH_FORBIDDEN)
+// for any PrincipalDevice that lacks the unexported device seal
+// (DEVICE-PRINCIPAL-MINT-CALLER-01). Calling this helper instead of constructing
+// auth.Principal{Kind: PrincipalDevice, ...} literals ensures tests remain
+// semantically correct after the PR #1898 seal requirement.
+//
+// Panics if mintDevicePrincipal returns an error (subject or tenantID empty), since
+// those represent programmer errors in the test setup.
+//
+// See also: TestContext for user-principal tests; TestServiceContext for
+// service-principal tests.
+func MustNewTestDevicePrincipal(subject, tenantID string) *Principal {
+	p, err := mintDevicePrincipal(Claims{Subject: subject, TenantID: tenantID, PrincipalKind: PrincipalKindClaimDevice})
+	if err != nil {
+		e := errcode.Assertion("authtest: MustNewTestDevicePrincipal: invalid device principal args")
+		e.InternalDetails = append(e.InternalDetails, errcode.InternalAttr("_", err.Error()))
+		panic(panicregister.Approved("authtest-device-principal-invalid-args", e))
+	}
+	return p
+}
 
 // TestServiceContext creates a context carrying a service Principal with the
 // given callerCell for use in handler/mount tests. Follows the net/http/httptest
@@ -39,6 +76,19 @@ const (
 	// TokenIntentAccess marks a short-lived credential for calling business
 	// endpoints. Verifier rejects any access token replayed at /auth/refresh.
 	TokenIntentAccess = kauth.TokenIntentAccess
+)
+
+// PrincipalKindClaim is a type alias of kauth.PrincipalKindClaim so runtime/auth
+// and kernel/auth share the single canonical "principal_kind" wire enum. It is
+// the signed marker distinguishing a device bearer token from a user token.
+type PrincipalKindClaim = kauth.PrincipalKindClaim
+
+const (
+	// PrincipalKindClaimUser is the default (absent claim) = ordinary user.
+	PrincipalKindClaimUser = kauth.PrincipalKindClaimUser
+	// PrincipalKindClaimDevice marks a device bearer token (minted into a
+	// PrincipalDevice by the sole sanctioned issuer mintDevicePrincipal).
+	PrincipalKindClaimDevice = kauth.PrincipalKindClaimDevice
 )
 
 // Claims is a type alias of kauth.Claims so that runtime/auth and kernel/cell

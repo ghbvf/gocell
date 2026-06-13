@@ -79,7 +79,9 @@ lifecycle、EST 前端、生产 device 主体。
   路线图唯一允许提前的 MDM/ZT 前期项（#1052「可提前子项」）。`deviceidentity` 是证书/身份之家。
   目录按仓库单源 `{kind}/{domain-path}/{version}/` 落 **kind-qualified** 路径（`contracts/http/deviceidentity/.../v1`、
   `contracts/event/deviceidentity/.../v1`、`contracts/command/{deviceidentity/rotate,remotecommand}/v1` 等，详见 spec FR-013）；
-  「4 个契约」是 domain 简写，非目录真源。
+  「4 个契约」是 domain 简写，非目录真源。**归属机制**：这些中立契约由**框架**归属（不绑单一 Cell，
+  对齐 cert-manager/SPIFFE/k8s 4/4 范式），经 sealed `ContractOwner`（`ownerCell: _framework`）落地——
+  详见 ADR `202606130635-1939-adr-framework-owned-contract.md`（#1939，blocks #1899）。
 - 落地 #1811（生产 device / super-admin 主体签发器）——证书底座硬前置。
 - **不建** `mdm/` / `zerotrust/` module 骨架；winmdm `pkicell` 的**框架级 PKI 原语下移 core**，
   winmdm 触发（2027 Q1）后只需建 WSTEP/SCEP 协议前端 + caworkflow，不再自建 PKI 原语。

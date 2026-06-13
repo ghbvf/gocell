@@ -148,6 +148,13 @@ func (m *AuthMetrics) recordServiceVerify(ctx context.Context, result, reason st
 // alerts can separate "credential failures" from "auth dependency degraded".
 // Without this branch the 503 path collapsed into "invalid_token" and made
 // the failure mode invisible (Finding #3 PR #490 second review).
+//
+// Device-mint rejects (subject/tenant missing, privileged role) use the
+// same ErrAuthUnauthorized code as generic token errors but carry a distinct
+// message constant from deviceprincipal.go. They bucket into "device_invalid"
+// so operators can distinguish device-credential problems from generic token
+// verification failures. No new errcode is registered — the match is
+// message-based against the three deviceprincipal.go const literals.
 func classifyTokenError(err error) string {
 	if err == nil {
 		return "ok"
@@ -159,6 +166,9 @@ func classifyTokenError(err error) string {
 		}
 		if ec.Code == errcode.ErrAuthInvalidTokenIntent {
 			return "invalid_intent"
+		}
+		if ec.Code == errcode.ErrAuthUnauthorized && isDeviceMintReject(ec.Message) {
+			return "device_invalid"
 		}
 	}
 	switch {
@@ -179,4 +189,14 @@ func classifyTokenError(err error) string {
 			return "invalid_token"
 		}
 	}
+}
+
+// isDeviceMintReject reports whether msg is one of the three device-principal
+// validation failure messages from deviceprincipal.go. Compared against the
+// package-level const literals so the match is stable and requires no new
+// errcode registration (#1898 F8).
+func isDeviceMintReject(msg string) bool {
+	return msg == msgDeviceSubjectMissing ||
+		msg == msgDeviceTenantMissing ||
+		msg == msgDeviceRoleForbidden
 }

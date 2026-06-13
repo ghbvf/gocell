@@ -29,7 +29,7 @@
     },
     "ownerCell": {
       "type": "string",
-      "description": "The cell that owns (provides) this contract. Defaults to the provider endpoint cell. May be omitted."
+      "description": "The owner of this contract: an existing cell id, or the reserved sentinel `_framework` for a neutral, provider-agnostic contract owned by the framework (permitted only for kind http/event, and must be lifecycle draft|deprecated until framework serving is wired). Defaults to the provider endpoint cell. May be omitted."
     },
     "consistencyLevel": {
       "type": "string",
@@ -223,8 +223,8 @@
         },
         "minLength": {
           "type": "integer",
-          "minimum": 0,
-          "description": "Minimum string length accepted for this parameter. Required by FMT-25 for non-uuid string path/query params."
+          "minimum": 1,
+          "description": "Minimum string length accepted for this parameter. Optional under FMT-25; when declared it must be >= 1 (an explicit no-op minLength: 0 is rejected) and <= maxLength."
         },
         "maxLength": {
           "type": "integer",

@@ -28,7 +28,7 @@ var contractSpec = contractspec.ContractSpec{
 
 // requestSchemaJSON is the embedded request schema for runtime validation.
 // Compiled once at handler construction time by schemavalidate.NewValidator.
-var requestSchemaJSON = []byte("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"properties\":{\"expectedVersion\":{\"description\":\"Compare-and-swap guard. Must equal the resource's current version; mismatch returns 409 ERR_VERSION_CONFLICT.\",\"maximum\":99999,\"minimum\":1,\"type\":\"integer\"},\"value\":{\"maxLength\":4096,\"minLength\":0,\"type\":\"string\"}},\"required\":[\"value\",\"expectedVersion\"],\"title\":\"http.config.update.v1.request\",\"type\":\"object\"}")
+var requestSchemaJSON = []byte("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"properties\":{\"expectedVersion\":{\"description\":\"Compare-and-swap guard. Must equal the resource's current version; mismatch returns 409 ERR_VERSION_CONFLICT.\",\"maximum\":99999,\"minimum\":1,\"type\":\"integer\"},\"value\":{\"maxLength\":4096,\"type\":\"string\"}},\"required\":[\"value\",\"expectedVersion\"],\"title\":\"http.config.update.v1.request\",\"type\":\"object\"}")
 
 // Handler wires HTTP decode/encode + auth.Mount for http.config.update.v1.
 type Handler struct {

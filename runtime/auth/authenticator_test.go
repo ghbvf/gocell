@@ -60,7 +60,10 @@ func TestJWTClaimsToPrincipal_Shape(t *testing.T) {
 		ExpiresAt:             exp,
 	}
 
-	p := jwtClaimsToPrincipal(claims)
+	p, err := jwtClaimsToPrincipal(claims)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if p == nil {
 		t.Fatal("expected non-nil principal")
 	}
@@ -552,6 +555,45 @@ func TestNewServiceTokenAuthenticator_PrincipalCallerCell(t *testing.T) {
 	// Spec: Roles must be nil for service principal.
 	if p.Roles != nil {
 		t.Errorf("expected nil Roles, got %v", p.Roles)
+	}
+}
+
+// TestServiceToken_NeverMintsDevicePrincipal proves concept isolation (#1898
+// FR-003): the service-token path is physically separate from the device-token
+// path, so a service token can never derive a PrincipalDevice and its
+// CallerCellID is never treated as a device subject. The service principal also
+// fails closed at RowVisibility (no device row scope from a caller-cell id).
+func TestServiceToken_NeverMintsDevicePrincipal(t *testing.T) {
+	ring := mustTestRing(t, testHMACKey, "")
+	now := time.Now()
+	token := GenerateServiceToken(ring, "accesscore", http.MethodGet, "/internal/v1/resource", "", "", now)
+
+	a := mustNewServiceTokenAuthenticator(t, ring, clockmock.New(now),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
+	req.Header.Set("Authorization", "ServiceToken "+token)
+
+	p, ok, err := a.Authenticate(req)
+	if err != nil || !ok || p == nil {
+		t.Fatalf("service-token authenticate failed: ok=%v err=%v", ok, err)
+	}
+	if p.Kind != PrincipalService {
+		t.Fatalf("service token must mint PrincipalService, got %v", p.Kind)
+	}
+	if p.Kind == PrincipalDevice {
+		t.Fatal("service token must NEVER mint PrincipalDevice (concept isolation)")
+	}
+	// callerCellID is identity-for-services, NOT a device subject.
+	if p.CallerCellID == "" {
+		t.Fatal("service principal must carry CallerCellID")
+	}
+	if p.Subject != "" {
+		t.Fatalf("service principal Subject must be empty (callerCellID is not a device subject), got %q", p.Subject)
+	}
+	// A service principal cannot derive a device row scope — fail closed.
+	if _, err := p.RowVisibility(req.Context()); err == nil {
+		t.Fatal("service principal must fail closed at RowVisibility (no device row scope)")
 	}
 }
 
