@@ -117,23 +117,25 @@ func TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_CollisionDivergentImport(t *testin
 func TestGRPCMethodOverlay_ReferentialIntegrity(t *testing.T) {
 	t.Parallel()
 	info := sampleProtoServiceInfo() // proto methods: [IssueCommand]
+	const service = "device.command.v1.DeviceCommandService"
 
 	// Valid: overlay name ∈ proto method set.
-	if err := validateGRPCMethodOverlay("grpc.a",
+	if err := validateGRPCMethodOverlay("grpc.a", service,
 		[]metadata.GRPCMethodMeta{{Name: "IssueCommand", Public: true}}, info); err != nil {
 		t.Fatalf("valid overlay rejected: %v", err)
 	}
 
-	// Invalid: overlay name ∉ proto method set — must name the contract + the
-	// unknown method.
-	err := validateGRPCMethodOverlay("grpc.a",
+	// Invalid: overlay name ∉ proto method set — the error must name the contract,
+	// the unknown method, AND the service FQN (as written in endpoints.grpc.service).
+	err := validateGRPCMethodOverlay("grpc.a", service,
 		[]metadata.GRPCMethodMeta{{Name: "Bogus", Public: true}}, info)
-	if err == nil || !strings.Contains(err.Error(), "Bogus") || !strings.Contains(err.Error(), "grpc.a") {
-		t.Fatalf("expected unknown-method rejection naming contract+method, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "Bogus") ||
+		!strings.Contains(err.Error(), "grpc.a") || !strings.Contains(err.Error(), service) {
+		t.Fatalf("expected unknown-method rejection naming contract+method+service FQN, got %v", err)
 	}
 
 	// Empty overlay is a no-op (no methods to validate).
-	if err := validateGRPCMethodOverlay("grpc.a", nil, info); err != nil {
+	if err := validateGRPCMethodOverlay("grpc.a", service, nil, info); err != nil {
 		t.Fatalf("nil overlay rejected: %v", err)
 	}
 }

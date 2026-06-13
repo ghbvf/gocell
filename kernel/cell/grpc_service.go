@@ -91,6 +91,13 @@ type GRPCServiceSpec struct {
 	// registrar can aggregate them into the auth interceptor's bypass set. Empty
 	// → every RPC of this service is authed (the fail-closed default). It is a
 	// data field (not a callback), so kernel can hold it without a grpc import.
+	//
+	// This field is cellgen-OWNED: declare public RPCs in the contract's
+	// endpoints.grpc.methods[] (public:true), not here. Hand-writing PublicMethods
+	// in a cell's Init bypasses the contractgen pre-pass that validates each name
+	// against the .proto method set — a typo would silently mark a non-existent
+	// method public (inert) or, worse, drift from the contract. Generated
+	// cell_gen.go is the only sanctioned writer.
 	PublicMethods []string
 }
 

@@ -80,7 +80,12 @@ func TestBuildGrpcServiceSpecFromCU_PublicMethods(t *testing.T) {
 			GRPC: &metadata.GRPCTransportMeta{
 				Service: "device.command.v1.DeviceCommandService",
 				Proto:   "contracts/grpc/device/command/v1/device_command.proto",
-				Methods: []metadata.GRPCMethodMeta{{Name: "IssueCommand", Public: true}},
+				// Mixed overlay: only the public:true entry contributes; the
+				// public:false entry is excluded (fail-closed default).
+				Methods: []metadata.GRPCMethodMeta{
+					{Name: "IssueCommand", Public: true},
+					{Name: "WatchCommands", Public: false},
+				},
 			},
 		},
 	}
@@ -98,7 +103,40 @@ func TestBuildGrpcServiceSpecFromCU_PublicMethods(t *testing.T) {
 	}
 	want := []string{"/device.command.v1.DeviceCommandService/IssueCommand"}
 	if !slices.Equal(got.PublicMethods, want) {
-		t.Errorf("PublicMethods = %v, want %v", got.PublicMethods, want)
+		t.Errorf("PublicMethods = %v, want %v (public:false entry must be excluded)", got.PublicMethods, want)
+	}
+}
+
+// TestRenderCell_GRPC_NoOverlay_OmitsPublicMethods covers the template's
+// {{- if .PublicMethods }} FALSE arm: a grpc contract with no methods overlay must
+// render a GRPCServiceSpec WITHOUT a PublicMethods field (fail-closed default).
+// Guards against a regression where the template emits an empty PublicMethods slice.
+func TestRenderCell_GRPC_NoOverlay_OmitsPublicMethods(t *testing.T) {
+	t.Parallel()
+	root := synthGRPCRoot(t)
+
+	// buildGRPCProject() declares an overlay; strip it for the no-overlay arm.
+	pm := buildGRPCProject()
+	pm.Contracts["grpc.device.command.v1"].Endpoints.GRPC.Methods = nil
+
+	spec, err := BuildCellSpec(pm, "demo", markergen.WireBundle{}, idxOf(map[string]string{"command": "commandServer"}))
+	if err != nil {
+		t.Fatalf("BuildCellSpec: %v", err)
+	}
+	if err := EnrichGrpcServicesWithProtoInfo(spec, root); err != nil {
+		t.Fatalf("EnrichGrpcServicesWithProtoInfo: %v", err)
+	}
+	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
+		TemplateName: "cell.tmpl",
+		Templates:    templates,
+		Data:         spec,
+		Filename:     "demo/cell_gen.go",
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if bytes.Contains(out, []byte("PublicMethods")) {
+		t.Errorf("no-overlay grpc cell must omit the PublicMethods field, got:\n%s", out)
 	}
 }
 

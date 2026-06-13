@@ -190,6 +190,43 @@ func TestServiceRegistrar_IsPublicMethod_EmptyDefault(t *testing.T) {
 		"no PublicMethods declared → every method authed (fail-closed)")
 }
 
+// TestServiceRegistrar_IsPublicMethod_MultiSpecAggregation verifies PublicMethods
+// are aggregated ACROSS multiple registered specs (each cell contributes its own
+// public set to the one shared registrar the auth interceptor consults).
+func TestServiceRegistrar_IsPublicMethod_MultiSpecAggregation(t *testing.T) {
+	t.Parallel()
+
+	reg, _ := newRegistrar()
+
+	specA := synthSpec("grpc.health.a.v1", "cell-a", func(r grpc.ServiceRegistrar) {
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+	})
+	specA.PublicMethods = []string{"/grpc.health.v1.Health/Check"}
+	require.NoError(t, reg.Register(specA))
+
+	// A second spec registering a DIFFERENT service contributes its own public set;
+	// service-name dedup forbids re-registering grpc.health.v1.Health, so use a
+	// distinct ServiceDesc.
+	specB := cell.GRPCServiceSpec{
+		ContractID:    "grpc.spy.b.v1",
+		CellID:        "cell-b",
+		Listener:      cell.PrimaryListener,
+		PublicMethods: []string{"/spy.v1.Spy/Ping"},
+		Register: func(r grpc.ServiceRegistrar) {
+			r.RegisterService(&grpc.ServiceDesc{
+				ServiceName: "spy.v1.Spy",
+				HandlerType: (*any)(nil),
+				Methods:     []grpc.MethodDesc{{MethodName: "Ping"}},
+			}, struct{}{})
+		},
+	}
+	require.NoError(t, reg.Register(specB))
+
+	assert.True(t, reg.IsPublicMethod("/grpc.health.v1.Health/Check"), "specA's public method must aggregate")
+	assert.True(t, reg.IsPublicMethod("/spy.v1.Spy/Ping"), "specB's public method must aggregate")
+	assert.False(t, reg.IsPublicMethod("/spy.v1.Spy/Other"), "an undeclared method stays authed (fail-closed)")
+}
+
 // --- Case 5: bad Register fn type panics -------------------------------------
 
 // TestServiceRegistrar_Register_BadFnType_Panics verifies a non-func Register field

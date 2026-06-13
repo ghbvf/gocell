@@ -968,6 +968,12 @@ const fieldEndpointsGRPCMethods = "endpoints.grpc.methods"
 func (v *Validator) validateFMT41() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
+		// Only grpc contracts carry endpoints.grpc.methods; the kind guard is
+		// defensive (FMT-37 already rejects endpoints.grpc on non-grpc contracts)
+		// so FMT-41 is self-contained and never processes a foreign overlay.
+		if cellvocab.ContractKind(c.Kind) != cellvocab.ContractGRPC {
+			continue
+		}
 		if c.Endpoints.GRPC == nil || len(c.Endpoints.GRPC.Methods) == 0 {
 			continue
 		}
@@ -981,17 +987,20 @@ func (v *Validator) validateFMT41() []ValidationResult {
 func (v *Validator) validateFMT41ForContract(c *metadata.ContractMeta) []ValidationResult {
 	g := c.Endpoints.GRPC
 	file := contractFile(c)
-	var results []ValidationResult
 
 	if !c.Codegen {
-		results = append(results, v.newError(
+		// Terminal for this overlay: codegen:false makes the whole overlay inert,
+		// so the per-entry name/dup/public guards below would be redundant noise —
+		// return the single actionable finding (fix codegen first, then re-validate).
+		return []ValidationResult{v.newError(
 			codeFMT41, IssueForbidden, file, fieldEndpointsGRPCMethods,
 			fmt.Sprintf("grpc contract %q declares endpoints.grpc.methods but has codegen:false; "+
 				"the overlay would never reach codegen and is silently inert", c.ID),
 			"set codegen:true (the default) or remove the methods overlay",
-		))
+		)}
 	}
 
+	var results []ValidationResult
 	seen := make(map[string]struct{}, len(g.Methods))
 	for i := range g.Methods {
 		m := g.Methods[i]

@@ -153,6 +153,9 @@ type GRPCTransportMeta struct {
 	// "contracts/grpc/device/command/v1/device_command.proto".
 	Proto string `yaml:"proto" json:"proto"`
 	// Methods is the sparse per-RPC auth overlay; nil/empty → every RPC authed.
+	// See ADR docs/architecture/202605260000-adr-grpc-transport-adapter.md
+	// §"Amendment 2026-06-13 — #1675" for the threat-matrix re-eval and the #2008
+	// extension plan.
 	Methods []GRPCMethodMeta `yaml:"methods,omitempty" json:"methods,omitempty"`
 }
 
@@ -173,6 +176,13 @@ type GRPCMethodMeta struct {
 	// Public marks this RPC as JWT-exempt. Absent (no entry) → authed. Codegen
 	// derives GRPCServiceSpec.PublicMethods from the public:true entries, which
 	// the runtime registrar aggregates into the auth interceptor's bypass set.
+	//
+	// omitempty is intentional: public:false is semantically identical to omitting
+	// the entry (both → authed), and FMT-41 rejects a public:false entry as vacuous
+	// (#1675 has no other flag). So the only meaningful value is true; the field is
+	// NOT a tri-state. #2008 adds further per-method fields, after which a
+	// public:false entry becomes meaningful (it may carry ABAC fields) and FMT-41's
+	// vacuous-entry guard widens accordingly.
 	Public bool `yaml:"public,omitempty" json:"public,omitempty"`
 }
 

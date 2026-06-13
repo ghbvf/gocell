@@ -62,6 +62,13 @@ func WithPublicMethod(pred func(fullMethod string) bool) AuthOption {
 // matcher). The default (nil predicate) is fail-closed — a reset-required token
 // is rejected on every method. Passing a nil predicate is a no-op; any
 // previously installed predicate is retained.
+//
+// NOTE the deliberate asymmetry with WithPublicMethod: this is LAST-WINS (a later
+// non-nil predicate replaces the earlier one), NOT OR-compose. Password-reset
+// exemption has a single source — there is no always-on registrar predicate to
+// union with — so multiple sources would be a configuration conflict, not an
+// additive set. WithPublicMethod composes (OR) precisely because the registrar
+// (#1675) is an always-present second source.
 func WithPasswordResetExempt(pred func(fullMethod string) bool) AuthOption {
 	return func(c *authConfig) {
 		if pred != nil {
@@ -128,6 +135,11 @@ func authorize(
 		}
 	}()
 
+	// Public-method bypass: a JWT-exempt RPC (#1675) skips token extraction
+	// entirely, so the handler receives the ORIGINAL ctx with NO authenticated
+	// principal. A public RPC's handler must not assume auth.PrincipalFromContext
+	// yields a caller — it is anonymous by construction. (Optional-token "upgrade
+	// if present" is out of scope until the #2008 gRPC PDP wiring.)
 	if callPredicate(cfg.publicMethod, fullMethod) {
 		return ctx, nil
 	}

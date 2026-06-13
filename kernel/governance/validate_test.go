@@ -2498,6 +2498,15 @@ func TestFMT41(t *testing.T) {
 			wantIssue: IssueForbidden,
 		},
 		{
+			name: "codegen:false short-circuits — one finding even with name defects",
+			// codegen:false makes the overlay inert; the per-entry guards are redundant
+			// noise, so FMT-41 returns ONLY the codegen finding (no dup/empty cascade).
+			methods:   []metadata.GRPCMethodMeta{{Name: "Verify", Public: true}, {Name: "Verify", Public: true}},
+			codegen:   false,
+			wantCount: 1,
+			wantIssue: IssueForbidden,
+		},
+		{
 			name:      "vacuous entry (public:false) rejected — asserts no non-default",
 			methods:   []metadata.GRPCMethodMeta{{Name: "Verify", Public: false}},
 			codegen:   true,
