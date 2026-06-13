@@ -11,6 +11,10 @@
       "required": [
         "deviceId",
         "compliant",
+        "diskEncryption",
+        "antivirus",
+        "patch",
+        "firewall",
         "observedAt"
       ],
       "properties": {

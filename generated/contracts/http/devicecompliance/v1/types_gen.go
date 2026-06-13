@@ -29,10 +29,10 @@ type Response struct {
 type ResponseData struct {
 	DeviceID       string                     `json:"deviceId"`
 	Compliant      bool                       `json:"compliant"`
-	DiskEncryption ResponseDataDiskEncryption `json:"diskEncryption,omitempty"`
-	Antivirus      ResponseDataAntivirus      `json:"antivirus,omitempty"`
-	Patch          ResponseDataPatch          `json:"patch,omitempty"`
-	Firewall       ResponseDataFirewall       `json:"firewall,omitempty"`
+	DiskEncryption ResponseDataDiskEncryption `json:"diskEncryption"`
+	Antivirus      ResponseDataAntivirus      `json:"antivirus"`
+	Patch          ResponseDataPatch          `json:"patch"`
+	Firewall       ResponseDataFirewall       `json:"firewall"`
 	// format: date-time
 	ObservedAt string `json:"observedAt"`
 	TenantID   string `json:"tenantId,omitempty"`
