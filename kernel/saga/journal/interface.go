@@ -278,23 +278,30 @@ type Heartbeater interface {
 // the Tailer hold a 2-method reader, structurally unable to claim/append/commit)
 // — NOT a contract for read-only backends. Every GlobalReader implementation is
 // itself the append-only saga_events store and hence a full [Journal] (MemJournal
-// today; PGJournal at PR-PG); there is no store-less, read-only-only
-// implementation in this design.
+// today; PGJournal in adapters/postgres/saga); there is no store-less,
+// read-only-only implementation in this design.
 //
 // Events are ordered by [Event.GlobalSeq], a stable total order across all
 // instances. MemJournal assigns it from an in-process counter; the PG backend
-// assigns it from a BIGINT IDENTITY column (PR-PG, deferred — until then PG does
-// not implement GlobalReader). Every GlobalReader implementation is enrolled in
-// the sagajournaltest.RunGlobalReaderConformance suite, enforced by archtest
-// SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01.
+// (adapters/postgres/saga.PGJournal, implemented in PR #1630) assigns it from a
+// BIGINT IDENTITY column (migration 064). Every GlobalReader implementation is
+// enrolled in the sagajournaltest.RunGlobalReaderConformance suite, enforced by
+// archtest SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01.
+//
+// Commit-order contract: a conforming backend MUST assign GlobalSeq such that a
+// consumer advancing its cursor by delivered GlobalSeq values never permanently
+// skips a lower seq that committed later. Concretely, GlobalSeq order must equal
+// commit-visibility order. The PG backend guarantees this by serializing
+// saga_events INSERTs with a transaction-scoped advisory lock
+// (sagaEventsGlobalAppendLockKey in journal_store.go) so the IDENTITY sequence
+// allocates in the same order as commits. A future safe-lag committed-prefix
+// reader that relaxes this serialization without losing events is tracked in
+// issue #2070.
 //
 // Position 0 is reserved: a conforming implementation never returns an event
-// with GlobalSeq==0 (the counter starts at 1). The zero value only ever appears
-// on events written by a backend that does not yet maintain a global sequence
-// (none today — PG, the only such backend, does not implement GlobalReader until
-// PR-PG). Consumers therefore use 0 as the "from the beginning" cursor and
-// HeadSeq==0 as the empty-journal sentinel; they must never checkpoint a real
-// position of 0.
+// with GlobalSeq==0 (the counter starts at 1). Consumers use 0 as the
+// "from the beginning" cursor and HeadSeq==0 as the empty-journal sentinel;
+// they must never checkpoint a real position of 0.
 type GlobalReader interface {
 	// LoadSince returns events whose GlobalSeq is strictly greater than
 	// afterGlobalSeq (exclusive lower bound = projection-checkpoint cursor

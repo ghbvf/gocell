@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -79,88 +80,119 @@ func TestPGOwnerCheckpointStore_ColdConcurrent_SameKey(t *testing.T) {
 	require.Equal(t, 0, otherCount, "no unexpected errors")
 }
 
-// TestPGOwnerCheckpointStore_Concurrent_LeaderHandoff exercises the
-// leader-handoff fencing window under real PG concurrency. Two distinct owner
-// tokens race AdvanceIfOwner against the same (cell, projection) key:
-//   - the AHEAD leader (offset > committed) must win and claim ownership
-//   - the STALE leader (offset == committed, different token) must be fenced
-//     with projection.ErrStaleOwner
+// TestPGOwnerCheckpointStore_Concurrent_LeaderHandoff exercises the warm-update
+// CAS contention path of AdvanceIfOwner under real PG concurrency. Both
+// contenders use the SAME (cellID, projectionID) key, which is the case the
+// previous version of this test failed to cover (it used projID+"-stale", a
+// DIFFERENT key, only testing cold-offset-0 rejection, not warm-update CAS).
 //
-// This proves the CAS fences at the SQL layer, not just in application logic.
-// Mirrors the spirit of TestPGSagaJournal_ClaimPending_Concurrent_NoDuplicate.
+// Design:
+//   - Seed: tokenA claims (cellID, projID) at offset 10 (cold claim, succeeds).
+//   - Phase 1 (deterministic ordering via RunInTx): start tokenB's transaction
+//     inside a goroutine. It calls AdvanceIfOwner(tokenB, 11) inside RunInTx so
+//     the SELECT FOR UPDATE acquires a row lock before signalling "locked".
+//     tokenB's goroutine then waits on "commit" before committing.
+//   - Phase 2: main goroutine starts tokenA's attempt. tokenA calls
+//     AdvanceIfOwner(tokenA, 10) which hits the same row inside its own RunInTx.
+//     The SELECT FOR UPDATE BLOCKS because tokenB holds the lock — proving the
+//     warm-update CAS contention point.
+//   - Phase 3: signal tokenB to commit. tokenB commits: owner=tokenB, offset=11.
+//     tokenA's FOR UPDATE unblocks; it reads owner=tokenB, offset=11. Since
+//     tokenA != tokenB AND 10 <= 11, AdvanceIfOwner returns ErrStaleOwner via
+//     the warm-update CAS (RowsAffected==0 from the SQL WHERE predicate or the
+//     Go short-circuit: ownerToken != recordedOwner && offset <= recordedOffset).
+//
+// This proves the CAS fences at the SQL layer, not just in application logic,
+// and exercises the warm-update path (row exists, SELECT FOR UPDATE blocks).
 func TestPGOwnerCheckpointStore_Concurrent_LeaderHandoff(t *testing.T) {
-	store, _ := newCheckpointStore(t)
+	store, txm := newCheckpointStore(t)
 	ctx := context.Background()
 
 	const cellID = "cell-concurrent-handoff"
 	const projID = "proj-concurrent-handoff"
 
-	// Seed the checkpoint at offset 10 with tokenA as the established leader.
+	// Warm-path timeout: max time tokenA may wait for tokenB to release the lock.
+	// Extracted per TEST-TIME-LITERAL-01.
+	const txHoldDuration = 2 * time.Second
+	const blockAssertTimeout = 200 * time.Millisecond
+
+	// Seed: tokenA claims the checkpoint at offset 10.
 	const tokenA = "leader-A-established"
+	const tokenB = "leader-B-new"
 	require.NoError(t, store.AdvanceIfOwner(ctx, cellID, projID, tokenA, 10),
 		"seed: leader A must claim at offset 10")
 
-	// Now simulate a handoff: tokenB is the new leader (ahead at offset 11),
-	// tokenA is the stale deposed leader (tries offset 10 again, same offset).
-	const tokenB = "leader-B-new"
+	// locked signals that tokenB's RunInTx has acquired the FOR UPDATE row lock.
+	// commit signals tokenB to commit its transaction.
+	locked := make(chan struct{})
+	commit := make(chan struct{})
 
 	var (
-		errB     error
-		errA     error
-		mu       sync.Mutex
-		wg       sync.WaitGroup
-		resultsA []error
-		resultsB []error
+		errB error
+		wg   sync.WaitGroup
 	)
-	_ = errB
-	_ = errA
 
-	// Run N rounds of racing: B tries to advance (ahead), A tries at same offset (stale).
-	const rounds = 8
-	for range rounds {
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			e := store.AdvanceIfOwner(ctx, cellID, projID, tokenB, 11)
-			mu.Lock()
-			resultsB = append(resultsB, e)
-			mu.Unlock()
-		}()
-		go func() {
-			defer wg.Done()
-			// tokenA tries to re-advance to the already-committed offset 10;
-			// after B claims (offset 11, owner=B), A at offset 10 is both
-			// behind AND different token — must be ErrStaleOwner.
-			// Even before B wins, A's offset 10 == committed 10 AND token != owner
-			// (owner is now tokenA from seed — but we're testing the window where
-			// leadership shifts). We reset to a fresh projection per round to
-			// guarantee predictable starting state.
-			e := store.AdvanceIfOwner(ctx, cellID, projID+"-stale", tokenA, 0)
-			mu.Lock()
-			resultsA = append(resultsA, e)
-			mu.Unlock()
-		}()
+	// Goroutine: tokenB inside a RunInTx acquires the row lock and holds it
+	// until "commit" is signalled, then advances to offset 11.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errB = txm.RunInTx(ctx, func(txCtx context.Context) error {
+			// AdvanceIfOwner inside an ambient tx: the pgexec layer routes
+			// the SELECT FOR UPDATE through the tx, acquiring the row lock.
+			if err := store.AdvanceIfOwner(txCtx, cellID, projID, tokenB, 11); err != nil {
+				return err
+			}
+			// Signal the main goroutine that the row lock is held.
+			close(locked)
+			// Hold the lock until the main goroutine asserts tokenA is blocked.
+			<-commit
+			return nil
+		})
+	}()
+
+	// Wait for tokenB to hold the row lock.
+	select {
+	case <-locked:
+	case <-time.After(txHoldDuration):
+		t.Fatal("tokenB did not acquire the row lock within the expected window")
 	}
+
+	// Start tokenA's attempt in a goroutine (it will block on the FOR UPDATE).
+	aResult := make(chan error, 1)
+	go func() {
+		aResult <- txm.RunInTx(ctx, func(txCtx context.Context) error {
+			return store.AdvanceIfOwner(txCtx, cellID, projID, tokenA, 10)
+		})
+	}()
+
+	// Assert tokenA is blocked: it must NOT return within blockAssertTimeout
+	// because tokenB holds the FOR UPDATE lock.
+	select {
+	case e := <-aResult:
+		t.Fatalf("tokenA returned before tokenB committed (expected blocking on FOR UPDATE), got: %v", e)
+	case <-time.After(blockAssertTimeout):
+		// Expected: tokenA is blocked.
+	}
+
+	// Release tokenB: commit the transaction (offset=11, owner=tokenB).
+	close(commit)
 	wg.Wait()
+	require.NoError(t, errB, "tokenB (offset 11, ahead) must succeed")
 
-	// All tokenA attempts on proj+"-stale" at offset 0 must be ErrStaleOwner
-	// (cold store, offset 0 is not strictly ahead of committed 0).
-	for i, e := range resultsA {
-		assert.True(t, errors.Is(e, projection.ErrStaleOwner),
-			"round %d: stale leader (offset 0 on cold store) must be ErrStaleOwner, got: %v", i, e)
+	// Now tokenA unblocks, reads owner=tokenB/offset=11, and must get ErrStaleOwner
+	// via the warm-update CAS path (tokenA != tokenB AND 10 <= 11).
+	select {
+	case errA := <-aResult:
+		assert.True(t, errors.Is(errA, projection.ErrStaleOwner),
+			"tokenA (offset 10, not ahead, different owner) must get ErrStaleOwner after tokenB committed, got: %v", errA)
+	case <-time.After(txHoldDuration):
+		t.Fatal("tokenA did not complete after tokenB released the row lock")
 	}
 
-	// tokenB at offset 11 (ahead of seeded 10) must succeed consistently.
-	// After the first win, subsequent rounds hit same-owner path (still offset 11)
-	// so they must also succeed.
-	for i, e := range resultsB {
-		assert.NoError(t, e,
-			"round %d: ahead leader (offset 11 > committed 10) must win, got: %v", i, e)
-	}
-
-	// After all rounds, the committed offset must be 11 and owner must be tokenB.
+	// Final state: offset=11, owner=tokenB.
 	finalOff, err := store.LoadOffset(ctx, cellID, projID)
 	require.NoError(t, err)
 	assert.Equal(t, int64(11), finalOff,
-		"after concurrent handoff, committed offset must be 11 (tokenB won)")
+		"after handoff, committed offset must be 11 (tokenB won)")
 }
