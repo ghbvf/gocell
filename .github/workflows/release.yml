@@ -161,9 +161,14 @@ jobs:
     needs: verify
     if: needs.verify.outputs.skip != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # F9: raised from 30 to 45 — cross-arch QEMU docker build + multi-arch push
+    # 基准；首次 stable release 后按实测回调。
+    timeout-minutes: 45
     permissions:
       contents: write  # push annotated tag + create/delete GitHub Release
+      # F11: packages:write は job 级（GitHub Actions 不支持 step-level permissions），
+      # snapshot 路径同样持有但不使用（snapshot 不触发 goreleaser）；
+      # token 仓库内 scope，无额外可利用面。
       packages: write  # push container images to ghcr.io (stable only, #1088)
     env:
       # GH_TOKEN (write-scope) is deliberately NOT set at job level — it is scoped
@@ -308,6 +313,11 @@ jobs:
       # Runs after tags are pushed so goreleaser can resolve {{.Tag}} from the
       # annotated tag. All four steps below are gated on prerelease != 'true';
       # the snapshot / daily path is completely untouched.
+      #
+      # F10: 半发布态说明 — goreleaser 先 push docker 再由后续 step 建 GH release。
+      # 若 smoke/release 步骤失败，进入「docker-pushed-but-no-release」态。
+      # re-dispatch 时 docker push 幂等（同 tag 覆盖），只需让 gh release create 完成。
+      # resume 校验当前不查 ghcr 镜像存在性（镜像幂等，无需重查）。
 
       - name: Set up Go for CLI sub-module (stable only)
         # Separate setup-go call targeting cmd/gocell/go.mod so goreleaser
@@ -332,12 +342,14 @@ jobs:
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
       - name: Log in to ghcr.io (stable only)
+        # F5: 统一使用 github.token（与本 workflow 其他 gh API 步骤一致，消除 PAT fallback 歧义）。
+        # job 已声明 packages:write，权限等价。
         if: needs.verify.outputs.prerelease != 'true'
         uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ github.token }}
 
       - name: Build CLI artifacts with goreleaser (stable only)
         # goreleaser builds cross-arch binaries + archives + checksums into
@@ -352,7 +364,9 @@ jobs:
         if: needs.verify.outputs.prerelease != 'true'
         uses: goreleaser/goreleaser-action@9c156ee8a17a598b3a9b32eca9d83de83de9050d # v6.3.0
         with:
-          version: '~> v2'
+          # F6: pinned for reproducible/supply-chain; bump via dependabot.
+          # v2.16.0 is the latest v2 release as of 2026-06-13.
+          version: 'v2.16.0'
           args: release --clean
         env:
           GOWORK: "off"
@@ -366,10 +380,17 @@ jobs:
         if: needs.verify.outputs.prerelease != 'true'
         run: |
           set -euo pipefail
-          bin="$(find dist -name 'gocell' -path '*linux_amd64*' | head -n1)"
-          if [ -z "$bin" ]; then
-            echo "::error::linux-amd64 gocell binary not found in dist/ — goreleaser build may have failed."
-            exit 1
+          # F7: goreleaser v2 默认输出布局为 dist/gocell_linux_amd64_v1/gocell
+          # (GOAMD64=v1 后缀)。精确路径优先，find 兜底时强制要求恰好 1 个匹配。
+          bin="dist/gocell_linux_amd64_v1/gocell"
+          if [ ! -f "$bin" ]; then
+            n=$(find dist -name 'gocell' -path '*linux_amd64*' | wc -l)
+            if [ "$n" -eq 1 ]; then
+              bin="$(find dist -name 'gocell' -path '*linux_amd64*')"
+            else
+              echo "::error::expected exactly 1 linux-amd64 binary in dist/, found $n (goreleaser build may have failed or layout changed)."
+              exit 1
+            fi
           fi
           chmod +x "$bin"
           actual="$("$bin" version --format json | jq -r '.cliVersion')"
@@ -382,7 +403,8 @@ jobs:
             echo "::error::cliVersion '$actual' != expected tag '$TAG' — ldflags symbol drift."
             exit 1
           fi
-          echo "version smoke passed: cliVersion=$actual"
+          # F8: 与本 workflow 其他关键步骤一致，写入 Step Summary。
+          echo "version smoke passed: cliVersion=$actual" | tee -a "$GITHUB_STEP_SUMMARY"
 
       # ── end goreleaser block ────────────────────────────────────────────────
 
