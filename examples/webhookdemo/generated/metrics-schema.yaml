@@ -69,6 +69,12 @@ metrics:
       labels:
         - outcome
       file: runtime/observability/metrics/shutdown.go
+    - name: cell_transport_requests_total
+      type: counter
+      help: Total cross-cell sync (http) contract calls, by transport mode (in_proc | remote).
+      labels:
+        - transport_mode
+      file: runtime/transport/metrics.go
     - name: config_stale_cipher_total
       type: counter
       help: Number of config values read that are encrypted with a non-current key version.
