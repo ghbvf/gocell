@@ -185,3 +185,48 @@ func TestEvaluate_BaselineDenyOverridesPermit(t *testing.T) {
 	dec := svc.evaluate([]*abac.Policy{tenantForbid}, resolver, testAuditRead)
 	assert.False(t, dec.IsAllow(), "tenant deny must override baseline allow (forbid-wins)")
 }
+
+// TestEvaluate_CrossAttrOwnership exercises the OpEqualsAttr cross-attribute
+// operator (#1977): a rule that permits when subject.sub == resource.owner. The
+// RHS attribute is resolved from the resource side, NOT from static Values. A
+// missing RHS attribute is fail-closed (deny), mirroring the LHS not-found guard.
+func TestEvaluate_CrossAttrOwnership(t *testing.T) {
+	svc := &Service{logger: slog.Default()}
+
+	// Synthetic (non-baseline) action so only the tenant cross-attr rule can grant.
+	const action = "thing:read"
+	ownerCond := abac.Condition{
+		Source:    abac.SourceSubject,
+		Key:       "sub",
+		Operator:  abac.OpEqualsAttr,
+		RHSSource: abac.SourceResource,
+		RHSKey:    "owner",
+	}
+	policy := policyWith("p1", permitRuleWithAction("owner-rule", []string{action}, ownerCond))
+
+	mkResolver := func(subject string, owner []string) attributeResolver {
+		p := &auth.Principal{Kind: auth.PrincipalUser, Subject: subject, TenantID: testTenantIDStr}
+		attrs := map[string][]string{}
+		if owner != nil {
+			attrs["owner"] = owner
+		}
+		return attributeResolver{principal: p, resourceAttrs: attrs}
+	}
+
+	tests := []struct {
+		name      string
+		resolver  attributeResolver
+		wantAllow bool
+	}{
+		{"subject equals owner — allow", mkResolver("u1", []string{"u1"}), true},
+		{"subject not owner — deny", mkResolver("u1", []string{"u2"}), false},
+		{"owner attr absent (RHS not-found) — deny", mkResolver("u1", nil), false},
+		{"subject absent (LHS not-found) — deny", mkResolver("", []string{"u1"}), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dec := svc.evaluate([]*abac.Policy{policy}, tt.resolver, action)
+			assert.Equal(t, tt.wantAllow, dec.IsAllow())
+		})
+	}
+}

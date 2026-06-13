@@ -181,9 +181,11 @@ func TestBuiltinBaseline_ConfigcorePerms(t *testing.T) {
 // TestBuiltinBaseline_AccesscorePerms proves the PR-10c accesscore baseline rules
 // reproduce the existing admin gate: admin/super-admin → Allow, ordinary user /
 // no-roles → Deny, for each of the 5 migrated accesscore permissions. The self
-// branch of the SelfOr-migrated permissions (user:read/write, role:read) is NOT a
-// baseline rule — it is a request-shape exemption in auth.RequirePermissionOrSelf,
-// so the baseline only needs to reproduce the admin (now admin/super-admin) path.
+// branch of the SelfOr-migrated permissions (user:read/write, role:read) is now a
+// baseline ownership rule (subject.sub == resource.id via RequirePermissionForResource,
+// #1977 Batch B), not a request-shape exemption in auth.RequirePermissionOrSelf.
+// This test pins the admin (admin/super-admin) baseline path; the ownership rules
+// are pinned by TestBuiltinBaseline_SelfOwnership below.
 func TestBuiltinBaseline_AccesscorePerms(t *testing.T) {
 	svc := &Service{logger: slog.Default()}
 
@@ -236,5 +238,137 @@ func TestBuiltinBaseline_AllRulesValid(t *testing.T) {
 		if err := r.Validate(); err != nil {
 			t.Errorf("builtinBaselineRules()[%d] (ID=%q) failed Validate(): %v", i, r.ID, err)
 		}
+	}
+}
+
+// TestBuiltinBaseline_SelfOwnership pins the identity-ownership baseline rules
+// added in #1977 Batch B: subject.sub == resource.id grants user:read, user:write,
+// and role:read for the owning subject. Admin path is unchanged (tested above).
+//
+// resource.id is exposed via attributeResolver.resourceID (added in Batch B):
+// a non-empty resourceID makes resource.id found=true; empty makes found=false.
+func TestBuiltinBaseline_SelfOwnership(t *testing.T) {
+	svc := &Service{logger: slog.Default()}
+
+	const (
+		ownerID    = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+		nonOwnerID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	)
+
+	ownerPrincipal := &auth.Principal{
+		Kind: auth.PrincipalUser, Subject: ownerID, TenantID: testTenantIDStr,
+		Roles: []string{"user"},
+	}
+	nonOwnerPrincipal := &auth.Principal{
+		Kind: auth.PrincipalUser, Subject: nonOwnerID, TenantID: testTenantIDStr,
+		Roles: []string{"user"},
+	}
+	adminPrincipal := &auth.Principal{
+		Kind: auth.PrincipalUser, Subject: nonOwnerID, TenantID: testTenantIDStr,
+		Roles: []string{auth.RoleAdmin},
+	}
+
+	ownershipActions := []string{
+		authz.PermUserRead().String(),
+		authz.PermUserWrite().String(),
+		authz.PermRoleRead().String(),
+	}
+	nonOwnershipAction := authz.PermConfigRead().String()
+
+	tests := []struct {
+		name       string
+		principal  *auth.Principal
+		resourceID string
+		action     string
+		wantAllow  bool
+	}{
+		// Self-ownership: subject.sub == resource.id → Allow for each ownership action.
+		{
+			name:      "owner + user:read + matching resource.id → Allow",
+			principal: ownerPrincipal, resourceID: ownerID,
+			action: authz.PermUserRead().String(), wantAllow: true,
+		},
+		{
+			name:      "owner + user:write + matching resource.id → Allow",
+			principal: ownerPrincipal, resourceID: ownerID,
+			action: authz.PermUserWrite().String(), wantAllow: true,
+		},
+		{
+			name:      "owner + role:read + matching resource.id → Allow",
+			principal: ownerPrincipal, resourceID: ownerID,
+			action: authz.PermRoleRead().String(), wantAllow: true,
+		},
+		// Non-owner: subject.sub != resource.id → no ownership rule fires → Deny.
+		{
+			name:      "non-owner + user:read → Deny (no ownership, no admin)",
+			principal: nonOwnerPrincipal, resourceID: ownerID,
+			action: authz.PermUserRead().String(), wantAllow: false,
+		},
+		{
+			name:      "non-owner + user:write → Deny",
+			principal: nonOwnerPrincipal, resourceID: ownerID,
+			action: authz.PermUserWrite().String(), wantAllow: false,
+		},
+		{
+			name:      "non-owner + role:read → Deny",
+			principal: nonOwnerPrincipal, resourceID: ownerID,
+			action: authz.PermRoleRead().String(), wantAllow: false,
+		},
+		// Admin bypass: admin role grants regardless of resource.id match.
+		{
+			name:      "admin + user:read + different resource.id → Allow (admin baseline)",
+			principal: adminPrincipal, resourceID: ownerID,
+			action: authz.PermUserRead().String(), wantAllow: true,
+		},
+		{
+			name:      "admin + role:read + different resource.id → Allow",
+			principal: adminPrincipal, resourceID: ownerID,
+			action: authz.PermRoleRead().String(), wantAllow: true,
+		},
+		// Empty resourceID: resource.id not-found → ownership rule can't fire → Deny.
+		{
+			name:      "owner subject + user:read + empty resourceID → Deny (resource.id not-found)",
+			principal: ownerPrincipal, resourceID: "",
+			action: authz.PermUserRead().String(), wantAllow: false,
+		},
+		// Ownership rules are action-scoped: config:read is NOT in the ownership set.
+		{
+			name:      "owner subject + config:read + matching resource.id → Deny (not an ownership action)",
+			principal: ownerPrincipal, resourceID: ownerID,
+			action: nonOwnershipAction, wantAllow: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver := attributeResolver{principal: tt.principal, resourceID: tt.resourceID}
+			dec := svc.evaluate(nil, resolver, tt.action)
+			assert.Equal(t, tt.wantAllow, dec.IsAllow(), "action=%q resourceID=%q roles=%v",
+				tt.action, tt.resourceID, tt.principal.Roles)
+		})
+	}
+
+	// Action-scope guard: ownership rules must NOT fire for any non-ownership action.
+	for _, action := range []string{
+		authz.PermConfigRead().String(),
+		authz.PermConfigWrite().String(),
+		authz.PermAuditRead().String(),
+		authz.PermPolicyRead().String(),
+	} {
+		t.Run("ownership rule not fired for "+action, func(t *testing.T) {
+			resolver := attributeResolver{principal: ownerPrincipal, resourceID: ownerID}
+			dec := svc.evaluate(nil, resolver, action)
+			assert.False(t, dec.IsAllow(),
+				"ownership rule must not grant non-ownership action %q to non-admin", action)
+		})
+	}
+
+	// All 3 ownership actions must be covered.
+	for _, action := range ownershipActions {
+		t.Run("ownership rule fires for "+action, func(t *testing.T) {
+			resolver := attributeResolver{principal: ownerPrincipal, resourceID: ownerID}
+			dec := svc.evaluate(nil, resolver, action)
+			assert.True(t, dec.IsAllow(), "ownership rule must grant action %q to owner", action)
+		})
 	}
 }

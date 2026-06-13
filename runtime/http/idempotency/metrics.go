@@ -11,7 +11,7 @@ import "context"
 // below). The same string-typed-enum funnel is used by the saga executor
 // (executor.TickResult / DriveResult / …) and reconcile (resultLabel).
 //
-// Cardinality: the value set is a closed, registration-time enumeration (6
+// Cardinality: the value set is a closed, registration-time enumeration (7
 // values); combined with the bounded {cell} dimension the worst-case series
 // count is tiny. There is no per-request / per-key dimension — keys are
 // SHA-256 hashed for logs only and never become metric labels.
@@ -56,6 +56,14 @@ const (
 	// It is security-relevant: a sustained rate can indicate a client bug or a
 	// replay attempt.
 	StateKeyReused RequestState = "key_reused"
+
+	// StateBodyReadFailed is recorded when reading the request body fails
+	// (io.ReadAll error → 503 ErrServiceUnavailable). Unlike StateStoreError (a
+	// Claim-path store failure → 500), this is an inbound transport/connection
+	// fault — e.g. the client aborted the upload — that occurs BEFORE the claim,
+	// so it is its own state: a sustained rate points at client/network trouble,
+	// not the idempotency store. Mirrors the webhook receiver's body-read handling.
+	StateBodyReadFailed RequestState = "body_read_failed"
 )
 
 // MetricsObserver is the best-effort sink for per-request idempotency metrics.

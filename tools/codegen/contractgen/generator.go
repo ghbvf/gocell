@@ -158,6 +158,17 @@ func Generate(root string, p *metadata.ProjectMeta, opts Options) (Result, error
 			return res, err
 		}
 	}
+
+	// The barrel index.ts is derived from the FULL project (every codegen
+	// contract that emits TS), NOT the generate scope — so a scoped
+	// `generate contract <id>` writes the same index.ts a full run would, and the
+	// generatedverify manifest (which also calls RenderTSBarrel) stays
+	// byte-identical. Without this, a scoped run would clobber the barrel with
+	// only the scoped contract's entry.
+	if err := generateTSBarrel(root, p, opts, &res); err != nil {
+		return res, err
+	}
+
 	return res, nil
 }
 
@@ -211,7 +222,8 @@ func checkGRPCProtoCollisions(root string, p *metadata.ProjectMeta) error {
 // generateOneContract renders all artifacts for a single contract and writes
 // (or dry-runs / verifies) them to disk, appending outcomes to res. The kind ×
 // artifact matrix is driven by artifactsForKind (single source, shared with
-// RenderContractArtifacts).
+// RenderContractArtifacts). The barrel index.ts is NOT emitted here — it is a
+// full-project aggregate written once by Generate (see generateTSBarrel).
 func generateOneContract(root string, p *metadata.ProjectMeta, contractID string, opts Options, res *Result) error {
 	// B.5: contract ID sanity — must not contain path separators or traversal sequences.
 	if strings.Contains(contractID, "..") || strings.ContainsAny(contractID, `/\`) {
@@ -263,6 +275,16 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 		}
 	}
 
+	// TS emit: per-contract types.ts in generated-ts/ (separate from Go
+	// generated/). responseProjection, non-types kinds and empty-DTO specs are
+	// skipped by specEmitsTS; the cross-contract barrel is written separately by
+	// Generate.
+	if !specEmitsTS(spec) {
+		return nil
+	}
+	if err := emitTSTypes(root, spec, opts, res); err != nil {
+		return fmt.Errorf("contract %q: ts emit: %w", contractID, err)
+	}
 	return nil
 }
 
@@ -357,6 +379,15 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID, m
 		out = append(out, CodegenArtifact{Path: rel, Content: content})
 	}
 
+	// Per-contract types.ts under generated-ts/ — included in the manifest so the
+	// generatedverify reverse-enumeration (which now lists *.ts) finds it in the
+	// expected set. Byte-identical to the disk write (both call renderTS(spec)).
+	// The cross-contract barrel index.ts is a separate aggregate (RenderTSBarrel).
+	out, err = appendTSArtifact(out, root, spec)
+	if err != nil {
+		return nil, err
+	}
+
 	return out, nil
 }
 
@@ -441,6 +472,9 @@ func relFromRoot(root, abs string) (string, error) {
 	rel, err := filepath.Rel(root, abs)
 	if err != nil {
 		return "", fmt.Errorf("relpath %s vs %s: %w", abs, root, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %s escapes root %s", abs, root)
 	}
 	return filepath.ToSlash(rel), nil
 }

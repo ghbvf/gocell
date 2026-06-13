@@ -67,15 +67,16 @@ var builtinBaseline = []abac.Rule{
 		Action:     []string{authz.PermFlagWrite().String()},
 		Conditions: []abac.Condition{adminOrSuperAdmin()},
 	},
-	// accesscore baseline (PR-10c #1348): one allow rule per migrated permission via
-	// the shared adminOrSuperAdmin() condition. The old accesscore gates were
-	// auth.AnyRole(RoleAdmin) / auth.SelfOr("id", RoleAdmin) — admin-only (HasRole is
-	// a literal check, no hierarchy) — so routing them through adminOrSuperAdmin()
+	// accesscore baseline (PR-10c #1348 + #1977 Batch B): one allow rule per migrated
+	// permission via the shared adminOrSuperAdmin() condition. The old accesscore gates
+	// were auth.AnyRole(RoleAdmin) / auth.SelfOr("id", RoleAdmin) — admin-only (HasRole
+	// is a literal check, no hierarchy) — so routing them through adminOrSuperAdmin()
 	// WIDENS them to admit super-admin (super-admin ⊇ admin; a deliberate relaxation,
 	// zero prod impact as superadmin is not yet issued). Same as the PR-10b configcore
-	// widening; see ADR §"Amendment: PR-10c" threat-model re-eval + ruling. The self
-	// branch of the migrated SelfOr gates is NOT a baseline rule — it stays a
-	// request-shape exemption in auth.RequirePermissionOrSelf (tenancy.md).
+	// widening; see ADR §"Amendment: PR-10c" threat-model re-eval + ruling.
+	// The self branch of the former SelfOr gates (user:read/write, role:read) is NOW a
+	// baseline ownership rule (subject.sub == resource.id) rather than a Go short-circuit
+	// in RequirePermissionOrSelf — see #1977 Batch B and the baseline-*-self rules below.
 	// action-scoped + role-conditioned — same shape as the rules above.
 	{
 		ID:         "baseline-policy-read-admin",
@@ -112,6 +113,58 @@ var builtinBaseline = []abac.Rule{
 		Action:     []string{authz.PermRoleRead().String()},
 		Conditions: []abac.Condition{adminOrSuperAdmin()},
 	},
+	// Identity-ownership baseline rules (#1977 Batch B): subject.sub == resource.id
+	// grants owner-scoped permissions (user:read, user:write, role:read) to the
+	// owning subject. resource.id is the canonicalized path param forwarded by
+	// RequirePermissionForResource. An empty resourceID makes resource.id not-found
+	// → ownership condition unsatisfied → fail-closed (empty param ≠ self).
+	// Semantics: self OR admin (either the ownership rule or the admin rule fires).
+	// action-scoped (these 3 perms only) — ownership does not grant config/audit/etc.
+	{
+		ID:         "baseline-user-read-self",
+		Name:       "Baseline: allow a user to read their own account (subject.sub == resource.id)",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermUserRead().String()},
+		Conditions: []abac.Condition{subjectIsResource()},
+	},
+	{
+		ID:         "baseline-user-write-self",
+		Name:       "Baseline: allow a user to write their own account (subject.sub == resource.id)",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermUserWrite().String()},
+		Conditions: []abac.Condition{subjectIsResource()},
+	},
+	{
+		ID:         "baseline-role-read-self",
+		Name:       "Baseline: allow a user to read their own role assignments (subject.sub == resource.id)",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermRoleRead().String()},
+		Conditions: []abac.Condition{subjectIsResource()},
+	},
+}
+
+// subjectIsResource returns the cross-attribute ABAC condition that checks
+// subject.sub == resource.id (#1977 Batch B). This is the identity-ownership
+// condition: the authenticated subject is the owner of the resource they are
+// accessing (user owns their own account/roles). Uses abac.OpEqualsAttr to
+// compare the LHS (subject.sub) against the RHS (resource.id) at evaluation
+// time — both resolved via attributeResolver, both fail-closed on not-found.
+//
+// "sub" is the canonical JWT claim key; resolveSubject maps both "sub" and
+// "subject" to principal.Subject (and canonicalizes it via ParseCanonicalUUID
+// so UUID case/format differences do not thwart the comparison). The RHS
+// resource.id is set from the resourceID field in attributeResolver, which
+// RequirePermissionForResource populates with the canonicalized path param.
+// Fail-closed on absent resource.id is enforced in evaluator.go matchCondition
+// (RHS attribute not-found → condition unsatisfied → ownership rule cannot grant).
+func subjectIsResource() abac.Condition {
+	return abac.Condition{
+		Source:    abac.SourceSubject,
+		Key:       "sub",
+		Operator:  abac.OpEqualsAttr,
+		RHSSource: abac.SourceResource,
+		RHSKey:    "id",
+	}
 }
 
 // adminOrSuperAdmin is the shared baseline condition: subject.roles ∈
@@ -133,16 +186,17 @@ func adminOrSuperAdmin() abac.Condition {
 // builtinBaselineRules returns the tenant-agnostic built-in baseline rule set.
 //
 // Built-in baseline reproducing the existing role→endpoint gate. action-scoped +
-// role-conditioned — NOT a downgrade allow-all (FR-011 fail-closed governs
-// missing-attr/store-err; the baseline governs the default policy set; the two do
-// not conflict). One rule per migrated endpoint; PR-10b/PR-10c extend it.
+// role-conditioned or ownership-conditioned — NOT a downgrade allow-all
+// (FR-011 fail-closed governs missing-attr/store-err; the baseline governs the
+// default policy set; the two do not conflict). One rule per migrated endpoint;
+// PR-10b/PR-10c/PR-10d (#1977 Batch B) extend it.
 //
 // Current baseline: PermAuditRead() (PR-10a) + the 5 configcore permissions
 // (PR-10b: config:read/write/publish, flag:read/write) + the 5 accesscore
-// permissions (PR-10c: policy:read/write, user:read/write, role:read), each
-// allowed for admin and super-admin principals via adminOrSuperAdmin(). Each rule
-// is action-scoped (Action target) so a baseline allow for one permission never
-// leaks to another.
+// permissions (PR-10c: policy:read/write, user:read/write, role:read) for
+// admin/super-admin; + 3 identity-ownership rules (#1977 Batch B:
+// user:read/write, role:read for subject.sub == resource.id). Each rule is
+// action-scoped so a baseline allow for one permission never leaks to another.
 //
 // Returns the package-level builtinBaseline slice directly (no allocation).
 func builtinBaselineRules() []abac.Rule {
