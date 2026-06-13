@@ -331,3 +331,43 @@ func TestHTTPIdempotencyMeta_RoundTrip(t *testing.T) {
 	assert.Equal(t, in, got, "HTTPTransportMeta round-trip must preserve idempotency.exempt")
 	assert.Contains(t, string(data), "idempotency:", "idempotency must serialize as a sibling of auth")
 }
+
+// TestGRPCTransportYAMLRoundTrip_Methods verifies the per-method auth overlay
+// (#1675) survives YAML round-trip: the sparse methods[] slice with a public
+// flag marshals and unmarshals losslessly.
+func TestGRPCTransportYAMLRoundTrip_Methods(t *testing.T) {
+	orig := GRPCTransportMeta{
+		Service: "device.command.v1.DeviceCommandService",
+		Proto:   "contracts/grpc/device/command/v1/device_command.proto",
+		Methods: []GRPCMethodMeta{
+			{Name: "Check", Public: true},
+		},
+	}
+	data, got := schemaRoundTrip(t, orig)
+	assert.Equal(t, orig, got)
+	assert.Contains(t, string(data), "name: Check")
+	assert.Contains(t, string(data), "public: true")
+}
+
+// TestGRPCTransportYAMLRoundTrip_NoMethods verifies the overlay is optional: a
+// transport with no methods[] serializes without the key and unmarshals to a
+// nil slice (the fail-closed default — every RPC authed).
+func TestGRPCTransportYAMLRoundTrip_NoMethods(t *testing.T) {
+	orig := GRPCTransportMeta{
+		Service: "x.v1.S",
+		Proto:   "contracts/grpc/x/v1/x.proto",
+	}
+	data, got := schemaRoundTrip(t, orig)
+	assert.Equal(t, orig, got)
+	assert.Nil(t, got.Methods)
+	assert.NotContains(t, string(data), "methods")
+}
+
+// TestGRPCMethodMeta_PublicOmitEmpty verifies public:false (the authed default)
+// omits from YAML so a sparse overlay entry serializes cleanly.
+func TestGRPCMethodMeta_PublicOmitEmpty(t *testing.T) {
+	orig := GRPCMethodMeta{Name: "Check"}
+	data, got := schemaRoundTrip(t, orig)
+	assert.Equal(t, orig, got)
+	assert.NotContains(t, string(data), "public")
+}

@@ -679,6 +679,27 @@
                     "type": "string",
                     "pattern": "^contracts/grpc/",
                     "description": "Contracts-relative path to the .proto file; must resolve under contracts/grpc/."
+                  },
+                  "methods": {
+                    "type": "array",
+                    "description": "Sparse per-RPC auth overlay (#1675). Only RPCs needing a non-default auth flag appear; absent methods are authed (fail-closed). The .proto remains the single source for the method SET — entries only annotate existing methods (referential integrity enforced by the contractgen pre-pass + governance FMT-41).",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["name", "public"],
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Proto RPC method simple name, e.g. Check. Must be a member of the proto service method set (FMT-41 + contractgen pre-pass)."
+                        },
+                        "public": {
+                          "type": "boolean",
+                          "const": true,
+                          "description": "Marks this RPC JWT-exempt. In #1675 public is the ONLY flag, so an entry exists iff public:true — const:true rejects public:false / omitted-public at the author surface, mirroring governance FMT-41's vacuous-entry guard (schema Hard + FMT-41 Medium, defense-in-depth). #2008 adds ABAC fields and relaxes BOTH this const and FMT-41 to 'asserts ≥1 non-default flag'."
+                        }
+                      }
+                    }
                   }
                 }
               }

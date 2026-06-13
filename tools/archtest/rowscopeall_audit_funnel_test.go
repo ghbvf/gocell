@@ -1,126 +1,115 @@
 //go:build archtest
 
 // rowscopeall_audit_funnel_test.go — closes the PRODUCER side of the
-// "RowScope=all ⟹ mandatory cross-tenant audit" funnel (epic #1337 PR-5, #1343).
+// "RowScope=all ⟹ mandatory cross-tenant audit" funnel (epic #1337 PR-5, #1343;
+// Hard-upgraded #1760).
 //
 // INVARIANT: ROWSCOPEALL-AUDIT-FUNNEL-01
 //
 // # What this guards
 //
-// PR-5 generalized the identity→RowScopeAll derivation. The audit ledger stores
-// fail-close RowScopeAll under #1618 per-tenant FORCE RLS (cross-tenant audit read
-// is deferred to backlog — the NOBYPASSRLS serving role cannot enumerate tenants);
-// a future non-audit consumer may instead APPLY the obligation. Either way the
-// store is a pure PEP: it does not decide who may HOLD a RowScopeAll obligation.
-// The security invariant "every RowScopeAll obligation is minted only at an
-// audited site" (spec FR-007) therefore rests entirely on the obligation PRODUCER:
-// the sole site that mints a RowScopeAll RowVisibility is
-// (*auth.Principal).RowVisibility, whose super-admin branch emits a mandatory
-// slog.Error security event co-located with — and unconditionally before — the
-// NewRowVisibility(RowScopeAll, "") construction (it fires even when the audit
-// store then fail-closes the obligation).
+// A RowScopeAll obligation grants cross-tenant visibility. As of #1760 it is
+// produced ONLY by the sealed tenant.NewCrossTenantVisibility constructor —
+// tenant.NewRowVisibility now REJECTS RowScopeAll (fail-closed KindInternal), so
+// the general path is provably incapable of minting it. The single sanctioned
+// mint of NewCrossTenantVisibility lives in (*auth.Principal).CrossTenantVisibility,
+// whose body emits a mandatory slog.Error security event (spec FR-007)
+// co-located with — and unconditionally before — the construction. RowVisibility's
+// super-admin branch delegates to that accessor, so every cross-tenant obligation
+// is audited regardless of which caller triggers it.
 //
-// This archtest pins every PRODUCTION call to tenant.NewRowVisibility that the
-// scanner cannot prove is non-All to a bounded allowlist. It is FAIL-CLOSED
-// (#1759 F1): a call is flagged when its scope argument is RowScopeAll OR is not
-// a compile-time constant the scanner can prove is non-All (laundered through a
-// var/param/return). Any non-allowlisted site that could mint a RowScopeAll
-// obligation would bypass the co-located audit — re-opening the "silent
-// cross-tenant read" hole. It is the producer-side complement to
-// ROWSCOPE-REPO-PARAM-FUNNEL-01 (which makes the obligation a mandatory typed
-// positional param + sealed, so a caller can neither forget nor forge it): that
-// rule guarantees the store always RECEIVES an obligation; this rule guarantees
-// a RowScopeAll obligation can only be PRODUCED by an audited / sanctioned site.
+// This archtest pins every PRODUCTION call to tenant.NewCrossTenantVisibility to a
+// bounded allowlist. Any non-allowlisted site that mints the obligation would
+// bypass the co-located audit — re-opening the "silent cross-tenant read" hole. It
+// is the producer-side complement to ROWSCOPE-REPO-PARAM-FUNNEL-01 (which makes the
+// obligation a mandatory typed positional param + sealed, so a caller can neither
+// forget nor forge it): that rule guarantees the store always RECEIVES an
+// obligation; this rule guarantees a RowScopeAll obligation can only be PRODUCED by
+// an audited / sanctioned site.
 //
 // # Legitimate producers (today)
 //
-//   - runtime/auth/rowscope.go — (*Principal).RowVisibility, the super-admin
-//     branch, which slog.Error-audits the cross-tenant access before
-//     constructing the all obligation.
+//   - runtime/auth/rowscope.go — (*Principal).CrossTenantVisibility, the sole
+//     super-admin mint, which slog.Error-audits the cross-tenant access before
+//     constructing the obligation (RowVisibility delegates here).
 //   - runtime/audit/ledger/storetest/suite.go — the ledger.Store conformance
 //     suite, a testing-helper package (every callsite takes testing.TB) that
-//     constructs RowVisibility across ALL four scopes (including RowScopeAll for
-//     the fail-closed conformance case) from a parametric `scope` argument.
-//     The parametric mint is fail-closed (non-constant arg), so it is
-//     explicitly sanctioned here rather than silently passed.
+//     mints an All obligation to exercise the serving store's fail-closed path.
 //
-// _test.go files and the archtest fixture are also exempt (they construct
-// RowScopeAll to exercise the store PEP / the scanner itself): the Production
-// scan excludes _test.go (Tests:false) and the build-tagged fixture.
+// _test.go files and the archtest fixture are also exempt: the Production scan
+// excludes _test.go (Tests:false) and the build-tagged fixture.
 //
 // # AI-robust rating (charter §"Funnel 双向锁评级")
 //
-//   - Downstream: HARD. ROWSCOPE-REPO-PARAM-FUNNEL-01 already makes the
-//     obligation a typed positional param (forget = compile error) and sealed
-//     (forge by struct literal = compile error), so the store cannot be reached
-//     with an all obligation that did not come from NewRowVisibility. This
-//     archtest's own detection is now fail-closed (go/types constant folding,
-//     alias-proof), so the AST detection has no laundering blind spot.
-//   - Upstream: MEDIUM, a GO-LANGUAGE CEILING (not a deferred TODO). Hard
-//     upstream would require RowScopeAll construction to be unreachable outside
-//     the audited derivation; tenant.NewRowVisibility must stay exported (the
-//     store conformance suite, fixtures, and the future PR-11/12 obligation
-//     combiner construct obligations across packages), and Go visibility cannot
-//     express "only this one func may pass RowScopeAll to an exported
-//     constructor". Same permanent ceiling as CTXKEYS-PRINCIPAL-WRITE-CALLER-01
-//     (#1282) / SPAN-SETATTR-HOLDER-SEAL (#851) / HEALTHZ-HOLDER-SEAL (#893).
-//     The Hard upgrade — a separate sealed all-construction type — is tracked as
-//     a deliberate won't-do-now at **gh #1760**. The downstream typed/sealed
-//     param + the co-located mandatory audit + the fail-closed allowlist are the
-//     enforcement.
+//   - General-path closure: HARD. tenant.NewRowVisibility rejects RowScopeAll at
+//     runtime (fail-closed), covering every laundering form at the actual call
+//     (a var/param/return that resolves to All errors just the same). The sole
+//     producer is the sealed NewCrossTenantVisibility; struct-literal forgery of
+//     either RowVisibility{scope:All} or CrossTenantVisibility{} is a compile error
+//     (unexported fields).
+//   - Downstream: Hard typed-param + fail-closed Validate at every PEP. The #1810
+//     cross-tenant audit read takes a tenant.CrossTenantVisibility positional
+//     parameter (not a bare RowVisibility), so forge = compile error and forget =
+//     compile error (Hard). The one residual Go cannot close is the constructable
+//     zero value (tenant.CrossTenantVisibility{} — an invalid obligation
+//     expressible without a literal in any package). Every cross-tenant read PEP
+//     closes it with CrossTenantVisibility.Validate: the auditquery Service AND
+//     every CrossTenantQueryStore implementation (the data-layer PEP) fail-closed
+//     (KindInternal) on a zero/invalid obligation (F2 Codex review). The store-side
+//     fail-close is a machine-checked conformance contract
+//     (RunCrossTenantQueryConformance / CrossTenant_ZeroObligation_Rejected covers
+//     mem + PG + any future backend), not a per-impl convention. The combined
+//     guarantee is "Hard typed-param + fail-closed Validate at every PEP", not
+//     "any passed value is unconditionally valid" — the residual is a Medium
+//     runtime guard layered at both the service and the data boundary.
+//   - Minter caller-restriction: MEDIUM, a GO-LANGUAGE CEILING (not a deferred
+//     TODO). "Only (*Principal).CrossTenantVisibility may call
+//     NewCrossTenantVisibility" is not compile-time expressible: pkg/tenant cannot
+//     import runtime/auth (cycle), and the constructor must stay exported for the
+//     conformance suite. This archtest caller-allowlist is the enforcement. Same
+//     permanent ceiling as CTXKEYS-PRINCIPAL-WRITE-CALLER-01 (#1282) /
+//     SPAN-SETATTR-HOLDER-SEAL (#851) / HEALTHZ-HOLDER-SEAL (#893). #1760 shipped
+//     the Hard general-path closure + the sealed minter + the Hard downstream
+//     funnel; this residual caller-restriction is the permanent Medium ceiling.
 //
 // # Tool blind spots (charter §"强制盲区自检")
 //
-//   - Detection is FAIL-CLOSED over the scope argument's compile-time constant
-//     value (info.Types[arg].Value vs the resolved value of tenant.RowScopeAll).
-//     A call whose scope arg is RowScopeAll (direct const, dot-imported bare
-//     ident, local const alias that folds to All, or untyped literal 4) is
-//     flagged; a call whose scope arg is NOT a compile-time constant (local
-//     var, parameter, function return) is flagged too (cannot prove non-All).
-//     Only a scope arg that is a compile-time constant provably != RowScopeAll
-//     (RowScopeSelf/Device/Tenant) passes. The previous direct-const-only
-//     detector (ResolvePackageRef on call.Args[0]) silently passed the
-//     var/param laundering form; the RED fixture (MintAllViaLocalVar /
-//     MintAllViaLocalConst) is the reverse self-check that the fail-closed
-//     detector now catches both, and the GREEN controls (MintSelf /
-//     MintSelfViaLocalConst) prove it does not over-flag a provable non-All
-//     constant.
-//   - Detection is call-based (tenant.NewRowVisibility CallExpr). A second
-//     constructor for RowVisibility would need adding to the scan; today
-//     NewRowVisibility is the sole constructor (sealed — see ROWSCOPE-REPO-PARAM
-//     godoc + pkg/tenant/rowvisibility.go).
-//   - The anti-vacuity guard (every allowlist entry must be observed ≥1× as a
-//     live fail-closed construction) is the reverse self-check: it proves the
-//     scanner resolves the real RowScopeAll / parametric mint and forbids a
-//     stale entry becoming a silent bypass slot.
+//   - Detection is symbol-based (a tenant.NewCrossTenantVisibility CallExpr). The
+//     constructor takes NO scope argument, so the prior scope-laundering blind spot
+//     (var/param/return scope) is structurally eliminated — there is nothing to
+//     launder. go/types resolution of the callee is alias-proof (qualified,
+//     aliased, dot-imported).
+//   - tenant.NewRowVisibility is NOT scanned here: it can no longer mint All (it
+//     errors at runtime), so a NewRowVisibility(RowScopeAll, …) call is dead code,
+//     not a cross-tenant hole. The runtime rejection + the pkg/tenant unit test are
+//     the enforcement for that path.
+//   - The anti-vacuity guard (every allowlist entry must be observed ≥1× as a live
+//     NewCrossTenantVisibility call) is the reverse self-check: it forbids a stale
+//     entry becoming a silent bypass slot.
 package archtest
 
 import (
 	"fmt"
 	"go/ast"
-	"go/constant"
-	"go/token"
-	"go/types"
 	"sort"
 	"strings"
 	"testing"
 )
 
 // rowScopeAllProducerAllowlist is the set of module-relative production files
-// allowed to construct a tenant.RowScopeAll obligation (or to pass a
-// non-provable scope to NewRowVisibility). See the file godoc.
+// allowed to call tenant.NewCrossTenantVisibility (the sole RowScopeAll
+// producer). See the file godoc.
 var rowScopeAllProducerAllowlist = map[string]struct{}{
-	"runtime/auth/rowscope.go":                {}, // (*Principal).RowVisibility super-admin branch — slog.Error-audits first
-	"runtime/audit/ledger/storetest/suite.go": {}, // ledger.Store conformance suite — parametric all-scope mint (testing-helper pkg)
+	"runtime/auth/rowscope.go":                {}, // (*Principal).CrossTenantVisibility — slog.Error-audits first
+	"runtime/audit/ledger/storetest/suite.go": {}, // ledger.Store conformance suite — testing-helper pkg
 }
 
 // rowScopeAllAuditFixturePkg is the build-tagged RED fixture package exercised
 // by the reverse self-check.
 const rowScopeAllAuditFixturePkg = "./tools/archtest/internal/rowscopeallauditfixture"
 
-// TestRowScopeAllAuditFunnel01 asserts every production NewRowVisibility call
-// whose scope arg is RowScopeAll — or that the scanner cannot prove is non-All —
-// sits in rowScopeAllProducerAllowlist, and that every allowlist entry is live
+// TestRowScopeAllAuditFunnel01 asserts every production tenant.NewCrossTenantVisibility
+// call sits in rowScopeAllProducerAllowlist, and that every allowlist entry is live
 // (anti-vacuity reverse check).
 func TestRowScopeAllAuditFunnel01(t *testing.T) {
 	t.Parallel()
@@ -139,7 +128,7 @@ func TestRowScopeAllAuditFunnel01(t *testing.T) {
 	})
 
 	// Anti-vacuity / no-stale reverse self-check: every allowlist entry must host
-	// a live fail-closed construction, else it is a dead bypass slot.
+	// a live NewCrossTenantVisibility construction, else it is a dead bypass slot.
 	allowed := make([]string, 0, len(rowScopeAllProducerAllowlist))
 	for f := range rowScopeAllProducerAllowlist {
 		allowed = append(allowed, f)
@@ -150,7 +139,7 @@ func TestRowScopeAllAuditFunnel01(t *testing.T) {
 			diags = append(diags, Diagnostic{
 				Message: fmt.Sprintf(
 					"ROWSCOPEALL-AUDIT-FUNNEL-01: allowlist entry %q is STALE — no live "+
-						"fail-closed tenant.NewRowVisibility construction observed. Either the scanner "+
+						"tenant.NewCrossTenantVisibility construction observed. Either the scanner "+
 						"regressed or the sanctioned producer was removed; drop the dead allowlist entry "+
 						"so it cannot become a silent bypass slot.",
 					f,
@@ -165,31 +154,28 @@ func TestRowScopeAllAuditFunnel01(t *testing.T) {
 // TestRowScopeAllAuditFunnel01_ScannerCatchesViolation is the reverse self-check:
 // it runs the SAME production detector (checkRowScopeAllAuditFunnel) against the
 // RED fixture — exercising the real allowlist + Diagnostic construction path, not
-// a parallel counter that could silently drift (#1759 F2). It asserts the
-// detector flags EXACTLY the fixture's fail-closed constructions (MintAll +
-// MintAllViaLocalVar + MintAllViaLocalConst) and NOT the GREEN controls (MintSelf
-// + MintSelfViaLocalConst), and that an allowlisted run suppresses them on the
-// same path.
+// a parallel counter that could silently drift (#1759 F2). It asserts the detector
+// flags EXACTLY the fixture's NewCrossTenantVisibility mint (MintCrossTenantOutsideFunnel)
+// and NOT the GREEN control (MintSelf), and that an allowlisted run suppresses it on
+// the same path.
 func TestRowScopeAllAuditFunnel01_ScannerCatchesViolation(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
-	// Empty allowlist: every fail-closed construction in the fixture is flagged.
+	// Empty allowlist: the fixture's NewCrossTenantVisibility mint is flagged.
 	diags := Run(t, Fixture(FixtureOpts{Tests: false}, []string{rowScopeAllAuditFixturePkg}), func(p *Pass) []Diagnostic {
 		d, _ := checkRowScopeAllAuditFunnel(p, nil)
 		return d
 	})
 
-	const wantFlagged = 3 // MintAll, MintAllViaLocalVar, MintAllViaLocalConst
+	const wantFlagged = 1 // MintCrossTenantOutsideFunnel (MintSelf is the GREEN control)
 	if len(diags) != wantFlagged {
 		t.Fatalf("ROWSCOPEALL-AUDIT-FUNNEL-01 scanner self-check: expected the production detector to "+
-			"flag exactly the %d fail-closed fixture constructions (direct + var-laundered + "+
-			"const-laundered RowScopeAll) and NOT the RowScopeSelf controls, got %d: %+v",
-			wantFlagged, len(diags), diags)
+			"flag exactly the %d NewCrossTenantVisibility fixture mint and NOT the RowScopeSelf control, "+
+			"got %d: %+v", wantFlagged, len(diags), diags)
 	}
-	lines := map[int]struct{}{}
 	for _, d := range diags {
 		if !strings.HasSuffix(d.Rel, "rowscopeallauditfixture/fixture.go") {
 			t.Errorf("ROWSCOPEALL-AUDIT-FUNNEL-01 scanner self-check: diagnostic Rel %q is not the RED "+
@@ -201,11 +187,6 @@ func TestRowScopeAllAuditFunnel01_ScannerCatchesViolation(t *testing.T) {
 		if d.Line <= 0 {
 			t.Errorf("ROWSCOPEALL-AUDIT-FUNNEL-01 scanner self-check: diagnostic has no resolved line: %+v", d)
 		}
-		lines[d.Line] = struct{}{}
-	}
-	if len(lines) != wantFlagged {
-		t.Errorf("ROWSCOPEALL-AUDIT-FUNNEL-01 scanner self-check: expected %d distinct flagged callsites, "+
-			"got %d (lines=%v) — detector may be flagging one callsite twice or missing one", wantFlagged, len(lines), lines)
 	}
 
 	// Same detector, fixture file IN the allowlist → ZERO diagnostics. Proves the
@@ -225,23 +206,21 @@ func TestRowScopeAllAuditFunnel01_ScannerCatchesViolation(t *testing.T) {
 }
 
 // checkRowScopeAllAuditFunnel scans one typed Pass for production
-// tenant.NewRowVisibility calls whose scope argument is RowScopeAll or cannot be
-// proven non-All (fail-closed), flagging any not in allowlist. It returns the
-// diagnostics plus the set of module-relative files in which a fail-closed
-// construction was observed (for the anti-vacuity reverse check). It is the
-// SINGLE detection path shared by the production test and the fixture self-check
-// (#1759 F2), so the fixture exercises the exact allowlist + Diagnostic logic and
-// detector drift cannot pass the self-check.
+// tenant.NewCrossTenantVisibility calls, flagging any not in allowlist. It returns
+// the diagnostics plus the set of module-relative files in which a construction was
+// observed (for the anti-vacuity reverse check). It is the SINGLE detection path
+// shared by the production test and the fixture self-check (#1759 F2), so the
+// fixture exercises the exact allowlist + Diagnostic logic and detector drift cannot
+// pass the self-check.
 func checkRowScopeAllAuditFunnel(p *Pass, allowlist map[string]struct{}) (diags []Diagnostic, observed map[string]struct{}) {
 	observed = map[string]struct{}{}
 	if !p.Typed() {
 		return nil, observed
 	}
-	allVal := tenantRowScopeAllValue(p)
 	for _, file := range p.Files {
 		rel := p.Rel(file)
 		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-			if !isFailClosedNewRowVisibilityCall(p.TypesInfo, allVal, call) {
+			if !IsCallToPkgFunc(p.TypesInfo, call, tenantPkgPath, "NewCrossTenantVisibility") {
 				return
 			}
 			observed[rel] = struct{}{}
@@ -253,68 +232,17 @@ func checkRowScopeAllAuditFunnel(p *Pass, allowlist map[string]struct{}) (diags 
 				Rel:  rel,
 				Line: pos.Line,
 				Message: fmt.Sprintf(
-					"ROWSCOPEALL-AUDIT-FUNNEL-01: tenant.NewRowVisibility in %s is constructed with a scope "+
-						"argument that is RowScopeAll, or that the scanner cannot prove is a non-All compile-time "+
-						"constant (laundered through a var/param/return — fail-closed). A RowScopeAll obligation "+
-						"grants cross-tenant visibility and MUST be minted only by the audited "+
-						"(*auth.Principal).RowVisibility derivation, which slog.Error-audits the cross-tenant "+
-						"access first (spec FR-007). Derive the obligation via Principal.RowVisibility; pass a "+
-						"compile-time non-All scope constant directly elsewhere; or, if this IS a sanctioned "+
-						"cross-scope producer (e.g. a conformance helper), add it to rowScopeAllProducerAllowlist "+
-						"with a rationale and co-locate the mandatory audit.",
+					"ROWSCOPEALL-AUDIT-FUNNEL-01: tenant.NewCrossTenantVisibility in %s mints a RowScopeAll "+
+						"(cross-tenant) obligation. It MUST be minted only by the audited "+
+						"(*auth.Principal).CrossTenantVisibility derivation, which slog.Error-audits the "+
+						"cross-tenant access first (spec FR-007). Derive the obligation via "+
+						"Principal.CrossTenantVisibility; or, if this IS a sanctioned cross-scope producer "+
+						"(e.g. a conformance helper), add it to rowScopeAllProducerAllowlist with a rationale "+
+						"and co-locate the mandatory audit.",
 					rel,
 				),
 			})
 		})
 	}
 	return diags, observed
-}
-
-// isFailClosedNewRowVisibilityCall reports whether call is tenant.NewRowVisibility
-// whose first (scope) argument is RowScopeAll OR is not a compile-time constant
-// the scanner can prove is non-All. It is fail-closed: a non-constant scope
-// (local var / parameter / function return) returns true because the scanner
-// cannot prove it isn't RowScopeAll at runtime. A constant scope returns true
-// only when its value equals tenant.RowScopeAll (constant folding resolves a
-// direct const, a dot-imported bare ident, a local const alias, and an untyped
-// literal). go/types resolution is alias-proof.
-func isFailClosedNewRowVisibilityCall(info *types.Info, allVal constant.Value, call *ast.CallExpr) bool {
-	if !IsCallToPkgFunc(info, call, tenantPkgPath, "NewRowVisibility") {
-		return false
-	}
-	if len(call.Args) == 0 {
-		return true // malformed call — fail closed
-	}
-	if allVal == nil {
-		return true // could not resolve tenant.RowScopeAll's value — fail closed
-	}
-	tv, ok := info.Types[call.Args[0]]
-	if !ok || tv.Value == nil {
-		// scope arg is not a compile-time constant (var/param/return); cannot
-		// prove it is non-All. Fail closed.
-		return true
-	}
-	return constant.Compare(tv.Value, token.EQL, allVal)
-}
-
-// tenantRowScopeAllValue resolves the compile-time constant value of
-// tenant.RowScopeAll via the Pass's imported tenant package, or nil if it cannot
-// be resolved (treated as fail-closed by the caller). Any package that calls
-// tenant.NewRowVisibility imports pkg/tenant directly (incl. dot-import), so the
-// const is reachable from p.Pkg.Imports().
-func tenantRowScopeAllValue(p *Pass) constant.Value {
-	if p.Pkg == nil {
-		return nil
-	}
-	for _, imp := range p.Pkg.Imports() {
-		if imp.Path() != tenantPkgPath {
-			continue
-		}
-		c, ok := imp.Scope().Lookup("RowScopeAll").(*types.Const)
-		if !ok {
-			return nil
-		}
-		return c.Val()
-	}
-	return nil
 }

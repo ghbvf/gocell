@@ -303,6 +303,87 @@ func TestTagPathsShape(t *testing.T) {
 	}
 }
 
+// TestStripReplaceAndPin directly asserts StripResult.Requires (the output of
+// collectPinnedRequires) for a table of fixture inputs. This is the missing
+// coverage for the Requires field — TestInstallableStripTransform01 byte-freezes
+// the transform output but does not exercise the returned metadata.
+func TestStripReplaceAndPin(t *testing.T) {
+	tests := []struct {
+		name         string
+		in           string
+		wantRequires []string // nil means empty (no internal requires pinned)
+	}{
+		{
+			name: "standard: replace stripped, internal requires pinned and reported",
+			in: "module github.com/ghbvf/gocell/cmd/gocell\n\ngo 1.25\n\n" +
+				"require (\n" +
+				"\tgithub.com/ghbvf/gocell v0.0.0\n" +
+				"\tgithub.com/ghbvf/gocell/tools v0.0.0\n" +
+				"\tgithub.com/google/uuid v1.6.0\n" +
+				")\n\n" +
+				"replace github.com/ghbvf/gocell => ../../\n" +
+				"replace github.com/ghbvf/gocell/tools => ../tools\n",
+			wantRequires: []string{
+				"github.com/ghbvf/gocell",
+				"github.com/ghbvf/gocell/tools",
+			},
+		},
+		{
+			name: "single internal require, replace stripped",
+			in: "module github.com/ghbvf/gocell/cmd/gocell\n\ngo 1.25\n\n" +
+				"require github.com/ghbvf/gocell v0.0.0\n\n" +
+				"replace github.com/ghbvf/gocell => ../../\n",
+			wantRequires: []string{"github.com/ghbvf/gocell"},
+		},
+		{
+			name: "no internal requires — Requires is empty (anti-vacuity baseline)",
+			in: "module github.com/ghbvf/gocell/cmd/gocell\n\ngo 1.25\n\n" +
+				"require github.com/google/uuid v1.6.0\n",
+			wantRequires: nil,
+		},
+		{
+			name: "indirect internal require is pinned and reported",
+			in: "module github.com/ghbvf/gocell/cmd/gocell\n\ngo 1.25\n\n" +
+				"require github.com/ghbvf/gocell v0.0.0 // indirect\n\n" +
+				"replace github.com/ghbvf/gocell => ../../\n",
+			wantRequires: []string{"github.com/ghbvf/gocell"},
+		},
+		{
+			name: "sibling-namespace false-match guard: gocellxyz must NOT appear in Requires",
+			in: "module github.com/ghbvf/gocell/cmd/gocell\n\ngo 1.25\n\n" +
+				"require github.com/ghbvf/gocellxyz/foo v0.4.0\n" +
+				"require github.com/ghbvf/gocell v0.0.0\n\n" +
+				"replace github.com/ghbvf/gocell => ../../\n",
+			wantRequires: []string{"github.com/ghbvf/gocell"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			modPath := filepath.Clean(filepath.Join(dir, "go.mod"))
+			if err := os.WriteFile(modPath, []byte(tt.in), 0o644); err != nil {
+				t.Fatalf("write go.mod: %v", err)
+			}
+			res, err := StripReplaceAndPin(dir, testPrefix, testVersion)
+			if err != nil {
+				t.Fatalf("StripReplaceAndPin: %v", err)
+			}
+			// Assert StripResult.Requires matches the expected pinned internal paths.
+			if !equalStrings(res.Requires, tt.wantRequires) {
+				t.Errorf("StripResult.Requires = %v, want %v", res.Requires, tt.wantRequires)
+			}
+			// Sanity: the written go.mod must not contain replace.
+			got, err := os.ReadFile(modPath)
+			if err != nil {
+				t.Fatalf("read go.mod: %v", err)
+			}
+			if strings.Contains(string(got), "replace") {
+				t.Errorf("stripped go.mod still contains 'replace':\n%s", got)
+			}
+		})
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

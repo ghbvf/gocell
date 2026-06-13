@@ -49,9 +49,21 @@ cd gocell
 go install ./cmd/gocell
 ```
 
-> `go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` 目前**不可用**（`cmd/gocell` 模块
-> 的 `go.mod` 含本地 `replace` 指令，`go install pkg@version` 在此场景被拒绝），跟踪于
-> #2045。源码安装（本地 clone）是当前可用的版本化获取方式。
+> `go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` **自首个搭载 #2045 发布流水线的
+> release 起可用**（不是所有 v0.1.x，v0.1.0 之前或早于该流水线的 tag 不包含独立子 module
+> commit，工具链无法解析）。release 流水线在发布时经 `modrelease.StripReplaceAndPin`
+> （`InstallableBinaries`，#2045）剥离本地 `replace` 指令并将内部 require 固定到已发布版本，
+> 再在独立子 module commit 上打 `cmd/gocell/vX.Y.Z` tag，使 Go 工具链可直接解析该版本。用法：
+>
+> ```bash
+> go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z
+> ```
+>
+> go-install 路径与预编译二进制路径的 `gocell version` 输出（`cli_version`）一致：go-install
+> 构建时 Go 工具链将模块版本 vX.Y.Z 写入 `debug.ReadBuildInfo().Main.Version`，`toolVersion()`
+> 据此返回正确版本，与 goreleaser 预编译二进制的 ldflags 注入路径输出相同。
+>
+> 源码安装（本地 clone）仍作为开发 / 预发布版本的 fallback 可用。
 
 ## `gocell version` 输出说明
 
@@ -96,7 +108,7 @@ framework 版本超出声明范围将不被支持，届时 CLI 可能在启动�
 
 | gocell CLI version | Compatible framework (`github.com/ghbvf/gocell`) | Notes |
 |--------------------|-------------------------------------------------|-------|
-| v0.1.0 | >=v0.1.0 <v0.2.0 | First stable release（co-tagged，best-effort intent；预编译产物自首个搭载发布流水线的 release 起提供，此 tag 不含） |
+| v0.1.0 | >=v0.1.0 <v0.2.0 | First stable release（co-tagged，best-effort intent；预编译产物自首个搭载发布流水线的 release 起提供，此 tag 不含；`go install @version` 自首个搭载 #2045 流水线的 release 起可用，v0.1.0 本身可能早于该流水线） |
 
 ## 与 release checklist 的关系
 

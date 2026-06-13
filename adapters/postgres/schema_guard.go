@@ -442,6 +442,20 @@ type expectedRLS struct {
 	// AUDITCORE-APPENDER-SINGLE-SOURCE-01 (the appender is the sole audit_entries
 	// writer), so there is no tenant-controlled INSERT path that can exploit it.
 	SystemRowsReadable bool
+	// AuditAdminPolicy, when non-empty, names a second role-scoped PERMISSIVE
+	// SELECT policy that is expected on this table ONLY when the
+	// gocell_audit_admin PG role is provisioned (#1810, migration 065).
+	//
+	// Security invariant: the guard enforces BOTH directions —
+	//   - role present  → policy MUST be present with the exact expected shape
+	//                     (PERMISSIVE, SELECT, TO gocell_audit_admin, USING(true),
+	//                      no WITH CHECK); any deviation is a /readyz failure.
+	//   - role absent   → policy MUST also be absent; an unexpected extra permissive
+	//                     policy on the table still fails (#1622 F1 invariant
+	//                     maintained: "no unexpected permissive policy").
+	// All other tables continue to expect exactly one policy regardless of whether
+	// gocell_audit_admin is provisioned.
+	AuditAdminPolicy string
 }
 
 // pgTypeTSTZ is the PostgreSQL column type name for a timezone-aware timestamp.
@@ -1018,7 +1032,11 @@ var expectedRLSTables = []expectedRLS{
 	// audit_entries (migration 055, #1618): SystemRowsReadable variant — the
 	// `OR tenant_id = ''` clause keeps tenant-less system/framework rows readable
 	// by every tenant AND insertable by the GUC-unset pre-auth appender.
-	{Table: "audit_entries", Policy: "tenant_isolation", SystemRowsReadable: true},
+	// AuditAdminPolicy (migration 065, #1810): role-scoped PERMISSIVE SELECT
+	// policy that allows gocell_audit_admin to read all tenants' rows. The
+	// guard expects this second policy ONLY when gocell_audit_admin is
+	// provisioned; it is absent (migration no-op) in environments without the role.
+	{Table: "audit_entries", Policy: "tenant_isolation", SystemRowsReadable: true, AuditAdminPolicy: auditAdminPolicy},
 }
 
 // rlsPolicyRow is a single pg_policies row (the security-load-bearing attributes
@@ -1068,18 +1086,49 @@ func verifyRLS(ctx context.Context, pool *Pool) error {
 	return nil
 }
 
-// verifyRLSPolicy loads EVERY policy on r.Table and asserts the single expected
-// tenant_isolation policy with its full security-load-bearing shape:
+// auditAdminRole is the PostgreSQL role name for the dedicated cross-tenant
+// audit read pool (#1810, migration 065). It is referenced by the role-existence
+// guard in verifyRLSPolicy, by the expected shape of the audit_admin_read_all
+// policy in checkRLSPolicyShape, and by the admin-pool preflight
+// (Pool.checkAuditAdminRole — asserts the pool connects AS this exact role).
+const auditAdminRole = "gocell_audit_admin"
+
+// auditAdminPolicy is the name of the role-scoped permissive SELECT policy that
+// grants gocell_audit_admin cross-tenant read on audit_entries (#1810, migration
+// 065). Single source for the expectedRLSTables registry and the admin-pool
+// preflight (Pool.checkAuditAdminPolicy), which both assert this exact policy.
+const auditAdminPolicy = "audit_admin_read_all"
+
+// auditEntriesRLS returns the audit_entries entry from expectedRLSTables — the
+// single source of the table + policy names the admin-pool preflight
+// (Pool.checkAuditAdminPolicy) reuses for error-detail context. The registry is a
+// compile-time constant set that always contains this entry, so the loop never
+// falls through; the trailing return is an unreachable safety net.
+func auditEntriesRLS() expectedRLS {
+	for _, r := range expectedRLSTables {
+		if r.AuditAdminPolicy == auditAdminPolicy {
+			return r
+		}
+	}
+	return expectedRLS{Table: "audit_entries", Policy: "tenant_isolation", AuditAdminPolicy: auditAdminPolicy}
+}
+
+// verifyRLSPolicy loads EVERY policy on r.Table and asserts the expected set
+// of security-load-bearing policies with their full shapes:
 //
-//   - exactly one policy on the table — an EXTRA permissive policy is OR-ed into
-//     the USING filter, widening visible rows across tenants;
-//   - named r.Policy, PERMISSIVE, command ALL, applied to PUBLIC;
-//   - a USING predicate that is EXACTLY the tenant_isolation equality binding the
-//     tenant_id column to the app.tenant_id GUC via NULLIF (see
-//     predicateIsTenantIsolation / rlsTenantPredicateRe for the exact form); and
-//   - a non-NULL WITH CHECK predicate that is the SAME equality (the write-side
-//     cross-tenant guard — a dropped/weakened WITH CHECK would let an INSERT stamp
-//     another tenant's id).
+//   - The primary tenant_isolation policy: named r.Policy, PERMISSIVE, command
+//     ALL, applied to PUBLIC, with a USING + WITH CHECK predicate that is EXACTLY
+//     the tenant_isolation equality binding tenant_id to the app.tenant_id GUC via
+//     NULLIF (see predicateIsTenantIsolation / rlsTenantPredicateRe for the exact
+//     form).
+//
+//   - When r.AuditAdminPolicy is non-empty AND the gocell_audit_admin PG role is
+//     provisioned: a second policy named r.AuditAdminPolicy, PERMISSIVE, command
+//     SELECT, applied to gocell_audit_admin, USING(true), no WITH CHECK. The guard
+//     queries pg_roles to determine role presence (same approach as migration 058's
+//     DO-block role guard). When the role is absent the policy must also be absent
+//     (migration 065 is a no-op there); an unexpected extra permissive policy still
+//     fails the guard (#1622 F1 invariant maintained for every table).
 //
 // Presence-by-name only (the pre-#1622 form) passed all of the above defects.
 // pg_policies renders polcmd='*' as 'ALL', polpermissive as 'PERMISSIVE', PUBLIC
@@ -1124,53 +1173,176 @@ func verifyRLSPolicy(ctx context.Context, pool *Pool, r expectedRLS) error {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
 			"schema_guard: iterate row-level security policies", rows.Err())
 	}
-	return checkRLSPolicyShape(r, policies)
+
+	// When this table has a conditional audit admin policy, query pg_roles to
+	// determine whether gocell_audit_admin is provisioned in this environment.
+	// The result is passed to checkRLSPolicyShape so the pure validation logic
+	// can assert the correct expected policy count without touching the DB.
+	auditAdminRolePresent := false
+	if r.AuditAdminPolicy != "" {
+		const roleQ = `SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)`
+		if qErr := pool.inner.QueryRow(ctx, roleQ, auditAdminRole).Scan(&auditAdminRolePresent); qErr != nil {
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+				"schema_guard: query audit admin role existence", qErr)
+		}
+	}
+
+	return checkRLSPolicyShape(r, policies, auditAdminRolePresent)
 }
 
-// checkRLSPolicyShape is the pure (DB-free) validation core of verifyRLSPolicy,
-// asserting the loaded policy set has exactly the expected tenant_isolation shape.
-func checkRLSPolicyShape(r expectedRLS, policies []rlsPolicyRow) error {
-	if len(policies) != 1 {
-		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
-			"schema_guard: table must carry exactly one row-security policy",
-			rlsPolicyShapeDetails(r, fmt.Sprintf("found %d policies %v; want exactly [%s]",
-				len(policies), policyNames(policies), r.Policy))...)
+// checkRLSPolicyShape is the pure (DB-free) validation core of verifyRLSPolicy.
+//
+// auditAdminRolePresent is true when verifyRLSPolicy found gocell_audit_admin in
+// pg_roles. It is meaningful only when r.AuditAdminPolicy is non-empty; otherwise
+// it is ignored and the function behaves as before.
+//
+// The function validates the policy set according to these rules:
+//
+//   - When r.AuditAdminPolicy == "" (all tables except audit_entries):
+//     exactly one policy is expected — the primary tenant_isolation policy.
+//
+//   - When r.AuditAdminPolicy != "" AND auditAdminRolePresent:
+//     exactly two policies are expected — the primary tenant_isolation policy
+//     AND the role-scoped audit admin read-all policy with shape
+//     (PERMISSIVE, SELECT, gocell_audit_admin, USING(true), no WITH CHECK).
+//
+//   - When r.AuditAdminPolicy != "" AND !auditAdminRolePresent:
+//     exactly one policy is expected (role absent → migration 065 is a no-op;
+//     the admin policy must be absent). An unexpected extra permissive policy
+//     still fails, preserving the #1622 F1 invariant.
+//
+// In all branches, any policy NOT in the expected set causes a /readyz failure.
+func checkRLSPolicyShape(r expectedRLS, policies []rlsPolicyRow, auditAdminRolePresent bool) error {
+	wantCount := 1
+	if r.AuditAdminPolicy != "" && auditAdminRolePresent {
+		wantCount = 2
 	}
-	p := policies[0]
-	if p.name != r.Policy {
+	if err := checkRLSPolicyCount(r, policies, wantCount); err != nil {
+		return err
+	}
+	if err := checkPrimaryRLSPolicyShape(r, policies); err != nil {
+		return err
+	}
+	if r.AuditAdminPolicy != "" && auditAdminRolePresent {
+		return checkNamedAuditAdminPolicy(r, policies)
+	}
+	return nil
+}
+
+// checkRLSPolicyCount asserts the loaded policy set has exactly wantCount entries.
+func checkRLSPolicyCount(r expectedRLS, policies []rlsPolicyRow, wantCount int) error {
+	if len(policies) == wantCount {
+		return nil
+	}
+	want := r.Policy
+	if wantCount == 2 {
+		want = r.Policy + ", " + r.AuditAdminPolicy
+	}
+	return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+		"schema_guard: table must carry exactly the expected row-security policies",
+		rlsPolicyShapeDetails(r, fmt.Sprintf("found %d policies %v; want exactly [%s]",
+			len(policies), policyNames(policies), want))...)
+}
+
+// checkPrimaryRLSPolicyShape finds and validates the primary tenant_isolation
+// policy in the loaded policy set. The policies slice is unordered.
+func checkPrimaryRLSPolicyShape(r expectedRLS, policies []rlsPolicyRow) error {
+	var primary *rlsPolicyRow
+	for i := range policies {
+		if policies[i].name == r.Policy {
+			primary = &policies[i]
+			break
+		}
+	}
+	if primary == nil {
 		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
 			"schema_guard: row-security policy has unexpected name",
-			rlsPolicyShapeDetails(r, fmt.Sprintf(gotWantQuotedFmt, p.name, r.Policy))...)
+			rlsPolicyShapeDetails(r, fmt.Sprintf("policy %q not found; got %v", r.Policy, policyNames(policies)))...)
 	}
-	if !strings.EqualFold(p.permissive, "PERMISSIVE") {
+	if !strings.EqualFold(primary.permissive, "PERMISSIVE") {
 		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
 			"schema_guard: row-security policy is not PERMISSIVE",
-			rlsPolicyShapeDetails(r, fmt.Sprintf("permissive=%q", p.permissive))...)
+			rlsPolicyShapeDetails(r, fmt.Sprintf("permissive=%q", primary.permissive))...)
 	}
-	if !strings.EqualFold(p.cmd, "ALL") {
+	if !strings.EqualFold(primary.cmd, "ALL") {
 		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
 			"schema_guard: row-security policy does not cover ALL commands",
-			rlsPolicyShapeDetails(r, fmt.Sprintf("cmd=%q want ALL", p.cmd))...)
+			rlsPolicyShapeDetails(r, fmt.Sprintf("cmd=%q want ALL", primary.cmd))...)
 	}
-	if !strings.EqualFold(p.roles, "public") {
+	if !strings.EqualFold(primary.roles, "public") {
 		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
 			"schema_guard: row-security policy is not applied to PUBLIC",
-			rlsPolicyShapeDetails(r, fmt.Sprintf("roles=%q want public", p.roles))...)
+			rlsPolicyShapeDetails(r, fmt.Sprintf("roles=%q want public", primary.roles))...)
 	}
-	if !predicateIsTenantIsolation(p.qual, r.SystemRowsReadable) {
+	if !predicateIsTenantIsolation(primary.qual, r.SystemRowsReadable) {
 		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
 			"schema_guard: row-security USING predicate is not the tenant_isolation equality",
-			rlsPolicyShapeDetails(r, fmt.Sprintf("using=%q", p.qual))...)
+			rlsPolicyShapeDetails(r, fmt.Sprintf("using=%q", primary.qual))...)
 	}
-	if p.withCheck == "" {
+	if primary.withCheck == "" {
 		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
 			"schema_guard: row-security policy is missing WITH CHECK",
 			rlsPolicyShapeDetails(r, "with_check is NULL")...)
 	}
-	if !predicateIsTenantIsolation(p.withCheck, r.SystemRowsReadable) {
+	if !predicateIsTenantIsolation(primary.withCheck, r.SystemRowsReadable) {
 		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
 			"schema_guard: row-security WITH CHECK predicate is not the tenant_isolation equality",
-			rlsPolicyShapeDetails(r, fmt.Sprintf("with_check=%q", p.withCheck))...)
+			rlsPolicyShapeDetails(r, fmt.Sprintf("with_check=%q", primary.withCheck))...)
+	}
+	return nil
+}
+
+// checkNamedAuditAdminPolicy finds the audit admin policy by name and delegates
+// to checkAuditAdminPolicyShape for the full shape validation.
+func checkNamedAuditAdminPolicy(r expectedRLS, policies []rlsPolicyRow) error {
+	var admin *rlsPolicyRow
+	for i := range policies {
+		if policies[i].name == r.AuditAdminPolicy {
+			admin = &policies[i]
+			break
+		}
+	}
+	if admin == nil {
+		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			"schema_guard: audit admin read-all policy not found",
+			rlsPolicyShapeDetails(r, fmt.Sprintf("policy %q not found; got %v", r.AuditAdminPolicy, policyNames(policies)))...)
+	}
+	return checkAuditAdminPolicyShape(r, *admin)
+}
+
+// checkAuditAdminPolicyShape validates the role-scoped audit admin read-all
+// policy (migration 065, #1810). Expected shape:
+//
+//   - PERMISSIVE (OR-ed with other policies — does not affect gocell_app)
+//   - FOR SELECT only (the admin pool must never INSERT/UPDATE/DELETE)
+//   - TO gocell_audit_admin (role-scoped — applies only to that role)
+//   - USING(true) (cross-tenant full read)
+//   - no WITH CHECK (SELECT-only policy has no write-side predicate)
+func checkAuditAdminPolicyShape(r expectedRLS, p rlsPolicyRow) error {
+	if !strings.EqualFold(p.permissive, "PERMISSIVE") {
+		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			"schema_guard: audit admin policy is not PERMISSIVE",
+			rlsPolicyShapeDetails(r, fmt.Sprintf("audit_admin permissive=%q", p.permissive))...)
+	}
+	if !strings.EqualFold(p.cmd, "SELECT") {
+		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			"schema_guard: audit admin policy must be FOR SELECT only",
+			rlsPolicyShapeDetails(r, fmt.Sprintf("audit_admin cmd=%q want SELECT", p.cmd))...)
+	}
+	if !strings.EqualFold(p.roles, auditAdminRole) {
+		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			"schema_guard: audit admin policy must be scoped to gocell_audit_admin",
+			rlsPolicyShapeDetails(r, fmt.Sprintf("audit_admin roles=%q want %q", p.roles, auditAdminRole))...)
+	}
+	if strings.TrimSpace(strings.ToLower(p.qual)) != "true" {
+		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			"schema_guard: audit admin policy USING must be exactly true",
+			rlsPolicyShapeDetails(r, fmt.Sprintf("audit_admin using=%q want true", p.qual))...)
+	}
+	if p.withCheck != "" {
+		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			"schema_guard: audit admin SELECT policy must not have WITH CHECK",
+			rlsPolicyShapeDetails(r, fmt.Sprintf("audit_admin with_check=%q want empty", p.withCheck))...)
 	}
 	return nil
 }

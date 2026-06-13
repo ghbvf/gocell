@@ -10,25 +10,27 @@ import (
 )
 
 // RowScopeAllUnsupportedError reports that a RowVisibility carrying
-// tenant.RowScopeAll reached a ledger read path (Query / GetBySeq).
-// RowScopeAll is cross-tenant super-admin visibility. Epic #1337 PR-5 (#1343)
-// landed the identity→RowScopeAll derivation (auth.Principal.RowVisibility), but
-// under #1618's per-tenant FORCE RLS a cross-tenant audit read is architecturally
-// blocked for the NOBYPASSRLS serving role (it cannot enumerate tenants), so the
-// audited super-admin path stays DEFERRED to backlog; until it is wired EVERY
-// ledger backend fail-closes RowScopeAll (no silent degrade to tenant scope — a
-// partial "all-within-my-tenant" view would be a misleading under-delivery). It
-// is shared by MemStore and the PG LedgerStore so the rejection is byte-identical
-// across backends and exercised uniformly by the conformance suite.
+// tenant.RowScopeAll reached a ledger read path (Query / GetBySeq) on the
+// SERVING pool (gocell_rls_app, NOBYPASSRLS). This is defense-in-depth:
+// the serving pool cannot enumerate cross-tenant rows regardless of caller
+// intent, so it fail-closes unconditionally.
 //
-// The classification is KindNotImplemented (HTTP 501, RFC 9110 §15.6.2): the
-// super-admin request is policy-AUTHORIZED (auditQueryPolicy admits RoleSuperAdmin)
-// but the cross-tenant-audit CAPABILITY is deferred / not yet implemented — a 500
-// would mislead ops into chasing an unexpected server fault and pollute the 5xx
-// SLO (#1618 review F5). 501 is still 5xx, so the wire body collapses to the
-// generic ErrInternal code (errcode.PublicCodeForStatus); only the status differs.
-// The FR-007 cross-tenant audit slog.Error is still emitted upstream (at mint,
-// inside auth.Principal.RowVisibility) regardless of this store-side rejection.
+// Cross-tenant super-admin reads are NOT deferred — they are served by a
+// dedicated admin connection pool (gocell_audit_admin role, with a permissive
+// RLS SELECT policy USING(true)) provisioned by #1810 and exposed via
+// CrossTenantQueryStore. When CrossTenantQueryStore is provisioned and wired,
+// the handler routes super-admin reads through that store; when it is NOT
+// provisioned, the handler surfaces this error as a graceful-absent 501
+// (RFC 9110 §15.6.2) rather than fail-open.
+//
+// RowScopeAllUnsupportedError is shared by MemStore and the PG LedgerStore
+// (the SERVING-pool path) so the rejection is byte-identical across backends
+// and exercised uniformly by the conformance suite. It is not returned by
+// AuditCrossTenantStore (the admin-pool path, which has no RowScopeAll guard).
+//
+// The FR-007 cross-tenant audit slog.Error is emitted upstream (inside
+// auth.Principal.CrossTenantVisibility) before the store is consulted, so the
+// audit fires regardless of whether the store returns this error.
 func RowScopeAllUnsupportedError() error {
 	return errcode.New(errcode.KindNotImplemented, errcode.ErrInternal,
 		"audit ledger: RowScopeAll is not supported on this read path")
@@ -198,10 +200,12 @@ type Store interface {
 	//     existence is not leaked).
 	//
 	// vis must be valid (NewRowVisibility must succeed). A vis carrying RowScopeAll
-	// is fail-closed on every backend (RowScopeAllUnsupportedError) — cross-tenant
-	// audit read is deferred to backlog under #1618 FORCE RLS (see
-	// RowScopeAllUnsupportedError). GetBySeq has NO production caller today (chain
-	// replay / conformance / startup tail-verify only).
+	// is fail-closed on every serving-pool backend (RowScopeAllUnsupportedError) —
+	// the NOBYPASSRLS serving role cannot read cross-tenant; the sanctioned
+	// super-admin cross-tenant read is served separately by the admin-pool-backed
+	// CrossTenantQueryStore (#1810), not via GetBySeq. GetBySeq has NO production
+	// caller today (chain replay / conformance / startup tail-verify only) and no
+	// cross-tenant HTTP surface.
 	GetBySeq(ctx context.Context, vis tenant.RowVisibility, seq int64) (*Entry, error)
 
 	// Query lists entries matching AuditFilters using keyset cursor pagination
@@ -229,9 +233,11 @@ type Store interface {
 	// (the orthogonal OWNER axis). Self/device scopes restrict results to entries
 	// whose actor_id matches the obligation subject. Tenant scope returns all
 	// matching rows in t. vis must be valid (NewRowVisibility must succeed). A vis
-	// carrying RowScopeAll is fail-closed on every backend
-	// (RowScopeAllUnsupportedError) — cross-tenant audit read is deferred to backlog
-	// under #1618 FORCE RLS (PR-5 #1343 landed the derivation, not the audit path).
+	// carrying RowScopeAll is fail-closed on every serving-pool backend
+	// (RowScopeAllUnsupportedError) as defense in depth — the NOBYPASSRLS serving
+	// role cannot read cross-tenant. The sanctioned super-admin cross-tenant read is
+	// served by the dedicated admin-pool CrossTenantQueryStore (#1810), which takes
+	// the sealed tenant.CrossTenantVisibility, not this RowScopeAll-on-Query path.
 	Query(ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, filters AuditFilters, params query.ListParams) ([]*Entry, error)
 
 	// Verify re-computes the HMAC for each entry in [fromSeq, toSeq] and checks

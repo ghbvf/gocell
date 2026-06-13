@@ -93,6 +93,33 @@ previously emitted under an empty/ambient identity (a latent inheritance risk); 
 emits under a fixed, recognizable, auditable `"system"` identity. The change reduces
 attack surface (no ambient inheritance) rather than expanding it.
 
+### #1954 amendment (required Tenancy declaration)
+
+#1954 amends this ADR by upgrading the "a multi-tenant reconciler must add its own
+tenant dimension" guard from a documentation-level (Soft) godoc MUST to a
+construction-time machine guard: `reconcile.New` takes a required sealed `Tenancy`
+stance (`SingleTenant()` / `TenantScoped()`). **Threat matrix delta: still none added,
+and the pre-existing cross-tenant key-collision threat is downgraded, not widened.**
+
+- The amendment does **not** touch the system-identity install — the framework
+  principal stays tenantless `"system"` by positive assertion (§Decision unchanged).
+  Tenant-awareness is the consumer's command-id responsibility; `TenantScoped()` is an
+  acknowledgement of that responsibility, orthogonal to the framework identity. So
+  "install tenantless yet allow `TenantScoped()`" is not a contradiction.
+- The latent threat this ADR's §Consequences already named — a multi-tenant copy of
+  the single-tenant archetype emitting under `_notenant` and colliding cross-tenant on
+  a shared entity id — was previously guarded only by Soft prose (an AI co-author could
+  miss it silently). It is now a **conscious, compile-checked, auditable declaration**:
+  omitting the stance is a compile error, the zero value is a Build fail-fast. The
+  collision risk does not disappear (see residual blind spots) but its failure mode
+  moves from *silent omission* to *explicit assertion* — a strict reduction.
+- **Residual blind spots (permanent ceilings, not deferred work):** the guard cannot
+  verify a `TenantScoped()` body actually encodes the tenant (consumer correctness,
+  out of framework reach — same class as the `RECONCILE-FENCED-WRITE-FUNNEL-01`
+  ApplyFenced-ignores-epoch admission), nor cross-check a `SingleTenant()` declaration
+  against an actual multi-tenant cell (no cell-level tenancy signal exists — multi-
+  tenancy is a runtime `ctxkeys.TenantID` property, not a static cell attribute).
+
 ## AI-robust rating (charter §"Funnel 双向锁评级")
 
 - **Upstream Hard**: `installSystemProducerIdentity` is unexported; Go visibility makes
@@ -123,9 +150,23 @@ attack surface (no ambient inheritance) rather than expanding it.
   no version bump. Only the emitted entry's audit identity changes from empty → `"system"`.
 - A **multi-tenant** reconciler must add its own tenant dimension to its command-id /
   store derivation — it cannot rely on an ambient ctx tenant, which the install strips.
-  This is documented at the install site and the cert-renewal reconciler godoc. NOTE
-  this is a **documentation-level (Soft) guard** — there is no machine enforcement and
-  no multi-tenant reconciler exists today; it is forward guidance, not a new mechanism.
+  As of #1954 this is **machine-enforced at construction**, no longer a Soft godoc
+  guard: `reconcile.New` takes a REQUIRED sealed `Tenancy` second parameter
+  (`SingleTenant()` / `TenantScoped()`). Enforcement axes — (1) forging a non-zero
+  `Tenancy` is type-system **Hard** (unexported field, accessor-func minters); (2)
+  omitting the stance is a **compile** error (positional param — `reconcile.New(r)`
+  does not compile); (3) the zero `Tenancy{}` is a **Build fail-fast**; (4) the minter
+  value set is archtest-frozen (`RECONCILE-TENANCY-DECLARED-01`, Medium). **Concept
+  coherence with this ADR (threat-model re-eval):** the framework principal stays
+  tenantless system by positive assertion (the install in this ADR is unchanged);
+  tenant-awareness is the consumer's command-id responsibility, declared via
+  `TenantScoped()` — the two are orthogonal, so "install tenantless yet allow
+  TenantScoped" is not a contradiction. **Residual blind spots** (permanent ceilings,
+  documented not deferred): the guard cannot verify a `TenantScoped` body actually
+  encodes the tenant (consumer correctness, out of framework reach), nor cross-check a
+  `SingleTenant()` declaration against an actual multi-tenant cell (no cell-level
+  tenancy signal exists — multi-tenancy is a runtime ctx property, not a static cell
+  attribute). It converts an unconscious omission into a conscious, auditable assertion.
 - **Operations / observability**: emitted reconcile commands carry `actor=subject="system"`
   in the outbox envelope (a recognizable, filterable audit sentinel, consistent with
   `projection.SystemPrincipalActor`), and their Claimer dedup key sits under the

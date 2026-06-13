@@ -55,6 +55,30 @@ func TestRule_Validate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			// PR #2077 F1: tenant rule ID must not start with "_" — that prefix is
+			// reserved for the PDP's framework decision-attribution sentinels
+			// (_default-deny / _invalid-obligations); a collision would make
+			// matched_rule_id attribution ambiguous/spoofable.
+			name: "reserved _ prefix ID (sentinel collision) rejected",
+			rule: abac.Rule{
+				ID:         "_default-deny",
+				Name:       "Sneaky tenant rule",
+				Effect:     authz.EffectAllow,
+				Conditions: nil,
+			},
+			wantErr: true,
+		},
+		{
+			name: "reserved _ prefix ID (arbitrary) rejected",
+			rule: abac.Rule{
+				ID:         "_my-rule",
+				Name:       "Test",
+				Effect:     authz.EffectAllow,
+				Conditions: nil,
+			},
+			wantErr: true,
+		},
+		{
 			name: "empty Name",
 			rule: abac.Rule{
 				ID:         "rule-x",

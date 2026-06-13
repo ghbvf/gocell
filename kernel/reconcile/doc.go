@@ -10,7 +10,7 @@
 // delaying queue (F6, one waitingLoop goroutine) + dirty/processing dedup (F5,
 // coalescing in-flight triggers into a single re-run) + per-entity exponential
 // backoff (5ms..1000s, no jitter). PR-A7 (#1168) privatized the Loop constructor
-// behind a Builder DSL: reconcile.New(r).With*().Build() is the sole public
+// behind a Builder DSL: reconcile.New(r, tenancy).With*().Build() is the sole public
 // construction entry; all Loop config fields are unexported (Hard upstream funnel);
 // a Trigger is required by Build; defaulting runs through a single applyDefaults()
 // funnel at Start with no lazy getter methods. The Builder is a pure wiring layer:
@@ -34,8 +34,8 @@
 //
 // # Three-piece minimal core
 //
-// A consumer implements Reconciler and wires a Loop via reconcile.New(r).With*().Build(). The
-// whole public surface a consumer must learn at PR-A2 is:
+// A consumer implements Reconciler and wires a Loop via reconcile.New(r, tenancy).With*().Build().
+// The whole public surface a consumer must learn at PR-A2 is:
 //
 //	Reconciler  — Reconcile(ctx, Request) (Result, error)
 //	Request     — { EntityID string }
@@ -150,6 +150,13 @@
 //     goleak.VerifyTestMain, banning the per-test VerifyNone(IgnoreCurrent())
 //     idiom that flakes under -race (the Trigger / watchDrain tails drain
 //     asynchronously on ctx cancel).
+//   - RECONCILE-TENANCY-DECLARED-01 (#1954): every Loop declares a sealed Tenancy
+//     stance (SingleTenant / TenantScoped) as the required second arg of
+//     reconcile.New — omitting it is a compile error, the zero value is a Build
+//     fail-fast, and the minter set is archtest-frozen. Forces the multi-tenant
+//     command-id obligation to be a conscious declaration (was a Soft godoc MUST
+//     before #1954). The archtest freezes only the stance VALUE SET (Medium); the
+//     sealing + required-param are type/compile Hard. See the Tenancy godoc.
 //
 // Leader election (PR-A6) is whole-loop: when a LeaderElector is wired only the
 // lease holder dispatches Reconcile; a lost lease cancels the lease-scoped ctx to
@@ -184,7 +191,9 @@
 // (Go visibility — only Loop.process reaches it) and its ctxkeys writes are
 // caller-allowlisted by CTXKEYS-PRINCIPAL-WRITE-CALLER-01. A multi-tenant
 // reconciler must add its own tenant dimension (the system identity is
-// deliberately tenantless) — see the ADR.
+// deliberately tenantless); this obligation is machine-enforced at construction by
+// the required sealed Tenancy stance on reconcile.New (RECONCILE-TENANCY-DECLARED-01,
+// #1954) — see the ADR.
 //
 // ref: kubernetes-sigs/controller-runtime pkg/reconcile/reconcile.go
 // ref: kubernetes/client-go tools/leaderelection/leaderelection.go

@@ -7,7 +7,7 @@
 ## Prerequisites
 
 - Go 1.25.11+
-- `gocell` CLI — 三种获取方式（按推荐顺序）：
+- `gocell` CLI — 四种获取方式（按推荐顺序）：预编译二进制 / Docker / 源码安装 / `go install @version`：
 
   **预编译二进制（推荐）**
 
@@ -48,7 +48,15 @@
   gocell version  # 验证安装成功
   ```
 
-  The framework itself is a public module; `go get github.com/ghbvf/gocell@v0.1.0` works without GOPRIVATE. #1843 adds per-module release tags for every **library** satellite (`adapters/*`, `corecells`, `cellmodules`; `tools` is published for toolchain consumers such as external `archtest` users, not business Cells), synchronized to the same `vX.Y.Z` as the root — so `go get github.com/ghbvf/gocell/adapters/postgres@vX.Y.Z` resolves (see §6). These satellite tags exist **from the first stable release that ships #1843 onward** (the root-only `v0.1.0` predates it and has no satellite tags). `go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` is still **not** available — `cmd/gocell` is a `go install` binary, and `go install pkg@version` is rejected outright when the target module's `go.mod` carries the local `replace` directive it needs for monorepo development. #1843 deliberately excludes the `cmd/*` modules for exactly this reason; making the CLI installable at a version needs release-time replace-strip, tracked as **#2045**. Install from source (above) or use a pre-built binary for now.
+  The framework itself is a public module; `go get github.com/ghbvf/gocell@v0.1.0` works without GOPRIVATE. #1843 adds per-module release tags for every **library** satellite (`adapters/*`, `corecells`, `cellmodules`; `tools` is published for toolchain consumers such as external `archtest` users, not business Cells), synchronized to the same `vX.Y.Z` as the root — so `go get github.com/ghbvf/gocell/adapters/postgres@vX.Y.Z` resolves (see §6). These satellite tags exist **from the first stable release that ships #1843 onward** (the root-only `v0.1.0` predates it and has no satellite tags).
+
+  **`go install @version`（版本化安装，toolchain-managed 环境可选）**
+
+  ```bash
+  go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z
+  ```
+
+  Available **from the first release that ships the #2045 pipeline onward** (not all v0.1.x — early tags before this pipeline landed lack the separate sub-module commit that the Go toolchain requires). The release pipeline uses `modrelease.StripReplaceAndPin` (`InstallableBinaries`, #2045) to strip the local `replace` directive and pin internal requires to the published version, then tags the result as `cmd/gocell/vX.Y.Z`. The `gocell version` output (`cli_version`) from a `go install` binary is identical to that of a pre-built binary: Go embeds the module version into `debug.ReadBuildInfo().Main.Version`, which `toolVersion()` returns. Pre-built binaries and Docker images remain the recommended install path; `go install @version` is an additional option for toolchain-managed environments. Note: satellite library tags (#1843, from `go get github.com/ghbvf/gocell/adapters/postgres@vX.Y.Z`) and the CLI `go install` tag (#2045, `cmd/gocell/vX.Y.Z`) have different availability start points — they are independent pipeline steps.
 
 - **Verify CLI ↔ framework version compatibility**: before running `gocell validate`, confirm the
   installed CLI is compatible with the framework version your project depends on:

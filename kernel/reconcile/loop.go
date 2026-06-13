@@ -171,7 +171,7 @@ func (h *waitingHeap) Pop() any {
 // the scheduling loop's own control shell; the per-entity worker dispatch and
 // requeue are reconcile-specific.
 //
-// Construct via the Builder (reconcile.New(r).With*().Build()) in production.
+// Construct via the Builder (reconcile.New(r, tenancy).With*().Build()) in production.
 // All configuration fields are unexported; the Builder is the sole public
 // construction entry point. Loop config fields are private so that
 // &reconcile.Loop{Field: ...} from outside the package is a compile error —
