@@ -2426,6 +2426,103 @@ func TestFMT37(t *testing.T) {
 	}
 }
 
+// TestFMT41 exercises the per-method gRPC auth overlay metadata-pure guards
+// (#1675): non-empty name, no duplicate names, methods⇒codegen:true (the
+// dead-overlay gate), and — in #1675 where public is the only flag — each entry
+// must assert public:true (no vacuous entries). Referential integrity (name ∈
+// proto method set) is NOT here — kernel⊥tools, so it lives in the contractgen
+// pre-pass; this rule covers only what governance can decide from metadata.
+func TestFMT41(t *testing.T) {
+	const validProto = "contracts/grpc/access/session/verify/v1/session_verify.proto"
+	// grpcWithMethods returns a fresh codegen-enabled grpc ContractMeta carrying
+	// the given overlay. codegen defaults to true in production (parser), but a
+	// directly-constructed ContractMeta zeroes it — set it explicitly here.
+	grpcWithMethods := func(codegen bool, methods []metadata.GRPCMethodMeta) *metadata.ContractMeta {
+		return &metadata.ContractMeta{
+			ID:               "grpc.access.session.verify.v1",
+			Kind:             "grpc",
+			OwnerCell:        metadatatest.CellIDAccessCore,
+			ConsistencyLevel: "L1",
+			Lifecycle:        "active",
+			Codegen:          codegen,
+			Endpoints: metadata.EndpointsMeta{
+				Server:  metadatatest.CellIDAccessCore,
+				Clients: []string{metadatatest.CellIDSvcB},
+				GRPC: &metadata.GRPCTransportMeta{
+					Service: "access.session.v1.SessionVerifyService",
+					Proto:   validProto,
+					Methods: methods,
+				},
+			},
+			File: "contracts/grpc/access/session/verify/v1/contract.yaml",
+		}
+	}
+	tests := []struct {
+		name      string
+		methods   []metadata.GRPCMethodMeta
+		codegen   bool
+		wantCount int
+		wantIssue IssueType
+	}{
+		{
+			name:      "no overlay — vacuous pass",
+			methods:   nil,
+			codegen:   true,
+			wantCount: 0,
+		},
+		{
+			name:      "valid overlay (public:true, codegen:true)",
+			methods:   []metadata.GRPCMethodMeta{{Name: "Verify", Public: true}},
+			codegen:   true,
+			wantCount: 0,
+		},
+		{
+			name:      "empty method name rejected",
+			methods:   []metadata.GRPCMethodMeta{{Name: "", Public: true}},
+			codegen:   true,
+			wantCount: 1,
+			wantIssue: IssueRequired,
+		},
+		{
+			name:      "duplicate method name rejected",
+			methods:   []metadata.GRPCMethodMeta{{Name: "Verify", Public: true}, {Name: "Verify", Public: true}},
+			codegen:   true,
+			wantCount: 1,
+			wantIssue: IssueDuplicate,
+		},
+		{
+			name:      "overlay on codegen:false rejected (dead overlay — no live consumer)",
+			methods:   []metadata.GRPCMethodMeta{{Name: "Verify", Public: true}},
+			codegen:   false,
+			wantCount: 1,
+			wantIssue: IssueForbidden,
+		},
+		{
+			name:      "vacuous entry (public:false) rejected — asserts no non-default",
+			methods:   []metadata.GRPCMethodMeta{{Name: "Verify", Public: false}},
+			codegen:   true,
+			wantCount: 1,
+			wantIssue: IssueInvalid,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			pm.Contracts["grpc.access.session.verify.v1"] = grpcWithMethods(tt.codegen, tt.methods)
+			val := NewValidator(pm, "", clock.Real())
+			got := findByCode(val.validateFMT41(), "FMT-41")
+			assert.Len(t, got, tt.wantCount)
+			for _, r := range got {
+				assert.Equal(t, SeverityError, r.Severity)
+				assert.Equal(t, "endpoints.grpc.methods", r.Field)
+				if tt.wantIssue != "" {
+					assert.Equal(t, tt.wantIssue, r.IssueType)
+				}
+			}
+		})
+	}
+}
+
 // TestFMT37Proto_TraversalAndControlRune exercises the two guards that were
 // missing from governance before the single-source metadata.ValidateGRPCProtoPath
 // was introduced (#1601 findings #2/#3): filepath.IsLocal traversal rejection
