@@ -33,9 +33,14 @@ import (
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
-// testAdminCtx returns an admin auth context with the canonical test tenant injected.
+// testAdminCtx returns an admin auth context with the canonical test tenant and
+// an allow Authorizer injected. The Authorizer is required by
+// auth.RequirePermission (PDP gate) after the PR-10c migration from role-literal
+// to permission-based gates.
 func testAdminCtx() context.Context {
-	return ctxkeys.WithTenantID(auth.TestContext("admin-user", []string{"admin"}), "00000000-0000-0000-0000-000000000001")
+	return withAllowAuthorizer(
+		ctxkeys.WithTenantID(auth.TestContext("admin-user", []string{"admin"}), "00000000-0000-0000-0000-000000000001"),
+	)
 }
 
 func newIdentityRefreshStore() refresh.Store {

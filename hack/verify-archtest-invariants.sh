@@ -63,16 +63,20 @@ source hack/lib/archtest.sh
 # shard) — a SILENT (green) perf regression that must fail at PR-merge, not only
 # nightly. Cheap here: a header-only //go:build parse per file, NO packages.Load.
 #
-# PERMISSION-BASED-AUTHZ-01 — only its CHEAP exact-set freeze
-# (TestPermissionBasedAuthzAllowlist_Ceiling) IS in this PR-time set: it asserts the
-# role-literal-gate migration allowlist equals its frozen expected set (an in-memory
-# map compare, NO packages.Load), so allowlist tampering — a grow, or a swap that
-# keeps len=3 while silently exempting a new role-literal gate — fails at PR-merge,
-# not only nightly. The rule's heavy enforcement scan (TestPermissionBasedAuthz_01)
-# is a whole-corecells packages.Load typed scan and, like CLOCK-POSITIONAL-INJECTION-01
-# above, stays nightly (archtest-nightly.yml) to respect the 2-CPU/7GB runner budget;
-# it also carries the live no-stale anti-vacuity (each allowlisted file must still hold
-# a real gate). #1925 PR-10b pr-review F2/F3.
+# PERMISSION-BASED-AUTHZ-01 — its migration allowlist was DRAINED to empty by
+# PR-10c (#1348). Two CHEAP guards keep the rule at PR-time so it does not silently
+# regress to nightly-only — the failure PR #1974 review F3 caught when the former
+# TestPermissionBasedAuthzAllowlist_Ceiling was deleted with no PR-time replacement:
+#   TestPermissionBasedAuthzAllowlist_FrozenEmpty — in-memory exact-set freeze at ∅
+#     (NO packages.Load): a re-grow that re-opens a role-literal-gate exemption fails
+#     at PR-merge, not just nightly. Replaces the deleted Ceiling, frozen at empty.
+#   TestPermissionBasedAuthz_ReverseFixture — loads the standalone RED fixture
+#     (~1.7s, ONE tiny module, NOT the corecells tree) and asserts the scan fires,
+#     proving the typed scanner is non-vacuous at PR-merge.
+# The heavy whole-corecells packages.Load scan (TestPermissionBasedAuthz_01), like
+# CLOCK-POSITIONAL-INJECTION-01 above, stays nightly (archtest-nightly.yml) to respect
+# the 2-CPU/7GB runner budget — a real new gate in a live corecells handler is caught
+# there. #1925 PR-10b pr-review F2/F3; #1974 PR-10c pr-review F3.
 #
 # -tags=archtest: the archtest leaf is gated behind `//go:build archtest` so a
 # bare `go test ./...` keeps it off the make verify / PR critical path (build-tag
@@ -81,7 +85,7 @@ source hack/lib/archtest.sh
 # renamed tag (which yields "[no test files]" → 0 tests → false green) into a
 # hard failure — `-run` over an empty test set exits 0 otherwise.
 if ! output="$(go test -tags="$ARCHTEST_BUILD_TAGS" ./tools/archtest \
-  -run '^(TestProdClockInjection|TestKernelClockLeafFallback|TestKernelClockLeafFallbackFixtures|TestProdClockInjectionFixtures|TestProdDurationConst|TestProdDurationConstFixtures|TestTestTimeLiteralConst|TestTestSleepDiscipline|TestTestTimeLiteralFixtures|TestPanicRegistered|TestPanicRegisteredScannerFixtures|TestArchtestModulePathFunnel|TestModulePathFunnel_TypedReconstruction|TestFenceTokenMintFunnel_AllowlistEnforced|TestMetadatatestImportScope|TestFixtureCellIDTypedBuilder_NewCellIDBodyShape|TestFixtureCellIDTypedBuilder_VarInitializerShape|TestRootModuleNoReplace01|TestRootModuleNoReplace01_NegativeControl|TestPlatformCellScanCoverage01|TestPlatformCellScanCoverage01_AntiVacuity|TestArchtest_AllLeafTestFiles_HaveArchtestBuildTag|TestArchtest_InvariantsScriptContainsFunnelGuard|TestPermissionBasedAuthzAllowlist_Ceiling|TestContractOwnerCellFunnel_NoBypass|TestContractOwnerCellFunnel_DetectorIsNotVacuous)$' \
+  -run '^(TestProdClockInjection|TestKernelClockLeafFallback|TestKernelClockLeafFallbackFixtures|TestProdClockInjectionFixtures|TestProdDurationConst|TestProdDurationConstFixtures|TestTestTimeLiteralConst|TestTestSleepDiscipline|TestTestTimeLiteralFixtures|TestPanicRegistered|TestPanicRegisteredScannerFixtures|TestArchtestModulePathFunnel|TestModulePathFunnel_TypedReconstruction|TestFenceTokenMintFunnel_AllowlistEnforced|TestMetadatatestImportScope|TestFixtureCellIDTypedBuilder_NewCellIDBodyShape|TestFixtureCellIDTypedBuilder_VarInitializerShape|TestRootModuleNoReplace01|TestRootModuleNoReplace01_NegativeControl|TestPlatformCellScanCoverage01|TestPlatformCellScanCoverage01_AntiVacuity|TestArchtest_AllLeafTestFiles_HaveArchtestBuildTag|TestArchtest_InvariantsScriptContainsFunnelGuard|TestPermissionBasedAuthzAllowlist_FrozenEmpty|TestPermissionBasedAuthz_ReverseFixture|TestContractOwnerCellFunnel_NoBypass|TestContractOwnerCellFunnel_DetectorIsNotVacuous)$' \
   -count=1 -timeout 5m 2>&1)"; then
   printf '%s\n' "$output"
   exit 1

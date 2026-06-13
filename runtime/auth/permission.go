@@ -172,6 +172,64 @@ func RequirePermission(p authz.Permission) Policy {
 	}
 }
 
+// RequirePermissionOrSelf returns a Policy that permits the request when the
+// authenticated subject is accessing its OWN resource — the path parameter named
+// by pathParam equals the subject — and otherwise delegates to RequirePermission(p)
+// so the PDP decides.
+//
+// It is the migration target for the legacy auth.SelfOr(pathParam, RoleAdmin)
+// ownership gates (accesscore identitymanage/rbaccheck, PR-10c #1348): the
+// role-bypass branch becomes a permission gate; the self branch stays a
+// request-shape exemption.
+//
+// Self-exemption is a REQUEST-SHAPE determination (.claude/rules/gocell/tenancy.md
+// §ABAC authz): a caller naming itself in the path reads/writes its own resource
+// and is exempt from the route PDP; the data layer still governs row visibility
+// via RowScope. This is NOT a second PDP path — every non-self request flows
+// through the sole RequirePermission gate (the single PDP route entry, ADR §D5).
+// Self-exemption is gated on PrincipalUser with a non-empty Subject: service and
+// anonymous principals never self-exempt, they fall through to the PDP
+// (fail-closed). The self comparison (isSelfAccess) normalizes both the path value
+// and the subject to canonical UUID form, mirroring RequireSelfOrRole.
+//
+// Empty param ≠ self (tenancy.md): an empty path value never matches a non-empty
+// subject (isSelfAccess returns false on empty target), so it falls through to the
+// PDP — a subject can only self-exempt by explicitly naming itself.
+//
+// Zero permission fails closed FIRST: a zero authz.Permission{} (a mis-wired gate)
+// is rejected before the self-exemption check, so the self branch inherits the same
+// fail-closed precondition as RequirePermission rather than silently permitting a
+// self-naming caller (F2).
+//
+// Caller contract (review-enforced, not type-expressible): pathParam MUST name
+// the subject-identity path parameter of the route (the target user/owner id) —
+// pointing it at an unrelated param would exempt non-owners.
+//
+// AI-robust Grade: Medium — the self-check is a runtime param==subject judgement
+// (not type-expressible); it fails closed (non-user principal, empty subject, or
+// empty/mismatched param → delegates to RequirePermission → 401/403). Hard-ification
+// rides the PR-13 codegen funnel together with RequirePermission.
+func RequirePermissionOrSelf(pathParam string, p authz.Permission) Policy {
+	requirePermission := RequirePermission(p)
+	return func(r *http.Request) error {
+		// Fail-closed BEFORE the self-exemption shortcut (PR #1974 review F2): a
+		// zero authz.Permission{} is a programmer error and must never be permitted,
+		// not even for a self-naming caller. The self branch otherwise returns nil
+		// without ever reaching RequirePermission's own zero guard, so the wrapper
+		// would silently permit a mis-wired gate. Hoisting the guard makes the self
+		// branch inherit the same fail-closed precondition as the PDP path.
+		if p.IsZero() {
+			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgPermissionNotSpecified)
+		}
+		if principal, ok := FromContext(r.Context()); ok &&
+			principal.Kind == PrincipalUser && principal.Subject != "" &&
+			isSelfAccess(principal.Subject, r.PathValue(pathParam)) {
+			return nil
+		}
+		return requirePermission(r)
+	}
+}
+
 // evaluatePermissionDecision maps a PDP Decision to the route-gate outcome:
 //   - Allow with zero obligations → nil (permit).
 //   - Allow with a non-zero obligation this coarse gate cannot discharge → deny
