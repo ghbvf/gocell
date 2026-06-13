@@ -166,6 +166,19 @@ func auditRowUUID(logical string) string {
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(logical)).String()
 }
 
+// insertCrossTenantRowSQL inserts an audit_entries row carrying an explicit
+// subject_id ($7) and trace_id ($9) — unlike insertAuditRowSQL which hardcodes
+// them empty. The cross-tenant conformance SubjectID/TraceID filter sub-tests
+// need real values persisted so QueryCrossTenant's predicate matching is
+// exercised on PG. session_id / correlation_id stay empty; occurred_at and
+// timestamp both bind $10; payload is an empty JSON object.
+const insertCrossTenantRowSQL = `
+INSERT INTO audit_entries
+    (id, namespace, seq_no, event_id, event_type, actor_id,
+     subject_id, tenant_id, session_id, correlation_id, trace_id, occurred_at,
+     timestamp, payload, prev_hash, hash)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '', '', $9, $10, $10, '{}', $11, $12)`
+
 // TestAuditCrossTenantStore_PG_ReadsAcrossTenants proves that a pool connected
 // as gocell_audit_admin — backed by the permissive audit_admin_read_all RLS
 // SELECT policy (USING(true)) created by migration 064 — can read rows across:
@@ -478,17 +491,22 @@ func seedCrossTenantEntries(t *testing.T, ownerPool *Pool, entries []*ledger.Ent
 
 		// Generate a deterministic row ID (event_id is a UNIQUE key per chain). The
 		// id column is uuid, so derive a stable valid UUID from eventID+suffix.
-		_, err := ownerPool.DB().Exec(ctx, insertAuditRowSQL,
-			auditRowUUID(e.EventID+"-pg"), // id column (uuid) — unique per chain entry
-			ns,
-			seqNo,
-			e.EventID, // event_id (the conformance unique key)
-			e.EventType,
-			e.ActorID,
-			tid,
-			ts,
-			prevHash,
-			auditHash64,
+		// Unlike insertAuditRowSQL (which hardcodes empty subject_id/trace_id), this
+		// persists the entry's SubjectID + TraceID so the cross-tenant SubjectID/
+		// TraceID filter conformance sub-tests exercise real predicate matching.
+		_, err := ownerPool.DB().Exec(ctx, insertCrossTenantRowSQL,
+			auditRowUUID(e.EventID+"-pg"), // $1 id (uuid) — unique per chain entry
+			ns,                            // $2 namespace
+			seqNo,                         // $3 seq_no
+			e.EventID,                     // $4 event_id (conformance unique key)
+			e.EventType,                   // $5 event_type
+			e.ActorID,                     // $6 actor_id
+			e.SubjectID,                   // $7 subject_id
+			tid,                           // $8 tenant_id
+			e.TraceID,                     // $9 trace_id
+			ts,                            // $10 occurred_at + timestamp
+			prevHash,                      // $11 prev_hash
+			auditHash64,                   // $12 hash
 		)
 		require.NoError(t, err, "seedCrossTenantEntries: insert %s (ns=%s tenant=%s seq=%d)",
 			e.EventID, ns, tid, seqNo)
