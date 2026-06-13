@@ -558,27 +558,8 @@ func (s *PGJournal) MarkTerminal(ctx context.Context, instanceID, leaseID idutil
 		return false, err
 	}
 
-	if _, err := tx.Exec(ctx, updateInstanceTerminal,
-		statusToInt16(finalStatus), now, string(instanceID), string(leaseID),
-	); err != nil {
-		return false, errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGQuery,
-			"saga journal: MarkTerminal update failed", err)
-	}
-
-	// Serialize saga_events INSERTs so global_seq order == commit order (F1).
-	// See sagaEventsGlobalAppendLockKey for the full rationale.
-	if _, err := tx.Exec(ctx, advisoryLockSQL, sagaEventsGlobalAppendLockKey); err != nil {
-		return false, errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGQuery,
-			"saga journal: MarkTerminal advisory lock", err)
-	}
-
-	version := row.currentVersion + 1
-	if _, err := tx.Exec(ctx, insertEvent,
-		string(instanceID), version, kindToInt16(termKind),
-		nullableStepName(""), nil, now,
-	); err != nil {
-		return false, errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGQuery,
-			"saga journal: MarkTerminal insert event failed", err)
+	if err := markTerminalWrites(ctx, tx, instanceID, leaseID, finalStatus, termKind, row.currentVersion+1, now); err != nil {
+		return false, err
 	}
 
 	if owned {
@@ -589,6 +570,39 @@ func (s *PGJournal) MarkTerminal(ctx context.Context, instanceID, leaseID idutil
 		committed = true
 	}
 	return true, nil
+}
+
+// markTerminalWrites performs the terminal projection update plus the
+// advisory-locked terminal event append inside the caller's tx. Split out of
+// MarkTerminal to keep that method under the cognitive-complexity budget; the
+// commit-order protocol (F1, #1630) is unchanged — sagaEventsGlobalAppendLockKey
+// is still acquired immediately before the insertEvent INSERT.
+func markTerminalWrites(
+	ctx context.Context, tx pgx.Tx, instanceID, leaseID idutil.SafeID,
+	finalStatus saga.Status, termKind journal.EventKind, version int64, now time.Time,
+) error {
+	if _, err := tx.Exec(ctx, updateInstanceTerminal,
+		statusToInt16(finalStatus), now, string(instanceID), string(leaseID),
+	); err != nil {
+		return errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGQuery,
+			"saga journal: MarkTerminal update failed", err)
+	}
+
+	// Serialize saga_events INSERTs so global_seq order == commit order (F1).
+	// See sagaEventsGlobalAppendLockKey for the full rationale.
+	if _, err := tx.Exec(ctx, advisoryLockSQL, sagaEventsGlobalAppendLockKey); err != nil {
+		return errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGQuery,
+			"saga journal: MarkTerminal advisory lock", err)
+	}
+
+	if _, err := tx.Exec(ctx, insertEvent,
+		string(instanceID), version, kindToInt16(termKind),
+		nullableStepName(""), nil, now,
+	); err != nil {
+		return errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGQuery,
+			"saga journal: MarkTerminal insert event failed", err)
+	}
+	return nil
 }
 
 // RepoReady probes the saga_instances relation so schema/migration drift
