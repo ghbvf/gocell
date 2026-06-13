@@ -537,8 +537,8 @@ func TestConverter_CrossAttr_Create_RoundTrip(t *testing.T) {
 						Source:    "subject",
 						Key:       "sub",
 						Operator:  "eq_attr",
-						RhsSource: "resource",
-						RhsKey:    "id",
+						RHSSource: "resource",
+						RHSKey:    "id",
 						// Values intentionally absent/nil for cross-attr
 					},
 				},
@@ -557,8 +557,8 @@ func TestConverter_CrossAttr_Create_RoundTrip(t *testing.T) {
 	assert.Equal(t, "subject", cond.Source)
 	assert.Equal(t, "sub", cond.Key)
 	assert.Equal(t, "eq_attr", cond.Operator)
-	assert.Equal(t, "resource", cond.RhsSource, "response must re-emit rhsSource")
-	assert.Equal(t, "id", cond.RhsKey, "response must re-emit rhsKey")
+	assert.Equal(t, "resource", cond.RHSSource, "response must re-emit rhsSource")
+	assert.Equal(t, "id", cond.RHSKey, "response must re-emit rhsKey")
 	assert.Empty(t, cond.Values, "cross-attr condition must have no values in response")
 }
 
@@ -585,8 +585,8 @@ func TestConverter_CrossAttr_Update_RoundTrip(t *testing.T) {
 						Source:    "subject",
 						Key:       "sub",
 						Operator:  "eq_attr",
-						RhsSource: "resource",
-						RhsKey:    "id",
+						RHSSource: "resource",
+						RHSKey:    "id",
 					},
 				},
 			},
@@ -603,8 +603,8 @@ func TestConverter_CrossAttr_Update_RoundTrip(t *testing.T) {
 	cond := data.Rules[0].Conditions[0]
 
 	assert.Equal(t, "eq_attr", cond.Operator)
-	assert.Equal(t, "resource", cond.RhsSource, "response must re-emit rhsSource")
-	assert.Equal(t, "id", cond.RhsKey, "response must re-emit rhsKey")
+	assert.Equal(t, "resource", cond.RHSSource, "response must re-emit rhsSource")
+	assert.Equal(t, "id", cond.RHSKey, "response must re-emit rhsKey")
 	assert.Empty(t, cond.Values)
 }
 
@@ -628,8 +628,8 @@ func TestConverter_CrossAttr_StrayValues_Rejected(t *testing.T) {
 						Source:    "subject",
 						Key:       "sub",
 						Operator:  "eq_attr",
-						RhsSource: "resource",
-						RhsKey:    "id",
+						RHSSource: "resource",
+						RHSKey:    "id",
 						Values:    []string{"stray-value"},
 					},
 				},
@@ -641,7 +641,7 @@ func TestConverter_CrossAttr_StrayValues_Rejected(t *testing.T) {
 	assert.True(t, ok, "eq_attr with stray values must yield 422, got %T", resp)
 }
 
-// TestConverter_CrossAttr_InvalidRHSSource_Rejected asserts that an unrecognised
+// TestConverter_CrossAttr_InvalidRHSSource_Rejected asserts that an unrecognized
 // rhsSource string is rejected with 422 (KindInvalid).
 func TestConverter_CrossAttr_InvalidRHSSource_Rejected(t *testing.T) {
 	svc := newConverterTestService(t)
@@ -660,8 +660,8 @@ func TestConverter_CrossAttr_InvalidRHSSource_Rejected(t *testing.T) {
 						Source:    "subject",
 						Key:       "sub",
 						Operator:  "eq_attr",
-						RhsSource: "not-a-source",
-						RhsKey:    "id",
+						RHSSource: "not-a-source",
+						RHSKey:    "id",
 					},
 				},
 			},
@@ -707,6 +707,6 @@ func TestConverter_StaticCondition_NoRHSInResponse(t *testing.T) {
 	cond := data.Rules[0].Conditions[0]
 	assert.Equal(t, "eq", cond.Operator)
 	assert.Equal(t, []string{"eng"}, cond.Values)
-	assert.Empty(t, cond.RhsSource, "static condition must emit no rhsSource")
-	assert.Empty(t, cond.RhsKey, "static condition must emit no rhsKey")
+	assert.Empty(t, cond.RHSSource, "static condition must emit no rhsSource")
+	assert.Empty(t, cond.RHSKey, "static condition must emit no rhsKey")
 }

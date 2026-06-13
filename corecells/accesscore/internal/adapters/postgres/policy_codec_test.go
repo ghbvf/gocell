@@ -338,7 +338,7 @@ func TestPolicyCodec_StaticCondition_NoRHSFields(t *testing.T) {
 }
 
 // TestPolicyCodec_OldRowWithoutRHSFields asserts back-compat: a JSONB row
-// serialised BEFORE #1977 (no rhsSource/rhsKey keys) still decodes cleanly for
+// serialized BEFORE #1977 (no rhsSource/rhsKey keys) still decodes cleanly for
 // static operators, with RHSSource==0 and RHSKey=="".
 func TestPolicyCodec_OldRowWithoutRHSFields(t *testing.T) {
 	const oldRow = `[{"id":"r1","name":"Legacy rule","effect":"allow",` +

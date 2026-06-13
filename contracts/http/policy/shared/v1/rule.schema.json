@@ -30,7 +30,7 @@
       "description": "All conditions are AND-combined. Empty or absent means unconditional (rule always applies).",
       "items": {
         "type": "object",
-        "required": ["source", "key", "operator", "values"],
+        "required": ["source", "key", "operator"],
         "additionalProperties": false,
         "properties": {
           "source": {
@@ -48,10 +48,10 @@
           },
           "operator": {
             "type": "string",
-            "$comment": "enum: eq, neq, in, not_in — minLength/maxLength guards are length-based equivalents",
+            "$comment": "enum: eq, neq, in, not_in, eq_attr — minLength/maxLength guards are length-based equivalents; maxLength bumped to 7 to admit eq_attr (7 chars)",
             "minLength": 2,
-            "maxLength": 6,
-            "description": "Comparison applied between the resolved attribute and values. Valid values: eq, neq, in, not_in."
+            "maxLength": 7,
+            "description": "Comparison applied between the resolved attribute and the right-hand side. Valid values: eq, neq, in, not_in (static: compare against values), eq_attr (cross-attribute: compare against rhsSource/rhsKey instead of values)."
           },
           "values": {
             "type": "array",
@@ -61,7 +61,20 @@
               "minLength": 1,
               "maxLength": 512
             },
-            "description": "Right-hand side of the comparison. Must be non-empty."
+            "description": "Right-hand side of the comparison for static operators (eq, neq, in, not_in). Must be non-empty when present. Absent for cross-attribute operator eq_attr."
+          },
+          "rhsSource": {
+            "type": "string",
+            "$comment": "enum: subject, resource, environment — same shape as source; only valid when operator is eq_attr",
+            "minLength": 7,
+            "maxLength": 11,
+            "description": "Cross-attribute right-hand-side namespace. Set only for operator eq_attr. Valid values: subject, resource, environment."
+          },
+          "rhsKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Cross-attribute right-hand-side attribute name. Set only for operator eq_attr."
           }
         }
       }

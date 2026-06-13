@@ -57,14 +57,17 @@ func createRuleItemToDomain(item *policyCreate.RequestRulesItem) (abac.Rule, err
 }
 
 // conditionWire is the minimal condition wire shape shared by create and update
-// request schemas. Both generated types carry Source/Key/Operator/Values fields
-// with identical semantics; this adapter allows parseConditionWire to operate on
-// both without duplicating the parsing logic (avoids dupl lint).
+// request schemas. Both generated types carry Source/Key/Operator/Values and
+// (post-#1977) RHSSource/RHSKey fields with identical semantics; this adapter
+// allows parseConditionWire to operate on both without duplicating the parsing
+// logic (avoids dupl lint).
 type conditionWire interface {
 	getSource() string
 	getKey() string
 	getOperator() string
 	getValues() []string
+	getRHSSource() string
+	getRHSKey() string
 }
 
 func createConditionsToDomain(items []*policyCreate.RequestRulesItemConditionsItem) ([]abac.Condition, error) {
@@ -82,13 +85,19 @@ func createConditionsToDomain(items []*policyCreate.RequestRulesItemConditionsIt
 // createCondWire adapts the create-contract condition type to conditionWire.
 type createCondWire policyCreate.RequestRulesItemConditionsItem
 
-func (w *createCondWire) getSource() string   { return w.Source }
-func (w *createCondWire) getKey() string      { return w.Key }
-func (w *createCondWire) getOperator() string { return w.Operator }
-func (w *createCondWire) getValues() []string { return w.Values }
+func (w *createCondWire) getSource() string    { return w.Source }
+func (w *createCondWire) getKey() string       { return w.Key }
+func (w *createCondWire) getOperator() string  { return w.Operator }
+func (w *createCondWire) getValues() []string  { return w.Values }
+func (w *createCondWire) getRHSSource() string { return w.RHSSource }
+func (w *createCondWire) getRHSKey() string    { return w.RHSKey }
 
 // parseConditionWires converts a slice of conditionWire to domain Conditions.
 // Factored out to avoid code duplication between create and update converters.
+// For cross-attribute conditions (op=="eq_attr"), rhsSource is parsed into
+// Condition.RHSSource and rhsKey into Condition.RHSKey; Values is left nil.
+// Domain Condition.Validate (called downstream in service.go) enforces the
+// operator-discriminated shape → malformed = 422 (#1977).
 func parseConditionWires(items []conditionWire) ([]abac.Condition, error) {
 	if len(items) == 0 {
 		return nil, nil
@@ -107,7 +116,19 @@ func parseConditionWires(items []conditionWire) ([]abac.Condition, error) {
 				"policymanage: invalid condition operator",
 				errcode.WithDetails(errcode.PublicString("operator", c.getOperator())))
 		}
-		conds = append(conds, abac.Condition{Source: src, Key: c.getKey(), Operator: op, Values: c.getValues()})
+		cond := abac.Condition{Source: src, Key: c.getKey(), Operator: op, Values: c.getValues()}
+		// Cross-attribute operator: parse rhsSource if present.
+		if c.getRHSSource() != "" {
+			rhsSrc, err := abac.ParseAttributeSource(c.getRHSSource())
+			if err != nil {
+				return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+					"policymanage: invalid condition rhsSource",
+					errcode.WithDetails(errcode.PublicString("rhsSource", c.getRHSSource())))
+			}
+			cond.RHSSource = rhsSrc
+			cond.RHSKey = c.getRHSKey()
+		}
+		conds = append(conds, cond)
 	}
 	return conds, nil
 }
@@ -175,10 +196,12 @@ func updateConditionsToDomain(items []*policyUpdate.RequestRulesItemConditionsIt
 // updateCondWire adapts the update-contract condition type to conditionWire.
 type updateCondWire policyUpdate.RequestRulesItemConditionsItem
 
-func (w *updateCondWire) getSource() string   { return w.Source }
-func (w *updateCondWire) getKey() string      { return w.Key }
-func (w *updateCondWire) getOperator() string { return w.Operator }
-func (w *updateCondWire) getValues() []string { return w.Values }
+func (w *updateCondWire) getSource() string    { return w.Source }
+func (w *updateCondWire) getKey() string       { return w.Key }
+func (w *updateCondWire) getOperator() string  { return w.Operator }
+func (w *updateCondWire) getValues() []string  { return w.Values }
+func (w *updateCondWire) getRHSSource() string { return w.RHSSource }
+func (w *updateCondWire) getRHSKey() string    { return w.RHSKey }
 
 func updateObligationsToDomain(obs *policyUpdate.RequestRulesItemObligations) (authz.Obligations, error) {
 	if obs == nil {
@@ -250,9 +273,14 @@ func polCondsToCreateWire(conds []abac.Condition) []*policyCreate.ResponseDataRu
 	}
 	out := make([]*policyCreate.ResponseDataRulesItemConditionsItem, 0, len(conds))
 	for _, c := range conds {
-		out = append(out, &policyCreate.ResponseDataRulesItemConditionsItem{
+		item := &policyCreate.ResponseDataRulesItemConditionsItem{
 			Source: c.Source.String(), Key: c.Key, Operator: c.Operator.String(), Values: c.Values,
-		})
+		}
+		if c.RHSSource != 0 {
+			item.RHSSource = c.RHSSource.String()
+			item.RHSKey = c.RHSKey
+		}
+		out = append(out, item)
 	}
 	return out
 }
@@ -297,9 +325,14 @@ func polCondsToGetWire(conds []abac.Condition) []*policyGet.ResponseDataRulesIte
 	}
 	out := make([]*policyGet.ResponseDataRulesItemConditionsItem, 0, len(conds))
 	for _, c := range conds {
-		out = append(out, &policyGet.ResponseDataRulesItemConditionsItem{
+		item := &policyGet.ResponseDataRulesItemConditionsItem{
 			Source: c.Source.String(), Key: c.Key, Operator: c.Operator.String(), Values: c.Values,
-		})
+		}
+		if c.RHSSource != 0 {
+			item.RHSSource = c.RHSSource.String()
+			item.RHSKey = c.RHSKey
+		}
+		out = append(out, item)
 	}
 	return out
 }
@@ -344,9 +377,14 @@ func polCondsToUpdateWire(conds []abac.Condition) []*policyUpdate.ResponseDataRu
 	}
 	out := make([]*policyUpdate.ResponseDataRulesItemConditionsItem, 0, len(conds))
 	for _, c := range conds {
-		out = append(out, &policyUpdate.ResponseDataRulesItemConditionsItem{
+		item := &policyUpdate.ResponseDataRulesItemConditionsItem{
 			Source: c.Source.String(), Key: c.Key, Operator: c.Operator.String(), Values: c.Values,
-		})
+		}
+		if c.RHSSource != 0 {
+			item.RHSSource = c.RHSSource.String()
+			item.RHSKey = c.RHSKey
+		}
+		out = append(out, item)
 	}
 	return out
 }
@@ -391,9 +429,14 @@ func polCondsToListWire(conds []abac.Condition) []*policyList.ResponseDataItemRu
 	}
 	out := make([]*policyList.ResponseDataItemRulesItemConditionsItem, 0, len(conds))
 	for _, c := range conds {
-		out = append(out, &policyList.ResponseDataItemRulesItemConditionsItem{
+		item := &policyList.ResponseDataItemRulesItemConditionsItem{
 			Source: c.Source.String(), Key: c.Key, Operator: c.Operator.String(), Values: c.Values,
-		})
+		}
+		if c.RHSSource != 0 {
+			item.RHSSource = c.RHSSource.String()
+			item.RHSKey = c.RHSKey
+		}
+		out = append(out, item)
 	}
 	return out
 }

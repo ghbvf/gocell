@@ -61,10 +61,11 @@ var (
 	effectFromCode = invertCodeMap(effectToCode)
 
 	operatorToCode = map[abac.Operator]string{
-		abac.OpEquals:    "eq",
-		abac.OpNotEquals: "neq",
-		abac.OpIn:        "in",
-		abac.OpNotIn:     "not_in",
+		abac.OpEquals:     "eq",
+		abac.OpNotEquals:  "neq",
+		abac.OpIn:         "in",
+		abac.OpNotIn:      "not_in",
+		abac.OpEqualsAttr: "eq_attr",
 	}
 	operatorFromCode = invertCodeMap(operatorToCode)
 
@@ -108,7 +109,13 @@ type conditionJSON struct {
 	Source   string   `json:"source"`
 	Key      string   `json:"key"`
 	Operator string   `json:"op"`
-	Values   []string `json:"values"`
+	Values   []string `json:"values,omitempty"`
+	// RHSSource and RHSKey are only present for cross-attribute conditions
+	// (OpEqualsAttr). Static operators leave these fields zero/empty and they
+	// are omitted from the serialized JSON (omitempty), keeping existing rows
+	// byte-identical (#1977 Batch C).
+	RHSSource string `json:"rhsSource,omitempty"`
+	RHSKey    string `json:"rhsKey,omitempty"`
 }
 
 type obligationsJSON struct {
@@ -277,7 +284,19 @@ func encodeConditions(conds []abac.Condition) ([]conditionJSON, error) {
 		if err != nil {
 			return nil, err
 		}
-		out[i] = conditionJSON{Source: srcCode, Key: c.Key, Operator: opCode, Values: c.Values}
+		dto := conditionJSON{Source: srcCode, Key: c.Key, Operator: opCode, Values: c.Values}
+		// For cross-attribute conditions (OpEqualsAttr) write the RHS attribute
+		// reference; static operators leave RHSSource/RHSKey zero/empty and they
+		// are omitted via omitempty — static rows stay byte-identical (#1977).
+		if c.Operator == abac.OpEqualsAttr {
+			rhsSrcCode, err := encodeSource(c.RHSSource)
+			if err != nil {
+				return nil, err
+			}
+			dto.RHSSource = rhsSrcCode
+			dto.RHSKey = c.RHSKey
+		}
+		out[i] = dto
 	}
 	return out, nil
 }
@@ -326,7 +345,18 @@ func decodeConditions(conds []conditionJSON) ([]abac.Condition, error) {
 		if err != nil {
 			return nil, err
 		}
-		out[i] = abac.Condition{Source: src, Key: c.Key, Operator: op, Values: c.Values}
+		cond := abac.Condition{Source: src, Key: c.Key, Operator: op, Values: c.Values}
+		// Decode cross-attribute RHS when present. Legacy rows (no rhsSource/rhsKey
+		// keys) leave these empty strings which are the zero values — safe (#1977).
+		if c.RHSSource != "" {
+			rhsSrc, err := decodeSource(c.RHSSource)
+			if err != nil {
+				return nil, err
+			}
+			cond.RHSSource = rhsSrc
+			cond.RHSKey = c.RHSKey
+		}
+		out[i] = cond
 	}
 	return out, nil
 }
