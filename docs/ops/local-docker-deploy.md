@@ -371,7 +371,7 @@ machine but not for a production deployment.
 | Health listener bind | `127.0.0.1:9091` with `GOCELL_HTTP_HEALTH_LOCAL_ONLY=1` — container loopback only | `:9091` (Pod-reachable) for Kubelet probes and Prometheus scrapes; remove `LOCAL_ONLY`; see [./listener-topology.md](./listener-topology.md) |
 | Internal listener bind | `127.0.0.1:9090` — container loopback, not reachable from Docker bridge | NetworkPolicy + caller-cell allowlist; see [./listener-topology.md](./listener-topology.md) |
 | Secret rotation | `rm .env.local` + re-run script + full teardown + re-run setup/admin | Rolling K8s Secret replacement + `kubectl rollout restart`; see [./first-run-setup.md](./first-run-setup.md) |
-| EventBus / AMQP broker | `GOCELL_SINGLE_POD=1` — in-process event relay, no RabbitMQ needed | Multi-pod requires external AMQP broker: `GOCELL_AMQP_URL=amqp://user:pass@rabbitmq.example.com:5672/`. Remove `GOCELL_SINGLE_POD=1` from env. |
+| EventBus / AMQP broker | RabbitMQ container in the compose stack; `GOCELL_AMQP_URL=amqp://gocell:…@rabbitmq:5672/`. **postgres topology requires a real broker — `GOCELL_SINGLE_POD=1` does NOT waive it** (single-pod only waives *distributed nonce/replay*, not the durable outbox event broker); corebundle fail-closes at startup without `GOCELL_AMQP_URL` (#1940). | Managed AMQP broker (RabbitMQ / cluster) over TLS: `GOCELL_AMQP_URL=amqps://user:pass@rabbitmq.example.com:5671/`. The broker is required whenever `GOCELL_CELL_ADAPTER_MODE=postgres`, independent of pod count. |
 
 
 ## Related Documents

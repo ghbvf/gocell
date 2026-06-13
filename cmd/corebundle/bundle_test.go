@@ -79,7 +79,8 @@ func buildTestSharedDepsAndLocals(t *testing.T) (*composition.SharedDeps, *cmdLo
 		JWTIssuer:            issuer,
 		JWTVerifier:          verifier,
 		MetricsProvider:      ps.metricProvider,
-		EventBus:             eb,
+		Publisher:            eb,
+		Subscriber:           eb,
 		ConfigEventCollector: configEventCollector,
 		ConsumerClaimer:      idempotency.NewInMemClaimer(clock.Real()),
 		InternalHMACRing:     ring,
@@ -128,13 +129,16 @@ func newValidatedSharedDepsAndLocals(t *testing.T, topo bootstrap.Topology) (*co
 	nonceStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
 
+	eb2 := eventbus.New(clock.Real())
+
 	shared := &composition.SharedDeps{
 		Clock:                clock.Real(),
 		Topology:             topo,
 		JWTIssuer:            issuer,
 		JWTVerifier:          verifier,
 		MetricsProvider:      ps.metricProvider,
-		EventBus:             eventbus.New(clock.Real()),
+		Publisher:            eb2,
+		Subscriber:           eb2,
 		ConfigEventCollector: configEventCollector,
 		ConsumerClaimer:      idempotency.NewInMemClaimer(clock.Real()),
 		InternalHMACRing:     ring,

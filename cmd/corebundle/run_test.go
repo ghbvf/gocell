@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/runtime/http/health/healthtest"
 )
@@ -26,6 +27,23 @@ func TestReleaseUnhandedResources_ClosesPoolWhenNotHanded(t *testing.T) {
 	releaseUnhandedResources(context.Background(), locals, false)
 
 	assert.True(t, pool.closeCalled, "pool must be closed when startup aborts before handoff")
+}
+
+// TestReleaseUnhandedResources_ClosesBrokerResources verifies the startup-abort
+// defer also closes the event-transport broker connection (#1940): it is dialed
+// eagerly inside LoadSharedDepsFromEnv, so a failure between Load and bootstrap.Run
+// (provisionCapabilities / composition.Build) would otherwise leak the open broker
+// socket. handedToBootstrap == false → close; handed → no-op.
+func TestReleaseUnhandedResources_ClosesBrokerResources(t *testing.T) {
+	broker := &fakeManagedResource{}
+	locals := &cmdLocals{brokerResources: []kernellifecycle.ManagedResource{broker}}
+	releaseUnhandedResources(context.Background(), locals, false)
+	assert.True(t, broker.closeCalled, "broker connection must be closed when startup aborts before handoff")
+
+	handed := &fakeManagedResource{}
+	handedLocals := &cmdLocals{brokerResources: []kernellifecycle.ManagedResource{handed}}
+	releaseUnhandedResources(context.Background(), handedLocals, true)
+	assert.False(t, handed.closeCalled, "handed-off broker is owned by bootstrap; defer must not close it")
 }
 
 // TestReleaseUnhandedResources_NoCloseWhenHanded verifies the handoff gate: once

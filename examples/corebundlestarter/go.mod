@@ -76,6 +76,8 @@ replace github.com/ghbvf/gocell/adapters/adapterutil => ../../adapters/adapterut
 
 replace github.com/ghbvf/gocell/adapters/postgres => ../../adapters/postgres
 
+replace github.com/ghbvf/gocell/adapters/rabbitmq => ../../adapters/rabbitmq
+
 replace github.com/ghbvf/gocell/adapters/ratelimit => ../../adapters/ratelimit
 
 replace github.com/ghbvf/gocell/adapters/redis => ../../adapters/redis

@@ -11,12 +11,12 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/capability"
-	"github.com/ghbvf/gocell/runtime/eventbus"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
@@ -88,8 +88,21 @@ type SharedDeps struct {
 	// import adapters/prometheus or github.com/prometheus/client_golang.
 	MetricsProvider kernelmetrics.Provider
 
-	// EventBus is the in-process event bus for publish and subscribe.
-	EventBus *eventbus.InMemoryEventBus
+	// Publisher is the outbox event publisher — the sink the relay publishes
+	// already-persisted outbox entries to. In demo topology it is the in-process
+	// eventbus; in postgres topology a real broker (RabbitMQ). The type is the
+	// kernel/outbox interface so this package never imports runtime/eventbus or
+	// adapters/* (same layering reason as MetricsProvider). The composition root
+	// resolves it via cellmodules/eventtransport.Resolve, which gates the choice
+	// on Topology and fail-closes postgres mode onto a real broker (#1940).
+	Publisher outbox.Publisher
+
+	// Subscriber is the outbox event subscriber — the source consumers read from.
+	// In demo topology it is the SAME in-process eventbus instance as Publisher
+	// (so in-process publish is visible to in-process subscribers); in postgres
+	// topology the same broker's subscriber. Interface-typed for the same layering
+	// reason as Publisher.
+	Subscriber outbox.Subscriber
 
 	// ConfigEventCollector records config consumer process and settlement
 	// metrics. It is genuinely cross-cell — consumed by accesscore, configcore,
@@ -229,8 +242,11 @@ func (d *SharedDeps) validate() error {
 	if validation.IsNilInterface(d.MetricsProvider) {
 		missing("MetricsProvider")
 	}
-	if d.EventBus == nil {
-		missing("EventBus")
+	if validation.IsNilInterface(d.Publisher) {
+		missing("Publisher")
+	}
+	if validation.IsNilInterface(d.Subscriber) {
+		missing("Subscriber")
 	}
 	if validation.IsNilInterface(d.ConfigEventCollector) {
 		missing("ConfigEventCollector")

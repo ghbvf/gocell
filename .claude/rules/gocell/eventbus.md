@@ -1,5 +1,21 @@
 # EventBus 规范
 
+## 事件传输选型（topology-gated）
+
+composition root 的 `outbox.Publisher`/`outbox.Subscriber` 经
+`cellmodules/eventtransport.Resolve(clk, topo, cfg)` 按 `Topology` 单源选型：
+
+- demo / memory 拓扑 → 进程内 `runtime/eventbus`（Publisher == Subscriber 同实例）。
+- postgres 拓扑 → 真实 broker（RabbitMQ，从 `GOCELL_AMQP_URL`）；缺 broker URL 启动期
+  fail-closed，**不静默降级回 in-memory**（relay 必须把已持久化的 outbox entry 发到 broker，
+  而非进程内 bus，否则跨进程/重启丢事件）。
+
+in-memory bus **仅** demo 拓扑可达：`cmd/corebundle` 生产代码禁止直接 import
+`runtime/eventbus`，由 depguard `corebundle-no-direct-eventbus` 守卫
+（`COREBUNDLE-EVENTBUS-FUNNEL-01`，路径级 import ban）。扩展新 broker（mqtt）在
+`eventtransport` 的 `brokerKind` switch 加分支 + 暴露选择 env，不在本约束外另开旁路。
+权威语义见 `cellmodules/eventtransport/doc.go` 与 ADR `202606131500-1940`。
+
 ## ConsumerBase
 
 所有 consumer 使用 `ConsumerBase`。它负责 Claim / Commit / Release、幂等、

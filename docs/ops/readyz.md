@@ -153,7 +153,7 @@ the `X-Readyz-Token` header.
 	    "dependencies": {
 	      "postgres_ready": { "status": "healthy", "duration_ms": 3 }
 	    },
-	    "adapters": { "storage": "postgres", "eventbus": "rabbitmq" }
+	    "adapters": { "storage": "postgres", "event_bus": "rabbitmq" }
 	  }
 }
 ```
@@ -174,7 +174,7 @@ wire (it rides the slog channel only):
 	      "postgres_ready": { "status": "healthy", "duration_ms": 3 },
 	      "rabbitmq_ready":  { "status": "degraded", "duration_ms": 8 }
 	    },
-	    "adapters": { "storage": "postgres", "eventbus": "rabbitmq" }
+	    "adapters": { "storage": "postgres", "event_bus": "rabbitmq" }
 	  }
 }
 ```
@@ -226,7 +226,7 @@ time=2026-05-26T03:50:06Z level=WARN msg="readyz unhealthy"
   dependencies.rabbitmq_ready.status=unhealthy
   dependencies.rabbitmq_ready.duration_ms=12
   dependencies.rabbitmq_ready.error_msg="dial failed password=<REDACTED> host=mq"
-  adapters=map[storage:postgres eventbus:rabbitmq]
+  adapters=map[storage:postgres event_bus:rabbitmq]
 ```
 
 Verbose 503 slog example（JSON handler，`-log-format=json`）：
@@ -244,7 +244,7 @@ Verbose 503 slog example（JSON handler，`-log-format=json`）：
     "postgres_ready": {"status": "healthy", "duration_ms": 3, "error_msg": ""},
     "rabbitmq_ready": {"status": "unhealthy", "duration_ms": 12, "error_msg": "dial failed password=<REDACTED> host=mq"}
   },
-  "adapters": {"storage": "postgres", "eventbus": "rabbitmq"}
+  "adapters": {"storage": "postgres", "event_bus": "rabbitmq"}
 }
 ```
 

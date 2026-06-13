@@ -112,7 +112,7 @@ func (m *module) Provide(
 	modResult, err := buildConfigCoreOpts(shared.Clock, configCoreModuleConfig{
 		topology:         shared.Topology,
 		pg:               shared.PG,
-		publisher:        shared.EventBus,
+		publisher:        shared.Publisher,
 		metricsProvider:  shared.MetricsProvider,
 		valueTransformer: vt,
 		onStaleCipher: func(_, _, _ string) {

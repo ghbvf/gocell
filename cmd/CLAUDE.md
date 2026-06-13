@@ -122,6 +122,7 @@ Wave-1 #1423 删除了跨 module value handoff（`ModuleExports` + `in` 参数�
 | `NonceStore` | /internal/v1/* 服务令牌防重放 store；control-plane 校验经 `Kind()` 拒 noop / 多 pod in-memory（#1410） |
 | `SharedPGPool` | postgres 连接池（跨 Cell 共享） |
 | `ConsumerClaimer` | outbox 消费幂等键声明者；`Kind()` 自报 in_memory/distributed（#1410，CP8 fail-closed） |
+| `Publisher` / `Subscriber` | outbox 事件传输（relay 发布 sink + consumer 订阅源）；接口型，经 `cellmodules/eventtransport.Resolve` 按 Topology 选型——demo=in-memory，postgres=真实 broker（RabbitMQ），缺 broker fail-closed（#1940） |
 | `PrimaryHTTPAddr` / `InternalHTTPAddr` / `HealthHTTPAddr` | 三 listener 绑定地址 |
 
 ## 环境变量（关键）
@@ -133,3 +134,4 @@ Wave-1 #1423 删除了跨 module value handoff（`ModuleExports` + `in` 参数�
 | `GOCELL_ACCESSCORE_IP_HASH_SALT` | bootstrap-failed 事件 client-IP keyed-hash salt（≥32 字节，#1488） | real 模式 fail-fast（缺失/demo key/<32B） |
 | `GOCELL_ADAPTER_MODE` | 适配器模式：`""`（dev，默认）/ `real` | — |
 | `GOCELL_CELL_ADAPTER_MODE` | 存储后端：`memory`（默认）/ `postgres`（`postgres` 经 Topology 耦合规则强制要求 `GOCELL_ADAPTER_MODE=real`） | — |
+| `GOCELL_AMQP_URL` | postgres 拓扑的 RabbitMQ broker URL（事件传输 publisher/subscriber，#1940）；demo 拓扑不读 | postgres 拓扑 fail-fast（缺即启动期报错，不静默降级回 in-memory） |

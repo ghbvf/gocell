@@ -49,7 +49,7 @@
 // ## Symbol inventory (lives here, not in ai-robust.md per the charter)
 //
 //   - Frozen type: github.com/ghbvf/gocell/runtime/composition.SharedDeps
-//   - Frozen golden: sharedDepsFrozenExportedFields (20 exported fields)
+//   - Frozen golden: sharedDepsFrozenExportedFields (21 exported fields)
 //
 // Relationship: advances #1412 (SharedDeps Hard-ization) by covering the
 // field-set dimension. The unexported sealed-construction marker (valid) is
@@ -83,7 +83,8 @@ var sharedDepsFrozenExportedFields = map[string]string{
 	"JWTIssuer":            "*auth.JWTIssuer",
 	"JWTVerifier":          "*auth.JWTVerifier",
 	"MetricsProvider":      "metrics.Provider",
-	"EventBus":             "*eventbus.InMemoryEventBus",
+	"Publisher":            "outbox.Publisher",
+	"Subscriber":           "outbox.Subscriber",
 	"ConfigEventCollector": "metrics.ConfigEventCollector",
 	"ConsumerClaimer":      "idempotency.Claimer",
 	"PG":                   "capability.PGProvider",
@@ -175,7 +176,8 @@ func TestSharedDepsFieldSetFrozen01_DetectorRejectsPerturbation(t *testing.T) {
 		JWTIssuer            string
 		JWTVerifier          string
 		MetricsProvider      string
-		EventBus             string
+		Publisher            string
+		Subscriber           string
 		ConfigEventCollector string
 		ConsumerClaimer      string
 		PG                   string
@@ -193,7 +195,7 @@ func TestSharedDepsFieldSetFrozen01_DetectorRejectsPerturbation(t *testing.T) {
 	}
 	retyped := exportedFieldTypeStrings(reflect.TypeOf(sharedDepsRetypedClock{}))
 	assert.NotEqual(t, sharedDepsFrozenExportedFields, retyped,
-		"%s anti-vacuity (type drift): a struct with the same 20 field names but Clock "+
+		"%s anti-vacuity (type drift): a struct with the same 21 field names but Clock "+
 			"retyped to string must NOT match the golden — proves type-string drift detection, "+
 			"not just field-set membership detection", ruleSharedDepsFieldSetFrozen01)
 

@@ -34,6 +34,9 @@ trap 'rm -f "${_tmp_out}"' EXIT
 # (postgres://role:pw@host/db), where base64's '/' '+' '=' break URL parsing.
 _pg_password="$(openssl rand -hex 16)"
 _gocell_app_password="$(openssl rand -hex 16)"
+# RabbitMQ password is hex (URL-safe): embedded in GOCELL_AMQP_URL userinfo
+# (amqp://gocell:pw@rabbitmq:5672/), same rationale as the PG passwords (#1940).
+_rabbitmq_password="$(openssl rand -hex 16)"
 _master_key="$(openssl rand -hex 32)"
 _cursor_key_config="$(openssl rand -base64 32)"
 _hmac_key="$(openssl rand -base64 32)"
@@ -52,6 +55,7 @@ cat >"${_tmp_out}" <<EOF
 
 PG_PASSWORD=${_pg_password}
 GOCELL_APP_PASSWORD=${_gocell_app_password}
+RABBITMQ_PASSWORD=${_rabbitmq_password}
 CONFIGCORE_MASTER_KEY=${_master_key}
 CONFIGCORE_CURSOR_KEY=${_cursor_key_config}
 AUDITCORE_HMAC_KEY=${_hmac_key}

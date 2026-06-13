@@ -80,7 +80,8 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 		JWTIssuer:            issuer,
 		JWTVerifier:          verifier,
 		MetricsProvider:      mp,
-		EventBus:             eb,
+		Publisher:            eb,
+		Subscriber:           eb,
 		ConfigEventCollector: cec,
 		ConsumerClaimer:      claimer,
 		InternalHMACRing:     testHMACRing(t),
@@ -267,37 +268,55 @@ func TestSharedDeps_Validate_NilReceiver(t *testing.T) {
 // TestSharedDeps_Validate_MissingFields verifies that each Validate()-required
 // field, when nil, causes Validate() to return an error.
 func TestSharedDeps_Validate_MissingFields(t *testing.T) {
+	// wantField asserts the error names the specific missing field (validate uses
+	// errors.Join, not short-circuit, so each field is validated INDEPENDENTLY —
+	// nilling exactly one from a valid base must surface that one's name). This
+	// proves Publisher and Subscriber are each guarded on their own, not merely
+	// that "some" field check fired.
 	tests := []struct {
-		name  string
-		mutFn func(s *SharedDeps)
+		name      string
+		mutFn     func(s *SharedDeps)
+		wantField string
 	}{
 		{
-			name:  "Clock nil",
-			mutFn: func(s *SharedDeps) { s.Clock = nil },
+			name:      "Clock nil",
+			mutFn:     func(s *SharedDeps) { s.Clock = nil },
+			wantField: "Clock",
 		},
 		{
-			name:  "JWTIssuer nil",
-			mutFn: func(s *SharedDeps) { s.JWTIssuer = nil },
+			name:      "JWTIssuer nil",
+			mutFn:     func(s *SharedDeps) { s.JWTIssuer = nil },
+			wantField: "JWTIssuer",
 		},
 		{
-			name:  "JWTVerifier nil",
-			mutFn: func(s *SharedDeps) { s.JWTVerifier = nil },
+			name:      "JWTVerifier nil",
+			mutFn:     func(s *SharedDeps) { s.JWTVerifier = nil },
+			wantField: "JWTVerifier",
 		},
 		{
-			name:  "MetricsProvider nil",
-			mutFn: func(s *SharedDeps) { s.MetricsProvider = nil },
+			name:      "MetricsProvider nil",
+			mutFn:     func(s *SharedDeps) { s.MetricsProvider = nil },
+			wantField: "MetricsProvider",
 		},
 		{
-			name:  "EventBus nil",
-			mutFn: func(s *SharedDeps) { s.EventBus = nil },
+			name:      "Publisher nil",
+			mutFn:     func(s *SharedDeps) { s.Publisher = nil },
+			wantField: "Publisher",
 		},
 		{
-			name:  "ConfigEventCollector nil",
-			mutFn: func(s *SharedDeps) { s.ConfigEventCollector = nil },
+			name:      "Subscriber nil",
+			mutFn:     func(s *SharedDeps) { s.Subscriber = nil },
+			wantField: "Subscriber",
 		},
 		{
-			name:  "ConsumerClaimer nil",
-			mutFn: func(s *SharedDeps) { s.ConsumerClaimer = nil },
+			name:      "ConfigEventCollector nil",
+			mutFn:     func(s *SharedDeps) { s.ConfigEventCollector = nil },
+			wantField: "ConfigEventCollector",
+		},
+		{
+			name:      "ConsumerClaimer nil",
+			mutFn:     func(s *SharedDeps) { s.ConsumerClaimer = nil },
+			wantField: "ConsumerClaimer",
 		},
 	}
 
@@ -307,7 +326,9 @@ func TestSharedDeps_Validate_MissingFields(t *testing.T) {
 			s := buildTestSharedDeps(t)
 			tc.mutFn(s)
 			err := s.validate()
-			assert.Error(t, err, "expected error for %s", tc.name)
+			require.Error(t, err, "expected error for %s", tc.name)
+			assert.Contains(t, err.Error(), tc.wantField,
+				"validate() error must name the missing field %q", tc.wantField)
 		})
 	}
 }

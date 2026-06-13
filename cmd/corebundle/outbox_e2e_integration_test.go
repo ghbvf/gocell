@@ -88,7 +88,7 @@ type configEntryUpsertedBusinessPayload struct {
 // buildE2EConfigCoreShared constructs a *composition.SharedDeps suitable for
 // driving the E2E configcore postgres path via buildConfigCoreCellFromShared.
 // It uses the test-default shared (from buildTestSharedDepsAndLocals) and
-// overrides Topology, PG, and EventBus.
+// overrides Topology, PG, and the Publisher/Subscriber (the in-memory bus).
 //
 // The key provider is no longer built here: cellmodules/configcore.Module.Provide
 // self-builds it from GOCELL_CONFIGCORE_KEY_PROVIDER and related env vars
@@ -104,7 +104,8 @@ func buildE2EConfigCoreShared(
 	t.Setenv("GOCELL_CONFIGCORE_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
 	shared.Topology = mkTopo("real", "postgres", true)
 	shared.PG = pgProvider
-	shared.EventBus = eb
+	shared.Publisher = eb
+	shared.Subscriber = eb
 	return shared
 }
 

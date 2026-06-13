@@ -8,6 +8,7 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/migration"
+	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/capability"
 	"github.com/ghbvf/gocell/runtime/composition"
 )
@@ -70,7 +71,7 @@ func provisionCapabilities(ctx context.Context, shared *composition.SharedDeps, 
 // In memory mode the pool is not opened and shared.PG stays nil; cell modules
 // fall through to their in-memory storage path.
 func provisionPostgres(ctx context.Context, shared *composition.SharedDeps, locals *cmdLocals) error {
-	if shared.Topology.StorageBackend() != "postgres" {
+	if shared.Topology.StorageBackend() != bootstrap.StorageBackendPostgres {
 		return nil
 	}
 	pgCfg, err := LoadPGConfig("CONFIGCORE")
