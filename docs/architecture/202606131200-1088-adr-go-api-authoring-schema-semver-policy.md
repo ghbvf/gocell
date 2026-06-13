@@ -104,9 +104,9 @@ CLI 校验，不直接 Go 依赖）。现有 archtest 已禁止此 import 路径
 
 | 威胁 | 缓解 | 评级 |
 |------|------|------|
-| 外部 `go get -u` 踩 sealed marker constructor 签名变更，编译失败（R9 根因） | v0.x intent：PR 说明 + `[breaking-api]` CHANGELOG；v1.0 GA 后 gorelease CI 门禁阻止未预告的 breaking merge | Soft（v0.x）→ Medium（v1.0 GA，待建 backlog #gorelease-ci） |
-| authoring schema 改必填字段，外部 `gocell validate` 失败 | v0.x intent：schema breaking 须 PR 说明；v1.0 GA 后 JSON-schema diff CI 门禁 | Soft（v0.x）→ Medium（v1.0 GA，待建 backlog） |
-| v0.x「intent」被外部消费方误读为「guarantee」 | 本 ADR + cli-version-compatibility.md + cell-external-repo-quickstart.md 明确 v0.x = best-effort intent；`gocell version` 输出注明「pre-GA」 | Soft（文档澄清，无机器强制，可接受：v0.x 定义上不保证） |
+| 外部 `go get -u` 踩 sealed marker constructor 签名变更，编译失败（R9 根因） | v0.x intent：PR 说明 + `[breaking-api]` CHANGELOG；v1.0 GA 后 gorelease CI 门禁阻止未预告的 breaking merge | Soft（v0.x）→ Medium（v1.0 GA，#2046 gorelease/apidiff CI 门禁） |
+| authoring schema 改必填字段，外部 `gocell validate` 失败 | v0.x intent：schema breaking 须 PR 说明；v1.0 GA 后 JSON-schema diff CI 门禁 | Soft（v0.x）→ Medium（v1.0 GA，#2046） |
+| v0.x「intent」被外部消费方误读为「guarantee」 | 本 ADR + cli-version-compatibility.md + cell-external-repo-quickstart.md 明确 v0.x = best-effort intent（`gocell version` 输出版本字段，pre-GA 语义由前述文档承载，命令本身不附加文案） | Soft（文档澄清，无机器强制，可接受：v0.x 定义上不保证） |
 | v1.0 GA 后忘记切换 intent → guarantee，enforcement 未接入 | 本 ADR §D4 列出 v1.0 GA checklist；GA ADR 的 PR body 必须逐条核销（见下 §v1.0 GA self-closure checklist） | Medium（self-closure checklist 是人工检查，GA PR review 强制对照） |
 | contractspec 被外部误 import，绕过 CLI 校验路径 | 现有 archtest 已禁止（引用，不重复建） | Medium（现有 archtest 守卫） |
 | CLI 与 framework 版本对应关系手动维护漂移 | `compatible_framework_range` 从单一注入 version 常量派生，非手维护；`cli-version-compatibility.md` 表由 release checklist 驱动追加 | Medium（派生逻辑的正确性由 release 流程保证，非编译期 Hard） |

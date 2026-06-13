@@ -6,7 +6,11 @@
 # ref: goreleaser/goreleaser Dockerfile (distroless static)
 # ref: google/go-containerregistry Dockerfile
 
-FROM gcr.io/distroless/static:nonroot
+# Pinned by digest (not just the mutable :nonroot tag) for reproducible,
+# auditable builds; the digest is the multi-arch image index (covers
+# linux/amd64 + linux/arm64). Bumped automatically by Dependabot
+# (docker ecosystem, .github/dependabot.yml).
+FROM gcr.io/distroless/static:nonroot@sha256:963fa6c544fe5ce420f1f54fb88b6fb01479f054c8056d0f74cc2c6000df5240
 
 LABEL org.opencontainers.image.source="https://github.com/ghbvf/gocell" \
       org.opencontainers.image.description="GoCell CLI — governance and code-generation tool" \

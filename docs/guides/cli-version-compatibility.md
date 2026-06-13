@@ -17,11 +17,12 @@ framework 版本号始终相同：`gocell` CLI `vX.Y.Z` 对应 framework `vX.Y.Z
 tarball，解压后将 `gocell` 二进制放入 `$PATH`，并用 `checksums.txt` 校验完整性：
 
 ```bash
-# 示例（以实际 tag 和平台替换占位符）：
-# https://github.com/ghbvf/gocell/releases/tag/vX.Y.Z
-# 下载 gocell_linux_amd64.tar.gz 及 checksums.txt
-sha256sum -c checksums.txt
-tar -xzf gocell_linux_amd64.tar.gz
+# 从 https://github.com/ghbvf/gocell/releases/tag/vX.Y.Z 下载对应平台 tarball + checksums.txt。
+# 归档名格式：gocell_<version>_<os>_<arch>.tar.gz（version 无前导 v，例 gocell_0.2.0_linux_amd64.tar.gz）。
+# checksums.txt 含全部 4 个平台行；只下载目标平台时，仅校验该文件那一行：
+f=gocell_<version>_linux_amd64.tar.gz                 # 按实际 version/平台替换
+grep " ${f}\$" checksums.txt | sha256sum -c -         # macOS: grep " ${f}\$" checksums.txt | shasum -a 256 -c -
+tar -xzf "$f"
 mv gocell /usr/local/bin/
 ```
 
@@ -50,7 +51,7 @@ go install ./cmd/gocell
 
 > `go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` 目前**不可用**（`cmd/gocell` 模块
 > 的 `go.mod` 含本地 `replace` 指令，`go install pkg@version` 在此场景被拒绝），跟踪于
-> #1088。源码安装（本地 clone）是当前可用的版本化获取方式。
+> #2045。源码安装（本地 clone）是当前可用的版本化获取方式。
 
 ## `gocell version` 输出说明
 
