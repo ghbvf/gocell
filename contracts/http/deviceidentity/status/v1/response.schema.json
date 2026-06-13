@@ -49,6 +49,11 @@
           "type": "string",
           "format": "date-time",
           "maxLength": 64
+        },
+        "issuer": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Issuing CA identifier (provider-neutral; lets a multi-CA consumer correlate this cert to its issuer)."
         }
       }
     }

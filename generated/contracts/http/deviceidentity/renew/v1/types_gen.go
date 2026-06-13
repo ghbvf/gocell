@@ -51,6 +51,7 @@ type ResponseData struct {
 	Status      ResponseDataStatus `json:"status"`
 	DeviceID    string             `json:"deviceId,omitempty"`
 	PriorSerial string             `json:"priorSerial,omitempty"`
+	Issuer      string             `json:"issuer,omitempty"`
 }
 
 // ResponseDataStatus enumerates the closed value-set of the status field.

@@ -20,6 +20,7 @@ func TestDeviceState_V1(t *testing.T) {
 	// normal response
 	c.ValidateResponse(t, []byte(`{"data":{"deviceId":"dev-1","state":"online","lastSeenAt":"2026-06-13T00:00:00Z","tenantId":"t-1"}}`))
 	c.ValidateResponse(t, []byte(`{"data":{"deviceId":"dev-1","state":"offline"}}`))
+	c.ValidateResponse(t, []byte(`{"data":{"deviceId":"dev-1","state":"unknown"}}`))
 
 	// parameter errors
 	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","state":"bogus"}}`)) // bad deviceState enum

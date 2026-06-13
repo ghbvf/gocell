@@ -12,6 +12,7 @@
     },
     "deviceId": {
       "type": "string",
+      "minLength": 1,
       "maxLength": 256
     },
     "tenantId": {
@@ -25,6 +26,7 @@
     "reason": {
       "type": "string",
       "maxLength": 32,
+      "description": "RFC 5280 §5.3.1 CRLReason code. Full standard set retained for provider-neutral alignment; consumers should treat certificateHold/removeFromCRL per RFC 5280 semantics (hold / un-hold), not as permanent revocation.",
       "enum": [
         "unspecified",
         "keyCompromise",

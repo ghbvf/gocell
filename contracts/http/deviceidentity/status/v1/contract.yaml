@@ -4,8 +4,8 @@ ownerCell: _framework
 consistencyLevel: L0
 lifecycle: draft
 description: |
-  Device identity certificate status query — returns the current certificate status for a device.
-  ref: docs/architecture/202606130635-1939-adr-framework-owned-contract.md
+  GET status by deviceId; when the optional `serial` query param is omitted, returns the device's
+  current active certificate (highest epoch). ref: docs/architecture/202606130635-1939-adr-framework-owned-contract.md
 endpoints:
   server: _framework
   clients: []

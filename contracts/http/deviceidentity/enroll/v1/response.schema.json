@@ -12,15 +12,18 @@
       "properties": {
         "certificate": {
           "type": "string",
-          "maxLength": 16384
+          "maxLength": 16384,
+          "description": "Issued leaf certificate, base64-encoded DER (X.509)."
         },
         "chain": {
           "type": "string",
-          "maxLength": 65536
+          "maxLength": 65536,
+          "description": "PKCS#7 certs-only chain (leaf→root), base64-encoded DER."
         },
         "serial": {
           "type": "string",
-          "maxLength": 128
+          "maxLength": 128,
+          "description": "Certificate serial number (hex, RFC 5280 §4.1.2.2)."
         },
         "notBefore": {
           "type": "string",
@@ -34,10 +37,12 @@
         },
         "epoch": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "description": "Monotonic issuance epoch; increments on each rotation."
         },
         "status": {
           "type": "string",
+          "description": "Certificate lifecycle state.",
           "enum": [
             "requested",
             "issued",
@@ -52,6 +57,11 @@
         "deviceId": {
           "type": "string",
           "maxLength": 256
+        },
+        "issuer": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Issuing CA identifier (provider-neutral; lets a multi-CA consumer correlate this cert to its issuer)."
         }
       }
     }

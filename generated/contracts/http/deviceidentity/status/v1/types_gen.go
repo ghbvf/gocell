@@ -39,6 +39,7 @@ type ResponseData struct {
 	Epoch    int64  `json:"epoch"`
 	// format: date-time
 	RenewalTime string `json:"renewalTime,omitempty"`
+	Issuer      string `json:"issuer,omitempty"`
 }
 
 // ResponseDataStatus enumerates the closed value-set of the status field.
@@ -74,6 +75,7 @@ func (i ResponseData) ToMap() map[string]any {
 		"notAfter":    i.NotAfter,
 		"epoch":       i.Epoch,
 		"renewalTime": i.RenewalTime,
+		"issuer":      i.Issuer,
 	}
 }
 

@@ -8,19 +8,23 @@
     "deviceId": {
       "type": "string",
       "pattern": "\\S",
+      "maxLength": 256,
       "description": "Non-blank device identifier"
     },
     "tenantId": {
       "type": "string",
+      "maxLength": 256,
       "description": "Tenant identifier; omitted for single-tenant deployments"
     },
     "issuer": {
       "type": "string",
+      "maxLength": 256,
       "description": "Issuing CA identifier"
     },
     "serial": {
       "type": "string",
       "pattern": "\\S",
+      "maxLength": 128,
       "description": "Non-blank certificate serial number"
     },
     "epoch": {
@@ -31,11 +35,13 @@
     "notBefore": {
       "type": "string",
       "format": "date-time",
+      "maxLength": 64,
       "description": "Certificate validity start time (RFC 3339)"
     },
     "notAfter": {
       "type": "string",
       "format": "date-time",
+      "maxLength": 64,
       "description": "Certificate expiry time (RFC 3339)"
     },
     "action": {
@@ -45,6 +51,7 @@
     },
     "actorId": {
       "type": "string",
+      "maxLength": 256,
       "description": "Principal ID of the actor who triggered issuance"
     }
   },

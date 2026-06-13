@@ -42,8 +42,12 @@ func TestDeviceIdentityEnroll_V1(t *testing.T) {
 	}`))
 
 	// parameter errors
-	c.MustRejectRequest(t, []byte(`{"deviceId":"dev-1"}`)) // missing csr
-	c.MustRejectRequest(t, []byte(`{"csr":"Q1NSREVS"}`))   // missing deviceId
+	c.MustRejectRequest(t, []byte(`{"deviceId":"dev-1"}`))          // missing csr
+	c.MustRejectRequest(t, []byte(`{"csr":"Q1NSREVS"}`))            // missing deviceId
+	c.MustRejectRequest(t, []byte(`{"csr":"","deviceId":"dev-1"}`)) // empty csr (minLength:1)
+	c.MustRejectRequest(t, []byte(`{
+		"csr": "Q1NSREVS", "deviceId": "dev-1", "requestedDuration": "forever"
+	}`)) // invalid requestedDuration pattern
 	// NOTE: keyUsage allow-set is NOT enforced at the wire layer — contractgen cannot
 	// generate typed enums for array items, and the allowed-usage set is the Signer's
 	// SignConstraints responsibility (spec FR-005, PR-5). usages is a free-form string array here.
@@ -56,9 +60,10 @@ func TestDeviceIdentityEnroll_V1(t *testing.T) {
 	}`)) // bad certStatus enum
 	c.MustRejectResponse(t, []byte(`{"data":{"serial":"01AB","status":"issued"}}`)) // missing required cert material
 
-	// auth-boundary declaration (401/403 declared + body conforms)
+	// auth-boundary declaration (401/403/409 declared + body conforms)
 	c.ValidateErrorResponse(t, 401, validErrorBody)
 	c.ValidateErrorResponse(t, 403, validErrorBody)
+	c.ValidateErrorResponse(t, 409, validErrorBody)
 }
 
 func TestDeviceIdentityRenew_V1(t *testing.T) {
@@ -73,10 +78,21 @@ func TestDeviceIdentityRenew_V1(t *testing.T) {
 		}
 	}`))
 
-	c.MustRejectRequest(t, []byte(`{"csr":"Q1NSREVS","deviceId":"dev-1"}`))     // missing priorSerial
-	c.MustRejectRequest(t, []byte(`{"deviceId":"dev-1","priorSerial":"01AB"}`)) // missing csr
+	c.MustRejectRequest(t, []byte(`{"csr":"Q1NSREVS","deviceId":"dev-1"}`))              // missing priorSerial
+	c.MustRejectRequest(t, []byte(`{"deviceId":"dev-1","priorSerial":"01AB"}`))          // missing csr
+	c.MustRejectRequest(t, []byte(`{"csr":"","deviceId":"dev-1","priorSerial":"01AB"}`)) // empty csr (minLength:1)
+
+	c.MustRejectResponse(t, []byte(`{
+		"data": {
+			"certificate": "Y2VydA==", "chain": "Y2hhaW4=", "serial": "02CD",
+			"notBefore": "2026-06-13T00:00:00Z", "notAfter": "2027-06-13T00:00:00Z",
+			"epoch": 1, "status": "bogus"
+		}
+	}`)) // bad certStatus enum
+	c.MustRejectResponse(t, []byte(`{"data":{"serial":"02CD","status":"rotated"}}`)) // missing required cert material
 
 	c.ValidateErrorResponse(t, 401, validErrorBody)
+	c.ValidateErrorResponse(t, 403, validErrorBody)
 	c.ValidateErrorResponse(t, 404, validErrorBody)
 }
 
@@ -89,12 +105,23 @@ func TestDeviceIdentityRevoke_V1(t *testing.T) {
 		"issuer": "softca", "reason": "superseded"
 	}`))
 	c.ValidateResponse(t, []byte(`{
-		"data": {"serial": "01AB", "status": "revoked", "reason": "keyCompromise", "revokedAt": "2026-06-13T00:00:00Z"}
+		"data": {"serial": "01AB", "status": "revoked", "reason": "keyCompromise",
+		"revokedAt": "2026-06-13T00:00:00Z"}
 	}`))
 
-	c.MustRejectRequest(t, []byte(`{"deviceId":"dev-1","reason":"keyCompromise"}`))         // missing serial
-	c.MustRejectRequest(t, []byte(`{"serial":"01AB","deviceId":"dev-1"}`))                  // missing reason
-	c.MustRejectRequest(t, []byte(`{"serial":"01AB","deviceId":"dev-1","reason":"bogus"}`)) // bad revocationReason enum
+	c.MustRejectRequest(t, []byte(`{"deviceId":"dev-1","reason":"keyCompromise"}`))            // missing serial
+	c.MustRejectRequest(t, []byte(`{"serial":"01AB","deviceId":"dev-1"}`))                     // missing reason
+	c.MustRejectRequest(t, []byte(`{"serial":"01AB","deviceId":"dev-1","reason":"bogus"}`))    // bad revocationReason enum
+	c.MustRejectRequest(t, []byte(`{"serial":"01AB","deviceId":"","reason":"keyCompromise"}`)) // empty deviceId (minLength:1)
+
+	c.MustRejectResponse(t, []byte(`{
+		"data": {"serial": "01AB", "status": "bogus", "reason": "keyCompromise",
+		"revokedAt": "2026-06-13T00:00:00Z"}
+	}`)) // bad status enum
+	c.MustRejectResponse(t, []byte(`{
+		"data": {"serial": "01AB", "status": "revoked", "reason": "bogus",
+		"revokedAt": "2026-06-13T00:00:00Z"}
+	}`)) // bad reason enum
 
 	c.ValidateErrorResponse(t, 403, validErrorBody) // cross-scope fail-closed
 	c.ValidateErrorResponse(t, 404, validErrorBody)
@@ -121,6 +148,8 @@ func TestDeviceIdentityStatus_V1(t *testing.T) {
 	c.ValidateQueryParam(t, "deviceId", "dev-1")
 	c.ValidateQueryParam(t, "serial", "01AB")
 	c.MustRejectQueryParam(t, "deviceId", strings.Repeat("x", 257))
+	c.MustRejectQueryParam(t, "serial", strings.Repeat("x", 129))
+	c.MustRejectQueryParam(t, "tenantId", strings.Repeat("x", 257))
 
 	c.ValidateErrorResponse(t, 401, validErrorBody)
 	c.ValidateErrorResponse(t, 404, validErrorBody)
@@ -135,6 +164,8 @@ func TestDeviceIdentityCertIssuedEvent_V1(t *testing.T) {
 		"action": "enrolled", "actorId": "act-1"
 	}`))
 	c.ValidateHeaders(t, []byte(`{"eventId":"evt-abc"}`))
+
+	c.MustRejectHeaders(t, []byte(`{}`)) // missing required eventId
 
 	c.MustRejectPayload(t, []byte(`{
 		"deviceId": "dev-1", "epoch": 0, "notBefore": "2026-06-13T00:00:00Z",
@@ -160,6 +191,7 @@ func TestDeviceIdentityCertRevokedEvent_V1(t *testing.T) {
 		"revokedAt": "2026-06-13T00:00:00Z", "actorId": "act-1"
 	}`))
 	c.ValidateHeaders(t, []byte(`{"eventId":"evt-def"}`))
+	c.MustRejectHeaders(t, []byte(`{}`)) // missing required eventId
 
 	c.MustRejectPayload(t, []byte(`{
 		"deviceId": "dev-1", "reason": "keyCompromise",
@@ -169,4 +201,8 @@ func TestDeviceIdentityCertRevokedEvent_V1(t *testing.T) {
 		"deviceId": "dev-1", "serial": "01AB", "reason": "bogus",
 		"revokedAt": "2026-06-13T00:00:00Z", "actorId": "act-1"
 	}`)) // bad reason enum
+	c.MustRejectPayload(t, []byte(`{
+		"deviceId": "dev-1", "serial": "01AB", "reason": "keyCompromise",
+		"revokedAt": "2026-06-13T00:00:00Z", "actorId": "act-1", "privateKey": "leak"
+	}`)) // unevaluatedProperties:false guards key leak
 }

@@ -49,6 +49,7 @@ type ResponseData struct {
 	Epoch    int64              `json:"epoch"`
 	Status   ResponseDataStatus `json:"status"`
 	DeviceID string             `json:"deviceId,omitempty"`
+	Issuer   string             `json:"issuer,omitempty"`
 }
 
 // ResponseDataStatus enumerates the closed value-set of the status field.
@@ -135,6 +136,19 @@ type Enroll403ErrorResponse struct {
 
 func (r Enroll403ErrorResponse) visitEnrollResponse(ctx context.Context, w http.ResponseWriter) error {
 	httputil.WriteErrorWithStatus(ctx, w, 403, &r.Body)
+	return nil
+}
+
+// Enroll409ErrorResponse renders an HTTP 409 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Enroll409ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Enroll409ErrorResponse) visitEnrollResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 409, &r.Body)
 	return nil
 }
 

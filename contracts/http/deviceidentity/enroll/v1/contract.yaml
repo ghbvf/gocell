@@ -25,6 +25,9 @@ endpoints:
       403:
         description: "Forbidden — authenticated but lacks required permission"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      409:
+        description: "Conflict — device already has an active certificate; use the renew endpoint to rotate."
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       413:
         description: "Payload Too Large — request body exceeds the size limit"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
