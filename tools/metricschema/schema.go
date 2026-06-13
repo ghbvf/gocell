@@ -821,6 +821,26 @@ func (sp *scanPackage) resolveEnumStringConsts(pkgPath, typeName string) []strin
 	return vals
 }
 
+// resolveStringConst returns the value of the exported string const constName
+// declared in package pkgPath, resolved from the scanned package's type graph (the
+// single-source mechanism for a metric's help text, mirroring resolveEnumStringConsts
+// for value sets). Returns "" when the package is not in the graph, the const is
+// absent, or it is not a string — the caller fails loud on empty.
+func (sp *scanPackage) resolveStringConst(pkgPath, constName string) string {
+	if sp.pkg == nil || sp.pkg.Types == nil {
+		return ""
+	}
+	tpkg := importedTypesPackage(sp.pkg.Types, pkgPath)
+	if tpkg == nil {
+		return ""
+	}
+	c, ok := tpkg.Scope().Lookup(constName).(*types.Const)
+	if !ok || c.Val().Kind() != constant.String {
+		return ""
+	}
+	return constant.StringVal(c.Val())
+}
+
 // importedTypesPackage returns the *types.Package for pkgPath reachable from root
 // (root itself or one of its direct imports), or nil. The enum type's package is a
 // direct import of the metric ctor's caller (e.g. cellmodules/configcore imports
@@ -854,33 +874,30 @@ func (sp *scanPackage) providerRelayCollectorEntries(call *ast.CallExpr, rel str
 	if err != nil {
 		return nil, err
 	}
-	// Single-source the outbox_relayed_total {kind,outcome} label value sets from
-	// the sealed entryKind / relayOutcome enum consts in kernel/outbox, statically
-	// resolved here so the golden byte-locks them (Hard freeze, #1674). Fail loud if
-	// either resolves empty: an empty value set in the golden would be a silent
-	// freeze hole, so a missing/renamed enum type must break generation, not pass.
+	// Single-source the outbox_relayed_total help text and {kind,outcome} label value
+	// sets from kernel/outbox, statically resolved here so the golden byte-locks them
+	// (Hard freeze, #1674): the RelayedHelp const + the sealed entryKind / relayOutcome
+	// enum consts. NOTE one-hop: kernel/outbox must be a DIRECT import of this call's
+	// package (cellmodules/configcore is — see importedTypesPackage). A future caller
+	// reaching the ctor only through an intermediate package resolves empty and trips
+	// the fail-loud guard below (never silently emits an empty freeze).
+	relayedHelp := sp.resolveStringConst(kernelOutboxPkg, "RelayedHelp")
 	kindValues := sp.resolveEnumStringConsts(kernelOutboxPkg, "entryKind")
 	outcomeValues := sp.resolveEnumStringConsts(kernelOutboxPkg, "relayOutcome")
-	if len(kindValues) == 0 || len(outcomeValues) == 0 {
+	if relayedHelp == "" || len(kindValues) == 0 || len(outcomeValues) == 0 {
 		return nil, sp.unresolved(call, rel,
-			"outbox_relayed_total label value sets unresolved: kernel/outbox entryKind/relayOutcome "+
-				"enum consts not found (renamed/removed?) — cannot byte-lock the frozen value set")
+			"outbox_relayed_total metadata unresolved from kernel/outbox (RelayedHelp / entryKind / "+
+				"relayOutcome): renamed/removed, or this call's package no longer DIRECTLY imports "+
+				"kernel/outbox (one-hop resolution, see importedTypesPackage) — cannot byte-lock the "+
+				"frozen help/value set")
 	}
 	return []Entry{
 		sp.entryFromOpts("counter", opts{
-			name:      "outbox_relayed_total",
-			namespace: sp.namespace,
-			help: "Total number of outbox entries processed by the relay, by entry kind and outcome. " +
-				"kind=event is broker publish; kind=command is in-process async command dispatch. " +
-				"outcome=published|retried|dead are canonical writebacks; " +
-				"outcome=skipped covers MarkPublished updated=false (success path lost lease) " +
-				"and outcome=lost covers Mark{Retry,Dead} updated=false (failure path lost lease) — " +
-				"the canonical outcome for both is owned by the reclaimer (see outbox_reclaimed_total).",
-			labels: []string{"cell", "kind", "outcome"},
-			labelValues: map[string][]string{
-				"kind":    kindValues,
-				"outcome": outcomeValues,
-			},
+			name:        "outbox_relayed_total",
+			namespace:   sp.namespace,
+			help:        relayedHelp,
+			labels:      []string{"cell", "kind", "outcome"},
+			labelValues: map[string][]string{"kind": kindValues, "outcome": outcomeValues},
 		}, rel, call.Pos()),
 		sp.entryFromOpts("histogram", opts{
 			name:      "outbox_poll_duration_seconds",

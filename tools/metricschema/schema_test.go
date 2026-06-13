@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 	"github.com/ghbvf/gocell/tools/packagesload"
 )
@@ -49,6 +50,11 @@ func TestBuild_CorebundleCapturesReachableTypedMetrics(t *testing.T) {
 	assert.Equal(t, []string{"cell", "kind", "outcome"}, outboxRelayed.Labels)
 	assert.Equal(t, "gocell_outbox_relayed_total", outboxRelayed.FQName)
 	assert.Equal(t, "cellmodules/configcore/storage.go", outboxRelayed.File)
+	// #1674: help is single-sourced from the kernel/outbox RelayedHelp const and
+	// statically resolved into the schema — assert the scan bound the exact const so
+	// the golden help cannot drift from the Prometheus-registered help.
+	assert.Equal(t, outbox.RelayedHelp, outboxRelayed.Help,
+		"outbox_relayed_total help must resolve to kernel/outbox.RelayedHelp (single source)")
 	// #1674 Hard freeze: the {kind,outcome} value sets are single-sourced from the
 	// kernel/outbox entryKind/relayOutcome enum consts (statically resolved by the
 	// scanner) and byte-locked into the golden. This independent, hardcoded want-set

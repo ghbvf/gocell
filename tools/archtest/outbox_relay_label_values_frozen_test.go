@@ -10,10 +10,12 @@
 //     resolved by tools/metricschema into assemblies/corebundle/generated/
 //     metrics-schema.yaml. Adding / renaming / removing an enum value changes the
 //     golden; `gocell verify generated` then fails CI until the golden is
-//     regenerated, and tools/metricschema/schema_test.go pins the resolved set
-//     against an independent hardcoded want-set (anti-tautology). That is the Hard
-//     byte-lock — a value cannot drift silently. (gh #1416 generalizes this golden
-//     value-freeze to the saga/reconcile enums, retiring their A1 archtests.)
+//     regenerated, and the anti-tautology witness
+//     tools/metricschema/schema_test.go::TestBuild_CorebundleCapturesReachableTypedMetrics
+//     pins the resolved {kind,outcome} set against an independent hardcoded want-set
+//     (and the help against kernel/outbox.RelayedHelp). That is the Hard byte-lock —
+//     a value cannot drift silently. (gh #1416 generalizes this golden value-freeze
+//     to the saga/reconcile enums, retiring their A1 archtests.)
 //
 //   - DOWNSTREAM (Medium, THIS file): the sealed enum TYPE alone cannot stop an
 //     untyped string literal — Go assigns an untyped constant to a defined string
@@ -42,6 +44,12 @@
 //     unexported provider type), so a second raw emitter is review-visible.
 //   - It does NOT verify the golden actually contains the enum values — that is the
 //     upstream metricschema test's job (schema_test.go), deliberately separate.
+//   - The upstream resolution is ONE-HOP (tools/metricschema importedTypesPackage):
+//     the metric ctor's caller package must DIRECTLY import kernel/outbox. Today
+//     cellmodules/configcore does; if a future caller reaches the ctor only through
+//     an intermediate package, metricschema resolves empty and fails generation loud
+//     (not a silent freeze hole) — but the value set would then be unfrozen until the
+//     resolver is extended to a transitive walk. Accepted: review-visible + fail-loud.
 //
 // # Reverse self-check (non-vacuous proof)
 //

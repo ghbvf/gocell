@@ -614,6 +614,7 @@ func (r *Relay) pollOnce(ctx context.Context) error {
 			slog.Int("command_lost", stats.command.Lost),
 			slog.Duration("claim_dur", claimDur),
 			slog.Duration("publish_dur", pubDur),
+			slog.Duration("write_back_dur", wbDur),
 		)
 		r.metrics.RecordPollCycle(ctx, kout.PollCycleResult{
 			Event:        stats.event,
@@ -1035,6 +1036,13 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 // their per-instance dedup identity in metadata; surface it so command
 // dead-lettering is reconcilable. Non-command (event) entries have no command_id —
 // it is omitted then.
+//
+// PII boundary: entry_id / command_id are framework-minted identifiers (UUID-shaped),
+// aggregate_id is the producing cell's domain aggregate-root key, and last_error is
+// already run through SanitizeError. aggregate_id is an identifier, not PII content
+// (consistent with the pre-existing log shape); a cell that puts replayable PII in its
+// aggregate key is a cell-side redaction concern, not the relay's — the relay never
+// logs the entry payload body.
 func logEntryDeadLettered(ctx context.Context, entry ClaimedEntry, isCommand bool, attempts int, permanent bool, errMsg string) {
 	attrs := []slog.Attr{
 		slog.String("entry_id", entry.ID()),

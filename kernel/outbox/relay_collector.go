@@ -48,11 +48,14 @@ const (
 	outcomeLost      relayOutcome = "lost"
 )
 
-// relayedHelp is the help text for outbox_relayed_total. It is duplicated verbatim
-// as a string literal in tools/metricschema/schema.go (providerRelayCollectorEntries)
-// — the static schema scanner cannot import this package, so the golden's help is a
-// separate literal that MUST match byte-for-byte or `gocell verify generated` fails.
-const relayedHelp = "Total number of outbox entries processed by the relay, by entry kind and outcome. " +
+// RelayedHelp is the help text for outbox_relayed_total. It is the SINGLE source of
+// the help string: tools/metricschema statically resolves this exported const into
+// the metrics-schema golden (the static scanner reads it from the type graph, exactly
+// as it resolves the entryKind/relayOutcome value sets and the bucket consts), so the
+// golden's help and the Prometheus-registered help cannot diverge — there is no
+// hand-copied literal to drift. Exported so the schema scan and schema_test can bind
+// to it by name.
+const RelayedHelp = "Total number of outbox entries processed by the relay, by entry kind and outcome. " +
 	"kind=event is broker publish; kind=command is in-process async command dispatch. " +
 	"outcome=published|retried|dead are canonical writebacks; " +
 	"outcome=skipped covers MarkPublished updated=false (success path lost lease) " +
@@ -160,7 +163,7 @@ func registerRelayMetrics(p metrics.Provider, cellID string, cfg ProviderRelayCo
 
 	relayed, err := p.CounterVec(metrics.CounterOpts{
 		Name:       "outbox_relayed_total",
-		Help:       relayedHelp,
+		Help:       RelayedHelp,
 		LabelNames: []string{"cell", "kind", "outcome"},
 	})
 	if err := register(relayed, err, "outbox_relayed_total"); err != nil {
@@ -219,10 +222,17 @@ func registerRelayMetrics(p metrics.Provider, cellID string, cfg ProviderRelayCo
 // entries that settled to (kind, outcome). It is the SOLE emission point for the
 // kind/outcome labels: the kind and outcome params are the sealed entryKind /
 // relayOutcome types, and OUTBOX-RELAY-LABEL-VALUES-FROZEN-01's callsite guard bans
-// inline-constant args, so only the declared consts can reach the label. Zero (and
-// negative) counts are skipped to keep time-series cardinality clean — a persistent
-// zero fragment would otherwise appear in Grafana for a {kind,outcome} a cell never
-// produces (e.g. a command outcome on an event-only cell).
+// inline-constant args, so only the declared consts can reach the label.
+//
+// Zero (and negative) counts are skipped to keep time-series cardinality clean — a
+// persistent zero fragment would otherwise appear in Grafana for a {kind,outcome} a
+// cell never produces. Concretely, an event-only relay passes r.Command =
+// OutcomeCounts{} (all-zero), so every recordOutcome(kindCommand, …) call returns
+// early and the {kind="command",…} series are NEVER created (operators must tolerate
+// "no data" for command series on event-only cells; use `... or vector(0)` in PromQL).
+// This is INTENTIONALLY asymmetric with RecordBatchSize, which always observes
+// (including size=0) so dashboards can detect a totally idle relay — batch size is a
+// liveness gauge, whereas a zero outcome is the absence of that outcome, not a tick.
 func (c *providerRelayCollector) recordOutcome(ctx context.Context, kind entryKind, outcome relayOutcome, n int) {
 	if n <= 0 {
 		return
