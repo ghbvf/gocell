@@ -1,6 +1,7 @@
-# commandType was made required in-place on v1 (#1694 F9): pre-GA, no external
-# consumers (CLAUDE.md waives backward-compat). Breaking wire changes otherwise
-# rev the version dir per .claude/rules/gocell/api-versioning.md.
+# commandType made required in-place on active v1 (#1694 F9) — permitted by the
+# Pre-GA wire-break window in .claude/rules/gocell/api-versioning.md §兼容窗口
+# (until 2026-12-31; no external wire consumers). After the window, breaking wire
+# changes rev the version dir.
 id: command.devicecommand.enqueue.v1
 kind: command
 ownerCell: devicecell
