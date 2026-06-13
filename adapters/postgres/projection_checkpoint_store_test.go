@@ -54,8 +54,9 @@ func TestProjectionCheckpointStore_SaveOffset_UpsertSQLAndArgs(t *testing.T) {
 	require.Len(t, tx.execCalls, 1)
 	assert.Equal(t, upsertCheckpointSQL, tx.execCalls[0].sql)
 	assert.Equal(t, []any{"ordercell", "ordersummary", int64(42)}, tx.execCalls[0].args)
-	// owner column must NOT appear in the v1 write path (defense alongside the
-	// PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01 archtest).
+	// owner column must NOT appear in SaveOffset (the base CheckpointStore
+	// contract). The OwnerCheckpointStore.AdvanceIfOwner path writes owner via
+	// insertCheckpointWithOwnerSQL / updateCheckpointWithOwnerSQL instead.
 	assert.NotContains(t, tx.execCalls[0].sql, "owner")
 }
 

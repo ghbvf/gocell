@@ -81,9 +81,11 @@ const gotWantQuotedFmt = "got %q want %q"
 //   - saga_events        (040)  append-only saga event log
 //                                 + PK(instance_id, version) + FK→saga_instances(id) ON DELETE CASCADE
 //                                 + saga_events_kind_range, saga_events_version_positive CHECK
+//                                 + global_seq BIGINT GENERATED ALWAYS AS IDENTITY + idx_saga_events_global_seq
+//                                   (064_add_saga_events_global_seq.sql, EPIC #1609 PR-PG)
 //   - projection_checkpoints (045)  CQRS projection harness consumed-offset store
 //                                 + PK(cell_id, projection_id)
-//                                 + owner column reserved, write-guarded (v1 never writes it; reads harmless; ADR §Q5)
+//                                 + owner column activated by OwnerCheckpointStore.AdvanceIfOwner (PR-PG #1630)
 //   - projection_events  (058)  durable append-only projection event journal (#1504)
 //                                 + global_seq BIGINT GENERATED ALWAYS AS IDENTITY PK
 //                                 + idx_projection_events_id UNIQUE(id) (idempotency / cursor key)
@@ -654,8 +656,8 @@ var expectedColumns = []expectedColumn{
 	{Table: "saga_events", Column: "payload", Type: "bytea", NotNull: false},
 	{Table: "saga_events", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
 	// projection_checkpoints (045_create_projection_checkpoints.sql) — CQRS projection
-	// harness consumed-offset store. owner is reserved for v1.1 multi-pod claim and is
-	// NOT written by the v1 adapter (PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01).
+	// harness consumed-offset store. owner is now written by
+	// OwnerCheckpointStore.AdvanceIfOwner (activated in PR-PG, #1630 Batch 2).
 	{Table: "projection_checkpoints", Column: "cell_id", Type: "text", NotNull: true},
 	{Table: "projection_checkpoints", Column: "projection_id", Type: "text", NotNull: true},
 	{Table: "projection_checkpoints", Column: "offset_seq", Type: "bigint", NotNull: true},
@@ -765,11 +767,14 @@ var expectedPKs = []expectedPK{
 // expectedDefaults is the load-bearing column-default registry. Only defaults a
 // write path relies upon by omitting the column are registered here.
 var expectedDefaults = []expectedDefault{
-	// projection_checkpoints.owner (045) — the v1 upsert OMITS owner (forbidden by
-	// PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01), so the column's NOT NULL
-	// constraint is only satisfiable via this DEFAULT ''. A dropped/changed default
-	// would make the first SaveOffset fail at write time; asserting it here surfaces
-	// the drift at startup (readyz) instead.
+	// projection_checkpoints.owner (045) — SaveOffset (upsertCheckpointSQL) OMITS
+	// the owner column so its NOT NULL constraint is satisfied solely by this
+	// DEFAULT ''. AdvanceIfOwner always supplies owner explicitly and is never
+	// affected by the default. A dropped/changed default would make every
+	// SaveOffset call fail at write time; asserting it here surfaces the drift at
+	// startup (readyz) instead. (PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01
+	// was the v1-scoped archtest guard for this omission; it was retired in #1630
+	// Batch 2 when AdvanceIfOwner activated the write path.)
 	{Table: "projection_checkpoints", Column: "owner", Default: "''::text"},
 	// users.password_version (022 → 050 rebuild) — insertUserSQL omits this column
 	// and relies on DEFAULT 0 to satisfy the NOT NULL constraint (migration 033
