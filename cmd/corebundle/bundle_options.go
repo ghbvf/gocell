@@ -273,9 +273,10 @@ func projectionRuntimeOptions(shared *composition.SharedDeps) ([]bootstrap.Optio
 			// an empty workload does not warn).
 			slog.Info("projection: no durable journal source wired (no projection declared; gate off)", logArgs...)
 		} else {
-			// A projection IS declared but the gate is off → it will fail fast in the
+			// A projection IS declared but the gate is off, so it will fail fast in the
 			// phase6 drain. Actionable: warn so the operator sets the gate to wire it.
-			slog.Warn("projection: durable journal source not wired but a projection is declared — bootstrap will fail fast; set the gate to wire it", logArgs...)
+			slog.Warn("projection: a projection is declared but its durable journal source is gated off; bootstrap will fail fast",
+				logArgs...)
 		}
 		return nil, nil
 	}
