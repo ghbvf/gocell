@@ -24,8 +24,11 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
+	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/command"
+	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	commandruntime "github.com/ghbvf/gocell/runtime/command"
@@ -87,6 +90,17 @@ type Service struct {
 	// react. Nil means no hook (the common case). Set via WithOnCommandResolved by
 	// the composition root. It is fire-and-forget — it must not fail the ack.
 	onResolved func(context.Context, command.Entry, command.AckReason)
+
+	// emitter is the writer-backed CellEmitter EnqueueAsync uses to emit a
+	// cmdenqueue async command (the #1610 cross-cell idempotency consumer). Nil
+	// disables the async path (EnqueueAsync fail-fasts). Set via WithCommandEmitter
+	// by the composition root only for the public devicecommand slice; the internal
+	// and gRPC Services leave it nil.
+	emitter outbox.CellEmitter
+	// txRunner wraps EnqueueAsync's emit in a transaction so the durable PG outbox
+	// writer (which requires persistence.TxFromContext[pgx.Tx]) gets one. Defaults
+	// to outbox.DemoCellTxManager() (no-op) — overridden via WithCommandTxManager.
+	txRunner persistence.CellTxManager
 }
 
 // Option configures a device-command Service.
@@ -132,6 +146,9 @@ func NewService(
 		logger:     logger,
 		runMode:    runMode,
 		clock:      clk,
+		// Safe default: demo/no-op tx manager. Durable assemblies override it via
+		// WithCommandTxManager so EnqueueAsync's outbox write joins a real PG tx.
+		txRunner: outbox.DemoCellTxManager(),
 	}
 	for _, o := range opts {
 		o(s)
@@ -149,6 +166,31 @@ func WithSliceName(name string) Option {
 	return func(s *Service) {
 		if name != "" {
 			s.sliceName = name
+		}
+	}
+}
+
+// WithCommandEmitter wires the writer-backed CellEmitter EnqueueAsync uses to emit
+// the cmdenqueue async command (the #1610 cross-cell idempotency consumer). Only
+// the public devicecommand slice needs it; the internal/gRPC Services leave it
+// nil and never call EnqueueAsync. Accumulative: a nil emitter leaves the prior
+// value in place.
+func WithCommandEmitter(e outbox.CellEmitter) Option {
+	return func(s *Service) {
+		if e != nil {
+			s.emitter = e
+		}
+	}
+}
+
+// WithCommandTxManager sets the CellTxManager wrapping EnqueueAsync's outbox
+// write. Demo mode and tests use the default outbox.DemoCellTxManager() no-op;
+// durable mode injects a real PG tx manager so the write joins a transaction.
+// Accumulative: a nil txRunner leaves the prior value in place.
+func WithCommandTxManager(tx persistence.CellTxManager) Option {
+	return func(s *Service) {
+		if tx != nil {
+			s.txRunner = tx
 		}
 	}
 }
@@ -234,6 +276,30 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 		slog.String("command_type", commandType),
 	)
 	return entry, nil
+}
+
+// EnqueueAsync emits the cmdenqueue command through the outbox so the relay's
+// Claimer wrap deduplicates the dispatch by DeriveCommandKey(tenant, deviceID,
+// commandID): the SAME logical command, submitted via HTTP with the same
+// Idempotency-Key across different cells / listeners / pods, lands in a SINGLE
+// dedup slot and the enqueue handler runs exactly once (the #1610 cross-cell
+// consumer). It is the async sibling of Enqueue (which writes Pending directly).
+//
+// The commandID is sourced from the request's validated Idempotency-Key in ctx by
+// the bridge commandruntime.EmitAsyncFromIdempotencyKey — NOT a parameter here —
+// so the subject/commandID transpose footgun is structurally inexpressible. The
+// emit is wrapped in txRunner.RunInTx so the durable PG outbox writer gets a tx
+// (no-op in demo mode). A nil emitter (async path not wired) fail-fasts.
+func (s *Service) EnqueueAsync(ctx context.Context, deviceID, commandType, payload string) error {
+	if s.emitter == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"device-command: async enqueue requires a command emitter")
+	}
+	req := cmdenqueue.Request{DeviceID: deviceID, CommandType: commandType, Payload: payload}
+	return s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		return commandruntime.EmitAsyncFromIdempotencyKey(
+			txCtx, s.clock, s.emitter, cmdenqueue.DispatchID, deviceID, req)
+	})
 }
 
 // Dequeue claims pending commands for the given device and advances them to Sent.
