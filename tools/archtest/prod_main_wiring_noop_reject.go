@@ -155,6 +155,14 @@ var prodMainForbiddenSinks = map[string]string{
 // matches a declared main-pkg pattern. cfg.BuildTags drives a second tagged scan
 // so a sink behind //go:build <tag> is not missed; scanner.Canonical dedups the
 // overlap.
+//
+// Fail-closed on a no-op gate: every declared pattern that matched NO production
+// package across BOTH scans yields a diagnostic (prodMainUnmatchedPatternDiags). A
+// 0-match pattern — a typo, a path a refactor moved, a pattern written relative to
+// the wrong root, or a deliberately-unsupported whole-module ("." / "./...") or
+// absolute form (see matchesMainPkg) — would otherwise be a SILENT false green: the
+// consumer believes the guard is active while it scanned nothing. This closes the
+// vacuous-green hole (#1942 review cluster C1).
 func CheckProdMainWiringNoopReject(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	if len(cfg.ProductionMainPkgs) == 0 {
@@ -171,25 +179,33 @@ func CheckProdMainWiringNoopReject(t *testing.T, cfg ConfigForExternalCell) []Di
 		return nil
 	}
 	mainPkgs := cfg.ProductionMainPkgs
+	// matched accumulates, across BOTH the default and the build-tagged scan, which
+	// declared patterns hit at least one production package. Any pattern still unset
+	// after both scans matched NOTHING — a false-green misconfiguration the rule
+	// rejects loud below, never passes silently.
+	matched := make(map[string]bool, len(mainPkgs))
 	scan := func(p *Pass) []Diagnostic {
-		return collectProdMainWiringViolationsInPkgs(p, mainPkgs)
+		return collectProdMainWiringViolationsInPkgs(p, mainPkgs, matched)
 	}
 	out := Run(t, Production(TypedOpts{}), scan)
 	if len(cfg.BuildTags) > 0 {
 		out = append(out, Run(t, Production(TypedOpts{Tags: cfg.BuildTags}), scan)...)
 	}
+	out = append(out, prodMainUnmatchedPatternDiags(mainPkgs, matched)...)
 	return scanner.Canonical(out)
 }
 
 // collectProdMainWiringViolationsInPkgs returns the forward reference-walk
 // violations for p, but only when p's package belongs to one of mainPkgs. A typed
 // Pass is exactly one package, so every file shares one directory — gate the whole
-// Pass on the first file's dir.
-func collectProdMainWiringViolationsInPkgs(p *Pass, mainPkgs []string) []Diagnostic {
+// Pass on the first file's dir. It records every pattern p's dir matches into
+// matched (the 0-match accumulator CheckProdMainWiringNoopReject reads after the
+// scan to flag patterns that matched nothing).
+func collectProdMainWiringViolationsInPkgs(p *Pass, mainPkgs []string, matched map[string]bool) []Diagnostic {
 	if !p.Typed() || len(p.Files) == 0 {
 		return nil
 	}
-	if !matchesMainPkg(path.Dir(p.Rel(p.Files[0])), mainPkgs) {
+	if !markMatchingPatterns(path.Dir(p.Rel(p.Files[0])), mainPkgs, matched) {
 		return nil
 	}
 	return collectProdMainWiringViolations(p)
@@ -274,34 +290,88 @@ func prodMainViolationMessage(name string) string {
 	)
 }
 
-// matchesMainPkg reports whether relDir (a module-relative package directory)
-// belongs to one of patterns. Patterns are Go-style relative package patterns
-// matched module-path-agnostically against the dir: "./cmd/x" or "cmd/x" (exact
-// package) and "./cmd/x/..." (recursive prefix). A leading "./" is optional.
-// Extracted as a pure function so the matcher is unit-testable.
+// prodMainUnmatchedPatternDiags returns one diagnostic per declared ProductionMainPkgs
+// pattern that matched NO production package across the scan. matched is the
+// accumulator markMatchingPatterns populated. A 0-match pattern is almost always a
+// misconfiguration — a typo, a path a refactor moved, a pattern written relative to
+// the wrong root, or a deliberately-unsupported whole-module ("." / "./...") or
+// absolute form (see matchesMainPkg) — and silently passing it is a false green: the
+// composition-root noop guard the consumer believes is active scanned nothing. Each
+// diagnostic is anchored to the offending pattern (Rel=pat, the non-file Rel
+// convention DISTLOCK-LOCK-NOT-CONTEXT-01 uses for config-level diagnostics);
+// diagFile pins Line=1 so the report stays well-formed rather than degrading to ":0:".
+func prodMainUnmatchedPatternDiags(patterns []string, matched map[string]bool) []Diagnostic {
+	var d []Diagnostic
+	for _, pat := range patterns {
+		if matched[pat] {
+			continue
+		}
+		d = append(d, diagFile(pat, fmt.Sprintf(
+			"%s: ProductionMainPkgs pattern %q matched no production package — the composition-root "+
+				"noop guard scanned NOTHING for it (false green). Point it at a real package dir "+
+				"RELATIVE TO THE SCAN ROOT (the go.work workspace root, or the module root for a "+
+				"single-module repo), e.g. \"./cmd/yourbinary\". Whole-module patterns (\".\", "+
+				"\"./...\") and absolute paths are unsupported — a composition root is a SPECIFIC "+
+				"package; name it (\"./cmd/yourbinary\") or bound it (\"./cmd/...\").",
+			ruleProdMainWiringNoopReject01, pat)))
+	}
+	return d
+}
+
+// matchesMainPkg reports whether relDir (a SCAN-ROOT-relative package directory:
+// the go.work workspace root under a workspace, the module root for a single-module
+// repo — see findModuleRoot / Pass.Rel) belongs to one of patterns. Patterns are
+// Go-style relative package patterns matched root-path-agnostically against the dir:
+// "./cmd/x" or "cmd/x" (exact package) and "./cmd/x/..." (recursive prefix). A
+// leading "./" is optional. Extracted as a pure function so the matcher is
+// unit-testable.
 //
-// Deliberately UNSUPPORTED (each silently matches nothing — by design, asserted in
-// TestMatchesMainPkg):
+// UNSUPPORTED forms — this pure matcher returns false for each (asserted in
+// TestMatchesMainPkg), and CheckProdMainWiringNoopReject then escalates any pattern
+// that matched nothing to a LOUD 0-match diagnostic (prodMainUnmatchedPatternDiags),
+// so they are no longer a silent no-op at the Check level:
 //   - whole-module "./..." / "." — a composition root is a SPECIFIC package, never
 //     the whole module; banning raw noop everywhere would false-positive on the
 //     test/demo helpers that legitimately construct it (the very reason the sinks
 //     stay public). Use an explicit "./cmd/x" or a bounded "./cmd/..." instead.
-//   - absolute paths — relDir is always module-relative, so an absolute pattern
-//     never equals it. Pass module-relative patterns.
+//   - absolute paths — relDir is always scan-root-relative, so an absolute pattern
+//     never equals it. Pass scan-root-relative patterns.
 func matchesMainPkg(relDir string, patterns []string) bool {
 	relDir = path.Clean(relDir)
 	for _, pat := range patterns {
-		pat = strings.TrimPrefix(pat, "./")
-		if rec, ok := strings.CutSuffix(pat, "/..."); ok {
-			rec = path.Clean(rec)
-			if relDir == rec || strings.HasPrefix(relDir, rec+"/") {
-				return true
-			}
-			continue
-		}
-		if relDir == path.Clean(pat) {
+		if matchesMainPkgPattern(relDir, pat) {
 			return true
 		}
 	}
 	return false
+}
+
+// matchesMainPkgPattern reports whether the already-path.Clean'd relDir belongs to
+// the single pattern pat. Split out of matchesMainPkg so markMatchingPatterns can
+// ask the question per-pattern (to record per-pattern hits) without re-implementing
+// the "./"-prefix / "/..." recursive semantics — one matcher, one source of truth.
+func matchesMainPkgPattern(relDir, pat string) bool {
+	pat = strings.TrimPrefix(pat, "./")
+	if rec, ok := strings.CutSuffix(pat, "/..."); ok {
+		rec = path.Clean(rec)
+		return relDir == rec || strings.HasPrefix(relDir, rec+"/")
+	}
+	return relDir == path.Clean(pat)
+}
+
+// markMatchingPatterns records in matched every pattern that relDir belongs to (a
+// dir can satisfy more than one, e.g. "./cmd/x" and "./cmd/..."), and reports
+// whether relDir matched at least one. matched is the accumulator
+// CheckProdMainWiringNoopReject reads AFTER the scan to flag patterns that matched
+// no production package at all (a false-green misconfiguration → loud diagnostic).
+func markMatchingPatterns(relDir string, patterns []string, matched map[string]bool) bool {
+	relDir = path.Clean(relDir)
+	any := false
+	for _, pat := range patterns {
+		if matchesMainPkgPattern(relDir, pat) {
+			matched[pat] = true
+			any = true
+		}
+	}
+	return any
 }

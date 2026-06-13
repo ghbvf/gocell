@@ -15,6 +15,11 @@
 //     prove every forbidden symbol and every resolution form fires.
 //   - Green: the sanctioned funnels (DemoCellEmitter / DemoCellTxManager /
 //     NewDirectCellEmitter / ResolveEmitter / eventbus.New) are NOT flagged.
+//   - Filter: the main-pkg filter fires through a matching package to the detector
+//     and gates out a non-matching one (the reds bypass the filter, so this proves
+//     the public Check's filter wiring; #1942 review C1 / F2).
+//   - 0-match: a declared ProductionMainPkgs pattern that matches nothing fails LOUD
+//     through the public Check rather than passing silently (#1942 review C1 / F1).
 //   - matchesMainPkg unit table + empty-ProductionMainPkgs no-scan.
 
 package archtest
@@ -157,6 +162,79 @@ func TestProdMainWiringNoopReject_EmptyPkgs_NoScan(t *testing.T) {
 	t.Parallel()
 	if diags := CheckProdMainWiringNoopReject(t, ConfigForExternalCell{}); len(diags) != 0 {
 		t.Errorf("empty ProductionMainPkgs must produce no diagnostics, got %d: %+v", len(diags), diags)
+	}
+}
+
+// TestProdMainWiringNoopReject_Filter_FiresThroughOnMatch closes the F2 (#1942
+// review C1) gap: the detector reds call collectProdMainWiringViolations directly,
+// BYPASSING the main-pkg filter, so they never prove the filter actually forwards a
+// matching package to the detector. This drives collectProdMainWiringViolationsInPkgs
+// (the filtered wrapper used by the public Check) with a pattern that matches the
+// red_qualified fixture's dir and asserts it produces the SAME diagnostics as the
+// unfiltered detector self-test (same golden) — i.e. matchesMainPkg passed the
+// package through. It also asserts the pattern was recorded in the matched
+// accumulator (the 0-match guard's input).
+func TestProdMainWiringNoopReject_Filter_FiresThroughOnMatch(t *testing.T) {
+	root := findModuleRoot(t)
+	relDir, pattern := prodMainWiringFixturePattern("red_qualified")
+	matched := map[string]bool{}
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
+		return collectProdMainWiringViolationsInPkgs(p, []string{pattern}, matched)
+	})
+	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
+	if !matched[pattern] {
+		t.Errorf("matching pattern %q must be recorded in the matched accumulator, got %v", pattern, matched)
+	}
+}
+
+// TestProdMainWiringNoopReject_Filter_GatesOutNonMatch is the companion negative:
+// the SAME violating fixture, scanned through collectProdMainWiringViolationsInPkgs
+// with a pattern that does NOT match its dir, yields zero diagnostics — proving the
+// main-pkg filter genuinely gates the detector (the violations are dropped because
+// the package is out of the declared composition-root set, not because they were
+// never present). The non-matching pattern is also absent from the matched set.
+func TestProdMainWiringNoopReject_Filter_GatesOutNonMatch(t *testing.T) {
+	_, pattern := prodMainWiringFixturePattern("red_qualified")
+	const nonMatch = "./cmd/this-package-does-not-match-the-fixture-dir"
+	matched := map[string]bool{}
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
+		return collectProdMainWiringViolationsInPkgs(p, []string{nonMatch}, matched)
+	})
+	if len(diags) != 0 {
+		t.Errorf("a non-matching main-pkg pattern must gate out all violations, got %d: %+v", len(diags), diags)
+	}
+	if matched[nonMatch] {
+		t.Errorf("non-matching pattern %q must not be recorded as matched", nonMatch)
+	}
+}
+
+// TestProdMainWiringNoopReject_UnmatchedPattern_FailsLoud is the F1 (#1942 review
+// C1) regression pin: a declared ProductionMainPkgs pattern that matches NO
+// production package must fail LOUD through the public CheckProdMainWiringNoopReject
+// (not silently green). It exercises the real public Check + ProductionMainPkgs
+// wiring over GoCell's own workspace Production scan with two never-matching
+// patterns — a typo'd path and the deliberately-unsupported whole-module "./..." —
+// and asserts exactly one 0-match diagnostic per pattern, each anchored to the
+// offending pattern. The real workspace is clean (the dogfood proves it), so the
+// only diagnostics are the two 0-match ones.
+func TestProdMainWiringNoopReject_UnmatchedPattern_FailsLoud(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping workspace Production scan in -short mode")
+	}
+	bogus := []string{"./cmd/this-composition-root-does-not-exist", "./..."}
+	diags := CheckProdMainWiringNoopReject(t, ConfigForExternalCell{ProductionMainPkgs: bogus})
+	if len(diags) != len(bogus) {
+		t.Fatalf("each 0-match ProductionMainPkgs pattern must produce exactly one diagnostic; "+
+			"want %d, got %d: %+v", len(bogus), len(diags), diags)
+	}
+	gotRels := make(map[string]bool, len(diags))
+	for _, d := range diags {
+		gotRels[d.Rel] = true
+	}
+	for _, b := range bogus {
+		if !gotRels[b] {
+			t.Errorf("missing 0-match diagnostic anchored to pattern %q; got %+v", b, diags)
+		}
 	}
 }
 

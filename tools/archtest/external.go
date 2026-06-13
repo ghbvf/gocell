@@ -142,12 +142,15 @@ type ConfigForExternalCell struct {
 	// patterns — e.g. []string{"./cmd/corebundle"}. PROD-MAIN-WIRING-NOOP-REJECT-01
 	// scans ONLY these packages and rejects direct construction of a raw kernel/outbox
 	// noop event sink (see prod_main_wiring_noop_reject.go). Entries are Go-style
-	// relative package patterns matched module-path-agnostically against each
-	// package's module-relative dir: "./cmd/x" (exact package) or "./cmd/x/..."
-	// (recursive). An empty slice means "do not scan composition roots" — opt-in by
-	// declaration, mirroring BuildTags; a repo that has not opted in gets no
-	// main-pkg scan (no false positives). An external repo lists whatever packages
-	// build its production binaries.
+	// relative package patterns matched against each package's SCAN-ROOT-relative dir
+	// (the go.work workspace root, or the module root for a single-module repo):
+	// "./cmd/x" (exact package) or "./cmd/x/..." (recursive). An empty slice means
+	// "do not scan composition roots" — opt-in by declaration, mirroring BuildTags;
+	// a repo that has not opted in gets no main-pkg scan (no false positives). A
+	// declared pattern that matches NO package is rejected loud (a silently-0-match
+	// pattern is a false green), so a typo or wrong-root pattern fails CI instead of
+	// quietly disabling the rule. An external repo lists whatever packages build its
+	// production binaries.
 	ProductionMainPkgs []string
 
 	// ExtraRules are consumer-owned custom rules appended to the standard set —
@@ -315,9 +318,16 @@ func StandardCellRules() []*CellRule {
 //
 //	func TestGoCellArchitecture(t *testing.T) {
 //	    archtest.RunStandardCellRules(t, archtest.ConfigForExternalCell{
-//	        BuildTags: []string{"prod"},
+//	        BuildTags:          []string{"prod"},
+//	        ProductionMainPkgs: []string{"./cmd/yourbinary"}, // enables PROD-MAIN-WIRING-NOOP-REJECT-01
 //	    })
 //	}
+//
+// Declare every composition-root (main) package in ProductionMainPkgs: omitting
+// it (empty slice) SKIPS PROD-MAIN-WIRING-NOOP-REJECT-01 entirely (opt-in by
+// declaration, mirroring BuildTags), so a copy-pasted config without it silently
+// runs without the composition-root noop guard. A declared pattern that matches
+// no package fails loud rather than passing — see the field godoc.
 //
 // The scan target is the consumer's own module (resolved by the drivers from
 // its go.mod), so the same call works unchanged in GoCell and in an external
