@@ -76,7 +76,7 @@ func TestBuiltinBaseline_AuditRead(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Evaluate with NO tenant policies — only baseline applies.
 			resolver := attributeResolver{principal: tt.principal}
-			dec := svc.evaluate(nil, resolver, tt.action)
+			dec, _ := svc.evaluate(nil, resolver, tt.action)
 			assert.Equal(t, tt.wantAllow, dec.IsAllow())
 		})
 	}
@@ -132,7 +132,7 @@ func TestBuiltinBaseline_SystemRead(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			resolver := attributeResolver{principal: tt.principal}
-			dec := svc.evaluate(nil, resolver, systemReadAction)
+			dec, _ := svc.evaluate(nil, resolver, systemReadAction)
 			assert.Equal(t, tt.wantAllow, dec.IsAllow())
 		})
 	}
@@ -171,7 +171,7 @@ func TestBuiltinBaseline_ConfigcorePerms(t *testing.T) {
 					Kind: auth.PrincipalUser, Subject: "subj-1", TenantID: testTenantIDStr,
 					Roles: rc.roles,
 				}}
-				dec := svc.evaluate(nil, resolver, action)
+				dec, _ := svc.evaluate(nil, resolver, action)
 				assert.Equal(t, rc.wantAllow, dec.IsAllow())
 			})
 		}
@@ -215,7 +215,7 @@ func TestBuiltinBaseline_AccesscorePerms(t *testing.T) {
 					Kind: auth.PrincipalUser, Subject: "subj-1", TenantID: testTenantIDStr,
 					Roles: rc.roles,
 				}}
-				dec := svc.evaluate(nil, resolver, action)
+				dec, _ := svc.evaluate(nil, resolver, action)
 				assert.Equal(t, rc.wantAllow, dec.IsAllow())
 			})
 		}
@@ -342,7 +342,7 @@ func TestBuiltinBaseline_SelfOwnership(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			resolver := attributeResolver{principal: tt.principal, resourceID: tt.resourceID}
-			dec := svc.evaluate(nil, resolver, tt.action)
+			dec, _ := svc.evaluate(nil, resolver, tt.action)
 			assert.Equal(t, tt.wantAllow, dec.IsAllow(), "action=%q resourceID=%q roles=%v",
 				tt.action, tt.resourceID, tt.principal.Roles)
 		})
@@ -357,7 +357,7 @@ func TestBuiltinBaseline_SelfOwnership(t *testing.T) {
 	} {
 		t.Run("ownership rule not fired for "+action, func(t *testing.T) {
 			resolver := attributeResolver{principal: ownerPrincipal, resourceID: ownerID}
-			dec := svc.evaluate(nil, resolver, action)
+			dec, _ := svc.evaluate(nil, resolver, action)
 			assert.False(t, dec.IsAllow(),
 				"ownership rule must not grant non-ownership action %q to non-admin", action)
 		})
@@ -367,7 +367,7 @@ func TestBuiltinBaseline_SelfOwnership(t *testing.T) {
 	for _, action := range ownershipActions {
 		t.Run("ownership rule fires for "+action, func(t *testing.T) {
 			resolver := attributeResolver{principal: ownerPrincipal, resourceID: ownerID}
-			dec := svc.evaluate(nil, resolver, action)
+			dec, _ := svc.evaluate(nil, resolver, action)
 			assert.True(t, dec.IsAllow(), "ownership rule must grant action %q to owner", action)
 		})
 	}
