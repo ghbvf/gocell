@@ -17,7 +17,7 @@
 //
 // The shared-infrastructure constructors
 //
-//	adapters/postgres.NewPool / NewTxManager / NewOutboxWriter
+//	adapters/postgres.NewPool / NewTxManager / NewOutboxWriter / NewJournalingOutboxWriter
 //	adapters/redis.NewClient
 //
 // may only be invoked from the assembly's single provisioning site
@@ -107,9 +107,10 @@ const (
 // per-role derivations (NewSessionStore, NewCache, …) are intentionally absent.
 var capForbiddenCtors = map[string]map[string]struct{}{
 	capPgImportPath: {
-		"NewPool":         {},
-		"NewTxManager":    {},
-		"NewOutboxWriter": {},
+		"NewPool":                   {},
+		"NewTxManager":              {},
+		"NewOutboxWriter":           {},
+		"NewJournalingOutboxWriter": {},
 	},
 	capRedisImportPath: {
 		"NewClient": {},

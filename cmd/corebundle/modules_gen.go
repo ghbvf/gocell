@@ -30,3 +30,17 @@ func generatedCapabilities() []capability.Kind {
 		capability.Redis,
 	}
 }
+
+// generatedProjectionSourceTopics is the sorted set of outbox-projection contract
+// ids (== routing topics) declared across the assembly cells' slice.yaml
+// contractUsages (role: subscribe, projection set, projectionSource outbox/empty;
+// saga-journal excluded). The composition root injects it into the journaling
+// outbox writer decorator so only events a projection will replay are double-written
+// to the durable projection_events journal (EPIC #1504 D4). Derived, never
+// hand-maintained (PROJECTION-EVENT-JOURNAL-TOPIC-ALLOWLIST-DERIVED-01); adding a
+// projection auto-enrolls its topic on the next `gocell generate assembly`, and
+// `--verify` red-flags stale output. ALWAYS emitted (nil when empty) so the
+// decorator wiring can call it unconditionally.
+func generatedProjectionSourceTopics() []string {
+	return nil
+}
