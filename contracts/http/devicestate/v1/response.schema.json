@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.devicestate.v1.response",
+  "type": "object",
+  "required": [
+    "data"
+  ],
+  "properties": {
+    "data": {
+      "type": "object",
+      "required": [
+        "deviceId",
+        "state",
+        "observedAt"
+      ],
+      "properties": {
+        "deviceId": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "online",
+            "offline",
+            "unknown"
+          ]
+        },
+        "observedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "Time this presence reading was determined (freshness anchor); always present even when state is unknown."
+        },
+        "lastSeenAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64
+        },
+        "tenantId": {
+          "type": "string",
+          "maxLength": 256
+        }
+      }
+    }
+  }
+}

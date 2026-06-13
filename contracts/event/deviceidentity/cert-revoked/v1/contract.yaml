@@ -1,0 +1,14 @@
+id: event.deviceidentity.cert-revoked.v1
+description: "L2 outbox fact: a device certificate was revoked. Metadata-only — no certificate body on the bus; consumers MUST refetch via the status endpoint. Producer-only and lifecycle: draft until a real subscriber lands. ref: docs/architecture/202606130635-1939-adr-framework-owned-contract.md. ref: RFC 5280 §5.3.1 CRLReason."
+kind: event
+ownerCell: _framework
+consistencyLevel: L2
+lifecycle: draft
+endpoints:
+  publisher: _framework
+schemaRefs:
+  headers: headers.schema.json
+  payload: payload.schema.json
+replayable: false
+idempotencyKey: eventId
+deliverySemantics: at-least-once

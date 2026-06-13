@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.deviceidentity.enroll.v1.response",
+  "type": "object",
+  "required": [
+    "data"
+  ],
+  "properties": {
+    "data": {
+      "type": "object",
+      "required": [
+        "certificate",
+        "chain",
+        "certRef",
+        "notBefore",
+        "notAfter",
+        "epoch",
+        "status"
+      ],
+      "properties": {
+        "certificate": {
+          "type": "string",
+          "maxLength": 16384,
+          "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+          "description": "Issued leaf certificate, base64-encoded DER (X.509)."
+        },
+        "chain": {
+          "type": "string",
+          "maxLength": 65536,
+          "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+          "description": "PKCS#7 certs-only chain (leaf→root), base64-encoded DER."
+        },
+        "certRef": {
+          "$ref": "../../../../shared/deviceidentity/v1/certificate-identity.schema.json"
+        },
+        "notBefore": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64
+        },
+        "notAfter": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64
+        },
+        "epoch": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Monotonic issuance epoch; increments on each rotation."
+        },
+        "status": {
+          "type": "string",
+          "description": "Certificate lifecycle state.",
+          "enum": [
+            "requested",
+            "issued",
+            "active",
+            "near-expiry",
+            "renewing",
+            "rotated",
+            "revoked",
+            "expired"
+          ]
+        },
+        "deviceId": {
+          "type": "string",
+          "maxLength": 256
+        }
+      }
+    }
+  }
+}

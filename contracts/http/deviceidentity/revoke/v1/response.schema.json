@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.deviceidentity.revoke.v1.response",
+  "type": "object",
+  "required": [
+    "data"
+  ],
+  "properties": {
+    "data": {
+      "type": "object",
+      "required": [
+        "certRef",
+        "status",
+        "revokedAt"
+      ],
+      "properties": {
+        "certRef": {
+          "$ref": "../../../../shared/deviceidentity/v1/certificate-identity.schema.json"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "requested",
+            "issued",
+            "active",
+            "near-expiry",
+            "renewing",
+            "rotated",
+            "revoked",
+            "expired"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "description": "RFC 5280 §5.3.1 CRLReason for permanent revocation. removeFromCRL (un-revoke) and the reinstatement path are intentionally excluded — this is a revoke action, not a hold/unhold lifecycle event.",
+          "enum": [
+            "unspecified",
+            "keyCompromise",
+            "caCompromise",
+            "affiliationChanged",
+            "superseded",
+            "cessationOfOperation",
+            "certificateHold",
+            "privilegeWithdrawn",
+            "aaCompromise"
+          ]
+        },
+        "revokedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64
+        }
+      }
+    }
+  }
+}
