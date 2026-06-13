@@ -679,6 +679,26 @@
                     "type": "string",
                     "pattern": "^contracts/grpc/",
                     "description": "Contracts-relative path to the .proto file; must resolve under contracts/grpc/."
+                  },
+                  "methods": {
+                    "type": "array",
+                    "description": "Sparse per-RPC auth overlay (#1675). Only RPCs needing a non-default auth flag appear; absent methods are authed (fail-closed). The .proto remains the single source for the method SET — entries only annotate existing methods (referential integrity enforced by the contractgen pre-pass + governance FMT-41).",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["name"],
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Proto RPC method simple name, e.g. Check. Must be a member of the proto service method set (FMT-41 + contractgen pre-pass)."
+                        },
+                        "public": {
+                          "type": "boolean",
+                          "description": "Marks this RPC JWT-exempt. Default false (authed)."
+                        }
+                      }
+                    }
                   }
                 }
               }

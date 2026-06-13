@@ -128,10 +128,20 @@ func (h *HTTPTransportMeta) IdempotencyFrameworkStatuses() []int {
 // enumerates all RPCs from the .proto via ReadProtoServiceInfo, so contract.yaml
 // never lists individual method names.
 //
-// No per-RPC auth overlay is declared here: a service-level public flag could
-// not express per-method auth once a service owns multiple RPCs, and nothing
-// consumed it (the runtime auth predicate is wired separately). The per-method
-// auth model is deferred to #1675.
+// Methods is a SPARSE per-RPC auth overlay (#1675): only RPCs needing a
+// non-default auth flag (public:true) appear; absent methods inherit the
+// fail-closed default (authed). The .proto remains the single source for the
+// method SET — this overlay only annotates existing methods, it never declares
+// them. Referential integrity (each Name ∈ the proto's method set) is enforced
+// by the contractgen pre-pass (kernel⊥tools, so governance cannot read the
+// .proto); governance FMT-41 enforces the metadata-pure guards (non-empty name,
+// no duplicates, methods⇒codegen:true, and — in #1675 where public is the only
+// flag — each entry must assert public:true).
+//
+// #1675 carries only the public flag. ABAC fields (permission/resource/action)
+// and internalOnly are deferred to #2008, where they land together with their
+// live PDP consumer — adding them here would be dead config (the anti-pattern
+// #1672 deleted when it removed the vestigial service-level auth.public).
 //
 // ref: grpc/grpc-go ServiceDesc; go-kratos/kratos protoc-gen-go-grpc service
 // descriptor — the proto service name is the wire identity.
@@ -142,6 +152,28 @@ type GRPCTransportMeta struct {
 	// Proto is the contracts-relative path to the .proto file, e.g.
 	// "contracts/grpc/device/command/v1/device_command.proto".
 	Proto string `yaml:"proto" json:"proto"`
+	// Methods is the sparse per-RPC auth overlay; nil/empty → every RPC authed.
+	Methods []GRPCMethodMeta `yaml:"methods,omitempty" json:"methods,omitempty"`
+}
+
+// GRPCMethodMeta is one entry of the per-RPC auth overlay (#1675). It annotates
+// a single proto RPC with a non-default auth flag. Only methods needing a
+// non-default appear in GRPCTransportMeta.Methods; an absent method is authed
+// (fail-closed). In #1675 the sole flag is Public; #2008 will add ABAC fields
+// (permission/resource/action) when it wires the gRPC PDP.
+//
+// ref: grpc-ecosystem/go-grpc-middleware interceptors/auth — per-method
+// AuthFuncOverride (declarative public-method exemption)
+// ref: grpc/grpc-go health/server.go — Check/Watch as the canonical public RPCs
+type GRPCMethodMeta struct {
+	// Name is the proto RPC method's simple name (e.g. "Check"). It MUST be a
+	// member of the proto service's method set (the .proto is the single source);
+	// FMT-41 + the contractgen pre-pass enforce referential integrity.
+	Name string `yaml:"name" json:"name"`
+	// Public marks this RPC as JWT-exempt. Absent (no entry) → authed. Codegen
+	// derives GRPCServiceSpec.PublicMethods from the public:true entries, which
+	// the runtime registrar aggregates into the auth interceptor's bypass set.
+	Public bool `yaml:"public,omitempty" json:"public,omitempty"`
 }
 
 // HTTPOwnershipMeta declares object-level authorization subject/resource paths.
