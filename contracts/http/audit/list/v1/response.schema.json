@@ -45,7 +45,7 @@
           },
           "scope": {
             "type": "string",
-            "description": "Origin of the audit row relative to the calling tenant: \"tenant\" for the caller's own-tenant rows, \"system\" for tenant-less framework/system rows (e.g. bootstrap.auth.fail) that the per-tenant RLS read clause surfaces to every tenant (#1618). Lets a tenant admin distinguish their own audit trail from global system events without exposing any other tenant's id. Empty for rows predating its introduction."
+            "description": "Row classification: \"tenant\" means the row belongs to a tenant (the owning tenant id is in the tenantId field; for a super-admin cross-tenant read rows from multiple tenants may appear, each with their own tenantId); \"system\" for tenant-less framework/system rows (e.g. bootstrap.auth.fail) that are surfaced to every tenant. Empty for rows predating its introduction."
           },
           "payload": {}
         },

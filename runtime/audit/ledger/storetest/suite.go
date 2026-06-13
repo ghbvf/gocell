@@ -124,8 +124,18 @@ func scopedVerify(t *testing.T, tr persistence.TxRunner, store ledger.Store, tid
 // tenant.RowScopeTenant with an empty subject (unrestricted visibility) so that
 // existing tests observe the same behavior as before PR-4. New visibility-
 // obligation tests pass explicit scope/subject values.
+//
+// RowScopeAll is minted via the sealed tenant.NewCrossTenantVisibility funnel
+// (#1760: tenant.NewRowVisibility rejects All); the conformance suite still needs
+// an All obligation to assert every serving store fail-closes it
+// (RowScopeAllUnsupportedError). This is the only other allowlisted caller of
+// NewCrossTenantVisibility besides the runtime/auth super-admin derivation
+// (ROWSCOPEALL-AUDIT-FUNNEL-01) — sanctioned because it is a testing-helper pkg.
 func mustRowVisibility(t testing.TB, scope tenant.RowScope, subject string) tenant.RowVisibility {
 	t.Helper()
+	if scope == tenant.RowScopeAll {
+		return tenant.NewCrossTenantVisibility().Visibility()
+	}
 	v, err := tenant.NewRowVisibility(scope, subject)
 	if err != nil {
 		t.Fatalf("mustRowVisibility(%v, %q): %v", scope, subject, err)
@@ -1698,5 +1708,425 @@ func assertErrCode(t *testing.T, err error, want errcode.Code) {
 	}
 	if coded.Code != want {
 		t.Errorf("errcode mismatch: got %s, want %s (msg=%q)", coded.Code, want, coded.Message)
+	}
+}
+
+// CrossTenantFactory constructs a fresh CrossTenantQueryStore for conformance
+// testing. The factory receives a slice of Entry fixtures to seed (one entry per
+// element) so conformance cases can assert cross-tenant multi-store behavior
+// without being coupled to a specific backend seeding API.
+//
+// The cleanup func is called by the conformance helper after each sub-test.
+type CrossTenantFactory func(t *testing.T, seed []*ledger.Entry) (store ledger.CrossTenantQueryStore, cleanup func())
+
+// RunCrossTenantQueryConformance runs the cross-tenant query conformance suite
+// against the supplied CrossTenantFactory. It covers:
+//
+//   - Cross-tenant read returns rows from multiple tenants and both namespace
+//     chains (the factory must seed entries for at least two distinct tenants).
+//   - Pagination: merge-ordered traversal with (timestamp DESC, id ASC) keyset
+//     yields every seeded entry exactly once.
+//   - AuditFilters narrowing: EventType / ActorID / From / To filters.
+//   - Empty sort is rejected (ErrValidationFailed) — same as ordinary Store.Query.
+//
+// The factory must seed the supplied entries before returning the store. Two
+// distinct tenants (crossTenantConformanceTenantA / crossTenantConformanceTenantB)
+// and two distinct namespaces (simulated by the factory's MemStore layout) are
+// used for correctness.
+//
+// Note: the ordinary serving Store.Query and GetBySeq paths continue to
+// fail-closed for RowScopeAll (RowScopeAllUnsupportedError — defense in depth).
+// RunCrossTenantQueryConformance only exercises the CrossTenantQueryStore path,
+// not the serving-store path.
+func RunCrossTenantQueryConformance(t *testing.T, factory CrossTenantFactory) {
+	t.Helper()
+
+	t.Run("CrossTenant_MultiTenant_MultiNamespace", func(t *testing.T) {
+		runCTMultiTenantMultiNamespace(t, factory)
+	})
+	t.Run("CrossTenant_Pagination", func(t *testing.T) {
+		runCTPagination(t, factory)
+	})
+	t.Run("CrossTenant_Filter_EventType", func(t *testing.T) {
+		runCTFilterEventType(t, factory)
+	})
+	t.Run("CrossTenant_Filter_ActorID", func(t *testing.T) {
+		runCTFilterActorID(t, factory)
+	})
+	t.Run("CrossTenant_Filter_TimeRange", func(t *testing.T) {
+		runCTFilterTimeRange(t, factory)
+	})
+	t.Run("CrossTenant_EmptySort_Rejected", func(t *testing.T) {
+		runCTEmptySortRejected(t, factory)
+	})
+	t.Run("CrossTenant_ZeroObligation_Rejected", func(t *testing.T) {
+		runCTZeroObligationRejected(t, factory)
+	})
+	t.Run("CrossTenant_Filter_SubjectID", func(t *testing.T) {
+		runCTFilterSubjectID(t, factory)
+	})
+	t.Run("CrossTenant_Filter_TraceID", func(t *testing.T) {
+		runCTFilterTraceID(t, factory)
+	})
+}
+
+// conformance tenant UUIDs for cross-tenant tests (distinct from the existing
+// per-tenant-chain isolation UUIDs to avoid fixture collisions).
+const (
+	crossTenantConformanceTenantA = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	crossTenantConformanceTenantB = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+)
+
+// Per-entry timestamp offsets for the cross-tenant seeds + the From/To filter
+// bound (TEST-TIME-LITERAL-01: no inline N*time.Millisecond literals).
+const (
+	ctTs2 = 2 * time.Millisecond
+	ctTs3 = 3 * time.Millisecond
+	ctTs4 = 4 * time.Millisecond
+	ctTs5 = 5 * time.Millisecond
+)
+
+// ctSeed returns a canonical cross-tenant seed: 3 entries for tenant-A
+// (timestamps T1, T3, T5) and 2 for tenant-B (T2, T4), seeded across the two
+// "namespace chains" the factory represents. The ordering mixes tenants so
+// merge-sort correctness is observable.
+func ctSeed(base time.Time) []*ledger.Entry {
+	mk := func(eventID, tenantID, actorID, eventType string, ts time.Time) *ledger.Entry {
+		return &ledger.Entry{
+			EventID:   eventID,
+			EventType: eventType,
+			ActorID:   actorID,
+			TenantID:  tenantID,
+			Timestamp: ts,
+			Payload:   []byte(`{}`),
+		}
+	}
+	return []*ledger.Entry{
+		mk("ct-a1", crossTenantConformanceTenantA, "actor-alice", "ct.test", base.Add(time.Millisecond)),
+		mk("ct-b1", crossTenantConformanceTenantB, "actor-bob", "ct.test", base.Add(ctTs2)),
+		mk("ct-a2", crossTenantConformanceTenantA, "actor-alice", "ct.test", base.Add(ctTs3)),
+		mk("ct-b2", crossTenantConformanceTenantB, "actor-bob", "ct.other", base.Add(ctTs4)),
+		mk("ct-a3", crossTenantConformanceTenantA, "actor-charlie", "ct.other", base.Add(ctTs5)),
+	}
+}
+
+// runCTMultiTenantMultiNamespace asserts that QueryCrossTenant returns entries
+// from BOTH tenants and all namespace chains with no tenant leakage or omission.
+func runCTMultiTenantMultiNamespace(t *testing.T, factory CrossTenantFactory) {
+	t.Helper()
+	base := epochAnchor
+	seed := ctSeed(base)
+	store, cleanup := factory(t, seed)
+	defer cleanup()
+
+	ctv := tenant.NewCrossTenantVisibility()
+	rows, err := store.QueryCrossTenant(context.Background(), ctv, ledger.AuditFilters{},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	if err != nil {
+		t.Fatalf("QueryCrossTenant: %v", err)
+	}
+
+	// All 5 seed entries must be visible.
+	if len(rows) != len(seed) {
+		t.Fatalf("QueryCrossTenant: got %d rows, want %d", len(rows), len(seed))
+	}
+
+	// Both tenants must appear in the result.
+	tenantsSeen := make(map[string]bool)
+	for _, r := range rows {
+		tenantsSeen[r.TenantID] = true
+	}
+	for _, wantTenant := range []string{crossTenantConformanceTenantA, crossTenantConformanceTenantB} {
+		if !tenantsSeen[wantTenant] {
+			t.Errorf("QueryCrossTenant: tenant %q not found in results", wantTenant)
+		}
+	}
+
+	// Results must be in timestamp DESC order.
+	for i := 1; i < len(rows); i++ {
+		if rows[i].Timestamp.After(rows[i-1].Timestamp) {
+			t.Errorf("QueryCrossTenant: ordering violation at index %d: %v > %v",
+				i, rows[i].Timestamp, rows[i-1].Timestamp)
+		}
+	}
+}
+
+// runCTPagination verifies that QueryCrossTenant with a small page limit
+// traverses all entries exactly once via the (timestamp DESC, id ASC) keyset.
+func runCTPagination(t *testing.T, factory CrossTenantFactory) {
+	t.Helper()
+	base := epochAnchor
+	seed := ctSeed(base)
+	store, cleanup := factory(t, seed)
+	defer cleanup()
+
+	ctv := tenant.NewCrossTenantVisibility()
+	var collected []string
+	var cursorVals []any
+	const pageSize = 2
+	const maxIter = 10
+
+	for iter := 0; iter < maxIter; iter++ {
+		rows, err := store.QueryCrossTenant(context.Background(), ctv, ledger.AuditFilters{},
+			query.ListParams{Limit: pageSize, Sort: ledger.QuerySort(), CursorValues: cursorVals})
+		if err != nil {
+			t.Fatalf("QueryCrossTenant iter %d: %v", iter, err)
+		}
+		hasMore := len(rows) > pageSize
+		page := rows
+		if hasMore {
+			page = rows[:pageSize]
+		}
+		for _, e := range page {
+			collected = append(collected, e.EventID)
+		}
+		if !hasMore {
+			break
+		}
+		last := page[len(page)-1]
+		cursorVals = []any{last.Timestamp.Format(time.RFC3339Nano), last.ID}
+	}
+
+	if len(collected) != len(seed) {
+		t.Fatalf("Pagination: traversed %d entries, want %d; got=%v",
+			len(collected), len(seed), collected)
+	}
+	// No duplicates.
+	seen := make(map[string]bool, len(collected))
+	for _, id := range collected {
+		if seen[id] {
+			t.Errorf("Pagination: duplicate EventID %q in traversal", id)
+		}
+		seen[id] = true
+	}
+}
+
+// runCTFilterEventType verifies AuditFilters.EventType narrows the cross-tenant result.
+func runCTFilterEventType(t *testing.T, factory CrossTenantFactory) {
+	t.Helper()
+	base := epochAnchor
+	seed := ctSeed(base) // 3 "ct.test" + 2 "ct.other"
+	store, cleanup := factory(t, seed)
+	defer cleanup()
+
+	ctv := tenant.NewCrossTenantVisibility()
+	rows, err := store.QueryCrossTenant(context.Background(), ctv,
+		ledger.AuditFilters{EventType: "ct.test"},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	if err != nil {
+		t.Fatalf("QueryCrossTenant(EventType=ct.test): %v", err)
+	}
+	if len(rows) != 3 {
+		t.Errorf("EventType filter: got %d, want 3", len(rows))
+	}
+	for _, r := range rows {
+		if r.EventType != "ct.test" {
+			t.Errorf("EventType filter leaked %q", r.EventType)
+		}
+	}
+}
+
+// runCTFilterActorID verifies AuditFilters.ActorID narrows the cross-tenant result
+// across tenants. actor-alice has 2 entries (both in tenant-A); actor-bob 2 (both
+// tenant-B), actor-charlie 1 (tenant-A).
+func runCTFilterActorID(t *testing.T, factory CrossTenantFactory) {
+	t.Helper()
+	base := epochAnchor
+	seed := ctSeed(base)
+	store, cleanup := factory(t, seed)
+	defer cleanup()
+
+	ctv := tenant.NewCrossTenantVisibility()
+	rows, err := store.QueryCrossTenant(context.Background(), ctv,
+		ledger.AuditFilters{ActorID: "actor-alice"},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	if err != nil {
+		t.Fatalf("QueryCrossTenant(ActorID=actor-alice): %v", err)
+	}
+	if len(rows) != 2 {
+		t.Errorf("ActorID filter: got %d, want 2 (alice entries)", len(rows))
+	}
+	for _, r := range rows {
+		if r.ActorID != "actor-alice" {
+			t.Errorf("ActorID filter leaked actor %q", r.ActorID)
+		}
+	}
+}
+
+// runCTFilterTimeRange verifies AuditFilters.From / To narrowing.
+func runCTFilterTimeRange(t *testing.T, factory CrossTenantFactory) {
+	t.Helper()
+	base := epochAnchor
+	seed := ctSeed(base)
+	store, cleanup := factory(t, seed)
+	defer cleanup()
+
+	ctv := tenant.NewCrossTenantVisibility()
+	// From=T2, To=T4 → should include entries at T2, T3, T4 (3 entries).
+	rows, err := store.QueryCrossTenant(context.Background(), ctv,
+		ledger.AuditFilters{
+			From: base.Add(ctTs2),
+			To:   base.Add(ctTs4),
+		},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	if err != nil {
+		t.Fatalf("QueryCrossTenant(From/To): %v", err)
+	}
+	if len(rows) != 3 {
+		t.Errorf("TimeRange filter: got %d, want 3 (T2..T4)", len(rows))
+	}
+}
+
+// runCTEmptySortRejected verifies that QueryCrossTenant rejects an empty Sort
+// with ErrValidationFailed — consistent with Store.Query and MultiStore.Query.
+func runCTEmptySortRejected(t *testing.T, factory CrossTenantFactory) {
+	t.Helper()
+	store, cleanup := factory(t, nil)
+	defer cleanup()
+
+	ctv := tenant.NewCrossTenantVisibility()
+	_, err := store.QueryCrossTenant(context.Background(), ctv, ledger.AuditFilters{},
+		query.ListParams{Limit: 10})
+	errcodetest.AssertCode(t, err, errcode.ErrValidationFailed)
+}
+
+// runCTZeroObligationRejected pins the F2 data-layer PEP: every
+// CrossTenantQueryStore implementation MUST fail-closed when handed a zero/invalid
+// CrossTenantVisibility. Go's zero value (tenant.CrossTenantVisibility{}) is
+// constructable despite the sealed minter, so a store that skipped obligation
+// validation would happily return the seeded rows — seeding real entries makes the
+// rejection non-vacuous (anti-vacuity). A valid Sort is passed so the rejection is
+// the obligation check (KindInternal/ErrInternal), not the empty-sort guard. This
+// is the single-source machine-checked contract that holds for mem, PG, and any
+// future backend wired into RunCrossTenantQueryConformance.
+func runCTZeroObligationRejected(t *testing.T, factory CrossTenantFactory) {
+	t.Helper()
+	seed := ctSeed(epochAnchor)
+	store, cleanup := factory(t, seed)
+	defer cleanup()
+
+	var zero tenant.CrossTenantVisibility // invalid obligation (scope=0)
+	rows, err := store.QueryCrossTenant(context.Background(), zero, ledger.AuditFilters{},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	errcodetest.AssertCode(t, err, errcode.ErrInternal)
+	if len(rows) != 0 {
+		t.Errorf("zero-obligation cross-tenant read returned %d rows; must fail-closed with none", len(rows))
+	}
+}
+
+// ctFilterSeed returns a seed with ≥2 distinct SubjectIDs and ≥2 distinct
+// TraceIDs across two tenants, so SubjectID/TraceID filter conformance tests
+// can assert the correct row counts without relying on the shared ctSeed (which
+// has identical SubjectIDs and no TraceIDs).
+//
+// Seed layout:
+//
+//	ct-f1: tenantA, subject=subject-alice, trace=trace-X, event=ct.filter
+//	ct-f2: tenantA, subject=subject-alice, trace=trace-Y, event=ct.filter
+//	ct-f3: tenantB, subject=subject-bob,   trace=trace-X, event=ct.filter
+//	ct-f4: tenantB, subject=subject-bob,   trace=trace-Z, event=ct.other
+func ctFilterSeed(base time.Time) []*ledger.Entry {
+	mk := func(eventID, tenantID, subjectID, traceID, eventType string, ts time.Time) *ledger.Entry {
+		return &ledger.Entry{
+			EventID:   eventID,
+			EventType: eventType,
+			ActorID:   "actor-filter",
+			SubjectID: subjectID,
+			TenantID:  tenantID,
+			TraceID:   traceID,
+			Timestamp: ts,
+			Payload:   []byte(`{}`),
+		}
+	}
+	return []*ledger.Entry{
+		mk("ct-f1", crossTenantConformanceTenantA, "subject-alice", "trace-X", "ct.filter", base.Add(time.Millisecond)),
+		mk("ct-f2", crossTenantConformanceTenantA, "subject-alice", "trace-Y", "ct.filter", base.Add(ctTs2)),
+		mk("ct-f3", crossTenantConformanceTenantB, "subject-bob", "trace-X", "ct.filter", base.Add(ctTs3)),
+		mk("ct-f4", crossTenantConformanceTenantB, "subject-bob", "trace-Z", "ct.other", base.Add(ctTs4)),
+	}
+}
+
+// runCTFilterSubjectID verifies AuditFilters.SubjectID narrows the cross-tenant
+// result to only entries whose SubjectID matches, across both tenants.
+//
+// ctFilterSeed has 2 entries with SubjectID="subject-alice" (tenantA) and 2 with
+// "subject-bob" (tenantB). Filtering by "subject-alice" must return exactly 2.
+//
+//nolint:dupl // intentionally mirrors runCTFilterTraceID: conformance functions share structure
+func runCTFilterSubjectID(t *testing.T, factory CrossTenantFactory) {
+	t.Helper()
+	base := epochAnchor
+	seed := ctFilterSeed(base)
+	store, cleanup := factory(t, seed)
+	defer cleanup()
+
+	ctv := tenant.NewCrossTenantVisibility()
+	rows, err := store.QueryCrossTenant(context.Background(), ctv,
+		ledger.AuditFilters{SubjectID: "subject-alice"},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	if err != nil {
+		t.Fatalf("QueryCrossTenant(SubjectID=subject-alice): %v", err)
+	}
+	if len(rows) != 2 {
+		t.Errorf("SubjectID filter: got %d rows, want 2 (alice has 2 entries across tenants)", len(rows))
+	}
+	for _, r := range rows {
+		if r.SubjectID != "subject-alice" {
+			t.Errorf("SubjectID filter leaked row with SubjectID=%q", r.SubjectID)
+		}
+	}
+
+	// Sanity: "subject-bob" yields 2 entries.
+	bobRows, err := store.QueryCrossTenant(context.Background(), ctv,
+		ledger.AuditFilters{SubjectID: "subject-bob"},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	if err != nil {
+		t.Fatalf("QueryCrossTenant(SubjectID=subject-bob): %v", err)
+	}
+	if len(bobRows) != 2 {
+		t.Errorf("SubjectID filter: got %d rows for subject-bob, want 2", len(bobRows))
+	}
+}
+
+// runCTFilterTraceID verifies AuditFilters.TraceID narrows the cross-tenant
+// result to only entries whose TraceID matches, across both tenants.
+//
+// ctFilterSeed has 2 entries with TraceID="trace-X" (one per tenant), 1 with
+// "trace-Y" (tenantA), and 1 with "trace-Z" (tenantB). Filtering by "trace-X"
+// must return exactly 2.
+//
+//nolint:dupl // intentionally mirrors runCTFilterSubjectID: conformance functions share structure
+func runCTFilterTraceID(t *testing.T, factory CrossTenantFactory) {
+	t.Helper()
+	base := epochAnchor
+	seed := ctFilterSeed(base)
+	store, cleanup := factory(t, seed)
+	defer cleanup()
+
+	ctv := tenant.NewCrossTenantVisibility()
+	rows, err := store.QueryCrossTenant(context.Background(), ctv,
+		ledger.AuditFilters{TraceID: "trace-X"},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	if err != nil {
+		t.Fatalf("QueryCrossTenant(TraceID=trace-X): %v", err)
+	}
+	if len(rows) != 2 {
+		t.Errorf("TraceID filter: got %d rows, want 2 (trace-X appears in both tenants)", len(rows))
+	}
+	for _, r := range rows {
+		if r.TraceID != "trace-X" {
+			t.Errorf("TraceID filter leaked row with TraceID=%q", r.TraceID)
+		}
+	}
+
+	// Sanity: "trace-Y" yields exactly 1 entry.
+	traceYRows, err := store.QueryCrossTenant(context.Background(), ctv,
+		ledger.AuditFilters{TraceID: "trace-Y"},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	if err != nil {
+		t.Fatalf("QueryCrossTenant(TraceID=trace-Y): %v", err)
+	}
+	if len(traceYRows) != 1 {
+		t.Errorf("TraceID filter: got %d rows for trace-Y, want 1", len(traceYRows))
 	}
 }

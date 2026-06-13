@@ -712,6 +712,95 @@ func TestService_Query_SubsecondFilterContext(t *testing.T) {
 	require.NoError(t, err, "changing From between pages must not invalidate the cursor")
 }
 
+// --- QueryCrossTenant tests (#1810) ---
+
+// fakeCtStore is a minimal in-process CrossTenantQueryStore for unit tests.
+// It returns a fixed slice of entries without needing a real admin pool.
+type fakeCtStore struct {
+	entries []*ledger.Entry
+	err     error
+}
+
+func (f *fakeCtStore) QueryCrossTenant(
+	_ context.Context, _ tenant.CrossTenantVisibility,
+	_ ledger.AuditFilters, params query.ListParams,
+) ([]*ledger.Entry, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	limit := params.FetchLimit()
+	if limit > len(f.entries) {
+		limit = len(f.entries)
+	}
+	return f.entries[:limit], nil
+}
+
+// TestService_QueryCrossTenant_NilStore_Returns501 locks the fail-closed
+// optionality contract (#1810): when crossTenantStore is nil (admin pool not
+// provisioned), QueryCrossTenant must return RowScopeAllUnsupportedError (501),
+// never nil/empty — the pre-#1810 behavior is preserved.
+func TestService_QueryCrossTenant_NilStore_Returns501(t *testing.T) {
+	svc, _ := newTestService() // no WithCrossTenantStore → crossTenantStore is nil
+
+	ctv := tenant.NewCrossTenantVisibility()
+	_, err := svc.QueryCrossTenant(context.Background(), ctv, ledger.AuditFilters{}, query.PageParams{})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.KindNotImplemented, ecErr.Kind,
+		"nil crossTenantStore must return RowScopeAllUnsupportedError (501)")
+}
+
+// TestService_QueryCrossTenant_WithStore_ReturnsPaged verifies that when a
+// CrossTenantQueryStore is wired, QueryCrossTenant returns its results via the
+// standard ExecutePagedQuery machinery (#1810), including hasMore detection and
+// cursor generation when more entries exist than the requested page limit.
+//
+// The fake seeds 4 entries; limit=2 means FetchLimit()=3, so the fake returns 3
+// rows. ExecutePagedQuery detects len(rows)>limit → HasMore=true, NextCursor non-empty.
+// Without this test, the N+1 hasMore path for cross-tenant reads was never asserted.
+func TestService_QueryCrossTenant_WithStore_ReturnsPaged(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	entries := []*ledger.Entry{
+		{
+			ID: "ct-1", EventID: "evt-ct-1", EventType: "vis.v1",
+			ActorID: "sa", TenantID: auditQueryTestTenant,
+			Timestamp: base, Payload: []byte("{}"),
+		},
+		{
+			ID: "ct-2", EventID: "evt-ct-2", EventType: "vis.v1",
+			ActorID: "sa", TenantID: auditQueryTestTenantB,
+			Timestamp: base.Add(time.Second), Payload: []byte("{}"),
+		},
+		{
+			ID: "ct-3", EventID: "evt-ct-3", EventType: "vis.v1",
+			ActorID: "sa", TenantID: auditQueryTestTenant,
+			Timestamp: base.Add(2 * time.Second), Payload: []byte("{}"),
+		},
+		{
+			ID: "ct-4", EventID: "evt-ct-4", EventType: "vis.v1",
+			ActorID: "sa", TenantID: auditQueryTestTenantB,
+			Timestamp: base.Add(3 * time.Second), Payload: []byte("{}"),
+		},
+	}
+	fake := &fakeCtStore{entries: entries}
+
+	store := newTestStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(),
+		query.RunModeProd, WithCrossTenantStore(fake))
+	require.NoError(t, err)
+
+	ctv := tenant.NewCrossTenantVisibility()
+
+	// First page: limit=2, fake has 4 entries → FetchLimit()=3, fake returns 3 rows
+	// → hasMore detection fires (len(3) > limit(2)).
+	result, err := svc.QueryCrossTenant(context.Background(), ctv, ledger.AuditFilters{}, query.PageParams{Limit: 2})
+	require.NoError(t, err)
+	assert.Len(t, result.Items, 2, "page-1 must contain exactly 2 items (page limit)")
+	assert.True(t, result.HasMore, "HasMore must be true when store has more entries than limit")
+	assert.NotEmpty(t, result.NextCursor, "NextCursor must be non-empty when HasMore is true")
+}
+
 // TestQuery_ZeroTime_SkipsFromToFormat asserts that when filters.From and filters.To
 // are zero, the QueryContext attrs slice does NOT contain "from" or "to" keys.
 //
@@ -808,4 +897,65 @@ func TestQuery_ZeroTime_SkipsFromToFormat(t *testing.T) {
 			t.Errorf("unexpected error on page2 with non-zero From: %v", err2)
 		}
 	}
+}
+
+// --- F2: QueryCrossTenant PEP obligation validation (Codex review #2051) ---
+
+// TestService_QueryCrossTenant_ZeroValue_FailsClosed locks F2 (Codex review):
+// a zero-value tenant.CrossTenantVisibility{} carries an invalid/zero RowVisibility;
+// QueryCrossTenant must fail-closed (KindInternal) rather than forwarding an invalid
+// obligation to the cross-tenant store. The typed funnel is Hard (forget/forge = compile
+// error), but the zero value is constructable — this PEP guard closes the residual gap.
+//
+// Without the fix this test would panic (nil-pointer) or return empty results from the
+// store rather than an error.
+func TestService_QueryCrossTenant_ZeroValue_FailsClosed(t *testing.T) {
+	store := newTestStore(t)
+	fake := &fakeCtStore{} // would return entries if reached
+
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(),
+		query.RunModeProd, WithCrossTenantStore(fake))
+	require.NoError(t, err)
+
+	// Zero-value CrossTenantVisibility: no NewCrossTenantVisibility() call.
+	var zeroCTV tenant.CrossTenantVisibility
+
+	_, err = svc.QueryCrossTenant(context.Background(), zeroCTV, ledger.AuditFilters{}, query.PageParams{})
+	require.Error(t, err, "zero CrossTenantVisibility must fail-closed")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.KindInternal, ecErr.Kind,
+		"zero CrossTenantVisibility must yield KindInternal (PEP fail-closed), got kind=%v", ecErr.Kind)
+}
+
+// --- F5: WithCrossTenantStore typed-nil bypass (Codex review #2051) ---
+
+// TestWithCrossTenantStore_TypedNil_KeepsStoreNil locks F5 (Codex review):
+// a typed-nil (*MemCrossTenantStore)(nil) is != nil at the interface level, so a plain
+// `s == nil` check would store it and bypass the 501 fail-closed path (the subsequent
+// nil-pointer call to QueryCrossTenant would panic). WithCrossTenantStore must use
+// validation.IsNilInterface to detect typed-nil values.
+//
+// Without the fix, QueryCrossTenant would panic (nil method call on typed-nil interface)
+// instead of returning RowScopeAllUnsupportedError (501).
+func TestWithCrossTenantStore_TypedNil_KeepsStoreNil(t *testing.T) {
+	store := newTestStore(t)
+
+	// Inject a typed-nil: interface value is non-nil (has a concrete type), but
+	// the underlying pointer is nil — triggers nil-panic without IsNilInterface.
+	var typedNilStore *ledger.MemCrossTenantStore
+
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(),
+		query.RunModeProd, WithCrossTenantStore(typedNilStore))
+	require.NoError(t, err, "NewService must succeed even with typed-nil CrossTenantStore")
+
+	// The typed-nil must NOT have been stored: QueryCrossTenant must return 501
+	// (RowScopeAllUnsupportedError), not panic.
+	ctv := tenant.NewCrossTenantVisibility()
+	_, err = svc.QueryCrossTenant(context.Background(), ctv, ledger.AuditFilters{}, query.PageParams{})
+	require.Error(t, err, "QueryCrossTenant must fail-closed when typed-nil store was injected")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.KindNotImplemented, ecErr.Kind,
+		"typed-nil store must yield RowScopeAllUnsupportedError (501), not a nil-pointer panic")
 }

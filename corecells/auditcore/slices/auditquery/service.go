@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
@@ -34,6 +35,35 @@ type Service struct {
 	txRunner persistence.CellTxManager `gocell:"required" gocellErr:"auditquery: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	logger   *slog.Logger
 	runMode  query.RunMode
+
+	// crossTenantStore is the OPTIONAL admin-pool-backed store for super-admin
+	// cross-tenant reads (#1810). When nil, QueryCrossTenant returns
+	// RowScopeAllUnsupportedError (HTTP 501, fail-closed). No gocell:"required" tag
+	// because absence is a valid operational state: the admin pool creds may not be
+	// provisioned, in which case super-admin reads stay gracefully unavailable.
+	crossTenantStore ledger.CrossTenantQueryStore
+}
+
+// ServiceOption is a functional option for NewService.
+type ServiceOption func(*Service)
+
+// WithCrossTenantStore injects the optional CrossTenantQueryStore. When not
+// supplied (or when a nil or typed-nil interface is passed), QueryCrossTenant
+// returns RowScopeAllUnsupportedError (HTTP 501) — graceful fail-closed, never
+// fail-open. Do NOT carry gocell:"required" here: the admin read pool
+// creds are an optional operational capability.
+//
+// Uses validation.IsNilInterface (F5, Codex review): a plain `s == nil` check
+// misses typed-nil values (e.g. (*MemCrossTenantStore)(nil)), which would be
+// stored and then nil-panic on the first QueryCrossTenant call, bypassing the
+// 501 fail-closed contract.
+func WithCrossTenantStore(s ledger.CrossTenantQueryStore) ServiceOption {
+	return func(svc *Service) {
+		if validation.IsNilInterface(s) {
+			return
+		}
+		svc.crossTenantStore = s
+	}
 }
 
 // NewService creates an audit-query Service. runMode controls cursor
@@ -42,11 +72,17 @@ type Service struct {
 //
 // store, codec and txRunner must be non-nil; codec is required for pagination,
 // txRunner for the tenant-scoped RunInTx that activates FORCE RLS on reads.
+// opts are optional ServiceOption values; currently WithCrossTenantStore is the
+// only supported option.
 func NewService(
 	store ledger.QueryStore, codec *query.CursorCodec, logger *slog.Logger,
 	txRunner persistence.CellTxManager, runMode query.RunMode,
+	opts ...ServiceOption,
 ) (*Service, error) {
 	s := &Service{store: store, codec: codec, txRunner: txRunner, logger: logger, runMode: runMode}
+	for _, o := range opts {
+		o(s)
+	}
 	if err := s.validateRequired(); err != nil {
 		return nil, err
 	}
@@ -146,6 +182,82 @@ func (s *Service) Query(
 				return nil, fmt.Errorf("audit-query: query: %w", err)
 			}
 			return entries, nil
+		},
+		Extract: func(e *ledger.Entry) []any {
+			return []any{e.Timestamp.Format(time.RFC3339Nano), e.ID}
+		},
+		OnCursorErr: query.LogCursorError(s.logger, "auditquery"),
+		RunMode:     s.runMode,
+	})
+}
+
+// QueryCrossTenant returns a paginated page of audit entries across ALL tenants,
+// using the admin-pool-backed CrossTenantQueryStore (#1810). This method is the
+// exclusive path for super-admin cross-tenant reads; it bypasses the per-tenant
+// RunInTx wrapper because the cross-tenant store uses its own admin pool with a
+// role-scoped permissive RLS policy (gocell_audit_admin), not the FORCE RLS
+// serving pool.
+//
+// Fail-closed optionality: when crossTenantStore is nil (admin pool creds not
+// provisioned), returns RowScopeAllUnsupportedError (HTTP 501). This preserves
+// the pre-#1810 behavior — graceful unavailability, never fail-open.
+//
+// ctv carries the sealed CrossTenantVisibility obligation; it is the sole
+// permitted mint of RowScopeAll and proves the mandatory FR-007 audit has
+// already been emitted by (*auth.Principal).CrossTenantVisibility.
+// errMsgInvalidCrossTenantObligation is the const-literal PEP fail-close message
+// (MESSAGE-CONST-LITERAL-01): a zero-value or non-All CrossTenantVisibility must
+// never reach the store (F2, Codex review). The typed funnel guarantees a
+// CrossTenantVisibility is passed (forget = compile error), but the zero value is
+// constructable, so the PEP validates the obligation at runtime.
+const errMsgInvalidCrossTenantObligation = "cross-tenant audit read: invalid or zero CrossTenantVisibility obligation"
+
+func (s *Service) QueryCrossTenant(
+	ctx context.Context, ctv tenant.CrossTenantVisibility, filters ledger.AuditFilters, pageReq query.PageParams,
+) (query.PageResult[*ledger.Entry], error) {
+	if s.crossTenantStore == nil {
+		return query.PageResult[*ledger.Entry]{}, ledger.RowScopeAllUnsupportedError()
+	}
+	// PEP: validate the obligation before reading. The typed funnel is Hard
+	// (forget/forge = compile error), but Go's zero value (tenant.CrossTenantVisibility{})
+	// is constructable, so this guard fail-closes a zero/invalid obligation (F2).
+	// ctv.Validate is the single-source predicate every store PEP also calls
+	// (defense in depth at the data layer).
+	if err := ctv.Validate(); err != nil {
+		return query.PageResult[*ledger.Entry]{}, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			errMsgInvalidCrossTenantObligation)
+	}
+	// Cursor-scope fingerprint for cross-tenant reads: same filter axes as Query
+	// (eventType/actorId/subjectId/traceId) but WITHOUT tenantId (the read spans
+	// all tenants by construction). rowScope is always "all" for this path.
+	attrs := []string{"endpoint", "audit-query"}
+	if filters.EventType != "" {
+		attrs = append(attrs, "eventType", filters.EventType)
+	}
+	if filters.ActorID != "" {
+		attrs = append(attrs, "actorId", filters.ActorID)
+	}
+	if filters.SubjectID != "" {
+		attrs = append(attrs, "subjectId", filters.SubjectID)
+	}
+	if filters.TraceID != "" {
+		attrs = append(attrs, "traceId", filters.TraceID)
+	}
+	// rowScope is always "all" for cross-tenant reads. No tenantId axis: the
+	// cursor is cross-tenant by design, and including a tenantId would be
+	// misleading (the read spans every tenant, not one).
+	attrs = append(attrs, "rowScope", ctv.Visibility().Scope().String())
+	qctx := query.QueryContext(attrs...)
+	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*ledger.Entry]{
+		Codec:      s.codec,
+		PageParams: pageReq,
+		Sort:       ledger.QuerySort(),
+		QueryCtx:   qctx,
+		Fetch: func(ctx context.Context, params query.ListParams) ([]*ledger.Entry, error) {
+			// No RunInTx wrapper: the cross-tenant store uses its own admin pool
+			// (gocell_audit_admin role + role-scoped permissive RLS policy), so the
+			// per-tenant FORCE RLS GUC mechanism does not apply here.
+			return s.crossTenantStore.QueryCrossTenant(ctx, ctv, filters, params)
 		},
 		Extract: func(e *ledger.Entry) []any {
 			return []any{e.Timestamp.Format(time.RFC3339Nano), e.ID}

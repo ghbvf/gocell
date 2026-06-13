@@ -29,7 +29,10 @@ func TestNewRowVisibility(t *testing.T) {
 		{name: "device empty subject rejected", scope: RowScopeDevice, subject: "", wantErr: true},
 		{name: "tenant allows empty subject", scope: RowScopeTenant, subject: ""},
 		{name: "tenant non-empty subject rejected", scope: RowScopeTenant, subject: "u1", wantErr: true},
-		{name: "all allows empty subject", scope: RowScopeAll, subject: ""},
+		// RowScopeAll is no longer mintable via NewRowVisibility (#1760): it is
+		// sealed behind NewCrossTenantVisibility. BOTH forms are rejected here —
+		// the general constructor is provably incapable of minting an All obligation.
+		{name: "all empty subject rejected (sealed)", scope: RowScopeAll, subject: "", wantErr: true},
 		{name: "all non-empty subject rejected", scope: RowScopeAll, subject: "u1", wantErr: true},
 		{name: "zero scope rejected", scope: RowScope(0), subject: "u1", wantErr: true},
 		{name: "out-of-range scope rejected", scope: RowScope(9), subject: "u1", wantErr: true},
@@ -116,13 +119,26 @@ func TestRowVisibility_SQLPredicate(t *testing.T) {
 	}
 }
 
+// mustRowVis mints a RowVisibility for tests, routing RowScopeAll through the
+// sealed NewCrossTenantVisibility funnel (#1760: NewRowVisibility now rejects
+// All). All other scopes go through the general constructor so a malformed
+// non-All obligation still surfaces its construction error.
+func mustRowVis(t *testing.T, scope RowScope, subject string) RowVisibility {
+	t.Helper()
+	if scope == RowScopeAll {
+		return NewCrossTenantVisibility().Visibility()
+	}
+	v, err := NewRowVisibility(scope, subject)
+	if err != nil {
+		t.Fatalf("NewRowVisibility(%v, %q): %v", scope, subject, err)
+	}
+	return v
+}
+
 func assertSQLPredicate(t *testing.T, tt sqlPredicateCase) {
 	t.Helper()
 
-	v, err := NewRowVisibility(tt.scope, tt.subject)
-	if err != nil {
-		t.Fatalf("NewRowVisibility: %v", err)
-	}
+	v := mustRowVis(t, tt.scope, tt.subject)
 	p, err := v.SQLPredicate(tt.ownerCol)
 	if tt.wantErr {
 		if err == nil {
@@ -173,10 +189,7 @@ func TestRowVisibility_Allows(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			v, err := NewRowVisibility(tt.scope, tt.subject)
-			if err != nil {
-				t.Fatalf("NewRowVisibility: %v", err)
-			}
+			v := mustRowVis(t, tt.scope, tt.subject)
 			if got := v.Allows(tt.ownerValue); got != tt.want {
 				t.Errorf("Allows(%q) = %v, want %v", tt.ownerValue, got, tt.want)
 			}

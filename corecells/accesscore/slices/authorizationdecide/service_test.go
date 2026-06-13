@@ -739,3 +739,92 @@ func TestAuthorize_ResourceAttr_MultiValuedIn(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, dec.IsAllow(), "multi-valued resource attr with OpIn must permit when any value matches")
 }
+
+// --- matched rule id logging (#2027 F12) ----------------------------------
+
+// recordingHandler captures every slog.Record at all levels so the decision-log
+// test can assert level + the matched_rule_id attribute (Authorize is invoked
+// synchronously, so no locking is needed).
+type recordingHandler struct{ records []slog.Record }
+
+func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *recordingHandler) WithGroup(string) slog.Handler      { return h }
+
+func recordAttr(r slog.Record, key string) (string, bool) {
+	var val string
+	var ok bool
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == key {
+			val, ok = a.Value.String(), true
+			return false
+		}
+		return true
+	})
+	return val, ok
+}
+
+// TestAuthorize_LogsMatchedRuleID is the F12 observability guard (#2027): the PDP
+// decision log carries matched_rule_id for both allow and deny, at Debug (it is
+// per-decision detail carrying subject/resource UUIDs — always-on coarse deny
+// visibility lives in RequirePermission's Info log + the deny-rate metric).
+func TestAuthorize_LogsMatchedRuleID(t *testing.T) {
+	const ownerID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+
+	tests := []struct {
+		name       string
+		principal  *auth.Principal
+		subject    string
+		resource   string
+		action     string
+		wantLevel  slog.Level
+		wantRuleID string
+	}{
+		{
+			name:       "ownership allow → Debug + self rule id",
+			principal:  &auth.Principal{Kind: auth.PrincipalUser, Subject: ownerID, TenantID: testTenantIDStr},
+			subject:    ownerID,
+			resource:   ownerID,
+			action:     authz.PermUserRead().String(),
+			wantLevel:  slog.LevelDebug,
+			wantRuleID: "baseline-user-read-self",
+		},
+		{
+			name:       "default-deny → Debug + sentinel rule id",
+			principal:  userPrincipal(nil),
+			subject:    "usr-1",
+			resource:   "/x",
+			action:     "read",
+			wantLevel:  slog.LevelDebug,
+			wantRuleID: "_default-deny",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := &recordingHandler{}
+			svc, err := NewService(clockmock.New(fixedClockTime), mem.NewPolicyRepository(),
+				mem.NewResourceAttributeProvider(), slog.New(h), WithTxManager(outbox.DemoCellTxManager()))
+			require.NoError(t, err)
+
+			_, err = svc.Authorize(reqCtx(tt.principal), tt.subject, tt.resource, tt.action)
+			require.NoError(t, err)
+
+			var rec *slog.Record
+			for i := range h.records {
+				if h.records[i].Message == "authorization decision" {
+					rec = &h.records[i]
+					break
+				}
+			}
+			require.NotNil(t, rec, "expected an 'authorization decision' log record")
+			assert.Equal(t, tt.wantLevel, rec.Level, "decision log level")
+			gotID, ok := recordAttr(*rec, "matched_rule_id")
+			require.True(t, ok, "decision log must carry matched_rule_id")
+			assert.Equal(t, tt.wantRuleID, gotID)
+		})
+	}
+}
