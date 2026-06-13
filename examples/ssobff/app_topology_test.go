@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"strings"
 	"testing"
@@ -8,7 +11,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
@@ -116,6 +121,88 @@ func TestSSOBFFApp_DemoTopologyDoesNotRequireInfra(t *testing.T) {
 	// Prove the gate fires at pool creation (bogus DSN), not before it.
 	assert.Contains(t, msg, "create PG pool",
 		"demo topology must reach the PG pool (bogus DSN should fail there, not at a Redis gate)")
+}
+
+// TestNewSSOBFFJWT pins the #2052 multi-pod JWT key gate: ssobff's JWT signing
+// keys are topology-gated via cellsecrets.LoadKeySet (mirroring cmd/corebundle's
+// buildJWTDeps), not a per-process ephemeral key pair. In real adapter mode the
+// shared key env vars (GOCELL_JWT_PRIVATE_KEY / GOCELL_JWT_PUBLIC_KEY) are
+// required and a missing pair fails closed — a per-pod ephemeral key would make
+// replica A's tokens 401 against replica B (the #2052 bug, 4th sibling of the
+// #825/#2017 single-pod-primitive family). Demo topology keeps ephemeral keys so
+// the walkthrough path stays infra-free.
+func TestNewSSOBFFJWT(t *testing.T) {
+	clk := clock.Real()
+
+	t.Run("demo topology generates ephemeral keys", func(t *testing.T) {
+		t.Setenv(auth.EnvJWTPrivateKey, "")
+		t.Setenv(auth.EnvJWTPublicKey, "")
+		issuer, verifier, err := newSSOBFFJWT(mkTopoT(t, "", "memory"), clk)
+		require.NoError(t, err)
+		assert.NotNil(t, issuer)
+		assert.NotNil(t, verifier)
+	})
+
+	t.Run("real topology missing JWT key env fails closed", func(t *testing.T) {
+		t.Setenv(auth.EnvJWTPrivateKey, "")
+		t.Setenv(auth.EnvJWTPublicKey, "")
+		_, _, err := newSSOBFFJWT(mkTopoT(t, "real", "postgres"), clk)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "JWT key",
+			"real topology must fail closed on missing shared JWT key env (no per-pod ephemeral)")
+		// Strengthen beyond the message substring: the wrapped errcode must be the
+		// key-missing code, so a future message reword cannot silently pass the gate.
+		var ecErr *errcode.Error
+		require.ErrorAs(t, err, &ecErr)
+		assert.Equal(t, auth.ErrKeyMissing, ecErr.Code,
+			"real-mode missing JWT key must surface auth.ErrKeyMissing")
+	})
+
+	t.Run("real shared key: replica A issues, replica B verifies (#2052)", func(t *testing.T) {
+		// The #2052 user-visible failure: replica A signs a token, replica B
+		// verifies it. With per-pod ephemeral keys, B 401s A's token; with the
+		// shared env key pair both pods derive the same KeySet, so cross-pod
+		// verify succeeds. Asserts the real cross-replica behavior, not just that
+		// construction returned non-nil — guards issuer/audience/key wiring.
+		setSSOBFFTestJWTKeyEnv(t)
+		realTopo := mkTopoT(t, "real", "postgres")
+
+		issuerA, _, err := newSSOBFFJWT(realTopo, clk)
+		require.NoError(t, err, "replica A: build JWT issuer/verifier")
+		_, verifierB, err := newSSOBFFJWT(realTopo, clk)
+		require.NoError(t, err, "replica B: build JWT issuer/verifier")
+
+		const subject = "user-2052"
+		token, err := issuerA.Issue(auth.TokenIntentAccess, subject, auth.IssueOptions{
+			Audience: []string{ssobffJWTAudience},
+		})
+		require.NoError(t, err, "replica A: issue access token")
+
+		claims, err := verifierB.VerifyIntent(context.Background(), token, auth.TokenIntentAccess)
+		require.NoError(t, err, "replica B must verify replica A's token (cross-pod, shared key)")
+		assert.Equal(t, subject, claims.Subject, "subject must round-trip across replicas")
+		assert.Equal(t, auth.TokenIntentAccess, claims.TokenUse, "token intent preserved")
+	})
+}
+
+// setSSOBFFTestJWTKeyEnv installs a PEM-encoded RSA key pair into the shared JWT
+// key env vars so a real-topology newSSOBFFJWT call loads them rather than failing
+// closed. Mirrors cmd/corebundle's setTestJWTKeyEnv. (auth.GenerateRSAKeyPair is
+// permitted here: GENERATE-RSA-KEYPAIR-FUNNEL-01 scans production files only,
+// _test.go is excluded.)
+func setSSOBFFTestJWTKeyEnv(t *testing.T) {
+	t.Helper()
+	priv, pub, err := auth.GenerateRSAKeyPair()
+	require.NoError(t, err, "generate test RSA key pair")
+	privPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(priv),
+	})
+	pubDER, err := x509.MarshalPKIXPublicKey(pub)
+	require.NoError(t, err, "marshal test public key")
+	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
+	t.Setenv(auth.EnvJWTPrivateKey, string(privPEM))
+	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
 }
 
 // TestResolveSSOBFFBootstrapCreds pins the F1 bootstrap-credential funnel: demo
