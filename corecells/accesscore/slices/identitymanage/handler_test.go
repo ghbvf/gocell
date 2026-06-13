@@ -272,7 +272,7 @@ func TestHandler(t *testing.T) {
 			method:        http.MethodGet,
 			path:          "/" + testutil.TestID("self-access-test"),
 			subject:       testutil.TestID("self-access-test"),
-			useAuthorizer: true, // PDP must be wired; self is now a baseline rule, not Go short-circuit
+			useAuthorizer: true,                // PDP must be wired; self is now a baseline rule, not Go short-circuit
 			wantStatus:    http.StatusNotFound, // authz passes (self via PDP), service returns 404
 		},
 		{

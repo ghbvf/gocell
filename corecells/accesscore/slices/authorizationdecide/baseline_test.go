@@ -284,56 +284,56 @@ func TestBuiltinBaseline_SelfOwnership(t *testing.T) {
 	}{
 		// Self-ownership: subject.sub == resource.id → Allow for each ownership action.
 		{
-			name: "owner + user:read + matching resource.id → Allow",
+			name:      "owner + user:read + matching resource.id → Allow",
 			principal: ownerPrincipal, resourceID: ownerID,
 			action: authz.PermUserRead().String(), wantAllow: true,
 		},
 		{
-			name: "owner + user:write + matching resource.id → Allow",
+			name:      "owner + user:write + matching resource.id → Allow",
 			principal: ownerPrincipal, resourceID: ownerID,
 			action: authz.PermUserWrite().String(), wantAllow: true,
 		},
 		{
-			name: "owner + role:read + matching resource.id → Allow",
+			name:      "owner + role:read + matching resource.id → Allow",
 			principal: ownerPrincipal, resourceID: ownerID,
 			action: authz.PermRoleRead().String(), wantAllow: true,
 		},
 		// Non-owner: subject.sub != resource.id → no ownership rule fires → Deny.
 		{
-			name: "non-owner + user:read → Deny (no ownership, no admin)",
+			name:      "non-owner + user:read → Deny (no ownership, no admin)",
 			principal: nonOwnerPrincipal, resourceID: ownerID,
 			action: authz.PermUserRead().String(), wantAllow: false,
 		},
 		{
-			name: "non-owner + user:write → Deny",
+			name:      "non-owner + user:write → Deny",
 			principal: nonOwnerPrincipal, resourceID: ownerID,
 			action: authz.PermUserWrite().String(), wantAllow: false,
 		},
 		{
-			name: "non-owner + role:read → Deny",
+			name:      "non-owner + role:read → Deny",
 			principal: nonOwnerPrincipal, resourceID: ownerID,
 			action: authz.PermRoleRead().String(), wantAllow: false,
 		},
 		// Admin bypass: admin role grants regardless of resource.id match.
 		{
-			name: "admin + user:read + different resource.id → Allow (admin baseline)",
+			name:      "admin + user:read + different resource.id → Allow (admin baseline)",
 			principal: adminPrincipal, resourceID: ownerID,
 			action: authz.PermUserRead().String(), wantAllow: true,
 		},
 		{
-			name: "admin + role:read + different resource.id → Allow",
+			name:      "admin + role:read + different resource.id → Allow",
 			principal: adminPrincipal, resourceID: ownerID,
 			action: authz.PermRoleRead().String(), wantAllow: true,
 		},
 		// Empty resourceID: resource.id not-found → ownership rule can't fire → Deny.
 		{
-			name: "owner subject + user:read + empty resourceID → Deny (resource.id not-found)",
+			name:      "owner subject + user:read + empty resourceID → Deny (resource.id not-found)",
 			principal: ownerPrincipal, resourceID: "",
 			action: authz.PermUserRead().String(), wantAllow: false,
 		},
 		// Ownership rules are action-scoped: config:read is NOT in the ownership set.
 		{
-			name: "owner subject + config:read + matching resource.id → Deny (not an ownership action)",
+			name:      "owner subject + config:read + matching resource.id → Deny (not an ownership action)",
 			principal: ownerPrincipal, resourceID: ownerID,
 			action: nonOwnershipAction, wantAllow: false,
 		},

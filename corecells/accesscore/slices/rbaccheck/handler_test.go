@@ -177,10 +177,10 @@ func TestHandler(t *testing.T) {
 			},
 		},
 		{
-			name:    "GET /{userID} self-access no roles returns empty",
-			path:    "/api/v1/access/roles/" + testutil.TestID("unknown-user"),
-			subject: testutil.TestID("unknown-user"),
-			ctxFn:   withAllowAuthorizer,
+			name:       "GET /{userID} self-access no roles returns empty",
+			path:       "/api/v1/access/roles/" + testutil.TestID("unknown-user"),
+			subject:    testutil.TestID("unknown-user"),
+			ctxFn:      withAllowAuthorizer,
 			wantStatus: http.StatusOK,
 			checkBody: func(t *testing.T, body []byte) {
 				var resp struct {

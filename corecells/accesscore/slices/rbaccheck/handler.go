@@ -86,11 +86,13 @@ type Handler struct {
 }
 
 // NewHandler creates an rbaccheck Handler with the generated list/check handlers.
-// Gate: self-exempt via path param userID==subject (no PDP consulted); otherwise
-// delegates to auth.RequirePermission(authz.PermRoleRead()) — the PDP baseline
-// grants admin/super-admin. Fail-closed: non-self with no Authorizer or PDP deny → 403.
+// Gate: auth.RequirePermissionForResource("userID", PermRoleRead()) forwards the
+// userID path param to the PDP as resource; the baseline ownership rule
+// (subject.sub == resource.id, #1977 Batch B) grants self-access via PDP
+// (no Go short-circuit). Admin/super-admin are granted by the admin baseline rule.
+// Fail-closed: absent Authorizer or PDP deny → 403.
 func NewHandler(svc *Service) *Handler {
-	policy := auth.RequirePermissionOrSelf("userID", authz.PermRoleRead())
+	policy := auth.RequirePermissionForResource("userID", authz.PermRoleRead())
 	return &Handler{
 		listH:  listg.NewHandler(ListAdapter{svc}, policy),
 		checkH: checkg.NewHandler(CheckAdapter{svc}, policy),
