@@ -179,9 +179,58 @@ compose wiring is sufficient.
 
 ---
 
+## Amendment 2026-06-13 — third role `gocell_audit_admin` (cross-tenant audit read, #1810)
+
+#1810 adds a THIRD deployment role for the sanctioned super-admin cross-tenant
+audit read. It is a **deliberate, bounded** addition to the dual-role model above
+and does **not** weaken the core invariant ("the serving role has no way to read
+across tenants").
+
+| Role | Used by | Attributes |
+|------|---------|-----------|
+| `gocell_audit_admin` | auditcore admin read pool (`GOCELL_AUDIT_ADMIN_DSN`) | `NOSUPERUSER`, **`NOBYPASSRLS`**, non-owner; **SELECT on `audit_entries` only** |
+
+**Why this is NOT a no-BYPASSRLS-invariant violation.** The role is itself
+`NOBYPASSRLS`. Its cross-tenant visibility comes from a **role-scoped permissive
+RLS policy** `audit_admin_read_all ON audit_entries FOR SELECT TO gocell_audit_admin
+USING (true)` (migration 064), not from the `BYPASSRLS` attribute the §Context
+threat model bans. The distinction is load-bearing:
+
+- `BYPASSRLS` disables RLS for **every table and every query** the role makes —
+  an opaque, blanket bypass invisible in `pg_policy`.
+- A role-scoped permissive policy is **explicit, auditable, and narrow**: it is a
+  row in `pg_policy` (so `schema_guard.verifyRLS` pins its exact shape), it applies
+  to **exactly one table** (`audit_entries`) and **one command** (`SELECT`), and
+  PostgreSQL still evaluates RLS for this role — the policy just evaluates to
+  `true`. The role has no INSERT/UPDATE/DELETE and no access to any other RLS table.
+
+`gocell_app`'s effective predicate and `FORCE ROW LEVEL SECURITY` are **byte-for-byte
+unchanged** — a role-listed permissive policy is invisible to other roles. An
+integration test asserts `gocell_app` still cannot read another tenant's audit rows
+after migration 064.
+
+**Provisioning.** `deploy/postgres/init/10-restricted-role.sh` also creates
+`gocell_audit_admin` (password via `GOCELL_AUDIT_ADMIN_PASSWORD`, no fallback). The
+role is **optional**: where it is not provisioned, migration 064 is a no-op
+(role-guarded) and super-admin cross-tenant reads stay fail-closed at HTTP 501. The
+admin pool is `NOBYPASSRLS`, so the existing `postgres_app_role_restricted_ready`
+probe's intent (no BYPASSRLS in the deployment) is upheld for it too; the admin
+pool contributes no `/readyz` probe of its own (close-only managed resource) to
+avoid a `postgres_ready` probe-name collision with the serving pool.
+
+**Threat-matrix re-evaluation (per ai-robust "ADR amendment 落地必查"):** the
+§Context threat (1)(2)(3) enumeration is unchanged — (3) "any role with BYPASSRLS"
+still bans BYPASSRLS, and `gocell_audit_admin` is NOBYPASSRLS, so it is outside
+that threat by construction. The new privileged read is contained to one table /
+one command on a separate role, gated upstream by the Hard sealed
+`tenant.CrossTenantVisibility` funnel (#1760) + the mandatory FR-007 audit. See ADR
+`202606071300-1618` Amendment 2026-06-13 and ADR
+`202606131900-1810-adr-super-admin-cross-tenant-audit-read`.
+
 ## References
 
 - `deploy/postgres/init/10-restricted-role.sh` — role-creation initdb script
+- ADR `202606071300-1618` Amendment 2026-06-13 + ADR `202606131900-1810` — cross-tenant audit read (#1810)
 - `docs/ops/readyz.md` §Adapter-level: serving-role capability probe
 - `docs/ops/local-docker-deploy.md` §Dual-role PostgreSQL
 - `docs/ops/alerting-rules.md` §GoCellPostgresAppRoleNotRestricted
