@@ -15,4 +15,10 @@ LABEL org.opencontainers.image.source="https://github.com/ghbvf/gocell" \
 # goreleaser copies the platform-matched binary into the build context root.
 COPY gocell /gocell
 
+# distroless:nonroot already defaults to the nonroot user (uid 65532), but make
+# it explicit so the image never runs as root regardless of base-image drift and
+# so static scanners (Semgrep dockerfile.security.missing-user-entrypoint, a
+# blocking gate) can verify non-root from the Dockerfile alone.
+USER nonroot:nonroot
+
 ENTRYPOINT ["/gocell"]
