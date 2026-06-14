@@ -1,80 +1,60 @@
-// Package percellpg is the topology-gated single source for the per-cell
-// postgres pool that a colocated composition root provisions. It is the
-// postgres-pool sibling of cellmodules/eventtransport.Resolve (event transport),
-// cellmodules/replaydeps.Resolve (consumer claimer + service-token nonce), and
-// cellmodules/sagaprojectiondeps.Resolve (saga-journal projection dependencies):
-// one Resolve maps a bootstrap.Topology to the correct PG backend, so a
-// composition root never hard-codes a pool constructor.
+// Package percellpg is the topology-gated single source for the per-cell postgres
+// DSN decision a colocated composition root provisions its pool from. It is the
+// per-cell-DSN sibling of cellmodules/eventtransport.Resolve, replaydeps.Resolve,
+// and sagaprojectiondeps.Resolve — but it is a PURE decision function: it performs
+// NO I/O and constructs NO adapter primitives.
+//
+// # Why pure (construction stays in cmd/corebundle/cap_wiring.go)
+//
+// The banned shared-infra constructors (adapterpg.NewPool / NewTxManager /
+// NewJournalingOutboxWriter) must stay in the single sanctioned cmd/ provisioning
+// site so the cmd/-scoped machine guards keep covering them:
+//   - CAPABILITY-PROVIDER-FUNNEL-01 (bans those constructors outside cap_wiring.go), and
+//   - PROJECTION-EVENT-JOURNAL-TOPIC-ALLOWLIST-DERIVED-01 (requires NewJournalingOutboxWriter
+//     to take the direct generatedProjectionSourceTopics() accessor, not a threaded variable).
+//
+// Moving construction into cellmodules/percellpg would silently take it out of both
+// guards' cmd/-only scan — so this package only DECIDES the agreed DSN config;
+// cap_wiring.go opens the pool, verifies schema, builds the journaling writer with
+// the direct accessor, and wraps the capability.PGProvider.
 //
 // # Backend selection
 //
 //	memory topology (topo.StorageBackend() != postgres):
-//	  No pool is opened. Resolve returns empty Deps (nil Provider, no Resources).
-//	  Cell modules fall through to their in-memory storage path.
+//	  Resolve returns (zero, ok=false, nil) — no pool. Cell modules take their
+//	  in-memory storage path.
 //
 //	postgres topology:
-//	  A single deduped pool is opened, verified, and wrapped into a sealed
-//	  capability.PGProvider. The pool is returned as a lifecycle.ManagedResource
-//	  so the composition root registers it first (LIFO: closed last, after every
-//	  PG consumer — relay, cell workers, tx).
+//	  Resolve returns (agreedConfig, ok=true, nil) — the single deduped DSN config
+//	  cap_wiring.go opens the assembly's one shared pool from.
 //
 // # Dedup-by-DSN invariant
 //
 // Colocated assemblies share one physical database: all postgres cells must be
 // configured with the SAME DSN (GOCELL_<CELLID>_DATABASE_URL). Resolve deduplicates
-// by strings.TrimSpace(DSN) and opens exactly ONE pool, preserving today's
-// shared-pool behavior while introducing per-cell DSN injection.
+// by strings.TrimSpace(DSN) and yields exactly one agreed config, preserving today's
+// shared-pool behavior while making per-cell DSN injection explicit.
 //
 // # Pool knobs in colocated mode
 //
-// In colocated/dedup mode (all cells share the same DSN) the shared pool's
-// connection knobs (MaxConns / IdleTimeout / MaxLifetime) are taken from
-// cellIDs[0] — the alphabetically-first postgres cell after sort.Strings. With
-// the current platform cells (accesscore / auditcore / configcore) that is
-// always accesscore (a < au < c). Operators MUST set the pool knobs identically
-// across all postgres cells' DATABASE_* vars; only the accesscore knobs are
-// applied to the shared pool and the others are silently ignored in colocated
-// mode. Per-cell pool-knob isolation is split-topology territory (#2152).
+// The agreed config is the alphabetically-first cell's Config (cellIDs[0] after
+// sort.Strings), so its pool knobs (MaxConns / IdleTimeout / MaxLifetime) configure
+// the shared pool. With the current platform cells that is always accesscore
+// (a < au < c). Operators MUST set the pool knobs identically across all postgres
+// cells' DATABASE_* vars — only the first cell's knobs are applied in colocated mode.
+// Per-cell pool-knob isolation is split-topology territory (#2152).
 //
-// # Fail-closed invariants
+// # Fail-closed invariants (the three gates)
 //
-//   - A postgres-requiring cell whose DSN is empty (or whitespace-only) is a
-//     startup error. The message names the cell ID and the expected env var
-//     (GOCELL_<CELLID>_DATABASE_URL). Never a silent fallback — sharing another
-//     cell's pool without operator intent would bypass per-cell credential isolation.
+//   - Empty cell set in postgres topology — a misconfiguration, fail-closed (also
+//     guards the cellIDs[0] index from panicking on an empty map).
+//   - A postgres-requiring cell whose DSN is empty (or whitespace-only) — fail-closed;
+//     the diagnostic carries the cell ID and expected env var. Never a silent fallback.
+//   - Per-cell distinct DSNs (>1 distinct after dedup) — fail-closed, pointing to the
+//     split-topology backlog (US4 #1963 / #2152, per-cell outbox relay fan-out).
 //
-//   - Per-cell distinct DSNs (>1 distinct after dedup) are a startup error pointing
-//     to the split-topology backlog (US4 #1963, per-cell outbox relay fan-out).
-//     Colocated assemblies must set all per-cell DATABASE_URLs to the same value.
-//
-// # CAPABILITY-PROVIDER-FUNNEL-01 (pool construction site)
-//
-// Primary pool construction lives here in cellmodules/percellpg, not in
-// cmd/corebundle/cap_wiring.go. Cellmodules is the Composition Root layer
-// (trusted; may import all layers) and is the same class as the auditcore admin
-// pool and sagaprojectiondeps' NewTxManager. The cmd-only CAPABILITY-PROVIDER-FUNNEL-01
-// scan (archtest) bans direct adapter constructor calls in cmd/ files outside the
-// sanctioned cap_wiring.go site; percellpg is intentionally outside that scan's
-// cmd/-only scope. The upstream Hard guard is the sealed capability.PGProvider
-// (unexported marker isPGProvider + sole NewPGProvider constructor in
-// runtime/capability), which makes the provider unforgeable outside package capability.
-// The downstream archtest scan + cmd-only ban serve as defense-in-depth for any
-// residual cmd/-level direct construction.
-//
-// # Blind spots
-//
-// Per ai-robust.md "Funnel 类约束必须分别说明上游和下游强度":
-//
-// Downstream (archtest, cmd/-only scan): the CAPABILITY-PROVIDER-FUNNEL-01 scan
-// covers cmd/... and flags direct adapterpg.NewPool / NewTxManager / NewOutboxWriter /
-// NewJournalingOutboxWriter calls outside cap_wiring.go. percellpg is in cellmodules/,
-// which is intentionally outside the cmd/-only scan — same class as sagaprojectiondeps.
-//
-// Upstream (sealed type, Hard): capability.PGProvider is unforgeable outside
-// package capability. A cellmodules package that calls adapterpg.NewPool directly
-// (outside percellpg) bypasses the dedup gate but not the sealed type: the composed
-// bootstrap still requires a capability.PGProvider, so a second raw pool would have
-// no injection path. The per-cell dedup invariant is therefore the primary new
-// behavioral gate; pool-construction multiplicity is a known accepted blind spot
-// (same posture as sagaprojectiondeps § "upstream empirical absence").
+// Being pure, all three gates plus the success/memory branches are exhaustively
+// unit-tested (no live database needed). The pool-open + schema-verify I/O that
+// cap_wiring.go runs from the agreed config is covered by the real-PG integration
+// test cmd/corebundle/corebundle_pg_env_integration_test.go.
 package percellpg

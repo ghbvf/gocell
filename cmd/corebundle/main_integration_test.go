@@ -116,8 +116,9 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMismatch(t *testing.T) {
 	require.NoError(t, execErr, "deleting version records must succeed")
 	_ = pool.Close(ctx)
 
-	// Drive the full env→provision path on the lagged DB; percellpg.Resolve opens
-	// its own pool and runs verifyPGPreconditions, which must fail-closed.
+	// Drive the full env→provision path on the lagged DB; provisionPostgres opens
+	// the pool (from the percellpg-agreed DSN) and runs verifyPGPreconditions,
+	// which must fail-closed.
 	setRealModeEnv(t, dsn)
 	shared, locals, err := LoadSharedDepsFromEnv(ctx)
 	require.NoError(t, err, "LoadSharedDepsFromEnv must succeed")

@@ -9,6 +9,8 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cellmodules/percellpg"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/migration"
+	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 	"github.com/ghbvf/gocell/framework/runtime/capability"
 	"github.com/ghbvf/gocell/framework/runtime/composition"
 )
@@ -22,11 +24,11 @@ import (
 // the injected provider (shared.PG / shared.Redis) and never construct adapter
 // primitives themselves.
 //
-// Postgres provisioning now delegates to cellmodules/percellpg.Resolve, which
-// handles per-cell DSN resolution, dedup-by-DSN, fail-closed gates, pool
-// construction, schema verification, and provider wrapping. This file remains the
-// sole sanctioned caller entry point in cmd/ (CAPABILITY-PROVIDER-FUNNEL-01
-// downstream allowlist); the actual adapter constructors moved to percellpg.
+// Postgres per-cell DSN resolution (dedup-by-DSN + fail-closed gates) is decided
+// by cellmodules/percellpg.Resolve, but the adapter construction (pool, TxManager,
+// journaling outbox writer, capability.PGProvider) stays HERE — this file remains
+// the single sanctioned shared-infra provisioning site in cmd/
+// (CAPABILITY-PROVIDER-FUNNEL-01 + PROJECTION-EVENT-JOURNAL-TOPIC-ALLOWLIST-DERIVED-01).
 //
 // Called from runCorebundle after LoadSharedDepsFromEnv and before composition.Builder.Build
 // so the providers are present (or fail-fast) before any module.Provide runs —
@@ -62,49 +64,94 @@ func provisionCapabilities(ctx context.Context, shared *composition.SharedDeps, 
 	return nil
 }
 
-// provisionPostgres delegates postgres pool provisioning to cellmodules/percellpg.Resolve.
-// It builds a percellpg.Config by iterating generatedPostgresCells() (single source:
-// cell IDs whose cell.yaml requires postgres, derived by codegen) and loading each
-// cell's per-cell DSN from the environment via LoadPGConfig. The resolver handles
-// dedup-by-DSN, fail-closed gates (missing DSN, distinct DSNs), pool construction,
-// schema/shape/index verification, and capability.PGProvider wrapping.
+// provisionPostgres opens the assembly's single serving pool from the per-cell
+// DSN agreed by cellmodules/percellpg.Resolve. percellpg owns the per-cell DSN
+// decision (dedup-by-DSN + fail-closed gates: empty cell set, missing DSN, >1
+// distinct DSN); this site owns the actual adapter construction — pool, schema
+// verification, the journaling outbox writer, and the capability.PGProvider —
+// because the banned shared-infra constructors (NewPool / NewTxManager /
+// NewJournalingOutboxWriter) must stay in the single sanctioned cmd/ site that
+// CAPABILITY-PROVIDER-FUNNEL-01 and PROJECTION-EVENT-JOURNAL-TOPIC-ALLOWLIST-
+// DERIVED-01 cover.
 //
-// In memory topology the resolver returns empty Deps and shared.PG stays nil;
-// cell modules fall through to their in-memory storage path.
-//
-// The decorator's topic argument MUST stay the direct generatedProjectionSourceTopics()
-// call (PROJECTION-EVENT-JOURNAL-TOPIC-ALLOWLIST-DERIVED-01 rejects a threaded
-// variable, which could hide a hand-typed list).
+// The topology gate runs FIRST — before reading any per-cell PG env — so memory
+// mode is never blocked by an unused / malformed GOCELL_<CELL>_DATABASE_* knob.
+// In memory topology shared.PG stays nil and cell modules take their in-memory path.
 func provisionPostgres(ctx context.Context, shared *composition.SharedDeps, locals *cmdLocals) error {
+	if shared.Topology.StorageBackend() != bootstrap.StorageBackendPostgres {
+		return nil
+	}
+
 	cells := make(map[string]adapterpg.Config, len(generatedPostgresCells()))
 	for _, cellID := range generatedPostgresCells() {
 		pgCfg, err := LoadPGConfig(strings.ToUpper(cellID))
 		if err != nil {
-			return fmt.Errorf("percellpg: load config for cell %s: %w", cellID, err)
+			return fmt.Errorf("corebundle: load PG config for cell %s: %w", cellID, err)
 		}
 		cells[cellID] = pgCfg
+	}
+
+	agreed, ok, err := percellpg.Resolve(shared.Topology, percellpg.Config{
+		Cells:                 cells,
+		RequireRestrictedRole: true,
+	})
+	if err != nil {
+		return err
+	}
+	if !ok {
+		// Defensive: topology was already gated above, so postgres topology always
+		// yields ok=true here. Belt-and-suspenders against a future gate drift.
+		return nil
+	}
+
+	pool, err := adapterpg.NewPool(ctx, agreed)
+	if err != nil {
+		return fmt.Errorf("corebundle: open assembly PG pool: %w", err)
+	}
+	if vErr := verifyPGPreconditions(ctx, pool); vErr != nil {
+		_ = pool.Close(ctx) // no leak on verify error
+		return vErr
 	}
 
 	// Surface the wired topic-set size so operators can distinguish "journal inactive
 	// because no projections are declared" (count 0, expected today) from a wiring
 	// regression — the durable journal otherwise gives no startup signal (#1504 PR-02).
+	// The decorator's topic argument MUST stay the direct generatedProjectionSourceTopics()
+	// call (PROJECTION-EVENT-JOURNAL-TOPIC-ALLOWLIST-DERIVED-01 rejects a threaded
+	// variable, which could hide a hand-typed list).
 	slog.InfoContext(ctx, "corebundle: journaling outbox writer wired",
 		slog.Int("projection_source_topic_count", len(generatedProjectionSourceTopics())))
+	writer := adapterpg.NewJournalingOutboxWriter(adapterpg.NewOutboxWriter(shared.Clock), generatedProjectionSourceTopics())
 
-	deps, err := percellpg.Resolve(ctx, shared.Clock, shared.Topology, percellpg.Config{
-		Cells:                  cells,
-		ProjectionSourceTopics: generatedProjectionSourceTopics(),
-		RequireRestrictedRole:  true,
-	})
-	if err != nil {
+	shared.PG = capability.NewPGProvider(adapterpg.NewTxManager(pool), writer, pool.DB())
+	locals.poolMR = pool
+	return nil
+}
+
+// verifyPGPreconditions runs the three assembly-wide PG fail-fast checks in order.
+// Caller owns pool lifecycle; on error the caller must close the pool.
+func verifyPGPreconditions(ctx context.Context, pool *adapterpg.Pool) error {
+	if err := verifyConfigCorePGSchema(ctx, pool); err != nil {
 		return err
 	}
-
-	if deps.Provider != nil {
-		shared.PG = deps.Provider
+	// S3+S5: column-existence fail-fast catches partial migrations.
+	if err := adapterpg.VerifyExpectedShape(ctx, pool); err != nil {
+		return fmt.Errorf("corebundle PG schema shape: %w", err)
 	}
-	if len(deps.Resources) > 0 {
-		locals.poolMR = deps.Resources[0]
+	// B2-X-03: operators must DROP INVALID indexes manually before start.
+	if err := adapterpg.VerifyNoInvalidIndexes(ctx, pool); err != nil {
+		return fmt.Errorf("corebundle PG invalid indexes: %w", err)
+	}
+	return nil
+}
+
+func verifyConfigCorePGSchema(ctx context.Context, pool *adapterpg.Pool) error {
+	migrationsFS, err := adapterpg.MigrationsFS()
+	if err != nil {
+		return fmt.Errorf("corebundle PG migrations fs: %w", err)
+	}
+	if err := adapterpg.VerifyExpectedVersion(ctx, pool, migrationsFS, migration.PlatformNamespace); err != nil {
+		return fmt.Errorf("corebundle PG schema guard: %w", err)
 	}
 	return nil
 }
