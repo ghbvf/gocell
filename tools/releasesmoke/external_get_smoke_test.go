@@ -153,7 +153,7 @@ func TestExternalGet_AllPublishable_Build(t *testing.T) {
 // version resolution of exactly the modules the bump rewrites, without dragging
 // in the root module's external universe. The local replace is PRESERVED to prove
 // Go ignores a dependency's replace (the OTel-canonical shape).
-func buildProxy(t *testing.T, root, version string, omit ...string) string { //nolint:unparam // one synthetic publish version by design
+func buildProxy(t *testing.T, root, version string, omit ...string) string { //nolint:unparam // R2-approved: synthetic version by design
 	t.Helper()
 	prefix, err := gomodutil.ReadModulePath(root)
 	if err != nil {
