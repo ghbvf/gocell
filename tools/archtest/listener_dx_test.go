@@ -9,8 +9,13 @@ package archtest
 //   - production Go must not reintroduce deleted listener option APIs;
 //   - production Go must not reintroduce the old auth.Route Delegated surface;
 //   - owner API signatures for RouteGroup.Register and auth.Mount stay aligned;
-//   - active docs/godoc must not show old listener APIs, Delegated examples, or
-//     the legacy single-mux route registration surface.
+//   - active docs/godoc must not show old listener APIs, the deleted auth.Route
+//     Delegated surface in its Go-syntax forms (`Delegated:` / `.Delegated` /
+//     `WithDelegatedMatcher`), or the legacy single-mux route registration
+//     surface. The bare English word "delegated" is NOT forbidden — "delegated
+//     ownership" is live ABAC vocabulary (see .claude/rules/gocell/tenancy.md);
+//     only the deleted Go surface is. TestListenerDXA52DocTermFixture is the
+//     RED/GREEN anti-vacuity proof for this distinction.
 //
 // Historical provenance remains allowed in docs/plans/**,
 // docs/reviews/**, docs/archive/**, and CHANGELOG.md.
@@ -56,7 +61,16 @@ var activeDocForbiddenTerms = []string{
 	"WithHTTPInternalAddr",
 	"WithPrimaryListener",
 	"WithInternalListener",
-	"Delegated",
+	// The deleted auth.Route Delegated surface is matched by its Go-syntax forms
+	// only: the composite-literal key (auth.Route{Delegated: ...}), a field access
+	// (route.Delegated), and the deleted helper (WithDelegatedMatcher). We
+	// deliberately do NOT forbid the bare word "Delegated": "delegated ownership"
+	// is live ABAC vocabulary (.claude/rules/gocell/tenancy.md, ADR
+	// 202606121400-1348) and a case-sensitive substring false-positives on that
+	// prose. Anti-vacuity proof: TestListenerDXA52DocTermFixture.
+	"Delegated:",
+	".Delegated",
+	"WithDelegatedMatcher",
 }
 
 var productionForbiddenSurfaceTerms = []string{
@@ -383,15 +397,11 @@ func activeDocTermViolations(t *testing.T, root, path string) []string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Clean(path))
 	require.NoError(t, err)
-	lines := strings.Split(string(data), "\n")
 	var violations []string
-	terms := listenerDXForbiddenDocTerms()
-	for i, line := range lines {
-		for _, term := range terms {
-			if strings.Contains(line, term) {
-				violations = append(violations, listenerDXViolation(root, path, i+1,
-					fmt.Sprintf("active docs/godoc contains %q", term)))
-			}
+	for i, line := range strings.Split(string(data), "\n") {
+		for _, term := range listenerDXLineForbiddenTerms(line) {
+			violations = append(violations, listenerDXViolation(root, path, i+1,
+				fmt.Sprintf("active docs/godoc contains %q", term)))
 		}
 	}
 	return violations
@@ -407,14 +417,10 @@ func activeDocTermViolationsFromFile(p *Pass, file *ast.File) []string {
 	if err != nil {
 		return []string{fmt.Sprintf("%s:0: cannot read file: %v", rel, err)}
 	}
-	lines := strings.Split(string(data), "\n")
 	var violations []string
-	terms := listenerDXForbiddenDocTerms()
-	for i, line := range lines {
-		for _, term := range terms {
-			if strings.Contains(line, term) {
-				violations = append(violations, fmt.Sprintf("%s:%d: active docs/godoc contains %q", rel, i+1, term))
-			}
+	for i, line := range strings.Split(string(data), "\n") {
+		for _, term := range listenerDXLineForbiddenTerms(line) {
+			violations = append(violations, fmt.Sprintf("%s:%d: active docs/godoc contains %q", rel, i+1, term))
 		}
 	}
 	return violations
@@ -424,14 +430,11 @@ func activeDocTermViolationsFromFile(p *Pass, file *ast.File) []string {
 // for forbidden terms. Run parses with ParseComments so file.Comments is populated.
 func activeGoCommentTermViolationsPass(p *Pass, file *ast.File) []string {
 	var violations []string
-	terms := listenerDXForbiddenDocTerms()
 	for _, group := range file.Comments {
 		for _, comment := range group.List {
-			for _, term := range terms {
-				if strings.Contains(comment.Text, term) {
-					violations = append(violations, fmt.Sprintf("%s:%d: active godoc/comment contains %q",
-						p.Rel(file), p.Fset.Position(comment.Pos()).Line, term))
-				}
+			for _, term := range listenerDXLineForbiddenTerms(comment.Text) {
+				violations = append(violations, fmt.Sprintf("%s:%d: active godoc/comment contains %q",
+					p.Rel(file), p.Fset.Position(comment.Pos()).Line, term))
 			}
 		}
 	}
