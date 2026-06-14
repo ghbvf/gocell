@@ -88,7 +88,21 @@ production 代码（`cmd/corebundle/secrets.go:30`）可以直接调用，且编
 - `runtime/audit/ledger/storetest/`
 - `cells/internal/testoutbox/`
 
-**D1 总结：除上述三类外，production 路径（`kernel/` `runtime/` `adapters/` `cells/`
+**(c) 子情形：无法物理隔离的 test fixture（依赖生产包的包私有状态）**
+
+少数 test fixture 必须**导出于生产包本体**——因为它依赖该包的**包私有状态**（私有 seal /
+私有 mint），而跨包 `_test.go` 调用方又够不到包私有符号，故无法迁入上述任一 test-fixture 子包。
+这类 fixture 以 `(modulePath, funcName)` 形式登记进 `allowedMustDecls` carve-out（而非靠包前缀豁免），
+其 **production caller ban 由专用 companion archtest 承载**。当前唯一实例：
+
+- `runtime/auth.MustNewTestDevicePrincipal`：伪造 sealed device principal 供跨 cell handler /
+  集成测试用，依赖未导出的 `mintDevicePrincipal` seal（PR #1898 起 `Principal.RowVisibility` 对
+  无 seal 的 device principal fail-close），无法迁包；production 调用方由
+  `NO-TEST-DEVICE-PRINCIPAL-IN-PRODUCTION-01`（AST 全扫，更高执行高度）禁止。与
+  `runtime/auth/keystest`（可迁包的 RSA key fixture）形成对照：能隔离的迁包，依赖包私有 seal 的
+  留本体 + carve-out + companion ban。
+
+**D1 总结：除上述三类（含 (c) 子情形）外，production 路径（`kernel/` `runtime/` `adapters/` `cells/`
 `cmd/` `examples/` 非 `_test.go` 非 test 子包）禁止声明或调用 `Must*` 真构造器。**
 
 另有一处内部 validator 豁免，详见 §carve-out registry。
@@ -289,6 +303,7 @@ system 表达"function name 必须有 receiver"。
 | `pkgErrcode` | `MustValidateDetailsKinds` | assertion guard | details kind 合法性，pkg-level var init |
 | `pkgAppender` | `MustNewSpec` | codegen funnel | sealed 白名单 funnel，pkg-level var init |
 | `pkgWebsocketHub` | `MustValidateHubConfig` | 内部 validator | `NewHub` 内部调用，不暴露为跨包 callee |
+| `runtime/auth` | `MustNewTestDevicePrincipal` | (c) test fixture（非隔离子情形） | 伪造 sealed device principal 供跨 cell handler/集成测试；依赖未导出 `mintDevicePrincipal` seal 无法迁包，production caller 由 `NO-TEST-DEVICE-PRINCIPAL-IN-PRODUCTION-01` 守卫（#2115） |
 | ~~`runtime/audit/ledger`~~ | ~~`MustTamperEntryHash`~~ | ~~(c) test fixture method on MemStore~~ | **REMOVED (A-05 refactor)**: relocated to `ledger/mem_store_tamper_test.go` as unexported `tamperEntryHash`; negative Verify tests moved from `storetest/suite.go` to same-package `_test.go`; carve-out entry deleted from archtest `allowedMustDecls`. |
 | ~~`runtime/audit/ledger`~~ | ~~`MustTamperEntryPrevHash`~~ | ~~(c) test fixture method on MemStore~~ | **REMOVED (A-05 refactor)**: same as above; unexported `tamperEntryPrevHash` in `_test.go`. |
 
