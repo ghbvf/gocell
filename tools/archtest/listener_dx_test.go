@@ -32,6 +32,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// ruleListenerDXA52 labels assertion failures with the A52 batch id. The file's
+// registered invariant is LISTENER-DX-01 (see the INVARIANT header above); both
+// ids resolve to this file via `grep -rn`.
 const ruleListenerDXA52 = "LISTENER-DX-A52"
 
 var oldListenerAPIIdents = map[string]struct{}{
@@ -441,12 +444,15 @@ func activeGoCommentTermViolationsPass(p *Pass, file *ast.File) []string {
 	return violations
 }
 
-func listenerDXForbiddenDocTerms() []string {
-	terms := make([]string, 0, len(activeDocForbiddenTerms)+len(oldRouteSurfaceDocTerms))
-	terms = append(terms, activeDocForbiddenTerms...)
-	terms = append(terms, oldRouteSurfaceDocTerms...)
-	return terms
-}
+// listenerDXForbiddenDocTerms is the single combined term set forbidden in
+// active docs/godoc: the active-doc listener/route terms plus the legacy
+// single-mux route-surface terms. Computed once at package init. Do NOT scan
+// against the two source vars directly — listenerDXLineForbiddenTerms is the
+// sole per-line entry point, so the anti-vacuity fixture covers every term.
+var listenerDXForbiddenDocTerms = append(
+	append([]string{}, activeDocForbiddenTerms...),
+	oldRouteSurfaceDocTerms...,
+)
 
 func listenerDXViolation(root, path string, line int, msg string) string {
 	rel, err := filepath.Rel(root, path)
@@ -462,7 +468,7 @@ func listenerDXViolation(root, path string, line int, msg string) string {
 // TestListenerDXA52DocTermFixture apply uniformly across all three doc surfaces.
 func listenerDXLineForbiddenTerms(line string) []string {
 	var hits []string
-	for _, term := range listenerDXForbiddenDocTerms() {
+	for _, term := range listenerDXForbiddenDocTerms {
 		if strings.Contains(line, term) {
 			hits = append(hits, term)
 		}
@@ -511,4 +517,20 @@ func TestListenerDXA52DocTermFixture(t *testing.T) {
 				"%s: legitimate prose %q must not be flagged", ruleListenerDXA52, tc.line)
 		})
 	}
+
+	// Mechanical anti-vacuity over the WHOLE term set (not just the Delegated
+	// forms above): every forbidden term must be reachable via the shared matcher,
+	// and none may be empty (an empty term matches every line). Self-maintaining —
+	// a newly added term is auto-covered, so the matcher can never silently drop a
+	// source list or admit a vacuous term.
+	t.Run("every_term_is_live", func(t *testing.T) {
+		require.NotEmpty(t, listenerDXForbiddenDocTerms, "%s: forbidden term set is empty", ruleListenerDXA52)
+		for _, term := range listenerDXForbiddenDocTerms {
+			require.NotEmpty(t, term,
+				"%s: an empty forbidden term would flag every line", ruleListenerDXA52)
+			probe := "doc text mentioning " + term + " inline"
+			assert.NotEmpty(t, listenerDXLineForbiddenTerms(probe),
+				"%s: forbidden term %q is unreachable via the shared matcher", ruleListenerDXA52, term)
+		}
+	})
 }
