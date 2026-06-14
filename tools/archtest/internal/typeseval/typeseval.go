@@ -216,6 +216,23 @@ func workspacePatternGroups(root string, patterns []string) ([]patternGroup, []s
 	if err != nil {
 		return nil, nil, false
 	}
+	// Expand satellite parent-prefixes ("./cmd/...", "./adapters/...",
+	// "./examples/...") that span multiple members into their per-member patterns
+	// so the satellite packages are ACTUALLY scanned. Without this a pattern no
+	// single member owns hits splitWorkspacePattern's skip and match-zeroes —
+	// silently dropping the ./cmd/… ./adapters/… ./examples/… coverage that
+	// security/governance archtest rules declare over those satellites (#1565
+	// fidelity, F5). A prefix with zero members under it still falls through to
+	// the skip (genuine match-zero).
+	expanded := make([]string, 0, len(patterns))
+	for _, p := range patterns {
+		if parts, ok := workspace.ExpandParentPrefix(mods, p); ok {
+			expanded = append(expanded, parts...)
+		} else {
+			expanded = append(expanded, p)
+		}
+	}
+	patterns = expanded
 	groups := make([]patternGroup, 0, len(mods))
 	groupByDir := map[string]int{}
 	add := func(dir, pattern string) {
@@ -253,10 +270,14 @@ func workspacePatternGroups(root string, patterns []string) ([]patternGroup, []s
 const frameworkModuleDir = "framework"
 
 // skipPatternDir is the sentinel member-dir splitWorkspacePattern returns for a
-// root-relative parent prefix that no workspace member owns (e.g. "./cmd/...",
-// "./adapters/..."). workspacePatternGroups drops such patterns so they match-zero
-// — reproducing the pre-#1565 root module's match-zero of satellite subtrees. The
-// NUL byte cannot occur in a real dir, so it is unambiguous.
+// root-relative parent prefix that no workspace member owns AND that has no member
+// living under it — a genuine empty match (e.g. a typo "./nonexistent/..."). Real
+// multi-member satellite prefixes ("./cmd/...", "./adapters/...", "./examples/...")
+// are expanded to their members by workspacePatternGroups BEFORE split is called
+// (workspace.ExpandParentPrefix), so they are actually scanned, never silently
+// skipped (F5, SATELLITE-PARENT-PREFIX-SCAN-01). workspacePatternGroups drops a
+// skipPatternDir pattern so it match-zeroes. The NUL byte cannot occur in a real
+// dir, so it is unambiguous.
 const skipPatternDir = "\x00skip-no-member"
 
 func splitWorkspacePattern(mods []workspace.Module, pattern string) (string, string) {
@@ -270,18 +291,18 @@ func splitWorkspacePattern(mods []workspace.Module, pattern string) (string, str
 	if dir, modulePattern, ok := matchWorkspaceMember(mods, pattern); ok {
 		return dir, modulePattern
 	}
-	// No member matched a root-relative parent prefix like "./cmd/..." /
-	// "./adapters/..." / "./examples/..." (prodscan.Patterns lists these for the
-	// platform scan's coverage symmetry). Pre-#1565 they match-zeroed under the root
-	// module's ModeModule load — their packages live in separate satellite modules.
-	// Post-#1565 there is no root module to anchor them and no framework subtree named
-	// cmd/adapters to match-zero against, so signal SKIP: workspacePatternGroups drops
-	// the pattern entirely (→ match-zero), reproducing the base scope. A member that
-	// matched but whose subdir is missing (e.g. "./tools/.../nonexistent/...") took the
-	// matched branch above and is NOT skipped — it loads and surfaces a packages.Error,
-	// preserving typo diagnostics. Only skip when a framework core member exists (the
-	// real post-#1565 workspace); a synthetic single-module set falls through to the
-	// root-anchored (".") form so its in-module subtrees still load.
+	// No member matched a root-relative parent prefix. Multi-member satellite
+	// prefixes ("./cmd/...", "./adapters/...", "./examples/...") are already expanded
+	// to their owning members upstream in workspacePatternGroups
+	// (workspace.ExpandParentPrefix), so they are scanned, not skipped (F5). Reaching
+	// here means the prefix has NO member under it at all — a genuine empty match
+	// (e.g. a typo "./nonexistent/..."). Signal SKIP: workspacePatternGroups drops the
+	// pattern entirely (→ match-zero). A member that matched but whose subdir is
+	// missing (e.g. "./tools/.../nonexistent/...") took the matched branch above and is
+	// NOT skipped — it loads and surfaces a packages.Error, preserving typo
+	// diagnostics. Only skip when a framework core member exists (the real post-#1565
+	// workspace); a synthetic single-module set falls through to the root-anchored
+	// (".") form so its in-module subtrees still load.
 	if strings.HasPrefix(pattern, "./") && hasFrameworkMember(mods) {
 		return skipPatternDir, ""
 	}

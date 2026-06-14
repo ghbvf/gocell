@@ -284,3 +284,90 @@ func TestModules_ManifestSymlinkEscape(t *testing.T) {
 		t.Fatalf("Modules() error = %q, want root-confinement signal %q", err.Error(), "escapes")
 	}
 }
+
+func TestExpandParentPrefix(t *testing.T) {
+	// A representative post-#1565 member set: cmd/ and adapters/ each span
+	// multiple members; framework is a single top-level member.
+	mods := []workspace.Module{
+		{Dir: "framework", ImportPath: "github.com/ghbvf/gocell/framework"},
+		{Dir: "cmd/gocell", ImportPath: "github.com/ghbvf/gocell/cmd/gocell"},
+		{Dir: "cmd/corebundle", ImportPath: "github.com/ghbvf/gocell/cmd/corebundle"},
+		{Dir: "adapters/postgres", ImportPath: "github.com/ghbvf/gocell/adapters/postgres"},
+		{Dir: "adapters/redis", ImportPath: "github.com/ghbvf/gocell/adapters/redis"},
+	}
+	tests := []struct {
+		name    string
+		mods    []workspace.Module
+		pattern string
+		want    []string
+		wantOK  bool
+	}{
+		{
+			name:    "multi-member cmd prefix expands to each member",
+			mods:    mods,
+			pattern: "./cmd/...",
+			want:    []string{"./cmd/corebundle/...", "./cmd/gocell/..."},
+			wantOK:  true,
+		},
+		{
+			name:    "multi-member adapters prefix expands and sorts",
+			mods:    mods,
+			pattern: "./adapters/...",
+			want:    []string{"./adapters/postgres/...", "./adapters/redis/..."},
+			wantOK:  true,
+		},
+		{
+			// framework is a single member that OWNS the dir exactly — the
+			// caller's normal single-member resolution must handle it, not us.
+			name:    "single owning member is not expanded",
+			mods:    mods,
+			pattern: "./framework/...",
+			wantOK:  false,
+		},
+		{
+			// A subpath UNDER a single member (framework/kernel) is owned by that
+			// member; no member lives strictly under "framework/kernel".
+			name:    "subpath under a single member is not expanded",
+			mods:    mods,
+			pattern: "./framework/kernel/...",
+			wantOK:  false,
+		},
+		{
+			name:    "prefix with no member under it match-zeroes (not expanded)",
+			mods:    mods,
+			pattern: "./examples/...",
+			wantOK:  false,
+		},
+		{
+			// Single-module fixture: the sole "." member owns nothing under a
+			// subdir, so "./cmd/..." stays verbatim (loads in the one module).
+			name:    "single-module fixture leaves pattern verbatim",
+			mods:    []workspace.Module{{Dir: ".", ImportPath: "github.com/acme/app"}},
+			pattern: "./cmd/...",
+			wantOK:  false,
+		},
+		{
+			name:    "non-recursive pattern is not expanded",
+			mods:    mods,
+			pattern: "./cmd/gocell",
+			wantOK:  false,
+		},
+		{
+			name:    "bare-root recursive pattern is not expanded",
+			mods:    mods,
+			pattern: "./...",
+			wantOK:  false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := workspace.ExpandParentPrefix(tc.mods, tc.pattern)
+			if ok != tc.wantOK {
+				t.Fatalf("ExpandParentPrefix(%q) ok = %v, want %v (got %v)", tc.pattern, ok, tc.wantOK, got)
+			}
+			if tc.wantOK && !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("ExpandParentPrefix(%q) = %v, want %v", tc.pattern, got, tc.want)
+			}
+		})
+	}
+}

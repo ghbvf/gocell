@@ -161,6 +161,55 @@ func Modules(root string) ([]Module, error) {
 	return mods, nil
 }
 
+// ExpandParentPrefix expands a root-relative parent-prefix package pattern that
+// spans MULTIPLE workspace members — e.g. "./cmd/...", "./adapters/...",
+// "./examples/..." — into one "./<member-dir>/..." pattern per member living
+// strictly under that prefix dir (cmd/ holds cmd/gocell + cmd/corebundle;
+// adapters/ holds adapters/postgres, adapters/redis, …).
+//
+// Such a prefix has no single owning module, so post-#1565 (no root module to
+// anchor "./cmd/...") it cannot be loaded as written: a ModeModule load errors
+// ("directory prefix cmd does not contain main module") and a workspace loader
+// that merely match-zeroes it SILENTLY DROPS the satellite coverage that
+// governance / security archtest rules declare over ./cmd/… ./adapters/… and
+// ./examples/…. Expanding to the real members restores that coverage — each
+// "./<member>/..." resolves as a normal workspace member in ModeWorkspace.
+//
+// Returns (expansions, true) iff pattern is "./<dir>/..." and ≥1 member lives
+// strictly under <dir>. Returns (nil, false) for everything else and the caller
+// keeps the pattern verbatim: a member owning <dir> exactly (normal
+// single-member resolution handles it), no member under <dir> (a genuine
+// match-zero), a single-module fixture (its sole "." member owns nothing under a
+// subdir), or a non-recursive pattern. Expansions are sorted for deterministic
+// load order.
+func ExpandParentPrefix(mods []Module, pattern string) ([]string, bool) {
+	if !strings.HasPrefix(pattern, "./") || !strings.HasSuffix(pattern, "/...") {
+		return nil, false
+	}
+	dir := strings.TrimSuffix(strings.TrimPrefix(pattern, "./"), "/...")
+	if dir == "" || dir == "." {
+		return nil, false
+	}
+	prefix := dir + "/"
+	var out []string
+	for _, m := range mods {
+		md := filepath.ToSlash(filepath.Clean(m.Dir))
+		if md == dir {
+			// A single member owns the prefix exactly → not a multi-member parent
+			// prefix; the caller's normal single-member resolution handles it.
+			return nil, false
+		}
+		if strings.HasPrefix(md, prefix) {
+			out = append(out, "./"+md+"/...")
+		}
+	}
+	if len(out) == 0 {
+		return nil, false
+	}
+	sort.Strings(out)
+	return out, true
+}
+
 // CorePrefix returns the GoCell org/repo PREFIX (e.g. "github.com/ghbvf/gocell")
 // shared by every workspace member — the single source for callers that identify
 // or compose internal module paths: modrelease's internal-require matcher,
