@@ -1,7 +1,7 @@
-// Package {{.Package}} implements the {{.CellID}} cell.
+// Package extcell implements the extcell cell.
 //
 // TODO: write a one-paragraph description of the cell's responsibility.
-package {{.Package}}
+package extcell
 
 import (
 	"context"
@@ -18,14 +18,14 @@ import (
 // gocellPlatformPrefixes or regenerate the platform golden (that is only for
 // the gocell platform itself).
 func init() {
-	errcode.RegisterPrefix("{{.ErrPrefix}}", "{{.ModulePath}}")
+	errcode.RegisterPrefix("ERR_EXTCELL_", "example.com/external")
 }
 
-{{.ListenerMarker}}ref=cell.PrimaryListener,prefix=/api/v1
+// +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1
 // TODO: declare additional listeners (e.g. cell.InternalListener) by
 // adding more listener markers (same format as the line above) above this
 // struct, or remove the marker if this cell has no HTTP routes.
-type {{.StructName}} struct {
+type ExtCell struct {
 	*cell.BaseCell
 
 	// TODO: add handler/service fields. Example for HTTP routes:
@@ -41,9 +41,9 @@ type {{.StructName}} struct {
 	//   fooSvc *foo.Service
 }
 
-// New{{.StructName}} creates a new {{.StructName}}.
-func New{{.StructName}}() *{{.StructName}} {
-	return &{{.StructName}}{
+// NewExtCell creates a new ExtCell.
+func NewExtCell() *ExtCell {
+	return &ExtCell{
 		BaseCell: cell.MustNewBaseCell(loadCellMetadata()),
 	}
 }
@@ -53,7 +53,7 @@ func New{{.StructName}}() *{{.StructName}} {
 // after BaseCell.Init and before mounting generated route groups.
 //
 //nolint:unparam // ctx is part of the K#04 initInternal contract
-func (c *{{.StructName}}) initInternal(ctx context.Context, reg cell.Registrar) error {
+func (c *ExtCell) initInternal(ctx context.Context, reg cell.Registrar) error {
 	// TODO: construct services and handlers, c.AddSlice(...), register
 	// health probes via reg.Health, lifecycle hooks via reg.Lifecycle.
 	return nil

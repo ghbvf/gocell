@@ -175,10 +175,11 @@ func TestScaffoldCell_CellYAMLContainsOwnerRole(t *testing.T) {
 // to verify template rendering correctness.
 func TestScaffoldCell_TableDriven(t *testing.T) {
 	tests := []struct {
-		name           string
-		spec           ScaffoldSpec
-		wantInCellGo   []string
-		wantInCellYAML []string
+		name            string
+		spec            ScaffoldSpec
+		wantInCellGo    []string
+		notWantInCellGo []string
+		wantInCellYAML  []string
 	}{
 		{
 			name: "basic cell",
@@ -197,7 +198,14 @@ func TestScaffoldCell_TableDriven(t *testing.T) {
 				"// +cell:listener:",
 				"func (c *MyCore) initInternal(",
 				"loadCellMetadata()",
-				"github.com/example/app/framework/kernel/cell",
+				// issue #2126: framework imports are the fixed gocell framework module
+				// path, INDEPENDENT of the consumer's own module path (github.com/example/app).
+				"github.com/ghbvf/gocell/framework/kernel/cell",
+			},
+			notWantInCellGo: []string{
+				// The framework import must never be parameterized by the consumer
+				// module path — that renders an uncompilable path (issue #2126).
+				"github.com/example/app/framework",
 			},
 			wantInCellYAML: []string{
 				"id: mycore",
@@ -226,6 +234,10 @@ func TestScaffoldCell_TableDriven(t *testing.T) {
 				"slice.yaml",
 				"contractUsages",
 			},
+			notWantInCellGo: []string{
+				// issue #2126: framework imports never carry the consumer module path.
+				"github.com/acme/iot/framework",
+			},
 			wantInCellYAML: []string{
 				"id: iotdevice",
 				"goStructName: IoTDevice",
@@ -249,6 +261,11 @@ func TestScaffoldCell_TableDriven(t *testing.T) {
 			for _, want := range tc.wantInCellGo {
 				if !strings.Contains(string(cellGo), want) {
 					t.Errorf("cell.go missing %q", want)
+				}
+			}
+			for _, notWant := range tc.notWantInCellGo {
+				if strings.Contains(string(cellGo), notWant) {
+					t.Errorf("cell.go must not contain %q (issue #2126: framework import leaked consumer module path)", notWant)
 				}
 			}
 			for _, want := range tc.wantInCellYAML {
